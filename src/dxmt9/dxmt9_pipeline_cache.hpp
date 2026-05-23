@@ -277,6 +277,16 @@ buildPresentPipeline(WMT::Reference<WMT::Device> device, bool opaqueAlpha,
                      WMT::Reference<WMT::BinaryArchive>* archive,
                      const std::string* archivePath);
 
+// Build the gamma-apply present pipeline variant. Same vertex shader as
+// the textured blit pipeline above; the fragment shader runs a 256-entry
+// per-channel LUT lookup against the source texture sample. Bound only
+// when SwapDesc::gammaRampIsIdentity is false — the existing
+// buildPresentPipeline variant is the identity fast-path.
+std::shared_future<WMT::Reference<WMT::RenderPipelineState>>
+buildGammaApplyPresentPipeline(WMT::Reference<WMT::Device> device, bool opaqueAlpha,
+                               WMT::Reference<WMT::BinaryArchive>* archive,
+                               const std::string* archivePath);
+
 // Compose a ShaderVariantKey from a flat draw state view + pre-resolved attachment
 // state. The layoutHash incorporates the FFP layout hash or, if not FFP,
 // a vertex-declaration hash.

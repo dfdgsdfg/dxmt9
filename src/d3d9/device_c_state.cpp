@@ -232,6 +232,15 @@ extern "C" int32_t dxmt9c_device_set_clip_plane(D9CDevice* d, uint32_t idx,
   return d->iface->SetClipPlane(idx, cp);
 }
 
+extern "C" void dxmt9c_device_set_gamma_ramp(D9CDevice* d, const uint16_t* ramp) {
+  // POD copy from a 768-u16 buffer into the core::Device shadow. The PE
+  // side memcpys from the D3DGAMMARAMP it received; we trust the wire
+  // shape and reinterpret as the layout-identical core::GammaRamp.
+  if (!d || !ramp) return;
+  const auto* typed = reinterpret_cast<const dxmt9::core::GammaRamp*>(ramp);
+  d->dev().setGammaRamp(typed);
+}
+
 extern "C" int32_t dxmt9c_device_get_clip_plane(D9CDevice* d, uint32_t idx, float plane[4]) {
   (void)d;
   (void)idx;

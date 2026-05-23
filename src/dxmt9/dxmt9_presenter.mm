@@ -209,11 +209,18 @@ Presenter::~Presenter() {
 }
 
 std::shared_future<WMT::Reference<WMT::RenderPipelineState>>&
-Presenter::pipelineFor(bool opaqueAlpha) {
-  auto& slot = opaqueAlpha ? pipelineOpaque_ : pipelineAlpha_;
+Presenter::pipelineFor(bool opaqueAlpha, bool applyGamma) {
+  auto& slot = applyGamma
+                   ? (opaqueAlpha ? pipelineGammaOpaque_ : pipelineGammaAlpha_)
+                   : (opaqueAlpha ? pipelineOpaque_ : pipelineAlpha_);
   if (!slot.valid()) {
-    slot = pipeline::buildPresentPipeline(WMT::Reference<WMT::Device>{device_.handle},
-                                            opaqueAlpha, archive_, archivePath_);
+    slot = applyGamma
+               ? pipeline::buildGammaApplyPresentPipeline(
+                     WMT::Reference<WMT::Device>{device_.handle},
+                     opaqueAlpha, archive_, archivePath_)
+               : pipeline::buildPresentPipeline(
+                     WMT::Reference<WMT::Device>{device_.handle},
+                     opaqueAlpha, archive_, archivePath_);
   }
   return slot;
 }
@@ -492,7 +499,12 @@ Presenter::EncodeResult Presenter::encodeCommands(WMT::CommandBuffer& commandBuf
       break;
   }
 
-  auto pipelineFuture = pipelineFor(params.opaqueAlpha);
+  // G2-B Option A — non-identity ramp opts into the gamma-apply PSO and
+  // pays one extra setFragmentBytes(1.5 KB) per present. Identity ramps
+  // (the default for apps that never call SetGammaRamp, plus the explicit
+  // reset to identity baseline) stay on the validated textured-blit path.
+  const bool applyGamma = !params.gammaRampIsIdentity && params.gammaRamp != nullptr;
+  auto pipelineFuture = pipelineFor(params.opaqueAlpha, applyGamma);
   auto pipeline = pipelineFuture.get();
   if (!pipeline) {
     presentimpl::traceEvent("pipeline.nil", params.seqId, hwnd_);
@@ -582,6 +594,13 @@ Presenter::EncodeResult Presenter::encodeCommands(WMT::CommandBuffer& commandBuf
   encoder.setFragmentTexture(params.source, 0);
   if (sampler_) {
     encoder.setFragmentSamplerState(sampler_, 0);
+  }
+  if (applyGamma) {
+    // setFragmentBytes is bounded to 4 KB inline; the 1.5 KB ramp fits
+    // comfortably and the payload lives on the encoder's command buffer
+    // for the encoder's lifetime, so we can borrow SwapDesc::gammaRamp
+    // directly without owning a copy.
+    encoder.setFragmentBytes(params.gammaRamp, sizeof(core::GammaRamp), 0);
   }
 
   const auto drawableWidth = drawableTex.width();
@@ -762,6 +781,11 @@ bool encodePresent(WMT::CommandBuffer& commandBuffer,
   params.seqId = seqId;
   params.drawableToken = std::move(drawableToken);
   params.drawableTokenRequired = present.drawableTokenRequired;
+  // SwapDesc::gammaRamp is a POD on the same struct we're iterating; it
+  // stays valid until the encoder finishes encoding, so a borrowed
+  // pointer is safe here. The identity flag is the fast-path selector.
+  params.gammaRamp = &present.gammaRamp;
+  params.gammaRampIsIdentity = present.gammaRampIsIdentity;
 
   const auto presentResult = presenter->encodeCommands(commandBuffer, params);
   if (presentResult.encoded) {

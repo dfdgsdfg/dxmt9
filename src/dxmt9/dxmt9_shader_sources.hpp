@@ -35,6 +35,15 @@ std::string makeTexturedVertexSource(u64 variantHash);
 // 1.0 (used for X8R8G8B8 / X8B8G8R8 present paths).
 std::string makeTexturedFragmentSource(u64 variantHash, bool forceOpaqueAlpha = false);
 
+// Gamma-ramp-apply fragment shader. Same VS as makeTexturedVertexSource —
+// shares the fullscreen-triangle UV emitter. The FS samples the source
+// texture and quantizes each channel to a 0..255 index into a 256-entry
+// ushort LUT bound at buffer(0). forceOpaqueAlpha=true clamps alpha to
+// 1.0 to match the existing X8R8G8B8 / X8B8G8R8 present path. The 1.5 KB
+// LUT payload rides as setFragmentBytes (well under Metal's 4 KB inline
+// limit) so no MTLBuffer allocation is needed per frame.
+std::string makeGammaApplyFragmentSource(u64 variantHash, bool forceOpaqueAlpha = false);
+
 // Compile a source string into a WMT::Library (Metal Shading Language).
 // Returns an empty reference on failure.
 WMT::Reference<WMT::Library> makeLibrary(WMT::Device& device, const std::string& source);

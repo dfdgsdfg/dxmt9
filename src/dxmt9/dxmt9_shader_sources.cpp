@@ -98,6 +98,44 @@ std::string makeTexturedFragmentSource(u64 variantHash, bool forceOpaqueAlpha) {
   return out.str();
 }
 
+std::string makeGammaApplyFragmentSource(u64 variantHash, bool forceOpaqueAlpha) {
+  // The GammaUniforms layout mirrors core::GammaRamp / D3DGAMMARAMP byte-
+  // for-byte (3 * 256 * u16, total 1.5 KB). setFragmentBytes copies the
+  // POD straight from SwapDesc::gammaRamp — no MTLBuffer needed. The 8-bit
+  // quantize is intentional: D3D9 gamma ramps are documented as a 256-entry
+  // LUT indexed by the source channel scaled to 0..255, so a deeper sample
+  // doesn't gain precision (the upper 8 bits already pick the entry).
+  std::ostringstream out;
+  out << "#include <metal_stdlib>\nusing namespace metal;\n";
+  out << "struct VSOut { float4 position [[position]]; float2 uv; };\n";
+  out << "struct GammaUniforms {\n";
+  out << "  ushort red[" << core::kMaxGammaRampEntries << "];\n";
+  out << "  ushort green[" << core::kMaxGammaRampEntries << "];\n";
+  out << "  ushort blue[" << core::kMaxGammaRampEntries << "];\n";
+  out << "};\n";
+  out << "fragment float4 dxmt9_fs(VSOut in [[stage_in]],\n";
+  out << "                          texture2d<float> tex0 [[texture(0)]],\n";
+  out << "                          sampler samp0 [[sampler(0)]],\n";
+  out << "                          constant GammaUniforms& ramp [[buffer(0)]]) {\n";
+  out << "  float4 color = tex0.sample(samp0, in.uv);\n";
+  out << "  uint ri = uint(saturate(color.r) * 255.0 + 0.5);\n";
+  out << "  uint gi = uint(saturate(color.g) * 255.0 + 0.5);\n";
+  out << "  uint bi = uint(saturate(color.b) * 255.0 + 0.5);\n";
+  out << "  float4 mapped;\n";
+  out << "  mapped.r = float(ramp.red[ri])   * (1.0 / 65535.0);\n";
+  out << "  mapped.g = float(ramp.green[gi]) * (1.0 / 65535.0);\n";
+  out << "  mapped.b = float(ramp.blue[bi])  * (1.0 / 65535.0);\n";
+  if (forceOpaqueAlpha) {
+    out << "  mapped.a = 1.0;\n";
+  } else {
+    out << "  mapped.a = color.a;\n";
+  }
+  out << "  return mapped;\n";
+  out << "}\n";
+  out << "// variant " << variantHash << "\n";
+  return out.str();
+}
+
 WMT::Reference<WMT::Library> makeLibrary(WMT::Device& device, const std::string& source) {
   WMT::Error error{};
   auto lib = device.newLibraryFromSource(source.c_str(), error);

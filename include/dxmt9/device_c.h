@@ -918,6 +918,13 @@ DXMT9_NODISCARD int32_t  dxmt9c_device_present(D9CDevice*, const D9CRect* src, c
 DXMT9_NODISCARD int32_t  dxmt9c_device_begin_scene(D9CDevice*);
 DXMT9_NODISCARD int32_t  dxmt9c_device_end_scene(D9CDevice*);
 
+/* Per-device gamma ramp shadow. The 768 uint16_t payload (3 channels x 256
+ * entries) is copied into the server-side core::Device, where snapshotSwapDesc
+ * embeds it into every SwapDesc the unix-side Presenter consumes. Null `ramp`
+ * is a no-op (matches the void-return D3D9 contract — there is no error
+ * channel for callers to observe). */
+void     dxmt9c_device_set_gamma_ramp(D9CDevice*, const uint16_t* ramp);
+
 DXMT9_NODISCARD int32_t  dxmt9c_device_clear(D9CDevice*, uint32_t count, const D9CRect* rects,
                               uint32_t flags, uint32_t colorARGB, float z,
                               uint32_t stencil);

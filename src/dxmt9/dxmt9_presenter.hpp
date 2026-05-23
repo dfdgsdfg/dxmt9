@@ -149,6 +149,15 @@ class Presenter {
     uint64_t seqId = 0;                  // for trace events
     std::shared_ptr<PresentDrawableToken> drawableToken{};
     bool drawableTokenRequired = false;
+    // G2-B Option A — per-present gamma ramp. When gammaRampIsIdentity is
+    // true the encoder selects the standard textured-blit PSO (fast path,
+    // matches the pre-G2-B present behavior); when false the encoder
+    // selects the gamma-apply PSO variant and uploads the 1.5 KB ramp via
+    // setFragmentBytes(buffer 0). The pointer is borrowed from
+    // SwapDesc::gammaRamp; encoders::encodePresent populates both fields
+    // from the SwapDesc snapshot.
+    const core::GammaRamp* gammaRamp = nullptr;
+    bool gammaRampIsIdentity = true;
   };
 
   struct EncodeResult {
@@ -179,9 +188,12 @@ class Presenter {
 
  private:
   // Return the pipeline future for the requested variant, kicking off the
-  // build if this is the first request.
+  // build if this is the first request. `applyGamma=true` selects the
+  // gamma-apply PSO variant; the identity / non-applied fast-path remains
+  // the standard textured-blit PSO so apps that never call SetGammaRamp
+  // pay no extra cost.
   std::shared_future<WMT::Reference<WMT::RenderPipelineState>>&
-      pipelineFor(bool opaqueAlpha);
+      pipelineFor(bool opaqueAlpha, bool applyGamma);
   void configureLayer(const AcquireParams& params);
   WMT::Reference<WMT::MetalDrawable> takeOrWaitForPrefetchedDrawable();
   void discardPrefetchedDrawable();
@@ -197,11 +209,17 @@ class Presenter {
   // wide cache). Branch sites read this directly instead of going
   // through scattered env-parsing lambdas.
   AcquirePolicy policy_ = AcquirePolicy::Sync;
-  // Pipeline cache — two variants (alpha-preserving + alpha-forced-to-1).
-  // std::shared_future lets concurrent encodeCommands calls share the result
-  // of a single async build.
+  // Pipeline cache — four variants: alpha-preserving / alpha-forced-to-1
+  // crossed with identity-gamma (default present) / gamma-apply (G2-B
+  // Option A). std::shared_future lets concurrent encodeCommands calls
+  // share the result of a single async build. Lazy: the gamma variants
+  // are not constructed until the first non-identity SetGammaRamp present
+  // selects them, so the steady-state cost for apps that never call
+  // SetGammaRamp is exactly one pipeline build per opaqueAlpha flavor.
   std::shared_future<WMT::Reference<WMT::RenderPipelineState>> pipelineAlpha_{};
   std::shared_future<WMT::Reference<WMT::RenderPipelineState>> pipelineOpaque_{};
+  std::shared_future<WMT::Reference<WMT::RenderPipelineState>> pipelineGammaAlpha_{};
+  std::shared_future<WMT::Reference<WMT::RenderPipelineState>> pipelineGammaOpaque_{};
   WMT::Reference<WMT::SamplerState> sampler_{};
   std::mutex stateMutex_{};
   WMTLayerProps cachedLayerProps_{};

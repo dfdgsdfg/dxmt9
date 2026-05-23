@@ -1420,6 +1420,18 @@ class Device : public std::enable_shared_from_this<Device> {
   std::shared_ptr<StateBlock> captureStateBlock() const;
   HResult applyStateBlock(const StateBlock& block);
 
+  // Per-device gamma ramp shadow — D3D9 SetGammaRamp transports the 1.5 KB
+  // payload through the D9C bridge to here; snapshotSwapDesc embeds the
+  // current ramp into every present so the unix-side Presenter can apply
+  // it without a parallel ABI entry. `setGammaRamp(nullptr)` is a no-op
+  // (D3D9 has no error channel — defensive copy of wined3d shape). The
+  // identity check is recomputed every Set; default state is identity
+  // (entries[i] = i << 8 per channel) so an app that never calls
+  // SetGammaRamp never trips the apply pass.
+  void setGammaRamp(const GammaRamp* ramp) noexcept;
+  const GammaRamp& gammaRamp() const noexcept { return gammaRamp_; }
+  bool gammaRampIsIdentity() const noexcept { return gammaRampIsIdentity_; }
+
   HResult fillSurface(const std::shared_ptr<Surface>& surface, const Rect* rect, ColorRGBA color);
   HResult stretchRect(const std::shared_ptr<Surface>& src, const Rect* srcRect,
                       const std::shared_ptr<Surface>& dst, const Rect* dstRect, bool linear);
@@ -1515,6 +1527,12 @@ class Device : public std::enable_shared_from_this<Device> {
   bool deviceLost_ = false;
   bool presentOccluded_ = false;
   ExperimentCaptureConfig experimentCapture_{};
+  // Gamma ramp shadow — initialized to the identity ramp in the
+  // constructor (see core.cpp). Recomputed on every setGammaRamp; the
+  // identity flag is the fast-path that lets the unix presenter skip
+  // the gamma-apply encoder altogether.
+  GammaRamp gammaRamp_{};
+  bool gammaRampIsIdentity_ = true;
 };
 
 class Factory {

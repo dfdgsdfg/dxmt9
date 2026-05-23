@@ -45,7 +45,7 @@ void testBridgeOpcodeCountMatchesEnumSpan() {
 
   checkEq(first, static_cast<unsigned int>(DXMT9_WINEMETAL_BRIDGE_OP_BASE),
           "device_c bridge starts after shader unix-call slots");
-  checkEq(dxmt9::bridge::kBridgeOpcodeCount, 143u,
+  checkEq(dxmt9::bridge::kBridgeOpcodeCount, 144u,
           "generated bridge opcode count");
   check(last >= first, "bridge opcode enum is monotonic");
   checkEq(last - first + 1u, dxmt9::bridge::kBridgeOpcodeCount,

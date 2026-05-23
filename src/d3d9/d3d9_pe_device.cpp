@@ -604,6 +604,23 @@ class D3D9DeviceImpl final : public IDirect3DDevice9Ex, public D3D9PeRecorderFlu
         }
     }
 
+    /* gamma ramp shadow — G2-B Option B retained for the GetGammaRamp
+     * round-trip contract. The unix-side present-pass apply (Option A)
+     * pushes the same payload through dxmt9c_device_set_gamma_ramp into
+     * core::Device on every SetGammaRamp, so the PE shadow is solely the
+     * source of truth for Get reads. Default ramp is identity (entry[i]
+     * = i << 8 per channel), matching wined3d's orig_gamma baseline. */
+    D3DGAMMARAMP gammaRamp_{};
+
+    void initGammaRampIdentity() noexcept {
+        for (UINT i = 0; i < 256; ++i) {
+            const WORD v = static_cast<WORD>(i << 8);
+            gammaRamp_.red[i]   = v;
+            gammaRamp_.green[i] = v;
+            gammaRamp_.blue[i]  = v;
+        }
+    }
+
     template<typename T>
     static void setRef(T*& slot, T* newVal) {
         if (newVal) newVal->AddRef();
@@ -2219,20 +2236,15 @@ public:
         // the conformance manifest aligned. Toggling has no observable effect.
         return S_OK;
     }
-    // SetGammaRamp / GetGammaRamp: shadow-only (G1-4 audit Option B —
-    // see gammaRamp_ comment). D3D9 spec: void return; D3D9-side calls
-    // can't fail. Wine's wined3d_swapchain_set_gamma_ramp ignores
-    // unknown bits in `flags` (`FIXME: Ignoring flags`), so we accept
-    // both D3DSGR_NO_CALIBRATION (0) and D3DSGR_CALIBRATE (1) without
-    // any per-call branching; macOS has no calibrator either way.
-    //
-    // iSwapChain is unused: D3D9 SetGammaRamp returns void so there is
-    // no error channel for "invalid swapchain index". Wine forwards to
-    // the per-swapchain output; dxmt9 stores into a single device-wide
-    // shadow. A multi-swapchain app probing sc>0 reads back the same
-    // values, which is observationally indistinguishable from a
-    // per-output forward as long as the platform output truly is
-    // shared (macOS single-display laptop case).
+    // SetGammaRamp / GetGammaRamp — G2-B PE shadow + Option A unix push.
+    // D3D9 returns void; Wine wined3d ignores unknown flag bits ("FIXME:
+    // Ignoring flags") so we accept any flags value as opaque. iSwapChain
+    // is unused for the shadow since there is no error channel on the
+    // void-return D3D9 contract — the per-output forwarding in wined3d
+    // is observationally invisible to the caller. SetGammaRamp also
+    // pushes the payload through the D9C bridge to core::Device so the
+    // unix-side Presenter can apply it on the next Present without a
+    // second ABI roundtrip per frame.
     void    STDMETHODCALLTYPE SetGammaRamp(UINT swapChain, DWORD flags, const D3DGAMMARAMP* ramp) noexcept override {
         dxmt9DeviceDebugLog("device_set_gamma_ramp device=%p swapChain=%u flags=0x%x ramp=%p",
                             this, swapChain, (unsigned)flags,
@@ -2241,6 +2253,9 @@ public:
         // Byte-copy: D3DGAMMARAMP is a POD (3 * 256 * WORD). sizeof
         // is the safe shape regardless of any future struct growth.
         std::memcpy(&gammaRamp_, ramp, sizeof(D3DGAMMARAMP));
+        if (dev_) {
+            dxmt9c_device_set_gamma_ramp(dev_, reinterpret_cast<const uint16_t*>(ramp));
+        }
     }
     void    STDMETHODCALLTYPE GetGammaRamp(UINT swapChain, D3DGAMMARAMP* p) noexcept override {
         dxmt9DeviceDebugLog("device_get_gamma_ramp device=%p swapChain=%u out=%p",

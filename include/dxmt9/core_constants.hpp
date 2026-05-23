@@ -58,6 +58,10 @@ inline constexpr u32 kMaxBoolConstants = 16;
 inline constexpr u32 kMaxStateSlots = 256;
 inline constexpr u32 kMaxTextureStageStates = 64;
 inline constexpr u32 kMaxSamplerStates = 64;
+// D3DGAMMARAMP carries 256 WORD entries per channel (red/green/blue).
+// Pinned here so SwapDesc::gammaRamp and the unix-side present-pass apply
+// agree on the entry count without #include-ing <d3d9types.h>.
+inline constexpr u32 kMaxGammaRampEntries = 256;
 // D3D9 MAXD3DDECLLENGTH is 64 (including the end-marker). Snapshot capacity
 // kept fixed at 32 — production fixed-function and shader pipelines emit far
 // fewer vertex elements per declaration; the capacity bounds the worst case.
@@ -746,6 +750,26 @@ struct ClearDesc {
   std::vector<Rect> rects;
 };
 
+// IDirect3DDevice9::Set/GetGammaRamp shape — three independent 256-entry
+// per-channel WORD LUTs. POD (3 * 256 * u16 = 1536 bytes) so the ramp can
+// embed directly in SwapDesc and ride the present-time wire to the
+// unix-side Presenter without a separate ABI entry.
+//
+// Identity ramp convention: entry[i] = i << 8 per channel (matches
+// wined3d's "orig_gamma" baseline + D3D9's documented identity table).
+// Presenter::encodeCommands skips the gamma-apply pass when the ramp is
+// identity; the equality test runs lazily on SetGammaRamp and the result
+// is cached in SwapDesc::gammaRampIsIdentity.
+struct GammaRamp {
+  std::array<u16, kMaxGammaRampEntries> red{};
+  std::array<u16, kMaxGammaRampEntries> green{};
+  std::array<u16, kMaxGammaRampEntries> blue{};
+};
+static_assert(sizeof(GammaRamp) == 3u * kMaxGammaRampEntries * sizeof(u16),
+              "core::GammaRamp must layout-match D3DGAMMARAMP (3 * 256 * WORD)");
+static_assert(sizeof(GammaRamp) == 1536u,
+              "core::GammaRamp absolute byte size pin");
+
 struct SwapDesc {
   Handle window{};
   // D3D9 present source is the swapchain backbuffer. The queue keeps a
@@ -760,6 +784,14 @@ struct SwapDesc {
   u32 backBufferCount = 1;
   bool displaySyncEnabled = true;
   MultiSampleType multiSampleType = MultiSampleType::None;
+  // Per-present gamma LUT snapshot — populated by Device::snapshotSwapDesc
+  // from core::Device::gammaRamp_. The unix-side Presenter consumes this
+  // via setFragmentBytes into the gamma-apply fragment shader. When
+  // gammaRampIsIdentity is true (default / wined3d's orig_gamma baseline)
+  // Presenter::encodeCommands routes through the identity fast-path PSO
+  // and never reads the ramp payload.
+  GammaRamp gammaRamp{};
+  bool gammaRampIsIdentity = true;
   // Queue-local handle for the per-window Presenter binding registered by
   // the owning core::SwapChain. The unix-side CommandQueue resolves this
   // back to a Presenter* (and any pending drawable token from

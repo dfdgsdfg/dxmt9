@@ -617,6 +617,41 @@ buildPresentPipeline(WMT::Reference<WMT::Device> device, bool opaqueAlpha,
 }
 
 std::shared_future<WMT::Reference<WMT::RenderPipelineState>>
+buildGammaApplyPresentPipeline(WMT::Reference<WMT::Device> device, bool opaqueAlpha,
+                               WMT::Reference<WMT::BinaryArchive>* archive,
+                               const std::string* archivePath) {
+  (void)archivePath;
+  auto future = std::async(std::launch::async,
+                            [device, opaqueAlpha, archive]() mutable {
+    auto vsLib = shaders::makeLibrary(device, shaders::makeTexturedVertexSource(shaders::makeHash("present-gamma")));
+    auto fsLib = shaders::makeLibrary(device, shaders::makeGammaApplyFragmentSource(
+                                          shaders::makeHash(opaqueAlpha ? "present-gamma-opaque" : "present-gamma"),
+                                          opaqueAlpha));
+    if (!vsLib || !fsLib) return WMT::Reference<WMT::RenderPipelineState>{};
+    auto vs = vsLib.newFunction("dxmt9_vs");
+    auto fs = fsLib.newFunction("dxmt9_fs");
+    WMTRenderPipelineInfo info{};
+    info.max_tessellation_factor = 1;
+    info.vertex_function = vs.handle;
+    info.fragment_function = fs.handle;
+    info.raster_sample_count = 1;
+    info.colors[0].pixel_format = WMTPixelFormatBGRA8Unorm;
+    info.colors[0].write_mask = WMTColorWriteMaskAll;
+    info.rasterization_enabled = true;
+    if (archive && *archive) info.binary_archive_for_serialization = (*archive).handle;
+    WMT::Error err{};
+    perf::countPipelineBuild(perf::PipelineKind::Present);
+    auto pso = device.newRenderPipelineState(info, err);
+    if (pso) {
+      pso.setLabel(labels::makeLabelStringFmt("pso_present_gamma_%s",
+                                                opaqueAlpha ? "opaque" : "alpha"));
+    }
+    return pso;
+  });
+  return future.share();
+}
+
+std::shared_future<WMT::Reference<WMT::RenderPipelineState>>
 Cache::getOrBuildDrawPipelineForState(WMT::Reference<WMT::Device> device,
                                       const core::BackendLimits& limits,
                                       resources::Pool& pool,

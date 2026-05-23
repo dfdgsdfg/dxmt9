@@ -139,6 +139,16 @@ Device::Device(AdapterInfo adapter, BackendLimits limits,
   state_.viewport = {0, 0, width, height, 0.0f, 1.0f};
   deviceLost_ = false;
   maximumFrameLatency_ = kDefaultFrameLatency;
+  // Identity ramp baseline — entries[i] = i << 8 per channel. Apps that
+  // never call SetGammaRamp see the identity shadow in GetGammaRamp and
+  // the unix-side presenter routes through the no-op fast-path.
+  for (u32 i = 0; i < kMaxGammaRampEntries; ++i) {
+    const u16 v = static_cast<u16>(i << 8);
+    gammaRamp_.red[i] = v;
+    gammaRamp_.green[i] = v;
+    gammaRamp_.blue[i] = v;
+  }
+  gammaRampIsIdentity_ = true;
   if (backend_) {
     backend_->setMaxFrameLatency(maximumFrameLatency_);
   }
@@ -195,6 +205,8 @@ SwapDesc Device::snapshotSwapDesc() const {
   desc.backBufferCount = std::max(1u, presentParameters_.backBufferCount);
   desc.displaySyncEnabled = presentParameters_.presentationInterval != PresentInterval::Immediate;
   desc.multiSampleType = presentParameters_.multiSampleType;
+  desc.gammaRamp = gammaRamp_;
+  desc.gammaRampIsIdentity = gammaRampIsIdentity_;
   if (!swapChains_.empty()) {
     if (auto backBuffer = swapChains_[0]->backBuffer()) {
       desc.sourceSurface = backBuffer->handle();
@@ -354,6 +366,25 @@ HResult Device::setConvolutionMonoKernel() {
 
 HResult Device::composeRects() {
   return E_NOTIMPL;
+}
+
+void Device::setGammaRamp(const GammaRamp* ramp) noexcept {
+  if (!ramp) return;
+  gammaRamp_ = *ramp;
+  // Identity check — D3D9's documented identity table is entries[i] = i << 8
+  // per channel. Recomputed lazily so the unix presenter only checks one
+  // bool to decide whether to enable the gamma-apply encoder. Worst-case
+  // 768 u16 compares; an order-of-magnitude cheaper than one 1.5 KB
+  // setFragmentBytes per present.
+  bool identity = true;
+  for (u32 i = 0; identity && i < kMaxGammaRampEntries; ++i) {
+    const u16 expected = static_cast<u16>(i << 8);
+    if (gammaRamp_.red[i] != expected || gammaRamp_.green[i] != expected ||
+        gammaRamp_.blue[i] != expected) {
+      identity = false;
+    }
+  }
+  gammaRampIsIdentity_ = identity;
 }
 
 HResult Device::checkDeviceMultiSampleType(Format format, MultiSampleType type) const {
