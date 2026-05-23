@@ -324,6 +324,8 @@ static const struct test_case tests[] =
             test_stretch_rect_multisample_resolve_policy},
     {"multisample_render_target_init_policy",
             test_multisample_render_target_init_policy},
+    {"get_render_target_data_msaa_policy",
+            test_get_render_target_data_msaa_policy},
     {"visual_specular_lighting_render_state_policy",
             test_visual_specular_lighting_render_state_policy},
     {"visual_max_index16_draw_policy",

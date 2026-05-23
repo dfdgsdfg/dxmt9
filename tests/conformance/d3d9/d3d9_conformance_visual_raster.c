@@ -814,3 +814,107 @@ done_window:
 done_d3d9:
     IDirect3D9_Release(d3d9);
 }
+
+/*
+ * Wine provenance: dlls/d3d9/tests/visual.c
+ * function: multisample_get_rtdata_test (visual.c:17106)
+ * commit: 6e073d28dee3af7f4c965daec94644e0f9f92727
+ *
+ * Wine's multisample_get_rtdata_test verifies that GetRenderTargetData
+ * cannot copy out of a multisampled render target into a SYSTEMMEM
+ * offscreen surface (the runtime has no way to express the per-sample
+ * data in a single sysmem surface); the only legal readback path is
+ * to resolve via StretchRect into a non-MSAA RT and call
+ * GetRenderTargetData on the resolved RT.
+ *
+ * This PE-route scaffold pins the public-ABI decision matrix only:
+ *   - CreateRenderTarget(MSAA 2x) returns S_OK or D3DERR_NOTAVAILABLE;
+ *     NOTAVAILABLE is treated as a cap gap and skips the readback probe.
+ *   - GetRenderTargetData(msaa_rt, sysmem_dst) returns
+ *     D3DERR_INVALIDCALL (Wine and reference drivers reject MSAA→sysmem
+ *     readback).
+ *   - Positive control: GetRenderTargetData on a non-MSAA RT into the
+ *     same sysmem surface returns S_OK so we know the failure above is
+ *     about the MSAA source, not the sysmem dst or device state.
+ */
+void test_get_render_target_data_msaa_policy(const struct d3d9_api *api)
+{
+    IDirect3DSurface9 *sysmem_dst = NULL;
+    IDirect3DSurface9 *nonmsaa_rt = NULL;
+    IDirect3DSurface9 *msaa_rt = NULL;
+    IDirect3DDevice9 *device = NULL;
+    IDirect3D9 *d3d9;
+    HWND window;
+    HRESULT hr;
+
+    d3d9 = api->create9(D3D_SDK_VERSION);
+    if (!d3d9)
+    {
+        skip_current_test("Direct3DCreate9 returned NULL");
+        return;
+    }
+
+    window = create_test_window();
+    CHECK_TRUE(window != NULL);
+    if (!window)
+        goto done_d3d9;
+
+    device = create_base_device(d3d9, window);
+    if (!device)
+        goto done_window;
+
+    /* MSAA RT may not be available on every runtime; HR must be one of
+     * S_OK / D3DERR_NOTAVAILABLE. NOTAVAILABLE is treated as a cap gap
+     * and skips the GetRenderTargetData rejection probe. */
+    hr = IDirect3DDevice9_CreateRenderTarget(device, 64, 64,
+            D3DFMT_A8R8G8B8, D3DMULTISAMPLE_2_SAMPLES, 0, FALSE,
+            &msaa_rt, NULL);
+    CHECK_TRUE(hr == D3D_OK || hr == D3DERR_NOTAVAILABLE);
+    if (hr == D3DERR_NOTAVAILABLE)
+    {
+        CHECK_TRUE(msaa_rt == NULL);
+        goto done_device;
+    }
+    if (FAILED(hr))
+        goto done_device;
+
+    /* SYSTEMMEM destination for the GetRenderTargetData readback. */
+    hr = IDirect3DDevice9_CreateOffscreenPlainSurface(device, 64, 64,
+            D3DFMT_A8R8G8B8, D3DPOOL_SYSTEMMEM, &sysmem_dst, NULL);
+    CHECK_HR(hr, D3D_OK);
+    if (FAILED(hr))
+        goto done_rtdata_msaa;
+
+    /* Negative probe: MSAA -> SYSTEMMEM readback must be rejected. */
+    CHECK_HR(IDirect3DDevice9_GetRenderTargetData(device, msaa_rt,
+            sysmem_dst), D3DERR_INVALIDCALL);
+
+    /* Positive control: non-MSAA RT -> SYSTEMMEM readback must
+     * succeed, proving the rejection above is about the MSAA source
+     * and not the sysmem dst or device state. */
+    hr = IDirect3DDevice9_CreateRenderTarget(device, 64, 64,
+            D3DFMT_A8R8G8B8, D3DMULTISAMPLE_NONE, 0, FALSE,
+            &nonmsaa_rt, NULL);
+    CHECK_HR(hr, D3D_OK);
+    if (FAILED(hr))
+        goto done_rtdata_sysmem;
+
+    CHECK_HR(IDirect3DDevice9_GetRenderTargetData(device, nonmsaa_rt,
+            sysmem_dst), D3D_OK);
+
+    IDirect3DSurface9_Release(nonmsaa_rt);
+done_rtdata_sysmem:
+    IDirect3DSurface9_Release(sysmem_dst);
+done_rtdata_msaa:
+    IDirect3DSurface9_Release(msaa_rt);
+    IDirect3DDevice9_Release(device);
+    DestroyWindow(window);
+    IDirect3D9_Release(d3d9);
+    return;
+done_device:
+    IDirect3DDevice9_Release(device);
+done_window:
+    DestroyWindow(window);
+done_d3d9:
+    IDirect3D9_Release(d3d9);
+}

@@ -27,11 +27,11 @@ changes not yet visible upstream.
 
 | Field | Value |
 |-------|-------|
-| Commit | `d24ccd35762dda1039ac1a28698c28beab33fcce` — **work tree dirty** |
-| Short  | `d24ccd3` |
-| Tag / describe | `d24ccd3` |
+| Commit | `05e4416cbe8c1886973f827bfb435e0ff842e699` — **work tree dirty** |
+| Short  | `05e4416` |
+| Tag / describe | `05e4416` |
 | Author date | `2026-05-24` |
-| Subject | tests/conformance/d3d9: add test_stretch_rect_multisample_resolve_policy; test_multisample_stretch_rect partial → scaffolded |
+| Subject | tests/conformance/d3d9: add test_multisample_render_target_init_policy; test_multisample_init partial → scaffolded |
 
 ### Wine reference revision
 
@@ -50,7 +50,7 @@ the same commit in the Wine checkout before opening the source.
 
 ```sh
 # Reproduce the inventory verbatim from a clean tree:
-git -C "$DXMT9_REPO" checkout d24ccd35762dda1039ac1a28698c28beab33fcce
+git -C "$DXMT9_REPO" checkout 05e4416cbe8c1886973f827bfb435e0ff842e699
 git -C "$WINE_REPO"  checkout 6e073d28dee3af7f4c965daec94644e0f9f92727
 python3 scripts/tools/gen_wine_d3d9_test_inventory.py
 ```
@@ -72,11 +72,11 @@ python3 scripts/tools/gen_wine_d3d9_test_inventory.py
 
 | Wine source | Tests | covered | scaffolded | partial | failing | other |
 |-------------|-----:|--------:|----------:|--------:|--------:|------:|
-| `visual.c` | 135 | 65 | 61 | 9 | 0 | 0 |
+| `visual.c` | 135 | 65 | 62 | 8 | 0 | 0 |
 | `device.c` | 105 | 1 | 104 | 0 | 0 | 0 |
 | `d3d9ex.c` | 27 | 0 | 27 | 0 | 0 | 0 |
 | `stateblock.c` | 1 | 0 | 1 | 0 | 0 | 0 |
-| **TOTAL** | **268** | **66** | **193** | **9** | **0** | **0** |
+| **TOTAL** | **268** | **66** | **194** | **8** | **0** | **0** |
 
 `other` rolls up `deferred`, `partial/deferred`, and any UNTRACKED rows.
 
@@ -116,7 +116,7 @@ Source: [`dlls/d3d9/tests/visual.c`](https://gitlab.winehq.org/wine/wine/-/blob/
 | `loop_index_test` | 13791 | ✅ | — |
 | `maxmip_test` | 4671 | ✅ | — |
 | `multiple_rendertargets_test` | 11617 | 🟢 | — |
-| `multisample_get_rtdata_test` | 17106 | 🟡 | — |
+| `multisample_get_rtdata_test` | 17106 | 📐 | `test_get_render_target_data_msaa_policy` |
 | `multisampled_depth_buffer_test` | 17240 | 📐 | `test_visual_multisampled_depth_buffer_caps_policy` |
 | `nested_loop_test` | 7219 | ✅ | — |
 | `np2_stretch_rect_test` | 12487 | 📐 | `test_stretch_rect_npot_dimension_policy` |
