@@ -1,0 +1,60 @@
+; [provenance]
+; source: dxmt9
+; source_kind: project-authored
+; license: MIT
+; license_scope: project-mit
+; oracle: Wine d3d9 visual.c test_texcoordindex behavior, reduced to D3DTSS_TEXCOORDINDEX != stage with an active per-stage texture-transform matrix
+; oracle-date: 2026-05-23
+
+; Wine reference: dlls/d3d9/tests/visual.c::test_texcoordindex (line 21069).
+;
+; When D3DTSS_TEXCOORDINDEX selects a vertex texcoord set whose index
+; differs from the stage number AND a per-stage texture-transform matrix
+; is active, the FFP fragment shader must sample using the matrix-applied
+; output that the FFP vertex shader wrote into `out.texcoord<stage>`,
+; NOT the raw `in.texcoord<TCI>` slot. dxmt9 historically routed by
+; `key.stages[stage].texCoordIndex` in the FS combiner — which silently
+; bypassed the matrix whenever TCI != stage (the matrix was applied to
+; the wrong out slot, which the FS then ignored).
+;
+; This pins the contract: stage 0 takes its source from tex1 (TCI=1)
+; with an additive translation matrix (+0.4, +0.4) on stage 0. The
+; quad's tex1 attribute interpolates from (1,1) at the top-left vertex
+; to (0,0) at the bottom-right vertex — so the screen center pixel
+; (32, 32) sees tex1 = (0.5, 0.5).
+;
+;   - With the fix: VS writes out.texcoord0 = matrix * (0.5, 0.5)
+;                   = (0.9, 0.9). FS samples at (0.9, 0.9) on the 2x2
+;                   point-clamped texture — the bottom-right "white"
+;                   texel.
+;   - Without the fix: FS samples in.texcoord1, which holds stage 1's
+;                      output. Stage 1 has identity transform, so
+;                      in.texcoord1 = vertex tex1 = (0.5, 0.5) at the
+;                      center → point-clamped 2x2 sample is on the
+;                      boundary and (depending on rounding) yields red
+;                      or green — never white. The matrix would have
+;                      no observable effect.
+
+[test]
+clear rgba(0.0, 0.0, 0.0, 1.0)
+dxmt9-render-state z_enable=disable z_write=disable
+; 2x2 texture, row-major: top-left red, top-right green, bottom-left blue, bottom-right white.
+dxmt9-texture 0 2 2 A8R8G8B8 red green blue white
+dxmt9-sampler 0 address_u=clamp address_v=clamp min_filter=point mag_filter=point mip_filter=point
+; Texture-transform matrix on stage 0: translate (u,v) by (+0.4, +0.4) and
+; declare 2-component output (D3DTTFF_COUNT2). dxmt9_apply_texture_transform
+; computes transformed[i] = dot(M_row_i, coord), so the translation goes
+; in column 3 of each row:
+;     [ 1  0  0  0.4 ]
+;     [ 0  1  0  0.4 ]
+;     [ 0  0  1  0   ]
+;     [ 0  0  0  1   ]
+dxmt9-texture-transform 0  1.0 0.0 0.0 0.4  0.0 1.0 0.0 0.4  0.0 0.0 1.0 0.0  0.0 0.0 0.0 1.0
+; Stage 0: select tex1 (TCI=1); enable the matrix with COUNT2; sample diffuse.
+dxmt9-texture-stage 0 color_op=selectarg1 color_arg1=texture alpha_op=selectarg1 alpha_arg1=texture texcoord_index=1 texturetransformflags=count2
+dxmt9-bind-texture 0 0
+; The Tex2 helper writes tex1 = (1-u, 1-v) at each corner, so the
+; center pixel sees tex1 = (0.5, 0.5). With matrix +0.4 on stage 0
+; we expect a sample at (0.9, 0.9) → bottom-right "white" texel.
+dxmt9-draw-textured-quad-tex2
+probe (32, 32) rgba(1.0, 1.0, 1.0, 1.0) 1

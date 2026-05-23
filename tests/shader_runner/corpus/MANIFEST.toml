@@ -611,6 +611,18 @@ oracle = "math-derivation"
 oracle-date = "2026-05-16"
 
 [[test]]
+file = "texture/dxmt9_ffp_texcoord_index_matrix_readback.shader_test"
+status = "passing"
+source = "dxmt9"
+source_kind = "project-authored"
+license = "MIT"
+license_scope = "project-mit"
+models = ["ffp"]
+opcodes = ["TEX"]
+oracle = "Wine d3d9 visual.c test_texcoordindex behavior, reduced to D3DTSS_TEXCOORDINDEX != stage with active D3DTTFF_COUNT2 texture matrix"
+oracle-date = "2026-05-23"
+
+[[test]]
 file = "texture/dxmt9_ffp_texcoord1_transform_readback.shader_test"
 status = "passing"
 source = "dxmt9"

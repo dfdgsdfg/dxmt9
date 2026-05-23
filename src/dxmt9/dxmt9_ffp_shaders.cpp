@@ -952,7 +952,15 @@ std::string makeFfpPixelSource(const FfpPixelKey& key,
     }
     if (debugFfpTexture) {
       const size_t stage = activeStages.front();
-      const u32 coordIndex = key.stages[stage].texCoordIndex & 0xffffu;
+      // FFP texcoord routing: the FFP vertex shader has already resolved
+      // TSS_TEXCOORDINDEX *and* applied the per-stage texture-transform
+      // matrix into `out.texcoord<stage>` (see `makeFfpVertexSource`).
+      // The fragment shader samples stage N at `in.texcoord<stage>` --
+      // routing by `stages[stage].texCoordIndex` here would silently
+      // bypass the matrix whenever TCI != stage (Wine `test_texcoordindex`
+      // + a TEXTURE0 transform). D3D9IntentProbe regression coverage:
+      // `texcoord-index-matrix`.
+      const u32 coordIndex = static_cast<u32>(stage);
       out << "  return tex" << stage << ".sample(samp" << stage
           << ", " << sampleCoord(coordIndex) << ");\n";
       out << "}\n";
@@ -961,7 +969,10 @@ std::string makeFfpPixelSource(const FfpPixelKey& key,
     }
     if (debugFfpAlpha) {
       const size_t stage = activeStages.front();
-      const u32 coordIndex = key.stages[stage].texCoordIndex & 0xffffu;
+      // Same per-stage routing as the debugFfpTexture branch above:
+      // the FFP VS already wrote the transformed coord into
+      // `out.texcoord<stage>`.
+      const u32 coordIndex = static_cast<u32>(stage);
       out << "  float alpha = tex" << stage << ".sample(samp" << stage
           << ", " << sampleCoord(coordIndex) << ").a;\n";
       out << "  return float4(alpha, alpha, alpha, 1.0);\n";
@@ -978,7 +989,18 @@ std::string makeFfpPixelSource(const FfpPixelKey& key,
         continue;
       }
       const bool hasTexture = context.textures[stage];
-      const u32 coordIndex = stageKey.texCoordIndex & 0xffffu;
+      // FFP texcoord routing: the FFP vertex shader has already resolved
+      // TSS_TEXCOORDINDEX *and* applied the per-stage texture-transform
+      // matrix into `out.texcoord<stage>`. The fragment shader therefore
+      // samples stage N at `in.texcoord<stage>` -- routing by
+      // `stageKey.texCoordIndex` here would silently bypass the matrix
+      // whenever TCI != stage (e.g. Wine `test_texcoordindex` /
+      // D3D9IntentProbe `texcoord-index-matrix`: TCI=1 + TEXTURE0
+      // transform on stage 0). The vertex shader also enforces "matrix
+      // off => identity passthrough", so the FS read collapses to the
+      // selected input slot when TTFF=DISABLE (the 14 non-matrix probe
+      // cases that were already passing).
+      const u32 coordIndex = static_cast<u32>(stage);
       // Wine fixed_function_bumpmap_test (D3DTOP_BUMPENVMAP = 22,
       // D3DTOP_BUMPENVMAPLUMINANCE = 23): when this stage's colorOp is
       // a bump-env op, the *current* stage's texture is sampled at

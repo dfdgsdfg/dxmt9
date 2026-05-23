@@ -27,11 +27,11 @@ changes not yet visible upstream.
 
 | Field | Value |
 |-------|-------|
-| Commit | `1ef74958ed4d1256a7b18a442da775e75c461abd` |
-| Short  | `1ef7495` |
-| Tag / describe | `1ef7495` |
+| Commit | `762ee1b5ba1f00e19d3f5b36cb4a417244053456` — **work tree dirty** |
+| Short  | `762ee1b` |
+| Tag / describe | `762ee1b` |
 | Author date | `2026-05-23` |
-| Subject | d3d9 FFP: support D3DFVF_XYZW; pin 3 EXP-orphan behaviors as SR corpus |
+| Subject | manifest: opcodes for ffp_xyzw_w_divide_readback corpus entry |
 
 ### Wine reference revision
 
@@ -50,7 +50,7 @@ the same commit in the Wine checkout before opening the source.
 
 ```sh
 # Reproduce the inventory verbatim from a clean tree:
-git -C "$DXMT9_REPO" checkout 1ef74958ed4d1256a7b18a442da775e75c461abd
+git -C "$DXMT9_REPO" checkout 762ee1b5ba1f00e19d3f5b36cb4a417244053456
 git -C "$WINE_REPO"  checkout 6e073d28dee3af7f4c965daec94644e0f9f92727
 python3 scripts/tools/gen_wine_d3d9_test_inventory.py
 ```
@@ -72,11 +72,11 @@ python3 scripts/tools/gen_wine_d3d9_test_inventory.py
 
 | Wine source | Tests | covered | scaffolded | partial | failing | other |
 |-------------|-----:|--------:|----------:|--------:|--------:|------:|
-| `visual.c` | 135 | 44 | 55 | 36 | 0 | 0 |
+| `visual.c` | 135 | 45 | 55 | 35 | 0 | 0 |
 | `device.c` | 105 | 1 | 95 | 9 | 0 | 0 |
 | `d3d9ex.c` | 27 | 0 | 25 | 2 | 0 | 0 |
 | `stateblock.c` | 1 | 0 | 1 | 0 | 0 | 0 |
-| **TOTAL** | **268** | **45** | **176** | **47** | **0** | **0** |
+| **TOTAL** | **268** | **46** | **176** | **46** | **0** | **0** |
 
 `other` rolls up `deferred`, `partial/deferred`, and any UNTRACKED rows.
 
@@ -194,7 +194,7 @@ Source: [`dlls/d3d9/tests/visual.c`](https://gitlab.winehq.org/wine/wine/-/blob/
 | `test_specular_lighting` | 774 | 📐 | `test_visual_specular_lighting_render_state_policy` |
 | `test_sysmem_draw` | 25372 | ✅ | — |
 | `test_table_fog_zw` | 20324 | 🟡 | — |
-| `test_texcoordindex` | 21069 | 🟡 | — |
+| `test_texcoordindex` | 21069 | ✅ | — |
 | `test_texture_blending` | 22642 | 🟡 | — |
 | `test_texture_transform_flags` | 28549 | ✅ | — |
 | `test_uninitialized_varyings` | 22176 | ✅ | — |
