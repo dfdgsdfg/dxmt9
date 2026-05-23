@@ -157,6 +157,23 @@ resource_format_boundary_spec = executable(
 test('dxmt9-resource-format-boundary-spec', resource_format_boundary_spec,
      env: dxmt9_native_test_env_vars + ['DXMT_DEBUG_DISABLE_SHADER_ARCHIVE=1'])
 
+# G2-D unknown-disposition audit follow-up: regression guard for the
+# IDirect3DBaseTexture9::GenerateMipSubLevels promotion across Texture,
+# CubeTexture, and VolumeTexture (PE wrappers in
+# src/d3d9/d3d9_pe_device_child_surface.cpp). Exercises the C ABI
+# (dxmt9c_texture_generate_mip_sublevels) and the AUTOGENMIPMAP usage
+# round-trip the PE-side gate depends on.
+core_d3d9_generate_mipmaps_spec = executable(
+  'dxmt9-core-d3d9-generate-mipmaps-spec',
+  'core_d3d9_generate_mipmaps_spec.cpp',
+  include_directories: dxmt9_inc,
+  dependencies: [dxmt9_dep, dxmt9_frontend_dep],
+  link_args: dxmt9_test_link_args,
+)
+
+test('dxmt9-core-d3d9-generate-mipmaps-spec', core_d3d9_generate_mipmaps_spec,
+     env: dxmt9_native_test_env_vars + ['DXMT_DEBUG_DISABLE_SHADER_ARCHIVE=1'])
+
 core_stateblock_restore_spec = executable(
   'dxmt9-core-stateblock-restore-spec',
   'core_stateblock_restore_spec.cpp',

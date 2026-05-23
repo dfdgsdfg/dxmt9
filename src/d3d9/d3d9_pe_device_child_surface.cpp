@@ -871,6 +871,19 @@ public:
     return autoGenFilter_;
   }
   void STDMETHODCALLTYPE GenerateMipSubLevels() noexcept override {
+    // Why: Wine oracle dlls/d3d9/texture.c::d3d9_texture_2d_GenerateMipSubLevels
+    // -> d3d9_texture_gen_auto_mipmap only regenerates mips when the texture
+    // carries D3DUSAGE_AUTOGENMIPMAP (gated via D3D9_TEXTURE_MIPMAP_DIRTY,
+    // which is itself set only on AUTOGENMIPMAP textures by
+    // d3d9_texture_flag_auto_gen_mipmap). Non-AUTOGENMIPMAP textures are a
+    // no-op (Wine emits no WARN here, just returns). The backend
+    // dxmt9c_texture_generate_mip_sublevels does not enforce this flag for
+    // its internal unlockRect-driven path, so we gate at the COM vtable.
+    D9CSurfaceDesc sd{};
+    if (FAILED(hr32(dxmt9c_texture_get_level_desc(t_, 0, &sd))))
+      return;
+    if ((sd.usage & D3DUSAGE_AUTOGENMIPMAP) == 0)
+      return;
     const HRESULT flushHr = flushChildRecorder(recorder_);
     if (FAILED(flushHr))
       return;
@@ -1136,6 +1149,16 @@ public:
     return autoGenFilter_;
   }
   void STDMETHODCALLTYPE GenerateMipSubLevels() noexcept override {
+    // Why: Wine oracle dlls/d3d9/texture.c::d3d9_texture_cube_GenerateMipSubLevels
+    // shares d3d9_texture_gen_auto_mipmap with the 2D path; the dirty-flag
+    // gating only fires for D3DUSAGE_AUTOGENMIPMAP textures. Mirror that
+    // contract here before forwarding to the C ABI (which is type-agnostic
+    // and would otherwise rebuild mips for any cube with mipLevels > 1).
+    D9CSurfaceDesc sd{};
+    if (FAILED(hr32(dxmt9c_texture_get_level_desc(t_, 0, &sd))))
+      return;
+    if ((sd.usage & D3DUSAGE_AUTOGENMIPMAP) == 0)
+      return;
     const HRESULT flushHr = flushChildRecorder(recorder_);
     if (FAILED(flushHr))
       return;
@@ -1460,6 +1483,15 @@ public:
     return autoGenFilter_;
   }
   void STDMETHODCALLTYPE GenerateMipSubLevels() noexcept override {
+    // Why: Wine oracle dlls/d3d9/texture.c::d3d9_texture_volume_GenerateMipSubLevels
+    // shares the same d3d9_texture_gen_auto_mipmap path as the 2D and cube
+    // variants. Volume textures honour the D3DUSAGE_AUTOGENMIPMAP gate
+    // identically; non-AUTOGENMIPMAP volume textures are a no-op.
+    D9CSurfaceDesc sd{};
+    if (FAILED(hr32(dxmt9c_texture_get_level_desc(t_, 0, &sd))))
+      return;
+    if ((sd.usage & D3DUSAGE_AUTOGENMIPMAP) == 0)
+      return;
     const HRESULT flushHr = flushChildRecorder(recorder_);
     if (FAILED(flushHr))
       return;
