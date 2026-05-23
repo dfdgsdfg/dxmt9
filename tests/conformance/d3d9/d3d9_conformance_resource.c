@@ -3117,6 +3117,102 @@ done_d3d9:
 
 /*
  * Wine provenance: dlls/d3d9/tests/device.c
+ * function: test_cube_textures()
+ * commit: 6e073d28dee3af7f4c965daec94644e0f9f92727
+ *
+ * Scope: HRESULT contract for CreateCubeTexture edge length and explicit
+ * level count. The sibling test_cube_texture_level_surface_policy() covers
+ * the level/desc/face surface side; this one pins the creation-time policy
+ * for edge length 0 and explicit level counts that exceed log2(edge)+1.
+ */
+void test_create_cube_texture_dim_policy(const struct d3d9_api *api)
+{
+    IDirect3DCubeTexture9 *cube = NULL;
+    IDirect3DDevice9 *device = NULL;
+    IDirect3D9 *d3d9;
+    D3DCAPS9 caps;
+    HWND window;
+    HRESULT hr;
+
+    d3d9 = api->create9(D3D_SDK_VERSION);
+    if (!d3d9)
+    {
+        skip_current_test("Direct3DCreate9 returned NULL");
+        return;
+    }
+
+    window = create_test_window();
+    CHECK_TRUE(window != NULL);
+    if (!window)
+        goto done_d3d9;
+
+    device = create_base_device(d3d9, window);
+    if (!device)
+        goto done_window;
+
+    memset(&caps, 0, sizeof(caps));
+    CHECK_HR(IDirect3DDevice9_GetDeviceCaps(device, &caps), D3D_OK);
+    if (!(caps.TextureCaps & D3DPTEXTURECAPS_CUBEMAP))
+    {
+        skip_current_test("cube textures are not supported");
+        goto done_device;
+    }
+
+    /* Edge length == 1 is the minimum legal cube size. */
+    cube = NULL;
+    hr = IDirect3DDevice9_CreateCubeTexture(device, 1, 1, 0,
+            D3DFMT_A8R8G8B8, D3DPOOL_MANAGED, &cube, NULL);
+    CHECK_HR(hr, D3D_OK);
+    if (SUCCEEDED(hr) && cube)
+    {
+        IDirect3DCubeTexture9_Release(cube);
+        cube = NULL;
+    }
+
+    /* Power-of-two edge length is the canonical happy path. */
+    cube = NULL;
+    hr = IDirect3DDevice9_CreateCubeTexture(device, 64, 1, 0,
+            D3DFMT_A8R8G8B8, D3DPOOL_MANAGED, &cube, NULL);
+    CHECK_HR(hr, D3D_OK);
+    if (SUCCEEDED(hr) && cube)
+    {
+        IDirect3DCubeTexture9_Release(cube);
+        cube = NULL;
+    }
+
+    /* Edge length == 0 must be rejected. */
+    cube = NULL;
+    hr = IDirect3DDevice9_CreateCubeTexture(device, 0, 1, 0,
+            D3DFMT_A8R8G8B8, D3DPOOL_MANAGED, &cube, NULL);
+    CHECK_HR(hr, D3DERR_INVALIDCALL);
+    if (SUCCEEDED(hr) && cube)
+    {
+        IDirect3DCubeTexture9_Release(cube);
+        cube = NULL;
+    }
+
+    /* Explicit Levels exceeding log2(edge)+1 must be rejected. For edge=64
+     * the cap is log2(64)+1=7, so Levels=8 is out of range. */
+    cube = NULL;
+    hr = IDirect3DDevice9_CreateCubeTexture(device, 64, 8, 0,
+            D3DFMT_A8R8G8B8, D3DPOOL_MANAGED, &cube, NULL);
+    CHECK_HR(hr, D3DERR_INVALIDCALL);
+    if (SUCCEEDED(hr) && cube)
+    {
+        IDirect3DCubeTexture9_Release(cube);
+        cube = NULL;
+    }
+
+done_device:
+    IDirect3DDevice9_Release(device);
+done_window:
+    DestroyWindow(window);
+done_d3d9:
+    IDirect3D9_Release(d3d9);
+}
+
+/*
+ * Wine provenance: dlls/d3d9/tests/device.c
  * function: test_volume_resource()
  * commit: 6e073d28dee3af7f4c965daec94644e0f9f92727
  */

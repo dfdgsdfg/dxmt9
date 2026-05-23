@@ -147,6 +147,8 @@ static const struct test_case tests[] =
             test_texture_surface_container_policy},
     {"cube_texture_level_surface_policy",
             test_cube_texture_level_surface_policy},
+    {"create_cube_texture_dim_policy",
+            test_create_cube_texture_dim_policy},
     {"volume_resource_container_desc", test_volume_resource_container_desc},
     {"volume_container_interface_policy",
             test_volume_container_interface_policy},

@@ -27,11 +27,11 @@ changes not yet visible upstream.
 
 | Field | Value |
 |-------|-------|
-| Commit | `9bfc70f27aad8fc8b87bf5dc4a30f301275e57c8` — **work tree dirty** |
-| Short  | `9bfc70f` |
-| Tag / describe | `9bfc70f` |
+| Commit | `fbc0027d72b8171af7c7f680b149fc9ac951b863` — **work tree dirty** |
+| Short  | `fbc0027` |
+| Tag / describe | `fbc0027` |
 | Author date | `2026-05-23` |
-| Subject | tests/conformance/d3d9: add test_create_texture_npot_policy scaffold; test_npot_textures partial → scaffolded |
+| Subject | tests/conformance/d3d9: add test_stretch_rect_null_and_degenerate_policy scaffold; test_stretch_rect partial → scaffolded |
 
 ### Wine reference revision
 
@@ -50,7 +50,7 @@ the same commit in the Wine checkout before opening the source.
 
 ```sh
 # Reproduce the inventory verbatim from a clean tree:
-git -C "$DXMT9_REPO" checkout 9bfc70f27aad8fc8b87bf5dc4a30f301275e57c8
+git -C "$DXMT9_REPO" checkout fbc0027d72b8171af7c7f680b149fc9ac951b863
 git -C "$WINE_REPO"  checkout 6e073d28dee3af7f4c965daec94644e0f9f92727
 python3 scripts/tools/gen_wine_d3d9_test_inventory.py
 ```
@@ -73,10 +73,10 @@ python3 scripts/tools/gen_wine_d3d9_test_inventory.py
 | Wine source | Tests | covered | scaffolded | partial | failing | other |
 |-------------|-----:|--------:|----------:|--------:|--------:|------:|
 | `visual.c` | 135 | 65 | 55 | 15 | 0 | 0 |
-| `device.c` | 105 | 1 | 102 | 2 | 0 | 0 |
+| `device.c` | 105 | 1 | 103 | 1 | 0 | 0 |
 | `d3d9ex.c` | 27 | 0 | 25 | 2 | 0 | 0 |
 | `stateblock.c` | 1 | 0 | 1 | 0 | 0 | 0 |
-| **TOTAL** | **268** | **66** | **183** | **19** | **0** | **0** |
+| **TOTAL** | **268** | **66** | **184** | **18** | **0** | **0** |
 
 `other` rolls up `deferred`, `partial/deferred`, and any UNTRACKED rows.
 
@@ -234,7 +234,7 @@ Source: [`dlls/d3d9/tests/device.c`](https://gitlab.winehq.org/wine/wine/-/blob/
 | `test_clip_planes_limits` | 13133 | 📐 | `test_clip_plane_state_getters` |
 | `test_create_rt_ds_fail` | 10571 | 📐 | `test_create_rt_ds_failure_policy` |
 | `test_creation_parameters` | 14818 | 📐 | `test_device_creation_parameters_policy`, `test_multithreaded_device_creation_policy` |
-| `test_cube_textures` | 7820 | 🟡 | — |
+| `test_cube_textures` | 7820 | 📐 | `test_cube_texture_face_desc_parity`, `test_cube_texture_level_surface_policy`, `test_create_cube_texture_dim_policy` |
 | `test_cursor` | 1852 | 📐 | `window_cursor_ownership` |
 | `test_cursor_clipping` | 14865 | 📐 | `window_cursor_ownership` |
 | `test_cursor_pos` | 5286 | 📐 | `window_cursor_ownership` |

@@ -1571,6 +1571,23 @@ status = "scaffolded"
 [[case]]
 executable = "dxmt9-d3d9-conformance.exe"
 source_file = "d3d9_conformance_resource.c"
+function = "test_create_cube_texture_dim_policy"
+source = "wine/dlls/d3d9/tests/device.c:test_cube_textures/test_create_cube_texture"
+source_kind = "behavioral-oracle"
+license = "LGPL-2.1-or-later"
+license_scope = "external-not-vendored"
+upstream_commit = "6e073d28dee3af7f4c965daec94644e0f9f92727"
+lanes = ["app-local", "builtin"]
+arches = ["x64", "x86"]
+area = "texture-creation"
+owner = "core/resources"
+requirements = ["R-TEST-12.13"]
+acceptance = ["CreateCubeTexture accepts edge length >= 1 and rejects edge length 0 and explicit Levels greater than log2(edge)+1 with D3DERR_INVALIDCALL"]
+status = "scaffolded"
+
+[[case]]
+executable = "dxmt9-d3d9-conformance.exe"
+source_file = "d3d9_conformance_resource.c"
 function = "test_volume_resource_container_desc"
 source = "wine/dlls/d3d9/tests/device.c:test_volume_resource"
 source_kind = "behavioral-oracle"

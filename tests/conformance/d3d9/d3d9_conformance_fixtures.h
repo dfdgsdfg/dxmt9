@@ -427,6 +427,7 @@ void test_index_buffer_desc_binding_policy(const struct d3d9_api *api);
 void test_vertex_buffer_desc_binding_policy(const struct d3d9_api *api);
 void test_texture_surface_container_policy(const struct d3d9_api *api);
 void test_cube_texture_level_surface_policy(const struct d3d9_api *api);
+void test_create_cube_texture_dim_policy(const struct d3d9_api *api);
 void test_volume_resource_container_desc(const struct d3d9_api *api);
 void test_volume_container_interface_policy(const struct d3d9_api *api);
 void test_volume_mipmap_level_desc_policy(const struct d3d9_api *api);
