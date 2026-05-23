@@ -90,7 +90,7 @@ Source: [`dlls/d3d9/tests/visual.c`](https://gitlab.winehq.org/wine/wine/-/blob/
 | `alphareplicate_test` | 13262 | ✅ | — |
 | `alphatest_test` | 13507 | ✅ | — |
 | `clear_test` | 1154 | 📐 | `test_visual_clear_color_only_policy` |
-| `clip_planes_test` | 16182 | 🟡 | — |
+| `clip_planes_test` | 16182 | 🟡 | deferred — see `specs/gap.md` "Clip planes" row; regression seed `tests/shader_runner/corpus/render_state/dxmt9_clip_plane_halfspace_readback.shader_test` (status=failing) |
 | `cnd_test` | 6675 | ✅ | — |
 | `color_fill_test` | 1663 | 📐 | `test_visual_colorfill_format_policy` |
 | `conditional_np2_repeat_test` | 9841 | ✅ | — |
