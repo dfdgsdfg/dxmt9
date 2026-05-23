@@ -27,11 +27,11 @@ changes not yet visible upstream.
 
 | Field | Value |
 |-------|-------|
-| Commit | `ff4ae2d3b4432de784415229e191eccf4b974a24` — **work tree dirty** |
-| Short  | `ff4ae2d` |
-| Tag / describe | `ff4ae2d` |
+| Commit | `d18f68a8d93b7778f4e881b83ac1b2c888a8e49c` — **work tree dirty** |
+| Short  | `d18f68a` |
+| Tag / describe | `d18f68a` |
 | Author date | `2026-05-23` |
-| Subject | tests/conformance/d3d9: add test_ex_device_sysmem_vertex_buffer_policy scaffold; test_sysmem_draw partial → scaffolded |
+| Subject | tests/conformance/d3d9: add test_stretch_rect_depth_stencil_policy scaffold; depth_blit_test partial → scaffolded |
 
 ### Wine reference revision
 
@@ -50,7 +50,7 @@ the same commit in the Wine checkout before opening the source.
 
 ```sh
 # Reproduce the inventory verbatim from a clean tree:
-git -C "$DXMT9_REPO" checkout ff4ae2d3b4432de784415229e191eccf4b974a24
+git -C "$DXMT9_REPO" checkout d18f68a8d93b7778f4e881b83ac1b2c888a8e49c
 git -C "$WINE_REPO"  checkout 6e073d28dee3af7f4c965daec94644e0f9f92727
 python3 scripts/tools/gen_wine_d3d9_test_inventory.py
 ```
@@ -72,11 +72,11 @@ python3 scripts/tools/gen_wine_d3d9_test_inventory.py
 
 | Wine source | Tests | covered | scaffolded | partial | failing | other |
 |-------------|-----:|--------:|----------:|--------:|--------:|------:|
-| `visual.c` | 135 | 65 | 57 | 13 | 0 | 0 |
+| `visual.c` | 135 | 65 | 58 | 12 | 0 | 0 |
 | `device.c` | 105 | 1 | 104 | 0 | 0 | 0 |
 | `d3d9ex.c` | 27 | 0 | 27 | 0 | 0 | 0 |
 | `stateblock.c` | 1 | 0 | 1 | 0 | 0 | 0 |
-| **TOTAL** | **268** | **66** | **189** | **13** | **0** | **0** |
+| **TOTAL** | **268** | **66** | **190** | **12** | **0** | **0** |
 
 `other` rolls up `deferred`, `partial/deferred`, and any UNTRACKED rows.
 
@@ -132,7 +132,7 @@ Source: [`dlls/d3d9/tests/visual.c`](https://gitlab.winehq.org/wine/wine/-/blob/
 | `srgbwrite_format_test` | 16509 | 📐 | `test_visual_srgb_write_caps_policy` |
 | `stencil_cull_test` | 10394 | 📐 | `test_visual_stencil_cull_caps_policy` |
 | `stream_test` | 12133 | 📐 | `test_stream_source_frequency_state` |
-| `stretchrect_test` | 4048 | 🟡 | — |
+| `stretchrect_test` | 4048 | 📐 | `test_stretch_rect_format_matrix_policy` |
 | `test_3dc_formats` | 19655 | 📐 | `test_visual_3dc_format_caps_policy` |
 | `test_alpha_to_coverage` | 26521 | ✅ | — |
 | `test_backbuffer_resize` | 24193 | 📐 | `test_backbuffer_resize_present_parameter_policy` |

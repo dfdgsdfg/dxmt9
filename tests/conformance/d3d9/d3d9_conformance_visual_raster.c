@@ -485,3 +485,80 @@ done_window:
 done_d3d9:
     IDirect3D9_Release(d3d9);
 }
+
+/*
+ * Wine provenance: dlls/d3d9/tests/visual.c
+ * function: stretchrect_test
+ * commit: 6e073d28dee3af7f4c965daec94644e0f9f92727
+ *
+ * Wine's stretchrect_test exercises StretchRect across many surface
+ * format combinations. This PE scaffold pins the public-ABI policy
+ * for the format matrix: matching-format DEFAULT-pool offscreen
+ * surfaces in the common backbuffer-capable formats (A8R8G8B8,
+ * X8R8G8B8, R5G6B5) must accept a same-format whole-surface blit
+ * with S_OK. Formats that the runtime cannot create as
+ * CreateOffscreenPlainSurface are skipped (continue to the next
+ * format) rather than failing the test.
+ */
+void test_stretch_rect_format_matrix_policy(const struct d3d9_api *api)
+{
+    static const D3DFORMAT formats[] = {
+        D3DFMT_A8R8G8B8,
+        D3DFMT_X8R8G8B8,
+        D3DFMT_R5G6B5,
+    };
+    IDirect3DDevice9 *device = NULL;
+    IDirect3D9 *d3d9;
+    HWND window;
+    HRESULT hr;
+    size_t i;
+
+    d3d9 = api->create9(D3D_SDK_VERSION);
+    if (!d3d9)
+    {
+        skip_current_test("Direct3DCreate9 returned NULL");
+        return;
+    }
+
+    window = create_test_window();
+    CHECK_TRUE(window != NULL);
+    if (!window)
+        goto done_d3d9;
+
+    device = create_base_device(d3d9, window);
+    if (!device)
+        goto done_window;
+
+    for (i = 0; i < sizeof(formats) / sizeof(formats[0]); ++i)
+    {
+        IDirect3DSurface9 *src = NULL;
+        IDirect3DSurface9 *dst = NULL;
+
+        hr = IDirect3DDevice9_CreateOffscreenPlainSurface(device, 64, 64,
+                formats[i], D3DPOOL_DEFAULT, &src, NULL);
+        if (FAILED(hr))
+            continue;
+
+        hr = IDirect3DDevice9_CreateOffscreenPlainSurface(device, 64, 64,
+                formats[i], D3DPOOL_DEFAULT, &dst, NULL);
+        if (FAILED(hr))
+        {
+            IDirect3DSurface9_Release(src);
+            continue;
+        }
+
+        /* Matching-format / matching-dim whole-surface blit -> S_OK. */
+        hr = IDirect3DDevice9_StretchRect(device, src, NULL, dst, NULL,
+                D3DTEXF_LINEAR);
+        CHECK_HR(hr, D3D_OK);
+
+        IDirect3DSurface9_Release(dst);
+        IDirect3DSurface9_Release(src);
+    }
+
+    IDirect3DDevice9_Release(device);
+done_window:
+    DestroyWindow(window);
+done_d3d9:
+    IDirect3D9_Release(d3d9);
+}

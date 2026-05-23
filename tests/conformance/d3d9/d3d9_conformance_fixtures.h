@@ -525,6 +525,7 @@ void test_visual_line_antialiasing_blending_state_policy(const struct d3d9_api *
 void test_visual_blit_format_conversion_policy(const struct d3d9_api *api);
 void test_stretch_rect_null_and_degenerate_policy(const struct d3d9_api *api);
 void test_stretch_rect_depth_stencil_policy(const struct d3d9_api *api);
+void test_stretch_rect_format_matrix_policy(const struct d3d9_api *api);
 
 
 /* Wine visual.c planned-item scaffolds (G1). */
