@@ -12,13 +12,40 @@ from __future__ import annotations
 
 import os
 import re
+import subprocess
 from pathlib import Path
 
 # Generator lives in `scripts/tools/`; walk up two levels to reach the dxmt9 repo root.
 REPO = Path(__file__).resolve().parents[2]
-WINE = Path(os.environ.get("WINE_REPO", str(REPO.parent / "wine"))) / "dlls" / "d3d9" / "tests"
+WINE_ROOT = Path(os.environ.get("WINE_REPO", str(REPO.parent / "wine")))
+WINE = WINE_ROOT / "dlls" / "d3d9" / "tests"
 PLAN = REPO / "specs" / "wine_test.plan.md"
 OUT = REPO / "specs" / "gap_wine_d3d9_test.md"
+
+
+def wine_provenance() -> dict[str, str]:
+    """Capture the Wine reference commit so the inventory has stable
+    provenance: any reader can `git -C $WINE_REPO checkout <hash>` and
+    reproduce the line numbers in the table."""
+    out: dict[str, str] = {"hash": "unknown", "short": "unknown",
+                            "date": "unknown", "subject": "unknown",
+                            "describe": "unknown",
+                            "root": str(WINE_ROOT)}
+    if not (WINE_ROOT / ".git").exists():
+        return out
+    def _run(args: list[str]) -> str:
+        try:
+            return subprocess.check_output(
+                ["git", "-C", str(WINE_ROOT)] + args, text=True,
+                stderr=subprocess.DEVNULL).strip()
+        except subprocess.CalledProcessError:
+            return ""
+    out["hash"] = _run(["rev-parse", "HEAD"]) or out["hash"]
+    out["short"] = _run(["rev-parse", "--short", "HEAD"]) or out["short"]
+    out["date"] = _run(["show", "-s", "--format=%ad", "--date=short", "HEAD"]) or out["date"]
+    out["subject"] = _run(["show", "-s", "--format=%s", "HEAD"]) or out["subject"]
+    out["describe"] = _run(["describe", "--always", "--tags"]) or out["describe"]
+    return out
 
 SOURCES = ["visual", "device", "d3d9ex", "stateblock"]
 
@@ -148,6 +175,8 @@ def main() -> None:
         inventories[src] = rows
         summary_rows.append((src, len(rows), per_status))
 
+    prov = wine_provenance()
+
     lines: list[str] = []
     lines.append("# Wine D3D9 Test Inventory")
     lines.append("")
@@ -162,6 +191,27 @@ def main() -> None:
     lines.append("")
     lines.append("Generated from Wine source + plan tables by")
     lines.append("`scripts/tools/gen_wine_d3d9_test_inventory.py` (see commit history).")
+    lines.append("")
+    lines.append("## Wine reference revision")
+    lines.append("")
+    lines.append("The `Wine line` column below points into the Wine commit captured at")
+    lines.append("generation time. To reproduce the line numbers verbatim, check out")
+    lines.append("the same commit in the Wine checkout before opening the source.")
+    lines.append("")
+    lines.append("| Field | Value |")
+    lines.append("|-------|-------|")
+    lines.append(f"| Commit | `{prov['hash']}` |")
+    lines.append(f"| Short  | `{prov['short']}` |")
+    lines.append(f"| Tag / describe | `{prov['describe']}` |")
+    lines.append(f"| Author date | `{prov['date']}` |")
+    lines.append(f"| Subject | {prov['subject']} |")
+    lines.append(f"| Upstream | https://gitlab.winehq.org/wine/wine/-/commit/{prov['hash']} |")
+    lines.append("")
+    lines.append("```sh")
+    lines.append("# Reproduce the line numbers in this table:")
+    lines.append(f"git -C \"$WINE_REPO\" checkout {prov['hash']}")
+    lines.append("python3 scripts/tools/gen_wine_d3d9_test_inventory.py")
+    lines.append("```")
     lines.append("")
     lines.append("## Legend")
     lines.append("")

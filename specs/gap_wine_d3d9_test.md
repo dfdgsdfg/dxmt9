@@ -12,6 +12,27 @@ staging; this gap doc tracks **which Wine oracles exist** and
 Generated from Wine source + plan tables by
 `scripts/tools/gen_wine_d3d9_test_inventory.py` (see commit history).
 
+## Wine reference revision
+
+The `Wine line` column below points into the Wine commit captured at
+generation time. To reproduce the line numbers verbatim, check out
+the same commit in the Wine checkout before opening the source.
+
+| Field | Value |
+|-------|-------|
+| Commit | `6e073d28dee3af7f4c965daec94644e0f9f92727` |
+| Short  | `6e073d2` |
+| Tag / describe | `wine-11.6` |
+| Author date | `2026-04-03` |
+| Subject | Release 11.6. |
+| Upstream | https://gitlab.winehq.org/wine/wine/-/commit/6e073d28dee3af7f4c965daec94644e0f9f92727 |
+
+```sh
+# Reproduce the line numbers in this table:
+git -C "$WINE_REPO" checkout 6e073d28dee3af7f4c965daec94644e0f9f92727
+python3 scripts/tools/gen_wine_d3d9_test_inventory.py
+```
+
 ## Legend
 
 | Icon | Status meaning | Where evidence lives |
