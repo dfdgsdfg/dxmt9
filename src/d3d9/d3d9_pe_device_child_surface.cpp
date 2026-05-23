@@ -485,6 +485,8 @@ public:
   DWORD STDMETHODCALLTYPE GetPriority() noexcept override {
     return priorityShadow_;
   }
+  // stub: Wine returns S_OK; PreLoad is a hint to copy into VRAM, dxmt9 backing
+  // is already Metal GPU-resident.
   void STDMETHODCALLTYPE PreLoad() noexcept override {}
   D3DRESOURCETYPE STDMETHODCALLTYPE GetType() noexcept override {
     return D3DRTYPE_SURFACE;
@@ -845,6 +847,8 @@ public:
   DWORD STDMETHODCALLTYPE GetPriority() noexcept override {
     return priorityShadow_;
   }
+  // stub: Wine returns S_OK; PreLoad is a hint to copy into VRAM, dxmt9 backing
+  // is already Metal GPU-resident.
   void STDMETHODCALLTYPE PreLoad() noexcept override {}
   D3DRESOURCETYPE STDMETHODCALLTYPE GetType() noexcept override {
     return D3DRTYPE_TEXTURE;
@@ -1108,6 +1112,8 @@ public:
   DWORD STDMETHODCALLTYPE GetPriority() noexcept override {
     return priorityShadow_;
   }
+  // stub: Wine returns S_OK; PreLoad is a hint to copy into VRAM, dxmt9 backing
+  // is already Metal GPU-resident.
   void STDMETHODCALLTYPE PreLoad() noexcept override {}
   D3DRESOURCETYPE STDMETHODCALLTYPE GetType() noexcept override {
     return D3DRTYPE_CUBETEXTURE;
@@ -1430,6 +1436,8 @@ public:
   DWORD STDMETHODCALLTYPE GetPriority() noexcept override {
     return priorityShadow_;
   }
+  // stub: Wine returns S_OK; PreLoad is a hint to copy into VRAM, dxmt9 backing
+  // is already Metal GPU-resident.
   void STDMETHODCALLTYPE PreLoad() noexcept override {}
   D3DRESOURCETYPE STDMETHODCALLTYPE GetType() noexcept override {
     return D3DRTYPE_VOLUMETEXTURE;
@@ -1518,6 +1526,8 @@ public:
     return unlockTextureBox(t_, level, recorder_);
   }
   HRESULT STDMETHODCALLTYPE AddDirtyBox(const D3DBOX *) noexcept override {
+    // stub: Wine returns S_OK; dxmt9 uploads dirty regions via the chunk recorder,
+    // AddDirtyBox is an optimization hint.
     return S_OK;
   }
 };

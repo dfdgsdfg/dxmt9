@@ -1,5 +1,7 @@
 #include "core_spec_fixtures.hpp"
 
+#include "dxmt9/d3d9_raster_status.hpp"
+
 #include <cstdlib>
 #include <filesystem>
 #include <fstream>
@@ -1501,6 +1503,39 @@ void testExperimentCaptureWriteFailureEmitsSkipSidecar() {
   std::filesystem::remove_all(root);
 }
 
+void testRasterStatusEstimateAdvancesMonotonicallyModuloDisplayHeight() {
+  using dxmt9::d3d9::computeRasterStatusEstimate;
+
+  constexpr uint32_t displayHeight = 480u;
+
+  // Two consecutive ticks must either produce different ScanLine values or
+  // both fall inside the documented [0, displayHeight) range — the property
+  // the polling-spin idiom relies on. With monotonically increasing ticks
+  // the modulo step also advances by one until it wraps.
+  const auto first = computeRasterStatusEstimate(1u, displayHeight);
+  const auto second = computeRasterStatusEstimate(2u, displayHeight);
+  check(first.scanLine < displayHeight, "raster scanline within display height (first)");
+  check(second.scanLine < displayHeight, "raster scanline within display height (second)");
+  checkEq(second.scanLine, first.scanLine + 1u,
+          "raster scanline advances by one per tick before wrap");
+
+  // Wrap behaviour: at the boundary scanLine returns to 0 and InVBlank flips
+  // true. That keeps GetRasterStatus consistent with the documented D3D9
+  // contract "ScanLine == 0 means vertical-blank".
+  const auto wrap = computeRasterStatusEstimate(displayHeight, displayHeight);
+  checkEq(wrap.scanLine, 0u, "raster scanline wraps to zero at display height");
+  check(wrap.inVBlank, "raster InVBlank set at wrap boundary");
+  const auto past = computeRasterStatusEstimate(displayHeight + 1u, displayHeight);
+  checkEq(past.scanLine, 1u, "raster scanline continues past wrap");
+  check(!past.inVBlank, "raster InVBlank clear past wrap");
+
+  // Zero display height (no swapchain present) must not divide by zero — the
+  // helper returns the neutral all-zero VBlank state instead.
+  const auto neutral = computeRasterStatusEstimate(123u, 0u);
+  checkEq(neutral.scanLine, 0u, "raster scanline neutral on zero display height");
+  check(neutral.inVBlank, "raster InVBlank neutral on zero display height");
+}
+
 }  // namespace
 
 int main() {
@@ -1516,6 +1551,7 @@ int main() {
     testExperimentCaptureFrameListAndRangeWriteInternalFrames();
     testResetRestartsExperimentCaptureFrameCounter();
     testExperimentCaptureWriteFailureEmitsSkipSidecar();
+    testRasterStatusEstimateAdvancesMonotonicallyModuloDisplayHeight();
   } catch (const TestFailure& error) {
     std::cerr << error.what() << '\n';
     return EXIT_FAILURE;

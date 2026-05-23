@@ -4,6 +4,7 @@
 
 #include "d3d9_pe_device_child.hpp"
 
+#include "dxmt9/d3d9_raster_status.hpp"
 #include "util/config/config.hpp"
 #include "util/log/log.hpp"
 
@@ -563,8 +564,22 @@ public:
   }
   HRESULT STDMETHODCALLTYPE
   GetRasterStatus(D3DRASTER_STATUS *p) noexcept override {
-    if (p)
-      memset(p, 0, sizeof(*p));
+    if (!p)
+      return S_OK;
+    // Synthesize a monotonically-advancing ScanLine so apps that VBlank-poll do
+    // not spin forever. dxmt9 has no real per-line vblank signal from Metal;
+    // we derive a counter-modulo-height estimate from the swapchain backbuffer.
+    static std::atomic<uint64_t> rasterTick{0};
+    uint32_t displayHeight = 0;
+    D9CPresentParams cpp{};
+    if (SUCCEEDED(hr32(dxmt9c_swapchain_get_present_params(sc_, &cpp)))) {
+      displayHeight = cpp.backBufferHeight;
+    }
+    const auto tick = rasterTick.fetch_add(1, std::memory_order_relaxed) + 1;
+    const auto est = ::dxmt9::d3d9::computeRasterStatusEstimate(tick, displayHeight);
+    memset(p, 0, sizeof(*p));
+    p->ScanLine = est.scanLine;
+    p->InVBlank = est.inVBlank ? TRUE : FALSE;
     return S_OK;
   }
   HRESULT STDMETHODCALLTYPE
@@ -627,6 +642,7 @@ public:
 
   HRESULT STDMETHODCALLTYPE
   GetLastPresentCount(UINT *pLastPresentCount) noexcept override {
+    // stub: Wine returns S_OK; presentation statistics not measured.
     if (pLastPresentCount)
       *pLastPresentCount = 0u;
     return S_OK;
@@ -634,6 +650,7 @@ public:
 
   HRESULT STDMETHODCALLTYPE
   GetPresentStats(D3DPRESENTSTATS *pPresentationStatistics) noexcept override {
+    // stub: Wine returns S_OK; presentation statistics not measured.
     if (pPresentationStatistics) {
       memset(pPresentationStatistics, 0, sizeof(*pPresentationStatistics));
     }

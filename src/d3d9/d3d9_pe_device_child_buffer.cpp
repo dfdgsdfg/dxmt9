@@ -181,6 +181,8 @@ public:
   DWORD STDMETHODCALLTYPE GetPriority() noexcept override {
     return priorityShadow_;
   }
+  // stub: Wine returns S_OK; PreLoad is a hint to copy into VRAM, dxmt9 backing
+  // is already Metal GPU-resident.
   void STDMETHODCALLTYPE PreLoad() noexcept override {}
   D3DRESOURCETYPE STDMETHODCALLTYPE GetType() noexcept override {
     return D3DRTYPE_VERTEXBUFFER;
@@ -332,6 +334,8 @@ public:
   DWORD STDMETHODCALLTYPE GetPriority() noexcept override {
     return priorityShadow_;
   }
+  // stub: Wine returns S_OK; PreLoad is a hint to copy into VRAM, dxmt9 backing
+  // is already Metal GPU-resident.
   void STDMETHODCALLTYPE PreLoad() noexcept override {}
   D3DRESOURCETYPE STDMETHODCALLTYPE GetType() noexcept override {
     return D3DRTYPE_INDEXBUFFER;

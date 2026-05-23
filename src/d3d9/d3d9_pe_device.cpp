@@ -3,6 +3,7 @@
 
 #include <algorithm>
 #include <array>
+#include <atomic>
 #include <cstdarg>
 #include <cstdint>
 #include <cstdlib>
@@ -16,6 +17,7 @@
 #include "d3d9_pe_draw_packet.hpp"
 #include "d3d9_pe_recorder.hpp"
 #include "d3d9_pe_state_shadow.hpp"
+#include "dxmt9/d3d9_raster_status.hpp"
 #include "util/config/config.hpp"
 #include "util/log/log.hpp"
 
@@ -1808,7 +1810,10 @@ public:
                             value, (unsigned)value, (unsigned long long)used);
         return value;
     }
-    HRESULT STDMETHODCALLTYPE EvictManagedResources() noexcept override { return S_OK; }
+    HRESULT STDMETHODCALLTYPE EvictManagedResources() noexcept override {
+        // stub: Wine returns S_OK; Apple GPUs have unified memory, manual eviction is not exposed.
+        return S_OK;
+    }
 
     HRESULT STDMETHODCALLTYPE GetDirect3D(IDirect3D9** ppD3D) noexcept override {
         if (!ppD3D) return D3DERR_INVALIDCALL;
@@ -1902,6 +1907,8 @@ public:
         return S_OK;
     }
     void    STDMETHODCALLTYPE SetCursorPosition(int x, int y, DWORD flags) noexcept override {
+        // stub: Wine returns S_OK; cursor positioning belongs to the WindowServer / window manager,
+        // the app's hint is informational.
         dxmt9DeviceDebugLog("device_set_cursor_position device=%p x=%d y=%d flags=0x%x",
                             this, x, y, (unsigned)flags);
     }
@@ -2150,11 +2157,32 @@ public:
         if (!p || swapChain != 0) {
             return D3DERR_INVALIDCALL;
         }
+        // Synthesize a monotonically-advancing ScanLine so apps that VBlank-poll do
+        // not spin forever. dxmt9 has no real per-line vblank signal from Metal;
+        // the helper takes a per-call counter and the current backbuffer height.
+        static std::atomic<uint64_t> rasterTick{0};
+        uint32_t displayHeight = 0;
+        D9CSwapChain* chain = dxmt9c_device_get_swap_chain(dev_, swapChain);
+        if (chain) {
+            D9CPresentParams cpp{};
+            if (SUCCEEDED(hr32(dxmt9c_swapchain_get_present_params(chain, &cpp)))) {
+                displayHeight = cpp.backBufferHeight;
+            }
+            dxmt9c_swapchain_release(chain);
+        }
+        const auto tick = rasterTick.fetch_add(1, std::memory_order_relaxed) + 1;
+        const auto est = ::dxmt9::d3d9::computeRasterStatusEstimate(tick, displayHeight);
         memset(p, 0, sizeof(*p));
+        p->ScanLine = est.scanLine;
+        p->InVBlank = est.inVBlank ? TRUE : FALSE;
         return S_OK;
     }
     HRESULT STDMETHODCALLTYPE SetDialogBoxMode(BOOL enableDialogs) noexcept override {
         dxmt9DeviceDebugLog("device_set_dialog_box_mode device=%p enable=%u", this, (unsigned)enableDialogs);
+        // stub: Wine `wined3d_device_set_dialog_box_mode` returns WINED3D_OK
+        // unconditionally — dialog-box mode requires Win32 user32/dwm primitives
+        // that don't exist on macOS, but matching the Wine S_OK contract keeps
+        // the conformance manifest aligned. Toggling has no observable effect.
         return S_OK;
     }
     void    STDMETHODCALLTYPE SetGammaRamp(UINT swapChain, DWORD flags, const D3DGAMMARAMP*) noexcept override {
@@ -3174,6 +3202,8 @@ public:
     }
     HRESULT STDMETHODCALLTYPE GetClipStatus(D3DCLIPSTATUS9* p) noexcept override {
         dxmt9DeviceDebugLog("device_get_clip_status device=%p", this);
+        // stub: Wine returns S_OK; dxmt9 does not track per-primitive clip status,
+        // zero is the documented neutral value.
         if (p) memset(p, 0, sizeof(*p)); return S_OK;
     }
 
@@ -3508,9 +3538,15 @@ public:
     }
     HRESULT STDMETHODCALLTYPE SetNPatchMode(float segments) noexcept override {
         dxmt9DeviceDebugLog("device_set_npatch_mode device=%p segments=%f", this, segments);
+        // stub: Wine returns S_OK; N-Patch tessellation was removed in D3D10, legacy
+        // apps tolerate a no-op.
         return S_OK;
     }
-    float   STDMETHODCALLTYPE GetNPatchMode() noexcept override { return 0.0f; }
+    float   STDMETHODCALLTYPE GetNPatchMode() noexcept override {
+        // stub: Wine returns 0.0f; N-Patch tessellation removed in D3D10, legacy apps
+        // tolerate a no-op.
+        return 0.0f;
+    }
 
     /* ── textures ── */
     // Wine d3d9 texture-stage validation. Valid stages are the FFP
@@ -4078,7 +4114,10 @@ public:
     }
     HRESULT STDMETHODCALLTYPE DrawRectPatch(UINT, const float*, const D3DRECTPATCH_INFO*) noexcept override { return D3DERR_INVALIDCALL; }
     HRESULT STDMETHODCALLTYPE DrawTriPatch(UINT, const float*, const D3DTRIPATCH_INFO*) noexcept override { return D3DERR_INVALIDCALL; }
-    HRESULT STDMETHODCALLTYPE DeletePatch(UINT) noexcept override { return S_OK; }
+    HRESULT STDMETHODCALLTYPE DeletePatch(UINT) noexcept override {
+        // stub: Wine returns S_OK; patch primitives unused on Metal.
+        return S_OK;
+    }
 
     /* ── query ── */
     HRESULT STDMETHODCALLTYPE CreateQuery(D3DQUERYTYPE type,
@@ -4119,15 +4158,25 @@ public:
         return hr;
     }
 
-    HRESULT STDMETHODCALLTYPE GetGPUThreadPriority(INT* p) noexcept override { if (p) *p = 0; return S_OK; }
-    HRESULT STDMETHODCALLTYPE SetGPUThreadPriority(INT) noexcept override { return S_OK; }
+    HRESULT STDMETHODCALLTYPE GetGPUThreadPriority(INT* p) noexcept override {
+        // stub: Wine returns S_OK; GPU thread priority is not exposed by Metal.
+        if (p) *p = 0; return S_OK;
+    }
+    HRESULT STDMETHODCALLTYPE SetGPUThreadPriority(INT) noexcept override {
+        // stub: Wine returns S_OK; GPU thread priority is not exposed by Metal.
+        return S_OK;
+    }
 
     HRESULT STDMETHODCALLTYPE WaitForVBlank(UINT sc) noexcept override {
         return hr32(dxmt9c_device_wait_for_vblank(dev_, sc));
     }
 
     HRESULT STDMETHODCALLTYPE CheckResourceResidency(IDirect3DResource9**,
-                                                      UINT32) noexcept override { return S_OK; }
+                                                      UINT32) noexcept override {
+        // stub: Wine returns S_OK; unified memory on Apple Silicon — all resources
+        // are resident.
+        return S_OK;
+    }
 
     HRESULT STDMETHODCALLTYPE SetMaximumFrameLatency(UINT maxLatency) noexcept override {
         // Wine d3d9ex test_frame_latency contract: valid range is 1..30.
