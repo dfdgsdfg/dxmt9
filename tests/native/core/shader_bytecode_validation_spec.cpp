@@ -224,6 +224,32 @@ void testFragmentSourceFallbackOnReject() {
   check(!source.empty(), "fallback MSL is non-empty on decoder reject");
 }
 
+void testDstOpcodeAccepted() {
+  // vs_2_0, then `dst r0, r1, r2` (opcode 17 = kD3DSIO_DST). DST has
+  // one dst and two src operands; before P0-1 the decoder had no entry
+  // for opcode 17 in fixedOperandCount() and the instruction tripped
+  // the invalid_opcode bucket. The test asserts the opposite: a
+  // dst-using SM2 shader decodes cleanly with zero reject deltas.
+  std::vector<u32> words;
+  words.push_back(makeVersionToken(true, 2, 0));
+  words.push_back(makeInstructionToken(kD3DSIO_DST, 3));
+  words.push_back(makeDstToken(kD3DSPR_TEMP, 0));
+  words.push_back(makeSrcToken(kD3DSPR_TEMP, 1));
+  words.push_back(makeSrcToken(kD3DSPR_TEMP, 2));
+  words.push_back(kD3DSIO_END);
+  const auto before = rejectSnapshot();
+  const auto module = decode(words, /*vertex=*/true);
+  const auto after = rejectSnapshot();
+  check(!module.instructions.empty(),
+        "dst opcode produces decoded instructions");
+  checkEq(after.invalidOpcode - before.invalidOpcode, 0ull,
+          "dst opcode does not increment invalid_opcode");
+  checkEq(after.truncated - before.truncated, 0ull,
+          "dst opcode does not increment truncated");
+  checkEq(after.unsupportedVersion - before.unsupportedVersion, 0ull,
+          "dst opcode does not increment unsupported_version");
+}
+
 void testValidBytecodeDoesNotIncrement() {
   // Regression guard: the existing valid-bytecode round-trip in
   // core_shader_translator_spec must NOT increment any reject bucket.
@@ -263,6 +289,7 @@ int main() {
     (void)testMissingEndToken;
     (void)testOversizedConstantRegister;
     testInvalidOpcode();
+    testDstOpcodeAccepted();
     testFragmentSourceFallbackOnReject();
     testValidBytecodeDoesNotIncrement();
   } catch (const TestFailure& error) {

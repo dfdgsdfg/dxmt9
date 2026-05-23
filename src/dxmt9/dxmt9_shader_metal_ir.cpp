@@ -1451,6 +1451,7 @@ std::string translateSpirvToMsl(const SpirvModule& module,
       case kD3DSIO_EXP:
       case kD3DSIO_LOG:
       case kD3DSIO_LIT:
+      case kD3DSIO_DST:
       case kD3DSIO_EXPP:
       case kD3DSIO_LOGP:
       case kD3DSIO_SINCOS:
@@ -1529,6 +1530,18 @@ std::string translateSpirvToMsl(const SpirvModule& module,
                       " float lit_w = clamp(lit_src.w, -128.0f, 128.0f);"
                       " float lit_z = (lit_x > 0.0f) ? pow(max(lit_y, 0.0f), lit_w) : 0.0f;"
                       " return float4(1.0f, max(lit_x, 0.0f), lit_z, 1.0f); }())";
+              break;
+            }
+            case kD3DSIO_DST: {
+              // D3D9 DST (Distance Vector): dst = (1, src0.y * src1.y,
+              //                                    src0.z, src1.w).
+              // Mate of fixed-function attenuation helpers (DST and LIT
+              // typically appear together to build distance-falloff
+              // lighting). Source swizzles are honored by readSrc(); the
+              // write mask is applied downstream by the existing dstMask
+              // assignment site.
+              value = std::string("float4(1.0f, (") + readSrc(1) + ").y * (" + readSrc(2) + ").y, (" +
+                      readSrc(1) + ").z, (" + readSrc(2) + ").w)";
               break;
             }
             case kD3DSIO_SINCOS:
@@ -2516,6 +2529,7 @@ std::string translateSpirvToMsl(const SpirvModule& module,
       case kD3DSIO_EXP:
       case kD3DSIO_LOG:
       case kD3DSIO_LIT:
+      case kD3DSIO_DST:
       case kD3DSIO_EXPP:
       case kD3DSIO_LOGP:
       case kD3DSIO_SINCOS:
@@ -2593,6 +2607,13 @@ std::string translateSpirvToMsl(const SpirvModule& module,
                     " float lit_w = clamp(lit_src.w, -128.0f, 128.0f);"
                     " float lit_z = (lit_x > 0.0f) ? pow(max(lit_y, 0.0f), lit_w) : 0.0f;"
                     " return float4(1.0f, max(lit_x, 0.0f), lit_z, 1.0f); }())";
+            break;
+          }
+          case kD3DSIO_DST: {
+            // D3D9 DST mirror in the SM1 lowering branch — see the SM2+
+            // arm above for the canonical formula.
+            value = std::string("float4(1.0f, (") + readSrc(1) + ").y * (" + readSrc(2) + ").y, (" +
+                    readSrc(1) + ").z, (" + readSrc(2) + ").w)";
             break;
           }
           case kD3DSIO_SINCOS:

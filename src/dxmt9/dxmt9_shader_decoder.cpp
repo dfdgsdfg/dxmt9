@@ -268,6 +268,8 @@ std::string opcodeName(u32 opcode) {
       return "log";
     case kD3DSIO_LIT:
       return "lit";
+    case kD3DSIO_DST:
+      return "dst";
     case kD3DSIO_M4x4:
       return "m4x4";
     case kD3DSIO_M4x3:
@@ -454,6 +456,7 @@ u32 fixedOperandCount(u32 opcode) {
     case kD3DSIO_MUL:
     case kD3DSIO_DP3:
     case kD3DSIO_DP4:
+    case kD3DSIO_DST:
     case kD3DSIO_MIN:
     case kD3DSIO_MAX:
     case kD3DSIO_POW:
@@ -503,6 +506,7 @@ bool opcodeWritesFirstOperand(u32 opcode) {
     case kD3DSIO_EXP:
     case kD3DSIO_LOG:
     case kD3DSIO_LIT:
+    case kD3DSIO_DST:
     case kD3DSIO_EXPP:
     case kD3DSIO_LOGP:
     case kD3DSIO_SINCOS:

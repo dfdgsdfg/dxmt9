@@ -134,6 +134,24 @@ std::vector<u32> makeVs20Bytecode() {
   return words;
 }
 
+// vs_2_0: dcl_position o0; dst r0, r1.xyzw, r2.xyzw; mov o0, r0.
+// Exercises the new DST (opcode 17) lowering through the MSL emitter so
+// the determinism guard covers it; before P0-1 this would have tripped
+// invalid_opcode and the translator would have produced an empty module.
+std::vector<u32> makeVs20DstBytecode() {
+  return {
+      0xfffe0200u,
+      // dcl_position o0
+      0x0200001fu, 0x80000000u, 0xc00f0000u,
+      // dst r0, r1, r2 — opcode 17, op-count 3, dst TEMP r0 mask=0xf,
+      // src TEMP r1 swizzle=0xe4, src TEMP r2 swizzle=0xe4.
+      0x03000011u, 0x800f0000u, 0x80e40001u, 0x80e40002u,
+      // mov o0, r0
+      0x02000001u, 0xc00f0000u, 0x80e40000u,
+      0x0000ffffu,
+  };
+}
+
 // ps_2_0: dcl t0; dcl_2d s0; texld r0, t0, s0; mov oC0, r0.
 const std::array<u32, 15> kPs20Bytecode = {
     0xffff0200u,
@@ -234,7 +252,8 @@ DrawDesc makeBytecodeDrawDesc(const ShaderRef& vs, const ShaderRef& ps) {
 // Positive (determinism) cases.
 
 void testTranslatedVertexIsDeterministic() {
-  for (const auto& bytecode : {makeVs20Bytecode(), makeVs30Bytecode()}) {
+  for (const auto& bytecode : {makeVs20Bytecode(), makeVs30Bytecode(),
+                               makeVs20DstBytecode()}) {
     const auto vs = makeBytecodeShaderRef(bytecode);
     const auto desc = makeBytecodeDrawDesc(vs, ShaderRef{});
     for (const bool argbuf : {false, true}) {

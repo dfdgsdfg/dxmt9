@@ -171,6 +171,7 @@ constexpr u32 kD3DSIO_SLT = 12u;
 constexpr u32 kD3DSIO_SGE = 13u;
 constexpr u32 kD3DSIO_EXP = 14u;
 constexpr u32 kD3DSIO_LOG = 15u;
+constexpr u32 kD3DSIO_DST = 17u;
 constexpr u32 kD3DSIO_M4x4 = 20u;
 constexpr u32 kD3DSIO_M4x3 = 21u;
 constexpr u32 kD3DSIO_M3x2 = 24u;
