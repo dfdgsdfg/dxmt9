@@ -347,6 +347,8 @@ static const struct test_case tests[] =
             test_set_get_depth_stencil_surface_policy},
     {"device_desktop_window_present_policy",
             test_device_desktop_window_present_policy},
+    {"ex_device_sysmem_vertex_buffer_policy",
+            test_ex_device_sysmem_vertex_buffer_policy},
 };
 
 int main(int argc, char **argv)

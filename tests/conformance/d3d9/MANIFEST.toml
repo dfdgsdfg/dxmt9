@@ -3754,3 +3754,20 @@ owner = "core/device"
 requirements = ["R-TEST-12.3"]
 acceptance = ["CreateDevice with hFocusWindow=GetDesktopWindow() and pp.hDeviceWindow=GetDesktopWindow() (Windowed=TRUE, SwapEffect=DISCARD) returns S_OK; a follow-up Clear(D3DCLEAR_TARGET) and Present(NULL,NULL,NULL,NULL) on the resulting device both return S_OK — i.e. the desktop window is accepted at device creation and not silently rejected at present time. The Ex variant in d3d9ex.c:test_desktop_window pins the identical contract via CreateDeviceEx, with no policy delta beyond the Ex factory wrapper."]
 status = "scaffolded"
+
+[[case]]
+executable = "dxmt9-d3d9-conformance.exe"
+source_file = "d3d9_conformance_device.c"
+function = "test_ex_device_sysmem_vertex_buffer_policy"
+source = "wine/dlls/d3d9/tests/d3d9ex.c:test_sysmem_draw"
+source_kind = "behavioral-oracle"
+license = "LGPL-2.1-or-later"
+license_scope = "external-not-vendored"
+upstream_commit = "6e073d28dee3af7f4c965daec94644e0f9f92727"
+lanes = ["app-local", "builtin"]
+arches = ["x64", "x86"]
+area = "vertex-buffer"
+owner = "core/resources"
+requirements = ["R-TEST-12.13", "R-TEST-12.14"]
+acceptance = ["Direct3DCreate9Ex + CreateDeviceEx(HAL, HARDWARE_VERTEXPROCESSING, Windowed=TRUE, SwapEffect=DISCARD, A8R8G8B8) returns S_OK; CreateVertexBuffer(size=256, Usage=0, FVF=0, Pool=D3DPOOL_SYSTEMMEM) on the Ex device returns S_OK; a no-flag Lock(0,0,&ptr,0) on the resulting sysmem VB returns S_OK and yields a non-NULL pointer; Unlock returns S_OK. HRESULT-contract scope only: no draw is issued, no pixel readback is sampled — the visual-correctness pin lives in the visual.c:test_sysmem_draw ✅ row. D3DUSAGE_DYNAMIC + SYSTEMMEM and DISCARD-on-non-dynamic policy are pinned separately by test_pinned_buffers_d3dusage_policy."]
+status = "scaffolded"

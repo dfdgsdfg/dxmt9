@@ -515,6 +515,7 @@ void test_multithreaded_device_creation_policy(const struct d3d9_api *api);
 void test_draw_primitive_outside_scene_policy(const struct d3d9_api *api);
 void test_set_get_depth_stencil_surface_policy(const struct d3d9_api *api);
 void test_device_desktop_window_present_policy(const struct d3d9_api *api);
+void test_ex_device_sysmem_vertex_buffer_policy(const struct d3d9_api *api);
 
 void test_visual_shadow_depth_compare_caps_policy(const struct d3d9_api *api);
 

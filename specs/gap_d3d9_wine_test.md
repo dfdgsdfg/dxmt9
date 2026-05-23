@@ -27,11 +27,11 @@ changes not yet visible upstream.
 
 | Field | Value |
 |-------|-------|
-| Commit | `fedb6a5249b75b44c96221cbcf2a0576c5ce6398` — **work tree dirty** |
-| Short  | `fedb6a5` |
-| Tag / describe | `fedb6a5` |
+| Commit | `870a8e4a91e5a2916353ae0f4fcc25f786137a72` — **work tree dirty** |
+| Short  | `870a8e4` |
+| Tag / describe | `870a8e4` |
 | Author date | `2026-05-23` |
-| Subject | specs/wine_test: test_shader_validator partial → scaffolded; cite existing PE stub |
+| Subject | tests/conformance/d3d9: add test_device_desktop_window_present_policy scaffold; test_desktop_window partial → scaffolded (visual.c + d3d9ex.c) |
 
 ### Wine reference revision
 
@@ -50,7 +50,7 @@ the same commit in the Wine checkout before opening the source.
 
 ```sh
 # Reproduce the inventory verbatim from a clean tree:
-git -C "$DXMT9_REPO" checkout fedb6a5249b75b44c96221cbcf2a0576c5ce6398
+git -C "$DXMT9_REPO" checkout 870a8e4a91e5a2916353ae0f4fcc25f786137a72
 git -C "$WINE_REPO"  checkout 6e073d28dee3af7f4c965daec94644e0f9f92727
 python3 scripts/tools/gen_wine_d3d9_test_inventory.py
 ```
@@ -74,9 +74,9 @@ python3 scripts/tools/gen_wine_d3d9_test_inventory.py
 |-------------|-----:|--------:|----------:|--------:|--------:|------:|
 | `visual.c` | 135 | 65 | 56 | 14 | 0 | 0 |
 | `device.c` | 105 | 1 | 104 | 0 | 0 | 0 |
-| `d3d9ex.c` | 27 | 0 | 26 | 1 | 0 | 0 |
+| `d3d9ex.c` | 27 | 0 | 27 | 0 | 0 | 0 |
 | `stateblock.c` | 1 | 0 | 1 | 0 | 0 | 0 |
-| **TOTAL** | **268** | **66** | **187** | **15** | **0** | **0** |
+| **TOTAL** | **268** | **66** | **188** | **14** | **0** | **0** |
 
 `other` rolls up `deferred`, `partial/deferred`, and any UNTRACKED rows.
 
@@ -359,7 +359,7 @@ Source: [`dlls/d3d9/tests/d3d9ex.c`](https://gitlab.winehq.org/wine/wine/-/blob/
 | `test_scene` | 5031 | 📐 | — |
 | `test_swapchain_get_displaymode_ex` | 432 | 📐 | `test_ex_swapchain_display_mode`, `test_ex_swapchain_display_mode_null_rotation`, `test_swapchain_get_display_mode_ex_policy` |
 | `test_swapchain_parameters` | 3655 | 📐 | `test_ex_create_reset_mode_validation` |
-| `test_sysmem_draw` | 4693 | 🟡 | — |
+| `test_sysmem_draw` | 4693 | 📐 | `test_ex_device_sysmem_vertex_buffer_policy` |
 | `test_unsupported_shaders` | 2173 | 📐 | `test_ex_shader_validation_policy` |
 | `test_user_memory` | 715 | 📐 | `test_ex_shared_handle_policy`, `test_ex_user_memory_lock_identity` |
 | `test_user_memory_getdc` | 1957 | 📐 | `test_ex_user_memory_getdc_dib_identity`, `test_ex_user_memory_getdc_format_policy` |

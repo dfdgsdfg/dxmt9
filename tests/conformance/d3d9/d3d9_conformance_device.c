@@ -4340,3 +4340,99 @@ void test_device_desktop_window_present_policy(const struct d3d9_api *api)
 done_d3d9:
     IDirect3D9_Release(d3d9);
 }
+
+/*
+ * Wine provenance: dlls/d3d9/tests/d3d9ex.c
+ * function: test_sysmem_draw (line 4693)
+ * commit: 6e073d28dee3af7f4c965daec94644e0f9f92727
+ *
+ * The base-device equivalent in dlls/d3d9/tests/visual.c
+ * (test_sysmem_draw at visual.c:25372) is already ✅ covered. This
+ * scaffold pins the D3D9Ex variant: the contract that an Ex factory +
+ * Ex device + system-memory vertex buffer combination is created
+ * without rejection at the HRESULT contract layer, and that the
+ * dynamic-lock entry point still validates pool/usage flags the same
+ * way as the base-device path.
+ *
+ * Scope (intentionally narrow): HRESULT contract on the Ex creation
+ * lattice — no draw is issued, no readback is sampled. The visual
+ * pixel-correctness pin lives in the visual.c ✅ row. Pixel-level
+ * coverage of the Ex path requires shader-runner_dxmt9 plumbing that
+ * is out of scope for this scaffold.
+ *
+ * Pinned contracts:
+ *   - Direct3DCreate9Ex(D3D_SDK_VERSION, &d3d9ex) returns S_OK.
+ *   - CreateDeviceEx(HAL, HARDWARE_VP, Windowed=TRUE, SwapEffect=
+ *     DISCARD, A8R8G8B8) returns S_OK.
+ *   - CreateVertexBuffer(256, 0, 0, D3DPOOL_SYSTEMMEM) returns S_OK
+ *     (the plain sysmem VB form Wine's oracle uses).
+ *   - Lock(0, 0, &ptr, 0) on a non-dynamic SYSTEMMEM VB returns S_OK
+ *     and yields a non-NULL pointer (sysmem VBs always honor a
+ *     no-flag lock; DISCARD on a non-dynamic VB is D3DERR_INVALIDCALL,
+ *     pinned separately by the existing test_pinned_buffers_*_policy
+ *     scaffold).
+ *   - Unlock returns S_OK.
+ *
+ * Note on D3DUSAGE_DYNAMIC + SYSTEMMEM: Wine accepts this combo on
+ * the base device (test_pinned_buffers_d3dusage_policy already pins
+ * the DEFAULT-pool dynamic flow), but the Ex sysmem_draw oracle uses
+ * the plain SYSTEMMEM form (no DYNAMIC, no WRITEONLY) to exercise
+ * the sysmem VB upload path. We follow the oracle.
+ */
+void test_ex_device_sysmem_vertex_buffer_policy(const struct d3d9_api *api)
+{
+    IDirect3D9Ex *d3d9ex;
+    IDirect3DDevice9Ex *device_ex = NULL;
+    IDirect3DVertexBuffer9 *vb = NULL;
+    D3DPRESENT_PARAMETERS pp;
+    HWND window;
+    void *data;
+    HRESULT hr;
+
+    d3d9ex = create_d3d9ex(api);
+    if (!d3d9ex)
+        return;
+
+    window = create_test_window();
+    CHECK_TRUE(window != NULL);
+    if (!window)
+        goto done_d3d9;
+
+    pp = default_present_parameters(window);
+    pp.SwapEffect = D3DSWAPEFFECT_DISCARD;
+    pp.BackBufferFormat = D3DFMT_A8R8G8B8;
+    hr = IDirect3D9Ex_CreateDeviceEx(d3d9ex, D3DADAPTER_DEFAULT,
+            D3DDEVTYPE_HAL, window, D3DCREATE_HARDWARE_VERTEXPROCESSING,
+            &pp, NULL, &device_ex);
+    if (FAILED(hr))
+    {
+        char hr_buffer[16];
+        print_hr(hr_buffer, sizeof(hr_buffer), hr);
+        skip_current_test("CreateDeviceEx failed with %s", hr_buffer);
+        goto done_window;
+    }
+
+    hr = IDirect3DDevice9Ex_CreateVertexBuffer(device_ex, 256, 0, 0,
+            D3DPOOL_SYSTEMMEM, &vb, NULL);
+    CHECK_HR(hr, D3D_OK);
+    if (FAILED(hr) || !vb)
+        goto done_device;
+
+    data = NULL;
+    hr = IDirect3DVertexBuffer9_Lock(vb, 0, 0, &data, 0);
+    CHECK_HR(hr, D3D_OK);
+    if (SUCCEEDED(hr))
+    {
+        CHECK_TRUE(data != NULL);
+        CHECK_HR(IDirect3DVertexBuffer9_Unlock(vb), D3D_OK);
+    }
+
+    IDirect3DVertexBuffer9_Release(vb);
+
+done_device:
+    IDirect3DDevice9Ex_Release(device_ex);
+done_window:
+    DestroyWindow(window);
+done_d3d9:
+    IDirect3D9Ex_Release(d3d9ex);
+}
