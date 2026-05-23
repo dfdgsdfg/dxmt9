@@ -123,15 +123,19 @@ void test_vendor_policy_intz_caps(const struct d3d9_api *api)
     }
 
     /*
-     * dxmt9 does not expose INTZ as a sampleable depth-stencil texture
-     * format on Metal; the CheckDeviceFormat query must consistently
-     * report D3DERR_NOTAVAILABLE. A future Metal depth-sampling path
-     * would flip the contract to S_OK and add the readback oracle.
+     * dxmt9 now exposes INTZ as a sampleable depth-stencil texture
+     * format via the Metal Depth32Float_Stencil8 path (commit 36935fb
+     * closed gap_d3d9.md §C.5 row INTZ via track G1-3). The
+     * CheckDeviceFormat query reports S_OK for the
+     * USAGE_DEPTHSTENCIL + RTYPE_TEXTURE pair; a dedicated readback
+     * oracle for INTZ depth-as-sampler readback lives in the
+     * `legacy_sm1/dxmt9_ps14_texdepth_*` corpus entries (already
+     * passing) and a future INTZ-specific runtime probe.
      */
     hr = IDirect3D9_CheckDeviceFormat(d3d9, D3DADAPTER_DEFAULT,
             D3DDEVTYPE_HAL, D3DFMT_X8R8G8B8, D3DUSAGE_DEPTHSTENCIL,
             D3DRTYPE_TEXTURE, intz_format);
-    CHECK_HR(hr, D3DERR_NOTAVAILABLE);
+    CHECK_HR(hr, D3D_OK);
 
     IDirect3D9_Release(d3d9);
 }
