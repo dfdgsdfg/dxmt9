@@ -25,7 +25,11 @@ using u64 = std::uint64_t;
 // D3D9 FVF bits + vertex-declaration usage/type codes. Previously duplicated
 // as constexpr inside backend_metal.mm's anonymous namespace; centralized
 // here so the FFP layout decoder + encoders share the definitions.
-inline constexpr u32 kFvfPositionMask = 0x000eu;
+// D3D9 position mask spans bit 14 so D3DFVF_XYZW (0x4002) is distinguishable
+// from plain D3DFVF_XYZ (0x0002). D3DFVF_LASTBETA_UBYTE4 / _D3DCOLOR
+// modifiers live outside this mask in 0x1000 / 0x8000 and are decoded
+// separately by the blend-indices reader.
+inline constexpr u32 kFvfPositionMask = 0x400eu;
 inline constexpr u32 kFvfXyz = 0x0002u;
 inline constexpr u32 kFvfXyzrhw = 0x0004u;
 inline constexpr u32 kFvfXyzB1 = 0x0006u;
@@ -33,6 +37,7 @@ inline constexpr u32 kFvfXyzB2 = 0x0008u;
 inline constexpr u32 kFvfXyzB3 = 0x000au;
 inline constexpr u32 kFvfXyzB4 = 0x000cu;
 inline constexpr u32 kFvfXyzB5 = 0x000eu;
+inline constexpr u32 kFvfXyzw = 0x4002u;
 inline constexpr u32 kFvfNormal = 0x0010u;
 inline constexpr u32 kFvfPSize = 0x0020u;
 inline constexpr u32 kFvfDiffuse = 0x0040u;

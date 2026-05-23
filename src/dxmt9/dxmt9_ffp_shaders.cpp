@@ -404,7 +404,7 @@ std::optional<FixedFunctionVertexLayout> decodeFixedFunctionVertexLayout(const V
 
   const u32 fvf = decl.fvf;
   const u32 position = fvf & kFvfPositionMask;
-  if (position != kFvfXyzrhw && position != kFvfXyz &&
+  if (position != kFvfXyzrhw && position != kFvfXyz && position != kFvfXyzw &&
       position != kFvfXyzB1 && position != kFvfXyzB2 &&
       position != kFvfXyzB3 && position != kFvfXyzB4 &&
       position != kFvfXyzB5) {
@@ -413,11 +413,16 @@ std::optional<FixedFunctionVertexLayout> decodeFixedFunctionVertexLayout(const V
 
   layout.valid = true;
   layout.preTransformed = position == kFvfXyzrhw;
-  layout.positionComponents = layout.preTransformed ? 4u : 3u;
+  // D3DFVF_XYZW (Wine `test_ffp_w`, visual.c:28095) declares a 4-component
+  // input but is NOT pre-transformed; the W is forced to 1.0 in the
+  // transformed FFP VS body. Keep this branch separate from `preTransformed`
+  // so the lighting / camera-space texgen still runs.
+  const bool xyzw = (position == kFvfXyzw);
+  layout.positionComponents = (layout.preTransformed || xyzw) ? 4u : 3u;
   u32 offset = 0;
   layout.positionOffset = offset;
-  offset += layout.preTransformed ? 16u : 12u;
-  if (!layout.preTransformed && position > kFvfXyz) {
+  offset += (layout.preTransformed || xyzw) ? 16u : 12u;
+  if (!layout.preTransformed && !xyzw && position > kFvfXyz) {
     layout.hasBlendWeight = true;
     layout.blendWeightOffset = offset;
     layout.blendWeightComponents = std::min<u32>((position - kFvfXyzrhw) / 2u, 4u);
@@ -621,6 +626,13 @@ std::string makeFfpVertexSource(const FfpVertexKey& key,
     out << "  const uint base = drawVolatile.vertexStreamOffset + uint(vertexIndex) * stride;\n";
     if (layout->positionComponents == 4) {
       out << "  float4 inPosition = dxmt9_load_f32x4(stream0, base + " << layout->positionOffset << "u);\n";
+      // Wine `test_ffp_w` (visual.c:28095) proves D3DFVF_XYZW / FLOAT4
+      // POSITION inputs feed the FFP transform with W forced to 1.0, not
+      // the buffer value. The XYZ stay verbatim, only the homogeneous W is
+      // overridden before the WorldViewProjection multiply. This path is
+      // never taken for pre-transformed POSITIONT — that hits the
+      // `preTransformed` branch above.
+      out << "  inPosition.w = 1.0f;\n";
     } else {
       out << "  float4 inPosition = float4(dxmt9_load_f32x3(stream0, base + " << layout->positionOffset
           << "u), 1.0f);\n";

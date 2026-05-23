@@ -1,0 +1,32 @@
+; [provenance]
+; source: dxmt9
+; source_kind: project-authored
+; license: MIT
+; license_scope: project-mit
+; oracle: Wine d3d9 visual.c test_per_stage_constant behavior, reduced to per-stage D3DTSS_CONSTANT routed through SELECTARG1 combiner with COMPLEMENT modifier
+; oracle-date: 2026-05-23
+
+; Wine `test_per_stage_constant` (visual.c:19516) iterates four
+; D3DTSS_COLORARG1 source variants while D3DTSS_CONSTANT holds 0x80a1b2c3:
+;   1) D3DTA_CONSTANT                                  -> RGB matches constant.
+;   2) D3DTA_CONSTANT | D3DTA_COMPLEMENT (0x16)        -> RGB = (1 - constant).
+;   3) D3DTA_CONSTANT | D3DTA_ALPHAREPLICATE (0x26)    -> RGB = constant.aaaa.
+;   4) D3DTA_CURRENT + ALPHAARG1=D3DTA_CONSTANT        -> alpha sourced from constant.
+; Iteration (1) is already covered by `dxmt9_ffp_tss_constant_readback`. This
+; test pins iteration (2) — verifying that the per-stage constant uniform
+; reaches the FFP combiner AND that the texture-arg `COMPLEMENT` modifier
+; (`arg & 0x10`) is honored on the constant input. With constant=0x80a1b2c3
+; the complement of the RGB channels is 0xff-0xa1=0x5e (0.369),
+; 0xff-0xb2=0x4d (0.302), 0xff-0xc3=0x3c (0.235), matching Wine's expected
+; readback `0x005e4d3c`.
+
+[test]
+clear rgba(0.0, 0.0, 0.0, 1.0)
+dxmt9-render-state z_enable=disable z_write=disable
+dxmt9-texture 0 1 1 A8R8G8B8 white
+dxmt9-sampler 0 address_u=clamp address_v=clamp min_filter=point mag_filter=point mip_filter=point
+dxmt9-texture-stage 0 color_op=selectarg1 alpha_op=selectarg1 color_arg1=0x16 alpha_arg1=constant constant=0x80a1b2c3
+dxmt9-bind-texture 0 0
+dxmt9-draw-textured-quad
+expect-source pixel contains "ffpPs.stageConstants[0]"
+probe (32, 32) rgba(0.369, 0.302, 0.235, 0.502) 2

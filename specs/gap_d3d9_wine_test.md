@@ -27,11 +27,11 @@ changes not yet visible upstream.
 
 | Field | Value |
 |-------|-------|
-| Commit | `20dc0089b34c0f3d93dd0092bedff18a97e028bb` — **work tree dirty** |
-| Short  | `20dc008` |
-| Tag / describe | `20dc008` |
+| Commit | `670a9005c7b2f546cdaae19ace8c19accc138e11` — **work tree dirty** |
+| Short  | `670a900` |
+| Tag / describe | `670a900` |
 | Author date | `2026-05-23` |
-| Subject | d3d9: remove duplicate gammaRamp_ shadow after Option A merge |
+| Subject | specs/gap_d3d9_wine_test: 5 SR-evidenced tests flip failing→covered |
 
 ### Wine reference revision
 
@@ -50,7 +50,7 @@ the same commit in the Wine checkout before opening the source.
 
 ```sh
 # Reproduce the inventory verbatim from a clean tree:
-git -C "$DXMT9_REPO" checkout 20dc0089b34c0f3d93dd0092bedff18a97e028bb
+git -C "$DXMT9_REPO" checkout 670a9005c7b2f546cdaae19ace8c19accc138e11
 git -C "$WINE_REPO"  checkout 6e073d28dee3af7f4c965daec94644e0f9f92727
 python3 scripts/tools/gen_wine_d3d9_test_inventory.py
 ```
@@ -72,11 +72,11 @@ python3 scripts/tools/gen_wine_d3d9_test_inventory.py
 
 | Wine source | Tests | covered | scaffolded | partial | failing | other |
 |-------------|-----:|--------:|----------:|--------:|--------:|------:|
-| `visual.c` | 135 | 38 | 55 | 36 | 6 | 0 |
+| `visual.c` | 135 | 41 | 55 | 36 | 3 | 0 |
 | `device.c` | 105 | 1 | 95 | 9 | 0 | 0 |
 | `d3d9ex.c` | 27 | 0 | 25 | 2 | 0 | 0 |
 | `stateblock.c` | 1 | 0 | 1 | 0 | 0 | 0 |
-| **TOTAL** | **268** | **39** | **176** | **47** | **6** | **0** |
+| **TOTAL** | **268** | **42** | **176** | **47** | **3** | **0** |
 
 `other` rolls up `deferred`, `partial/deferred`, and any UNTRACKED rows.
 
@@ -156,7 +156,7 @@ Source: [`dlls/d3d9/tests/visual.c`](https://gitlab.winehq.org/wine/wine/-/blob/
 | `test_dynamic_map_synchronization` | 26843 | ✅ | — |
 | `test_evict_bound_resources` | 23967 | 📐 | `test_visual_evict_managed_resources_policy` |
 | `test_fetch4` | 15189 | 📐 | `test_vendor_policy_fetch4_caps` |
-| `test_ffp_w` | 28095 | 🔴 | — |
+| `test_ffp_w` | 28095 | ✅ | — |
 | `test_filling_convention` | 26975 | 📐 | `test_visual_filling_convention_caps_policy` |
 | `test_flip` | 22028 | 📐 | `test_visual_swapchain_flip_present_policy` |
 | `test_fog` | 28198 | 🟡 | — |
@@ -183,7 +183,7 @@ Source: [`dlls/d3d9/tests/visual.c`](https://gitlab.winehq.org/wine/wine/-/blob/
 | `test_negative_fixedfunction_fog` | 19957 | 🟢 | — |
 | `test_nrm_instruction` | 25655 | ✅ | — |
 | `test_null_format` | 24739 | 📐 | `test_visual_null_format_caps_policy` |
-| `test_per_stage_constant` | 19516 | 🟠 | — |
+| `test_per_stage_constant` | 19516 | ✅ | — |
 | `test_pointsize` | 10873 | 🟢 | — |
 | `test_position_index` | 20115 | 📐 | `test_visual_position_index_decl_policy` |
 | `test_sample_attached_rendertarget` | 26344 | ✅ | — |
@@ -197,7 +197,7 @@ Source: [`dlls/d3d9/tests/visual.c`](https://gitlab.winehq.org/wine/wine/-/blob/
 | `test_texcoordindex` | 21069 | 🟡 | — |
 | `test_texture_blending` | 22642 | 🟡 | — |
 | `test_texture_transform_flags` | 28549 | 🟠 | — |
-| `test_uninitialized_varyings` | 22176 | 🟠 | — |
+| `test_uninitialized_varyings` | 22176 | ✅ | — |
 | `test_updatetexture` | 21506 | ✅ | — |
 | `test_vertex_blending` | 21243 | ✅ | — |
 | `test_vertex_texture` | 24394 | 🟢 | — |

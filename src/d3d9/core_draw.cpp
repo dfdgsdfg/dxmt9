@@ -494,9 +494,14 @@ void emitRenderTrace(const char *fmt, ...) {
   va_end(args);
 }
 
-constexpr u32 kFvfPositionMask = 0x000eu;
+// D3DFVF_POSITION_MASK spans bit 14 (D3DFVF_XYZW = 0x4002), so the stride
+// inferer must read 4-component XYZW positions as 16 bytes — not collapse
+// them to XYZ via the legacy 0x000e mask. Aligns with the shared
+// `dxmt9_ffp_shaders.hpp` constant. Wine reference: visual.c `test_ffp_w`.
+constexpr u32 kFvfPositionMask = 0x400eu;
 constexpr u32 kFvfXyzrhw = 0x0004u;
 constexpr u32 kFvfXyz = 0x0002u;
+constexpr u32 kFvfXyzw = 0x4002u;
 constexpr u32 kFvfNormal = 0x0010u;
 constexpr u32 kFvfDiffuse = 0x0040u;
 constexpr u32 kFvfSpecular = 0x0080u;
@@ -586,7 +591,7 @@ u32 inferStreamZeroStride(const VertexDeclSnapshot &vertexDecl) {
   const u32 fvf = vertexDecl.fvf;
   const u32 position = fvf & kFvfPositionMask;
   u32 stride = 0;
-  if (position == kFvfXyzrhw) {
+  if (position == kFvfXyzrhw || position == kFvfXyzw) {
     stride = 16u;
   } else if (position == kFvfXyz) {
     stride = 12u;

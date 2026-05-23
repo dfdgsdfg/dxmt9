@@ -1,0 +1,41 @@
+; [provenance]
+; source: dxmt9
+; source_kind: project-authored
+; license: MIT
+; license_scope: project-mit
+; oracle: Wine d3d9 visual.c test_uninitialized_varyings behavior, reduced to vs_2_0 writes only oPos + ps_2_0 reads v1 (specular) → FS reads (0,0,0,*)
+; oracle-date: 2026-05-23
+
+; Wine reference: dlls/d3d9/tests/visual.c line 22342 — case
+;   {D3DVS_VERSION(2, 0), vs2_code, D3DPS_VERSION(2, 0), ps2_specular_code, 0xff000000, TRUE, FALSE, TRUE}
+; The VS declares only POSITION; the FS reads v1 (COLOR1, specular). Wine and
+; Windows D3D9 expect rgb=0 for an undeclared/unwritten secondary-color varying.
+; (Wine documents COLOR0/diffuse as the well-known exception that defaults to
+; 1.0 — see lines 22341 and 22348 of the same test — so this corpus exercises
+; a non-COLOR0 varying to verify the default-zero contract.)
+
+[vertex shader d3dbc-hex]
+; vs_2_0
+;   dcl_position v0
+;   mov oPos, v0
+fffe0200 0200001f 80000000 900f0000
+02000001 c00f0000 90e40000
+0000ffff
+
+[pixel shader d3dbc-hex]
+; ps_2_0
+;   dcl v1            ; specular / COLOR1
+;   mov oC0, v1
+ffff0200 0200001f 80000000 900f0001
+02000001 800f0800 90e40001
+0000ffff
+
+[test]
+clear rgba(1.0, 0.0, 0.0, 1.0)
+dxmt9-draw-vs-color-triangle
+; Right half: triangle drawn → FS samples unwritten v1 → expect rgb=0.
+; dxmt9 emits `outSecondaryColor = float4(0.0f)` in
+; src/dxmt9/dxmt9_shader_metal_ir.cpp, so alpha is also 0 on this backend.
+probe (48, 32) rgba(0.0, 0.0, 0.0, 0.0) 1
+; Left half: outside the triangle, clear color (red) is preserved.
+probe (16, 32) rgba(1.0, 0.0, 0.0, 1.0) 1

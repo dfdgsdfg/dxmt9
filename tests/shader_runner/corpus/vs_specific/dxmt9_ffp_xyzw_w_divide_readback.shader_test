@@ -1,0 +1,35 @@
+; [provenance]
+; source: dxmt9
+; source_kind: project-authored
+; license: MIT
+; license_scope: project-mit
+; oracle: Wine d3d9 visual.c test_ffp_w behavior, reduced to D3DFVF_XYZW vertex buffer with non-1.0 W input forced to 1.0 by FFP transform
+; oracle-date: 2026-05-23
+
+; Wine reference: dlls/d3d9/tests/visual.c::test_ffp_w (line 28095).
+;
+; D3DFVF_XYZW (0x4002 = D3DFVF_XYZ | bit 0x4000) declares a 4-component
+; POSITION input that is NOT pre-transformed. The W value in the buffer is
+; ignored: the FFP vertex pipeline forces W=1.0 before the
+; WorldViewProjection multiply, otherwise a per-vertex W=0.5 would
+; collapse the quad through the projection / perspective divide.
+;
+; This corpus pins the runtime behaviour: an XYZW quad in NDC [-0.5, +0.5]
+; with diffuse green and per-vertex W=0.5 must render the diffuse colour
+; at the central half of the framebuffer. With the W override missing
+; (regression), the quad either fails layout validation (FVF rejected by
+; decodeFixedFunctionVertexLayout) or projects to a single point and
+; leaves the framebuffer clear.
+
+[test]
+clear rgba(1.0, 0.0, 0.0, 1.0)
+dxmt9-render-state z_enable=disable z_write=disable
+dxmt9-texture 0 1 1 A8R8G8B8 rgba(1.0,1.0,1.0,1.0)
+dxmt9-bind-texture 0 0
+dxmt9-sampler 0 address_u=clamp address_v=clamp min_filter=point mag_filter=point mip_filter=point
+dxmt9-texture-stage 0 color_op=selectarg1 color_arg1=diffuse alpha_op=selectarg1 alpha_arg1=diffuse
+dxmt9-draw-ffp-xyzw-color-quad
+; Centre pixel: inside the [-0.5,+0.5] NDC quad → diffuse green.
+probe (32, 32) rgba(0.0, 0.863, 0.0, 1.0) 2
+; Corner pixel: outside the quad → clear red preserved.
+probe (4, 4) rgba(1.0, 0.0, 0.0, 1.0) 1
