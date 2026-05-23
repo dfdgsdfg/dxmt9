@@ -645,3 +645,86 @@ done_window:
 done_d3d9:
     IDirect3D9_Release(d3d9);
 }
+
+/*
+ * Wine provenance: dlls/d3d9/tests/visual.c
+ * function: test_multisample_stretch_rect (visual.c:4494)
+ * commit: 6e073d28dee3af7f4c965daec94644e0f9f92727
+ *
+ * Wine's test_multisample_stretch_rect exercises StretchRect as the
+ * D3D9 multisample-resolve mechanism. This PE scaffold pins the
+ * public-ABI policy: an MSAA D3DPOOL_DEFAULT render target may be
+ * StretchRect'd into a non-MSAA render target of the same format
+ * (the legal MSAA-resolve direction) and returns S_OK; the reverse
+ * direction (non-MSAA -> MSAA target) is illegal and must fail with
+ * D3DERR_INVALIDCALL. If the runtime reports the MSAA mode as
+ * unavailable via D3DERR_NOTAVAILABLE at CreateRenderTarget time
+ * (cap gap), the scaffold accepts that and skips the resolve probes
+ * rather than failing the test.
+ */
+void test_stretch_rect_multisample_resolve_policy(const struct d3d9_api *api)
+{
+    IDirect3DSurface9 *msaa_rt = NULL;
+    IDirect3DSurface9 *nonmsaa_rt = NULL;
+    IDirect3DDevice9 *device = NULL;
+    IDirect3D9 *d3d9;
+    HWND window;
+    HRESULT hr;
+
+    d3d9 = api->create9(D3D_SDK_VERSION);
+    if (!d3d9)
+    {
+        skip_current_test("Direct3DCreate9 returned NULL");
+        return;
+    }
+
+    window = create_test_window();
+    CHECK_TRUE(window != NULL);
+    if (!window)
+        goto done_d3d9;
+
+    device = create_base_device(d3d9, window);
+    if (!device)
+        goto done_window;
+
+    /* MSAA RT may not be available on every runtime; treat NOTAVAILABLE
+     * as a cap gap and skip the resolve probes. */
+    hr = IDirect3DDevice9_CreateRenderTarget(device, 64, 64,
+            D3DFMT_A8R8G8B8, D3DMULTISAMPLE_2_SAMPLES, 0, FALSE,
+            &msaa_rt, NULL);
+    if (hr == D3DERR_NOTAVAILABLE)
+    {
+        CHECK_TRUE(msaa_rt == NULL);
+        goto done_device;
+    }
+    CHECK_HR(hr, D3D_OK);
+    if (FAILED(hr))
+        goto done_device;
+
+    hr = IDirect3DDevice9_CreateRenderTarget(device, 64, 64,
+            D3DFMT_A8R8G8B8, D3DMULTISAMPLE_NONE, 0, FALSE,
+            &nonmsaa_rt, NULL);
+    CHECK_HR(hr, D3D_OK);
+    if (FAILED(hr))
+        goto done_msaa;
+
+    /* Legal direction: MSAA -> non-MSAA is the D3D9 resolve idiom. */
+    hr = IDirect3DDevice9_StretchRect(device, msaa_rt, NULL,
+            nonmsaa_rt, NULL, D3DTEXF_NONE);
+    CHECK_HR(hr, D3D_OK);
+
+    /* Illegal direction: non-MSAA -> MSAA target. */
+    hr = IDirect3DDevice9_StretchRect(device, nonmsaa_rt, NULL,
+            msaa_rt, NULL, D3DTEXF_NONE);
+    CHECK_HR(hr, D3DERR_INVALIDCALL);
+
+    IDirect3DSurface9_Release(nonmsaa_rt);
+done_msaa:
+    IDirect3DSurface9_Release(msaa_rt);
+done_device:
+    IDirect3DDevice9_Release(device);
+done_window:
+    DestroyWindow(window);
+done_d3d9:
+    IDirect3D9_Release(d3d9);
+}

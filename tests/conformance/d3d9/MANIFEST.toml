@@ -3570,6 +3570,23 @@ status = "scaffolded"
 
 [[case]]
 executable = "dxmt9-d3d9-conformance.exe"
+source_file = "d3d9_conformance_visual_raster.c"
+function = "test_stretch_rect_multisample_resolve_policy"
+source = "wine/dlls/d3d9/tests/visual.c:test_multisample_stretch_rect"
+source_kind = "behavioral-oracle"
+license = "LGPL-2.1-or-later"
+license_scope = "external-not-vendored"
+upstream_commit = "6e073d28dee3af7f4c965daec94644e0f9f92727"
+lanes = ["app-local", "builtin"]
+arches = ["x64", "x86"]
+area = "surface-blit"
+owner = "core/resources"
+requirements = ["R-TEST-12.13", "R-TEST-12.14"]
+acceptance = ["StretchRect of an MSAA D3DPOOL_DEFAULT D3DFMT_A8R8G8B8 render target into a same-format non-MSAA render target returns S_OK (D3D9 multisample-resolve idiom); the reverse direction (non-MSAA -> MSAA target) returns D3DERR_INVALIDCALL; if MSAA RT creation returns D3DERR_NOTAVAILABLE the resolve probes are skipped"]
+status = "scaffolded"
+
+[[case]]
+executable = "dxmt9-d3d9-conformance.exe"
 source_file = "d3d9_conformance_vendor_policy.c"
 function = "test_vendor_policy_texbem_unsupported"
 source = "wine/dlls/d3d9/tests/visual.c:texbem_test"
