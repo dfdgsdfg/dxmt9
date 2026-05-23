@@ -275,6 +275,18 @@ oracle = "math-derivation"
 oracle-date = "2026-05-16"
 
 [[test]]
+file = "render_state/dxmt9_blend_srcalpha_invsrcalpha_readback.shader_test"
+status = "passing"
+source = "dxmt9"
+source_kind = "project-authored"
+license = "MIT"
+license_scope = "project-mit"
+models = ["ffp"]
+opcodes = ["PROBE"]
+oracle = "Wine d3d9 visual.c test_blend behavior, reduced to SRC_ALPHA/INV_SRC_ALPHA midpoint readback"
+oracle-date = "2026-05-23"
+
+[[test]]
 file = "render_state/dxmt9_blend_op_subtract_readback.shader_test"
 status = "passing"
 source = "dxmt9"

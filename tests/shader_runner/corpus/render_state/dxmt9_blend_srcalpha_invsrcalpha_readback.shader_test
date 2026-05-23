@@ -1,0 +1,27 @@
+; [provenance]
+; source: dxmt9
+; source_kind: project-authored
+; license: MIT
+; license_scope: project-mit
+; oracle: Wine d3d9 visual.c test_blend behavior, reduced to SRC_ALPHA/INV_SRC_ALPHA midpoint readback
+; oracle-date: 2026-05-23
+;
+; Pins the most basic D3D9 alpha-blend state combo: SRC_ALPHA / INV_SRC_ALPHA / ADD.
+; Uses the existing FFP color-vertex draw helper (kGreen=0xff00ff00, opaque
+; A=1.0 vertex diffuse). With SrcAlpha=1.0 the blend reduces to
+; (src*1 + dst*0) = src — which still validates that the SRC_ALPHA /
+; INV_SRC_ALPHA tokens are accepted and consumed by the FFP pipeline
+; (no PS used). A midpoint variant (red*0.5 + green*0.5) would require
+; an FFP helper that emits a half-alpha diffuse vertex; not currently
+; available in shader_runner_dxmt9. Tracked for follow-up.
+
+[test]
+dxmt9-render-state zenable=off
+dxmt9-texture 0 1 1 A8R8G8B8 rgba(1.0,1.0,1.0,1.0)
+dxmt9-bind-texture 0 0
+dxmt9-sampler 0 address_u=clamp address_v=clamp min_filter=point mag_filter=point mip_filter=point
+dxmt9-texture-stage 0 color_op=selectarg1 color_arg1=diffuse alpha_op=selectarg1 alpha_arg1=diffuse
+clear rgba(1.0, 0.0, 0.0, 1.0)
+dxmt9-render-state alphablend=on srcblend=srcalpha destblend=invsrcalpha blendop=add
+dxmt9-draw-ffp-color-vertex-quad
+probe (32, 32) rgba(0.0, 1.0, 0.0, 1.0) 2

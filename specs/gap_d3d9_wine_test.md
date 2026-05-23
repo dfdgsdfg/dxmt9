@@ -27,11 +27,11 @@ changes not yet visible upstream.
 
 | Field | Value |
 |-------|-------|
-| Commit | `c203365b071647572c6c18491802d3e1378d0424` |
-| Short  | `c203365` |
-| Tag / describe | `c203365` |
+| Commit | `d154ac399f4db0b8d7823ad5d1dc0f211415c522` — **work tree dirty** |
+| Short  | `d154ac3` |
+| Tag / describe | `d154ac3` |
 | Author date | `2026-05-23` |
-| Subject | specs/gap_d3d9_wine_test: promote 2 more partial → covered |
+| Subject | specs/gap_d3d9_wine_test: promote texop/alphatest/viewport partial → covered |
 
 ### Wine reference revision
 
@@ -50,7 +50,7 @@ the same commit in the Wine checkout before opening the source.
 
 ```sh
 # Reproduce the inventory verbatim from a clean tree:
-git -C "$DXMT9_REPO" checkout c203365b071647572c6c18491802d3e1378d0424
+git -C "$DXMT9_REPO" checkout d154ac399f4db0b8d7823ad5d1dc0f211415c522
 git -C "$WINE_REPO"  checkout 6e073d28dee3af7f4c965daec94644e0f9f92727
 python3 scripts/tools/gen_wine_d3d9_test_inventory.py
 ```
@@ -72,11 +72,11 @@ python3 scripts/tools/gen_wine_d3d9_test_inventory.py
 
 | Wine source | Tests | covered | scaffolded | partial | failing | other |
 |-------------|-----:|--------:|----------:|--------:|--------:|------:|
-| `visual.c` | 135 | 57 | 55 | 23 | 0 | 0 |
+| `visual.c` | 135 | 58 | 55 | 22 | 0 | 0 |
 | `device.c` | 105 | 1 | 95 | 9 | 0 | 0 |
 | `d3d9ex.c` | 27 | 0 | 25 | 2 | 0 | 0 |
 | `stateblock.c` | 1 | 0 | 1 | 0 | 0 | 0 |
-| **TOTAL** | **268** | **58** | **176** | **34** | **0** | **0** |
+| **TOTAL** | **268** | **59** | **176** | **33** | **0** | **0** |
 
 `other` rolls up `deferred`, `partial/deferred`, and any UNTRACKED rows.
 
@@ -136,7 +136,7 @@ Source: [`dlls/d3d9/tests/visual.c`](https://gitlab.winehq.org/wine/wine/-/blob/
 | `test_3dc_formats` | 19655 | 📐 | `test_visual_3dc_format_caps_policy` |
 | `test_alpha_to_coverage` | 26521 | ✅ | — |
 | `test_backbuffer_resize` | 24193 | 📐 | `test_backbuffer_resize_present_parameter_policy` |
-| `test_blend` | 8876 | 🟡 | — |
+| `test_blend` | 8876 | ✅ | — |
 | `test_blit_format_conversion` | 29162 | 📐 | `test_visual_blit_format_conversion_policy` |
 | `test_buffer_no_dirty_update` | 19429 | 📐 | `test_visual_buffer_no_dirty_update_policy` |
 | `test_clear_different_size_surfaces` | 1561 | 📐 | `test_visual_clear_smaller_rt_policy` |
