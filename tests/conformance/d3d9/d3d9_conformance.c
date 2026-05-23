@@ -322,6 +322,8 @@ static const struct test_case tests[] =
             test_stretch_rect_npot_dimension_policy},
     {"stretch_rect_multisample_resolve_policy",
             test_stretch_rect_multisample_resolve_policy},
+    {"multisample_render_target_init_policy",
+            test_multisample_render_target_init_policy},
     {"visual_specular_lighting_render_state_policy",
             test_visual_specular_lighting_render_state_policy},
     {"visual_max_index16_draw_policy",

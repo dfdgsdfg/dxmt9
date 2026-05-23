@@ -528,6 +528,7 @@ void test_stretch_rect_depth_stencil_policy(const struct d3d9_api *api);
 void test_stretch_rect_format_matrix_policy(const struct d3d9_api *api);
 void test_stretch_rect_npot_dimension_policy(const struct d3d9_api *api);
 void test_stretch_rect_multisample_resolve_policy(const struct d3d9_api *api);
+void test_multisample_render_target_init_policy(const struct d3d9_api *api);
 
 
 /* Wine visual.c planned-item scaffolds (G1). */

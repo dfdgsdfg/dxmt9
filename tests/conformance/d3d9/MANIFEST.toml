@@ -3587,6 +3587,23 @@ status = "scaffolded"
 
 [[case]]
 executable = "dxmt9-d3d9-conformance.exe"
+source_file = "d3d9_conformance_visual_raster.c"
+function = "test_multisample_render_target_init_policy"
+source = "wine/dlls/d3d9/tests/visual.c:test_multisample_init"
+source_kind = "behavioral-oracle"
+license = "LGPL-2.1-or-later"
+license_scope = "external-not-vendored"
+upstream_commit = "6e073d28dee3af7f4c965daec94644e0f9f92727"
+lanes = ["app-local", "builtin"]
+arches = ["x64", "x86"]
+area = "surface-blit"
+owner = "core/resources"
+requirements = ["R-TEST-12.13", "R-TEST-12.14"]
+acceptance = ["CreateRenderTarget for a D3DPOOL_DEFAULT D3DFMT_A8R8G8B8 surface with D3DMULTISAMPLE_2_SAMPLES returns S_OK or D3DERR_NOTAVAILABLE; on S_OK the surface can be bound as RT 0 via SetRenderTarget and cleared with D3DCLEAR_TARGET (both returning S_OK); the original backbuffer can be restored as RT 0 before the MSAA RT is released; if MSAA RT creation returns D3DERR_NOTAVAILABLE the bind/clear probes are skipped"]
+status = "scaffolded"
+
+[[case]]
+executable = "dxmt9-d3d9-conformance.exe"
 source_file = "d3d9_conformance_vendor_policy.c"
 function = "test_vendor_policy_texbem_unsupported"
 source = "wine/dlls/d3d9/tests/visual.c:texbem_test"

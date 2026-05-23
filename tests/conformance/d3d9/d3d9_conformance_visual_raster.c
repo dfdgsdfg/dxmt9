@@ -728,3 +728,89 @@ done_window:
 done_d3d9:
     IDirect3D9_Release(d3d9);
 }
+
+/*
+ * Wine provenance: dlls/d3d9/tests/visual.c
+ * function: test_multisample_init (visual.c:22489)
+ * commit: 6e073d28dee3af7f4c965daec94644e0f9f92727
+ *
+ * Wine's test_multisample_init creates an MSAA render target, binds it,
+ * clears it to a known color, resolves it to a non-MSAA RT and reads
+ * pixels back. The pixel-readback step is EXP-route (needs a working
+ * Metal probe). This PE-route scaffold pins only the public-ABI
+ * decision matrix: an MSAA D3DPOOL_DEFAULT render target can be
+ * created, bound as RT 0, and cleared with D3DCLEAR_TARGET — all
+ * returning S_OK. If the runtime reports the MSAA mode as unavailable
+ * via D3DERR_NOTAVAILABLE at CreateRenderTarget time (cap gap), the
+ * scaffold accepts that and skips the bind/clear probes rather than
+ * failing the test. The original RT 0 is restored before release so
+ * the device is left in a clean state.
+ */
+void test_multisample_render_target_init_policy(const struct d3d9_api *api)
+{
+    IDirect3DSurface9 *original_bb = NULL;
+    IDirect3DSurface9 *msaa_rt = NULL;
+    IDirect3DDevice9 *device = NULL;
+    IDirect3D9 *d3d9;
+    HWND window;
+    HRESULT hr;
+
+    d3d9 = api->create9(D3D_SDK_VERSION);
+    if (!d3d9)
+    {
+        skip_current_test("Direct3DCreate9 returned NULL");
+        return;
+    }
+
+    window = create_test_window();
+    CHECK_TRUE(window != NULL);
+    if (!window)
+        goto done_d3d9;
+
+    device = create_base_device(d3d9, window);
+    if (!device)
+        goto done_window;
+
+    /* MSAA RT may not be available on every runtime; HR must be one of
+     * S_OK / D3DERR_NOTAVAILABLE. NOTAVAILABLE is treated as a cap gap
+     * and skips the bind/clear probes. */
+    hr = IDirect3DDevice9_CreateRenderTarget(device, 64, 64,
+            D3DFMT_A8R8G8B8, D3DMULTISAMPLE_2_SAMPLES, 0, FALSE,
+            &msaa_rt, NULL);
+    CHECK_TRUE(hr == D3D_OK || hr == D3DERR_NOTAVAILABLE);
+    if (hr == D3DERR_NOTAVAILABLE)
+    {
+        CHECK_TRUE(msaa_rt == NULL);
+        goto done_device;
+    }
+    if (FAILED(hr))
+        goto done_device;
+
+    /* Snapshot the original RT 0 (backbuffer) so we can restore it
+     * before releasing the MSAA RT — releasing a currently-bound RT
+     * is a runtime ownership edge case we explicitly avoid here. */
+    hr = IDirect3DDevice9_GetRenderTarget(device, 0, &original_bb);
+    CHECK_HR(hr, D3D_OK);
+    if (FAILED(hr))
+        goto done_msaa;
+
+    /* Bind MSAA RT as slot 0 and clear it to a known color. */
+    CHECK_HR(IDirect3DDevice9_SetRenderTarget(device, 0, msaa_rt), D3D_OK);
+    CHECK_HR(IDirect3DDevice9_Clear(device, 0, NULL, D3DCLEAR_TARGET,
+            0xff00ff00, 0.0f, 0), D3D_OK);
+
+    /* Restore the original backbuffer as RT 0 before releasing the MSAA
+     * RT, so the device is left in a clean state. */
+    CHECK_HR(IDirect3DDevice9_SetRenderTarget(device, 0, original_bb),
+            D3D_OK);
+    IDirect3DSurface9_Release(original_bb);
+
+done_msaa:
+    IDirect3DSurface9_Release(msaa_rt);
+done_device:
+    IDirect3DDevice9_Release(device);
+done_window:
+    DestroyWindow(window);
+done_d3d9:
+    IDirect3D9_Release(d3d9);
+}

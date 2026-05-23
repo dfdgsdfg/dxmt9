@@ -27,11 +27,11 @@ changes not yet visible upstream.
 
 | Field | Value |
 |-------|-------|
-| Commit | `63684c16cd74388fbefc779fb2f30d0a12d75845` — **work tree dirty** |
-| Short  | `63684c1` |
-| Tag / describe | `63684c1` |
+| Commit | `d24ccd35762dda1039ac1a28698c28beab33fcce` — **work tree dirty** |
+| Short  | `d24ccd3` |
+| Tag / describe | `d24ccd3` |
 | Author date | `2026-05-24` |
-| Subject | tests/conformance/d3d9: add test_stretch_rect_npot_dimension_policy; np2_stretch_rect_test partial → scaffolded |
+| Subject | tests/conformance/d3d9: add test_stretch_rect_multisample_resolve_policy; test_multisample_stretch_rect partial → scaffolded |
 
 ### Wine reference revision
 
@@ -50,7 +50,7 @@ the same commit in the Wine checkout before opening the source.
 
 ```sh
 # Reproduce the inventory verbatim from a clean tree:
-git -C "$DXMT9_REPO" checkout 63684c16cd74388fbefc779fb2f30d0a12d75845
+git -C "$DXMT9_REPO" checkout d24ccd35762dda1039ac1a28698c28beab33fcce
 git -C "$WINE_REPO"  checkout 6e073d28dee3af7f4c965daec94644e0f9f92727
 python3 scripts/tools/gen_wine_d3d9_test_inventory.py
 ```
@@ -72,11 +72,11 @@ python3 scripts/tools/gen_wine_d3d9_test_inventory.py
 
 | Wine source | Tests | covered | scaffolded | partial | failing | other |
 |-------------|-----:|--------:|----------:|--------:|--------:|------:|
-| `visual.c` | 135 | 65 | 60 | 10 | 0 | 0 |
+| `visual.c` | 135 | 65 | 61 | 9 | 0 | 0 |
 | `device.c` | 105 | 1 | 104 | 0 | 0 | 0 |
 | `d3d9ex.c` | 27 | 0 | 27 | 0 | 0 | 0 |
 | `stateblock.c` | 1 | 0 | 1 | 0 | 0 | 0 |
-| **TOTAL** | **268** | **66** | **192** | **10** | **0** | **0** |
+| **TOTAL** | **268** | **66** | **193** | **9** | **0** | **0** |
 
 `other` rolls up `deferred`, `partial/deferred`, and any UNTRACKED rows.
 
@@ -176,7 +176,7 @@ Source: [`dlls/d3d9/tests/visual.c`](https://gitlab.winehq.org/wine/wine/-/blob/
 | `test_mismatched_sample_types` | 25977 | ✅ | — |
 | `test_mova` | 1965 | ✅ | — |
 | `test_multisample_get_front_buffer_data` | 17168 | 📐 | `test_visual_multisample_get_front_buffer_data_policy` |
-| `test_multisample_init` | 22489 | 🟡 | — |
+| `test_multisample_init` | 22489 | 📐 | `test_multisample_render_target_init_policy` |
 | `test_multisample_mismatch` | 20823 | 📐 | `test_visual_multisample_rt_ds_mismatch_policy` |
 | `test_multisample_stretch_rect` | 4494 | 📐 | `test_stretch_rect_multisample_resolve_policy` |
 | `test_mvp_software_vertex_shaders` | 24522 | 📐 | `test_visual_mvp_software_vp_policy` |
