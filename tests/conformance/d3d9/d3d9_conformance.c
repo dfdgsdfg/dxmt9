@@ -333,6 +333,8 @@ static const struct test_case tests[] =
     {"visual_vface_pixel_shader_create_policy",
             test_visual_vface_pixel_shader_create_policy},
     {"visual_fp_special_caps_policy", test_visual_fp_special_caps_policy},
+    {"draw_primitive_outside_scene_policy",
+            test_draw_primitive_outside_scene_policy},
 };
 
 int main(int argc, char **argv)

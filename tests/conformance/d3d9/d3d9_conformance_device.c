@@ -3971,3 +3971,58 @@ done_window:
 done_d3d9:
     IDirect3D9_Release(d3d9);
 }
+
+/*
+ * Wine provenance: dlls/d3d9/tests/device.c
+ * function: test_draw_primitive (BeginScene precondition slice)
+ * commit: 6e073d28dee3af7f4c965daec94644e0f9f92727
+ *
+ * Pins the scene-precondition contract for DrawPrimitive: a call issued
+ * outside a BeginScene/EndScene pair must return D3DERR_INVALIDCALL,
+ * while a zero-primitive-count DrawPrimitive issued inside a scene is a
+ * no-op that succeeds with S_OK. Matches Wine's expectations in
+ * test_draw_primitive at dlls/d3d9/tests/device.c around line 3081.
+ */
+void test_draw_primitive_outside_scene_policy(const struct d3d9_api *api)
+{
+    IDirect3DDevice9 *device = NULL;
+    IDirect3D9 *d3d9;
+    HWND window;
+    HRESULT hr;
+
+    d3d9 = api->create9(D3D_SDK_VERSION);
+    if (!d3d9)
+    {
+        skip_current_test("Direct3DCreate9 returned NULL");
+        return;
+    }
+
+    window = create_test_window();
+    CHECK_TRUE(window != NULL);
+    if (!window)
+        goto done_d3d9;
+
+    device = create_base_device(d3d9, window);
+    if (!device)
+        goto done_window;
+
+    /* DrawPrimitive without a prior BeginScene must reject. */
+    hr = IDirect3DDevice9_DrawPrimitive(device, D3DPT_TRIANGLELIST, 0, 0);
+    CHECK_HR(hr, D3DERR_INVALIDCALL);
+
+    /* Inside a scene, zero primitiveCount is a no-op that returns S_OK. */
+    CHECK_HR(IDirect3DDevice9_BeginScene(device), D3D_OK);
+    hr = IDirect3DDevice9_DrawPrimitive(device, D3DPT_TRIANGLELIST, 0, 0);
+    CHECK_HR(hr, D3D_OK);
+    CHECK_HR(IDirect3DDevice9_EndScene(device), D3D_OK);
+
+    /* After EndScene, the scene precondition is re-armed: must reject again. */
+    hr = IDirect3DDevice9_DrawPrimitive(device, D3DPT_TRIANGLELIST, 0, 0);
+    CHECK_HR(hr, D3DERR_INVALIDCALL);
+
+    IDirect3DDevice9_Release(device);
+done_window:
+    DestroyWindow(window);
+done_d3d9:
+    IDirect3D9_Release(d3d9);
+}

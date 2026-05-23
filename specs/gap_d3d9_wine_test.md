@@ -27,9 +27,9 @@ changes not yet visible upstream.
 
 | Field | Value |
 |-------|-------|
-| Commit | `4262a3af05359b075b1413d0388f9f5f4ee8a4fa` |
-| Short  | `4262a3a` |
-| Tag / describe | `4262a3a` |
+| Commit | `88dc6520df6f3fa7491334d7b03a962d00860de5` — **work tree dirty** |
+| Short  | `88dc652` |
+| Tag / describe | `88dc652` |
 | Author date | `2026-05-23` |
 | Subject | tests/conformance/d3d9: add test_device_get_swap_chain_bounds_policy scaffold; test_swapchain partial → scaffolded |
 
@@ -50,7 +50,7 @@ the same commit in the Wine checkout before opening the source.
 
 ```sh
 # Reproduce the inventory verbatim from a clean tree:
-git -C "$DXMT9_REPO" checkout 4262a3af05359b075b1413d0388f9f5f4ee8a4fa
+git -C "$DXMT9_REPO" checkout 88dc6520df6f3fa7491334d7b03a962d00860de5
 git -C "$WINE_REPO"  checkout 6e073d28dee3af7f4c965daec94644e0f9f92727
 python3 scripts/tools/gen_wine_d3d9_test_inventory.py
 ```
@@ -73,10 +73,10 @@ python3 scripts/tools/gen_wine_d3d9_test_inventory.py
 | Wine source | Tests | covered | scaffolded | partial | failing | other |
 |-------------|-----:|--------:|----------:|--------:|--------:|------:|
 | `visual.c` | 135 | 65 | 55 | 15 | 0 | 0 |
-| `device.c` | 105 | 1 | 97 | 7 | 0 | 0 |
+| `device.c` | 105 | 1 | 98 | 6 | 0 | 0 |
 | `d3d9ex.c` | 27 | 0 | 25 | 2 | 0 | 0 |
 | `stateblock.c` | 1 | 0 | 1 | 0 | 0 | 0 |
-| **TOTAL** | **268** | **66** | **178** | **24** | **0** | **0** |
+| **TOTAL** | **268** | **66** | **179** | **23** | **0** | **0** |
 
 `other` rolls up `deferred`, `partial/deferred`, and any UNTRACKED rows.
 
@@ -245,7 +245,7 @@ Source: [`dlls/d3d9/tests/device.c`](https://gitlab.winehq.org/wine/wine/-/blob/
 | `test_device_window_reset` | 5899 | 📐 | `window_cursor_ownership` |
 | `test_display_formats` | 3551 | 🟡 | — |
 | `test_display_modes` | 2591 | 📐 | `test_factory_validation_return_codes` |
-| `test_draw_primitive` | 3081 | 🟡 | — |
+| `test_draw_primitive` | 3081 | 📐 | `test_draw_primitive_outside_scene_policy` |
 | `test_filter` | 8082 | 📐 | `resource_getdc_lod_autogen_mipmap`, `test_sampler_state_edges` |
 | `test_format_unknown` | 12946 | 📐 | `resource_getdc_lod_autogen_mipmap` |
 | `test_fpu_setup` | 4998 | 📐 | `test_fpu_setup` |
