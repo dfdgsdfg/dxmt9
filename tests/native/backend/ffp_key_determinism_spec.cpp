@@ -345,6 +345,49 @@ void testPointStateKeysDeterministic() {
   }
 }
 
+// Case 4b (G2-C): per-light Type byte participates in the FFP vertex key
+// (D3D9 §B.5 — Directional / Point / Spot lower to different MSL
+// bodies). Three independent fixtures, identical except for the slot-0
+// light type, must produce three distinct keys and three distinct
+// hashes.
+void testVertexKeySensitiveToPerLightType() {
+  auto baseState = makeRepresentativeFfpState();
+  // Pin all lights so only slot 0's type varies in the test below.
+  for (size_t i = 0; i < kMaxLights; ++i) {
+    baseState.lightEnabled[i] = (i < 2);
+  }
+  baseState.lights[1].type = LightType::Directional;
+
+  baseState.lights[0].type = LightType::Directional;
+  const auto k1 = makeFfpVertexKey(baseState);
+  baseState.lights[0].type = LightType::Point;
+  const auto k2 = makeFfpVertexKey(baseState);
+  baseState.lights[0].type = LightType::Spot;
+  const auto k3 = makeFfpVertexKey(baseState);
+
+  checkEq(k1.lightType[0], static_cast<u32>(LightType::Directional),
+          "directional fixture light type");
+  checkEq(k2.lightType[0], static_cast<u32>(LightType::Point),
+          "point fixture light type");
+  checkEq(k3.lightType[0], static_cast<u32>(LightType::Spot),
+          "spot fixture light type");
+  checkNe(k1, k2, "Directional/Point keys must differ on slot 0 type");
+  checkNe(k1, k3, "Directional/Spot keys must differ on slot 0 type");
+  checkNe(k2, k3, "Point/Spot keys must differ on slot 0 type");
+  checkNe(k1.hash, k2.hash, "Directional/Point hashes must differ");
+  checkNe(k1.hash, k3.hash, "Directional/Spot hashes must differ");
+  checkNe(k2.hash, k3.hash, "Point/Spot hashes must differ");
+
+  // Slot-N sensitivity: flipping slot 1 also flips the key (per-slot
+  // hashing, not "any slot changed").
+  auto slot1 = baseState;
+  slot1.lights[0].type = LightType::Directional;
+  slot1.lights[1].type = LightType::Spot;
+  const auto k1Slot1Spot = makeFfpVertexKey(slot1);
+  checkNe(k1Slot1Spot, k1,
+          "Slot-1 type change must flip vertex key independently");
+}
+
 // Case 5: directly brace-initialized keys round-trip through operator==
 // and copy-construction. Covers test fixtures that bypass `DeviceState`
 // and the canonical builders. We do NOT compare a brace-init key against
@@ -435,6 +478,7 @@ int main() {
     testPixelKeyDeterministicAcrossRepeatedBuilds();
     testPixelKeySensitiveToTssPerturbations();
     testVertexKeySensitiveToVsStatePerturbations();
+    testVertexKeySensitiveToPerLightType();
     testDirectInitKeyOperatorEqualityIsStable();
     testBuilderIgnoresMapInsertionOrder();
     testPointSpriteAndScaleKeyBitsAreKeyOnly();

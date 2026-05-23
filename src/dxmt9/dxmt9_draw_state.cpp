@@ -4,6 +4,7 @@
 
 #include <algorithm>
 #include <bit>
+#include <cmath>
 
 namespace dxmt9::state {
 
@@ -114,6 +115,22 @@ FfpVsConsts buildFfpVsConsts(core::FlatDrawStateView state) {
     out.lightAmbient[i] = colorToArray(light.ambient);
     out.lightDirection[i] = {light.direction[0], light.direction[1],
                              light.direction[2], 0.0f};
+    // D3D9 §B.5: position/range/atten/falloff/theta/phi for Point/Spot.
+    // For Directional lights the shader skips these fields entirely
+    // (see emitLightingBlock branch on key.lightType[i]); we still emit
+    // a defined value so the uniform layout is fully initialized.
+    out.lightPosition[i] = {light.position[0], light.position[1],
+                            light.position[2], light.range};
+    out.lightAttenuation[i] = {light.attenuation0, light.attenuation1,
+                               light.attenuation2, light.falloff};
+    // Precompute the spot half-angle cosines. D3D9 stores theta/phi as
+    // full cone angles in radians; the per-vertex spot factor compares
+    // dot(L, -SpotDir) to cos(angle/2). Outer (phi) defines the zero-
+    // intensity boundary, inner (theta) defines the full-intensity
+    // plateau.
+    const f32 cosOuter = std::cos(0.5f * light.phi);
+    const f32 cosInner = std::cos(0.5f * light.theta);
+    out.lightSpotCone[i] = {cosInner, cosOuter, 0.0f, 0.0f};
   }
   for (std::size_t matrix = 0; matrix < out.ffpBlendWorldViewProj.size(); ++matrix) {
     for (std::size_t row = 0; row < 4; ++row) {

@@ -49,6 +49,16 @@ struct FfpVsConsts {
   std::array<std::array<f32, 4>, core::kMaxLights> lightSpecular{};
   std::array<std::array<f32, 4>, core::kMaxLights> lightAmbient{};
   std::array<std::array<f32, 4>, core::kMaxLights> lightDirection{};
+  // Point/Spot lighting (D3D9 §B.5). lightPosition.xyz is the world-space
+  // light position (Point/Spot); .w carries Range. lightAttenuation packs
+  // (atten0, atten1, atten2, falloff) used by the D3D9 attenuation /
+  // spot-factor equations. lightSpotCone packs (cos(theta/2),
+  // cos(phi/2), 1.0, 0.0); the trailing scalars are reserved for future
+  // packing and keep the float4 array element aligned. Type per-slot is
+  // already in FfpVertexKey.lightType[] (Directional/Point/Spot).
+  std::array<std::array<f32, 4>, core::kMaxLights> lightPosition{};
+  std::array<std::array<f32, 4>, core::kMaxLights> lightAttenuation{};
+  std::array<std::array<f32, 4>, core::kMaxLights> lightSpotCone{};
   std::array<std::array<std::array<f32, 4>, 4>, 4> ffpBlendWorldViewProj{};
   std::array<std::array<std::array<f32, 4>, 4>, core::kMaxTextureStages> ffpTextureTransforms{};
   std::array<core::ClipPlane, core::kMaxClipPlanes> clipPlanes{};
@@ -68,7 +78,7 @@ struct FfpVsConsts {
   f32 pointScaleB = 0.0f;
   f32 pointScaleC = 0.0f;
 };
-static_assert(sizeof(FfpVsConsts) == 1736,
+static_assert(sizeof(FfpVsConsts) == 2120,
               "FfpVsConsts layout must match MSL prelude declaration");
 
 struct FfpPsConsts {

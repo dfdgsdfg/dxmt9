@@ -158,6 +158,14 @@ std::string makeShaderPrelude(bool withClipDistances) {
   out << "  float4 lightSpecular[" << kMaxLights << "];\n";
   out << "  float4 lightAmbient[" << kMaxLights << "];\n";
   out << "  float4 lightDirection[" << kMaxLights << "];\n";
+  // Point/Spot: xyz=position, w=range. Spot: lightDirection holds the
+  // spot-cone axis (D3D9 reuses the directional `Direction` field).
+  out << "  float4 lightPosition[" << kMaxLights << "];\n";
+  // Point/Spot atten poly + spot falloff exponent: x=A0, y=A1, z=A2,
+  // w=falloff.
+  out << "  float4 lightAttenuation[" << kMaxLights << "];\n";
+  // Spot only: x=cos(theta/2), y=cos(phi/2), zw=reserved.
+  out << "  float4 lightSpotCone[" << kMaxLights << "];\n";
   out << "  float4 ffpBlendWorldViewProj[4][4];\n";
   out << "  float4 ffpTextureTransforms[" << kMaxTextureStages << "][4];\n";
   out << "  float4 clipPlanes[" << kMaxClipPlanes << "];\n";

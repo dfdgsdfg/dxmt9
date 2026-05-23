@@ -26,7 +26,7 @@ using dxmt9::state::VsConsts;
 
 static_assert(sizeof(VsConsts) == 4416, "VsConsts size pinned for MSL prelude parity");
 static_assert(sizeof(PsConsts) == 3904, "PsConsts size pinned for MSL prelude parity");
-static_assert(sizeof(FfpVsConsts) == 1736, "FfpVsConsts size pinned for MSL prelude parity");
+static_assert(sizeof(FfpVsConsts) == 2120, "FfpVsConsts size pinned for MSL prelude parity");
 static_assert(sizeof(FfpPsConsts) == 384, "FfpPsConsts size pinned for MSL prelude parity");
 static_assert(sizeof(DrawVolatile) == 16, "DrawVolatile size pinned for MSL prelude parity");
 
@@ -60,24 +60,27 @@ static_assert(offsetof(FfpVsConsts, lightDiffuse) == 288);
 static_assert(offsetof(FfpVsConsts, lightSpecular) == 416);
 static_assert(offsetof(FfpVsConsts, lightAmbient) == 544);
 static_assert(offsetof(FfpVsConsts, lightDirection) == 672);
-static_assert(offsetof(FfpVsConsts, ffpBlendWorldViewProj) == 800);
-static_assert(offsetof(FfpVsConsts, ffpTextureTransforms) == 1056);
-static_assert(offsetof(FfpVsConsts, clipPlanes) == 1568);
-static_assert(offsetof(FfpVsConsts, halfPixelFixup) == 1664);
-static_assert(offsetof(FfpVsConsts, viewportOrigin) == 1672);
-static_assert(offsetof(FfpVsConsts, viewportSize) == 1680);
-static_assert(offsetof(FfpVsConsts, fogStart) == 1688);
-static_assert(offsetof(FfpVsConsts, fogEnd) == 1692);
-static_assert(offsetof(FfpVsConsts, fogDensity) == 1696);
-static_assert(offsetof(FfpVsConsts, fogMode) == 1700);
-static_assert(offsetof(FfpVsConsts, rangeFog) == 1704);
-static_assert(offsetof(FfpVsConsts, clipPlaneMask) == 1708);
-static_assert(offsetof(FfpVsConsts, pointSize) == 1712);
-static_assert(offsetof(FfpVsConsts, pointSizeMin) == 1716);
-static_assert(offsetof(FfpVsConsts, pointSizeMax) == 1720);
-static_assert(offsetof(FfpVsConsts, pointScaleA) == 1724);
-static_assert(offsetof(FfpVsConsts, pointScaleB) == 1728);
-static_assert(offsetof(FfpVsConsts, pointScaleC) == 1732);
+static_assert(offsetof(FfpVsConsts, lightPosition) == 800);
+static_assert(offsetof(FfpVsConsts, lightAttenuation) == 928);
+static_assert(offsetof(FfpVsConsts, lightSpotCone) == 1056);
+static_assert(offsetof(FfpVsConsts, ffpBlendWorldViewProj) == 1184);
+static_assert(offsetof(FfpVsConsts, ffpTextureTransforms) == 1440);
+static_assert(offsetof(FfpVsConsts, clipPlanes) == 1952);
+static_assert(offsetof(FfpVsConsts, halfPixelFixup) == 2048);
+static_assert(offsetof(FfpVsConsts, viewportOrigin) == 2056);
+static_assert(offsetof(FfpVsConsts, viewportSize) == 2064);
+static_assert(offsetof(FfpVsConsts, fogStart) == 2072);
+static_assert(offsetof(FfpVsConsts, fogEnd) == 2076);
+static_assert(offsetof(FfpVsConsts, fogDensity) == 2080);
+static_assert(offsetof(FfpVsConsts, fogMode) == 2084);
+static_assert(offsetof(FfpVsConsts, rangeFog) == 2088);
+static_assert(offsetof(FfpVsConsts, clipPlaneMask) == 2092);
+static_assert(offsetof(FfpVsConsts, pointSize) == 2096);
+static_assert(offsetof(FfpVsConsts, pointSizeMin) == 2100);
+static_assert(offsetof(FfpVsConsts, pointSizeMax) == 2104);
+static_assert(offsetof(FfpVsConsts, pointScaleA) == 2108);
+static_assert(offsetof(FfpVsConsts, pointScaleB) == 2112);
+static_assert(offsetof(FfpVsConsts, pointScaleC) == 2116);
 
 // FfpPsConsts: textureFactor | per-stage constants | 4x f32 | 4x u32 |
 // bump-env arrays.
@@ -148,6 +151,9 @@ void checkMslPreludeContainsStructDecls() {
   requireSubstring(prelude, "float4 lightSpecular[8]", "FfpVsConsts.lightSpecular");
   requireSubstring(prelude, "float4 lightAmbient[8]", "FfpVsConsts.lightAmbient");
   requireSubstring(prelude, "float4 lightDirection[8]", "FfpVsConsts.lightDirection");
+  requireSubstring(prelude, "float4 lightPosition[8]", "FfpVsConsts.lightPosition");
+  requireSubstring(prelude, "float4 lightAttenuation[8]", "FfpVsConsts.lightAttenuation");
+  requireSubstring(prelude, "float4 lightSpotCone[8]", "FfpVsConsts.lightSpotCone");
   requireSubstring(prelude, "float4 ffpBlendWorldViewProj[4][4]",
                    "FfpVsConsts.ffpBlendWorldViewProj");
   requireSubstring(prelude, "float4 ffpTextureTransforms[8][4]",

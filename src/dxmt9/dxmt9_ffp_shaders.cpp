@@ -160,8 +160,16 @@ void emitLightingBlock(std::ostringstream& shader, const FfpVertexKey& key) {
   }
   bool hasSupportedLight = false;
   for (u32 i = 0; i < kMaxLights; ++i) {
-    hasSupportedLight = hasSupportedLight ||
-        (key.lightEnabled[i] && key.lightType[i] == static_cast<u32>(LightType::Directional));
+    if (!key.lightEnabled[i]) {
+      continue;
+    }
+    const u32 type = key.lightType[i];
+    if (type == static_cast<u32>(LightType::Directional) ||
+        type == static_cast<u32>(LightType::Point) ||
+        type == static_cast<u32>(LightType::Spot)) {
+      hasSupportedLight = true;
+      break;
+    }
   }
   if (!hasSupportedLight) {
     return;
@@ -185,27 +193,115 @@ void emitLightingBlock(std::ostringstream& shader, const FfpVertexKey& key) {
     if (!key.lightEnabled[i]) {
       continue;
     }
-    if (key.lightType[i] != static_cast<u32>(LightType::Directional)) {
+    const u32 type = key.lightType[i];
+    const bool isDirectional = type == static_cast<u32>(LightType::Directional);
+    const bool isPoint = type == static_cast<u32>(LightType::Point);
+    const bool isSpot = type == static_cast<u32>(LightType::Spot);
+    if (!isDirectional && !isPoint && !isSpot) {
       continue;
     }
-    shader << "  dxmt9_diffuseAccum += dxmt9_materialAmbient.rgb * ffpVs.lightAmbient["
-           << i << "].rgb;\n";
-    shader << "  float3 dxmt9_lightVec" << i << " = -ffpVs.lightDirection[" << i << "].xyz;\n";
-    shader << "  if (length(dxmt9_lightVec" << i << ") <= 1.0e-8f) "
-           << "dxmt9_lightVec" << i << " = float3(0.0f, 0.0f, 1.0f);\n";
-    shader << "  dxmt9_lightVec" << i << " = normalize(dxmt9_lightVec" << i << ");\n";
-    shader << "  float dxmt9_ndotl" << i
-           << " = max(dot(dxmt9_litNormal, dxmt9_lightVec" << i << "), 0.0f);\n";
-    shader << "  dxmt9_diffuseAccum += dxmt9_materialDiffuse.rgb * ffpVs.lightDiffuse["
-           << i << "].rgb * dxmt9_ndotl" << i << ";\n";
-    if (key.specularEnabled) {
-      shader << "  float3 dxmt9_halfVec" << i
-             << " = normalize(dxmt9_lightVec" << i << " + float3(0.0f, 0.0f, 1.0f));\n";
-      shader << "  float dxmt9_specFactor" << i
-             << " = dxmt9_ndotl" << i << " > 0.0f ? pow(max(dot(dxmt9_litNormal, dxmt9_halfVec"
-             << i << "), 0.0f), max(ffpVs.materialPower.x, 1.0f)) : 0.0f;\n";
-      shader << "  dxmt9_specularAccum += dxmt9_materialSpecular.rgb * ffpVs.lightSpecular["
-             << i << "].rgb * dxmt9_specFactor" << i << ";\n";
+
+    // D3D9 ambient contribution from per-light ambient is applied
+    // before attenuation gating in the SDK reference; we keep that
+    // ordering identical for Directional but for Point/Spot we
+    // multiply by the attenuation * spot factor so a light that is
+    // out-of-range or outside its cone contributes nothing.
+    if (isDirectional) {
+      shader << "  dxmt9_diffuseAccum += dxmt9_materialAmbient.rgb * ffpVs.lightAmbient["
+             << i << "].rgb;\n";
+      shader << "  float3 dxmt9_lightVec" << i << " = -ffpVs.lightDirection[" << i << "].xyz;\n";
+      shader << "  if (length(dxmt9_lightVec" << i << ") <= 1.0e-8f) "
+             << "dxmt9_lightVec" << i << " = float3(0.0f, 0.0f, 1.0f);\n";
+      shader << "  dxmt9_lightVec" << i << " = normalize(dxmt9_lightVec" << i << ");\n";
+      shader << "  float dxmt9_ndotl" << i
+             << " = max(dot(dxmt9_litNormal, dxmt9_lightVec" << i << "), 0.0f);\n";
+      shader << "  dxmt9_diffuseAccum += dxmt9_materialDiffuse.rgb * ffpVs.lightDiffuse["
+             << i << "].rgb * dxmt9_ndotl" << i << ";\n";
+      if (key.specularEnabled) {
+        shader << "  float3 dxmt9_halfVec" << i
+               << " = normalize(dxmt9_lightVec" << i << " + float3(0.0f, 0.0f, 1.0f));\n";
+        shader << "  float dxmt9_specFactor" << i
+               << " = dxmt9_ndotl" << i << " > 0.0f ? pow(max(dot(dxmt9_litNormal, dxmt9_halfVec"
+               << i << "), 0.0f), max(ffpVs.materialPower.x, 1.0f)) : 0.0f;\n";
+        shader << "  dxmt9_specularAccum += dxmt9_materialSpecular.rgb * ffpVs.lightSpecular["
+               << i << "].rgb * dxmt9_specFactor" << i << ";\n";
+      }
+    } else {
+      // Point / Spot — D3D9 §B.5 evaluation.
+      // L = lightPos - vertexPos (camera space). Distance gate at Range.
+      shader << "  float3 dxmt9_lightDelta" << i
+             << " = ffpVs.lightPosition[" << i << "].xyz - dxmt9_cameraPosition.xyz;\n";
+      shader << "  float dxmt9_lightDist" << i
+             << " = length(dxmt9_lightDelta" << i << ");\n";
+      shader << "  float dxmt9_lightRange" << i
+             << " = ffpVs.lightPosition[" << i << "].w;\n";
+      shader << "  float3 dxmt9_lightVec" << i << " = dxmt9_lightDist" << i
+             << " > 1.0e-8f ? dxmt9_lightDelta" << i << " / dxmt9_lightDist" << i
+             << " : float3(0.0f, 0.0f, 1.0f);\n";
+      // attenuation = 1 / (A0 + A1*d + A2*d^2). Saturated to [0,1] per
+      // D3D9 reference. Beyond Range the light is fully attenuated to 0.
+      shader << "  float dxmt9_attenDenom" << i
+             << " = ffpVs.lightAttenuation[" << i << "].x"
+             << " + ffpVs.lightAttenuation[" << i << "].y * dxmt9_lightDist" << i
+             << " + ffpVs.lightAttenuation[" << i << "].z * dxmt9_lightDist" << i
+             << " * dxmt9_lightDist" << i << ";\n";
+      shader << "  float dxmt9_attenuation" << i
+             << " = dxmt9_lightDist" << i << " > dxmt9_lightRange" << i
+             << " ? 0.0f : saturate(1.0f / max(dxmt9_attenDenom" << i
+             << ", 1.0e-8f));\n";
+      if (isSpot) {
+        // rho = dot(-SpotDir, L). Spot factor:
+        //   inside inner cone (rho >= cosTheta/2) -> 1
+        //   outside outer cone (rho <= cosPhi/2)  -> 0
+        //   between                               -> ((rho - cosPhi)/(cosTheta - cosPhi))^falloff
+        shader << "  float3 dxmt9_spotDir" << i
+               << " = -ffpVs.lightDirection[" << i << "].xyz;\n";
+        shader << "  if (length(dxmt9_spotDir" << i << ") <= 1.0e-8f) "
+               << "dxmt9_spotDir" << i << " = float3(0.0f, 0.0f, 1.0f);\n";
+        shader << "  dxmt9_spotDir" << i << " = normalize(dxmt9_spotDir" << i << ");\n";
+        shader << "  float dxmt9_spotRho" << i
+               << " = dot(dxmt9_spotDir" << i << ", dxmt9_lightVec" << i << ");\n";
+        shader << "  float dxmt9_spotCosInner" << i
+               << " = ffpVs.lightSpotCone[" << i << "].x;\n";
+        shader << "  float dxmt9_spotCosOuter" << i
+               << " = ffpVs.lightSpotCone[" << i << "].y;\n";
+        shader << "  float dxmt9_spotFalloff" << i
+               << " = ffpVs.lightAttenuation[" << i << "].w;\n";
+        shader << "  float dxmt9_spotDenom" << i
+               << " = max(dxmt9_spotCosInner" << i << " - dxmt9_spotCosOuter" << i
+               << ", 1.0e-6f);\n";
+        shader << "  float dxmt9_spotFactor" << i
+               << " = dxmt9_spotRho" << i << " <= dxmt9_spotCosOuter" << i
+               << " ? 0.0f : (dxmt9_spotRho" << i << " >= dxmt9_spotCosInner" << i
+               << " ? 1.0f : pow(saturate((dxmt9_spotRho" << i
+               << " - dxmt9_spotCosOuter" << i << ") / dxmt9_spotDenom" << i
+               << "), max(dxmt9_spotFalloff" << i << ", 0.0f)));\n";
+        shader << "  dxmt9_attenuation" << i
+               << " *= dxmt9_spotFactor" << i << ";\n";
+      }
+      // Per-light ambient is gated by the same attenuation/spot factor
+      // for Point/Spot — outside the cone or beyond range contributes
+      // nothing.
+      shader << "  dxmt9_diffuseAccum += dxmt9_materialAmbient.rgb"
+             << " * ffpVs.lightAmbient[" << i << "].rgb"
+             << " * dxmt9_attenuation" << i << ";\n";
+      shader << "  float dxmt9_ndotl" << i
+             << " = max(dot(dxmt9_litNormal, dxmt9_lightVec" << i << "), 0.0f);\n";
+      shader << "  dxmt9_diffuseAccum += dxmt9_materialDiffuse.rgb"
+             << " * ffpVs.lightDiffuse[" << i << "].rgb * dxmt9_ndotl" << i
+             << " * dxmt9_attenuation" << i << ";\n";
+      if (key.specularEnabled) {
+        // Half-vector uses local-eye approximation matching the
+        // directional path (eye = +Z in camera space).
+        shader << "  float3 dxmt9_halfVec" << i
+               << " = normalize(dxmt9_lightVec" << i << " + float3(0.0f, 0.0f, 1.0f));\n";
+        shader << "  float dxmt9_specFactor" << i
+               << " = dxmt9_ndotl" << i << " > 0.0f ? pow(max(dot(dxmt9_litNormal, dxmt9_halfVec"
+               << i << "), 0.0f), max(ffpVs.materialPower.x, 1.0f)) : 0.0f;\n";
+        shader << "  dxmt9_specularAccum += dxmt9_materialSpecular.rgb"
+               << " * ffpVs.lightSpecular[" << i << "].rgb * dxmt9_specFactor" << i
+               << " * dxmt9_attenuation" << i << ";\n";
+      }
     }
   }
   shader << "  out.color = saturate(float4(dxmt9_diffuseAccum, dxmt9_materialDiffuse.a));\n";
@@ -495,6 +591,12 @@ std::string makeFfpVertexSource(const FfpVertexKey& key,
       out << "  out.secondaryColor = float4(0.0);\n";
     }
     out << "  float3 dxmt9_lightingNormal = float3(0.0f, 0.0f, 1.0f);\n";
+    // Point/Spot lighting (D3D9 §B.5) references dxmt9_cameraPosition;
+    // pre-transformed vertices have no transformable camera-space
+    // position, so we emit a zero stand-in. D3D9 apps that ship XYZRHW
+    // geometry typically disable lighting, but the body must still
+    // compile when key.lightingEnabled is set.
+    out << "  float4 dxmt9_cameraPosition = float4(0.0f, 0.0f, 0.0f, 1.0f);\n";
     emitStageTexcoords(out);
     if (shaders::vsoutEmitFogFactor()) out << "  out.fogFactor = 1.0;\n";
     if (shaders::vsoutEmitPointSize()) {
@@ -673,6 +775,10 @@ std::string makeFfpVertexSource(const FfpVertexKey& key,
     out << "  out.color = float4(1.0);\n";
     out << "  out.secondaryColor = float4(0.0);\n";
     out << "  float3 dxmt9_lightingNormal = float3(0.0f, 0.0f, 1.0f);\n";
+    // Fallback (no vertex layout) path: emit a zero camera position so
+    // Point/Spot lighting (D3D9 §B.5) compiles even when no real
+    // geometry stream is bound.
+    out << "  float4 dxmt9_cameraPosition = float4(0.0f, 0.0f, 0.0f, 1.0f);\n";
     out << "  out.texcoord0 = float4(float2(vid & 1u, (vid >> 1u) & 1u), 0.0f, 1.0f);\n";
     for (size_t i = 1; i < maxTexOut; ++i) {
       out << "  out.texcoord" << i << " = out.texcoord0;\n";

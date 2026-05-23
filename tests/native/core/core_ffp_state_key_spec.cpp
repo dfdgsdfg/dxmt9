@@ -248,6 +248,95 @@ void testVisualDerivedFfpCoverage() {
   check(varyingPixelKey.hash != fogPixelKey.hash, "varying pixel key differs");
 }
 
+// D3D9 §B.5 Point/Spot lighting lowering. Asserts that the generated
+// MSL FFP vertex source contains the per-light-type evaluation branches
+// when the corresponding light slots are bound. Companion to the FFP
+// vertex-key determinism spec which guards key sensitivity.
+void testPointAndSpotLightingMslContract() {
+  DrawDesc desc{};
+  desc.vertexDecl.elements = {
+      VertexElement{0, 0, dxmt9::ffp::kD3DDeclTypeFloat3, 0,
+                    dxmt9::ffp::kD3DDeclUsagePosition, 0},
+      VertexElement{0, 12, dxmt9::ffp::kD3DDeclTypeFloat3, 0,
+                    dxmt9::ffp::kD3DDeclUsageNormal, 0},
+  };
+  desc.vertexDecl.streams[0].stride = 24;
+
+  // Directional only — baseline, no Point/Spot branches expected.
+  FfpVertexKey directionalKey{};
+  directionalKey.lightingEnabled = true;
+  directionalKey.lightEnabled[0] = true;
+  directionalKey.lightType[0] = static_cast<u32>(LightType::Directional);
+  const auto directionalSource = dxmt9::ffp::makeFfpVertexSource(
+      directionalKey, dxmt9::drawshader::makeShaderSourceContext(desc));
+  checkContains(directionalSource, "-ffpVs.lightDirection[0].xyz",
+                "directional-only source uses lightDirection");
+  check(directionalSource.find("ffpVs.lightPosition[0].xyz - dxmt9_cameraPosition.xyz") ==
+            std::string::npos,
+        "directional-only source must not emit Point lightDelta math");
+
+  // Point — must reference lightPosition and the attenuation polynomial,
+  // must not gate on spotCone.
+  FfpVertexKey pointKey{};
+  pointKey.lightingEnabled = true;
+  pointKey.lightEnabled[0] = true;
+  pointKey.lightType[0] = static_cast<u32>(LightType::Point);
+  const auto pointSource = dxmt9::ffp::makeFfpVertexSource(
+      pointKey, dxmt9::drawshader::makeShaderSourceContext(desc));
+  checkContains(pointSource,
+                "ffpVs.lightPosition[0].xyz - dxmt9_cameraPosition.xyz",
+                "point source forms L = lightPos - vertexPos");
+  checkContains(pointSource, "ffpVs.lightAttenuation[0].x",
+                "point source reads attenuation A0");
+  checkContains(pointSource, "ffpVs.lightAttenuation[0].y * dxmt9_lightDist0",
+                "point source applies A1 * d");
+  checkContains(pointSource,
+                "ffpVs.lightAttenuation[0].z * dxmt9_lightDist0 * dxmt9_lightDist0",
+                "point source applies A2 * d^2");
+  checkContains(pointSource, "ffpVs.lightPosition[0].w",
+                "point source reads Range from lightPosition.w");
+  check(pointSource.find("ffpVs.lightSpotCone") == std::string::npos,
+        "point source must not reference spot cone parameters");
+
+  // Spot — must reference both Point and Spot ladders.
+  FfpVertexKey spotKey{};
+  spotKey.lightingEnabled = true;
+  spotKey.lightEnabled[0] = true;
+  spotKey.lightType[0] = static_cast<u32>(LightType::Spot);
+  const auto spotSource = dxmt9::ffp::makeFfpVertexSource(
+      spotKey, dxmt9::drawshader::makeShaderSourceContext(desc));
+  checkContains(spotSource,
+                "ffpVs.lightPosition[0].xyz - dxmt9_cameraPosition.xyz",
+                "spot source forms L = lightPos - vertexPos");
+  checkContains(spotSource, "ffpVs.lightSpotCone[0].x",
+                "spot source reads cos(theta/2) inner cosine");
+  checkContains(spotSource, "ffpVs.lightSpotCone[0].y",
+                "spot source reads cos(phi/2) outer cosine");
+  checkContains(spotSource, "ffpVs.lightAttenuation[0].w",
+                "spot source reads falloff");
+  checkContains(spotSource, "-ffpVs.lightDirection[0].xyz",
+                "spot source reuses lightDirection as spot axis");
+
+  // Mixed — slot 0 Point, slot 1 Spot, slot 2 Directional. Each branch
+  // must appear independently.
+  FfpVertexKey mixedKey{};
+  mixedKey.lightingEnabled = true;
+  mixedKey.lightEnabled[0] = true;
+  mixedKey.lightType[0] = static_cast<u32>(LightType::Point);
+  mixedKey.lightEnabled[1] = true;
+  mixedKey.lightType[1] = static_cast<u32>(LightType::Spot);
+  mixedKey.lightEnabled[2] = true;
+  mixedKey.lightType[2] = static_cast<u32>(LightType::Directional);
+  const auto mixedSource = dxmt9::ffp::makeFfpVertexSource(
+      mixedKey, dxmt9::drawshader::makeShaderSourceContext(desc));
+  checkContains(mixedSource, "ffpVs.lightAttenuation[0]",
+                "mixed source emits Point attenuation for slot 0");
+  checkContains(mixedSource, "ffpVs.lightSpotCone[1]",
+                "mixed source emits Spot cone for slot 1");
+  checkContains(mixedSource, "-ffpVs.lightDirection[2].xyz",
+                "mixed source emits Directional ladder for slot 2");
+}
+
 void testFixedFunctionDeclarationMissingInputsEmitD3DDefaults() {
   // behavioral oracle: Wine visual.c:fixed_function_decl_test
   DrawDesc desc{};
@@ -410,6 +499,7 @@ int main() {
     testDepthStencilKeyDisablesDepthCompare();
     testFfpKeys();
     testVisualDerivedFfpCoverage();
+    testPointAndSpotLightingMslContract();
     testFixedFunctionDeclarationMissingInputsEmitD3DDefaults();
     testVisualPortCoverage();
   } catch (const TestFailure& error) {
