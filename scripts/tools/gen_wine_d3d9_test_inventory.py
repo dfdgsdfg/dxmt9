@@ -20,7 +20,7 @@ REPO = Path(__file__).resolve().parents[2]
 WINE_ROOT = Path(os.environ.get("WINE_REPO", str(REPO.parent / "wine")))
 WINE = WINE_ROOT / "dlls" / "d3d9" / "tests"
 PLAN = REPO / "specs" / "wine_test.plan.md"
-OUT = REPO / "specs" / "gap_wine_d3d9_test.md"
+OUT = REPO / "specs" / "gap_d3d9_wine_test.md"
 
 
 def _git_capture(root: Path) -> dict[str, str]:

@@ -27,11 +27,11 @@ changes not yet visible upstream.
 
 | Field | Value |
 |-------|-------|
-| Commit | `5e1ef5df50f322fddfa6a04a9ec9fa8ceb7e5b87` |
-| Short  | `5e1ef5d` |
-| Tag / describe | `5e1ef5d` |
+| Commit | `138ad933306ff5a18541e373bc2f91e3144549b6` — **work tree dirty** |
+| Short  | `138ad93` |
+| Tag / describe | `138ad93` |
 | Author date | `2026-05-23` |
-| Subject | scripts/tools/gen_wine_d3d9_test_inventory: capture dxmt9 provenance |
+| Subject | tests/conformance: flip vendor_policy_intz_caps to expect S_OK |
 
 ### Wine reference revision
 
@@ -50,7 +50,7 @@ the same commit in the Wine checkout before opening the source.
 
 ```sh
 # Reproduce the inventory verbatim from a clean tree:
-git -C "$DXMT9_REPO" checkout 5e1ef5df50f322fddfa6a04a9ec9fa8ceb7e5b87
+git -C "$DXMT9_REPO" checkout 138ad933306ff5a18541e373bc2f91e3144549b6
 git -C "$WINE_REPO"  checkout 6e073d28dee3af7f4c965daec94644e0f9f92727
 python3 scripts/tools/gen_wine_d3d9_test_inventory.py
 ```
