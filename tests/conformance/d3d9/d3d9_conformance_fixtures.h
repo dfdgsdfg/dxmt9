@@ -520,6 +520,7 @@ void test_visual_shadow_depth_compare_caps_policy(const struct d3d9_api *api);
 void test_visual_filling_convention_caps_policy(const struct d3d9_api *api);
 void test_visual_line_antialiasing_blending_state_policy(const struct d3d9_api *api);
 void test_visual_blit_format_conversion_policy(const struct d3d9_api *api);
+void test_stretch_rect_null_and_degenerate_policy(const struct d3d9_api *api);
 
 
 /* Wine visual.c planned-item scaffolds (G1). */

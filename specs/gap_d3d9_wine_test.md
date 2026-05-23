@@ -27,11 +27,11 @@ changes not yet visible upstream.
 
 | Field | Value |
 |-------|-------|
-| Commit | `334e0d9ba33fc110be969bd198f9c5696da3e998` — **work tree dirty** |
-| Short  | `334e0d9` |
-| Tag / describe | `334e0d9` |
+| Commit | `9bfc70f27aad8fc8b87bf5dc4a30f301275e57c8` — **work tree dirty** |
+| Short  | `9bfc70f` |
+| Tag / describe | `9bfc70f` |
 | Author date | `2026-05-23` |
-| Subject | tests/conformance/d3d9: add test_check_device_type_display_format_policy scaffold; test_display_formats partial → scaffolded |
+| Subject | tests/conformance/d3d9: add test_create_texture_npot_policy scaffold; test_npot_textures partial → scaffolded |
 
 ### Wine reference revision
 
@@ -50,7 +50,7 @@ the same commit in the Wine checkout before opening the source.
 
 ```sh
 # Reproduce the inventory verbatim from a clean tree:
-git -C "$DXMT9_REPO" checkout 334e0d9ba33fc110be969bd198f9c5696da3e998
+git -C "$DXMT9_REPO" checkout 9bfc70f27aad8fc8b87bf5dc4a30f301275e57c8
 git -C "$WINE_REPO"  checkout 6e073d28dee3af7f4c965daec94644e0f9f92727
 python3 scripts/tools/gen_wine_d3d9_test_inventory.py
 ```
@@ -73,10 +73,10 @@ python3 scripts/tools/gen_wine_d3d9_test_inventory.py
 | Wine source | Tests | covered | scaffolded | partial | failing | other |
 |-------------|-----:|--------:|----------:|--------:|--------:|------:|
 | `visual.c` | 135 | 65 | 55 | 15 | 0 | 0 |
-| `device.c` | 105 | 1 | 101 | 3 | 0 | 0 |
+| `device.c` | 105 | 1 | 102 | 2 | 0 | 0 |
 | `d3d9ex.c` | 27 | 0 | 25 | 2 | 0 | 0 |
 | `stateblock.c` | 1 | 0 | 1 | 0 | 0 | 0 |
-| **TOTAL** | **268** | **66** | **182** | **20** | **0** | **0** |
+| **TOTAL** | **268** | **66** | **183** | **19** | **0** | **0** |
 
 `other` rolls up `deferred`, `partial/deferred`, and any UNTRACKED rows.
 
@@ -301,7 +301,7 @@ Source: [`dlls/d3d9/tests/device.c`](https://gitlab.winehq.org/wine/wine/-/blob/
 | `test_shader_constant_apply` | 11446 | 📐 | `test_shader_constant_stateblock_cross_stage` |
 | `test_shader_validator` | 14660 | 🟡 | `shader_validator_stub_behavior` |
 | `test_shared_handle` | 11088 | 📐 | `test_shared_handle_policy` |
-| `test_stretch_rect` | 13277 | 🟡 | — |
+| `test_stretch_rect` | 13277 | 📐 | `test_stretch_rect_null_and_degenerate_policy` |
 | `test_surface_alignment` | 8360 | 📐 | `test_surface_alignment` |
 | `test_surface_blocks` | 9529 | 📐 | `resource_container_level_desc_and_locks`, `test_index_buffer_desc_binding_policy`, `test_vertex_buffer_desc_binding_policy` |
 | `test_surface_dimensions` | 9338 | 📐 | `test_surface_dimensions` |

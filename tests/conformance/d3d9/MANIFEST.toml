@@ -3485,6 +3485,23 @@ status = "scaffolded"
 
 [[case]]
 executable = "dxmt9-d3d9-conformance.exe"
+source_file = "d3d9_conformance_visual_raster.c"
+function = "test_stretch_rect_null_and_degenerate_policy"
+source = "wine/dlls/d3d9/tests/device.c:test_stretch_rect"
+source_kind = "behavioral-oracle"
+license = "LGPL-2.1-or-later"
+license_scope = "external-not-vendored"
+upstream_commit = "6e073d28dee3af7f4c965daec94644e0f9f92727"
+lanes = ["app-local", "builtin"]
+arches = ["x64", "x86"]
+area = "surface-blit"
+owner = "core/resources"
+requirements = ["R-TEST-12.13", "R-TEST-12.14"]
+acceptance = ["StretchRect with NULL src or NULL dst returns D3DERR_INVALIDCALL, matching-format / matching-dim DEFAULT-pool A8R8G8B8 surfaces with NULL rects return S_OK, zero-area src rect returns D3DERR_INVALIDCALL, negative-extent src rect returns D3DERR_INVALIDCALL"]
+status = "scaffolded"
+
+[[case]]
+executable = "dxmt9-d3d9-conformance.exe"
 source_file = "d3d9_conformance_vendor_policy.c"
 function = "test_vendor_policy_texbem_unsupported"
 source = "wine/dlls/d3d9/tests/visual.c:texbem_test"

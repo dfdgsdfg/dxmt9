@@ -283,3 +283,106 @@ done_window:
 done_d3d9:
     IDirect3D9_Release(d3d9);
 }
+
+/*
+ * Wine provenance: dlls/d3d9/tests/device.c
+ * function: test_stretch_rect
+ * commit: 6e073d28dee3af7f4c965daec94644e0f9f92727
+ *
+ * Wine's test_stretch_rect exercises StretchRect HRESULT contracts
+ * across many surface format / pool / filter / rect combos. This
+ * scaffold pins a minimal subset of the public-ABI policy: NULL
+ * src or NULL dst returns D3DERR_INVALIDCALL; a rect with
+ * non-positive (zero-area or negative) width/height also returns
+ * D3DERR_INVALIDCALL. Format / pool / MSAA matrix is covered by
+ * sibling test_visual_blit_format_conversion_policy.
+ */
+void test_stretch_rect_null_and_degenerate_policy(const struct d3d9_api *api)
+{
+    IDirect3DSurface9 *src = NULL;
+    IDirect3DSurface9 *dst = NULL;
+    IDirect3DDevice9 *device = NULL;
+    IDirect3D9 *d3d9;
+    HWND window;
+    HRESULT hr;
+    RECT degen = {10, 10, 10, 10};
+    RECT neg = {20, 30, 10, 5};
+
+    d3d9 = api->create9(D3D_SDK_VERSION);
+    if (!d3d9)
+    {
+        skip_current_test("Direct3DCreate9 returned NULL");
+        return;
+    }
+
+    window = create_test_window();
+    CHECK_TRUE(window != NULL);
+    if (!window)
+        goto done_d3d9;
+
+    device = create_base_device(d3d9, window);
+    if (!device)
+        goto done_window;
+
+    /* StretchRect requires DEFAULT-pool surfaces; use that for both so the
+     * success leg is unambiguous. The pool/format matrix is exercised in
+     * test_visual_blit_format_conversion_policy. */
+    hr = IDirect3DDevice9_CreateOffscreenPlainSurface(device, 64, 64,
+            D3DFMT_A8R8G8B8, D3DPOOL_DEFAULT, &src, NULL);
+    if (FAILED(hr))
+    {
+        char hr_buffer[16];
+        print_hr(hr_buffer, sizeof(hr_buffer), hr);
+        skip_current_test("CreateOffscreenPlainSurface src failed with %s",
+                hr_buffer);
+        goto done_device;
+    }
+
+    hr = IDirect3DDevice9_CreateOffscreenPlainSurface(device, 64, 64,
+            D3DFMT_A8R8G8B8, D3DPOOL_DEFAULT, &dst, NULL);
+    if (FAILED(hr))
+    {
+        char hr_buffer[16];
+        print_hr(hr_buffer, sizeof(hr_buffer), hr);
+        skip_current_test("CreateOffscreenPlainSurface dst failed with %s",
+                hr_buffer);
+        goto done_src;
+    }
+
+    /* NULL src -> D3DERR_INVALIDCALL. */
+    hr = IDirect3DDevice9_StretchRect(device, NULL, NULL, dst, NULL,
+            D3DTEXF_NONE);
+    CHECK_HR(hr, D3DERR_INVALIDCALL);
+
+    /* NULL dst -> D3DERR_INVALIDCALL. */
+    hr = IDirect3DDevice9_StretchRect(device, src, NULL, NULL, NULL,
+            D3DTEXF_NONE);
+    CHECK_HR(hr, D3DERR_INVALIDCALL);
+
+    /* Both non-NULL, matching format / dims / pool, default whole-surface
+     * rects -> S_OK. */
+    hr = IDirect3DDevice9_StretchRect(device, src, NULL, dst, NULL,
+            D3DTEXF_NONE);
+    CHECK_HR(hr, D3D_OK);
+
+    /* Zero-area src rect -> D3DERR_INVALIDCALL. */
+    hr = IDirect3DDevice9_StretchRect(device, src, &degen, dst, NULL,
+            D3DTEXF_NONE);
+    CHECK_HR(hr, D3DERR_INVALIDCALL);
+
+    /* Negative-extent src rect (right < left, bottom < top) ->
+     * D3DERR_INVALIDCALL. */
+    hr = IDirect3DDevice9_StretchRect(device, src, &neg, dst, NULL,
+            D3DTEXF_NONE);
+    CHECK_HR(hr, D3DERR_INVALIDCALL);
+
+    IDirect3DSurface9_Release(dst);
+done_src:
+    IDirect3DSurface9_Release(src);
+done_device:
+    IDirect3DDevice9_Release(device);
+done_window:
+    DestroyWindow(window);
+done_d3d9:
+    IDirect3D9_Release(d3d9);
+}
