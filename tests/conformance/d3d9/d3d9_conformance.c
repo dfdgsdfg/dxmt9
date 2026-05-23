@@ -345,6 +345,8 @@ static const struct test_case tests[] =
             test_draw_primitive_outside_scene_policy},
     {"set_get_depth_stencil_surface_policy",
             test_set_get_depth_stencil_surface_policy},
+    {"device_desktop_window_present_policy",
+            test_device_desktop_window_present_policy},
 };
 
 int main(int argc, char **argv)

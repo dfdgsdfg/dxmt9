@@ -3737,3 +3737,20 @@ owner = "core/device"
 requirements = ["R-TEST-12.3"]
 acceptance = ["GetDepthStencilSurface on a device created with EnableAutoDepthStencil=TRUE returns the implicit D24S8 surface; SetDepthStencilSurface(NULL) detaches it so a follow-up Get yields D3DERR_NOTFOUND with the out-pointer cleared; re-attaching the saved surface restores the binding; GetDepthStencilSurface(NULL) rejects with D3DERR_INVALIDCALL without disturbing the binding"]
 status = "scaffolded"
+
+[[case]]
+executable = "dxmt9-d3d9-conformance.exe"
+source_file = "d3d9_conformance_device.c"
+function = "test_device_desktop_window_present_policy"
+source = "wine/dlls/d3d9/tests/visual.c:test_desktop_window+wine/dlls/d3d9/tests/d3d9ex.c:test_desktop_window"
+source_kind = "behavioral-oracle"
+license = "LGPL-2.1-or-later"
+license_scope = "external-not-vendored"
+upstream_commit = "6e073d28dee3af7f4c965daec94644e0f9f92727"
+lanes = ["app-local", "builtin"]
+arches = ["x64", "x86"]
+area = "device-creation"
+owner = "core/device"
+requirements = ["R-TEST-12.3"]
+acceptance = ["CreateDevice with hFocusWindow=GetDesktopWindow() and pp.hDeviceWindow=GetDesktopWindow() (Windowed=TRUE, SwapEffect=DISCARD) returns S_OK; a follow-up Clear(D3DCLEAR_TARGET) and Present(NULL,NULL,NULL,NULL) on the resulting device both return S_OK — i.e. the desktop window is accepted at device creation and not silently rejected at present time. The Ex variant in d3d9ex.c:test_desktop_window pins the identical contract via CreateDeviceEx, with no policy delta beyond the Ex factory wrapper."]
+status = "scaffolded"

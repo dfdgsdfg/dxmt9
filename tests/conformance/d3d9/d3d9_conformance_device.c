@@ -4262,3 +4262,81 @@ done_window:
 done_d3d9:
     IDirect3D9_Release(d3d9);
 }
+
+/*
+ * Wine provenance: dlls/d3d9/tests/visual.c
+ * function: test_desktop_window
+ * commit: 6e073d28dee3af7f4c965daec94644e0f9f92727
+ *
+ * The same contract is mirrored verbatim in dlls/d3d9/tests/d3d9ex.c
+ * (test_desktop_window at d3d9ex.c:4976), which exercises the
+ * IDirect3DDevice9Ex variant of the same flow. The base-device case
+ * pinned here covers the shared D3D9 surface; the Ex variant adds no
+ * new policy beyond the QI/CreateDeviceEx wrapper already covered by
+ * other Ex device-creation cases.
+ *
+ * Pins the device-creation policy for hDeviceWindow=GetDesktopWindow():
+ * CreateDevice with both hFocusWindow and pp.hDeviceWindow set to the
+ * desktop window must accept the request and return S_OK, and a
+ * follow-up Clear + Present on the resulting device must succeed
+ * (Wine asserts SUCCEEDED on both). This guards against an implicit
+ * desktop-window redirect / rejection at device creation or present
+ * time. The Wine oracle additionally tests NULL HWND, but that surface
+ * is covered separately by the existing window-policy cases — keeping
+ * the scope here to the desktop-window pin keeps the scaffold small.
+ */
+void test_device_desktop_window_present_policy(const struct d3d9_api *api)
+{
+    D3DPRESENT_PARAMETERS pp;
+    IDirect3DDevice9 *device = NULL;
+    IDirect3D9 *d3d9;
+    HWND desktop;
+    HRESULT hr;
+
+    d3d9 = api->create9(D3D_SDK_VERSION);
+    if (!d3d9)
+    {
+        skip_current_test("Direct3DCreate9 returned NULL");
+        return;
+    }
+
+    desktop = GetDesktopWindow();
+    CHECK_TRUE(desktop != NULL);
+    if (!desktop)
+        goto done_d3d9;
+
+    pp = default_present_parameters(desktop);
+    /*
+     * Match the Wine oracle: SwapEffect=DISCARD so the desktop-window
+     * present path takes the same swap-effect branch the oracle
+     * exercises via create_device(d3d, GetDesktopWindow(),
+     * GetDesktopWindow(), TRUE). default_present_parameters defaults
+     * to COPY, which would diverge from the oracle's policy slice.
+     */
+    pp.SwapEffect = D3DSWAPEFFECT_DISCARD;
+
+    hr = IDirect3D9_CreateDevice(d3d9, D3DADAPTER_DEFAULT, D3DDEVTYPE_HAL,
+            desktop, D3DCREATE_HARDWARE_VERTEXPROCESSING, &pp, &device);
+    CHECK_HR(hr, D3D_OK);
+    if (FAILED(hr) || !device)
+        goto done_d3d9;
+
+    /*
+     * Wine's oracle issues Clear + Present and asserts SUCCEEDED on
+     * both. Pin that here. If dxmt9 ever decides to reject Present on
+     * a desktop-window-bound swap chain (returning D3DERR_INVALIDCALL),
+     * this CHECK_HR fails loudly and the divergence becomes a tracked
+     * scaffolded → failing transition rather than a silent behavior
+     * drift.
+     */
+    hr = IDirect3DDevice9_Clear(device, 0, NULL, D3DCLEAR_TARGET,
+            0xffff0000, 1.0f, 0);
+    CHECK_HR(hr, D3D_OK);
+
+    hr = IDirect3DDevice9_Present(device, NULL, NULL, NULL, NULL);
+    CHECK_HR(hr, D3D_OK);
+
+    IDirect3DDevice9_Release(device);
+done_d3d9:
+    IDirect3D9_Release(d3d9);
+}

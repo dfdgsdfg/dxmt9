@@ -27,11 +27,11 @@ changes not yet visible upstream.
 
 | Field | Value |
 |-------|-------|
-| Commit | `35f46cc73cf45a758e10169a01af65d0a5524402` — **work tree dirty** |
-| Short  | `35f46cc` |
-| Tag / describe | `35f46cc` |
+| Commit | `fedb6a5249b75b44c96221cbcf2a0576c5ce6398` — **work tree dirty** |
+| Short  | `fedb6a5` |
+| Tag / describe | `fedb6a5` |
 | Author date | `2026-05-23` |
-| Subject | tests/conformance/d3d9: add test_create_cube_texture_dim_policy scaffold; test_cube_textures partial → scaffolded |
+| Subject | specs/wine_test: test_shader_validator partial → scaffolded; cite existing PE stub |
 
 ### Wine reference revision
 
@@ -50,7 +50,7 @@ the same commit in the Wine checkout before opening the source.
 
 ```sh
 # Reproduce the inventory verbatim from a clean tree:
-git -C "$DXMT9_REPO" checkout 35f46cc73cf45a758e10169a01af65d0a5524402
+git -C "$DXMT9_REPO" checkout fedb6a5249b75b44c96221cbcf2a0576c5ce6398
 git -C "$WINE_REPO"  checkout 6e073d28dee3af7f4c965daec94644e0f9f92727
 python3 scripts/tools/gen_wine_d3d9_test_inventory.py
 ```
@@ -72,11 +72,11 @@ python3 scripts/tools/gen_wine_d3d9_test_inventory.py
 
 | Wine source | Tests | covered | scaffolded | partial | failing | other |
 |-------------|-----:|--------:|----------:|--------:|--------:|------:|
-| `visual.c` | 135 | 65 | 55 | 15 | 0 | 0 |
+| `visual.c` | 135 | 65 | 56 | 14 | 0 | 0 |
 | `device.c` | 105 | 1 | 104 | 0 | 0 | 0 |
-| `d3d9ex.c` | 27 | 0 | 25 | 2 | 0 | 0 |
+| `d3d9ex.c` | 27 | 0 | 26 | 1 | 0 | 0 |
 | `stateblock.c` | 1 | 0 | 1 | 0 | 0 | 0 |
-| **TOTAL** | **268** | **66** | **185** | **17** | **0** | **0** |
+| **TOTAL** | **268** | **66** | **187** | **15** | **0** | **0** |
 
 `other` rolls up `deferred`, `partial/deferred`, and any UNTRACKED rows.
 
@@ -149,7 +149,7 @@ Source: [`dlls/d3d9/tests/visual.c`](https://gitlab.winehq.org/wine/wine/-/blob/
 | `test_default_diffuse` | 27607 | ✅ | — |
 | `test_depth_stencil_init` | 22556 | 📐 | `test_visual_depth_stencil_init_policy` |
 | `test_depthbias` | 21851 | ✅ | — |
-| `test_desktop_window` | 25880 | 🟡 | — |
+| `test_desktop_window` | 25880 | 📐 | `test_device_desktop_window_present_policy` |
 | `test_draw_mapped_buffer` | 26213 | 🟡 | — |
 | `test_drawindexedprimitiveup` | 24293 | ✅ | — |
 | `test_dsy` | 23840 | ✅ | — |
@@ -342,7 +342,7 @@ Source: [`dlls/d3d9/tests/d3d9ex.c`](https://gitlab.winehq.org/wine/wine/-/blob/
 |------------|----------:|:------:|---------------------------------|
 | `test_backbuffer_resize` | 3848 | 📐 | `test_backbuffer_resize_present_parameter_policy` |
 | `test_create_depth_stencil_surface_ex` | 640 | 📐 | `test_create_depth_stencil_surface_ex` |
-| `test_desktop_window` | 4976 | 🟡 | — |
+| `test_desktop_window` | 4976 | 📐 | `test_device_desktop_window_present_policy` |
 | `test_device_caps` | 4052 | 📐 | — |
 | `test_format_unknown` | 3977 | 📐 | `test_creation_failure_out_pointers` |
 | `test_frame_latency` | 4184 | 📐 | `test_ex_frame_latency_state` |
