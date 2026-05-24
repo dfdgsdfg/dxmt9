@@ -8,15 +8,16 @@
 ;         negative-y).
 ; oracle-date: 2026-05-23
 
-; FAILING — under investigation. Initializing unset clip-distance slots to
-; +1 (the half-fix in this commit) is necessary but not sufficient: every
-; non-degenerate FFP clip plane still clips ALL fragments on Apple7. The
-; remaining ground truth is whether `ffpVs.clipPlaneMask` or
-; `ffpVs.clipPlanes[0]` at runtime is reaching the shader with the values
-; the test set. The existing `dxmt9_clip_plane_runtime_readback.shader_test`
-; (VS path, plane (0,0,0,-1) → dot=-w=-1) passes because every fragment is
-; clipped; that case is degenerate and does not exercise half-space
-; discrimination. This corpus is the regression seed for the residual gap.
+; Passing as of the Apple-Metal single-`[[clip_distance]]` fix:
+; Apple Metal (Apple7+) only honours one `[[clip_distance]]` output per
+; vertex shader. The array form and multiple-scalar form both silently
+; clip every fragment. dxmt9 now collapses D3D9's up-to-six clip planes
+; into one slot via `min(d_i)` over the enabled mask, which is
+; equivalent to "any plane discards" (any d_i < 0 ⇒ min < 0 ⇒ clip).
+; The existing `dxmt9_clip_plane_runtime_readback.shader_test` keeps the
+; degenerate all-clip case alive; this corpus pins the half-space
+; discrimination case that the previous array/multi-scalar form could
+; not honour.
 
 [test]
 clip-plane-mask 1

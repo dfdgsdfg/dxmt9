@@ -27,11 +27,11 @@ changes not yet visible upstream.
 
 | Field | Value |
 |-------|-------|
-| Commit | `48ae1cafc786c904bbc55abf49dd8faec0982dfb` — **work tree dirty** |
-| Short  | `48ae1ca` |
-| Tag / describe | `48ae1ca` |
+| Commit | `d4ec68411a5fb15e9b0861ce649dc31196233381` — **work tree dirty** |
+| Short  | `d4ec684` |
+| Tag / describe | `d4ec684` |
 | Author date | `2026-05-24` |
-| Subject | tests/conformance/d3d9: add test_draw_mapped_buffer_policy; test_draw_mapped_buffer partial → scaffolded |
+| Subject | specs/gap: formally defer FFP clip-planes half-space failure |
 
 ### Wine reference revision
 
@@ -50,7 +50,7 @@ the same commit in the Wine checkout before opening the source.
 
 ```sh
 # Reproduce the inventory verbatim from a clean tree:
-git -C "$DXMT9_REPO" checkout 48ae1cafc786c904bbc55abf49dd8faec0982dfb
+git -C "$DXMT9_REPO" checkout d4ec68411a5fb15e9b0861ce649dc31196233381
 git -C "$WINE_REPO"  checkout 6e073d28dee3af7f4c965daec94644e0f9f92727
 python3 scripts/tools/gen_wine_d3d9_test_inventory.py
 ```
@@ -72,11 +72,11 @@ python3 scripts/tools/gen_wine_d3d9_test_inventory.py
 
 | Wine source | Tests | covered | scaffolded | partial | failing | other |
 |-------------|-----:|--------:|----------:|--------:|--------:|------:|
-| `visual.c` | 135 | 69 | 65 | 1 | 0 | 0 |
+| `visual.c` | 135 | 70 | 65 | 0 | 0 | 0 |
 | `device.c` | 105 | 1 | 104 | 0 | 0 | 0 |
 | `d3d9ex.c` | 27 | 0 | 27 | 0 | 0 | 0 |
 | `stateblock.c` | 1 | 0 | 1 | 0 | 0 | 0 |
-| **TOTAL** | **268** | **70** | **197** | **1** | **0** | **0** |
+| **TOTAL** | **268** | **71** | **197** | **0** | **0** | **0** |
 
 `other` rolls up `deferred`, `partial/deferred`, and any UNTRACKED rows.
 
@@ -90,7 +90,7 @@ Source: [`dlls/d3d9/tests/visual.c`](https://gitlab.winehq.org/wine/wine/-/blob/
 | `alphareplicate_test` | 13262 | ✅ | — |
 | `alphatest_test` | 13507 | ✅ | — |
 | `clear_test` | 1154 | 📐 | `test_visual_clear_color_only_policy` |
-| `clip_planes_test` | 16182 | 🟡 | deferred — see `specs/gap.md` "Clip planes" row; regression seed `tests/shader_runner/corpus/render_state/dxmt9_clip_plane_halfspace_readback.shader_test` (status=failing) |
+| `clip_planes_test` | 16182 | ✅ | — |
 | `cnd_test` | 6675 | ✅ | — |
 | `color_fill_test` | 1663 | 📐 | `test_visual_colorfill_format_policy` |
 | `conditional_np2_repeat_test` | 9841 | ✅ | — |

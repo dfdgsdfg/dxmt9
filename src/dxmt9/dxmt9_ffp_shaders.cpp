@@ -802,17 +802,20 @@ std::string makeFfpVertexSource(const FfpVertexKey& key,
   }
   emitLightingBlock(out, key);
   if (key.clipPlaneMask != 0 || context.clipPlaneMask != 0) {
-    // Initialize all 6 slots to +1 (positive = pass) so disabled planes
-    // never produce a negative clip distance. Metal's [[clip_distance]]
-    // semantics discard fragments whose any-slot distance is < 0; without
-    // this init, the zeroed-plane × zero-init-out.clipDistance is
-    // implementation-defined and observably clips everything on Apple7+.
-    out << "  for (uint i = 0; i < 6; ++i) { out.clipDistance[i] = 1.0f; }\n";
-    out << "  for (uint i = 0; i < 6; ++i) {\n";
+    // Apple Metal limits us to a single `[[clip_distance]]` per VS
+    // output (see comment in `dxmt9_shader_sources.cpp`). Collapse the
+    // up-to-six D3D9 clip planes into one slot by writing the minimum
+    // of the enabled per-plane half-space tests: a fragment is clipped
+    // iff ANY plane's dot is < 0, which is equivalent to `min(d_i) < 0`
+    // for slots enabled in `ffpVs.clipPlaneMask`.
+    out << "  float dxmt9_minClip = 1.0f;\n";
+    out << "  for (uint i = 0u; i < 6u; ++i) {\n";
     out << "    if ((ffpVs.clipPlaneMask & (1u << i)) != 0u) {\n";
-      out << "      out.clipDistance[i] = dot(ffpVs.clipPlanes[i], out.position);\n";
+    out << "      const float d = dot(ffpVs.clipPlanes[i], out.position);\n";
+    out << "      dxmt9_minClip = min(dxmt9_minClip, d);\n";
     out << "    }\n";
     out << "  }\n";
+    out << "  out.clipDistance0 = dxmt9_minClip;\n";
   }
   out << "  return out;\n";
   out << "}\n";

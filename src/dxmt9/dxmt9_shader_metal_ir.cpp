@@ -918,7 +918,10 @@ std::string translateSpirvToMsl(const SpirvModule& module,
         out << "  out.pointSize = outPointSize;\n";
       }
       if (context.clipPlaneMask != 0) {
-        out << "  for (uint i = 0; i < 6; ++i) { out.clipDistance[i] = 1.0f; }\n";
+        // Translated D3D-bytecode VS path that did not write any clip
+        // distance: seed the Apple-only `[[clip_distance]]` slot with +1
+        // so disabled planes don't accidentally discard fragments.
+        out << "  out.clipDistance0 = 1.0f;\n";
       }
       out << "  return out;\n";
       out << "}\n";
@@ -1832,14 +1835,18 @@ std::string translateSpirvToMsl(const SpirvModule& module,
     }
     out << "  out.position.xy += ffpVs.halfPixelFixup * out.position.w;\n";
     if (context.clipPlaneMask != 0) {
-      // Initialize all 6 slots to +1 (passes) so disabled planes do not
-      // discard fragments. See note in dxmt9_ffp_shaders.cpp.
-      out << "  for (uint i = 0; i < 6; ++i) { out.clipDistance[i] = 1.0f; }\n";
-      out << "  for (uint i = 0; i < 6; ++i) {\n";
+      // Single `[[clip_distance]]` min-fold — see comment in
+      // `dxmt9_ffp_shaders.cpp`. Apple Metal only honours one
+      // [[clip_distance]] output; we collapse D3D9's six clip planes
+      // into one slot via min(d_i) over the runtime-enabled mask.
+      out << "  float dxmt9_minClip = 1.0f;\n";
+      out << "  for (uint i = 0u; i < 6u; ++i) {\n";
       out << "    if ((ffpVs.clipPlaneMask & (1u << i)) != 0u) {\n";
-      out << "      out.clipDistance[i] = dot(ffpVs.clipPlanes[i], out.position);\n";
+      out << "      const float d = dot(ffpVs.clipPlanes[i], out.position);\n";
+      out << "      dxmt9_minClip = min(dxmt9_minClip, d);\n";
       out << "    }\n";
       out << "  }\n";
+      out << "  out.clipDistance0 = dxmt9_minClip;\n";
     }
     out << "  return out;\n";
     out << "}\n";

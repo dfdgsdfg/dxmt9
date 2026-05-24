@@ -282,7 +282,23 @@ std::string makeShaderPrelude(bool withClipDistances) {
     out << "  float pointSize [[point_size]];\n";
   }
   if (withClipDistances) {
-    out << "  float clipDistance [[clip_distance]] [6];\n";
+    // Apple Metal (Apple7+) only honours a single `[[clip_distance]]`
+    // declaration per vertex output. Both the array form
+    // (`float clipDistance [[clip_distance]] [N]`) and multiple
+    // separately-attributed scalars (`float a [[clip_distance(0)]];
+    // float b [[clip_distance(1)]];`) silently clip every fragment
+    // regardless of the per-slot value. The only working form is one
+    // scalar `[[clip_distance]]` field per vertex output.
+    //
+    // D3D9 supports up to 6 clip planes via D3DRS_CLIPPLANEENABLE.
+    // dxmt9 collapses the per-plane half-space tests into the single
+    // Apple-supported slot by writing `min(d_i)` over the enabled
+    // planes — a fragment is clipped iff ANY plane's dot is < 0, which
+    // is equivalent to `min(d_i) < 0`. See `makeFfpVertexSource` /
+    // `dxmt9_shader_metal_ir.cpp` for the runtime min-fold. Wine
+    // `clip_planes_test` regression coverage:
+    // tests/shader_runner/corpus/render_state/dxmt9_clip_plane_halfspace_readback.shader_test
+    out << "  float clipDistance0 [[clip_distance]];\n";
   }
   out << "};\n";
   out << "inline float4 dxmt9_merge(float4 current, float4 next, uint mask) {\n";
