@@ -305,6 +305,34 @@ void testComWrappersEx() {
   checkEq(device->SetConvolutionMonoKernel(), E_NOTIMPL, "mono kernel not impl");
   checkEq(device->ComposeRects(), E_NOTIMPL, "compose rects not impl");
 
+  // ── gap_d3d9 §D: regression gates for silent-S_OK COM stubs ──────────────
+  // These methods are documented no-ops on Metal/Apple Silicon that match
+  // Wine's S_OK contract. They have no observable side effect, so without an
+  // explicit assertion a regression (e.g. an accidental E_NOTIMPL, or a stale
+  // out-param) would pass silently. Pin the exact documented return contract
+  // verified on master so a behavioral drift is caught here.
+
+  // CheckResourceResidency is a no-op that ignores its resource span entirely;
+  // a non-empty span must still return S_OK (gap_d3d9 D — residency stub). The
+  // stub never dereferences the entries, so opaque sentinel pointers suffice.
+  int residencySentinel = 0;
+  void* residencyResources[2] = {device, &residencySentinel};
+  checkEq(device->CheckResourceResidency(std::span<void* const>(residencyResources, 2)), S_OK,
+          "check resource residency ignores non-empty span");
+
+  // SetGPUThreadPriority accepts any value as a no-op; GetGPUThreadPriority is
+  // hardwired to report 0 and does NOT track prior Set calls (gap_d3d9 D —
+  // gpu thread priority stub). Pin both the zero-priority round-trip across a
+  // Set(0) and the always-zero readback after a non-zero Set.
+  checkEq(device->SetGPUThreadPriority(0), D3D_OK, "set gpu priority zero");
+  priority = 999;
+  checkEq(device->GetGPUThreadPriority(&priority), D3D_OK, "get gpu priority after set zero");
+  checkEq(priority, 0, "gpu priority still zero after set zero");
+  checkEq(device->SetGPUThreadPriority(7), D3D_OK, "set gpu priority non-zero");
+  priority = 999;
+  checkEq(device->GetGPUThreadPriority(&priority), D3D_OK, "get gpu priority after set non-zero");
+  checkEq(priority, 0, "gpu priority not tracked: still zero after non-zero set");
+
   Handle sharedHandle{123};
   auto rt = device->CreateRenderTargetEx({128, 64, Format::A8R8G8B8, Pool::Default, UsageRenderTarget, true,
                                           false, MultiSampleType::Four},
