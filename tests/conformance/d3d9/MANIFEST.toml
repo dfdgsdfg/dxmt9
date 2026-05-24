@@ -5107,14 +5107,14 @@ area = "surface-blit"
 owner = "core/resources"
 requirements = ["R-TEST-12.13", "R-TEST-12.14"]
 acceptance = ["CreateRenderTarget for a D3DPOOL_DEFAULT D3DFMT_A8R8G8B8 surface with D3DMULTISAMPLE_2_SAMPLES returns S_OK or D3DERR_NOTAVAILABLE; if NOTAVAILABLE the readback probe is skipped; on S_OK, GetRenderTargetData from the MSAA RT into a D3DPOOL_SYSTEMMEM offscreen plain surface of the same dimensions and format returns D3DERR_INVALIDCALL (MSAA->sysmem readback is rejected); a positive control GetRenderTargetData from a same-format non-MSAA RT into the same sysmem surface returns S_OK"]
-status = "failing"
+status = "partial"
 
 [[case.evidence]]
 lane = "builtin"
 arch = "x64"
-status = "failing"
+status = "passing"
 source = "tests/conformance/d3d9/evidence/sikarugir-cx-24.0.7-builtin-x64.json:1"
-summary = "Sikarugir-CX 24.0.7 builtin lane x64 2026-05-24 — failing in chunked runner snapshot; follow-up."
+summary = "Sikarugir-CX 24.0.7 builtin lane x64 2026-05-24 — passing after PE-side GetRenderTargetData rejects MSAA-source readback into sysmem with D3DERR_INVALIDCALL."
 
 [[case]]
 executable = "dxmt9-d3d9-conformance.exe"

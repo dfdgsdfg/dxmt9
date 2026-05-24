@@ -2596,6 +2596,21 @@ public:
         // get_render_target_data_policy: both args must be non-NULL. Wine
         // rejects NULL with INVALIDCALL before any backend work.
         if (!rt || !dst) return D3DERR_INVALIDCALL;
+        // Wine d3d9 multisample_get_rtdata_test (visual.c:17106) contract:
+        // GetRenderTargetData cannot copy from a multisampled render target
+        // into a SYSTEMMEM offscreen surface — there is no way to express
+        // per-sample data in a single sysmem surface. The legal readback
+        // path is StretchRect (MSAA -> non-MSAA resolve) followed by
+        // GetRenderTargetData on the resolved RT.
+        // get_render_target_data_msaa_policy.
+        {
+            D3DSURFACE_DESC sdSrc{};
+            if (SUCCEEDED(rt->GetDesc(&sdSrc))) {
+                if (sdSrc.MultiSampleType != D3DMULTISAMPLE_NONE) {
+                    return D3DERR_INVALIDCALL;
+                }
+            }
+        }
         // Phase 24: chunk-recorder path. The PE caller is synchronous —
         // the call doesn't return until the data is in dst — but
         // routing through the chunk record stream keeps ordering atomic
