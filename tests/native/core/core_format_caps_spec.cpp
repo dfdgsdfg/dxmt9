@@ -210,6 +210,62 @@ void testSigned3DcAndUnsupportedFormatCaps() {
           D3DERR_NOTAVAILABLE, "unknown/null-like format caps rejected");
 }
 
+void testVendorDepthPseudoFormats() {
+  // gap_d3d9.md §C.5 — DF16/DF24 are vendor depth-as-texture pseudo-
+  // formats (FOURCC 'DF16'/'DF24'), handled exactly like INTZ: a
+  // depth-stencil texture that is also sampleable. They previously fell
+  // through fmtFromD3D to Format::Unknown -> NOTAVAILABLE.
+  //
+  // FOURCC bytes (little-endian, matching the INTZ literal convention):
+  //   'DF16' = 'D'|'F'<<8|'1'<<16|'6'<<24 = 0x36314644 = 909198916
+  //   'DF24' = 'D'|'F'<<8|'2'<<16|'4'<<24 = 0x34324644 = 875710020
+  constexpr u32 kD3DFmtDF16 = 909198916u;   // 0x36314644
+  constexpr u32 kD3DFmtDF24 = 875710020u;   // 0x34324644
+
+  checkEq(dxmt9::d3d9::devicec::fmtFromD3D(kD3DFmtDF16), Format::DF16,
+          "DF16 FOURCC maps to core Format::DF16");
+  checkEq(dxmt9::d3d9::devicec::fmtFromD3D(kD3DFmtDF24), Format::DF24,
+          "DF24 FOURCC maps to core Format::DF24");
+  checkEq(dxmt9::d3d9::devicec::fmtToD3D(Format::DF16), kD3DFmtDF16,
+          "DF16 core format round-trips back to FOURCC");
+  checkEq(dxmt9::d3d9::devicec::fmtToD3D(Format::DF24), kD3DFmtDF24,
+          "DF24 core format round-trips back to FOURCC");
+
+  // Mirror INTZ's format-table shape: sampleable depth-stencil texture,
+  // not a color render target.
+  const auto* df16 = findFormatInfo(Format::DF16);
+  check(df16 != nullptr, "DF16 format info missing");
+  if (df16 != nullptr) {
+    check(df16->depthStencil, "DF16 is a depth-stencil format");
+    check(!df16->renderTarget, "DF16 is not a color render target");
+    checkEq(df16->backendFormat, BackendPixelFormat::Depth16Unorm,
+            "DF16 backend pixel format is Depth16Unorm");
+  }
+  const auto* df24 = findFormatInfo(Format::DF24);
+  check(df24 != nullptr, "DF24 format info missing");
+  if (df24 != nullptr) {
+    check(df24->depthStencil, "DF24 is a depth-stencil format");
+    check(!df24->renderTarget, "DF24 is not a color render target");
+    checkEq(df24->backendFormat, BackendPixelFormat::Depth32Float,
+            "DF24 backend pixel format mirrors INTZ's Depth32Float target");
+  }
+
+  // CheckDeviceFormat: like INTZ, depth-stencil texture usage succeeds
+  // and color render-target usage is rejected.
+  BackendLimits limits{};
+  limits.supportsDepth24Stencil8 = true;
+  limits.supportsDepth32FloatStencil8 = true;
+  Factory factory(limits);
+  checkEq(factory.checkDeviceFormat(0, Format::DF16, UsageDepthStencil), D3D_OK,
+          "DF16 depth-stencil texture support");
+  checkEq(factory.checkDeviceFormat(0, Format::DF24, UsageDepthStencil), D3D_OK,
+          "DF24 depth-stencil texture support");
+  checkEq(factory.checkDeviceFormat(0, Format::DF16, UsageRenderTarget),
+          D3DERR_NOTAVAILABLE, "DF16 color render-target usage rejected");
+  checkEq(factory.checkDeviceFormat(0, Format::DF24, UsageRenderTarget),
+          D3DERR_NOTAVAILABLE, "DF24 color render-target usage rejected");
+}
+
 void testHelpers() {
   const Viewport viewport{0, 0, 800, 600, 0.0f, 1.0f};
   const auto fixup = halfPixelFixup(viewport);
@@ -298,6 +354,7 @@ int main() {
   try {
     testFormatAndCaps();
     testSigned3DcAndUnsupportedFormatCaps();
+    testVendorDepthPseudoFormats();
     testHelpers();
     testDeviceCPresentIntervalMapping();
     testRingArenaExhaustionFallsBack();

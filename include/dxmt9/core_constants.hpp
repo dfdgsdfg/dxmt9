@@ -297,6 +297,15 @@ enum class Format : u32 {
   // Backed by MTLPixelFormatDepth32Float; sampled returns depth in .r.
   // See specs/gap_d3d9.md §C.5.
   INTZ,
+  // Vendor depth-as-texture pseudo-formats. FOURCC 'DF16' (0x36314644)
+  // and 'DF24' (0x34324644). Like INTZ, these expose a depth-stencil
+  // texture that is also sampleable as a single-channel shader resource;
+  // shadow-mapping titles depend on them. DF16 is 16-bit depth (backed by
+  // MTLPixelFormatDepth16Unorm); DF24 is 24-bit depth which has no direct
+  // Metal equivalent, so it mirrors INTZ onto MTLPixelFormatDepth32Float.
+  // See specs/gap_d3d9.md §C.5.
+  DF16,
+  DF24,
   INDEX16,
   INDEX32,
 };

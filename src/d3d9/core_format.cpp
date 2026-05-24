@@ -132,6 +132,16 @@ const std::vector<FormatEntry> &formatEntries() {
       // because INTZ is not a color render target.
       {{Format::INTZ, BackendPixelFormat::Depth32Float, FormatClass::Optional,
         4, false, true, false, false}},
+      // DF16 / DF24 — vendor depth-as-texture pseudo-formats, handled like
+      // INTZ (sampleable depth-stencil, not a color render target). DF16 is
+      // 16-bit depth (Depth16Unorm, 2 bpp). DF24 is 24-bit depth, which has
+      // no Metal-native target, so it reuses INTZ's Depth32Float (4 bpp) —
+      // depth precision is over-provisioned, which is safe for the shadow-map
+      // sampling these formats are used for. See specs/gap_d3d9.md §C.5.
+      {{Format::DF16, BackendPixelFormat::Depth16Unorm, FormatClass::Optional,
+        2, false, true, false, false}},
+      {{Format::DF24, BackendPixelFormat::Depth32Float, FormatClass::Optional,
+        4, false, true, false, false}},
       {{Format::INDEX16, BackendPixelFormat::Unknown, FormatClass::Required, 2,
         false, false, false, true}},
       {{Format::INDEX32, BackendPixelFormat::Unknown, FormatClass::Required, 4,
@@ -335,6 +345,10 @@ std::string formatName(Format format) {
     return "S8_LOCKABLE";
   case Format::INTZ:
     return "INTZ";
+  case Format::DF16:
+    return "DF16";
+  case Format::DF24:
+    return "DF24";
   case Format::INDEX16:
     return "INDEX16";
   case Format::INDEX32:

@@ -84,6 +84,10 @@ dxmt9::core::Format fmtFromD3D(uint32_t d3d) {
     case 85: return F::S8_LOCKABLE;
     // FOURCC 'INTZ' = 0x5A544E49 — vendor depth-as-color pseudo-format.
     case 1515474505u: return F::INTZ;
+    // FOURCC 'DF16' = 0x36314644 — vendor 16-bit depth-as-texture format.
+    case 909198916u: return F::DF16;
+    // FOURCC 'DF24' = 0x34324644 — vendor 24-bit depth-as-texture format.
+    case 875710020u: return F::DF24;
     case 101: return F::INDEX16;
     case 102: return F::INDEX32;
     default: return F::Unknown;
@@ -140,6 +144,8 @@ uint32_t fmtToD3D(dxmt9::core::Format format) {
     case F::D24FS8: return 83;
     case F::S8_LOCKABLE: return 85;
     case F::INTZ: return 1515474505u;
+    case F::DF16: return 909198916u;
+    case F::DF24: return 875710020u;
     case F::INDEX16: return 101;
     case F::INDEX32: return 102;
     case F::Unknown:
