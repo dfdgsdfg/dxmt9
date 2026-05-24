@@ -86,7 +86,7 @@ a `file:line` anchor checked against the live tree.
 | Item | Section | Priority | Notes |
 |---|---|---|---|
 | COM silent-`S_OK` stub gates — 4 PE-only remain (SetNPatchMode/GetNPatchMode, SetClipStatus/GetClipStatus, DeletePatch) | D.* | Med | native `com::` harness reached 3/7; rest need the PE conformance lane (`d3d9_device_misc.cpp` already gates SetDialogBoxMode/ValidateDevice) |
-| Vendor pseudo-formats `RESZ`/`NULL`/`ATOC` — **classification landed; behavioral pending** | C.5 | Med | FOURCC classification + `CheckDeviceFormat` outcomes done (`2f619f0`, gate `dxmt9-core-format-caps-spec`). Behavioral: RESZ=R-FORMAT-11 MSAA depth resolve, NULL=R-FORMAT-12 colorless RT, ATOC=R-FORMAT-13 alpha-to-coverage. See `specs/d3d9/formats/{requirements,design}.md` |
+| Vendor pseudo-formats `RESZ`/`NULL` — **behavioral pending** (`ATOC` done) | C.5 | Med | FOURCC classification done (`2f619f0`). ATOC behavioral done (`3293e39`, R-FORMAT-13, gate `dxmt9-backend-pipeline-key-spec` — bridge already exposed `alphaToCoverageEnabled`). Remaining: RESZ=R-FORMAT-11 MSAA depth resolve, NULL=R-FORMAT-12 colorless RT. See `specs/d3d9/formats/{requirements,design}.md` |
 | `D3DRS_TWOSIDEDSTENCILMODE` (185) behavioural gate | B.10#7 | Low | backend uses single-ref/both-faces; partial backend limit |
 | `SAMP_MIPMAPLODBIAS` per-sampler bias | B.3/B.10#4 | Blocked | requires a `lod_bias` field on `WMTSamplerInfo` (winemetal ABI extension) |
 | `D3DCLIPSTATUS9` Set/GetClipStatus | B.8/D.* | Low | nil-return arguably correct (D3D9 has no per-primitive clip tracking) |
