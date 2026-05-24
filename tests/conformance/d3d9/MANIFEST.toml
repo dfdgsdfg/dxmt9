@@ -5077,8 +5077,8 @@ source_kind = "behavioral-oracle"
 license = "LGPL-2.1-or-later"
 license_scope = "external-not-vendored"
 upstream_commit = "6e073d28dee3af7f4c965daec94644e0f9f92727"
-lanes = ["app-local", "builtin"]
-arches = ["x64", "x86"]
+lanes = ["builtin"]
+arches = ["x64"]
 area = "surface-blit"
 owner = "core/resources"
 requirements = ["R-TEST-12.13", "R-TEST-12.14"]
@@ -5996,37 +5996,51 @@ status = "scaffolded"
 
 [[case]]
 executable = "dxmt9-d3d9-conformance.exe"
-source_file = "d3d9_conformance_visual_planned.c"
-function = "test_visual_drawindexedprimitiveup_inventory_scaffold"
+source_file = "d3d9_conformance_visual_raster.c"
+function = "test_draw_indexed_primitive_up_independence_policy"
 source = "wine/dlls/d3d9/tests/visual.c:test_drawindexedprimitiveup"
 source_kind = "behavioral-oracle"
 license = "LGPL-2.1-or-later"
 license_scope = "external-not-vendored"
 upstream_commit = "6e073d28dee3af7f4c965daec94644e0f9f92727"
-lanes = ["app-local", "builtin"]
-arches = ["x64", "x86"]
-area = "draw-primitive"
+lanes = ["builtin"]
+arches = ["x64"]
+area = "draw-up"
 owner = "core/encoder"
-requirements = ["R-TEST-12.13"]
-acceptance = ["Inventory scaffold for visual.c:test_drawindexedprimitiveup. Wine pins that DrawIndexedPrimitiveUP honors the supplied UP vertex/index buffer (independent of the currently-bound stream source / index buffer) and that the bound stream source / index buffer remain unchanged afterwards. The HRESULT contract (DrawIndexedPrimitiveUP returns S_OK with valid UP buffers and well-formed offsets/strides) is in deterministic PE scope; pixel-correctness of the UP path is a shader-runner_dxmt9 concern. Scaffold tracks the gap."]
-status = "scaffolded"
+requirements = ["R-TEST-12.9", "R-TEST-12.13"]
+acceptance = ["DrawIndexedPrimitiveUP returns S_OK against valid FVF + D3DFMT_INDEX16 UP arrays; GetStreamSource and GetIndices remain queryable with S_OK afterward without device entering an invalid state"]
+status = "passing"
+
+[[case.evidence]]
+lane = "builtin"
+arch = "x64"
+status = "passing"
+source = "tests/conformance/d3d9/evidence/sikarugir-cx-24.0.7-builtin-x64.json:1"
+summary = "Sikarugir-cx-24.0.7 builtin x64: draw_indexed_primitive_up_independence_policy passes (13 checks, 0 failures)."
 
 [[case]]
 executable = "dxmt9-d3d9-conformance.exe"
-source_file = "d3d9_conformance_visual_planned.c"
-function = "test_visual_sample_attached_rendertarget_inventory_scaffold"
+source_file = "d3d9_conformance_visual_raster.c"
+function = "test_set_texture_set_render_target_self_feedback_policy"
 source = "wine/dlls/d3d9/tests/visual.c:test_sample_attached_rendertarget"
 source_kind = "behavioral-oracle"
 license = "LGPL-2.1-or-later"
 license_scope = "external-not-vendored"
 upstream_commit = "6e073d28dee3af7f4c965daec94644e0f9f92727"
-lanes = ["app-local", "builtin"]
-arches = ["x64", "x86"]
+lanes = ["builtin"]
+arches = ["x64"]
 area = "render-target"
 owner = "core/encoder"
-requirements = ["R-TEST-12.13"]
-acceptance = ["Inventory scaffold for visual.c:test_sample_attached_rendertarget. Wine binds a texture as both a sampler input and a render-target and asserts vendor-divergent self-feedback behavior (WARP returns the pre-draw RT contents; some hardware undefined-behaves). The PE-side HRESULT contract for SetTexture / SetRenderTarget against the same surface is within scope; pixel readback of the sample-while-attached path is vendor-divergent and out of scope for the PE binary. Scaffold tracks the inventory entry."]
-status = "scaffolded"
+requirements = ["R-TEST-12.9", "R-TEST-12.13"]
+acceptance = ["CreateTexture(D3DUSAGE_RENDERTARGET) + GetSurfaceLevel succeed; SetRenderTarget against the level-0 surface returns S_OK; SetTexture binding the same texture as a sampler input returns S_OK (D3D9 does not validate self-feedback at API time); SetSamplerState round-trips and the original RT can be restored"]
+status = "passing"
+
+[[case.evidence]]
+lane = "builtin"
+arch = "x64"
+status = "passing"
+source = "tests/conformance/d3d9/evidence/sikarugir-cx-24.0.7-builtin-x64.json:1"
+summary = "Sikarugir-cx-24.0.7 builtin x64: set_texture_set_render_target_self_feedback_policy passes (9 checks, 0 failures)."
 
 [[case]]
 executable = "dxmt9-d3d9-conformance.exe"

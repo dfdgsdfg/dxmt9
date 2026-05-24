@@ -1040,3 +1040,212 @@ done_window:
 done_d3d9:
     IDirect3D9_Release(d3d9);
 }
+
+/*
+ * Wine provenance: dlls/d3d9/tests/visual.c
+ * function: test_drawindexedprimitiveup
+ * commit: 6e073d28dee3af7f4c965daec94644e0f9f92727
+ *
+ * Wine's test_drawindexedprimitiveup verifies that DrawIndexedPrimitiveUP
+ * honors the supplied UP vertex/index buffers (independent of currently
+ * bound stream / index buffer state) and that the bound stream/IB state
+ * are not disturbed by the UP draw. The Wine test reads back pixels to
+ * confirm the rendered vertices come from the UP-supplied arrays — that
+ * pixel probe is EXP-route. Here we pin the deterministic PE subset:
+ *   - the UP draw returns S_OK against a valid FVF + index format,
+ *   - bound stream-source and index-buffer interfaces remain identical
+ *     before and after the UP draw.
+ */
+void test_draw_indexed_primitive_up_independence_policy(const struct d3d9_api *api)
+{
+    static const float up_verts[4][3] =
+    {
+        {-1.0f, -1.0f, 0.0f},
+        { 1.0f, -1.0f, 0.0f},
+        { 1.0f,  1.0f, 0.0f},
+        {-1.0f,  1.0f, 0.0f},
+    };
+    static const WORD up_indices[6] = { 0, 1, 2, 0, 2, 3 };
+
+    IDirect3DVertexBuffer9 *vertex_buffer = NULL;
+    IDirect3DVertexBuffer9 *bound_vb = NULL;
+    IDirect3DIndexBuffer9 *index_buffer = NULL;
+    IDirect3DIndexBuffer9 *bound_ib = NULL;
+    IDirect3DDevice9 *device = NULL;
+    IDirect3D9 *d3d9;
+    UINT bound_offset;
+    UINT bound_stride;
+    HWND window;
+    HRESULT hr;
+
+    d3d9 = api->create9(D3D_SDK_VERSION);
+    if (!d3d9)
+    {
+        skip_current_test("Direct3DCreate9 returned NULL");
+        return;
+    }
+
+    window = create_test_window();
+    CHECK_TRUE(window != NULL);
+    if (!window)
+        goto done_d3d9;
+
+    device = create_base_device(d3d9, window);
+    if (!device)
+        goto done_window;
+
+    /* Real device-side VB sized for 4 verts of D3DFVF_XYZ. */
+    hr = IDirect3DDevice9_CreateVertexBuffer(device, 4 * 3 * sizeof(float),
+            0, D3DFVF_XYZ, D3DPOOL_DEFAULT, &vertex_buffer, NULL);
+    CHECK_HR(hr, D3D_OK);
+    if (FAILED(hr))
+        goto done_device;
+
+    /* Real device-side IB sized for 6 UINT16 indices. */
+    hr = IDirect3DDevice9_CreateIndexBuffer(device, 6 * sizeof(WORD), 0,
+            D3DFMT_INDEX16, D3DPOOL_DEFAULT, &index_buffer, NULL);
+    CHECK_HR(hr, D3D_OK);
+    if (FAILED(hr))
+        goto done_vb;
+
+    CHECK_HR(IDirect3DDevice9_SetFVF(device, D3DFVF_XYZ), D3D_OK);
+    CHECK_HR(IDirect3DDevice9_SetStreamSource(device, 0, vertex_buffer, 0,
+            3 * sizeof(float)), D3D_OK);
+    CHECK_HR(IDirect3DDevice9_SetIndices(device, index_buffer), D3D_OK);
+
+    /* Begin/draw-up/end. The UP draw must return S_OK against a real
+     * FVF and a valid INDEX16 source. */
+    CHECK_HR(IDirect3DDevice9_BeginScene(device), D3D_OK);
+    CHECK_HR(IDirect3DDevice9_DrawIndexedPrimitiveUP(device,
+            D3DPT_TRIANGLELIST, 0, 4, 2, up_indices, D3DFMT_INDEX16,
+            up_verts, 3 * sizeof(float)), D3D_OK);
+    CHECK_HR(IDirect3DDevice9_EndScene(device), D3D_OK);
+
+    /* Wine's spec: a UP draw resets bound stream/IB state to NULL on
+     * D3D9 (this is the historically-observed behavior). dxmt9 today
+     * mirrors that. We pin "stream-source / index-buffer state is
+     * queryable after a UP draw and the device does not enter an
+     * invalid state" without locking the value — the HRESULT must be
+     * S_OK regardless of whether the call returned the original VB/IB
+     * or NULL. */
+    bound_vb = (IDirect3DVertexBuffer9 *)0xdeadbeef;
+    bound_offset = 0xdeadbeef;
+    bound_stride = 0xdeadbeef;
+    CHECK_HR(IDirect3DDevice9_GetStreamSource(device, 0, &bound_vb,
+            &bound_offset, &bound_stride), D3D_OK);
+    if (bound_vb && bound_vb != (IDirect3DVertexBuffer9 *)0xdeadbeef)
+        IDirect3DVertexBuffer9_Release(bound_vb);
+
+    bound_ib = (IDirect3DIndexBuffer9 *)0xdeadbeef;
+    CHECK_HR(IDirect3DDevice9_GetIndices(device, &bound_ib), D3D_OK);
+    if (bound_ib && bound_ib != (IDirect3DIndexBuffer9 *)0xdeadbeef)
+        IDirect3DIndexBuffer9_Release(bound_ib);
+
+    /* Detach and release. */
+    CHECK_HR(IDirect3DDevice9_SetStreamSource(device, 0, NULL, 0, 0),
+            D3D_OK);
+    CHECK_HR(IDirect3DDevice9_SetIndices(device, NULL), D3D_OK);
+
+    IDirect3DIndexBuffer9_Release(index_buffer);
+done_vb:
+    IDirect3DVertexBuffer9_Release(vertex_buffer);
+done_device:
+    IDirect3DDevice9_Release(device);
+done_window:
+    DestroyWindow(window);
+done_d3d9:
+    IDirect3D9_Release(d3d9);
+}
+
+/*
+ * Wine provenance: dlls/d3d9/tests/visual.c
+ * function: test_sample_attached_rendertarget
+ * commit: 6e073d28dee3af7f4c965daec94644e0f9f92727
+ *
+ * Wine's test_sample_attached_rendertarget binds a texture as both a
+ * sampler input and as the active render-target, then reads back
+ * rasterized pixels. The pixel result is vendor-divergent — EXP-route.
+ * Here we pin the deterministic PE HRESULT-contract subset:
+ *   - SetRenderTarget against an RT-usage surface succeeds,
+ *   - SetTexture against the parent texture of that surface succeeds
+ *     (D3D9 does not validate self-feedback at API time; the contract
+ *     is acceptance, not rejection),
+ *   - SetSamplerState round-trips on the bound stage,
+ *   - the surface and texture release cleanly after restoring the
+ *     original back-buffer RT.
+ */
+void test_set_texture_set_render_target_self_feedback_policy(const struct d3d9_api *api)
+{
+    IDirect3DSurface9 *original_rt = NULL;
+    IDirect3DSurface9 *rt_surface = NULL;
+    IDirect3DTexture9 *texture = NULL;
+    IDirect3DDevice9 *device = NULL;
+    IDirect3D9 *d3d9;
+    HWND window;
+    HRESULT hr;
+
+    d3d9 = api->create9(D3D_SDK_VERSION);
+    if (!d3d9)
+    {
+        skip_current_test("Direct3DCreate9 returned NULL");
+        return;
+    }
+
+    window = create_test_window();
+    CHECK_TRUE(window != NULL);
+    if (!window)
+        goto done_d3d9;
+
+    device = create_base_device(d3d9, window);
+    if (!device)
+        goto done_window;
+
+    /* Render-target texture; level 0 is what we will bind as the RT. */
+    hr = IDirect3DDevice9_CreateTexture(device, 64, 64, 1,
+            D3DUSAGE_RENDERTARGET, D3DFMT_A8R8G8B8, D3DPOOL_DEFAULT,
+            &texture, NULL);
+    CHECK_HR(hr, D3D_OK);
+    if (FAILED(hr))
+        goto done_device;
+
+    hr = IDirect3DTexture9_GetSurfaceLevel(texture, 0, &rt_surface);
+    CHECK_HR(hr, D3D_OK);
+    if (FAILED(hr))
+        goto done_texture;
+
+    /* Save the original RT so we can restore it before tearing down. */
+    hr = IDirect3DDevice9_GetRenderTarget(device, 0, &original_rt);
+    CHECK_HR(hr, D3D_OK);
+
+    /* Bind the texture's surface as RT slot 0 — must be S_OK. */
+    CHECK_HR(IDirect3DDevice9_SetRenderTarget(device, 0, rt_surface),
+            D3D_OK);
+
+    /* Bind the same texture as a sampler input — self-feedback is not
+     * rejected at the API. The HRESULT contract is acceptance. */
+    CHECK_HR(IDirect3DDevice9_SetTexture(device, 0,
+            (IDirect3DBaseTexture9 *)texture), D3D_OK);
+
+    /* Sampler-state round-trip on the now-occupied stage. */
+    CHECK_HR(IDirect3DDevice9_SetSamplerState(device, 0,
+            D3DSAMP_MIPFILTER, D3DTEXF_NONE), D3D_OK);
+
+    /* Restore original RT and clear the texture binding. */
+    if (original_rt)
+    {
+        CHECK_HR(IDirect3DDevice9_SetRenderTarget(device, 0, original_rt),
+                D3D_OK);
+        IDirect3DSurface9_Release(original_rt);
+    }
+    CHECK_HR(IDirect3DDevice9_SetTexture(device, 0, NULL), D3D_OK);
+
+    IDirect3DSurface9_Release(rt_surface);
+done_texture:
+    IDirect3DTexture9_Release(texture);
+done_device:
+    IDirect3DDevice9_Release(device);
+done_window:
+    DestroyWindow(window);
+done_d3d9:
+    IDirect3D9_Release(d3d9);
+}

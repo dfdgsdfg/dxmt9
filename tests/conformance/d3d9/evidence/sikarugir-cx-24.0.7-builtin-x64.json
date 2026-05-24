@@ -240,6 +240,8 @@
   "volume_container_interface_policy": "pass",
   "volume_lockbox_bounds_offset_policy": "pass",
   "volume_mipmap_level_desc_policy": "pass",
+  "draw_indexed_primitive_up_independence_policy": "pass",
+  "set_texture_set_render_target_self_feedback_policy": "pass",
   "volume_resource_container_desc": "pass",
   "window_cursor_ownership": "pass",
   "window_position_present_parameter_policy": "pass",

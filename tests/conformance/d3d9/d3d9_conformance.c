@@ -389,6 +389,10 @@ static const struct test_case tests[] =
     {"ex_device_sysmem_vertex_buffer_policy",
             test_ex_device_sysmem_vertex_buffer_policy},
     {"draw_mapped_buffer_policy", test_draw_mapped_buffer_policy},
+    {"draw_indexed_primitive_up_independence_policy",
+            test_draw_indexed_primitive_up_independence_policy},
+    {"set_texture_set_render_target_self_feedback_policy",
+            test_set_texture_set_render_target_self_feedback_policy},
 };
 
 int main(int argc, char **argv)
