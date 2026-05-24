@@ -36,6 +36,7 @@ using core::RS_STENCIL_CCW_PASS;
 using core::RS_STENCIL_CCW_WRITEMASK;
 using core::RS_STENCIL_CCW_ZFAIL;
 using core::RS_STENCIL_ENABLE;
+using core::RS_TWO_SIDED_STENCIL_MODE;
 using core::RS_STENCIL_FAIL;
 using core::RS_STENCIL_FUNC;
 using core::RS_STENCIL_MASK;
