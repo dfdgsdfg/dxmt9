@@ -27,11 +27,11 @@ edits not yet visible upstream.
 
 | Field | Value |
 |-------|-------|
-| Commit | `e93a05bc4e7ca6374d53e843213a17d11d8b4394` — **work tree dirty** |
-| Short  | `e93a05b` |
-| Tag / describe | `e93a05b` |
+| Commit | `35f25b88bd6fd55404674fcf304aa92442b151df` — **work tree dirty** |
+| Short  | `35f25b8` |
+| Tag / describe | `35f25b8` |
 | Author date | `2026-05-24` |
-| Subject | gen_wine_d3d9_test_inventory: derive status from MANIFEST.toml, retire wine_test.plan.md |
+| Subject | gen_wine_d3d9_test_inventory: fix `+` cross-file separator and evidence-status aggregation |
 
 ### Wine reference revision
 
@@ -50,7 +50,7 @@ the same commit in the Wine checkout before opening the source.
 
 ```sh
 # Reproduce the inventory verbatim from a clean tree:
-git -C "$DXMT9_REPO" checkout e93a05bc4e7ca6374d53e843213a17d11d8b4394
+git -C "$DXMT9_REPO" checkout 35f25b88bd6fd55404674fcf304aa92442b151df
 git -C "$WINE_REPO"  checkout 6e073d28dee3af7f4c965daec94644e0f9f92727
 python3 scripts/tools/gen_wine_d3d9_test_inventory.py
 ```
@@ -73,10 +73,10 @@ python3 scripts/tools/gen_wine_d3d9_test_inventory.py
 | Wine source | Tests | covered | scaffolded | partial | failing | other |
 |-------------|-----:|--------:|----------:|--------:|--------:|------:|
 | `visual.c` | 135 | 120 | 0 | 0 | 0 | 15 |
-| `device.c` | 105 | 97 | 0 | 0 | 6 | 2 |
-| `d3d9ex.c` | 27 | 18 | 0 | 0 | 4 | 5 |
+| `device.c` | 105 | 102 | 0 | 0 | 1 | 2 |
+| `d3d9ex.c` | 27 | 22 | 0 | 0 | 0 | 5 |
 | `stateblock.c` | 1 | 1 | 0 | 0 | 0 | 0 |
-| **TOTAL** | **268** | **236** | **0** | **0** | **10** | **22** |
+| **TOTAL** | **268** | **245** | **0** | **0** | **1** | **22** |
 
 `other` rolls up `deferred`, `partial/deferred`, and any UNTRACKED rows.
 
@@ -229,8 +229,8 @@ Source: [`dlls/d3d9/tests/device.c`](https://gitlab.winehq.org/wine/wine/-/blob/
 | Wine entry | Wine line | Status | dxmt9 PE function(s) / evidence |
 |------------|----------:|:------:|---------------------------------|
 | `test_begin_end_state_block` | 11366 | ✅ | `test_begin_end_state_block_policy` |
-| `test_check_device_format` | 12577 | 🟠 | `test_factory_validation_return_codes`, `test_factory_caps_edge_matrix`, `test_check_device_format_conversion_matrix` |
-| `test_checkdevicemultisampletype` | 1116 | 🟠 | `test_factory_validation_return_codes`, `test_factory_caps_edge_matrix` |
+| `test_check_device_format` | 12577 | ✅ | `test_factory_validation_return_codes`, `test_factory_caps_edge_matrix`, `test_check_device_format_conversion_matrix` |
+| `test_checkdevicemultisampletype` | 1116 | ✅ | `test_factory_validation_return_codes`, `test_factory_caps_edge_matrix` |
 | `test_clip_planes_limits` | 13133 | ✅ | `test_clip_plane_state_getters` |
 | `test_create_rt_ds_fail` | 10571 | ✅ | `test_create_rt_ds_failure_policy` |
 | `test_creation_parameters` | 14818 | ✅ | `test_device_creation_parameters_policy`, `test_multithreaded_device_creation_policy` |
@@ -244,7 +244,7 @@ Source: [`dlls/d3d9/tests/device.c`](https://gitlab.winehq.org/wine/wine/-/blob/
 | `test_device_caps` | 13482 | ✅ | `test_device_caps_roundtrip_policy` |
 | `test_device_window_reset` | 5899 | ✅ | `window_cursor_ownership` |
 | `test_display_formats` | 3551 | ✅ | `test_check_device_type_display_format_policy` |
-| `test_display_modes` | 2591 | 🟠 | `test_factory_validation_return_codes` |
+| `test_display_modes` | 2591 | ✅ | `test_factory_validation_return_codes` |
 | `test_draw_primitive` | 3081 | ✅ | `test_draw_primitive_outside_scene_policy` |
 | `test_filter` | 8082 | ✅ | `test_sampler_state_edges`, `resource_getdc_lod_autogen_mipmap` |
 | `test_format_unknown` | 12946 | ✅ | `resource_getdc_lod_autogen_mipmap` |
@@ -283,7 +283,7 @@ Source: [`dlls/d3d9/tests/device.c`](https://gitlab.winehq.org/wine/wine/-/blob/
 | `test_pinned_buffers` | 9992 | ✅ | `test_pinned_buffers_d3dusage_policy` |
 | `test_pixel_format` | 11187 | ✅ | `test_pixel_format_window_policy` |
 | `test_pixel_shader_constant` | 7238 | ✅ | `test_pixel_shader_constant` |
-| `test_private_data` | 8823 | 🟠 | `test_private_data_iunknown_ownership_smoke`, `test_private_data_resource_wrappers`, `test_private_data_replace_and_size_policy`, `test_private_data_bytes`, `test_private_data_iunknown` |
+| `test_private_data` | 8823 | ✅ | `test_private_data_iunknown_ownership_smoke`, `test_private_data_resource_wrappers`, `test_private_data_replace_and_size_policy`, `test_private_data_bytes`, `test_private_data_iunknown` |
 | `test_query_support` | 6430 | ✅ | `query_support_probe`, `test_query_get_data_size_policy` |
 | `test_refcount` | 1497 | ✅ | `test_resource_get_device_wrapper_policy`, `test_get_direct3d_addref`, `test_resource_get_device_addref`, `test_device_parent_caps_getter_policy` |
 | `test_render_target_device_mismatch` | 12889 | ✅ | `test_render_target_device_mismatch` |
@@ -310,7 +310,7 @@ Source: [`dlls/d3d9/tests/device.c`](https://gitlab.winehq.org/wine/wine/-/blob/
 | `test_surface_get_container` | 8291 | ✅ | `test_texture_surface_container_policy`, `resource_container_level_desc_and_locks` |
 | `test_swapchain` | 1269 | ✅ | `test_device_get_swap_chain_bounds_policy` |
 | `test_swapchain_multisample_reset` | 13219 | ✅ | `test_swapchain_multisample_reset` |
-| `test_swapchain_parameters` | 12337 | 🟠 | `test_present_parameter_validation`, `test_present_parameter_normalization`, `test_swapchain_backbuffer_getter_policy`, `test_additional_swapchain_backbuffer_bounds` |
+| `test_swapchain_parameters` | 12337 | ✅ | `test_present_parameter_validation`, `test_present_parameter_normalization`, `test_swapchain_backbuffer_getter_policy`, `test_additional_swapchain_backbuffer_bounds` |
 | `test_texture_stage_states` | 7658 | ✅ | `test_texture_stage_states` |
 | `test_timestamp_query` | 6790 | ✅ | `timestamp_query_public_sizes`, `test_query_get_data_size_policy` |
 | `test_unsupported_shaders` | 7296 | ✅ | `test_unsupported_shaders`, `test_shader_unsupported_stage_variants` |
@@ -344,7 +344,7 @@ Source: [`dlls/d3d9/tests/d3d9ex.c`](https://gitlab.winehq.org/wine/wine/-/blob/
 | `test_create_depth_stencil_surface_ex` | 640 | ✅ | `test_create_depth_stencil_surface_ex` |
 | `test_desktop_window` | 4976 | ✅ | `test_device_desktop_window_present_policy` |
 | `test_device_caps` | 4052 | ✅ | `test_device_caps_roundtrip_policy` |
-| `test_format_unknown` | 3977 | 🟠 | `test_creation_failure_out_pointers` |
+| `test_format_unknown` | 3977 | ✅ | `test_creation_failure_out_pointers` |
 | `test_frame_latency` | 4184 | ✅ | `test_ex_frame_latency_state` |
 | `test_get_adapter_displaymode_ex` | 522 | ✅ | `test_ex_adapter_luid_display_mode`, `test_ex_adapter_display_mode_null_rotation`, `test_ex_get_adapter_display_mode_ex_policy` |
 | `test_get_adapter_luid` | 400 | ✅ | `test_ex_adapter_luid_display_mode`, `test_ex_get_adapter_luid_policy` |
@@ -353,15 +353,15 @@ Source: [`dlls/d3d9/tests/d3d9ex.c`](https://gitlab.winehq.org/wine/wine/-/blob/
 | `test_qi_base_to_ex` | 240 | ✅ | `test_qi_base_to_ex` |
 | `test_qi_ex_to_base` | 303 | ✅ | `test_qi_ex_to_base` |
 | `test_reset` | 888 | ✅ | `test_reset_hresult_matrix_policy` |
-| `test_reset_ex` | 1420 | 🟠 | `test_ex_adapter_mode_enum_bounds`, `test_ex_create_reset_mode_validation` |
+| `test_reset_ex` | 1420 | ✅ | `test_ex_adapter_mode_enum_bounds`, `test_ex_create_reset_mode_validation` |
 | `test_reset_resources` | 1843 | ✅ | `test_reset_resources_policy` |
 | `test_resource_access` | 4229 | ✅ | `test_resource_access_ex_pool_policy` |
 | `test_scene` | 5031 | ✅ | `test_scene_ex_begin_end_policy` |
 | `test_swapchain_get_displaymode_ex` | 432 | ✅ | `test_ex_swapchain_display_mode`, `test_ex_swapchain_display_mode_null_rotation`, `test_swapchain_get_display_mode_ex_policy` |
-| `test_swapchain_parameters` | 3655 | 🟠 | `test_ex_create_reset_mode_validation` |
+| `test_swapchain_parameters` | 3655 | ✅ | `test_ex_create_reset_mode_validation` |
 | `test_sysmem_draw` | 4693 | ✅ | `test_ex_device_sysmem_vertex_buffer_policy` |
 | `test_unsupported_shaders` | 2173 | ✅ | `test_unsupported_shaders`, `test_ex_shader_validation_policy` |
-| `test_user_memory` | 715 | 🟠 | `test_ex_shared_handle_policy`, `test_ex_user_memory_lock_identity` |
+| `test_user_memory` | 715 | ✅ | `test_ex_shared_handle_policy`, `test_ex_user_memory_lock_identity` |
 | `test_user_memory_getdc` | 1957 | ✅ | `test_ex_user_memory_getdc_dib_identity`, `test_ex_user_memory_getdc_format_policy` |
 | `test_vidmem_accounting` | 1909 | ✅ | `test_ex_vidmem_accounting_policy` |
 | `test_window_style` | 3458 | ❓ | — |

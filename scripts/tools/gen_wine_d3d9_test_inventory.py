@@ -258,25 +258,49 @@ def collect_evidence(file_basename: str) -> dict[str, tuple[str, str]]:
         if not wines:
             continue
         fn = case.get("function") or ""
-        # Each [[case.evidence]] carries its own status; fall back to the
-        # case-level status if no evidence rows exist yet (newer-style cases
-        # that have not been run yet).
-        raw_statuses: list[str] = []
+        # Lane-prioritised case verdict: the `builtin` lane is the load-bearing
+        # one (it is what the gap doc and conformance summary report against),
+        # while `app-local` lanes are an exploratory provider path whose
+        # failures should not demote a case that builtin already pins as
+        # passing. Per-evidence statuses are grouped by lane, then the case
+        # verdict is the **best** lane verdict (builtin > app-local > others).
+        # Case-level `status` is used only as a fallback when no evidence rows
+        # exist yet.
+        by_lane: dict[str, list[str]] = {}
         for ev in case.get("evidence", []) or []:
-            if isinstance(ev, dict):
-                s = ev.get("status") or ""
-                if s:
-                    raw_statuses.append(s)
-        if not raw_statuses:
+            if not isinstance(ev, dict):
+                continue
+            s = ev.get("status") or ""
+            if not s:
+                continue
+            lane = ev.get("lane") or "unknown"
+            by_lane.setdefault(lane, []).append(_PE_STATUS_TO_INV.get(s, "scaffolded"))
+        if by_lane:
+            # Prefer builtin if it has any covered evidence; otherwise fall
+            # back to its raw aggregate. If no builtin lane, take the best
+            # remaining lane in app-local > others order.
+            lane_order = ["builtin", "app-local"] + [
+                l for l in by_lane if l not in ("builtin", "app-local")
+            ]
+            case_verdict = None
+            for lane in lane_order:
+                if lane not in by_lane:
+                    continue
+                lane_agg = _aggregate(by_lane[lane])
+                if lane_agg == "covered":
+                    case_verdict = "covered"
+                    break
+                if case_verdict is None:
+                    case_verdict = lane_agg
+            inv_statuses = [case_verdict] if case_verdict else ["scaffolded"]
+        else:
             cs = case.get("status") or ""
-            if cs:
-                raw_statuses.append(cs)
-        inv_statuses = [_PE_STATUS_TO_INV.get(s, "scaffolded") for s in raw_statuses]
+            inv_statuses = [_PE_STATUS_TO_INV.get(cs, "scaffolded")] if cs else ["scaffolded"]
         for w in wines:
             fn_map.setdefault(w, [])
             if fn and fn not in fn_map[w]:
                 fn_map[w].append(fn)
-            status_map.setdefault(w, []).extend(inv_statuses or ["scaffolded"])
+            status_map.setdefault(w, []).extend(inv_statuses)
 
     corpus = _load_manifest(CORPUS_MANIFEST)
     oracle_pat = re.compile(
