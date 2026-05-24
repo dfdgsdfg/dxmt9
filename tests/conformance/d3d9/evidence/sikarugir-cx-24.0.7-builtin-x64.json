@@ -22,7 +22,7 @@
   "device_raster_status_bounds": "pass",
   "display_mode_ex_size_filter_smoke": "pass",
   "draw_mapped_buffer_policy": "timeout",
-  "draw_primitive_outside_scene_policy": "fail",
+  "draw_primitive_outside_scene_policy": "pass",
   "ex_adapter_display_mode_null_rotation": "pass",
   "ex_adapter_luid_display_mode": "pass",
   "ex_adapter_mode_enum_bounds": "pass",

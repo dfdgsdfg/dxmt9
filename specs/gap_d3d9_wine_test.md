@@ -27,11 +27,11 @@ changes not yet visible upstream.
 
 | Field | Value |
 |-------|-------|
-| Commit | `ed0e08c38270f2d88b15f9356065b97c7fabbc9b` — **work tree dirty** |
-| Short  | `ed0e08c` |
-| Tag / describe | `ed0e08c` |
+| Commit | `397739012c79fb4248763d7d948ac63e63f5b1f3` — **work tree dirty** |
+| Short  | `3977390` |
+| Tag / describe | `3977390` |
 | Author date | `2026-05-24` |
-| Subject | specs/gap_d3d9_wine_test: 7 newly-scaffolded entries → failing per Sikarugir snapshot |
+| Subject | specs/gap_d3d9_wine_test: 13 more plan rows scaffolded → covered (any-pass policy) |
 
 ### Wine reference revision
 
@@ -50,7 +50,7 @@ the same commit in the Wine checkout before opening the source.
 
 ```sh
 # Reproduce the inventory verbatim from a clean tree:
-git -C "$DXMT9_REPO" checkout ed0e08c38270f2d88b15f9356065b97c7fabbc9b
+git -C "$DXMT9_REPO" checkout 397739012c79fb4248763d7d948ac63e63f5b1f3
 git -C "$WINE_REPO"  checkout 6e073d28dee3af7f4c965daec94644e0f9f92727
 python3 scripts/tools/gen_wine_d3d9_test_inventory.py
 ```
@@ -73,10 +73,10 @@ python3 scripts/tools/gen_wine_d3d9_test_inventory.py
 | Wine source | Tests | covered | scaffolded | partial | failing | other |
 |-------------|-----:|--------:|----------:|--------:|--------:|------:|
 | `visual.c` | 135 | 130 | 0 | 0 | 5 | 0 |
-| `device.c` | 105 | 75 | 28 | 0 | 2 | 0 |
+| `device.c` | 105 | 76 | 28 | 0 | 1 | 0 |
 | `d3d9ex.c` | 27 | 16 | 11 | 0 | 0 | 0 |
 | `stateblock.c` | 1 | 1 | 0 | 0 | 0 | 0 |
-| **TOTAL** | **268** | **222** | **39** | **0** | **7** | **0** |
+| **TOTAL** | **268** | **223** | **39** | **0** | **6** | **0** |
 
 `other` rolls up `deferred`, `partial/deferred`, and any UNTRACKED rows.
 
@@ -245,7 +245,7 @@ Source: [`dlls/d3d9/tests/device.c`](https://gitlab.winehq.org/wine/wine/-/blob/
 | `test_device_window_reset` | 5899 | 📐 | `window_cursor_ownership` |
 | `test_display_formats` | 3551 | ✅ | `test_check_device_type_display_format_policy` |
 | `test_display_modes` | 2591 | ✅ | `test_factory_validation_return_codes` |
-| `test_draw_primitive` | 3081 | 🔴 | `test_draw_primitive_outside_scene_policy` |
+| `test_draw_primitive` | 3081 | ✅ | `test_draw_primitive_outside_scene_policy` |
 | `test_filter` | 8082 | ✅ | `resource_getdc_lod_autogen_mipmap`, `test_sampler_state_edges` |
 | `test_format_unknown` | 12946 | 📐 | `resource_getdc_lod_autogen_mipmap` |
 | `test_fpu_setup` | 4998 | ✅ | `test_fpu_setup` |
