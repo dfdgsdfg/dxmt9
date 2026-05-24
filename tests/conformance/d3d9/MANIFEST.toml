@@ -5804,14 +5804,14 @@ area = "resources"
 owner = "core/resources"
 requirements = ["R-TEST-12.3"]
 acceptance = ["D3DPOOL_DEFAULT + D3DUSAGE_RENDERTARGET on the backbuffer colour format creates a texture; the level-0 surface is not lockable (LockRect returns D3DERR_INVALIDCALL)", "D3DPOOL_DEFAULT + D3DUSAGE_DYNAMIC colour texture is lockable", "D3DPOOL_DEFAULT + 0 usage colour texture is created OK but the surface is not lockable (the base-d3d9 default-pool rule that Ex relaxes)", "D3DPOOL_MANAGED + 0 usage colour texture is created OK and the surface is lockable", "D3DPOOL_SYSTEMMEM + 0 usage colour texture is created OK and the surface is lockable. Depth-format and ATI2N rows of the Wine matrix are left to vendor-policy probes — they depend on adapter CheckDeviceFormat outcomes."]
-status = "failing"
+status = "partial"
 
 [[case.evidence]]
 lane = "builtin"
 arch = "x64"
-status = "failing"
+status = "passing"
 source = "tests/conformance/d3d9/evidence/sikarugir-cx-24.0.7-builtin-x64.json:1"
-summary = "Sikarugir-CX 24.0.7 builtin lane x64 2026-05-24 — failing in chunked runner snapshot. dxmt9 lets LockRect succeed (S_OK) on D3DPOOL_DEFAULT + USAGE_RENDERTARGET and on D3DPOOL_DEFAULT + 0 usage colour surfaces where the Wine/MSDN oracle requires D3DERR_INVALIDCALL. The other matrix rows (DYNAMIC, MANAGED, SYSTEMMEM) pass; this is a focused implementation gap in default-pool lockability validation."
+summary = "Sikarugir-CX 24.0.7 builtin lane x64 2026-05-24 — passing in chunked runner snapshot. The base-d3d9 default-pool lockability rule is now gated at the PE LockRect path: D3DPOOL_DEFAULT without D3DUSAGE_DYNAMIC (including USAGE_RENDERTARGET and 0-usage) returns D3DERR_INVALIDCALL on a non-Ex device; Ex devices and DYNAMIC/MANAGED/SYSTEMMEM rows are unchanged."
 
 [[case]]
 executable = "dxmt9-d3d9-conformance.exe"

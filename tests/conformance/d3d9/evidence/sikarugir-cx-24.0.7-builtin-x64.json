@@ -102,7 +102,7 @@
   "reset_lockable_backbuffer_policy": "pass",
   "reset_lost_default_pool_rebinding": "pass",
   "reset_resources_policy": "pass",
-  "resource_access_base_pool_policy": "fail",
+  "resource_access_base_pool_policy": "pass",
   "resource_access_ex_pool_policy": "fail",
   "resource_container_level_desc_and_locks": "pass",
   "resource_get_device_wrapper_policy": "pass",

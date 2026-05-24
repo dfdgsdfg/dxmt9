@@ -27,11 +27,11 @@ changes not yet visible upstream.
 
 | Field | Value |
 |-------|-------|
-| Commit | `10e0435bc179e251357cf7d1d23b3ed79bb86abe` — **work tree dirty** |
-| Short  | `10e0435` |
-| Tag / describe | `10e0435` |
+| Commit | `68cbfd54343261bab10ea5f2e36034050aefdd8c` — **work tree dirty** |
+| Short  | `68cbfd5` |
+| Tag / describe | `68cbfd5` |
 | Author date | `2026-05-24` |
-| Subject | d3d9 SetVertexDeclaration: store decl as borrowed pointer (no AddRef) |
+| Subject | d3d9 validateVertexElements: return E_FAIL for misaligned offsets (Wine parity) |
 
 ### Wine reference revision
 
@@ -50,7 +50,7 @@ the same commit in the Wine checkout before opening the source.
 
 ```sh
 # Reproduce the inventory verbatim from a clean tree:
-git -C "$DXMT9_REPO" checkout 10e0435bc179e251357cf7d1d23b3ed79bb86abe
+git -C "$DXMT9_REPO" checkout 68cbfd54343261bab10ea5f2e36034050aefdd8c
 git -C "$WINE_REPO"  checkout 6e073d28dee3af7f4c965daec94644e0f9f92727
 python3 scripts/tools/gen_wine_d3d9_test_inventory.py
 ```
@@ -73,10 +73,10 @@ python3 scripts/tools/gen_wine_d3d9_test_inventory.py
 | Wine source | Tests | covered | scaffolded | partial | failing | other |
 |-------------|-----:|--------:|----------:|--------:|--------:|------:|
 | `visual.c` | 135 | 135 | 0 | 0 | 0 | 0 |
-| `device.c` | 105 | 100 | 4 | 0 | 1 | 0 |
+| `device.c` | 105 | 101 | 4 | 0 | 0 | 0 |
 | `d3d9ex.c` | 27 | 26 | 0 | 0 | 1 | 0 |
 | `stateblock.c` | 1 | 1 | 0 | 0 | 0 | 0 |
-| **TOTAL** | **268** | **262** | **4** | **0** | **2** | **0** |
+| **TOTAL** | **268** | **263** | **4** | **0** | **1** | **0** |
 
 `other` rolls up `deferred`, `partial/deferred`, and any UNTRACKED rows.
 
@@ -290,7 +290,7 @@ Source: [`dlls/d3d9/tests/device.c`](https://gitlab.winehq.org/wine/wine/-/blob/
 | `test_reset` | 2031 | ✅ | `test_reset_hresult_matrix_policy` |
 | `test_reset_fullscreen` | 4807 | ✅ | `test_reset_fullscreen_focus_window_policy` |
 | `test_reset_resources` | 5985 | ✅ | `test_reset_resources_policy` |
-| `test_resource_access` | 13659 | 🔴 | `test_resource_access_base_pool_policy` |
+| `test_resource_access` | 13659 | ✅ | `test_resource_access_base_pool_policy` |
 | `test_resource_priority` | 12209 | ✅ | `test_resource_priority_pool_policy`, `test_resource_priority_roundtrip` |
 | `test_resource_type` | 11789 | ✅ | `test_base_texture_metadata_iface_policy`, `test_cube_texture_face_desc_parity`, `test_resource_type`, `test_texture_level_surface_desc_parity`, `test_volume_mipmap_level_desc_policy` |
 | `test_scene` | 2678 | ✅ | `test_scene_invalid_transitions`, `test_scene_begin_end_matrix_policy` |

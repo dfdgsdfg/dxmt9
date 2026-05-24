@@ -176,6 +176,36 @@ static bool lockDiscardIsValid(DWORD flags, DWORD usage) {
   return (usage & D3DUSAGE_DYNAMIC) != 0;
 }
 
+// Wine d3d9 test_resource_access (base-pool variant, device.c:13659): on a
+// non-Ex device, a DEFAULT-pool surface is only lockable if the underlying
+// resource was created with D3DUSAGE_DYNAMIC. RENDERTARGET / DEPTHSTENCIL /
+// 0-usage DEFAULT surfaces return D3DERR_INVALIDCALL from Lock. Ex devices
+// relax the 0-usage case (covered by test_resource_access_ex_pool_policy).
+// Callers pass `is_ex=true` to skip the gate entirely.
+static bool defaultPoolLockAllowed(uint32_t pool, DWORD usage, bool is_ex) {
+  if (is_ex)
+    return true;
+  if (pool != D3DPOOL_DEFAULT)
+    return true;
+  return (usage & D3DUSAGE_DYNAMIC) != 0;
+}
+
+// Returns true if the device that owns this child resource was created via
+// IDirect3D9Ex::CreateDeviceEx (i.e. the COM object exposes
+// IID_IDirect3DDevice9Ex). Used to gate the base-vs-Ex Lock policy split.
+static bool deviceIsExtended(IDirect3DDevice9 *device) {
+  if (!device)
+    return false;
+  IDirect3DDevice9Ex *ex = nullptr;
+  const HRESULT hr =
+      device->QueryInterface(IID_IDirect3DDevice9Ex,
+                             reinterpret_cast<void **>(&ex));
+  if (FAILED(hr) || !ex)
+    return false;
+  ex->Release();
+  return true;
+}
+
 // Wine volume_block_lock_layout: block-compressed (DXT*/ATI*) volume
 // textures require the lock box to be 4-pixel aligned on Left/Top.
 // Non-aligned boxes return D3DERR_INVALIDCALL before any backend work.
@@ -560,11 +590,24 @@ public:
     // keeps a malformed Lock from committing pending records.
     if (locked_)
       return D3DERR_INVALIDCALL;
-    if (pRect) {
+    {
       D9CSurfaceDesc desc{};
       if (SUCCEEDED(hr32(dxmt9c_surface_get_desc(s_, &desc)))) {
-        if (!rectWithinExtents(pRect, desc.width, desc.height))
+        if (pRect && !rectWithinExtents(pRect, desc.width, desc.height))
           return D3DERR_INVALIDCALL;
+        // Wine d3d9 test_resource_access (base-pool variant,
+        // device.c:13659): a base device rejects Lock on a DEFAULT-pool
+        // texture-derived surface unless its owning texture was created
+        // with D3DUSAGE_DYNAMIC. Standalone CreateRenderTarget(Lockable)
+        // and CreateOffscreenPlainSurface intentionally fall through —
+        // they are not "texture-derived" so they keep their own lock
+        // contract (the backbuffer swap-chain gate above already covers
+        // its case). Ex devices relax the gate.
+        if (ownerIsTexture2D_
+            && !defaultPoolLockAllowed(desc.pool, desc.usage,
+                                       deviceIsExtended(device_))) {
+          return D3DERR_INVALIDCALL;
+        }
       }
     }
     // T4: if this surface aliases caller-owned memory (SYSTEMMEM
@@ -948,6 +991,15 @@ public:
           return D3DERR_INVALIDCALL;
         if (!lockDiscardIsValid(flags, desc.usage))
           return D3DERR_INVALIDCALL;
+        // Wine d3d9 test_resource_access (base-pool variant): a base
+        // device rejects Lock on a DEFAULT-pool resource unless it was
+        // created with D3DUSAGE_DYNAMIC. The user-memory aliasing path
+        // below is the SYSTEMMEM-shared-handle Ex-only short-circuit, so
+        // it is unaffected. Ex devices relax this gate.
+        if (!defaultPoolLockAllowed(desc.pool, desc.usage,
+                                    deviceIsExtended(device_))) {
+          return D3DERR_INVALIDCALL;
+        }
       }
     }
     // T4: user-memory aliasing path (SYSTEMMEM shared-handle). The
