@@ -564,6 +564,60 @@ void testPipelineHelpersUseExplicitFlatInputs() {
   checkEq(variant.sampleCount, 4u, "flat variant helper reads render target sample count");
 }
 
+void testAlphaToCoverageRenderStateHack() {
+  // R-FORMAT-13: alpha-to-coverage is enabled by writing the ATOC FOURCC
+  // token to D3DRS_ADAPTIVETESS_Y, and disabled by writing 0. The ATI
+  // A2M1/A2M0 tokens are accepted as aliases. The bit must fold into the
+  // PSO key so enabled and disabled draws hash to distinct pipelines.
+  DrawDesc desc{};
+  desc.vertexShader.hash = 0x1234u;
+  desc.pixelShader.hash = 0x5678u;
+
+  // Absent state -> disabled (ordinary meaning of an unset render state).
+  const auto absent = makeVariantKey(makeFlatDrawFixture(desc));
+  check(!absent.alphaToCoverage, "absent D3DRS_ADAPTIVETESS_Y leaves A2C disabled");
+
+  // Explicit 0 -> disabled.
+  desc.rs.values[RS_ADAPTIVETESS_Y] = 0u;
+  const auto disabledZero = makeVariantKey(makeFlatDrawFixture(desc));
+  check(!disabledZero.alphaToCoverage, "zero D3DRS_ADAPTIVETESS_Y disables A2C");
+
+  // ATOC token -> enabled.
+  desc.rs.values[RS_ADAPTIVETESS_Y] = kFourCcAtoc;
+  const auto enabledAtoc = makeVariantKey(makeFlatDrawFixture(desc));
+  check(enabledAtoc.alphaToCoverage, "ATOC token enables alpha-to-coverage");
+
+  // Enabled vs disabled must be distinct keys and distinct hashes (R-FORMAT-13
+  // requires the enabled/disabled draws to land in separate PSO cache slots).
+  check(!(enabledAtoc == disabledZero), "A2C enable changes the PSO key");
+  check(dxmt9::pipeline::ShaderVariantKeyHash{}(enabledAtoc) !=
+            dxmt9::pipeline::ShaderVariantKeyHash{}(disabledZero),
+        "A2C enable changes the PSO key hash");
+
+  // ATI alias A2M1 -> enabled.
+  desc.rs.values[RS_ADAPTIVETESS_Y] = kFourCcA2M1;
+  const auto enabledA2M1 = makeVariantKey(makeFlatDrawFixture(desc));
+  check(enabledA2M1.alphaToCoverage, "A2M1 alias enables alpha-to-coverage");
+
+  // ATI alias A2M0 -> disabled.
+  desc.rs.values[RS_ADAPTIVETESS_Y] = kFourCcA2M0;
+  const auto disabledA2M0 = makeVariantKey(makeFlatDrawFixture(desc));
+  check(!disabledA2M0.alphaToCoverage, "A2M0 alias disables alpha-to-coverage");
+
+  // A non-token, non-zero value reverts to the ordinary render-state meaning:
+  // it is not an A2C enable token, so the bit stays clear.
+  desc.rs.values[RS_ADAPTIVETESS_Y] = 0x12345678u;
+  const auto nonToken = makeVariantKey(makeFlatDrawFixture(desc));
+  check(!nonToken.alphaToCoverage,
+        "a non-token D3DRS_ADAPTIVETESS_Y value does not enable A2C");
+
+  // Token values are exactly the documented FOURCCs.
+  checkEq(kFourCcAtoc, 0x434F5441u, "ATOC FOURCC value");
+  checkEq(kFourCcA2M1, 0x314D3241u, "A2M1 FOURCC value");
+  checkEq(kFourCcA2M0, 0x304D3241u, "A2M0 FOURCC value");
+  checkEq(RS_ADAPTIVETESS_Y, 181u, "D3DRS_ADAPTIVETESS_Y render-state code");
+}
+
 void testSrgbCompatiblePixelFormatConversion() {
   BackendLimits limits{};
 
@@ -634,6 +688,7 @@ int main() {
     testContainedDrawShaderSourcesCarryActualSourceHashes();
     testProgrammableShaderVariantKeyUsesFullVertexDeclHash();
     testPipelineHelpersUseExplicitFlatInputs();
+    testAlphaToCoverageRenderStateHack();
     testSrgbCompatiblePixelFormatConversion();
     testUnsupportedDrawTranslatorFailureReturnsEmptyPipelineFuture();
   } catch (const TestFailure& failure) {

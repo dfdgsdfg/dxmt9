@@ -497,6 +497,19 @@ inline constexpr u32 RS_WRAP13 = 203;
 inline constexpr u32 RS_WRAP14 = 204;
 inline constexpr u32 RS_WRAP15 = 205;
 
+// Alpha-to-coverage render-state hack (R-FORMAT-13). D3D9 has no creatable
+// A2C state; titles enable it by writing the cross-vendor FOURCC token
+// MAKEFOURCC('A','T','O','C') to D3DRS_ADAPTIVETESS_Y (code 181, see
+// ~/workspaces/wine/include/d3d9types.h) and disable it by writing 0. The
+// ATI A2M1 / A2M0 tokens are accepted as enable / disable aliases. Any other
+// value reverts D3DRS_ADAPTIVETESS_Y to its ordinary (no-op) meaning. The
+// detected enable/disable folds into the PSO key (`alphaToCoverage`) and the
+// backend sets Metal `alphaToCoverageEnabled` accordingly.
+inline constexpr u32 RS_ADAPTIVETESS_Y = 181;
+inline constexpr u32 kFourCcAtoc = 0x434F5441u;  // 'ATOC' (little-endian byte order)
+inline constexpr u32 kFourCcA2M1 = 0x314D3241u;  // 'A2M1' enable alias
+inline constexpr u32 kFourCcA2M0 = 0x304D3241u;  // 'A2M0' disable alias
+
 inline constexpr u32 TSS_COLOR_OP = 1;
 inline constexpr u32 TSS_COLOR_ARG1 = 2;
 inline constexpr u32 TSS_COLOR_ARG2 = 3;

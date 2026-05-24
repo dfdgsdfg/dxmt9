@@ -765,12 +765,13 @@ TileFfpSelection selectTileFfpForPass(core::FlatDrawStateView state, bool suppor
   // tile-side. Pull the bit from the same render-state slot the
   // ShaderVariantKey uses so the selector stays consistent with the PSO
   // key.
-  // dxmt9 doesn't have a dedicated A2C render state (D3DRS_ADAPTIVETESS_Y
-  // is the historical encoding); for now drive A2C off `key.alphaToCoverage`
-  // through ShaderVariantKey, which is false until the AdaptiveTess path
-  // wires it. Always read it through the ShaderVariantKey contract once
-  // populated; for now treat it as false unless the hot record sets it.
-  const bool a2c = false;
+  // R-FORMAT-13: A2C is driven by the D3DRS_ADAPTIVETESS_Y FOURCC hack. Read
+  // the same render-state slot makeShaderVariantKey uses so the tile-FFP
+  // selector stays consistent with the PSO key: the ATOC token and the ATI
+  // A2M1 alias enable it; 0 / A2M0 / any other value leave it disabled.
+  const u32 adaptiveTessY = core::flatStateOr(rs, core::RS_ADAPTIVETESS_Y, 0u);
+  const bool a2c =
+      adaptiveTessY == core::kFourCcAtoc || adaptiveTessY == core::kFourCcA2M1;
   auto eligibility = ffp::classifyTileFfpEligibility(key, alphaRefNorm, a2c);
   switch (eligibility) {
     case ffp::TileFfpEligibility::Eligible:
@@ -824,7 +825,16 @@ ShaderVariantKey makeShaderVariantKey(core::FlatDrawStateView state,
       core::flatStateOr(hot.samplerStates[0], core::SAMP_MAG_FILTER, 0u) == 2u;
   key.clipPlanes = hot.clipPlaneMask != 0;
   key.alphaTest = core::flatStateOr(hot.renderStates, core::RS_ALPHA_TEST_ENABLE, 0u) != 0;
-  key.alphaToCoverage = false;
+  // R-FORMAT-13: alpha-to-coverage is driven by the cross-vendor render-state
+  // hack on D3DRS_ADAPTIVETESS_Y. Writing the ATOC FOURCC (or the ATI A2M1
+  // alias) enables it; 0, the A2M0 alias, or any other value leaves it
+  // disabled and reverts the render state to its ordinary meaning. The bit is
+  // mixed into ShaderVariantKeyHash, so enabled vs disabled draws hit distinct
+  // PSO cache slots, and the backend stamps Metal alphaToCoverageEnabled from
+  // it (the getOrBuildDrawPipeline build site sets info.alpha_to_coverage_enabled).
+  const u32 adaptiveTessY = core::flatStateOr(hot.renderStates, core::RS_ADAPTIVETESS_Y, 0u);
+  key.alphaToCoverage =
+      adaptiveTessY == core::kFourCcAtoc || adaptiveTessY == core::kFourCcA2M1;
   key.sampleCount = std::max(1u, hot.colorAttachments[0].sampleCount);
   for (std::size_t i = 0; i < core::kMaxTextureStages; ++i) {
     key.textureTypes[i] =
