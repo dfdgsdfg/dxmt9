@@ -478,6 +478,11 @@ inline constexpr u32 RS_STENCIL_PASS = 55;
 inline constexpr u32 RS_STENCIL_REF = 57;
 inline constexpr u32 RS_STENCIL_MASK = 58;
 inline constexpr u32 RS_STENCIL_WRITEMASK = 59;
+// D3DRS_TWOSIDEDSTENCILMODE = 185. When non-zero, BACK faces use the CCW
+// stencil ops/func (slots 186-189) instead of mirroring the front-face
+// ops (slots 53-56). D3D9 has no per-face stencil reference or read/write
+// mask, so those stay shared across both faces.
+inline constexpr u32 RS_TWO_SIDED_STENCIL_MODE = 185;
 inline constexpr u32 RS_STENCIL_CCW_FUNC = 189;
 inline constexpr u32 RS_STENCIL_CCW_FAIL = 186;
 inline constexpr u32 RS_STENCIL_CCW_ZFAIL = 187;

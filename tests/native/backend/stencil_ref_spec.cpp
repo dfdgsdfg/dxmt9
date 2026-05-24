@@ -269,6 +269,150 @@ void testEncoderForwardsStencilRefTwoSided() {
                         "TWOSIDEDSTENCILMODE is enabled");
 }
 
+// ---------------------------------------------------------------------------
+// D3DRS_TWOSIDEDSTENCILMODE (185) per-face stencil ops — gap_d3d9 B.10#7.
+//
+// D3D9 semantics: when D3DRS_TWOSIDEDSTENCILMODE is FALSE (default) back
+// faces use the SAME stencil ops as front (D3DRS_STENCILFAIL/ZFAIL/PASS/
+// FUNC, slots 53/54/55/56). When TRUE, back faces use the CCW family
+// (D3DRS_CCW_STENCILFAIL/ZFAIL/PASS/FUNC, slots 186/187/188/189). The
+// stencil *reference* and read/write masks are single in D3D9 and stay
+// shared across both faces.
+//
+// `makeDepthStencilKey` is the pure transform that lowers the flat render
+// states to the per-face `pipeline::DepthStencilKey`. These tests lock:
+//   * mode OFF  -> back ops == front ops even when CCW states are present
+//     (the CCW values must be ignored, matching D3D9 / the Wine oracle).
+//   * mode ON   -> back ops/func come from the CCW family, distinct from
+//     front.
+//   * default (no stencil states at all) is unchanged.
+
+using dxmt9::core::CompareFunc;
+using dxmt9::core::StencilOp;
+using dxmt9::state::makeDepthStencilKey;
+
+// Build a state with a distinct front-face op set and a distinct CCW op
+// set, optionally enabling D3DRS_TWOSIDEDSTENCILMODE (185). Entries must
+// stay sorted ascending by slot id (FlatStateSet invariant).
+dxmt9::core::CanonicalDrawState makeStateWithPerFaceStencil(bool twoSided) {
+  dxmt9::core::CanonicalDrawState state{};
+  state.hot.streamOffsets[0] = 0;
+  state.hot.streamStrides[0] = 20u;
+  state.shaderLayout.vertexDecl.streams[0].stride = 20u;
+  state.shaderLayout.vertexShader.kind =
+      dxmt9::core::ShaderRef::Kind::Bytecode;
+  state.shaderLayout.pixelShader.kind =
+      dxmt9::core::ShaderRef::Kind::Bytecode;
+
+  auto& rs = state.hot.renderStates;
+  std::size_t idx = 0;
+  auto put = [&](u32 slot, u32 value) {
+    rs.entries[idx++] = dxmt9::core::FlatStateEntry{slot, value};
+  };
+
+  // Slots in ascending order: 52 (enable), 53 fail, 54 zfail, 55 pass,
+  // 56 func, then 185 twoSided, 186 ccw fail, 187 ccw zfail, 188 ccw pass,
+  // 189 ccw func.
+  put(dxmt9::core::RS_STENCIL_ENABLE, 1u);
+  put(dxmt9::core::RS_STENCIL_FAIL, static_cast<u32>(StencilOp::Zero));
+  put(dxmt9::core::RS_STENCIL_ZFAIL, static_cast<u32>(StencilOp::Replace));
+  put(dxmt9::core::RS_STENCIL_PASS, static_cast<u32>(StencilOp::IncrSat));
+  put(dxmt9::core::RS_STENCIL_FUNC, static_cast<u32>(CompareFunc::Less));
+  if (twoSided) {
+    put(dxmt9::core::RS_TWO_SIDED_STENCIL_MODE, 1u);
+  }
+  // CCW ops are always present in the flat state — the point of the
+  // mode-OFF test is that they must be ignored unless 185 is set.
+  put(dxmt9::core::RS_STENCIL_CCW_FAIL, static_cast<u32>(StencilOp::Invert));
+  put(dxmt9::core::RS_STENCIL_CCW_ZFAIL, static_cast<u32>(StencilOp::Incr));
+  put(dxmt9::core::RS_STENCIL_CCW_PASS, static_cast<u32>(StencilOp::Decr));
+  put(dxmt9::core::RS_STENCIL_CCW_FUNC,
+      static_cast<u32>(CompareFunc::Greater));
+  rs.count = static_cast<u32>(idx);
+  return state;
+}
+
+void testDepthStencilKeyModeOffMirrorsFront() {
+  // Mode OFF: back-face ops must equal front-face ops, and must NOT pick
+  // up the CCW render states even though they are set.
+  auto state = makeStateWithPerFaceStencil(/*twoSided=*/false);
+  const auto key = makeDepthStencilKey(state.view());
+
+  checkEq(key.front.failureOperation,
+          static_cast<u32>(StencilOp::Zero), "mode-off front fail op");
+  checkEq(key.front.compareFunction,
+          static_cast<u32>(CompareFunc::Less), "mode-off front func");
+
+  checkEq(key.back.failureOperation, key.front.failureOperation,
+          "mode-off back fail op mirrors front");
+  checkEq(key.back.depthFailureOperation, key.front.depthFailureOperation,
+          "mode-off back zfail op mirrors front");
+  checkEq(key.back.passOperation, key.front.passOperation,
+          "mode-off back pass op mirrors front");
+  checkEq(key.back.compareFunction, key.front.compareFunction,
+          "mode-off back func mirrors front");
+  // Read/write masks are single in D3D9 and shared across both faces.
+  checkEq(key.back.readMask, key.front.readMask,
+          "mode-off back readMask mirrors front");
+  checkEq(key.back.writeMask, key.front.writeMask,
+          "mode-off back writeMask mirrors front");
+}
+
+void testDepthStencilKeyModeOnUsesCcw() {
+  // Mode ON: back-face ops/func come from the CCW family, distinct from
+  // front; the reference and masks stay shared.
+  auto state = makeStateWithPerFaceStencil(/*twoSided=*/true);
+  const auto key = makeDepthStencilKey(state.view());
+
+  // Front unchanged.
+  checkEq(key.front.failureOperation,
+          static_cast<u32>(StencilOp::Zero), "mode-on front fail op");
+  checkEq(key.front.compareFunction,
+          static_cast<u32>(CompareFunc::Less), "mode-on front func");
+
+  // Back from CCW family.
+  checkEq(key.back.failureOperation,
+          static_cast<u32>(StencilOp::Invert), "mode-on back fail op = CCW");
+  checkEq(key.back.depthFailureOperation,
+          static_cast<u32>(StencilOp::Incr), "mode-on back zfail op = CCW");
+  checkEq(key.back.passOperation,
+          static_cast<u32>(StencilOp::Decr), "mode-on back pass op = CCW");
+  checkEq(key.back.compareFunction,
+          static_cast<u32>(CompareFunc::Greater), "mode-on back func = CCW");
+
+  check(key.back.failureOperation != key.front.failureOperation,
+        "mode-on back fail op is distinct from front");
+  check(key.back.compareFunction != key.front.compareFunction,
+        "mode-on back func is distinct from front");
+
+  // Masks remain shared (D3D9 has no per-face CCW mask).
+  checkEq(key.back.readMask, key.front.readMask,
+          "mode-on back readMask still shared with front");
+  checkEq(key.back.writeMask, key.front.writeMask,
+          "mode-on back writeMask still shared with front");
+  // back.enabled tracks front.enabled.
+  checkEq(static_cast<unsigned>(key.back.enabled),
+          static_cast<unsigned>(key.front.enabled),
+          "mode-on back.enabled tracks front.enabled");
+}
+
+void testDepthStencilKeyDefaultUnchanged() {
+  // No stencil states at all -> front and back are the struct defaults and
+  // equal each other (byte-identical to the pre-change default).
+  dxmt9::core::CanonicalDrawState empty{};
+  const auto key = makeDepthStencilKey(empty.view());
+  dxmt9::pipeline::StencilFaceKey defaults{};
+  // back is what default produces; front.enabled is false so the rest are
+  // the StencilFaceKey defaults.
+  checkEq(static_cast<unsigned>(key.front.enabled), 0u,
+          "default front disabled");
+  checkEq(key.front.compareFunction, defaults.compareFunction,
+          "default front func");
+  checkEq(key.front.failureOperation, defaults.failureOperation,
+          "default front fail op");
+  check(key.back == key.front, "default back equals front (mode off)");
+}
+
 }  // namespace
 
 int main() {
@@ -279,6 +423,9 @@ int main() {
     testComputeStencilRefTwoSidedAppliesToBothFaces();
     testEncoderForwardsStencilRefSingleSided();
     testEncoderForwardsStencilRefTwoSided();
+    testDepthStencilKeyModeOffMirrorsFront();
+    testDepthStencilKeyModeOnUsesCcw();
+    testDepthStencilKeyDefaultUnchanged();
   } catch (const TestFailure& e) {
     std::cerr << "stencil_ref_spec failed: " << e.what() << '\n';
     return 1;

@@ -275,16 +275,31 @@ pipeline::DepthStencilKey makeDepthStencilKey(core::FlatDrawStateView state) {
       core::flatStateOr(rs, RS_STENCIL_PASS, static_cast<u32>(StencilOp::Keep));
   key.front.readMask = core::flatStateOr(rs, RS_STENCIL_MASK, 0xffu);
   key.front.writeMask = core::flatStateOr(rs, RS_STENCIL_WRITEMASK, 0xffu);
-  key.back.compareFunction =
-      core::flatStateOr(rs, RS_STENCIL_CCW_FUNC, key.front.compareFunction);
-  key.back.failureOperation =
-      core::flatStateOr(rs, RS_STENCIL_CCW_FAIL, key.front.failureOperation);
-  key.back.depthFailureOperation =
-      core::flatStateOr(rs, RS_STENCIL_CCW_ZFAIL, key.front.depthFailureOperation);
-  key.back.passOperation =
-      core::flatStateOr(rs, RS_STENCIL_CCW_PASS, key.front.passOperation);
-  key.back.readMask = core::flatStateOr(rs, RS_STENCIL_CCW_MASK, key.front.readMask);
-  key.back.writeMask = core::flatStateOr(rs, RS_STENCIL_CCW_WRITEMASK, key.front.writeMask);
+  // D3DRS_TWOSIDEDSTENCILMODE (185): when FALSE (default) back faces use the
+  // same ops/func as front; when TRUE back faces use the CCW family
+  // (D3DRS_CCW_STENCILFAIL/ZFAIL/PASS/FUNC, slots 186-189). Metal exposes
+  // these via MTLDepthStencilDescriptor.backFaceStencil. The stencil
+  // reference (computeStencilRef) and read/write masks are single in D3D9 —
+  // there is no D3DRS_CCW_STENCILREF / CCW mask — so they stay shared.
+  const bool twoSided = core::flatStateOr(rs, RS_TWO_SIDED_STENCIL_MODE, 0u) != 0;
+  if (twoSided) {
+    key.back.compareFunction =
+        core::flatStateOr(rs, RS_STENCIL_CCW_FUNC, key.front.compareFunction);
+    key.back.failureOperation =
+        core::flatStateOr(rs, RS_STENCIL_CCW_FAIL, key.front.failureOperation);
+    key.back.depthFailureOperation = core::flatStateOr(
+        rs, RS_STENCIL_CCW_ZFAIL, key.front.depthFailureOperation);
+    key.back.passOperation =
+        core::flatStateOr(rs, RS_STENCIL_CCW_PASS, key.front.passOperation);
+  } else {
+    key.back.compareFunction = key.front.compareFunction;
+    key.back.failureOperation = key.front.failureOperation;
+    key.back.depthFailureOperation = key.front.depthFailureOperation;
+    key.back.passOperation = key.front.passOperation;
+  }
+  // Masks are shared across both faces in D3D9 regardless of mode.
+  key.back.readMask = key.front.readMask;
+  key.back.writeMask = key.front.writeMask;
   key.back.enabled = key.front.enabled;
   return key;
 }
