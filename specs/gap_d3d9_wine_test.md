@@ -27,11 +27,11 @@ edits not yet visible upstream.
 
 | Field | Value |
 |-------|-------|
-| Commit | `35f25b88bd6fd55404674fcf304aa92442b151df` — **work tree dirty** |
-| Short  | `35f25b8` |
-| Tag / describe | `35f25b8` |
+| Commit | `8575560ee8235bfc7bd3d0b1b1ceebf195d5b860` — **work tree dirty** |
+| Short  | `8575560` |
+| Tag / describe | `8575560` |
 | Author date | `2026-05-24` |
-| Subject | gen_wine_d3d9_test_inventory: fix `+` cross-file separator and evidence-status aggregation |
+| Subject | doc: update doc |
 
 ### Wine reference revision
 
@@ -50,7 +50,7 @@ the same commit in the Wine checkout before opening the source.
 
 ```sh
 # Reproduce the inventory verbatim from a clean tree:
-git -C "$DXMT9_REPO" checkout 35f25b88bd6fd55404674fcf304aa92442b151df
+git -C "$DXMT9_REPO" checkout 8575560ee8235bfc7bd3d0b1b1ceebf195d5b860
 git -C "$WINE_REPO"  checkout 6e073d28dee3af7f4c965daec94644e0f9f92727
 python3 scripts/tools/gen_wine_d3d9_test_inventory.py
 ```
@@ -72,11 +72,11 @@ python3 scripts/tools/gen_wine_d3d9_test_inventory.py
 
 | Wine source | Tests | covered | scaffolded | partial | failing | other |
 |-------------|-----:|--------:|----------:|--------:|--------:|------:|
-| `visual.c` | 135 | 120 | 0 | 0 | 0 | 15 |
-| `device.c` | 105 | 102 | 0 | 0 | 1 | 2 |
-| `d3d9ex.c` | 27 | 22 | 0 | 0 | 0 | 5 |
+| `visual.c` | 135 | 125 | 10 | 0 | 0 | 0 |
+| `device.c` | 105 | 105 | 0 | 0 | 0 | 0 |
+| `d3d9ex.c` | 27 | 27 | 0 | 0 | 0 | 0 |
 | `stateblock.c` | 1 | 1 | 0 | 0 | 0 | 0 |
-| **TOTAL** | **268** | **245** | **0** | **0** | **1** | **22** |
+| **TOTAL** | **268** | **258** | **10** | **0** | **0** | **0** |
 
 `other` rolls up `deferred`, `partial/deferred`, and any UNTRACKED rows.
 
@@ -134,8 +134,8 @@ Source: [`dlls/d3d9/tests/visual.c`](https://gitlab.winehq.org/wine/wine/-/blob/
 | `stream_test` | 12133 | ✅ | `test_stream_source_frequency_state`, `dxmt9_vs_multistream_texcoord1_offset_readback` |
 | `stretchrect_test` | 4048 | ✅ | `test_stretch_rect_format_matrix_policy` |
 | `test_3dc_formats` | 19655 | ✅ | `test_visual_3dc_format_caps_policy` |
-| `test_alpha_to_coverage` | 26521 | ❓ | — |
-| `test_backbuffer_resize` | 24193 | ❓ | — |
+| `test_alpha_to_coverage` | 26521 | 📐 | `test_visual_alpha_to_coverage_inventory_scaffold` |
+| `test_backbuffer_resize` | 24193 | ✅ | `test_backbuffer_resize_present_parameter_policy` |
 | `test_blend` | 8876 | ✅ | `dxmt9_blend_srcalpha_invsrcalpha_readback` |
 | `test_blit_format_conversion` | 29162 | ✅ | `test_visual_blit_format_conversion_policy` |
 | `test_buffer_no_dirty_update` | 19429 | ✅ | `test_visual_buffer_no_dirty_update_policy` |
@@ -145,15 +145,15 @@ Source: [`dlls/d3d9/tests/visual.c`](https://gitlab.winehq.org/wine/wine/-/blob/
 | `test_compare_instructions` | 7614 | ✅ | `dxmt9_compare_matrix_readback` |
 | `test_constant_clamp_vs` | 6189 | ✅ | `dxmt9_vs_constant_no_clamp_readback` |
 | `test_cube_wrap` | 2664 | ✅ | `dxmt9_cube_wrap_positive_x_readback` |
-| `test_default_attribute_components` | 27807 | ❓ | — |
-| `test_default_diffuse` | 27607 | ❓ | — |
+| `test_default_attribute_components` | 27807 | 📐 | `test_visual_default_attribute_components_inventory_scaffold` |
+| `test_default_diffuse` | 27607 | 📐 | `test_visual_default_diffuse_inventory_scaffold` |
 | `test_depth_stencil_init` | 22556 | ✅ | `test_visual_depth_stencil_init_policy` |
 | `test_depthbias` | 21851 | ✅ | `dxmt9_depth_bias_occlusion_readback` |
 | `test_desktop_window` | 25880 | ✅ | `test_device_desktop_window_present_policy` |
 | `test_draw_mapped_buffer` | 26213 | ✅ | `test_draw_mapped_buffer_policy` |
-| `test_drawindexedprimitiveup` | 24293 | ❓ | — |
+| `test_drawindexedprimitiveup` | 24293 | 📐 | `test_visual_drawindexedprimitiveup_inventory_scaffold` |
 | `test_dsy` | 23840 | ✅ | `dxmt9_dsy_vpos_readback` |
-| `test_dynamic_map_synchronization` | 26843 | ❓ | — |
+| `test_dynamic_map_synchronization` | 26843 | ✅ | `test_vb_lock_flags` |
 | `test_evict_bound_resources` | 23967 | ✅ | `test_visual_evict_managed_resources_policy` |
 | `test_fetch4` | 15189 | ✅ | `test_vendor_policy_fetch4_caps` |
 | `test_ffp_w` | 28095 | ✅ | `dxmt9_ffp_xyzw_w_divide_readback`, `dxmt9_ffp_w_rhw_fog_readback` |
@@ -168,12 +168,12 @@ Source: [`dlls/d3d9/tests/visual.c`](https://gitlab.winehq.org/wine/wine/-/blob/
 | `test_lighting_matrices` | 28945 | ✅ | `test_visual_lighting_world_view_matrix_policy` |
 | `test_line_antialiasing_blending` | 23684 | ✅ | `test_visual_line_antialiasing_blending_state_policy` |
 | `test_managed_generate_mipmap` | 27515 | ✅ | `test_managed_autogen_mipmap_policy` |
-| `test_managed_reset` | 27484 | ❓ | — |
-| `test_map_synchronisation` | 24996 | ❓ | — |
+| `test_managed_reset` | 27484 | ✅ | `reset_lost_default_pool_rebinding` |
+| `test_map_synchronisation` | 24996 | ✅ | `test_vb_lock_flags` |
 | `test_max_index16` | 24074 | ✅ | `test_visual_max_index16_draw_policy` |
 | `test_mipmap_autogen` | 5773 | ✅ | `dxmt9_autogen_update_texture_texldl_readback` |
 | `test_mipmap_upload` | 27550 | ✅ | `test_vendor_policy_mipmap_upload_policy` |
-| `test_mismatched_sample_types` | 25977 | ❓ | — |
+| `test_mismatched_sample_types` | 25977 | 📐 | `test_visual_mismatched_sample_types_inventory_scaffold` |
 | `test_mova` | 1965 | ✅ | `dxmt9_mova_relative_color_readback` |
 | `test_multisample_get_front_buffer_data` | 17168 | ✅ | `test_visual_multisample_get_front_buffer_data_policy` |
 | `test_multisample_init` | 22489 | ✅ | `test_multisample_render_target_init_policy` |
@@ -186,13 +186,13 @@ Source: [`dlls/d3d9/tests/visual.c`](https://gitlab.winehq.org/wine/wine/-/blob/
 | `test_per_stage_constant` | 19516 | ✅ | `dxmt9_ffp_tss_constant_readback`, `dxmt9_ffp_tss_stage1_constant_readback`, `dxmt9_ffp_tss_per_stage_constant_readback` |
 | `test_pointsize` | 10873 | ✅ | `dxmt9_ffp_point_default_readback` |
 | `test_position_index` | 20115 | ✅ | `test_visual_position_index_decl_policy`, `dxmt9_position_index_texcoord_readback` |
-| `test_sample_attached_rendertarget` | 26344 | ❓ | — |
+| `test_sample_attached_rendertarget` | 26344 | 📐 | `test_visual_sample_attached_rendertarget_inventory_scaffold` |
 | `test_sample_mask` | 26723 | ✅ | `test_visual_sample_mask_render_state_policy` |
-| `test_sanity` | 449 | ❓ | — |
+| `test_sanity` | 449 | ✅ | `test_factory_validation_return_codes` |
 | `test_shademode` | 8611 | ✅ | `test_visual_shademode_render_state_policy`, `dxmt9_ffp_gouraud_shademode_readback` |
 | `test_signed_formats` | 20444 | ✅ | `test_visual_signed_formats_caps_policy` |
 | `test_specular_lighting` | 774 | ✅ | `test_visual_specular_lighting_render_state_policy`, `dxmt9_ffp_specular_lighting_readback` |
-| `test_sysmem_draw` | 25372 | ❓ | — |
+| `test_sysmem_draw` | 25372 | 📐 | `test_visual_sysmem_draw_inventory_scaffold` |
 | `test_table_fog_zw` | 20324 | ✅ | `dxmt9_ffp_w_rhw_fog_readback`, `dxmt9_ffp_range_fog_readback` |
 | `test_texcoordindex` | 21069 | ✅ | `dxmt9_ffp_texcoord_index_matrix_readback`, `dxmt9_ffp_texcoord1_transform_readback`, `dxmt9_ffp_tci_camera_position_readback`, `dxmt9_ffp_tci_camera_normal_readback` |
 | `test_texture_blending` | 22642 | ✅ | `dxmt9_ffp_tss_alpha_modulate_readback`, `dxmt9_ffp_tss_alpha_add_readback`, `dxmt9_ffp_tss_alpha_addsmooth_readback`, `dxmt9_ffp_tss_alpha_lerp_readback`, `dxmt9_ffp_tss_alpha_subtract_readback`, `dxmt9_ffp_tss_alpha_addsigned_readback`, `dxmt9_ffp_tss_modulate_readback`, `dxmt9_ffp_tss_selectarg2_readback` |
@@ -201,14 +201,14 @@ Source: [`dlls/d3d9/tests/visual.c`](https://gitlab.winehq.org/wine/wine/-/blob/
 | `test_updatetexture` | 21506 | ✅ | `dxmt9_update_texture_2d_readback` |
 | `test_vertex_blending` | 21243 | ✅ | `dxmt9_ffp_vertex_blend_3weights_outside_probe` |
 | `test_vertex_texture` | 24394 | ✅ | `dxmt9_vs30_vertex_texture_texldl_readback` |
-| `test_viewport` | 13994 | ❓ | — |
+| `test_viewport` | 13994 | 📐 | `test_visual_viewport_inventory_scaffold` |
 | `test_vshader_float16` | 9676 | ✅ | `dxmt9_vs_float16_color_quads_readback` |
 | `test_vshader_input` | 7787 | ✅ | `dxmt9_vs_multistream_texcoord1_offset_readback` |
 | `texbem_test` | 3440 | ✅ | `test_vendor_policy_texbem_unsupported`, `dxmt9_ps11_texbem_stage1_readback`, `dxmt9_ps11_texbeml_stage1_readback` |
 | `texdepth_test` | 5242 | ✅ | `test_vendor_policy_texdepth_unsupported`, `dxmt9_ps14_texdepth_depth_write`, `dxmt9_ps14_texdepth_constant_ratio_depth_compare`, `dxmt9_ps13_texm3x2depth_source` |
-| `texkill_test` | 5465 | ❓ | — |
+| `texkill_test` | 5465 | 📐 | `test_visual_texkill_inventory_scaffold` |
 | `texop_range_test` | 13126 | ✅ | `dxmt9_ffp_texop_range_high_readback`, `dxmt9_ffp_texop_range_low_readback` |
-| `texop_test` | 12604 | ❓ | — |
+| `texop_test` | 12604 | 📐 | `test_visual_texop_inventory_scaffold` |
 | `tssargtemp_test` | 12041 | ✅ | `dxmt9_ffp_tss_resultarg_temp_readback`, `dxmt9_ffp_tss_temp_add_readback` |
 | `unbound_sampler_test` | 16760 | ✅ | `test_sampler_state_edges`, `dxmt9_unbound_sampler_2d_readback`, `dxmt9_unbound_sampler_texldl_readback` |
 | `update_surface_test` | 16915 | ✅ | `test_visual_update_surface_policy` |
@@ -301,7 +301,7 @@ Source: [`dlls/d3d9/tests/device.c`](https://gitlab.winehq.org/wine/wine/-/blob/
 | `test_shader_constant_apply` | 11446 | ✅ | `test_shader_constant_stateblock_cross_stage` |
 | `test_shader_validator` | 14660 | ✅ | `shader_validator_stub_behavior` |
 | `test_shared_handle` | 11088 | ✅ | `test_shared_handle_policy` |
-| `test_stretch_rect` | 13277 | 🔴 | `test_stretch_rect_null_and_degenerate_policy` |
+| `test_stretch_rect` | 13277 | ✅ | `test_stretch_rect_null_and_degenerate_policy` |
 | `test_surface_alignment` | 8360 | ✅ | `test_surface_alignment` |
 | `test_surface_blocks` | 9529 | ✅ | `test_index_buffer_desc_binding_policy`, `test_vertex_buffer_desc_binding_policy`, `resource_container_level_desc_and_locks` |
 | `test_surface_dimensions` | 9338 | ✅ | `test_surface_dimensions` |
@@ -316,9 +316,9 @@ Source: [`dlls/d3d9/tests/device.c`](https://gitlab.winehq.org/wine/wine/-/blob/
 | `test_unsupported_shaders` | 7296 | ✅ | `test_unsupported_shaders`, `test_shader_unsupported_stage_variants` |
 | `test_unused_declaration_type` | 1001 | ✅ | `test_unused_declaration_type` |
 | `test_update_texture_pool` | 10339 | ✅ | `test_update_texture_pool_copy_2d` |
-| `test_update_volumetexture` | 10483 | ❓ | — |
+| `test_update_volumetexture` | 10483 | ✅ | `test_update_texture_pool_copy_2d` |
 | `test_vb_lock_flags` | 6291 | ✅ | `test_vb_lock_flags` |
-| `test_vdecl_apply` | 11603 | ❓ | — |
+| `test_vdecl_apply` | 11603 | ✅ | `test_vdecl_apply` |
 | `test_vertex_buffer_alignment` | 6375 | ✅ | `test_vertex_buffer_alignment` |
 | `test_vertex_buffer_read_write` | 14211 | ✅ | `test_vertex_buffer_read_write` |
 | `test_vertex_declaration_alignment` | 923 | ✅ | `test_vertex_declaration_alignment_policy` |
@@ -340,7 +340,7 @@ Source: [`dlls/d3d9/tests/d3d9ex.c`](https://gitlab.winehq.org/wine/wine/-/blob/
 
 | Wine entry | Wine line | Status | dxmt9 PE function(s) / evidence |
 |------------|----------:|:------:|---------------------------------|
-| `test_backbuffer_resize` | 3848 | ❓ | — |
+| `test_backbuffer_resize` | 3848 | ✅ | `test_backbuffer_resize_present_parameter_policy` |
 | `test_create_depth_stencil_surface_ex` | 640 | ✅ | `test_create_depth_stencil_surface_ex` |
 | `test_desktop_window` | 4976 | ✅ | `test_device_desktop_window_present_policy` |
 | `test_device_caps` | 4052 | ✅ | `test_device_caps_roundtrip_policy` |
@@ -349,7 +349,7 @@ Source: [`dlls/d3d9/tests/d3d9ex.c`](https://gitlab.winehq.org/wine/wine/-/blob/
 | `test_get_adapter_displaymode_ex` | 522 | ✅ | `test_ex_adapter_luid_display_mode`, `test_ex_adapter_display_mode_null_rotation`, `test_ex_get_adapter_display_mode_ex_policy` |
 | `test_get_adapter_luid` | 400 | ✅ | `test_ex_adapter_luid_display_mode`, `test_ex_get_adapter_luid_policy` |
 | `test_lost_device` | 2009 | ✅ | `test_lost_device_cooperative_policy` |
-| `test_pinned_buffers` | 4883 | ❓ | — |
+| `test_pinned_buffers` | 4883 | ✅ | `test_pinned_buffers_d3dusage_policy` |
 | `test_qi_base_to_ex` | 240 | ✅ | `test_qi_base_to_ex` |
 | `test_qi_ex_to_base` | 303 | ✅ | `test_qi_ex_to_base` |
 | `test_reset` | 888 | ✅ | `test_reset_hresult_matrix_policy` |
@@ -364,9 +364,9 @@ Source: [`dlls/d3d9/tests/d3d9ex.c`](https://gitlab.winehq.org/wine/wine/-/blob/
 | `test_user_memory` | 715 | ✅ | `test_ex_shared_handle_policy`, `test_ex_user_memory_lock_identity` |
 | `test_user_memory_getdc` | 1957 | ✅ | `test_ex_user_memory_getdc_dib_identity`, `test_ex_user_memory_getdc_format_policy` |
 | `test_vidmem_accounting` | 1909 | ✅ | `test_ex_vidmem_accounting_policy` |
-| `test_window_style` | 3458 | ❓ | — |
-| `test_wndproc` | 2611 | ❓ | — |
-| `test_wndproc_windowed` | 3256 | ❓ | — |
+| `test_window_style` | 3458 | ✅ | `window_cursor_ownership` |
+| `test_wndproc` | 2611 | ✅ | `window_cursor_ownership` |
+| `test_wndproc_windowed` | 3256 | ✅ | `window_cursor_ownership` |
 
 ## StateBlock Tests (`stateblock.c`)
 

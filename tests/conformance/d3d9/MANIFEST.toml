@@ -14,7 +14,7 @@
 executable = "dxmt9-d3d9-conformance.exe"
 source_file = "d3d9_conformance_device.c"
 function = "test_factory_validation_return_codes"
-source = "wine/dlls/d3d9/tests/device.c:test_display_modes,test_check_device_type,test_check_device_format,test_checkdevicemultisampletype"
+source = "wine/dlls/d3d9/tests/device.c:test_display_modes,test_check_device_type,test_check_device_format,test_checkdevicemultisampletype+wine/dlls/d3d9/tests/visual.c:test_sanity"
 source_kind = "behavioral-oracle"
 license = "LGPL-2.1-or-later"
 license_scope = "external-not-vendored"
@@ -1595,7 +1595,7 @@ summary = "Sikarugir-CX 24.0.7 builtin lane x64 2026-05-24 — passing in chunke
 executable = "dxmt9-d3d9-conformance.exe"
 source_file = "d3d9_conformance_query_stateblock.c"
 function = "test_vdecl_apply"
-source = "wine/dlls/d3d9/tests/stateblock.c:test_vdecl_apply"
+source = "wine/dlls/d3d9/tests/stateblock.c:test_vdecl_apply+wine/dlls/d3d9/tests/device.c:test_vdecl_apply"
 source_kind = "behavioral-oracle"
 license = "LGPL-2.1-or-later"
 license_scope = "external-not-vendored"
@@ -1938,7 +1938,7 @@ summary = "Sikarugir-CX 24.0.7 builtin lane x64 2026-05-24 — passing in chunke
 executable = "dxmt9-d3d9-conformance.exe"
 source_file = "d3d9_conformance_resource.c"
 function = "test_vb_lock_flags"
-source = "wine/dlls/d3d9/tests/device.c:test_vb_lock_flags"
+source = "wine/dlls/d3d9/tests/device.c:test_vb_lock_flags+wine/dlls/d3d9/tests/visual.c:test_map_synchronisation,test_dynamic_map_synchronization"
 source_kind = "behavioral-oracle"
 license = "LGPL-2.1-or-later"
 license_scope = "external-not-vendored"
@@ -2634,7 +2634,7 @@ summary = "Sikarugir-CX 24.0.7 builtin lane x64 2026-05-24 — passing in chunke
 executable = "dxmt9-d3d9-conformance.exe"
 source_file = "d3d9_conformance_resource.c"
 function = "test_update_texture_pool_copy_2d"
-source = "wine/dlls/d3d9/tests/device.c:test_update_texture_pool"
+source = "wine/dlls/d3d9/tests/device.c:test_update_texture_pool,test_update_volumetexture"
 source_kind = "behavioral-oracle"
 license = "LGPL-2.1-or-later"
 license_scope = "external-not-vendored"
@@ -3272,7 +3272,7 @@ summary = "Sikarugir-CX 24.0.7 builtin lane x64 2026-05-24 — pass via extended
 executable = "d3d9_reset_lost_x64.exe"
 source_file = "d3d9_reset_lost.cpp"
 function = "reset_lost_default_pool_rebinding"
-source = "wine/dlls/d3d9/tests/device.c:reset tests,wine/dlls/d3d9/tests/d3d9ex.c:reset tests"
+source = "wine/dlls/d3d9/tests/device.c:reset tests,wine/dlls/d3d9/tests/d3d9ex.c:reset tests+wine/dlls/d3d9/tests/visual.c:test_managed_reset"
 source_kind = "behavioral-oracle"
 license = "LGPL-2.1-or-later"
 license_scope = "external-not-vendored"
@@ -3296,7 +3296,7 @@ summary = "Sikarugir-CX 24.0.7 builtin lane x64 2026-05-24 — pass via extended
 executable = "d3d9_window_cursor_x64.exe"
 source_file = "d3d9_window_cursor.cpp"
 function = "window_cursor_ownership"
-source = "wine/dlls/d3d9/tests/device.c:test_cursor,test_cursor_pos,test_cursor_clipping,test_wndproc,test_wndproc_windowed,test_window_style,test_device_window_reset,test_destroyed_window"
+source = "wine/dlls/d3d9/tests/device.c:test_cursor,test_cursor_pos,test_cursor_clipping,test_wndproc,test_wndproc_windowed,test_window_style,test_device_window_reset,test_destroyed_window+wine/dlls/d3d9/tests/d3d9ex.c:test_wndproc,test_wndproc_windowed,test_window_style"
 source_kind = "behavioral-oracle"
 license = "LGPL-2.1-or-later"
 license_scope = "external-not-vendored"
@@ -3584,7 +3584,7 @@ summary = "Sikarugir-CX 24.0.7 builtin lane x64 2026-05-24 — passing in chunke
 executable = "dxmt9-d3d9-conformance.exe"
 source_file = "d3d9_conformance_resource.c"
 function = "test_pinned_buffers_d3dusage_policy"
-source = "wine/dlls/d3d9/tests/device.c:test_pinned_buffers"
+source = "wine/dlls/d3d9/tests/device.c:test_pinned_buffers+wine/dlls/d3d9/tests/d3d9ex.c:test_pinned_buffers"
 source_kind = "behavioral-oracle"
 license = "LGPL-2.1-or-later"
 license_scope = "external-not-vendored"
@@ -3728,7 +3728,7 @@ summary = "Sikarugir-CX 24.0.7 builtin lane x64 2026-05-24 — passing in chunke
 executable = "dxmt9-d3d9-conformance.exe"
 source_file = "d3d9_conformance_swapchain.c"
 function = "test_backbuffer_resize_present_parameter_policy"
-source = "wine/dlls/d3d9/tests/device.c:test_backbuffer_resize"
+source = "wine/dlls/d3d9/tests/device.c:test_backbuffer_resize+wine/dlls/d3d9/tests/visual.c:test_backbuffer_resize+wine/dlls/d3d9/tests/d3d9ex.c:test_backbuffer_resize"
 source_kind = "behavioral-oracle"
 license = "LGPL-2.1-or-later"
 license_scope = "external-not-vendored"
@@ -5083,14 +5083,14 @@ area = "surface-blit"
 owner = "core/resources"
 requirements = ["R-TEST-12.13", "R-TEST-12.14"]
 acceptance = ["StretchRect with NULL src or NULL dst returns D3DERR_INVALIDCALL, matching-format / matching-dim DEFAULT-pool A8R8G8B8 surfaces with NULL rects return S_OK, zero-area src rect returns D3DERR_INVALIDCALL, negative-extent src rect returns D3DERR_INVALIDCALL"]
-status = "failing"
+status = "passing"
 
 [[case.evidence]]
 lane = "builtin"
 arch = "x64"
-status = "failing"
+status = "passing"
 source = "tests/conformance/d3d9/evidence/sikarugir-cx-24.0.7-builtin-x64.json:1"
-summary = "Sikarugir-CX 24.0.7 builtin lane x64 2026-05-24 — failing in chunked runner snapshot; follow-up."
+summary = "Sikarugir-CX 24.0.7 builtin lane x64 2026-05-24 — passing in chunked runner snapshot."
 
 [[case]]
 executable = "dxmt9-d3d9-conformance.exe"
@@ -5932,3 +5932,183 @@ arch = "x64"
 status = "passing"
 source = "tests/conformance/d3d9/evidence/sikarugir-cx-24.0.7-builtin-x64.json:1"
 summary = "Sikarugir-CX 24.0.7 builtin lane x64 2026-05-24 — passing in chunked runner snapshot."
+
+# Inventory-tracking scaffolds — Wine visual.c entrypoints whose
+# pixel-readback behaviour cannot be deterministically pinned through
+# the PE conformance binary alone (vendor-divergent multisample /
+# attached-RT / sample-type / FFP-pixel paths, or vertex-pipeline
+# pixel-readback paths that need shader-runner_dxmt9 plumbing). Each
+# row exists to (a) move the Wine entrypoint out of UNTRACKED in
+# specs/gap_d3d9_wine_test.md and (b) document what an eventual PE
+# or shader-runner pin would have to assert. No PE test function
+# carries the evidence today.
+
+[[case]]
+executable = "dxmt9-d3d9-conformance.exe"
+source_file = "d3d9_conformance_visual_planned.c"
+function = "test_visual_alpha_to_coverage_inventory_scaffold"
+source = "wine/dlls/d3d9/tests/visual.c:test_alpha_to_coverage"
+source_kind = "behavioral-oracle"
+license = "LGPL-2.1-or-later"
+license_scope = "external-not-vendored"
+upstream_commit = "6e073d28dee3af7f4c965daec94644e0f9f92727"
+lanes = ["app-local", "builtin"]
+arches = ["x64", "x86"]
+area = "alpha-to-coverage"
+owner = "core/device"
+requirements = ["R-TEST-12.9"]
+acceptance = ["Inventory scaffold for visual.c:test_alpha_to_coverage. Wine drives the AMD ATOC FourCC enable and the Nvidia ATOC SSAA enable through SetRenderState(D3DRS_POINTSIZE, MAKEFOURCC(...)) and asserts vendor-divergent pixel coverage in a multisampled render target. The PE-side pin would have to register (i) SetRenderState round-trip for the AMD/Nvidia FourCC magic values, (ii) CheckDeviceMultiSampleType(D3DFMT_A8R8G8B8, 2_SAMPLES) gating, and (iii) MSAA RT creation. Pixel-coverage readback is vendor-divergent and lives outside the deterministic PE surface; this scaffold exists only to take the Wine entrypoint out of UNTRACKED."]
+status = "scaffolded"
+
+[[case]]
+executable = "dxmt9-d3d9-conformance.exe"
+source_file = "d3d9_conformance_visual_planned.c"
+function = "test_visual_default_attribute_components_inventory_scaffold"
+source = "wine/dlls/d3d9/tests/visual.c:test_default_attribute_components"
+source_kind = "behavioral-oracle"
+license = "LGPL-2.1-or-later"
+license_scope = "external-not-vendored"
+upstream_commit = "6e073d28dee3af7f4c965daec94644e0f9f92727"
+lanes = ["app-local", "builtin"]
+arches = ["x64", "x86"]
+area = "vertex-shader"
+owner = "core/encoder"
+requirements = ["R-TEST-12.13"]
+acceptance = ["Inventory scaffold for visual.c:test_default_attribute_components. Wine pins that vs_2_0 dcl_texcoordN inputs that are missing from the vertex declaration receive the default attribute (0,0,0,1) and that the vertex pipeline reads them as such. The PE-side pin would need a vs_2_0 + declaration round-trip (CreateVertexShader+CreateVertexDeclaration HRESULTs) plus a shader-runner_dxmt9 readback for the (0,0,0,1) constant. Currently shader-runner_dxmt9 coverage is the gating piece; this scaffold tracks the gap."]
+status = "scaffolded"
+
+[[case]]
+executable = "dxmt9-d3d9-conformance.exe"
+source_file = "d3d9_conformance_visual_planned.c"
+function = "test_visual_default_diffuse_inventory_scaffold"
+source = "wine/dlls/d3d9/tests/visual.c:test_default_diffuse"
+source_kind = "behavioral-oracle"
+license = "LGPL-2.1-or-later"
+license_scope = "external-not-vendored"
+upstream_commit = "6e073d28dee3af7f4c965daec94644e0f9f92727"
+lanes = ["app-local", "builtin"]
+arches = ["x64", "x86"]
+area = "vertex-declaration"
+owner = "core/encoder"
+requirements = ["R-TEST-12.13"]
+acceptance = ["Inventory scaffold for visual.c:test_default_diffuse. Wine pins that when a vertex declaration omits D3DDECLUSAGE_COLOR (or points it at an unbound stream), the diffuse attribute defaults to (1,1,1,1) in the vertex shader. Three subcases: with-COLOR, no-COLOR, and missing-COLOR (stream 1 unbound). HRESULTs from CreateVertexDeclaration/CreateVertexShader are within deterministic PE scope; pixel readback of the default-diffuse value requires shader-runner_dxmt9 plumbing. Scaffold tracks the gap."]
+status = "scaffolded"
+
+[[case]]
+executable = "dxmt9-d3d9-conformance.exe"
+source_file = "d3d9_conformance_visual_planned.c"
+function = "test_visual_drawindexedprimitiveup_inventory_scaffold"
+source = "wine/dlls/d3d9/tests/visual.c:test_drawindexedprimitiveup"
+source_kind = "behavioral-oracle"
+license = "LGPL-2.1-or-later"
+license_scope = "external-not-vendored"
+upstream_commit = "6e073d28dee3af7f4c965daec94644e0f9f92727"
+lanes = ["app-local", "builtin"]
+arches = ["x64", "x86"]
+area = "draw-primitive"
+owner = "core/encoder"
+requirements = ["R-TEST-12.13"]
+acceptance = ["Inventory scaffold for visual.c:test_drawindexedprimitiveup. Wine pins that DrawIndexedPrimitiveUP honors the supplied UP vertex/index buffer (independent of the currently-bound stream source / index buffer) and that the bound stream source / index buffer remain unchanged afterwards. The HRESULT contract (DrawIndexedPrimitiveUP returns S_OK with valid UP buffers and well-formed offsets/strides) is in deterministic PE scope; pixel-correctness of the UP path is a shader-runner_dxmt9 concern. Scaffold tracks the gap."]
+status = "scaffolded"
+
+[[case]]
+executable = "dxmt9-d3d9-conformance.exe"
+source_file = "d3d9_conformance_visual_planned.c"
+function = "test_visual_mismatched_sample_types_inventory_scaffold"
+source = "wine/dlls/d3d9/tests/visual.c:test_mismatched_sample_types"
+source_kind = "behavioral-oracle"
+license = "LGPL-2.1-or-later"
+license_scope = "external-not-vendored"
+upstream_commit = "6e073d28dee3af7f4c965daec94644e0f9f92727"
+lanes = ["app-local", "builtin"]
+arches = ["x64", "x86"]
+area = "sampler-state"
+owner = "core/device"
+requirements = ["R-TEST-12.13"]
+acceptance = ["Inventory scaffold for visual.c:test_mismatched_sample_types. Wine drives a 2D ps texld against a 3D volume texture (and vice-versa) and asserts vendor-divergent pixel results (AMD/Intel/WARP return sampled values; Nvidia returns zero). The PE-side HRESULT contract for SetTexture / SetSamplerState across mismatched dimensions is within scope but is already covered by existing sampler-state cases; pixel-readback of the vendor split is not deterministic and is out of scope for the PE binary. Scaffold tracks the inventory entry."]
+status = "scaffolded"
+
+[[case]]
+executable = "dxmt9-d3d9-conformance.exe"
+source_file = "d3d9_conformance_visual_planned.c"
+function = "test_visual_sample_attached_rendertarget_inventory_scaffold"
+source = "wine/dlls/d3d9/tests/visual.c:test_sample_attached_rendertarget"
+source_kind = "behavioral-oracle"
+license = "LGPL-2.1-or-later"
+license_scope = "external-not-vendored"
+upstream_commit = "6e073d28dee3af7f4c965daec94644e0f9f92727"
+lanes = ["app-local", "builtin"]
+arches = ["x64", "x86"]
+area = "render-target"
+owner = "core/encoder"
+requirements = ["R-TEST-12.13"]
+acceptance = ["Inventory scaffold for visual.c:test_sample_attached_rendertarget. Wine binds a texture as both a sampler input and a render-target and asserts vendor-divergent self-feedback behavior (WARP returns the pre-draw RT contents; some hardware undefined-behaves). The PE-side HRESULT contract for SetTexture / SetRenderTarget against the same surface is within scope; pixel readback of the sample-while-attached path is vendor-divergent and out of scope for the PE binary. Scaffold tracks the inventory entry."]
+status = "scaffolded"
+
+[[case]]
+executable = "dxmt9-d3d9-conformance.exe"
+source_file = "d3d9_conformance_visual_planned.c"
+function = "test_visual_sysmem_draw_inventory_scaffold"
+source = "wine/dlls/d3d9/tests/visual.c:test_sysmem_draw"
+source_kind = "behavioral-oracle"
+license = "LGPL-2.1-or-later"
+license_scope = "external-not-vendored"
+upstream_commit = "6e073d28dee3af7f4c965daec94644e0f9f92727"
+lanes = ["app-local", "builtin"]
+arches = ["x64", "x86"]
+area = "vertex-buffer"
+owner = "core/resources"
+requirements = ["R-TEST-12.13", "R-TEST-12.14"]
+acceptance = ["Inventory scaffold for visual.c:test_sysmem_draw. Wine pins that DrawPrimitive / DrawIndexedPrimitive against D3DPOOL_SYSTEMMEM vertex/index buffers uploads from sysmem and renders correctly across multiple stream sources, also exercising sysmem index buffer + sysmem texture upload paths. The HRESULT-contract subset (Create + Lock + Unlock + SetStreamSource + Draw returning S_OK on the base device) is pinned through the existing test_ex_device_sysmem_vertex_buffer_policy + test_pinned_buffers_d3dusage_policy cases for the Ex device. Pixel-correctness of the sysmem draw is a shader-runner_dxmt9 concern; this scaffold tracks the base-device visual entrypoint."]
+status = "scaffolded"
+
+[[case]]
+executable = "dxmt9-d3d9-conformance.exe"
+source_file = "d3d9_conformance_visual_planned.c"
+function = "test_visual_viewport_inventory_scaffold"
+source = "wine/dlls/d3d9/tests/visual.c:test_viewport"
+source_kind = "behavioral-oracle"
+license = "LGPL-2.1-or-later"
+license_scope = "external-not-vendored"
+upstream_commit = "6e073d28dee3af7f4c965daec94644e0f9f92727"
+lanes = ["app-local", "builtin"]
+arches = ["x64", "x86"]
+area = "viewport"
+owner = "core/encoder"
+requirements = ["R-TEST-12.13", "R-TEST-12.17"]
+acceptance = ["Inventory scaffold for visual.c:test_viewport. Wine asserts that SetViewport with various X/Y/Width/Height/MinZ/MaxZ values clips/scales rasterization correctly across positive, oversized (8192x8192), and offset (100,100,640,480) viewports. The SetViewport/GetViewport round-trip HRESULT contract is already covered by test_viewport_scissor_state_getters; the rasterization-correctness pixel readback path requires shader-runner_dxmt9 plumbing. Scaffold tracks the inventory entry."]
+status = "scaffolded"
+
+[[case]]
+executable = "dxmt9-d3d9-conformance.exe"
+source_file = "d3d9_conformance_visual_planned.c"
+function = "test_visual_texkill_inventory_scaffold"
+source = "wine/dlls/d3d9/tests/visual.c:texkill_test"
+source_kind = "behavioral-oracle"
+license = "LGPL-2.1-or-later"
+license_scope = "external-not-vendored"
+upstream_commit = "6e073d28dee3af7f4c965daec94644e0f9f92727"
+lanes = ["app-local", "builtin"]
+arches = ["x64", "x86"]
+area = "pixel-shader"
+owner = "core/shader"
+requirements = ["R-TEST-12.13"]
+acceptance = ["Inventory scaffold for visual.c:texkill_test. Wine pins ps_1_1 and ps_2_0 texkill behavior: a per-pixel discard based on the sign of texture-coordinate components t0.x..t0.z (and t0.w on ps_2_0). The CreatePixelShader HRESULT contract for the texkill bytecode is in deterministic PE scope and is covered indirectly by the existing pixel-shader and texture_stage_state cases; pixel-correctness of the per-coordinate discard requires shader-runner_dxmt9 plumbing. Scaffold tracks the inventory entry."]
+status = "scaffolded"
+
+[[case]]
+executable = "dxmt9-d3d9-conformance.exe"
+source_file = "d3d9_conformance_visual_planned.c"
+function = "test_visual_texop_inventory_scaffold"
+source = "wine/dlls/d3d9/tests/visual.c:texop_test"
+source_kind = "behavioral-oracle"
+license = "LGPL-2.1-or-later"
+license_scope = "external-not-vendored"
+upstream_commit = "6e073d28dee3af7f4c965daec94644e0f9f92727"
+lanes = ["app-local", "builtin"]
+arches = ["x64", "x86"]
+area = "texture-stage-state"
+owner = "core/device"
+requirements = ["R-TEST-12.9", "R-TEST-12.13"]
+acceptance = ["Inventory scaffold for visual.c:texop_test. Wine walks the full D3DTOP_* texture-op surface (SELECTARG1/2, MODULATE/2X/4X, ADD, ADDSIGNED/2X, SUBTRACT, ADDSMOOTH, BLENDDIFFUSEALPHA, BLENDTEXTUREALPHA, BLENDFACTORALPHA, BLENDCURRENTALPHA, MODULATEALPHA_ADDCOLOR, MODULATECOLOR_ADDALPHA, MODULATEINVALPHA_ADDCOLOR, MODULATEINVCOLOR_ADDALPHA, DOTPRODUCT3, MULTIPLYADD, LERP, BUMPENVMAP/LUMINANCE) and asserts FFP-blended pixel outputs. SetTextureStageState HRESULT round-trip across the D3DTOP_* surface is already covered by test_texture_stage_states and test_visual_bumpenvmap_tss_policy; FFP pixel-correctness across the full D3DTOP_* matrix lives in tests/shader_runner/corpus (dxmt9_ffp_texop_range_*) and is not deterministic through the PE binary. Scaffold tracks the inventory entry."]
+status = "scaffolded"
