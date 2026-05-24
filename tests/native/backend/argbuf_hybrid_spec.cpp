@@ -13,11 +13,9 @@
 // Hardware shader-runner equality (R-BACK-12.26) is a follow-up — this
 // spec runs on the native build with no Metal device.
 
-#include <array>
 #include <cstdint>
 #include <exception>
 #include <iostream>
-#include <span>
 #include <sstream>
 #include <stdexcept>
 #include <string>
@@ -190,187 +188,6 @@ void testArgumentDescriptorRoles() {
 }
 
 // ---------------------------------------------------------------------
-// A4b — resource-array descriptor layout (R-BACK-12.22..12.26 sub-mode)
-
-void testResourceArrayDescriptorCount() {
-  const auto descriptors =
-      dxmt9::argbuf_hybrid::buildResourceArrayArgumentDescriptors();
-  checkEq(static_cast<std::uint64_t>(descriptors.count()),
-          static_cast<std::uint64_t>(dxmt9::shaders::kArgbufResourceArrayDescriptorCount),
-          "resource-array descriptor count matches kArgbufResourceArrayDescriptorCount");
-  // 4 cbuf + 8 texture + 8 sampler = 20.
-  checkEq(static_cast<std::uint64_t>(descriptors.count()), 20ull,
-          "resource-array descriptor table holds 4 cbuf + 8 tex + 8 samp = 20 entries");
-}
-
-void testResourceArrayDescriptorRoles() {
-  const auto descriptors =
-      dxmt9::argbuf_hybrid::buildResourceArrayArgumentDescriptors();
-  // ids 0..3 — the four constant-buffer pointers (identical to constants-only).
-  for (std::uint32_t i = 0; i < dxmt9::shaders::kArgbufHybridConstantBufferCount; ++i) {
-    const auto& d = descriptors.entries[i];
-    checkEq(static_cast<std::uint32_t>(d.argumentType),
-            static_cast<std::uint32_t>(WMTArgumentTypeBuffer),
-            "resource-array ids 0..3 are constant-buffer pointers");
-    checkEq(static_cast<std::uint32_t>(d.index), i,
-            "resource-array cbuf pointer indices are 0..3");
-    check(d.constantBlockAlignment >= 16u,
-          "resource-array cbuf pointers carry >=16 B alignment");
-  }
-  // texture array — ids 4..11, all WMTArgumentTypeTexture, textureType 2D.
-  for (std::uint32_t s = 0; s < dxmt9::shaders::kArgbufResourceArrayStageCount; ++s) {
-    const auto& d = descriptors.entries[dxmt9::shaders::kArgbufHybridConstantBufferCount + s];
-    checkEq(static_cast<std::uint32_t>(d.argumentType),
-            static_cast<std::uint32_t>(WMTArgumentTypeTexture),
-            "resource-array texture entries are WMTArgumentTypeTexture");
-    checkEq(static_cast<std::uint32_t>(d.index),
-            dxmt9::shaders::kArgbufResourceArrayTextureBaseId + s,
-            "resource-array texture ids start at the texture base id");
-    checkEq(static_cast<std::uint32_t>(d.textureType),
-            static_cast<std::uint32_t>(WMTTextureType2D),
-            "resource-array texture entries declare WMTTextureType2D");
-  }
-  // sampler array — ids 12..19, all WMTArgumentTypeSampler.
-  for (std::uint32_t s = 0; s < dxmt9::shaders::kArgbufResourceArrayStageCount; ++s) {
-    const auto& d = descriptors.entries[dxmt9::shaders::kArgbufHybridConstantBufferCount +
-                                        dxmt9::shaders::kArgbufResourceArrayStageCount + s];
-    checkEq(static_cast<std::uint32_t>(d.argumentType),
-            static_cast<std::uint32_t>(WMTArgumentTypeSampler),
-            "resource-array sampler entries are WMTArgumentTypeSampler");
-    checkEq(static_cast<std::uint32_t>(d.index),
-            dxmt9::shaders::kArgbufResourceArraySamplerBaseId + s,
-            "resource-array sampler ids start at the sampler base id");
-  }
-  // Layout pins: texture base 4, sampler base 12 (so the host descriptor
-  // table and the MSL ArgbufLayout struct agree on every [[id(N)]]).
-  checkEq(dxmt9::shaders::kArgbufResourceArrayTextureBaseId, 4u,
-          "resource-array texture array starts at id 4");
-  checkEq(dxmt9::shaders::kArgbufResourceArraySamplerBaseId, 12u,
-          "resource-array sampler array starts at id 12");
-}
-
-void testConstantsOnlyDescriptorUnchanged() {
-  // The default constants-only table must stay exactly four cbuf pointers —
-  // the resource-array sub-mode adds a SEPARATE table; it never grows this
-  // one (default lane stays byte-identical).
-  const auto descriptors = dxmt9::argbuf_hybrid::buildArgumentDescriptors();
-  checkEq(static_cast<std::uint64_t>(descriptors.count()), 4ull,
-          "constants-only descriptor table is unchanged at 4 entries");
-}
-
-// ---------------------------------------------------------------------
-// A4c — resource-array populator recorder (residency + ABI, fault 1/3/4/5)
-
-void testResourceArrayPopulatorWritesAndMakesResident() {
-  // Drive populateResourceBindings with suppressMetalCalls=true and capture
-  // the (handle, argbuf-id) writes + the useResource residency tuples so we
-  // can assert fault candidates 3 (gpuResourceID ABI position), 4
-  // (useResource residency + usage flags) without a Metal device.
-  struct Capture {
-    int setTextureCalls = 0;
-    int setSamplerCalls = 0;
-    int useTextureCalls = 0;
-    std::uint64_t lastTextureHandle = 0;
-    std::uint32_t lastTextureId = 0;
-    std::uint64_t lastSamplerHandle = 0;
-    std::uint32_t lastSamplerId = 0;
-    std::uint32_t lastUsage = 0;
-    std::uint32_t lastStages = 0;
-  } cap;
-
-  dxmt9::argbuf_hybrid::ResourceArrayRecorder rec{};
-  rec.userdata = &cap;
-  rec.suppressMetalCalls = true;
-  rec.setTexture = [](void* u, std::uint64_t h, std::uint32_t id) {
-    auto* c = static_cast<Capture*>(u);
-    c->setTextureCalls++;
-    c->lastTextureHandle = h;
-    c->lastTextureId = id;
-  };
-  rec.setSampler = [](void* u, std::uint64_t h, std::uint32_t id) {
-    auto* c = static_cast<Capture*>(u);
-    c->setSamplerCalls++;
-    c->lastSamplerHandle = h;
-    c->lastSamplerId = id;
-  };
-  rec.useTexture = [](void* u, std::uint64_t h, std::uint32_t usage,
-                      std::uint32_t stages) {
-    auto* c = static_cast<Capture*>(u);
-    c->useTextureCalls++;
-    c->lastTextureHandle = h;
-    c->lastUsage = usage;
-    c->lastStages = stages;
-  };
-
-  dxmt9::argbuf_hybrid::ArgbufEncoderResource encoderResource{};
-  encoderResource.initForTest(/*encodedLength=*/512, /*alignment=*/256);
-
-  std::array<dxmt9::argbuf_hybrid::ResourceArrayBinding, 2> bindings{};
-  bindings[0].stage = 0;
-  bindings[0].texture = WMT::Texture{0x1111ull};
-  bindings[0].sampler = WMT::SamplerState{0x2222ull};
-  bindings[1].stage = 3;
-  bindings[1].texture = WMT::Texture{0x3333ull};
-  bindings[1].sampler = WMT::SamplerState{0x4444ull};
-
-  const auto resident = dxmt9::argbuf_hybrid::populateResourceBindings(
-      encoderResource,
-      std::span<const dxmt9::argbuf_hybrid::ResourceArrayBinding>(
-          bindings.data(), bindings.size()),
-      &rec, /*residencyEncoder=*/{});
-
-  checkEq(static_cast<std::uint64_t>(resident), 2ull,
-          "both textures counted resident");
-  checkEq(cap.setTextureCalls, 2, "two textures written into the argbuf");
-  checkEq(cap.setSamplerCalls, 2, "two samplers written into the argbuf");
-  // Fault candidate 4 — every argbuf-pointed texture gets a useResource.
-  checkEq(cap.useTextureCalls, 2,
-          "every argbuf texture issues a useResource residency call");
-  // Fault candidate 4 — usage is Read|Sample, stages Vertex|Fragment.
-  checkEq(cap.lastUsage,
-          static_cast<std::uint32_t>(WMTResourceUsageRead | WMTResourceUsageSample),
-          "residency usage is Read|Sample");
-  checkEq(cap.lastStages,
-          static_cast<std::uint32_t>(WMTRenderStageVertex | WMTRenderStageFragment),
-          "residency stages are Vertex|Fragment");
-  // Fault candidate 3 — stage 3 texture lands at texture base id + 3, sampler
-  // at sampler base id + 3.
-  checkEq(cap.lastTextureId,
-          dxmt9::shaders::kArgbufResourceArrayTextureBaseId + 3u,
-          "stage 3 texture written at texture base id + 3");
-  checkEq(cap.lastSamplerId,
-          dxmt9::shaders::kArgbufResourceArraySamplerBaseId + 3u,
-          "stage 3 sampler written at sampler base id + 3");
-  checkEq(cap.lastSamplerHandle, 0x4444ull,
-          "stage 3 sampler handle round-trips");
-}
-
-void testResourceArrayPopulatorSkipsOutOfRangeStage() {
-  // A stage >= kArgbufResourceArrayStageCount must be skipped (it belongs on
-  // the direct lane) — never written into the argbuf array.
-  int writes = 0;
-  dxmt9::argbuf_hybrid::ResourceArrayRecorder rec{};
-  rec.userdata = &writes;
-  rec.suppressMetalCalls = true;
-  rec.setTexture = [](void* u, std::uint64_t, std::uint32_t) {
-    (*static_cast<int*>(u))++;
-  };
-  dxmt9::argbuf_hybrid::ArgbufEncoderResource encoderResource{};
-  encoderResource.initForTest(512, 256);
-  std::array<dxmt9::argbuf_hybrid::ResourceArrayBinding, 1> bindings{};
-  bindings[0].stage = dxmt9::shaders::kArgbufResourceArrayStageCount;  // out of range
-  bindings[0].texture = WMT::Texture{0x5555ull};
-  const auto resident = dxmt9::argbuf_hybrid::populateResourceBindings(
-      encoderResource,
-      std::span<const dxmt9::argbuf_hybrid::ResourceArrayBinding>(
-          bindings.data(), bindings.size()),
-      &rec, {});
-  checkEq(static_cast<std::uint64_t>(resident), 0ull,
-          "out-of-range stage makes no texture resident");
-  checkEq(writes, 0, "out-of-range stage writes nothing into the argbuf");
-}
-
-// ---------------------------------------------------------------------
 // A5 — MSL prelude argbuf variant (R-BACK-12.23)
 
 void testArgbufHybridPreludeContainsArgbufLayout() {
@@ -443,11 +260,6 @@ int main() {
     testTileFfpAndArgbufHybridBitsAreIndependent();
     testArgumentDescriptorCount();
     testArgumentDescriptorRoles();
-    testResourceArrayDescriptorCount();
-    testResourceArrayDescriptorRoles();
-    testConstantsOnlyDescriptorUnchanged();
-    testResourceArrayPopulatorWritesAndMakesResident();
-    testResourceArrayPopulatorSkipsOutOfRangeStage();
     testArgbufHybridPreludeContainsArgbufLayout();
     testArgbufHybridPreludeIncludesStage1Structs();
     testArgbufHybridPreludeWithClipDistances();

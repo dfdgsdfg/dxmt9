@@ -288,12 +288,7 @@ argbuf_hybrid_spec = executable(
   'dxmt9-argbuf-hybrid-spec',
   'argbuf_hybrid_spec.cpp',
   include_directories: dxmt9_inc,
-  # dxmt9_winemetal_dep: the resource-array populator tests construct an
-  # ArgbufEncoderResource on the stack, whose WMT::Reference<ArgumentEncoder>
-  # dtor drags NSObject_release into the link (same reason as
-  # dxmt9-argbuf-populator-spec). The spec never calls into Metal
-  # (suppressMetalCalls=true).
-  dependencies: [dxmt9_dep, dxmt9_frontend_dep, dxmt9_winemetal_dep],
+  dependencies: [dxmt9_dep, dxmt9_frontend_dep],
   link_args: dxmt9_test_link_args,
 )
 

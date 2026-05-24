@@ -135,13 +135,6 @@ struct ArgbufRegionOffsets {
 class ArgbufEncoderResource {
  public:
   void init(WMT::Device device);
-  // R-BACK-12.22..12.26 (resource-array sub-mode) — build the encoder from
-  // the extended 20-entry descriptor table (4 cbuf + 8 texture + 8 sampler)
-  // instead of the constants-only 4-entry table. A queue owning the
-  // resource-array lane builds a SECOND ArgbufEncoderResource with this so
-  // the constants-only encoder (and the byte-identical default path) is
-  // never disturbed.
-  void initResourceArray(WMT::Device device);
   void initForTest(u64 encodedLength, u64 alignment) noexcept;
 
   bool initialized() const noexcept { return initialized_; }

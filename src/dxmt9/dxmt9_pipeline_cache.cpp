@@ -681,8 +681,7 @@ Cache::getOrBuildDrawPipelineForState(WMT::Reference<WMT::Device> device,
                                       WMT::Reference<WMT::BinaryArchive>* archive,
                                       const std::string* archivePath,
                                       bool tileFfpMode,
-                                      bool argbufHybridMode,
-                                      bool argbufResourceArray) {
+                                      bool argbufHybridMode) {
   const bool srgbWrite =
       core::flatStateOr(state.hot->renderStates, core::RS_SRGB_WRITE_ENABLE, 0u) != 0;
   auto resolvePixelFormat = [&](core::Handle handle) -> u32 {
@@ -722,20 +721,12 @@ Cache::getOrBuildDrawPipelineForState(WMT::Reference<WMT::Device> device,
   // R-BACK-12.22 / 12.23: stamp the argbuf-hybrid-mode bit so Stage 1
   // and Stage 2 variants of the same shader compile separate PSOs.
   key.argbufHybridMode = argbufHybridMode;
-  // R-BACK-12.22..12.26 (resource-array sub-mode): stamp the sub-bit only
-  // alongside argbufHybridMode so a stray true can never select the
-  // resource-array prelude on a Stage 1 PSO.
-  key.argbufResourceArray = argbufHybridMode && argbufResourceArray;
   drawshader::ShaderSourceContext shaderSource =
       drawshader::makeShaderSourceContext(state.shaderContext(), *state.hot);
   // R-BACK-12.22..12.26 MSL routing — propagate the variant key bit into
   // the source-emitter context so FFP and DXBC->MSL bodies read uniforms
   // through `ArgbufLayout` at slot 30 instead of slots 0/3.
   shaderSource.argbufHybridMode = argbufHybridMode;
-  // R-BACK-12.22..12.26 (resource-array sub-mode): propagate the sub-bit so
-  // the emitters route texture/sampler reads through the slot-30 argbuf
-  // arrays + alias block. Mirrors the key bit exactly.
-  shaderSource.argbufResourceArray = key.argbufResourceArray;
   // gap_d3d9 B.3: propagate the LOD-bias gate bit so the FFP and DXBC->MSL
   // emitters declare the slot-4 SamplerLodBias param + thread bias() only when
   // a sampler carries a non-zero LOD bias. makeShaderVariantKey already

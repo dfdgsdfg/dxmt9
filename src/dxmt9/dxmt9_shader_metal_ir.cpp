@@ -39,9 +39,7 @@ using f32 = float;
 
 using ::dxmt9::shaders::makeShaderPrelude;
 using ::dxmt9::shaders::makeShaderPreludeArgbufHybrid;
-using ::dxmt9::shaders::makeShaderPreludeArgbufResourceArray;
 using ::dxmt9::shaders::kArgbufHybridBindSlot;
-using ::dxmt9::shaders::kArgbufResourceArrayStageCount;
 
 namespace {
 
@@ -686,36 +684,6 @@ TextureType samplerTextureType(const SpirvModule& module,
   return sampler < context.textureTypes.size() ? context.textureTypes[sampler] : TextureType::TwoD;
 }
 
-// R-BACK-12.22..12.26 (resource-array sub-mode) — fragment-stage
-// eligibility. The slot-30 argbuf texture array is homogeneously
-// `texture2d<float>` (the host MTLArgumentEncoder descriptor table is a
-// single shape per queue), so a fragment that samples a cube or volume
-// texture cannot alias `tex<stage>` off `abuf.textures[stage]` without a
-// type mismatch. Such shaders fall back to the constants-only hybrid
-// prelude + the direct [[texture(N)]] lane — characterized limitation;
-// the main session's cube/volume readback exercises this fallback, not
-// the argbuf array path. Returns true iff every USED fragment sampler is
-// a 2D (or 2D-array) texture.
-bool pixelResourceArrayEligible(const SpirvModule& module,
-                                const ShaderSourceContext& context,
-                                const std::array<bool, kMaxSamplers>& samplerUsage) {
-  for (u32 stage = 0; stage < kMaxSamplers; ++stage) {
-    if (!samplerUsage[stage]) {
-      continue;
-    }
-    if (stage >= shaders::kArgbufResourceArrayStageCount) {
-      // Only s0..s7 ride the argbuf array; a higher stage keeps the shader
-      // on the direct lane.
-      return false;
-    }
-    const auto type = samplerTextureType(module, context, stage);
-    if (type != TextureType::TwoD && type != TextureType::Array2D) {
-      return false;
-    }
-  }
-  return true;
-}
-
 std::string textureTypeName(TextureType type) {
   switch (type) {
     case TextureType::Cube:
@@ -844,25 +812,7 @@ std::string translateSpirvToMsl(const SpirvModule& module,
                                 bool vertex) {
   std::ostringstream out;
   const bool argbufHybrid = context.argbufHybridMode;
-  // R-BACK-12.22..12.26 (resource-array sub-mode) — decide the fragment
-  // resource-array eligibility BEFORE emitting the prelude (the extended
-  // ArgbufLayout with texture/sampler arrays must replace the 4-pointer
-  // form). Only the fragment stage rides the argbuf texture array; the
-  // vertex stage keeps its direct vertex-texture lane. Cube/volume / s8+
-  // shaders fall back to the constants-only hybrid prelude (see
-  // pixelResourceArrayEligible).
-  const bool fragmentArgbufResourceArray = [&] {
-    if (vertex || !argbufHybrid || !context.argbufResourceArray) {
-      return false;
-    }
-    const auto usage = collectPixelSamplerUsage(module, context);
-    const bool anyUsed =
-        std::any_of(usage.begin(), usage.end(), [](bool u) { return u; });
-    return anyUsed && pixelResourceArrayEligible(module, context, usage);
-  }();
-  if (fragmentArgbufResourceArray) {
-    out << makeShaderPreludeArgbufResourceArray(context.clipPlaneMask != 0);
-  } else if (argbufHybrid) {
+  if (argbufHybrid) {
     out << makeShaderPreludeArgbufHybrid(context.clipPlaneMask != 0);
   } else {
     out << makeShaderPrelude(context.clipPlaneMask != 0);
@@ -1965,35 +1915,7 @@ std::string translateSpirvToMsl(const SpirvModule& module,
     }
   };
   if (textured) {
-    if (fragmentArgbufResourceArray) {
-      // R-BACK-12.22..12.26 (resource-array sub-mode) — texture/sampler
-      // resources ride the slot-30 argbuf arrays; the entry point declares
-      // NO [[texture(N)]] / [[sampler(N)]] params. The alias block below
-      // re-binds `tex<stage>` / `samp<stage>` (all 2D — guaranteed by
-      // pixelResourceArrayEligible) off the argbuf so every translated
-      // sample site (tex<stage>.sample(samp<stage>, ...)) is byte-identical
-      // to the direct lane.
-      out << "fragment " << fragmentReturnType
-          << " dxmt9_fs(VSOut in [[stage_in]],\n";
-      emitFrontFacingParameter();
-      out << "                     constant ArgbufLayout& abuf [[buffer("
-          << kArgbufHybridBindSlot << ")]]";
-      if (emitLodBias) {
-        out << ",\n                     constant SamplerLodBias& samplerLodBias [[buffer(4)]]";
-      }
-      out << ") {\n";
-      out << "  constant PsConsts& psConsts = *abuf.psConsts;\n";
-      out << "  constant FfpPsConsts& ffpPs = *abuf.ffpPs;\n";
-      for (u32 stage = 0; stage < kMaxSamplers; ++stage) {
-        if (!samplerUsage[stage]) {
-          continue;
-        }
-        out << "  texture2d<float> tex" << stage << " = abuf.textures["
-            << stage << "];\n";
-        out << "  sampler samp" << stage << " = abuf.samplers[" << stage
-            << "];\n";
-      }
-    } else if (argbufHybrid) {
+    if (argbufHybrid) {
       // R-BACK-12.22..12.26 MSL routing — single argbuf at slot 30
       // replaces uniform slots 0/3. Texture/sampler parameters remain
       // direct so texture-bound Stage 2 draws share the proven Stage 1
