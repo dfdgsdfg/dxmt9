@@ -104,6 +104,7 @@ void testWireRecordsStayPod() {
   checkPodWireShape<D9CCommandRecordUpdateSurface>("D9CCommandRecordUpdateSurface");
   checkPodWireShape<D9CCommandRecordQueryIssue>("D9CCommandRecordQueryIssue");
   checkPodWireShape<D9CCommandRecordReadback>("D9CCommandRecordReadback");
+  checkPodWireShape<D9CCommandRecordReszDepthResolve>("D9CCommandRecordReszDepthResolve");
   checkPodWireShape<D9CCommandRecordApplyState>("D9CCommandRecordApplyState");
   checkPodWireShape<D9CCommandChunk>("D9CCommandChunk");
   checkPodWireShape<D9CChunkHandleEntry>("D9CChunkHandleEntry");
@@ -132,6 +133,8 @@ void testCommandRecordIds() {
   checkEq(D9C_COMMAND_RECORD_QUERY_ISSUE, 26, "query issue command ID");
   checkEq(D9C_COMMAND_RECORD_READBACK, 27, "readback command ID");
   checkEq(D9C_COMMAND_RECORD_APPLY_STATE, 28, "apply state command ID");
+  checkEq(D9C_COMMAND_RECORD_RESZ_DEPTH_RESOLVE, 29,
+          "RESZ depth-resolve command ID");
 }
 
 void testRecordHeaderLayout() {
@@ -175,6 +178,8 @@ void testRecordHeaderLayout() {
           "query issue header offset");
   checkEq(offsetof(D9CCommandRecordReadback, header), std::size_t{0},
           "readback header offset");
+  checkEq(offsetof(D9CCommandRecordReszDepthResolve, header), std::size_t{0},
+          "RESZ depth-resolve header offset");
   checkEq(offsetof(D9CCommandRecordApplyState, header), std::size_t{0}, "apply state header offset");
   check(sizeof(D9CCommandRecordHeader) <= sizeof(D9CCommandRecordDrawPrimitive),
         "fixed records contain the common header");
@@ -294,6 +299,9 @@ void testCommandRecordLayouts() {
       "D9CCommandRecordQueryIssue", 24u, alignof(std::uint64_t));
   checkSizeAlign<D9CCommandRecordReadback>(
       "D9CCommandRecordReadback", 24u, alignof(std::uint64_t));
+  // RESZ depth-resolve mirrors Readback's two-handle shape exactly.
+  checkSizeAlign<D9CCommandRecordReszDepthResolve>(
+      "D9CCommandRecordReszDepthResolve", 24u, alignof(std::uint64_t));
   checkSizeAlign<D9CCommandRecordApplyState>("D9CCommandRecordApplyState", 4816u, 4u);
   checkSizeAlign<D9CCommandChunk>("D9CCommandChunk", 32u, 4u);
   checkSizeAlign<D9CChunkHandleEntry>(
@@ -349,6 +357,10 @@ void testCommandRecordLayouts() {
           "query issue flags offset");
   checkEq(offsetof(D9CCommandRecordReadback, srcWire), std::size_t{8},
           "readback source wire offset");
+  checkEq(offsetof(D9CCommandRecordReszDepthResolve, msaaDepthHandle),
+          std::size_t{8}, "RESZ depth-resolve MSAA depth handle offset");
+  checkEq(offsetof(D9CCommandRecordReszDepthResolve, intzDestHandle),
+          std::size_t{16}, "RESZ depth-resolve INTZ dest handle offset");
   checkEq(offsetof(D9CCommandRecordApplyState, packet), std::size_t{8},
           "apply state packet offset");
   checkEq(offsetof(D9CCommandChunk, records), std::size_t{12},

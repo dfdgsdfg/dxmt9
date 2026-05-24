@@ -204,6 +204,22 @@ void testImportedRecordReplayInfoClassifiesOrderingBoundaries() {
   check(readback.barrier, "readback is an ordering barrier");
   check(readback.synchronousReadBoundary, "readback is a synchronous read boundary");
 
+  // R-FORMAT-11: RESZ depth-resolve classifies as a fire-and-forget SurfaceOp
+  // ordering barrier (the StretchRect/ColorFill class), NOT the Readback
+  // synchronous-read class and NOT a draw.
+  const auto resz =
+      replayInfoForCommandRecordType(D9C_COMMAND_RECORD_RESZ_DEPTH_RESOLVE);
+  checkEq(static_cast<int>(resz.category),
+          static_cast<int>(ImportedRecordReplayCategory::SurfaceOp),
+          "RESZ depth-resolve category");
+  check(resz.ordered, "RESZ depth-resolve is ordered");
+  check(resz.readsDeviceState, "RESZ depth-resolve observes bound depth state");
+  check(resz.referencesResources, "RESZ depth-resolve references surfaces");
+  check(resz.barrier, "RESZ depth-resolve is an ordering barrier");
+  check(!resz.synchronousReadBoundary,
+        "RESZ depth-resolve is fire-and-forget, not a synchronous read boundary");
+  check(!resz.draw, "RESZ depth-resolve is not a draw");
+
   const auto unknown = replayInfoForCommandRecordType(0xffffu);
   checkEq(static_cast<int>(unknown.category), static_cast<int>(ImportedRecordReplayCategory::Unknown),
           "unknown record category");

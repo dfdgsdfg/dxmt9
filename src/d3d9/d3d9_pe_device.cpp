@@ -3402,35 +3402,51 @@ public:
      * attachment uses store=MultisampleResolve + resolve_texture +
      * filter=Sample.
      *
-     * REMAINING SEAM (intentionally out of scope for this file-restricted
-     * change): the PE->unix record DISPATCH that carries (msaaDepthHandle,
-     * intzDestHandle) across the bridge and invokes encodeDepthResolve. A new
-     * D9C_COMMAND_RECORD_RESZ_DEPTH_RESOLVE surface-op record (mirroring
-     * D9CCommandRecordReadback's two-handle shape) must be added to
-     * include/dxmt9/device_c.h, validated in device_c_record_validate.cpp,
-     * classified as a SurfaceOp barrier in device_c_record_replay.cpp, and
-     * dispatched in device_c_record_replay.cpp's execution switch +
-     * dxmt9_draw_encoder.mm's surface-op Kind switch to call encodeDepthResolve.
-     * Those importer/queue files are outside this change's allowed file set, so
-     * the PE side stays detect-only here: emitting an unhandled record type
-     * would break chunk replay (replayInfoForCommandRecordType returns an empty
-     * info for unknown types). Until the dispatch lands, the sentinel is
-     * detected and the bound source/dest are identified + logged. */
+     * PE->unix DISPATCH (this change): the request is carried across the
+     * bridge as a D9C_COMMAND_RECORD_RESZ_DEPTH_RESOLVE chunk record
+     * (mirroring D9CCommandRecordReadback's two-handle shape) — msaaDepthHandle
+     * = the bound depth-stencil surface, intzDestHandle = the stage-0 INTZ
+     * texture. It is validated in device_c_record_validate.cpp, classified as
+     * a SurfaceOp ordering barrier in device_c_record_replay.cpp, and
+     * dispatched to dxmt9::encoders::encodeDepthResolve via
+     * dxmt9_draw_encoder.mm's surface-op Kind switch. The record is emitted
+     * exactly like StretchRect/ColorFill (chunkBarrierFlush, then append with
+     * source/dest retained), so it orders atomically with the surrounding
+     * draws/clears in the same chunk. */
     HRESULT requestReszDepthResolve() noexcept {
+        std::lock_guard<std::recursive_mutex> recorderLock(recorderMutex_);
         // MSAA depth source = the currently bound depth-stencil surface.
         D9CSurface* const depthSrcRaw = rawSurf(dsSurface_);
         // INTZ depth destination = the texture bound at fragment stage 0.
         D9CTexture* const intzDstRaw = rawTex(textures_[0]);
         dxmt9DeviceDebugLog(
-            "device_resz_depth_resolve device=%p depth_src=%p intz_dst=%p "
-            "(detected; backend resolve deferred on winemetal ABI gap)",
+            "device_resz_depth_resolve device=%p depth_src=%p intz_dst=%p",
             this, static_cast<void*>(depthSrcRaw),
             static_cast<void*>(intzDstRaw));
-        // No bound source or destination: nothing to resolve. Benign no-op.
-        // (Left intentionally as a detect-only point until the backend
-        // depth-resolve ABI exists; see the BACKEND TODO above.)
-        (void)depthSrcRaw;
-        (void)intzDstRaw;
+        // No bound source or destination: nothing to resolve. RESZ is a
+        // fire-and-forget idiom, so a missing binding is a benign no-op
+        // (matching real-hardware behavior). Don't emit an empty record.
+        if (!depthSrcRaw || !intzDstRaw) {
+            return S_OK;
+        }
+        // Surface-op emit pattern (mirrors StretchRect / ColorFill): drain any
+        // pending hot state to a barrier, then append the standalone record
+        // with both endpoints retained for the chunk's lifetime. INTZ dest is
+        // a texture handle, MSAA depth source a surface handle — canonicalized
+        // the same way the neighboring surface ops resolve their endpoints
+        // (rawSurf / rawTex → SERVER-SIDE wire cast), so the importer decodes
+        // them via the same wireValuePtr path.
+        const HRESULT barrierHr = chunkBarrierFlush();
+        if (FAILED(barrierHr)) return barrierHr;
+        D9CCommandRecordReszDepthResolve record{};
+        record.header.type = D9C_COMMAND_RECORD_RESZ_DEPTH_RESOLVE;
+        record.header.size = sizeof(record);
+        record.msaaDepthHandle = reinterpret_cast<uint64_t>(depthSrcRaw);
+        record.intzDestHandle = reinterpret_cast<uint64_t>(intzDstRaw);
+        const HRESULT appendHr = appendCommandRecordRetained(
+            &record, sizeof(record), depthSrcRaw, /*surface1=*/nullptr,
+            intzDstRaw);
+        if (FAILED(appendHr)) return appendHr;
         return S_OK;
     }
 

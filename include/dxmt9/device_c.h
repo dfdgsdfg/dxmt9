@@ -699,6 +699,16 @@ enum {
      * pattern that violated the chunk-mode invariant (Set* never
      * crosses PE/unix in the default path). */
     D9C_COMMAND_RECORD_APPLY_STATE = 28,
+    /* R-FORMAT-11: RESZ MSAA depth-resolve. The exact D3D9 idiom
+     * SetRenderState(D3DRS_POINTSIZE, 0x7FA05000) is a *command* — resolve
+     * the bound multisampled depth source into the bound INTZ depth texture.
+     * Fire-and-forget (no synchronous result), so it travels as a chunk
+     * record like the other surface ops rather than a flush+bridge call.
+     * Two-handle shape mirrors D9C_COMMAND_RECORD_READBACK: both handles are
+     * SERVER-SIDE casts the importer decodes the same way as the surface ops.
+     * GPU correctness (MSAA depth + INTZ readback) is deferred runtime
+     * validation; this record only carries the (source, destination) pair. */
+    D9C_COMMAND_RECORD_RESZ_DEPTH_RESOLVE = 29,
 };
 
 typedef struct D9CCommandRecordHeader {
@@ -838,6 +848,20 @@ typedef struct D9CCommandRecordReadback {
     uint64_t srcWire;        /* RT being read (D9CSurface*) */
     uint64_t dstWire;        /* CPU-mappable destination (D9CSurface*) */
 } D9CCommandRecordReadback;
+
+/* Standalone RESZ depth-resolve record. Mirrors D9CCommandRecordReadback's
+ * two-handle shape exactly (header + two uint64 wire handles → 24 bytes,
+ * uint64 alignment). srcWire is the bound multisampled depth source
+ * (SERVER-SIDE D9CSurface* cast); dstWire is the bound INTZ depth
+ * destination texture (SERVER-SIDE D9CTexture* cast — RESZ writes the
+ * resolved depth into the stage-0 INTZ texture). Fire-and-forget: like
+ * StretchRect/ColorFill it is a surface-op ordering barrier, NOT a
+ * synchronous read boundary, so the PE caller does not block on a result. */
+typedef struct D9CCommandRecordReszDepthResolve {
+    D9CCommandRecordHeader header;
+    uint64_t msaaDepthHandle; /* MSAA depth source (D9CSurface*) */
+    uint64_t intzDestHandle;  /* INTZ depth destination (D9CTexture*) */
+} D9CCommandRecordReszDepthResolve;
 
 /* Standalone state-delta record. The packet's draw fields are unused
  * (set to zero by chunkBarrierFlush); only state-delta fields apply.

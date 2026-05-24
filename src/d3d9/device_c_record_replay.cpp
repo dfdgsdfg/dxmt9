@@ -195,6 +195,13 @@ ImportedRecordReplayInfo replayInfoForCommandRecordType(std::uint32_t type) noex
   case D9C_COMMAND_RECORD_COLOR_FILL:
   case D9C_COMMAND_RECORD_UPDATE_TEXTURE:
   case D9C_COMMAND_RECORD_UPDATE_SURFACE:
+  // R-FORMAT-11: RESZ depth-resolve is a fire-and-forget surface op (MSAA
+  // depth source → INTZ destination) — the same SurfaceOp ordering-barrier
+  // class as StretchRect/ColorFill, NOT the synchronousReadBoundary Readback
+  // class, so PE never blocks on a result. Classifying it here (rather than
+  // letting it fall through to the empty Unknown info) keeps chunk replay
+  // from misreading it as a draw.
+  case D9C_COMMAND_RECORD_RESZ_DEPTH_RESOLVE:
     return ImportedRecordReplayInfo{
         .category = ImportedRecordReplayCategory::SurfaceOp,
         .ordered = true,

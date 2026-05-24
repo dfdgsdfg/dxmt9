@@ -276,6 +276,15 @@ inline D9CCommandRecordReadback makeReadbackRecord() {
   return readback;
 }
 
+inline D9CCommandRecordReszDepthResolve makeReszDepthResolveRecord() {
+  D9CCommandRecordReszDepthResolve resz{};
+  resz.header.type = D9C_COMMAND_RECORD_RESZ_DEPTH_RESOLVE;
+  resz.header.size = sizeof(resz);
+  resz.msaaDepthHandle = 0x7000u;
+  resz.intzDestHandle = 0x7008u;
+  return resz;
+}
+
 inline D9CCommandRecordApplyState makeApplyStateRecord() {
   D9CCommandRecordApplyState apply{};
   apply.header.type = D9C_COMMAND_RECORD_APPLY_STATE;

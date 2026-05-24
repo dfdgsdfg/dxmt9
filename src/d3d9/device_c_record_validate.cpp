@@ -63,7 +63,7 @@ bool sectionAligned(
   return (address % alignment) == 0u;
 }
 
-constexpr std::array<RecordLayout, 19> kRecordLayouts{{
+constexpr std::array<RecordLayout, 20> kRecordLayouts{{
     {D9C_COMMAND_RECORD_DRAW_PRIMITIVE,
      byteSize(sizeof(D9CCommandRecordDrawPrimitive)), RecordSizeMode::Exact},
     {D9C_COMMAND_RECORD_DRAW_INDEXED_PRIMITIVE,
@@ -106,6 +106,8 @@ constexpr std::array<RecordLayout, 19> kRecordLayouts{{
      byteSize(sizeof(D9CCommandRecordQueryIssue)), RecordSizeMode::Exact},
     {D9C_COMMAND_RECORD_READBACK,
      byteSize(sizeof(D9CCommandRecordReadback)), RecordSizeMode::Exact},
+    {D9C_COMMAND_RECORD_RESZ_DEPTH_RESOLVE,
+     byteSize(sizeof(D9CCommandRecordReszDepthResolve)), RecordSizeMode::Exact},
     {D9C_COMMAND_RECORD_APPLY_STATE,
      byteSize(sizeof(D9CCommandRecordApplyState)), RecordSizeMode::Exact},
 }};

@@ -196,6 +196,12 @@ void testAllCommandIdsValidateWithExpectedRecordShapes() {
                         sizeof(readback), sizeof(readback),
                         "READBACK record");
 
+  const auto resz = makeReszDepthResolveRecord();
+  checkValidRecordBytes(recordBytes(resz),
+                        D9C_COMMAND_RECORD_RESZ_DEPTH_RESOLVE,
+                        sizeof(resz), sizeof(resz),
+                        "RESZ_DEPTH_RESOLVE record");
+
   const auto apply = makeApplyStateRecord();
   checkValidRecordBytes(recordBytes(apply), D9C_COMMAND_RECORD_APPLY_STATE,
                         sizeof(apply), sizeof(apply),
@@ -262,6 +268,9 @@ void testSurfaceQueryRecordValidationMatrix() {
   checkExactRecordSizeMatrix(makeUpdateSurfaceRecord(), "UPDATE_SURFACE");
   checkExactRecordSizeMatrix(makeUpdateTextureRecord(), "UPDATE_TEXTURE");
   checkExactRecordSizeMatrix(makeStretchRectRecord(), "STRETCH_RECT");
+  // RESZ depth-resolve: validator accepts a well-formed two-handle record
+  // and rejects undersized / trailing / truncated variants (mirrors Readback).
+  checkExactRecordSizeMatrix(makeReszDepthResolveRecord(), "RESZ_DEPTH_RESOLVE");
 }
 
 void testInvalidTruncatedAndUnknownRecords() {
@@ -618,6 +627,11 @@ void testImportedWireAcceptsAllCommandIds() {
   checkWireAcceptsRecordBytes(recordBytes(readback), D9C_COMMAND_RECORD_READBACK,
                               "READBACK");
 
+  const auto resz = makeReszDepthResolveRecord();
+  checkWireAcceptsRecordBytes(recordBytes(resz),
+                              D9C_COMMAND_RECORD_RESZ_DEPTH_RESOLVE,
+                              "RESZ_DEPTH_RESOLVE");
+
   const auto apply = makeApplyStateRecord();
   checkWireAcceptsRecordBytes(recordBytes(apply), D9C_COMMAND_RECORD_APPLY_STATE,
                               "APPLY_STATE");
@@ -656,6 +670,11 @@ void testImportedWireSpecialRecordValidationMatrix() {
   checkWireRecordMatrix(recordBytes(stretch),
                         D9C_COMMAND_RECORD_STRETCH_RECT,
                         "STRETCH_RECT");
+
+  const auto resz = makeReszDepthResolveRecord();
+  checkWireRecordMatrix(recordBytes(resz),
+                        D9C_COMMAND_RECORD_RESZ_DEPTH_RESOLVE,
+                        "RESZ_DEPTH_RESOLVE");
 }
 
 }  // namespace
