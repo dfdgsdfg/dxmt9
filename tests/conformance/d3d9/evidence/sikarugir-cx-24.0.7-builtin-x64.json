@@ -108,7 +108,7 @@
   "stream_source_null_offset_alignment_policy": "pass",
   "stream_source_vb_offset_alignment_policy": "pass",
   "stream_source_zero_stride_policy": "pass",
-  "stretch_rect_depth_stencil_policy": "fail",
+  "stretch_rect_depth_stencil_policy": "pass",
   "stretch_rect_format_conversion_policy": "fail",
   "stretch_rect_format_matrix_policy": "pass",
   "stretch_rect_multisample_resolve_policy": "fail",

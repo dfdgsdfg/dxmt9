@@ -2650,6 +2650,32 @@ public:
                         dstRect->bottom <= dstRect->top)) {
             return D3DERR_INVALIDCALL;
         }
+        // Wine d3d9 depth_blit_test (visual.c:14713) contract: when either
+        // surface is a depth-stencil format, the other must be the same
+        // depth-stencil format. Cross-format depth blits (e.g. D24S8 -> D16)
+        // and depth -> color blits are rejected with INVALIDCALL.
+        // stretch_rect_depth_stencil_policy.
+        {
+            D3DSURFACE_DESC sdSrc{};
+            D3DSURFACE_DESC sdDst{};
+            const bool gotSrc = SUCCEEDED(src->GetDesc(&sdSrc));
+            const bool gotDst = SUCCEEDED(dst->GetDesc(&sdDst));
+            auto isDepth = [](D3DFORMAT f) {
+                return f == D3DFMT_D16 || f == D3DFMT_D24X8 ||
+                       f == D3DFMT_D24S8 || f == D3DFMT_D32 ||
+                       f == D3DFMT_D15S1 || f == D3DFMT_D24X4S4 ||
+                       f == D3DFMT_D24FS8 || f == D3DFMT_D32F_LOCKABLE ||
+                       f == D3DFMT_D16_LOCKABLE || f == D3DFMT_D32_LOCKABLE;
+            };
+            if (gotSrc && gotDst) {
+                const bool srcIsDepth = isDepth(sdSrc.Format);
+                const bool dstIsDepth = isDepth(sdDst.Format);
+                if ((srcIsDepth || dstIsDepth) &&
+                    sdSrc.Format != sdDst.Format) {
+                    return D3DERR_INVALIDCALL;
+                }
+            }
+        }
         D9CRect cs{}, cd{};
         if (srcRect) cs = toR(*srcRect); if (dstRect) cd = toR(*dstRect);
         const HRESULT barrierHr = chunkBarrierFlush();

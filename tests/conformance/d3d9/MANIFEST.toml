@@ -4844,14 +4844,14 @@ area = "surface-blit"
 owner = "core/resources"
 requirements = ["R-TEST-12.13", "R-TEST-12.14"]
 acceptance = ["StretchRect on two matching D24S8 DEFAULT-pool depth-stencil surfaces returns S_OK or D3DERR_INVALIDCALL, cross-format D24S8 -> D16 depth blit returns D3DERR_INVALIDCALL"]
-status = "failing"
+status = "partial"
 
 [[case.evidence]]
 lane = "builtin"
 arch = "x64"
-status = "failing"
+status = "passing"
 source = "tests/conformance/d3d9/evidence/sikarugir-cx-24.0.7-builtin-x64.json:1"
-summary = "Sikarugir-CX 24.0.7 builtin lane x64 2026-05-24 — failing in chunked runner snapshot; follow-up."
+summary = "Sikarugir-CX 24.0.7 builtin lane x64 2026-05-24 — passing after PE-side depth-stencil cross-format validation in StretchRect."
 
 [[case]]
 executable = "dxmt9-d3d9-conformance.exe"
