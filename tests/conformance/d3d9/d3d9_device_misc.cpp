@@ -208,10 +208,56 @@ void device_utility_creation_flags() {
   CHECK(device == nullptr);
 }
 
+// gap_d3d9 D.* — regression gates for the remaining silent-S_OK COM stubs.
+// These exercise the pure state round-trip / documented returns, not real
+// per-primitive clip results or N-Patch tessellation (dxmt9 and Wine both
+// treat these as state-only / no-op on the Metal path).
+void device_com_stub_returns() {
+  Fixture fixture;
+  if (!fixture.init("device_com_stub_returns")) return;
+
+  // SetClipStatus / GetClipStatus — pure state round-trip (gap_d3d9 B.8).
+  // Null SetClipStatus is rejected with D3DERR_INVALIDCALL (mirrors
+  // wined3d_device_set_clip_status's !clip_status guard).
+  CHECK_HR(fixture.device->SetClipStatus(nullptr), D3DERR_INVALIDCALL);
+
+  D3DCLIPSTATUS9 cs = {};
+  cs.ClipUnion = 0x0000000Fu;
+  cs.ClipIntersection = 0x00000003u;
+  CHECK_HR(fixture.device->SetClipStatus(&cs), D3D_OK);
+
+  D3DCLIPSTATUS9 out = {};
+  out.ClipUnion = 0xdeadbeefu;
+  out.ClipIntersection = 0xdeadbeefu;
+  CHECK_HR(fixture.device->GetClipStatus(&out), D3D_OK);
+  CHECK(out.ClipUnion == cs.ClipUnion);
+  CHECK(out.ClipIntersection == cs.ClipIntersection);
+
+  // A second Set/Get with different values must reflect the latest state.
+  cs.ClipUnion = 0u;
+  cs.ClipIntersection = 0xFFFFFFFFu;
+  CHECK_HR(fixture.device->SetClipStatus(&cs), D3D_OK);
+  out.ClipUnion = 0xdeadbeefu;
+  out.ClipIntersection = 0xdeadbeefu;
+  CHECK_HR(fixture.device->GetClipStatus(&out), D3D_OK);
+  CHECK(out.ClipUnion == 0u);
+  CHECK(out.ClipIntersection == 0xFFFFFFFFu);
+
+  // SetNPatchMode / GetNPatchMode — disabling (0.0f) returns S_OK and the
+  // getter reports 0.0f (N-Patch tessellation is a no-op on Metal).
+  CHECK_HR(fixture.device->SetNPatchMode(0.0f), D3D_OK);
+  CHECK(fixture.device->GetNPatchMode() == 0.0f);
+
+  // DeletePatch — documented S_OK on this path; patch primitives are unused
+  // on Metal so deleting any handle is a benign no-op.
+  CHECK_HR(fixture.device->DeletePatch(0), D3D_OK);
+}
+
 }  // namespace
 
 int main() {
   device_utility_creation_flags();
+  device_com_stub_returns();
 
   if (failures) {
     std::printf("d3d9_device_misc_x64: %d failure(s), %d skip(s)\n", failures, skips);

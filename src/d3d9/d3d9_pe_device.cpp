@@ -3371,15 +3371,26 @@ public:
         std::memcpy(pPlane, &peState_.clipPlaneShadow[off], sizeof(float) * 4);
         return S_OK;
     }
-    HRESULT STDMETHODCALLTYPE SetClipStatus(const D3DCLIPSTATUS9*) noexcept override {
+    HRESULT STDMETHODCALLTYPE SetClipStatus(const D3DCLIPSTATUS9* p) noexcept override {
         dxmt9DeviceDebugLog("device_set_clip_status device=%p", this);
+        // Pure state round-trip (gap_d3d9 B.8): store the struct so GetClipStatus
+        // returns the last-set value. dxmt9 does not compute per-primitive clip
+        // results here (wined3d's set/get_clip_status are storage-free stubs that
+        // only reject null). Null is rejected with D3DERR_INVALIDCALL to match
+        // wined3d_device_set_clip_status's !clip_status guard.
+        if (!p) return D3DERR_INVALIDCALL;
+        peState_.clipStatusUnion = p->ClipUnion;
+        peState_.clipStatusIntersection = p->ClipIntersection;
         return S_OK;
     }
     HRESULT STDMETHODCALLTYPE GetClipStatus(D3DCLIPSTATUS9* p) noexcept override {
         dxmt9DeviceDebugLog("device_get_clip_status device=%p", this);
-        // stub: Wine returns S_OK; dxmt9 does not track per-primitive clip status,
-        // zero is the documented neutral value.
-        if (p) memset(p, 0, sizeof(*p)); return S_OK;
+        // Round-trip companion to SetClipStatus: write back the shadow. Default
+        // (post-CreateDevice) is ClipUnion=0, ClipIntersection=0xFFFFFFFF.
+        if (!p) return D3DERR_INVALIDCALL;
+        p->ClipUnion = peState_.clipStatusUnion;
+        p->ClipIntersection = peState_.clipStatusIntersection;
+        return S_OK;
     }
 
     /* R-FORMAT-11 — service a RESZ depth-resolve sentinel write. Resolves the
