@@ -393,6 +393,7 @@ static const struct test_case tests[] =
             test_draw_indexed_primitive_up_independence_policy},
     {"set_texture_set_render_target_self_feedback_policy",
             test_set_texture_set_render_target_self_feedback_policy},
+    {"atoc_render_state_msaa_policy", test_atoc_render_state_msaa_policy},
 };
 
 int main(int argc, char **argv)

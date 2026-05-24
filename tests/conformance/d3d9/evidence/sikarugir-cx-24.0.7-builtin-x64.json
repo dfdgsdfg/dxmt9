@@ -1,5 +1,6 @@
 {
   "additional_swapchain_backbuffer_bounds": "pass",
+  "atoc_render_state_msaa_policy": "pass",
   "backbuffer_resize_present_parameter_policy": "pass",
   "base_texture_metadata_iface_policy": "pass",
   "base_vidmem_accounting_policy": "pass",

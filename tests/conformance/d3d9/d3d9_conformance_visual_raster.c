@@ -1249,3 +1249,123 @@ done_window:
 done_d3d9:
     IDirect3D9_Release(d3d9);
 }
+
+/*
+ * Wine provenance: dlls/d3d9/tests/visual.c
+ * function: test_alpha_to_coverage
+ * commit: 6e073d28dee3af7f4c965daec94644e0f9f92727
+ *
+ * Wine's test_alpha_to_coverage exercises vendor-specific Alpha-To-Coverage
+ * MSAA enable paths by smuggling FourCC magic values through
+ * D3DRS_POINTSIZE — AMD uses 'A2M1'/'A2M0', Nvidia uses 'ATOC'/'SSAA'. It
+ * then renders into an MSAA RT and reads pixel coverage, which is
+ * vendor-divergent and EXP-route.
+ *
+ * The HRESULT-contract subset is pinnable: D3DRS_POINTSIZE is a
+ * float-by-DWORD slot — the runtime preserves bit patterns verbatim, so
+ * any DWORD round-trips through Set/GetRenderState. Pair that with the
+ * MSAA RT creation + ATOC-enabled Clear flow to demonstrate the ATOC
+ * enable path reaches the driver without rejection.
+ */
+void test_atoc_render_state_msaa_policy(const struct d3d9_api *api)
+{
+    static const DWORD atoc_fourcc[] =
+    {
+        MAKEFOURCC('A','2','M','1'),   /* AMD enable */
+        MAKEFOURCC('A','2','M','0'),   /* AMD disable */
+        MAKEFOURCC('A','T','O','C'),   /* Nvidia enable */
+        MAKEFOURCC('S','S','A','A'),   /* Nvidia SSAA marker */
+    };
+    IDirect3DSurface9 *original_rt = NULL;
+    IDirect3DSurface9 *rt = NULL;
+    IDirect3DDevice9 *device = NULL;
+    IDirect3D9 *d3d9;
+    DWORD quality_levels;
+    HWND window;
+    HRESULT hr;
+    DWORD got;
+    UINT i;
+
+    d3d9 = api->create9(D3D_SDK_VERSION);
+    if (!d3d9)
+    {
+        skip_current_test("Direct3DCreate9 returned NULL");
+        return;
+    }
+
+    window = create_test_window();
+    CHECK_TRUE(window != NULL);
+    if (!window)
+        goto done_d3d9;
+
+    device = create_base_device(d3d9, window);
+    if (!device)
+        goto done_window;
+
+    /* Each ATOC FourCC round-trips verbatim through D3DRS_POINTSIZE. The
+     * runtime does not validate values for this state — it's a
+     * float-by-DWORD slot, so any DWORD is accepted and read back
+     * unchanged. */
+    for (i = 0; i < ARRAY_SIZE(atoc_fourcc); ++i)
+    {
+        CHECK_HR(IDirect3DDevice9_SetRenderState(device, D3DRS_POINTSIZE,
+                atoc_fourcc[i]), D3D_OK);
+        got = 0xdeadbeef;
+        CHECK_HR(IDirect3DDevice9_GetRenderState(device, D3DRS_POINTSIZE,
+                &got), D3D_OK);
+        CHECK_TRUE(got == atoc_fourcc[i]);
+    }
+
+    /* MSAA RT branch — accept S_OK or D3DERR_NOTAVAILABLE for the cap
+     * query, then only proceed if the host supports 2x MSAA. */
+    quality_levels = 0;
+    hr = IDirect3D9_CheckDeviceMultiSampleType(d3d9, D3DADAPTER_DEFAULT,
+            D3DDEVTYPE_HAL, D3DFMT_A8R8G8B8, TRUE,
+            D3DMULTISAMPLE_2_SAMPLES, &quality_levels);
+    CHECK_TRUE(hr == D3D_OK || hr == D3DERR_NOTAVAILABLE);
+
+    if (SUCCEEDED(hr) && quality_levels > 0)
+    {
+        hr = IDirect3DDevice9_CreateRenderTarget(device, 64, 64,
+                D3DFMT_A8R8G8B8, D3DMULTISAMPLE_2_SAMPLES,
+                quality_levels - 1, FALSE, &rt, NULL);
+        CHECK_HR(hr, D3D_OK);
+
+        if (rt)
+        {
+            /* Enable AMD-style ATOC then run a minimal encode flow on
+             * the MSAA RT — we only pin that the enable does not
+             * prevent basic encoder progress. Pixel coverage is
+             * vendor-divergent and out of scope here. */
+            CHECK_HR(IDirect3DDevice9_SetRenderState(device,
+                    D3DRS_POINTSIZE, MAKEFOURCC('A','2','M','1')), D3D_OK);
+
+            CHECK_HR(IDirect3DDevice9_GetRenderTarget(device, 0,
+                    &original_rt), D3D_OK);
+            CHECK_HR(IDirect3DDevice9_SetRenderTarget(device, 0, rt),
+                    D3D_OK);
+            CHECK_HR(IDirect3DDevice9_BeginScene(device), D3D_OK);
+            CHECK_HR(IDirect3DDevice9_Clear(device, 0, NULL,
+                    D3DCLEAR_TARGET, 0, 0.0f, 0), D3D_OK);
+            CHECK_HR(IDirect3DDevice9_EndScene(device), D3D_OK);
+
+            if (original_rt)
+            {
+                CHECK_HR(IDirect3DDevice9_SetRenderTarget(device, 0,
+                        original_rt), D3D_OK);
+                IDirect3DSurface9_Release(original_rt);
+            }
+            IDirect3DSurface9_Release(rt);
+        }
+    }
+
+    /* Reset D3DRS_POINTSIZE to a benign default before tearing down. */
+    IDirect3DDevice9_SetRenderState(device, D3DRS_POINTSIZE, 0);
+
+    IDirect3DDevice9_Release(device);
+
+done_window:
+    DestroyWindow(window);
+done_d3d9:
+    IDirect3D9_Release(d3d9);
+}

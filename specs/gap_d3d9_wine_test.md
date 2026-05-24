@@ -27,11 +27,11 @@ edits not yet visible upstream.
 
 | Field | Value |
 |-------|-------|
-| Commit | `ce9ab4fbc955ad97a9c019b76f020bac11e38156` — **work tree dirty** |
-| Short  | `ce9ab4f` |
-| Tag / describe | `ce9ab4f` |
+| Commit | `ccc58d74941d111e92dee8125cfa230f78034bb9` — **work tree dirty** |
+| Short  | `ccc58d7` |
+| Tag / describe | `ccc58d7` |
 | Author date | `2026-05-24` |
-| Subject | tests/conformance/d3d9: add DrawIndexedPrimitiveUP + RT self-feedback HRESULT cases |
+| Subject | specs/d3d9: design RESZ/NULL/ATOC (designable) + NVDB/WRAP (unsupported) |
 
 ### Wine reference revision
 
@@ -50,7 +50,7 @@ the same commit in the Wine checkout before opening the source.
 
 ```sh
 # Reproduce the inventory verbatim from a clean tree:
-git -C "$DXMT9_REPO" checkout ce9ab4fbc955ad97a9c019b76f020bac11e38156
+git -C "$DXMT9_REPO" checkout ccc58d74941d111e92dee8125cfa230f78034bb9
 git -C "$WINE_REPO"  checkout 6e073d28dee3af7f4c965daec94644e0f9f92727
 python3 scripts/tools/gen_wine_d3d9_test_inventory.py
 ```
@@ -72,11 +72,11 @@ python3 scripts/tools/gen_wine_d3d9_test_inventory.py
 
 | Wine source | Tests | covered | scaffolded | partial | failing | other |
 |-------------|-----:|--------:|----------:|--------:|--------:|------:|
-| `visual.c` | 135 | 134 | 1 | 0 | 0 | 0 |
+| `visual.c` | 135 | 135 | 0 | 0 | 0 | 0 |
 | `device.c` | 105 | 105 | 0 | 0 | 0 | 0 |
 | `d3d9ex.c` | 27 | 27 | 0 | 0 | 0 | 0 |
 | `stateblock.c` | 1 | 1 | 0 | 0 | 0 | 0 |
-| **TOTAL** | **268** | **267** | **1** | **0** | **0** | **0** |
+| **TOTAL** | **268** | **268** | **0** | **0** | **0** | **0** |
 
 `other` rolls up `deferred`, `partial/deferred`, and any UNTRACKED rows.
 
@@ -134,7 +134,7 @@ Source: [`dlls/d3d9/tests/visual.c`](https://gitlab.winehq.org/wine/wine/-/blob/
 | `stream_test` | 12133 | ✅ | `test_stream_source_frequency_state`, `dxmt9_vs_multistream_texcoord1_offset_readback` |
 | `stretchrect_test` | 4048 | ✅ | `test_stretch_rect_format_matrix_policy` |
 | `test_3dc_formats` | 19655 | ✅ | `test_visual_3dc_format_caps_policy` |
-| `test_alpha_to_coverage` | 26521 | 📐 | `test_visual_alpha_to_coverage_inventory_scaffold` |
+| `test_alpha_to_coverage` | 26521 | ✅ | `test_atoc_render_state_msaa_policy` |
 | `test_backbuffer_resize` | 24193 | ✅ | `test_backbuffer_resize_present_parameter_policy` |
 | `test_blend` | 8876 | ✅ | `dxmt9_blend_srcalpha_invsrcalpha_readback` |
 | `test_blit_format_conversion` | 29162 | ✅ | `test_visual_blit_format_conversion_policy` |

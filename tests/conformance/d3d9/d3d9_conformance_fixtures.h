@@ -555,6 +555,7 @@ void test_get_render_target_data_msaa_policy(const struct d3d9_api *api);
 /* Wine visual.c DrawIndexedPrimitiveUP and self-feedback HRESULT scaffolds. */
 void test_draw_indexed_primitive_up_independence_policy(const struct d3d9_api *api);
 void test_set_texture_set_render_target_self_feedback_policy(const struct d3d9_api *api);
+void test_atoc_render_state_msaa_policy(const struct d3d9_api *api);
 
 
 /* Wine visual.c planned-item scaffolds (G1). */
