@@ -55,6 +55,7 @@ dxmt9::core::Format fmtFromD3D(uint32_t d3d) {
     case 115: return F::G32R32F;
     case 114: return F::R32F;
     case 36: return F::A16B16G16R16;
+    case 110: return F::Q16W16V16U16;
     case 34: return F::G16R16;
     case 35: return F::A2R10G10B10;
     case 31: return F::A2B10G10R10;
@@ -77,6 +78,7 @@ dxmt9::core::Format fmtFromD3D(uint32_t d3d) {
     case 80: return F::D16;
     case 71: return F::D32;
     case 82: return F::D32F_LOCKABLE;
+    case 84: return F::D32_LOCKABLE;
     case 70: return F::D16_LOCKABLE;
     case 73: return F::D15S1;
     case 79: return F::D24X4S4;
@@ -114,6 +116,7 @@ uint32_t fmtToD3D(dxmt9::core::Format format) {
     case F::G32R32F: return 115;
     case F::R32F: return 114;
     case F::A16B16G16R16: return 36;
+    case F::Q16W16V16U16: return 110;
     case F::G16R16: return 34;
     case F::A2R10G10B10: return 35;
     case F::A2B10G10R10: return 31;
@@ -138,6 +141,7 @@ uint32_t fmtToD3D(dxmt9::core::Format format) {
     case F::D16: return 80;
     case F::D32: return 71;
     case F::D32F_LOCKABLE: return 82;
+    case F::D32_LOCKABLE: return 84;
     case F::D16_LOCKABLE: return 70;
     case F::D15S1: return 73;
     case F::D24X4S4: return 79;

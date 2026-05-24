@@ -67,6 +67,12 @@ const std::vector<FormatEntry> &formatEntries() {
         true, false, false, true}},
       {{Format::A16B16G16R16, BackendPixelFormat::RGBA16Unorm,
         FormatClass::Required, 8, true, false, false, true}},
+      // Q16W16V16U16 — 4x16-bit signed normalized bump/color format, the
+      // signed twin of A16B16G16R16. Backed by RGBA16Snorm on Metal. Same
+      // table shape as A16B16G16R16 (8 bpp, color render target, lockable),
+      // only the backend pixel format differs. See specs/gap_d3d9.md §C.12 #7.
+      {{Format::Q16W16V16U16, BackendPixelFormat::RGBA16Snorm,
+        FormatClass::Required, 8, true, false, false, true}},
       {{Format::G16R16, BackendPixelFormat::RG16Unorm, FormatClass::Required, 4,
         true, false, false, true}},
       {{Format::A2R10G10B10, BackendPixelFormat::RGB10A2Unorm,
@@ -114,6 +120,12 @@ const std::vector<FormatEntry> &formatEntries() {
       {{Format::D32, BackendPixelFormat::Depth32Float, FormatClass::Required, 4,
         false, true, false, true}},
       {{Format::D32F_LOCKABLE, BackendPixelFormat::Depth32Float,
+        FormatClass::Required, 4, false, true, false, true}},
+      // D32_LOCKABLE — lockable 32-bit depth. Metal has no 32-bit-int depth
+      // pixel format, so it mirrors D32F_LOCKABLE onto Depth32Float (4 bpp,
+      // depth-stencil, not a color render target, lockable). See
+      // specs/gap_d3d9.md §C.12 #7.
+      {{Format::D32_LOCKABLE, BackendPixelFormat::Depth32Float,
         FormatClass::Required, 4, false, true, false, true}},
       {{Format::D16_LOCKABLE, BackendPixelFormat::Depth16Unorm,
         FormatClass::Required, 2, false, true, false, true}},
@@ -285,6 +297,8 @@ std::string formatName(Format format) {
     return "R32F";
   case Format::A16B16G16R16:
     return "A16B16G16R16";
+  case Format::Q16W16V16U16:
+    return "Q16W16V16U16";
   case Format::G16R16:
     return "G16R16";
   case Format::A2R10G10B10:
@@ -333,6 +347,8 @@ std::string formatName(Format format) {
     return "D32";
   case Format::D32F_LOCKABLE:
     return "D32F_LOCKABLE";
+  case Format::D32_LOCKABLE:
+    return "D32_LOCKABLE";
   case Format::D16_LOCKABLE:
     return "D16_LOCKABLE";
   case Format::D15S1:
@@ -387,6 +403,8 @@ std::string backendFormatName(BackendPixelFormat format) {
     return "R32Float";
   case BackendPixelFormat::RGBA16Unorm:
     return "RGBA16Unorm";
+  case BackendPixelFormat::RGBA16Snorm:
+    return "RGBA16Snorm";
   case BackendPixelFormat::RG16Unorm:
     return "RG16Unorm";
   case BackendPixelFormat::RGB10A2Unorm:
@@ -449,6 +467,7 @@ bool formatSupportsUsage(Format format, u32 usage,
       return format == Format::D24S8 || format == Format::D24X8 ||
              format == Format::D16 || format == Format::D32 ||
              format == Format::D32F_LOCKABLE ||
+             format == Format::D32_LOCKABLE ||
              format == Format::D16_LOCKABLE || format == Format::D24FS8;
     }
     if (format == Format::D24FS8 && !limits.supportsDepth32FloatStencil8) {

@@ -49,6 +49,9 @@ WMTPixelFormat toPixelFormat(Format format, const core::BackendLimits& limits) {
       return WMTPixelFormatR32Float;
     case Format::A16B16G16R16:
       return WMTPixelFormatRGBA16Unorm;
+    case Format::Q16W16V16U16:
+      // Signed twin of A16B16G16R16: 4x16-bit signed normalized.
+      return WMTPixelFormatRGBA16Snorm;
     case Format::G16R16:
       return WMTPixelFormatRG16Unorm;
     case Format::A2R10G10B10:
@@ -94,6 +97,7 @@ WMTPixelFormat toPixelFormat(Format format, const core::BackendLimits& limits) {
       return WMTPixelFormatDepth16Unorm;
     case Format::D32:
     case Format::D32F_LOCKABLE:
+    case Format::D32_LOCKABLE:
     case Format::INTZ:
     case Format::DF24:
       // INTZ/DF16/DF24: vendor depth-as-color sampler formats. Backed by Depth32Float
@@ -153,6 +157,7 @@ bool formatHasDepthAspect(Format format) {
     case Format::D16:
     case Format::D32:
     case Format::D32F_LOCKABLE:
+    case Format::D32_LOCKABLE:
     case Format::D16_LOCKABLE:
     case Format::D24FS8:
     case Format::INTZ:

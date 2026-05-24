@@ -266,6 +266,79 @@ void testVendorDepthPseudoFormats() {
           D3DERR_NOTAVAILABLE, "DF24 color render-target usage rejected");
 }
 
+void testD32LockableAndQ16W16V16U16Formats() {
+  // gap_d3d9.md §C.12 #7 — D3DFMT_D32_LOCKABLE (code 84) and
+  // D3DFMT_Q16W16V16U16 (code 110) previously fell through fmtFromD3D to
+  // Format::Unknown -> NOTAVAILABLE. D32_LOCKABLE mirrors the existing
+  // D32F_LOCKABLE (lockable 32-bit depth; Metal has no 32-bit-int depth so
+  // both target Depth32Float). Q16W16V16U16 is a 4x16-bit SIGNED normalized
+  // color format mirroring the existing (unsigned) A16B16G16R16, but mapped
+  // to the signed Metal pixel format RGBA16Snorm.
+  constexpr u32 kD3DFmtD32Lockable = 84u;
+  constexpr u32 kD3DFmtQ16W16V16U16 = 110u;
+
+  checkEq(dxmt9::d3d9::devicec::fmtFromD3D(kD3DFmtD32Lockable),
+          Format::D32_LOCKABLE, "D32_LOCKABLE code 84 maps to Format::D32_LOCKABLE");
+  checkEq(dxmt9::d3d9::devicec::fmtFromD3D(kD3DFmtQ16W16V16U16),
+          Format::Q16W16V16U16, "Q16W16V16U16 code 110 maps to Format::Q16W16V16U16");
+  checkEq(dxmt9::d3d9::devicec::fmtToD3D(Format::D32_LOCKABLE), kD3DFmtD32Lockable,
+          "D32_LOCKABLE round-trips back to code 84");
+  checkEq(dxmt9::d3d9::devicec::fmtToD3D(Format::Q16W16V16U16), kD3DFmtQ16W16V16U16,
+          "Q16W16V16U16 round-trips back to code 110");
+
+  // D32_LOCKABLE: depth-stencil, lockable, not a color render target.
+  // Mirrors D32F_LOCKABLE onto Depth32Float (Metal has no 32-bit-int depth).
+  const auto* d32l = findFormatInfo(Format::D32_LOCKABLE);
+  check(d32l != nullptr, "D32_LOCKABLE format info missing");
+  if (d32l != nullptr) {
+    check(d32l->depthStencil, "D32_LOCKABLE is a depth-stencil format");
+    check(!d32l->renderTarget, "D32_LOCKABLE is not a color render target");
+    check(d32l->lockable, "D32_LOCKABLE is lockable");
+    checkEq(d32l->bytesPerPixel, 4u, "D32_LOCKABLE is 4 bytes per pixel");
+    checkEq(d32l->backendFormat, BackendPixelFormat::Depth32Float,
+            "D32_LOCKABLE backend pixel format mirrors D32F_LOCKABLE's Depth32Float");
+  }
+
+  // Q16W16V16U16: 4x16-bit signed normalized color, lockable, 8 bpp.
+  const auto* q16 = findFormatInfo(Format::Q16W16V16U16);
+  check(q16 != nullptr, "Q16W16V16U16 format info missing");
+  if (q16 != nullptr) {
+    check(!q16->depthStencil, "Q16W16V16U16 is a color format, not depth-stencil");
+    check(q16->lockable, "Q16W16V16U16 is lockable");
+    checkEq(q16->bytesPerPixel, 8u, "Q16W16V16U16 is 8 bytes per pixel");
+    checkEq(q16->backendFormat, BackendPixelFormat::RGBA16Snorm,
+            "Q16W16V16U16 backend pixel format is the signed RGBA16Snorm");
+  }
+
+  // Runtime Metal pixel-format mapping.
+  checkEq(dxmt9::convert::toPixelFormat(Format::D32_LOCKABLE, BackendLimits{}),
+          WMTPixelFormatDepth32Float, "D32_LOCKABLE -> Depth32Float WMT format");
+  checkEq(dxmt9::convert::toPixelFormat(Format::Q16W16V16U16, BackendLimits{}),
+          WMTPixelFormatRGBA16Snorm, "Q16W16V16U16 -> RGBA16Snorm WMT format");
+
+  // Depth aspect: D32_LOCKABLE has a depth aspect; Q16W16V16U16 does not.
+  check(dxmt9::convert::formatHasDepthAspect(Format::D32_LOCKABLE),
+        "D32_LOCKABLE has a depth aspect");
+  check(!dxmt9::convert::formatHasDepthAspect(Format::Q16W16V16U16),
+        "Q16W16V16U16 has no depth aspect");
+
+  // CheckDeviceFormat outcomes mirror the analogs: D32_LOCKABLE accepts
+  // depth-stencil usage like D32F_LOCKABLE; Q16W16V16U16 is a sampleable
+  // color texture and rejects depth-stencil usage.
+  BackendLimits limits{};
+  limits.supportsDepth24Stencil8 = true;
+  limits.supportsDepth32FloatStencil8 = true;
+  Factory factory(limits);
+  checkEq(factory.checkDeviceFormat(0, Format::D32_LOCKABLE, UsageDepthStencil),
+          D3D_OK, "D32_LOCKABLE depth-stencil texture support");
+  checkEq(factory.checkDeviceFormat(0, Format::D32_LOCKABLE, UsageTexture), D3D_OK,
+          "D32_LOCKABLE texture usage support");
+  checkEq(factory.checkDeviceFormat(0, Format::Q16W16V16U16, UsageTexture), D3D_OK,
+          "Q16W16V16U16 texture usage support");
+  checkEq(factory.checkDeviceFormat(0, Format::Q16W16V16U16, UsageDepthStencil),
+          D3DERR_NOTAVAILABLE, "Q16W16V16U16 depth-stencil usage rejected");
+}
+
 void testHelpers() {
   const Viewport viewport{0, 0, 800, 600, 0.0f, 1.0f};
   const auto fixup = halfPixelFixup(viewport);
@@ -355,6 +428,7 @@ int main() {
     testFormatAndCaps();
     testSigned3DcAndUnsupportedFormatCaps();
     testVendorDepthPseudoFormats();
+    testD32LockableAndQ16W16V16U16Formats();
     testHelpers();
     testDeviceCPresentIntervalMapping();
     testRingArenaExhaustionFallsBack();

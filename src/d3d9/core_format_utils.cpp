@@ -208,6 +208,7 @@ bool encodeColor(Format format, ColorRGBA c, u8 *dst) {
   case Format::G32R32F:
   case Format::R32F:
   case Format::A16B16G16R16:
+  case Format::Q16W16V16U16:
   case Format::G16R16:
   case Format::A2R10G10B10:
   case Format::A2B10G10R10:
@@ -230,6 +231,7 @@ bool isDepthFormat(Format format) {
   case Format::D16:
   case Format::D32:
   case Format::D32F_LOCKABLE:
+  case Format::D32_LOCKABLE:
   case Format::D16_LOCKABLE:
   case Format::D24FS8:
   case Format::INTZ:
@@ -390,6 +392,7 @@ void fillDepthStencil(std::vector<u8> &bytes, u32 pitch, u32 width, u32 height,
       }
       case Format::D32:
       case Format::D32F_LOCKABLE:
+      case Format::D32_LOCKABLE:
       case Format::INTZ:
       case Format::DF24: {
         const u32 raw =
@@ -440,6 +443,7 @@ void fillDepthStencil(std::vector<u8> &bytes, u32 pitch, u32 width, u32 height,
       }
       case Format::D32:
       case Format::D32F_LOCKABLE:
+      case Format::D32_LOCKABLE:
       case Format::INTZ:
       case Format::DF24: {
         const u32 raw = std::bit_cast<u32>(currentDepth);

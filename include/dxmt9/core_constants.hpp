@@ -263,6 +263,11 @@ enum class Format : u32 {
   G32R32F,
   R32F,
   A16B16G16R16,
+  // 4x16-bit SIGNED normalized bump/color format. D3DFMT_Q16W16V16U16
+  // (code 110). Mirrors the unsigned A16B16G16R16 but is backed by the
+  // signed Metal pixel format MTLPixelFormatRGBA16Snorm. See
+  // specs/gap_d3d9.md §C.12 #7.
+  Q16W16V16U16,
   G16R16,
   A2R10G10B10,
   A2B10G10R10,
@@ -287,6 +292,10 @@ enum class Format : u32 {
   D16,
   D32,
   D32F_LOCKABLE,
+  // Lockable 32-bit depth. D3DFMT_D32_LOCKABLE (code 84). Metal has no
+  // 32-bit-int depth pixel format, so this mirrors D32F_LOCKABLE onto
+  // MTLPixelFormatDepth32Float. See specs/gap_d3d9.md §C.12 #7.
+  D32_LOCKABLE,
   D16_LOCKABLE,
   D15S1,
   D24X4S4,
@@ -326,6 +335,7 @@ enum class BackendPixelFormat : u32 {
   RG32Float,
   R32Float,
   RGBA16Unorm,
+  RGBA16Snorm,
   RG16Unorm,
   RGB10A2Unorm,
   BGR10A2Unorm,
