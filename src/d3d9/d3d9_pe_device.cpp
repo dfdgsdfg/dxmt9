@@ -622,7 +622,11 @@ class D3D9DeviceImpl final : public IDirect3DDevice9Ex, public D3D9PeRecorderFlu
         setRef(ps_, (IDirect3DPixelShader9*)nullptr);
         for (auto& s : streamSrc_)  setRef(s, (IDirect3DVertexBuffer9*)nullptr);
         setRef(indexBuf_, (IDirect3DIndexBuffer9*)nullptr);
-        setRef(vdecl_, (IDirect3DVertexDeclaration9*)nullptr);
+        /* vdecl_ is a borrowed pointer (Wine refcount semantics — see
+         * SetVertexDeclaration), so no Release here. The underlying
+         * decl is either user-owned (user keeps it alive while bound)
+         * or implicit-FVF and released via fvfDeclCache_ below. */
+        vdecl_ = nullptr;
         /* Drop the FVF→decl shadow cache. The map owns one ref per entry
          * (held since the cache miss in SetFVF created the decl). */
         for (auto& [fvf, decl] : fvfDeclCache_) {
@@ -3795,9 +3799,10 @@ public:
         /* SetFVF shadows the vertex-declaration slot: GetVertexDeclaration
          * must return the implicit decl for this FVF (Wine
          * test_vertex_declaration_fvf_policy line ~702 and
-         * test_fvf_decl_management). */
-        IDirect3DVertexDeclaration9* implicit = implicitDeclForFvf(fvf);
-        setRef(vdecl_, implicit);
+         * test_fvf_decl_management). vdecl_ is borrowed (see
+         * SetVertexDeclaration for Wine refcount semantics) — the
+         * implicit decl is kept alive by fvfDeclCache_. */
+        vdecl_ = implicitDeclForFvf(fvf);
         return S_OK;
     }
     HRESULT STDMETHODCALLTYPE GetFVF(DWORD* pFVF) noexcept override {
@@ -3848,7 +3853,17 @@ public:
             peState_.stateBlockVdeclRecorded = true;
         }
         if (vdecl_ == pVD) return S_OK;
-        setRef(vdecl_, pVD);
+        /* Wine semantics (test_get_set_vertex_declaration, device.c:376):
+         * SetVertexDeclaration must NOT touch the user-visible refcount
+         * of either the previous or the new decl. The user is required
+         * to keep the bound decl alive until they rebind or release the
+         * device. Internally Wine's wined3d still holds its own ref via
+         * wined3d_stateblock_set_vertex_declaration; the dxmt9 analogue
+         * is the C-side D9CVertexDecl handle held by the PE wrapper. So
+         * we store vdecl_ as a borrowed pointer and never AddRef/Release
+         * through this slot. FVF-implicit decls are kept alive by
+         * fvfDeclCache_ so they outlive any user-visible window. */
+        vdecl_ = pVD;
         /* Explicit decl resets FVF to 0 (Wine
          * test_vertex_declaration_fvf_policy line ~692). User-supplied
          * decls do not back-convert to an FVF in this PE shadow; that

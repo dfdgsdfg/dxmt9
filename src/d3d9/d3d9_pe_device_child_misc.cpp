@@ -292,8 +292,10 @@ class D3D9StateBlockImpl final : public IDirect3DStateBlock9 {
       }
     }
     if (saved_.hasVdecl) {
-      // SetVertexDeclaration AddRefs internally; saved_.vdecl retains its own
-      // ref until destructor (or next Capture).
+      // SetVertexDeclaration is borrowed (Wine refcount semantics —
+      // see d3d9_pe_device.cpp::SetVertexDeclaration). saved_.vdecl
+      // retains its own ref until destructor (or next Capture), which
+      // is what keeps the decl alive while the state block holds it.
       (void)device_->SetVertexDeclaration(saved_.vdecl);
     }
   }

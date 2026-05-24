@@ -61,7 +61,7 @@
   "get_rt_bounds_policy": "pass",
   "get_set_pixel_shader": "pass",
   "get_set_texture": "pass",
-  "get_set_vertex_declaration_refcount_policy": "fail",
+  "get_set_vertex_declaration_refcount_policy": "pass",
   "get_set_vertex_shader": "pass",
   "index_buffer_desc_binding_policy": "pass",
   "intz_depth_sampleable_texture_policy": "pass",

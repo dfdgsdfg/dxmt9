@@ -27,11 +27,11 @@ changes not yet visible upstream.
 
 | Field | Value |
 |-------|-------|
-| Commit | `a32fe260d6f3c26b4f32f32277d3433b7a1ca554` — **work tree dirty** |
-| Short  | `a32fe26` |
-| Tag / describe | `a32fe26` |
+| Commit | `620c784432ad4fc6a31800227ddc9b51e992d5fb` — **work tree dirty** |
+| Short  | `620c784` |
+| Tag / describe | `620c784` |
 | Author date | `2026-05-24` |
-| Subject | tests/conformance/d3d9: add 6 PE scaffolds — resource access (×2) / VB rw / QI base-ex (×2) / ex scene |
+| Subject | specs/gap_d3d9_wine_test: honest accounting for batch-1 fails |
 
 ### Wine reference revision
 
@@ -50,7 +50,7 @@ the same commit in the Wine checkout before opening the source.
 
 ```sh
 # Reproduce the inventory verbatim from a clean tree:
-git -C "$DXMT9_REPO" checkout a32fe260d6f3c26b4f32f32277d3433b7a1ca554
+git -C "$DXMT9_REPO" checkout 620c784432ad4fc6a31800227ddc9b51e992d5fb
 git -C "$WINE_REPO"  checkout 6e073d28dee3af7f4c965daec94644e0f9f92727
 python3 scripts/tools/gen_wine_d3d9_test_inventory.py
 ```
@@ -73,10 +73,10 @@ python3 scripts/tools/gen_wine_d3d9_test_inventory.py
 | Wine source | Tests | covered | scaffolded | partial | failing | other |
 |-------------|-----:|--------:|----------:|--------:|--------:|------:|
 | `visual.c` | 135 | 135 | 0 | 0 | 0 | 0 |
-| `device.c` | 105 | 98 | 4 | 0 | 3 | 0 |
+| `device.c` | 105 | 99 | 4 | 0 | 2 | 0 |
 | `d3d9ex.c` | 27 | 26 | 0 | 0 | 1 | 0 |
 | `stateblock.c` | 1 | 1 | 0 | 0 | 0 | 0 |
-| **TOTAL** | **268** | **260** | **4** | **0** | **4** | **0** |
+| **TOTAL** | **268** | **261** | **4** | **0** | **3** | **0** |
 
 `other` rolls up `deferred`, `partial/deferred`, and any UNTRACKED rows.
 
@@ -257,7 +257,7 @@ Source: [`dlls/d3d9/tests/device.c`](https://gitlab.winehq.org/wine/wine/-/blob/
 | `test_get_rt` | 3036 | ✅ | `test_get_rt_bounds_policy` |
 | `test_get_set_pixel_shader` | 7167 | ✅ | `test_get_set_pixel_shader` |
 | `test_get_set_texture` | 8196 | ✅ | `test_get_set_texture` |
-| `test_get_set_vertex_declaration` | 376 | 🔴 | `test_get_set_vertex_declaration_refcount_policy` |
+| `test_get_set_vertex_declaration` | 376 | ✅ | `test_get_set_vertex_declaration_refcount_policy` |
 | `test_get_set_vertex_shader` | 6966 | ✅ | `test_get_set_vertex_shader` |
 | `test_getdc` | 8991 | 📐 | `resource_getdc_lod_autogen_mipmap` |
 | `test_invalid_multisample` | 1198 | ✅ | `test_invalid_multisample_render_target_quality` |
