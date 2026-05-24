@@ -413,4 +413,28 @@ HResult Device::getRenderTargetData(const std::shared_ptr<Surface> &src,
   return updateSurface(src, dst);
 }
 
+HResult Device::reszDepthResolve(const std::shared_ptr<Surface> &msaaDepth,
+                                 const std::shared_ptr<Texture> &intzDest) {
+  // R-FORMAT-11 — RESZ is fire-and-forget on real hardware: a missing or
+  // invalid binding is a benign no-op rather than an error (mirrors the PE
+  // emit's no-op guard in requestReszDepthResolve).
+  if (!msaaDepth || !intzDest || !msaaDepth->valid()) {
+    return D3D_OK;
+  }
+  // The INTZ destination is the stage-0 texture; resolve writes into its
+  // level-0 surface, whose handle resolves through the same surface table the
+  // encoder reads (encodeDepthResolve calls findSurface on both endpoints).
+  auto intzSurface = intzDest->surfaceLevel(0);
+  if (!intzSurface || !intzSurface->valid()) {
+    return D3D_OK;
+  }
+  if (backend_) {
+    DepthResolveDesc backendDesc;
+    backendDesc.msaaDepth = msaaDepth->handle();
+    backendDesc.intzDest = intzSurface->handle();
+    upperDevice_->submitDepthResolve(backendDesc);
+  }
+  return D3D_OK;
+}
+
 } // namespace dxmt9::core

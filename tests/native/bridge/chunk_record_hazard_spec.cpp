@@ -68,12 +68,23 @@ void testResourceRetentionDerivationFromSurfaceAndReadbackRecords() {
   readback.srcWire = 0x6000u;
   readback.dstWire = 0x6008u;
 
+  // R-FORMAT-11: RESZ depth-resolve retains its MSAA depth source as a
+  // surface and its INTZ destination as a texture (the two-handle shape
+  // mirrors Readback, but the destination kind differs — RESZ writes the
+  // resolved depth into the stage-0 INTZ texture).
+  D9CCommandRecordReszDepthResolve resz{};
+  resz.header.type = D9C_COMMAND_RECORD_RESZ_DEPTH_RESOLVE;
+  resz.header.size = sizeof(resz);
+  resz.msaaDepthHandle = 0x7000u;
+  resz.intzDestHandle = 0x7008u;
+
   std::vector<std::uint8_t> bytes;
   appendRecord(bytes, stretch);
   appendRecord(bytes, updateTexture);
   appendRecord(bytes, readback);
+  appendRecord(bytes, resz);
 
-  const auto chunk = makeImportedChunkView(bytes.data(), static_cast<std::uint32_t>(bytes.size()), 3u);
+  const auto chunk = makeImportedChunkView(bytes.data(), static_cast<std::uint32_t>(bytes.size()), 4u);
   ImportedChunkHandleSet handles;
   std::uint32_t offset = 0;
   std::uint32_t index = 0;
@@ -85,16 +96,18 @@ void testResourceRetentionDerivationFromSurfaceAndReadbackRecords() {
     offset = record->nextOffset();
     index = record->nextIndex();
   }
-  checkEq(index, 3u, "surface/readback retention parsed all records");
+  checkEq(index, 4u, "surface/readback retention parsed all records");
 
   const auto entries = makeImportedChunkHandleEntries(handles);
-  checkEq(entries.size(), static_cast<std::size_t>(6), "surface/readback retention includes all unique resources");
+  checkEq(entries.size(), static_cast<std::size_t>(8), "surface/readback retention includes all unique resources");
   check(containsHandle(entries, D9C_CHUNK_HANDLE_KIND_SURFACE, 0x4000u), "stretch source retained");
   check(containsHandle(entries, D9C_CHUNK_HANDLE_KIND_SURFACE, 0x4008u), "stretch destination retained");
   check(containsHandle(entries, D9C_CHUNK_HANDLE_KIND_TEXTURE, 0x5000u), "update texture source retained");
   check(containsHandle(entries, D9C_CHUNK_HANDLE_KIND_TEXTURE, 0x5008u), "update texture destination retained");
   check(containsHandle(entries, D9C_CHUNK_HANDLE_KIND_SURFACE, 0x6000u), "readback source retained");
   check(containsHandle(entries, D9C_CHUNK_HANDLE_KIND_SURFACE, 0x6008u), "readback destination retained");
+  check(containsHandle(entries, D9C_CHUNK_HANDLE_KIND_SURFACE, 0x7000u), "RESZ MSAA depth source retained as surface");
+  check(containsHandle(entries, D9C_CHUNK_HANDLE_KIND_TEXTURE, 0x7008u), "RESZ INTZ destination retained as texture");
 }
 
 void testResourceRetentionDerivationFromApplyStateRecords() {
@@ -208,16 +221,27 @@ void testImportedSurfaceOperationHazardsPreserveReadWriteIntent() {
   readback.srcWire = 0x4500u;
   readback.dstWire = 0x4508u;
 
+  // R-FORMAT-11: RESZ depth-resolve reads its MSAA depth source surface and
+  // writes its INTZ destination texture. The read/write split orders a later
+  // INTZ sample after the resolve (RAW); the destination's TEXTURE kind (not
+  // SURFACE) distinguishes it from the StretchRect/Readback shape.
+  D9CCommandRecordReszDepthResolve resz{};
+  resz.header.type = D9C_COMMAND_RECORD_RESZ_DEPTH_RESOLVE;
+  resz.header.size = sizeof(resz);
+  resz.msaaDepthHandle = 0x4600u;
+  resz.intzDestHandle = 0x4608u;
+
   std::vector<std::uint8_t> bytes;
   appendRecord(bytes, stretch);
   appendRecord(bytes, updateSurface);
   appendRecord(bytes, colorFill);
   appendRecord(bytes, updateTexture);
   appendRecord(bytes, readback);
+  appendRecord(bytes, resz);
 
   const auto chunk = makeImportedChunkView(bytes.data(),
                                            static_cast<std::uint32_t>(bytes.size()),
-                                           5u);
+                                           6u);
   std::uint32_t offset = 0;
   std::uint32_t index = 0;
   const auto nextHazards = [&](std::uint32_t type) {
@@ -288,7 +312,19 @@ void testImportedSurfaceOperationHazardsPreserveReadWriteIntent() {
         "readback hazard reads source surface");
   check(containsHandle(writes, D9C_CHUNK_HANDLE_KIND_SURFACE, 0x4508u),
         "readback hazard writes destination surface");
-  checkEq(index, 5u, "surface operation hazards consumed all records");
+
+  hazards = nextHazards(D9C_COMMAND_RECORD_RESZ_DEPTH_RESOLVE);
+  reads = makeImportedChunkHandleEntries(hazards.reads);
+  writes = makeImportedChunkHandleEntries(hazards.writes);
+  checkEq(reads.size(), static_cast<std::size_t>(1),
+          "RESZ depth-resolve hazard has one read surface");
+  checkEq(writes.size(), static_cast<std::size_t>(1),
+          "RESZ depth-resolve hazard has one write texture");
+  check(containsHandle(reads, D9C_CHUNK_HANDLE_KIND_SURFACE, 0x4600u),
+        "RESZ depth-resolve hazard reads MSAA depth source surface");
+  check(containsHandle(writes, D9C_CHUNK_HANDLE_KIND_TEXTURE, 0x4608u),
+        "RESZ depth-resolve hazard writes INTZ destination texture");
+  checkEq(index, 6u, "surface operation hazards consumed all records");
 }
 
 void testImportedReplayOrderingDecisionsAreDataDriven() {

@@ -913,6 +913,17 @@ bool nextDepthOperationIsClear(const core::ChunkSlot& slot,
           return false;
         }
         break;
+      case Kind::DepthResolve:
+        // R-FORMAT-11: a later RESZ resolve reads the MSAA depth surface as
+        // its source (and writes the INTZ destination). If either endpoint is
+        // this depth handle its tile contents must survive — force a Store
+        // exactly like the StretchRect/Readback depth-touch cases above.
+        if (next.depthResolve &&
+            (next.depthResolve->msaaDepth == depthHandle ||
+             next.depthResolve->intzDest == depthHandle)) {
+          return false;
+        }
+        break;
       case Kind::Present:
         // R-BACK-15.13: a Present in this chunk implies the frame may
         // persist depth state across the chunk boundary. Don't return
@@ -3176,6 +3187,27 @@ std::optional<core::metalqueue::QueueSubmissionRecord> encodeChunk(
         // R-BACK-15.5: destination receives content; source is unaffected
         ctx.queue.invalidateColorHandle(command.readback->destination);
         dxmt9::encoders::encodeReadback(commandBuffer, ctx.pool, *command.readback);
+        assertNoActiveEncoder();
+        commandBufferHasWork = true;
+        break;
+      }
+      case Kind::DepthResolve: {
+        if (!command.depthResolve) break;
+        flushPendingClear();
+        // RESZ depth resolve is the DEPTH twin of the color StretchRect
+        // resolve — reuse its split-reason bucket rather than expand the
+        // perf-counter table for a rarely-hit op.
+        flushRender(perf::EncoderSplitReason::StretchRect);
+        assertHelperEncoderPrecondition();
+        // R-FORMAT-11 — RESZ MSAA depth resolve. The DEPTH twin of the color
+        // resolve already wired in encodeStretchRect/encodeColorFill: open a
+        // depth-only render pass with store=MultisampleResolve and end it. The
+        // INTZ destination's contents are overwritten, so it qualifies as
+        // first-use again (R-BACK-15.5).
+        ctx.queue.invalidateColorHandle(command.depthResolve->intzDest);
+        dxmt9::encoders::encodeDepthResolve(commandBuffer, ctx.pool,
+                                            command.depthResolve->msaaDepth,
+                                            command.depthResolve->intzDest);
         assertNoActiveEncoder();
         commandBufferHasWork = true;
         break;

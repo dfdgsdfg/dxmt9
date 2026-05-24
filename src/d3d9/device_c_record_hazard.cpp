@@ -236,6 +236,14 @@ void collectImportedRecordResourceHandles(
     appendImportedChunkHandle(handles, D9C_CHUNK_HANDLE_KIND_SURFACE, decoded.dstWire);
     break;
   }
+  case D9C_COMMAND_RECORD_RESZ_DEPTH_RESOLVE: {
+    // R-FORMAT-11: MSAA depth source is a surface, INTZ destination a texture.
+    D9CCommandRecordReszDepthResolve decoded{};
+    std::memcpy(&decoded, record.record, sizeof(decoded));
+    appendImportedChunkHandle(handles, D9C_CHUNK_HANDLE_KIND_SURFACE, decoded.msaaDepthHandle);
+    appendImportedChunkHandle(handles, D9C_CHUNK_HANDLE_KIND_TEXTURE, decoded.intzDestHandle);
+    break;
+  }
   default:
     break;
   }
@@ -305,6 +313,15 @@ void collectImportedRecordResourceHazards(
     std::memcpy(&decoded, record.record, sizeof(decoded));
     appendImportedChunkHandle(hazards.reads, D9C_CHUNK_HANDLE_KIND_SURFACE, decoded.srcWire);
     appendImportedChunkHandle(hazards.writes, D9C_CHUNK_HANDLE_KIND_SURFACE, decoded.dstWire);
+    break;
+  }
+  case D9C_COMMAND_RECORD_RESZ_DEPTH_RESOLVE: {
+    // R-FORMAT-11: read the MSAA depth source surface, write the INTZ
+    // destination texture so a later INTZ sample orders after the resolve.
+    D9CCommandRecordReszDepthResolve decoded{};
+    std::memcpy(&decoded, record.record, sizeof(decoded));
+    appendImportedChunkHandle(hazards.reads, D9C_CHUNK_HANDLE_KIND_SURFACE, decoded.msaaDepthHandle);
+    appendImportedChunkHandle(hazards.writes, D9C_CHUNK_HANDLE_KIND_TEXTURE, decoded.intzDestHandle);
     break;
   }
   default:

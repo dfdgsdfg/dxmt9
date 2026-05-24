@@ -894,6 +894,15 @@ void Pool::markColorFillResources(const core::ColorFillDesc& desc, u64 seqId) {
   markSurfaceUse(desc.destination, seqId);
 }
 
+void Pool::markDepthResolveResources(const core::DepthResolveDesc& desc, u64 seqId) {
+  // R-FORMAT-11: both endpoints resolve through the surface table — the
+  // encoder calls findSurface() on each (msaaDepth = render-pass depth
+  // texture, intzDest = the INTZ texture's level-0 surface used as the
+  // resolve target). Mirrors markStretchResources / markReadbackResources.
+  markSurfaceUse(desc.msaaDepth, seqId);
+  markSurfaceUse(desc.intzDest, seqId);
+}
+
 bool Pool::uploadBufferData(u64 handleValue, const std::uint8_t* bytes, std::size_t byteCount) {
   auto* record = findBuffer(handleValue);
   if (!record) {

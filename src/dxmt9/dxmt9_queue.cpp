@@ -138,6 +138,10 @@ ChunkObservation makeChunkObservation(const MetalCommandView& command,
       };
     case MetalCommandKind::SurfaceCopy:
     case MetalCommandKind::Readback:
+    // R-FORMAT-11: RESZ depth resolve runs on a short-lived helper render
+    // encoder with no draws — classify it as a Blit observation like the
+    // other helper-encoder surface ops.
+    case MetalCommandKind::DepthResolve:
       return ChunkObservation{
           .kind = ChunkObservationKind::Blit,
           .compatFlags = 0,

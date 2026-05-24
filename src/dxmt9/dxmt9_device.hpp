@@ -144,6 +144,7 @@ class Device {
   virtual void submitStretchRect(const core::StretchRectDesc&) {}
   virtual void submitReadback(const core::ReadbackDesc&) {}
   virtual void submitColorFill(const core::ColorFillDesc&) {}
+  virtual void submitDepthResolve(const core::DepthResolveDesc&) {}
   virtual void present(const core::SwapDesc&) {}
   virtual void flush() {}
   virtual core::HResult waitForVBlank(const core::SwapDesc&) { return core::HResult{0}; }

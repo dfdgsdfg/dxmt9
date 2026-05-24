@@ -877,6 +877,23 @@ private:
                     static_cast<std::uintptr_t>(decoded.dstWire)), acquired);
             return true;
         }
+        case D9C_COMMAND_RECORD_RESZ_DEPTH_RESOLVE: {
+            // R-FORMAT-11: retain the MSAA depth source as a surface and the
+            // INTZ destination as a texture (mirrors Readback's two-handle
+            // retention, but the destination is a D9CTexture*).
+            if (wireRecord.payloadSize < sizeof(D9CCommandRecordReszDepthResolve)) {
+                return false;
+            }
+            D9CCommandRecordReszDepthResolve decoded{};
+            std::memcpy(&decoded, recordPayload, sizeof(decoded));
+            chunk_.retainer.retainSurface(
+                reinterpret_cast<D9CSurface*>(
+                    static_cast<std::uintptr_t>(decoded.msaaDepthHandle)), acquired);
+            chunk_.retainer.retainTexture(
+                reinterpret_cast<D9CTexture*>(
+                    static_cast<std::uintptr_t>(decoded.intzDestHandle)), acquired);
+            return true;
+        }
         default:
             return true;
         }
@@ -996,6 +1013,20 @@ private:
                    appendRecordWireHandleFrom(
                        handles, firstHandle, D9C_CHUNK_HANDLE_KIND_SURFACE,
                        decoded.dstWire);
+        }
+        case D9C_COMMAND_RECORD_RESZ_DEPTH_RESOLVE: {
+            // R-FORMAT-11: MSAA depth source surface + INTZ destination texture.
+            if (wireRecord.payloadSize < sizeof(D9CCommandRecordReszDepthResolve)) {
+                return false;
+            }
+            D9CCommandRecordReszDepthResolve decoded{};
+            std::memcpy(&decoded, recordPayload, sizeof(decoded));
+            return appendRecordWireHandleFrom(
+                       handles, firstHandle, D9C_CHUNK_HANDLE_KIND_SURFACE,
+                       decoded.msaaDepthHandle) &&
+                   appendRecordWireHandleFrom(
+                       handles, firstHandle, D9C_CHUNK_HANDLE_KIND_TEXTURE,
+                       decoded.intzDestHandle);
         }
         default:
             return true;

@@ -968,6 +968,9 @@ void markSlotResourcesUnlocked(resources::Pool& pool, const core::ChunkSlot& slo
       case core::MetalCommandKind::ColorFill:
         if (command.colorFill) pool.markColorFillResources(*command.colorFill, slot.seqId);
         break;
+      case core::MetalCommandKind::DepthResolve:
+        if (command.depthResolve) pool.markDepthResolveResources(*command.depthResolve, slot.seqId);
+        break;
       case core::MetalCommandKind::Present:
         if (command.present && command.present->presentSource) {
           if (auto* surface = pool.findSurface(command.present->presentSource.value)) {
@@ -1109,6 +1112,17 @@ void CommandQueue::submitColorFill(const core::ColorFillDesc& desc) {
   currentSlotUnlocked(*this).appendColorFill(desc);
   currentBackBuffer_ = desc.destination;
   pool_.markColorFillResources(desc, seqIdForMark(*this, 0));
+}
+
+void CommandQueue::submitDepthResolve(const core::DepthResolveDesc& desc) {
+  // R-FORMAT-11 — RESZ MSAA depth resolve. Fire-and-forget surface op:
+  // append the command + mark both endpoints, mirroring submitColorFill.
+  // The destination is the INTZ depth texture, not the present back buffer,
+  // so currentBackBuffer_ is left untouched.
+  std::unique_lock lock(mutex_);
+  ensureWritingSlotUnlocked(*this, lock);
+  currentSlotUnlocked(*this).appendDepthResolve(desc);
+  pool_.markDepthResolveResources(desc, seqIdForMark(*this, 0));
 }
 
 std::uint64_t CommandQueue::submitPresent(const core::SwapDesc& desc) {

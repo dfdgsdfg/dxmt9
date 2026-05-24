@@ -1017,6 +1017,29 @@ extern "C" int32_t dxmt9c_device_commit_chunk(D9CDevice* d, const D9CCommandChun
       hr = dxmt9c_device_get_render_target_data(d, srcSurf, dstSurf);
       break;
     }
+    case D9C_COMMAND_RECORD_RESZ_DEPTH_RESOLVE: {
+      // R-FORMAT-11 — RESZ MSAA depth resolve. Mirrors the StretchRect /
+      // Readback two-handle decode: msaaDepthHandle is a SERVER-SIDE
+      // D9CSurface* (the bound multisampled depth source), intzDestHandle a
+      // SERVER-SIDE D9CTexture* (the stage-0 INTZ destination). Canonicalize
+      // each wrapper to its core object and submit through the same backend
+      // queue path StretchRect uses — Device::reszDepthResolve builds the
+      // DepthResolveDesc (surface handle + the INTZ texture's level-0 surface
+      // handle) and submits it. This is server-local: RESZ is record-only, so
+      // unlike Readback it needs no dxmt9c_* PE bridge entry / ABI-hash slot.
+      // Fire-and-forget — a missing binding resolves to a benign no-op inside
+      // reszDepthResolve, matching real-hardware RESZ behavior.
+      D9CCommandRecordReszDepthResolve resz{};
+      std::memcpy(&resz, record, sizeof(resz));
+      auto* msaaDepth = wireValuePtr<D9CSurface>(resz.msaaDepthHandle);
+      auto* intzDest = wireValuePtr<D9CTexture>(resz.intzDestHandle);
+      // Null wrappers are a benign no-op (fire-and-forget); the PE side
+      // already suppresses emitting a record when either binding is absent.
+      hr = (msaaDepth && intzDest)
+               ? d->dev().reszDepthResolve(msaaDepth->obj, intzDest->obj)
+               : dxmt9::core::D3D_OK;
+      break;
+    }
     case D9C_COMMAND_RECORD_APPLY_STATE: {
       D9CCommandRecordApplyState as{};
       std::memcpy(&as, record, sizeof(as));

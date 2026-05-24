@@ -238,7 +238,14 @@ void testChunkSlotSimpleCommandSoAViews() {
   present.interval = PresentInterval::Immediate;
   slot.appendPresent(present, Handle{0xa0a0});
 
-  checkEq(slot.commandCount(), std::size_t{6},
+  // R-FORMAT-11: RESZ depth resolve appended after Present so the existing
+  // indices above are unchanged; it is its own command kind / payload array.
+  DepthResolveDesc depthResolve{};
+  depthResolve.msaaDepth = Handle{0xb0b0};
+  depthResolve.intzDest = Handle{0xc0c0};
+  slot.appendDepthResolve(depthResolve);
+
+  checkEq(slot.commandCount(), std::size_t{7},
           "slot simple command appends produce one command header each");
   checkEq(slot.clearRecords.size(), std::size_t{1},
           "slot simple command append stores one clear payload");
@@ -252,6 +259,8 @@ void testChunkSlotSimpleCommandSoAViews() {
           "slot simple command append stores one color-fill payload");
   checkEq(slot.presentRecords.size(), std::size_t{1},
           "slot simple command append stores one present payload");
+  checkEq(slot.depthResolveRecords.size(), std::size_t{1},
+          "slot simple command append stores one depth-resolve payload");
 
   for (const auto& header : slot.commandHeaders) {
     checkEq(header.payloadIndex, 0u,
@@ -303,6 +312,16 @@ void testChunkSlotSimpleCommandSoAViews() {
           "slot present payload preserves present desc");
   checkEq(presentView.present->presentSource, Handle{0xa0a0},
           "slot present payload preserves explicit source");
+
+  const auto depthResolveView = slot.commandAt(6);
+  checkEq(depthResolveView.kind, MetalCommandKind::DepthResolve,
+          "slot depth-resolve view reports command kind");
+  check(depthResolveView.depthResolve != nullptr,
+        "slot depth-resolve view resolves payload");
+  checkEq(depthResolveView.depthResolve->msaaDepth, Handle{0xb0b0},
+          "slot depth-resolve payload preserves MSAA depth source handle");
+  checkEq(depthResolveView.depthResolve->intzDest, Handle{0xc0c0},
+          "slot depth-resolve payload preserves INTZ destination handle");
 
   slot.clearCommands();
   check(slot.commandsEmpty(), "slot clearCommands removes command headers");

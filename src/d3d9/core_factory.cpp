@@ -155,6 +155,10 @@ public:
     if (backend_)
       backend_->submitColorFill(desc);
   }
+  void submitDepthResolve(const DepthResolveDesc &desc) override {
+    if (backend_)
+      backend_->submitDepthResolve(desc);
+  }
   void present(const SwapDesc &desc) override {
     if (backend_)
       backend_->present(desc);

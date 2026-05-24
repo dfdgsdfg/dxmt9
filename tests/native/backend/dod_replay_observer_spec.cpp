@@ -263,6 +263,12 @@ std::vector<QueueReplayObservation> observeQueueReplay(const ChunkSlot &slot) {
           command.colorFill ? command.colorFill->destination : Handle{};
       observation.orderingBoundary = true;
       break;
+    case MetalCommandKind::DepthResolve:
+      observation.category = QueueReplayCategory::Blit;
+      observation.primaryHandle =
+          command.depthResolve ? command.depthResolve->intzDest : Handle{};
+      observation.orderingBoundary = true;
+      break;
     case MetalCommandKind::Present:
       observation.category = QueueReplayCategory::Present;
       observation.primaryHandle =

@@ -979,6 +979,7 @@ class BackendDevice {
   virtual void submitStretchRect(const StretchRectDesc& desc) { (void)desc; }
   virtual void submitReadback(const ReadbackDesc& desc) { (void)desc; }
   virtual void submitColorFill(const ColorFillDesc& desc) { (void)desc; }
+  virtual void submitDepthResolve(const DepthResolveDesc& desc) { (void)desc; }
   virtual void present(const SwapDesc& desc) { (void)desc; }
   virtual void setDeviceLostObserver(DeviceLostObserver observer) { (void)observer; }
   virtual void setPresentationStatusObserver(PresentationStatusObserver observer) { (void)observer; }
@@ -1453,6 +1454,13 @@ class Device : public std::enable_shared_from_this<Device> {
   HResult updateSurface(const std::shared_ptr<Surface>& src, const std::shared_ptr<Surface>& dst);
   HResult updateTexture(const std::shared_ptr<Texture>& src, const std::shared_ptr<Texture>& dst);
   HResult getRenderTargetData(const std::shared_ptr<Surface>& src, const std::shared_ptr<Surface>& dst);
+  // R-FORMAT-11 — RESZ MSAA depth resolve. `msaaDepth` is the bound
+  // multisampled depth-stencil surface; `intzDest` is the stage-0 INTZ
+  // destination texture. Builds a DepthResolveDesc from the surface handle +
+  // the texture's level-0 surface handle and submits it to the backend
+  // queue, mirroring stretchRect's submit path. Fire-and-forget surface op.
+  HResult reszDepthResolve(const std::shared_ptr<Surface>& msaaDepth,
+                           const std::shared_ptr<Texture>& intzDest);
 
  private:
   struct ExperimentCaptureConfig {

@@ -18,6 +18,7 @@ enum class MetalCommandKind : std::uint8_t {
   StretchRect,
   Readback,
   ColorFill,
+  DepthResolve,
   Present,
 };
 
@@ -57,6 +58,7 @@ struct MetalCommandView {
   const StretchRectDesc* stretchRect = nullptr;
   const ReadbackDesc* readback = nullptr;
   const ColorFillDesc* colorFill = nullptr;
+  const DepthResolveDesc* depthResolve = nullptr;
   const PresentCommandRecord* present = nullptr;
 };
 
@@ -171,6 +173,7 @@ struct ChunkSlot {
   std::vector<StretchRectDesc> stretchRectRecords;
   std::vector<ReadbackDesc> readbackRecords;
   std::vector<ColorFillDesc> colorFillRecords;
+  std::vector<DepthResolveDesc> depthResolveRecords;
   std::vector<PresentCommandRecord> presentRecords;
 
   bool commandsEmpty() const noexcept {
@@ -199,6 +202,7 @@ struct ChunkSlot {
     stretchRectRecords.clear();
     readbackRecords.clear();
     colorFillRecords.clear();
+    depthResolveRecords.clear();
     presentRecords.clear();
   }
 
@@ -510,6 +514,10 @@ struct ChunkSlot {
     appendCommandRecord(MetalCommandKind::ColorFill, colorFillRecords, colorFill);
   }
 
+  void appendDepthResolve(const DepthResolveDesc& depthResolve) {
+    appendCommandRecord(MetalCommandKind::DepthResolve, depthResolveRecords, depthResolve);
+  }
+
   void appendPresent(const SwapDesc& present, Handle presentSource) {
     appendCommandRecord(MetalCommandKind::Present, presentRecords, PresentCommandRecord{
         .present = present,
@@ -567,6 +575,9 @@ struct ChunkSlot {
       break;
     case MetalCommandKind::ColorFill:
       if (payloadIndex < colorFillRecords.size()) view.colorFill = &colorFillRecords[payloadIndex];
+      break;
+    case MetalCommandKind::DepthResolve:
+      if (payloadIndex < depthResolveRecords.size()) view.depthResolve = &depthResolveRecords[payloadIndex];
       break;
     case MetalCommandKind::Present:
       if (payloadIndex < presentRecords.size()) view.present = &presentRecords[payloadIndex];

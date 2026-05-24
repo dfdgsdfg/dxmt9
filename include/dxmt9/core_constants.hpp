@@ -1199,6 +1199,16 @@ struct ColorFillDesc {
   ColorRGBA color{};
 };
 
+// R-FORMAT-11 — RESZ multisample depth resolve. `msaaDepth` is the bound
+// multisampled depth-stencil surface; `intzDest` is the INTZ destination
+// (the stage-0 INTZ texture's level-0 surface handle). Both resolve through
+// the resource pool's surface table — the encoder binds `msaaDepth` as the
+// render-pass depth `texture` and `intzDest` as its `resolve_texture`.
+struct DepthResolveDesc {
+  Handle msaaDepth{};
+  Handle intzDest{};
+};
+
 const std::vector<FormatInfo>& formatTable();
 const FormatInfo* findFormatInfo(Format format);
 FormatClass classifyFormat(Format format);

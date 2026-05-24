@@ -506,6 +506,7 @@ struct Pool {
   void markStretchResources(const core::StretchRectDesc& desc, u64 seqId);
   void markReadbackResources(const core::ReadbackDesc& desc, u64 seqId);
   void markColorFillResources(const core::ColorFillDesc& desc, u64 seqId);
+  void markDepthResolveResources(const core::DepthResolveDesc& desc, u64 seqId);
 
  private:
   detail::HandleArena<BufferRecord, detail::ResourceHandleKind::Buffer> bufferArena_;

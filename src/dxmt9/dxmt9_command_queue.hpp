@@ -149,6 +149,7 @@ class CommandQueue {
   void submitStretchRect(const core::StretchRectDesc& desc);
   void submitReadback(const core::ReadbackDesc& desc);
   void submitColorFill(const core::ColorFillDesc& desc);
+  void submitDepthResolve(const core::DepthResolveDesc& desc);
   // submitPresent / presentBoundary are the present surface today; any
   // future PresenterSlot registry (CommandQueue-owned table mapping a
   // PresentId → Presenter* with slot reuse + per-slot generation counter,
