@@ -27,11 +27,11 @@ changes not yet visible upstream.
 
 | Field | Value |
 |-------|-------|
-| Commit | `68cbfd54343261bab10ea5f2e36034050aefdd8c` — **work tree dirty** |
-| Short  | `68cbfd5` |
-| Tag / describe | `68cbfd5` |
+| Commit | `cc5dacd37d2c878a57c2e02caff5de572dd3c79a` — **work tree dirty** |
+| Short  | `cc5dacd` |
+| Tag / describe | `cc5dacd` |
 | Author date | `2026-05-24` |
-| Subject | d3d9 validateVertexElements: return E_FAIL for misaligned offsets (Wine parity) |
+| Subject | d3d9 test_resource_access (base): gate DEFAULT-pool LockRect on USAGE_DYNAMIC |
 
 ### Wine reference revision
 
@@ -50,7 +50,7 @@ the same commit in the Wine checkout before opening the source.
 
 ```sh
 # Reproduce the inventory verbatim from a clean tree:
-git -C "$DXMT9_REPO" checkout 68cbfd54343261bab10ea5f2e36034050aefdd8c
+git -C "$DXMT9_REPO" checkout cc5dacd37d2c878a57c2e02caff5de572dd3c79a
 git -C "$WINE_REPO"  checkout 6e073d28dee3af7f4c965daec94644e0f9f92727
 python3 scripts/tools/gen_wine_d3d9_test_inventory.py
 ```
@@ -74,9 +74,9 @@ python3 scripts/tools/gen_wine_d3d9_test_inventory.py
 |-------------|-----:|--------:|----------:|--------:|--------:|------:|
 | `visual.c` | 135 | 135 | 0 | 0 | 0 | 0 |
 | `device.c` | 105 | 101 | 4 | 0 | 0 | 0 |
-| `d3d9ex.c` | 27 | 26 | 0 | 0 | 1 | 0 |
+| `d3d9ex.c` | 27 | 27 | 0 | 0 | 0 | 0 |
 | `stateblock.c` | 1 | 1 | 0 | 0 | 0 | 0 |
-| **TOTAL** | **268** | **263** | **4** | **0** | **1** | **0** |
+| **TOTAL** | **268** | **264** | **4** | **0** | **0** | **0** |
 
 `other` rolls up `deferred`, `partial/deferred`, and any UNTRACKED rows.
 
@@ -355,7 +355,7 @@ Source: [`dlls/d3d9/tests/d3d9ex.c`](https://gitlab.winehq.org/wine/wine/-/blob/
 | `test_reset` | 888 | ✅ | `test_reset_hresult_matrix_policy` |
 | `test_reset_ex` | 1420 | ✅ | `test_ex_adapter_mode_enum_bounds`, `test_ex_create_reset_mode_validation` |
 | `test_reset_resources` | 1843 | ✅ | `test_reset_resources_policy` |
-| `test_resource_access` | 4229 | 🔴 | `test_resource_access_ex_pool_policy` |
+| `test_resource_access` | 4229 | ✅ | `test_resource_access_ex_pool_policy` |
 | `test_scene` | 5031 | ✅ | `test_scene_ex_begin_end_policy` |
 | `test_swapchain_get_displaymode_ex` | 432 | ✅ | `test_ex_swapchain_display_mode`, `test_ex_swapchain_display_mode_null_rotation`, `test_swapchain_get_display_mode_ex_policy` |
 | `test_swapchain_parameters` | 3655 | ✅ | `test_ex_create_reset_mode_validation` |

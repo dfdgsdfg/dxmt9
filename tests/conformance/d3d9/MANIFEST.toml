@@ -5828,14 +5828,14 @@ area = "resources-ex"
 owner = "core/resources"
 requirements = ["R-TEST-12.3"]
 acceptance = ["Under D3D9Ex, D3DPOOL_DEFAULT + 0 usage colour texture is created OK and the level-0 surface IS lockable (Ex relaxes the base d3d9 default-pool rule)", "D3DPOOL_MANAGED is rejected outright by an Ex device's CreateTexture (D3DERR_INVALIDCALL)", "D3DPOOL_SYSTEMMEM + 0 usage colour texture is still permitted and lockable", "D3DPOOL_DEFAULT + D3DUSAGE_DYNAMIC colour texture is created OK and lockable. Depth-format and ATI2N rows of the Wine matrix are left to vendor-policy probes."]
-status = "failing"
+status = "partial"
 
 [[case.evidence]]
 lane = "builtin"
 arch = "x64"
-status = "failing"
+status = "passing"
 source = "tests/conformance/d3d9/evidence/sikarugir-cx-24.0.7-builtin-x64.json:1"
-summary = "Sikarugir-CX 24.0.7 builtin lane x64 2026-05-24 — failing in chunked runner snapshot. dxmt9 accepts CreateTexture(POOL_MANAGED) on an Ex device (S_OK) where the Wine/MSDN oracle requires D3DERR_INVALIDCALL — Ex must reject MANAGED outright. The other Ex rows pass."
+summary = "Sikarugir-CX 24.0.7 builtin lane x64 2026-05-24 — passing in chunked runner snapshot. The Ex-pool gate now rejects D3DPOOL_MANAGED on Ex devices in CreateTexture / CreateVolumeTexture / CreateCubeTexture (extended_ + pool == D3DPOOL_MANAGED -> D3DERR_INVALIDCALL). Wine d3d9ex.c:test_resource_access marks every MANAGED row valid=FALSE. The other Ex rows (DEFAULT + 0, SYSTEMMEM, DYNAMIC) are unchanged."
 
 [[case]]
 executable = "dxmt9-d3d9-conformance.exe"

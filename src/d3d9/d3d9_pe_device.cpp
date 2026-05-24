@@ -2270,6 +2270,13 @@ public:
         if (!ppTex) return D3DERR_INVALIDCALL;
         *ppTex = nullptr;
         if (isUnknownFormat(fmt)) return D3DERR_INVALIDCALL;
+        // Wine D3D9Ex contract from dlls/d3d9/tests/d3d9ex.c
+        // test_resource_access: D3DPOOL_MANAGED is rejected outright on
+        // Ex devices (every MANAGED row in the matrix is marked
+        // valid=FALSE, regardless of usage / format). Scaffold:
+        // tests/conformance/d3d9/d3d9_conformance_device.c
+        // test_resource_access_ex_pool_policy.
+        if (extended_ && pool == D3DPOOL_MANAGED) return D3DERR_INVALIDCALL;
         const HRESULT sharedHr = validateSharedHandleForTexture(extended_, psh, pool, levels, true);
         if (FAILED(sharedHr)) return sharedHr;
         // T4 (D3D9Ex shared-handle, SYSTEMMEM partial): SYSTEMMEM 1-mip
@@ -2316,6 +2323,9 @@ public:
         if (!ppTex) return D3DERR_INVALIDCALL;
         *ppTex = nullptr;
         if (isUnknownFormat(fmt)) return D3DERR_INVALIDCALL;
+        // Wine D3D9Ex contract: see CreateTexture above — MANAGED pool
+        // is rejected outright on Ex devices.
+        if (extended_ && pool == D3DPOOL_MANAGED) return D3DERR_INVALIDCALL;
         const HRESULT sharedHr = validateSharedHandleForTexture(extended_, psh, pool, levels, false);
         if (FAILED(sharedHr)) return sharedHr;
         dxmt9DeviceDebugLog("device_create_volume_texture device=%p size=%ux%ux%u levels=%u usage=0x%x fmt=%u pool=%u",
@@ -2337,6 +2347,9 @@ public:
         if (!ppTex) return D3DERR_INVALIDCALL;
         *ppTex = nullptr;
         if (isUnknownFormat(fmt)) return D3DERR_INVALIDCALL;
+        // Wine D3D9Ex contract: see CreateTexture above — MANAGED pool
+        // is rejected outright on Ex devices.
+        if (extended_ && pool == D3DPOOL_MANAGED) return D3DERR_INVALIDCALL;
         const HRESULT sharedHr = validateSharedHandleForTexture(extended_, psh, pool, levels, false);
         if (FAILED(sharedHr)) return sharedHr;
         dxmt9DeviceDebugLog("device_create_cube_texture device=%p size=%u levels=%u usage=0x%x fmt=%u pool=%u",

@@ -103,7 +103,7 @@
   "reset_lost_default_pool_rebinding": "pass",
   "reset_resources_policy": "pass",
   "resource_access_base_pool_policy": "pass",
-  "resource_access_ex_pool_policy": "fail",
+  "resource_access_ex_pool_policy": "pass",
   "resource_container_level_desc_and_locks": "pass",
   "resource_get_device_wrapper_policy": "pass",
   "resource_getdc_lod_autogen_mipmap": "skip",
