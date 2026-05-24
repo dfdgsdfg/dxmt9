@@ -392,6 +392,9 @@ inline constexpr u32 RS_DEST_BLEND = 20;
 inline constexpr u32 RS_BLEND_OP = 171;
 inline constexpr u32 RS_SCISSOR_TEST_ENABLE = 174;
 inline constexpr u32 RS_COLOR_WRITE_ENABLE = 168;
+inline constexpr u32 RS_COLOR_WRITE_ENABLE1 = 190;
+inline constexpr u32 RS_COLOR_WRITE_ENABLE2 = 191;
+inline constexpr u32 RS_COLOR_WRITE_ENABLE3 = 192;
 inline constexpr u32 RS_Z_ENABLE = 7;
 inline constexpr u32 RS_ALPHABLEND_ENABLE = 27;
 inline constexpr u32 RS_BLEND_FACTOR = 193;
@@ -833,6 +836,9 @@ struct PresentParameters {
   u32 swapEffect = 1;
   bool discardSwapEffect = true;
   MultiSampleType multiSampleType = MultiSampleType::None;
+  u32 multiSampleQuality = 0;
+  u32 flags = 0;
+  u32 fullScreenRefreshRateInHz = 0;
 };
 
 struct BufferDesc {

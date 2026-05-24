@@ -262,6 +262,17 @@ void testDeviceCPresentIntervalMapping() {
   cParams.presentationInterval = kD3DPRESENT_INTERVAL_IMMEDIATE;
   checkEq(dxmt9::d3d9::devicec::ppFromC(cParams).presentationInterval, PresentInterval::Immediate,
           "present params preserve immediate interval");
+
+  // gap_d3d9 C.12: MultiSampleQuality / Flags / FullScreen_RefreshRateInHz must
+  // propagate from the C ABI struct into core::PresentParameters via ppFromC.
+  D9CPresentParams cMs{};
+  cMs.multiSampleQuality = 3u;
+  cMs.flags = 0x800u;  // D3DPRESENTFLAG_LOCKABLE_BACKBUFFER
+  cMs.fullScreenRefreshRateHz = 60u;
+  auto pMs = dxmt9::d3d9::devicec::ppFromC(cMs);
+  checkEq(pMs.multiSampleQuality, 3u, "present params copy multiSampleQuality");
+  checkEq(pMs.flags, 0x800u, "present params copy flags");
+  checkEq(pMs.fullScreenRefreshRateInHz, 60u, "present params copy fullscreen refresh rate");
 }
 
 void testRingArenaExhaustionFallsBack() {

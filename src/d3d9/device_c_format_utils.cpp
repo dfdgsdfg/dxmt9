@@ -257,6 +257,9 @@ dxmt9::core::PresentParameters ppFromC(const D9CPresentParams& c) {
   p.enableAutoDepthStencil = c.enableAutoDepthStencil != 0;
   p.autoDepthStencilFormat = fmtFromD3D(c.autoDepthStencilFormat);
   p.multiSampleType = msTypeFromD3D(c.multiSampleType);
+  p.multiSampleQuality = c.multiSampleQuality;
+  p.flags = c.flags;
+  p.fullScreenRefreshRateInHz = c.fullScreenRefreshRateHz;
   p.deviceWindow = dxmt9::core::Handle{c.deviceWindow};
   p.presentationInterval = presentIntervalFromD3D(c.presentationInterval);
   p.presentationIntervalRaw = c.presentationInterval;
