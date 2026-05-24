@@ -27,11 +27,11 @@ changes not yet visible upstream.
 
 | Field | Value |
 |-------|-------|
-| Commit | `2181b3f422a915af5352e6d7abb3ac1951ea32c0` — **work tree dirty** |
-| Short  | `2181b3f` |
-| Tag / describe | `2181b3f` |
+| Commit | `2e0aa96fd534664166b6ddb3271c8e2de758d94e` |
+| Short  | `2e0aa96` |
+| Tag / describe | `2e0aa96` |
 | Author date | `2026-05-24` |
-| Subject | d3d9 depth_blit_test: reject cross-format depth-stencil StretchRect at PE |
+| Subject | d3d9 test_draw_mapped_buffer: reduce scope to unmapped-VB draw |
 
 ### Wine reference revision
 
@@ -50,7 +50,7 @@ the same commit in the Wine checkout before opening the source.
 
 ```sh
 # Reproduce the inventory verbatim from a clean tree:
-git -C "$DXMT9_REPO" checkout 2181b3f422a915af5352e6d7abb3ac1951ea32c0
+git -C "$DXMT9_REPO" checkout 2e0aa96fd534664166b6ddb3271c8e2de758d94e
 git -C "$WINE_REPO"  checkout 6e073d28dee3af7f4c965daec94644e0f9f92727
 python3 scripts/tools/gen_wine_d3d9_test_inventory.py
 ```
