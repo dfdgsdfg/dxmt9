@@ -45,7 +45,57 @@ Severity legend (used uniformly across the file):
 | D. COM methods (21 interfaces) | 225 | 176 | 13 | 33 | D.1..D.21 (10 explicit 🚫, 23 silent stub) |
 | **Grand total** | **~803** | **~534** | **~46** | **~163** | |
 
+> **The per-section detail tables (A/B/C/D) below predate the 2026-05-24
+> re-audit and are stale where an item has since closed on `master`.**
+> The authoritative current status is the re-audit delta immediately
+> below; the detail tables are regenerated on demand via the methodology
+> footers.
+
+## Re-audit delta (2026-05-24, against `master`)
+
+A read-only re-audit confirmed that a number of items authored as gaps on
+2026-05-23 have since been implemented on `master`. Verdicts below carry
+a `file:line` anchor checked against the live tree.
+
+### Closed since authoring (verified done)
+
+| Item | Section | Evidence |
+|---|---|---|
+| `SAMP_BORDER_COLOR` slot fixed to 4 (+ regression `static_assert`) | B.3 | `include/dxmt9/core_constants.hpp:443,472` |
+| 6 D3DDECLUSAGE + 6 D3DDECLMETHOD → `DecoderReject` + perf counter | A.4/A.5 | `src/dxmt9/dxmt9_shader_decoder.cpp:83,89,121-126,134-158,1335` |
+| `AlphaCmpCaps` sourced from `alphaCmpCaps` | C.7 | `src/d3d9/device_c_format_utils.cpp:295`; `src/d3d9/d3d9_pe_factory.cpp:268` |
+| `AdapterIdentifier9` DeviceIdentifier GUID + WHQLLevel populated (stable FNV-1a) | C.9 | `src/d3d9/core_factory.cpp:276-299,303-327` |
+| `D3DRASTER_STATUS::ScanLine` synthesized (monotonic) | C.10/C.11 | `src/d3d9/d3d9_pe_device.cpp:2203-2226` |
+| `D3DRS_DEPTHBIAS` + `SLOPESCALEDEPTHBIAS` → Metal `setRasterizerState` | B.10#1 | `src/dxmt9/dxmt9_draw_encoder.mm:556-564` |
+| `D3DLIGHT_POINT` / `D3DLIGHT_SPOT` FFP lighting (Position/Range/Atten/Theta/Phi) | B.5/B.10#5 | `src/dxmt9/dxmt9_ffp_shaders.cpp:168-284` |
+| `D3DGAMMARAMP` real impl + PE shadow + unix bridge | B.9/D.* | `src/d3d9/d3d9_pe_device.cpp:578-612,2244-2261` |
+| `INTZ` vendor format accepted | C.5 | `src/d3d9/device_c_format_utils.cpp:85` |
+| `R8G8B8` mapped (not Unsupported) | C.7 | `src/d3d9/device_c_format_utils.cpp:50` |
+| `D9CCaps::adapterOrdinal` assigned from adapter index | C.12#8 | `src/d3d9/device_c_factory.cpp:217` |
+| `GenerateMipSubLevels` conditional real work (AUTOGENMIPMAP) | D.* | `src/d3d9/d3d9_pe_device_child_surface.cpp:916+` |
+| `AddDirtyRect` (2D texture) validates pool/bounds | D.* | `src/d3d9/d3d9_pe_device_child_surface.cpp:1058` |
+
+### Remaining actionable gaps (verified still open)
+
+| Item | Section | Priority | Notes |
+|---|---|---|---|
+| MRT `COLORWRITEENABLE1..3` per-RT masks | B.10#2 | High | only RT0 mask honored today |
+| `PresentParameters` MultiSampleQuality / Flags / FullScreen_RefreshRateInHz | C.12#1,#9 | High | core struct lacks fields; `ppFromC` drops them |
+| COM silent-`S_OK` stub **test gates** (~10 methods) | D.* | Med | behaviour matches Wine S_OK; deliverable is a regression gate, not E_NOTIMPL |
+| Vendor formats `DF16`/`DF24`/`RESZ`/`NULL`/`NVDB`/`ATOC` | C.5 | Med | INTZ already done; promote rest as needed |
+| TSS `COLORARG0` / `ALPHAARG0` triadic ops (MULTIPLYADD/LERP) | B.10#10 | Med | needs FfpPixelStage extension |
+| `D3DRS_WRAP0..15` per-stage texcoord wrap | B.10#6 | Low | no constants/consumers |
+| `D32_LOCKABLE` (84) / `Q16W16V16U16` (110) | C.12#7 | Low | DX9b legacy; needs correct Metal mapping |
+| `D3DRS_DEBUGMONITORTOKEN` (165) constant | B.10#9 | Low | unused by apps; PE-shadow-generic at most |
+| `D3DRS_TWOSIDEDSTENCILMODE` (185) behavioural gate | B.10#7 | Low | backend uses single-ref/both-faces; partial backend limit |
+| `SAMP_MIPMAPLODBIAS` per-sampler bias | B.3/B.10#4 | Blocked | requires a `lod_bias` field on `WMTSamplerInfo` (winemetal ABI extension) |
+| `D3DCLIPSTATUS9` Set/GetClipStatus | B.8/D.* | Low | nil-return arguably correct (D3D9 has no per-primitive clip tracking) |
+
 ## Cross-cutting high-priority findings
+
+> Several rows in this table closed on 2026-05-24 — see the re-audit
+> delta above for the authoritative status. Rows kept here for the
+> original audit record.
 
 Items below are surfaced from the four parts as deserving a dedicated
 track even after Wave 1 / Wave 2 of `specs/d3d9.plan.md` landed.
