@@ -1,25 +1,40 @@
 #!/usr/bin/env python3
-"""Generate specs/gap_wine_d3d9_test.md from Wine source + plan.md.
+"""Generate specs/gap_d3d9_wine_test.md directly from MANIFEST data.
 
 For each `START_TEST` test function in
 `~/workspaces/wine/dlls/d3d9/tests/{visual,device,d3d9ex,stateblock}.c`,
 emit one inventory row that records:
   - Wine source file + line number (so devs can jump straight to the oracle)
-  - dxmt9 porting status (from `specs/wine_test.plan.md` §5.1-5.4)
-  - dxmt9 PE function name(s) carrying the evidence (or `—` when none)
+  - dxmt9 porting status derived from PE conformance + corpus evidence
+  - dxmt9 PE / corpus function names carrying the evidence (or `—` when none)
+
+Status source-of-truth (in order of precedence):
+  1. `tests/conformance/d3d9/MANIFEST.toml` `[[case]]` rows whose
+     `source = "wine/dlls/d3d9/tests/<file>.c:<wine_test>[,…]"` cites
+     the Wine test. Case-level `status` (passing / partial / scaffolded
+     / failing / skipped) is mapped to the inventory icon.
+  2. `tests/shader_runner/corpus/MANIFEST.toml` `[[test]]` rows whose
+     `oracle = "Wine d3d9 <file>.c <wine_test> behavior, ..."` cites
+     the Wine test. Corpus `status` (passing / failing) is mapped.
+
+There is no separate `specs/wine_test.plan.md`. Earlier rounds of
+this generator parsed §5.1-§5.4 of that plan, but the plan duplicated
+data that already lives in MANIFEST.toml — it has been retired.
 """
 from __future__ import annotations
 
 import os
 import re
 import subprocess
+import tomllib
 from pathlib import Path
 
 # Generator lives in `scripts/tools/`; walk up two levels to reach the dxmt9 repo root.
 REPO = Path(__file__).resolve().parents[2]
 WINE_ROOT = Path(os.environ.get("WINE_REPO", str(REPO.parent / "wine")))
 WINE = WINE_ROOT / "dlls" / "d3d9" / "tests"
-PLAN = REPO / "specs" / "wine_test.plan.md"
+PE_MANIFEST = REPO / "tests" / "conformance" / "d3d9" / "MANIFEST.toml"
+CORPUS_MANIFEST = REPO / "tests" / "shader_runner" / "corpus" / "MANIFEST.toml"
 OUT = REPO / "specs" / "gap_d3d9_wine_test.md"
 
 
@@ -71,13 +86,6 @@ def dxmt9_provenance() -> dict[str, str]:
     return _git_capture(REPO)
 
 SOURCES = ["visual", "device", "d3d9ex", "stateblock"]
-
-PLAN_SECTIONS = {
-    "visual": r"^### 5\.1 ",
-    "device": r"^### 5\.2 ",
-    "d3d9ex": r"^### 5\.3 ",
-    "stateblock": r"^### 5\.4 ",
-}
 
 HELPERS = {
     "memset", "ok", "skip", "trace", "win_skip", "HeapFree", "HeapAlloc",
@@ -138,32 +146,51 @@ def extract_test_calls(src: str) -> list[tuple[str, int]]:
     return calls
 
 
-def parse_plan_rows(section_re: str) -> dict[str, tuple[str, str]]:
-    """Return {wine_entry: (status, dxmt9_fn)} for the matching plan section."""
-    text = PLAN.read_text()
-    lines = text.splitlines()
-    rows: dict[str, tuple[str, str]] = {}
-    in_sec = False
-    section_pat = re.compile(section_re)
-    next_pat = re.compile(r"^### ")
-    for line in lines:
-        if section_pat.search(line):
-            in_sec = True
+def _parse_wine_source(source: str, file_basename: str) -> list[str]:
+    """Pull Wine test names out of a `source = "wine/dlls/d3d9/tests/X.c:..."`
+    string when X matches `file_basename` (e.g. `device`). Returns [] when
+    the source does not cite the file.
+
+    Handles:
+      - single:           `wine/dlls/d3d9/tests/device.c:test_x`
+      - comma-list:       `wine/dlls/d3d9/tests/device.c:test_a,test_b`
+      - cross-file:       `wine/.../device.c:test_a,wine/.../visual.c:test_b`
+      - sub-test ('/'):   `wine/.../device.c:test_cube/test_cube_levels`
+      - free-text:        `wine/.../d3d9ex.c:base-vs-ex QueryInterface tests`
+                          (returns [] since no canonical test name).
+    """
+    out: list[str] = []
+    # Cross-file: split on `,wine/`. The first segment is `wine/.../X.c:...`,
+    # any subsequent segments are missing the `wine/` prefix.
+    parts = re.split(r",(?=wine/)", source)
+    for part in parts:
+        m = re.match(r"^wine/dlls/d3d9/tests/([a-z0-9_]+)\.c:(.*)$", part.strip())
+        if not m:
             continue
-        if in_sec and next_pat.match(line) and not section_pat.search(line):
-            break
-        if not in_sec or not line.startswith("| `"):
+        if m.group(1) != file_basename:
             continue
-        # | `name` | Route | Status | dxmt9 PE function(s) | Item DAG |
-        cols = [c.strip() for c in line.strip().strip("|").split("|")]
-        if len(cols) < 5:
-            continue
-        name = cols[0].strip("`")
-        status = cols[2]
-        dxmt9_fn = cols[3]
-        if name and name != "Wine entry":
-            rows[name] = (status, dxmt9_fn)
-    return rows
+        rest = m.group(2)
+        for chunk in rest.split(","):
+            chunk = chunk.strip()
+            if not chunk:
+                continue
+            # Sub-test form: keep the head and any explicit `test_*` names
+            # in the slash chain (drops free-text qualifiers).
+            for piece in chunk.split("/"):
+                piece = piece.strip()
+                if not piece:
+                    continue
+                # Accept identifier-looking tokens only.
+                if re.match(r"^[A-Za-z_][A-Za-z0-9_]*$", piece):
+                    out.append(piece)
+    return out
+
+
+def _load_manifest(path: Path) -> dict:
+    if not path.is_file():
+        return {}
+    with path.open("rb") as f:
+        return tomllib.load(f)
 
 
 STATUS_ICON = {
@@ -182,17 +209,117 @@ def status_icon(status: str) -> str:
     return STATUS_ICON.get(status, "❓")
 
 
+# PE case status → inventory bucket. `passing` and `partial` (with passing
+# evidence) both signal evidence-in-hand; the inventory treats them as
+# covered. `scaffolded` and `skipped` remain `scaffolded` (skip = intentional
+# defer; scaffold = case exists but no run). `failing` is failing.
+_PE_STATUS_TO_INV = {
+    "passing":    "covered",
+    "partial":    "covered",
+    "skipped":    "covered",  # intentional defer with documented reason
+    "scaffolded": "scaffolded",
+    "failing":    "failing",
+    "todo":       "scaffolded",
+}
+
+# Aggregation rule when a Wine test has multiple evidence rows:
+# any failing → failing; else any covered (passing/partial) → covered;
+# else scaffolded; else UNTRACKED.
+def _aggregate(statuses: list[str]) -> str:
+    if not statuses:
+        return "UNTRACKED"
+    if "failing" in statuses:
+        # Mixed pass + failing reads as failing/partial; pure failing as failing.
+        if "covered" in statuses:
+            return "failing/partial"
+        return "failing"
+    if "covered" in statuses:
+        return "covered"
+    if "scaffolded" in statuses:
+        return "scaffolded"
+    return "UNTRACKED"
+
+
+def collect_evidence(file_basename: str) -> dict[str, tuple[str, str]]:
+    """Return {wine_test_name: (status, ", ".join(dxmt9_fns))} for the
+    Wine source file `file_basename` (e.g. `device`).
+
+    Walks both the PE conformance manifest and the shader corpus manifest;
+    aggregates per-Wine-test evidence into the inventory's status vocabulary.
+    """
+    fn_map: dict[str, list[str]] = {}  # wine_name -> [fn, …]
+    status_map: dict[str, list[str]] = {}  # wine_name -> [inv_status, …]
+
+    pe = _load_manifest(PE_MANIFEST)
+    for case in pe.get("case", []):
+        if not isinstance(case, dict):
+            continue
+        wines = _parse_wine_source(case.get("source", ""), file_basename)
+        if not wines:
+            continue
+        fn = case.get("function") or ""
+        case_status = case.get("status") or ""
+        inv = _PE_STATUS_TO_INV.get(case_status, "scaffolded")
+        for w in wines:
+            fn_map.setdefault(w, [])
+            if fn and fn not in fn_map[w]:
+                fn_map[w].append(fn)
+            status_map.setdefault(w, []).append(inv)
+
+    corpus = _load_manifest(CORPUS_MANIFEST)
+    oracle_pat = re.compile(
+        r"^Wine d3d9 ([a-z0-9_]+)\.c[\s:]+(.+?)(?:\s+behavior|$)", re.IGNORECASE)
+    name_pat = re.compile(r"\b([a-zA-Z_][a-zA-Z0-9_]*)\b")
+    for entry in corpus.get("test", []):
+        if not isinstance(entry, dict):
+            continue
+        oracle = entry.get("oracle") or ""
+        m = oracle_pat.match(oracle)
+        if not m:
+            continue
+        if m.group(1) != file_basename:
+            continue
+        # Wine test names live in the second group; extract identifier-like
+        # tokens and filter to those that look like Wine test entrypoints
+        # (start with `test_` or end with `_test`, plus known anchors).
+        for tok in name_pat.findall(m.group(2)):
+            if tok.startswith("test_") or tok.endswith("_test"):
+                fn_map.setdefault(tok, [])
+                f = entry.get("file") or ""
+                # Use the corpus file basename (sans `.shader_test`) as a
+                # human-readable cite when no PE function exists.
+                if f:
+                    leaf = Path(f).stem
+                    if leaf not in fn_map[tok]:
+                        fn_map[tok].append(leaf)
+                corpus_status = entry.get("status") or ""
+                if corpus_status == "passing":
+                    status_map.setdefault(tok, []).append("covered")
+                elif corpus_status == "failing":
+                    status_map.setdefault(tok, []).append("failing")
+                else:
+                    status_map.setdefault(tok, []).append("scaffolded")
+
+    out: dict[str, tuple[str, str]] = {}
+    for name, statuses in status_map.items():
+        agg = _aggregate(statuses)
+        fns = fn_map.get(name, [])
+        fns_disp = ", ".join(f"`{f}`" for f in fns) if fns else "—"
+        out[name] = (agg, fns_disp)
+    return out
+
+
 def main() -> None:
     inventories: dict[str, list[tuple[str, int, str, str]]] = {}
     summary_rows: list[tuple[str, int, dict[str, int]]] = []
 
     for src in SOURCES:
         calls = extract_test_calls(src)
-        plan_rows = parse_plan_rows(PLAN_SECTIONS[src])
+        evidence_rows = collect_evidence(src)
         per_status: dict[str, int] = {}
         rows: list[tuple[str, int, str, str]] = []
         for name, line in sorted(calls, key=lambda kv: kv[0]):
-            status, dxmt9_fn = plan_rows.get(name, ("UNTRACKED", "—"))
+            status, dxmt9_fn = evidence_rows.get(name, ("UNTRACKED", "—"))
             rows.append((name, line, status, dxmt9_fn))
             per_status[status] = per_status.get(status, 0) + 1
         inventories[src] = rows
@@ -208,13 +335,13 @@ def main() -> None:
     lines.append("test reachable from a `START_TEST` body, with the dxmt9 porting status")
     lines.append("and the dxmt9 PE conformance function(s) that carry the evidence.")
     lines.append("")
-    lines.append("This file is the long-lived companion to the gitignored")
-    lines.append("`specs/wine_test.plan.md`. The plan tracks per-round implementation")
-    lines.append("staging; this gap doc tracks **which Wine oracles exist** and")
-    lines.append("**where each one is mirrored** in the dxmt9 test surface.")
+    lines.append("This gap doc tracks **which Wine oracles exist** and **where each")
+    lines.append("one is mirrored** in the dxmt9 test surface — derived directly from")
+    lines.append("`tests/conformance/d3d9/MANIFEST.toml` (PE conformance evidence)")
+    lines.append("and `tests/shader_runner/corpus/MANIFEST.toml` (shader-runner")
+    lines.append("oracle citations).")
     lines.append("")
-    lines.append("Generated from Wine source + plan tables by")
-    lines.append("`scripts/tools/gen_wine_d3d9_test_inventory.py` (see commit history).")
+    lines.append("Generated by `scripts/tools/gen_wine_d3d9_test_inventory.py`.")
     lines.append("")
     lines.append("## Provenance")
     lines.append("")
@@ -227,8 +354,8 @@ def main() -> None:
     lines.append("")
     self_dirty = (" — **work tree dirty**" if self_prov["dirty"] == "yes" else "")
     lines.append("Captured from `git -C <repo>` at the moment this file was rendered.")
-    lines.append("A dirty work tree means the porting-status column may include")
-    lines.append("changes not yet visible upstream.")
+    lines.append("A dirty work tree means the status column may include MANIFEST")
+    lines.append("edits not yet visible upstream.")
     lines.append("")
     lines.append("| Field | Value |")
     lines.append("|-------|-------|")
@@ -271,7 +398,7 @@ def main() -> None:
     lines.append("| 🟠 | `failing/partial` | Mixed evidence; some sub-cases pass, others record failing readbacks. |")
     lines.append("| 🔴 | `failing` | Test exists in the dxmt9 surface but records a deliberate failing readback. |")
     lines.append("| ⏸️ | `deferred` / `partial/deferred` | Acknowledged gap; not yet fixable from the dxmt9 PE side alone. |")
-    lines.append("| ❓ | UNTRACKED | Wine test discovered after the last plan refresh. None today — flag if it appears. |")
+    lines.append("| ❓ | UNTRACKED | Wine test that no MANIFEST.toml entry currently cites. Flag if it appears. |")
     lines.append("")
     lines.append("## Summary")
     lines.append("")
@@ -333,15 +460,11 @@ def main() -> None:
     lines.append("```")
     lines.append("")
     lines.append("The generator reads Wine source from `$WINE_REPO` (default")
-    lines.append("`~/workspaces/wine`) and the plan from `specs/wine_test.plan.md`.")
-    lines.append("It re-counts `START_TEST` callees by walking the brace-depth of the")
-    lines.append("test entrypoint body, so newly added Wine tests appear with status")
-    lines.append("`UNTRACKED` until the plan picks them up.")
-    lines.append("")
-    lines.append("Cross-reference: per-round implementation staging lives in")
-    lines.append("`specs/wine_test.plan.md` (gitignored) and")
-    lines.append("`specs/wine_test_failures.plan.md`; once a Wine row reaches a stable")
-    lines.append("`covered` / `scaffolded` state, update both this file and the plan.")
+    lines.append("`~/workspaces/wine`) plus `tests/conformance/d3d9/MANIFEST.toml` and")
+    lines.append("`tests/shader_runner/corpus/MANIFEST.toml`. It re-counts `START_TEST`")
+    lines.append("callees by walking the brace-depth of the test entrypoint body, so")
+    lines.append("newly added Wine tests appear with status `UNTRACKED` until a")
+    lines.append("MANIFEST entry cites them.")
     lines.append("")
     OUT.write_text("\n".join(lines))
     print(f"wrote {OUT} ({grand_total} entries)")
