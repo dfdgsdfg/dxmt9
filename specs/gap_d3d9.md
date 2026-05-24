@@ -91,7 +91,7 @@ a `file:line` anchor checked against the live tree.
 | COM silent-`S_OK` stub gates — 4 PE-only remain (SetNPatchMode/GetNPatchMode, SetClipStatus/GetClipStatus, DeletePatch) | D.* | Med | native `com::` harness reached 3/7; rest need the PE conformance lane (`d3d9_device_misc.cpp` already gates SetDialogBoxMode/ValidateDevice) |
 | `RESZ` GPU depth-resolve (sentinel detect/stage done) | C.5 | **Blocked** | needs winemetal ABI extension: `WMTDepthAttachmentInfo.resolve_texture` + `MTLMultisampleDepthResolveFilter` (color resolve already exists on `WMTColorAttachmentInfo`; depth twin missing). PE detect+stage + backend TODO landed (`82c89fc`, R-FORMAT-11). |
 | `D3DRS_TWOSIDEDSTENCILMODE` (185) behavioural gate | B.10#7 | Low | backend uses single-ref/both-faces; partial backend limit |
-| `SAMP_MIPMAPLODBIAS` per-sampler bias | B.3/B.10#4 | Blocked | requires a `lod_bias` field on `WMTSamplerInfo` (winemetal ABI extension) |
+| `SAMP_MIPMAPLODBIAS` per-sampler bias | B.3/B.10#4 | Med | **NOT a winemetal ABI gap (note corrected 2026-05-24)** — `MTLSamplerDescriptor` has no LOD-bias; Metal biases at sample time. Implement as a per-sampler bias uniform + `sample(…, bias(b))` at the MSL emit sites (FFP + translated texld). Shader-plumbing, no ABI change. |
 | `D3DCLIPSTATUS9` Set/GetClipStatus | B.8/D.* | Low | nil-return arguably correct (D3D9 has no per-primitive clip tracking) |
 
 ### Resolved as documented-unsupported / non-gap (no implementation planned)
