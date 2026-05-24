@@ -2761,6 +2761,18 @@ std::optional<core::metalqueue::QueueSubmissionRecord> encodeChunk(
   // boundary). encodeDraw reads + clears bits as it sub-allocates and
   // binds per-frequency UBOs.
   uniform::DirtyState uniformDirty = ctx.dirty;
+  // Per-frequency UBO sticky-binding (R-BACK-12.5/12.8) clears the
+  // constant dirty bits after each draw uploads, so a later draw on the
+  // same encoder reuses the prior draw's slabs. That is correct only while
+  // consecutive draws share constants. When a DrawRun carries a different
+  // uniform payload (e.g. SimpleSample's base vs overlay pass differ only
+  // in g_PassMix / g_OverlayAlpha), the new constants must be re-uploaded
+  // — otherwise the draw silently reuses the previous pass's constant
+  // slab. Each distinct payload is a distinct interned pointer (chunk-slot
+  // owned + deduped), so a pointer change is a reliable "constants moved"
+  // signal. Reset to null at every encoder open (markAllDirty already
+  // forces the first draw to upload there).
+  const core::DrawUniformPayload* lastEncodedUniformPayload = nullptr;
 
   // TLA+: EncoderLifecycle variable binding:
   // activeKind  := activeRenderEncoder ? "Render" : activeBlitEncoder ? "Blit" : "None"
@@ -2981,6 +2993,7 @@ std::optional<core::metalqueue::QueueSubmissionRecord> encodeChunk(
     // sticky bindings — every uniform category must rebind on the
     // first draw of the new encoder.
     uniform::markAllDirty(uniformDirty);
+    lastEncodedUniformPayload = nullptr;
     assertEncoderLifecycleInvariant();
   };
 
@@ -3091,6 +3104,16 @@ std::optional<core::metalqueue::QueueSubmissionRecord> encodeChunk(
             core::drawRunDrawCount(command) == 0) break;
         auto stateView = command.drawState;
         stateView.uniforms = command.drawUniformPayload;
+        // Re-mark uniform constants dirty when this DrawRun's payload
+        // differs from the last one encoded on this encoder. Without it,
+        // the post-upload dirty clear leaves a later draw reusing the
+        // previous draw's constant slab (e.g. SimpleSample's overlay pass
+        // would inherit the base pass's g_PassMix). Same payload pointer
+        // → no re-upload, so the sticky-binding fast path is preserved.
+        if (command.drawUniformPayload != lastEncodedUniformPayload) {
+          uniform::markAllDirty(uniformDirty);
+          lastEncodedUniformPayload = command.drawUniformPayload;
+        }
         const auto& hot = *stateView.hot;
         const auto drawParams = command.drawParams;
         // Compact draw-run: state bound from base ONCE (render-pass +
