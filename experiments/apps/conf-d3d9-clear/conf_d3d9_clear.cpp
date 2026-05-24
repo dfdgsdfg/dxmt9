@@ -1,4 +1,4 @@
-#include "../common/dx9_fast_sanity.hpp"
+#include "../common/conf-d3d9-fast-sanity.hpp"
 
 namespace {
 

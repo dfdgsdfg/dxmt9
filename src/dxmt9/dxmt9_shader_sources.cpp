@@ -503,4 +503,42 @@ std::string makeShaderPreludeArgbufHybrid(bool withClipDistances) {
   return out.str();
 }
 
+bool argbufResourceArrayEnabled() {
+  static const bool value = [] {
+    const char* env = std::getenv("DXMT9_ARGBUF_RESOURCE_ARRAY");
+    return env && env[0] != '\0' && std::strcmp(env, "0") != 0;
+  }();
+  return value;
+}
+
+std::string makeShaderPreludeArgbufResourceArray(bool withClipDistances) {
+  // Reuse the constants-only Stage 2 prelude verbatim for the five uniform
+  // struct definitions + helper inlines, then re-emit the ArgbufLayout
+  // struct EXTENDED with the texture/sampler arrays. We intentionally do
+  // not call makeShaderPreludeArgbufHybrid (which already emits a 4-pointer
+  // ArgbufLayout) — a single MSL TU cannot declare `struct ArgbufLayout`
+  // twice. Instead we emit makeShaderPrelude (no ArgbufLayout) and then the
+  // extended struct here.
+  std::ostringstream out;
+  out << makeShaderPrelude(withClipDistances);
+  // ArgbufLayout mirrors the per-encoder argbuf shape with texture/sampler
+  // arrays appended (design.md §11.2, resource-array sub-mode). [[id(N)]]
+  // attributes pin the descriptor indices so the host MTLArgumentEncoder
+  // descriptor table (buildResourceArrayArgumentDescriptors) and the MSL
+  // struct stay layout-compatible. The texture array is homogeneously typed
+  // `texture2d<float>`; per-shader cube/volume aliasing is emitted by the
+  // entry-point alias block (the gpuResourceID is type-agnostic on the wire).
+  out << "struct ArgbufLayout {\n";
+  out << "  constant VsConsts*    vsConsts [[id(0)]];\n";
+  out << "  constant FfpVsConsts* ffpVs    [[id(1)]];\n";
+  out << "  constant PsConsts*    psConsts [[id(2)]];\n";
+  out << "  constant FfpPsConsts* ffpPs    [[id(3)]];\n";
+  out << "  array<texture2d<float>, " << kArgbufResourceArrayStageCount
+      << "> textures [[id(" << kArgbufResourceArrayTextureBaseId << ")]];\n";
+  out << "  array<sampler, " << kArgbufResourceArrayStageCount
+      << "> samplers [[id(" << kArgbufResourceArraySamplerBaseId << ")]];\n";
+  out << "};\n";
+  return out.str();
+}
+
 }  // namespace dxmt9::shaders

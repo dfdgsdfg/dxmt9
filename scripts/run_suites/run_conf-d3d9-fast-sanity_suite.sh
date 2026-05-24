@@ -14,7 +14,7 @@ apps=(
 usage() {
   cat <<'EOF'
 Usage:
-  bash scripts/run_suites/run_dx9_fast_sanity_suite.sh [options]
+  bash scripts/run_suites/run_conf-d3d9-fast-sanity_suite.sh [options]
 
 Options:
   --wine-root <path>              Wine runtime root passed to run_experiment.py.
@@ -39,8 +39,8 @@ This script:
      - builtin-x86
 
 Outputs:
-  experiments/output/dx9-fast-sanity/summary.json
-  experiments/output/dx9-fast-sanity/summary.md
+  experiments/output/conf-d3d9-fast-sanity/summary.json
+  experiments/output/conf-d3d9-fast-sanity/summary.md
 EOF
 }
 
@@ -114,7 +114,7 @@ x86_pe_build_dir=${x86_pe_build_dir:-"$repo_root/build-win32-x86-builtin/src/win
 x86_runtime_pe_build_dir=${x86_runtime_pe_build_dir:-"$repo_root/build-win32-x86-builtin/src/winemetal"}
 unix_build_dir=${unix_build_dir:-"$repo_root/build-x86_64-builtin/src"}
 
-suite_dir="$repo_root/experiments/output/dx9-fast-sanity"
+suite_dir="$repo_root/experiments/output/conf-d3d9-fast-sanity"
 mkdir -p "$suite_dir"
 summary_json="$suite_dir/summary.json"
 summary_md="$suite_dir/summary.md"
@@ -132,7 +132,7 @@ cleanup_stale_prefixes() {
 
 build_apps() {
   printf '==> building fast sanity apps\n' | tee -a "$suite_log"
-  bash "$repo_root/scripts/build_apps/build_dx9_fast_sanity_apps.sh" | tee -a "$suite_log"
+  bash "$repo_root/scripts/build_apps/build_conf-d3d9-fast-sanity.sh" | tee -a "$suite_log"
   printf '\n' | tee -a "$suite_log"
 }
 

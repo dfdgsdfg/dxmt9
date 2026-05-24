@@ -6,11 +6,11 @@ None of these are wired to Meson tests; they are launched manually or by
 `scripts/run_apps/`.
 
 - `build_sample-d3d9-basic-hlsl.sh` — DirectX SDK sample-d3d9-basic-hlsl sample.
-- `build_dx9_fast_sanity_apps.sh` — bundle build for the fast-sanity suite.
+- `build_conf-d3d9-fast-sanity.sh` — bundle build for the fast-sanity suite.
 - `build_sample-d3d9-hdr-formats.sh` — DirectX SDK sample-d3d9-hdr-formats sample.
 - `build_sample-d3d9-irrlicht-lights.sh` — Irrlicht managed-lights demo.
 - `build_sample-d3d9-multitexture-terrain.sh` — dxmt9 multitexture terrain demo.
-- `build_performance_probe.sh` — internal perf probe app (shared by dxmt9-perf-* entries).
+- `build_perf-d3d9-probe.sh` — internal perf probe app (shared by perf-d3d9-* entries).
 - `build_sample-d3d9-dxut-simple.sh` — DXUT simple sample.
 - `build_sample-d3d9-tutorial07.sh` — DirectX SDK sample-d3d9-tutorial07.
 - `build_sample-d3d9-water-rt.sh` — dxmt9 water render-target demo.

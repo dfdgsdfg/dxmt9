@@ -9,7 +9,7 @@ Per-app or synthetic-probe shell launchers invoked by
 
 - `common.sh` — sourced by every launcher; provides `exp_stage_dxmt9`,
   `exp_run_wine_binary`, prefix discovery, capture/log hooks.
-- `dx9_fast_sanity.sh` — bundle launcher for the 5 d9vk fast-sanity apps
+- `conf-d3d9-fast-sanity.sh` — bundle launcher for the 5 d9vk fast-sanity apps
   (`conf-d3d9-clear`, `conf-d3d9-buffer`, etc.), shared rather than
   per-app.
 

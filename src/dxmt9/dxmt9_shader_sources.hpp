@@ -142,6 +142,40 @@ bool fsHalfPrecisionEnabled();
 // also stay direct. See R-BACK-12.23 / design.md §11.2.
 std::string makeShaderPreludeArgbufHybrid(bool withClipDistances);
 
+// R-BACK-12.22..12.26 (resource-array sub-mode) — opt-in env gate. True
+// iff `DXMT9_ARGBUF_RESOURCE_ARRAY` is set to a non-empty, non-"0" value.
+// Read once (static init). The Stage 2 hybrid carries texture/sampler
+// resources through the slot-30 argbuf only when this is set; default OFF
+// keeps the constants-only lane byte-identical. The gate is meaningful
+// only when the device-level Stage 2 capability gate already holds.
+bool argbufResourceArrayEnabled();
+
+// R-BACK-12.22..12.26 (resource-array sub-mode) — extended ArgbufLayout
+// prelude. Same five per-category uniform structs + the four
+// constant-buffer pointers at [[id(0..3)]] as makeShaderPreludeArgbufHybrid,
+// PLUS a per-stage texture/sampler resource array:
+//
+//   struct ArgbufLayout {
+//     constant VsConsts*    vsConsts [[id(0)]];
+//     constant FfpVsConsts* ffpVs    [[id(1)]];
+//     constant PsConsts*    psConsts [[id(2)]];
+//     constant FfpPsConsts* ffpPs    [[id(3)]];
+//     texture2d<float> textures[8] [[id(4)]];
+//     sampler          samplers[8] [[id(12)]];
+//   };
+//
+// The texture array is homogeneously typed `texture2d<float>` — cube /
+// volume sampling reinterprets the same `[[id]]` slot in the shader via
+// an `as_type`-free typed alias emitted by the per-shader emitter (the
+// gpuResourceID written by MTLArgumentEncoder_setTexture is type-agnostic
+// at the ABI level). The host descriptor table mirrors these [[id]]
+// positions (see argbuf_hybrid::buildResourceArrayArgumentDescriptors).
+//
+// Texture/sampler array sizes are kArgbufResourceArrayStageCount (8 — the
+// fixed-function texture-stage count; matches the DXBC s0..s7 fragment
+// sampler range the FFP/IR emitters bind).
+std::string makeShaderPreludeArgbufResourceArray(bool withClipDistances);
+
 // R-BACK-12.22 — argbuf bind slot. Mirrors DXMT's slot-30 convention so
 // frame captures and existing tooling stay consistent.
 inline constexpr std::uint32_t kArgbufHybridBindSlot = 30u;
@@ -153,5 +187,24 @@ inline constexpr std::uint32_t kArgbufHybridBindSlot = 30u;
 inline constexpr std::uint32_t kArgbufHybridConstantBufferCount = 4u;
 inline constexpr std::uint32_t kArgbufHybridDescriptorCount =
     kArgbufHybridConstantBufferCount;
+
+// R-BACK-12.22..12.26 (resource-array sub-mode) — argbuf texture/sampler
+// array layout. The four constant-buffer pointers keep [[id(0..3)]]; the
+// texture array occupies the next kArgbufResourceArrayStageCount ids and
+// the sampler array the ids after that. Pinned here so the MSL ArgbufLayout
+// struct (emitted by makeShaderPreludeArgbufResourceArray) and the host
+// MTLArgumentEncoder descriptor table (buildResourceArrayArgumentDescriptors)
+// agree on every [[id(N)]] without a magic number on either side.
+//
+// 8 stages = the fixed-function texture-stage count (kMaxTextureStages) and
+// the DXBC s0..s7 fragment sampler range the FFP/IR emitters bind. Vertex
+// texture samplers (s8..) stay on the direct lane in this sub-mode.
+inline constexpr std::uint32_t kArgbufResourceArrayStageCount = 8u;
+inline constexpr std::uint32_t kArgbufResourceArrayTextureBaseId =
+    kArgbufHybridConstantBufferCount;  // id 4
+inline constexpr std::uint32_t kArgbufResourceArraySamplerBaseId =
+    kArgbufResourceArrayTextureBaseId + kArgbufResourceArrayStageCount;  // id 12
+inline constexpr std::uint32_t kArgbufResourceArrayDescriptorCount =
+    kArgbufHybridConstantBufferCount + 2u * kArgbufResourceArrayStageCount;  // 4 + 8 + 8 = 20
 
 }  // namespace dxmt9::shaders

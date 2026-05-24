@@ -42,7 +42,7 @@ bash scripts/run_suites/run_dx9_regression_suite.sh --wine-root "$WINE_ROOT"
 DX9 fast sanity suite derived from the small `d9vk` D3D9 tests:
 
 ```sh
-bash scripts/run_suites/run_dx9_fast_sanity_suite.sh --wine-root "$WINE_ROOT"
+bash scripts/run_suites/run_conf-d3d9-fast-sanity_suite.sh --wine-root "$WINE_ROOT"
 ```
 
 This suite:
@@ -50,7 +50,7 @@ This suite:
 - cross-builds the repo-local Win32 sanity apps
 - runs them across `dxmt9-x64`, `builtin-x64`, and `builtin-x86`
 - uses self-validating app exits plus captured frames, not builtin-oracle SSIM
-- writes `experiments/output/dx9-fast-sanity/summary.json` and `summary.md`
+- writes `experiments/output/conf-d3d9-fast-sanity/summary.json` and `summary.md`
 
 Builtin-oracle compare suite for selected DX9 sample apps:
 

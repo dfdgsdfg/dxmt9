@@ -34,6 +34,17 @@ struct ShaderSourceContext {
   // stream (slot 1) and `DrawVolatile` (slot 5) stay direct (design.md
   // §11.4). This is set from `ShaderVariantKey::argbufHybridMode`.
   bool argbufHybridMode = false;
+  // R-BACK-12.22..12.26 (resource-array sub-mode) — when true AND
+  // argbufHybridMode is also true, the FFP and DXBC->MSL fragment/vertex
+  // emitters additionally route the per-stage texture/sampler resources
+  // through the slot-30 `ArgbufLayout` (texture/sampler array members at
+  // [[id(4..)]]) instead of the direct `[[texture(N)]]` / `[[sampler(N)]]`
+  // param lane. Default OFF — when off the emitted MSL is byte-identical
+  // to the constants-only Stage 2 form. Set from
+  // `ShaderVariantKey::argbufResourceArray`, which makeShaderVariantKey
+  // computes from the `DXMT9_ARGBUF_RESOURCE_ARRAY` opt-in env flag. This
+  // bit is meaningless unless argbufHybridMode is also set.
+  bool argbufResourceArray = false;
   // D3DSAMP_MIPMAPLODBIAS (gap_d3d9 B.3) PSO-variant gate. When true the FFP
   // and DXBC->MSL fragment emitters declare
   // `constant SamplerLodBias& samplerLodBias [[buffer(4)]]` and thread bias()

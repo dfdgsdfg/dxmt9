@@ -110,6 +110,17 @@ struct ShaderVariantKey {
   // reading the slot-30 argbuf). The selector flips this on at encoder
   // open when `argbufHybridEnabled()` holds and the pass is eligible.
   bool argbufHybridMode = false;
+  // R-BACK-12.22..12.26 (resource-array sub-mode) — opt-in sub-bit of the
+  // Stage 2 hybrid. When set (only ever alongside argbufHybridMode) the
+  // emitters carry the per-stage texture/sampler resources through the
+  // slot-30 argbuf texture/sampler arrays instead of direct
+  // [[texture(N)]] / [[sampler(N)]] binds, and the host populator writes
+  // them into the argbuf + issues `useResource` residency. Default off;
+  // gated on the `DXMT9_ARGBUF_RESOURCE_ARRAY` env flag (read once at
+  // makeShaderVariantKey time). A Stage 2 constants-only PSO and a Stage 2
+  // resource-array PSO therefore hash to distinct cache entries so the
+  // default constants-only lane stays byte-identical.
+  bool argbufResourceArray = false;
   // D3DSAMP_MIPMAPLODBIAS (gap_d3d9 B.3) PSO-variant gate. Set by
   // makeShaderVariantKey from state::anySamplerLodBiasNonzero — true iff some
   // active sampler stage has a non-zero mip LOD bias. When set, the fragment

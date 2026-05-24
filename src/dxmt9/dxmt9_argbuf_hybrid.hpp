@@ -23,6 +23,7 @@
 #include <array>
 #include <cstddef>
 #include <cstdint>
+#include <span>
 
 namespace dxmt9 {
 class CommandQueue;
@@ -66,6 +67,28 @@ struct ArgumentDescriptors {
 // FfpVsConsts/FfpPsConsts also begin on 4-byte boundaries; 16 B keeps
 // the Tier-2 GPU-pointer slot aligned).
 ArgumentDescriptors buildArgumentDescriptors();
+
+// R-BACK-12.22..12.26 (resource-array sub-mode) — extended descriptor table:
+// the four constant-buffer pointers at id 0..3 PLUS a texture array
+// (kArgbufResourceArrayStageCount entries starting at
+// kArgbufResourceArrayTextureBaseId) and a sampler array (same count,
+// starting at kArgbufResourceArraySamplerBaseId). The texture entries are
+// tagged WMTTextureType2D — the dominant case; cube/volume sampling
+// reinterprets the same slot in MSL since the gpuResourceID written by
+// MTLArgumentEncoder_setTexture is type-agnostic on the wire. The returned
+// struct is consumed by MTLDevice::newArgumentEncoder exactly like
+// buildArgumentDescriptors; only the queue's resource-array encoder uses
+// it (a second MTLArgumentEncoder, built only when the resource-array lane
+// is enabled — the constants-only encoder is left untouched so the default
+// path stays byte-identical).
+struct ResourceArrayArgumentDescriptors {
+  std::array<WMTArgumentDescriptor, shaders::kArgbufResourceArrayDescriptorCount>
+      entries{};
+  std::size_t count() const noexcept {
+    return shaders::kArgbufResourceArrayDescriptorCount;
+  }
+};
+ResourceArrayArgumentDescriptors buildResourceArrayArgumentDescriptors();
 
 // Capability-gate sense check for unit tests. The actual gate result is
 // cached on `resources::Pool::argbufHybridEnabled_` at queue init; this
@@ -239,6 +262,60 @@ u64 updateDirtyArgbufRegions(CommandQueue& queue,
                               std::uint64_t seqId,
                               const ArgbufRecorder* recorder = nullptr,
                               WMT::RenderCommandEncoder residencyEncoder = {});
+
+// R-BACK-12.22..12.26 (resource-array sub-mode) — one resolved
+// texture/sampler binding the encoder hands to the resource-array
+// populator. `texture` / `sampler` are the SAME WMT handles the Stage 1
+// direct lane would bind (resources::textureForShaderRead +
+// makeSampler). A zero-handle texture or sampler leaves that argbuf slot
+// unwritten (the shader must not sample an unbound stage). `stage` is the
+// D3D9 fragment sampler stage (0..kArgbufResourceArrayStageCount-1) and
+// indexes both the texture and sampler arrays in ArgbufLayout.
+struct ResourceArrayBinding {
+  u32 stage = 0;
+  WMT::Texture texture{};
+  WMT::SamplerState sampler{};
+};
+
+// Recorder hook for the resource-array populator. Tests set
+// suppressMetalCalls=true to capture the exact (stage, texture-handle,
+// sampler-handle, argbuf-id, residency-usage) tuples without a Metal
+// device. Production passes nullptr.
+struct ResourceArrayRecorder {
+  void* userdata = nullptr;
+  bool suppressMetalCalls = false;
+
+  void (*setTexture)(void* userdata, u64 textureHandle, u32 argbufId) = nullptr;
+  void (*setSampler)(void* userdata, u64 samplerHandle, u32 argbufId) = nullptr;
+  // Residency: usage is the WMTResourceUsage bitmask, stages the
+  // WMTRenderStages bitmask passed to useResource.
+  void (*useTexture)(void* userdata, u64 textureHandle, u32 usage, u32 stages) =
+      nullptr;
+};
+
+// R-BACK-12.22..12.26 (resource-array sub-mode, fault candidates 1/3/4/5)
+// — write the resolved per-stage textures + samplers into the
+// resource-array argbuf via MTLArgumentEncoder_setTexture /
+// _setSamplerState (fault candidate 3: gpuResourceID ABI) at the [[id]]
+// positions pinned by kArgbufResourceArray*BaseId, and — critically —
+// issue `useResource(texture, Read|Sample, Vertex|Fragment)` on the
+// render encoder for every argbuf-pointed texture (fault candidate 4:
+// argbuf-referenced resources are NOT made resident by the slot-30 bind
+// alone; the GPU faults on access without an explicit useResource). The
+// argument encoder must already be anchored on the argbuf storage
+// (openArgbuf / setArgumentBuffer) before this runs.
+//
+// Samplers do not require useResource (they carry no backing allocation);
+// their lifetime is held by the caller retaining the WMT::SamplerState
+// reference against the argbuf's seqId (fault candidate 2). This function
+// does not retain — the caller (encoder) owns retention through the same
+// transient-ring seqId waterline as the constant buffers.
+//
+// Returns the number of texture slots made resident (for perf accounting).
+u32 populateResourceBindings(ArgbufEncoderResource& encoderResource,
+                             std::span<const ResourceArrayBinding> bindings,
+                             const ResourceArrayRecorder* recorder = nullptr,
+                             WMT::RenderCommandEncoder residencyEncoder = {});
 
 // R-BACK-12.24 — point the Stage 2 FfpVsConsts entry at an already
 // uploaded host slice. Used by encodeDraw after the FFP preTransformed

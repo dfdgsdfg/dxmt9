@@ -80,8 +80,8 @@ Required test shape:
 Current test placement:
 
 - Implemented as `conf-d3d9-lock-matrix`.
-- Built by `scripts/build_apps/build_dx9_fast_sanity_apps.sh`.
-- Run by default in `scripts/run_suites/run_dx9_fast_sanity_suite.sh` across
+- Built by `scripts/build_apps/build_conf-d3d9-fast-sanity.sh`.
+- Run by default in `scripts/run_suites/run_conf-d3d9-fast-sanity_suite.sh` across
   `dxmt9-x64`, `builtin-x64`, and `builtin-x86`.
 - Catalogue entry is `experiments/CATALOGUE.toml`.
 
@@ -203,7 +203,7 @@ DXVK behavior to mirror:
 Current `dxmt9` references:
 
 - Backbuffer usage is exercised indirectly by
-  `experiments/apps/common/dx9_fast_sanity.hpp:230`.
+  `experiments/apps/common/conf-d3d9-fast-sanity.hpp:230`.
 - Current command-queue tracking of the active backbuffer is in
   `src/dxmt9/dxmt9_command_queue.cpp:236`,
   `src/dxmt9/dxmt9_command_queue.cpp:245`, and
@@ -233,8 +233,8 @@ Status:
   oracle tests.
 - Prefer fast sanity apps over large sample apps for these quirks because the
   failures need to identify a single D3D9 compatibility rule.
-- Add new apps to `scripts/build_apps/build_dx9_fast_sanity_apps.sh` and
-  `scripts/run_suites/run_dx9_fast_sanity_suite.sh` only when they are deterministic enough
+- Add new apps to `scripts/build_apps/build_conf-d3d9-fast-sanity.sh` and
+  `scripts/run_suites/run_conf-d3d9-fast-sanity_suite.sh` only when they are deterministic enough
   to run in all three lanes.
 - If a test intentionally documents a current `dxmt9` gap, add it as an
   opt-in app first, then move it into the default fast sanity suite after the

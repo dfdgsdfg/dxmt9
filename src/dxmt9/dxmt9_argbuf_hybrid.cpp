@@ -39,6 +39,50 @@ ArgumentDescriptors buildArgumentDescriptors() {
   return descriptors;
 }
 
+ResourceArrayArgumentDescriptors buildResourceArrayArgumentDescriptors() {
+  ResourceArrayArgumentDescriptors descriptors{};
+  // ids 0..3 — the same four constant-buffer pointers as the constants-only
+  // table. Keeping them identical means a resource-array PSO's uniform reads
+  // are byte-for-byte the constants-only path; only the texture/sampler
+  // arrays are new.
+  for (u32 i = 0; i < shaders::kArgbufHybridConstantBufferCount; ++i) {
+    auto& d = descriptors.entries[i];
+    d.argumentType = WMTArgumentTypeBuffer;
+    d.index = i;
+    d.arrayLength = 0;
+    d.access = kArgumentAccessReadOnly;
+    d.textureType = 0;
+    d.constantBlockAlignment = kConstantBlockAlignment;
+  }
+  // texture array — kArgbufResourceArrayStageCount entries starting at id 4.
+  // MTLArgumentDescriptor for an MSL `array<texture2d<float>, N>` is N
+  // consecutive single-texture descriptors (arrayLength stays 0 per entry;
+  // the array shape comes from the consecutive [[id]] run + the MSL decl).
+  // textureType=WMTTextureType2D is the dominant case; cube/volume reuse the
+  // same slot (gpuResourceID is type-agnostic on the wire — see header).
+  std::size_t cursor = shaders::kArgbufHybridConstantBufferCount;
+  for (u32 s = 0; s < shaders::kArgbufResourceArrayStageCount; ++s, ++cursor) {
+    auto& d = descriptors.entries[cursor];
+    d.argumentType = WMTArgumentTypeTexture;
+    d.index = shaders::kArgbufResourceArrayTextureBaseId + s;
+    d.arrayLength = 0;
+    d.access = kArgumentAccessReadOnly;
+    d.textureType = static_cast<u32>(WMTTextureType2D);
+    d.constantBlockAlignment = 0;
+  }
+  // sampler array — kArgbufResourceArrayStageCount entries starting at id 12.
+  for (u32 s = 0; s < shaders::kArgbufResourceArrayStageCount; ++s, ++cursor) {
+    auto& d = descriptors.entries[cursor];
+    d.argumentType = WMTArgumentTypeSampler;
+    d.index = shaders::kArgbufResourceArraySamplerBaseId + s;
+    d.arrayLength = 0;
+    d.access = kArgumentAccessReadOnly;
+    d.textureType = 0;
+    d.constantBlockAlignment = 0;
+  }
+  return descriptors;
+}
+
 bool computeCapabilityGate(WMTArgumentBuffersTier argumentBuffersTier, bool apple3) {
   return argumentBuffersTier >= WMTArgumentBuffersTier2 && apple3;
 }
@@ -291,6 +335,67 @@ u64 updateDirtyArgbufRegions(CommandQueue& queue,
                                   kFfpPsArgbufIdx, seqId, recorder, residencyEncoder);
   }
   return bytes;
+}
+
+u32 populateResourceBindings(ArgbufEncoderResource& encoderResource,
+                             std::span<const ResourceArrayBinding> bindings,
+                             const ResourceArrayRecorder* recorder,
+                             WMT::RenderCommandEncoder residencyEncoder) {
+  if (!encoderResource.initialized()) return 0;
+  // Residency usage for an argbuf-pointed sampled texture: Read | Sample,
+  // visible to both the vertex and fragment stages. Fault candidate 4 — a
+  // resource only referenced through an argument buffer is NOT made
+  // resident by binding the argbuf at slot 30; without this explicit
+  // useResource the GPU faults (the historical texture-corpus readback
+  // fault). Read covers texelFetch-style access, Sample covers
+  // .sample(); both are cheap to over-request and the validation layer
+  // rejects a missing one, not a superset.
+  const auto kUsage = static_cast<WMTResourceUsage>(
+      WMTResourceUsageRead | WMTResourceUsageSample);
+  const auto kStages = static_cast<WMTRenderStages>(
+      WMTRenderStageVertex | WMTRenderStageFragment);
+  const bool suppress = recorder && recorder->suppressMetalCalls;
+  u32 residentTextures = 0;
+  for (const auto& b : bindings) {
+    if (b.stage >= shaders::kArgbufResourceArrayStageCount) {
+      continue;
+    }
+    const u32 textureId = shaders::kArgbufResourceArrayTextureBaseId + b.stage;
+    const u32 samplerId = shaders::kArgbufResourceArraySamplerBaseId + b.stage;
+    if (b.texture) {
+      if (recorder && recorder->setTexture) {
+        recorder->setTexture(recorder->userdata, b.texture.handle, textureId);
+      }
+      if (!suppress) {
+        encoderResource.argumentEncoder().setTexture(b.texture, textureId);
+      }
+      // Residency — fault candidate 4. Issue useResource even in the
+      // recorder path so the (handle, usage, stages) tuple is observable;
+      // the Metal call itself is gated on a live residencyEncoder.
+      if (recorder && recorder->useTexture) {
+        recorder->useTexture(recorder->userdata, b.texture.handle,
+                             static_cast<u32>(kUsage),
+                             static_cast<u32>(kStages));
+      }
+      if (residencyEncoder && !suppress) {
+        residencyEncoder.useResource(WMT::Resource{b.texture.handle}, kUsage,
+                                     kStages);
+      }
+      ++residentTextures;
+    }
+    if (b.sampler) {
+      if (recorder && recorder->setSampler) {
+        recorder->setSampler(recorder->userdata, b.sampler.handle, samplerId);
+      }
+      if (!suppress) {
+        encoderResource.argumentEncoder().setSamplerState(b.sampler, samplerId);
+      }
+      // Samplers carry no backing allocation — no useResource. Lifetime is
+      // the caller's WMT::SamplerState retention against the argbuf seqId
+      // (fault candidate 2).
+    }
+  }
+  return residentTextures;
 }
 
 void pointFfpVsAtSlice(ArgbufEncoderResource& encoderResource,

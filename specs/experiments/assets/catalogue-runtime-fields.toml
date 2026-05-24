@@ -79,6 +79,6 @@ source       = "https://github.com/Joshua-Ashton/d9vk"
 license      = "zlib"
 source_kind  = "third-party-fixture"
 binary       = "experiments/apps/conf-d3d9-clear/conf-d3d9-clear-x64.exe"
-launcher     = "experiments/launchers/dx9_fast_sanity.sh"
+launcher     = "experiments/launchers/conf-d3d9-fast-sanity.sh"
 requires_wine = true
 # (no wine_id, no install_drive_letter — fixture, not a wild install)

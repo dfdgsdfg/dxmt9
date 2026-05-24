@@ -234,6 +234,12 @@ std::size_t ShaderVariantKeyHash::operator()(const ShaderVariantKey& key) const 
   // hash so Stage 1 and Stage 2 PSOs of the same shader live in
   // distinct cache slots.
   hash = mix(hash, static_cast<u64>(key.argbufHybridMode));
+  // R-BACK-12.22..12.26 (resource-array sub-mode): the texture/sampler
+  // resource-array sub-bit participates in the key hash so a Stage 2
+  // constants-only PSO and a Stage 2 resource-array PSO of the same
+  // shader live in distinct cache slots — keeps the default lane
+  // byte-identical.
+  hash = mix(hash, static_cast<u64>(key.argbufResourceArray));
   // gap_d3d9 B.3: the LOD-bias gate bit participates in the key hash so the
   // bias-on (slot-4 + bias()) and bias-off (plain sample) variants of the same
   // shader hit distinct cache slots.
