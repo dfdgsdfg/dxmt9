@@ -160,9 +160,9 @@ def _parse_wine_source(source: str, file_basename: str) -> list[str]:
                           (returns [] since no canonical test name).
     """
     out: list[str] = []
-    # Cross-file: split on `,wine/`. The first segment is `wine/.../X.c:...`,
-    # any subsequent segments are missing the `wine/` prefix.
-    parts = re.split(r",(?=wine/)", source)
+    # Cross-file: split on `,wine/` or `+wine/` separators. Each subsequent
+    # segment still begins with `wine/dlls/...`.
+    parts = re.split(r"[,+](?=wine/)", source)
     for part in parts:
         m = re.match(r"^wine/dlls/d3d9/tests/([a-z0-9_]+)\.c:(.*)$", part.strip())
         if not m:
@@ -258,13 +258,25 @@ def collect_evidence(file_basename: str) -> dict[str, tuple[str, str]]:
         if not wines:
             continue
         fn = case.get("function") or ""
-        case_status = case.get("status") or ""
-        inv = _PE_STATUS_TO_INV.get(case_status, "scaffolded")
+        # Each [[case.evidence]] carries its own status; fall back to the
+        # case-level status if no evidence rows exist yet (newer-style cases
+        # that have not been run yet).
+        raw_statuses: list[str] = []
+        for ev in case.get("evidence", []) or []:
+            if isinstance(ev, dict):
+                s = ev.get("status") or ""
+                if s:
+                    raw_statuses.append(s)
+        if not raw_statuses:
+            cs = case.get("status") or ""
+            if cs:
+                raw_statuses.append(cs)
+        inv_statuses = [_PE_STATUS_TO_INV.get(s, "scaffolded") for s in raw_statuses]
         for w in wines:
             fn_map.setdefault(w, [])
             if fn and fn not in fn_map[w]:
                 fn_map[w].append(fn)
-            status_map.setdefault(w, []).append(inv)
+            status_map.setdefault(w, []).extend(inv_statuses or ["scaffolded"])
 
     corpus = _load_manifest(CORPUS_MANIFEST)
     oracle_pat = re.compile(
