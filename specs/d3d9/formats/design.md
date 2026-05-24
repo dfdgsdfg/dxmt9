@@ -34,6 +34,7 @@ format as **Required**, **Optional**, or **Unsupported** for dxmt9.
 | D3DFMT_V8U8 | RG8Snorm | **Required** | Signed two-channel (bump) |
 | D3DFMT_Q8W8V8U8 | RGBA8Snorm | **Required** | Signed four-channel |
 | D3DFMT_V16U16 | RG16Snorm | **Required** | |
+| D3DFMT_Q16W16V16U16 | RGBA16Snorm | **Optional** | Signed four-channel 16-bit (bump). Color/sampling supported; FormatInfo currently mirrors `A16B16G16R16` including `renderTarget=true` — real D3D9 may not advertise RT for it (minor caps over-report, tracked in `specs/gap_d3d9.md`) |
 | D3DFMT_CxV8U8 | none | **Unsupported** | Computed normal map; no Metal equivalent |
 
 ### BGRA Byte-Order Note
@@ -60,7 +61,8 @@ must replicate the R channel to G and B: `color.rgb = texture.rrr`.
 | D3DFMT_D24X8 | Depth24Unorm_Stencil8 | **Required (macOS)** | Stencil present but ignored by app |
 | D3DFMT_D16 | Depth16Unorm | **Required** | |
 | D3DFMT_D32 | Depth32Float | **Required** | Use float; D3D9 D32 = 32-bit fixed |
-| D3DFMT_D32F_LOCKABLE | Depth32Float | **Required** | Lockable depth; staging readback |
+| D3DFMT_D32F_LOCKABLE | Depth32Float | **Required** | Lockable float depth; staging readback |
+| D3DFMT_D32_LOCKABLE | Depth32Float | **Required** | Lockable 32-bit depth (D3D9b); Metal has no 32-bit-int depth, so mapped to Depth32Float like D32F_LOCKABLE |
 | D3DFMT_D16_LOCKABLE | Depth16Unorm | **Required** | Staging readback |
 | D3DFMT_D15S1 | none | **Unsupported** | No Metal equivalent |
 | D3DFMT_D24X4S4 | none | **Unsupported** | No Metal equivalent |
@@ -138,3 +140,53 @@ data is uploaded via `Lock`/`Unlock`:
 
 Conversion is performed by the core on the CPU during the Lock/Unlock cycle. The
 backend receives converted data in the target Metal format.
+
+## Vendor Pseudo-Formats and Hardware-Hack FOURCCs
+
+Per R-FORMAT-7 every FOURCC pseudo-format must be explicitly classified.
+Three are depth-as-texture sampler formats backed by real Metal depth
+formats; the rest are command triggers or capability probes (normative
+behaviour in R-FORMAT-11..14, R-CORE-3.9).
+
+| D3DFORMAT (FOURCC) | Metal mapping / mechanism | Support | Notes |
+|---|---|---|---|
+| `INTZ` | Depth32Float, sampled as texture | **Optional** | Depth-as-texture; sample returns depth in `.r`. Implemented. |
+| `DF16` | Depth16Unorm, sampled as texture | **Optional** | 16-bit depth-as-texture; mirrors INTZ. Implemented. |
+| `DF24` | Depth32Float, sampled as texture | **Optional** | 24-bit nominal; Depth32Float over-provisioned (no 24-bit depth-only Metal format). Implemented. |
+| `RESZ` | Command: MSAA depth-resolve trigger | **Optional** | R-FORMAT-11. Sentinel `D3DRS_POINTSIZE = 0x7FA05000` resolves the bound multisampled depth into an INTZ texture. |
+| `NULL` | Colorless render pass (no color storage) | **Optional** | R-FORMAT-12. Depth/stencil-only passes; backend omits / `DontCare`s the color attachment. |
+| `ATOC` | Render state: `alphaToCoverageEnabled` | n/a (state hack) | R-FORMAT-13. Enabled via `D3DRS_ADAPTIVETESS_Y`; ATI `A2M1`/`A2M0` aliases. Not a creatable surface. |
+| `NVDB` | none — no Metal depth-bounds test | **Unsupported** | R-FORMAT-14. `CheckDeviceFormat` → `D3DERR_NOTAVAILABLE`; correctness-neutral perf optimization, apps fall back. |
+| `RAWZ` | none | **Unsupported** | Legacy NVIDIA raw-depth read; no Metal path. |
+| `ATI1` / `ATI2` | BC4_RUnorm / BC5_RGUnorm | **Required** | Compressed; see Compressed Texture Formats table. |
+
+**RESZ resolve mechanism.** RESZ is not storage. The runtime trigger is
+`SetRenderState(D3DRS_POINTSIZE, 0x7FA05000)` while the multisampled
+depth surface is bound at texture stage 0. The PE layer recognises the
+sentinel (distinct from any plausible point size), records a
+depth-resolve command referencing the bound MSAA depth source and the
+INTZ destination, and the backend performs the resolve as a Metal
+render-pass depth-resolve attachment (`MTLMultisampleDepthResolveFilter`,
+typically `Sample`). A non-sentinel `D3DRS_POINTSIZE` keeps its normal
+point-size meaning and must not trigger a resolve.
+
+**NULL render target.** A `NULL` surface allocates no color backing. When
+bound as the active render target the backend configures the render pass
+with no color writes — the color attachment is omitted, or present with
+`MTLStoreActionDontCare` and no allocated texture — so the depth/stencil
+attachment is the effective target. This supports the common depth-only
+shadow pass and stencil-shadow-volume pass without wasting color
+bandwidth. Locking or reading back a NULL surface returns
+`D3DERR_INVALIDCALL`.
+
+**ATOC alpha-to-coverage.** Alpha-to-coverage is a render-state hack, not
+a creatable format. The PE layer detects `D3DRS_ADAPTIVETESS_Y ==
+MAKEFOURCC('A','T','O','C')` (enable) or `0` (disable), folds an
+alpha-to-coverage bit into the pipeline-state key so enabled and disabled
+draws hash to distinct PSOs, and the backend sets
+`MTLRenderPipelineDescriptor.alphaToCoverageEnabled`. The ATI
+`A2M1`/`A2M0` tokens are accepted as aliases.
+
+**Implementation status.** INTZ/DF16/DF24 are implemented. RESZ, NULL,
+ATOC are specified here but not yet implemented; NVDB and RAWZ are
+specified as Unsupported. See `specs/gap_d3d9.md` for the live status.

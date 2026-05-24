@@ -60,3 +60,50 @@ falls back to `Depth32Float_Stencil8`.
 **R-FORMAT-10** Formats that have no exact Metal equivalent but are accepted for
 upload must be converted during the core `Lock`/`Unlock` cycle before the backend
 receives data.
+
+## Vendor Pseudo-Format and Hardware-Hack Contracts
+
+These FOURCC values are not ordinary storage formats; they are command
+triggers or capability probes that D3D9 titles drive through the format
+and render-state surfaces. Concrete Metal mechanisms live in
+`specs/d3d9/formats/design.md` (§ Vendor Pseudo-Formats).
+
+**R-FORMAT-11** `D3DFMT_RESZ` (`MAKEFOURCC('R','E','S','Z')`) is an
+**Optional** *command* pseudo-format that resolves a multisampled depth
+surface into a bound `INTZ` depth texture. `CheckDeviceFormat(RESZ, …,
+D3DRTYPE_SURFACE)` must return `D3D_OK` only when the Metal device
+supports multisample depth resolve. RESZ carries no storage: the resolve
+is requested at runtime by binding the multisampled depth surface as a
+texture and writing the sentinel value `0x7FA05000` to `D3DRS_POINTSIZE`.
+The PE layer must detect this sentinel write and emit a depth-resolve
+command; the backend resolves the multisampled depth into the bound INTZ
+texture via a Metal render-pass depth-resolve attachment. A non-sentinel
+`D3DRS_POINTSIZE` value must retain its ordinary point-size meaning.
+
+**R-FORMAT-12** `D3DFMT_NULL` (`MAKEFOURCC('N','U','L','L')`) is a
+null render-target pseudo-format with no color storage, used for
+depth/stencil-only passes (shadow depth, stencil-shadow volumes).
+`CheckDeviceFormat(NULL, D3DUSAGE_RENDERTARGET, D3DRTYPE_SURFACE)` must
+return `D3D_OK`. A NULL render target must allocate no color backing;
+when it is the bound render target the backend must configure a render
+pass with no color writes (color attachment omitted or store action
+`DontCare`), leaving the depth/stencil attachment as the effective
+target. `Lock`/readback of a NULL surface must return
+`D3DERR_INVALIDCALL`.
+
+**R-FORMAT-13** Alpha-to-coverage is enabled through a cross-vendor
+render-state hack, not a creatable format: writing
+`MAKEFOURCC('A','T','O','C')` to `D3DRS_ADAPTIVETESS_Y` enables it and `0`
+disables it (the ATI `A2M1`/`A2M0` tokens are accepted as aliases). The
+PE layer must detect the enable/disable token, fold an alpha-to-coverage
+bit into the pipeline-state key, and the backend must set Metal
+`alphaToCoverageEnabled` accordingly. While disabled, the host render
+state reverts to its ordinary meaning.
+
+**R-FORMAT-14** `D3DFMT_NVDB` (`MAKEFOURCC('N','V','D','B')`) probes the
+NVIDIA depth-bounds-test capability. Metal has no depth-bounds test, so
+`CheckDeviceFormat(NVDB)` must return `D3DERR_NOTAVAILABLE`. The
+depth-bounds test is a performance-only, correctness-neutral
+optimization; reporting it unavailable causes conformant applications to
+disable it and fall back to normal depth testing, so no rendering
+regression results.

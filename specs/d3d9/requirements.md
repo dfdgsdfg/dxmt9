@@ -230,6 +230,20 @@ quirks validated by Wine's `dlls/d3d9/tests/stateblock.c` suite.
 `EndStateBlock()` without a matching active recording must also fail with
 `D3DERR_INVALIDCALL`.
 
+**R-CORE-3.9** The per-texture-coordinate wrap render states
+`D3DRS_WRAP0`..`D3DRS_WRAP15` must be accepted, shadowed, and
+stateblock-tracked like any other render state, so `GetRenderState`
+round-trips them per R-CORE-3.2. Their default value (`0`, all
+`D3DWRAPCOORD_*` bits clear) disables cylindrical texture-coordinate
+wrapping and renders correctly. dxmt9 has no faithful Metal equivalent
+for *enabled* cylindrical-wrap interpolation — a rasterizer-level
+shortest-path wrap of texture coordinates across a primitive — so a
+non-zero `D3DRS_WRAPn` is a **documented no-op**: geometry renders
+without wrapping and may show seams on the rare titles that rely on it.
+This is an accepted limitation, not a silent state drop; the value
+remains visible through `GetRenderState`. (Same class of Metal-capability
+limitation as the single-`[[clip_distance]]` clip-plane collapse.)
+
 ---
 
 ## 4. Resource Lifetime and Ownership
