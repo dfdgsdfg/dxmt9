@@ -27,11 +27,11 @@ changes not yet visible upstream.
 
 | Field | Value |
 |-------|-------|
-| Commit | `ee8c4285c4f5dc1438e6f173c9245591500c5b7e` — **work tree dirty** |
-| Short  | `ee8c428` |
-| Tag / describe | `ee8c428` |
+| Commit | `cf2ef200604ad5cfe27f6770b8fec70bf5276c0e` — **work tree dirty** |
+| Short  | `cf2ef20` |
+| Tag / describe | `cf2ef20` |
 | Author date | `2026-05-24` |
-| Subject | specs/gap_d3d9_wine_test: regen after cherry-pick reconciliation |
+| Subject | tests/conformance/d3d9: add 6 PE scaffolds — vertex decl / FVF / scene / RT-get |
 
 ### Wine reference revision
 
@@ -50,7 +50,7 @@ the same commit in the Wine checkout before opening the source.
 
 ```sh
 # Reproduce the inventory verbatim from a clean tree:
-git -C "$DXMT9_REPO" checkout ee8c4285c4f5dc1438e6f173c9245591500c5b7e
+git -C "$DXMT9_REPO" checkout cf2ef200604ad5cfe27f6770b8fec70bf5276c0e
 git -C "$WINE_REPO"  checkout 6e073d28dee3af7f4c965daec94644e0f9f92727
 python3 scripts/tools/gen_wine_d3d9_test_inventory.py
 ```
@@ -73,10 +73,10 @@ python3 scripts/tools/gen_wine_d3d9_test_inventory.py
 | Wine source | Tests | covered | scaffolded | partial | failing | other |
 |-------------|-----:|--------:|----------:|--------:|--------:|------:|
 | `visual.c` | 135 | 135 | 0 | 0 | 0 | 0 |
-| `device.c` | 105 | 91 | 14 | 0 | 0 | 0 |
-| `d3d9ex.c` | 27 | 19 | 8 | 0 | 0 | 0 |
+| `device.c` | 105 | 97 | 8 | 0 | 0 | 0 |
+| `d3d9ex.c` | 27 | 23 | 4 | 0 | 0 | 0 |
 | `stateblock.c` | 1 | 1 | 0 | 0 | 0 | 0 |
-| **TOTAL** | **268** | **246** | **22** | **0** | **0** | **0** |
+| **TOTAL** | **268** | **256** | **12** | **0** | **0** | **0** |
 
 `other` rolls up `deferred`, `partial/deferred`, and any UNTRACKED rows.
 
@@ -228,7 +228,7 @@ Source: [`dlls/d3d9/tests/device.c`](https://gitlab.winehq.org/wine/wine/-/blob/
 
 | Wine entry | Wine line | Status | dxmt9 PE function(s) / evidence |
 |------------|----------:|:------:|---------------------------------|
-| `test_begin_end_state_block` | 11366 | 📐 | — |
+| `test_begin_end_state_block` | 11366 | ✅ | `test_begin_end_state_block_policy` |
 | `test_check_device_format` | 12577 | ✅ | `test_check_device_format_conversion_matrix`, `test_factory_caps_edge_matrix`, `test_factory_validation_return_codes` |
 | `test_checkdevicemultisampletype` | 1116 | ✅ | `test_factory_caps_edge_matrix`, `test_factory_validation_return_codes` |
 | `test_clip_planes_limits` | 13133 | ✅ | `test_clip_plane_state_getters` |
@@ -241,7 +241,7 @@ Source: [`dlls/d3d9/tests/device.c`](https://gitlab.winehq.org/wine/wine/-/blob/
 | `test_d3d9on12` | 15138 | ✅ | `d3d9on12_loader_safe_failure` |
 | `test_depthstenciltest` | 2869 | ✅ | `test_set_get_depth_stencil_surface_policy` |
 | `test_destroyed_window` | 13008 | ✅ | `window_cursor_ownership` |
-| `test_device_caps` | 13482 | 📐 | — |
+| `test_device_caps` | 13482 | ✅ | `test_device_caps_roundtrip_policy` |
 | `test_device_window_reset` | 5899 | ✅ | `window_cursor_ownership` |
 | `test_display_formats` | 3551 | ✅ | `test_check_device_type_display_format_policy` |
 | `test_display_modes` | 2591 | ✅ | `test_factory_validation_return_codes` |
@@ -252,7 +252,7 @@ Source: [`dlls/d3d9/tests/device.c`](https://gitlab.winehq.org/wine/wine/-/blob/
 | `test_fvf_decl_conversion` | 501 | ✅ | `test_fvf_decl_conversion_roundtrip_policy` |
 | `test_fvf_decl_management` | 843 | ✅ | `test_fvf_decl_management` |
 | `test_get_declaration` | 428 | ✅ | `test_get_declaration_roundtrip_policy` |
-| `test_get_display_mode` | 14312 | 📐 | — |
+| `test_get_display_mode` | 14312 | ✅ | `test_get_display_mode_policy` |
 | `test_get_render_target_data` | 12841 | ✅ | `test_get_render_target_data_policy` |
 | `test_get_rt` | 3036 | ✅ | `test_get_rt_bounds_policy` |
 | `test_get_set_pixel_shader` | 7167 | ✅ | `test_get_set_pixel_shader` |
@@ -268,7 +268,7 @@ Source: [`dlls/d3d9/tests/device.c`](https://gitlab.winehq.org/wine/wine/-/blob/
 | `test_lockrect_invalid` | 8529 | ✅ | `test_resource_lock_error_policy`, `test_surface_reentrant_lock_preserves_output`, `test_texture_level_surface_unlock_policy`, `test_texture_reentrant_lock_preserves_output` |
 | `test_lockrect_offset` | 8440 | ✅ | `test_compressed_surface_lockrect_block_offset`, `test_resource_lock_error_policy`, `test_surface_lockrect_subrect_offset_policy` |
 | `test_lod` | 8247 | ✅ | `resource_getdc_lod_autogen_mipmap`, `test_texture_lod_policy` |
-| `test_lost_device` | 12107 | 📐 | — |
+| `test_lost_device` | 12107 | ✅ | `test_lost_device_cooperative_policy` |
 | `test_mipmap_gen` | 7878 | ✅ | `resource_getdc_lod_autogen_mipmap`, `test_texture_autogen_filter_level_policy` |
 | `test_mipmap_levels` | 1087 | ✅ | `test_base_texture_metadata_iface_policy`, `test_texture_auto_mipmap_level_count` |
 | `test_mipmap_lock` | 11963 | ✅ | `test_mipmap_surface_update_lock_policy`, `test_resource_lock_error_policy` |
@@ -287,9 +287,9 @@ Source: [`dlls/d3d9/tests/device.c`](https://gitlab.winehq.org/wine/wine/-/blob/
 | `test_query_support` | 6430 | ✅ | `query_support_probe`, `test_query_get_data_size_policy` |
 | `test_refcount` | 1497 | ✅ | `test_device_parent_caps_getter_policy`, `test_get_direct3d_addref`, `test_resource_get_device_addref`, `test_resource_get_device_wrapper_policy` |
 | `test_render_target_device_mismatch` | 12889 | ✅ | `test_render_target_device_mismatch` |
-| `test_reset` | 2031 | 📐 | — |
+| `test_reset` | 2031 | ✅ | `test_reset_hresult_matrix_policy` |
 | `test_reset_fullscreen` | 4807 | ✅ | `test_reset_fullscreen_focus_window_policy` |
-| `test_reset_resources` | 5985 | 📐 | — |
+| `test_reset_resources` | 5985 | ✅ | `test_reset_resources_policy` |
 | `test_resource_access` | 13659 | 📐 | — |
 | `test_resource_priority` | 12209 | ✅ | `test_resource_priority_pool_policy`, `test_resource_priority_roundtrip` |
 | `test_resource_type` | 11789 | ✅ | `test_base_texture_metadata_iface_policy`, `test_cube_texture_face_desc_parity`, `test_resource_type`, `test_texture_level_surface_desc_parity`, `test_volume_mipmap_level_desc_policy` |
@@ -343,18 +343,18 @@ Source: [`dlls/d3d9/tests/d3d9ex.c`](https://gitlab.winehq.org/wine/wine/-/blob/
 | `test_backbuffer_resize` | 3848 | ✅ | `test_backbuffer_resize_present_parameter_policy` |
 | `test_create_depth_stencil_surface_ex` | 640 | ✅ | `test_create_depth_stencil_surface_ex` |
 | `test_desktop_window` | 4976 | ✅ | `test_device_desktop_window_present_policy` |
-| `test_device_caps` | 4052 | 📐 | — |
+| `test_device_caps` | 4052 | ✅ | `test_device_caps_roundtrip_policy` |
 | `test_format_unknown` | 3977 | ✅ | `test_creation_failure_out_pointers` |
 | `test_frame_latency` | 4184 | ✅ | `test_ex_frame_latency_state` |
 | `test_get_adapter_displaymode_ex` | 522 | ✅ | `test_ex_adapter_display_mode_null_rotation`, `test_ex_adapter_luid_display_mode`, `test_ex_get_adapter_display_mode_ex_policy` |
 | `test_get_adapter_luid` | 400 | ✅ | `test_ex_adapter_luid_display_mode`, `test_ex_get_adapter_luid_policy` |
-| `test_lost_device` | 2009 | 📐 | — |
+| `test_lost_device` | 2009 | ✅ | `test_lost_device_cooperative_policy` |
 | `test_pinned_buffers` | 4883 | ✅ | `test_pinned_buffers_d3dusage_policy` |
 | `test_qi_base_to_ex` | 240 | 📐 | — |
 | `test_qi_ex_to_base` | 303 | 📐 | — |
-| `test_reset` | 888 | 📐 | — |
+| `test_reset` | 888 | ✅ | `test_reset_hresult_matrix_policy` |
 | `test_reset_ex` | 1420 | ✅ | `test_ex_adapter_mode_enum_bounds`, `test_ex_create_reset_mode_validation` |
-| `test_reset_resources` | 1843 | 📐 | — |
+| `test_reset_resources` | 1843 | ✅ | `test_reset_resources_policy` |
 | `test_resource_access` | 4229 | 📐 | — |
 | `test_scene` | 5031 | 📐 | — |
 | `test_swapchain_get_displaymode_ex` | 432 | ✅ | `test_ex_swapchain_display_mode`, `test_ex_swapchain_display_mode_null_rotation`, `test_swapchain_get_display_mode_ex_policy` |

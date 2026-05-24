@@ -4922,3 +4922,485 @@ done_window:
 done_d3d9:
     IDirect3D9_Release(d3d9);
 }
+
+/*
+ * Wine provenance: dlls/d3d9/tests/device.c
+ * function: test_begin_end_state_block (line 11366)
+ * Pins Begin/EndStateBlock HR contract: Begin then End returns S_OK and
+ * a non-NULL stateblock; a second End immediately after returns
+ * D3DERR_INVALIDCALL with the out-pointer left untouched; while a
+ * Begin is open, a nested Begin / CreateStateBlock / Apply / Capture
+ * all return D3DERR_INVALIDCALL.
+ */
+void test_begin_end_state_block_policy(const struct d3d9_api *api)
+{
+    IDirect3DStateBlock9 *stateblock = NULL;
+    IDirect3DStateBlock9 *stateblock2 = NULL;
+    IDirect3DStateBlock9 *sentinel = (IDirect3DStateBlock9 *)(uintptr_t)0xdeadbeef;
+    IDirect3DDevice9 *device = NULL;
+    IDirect3D9 *d3d9;
+    HWND window;
+    HRESULT hr;
+
+    d3d9 = api->create9(D3D_SDK_VERSION);
+    if (!d3d9)
+    {
+        skip_current_test("Direct3DCreate9 returned NULL");
+        return;
+    }
+
+    window = create_test_window();
+    CHECK_TRUE(window != NULL);
+    if (!window)
+        goto done_d3d9;
+
+    device = create_base_device(d3d9, window);
+    if (!device)
+        goto done_window;
+
+    /* Begin / change / End pair returns a valid stateblock. */
+    CHECK_HR(IDirect3DDevice9_BeginStateBlock(device), D3D_OK);
+    CHECK_HR(IDirect3DDevice9_SetRenderState(device, D3DRS_LIGHTING, FALSE), D3D_OK);
+    stateblock = sentinel;
+    hr = IDirect3DDevice9_EndStateBlock(device, &stateblock);
+    CHECK_HR(hr, D3D_OK);
+    CHECK_TRUE(stateblock != NULL && stateblock != sentinel);
+
+    /* Second End immediately after returns INVALIDCALL and leaves
+     * the out-pointer untouched. */
+    stateblock2 = sentinel;
+    hr = IDirect3DDevice9_EndStateBlock(device, &stateblock2);
+    CHECK_HR(hr, D3DERR_INVALIDCALL);
+    CHECK_TRUE(stateblock2 == sentinel);
+
+    /* Begin again; nested operations during the open block must fail. */
+    CHECK_HR(IDirect3DDevice9_BeginStateBlock(device), D3D_OK);
+    CHECK_HR(IDirect3DDevice9_BeginStateBlock(device), D3DERR_INVALIDCALL);
+    if (stateblock)
+    {
+        CHECK_HR(IDirect3DStateBlock9_Apply(stateblock), D3DERR_INVALIDCALL);
+        CHECK_HR(IDirect3DStateBlock9_Capture(stateblock), D3DERR_INVALIDCALL);
+    }
+    CHECK_HR(IDirect3DDevice9_CreateStateBlock(device, D3DSBT_ALL, &stateblock2),
+            D3DERR_INVALIDCALL);
+
+    /* Close the open block; End must succeed. */
+    stateblock2 = NULL;
+    CHECK_HR(IDirect3DDevice9_EndStateBlock(device, &stateblock2), D3D_OK);
+    CHECK_TRUE(stateblock2 != NULL);
+
+    if (stateblock2)
+        IDirect3DStateBlock9_Release(stateblock2);
+    if (stateblock)
+        IDirect3DStateBlock9_Release(stateblock);
+
+    IDirect3DDevice9_Release(device);
+done_window:
+    DestroyWindow(window);
+done_d3d9:
+    IDirect3D9_Release(d3d9);
+}
+
+/*
+ * Wine provenance: dlls/d3d9/tests/device.c (line 13482)
+ *              and dlls/d3d9/tests/d3d9ex.c (line 4052)
+ * function: test_device_caps
+ * Minimum observable contract: GetDeviceCaps round-trips at both the
+ * factory and device entry points, the field set is consistent (no
+ * bogus extension bits in Caps[1-3]), and per-adapter and per-device
+ * caps agree on the bits the public oracle reads.
+ */
+void test_device_caps_roundtrip_policy(const struct d3d9_api *api)
+{
+    static const DWORD caps1_allowed = D3DCAPS_READ_SCANLINE;
+    static const DWORD caps2_allowed =
+        D3DCAPS2_FULLSCREENGAMMA | D3DCAPS2_CANCALIBRATEGAMMA | D3DCAPS2_RESERVED
+        | D3DCAPS2_CANMANAGERESOURCE | D3DCAPS2_DYNAMICTEXTURES
+        | D3DCAPS2_CANAUTOGENMIPMAP | D3DCAPS2_CANSHARERESOURCE;
+    static const DWORD caps3_allowed =
+        D3DCAPS3_ALPHA_FULLSCREEN_FLIP_OR_DISCARD
+        | D3DCAPS3_LINEAR_TO_SRGB_PRESENTATION | D3DCAPS3_COPY_TO_VIDMEM
+        | D3DCAPS3_COPY_TO_SYSTEMMEM | D3DCAPS3_DXVAHD
+        | D3DCAPS3_DXVAHD_LIMITED | D3DCAPS3_RESERVED;
+    IDirect3DDevice9 *device = NULL;
+    IDirect3D9 *d3d9;
+    D3DCAPS9 factory_caps;
+    D3DCAPS9 device_caps;
+    HWND window;
+    HRESULT hr;
+
+    d3d9 = api->create9(D3D_SDK_VERSION);
+    if (!d3d9)
+    {
+        skip_current_test("Direct3DCreate9 returned NULL");
+        return;
+    }
+
+    window = create_test_window();
+    CHECK_TRUE(window != NULL);
+    if (!window)
+        goto done_d3d9;
+
+    /* Factory-side GetDeviceCaps for the default adapter. */
+    memset(&factory_caps, 0xcd, sizeof(factory_caps));
+    hr = IDirect3D9_GetDeviceCaps(d3d9, D3DADAPTER_DEFAULT, D3DDEVTYPE_HAL,
+            &factory_caps);
+    if (hr == D3DERR_NOTAVAILABLE)
+    {
+        skip_current_test("D3DDEVTYPE_HAL not available on this adapter");
+        goto done_window;
+    }
+    CHECK_HR(hr, D3D_OK);
+    CHECK_TRUE(factory_caps.AdapterOrdinal == D3DADAPTER_DEFAULT);
+    CHECK_TRUE(factory_caps.DeviceType == D3DDEVTYPE_HAL);
+    CHECK_TRUE((factory_caps.Caps & ~caps1_allowed) == 0);
+    CHECK_TRUE((factory_caps.Caps2 & ~caps2_allowed) == 0);
+    CHECK_TRUE((factory_caps.Caps3 & ~caps3_allowed) == 0);
+    CHECK_TRUE(factory_caps.MaxSimultaneousTextures != 0);
+    CHECK_TRUE(factory_caps.NumSimultaneousRTs != 0);
+
+    /* Device-side GetDeviceCaps must agree with the factory value. */
+    device = create_base_device(d3d9, window);
+    if (!device)
+        goto done_window;
+
+    memset(&device_caps, 0xcd, sizeof(device_caps));
+    CHECK_HR(IDirect3DDevice9_GetDeviceCaps(device, &device_caps), D3D_OK);
+    CHECK_TRUE(device_caps.AdapterOrdinal == factory_caps.AdapterOrdinal);
+    CHECK_TRUE(device_caps.DeviceType == factory_caps.DeviceType);
+    CHECK_TRUE(device_caps.Caps == factory_caps.Caps);
+    CHECK_TRUE(device_caps.Caps2 == factory_caps.Caps2);
+    CHECK_TRUE(device_caps.Caps3 == factory_caps.Caps3);
+    CHECK_TRUE(device_caps.MaxSimultaneousTextures
+            == factory_caps.MaxSimultaneousTextures);
+    CHECK_TRUE(device_caps.NumSimultaneousRTs
+            == factory_caps.NumSimultaneousRTs);
+    CHECK_TRUE(device_caps.VertexShaderVersion
+            == factory_caps.VertexShaderVersion);
+    CHECK_TRUE(device_caps.PixelShaderVersion
+            == factory_caps.PixelShaderVersion);
+
+    /* NULL out-pointer: must return D3DERR_INVALIDCALL, not crash. */
+    CHECK_HR(IDirect3DDevice9_GetDeviceCaps(device, NULL), D3DERR_INVALIDCALL);
+
+    IDirect3DDevice9_Release(device);
+done_window:
+    DestroyWindow(window);
+done_d3d9:
+    IDirect3D9_Release(d3d9);
+}
+
+/*
+ * Wine provenance: dlls/d3d9/tests/device.c
+ * function: test_get_display_mode (line 14312)
+ * Pins IDirect3DDevice9::GetDisplayMode HR contract: with iSwapChain=0
+ * on a windowed device the call succeeds and reports the default
+ * desktop format (D3DFMT_X8R8G8B8); GetAdapterDisplayMode agrees;
+ * the device's swapchain agrees; a NULL D3DDISPLAYMODE pointer is
+ * rejected with D3DERR_INVALIDCALL.
+ */
+void test_get_display_mode_policy(const struct d3d9_api *api)
+{
+    IDirect3DSwapChain9 *swapchain = NULL;
+    IDirect3DDevice9 *device = NULL;
+    IDirect3D9 *d3d9;
+    D3DDISPLAYMODE mode;
+    D3DDISPLAYMODE adapter_mode;
+    D3DDISPLAYMODE swap_mode;
+    HWND window;
+    HRESULT hr;
+
+    d3d9 = api->create9(D3D_SDK_VERSION);
+    if (!d3d9)
+    {
+        skip_current_test("Direct3DCreate9 returned NULL");
+        return;
+    }
+
+    window = create_test_window();
+    CHECK_TRUE(window != NULL);
+    if (!window)
+        goto done_d3d9;
+
+    device = create_base_device(d3d9, window);
+    if (!device)
+        goto done_window;
+
+    memset(&mode, 0, sizeof(mode));
+    hr = IDirect3DDevice9_GetDisplayMode(device, 0, &mode);
+    CHECK_HR(hr, D3D_OK);
+    CHECK_TRUE(mode.Format == D3DFMT_X8R8G8B8);
+    CHECK_TRUE(mode.Width != 0);
+    CHECK_TRUE(mode.Height != 0);
+
+    memset(&adapter_mode, 0, sizeof(adapter_mode));
+    hr = IDirect3D9_GetAdapterDisplayMode(d3d9, D3DADAPTER_DEFAULT,
+            &adapter_mode);
+    CHECK_HR(hr, D3D_OK);
+    CHECK_TRUE(adapter_mode.Format == D3DFMT_X8R8G8B8);
+
+    hr = IDirect3DDevice9_GetSwapChain(device, 0, &swapchain);
+    CHECK_HR(hr, D3D_OK);
+    if (swapchain)
+    {
+        memset(&swap_mode, 0, sizeof(swap_mode));
+        CHECK_HR(IDirect3DSwapChain9_GetDisplayMode(swapchain, &swap_mode),
+                D3D_OK);
+        CHECK_TRUE(swap_mode.Format == D3DFMT_X8R8G8B8);
+        IDirect3DSwapChain9_Release(swapchain);
+    }
+
+    /* NULL out-pointer rejection. */
+    CHECK_HR(IDirect3DDevice9_GetDisplayMode(device, 0, NULL),
+            D3DERR_INVALIDCALL);
+
+    IDirect3DDevice9_Release(device);
+done_window:
+    DestroyWindow(window);
+done_d3d9:
+    IDirect3D9_Release(d3d9);
+}
+
+/*
+ * Wine provenance: dlls/d3d9/tests/device.c (line 12107)
+ *              and dlls/d3d9/tests/d3d9ex.c (line 2009)
+ * function: test_lost_device
+ * Pins TestCooperativeLevel and Present on a freshly created device.
+ * The full fullscreen focus-loss / restore / reset matrix used by Wine
+ * relies on real fullscreen behaviour that is not deterministic under
+ * automation; here we pin the public contract that *can* be exercised
+ * windowed: TestCooperativeLevel returns S_OK on a healthy device,
+ * Present returns S_OK, and a Reset on a healthy device returns S_OK
+ * with subsequent TestCooperativeLevel still S_OK.
+ */
+void test_lost_device_cooperative_policy(const struct d3d9_api *api)
+{
+    D3DPRESENT_PARAMETERS pp;
+    IDirect3DDevice9 *device = NULL;
+    IDirect3D9 *d3d9;
+    HWND window;
+
+    d3d9 = api->create9(D3D_SDK_VERSION);
+    if (!d3d9)
+    {
+        skip_current_test("Direct3DCreate9 returned NULL");
+        return;
+    }
+
+    window = create_test_window();
+    CHECK_TRUE(window != NULL);
+    if (!window)
+        goto done_d3d9;
+
+    device = create_base_device(d3d9, window);
+    if (!device)
+        goto done_window;
+
+    /* Healthy windowed device: TestCooperativeLevel -> S_OK. */
+    CHECK_HR(IDirect3DDevice9_TestCooperativeLevel(device), D3D_OK);
+    /* Present on a healthy device must succeed. */
+    CHECK_HR(IDirect3DDevice9_Present(device, NULL, NULL, NULL, NULL), D3D_OK);
+
+    /* Reset on a healthy device must succeed and leave it healthy. */
+    pp = default_present_parameters(window);
+    CHECK_HR(IDirect3DDevice9_Reset(device, &pp), D3D_OK);
+    CHECK_HR(IDirect3DDevice9_TestCooperativeLevel(device), D3D_OK);
+    CHECK_HR(IDirect3DDevice9_Present(device, NULL, NULL, NULL, NULL), D3D_OK);
+
+    IDirect3DDevice9_Release(device);
+done_window:
+    DestroyWindow(window);
+done_d3d9:
+    IDirect3D9_Release(d3d9);
+}
+
+/*
+ * Wine provenance: dlls/d3d9/tests/device.c (line 2031)
+ *              and dlls/d3d9/tests/d3d9ex.c (line 888)
+ * function: test_reset
+ * Pins the HR matrix for IDirect3DDevice9::Reset on a windowed device:
+ *   - Reset with a fully-specified valid D3DPRESENT_PARAMETERS -> S_OK.
+ *   - Reset with BackBufferCount==0 normalises to 1 and -> S_OK.
+ *   - Reset with NULL pp -> D3DERR_INVALIDCALL (out-of-contract, no
+ *     reset performed).
+ *   - After a successful Reset, GetSwapChain(0,...) -> S_OK and the
+ *     reported backbuffer dimensions match the resized values.
+ * The Wine fullscreen mode-change subset of test_reset depends on
+ * registry_mode + adapter mode enumeration that is not deterministic
+ * under headless automation; only the windowed HR contract is pinned.
+ */
+void test_reset_hresult_matrix_policy(const struct d3d9_api *api)
+{
+    D3DPRESENT_PARAMETERS pp;
+    IDirect3DSwapChain9 *swapchain = NULL;
+    D3DSURFACE_DESC desc;
+    IDirect3DSurface9 *backbuffer = NULL;
+    IDirect3DDevice9 *device = NULL;
+    IDirect3D9 *d3d9;
+    HWND window;
+    HRESULT hr;
+
+    d3d9 = api->create9(D3D_SDK_VERSION);
+    if (!d3d9)
+    {
+        skip_current_test("Direct3DCreate9 returned NULL");
+        return;
+    }
+
+    window = create_test_window();
+    CHECK_TRUE(window != NULL);
+    if (!window)
+        goto done_d3d9;
+
+    device = create_base_device(d3d9, window);
+    if (!device)
+        goto done_window;
+
+    /* NULL pp: rejected with INVALIDCALL. */
+    CHECK_HR(IDirect3DDevice9_Reset(device, NULL), D3DERR_INVALIDCALL);
+    /* Device still healthy after invalid Reset. */
+    CHECK_HR(IDirect3DDevice9_TestCooperativeLevel(device), D3D_OK);
+
+    /* Valid resize Reset. */
+    pp = default_present_parameters(window);
+    pp.BackBufferWidth = 320;
+    pp.BackBufferHeight = 240;
+    CHECK_HR(IDirect3DDevice9_Reset(device, &pp), D3D_OK);
+    CHECK_HR(IDirect3DDevice9_TestCooperativeLevel(device), D3D_OK);
+
+    /* Backbuffer dimensions reflect the resize. */
+    hr = IDirect3DDevice9_GetSwapChain(device, 0, &swapchain);
+    CHECK_HR(hr, D3D_OK);
+    if (swapchain)
+    {
+        hr = IDirect3DSwapChain9_GetBackBuffer(swapchain, 0,
+                D3DBACKBUFFER_TYPE_MONO, &backbuffer);
+        CHECK_HR(hr, D3D_OK);
+        if (backbuffer)
+        {
+            memset(&desc, 0, sizeof(desc));
+            CHECK_HR(IDirect3DSurface9_GetDesc(backbuffer, &desc), D3D_OK);
+            CHECK_TRUE(desc.Width == 320);
+            CHECK_TRUE(desc.Height == 240);
+            IDirect3DSurface9_Release(backbuffer);
+        }
+        IDirect3DSwapChain9_Release(swapchain);
+    }
+
+    /* BackBufferCount==0 normalises to 1, Reset still succeeds. */
+    pp = default_present_parameters(window);
+    pp.BackBufferCount = 0;
+    CHECK_HR(IDirect3DDevice9_Reset(device, &pp), D3D_OK);
+    CHECK_HR(IDirect3DDevice9_TestCooperativeLevel(device), D3D_OK);
+
+    IDirect3DDevice9_Release(device);
+done_window:
+    DestroyWindow(window);
+done_d3d9:
+    IDirect3D9_Release(d3d9);
+}
+
+/*
+ * Wine provenance: dlls/d3d9/tests/device.c (line 5985)
+ *              and dlls/d3d9/tests/d3d9ex.c (line 1843)
+ * function: test_reset_resources
+ * Pins the Reset contract w.r.t. active resources: after Reset, the
+ * implicit backbuffer/RT(0) chain is rebuilt from the present
+ * parameters, GetRenderTarget(0) returns the new implicit backbuffer,
+ * and GetRenderTarget(i) for i>=1 returns D3DERR_NOTFOUND until the
+ * app re-binds an extra RT. Resources bound at Reset time
+ * (depth-stencil, additional RTs) are dropped.
+ */
+void test_reset_resources_policy(const struct d3d9_api *api)
+{
+    IDirect3DSurface9 *ds_surface = NULL;
+    IDirect3DSurface9 *rt = NULL;
+    IDirect3DSurface9 *bb = NULL;
+    IDirect3DDevice9 *device = NULL;
+    D3DPRESENT_PARAMETERS pp;
+    IDirect3D9 *d3d9;
+    D3DCAPS9 caps;
+    UINT i;
+    HWND window;
+    HRESULT hr;
+
+    d3d9 = api->create9(D3D_SDK_VERSION);
+    if (!d3d9)
+    {
+        skip_current_test("Direct3DCreate9 returned NULL");
+        return;
+    }
+
+    window = create_test_window();
+    CHECK_TRUE(window != NULL);
+    if (!window)
+        goto done_d3d9;
+
+    device = create_base_device(d3d9, window);
+    if (!device)
+        goto done_window;
+
+    CHECK_HR(IDirect3DDevice9_GetDeviceCaps(device, &caps), D3D_OK);
+
+    /* Create + bind an extra depth-stencil surface. */
+    hr = IDirect3DDevice9_CreateDepthStencilSurface(device, 128, 128,
+            D3DFMT_D24S8, D3DMULTISAMPLE_NONE, 0, TRUE, &ds_surface, NULL);
+    if (SUCCEEDED(hr) && ds_surface)
+    {
+        CHECK_HR(IDirect3DDevice9_SetDepthStencilSurface(device, ds_surface),
+                D3D_OK);
+        IDirect3DSurface9_Release(ds_surface);
+        ds_surface = NULL;
+    }
+
+    /* Bind additional RTs (slots 1..NumSimultaneousRTs-1). */
+    for (i = 1; i < caps.NumSimultaneousRTs; ++i)
+    {
+        IDirect3DTexture9 *texture = NULL;
+        IDirect3DSurface9 *surface = NULL;
+        hr = IDirect3DDevice9_CreateTexture(device, 128, 128, 1,
+                D3DUSAGE_RENDERTARGET, D3DFMT_A8R8G8B8, D3DPOOL_DEFAULT,
+                &texture, NULL);
+        if (FAILED(hr) || !texture)
+            continue;
+        if (SUCCEEDED(IDirect3DTexture9_GetSurfaceLevel(texture, 0, &surface))
+                && surface)
+        {
+            IDirect3DDevice9_SetRenderTarget(device, i, surface);
+            IDirect3DSurface9_Release(surface);
+        }
+        IDirect3DTexture9_Release(texture);
+    }
+
+    /* Reset rebuilds the implicit chain. */
+    pp = default_present_parameters(window);
+    CHECK_HR(IDirect3DDevice9_Reset(device, &pp), D3D_OK);
+
+    /* GetRenderTarget(0) returns the new implicit backbuffer. */
+    hr = IDirect3DDevice9_GetBackBuffer(device, 0, 0, D3DBACKBUFFER_TYPE_MONO,
+            &bb);
+    CHECK_HR(hr, D3D_OK);
+    hr = IDirect3DDevice9_GetRenderTarget(device, 0, &rt);
+    CHECK_HR(hr, D3D_OK);
+    CHECK_TRUE(rt == bb);
+    if (rt)
+        IDirect3DSurface9_Release(rt);
+    if (bb)
+        IDirect3DSurface9_Release(bb);
+
+    /* Slots 1..NumSimultaneousRTs-1 are now unbound: D3DERR_NOTFOUND. */
+    for (i = 1; i < caps.NumSimultaneousRTs; ++i)
+    {
+        IDirect3DSurface9 *extra = NULL;
+        hr = IDirect3DDevice9_GetRenderTarget(device, i, &extra);
+        CHECK_HR(hr, D3DERR_NOTFOUND);
+        if (extra)
+            IDirect3DSurface9_Release(extra);
+    }
+
+    IDirect3DDevice9_Release(device);
+done_window:
+    DestroyWindow(window);
+done_d3d9:
+    IDirect3D9_Release(d3d9);
+}

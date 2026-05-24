@@ -5644,3 +5644,147 @@ status = "passing"
 source = "tests/conformance/d3d9/evidence/sikarugir-cx-24.0.7-builtin-x64.json:1"
 summary = "Sikarugir-CX 24.0.7 builtin lane x64 2026-05-24 — passing after scope reduction to unmapped-VB draw probe."
 
+[[case]]
+executable = "dxmt9-d3d9-conformance.exe"
+source_file = "d3d9_conformance_device.c"
+function = "test_begin_end_state_block_policy"
+source = "wine/dlls/d3d9/tests/device.c:test_begin_end_state_block"
+source_kind = "behavioral-oracle"
+license = "LGPL-2.1-or-later"
+license_scope = "external-not-vendored"
+upstream_commit = "6e073d28dee3af7f4c965daec94644e0f9f92727"
+lanes = ["app-local", "builtin"]
+arches = ["x64", "x86"]
+area = "stateblock"
+owner = "core/device"
+requirements = ["R-TEST-12.3"]
+acceptance = ["BeginStateBlock + EndStateBlock returns S_OK and a non-NULL stateblock", "A second EndStateBlock immediately after returns D3DERR_INVALIDCALL and leaves the out-pointer untouched", "While a Begin is open, nested BeginStateBlock / CreateStateBlock / Apply / Capture all return D3DERR_INVALIDCALL"]
+status = "partial"
+
+[[case.evidence]]
+lane = "builtin"
+arch = "x64"
+status = "passing"
+source = "tests/conformance/d3d9/evidence/sikarugir-cx-24.0.7-builtin-x64.json:1"
+summary = "Sikarugir-CX 24.0.7 builtin lane x64 2026-05-24 — passing in chunked runner snapshot."
+
+[[case]]
+executable = "dxmt9-d3d9-conformance.exe"
+source_file = "d3d9_conformance_device.c"
+function = "test_device_caps_roundtrip_policy"
+source = "wine/dlls/d3d9/tests/device.c:test_device_caps,wine/dlls/d3d9/tests/d3d9ex.c:test_device_caps"
+source_kind = "behavioral-oracle"
+license = "LGPL-2.1-or-later"
+license_scope = "external-not-vendored"
+upstream_commit = "6e073d28dee3af7f4c965daec94644e0f9f92727"
+lanes = ["app-local", "builtin"]
+arches = ["x64", "x86"]
+area = "device-caps"
+owner = "core/device"
+requirements = ["R-TEST-12.3"]
+acceptance = ["IDirect3D9::GetDeviceCaps and IDirect3DDevice9::GetDeviceCaps both succeed and agree on AdapterOrdinal, DeviceType, Caps, Caps2, Caps3, NumSimultaneousRTs, and shader versions", "Caps / Caps2 / Caps3 contain no bits outside the public D3D9 oracle allow-list", "GetDeviceCaps(NULL) returns D3DERR_INVALIDCALL"]
+status = "partial"
+
+[[case.evidence]]
+lane = "builtin"
+arch = "x64"
+status = "passing"
+source = "tests/conformance/d3d9/evidence/sikarugir-cx-24.0.7-builtin-x64.json:1"
+summary = "Sikarugir-CX 24.0.7 builtin lane x64 2026-05-24 — passing in chunked runner snapshot (shared coverage for device.c:test_device_caps and d3d9ex.c:test_device_caps)."
+
+[[case]]
+executable = "dxmt9-d3d9-conformance.exe"
+source_file = "d3d9_conformance_device.c"
+function = "test_get_display_mode_policy"
+source = "wine/dlls/d3d9/tests/device.c:test_get_display_mode"
+source_kind = "behavioral-oracle"
+license = "LGPL-2.1-or-later"
+license_scope = "external-not-vendored"
+upstream_commit = "6e073d28dee3af7f4c965daec94644e0f9f92727"
+lanes = ["app-local", "builtin"]
+arches = ["x64", "x86"]
+area = "display-mode"
+owner = "core/device"
+requirements = ["R-TEST-12.3"]
+acceptance = ["IDirect3DDevice9::GetDisplayMode(swap=0) returns S_OK and Format=D3DFMT_X8R8G8B8 with non-zero width/height", "IDirect3D9::GetAdapterDisplayMode(D3DADAPTER_DEFAULT) returns S_OK and the same Format", "IDirect3DSwapChain9::GetDisplayMode on the device's implicit swapchain returns S_OK and the same Format", "GetDisplayMode with NULL D3DDISPLAYMODE* returns D3DERR_INVALIDCALL"]
+status = "partial"
+
+[[case.evidence]]
+lane = "builtin"
+arch = "x64"
+status = "passing"
+source = "tests/conformance/d3d9/evidence/sikarugir-cx-24.0.7-builtin-x64.json:1"
+summary = "Sikarugir-CX 24.0.7 builtin lane x64 2026-05-24 — passing in chunked runner snapshot."
+
+[[case]]
+executable = "dxmt9-d3d9-conformance.exe"
+source_file = "d3d9_conformance_device.c"
+function = "test_lost_device_cooperative_policy"
+source = "wine/dlls/d3d9/tests/device.c:test_lost_device,wine/dlls/d3d9/tests/d3d9ex.c:test_lost_device"
+source_kind = "behavioral-oracle"
+license = "LGPL-2.1-or-later"
+license_scope = "external-not-vendored"
+upstream_commit = "6e073d28dee3af7f4c965daec94644e0f9f92727"
+lanes = ["app-local", "builtin"]
+arches = ["x64", "x86"]
+area = "lost-device"
+owner = "core/device"
+requirements = ["R-TEST-12.3"]
+acceptance = ["TestCooperativeLevel on a healthy windowed device returns D3D_OK", "Present on a healthy device returns D3D_OK", "Reset on a healthy device returns D3D_OK and subsequent TestCooperativeLevel / Present remain D3D_OK. The full Wine fullscreen focus-loss / D3DERR_DEVICELOST matrix is left to experiments — it depends on non-deterministic fullscreen focus events under headless automation."]
+status = "partial"
+
+[[case.evidence]]
+lane = "builtin"
+arch = "x64"
+status = "passing"
+source = "tests/conformance/d3d9/evidence/sikarugir-cx-24.0.7-builtin-x64.json:1"
+summary = "Sikarugir-CX 24.0.7 builtin lane x64 2026-05-24 — passing in chunked runner snapshot (shared coverage for device.c:test_lost_device and d3d9ex.c:test_lost_device, windowed subset only)."
+
+[[case]]
+executable = "dxmt9-d3d9-conformance.exe"
+source_file = "d3d9_conformance_device.c"
+function = "test_reset_hresult_matrix_policy"
+source = "wine/dlls/d3d9/tests/device.c:test_reset,wine/dlls/d3d9/tests/d3d9ex.c:test_reset"
+source_kind = "behavioral-oracle"
+license = "LGPL-2.1-or-later"
+license_scope = "external-not-vendored"
+upstream_commit = "6e073d28dee3af7f4c965daec94644e0f9f92727"
+lanes = ["app-local", "builtin"]
+arches = ["x64", "x86"]
+area = "reset"
+owner = "core/device"
+requirements = ["R-TEST-12.3"]
+acceptance = ["Reset(NULL) returns D3DERR_INVALIDCALL and leaves the device healthy", "Reset with valid resized present parameters returns S_OK; the backbuffer chain rebuilds with the new dimensions", "Reset with BackBufferCount=0 normalises to 1 and returns S_OK. The fullscreen mode-change subset of Wine's test_reset is gated by adapter mode enumeration and is left to experiments."]
+status = "partial"
+
+[[case.evidence]]
+lane = "builtin"
+arch = "x64"
+status = "passing"
+source = "tests/conformance/d3d9/evidence/sikarugir-cx-24.0.7-builtin-x64.json:1"
+summary = "Sikarugir-CX 24.0.7 builtin lane x64 2026-05-24 — passing in chunked runner snapshot (shared coverage for device.c:test_reset and d3d9ex.c:test_reset, windowed HR matrix only)."
+
+[[case]]
+executable = "dxmt9-d3d9-conformance.exe"
+source_file = "d3d9_conformance_device.c"
+function = "test_reset_resources_policy"
+source = "wine/dlls/d3d9/tests/device.c:test_reset_resources,wine/dlls/d3d9/tests/d3d9ex.c:test_reset_resources"
+source_kind = "behavioral-oracle"
+license = "LGPL-2.1-or-later"
+license_scope = "external-not-vendored"
+upstream_commit = "6e073d28dee3af7f4c965daec94644e0f9f92727"
+lanes = ["app-local", "builtin"]
+arches = ["x64", "x86"]
+area = "reset"
+owner = "core/device"
+requirements = ["R-TEST-12.3"]
+acceptance = ["With a depth-stencil and additional RTs (slots 1..NumSimultaneousRTs-1) bound, Reset returns S_OK", "After Reset, GetRenderTarget(0) returns the new implicit backbuffer surface (matches GetBackBuffer(0,0,MONO))", "After Reset, GetRenderTarget(i) for i>=1 returns D3DERR_NOTFOUND until the app re-binds"]
+status = "partial"
+
+[[case.evidence]]
+lane = "builtin"
+arch = "x64"
+status = "passing"
+source = "tests/conformance/d3d9/evidence/sikarugir-cx-24.0.7-builtin-x64.json:1"
+summary = "Sikarugir-CX 24.0.7 builtin lane x64 2026-05-24 — passing in chunked runner snapshot (shared coverage for device.c:test_reset_resources and d3d9ex.c:test_reset_resources)."
+
