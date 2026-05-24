@@ -41,6 +41,8 @@ constexpr u32 kD3DFmtD24X8 = 77u;
 constexpr u32 kD3DFmtDXT5 = 894720068u;
 // FOURCC 'INTZ' = ('I')|('N'<<8)|('T'<<16)|('Z'<<24) = 0x5A544E49.
 constexpr u32 kD3DFmtINTZ = 1515474505u;
+// FOURCC 'NULL' = ('N')|('U'<<8)|('L'<<16)|('L'<<24) = 0x4C4C554E.
+constexpr u32 kD3DFmtNULL = 1280070990u;
 
 // Native unit tests can drive the public D9C creation calls into core
 // resources and the recording backend. They cannot see the final
@@ -1050,6 +1052,86 @@ void testIntzDepthSampleableFormatMapping() {
         "INTZ texture usage includes RenderTarget");
 }
 
+// D3DFMT_NULL — colorless render target (R-FORMAT-12,
+// specs/d3d9/formats/design.md "NULL render target"). Creating a NULL
+// render-target surface must SUCCEED but allocate no color backing; the
+// surface is flagged as a null render target so the backend render pass
+// can omit the color attachment. Lock/LockRect/readback on a NULL surface
+// must return D3DERR_INVALIDCALL. The render-pass color-attachment omission
+// itself is ObjC++/Metal and validated at the GPU/runtime level, not here.
+void testNullRenderTargetColorlessBehavior() {
+  // Classification prerequisite landed in 2f619f0: NULL FOURCC maps to
+  // Format::NullRt, renderTarget-capable, placeholder BGRA8Unorm backend.
+  checkEq(dxmt9::d3d9::devicec::fmtFromD3D(kD3DFmtNULL), Format::NullRt,
+          "NULL FOURCC maps to core Format::NullRt");
+  checkEq(dxmt9::d3d9::devicec::fmtToD3D(Format::NullRt), kD3DFmtNULL,
+          "NULL core format round-trips back to FOURCC");
+
+  const auto* info = findFormatInfo(Format::NullRt);
+  check(info != nullptr, "NULL has a format-table entry");
+  if (info) {
+    check(info->renderTarget, "NULL is render-target capable");
+    check(!info->depthStencil, "NULL is not itself a depth-stencil format");
+    check(!info->compressed, "NULL is not block-compressed");
+  }
+
+  PublicDevice fixture;
+
+  // (b)/(a) Creation: a NULL render target must succeed and reach the
+  // backend tagged renderTarget, just like any other RT surface.
+  const auto rtBefore = fixture.backend->createdSurfaces.size();
+  auto nullRt = UniqueSurface(dxmt9c_device_create_render_target(
+      fixture.c(), 64, 64, kD3DFmtNULL, kD3DMultiSampleNone, 0, 0, nullptr));
+  check(nullRt != nullptr, "NULL render-target creation succeeds");
+  checkEq(fixture.backend->createdSurfaces.size(), rtBefore + size_t{1},
+          "NULL render target reaches backend");
+  const auto& nullDesc = fixture.backend->createdSurfaces[rtBefore];
+  checkEq(nullDesc.format, Format::NullRt, "NULL backend format");
+  check(nullDesc.renderTarget, "NULL backend render-target flag");
+
+  // (a) No color backing: the core surface must report itself as a null
+  // render target and allocate ZERO bytes of color storage even though the
+  // surface is 64x64 (a normal RT would allocate width*height*bpp bytes).
+  check(nullRt->obj->isNullRenderTarget(),
+        "core surface reports NULL render-target marker");
+  checkEq(nullRt->obj->colorBackingByteSize(), size_t{0},
+          "NULL render target allocates no color backing bytes");
+
+  const auto nullPublic = surfaceDesc(nullRt.get(), "NULL public desc");
+  checkEq(nullPublic.format, kD3DFmtNULL, "NULL public format round-trip");
+  checkEq(nullPublic.resourceType, kD3DResourceTypeSurface,
+          "NULL resource type is SURFACE");
+  checkEq(nullPublic.width, 64u, "NULL public width preserved");
+  checkEq(nullPublic.height, 64u, "NULL public height preserved");
+
+  // (c) Lock/LockRect on a NULL surface must be rejected — there is no
+  // color storage to map.
+  D9CLockedRect lock{};
+  checkEq(dxmt9c_surface_lock_rect(nullRt.get(), &lock, nullptr, 0),
+          D3DERR_INVALIDCALL, "NULL surface full Lock returns INVALIDCALL");
+  check(lock.bits == nullptr, "NULL surface lock yields no bits");
+
+  D9CLockedRect rectLock{};
+  const D9CRect subRect{0, 0, 32, 32};
+  checkEq(dxmt9c_surface_lock_rect(nullRt.get(), &rectLock, &subRect, 0),
+          D3DERR_INVALIDCALL, "NULL surface LockRect returns INVALIDCALL");
+
+  // The core-level lockRect must independently reject (the C bridge maps a
+  // null/zero region to INVALIDCALL, but verify the core contract too).
+  const auto coreLock = nullRt->obj->lockRect(nullptr, 0);
+  check(coreLock.data == nullptr && coreLock.pitch == 0,
+        "core NULL surface lockRect yields empty region");
+
+  // (c) GetRenderTargetData with a NULL source must be rejected. Pair the
+  // NULL surface against a normal offscreen system-memory destination.
+  auto dest = UniqueSurface(dxmt9c_device_create_offscreen_surface(
+      fixture.c(), 64, 64, kD3DFmtA8R8G8B8, kD3DPoolSystemMem, nullptr));
+  check(dest != nullptr, "offscreen readback destination creation succeeds");
+  checkEq(fixture.device->GetRenderTargetData(nullRt->obj, dest->obj),
+          D3DERR_INVALIDCALL,
+          "GetRenderTargetData from NULL source returns INVALIDCALL");
+}
+
 }  // namespace
 
 int main() {
@@ -1065,6 +1147,7 @@ int main() {
     testCubeTextureFaceMajorMiptreeSubresourceBoundaries();
     testSurfaceDescriptorsMultisampleDepthFallbackAndOffscreenPitch();
     testIntzDepthSampleableFormatMapping();
+    testNullRenderTargetColorlessBehavior();
   } catch (const TestFailure& error) {
     std::cerr << error.what() << '\n';
     return EXIT_FAILURE;

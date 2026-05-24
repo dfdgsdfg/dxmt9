@@ -953,7 +953,16 @@ WMT::Reference<WMT::RenderCommandEncoder> beginRenderPass(
     std::size_t lookaheadStartIndex) {
   const auto& hot = *drawState.hot;
   auto* primarySurface = ctx.pool.findSurface(hot.colorAttachments[0].handle.value);
-  if (!primarySurface || !primarySurface->texture) {
+  // R-FORMAT-12: a D3DFMT_NULL render target is colorless and has no Metal
+  // color texture by design. When RT0 is a NULL render target the render
+  // pass is depth/stencil-only — proceed (the per-attachment loop below
+  // omits every color attachment that has no texture, so the NULL RT
+  // contributes no color attachment and the bound depth/stencil becomes
+  // the effective target). Only abort when RT0 is genuinely missing, or it
+  // is a normal color RT that failed to allocate its texture.
+  const bool primaryIsNullRt =
+      primarySurface && primarySurface->desc.format == core::Format::NullRt;
+  if (!primarySurface || (!primarySurface->texture && !primaryIsNullRt)) {
     return {};
   }
   WMTRenderPassInfo passInfo{};

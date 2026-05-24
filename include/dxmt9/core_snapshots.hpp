@@ -1192,6 +1192,21 @@ class Surface : public std::enable_shared_from_this<Surface> {
     return true;
   }
   ContainerKind containerKind() const noexcept { return containerKind_; }
+  // R-FORMAT-12: a D3DFMT_NULL render target is colorless — it carries no
+  // color backing storage and the backend render pass omits its color
+  // attachment, leaving the depth/stencil attachment as the effective
+  // target. Derived purely from the surface format so the marker stays in
+  // lockstep with classification (Format::NullRt) at zero storage cost.
+  bool isNullRenderTarget() const noexcept {
+    return desc_.format == Format::NullRt;
+  }
+  // Bytes of CPU-side color backing allocated for a device-owned surface.
+  // Zero for a NULL render target (no color storage) and for any
+  // texture-container surface (the container owns the bytes). Exposed for
+  // the colorless-RT contract test.
+  std::size_t colorBackingByteSize() const noexcept {
+    return standaloneBytes_.size();
+  }
   u32 multiSampleCount() const noexcept { return dxmt9::core::sampleCount(desc_.multiSampleType); }
   std::shared_ptr<Texture> textureContainer() const noexcept { return textureContainer_.lock(); }
   std::shared_ptr<Device> deviceContainer() const noexcept { return owner_.lock(); }

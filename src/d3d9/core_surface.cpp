@@ -24,7 +24,12 @@ Surface::Surface(std::shared_ptr<Device> owner, SurfaceHandle handle,
   if (auto ownerPtr = owner_.lock()) {
     backend_ = ownerPtr->upperDevice();
   }
-  if (desc_.width != 0 && desc_.height != 0) {
+  // R-FORMAT-12: a D3DFMT_NULL render target is colorless. Creation must
+  // succeed but allocate no color backing — it exists only to drive a
+  // depth/stencil-only render pass (shadow depth / stencil-shadow volume).
+  // Leave standalonePitch_ == 0 / standaloneBytes_ empty; lockRect() and
+  // the GPU readback path key off isNullRenderTarget() to reject mapping.
+  if (desc_.width != 0 && desc_.height != 0 && !isNullRenderTarget()) {
     standalonePitch_ = formatRowPitch(desc_.format, desc_.width);
     standaloneBytes_.resize(
         formatByteSize(desc_.format, desc_.width, desc_.height), 0);
@@ -54,6 +59,13 @@ Surface::~Surface() { invalidate(); }
 
 LockedRegion Surface::lockRect(const Rect *rect, u32 flags) {
   if (!valid_) {
+    return {};
+  }
+  // R-FORMAT-12: a NULL render target has no color storage; Lock/LockRect
+  // must fail. Return an empty region — the C bridge maps a null/zero
+  // region to D3DERR_INVALIDCALL. Reject before flipping locked_ so a NULL
+  // surface is never spuriously marked locked.
+  if (isNullRenderTarget()) {
     return {};
   }
   if (containerKind_ == ContainerKind::Texture) {
@@ -354,6 +366,11 @@ HResult Device::updateSurface(const std::shared_ptr<Surface> &src,
 HResult Device::getRenderTargetData(const std::shared_ptr<Surface> &src,
                                     const std::shared_ptr<Surface> &dst) {
   if (!src || !dst || !src->valid() || !dst->valid()) {
+    return D3DERR_INVALIDCALL;
+  }
+  // R-FORMAT-12: a NULL render target has no color storage to read back.
+  // Readback from (or into) a NULL surface is an invalid call.
+  if (src->isNullRenderTarget() || dst->isNullRenderTarget()) {
     return D3DERR_INVALIDCALL;
   }
   if (backend_) {

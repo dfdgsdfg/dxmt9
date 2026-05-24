@@ -430,6 +430,16 @@ core::SurfaceHandle Pool::createSurface(WMT::Device device,
                                           const core::SurfaceDesc& desc) {
   SurfaceRecord record;
   record.desc = desc;
+  // R-FORMAT-12: a D3DFMT_NULL render target is colorless — it has no
+  // color storage. Allocate no Metal texture; the record exists only as a
+  // zero-cost marker so SetRenderTarget can bind it and the render-pass
+  // builder (dxmt9_draw_encoder.mm::beginRenderPass) omits its color
+  // attachment, leaving the bound depth/stencil as the effective target.
+  if (desc.format == core::Format::NullRt) {
+    const auto handle = surfaceArena_.insert(std::move(record));
+    traceSurfaceCreate(handle, desc, /*hasTexture=*/false);
+    return handle;
+  }
   // Surfaces match the texture storage policy (R-BACK-5.7): every pool
   // gets a Metal texture so `submitSurfaceCopy` can blit between any
   // pair, including SYSTEMMEM-side staging surfaces. Storage mode comes
