@@ -212,6 +212,48 @@ void testMrtColorWriteMaskDefaultAndOverride() {
   }
 }
 
+void testMrtPerRenderTargetColorWriteMask() {
+  // (a) default: every attachment writes full RGBA.
+  DrawDesc desc{};
+  auto keys = makeBlendKeys(makeFlatDrawFixture(desc).hot);
+  for (std::size_t i = 0; i < kMaxRenderTargets; ++i) {
+    checkEq(keys[i].colorWriteMask, 0xfu, "default per-RT color write mask is all channels");
+  }
+
+  // (b) RS_COLOR_WRITE_ENABLE1 partial mask changes ONLY attachment 1.
+  desc.rs.values[RS_COLOR_WRITE_ENABLE1] = 0x5u;
+  keys = makeBlendKeys(makeFlatDrawFixture(desc).hot);
+  checkEq(keys[0].colorWriteMask, 0xfu, "attachment 0 unaffected by RS_COLOR_WRITE_ENABLE1");
+  checkEq(keys[1].colorWriteMask, 0x5u, "attachment 1 driven by RS_COLOR_WRITE_ENABLE1");
+  checkEq(keys[2].colorWriteMask, 0xfu, "attachment 2 unaffected by RS_COLOR_WRITE_ENABLE1");
+  checkEq(keys[3].colorWriteMask, 0xfu, "attachment 3 unaffected by RS_COLOR_WRITE_ENABLE1");
+
+  // (c) attachment 0 still driven by RS_COLOR_WRITE_ENABLE; per-RT slots are
+  // independent and 2/3 keep falling back to the all-channels default.
+  desc.rs.values[RS_COLOR_WRITE_ENABLE] = 0x3u;
+  keys = makeBlendKeys(makeFlatDrawFixture(desc).hot);
+  checkEq(keys[0].colorWriteMask, 0x3u, "attachment 0 driven by RS_COLOR_WRITE_ENABLE");
+  checkEq(keys[1].colorWriteMask, 0x5u, "attachment 1 still driven by RS_COLOR_WRITE_ENABLE1");
+  checkEq(keys[2].colorWriteMask, 0xfu,
+          "attachment 2 falls back to all channels when its per-RT slot is unset");
+  checkEq(keys[3].colorWriteMask, 0xfu,
+          "attachment 3 falls back to all channels when its per-RT slot is unset");
+
+  // RS_COLOR_WRITE_ENABLE2 / ...ENABLE3 drive attachments 2 and 3 respectively.
+  desc.rs.values[RS_COLOR_WRITE_ENABLE2] = 0x9u;
+  desc.rs.values[RS_COLOR_WRITE_ENABLE3] = 0x6u;
+  keys = makeBlendKeys(makeFlatDrawFixture(desc).hot);
+  checkEq(keys[2].colorWriteMask, 0x9u, "attachment 2 driven by RS_COLOR_WRITE_ENABLE2");
+  checkEq(keys[3].colorWriteMask, 0x6u, "attachment 3 driven by RS_COLOR_WRITE_ENABLE3");
+
+  // force-visible mode overrides every per-RT mask back to all channels.
+  keys = makeBlendKeys(makeFlatDrawFixture(desc).hot, true);
+  for (std::size_t i = 0; i < kMaxRenderTargets; ++i) {
+    checkEq(keys[i].colorWriteMask, 0xfu,
+            "force-visible mode restores all-channel writes for every per-RT slot");
+  }
+}
+
 void testShaderVariantKeyReflectsSamplerTextureAndFiltering() {
   DrawDesc desc{};
   desc.vertexShader.hash = 0x101u;
@@ -579,6 +621,7 @@ int main() {
     testBlendOperationFallbacks();
     testBlendFactorFallbacks();
     testMrtColorWriteMaskDefaultAndOverride();
+    testMrtPerRenderTargetColorWriteMask();
     testShaderVariantKeyReflectsSamplerTextureAndFiltering();
     testFvfLayoutHashIsDeterministicAndResponsive();
     testShaderVariantKeyHashRespondsToLayoutAndBlendState();

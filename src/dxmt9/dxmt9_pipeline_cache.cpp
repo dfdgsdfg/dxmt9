@@ -158,10 +158,22 @@ detail::makeBlendAttachmentKeys(core::FlatDrawStateView state, bool forceVisible
   const u32 destinationAlphaBlendFactor =
       separateAlphaBlend ? core::flatStateOr(rs, core::RS_DEST_BLEND_ALPHA, destinationRGBBlendFactor)
                          : destinationRGBBlendFactor;
-  const u32 colorWriteMask =
+  // D3D9 exposes one color-write mask per render target: RS_COLOR_WRITE_ENABLE
+  // drives RT0, ...ENABLE1/2/3 drive RT1/2/3. Per-RT slots are only honored on
+  // devices that advertise independent write masks; for parity we map each
+  // attachment to its slot and fall back to RT0's mask when the per-RT slot was
+  // never set, so single-RT apps (which only touch slot 168) are unaffected.
+  const u32 baseColorWriteMask =
       forceVisibleDraw ? 0xfu : core::flatStateOr(rs, core::RS_COLOR_WRITE_ENABLE, 0xfu);
+  constexpr std::array<u32, core::kMaxRenderTargets> kColorWriteSlots = {
+      core::RS_COLOR_WRITE_ENABLE,
+      core::RS_COLOR_WRITE_ENABLE1,
+      core::RS_COLOR_WRITE_ENABLE2,
+      core::RS_COLOR_WRITE_ENABLE3,
+  };
 
-  for (auto& blend : blendAttachments) {
+  for (std::size_t i = 0; i < core::kMaxRenderTargets; ++i) {
+    auto& blend = blendAttachments[i];
     blend.blendingEnabled = blendEnabled;
     blend.rgbBlendOperation = rgbBlendOperation;
     blend.alphaBlendOperation = alphaBlendOperation;
@@ -169,7 +181,8 @@ detail::makeBlendAttachmentKeys(core::FlatDrawStateView state, bool forceVisible
     blend.destinationRGBBlendFactor = destinationRGBBlendFactor;
     blend.sourceAlphaBlendFactor = sourceAlphaBlendFactor;
     blend.destinationAlphaBlendFactor = destinationAlphaBlendFactor;
-    blend.colorWriteMask = colorWriteMask;
+    blend.colorWriteMask =
+        forceVisibleDraw ? 0xfu : core::flatStateOr(rs, kColorWriteSlots[i], baseColorWriteMask);
   }
   return blendAttachments;
 }

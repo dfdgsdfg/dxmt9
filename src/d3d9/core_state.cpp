@@ -162,6 +162,11 @@ void DeviceState::reset() {
   renderStates.set(RS_DEST_BLEND, static_cast<u32>(BlendFactor::Zero));
   renderStates.set(RS_BLEND_OP, static_cast<u32>(BlendOp::Add));
   renderStates.set(RS_COLOR_WRITE_ENABLE, 0xf);
+  // Per-RT color-write masks default to all channels so MRT slots 1..3 match
+  // RT0's default and single-RT apps (which only touch slot 168) are unaffected.
+  renderStates.set(RS_COLOR_WRITE_ENABLE1, 0xf);
+  renderStates.set(RS_COLOR_WRITE_ENABLE2, 0xf);
+  renderStates.set(RS_COLOR_WRITE_ENABLE3, 0xf);
   renderStates.set(RS_Z_ENABLE, 1);
   renderStates.set(RS_ALPHABLEND_ENABLE, 0);
   renderStates.set(RS_BLEND_FACTOR, 0xffffffffu);
