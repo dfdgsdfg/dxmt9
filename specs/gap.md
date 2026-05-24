@@ -195,9 +195,9 @@ bridge naming is no longer part of the target spec.
 | C ABI bridge header `device_c.h` | ✅ | All factory / device / resource types |
 | Provider-side C ABI wrappers in `src/d3d9/` | ✅ | `dxmt9c_*` provider + bridge sources are present |
 | `winemetal.so` unix module | ✅ | `src/winemetal/unix/meson.build` builds `winemetal.so` and links Wine `winemac.so` / `ntdll.so` when configured |
-| `d3d9.dll` as user-facing PE DLL | ⚠️ | Source target exists in `src/win32/`; build/runtime validation still required |
-| `winemetal.dll` as shared Wine builtin PE bridge | ⚠️ | Source target exists in `src/winemetal/`; Wine builtin postprocess/runtime validation still required |
-| PE bridge ↔ unix module thunk mechanism | ⚠️ | Code-gen + bridge sources are present; needs end-to-end Wine smoke verification |
+| `d3d9.dll` as user-facing PE DLL | ✅ (builtin x64) | Built via `build-win32-x64-builtin` (llvm-mingw cross + `winebuild --builtin` postprocess), staged to `lib/wine/x86_64-windows/d3d9.dll` + prefix `system32`. **2026-05-25 end-to-end Wine WSI smoke PASS** — see thunk row. WoW64 x86 (`build-win32-x86-builtin` → `i386-windows`/`syswow64`) is built + staged but not yet runtime-exercised (smoke ran the x64 binary). |
+| `winemetal.dll` as shared Wine builtin PE bridge | ✅ (builtin x64) | Built + `winebuild --builtin` postprocessed, staged to `lib/wine/x86_64-windows/winemetal.dll`. Loaded under `WINEDLLOVERRIDES="d3d9,winemetal=n,b"`; PE-side `abi-hash handshake OK` logged. WoW64 x86 variant staged, not runtime-exercised. |
+| PE bridge ↔ unix module thunk mechanism | ✅ (builtin x64) | **2026-05-25 end-to-end Wine WSI smoke PASS (builtin x64, Sikarugir `sikarugir-cx-24.0.7`):** `python3 scripts/run_apps/run_experiment.py run conf-d3d9-triangle --wine-id sikarugir-cx-24.0.7` staged the trio into `lib/wine/{x86_64-windows,i386-windows,x86_64-unix}` + prefix; **`[winemetal-abi] abi-hash handshake OK (0x29886309da4f648d)` in BOTH the PE bridge log and the unix runtime log** (PE↔unix lockstep confirmed at runtime); `[dxmt9-wsi] layer_acquisition=macdrv_functions` (CAMetalLayer attach via `@rpath`-resolved `_macdrv_functions`); `CreateDeviceEx → non-null device`; `device_present hr=0x00000000`; `returncode=0`, `failures=[]`, non-blank capture (mean_luma 78.8 / variance 2669). Remaining: WoW64/x86 runtime exercise, the native app-local lane smoke, and the dedicated `conf-d3d9-wsi-present` binary (currently missing → used `conf-d3d9-triangle` as the WSI smoke). |
 | `dxmt9.dll` / `dxmt9.so` legacy bridge naming | ❌ | Removed from target spec; stale references should be treated as documentation drift |
 
 ---
@@ -365,7 +365,7 @@ No implementation exists yet. All R-D3D7-1.x through R-D3D7-10.x are not started
 |---|---|
 | Core | partial |
 | Backend | complete |
-| Wine PE / `winemetal` deployment | partial |
+| Wine PE / `winemetal` deployment | partial (builtin x64 lane end-to-end validated 2026-05-25; WoW64 runtime-exercise + native app-local lane pending) |
 | Verification | complete |
 | Tests | partial |
 | D3D8 (`d3d8.dll`) | not started |
@@ -387,6 +387,6 @@ No implementation exists yet. All R-D3D7-1.x through R-D3D7-10.x are not started
 | 6 | Implement Wine-oracle D3D9Ex QI conformance and finish Ex/display/swap-chain validation | R-CORE-1.6, R-CORE-10.2-R-CORE-10.4, R-CORE-10.17, R-CORE-10.18, R-TEST-12.4 |
 | 7 | Expand Wine stateblock conformance beyond the current compact scaffold and implement full `D3DSBT_*` masks/resource/reset interactions | R-CORE-3.7, R-CORE-3.8, R-TEST-12.5, R-TEST-12.19 |
 | 8 | Expand compact reset/window scaffolds if runtime evidence exposes missing Wine-visible edge cases, then promote device lifetime/refcount, query validation, resource wrapper, and scene scaffolds with runtime evidence | R-CORE-2.6, R-CORE-2.8, R-CORE-4.8-R-CORE-4.10, R-CORE-8.3, R-TEST-12.3, R-TEST-12.12-R-TEST-12.14, R-TEST-12.17-R-TEST-12.18 |
-| 9 | Build and verify the upstream-style PE targets: `d3d9.dll` + `winemetal.dll` + `winemetal.so` | d3d9/wsi §6, §9 |
-| 10 | Run the Wine WSI smoke on the upstream-style deployment and promote the gap status if it passes | R-TEST-11.3 |
+| 9 | ✅ **Done (builtin x64, 2026-05-25).** Built + verified the upstream-style PE targets `d3d9.dll` + `winemetal.dll` + `winemetal.so` (builtin postprocess, staged to `lib/wine/{x86_64-windows,i386-windows,x86_64-unix}`). Residual: WoW64/x86 runtime exercise + native app-local-lane build. | d3d9/wsi §6, §9 |
+| 10 | ✅ **Done (builtin x64, 2026-05-25).** Wine WSI smoke (`conf-d3d9-triangle` under Sikarugir) PASSED on the upstream-style builtin deployment — abi-hash handshake OK, `macdrv_functions` layer attach, device + present + exit 0. Gap status promoted (Wine PE layer rows). Residual: run the WoW64 binary + the dedicated `conf-d3d9-wsi-present` (binary currently absent). | R-TEST-11.3 |
 | 11 | D3D8 entry point + IDirect3D8 factory + resource wrappers | R-D3D8-1.1, R-D3D8-2.1 |
