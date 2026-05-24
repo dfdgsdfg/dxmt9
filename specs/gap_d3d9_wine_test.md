@@ -27,11 +27,11 @@ changes not yet visible upstream.
 
 | Field | Value |
 |-------|-------|
-| Commit | `397739012c79fb4248763d7d948ac63e63f5b1f3` — **work tree dirty** |
-| Short  | `3977390` |
-| Tag / describe | `3977390` |
+| Commit | `fca8eff08a9de3829495bd6aa5ff5165932addc3` — **work tree dirty** |
+| Short  | `fca8eff` |
+| Tag / describe | `fca8eff` |
 | Author date | `2026-05-24` |
-| Subject | specs/gap_d3d9_wine_test: 13 more plan rows scaffolded → covered (any-pass policy) |
+| Subject | d3d9 test_draw_primitive: fix outside-scene policy — Wine's d3d9 builtin doesn't gate DrawPrimitive on in_scene |
 
 ### Wine reference revision
 
@@ -50,7 +50,7 @@ the same commit in the Wine checkout before opening the source.
 
 ```sh
 # Reproduce the inventory verbatim from a clean tree:
-git -C "$DXMT9_REPO" checkout 397739012c79fb4248763d7d948ac63e63f5b1f3
+git -C "$DXMT9_REPO" checkout fca8eff08a9de3829495bd6aa5ff5165932addc3
 git -C "$WINE_REPO"  checkout 6e073d28dee3af7f4c965daec94644e0f9f92727
 python3 scripts/tools/gen_wine_d3d9_test_inventory.py
 ```
@@ -73,10 +73,10 @@ python3 scripts/tools/gen_wine_d3d9_test_inventory.py
 | Wine source | Tests | covered | scaffolded | partial | failing | other |
 |-------------|-----:|--------:|----------:|--------:|--------:|------:|
 | `visual.c` | 135 | 130 | 0 | 0 | 5 | 0 |
-| `device.c` | 105 | 76 | 28 | 0 | 1 | 0 |
+| `device.c` | 105 | 77 | 28 | 0 | 0 | 0 |
 | `d3d9ex.c` | 27 | 16 | 11 | 0 | 0 | 0 |
 | `stateblock.c` | 1 | 1 | 0 | 0 | 0 | 0 |
-| **TOTAL** | **268** | **223** | **39** | **0** | **6** | **0** |
+| **TOTAL** | **268** | **224** | **39** | **0** | **5** | **0** |
 
 `other` rolls up `deferred`, `partial/deferred`, and any UNTRACKED rows.
 
@@ -301,7 +301,7 @@ Source: [`dlls/d3d9/tests/device.c`](https://gitlab.winehq.org/wine/wine/-/blob/
 | `test_shader_constant_apply` | 11446 | ✅ | `test_shader_constant_stateblock_cross_stage` |
 | `test_shader_validator` | 14660 | 📐 | `shader_validator_stub_behavior` |
 | `test_shared_handle` | 11088 | ✅ | `test_shared_handle_policy` |
-| `test_stretch_rect` | 13277 | 🔴 | `test_stretch_rect_null_and_degenerate_policy` |
+| `test_stretch_rect` | 13277 | ✅ | `test_stretch_rect_null_and_degenerate_policy` |
 | `test_surface_alignment` | 8360 | ✅ | `test_surface_alignment` |
 | `test_surface_blocks` | 9529 | ✅ | `resource_container_level_desc_and_locks`, `test_index_buffer_desc_binding_policy`, `test_vertex_buffer_desc_binding_policy` |
 | `test_surface_dimensions` | 9338 | ✅ | `test_surface_dimensions` |

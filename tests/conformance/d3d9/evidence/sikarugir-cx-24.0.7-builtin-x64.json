@@ -113,7 +113,7 @@
   "stretch_rect_format_matrix_policy": "pass",
   "stretch_rect_multisample_resolve_policy": "fail",
   "stretch_rect_npot_dimension_policy": "pass",
-  "stretch_rect_null_and_degenerate_policy": "fail",
+  "stretch_rect_null_and_degenerate_policy": "pass",
   "surface_alignment": "pass",
   "surface_dimensions": "pass",
   "surface_double_unlock_pool_policy": "pass",

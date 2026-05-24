@@ -2637,6 +2637,19 @@ public:
                             this, src, dst, (unsigned)filter,
                             srcRect ? "<custom>" : "<full>",
                             dstRect ? "<custom>" : "<full>");
+        // Wine d3d9 test_stretch_rect contract: NULL src or NULL dst, and
+        // degenerate / negative-extent src or dst rects, are rejected with
+        // D3DERR_INVALIDCALL before any wire-record dispatch
+        // (stretch_rect_null_and_degenerate_policy).
+        if (!src || !dst) return D3DERR_INVALIDCALL;
+        if (srcRect && (srcRect->right <= srcRect->left ||
+                        srcRect->bottom <= srcRect->top)) {
+            return D3DERR_INVALIDCALL;
+        }
+        if (dstRect && (dstRect->right <= dstRect->left ||
+                        dstRect->bottom <= dstRect->top)) {
+            return D3DERR_INVALIDCALL;
+        }
         D9CRect cs{}, cd{};
         if (srcRect) cs = toR(*srcRect); if (dstRect) cd = toR(*dstRect);
         const HRESULT barrierHr = chunkBarrierFlush();
