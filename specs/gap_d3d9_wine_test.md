@@ -27,11 +27,11 @@ changes not yet visible upstream.
 
 | Field | Value |
 |-------|-------|
-| Commit | `620c784432ad4fc6a31800227ddc9b51e992d5fb` — **work tree dirty** |
-| Short  | `620c784` |
-| Tag / describe | `620c784` |
+| Commit | `10e0435bc179e251357cf7d1d23b3ed79bb86abe` — **work tree dirty** |
+| Short  | `10e0435` |
+| Tag / describe | `10e0435` |
 | Author date | `2026-05-24` |
-| Subject | specs/gap_d3d9_wine_test: honest accounting for batch-1 fails |
+| Subject | d3d9 SetVertexDeclaration: store decl as borrowed pointer (no AddRef) |
 
 ### Wine reference revision
 
@@ -50,7 +50,7 @@ the same commit in the Wine checkout before opening the source.
 
 ```sh
 # Reproduce the inventory verbatim from a clean tree:
-git -C "$DXMT9_REPO" checkout 620c784432ad4fc6a31800227ddc9b51e992d5fb
+git -C "$DXMT9_REPO" checkout 10e0435bc179e251357cf7d1d23b3ed79bb86abe
 git -C "$WINE_REPO"  checkout 6e073d28dee3af7f4c965daec94644e0f9f92727
 python3 scripts/tools/gen_wine_d3d9_test_inventory.py
 ```
@@ -73,10 +73,10 @@ python3 scripts/tools/gen_wine_d3d9_test_inventory.py
 | Wine source | Tests | covered | scaffolded | partial | failing | other |
 |-------------|-----:|--------:|----------:|--------:|--------:|------:|
 | `visual.c` | 135 | 135 | 0 | 0 | 0 | 0 |
-| `device.c` | 105 | 99 | 4 | 0 | 2 | 0 |
+| `device.c` | 105 | 100 | 4 | 0 | 1 | 0 |
 | `d3d9ex.c` | 27 | 26 | 0 | 0 | 1 | 0 |
 | `stateblock.c` | 1 | 1 | 0 | 0 | 0 | 0 |
-| **TOTAL** | **268** | **261** | **4** | **0** | **3** | **0** |
+| **TOTAL** | **268** | **262** | **4** | **0** | **2** | **0** |
 
 `other` rolls up `deferred`, `partial/deferred`, and any UNTRACKED rows.
 
@@ -321,7 +321,7 @@ Source: [`dlls/d3d9/tests/device.c`](https://gitlab.winehq.org/wine/wine/-/blob/
 | `test_vdecl_apply` | 11603 | ✅ | `test_vdecl_apply` |
 | `test_vertex_buffer_alignment` | 6375 | ✅ | `test_vertex_buffer_alignment` |
 | `test_vertex_buffer_read_write` | 14211 | ✅ | `test_vertex_buffer_read_write` |
-| `test_vertex_declaration_alignment` | 923 | 🔴 | `test_vertex_declaration_alignment_policy` |
+| `test_vertex_declaration_alignment` | 923 | ✅ | `test_vertex_declaration_alignment_policy` |
 | `test_vertex_shader_constant` | 7037 | ✅ | `test_vertex_shader_constant` |
 | `test_vidmem_accounting` | 10208 | ✅ | `test_base_vidmem_accounting_policy` |
 | `test_volume_blocks` | 10615 | ✅ | `test_vendor_format_public_api_policy`, `test_volume_block_lock_layout`, `test_volume_blocks_compressed_layout_policy` |

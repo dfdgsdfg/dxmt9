@@ -180,7 +180,7 @@
   "vertex_buffer_alignment": "pass",
   "vertex_buffer_desc_binding_policy": "pass",
   "vertex_buffer_read_write": "pass",
-  "vertex_declaration_alignment_policy": "fail",
+  "vertex_declaration_alignment_policy": "pass",
   "vertex_declaration_fvf_policy": "pass",
   "vertex_shader_constant": "pass",
   "viewport_scissor_state_getters": "pass",

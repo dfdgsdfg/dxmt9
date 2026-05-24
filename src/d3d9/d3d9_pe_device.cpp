@@ -302,7 +302,8 @@ constexpr uint32_t kShaderEndToken = 0x0000FFFFu;
 ///   - terminated by D3DDECL_END (stream=0xFF, type=UNUSED)
 ///   - no in-band UNUSED elements (Wine returns E_FAIL for those)
 ///   - each offset is naturally aligned to the element's word size when the
-///     type is FLOAT-like / 32-bit-aligned (multiples of 4).
+///     type is FLOAT-like / 32-bit-aligned (multiples of 4). Misaligned
+///     offsets are surfaced as E_FAIL per Wine, not D3DERR_INVALIDCALL.
 [[nodiscard]] HRESULT validateVertexElements(const D3DVERTEXELEMENT9* elems) {
     if (!elems) return D3DERR_INVALIDCALL;
     constexpr size_t kMaxLen = MAXD3DDECLLENGTH + 1; /* +END */
@@ -321,8 +322,11 @@ constexpr uint32_t kShaderEndToken = 0x0000FFFFu;
             /* Unknown type (non-UNUSED, non-recognized). */
             return D3DERR_INVALIDCALL;
         }
-        /* All D3D9 element types are 32-bit word aligned. */
-        if ((e.Offset & 0x3u) != 0u) return D3DERR_INVALIDCALL;
+        /* All D3D9 element types are 32-bit word aligned.
+         * Wine's CreateVertexDeclaration surfaces misaligned offsets as
+         * E_FAIL (dlls/d3d9/tests/device.c test_vertex_declaration_alignment),
+         * not D3DERR_INVALIDCALL — mirror that here for parity. */
+        if ((e.Offset & 0x3u) != 0u) return E_FAIL;
     }
     /* Ran off the end without seeing an END marker. */
     return D3DERR_INVALIDCALL;

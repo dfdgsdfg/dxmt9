@@ -790,14 +790,14 @@ area = "vertex-declaration"
 owner = "core/device"
 requirements = ["R-TEST-12.3"]
 acceptance = ["CreateVertexDeclaration rejects misaligned element offsets with E_FAIL and accepts 4-byte-aligned offsets with D3D_OK matching the Wine oracle"]
-status = "failing"
+status = "partial"
 
 [[case.evidence]]
 lane = "builtin"
 arch = "x64"
-status = "failing"
+status = "passing"
 source = "tests/conformance/d3d9/evidence/sikarugir-cx-24.0.7-builtin-x64.json:1"
-summary = "Sikarugir-CX 24.0.7 builtin lane x64 2026-05-24 — fail in chunked runner snapshot (dxmt9 PE returns D3DERR_INVALIDCALL for misaligned offsets, Wine oracle returns E_FAIL — divergence in validateVertexElements at src/d3d9/d3d9_pe_device.cpp:325)."
+summary = "Sikarugir-CX 24.0.7 builtin lane x64 2026-05-24 — passing in chunked runner snapshot after validateVertexElements returns E_FAIL for misaligned offsets (src/d3d9/d3d9_pe_device.cpp:325)."
 
 [[case]]
 executable = "dxmt9-d3d9-conformance.exe"
