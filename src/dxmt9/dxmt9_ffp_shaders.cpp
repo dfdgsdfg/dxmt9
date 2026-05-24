@@ -312,8 +312,9 @@ void emitLightingBlock(std::ostringstream& shader, const FfpVertexKey& key) {
 
 void emitFfpTextureOpHelper(std::ostringstream& out) {
   out << "inline float4 dxmt9_apply_ffp_texture_op(uint op, float4 arg1, float4 arg2,\n";
-  out << "                                          float4 current, float4 diffuse,\n";
-  out << "                                          float4 texture, float4 tfactor) {\n";
+  out << "                                          float4 arg0, float4 current,\n";
+  out << "                                          float4 diffuse, float4 texture,\n";
+  out << "                                          float4 tfactor) {\n";
   out << "  switch (op) {\n";
   out << "    case 12u: return mix(arg2, arg1, diffuse.a);\n";
   out << "    case 13u: return mix(arg2, arg1, texture.a);\n";
@@ -326,7 +327,16 @@ void emitFfpTextureOpHelper(std::ostringstream& out) {
   // chained stages can read it via `current` or `D3DTA_TEXTURE`.
   out << "    case 22u: return texture;\n";
   out << "    case 23u: return texture;\n";
-  out << "    case 25u: return saturate(arg1 + arg2 * current);\n";
+  // D3DTOP_MULTIPLYADD (25): saturate(arg1 * arg2 + arg0) — the third
+  // explicit argument (D3DTSS_COLORARG0 / ALPHAARG0) is the accumulate
+  // term, not the prior-stage `current`. Matches wined3d ffp_hlsl.c
+  // WINED3D_TOP_MULTIPLY_ADD.
+  out << "    case 25u: return saturate(arg1 * arg2 + arg0);\n";
+  // D3DTOP_LERP (26): lerp(arg2, arg1, arg0) component-wise — arg0 is the
+  // blend factor (arg0=0 -> arg2, arg0=1 -> arg1). Matches wined3d
+  // ffp_hlsl.c WINED3D_TOP_LERP (`lerp(arg2, arg1, arg0)`); MSL `mix`
+  // shares HLSL `lerp` operand order.
+  out << "    case 26u: return mix(arg2, arg1, arg0);\n";
   out << "    default: return dxmt9_apply_texture_op(op, arg1, arg2, current);\n";
   out << "  }\n";
   out << "}\n";
@@ -1017,18 +1027,25 @@ std::string makeFfpPixelSource(const FfpPixelKey& key,
       out << "  float4 colorArg2_" << stage << " = dxmt9_select_texture_arg(" << stageKey.colorArg2
           << "u, current, diffuse, specular, texColor" << stage << ", tfactor, temp, "
           << "ffpPs.stageConstants[" << stage << "]);\n";
+      // Third (triadic) argument — read by D3DTOP_MULTIPLYADD / D3DTOP_LERP.
+      out << "  float4 colorArg0_" << stage << " = dxmt9_select_texture_arg(" << stageKey.colorArg0
+          << "u, current, diffuse, specular, texColor" << stage << ", tfactor, temp, "
+          << "ffpPs.stageConstants[" << stage << "]);\n";
       out << "  float4 stageResult" << stage << " = dxmt9_apply_ffp_texture_op(" << stageKey.colorOp
-          << "u, colorArg1_" << stage << ", colorArg2_" << stage << ", current, diffuse, texColor"
-          << stage << ", tfactor);\n";
+          << "u, colorArg1_" << stage << ", colorArg2_" << stage << ", colorArg0_" << stage
+          << ", current, diffuse, texColor" << stage << ", tfactor);\n";
       out << "  float4 alphaArg1_" << stage << " = dxmt9_select_texture_arg(" << stageKey.alphaArg1
           << "u, current, diffuse, specular, texColor" << stage << ", tfactor, temp, "
           << "ffpPs.stageConstants[" << stage << "]);\n";
       out << "  float4 alphaArg2_" << stage << " = dxmt9_select_texture_arg(" << stageKey.alphaArg2
           << "u, current, diffuse, specular, texColor" << stage << ", tfactor, temp, "
           << "ffpPs.stageConstants[" << stage << "]);\n";
+      out << "  float4 alphaArg0_" << stage << " = dxmt9_select_texture_arg(" << stageKey.alphaArg0
+          << "u, current, diffuse, specular, texColor" << stage << ", tfactor, temp, "
+          << "ffpPs.stageConstants[" << stage << "]);\n";
       out << "  stageResult" << stage << ".a = dxmt9_apply_ffp_texture_op(" << stageKey.alphaOp
-          << "u, alphaArg1_" << stage << ", alphaArg2_" << stage << ", current, diffuse, texColor"
-          << stage << ", tfactor).a;\n";
+          << "u, alphaArg1_" << stage << ", alphaArg2_" << stage << ", alphaArg0_" << stage
+          << ", current, diffuse, texColor" << stage << ", tfactor).a;\n";
       out << "  current = stageResult" << stage << ";\n";
       if (stageKey.resultArg == 5u) {
         out << "  temp = stageResult" << stage << ";\n";

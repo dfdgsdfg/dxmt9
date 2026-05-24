@@ -55,9 +55,11 @@ u64 hashFfpPixelKeyForState(const FfpPixelKey &key) {
     hash = hashCombineForState(hash, stage.colorOp);
     hash = hashCombineForState(hash, stage.colorArg1);
     hash = hashCombineForState(hash, stage.colorArg2);
+    hash = hashCombineForState(hash, stage.colorArg0);
     hash = hashCombineForState(hash, stage.alphaOp);
     hash = hashCombineForState(hash, stage.alphaArg1);
     hash = hashCombineForState(hash, stage.alphaArg2);
+    hash = hashCombineForState(hash, stage.alphaArg0);
     hash = hashCombineForState(hash, stage.resultArg);
     hash = hashCombineForState(hash, stage.texType);
     hash = hashCombineForState(hash, stage.texCoordIndex);

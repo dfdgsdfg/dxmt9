@@ -942,9 +942,11 @@ u64 hashFfpPixelKey(const FfpPixelKey &key) {
     hash = hashCombine(hash, stage.colorOp);
     hash = hashCombine(hash, stage.colorArg1);
     hash = hashCombine(hash, stage.colorArg2);
+    hash = hashCombine(hash, stage.colorArg0);
     hash = hashCombine(hash, stage.alphaOp);
     hash = hashCombine(hash, stage.alphaArg1);
     hash = hashCombine(hash, stage.alphaArg2);
+    hash = hashCombine(hash, stage.alphaArg0);
     hash = hashCombine(hash, stage.resultArg);
     hash = hashCombine(hash, stage.texType);
     hash = hashCombine(hash, stage.texCoordIndex);
@@ -2227,9 +2229,11 @@ FfpPixelKey makeFfpPixelKey(const DeviceState &state) {
     out.colorOp = map.contains(TSS_COLOR_OP) ? map.at(TSS_COLOR_OP) : 0;
     out.colorArg1 = map.contains(TSS_COLOR_ARG1) ? map.at(TSS_COLOR_ARG1) : 0;
     out.colorArg2 = map.contains(TSS_COLOR_ARG2) ? map.at(TSS_COLOR_ARG2) : 0;
+    out.colorArg0 = map.contains(TSS_COLOR_ARG0) ? map.at(TSS_COLOR_ARG0) : 0;
     out.alphaOp = map.contains(TSS_ALPHA_OP) ? map.at(TSS_ALPHA_OP) : 0;
     out.alphaArg1 = map.contains(TSS_ALPHA_ARG1) ? map.at(TSS_ALPHA_ARG1) : 0;
     out.alphaArg2 = map.contains(TSS_ALPHA_ARG2) ? map.at(TSS_ALPHA_ARG2) : 0;
+    out.alphaArg0 = map.contains(TSS_ALPHA_ARG0) ? map.at(TSS_ALPHA_ARG0) : 0;
     out.resultArg = map.contains(TSS_RESULT_ARG) ? map.at(TSS_RESULT_ARG) : 0;
     out.texType = map.contains(TSS_TEXTURE_TYPE) ? map.at(TSS_TEXTURE_TYPE) : 0;
     out.texCoordIndex =

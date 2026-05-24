@@ -139,6 +139,7 @@ enum class TextureOp : u32 {
   Subtract = 10,
   AddSmooth = 11,
   DotProduct3 = 24,
+  MultiplyAdd = 25,
   Lerp = 26,
   BumpEnvMap = 22,
   BumpEnvMapLuminance = 23,
@@ -423,6 +424,11 @@ inline constexpr u32 TSS_BUMPENVMAT00 = 7;
 inline constexpr u32 TSS_BUMPENVMAT01 = 8;
 inline constexpr u32 TSS_BUMPENVMAT10 = 9;
 inline constexpr u32 TSS_BUMPENVMAT11 = 10;
+// Triadic third-argument slots — D3DTSS_COLORARG0 (26) / D3DTSS_ALPHAARG0
+// (27), read by the triadic ops D3DTOP_MULTIPLYADD (25) and D3DTOP_LERP
+// (26). gap_d3d9 §B.10#10 / §B.2.
+inline constexpr u32 TSS_COLOR_ARG0 = 26;
+inline constexpr u32 TSS_ALPHA_ARG0 = 27;
 inline constexpr u32 TSS_RESULT_ARG = 28;
 inline constexpr u32 TSS_TEXCOORD_INDEX = 11;
 inline constexpr u32 TSS_BUMPENVLSCALE = 22;
@@ -639,9 +645,13 @@ struct FfpPixelStage {
   u32 colorOp = 0;
   u32 colorArg1 = 0;
   u32 colorArg2 = 0;
+  // Triadic third argument (D3DTSS_COLORARG0 / D3DTSS_ALPHAARG0), read by
+  // D3DTOP_MULTIPLYADD / D3DTOP_LERP. gap_d3d9 §B.10#10.
+  u32 colorArg0 = 0;
   u32 alphaOp = 0;
   u32 alphaArg1 = 0;
   u32 alphaArg2 = 0;
+  u32 alphaArg0 = 0;
   u32 resultArg = 0;
   u32 texType = 0;
   u32 texCoordIndex = 0;
