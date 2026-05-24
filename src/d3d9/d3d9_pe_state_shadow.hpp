@@ -470,13 +470,6 @@ struct PeHotStateShadow {
     DWORD pendingLightEnableValidMask = 0;
     DWORD pendingLightEnableMask = 0;
     DWORD lightEnableShadow = 0;
-    // SetClipStatus / GetClipStatus state round-trip (gap_d3d9 B.8). dxmt9
-    // does not compute per-primitive clip results on this path (neither does
-    // wined3d — its set/get_clip_status are storage-free stubs); this is a
-    // pure shadow so GetClipStatus returns the last SetClipStatus value.
-    // D3D9 post-CreateDevice default is ClipUnion=0, ClipIntersection=all-set.
-    DWORD clipStatusUnion = 0;
-    DWORD clipStatusIntersection = 0xFFFFFFFFu;
 
     bool hasPendingHotState() const noexcept {
         return !pendingRenderStates.empty() || pendingTextureMask != 0 ||

@@ -216,27 +216,22 @@ void device_com_stub_returns() {
   Fixture fixture;
   if (!fixture.init("device_com_stub_returns")) return;
 
-  // SetClipStatus / GetClipStatus — pure state round-trip (gap_d3d9 B.8).
-  // Null SetClipStatus is rejected with D3DERR_INVALIDCALL (mirrors
-  // wined3d_device_set_clip_status's !clip_status guard).
+  // SetClipStatus / GetClipStatus — Wine-matching storage-free stub with a
+  // defined default (gap_d3d9 B.8). dxmt9 has no per-vertex clip-flag
+  // accumulation path (neither does wined3d), so SetClipStatus accepts without
+  // storing and GetClipStatus reports the "everything visible / nothing clipped"
+  // default rather than echoing a meaningless seed. Null is rejected with
+  // D3DERR_INVALIDCALL (mirrors wined3d's !clip_status guard).
   CHECK_HR(fixture.device->SetClipStatus(nullptr), D3DERR_INVALIDCALL);
+  CHECK_HR(fixture.device->GetClipStatus(nullptr), D3DERR_INVALIDCALL);
 
   D3DCLIPSTATUS9 cs = {};
   cs.ClipUnion = 0x0000000Fu;
   cs.ClipIntersection = 0x00000003u;
   CHECK_HR(fixture.device->SetClipStatus(&cs), D3D_OK);
 
+  // The seed is NOT echoed back; GetClipStatus always writes the defined default.
   D3DCLIPSTATUS9 out = {};
-  out.ClipUnion = 0xdeadbeefu;
-  out.ClipIntersection = 0xdeadbeefu;
-  CHECK_HR(fixture.device->GetClipStatus(&out), D3D_OK);
-  CHECK(out.ClipUnion == cs.ClipUnion);
-  CHECK(out.ClipIntersection == cs.ClipIntersection);
-
-  // A second Set/Get with different values must reflect the latest state.
-  cs.ClipUnion = 0u;
-  cs.ClipIntersection = 0xFFFFFFFFu;
-  CHECK_HR(fixture.device->SetClipStatus(&cs), D3D_OK);
   out.ClipUnion = 0xdeadbeefu;
   out.ClipIntersection = 0xdeadbeefu;
   CHECK_HR(fixture.device->GetClipStatus(&out), D3D_OK);

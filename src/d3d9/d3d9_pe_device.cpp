@@ -3373,23 +3373,22 @@ public:
     }
     HRESULT STDMETHODCALLTYPE SetClipStatus(const D3DCLIPSTATUS9* p) noexcept override {
         dxmt9DeviceDebugLog("device_set_clip_status device=%p", this);
-        // Pure state round-trip (gap_d3d9 B.8): store the struct so GetClipStatus
-        // returns the last-set value. dxmt9 does not compute per-primitive clip
-        // results here (wined3d's set/get_clip_status are storage-free stubs that
-        // only reject null). Null is rejected with D3DERR_INVALIDCALL to match
-        // wined3d_device_set_clip_status's !clip_status guard.
+        // gap_d3d9 B.8: dxmt9 does not track per-primitive clip status — no hardware
+        // path exposes per-vertex clip-flag accumulation, exactly like wined3d's
+        // storage-free stub. Reject null (the one real wined3d contract) and
+        // otherwise accept without storing; echoing the seed back would be a
+        // meaningless fake value, so GetClipStatus returns a defined default instead.
         if (!p) return D3DERR_INVALIDCALL;
-        peState_.clipStatusUnion = p->ClipUnion;
-        peState_.clipStatusIntersection = p->ClipIntersection;
         return S_OK;
     }
     HRESULT STDMETHODCALLTYPE GetClipStatus(D3DCLIPSTATUS9* p) noexcept override {
         dxmt9DeviceDebugLog("device_get_clip_status device=%p", this);
-        // Round-trip companion to SetClipStatus: write back the shadow. Default
-        // (post-CreateDevice) is ClipUnion=0, ClipIntersection=0xFFFFFFFF.
         if (!p) return D3DERR_INVALIDCALL;
-        p->ClipUnion = peState_.clipStatusUnion;
-        p->ClipIntersection = peState_.clipStatusIntersection;
+        // Defined "everything visible / nothing clipped" default rather than echoing
+        // a meaningless seed (no real clip accumulation exists on the HW path) or
+        // leaving the caller's buffer untouched.
+        p->ClipUnion = 0u;
+        p->ClipIntersection = 0xFFFFFFFFu;
         return S_OK;
     }
 
