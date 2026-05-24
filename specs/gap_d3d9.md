@@ -9,10 +9,10 @@ Comprehensive per-spec-item inventory of the D3D9 surface across:
 
 Authored 2026-05-23 from a four-agent parallel audit. Each row records:
 defined? · backend-read / runtime-use? · tested? · source/test anchor ·
-notes. **This file is a tracker, not a spec** — it is local-only
-(matches `.gitignore: *.plan.md`) and is regenerated on demand from the
-current source tree via the methodology footers at the bottom of each
-section.
+notes. **This file is a tracker, not a spec** — it is a committed
+companion to [`specs/gap.md`](gap.md) (tracked, not gitignored) and is
+regenerated on demand from the current source tree via the methodology
+footers at the bottom of each section.
 
 Severity legend (used uniformly across the file):
 
