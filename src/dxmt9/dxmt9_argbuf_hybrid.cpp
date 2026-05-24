@@ -109,6 +109,25 @@ void ArgbufEncoderResource::init(WMT::Device device) {
   initialized_ = true;
 }
 
+void ArgbufEncoderResource::initResourceArray(WMT::Device device) {
+  if (initialized_) {
+    return;
+  }
+  // Extended 20-entry table — keep the local alive across the
+  // newArgumentEncoder call (the WMT bridge reads entries.data() span
+  // synchronously).
+  const auto descriptors = buildResourceArrayArgumentDescriptors();
+  encoder_ = device.newArgumentEncoder(
+      descriptors.entries.data(),
+      static_cast<u32>(descriptors.count()));
+  if (!encoder_) {
+    return;
+  }
+  encodedLength_ = encoder_.encodedLength();
+  alignment_ = std::max<u64>(16u, encoder_.alignment());
+  initialized_ = true;
+}
+
 void ArgbufEncoderResource::initForTest(u64 encodedLength, u64 alignment) noexcept {
   encodedLength_ = encodedLength;
   alignment_ = std::max<u64>(16u, alignment);

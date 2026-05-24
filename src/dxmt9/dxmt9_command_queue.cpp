@@ -168,6 +168,23 @@ CommandQueue::CommandQueue(WMT::Device device, core::BackendLimits limits)
   if (pool_.argbufHybridEnabled() && device_) {
     argbufEncoderResource_.init(device_);
   }
+  // R-BACK-12.22..12.26 (resource-array sub-mode) — opt-in second lane.
+  // Build the 20-entry resource-array encoder ONLY when the constants-only
+  // Stage 2 gate held AND the DXMT9_ARGBUF_RESOURCE_ARRAY env flag is set.
+  // Default off: resourceArrayLaneActive_ stays false, the second encoder
+  // stays uninitialized, and every Stage 2 pass uses the byte-identical
+  // constants-only encoder. When on, the encoder thread selects this
+  // encoder + the resource-array PSO bit per pass.
+  resourceArrayLaneActive_ =
+      pool_.argbufHybridEnabled() && shaders::argbufResourceArrayEnabled();
+  if (resourceArrayLaneActive_ && device_) {
+    resourceArrayEncoderResource_.initResourceArray(device_);
+    // If the extended encoder failed to build (driver rejected the 20-entry
+    // table), fall back to the constants-only lane rather than half-enable.
+    if (!resourceArrayEncoderResource_.initialized()) {
+      resourceArrayLaneActive_ = false;
+    }
+  }
   // R-BACK-14.* — bind the small-resource heap manager to the same
   // WMT::Device + unified-memory probe used by the pool's storage-mode
   // selectors. Init must run before initializer_ / encode loops because

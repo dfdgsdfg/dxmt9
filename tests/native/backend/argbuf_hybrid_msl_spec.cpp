@@ -86,6 +86,17 @@ dxmt9::drawshader::ShaderSourceContext makeContext(const DrawDesc& desc,
   return context;
 }
 
+// R-BACK-12.22..12.26 (resource-array sub-mode) — build a context with the
+// resource-array sub-bit set (always alongside argbufHybridMode, matching
+// the pipeline-cache invariant key.argbufResourceArray = argbufHybridMode &&
+// argbufResourceArray).
+dxmt9::drawshader::ShaderSourceContext makeResourceArrayContext(const DrawDesc& desc) {
+  auto context = dxmt9::drawshader::makeShaderSourceContext(desc);
+  context.argbufHybridMode = true;
+  context.argbufResourceArray = true;
+  return context;
+}
+
 // ---------------------------------------------------------------------
 // FFP vertex emitter
 
@@ -438,10 +449,134 @@ void testArgbufLayoutStructPresentOnlyForStage2() {
         "argbuf descriptor count equals the four constant-buffer pointers");
 }
 
+// ---------------------------------------------------------------------
+// R-BACK-12.22..12.26 (resource-array sub-mode) — texture/sampler via argbuf
+
+void testResourceArrayPreludeShape() {
+  // The extended prelude declares the texture/sampler arrays at the pinned
+  // [[id]] positions; the constants-only prelude does not.
+  const auto prelude =
+      dxmt9::shaders::makeShaderPreludeArgbufResourceArray(/*withClipDistances=*/false);
+  checkContains(prelude, "struct ArgbufLayout",
+                "resource-array prelude declares ArgbufLayout");
+  checkContains(prelude, "array<texture2d<float>, 8> textures [[id(4)]]",
+                "resource-array prelude declares the texture array at id 4");
+  checkContains(prelude, "array<sampler, 8> samplers [[id(12)]]",
+                "resource-array prelude declares the sampler array at id 12");
+  // The four constant-buffer pointers keep id 0..3.
+  for (const char* tag : {"[[id(0)]]", "[[id(1)]]", "[[id(2)]]", "[[id(3)]]"}) {
+    checkContains(prelude, tag,
+                  "resource-array prelude keeps the four cbuf pointer ids");
+  }
+  // Constants-only prelude must NOT grow the texture/sampler arrays — the
+  // default Stage 2 lane stays byte-identical.
+  const auto constantsOnly =
+      dxmt9::shaders::makeShaderPreludeArgbufHybrid(/*withClipDistances=*/false);
+  checkNotContains(constantsOnly, "array<texture2d<float>",
+                   "constants-only prelude must not declare the texture array");
+  checkNotContains(constantsOnly, "array<sampler",
+                   "constants-only prelude must not declare the sampler array");
+}
+
+void testFfpPixelResourceArrayTextured() {
+  // FFP textures are always texture2d<float>, so the resource-array lane is
+  // always eligible for an active textured FFP stage.
+  DrawDesc desc{};
+  desc.pixelShader.kind = ShaderRef::Kind::FixedFunctionPixel;
+  FfpPixelKey psKey{};
+  psKey.stages[0].colorOp = 4;  // Modulate
+  psKey.stages[0].alphaOp = 4;
+  psKey.stages[0].colorArg1 = 2;  // texture
+  psKey.stages[0].colorArg2 = 0;
+  psKey.stages[0].alphaArg1 = 2;
+  psKey.stages[0].alphaArg2 = 0;
+  desc.pixelShader.pixelKey = psKey;
+  desc.textures[0].handle = Handle{1};
+
+  const auto src =
+      dxmt9::ffp::makeFfpPixelSource(psKey, makeResourceArrayContext(desc));
+  // Argbuf still carries the constants.
+  checkContains(src, "[[buffer(30)]]",
+                "resource-array FFP pixel binds argbuf at slot 30");
+  checkContains(src, "abuf.psConsts",
+                "resource-array FFP pixel aliases psConsts off the argbuf");
+  // Texture/sampler now ride the argbuf arrays — NO direct texture/sampler
+  // slot params.
+  checkNotContains(src, "[[texture(0)]]",
+                   "resource-array FFP pixel drops the direct texture(0) param");
+  checkNotContains(src, "[[sampler(0)]]",
+                   "resource-array FFP pixel drops the direct sampler(0) param");
+  // Alias block rebinds tex0/samp0 off the argbuf arrays.
+  checkContains(src, "texture2d<float> tex0 = abuf.textures[0];",
+                "resource-array FFP pixel aliases tex0 off abuf.textures");
+  checkContains(src, "sampler samp0 = abuf.samplers[0];",
+                "resource-array FFP pixel aliases samp0 off abuf.samplers");
+  // The body sample form is unchanged so every downstream sample site works.
+  checkContains(src, "tex0.sample(samp0",
+                "resource-array FFP pixel body keeps tex0.sample(samp0, ...) form");
+}
+
+void testTranslatedPixelResourceArray2D() {
+  // ps_2_0 sampling stage 2 with a default 2D sampler type — eligible for
+  // the resource-array lane.
+  ShaderRef shader = makePixelShaderRef();
+  DrawDesc desc{};
+  desc.pixelShader = shader;
+  desc.textures[2].handle = Handle{3};
+  // Default textureTypes are TwoD; leave them so the eligibility predicate
+  // holds.
+  const auto src = dxmt9::translator::makeTranslatedFragmentSource(
+      shader, makeResourceArrayContext(desc));
+  checkContains(src, "[[buffer(30)]]",
+                "resource-array translated pixel binds argbuf at slot 30");
+  checkContains(src, "abuf.psConsts",
+                "resource-array translated pixel aliases psConsts");
+  checkNotContains(src, "[[texture(2)]]",
+                   "resource-array translated pixel drops the direct texture(2) param");
+  checkNotContains(src, "[[sampler(2)]]",
+                   "resource-array translated pixel drops the direct sampler(2) param");
+  checkContains(src, "texture2d<float> tex2 = abuf.textures[2];",
+                "resource-array translated pixel aliases tex2 off abuf.textures");
+  checkContains(src, "sampler samp2 = abuf.samplers[2];",
+                "resource-array translated pixel aliases samp2 off abuf.samplers");
+  checkContains(src, "tex2.sample(samp2",
+                "resource-array translated pixel body keeps tex2.sample(samp2, ...) form");
+}
+
+void testResourceArrayDisabledStaysConstantsOnly() {
+  // With the resource-array sub-bit OFF (constants-only Stage 2), the
+  // textured FFP pixel MSL must be byte-identical to the pre-sub-mode
+  // Stage 2 form: direct [[texture(N)]] / [[sampler(N)]] params, no argbuf
+  // texture-array alias. This guards the "default OFF is byte-identical"
+  // invariant the whole sub-mode is gated on.
+  DrawDesc desc{};
+  desc.pixelShader.kind = ShaderRef::Kind::FixedFunctionPixel;
+  FfpPixelKey psKey{};
+  psKey.stages[0].colorOp = 4;
+  psKey.stages[0].alphaOp = 4;
+  psKey.stages[0].colorArg1 = 2;
+  psKey.stages[0].colorArg2 = 0;
+  psKey.stages[0].alphaArg1 = 2;
+  psKey.stages[0].alphaArg2 = 0;
+  desc.pixelShader.pixelKey = psKey;
+  desc.textures[0].handle = Handle{1};
+
+  const auto constantsOnly =
+      dxmt9::ffp::makeFfpPixelSource(psKey, makeContext(desc, /*argbufHybridMode=*/true));
+  checkContains(constantsOnly, "texture2d<float> tex0 [[texture(0)]]",
+                "constants-only Stage 2 keeps the direct texture(0) param");
+  checkNotContains(constantsOnly, "abuf.textures[0]",
+                   "constants-only Stage 2 must not alias texture off the argbuf");
+}
+
 }  // namespace
 
 int main() {
   try {
+    testResourceArrayPreludeShape();
+    testFfpPixelResourceArrayTextured();
+    testTranslatedPixelResourceArray2D();
+    testResourceArrayDisabledStaysConstantsOnly();
     testFfpVertexStage1Bindings();
     testFfpVertexStage2Bindings();
     testFfpPixelStage1Bindings();

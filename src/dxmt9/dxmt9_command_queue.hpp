@@ -274,6 +274,20 @@ class CommandQueue {
     return argbufEncoderResource_;
   }
 
+  // R-BACK-12.22..12.26 (resource-array sub-mode) — the queue-owned SECOND
+  // MTLArgumentEncoder, built from the extended 20-entry table only when
+  // the resource-array opt-in is active (capability gate held AND
+  // DXMT9_ARGBUF_RESOURCE_ARRAY set). Stays uninitialized otherwise, so the
+  // constants-only encoder and the byte-identical default path are never
+  // disturbed. `resourceArrayLaneActive()` is the single bool the encoder
+  // reads per pass to choose this encoder + the resource-array PSO bit.
+  argbuf_hybrid::ArgbufEncoderResource& resourceArrayEncoderResource() noexcept {
+    return resourceArrayEncoderResource_;
+  }
+  bool resourceArrayLaneActive() const noexcept {
+    return resourceArrayLaneActive_;
+  }
+
   // R-BACK-15.4 / 15.5 / 15.6: touched color attachment set API. The
   // encoder's beginRenderPass calls isColorHandleTouched on each color
   // attachment to decide whether the first load action can be DontCare
@@ -414,6 +428,13 @@ class CommandQueue {
   // ctor). Order matters — must outlive the worker threads that may
   // observe it via encoders::EncodeContext.
   argbuf_hybrid::ArgbufEncoderResource argbufEncoderResource_{};
+  // R-BACK-12.22..12.26 (resource-array sub-mode) — second encoder + lane
+  // flag. resourceArrayEncoderResource_ is built from the 20-entry table
+  // only when resourceArrayLaneActive_ holds (set in the ctor from the
+  // capability gate AND DXMT9_ARGBUF_RESOURCE_ARRAY). Both default to a
+  // disabled/uninitialized state so the constants-only path is untouched.
+  argbuf_hybrid::ArgbufEncoderResource resourceArrayEncoderResource_{};
+  bool resourceArrayLaneActive_ = false;
   std::unique_ptr<resources::Initializer> initializer_;
   core::metalcapture::MetalCaptureController metalCapture_{};
 

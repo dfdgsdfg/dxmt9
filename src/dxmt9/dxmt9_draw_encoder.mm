@@ -717,6 +717,11 @@ WMT::Reference<WMT::SamplerState> makeSampler(WMT::Reference<WMT::Device> device
   info.t_address_mode = WMTSamplerAddressModeClampToEdge;
   info.r_address_mode = WMTSamplerAddressModeClampToEdge;
   info.normalized_coords = true;
+  // R-BACK-12.22..12.26 (resource-array sub-mode): a sampler placed in an
+  // argument buffer must be created with supportArgumentBuffers=YES or its
+  // gpuResourceID is invalid (GPU page fault on .sample()). Gated on the
+  // opt-in lane so the default direct-bind path is byte-identical.
+  info.support_argument_buffers = dxmt9::shaders::argbufResourceArrayEnabled();
   DXMT_ASSERT(device && "makeSampler(linear) called with stale/null Metal device handle");
   return device.newSamplerState(info);
 }
@@ -758,6 +763,11 @@ WMTSamplerInfo makeSamplerInfo(const SamplerSnapshot& snapshot, float lodMinClam
   info.lod_max_clamp = 1e9f;
   info.max_anisotroy = maxAnisotropy;
   info.normalized_coords = true;
+  // R-BACK-12.22..12.26 (resource-array sub-mode): samplers that ride the
+  // slot-30 argbuf need supportArgumentBuffers=YES for a valid gpuResourceID
+  // (else .sample() page-faults). Gated on the opt-in lane; default
+  // direct-bind path is byte-identical.
+  info.support_argument_buffers = dxmt9::shaders::argbufResourceArrayEnabled();
   return info;
 }
 
@@ -809,6 +819,11 @@ WMTSamplerInfo makeSamplerInfo(const core::FlatStateSet<core::kMaxSamplerStates>
   info.lod_max_clamp = 1e9f;
   info.max_anisotroy = maxAnisotropy;
   info.normalized_coords = true;
+  // R-BACK-12.22..12.26 (resource-array sub-mode): samplers that ride the
+  // slot-30 argbuf need supportArgumentBuffers=YES for a valid gpuResourceID
+  // (else .sample() page-faults). Gated on the opt-in lane; default
+  // direct-bind path is byte-identical.
+  info.support_argument_buffers = dxmt9::shaders::argbufResourceArrayEnabled();
   return info;
 }
 
@@ -1235,7 +1250,8 @@ bool encodeDraw(EncodeContext& ctx,
                  std::span<const u8> paramPayloadArena,
                  uniform::DirtyState* dirty,
                  bool tileFfpMode,
-                 bool argbufHybridMode) {
+                 bool argbufHybridMode,
+                 bool argbufResourceArray) {
   // Hot per-draw entry. Per codebase_conventions.rules.md, no heap allocation
   // is permitted on this path; the guard is debug-only and asserts this when
   // DXMT_DEBUG_NO_PER_DRAW_ALLOC=1 is set in env. See dxmt9_debug_alloc_guard.
@@ -1355,7 +1371,8 @@ bool encodeDraw(EncodeContext& ctx,
     } else {
       pipelineRef = ctx.cache.getOrBuildDrawPipelineForState(
           ctx.device, ctx.limits, ctx.pool, drawState, ctx.shaderArchive,
-          ctx.shaderArchivePath, tileFfpMode, argbufHybridMode).get();
+          ctx.shaderArchivePath, tileFfpMode, argbufHybridMode,
+          argbufResourceArray).get();
       pipeline = WMT::RenderPipelineState{pipelineRef.handle};
     }
     if (!pipeline) {
@@ -1447,6 +1464,45 @@ bool encodeDraw(EncodeContext& ctx,
   uniform::markAllDirty(scratchDirty);
   uniform::DirtyState* dirtyPtr = dirty ? dirty : &scratchDirty;
   const auto& shaderUsage = drawState.shaderContext();
+  // R-BACK-12.22..12.26 (resource-array sub-mode) — when this pass runs the
+  // resource-array lane the constant-buffer entries AND the texture/sampler
+  // arrays share the SAME argument buffer, so every argbuf write
+  // (updateDirtyArgbufRegions / pointFfpVsAtSlice / populateResourceBindings)
+  // must target the resource-array encoder. Otherwise (constants-only Stage 2)
+  // the constants-only encoder is used, byte-identical to before. Resolved
+  // once here so the constant + resource write paths can't diverge.
+  const bool useResourceArrayArgbuf =
+      argbufResourceArray && argbufHybridMode &&
+      ctx.queue.resourceArrayEncoderResource().initialized();
+  auto& argbufEncoderForDraw = useResourceArrayArgbuf
+                                   ? ctx.queue.resourceArrayEncoderResource()
+                                   : ctx.queue.argbufEncoderResource();
+  // R-BACK-12.22..12.26 (resource-array sub-mode, fault candidate 2 —
+  // argbuf lifetime across draws). The constants-only lane re-points each
+  // cbuf [[id]] at a FRESH transient slab per dirty draw, so old draws'
+  // data survives in their own slabs even though the descriptor table is
+  // reused in place. The texture/sampler arrays, by contrast, write the
+  // gpuResourceID INLINE into the argbuf slot — so a second draw that
+  // changes a texture would overwrite the first draw's slot before the GPU
+  // consumed it. To stay correct-by-construction we reserve a FRESH
+  // resource-array argbuf per draw on this lane and rebind slot 30, so each
+  // draw's argbuf (constants + textures) is self-contained. All four
+  // constant categories are forced dirty so updateDirtyArgbufRegions
+  // repopulates them into the fresh slab. (Higher-traffic optimisation —
+  // only re-open when a texture/sampler actually changed — is left for a
+  // follow-up; per-draw reopen is the safe floor.)
+  if (useResourceArrayArgbuf) {
+    const auto populated = dxmt9::argbuf_hybrid::openArgbuf(
+        ctx.queue, argbufEncoderForDraw, seqId);
+    if (populated && !suppressRecordedMetalCalls(ctx)) {
+      encoder.setVertexBuffer(populated.storage, populated.offset,
+                              dxmt9::shaders::kArgbufHybridBindSlot);
+      encoder.setFragmentBuffer(populated.storage, populated.offset,
+                                dxmt9::shaders::kArgbufHybridBindSlot);
+      perf::countArgbufHybridBytes(populated.length);
+      uniform::markAllDirty(*dirtyPtr);
+    }
+  }
   // R-BACK-12.24 — Stage 2 argbuf dirty mirror.
   //
   // When the encoder is on the argbuf-hybrid path AND any per-frequency
@@ -1456,7 +1512,7 @@ bool encodeDraw(EncodeContext& ctx,
   // slot 3 Stage 1 binds below are skipped once the argbuf owns the data.
   if (argbufHybridMode) {
     const auto bytes = dxmt9::argbuf_hybrid::updateDirtyArgbufRegions(
-        ctx.queue, ctx.queue.argbufEncoderResource(), drawState, *dirtyPtr,
+        ctx.queue, argbufEncoderForDraw, drawState, *dirtyPtr,
         shaderUsage.vertexConstantUsage, shaderUsage.pixelConstantUsage, seqId,
         nullptr, encoder);
     if (bytes != 0) {
@@ -1529,7 +1585,7 @@ bool encodeDraw(EncodeContext& ctx,
     if (slice) {
       if (argbufHybridMode) {
         dxmt9::argbuf_hybrid::pointFfpVsAtSlice(
-            ctx.queue.argbufEncoderResource(), slice.buffer, slice.offset,
+            argbufEncoderForDraw, slice.buffer, slice.offset,
             nullptr, encoder);
         perf::countArgbufHybridBytes(sizeof(FfpVsConsts));
       } else {
@@ -2136,6 +2192,73 @@ bool encodeDraw(EncodeContext& ctx,
         }
       }
 
+      // R-BACK-12.22..12.26 (resource-array sub-mode) — when this pass runs
+      // the resource-array lane, fragment-stage textures/samplers travel
+      // through the slot-30 argbuf (writes + useResource residency) instead
+      // of the direct lane. Only the FFP s0..s7 fragment stages (<
+      // kArgbufResourceArrayStageCount) ride the argbuf; any higher stage
+      // stays direct. The argbuf texture array is homogeneously
+      // texture2d<float>, so this MUST match the emitter's
+      // pixelResourceArrayEligible decision: every used stage < 8 AND every
+      // bound texture is 2D. A cube/volume binding (or a stage >= 8) forces
+      // the WHOLE draw back onto the direct lane — the emitter emitted the
+      // constants-only-hybrid form with direct [[texture(N)]] params for
+      // exactly this shader, so a split would leave those params unbound.
+      // Trace lines are kept identical to the direct path so capture
+      // diffing is unchanged.
+      bool fragmentResourceArrayEligible = useResourceArrayArgbuf;
+      if (fragmentResourceArrayEligible) {
+        for (std::size_t i = 0; i < resolvedFragmentBindingCount; ++i) {
+          const auto& binding = resolvedFragmentBindings[i];
+          if (binding.stage >= dxmt9::shaders::kArgbufResourceArrayStageCount) {
+            fragmentResourceArrayEligible = false;
+            break;
+          }
+          if (binding.textureRecord &&
+              binding.textureRecord->desc.type != core::TextureType::TwoD &&
+              binding.textureRecord->desc.type != core::TextureType::Array2D) {
+            fragmentResourceArrayEligible = false;
+            break;
+          }
+        }
+      }
+      const bool useResourceArrayLane = fragmentResourceArrayEligible;
+      if (useResourceArrayLane) {
+        std::array<dxmt9::argbuf_hybrid::ResourceArrayBinding,
+                   dxmt9::shaders::kArgbufResourceArrayStageCount>
+            argbufBindings{};
+        std::size_t argbufBindingCount = 0;
+        for (std::size_t i = 0; i < resolvedFragmentBindingCount; ++i) {
+          const auto& binding = resolvedFragmentBindings[i];
+          if (binding.stage >= dxmt9::shaders::kArgbufResourceArrayStageCount) {
+            continue;
+          }
+          if (debug::shouldTraceTexture(binding.textureHandle) && binding.textureRecord) {
+            std::ostringstream out;
+            out << "[dxmt9-texture] bind stage=" << binding.stage
+                << " handle=0x" << std::hex << binding.textureHandle.value << std::dec
+                << " format=" << static_cast<unsigned>(binding.textureRecord->desc.format)
+                << " size=" << binding.textureRecord->desc.width << "x"
+                << binding.textureRecord->desc.height
+                << " levels=" << binding.textureRecord->desc.levels
+                << " lod=" << binding.textureLod;
+            emitTextureTraceLine(out.str());
+          }
+          auto& slot = argbufBindings[argbufBindingCount++];
+          slot.stage = binding.stage;
+          slot.texture = binding.texture;
+          slot.sampler = binding.sampler;
+          if (binding.texture) countTextureBind();
+          if (binding.sampler) countSamplerBind();
+        }
+        if (!suppressRecordedMetalCalls(ctx)) {
+          dxmt9::argbuf_hybrid::populateResourceBindings(
+              argbufEncoderForDraw,
+              std::span<const dxmt9::argbuf_hybrid::ResourceArrayBinding>(
+                  argbufBindings.data(), argbufBindingCount),
+              /*recorder=*/nullptr, encoder);
+        }
+      } else {
       for (std::size_t i = 0; i < resolvedFragmentBindingCount; ++i) {
         const auto& binding = resolvedFragmentBindings[i];
         if (binding.texture) {
@@ -2159,6 +2282,7 @@ bool encodeDraw(EncodeContext& ctx,
                                           static_cast<std::uint8_t>(binding.stage));
           countSamplerBind();
         }
+      }
       }
     }
     // D3DSAMP_MIPMAPLODBIAS (gap_d3d9 B.3): the per-sampler mip LOD bias is
@@ -2612,6 +2736,14 @@ std::optional<core::metalqueue::QueueSubmissionRecord> encodeChunk(
   // — the design today reserves one argbuf per encoder and rewrites
   // sub-regions in place.
   bool activePassUsesArgbufHybrid = false;
+  // R-BACK-12.22..12.26 (resource-array sub-mode) — current render
+  // encoder's resource-array sub-state. Set at startRenderPass when the
+  // resource-array lane is active for the queue AND the pass opened the
+  // resource-array argbuf. Consumed by encodeDraw to (a) stamp the
+  // ShaderVariantKey::argbufResourceArray PSO bit and (b) route fragment
+  // textures/samplers through populateResourceBindings + useResource. Like
+  // activePassUsesArgbufHybrid the pass is sticky — never mid-pass switch.
+  bool activePassUsesArgbufResourceArray = false;
   [[maybe_unused]] WMT::Buffer activeArgbufStorage{};
   [[maybe_unused]] std::uint64_t activeArgbufOffset = 0;
   std::optional<core::FlatDrawStateKey> activeDrawStateKey;
@@ -2778,6 +2910,7 @@ std::optional<core::metalqueue::QueueSubmissionRecord> encodeChunk(
     // returns an empty handle and we fall through to the Stage 1
     // counter; no slot-30 bind is issued.
     activePassUsesArgbufHybrid = false;
+    activePassUsesArgbufResourceArray = false;
     activeArgbufStorage = {};
     activeArgbufOffset = 0;
     {
@@ -2785,7 +2918,16 @@ std::optional<core::metalqueue::QueueSubmissionRecord> encodeChunk(
           drawState, ctx.pool.argbufHybridEnabled());
       if (argbufDecision == dxmt9::pipeline::ArgbufHybridDecision::Stage2) {
         perf::countArgbufHybridEncoder();
-        auto& encoderResource = ctx.queue.argbufEncoderResource();
+        // R-BACK-12.22..12.26 (resource-array sub-mode) — pick the
+        // resource-array encoder (20-entry table, larger encodedLength) when
+        // the lane is active for the queue; otherwise the constants-only
+        // encoder. Both anchor onto a fresh transient slab; the only delta is
+        // the reservation size and whether texture/sampler slots are written.
+        const bool resourceArrayLane = ctx.queue.resourceArrayLaneActive() &&
+            ctx.queue.resourceArrayEncoderResource().initialized();
+        auto& encoderResource = resourceArrayLane
+                                    ? ctx.queue.resourceArrayEncoderResource()
+                                    : ctx.queue.argbufEncoderResource();
         const auto populated = dxmt9::argbuf_hybrid::openArgbuf(
             ctx.queue, encoderResource, encodeChunkSeqId);
         if (populated) {
@@ -2811,6 +2953,7 @@ std::optional<core::metalqueue::QueueSubmissionRecord> encodeChunk(
           // updateDirtyArgbufRegions on the first draw.
           perf::countArgbufHybridBytes(populated.length);
           activePassUsesArgbufHybrid = true;
+          activePassUsesArgbufResourceArray = resourceArrayLane;
           activeArgbufStorage = populated.storage;
           activeArgbufOffset = populated.offset;
         } else {
@@ -3142,7 +3285,8 @@ std::optional<core::metalqueue::QueueSubmissionRecord> encodeChunk(
                          recordPayloadArena,
                          &uniformDirty,
                          /*tileFfpMode=*/activePassUsesTileFfp,
-                         /*argbufHybridMode=*/activePassUsesArgbufHybrid)) {
+                         /*argbufHybridMode=*/activePassUsesArgbufHybrid,
+                         /*argbufResourceArray=*/activePassUsesArgbufResourceArray)) {
             baseBound = true;
             activeDrawStateKey = hot.key;
           }
