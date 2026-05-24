@@ -86,7 +86,7 @@ a `file:line` anchor checked against the live tree.
 | Item | Section | Priority | Notes |
 |---|---|---|---|
 | COM silent-`S_OK` stub gates — 4 PE-only remain (SetNPatchMode/GetNPatchMode, SetClipStatus/GetClipStatus, DeletePatch) | D.* | Med | native `com::` harness reached 3/7; rest need the PE conformance lane (`d3d9_device_misc.cpp` already gates SetDialogBoxMode/ValidateDevice) |
-| Vendor pseudo-formats `RESZ`/`NULL`/`ATOC` — **designed, impl pending** | C.5 | Med | design landed 2026-05-24: RESZ=R-FORMAT-11 (MSAA depth resolve), NULL=R-FORMAT-12 (colorless RT), ATOC=R-FORMAT-13 (alpha-to-coverage state hack). See `specs/d3d9/formats/{requirements,design}.md` |
+| Vendor pseudo-formats `RESZ`/`NULL`/`ATOC` — **classification landed; behavioral pending** | C.5 | Med | FOURCC classification + `CheckDeviceFormat` outcomes done (`2f619f0`, gate `dxmt9-core-format-caps-spec`). Behavioral: RESZ=R-FORMAT-11 MSAA depth resolve, NULL=R-FORMAT-12 colorless RT, ATOC=R-FORMAT-13 alpha-to-coverage. See `specs/d3d9/formats/{requirements,design}.md` |
 | `D3DRS_TWOSIDEDSTENCILMODE` (185) behavioural gate | B.10#7 | Low | backend uses single-ref/both-faces; partial backend limit |
 | `SAMP_MIPMAPLODBIAS` per-sampler bias | B.3/B.10#4 | Blocked | requires a `lod_bias` field on `WMTSamplerInfo` (winemetal ABI extension) |
 | `D3DCLIPSTATUS9` Set/GetClipStatus | B.8/D.* | Low | nil-return arguably correct (D3D9 has no per-primitive clip tracking) |
@@ -95,10 +95,10 @@ a `file:line` anchor checked against the live tree.
 
 | Item | Section | Decision |
 |---|---|---|
-| `D3DFMT_NVDB` depth-bounds test | C.5 | **Unsupported** — Metal has no depth-bounds test; `CheckDeviceFormat`→`NOTAVAILABLE`. Perf-only/correctness-neutral, apps fall back. R-FORMAT-14 (2026-05-24). |
-| `D3DRS_WRAP0..15` texcoord wrap | B.10#6 | **Accepted no-op** — default (disabled) is correct; enabled cylindrical-wrap has no faithful Metal equivalent, documented limitation. R-CORE-3.9 (2026-05-24). |
+| `D3DFMT_NVDB` depth-bounds test | C.5 | **Unsupported — implemented + tested 2026-05-24.** Metal has no depth-bounds test; classified `Format::Nvdb`, `CheckDeviceFormat`→`NOTAVAILABLE`. R-FORMAT-14; gate `dxmt9-core-format-caps-spec`. |
+| `D3DRS_WRAP0..15` texcoord wrap | B.10#6 | **Accepted no-op — implemented + tested 2026-05-24.** `RS_WRAP0..15` constants defined + GetRenderState round-trip; enabled cylindrical-wrap is the documented limitation. R-CORE-3.9; gate `dxmt9-state-draw-transform-spec`. |
+| `D3DFMT_RAWZ` legacy raw depth | C.5 | **Unsupported — implemented + tested 2026-05-24.** Classified `Format::Rawz`, `CheckDeviceFormat`→`NOTAVAILABLE`; gate `dxmt9-core-format-caps-spec`. |
 | `D3DRS_DEBUGMONITORTOKEN` (165) | B.10#9 | **Non-gap** — PE shadow already stores all RS slots ≤255 generically; a named constant adds nothing functional. |
-| `D3DFMT_RAWZ` legacy raw depth | C.5 | **Unsupported** — no Metal path; classified in `specs/d3d9/formats/design.md`. |
 
 ## Cross-cutting high-priority findings
 
