@@ -706,6 +706,150 @@ summary = "Sikarugir-CX 24.0.7 builtin lane x64 2026-05-24 — passing in chunke
 [[case]]
 executable = "dxmt9-d3d9-conformance.exe"
 source_file = "d3d9_conformance_device.c"
+function = "test_get_set_vertex_declaration_refcount_policy"
+source = "wine/dlls/d3d9/tests/device.c:test_get_set_vertex_declaration"
+source_kind = "behavioral-oracle"
+license = "LGPL-2.1-or-later"
+license_scope = "external-not-vendored"
+upstream_commit = "6e073d28dee3af7f4c965daec94644e0f9f92727"
+lanes = ["app-local", "builtin"]
+arches = ["x64", "x86"]
+area = "vertex-declaration"
+owner = "core/device"
+requirements = ["R-TEST-12.3"]
+acceptance = ["SetVertexDeclaration does not change the decl refcount", "GetVertexDeclaration AddRefs the returned declaration and returns the active binding"]
+status = "failing"
+
+[[case.evidence]]
+lane = "builtin"
+arch = "x64"
+status = "failing"
+source = "tests/conformance/d3d9/evidence/sikarugir-cx-24.0.7-builtin-x64.json:1"
+summary = "Sikarugir-CX 24.0.7 builtin lane x64 2026-05-24 — fail in chunked runner snapshot (dxmt9 PE SetVertexDeclaration AddRefs the decl, diverges from Wine oracle which leaves refcount untouched)."
+
+[[case]]
+executable = "dxmt9-d3d9-conformance.exe"
+source_file = "d3d9_conformance_device.c"
+function = "test_get_declaration_roundtrip_policy"
+source = "wine/dlls/d3d9/tests/device.c:test_get_declaration"
+source_kind = "behavioral-oracle"
+license = "LGPL-2.1-or-later"
+license_scope = "external-not-vendored"
+upstream_commit = "6e073d28dee3af7f4c965daec94644e0f9f92727"
+lanes = ["app-local", "builtin"]
+arches = ["x64", "x86"]
+area = "vertex-declaration"
+owner = "core/device"
+requirements = ["R-TEST-12.3"]
+acceptance = ["GetDeclaration with NULL elements reports the element count", "GetDeclaration with non-NULL elements byte-matches the source vertex declaration"]
+status = "partial"
+
+[[case.evidence]]
+lane = "builtin"
+arch = "x64"
+status = "passing"
+source = "tests/conformance/d3d9/evidence/sikarugir-cx-24.0.7-builtin-x64.json:1"
+summary = "Sikarugir-CX 24.0.7 builtin lane x64 2026-05-24 — passing in chunked runner snapshot."
+
+[[case]]
+executable = "dxmt9-d3d9-conformance.exe"
+source_file = "d3d9_conformance_device.c"
+function = "test_fvf_decl_conversion_roundtrip_policy"
+source = "wine/dlls/d3d9/tests/device.c:test_fvf_decl_conversion"
+source_kind = "behavioral-oracle"
+license = "LGPL-2.1-or-later"
+license_scope = "external-not-vendored"
+upstream_commit = "6e073d28dee3af7f4c965daec94644e0f9f92727"
+lanes = ["app-local", "builtin"]
+arches = ["x64", "x86"]
+area = "vertex-declaration"
+owner = "core/device"
+requirements = ["R-TEST-12.3"]
+acceptance = ["Set/GetFVF round-trip preserves the FVF code for the common XYZ/XYZRHW/NORMAL/DIFFUSE/TEX subset", "Set FVF=0 round-trips to 0"]
+status = "partial"
+
+[[case.evidence]]
+lane = "builtin"
+arch = "x64"
+status = "passing"
+source = "tests/conformance/d3d9/evidence/sikarugir-cx-24.0.7-builtin-x64.json:1"
+summary = "Sikarugir-CX 24.0.7 builtin lane x64 2026-05-24 — passing in chunked runner snapshot."
+
+[[case]]
+executable = "dxmt9-d3d9-conformance.exe"
+source_file = "d3d9_conformance_device.c"
+function = "test_vertex_declaration_alignment_policy"
+source = "wine/dlls/d3d9/tests/device.c:test_vertex_declaration_alignment"
+source_kind = "behavioral-oracle"
+license = "LGPL-2.1-or-later"
+license_scope = "external-not-vendored"
+upstream_commit = "6e073d28dee3af7f4c965daec94644e0f9f92727"
+lanes = ["app-local", "builtin"]
+arches = ["x64", "x86"]
+area = "vertex-declaration"
+owner = "core/device"
+requirements = ["R-TEST-12.3"]
+acceptance = ["CreateVertexDeclaration rejects misaligned element offsets with E_FAIL and accepts 4-byte-aligned offsets with D3D_OK matching the Wine oracle"]
+status = "failing"
+
+[[case.evidence]]
+lane = "builtin"
+arch = "x64"
+status = "failing"
+source = "tests/conformance/d3d9/evidence/sikarugir-cx-24.0.7-builtin-x64.json:1"
+summary = "Sikarugir-CX 24.0.7 builtin lane x64 2026-05-24 — fail in chunked runner snapshot (dxmt9 PE returns D3DERR_INVALIDCALL for misaligned offsets, Wine oracle returns E_FAIL — divergence in validateVertexElements at src/d3d9/d3d9_pe_device.cpp:325)."
+
+[[case]]
+executable = "dxmt9-d3d9-conformance.exe"
+source_file = "d3d9_conformance_device.c"
+function = "test_get_rt_bounds_policy"
+source = "wine/dlls/d3d9/tests/device.c:test_get_rt"
+source_kind = "behavioral-oracle"
+license = "LGPL-2.1-or-later"
+license_scope = "external-not-vendored"
+upstream_commit = "6e073d28dee3af7f4c965daec94644e0f9f92727"
+lanes = ["app-local", "builtin"]
+arches = ["x64", "x86"]
+area = "device-lifetime"
+owner = "core/device"
+requirements = ["R-TEST-12.3"]
+acceptance = ["GetRenderTarget slot 0 returns the backbuffer surface", "GetRenderTarget on unused slots in [1, NumSimultaneousRTs) returns D3DERR_NOTFOUND with the out pointer set to NULL"]
+status = "partial"
+
+[[case.evidence]]
+lane = "builtin"
+arch = "x64"
+status = "passing"
+source = "tests/conformance/d3d9/evidence/sikarugir-cx-24.0.7-builtin-x64.json:1"
+summary = "Sikarugir-CX 24.0.7 builtin lane x64 2026-05-24 — passing in chunked runner snapshot."
+
+[[case]]
+executable = "dxmt9-d3d9-conformance.exe"
+source_file = "d3d9_conformance_device.c"
+function = "test_scene_begin_end_matrix_policy"
+source = "wine/dlls/d3d9/tests/device.c:test_scene"
+source_kind = "behavioral-oracle"
+license = "LGPL-2.1-or-later"
+license_scope = "external-not-vendored"
+upstream_commit = "6e073d28dee3af7f4c965daec94644e0f9f92727"
+lanes = ["app-local", "builtin"]
+arches = ["x64", "x86"]
+area = "device-lifetime"
+owner = "core/device"
+requirements = ["R-TEST-12.3"]
+acceptance = ["BeginScene/EndScene HR matrix matches the Wine oracle for the orphan-End, nested-Begin, double-End, and post-recovery branches"]
+status = "partial"
+
+[[case.evidence]]
+lane = "builtin"
+arch = "x64"
+status = "passing"
+source = "tests/conformance/d3d9/evidence/sikarugir-cx-24.0.7-builtin-x64.json:1"
+summary = "Sikarugir-CX 24.0.7 builtin lane x64 2026-05-24 — passing in chunked runner snapshot."
+
+[[case]]
+executable = "dxmt9-d3d9-conformance.exe"
+source_file = "d3d9_conformance_device.c"
 function = "test_get_set_vertex_shader"
 source = "wine/dlls/d3d9/tests/device.c:test_get_set_vertex_shader"
 source_kind = "behavioral-oracle"

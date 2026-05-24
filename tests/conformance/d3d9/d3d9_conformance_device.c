@@ -4521,3 +4521,404 @@ done_window:
 done_d3d9:
     IDirect3D9_Release(d3d9);
 }
+
+/*
+ * Wine provenance: dlls/d3d9/tests/device.c
+ * function: test_get_set_vertex_declaration (line 376)
+ * Pins Set/GetVertexDeclaration refcount behaviour (Set does not
+ * touch the decl refcount; Get adds one).
+ */
+void test_get_set_vertex_declaration_refcount_policy(const struct d3d9_api *api)
+{
+    static const D3DVERTEXELEMENT9 simple_decl[] =
+    {
+        {0, 0, D3DDECLTYPE_FLOAT3, D3DDECLMETHOD_DEFAULT,
+                D3DDECLUSAGE_POSITION, 0},
+        D3DDECL_END()
+    };
+    IDirect3DVertexDeclaration9 *decl = NULL;
+    IDirect3DVertexDeclaration9 *current = NULL;
+    IDirect3DDevice9 *device = NULL;
+    IDirect3D9 *d3d9;
+    ULONG before, after;
+    HWND window;
+    HRESULT hr;
+
+    d3d9 = api->create9(D3D_SDK_VERSION);
+    if (!d3d9)
+    {
+        skip_current_test("Direct3DCreate9 returned NULL");
+        return;
+    }
+
+    window = create_test_window();
+    CHECK_TRUE(window != NULL);
+    if (!window)
+        goto done_d3d9;
+
+    device = create_base_device(d3d9, window);
+    if (!device)
+        goto done_window;
+
+    hr = IDirect3DDevice9_CreateVertexDeclaration(device, simple_decl, &decl);
+    CHECK_HR(hr, D3D_OK);
+    if (FAILED(hr) || !decl)
+        goto done_device;
+
+    /* SetVertexDeclaration must not touch the decl's refcount. */
+    before = get_refcount((IUnknown *)decl);
+    CHECK_HR(IDirect3DDevice9_SetVertexDeclaration(device, decl), D3D_OK);
+    after = get_refcount((IUnknown *)decl);
+    CHECK_TRUE(after == before);
+
+    /* GetVertexDeclaration must AddRef. */
+    current = NULL;
+    hr = IDirect3DDevice9_GetVertexDeclaration(device, &current);
+    CHECK_HR(hr, D3D_OK);
+    CHECK_TRUE(current == decl);
+    if (current)
+    {
+        ULONG after_get = get_refcount((IUnknown *)decl);
+        CHECK_TRUE(after_get == before + 1);
+        IDirect3DVertexDeclaration9_Release(current);
+    }
+
+    IDirect3DVertexDeclaration9_Release(decl);
+
+done_device:
+    IDirect3DDevice9_Release(device);
+done_window:
+    DestroyWindow(window);
+done_d3d9:
+    IDirect3D9_Release(d3d9);
+}
+
+/*
+ * Wine provenance: dlls/d3d9/tests/device.c
+ * function: test_get_declaration (line 428)
+ * Pins IDirect3DVertexDeclaration9::GetDeclaration roundtrip: NULL
+ * elements pointer returns the count; non-NULL fills element data and
+ * the byte image matches the source declaration.
+ */
+void test_get_declaration_roundtrip_policy(const struct d3d9_api *api)
+{
+    static const D3DVERTEXELEMENT9 simple_decl[] =
+    {
+        {0, 0, D3DDECLTYPE_FLOAT3, D3DDECLMETHOD_DEFAULT,
+                D3DDECLUSAGE_POSITION, 0},
+        D3DDECL_END()
+    };
+    IDirect3DVertexDeclaration9 *decl = NULL;
+    IDirect3DDevice9 *device = NULL;
+    IDirect3D9 *d3d9;
+    D3DVERTEXELEMENT9 elements[MAXD3DDECLLENGTH + 1];
+    UINT count;
+    HWND window;
+    HRESULT hr;
+
+    d3d9 = api->create9(D3D_SDK_VERSION);
+    if (!d3d9)
+    {
+        skip_current_test("Direct3DCreate9 returned NULL");
+        return;
+    }
+
+    window = create_test_window();
+    CHECK_TRUE(window != NULL);
+    if (!window)
+        goto done_d3d9;
+
+    device = create_base_device(d3d9, window);
+    if (!device)
+        goto done_window;
+
+    hr = IDirect3DDevice9_CreateVertexDeclaration(device, simple_decl, &decl);
+    CHECK_HR(hr, D3D_OK);
+    if (FAILED(hr) || !decl)
+        goto done_device;
+
+    /* NULL elements with non-NULL count returns the element count. */
+    count = 0x1337c0de;
+    hr = IDirect3DVertexDeclaration9_GetDeclaration(decl, NULL, &count);
+    CHECK_HR(hr, D3D_OK);
+    CHECK_TRUE(count == ARRAY_SIZE(simple_decl));
+
+    /* Re-query, starting from 0. */
+    count = 0;
+    hr = IDirect3DVertexDeclaration9_GetDeclaration(decl, NULL, &count);
+    CHECK_HR(hr, D3D_OK);
+    CHECK_TRUE(count == ARRAY_SIZE(simple_decl));
+
+    /* Non-NULL elements: returned bytes must byte-match the source. */
+    memset(elements, 0, sizeof(elements));
+    count = ARRAY_SIZE(elements);
+    hr = IDirect3DVertexDeclaration9_GetDeclaration(decl, elements, &count);
+    CHECK_HR(hr, D3D_OK);
+    CHECK_TRUE(count == ARRAY_SIZE(simple_decl));
+    CHECK_TRUE(memcmp(elements, simple_decl,
+            count * sizeof(elements[0])) == 0);
+
+    IDirect3DVertexDeclaration9_Release(decl);
+
+done_device:
+    IDirect3DDevice9_Release(device);
+done_window:
+    DestroyWindow(window);
+done_d3d9:
+    IDirect3D9_Release(d3d9);
+}
+
+/*
+ * Wine provenance: dlls/d3d9/tests/device.c
+ * function: test_fvf_decl_conversion (line 501)
+ * Pins the FVF round-trip path of Set/GetFVF for the subset of FVF
+ * codes that survive without `todo_wine` annotation in the upstream
+ * oracle (XYZ, XYZRHW, XYZ|NORMAL, XYZ|DIFFUSE).
+ */
+void test_fvf_decl_conversion_roundtrip_policy(const struct d3d9_api *api)
+{
+    static const DWORD fvf_codes[] =
+    {
+        D3DFVF_XYZ,
+        D3DFVF_XYZRHW,
+        D3DFVF_XYZ | D3DFVF_NORMAL,
+        D3DFVF_XYZ | D3DFVF_DIFFUSE,
+        D3DFVF_XYZ | D3DFVF_DIFFUSE | D3DFVF_TEX1,
+        D3DFVF_XYZ | D3DFVF_TEX2,
+    };
+    IDirect3DDevice9 *device = NULL;
+    IDirect3D9 *d3d9;
+    DWORD fvf;
+    HWND window;
+    HRESULT hr;
+    unsigned int i;
+
+    d3d9 = api->create9(D3D_SDK_VERSION);
+    if (!d3d9)
+    {
+        skip_current_test("Direct3DCreate9 returned NULL");
+        return;
+    }
+
+    window = create_test_window();
+    CHECK_TRUE(window != NULL);
+    if (!window)
+        goto done_d3d9;
+
+    device = create_base_device(d3d9, window);
+    if (!device)
+        goto done_window;
+
+    /* Initial FVF must be zero. */
+    fvf = 0xdeadbeef;
+    hr = IDirect3DDevice9_GetFVF(device, &fvf);
+    CHECK_HR(hr, D3D_OK);
+    CHECK_TRUE(fvf == 0);
+
+    for (i = 0; i < ARRAY_SIZE(fvf_codes); ++i)
+    {
+        CHECK_HR(IDirect3DDevice9_SetFVF(device, fvf_codes[i]), D3D_OK);
+        fvf = 0;
+        hr = IDirect3DDevice9_GetFVF(device, &fvf);
+        CHECK_HR(hr, D3D_OK);
+        CHECK_TRUE(fvf == fvf_codes[i]);
+    }
+
+    /* Setting FVF=0 must round-trip back to 0. */
+    CHECK_HR(IDirect3DDevice9_SetFVF(device, 0), D3D_OK);
+    fvf = 0xdeadbeef;
+    hr = IDirect3DDevice9_GetFVF(device, &fvf);
+    CHECK_HR(hr, D3D_OK);
+    CHECK_TRUE(fvf == 0);
+
+    IDirect3DDevice9_Release(device);
+done_window:
+    DestroyWindow(window);
+done_d3d9:
+    IDirect3D9_Release(d3d9);
+}
+
+/*
+ * Wine provenance: dlls/d3d9/tests/device.c
+ * function: test_vertex_declaration_alignment (line 923)
+ * Pins the element offset alignment HR matrix from the upstream
+ * oracle: offsets that are multiples of 4 succeed; offsets 17-19 fail
+ * with E_FAIL.
+ */
+void test_vertex_declaration_alignment_policy(const struct d3d9_api *api)
+{
+    static const struct
+    {
+        WORD second_offset;
+        HRESULT expected;
+    } cases[] =
+    {
+        {16, D3D_OK},
+        {17, E_FAIL},
+        {18, E_FAIL},
+        {19, E_FAIL},
+        {20, D3D_OK},
+    };
+    IDirect3DDevice9 *device = NULL;
+    IDirect3D9 *d3d9;
+    HWND window;
+    unsigned int i;
+
+    d3d9 = api->create9(D3D_SDK_VERSION);
+    if (!d3d9)
+    {
+        skip_current_test("Direct3DCreate9 returned NULL");
+        return;
+    }
+
+    window = create_test_window();
+    CHECK_TRUE(window != NULL);
+    if (!window)
+        goto done_d3d9;
+
+    device = create_base_device(d3d9, window);
+    if (!device)
+        goto done_window;
+
+    for (i = 0; i < ARRAY_SIZE(cases); ++i)
+    {
+        D3DVERTEXELEMENT9 elements[3] =
+        {
+            {0, 0, D3DDECLTYPE_FLOAT3, D3DDECLMETHOD_DEFAULT,
+                    D3DDECLUSAGE_POSITION, 0},
+            {0, cases[i].second_offset, D3DDECLTYPE_D3DCOLOR,
+                    D3DDECLMETHOD_DEFAULT, D3DDECLUSAGE_COLOR, 0},
+            D3DDECL_END()
+        };
+        IDirect3DVertexDeclaration9 *decl = NULL;
+        HRESULT hr;
+
+        hr = IDirect3DDevice9_CreateVertexDeclaration(device, elements,
+                &decl);
+        CHECK_HR(hr, cases[i].expected);
+        if (SUCCEEDED(hr) && decl)
+            IDirect3DVertexDeclaration9_Release(decl);
+    }
+
+    IDirect3DDevice9_Release(device);
+done_window:
+    DestroyWindow(window);
+done_d3d9:
+    IDirect3D9_Release(d3d9);
+}
+
+/*
+ * Wine provenance: dlls/d3d9/tests/device.c
+ * function: test_get_rt (line 3036)
+ * Pins GetRenderTarget on slot 0 (backbuffer) and the out-of-range
+ * slots (return D3DERR_NOTFOUND with the out pointer cleared to NULL).
+ */
+void test_get_rt_bounds_policy(const struct d3d9_api *api)
+{
+    IDirect3DDevice9 *device = NULL;
+    IDirect3DSurface9 *backbuffer = NULL;
+    IDirect3DSurface9 *rt;
+    IDirect3D9 *d3d9;
+    D3DCAPS9 caps;
+    HWND window;
+    HRESULT hr;
+    UINT i;
+
+    d3d9 = api->create9(D3D_SDK_VERSION);
+    if (!d3d9)
+    {
+        skip_current_test("Direct3DCreate9 returned NULL");
+        return;
+    }
+
+    window = create_test_window();
+    CHECK_TRUE(window != NULL);
+    if (!window)
+        goto done_d3d9;
+
+    device = create_base_device(d3d9, window);
+    if (!device)
+        goto done_window;
+
+    hr = IDirect3DDevice9_GetRenderTarget(device, 0, &backbuffer);
+    CHECK_HR(hr, D3D_OK);
+    CHECK_TRUE(backbuffer != NULL);
+
+    memset(&caps, 0, sizeof(caps));
+    CHECK_HR(IDirect3DDevice9_GetDeviceCaps(device, &caps), D3D_OK);
+
+    for (i = 1; i < caps.NumSimultaneousRTs; ++i)
+    {
+        rt = (IDirect3DSurface9 *)0xdeadbeef;
+        hr = IDirect3DDevice9_GetRenderTarget(device, i, &rt);
+        CHECK_HR(hr, D3DERR_NOTFOUND);
+        CHECK_TRUE(rt == NULL);
+    }
+
+    if (backbuffer)
+        IDirect3DSurface9_Release(backbuffer);
+
+    IDirect3DDevice9_Release(device);
+done_window:
+    DestroyWindow(window);
+done_d3d9:
+    IDirect3D9_Release(d3d9);
+}
+
+/*
+ * Wine provenance: dlls/d3d9/tests/device.c
+ * function: test_scene (line 2678)
+ * Pins the BeginScene/EndScene HR matrix from the upstream oracle.
+ * This complements `test_scene_invalid_transitions` which already
+ * covers the Reset-clears-scene branch; the matrix here adds the
+ * nested-Begin and double-End HR positions inline so the breadth of
+ * the Wine state machine is regression-guarded.
+ */
+void test_scene_begin_end_matrix_policy(const struct d3d9_api *api)
+{
+    IDirect3DDevice9 *device = NULL;
+    IDirect3D9 *d3d9;
+    HWND window;
+
+    d3d9 = api->create9(D3D_SDK_VERSION);
+    if (!d3d9)
+    {
+        skip_current_test("Direct3DCreate9 returned NULL");
+        return;
+    }
+
+    window = create_test_window();
+    CHECK_TRUE(window != NULL);
+    if (!window)
+        goto done_d3d9;
+
+    device = create_base_device(d3d9, window);
+    if (!device)
+        goto done_window;
+
+    /* EndScene without BeginScene -> INVALIDCALL. */
+    CHECK_HR(IDirect3DDevice9_EndScene(device), D3DERR_INVALIDCALL);
+
+    /* Normal Begin/End pair -> S_OK each. */
+    CHECK_HR(IDirect3DDevice9_BeginScene(device), D3D_OK);
+    CHECK_HR(IDirect3DDevice9_EndScene(device), D3D_OK);
+
+    /* Second EndScene -> INVALIDCALL again. */
+    CHECK_HR(IDirect3DDevice9_EndScene(device), D3DERR_INVALIDCALL);
+
+    /* Nested BeginScene -> INVALIDCALL. */
+    CHECK_HR(IDirect3DDevice9_BeginScene(device), D3D_OK);
+    CHECK_HR(IDirect3DDevice9_BeginScene(device), D3DERR_INVALIDCALL);
+    CHECK_HR(IDirect3DDevice9_EndScene(device), D3D_OK);
+    CHECK_HR(IDirect3DDevice9_EndScene(device), D3DERR_INVALIDCALL);
+
+    /* Confirm device returns to a clean state — a fresh pair succeeds. */
+    CHECK_HR(IDirect3DDevice9_BeginScene(device), D3D_OK);
+    CHECK_HR(IDirect3DDevice9_EndScene(device), D3D_OK);
+
+    IDirect3DDevice9_Release(device);
+done_window:
+    DestroyWindow(window);
+done_d3d9:
+    IDirect3D9_Release(d3d9);
+}
