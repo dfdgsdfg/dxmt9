@@ -443,6 +443,17 @@ static D9CShader*    rawPS(IDirect3DPixelShader9* p)        { return D3D9PeRawPi
 static D9CVertexDecl* rawVD(IDirect3DVertexDeclaration9* p) { return D3D9PeRawVertexDecl(p); }
 static D9CTexture*   rawTex(IDirect3DBaseTexture9* p)       { return D3D9PeRawTexture(p); }
 
+/* R-FORMAT-11 — RESZ MSAA depth-resolve trigger. RESZ is a *command*, not
+ * storage: an app requests a multisample depth resolve into the bound INTZ
+ * depth texture by writing this exact sentinel to D3DRS_POINTSIZE while the
+ * multisampled depth surface is bound as a texture. Any other D3DRS_POINTSIZE
+ * value keeps its ordinary point-size meaning. The value-level classification
+ * is unit-pinned by core::isReszDepthResolveSentinel (core_constants.hpp); it
+ * is duplicated here as a literal because this PE translation unit speaks the
+ * C ABI (device_c.h), not the C++ core header. See
+ * specs/d3d9/formats/{requirements,design}.md. */
+static constexpr DWORD kReszDepthResolveSentinel = 0x7FA05000u;
+
 /* =========================================================================
  * D3D9DeviceImpl — IDirect3DDevice9Ex
  * ========================================================================= */
@@ -3371,11 +3382,62 @@ public:
         if (p) memset(p, 0, sizeof(*p)); return S_OK;
     }
 
+    /* R-FORMAT-11 — service a RESZ depth-resolve sentinel write. Resolves the
+     * bound multisampled depth source (the bound depth-stencil surface) into
+     * the bound INTZ depth destination (the stage-0 texture). Returns S_OK
+     * unconditionally: D3D9 SetRenderState has no failure contract for a
+     * point-size write, and the RESZ idiom is fire-and-forget — a missing
+     * source/destination binding is a benign no-op on real hardware too.
+     *
+     * BACKEND TODO (winemetal ABI gap): the actual GPU resolve cannot be
+     * emitted yet. The existing MSAA *color* resolve rides on
+     * WMTColorAttachmentInfo.resolve_texture + WMTStoreActionMultisampleResolve
+     * (src/dxmt9/dxmt9_blit_encoders.cpp). The DEPTH twin requires
+     * WMTDepthAttachmentInfo to carry resolve_texture + a depth resolve filter
+     * (MTLMultisampleDepthResolveFilter, e.g. Sample) so the unix importer can
+     * set MTLRenderPassDescriptor.depthAttachment.resolveTexture /
+     * .depthResolveFilter (src/winemetal/unix/winemetal_private_api.mm:1151).
+     * Those fields are NOT exposed today (src/winemetal/winemetal.h:684 —
+     * WMTDepthAttachmentInfo has no resolve_texture). Extending the bridge ABI
+     * is out of scope for this change; see the RETURN report. Until the ABI
+     * lands, the sentinel is detected, the bound source/dest are identified,
+     * and the resolve request is logged but not encoded — no wire record is
+     * emitted because the backend has no path to consume it. */
+    HRESULT requestReszDepthResolve() noexcept {
+        // MSAA depth source = the currently bound depth-stencil surface.
+        D9CSurface* const depthSrcRaw = rawSurf(dsSurface_);
+        // INTZ depth destination = the texture bound at fragment stage 0.
+        D9CTexture* const intzDstRaw = rawTex(textures_[0]);
+        dxmt9DeviceDebugLog(
+            "device_resz_depth_resolve device=%p depth_src=%p intz_dst=%p "
+            "(detected; backend resolve deferred on winemetal ABI gap)",
+            this, static_cast<void*>(depthSrcRaw),
+            static_cast<void*>(intzDstRaw));
+        // No bound source or destination: nothing to resolve. Benign no-op.
+        // (Left intentionally as a detect-only point until the backend
+        // depth-resolve ABI exists; see the BACKEND TODO above.)
+        (void)depthSrcRaw;
+        (void)intzDstRaw;
+        return S_OK;
+    }
+
     /* ── render states ── */
     HRESULT STDMETHODCALLTYPE SetRenderState(D3DRENDERSTATETYPE state,
                                               DWORD value) noexcept override {
         dxmt9DeviceDebugLog("device_set_render_state device=%p state=%u value=0x%x",
                             this, (unsigned)state, (unsigned)value);
+        // R-FORMAT-11 — RESZ MSAA depth-resolve trigger. The exact sentinel
+        // write SetRenderState(D3DRS_POINTSIZE, 0x7FA05000) is a *command*,
+        // not a point size: resolve the bound multisampled depth source
+        // (the bound depth-stencil surface) into the bound INTZ depth
+        // texture (stage 0). Intercept BEFORE any point-size shadow/record
+        // so the sentinel never reaches the normal render-state path; a
+        // non-sentinel D3DRS_POINTSIZE falls through and keeps its ordinary
+        // point-size meaning. (A sentinel arriving during state-block
+        // recording is likewise a command, not recordable state.)
+        if (state == D3DRS_POINTSIZE && value == kReszDepthResolveSentinel) {
+            return requestReszDepthResolve();
+        }
         if (stateBlockRecording_) {
             const DWORD stateKey = static_cast<DWORD>(state);
             if (!peState_.stateBlockRenderStateRestore.contains(stateKey)) {

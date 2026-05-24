@@ -4,6 +4,7 @@
 #include "../../../src/dxmt9/dxmt9_draw_state.hpp"
 
 #include <array>
+#include <bit>
 #include <cmath>
 #include <cstring>
 #include <cstdlib>
@@ -2350,6 +2351,43 @@ void testFlatDrawStateKey() {
         "shader constant changes flat base draw state");
 }
 
+// R-FORMAT-11 — RESZ MSAA depth-resolve trigger. The sentinel write
+// SetRenderState(D3DRS_POINTSIZE=154, 0x7FA05000) is a *command*, not a
+// point size. This pins the pure classification transform that the PE
+// recorder consults so the sentinel is recognised and any other
+// D3DRS_POINTSIZE value keeps its ordinary point-size meaning.
+void testReszDepthResolveSentinelClassification() {
+  // (a) The exact sentinel on RS_POINTSIZE is recognised as the resolve
+  // trigger.
+  check(isReszDepthResolveSentinel(RS_POINTSIZE, kReszDepthResolveSentinel),
+        "RESZ sentinel on RS_POINTSIZE must be recognised as resolve trigger");
+  checkEq(kReszDepthResolveSentinel, 0x7FA05000u,
+          "RESZ sentinel value must be exactly 0x7FA05000");
+  checkEq(RS_POINTSIZE, 154u, "D3DRS_POINTSIZE must be code 154");
+
+  // (b) An ordinary point size on RS_POINTSIZE is NOT the resolve trigger
+  // and keeps its point-size meaning. Probe a float-bit-pattern point size
+  // (1.0f) and a couple of near-miss integer values.
+  const u32 pointSizeOneBits = std::bit_cast<u32>(1.0f);
+  check(!isReszDepthResolveSentinel(RS_POINTSIZE, pointSizeOneBits),
+        "ordinary point size (1.0f bits) must not be the RESZ sentinel");
+  check(!isReszDepthResolveSentinel(RS_POINTSIZE, 0u),
+        "zero point size must not be the RESZ sentinel");
+  check(!isReszDepthResolveSentinel(RS_POINTSIZE, 0x7FA05000u - 1u),
+        "near-miss value below the sentinel must not trigger");
+  check(!isReszDepthResolveSentinel(RS_POINTSIZE, 0x7FA05000u + 1u),
+        "near-miss value above the sentinel must not trigger");
+
+  // (c) The sentinel VALUE written to a DIFFERENT render state is NOT the
+  // resolve trigger — only RS_POINTSIZE carries the RESZ contract.
+  check(!isReszDepthResolveSentinel(RS_POINTSIZE_MIN, kReszDepthResolveSentinel),
+        "sentinel value on RS_POINTSIZE_MIN must not trigger a resolve");
+  check(!isReszDepthResolveSentinel(RS_POINTSIZE_MAX, kReszDepthResolveSentinel),
+        "sentinel value on RS_POINTSIZE_MAX must not trigger a resolve");
+  check(!isReszDepthResolveSentinel(RS_FILL_MODE, kReszDepthResolveSentinel),
+        "sentinel value on a non-pointsize state must not trigger a resolve");
+}
+
 }  // namespace
 
 int main() {
@@ -2376,5 +2414,6 @@ int main() {
   testVertexDeclSnapshotSurvivesLaterStateMutation();
   testIndexedDrawRunPolicyDataContract();
   testFlatDrawStateKey();
+  testReszDepthResolveSentinelClassification();
   return 0;
 }

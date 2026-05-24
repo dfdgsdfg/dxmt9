@@ -433,6 +433,22 @@ inline constexpr u32 RS_POINTSCALE_A = 158;
 inline constexpr u32 RS_POINTSCALE_B = 159;
 inline constexpr u32 RS_POINTSCALE_C = 160;
 inline constexpr u32 RS_POINTSIZE_MAX = 166;
+
+// R-FORMAT-11 — RESZ MSAA depth-resolve trigger. RESZ is a *command*, not
+// storage: an app requests a multisample depth resolve into the bound INTZ
+// depth texture by writing this exact sentinel to D3DRS_POINTSIZE
+// (D3D9 code 154) while the multisampled depth surface is bound as a
+// texture. Any non-sentinel D3DRS_POINTSIZE write keeps its ordinary
+// point-size meaning. See specs/d3d9/formats/{requirements,design}.md.
+inline constexpr u32 kReszDepthResolveSentinel = 0x7FA05000u;
+
+// Pure value transform: true iff this SetRenderState(key, value) write is the
+// RESZ depth-resolve trigger and must NOT be treated as a point size. Both the
+// key (RS_POINTSIZE) and the exact sentinel value must match.
+inline constexpr bool isReszDepthResolveSentinel(u32 key, u32 value) {
+  return key == RS_POINTSIZE && value == kReszDepthResolveSentinel;
+}
+
 inline constexpr u32 RS_INDEXED_VERTEX_BLEND_ENABLE = 167;
 inline constexpr u32 RS_CULL_MODE = 22;
 inline constexpr u32 RS_FILL_MODE = 8;
