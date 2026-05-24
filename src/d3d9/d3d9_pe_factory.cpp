@@ -587,6 +587,17 @@ public:
                                  (unsigned)fmt, (unsigned)msType);
             return D3DERR_INVALIDCALL;
         }
+        /* Wine `dlls/d3d9/tests/device.c::test_check_device_type` /
+         * test_invalid_multisample: D3DMULTISAMPLE_NONE on a valid
+         * (non-UNKNOWN) format always reports exactly one quality level
+         * and succeeds, independent of any hardware MSAA support. Pin
+         * the contract here so the oracle's quality_levels==1
+         * expectation does not depend on the C-backend resolving NONE. */
+        if (msType == D3DMULTISAMPLE_NONE) {
+            if (pQuality) *pQuality = 1u;
+            dxmt9FactoryDebugLog("CheckDeviceMultiSampleType -> NONE quality=1");
+            return D3D_OK;
+        }
         HRESULT hr = hr32(dxmt9c_factory_check_device_multisample(
             f_, adapter, (uint32_t)fmt, (uint32_t)msType,
             windowed ? 1u : 0u));
@@ -616,9 +627,20 @@ public:
         return hr;
     }
 
-    HRESULT STDMETHODCALLTYPE CheckDeviceFormatConversion(UINT, D3DDEVTYPE deviceType,
+    HRESULT STDMETHODCALLTYPE CheckDeviceFormatConversion(UINT adapter, D3DDEVTYPE deviceType,
                                                            D3DFORMAT srcFmt,
                                                            D3DFORMAT dstFmt) noexcept override {
+        /* Adapter ordinal is validated first: an out-of-range adapter is a
+         * caller error (D3DERR_INVALIDCALL), matching the precedence the
+         * sibling Check* methods use. The Wine oracle
+         * (test_check_device_format_conversion_matrix) only exercises
+         * D3DADAPTER_DEFAULT, so the format-pair matrix below is the
+         * primary contract; this guard is the standard adapter-bounds
+         * parity shared with CheckDeviceType / CheckDeviceFormat. */
+        if (adapter >= dxmt9c_factory_adapter_count(f_)) {
+            dxmt9FactoryDebugLog("CheckDeviceFormatConversion -> invalid adapter=%u", adapter);
+            return D3DERR_INVALIDCALL;
+        }
         if (!isSupportedDeviceType(deviceType)) {
             dxmt9FactoryDebugLog("CheckDeviceFormatConversion -> unsupported devType=%u", (unsigned)deviceType);
             return D3DERR_NOTAVAILABLE;
@@ -838,6 +860,15 @@ public:
     HRESULT STDMETHODCALLTYPE GetAdapterLUID(UINT adapter, LUID* pLuid) noexcept override {
         if (!pLuid) return D3DERR_INVALIDCALL;
         dxmt9FactoryDebugLog("GetAdapterLUID adapter=%u", adapter);
+        /* Wine oracle test_ex_get_adapter_luid_policy: an out-of-range
+         * adapter ordinal returns D3DERR_INVALIDCALL (and must not write
+         * through pLuid). Guard before the C-backend call so the result
+         * does not depend on dxmt9c_factory_get_adapter_luid's own
+         * bounds handling. */
+        if (adapter >= dxmt9c_factory_adapter_count(f_)) {
+            dxmt9FactoryDebugLog("GetAdapterLUID -> invalid adapter=%u", adapter);
+            return D3DERR_INVALIDCALL;
+        }
         uint32_t lo; int32_t hi;
         HRESULT hr = hr32(dxmt9c_factory_get_adapter_luid(f_, adapter, &lo, &hi));
         if (SUCCEEDED(hr)) { pLuid->LowPart = lo; pLuid->HighPart = hi; }

@@ -33,6 +33,26 @@ core_device_coverage_spec = executable(
 test('dxmt9-core-device-coverage-spec', core_device_coverage_spec,
      env: dxmt9_native_test_env_vars + ['DXMT_DEBUG_DISABLE_SHADER_ARCHIVE=1'])
 
+# Factory HRESULT / enum validation parity. Locks the shared
+# dxmt9::com / core::Factory validation contract behind the PE-side
+# IDirect3D9 / IDirect3D9Ex wrapper (src/d3d9/d3d9_pe_factory.cpp):
+# CheckDeviceType adapter/availability, CheckDeviceMultiSampleType NONE
+# quality level + unsupported sample-count rejection, and Ex
+# adapter-ordinal validation (EnumAdapterModesEx /
+# GetAdapterDisplayModeEx / GetAdapterLUID / CreateDeviceEx mode
+# relation). Wine oracle lives in the PE conformance functions in
+# tests/conformance/d3d9 (read, not modified).
+core_factory_validation_spec = executable(
+  'dxmt9-core-factory-validation-spec',
+  'core_factory_validation_spec.cpp',
+  include_directories: dxmt9_inc,
+  dependencies: [dxmt9_dep, dxmt9_frontend_dep],
+  link_args: dxmt9_test_link_args,
+)
+
+test('dxmt9-core-factory-validation-spec', core_factory_validation_spec,
+     env: dxmt9_native_test_env_vars + ['DXMT_DEBUG_DISABLE_SHADER_ARCHIVE=1'])
+
 core_ffp_state_key_spec = executable(
   'dxmt9-core-ffp-state-key-spec',
   'core_ffp_state_key_spec.cpp',
