@@ -34,6 +34,13 @@ status = "failing"
 source = "specs/gap.md:170"
 summary = "First device-backed app-local run reached the provider with failures in the factory validation group."
 
+[[case.evidence]]
+lane = "builtin"
+arch = "x64"
+status = "passing"
+source = "tests/conformance/d3d9/evidence/sikarugir-cx-24.0.7-builtin-x64.json:1"
+summary = "Sikarugir-CX 24.0.7 builtin lane x64 2026-05-24 — passing in chunked runner snapshot."
+
 [[case]]
 executable = "dxmt9-d3d9-conformance.exe"
 source_file = "d3d9_conformance_device.c"
@@ -49,7 +56,14 @@ area = "factory-validation"
 owner = "core/factory"
 requirements = ["R-TEST-12.3", "R-TEST-12.10"]
 acceptance = ["multisample NONE quality levels, invalid multisample enums, unknown adapter formats, incompatible display/texture formats, and autogen mipmap usage results match Wine oracle"]
-status = "scaffolded"
+status = "partial"
+
+[[case.evidence]]
+lane = "builtin"
+arch = "x64"
+status = "passing"
+source = "tests/conformance/d3d9/evidence/sikarugir-cx-24.0.7-builtin-x64.json:1"
+summary = "Sikarugir-CX 24.0.7 builtin lane x64 2026-05-24 — passing in chunked runner snapshot."
 
 [[case]]
 executable = "dxmt9-d3d9-conformance.exe"
@@ -66,7 +80,14 @@ area = "render-target-creation"
 owner = "core/resources"
 requirements = ["R-TEST-12.10", "R-TEST-12.13"]
 acceptance = ["CreateRenderTarget accepts supported multisample quality zero, rejects quality equal to reported count, and rejects unsupported sample counts with Wine-compatible HRESULTs"]
-status = "scaffolded"
+status = "partial"
+
+[[case.evidence]]
+lane = "builtin"
+arch = "x64"
+status = "passing"
+source = "tests/conformance/d3d9/evidence/sikarugir-cx-24.0.7-builtin-x64.json:1"
+summary = "Sikarugir-CX 24.0.7 builtin lane x64 2026-05-24 — passing in chunked runner snapshot."
 
 [[case]]
 executable = "dxmt9-d3d9-conformance.exe"
@@ -83,7 +104,14 @@ area = "display-mode"
 owner = "core/factory"
 requirements = ["R-TEST-12.3", "R-TEST-12.10"]
 acceptance = ["device and swap-chain display modes expose Windows-compatible adapter formats"]
-status = "scaffolded"
+status = "partial"
+
+[[case.evidence]]
+lane = "builtin"
+arch = "x64"
+status = "passing"
+source = "tests/conformance/d3d9/evidence/sikarugir-cx-24.0.7-builtin-x64.json:1"
+summary = "Sikarugir-CX 24.0.7 builtin lane x64 2026-05-24 — passing in chunked runner snapshot."
 
 [[case]]
 executable = "dxmt9-d3d9-conformance.exe"
@@ -100,7 +128,14 @@ area = "d3d9ex"
 owner = "pe/com"
 requirements = ["R-TEST-12.4"]
 acceptance = ["Direct3DCreate9 objects reject Ex interfaces"]
-status = "scaffolded"
+status = "partial"
+
+[[case.evidence]]
+lane = "builtin"
+arch = "x64"
+status = "passing"
+source = "tests/conformance/d3d9/evidence/sikarugir-cx-24.0.7-builtin-x64.json:1"
+summary = "Sikarugir-CX 24.0.7 builtin lane x64 2026-05-24 — passing in chunked runner snapshot."
 
 [[case]]
 executable = "dxmt9-d3d9-conformance.exe"
@@ -117,7 +152,14 @@ area = "d3d9ex"
 owner = "pe/com"
 requirements = ["R-TEST-12.4"]
 acceptance = ["Direct3DCreate9Ex objects expose base interfaces and Ex-created devices expose Ex QI"]
-status = "scaffolded"
+status = "partial"
+
+[[case.evidence]]
+lane = "builtin"
+arch = "x64"
+status = "passing"
+source = "tests/conformance/d3d9/evidence/sikarugir-cx-24.0.7-builtin-x64.json:1"
+summary = "Sikarugir-CX 24.0.7 builtin lane x64 2026-05-24 — passing in chunked runner snapshot."
 
 [[case]]
 executable = "dxmt9-d3d9-conformance.exe"
@@ -134,7 +176,14 @@ area = "d3d9ex-display"
 owner = "core/factory"
 requirements = ["R-TEST-12.4"]
 acceptance = ["Ex display-mode structs validate Size and preserve filter shape"]
-status = "scaffolded"
+status = "partial"
+
+[[case.evidence]]
+lane = "builtin"
+arch = "x64"
+status = "passing"
+source = "tests/conformance/d3d9/evidence/sikarugir-cx-24.0.7-builtin-x64.json:1"
+summary = "Sikarugir-CX 24.0.7 builtin lane x64 2026-05-24 — passing in chunked runner snapshot."
 
 [[case]]
 executable = "dxmt9-d3d9-conformance.exe"
@@ -151,7 +200,14 @@ area = "d3d9ex-display"
 owner = "core/factory"
 requirements = ["R-TEST-12.4"]
 acceptance = ["GetAdapterLUID and GetAdapterDisplayModeEx validate null/invalid inputs and expose stable adapter display identity"]
-status = "scaffolded"
+status = "partial"
+
+[[case.evidence]]
+lane = "builtin"
+arch = "x64"
+status = "passing"
+source = "tests/conformance/d3d9/evidence/sikarugir-cx-24.0.7-builtin-x64.json:1"
+summary = "Sikarugir-CX 24.0.7 builtin lane x64 2026-05-24 — passing in chunked runner snapshot."
 
 [[case]]
 executable = "dxmt9-d3d9-conformance.exe"
@@ -168,7 +224,14 @@ area = "d3d9ex-display"
 owner = "core/factory"
 requirements = ["R-TEST-12.4"]
 acceptance = ["GetAdapterDisplayModeEx accepts a null rotation out-pointer while preserving the base display-mode fields and ScanLineOrdering"]
-status = "scaffolded"
+status = "partial"
+
+[[case.evidence]]
+lane = "builtin"
+arch = "x64"
+status = "passing"
+source = "tests/conformance/d3d9/evidence/sikarugir-cx-24.0.7-builtin-x64.json:1"
+summary = "Sikarugir-CX 24.0.7 builtin lane x64 2026-05-24 — passing in chunked runner snapshot."
 
 [[case]]
 executable = "dxmt9-d3d9-conformance.exe"
@@ -185,7 +248,14 @@ area = "d3d9ex-display"
 owner = "core/factory"
 requirements = ["R-TEST-12.4"]
 acceptance = ["GetAdapterModeCountEx and EnumAdapterModesEx preserve filter format, reject invalid adapters, and reject out-of-range mode indices"]
-status = "scaffolded"
+status = "partial"
+
+[[case.evidence]]
+lane = "builtin"
+arch = "x64"
+status = "passing"
+source = "tests/conformance/d3d9/evidence/sikarugir-cx-24.0.7-builtin-x64.json:1"
+summary = "Sikarugir-CX 24.0.7 builtin lane x64 2026-05-24 — passing in chunked runner snapshot."
 
 [[case]]
 executable = "dxmt9-d3d9-conformance.exe"
@@ -202,7 +272,14 @@ area = "d3d9ex-display"
 owner = "core/swapchain"
 requirements = ["R-TEST-12.4", "R-TEST-12.17"]
 acceptance = ["IDirect3DDevice9Ex and IDirect3DSwapChain9Ex display-mode Ex getters validate Size and expose display mode data"]
-status = "scaffolded"
+status = "partial"
+
+[[case.evidence]]
+lane = "builtin"
+arch = "x64"
+status = "passing"
+source = "tests/conformance/d3d9/evidence/sikarugir-cx-24.0.7-builtin-x64.json:1"
+summary = "Sikarugir-CX 24.0.7 builtin lane x64 2026-05-24 — passing in chunked runner snapshot."
 
 [[case]]
 executable = "dxmt9-d3d9-conformance.exe"
@@ -219,7 +296,14 @@ area = "d3d9ex-display"
 owner = "core/swapchain"
 requirements = ["R-TEST-12.4", "R-TEST-12.17"]
 acceptance = ["IDirect3DDevice9Ex and IDirect3DSwapChain9Ex GetDisplayModeEx accept null rotation out-pointers and preserve base GetDisplayMode fields"]
-status = "scaffolded"
+status = "partial"
+
+[[case.evidence]]
+lane = "builtin"
+arch = "x64"
+status = "passing"
+source = "tests/conformance/d3d9/evidence/sikarugir-cx-24.0.7-builtin-x64.json:1"
+summary = "Sikarugir-CX 24.0.7 builtin lane x64 2026-05-24 — passing in chunked runner snapshot."
 
 [[case]]
 executable = "dxmt9-d3d9-conformance.exe"
@@ -236,7 +320,14 @@ area = "d3d9ex-present"
 owner = "core/device"
 requirements = ["R-TEST-12.4", "R-TEST-12.17"]
 acceptance = ["MaximumFrameLatency default, valid range, invalid range, and getter null-pointer behavior match Wine oracle"]
-status = "scaffolded"
+status = "partial"
+
+[[case.evidence]]
+lane = "builtin"
+arch = "x64"
+status = "passing"
+source = "tests/conformance/d3d9/evidence/sikarugir-cx-24.0.7-builtin-x64.json:1"
+summary = "Sikarugir-CX 24.0.7 builtin lane x64 2026-05-24 — passing in chunked runner snapshot."
 
 [[case]]
 executable = "dxmt9-d3d9-conformance.exe"
@@ -262,6 +353,13 @@ status = "failing"
 source = "specs/gap.md:170"
 summary = "First device-backed app-local run reached the provider with failures in the present-parameter validation group."
 
+[[case.evidence]]
+lane = "builtin"
+arch = "x64"
+status = "passing"
+source = "tests/conformance/d3d9/evidence/sikarugir-cx-24.0.7-builtin-x64.json:1"
+summary = "Sikarugir-CX 24.0.7 builtin lane x64 2026-05-24 — passing in chunked runner snapshot."
+
 [[case]]
 executable = "dxmt9-d3d9-conformance.exe"
 source_file = "d3d9_conformance_swapchain.c"
@@ -277,7 +375,14 @@ area = "present-parameters"
 owner = "core/swapchain"
 requirements = ["R-TEST-12.3", "R-TEST-12.17"]
 acceptance = ["BackBufferCount zero normalizes to one for COPY swapchains and GetPresentParameters preserves window, windowed state, swap effect, and presentation interval"]
-status = "scaffolded"
+status = "partial"
+
+[[case.evidence]]
+lane = "builtin"
+arch = "x64"
+status = "passing"
+source = "tests/conformance/d3d9/evidence/sikarugir-cx-24.0.7-builtin-x64.json:1"
+summary = "Sikarugir-CX 24.0.7 builtin lane x64 2026-05-24 — passing in chunked runner snapshot."
 
 [[case]]
 executable = "dxmt9-d3d9-conformance.exe"
@@ -294,7 +399,14 @@ area = "swapchain-state"
 owner = "core/swapchain"
 requirements = ["R-TEST-12.3", "R-TEST-12.17"]
 acceptance = ["implicit swapchain back-buffer getters reject invalid indices, ignore back-buffer type values, return the same surface object, and clear invalid device getter out-pointers like Wine"]
-status = "scaffolded"
+status = "partial"
+
+[[case.evidence]]
+lane = "builtin"
+arch = "x64"
+status = "passing"
+source = "tests/conformance/d3d9/evidence/sikarugir-cx-24.0.7-builtin-x64.json:1"
+summary = "Sikarugir-CX 24.0.7 builtin lane x64 2026-05-24 — passing in chunked runner snapshot."
 
 [[case]]
 executable = "dxmt9-d3d9-conformance.exe"
@@ -311,7 +423,14 @@ area = "swapchain-state"
 owner = "core/swapchain"
 requirements = ["R-TEST-12.3", "R-TEST-12.17"]
 acceptance = ["additional swapchains normalize zero back-buffer count, default a NULL device window to the device window, expose valid buffers, and preserve failed out-pointers for out-of-range indices"]
-status = "scaffolded"
+status = "partial"
+
+[[case.evidence]]
+lane = "builtin"
+arch = "x64"
+status = "passing"
+source = "tests/conformance/d3d9/evidence/sikarugir-cx-24.0.7-builtin-x64.json:1"
+summary = "Sikarugir-CX 24.0.7 builtin lane x64 2026-05-24 — passing in chunked runner snapshot."
 
 [[case]]
 executable = "dxmt9-d3d9-conformance.exe"
@@ -328,7 +447,14 @@ area = "swapchain"
 owner = "core/swapchain"
 requirements = ["R-TEST-12.3", "R-TEST-12.17"]
 acceptance = ["IDirect3DDevice9::GetSwapChain returns D3D_OK for every index in [0, GetNumberOfSwapChains()) and D3DERR_INVALIDCALL with a cleared out-pointer for any index at or above the count, including arbitrary large indices, and rejects a NULL out-pointer with D3DERR_INVALIDCALL"]
-status = "scaffolded"
+status = "partial"
+
+[[case.evidence]]
+lane = "builtin"
+arch = "x64"
+status = "passing"
+source = "tests/conformance/d3d9/evidence/sikarugir-cx-24.0.7-builtin-x64.json:1"
+summary = "Sikarugir-CX 24.0.7 builtin lane x64 2026-05-24 — passing in chunked runner snapshot."
 
 [[case]]
 executable = "dxmt9-d3d9-conformance.exe"
@@ -345,7 +471,14 @@ area = "backbuffer-locking"
 owner = "core/swapchain"
 requirements = ["R-TEST-12.13", "R-TEST-12.17"]
 acceptance = ["lockable back buffers can be locked and ordinary back buffers reject LockRect with Wine-compatible HRESULTs"]
-status = "scaffolded"
+status = "partial"
+
+[[case.evidence]]
+lane = "builtin"
+arch = "x64"
+status = "passing"
+source = "tests/conformance/d3d9/evidence/sikarugir-cx-24.0.7-builtin-x64.json:1"
+summary = "Sikarugir-CX 24.0.7 builtin lane x64 2026-05-24 — passing in chunked runner snapshot."
 
 [[case]]
 executable = "dxmt9-d3d9-conformance.exe"
@@ -362,7 +495,14 @@ area = "backbuffer-locking"
 owner = "core/swapchain"
 requirements = ["R-TEST-12.13", "R-TEST-12.17"]
 acceptance = ["ordinary back buffers reject LockRect(DISCARD) and GetDC without mutating the HDC out-parameter"]
-status = "scaffolded"
+status = "partial"
+
+[[case.evidence]]
+lane = "builtin"
+arch = "x64"
+status = "passing"
+source = "tests/conformance/d3d9/evidence/sikarugir-cx-24.0.7-builtin-x64.json:1"
+summary = "Sikarugir-CX 24.0.7 builtin lane x64 2026-05-24 — passing in chunked runner snapshot."
 
 [[case]]
 executable = "dxmt9-d3d9-conformance.exe"
@@ -379,7 +519,14 @@ area = "backbuffer-locking"
 owner = "core/swapchain"
 requirements = ["R-TEST-12.13", "R-TEST-12.17"]
 acceptance = ["Reset with D3DPRESENTFLAG_LOCKABLE_BACKBUFFER preserves present parameters and produces a lockable back buffer"]
-status = "scaffolded"
+status = "partial"
+
+[[case.evidence]]
+lane = "builtin"
+arch = "x64"
+status = "passing"
+source = "tests/conformance/d3d9/evidence/sikarugir-cx-24.0.7-builtin-x64.json:1"
+summary = "Sikarugir-CX 24.0.7 builtin lane x64 2026-05-24 — passing in chunked runner snapshot."
 
 [[case]]
 executable = "dxmt9-d3d9-conformance.exe"
@@ -396,7 +543,14 @@ area = "swapchain-reset"
 owner = "core/swapchain"
 requirements = ["R-TEST-12.3", "R-TEST-12.17"]
 acceptance = ["implicit swapchain reset to a supported multisample type preserves Wine-compatible present parameters and clear behavior"]
-status = "scaffolded"
+status = "partial"
+
+[[case.evidence]]
+lane = "builtin"
+arch = "x64"
+status = "passing"
+source = "tests/conformance/d3d9/evidence/sikarugir-cx-24.0.7-builtin-x64.json:1"
+summary = "Sikarugir-CX 24.0.7 builtin lane x64 2026-05-24 — passing in chunked runner snapshot."
 
 [[case]]
 executable = "dxmt9-d3d9-conformance.exe"
@@ -413,7 +567,14 @@ area = "window-position"
 owner = "pe/windowing"
 requirements = ["R-TEST-12.14", "R-TEST-12.17"]
 acceptance = ["fullscreen device creation and reset restore the device window rectangle to the adapter monitor bounds"]
-status = "scaffolded"
+status = "partial"
+
+[[case.evidence]]
+lane = "builtin"
+arch = "x64"
+status = "passing"
+source = "tests/conformance/d3d9/evidence/sikarugir-cx-24.0.7-builtin-x64.json:1"
+summary = "Sikarugir-CX 24.0.7 builtin lane x64 2026-05-24 — passing in chunked runner snapshot."
 
 [[case]]
 executable = "dxmt9-d3d9-conformance.exe"
@@ -439,6 +600,13 @@ status = "failing"
 source = "specs/gap.md:170"
 summary = "First device-backed app-local run reached the provider with failures in the Ex create/reset validation group."
 
+[[case.evidence]]
+lane = "builtin"
+arch = "x64"
+status = "passing"
+source = "tests/conformance/d3d9/evidence/sikarugir-cx-24.0.7-builtin-x64.json:1"
+summary = "Sikarugir-CX 24.0.7 builtin lane x64 2026-05-24 — passing in chunked runner snapshot."
+
 [[case]]
 executable = "dxmt9-d3d9-conformance.exe"
 source_file = "d3d9_conformance_device.c"
@@ -454,7 +622,14 @@ area = "device-lifetime"
 owner = "core/device"
 requirements = ["R-TEST-12.3"]
 acceptance = ["BeginScene and EndScene success/invalid-call transitions match Wine oracle", "Reset clears active scene state"]
-status = "scaffolded"
+status = "partial"
+
+[[case.evidence]]
+lane = "builtin"
+arch = "x64"
+status = "passing"
+source = "tests/conformance/d3d9/evidence/sikarugir-cx-24.0.7-builtin-x64.json:1"
+summary = "Sikarugir-CX 24.0.7 builtin lane x64 2026-05-24 — passing in chunked runner snapshot."
 
 [[case]]
 executable = "dxmt9-d3d9-conformance.exe"
@@ -471,7 +646,14 @@ area = "vertex-declaration"
 owner = "core/device"
 requirements = ["R-TEST-12.3"]
 acceptance = ["Get/SetVertexDeclaration, Get/SetFVF, FVF-generated declarations, and invalid declaration HRESULTs match Wine oracle"]
-status = "scaffolded"
+status = "partial"
+
+[[case.evidence]]
+lane = "builtin"
+arch = "x64"
+status = "passing"
+source = "tests/conformance/d3d9/evidence/sikarugir-cx-24.0.7-builtin-x64.json:1"
+summary = "Sikarugir-CX 24.0.7 builtin lane x64 2026-05-24 — passing in chunked runner snapshot."
 
 [[case]]
 executable = "dxmt9-d3d9-conformance.exe"
@@ -488,7 +670,14 @@ area = "vertex-declaration"
 owner = "core/device"
 requirements = ["R-TEST-12.3"]
 acceptance = ["FVF-generated declarations expose Wine-compatible elements and stable per-FVF declaration identity"]
-status = "scaffolded"
+status = "partial"
+
+[[case.evidence]]
+lane = "builtin"
+arch = "x64"
+status = "passing"
+source = "tests/conformance/d3d9/evidence/sikarugir-cx-24.0.7-builtin-x64.json:1"
+summary = "Sikarugir-CX 24.0.7 builtin lane x64 2026-05-24 — passing in chunked runner snapshot."
 
 [[case]]
 executable = "dxmt9-d3d9-conformance.exe"
@@ -505,7 +694,14 @@ area = "vertex-declaration"
 owner = "core/device"
 requirements = ["R-TEST-12.3"]
 acceptance = ["non-terminating D3DDECLTYPE_UNUSED elements reject with Wine-compatible HRESULTs and out-pointer handling"]
-status = "scaffolded"
+status = "partial"
+
+[[case.evidence]]
+lane = "builtin"
+arch = "x64"
+status = "passing"
+source = "tests/conformance/d3d9/evidence/sikarugir-cx-24.0.7-builtin-x64.json:1"
+summary = "Sikarugir-CX 24.0.7 builtin lane x64 2026-05-24 — passing in chunked runner snapshot."
 
 [[case]]
 executable = "dxmt9-d3d9-conformance.exe"
@@ -522,7 +718,14 @@ area = "shader-state"
 owner = "core/device"
 requirements = ["R-TEST-12.3", "R-TEST-12.15"]
 acceptance = ["Create/Get/SetVertexShader null handling, refcount ownership, getter AddRef, and clear state match Wine oracle"]
-status = "scaffolded"
+status = "partial"
+
+[[case.evidence]]
+lane = "builtin"
+arch = "x64"
+status = "passing"
+source = "tests/conformance/d3d9/evidence/sikarugir-cx-24.0.7-builtin-x64.json:1"
+summary = "Sikarugir-CX 24.0.7 builtin lane x64 2026-05-24 — passing in chunked runner snapshot."
 
 [[case]]
 executable = "dxmt9-d3d9-conformance.exe"
@@ -539,7 +742,14 @@ area = "shader-constants"
 owner = "core/device"
 requirements = ["R-TEST-12.3", "R-TEST-12.15"]
 acceptance = ["vertex shader float, int, and bool constants round-trip with exact public out-pointer and invalid-range behavior"]
-status = "scaffolded"
+status = "partial"
+
+[[case.evidence]]
+lane = "builtin"
+arch = "x64"
+status = "passing"
+source = "tests/conformance/d3d9/evidence/sikarugir-cx-24.0.7-builtin-x64.json:1"
+summary = "Sikarugir-CX 24.0.7 builtin lane x64 2026-05-24 — passing in chunked runner snapshot."
 
 [[case]]
 executable = "dxmt9-d3d9-conformance.exe"
@@ -556,7 +766,14 @@ area = "shader-state"
 owner = "core/device"
 requirements = ["R-TEST-12.3", "R-TEST-12.15"]
 acceptance = ["Create/Get/SetPixelShader null handling, refcount ownership, getter AddRef, and clear state match Wine oracle"]
-status = "scaffolded"
+status = "partial"
+
+[[case.evidence]]
+lane = "builtin"
+arch = "x64"
+status = "passing"
+source = "tests/conformance/d3d9/evidence/sikarugir-cx-24.0.7-builtin-x64.json:1"
+summary = "Sikarugir-CX 24.0.7 builtin lane x64 2026-05-24 — passing in chunked runner snapshot."
 
 [[case]]
 executable = "dxmt9-d3d9-conformance.exe"
@@ -573,7 +790,14 @@ area = "shader-constants"
 owner = "core/device"
 requirements = ["R-TEST-12.3", "R-TEST-12.15"]
 acceptance = ["pixel shader float, int, and bool constants round-trip with exact public out-pointer behavior"]
-status = "scaffolded"
+status = "partial"
+
+[[case.evidence]]
+lane = "builtin"
+arch = "x64"
+status = "passing"
+source = "tests/conformance/d3d9/evidence/sikarugir-cx-24.0.7-builtin-x64.json:1"
+summary = "Sikarugir-CX 24.0.7 builtin lane x64 2026-05-24 — passing in chunked runner snapshot."
 
 [[case]]
 executable = "dxmt9-d3d9-conformance.exe"
@@ -590,7 +814,14 @@ area = "shader-validation"
 owner = "core/device"
 requirements = ["R-TEST-12.4", "R-TEST-12.15"]
 acceptance = ["base and D3D9Ex devices reject unsupported shader versions with Wine-compatible HRESULT and out-pointer policy"]
-status = "scaffolded"
+status = "partial"
+
+[[case.evidence]]
+lane = "builtin"
+arch = "x64"
+status = "passing"
+source = "tests/conformance/d3d9/evidence/sikarugir-cx-24.0.7-builtin-x64.json:1"
+summary = "Sikarugir-CX 24.0.7 builtin lane x64 2026-05-24 — passing in chunked runner snapshot."
 
 [[case]]
 executable = "dxmt9-d3d9-conformance.exe"
@@ -607,7 +838,14 @@ area = "shader-validation"
 owner = "core/device"
 requirements = ["R-TEST-12.3", "R-TEST-12.15"]
 acceptance = ["vertex and pixel shader creation reject bytecode from the wrong shader stage with Wine-compatible HRESULTs"]
-status = "scaffolded"
+status = "partial"
+
+[[case.evidence]]
+lane = "builtin"
+arch = "x64"
+status = "passing"
+source = "tests/conformance/d3d9/evidence/sikarugir-cx-24.0.7-builtin-x64.json:1"
+summary = "Sikarugir-CX 24.0.7 builtin lane x64 2026-05-24 — passing in chunked runner snapshot."
 
 [[case]]
 executable = "dxmt9-d3d9-conformance.exe"
@@ -624,7 +862,14 @@ area = "d3d9ex-shader-validation"
 owner = "core/device"
 requirements = ["R-TEST-12.4", "R-TEST-12.15"]
 acceptance = ["D3D9Ex devices validate null, unsupported, and valid D3D9 shader bytecode with Wine-compatible HRESULTs and out-pointer behavior"]
-status = "scaffolded"
+status = "partial"
+
+[[case.evidence]]
+lane = "builtin"
+arch = "x64"
+status = "passing"
+source = "tests/conformance/d3d9/evidence/sikarugir-cx-24.0.7-builtin-x64.json:1"
+summary = "Sikarugir-CX 24.0.7 builtin lane x64 2026-05-24 — passing in chunked runner snapshot."
 
 [[case]]
 executable = "dxmt9-d3d9-conformance.exe"
@@ -641,7 +886,14 @@ area = "texture-stage-state"
 owner = "core/device"
 requirements = ["R-TEST-12.3", "R-TEST-12.15"]
 acceptance = ["texture stage getter/setter matrix round-trips color, alpha, bump, result, constant, invalid type, null out-pointer, and limit behavior"]
-status = "scaffolded"
+status = "partial"
+
+[[case.evidence]]
+lane = "builtin"
+arch = "x64"
+status = "passing"
+source = "tests/conformance/d3d9/evidence/sikarugir-cx-24.0.7-builtin-x64.json:1"
+summary = "Sikarugir-CX 24.0.7 builtin lane x64 2026-05-24 — passing in chunked runner snapshot."
 
 [[case]]
 executable = "dxmt9-d3d9-conformance.exe"
@@ -658,7 +910,14 @@ area = "sampler-state"
 owner = "core/device"
 requirements = ["R-TEST-12.3", "R-TEST-12.15"]
 acceptance = ["sampler address/filter/sRGB/displacement states round-trip and null out-parameters match Wine oracle"]
-status = "scaffolded"
+status = "partial"
+
+[[case.evidence]]
+lane = "builtin"
+arch = "x64"
+status = "passing"
+source = "tests/conformance/d3d9/evidence/sikarugir-cx-24.0.7-builtin-x64.json:1"
+summary = "Sikarugir-CX 24.0.7 builtin lane x64 2026-05-24 — passing in chunked runner snapshot."
 
 [[case]]
 executable = "dxmt9-d3d9-conformance.exe"
@@ -675,7 +934,14 @@ area = "fixed-function-lighting"
 owner = "core/device"
 requirements = ["R-TEST-12.3", "R-TEST-12.18"]
 acceptance = ["SetLight validates null lights and LightEnable/GetLightEnable preserve caller-visible enable state"]
-status = "scaffolded"
+status = "partial"
+
+[[case.evidence]]
+lane = "builtin"
+arch = "x64"
+status = "passing"
+source = "tests/conformance/d3d9/evidence/sikarugir-cx-24.0.7-builtin-x64.json:1"
+summary = "Sikarugir-CX 24.0.7 builtin lane x64 2026-05-24 — passing in chunked runner snapshot."
 
 [[case]]
 executable = "dxmt9-d3d9-conformance.exe"
@@ -692,7 +958,14 @@ area = "device-creation"
 owner = "core/device"
 requirements = ["R-TEST-12.3"]
 acceptance = ["D3DCREATE_FPU_PRESERVE participates in CreateDevice and GetCreationParameters public behavior flags"]
-status = "scaffolded"
+status = "partial"
+
+[[case.evidence]]
+lane = "builtin"
+arch = "x64"
+status = "passing"
+source = "tests/conformance/d3d9/evidence/sikarugir-cx-24.0.7-builtin-x64.json:1"
+summary = "Sikarugir-CX 24.0.7 builtin lane x64 2026-05-24 — passing in chunked runner snapshot."
 
 [[case]]
 executable = "dxmt9-d3d9-conformance.exe"
@@ -709,7 +982,14 @@ area = "device-caps"
 owner = "core/device"
 requirements = ["R-TEST-12.3", "R-TEST-12.10"]
 acceptance = ["public D3DCAPS9 limit fields are populated and limit-indexed state calls reject out-of-range values"]
-status = "scaffolded"
+status = "partial"
+
+[[case.evidence]]
+lane = "builtin"
+arch = "x64"
+status = "passing"
+source = "tests/conformance/d3d9/evidence/sikarugir-cx-24.0.7-builtin-x64.json:1"
+summary = "Sikarugir-CX 24.0.7 builtin lane x64 2026-05-24 — passing in chunked runner snapshot."
 
 [[case]]
 executable = "dxmt9-d3d9-conformance.exe"
@@ -726,7 +1006,14 @@ area = "device-state-getters"
 owner = "core/device"
 requirements = ["R-TEST-12.3", "R-TEST-12.17"]
 acceptance = ["viewport and scissor getters expose default device dimensions, reject null out-pointers, and round-trip explicit caller state"]
-status = "scaffolded"
+status = "partial"
+
+[[case.evidence]]
+lane = "builtin"
+arch = "x64"
+status = "passing"
+source = "tests/conformance/d3d9/evidence/sikarugir-cx-24.0.7-builtin-x64.json:1"
+summary = "Sikarugir-CX 24.0.7 builtin lane x64 2026-05-24 — passing in chunked runner snapshot."
 
 [[case]]
 executable = "dxmt9-d3d9-conformance.exe"
@@ -743,7 +1030,14 @@ area = "viewport-scissor"
 owner = "core/device"
 requirements = ["R-TEST-12.3", "R-TEST-12.17"]
 acceptance = ["default scissor rect equals the back-buffer dimensions at CreateDevice and is re-derived from the present-parameter back-buffer size on Reset()"]
-status = "scaffolded"
+status = "partial"
+
+[[case.evidence]]
+lane = "builtin"
+arch = "x64"
+status = "passing"
+source = "tests/conformance/d3d9/evidence/sikarugir-cx-24.0.7-builtin-x64.json:1"
+summary = "Sikarugir-CX 24.0.7 builtin lane x64 2026-05-24 — passing in chunked runner snapshot."
 
 [[case]]
 executable = "dxmt9-d3d9-conformance.exe"
@@ -760,7 +1054,14 @@ area = "device-state-getters"
 owner = "core/device"
 requirements = ["R-TEST-12.3", "R-TEST-12.18"]
 acceptance = ["clip-plane getters expose default zero planes, reject null out-pointers, and preserve SetClipPlane plus CLIPPLANEENABLE state"]
-status = "scaffolded"
+status = "partial"
+
+[[case.evidence]]
+lane = "builtin"
+arch = "x64"
+status = "passing"
+source = "tests/conformance/d3d9/evidence/sikarugir-cx-24.0.7-builtin-x64.json:1"
+summary = "Sikarugir-CX 24.0.7 builtin lane x64 2026-05-24 — passing in chunked runner snapshot."
 
 [[case]]
 executable = "dxmt9-d3d9-conformance.exe"
@@ -777,7 +1078,14 @@ area = "stream-state"
 owner = "core/device"
 requirements = ["R-TEST-12.3"]
 acceptance = ["null stream-source state round-trips through SetStreamSource/GetStreamSource with exact HRESULT and out-parameter behavior"]
-status = "scaffolded"
+status = "partial"
+
+[[case.evidence]]
+lane = "builtin"
+arch = "x64"
+status = "passing"
+source = "tests/conformance/d3d9/evidence/sikarugir-cx-24.0.7-builtin-x64.json:1"
+summary = "Sikarugir-CX 24.0.7 builtin lane x64 2026-05-24 — passing in chunked runner snapshot."
 
 [[case]]
 executable = "dxmt9-d3d9-conformance.exe"
@@ -794,7 +1102,14 @@ area = "stream-state"
 owner = "core/device"
 requirements = ["R-TEST-12.3", "R-TEST-12.16"]
 acceptance = ["a programmable vertex declaration may reference a null secondary stream while DrawPrimitive still succeeds when stream 0 provides the position input"]
-status = "scaffolded"
+status = "partial"
+
+[[case.evidence]]
+lane = "builtin"
+arch = "x64"
+status = "passing"
+source = "tests/conformance/d3d9/evidence/sikarugir-cx-24.0.7-builtin-x64.json:1"
+summary = "Sikarugir-CX 24.0.7 builtin lane x64 2026-05-24 — passing in chunked runner snapshot."
 
 [[case]]
 executable = "dxmt9-d3d9-conformance.exe"
@@ -811,7 +1126,14 @@ area = "stream-state"
 owner = "core/device"
 requirements = ["R-TEST-12.3"]
 acceptance = ["stream-source pointer, offset, stride, AddRef, unset, and invalid stream-index behavior match Wine oracle"]
-status = "scaffolded"
+status = "partial"
+
+[[case.evidence]]
+lane = "builtin"
+arch = "x64"
+status = "passing"
+source = "tests/conformance/d3d9/evidence/sikarugir-cx-24.0.7-builtin-x64.json:1"
+summary = "Sikarugir-CX 24.0.7 builtin lane x64 2026-05-24 — passing in chunked runner snapshot."
 
 [[case]]
 executable = "dxmt9-d3d9-conformance.exe"
@@ -828,7 +1150,14 @@ area = "stream-state"
 owner = "core/device"
 requirements = ["R-TEST-12.3"]
 acceptance = ["stream-source frequency defaults, instancing/indexed flag combinations, invalid stream-zero instancing, and invalid zero-frequency behavior match Wine oracle"]
-status = "scaffolded"
+status = "partial"
+
+[[case.evidence]]
+lane = "builtin"
+arch = "x64"
+status = "passing"
+source = "tests/conformance/d3d9/evidence/sikarugir-cx-24.0.7-builtin-x64.json:1"
+summary = "Sikarugir-CX 24.0.7 builtin lane x64 2026-05-24 — passing in chunked runner snapshot."
 
 [[case]]
 executable = "dxmt9-d3d9-conformance.exe"
@@ -845,7 +1174,14 @@ area = "stream-state"
 owner = "core/device"
 requirements = ["R-TEST-12.3"]
 acceptance = ["bound vertex-buffer stream offsets preserve Wine-compatible alignment tolerance and aligned offset/stride state"]
-status = "scaffolded"
+status = "partial"
+
+[[case.evidence]]
+lane = "builtin"
+arch = "x64"
+status = "passing"
+source = "tests/conformance/d3d9/evidence/sikarugir-cx-24.0.7-builtin-x64.json:1"
+summary = "Sikarugir-CX 24.0.7 builtin lane x64 2026-05-24 — passing in chunked runner snapshot."
 
 [[case]]
 executable = "dxmt9-d3d9-conformance.exe"
@@ -862,7 +1198,14 @@ area = "stream-state"
 owner = "core/device"
 requirements = ["R-TEST-12.3"]
 acceptance = ["unsetting a stream-source pointer preserves the last offset and stride layout reported by GetStreamSource"]
-status = "scaffolded"
+status = "partial"
+
+[[case.evidence]]
+lane = "builtin"
+arch = "x64"
+status = "passing"
+source = "tests/conformance/d3d9/evidence/sikarugir-cx-24.0.7-builtin-x64.json:1"
+summary = "Sikarugir-CX 24.0.7 builtin lane x64 2026-05-24 — passing in chunked runner snapshot."
 
 [[case]]
 executable = "dxmt9-d3d9-conformance.exe"
@@ -879,7 +1222,14 @@ area = "stream-state"
 owner = "core/device"
 requirements = ["R-TEST-12.3"]
 acceptance = ["zero-stride stream-source bindings round-trip through GetStreamSource without changing pointer, offset, or stride state"]
-status = "scaffolded"
+status = "partial"
+
+[[case.evidence]]
+lane = "builtin"
+arch = "x64"
+status = "passing"
+source = "tests/conformance/d3d9/evidence/sikarugir-cx-24.0.7-builtin-x64.json:1"
+summary = "Sikarugir-CX 24.0.7 builtin lane x64 2026-05-24 — passing in chunked runner snapshot."
 
 [[case]]
 executable = "dxmt9-d3d9-conformance.exe"
@@ -896,7 +1246,14 @@ area = "stream-state"
 owner = "core/device"
 requirements = ["R-TEST-12.3"]
 acceptance = ["NULL stream-source offset updates preserve Wine-compatible alignment tolerance and aligned NULL offset/zero-stride state"]
-status = "scaffolded"
+status = "partial"
+
+[[case.evidence]]
+lane = "builtin"
+arch = "x64"
+status = "passing"
+source = "tests/conformance/d3d9/evidence/sikarugir-cx-24.0.7-builtin-x64.json:1"
+summary = "Sikarugir-CX 24.0.7 builtin lane x64 2026-05-24 — passing in chunked runner snapshot."
 
 [[case]]
 executable = "dxmt9-d3d9-conformance.exe"
@@ -913,7 +1270,14 @@ area = "texture-state"
 owner = "core/device"
 requirements = ["R-TEST-12.3", "R-TEST-12.13", "R-TEST-12.18"]
 acceptance = ["GetTexture/SetTexture null state, AddRef ownership, clear, null out-pointer, and invalid stage behavior match Wine oracle"]
-status = "scaffolded"
+status = "partial"
+
+[[case.evidence]]
+lane = "builtin"
+arch = "x64"
+status = "passing"
+source = "tests/conformance/d3d9/evidence/sikarugir-cx-24.0.7-builtin-x64.json:1"
+summary = "Sikarugir-CX 24.0.7 builtin lane x64 2026-05-24 — passing in chunked runner snapshot."
 
 [[case]]
 executable = "dxmt9-d3d9-conformance.exe"
@@ -930,7 +1294,14 @@ area = "palette-state"
 owner = "core/device"
 requirements = ["R-TEST-12.3"]
 acceptance = ["palette entries and current texture palette state round-trip and reject null out-parameters with Wine-compatible HRESULTs"]
-status = "scaffolded"
+status = "partial"
+
+[[case.evidence]]
+lane = "builtin"
+arch = "x64"
+status = "passing"
+source = "tests/conformance/d3d9/evidence/sikarugir-cx-24.0.7-builtin-x64.json:1"
+summary = "Sikarugir-CX 24.0.7 builtin lane x64 2026-05-24 — passing in chunked runner snapshot."
 
 [[case]]
 executable = "dxmt9-d3d9-conformance.exe"
@@ -947,7 +1318,14 @@ area = "palette-state"
 owner = "core/device"
 requirements = ["R-TEST-12.3"]
 acceptance = ["palette alpha-entry writes follow D3DPTEXTURECAPS_ALPHAPALETTE and failed alpha writes preserve the previous palette"]
-status = "scaffolded"
+status = "partial"
+
+[[case.evidence]]
+lane = "builtin"
+arch = "x64"
+status = "passing"
+source = "tests/conformance/d3d9/evidence/sikarugir-cx-24.0.7-builtin-x64.json:1"
+summary = "Sikarugir-CX 24.0.7 builtin lane x64 2026-05-24 — passing in chunked runner snapshot."
 
 [[case]]
 executable = "dxmt9-d3d9-conformance.exe"
@@ -964,7 +1342,14 @@ area = "palette-state"
 owner = "core/device"
 requirements = ["R-TEST-12.3"]
 acceptance = ["multiple palette entry arrays remain isolated and SetCurrentTexturePalette/GetCurrentTexturePalette switch the active palette without mutating stored entries"]
-status = "scaffolded"
+status = "partial"
+
+[[case.evidence]]
+lane = "builtin"
+arch = "x64"
+status = "passing"
+source = "tests/conformance/d3d9/evidence/sikarugir-cx-24.0.7-builtin-x64.json:1"
+summary = "Sikarugir-CX 24.0.7 builtin lane x64 2026-05-24 — passing in chunked runner snapshot."
 
 [[case]]
 executable = "dxmt9-d3d9-conformance.exe"
@@ -981,7 +1366,14 @@ area = "adapter-enumeration"
 owner = "core/factory"
 requirements = ["R-TEST-12.3", "R-TEST-12.10"]
 acceptance = ["adapter count bounds, per-adapter identifier/caps, and invalid adapter HRESULTs match Wine oracle"]
-status = "scaffolded"
+status = "partial"
+
+[[case.evidence]]
+lane = "builtin"
+arch = "x64"
+status = "passing"
+source = "tests/conformance/d3d9/evidence/sikarugir-cx-24.0.7-builtin-x64.json:1"
+summary = "Sikarugir-CX 24.0.7 builtin lane x64 2026-05-24 — passing in chunked runner snapshot."
 
 [[case]]
 executable = "dxmt9-d3d9-conformance.exe"
@@ -998,7 +1390,14 @@ area = "stateblock"
 owner = "core/stateblock"
 requirements = ["R-TEST-12.5", "R-TEST-12.19"]
 acceptance = ["invalid stateblock types and recording-time invalid calls match Wine oracle"]
-status = "scaffolded"
+status = "partial"
+
+[[case.evidence]]
+lane = "builtin"
+arch = "x64"
+status = "passing"
+source = "tests/conformance/d3d9/evidence/sikarugir-cx-24.0.7-builtin-x64.json:1"
+summary = "Sikarugir-CX 24.0.7 builtin lane x64 2026-05-24 — passing in chunked runner snapshot."
 
 [[case]]
 executable = "dxmt9-d3d9-conformance.exe"
@@ -1015,7 +1414,14 @@ area = "stateblock"
 owner = "core/stateblock"
 requirements = ["R-TEST-12.5", "R-TEST-12.15", "R-TEST-12.19"]
 acceptance = ["stateblocks record, apply, and capture vertex/pixel shader constants through public Get/Set constant APIs"]
-status = "scaffolded"
+status = "partial"
+
+[[case.evidence]]
+lane = "builtin"
+arch = "x64"
+status = "passing"
+source = "tests/conformance/d3d9/evidence/sikarugir-cx-24.0.7-builtin-x64.json:1"
+summary = "Sikarugir-CX 24.0.7 builtin lane x64 2026-05-24 — passing in chunked runner snapshot."
 
 [[case]]
 executable = "dxmt9-d3d9-conformance.exe"
@@ -1032,7 +1438,14 @@ area = "stateblock"
 owner = "core/stateblock"
 requirements = ["R-TEST-12.5", "R-TEST-12.15", "R-TEST-12.19"]
 acceptance = ["stateblocks restore vertex and pixel shader float, integer, and boolean constants from non-zero registers without cross-stage leakage"]
-status = "scaffolded"
+status = "partial"
+
+[[case.evidence]]
+lane = "builtin"
+arch = "x64"
+status = "passing"
+source = "tests/conformance/d3d9/evidence/sikarugir-cx-24.0.7-builtin-x64.json:1"
+summary = "Sikarugir-CX 24.0.7 builtin lane x64 2026-05-24 — passing in chunked runner snapshot."
 
 [[case]]
 executable = "dxmt9-d3d9-conformance.exe"
@@ -1049,7 +1462,14 @@ area = "stateblock"
 owner = "core/stateblock"
 requirements = ["R-TEST-12.5", "R-TEST-12.19"]
 acceptance = ["stateblocks record, apply, and capture vertex declaration state with getter AddRef behavior preserved"]
-status = "scaffolded"
+status = "partial"
+
+[[case.evidence]]
+lane = "builtin"
+arch = "x64"
+status = "passing"
+source = "tests/conformance/d3d9/evidence/sikarugir-cx-24.0.7-builtin-x64.json:1"
+summary = "Sikarugir-CX 24.0.7 builtin lane x64 2026-05-24 — passing in chunked runner snapshot."
 
 [[case]]
 executable = "dxmt9-d3d9-conformance.exe"
@@ -1066,7 +1486,14 @@ area = "stateblock"
 owner = "core/stateblock"
 requirements = ["R-TEST-12.5", "R-TEST-12.19"]
 acceptance = ["stateblocks record, apply, and capture view and high-index world transform values through public Get/SetTransform APIs"]
-status = "scaffolded"
+status = "partial"
+
+[[case.evidence]]
+lane = "builtin"
+arch = "x64"
+status = "passing"
+source = "tests/conformance/d3d9/evidence/sikarugir-cx-24.0.7-builtin-x64.json:1"
+summary = "Sikarugir-CX 24.0.7 builtin lane x64 2026-05-24 — passing in chunked runner snapshot."
 
 [[case]]
 executable = "dxmt9-d3d9-conformance.exe"
@@ -1083,7 +1510,14 @@ area = "stateblock"
 owner = "core/stateblock"
 requirements = ["R-TEST-12.5", "R-TEST-12.19"]
 acceptance = ["MultiplyTransform updates live primary state while recording and captured stateblocks replay the Wine-observed transform result for view, projection, texture, and world matrices"]
-status = "scaffolded"
+status = "partial"
+
+[[case.evidence]]
+lane = "builtin"
+arch = "x64"
+status = "passing"
+source = "tests/conformance/d3d9/evidence/sikarugir-cx-24.0.7-builtin-x64.json:1"
+summary = "Sikarugir-CX 24.0.7 builtin lane x64 2026-05-24 — passing in chunked runner snapshot."
 
 [[case]]
 executable = "dxmt9-d3d9-conformance.exe"
@@ -1100,7 +1534,14 @@ area = "private-data"
 owner = "core/resources"
 requirements = ["R-TEST-12.3"]
 acceptance = ["D3DSPD_IUNKNOWN AddRef/Release ownership is object-pointer based"]
-status = "scaffolded"
+status = "partial"
+
+[[case.evidence]]
+lane = "builtin"
+arch = "x64"
+status = "passing"
+source = "tests/conformance/d3d9/evidence/sikarugir-cx-24.0.7-builtin-x64.json:1"
+summary = "Sikarugir-CX 24.0.7 builtin lane x64 2026-05-24 — passing in chunked runner snapshot."
 
 [[case]]
 executable = "dxmt9-d3d9-conformance.exe"
@@ -1126,6 +1567,13 @@ status = "failing"
 source = "specs/gap.md:170"
 summary = "First device-backed app-local run reached the provider with failures in the private-data resource wrapper group."
 
+[[case.evidence]]
+lane = "builtin"
+arch = "x64"
+status = "passing"
+source = "tests/conformance/d3d9/evidence/sikarugir-cx-24.0.7-builtin-x64.json:1"
+summary = "Sikarugir-CX 24.0.7 builtin lane x64 2026-05-24 — passing in chunked runner snapshot."
+
 [[case]]
 executable = "dxmt9-d3d9-conformance.exe"
 source_file = "d3d9_conformance_resource.c"
@@ -1141,7 +1589,14 @@ area = "private-data"
 owner = "core/resources"
 requirements = ["R-TEST-12.13"]
 acceptance = ["SetPrivateData replacement overwrites byte payload size and contents, undersized reads return MOREDATA without writing, and double free reports NOTFOUND"]
-status = "scaffolded"
+status = "partial"
+
+[[case.evidence]]
+lane = "builtin"
+arch = "x64"
+status = "passing"
+source = "tests/conformance/d3d9/evidence/sikarugir-cx-24.0.7-builtin-x64.json:1"
+summary = "Sikarugir-CX 24.0.7 builtin lane x64 2026-05-24 — passing in chunked runner snapshot."
 
 [[case]]
 executable = "dxmt9-d3d9-conformance.exe"
@@ -1158,7 +1613,14 @@ area = "resource-locking"
 owner = "core/resources"
 requirements = ["R-TEST-12.13"]
 acceptance = ["surface, texture, mip-level, dynamic write-only texture, and volume lock invalid/double-unlock policies match Wine oracle"]
-status = "scaffolded"
+status = "partial"
+
+[[case.evidence]]
+lane = "builtin"
+arch = "x64"
+status = "passing"
+source = "tests/conformance/d3d9/evidence/sikarugir-cx-24.0.7-builtin-x64.json:1"
+summary = "Sikarugir-CX 24.0.7 builtin lane x64 2026-05-24 — passing in chunked runner snapshot."
 
 [[case]]
 executable = "dxmt9-d3d9-conformance.exe"
@@ -1175,7 +1637,14 @@ area = "resource-locking"
 owner = "core/resources"
 requirements = ["R-TEST-12.13"]
 acceptance = ["uncompressed surface sub-rectangle LockRect returns a pBits pointer offset by top * pitch + left * bytes-per-pixel from the full-surface base"]
-status = "scaffolded"
+status = "partial"
+
+[[case.evidence]]
+lane = "builtin"
+arch = "x64"
+status = "passing"
+source = "tests/conformance/d3d9/evidence/sikarugir-cx-24.0.7-builtin-x64.json:1"
+summary = "Sikarugir-CX 24.0.7 builtin lane x64 2026-05-24 — passing in chunked runner snapshot."
 
 [[case]]
 executable = "dxmt9-d3d9-conformance.exe"
@@ -1192,7 +1661,14 @@ area = "resource-locking"
 owner = "core/resources"
 requirements = ["R-TEST-12.13"]
 acceptance = ["DXT surface full-lock pitch and sub-rectangle LockRect pBits block offsets match Wine oracle"]
-status = "scaffolded"
+status = "partial"
+
+[[case.evidence]]
+lane = "builtin"
+arch = "x64"
+status = "passing"
+source = "tests/conformance/d3d9/evidence/sikarugir-cx-24.0.7-builtin-x64.json:1"
+summary = "Sikarugir-CX 24.0.7 builtin lane x64 2026-05-24 — passing in chunked runner snapshot."
 
 [[case]]
 executable = "dxmt9-d3d9-conformance.exe"
@@ -1209,7 +1685,14 @@ area = "resource-locking"
 owner = "core/resources"
 requirements = ["R-TEST-12.13"]
 acceptance = ["a second LockRect on an already locked surface fails with D3DERR_INVALIDCALL and preserves the caller's D3DLOCKED_RECT output fields"]
-status = "scaffolded"
+status = "partial"
+
+[[case.evidence]]
+lane = "builtin"
+arch = "x64"
+status = "passing"
+source = "tests/conformance/d3d9/evidence/sikarugir-cx-24.0.7-builtin-x64.json:1"
+summary = "Sikarugir-CX 24.0.7 builtin lane x64 2026-05-24 — passing in chunked runner snapshot."
 
 [[case]]
 executable = "dxmt9-d3d9-conformance.exe"
@@ -1226,7 +1709,14 @@ area = "resource-locking"
 owner = "core/resources"
 requirements = ["R-TEST-12.13"]
 acceptance = ["a second LockRect on already locked texture and cube-texture levels fails with D3DERR_INVALIDCALL and preserves the caller's D3DLOCKED_RECT output fields"]
-status = "scaffolded"
+status = "partial"
+
+[[case.evidence]]
+lane = "builtin"
+arch = "x64"
+status = "passing"
+source = "tests/conformance/d3d9/evidence/sikarugir-cx-24.0.7-builtin-x64.json:1"
+summary = "Sikarugir-CX 24.0.7 builtin lane x64 2026-05-24 — passing in chunked runner snapshot."
 
 [[case]]
 executable = "dxmt9-d3d9-conformance.exe"
@@ -1243,7 +1733,14 @@ area = "resource-locking"
 owner = "core/resources"
 requirements = ["R-TEST-12.13"]
 acceptance = ["extra UnlockRect behavior distinguishes texture-owned surface levels from offscreen and cube-level surfaces after a successful LockRect/UnlockRect pair"]
-status = "scaffolded"
+status = "partial"
+
+[[case.evidence]]
+lane = "builtin"
+arch = "x64"
+status = "passing"
+source = "tests/conformance/d3d9/evidence/sikarugir-cx-24.0.7-builtin-x64.json:1"
+summary = "Sikarugir-CX 24.0.7 builtin lane x64 2026-05-24 — passing in chunked runner snapshot."
 
 [[case]]
 executable = "dxmt9-d3d9-conformance.exe"
@@ -1260,7 +1757,14 @@ area = "resource-locking"
 owner = "core/resources"
 requirements = ["R-TEST-12.13"]
 acceptance = ["offscreen plain surfaces in DEFAULT, SCRATCH, and SYSTEMMEM pools expose descriptor metadata and reject unlock-before-lock and double-unlock with Wine-compatible HRESULTs"]
-status = "scaffolded"
+status = "partial"
+
+[[case.evidence]]
+lane = "builtin"
+arch = "x64"
+status = "passing"
+source = "tests/conformance/d3d9/evidence/sikarugir-cx-24.0.7-builtin-x64.json:1"
+summary = "Sikarugir-CX 24.0.7 builtin lane x64 2026-05-24 — passing in chunked runner snapshot."
 
 [[case]]
 executable = "dxmt9-d3d9-conformance.exe"
@@ -1277,7 +1781,14 @@ area = "resource-locking"
 owner = "core/resources"
 requirements = ["R-TEST-12.13"]
 acceptance = ["locked system-memory mip surfaces reject per-surface UpdateSurface for the locked level while whole-texture UpdateTexture remains accepted"]
-status = "scaffolded"
+status = "partial"
+
+[[case.evidence]]
+lane = "builtin"
+arch = "x64"
+status = "passing"
+source = "tests/conformance/d3d9/evidence/sikarugir-cx-24.0.7-builtin-x64.json:1"
+summary = "Sikarugir-CX 24.0.7 builtin lane x64 2026-05-24 — passing in chunked runner snapshot."
 
 [[case]]
 executable = "dxmt9-d3d9-conformance.exe"
@@ -1294,7 +1805,14 @@ area = "resource-locking"
 owner = "core/resources"
 requirements = ["R-TEST-12.13"]
 acceptance = ["vertex-buffer lock flags, double-lock rejection, unlock rejection, DISCARD, and NOOVERWRITE behavior match Wine oracle"]
-status = "scaffolded"
+status = "partial"
+
+[[case.evidence]]
+lane = "builtin"
+arch = "x64"
+status = "passing"
+source = "tests/conformance/d3d9/evidence/sikarugir-cx-24.0.7-builtin-x64.json:1"
+summary = "Sikarugir-CX 24.0.7 builtin lane x64 2026-05-24 — passing in chunked runner snapshot."
 
 [[case]]
 executable = "dxmt9-d3d9-conformance.exe"
@@ -1311,7 +1829,14 @@ area = "resource-locking"
 owner = "core/resources"
 requirements = ["R-TEST-12.3", "R-TEST-12.13", "R-TEST-12.16"]
 acceptance = ["dynamic WRITEONLY vertex buffers preserve uploaded data across stream binding and DrawPrimitive, and both normal and READONLY locks expose the original bytes"]
-status = "scaffolded"
+status = "partial"
+
+[[case.evidence]]
+lane = "builtin"
+arch = "x64"
+status = "passing"
+source = "tests/conformance/d3d9/evidence/sikarugir-cx-24.0.7-builtin-x64.json:1"
+summary = "Sikarugir-CX 24.0.7 builtin lane x64 2026-05-24 — passing in chunked runner snapshot."
 
 [[case]]
 executable = "dxmt9-d3d9-conformance.exe"
@@ -1328,7 +1853,14 @@ area = "resource-locking"
 owner = "core/resources"
 requirements = ["R-TEST-12.13"]
 acceptance = ["vertex-buffer Lock returns aligned storage and offset locks point at the requested byte offset"]
-status = "scaffolded"
+status = "partial"
+
+[[case.evidence]]
+lane = "builtin"
+arch = "x64"
+status = "passing"
+source = "tests/conformance/d3d9/evidence/sikarugir-cx-24.0.7-builtin-x64.json:1"
+summary = "Sikarugir-CX 24.0.7 builtin lane x64 2026-05-24 — passing in chunked runner snapshot."
 
 [[case]]
 executable = "dxmt9-d3d9-conformance.exe"
@@ -1345,7 +1877,14 @@ area = "resource-locking"
 owner = "core/resources"
 requirements = ["R-TEST-12.13"]
 acceptance = ["surface LockRect returns aligned pBits and stable pitch for full and sub-rect locks"]
-status = "scaffolded"
+status = "partial"
+
+[[case.evidence]]
+lane = "builtin"
+arch = "x64"
+status = "passing"
+source = "tests/conformance/d3d9/evidence/sikarugir-cx-24.0.7-builtin-x64.json:1"
+summary = "Sikarugir-CX 24.0.7 builtin lane x64 2026-05-24 — passing in chunked runner snapshot."
 
 [[case]]
 executable = "dxmt9-d3d9-conformance.exe"
@@ -1362,7 +1901,14 @@ area = "resource-description"
 owner = "core/resources"
 requirements = ["R-TEST-12.13"]
 acceptance = ["surface and texture level descriptions expose Windows-compatible dimensions, formats, pools, and invalid-level HRESULTs"]
-status = "scaffolded"
+status = "partial"
+
+[[case.evidence]]
+lane = "builtin"
+arch = "x64"
+status = "passing"
+source = "tests/conformance/d3d9/evidence/sikarugir-cx-24.0.7-builtin-x64.json:1"
+summary = "Sikarugir-CX 24.0.7 builtin lane x64 2026-05-24 — passing in chunked runner snapshot."
 
 [[case]]
 executable = "dxmt9-d3d9-conformance.exe"
@@ -1379,7 +1925,14 @@ area = "resource-description"
 owner = "core/resources"
 requirements = ["R-TEST-12.13"]
 acceptance = ["implicit full mip-chain texture creation exposes Wine-compatible level counts for square, one-dimensional, and 1x1 textures"]
-status = "scaffolded"
+status = "partial"
+
+[[case.evidence]]
+lane = "builtin"
+arch = "x64"
+status = "passing"
+source = "tests/conformance/d3d9/evidence/sikarugir-cx-24.0.7-builtin-x64.json:1"
+summary = "Sikarugir-CX 24.0.7 builtin lane x64 2026-05-24 — passing in chunked runner snapshot."
 
 [[case]]
 executable = "dxmt9-d3d9-conformance.exe"
@@ -1396,7 +1949,14 @@ area = "resource-description"
 owner = "core/resources"
 requirements = ["R-TEST-12.13"]
 acceptance = ["IDirect3DBaseTexture9 metadata accessors expose concrete texture type and level-count parity for 2D textures, cube textures, and mipmapped volume textures when supported"]
-status = "scaffolded"
+status = "partial"
+
+[[case.evidence]]
+lane = "builtin"
+arch = "x64"
+status = "passing"
+source = "tests/conformance/d3d9/evidence/sikarugir-cx-24.0.7-builtin-x64.json:1"
+summary = "Sikarugir-CX 24.0.7 builtin lane x64 2026-05-24 — passing in chunked runner snapshot."
 
 [[case]]
 executable = "dxmt9-d3d9-conformance.exe"
@@ -1413,7 +1973,14 @@ area = "resource-description"
 owner = "core/resources"
 requirements = ["R-TEST-12.13"]
 acceptance = ["autogen-mipmap textures expose one public level, default LINEAR filter state, filter setter validation, level-desc usage flags, and invalid explicit-level/systemmem creation parity"]
-status = "scaffolded"
+status = "partial"
+
+[[case.evidence]]
+lane = "builtin"
+arch = "x64"
+status = "passing"
+source = "tests/conformance/d3d9/evidence/sikarugir-cx-24.0.7-builtin-x64.json:1"
+summary = "Sikarugir-CX 24.0.7 builtin lane x64 2026-05-24 — passing in chunked runner snapshot."
 
 [[case]]
 executable = "dxmt9-d3d9-conformance.exe"
@@ -1430,7 +1997,14 @@ area = "texture-creation"
 owner = "core/resources"
 requirements = ["R-TEST-12.13"]
 acceptance = ["MANAGED-pool textures with D3DUSAGE_AUTOGENMIPMAP succeed and expose a single public mip level; SYSTEMMEM-pool textures with D3DUSAGE_AUTOGENMIPMAP fail with D3DERR_INVALIDCALL"]
-status = "scaffolded"
+status = "partial"
+
+[[case.evidence]]
+lane = "builtin"
+arch = "x64"
+status = "passing"
+source = "tests/conformance/d3d9/evidence/sikarugir-cx-24.0.7-builtin-x64.json:1"
+summary = "Sikarugir-CX 24.0.7 builtin lane x64 2026-05-24 — passing in chunked runner snapshot."
 
 [[case]]
 executable = "dxmt9-d3d9-conformance.exe"
@@ -1447,7 +2021,14 @@ area = "resource-format"
 owner = "core/resources"
 requirements = ["R-TEST-12.3", "R-TEST-12.13"]
 acceptance = ["D3DFMT_NULL render-target surface and texture support, descriptors, binding, clearing, and lockability match Wine oracle when advertised"]
-status = "scaffolded"
+status = "partial"
+
+[[case.evidence]]
+lane = "builtin"
+arch = "x64"
+status = "passing"
+source = "tests/conformance/d3d9/evidence/sikarugir-cx-24.0.7-builtin-x64.json:1"
+summary = "Sikarugir-CX 24.0.7 builtin lane x64 2026-05-24 — passing in chunked runner snapshot."
 
 [[case]]
 executable = "dxmt9-d3d9-conformance.exe"
@@ -1464,7 +2045,14 @@ area = "resource-description"
 owner = "core/resources"
 requirements = ["R-TEST-12.13"]
 acceptance = ["GetType returns the public D3DRESOURCETYPE matching each created resource wrapper"]
-status = "scaffolded"
+status = "partial"
+
+[[case.evidence]]
+lane = "builtin"
+arch = "x64"
+status = "passing"
+source = "tests/conformance/d3d9/evidence/sikarugir-cx-24.0.7-builtin-x64.json:1"
+summary = "Sikarugir-CX 24.0.7 builtin lane x64 2026-05-24 — passing in chunked runner snapshot."
 
 [[case]]
 executable = "dxmt9-d3d9-conformance.exe"
@@ -1481,7 +2069,14 @@ area = "resource-description"
 owner = "core/resources"
 requirements = ["R-TEST-12.13"]
 acceptance = ["texture level surfaces expose descriptors that match their owning texture level descriptors across base, middle, and tail mip levels"]
-status = "scaffolded"
+status = "partial"
+
+[[case.evidence]]
+lane = "builtin"
+arch = "x64"
+status = "passing"
+source = "tests/conformance/d3d9/evidence/sikarugir-cx-24.0.7-builtin-x64.json:1"
+summary = "Sikarugir-CX 24.0.7 builtin lane x64 2026-05-24 — passing in chunked runner snapshot."
 
 [[case]]
 executable = "dxmt9-d3d9-conformance.exe"
@@ -1498,7 +2093,14 @@ area = "resource-description"
 owner = "core/resources"
 requirements = ["R-TEST-12.13"]
 acceptance = ["cube texture face surfaces expose descriptors matching the cube texture level descriptor for multiple faces"]
-status = "scaffolded"
+status = "partial"
+
+[[case.evidence]]
+lane = "builtin"
+arch = "x64"
+status = "passing"
+source = "tests/conformance/d3d9/evidence/sikarugir-cx-24.0.7-builtin-x64.json:1"
+summary = "Sikarugir-CX 24.0.7 builtin lane x64 2026-05-24 — passing in chunked runner snapshot."
 
 [[case]]
 executable = "dxmt9-d3d9-conformance.exe"
@@ -1515,7 +2117,14 @@ area = "resource-lifetime"
 owner = "pe/com"
 requirements = ["R-TEST-12.3", "R-TEST-12.13"]
 acceptance = ["surface, texture, cube texture, volume texture, vertex-buffer, and index-buffer GetDevice methods return the parent device and AddRef it"]
-status = "scaffolded"
+status = "partial"
+
+[[case.evidence]]
+lane = "builtin"
+arch = "x64"
+status = "passing"
+source = "tests/conformance/d3d9/evidence/sikarugir-cx-24.0.7-builtin-x64.json:1"
+summary = "Sikarugir-CX 24.0.7 builtin lane x64 2026-05-24 — passing in chunked runner snapshot."
 
 [[case]]
 executable = "dxmt9-d3d9-conformance.exe"
@@ -1532,7 +2141,14 @@ area = "resource-description"
 owner = "core/resources"
 requirements = ["R-TEST-12.3", "R-TEST-12.13"]
 acceptance = ["index-buffer GetDesc exposes Wine-compatible type, format, usage, pool, and size metadata; valid buffers lock and bind through SetIndices/GetIndices while scratch-pool creation is rejected"]
-status = "scaffolded"
+status = "partial"
+
+[[case.evidence]]
+lane = "builtin"
+arch = "x64"
+status = "passing"
+source = "tests/conformance/d3d9/evidence/sikarugir-cx-24.0.7-builtin-x64.json:1"
+summary = "Sikarugir-CX 24.0.7 builtin lane x64 2026-05-24 — passing in chunked runner snapshot."
 
 [[case]]
 executable = "dxmt9-d3d9-conformance.exe"
@@ -1549,7 +2165,14 @@ area = "resource-description"
 owner = "core/resources"
 requirements = ["R-TEST-12.3", "R-TEST-12.13"]
 acceptance = ["vertex-buffer GetDesc exposes Wine-compatible type, FVF, usage, pool, and size metadata; valid buffers lock and bind through SetStreamSource/GetStreamSource while scratch-pool creation is rejected"]
-status = "scaffolded"
+status = "partial"
+
+[[case.evidence]]
+lane = "builtin"
+arch = "x64"
+status = "passing"
+source = "tests/conformance/d3d9/evidence/sikarugir-cx-24.0.7-builtin-x64.json:1"
+summary = "Sikarugir-CX 24.0.7 builtin lane x64 2026-05-24 — passing in chunked runner snapshot."
 
 [[case]]
 executable = "dxmt9-d3d9-conformance.exe"
@@ -1566,7 +2189,14 @@ area = "resource-description"
 owner = "core/resources"
 requirements = ["R-TEST-12.13"]
 acceptance = ["texture level surfaces return the owning texture for IUnknown, IDirect3DResource9, IDirect3DBaseTexture9, and IDirect3DTexture9 containers, and reject IDirect3DSurface9 with a null out-pointer"]
-status = "scaffolded"
+status = "partial"
+
+[[case.evidence]]
+lane = "builtin"
+arch = "x64"
+status = "passing"
+source = "tests/conformance/d3d9/evidence/sikarugir-cx-24.0.7-builtin-x64.json:1"
+summary = "Sikarugir-CX 24.0.7 builtin lane x64 2026-05-24 — passing in chunked runner snapshot."
 
 [[case]]
 executable = "dxmt9-d3d9-conformance.exe"
@@ -1583,7 +2213,14 @@ area = "resource-description"
 owner = "core/resources"
 requirements = ["R-TEST-12.13"]
 acceptance = ["cube texture level count, level descriptors, cube surface descriptors, invalid face, invalid level, and null out-parameter behavior match Wine oracle"]
-status = "scaffolded"
+status = "partial"
+
+[[case.evidence]]
+lane = "builtin"
+arch = "x64"
+status = "passing"
+source = "tests/conformance/d3d9/evidence/sikarugir-cx-24.0.7-builtin-x64.json:1"
+summary = "Sikarugir-CX 24.0.7 builtin lane x64 2026-05-24 — passing in chunked runner snapshot."
 
 [[case]]
 executable = "dxmt9-d3d9-conformance.exe"
@@ -1600,7 +2237,14 @@ area = "texture-creation"
 owner = "core/resources"
 requirements = ["R-TEST-12.13"]
 acceptance = ["CreateCubeTexture accepts edge length >= 1 and rejects edge length 0 and explicit Levels greater than log2(edge)+1 with D3DERR_INVALIDCALL"]
-status = "scaffolded"
+status = "skipped"
+
+[[case.evidence]]
+lane = "builtin"
+arch = "x64"
+status = "skipped"
+source = "tests/conformance/d3d9/evidence/sikarugir-cx-24.0.7-builtin-x64.json:1"
+summary = "Sikarugir-CX 24.0.7 builtin lane x64 2026-05-24 — intentional skip per runner KNOWN_HANGS / SKIPS."
 
 [[case]]
 executable = "dxmt9-d3d9-conformance.exe"
@@ -1617,7 +2261,14 @@ area = "volume-resources"
 owner = "core/resources"
 requirements = ["R-TEST-12.3", "R-TEST-12.13"]
 acceptance = ["volume levels expose descriptions and parent containers, but do not expose IDirect3DResource9 through QueryInterface"]
-status = "scaffolded"
+status = "skipped"
+
+[[case.evidence]]
+lane = "builtin"
+arch = "x64"
+status = "skipped"
+source = "tests/conformance/d3d9/evidence/sikarugir-cx-24.0.7-builtin-x64.json:1"
+summary = "Sikarugir-CX 24.0.7 builtin lane x64 2026-05-24 — intentional skip per runner KNOWN_HANGS / SKIPS."
 
 [[case]]
 executable = "dxmt9-d3d9-conformance.exe"
@@ -1634,7 +2285,14 @@ area = "volume-resources"
 owner = "core/resources"
 requirements = ["R-TEST-12.13"]
 acceptance = ["volume level GetContainer returns the owning volume texture for IUnknown, IDirect3DResource9, IDirect3DBaseTexture9, and IDirect3DVolumeTexture9, and rejects IDirect3DVolume9 with a null out-pointer"]
-status = "scaffolded"
+status = "skipped"
+
+[[case.evidence]]
+lane = "builtin"
+arch = "x64"
+status = "skipped"
+source = "tests/conformance/d3d9/evidence/sikarugir-cx-24.0.7-builtin-x64.json:1"
+summary = "Sikarugir-CX 24.0.7 builtin lane x64 2026-05-24 — intentional skip per runner KNOWN_HANGS / SKIPS."
 
 [[case]]
 executable = "dxmt9-d3d9-conformance.exe"
@@ -1651,7 +2309,14 @@ area = "volume-resources"
 owner = "core/resources"
 requirements = ["R-TEST-12.13"]
 acceptance = ["mipmapped volume textures expose stable level count, per-level volume descriptors, matching GetLevelDesc metadata, and invalid level/null out-parameter behavior"]
-status = "scaffolded"
+status = "partial"
+
+[[case.evidence]]
+lane = "builtin"
+arch = "x64"
+status = "passing"
+source = "tests/conformance/d3d9/evidence/sikarugir-cx-24.0.7-builtin-x64.json:1"
+summary = "Sikarugir-CX 24.0.7 builtin lane x64 2026-05-24 — passing in chunked runner snapshot."
 
 [[case]]
 executable = "dxmt9-d3d9-conformance.exe"
@@ -1668,7 +2333,14 @@ area = "volume-resources"
 owner = "core/resources"
 requirements = ["R-TEST-12.13"]
 acceptance = ["DXT scratch volume locks expose block-shaped row and slice pitch and reject block-misaligned lock boxes"]
-status = "scaffolded"
+status = "partial"
+
+[[case.evidence]]
+lane = "builtin"
+arch = "x64"
+status = "passing"
+source = "tests/conformance/d3d9/evidence/sikarugir-cx-24.0.7-builtin-x64.json:1"
+summary = "Sikarugir-CX 24.0.7 builtin lane x64 2026-05-24 — passing in chunked runner snapshot."
 
 [[case]]
 executable = "dxmt9-d3d9-conformance.exe"
@@ -1685,7 +2357,14 @@ area = "volume-resources"
 owner = "core/resources"
 requirements = ["R-TEST-12.13"]
 acceptance = ["volume LockBox validates empty, reversed, and out-of-bounds boxes while valid partial boxes expose pBits offsets matching slice/row/texel layout"]
-status = "scaffolded"
+status = "partial"
+
+[[case.evidence]]
+lane = "builtin"
+arch = "x64"
+status = "passing"
+source = "tests/conformance/d3d9/evidence/sikarugir-cx-24.0.7-builtin-x64.json:1"
+summary = "Sikarugir-CX 24.0.7 builtin lane x64 2026-05-24 — passing in chunked runner snapshot."
 
 [[case]]
 executable = "dxmt9-d3d9-conformance.exe"
@@ -1702,7 +2381,14 @@ area = "format-policy"
 owner = "core/resources"
 requirements = ["R-TEST-12.8", "R-TEST-12.13"]
 acceptance = ["public CheckDeviceFormat policy for vendor FourCC formats reports support or not-available, and NULL render-target format behavior matches Wine when advertised"]
-status = "scaffolded"
+status = "partial"
+
+[[case.evidence]]
+lane = "builtin"
+arch = "x64"
+status = "passing"
+source = "tests/conformance/d3d9/evidence/sikarugir-cx-24.0.7-builtin-x64.json:1"
+summary = "Sikarugir-CX 24.0.7 builtin lane x64 2026-05-24 — passing in chunked runner snapshot."
 
 [[case]]
 executable = "dxmt9-d3d9-conformance.exe"
@@ -1719,7 +2405,14 @@ area = "format-policy"
 owner = "core/resources"
 requirements = ["R-TEST-12.8"]
 acceptance = ["INTZ vendor FOURCC reports D3D_OK for D3DUSAGE_DEPTHSTENCIL + D3DRTYPE_TEXTURE, an INTZ texture binds both as the depth-stencil surface and as a sampler resource"]
-status = "scaffolded"
+status = "partial"
+
+[[case.evidence]]
+lane = "builtin"
+arch = "x64"
+status = "passing"
+source = "tests/conformance/d3d9/evidence/sikarugir-cx-24.0.7-builtin-x64.json:1"
+summary = "Sikarugir-CX 24.0.7 builtin lane x64 2026-05-24 — passing in chunked runner snapshot."
 
 [[case]]
 executable = "dxmt9-d3d9-conformance.exe"
@@ -1736,7 +2429,14 @@ area = "resource-priority"
 owner = "core/resources"
 requirements = ["R-TEST-12.13"]
 acceptance = ["managed resource SetPriority returns the previous value and GetPriority exposes the current value"]
-status = "scaffolded"
+status = "partial"
+
+[[case.evidence]]
+lane = "builtin"
+arch = "x64"
+status = "passing"
+source = "tests/conformance/d3d9/evidence/sikarugir-cx-24.0.7-builtin-x64.json:1"
+summary = "Sikarugir-CX 24.0.7 builtin lane x64 2026-05-24 — passing in chunked runner snapshot."
 
 [[case]]
 executable = "dxmt9-d3d9-conformance.exe"
@@ -1753,7 +2453,14 @@ area = "resource-priority"
 owner = "core/resources"
 requirements = ["R-TEST-12.13"]
 acceptance = ["texture, surface, vertex-buffer, and render-target priority behavior across default, system-memory, managed, and scratch pools matches Wine oracle"]
-status = "scaffolded"
+status = "partial"
+
+[[case.evidence]]
+lane = "builtin"
+arch = "x64"
+status = "passing"
+source = "tests/conformance/d3d9/evidence/sikarugir-cx-24.0.7-builtin-x64.json:1"
+summary = "Sikarugir-CX 24.0.7 builtin lane x64 2026-05-24 — passing in chunked runner snapshot."
 
 [[case]]
 executable = "dxmt9-d3d9-conformance.exe"
@@ -1770,7 +2477,14 @@ area = "resource-lod"
 owner = "core/resources"
 requirements = ["R-TEST-12.13"]
 acceptance = ["SetLOD is ignored on default-pool textures and returns previous LOD on managed textures with Wine-compatible GetLOD state"]
-status = "scaffolded"
+status = "partial"
+
+[[case.evidence]]
+lane = "builtin"
+arch = "x64"
+status = "passing"
+source = "tests/conformance/d3d9/evidence/sikarugir-cx-24.0.7-builtin-x64.json:1"
+summary = "Sikarugir-CX 24.0.7 builtin lane x64 2026-05-24 — passing in chunked runner snapshot."
 
 [[case]]
 executable = "dxmt9-d3d9-conformance.exe"
@@ -1787,7 +2501,14 @@ area = "resource-copy"
 owner = "core/resources"
 requirements = ["R-TEST-12.3", "R-TEST-12.13"]
 acceptance = ["UpdateTexture accepts system-memory source to default-pool destination and rejects reversed or null texture operands"]
-status = "scaffolded"
+status = "partial"
+
+[[case.evidence]]
+lane = "builtin"
+arch = "x64"
+status = "passing"
+source = "tests/conformance/d3d9/evidence/sikarugir-cx-24.0.7-builtin-x64.json:1"
+summary = "Sikarugir-CX 24.0.7 builtin lane x64 2026-05-24 — passing in chunked runner snapshot."
 
 [[case]]
 executable = "dxmt9-d3d9-conformance.exe"
@@ -1804,7 +2525,14 @@ area = "shared-handles"
 owner = "core/resources"
 requirements = ["R-TEST-12.3", "R-TEST-12.11"]
 acceptance = ["non-Ex shared-handle resource creation returns E_NOTIMPL without producing objects"]
-status = "scaffolded"
+status = "partial"
+
+[[case.evidence]]
+lane = "builtin"
+arch = "x64"
+status = "passing"
+source = "tests/conformance/d3d9/evidence/sikarugir-cx-24.0.7-builtin-x64.json:1"
+summary = "Sikarugir-CX 24.0.7 builtin lane x64 2026-05-24 — passing in chunked runner snapshot."
 
 [[case]]
 executable = "dxmt9-d3d9-conformance.exe"
@@ -1830,6 +2558,13 @@ status = "failing"
 source = "specs/gap.md:170"
 summary = "First device-backed app-local run reached the provider with failures in the Ex shared-handle policy group."
 
+[[case.evidence]]
+lane = "builtin"
+arch = "x64"
+status = "passing"
+source = "tests/conformance/d3d9/evidence/sikarugir-cx-24.0.7-builtin-x64.json:1"
+summary = "Sikarugir-CX 24.0.7 builtin lane x64 2026-05-24 — passing in chunked runner snapshot."
+
 [[case]]
 executable = "dxmt9-d3d9-conformance.exe"
 source_file = "d3d9_conformance_resource.c"
@@ -1845,7 +2580,14 @@ area = "d3d9ex-user-memory"
 owner = "core/resources"
 requirements = ["R-TEST-12.4", "R-TEST-12.13"]
 acceptance = ["Ex user-memory system-memory texture and offscreen surface creation succeed and LockRect exposes caller memory with Wine-compatible pitch"]
-status = "scaffolded"
+status = "partial"
+
+[[case.evidence]]
+lane = "builtin"
+arch = "x64"
+status = "passing"
+source = "tests/conformance/d3d9/evidence/sikarugir-cx-24.0.7-builtin-x64.json:1"
+summary = "Sikarugir-CX 24.0.7 builtin lane x64 2026-05-24 — passing in chunked runner snapshot."
 
 [[case]]
 executable = "dxmt9-d3d9-conformance.exe"
@@ -1862,7 +2604,14 @@ area = "d3d9ex-user-memory"
 owner = "core/resources"
 requirements = ["R-TEST-12.4", "R-TEST-12.13"]
 acceptance = ["Ex user-memory offscreen surfaces expose a GetDC DIB section backed by the caller allocation and GDI writes update that memory"]
-status = "scaffolded"
+status = "partial"
+
+[[case.evidence]]
+lane = "builtin"
+arch = "x64"
+status = "passing"
+source = "tests/conformance/d3d9/evidence/sikarugir-cx-24.0.7-builtin-x64.json:1"
+summary = "Sikarugir-CX 24.0.7 builtin lane x64 2026-05-24 — passing in chunked runner snapshot."
 
 [[case]]
 executable = "dxmt9-d3d9-conformance.exe"
@@ -1888,6 +2637,13 @@ status = "failing"
 source = "specs/gap.md:170"
 summary = "First device-backed app-local run reached the provider with failures in the creation-failure out-pointer group."
 
+[[case.evidence]]
+lane = "builtin"
+arch = "x64"
+status = "passing"
+source = "tests/conformance/d3d9/evidence/sikarugir-cx-24.0.7-builtin-x64.json:1"
+summary = "Sikarugir-CX 24.0.7 builtin lane x64 2026-05-24 — passing in chunked runner snapshot."
+
 [[case]]
 executable = "dxmt9-d3d9-conformance.exe"
 source_file = "d3d9_conformance_resource.c"
@@ -1903,7 +2659,14 @@ area = "render-target-creation"
 owner = "core/resources"
 requirements = ["R-TEST-12.3", "R-TEST-12.13"]
 acceptance = ["CreateRenderTarget rejects depth-stencil formats and CreateDepthStencilSurface rejects color formats while clearing failed out-pointers"]
-status = "scaffolded"
+status = "partial"
+
+[[case.evidence]]
+lane = "builtin"
+arch = "x64"
+status = "passing"
+source = "tests/conformance/d3d9/evidence/sikarugir-cx-24.0.7-builtin-x64.json:1"
+summary = "Sikarugir-CX 24.0.7 builtin lane x64 2026-05-24 — passing in chunked runner snapshot."
 
 [[case]]
 executable = "dxmt9-d3d9-conformance.exe"
@@ -1920,7 +2683,14 @@ area = "render-target-readback"
 owner = "core/resources"
 requirements = ["R-TEST-12.3", "R-TEST-12.13"]
 acceptance = ["GetRenderTargetData rejects null source or destination surfaces and accepts render-target to system-memory offscreen readback"]
-status = "scaffolded"
+status = "partial"
+
+[[case.evidence]]
+lane = "builtin"
+arch = "x64"
+status = "passing"
+source = "tests/conformance/d3d9/evidence/sikarugir-cx-24.0.7-builtin-x64.json:1"
+summary = "Sikarugir-CX 24.0.7 builtin lane x64 2026-05-24 — passing in chunked runner snapshot."
 
 [[case]]
 executable = "dxmt9-d3d9-conformance.exe"
@@ -1937,7 +2707,14 @@ area = "render-target-state"
 owner = "core/device"
 requirements = ["R-TEST-12.3", "R-TEST-12.13"]
 acceptance = ["render-target and depth-stencil surfaces created by another device are rejected with Wine-compatible HRESULTs"]
-status = "scaffolded"
+status = "partial"
+
+[[case.evidence]]
+lane = "builtin"
+arch = "x64"
+status = "passing"
+source = "tests/conformance/d3d9/evidence/sikarugir-cx-24.0.7-builtin-x64.json:1"
+summary = "Sikarugir-CX 24.0.7 builtin lane x64 2026-05-24 — passing in chunked runner snapshot."
 
 [[case]]
 executable = "dxmt9-d3d9-conformance.exe"
@@ -1954,7 +2731,14 @@ area = "d3d9ex-resources"
 owner = "core/resources"
 requirements = ["R-TEST-12.4", "R-TEST-12.13"]
 acceptance = ["CreateDepthStencilSurfaceEx validates null/unknown-format failures and exposes a depth-stencil surface description on success"]
-status = "scaffolded"
+status = "partial"
+
+[[case.evidence]]
+lane = "builtin"
+arch = "x64"
+status = "passing"
+source = "tests/conformance/d3d9/evidence/sikarugir-cx-24.0.7-builtin-x64.json:1"
+summary = "Sikarugir-CX 24.0.7 builtin lane x64 2026-05-24 — passing in chunked runner snapshot."
 
 [[case]]
 executable = "dxmt9-d3d9-device-lifetime.exe"
@@ -2308,7 +3092,14 @@ area = "resource-memory-accounting"
 owner = "core/resources"
 requirements = ["R-TEST-12.13"]
 acceptance = ["base D3D9 default-pool render-target texture allocation decreases GetAvailableTextureMem by Wine-compatible magnitude and accepts out-of-memory HRESULTs"]
-status = "scaffolded"
+status = "partial"
+
+[[case.evidence]]
+lane = "builtin"
+arch = "x64"
+status = "passing"
+source = "tests/conformance/d3d9/evidence/sikarugir-cx-24.0.7-builtin-x64.json:1"
+summary = "Sikarugir-CX 24.0.7 builtin lane x64 2026-05-24 — passing in chunked runner snapshot."
 
 [[case]]
 executable = "dxmt9-d3d9-conformance.exe"
@@ -2325,7 +3116,14 @@ area = "d3d9ex-resource-memory-accounting"
 owner = "core/resources"
 requirements = ["R-TEST-12.13"]
 acceptance = ["D3D9Ex default-pool render-target texture allocation keeps GetAvailableTextureMem stable within the Wine oracle tolerance and never reports D3DERR_OUTOFVIDEOMEMORY"]
-status = "scaffolded"
+status = "partial"
+
+[[case.evidence]]
+lane = "builtin"
+arch = "x64"
+status = "passing"
+source = "tests/conformance/d3d9/evidence/sikarugir-cx-24.0.7-builtin-x64.json:1"
+summary = "Sikarugir-CX 24.0.7 builtin lane x64 2026-05-24 — passing in chunked runner snapshot."
 
 [[case]]
 executable = "dxmt9-d3d9-conformance.exe"
@@ -2342,7 +3140,14 @@ area = "window-pixel-format"
 owner = "pe/windowing"
 requirements = ["R-TEST-12.14"]
 acceptance = ["device creation, draw, present, and alternate-window present preserve existing window pixel formats and do not assign a pixel format to a blank window"]
-status = "scaffolded"
+status = "partial"
+
+[[case.evidence]]
+lane = "builtin"
+arch = "x64"
+status = "passing"
+source = "tests/conformance/d3d9/evidence/sikarugir-cx-24.0.7-builtin-x64.json:1"
+summary = "Sikarugir-CX 24.0.7 builtin lane x64 2026-05-24 — passing in chunked runner snapshot."
 
 [[case]]
 executable = "dxmt9-d3d9-conformance.exe"
@@ -2359,7 +3164,14 @@ area = "device-creation"
 owner = "core/device"
 requirements = ["R-TEST-12.3", "R-TEST-12.18"]
 acceptance = ["GetCreationParameters reports adapter, device type, focus window, and creation flags from the creating call and rejects null out-pointers"]
-status = "scaffolded"
+status = "partial"
+
+[[case.evidence]]
+lane = "builtin"
+arch = "x64"
+status = "passing"
+source = "tests/conformance/d3d9/evidence/sikarugir-cx-24.0.7-builtin-x64.json:1"
+summary = "Sikarugir-CX 24.0.7 builtin lane x64 2026-05-24 — passing in chunked runner snapshot."
 
 [[case]]
 executable = "dxmt9-d3d9-conformance.exe"
@@ -2376,7 +3188,14 @@ area = "device-misc"
 owner = "core/device"
 requirements = ["R-TEST-12.3", "R-TEST-12.18"]
 acceptance = ["GetDirect3D null-pointer, AddRef, returned parent identity, GetDeviceCaps null-pointer, caps identity, available texture memory, and EvictManagedResources behavior match the Wine oracle"]
-status = "scaffolded"
+status = "partial"
+
+[[case.evidence]]
+lane = "builtin"
+arch = "x64"
+status = "passing"
+source = "tests/conformance/d3d9/evidence/sikarugir-cx-24.0.7-builtin-x64.json:1"
+summary = "Sikarugir-CX 24.0.7 builtin lane x64 2026-05-24 — passing in chunked runner snapshot."
 
 [[case]]
 executable = "dxmt9-d3d9-conformance.exe"
@@ -2393,7 +3212,14 @@ area = "device-misc"
 owner = "core/device"
 requirements = ["R-TEST-12.3", "R-TEST-12.18"]
 acceptance = ["GetRasterStatus accepts swapchain zero with Wine-compatible host variance and rejects null or out-of-range swapchain arguments"]
-status = "scaffolded"
+status = "partial"
+
+[[case.evidence]]
+lane = "builtin"
+arch = "x64"
+status = "passing"
+source = "tests/conformance/d3d9/evidence/sikarugir-cx-24.0.7-builtin-x64.json:1"
+summary = "Sikarugir-CX 24.0.7 builtin lane x64 2026-05-24 — passing in chunked runner snapshot."
 
 [[case]]
 executable = "dxmt9-d3d9-conformance.exe"
@@ -2410,7 +3236,14 @@ area = "device-lifecycle"
 owner = "core/device"
 requirements = ["R-TEST-12.3", "R-TEST-12.18"]
 acceptance = ["two concurrent IDirect3DDevice9 instances created from the same factory keep independent render state and report the same parent factory"]
-status = "scaffolded"
+status = "partial"
+
+[[case.evidence]]
+lane = "builtin"
+arch = "x64"
+status = "passing"
+source = "tests/conformance/d3d9/evidence/sikarugir-cx-24.0.7-builtin-x64.json:1"
+summary = "Sikarugir-CX 24.0.7 builtin lane x64 2026-05-24 — passing in chunked runner snapshot."
 
 [[case]]
 executable = "dxmt9-d3d9-conformance.exe"
@@ -2427,7 +3260,14 @@ area = "display-mode"
 owner = "core/device"
 requirements = ["R-TEST-12.3", "R-TEST-12.14"]
 acceptance = ["CreateDevice with split focus/device windows under D3DCREATE_NOWINDOWCHANGES preserves the focus HWND across a windowed Reset"]
-status = "scaffolded"
+status = "partial"
+
+[[case.evidence]]
+lane = "builtin"
+arch = "x64"
+status = "passing"
+source = "tests/conformance/d3d9/evidence/sikarugir-cx-24.0.7-builtin-x64.json:1"
+summary = "Sikarugir-CX 24.0.7 builtin lane x64 2026-05-24 — passing in chunked runner snapshot."
 
 [[case]]
 executable = "dxmt9-d3d9-conformance.exe"
@@ -2444,7 +3284,14 @@ area = "display-mode"
 owner = "core/wsi"
 requirements = ["R-TEST-12.3", "R-TEST-12.14"]
 acceptance = ["fullscreen CreateDevice records hFocusWindow and a fullscreen-to-fullscreen Reset preserves the implicit swapchain binding"]
-status = "scaffolded"
+status = "partial"
+
+[[case.evidence]]
+lane = "builtin"
+arch = "x64"
+status = "passing"
+source = "tests/conformance/d3d9/evidence/sikarugir-cx-24.0.7-builtin-x64.json:1"
+summary = "Sikarugir-CX 24.0.7 builtin lane x64 2026-05-24 — passing in chunked runner snapshot."
 
 [[case]]
 executable = "dxmt9-d3d9-conformance.exe"
@@ -2461,7 +3308,14 @@ area = "window-policy"
 owner = "core/wsi"
 requirements = ["R-TEST-12.3", "R-TEST-12.14"]
 acceptance = ["GetPresentParameters round-trips hDeviceWindow and back-buffer dimensions across a Reset that re-uses the same focus window, and rejects a null out-pointer"]
-status = "scaffolded"
+status = "partial"
+
+[[case.evidence]]
+lane = "builtin"
+arch = "x64"
+status = "passing"
+source = "tests/conformance/d3d9/evidence/sikarugir-cx-24.0.7-builtin-x64.json:1"
+summary = "Sikarugir-CX 24.0.7 builtin lane x64 2026-05-24 — passing in chunked runner snapshot."
 
 [[case]]
 executable = "dxmt9-d3d9-conformance.exe"
@@ -2478,7 +3332,14 @@ area = "vertex-buffer"
 owner = "core/resources"
 requirements = ["R-TEST-12.13", "R-TEST-12.14"]
 acceptance = ["D3DUSAGE_DYNAMIC | WRITEONLY vertex buffers in D3DPOOL_DEFAULT accept DISCARD and NOOVERWRITE locks and round-trip Size, Pool, and Usage through GetDesc"]
-status = "scaffolded"
+status = "partial"
+
+[[case.evidence]]
+lane = "builtin"
+arch = "x64"
+status = "passing"
+source = "tests/conformance/d3d9/evidence/sikarugir-cx-24.0.7-builtin-x64.json:1"
+summary = "Sikarugir-CX 24.0.7 builtin lane x64 2026-05-24 — passing in chunked runner snapshot."
 
 [[case]]
 executable = "dxmt9-d3d9-conformance.exe"
@@ -2495,7 +3356,14 @@ area = "volume-texture"
 owner = "core/resources"
 requirements = ["R-TEST-12.13", "R-TEST-12.14"]
 acceptance = ["DXT1 volume textures expose block-aligned GetLevelDesc dimensions and LockBox returns a RowPitch that is a positive multiple of the 8-byte DXT1 block size"]
-status = "scaffolded"
+status = "partial"
+
+[[case.evidence]]
+lane = "builtin"
+arch = "x64"
+status = "passing"
+source = "tests/conformance/d3d9/evidence/sikarugir-cx-24.0.7-builtin-x64.json:1"
+summary = "Sikarugir-CX 24.0.7 builtin lane x64 2026-05-24 — passing in chunked runner snapshot."
 
 [[case]]
 executable = "dxmt9-d3d9-conformance.exe"
@@ -2512,7 +3380,14 @@ area = "d3d9ex"
 owner = "core/resources"
 requirements = ["R-TEST-12.3", "R-TEST-12.13"]
 acceptance = ["CreateOffscreenPlainSurfaceEx with user memory accepts D3DFMT_X8R8G8B8 with a round-tripping surface descriptor and rejects D3DFMT_DXT1 with D3DERR_INVALIDCALL and a cleared out-pointer"]
-status = "scaffolded"
+status = "partial"
+
+[[case.evidence]]
+lane = "builtin"
+arch = "x64"
+status = "passing"
+source = "tests/conformance/d3d9/evidence/sikarugir-cx-24.0.7-builtin-x64.json:1"
+summary = "Sikarugir-CX 24.0.7 builtin lane x64 2026-05-24 — passing in chunked runner snapshot."
 
 [[case]]
 executable = "dxmt9-d3d9-conformance.exe"
@@ -2529,7 +3404,14 @@ area = "d3d9ex"
 owner = "core/wsi"
 requirements = ["R-TEST-12.3", "R-TEST-12.10"]
 acceptance = ["IDirect3DSwapChain9Ex::GetDisplayModeEx fills Size, an X8R8G8B8/A8R8G8B8/R5G6B5 Format, and one of four D3DDISPLAYROTATION values; NULL out-pointer is rejected"]
-status = "scaffolded"
+status = "partial"
+
+[[case.evidence]]
+lane = "builtin"
+arch = "x64"
+status = "passing"
+source = "tests/conformance/d3d9/evidence/sikarugir-cx-24.0.7-builtin-x64.json:1"
+summary = "Sikarugir-CX 24.0.7 builtin lane x64 2026-05-24 — passing in chunked runner snapshot."
 
 [[case]]
 executable = "dxmt9-d3d9-conformance.exe"
@@ -2546,7 +3428,14 @@ area = "d3d9ex"
 owner = "core/factory"
 requirements = ["R-TEST-12.3"]
 acceptance = ["IDirect3D9Ex::GetAdapterLUID returns a non-zero LUID for the default adapter and rejects out-of-range ordinals and NULL out-pointers"]
-status = "scaffolded"
+status = "partial"
+
+[[case.evidence]]
+lane = "builtin"
+arch = "x64"
+status = "passing"
+source = "tests/conformance/d3d9/evidence/sikarugir-cx-24.0.7-builtin-x64.json:1"
+summary = "Sikarugir-CX 24.0.7 builtin lane x64 2026-05-24 — passing in chunked runner snapshot."
 
 [[case]]
 executable = "dxmt9-d3d9-conformance.exe"
@@ -2563,7 +3452,14 @@ area = "d3d9ex"
 owner = "core/factory"
 requirements = ["R-TEST-12.3", "R-TEST-12.10"]
 acceptance = ["IDirect3D9Ex::GetAdapterDisplayModeEx fills Size and a valid rotation, tolerates a NULL rotation out-pointer, and rejects invalid adapter ordinals"]
-status = "scaffolded"
+status = "partial"
+
+[[case.evidence]]
+lane = "builtin"
+arch = "x64"
+status = "passing"
+source = "tests/conformance/d3d9/evidence/sikarugir-cx-24.0.7-builtin-x64.json:1"
+summary = "Sikarugir-CX 24.0.7 builtin lane x64 2026-05-24 — passing in chunked runner snapshot."
 
 [[case]]
 executable = "dxmt9-d3d9-conformance.exe"
@@ -2580,7 +3476,14 @@ area = "swapchain"
 owner = "core/wsi"
 requirements = ["R-TEST-12.10"]
 acceptance = ["ResetEx with new BackBufferWidth/Height resizes the implicit swapchain and the new backbuffer GetDesc reports the new dimensions; non-Ex Reset with mismatched present parameters resolves to D3D_OK or D3DERR_INVALIDCALL"]
-status = "scaffolded"
+status = "partial"
+
+[[case.evidence]]
+lane = "builtin"
+arch = "x64"
+status = "passing"
+source = "tests/conformance/d3d9/evidence/sikarugir-cx-24.0.7-builtin-x64.json:1"
+summary = "Sikarugir-CX 24.0.7 builtin lane x64 2026-05-24 — passing in chunked runner snapshot."
 
 [[case]]
 executable = "dxmt9-d3d9-conformance.exe"
@@ -2597,7 +3500,14 @@ area = "texture-format"
 owner = "core/resources"
 requirements = ["R-TEST-12.13", "R-TEST-12.14"]
 acceptance = ["IDirect3D9::CheckDeviceFormat reports D3DFMT_R32F texture support on supporting adapters and a 4x4 managed-pool R32F texture locks with Pitch >= 16 bytes"]
-status = "scaffolded"
+status = "partial"
+
+[[case.evidence]]
+lane = "builtin"
+arch = "x64"
+status = "passing"
+source = "tests/conformance/d3d9/evidence/sikarugir-cx-24.0.7-builtin-x64.json:1"
+summary = "Sikarugir-CX 24.0.7 builtin lane x64 2026-05-24 — passing in chunked runner snapshot."
 
 [[case]]
 executable = "dxmt9-d3d9-conformance.exe"
@@ -2614,7 +3524,14 @@ area = "texture-format"
 owner = "core/resources"
 requirements = ["R-TEST-12.13", "R-TEST-12.14"]
 acceptance = ["IDirect3D9::CheckDeviceFormat reports D3DFMT_G16R16 texture support on supporting adapters and a 4x4 managed-pool G16R16 texture locks with Pitch >= 16 bytes"]
-status = "scaffolded"
+status = "partial"
+
+[[case.evidence]]
+lane = "builtin"
+arch = "x64"
+status = "passing"
+source = "tests/conformance/d3d9/evidence/sikarugir-cx-24.0.7-builtin-x64.json:1"
+summary = "Sikarugir-CX 24.0.7 builtin lane x64 2026-05-24 — passing in chunked runner snapshot."
 
 [[case]]
 executable = "dxmt9-d3d9-conformance.exe"
@@ -2631,7 +3548,14 @@ area = "volume-texture"
 owner = "core/resources"
 requirements = ["R-TEST-12.13", "R-TEST-12.14"]
 acceptance = ["IDirect3D9::CheckDeviceFormat reports D3DFMT_V16U16 volume-texture support on supporting adapters and a 4x4x2 managed-pool V16U16 volume locks with positive row and slice pitch divisible by 4"]
-status = "scaffolded"
+status = "partial"
+
+[[case.evidence]]
+lane = "builtin"
+arch = "x64"
+status = "passing"
+source = "tests/conformance/d3d9/evidence/sikarugir-cx-24.0.7-builtin-x64.json:1"
+summary = "Sikarugir-CX 24.0.7 builtin lane x64 2026-05-24 — passing in chunked runner snapshot."
 
 [[case]]
 executable = "dxmt9-d3d9-conformance.exe"
@@ -2648,7 +3572,14 @@ area = "format-caps"
 owner = "core/resources"
 requirements = ["R-TEST-12.3", "R-TEST-12.13"]
 acceptance = ["IDirect3D9::CheckDeviceFormat with D3DUSAGE_QUERY_SRGBREAD on D3DFMT_A8R8G8B8 textures returns S_OK or D3DERR_NOTAVAILABLE"]
-status = "scaffolded"
+status = "partial"
+
+[[case.evidence]]
+lane = "builtin"
+arch = "x64"
+status = "passing"
+source = "tests/conformance/d3d9/evidence/sikarugir-cx-24.0.7-builtin-x64.json:1"
+summary = "Sikarugir-CX 24.0.7 builtin lane x64 2026-05-24 — passing in chunked runner snapshot."
 
 [[case]]
 executable = "dxmt9-d3d9-conformance.exe"
@@ -2665,7 +3596,14 @@ area = "format-caps"
 owner = "core/resources"
 requirements = ["R-TEST-12.3", "R-TEST-12.13"]
 acceptance = ["IDirect3D9::CheckDeviceFormat with D3DUSAGE_QUERY_SRGBWRITE on D3DFMT_A8R8G8B8 textures returns S_OK or D3DERR_NOTAVAILABLE"]
-status = "scaffolded"
+status = "partial"
+
+[[case.evidence]]
+lane = "builtin"
+arch = "x64"
+status = "passing"
+source = "tests/conformance/d3d9/evidence/sikarugir-cx-24.0.7-builtin-x64.json:1"
+summary = "Sikarugir-CX 24.0.7 builtin lane x64 2026-05-24 — passing in chunked runner snapshot."
 
 [[case]]
 executable = "dxmt9-d3d9-conformance.exe"
@@ -2682,7 +3620,14 @@ area = "format-caps"
 owner = "core/resources"
 requirements = ["R-TEST-12.3", "R-TEST-12.13"]
 acceptance = ["IDirect3D9::CheckDeviceFormat with D3DUSAGE_QUERY_SRGBREAD on D3DFMT_A8R8G8B8 volume textures returns S_OK or D3DERR_NOTAVAILABLE"]
-status = "scaffolded"
+status = "partial"
+
+[[case.evidence]]
+lane = "builtin"
+arch = "x64"
+status = "passing"
+source = "tests/conformance/d3d9/evidence/sikarugir-cx-24.0.7-builtin-x64.json:1"
+summary = "Sikarugir-CX 24.0.7 builtin lane x64 2026-05-24 — passing in chunked runner snapshot."
 
 [[case]]
 executable = "dxmt9-d3d9-conformance.exe"
@@ -2699,7 +3644,14 @@ area = "volume-texture"
 owner = "core/resources"
 requirements = ["R-TEST-12.13", "R-TEST-12.14"]
 acceptance = ["IDirect3D9::CheckDeviceFormat reports D3DFMT_DXT1 volume-texture support on supporting adapters and a 4x4x4 managed-pool DXT1 volume locks with RowPitch >= 8 bytes (one DXT1 block per row)"]
-status = "scaffolded"
+status = "partial"
+
+[[case.evidence]]
+lane = "builtin"
+arch = "x64"
+status = "passing"
+source = "tests/conformance/d3d9/evidence/sikarugir-cx-24.0.7-builtin-x64.json:1"
+summary = "Sikarugir-CX 24.0.7 builtin lane x64 2026-05-24 — passing in chunked runner snapshot."
 
 [[case]]
 executable = "dxmt9-d3d9-conformance.exe"
@@ -2716,7 +3668,14 @@ area = "format-caps"
 owner = "core/resources"
 requirements = ["R-TEST-12.3", "R-TEST-12.13"]
 acceptance = ["IDirect3D9::CheckDeviceFormat for D3DFMT_V8U8, D3DFMT_V16U16, and D3DFMT_Q8W8V8U8 as 2D textures returns either S_OK or D3DERR_NOTAVAILABLE for each format"]
-status = "scaffolded"
+status = "partial"
+
+[[case.evidence]]
+lane = "builtin"
+arch = "x64"
+status = "passing"
+source = "tests/conformance/d3d9/evidence/sikarugir-cx-24.0.7-builtin-x64.json:1"
+summary = "Sikarugir-CX 24.0.7 builtin lane x64 2026-05-24 — passing in chunked runner snapshot."
 
 [[case]]
 executable = "dxmt9-d3d9-conformance.exe"
@@ -2733,7 +3692,14 @@ area = "render-state"
 owner = "core/device"
 requirements = ["R-TEST-12.9", "R-TEST-12.14"]
 acceptance = ["SetRenderState(D3DRS_ZENABLE) round-trips through GetRenderState and viewport MinZ/MaxZ outside [0,1] is still accepted by SetViewport"]
-status = "scaffolded"
+status = "partial"
+
+[[case.evidence]]
+lane = "builtin"
+arch = "x64"
+status = "passing"
+source = "tests/conformance/d3d9/evidence/sikarugir-cx-24.0.7-builtin-x64.json:1"
+summary = "Sikarugir-CX 24.0.7 builtin lane x64 2026-05-24 — passing in chunked runner snapshot."
 
 [[case]]
 executable = "dxmt9-d3d9-conformance.exe"
@@ -2750,7 +3716,14 @@ area = "depth-stencil"
 owner = "core/resources"
 requirements = ["R-TEST-12.13", "R-TEST-12.14"]
 acceptance = ["binding a depth-stencil surface smaller than the bound render target returns a Wine-compatible HRESULT (S_OK or D3DERR_INVALIDCALL) and never crashes"]
-status = "scaffolded"
+status = "partial"
+
+[[case.evidence]]
+lane = "builtin"
+arch = "x64"
+status = "passing"
+source = "tests/conformance/d3d9/evidence/sikarugir-cx-24.0.7-builtin-x64.json:1"
+summary = "Sikarugir-CX 24.0.7 builtin lane x64 2026-05-24 — passing in chunked runner snapshot."
 
 [[case]]
 executable = "dxmt9-d3d9-conformance.exe"
@@ -2767,7 +3740,14 @@ area = "depth-stencil"
 owner = "core/encoder"
 requirements = ["R-TEST-12.13", "R-TEST-12.14"]
 acceptance = ["Clear with D3DCLEAR_ZBUFFER succeeds when a depth surface is bound and rejects with D3DERR_INVALIDCALL after SetDepthStencilSurface(NULL)"]
-status = "scaffolded"
+status = "partial"
+
+[[case.evidence]]
+lane = "builtin"
+arch = "x64"
+status = "passing"
+source = "tests/conformance/d3d9/evidence/sikarugir-cx-24.0.7-builtin-x64.json:1"
+summary = "Sikarugir-CX 24.0.7 builtin lane x64 2026-05-24 — passing in chunked runner snapshot."
 
 [[case]]
 executable = "dxmt9-d3d9-conformance.exe"
@@ -2784,7 +3764,14 @@ area = "depth-stencil"
 owner = "core/device"
 requirements = ["R-TEST-12.13", "R-TEST-12.14"]
 acceptance = ["Reset with EnableAutoDepthStencil=FALSE makes GetDepthStencilSurface return D3DERR_NOTFOUND, and a follow-up Reset with auto-depth-stencil restores the implicit DS surface"]
-status = "scaffolded"
+status = "partial"
+
+[[case.evidence]]
+lane = "builtin"
+arch = "x64"
+status = "passing"
+source = "tests/conformance/d3d9/evidence/sikarugir-cx-24.0.7-builtin-x64.json:1"
+summary = "Sikarugir-CX 24.0.7 builtin lane x64 2026-05-24 — passing in chunked runner snapshot."
 
 [[case]]
 executable = "dxmt9-d3d9-conformance.exe"
@@ -2801,7 +3788,14 @@ area = "format-caps"
 owner = "core/resources"
 requirements = ["R-TEST-12.3", "R-TEST-12.13"]
 acceptance = ["CheckDeviceFormat reports a Wine-compatible HRESULT (S_OK or D3DERR_NOTAVAILABLE) when querying the vendor depth-bounds D3DFMT_NVDB format"]
-status = "scaffolded"
+status = "partial"
+
+[[case.evidence]]
+lane = "builtin"
+arch = "x64"
+status = "passing"
+source = "tests/conformance/d3d9/evidence/sikarugir-cx-24.0.7-builtin-x64.json:1"
+summary = "Sikarugir-CX 24.0.7 builtin lane x64 2026-05-24 — passing in chunked runner snapshot."
 
 [[case]]
 executable = "dxmt9-d3d9-conformance.exe"
@@ -2818,7 +3812,14 @@ area = "render-state"
 owner = "core/device"
 requirements = ["R-TEST-12.9"]
 acceptance = ["SetRenderState(D3DRS_ZENABLE) accepts D3DZB_FALSE, D3DZB_TRUE, and D3DZB_USEW and round-trips each value through GetRenderState"]
-status = "scaffolded"
+status = "partial"
+
+[[case.evidence]]
+lane = "builtin"
+arch = "x64"
+status = "passing"
+source = "tests/conformance/d3d9/evidence/sikarugir-cx-24.0.7-builtin-x64.json:1"
+summary = "Sikarugir-CX 24.0.7 builtin lane x64 2026-05-24 — passing in chunked runner snapshot."
 
 [[case]]
 executable = "dxmt9-d3d9-conformance.exe"
@@ -2835,7 +3836,14 @@ area = "render-state"
 owner = "core/device"
 requirements = ["R-TEST-12.9"]
 acceptance = ["SetRenderState(D3DRS_ZWRITEENABLE) defaults to TRUE after CreateDevice and round-trips both TRUE and FALSE through GetRenderState"]
-status = "scaffolded"
+status = "partial"
+
+[[case.evidence]]
+lane = "builtin"
+arch = "x64"
+status = "passing"
+source = "tests/conformance/d3d9/evidence/sikarugir-cx-24.0.7-builtin-x64.json:1"
+summary = "Sikarugir-CX 24.0.7 builtin lane x64 2026-05-24 — passing in chunked runner snapshot."
 
 [[case]]
 executable = "dxmt9-d3d9-conformance.exe"
@@ -2852,7 +3860,14 @@ area = "depth-stencil"
 owner = "core/resources"
 requirements = ["R-TEST-12.13", "R-TEST-12.14"]
 acceptance = ["CheckDeviceMultiSampleType for D3DFMT_D24S8 with D3DMULTISAMPLE_2_SAMPLES reports a Wine-compatible HRESULT and a successful create matches the quality bound"]
-status = "scaffolded"
+status = "partial"
+
+[[case.evidence]]
+lane = "builtin"
+arch = "x64"
+status = "passing"
+source = "tests/conformance/d3d9/evidence/sikarugir-cx-24.0.7-builtin-x64.json:1"
+summary = "Sikarugir-CX 24.0.7 builtin lane x64 2026-05-24 — passing in chunked runner snapshot."
 
 [[case]]
 executable = "dxmt9-d3d9-conformance.exe"
@@ -2869,7 +3884,14 @@ area = "render-state"
 owner = "core/encoder"
 requirements = ["R-TEST-12.9", "R-TEST-12.14"]
 acceptance = ["SetRenderState for D3DRS_DEPTHBIAS and D3DRS_SLOPESCALEDEPTHBIAS round-trips through GetRenderState and SetViewport accepts MinZ/MaxZ outside [0,1]"]
-status = "scaffolded"
+status = "partial"
+
+[[case.evidence]]
+lane = "builtin"
+arch = "x64"
+status = "passing"
+source = "tests/conformance/d3d9/evidence/sikarugir-cx-24.0.7-builtin-x64.json:1"
+summary = "Sikarugir-CX 24.0.7 builtin lane x64 2026-05-24 — passing in chunked runner snapshot."
 
 [[case]]
 executable = "dxmt9-d3d9-conformance.exe"
@@ -2886,7 +3908,14 @@ area = "clear"
 owner = "core/encoder"
 requirements = ["R-TEST-12.14"]
 acceptance = ["Clear with D3DCLEAR_TARGET succeeds for Count=0+NULL rects and rejects Count=0+non-NULL rects and Count>0+NULL rects with D3DERR_INVALIDCALL"]
-status = "scaffolded"
+status = "partial"
+
+[[case.evidence]]
+lane = "builtin"
+arch = "x64"
+status = "passing"
+source = "tests/conformance/d3d9/evidence/sikarugir-cx-24.0.7-builtin-x64.json:1"
+summary = "Sikarugir-CX 24.0.7 builtin lane x64 2026-05-24 — passing in chunked runner snapshot."
 
 [[case]]
 executable = "dxmt9-d3d9-conformance.exe"
@@ -2903,7 +3932,14 @@ area = "render-target"
 owner = "core/encoder"
 requirements = ["R-TEST-12.13", "R-TEST-12.14"]
 acceptance = ["Clear against a smaller render-target returns a Wine-compatible HRESULT (S_OK or D3DERR_INVALIDCALL) and never crashes"]
-status = "scaffolded"
+status = "partial"
+
+[[case.evidence]]
+lane = "builtin"
+arch = "x64"
+status = "passing"
+source = "tests/conformance/d3d9/evidence/sikarugir-cx-24.0.7-builtin-x64.json:1"
+summary = "Sikarugir-CX 24.0.7 builtin lane x64 2026-05-24 — passing in chunked runner snapshot."
 
 [[case]]
 executable = "dxmt9-d3d9-conformance.exe"
@@ -2920,7 +3956,14 @@ area = "surface"
 owner = "core/resources"
 requirements = ["R-TEST-12.13", "R-TEST-12.14"]
 acceptance = ["ColorFill succeeds for A8R8G8B8 default-pool surfaces and rejects compressed (DXT1) and SYSTEMMEM surfaces with D3DERR_INVALIDCALL"]
-status = "scaffolded"
+status = "partial"
+
+[[case.evidence]]
+lane = "builtin"
+arch = "x64"
+status = "passing"
+source = "tests/conformance/d3d9/evidence/sikarugir-cx-24.0.7-builtin-x64.json:1"
+summary = "Sikarugir-CX 24.0.7 builtin lane x64 2026-05-24 — passing in chunked runner snapshot."
 
 [[case]]
 executable = "dxmt9-d3d9-conformance.exe"
@@ -2937,7 +3980,14 @@ area = "surface"
 owner = "core/resources"
 requirements = ["R-TEST-12.13", "R-TEST-12.14"]
 acceptance = ["CreateOffscreenPlainSurface accepts DEFAULT pool with round-tripping desc and rejects MANAGED pool with D3DERR_INVALIDCALL"]
-status = "scaffolded"
+status = "partial"
+
+[[case.evidence]]
+lane = "builtin"
+arch = "x64"
+status = "passing"
+source = "tests/conformance/d3d9/evidence/sikarugir-cx-24.0.7-builtin-x64.json:1"
+summary = "Sikarugir-CX 24.0.7 builtin lane x64 2026-05-24 — passing in chunked runner snapshot."
 
 [[case]]
 executable = "dxmt9-d3d9-conformance.exe"
@@ -2954,7 +4004,14 @@ area = "format-caps"
 owner = "core/resources"
 requirements = ["R-TEST-12.3", "R-TEST-12.13"]
 acceptance = ["CheckDeviceFormat for D3DFMT_D24S8 depth-stencil returns S_OK and D3DFMT_S8_LOCKABLE returns a Wine-compatible HRESULT"]
-status = "scaffolded"
+status = "partial"
+
+[[case.evidence]]
+lane = "builtin"
+arch = "x64"
+status = "passing"
+source = "tests/conformance/d3d9/evidence/sikarugir-cx-24.0.7-builtin-x64.json:1"
+summary = "Sikarugir-CX 24.0.7 builtin lane x64 2026-05-24 — passing in chunked runner snapshot."
 
 [[case]]
 executable = "dxmt9-d3d9-conformance.exe"
@@ -2971,7 +4028,14 @@ area = "surface"
 owner = "core/resources"
 requirements = ["R-TEST-12.13", "R-TEST-12.14"]
 acceptance = ["UpdateSurface from SYSTEMMEM to DEFAULT succeeds; rejects SYSTEMMEM destination and rejects mismatched A8R8G8B8 / X8R8G8B8 with D3DERR_INVALIDCALL"]
-status = "scaffolded"
+status = "partial"
+
+[[case.evidence]]
+lane = "builtin"
+arch = "x64"
+status = "passing"
+source = "tests/conformance/d3d9/evidence/sikarugir-cx-24.0.7-builtin-x64.json:1"
+summary = "Sikarugir-CX 24.0.7 builtin lane x64 2026-05-24 — passing in chunked runner snapshot."
 
 [[case]]
 executable = "dxmt9-d3d9-conformance.exe"
@@ -2988,7 +4052,14 @@ area = "swapchain"
 owner = "core/wsi"
 requirements = ["R-TEST-12.10"]
 acceptance = ["Present with all-NULL args succeeds and GetBackBuffer(0) returns a surface whose desc width/height are positive and consistent with the present parameters"]
-status = "scaffolded"
+status = "partial"
+
+[[case.evidence]]
+lane = "builtin"
+arch = "x64"
+status = "passing"
+source = "tests/conformance/d3d9/evidence/sikarugir-cx-24.0.7-builtin-x64.json:1"
+summary = "Sikarugir-CX 24.0.7 builtin lane x64 2026-05-24 — passing in chunked runner snapshot."
 
 [[case]]
 executable = "dxmt9-d3d9-conformance.exe"
@@ -3005,7 +4076,14 @@ area = "render-state"
 owner = "core/device"
 requirements = ["R-TEST-12.9"]
 acceptance = ["D3DRS_SHADEMODE default is D3DSHADE_GOURAUD and SetRenderState round-trips D3DSHADE_FLAT and D3DSHADE_PHONG through GetRenderState"]
-status = "scaffolded"
+status = "partial"
+
+[[case.evidence]]
+lane = "builtin"
+arch = "x64"
+status = "passing"
+source = "tests/conformance/d3d9/evidence/sikarugir-cx-24.0.7-builtin-x64.json:1"
+summary = "Sikarugir-CX 24.0.7 builtin lane x64 2026-05-24 — passing in chunked runner snapshot."
 
 [[case]]
 executable = "dxmt9-d3d9-conformance.exe"
@@ -3022,7 +4100,14 @@ area = "render-state"
 owner = "core/device"
 requirements = ["R-TEST-12.9", "R-TEST-12.14"]
 acceptance = ["D3DRS_LIGHTING default is TRUE; SetLight + LightEnable + GetLight round-trips a D3DLIGHT_DIRECTIONAL light; SetLight(NULL) returns D3DERR_INVALIDCALL"]
-status = "scaffolded"
+status = "partial"
+
+[[case.evidence]]
+lane = "builtin"
+arch = "x64"
+status = "passing"
+source = "tests/conformance/d3d9/evidence/sikarugir-cx-24.0.7-builtin-x64.json:1"
+summary = "Sikarugir-CX 24.0.7 builtin lane x64 2026-05-24 — passing in chunked runner snapshot."
 
 [[case]]
 executable = "dxmt9-d3d9-conformance.exe"
@@ -3039,7 +4124,14 @@ area = "transform-state"
 owner = "core/device"
 requirements = ["R-TEST-12.9"]
 acceptance = ["SetTransform/GetTransform round-trips byte-equal D3DMATRIX for D3DTS_WORLD, D3DTS_VIEW, and D3DTS_PROJECTION; unknown indices are accepted with S_OK"]
-status = "scaffolded"
+status = "partial"
+
+[[case.evidence]]
+lane = "builtin"
+arch = "x64"
+status = "passing"
+source = "tests/conformance/d3d9/evidence/sikarugir-cx-24.0.7-builtin-x64.json:1"
+summary = "Sikarugir-CX 24.0.7 builtin lane x64 2026-05-24 — passing in chunked runner snapshot."
 
 [[case]]
 executable = "dxmt9-d3d9-conformance.exe"
@@ -3056,7 +4148,14 @@ area = "resource-lifetime"
 owner = "core/resources"
 requirements = ["R-TEST-12.13", "R-TEST-12.14"]
 acceptance = ["SetStreamSource transfers an internal reference such that GetStreamSource still returns the original vertex buffer after the caller releases its reference"]
-status = "scaffolded"
+status = "partial"
+
+[[case.evidence]]
+lane = "builtin"
+arch = "x64"
+status = "passing"
+source = "tests/conformance/d3d9/evidence/sikarugir-cx-24.0.7-builtin-x64.json:1"
+summary = "Sikarugir-CX 24.0.7 builtin lane x64 2026-05-24 — passing in chunked runner snapshot."
 
 [[case]]
 executable = "dxmt9-d3d9-conformance.exe"
@@ -3073,7 +4172,14 @@ area = "resource-lifetime"
 owner = "core/resources"
 requirements = ["R-TEST-12.13", "R-TEST-12.14"]
 acceptance = ["EvictManagedResources returns S_OK while a managed texture is bound and the texture remains usable through GetLevelDesc after eviction"]
-status = "scaffolded"
+status = "partial"
+
+[[case.evidence]]
+lane = "builtin"
+arch = "x64"
+status = "passing"
+source = "tests/conformance/d3d9/evidence/sikarugir-cx-24.0.7-builtin-x64.json:1"
+summary = "Sikarugir-CX 24.0.7 builtin lane x64 2026-05-24 — passing in chunked runner snapshot."
 
 [[case]]
 executable = "dxmt9-d3d9-conformance.exe"
@@ -3090,7 +4196,14 @@ area = "texture-update"
 owner = "core/resources"
 requirements = ["R-TEST-12.13", "R-TEST-12.14"]
 acceptance = ["AddDirtyRect on MANAGED textures accepts NULL and valid rects, rejects inverted rects with D3DERR_INVALIDCALL, and rejects DEFAULT-pool textures with D3DERR_INVALIDCALL"]
-status = "scaffolded"
+status = "partial"
+
+[[case.evidence]]
+lane = "builtin"
+arch = "x64"
+status = "passing"
+source = "tests/conformance/d3d9/evidence/sikarugir-cx-24.0.7-builtin-x64.json:1"
+summary = "Sikarugir-CX 24.0.7 builtin lane x64 2026-05-24 — passing in chunked runner snapshot."
 
 [[case]]
 executable = "dxmt9-d3d9-conformance.exe"
@@ -3107,7 +4220,14 @@ area = "swapchain"
 owner = "core/wsi"
 requirements = ["R-TEST-12.10", "R-TEST-12.14"]
 acceptance = ["GetFrontBufferData against a desktop-sized SYSTEMMEM surface returns a Wine-compatible HRESULT (S_OK / D3DERR_INVALIDCALL / D3DERR_DEVICELOST) and rejects NULL destination with D3DERR_INVALIDCALL"]
-status = "scaffolded"
+status = "partial"
+
+[[case.evidence]]
+lane = "builtin"
+arch = "x64"
+status = "passing"
+source = "tests/conformance/d3d9/evidence/sikarugir-cx-24.0.7-builtin-x64.json:1"
+summary = "Sikarugir-CX 24.0.7 builtin lane x64 2026-05-24 — passing in chunked runner snapshot."
 
 [[case]]
 executable = "dxmt9-d3d9-conformance.exe"
@@ -3124,7 +4244,14 @@ area = "render-target"
 owner = "core/resources"
 requirements = ["R-TEST-12.13", "R-TEST-12.14"]
 acceptance = ["binding a multisampled depth-stencil to a non-multisampled render target is rejected with D3DERR_INVALIDCALL when 2x multisample is supported"]
-status = "scaffolded"
+status = "partial"
+
+[[case.evidence]]
+lane = "builtin"
+arch = "x64"
+status = "passing"
+source = "tests/conformance/d3d9/evidence/sikarugir-cx-24.0.7-builtin-x64.json:1"
+summary = "Sikarugir-CX 24.0.7 builtin lane x64 2026-05-24 — passing in chunked runner snapshot."
 
 [[case]]
 executable = "dxmt9-d3d9-conformance.exe"
@@ -3141,7 +4268,14 @@ area = "vertex-buffer"
 owner = "core/resources"
 requirements = ["R-TEST-12.13", "R-TEST-12.14"]
 acceptance = ["MANAGED vertex buffers Lock/Unlock without an explicit AddDirtyRect dance and DYNAMIC|WRITEONLY DEFAULT-pool buffers accept DISCARD locks"]
-status = "scaffolded"
+status = "partial"
+
+[[case.evidence]]
+lane = "builtin"
+arch = "x64"
+status = "passing"
+source = "tests/conformance/d3d9/evidence/sikarugir-cx-24.0.7-builtin-x64.json:1"
+summary = "Sikarugir-CX 24.0.7 builtin lane x64 2026-05-24 — passing in chunked runner snapshot."
 
 [[case]]
 executable = "dxmt9-d3d9-conformance.exe"
@@ -3158,7 +4292,14 @@ area = "format-caps"
 owner = "core/resources"
 requirements = ["R-TEST-12.3", "R-TEST-12.13"]
 acceptance = ["CheckDeviceFormat returns a Wine-compatible HRESULT (S_OK or D3DERR_NOTAVAILABLE) for YUY2 and UYVY offscreen surfaces"]
-status = "scaffolded"
+status = "partial"
+
+[[case.evidence]]
+lane = "builtin"
+arch = "x64"
+status = "passing"
+source = "tests/conformance/d3d9/evidence/sikarugir-cx-24.0.7-builtin-x64.json:1"
+summary = "Sikarugir-CX 24.0.7 builtin lane x64 2026-05-24 — passing in chunked runner snapshot."
 
 [[case]]
 executable = "dxmt9-d3d9-conformance.exe"
@@ -3175,7 +4316,14 @@ area = "surface"
 owner = "core/resources"
 requirements = ["R-TEST-12.13", "R-TEST-12.14"]
 acceptance = ["YUY2 offscreen-plain surfaces LockRect with a row pitch of at least 2*width bytes"]
-status = "scaffolded"
+status = "partial"
+
+[[case.evidence]]
+lane = "builtin"
+arch = "x64"
+status = "passing"
+source = "tests/conformance/d3d9/evidence/sikarugir-cx-24.0.7-builtin-x64.json:1"
+summary = "Sikarugir-CX 24.0.7 builtin lane x64 2026-05-24 — passing in chunked runner snapshot."
 
 [[case]]
 executable = "dxmt9-d3d9-conformance.exe"
@@ -3192,7 +4340,14 @@ area = "format-caps"
 owner = "core/resources"
 requirements = ["R-TEST-12.3", "R-TEST-12.13"]
 acceptance = ["CheckDeviceFormat returns a Wine-compatible HRESULT for the ATI1 and ATI2 vendor 3Dc compressed formats"]
-status = "scaffolded"
+status = "partial"
+
+[[case.evidence]]
+lane = "builtin"
+arch = "x64"
+status = "passing"
+source = "tests/conformance/d3d9/evidence/sikarugir-cx-24.0.7-builtin-x64.json:1"
+summary = "Sikarugir-CX 24.0.7 builtin lane x64 2026-05-24 — passing in chunked runner snapshot."
 
 [[case]]
 executable = "dxmt9-d3d9-conformance.exe"
@@ -3209,7 +4364,14 @@ area = "vertex-declaration"
 owner = "core/device"
 requirements = ["R-TEST-12.13"]
 acceptance = ["CreateVertexDeclaration accepts a declaration with D3DDECLUSAGE_POSITION at indices 0 and 1"]
-status = "scaffolded"
+status = "partial"
+
+[[case.evidence]]
+lane = "builtin"
+arch = "x64"
+status = "passing"
+source = "tests/conformance/d3d9/evidence/sikarugir-cx-24.0.7-builtin-x64.json:1"
+summary = "Sikarugir-CX 24.0.7 builtin lane x64 2026-05-24 — passing in chunked runner snapshot."
 
 [[case]]
 executable = "dxmt9-d3d9-conformance.exe"
@@ -3226,7 +4388,14 @@ area = "device-lifecycle"
 owner = "core/device"
 requirements = ["R-TEST-12.3", "R-TEST-12.18"]
 acceptance = ["CreateDevice with D3DCREATE_SOFTWARE_VERTEXPROCESSING reports its software-vertex-processing mode through GetSoftwareVertexProcessing and the create HRESULT is one of S_OK, D3DERR_INVALIDCALL, or D3DERR_NOTAVAILABLE"]
-status = "scaffolded"
+status = "partial"
+
+[[case.evidence]]
+lane = "builtin"
+arch = "x64"
+status = "passing"
+source = "tests/conformance/d3d9/evidence/sikarugir-cx-24.0.7-builtin-x64.json:1"
+summary = "Sikarugir-CX 24.0.7 builtin lane x64 2026-05-24 — passing in chunked runner snapshot."
 
 [[case]]
 executable = "dxmt9-d3d9-conformance.exe"
@@ -3243,7 +4412,14 @@ area = "stateblock"
 owner = "core/stateblock"
 requirements = ["R-TEST-12.5", "R-TEST-12.19"]
 acceptance = ["A D3DSBT_ALL stateblock capture-then-apply restores D3DRS_FILLMODE after a subsequent mutation"]
-status = "scaffolded"
+status = "partial"
+
+[[case.evidence]]
+lane = "builtin"
+arch = "x64"
+status = "passing"
+source = "tests/conformance/d3d9/evidence/sikarugir-cx-24.0.7-builtin-x64.json:1"
+summary = "Sikarugir-CX 24.0.7 builtin lane x64 2026-05-24 — passing in chunked runner snapshot."
 
 [[case]]
 executable = "dxmt9-d3d9-conformance.exe"
@@ -3260,7 +4436,14 @@ area = "stateblock"
 owner = "core/stateblock"
 requirements = ["R-TEST-12.5", "R-TEST-12.19"]
 acceptance = ["A D3DSBT_PIXELSTATE stateblock restores D3DRS_SRCBLEND but not the vertex-state D3DRS_CULLMODE on Apply"]
-status = "scaffolded"
+status = "partial"
+
+[[case.evidence]]
+lane = "builtin"
+arch = "x64"
+status = "passing"
+source = "tests/conformance/d3d9/evidence/sikarugir-cx-24.0.7-builtin-x64.json:1"
+summary = "Sikarugir-CX 24.0.7 builtin lane x64 2026-05-24 — passing in chunked runner snapshot."
 
 [[case]]
 executable = "dxmt9-d3d9-conformance.exe"
@@ -3277,7 +4460,14 @@ area = "stateblock"
 owner = "core/stateblock"
 requirements = ["R-TEST-12.5", "R-TEST-12.19"]
 acceptance = ["A D3DSBT_VERTEXSTATE stateblock restores D3DRS_CULLMODE but not the pixel-state D3DRS_SRCBLEND on Apply"]
-status = "scaffolded"
+status = "partial"
+
+[[case.evidence]]
+lane = "builtin"
+arch = "x64"
+status = "passing"
+source = "tests/conformance/d3d9/evidence/sikarugir-cx-24.0.7-builtin-x64.json:1"
+summary = "Sikarugir-CX 24.0.7 builtin lane x64 2026-05-24 — passing in chunked runner snapshot."
 
 [[case]]
 executable = "dxmt9-d3d9-conformance.exe"
@@ -3294,7 +4484,14 @@ area = "query"
 owner = "core/queries"
 requirements = ["R-TEST-12.8"]
 acceptance = ["CreateQuery returns S_OK for supported types and the returned IDirect3DQuery9 reports a positive GetDataSize and the requested GetType; unknown query types are rejected with D3DERR_NOTAVAILABLE or D3DERR_INVALIDCALL"]
-status = "scaffolded"
+status = "partial"
+
+[[case.evidence]]
+lane = "builtin"
+arch = "x64"
+status = "passing"
+source = "tests/conformance/d3d9/evidence/sikarugir-cx-24.0.7-builtin-x64.json:1"
+summary = "Sikarugir-CX 24.0.7 builtin lane x64 2026-05-24 — passing in chunked runner snapshot."
 
 [[case]]
 executable = "dxmt9-d3d9-conformance.exe"
@@ -3311,7 +4508,14 @@ area = "format-caps"
 owner = "core/factory"
 requirements = ["R-TEST-12.3", "R-TEST-12.13"]
 acceptance = ["CheckDeviceFormatConversion returns S_OK for identity and A8R8G8B8 <-> X8R8G8B8 pairs and D3DERR_NOTAVAILABLE for incompatible pairs (DXT1 -> A8R8G8B8, R5G6B5 -> A8R8G8B8)"]
-status = "scaffolded"
+status = "partial"
+
+[[case.evidence]]
+lane = "builtin"
+arch = "x64"
+status = "passing"
+source = "tests/conformance/d3d9/evidence/sikarugir-cx-24.0.7-builtin-x64.json:1"
+summary = "Sikarugir-CX 24.0.7 builtin lane x64 2026-05-24 — passing in chunked runner snapshot."
 
 [[case]]
 executable = "dxmt9-d3d9-conformance.exe"
@@ -3328,7 +4532,14 @@ area = "device-format"
 owner = "core/factory"
 requirements = ["R-TEST-12.3", "R-TEST-12.13"]
 acceptance = ["CheckDeviceType returns S_OK for displayable adapter/backbuffer pairs (X8R8G8B8+A8R8G8B8, X8R8G8B8+X8R8G8B8, R5G6B5+R5G6B5 windowed) and D3DERR_NOTAVAILABLE for non-displayable adapter formats (DXT1 windowed) or alpha-channel adapter formats in exclusive fullscreen (A8R8G8B8+X8R8G8B8)"]
-status = "scaffolded"
+status = "partial"
+
+[[case.evidence]]
+lane = "builtin"
+arch = "x64"
+status = "passing"
+source = "tests/conformance/d3d9/evidence/sikarugir-cx-24.0.7-builtin-x64.json:1"
+summary = "Sikarugir-CX 24.0.7 builtin lane x64 2026-05-24 — passing in chunked runner snapshot."
 
 [[case]]
 executable = "dxmt9-d3d9-conformance.exe"
@@ -3345,7 +4556,14 @@ area = "texture-creation"
 owner = "core/resources"
 requirements = ["R-TEST-12.8", "R-TEST-12.13"]
 acceptance = ["CreateTexture with non-power-of-two dimensions (3x5, 15x17, 33x65, 127x255) in both MANAGED and DEFAULT pools returns S_OK, and CreateCubeTexture with NPOT edge length (33) in MANAGED pool returns S_OK — dxmt9 reports modern full-NPOT caps"]
-status = "scaffolded"
+status = "partial"
+
+[[case.evidence]]
+lane = "builtin"
+arch = "x64"
+status = "passing"
+source = "tests/conformance/d3d9/evidence/sikarugir-cx-24.0.7-builtin-x64.json:1"
+summary = "Sikarugir-CX 24.0.7 builtin lane x64 2026-05-24 — passing in chunked runner snapshot."
 
 [[case]]
 executable = "dxmt9-d3d9-conformance.exe"
@@ -3362,7 +4580,14 @@ area = "device-lifecycle"
 owner = "core/device"
 requirements = ["R-TEST-12.3", "R-TEST-12.18"]
 acceptance = ["CreateDevice with D3DCREATE_MULTITHREADED | D3DCREATE_HARDWARE_VERTEXPROCESSING succeeds and GetCreationParameters reports both flags in BehaviorFlags"]
-status = "scaffolded"
+status = "partial"
+
+[[case.evidence]]
+lane = "builtin"
+arch = "x64"
+status = "passing"
+source = "tests/conformance/d3d9/evidence/sikarugir-cx-24.0.7-builtin-x64.json:1"
+summary = "Sikarugir-CX 24.0.7 builtin lane x64 2026-05-24 — passing in chunked runner snapshot."
 
 [[case]]
 executable = "dxmt9-d3d9-conformance.exe"
@@ -3379,7 +4604,14 @@ area = "format-caps"
 owner = "core/resources"
 requirements = ["R-TEST-12.3", "R-TEST-12.13"]
 acceptance = ["CheckDeviceFormat returns a Wine-compatible HRESULT when probing D3DUSAGE_DEPTHSTENCIL with D3DRTYPE_TEXTURE for D3DFMT_D16, D3DFMT_D24S8, and D3DFMT_D24X8 (shadow-texture sampling caps)"]
-status = "scaffolded"
+status = "partial"
+
+[[case.evidence]]
+lane = "builtin"
+arch = "x64"
+status = "passing"
+source = "tests/conformance/d3d9/evidence/sikarugir-cx-24.0.7-builtin-x64.json:1"
+summary = "Sikarugir-CX 24.0.7 builtin lane x64 2026-05-24 — passing in chunked runner snapshot."
 
 [[case]]
 executable = "dxmt9-d3d9-conformance.exe"
@@ -3396,7 +4628,14 @@ area = "lighting"
 owner = "core/device"
 requirements = ["R-TEST-12.9"]
 acceptance = ["D3DRS_SPECULARENABLE round-trips TRUE/FALSE byte-equal, SetMaterial/GetMaterial round-trips Specular and Power byte-equal, default Power is 0.0f and default specular is black"]
-status = "scaffolded"
+status = "partial"
+
+[[case.evidence]]
+lane = "builtin"
+arch = "x64"
+status = "passing"
+source = "tests/conformance/d3d9/evidence/sikarugir-cx-24.0.7-builtin-x64.json:1"
+summary = "Sikarugir-CX 24.0.7 builtin lane x64 2026-05-24 — passing in chunked runner snapshot."
 
 [[case]]
 executable = "dxmt9-d3d9-conformance.exe"
@@ -3413,7 +4652,14 @@ area = "draw-primitive"
 owner = "core/encoder"
 requirements = ["R-TEST-12.13", "R-TEST-12.14"]
 acceptance = ["D3DFMT_INDEX16 buffers accept indices up to 0xfffe, DrawIndexedPrimitive with NumVertices=0xffff returns S_OK or D3DERR_INVALIDCALL without crashing, caps.MaxVertexIndex is at least 0xfffe"]
-status = "scaffolded"
+status = "partial"
+
+[[case.evidence]]
+lane = "builtin"
+arch = "x64"
+status = "passing"
+source = "tests/conformance/d3d9/evidence/sikarugir-cx-24.0.7-builtin-x64.json:1"
+summary = "Sikarugir-CX 24.0.7 builtin lane x64 2026-05-24 — passing in chunked runner snapshot."
 
 [[case]]
 executable = "dxmt9-d3d9-conformance.exe"
@@ -3430,7 +4676,14 @@ area = "format-caps"
 owner = "core/resources"
 requirements = ["R-TEST-12.13", "R-TEST-12.14"]
 acceptance = ["CheckDeviceFormat for D3DFMT_NULL surface render targets returns S_OK or D3DERR_NOTAVAILABLE; when supported, CreateRenderTarget(D3DFMT_NULL) succeeds and GetDesc reports the format and dimensions back"]
-status = "scaffolded"
+status = "partial"
+
+[[case.evidence]]
+lane = "builtin"
+arch = "x64"
+status = "passing"
+source = "tests/conformance/d3d9/evidence/sikarugir-cx-24.0.7-builtin-x64.json:1"
+summary = "Sikarugir-CX 24.0.7 builtin lane x64 2026-05-24 — passing in chunked runner snapshot."
 
 [[case]]
 executable = "dxmt9-d3d9-conformance.exe"
@@ -3447,7 +4700,14 @@ area = "render-state"
 owner = "core/device"
 requirements = ["R-TEST-12.9"]
 acceptance = ["D3DRS_MULTISAMPLEMASK defaults to 0xffffffff and round-trips arbitrary 32-bit values byte-equal; D3DRS_MULTISAMPLEANTIALIAS defaults to TRUE and round-trips TRUE/FALSE"]
-status = "scaffolded"
+status = "partial"
+
+[[case.evidence]]
+lane = "builtin"
+arch = "x64"
+status = "passing"
+source = "tests/conformance/d3d9/evidence/sikarugir-cx-24.0.7-builtin-x64.json:1"
+summary = "Sikarugir-CX 24.0.7 builtin lane x64 2026-05-24 — passing in chunked runner snapshot."
 
 [[case]]
 executable = "dxmt9-d3d9-conformance.exe"
@@ -3464,7 +4724,14 @@ area = "depth-stencil"
 owner = "core/resources"
 requirements = ["R-TEST-12.13", "R-TEST-12.14"]
 acceptance = ["CreateDepthStencilSurface(D24S8) succeeds with matching dims/format/Pool=DEFAULT/Type=SURFACE, SetDepthStencilSurface round-trips through Get with AddRef, and SetDepthStencilSurface(NULL) yields D3DERR_NOTFOUND with NULL out-pointer"]
-status = "scaffolded"
+status = "partial"
+
+[[case.evidence]]
+lane = "builtin"
+arch = "x64"
+status = "passing"
+source = "tests/conformance/d3d9/evidence/sikarugir-cx-24.0.7-builtin-x64.json:1"
+summary = "Sikarugir-CX 24.0.7 builtin lane x64 2026-05-24 — passing in chunked runner snapshot."
 
 [[case]]
 executable = "dxmt9-d3d9-conformance.exe"
@@ -3481,7 +4748,14 @@ area = "raster-state"
 owner = "core/encoder"
 requirements = ["R-TEST-12.9"]
 acceptance = ["caps report CULLNONE/CW/CCW, D3DRS_CULLMODE defaults to CCW and round-trips for all three modes, LineCaps D3DLINECAPS_ANTIALIAS is queried without crash"]
-status = "scaffolded"
+status = "partial"
+
+[[case.evidence]]
+lane = "builtin"
+arch = "x64"
+status = "passing"
+source = "tests/conformance/d3d9/evidence/sikarugir-cx-24.0.7-builtin-x64.json:1"
+summary = "Sikarugir-CX 24.0.7 builtin lane x64 2026-05-24 — passing in chunked runner snapshot."
 
 [[case]]
 executable = "dxmt9-d3d9-conformance.exe"
@@ -3498,7 +4772,14 @@ area = "render-state"
 owner = "core/device"
 requirements = ["R-TEST-12.9"]
 acceptance = ["D3DRS_ANTIALIASEDLINEENABLE defaults FALSE and round-trips, D3DRS_ALPHABLENDENABLE defaults FALSE, BLENDOP/SRCBLEND/DESTBLEND round-trip the SRCALPHA/INVSRCALPHA/ADD pipeline"]
-status = "scaffolded"
+status = "partial"
+
+[[case.evidence]]
+lane = "builtin"
+arch = "x64"
+status = "passing"
+source = "tests/conformance/d3d9/evidence/sikarugir-cx-24.0.7-builtin-x64.json:1"
+summary = "Sikarugir-CX 24.0.7 builtin lane x64 2026-05-24 — passing in chunked runner snapshot."
 
 [[case]]
 executable = "dxmt9-d3d9-conformance.exe"
@@ -3515,7 +4796,14 @@ area = "surface"
 owner = "core/encoder"
 requirements = ["R-TEST-12.13", "R-TEST-12.14"]
 acceptance = ["StretchRect between A8R8G8B8 RTs in DEFAULT pool succeeds, A8R8G8B8 to X8R8G8B8 returns S_OK or D3DERR_INVALIDCALL, MSAA mismatch returns S_OK or D3DERR_INVALIDCALL"]
-status = "scaffolded"
+status = "partial"
+
+[[case.evidence]]
+lane = "builtin"
+arch = "x64"
+status = "passing"
+source = "tests/conformance/d3d9/evidence/sikarugir-cx-24.0.7-builtin-x64.json:1"
+summary = "Sikarugir-CX 24.0.7 builtin lane x64 2026-05-24 — passing in chunked runner snapshot."
 
 [[case]]
 executable = "dxmt9-d3d9-conformance.exe"
@@ -3532,7 +4820,14 @@ area = "surface-blit"
 owner = "core/resources"
 requirements = ["R-TEST-12.13", "R-TEST-12.14"]
 acceptance = ["StretchRect with NULL src or NULL dst returns D3DERR_INVALIDCALL, matching-format / matching-dim DEFAULT-pool A8R8G8B8 surfaces with NULL rects return S_OK, zero-area src rect returns D3DERR_INVALIDCALL, negative-extent src rect returns D3DERR_INVALIDCALL"]
-status = "scaffolded"
+status = "failing"
+
+[[case.evidence]]
+lane = "builtin"
+arch = "x64"
+status = "failing"
+source = "tests/conformance/d3d9/evidence/sikarugir-cx-24.0.7-builtin-x64.json:1"
+summary = "Sikarugir-CX 24.0.7 builtin lane x64 2026-05-24 — failing in chunked runner snapshot; follow-up."
 
 [[case]]
 executable = "dxmt9-d3d9-conformance.exe"
@@ -3549,7 +4844,14 @@ area = "surface-blit"
 owner = "core/resources"
 requirements = ["R-TEST-12.13", "R-TEST-12.14"]
 acceptance = ["StretchRect on two matching D24S8 DEFAULT-pool depth-stencil surfaces returns S_OK or D3DERR_INVALIDCALL, cross-format D24S8 -> D16 depth blit returns D3DERR_INVALIDCALL"]
-status = "scaffolded"
+status = "failing"
+
+[[case.evidence]]
+lane = "builtin"
+arch = "x64"
+status = "failing"
+source = "tests/conformance/d3d9/evidence/sikarugir-cx-24.0.7-builtin-x64.json:1"
+summary = "Sikarugir-CX 24.0.7 builtin lane x64 2026-05-24 — failing in chunked runner snapshot; follow-up."
 
 [[case]]
 executable = "dxmt9-d3d9-conformance.exe"
@@ -3566,7 +4868,14 @@ area = "surface-blit"
 owner = "core/resources"
 requirements = ["R-TEST-12.13", "R-TEST-12.14"]
 acceptance = ["StretchRect on matching-format DEFAULT-pool offscreen surfaces in {A8R8G8B8, X8R8G8B8, R5G6B5} returns S_OK with D3DTEXF_LINEAR and matching dims; formats not creatable as CreateOffscreenPlainSurface are skipped"]
-status = "scaffolded"
+status = "partial"
+
+[[case.evidence]]
+lane = "builtin"
+arch = "x64"
+status = "passing"
+source = "tests/conformance/d3d9/evidence/sikarugir-cx-24.0.7-builtin-x64.json:1"
+summary = "Sikarugir-CX 24.0.7 builtin lane x64 2026-05-24 — passing in chunked runner snapshot."
 
 [[case]]
 executable = "dxmt9-d3d9-conformance.exe"
@@ -3583,7 +4892,14 @@ area = "surface-blit"
 owner = "core/resources"
 requirements = ["R-TEST-12.13", "R-TEST-12.14"]
 acceptance = ["StretchRect on NPOT D3DPOOL_DEFAULT D3DFMT_A8R8G8B8 offscreen surfaces returns S_OK with D3DTEXF_LINEAR for NPOT->NPOT, NPOT->POT non-square scaling, and asymmetric NPOT->NPOT combinations; pairs not creatable as CreateOffscreenPlainSurface are skipped"]
-status = "scaffolded"
+status = "partial"
+
+[[case.evidence]]
+lane = "builtin"
+arch = "x64"
+status = "passing"
+source = "tests/conformance/d3d9/evidence/sikarugir-cx-24.0.7-builtin-x64.json:1"
+summary = "Sikarugir-CX 24.0.7 builtin lane x64 2026-05-24 — passing in chunked runner snapshot."
 
 [[case]]
 executable = "dxmt9-d3d9-conformance.exe"
@@ -3600,7 +4916,14 @@ area = "surface-blit"
 owner = "core/resources"
 requirements = ["R-TEST-12.13", "R-TEST-12.14"]
 acceptance = ["StretchRect between channel-equivalent A8R8G8B8 and X8R8G8B8 DEFAULT-pool offscreen surfaces returns S_OK in both directions; A8R8G8B8 -> R5G6B5 conversion returns S_OK or D3DERR_INVALIDCALL; DXT1 -> A8R8G8B8 conversion returns D3DERR_INVALIDCALL when the runtime can create a DXT1 offscreen surface; otherwise the compressed probe is skipped"]
-status = "scaffolded"
+status = "failing"
+
+[[case.evidence]]
+lane = "builtin"
+arch = "x64"
+status = "failing"
+source = "tests/conformance/d3d9/evidence/sikarugir-cx-24.0.7-builtin-x64.json:1"
+summary = "Sikarugir-CX 24.0.7 builtin lane x64 2026-05-24 — failing in chunked runner snapshot; follow-up."
 
 [[case]]
 executable = "dxmt9-d3d9-conformance.exe"
@@ -3617,7 +4940,14 @@ area = "surface-blit"
 owner = "core/resources"
 requirements = ["R-TEST-12.13", "R-TEST-12.14"]
 acceptance = ["StretchRect of an MSAA D3DPOOL_DEFAULT D3DFMT_A8R8G8B8 render target into a same-format non-MSAA render target returns S_OK (D3D9 multisample-resolve idiom); the reverse direction (non-MSAA -> MSAA target) returns D3DERR_INVALIDCALL; if MSAA RT creation returns D3DERR_NOTAVAILABLE the resolve probes are skipped"]
-status = "scaffolded"
+status = "failing"
+
+[[case.evidence]]
+lane = "builtin"
+arch = "x64"
+status = "failing"
+source = "tests/conformance/d3d9/evidence/sikarugir-cx-24.0.7-builtin-x64.json:1"
+summary = "Sikarugir-CX 24.0.7 builtin lane x64 2026-05-24 — failing in chunked runner snapshot; follow-up."
 
 [[case]]
 executable = "dxmt9-d3d9-conformance.exe"
@@ -3634,7 +4964,14 @@ area = "surface-blit"
 owner = "core/resources"
 requirements = ["R-TEST-12.13", "R-TEST-12.14"]
 acceptance = ["CreateRenderTarget for a D3DPOOL_DEFAULT D3DFMT_A8R8G8B8 surface with D3DMULTISAMPLE_2_SAMPLES returns S_OK or D3DERR_NOTAVAILABLE; on S_OK the surface can be bound as RT 0 via SetRenderTarget and cleared with D3DCLEAR_TARGET (both returning S_OK); the original backbuffer can be restored as RT 0 before the MSAA RT is released; if MSAA RT creation returns D3DERR_NOTAVAILABLE the bind/clear probes are skipped"]
-status = "scaffolded"
+status = "partial"
+
+[[case.evidence]]
+lane = "builtin"
+arch = "x64"
+status = "passing"
+source = "tests/conformance/d3d9/evidence/sikarugir-cx-24.0.7-builtin-x64.json:1"
+summary = "Sikarugir-CX 24.0.7 builtin lane x64 2026-05-24 — passing in chunked runner snapshot."
 
 [[case]]
 executable = "dxmt9-d3d9-conformance.exe"
@@ -3651,7 +4988,14 @@ area = "surface-blit"
 owner = "core/resources"
 requirements = ["R-TEST-12.13", "R-TEST-12.14"]
 acceptance = ["CreateRenderTarget for a D3DPOOL_DEFAULT D3DFMT_A8R8G8B8 surface with D3DMULTISAMPLE_2_SAMPLES returns S_OK or D3DERR_NOTAVAILABLE; if NOTAVAILABLE the readback probe is skipped; on S_OK, GetRenderTargetData from the MSAA RT into a D3DPOOL_SYSTEMMEM offscreen plain surface of the same dimensions and format returns D3DERR_INVALIDCALL (MSAA->sysmem readback is rejected); a positive control GetRenderTargetData from a same-format non-MSAA RT into the same sysmem surface returns S_OK"]
-status = "scaffolded"
+status = "failing"
+
+[[case.evidence]]
+lane = "builtin"
+arch = "x64"
+status = "failing"
+source = "tests/conformance/d3d9/evidence/sikarugir-cx-24.0.7-builtin-x64.json:1"
+summary = "Sikarugir-CX 24.0.7 builtin lane x64 2026-05-24 — failing in chunked runner snapshot; follow-up."
 
 [[case]]
 executable = "dxmt9-d3d9-conformance.exe"
@@ -3668,7 +5012,14 @@ area = "vendor-format-policy"
 owner = "core/resources"
 requirements = ["R-TEST-12.3", "R-TEST-12.13"]
 acceptance = ["CheckDeviceFormat(D3DFMT_V8U8, QUERY_BUMPENVMAP) returns one of {S_OK, D3DERR_NOTAVAILABLE} stably; TEXBEM opcode lowering deferred until NATIVE BEM oracle exists"]
-status = "scaffolded"
+status = "partial"
+
+[[case.evidence]]
+lane = "builtin"
+arch = "x64"
+status = "passing"
+source = "tests/conformance/d3d9/evidence/sikarugir-cx-24.0.7-builtin-x64.json:1"
+summary = "Sikarugir-CX 24.0.7 builtin lane x64 2026-05-24 — passing in chunked runner snapshot."
 
 [[case]]
 executable = "dxmt9-d3d9-conformance.exe"
@@ -3685,7 +5036,14 @@ area = "vendor-format-policy"
 owner = "core/resources"
 requirements = ["R-TEST-12.3", "R-TEST-12.13"]
 acceptance = ["D3DCAPS9 exposes ps_1_4 with finite PixelShader1xMaxValue; TEXDEPTH opcode lowering deferred until SM1 depth-readback oracle exists"]
-status = "scaffolded"
+status = "partial"
+
+[[case.evidence]]
+lane = "builtin"
+arch = "x64"
+status = "passing"
+source = "tests/conformance/d3d9/evidence/sikarugir-cx-24.0.7-builtin-x64.json:1"
+summary = "Sikarugir-CX 24.0.7 builtin lane x64 2026-05-24 — passing in chunked runner snapshot."
 
 [[case]]
 executable = "dxmt9-d3d9-conformance.exe"
@@ -3702,7 +5060,14 @@ area = "vendor-format-policy"
 owner = "core/resources"
 requirements = ["R-TEST-12.3", "R-TEST-12.13"]
 acceptance = ["CheckDeviceFormat for INTZ sampleable depth-stencil texture returns D3DERR_NOTAVAILABLE; dxmt9 does not expose INTZ on Metal"]
-status = "scaffolded"
+status = "partial"
+
+[[case.evidence]]
+lane = "builtin"
+arch = "x64"
+status = "passing"
+source = "tests/conformance/d3d9/evidence/sikarugir-cx-24.0.7-builtin-x64.json:1"
+summary = "Sikarugir-CX 24.0.7 builtin lane x64 2026-05-24 — passing in chunked runner snapshot."
 
 [[case]]
 executable = "dxmt9-d3d9-conformance.exe"
@@ -3719,7 +5084,14 @@ area = "vendor-format-policy"
 owner = "core/resources"
 requirements = ["R-TEST-12.3", "R-TEST-12.13"]
 acceptance = ["CheckDeviceFormat for D24S8 sampleable depth-stencil texture and GET4 FOURCC both return D3DERR_NOTAVAILABLE; FETCH4 enable token unsupported on dxmt9"]
-status = "scaffolded"
+status = "partial"
+
+[[case.evidence]]
+lane = "builtin"
+arch = "x64"
+status = "passing"
+source = "tests/conformance/d3d9/evidence/sikarugir-cx-24.0.7-builtin-x64.json:1"
+summary = "Sikarugir-CX 24.0.7 builtin lane x64 2026-05-24 — passing in chunked runner snapshot."
 
 [[case]]
 executable = "dxmt9-d3d9-conformance.exe"
@@ -3736,7 +5108,14 @@ area = "vendor-format-policy"
 owner = "core/resources"
 requirements = ["R-TEST-12.3", "R-TEST-12.13"]
 acceptance = ["CheckDeviceFormat for RESZ FOURCC returns D3DERR_NOTAVAILABLE; dxmt9 uses resolve attachments + dedicated blit on Metal instead of RESZ-style enable token"]
-status = "scaffolded"
+status = "partial"
+
+[[case.evidence]]
+lane = "builtin"
+arch = "x64"
+status = "passing"
+source = "tests/conformance/d3d9/evidence/sikarugir-cx-24.0.7-builtin-x64.json:1"
+summary = "Sikarugir-CX 24.0.7 builtin lane x64 2026-05-24 — passing in chunked runner snapshot."
 
 [[case]]
 executable = "dxmt9-d3d9-conformance.exe"
@@ -3753,7 +5132,14 @@ area = "vendor-format-policy"
 owner = "core/resources"
 requirements = ["R-TEST-12.3", "R-TEST-12.13"]
 acceptance = ["D3DCAPS9 advertises D3DPTEXTURECAPS_MIPMAP with at least one blend stage and one simultaneous texture; per-level Lock upload contract deferred to NATIVE follow-up"]
-status = "scaffolded"
+status = "partial"
+
+[[case.evidence]]
+lane = "builtin"
+arch = "x64"
+status = "passing"
+source = "tests/conformance/d3d9/evidence/sikarugir-cx-24.0.7-builtin-x64.json:1"
+summary = "Sikarugir-CX 24.0.7 builtin lane x64 2026-05-24 — passing in chunked runner snapshot."
 
 [[case]]
 executable = "dxmt9-d3d9-conformance.exe"
@@ -3770,7 +5156,14 @@ area = "texture-miptree"
 owner = "core/resources"
 requirements = ["R-TEST-12.13", "R-TEST-12.14"]
 acceptance = ["A8R8G8B8 mip chain reports the expected 7-level count, per-level GetLevelDesc returns power-of-two dims floored at 1, and LockRect pitch is at least width*4 bytes for each level"]
-status = "scaffolded"
+status = "partial"
+
+[[case.evidence]]
+lane = "builtin"
+arch = "x64"
+status = "passing"
+source = "tests/conformance/d3d9/evidence/sikarugir-cx-24.0.7-builtin-x64.json:1"
+summary = "Sikarugir-CX 24.0.7 builtin lane x64 2026-05-24 — passing in chunked runner snapshot."
 
 [[case]]
 executable = "dxmt9-d3d9-conformance.exe"
@@ -3787,7 +5180,14 @@ area = "texture-stage-state"
 owner = "core/device"
 requirements = ["R-TEST-12.9", "R-TEST-12.13"]
 acceptance = ["D3DTOP_BUMPENVMAP / D3DTOP_BUMPENVMAPLUMINANCE round-trip through SetTextureStageState/GetTextureStageState; BUMPENVMAT00/01/10/11 and BUMPENVLSCALE/BUMPENVLOFFSET DWORD-encoded float values round-trip byte-equal; TextureOpCaps surface is reported per device"]
-status = "scaffolded"
+status = "partial"
+
+[[case.evidence]]
+lane = "builtin"
+arch = "x64"
+status = "passing"
+source = "tests/conformance/d3d9/evidence/sikarugir-cx-24.0.7-builtin-x64.json:1"
+summary = "Sikarugir-CX 24.0.7 builtin lane x64 2026-05-24 — passing in chunked runner snapshot."
 
 [[case]]
 executable = "dxmt9-d3d9-conformance.exe"
@@ -3804,7 +5204,14 @@ area = "vertex-declaration"
 owner = "core/device"
 requirements = ["R-TEST-12.13"]
 acceptance = ["CreateVertexDeclaration accepts a declaration containing D3DDECLUSAGE_POSITIONT and GetDeclaration returns a byte-equal element array; the implicit declaration from D3DFVF_XYZRHW exposes POSITIONT as the first element"]
-status = "scaffolded"
+status = "partial"
+
+[[case.evidence]]
+lane = "builtin"
+arch = "x64"
+status = "passing"
+source = "tests/conformance/d3d9/evidence/sikarugir-cx-24.0.7-builtin-x64.json:1"
+summary = "Sikarugir-CX 24.0.7 builtin lane x64 2026-05-24 — passing in chunked runner snapshot."
 
 [[case]]
 executable = "dxmt9-d3d9-conformance.exe"
@@ -3821,7 +5228,14 @@ area = "shader-validation"
 owner = "core/device"
 requirements = ["R-TEST-12.3"]
 acceptance = ["CreatePixelShader rejects NULL bytecode with D3DERR_INVALIDCALL; minimal ps_3_0 stream is accepted when device caps advertise ps_3_0; PS20Caps surface is readable without crashing"]
-status = "scaffolded"
+status = "partial"
+
+[[case.evidence]]
+lane = "builtin"
+arch = "x64"
+status = "passing"
+source = "tests/conformance/d3d9/evidence/sikarugir-cx-24.0.7-builtin-x64.json:1"
+summary = "Sikarugir-CX 24.0.7 builtin lane x64 2026-05-24 — passing in chunked runner snapshot."
 
 [[case]]
 executable = "dxmt9-d3d9-conformance.exe"
@@ -3838,7 +5252,14 @@ area = "format-caps"
 owner = "core/resources"
 requirements = ["R-TEST-12.3", "R-TEST-12.13"]
 acceptance = ["PS20Caps.NumInstructionSlots is positive when ps_2_0+ is advertised; MaxPixelShader30InstructionSlots is positive when ps_3_0+ is advertised; PrimitiveMiscCaps fog-related bits are reported per device"]
-status = "scaffolded"
+status = "partial"
+
+[[case.evidence]]
+lane = "builtin"
+arch = "x64"
+status = "passing"
+source = "tests/conformance/d3d9/evidence/sikarugir-cx-24.0.7-builtin-x64.json:1"
+summary = "Sikarugir-CX 24.0.7 builtin lane x64 2026-05-24 — passing in chunked runner snapshot."
 
 [[case]]
 executable = "dxmt9-d3d9-conformance.exe"
@@ -3855,7 +5276,14 @@ area = "draw-primitive"
 owner = "core/device"
 requirements = ["R-TEST-12.3"]
 acceptance = ["DrawPrimitive issued outside a BeginScene/EndScene pair returns D3DERR_INVALIDCALL; inside a scene, DrawPrimitive with PrimitiveCount=0 is a no-op that returns S_OK; after EndScene the scene precondition is re-armed and DrawPrimitive rejects again"]
-status = "scaffolded"
+status = "failing"
+
+[[case.evidence]]
+lane = "builtin"
+arch = "x64"
+status = "failing"
+source = "tests/conformance/d3d9/evidence/sikarugir-cx-24.0.7-builtin-x64.json:1"
+summary = "Sikarugir-CX 24.0.7 builtin lane x64 2026-05-24 — failing in chunked runner snapshot; follow-up."
 
 [[case]]
 executable = "dxmt9-d3d9-conformance.exe"
@@ -3872,7 +5300,14 @@ area = "depth-stencil"
 owner = "core/device"
 requirements = ["R-TEST-12.3"]
 acceptance = ["GetDepthStencilSurface on a device created with EnableAutoDepthStencil=TRUE returns the implicit D24S8 surface; SetDepthStencilSurface(NULL) detaches it so a follow-up Get yields D3DERR_NOTFOUND with the out-pointer cleared; re-attaching the saved surface restores the binding; GetDepthStencilSurface(NULL) rejects with D3DERR_INVALIDCALL without disturbing the binding"]
-status = "scaffolded"
+status = "partial"
+
+[[case.evidence]]
+lane = "builtin"
+arch = "x64"
+status = "passing"
+source = "tests/conformance/d3d9/evidence/sikarugir-cx-24.0.7-builtin-x64.json:1"
+summary = "Sikarugir-CX 24.0.7 builtin lane x64 2026-05-24 — passing in chunked runner snapshot."
 
 [[case]]
 executable = "dxmt9-d3d9-conformance.exe"
@@ -3889,7 +5324,14 @@ area = "device-creation"
 owner = "core/device"
 requirements = ["R-TEST-12.3"]
 acceptance = ["CreateDevice with hFocusWindow=GetDesktopWindow() and pp.hDeviceWindow=GetDesktopWindow() (Windowed=TRUE, SwapEffect=DISCARD) returns S_OK; a follow-up Clear(D3DCLEAR_TARGET) and Present(NULL,NULL,NULL,NULL) on the resulting device both return S_OK — i.e. the desktop window is accepted at device creation and not silently rejected at present time. The Ex variant in d3d9ex.c:test_desktop_window pins the identical contract via CreateDeviceEx, with no policy delta beyond the Ex factory wrapper."]
-status = "scaffolded"
+status = "partial"
+
+[[case.evidence]]
+lane = "builtin"
+arch = "x64"
+status = "passing"
+source = "tests/conformance/d3d9/evidence/sikarugir-cx-24.0.7-builtin-x64.json:1"
+summary = "Sikarugir-CX 24.0.7 builtin lane x64 2026-05-24 — passing in chunked runner snapshot."
 
 [[case]]
 executable = "dxmt9-d3d9-conformance.exe"
@@ -3906,7 +5348,14 @@ area = "vertex-buffer"
 owner = "core/resources"
 requirements = ["R-TEST-12.13", "R-TEST-12.14"]
 acceptance = ["Direct3DCreate9Ex + CreateDeviceEx(HAL, HARDWARE_VERTEXPROCESSING, Windowed=TRUE, SwapEffect=DISCARD, A8R8G8B8) returns S_OK; CreateVertexBuffer(size=256, Usage=0, FVF=0, Pool=D3DPOOL_SYSTEMMEM) on the Ex device returns S_OK; a no-flag Lock(0,0,&ptr,0) on the resulting sysmem VB returns S_OK and yields a non-NULL pointer; Unlock returns S_OK. HRESULT-contract scope only: no draw is issued, no pixel readback is sampled — the visual-correctness pin lives in the visual.c:test_sysmem_draw ✅ row. D3DUSAGE_DYNAMIC + SYSTEMMEM and DISCARD-on-non-dynamic policy are pinned separately by test_pinned_buffers_d3dusage_policy."]
-status = "scaffolded"
+status = "partial"
+
+[[case.evidence]]
+lane = "builtin"
+arch = "x64"
+status = "passing"
+source = "tests/conformance/d3d9/evidence/sikarugir-cx-24.0.7-builtin-x64.json:1"
+summary = "Sikarugir-CX 24.0.7 builtin lane x64 2026-05-24 — passing in chunked runner snapshot."
 
 [[case]]
 executable = "dxmt9-d3d9-conformance.exe"
@@ -3923,4 +5372,12 @@ area = "draw-primitive"
 owner = "core/device"
 requirements = ["R-TEST-12.3"]
 acceptance = ["CreateVertexBuffer(size=256, Usage=0, FVF=0, Pool=D3DPOOL_DEFAULT) returns S_OK; SetStreamSource(0, vb, 0, stride=16) and SetFVF(D3DFVF_XYZ|D3DFVF_DIFFUSE) return S_OK; Lock(0,0,&ptr,0) on the bound VB returns S_OK leaving the buffer mapped; inside BeginScene/EndScene, DrawPrimitive(TRIANGLELIST, 0, 1) returns either D3DERR_INVALIDCALL (Wine oracle — draws from a mapped VB must reject) or S_OK (dxmt9's deferred-record path may currently permit it; accept-either pins the HRESULT shape without forcing the fix landing order); EndScene returns S_OK; Unlock returns S_OK; after Unlock, BeginScene + DrawPrimitive(TRIANGLELIST, 0, 1) + EndScene all return S_OK — Unlock re-arms the stream-source for normal use."]
-status = "scaffolded"
+status = "failing"
+
+[[case.evidence]]
+lane = "builtin"
+arch = "x64"
+status = "failing"
+source = "tests/conformance/d3d9/evidence/sikarugir-cx-24.0.7-builtin-x64.json:1"
+summary = "Sikarugir-CX 24.0.7 builtin lane x64 2026-05-24 — chunk runner timeout (hang)."
+
