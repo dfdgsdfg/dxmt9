@@ -80,13 +80,16 @@ a `file:line` anchor checked against the live tree.
 | `DF16`/`DF24` vendor depth-as-texture accepted + wired to Metal depth (closed 2026-05-24) | C.5 | `device_c_format_utils.cpp`/`core_format.cpp`/`dxmt9_format_convert.cpp`/`core_format_utils.cpp`; gate `dxmt9-core-format-caps-spec` |
 | TSS `COLORARG0`/`ALPHAARG0` + MULTIPLYADD/LERP triadic ops, arg0 default `D3DTA_CURRENT` (closed 2026-05-24) | B.10#10 | `dxmt9_ffp_shaders.cpp`/`core_draw.cpp`; gates `dxmt9-ffp-triadic-msl-spec` + tss_multiplyadd/lerp/alpha_lerp GPU readbacks |
 | `D32_LOCKABLE` (84) + `Q16W16V16U16` (110) formats end-to-end (closed 2026-05-24) | C.12#7 | mirror D32F_LOCKABLE→Depth32Float / A16B16G16R16→RGBA16Snorm; gate `dxmt9-core-format-caps-spec`. Caveat: Q16W16V16U16 FormatInfo mirrors its analog's `renderTarget=true` — real D3D9 may not advertise RT for it (minor caps over-report) |
+| `ATOC` alpha-to-coverage — classification + behavioral (closed 2026-05-24) | C.5 | R-FORMAT-13; `RS_ADAPTIVETESS_Y`(181) ATOC/A2M1/A2M0 token → PSO `alphaToCoverage` bit → bridge `alphaToCoverageEnabled` (already exposed). `3293e39`, gate `dxmt9-backend-pipeline-key-spec` |
+| `NULL` colorless render target — classification + behavioral (closed 2026-05-24) | C.5 | R-FORMAT-12; no color backing, `beginRenderPass` omits color attachment, Lock/readback→INVALIDCALL. `2f7b04e`, gate `dxmt9-resource-format-boundary-spec` (render-pass omission deferred to GPU validation) |
+| `RESZ` FOURCC classification + sentinel detect/stage (closed 2026-05-24) | C.5 | R-FORMAT-11; `2f619f0`+`82c89fc`, gate `dxmt9-state-draw-transform-spec`. GPU depth-resolve itself is **blocked** — see Remaining |
 
 ### Remaining actionable gaps (verified still open)
 
 | Item | Section | Priority | Notes |
 |---|---|---|---|
 | COM silent-`S_OK` stub gates — 4 PE-only remain (SetNPatchMode/GetNPatchMode, SetClipStatus/GetClipStatus, DeletePatch) | D.* | Med | native `com::` harness reached 3/7; rest need the PE conformance lane (`d3d9_device_misc.cpp` already gates SetDialogBoxMode/ValidateDevice) |
-| Vendor pseudo-format `RESZ` — **behavioral pending** (`ATOC`, `NULL` done) | C.5 | Med | classification (`2f619f0`) + ATOC (`3293e39`, R-FORMAT-13) + NULL (`2f7b04e`, R-FORMAT-12, gate `dxmt9-resource-format-boundary-spec`) all done. Remaining: RESZ=R-FORMAT-11 MSAA depth-resolve trigger. See `specs/d3d9/formats/{requirements,design}.md` |
+| `RESZ` GPU depth-resolve (sentinel detect/stage done) | C.5 | **Blocked** | needs winemetal ABI extension: `WMTDepthAttachmentInfo.resolve_texture` + `MTLMultisampleDepthResolveFilter` (color resolve already exists on `WMTColorAttachmentInfo`; depth twin missing). PE detect+stage + backend TODO landed (`82c89fc`, R-FORMAT-11). |
 | `D3DRS_TWOSIDEDSTENCILMODE` (185) behavioural gate | B.10#7 | Low | backend uses single-ref/both-faces; partial backend limit |
 | `SAMP_MIPMAPLODBIAS` per-sampler bias | B.3/B.10#4 | Blocked | requires a `lod_bias` field on `WMTSamplerInfo` (winemetal ABI extension) |
 | `D3DCLIPSTATUS9` Set/GetClipStatus | B.8/D.* | Low | nil-return arguably correct (D3D9 has no per-primitive clip tracking) |
