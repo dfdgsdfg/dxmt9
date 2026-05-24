@@ -128,8 +128,26 @@ table for per-item commits + gate test targets):
 
 Outstanding work here is **not implementation** but **deferred evidence**:
 GPU-runtime pixel validation (RESZ MSAA→INTZ readback, NULL color-attachment
-omission, MIPMAPLODBIAS mip selection) and conformance Wine-run validation of
-the new PE gates — each needs a Wine + GPU-readback probe.
+omission, MIPMAPLODBIAS mip selection, tile-FFP↔portable equality) and
+conformance Wine-run validation of the new PE gates.
+
+**2026-05-25 — why these are still "deferred": the blocker is `shader_runner_dxmt9`
+DSL expressiveness, NOT the dxmt9 implementation** (sub-agent investigation; each
+feature's `src/` path was confirmed implemented + reachable). Actionable per-feature
+unblocks (all are runner/`tests/shader_runner/shader_runner_dxmt9.cpp` extensions):
+
+| Feature | Runner DSL gap | Smallest unblock | Recommended vehicle |
+|---|---|---|---|
+| **`SAMP_MIPMAPLODBIAS`** | `parseDxmt9Sampler` (~line 1221-1260) has no key for sampler-state 8; `setSamplerState(stage,8,value)` is otherwise reachable via `applyDxmt9SamplerSetups` | add one `lod_bias`/`mipmaplodbias` branch using the existing `bitCastFloatState` float→u32 helper (~5 lines) | **`shader_runner` (tractable now)** — mip/LOD corpus already exists to model on |
+| **`D3DFMT_NULL` depth-only** | (a) `parseDxmt9Format` has no `null` token + RT slot 0 hardcoded to backbuffer; (b) no depth readback / depth-as-texture sampling | larger: NULL-as-effective-RT + a depth-readback directive | **native/fake-backend render-pass-attachment spec** (assert color attachment omitted, depth retained) is a better fit than the readback runner |
+| **tile-FFP ↔ portable equality** | `selectTileFfpForPass` (`dxmt9_pipeline_cache.cpp:747`) + `setSupportsApple3` (`dxmt9_command_queue.cpp:144`) are pure functions with **no env escape hatch** (unlike the sibling `DXMT9_DISABLE_ARGBUF_HYBRID` 11 lines below); also every probe-bearing FFP fog test is textured → selector forces portable, so no tile-path readback exists | add a `DXMT9_TILE_FFP=force\|off\|auto` toggle at the selector / supportsApple3 override, then A/B the same draw | **`shader_runner` once the toggle lands** (small `src/` env addition) |
+| **RESZ MSAA→INTZ** | all 4 steps unexpressible: no MSAA depth-stencil RT directive, no RESZ/`POINTSIZE`-sentinel trigger, no `INTZ` format token/sampling, no depth readback (`Device::reszDepthResolve`/`submitDepthResolve` exist but the runner drives the core `Device` with none of these exposed) | substantial: 4-area DSL extension | native/fake-backend depth-resolve spec or a Wine PE conformance exe; readback-runner is the highest-effort path |
+
+`DXMT9_PREWARM=disabled` + isolated `DXMT9_CACHE_DIR` were used per run. The dxmt9
+implementations themselves are unchanged and presumed correct — but **unverified on
+GPU**; the argbuf precedent (a "landed" lane that was a GPU page fault) is the reason
+these should not be assumed correct until a probe (via one of the vehicles above)
+actually reads back the pixels.
 
 ---
 
@@ -380,7 +398,7 @@ No implementation exists yet. All R-D3D7-1.x through R-D3D7-10.x are not started
 | Priority | Work | Spec anchor |
 |---|---|---|
 | 1 | Extend the `shader_runner_dxmt9` runtime probe layer beyond texture / dependent-read / VS color / viewport / half-pixel / color-write probes to mip/4x4/LOD, alpha/oDepth/MRT/fog/sRGB cases, and fix the tracked alpha-test readback regression | R-TEST-1.7–R-TEST-1.10 |
-| 2 | GPU-runtime pixel validation for the 2026-05-24 D3D9 features whose code landed but readback is deferred: RESZ MSAA→INTZ depth resolve, NULL colorless (depth-only) render pass, and `SAMP_MIPMAPLODBIAS` mip selection — each needs a Wine + MSAA/mip + readback probe | `gap_d3d9.md` deferred-evidence rows, R-FORMAT-11/12 |
+| 2 | GPU-runtime validation for the landed-but-unverified features (RESZ MSAA→INTZ resolve, NULL depth-only pass, `SAMP_MIPMAPLODBIAS`, tile-FFP↔portable equality). **2026-05-25: confirmed BLOCKED on `shader_runner_dxmt9` DSL expressiveness, not implementation** — see the per-feature unblock table in the D3D9 API Coverage Inventory section. Order by tractability: (a) MIPMAPLODBIAS = ~5-line DSL sampler-key → run now; (b) tile-FFP = add `DXMT9_TILE_FFP` force-toggle then A/B; (c) NULL = native render-pass-attachment spec; (d) RESZ = native depth-resolve spec or Wine PE exe | `gap_d3d9.md` deferred-evidence rows, R-FORMAT-11/12, R-BACK-13.* | 
 | 3 | Promote PE conformance lane/arch breadth: the builtin x64 lane is largely passing, so drive the app-local and x86 lanes to passing across the 237 `partial` manifest cases and fix the 6 `failing` cases (factory validation, present-parameter validation, Ex create/reset, private-data resource wrappers, Ex shared-handle, creation-failure out pointers); includes the Wine-run validation of the new COM stub gates | R-TEST-12.1, R-TEST-12.20 |
 | 4 | Finish factory HRESULT parity and validation coverage, including `CheckDeviceFormatConversion`, multisample quality levels, device-type enum handling, and any selected optional export-profile stubs beyond the current auxiliary set | R-CORE-1.9, R-CORE-1.11-R-CORE-1.15, R-TEST-12.9-R-TEST-12.10, R-TEST-12.15-R-TEST-12.16 |
 | 5 | Implement and verify D3D9Ex user-memory texture/offscreen-surface paths and shared-handle error policy | R-CORE-4.11-R-CORE-4.12, R-TEST-12.11 |
