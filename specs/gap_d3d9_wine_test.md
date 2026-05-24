@@ -27,11 +27,11 @@ edits not yet visible upstream.
 
 | Field | Value |
 |-------|-------|
-| Commit | `8575560ee8235bfc7bd3d0b1b1ceebf195d5b860` — **work tree dirty** |
-| Short  | `8575560` |
-| Tag / describe | `8575560` |
+| Commit | `d2d931e4917c893ef2f9d527661b23773b51dc96` — **work tree dirty** |
+| Short  | `d2d931e` |
+| Tag / describe | `d2d931e` |
 | Author date | `2026-05-24` |
-| Subject | doc: update doc |
+| Subject | d3d9: per-RT COLORWRITEENABLE1..3 masks (gap_d3d9 B.10#2) |
 
 ### Wine reference revision
 
@@ -50,7 +50,7 @@ the same commit in the Wine checkout before opening the source.
 
 ```sh
 # Reproduce the inventory verbatim from a clean tree:
-git -C "$DXMT9_REPO" checkout 8575560ee8235bfc7bd3d0b1b1ceebf195d5b860
+git -C "$DXMT9_REPO" checkout d2d931e4917c893ef2f9d527661b23773b51dc96
 git -C "$WINE_REPO"  checkout 6e073d28dee3af7f4c965daec94644e0f9f92727
 python3 scripts/tools/gen_wine_d3d9_test_inventory.py
 ```
@@ -72,11 +72,11 @@ python3 scripts/tools/gen_wine_d3d9_test_inventory.py
 
 | Wine source | Tests | covered | scaffolded | partial | failing | other |
 |-------------|-----:|--------:|----------:|--------:|--------:|------:|
-| `visual.c` | 135 | 125 | 10 | 0 | 0 | 0 |
+| `visual.c` | 135 | 129 | 6 | 0 | 0 | 0 |
 | `device.c` | 105 | 105 | 0 | 0 | 0 | 0 |
 | `d3d9ex.c` | 27 | 27 | 0 | 0 | 0 | 0 |
 | `stateblock.c` | 1 | 1 | 0 | 0 | 0 | 0 |
-| **TOTAL** | **268** | **258** | **10** | **0** | **0** | **0** |
+| **TOTAL** | **268** | **262** | **6** | **0** | **0** | **0** |
 
 `other` rolls up `deferred`, `partial/deferred`, and any UNTRACKED rows.
 
@@ -173,7 +173,7 @@ Source: [`dlls/d3d9/tests/visual.c`](https://gitlab.winehq.org/wine/wine/-/blob/
 | `test_max_index16` | 24074 | ✅ | `test_visual_max_index16_draw_policy` |
 | `test_mipmap_autogen` | 5773 | ✅ | `dxmt9_autogen_update_texture_texldl_readback` |
 | `test_mipmap_upload` | 27550 | ✅ | `test_vendor_policy_mipmap_upload_policy` |
-| `test_mismatched_sample_types` | 25977 | 📐 | `test_visual_mismatched_sample_types_inventory_scaffold` |
+| `test_mismatched_sample_types` | 25977 | ✅ | `test_sampler_state_edges` |
 | `test_mova` | 1965 | ✅ | `dxmt9_mova_relative_color_readback` |
 | `test_multisample_get_front_buffer_data` | 17168 | ✅ | `test_visual_multisample_get_front_buffer_data_policy` |
 | `test_multisample_init` | 22489 | ✅ | `test_multisample_render_target_init_policy` |
@@ -192,7 +192,7 @@ Source: [`dlls/d3d9/tests/visual.c`](https://gitlab.winehq.org/wine/wine/-/blob/
 | `test_shademode` | 8611 | ✅ | `test_visual_shademode_render_state_policy`, `dxmt9_ffp_gouraud_shademode_readback` |
 | `test_signed_formats` | 20444 | ✅ | `test_visual_signed_formats_caps_policy` |
 | `test_specular_lighting` | 774 | ✅ | `test_visual_specular_lighting_render_state_policy`, `dxmt9_ffp_specular_lighting_readback` |
-| `test_sysmem_draw` | 25372 | 📐 | `test_visual_sysmem_draw_inventory_scaffold` |
+| `test_sysmem_draw` | 25372 | ✅ | `test_ex_device_sysmem_vertex_buffer_policy` |
 | `test_table_fog_zw` | 20324 | ✅ | `dxmt9_ffp_w_rhw_fog_readback`, `dxmt9_ffp_range_fog_readback` |
 | `test_texcoordindex` | 21069 | ✅ | `dxmt9_ffp_texcoord_index_matrix_readback`, `dxmt9_ffp_texcoord1_transform_readback`, `dxmt9_ffp_tci_camera_position_readback`, `dxmt9_ffp_tci_camera_normal_readback` |
 | `test_texture_blending` | 22642 | ✅ | `dxmt9_ffp_tss_alpha_modulate_readback`, `dxmt9_ffp_tss_alpha_add_readback`, `dxmt9_ffp_tss_alpha_addsmooth_readback`, `dxmt9_ffp_tss_alpha_lerp_readback`, `dxmt9_ffp_tss_alpha_subtract_readback`, `dxmt9_ffp_tss_alpha_addsigned_readback`, `dxmt9_ffp_tss_modulate_readback`, `dxmt9_ffp_tss_selectarg2_readback` |
@@ -201,14 +201,14 @@ Source: [`dlls/d3d9/tests/visual.c`](https://gitlab.winehq.org/wine/wine/-/blob/
 | `test_updatetexture` | 21506 | ✅ | `dxmt9_update_texture_2d_readback` |
 | `test_vertex_blending` | 21243 | ✅ | `dxmt9_ffp_vertex_blend_3weights_outside_probe` |
 | `test_vertex_texture` | 24394 | ✅ | `dxmt9_vs30_vertex_texture_texldl_readback` |
-| `test_viewport` | 13994 | 📐 | `test_visual_viewport_inventory_scaffold` |
+| `test_viewport` | 13994 | ✅ | `test_viewport_scissor_state_getters` |
 | `test_vshader_float16` | 9676 | ✅ | `dxmt9_vs_float16_color_quads_readback` |
 | `test_vshader_input` | 7787 | ✅ | `dxmt9_vs_multistream_texcoord1_offset_readback` |
 | `texbem_test` | 3440 | ✅ | `test_vendor_policy_texbem_unsupported`, `dxmt9_ps11_texbem_stage1_readback`, `dxmt9_ps11_texbeml_stage1_readback` |
 | `texdepth_test` | 5242 | ✅ | `test_vendor_policy_texdepth_unsupported`, `dxmt9_ps14_texdepth_depth_write`, `dxmt9_ps14_texdepth_constant_ratio_depth_compare`, `dxmt9_ps13_texm3x2depth_source` |
 | `texkill_test` | 5465 | 📐 | `test_visual_texkill_inventory_scaffold` |
 | `texop_range_test` | 13126 | ✅ | `dxmt9_ffp_texop_range_high_readback`, `dxmt9_ffp_texop_range_low_readback` |
-| `texop_test` | 12604 | 📐 | `test_visual_texop_inventory_scaffold` |
+| `texop_test` | 12604 | ✅ | `test_texture_stage_states` |
 | `tssargtemp_test` | 12041 | ✅ | `dxmt9_ffp_tss_resultarg_temp_readback`, `dxmt9_ffp_tss_temp_add_readback` |
 | `unbound_sampler_test` | 16760 | ✅ | `test_sampler_state_edges`, `dxmt9_unbound_sampler_2d_readback`, `dxmt9_unbound_sampler_texldl_readback` |
 | `update_surface_test` | 16915 | ✅ | `test_visual_update_surface_policy` |
