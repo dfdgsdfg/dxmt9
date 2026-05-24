@@ -90,11 +90,13 @@ WMTPixelFormat toPixelFormat(Format format, const core::BackendLimits& limits) {
                                                  : WMTPixelFormatDepth32Float;
     case Format::D16:
     case Format::D16_LOCKABLE:
+    case Format::DF16:
       return WMTPixelFormatDepth16Unorm;
     case Format::D32:
     case Format::D32F_LOCKABLE:
     case Format::INTZ:
-      // INTZ: vendor depth-as-color sampler format. Backed by Depth32Float
+    case Format::DF24:
+      // INTZ/DF16/DF24: vendor depth-as-color sampler formats. Backed by Depth32Float
       // on Metal; shader samples receive the depth value in .r. Texture
       // usage must include both ShaderRead and RenderTarget — handled
       // by toTextureUsage() via the UsageDepthStencil branch.
@@ -154,6 +156,8 @@ bool formatHasDepthAspect(Format format) {
     case Format::D16_LOCKABLE:
     case Format::D24FS8:
     case Format::INTZ:
+    case Format::DF16:
+    case Format::DF24:
       return true;
     default:
       return false;
