@@ -27,11 +27,11 @@ changes not yet visible upstream.
 
 | Field | Value |
 |-------|-------|
-| Commit | `cf2ef200604ad5cfe27f6770b8fec70bf5276c0e` — **work tree dirty** |
-| Short  | `cf2ef20` |
-| Tag / describe | `cf2ef20` |
+| Commit | `799a11dab02d64fc6902448c92c617513c3f2cff` — **work tree dirty** |
+| Short  | `799a11d` |
+| Tag / describe | `799a11d` |
 | Author date | `2026-05-24` |
-| Subject | tests/conformance/d3d9: add 6 PE scaffolds — vertex decl / FVF / scene / RT-get |
+| Subject | tests/conformance/d3d9: add 6 PE scaffolds — state block / device caps / display mode / lost device / reset (×2 ex) |
 
 ### Wine reference revision
 
@@ -50,7 +50,7 @@ the same commit in the Wine checkout before opening the source.
 
 ```sh
 # Reproduce the inventory verbatim from a clean tree:
-git -C "$DXMT9_REPO" checkout cf2ef200604ad5cfe27f6770b8fec70bf5276c0e
+git -C "$DXMT9_REPO" checkout 799a11dab02d64fc6902448c92c617513c3f2cff
 git -C "$WINE_REPO"  checkout 6e073d28dee3af7f4c965daec94644e0f9f92727
 python3 scripts/tools/gen_wine_d3d9_test_inventory.py
 ```
@@ -73,10 +73,10 @@ python3 scripts/tools/gen_wine_d3d9_test_inventory.py
 | Wine source | Tests | covered | scaffolded | partial | failing | other |
 |-------------|-----:|--------:|----------:|--------:|--------:|------:|
 | `visual.c` | 135 | 135 | 0 | 0 | 0 | 0 |
-| `device.c` | 105 | 97 | 8 | 0 | 0 | 0 |
-| `d3d9ex.c` | 27 | 23 | 4 | 0 | 0 | 0 |
+| `device.c` | 105 | 98 | 6 | 0 | 1 | 0 |
+| `d3d9ex.c` | 27 | 26 | 0 | 0 | 1 | 0 |
 | `stateblock.c` | 1 | 1 | 0 | 0 | 0 | 0 |
-| **TOTAL** | **268** | **256** | **12** | **0** | **0** | **0** |
+| **TOTAL** | **268** | **260** | **6** | **0** | **2** | **0** |
 
 `other` rolls up `deferred`, `partial/deferred`, and any UNTRACKED rows.
 
@@ -290,7 +290,7 @@ Source: [`dlls/d3d9/tests/device.c`](https://gitlab.winehq.org/wine/wine/-/blob/
 | `test_reset` | 2031 | ✅ | `test_reset_hresult_matrix_policy` |
 | `test_reset_fullscreen` | 4807 | ✅ | `test_reset_fullscreen_focus_window_policy` |
 | `test_reset_resources` | 5985 | ✅ | `test_reset_resources_policy` |
-| `test_resource_access` | 13659 | 📐 | — |
+| `test_resource_access` | 13659 | 🔴 | `test_resource_access_base_pool_policy` |
 | `test_resource_priority` | 12209 | ✅ | `test_resource_priority_pool_policy`, `test_resource_priority_roundtrip` |
 | `test_resource_type` | 11789 | ✅ | `test_base_texture_metadata_iface_policy`, `test_cube_texture_face_desc_parity`, `test_resource_type`, `test_texture_level_surface_desc_parity`, `test_volume_mipmap_level_desc_policy` |
 | `test_scene` | 2678 | ✅ | `test_scene_invalid_transitions`, `test_scene_begin_end_matrix_policy` |
@@ -320,7 +320,7 @@ Source: [`dlls/d3d9/tests/device.c`](https://gitlab.winehq.org/wine/wine/-/blob/
 | `test_vb_lock_flags` | 6291 | ✅ | `test_vb_lock_flags` |
 | `test_vdecl_apply` | 11603 | ✅ | `test_vdecl_apply` |
 | `test_vertex_buffer_alignment` | 6375 | ✅ | `test_vertex_buffer_alignment` |
-| `test_vertex_buffer_read_write` | 14211 | 📐 | — |
+| `test_vertex_buffer_read_write` | 14211 | ✅ | `test_vertex_buffer_read_write` |
 | `test_vertex_declaration_alignment` | 923 | 📐 | `test_vertex_declaration_alignment_policy` |
 | `test_vertex_shader_constant` | 7037 | ✅ | `test_vertex_shader_constant` |
 | `test_vidmem_accounting` | 10208 | ✅ | `test_base_vidmem_accounting_policy` |
@@ -350,13 +350,13 @@ Source: [`dlls/d3d9/tests/d3d9ex.c`](https://gitlab.winehq.org/wine/wine/-/blob/
 | `test_get_adapter_luid` | 400 | ✅ | `test_ex_adapter_luid_display_mode`, `test_ex_get_adapter_luid_policy` |
 | `test_lost_device` | 2009 | ✅ | `test_lost_device_cooperative_policy` |
 | `test_pinned_buffers` | 4883 | ✅ | `test_pinned_buffers_d3dusage_policy` |
-| `test_qi_base_to_ex` | 240 | 📐 | — |
-| `test_qi_ex_to_base` | 303 | 📐 | — |
+| `test_qi_base_to_ex` | 240 | ✅ | `test_qi_base_to_ex` |
+| `test_qi_ex_to_base` | 303 | ✅ | `test_qi_ex_to_base` |
 | `test_reset` | 888 | ✅ | `test_reset_hresult_matrix_policy` |
 | `test_reset_ex` | 1420 | ✅ | `test_ex_adapter_mode_enum_bounds`, `test_ex_create_reset_mode_validation` |
 | `test_reset_resources` | 1843 | ✅ | `test_reset_resources_policy` |
-| `test_resource_access` | 4229 | 📐 | — |
-| `test_scene` | 5031 | 📐 | — |
+| `test_resource_access` | 4229 | 🔴 | `test_resource_access_ex_pool_policy` |
+| `test_scene` | 5031 | ✅ | `test_scene_ex_begin_end_policy` |
 | `test_swapchain_get_displaymode_ex` | 432 | ✅ | `test_ex_swapchain_display_mode`, `test_ex_swapchain_display_mode_null_rotation`, `test_swapchain_get_display_mode_ex_policy` |
 | `test_swapchain_parameters` | 3655 | ✅ | `test_ex_create_reset_mode_validation` |
 | `test_sysmem_draw` | 4693 | ✅ | `test_ex_device_sysmem_vertex_buffer_policy` |

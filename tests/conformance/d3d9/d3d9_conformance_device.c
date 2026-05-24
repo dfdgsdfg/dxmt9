@@ -5404,3 +5404,685 @@ done_window:
 done_d3d9:
     IDirect3D9_Release(d3d9);
 }
+
+/*
+ * Wine provenance: dlls/d3d9/tests/device.c
+ * function: test_resource_access (line 13659)
+ * Pins the base-device pool semantics matrix that Wine's test_resource_access
+ * exercises across every (pool, format, usage) tuple. We focus on a focused
+ * slice of the full Wine cross-product that captures the load-bearing pool
+ * policy without depending on adapter-specific depth-format CheckDeviceFormat
+ * outcomes:
+ *   - D3DPOOL_DEFAULT + D3DUSAGE_RENDERTARGET on the colour backbuffer format
+ *     creates a texture (S_OK) whose level-0 surface is non-lockable
+ *     (Lock returns D3DERR_INVALIDCALL).
+ *   - D3DPOOL_DEFAULT + D3DUSAGE_DYNAMIC on the colour format creates a
+ *     texture whose level-0 surface IS lockable (Lock returns S_OK).
+ *   - D3DPOOL_MANAGED + 0 usage on the colour format creates a texture whose
+ *     level-0 surface is lockable.
+ *   - D3DPOOL_SYSTEMMEM + 0 usage on the colour format creates a texture
+ *     whose level-0 surface is lockable.
+ *   - D3DPOOL_DEFAULT + 0 usage on a colour format creates a texture whose
+ *     level-0 surface is NOT lockable (the canonical "default-pool surface
+ *     is not lockable" base-d3d9 rule that Ex relaxes — see the Ex variant).
+ */
+void test_resource_access_base_pool_policy(const struct d3d9_api *api)
+{
+    IDirect3DTexture9 *texture = NULL;
+    IDirect3DSurface9 *surface = NULL;
+    IDirect3DSurface9 *backbuffer = NULL;
+    D3DSURFACE_DESC desc;
+    D3DLOCKED_RECT lr;
+    D3DFORMAT colour_format;
+    IDirect3DDevice9 *device = NULL;
+    IDirect3D9 *d3d9;
+    HWND window;
+    HRESULT hr;
+
+    d3d9 = api->create9(D3D_SDK_VERSION);
+    if (!d3d9)
+    {
+        skip_current_test("Direct3DCreate9 returned NULL");
+        return;
+    }
+
+    window = create_test_window();
+    CHECK_TRUE(window != NULL);
+    if (!window)
+        goto done_d3d9;
+
+    device = create_base_device(d3d9, window);
+    if (!device)
+        goto done_window;
+
+    /* Discover the backbuffer's colour format. */
+    hr = IDirect3DDevice9_GetBackBuffer(device, 0, 0, D3DBACKBUFFER_TYPE_MONO, &backbuffer);
+    CHECK_HR(hr, D3D_OK);
+    if (FAILED(hr))
+        goto done_device;
+    hr = IDirect3DSurface9_GetDesc(backbuffer, &desc);
+    CHECK_HR(hr, D3D_OK);
+    colour_format = desc.Format;
+    IDirect3DSurface9_Release(backbuffer);
+
+    /* DEFAULT + RENDERTARGET: created OK, surface not lockable. */
+    hr = IDirect3DDevice9_CreateTexture(device, 16, 16, 1,
+            D3DUSAGE_RENDERTARGET, colour_format, D3DPOOL_DEFAULT, &texture, NULL);
+    CHECK_HR(hr, D3D_OK);
+    if (SUCCEEDED(hr))
+    {
+        hr = IDirect3DTexture9_GetSurfaceLevel(texture, 0, &surface);
+        CHECK_HR(hr, D3D_OK);
+        if (SUCCEEDED(hr))
+        {
+            memset(&lr, 0, sizeof(lr));
+            hr = IDirect3DSurface9_LockRect(surface, &lr, NULL, 0);
+            CHECK_HR(hr, D3DERR_INVALIDCALL);
+            if (SUCCEEDED(hr))
+                IDirect3DSurface9_UnlockRect(surface);
+            IDirect3DSurface9_Release(surface);
+            surface = NULL;
+        }
+        IDirect3DTexture9_Release(texture);
+        texture = NULL;
+    }
+
+    /* DEFAULT + DYNAMIC: created OK, surface IS lockable. */
+    hr = IDirect3DDevice9_CreateTexture(device, 16, 16, 1,
+            D3DUSAGE_DYNAMIC, colour_format, D3DPOOL_DEFAULT, &texture, NULL);
+    CHECK_HR(hr, D3D_OK);
+    if (SUCCEEDED(hr))
+    {
+        hr = IDirect3DTexture9_GetSurfaceLevel(texture, 0, &surface);
+        CHECK_HR(hr, D3D_OK);
+        if (SUCCEEDED(hr))
+        {
+            memset(&lr, 0, sizeof(lr));
+            hr = IDirect3DSurface9_LockRect(surface, &lr, NULL, 0);
+            CHECK_HR(hr, D3D_OK);
+            if (SUCCEEDED(hr))
+                IDirect3DSurface9_UnlockRect(surface);
+            IDirect3DSurface9_Release(surface);
+            surface = NULL;
+        }
+        IDirect3DTexture9_Release(texture);
+        texture = NULL;
+    }
+
+    /* DEFAULT + 0 usage (colour): created OK, surface NOT lockable
+     * (the canonical base-d3d9 default-pool rule that Ex relaxes). */
+    hr = IDirect3DDevice9_CreateTexture(device, 16, 16, 1,
+            0, colour_format, D3DPOOL_DEFAULT, &texture, NULL);
+    CHECK_HR(hr, D3D_OK);
+    if (SUCCEEDED(hr))
+    {
+        hr = IDirect3DTexture9_GetSurfaceLevel(texture, 0, &surface);
+        CHECK_HR(hr, D3D_OK);
+        if (SUCCEEDED(hr))
+        {
+            memset(&lr, 0, sizeof(lr));
+            hr = IDirect3DSurface9_LockRect(surface, &lr, NULL, 0);
+            CHECK_HR(hr, D3DERR_INVALIDCALL);
+            if (SUCCEEDED(hr))
+                IDirect3DSurface9_UnlockRect(surface);
+            IDirect3DSurface9_Release(surface);
+            surface = NULL;
+        }
+        IDirect3DTexture9_Release(texture);
+        texture = NULL;
+    }
+
+    /* MANAGED + 0 usage: created OK, surface IS lockable. */
+    hr = IDirect3DDevice9_CreateTexture(device, 16, 16, 1,
+            0, colour_format, D3DPOOL_MANAGED, &texture, NULL);
+    CHECK_HR(hr, D3D_OK);
+    if (SUCCEEDED(hr))
+    {
+        hr = IDirect3DTexture9_GetSurfaceLevel(texture, 0, &surface);
+        CHECK_HR(hr, D3D_OK);
+        if (SUCCEEDED(hr))
+        {
+            memset(&lr, 0, sizeof(lr));
+            hr = IDirect3DSurface9_LockRect(surface, &lr, NULL, 0);
+            CHECK_HR(hr, D3D_OK);
+            if (SUCCEEDED(hr))
+                IDirect3DSurface9_UnlockRect(surface);
+            IDirect3DSurface9_Release(surface);
+            surface = NULL;
+        }
+        IDirect3DTexture9_Release(texture);
+        texture = NULL;
+    }
+
+    /* SYSTEMMEM + 0 usage: created OK, surface IS lockable. */
+    hr = IDirect3DDevice9_CreateTexture(device, 16, 16, 1,
+            0, colour_format, D3DPOOL_SYSTEMMEM, &texture, NULL);
+    CHECK_HR(hr, D3D_OK);
+    if (SUCCEEDED(hr))
+    {
+        hr = IDirect3DTexture9_GetSurfaceLevel(texture, 0, &surface);
+        CHECK_HR(hr, D3D_OK);
+        if (SUCCEEDED(hr))
+        {
+            memset(&lr, 0, sizeof(lr));
+            hr = IDirect3DSurface9_LockRect(surface, &lr, NULL, 0);
+            CHECK_HR(hr, D3D_OK);
+            if (SUCCEEDED(hr))
+                IDirect3DSurface9_UnlockRect(surface);
+            IDirect3DSurface9_Release(surface);
+            surface = NULL;
+        }
+        IDirect3DTexture9_Release(texture);
+        texture = NULL;
+    }
+
+done_device:
+    IDirect3DDevice9_Release(device);
+done_window:
+    DestroyWindow(window);
+done_d3d9:
+    IDirect3D9_Release(d3d9);
+}
+
+/*
+ * Wine provenance: dlls/d3d9/tests/d3d9ex.c
+ * function: test_resource_access (line 4229)
+ * Ex-specific pool semantics — the load-bearing divergence from base d3d9
+ * is that under D3D9Ex, D3DPOOL_DEFAULT + 0 usage colour textures ARE
+ * lockable (Wine's tests[0] is valid=TRUE in d3d9ex.c, where the same
+ * row in device.c is valid=TRUE for creation but Lock then returns
+ * INVALIDCALL because base-pool default-pool surfaces are not lockable
+ * without DYNAMIC/RENDERTARGET). Companion to test_resource_access_base_pool_policy.
+ *
+ * We also pin the Ex-side disallowed-pool rule that test[14] in d3d9ex.c
+ * makes explicit: D3DPOOL_MANAGED is rejected by an Ex device at
+ * CreateTexture time (D3DERR_INVALIDCALL) — the upstream Wine table sets
+ * valid=FALSE for every MANAGED row, mirroring the public MSDN contract.
+ */
+void test_resource_access_ex_pool_policy(const struct d3d9_api *api)
+{
+    IDirect3DTexture9 *texture = NULL;
+    IDirect3DSurface9 *surface = NULL;
+    IDirect3DSurface9 *backbuffer = NULL;
+    D3DSURFACE_DESC desc;
+    D3DLOCKED_RECT lr;
+    D3DFORMAT colour_format;
+    IDirect3DDevice9Ex *device = NULL;
+    IDirect3D9Ex *d3d9ex;
+    HWND window;
+    HRESULT hr;
+
+    d3d9ex = create_d3d9ex(api);
+    if (!d3d9ex)
+        return;
+
+    window = create_test_window();
+    CHECK_TRUE(window != NULL);
+    if (!window)
+        goto done_d3d9;
+
+    device = create_ex_device(d3d9ex, window);
+    if (!device)
+        goto done_window;
+
+    /* Discover the backbuffer's colour format. */
+    hr = IDirect3DDevice9Ex_GetBackBuffer(device, 0, 0, D3DBACKBUFFER_TYPE_MONO, &backbuffer);
+    CHECK_HR(hr, D3D_OK);
+    if (FAILED(hr))
+        goto done_device;
+    hr = IDirect3DSurface9_GetDesc(backbuffer, &desc);
+    CHECK_HR(hr, D3D_OK);
+    colour_format = desc.Format;
+    IDirect3DSurface9_Release(backbuffer);
+
+    /* Ex: DEFAULT + 0 usage colour — created OK, surface IS lockable
+     * (this is the relaxation that distinguishes Ex from base d3d9). */
+    hr = IDirect3DDevice9Ex_CreateTexture(device, 16, 16, 1,
+            0, colour_format, D3DPOOL_DEFAULT, &texture, NULL);
+    CHECK_HR(hr, D3D_OK);
+    if (SUCCEEDED(hr))
+    {
+        hr = IDirect3DTexture9_GetSurfaceLevel(texture, 0, &surface);
+        CHECK_HR(hr, D3D_OK);
+        if (SUCCEEDED(hr))
+        {
+            memset(&lr, 0, sizeof(lr));
+            hr = IDirect3DSurface9_LockRect(surface, &lr, NULL, 0);
+            CHECK_HR(hr, D3D_OK);
+            if (SUCCEEDED(hr))
+                IDirect3DSurface9_UnlockRect(surface);
+            IDirect3DSurface9_Release(surface);
+            surface = NULL;
+        }
+        IDirect3DTexture9_Release(texture);
+        texture = NULL;
+    }
+
+    /* Ex: MANAGED + 0 usage colour — rejected outright by an Ex device. */
+    hr = IDirect3DDevice9Ex_CreateTexture(device, 16, 16, 1,
+            0, colour_format, D3DPOOL_MANAGED, &texture, NULL);
+    CHECK_HR(hr, D3DERR_INVALIDCALL);
+    if (SUCCEEDED(hr) && texture)
+    {
+        IDirect3DTexture9_Release(texture);
+        texture = NULL;
+    }
+
+    /* Ex: SYSTEMMEM + 0 usage colour — still permitted, surface lockable. */
+    hr = IDirect3DDevice9Ex_CreateTexture(device, 16, 16, 1,
+            0, colour_format, D3DPOOL_SYSTEMMEM, &texture, NULL);
+    CHECK_HR(hr, D3D_OK);
+    if (SUCCEEDED(hr))
+    {
+        hr = IDirect3DTexture9_GetSurfaceLevel(texture, 0, &surface);
+        CHECK_HR(hr, D3D_OK);
+        if (SUCCEEDED(hr))
+        {
+            memset(&lr, 0, sizeof(lr));
+            hr = IDirect3DSurface9_LockRect(surface, &lr, NULL, 0);
+            CHECK_HR(hr, D3D_OK);
+            if (SUCCEEDED(hr))
+                IDirect3DSurface9_UnlockRect(surface);
+            IDirect3DSurface9_Release(surface);
+            surface = NULL;
+        }
+        IDirect3DTexture9_Release(texture);
+        texture = NULL;
+    }
+
+    /* Ex: DEFAULT + DYNAMIC colour — created OK, surface lockable. */
+    hr = IDirect3DDevice9Ex_CreateTexture(device, 16, 16, 1,
+            D3DUSAGE_DYNAMIC, colour_format, D3DPOOL_DEFAULT, &texture, NULL);
+    CHECK_HR(hr, D3D_OK);
+    if (SUCCEEDED(hr))
+    {
+        hr = IDirect3DTexture9_GetSurfaceLevel(texture, 0, &surface);
+        CHECK_HR(hr, D3D_OK);
+        if (SUCCEEDED(hr))
+        {
+            memset(&lr, 0, sizeof(lr));
+            hr = IDirect3DSurface9_LockRect(surface, &lr, NULL, 0);
+            CHECK_HR(hr, D3D_OK);
+            if (SUCCEEDED(hr))
+                IDirect3DSurface9_UnlockRect(surface);
+            IDirect3DSurface9_Release(surface);
+            surface = NULL;
+        }
+        IDirect3DTexture9_Release(texture);
+        texture = NULL;
+    }
+
+done_device:
+    IDirect3DDevice9Ex_Release(device);
+done_window:
+    DestroyWindow(window);
+done_d3d9:
+    IDirect3D9Ex_Release(d3d9ex);
+}
+
+/*
+ * Wine provenance: dlls/d3d9/tests/device.c
+ * function: test_vertex_buffer_read_write (line 14211)
+ * Pins the dynamic vertex-buffer Lock/Unlock access matrix that Wine
+ * exercises after a draw has caused the buffer to be backed by a BO.
+ * Each Lock/Unlock round-trip must return S_OK; NOOVERWRITE and 0-flag
+ * locks observe each other's writes; the buffer survives the draw.
+ */
+void test_vertex_buffer_read_write(const struct d3d9_api *api)
+{
+    static const float tri[3 * 3] =
+    {
+        -1.0f, -1.0f, 0.0f,
+        -1.0f,  1.0f, 0.0f,
+         1.0f,  1.0f, 0.0f,
+    };
+    IDirect3DVertexBuffer9 *buffer = NULL;
+    IDirect3DDevice9 *device = NULL;
+    IDirect3D9 *d3d9;
+    HWND window;
+    HRESULT hr;
+    float *data;
+    unsigned int i;
+
+    d3d9 = api->create9(D3D_SDK_VERSION);
+    if (!d3d9)
+    {
+        skip_current_test("Direct3DCreate9 returned NULL");
+        return;
+    }
+
+    window = create_test_window();
+    CHECK_TRUE(window != NULL);
+    if (!window)
+        goto done_d3d9;
+
+    device = create_base_device(d3d9, window);
+    if (!device)
+        goto done_window;
+
+    hr = IDirect3DDevice9_CreateVertexBuffer(device, sizeof(tri),
+            D3DUSAGE_DYNAMIC, D3DFVF_XYZ, D3DPOOL_DEFAULT, &buffer, NULL);
+    CHECK_HR(hr, D3D_OK);
+    if (FAILED(hr))
+        goto done_device;
+
+    /* Lock(DISCARD) — populate. */
+    data = NULL;
+    hr = IDirect3DVertexBuffer9_Lock(buffer, 0, sizeof(tri),
+            (void **)&data, D3DLOCK_DISCARD);
+    CHECK_HR(hr, D3D_OK);
+    if (SUCCEEDED(hr))
+    {
+        memcpy(data, tri, sizeof(tri));
+        hr = IDirect3DVertexBuffer9_Unlock(buffer);
+        CHECK_HR(hr, D3D_OK);
+    }
+
+    /* Bind + draw to force BO materialisation. */
+    hr = IDirect3DDevice9_SetStreamSource(device, 0, buffer, 0, sizeof(float) * 3);
+    CHECK_HR(hr, D3D_OK);
+    hr = IDirect3DDevice9_BeginScene(device);
+    CHECK_HR(hr, D3D_OK);
+    hr = IDirect3DDevice9_SetFVF(device, D3DFVF_XYZ);
+    CHECK_HR(hr, D3D_OK);
+    hr = IDirect3DDevice9_DrawPrimitive(device, D3DPT_TRIANGLELIST, 0, 1);
+    CHECK_HR(hr, D3D_OK);
+    hr = IDirect3DDevice9_EndScene(device);
+    CHECK_HR(hr, D3D_OK);
+    hr = IDirect3DDevice9_Present(device, NULL, NULL, NULL, NULL);
+    CHECK_HR(hr, D3D_OK);
+
+    /* Lock(NOOVERWRITE) — write 3.0f */
+    data = NULL;
+    hr = IDirect3DVertexBuffer9_Lock(buffer, 0, sizeof(tri),
+            (void **)&data, D3DLOCK_NOOVERWRITE);
+    CHECK_HR(hr, D3D_OK);
+    if (SUCCEEDED(hr))
+    {
+        for (i = 0; i < 3; ++i)
+            data[i] = 3.0f;
+        hr = IDirect3DVertexBuffer9_Unlock(buffer);
+        CHECK_HR(hr, D3D_OK);
+    }
+
+    /* Lock(NOOVERWRITE) — read back 3.0f */
+    data = NULL;
+    hr = IDirect3DVertexBuffer9_Lock(buffer, 0, sizeof(tri),
+            (void **)&data, D3DLOCK_NOOVERWRITE);
+    CHECK_HR(hr, D3D_OK);
+    if (SUCCEEDED(hr))
+    {
+        for (i = 0; i < 3; ++i)
+            CHECK_TRUE(data[i] == 3.0f);
+        hr = IDirect3DVertexBuffer9_Unlock(buffer);
+        CHECK_HR(hr, D3D_OK);
+    }
+
+    /* Lock(0) — read back 3.0f */
+    data = NULL;
+    hr = IDirect3DVertexBuffer9_Lock(buffer, 0, sizeof(tri),
+            (void **)&data, 0);
+    CHECK_HR(hr, D3D_OK);
+    if (SUCCEEDED(hr))
+    {
+        for (i = 0; i < 3; ++i)
+            CHECK_TRUE(data[i] == 3.0f);
+        hr = IDirect3DVertexBuffer9_Unlock(buffer);
+        CHECK_HR(hr, D3D_OK);
+    }
+
+    /* Lock(0) — write 4.0f */
+    data = NULL;
+    hr = IDirect3DVertexBuffer9_Lock(buffer, 0, sizeof(tri),
+            (void **)&data, 0);
+    CHECK_HR(hr, D3D_OK);
+    if (SUCCEEDED(hr))
+    {
+        for (i = 0; i < 3; ++i)
+            data[i] = 4.0f;
+        hr = IDirect3DVertexBuffer9_Unlock(buffer);
+        CHECK_HR(hr, D3D_OK);
+    }
+
+    /* Lock(NOOVERWRITE) — read back 4.0f */
+    data = NULL;
+    hr = IDirect3DVertexBuffer9_Lock(buffer, 0, sizeof(tri),
+            (void **)&data, D3DLOCK_NOOVERWRITE);
+    CHECK_HR(hr, D3D_OK);
+    if (SUCCEEDED(hr))
+    {
+        for (i = 0; i < 3; ++i)
+            CHECK_TRUE(data[i] == 4.0f);
+        hr = IDirect3DVertexBuffer9_Unlock(buffer);
+        CHECK_HR(hr, D3D_OK);
+    }
+
+    IDirect3DVertexBuffer9_Release(buffer);
+done_device:
+    IDirect3DDevice9_Release(device);
+done_window:
+    DestroyWindow(window);
+done_d3d9:
+    IDirect3D9_Release(d3d9);
+}
+
+/*
+ * Wine provenance: dlls/d3d9/tests/d3d9ex.c
+ * function: test_qi_base_to_ex (line 240)
+ * Pins: a base-d3d9 IDirect3D9 / IDirect3DDevice9 / IDirect3DSwapChain9
+ * trio MUST refuse QueryInterface(IID_*Ex) with E_NOINTERFACE and leave the
+ * out-pointer set to NULL.
+ */
+void test_qi_base_to_ex(const struct d3d9_api *api)
+{
+    IDirect3D9 *d3d9 = NULL;
+    IDirect3D9Ex *d3d9ex = (IDirect3D9Ex *)(uintptr_t)0xdeadbeef;
+    IDirect3DDevice9 *device = NULL;
+    IDirect3DDevice9Ex *device_ex = (IDirect3DDevice9Ex *)(uintptr_t)0xdeadbeef;
+    IDirect3DSwapChain9 *swapchain = NULL;
+    IDirect3DSwapChain9Ex *swapchain_ex = (IDirect3DSwapChain9Ex *)(uintptr_t)0xdeadbeef;
+    HWND window;
+    HRESULT hr;
+
+    d3d9 = api->create9(D3D_SDK_VERSION);
+    if (!d3d9)
+    {
+        skip_current_test("Direct3DCreate9 returned NULL");
+        return;
+    }
+
+    /* IDirect3D9 -> IID_IDirect3D9Ex: must fail E_NOINTERFACE, NULL out. */
+    hr = IDirect3D9_QueryInterface(d3d9, &IID_IDirect3D9Ex, (void **)&d3d9ex);
+    CHECK_HR(hr, E_NOINTERFACE);
+    CHECK_TRUE(d3d9ex == NULL);
+    if (d3d9ex && d3d9ex != (IDirect3D9Ex *)(uintptr_t)0xdeadbeef)
+        IDirect3D9Ex_Release(d3d9ex);
+
+    window = create_test_window();
+    CHECK_TRUE(window != NULL);
+    if (!window)
+        goto done_d3d9;
+
+    device = create_base_device(d3d9, window);
+    if (!device)
+        goto done_window;
+
+    /* IDirect3DDevice9 -> IID_IDirect3DDevice9Ex: must fail E_NOINTERFACE. */
+    hr = IDirect3DDevice9_QueryInterface(device, &IID_IDirect3DDevice9Ex,
+            (void **)&device_ex);
+    CHECK_HR(hr, E_NOINTERFACE);
+    CHECK_TRUE(device_ex == NULL);
+    if (device_ex && device_ex != (IDirect3DDevice9Ex *)(uintptr_t)0xdeadbeef)
+        IDirect3DDevice9Ex_Release(device_ex);
+
+    /* Implicit swapchain -> IID_IDirect3DSwapChain9Ex: same rule. */
+    hr = IDirect3DDevice9_GetSwapChain(device, 0, &swapchain);
+    CHECK_HR(hr, D3D_OK);
+    if (SUCCEEDED(hr) && swapchain)
+    {
+        hr = IDirect3DSwapChain9_QueryInterface(swapchain,
+                &IID_IDirect3DSwapChain9Ex, (void **)&swapchain_ex);
+        CHECK_HR(hr, E_NOINTERFACE);
+        CHECK_TRUE(swapchain_ex == NULL);
+        if (swapchain_ex && swapchain_ex != (IDirect3DSwapChain9Ex *)(uintptr_t)0xdeadbeef)
+            IDirect3DSwapChain9Ex_Release(swapchain_ex);
+        IDirect3DSwapChain9_Release(swapchain);
+    }
+
+    IDirect3DDevice9_Release(device);
+done_window:
+    DestroyWindow(window);
+done_d3d9:
+    IDirect3D9_Release(d3d9);
+}
+
+/*
+ * Wine provenance: dlls/d3d9/tests/d3d9ex.c
+ * function: test_qi_ex_to_base (line 303)
+ * Pins the reverse direction: an IDirect3D9Ex factory must QI down to
+ * IDirect3D9 (S_OK, non-NULL), a normal device created via
+ * IDirect3D9::CreateDevice (non-Ex, on the QI'd base factory) must QI
+ * up to IDirect3DDevice9Ex (S_OK, non-NULL), and the implicit swapchain
+ * of that device must QI up to IDirect3DSwapChain9Ex.
+ */
+void test_qi_ex_to_base(const struct d3d9_api *api)
+{
+    IDirect3D9Ex *d3d9ex = NULL;
+    IDirect3D9 *d3d9 = (IDirect3D9 *)(uintptr_t)0xdeadbeef;
+    IDirect3DDevice9 *device = NULL;
+    IDirect3DDevice9Ex *device_ex = (IDirect3DDevice9Ex *)(uintptr_t)0xdeadbeef;
+    IDirect3DSwapChain9 *swapchain = NULL;
+    IDirect3DSwapChain9Ex *swapchain_ex = (IDirect3DSwapChain9Ex *)(uintptr_t)0xdeadbeef;
+    D3DPRESENT_PARAMETERS pp;
+    HWND window;
+    HRESULT hr;
+
+    d3d9ex = create_d3d9ex(api);
+    if (!d3d9ex)
+        return;
+
+    /* Ex factory -> IID_IDirect3D9: must succeed and return non-deadbeef. */
+    hr = IDirect3D9Ex_QueryInterface(d3d9ex, &IID_IDirect3D9, (void **)&d3d9);
+    CHECK_HR(hr, S_OK);
+    CHECK_TRUE(d3d9 != NULL && d3d9 != (IDirect3D9 *)(uintptr_t)0xdeadbeef);
+
+    window = create_test_window();
+    CHECK_TRUE(window != NULL);
+    if (!window)
+        goto done_d3d9;
+
+    /* Create a non-Ex device through the QI'd base IDirect3D9 vtable
+     * and QI it back up to IDirect3DDevice9Ex. */
+    pp = default_present_parameters(window);
+    pp.SwapEffect = D3DSWAPEFFECT_DISCARD;
+    pp.BackBufferFormat = D3DFMT_A8R8G8B8;
+    if (d3d9 && d3d9 != (IDirect3D9 *)(uintptr_t)0xdeadbeef)
+    {
+        hr = IDirect3D9_CreateDevice(d3d9, D3DADAPTER_DEFAULT, D3DDEVTYPE_HAL,
+                window, D3DCREATE_SOFTWARE_VERTEXPROCESSING, &pp, &device);
+        CHECK_HR(hr, D3D_OK);
+    }
+    if (!device)
+        goto done_window;
+
+    hr = IDirect3DDevice9_QueryInterface(device, &IID_IDirect3DDevice9Ex,
+            (void **)&device_ex);
+    CHECK_HR(hr, D3D_OK);
+    CHECK_TRUE(device_ex != NULL
+            && device_ex != (IDirect3DDevice9Ex *)(uintptr_t)0xdeadbeef);
+
+    /* Implicit swapchain -> IID_IDirect3DSwapChain9Ex: must succeed. */
+    hr = IDirect3DDevice9_GetSwapChain(device, 0, &swapchain);
+    CHECK_HR(hr, D3D_OK);
+    if (SUCCEEDED(hr) && swapchain)
+    {
+        hr = IDirect3DSwapChain9_QueryInterface(swapchain,
+                &IID_IDirect3DSwapChain9Ex, (void **)&swapchain_ex);
+        CHECK_HR(hr, D3D_OK);
+        CHECK_TRUE(swapchain_ex != NULL
+                && swapchain_ex != (IDirect3DSwapChain9Ex *)(uintptr_t)0xdeadbeef);
+        if (swapchain_ex && swapchain_ex != (IDirect3DSwapChain9Ex *)(uintptr_t)0xdeadbeef)
+            IDirect3DSwapChain9Ex_Release(swapchain_ex);
+        IDirect3DSwapChain9_Release(swapchain);
+    }
+
+    if (device_ex && device_ex != (IDirect3DDevice9Ex *)(uintptr_t)0xdeadbeef)
+        IDirect3DDevice9Ex_Release(device_ex);
+    IDirect3DDevice9_Release(device);
+done_window:
+    DestroyWindow(window);
+done_d3d9:
+    if (d3d9 && d3d9 != (IDirect3D9 *)(uintptr_t)0xdeadbeef)
+        IDirect3D9_Release(d3d9);
+    IDirect3D9Ex_Release(d3d9ex);
+}
+
+/*
+ * Wine provenance: dlls/d3d9/tests/d3d9ex.c
+ * function: test_scene (line 5031)
+ * Ex-specific BeginScene/EndScene contract — like the base d3d9 test_scene,
+ * but exercised on an IDirect3DDevice9Ex. Pins the windowed-deterministic
+ * subset of the Wine oracle:
+ *   - EndScene without prior BeginScene -> D3DERR_INVALIDCALL.
+ *   - BeginScene then EndScene -> S_OK / S_OK.
+ *   - A second EndScene without a new BeginScene -> D3DERR_INVALIDCALL.
+ *   - Nested BeginScene while a scene is open -> D3DERR_INVALIDCALL,
+ *     followed by EndScene -> S_OK, followed by a redundant EndScene ->
+ *     D3DERR_INVALIDCALL.
+ *
+ * The Ex divergence from base d3d9 — that Reset() does NOT clear scene
+ * state — is observed downstream by test_reset_*; this scaffold deliberately
+ * stays inside the windowed scene-state matrix that is deterministic under
+ * the chunked runner.
+ */
+void test_scene_ex_begin_end_policy(const struct d3d9_api *api)
+{
+    IDirect3DDevice9Ex *device = NULL;
+    IDirect3D9Ex *d3d9ex;
+    HWND window;
+    HRESULT hr;
+
+    d3d9ex = create_d3d9ex(api);
+    if (!d3d9ex)
+        return;
+
+    window = create_test_window();
+    CHECK_TRUE(window != NULL);
+    if (!window)
+        goto done_d3d9;
+
+    device = create_ex_device(d3d9ex, window);
+    if (!device)
+        goto done_window;
+
+    /* EndScene without BeginScene -> INVALIDCALL. */
+    hr = IDirect3DDevice9Ex_EndScene(device);
+    CHECK_HR(hr, D3DERR_INVALIDCALL);
+
+    /* Normal BeginScene + EndScene pair -> S_OK / S_OK. */
+    hr = IDirect3DDevice9Ex_BeginScene(device);
+    CHECK_HR(hr, S_OK);
+    hr = IDirect3DDevice9Ex_EndScene(device);
+    CHECK_HR(hr, S_OK);
+
+    /* Second EndScene without a new BeginScene -> INVALIDCALL. */
+    hr = IDirect3DDevice9Ex_EndScene(device);
+    CHECK_HR(hr, D3DERR_INVALIDCALL);
+
+    /* Nested BeginScene while a scene is open -> INVALIDCALL,
+     * followed by EndScene -> S_OK, redundant EndScene -> INVALIDCALL. */
+    hr = IDirect3DDevice9Ex_BeginScene(device);
+    CHECK_HR(hr, S_OK);
+    hr = IDirect3DDevice9Ex_BeginScene(device);
+    CHECK_HR(hr, D3DERR_INVALIDCALL);
+    hr = IDirect3DDevice9Ex_EndScene(device);
+    CHECK_HR(hr, S_OK);
+    hr = IDirect3DDevice9Ex_EndScene(device);
+    CHECK_HR(hr, D3DERR_INVALIDCALL);
+
+    IDirect3DDevice9Ex_Release(device);
+done_window:
+    DestroyWindow(window);
+done_d3d9:
+    IDirect3D9Ex_Release(d3d9ex);
+}

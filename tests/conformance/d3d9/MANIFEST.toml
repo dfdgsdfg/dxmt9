@@ -5788,3 +5788,147 @@ status = "passing"
 source = "tests/conformance/d3d9/evidence/sikarugir-cx-24.0.7-builtin-x64.json:1"
 summary = "Sikarugir-CX 24.0.7 builtin lane x64 2026-05-24 — passing in chunked runner snapshot (shared coverage for device.c:test_reset_resources and d3d9ex.c:test_reset_resources)."
 
+
+[[case]]
+executable = "dxmt9-d3d9-conformance.exe"
+source_file = "d3d9_conformance_device.c"
+function = "test_resource_access_base_pool_policy"
+source = "wine/dlls/d3d9/tests/device.c:test_resource_access"
+source_kind = "behavioral-oracle"
+license = "LGPL-2.1-or-later"
+license_scope = "external-not-vendored"
+upstream_commit = "6e073d28dee3af7f4c965daec94644e0f9f92727"
+lanes = ["app-local", "builtin"]
+arches = ["x64", "x86"]
+area = "resources"
+owner = "core/resources"
+requirements = ["R-TEST-12.3"]
+acceptance = ["D3DPOOL_DEFAULT + D3DUSAGE_RENDERTARGET on the backbuffer colour format creates a texture; the level-0 surface is not lockable (LockRect returns D3DERR_INVALIDCALL)", "D3DPOOL_DEFAULT + D3DUSAGE_DYNAMIC colour texture is lockable", "D3DPOOL_DEFAULT + 0 usage colour texture is created OK but the surface is not lockable (the base-d3d9 default-pool rule that Ex relaxes)", "D3DPOOL_MANAGED + 0 usage colour texture is created OK and the surface is lockable", "D3DPOOL_SYSTEMMEM + 0 usage colour texture is created OK and the surface is lockable. Depth-format and ATI2N rows of the Wine matrix are left to vendor-policy probes — they depend on adapter CheckDeviceFormat outcomes."]
+status = "failing"
+
+[[case.evidence]]
+lane = "builtin"
+arch = "x64"
+status = "failing"
+source = "tests/conformance/d3d9/evidence/sikarugir-cx-24.0.7-builtin-x64.json:1"
+summary = "Sikarugir-CX 24.0.7 builtin lane x64 2026-05-24 — failing in chunked runner snapshot. dxmt9 lets LockRect succeed (S_OK) on D3DPOOL_DEFAULT + USAGE_RENDERTARGET and on D3DPOOL_DEFAULT + 0 usage colour surfaces where the Wine/MSDN oracle requires D3DERR_INVALIDCALL. The other matrix rows (DYNAMIC, MANAGED, SYSTEMMEM) pass; this is a focused implementation gap in default-pool lockability validation."
+
+[[case]]
+executable = "dxmt9-d3d9-conformance.exe"
+source_file = "d3d9_conformance_device.c"
+function = "test_resource_access_ex_pool_policy"
+source = "wine/dlls/d3d9/tests/d3d9ex.c:test_resource_access"
+source_kind = "behavioral-oracle"
+license = "LGPL-2.1-or-later"
+license_scope = "external-not-vendored"
+upstream_commit = "6e073d28dee3af7f4c965daec94644e0f9f92727"
+lanes = ["app-local", "builtin"]
+arches = ["x64", "x86"]
+area = "resources-ex"
+owner = "core/resources"
+requirements = ["R-TEST-12.3"]
+acceptance = ["Under D3D9Ex, D3DPOOL_DEFAULT + 0 usage colour texture is created OK and the level-0 surface IS lockable (Ex relaxes the base d3d9 default-pool rule)", "D3DPOOL_MANAGED is rejected outright by an Ex device's CreateTexture (D3DERR_INVALIDCALL)", "D3DPOOL_SYSTEMMEM + 0 usage colour texture is still permitted and lockable", "D3DPOOL_DEFAULT + D3DUSAGE_DYNAMIC colour texture is created OK and lockable. Depth-format and ATI2N rows of the Wine matrix are left to vendor-policy probes."]
+status = "failing"
+
+[[case.evidence]]
+lane = "builtin"
+arch = "x64"
+status = "failing"
+source = "tests/conformance/d3d9/evidence/sikarugir-cx-24.0.7-builtin-x64.json:1"
+summary = "Sikarugir-CX 24.0.7 builtin lane x64 2026-05-24 — failing in chunked runner snapshot. dxmt9 accepts CreateTexture(POOL_MANAGED) on an Ex device (S_OK) where the Wine/MSDN oracle requires D3DERR_INVALIDCALL — Ex must reject MANAGED outright. The other Ex rows pass."
+
+[[case]]
+executable = "dxmt9-d3d9-conformance.exe"
+source_file = "d3d9_conformance_device.c"
+function = "test_vertex_buffer_read_write"
+source = "wine/dlls/d3d9/tests/device.c:test_vertex_buffer_read_write"
+source_kind = "behavioral-oracle"
+license = "LGPL-2.1-or-later"
+license_scope = "external-not-vendored"
+upstream_commit = "6e073d28dee3af7f4c965daec94644e0f9f92727"
+lanes = ["app-local", "builtin"]
+arches = ["x64", "x86"]
+area = "vertex-buffer"
+owner = "core/resources"
+requirements = ["R-TEST-12.3"]
+acceptance = ["CreateVertexBuffer(USAGE_DYNAMIC,FVF_XYZ,POOL_DEFAULT) returns S_OK", "Lock(DISCARD) returns S_OK and the populated buffer is drawable inside a BeginScene/EndScene + Present round-trip", "Lock(NOOVERWRITE) write 3.0f, then Lock(NOOVERWRITE) read-back observes 3.0f", "Lock(0) read-back also observes 3.0f", "Lock(0) write 4.0f, then Lock(NOOVERWRITE) read-back observes 4.0f. All Lock/Unlock calls return S_OK."]
+status = "partial"
+
+[[case.evidence]]
+lane = "builtin"
+arch = "x64"
+status = "passing"
+source = "tests/conformance/d3d9/evidence/sikarugir-cx-24.0.7-builtin-x64.json:1"
+summary = "Sikarugir-CX 24.0.7 builtin lane x64 2026-05-24 — passing in chunked runner snapshot."
+
+[[case]]
+executable = "dxmt9-d3d9-conformance.exe"
+source_file = "d3d9_conformance_device.c"
+function = "test_qi_base_to_ex"
+source = "wine/dlls/d3d9/tests/d3d9ex.c:test_qi_base_to_ex"
+source_kind = "behavioral-oracle"
+license = "LGPL-2.1-or-later"
+license_scope = "external-not-vendored"
+upstream_commit = "6e073d28dee3af7f4c965daec94644e0f9f92727"
+lanes = ["app-local", "builtin"]
+arches = ["x64", "x86"]
+area = "queryinterface"
+owner = "core/device"
+requirements = ["R-TEST-12.3"]
+acceptance = ["IDirect3D9::QueryInterface(IID_IDirect3D9Ex) returns E_NOINTERFACE and writes NULL to the out-pointer", "IDirect3DDevice9::QueryInterface(IID_IDirect3DDevice9Ex) returns E_NOINTERFACE and writes NULL", "IDirect3DSwapChain9::QueryInterface(IID_IDirect3DSwapChain9Ex) on the implicit swapchain returns E_NOINTERFACE and writes NULL"]
+status = "partial"
+
+[[case.evidence]]
+lane = "builtin"
+arch = "x64"
+status = "passing"
+source = "tests/conformance/d3d9/evidence/sikarugir-cx-24.0.7-builtin-x64.json:1"
+summary = "Sikarugir-CX 24.0.7 builtin lane x64 2026-05-24 — passing in chunked runner snapshot."
+
+[[case]]
+executable = "dxmt9-d3d9-conformance.exe"
+source_file = "d3d9_conformance_device.c"
+function = "test_qi_ex_to_base"
+source = "wine/dlls/d3d9/tests/d3d9ex.c:test_qi_ex_to_base"
+source_kind = "behavioral-oracle"
+license = "LGPL-2.1-or-later"
+license_scope = "external-not-vendored"
+upstream_commit = "6e073d28dee3af7f4c965daec94644e0f9f92727"
+lanes = ["app-local", "builtin"]
+arches = ["x64", "x86"]
+area = "queryinterface"
+owner = "core/device"
+requirements = ["R-TEST-12.3"]
+acceptance = ["IDirect3D9Ex::QueryInterface(IID_IDirect3D9) returns S_OK and a non-deadbeef, non-NULL pointer", "A normal IDirect3DDevice9 created through the QI'd base factory must QueryInterface up to IDirect3DDevice9Ex (S_OK)", "Its implicit IDirect3DSwapChain9 must QueryInterface up to IDirect3DSwapChain9Ex (S_OK)"]
+status = "partial"
+
+[[case.evidence]]
+lane = "builtin"
+arch = "x64"
+status = "passing"
+source = "tests/conformance/d3d9/evidence/sikarugir-cx-24.0.7-builtin-x64.json:1"
+summary = "Sikarugir-CX 24.0.7 builtin lane x64 2026-05-24 — passing in chunked runner snapshot."
+
+[[case]]
+executable = "dxmt9-d3d9-conformance.exe"
+source_file = "d3d9_conformance_device.c"
+function = "test_scene_ex_begin_end_policy"
+source = "wine/dlls/d3d9/tests/d3d9ex.c:test_scene"
+source_kind = "behavioral-oracle"
+license = "LGPL-2.1-or-later"
+license_scope = "external-not-vendored"
+upstream_commit = "6e073d28dee3af7f4c965daec94644e0f9f92727"
+lanes = ["app-local", "builtin"]
+arches = ["x64", "x86"]
+area = "scene"
+owner = "core/device"
+requirements = ["R-TEST-12.3"]
+acceptance = ["EndScene on a fresh IDirect3DDevice9Ex returns D3DERR_INVALIDCALL", "BeginScene + EndScene returns S_OK / S_OK; a redundant EndScene returns D3DERR_INVALIDCALL", "Nested BeginScene while a scene is open returns D3DERR_INVALIDCALL; EndScene closes the open scene (S_OK); a redundant EndScene then returns D3DERR_INVALIDCALL. Reset() scene-state divergence vs. base d3d9 is observed by test_reset_* and is out of scope for this scaffold."]
+status = "partial"
+
+[[case.evidence]]
+lane = "builtin"
+arch = "x64"
+status = "passing"
+source = "tests/conformance/d3d9/evidence/sikarugir-cx-24.0.7-builtin-x64.json:1"
+summary = "Sikarugir-CX 24.0.7 builtin lane x64 2026-05-24 — passing in chunked runner snapshot."
