@@ -79,6 +79,7 @@ a `file:line` anchor checked against the live tree.
 | COM stub regression gates: CheckResourceResidency, Get/SetGPUThreadPriority (native, closed 2026-05-24) | D.* | `tests/native/core/core_device_com_spec.cpp`; gate `dxmt9-core-device-com-spec` |
 | `DF16`/`DF24` vendor depth-as-texture accepted + wired to Metal depth (closed 2026-05-24) | C.5 | `device_c_format_utils.cpp`/`core_format.cpp`/`dxmt9_format_convert.cpp`/`core_format_utils.cpp`; gate `dxmt9-core-format-caps-spec` |
 | TSS `COLORARG0`/`ALPHAARG0` + MULTIPLYADD/LERP triadic ops, arg0 default `D3DTA_CURRENT` (closed 2026-05-24) | B.10#10 | `dxmt9_ffp_shaders.cpp`/`core_draw.cpp`; gates `dxmt9-ffp-triadic-msl-spec` + tss_multiplyadd/lerp/alpha_lerp GPU readbacks |
+| `D32_LOCKABLE` (84) + `Q16W16V16U16` (110) formats end-to-end (closed 2026-05-24) | C.12#7 | mirror D32F_LOCKABLE→Depth32Float / A16B16G16R16→RGBA16Snorm; gate `dxmt9-core-format-caps-spec`. Caveat: Q16W16V16U16 FormatInfo mirrors its analog's `renderTarget=true` — real D3D9 may not advertise RT for it (minor caps over-report) |
 
 ### Remaining actionable gaps (verified still open)
 
@@ -86,9 +87,8 @@ a `file:line` anchor checked against the live tree.
 |---|---|---|---|
 | COM silent-`S_OK` stub gates — 4 PE-only remain (SetNPatchMode/GetNPatchMode, SetClipStatus/GetClipStatus, DeletePatch) | D.* | Med | native `com::` harness reached 3/7; rest need the PE conformance lane (`d3d9_device_misc.cpp` already gates SetDialogBoxMode/ValidateDevice) |
 | Vendor formats `RESZ`/`NULL`/`NVDB`/`ATOC` (special-semantic) | C.5 | Med | INTZ + DF16/DF24 done; these are resolve-trigger / null-RT / depth-bounds / alpha-to-coverage — need per-feature design, not plain format adds |
-| `D3DRS_WRAP0..15` per-stage texcoord wrap | B.10#6 | Low | no constants/consumers |
-| `D32_LOCKABLE` (84) / `Q16W16V16U16` (110) | C.12#7 | Low | DX9b legacy; needs correct Metal mapping |
-| `D3DRS_DEBUGMONITORTOKEN` (165) constant | B.10#9 | Low | unused by apps; PE-shadow-generic at most |
+| `D3DRS_WRAP0..15` per-stage texcoord wrap | B.10#6 | Low | rasterizer-level cylindrical-wrap interpolation; **no faithful Metal equivalent** — needs design (approximate or document as unsupported) |
+| `D3DRS_DEBUGMONITORTOKEN` (165) | B.10#9 | None | effectively a non-gap — PE shadow already stores all RS slots ≤255 generically; a named constant adds nothing functional |
 | `D3DRS_TWOSIDEDSTENCILMODE` (185) behavioural gate | B.10#7 | Low | backend uses single-ref/both-faces; partial backend limit |
 | `SAMP_MIPMAPLODBIAS` per-sampler bias | B.3/B.10#4 | Blocked | requires a `lod_bias` field on `WMTSamplerInfo` (winemetal ABI extension) |
 | `D3DCLIPSTATUS9` Set/GetClipStatus | B.8/D.* | Low | nil-return arguably correct (D3D9 has no per-primitive clip tracking) |
