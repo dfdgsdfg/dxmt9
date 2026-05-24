@@ -413,6 +413,30 @@ inline constexpr u32 RS_STENCIL_CCW_MASK = RS_STENCIL_MASK;
 inline constexpr u32 RS_STENCIL_CCW_WRITEMASK = RS_STENCIL_WRITEMASK;
 inline constexpr u32 RS_TEXTURE_FACTOR = 60;
 
+// D3DRS_WRAP0..15 (texture-coordinate cylindrical wrap enable, R-CORE-3.9).
+// Enabled wrap has no Metal equivalent and is an accepted no-op: dxmt9 does
+// NOT implement wrapping. These values are shadowed only so SetRenderState /
+// GetRenderState round-trips them like any other render state (default 0 =
+// disabled is correct). Do not wire a backend consumer to these.
+// D3D9 splits the range: WRAP0..7 = 128..135, WRAP8..15 = 198..205
+// (see ~/workspaces/wine/include/d3d9types.h).
+inline constexpr u32 RS_WRAP0 = 128;
+inline constexpr u32 RS_WRAP1 = 129;
+inline constexpr u32 RS_WRAP2 = 130;
+inline constexpr u32 RS_WRAP3 = 131;
+inline constexpr u32 RS_WRAP4 = 132;
+inline constexpr u32 RS_WRAP5 = 133;
+inline constexpr u32 RS_WRAP6 = 134;
+inline constexpr u32 RS_WRAP7 = 135;
+inline constexpr u32 RS_WRAP8 = 198;
+inline constexpr u32 RS_WRAP9 = 199;
+inline constexpr u32 RS_WRAP10 = 200;
+inline constexpr u32 RS_WRAP11 = 201;
+inline constexpr u32 RS_WRAP12 = 202;
+inline constexpr u32 RS_WRAP13 = 203;
+inline constexpr u32 RS_WRAP14 = 204;
+inline constexpr u32 RS_WRAP15 = 205;
+
 inline constexpr u32 TSS_COLOR_OP = 1;
 inline constexpr u32 TSS_COLOR_ARG1 = 2;
 inline constexpr u32 TSS_COLOR_ARG2 = 3;

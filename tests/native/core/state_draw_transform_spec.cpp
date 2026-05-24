@@ -840,6 +840,63 @@ void testClipPlaneLimitsAtCoreBoundary() {
   }
 }
 
+// R-CORE-3.9: D3DRS_WRAP0..15 must be accepted, shadowed, and round-trip
+// through GetRenderState like any other render state. Enabled cylindrical
+// wrap has no Metal equivalent and is a documented no-op (no backend
+// consumer is wired); this test only proves the Set/Get round-trip and the
+// default-0 (disabled) behaviour across BOTH D3D9 value ranges
+// (WRAP0..7 = 128..135, WRAP8..15 = 198..205).
+void testWrapRenderStateRoundTrip() {
+  auto backend = std::make_shared<dxmt9::core::spec::RecordingBackend>();
+  Factory factory(BackendLimits{}, backend);
+  PresentParameters params{};
+  params.backBufferWidth = 32;
+  params.backBufferHeight = 32;
+  params.backBufferFormat = Format::A8R8G8B8;
+  params.windowed = true;
+  params.deviceWindow = Handle{0x5151};
+
+  auto device = factory.createDevice(0, params);
+  check(device != nullptr, "wrap render-state device creation");
+
+  // Representative slots spanning both contiguous WRAP ranges.
+  const std::array<std::pair<u32, u32>, 4> cases{{
+      {RS_WRAP0, 128u},
+      {RS_WRAP7, 135u},
+      {RS_WRAP8, 198u},
+      {RS_WRAP15, 205u},
+  }};
+
+  // Default is 0 (disabled) before any SetRenderState.
+  for (const auto& [slot, value] : cases) {
+    checkEq(slot, value, "WRAP constant matches verified D3D9 value");
+    checkEq(device->getRenderState(slot), 0u,
+            "WRAP render state defaults to 0 (disabled)");
+  }
+
+  // SetRenderState round-trips a non-default ENABLED value (no-op consumer
+  // wise, but must still be shadowed and readable).
+  for (const auto& [slot, value] : cases) {
+    checkEq(device->setRenderState(slot, 1u), D3D_OK,
+            "SetRenderState(WRAP) is accepted at the state boundary");
+    checkEq(device->getRenderState(slot), 1u,
+            "GetRenderState(WRAP) round-trips the shadowed ENABLED value");
+  }
+
+  // Distinct per-slot values round-trip independently (no slot aliasing
+  // between the 128..135 and 198..205 ranges).
+  for (u32 i = 0; i < cases.size(); ++i) {
+    const u32 slot = cases[i].first;
+    const u32 value = 0xC0DE0000u + i;
+    checkEq(device->setRenderState(slot, value), D3D_OK,
+            "SetRenderState(WRAP) accepts an arbitrary shadowed value");
+  }
+  for (u32 i = 0; i < cases.size(); ++i) {
+    checkEq(device->getRenderState(cases[i].first), 0xC0DE0000u + i,
+            "GetRenderState(WRAP) returns the exact per-slot shadowed value");
+  }
+}
+
 void testClipPlaneTransformPayloadAndMaskBounds() {
   DeviceState state;
   state.reset();
@@ -2305,6 +2362,7 @@ int main() {
   testTransformMultiplicationOrderAndBlendSlots();
   testExtendedWorldMatrixTransformRoundTrip();
   testClipPlaneLimitsAtCoreBoundary();
+  testWrapRenderStateRoundTrip();
   testClipPlaneTransformPayloadAndMaskBounds();
   testConstantsAndShaderRefs();
   testShaderConstantPayloadSurvivesDrawRunCommandView();
