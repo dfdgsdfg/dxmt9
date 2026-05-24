@@ -1156,6 +1156,15 @@ extern "C" obj_handle_t MTLCommandBuffer_renderCommandEncoder(obj_handle_t cmdbu
     desc.depthAttachment.texture      = (id<MTLTexture>)info->depth.texture;
     desc.depthAttachment.loadAction   = (MTLLoadAction)info->depth.load_action;
     desc.depthAttachment.storeAction  = (MTLStoreAction)info->depth.store_action;
+    // R-FORMAT-11 — multisample depth resolve (RESZ). Mirrors the color
+    // attachment resolve wiring above. depthResolveFilter has no implicit
+    // default that matches D3D9, so set it whenever a resolve texture is
+    // bound (the store action selects whether the resolve actually runs).
+    if (info->depth.resolve_texture) {
+      desc.depthAttachment.resolveTexture = (id<MTLTexture>)info->depth.resolve_texture;
+      desc.depthAttachment.depthResolveFilter =
+          (MTLMultisampleDepthResolveFilter)info->depth.resolve_filter;
+    }
   }
   if (info->stencil.texture) {
     desc.stencilAttachment.clearStencil = info->stencil.clear_stencil;

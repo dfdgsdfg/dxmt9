@@ -3389,20 +3389,33 @@ public:
      * point-size write, and the RESZ idiom is fire-and-forget — a missing
      * source/destination binding is a benign no-op on real hardware too.
      *
-     * BACKEND TODO (winemetal ABI gap): the actual GPU resolve cannot be
-     * emitted yet. The existing MSAA *color* resolve rides on
-     * WMTColorAttachmentInfo.resolve_texture + WMTStoreActionMultisampleResolve
-     * (src/dxmt9/dxmt9_blit_encoders.cpp). The DEPTH twin requires
-     * WMTDepthAttachmentInfo to carry resolve_texture + a depth resolve filter
-     * (MTLMultisampleDepthResolveFilter, e.g. Sample) so the unix importer can
-     * set MTLRenderPassDescriptor.depthAttachment.resolveTexture /
-     * .depthResolveFilter (src/winemetal/unix/winemetal_private_api.mm:1151).
-     * Those fields are NOT exposed today (src/winemetal/winemetal.h:684 —
-     * WMTDepthAttachmentInfo has no resolve_texture). Extending the bridge ABI
-     * is out of scope for this change; see the RETURN report. Until the ABI
-     * lands, the sentinel is detected, the bound source/dest are identified,
-     * and the resolve request is logged but not encoded — no wire record is
-     * emitted because the backend has no path to consume it. */
+     * BACKEND STATUS: the winemetal ABI + backend primitive now exist.
+     * WMTDepthAttachmentInfo carries resolve_texture + resolve_filter
+     * (WMTMultisampleDepthResolveFilter) — the DEPTH twin of the color resolve
+     * that rides on WMTColorAttachmentInfo.resolve_texture +
+     * WMTStoreActionMultisampleResolve. The unix importer wires
+     * MTLRenderPassDescriptor.depthAttachment.resolveTexture /
+     * .depthResolveFilter (src/winemetal/unix/winemetal_private_api.mm), and
+     * the backend resolve is implemented as
+     * dxmt9::encoders::encodeDepthResolve(cmdbuf, pool, msaaDepthSrc, intzDst)
+     * in src/dxmt9/dxmt9_blit_encoders.cpp — a render pass whose depth
+     * attachment uses store=MultisampleResolve + resolve_texture +
+     * filter=Sample.
+     *
+     * REMAINING SEAM (intentionally out of scope for this file-restricted
+     * change): the PE->unix record DISPATCH that carries (msaaDepthHandle,
+     * intzDestHandle) across the bridge and invokes encodeDepthResolve. A new
+     * D9C_COMMAND_RECORD_RESZ_DEPTH_RESOLVE surface-op record (mirroring
+     * D9CCommandRecordReadback's two-handle shape) must be added to
+     * include/dxmt9/device_c.h, validated in device_c_record_validate.cpp,
+     * classified as a SurfaceOp barrier in device_c_record_replay.cpp, and
+     * dispatched in device_c_record_replay.cpp's execution switch +
+     * dxmt9_draw_encoder.mm's surface-op Kind switch to call encodeDepthResolve.
+     * Those importer/queue files are outside this change's allowed file set, so
+     * the PE side stays detect-only here: emitting an unhandled record type
+     * would break chunk replay (replayInfoForCommandRecordType returns an empty
+     * info for unknown types). Until the dispatch lands, the sentinel is
+     * detected and the bound source/dest are identified + logged. */
     HRESULT requestReszDepthResolve() noexcept {
         // MSAA depth source = the currently bound depth-stencil surface.
         D9CSurface* const depthSrcRaw = rawSurf(dsSurface_);

@@ -660,6 +660,17 @@ enum WMTStoreAction {
   WMTStoreActionCustomSampleDepthStore = 5,
 };
 
+// R-FORMAT-11 — multisample depth-resolve filter. Mirrors
+// MTLMultisampleDepthResolveFilter. The RESZ depth resolve uses
+// WMTMultisampleDepthResolveFilterSample (pick sample 0), matching D3D9's
+// "resolve the multisampled depth into the bound INTZ texture" semantics
+// where no min/max reduction is implied.
+enum WMTMultisampleDepthResolveFilter {
+  WMTMultisampleDepthResolveFilterSample = 0,
+  WMTMultisampleDepthResolveFilterMin = 1,
+  WMTMultisampleDepthResolveFilterMax = 2,
+};
+
 struct WMTClearColor {
   double r;
   double g;
@@ -689,6 +700,13 @@ struct WMTDepthAttachmentInfo {
   uint16_t slice;
   uint32_t depth_plane;
   float clear_depth;
+  // R-FORMAT-11 — multisample depth resolve. When `resolve_texture` is set
+  // and `store_action` is WMTStoreActionMultisampleResolve (or
+  // WMTStoreActionStoreAndMultisampleResolve), the unix importer wires
+  // MTLRenderPassDescriptor.depthAttachment.resolveTexture and
+  // .depthResolveFilter. Mirrors the WMTColorAttachmentInfo resolve shape.
+  obj_handle_t resolve_texture;
+  enum WMTMultisampleDepthResolveFilter resolve_filter;
 };
 
 struct WMTStencilAttachmentInfo {

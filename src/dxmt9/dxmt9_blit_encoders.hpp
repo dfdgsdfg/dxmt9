@@ -64,6 +64,18 @@ void encodeClearPass(WMT::CommandBuffer& commandBuffer,
                       resources::Pool& pool,
                       const core::ClearDesc& clear);
 
+// R-FORMAT-11 — RESZ multisample depth resolve. Resolves the bound
+// multisampled depth surface (`msaaDepthSource`) into the bound INTZ depth
+// texture (`intzDestination`) via a render pass whose depth attachment uses
+// store=MultisampleResolve + resolve_texture + filter=Sample. The DEPTH twin
+// of the color MSAA resolve already wired in encodeStretchRect /
+// encodeColorFill / encodeClearPass. No-op when either surface is missing or
+// lacks a depth aspect.
+void encodeDepthResolve(WMT::CommandBuffer& commandBuffer,
+                        resources::Pool& pool,
+                        core::Handle msaaDepthSource,
+                        core::Handle intzDestination);
+
 }  // namespace dxmt9::encoders
 
 // Forward decl for readbackSurface.

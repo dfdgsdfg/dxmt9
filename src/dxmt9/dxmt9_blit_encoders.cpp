@@ -403,6 +403,48 @@ void encodeClearPass(WMT::CommandBuffer& commandBuffer,
   }
 }
 
+void encodeDepthResolve(WMT::CommandBuffer& commandBuffer,
+                        resources::Pool& pool,
+                        core::Handle msaaDepthSource,
+                        core::Handle intzDestination) {
+  // R-FORMAT-11 — RESZ multisample depth resolve. The DEPTH twin of the
+  // color MSAA resolve in encodeStretchRect/encodeColorFill/encodeClearPass:
+  // open a render pass whose depth attachment binds the multisampled depth
+  // surface as `texture`, the INTZ destination as `resolve_texture`, with
+  // store=MultisampleResolve + filter=Sample, then immediately end the
+  // encoder. Metal performs the depth resolve at encoder-end exactly as it
+  // does for the color resolve store action — no draws are recorded.
+  auto* src = pool.findSurface(msaaDepthSource.value);
+  auto* dst = pool.findSurface(intzDestination.value);
+  if (!src || !dst || !src->texture || !dst->texture) {
+    // Benign no-op: the RESZ idiom is fire-and-forget on real hardware too.
+    return;
+  }
+  // The source must be a multisampled depth surface; the destination must
+  // carry a depth aspect (INTZ). A mismatched pair is a no-op rather than a
+  // mis-encode.
+  if (!src->desc.depthStencil ||
+      !dxmt9::convert::formatHasDepthAspect(src->desc.format) ||
+      !dxmt9::convert::formatHasDepthAspect(dst->desc.format)) {
+    return;
+  }
+  WMTRenderPassInfo passInfo{};
+  passInfo.depth.texture = src->texture.handle;
+  passInfo.depth.load_action = WMTLoadActionLoad;
+  passInfo.depth.store_action = WMTStoreActionMultisampleResolve;
+  passInfo.depth.resolve_texture = dst->texture.handle;
+  passInfo.depth.resolve_filter = WMTMultisampleDepthResolveFilterSample;
+  auto encoder = commandBuffer.renderCommandEncoder(passInfo);
+  if (!encoder) {
+    return;
+  }
+  encoder.setLabel(labels::makeLabelStringFmt(
+      "DepthResolve[src=0x%llx,intz=0x%llx]",
+      static_cast<unsigned long long>(msaaDepthSource.value),
+      static_cast<unsigned long long>(intzDestination.value)));
+  encoder.endEncoding();
+}
+
 bool readbackSurface(CommandQueue& queue,
                       resources::Pool& pool,
                       WMT::Reference<WMT::Device> device,

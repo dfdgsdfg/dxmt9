@@ -129,6 +129,21 @@ wmt_setbytes_dispatch_spec = executable(
 
 test('dxmt9-wmt-setbytes-dispatch-spec', wmt_setbytes_dispatch_spec)
 
+# R-FORMAT-11 — winemetal depth-resolve ABI surface. Header-only: pins the
+# WMTDepthAttachmentInfo resolve_texture / resolve_filter fields and the
+# WMTMultisampleDepthResolveFilter enum added for the RESZ depth resolve.
+wmt_depth_resolve_abi_spec = executable(
+  'dxmt9-wmt-depth-resolve-abi-spec',
+  'wmt_depth_resolve_abi_spec.cpp',
+  include_directories: [
+    dxmt9_inc,
+    include_directories('../../../src'),
+  ],
+  link_args: dxmt9_test_link_args,
+)
+
+test('dxmt9-wmt-depth-resolve-abi-spec', wmt_depth_resolve_abi_spec)
+
 # Regression test for the wow64 texture-lock shadow allocation size.
 # SFIV crashed at 0x1A4B1000 because a BC3 1x1 mip's shadow was sized
 # to one 4KB page yet the game wrote past it. The helper that backs
