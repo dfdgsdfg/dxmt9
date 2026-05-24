@@ -339,6 +339,106 @@ void testD32LockableAndQ16W16V16U16Formats() {
           D3DERR_NOTAVAILABLE, "Q16W16V16U16 depth-stencil usage rejected");
 }
 
+void testFourccPseudoFormatClassification() {
+  // specs/d3d9/formats/requirements.md R-FORMAT-11..14 — classification of
+  // five vendor FOURCC pseudo-formats. CLASSIFICATION ONLY: the runtime
+  // behaviour (RESZ depth resolve, NULL colorless pass, ATOC
+  // alpha-to-coverage render state) is wired by separate follow-up agents.
+  //
+  // FOURCC bytes (little-endian, matching the INTZ literal convention
+  //   value = c0 | c1<<8 | c2<<16 | c3<<24):
+  //   'RESZ' = 'R'|'E'<<8|'S'<<16|'Z'<<24 = 0x5A534552 = 1515406674
+  //   'NULL' = 'N'|'U'<<8|'L'<<16|'L'<<24 = 0x4C4C554E = 1280070990
+  //   'ATOC' = 'A'|'T'<<8|'O'<<16|'C'<<24 = 0x434F5441 = 1129272385
+  //   'NVDB' = 'N'|'V'<<8|'D'<<16|'B'<<24 = 0x4244564E = 1111774798
+  //   'RAWZ' = 'R'|'A'<<8|'W'<<16|'Z'<<24 = 0x5A574152 = 1515667794
+  constexpr u32 kD3DFmtResz = 1515406674u;  // 0x5A534552
+  constexpr u32 kD3DFmtNull = 1280070990u;  // 0x4C4C554E
+  constexpr u32 kD3DFmtAtoc = 1129272385u;  // 0x434F5441
+  constexpr u32 kD3DFmtNvdb = 1111774798u;  // 0x4244564E
+  constexpr u32 kD3DFmtRawz = 1515667794u;  // 0x5A574152
+
+  // fmtFromD3D / fmtToD3D round-trips.
+  checkEq(dxmt9::d3d9::devicec::fmtFromD3D(kD3DFmtResz), Format::Resz,
+          "RESZ FOURCC maps to core Format::Resz");
+  checkEq(dxmt9::d3d9::devicec::fmtFromD3D(kD3DFmtNull), Format::NullRt,
+          "NULL FOURCC maps to core Format::NullRt");
+  checkEq(dxmt9::d3d9::devicec::fmtFromD3D(kD3DFmtAtoc), Format::Atoc,
+          "ATOC FOURCC maps to core Format::Atoc");
+  checkEq(dxmt9::d3d9::devicec::fmtFromD3D(kD3DFmtNvdb), Format::Nvdb,
+          "NVDB FOURCC maps to core Format::Nvdb");
+  checkEq(dxmt9::d3d9::devicec::fmtFromD3D(kD3DFmtRawz), Format::Rawz,
+          "RAWZ FOURCC maps to core Format::Rawz");
+  checkEq(dxmt9::d3d9::devicec::fmtToD3D(Format::Resz), kD3DFmtResz,
+          "RESZ core format round-trips back to FOURCC");
+  checkEq(dxmt9::d3d9::devicec::fmtToD3D(Format::NullRt), kD3DFmtNull,
+          "NULL core format round-trips back to FOURCC");
+  checkEq(dxmt9::d3d9::devicec::fmtToD3D(Format::Atoc), kD3DFmtAtoc,
+          "ATOC core format round-trips back to FOURCC");
+  checkEq(dxmt9::d3d9::devicec::fmtToD3D(Format::Nvdb), kD3DFmtNvdb,
+          "NVDB core format round-trips back to FOURCC");
+  checkEq(dxmt9::d3d9::devicec::fmtToD3D(Format::Rawz), kD3DFmtRawz,
+          "RAWZ core format round-trips back to FOURCC");
+
+  // R-FORMAT-12: NULL is a render-target-capable classification (no real
+  // color storage; colorless-pass behaviour deferred to a follow-up agent).
+  const auto* nullRt = findFormatInfo(Format::NullRt);
+  check(nullRt != nullptr, "NULL format info missing");
+  if (nullRt != nullptr) {
+    check(nullRt->renderTarget, "NULL is render-target capable");
+    check(!nullRt->depthStencil, "NULL is not a depth-stencil format");
+    check(!nullRt->compressed, "NULL is not compressed");
+  }
+
+  // R-FORMAT-14 + RAWZ: explicitly classified Unsupported so they cannot
+  // slip through as ordinary color formats (R-FORMAT-7). No Metal mapping.
+  const auto* nvdb = findFormatInfo(Format::Nvdb);
+  check(nvdb != nullptr, "NVDB format info missing");
+  if (nvdb != nullptr) {
+    checkEq(nvdb->support, FormatClass::Unsupported, "NVDB is Unsupported");
+    checkEq(nvdb->backendFormat, BackendPixelFormat::Unknown,
+            "NVDB has no Metal pixel format");
+  }
+  const auto* rawz = findFormatInfo(Format::Rawz);
+  check(rawz != nullptr, "RAWZ format info missing");
+  if (rawz != nullptr) {
+    checkEq(rawz->support, FormatClass::Unsupported, "RAWZ is Unsupported");
+    checkEq(rawz->backendFormat, BackendPixelFormat::Unknown,
+            "RAWZ has no Metal pixel format");
+  }
+
+  BackendLimits limits{};
+  limits.supportsDepth24Stencil8 = true;
+  limits.supportsDepth32FloatStencil8 = true;
+  Factory factory(limits);
+
+  // R-FORMAT-12: CheckDeviceFormat(NULL, RENDERTARGET) -> D3D_OK.
+  checkEq(factory.checkDeviceFormat(0, Format::NullRt, UsageRenderTarget),
+          D3D_OK, "NULL render-target usage supported");
+
+  // R-FORMAT-11: CheckDeviceFormat(RESZ, ..., SURFACE) -> D3D_OK. A surface
+  // query carries no usage flags (usage == 0); assume Apple GPUs support
+  // MSAA depth resolve. RESZ is a command surface, not a color RT.
+  checkEq(factory.checkDeviceFormat(0, Format::Resz, 0u), D3D_OK,
+          "RESZ surface usage supported");
+
+  // R-FORMAT-13: CheckDeviceFormat(ATOC) -> D3D_OK consistently. ATOC is a
+  // render-state hack surfaced as a creatable-looking FOURCC; classification
+  // reports support, the alpha-to-coverage behaviour is a follow-up agent.
+  checkEq(factory.checkDeviceFormat(0, Format::Atoc, 0u), D3D_OK,
+          "ATOC usage supported");
+
+  // R-FORMAT-14 + RAWZ: both probes report NOTAVAILABLE for any usage.
+  checkEq(factory.checkDeviceFormat(0, Format::Nvdb, 0u), D3DERR_NOTAVAILABLE,
+          "NVDB reports NOTAVAILABLE");
+  checkEq(factory.checkDeviceFormat(0, Format::Rawz, 0u), D3DERR_NOTAVAILABLE,
+          "RAWZ reports NOTAVAILABLE");
+  checkEq(factory.checkDeviceFormat(0, Format::Nvdb, UsageTexture),
+          D3DERR_NOTAVAILABLE, "NVDB texture usage rejected");
+  checkEq(factory.checkDeviceFormat(0, Format::Rawz, UsageTexture),
+          D3DERR_NOTAVAILABLE, "RAWZ texture usage rejected");
+}
+
 void testHelpers() {
   const Viewport viewport{0, 0, 800, 600, 0.0f, 1.0f};
   const auto fixup = halfPixelFixup(viewport);
@@ -429,6 +529,7 @@ int main() {
     testSigned3DcAndUnsupportedFormatCaps();
     testVendorDepthPseudoFormats();
     testD32LockableAndQ16W16V16U16Formats();
+    testFourccPseudoFormatClassification();
     testHelpers();
     testDeviceCPresentIntervalMapping();
     testRingArenaExhaustionFallsBack();

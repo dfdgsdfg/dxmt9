@@ -90,6 +90,17 @@ dxmt9::core::Format fmtFromD3D(uint32_t d3d) {
     case 909198916u: return F::DF16;
     // FOURCC 'DF24' = 0x34324644 — vendor 24-bit depth-as-texture format.
     case 875710020u: return F::DF24;
+    // Vendor FOURCC pseudo-formats (R-FORMAT-11..14, classification only).
+    // FOURCC 'RESZ' = 0x5A534552 — MSAA depth-resolve command surface.
+    case 1515406674u: return F::Resz;
+    // FOURCC 'NULL' = 0x4C4C554E — null render target (depth/stencil-only).
+    case 1280070990u: return F::NullRt;
+    // FOURCC 'ATOC' = 0x434F5441 — alpha-to-coverage render-state token.
+    case 1129272385u: return F::Atoc;
+    // FOURCC 'NVDB' = 0x4244564E — NVIDIA depth-bounds probe (unsupported).
+    case 1111774798u: return F::Nvdb;
+    // FOURCC 'RAWZ' = 0x5A574152 — vendor depth-readback probe (unsupported).
+    case 1515667794u: return F::Rawz;
     case 101: return F::INDEX16;
     case 102: return F::INDEX32;
     default: return F::Unknown;
@@ -150,6 +161,11 @@ uint32_t fmtToD3D(dxmt9::core::Format format) {
     case F::INTZ: return 1515474505u;
     case F::DF16: return 909198916u;
     case F::DF24: return 875710020u;
+    case F::Resz: return 1515406674u;
+    case F::NullRt: return 1280070990u;
+    case F::Atoc: return 1129272385u;
+    case F::Nvdb: return 1111774798u;
+    case F::Rawz: return 1515667794u;
     case F::INDEX16: return 101;
     case F::INDEX32: return 102;
     case F::Unknown:

@@ -154,6 +154,38 @@ const std::vector<FormatEntry> &formatEntries() {
         2, false, true, false, false}},
       {{Format::DF24, BackendPixelFormat::Depth32Float, FormatClass::Optional,
         4, false, true, false, false}},
+      // Vendor FOURCC pseudo-formats — classification only; runtime
+      // behaviour deferred to follow-up agents. See
+      // specs/d3d9/formats/requirements.md R-FORMAT-11..14.
+      //
+      // RESZ (R-FORMAT-11) — MSAA depth-resolve *command* surface. Carries
+      // no storage and is not a color render target, so renderTarget=false
+      // (a SURFACE query passes via the Optional classification with no
+      // usage flags). Benign Unknown backend placeholder: RESZ never
+      // allocates a Metal texture; the resolve trigger is a follow-up agent.
+      {{Format::Resz, BackendPixelFormat::Unknown, FormatClass::Optional, 0,
+        false, false, false, false}},
+      // NULL (R-FORMAT-12) — null render target with no color storage.
+      // renderTarget=true so CheckDeviceFormat(NULL, RENDERTARGET) -> D3D_OK.
+      // The benign BGRA8Unorm backend placeholder is a classification
+      // stand-in only; the colorless-pass behaviour (no color backing, no
+      // color writes, Lock -> INVALIDCALL) is deferred to a follow-up agent.
+      {{Format::NullRt, BackendPixelFormat::BGRA8Unorm, FormatClass::Optional,
+        4, true, false, false, false}},
+      // ATOC (R-FORMAT-13) — alpha-to-coverage render-state token surfaced
+      // as a FOURCC. Classified supported (Optional, no usage requirement)
+      // so CheckDeviceFormat(ATOC) reports support consistently; the
+      // render-state behaviour is a follow-up agent. Benign Unknown
+      // placeholder: ATOC never allocates a Metal texture.
+      {{Format::Atoc, BackendPixelFormat::Unknown, FormatClass::Optional, 0,
+        false, false, false, false}},
+      // NVDB (R-FORMAT-14) + RAWZ — vendor probes with no Metal equivalent.
+      // Classified Unsupported so CheckDeviceFormat returns NOTAVAILABLE and
+      // they cannot slip through as ordinary color formats (R-FORMAT-7).
+      {{Format::Nvdb, BackendPixelFormat::Unknown, FormatClass::Unsupported, 0,
+        false, false, false, false}},
+      {{Format::Rawz, BackendPixelFormat::Unknown, FormatClass::Unsupported, 0,
+        false, false, false, false}},
       {{Format::INDEX16, BackendPixelFormat::Unknown, FormatClass::Required, 2,
         false, false, false, true}},
       {{Format::INDEX32, BackendPixelFormat::Unknown, FormatClass::Required, 4,
@@ -365,6 +397,16 @@ std::string formatName(Format format) {
     return "DF16";
   case Format::DF24:
     return "DF24";
+  case Format::Resz:
+    return "RESZ";
+  case Format::NullRt:
+    return "NULL";
+  case Format::Atoc:
+    return "ATOC";
+  case Format::Nvdb:
+    return "NVDB";
+  case Format::Rawz:
+    return "RAWZ";
   case Format::INDEX16:
     return "INDEX16";
   case Format::INDEX32:

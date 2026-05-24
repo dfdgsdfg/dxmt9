@@ -316,6 +316,37 @@ enum class Format : u32 {
   // See specs/gap_d3d9.md §C.5.
   DF16,
   DF24,
+  // Vendor FOURCC pseudo-formats — classification only (the runtime
+  // behaviour is wired by separate follow-up agents). Enumerator names
+  // avoid the `NULL` macro. See specs/d3d9/formats/requirements.md
+  // R-FORMAT-11..14.
+  //
+  // RESZ (FOURCC 'RESZ', 0x5A534552) — R-FORMAT-11. Optional *command*
+  // pseudo-format that triggers an MSAA depth resolve into a bound INTZ
+  // texture. Carries no storage; classified RT-incapable so it is only a
+  // command surface. The resolve trigger is a follow-up agent.
+  Resz,
+  // NULL (FOURCC 'NULL', 0x4C4C554E) — R-FORMAT-12. Null render-target
+  // pseudo-format with no color storage, used for depth/stencil-only
+  // passes. Classified render-target capable so CheckDeviceFormat with
+  // D3DUSAGE_RENDERTARGET succeeds; the colorless render-pass behaviour
+  // (no color writes / Lock -> INVALIDCALL) is a follow-up agent.
+  NullRt,
+  // ATOC (FOURCC 'ATOC', 0x434F5441) — R-FORMAT-13. Alpha-to-coverage
+  // is a cross-vendor render-state hack, not a creatable format; this
+  // enumerator only lets CheckDeviceFormat report support consistently.
+  // The render-state alpha-to-coverage behaviour is a follow-up agent.
+  Atoc,
+  // NVDB (FOURCC 'NVDB', 0x4244564E) — R-FORMAT-14. Probes the NVIDIA
+  // depth-bounds-test cap. Metal has no depth-bounds test, so this is
+  // classified Unsupported -> CheckDeviceFormat returns NOTAVAILABLE.
+  // No Metal pixel format. Classified explicitly so it cannot slip
+  // through as an ordinary color format (R-FORMAT-7).
+  Nvdb,
+  // RAWZ (FOURCC 'RAWZ', 0x5A574152). Vendor depth-readback probe with no
+  // Metal equivalent; classified Unsupported -> NOTAVAILABLE, explicitly
+  // so it cannot slip through as an ordinary color format (R-FORMAT-7).
+  Rawz,
   INDEX16,
   INDEX32,
 };
