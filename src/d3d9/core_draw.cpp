@@ -2234,11 +2234,13 @@ FfpPixelKey makeFfpPixelKey(const DeviceState &state) {
     out.colorOp = map.contains(TSS_COLOR_OP) ? map.at(TSS_COLOR_OP) : 0;
     out.colorArg1 = map.contains(TSS_COLOR_ARG1) ? map.at(TSS_COLOR_ARG1) : 0;
     out.colorArg2 = map.contains(TSS_COLOR_ARG2) ? map.at(TSS_COLOR_ARG2) : 0;
-    out.colorArg0 = map.contains(TSS_COLOR_ARG0) ? map.at(TSS_COLOR_ARG0) : 0;
+    // D3DTSS_COLORARG0/ALPHAARG0 default to D3DTA_CURRENT (1), not D3DTA_DIFFUSE (0)
+    // — the triadic ops (MULTIPLYADD/LERP) read arg0 and rely on this default.
+    out.colorArg0 = map.contains(TSS_COLOR_ARG0) ? map.at(TSS_COLOR_ARG0) : 1;
     out.alphaOp = map.contains(TSS_ALPHA_OP) ? map.at(TSS_ALPHA_OP) : 0;
     out.alphaArg1 = map.contains(TSS_ALPHA_ARG1) ? map.at(TSS_ALPHA_ARG1) : 0;
     out.alphaArg2 = map.contains(TSS_ALPHA_ARG2) ? map.at(TSS_ALPHA_ARG2) : 0;
-    out.alphaArg0 = map.contains(TSS_ALPHA_ARG0) ? map.at(TSS_ALPHA_ARG0) : 0;
+    out.alphaArg0 = map.contains(TSS_ALPHA_ARG0) ? map.at(TSS_ALPHA_ARG0) : 1;
     out.resultArg = map.contains(TSS_RESULT_ARG) ? map.at(TSS_RESULT_ARG) : 0;
     out.texType = map.contains(TSS_TEXTURE_TYPE) ? map.at(TSS_TEXTURE_TYPE) : 0;
     out.texCoordIndex =
