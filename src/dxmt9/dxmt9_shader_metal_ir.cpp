@@ -1890,6 +1890,17 @@ std::string translateSpirvToMsl(const SpirvModule& module,
     out << "};\n";
   }
 
+  // D3DSAMP_MIPMAPLODBIAS (gap_d3d9 B.3): per-sampler mip LOD bias is applied
+  // at sample time via `texture.sample(..., bias(b))`; Metal samplers carry no
+  // LOD-bias field. The bias rides a dedicated fragment uniform bound at slot 4
+  // (host struct dxmt9::state::SamplerLodBias). Declared inline here — byte
+  // identical float[8] — so the shared prelude stays untouched. Only textured
+  // fragments declare/read it; default 0.0 keeps bias() a no-op.
+  if (textured) {
+    out << "struct SamplerLodBias {\n";
+    out << "  float bias[" << kMaxTextureStages << "];\n";
+    out << "};\n";
+  }
   const char* fragmentReturnType = usesFragmentOutStruct ? "FSOut" : "float4";
   auto emitFrontFacingParameter = [&] {
     if (usesVFaceInput) {
@@ -1908,6 +1919,7 @@ std::string translateSpirvToMsl(const SpirvModule& module,
       out << "                     constant ArgbufLayout& abuf [[buffer("
           << kArgbufHybridBindSlot << ")]], ";
       emitFragmentTextureArguments(out, samplerUsage, module, context);
+      out << ",\n                     constant SamplerLodBias& samplerLodBias [[buffer(4)]]";
       out << ") {\n";
       out << "  constant PsConsts& psConsts = *abuf.psConsts;\n";
       out << "  constant FfpPsConsts& ffpPs = *abuf.ffpPs;\n";
@@ -1918,6 +1930,7 @@ std::string translateSpirvToMsl(const SpirvModule& module,
       out << "                     constant PsConsts& psConsts [[buffer(0)]],\n";
       out << "                     constant FfpPsConsts& ffpPs [[buffer(3)]], ";
       emitFragmentTextureArguments(out, samplerUsage, module, context);
+      out << ",\n                     constant SamplerLodBias& samplerLodBias [[buffer(4)]]";
       out << ") {\n";
     }
   } else {
@@ -2136,8 +2149,17 @@ std::string translateSpirvToMsl(const SpirvModule& module,
           (sampler >= context.textures.size() || !context.textures[sampler])) {
         return std::string("float4(0.0f, 0.0f, 0.0f, 1.0f)");
       }
+      // D3DSAMP_MIPMAPLODBIAS (gap_d3d9 B.3): thread the per-sampler mip LOD
+      // bias into the implicit-gradient sample. The bias rides the slot-4
+      // SamplerLodBias uniform (8 stages); default 0.0 makes bias() a no-op.
+      // Explicit-LOD/gradient opcodes (TEXLDL/TEXLDD) supply their own level
+      // and are handled at their own sites without bias().
+      std::string biasArg;
+      if (sampler < kMaxTextureStages) {
+        biasArg = ", bias(samplerLodBias.bias[" + std::to_string(sampler) + "])";
+      }
       return "tex" + std::to_string(sampler) + ".sample(samp" + std::to_string(sampler) + ", "
-             + sampleCoord(sampler, coord) + ")";
+             + sampleCoord(sampler, coord) + biasArg + ")";
     };
     auto legacyStage = [&] {
       if (instruction.operands.empty()) {

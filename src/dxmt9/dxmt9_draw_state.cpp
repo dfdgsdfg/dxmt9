@@ -230,6 +230,20 @@ FfpPsConsts buildFfpPsConsts(core::FlatDrawStateView state) {
   return out;
 }
 
+SamplerLodBias buildSamplerLodBias(core::FlatDrawStateView state) {
+  // D3DSAMP_MIPMAPLODBIAS (=8) is stored as a DWORD but is an IEEE-754 float
+  // (same DWORD-reinterpret pattern as fog start/end/density and point size).
+  // Read it per sampler stage and bit-cast to the float the shader threads
+  // into bias(). Default 0.0 keeps the common no-bias case a no-op.
+  SamplerLodBias out;
+  for (u32 stage = 0; stage < core::kMaxTextureStages; ++stage) {
+    out.bias[stage] = std::bit_cast<f32>(core::flatStateOr(
+        state.hot->samplerStates[stage], core::SAMP_MIPMAP_LOD_BIAS,
+        std::bit_cast<u32>(0.0f)));
+  }
+  return out;
+}
+
 DrawVolatile buildDrawVolatile(i32 vertexBaseIndex, u32 vertexStreamOffset,
                                u32 vertexStreamStride) {
   DrawVolatile out;

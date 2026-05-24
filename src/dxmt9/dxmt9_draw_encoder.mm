@@ -105,9 +105,11 @@ using dxmt9::state::DrawVolatile;
 using dxmt9::state::FfpPsConsts;
 using dxmt9::state::FfpVsConsts;
 using dxmt9::state::PsConsts;
+using dxmt9::state::SamplerLodBias;
 using dxmt9::state::VsConsts;
 using dxmt9::state::buildDrawVolatile;
 using dxmt9::state::buildFfpPsConsts;
+using dxmt9::state::buildSamplerLodBias;
 using dxmt9::state::buildFfpVsConsts;
 using dxmt9::state::buildPsConsts;
 using dxmt9::state::buildVsConsts;
@@ -2145,6 +2147,27 @@ bool encodeDraw(EncodeContext& ctx,
                                           static_cast<std::uint8_t>(binding.stage));
           countSamplerBind();
         }
+      }
+    }
+    // D3DSAMP_MIPMAPLODBIAS (gap_d3d9 B.3): the per-sampler mip LOD bias is
+    // applied at sample time in MSL via `texture.sample(..., bias(b))` —
+    // Metal samplers have no LOD-bias field. Textured fragment shaders declare
+    // `constant SamplerLodBias& samplerLodBias [[buffer(4)]]`, a reference that
+    // MUST be bound. The shader declares the param from bytecode sampler usage,
+    // which can be true even when no texture handle is currently bound (the
+    // unbound-texture fallback path), so bind slot 4 unconditionally for every
+    // base-state draw rather than only when fragmentTextureSamplers is
+    // non-empty. The 32-byte upload is cheap; binding an unread slot on a
+    // non-textured draw is harmless. Default 0.0 makes bias() a runtime no-op,
+    // so non-biasing draws render unchanged. Bound on the same direct resource
+    // lane as textures/samplers, so it is consistent under the argbuf-hybrid
+    // path too (textures/samplers also stay direct there).
+    {
+      SamplerLodBias lodBias = buildSamplerLodBias(drawState);
+      auto slice = uploadTransientBuffer(&lodBias, sizeof(lodBias), alignof(SamplerLodBias));
+      if (slice && !suppressRecordedMetalCalls(ctx)) {
+        encoder.setFragmentBuffer(slice.buffer, slice.offset, 4);
+        countUniformBufferBinds(1);
       }
     }
     if (!bindingPacket.vertexTextureSamplers.empty()) {

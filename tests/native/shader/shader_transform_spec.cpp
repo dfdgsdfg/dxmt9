@@ -1467,6 +1467,47 @@ void testPs20SamplerRegisterSlotMapping() {
   checkContains(source, "tex7.sample(samp7", "ps_2_0 texture sample uses the declared sampler register slot");
 }
 
+void testPs20MipLodBiasEmitsShaderSideBias() {
+  // D3DSAMP_MIPMAPLODBIAS (gap_d3d9 B.3) is applied at sample time in MSL
+  // via texture.sample(sampler, coord, bias(b)) — Metal's MTLSamplerDescriptor
+  // has no LOD-bias field. The per-sampler bias rides a dedicated uniform
+  // (`SamplerLodBias`) bound at fragment buffer slot 4. The translated
+  // fragment must (1) declare that uniform and (2) thread its per-sampler
+  // value through bias() on every implicit-gradient (TEX) sample.
+  const auto source = translatePixel(makePs20TexturedBytecode(7));
+  checkContains(source, "struct SamplerLodBias",
+                "translated PS declares the per-sampler LOD-bias uniform struct");
+  checkContains(source, "constant SamplerLodBias& samplerLodBias [[buffer(4)]]",
+                "translated PS binds the LOD-bias uniform at fragment slot 4");
+  checkContains(source, "tex7.sample(samp7",
+                "ps_2_0 still samples through the declared sampler register slot");
+  checkContains(source, "bias(samplerLodBias.bias[7])",
+                "ps_2_0 TEX threads the per-sampler LOD bias into bias()");
+}
+
+void testFfpMipLodBiasEmitsShaderSideBias() {
+  // Same gap_d3d9 B.3 contract for the fixed-function pixel path: a textured
+  // FFP stage threads its per-sampler LOD bias through bias() on the stage
+  // sample. The `SamplerLodBias` uniform is declared and bound at slot 4.
+  FfpPixelKey key{};
+  key.stages[0].colorOp = static_cast<u32>(TextureOp::SelectArg1);
+  key.stages[0].colorArg1 = 2u;  // D3DTA_TEXTURE
+  DrawDesc desc{};
+  desc.pixelShader.kind = ShaderRef::Kind::FixedFunctionPixel;
+  desc.pixelShader.pixelKey = key;
+  desc.textures[0].handle = Handle{1u};
+  auto context = dxmt9::drawshader::makeShaderSourceContext(desc);
+  const auto source = dxmt9::ffp::makeFfpPixelSource(key, context);
+  checkContains(source, "struct SamplerLodBias",
+                "FFP PS declares the per-sampler LOD-bias uniform struct");
+  checkContains(source, "constant SamplerLodBias& samplerLodBias [[buffer(4)]]",
+                "FFP PS binds the LOD-bias uniform at fragment slot 4");
+  checkContains(source, "tex0.sample(samp0",
+                "FFP stage 0 samples its bound texture");
+  checkContains(source, "bias(samplerLodBias.bias[0])",
+                "FFP stage 0 threads the per-sampler LOD bias into bias()");
+}
+
 void testPs30InputSemanticTexcoordMapping() {
   const auto source = translatePixel(makePs30InputSemanticBytecode());
   checkContains(source, "dxmt9_select_texcoord(in, 3u)",
@@ -1908,8 +1949,8 @@ void testPs11LegacyTexcoordTexLoweringContract() {
   checkContains(source, "outTexcoord[0] = float4(saturate((dxmt9_select_texcoord(in, 0u)).xyz), 1.0f);",
                 "ps_1_1 TEXCOORD clamps the stage texcoord and forces w=1");
   checkContains(source, "texture2d<float> tex0 [[texture(0)]]", "ps_1_1 TEX binds the destination stage texture");
-  checkContains(source, "outTexcoord[0] = tex0.sample(samp0, (outTexcoord[0]).xy);",
-                "ps_1_1 TEX samples stage 0 through destination t0");
+  checkContains(source, "outTexcoord[0] = tex0.sample(samp0, (outTexcoord[0]).xy, bias(samplerLodBias.bias[0]));",
+                "ps_1_1 TEX samples stage 0 through destination t0 with per-sampler LOD bias");
   checkContains(source, "r[0] = outTexcoord[0];", "ps_1_1 t# source reaches r0 color output");
 }
 
@@ -1932,8 +1973,8 @@ void testPs14TexcrdTexldTexdepthLoweringContract() {
   checkContains(source, "r[0] = dxmt9_select_texcoord(in, 0u);",
                 "ps_1_4 TEXCRD copies explicit t# source to r#");
   checkContains(source, "texture2d<float> tex1 [[texture(1)]]", "ps_1_4 TEXLD binds destination stage texture");
-  checkContains(source, "r[1] = tex1.sample(samp1, (dxmt9_select_texcoord(in, 1u)).xy);",
-                "ps_1_4 TEXLD samples destination stage with explicit source coords");
+  checkContains(source, "r[1] = tex1.sample(samp1, (dxmt9_select_texcoord(in, 1u)).xy, bias(samplerLodBias.bias[1]));",
+                "ps_1_4 TEXLD samples destination stage with explicit source coords and per-sampler LOD bias");
   checkContains(source, "outDepth = clamp((r[5]).x / min((r[5]).y, 1.0f), 0.0f, 1.0f);",
                 "ps_1_4 TEXDEPTH writes fragment depth from r5-style source");
 }
@@ -2207,6 +2248,8 @@ int main() {
     testPs30PredicatedInstructionLowersGuard();
     testD3DOpcodeNamesCoverUnsupportedSurface();
     testPs20SamplerRegisterSlotMapping();
+    testPs20MipLodBiasEmitsShaderSideBias();
+    testFfpMipLodBiasEmitsShaderSideBias();
     testPs30InputSemanticTexcoordMapping();
     testPs30TexkillLoweringContract();
     testPs20ColorInputUsesLegacyInputMapping();

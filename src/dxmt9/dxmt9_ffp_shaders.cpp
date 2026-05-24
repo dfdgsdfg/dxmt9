@@ -866,6 +866,17 @@ std::string makeFfpPixelSource(const FfpPixelKey& key,
     out << shaders::makeShaderPrelude(context.clipPlaneMask != 0);
   }
   emitFfpTextureOpHelper(out);
+  // D3DSAMP_MIPMAPLODBIAS (gap_d3d9 B.3): per-sampler mip LOD bias is applied
+  // at sample time via `texture.sample(..., bias(b))`; Metal samplers carry no
+  // LOD-bias field. The bias rides a dedicated fragment uniform bound at slot 4
+  // (host struct dxmt9::state::SamplerLodBias). Declared inline here — byte
+  // identical float[8] — so the shared prelude stays untouched. Only textured
+  // fragments declare/read it; default 0.0 keeps bias() a no-op.
+  if (textured) {
+    out << "struct SamplerLodBias {\n";
+    out << "  float bias[" << kMaxTextureStages << "];\n";
+    out << "};\n";
+  }
   // R-BACK-12.22..12.26 MSL routing — when argbufHybrid is set, the
   // fragment entry point takes a single argument buffer at slot 30 for
   // `psConsts`/`ffpPs`. Texture/sampler parameters remain direct so
@@ -896,6 +907,7 @@ std::string makeFfpPixelSource(const FfpPixelKey& key,
         out << "texture2d<float> tex" << stage << " [[texture(" << stage
             << ")]], sampler samp" << stage << " [[sampler(" << stage << ")]]";
       }
+      out << ", constant SamplerLodBias& samplerLodBias [[buffer(4)]]";
       out << ") {\n";
       out << "  constant PsConsts& psConsts = *abuf.psConsts;\n";
       out << "  constant FfpPsConsts& ffpPs = *abuf.ffpPs;\n";
@@ -913,6 +925,7 @@ std::string makeFfpPixelSource(const FfpPixelKey& key,
         out << "texture2d<float> tex" << stage << " [[texture(" << stage << ")]], sampler samp" << stage
             << " [[sampler(" << stage << ")]]";
       }
+      out << ", constant SamplerLodBias& samplerLodBias [[buffer(4)]]";
       out << ") {\n";
     }
     out << "  (void)psConsts;\n";
@@ -981,7 +994,7 @@ std::string makeFfpPixelSource(const FfpPixelKey& key,
       // `texcoord-index-matrix`.
       const u32 coordIndex = static_cast<u32>(stage);
       out << "  return tex" << stage << ".sample(samp" << stage
-          << ", " << sampleCoord(coordIndex) << ");\n";
+          << ", " << sampleCoord(coordIndex) << ", bias(samplerLodBias.bias[" << stage << "]));\n";
       out << "}\n";
       out << "// ffp pixel hash " << key.hash << "\n";
       return out.str();
@@ -993,7 +1006,7 @@ std::string makeFfpPixelSource(const FfpPixelKey& key,
       // `out.texcoord<stage>`.
       const u32 coordIndex = static_cast<u32>(stage);
       out << "  float alpha = tex" << stage << ".sample(samp" << stage
-          << ", " << sampleCoord(coordIndex) << ").a;\n";
+          << ", " << sampleCoord(coordIndex) << ", bias(samplerLodBias.bias[" << stage << "])).a;\n";
       out << "  return float4(alpha, alpha, alpha, 1.0);\n";
       out << "}\n";
       out << "// ffp pixel hash " << key.hash << "\n";
@@ -1050,7 +1063,7 @@ std::string makeFfpPixelSource(const FfpPixelKey& key,
               << bumpStage << ".g);\n";
           out << "  float4 texColor" << stage << " = tex" << stage
               << ".sample(samp" << stage << ", baseUV" << stage
-              << " + bumpDelta" << stage << ");\n";
+              << " + bumpDelta" << stage << ", bias(samplerLodBias.bias[" << stage << "]));\n";
           if (isBumpEnvLum) {
             out << "  float bumpLum" << stage
                 << " = saturate(texColor" << bumpStage << ".b * ffpPs.bumpEnvLum["
@@ -1059,7 +1072,7 @@ std::string makeFfpPixelSource(const FfpPixelKey& key,
           }
         } else {
           out << "  float4 texColor" << stage << " = tex" << stage << ".sample(samp" << stage
-              << ", " << sampleCoord(coordIndex) << ");\n";
+              << ", " << sampleCoord(coordIndex) << ", bias(samplerLodBias.bias[" << stage << "]));\n";
         }
       } else {
         out << "  float4 texColor" << stage << " = float4(1.0f);\n";

@@ -110,12 +110,28 @@ struct DrawVolatile {
 static_assert(sizeof(DrawVolatile) == 16,
               "DrawVolatile layout must match MSL prelude declaration");
 
+// Per-sampler mip LOD bias (D3DSAMP_MIPMAPLODBIAS, gap_d3d9 B.3). Metal's
+// MTLSamplerDescriptor has no LOD-bias field — the bias is applied at sample
+// time in the shader via `texture.sample(sampler, coord, bias(b))`. This is a
+// dedicated fragment uniform bound at buffer slot 4 (textures/samplers also
+// stay direct, including under the argbuf-hybrid path, so slot 4 is consistent
+// in both modes). 8 slots mirror the 8 FFP/translated texture stages; the
+// emitters declare a byte-identical `struct SamplerLodBias` inline (the shader
+// prelude is intentionally untouched). Default 0.0 makes every `bias(0.0)` a
+// runtime no-op, so the common no-bias draw renders unchanged.
+struct SamplerLodBias {
+  std::array<f32, core::kMaxTextureStages> bias{};
+};
+static_assert(sizeof(SamplerLodBias) == core::kMaxTextureStages * sizeof(f32),
+              "SamplerLodBias must be a tight float[8] for the MSL slot-4 binding");
+
 // Per-stage transforms producing the split structs above. Pure value
 // transforms over flat draw state.
 VsConsts buildVsConsts(core::FlatDrawStateView state);
 PsConsts buildPsConsts(core::FlatDrawStateView state);
 FfpVsConsts buildFfpVsConsts(core::FlatDrawStateView state);
 FfpPsConsts buildFfpPsConsts(core::FlatDrawStateView state);
+SamplerLodBias buildSamplerLodBias(core::FlatDrawStateView state);
 DrawVolatile buildDrawVolatile(i32 vertexBaseIndex, u32 vertexStreamOffset,
                                u32 vertexStreamStride);
 
