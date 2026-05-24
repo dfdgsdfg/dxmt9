@@ -34,6 +34,16 @@ struct ShaderSourceContext {
   // stream (slot 1) and `DrawVolatile` (slot 5) stay direct (design.md
   // §11.4). This is set from `ShaderVariantKey::argbufHybridMode`.
   bool argbufHybridMode = false;
+  // D3DSAMP_MIPMAPLODBIAS (gap_d3d9 B.3) PSO-variant gate. When true the FFP
+  // and DXBC->MSL fragment emitters declare
+  // `constant SamplerLodBias& samplerLodBias [[buffer(4)]]` and thread bias()
+  // through every implicit-gradient sample; when false neither the param nor
+  // bias() is emitted (the MSL is byte-identical to the pre-MIPMAPLODBIAS
+  // plain-sample form). Set from `ShaderVariantKey::samplerLodBias`, which is
+  // computed by makeShaderVariantKey from state::anySamplerLodBiasNonzero — the
+  // same predicate gates the encoder's slot-4 bind, keeping declaration and
+  // binding in lockstep.
+  bool samplerLodBias = false;
 };
 
 ShaderSourceContext makeShaderSourceContext(const core::DrawShaderLayoutContext& layout,

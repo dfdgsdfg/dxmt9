@@ -1,5 +1,6 @@
 #include "dxmt9_pipeline_cache.hpp"
 #include "dxmt9_draw_shader.hpp"
+#include "dxmt9_draw_state.hpp"
 #include "dxmt9_ffp_shaders.hpp"
 #include "dxmt9_format_convert.hpp"
 #include "dxmt9_metal_labels.hpp"
@@ -233,6 +234,10 @@ std::size_t ShaderVariantKeyHash::operator()(const ShaderVariantKey& key) const 
   // hash so Stage 1 and Stage 2 PSOs of the same shader live in
   // distinct cache slots.
   hash = mix(hash, static_cast<u64>(key.argbufHybridMode));
+  // gap_d3d9 B.3: the LOD-bias gate bit participates in the key hash so the
+  // bias-on (slot-4 + bias()) and bias-off (plain sample) variants of the same
+  // shader hit distinct cache slots.
+  hash = mix(hash, static_cast<u64>(key.samplerLodBias));
   hash = mix(hash, key.sampleCount);
   for (auto type : key.textureTypes) {
     hash = mix(hash, type);
@@ -716,6 +721,11 @@ Cache::getOrBuildDrawPipelineForState(WMT::Reference<WMT::Device> device,
   // the source-emitter context so FFP and DXBC->MSL bodies read uniforms
   // through `ArgbufLayout` at slot 30 instead of slots 0/3.
   shaderSource.argbufHybridMode = argbufHybridMode;
+  // gap_d3d9 B.3: propagate the LOD-bias gate bit so the FFP and DXBC->MSL
+  // emitters declare the slot-4 SamplerLodBias param + thread bias() only when
+  // a sampler carries a non-zero LOD bias. makeShaderVariantKey already
+  // computed key.samplerLodBias from the same predicate the encoder bind reads.
+  shaderSource.samplerLodBias = key.samplerLodBias;
   return getOrBuildDrawPipeline(device, key, std::move(shaderSource), archive, archivePath);
 }
 
@@ -835,6 +845,12 @@ ShaderVariantKey makeShaderVariantKey(core::FlatDrawStateView state,
   const u32 adaptiveTessY = core::flatStateOr(hot.renderStates, core::RS_ADAPTIVETESS_Y, 0u);
   key.alphaToCoverage =
       adaptiveTessY == core::kFourCcAtoc || adaptiveTessY == core::kFourCcA2M1;
+  // gap_d3d9 B.3: PSO-variant gate for D3DSAMP_MIPMAPLODBIAS. Set from the
+  // single predicate so bias-on and bias-off draws hash to distinct PSOs and
+  // the slot-4 SamplerLodBias param + bias() sampling are emitted only when a
+  // sampler actually carries a non-zero LOD bias. The same predicate gates the
+  // encoder's slot-4 bind, keeping declaration and binding in lockstep.
+  key.samplerLodBias = state::anySamplerLodBiasNonzero(state);
   key.sampleCount = std::max(1u, hot.colorAttachments[0].sampleCount);
   for (std::size_t i = 0; i < core::kMaxTextureStages; ++i) {
     key.textureTypes[i] =

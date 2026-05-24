@@ -110,6 +110,16 @@ struct ShaderVariantKey {
   // reading the slot-30 argbuf). The selector flips this on at encoder
   // open when `argbufHybridEnabled()` holds and the pass is eligible.
   bool argbufHybridMode = false;
+  // D3DSAMP_MIPMAPLODBIAS (gap_d3d9 B.3) PSO-variant gate. Set by
+  // makeShaderVariantKey from state::anySamplerLodBiasNonzero — true iff some
+  // active sampler stage has a non-zero mip LOD bias. When set, the fragment
+  // emitters declare `constant SamplerLodBias& samplerLodBias [[buffer(4)]]`
+  // and thread bias() through every implicit-gradient sample, and the encoder
+  // binds the slot-4 uniform. When clear, none of that is emitted or bound —
+  // the MSL is byte-identical to the pre-MIPMAPLODBIAS plain-sample form, and
+  // the common no-bias draw skips the per-draw slot-4 upload + bind. bias-on
+  // and bias-off draws therefore hash to distinct PSOs (mirrors tileFfpMode).
+  bool samplerLodBias = false;
   u32 sampleCount = 1;
   std::array<u32, core::kMaxTextureStages> textureTypes{};
   std::array<u32, core::kMaxRenderTargets> colorFormats{};

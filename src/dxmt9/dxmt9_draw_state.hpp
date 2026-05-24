@@ -132,6 +132,13 @@ PsConsts buildPsConsts(core::FlatDrawStateView state);
 FfpVsConsts buildFfpVsConsts(core::FlatDrawStateView state);
 FfpPsConsts buildFfpPsConsts(core::FlatDrawStateView state);
 SamplerLodBias buildSamplerLodBias(core::FlatDrawStateView state);
+// PSO-variant gate predicate for D3DSAMP_MIPMAPLODBIAS (gap_d3d9 B.3). True iff
+// any active sampler stage carries a non-zero mip LOD bias. Single source of
+// truth: the PSO key bit (ShaderVariantKey::samplerLodBias, set in
+// makeShaderVariantKey) and the encoder's slot-4 SamplerLodBias bind both read
+// this same predicate over the same flat draw state, so the shader's
+// `[[buffer(4)]]` declaration and the bind can never drift apart.
+bool anySamplerLodBiasNonzero(core::FlatDrawStateView state);
 DrawVolatile buildDrawVolatile(i32 vertexBaseIndex, u32 vertexStreamOffset,
                                u32 vertexStreamStride);
 

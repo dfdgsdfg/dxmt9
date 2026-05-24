@@ -1857,6 +1857,13 @@ std::string translateSpirvToMsl(const SpirvModule& module,
   const auto samplerUsage = collectPixelSamplerUsage(module, context);
   const auto pixelInputSemantics = collectPixelInputSemantics(module);
   const bool textured = std::any_of(samplerUsage.begin(), samplerUsage.end(), [](bool used) { return used; });
+  // D3DSAMP_MIPMAPLODBIAS (gap_d3d9 B.3) PSO-variant gate: only emit the slot-4
+  // SamplerLodBias param + thread bias() through sample() when the variant key
+  // flagged a non-zero sampler LOD bias. When clear, the translated MSL is
+  // byte-identical to the pre-MIPMAPLODBIAS plain-sample form, and the encoder
+  // skips the slot-4 bind on the same predicate. Only meaningful when the
+  // fragment actually samples a texture.
+  const bool emitLodBias = context.samplerLodBias && textured;
   const bool usesVFaceInput = pixelUsesVFaceInput(module);
   const bool traceShaderInputs = [] {
     const char* env = std::getenv("DXMT_TRACE_SHADER_INPUTS");
@@ -1894,9 +1901,9 @@ std::string translateSpirvToMsl(const SpirvModule& module,
   // at sample time via `texture.sample(..., bias(b))`; Metal samplers carry no
   // LOD-bias field. The bias rides a dedicated fragment uniform bound at slot 4
   // (host struct dxmt9::state::SamplerLodBias). Declared inline here — byte
-  // identical float[8] — so the shared prelude stays untouched. Only textured
-  // fragments declare/read it; default 0.0 keeps bias() a no-op.
-  if (textured) {
+  // identical float[8] — so the shared prelude stays untouched. PSO-variant
+  // gated: only emitted when some active sampler carries a non-zero LOD bias.
+  if (emitLodBias) {
     out << "struct SamplerLodBias {\n";
     out << "  float bias[" << kMaxTextureStages << "];\n";
     out << "};\n";
@@ -1919,7 +1926,9 @@ std::string translateSpirvToMsl(const SpirvModule& module,
       out << "                     constant ArgbufLayout& abuf [[buffer("
           << kArgbufHybridBindSlot << ")]], ";
       emitFragmentTextureArguments(out, samplerUsage, module, context);
-      out << ",\n                     constant SamplerLodBias& samplerLodBias [[buffer(4)]]";
+      if (emitLodBias) {
+        out << ",\n                     constant SamplerLodBias& samplerLodBias [[buffer(4)]]";
+      }
       out << ") {\n";
       out << "  constant PsConsts& psConsts = *abuf.psConsts;\n";
       out << "  constant FfpPsConsts& ffpPs = *abuf.ffpPs;\n";
@@ -1930,7 +1939,9 @@ std::string translateSpirvToMsl(const SpirvModule& module,
       out << "                     constant PsConsts& psConsts [[buffer(0)]],\n";
       out << "                     constant FfpPsConsts& ffpPs [[buffer(3)]], ";
       emitFragmentTextureArguments(out, samplerUsage, module, context);
-      out << ",\n                     constant SamplerLodBias& samplerLodBias [[buffer(4)]]";
+      if (emitLodBias) {
+        out << ",\n                     constant SamplerLodBias& samplerLodBias [[buffer(4)]]";
+      }
       out << ") {\n";
     }
   } else {
@@ -2151,11 +2162,13 @@ std::string translateSpirvToMsl(const SpirvModule& module,
       }
       // D3DSAMP_MIPMAPLODBIAS (gap_d3d9 B.3): thread the per-sampler mip LOD
       // bias into the implicit-gradient sample. The bias rides the slot-4
-      // SamplerLodBias uniform (8 stages); default 0.0 makes bias() a no-op.
-      // Explicit-LOD/gradient opcodes (TEXLDL/TEXLDD) supply their own level
-      // and are handled at their own sites without bias().
+      // SamplerLodBias uniform (8 stages). PSO-variant gated on the same flag
+      // as the slot-4 param declaration above: when clear the sample is the
+      // pre-feature plain-sample form with no bias() argument. Explicit-LOD /
+      // gradient opcodes (TEXLDL/TEXLDD) supply their own level and are handled
+      // at their own sites without bias().
       std::string biasArg;
-      if (sampler < kMaxTextureStages) {
+      if (emitLodBias && sampler < kMaxTextureStages) {
         biasArg = ", bias(samplerLodBias.bias[" + std::to_string(sampler) + "])";
       }
       return "tex" + std::to_string(sampler) + ".sample(samp" + std::to_string(sampler) + ", "

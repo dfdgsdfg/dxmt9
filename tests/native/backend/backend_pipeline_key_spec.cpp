@@ -1,4 +1,5 @@
 #include <array>
+#include <bit>
 #include <cstddef>
 #include <exception>
 #include <iostream>
@@ -618,6 +619,51 @@ void testAlphaToCoverageRenderStateHack() {
   checkEq(RS_ADAPTIVETESS_Y, 181u, "D3DRS_ADAPTIVETESS_Y render-state code");
 }
 
+void testSamplerLodBiasVariantBit() {
+  // D3DSAMP_MIPMAPLODBIAS PSO-variant gating (gap_d3d9 B.3): the variant key
+  // carries a `samplerLodBias` bit driven by the single predicate
+  // `anySamplerLodBiasNonzero`. It is true iff some active sampler stage's
+  // SAMP_MIPMAP_LOD_BIAS bit-casts to a non-zero float. bias-on and bias-off
+  // draws must land in distinct PSO cache slots (distinct key + distinct hash)
+  // so the bias() / slot-4-param variant and the plain-sample variant never
+  // alias.
+  DrawDesc desc{};
+  desc.vertexShader.hash = 0x9001u;
+  desc.pixelShader.hash = 0x9002u;
+  desc.textures[0].handle = Handle{0x55u};
+
+  // Absent LOD-bias state (DWORD 0 == 0.0f) -> bit clear.
+  const auto absent = makeVariantKey(makeFlatDrawFixture(desc));
+  check(!absent.samplerLodBias, "absent SAMP_MIPMAPLODBIAS leaves the variant bit clear");
+
+  // Explicit 0.0f bias -> still clear (the common no-bias case).
+  desc.samplers[0].states[SAMP_MIPMAP_LOD_BIAS] = std::bit_cast<u32>(0.0f);
+  const auto zeroBias = makeVariantKey(makeFlatDrawFixture(desc));
+  check(!zeroBias.samplerLodBias, "explicit 0.0 SAMP_MIPMAPLODBIAS leaves the variant bit clear");
+
+  // Non-zero float bias -> bit set.
+  desc.samplers[0].states[SAMP_MIPMAP_LOD_BIAS] = std::bit_cast<u32>(-1.5f);
+  const auto biased = makeVariantKey(makeFlatDrawFixture(desc));
+  check(biased.samplerLodBias, "non-zero SAMP_MIPMAPLODBIAS sets the variant bit");
+
+  // bias-on vs bias-off must be distinct keys and distinct hashes (separate
+  // PSO cache slots, mirroring tileFfpMode / alphaToCoverage).
+  check(!(biased == zeroBias), "LOD-bias enable changes the PSO key");
+  check(dxmt9::pipeline::ShaderVariantKeyHash{}(biased) !=
+            dxmt9::pipeline::ShaderVariantKeyHash{}(zeroBias),
+        "LOD-bias enable changes the PSO key hash");
+
+  // A non-zero bias on a non-stage-0 sampler also sets the bit (predicate
+  // scans every active sampler stage, not just stage 0).
+  desc.samplers[0].states[SAMP_MIPMAP_LOD_BIAS] = std::bit_cast<u32>(0.0f);
+  desc.samplers[3].states[SAMP_MIPMAP_LOD_BIAS] = std::bit_cast<u32>(2.0f);
+  const auto biasedStage3 = makeVariantKey(makeFlatDrawFixture(desc));
+  check(biasedStage3.samplerLodBias,
+        "non-zero SAMP_MIPMAPLODBIAS on a later sampler stage sets the variant bit");
+
+  checkEq(SAMP_MIPMAP_LOD_BIAS, 8u, "D3DSAMP_MIPMAPLODBIAS sampler-state code");
+}
+
 void testSrgbCompatiblePixelFormatConversion() {
   BackendLimits limits{};
 
@@ -689,6 +735,7 @@ int main() {
     testProgrammableShaderVariantKeyUsesFullVertexDeclHash();
     testPipelineHelpersUseExplicitFlatInputs();
     testAlphaToCoverageRenderStateHack();
+    testSamplerLodBiasVariantBit();
     testSrgbCompatiblePixelFormatConversion();
     testUnsupportedDrawTranslatorFailureReturnsEmptyPipelineFuture();
   } catch (const TestFailure& failure) {

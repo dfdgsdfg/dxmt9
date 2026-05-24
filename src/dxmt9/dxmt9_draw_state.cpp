@@ -245,6 +245,25 @@ SamplerLodBias buildSamplerLodBias(core::FlatDrawStateView state) {
   return out;
 }
 
+bool anySamplerLodBiasNonzero(core::FlatDrawStateView state) {
+  // PSO-variant gate predicate (gap_d3d9 B.3): single source of truth shared by
+  // the PSO key (emit) and the slot-4 encoder bind. True iff some sampler
+  // stage's SAMP_MIPMAP_LOD_BIAS DWORD bit-casts to a non-zero float. Reads the
+  // exact same flat state slots buildSamplerLodBias uses so the key bit and the
+  // bind decision can never disagree. The common no-bias draw returns false,
+  // dropping the slot-4 SamplerLodBias param + bind + per-sample bias() to the
+  // pre-feature plain-sample form.
+  for (u32 stage = 0; stage < core::kMaxTextureStages; ++stage) {
+    const f32 bias = std::bit_cast<f32>(core::flatStateOr(
+        state.hot->samplerStates[stage], core::SAMP_MIPMAP_LOD_BIAS,
+        std::bit_cast<u32>(0.0f)));
+    if (bias != 0.0f) {
+      return true;
+    }
+  }
+  return false;
+}
+
 DrawVolatile buildDrawVolatile(i32 vertexBaseIndex, u32 vertexStreamOffset,
                                u32 vertexStreamStride) {
   DrawVolatile out;

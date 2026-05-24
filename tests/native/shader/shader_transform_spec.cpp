@@ -208,6 +208,19 @@ std::string translatePixel(std::span<const u32> words) {
       shader, dxmt9::drawshader::makeShaderSourceContext(desc));
 }
 
+// D3DSAMP_MIPMAPLODBIAS (gap_d3d9 B.3) is gated behind the
+// ShaderSourceContext::samplerLodBias variant flag. This overload threads the
+// flag so the spec can assert both the bias-on emit and the byte-identical
+// bias-off emit (no slot-4 param, plain sample()).
+std::string translatePixel(std::span<const u32> words, bool samplerLodBias) {
+  const auto shader = makeShader(words);
+  DrawDesc desc{};
+  desc.pixelShader = shader;
+  auto context = dxmt9::drawshader::makeShaderSourceContext(desc);
+  context.samplerLodBias = samplerLodBias;
+  return dxmt9::translator::makeTranslatedFragmentSource(shader, context);
+}
+
 std::string translateVertex(std::span<const u32> words) {
   const auto shader = makeShader(words);
   DrawDesc desc{};
@@ -1471,10 +1484,11 @@ void testPs20MipLodBiasEmitsShaderSideBias() {
   // D3DSAMP_MIPMAPLODBIAS (gap_d3d9 B.3) is applied at sample time in MSL
   // via texture.sample(sampler, coord, bias(b)) — Metal's MTLSamplerDescriptor
   // has no LOD-bias field. The per-sampler bias rides a dedicated uniform
-  // (`SamplerLodBias`) bound at fragment buffer slot 4. The translated
-  // fragment must (1) declare that uniform and (2) thread its per-sampler
-  // value through bias() on every implicit-gradient (TEX) sample.
-  const auto source = translatePixel(makePs20TexturedBytecode(7));
+  // (`SamplerLodBias`) bound at fragment buffer slot 4. When the variant flag
+  // is SET the translated fragment must (1) declare that uniform and (2) thread
+  // its per-sampler value through bias() on every implicit-gradient (TEX)
+  // sample.
+  const auto source = translatePixel(makePs20TexturedBytecode(7), /*samplerLodBias=*/true);
   checkContains(source, "struct SamplerLodBias",
                 "translated PS declares the per-sampler LOD-bias uniform struct");
   checkContains(source, "constant SamplerLodBias& samplerLodBias [[buffer(4)]]",
@@ -1485,10 +1499,28 @@ void testPs20MipLodBiasEmitsShaderSideBias() {
                 "ps_2_0 TEX threads the per-sampler LOD bias into bias()");
 }
 
+void testPs20MipLodBiasClearOmitsShaderSideBias() {
+  // gap_d3d9 B.3 PSO-variant gating: when no active sampler carries a non-zero
+  // LOD bias the variant flag is CLEAR, and the emitted MSL must be the
+  // pre-feature form — NO slot-4 SamplerLodBias param and a plain
+  // sample(sampler, coord) with no bias() argument. This keeps the common
+  // no-bias draw off the per-draw slot-4 upload + bind.
+  const auto source = translatePixel(makePs20TexturedBytecode(7), /*samplerLodBias=*/false);
+  checkNotContains(source, "SamplerLodBias",
+                   "bias-off translated PS omits the LOD-bias uniform entirely");
+  checkNotContains(source, "buffer(4)",
+                   "bias-off translated PS binds nothing at fragment slot 4");
+  checkNotContains(source, "bias(",
+                   "bias-off translated PS samples without a bias() argument");
+  checkContains(source, "tex7.sample(samp7",
+                "bias-off translated PS still samples through the sampler register slot");
+}
+
 void testFfpMipLodBiasEmitsShaderSideBias() {
-  // Same gap_d3d9 B.3 contract for the fixed-function pixel path: a textured
-  // FFP stage threads its per-sampler LOD bias through bias() on the stage
-  // sample. The `SamplerLodBias` uniform is declared and bound at slot 4.
+  // Same gap_d3d9 B.3 contract for the fixed-function pixel path: with the
+  // variant flag SET a textured FFP stage threads its per-sampler LOD bias
+  // through bias() on the stage sample. The `SamplerLodBias` uniform is
+  // declared and bound at slot 4.
   FfpPixelKey key{};
   key.stages[0].colorOp = static_cast<u32>(TextureOp::SelectArg1);
   key.stages[0].colorArg1 = 2u;  // D3DTA_TEXTURE
@@ -1497,6 +1529,7 @@ void testFfpMipLodBiasEmitsShaderSideBias() {
   desc.pixelShader.pixelKey = key;
   desc.textures[0].handle = Handle{1u};
   auto context = dxmt9::drawshader::makeShaderSourceContext(desc);
+  context.samplerLodBias = true;
   const auto source = dxmt9::ffp::makeFfpPixelSource(key, context);
   checkContains(source, "struct SamplerLodBias",
                 "FFP PS declares the per-sampler LOD-bias uniform struct");
@@ -1506,6 +1539,30 @@ void testFfpMipLodBiasEmitsShaderSideBias() {
                 "FFP stage 0 samples its bound texture");
   checkContains(source, "bias(samplerLodBias.bias[0])",
                 "FFP stage 0 threads the per-sampler LOD bias into bias()");
+}
+
+void testFfpMipLodBiasClearOmitsShaderSideBias() {
+  // gap_d3d9 B.3 PSO-variant gating, FFP path: when the variant flag is CLEAR
+  // the textured FFP fragment must be the pre-feature form — no slot-4
+  // SamplerLodBias param and a plain stage sample with no bias() argument.
+  FfpPixelKey key{};
+  key.stages[0].colorOp = static_cast<u32>(TextureOp::SelectArg1);
+  key.stages[0].colorArg1 = 2u;  // D3DTA_TEXTURE
+  DrawDesc desc{};
+  desc.pixelShader.kind = ShaderRef::Kind::FixedFunctionPixel;
+  desc.pixelShader.pixelKey = key;
+  desc.textures[0].handle = Handle{1u};
+  auto context = dxmt9::drawshader::makeShaderSourceContext(desc);
+  context.samplerLodBias = false;
+  const auto source = dxmt9::ffp::makeFfpPixelSource(key, context);
+  checkNotContains(source, "SamplerLodBias",
+                   "bias-off FFP PS omits the LOD-bias uniform entirely");
+  checkNotContains(source, "buffer(4)",
+                   "bias-off FFP PS binds nothing at fragment slot 4");
+  checkNotContains(source, "bias(",
+                   "bias-off FFP PS samples without a bias() argument");
+  checkContains(source, "tex0.sample(samp0",
+                "bias-off FFP PS still samples its bound texture");
 }
 
 void testPs30InputSemanticTexcoordMapping() {
@@ -2249,7 +2306,9 @@ int main() {
     testD3DOpcodeNamesCoverUnsupportedSurface();
     testPs20SamplerRegisterSlotMapping();
     testPs20MipLodBiasEmitsShaderSideBias();
+    testPs20MipLodBiasClearOmitsShaderSideBias();
     testFfpMipLodBiasEmitsShaderSideBias();
+    testFfpMipLodBiasClearOmitsShaderSideBias();
     testPs30InputSemanticTexcoordMapping();
     testPs30TexkillLoweringContract();
     testPs20ColorInputUsesLegacyInputMapping();
