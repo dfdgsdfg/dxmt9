@@ -77,14 +77,15 @@ a `file:line` anchor checked against the live tree.
 | MRT `COLORWRITEENABLE1..3` per-RT independent masks (closed 2026-05-24) | B.10#2 | `src/dxmt9/dxmt9_pipeline_cache.cpp` `makeBlendAttachmentKeys`; gate `dxmt9-backend-pipeline-key-spec` |
 | `PresentParameters` MultiSampleQuality/Flags/FullScreen_RefreshRateInHz plumbed (closed 2026-05-24) | C.12#1,#9 | `include/dxmt9/core_constants.hpp` + `ppFromC`; gate `dxmt9-core-format-caps-spec` |
 | COM stub regression gates: CheckResourceResidency, Get/SetGPUThreadPriority (native, closed 2026-05-24) | D.* | `tests/native/core/core_device_com_spec.cpp`; gate `dxmt9-core-device-com-spec` |
+| `DF16`/`DF24` vendor depth-as-texture accepted + wired to Metal depth (closed 2026-05-24) | C.5 | `device_c_format_utils.cpp`/`core_format.cpp`/`dxmt9_format_convert.cpp`/`core_format_utils.cpp`; gate `dxmt9-core-format-caps-spec` |
+| TSS `COLORARG0`/`ALPHAARG0` + MULTIPLYADD/LERP triadic ops, arg0 default `D3DTA_CURRENT` (closed 2026-05-24) | B.10#10 | `dxmt9_ffp_shaders.cpp`/`core_draw.cpp`; gates `dxmt9-ffp-triadic-msl-spec` + tss_multiplyadd/lerp/alpha_lerp GPU readbacks |
 
 ### Remaining actionable gaps (verified still open)
 
 | Item | Section | Priority | Notes |
 |---|---|---|---|
 | COM silent-`S_OK` stub gates — 4 PE-only remain (SetNPatchMode/GetNPatchMode, SetClipStatus/GetClipStatus, DeletePatch) | D.* | Med | native `com::` harness reached 3/7; rest need the PE conformance lane (`d3d9_device_misc.cpp` already gates SetDialogBoxMode/ValidateDevice) |
-| Vendor formats `DF16`/`DF24`/`RESZ`/`NULL`/`NVDB`/`ATOC` | C.5 | Med | INTZ already done; promote rest as needed |
-| TSS `COLORARG0` / `ALPHAARG0` triadic ops (MULTIPLYADD/LERP) | B.10#10 | Med | needs FfpPixelStage extension |
+| Vendor formats `RESZ`/`NULL`/`NVDB`/`ATOC` (special-semantic) | C.5 | Med | INTZ + DF16/DF24 done; these are resolve-trigger / null-RT / depth-bounds / alpha-to-coverage — need per-feature design, not plain format adds |
 | `D3DRS_WRAP0..15` per-stage texcoord wrap | B.10#6 | Low | no constants/consumers |
 | `D32_LOCKABLE` (84) / `Q16W16V16U16` (110) | C.12#7 | Low | DX9b legacy; needs correct Metal mapping |
 | `D3DRS_DEBUGMONITORTOKEN` (165) constant | B.10#9 | Low | unused by apps; PE-shadow-generic at most |
