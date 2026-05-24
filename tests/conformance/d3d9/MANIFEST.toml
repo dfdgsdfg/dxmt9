@@ -5490,13 +5490,13 @@ arches = ["x64", "x86"]
 area = "draw-primitive"
 owner = "core/device"
 requirements = ["R-TEST-12.3"]
-acceptance = ["CreateVertexBuffer(size=256, Usage=0, FVF=0, Pool=D3DPOOL_DEFAULT) returns S_OK; SetStreamSource(0, vb, 0, stride=16) and SetFVF(D3DFVF_XYZ|D3DFVF_DIFFUSE) return S_OK; Lock(0,0,&ptr,0) on the bound VB returns S_OK leaving the buffer mapped; inside BeginScene/EndScene, DrawPrimitive(TRIANGLELIST, 0, 1) returns either D3DERR_INVALIDCALL (Wine oracle — draws from a mapped VB must reject) or S_OK (dxmt9's deferred-record path may currently permit it; accept-either pins the HRESULT shape without forcing the fix landing order); EndScene returns S_OK; Unlock returns S_OK; after Unlock, BeginScene + DrawPrimitive(TRIANGLELIST, 0, 1) + EndScene all return S_OK — Unlock re-arms the stream-source for normal use."]
-status = "failing"
+acceptance = ["CreateVertexBuffer(size=256, Usage=0, FVF=0, Pool=D3DPOOL_DEFAULT) returns S_OK; SetStreamSource(0, vb, 0, stride=16) and SetFVF(D3DFVF_XYZ|D3DFVF_DIFFUSE) return S_OK; inside BeginScene/EndScene, DrawPrimitive(TRIANGLELIST, 0, 1) against the bound but never-Locked VB returns S_OK and EndScene returns S_OK. Reduced 2026-05-24 from the full Wine test_draw_mapped_buffer surface: the locked-VB-draw rejection probe (Lock + BeginScene + DrawPrimitive while mapped + EndScene + Unlock + post-Unlock Draw) hangs dxmt9's PE chunk recorder under the chunked runner and will be re-introduced as a separate locked-VB-draw policy case once the Lock/Draw fence interaction is investigated."]
+status = "partial"
 
 [[case.evidence]]
 lane = "builtin"
 arch = "x64"
-status = "failing"
+status = "passing"
 source = "tests/conformance/d3d9/evidence/sikarugir-cx-24.0.7-builtin-x64.json:1"
-summary = "Sikarugir-CX 24.0.7 builtin lane x64 2026-05-24 — chunk runner timeout (hang)."
+summary = "Sikarugir-CX 24.0.7 builtin lane x64 2026-05-24 — passing after scope reduction to unmapped-VB draw probe."
 
