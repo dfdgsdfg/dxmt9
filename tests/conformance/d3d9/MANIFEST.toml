@@ -5059,14 +5059,14 @@ area = "surface-blit"
 owner = "core/resources"
 requirements = ["R-TEST-12.13", "R-TEST-12.14"]
 acceptance = ["StretchRect of an MSAA D3DPOOL_DEFAULT D3DFMT_A8R8G8B8 render target into a same-format non-MSAA render target returns S_OK (D3D9 multisample-resolve idiom); the reverse direction (non-MSAA -> MSAA target) returns D3DERR_INVALIDCALL; if MSAA RT creation returns D3DERR_NOTAVAILABLE the resolve probes are skipped"]
-status = "failing"
+status = "partial"
 
 [[case.evidence]]
 lane = "builtin"
 arch = "x64"
-status = "failing"
+status = "passing"
 source = "tests/conformance/d3d9/evidence/sikarugir-cx-24.0.7-builtin-x64.json:1"
-summary = "Sikarugir-CX 24.0.7 builtin lane x64 2026-05-24 — failing in chunked runner snapshot; follow-up."
+summary = "Sikarugir-CX 24.0.7 builtin lane x64 2026-05-24 — passing after PE-side StretchRect rejects multisampled destination (non-MSAA -> MSAA blits return D3DERR_INVALIDCALL)."
 
 [[case]]
 executable = "dxmt9-d3d9-conformance.exe"

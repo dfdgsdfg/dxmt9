@@ -2694,6 +2694,17 @@ public:
                     return D3DERR_INVALIDCALL;
                 }
             }
+            // Wine d3d9 test_multisample_stretch_rect (visual.c:4494)
+            // contract: the destination of a StretchRect must not be
+            // multisampled. MSAA -> non-MSAA is the D3D9 resolve idiom
+            // and is allowed; non-MSAA -> MSAA and MSAA -> MSAA blits
+            // are rejected with D3DERR_INVALIDCALL.
+            // stretch_rect_multisample_resolve_policy.
+            if (gotSrc && gotDst) {
+                if (sdDst.MultiSampleType != D3DMULTISAMPLE_NONE) {
+                    return D3DERR_INVALIDCALL;
+                }
+            }
         }
         D9CRect cs{}, cd{};
         if (srcRect) cs = toR(*srcRect); if (dstRect) cd = toR(*dstRect);
