@@ -82,7 +82,8 @@ a `file:line` anchor checked against the live tree.
 | `D32_LOCKABLE` (84) + `Q16W16V16U16` (110) formats end-to-end (closed 2026-05-24) | C.12#7 | mirror D32F_LOCKABLE→Depth32Float / A16B16G16R16→RGBA16Snorm; gate `dxmt9-core-format-caps-spec`. Caveat: Q16W16V16U16 FormatInfo mirrors its analog's `renderTarget=true` — real D3D9 may not advertise RT for it (minor caps over-report) |
 | `ATOC` alpha-to-coverage — classification + behavioral (closed 2026-05-24) | C.5 | R-FORMAT-13; `RS_ADAPTIVETESS_Y`(181) ATOC/A2M1/A2M0 token → PSO `alphaToCoverage` bit → bridge `alphaToCoverageEnabled` (already exposed). `3293e39`, gate `dxmt9-backend-pipeline-key-spec` |
 | `NULL` colorless render target — classification + behavioral (closed 2026-05-24) | C.5 | R-FORMAT-12; no color backing, `beginRenderPass` omits color attachment, Lock/readback→INVALIDCALL. `2f7b04e`, gate `dxmt9-resource-format-boundary-spec` (render-pass omission deferred to GPU validation) |
-| `RESZ` FOURCC classification + sentinel detect/stage (closed 2026-05-24) | C.5 | R-FORMAT-11; `2f619f0`+`82c89fc`, gate `dxmt9-state-draw-transform-spec`. GPU depth-resolve itself is **blocked** — see Remaining |
+| `RESZ` FOURCC classification + sentinel detect/stage (closed 2026-05-24) | C.5 | R-FORMAT-11; `2f619f0`+`82c89fc`, gate `dxmt9-state-draw-transform-spec`. ABI + backend primitive also landed (`8568fab`); dispatch seam = see Remaining |
+| `SAMP_MIPMAPLODBIAS` per-sampler mip LOD bias — shader-side (closed 2026-05-24) | B.3/B.10#4 | `bfb8a2d`; `SamplerLodBias` uniform (fragment slot 4) + `sample(…, bias(b))` at FFP (4) + translated-texld (1) sites; `bias(0)` no-op. Gate `dxmt9-shader-transform-spec` (+ texture readbacks confirm no-op). GPU mip-bias validation deferred. NOT an ABI change. |
 
 ### Remaining actionable gaps (verified still open)
 
@@ -91,7 +92,6 @@ a `file:line` anchor checked against the live tree.
 | COM silent-`S_OK` stub gates — 4 PE-only remain (SetNPatchMode/GetNPatchMode, SetClipStatus/GetClipStatus, DeletePatch) | D.* | Med | native `com::` harness reached 3/7; rest need the PE conformance lane (`d3d9_device_misc.cpp` already gates SetDialogBoxMode/ValidateDevice) |
 | `RESZ` GPU depth-resolve — **PE→unix dispatch seam remaining** | C.5 | Med | ABI extension (`WMTDepthAttachmentInfo` resolve fields + `WMTMultisampleDepthResolveFilter`), unix mapping, and backend `encodeDepthResolve` primitive all landed + lockstep-build verified (`8568fab`, gate `dxmt9-wmt-depth-resolve-abi-spec`). Remaining: wire record + validate/classify/replay + the `encodeDepthResolve` caller in the surface-op dispatch, then GPU MSAA+readback validation. R-FORMAT-11. |
 | `D3DRS_TWOSIDEDSTENCILMODE` (185) behavioural gate | B.10#7 | Low | backend uses single-ref/both-faces; partial backend limit |
-| `SAMP_MIPMAPLODBIAS` per-sampler bias | B.3/B.10#4 | Med | **NOT a winemetal ABI gap (note corrected 2026-05-24)** — `MTLSamplerDescriptor` has no LOD-bias; Metal biases at sample time. Implement as a per-sampler bias uniform + `sample(…, bias(b))` at the MSL emit sites (FFP + translated texld). Shader-plumbing, no ABI change. |
 | `D3DCLIPSTATUS9` Set/GetClipStatus | B.8/D.* | Low | nil-return arguably correct (D3D9 has no per-primitive clip tracking) |
 
 ### Resolved as documented-unsupported / non-gap (no implementation planned)
