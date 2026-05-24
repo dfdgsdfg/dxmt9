@@ -103,7 +103,7 @@ license = "MIT"
 license_scope = "project-mit"
 models = ["ps_3_0"]
 opcodes = ["DEF", "MOV", "TEXKILL"]
-oracle = "math-derivation"
+oracle = "Wine d3d9 visual.c texkill_test behavior, reduced to per-pixel discard validation against TEXKILL component-sign semantics"
 oracle-date = "2026-05-16"
 
 [[test]]
@@ -2839,7 +2839,7 @@ license = "MIT"
 license_scope = "project-mit"
 models = ["ffp"]
 opcodes = ["TEX"]
-oracle = "Wine d3d9 visual.c fixed_function_decl_test behavior, reduced to missing COLOR0 default white"
+oracle = "Wine d3d9 visual.c fixed_function_decl_test and test_default_diffuse behavior, reduced to missing COLOR0 default white"
 oracle-date = "2026-05-17"
 
 [[test]]
@@ -2851,7 +2851,7 @@ license = "MIT"
 license_scope = "project-mit"
 models = ["ffp"]
 opcodes = ["TEX"]
-oracle = "Wine d3d9 visual.c fixed_function_decl_test behavior, reduced to missing TEXCOORD0 default texture sampling"
+oracle = "Wine d3d9 visual.c fixed_function_decl_test and test_default_attribute_components behavior, reduced to missing TEXCOORD0 default texture sampling"
 oracle-date = "2026-05-19"
 
 [[test]]

@@ -5962,40 +5962,6 @@ status = "scaffolded"
 
 [[case]]
 executable = "dxmt9-d3d9-conformance.exe"
-source_file = "d3d9_conformance_visual_planned.c"
-function = "test_visual_default_attribute_components_inventory_scaffold"
-source = "wine/dlls/d3d9/tests/visual.c:test_default_attribute_components"
-source_kind = "behavioral-oracle"
-license = "LGPL-2.1-or-later"
-license_scope = "external-not-vendored"
-upstream_commit = "6e073d28dee3af7f4c965daec94644e0f9f92727"
-lanes = ["app-local", "builtin"]
-arches = ["x64", "x86"]
-area = "vertex-shader"
-owner = "core/encoder"
-requirements = ["R-TEST-12.13"]
-acceptance = ["Inventory scaffold for visual.c:test_default_attribute_components. Wine pins that vs_2_0 dcl_texcoordN inputs that are missing from the vertex declaration receive the default attribute (0,0,0,1) and that the vertex pipeline reads them as such. The PE-side pin would need a vs_2_0 + declaration round-trip (CreateVertexShader+CreateVertexDeclaration HRESULTs) plus a shader-runner_dxmt9 readback for the (0,0,0,1) constant. Currently shader-runner_dxmt9 coverage is the gating piece; this scaffold tracks the gap."]
-status = "scaffolded"
-
-[[case]]
-executable = "dxmt9-d3d9-conformance.exe"
-source_file = "d3d9_conformance_visual_planned.c"
-function = "test_visual_default_diffuse_inventory_scaffold"
-source = "wine/dlls/d3d9/tests/visual.c:test_default_diffuse"
-source_kind = "behavioral-oracle"
-license = "LGPL-2.1-or-later"
-license_scope = "external-not-vendored"
-upstream_commit = "6e073d28dee3af7f4c965daec94644e0f9f92727"
-lanes = ["app-local", "builtin"]
-arches = ["x64", "x86"]
-area = "vertex-declaration"
-owner = "core/encoder"
-requirements = ["R-TEST-12.13"]
-acceptance = ["Inventory scaffold for visual.c:test_default_diffuse. Wine pins that when a vertex declaration omits D3DDECLUSAGE_COLOR (or points it at an unbound stream), the diffuse attribute defaults to (1,1,1,1) in the vertex shader. Three subcases: with-COLOR, no-COLOR, and missing-COLOR (stream 1 unbound). HRESULTs from CreateVertexDeclaration/CreateVertexShader are within deterministic PE scope; pixel readback of the default-diffuse value requires shader-runner_dxmt9 plumbing. Scaffold tracks the gap."]
-status = "scaffolded"
-
-[[case]]
-executable = "dxmt9-d3d9-conformance.exe"
 source_file = "d3d9_conformance_visual_raster.c"
 function = "test_draw_indexed_primitive_up_independence_policy"
 source = "wine/dlls/d3d9/tests/visual.c:test_drawindexedprimitiveup"
@@ -6041,21 +6007,4 @@ arch = "x64"
 status = "passing"
 source = "tests/conformance/d3d9/evidence/sikarugir-cx-24.0.7-builtin-x64.json:1"
 summary = "Sikarugir-cx-24.0.7 builtin x64: set_texture_set_render_target_self_feedback_policy passes (9 checks, 0 failures)."
-
-[[case]]
-executable = "dxmt9-d3d9-conformance.exe"
-source_file = "d3d9_conformance_visual_planned.c"
-function = "test_visual_texkill_inventory_scaffold"
-source = "wine/dlls/d3d9/tests/visual.c:texkill_test"
-source_kind = "behavioral-oracle"
-license = "LGPL-2.1-or-later"
-license_scope = "external-not-vendored"
-upstream_commit = "6e073d28dee3af7f4c965daec94644e0f9f92727"
-lanes = ["app-local", "builtin"]
-arches = ["x64", "x86"]
-area = "pixel-shader"
-owner = "core/shader"
-requirements = ["R-TEST-12.13"]
-acceptance = ["Inventory scaffold for visual.c:texkill_test. Wine pins ps_1_1 and ps_2_0 texkill behavior: a per-pixel discard based on the sign of texture-coordinate components t0.x..t0.z (and t0.w on ps_2_0). The CreatePixelShader HRESULT contract for the texkill bytecode is in deterministic PE scope and is covered indirectly by the existing pixel-shader and texture_stage_state cases; pixel-correctness of the per-coordinate discard requires shader-runner_dxmt9 plumbing. Scaffold tracks the inventory entry."]
-status = "scaffolded"
 

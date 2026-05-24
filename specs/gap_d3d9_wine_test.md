@@ -27,11 +27,11 @@ edits not yet visible upstream.
 
 | Field | Value |
 |-------|-------|
-| Commit | `b0205231b2fc1946037ac595029f1d56c18cc997` — **work tree dirty** |
-| Short  | `b020523` |
-| Tag / describe | `b020523` |
+| Commit | `ce9ab4fbc955ad97a9c019b76f020bac11e38156` — **work tree dirty** |
+| Short  | `ce9ab4f` |
+| Tag / describe | `ce9ab4f` |
 | Author date | `2026-05-24` |
-| Subject | Merge branch 'worktree-agent-a17b372b16443a678' into agent/gap-d3d9-impl |
+| Subject | tests/conformance/d3d9: add DrawIndexedPrimitiveUP + RT self-feedback HRESULT cases |
 
 ### Wine reference revision
 
@@ -50,7 +50,7 @@ the same commit in the Wine checkout before opening the source.
 
 ```sh
 # Reproduce the inventory verbatim from a clean tree:
-git -C "$DXMT9_REPO" checkout b0205231b2fc1946037ac595029f1d56c18cc997
+git -C "$DXMT9_REPO" checkout ce9ab4fbc955ad97a9c019b76f020bac11e38156
 git -C "$WINE_REPO"  checkout 6e073d28dee3af7f4c965daec94644e0f9f92727
 python3 scripts/tools/gen_wine_d3d9_test_inventory.py
 ```
@@ -72,11 +72,11 @@ python3 scripts/tools/gen_wine_d3d9_test_inventory.py
 
 | Wine source | Tests | covered | scaffolded | partial | failing | other |
 |-------------|-----:|--------:|----------:|--------:|--------:|------:|
-| `visual.c` | 135 | 131 | 4 | 0 | 0 | 0 |
+| `visual.c` | 135 | 134 | 1 | 0 | 0 | 0 |
 | `device.c` | 105 | 105 | 0 | 0 | 0 | 0 |
 | `d3d9ex.c` | 27 | 27 | 0 | 0 | 0 | 0 |
 | `stateblock.c` | 1 | 1 | 0 | 0 | 0 | 0 |
-| **TOTAL** | **268** | **264** | **4** | **0** | **0** | **0** |
+| **TOTAL** | **268** | **267** | **1** | **0** | **0** | **0** |
 
 `other` rolls up `deferred`, `partial/deferred`, and any UNTRACKED rows.
 
@@ -145,8 +145,8 @@ Source: [`dlls/d3d9/tests/visual.c`](https://gitlab.winehq.org/wine/wine/-/blob/
 | `test_compare_instructions` | 7614 | ✅ | `dxmt9_compare_matrix_readback` |
 | `test_constant_clamp_vs` | 6189 | ✅ | `dxmt9_vs_constant_no_clamp_readback` |
 | `test_cube_wrap` | 2664 | ✅ | `dxmt9_cube_wrap_positive_x_readback` |
-| `test_default_attribute_components` | 27807 | 📐 | `test_visual_default_attribute_components_inventory_scaffold` |
-| `test_default_diffuse` | 27607 | 📐 | `test_visual_default_diffuse_inventory_scaffold` |
+| `test_default_attribute_components` | 27807 | ✅ | `dxmt9_ffp_decl_missing_texcoord_default_readback` |
+| `test_default_diffuse` | 27607 | ✅ | `dxmt9_ffp_decl_missing_defaults_readback` |
 | `test_depth_stencil_init` | 22556 | ✅ | `test_visual_depth_stencil_init_policy` |
 | `test_depthbias` | 21851 | ✅ | `dxmt9_depth_bias_occlusion_readback` |
 | `test_desktop_window` | 25880 | ✅ | `test_device_desktop_window_present_policy` |
@@ -206,7 +206,7 @@ Source: [`dlls/d3d9/tests/visual.c`](https://gitlab.winehq.org/wine/wine/-/blob/
 | `test_vshader_input` | 7787 | ✅ | `dxmt9_vs_multistream_texcoord1_offset_readback` |
 | `texbem_test` | 3440 | ✅ | `test_vendor_policy_texbem_unsupported`, `dxmt9_ps11_texbem_stage1_readback`, `dxmt9_ps11_texbeml_stage1_readback` |
 | `texdepth_test` | 5242 | ✅ | `test_vendor_policy_texdepth_unsupported`, `dxmt9_ps14_texdepth_depth_write`, `dxmt9_ps14_texdepth_constant_ratio_depth_compare`, `dxmt9_ps13_texm3x2depth_source` |
-| `texkill_test` | 5465 | 📐 | `test_visual_texkill_inventory_scaffold` |
+| `texkill_test` | 5465 | ✅ | `dxmt9_texkill_readback` |
 | `texop_range_test` | 13126 | ✅ | `dxmt9_ffp_texop_range_high_readback`, `dxmt9_ffp_texop_range_low_readback` |
 | `texop_test` | 12604 | ✅ | `test_texture_stage_states` |
 | `tssargtemp_test` | 12041 | ✅ | `dxmt9_ffp_tss_resultarg_temp_readback`, `dxmt9_ffp_tss_temp_add_readback` |
