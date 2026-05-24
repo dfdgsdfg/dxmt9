@@ -278,7 +278,14 @@ class Cache {
                                   WMT::Reference<WMT::BinaryArchive>* archive,
                                   const std::string* archivePath,
                                   bool tileFfpMode = false,
-                                  bool argbufHybridMode = false);
+                                  bool argbufHybridMode = false,
+                                  // R-BACK-12.22..12.26 (resource-array
+                                  // sub-mode) — stamp the resource-array
+                                  // PSO sub-bit. Only ever true alongside
+                                  // argbufHybridMode; selects the prelude
+                                  // that routes texture/sampler reads
+                                  // through the slot-30 argbuf arrays.
+                                  bool argbufResourceArray = false);
 
   std::mutex mutex{};
   PipelineMap draw{};

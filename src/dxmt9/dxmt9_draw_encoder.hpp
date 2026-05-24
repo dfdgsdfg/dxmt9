@@ -244,7 +244,19 @@ bool encodeDraw(EncodeContext& ctx,
                  // Stage 1 shadow binds are skipped in this mode.
                  // DrawVolatile (slot 5) and the vertex stream (slot 1)
                  // are unchanged in either mode (design.md §11.2).
-                 bool argbufHybridMode = false);
+                 bool argbufHybridMode = false,
+                 // R-BACK-12.22..12.26 (resource-array sub-mode) — when
+                 // true (only ever alongside argbufHybridMode), the
+                 // per-stage fragment textures/samplers are written into
+                 // the slot-30 resource-array argbuf via
+                 // argbuf_hybrid::populateResourceBindings (which also
+                 // issues the useResource residency the GPU needs for
+                 // argbuf-pointed textures) and the direct
+                 // [[texture(N)]] / [[sampler(N)]] binds below are skipped.
+                 // The PSO built for the draw carries the matching
+                 // ShaderVariantKey::argbufResourceArray bit. Default off
+                 // keeps the constants-only Stage 2 path byte-identical.
+                 bool argbufResourceArray = false);
 
 // Encode a single chunk's commands into a fresh WMT::CommandBuffer.
 // Returns a QueueSubmissionRecord that the finish loop commits; nullopt

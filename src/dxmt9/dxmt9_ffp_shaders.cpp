@@ -876,7 +876,17 @@ std::string makeFfpPixelSource(const FfpPixelKey& key,
     return env && env[0] != '\0' && std::strcmp(env, "0") != 0;
   }();
   const bool argbufHybrid = context.argbufHybridMode;
-  if (argbufHybrid) {
+  // R-BACK-12.22..12.26 (resource-array sub-mode) — only meaningful when
+  // Stage 2 hybrid is also on AND the fragment actually samples a texture.
+  // When set, the texture/sampler resources ride the slot-30 argbuf arrays
+  // and the direct [[texture(N)]] / [[sampler(N)]] params are dropped; an
+  // alias block re-binds the `tex<stage>` / `samp<stage>` names off the
+  // argbuf so every downstream sample site is byte-identical.
+  const bool argbufResourceArray =
+      argbufHybrid && context.argbufResourceArray && textured;
+  if (argbufResourceArray) {
+    out << shaders::makeShaderPreludeArgbufResourceArray(context.clipPlaneMask != 0);
+  } else if (argbufHybrid) {
     out << shaders::makeShaderPreludeArgbufHybrid(context.clipPlaneMask != 0);
   } else {
     out << shaders::makeShaderPrelude(context.clipPlaneMask != 0);
@@ -909,7 +919,32 @@ std::string makeFfpPixelSource(const FfpPixelKey& key,
     }
   };
   if (textured) {
-    if (argbufHybrid) {
+    if (argbufResourceArray) {
+      // R-BACK-12.22..12.26 (resource-array sub-mode) — texture/sampler
+      // resources ride the slot-30 argbuf arrays; the entry point declares
+      // NO [[texture(N)]] / [[sampler(N)]] params. The alias block below
+      // re-binds `tex<stage>` / `samp<stage>` off the argbuf so the FFP
+      // sample sites (which reference tex<stage>.sample(samp<stage>, ...))
+      // are byte-identical to the direct lane.
+      out << "fragment float4 dxmt9_fs(VSOut in [[stage_in]], "
+             "constant ArgbufLayout& abuf [[buffer("
+          << shaders::kArgbufHybridBindSlot << ")]]";
+      emitPointCoordParam();
+      if (emitLodBias) {
+        out << ", constant SamplerLodBias& samplerLodBias [[buffer(4)]]";
+      }
+      out << ") {\n";
+      out << "  constant PsConsts& psConsts = *abuf.psConsts;\n";
+      out << "  constant FfpPsConsts& ffpPs = *abuf.ffpPs;\n";
+      // FFP textures are always texture2d<float>; alias each active stage.
+      for (size_t i = 0; i < activeStages.size(); ++i) {
+        const size_t stage = activeStages[i];
+        out << "  texture2d<float> tex" << stage << " = abuf.textures["
+            << stage << "];\n";
+        out << "  sampler samp" << stage << " = abuf.samplers[" << stage
+            << "];\n";
+      }
+    } else if (argbufHybrid) {
       out << "fragment float4 dxmt9_fs(VSOut in [[stage_in]], "
              "constant ArgbufLayout& abuf [[buffer("
           << shaders::kArgbufHybridBindSlot << ")]]";
