@@ -111,8 +111,8 @@ run_lane() {
   if [[ -n "$timeout_override" ]]; then
     cmd+=(--timeout "$timeout_override")
   fi
-  if [[ "$cleanup_temp_prefix" == true ]]; then
-    cmd+=(--cleanup-temp-prefix)
+  if [[ "$cleanup_temp_prefix" == false ]]; then
+    cmd+=(--keep-temp-prefix)
   fi
 
   DXMT_EXPERIMENT_WINE_DLLOVERRIDES="$overrides" "${cmd[@]}" | tee -a "$suite_log" || true

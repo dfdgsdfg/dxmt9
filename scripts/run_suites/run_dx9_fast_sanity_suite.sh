@@ -195,8 +195,8 @@ run_lane() {
   if [[ -n "$unix_build_dir" ]]; then
     cmd+=(--unix-build-dir "$unix_build_dir")
   fi
-  if [[ "$cleanup_temp_prefix" == true ]]; then
-    cmd+=(--cleanup-temp-prefix)
+  if [[ "$cleanup_temp_prefix" == false ]]; then
+    cmd+=(--keep-temp-prefix)
   fi
 
   printf '==> %s %s\n' "$app" "$lane" | tee -a "$suite_log"

@@ -342,8 +342,8 @@ def run_one(
         "--unix-build-dir",
         str(REPO_ROOT / "build-x86_64-builtin" / "src"),
     ]
-    if not args.keep_prefixes:
-        cmd.append("--cleanup-temp-prefix")
+    if args.keep_prefixes:
+        cmd.append("--keep-temp-prefix")
 
     env = os.environ.copy()
     env.update(

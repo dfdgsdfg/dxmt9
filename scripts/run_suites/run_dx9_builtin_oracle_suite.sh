@@ -100,8 +100,8 @@ for app in "${apps[@]}"; do
   if [[ -n "$timeout_override" ]]; then
     cmd+=(--timeout "$timeout_override")
   fi
-  if [[ "$cleanup_temp_prefix" == true ]]; then
-    cmd+=(--cleanup-temp-prefix)
+  if [[ "$cleanup_temp_prefix" == false ]]; then
+    cmd+=(--keep-temp-prefix)
   fi
 
   if ! DXMT_EXPERIMENT_WINE_DLLOVERRIDES='d3d9=b' "${cmd[@]}" | tee -a "$suite_log"; then

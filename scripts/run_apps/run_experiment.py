@@ -823,7 +823,7 @@ def run_experiment(app: ExperimentApp, args: argparse.Namespace) -> int:
         prefix = create_temp_prefix(app.name)
         temp_prefix = True
 
-    cleanup_enabled = temp_prefix and args.cleanup_temp_prefix
+    cleanup_enabled = temp_prefix and not args.keep_temp_prefix
     cleanup_done = False
     process: subprocess.Popen[str] | None = None
     capture_error: str | None = None
@@ -1192,7 +1192,7 @@ def main() -> int:
     run_parser.add_argument("--mingw-bin-dir", help="x86_64 llvm-mingw bin dir for runtime DLL staging")
     run_parser.add_argument("--wow64-mingw-bin-dir", help="i686 llvm-mingw bin dir for runtime DLL staging")
     run_parser.add_argument("--accept-reference", action="store_true", help="Create the reference image if it does not exist")
-    run_parser.add_argument("--cleanup-temp-prefix", action="store_true", help="Delete the auto-created temp prefix after the run")
+    run_parser.add_argument("--keep-temp-prefix", action="store_true", help="Keep the auto-created temp prefix after the run (default: delete it)")
     run_parser.add_argument("--output-suffix", help="Append a suffix to the output directory name")
     run_parser.add_argument("--capture-delay-sec", type=float, default=None, help="Override CATALOGUE capture_delay_sec for this run")
     run_parser.add_argument(
