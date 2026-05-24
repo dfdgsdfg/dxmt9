@@ -1,7 +1,7 @@
 # Spec–Implementation Gap
 
 Current state of the codebase vs. the specifications.
-Updated against current working tree (2026-05-24, HEAD `81a2d0e`).
+Updated against current working tree (2026-05-24, HEAD `4a3aaa0`).
 
 Two companion per-item inventories feed this tracker and hold the
 authoritative detail behind the D3D9 and Tests rows below:
@@ -75,19 +75,20 @@ propagation, query validation, and lost-device/reset behaviour.
 **Wine-oracle test mapping is now complete.** All 268 Wine
 `{visual,device,d3d9ex,stateblock}.c` tests are mapped to dxmt9 PE
 conformance evidence (`gap_d3d9_wine_test.md`, 268/268 covered as of
-HEAD `81a2d0e`). The per-row "still need Wine-oracle conformance
+HEAD `4a3aaa0`). The per-row "still need Wine-oracle conformance
 coverage" notes above therefore now mean *lane / arch breadth promotion*
 (app-local + x86 lanes; the builtin x64 lane is largely passing) rather
 than a missing scaffold — see the Tests Layer rows. Separately, the
-per-spec-item audit in `gap_d3d9.md` (2026-05-23) surfaces concrete
-implementation gaps that are *not* lane-breadth issues; those are rolled
-up in the next subsection.
+per-spec-item audit in `gap_d3d9.md` (2026-05-23) surfaced concrete
+implementation gaps that were *not* lane-breadth issues; **those were all
+closed in the 2026-05-24 implementation pass** — `gap_d3d9.md`'s
+"Remaining actionable gaps" is now **None**. See the next subsection.
 
 ### D3D9 API Coverage Inventory
 
-Per-item inventory lives in [`specs/gap_d3d9.md`](gap_d3d9.md) (authored
-2026-05-23 from a four-agent parallel audit; a regenerable read-only
-ripgrep tracker, not a spec). Rolled-up totals:
+Per-item inventory lives in [`specs/gap_d3d9.md`](gap_d3d9.md) (a regenerable
+read-only ripgrep tracker, not a spec). The original **2026-05-23** four-agent
+audit baseline rolled up as (current status follows the table):
 
 | Category | Total rows | ✅ full | ⚠️ partial | ❌ silent gap |
 |---|---:|---:|---:|---:|
@@ -107,23 +108,28 @@ ripgrep tracker, not a spec). Rolled-up totals:
 | D. COM methods (21 interfaces) | 225 | 176 | 13 | 33 |
 | **Grand total** | **~803** | **~534** | **~46** | **~163** |
 
-High-priority findings that deserve a dedicated track beyond
-lane-breadth promotion (from `gap_d3d9.md` §"Cross-cutting high-priority
-findings"):
+**Current status (2026-05-24): `gap_d3d9.md` "Remaining actionable gaps" =
+None.** The 2026-05-24 re-audit found ~13 audited gaps were already implemented
+on `master`, and the implementation pass closed the rest. The high-priority
+findings the audit called out are all resolved (see `gap_d3d9.md`'s Closed
+table for per-item commits + gate test targets):
 
-| Finding | Section | Risk | Suggested track |
-|---|---|---|---|
-| **`core::SAMP_BORDER_COLOR = 15`** vs. Wine `D3DSAMP_BORDERCOLOR = 4` — wrong slot, every sampler with `BORDERCOLOR` mode silently misreads | B.3 | **High** | Verify the constant against Wine; fix to 4 with regression test |
-| **23 silent-`S_OK` COM stubs** (GammaRamp, DialogBox, NPatch, ValidateDevice, GPU thread priority, CheckResourceResidency, SwapChain stats…) — tests cannot tell a working call from a no-op | D.* | **High aggregate** | Convert each to honest impl or `E_NOTIMPL` + test gate |
-| 6 D3DDECLUSAGE (TANGENT/BINORMAL/TESSFACTOR/FOG/DEPTH/SAMPLE) silent fall-through | A.4 | Medium — normal-mapped assets misbind | DecoderReject + perf counter |
-| 6 D3DDECLMETHOD (only DEFAULT honored) silent fall-through | A.5 | Low-Med — N-patch / tessellation niche | DecoderReject + perf counter |
-| Point/Spot lighting: `D3DLIGHT9` carries Position/Range/Falloff/Attenuation but FFP emits directional only | B.5 | Medium — most legacy scenes have ≥ 1 point light | New FFP lighting track |
-| `INTZ` / `DF16` / `DF24` / `RAWZ` / `RESZ` / `NULL` / `ATOC` / `NVDB` / `GET4` vendor pseudo-formats all NOTAVAILABLE | C.5 | Medium — UE3/UE4-era shadow maps depend on `INTZ` | Promote INTZ first (most common) |
-| `SAMP_MIPMAPLODBIAS` per-sampler bias uniform unplumbed (4 MSL emit sites) | B.3 | Medium | P1-3 deferred — see `specs/d3d9.plan.md` §3 |
-| `AlphaCmpCaps` sourced from `alphaBlendCaps` not `alphaCmpCaps` (dedicated field dead code) | C.7 | Low | Wire `alphaCmpCaps` field, one-line fix |
-| `D3DRASTER_STATUS::ScanLine` always 0 | C.10 | Low — VBlank-poll loops get stuck | Wire to `CADisplayLink` or document as deferred |
-| `AdapterIdentifier9` DeviceIdentifier GUID + WHQLLevel always 0 | C.9 | Low — DRM / fingerprint paths break | Generate stable per-adapter GUID |
-| `D3DCLIPSTATUS9` / `D3DGAMMARAMP` log-only (no wire struct, no shadow) | B.8/B.9 | Low — apps rarely consume | Mark `E_NOTIMPL` properly OR full impl |
+| Finding (2026-05-23 audit) | Resolution |
+|---|---|
+| `SAMP_BORDER_COLOR` slot (was 15, Wine = 4) | ✅ fixed to 4 + regression `static_assert` |
+| 23 silent-`S_OK` COM stubs | ✅ GammaRamp / RasterStatus real impl; NPatch / DeletePatch / ClipStatus / GPU-priority / CheckResidency contract-gated |
+| 6 D3DDECLUSAGE + 6 D3DDECLMETHOD silent fall-through | ✅ `DecoderReject` + perf counter |
+| Point/Spot FFP lighting (directional-only) | ✅ implemented (Position/Range/Atten/Theta/Phi) |
+| Vendor formats `INTZ`/`DF16`/`DF24`/`RESZ`/`NULL`/`ATOC` | ✅ implemented (RESZ end-to-end); `NVDB`/`RAWZ` → explicit `NOTAVAILABLE` |
+| `SAMP_MIPMAPLODBIAS` unplumbed | ✅ shader-side `sample(…, bias(b))` + PSO-variant gated |
+| `AlphaCmpCaps` source / `RASTER ScanLine` / `AdapterIdentifier9` GUID+WHQL | ✅ all wired |
+| `D3DCLIPSTATUS9` / `D3DGAMMARAMP` log-only | ✅ GammaRamp real impl; ClipStatus = Wine-matching stub + defined default |
+| `D3DRS_TWOSIDEDSTENCILMODE` / `D3DRS_WRAP0..15` | ✅ implemented (per-face stencil ops / accepted no-op) |
+
+Outstanding work here is **not implementation** but **deferred evidence**:
+GPU-runtime pixel validation (RESZ MSAA→INTZ readback, NULL color-attachment
+omission, MIPMAPLODBIAS mip selection) and conformance Wine-run validation of
+the new PE gates — each needs a Wine + GPU-readback probe.
 
 ---
 
@@ -249,8 +255,8 @@ suite are still open.
 | Native `core_spec` coverage for resource mapping / present-readback / clip planes / MSAA / Ex wrappers / programmable texture orientation | ✅ | R-TEST-4.3-R-TEST-4.4, R-TEST-5.1–5.2, R-TEST-6.1 |
 | Fixed-function `.shader_test` files | ✅ | `ffp/alpha_test.shader_test` and native fixed-function coverage |
 | Wine `visual.c` oracle coverage (ps_1_x, FFP) | ✅ | native clean-room oracle coverage for lighting, fog, texture transform, texop, FFP varying, sanity, alpha, BEM, ps_1_4, and vs_1_1 source contracts |
-| Wine d3d9 test inventory (visual.c / device.c / d3d9ex.c / stateblock.c) | ✅ | [`specs/gap_d3d9_wine_test.md`](gap_d3d9_wine_test.md) inventories every Wine `START_TEST` entry across the four files and links each to the PE conformance function(s) carrying the evidence. **268/268 covered** as of HEAD `81a2d0e` (visual.c 135, device.c 105, d3d9ex.c 27, stateblock.c 1; 0 scaffolded / partial / failing / untracked). Oracle pinned to Wine `wine-11.6` (`6e073d2`). Regenerated from Wine source + the gitignored `specs/wine_test.plan.md` via `scripts/tools/gen_wine_d3d9_test_inventory.py`. |
-| Wine `device.c` / `d3d9ex.c` / `stateblock.c` conformance subset | ⚠️ | `tests/conformance/d3d9/MANIFEST.toml` now lists 245 Wine-oracle PE conformance cases with DoD/acceptance criteria and `dxmt9-d3d9-conformance-manifest-check` validates lane/arch evidence. Current case-level manifest status (HEAD `81a2d0e`): 237 partial, 7 failing, 1 skipped. The builtin x64 lane is largely passing per the chunked-runner evidence snapshot (Sikarugir-CX 24.0.7, 2026-05-24); cases sit at `partial` because the app-local and x86 lanes are not yet fully evidenced — that lane/arch breadth is the open promotion work (the Wine-test *mapping* itself is complete, `gap_d3d9_wine_test.md` 268/268). **2026-05-19 extension wave (V5):** added 13 more clean-room scaffolds closing the remaining `planned` rows in `specs/wine_test.plan.md` — `test_buffer_no_dirty_update`, `yuv_color_test`, `yuv_layout_test`, `test_3dc_formats`, `test_position_index`, `test_mvp_software_vertex_shaders`, `shadow_test` from visual.c; `D3DSBT_ALL` / `D3DSBT_PIXELSTATE` / `D3DSBT_VERTEXSTATE` capture-apply matrix slices from stateblock.c; and `test_query_get_data_size_policy`, `test_check_device_format_conversion_matrix`, `test_multithreaded_device_creation_policy` for advanced device.c surfaces (query GetDataSize, CheckDeviceFormatConversion matrix, D3DCREATE_MULTITHREADED). **Wine migration wave (2026-05-19):** added 43 new clean-room scaffolds across `device.c`, `d3d9ex.c`, and `visual.c` oracles. From `device.c` / `d3d9ex.c`: `test_multi_device_independent_state`, `test_mode_change_focus_swap_policy`, `test_reset_fullscreen_focus_window_policy`, `test_window_position_present_parameter_policy`, `test_pinned_buffers_d3dusage_policy`, `test_volume_blocks_compressed_layout_policy`, `test_ex_user_memory_getdc_format_policy`, `test_swapchain_get_display_mode_ex_policy`, `test_ex_get_adapter_luid_policy`, `test_ex_get_adapter_display_mode_ex_policy`, `test_backbuffer_resize_present_parameter_policy` (11). From `visual.c`, four new bucket files cover formats (`float_texture_test`, `g16r16_texture_test`, `volume_v16u16_test`, `srgbtexture_test`, `srgbwrite_format_test`, `volume_srgb_test`, `volume_dxtn_test`, `test_signed_formats`), depth-stencil (`z_range_test`, `ds_size_test`, `depth_buffer_test`, `depth_buffer2_test`, `depth_bounds_test`, `zenable_test`, `zwriteenable_test`, `multisampled_depth_buffer_test`), render-target / clear / surface (`depth_clamp_test`, `clear_test`, `test_clear_different_size_surfaces`, `color_fill_test`, `offscreen_test`, `stencil_cull_test`, `update_surface_test`, `test_flip`), and shading / lighting / resource lifetime (`test_shademode`, `lighting_test`, `test_lighting_matrices`, `release_buffer_test`, `test_evict_bound_resources`, `add_dirty_rect_test`, `test_multisample_get_front_buffer_data`, `test_multisample_mismatch`) — 32 total. All declare `lanes=[app-local,builtin]` × `arches=[x64,x86]`; x64 + x86 `dxmt9-d3d9-conformance.exe` builds clean. **Source organization (T8/T9, 2026-05-08/09):** `d3d9_conformance.c` (originally 1,777 LOC) split into a thin driver (73 LOC) + per-domain `d3d9_conformance_{device,resource,swapchain,query_stateblock}.c` linked to a single `dxmt9-d3d9-conformance.exe` (T8 `b2c4c75`); standalone per-test executables normalized to single `d3d9_*` prefix (drop `_x64` suffix from 6 files, add `d3d9_` prefix to 3 bare files; T9 `739a080`, target names preserved for external invocation compatibility). Focused x64 app-local export/auxiliary runtime evidence passes. The first device-backed app-local run now reaches the provider with 328 checks, 26 failures, and 0 skips; failing groups are factory validation, present-parameter validation, Ex create/reset, private-data resource wrappers, Ex shared-handle policy, and creation-failure out pointers |
+| Wine d3d9 test inventory (visual.c / device.c / d3d9ex.c / stateblock.c) | ✅ | [`specs/gap_d3d9_wine_test.md`](gap_d3d9_wine_test.md) inventories every Wine `START_TEST` entry across the four files and links each to the PE conformance function(s) carrying the evidence. **268/268 covered** as of HEAD `4a3aaa0` (visual.c 135, device.c 105, d3d9ex.c 27, stateblock.c 1; 0 scaffolded / partial / failing / untracked). Oracle pinned to Wine `wine-11.6` (`6e073d2`). Regenerated from Wine source + the gitignored `specs/wine_test.plan.md` via `scripts/tools/gen_wine_d3d9_test_inventory.py`. |
+| Wine `device.c` / `d3d9ex.c` / `stateblock.c` conformance subset | ⚠️ | `tests/conformance/d3d9/MANIFEST.toml` now lists 248 Wine-oracle PE conformance cases with DoD/acceptance criteria and `dxmt9-d3d9-conformance-manifest-check` validates lane/arch evidence. Current case-level manifest status (HEAD `4a3aaa0`): 4 passing, 237 partial, 6 failing, 1 skipped. The builtin x64 lane is largely passing per the chunked-runner evidence snapshot (Sikarugir-CX 24.0.7, 2026-05-24); cases sit at `partial` because the app-local and x86 lanes are not yet fully evidenced — that lane/arch breadth is the open promotion work (the Wine-test *mapping* itself is complete, `gap_d3d9_wine_test.md` 268/268). **2026-05-19 extension wave (V5):** added 13 more clean-room scaffolds closing the remaining `planned` rows in `specs/wine_test.plan.md` — `test_buffer_no_dirty_update`, `yuv_color_test`, `yuv_layout_test`, `test_3dc_formats`, `test_position_index`, `test_mvp_software_vertex_shaders`, `shadow_test` from visual.c; `D3DSBT_ALL` / `D3DSBT_PIXELSTATE` / `D3DSBT_VERTEXSTATE` capture-apply matrix slices from stateblock.c; and `test_query_get_data_size_policy`, `test_check_device_format_conversion_matrix`, `test_multithreaded_device_creation_policy` for advanced device.c surfaces (query GetDataSize, CheckDeviceFormatConversion matrix, D3DCREATE_MULTITHREADED). **Wine migration wave (2026-05-19):** added 43 new clean-room scaffolds across `device.c`, `d3d9ex.c`, and `visual.c` oracles. From `device.c` / `d3d9ex.c`: `test_multi_device_independent_state`, `test_mode_change_focus_swap_policy`, `test_reset_fullscreen_focus_window_policy`, `test_window_position_present_parameter_policy`, `test_pinned_buffers_d3dusage_policy`, `test_volume_blocks_compressed_layout_policy`, `test_ex_user_memory_getdc_format_policy`, `test_swapchain_get_display_mode_ex_policy`, `test_ex_get_adapter_luid_policy`, `test_ex_get_adapter_display_mode_ex_policy`, `test_backbuffer_resize_present_parameter_policy` (11). From `visual.c`, four new bucket files cover formats (`float_texture_test`, `g16r16_texture_test`, `volume_v16u16_test`, `srgbtexture_test`, `srgbwrite_format_test`, `volume_srgb_test`, `volume_dxtn_test`, `test_signed_formats`), depth-stencil (`z_range_test`, `ds_size_test`, `depth_buffer_test`, `depth_buffer2_test`, `depth_bounds_test`, `zenable_test`, `zwriteenable_test`, `multisampled_depth_buffer_test`), render-target / clear / surface (`depth_clamp_test`, `clear_test`, `test_clear_different_size_surfaces`, `color_fill_test`, `offscreen_test`, `stencil_cull_test`, `update_surface_test`, `test_flip`), and shading / lighting / resource lifetime (`test_shademode`, `lighting_test`, `test_lighting_matrices`, `release_buffer_test`, `test_evict_bound_resources`, `add_dirty_rect_test`, `test_multisample_get_front_buffer_data`, `test_multisample_mismatch`) — 32 total. All declare `lanes=[app-local,builtin]` × `arches=[x64,x86]`; x64 + x86 `dxmt9-d3d9-conformance.exe` builds clean. **Source organization (T8/T9, 2026-05-08/09):** `d3d9_conformance.c` (originally 1,777 LOC) split into a thin driver (73 LOC) + per-domain `d3d9_conformance_{device,resource,swapchain,query_stateblock}.c` linked to a single `dxmt9-d3d9-conformance.exe` (T8 `b2c4c75`); standalone per-test executables normalized to single `d3d9_*` prefix (drop `_x64` suffix from 6 files, add `d3d9_` prefix to 3 bare files; T9 `739a080`, target names preserved for external invocation compatibility). Focused x64 app-local export/auxiliary runtime evidence passes. The first device-backed app-local run now reaches the provider with 328 checks, 26 failures, and 0 skips; failing groups are factory validation, present-parameter validation, Ex create/reset, private-data resource wrappers, Ex shared-handle policy, and creation-failure out pointers |
 | Half-pixel offset exact-coverage test | ✅ | `testHelpers()` + `testRasterStateCoverage()` |
 | Winding / depth tests | ✅ | `testRasterStateCoverage()` |
 | Full upstream corpus sync | ✅ | `sync_corpus.sh` + provenance drift report |
@@ -373,15 +379,14 @@ No implementation exists yet. All R-D3D7-1.x through R-D3D7-10.x are not started
 
 | Priority | Work | Spec anchor |
 |---|---|---|
-| 1 | Fix the `gap_d3d9.md` high-risk correctness gaps: the `core::SAMP_BORDER_COLOR = 15` slot bug (Wine `D3DSAMP_BORDERCOLOR = 4`) with a regression test, and convert the 23 silent-`S_OK` COM stubs to honest impl or `E_NOTIMPL` + test gate so a no-op is distinguishable from a working call | `gap_d3d9.md` B.3, D.* |
-| 2 | Extend the `shader_runner_dxmt9` runtime probe layer beyond texture / dependent-read / VS color / viewport / half-pixel / color-write probes to mip/4x4/LOD, alpha/oDepth/MRT/fog/sRGB cases, and fix the tracked alpha-test readback regression | R-TEST-1.7–R-TEST-1.10 |
-| 3 | Promote PE conformance lane/arch breadth: the builtin x64 lane is largely passing, so drive the app-local and x86 lanes to passing across the 237 `partial` manifest cases and fix the 7 `failing` cases (factory validation, present-parameter validation, Ex create/reset, private-data resource wrappers, Ex shared-handle, creation-failure out pointers) | R-TEST-12.1, R-TEST-12.20 |
+| 1 | Extend the `shader_runner_dxmt9` runtime probe layer beyond texture / dependent-read / VS color / viewport / half-pixel / color-write probes to mip/4x4/LOD, alpha/oDepth/MRT/fog/sRGB cases, and fix the tracked alpha-test readback regression | R-TEST-1.7–R-TEST-1.10 |
+| 2 | GPU-runtime pixel validation for the 2026-05-24 D3D9 features whose code landed but readback is deferred: RESZ MSAA→INTZ depth resolve, NULL colorless (depth-only) render pass, and `SAMP_MIPMAPLODBIAS` mip selection — each needs a Wine + MSAA/mip + readback probe | `gap_d3d9.md` deferred-evidence rows, R-FORMAT-11/12 |
+| 3 | Promote PE conformance lane/arch breadth: the builtin x64 lane is largely passing, so drive the app-local and x86 lanes to passing across the 237 `partial` manifest cases and fix the 6 `failing` cases (factory validation, present-parameter validation, Ex create/reset, private-data resource wrappers, Ex shared-handle, creation-failure out pointers); includes the Wine-run validation of the new COM stub gates | R-TEST-12.1, R-TEST-12.20 |
 | 4 | Finish factory HRESULT parity and validation coverage, including `CheckDeviceFormatConversion`, multisample quality levels, device-type enum handling, and any selected optional export-profile stubs beyond the current auxiliary set | R-CORE-1.9, R-CORE-1.11-R-CORE-1.15, R-TEST-12.9-R-TEST-12.10, R-TEST-12.15-R-TEST-12.16 |
 | 5 | Implement and verify D3D9Ex user-memory texture/offscreen-surface paths and shared-handle error policy | R-CORE-4.11-R-CORE-4.12, R-TEST-12.11 |
 | 6 | Implement Wine-oracle D3D9Ex QI conformance and finish Ex/display/swap-chain validation | R-CORE-1.6, R-CORE-10.2-R-CORE-10.4, R-CORE-10.17, R-CORE-10.18, R-TEST-12.4 |
 | 7 | Expand Wine stateblock conformance beyond the current compact scaffold and implement full `D3DSBT_*` masks/resource/reset interactions | R-CORE-3.7, R-CORE-3.8, R-TEST-12.5, R-TEST-12.19 |
-| 8 | Close `gap_d3d9.md` medium-risk decode / lighting / format gaps: 6 D3DDECLUSAGE + 6 D3DDECLMETHOD silent fall-through (DecoderReject + perf counter), point/spot FFP lighting, and INTZ vendor-format promotion | `gap_d3d9.md` A.4, A.5, B.5, C.5 |
-| 9 | Expand compact reset/window scaffolds if runtime evidence exposes missing Wine-visible edge cases, then promote device lifetime/refcount, query validation, resource wrapper, and scene scaffolds with runtime evidence | R-CORE-2.6, R-CORE-2.8, R-CORE-4.8-R-CORE-4.10, R-CORE-8.3, R-TEST-12.3, R-TEST-12.12-R-TEST-12.14, R-TEST-12.17-R-TEST-12.18 |
-| 10 | Build and verify the upstream-style PE targets: `d3d9.dll` + `winemetal.dll` + `winemetal.so` | d3d9/wsi §6, §9 |
-| 11 | Run the Wine WSI smoke on the upstream-style deployment and promote the gap status if it passes | R-TEST-11.3 |
-| 12 | D3D8 entry point + IDirect3D8 factory + resource wrappers | R-D3D8-1.1, R-D3D8-2.1 |
+| 8 | Expand compact reset/window scaffolds if runtime evidence exposes missing Wine-visible edge cases, then promote device lifetime/refcount, query validation, resource wrapper, and scene scaffolds with runtime evidence | R-CORE-2.6, R-CORE-2.8, R-CORE-4.8-R-CORE-4.10, R-CORE-8.3, R-TEST-12.3, R-TEST-12.12-R-TEST-12.14, R-TEST-12.17-R-TEST-12.18 |
+| 9 | Build and verify the upstream-style PE targets: `d3d9.dll` + `winemetal.dll` + `winemetal.so` | d3d9/wsi §6, §9 |
+| 10 | Run the Wine WSI smoke on the upstream-style deployment and promote the gap status if it passes | R-TEST-11.3 |
+| 11 | D3D8 entry point + IDirect3D8 factory + resource wrappers | R-D3D8-1.1, R-D3D8-2.1 |
