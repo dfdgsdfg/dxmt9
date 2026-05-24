@@ -27,11 +27,11 @@ changes not yet visible upstream.
 
 | Field | Value |
 |-------|-------|
-| Commit | `8b6c3d98aec297e8d89eb47ae0a9d79f41bee5ab` — **work tree dirty** |
-| Short  | `8b6c3d9` |
-| Tag / describe | `8b6c3d9` |
+| Commit | `2181b3f422a915af5352e6d7abb3ac1951ea32c0` — **work tree dirty** |
+| Short  | `2181b3f` |
+| Tag / describe | `2181b3f` |
 | Author date | `2026-05-24` |
-| Subject | d3d9 test_stretch_rect: fix null/degenerate policy — validate before record |
+| Subject | d3d9 depth_blit_test: reject cross-format depth-stencil StretchRect at PE |
 
 ### Wine reference revision
 
@@ -50,7 +50,7 @@ the same commit in the Wine checkout before opening the source.
 
 ```sh
 # Reproduce the inventory verbatim from a clean tree:
-git -C "$DXMT9_REPO" checkout 8b6c3d98aec297e8d89eb47ae0a9d79f41bee5ab
+git -C "$DXMT9_REPO" checkout 2181b3f422a915af5352e6d7abb3ac1951ea32c0
 git -C "$WINE_REPO"  checkout 6e073d28dee3af7f4c965daec94644e0f9f92727
 python3 scripts/tools/gen_wine_d3d9_test_inventory.py
 ```
@@ -72,11 +72,11 @@ python3 scripts/tools/gen_wine_d3d9_test_inventory.py
 
 | Wine source | Tests | covered | scaffolded | partial | failing | other |
 |-------------|-----:|--------:|----------:|--------:|--------:|------:|
-| `visual.c` | 135 | 131 | 0 | 0 | 4 | 0 |
-| `device.c` | 105 | 77 | 28 | 0 | 0 | 0 |
-| `d3d9ex.c` | 27 | 16 | 11 | 0 | 0 | 0 |
+| `visual.c` | 135 | 135 | 0 | 0 | 0 | 0 |
+| `device.c` | 105 | 87 | 18 | 0 | 0 | 0 |
+| `d3d9ex.c` | 27 | 19 | 8 | 0 | 0 | 0 |
 | `stateblock.c` | 1 | 1 | 0 | 0 | 0 | 0 |
-| **TOTAL** | **268** | **225** | **39** | **0** | **4** | **0** |
+| **TOTAL** | **268** | **242** | **26** | **0** | **0** | **0** |
 
 `other` rolls up `deferred`, `partial/deferred`, and any UNTRACKED rows.
 
@@ -116,7 +116,7 @@ Source: [`dlls/d3d9/tests/visual.c`](https://gitlab.winehq.org/wine/wine/-/blob/
 | `loop_index_test` | 13791 | ✅ | — |
 | `maxmip_test` | 4671 | ✅ | — |
 | `multiple_rendertargets_test` | 11617 | ✅ | — |
-| `multisample_get_rtdata_test` | 17106 | 🔴 | `test_get_render_target_data_msaa_policy` |
+| `multisample_get_rtdata_test` | 17106 | ✅ | `test_get_render_target_data_msaa_policy` |
 | `multisampled_depth_buffer_test` | 17240 | ✅ | `test_visual_multisampled_depth_buffer_caps_policy` |
 | `nested_loop_test` | 7219 | ✅ | — |
 | `np2_stretch_rect_test` | 12487 | ✅ | `test_stretch_rect_npot_dimension_policy` |
@@ -150,7 +150,7 @@ Source: [`dlls/d3d9/tests/visual.c`](https://gitlab.winehq.org/wine/wine/-/blob/
 | `test_depth_stencil_init` | 22556 | ✅ | `test_visual_depth_stencil_init_policy` |
 | `test_depthbias` | 21851 | ✅ | — |
 | `test_desktop_window` | 25880 | ✅ | `test_device_desktop_window_present_policy` |
-| `test_draw_mapped_buffer` | 26213 | 🔴 | `test_draw_mapped_buffer_policy` |
+| `test_draw_mapped_buffer` | 26213 | ✅ | `test_draw_mapped_buffer_policy` |
 | `test_drawindexedprimitiveup` | 24293 | ✅ | — |
 | `test_dsy` | 23840 | ✅ | — |
 | `test_dynamic_map_synchronization` | 26843 | ✅ | — |
@@ -161,7 +161,7 @@ Source: [`dlls/d3d9/tests/visual.c`](https://gitlab.winehq.org/wine/wine/-/blob/
 | `test_flip` | 22028 | ✅ | `test_visual_swapchain_flip_present_policy` |
 | `test_fog` | 28198 | ✅ | — |
 | `test_fog_interpolation` | 19817 | ✅ | — |
-| `test_format_conversion` | 27960 | 🔴 | `test_stretch_rect_format_conversion_policy` |
+| `test_format_conversion` | 27960 | ✅ | `test_stretch_rect_format_conversion_policy` |
 | `test_fragment_coords` | 10666 | ✅ | — |
 | `test_generate_mipmap` | 5644 | ✅ | — |
 | `test_generated_texcoords` | 29067 | ✅ | — |
@@ -178,7 +178,7 @@ Source: [`dlls/d3d9/tests/visual.c`](https://gitlab.winehq.org/wine/wine/-/blob/
 | `test_multisample_get_front_buffer_data` | 17168 | ✅ | `test_visual_multisample_get_front_buffer_data_policy` |
 | `test_multisample_init` | 22489 | ✅ | `test_multisample_render_target_init_policy` |
 | `test_multisample_mismatch` | 20823 | ✅ | `test_visual_multisample_rt_ds_mismatch_policy` |
-| `test_multisample_stretch_rect` | 4494 | 🔴 | `test_stretch_rect_multisample_resolve_policy` |
+| `test_multisample_stretch_rect` | 4494 | ✅ | `test_stretch_rect_multisample_resolve_policy` |
 | `test_mvp_software_vertex_shaders` | 24522 | ✅ | `test_visual_mvp_software_vp_policy` |
 | `test_negative_fixedfunction_fog` | 19957 | ✅ | — |
 | `test_nrm_instruction` | 25655 | ✅ | — |
@@ -235,14 +235,14 @@ Source: [`dlls/d3d9/tests/device.c`](https://gitlab.winehq.org/wine/wine/-/blob/
 | `test_create_rt_ds_fail` | 10571 | ✅ | `test_create_rt_ds_failure_policy` |
 | `test_creation_parameters` | 14818 | ✅ | `test_device_creation_parameters_policy`, `test_multithreaded_device_creation_policy` |
 | `test_cube_textures` | 7820 | ✅ | `test_cube_texture_face_desc_parity`, `test_cube_texture_level_surface_policy`, `test_create_cube_texture_dim_policy` |
-| `test_cursor` | 1852 | 📐 | `window_cursor_ownership` |
-| `test_cursor_clipping` | 14865 | 📐 | `window_cursor_ownership` |
-| `test_cursor_pos` | 5286 | 📐 | `window_cursor_ownership` |
-| `test_d3d9on12` | 15138 | 📐 | `d3d9on12_loader_safe_failure` |
+| `test_cursor` | 1852 | ✅ | `window_cursor_ownership` |
+| `test_cursor_clipping` | 14865 | ✅ | `window_cursor_ownership` |
+| `test_cursor_pos` | 5286 | ✅ | `window_cursor_ownership` |
+| `test_d3d9on12` | 15138 | ✅ | `d3d9on12_loader_safe_failure` |
 | `test_depthstenciltest` | 2869 | ✅ | `test_set_get_depth_stencil_surface_policy` |
-| `test_destroyed_window` | 13008 | 📐 | `window_cursor_ownership` |
+| `test_destroyed_window` | 13008 | ✅ | `window_cursor_ownership` |
 | `test_device_caps` | 13482 | 📐 | — |
-| `test_device_window_reset` | 5899 | 📐 | `window_cursor_ownership` |
+| `test_device_window_reset` | 5899 | ✅ | `window_cursor_ownership` |
 | `test_display_formats` | 3551 | ✅ | `test_check_device_type_display_format_policy` |
 | `test_display_modes` | 2591 | ✅ | `test_factory_validation_return_codes` |
 | `test_draw_primitive` | 3081 | ✅ | `test_draw_primitive_outside_scene_policy` |
@@ -299,7 +299,7 @@ Source: [`dlls/d3d9/tests/device.c`](https://gitlab.winehq.org/wine/wine/-/blob/
 | `test_set_rt_vp_scissor` | 6055 | ✅ | `test_viewport_scissor_state_getters` |
 | `test_set_stream_source` | 3468 | ✅ | `test_set_stream_source_state`, `test_stream_source_null_layout_policy`, `test_stream_source_null_offset_alignment_policy`, `test_stream_source_vb_offset_alignment_policy`, `test_stream_source_zero_stride_policy` |
 | `test_shader_constant_apply` | 11446 | ✅ | `test_shader_constant_stateblock_cross_stage` |
-| `test_shader_validator` | 14660 | 📐 | `shader_validator_stub_behavior` |
+| `test_shader_validator` | 14660 | ✅ | `shader_validator_stub_behavior` |
 | `test_shared_handle` | 11088 | ✅ | `test_shared_handle_policy` |
 | `test_stretch_rect` | 13277 | ✅ | `test_stretch_rect_null_and_degenerate_policy` |
 | `test_surface_alignment` | 8360 | ✅ | `test_surface_alignment` |
@@ -329,9 +329,9 @@ Source: [`dlls/d3d9/tests/device.c`](https://gitlab.winehq.org/wine/wine/-/blob/
 | `test_volume_locking` | 10260 | ✅ | `resource_container_level_desc_and_locks`, `test_resource_lock_error_policy` |
 | `test_volume_resource` | 6240 | 📐 | `test_volume_resource_container_desc` |
 | `test_window_position` | 14942 | ✅ | `test_fullscreen_window_position_restore`, `test_window_position_present_parameter_policy` |
-| `test_window_style` | 5114 | 📐 | `window_cursor_ownership` |
-| `test_wndproc` | 3882 | 📐 | `window_cursor_ownership` |
-| `test_wndproc_windowed` | 4596 | 📐 | `window_cursor_ownership` |
+| `test_window_style` | 5114 | ✅ | `window_cursor_ownership` |
+| `test_wndproc` | 3882 | ✅ | `window_cursor_ownership` |
+| `test_wndproc_windowed` | 4596 | ✅ | `window_cursor_ownership` |
 | `test_writeonly_resource` | 12034 | ✅ | `test_writeonly_vertex_buffer_readback_policy` |
 
 ## D3D9Ex-Specific Tests (`d3d9ex.c`)
@@ -364,9 +364,9 @@ Source: [`dlls/d3d9/tests/d3d9ex.c`](https://gitlab.winehq.org/wine/wine/-/blob/
 | `test_user_memory` | 715 | ✅ | `test_ex_shared_handle_policy`, `test_ex_user_memory_lock_identity` |
 | `test_user_memory_getdc` | 1957 | ✅ | `test_ex_user_memory_getdc_dib_identity`, `test_ex_user_memory_getdc_format_policy` |
 | `test_vidmem_accounting` | 1909 | ✅ | `test_ex_vidmem_accounting_policy` |
-| `test_window_style` | 3458 | 📐 | `window_cursor_ownership` |
-| `test_wndproc` | 2611 | 📐 | `window_cursor_ownership` |
-| `test_wndproc_windowed` | 3256 | 📐 | `window_cursor_ownership` |
+| `test_window_style` | 3458 | ✅ | `window_cursor_ownership` |
+| `test_wndproc` | 2611 | ✅ | `window_cursor_ownership` |
+| `test_wndproc_windowed` | 3256 | ✅ | `window_cursor_ownership` |
 
 ## StateBlock Tests (`stateblock.c`)
 
