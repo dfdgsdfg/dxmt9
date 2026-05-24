@@ -1,7 +1,7 @@
 # Street Fighter IV Benchmark — measurement after M-cycle
 
 Run on 2026-05-10 with the M1-M7 + O1 builds applied (release artifacts).
-Captured via `bash scripts/run_apps/run_sfiv_benchmark_experiment.sh` with
+Captured via `bash scripts/run_apps/run_app-d3d9-sfiv-benchmark_experiment.sh` with
 `DXMT_PERF_COUNTERS=1 DXMT9_PERF_FRAME_SAMPLING=1`. Output in
 `experiments/output/app-d3d9-sfiv-benchmark-post-mcycle-010048/`.
 
@@ -110,7 +110,7 @@ work, but render-pass setup overhead now dominates.
 
 ```sh
 DXMT_PERF_COUNTERS=1 DXMT9_PERF_FRAME_SAMPLING=1 \
-  bash scripts/run_apps/run_sfiv_benchmark_experiment.sh \
+  bash scripts/run_apps/run_app-d3d9-sfiv-benchmark_experiment.sh \
   --binary "$HOME/.cache/dxmt9/sfiv-benchmark/extracted/Program Files/CAPCOM/STREETFIGHTERIV_BENCHMARK/StreetFighterIV_Benchmark.exe" \
   --pe-build-dir build-win32-x64-builtin-release/src/win32 \
   --runtime-pe-build-dir build-win32-x64-builtin-release/src/winemetal \
@@ -123,7 +123,7 @@ To capture a single frame:
 ```sh
 DXMT_PERF_COUNTERS=1 DXMT9_PERF_FRAME_SAMPLING=1 \
 DXMT_METAL_CAPTURE_FRAME=2000 DXMT_METAL_CAPTURE_PATH=/tmp/sfiv.gputrace \
-  bash scripts/run_apps/run_sfiv_benchmark_experiment.sh ...
+  bash scripts/run_apps/run_app-d3d9-sfiv-benchmark_experiment.sh ...
 ```
 
 ---
@@ -187,12 +187,12 @@ can be verified frame-by-frame (replaces grepping the cumulative
 ```sh
 # baseline (existing 1 CB / chunk)
 DXMT_PERF_COUNTERS=1 DXMT9_PERF_FRAME_SAMPLING=1 \
-  bash scripts/run_apps/run_sfiv_benchmark_experiment.sh ...
+  bash scripts/run_apps/run_app-d3d9-sfiv-benchmark_experiment.sh ...
 
 # treatment (1+ CB / chunk via per-render-pass split)
 DXMT_PERF_COUNTERS=1 DXMT9_PERF_FRAME_SAMPLING=1 \
   DXMT9_MID_CHUNK_COMMIT_POLICY=per-render-pass \
-  bash scripts/run_apps/run_sfiv_benchmark_experiment.sh ...
+  bash scripts/run_apps/run_app-d3d9-sfiv-benchmark_experiment.sh ...
 ```
 
 Compare per-frame `sub_command_buffers`, `command_buffers`,
@@ -272,18 +272,18 @@ overhead — exactly the trade the cost model anticipated.
 ```sh
 # baseline
 env DXMT_PERF_COUNTERS=1 DXMT9_PERF_FRAME_SAMPLING=1 \
-  bash scripts/run_apps/run_sfiv_benchmark_experiment.sh ...
+  bash scripts/run_apps/run_app-d3d9-sfiv-benchmark_experiment.sh ...
 
 # cap=4 default
 env DXMT_PERF_COUNTERS=1 DXMT9_PERF_FRAME_SAMPLING=1 \
   DXMT9_MID_CHUNK_COMMIT_POLICY=per-render-pass \
-  bash scripts/run_apps/run_sfiv_benchmark_experiment.sh ...
+  bash scripts/run_apps/run_app-d3d9-sfiv-benchmark_experiment.sh ...
 
 # unbounded (diagnostic only)
 env DXMT_PERF_COUNTERS=1 DXMT9_PERF_FRAME_SAMPLING=1 \
   DXMT9_MID_CHUNK_COMMIT_POLICY=per-render-pass \
   DXMT9_MID_CHUNK_COMMIT_CAP_PER_RENDER_PASS=0 \
-  bash scripts/run_apps/run_sfiv_benchmark_experiment.sh ...
+  bash scripts/run_apps/run_app-d3d9-sfiv-benchmark_experiment.sh ...
 ```
 
 ---

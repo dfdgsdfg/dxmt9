@@ -9,7 +9,7 @@ repo_root=$(cd -- "$script_dir/../.." && pwd)
 # under Wine-*-DXMT (vanilla Wine trips d3dx10_43 / D3DX10SaveTextureToMemory
 # before the game becomes a usable baseline; see experiments/README.md).
 # When that path is needed, override explicitly:
-#   bash run_anno1404_experiment.sh --wine-root .../Wine-11.7-DXMT/.../wine
+#   bash run_app-d3d9-anno-1404_experiment.sh --wine-root .../Wine-11.7-DXMT/.../wine
 # Defaulting to vanilla here keeps the runner consistent with every other wild
 # runner; the user opts into the patched runtime per-invocation.
 wine_root_default="$HOME/Library/Application Support/heroic/tools/wine/Wine-11.7/Contents/Resources/wine"
