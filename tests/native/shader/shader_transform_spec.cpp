@@ -2006,8 +2006,11 @@ void testPs11LegacyTexcoordTexLoweringContract() {
   checkContains(source, "outTexcoord[0] = float4(saturate((dxmt9_select_texcoord(in, 0u)).xyz), 1.0f);",
                 "ps_1_1 TEXCOORD clamps the stage texcoord and forces w=1");
   checkContains(source, "texture2d<float> tex0 [[texture(0)]]", "ps_1_1 TEX binds the destination stage texture");
-  checkContains(source, "outTexcoord[0] = tex0.sample(samp0, (outTexcoord[0]).xy, bias(samplerLodBias.bias[0]));",
-                "ps_1_1 TEX samples stage 0 through destination t0 with per-sampler LOD bias");
+  // samplerLodBias variant flag is clear here (general TEX-lowering contract),
+  // so the sample emits the plain form with no bias() arg — the dedicated
+  // ps_2_0 / FFP cases cover the flag-set bias() path.
+  checkContains(source, "outTexcoord[0] = tex0.sample(samp0, (outTexcoord[0]).xy);",
+                "ps_1_1 TEX samples stage 0 through destination t0 (no LOD bias when variant flag clear)");
   checkContains(source, "r[0] = outTexcoord[0];", "ps_1_1 t# source reaches r0 color output");
 }
 
@@ -2030,8 +2033,9 @@ void testPs14TexcrdTexldTexdepthLoweringContract() {
   checkContains(source, "r[0] = dxmt9_select_texcoord(in, 0u);",
                 "ps_1_4 TEXCRD copies explicit t# source to r#");
   checkContains(source, "texture2d<float> tex1 [[texture(1)]]", "ps_1_4 TEXLD binds destination stage texture");
-  checkContains(source, "r[1] = tex1.sample(samp1, (dxmt9_select_texcoord(in, 1u)).xy, bias(samplerLodBias.bias[1]));",
-                "ps_1_4 TEXLD samples destination stage with explicit source coords and per-sampler LOD bias");
+  // samplerLodBias variant flag clear (general lowering contract) → plain sample.
+  checkContains(source, "r[1] = tex1.sample(samp1, (dxmt9_select_texcoord(in, 1u)).xy);",
+                "ps_1_4 TEXLD samples destination stage with explicit source coords (no LOD bias when variant flag clear)");
   checkContains(source, "outDepth = clamp((r[5]).x / min((r[5]).y, 1.0f), 0.0f, 1.0f);",
                 "ps_1_4 TEXDEPTH writes fragment depth from r5-style source");
 }
