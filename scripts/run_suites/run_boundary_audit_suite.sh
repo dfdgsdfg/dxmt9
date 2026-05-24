@@ -22,14 +22,14 @@ tag="${BOUNDARY_AUDIT_TAG:-boundary-audit-$(date +%Y%m%d-%H%M%S)}"
 # (boundary, probe app name) pairs. The probes must already be built
 # (scripts/build_apps/build_*_probe.sh) before this suite runs.
 suites=(
-  "B2 dxmt9-perf-bridge-empty"
-  "B3 dxmt9-perf-encode-replay"
-  "B3 dxmt9-perf-chain-parametric"
-  "B4 dxmt9-perf-ffp-only"
-  "B4 dxmt9-perf-multi-rt"
-  "B4 dxmt9-perf-depth-heavy"
-  "B4 dxmt9-perf-skeletal"
-  "B6 dxmt9-perf-present-loop"
+  "B2 perf-d3d9-bridge-empty"
+  "B3 perf-d3d9-encode-replay"
+  "B3 perf-d3d9-chain-parametric"
+  "B4 perf-d3d9-ffp-only"
+  "B4 perf-d3d9-multi-rt"
+  "B4 perf-d3d9-depth-heavy"
+  "B4 perf-d3d9-skeletal"
+  "B6 perf-d3d9-present-loop"
 )
 
 cd "$repo_root"

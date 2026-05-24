@@ -323,11 +323,11 @@ Instrumentation pass:
 - Added `PerformanceProbe` in-app `QueryPerformanceCounter` timings. The result JSON now includes `perf_probe_timings`.
 - Added dxmt9 CPU counters to the existing `[dxmt9-perf]` line. The result JSON now includes submit/encode/upload/command-buffer CPU time in `dxmt9_perf_counters`.
 - Smoke validation outputs:
-  - `experiments/output/dxmt9-perf-offscreen-heavy-instrumentation-smoke/result.json`
-  - `experiments/output/dxmt9-perf-many-draw-instrumentation-smoke/result.json`
+  - `experiments/output/perf-d3d9-offscreen-heavy-instrumentation-smoke/result.json`
+  - `experiments/output/perf-d3d9-many-draw-instrumentation-smoke/result.json`
 - Full reference outputs:
-  - `experiments/output/dxmt9-perf-offscreen-heavy-instrumentation-drawflush256/result.json`
-  - `experiments/output/dxmt9-perf-many-draw-instrumentation-default/result.json`
+  - `experiments/output/perf-d3d9-offscreen-heavy-instrumentation-drawflush256/result.json`
+  - `experiments/output/perf-d3d9-many-draw-instrumentation-default/result.json`
 
 | app | mode | process fps | process elapsed s | app total ms | render frame ms | draw loop ms | submitDraw CPU ms | encodeChunk CPU ms | encodeDraw CPU ms | transient upload CPU ms | sequence wait ms | completion wait ms |
 |---|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|
@@ -427,7 +427,7 @@ encode-thread CPU work and present pacing, not uniform-write bandwidth.
 
 ### encodeDraw sub-counter split + per-chunk DrawUniforms slab (2026-05-07)
 
-Two follow-up changes landed against `dxmt9-perf-offscreen-heavy` with `DXMT9_DRAW_CHUNK_COMMAND_LIMIT=256`:
+Two follow-up changes landed against `perf-d3d9-offscreen-heavy` with `DXMT9_DRAW_CHUNK_COMMAND_LIMIT=256`:
 
 - `744883d` splits `encode_draw_cpu_ms` into five sub-buckets — `pipeline_lookup`, `uniform_build`, `fvf_decode`, `stream_bind`, `issue` — so the dominant phase inside `encodeDraw()` is now visible per-run.
 - `46b234d` reserves one chunk-wide transient slab (`CommandQueue::reserveTransientBuffer`) sized for `drawCount * sizeof(DrawUniforms)` and lets `encodeDraw()` write the per-draw `DrawUniforms` directly into the slab. Replaces N per-draw `uploadTransientBuffer` calls with one reservation, matching the existing slab lifetime path.
@@ -743,9 +743,9 @@ Baseline performance, previous default latency 3:
 
 Performance probe split:
 
-- Harness: `bash scripts/run_suites/run_dx9_performance_suite.sh --timeout 45 --app dxmt9-perf-present-only --app dxmt9-perf-offscreen-heavy --app dxmt9-perf-many-draw`
+- Harness: `bash scripts/run_suites/run_dx9_performance_suite.sh --timeout 45 --app perf-d3d9-present-only --app perf-d3d9-offscreen-heavy --app perf-d3d9-many-draw`
 - Latest follow-up output: `experiments/output/dx9-performance-suite/summary.md`
-- Probe source: `experiments/apps/PerformanceProbe/PerformanceProbe.cpp`
+- Probe source: `experiments/apps/perf-d3d9-probe/perf_d3d9_probe.cpp`
 
 Initial probe result before transient-upload cleanup:
 
@@ -772,7 +772,7 @@ Interpretation:
 
 Automatic draw-chunk flush experiment:
 
-- Harness: direct `run_experiment.py` runs of `dxmt9-perf-offscreen-heavy` and `dxmt9-perf-many-draw` with `DXMT9_DRAW_CHUNK_COMMAND_LIMIT=<N> DXMT_PERF_COUNTERS=1`.
+- Harness: direct `run_experiment.py` runs of `perf-d3d9-offscreen-heavy` and `perf-d3d9-many-draw` with `DXMT9_DRAW_CHUNK_COMMAND_LIMIT=<N> DXMT_PERF_COUNTERS=1`.
 - The switch is opt-in. Default behavior remains the follow-up row above.
 
 | app | mode | fps | command buffers | Metal buffers | Metal buffer bytes | sequence wait ms | draw completion wait ms |
@@ -796,11 +796,11 @@ Interpretation:
 
 PE recorder bridge experiment:
 
-- Harness: `DXMT9_PROBE_FRAMES=20 DXMT9_PROBE_DRAWS=64 DXMT_PERF_COUNTERS=1 scripts/run_apps/run_experiment.py run dxmt9-perf-many-draw`.
-- Baseline output: `experiments/output/dxmt9-perf-many-draw-bridge-counter-smoke/result.json`.
-- Packet output: `experiments/output/dxmt9-perf-many-draw-draw-packet-queue-token-smoke/result.json`.
-- Chunk output: `experiments/output/dxmt9-perf-many-draw-draw-chunk-state-delta-smoke/result.json`.
-- Generic chunk output: `experiments/output/dxmt9-perf-many-draw-generic-command-chunk-smoke/result.json`.
+- Harness: `DXMT9_PROBE_FRAMES=20 DXMT9_PROBE_DRAWS=64 DXMT_PERF_COUNTERS=1 scripts/run_apps/run_experiment.py run perf-d3d9-many-draw`.
+- Baseline output: `experiments/output/perf-d3d9-many-draw-bridge-counter-smoke/result.json`.
+- Packet output: `experiments/output/perf-d3d9-many-draw-draw-packet-queue-token-smoke/result.json`.
+- Chunk output: `experiments/output/perf-d3d9-many-draw-draw-chunk-state-delta-smoke/result.json`.
+- Generic chunk output: `experiments/output/perf-d3d9-many-draw-generic-command-chunk-smoke/result.json`.
 - **DXMT9_PE_STATE_SHADOW** is now ON by default (Phase 22). The PE-side shadow defers every fixed-function `Set*` (RS / Texture / StreamSource / FVF / VS / PS / VDecl / RT / DS / Viewport / Scissor / TSS / Sampler / Material / ClipPlane / Transform / Light / LightEnable). Set `DXMT9_PE_STATE_SHADOW=0` only as a regression-detection escape hatch.
 - **DXMT9_PE_DRAW_CHUNK** is now ON by default (Phase 19). The recorder accumulates up to 64 records (configurable via `DXMT9_PE_CHUNK_MAX_RECORDS`) / 256 KB (`DXMT9_PE_CHUNK_MAX_BYTES`) and submits a versioned POD `D9CCommandChunk` through `commit_chunk`. Set `DXMT9_PE_DRAW_CHUNK=0` only for bisecting recorder-introduced bugs.
 - **DXMT9_PE_DRAW_FULL_SNAPSHOT=1** (Phase 16, default OFF) is a debug knob that forces every draw packet to carry the COMPLETE PE shadow as a self-contained snapshot, bypassing delta encoding. Costs ~10× wire bandwidth + disables run-coalescing; intended for stress testing and replay debugging.
@@ -932,10 +932,10 @@ Present policy repeated A/B, 3 runs per app/mode:
 
 Broader present policy A/B, 3 runs per app/mode:
 
-- Harness: `scripts/tools/run_dx9_present_policy_ab.py --runs 3 --timeout 45 --app dx-sdk-basichlsl --app dx-sdk-tutorial07 --app dxut-simple-sample --app irrlicht-managed-lights --app dxmt9-water-rt --app dxmt9-multitexture-terrain --tag 20260426-present-policy-broad-r3`
+- Harness: `scripts/tools/run_dx9_present_policy_ab.py --runs 3 --timeout 45 --app sample-d3d9-basic-hlsl --app sample-d3d9-tutorial07 --app sample-d3d9-dxut-simple --app sample-d3d9-irrlicht-lights --app sample-d3d9-water-rt --app sample-d3d9-multitexture-terrain --tag 20260426-present-policy-broad-r3`
 - Output: `experiments/output/dx9-present-policy-ab/20260426-present-policy-broad-r3/summary.md`
 - Result: 54/54 runs passed.
-- HDR follow-up: `scripts/tools/run_dx9_present_policy_ab.py --runs 3 --timeout 45 --app dx-sdk-hdrformats --tag 20260426-hdrformats-present-policy-r3`
+- HDR follow-up: `scripts/tools/run_dx9_present_policy_ab.py --runs 3 --timeout 45 --app sample-d3d9-hdr-formats --tag 20260426-hdrformats-present-policy-r3`
 - HDR output: `experiments/output/dx9-present-policy-ab/20260426-hdrformats-present-policy-r3/summary.md`
 - HDR result: 9/9 runs passed. The previous apparent hang did not reproduce under the explicit timeout/debug lane.
 
@@ -951,7 +951,7 @@ Broader present policy A/B, 3 runs per app/mode:
 
 Preacquire policy triage:
 
-- Harness: `scripts/tools/run_dx9_present_policy_ab.py --runs 3 --timeout 45 --mode default --mode preacquire --mode preacquire-cap --app dx-sdk-basichlsl --app dxut-simple-sample --app irrlicht-managed-lights --app dxmt9-water-rt --tag 20260426-present-preacquire-triage-r3`
+- Harness: `scripts/tools/run_dx9_present_policy_ab.py --runs 3 --timeout 45 --mode default --mode preacquire --mode preacquire-cap --app sample-d3d9-basic-hlsl --app sample-d3d9-dxut-simple --app sample-d3d9-irrlicht-lights --app sample-d3d9-water-rt --tag 20260426-present-preacquire-triage-r3`
 - Output: `experiments/output/dx9-present-policy-ab/20260426-present-preacquire-triage-r3/summary.md`
 - Result: 36/36 runs passed. The first triage showed that the old preacquire path mostly missed because encode could race ahead while the prefetch thread was still in-flight.
 
@@ -965,7 +965,7 @@ Preacquire policy triage:
 Preacquire in-flight wait follow-up:
 
 - Change: when `DXMT9_PRESENT_PREACQUIRE=1`, encode now waits for an already in-flight prefetch instead of immediately issuing a second `nextDrawable()`.
-- Harness: `scripts/tools/run_dx9_present_policy_ab.py --runs 3 --timeout 45 --mode default --mode preacquire --mode preacquire-cap --app dx-sdk-basichlsl --app dxut-simple-sample --tag 20260426-present-preacquire-wait-r3`
+- Harness: `scripts/tools/run_dx9_present_policy_ab.py --runs 3 --timeout 45 --mode default --mode preacquire --mode preacquire-cap --app sample-d3d9-basic-hlsl --app sample-d3d9-dxut-simple --tag 20260426-present-preacquire-wait-r3`
 - Output: `experiments/output/dx9-present-policy-ab/20260426-present-preacquire-wait-r3/summary.md`
 - Result: 18/18 runs passed.
 

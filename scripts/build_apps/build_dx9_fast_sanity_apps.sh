@@ -10,11 +10,11 @@ if [[ -d "$HOME/llvm-mingw/bin" ]]; then
 fi
 
 apps=(
-  "D9VKD3D9Clear:d3d9_clear.cpp:d3d9-clear"
-  "D9VKD3D9Buffer:d3d9_buffer.cpp:d3d9-buffer"
-  "D9VKD3D9FixedFunctionQuirks:d3d9_fixed_function_quirks.cpp:d3d9-ffp-quirks"
-  "D9VKD3D9LockMatrix:d3d9_lock_matrix.cpp:d3d9-lock-matrix"
-  "D9VKD3D9Triangle:d3d9_triangle.cpp:d3d9-triangle"
+  "conf-d3d9-clear:conf_d3d9_clear.cpp:conf-d3d9-clear"
+  "conf-d3d9-buffer:conf_d3d9_buffer.cpp:conf-d3d9-buffer"
+  "conf-d3d9-ffp-quirks:conf_d3d9_ffp_quirks.cpp:conf-d3d9-ffp-quirks"
+  "conf-d3d9-lock-matrix:conf_d3d9_lock_matrix.cpp:conf-d3d9-lock-matrix"
+  "conf-d3d9-triangle:conf_d3d9_triangle.cpp:conf-d3d9-triangle"
 )
 
 build_one() {

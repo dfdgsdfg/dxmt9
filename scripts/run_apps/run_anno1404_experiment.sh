@@ -5,7 +5,7 @@ script_dir=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
 repo_root=$(cd -- "$script_dir/../.." && pwd)
 
 # Vanilla Wine — see agents/rules/test_wild.rules.md.
-# NOTE: anno-1404-gold is a documented exception that historically only ran
+# NOTE: app-d3d9-anno-1404 is a documented exception that historically only ran
 # under Wine-*-DXMT (vanilla Wine trips d3dx10_43 / D3DX10SaveTextureToMemory
 # before the game becomes a usable baseline; see experiments/README.md).
 # When that path is needed, override explicitly:
@@ -27,7 +27,7 @@ for ((i=0; i<${#args[@]}; ++i)); do
   fi
 done
 
-cmd=(python3 "$repo_root/scripts/run_apps/run_experiment.py" run anno-1404-gold)
+cmd=(python3 "$repo_root/scripts/run_apps/run_experiment.py" run app-d3d9-anno-1404)
 if [[ "$has_wine_root" == false ]]; then
   cmd+=(--wine-root "$wine_root_default")
 fi

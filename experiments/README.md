@@ -7,7 +7,7 @@ current `dxmt9` runtime.
 
 | Subdir | Committed? | Purpose |
 |---|---|---|
-| `apps/` | yes | Small fixture EXEs (D9VK, BasicHLSL). |
+| `apps/` | yes | Small fixture EXEs (D9VK, sample-d3d9-basic-hlsl). |
 | `apps_3rd/` | no | External installs (SFIV, Anno 1404, etc.). |
 | `prefixs/` | no | Per-experiment Wine prefixes. |
 | `wine/` | mixed | `manifest.toml` + README committed; bundles ignored. |
@@ -22,15 +22,15 @@ Primary entrypoint:
 
 ```sh
 python3 scripts/run_apps/run_experiment.py list
-python3 scripts/run_apps/run_experiment.py run dxmt9-wsi-present-local
-python3 scripts/run_apps/run_experiment.py run dx-sdk-basichlsl --wine-root "$WINE_ROOT"
-python3 scripts/run_apps/run_experiment.py run dx-sdk-tutorial07 --wine-root "$WINE_ROOT"
-python3 scripts/run_apps/run_experiment.py run dx-sdk-hdrformats --wine-root "$WINE_ROOT"
-python3 scripts/run_apps/run_experiment.py run dxut-simple-sample --wine-root "$WINE_ROOT"
-python3 scripts/run_apps/run_experiment.py run irrlicht-managed-lights --wine-root "$WINE_ROOT"
-python3 scripts/run_apps/run_experiment.py run anno-1404-gold --wine-root "$WINE_ROOT" --prefix "$HOME/Games/_Prefixes/Anno 1404 Gold Edition"
-python3 scripts/run_apps/run_experiment.py run street-fighter-iv-benchmark --wine-root "$WINE_ROOT" --binary "/path/to/StreetFighterIV_Benchmark.exe"
-python3 scripts/run_apps/run_experiment.py run street-fighter-iv-benchmark-crossover-oracle --wine-root "$HOME/Applications/CrossOver.app/Contents/SharedSupport/CrossOver" --wine-bin "$HOME/Applications/CrossOver.app/Contents/SharedSupport/CrossOver/bin/wine" --prefix "$HOME/Library/Application Support/CrossOver/Bottles/Heroic" --binary "/path/to/StreetFighterIV_Benchmark.exe"
+python3 scripts/run_apps/run_experiment.py run conf-d3d9-wsi-present
+python3 scripts/run_apps/run_experiment.py run sample-d3d9-basic-hlsl --wine-root "$WINE_ROOT"
+python3 scripts/run_apps/run_experiment.py run sample-d3d9-tutorial07 --wine-root "$WINE_ROOT"
+python3 scripts/run_apps/run_experiment.py run sample-d3d9-hdr-formats --wine-root "$WINE_ROOT"
+python3 scripts/run_apps/run_experiment.py run sample-d3d9-dxut-simple --wine-root "$WINE_ROOT"
+python3 scripts/run_apps/run_experiment.py run sample-d3d9-irrlicht-lights --wine-root "$WINE_ROOT"
+python3 scripts/run_apps/run_experiment.py run app-d3d9-anno-1404 --wine-root "$WINE_ROOT" --prefix "$HOME/Games/_Prefixes/Anno 1404 Gold Edition"
+python3 scripts/run_apps/run_experiment.py run app-d3d9-sfiv-benchmark --wine-root "$WINE_ROOT" --binary "/path/to/StreetFighterIV_Benchmark.exe"
+python3 scripts/run_apps/run_experiment.py run app-d3d9-sfiv-benchmark-crossover-oracle --wine-root "$HOME/Applications/CrossOver.app/Contents/SharedSupport/CrossOver" --wine-bin "$HOME/Applications/CrossOver.app/Contents/SharedSupport/CrossOver/bin/wine" --prefix "$HOME/Library/Application Support/CrossOver/Bottles/Heroic" --binary "/path/to/StreetFighterIV_Benchmark.exe"
 ```
 
 DX9 regression suite:
@@ -80,11 +80,11 @@ Build-then-run via the consolidated runner. Pass `--build` to invoke the
 app's `build_script` (declared in `CATALOGUE.toml`) before launching:
 
 ```sh
-python3 scripts/run_apps/run_experiment.py run dx-sdk-basichlsl --build --wine-root "$WINE_ROOT"
-python3 scripts/run_apps/run_experiment.py run dx-sdk-tutorial07 --build --wine-root "$WINE_ROOT"
-python3 scripts/run_apps/run_experiment.py run dx-sdk-hdrformats --build --wine-root "$WINE_ROOT"
-python3 scripts/run_apps/run_experiment.py run dxut-simple-sample --build --wine-root "$WINE_ROOT"
-python3 scripts/run_apps/run_experiment.py run irrlicht-managed-lights --build --wine-root "$WINE_ROOT"
+python3 scripts/run_apps/run_experiment.py run sample-d3d9-basic-hlsl --build --wine-root "$WINE_ROOT"
+python3 scripts/run_apps/run_experiment.py run sample-d3d9-tutorial07 --build --wine-root "$WINE_ROOT"
+python3 scripts/run_apps/run_experiment.py run sample-d3d9-hdr-formats --build --wine-root "$WINE_ROOT"
+python3 scripts/run_apps/run_experiment.py run sample-d3d9-dxut-simple --build --wine-root "$WINE_ROOT"
+python3 scripts/run_apps/run_experiment.py run sample-d3d9-irrlicht-lights --build --wine-root "$WINE_ROOT"
 ```
 
 Wrappers that still need extra setup (default-prefix injection or installer
@@ -116,14 +116,14 @@ Current note:
 - the committed sample references are stale for several shader apps
 - use the builtin-oracle compare suite to judge current renderer parity
 - current builtin-vs-dxmt9 sample parity:
-  - `dx-sdk-basichlsl`: `0.9539`
-  - `dx-sdk-tutorial07`: `0.9094`
-  - `dxut-simple-sample`: `0.9426`
-  - `irrlicht-managed-lights`: `0.9979`
+  - `sample-d3d9-basic-hlsl`: `0.9539`
+  - `sample-d3d9-tutorial07`: `0.9094`
+  - `sample-d3d9-dxut-simple`: `0.9426`
+  - `sample-d3d9-irrlicht-lights`: `0.9979`
 
 Current verified bootstrap entry:
 
-- `dxmt9-wsi-present-local`
+- `conf-d3d9-wsi-present`
 
 This is not a catalogue target from the experiments spec. It exists to validate
 the launcher, frame-dump capture, and SSIM workflow locally before external
@@ -131,27 +131,27 @@ sample binaries are staged.
 
 Current verified real application entry:
 
-- `dx-sdk-basichlsl`
+- `sample-d3d9-basic-hlsl`
   - Heroic Wine 11.6 builtin path
   - 240 frames
   - direct backbuffer capture
   - `ssim = 1.0000`
-- `dx-sdk-tutorial07`
+- `sample-d3d9-tutorial07`
   - Heroic Wine 11.6 builtin path
   - 180 frames
   - direct backbuffer capture
   - `ssim = 1.0000`
-- `dxut-simple-sample`
+- `sample-d3d9-dxut-simple`
   - Heroic Wine 11.6 builtin path
   - 180 frames
   - direct backbuffer capture
   - `ssim = 1.0000`
-- `dx-sdk-hdrformats`
+- `sample-d3d9-hdr-formats`
   - Heroic Wine 11.6 builtin path
   - 180 frames
   - direct backbuffer capture
   - `ssim = 1.0000`
-- `irrlicht-managed-lights`
+- `sample-d3d9-irrlicht-lights`
   - Heroic Wine 11.6 builtin path
   - 180 frames
   - direct backbuffer capture
@@ -163,7 +163,7 @@ Current verified host:
 
 Current exploratory commercial target:
 
-- `anno-1404-gold`
+- `app-d3d9-anno-1404`
   - local Heroic install
   - supported runtime: `Wine-11.6-DXMT`
   - plain `Wine-11.6` is research-only because the game currently trips Wine's
@@ -173,54 +173,54 @@ Current exploratory commercial target:
 
 Current exploratory feature targets:
 
-- `dxmt9-d3d9-srgbtexture`
-- `dxmt9-d3d9-float-texture`
-- `dxmt9-d3d9-stream-source`
-- `dxmt9-d3d9-shademode-provoking`
-- `dxmt9-d3d9-pointsize-policy`
-- `dxmt9-d3d9-yuv-format-policy`
-- `dxmt9-d3d9-vendor-format-policy`
+- `conf-d3d9-srgb-texture`
+- `conf-d3d9-float-texture`
+- `conf-d3d9-stream-source`
+- `conf-d3d9-shademode-provoking`
+- `conf-d3d9-pointsize`
+- `conf-d3d9-yuv-format`
+- `conf-d3d9-vendor-format`
 
-D3D9IntentProbe notes:
+conf-d3d9-intent-probe notes:
 
 - These modes map to Wine `dlls/d3d9/tests/visual.c` behavior.
-- Current tree only has the ignored local `D3D9IntentProbe.exe`; the
-  corresponding source is absent from `experiments/apps/D3D9IntentProbe/`.
+- Current tree only has the ignored local `conf-d3d9-intent-probe.exe`; the
+  corresponding source is absent from `experiments/apps/conf-d3d9-intent-probe/`.
 - Catalogue rows and launchers are kept as exploratory scaffolding while the
   source/build lane is restored or replaced by a clean project-owned probe.
 
-- `dxmt9-water-rt`
+- `sample-d3d9-water-rt`
   - repo-local DX9 sample
   - render-to-texture + projected UV + alpha blend
   - intended as the first focused proxy for `Anno 1404` water rendering bugs
   - builtin-oracle compare now matches and can be used as a regression gate
-- `dxmt9-multitexture-terrain`
+- `sample-d3d9-multitexture-terrain`
   - repo-local DX9 sample
   - multi-sampler terrain material blend
   - intended as the second focused proxy for outdoor terrain/material bugs
   - builtin-oracle compare currently matches and can be used as a regression gate
-- `dxmt9-perf-present-only`
+- `perf-d3d9-present-only`
   - repo-local DX9 micro-benchmark
   - clear + immediate present, no draw stress
   - intended to isolate present/compositor pacing against Wine builtin D3D9
-- `dxmt9-perf-offscreen-heavy`
+- `perf-d3d9-offscreen-heavy`
   - repo-local DX9 micro-benchmark
   - many fixed-function draws into an offscreen render target, no per-frame present
   - intended to isolate draw/encode throughput without CAMetalLayer pacing
-- `dxmt9-perf-many-draw`
+- `perf-d3d9-many-draw`
   - repo-local DX9 micro-benchmark
   - many fixed-function draw calls followed by immediate present
   - intended to expose whether draw-call submission or present pacing dominates
 
 Current exploratory commercial-oracle candidate:
 
-- `street-fighter-iv-benchmark`
+- `app-d3d9-sfiv-benchmark`
   - Heroic `11.6-DXMT` research lane for `dxmt9`
   - keep the Heroic prefix fresh; if the benchmark starts failing after local DLL
     or `winetricks` experiments, recreate the prefix instead of trying to
     salvage it
   - wrapper now installs prefix-native `d3dx9_41` and mirrors the 32-bit DLL next to the extracted benchmark binary
-- `street-fighter-iv-benchmark-crossover-oracle`
+- `app-d3d9-sfiv-benchmark-crossover-oracle`
   - CrossOver `Heroic` bottle oracle lane
   - uses builtin `d3d9` / `d3dx9_41` for commercial visual comparison
   - current automatic capture is not trustworthy yet; use this lane as a manual visual oracle host until window capture is stabilized

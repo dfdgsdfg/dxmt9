@@ -313,7 +313,7 @@ core::TextureHandle Pool::createTexture(WMT::Device device,
   // either side is null. Skipping the SYSTEMMEM Metal allocation here
   // (the previous behavior) silently dropped every UpdateTexture upload,
   // leaving the destination DEFAULT texture uninitialized — visible as
-  // black/garbage triangles in d9vk-d3d9-triangle and equivalent SDK
+  // black/garbage triangles in conf-d3d9-triangle and equivalent SDK
   // samples. `toResourceOptions` already returns Shared for SYSTEMMEM,
   // so the storage mode is correct on both unified and discrete devices.
   {

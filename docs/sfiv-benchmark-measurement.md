@@ -3,7 +3,7 @@
 Run on 2026-05-10 with the M1-M7 + O1 builds applied (release artifacts).
 Captured via `bash scripts/run_apps/run_sfiv_benchmark_experiment.sh` with
 `DXMT_PERF_COUNTERS=1 DXMT9_PERF_FRAME_SAMPLING=1`. Output in
-`experiments/output/street-fighter-iv-benchmark-post-mcycle-010048/`.
+`experiments/output/app-d3d9-sfiv-benchmark-post-mcycle-010048/`.
 
 ## Top-line
 

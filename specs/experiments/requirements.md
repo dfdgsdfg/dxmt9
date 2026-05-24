@@ -101,31 +101,31 @@ source      = "https://github.com/walbourn/directx-sdk-samples"
 license     = "ms-directx-sdk"
 source_kind = "third-party-fixture"
 license_scope = "third-party-fixture"
-binary      = "experiments/apps/BasicHLSL/BasicHLSL.exe"
+binary      = "experiments/apps/sample-d3d9-basic-hlsl/sample-d3d9-basic-hlsl.exe"
 launcher    = "experiments/launchers/basicherl.sh"
 reference   = "experiments/references/basicherl.png"
 features    = ["vs_2_0", "ps_2_0", "lighting", "texturing"]
 status      = "untested"   # passing | failing | untested
 
 [[app]]
-name        = "dx-sdk-tutorial07"
+name        = "sample-d3d9-tutorial07"
 source      = "https://github.com/walbourn/directx-sdk-samples"
 license     = "ms-directx-sdk"
 source_kind = "third-party-fixture"
 license_scope = "third-party-fixture"
-binary      = "experiments/apps/Tutorial07/Tutorial07.exe"
+binary      = "experiments/apps/sample-d3d9-tutorial07/sample-d3d9-tutorial07.exe"
 launcher    = "experiments/launchers/tutorial07.sh"
 reference   = "experiments/references/tutorial07.png"
 features    = ["vs_2_0", "ps_2_0", "texturing"]
 status      = "untested"
 
 [[app]]
-name        = "dx-sdk-hdrformats"
+name        = "sample-d3d9-hdr-formats"
 source      = "https://github.com/walbourn/directx-sdk-samples"
 license     = "ms-directx-sdk"
 source_kind = "third-party-fixture"
 license_scope = "third-party-fixture"
-binary      = "experiments/apps/HDRFormats/HDRFormats.exe"
+binary      = "experiments/apps/sample-d3d9-hdr-formats/sample-d3d9-hdr-formats.exe"
 launcher    = "experiments/launchers/hdrformats.sh"
 reference   = "experiments/references/hdrformats.png"
 features    = ["ps_3_0", "fp16_rt", "fp32_rt", "hdr_tonemap"]
@@ -137,19 +137,19 @@ source      = "https://github.com/walbourn/DXUT"
 license     = "mit"
 source_kind = "third-party-fixture"
 license_scope = "third-party-fixture"
-binary      = "experiments/apps/DXUTSimpleSample/SimpleSample.exe"
+binary      = "experiments/apps/sample-d3d9-dxut-simple/sample-d3d9-dxut-simple.exe"
 launcher    = "experiments/launchers/dxut_simplesample.sh"
 reference   = "experiments/references/dxut_simplesample.png"
 features    = ["vs_2_0", "ps_2_0", "skinned_mesh", "state_management"]
 status      = "untested"
 
 [[app]]
-name        = "irrlicht-managed-lights"
+name        = "sample-d3d9-irrlicht-lights"
 source      = "https://github.com/zaki/irrlicht"
 license     = "zlib"
 source_kind = "third-party-fixture"
 license_scope = "third-party-fixture"
-binary      = "experiments/apps/irrlicht/20.ManagedLights"
+binary      = "experiments/apps/sample-d3d9-irrlicht-lights/20.ManagedLights"
 launcher    = "experiments/launchers/irrlicht_managed_lights.sh"
 reference   = "experiments/references/irrlicht_managed_lights.png"
 features    = ["ffp", "dynamic_lighting", "scene_graph", "d3d9_backend"]

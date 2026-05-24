@@ -13,7 +13,7 @@ Measurement infrastructure:
 - Per-boundary counter schema documented in
   `specs/benchmarks/boundary-counter-schema.md`.
 
-## B2 — PE → unix bridge (dxmt9-perf-bridge-empty)
+## B2 — PE → unix bridge (perf-d3d9-bridge-empty)
 
 20,000 BRIDGE_EMPTY_ITERATIONS, single run, default wine prefix.
 Probe killed at 60s timeout before completion (313 successful
@@ -39,7 +39,7 @@ is just 1.18×.
 This is the first-ever per-call bridge latency number for dxmt9.
 Previously only `chunk_admit` count was visible.
 
-## B3 — CommandQueue + sub-CB chain (dxmt9-perf-chain-parametric)
+## B3 — CommandQueue + sub-CB chain (perf-d3d9-chain-parametric)
 
 CHAIN_LENGTH=4, CHAIN_DRAWS_PER_PASS=20, CHAIN_ITERATIONS=300.
 Two runs: `policy=off` (baseline) and `policy=per-render-pass +
@@ -79,7 +79,7 @@ Present — was deliberate to isolate B3+B4 from B6. The observed zero
 encode work suggests the encoder relies on Present-driven flushes
 more than expected; this is itself a discovery worth documenting.
 
-## B6 — Presenter (dxmt9-perf-present-loop)
+## B6 — Presenter (perf-d3d9-present-loop)
 
 Not run as part of W4. Probe is built and catalogue-registered;
 schedule for the next cycle.
@@ -140,19 +140,19 @@ produce useful numbers in every case.
 # B2 baseline
 env DXMT_PERF_COUNTERS=1 BRIDGE_EMPTY_ITERATIONS=20000 \
   python3 scripts/tools/run_dx9_present_policy_ab.py \
-    --app dxmt9-perf-bridge-empty --mode default --runs 1 \
+    --app perf-d3d9-bridge-empty --mode default --runs 1 \
     --timeout 60 --boundary B2 --tag W4-baseline-B2
 
 # B3 chain (currently hits the encode anomaly above)
 env DXMT_PERF_COUNTERS=1 CHAIN_LENGTH=4 CHAIN_DRAWS_PER_PASS=20 CHAIN_ITERATIONS=300 \
   python3 scripts/tools/run_dx9_present_policy_ab.py \
-    --app dxmt9-perf-chain-parametric --mode default --runs 1 \
+    --app perf-d3d9-chain-parametric --mode default --runs 1 \
     --timeout 60 --boundary B3 --tag W4-chain-off
 
 env DXMT_PERF_COUNTERS=1 CHAIN_LENGTH=4 CHAIN_DRAWS_PER_PASS=20 CHAIN_ITERATIONS=300 \
     DXMT9_MID_CHUNK_COMMIT_POLICY=per-render-pass \
   python3 scripts/tools/run_dx9_present_policy_ab.py \
-    --app dxmt9-perf-chain-parametric --mode default --runs 1 \
+    --app perf-d3d9-chain-parametric --mode default --runs 1 \
     --timeout 60 --boundary B3 --tag W4-chain-cap4
 
 # Whole suite (after probes are stable)
@@ -165,7 +165,7 @@ bash scripts/run_suites/run_boundary_audit_suite.sh
    Cause: encode thread is dormant without a Present-triggered flush.
    Adding `CHAIN_PRESENT_INTERVAL=10` to the probe (Present every 10
    iterations) restores expected behavior. Fix shipped in
-   `experiments/apps/ChainParametricProbe/ChainParametricProbe.cpp`.
+   `experiments/apps/perf-d3d9-chain-parametric/perf_d3d9_chain_parametric.cpp`.
    Runtime-side investigation deferred — the no-Present case may
    represent a real edge in the queue lifecycle worth a separate
    gap.md row, but it does not block the cap=4 measurement.

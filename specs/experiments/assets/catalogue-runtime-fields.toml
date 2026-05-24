@@ -12,13 +12,13 @@
 # A wild app that should always run on the vanilla baseline. wine_id
 # points at a manifest entry whose variant=vanilla.
 [[app]]
-name         = "street-fighter-iv-benchmark"
+name         = "app-d3d9-sfiv-benchmark"
 source       = "https://www.capcom.com/sf4-benchmark"
 license      = "proprietary"
 source_kind  = "third-party-game"
 license_scope = "third-party-game"
 binary       = "D:/StreetFighterIV_Benchmark.exe"   # Windows-style path under <drive_letter>:
-launcher     = "experiments/launchers/street-fighter-iv-benchmark.sh"
+launcher     = "experiments/launchers/app-d3d9-sfiv-benchmark.sh"
 features     = ["wild", "benchmark", "wine"]
 status       = "passing"
 requires_wine = true
@@ -31,19 +31,19 @@ wine_alternatives    = []              # no alternates; vanilla-only
 install_drive_letter = "d"             # default
 
 # ─── Example 2: wild experiment with documented exception ──────────────
-# anno-1404-gold needs Wine-*-DXMT (vanilla trips d3dx10_43 / D3DX10).
+# app-d3d9-anno-1404 needs Wine-*-DXMT (vanilla trips d3dx10_43 / D3DX10).
 # wine_id points at the patched entry. The harness emits a warning at
 # run-start unless the chosen ID is one of wine_alternatives — but since
 # this exception is the *default*, we silence the warning by listing the
 # chosen ID in alternatives too. (Equivalent to "pre-approved exception".)
 [[app]]
-name         = "anno-1404-gold"
+name         = "app-d3d9-anno-1404"
 source       = "ubisoft"
 license      = "proprietary"
 source_kind  = "third-party-game"
 license_scope = "third-party-game"
 binary       = "D:/Anno1404.exe"
-launcher     = "experiments/launchers/anno-1404-gold.sh"
+launcher     = "experiments/launchers/app-d3d9-anno-1404.sh"
 features     = ["wild", "wine"]
 status       = "passing"
 requires_wine = true
@@ -74,11 +74,11 @@ install_drive_letter = "d"
 # don't get wine_id or wine_alternatives — the harness keeps the legacy
 # injection path for them.
 [[app]]
-name         = "d9vk-d3d9-clear"
+name         = "conf-d3d9-clear"
 source       = "https://github.com/Joshua-Ashton/d9vk"
 license      = "zlib"
 source_kind  = "third-party-fixture"
-binary       = "experiments/apps/D9VKD3D9Clear/d3d9-clear-x64.exe"
+binary       = "experiments/apps/conf-d3d9-clear/conf-d3d9-clear-x64.exe"
 launcher     = "experiments/launchers/dx9_fast_sanity.sh"
 requires_wine = true
 # (no wine_id, no install_drive_letter — fixture, not a wild install)

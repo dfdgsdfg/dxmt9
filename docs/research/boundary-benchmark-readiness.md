@@ -20,10 +20,10 @@ W3, W4, X1, Y1 against the V1 design (`docs/research/boundary-benchmarks.md`).
 
 **Probes:** 4 new binaries under `experiments/apps/`:
 
-- `BridgeEmptyProbe.cpp` (~350 LOC) — B2, zero-payload Clear loop.
-- `EncodeReplayProbe.cpp` (~300 LOC) — B3+B4, offscreen chunk replay, no Present.
-- `ChainParametricProbe.cpp` (~400 LOC) — B3+B4, parameterized RT chain, optional `CHAIN_PRESENT_INTERVAL` after X1 fixed the encode-thread anomaly.
-- `PresentLoopProbe.cpp` (~250 LOC) — B6, tiny Clear + empty Presents.
+- `perf_d3d9_bridge_empty.cpp` (~350 LOC) — B2, zero-payload Clear loop.
+- `perf_d3d9_encode_replay.cpp` (~300 LOC) — B3+B4, offscreen chunk replay, no Present.
+- `perf_d3d9_chain_parametric.cpp` (~400 LOC) — B3+B4, parameterized RT chain, optional `CHAIN_PRESENT_INTERVAL` after X1 fixed the encode-thread anomaly.
+- `perf_d3d9_present_loop.cpp` (~250 LOC) — B6, tiny Clear + empty Presents.
 - `tests/native/core/chunk_record_micro_spec.cpp` — B1 native micro-bench, fake backend, no Wine.
 
 **Harness:** `scripts/tools/run_dx9_present_policy_ab.py` defines

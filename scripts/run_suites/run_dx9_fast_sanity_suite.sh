@@ -5,10 +5,10 @@ script_dir=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
 repo_root=$(cd -- "$script_dir/../.." && pwd)
 
 apps=(
-  "d9vk-d3d9-clear"
-  "d9vk-d3d9-buffer"
-  "d9vk-d3d9-lock-matrix"
-  "d9vk-d3d9-triangle"
+  "conf-d3d9-clear"
+  "conf-d3d9-buffer"
+  "conf-d3d9-lock-matrix"
+  "conf-d3d9-triangle"
 )
 
 usage() {
@@ -140,20 +140,20 @@ binary_for_app() {
   local app=$1
   local arch=$2
   case "$app" in
-    d9vk-d3d9-clear)
-      printf '%s/experiments/apps/D9VKD3D9Clear/d3d9-clear-%s.exe' "$repo_root" "$arch"
+    conf-d3d9-clear)
+      printf '%s/experiments/apps/conf-d3d9-clear/conf-d3d9-clear-%s.exe' "$repo_root" "$arch"
       ;;
-    d9vk-d3d9-buffer)
-      printf '%s/experiments/apps/D9VKD3D9Buffer/d3d9-buffer-%s.exe' "$repo_root" "$arch"
+    conf-d3d9-buffer)
+      printf '%s/experiments/apps/conf-d3d9-buffer/conf-d3d9-buffer-%s.exe' "$repo_root" "$arch"
       ;;
-    d9vk-d3d9-ffp-quirks)
-      printf '%s/experiments/apps/D9VKD3D9FixedFunctionQuirks/d3d9-ffp-quirks-%s.exe' "$repo_root" "$arch"
+    conf-d3d9-ffp-quirks)
+      printf '%s/experiments/apps/conf-d3d9-ffp-quirks/conf-d3d9-ffp-quirks-%s.exe' "$repo_root" "$arch"
       ;;
-    d9vk-d3d9-lock-matrix)
-      printf '%s/experiments/apps/D9VKD3D9LockMatrix/d3d9-lock-matrix-%s.exe' "$repo_root" "$arch"
+    conf-d3d9-lock-matrix)
+      printf '%s/experiments/apps/conf-d3d9-lock-matrix/conf-d3d9-lock-matrix-%s.exe' "$repo_root" "$arch"
       ;;
-    d9vk-d3d9-triangle)
-      printf '%s/experiments/apps/D9VKD3D9Triangle/d3d9-triangle-%s.exe' "$repo_root" "$arch"
+    conf-d3d9-triangle)
+      printf '%s/experiments/apps/conf-d3d9-triangle/conf-d3d9-triangle-%s.exe' "$repo_root" "$arch"
       ;;
     *)
       return 1

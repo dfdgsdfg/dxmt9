@@ -990,7 +990,7 @@ std::string makeFfpPixelSource(const FfpPixelKey& key,
       // The fragment shader samples stage N at `in.texcoord<stage>` --
       // routing by `stages[stage].texCoordIndex` here would silently
       // bypass the matrix whenever TCI != stage (Wine `test_texcoordindex`
-      // + a TEXTURE0 transform). D3D9IntentProbe regression coverage:
+      // + a TEXTURE0 transform). conf-d3d9-intent-probe regression coverage:
       // `texcoord-index-matrix`.
       const u32 coordIndex = static_cast<u32>(stage);
       out << "  return tex" << stage << ".sample(samp" << stage
@@ -1027,7 +1027,7 @@ std::string makeFfpPixelSource(const FfpPixelKey& key,
       // samples stage N at `in.texcoord<stage>` -- routing by
       // `stageKey.texCoordIndex` here would silently bypass the matrix
       // whenever TCI != stage (e.g. Wine `test_texcoordindex` /
-      // D3D9IntentProbe `texcoord-index-matrix`: TCI=1 + TEXTURE0
+      // conf-d3d9-intent-probe `texcoord-index-matrix`: TCI=1 + TEXTURE0
       // transform on stage 0). The vertex shader also enforces "matrix
       // off => identity passthrough", so the FS read collapses to the
       // selected input slot when TTFF=DISABLE (the 14 non-matrix probe

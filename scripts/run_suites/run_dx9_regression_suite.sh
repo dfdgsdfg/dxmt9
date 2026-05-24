@@ -5,14 +5,14 @@ script_dir=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
 repo_root=$(cd -- "$script_dir/../.." && pwd)
 
 apps=(
-  "dxmt9-wsi-present-local"
-  "dx-sdk-basichlsl"
-  "dx-sdk-tutorial07"
-  "dx-sdk-hdrformats"
-  "dxut-simple-sample"
-  "irrlicht-managed-lights"
-  "dxmt9-water-rt"
-  "dxmt9-multitexture-terrain"
+  "conf-d3d9-wsi-present"
+  "sample-d3d9-basic-hlsl"
+  "sample-d3d9-tutorial07"
+  "sample-d3d9-hdr-formats"
+  "sample-d3d9-dxut-simple"
+  "sample-d3d9-irrlicht-lights"
+  "sample-d3d9-water-rt"
+  "sample-d3d9-multitexture-terrain"
 )
 
 usage() {

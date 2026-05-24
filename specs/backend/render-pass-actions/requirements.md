@@ -228,7 +228,7 @@ release build, current Apple Silicon hardware) must show:
 - `process_fps` increased by ≥ 30% versus the pre-spec baseline (current
   10 fps). Target: ≥ 13 fps.
 - All 57 native unit tests remain green.
-- Pixel output of `actual.png` for `dxmt9-perf-offscreen-heavy` remains
+- Pixel output of `actual.png` for `perf-d3d9-offscreen-heavy` remains
   byte-identical (full overwrite path, DontCare-load is a no-op there).
 
 These targets are conservative; full vanilla-wined3d parity (~30 fps) is

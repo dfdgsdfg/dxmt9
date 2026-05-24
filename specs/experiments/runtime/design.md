@@ -18,7 +18,7 @@ experiments/
 ├── apps/                  # existing — committed fixture EXEs (D9VK, BasicHLSL)
 ├── apps_3rd/              # NEW   — gitignored, externally-installed apps
 │   ├── sfiv/              #          (one subdir per [[app]].name in CATALOGUE)
-│   └── anno-1404-gold/
+│   └── app-d3d9-anno-1404/
 ├── prefixs/               # NEW   — gitignored, per-experiment Wine prefixes
 │   ├── sfiv/
 │   │   ├── drive_c/
@@ -26,7 +26,7 @@ experiments/
 │   │   │   ├── c: -> ../drive_c
 │   │   │   └── d: -> ../../apps_3rd/sfiv      ← junction to install
 │   │   └── system.reg
-│   └── anno-1404-gold/
+│   └── app-d3d9-anno-1404/
 ├── wine/                  # NEW   — manifest committed; wine bundles gitignored
 │   ├── manifest.toml      #          committed (Wine root catalogue)
 │   ├── README.md          #          committed (workflow doc)
@@ -262,14 +262,14 @@ Stepwise, one app at a time. SFIV first (driving case for this spec).
 digraph migrate_sfiv {
   s1[shape=box, label="add experiments/wine/manifest.toml\nwith heroic-11.7 + heroic-11.7-dxmt"];
   s2[shape=box, label="add experiments/wine/README.md"];
-  s3[shape=box, label="extend CATALOGUE.toml entry\nfor street-fighter-iv-benchmark"];
+  s3[shape=box, label="extend CATALOGUE.toml entry\nfor app-d3d9-sfiv-benchmark"];
   s4[shape=box, label="add to .gitignore"];
   s5[shape=box, label="implement scripts/wine/resolve.py\n+ scripts/wine/bootstrap_prefix.sh"];
   s6[shape=box, label="rewrite run_sfiv_benchmark_experiment.sh\nto use resolve + bootstrap"];
   s7[shape=box, label="user: install SFIV into\nexperiments/apps_3rd/sfiv"];
   s8[shape=box, label="run --rebuild-prefix"];
   s9[shape=box, label="verify: actual.png shows render,\nperf-frame lines emitted"];
-  s10[shape=box, label="repeat for anno-1404-gold\n(wine_id=heroic-11.7-dxmt)"];
+  s10[shape=box, label="repeat for app-d3d9-anno-1404\n(wine_id=heroic-11.7-dxmt)"];
 
   s1 -> s2 -> s3 -> s4 -> s5 -> s6 -> s7 -> s8 -> s9 -> s10;
 }

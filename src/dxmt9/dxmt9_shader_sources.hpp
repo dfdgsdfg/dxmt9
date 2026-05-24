@@ -72,7 +72,7 @@ std::string makeShaderPrelude(bool withClipDistances);
 // from both the VSOut struct emit and every VS-body write to those
 // fields, shrinking the inter-stage parameter buffer by 56 bytes/vertex.
 // Default off — the trim is workload-specific (verified for
-// `street-fighter-iv-benchmark`'s 15 dumped FS); apps that DO sample
+// `app-d3d9-sfiv-benchmark`'s 15 dumped FS); apps that DO sample
 // texcoord5..7 or read fogFactor/pointSize will produce wrong pixels.
 //
 // vsoutMaxTexcoord: 8 by default, 5 when trim is active. Loops over

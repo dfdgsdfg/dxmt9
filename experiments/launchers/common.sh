@@ -134,9 +134,9 @@ exp_run_d3d9_intent_probe() {
   local mode=$1
   shift || true
 
-  local source_path="$exp_repo_root/experiments/apps/D3D9IntentProbe/D3D9IntentProbe.cpp"
+  local source_path="$exp_repo_root/experiments/apps/conf-d3d9-intent-probe/conf-d3d9-intent-probe.cpp"
   if [[ ! -f "$source_path" ]]; then
-    exp_log "D3D9IntentProbe source/build lane unavailable: missing $source_path"
+    exp_log "conf-d3d9-intent-probe source/build lane unavailable: missing $source_path"
     exp_log "not running generated/ignored binary: ${DXMT_EXPERIMENT_BINARY:-<unset>}"
     exit 2
   fi

@@ -10,4 +10,4 @@ repo_root=$(cd -- "$script_dir/../.." && pwd)
 # are passed through to run_experiment.py.
 
 exec python3 "$repo_root/scripts/run_apps/run_experiment.py" run \
-  street-fighter-iv-benchmark "$@"
+  app-d3d9-sfiv-benchmark "$@"

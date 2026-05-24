@@ -59,11 +59,11 @@ if [[ -z "$prefix" ]]; then
 fi
 
 if [[ "$skip_build" != true ]]; then
-  bash "$repo_root/scripts/build_apps/build_dx-sdk-basichlsl.sh"
-  bash "$repo_root/scripts/build_apps/build_dx-sdk-tutorial07.sh"
-  bash "$repo_root/scripts/build_apps/build_dx-sdk-hdrformats.sh"
-  bash "$repo_root/scripts/build_apps/build_dxut-simple-sample.sh"
-  bash "$repo_root/scripts/build_apps/build_irrlicht-managed-lights.sh"
+  bash "$repo_root/scripts/build_apps/build_sample-d3d9-basic-hlsl.sh"
+  bash "$repo_root/scripts/build_apps/build_sample-d3d9-tutorial07.sh"
+  bash "$repo_root/scripts/build_apps/build_sample-d3d9-hdr-formats.sh"
+  bash "$repo_root/scripts/build_apps/build_sample-d3d9-dxut-simple.sh"
+  bash "$repo_root/scripts/build_apps/build_sample-d3d9-irrlicht-lights.sh"
 fi
 
 cmd=(
@@ -80,9 +80,9 @@ fi
 cat <<EOF
 
 Experiment commands:
-  python3 scripts/run_apps/run_experiment.py run dx-sdk-basichlsl --build --prefix "$prefix"${wine_root:+ --wine-root "$wine_root"}
-  python3 scripts/run_apps/run_experiment.py run dx-sdk-tutorial07 --build --prefix "$prefix"${wine_root:+ --wine-root "$wine_root"}
-  python3 scripts/run_apps/run_experiment.py run dx-sdk-hdrformats --build --prefix "$prefix"${wine_root:+ --wine-root "$wine_root"}
-  python3 scripts/run_apps/run_experiment.py run dxut-simple-sample --build --prefix "$prefix"${wine_root:+ --wine-root "$wine_root"}
-  python3 scripts/run_apps/run_experiment.py run irrlicht-managed-lights --build --prefix "$prefix"${wine_root:+ --wine-root "$wine_root"}
+  python3 scripts/run_apps/run_experiment.py run sample-d3d9-basic-hlsl --build --prefix "$prefix"${wine_root:+ --wine-root "$wine_root"}
+  python3 scripts/run_apps/run_experiment.py run sample-d3d9-tutorial07 --build --prefix "$prefix"${wine_root:+ --wine-root "$wine_root"}
+  python3 scripts/run_apps/run_experiment.py run sample-d3d9-hdr-formats --build --prefix "$prefix"${wine_root:+ --wine-root "$wine_root"}
+  python3 scripts/run_apps/run_experiment.py run sample-d3d9-dxut-simple --build --prefix "$prefix"${wine_root:+ --wine-root "$wine_root"}
+  python3 scripts/run_apps/run_experiment.py run sample-d3d9-irrlicht-lights --build --prefix "$prefix"${wine_root:+ --wine-root "$wine_root"}
 EOF

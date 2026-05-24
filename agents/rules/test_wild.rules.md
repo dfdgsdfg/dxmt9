@@ -29,7 +29,7 @@ compatibility matrix.
 **Reason — concrete incident (2026-05-10):** SFIV under `Wine-11.6-DXMT`
 appeared to flood `dxmt9.log` with `0xc0000005` access violations on
 every `factory_*` bridge call, suggesting a 32-bit bridge regression.
-Re-running the same 32-bit binary (`d9vk-d3d9-triangle-x86.exe`) under
+Re-running the same 32-bit binary (`conf-d3d9-triangle-x86.exe`) under
 vanilla `Wine-11.6` produced a clean `[winemetal-abi] info: abi-hash
 handshake OK` log and passed. The `Wine-11.6-DXMT` runtime had drifted
 from upstream Wine in a way that masked or simulated wow64 dispatch
@@ -74,7 +74,7 @@ adding one is a deliberate decision and must be justified inline:
 
 | App | Required runtime | Reason |
 |-----|------------------|--------|
-| `anno-1404-gold` | `Wine-*-DXMT` (any current DXMT build) | Vanilla Wine trips `d3dx10_43` / `D3DX10SaveTextureToMemory` before the game reaches a usable baseline. Documented in `experiments/README.md`. |
+| `app-d3d9-anno-1404` | `Wine-*-DXMT` (any current DXMT build) | Vanilla Wine trips `d3dx10_43` / `D3DX10SaveTextureToMemory` before the game reaches a usable baseline. Documented in `experiments/README.md`. |
 
 If you find another app that genuinely requires a patched Wine build,
 add a row here with the failure mode and a link to evidence. Do not
@@ -89,7 +89,7 @@ Before reporting a dxmt9 regression from a wild run, confirm:
    vanilla Heroic build (e.g. `Wine-11.7`), not `Wine-*-DXMT` /
    `Wine-*-VK` / a CrossOver bottle.
 2. **A small repro reproduces under the same runtime.** Run a fast
-   sanity test (e.g. `d9vk-d3d9-triangle`) with the same `--wine-root`.
+   sanity test (e.g. `conf-d3d9-triangle`) with the same `--wine-root`.
    If it passes, the bug is app-specific, not bridge-wide.
 3. **Both x64 and x86 lanes are tested when the failing binary is
    32-bit.** dxmt9 stages both `build-win32-x64-builtin` and

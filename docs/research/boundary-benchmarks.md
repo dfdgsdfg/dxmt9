@@ -48,7 +48,7 @@ others**, which is the diagnosis the V1 task is asking us to fix.
 ## 2. The 4 existing synthetic probes
 
 All four launchers (`experiments/launchers/dxmt9-perf-*.sh`) call
-the **same in-tree binary** `experiments/apps/PerformanceProbe/PerformanceProbe.cpp`
+the **same in-tree binary** `experiments/apps/perf-d3d9-probe/perf_d3d9_probe.cpp`
 with a different mode env var. They differ only in workload shape:
 
 | Probe | Mode | Target boundary | What it tests | Limitation |
@@ -68,7 +68,7 @@ all couple encode policy to GPU work.
 
 Ranked by ROI:
 
-### (b) Bridge-ABI throughput — `dxmt9-perf-bridge-empty.sh` 🟢 HIGH
+### (b) Bridge-ABI throughput — `perf-d3d9-bridge-empty.sh` 🟢 HIGH
 
 A small in-tree app that issues 100k `commit_chunk()` calls with
 **header-only / zero-record** payloads. Measures pure PE→unix crossing
@@ -79,7 +79,7 @@ cost without any encode or GPU work.
 - **Detects:** any per-call regression in the WINE_UNIX_CALL marshalling, struct-pack ABI changes, importer validation overhead.
 - **Implementation:** ~100 lines C++ + Wine wrapper, ~2 days.
 
-### (c) Encode-only throughput — `dxmt9-perf-encode-replay.sh` 🟢 HIGH
+### (c) Encode-only throughput — `perf-d3d9-encode-replay.sh` 🟢 HIGH
 
 A probe that pre-records a fixed chunk (saved to disk on first run, replayed
 N times on subsequent invocations). Measures encode-thread throughput
@@ -91,7 +91,7 @@ GPU completion timing**.
 - **Detects:** encode-thread CPU regressions, sub-CB chain policy effects in isolation.
 - **Implementation:** ~3 days. Pre-recording requires a serialization path for `core::ChunkSlot` which is partially in `chunk_record_import_spec` already.
 
-### (e) Sub-CB chain sensitivity — `dxmt9-perf-chain-parametric.sh` 🟢 HIGH
+### (e) Sub-CB chain sensitivity — `perf-d3d9-chain-parametric.sh` 🟢 HIGH
 
 Parametric workload over chain length, with **small RTs** (256×256 single-format,
 no MSAA, no resolve) so the tile-flush envelope per sub-CB is small enough
@@ -116,7 +116,7 @@ isolated from B2.
 - **Detects:** chunk-record regression caused by core/draw-encoder refactors.
 - **Implementation:** ~1 day; no Wine, no Metal.
 
-### (f) Drawable-acquire isolation — `dxmt9-perf-present-loop.sh` 🟡 MEDIUM
+### (f) Drawable-acquire isolation — `perf-d3d9-present-loop.sh` 🟡 MEDIUM
 
 N empty `Present()` cycles with no draw work. The existing
 `run_dx9_present_policy_ab.py` already exercises present policy at the
@@ -183,7 +183,7 @@ without breaking present-policy A/B.
 ## 6. Anti-goals
 
 - Do **not** consolidate the 4 existing probes into one app at the cost
-  of CATALOGUE.toml clarity. They already share `PerformanceProbe.cpp`
+  of CATALOGUE.toml clarity. They already share `perf_d3d9_probe.cpp`
   via mode env vars; the launcher script per-probe is the right
   granularity for catalogue + reproducibility.
 - Do **not** replace `run_dx9_present_policy_ab.py` with a new harness.

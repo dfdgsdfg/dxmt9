@@ -154,17 +154,17 @@ catalogue entry marks the external scope explicitly.
 ## 7. Current Verified Entries
 
 Current local verification set:
-- `dxmt9-wsi-present-local`
-- `dx-sdk-basichlsl`
-- `dx-sdk-tutorial07`
-- `dx-sdk-hdrformats`
-- `dxut-simple-sample`
-- `irrlicht-managed-lights`
+- `conf-d3d9-wsi-present`
+- `sample-d3d9-basic-hlsl`
+- `sample-d3d9-tutorial07`
+- `sample-d3d9-hdr-formats`
+- `sample-d3d9-dxut-simple`
+- `sample-d3d9-irrlicht-lights`
 
 Current verified Wine host:
 - Heroic Wine 11.5 builtin path
 
 Current exploratory commercial host:
-- `anno-1404-gold` on Heroic `Wine-11.6-DXMT`
+- `app-d3d9-anno-1404` on Heroic `Wine-11.6-DXMT`
 - plain Heroic `Wine-11.6` remains research-only because `Anno 1404` currently
   aborts in Wine's `d3dx10_43` path before it can serve as a renderer oracle

@@ -112,7 +112,7 @@ HeapEligibility HeapManager::classifyBuffer(u64 footprintBytes,
   // CPU-side write to never reach the GPU. The visible failure was
   // every D3DPOOL_DEFAULT vertex/index buffer smaller than the heap
   // footprint threshold ending up zero-filled at draw time —
-  // d9vk-d3d9-triangle's 36-byte VB landed exactly here, the GPU
+  // conf-d3d9-triangle's 36-byte VB landed exactly here, the GPU
   // sampled (0,0,0,0) for every vertex, and the triangle collapsed
   // to a degenerate point. Falling back to direct allocation puts
   // the buffer on the same `device.newBuffer` path the encoder has

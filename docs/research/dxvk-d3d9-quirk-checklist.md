@@ -27,11 +27,11 @@ Status meanings:
 
 | App | Current coverage | Gap |
 | --- | --- | --- |
-| `d9vk-d3d9-clear` | device create/reset/present/backbuffer copy path | no DXVK-specific D3D9 quirks |
-| `d9vk-d3d9-buffer` | `D3DPOOL_DEFAULT` vertex-buffer lock permutations | no texture/surface locks, no non-default pool matrix, no lost-device cases |
-| `d9vk-d3d9-ffp-quirks` | API-level texture-stage-state clamp behavior, opt-in with `--app` | no texcoord transform, DOTPRODUCT3, or Dref pixel oracle yet |
-| `d9vk-d3d9-lock-matrix` | buffer, index-buffer, texture, and surface lock matrix for common flag/pool combinations | no lost-device cases, no multisample non-lockable assertion, no multiplane pitch rows |
-| `d9vk-d3d9-triangle` | shader compile/create, texture upload, render target, depth stencil, draw, stretch/present path | no fixed-function quirk oracle |
+| `conf-d3d9-clear` | device create/reset/present/backbuffer copy path | no DXVK-specific D3D9 quirks |
+| `conf-d3d9-buffer` | `D3DPOOL_DEFAULT` vertex-buffer lock permutations | no texture/surface locks, no non-default pool matrix, no lost-device cases |
+| `conf-d3d9-ffp-quirks` | API-level texture-stage-state clamp behavior, opt-in with `--app` | no texcoord transform, DOTPRODUCT3, or Dref pixel oracle yet |
+| `conf-d3d9-lock-matrix` | buffer, index-buffer, texture, and surface lock matrix for common flag/pool combinations | no lost-device cases, no multisample non-lockable assertion, no multiplane pitch rows |
+| `conf-d3d9-triangle` | shader compile/create, texture upload, render target, depth stencil, draw, stretch/present path | no fixed-function quirk oracle |
 
 ## 1. Lock Matrix
 
@@ -58,9 +58,9 @@ DXVK behavior to mirror:
 Current `dxmt9` references:
 
 - Legacy app coverage is limited to
-  `experiments/apps/D9VKD3D9Buffer/d3d9_buffer.cpp:40`.
+  `experiments/apps/conf-d3d9-buffer/conf_d3d9_buffer.cpp:40`.
 - Current lock-matrix app is
-  `experiments/apps/D9VKD3D9LockMatrix/d3d9_lock_matrix.cpp`.
+  `experiments/apps/conf-d3d9-lock-matrix/conf_d3d9_lock_matrix.cpp`.
 - Texture lock entry is `src/d3d9/core.cpp:1925`.
 - Surface lock entry is `src/d3d9/core.cpp:2096`.
 - C bridge forwards lock flags without much normalization in
@@ -79,7 +79,7 @@ Required test shape:
 
 Current test placement:
 
-- Implemented as `d9vk-d3d9-lock-matrix`.
+- Implemented as `conf-d3d9-lock-matrix`.
 - Built by `scripts/build_apps/build_dx9_fast_sanity_apps.sh`.
 - Run by default in `scripts/run_suites/run_dx9_fast_sanity_suite.sh` across
   `dxmt9-x64`, `builtin-x64`, and `builtin-x86`.
@@ -113,9 +113,9 @@ Current `dxmt9` references:
   `src/d3d9/device_c_device_state_draw.cpp:219`.
 - Core virtual entry is `include/dxmt9/com.hpp:120`.
 - Existing sample-style FFP coverage exists only incidentally in apps such as
-  `experiments/apps/irrlicht/20.ManagedLights.cpp:334`.
+  `experiments/apps/sample-d3d9-irrlicht-lights/sample_d3d9_irrlicht_lights.cpp:334`.
 - API-level TSS clamp coverage is
-  `experiments/apps/D9VKD3D9FixedFunctionQuirks/d3d9_fixed_function_quirks.cpp`.
+  `experiments/apps/conf-d3d9-ffp-quirks/conf_d3d9_ffp_quirks.cpp`.
 
 Required test shape:
 
@@ -128,7 +128,7 @@ Required test shape:
 
 Recommendation:
 
-- Keep extending `d9vk-d3d9-ffp-quirks`.
+- Keep extending `conf-d3d9-ffp-quirks`.
 - TSS clamp is already covered as an API-only section because it is cheap and
   catches the Dawn of Magic 2 compatibility behavior.
 - Keep texcoord/DOTPRODUCT3/Dref as pixel checks over a small render target so

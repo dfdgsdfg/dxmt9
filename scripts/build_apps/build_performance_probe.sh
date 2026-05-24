@@ -3,9 +3,9 @@ set -euo pipefail
 
 script_dir=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
 repo_root=$(cd -- "$script_dir/../.." && pwd)
-app_dir="$repo_root/experiments/apps/PerformanceProbe"
-source_file="$app_dir/PerformanceProbe.cpp"
-output_file="$app_dir/PerformanceProbe.exe"
+app_dir="$repo_root/experiments/apps/perf-d3d9-probe"
+source_file="$app_dir/perf_d3d9_probe.cpp"
+output_file="$app_dir/perf-d3d9-probe.exe"
 
 if [[ -d "$HOME/llvm-mingw/bin" ]]; then
   export PATH="$HOME/llvm-mingw/bin:$PATH"

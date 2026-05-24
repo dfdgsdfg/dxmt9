@@ -46,7 +46,7 @@ MODE_ENV = {
     },
 }
 
-DEFAULT_APPS = ["dx-sdk-basichlsl", "dx-sdk-tutorial07"]
+DEFAULT_APPS = ["sample-d3d9-basic-hlsl", "sample-d3d9-tutorial07"]
 DEFAULT_MODES = ["default", "async", "async-cap"]
 PRESENT_COUNTER_FIELDS = [
     "present_encoded",

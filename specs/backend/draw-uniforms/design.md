@@ -365,7 +365,7 @@ call sites until the encoder begins emitting the new command.
 | `R-BACK-12.16` host-MSL layout match | `tests/native/core/draw_uniforms_layout_spec.cpp` — `static_assert(offsetof + sizeof)` mirrored against parsed MSL prelude. |
 | `R-BACK-12.17` cache key | Existing shader-source-hash cache key tests preserve this. |
 | `R-BACK-12.18` static struct sizes | `static_assert` blocks in `dxmt9_draw_state.hpp` plus the layout spec. |
-| `R-BACK-12.19` per-draw write bound | `experiments/apps/PerformanceProbe` rerun under `dxmt9-perf-offscreen-heavy` — assert new `uniform_*_bytes` counters scale with state churn, not draw count. |
+| `R-BACK-12.19` per-draw write bound | `experiments/apps/perf-d3d9-probe` rerun under `perf-d3d9-offscreen-heavy` — assert new `uniform_*_bytes` counters scale with state churn, not draw count. |
 | `R-BACK-12.20` per-draw API call bound | Same probe — assert `setBuffer*` calls/draw approach 0 on the sticky-bind common case. |
 | `R-BACK-12.21` counter coverage | `scripts/check/assert_perf_counters.py` extension — fail if expected `uniform_*` keys missing. |
 

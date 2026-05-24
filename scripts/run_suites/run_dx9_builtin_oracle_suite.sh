@@ -5,9 +5,9 @@ script_dir=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
 repo_root=$(cd -- "$script_dir/../.." && pwd)
 
 apps=(
-  "dx-sdk-basichlsl"
-  "dx-sdk-tutorial07"
-  "dxut-simple-sample"
+  "sample-d3d9-basic-hlsl"
+  "sample-d3d9-tutorial07"
+  "sample-d3d9-dxut-simple"
 )
 
 usage() {
