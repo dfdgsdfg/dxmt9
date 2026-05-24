@@ -84,14 +84,18 @@ a `file:line` anchor checked against the live tree.
 | `NULL` colorless render target — classification + behavioral (closed 2026-05-24) | C.5 | R-FORMAT-12; no color backing, `beginRenderPass` omits color attachment, Lock/readback→INVALIDCALL. `2f7b04e`, gate `dxmt9-resource-format-boundary-spec` (render-pass omission deferred to GPU validation) |
 | `RESZ` MSAA depth-resolve — **end-to-end code-complete** (closed 2026-05-24) | C.5 | R-FORMAT-11. Full pipeline: PE sentinel detect (`82c89fc`) → wire record + validate/classify (`1e914a4`) → recorder retention + replay-execute + `MetalCommandKind::DepthResolve` + encoder dispatch (`d5572fc`) → `encodeDepthResolve` primitive + winemetal depth-resolve ABI (`8568fab`). Classification `2f619f0`. Gates: `dxmt9-wmt-depth-resolve-abi-spec`, `dxmt9-chunk-record-hazard-spec`, `dxmt9-state-draw-transform-spec`, `dxmt9-dod-replay-observer-spec`; full lockstep build clean. **GPU MSAA+INTZ-readback pixel validation deferred** (needs a runtime probe). |
 | `SAMP_MIPMAPLODBIAS` per-sampler mip LOD bias — shader-side (closed 2026-05-24) | B.3/B.10#4 | `bfb8a2d`; `SamplerLodBias` uniform (fragment slot 4) + `sample(…, bias(b))` at FFP (4) + translated-texld (1) sites; `bias(0)` no-op. Gate `dxmt9-shader-transform-spec` (+ texture readbacks confirm no-op). GPU mip-bias validation deferred. NOT an ABI change. |
+| `D3DRS_TWOSIDEDSTENCILMODE` (185) per-face stencil ops (closed 2026-05-24) | B.10#7 | `19f4274`+`fc10a5b`; mode-on → back-face ops from CCW render states (`MTLDepthStencilDescriptor.backFaceStencil`); mode-off mirrors front (byte-identical default). Also fixed a latent CCW-state leak. Gate `dxmt9-stencil-ref-spec`. |
+| `D3DCLIPSTATUS9` Set/GetClipStatus — Wine-matching stub + defined default (closed 2026-05-24) | B.8/D.* | `6f190b9`+`fbfd917` (A'); reject null, accept-without-store, GetClipStatus returns the defined all-visible default. No HW clip-flag accumulation exists (matches wined3d). Gate `dxmt9-core-device-com-spec` (native) + `d3d9_device_misc.cpp` (conformance, compiles; Wine-run deferred). |
+| COM silent-`S_OK` stub gates — SetNPatchMode/GetNPatchMode, DeletePatch, Set/GetClipStatus (closed 2026-05-24) | D.* | `6f190b9`; conformance gates in `d3d9_device_misc.cpp` pin the documented no-op/INVALIDCALL contracts (compiles in the win32 PE build; Wine-run validation deferred). |
 
 ### Remaining actionable gaps (verified still open)
 
-| Item | Section | Priority | Notes |
-|---|---|---|---|
-| COM silent-`S_OK` stub gates — 4 PE-only remain (SetNPatchMode/GetNPatchMode, SetClipStatus/GetClipStatus, DeletePatch) | D.* | Med | native `com::` harness reached 3/7; rest need the PE conformance lane (`d3d9_device_misc.cpp` already gates SetDialogBoxMode/ValidateDevice) |
-| `D3DRS_TWOSIDEDSTENCILMODE` (185) behavioural gate | B.10#7 | Low | backend uses single-ref/both-faces; partial backend limit |
-| `D3DCLIPSTATUS9` Set/GetClipStatus | B.8/D.* | Low | nil-return arguably correct (D3D9 has no per-primitive clip tracking) |
+**None.** All actionable D3D9 API-coverage gaps are closed — implemented (and
+build/unit-verified) or resolved as documented-unsupported/non-gap (below).
+Outstanding work is limited to **deferred GPU-runtime pixel validations**
+(RESZ MSAA→INTZ readback, NULL color-attachment omission, MIPMAPLODBIAS mip
+selection) and **conformance Wine-run validation** of the new PE gates — each
+needs a Wine + GPU readback probe, not further implementation.
 
 ### Resolved as documented-unsupported / non-gap (no implementation planned)
 
