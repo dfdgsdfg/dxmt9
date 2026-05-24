@@ -26,6 +26,21 @@ ffp_key_determinism_spec = executable(
 test('dxmt9-ffp-key-determinism-spec', ffp_key_determinism_spec,
      env: dxmt9_native_test_env)
 
+# FFP triadic texture-stage args (D3DTSS_COLORARG0 / ALPHAARG0 consumed by
+# D3DTOP_MULTIPLYADD / D3DTOP_LERP). Asserts the arg0 fields are captured
+# into the FfpPixelKey (key + hash sensitivity) and that makeFfpPixelSource
+# emits the triadic op bodies reading arg0. gap_d3d9 §B.10#10 / §B.2.
+ffp_triadic_msl_spec = executable(
+  'dxmt9-ffp-triadic-msl-spec',
+  'ffp_triadic_msl_spec.cpp',
+  include_directories: dxmt9_inc,
+  dependencies: [dxmt9_dep, dxmt9_frontend_dep],
+  link_args: dxmt9_test_link_args,
+)
+
+test('dxmt9-ffp-triadic-msl-spec', ffp_triadic_msl_spec,
+     env: dxmt9_native_test_env)
+
 # Present drawable acquire policy resolver matrix — locks the priority
 # `Async > SyncOnSubmit > PreAcquire > Sync` and the "0" / empty-string
 # treatment of the three DXMT9_PRESENT_* env strings. See the header
