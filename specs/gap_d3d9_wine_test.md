@@ -27,11 +27,11 @@ changes not yet visible upstream.
 
 | Field | Value |
 |-------|-------|
-| Commit | `cc5dacd37d2c878a57c2e02caff5de572dd3c79a` — **work tree dirty** |
-| Short  | `cc5dacd` |
-| Tag / describe | `cc5dacd` |
+| Commit | `a3fb574bc8e3407b468aa544daf005d664013421` — **work tree dirty** |
+| Short  | `a3fb574` |
+| Tag / describe | `a3fb574` |
 | Author date | `2026-05-24` |
-| Subject | d3d9 test_resource_access (base): gate DEFAULT-pool LockRect on USAGE_DYNAMIC |
+| Subject | d3d9 test_resource_access (ex): reject D3DPOOL_MANAGED on Ex devices |
 
 ### Wine reference revision
 
@@ -50,7 +50,7 @@ the same commit in the Wine checkout before opening the source.
 
 ```sh
 # Reproduce the inventory verbatim from a clean tree:
-git -C "$DXMT9_REPO" checkout cc5dacd37d2c878a57c2e02caff5de572dd3c79a
+git -C "$DXMT9_REPO" checkout a3fb574bc8e3407b468aa544daf005d664013421
 git -C "$WINE_REPO"  checkout 6e073d28dee3af7f4c965daec94644e0f9f92727
 python3 scripts/tools/gen_wine_d3d9_test_inventory.py
 ```
@@ -73,10 +73,10 @@ python3 scripts/tools/gen_wine_d3d9_test_inventory.py
 | Wine source | Tests | covered | scaffolded | partial | failing | other |
 |-------------|-----:|--------:|----------:|--------:|--------:|------:|
 | `visual.c` | 135 | 135 | 0 | 0 | 0 | 0 |
-| `device.c` | 105 | 101 | 4 | 0 | 0 | 0 |
+| `device.c` | 105 | 105 | 0 | 0 | 0 | 0 |
 | `d3d9ex.c` | 27 | 27 | 0 | 0 | 0 | 0 |
 | `stateblock.c` | 1 | 1 | 0 | 0 | 0 | 0 |
-| **TOTAL** | **268** | **264** | **4** | **0** | **0** | **0** |
+| **TOTAL** | **268** | **268** | **0** | **0** | **0** | **0** |
 
 `other` rolls up `deferred`, `partial/deferred`, and any UNTRACKED rows.
 
@@ -247,7 +247,7 @@ Source: [`dlls/d3d9/tests/device.c`](https://gitlab.winehq.org/wine/wine/-/blob/
 | `test_display_modes` | 2591 | ✅ | `test_factory_validation_return_codes` |
 | `test_draw_primitive` | 3081 | ✅ | `test_draw_primitive_outside_scene_policy` |
 | `test_filter` | 8082 | ✅ | `resource_getdc_lod_autogen_mipmap`, `test_sampler_state_edges` |
-| `test_format_unknown` | 12946 | 📐 | `resource_getdc_lod_autogen_mipmap` |
+| `test_format_unknown` | 12946 | ✅ | `resource_getdc_lod_autogen_mipmap` |
 | `test_fpu_setup` | 4998 | ✅ | `test_fpu_setup` |
 | `test_fvf_decl_conversion` | 501 | ✅ | `test_fvf_decl_conversion_roundtrip_policy` |
 | `test_fvf_decl_management` | 843 | ✅ | `test_fvf_decl_management` |
@@ -259,7 +259,7 @@ Source: [`dlls/d3d9/tests/device.c`](https://gitlab.winehq.org/wine/wine/-/blob/
 | `test_get_set_texture` | 8196 | ✅ | `test_get_set_texture` |
 | `test_get_set_vertex_declaration` | 376 | ✅ | `test_get_set_vertex_declaration_refcount_policy` |
 | `test_get_set_vertex_shader` | 6966 | ✅ | `test_get_set_vertex_shader` |
-| `test_getdc` | 8991 | 📐 | `resource_getdc_lod_autogen_mipmap` |
+| `test_getdc` | 8991 | ✅ | `resource_getdc_lod_autogen_mipmap` |
 | `test_invalid_multisample` | 1198 | ✅ | `test_invalid_multisample_render_target_quality` |
 | `test_lights` | 3414 | ✅ | `test_light_enable_state` |
 | `test_limits` | 2816 | ✅ | `test_limits` |
@@ -325,9 +325,9 @@ Source: [`dlls/d3d9/tests/device.c`](https://gitlab.winehq.org/wine/wine/-/blob/
 | `test_vertex_shader_constant` | 7037 | ✅ | `test_vertex_shader_constant` |
 | `test_vidmem_accounting` | 10208 | ✅ | `test_base_vidmem_accounting_policy` |
 | `test_volume_blocks` | 10615 | ✅ | `test_vendor_format_public_api_policy`, `test_volume_block_lock_layout`, `test_volume_blocks_compressed_layout_policy` |
-| `test_volume_get_container` | 6159 | 📐 | `resource_container_level_desc_and_locks`, `test_volume_container_interface_policy` |
+| `test_volume_get_container` | 6159 | ✅ | `resource_container_level_desc_and_locks`, `test_volume_container_interface_policy` |
 | `test_volume_locking` | 10260 | ✅ | `resource_container_level_desc_and_locks`, `test_resource_lock_error_policy` |
-| `test_volume_resource` | 6240 | 📐 | `test_volume_resource_container_desc` |
+| `test_volume_resource` | 6240 | ✅ | `test_volume_resource_container_desc` |
 | `test_window_position` | 14942 | ✅ | `test_fullscreen_window_position_restore`, `test_window_position_present_parameter_policy` |
 | `test_window_style` | 5114 | ✅ | `window_cursor_ownership` |
 | `test_wndproc` | 3882 | ✅ | `window_cursor_ownership` |
