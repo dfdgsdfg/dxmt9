@@ -5035,14 +5035,14 @@ area = "surface-blit"
 owner = "core/resources"
 requirements = ["R-TEST-12.13", "R-TEST-12.14"]
 acceptance = ["StretchRect between channel-equivalent A8R8G8B8 and X8R8G8B8 DEFAULT-pool offscreen surfaces returns S_OK in both directions; A8R8G8B8 -> R5G6B5 conversion returns S_OK or D3DERR_INVALIDCALL; DXT1 -> A8R8G8B8 conversion returns D3DERR_INVALIDCALL when the runtime can create a DXT1 offscreen surface; otherwise the compressed probe is skipped"]
-status = "failing"
+status = "partial"
 
 [[case.evidence]]
 lane = "builtin"
 arch = "x64"
-status = "failing"
+status = "passing"
 source = "tests/conformance/d3d9/evidence/sikarugir-cx-24.0.7-builtin-x64.json:1"
-summary = "Sikarugir-CX 24.0.7 builtin lane x64 2026-05-24 — failing in chunked runner snapshot; follow-up."
+summary = "Sikarugir-CX 24.0.7 builtin lane x64 2026-05-24 — passing after PE-side StretchRect rejects compressed↔uncompressed format mismatch."
 
 [[case]]
 executable = "dxmt9-d3d9-conformance.exe"

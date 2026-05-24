@@ -2675,6 +2675,25 @@ public:
                     return D3DERR_INVALIDCALL;
                 }
             }
+            // Wine d3d9 test_format_conversion (visual.c:27960) contract:
+            // StretchRect does not perform block-compressed <-> linear
+            // conversion. If either surface is a DXT* compressed format,
+            // the other surface must have the same compressed format.
+            // (DXT1 -> A8R8G8B8 must fail with D3DERR_INVALIDCALL.)
+            // stretch_rect_format_conversion_policy.
+            if (gotSrc && gotDst) {
+                auto isCompressed = [](D3DFORMAT f) {
+                    return f == D3DFMT_DXT1 || f == D3DFMT_DXT2 ||
+                           f == D3DFMT_DXT3 || f == D3DFMT_DXT4 ||
+                           f == D3DFMT_DXT5;
+                };
+                const bool srcIsCompressed = isCompressed(sdSrc.Format);
+                const bool dstIsCompressed = isCompressed(sdDst.Format);
+                if ((srcIsCompressed || dstIsCompressed) &&
+                    sdSrc.Format != sdDst.Format) {
+                    return D3DERR_INVALIDCALL;
+                }
+            }
         }
         D9CRect cs{}, cd{};
         if (srcRect) cs = toR(*srcRect); if (dstRect) cd = toR(*dstRect);
