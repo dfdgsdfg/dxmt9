@@ -253,6 +253,27 @@ core_d3d9_multiply_transform_spec = executable(
 test('dxmt9-core-d3d9-multiply-transform-spec', core_d3d9_multiply_transform_spec,
      env: dxmt9_native_test_env_vars + ['DXMT_DEBUG_DISABLE_SHADER_ARCHIVE=1'])
 
+# Wine D3D9 behavioral oracle: present-parameter validation
+# (test_present_parameter_validation / test_present_parameter_normalization),
+# Ex create/reset mode validation (test_ex_create_reset_mode_validation),
+# and query GetDataSize per-type sizes (test_query_get_data_size_policy /
+# occlusion_query_public_sizes / timestamp_query_public_sizes). Pure
+# value-level pins on the PE-side validators in
+# src/d3d9/d3d9_pe_device.cpp (pePresentParamsHResult /
+# peResetExModeHResult / peNormalizeBackBufferCount /
+# peQueryDataSizeForType) — d3d9_pe_device.cpp is a Windows-only TU so
+# the helpers are mirrored here at value level.
+core_d3d9_device_validation_spec = executable(
+  'dxmt9-core-d3d9-device-validation-spec',
+  'core_d3d9_device_validation_spec.cpp',
+  include_directories: dxmt9_inc,
+  dependencies: [dxmt9_dep, dxmt9_frontend_dep],
+  link_args: dxmt9_test_link_args,
+)
+
+test('dxmt9-core-d3d9-device-validation-spec', core_d3d9_device_validation_spec,
+     env: dxmt9_native_test_env_vars + ['DXMT_DEBUG_DISABLE_SHADER_ARCHIVE=1'])
+
 # CPU-only chunk-build microbenchmark (V1 audit item (a), boundary B1).
 # Times the cost of building POD chunk records from a typical D3D9
 # hot-path mix isolated from any bridge / Metal / GPU work. Output

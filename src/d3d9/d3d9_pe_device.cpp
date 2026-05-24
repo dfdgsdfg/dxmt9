@@ -98,6 +98,110 @@ static bool isUnknownFormat(D3DFORMAT fmt) {
     return fmt == D3DFMT_UNKNOWN;
 }
 
+// ── D3D9 present-parameter / Ex-mode / query validation ──────────────────
+// Pure, PE-side validators that encode the Windows-runtime HRESULT
+// contract for the device's swap-chain-shaped entry points (Reset,
+// ResetEx, CreateAdditionalSwapChain) and IDirect3DQuery9::GetDataSize.
+//
+// Wine behavioral oracle (read, not modified):
+//   * tests/conformance/d3d9/d3d9_conformance_swapchain.c:
+//       test_present_parameter_validation, test_present_parameter_normalization
+//   * tests/conformance/d3d9/d3d9_conformance_device.c:
+//       test_ex_create_reset_mode_validation, test_query_get_data_size_policy
+//   * tests/conformance/d3d9/d3d9_queries.cpp:
+//       occlusion_query_public_sizes, timestamp_query_public_sizes
+// (Wine commit 6e073d28dee3af7f4c965daec94644e0f9f92727.)
+//
+// The native value-level pin is
+// tests/native/core/core_d3d9_device_validation_spec.cpp — keep the two
+// in lockstep (d3d9_pe_device.cpp is a Windows-only TU, so the native
+// spec mirrors these by value rather than instantiating the device).
+//
+// NOTE: CreateDevice-time validation lives in d3d9_pe_factory.cpp
+// (validatePresentParametersD3D, parallel-owned). These device-side
+// validators apply the identical present-parameter rule at the device's
+// own re-configuration entry points without crossing the C bridge first.
+static bool isValidPresentationIntervalRaw(UINT interval) {
+    return interval == D3DPRESENT_INTERVAL_DEFAULT ||
+           interval == D3DPRESENT_INTERVAL_ONE ||
+           interval == D3DPRESENT_INTERVAL_TWO ||
+           interval == D3DPRESENT_INTERVAL_THREE ||
+           interval == D3DPRESENT_INTERVAL_FOUR ||
+           interval == D3DPRESENT_INTERVAL_IMMEDIATE;
+}
+
+// Mirror: core_d3d9_device_validation_spec.cpp::mirrorPresentParamsHResult.
+[[nodiscard]] static HRESULT pePresentParamsHResult(D3DSWAPEFFECT swapEffect,
+                                                    UINT backBufferCount,
+                                                    UINT presentationInterval,
+                                                    bool extended) {
+    switch (swapEffect) {
+    case D3DSWAPEFFECT_DISCARD:
+    case D3DSWAPEFFECT_FLIP:
+    case D3DSWAPEFFECT_COPY:
+        break;
+    case D3DSWAPEFFECT_FLIPEX:
+        if (extended) break;
+        return D3DERR_INVALIDCALL;
+    default:
+        return D3DERR_INVALIDCALL;
+    }
+
+    const UINT maxBackBufferCount = extended ? 30u : 3u;
+    if (backBufferCount > maxBackBufferCount) {
+        return D3DERR_INVALIDCALL;
+    }
+    // COPY swap effect supports at most a single back buffer.
+    if (swapEffect == D3DSWAPEFFECT_COPY && backBufferCount > 1u) {
+        return D3DERR_INVALIDCALL;
+    }
+    if (!isValidPresentationIntervalRaw(presentationInterval)) {
+        return D3DERR_INVALIDCALL;
+    }
+    return D3D_OK;
+}
+
+// Mirror: core_d3d9_device_validation_spec.cpp::mirrorResetExModeHResult.
+// hasMode == (pFsMode != nullptr); when hasMode is false modeSize/modeW/
+// modeH are ignored.
+[[nodiscard]] static HRESULT peResetExModeHResult(bool windowed, bool hasMode,
+                                                  UINT modeSize, UINT modeW,
+                                                  UINT modeH, UINT ppW, UINT ppH) {
+    if (hasMode && modeSize != sizeof(D3DDISPLAYMODEEX)) {
+        return D3DERR_INVALIDCALL;
+    }
+    // Windowed ResetEx must pass a NULL mode; fullscreen must pass a mode.
+    if (windowed ? hasMode : !hasMode) {
+        return D3DERR_INVALIDCALL;
+    }
+    // Fullscreen mode dimensions must match the requested back-buffer size
+    // (this also rejects a zero-dimension mode when the back buffer is sized).
+    if (hasMode && (modeW != ppW || modeH != ppH)) {
+        return D3DERR_INVALIDCALL;
+    }
+    return D3D_OK;
+}
+
+// Mirror: core_d3d9_device_validation_spec.cpp::mirrorNormalizeBackBufferCount.
+// BackBufferCount == 0 normalizes to 1 (the documented minimum the
+// swap-chain reports back through GetPresentParameters).
+[[nodiscard]] static UINT peNormalizeBackBufferCount(UINT count) {
+    return count == 0u ? 1u : count;
+}
+
+// Mirror: core_d3d9_device_validation_spec.cpp::mirrorQueryDataSizeForType.
+// Per-type IDirect3DQuery9::GetDataSize byte size (0 = unsupported type).
+[[nodiscard]] static DWORD peQueryDataSizeForType(D3DQUERYTYPE type) {
+    switch (type) {
+    case D3DQUERYTYPE_EVENT:             return sizeof(BOOL);
+    case D3DQUERYTYPE_OCCLUSION:         return sizeof(DWORD);
+    case D3DQUERYTYPE_TIMESTAMP:         return sizeof(UINT64);
+    case D3DQUERYTYPE_TIMESTAMPDISJOINT: return sizeof(BOOL);
+    case D3DQUERYTYPE_TIMESTAMPFREQ:     return sizeof(UINT64);
+    default:                             return 0u;
+    }
+}
+
 // T4 (D3D9Ex shared-handle, SYSTEMMEM partial): for SYSTEMMEM textures
 // the test_user_memory oracle (Wine d3d9ex tests) requires that
 //   - 0 levels (auto-mip)            -> D3DERR_INVALIDCALL
@@ -1986,6 +2090,15 @@ public:
             D3DPRESENT_PARAMETERS* pPP, IDirect3DSwapChain9** ppSC) noexcept override {
         if (!pPP || !ppSC) return D3DERR_INVALIDCALL;
         *ppSC = nullptr;
+        // Present-parameter validation (same rule as CreateDevice / Reset):
+        // invalid swap effect, BackBufferCount over the cap, COPY with > 1
+        // back buffer, and undocumented presentation intervals are rejected
+        // with D3DERR_INVALIDCALL before any swap chain is created.
+        if (const HRESULT vhr = pePresentParamsHResult(pPP->SwapEffect,
+                pPP->BackBufferCount, pPP->PresentationInterval, extended_);
+            FAILED(vhr)) {
+            return vhr;
+        }
         D9CPresentParams cpp{};
         // minimal fill
         cpp.backBufferWidth  = pPP->BackBufferWidth;
@@ -2017,9 +2130,7 @@ public:
         //     zeroed.
         // Tests: test_additional_swapchain_backbuffer_bounds at
         // tests/conformance/d3d9/d3d9_conformance_swapchain.c:443-444.
-        if (pPP->BackBufferCount == 0) {
-            pPP->BackBufferCount = 1;
-        }
+        pPP->BackBufferCount = peNormalizeBackBufferCount(pPP->BackBufferCount);
         pPP->hDeviceWindow = nullptr;
         return S_OK;
     }
@@ -2056,6 +2167,15 @@ public:
     HRESULT STDMETHODCALLTYPE Reset(D3DPRESENT_PARAMETERS* pPP) noexcept override {
         std::lock_guard<std::recursive_mutex> recorderLock(recorderMutex_);
         if (!pPP) return D3DERR_INVALIDCALL;
+        // Present-parameter validation (same rule as CreateDevice): invalid
+        // swap effect, BackBufferCount over the cap, COPY with > 1 back
+        // buffer, and undocumented presentation intervals are rejected with
+        // D3DERR_INVALIDCALL before any device state is torn down.
+        if (const HRESULT vhr = pePresentParamsHResult(pPP->SwapEffect,
+                pPP->BackBufferCount, pPP->PresentationInterval, extended_);
+            FAILED(vhr)) {
+            return vhr;
+        }
         D9CPresentParams cpp{};
         cpp.backBufferWidth  = pPP->BackBufferWidth;
         cpp.backBufferHeight = pPP->BackBufferHeight;
@@ -4398,9 +4518,19 @@ public:
     /* ── query ── */
     HRESULT STDMETHODCALLTYPE CreateQuery(D3DQUERYTYPE type,
                                            IDirect3DQuery9** ppQ) noexcept override {
+        // Query-type support gate. Unsupported / out-of-range types return
+        // D3DERR_NOTAVAILABLE — including the support-probe form
+        // CreateQuery(type, NULL), which must NOT mutate *ppQ (it is NULL).
+        // peQueryDataSizeForType reports a non-zero size for exactly the
+        // supported set {EVENT, OCCLUSION, TIMESTAMP, TIMESTAMPDISJOINT,
+        // TIMESTAMPFREQ}; everything else (e.g. 0xdeadbeef) reports 0.
+        // Oracle: test_query_get_data_size_policy, query_support_probe.
+        if (peQueryDataSizeForType(type) == 0u) return D3DERR_NOTAVAILABLE;
         D9CQuery* q = dxmt9c_device_create_query(dev_, (uint32_t)type);
         if (!q) return D3DERR_NOTAVAILABLE;
         if (!ppQ) {
+            // Support-probe form: the type is supported, report S_OK but
+            // create no object (caller passed a NULL out pointer).
             dxmt9c_query_release(q);
             return S_OK;
         }
@@ -4514,11 +4644,23 @@ public:
     HRESULT STDMETHODCALLTYPE ResetEx(D3DPRESENT_PARAMETERS* pPP,
                                        D3DDISPLAYMODEEX* pFsMode) noexcept override {
         if (!pPP) return D3DERR_INVALIDCALL;
-        if (pFsMode && pFsMode->Size != sizeof(D3DDISPLAYMODEEX)) return D3DERR_INVALIDCALL;
-        if (pPP->Windowed ? pFsMode != nullptr : pFsMode == nullptr) return D3DERR_INVALIDCALL;
-        if (pFsMode && (pFsMode->Width != pPP->BackBufferWidth
-                || pFsMode->Height != pPP->BackBufferHeight)) {
-            return D3DERR_INVALIDCALL;
+        // ResetEx windowed/fullscreen mode rules: wrong mode Size, a mode
+        // supplied for a windowed reset (or missing for a fullscreen reset),
+        // and a fullscreen mode whose dimensions do not match the requested
+        // back-buffer size are all rejected with D3DERR_INVALIDCALL.
+        if (const HRESULT mhr = peResetExModeHResult(pPP->Windowed != FALSE,
+                pFsMode != nullptr, pFsMode ? pFsMode->Size : 0u,
+                pFsMode ? pFsMode->Width : 0u, pFsMode ? pFsMode->Height : 0u,
+                pPP->BackBufferWidth, pPP->BackBufferHeight);
+            FAILED(mhr)) {
+            return mhr;
+        }
+        // Present-parameter validation (same rule as Reset / CreateDevice),
+        // evaluated on the extended lane (FLIPEX allowed, cap 30).
+        if (const HRESULT vhr = pePresentParamsHResult(pPP->SwapEffect,
+                pPP->BackBufferCount, pPP->PresentationInterval, extended_);
+            FAILED(vhr)) {
+            return vhr;
         }
         D9CPresentParams cpp{};
         cpp.backBufferWidth  = pPP->BackBufferWidth;
