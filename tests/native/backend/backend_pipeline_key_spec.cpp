@@ -200,10 +200,14 @@ void testMrtColorWriteMaskDefaultAndOverride() {
     checkEq(keys[i].pixelFormat, 0u, "render-state helper leaves pixel format unresolved");
   }
 
+  // Per-RT independent masks: RS_COLOR_WRITE_ENABLE drives only RT0; RT1..3 keep
+  // their all-channels default (each reads its own ...ENABLE1/2/3 slot).
   desc.rs.values[RS_COLOR_WRITE_ENABLE] = 0x5u;
   keys = makeBlendKeys(makeFlatDrawFixture(desc).hot);
-  for (std::size_t i = 0; i < kMaxRenderTargets; ++i) {
-    checkEq(keys[i].colorWriteMask, 0x5u, "color write mask override applies to every MRT key");
+  checkEq(keys[0].colorWriteMask, 0x5u, "RS_COLOR_WRITE_ENABLE drives RT0");
+  for (std::size_t i = 1; i < kMaxRenderTargets; ++i) {
+    checkEq(keys[i].colorWriteMask, 0xfu,
+            "RS_COLOR_WRITE_ENABLE no longer collapses onto RT1..3 (per-RT slots independent)");
   }
 
   keys = makeBlendKeys(makeFlatDrawFixture(desc).hot, true);
