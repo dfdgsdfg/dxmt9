@@ -570,6 +570,14 @@ struct RecordingBackend final : BackendDevice {
     colorFills.push_back(desc);
   }
 
+  // R-FORMAT-11 — RESZ MSAA depth resolve. Device::reszDepthResolve builds
+  // the DepthResolveDesc (MSAA source surface + INTZ destination's level-0
+  // surface handle) and submits it through this seam; the recorder lets the
+  // depth-resolve spec assert the constructed desc without a Metal device.
+  void submitDepthResolve(const DepthResolveDesc& desc) override {
+    depthResolves.push_back(desc);
+  }
+
   void present(const SwapDesc& desc) override {
     presents.push_back(desc);
   }
@@ -608,6 +616,7 @@ struct RecordingBackend final : BackendDevice {
   ReadbackPixels readbackSurfacePixels;
   bool readbackSurfaceResult = false;
   std::vector<ColorFillDesc> colorFills;
+  std::vector<DepthResolveDesc> depthResolves;
   std::vector<SwapDesc> presents;
   u32 flushCount = 0;
   DeviceLostObserver deviceLostObserver;

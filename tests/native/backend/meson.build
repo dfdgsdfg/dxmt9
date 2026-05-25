@@ -154,6 +154,36 @@ render_pass_actions_spec = executable(
 test('dxmt9-render-pass-actions-spec', render_pass_actions_spec,
      env: dxmt9_native_test_env_vars)
 
+# R-FORMAT-12 — D3DFMT_NULL depth-only (colorless) render-pass attachment
+# decisions. Pure value transforms (encoders::renderPassAdmitsRt0 /
+# colorAttachmentIncluded) extracted from beginRenderPass so the
+# color-omitted / depth-retained policy is unit-testable without a Metal
+# device. Modeled on render_pass_actions_spec.cpp.
+null_rt_attachment_spec = executable(
+  'dxmt9-null-rt-attachment-spec',
+  'null_rt_attachment_spec.cpp',
+  include_directories: dxmt9_inc,
+  dependencies: [dxmt9_dep, dxmt9_frontend_dep],
+  link_args: dxmt9_test_link_args,
+)
+
+test('dxmt9-null-rt-attachment-spec', null_rt_attachment_spec)
+
+# R-FORMAT-11 — RESZ MSAA->INTZ depth resolve. Covers the POINTSIZE-sentinel
+# trigger detection (core::isReszDepthResolveSentinel) and the
+# Device::reszDepthResolve DepthResolveDesc construction (MSAA source +
+# INTZ level-0 destination), the latter driven through a RecordingBackend
+# observer. Uses the tests/native/core fixture; no Metal device.
+resz_depth_resolve_spec = executable(
+  'dxmt9-resz-depth-resolve-spec',
+  'resz_depth_resolve_spec.cpp',
+  include_directories: dxmt9_inc,
+  dependencies: [dxmt9_dep, dxmt9_frontend_dep],
+  link_args: dxmt9_test_link_args,
+)
+
+test('dxmt9-resz-depth-resolve-spec', resz_depth_resolve_spec)
+
 metal_encoder_recorder_spec = executable(
   'dxmt9-metal-encoder-recorder-spec',
   'metal_encoder_recorder_spec.cpp',

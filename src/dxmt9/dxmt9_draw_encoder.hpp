@@ -174,6 +174,44 @@ bool nextDepthOperationIsClear(const core::ChunkSlot& slot,
                                std::size_t startCommandIndex,
                                core::Handle depthHandle);
 
+// R-FORMAT-12 — colorless (D3DFMT_NULL) render-pass attachment decisions,
+// extracted as pure value transforms so the depth-only-pass policy is
+// unit-testable without a Metal device / ObjC++ encoder (the begin path
+// itself lives in beginRenderPass and consumes these). Modeled on the
+// existing applyColorLoadPolicy transcription in
+// tests/native/backend/render_pass_actions_spec.cpp.
+//
+// Inputs are the three observable facts about render-target slot 0 that
+// gate whether the render pass opens at all:
+//   surfaceExists — pool.findSurface(rt0) returned a record.
+//   hasTexture    — that record owns a backend (Metal) color texture.
+//   isNullRt      — that record's format is Format::NullRt (colorless).
+struct ColorlessRenderPassRt0 {
+  bool surfaceExists = false;
+  bool hasTexture = false;
+  bool isNullRt = false;
+};
+
+// True iff beginRenderPass should proceed to build the pass for this RT0.
+// A NULL render target has a surface record but deliberately no color
+// texture, so it admits a depth/stencil-only pass; a genuinely missing RT0
+// or a normal color RT whose texture failed to allocate aborts the pass.
+// One-to-one with the guard at dxmt9_draw_encoder.mm beginRenderPass entry.
+inline constexpr bool renderPassAdmitsRt0(const ColorlessRenderPassRt0& rt0) {
+  return rt0.surfaceExists && (rt0.hasTexture || rt0.isNullRt);
+}
+
+// True iff a color-attachment slot contributes a color attachment to the
+// pass. The per-attachment loop includes a slot only when its surface owns
+// a backend texture, so a NULL render target (surface present, no texture)
+// is omitted — the depth/stencil attachment becomes the effective target.
+// One-to-one with the `if (!surface || !surface->texture) continue;` filter
+// in the color-attachment loop.
+inline constexpr bool colorAttachmentIncluded(bool surfaceExists,
+                                              bool hasTexture) {
+  return surfaceExists && hasTexture;
+}
+
 // Pre-uploaded transient slices for a single draw within a DrawRun
 // batch (Phase 5-B). When the Kind::DrawRun handler pre-batches all UP
 // vertex/index payloads for the run via

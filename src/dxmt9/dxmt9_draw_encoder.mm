@@ -989,9 +989,13 @@ WMT::Reference<WMT::RenderCommandEncoder> beginRenderPass(
   // contributes no color attachment and the bound depth/stencil becomes
   // the effective target). Only abort when RT0 is genuinely missing, or it
   // is a normal color RT that failed to allocate its texture.
-  const bool primaryIsNullRt =
-      primarySurface && primarySurface->desc.format == core::Format::NullRt;
-  if (!primarySurface || (!primarySurface->texture && !primaryIsNullRt)) {
+  const ColorlessRenderPassRt0 rt0{
+      .surfaceExists = primarySurface != nullptr,
+      .hasTexture = primarySurface && static_cast<bool>(primarySurface->texture),
+      .isNullRt =
+          primarySurface && primarySurface->desc.format == core::Format::NullRt,
+  };
+  if (!renderPassAdmitsRt0(rt0)) {
     return {};
   }
   WMTRenderPassInfo passInfo{};
@@ -999,7 +1003,10 @@ WMT::Reference<WMT::RenderCommandEncoder> beginRenderPass(
                                    hot.colorAttachments[0].handle == ctx.queue.currentBackBuffer_;
   for (std::size_t i = 0; i < core::kMaxRenderTargets; ++i) {
     auto* surface = ctx.pool.findSurface(hot.colorAttachments[i].handle.value);
-    if (!surface || !surface->texture) {
+    // R-FORMAT-12: omit any color slot whose surface owns no backend texture
+    // (a NULL render target is the colorless case). See colorAttachmentIncluded.
+    if (!colorAttachmentIncluded(surface != nullptr,
+                                 surface && static_cast<bool>(surface->texture))) {
       continue;
     }
     auto& attachment = passInfo.colors[i];
