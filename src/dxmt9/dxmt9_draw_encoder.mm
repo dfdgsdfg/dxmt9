@@ -1376,6 +1376,17 @@ bool encodeDraw(EncodeContext& ctx,
     WMT::RenderPipelineState pipeline{};
     if (suppressBaseStateLookup(ctx)) {
       pipeline = ctx.drawRecorder->renderPipelineState;
+    } else if (tileFfpMode) {
+      // R-BACK-13.1 two-stage tile-FFP encode: the render command encoder
+      // first rasterizes the geometry with the BASE-COLOUR fragment PSO
+      // (fog / alpha-test / A2C stripped), and only afterwards runs the tile
+      // kernel over the imageblock. So in tile mode the PSO bound here via
+      // setRenderPipelineState is the base-colour render PSO, NOT the tile
+      // PSO. The tile PSO is fetched + dispatched after drawPrimitives below.
+      pipelineRef = ctx.cache.getOrBuildTileFfpBaseColorPipelineForState(
+          ctx.device, ctx.limits, ctx.pool, drawState, ctx.shaderArchive,
+          ctx.shaderArchivePath).get();
+      pipeline = WMT::RenderPipelineState{pipelineRef.handle};
     } else {
       pipelineRef = ctx.cache.getOrBuildDrawPipelineForState(
           ctx.device, ctx.limits, ctx.pool, drawState, ctx.shaderArchive,
@@ -1432,19 +1443,54 @@ bool encodeDraw(EncodeContext& ctx,
             static_cast<unsigned long long>(variantHash)));
       }
     }
-    if (tileFfpMode) {
-      // R-BACK-13.6: tile-shader FFP path. The render encoder hosts
-      // both render and tile commands; setTileRenderPipelineState binds
-      // the tile-stage variant built from makeFfpTilePixelSource and
-      // dispatchThreadsPerTile launches one tile-stage thread per
-      // tile. Metal computes the pass tile size from the bound
-      // attachment shape and exposes it via tileWidth/tileHeight on
-      // the encoder; query that as the source of truth and fall back
-      // to 16x16 (Apple GPU's typical tile dimension) if Metal returns
-      // 0 — older OS or unsupported attachment shapes.
-      // threadgroup_size_matches_tile_size = 1 on the descriptor side
-      // keeps Metal in agreement with the dispatch.
-      encoder.setTileRenderPipelineState(pipeline);
+    // R-BACK-13.1: in BOTH the portable and the tile-FFP base-colour cases
+    // the PSO bound here is an ordinary render pipeline, so the geometry
+    // draw below rasterizes into the imageblock. The tile-FFP imageblock
+    // post-pass (setTileRenderPipelineState + dispatchThreadsPerTile) is
+    // deferred until AFTER drawPrimitives — see emitTileFfpPostPass below.
+    recordedSetRenderPipelineState(ctx, encoder, pipeline);
+    countPipelineBind();
+  }
+  // R-BACK-13.1 two-stage tile-FFP encode — tile post-pass.
+  //
+  // For a tile-FFP draw the geometry is rasterized below by the base-colour
+  // render PSO; the fog / alpha-test / A2C effects then run as a tile kernel
+  // (makeFfpTilePixelSource) over the imageblock. Metal allows a tile
+  // dispatch inside a render encoder *after* draws: the tile kernel
+  // reads/writes the same imageblock the draw wrote. We fetch the tile PSO
+  // on EVERY tile-mode draw (not just the base-bind iteration) because each
+  // draw in a DrawRun needs its own post-pass over its just-written pixels;
+  // the cache lookup is a hit after the first build. The dispatch itself is
+  // deferred to fire on every successful-draw return path via a scope guard
+  // so it always runs immediately after this draw's drawPrimitives.
+  WMT::Reference<WMT::RenderPipelineState> tileFfpPsoRef;
+  WMT::RenderPipelineState tileFfpPso{};
+  if (tileFfpMode && !suppressBaseStateLookup(ctx)) {
+    tileFfpPsoRef = ctx.cache.getOrBuildDrawPipelineForState(
+        ctx.device, ctx.limits, ctx.pool, drawState, ctx.shaderArchive,
+        ctx.shaderArchivePath, /*tileFfpMode=*/true, argbufHybridMode,
+        argbufResourceArray).get();
+    tileFfpPso = WMT::RenderPipelineState{tileFfpPsoRef.handle};
+  }
+  bool tileFfpDrawIssued = false;
+  struct TileFfpPostPassScope {
+    WMT::RenderCommandEncoder& encoder;
+    WMT::RenderPipelineState& pso;
+    bool& issued;
+    bool tile;
+    ~TileFfpPostPassScope() {
+      if (!tile || !issued || !pso) {
+        return;
+      }
+      // R-BACK-13.5: rebind the tile-stage variant, then dispatch one tile
+      // thread per imageblock lane. tileWidth/tileHeight come from the bound
+      // attachment shape; fall back to 16x16 (typical Apple GPU tile) when
+      // Metal reports 0. threadgroup_size_matches_tile_size on the descriptor
+      // keeps Metal in agreement with the dispatch extents. Setting the tile
+      // PSO does not disturb the render PSO bound for any subsequent draw on
+      // this encoder — the next draw rebinds its base-colour PSO when its
+      // base state changes (DrawRun iter boundaries set skipBaseStateBind).
+      encoder.setTileRenderPipelineState(pso);
       uint64_t tileW = encoder.tileWidth();
       uint64_t tileH = encoder.tileHeight();
       if (tileW == 0u || tileH == 0u) {
@@ -1452,12 +1498,8 @@ bool encodeDraw(EncodeContext& ctx,
         tileH = 16u;
       }
       encoder.dispatchThreadsPerTile(WMTSize{tileW, tileH, 1u});
-      countPipelineBind();
-    } else {
-      recordedSetRenderPipelineState(ctx, encoder, pipeline);
-      countPipelineBind();
     }
-  }
+  } tileFfpPostPassScope{encoder, tileFfpPso, tileFfpDrawIssued, tileFfpMode};
   auto uploadTransientBuffer = [&](const void* data, std::size_t len, std::size_t alignment) {
     return ctx.queue.uploadTransientBuffer(
         std::span<const std::byte>(reinterpret_cast<const std::byte*>(data), len),
@@ -2579,6 +2621,9 @@ bool encodeDraw(EncodeContext& ctx,
       pushDrawVolatile();
       {
         PerfScope issueScope(perf::countEncodeDrawIssueCpuTime);
+        // R-BACK-13.1: mark the draw issued so the tile-FFP post-pass scope
+        // guard runs the imageblock kernel after this geometry draw.
+        tileFfpDrawIssued = true;
         recordedDrawPrimitives(ctx, encoder, primitiveType, 0, (uint64_t)vertexCount);
       }
       return true;
@@ -2641,6 +2686,8 @@ bool encodeDraw(EncodeContext& ctx,
       pushDrawVolatile();
       {
         PerfScope issueScope(perf::countEncodeDrawIssueCpuTime);
+        // R-BACK-13.1: see the post-pass scope guard above.
+        tileFfpDrawIssued = true;
         recordedDrawIndexedPrimitives(ctx, encoder, primitiveType,
                                       toIndexType(pv.indexType),
                                       (uint64_t)vertexCount, indexBuffer,
@@ -2676,6 +2723,8 @@ bool encodeDraw(EncodeContext& ctx,
     recordedSetVertexBytes(ctx, encoder, &vol, sizeof(DrawVolatile), 5);
     perf::countUniformVolatilePush();
     PerfScope issueScope(perf::countEncodeDrawIssueCpuTime);
+    // R-BACK-13.1: see the post-pass scope guard above.
+    tileFfpDrawIssued = true;
     recordedDrawPrimitives(ctx, encoder, primitiveType, 0, (uint64_t)vertexCount);
   }
   return true;
