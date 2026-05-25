@@ -229,8 +229,17 @@ static bool isValidPresentationIntervalRaw(UINT interval) {
 // allowSystemMemUserMemory is false for cube/volume textures since the
 // partial scope only covers 2D textures and offscreen plain surfaces.
 // The width/height == 1x1 narrowing for 2D textures is enforced at the
-// call site (validate* doesn't see W/H). DEFAULT-pool sharing remains
-// E_NOTIMPL until the IOSurface / MTLSharedTexture bridge lands.
+// call site (validate* doesn't see W/H).
+//
+// DEFAULT-pool shared-handle contract (Wine d3d9 d3d9_device_CreateTexture
+// / CreateCubeTexture / CreateVolumeTexture, commit
+// 6e073d28dee3af7f4c965daec94644e0f9f92727): on an extended (D3D9Ex) device,
+// a non-NULL pSharedHandle in D3DPOOL_DEFAULT logs a FIXME and then *proceeds
+// to create the resource normally* — the handle is ignored, not rejected.
+// dxmt9 mirrors that observable HRESULT (S_OK + a real DEFAULT-pool resource)
+// even though cross-process sharing is not wired; an actual shared backing
+// would need an IOSurface / MTLSharedTexture winemetal bridge. The earlier
+// placeholder returned E_NOTIMPL here, which diverges from the oracle.
 [[nodiscard]] static HRESULT validateSharedHandleForTexture(bool extended,
                                               HANDLE* sharedHandle,
                                               D3DPOOL pool,
@@ -244,25 +253,28 @@ static bool isValidPresentationIntervalRaw(UINT interval) {
         return S_OK;
     }
     if (pool != D3DPOOL_DEFAULT) return D3DERR_INVALIDCALL;
-    return E_NOTIMPL;
+    // Extended + DEFAULT: Wine proceeds (handle ignored). Create normally.
+    return S_OK;
 }
 
-// T4: per Wine test_user_memory (~line 793-798), VB/IB with pSharedHandle
-// and SYSTEMMEM (or any non-DEFAULT pool) must return D3DERR_NOTAVAILABLE.
+// VB/IB shared-handle contract (Wine d3d9 d3d9_device_CreateVertexBuffer /
+// CreateIndexBuffer): non-extended -> E_NOTIMPL; extended + non-DEFAULT pool
+// -> D3DERR_NOTAVAILABLE; extended + DEFAULT -> FIXME then proceed normally.
 [[nodiscard]] static HRESULT validateSharedHandleForBuffer(bool extended,
                                              HANDLE* sharedHandle,
                                              D3DPOOL pool) {
     if (!sharedHandle) return S_OK;
     if (!extended) return E_NOTIMPL;
     if (pool != D3DPOOL_DEFAULT) return D3DERR_NOTAVAILABLE;
-    return E_NOTIMPL;
+    // Extended + DEFAULT: Wine proceeds (handle ignored). Create normally.
+    return S_OK;
 }
 
-// T4: per Wine test_user_memory (~line 800-830), offscreen plain surface
-// with pSharedHandle:
-//   - SYSTEMMEM           -> S_OK; user pointer aliased
-//   - SCRATCH             -> D3DERR_INVALIDCALL
-//   - DEFAULT (E_NOTIMPL) -> partial scope, see validateSharedHandleForDefaultSurface
+// Offscreen plain surface shared-handle contract (Wine d3d9
+// d3d9_device_CreateOffscreenPlainSurface):
+//   - SYSTEMMEM -> S_OK; user pointer aliased
+//   - SCRATCH   -> D3DERR_INVALIDCALL
+//   - DEFAULT   -> FIXME then proceed normally (handle ignored)
 [[nodiscard]] static HRESULT validateSharedHandleForSurface(bool extended,
                                               HANDLE* sharedHandle,
                                               D3DPOOL pool,
@@ -275,14 +287,19 @@ static bool isValidPresentationIntervalRaw(UINT interval) {
     }
     if (pool == D3DPOOL_SCRATCH) return D3DERR_INVALIDCALL;
     if (pool != D3DPOOL_DEFAULT) return D3DERR_INVALIDCALL;
-    return E_NOTIMPL;
+    // Extended + DEFAULT: Wine proceeds (handle ignored). Create normally.
+    return S_OK;
 }
 
+// Render-target / depth-stencil surfaces are DEFAULT-pool only. Wine d3d9
+// d3d9_device_CreateRenderTarget / CreateDepthStencilSurface: non-extended
+// -> E_NOTIMPL; extended -> FIXME then proceed normally (handle ignored).
 [[nodiscard]] static HRESULT validateSharedHandleForDefaultSurface(bool extended,
                                                      HANDLE* sharedHandle) {
     if (!sharedHandle) return S_OK;
     if (!extended) return E_NOTIMPL;
-    return E_NOTIMPL;
+    // Extended: Wine proceeds (handle ignored). Create normally.
+    return S_OK;
 }
 
 static D9CRect toR(const RECT& r) {
