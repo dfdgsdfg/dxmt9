@@ -13,6 +13,7 @@
 // FlatDrawStateView so tests run on the native build without GPU.
 
 #include <cstdint>
+#include <cstdlib>
 #include <exception>
 #include <iostream>
 #include <sstream>
@@ -265,6 +266,16 @@ void testTileFfpDisabledWhenShaderContextMissing() {
 }  // namespace
 
 int main() {
+  // R-BACK-13.* — selectTileFfpForPass consults the DXMT9_TILE_FFP escape
+  // hatch FIRST: when it resolves to `off` (the current interim-safety
+  // default, see tileFfpModeOverride in dxmt9_pipeline_cache.cpp) every draw
+  // short-circuits to {Portable, None} BEFORE the genuine GpuFamily / NotFfp /
+  // precision gates this spec exercises. Pin the override to `auto` for the
+  // duration of the spec so the real decision tree is reachable; the env is
+  // read once and cached on the first selector call, so set it before any
+  // selectTileFfpForPass() invocation. This does not change the runtime
+  // default — it only selects the code path under test.
+  setenv("DXMT9_TILE_FFP", "auto", 1);
   try {
     testGpuFamilyFallback();
     testEligibleFfpPicksTile();

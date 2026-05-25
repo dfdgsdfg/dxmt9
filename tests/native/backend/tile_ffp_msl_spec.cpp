@@ -136,9 +136,18 @@ void testFogArithmeticTypedFloat() {
   checkNotContains(src, "half fog",
                     "fog variable is never typed half");
   // Fog blend must promote the imageblock-read color to float regardless
-  // of the slot type, then demote on writeback.
-  checkContains(src, "float4 color = float4(slot->color)",
+  // of the slot type, then demote on writeback. The implicit-layout
+  // imageblock is read by value via read(tid) (the `.data(tid)` pointer
+  // accessor only compiles for the explicit layout and previously made the
+  // tile kernel fail to compile — guard against regressing to it).
+  checkContains(src, "float4 color = float4(tileSlot.color)",
                 "imageblock value is promoted to float4 for FFP arithmetic");
+  checkContains(src, "imageblock_data.read(tid)",
+                "implicit-layout imageblock is read by value via read(tid)");
+  checkContains(src, "imageblock_data.write(tileSlot, tid)",
+                "modified slot is written back via write(value, tid)");
+  checkNotContains(src, ".data(tid)",
+                   "tile kernel never uses the explicit-layout data() accessor");
 }
 
 void testAlphaTestEmitsBranchOnly() {
