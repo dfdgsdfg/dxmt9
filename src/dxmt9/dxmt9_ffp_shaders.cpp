@@ -1164,7 +1164,15 @@ std::string makeFfpPixelSource(const FfpPixelKey& key,
     }
     out << "  color = current;\n";
   }
-  if (key.alphaTestEnable) {
+  // R-BACK-13.1 — when this is the tile-FFP base-colour variant, the fog
+  // blend and the alpha-test discard are NOT emitted here; the tile kernel
+  // (makeFfpTilePixelSource) applies them over the rasterized base colour in
+  // the imageblock. Emitting them here too would double-apply fog and would
+  // discard fragments the tile kernel is supposed to alpha-test (the tile
+  // kernel reads back the imageblock color, so a discarded base fragment
+  // would never reach it).
+  const bool emitFogAlphaTest = !context.stripFogAlphaTestForTileBase;
+  if (emitFogAlphaTest && key.alphaTestEnable) {
     out << "  bool pass = true;\n";
     out << "  switch (ffpPs.alphaTestFunc) {\n";
     out << "    case 2u: pass = color.a < ffpPs.alphaRef; break;\n";
@@ -1178,7 +1186,7 @@ std::string makeFfpPixelSource(const FfpPixelKey& key,
     out << "  }\n";
     out << "  if (!pass) { discard_fragment(); }\n";
   }
-  if (key.fogMode != FogMode::None) {
+  if (emitFogAlphaTest && key.fogMode != FogMode::None) {
     out << "  float fogDepth = color.a;\n";
     out << "  color = dxmt9_apply_fog(color, ffpPs, fogDepth, in.fogFactor);\n";
   }

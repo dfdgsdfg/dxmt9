@@ -55,6 +55,16 @@ struct ShaderSourceContext {
   // same predicate gates the encoder's slot-4 bind, keeping declaration and
   // binding in lockstep.
   bool samplerLodBias = false;
+  // R-BACK-13.1 — tile-FFP base-colour pass gate. When true the FFP pixel
+  // emitter produces the *base-colour* variant: it computes the same FFP
+  // texture-stage / vertex colour but emits NEITHER the fog blend NOR the
+  // alpha-test `discard_fragment()`. Those effects move to the tile kernel
+  // (`makeFfpTilePixelSource`), which post-processes the rasterized base
+  // colour in the imageblock. Alpha-to-coverage is likewise stripped from
+  // the base PSO (the descriptor's `alpha_to_coverage_enabled` is forced
+  // off on the base-colour build). Only ever set alongside a tile-FFP draw
+  // selection; default off keeps the portable FFP fragment byte-identical.
+  bool stripFogAlphaTestForTileBase = false;
 };
 
 ShaderSourceContext makeShaderSourceContext(const core::DrawShaderLayoutContext& layout,
