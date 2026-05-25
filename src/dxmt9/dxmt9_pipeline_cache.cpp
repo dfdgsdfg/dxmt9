@@ -264,6 +264,10 @@ std::size_t ShaderVariantKeyHash::operator()(const ShaderVariantKey& key) const 
   // fragment-stage and tile-stage variants of the same FFPKeyPS hit
   // distinct cache entries.
   hash = mix(hash, static_cast<u64>(key.tileFfpMode));
+  // R-BACK-13.1: the tile-FFP base-colour sub-key participates in the hash so
+  // the base-colour render PSO (fog/alpha-test/A2C stripped) never collides
+  // with the portable fragment PSO of the same FFPKeyPS.
+  hash = mix(hash, static_cast<u64>(key.tileFfpBaseColor));
   // R-BACK-12.22 / 12.23: argbuf-hybrid mode participates in the key
   // hash so Stage 1 and Stage 2 PSOs of the same shader live in
   // distinct cache slots.
@@ -775,6 +779,70 @@ Cache::getOrBuildDrawPipelineForState(WMT::Reference<WMT::Device> device,
   // a sampler carries a non-zero LOD bias. makeShaderVariantKey already
   // computed key.samplerLodBias from the same predicate the encoder bind reads.
   shaderSource.samplerLodBias = key.samplerLodBias;
+  return getOrBuildDrawPipeline(device, key, std::move(shaderSource), archive, archivePath);
+}
+
+std::shared_future<WMT::Reference<WMT::RenderPipelineState>>
+Cache::getOrBuildTileFfpBaseColorPipelineForState(WMT::Reference<WMT::Device> device,
+                                                  const core::BackendLimits& limits,
+                                                  resources::Pool& pool,
+                                                  core::FlatDrawStateView state,
+                                                  WMT::Reference<WMT::BinaryArchive>* archive,
+                                                  const std::string* archivePath) {
+  // R-BACK-13.1 — assemble the same render-pipeline key as the portable
+  // fragment path, then re-stamp it for the base-colour tile-FFP sub-variant:
+  //   * tileFfpBaseColor = true   -> distinct cache slot + source-strip gate
+  //   * tileFfpMode       = false -> this is an ordinary fragment PSO, not the
+  //                                  tile-descriptor build
+  //   * alphaToCoverage   = false -> the base draw must write every covered
+  //                                  fragment so the tile kernel can post-
+  //                                  process it; A2C belongs to the tile pass
+  // and turn on stripFogAlphaTestForTileBase in the emitter context so
+  // makeFfpPixelSource drops the fog blend and the alpha-test discard.
+  const bool srgbWrite =
+      core::flatStateOr(state.hot->renderStates, core::RS_SRGB_WRITE_ENABLE, 0u) != 0;
+  auto resolvePixelFormat = [&](core::Handle handle) -> u32 {
+    if (!handle) {
+      return 0;
+    }
+    if (auto* surface = pool.findSurface(handle.value); surface) {
+      return static_cast<u32>(
+          dxmt9::convert::toPixelFormat(surface->desc.format, limits, srgbWrite));
+    }
+    return 0;
+  };
+
+  std::array<u32, core::kMaxRenderTargets> colorFormats{};
+  auto blendAttachments = detail::makeBlendAttachmentKeys(state, debugForceVisibleDraw());
+  for (std::size_t i = 0; i < core::kMaxRenderTargets; ++i) {
+    colorFormats[i] = resolvePixelFormat(state.hot->colorAttachments[i].handle);
+    blendAttachments[i].pixelFormat = colorFormats[i];
+  }
+  u32 depthFormat = 0;
+  u32 stencilFormat = 0;
+  if (state.hot->depthStencil.handle) {
+    if (auto* surface = pool.findSurface(state.hot->depthStencil.handle.value);
+        surface && surface->desc.depthStencil) {
+      const auto pixelFormat =
+          static_cast<u32>(dxmt9::convert::toPixelFormat(surface->desc.format, limits));
+      depthFormat = dxmt9::convert::formatHasDepthAspect(surface->desc.format) ? pixelFormat : 0u;
+      stencilFormat =
+          dxmt9::convert::formatHasStencilAspect(surface->desc.format) ? pixelFormat : 0u;
+    }
+  }
+  auto key = makeShaderVariantKey(state, colorFormats, blendAttachments, depthFormat, stencilFormat);
+  key.tileFfpMode = false;
+  key.tileFfpBaseColor = true;
+  // A2C is applied by the tile pass (or, where the tile kernel cannot, the
+  // draw stays portable via selectTileFfpForPass). The base draw must not
+  // alpha-to-coverage, so force the descriptor bit off for this sub-variant.
+  key.alphaToCoverage = false;
+  drawshader::ShaderSourceContext shaderSource =
+      drawshader::makeShaderSourceContext(state.shaderContext(), *state.hot);
+  shaderSource.samplerLodBias = key.samplerLodBias;
+  // R-BACK-13.1: drop fog blend + alpha-test discard from the emitted FFP
+  // fragment; the tile kernel re-applies them over the rasterized base colour.
+  shaderSource.stripFogAlphaTestForTileBase = true;
   return getOrBuildDrawPipeline(device, key, std::move(shaderSource), archive, archivePath);
 }
 

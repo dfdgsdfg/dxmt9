@@ -104,6 +104,16 @@ struct ShaderVariantKey {
   // this to false; the selector flips it on at encoder open when the
   // pass is chosen to run on the tile path.
   bool tileFfpMode = false;
+  // R-BACK-13.1 — tile-FFP base-colour pass sub-key. A tile-FFP draw needs
+  // BOTH a render PSO (the base-colour FFP fragment, fog/alpha-test/A2C
+  // stripped) AND the tile PSO (the imageblock post-pass). The two PSOs
+  // share the same FFPKeyPS but must hash to distinct cache entries: the
+  // tile PSO sets tileFfpMode=true (built via newRenderPipelineStateWithTileDescriptor),
+  // the base-colour render PSO sets tileFfpBaseColor=true (built as an
+  // ordinary fragment PSO whose source has stripFogAlphaTestForTileBase set
+  // and whose descriptor forces alpha_to_coverage_enabled off). Never both
+  // true on the same key. Portable-path keys leave both false.
+  bool tileFfpBaseColor = false;
   // R-BACK-12.22 / 12.23 — Stage 2 argbuf-hybrid mode bit. Two draws with
   // the same shaders but different argbuf-mode selection compile separate
   // PSOs (one Stage 1 prelude reading slot 0/3, one Stage 2 prelude
@@ -286,6 +296,23 @@ class Cache {
                                   // that routes texture/sampler reads
                                   // through the slot-30 argbuf arrays.
                                   bool argbufResourceArray = false);
+
+  // R-BACK-13.1 — companion to getOrBuildDrawPipelineForState for the
+  // tile-FFP two-stage encode. Returns the BASE-COLOUR render pipeline: an
+  // ordinary fragment PSO that rasterizes the FFP geometry colour with fog,
+  // alpha-test, and alpha-to-coverage STRIPPED (those run in the tile pass).
+  // The encoder binds this with setRenderPipelineState + drawPrimitives,
+  // then fetches the tile PSO via getOrBuildDrawPipelineForState(tileFfpMode)
+  // and runs dispatchThreadsPerTile over the same render encoder. Keyed with
+  // tileFfpBaseColor=true so it never collides with the portable fragment PSO
+  // (tileFfpBaseColor=false) or the tile PSO (tileFfpMode=true).
+  std::shared_future<WMT::Reference<WMT::RenderPipelineState>>
+  getOrBuildTileFfpBaseColorPipelineForState(WMT::Reference<WMT::Device> device,
+                                             const core::BackendLimits& limits,
+                                             resources::Pool& pool,
+                                             core::FlatDrawStateView state,
+                                             WMT::Reference<WMT::BinaryArchive>* archive,
+                                             const std::string* archivePath);
 
   std::mutex mutex{};
   PipelineMap draw{};
