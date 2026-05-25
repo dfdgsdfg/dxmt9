@@ -2531,6 +2531,30 @@ oracle = "Wine d3d9 visual.c maxmip_test behavior, reduced to D3DSAMP_MAXMIPLEVE
 oracle-date = "2026-05-23"
 
 [[test]]
+file = "texture/dxmt9_mipmaplodbias_readback.shader_test"
+status = "passing"
+source = "dxmt9"
+source_kind = "project-authored"
+license = "MIT"
+license_scope = "project-mit"
+models = ["ffp"]
+opcodes = ["TEX"]
+oracle = "Wine d3d9 visual.c texture_mipmaps_test / maxmip_test behavior, reduced to D3DSAMP_MIPMAPLODBIAS shifting derivative-based mip selection to a coarser level"
+oracle-date = "2026-05-25"
+
+[[test]]
+file = "texture/dxmt9_mipmaplodbias_zero_control_readback.shader_test"
+status = "passing"
+source = "dxmt9"
+source_kind = "project-authored"
+license = "MIT"
+license_scope = "project-mit"
+models = ["ffp"]
+opcodes = ["TEX"]
+oracle = "Wine d3d9 visual.c texture_mipmaps_test / maxmip_test behavior, zero-bias control for D3DSAMP_MIPMAPLODBIAS"
+oracle-date = "2026-05-25"
+
+[[test]]
 file = "vs_specific/dxmt9_vs_constant_no_clamp_readback.shader_test"
 status = "passing"
 source = "dxmt9"

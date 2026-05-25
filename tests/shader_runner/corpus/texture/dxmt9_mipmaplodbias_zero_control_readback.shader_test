@@ -1,0 +1,28 @@
+; [provenance]
+; source: dxmt9
+; source_kind: project-authored
+; license: MIT
+; license_scope: project-mit
+; oracle: Wine d3d9 visual.c texture_mipmaps_test / maxmip_test behavior, zero-bias control for D3DSAMP_MIPMAPLODBIAS
+; oracle-date: 2026-05-25
+
+; Zero-bias control for dxmt9_mipmaplodbias_readback. Same 8x8 red /
+; 4x4 green / 2x2 blue mip chain and same fullscreen quad, but lod_bias=0.0.
+; The implicit derivative LOD log2(8/64) = -3 clamps to mip 0, so the readback
+; must be red. This pins the un-biased baseline: the green readback in the
+; sibling +4.0 test is caused by the bias, not by always sampling a coarse mip.
+
+[test]
+clear rgba(0.0, 0.0, 0.0, 1.0)
+dxmt9-render-state z_enable=disable z_write=disable
+dxmt9-texture 0 8 8 A8R8G8B8 red red red red red red red red red red red red red red red red red red red red red red red red red red red red red red red red red red red red red red red red red red red red red red red red red red red red red red red red red red red red red red red red
+dxmt9-texture-mip 0 1 4 4 A8R8G8B8 green green green green green green green green green green green green green green green green
+dxmt9-texture-mip 0 2 2 2 A8R8G8B8 blue blue blue blue
+dxmt9-sampler 0 address_u=clamp address_v=clamp min_filter=linear mag_filter=linear mip_filter=point lod_bias=0.0
+dxmt9-texture-stage 0 color_op=selectarg1 alpha_op=selectarg1 color_arg1=texture alpha_arg1=texture texcoord_index=0
+dxmt9-bind-texture 0 0
+dxmt9-draw-textured-quad
+probe (16, 16) rgba(1.0, 0.0, 0.0, 1.0) 1
+probe (48, 16) rgba(1.0, 0.0, 0.0, 1.0) 1
+probe (16, 48) rgba(1.0, 0.0, 0.0, 1.0) 1
+probe (48, 48) rgba(1.0, 0.0, 0.0, 1.0) 1

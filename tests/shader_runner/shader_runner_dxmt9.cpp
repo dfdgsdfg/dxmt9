@@ -1252,6 +1252,11 @@ std::optional<SamplerSetup> parseDxmt9Sampler(std::string_view line) {
       sampler.states[SAMP_SRGB_TEXTURE] = parseBoolState(value);
     } else if (key == "maxmiplevel" || key == "max_mip_level") {
       sampler.states[SAMP_MAX_MIP_LEVEL] = parseU32Value(value);
+    } else if (key == "lodbias" || key == "mipmaplodbias") {
+      // D3DSAMP_MIPMAPLODBIAS is a float passed as a DWORD bit-cast; thread it
+      // through the same float->u32 helper the bumpenv float TSS states use so
+      // dxmt9_draw_state.cpp::buildSamplerLodBias can bit_cast<f32> it back.
+      sampler.states[SAMP_MIPMAP_LOD_BIAS] = bitCastFloatState(value);
     } else {
       fail("unsupported dxmt9-sampler state");
     }

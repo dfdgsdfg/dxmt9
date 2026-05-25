@@ -1,0 +1,32 @@
+; [provenance]
+; source: dxmt9
+; source_kind: project-authored
+; license: MIT
+; license_scope: project-mit
+; oracle: Wine d3d9 visual.c texture_mipmaps_test / maxmip_test behavior, reduced to D3DSAMP_MIPMAPLODBIAS shifting derivative-based mip selection to a coarser level
+; oracle-date: 2026-05-25
+
+; An 8x8 base texture (red) with mip 1 = 4x4 (green) and mip 2 = 2x2 (blue),
+; each a distinct solid color, is drawn over the full 64x64 render target.
+; A fullscreen quad maps UV [0,1] across 64 screen pixels, so the implicit
+; derivative LOD is log2(8/64) = -3, which clamps to mip 0 (red) with no bias.
+; With mip_filter=point the chosen mip is round(clamp(LOD)). A +4.0 LOD bias
+; lifts the effective LOD to -3 + 4 = +1, squarely inside the mip-1 band, so
+; the readback must become green. If the readback is red, the bias had no
+; effect and D3DSAMP_MIPMAPLODBIAS is broken; if blue, it over-shifted.
+; The zero-bias control lives in dxmt9_mipmaplodbias_zero_control_readback.
+
+[test]
+clear rgba(0.0, 0.0, 0.0, 1.0)
+dxmt9-render-state z_enable=disable z_write=disable
+dxmt9-texture 0 8 8 A8R8G8B8 red red red red red red red red red red red red red red red red red red red red red red red red red red red red red red red red red red red red red red red red red red red red red red red red red red red red red red red red red red red red red red red red
+dxmt9-texture-mip 0 1 4 4 A8R8G8B8 green green green green green green green green green green green green green green green green
+dxmt9-texture-mip 0 2 2 2 A8R8G8B8 blue blue blue blue
+dxmt9-sampler 0 address_u=clamp address_v=clamp min_filter=linear mag_filter=linear mip_filter=point lod_bias=4.0
+dxmt9-texture-stage 0 color_op=selectarg1 alpha_op=selectarg1 color_arg1=texture alpha_arg1=texture texcoord_index=0
+dxmt9-bind-texture 0 0
+dxmt9-draw-textured-quad
+probe (16, 16) rgba(0.0, 1.0, 0.0, 1.0) 1
+probe (48, 16) rgba(0.0, 1.0, 0.0, 1.0) 1
+probe (16, 48) rgba(0.0, 1.0, 0.0, 1.0) 1
+probe (48, 48) rgba(0.0, 1.0, 0.0, 1.0) 1
