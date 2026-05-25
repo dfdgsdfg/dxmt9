@@ -1484,21 +1484,29 @@ bool encodeDraw(EncodeContext& ctx,
   auto& argbufEncoderForDraw = useResourceArrayArgbuf
                                    ? ctx.queue.resourceArrayEncoderResource()
                                    : ctx.queue.argbufEncoderResource();
-  // R-BACK-12.22..12.26 (resource-array sub-mode, fault candidate 2 —
-  // argbuf lifetime across draws). The constants-only lane re-points each
-  // cbuf [[id]] at a FRESH transient slab per dirty draw, so old draws'
-  // data survives in their own slabs even though the descriptor table is
-  // reused in place. The texture/sampler arrays, by contrast, write the
-  // gpuResourceID INLINE into the argbuf slot — so a second draw that
-  // changes a texture would overwrite the first draw's slot before the GPU
-  // consumed it. To stay correct-by-construction we reserve a FRESH
-  // resource-array argbuf per draw on this lane and rebind slot 30, so each
-  // draw's argbuf (constants + textures) is self-contained. All four
-  // constant categories are forced dirty so updateDirtyArgbufRegions
-  // repopulates them into the fresh slab. (Higher-traffic optimisation —
-  // only re-open when a texture/sampler actually changed — is left for a
-  // follow-up; per-draw reopen is the safe floor.)
-  if (useResourceArrayArgbuf) {
+  // R-BACK-12.22..12.26 (argbuf lifetime across draws). Reserve a FRESH
+  // argbuf per draw and rebind slot 30 so each draw's argbuf is
+  // self-contained. This applies to BOTH Stage 2 lanes:
+  //
+  //   * resource-array lane: texture/sampler arrays write the gpuResourceID
+  //     INLINE into the argbuf slot, so a second draw that changes a texture
+  //     would overwrite the first draw's slot before the GPU consumed it.
+  //
+  //   * constants-only lane: the cbuf DATA goes to a fresh transient slab per
+  //     dirty draw (uploadTransientBuffer), but the argbuf descriptor table
+  //     itself is anchored once per openArgbuf and re-pointed IN PLACE by
+  //     updateDirtyArgbufRegions. The GPU reads the descriptor table at
+  //     execution time, so multiple draws in one render pass that share a
+  //     single descriptor table all observe the LAST pointer written
+  //     (last-write-wins on constants — dxut-simple overlay PassMix bug).
+  //     Re-opening per draw gives each draw its own descriptor table.
+  //
+  // All four constant categories are forced dirty so the dirty mirror below
+  // repopulates them into the fresh slab. (Higher-traffic optimisation — only
+  // re-open when constants/textures actually changed since the previous draw
+  // on this encoder — is left for a follow-up; per-draw reopen is the safe
+  // floor and matches the resource-array lane's pre-existing behaviour.)
+  if (argbufHybridMode) {
     const auto populated = dxmt9::argbuf_hybrid::openArgbuf(
         ctx.queue, argbufEncoderForDraw, seqId);
     if (populated && !suppressRecordedMetalCalls(ctx)) {
