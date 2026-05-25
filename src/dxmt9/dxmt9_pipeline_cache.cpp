@@ -48,8 +48,17 @@ bool envFlag(const char* name) noexcept {
 // DXMT9_DISABLE_ARGBUF_HYBRID one-shot-static pattern: read once at first
 // use (process-init semantics — env changes after dxmt9 load do not take
 // effect, like the other DXMT9 knobs).
-//   auto  — current heuristic (default, value unset / empty / unrecognized)
-//   off   — never take the tile path; always route the genuine portable lane
+//   off   — never take the tile path; always route the genuine portable lane.
+//           THIS IS THE DEFAULT (value unset / empty / unrecognized) as an
+//           interim safety measure: the tile encode wire (523b66e) issues
+//           setTileRenderPipelineState+dispatchThreadsPerTile INSTEAD OF the
+//           base-colour draw, so any tile-routed draw renders the cleared
+//           imageblock = BLACK. Until the two-stage encode (base-colour draw
+//           THEN tile dispatch) lands and is GPU-readback-validated, tile-FFP
+//           stays off by default. See specs/gap.md R-BACK-13 row.
+//   auto  — explicit opt-in to the selectTileFfpForPass heuristic (the path
+//           the two-stage-encode fix will validate behind this flag, then the
+//           default can flip back to auto once equality holds).
 //   force — take the tile path whenever the genuine eligibility gates still
 //           pass (FFP shape, precision, A2C). NEVER forces an ineligible
 //           draw (non-FFP, textured, vertex-blended, precision-unsafe, A2C),
@@ -60,10 +69,11 @@ TileFfpModeOverride tileFfpModeOverride() noexcept {
   static const TileFfpModeOverride mode = [] {
     const char* env = std::getenv("DXMT9_TILE_FFP");
     if (env) {
-      if (std::strcmp(env, "off") == 0) return TileFfpModeOverride::Off;
+      if (std::strcmp(env, "auto") == 0) return TileFfpModeOverride::Auto;
       if (std::strcmp(env, "force") == 0) return TileFfpModeOverride::Force;
+      // "off" and any unrecognized value fall through to the default.
     }
-    return TileFfpModeOverride::Auto;
+    return TileFfpModeOverride::Off;  // interim safety default — see comment above.
   }();
   return mode;
 }
