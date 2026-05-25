@@ -222,6 +222,15 @@ void testCreateDeviceExModeValidation() {
   check(d3d->CreateDeviceEx(0, winParams, &fsMode) == nullptr,
         "CreateDeviceEx windowed with fullscreen mode rejected");
 
+  // An out-of-range adapter ordinal is rejected (PE layer returns
+  // D3DERR_INVALIDCALL up front; the shared core
+  // createDeviceValidated mirrors the same bounds gate). Oracle:
+  // test_factory_validation_return_codes adapter-ordinal precedence
+  // applied at CreateDevice / CreateDeviceEx.
+  const size_t adapterCount = d3d->GetAdapterCount();
+  check(d3d->CreateDeviceEx(adapterCount, winParams, nullptr) == nullptr,
+        "CreateDeviceEx out-of-range adapter rejected");
+
   checkEq(d3d->Release(), 0u, "factory ex release");
 }
 
