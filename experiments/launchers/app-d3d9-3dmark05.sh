@@ -29,5 +29,5 @@ if [[ "${DXMT_3DMARK05_AUTO_ENTER:-1}" != "0" ]]; then
   ) &
 fi
 
-read -r -a dxmt_app-d3d9-3dmark05_args <<< "${DXMT_3DMARK05_ARGS:--gtall -batchall -featureall -cpuall -nosplash -nosysteminfo -noscreens}"
-exp_run_wine_binary "$DXMT_EXPERIMENT_BINARY" "${dxmt_app-d3d9-3dmark05_args[@]}"
+read -r -a dxmt_3dmark05_args <<< "${DXMT_3DMARK05_ARGS:--gtall -batchall -featureall -cpuall -nosplash -nosysteminfo -noscreens}"
+exp_run_wine_binary "$DXMT_EXPERIMENT_BINARY" "${dxmt_3dmark05_args[@]}"
