@@ -134,6 +134,7 @@ the switch in `CommandQueue::presentBoundary`
 | `DXMT_DEBUG_NO_PER_DRAW_ALLOC` | Trip per-draw alloc invariant | `0` |
 | `DXMT_DEBUG_DISABLE_SHADER_ARCHIVE` | Skip shader archive load/save | `0` |
 | `DXMT9_DISABLE_ARGBUF_HYBRID` | Force Stage 2 argument-buffer hybrid binding path off | `0` |
+| `DXMT9_TILE_FFP` | Tile-FFP path selector override: `auto` / `off` / `force`. `auto` (default) keeps the `selectTileFfpForPass` heuristic. `off` routes every FFP draw down the portable fragment lane regardless of eligibility (clean opt-out, ahead of all gates). `force` takes the tile lane for any draw that genuinely passes every eligibility gate (FFP shape, precision, A2C) — it does **not** force a genuinely-ineligible draw (non-Apple3 / non-FFP / textured / vertex-blended / precision-unsafe / A2C-with-alpha-test), which would mis-emit. Use `force` vs `off` to A/B the tile and portable readbacks of the same eligible non-textured FFP draw (R-BACK-13.*). Read once at first use (`dxmt9_pipeline_cache.cpp::selectTileFfpForPass`). | `auto` |
 | `DXMT_DISABLE_ALPHA_TEST` / `DXMT_DISABLE_CULL` / `DXMT_DISABLE_SCISSOR` | Disable specific state | `0` |
 | `DXMT_FORCE_EXPAND_INDEXED` | Force indexed-→-non-indexed expansion | `0` |
 | `DXMT_FORCE_WINDOWED` | Force windowed mode | `0` |

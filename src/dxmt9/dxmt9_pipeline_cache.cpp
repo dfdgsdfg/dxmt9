@@ -44,6 +44,30 @@ bool envFlag(const char* name) noexcept {
   return env && env[0] != '\0' && std::strcmp(env, "0") != 0;
 }
 
+// R-BACK-13.* tile-FFP ↔ portable equality escape hatch. Mirrors the
+// DXMT9_DISABLE_ARGBUF_HYBRID one-shot-static pattern: read once at first
+// use (process-init semantics — env changes after dxmt9 load do not take
+// effect, like the other DXMT9 knobs).
+//   auto  — current heuristic (default, value unset / empty / unrecognized)
+//   off   — never take the tile path; always route the genuine portable lane
+//   force — take the tile path whenever the genuine eligibility gates still
+//           pass (FFP shape, precision, A2C). NEVER forces an ineligible
+//           draw (non-FFP, textured, vertex-blended, precision-unsafe, A2C),
+//           which would mis-emit; those keep falling back to portable.
+enum class TileFfpModeOverride : std::uint8_t { Auto, Off, Force };
+
+TileFfpModeOverride tileFfpModeOverride() noexcept {
+  static const TileFfpModeOverride mode = [] {
+    const char* env = std::getenv("DXMT9_TILE_FFP");
+    if (env) {
+      if (std::strcmp(env, "off") == 0) return TileFfpModeOverride::Off;
+      if (std::strcmp(env, "force") == 0) return TileFfpModeOverride::Force;
+    }
+    return TileFfpModeOverride::Auto;
+  }();
+  return mode;
+}
+
 std::shared_future<WMT::Reference<WMT::RenderPipelineState>>
 makeReadyPipelineFuture(WMT::Reference<WMT::RenderPipelineState> value = {}) {
   std::promise<WMT::Reference<WMT::RenderPipelineState>> promise;
@@ -745,6 +769,20 @@ Cache::getOrBuildDrawPipelineForState(WMT::Reference<WMT::Device> device,
 }
 
 TileFfpSelection selectTileFfpForPass(core::FlatDrawStateView state, bool supportsApple3) {
+  // R-BACK-13.* DXMT9_TILE_FFP escape hatch (off|force|auto). `off` is a
+  // clean opt-out that routes every draw down the portable lane regardless
+  // of eligibility — keep it ahead of the genuine gates so an A/B probe can
+  // diff the two lanes for the SAME eligible draw. `force` deliberately does
+  // NOT bypass the genuine ineligibility gates below (GpuFamily / NotFfp /
+  // textured / vertex-blend / precision / A2C): forcing the tile kernel onto
+  // any of those would mis-emit. `force` therefore only guarantees the tile
+  // lane for a draw that genuinely passes every gate (the Eligible arm of
+  // the final switch) — which is what makes it the Tile half of the A/B
+  // against `off`'s Portable half for an eligible non-textured FFP draw.
+  const TileFfpModeOverride mode = tileFfpModeOverride();
+  if (mode == TileFfpModeOverride::Off) {
+    return TileFfpSelection{TileFfpDecision::Portable, TileFfpFallbackReason::None};
+  }
   // R-BACK-13.5: tile-FFP is unconditionally off on non-Apple3.
   if (!supportsApple3) {
     return TileFfpSelection{TileFfpDecision::Portable, TileFfpFallbackReason::GpuFamily};
@@ -800,12 +838,22 @@ TileFfpSelection selectTileFfpForPass(core::FlatDrawStateView state, bool suppor
   auto eligibility = ffp::classifyTileFfpEligibility(key, alphaRefNorm, a2c);
   switch (eligibility) {
     case ffp::TileFfpEligibility::Eligible:
+      // The genuinely-eligible draw takes the tile lane under both `auto`
+      // and `force` (`mode` is intentionally not re-checked here — there is
+      // no soft heuristic left to override at this point).
       return TileFfpSelection{TileFfpDecision::Tile, TileFfpFallbackReason::None};
     case ffp::TileFfpEligibility::IneligiblePrecision:
+      // R-BACK-13.* `force` deliberately does NOT promote a precision-unsafe
+      // draw (alpha-ref out of [0,1] / Exp|Exp2 fog) to the tile lane — the
+      // tile kernel cannot reproduce it bit-identically, so forcing it would
+      // mis-emit. Stay portable even under DXMT9_TILE_FFP=force.
       return TileFfpSelection{TileFfpDecision::Portable, TileFfpFallbackReason::Precision};
     case ffp::TileFfpEligibility::IneligibleUnsupportedState:
+      // Likewise A2C-with-alpha-test cannot be replicated tile-side; not
+      // forceable.
       return TileFfpSelection{TileFfpDecision::Portable, TileFfpFallbackReason::UnsupportedState};
   }
+  // Unreachable: classifyTileFfpEligibility is total over the enum.
   return TileFfpSelection{TileFfpDecision::Portable, TileFfpFallbackReason::Precision};
 }
 
