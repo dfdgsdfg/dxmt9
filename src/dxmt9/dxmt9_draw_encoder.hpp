@@ -294,7 +294,16 @@ bool encodeDraw(EncodeContext& ctx,
                  // The PSO built for the draw carries the matching
                  // ShaderVariantKey::argbufResourceArray bit. Default off
                  // keeps the constants-only Stage 2 path byte-identical.
-                 bool argbufResourceArray = false);
+                 bool argbufResourceArray = false,
+                 // R-BACK-12.22..12.26 — when true, reserve a FRESH argbuf
+                 // descriptor table for this draw and rebind slot 30 (each
+                 // draw self-contained). When false, reuse the encoder's
+                 // current argbuf table (correct only when this draw's
+                 // constants/resources are unchanged from the previous draw
+                 // on the same encoder). The caller decides via the uniform
+                 // payload hash; default true preserves the per-draw-reopen
+                 // safe floor for direct callers/tests.
+                 bool reopenArgbufHybrid = true);
 
 // Encode a single chunk's commands into a fresh WMT::CommandBuffer.
 // Returns a QueueSubmissionRecord that the finish loop commits; nullopt

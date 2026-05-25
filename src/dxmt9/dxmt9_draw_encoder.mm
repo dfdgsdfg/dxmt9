@@ -1258,7 +1258,8 @@ bool encodeDraw(EncodeContext& ctx,
                  uniform::DirtyState* dirty,
                  bool tileFfpMode,
                  bool argbufHybridMode,
-                 bool argbufResourceArray) {
+                 bool argbufResourceArray,
+                 bool reopenArgbufHybrid) {
   // Hot per-draw entry. Per codebase_conventions.rules.md, no heap allocation
   // is permitted on this path; the guard is debug-only and asserts this when
   // DXMT_DEBUG_NO_PER_DRAW_ALLOC=1 is set in env. See dxmt9_debug_alloc_guard.
@@ -1502,11 +1503,16 @@ bool encodeDraw(EncodeContext& ctx,
   //     Re-opening per draw gives each draw its own descriptor table.
   //
   // All four constant categories are forced dirty so the dirty mirror below
-  // repopulates them into the fresh slab. (Higher-traffic optimisation — only
-  // re-open when constants/textures actually changed since the previous draw
-  // on this encoder — is left for a follow-up; per-draw reopen is the safe
-  // floor and matches the resource-array lane's pre-existing behaviour.)
-  if (argbufHybridMode) {
+  // repopulates them into the fresh slab.
+  //
+  // `reopenArgbufHybrid` is the caller's optimisation gate (encodeChunk):
+  // the resource-array lane always reopens (texture/sampler inline writes),
+  // while the constants-only lane reopens only when this draw's uniform
+  // payload differs from the previous draw on the same encoder. When false
+  // we leave slot 30 bound to the prior draw's table — correct because its
+  // pointers still describe the unchanged constants — and the dirty mirror
+  // below is a no-op (the prior draw already consumed the const dirty bits).
+  if (argbufHybridMode && reopenArgbufHybrid) {
     const auto populated = dxmt9::argbuf_hybrid::openArgbuf(
         ctx.queue, argbufEncoderForDraw, seqId);
     if (populated && !suppressRecordedMetalCalls(ctx)) {
@@ -2777,6 +2783,14 @@ std::optional<core::metalqueue::QueueSubmissionRecord> encodeChunk(
   // binds per-frequency UBOs.
   uniform::DirtyState uniformDirty = ctx.dirty;
 
+  // R-BACK-12.22..12.26 — constants-only argbuf reopen gate. Tracks the
+  // uniform payload hash last written into the active encoder's argbuf
+  // descriptor table. A DrawRun whose payload matches reuses that table
+  // (no fresh reservation, no rebind); a changed payload forces a fresh
+  // table so draws can't observe last-write-wins on a shared table. Reset
+  // whenever a new encoder opens (its argbuf table starts empty).
+  std::optional<u64> lastArgbufPayloadHash;
+
   // TLA+: EncoderLifecycle variable binding:
   // activeKind  := activeRenderEncoder ? "Render" : activeBlitEncoder ? "Blit" : "None"
   // activeRT    := activeKey while activeRenderEncoder is live; NoRT otherwise.
@@ -2996,6 +3010,10 @@ std::optional<core::metalqueue::QueueSubmissionRecord> encodeChunk(
     // sticky bindings — every uniform category must rebind on the
     // first draw of the new encoder.
     uniform::markAllDirty(uniformDirty);
+    // The fresh encoder's argbuf table (opened above) is empty, so the
+    // first draw of this pass must reopen + populate regardless of its
+    // payload hash.
+    lastArgbufPayloadHash.reset();
     assertEncoderLifecycleInvariant();
   };
 
@@ -3286,6 +3304,16 @@ std::optional<core::metalqueue::QueueSubmissionRecord> encodeChunk(
         // via setVertexBytes per draw with no slab traffic.
         bool baseBound =
             activeDrawStateKey.has_value() && *activeDrawStateKey == hot.key;
+        // R-BACK-12.22..12.26 — constants-only argbuf reopen gate. Every draw
+        // in one DrawRun shares the same uniform payload, so at most the first
+        // draw needs a fresh argbuf table, and only when this run's payload
+        // differs from the previous one on this encoder. The resource-array
+        // lane always reopens (texture/sampler descriptors are written inline
+        // and can change between runs independently of the const hash).
+        const u64 runArgbufPayloadHash = command.drawUniformPayload->hash;
+        const bool argbufPayloadChanged =
+            !lastArgbufPayloadHash.has_value() ||
+            *lastArgbufPayloadHash != runArgbufPayloadHash;
         for (std::size_t i = 0; i < drawCount; ++i) {
           const auto& param = drawParams[i];
           PreUploadedDrawData preData{};
@@ -3293,6 +3321,9 @@ std::optional<core::metalqueue::QueueSubmissionRecord> encodeChunk(
             preData.vertex = upSlices[i * 2u];
             preData.index = upSlices[i * 2u + 1u];
           }
+          const bool reopenArgbuf =
+              activePassUsesArgbufResourceArray ||
+              (i == 0 && argbufPayloadChanged);
           if (encodeDraw(ctx, commandBuffer, activeRenderEncoder, stateView, slot.seqId,
                          /*skipBaseStateBind=*/baseBound,
                          anyUpData ? &preData : nullptr,
@@ -3301,11 +3332,13 @@ std::optional<core::metalqueue::QueueSubmissionRecord> encodeChunk(
                          &uniformDirty,
                          /*tileFfpMode=*/activePassUsesTileFfp,
                          /*argbufHybridMode=*/activePassUsesArgbufHybrid,
-                         /*argbufResourceArray=*/activePassUsesArgbufResourceArray)) {
+                         /*argbufResourceArray=*/activePassUsesArgbufResourceArray,
+                         /*reopenArgbufHybrid=*/reopenArgbuf)) {
             baseBound = true;
             activeDrawStateKey = hot.key;
           }
         }
+        lastArgbufPayloadHash = runArgbufPayloadHash;
         commandBufferHasWork = true;
         break;
       }
