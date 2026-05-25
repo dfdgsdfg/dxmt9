@@ -119,6 +119,18 @@ oracle = "math-derivation"
 oracle-date = "2026-03-29"
 
 [[test]]
+file = "ffp/dxmt9_tile_ffp_fog_equality_readback.shader_test"
+status = "passing"
+source = "dxmt9"
+source_kind = "project-authored"
+license = "MIT"
+license_scope = "project-mit"
+models = ["ffp"]
+opcodes = ["ALPHA_TEST", "PROBE"]
+oracle = "math-derivation"
+oracle-date = "2026-05-25"
+
+[[test]]
 file = "ffp/dxmt9_ffp_vertex_blend_triangle.shader_test"
 status = "passing"
 source = "dxmt9"
