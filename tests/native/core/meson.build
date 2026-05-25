@@ -22,6 +22,24 @@ core_device_com_spec = executable(
 test('dxmt9-core-device-com-spec', core_device_com_spec,
      env: dxmt9_native_test_env_vars + ['DXMT_DEBUG_DISABLE_SHADER_ARCHIVE=1'])
 
+# Device-free pin on the shared D3D9 private-data store
+# (dxmt9::util::ComPrivateData) used by every IDirect3DResource9 /
+# IDirect3DVolume9 PE wrapper. Covers R-CORE-4.10: byte-blob
+# set/overwrite/MOREDATA/NOTFOUND/null-size-query and D3DSPD_IUNKNOWN
+# AddRef-on-set/get, Release-on-overwrite/free/destroy, and
+# invalid-size rejection. Behavioral oracle: Wine test_private_data
+# (mirrored in tests/conformance/d3d9/d3d9_conformance_resource.c).
+core_private_data_spec = executable(
+  'dxmt9-core-private-data-spec',
+  'core_private_data_spec.cpp',
+  include_directories: dxmt9_inc,
+  dependencies: [dxmt9_dep, dxmt9_frontend_dep],
+  link_args: dxmt9_test_link_args,
+)
+
+test('dxmt9-core-private-data-spec', core_private_data_spec,
+     env: dxmt9_native_test_env_vars + ['DXMT_DEBUG_DISABLE_SHADER_ARCHIVE=1'])
+
 core_device_coverage_spec = executable(
   'dxmt9-core-device-coverage-spec',
   'core_device_coverage_spec.cpp',
