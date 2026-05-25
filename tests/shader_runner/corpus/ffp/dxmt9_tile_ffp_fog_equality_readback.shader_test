@@ -1,0 +1,27 @@
+; [provenance]
+; source: dxmt9
+; source_kind: project-authored
+; license: MIT
+; license_scope: project-mit
+; oracle: tile-FFP vs portable-FFP A/B readback equality (R-BACK-13.1)
+; oracle-date: 2026-05-25
+
+; Non-textured FFP draw exercising the tile-eligible FFP feature set
+; (linear table fog + alpha-test). With DXMT9_TILE_FFP=force this draw takes
+; the two-stage tile-shader path: the base-colour render PSO rasterizes the
+; FFP geometry colour (vertex alpha 1.0), then the tile kernel applies fog +
+; alpha-test over the imageblock. With DXMT9_TILE_FFP=off it takes the
+; portable fragment path. Both must read pixel-identical.
+;
+; Math: vertex alpha = 1.0; alpha-test greaterequal 0.5 passes; linear table
+; fog over [start=0, end=1] with fog source = vertex alpha gives fog factor
+; clamp((1 - 1)/(1 - 0)) = 0 => fully fogged => fogcolor (0.25,0.5,0.75) =
+; (64,128,191). The selector forces TEXTURED FFP to portable, so this draw is
+; deliberately non-textured (`draw quad`).
+
+[test]
+clear rgba(0.0, 0.0, 0.0, 1.0)
+dxmt9-render-state fog=on fogmode=linear fogstart=0.0 fogend=1.0 fogcolor=rgba(0.25,0.5,0.75,1.0)
+alpha-test enable greaterequal 0.5
+draw quad
+probe (32, 32) rgba(0.25, 0.5, 0.75, 1.0) 1

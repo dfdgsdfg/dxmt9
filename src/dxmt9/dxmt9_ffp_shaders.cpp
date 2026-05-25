@@ -1303,11 +1303,14 @@ std::string makeFfpTilePixelSource(const FfpPixelKey& key,
     out << "    ushort2 tid [[thread_position_in_threadgroup]],\n";
     out << "    constant FfpPsConsts& ffpPs [[buffer(3)]]) {\n";
   }
-  out << "  threadgroup_imageblock TileColorData* slot = imageblock_data.data(tid);\n";
-  // R-BACK-13.7: even when the imageblock element is `half4`, FFP
-  // arithmetic must be carried in `float` to preserve bit-identity with
-  // the portable path. We promote on read and demote on write-back.
-  out << "  float4 color = float4(slot->color);\n";
+  // R-BACK-13.5/13.7: `imageblock_layout_implicit` imageblocks expose the
+  // per-thread slot via read(tid)/write(value, tid) (the `.data(tid)`
+  // pointer accessor requires the explicit-layout form and does not compile
+  // here). Read the attachment color by value, run the FFP arithmetic in
+  // `float` (never `half`) to preserve bit-identity with the portable path,
+  // then write back the modified slot.
+  out << "  TileColorData tileSlot = imageblock_data.read(tid);\n";
+  out << "  float4 color = float4(tileSlot.color);\n";
   if (key.alphaTestEnable) {
     out << "  if (ffpPs.alphaTestEnable != 0u) {\n";
     out << "    bool pass = true;\n";
@@ -1330,17 +1333,29 @@ std::string makeFfpTilePixelSource(const FfpPixelKey& key,
   if (key.fogMode != FogMode::None) {
     // Fog blend: linear over [fogStart, fogEnd]. Computed in float
     // (R-BACK-13.7) regardless of attachment format.
-    out << "  float fog = clamp((ffpPs.fogEnd - color.a) /\n";
-    out << "                    max(ffpPs.fogEnd - ffpPs.fogStart, 1.0e-6f),\n";
-    out << "                    0.0f, 1.0f);\n";
-    out << "  color = float4(mix(ffpPs.fogColor.rgb, color.rgb, fog), color.a);\n";
+    //
+    // Runtime-gate on `ffpPs.fogMode` exactly as the portable path does:
+    // `makeFfpPixelKey` bakes a non-None fogMode whenever a fog table/vertex
+    // mode render-state is set, but `buildFfpPsConsts` writes
+    // `ffpPs.fogMode = 0` whenever D3DRS_FOGENABLE is off. The portable
+    // `dxmt9_apply_fog` consults `ffpPs.fogMode` at runtime (fog factor 1.0 =>
+    // no blend) so a fog-keyed-but-fog-disabled draw is a no-op there. Without
+    // this guard the tile kernel would blend toward a zeroed fogColor and turn
+    // a fog-disabled draw black (plain-quad regression).
+    out << "  if (ffpPs.fogMode != 0u) {\n";
+    out << "    float fog = clamp((ffpPs.fogEnd - color.a) /\n";
+    out << "                      max(ffpPs.fogEnd - ffpPs.fogStart, 1.0e-6f),\n";
+    out << "                      0.0f, 1.0f);\n";
+    out << "    color = float4(mix(ffpPs.fogColor.rgb, color.rgb, fog), color.a);\n";
+    out << "  }\n";
   }
-  // Demote back to imageblock element type on write.
+  // Demote back to the imageblock element type and write the slot back.
   if (useHalf) {
-    out << "  slot->color = half4(color);\n";
+    out << "  tileSlot.color = half4(color);\n";
   } else {
-    out << "  slot->color = color;\n";
+    out << "  tileSlot.color = color;\n";
   }
+  out << "  imageblock_data.write(tileSlot, tid);\n";
   out << "}\n";
   out << "// ffp tile pixel hash " << key.hash << " fmt " << colorAttachmentPixelFormat << "\n";
   (void)context;
