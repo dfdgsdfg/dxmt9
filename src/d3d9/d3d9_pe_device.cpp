@@ -131,9 +131,18 @@ static bool isValidPresentationIntervalRaw(UINT interval) {
 }
 
 // Mirror: core_d3d9_device_validation_spec.cpp::mirrorPresentParamsHResult.
+//
+// multiSampleType / multiSampleQuality encode the Windows D3D9
+// multisample-vs-swap-effect contract validated by Wine's
+// wined3d_swapchain_state_init: multisampling is only legal with
+// D3DSWAPEFFECT_DISCARD, and a non-zero MultiSampleQuality requires a
+// non-NONE MultiSampleType. (test_swapchain_multisample_reset resets
+// with DISCARD + 2_SAMPLES, which stays valid under this rule.)
 [[nodiscard]] static HRESULT pePresentParamsHResult(D3DSWAPEFFECT swapEffect,
                                                     UINT backBufferCount,
                                                     UINT presentationInterval,
+                                                    D3DMULTISAMPLE_TYPE multiSampleType,
+                                                    UINT multiSampleQuality,
                                                     bool extended) {
     switch (swapEffect) {
     case D3DSWAPEFFECT_DISCARD:
@@ -156,6 +165,15 @@ static bool isValidPresentationIntervalRaw(UINT interval) {
         return D3DERR_INVALIDCALL;
     }
     if (!isValidPresentationIntervalRaw(presentationInterval)) {
+        return D3DERR_INVALIDCALL;
+    }
+    // Multisampled swap chains require D3DSWAPEFFECT_DISCARD; a quality
+    // level cannot be requested without a sample type.
+    if (multiSampleType != D3DMULTISAMPLE_NONE &&
+        swapEffect != D3DSWAPEFFECT_DISCARD) {
+        return D3DERR_INVALIDCALL;
+    }
+    if (multiSampleType == D3DMULTISAMPLE_NONE && multiSampleQuality != 0u) {
         return D3DERR_INVALIDCALL;
     }
     return D3D_OK;
@@ -2095,7 +2113,8 @@ public:
         // back buffer, and undocumented presentation intervals are rejected
         // with D3DERR_INVALIDCALL before any swap chain is created.
         if (const HRESULT vhr = pePresentParamsHResult(pPP->SwapEffect,
-                pPP->BackBufferCount, pPP->PresentationInterval, extended_);
+                pPP->BackBufferCount, pPP->PresentationInterval,
+                pPP->MultiSampleType, pPP->MultiSampleQuality, extended_);
             FAILED(vhr)) {
             return vhr;
         }
@@ -2172,7 +2191,8 @@ public:
         // buffer, and undocumented presentation intervals are rejected with
         // D3DERR_INVALIDCALL before any device state is torn down.
         if (const HRESULT vhr = pePresentParamsHResult(pPP->SwapEffect,
-                pPP->BackBufferCount, pPP->PresentationInterval, extended_);
+                pPP->BackBufferCount, pPP->PresentationInterval,
+                pPP->MultiSampleType, pPP->MultiSampleQuality, extended_);
             FAILED(vhr)) {
             return vhr;
         }
@@ -3641,6 +3661,9 @@ public:
     HRESULT STDMETHODCALLTYPE CreateStateBlock(D3DSTATEBLOCKTYPE type,
                                                 IDirect3DStateBlock9** ppSB) noexcept override {
         if (!ppSB) return D3DERR_INVALIDCALL;
+        // D3D9 creation contract: a failed create must leave the out-pointer
+        // NULL before the error HRESULT is returned.
+        *ppSB = nullptr;
         if (!isValidD3DStateBlockType(type) || stateBlockRecording_) {
             return D3DERR_INVALIDCALL;
         }
@@ -3674,6 +3697,9 @@ public:
     }
     HRESULT STDMETHODCALLTYPE EndStateBlock(IDirect3DStateBlock9** ppSB) noexcept override {
         if (!ppSB) return D3DERR_INVALIDCALL;
+        // D3D9 creation contract: a failed create must leave the out-pointer
+        // NULL before the error HRESULT is returned.
+        *ppSB = nullptr;
         if (!stateBlockRecording_) {
             return D3DERR_INVALIDCALL;
         }
@@ -4658,7 +4684,8 @@ public:
         // Present-parameter validation (same rule as Reset / CreateDevice),
         // evaluated on the extended lane (FLIPEX allowed, cap 30).
         if (const HRESULT vhr = pePresentParamsHResult(pPP->SwapEffect,
-                pPP->BackBufferCount, pPP->PresentationInterval, extended_);
+                pPP->BackBufferCount, pPP->PresentationInterval,
+                pPP->MultiSampleType, pPP->MultiSampleQuality, extended_);
             FAILED(vhr)) {
             return vhr;
         }

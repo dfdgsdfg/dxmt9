@@ -55,6 +55,12 @@ constexpr uint32_t kSwapFlip = 2u;
 constexpr uint32_t kSwapCopy = 3u;
 constexpr uint32_t kSwapFlipEx = 5u;
 
+// D3DMULTISAMPLE_TYPE (<d3d9types.h>): NONE=0, NONMASKABLE=1, 2_SAMPLES=2,
+// ... 16_SAMPLES=16.  The validator only needs NONE vs non-NONE.
+constexpr uint32_t kMsNone = 0u;
+constexpr uint32_t kMs2 = 2u;
+constexpr uint32_t kMs4 = 4u;
+
 // D3DPRESENT_INTERVAL_* (<d3d9.h>): DEFAULT=0, ONE=1, TWO=2, THREE=4,
 // FOUR=8, IMMEDIATE=0x80000000.
 constexpr uint32_t kIntervalDefault = 0u;
@@ -84,9 +90,14 @@ bool mirrorIsValidPresentationIntervalRaw(uint32_t interval) {
          interval == kIntervalFour || interval == kIntervalImmediate;
 }
 
-// Mirrors pePresentParamsHResult().
+// Mirrors pePresentParamsHResult().  multiSampleType / multiSampleQuality
+// encode the Windows D3D9 multisample-vs-swap-effect contract: a
+// multisampled swap chain requires D3DSWAPEFFECT_DISCARD, and a non-zero
+// MultiSampleQuality requires a non-NONE MultiSampleType.
 int32_t mirrorPresentParamsHResult(uint32_t swapEffect, uint32_t backBufferCount,
-                                   uint32_t presentationInterval, bool extended) {
+                                   uint32_t presentationInterval,
+                                   uint32_t multiSampleType,
+                                   uint32_t multiSampleQuality, bool extended) {
   switch (swapEffect) {
   case kSwapDiscard:
   case kSwapFlip:
@@ -107,6 +118,12 @@ int32_t mirrorPresentParamsHResult(uint32_t swapEffect, uint32_t backBufferCount
     return kD3DERR_INVALIDCALL;
   }
   if (!mirrorIsValidPresentationIntervalRaw(presentationInterval)) {
+    return kD3DERR_INVALIDCALL;
+  }
+  if (multiSampleType != kMsNone && swapEffect != kSwapDiscard) {
+    return kD3DERR_INVALIDCALL;
+  }
+  if (multiSampleType == kMsNone && multiSampleQuality != 0u) {
     return kD3DERR_INVALIDCALL;
   }
   return kD3D_OK;
@@ -166,39 +183,39 @@ void testPresentParamsValidation() {
   // Exact cases from test_present_parameter_validation (windowed lane).
   // {windowed, count, swap, interval} -> expected HRESULT.
   // swap=0 is not a valid effect.
-  checkEq(mirrorPresentParamsHResult(0u, 1u, kIntervalImmediate, false),
+  checkEq(mirrorPresentParamsHResult(0u, 1u, kIntervalImmediate, kMsNone, 0u, false),
           kD3DERR_INVALIDCALL, "swap effect 0 is invalid");
   // COPY + count 2 -> INVALIDCALL.
-  checkEq(mirrorPresentParamsHResult(kSwapCopy, 2u, kIntervalImmediate, false),
+  checkEq(mirrorPresentParamsHResult(kSwapCopy, 2u, kIntervalImmediate, kMsNone, 0u, false),
           kD3DERR_INVALIDCALL, "COPY allows only 1 back buffer");
   // DISCARD + count 4 -> INVALIDCALL (> 3 for non-extended).
-  checkEq(mirrorPresentParamsHResult(kSwapDiscard, 4u, kIntervalImmediate, false),
+  checkEq(mirrorPresentParamsHResult(kSwapDiscard, 4u, kIntervalImmediate, kMsNone, 0u, false),
           kD3DERR_INVALIDCALL, "non-extended back buffer count cap is 3");
   // FLIPEX on a non-extended device -> INVALIDCALL.
-  checkEq(mirrorPresentParamsHResult(kSwapFlipEx, 1u, kIntervalImmediate, false),
+  checkEq(mirrorPresentParamsHResult(kSwapFlipEx, 1u, kIntervalImmediate, kMsNone, 0u, false),
           kD3DERR_INVALIDCALL, "FLIPEX requires an extended device");
   // DISCARD + bogus interval 5 -> INVALIDCALL.
-  checkEq(mirrorPresentParamsHResult(kSwapDiscard, 1u, 5u, false),
+  checkEq(mirrorPresentParamsHResult(kSwapDiscard, 1u, 5u, kMsNone, 0u, false),
           kD3DERR_INVALIDCALL, "interval 5 is not a valid presentation interval");
   // COPY + count 0 -> OK (0 is within COPY's <=1 allowance).
-  checkEq(mirrorPresentParamsHResult(kSwapCopy, 0u, kIntervalImmediate, false),
+  checkEq(mirrorPresentParamsHResult(kSwapCopy, 0u, kIntervalImmediate, kMsNone, 0u, false),
           kD3D_OK, "COPY + count 0 is valid");
   // DISCARD + count 3 -> OK (at the non-extended cap).
-  checkEq(mirrorPresentParamsHResult(kSwapDiscard, 3u, kIntervalImmediate, false),
+  checkEq(mirrorPresentParamsHResult(kSwapDiscard, 3u, kIntervalImmediate, kMsNone, 0u, false),
           kD3D_OK, "DISCARD + count 3 is at the cap and valid");
 }
 
 void testPresentParamsExtendedLane() {
   // FLIPEX is allowed only on an extended device.
-  checkEq(mirrorPresentParamsHResult(kSwapFlipEx, 1u, kIntervalImmediate, true),
+  checkEq(mirrorPresentParamsHResult(kSwapFlipEx, 1u, kIntervalImmediate, kMsNone, 0u, true),
           kD3D_OK, "FLIPEX is valid on an extended device");
   // Extended back buffer cap is 30.
-  checkEq(mirrorPresentParamsHResult(kSwapDiscard, 30u, kIntervalDefault, true),
+  checkEq(mirrorPresentParamsHResult(kSwapDiscard, 30u, kIntervalDefault, kMsNone, 0u, true),
           kD3D_OK, "extended back buffer cap is 30");
-  checkEq(mirrorPresentParamsHResult(kSwapDiscard, 31u, kIntervalDefault, true),
+  checkEq(mirrorPresentParamsHResult(kSwapDiscard, 31u, kIntervalDefault, kMsNone, 0u, true),
           kD3DERR_INVALIDCALL, "extended back buffer count 31 exceeds the cap");
   // COPY's <=1 rule still applies on an extended device.
-  checkEq(mirrorPresentParamsHResult(kSwapCopy, 2u, kIntervalImmediate, true),
+  checkEq(mirrorPresentParamsHResult(kSwapCopy, 2u, kIntervalImmediate, kMsNone, 0u, true),
           kD3DERR_INVALIDCALL, "COPY allows only 1 back buffer even when extended");
 }
 
@@ -207,13 +224,36 @@ void testPresentParamsValidIntervals() {
   const uint32_t valid[] = {kIntervalDefault, kIntervalOne, kIntervalTwo,
                             kIntervalThree, kIntervalFour, kIntervalImmediate};
   for (uint32_t iv : valid) {
-    checkEq(mirrorPresentParamsHResult(kSwapDiscard, 1u, iv, false), kD3D_OK,
+    checkEq(mirrorPresentParamsHResult(kSwapDiscard, 1u, iv, kMsNone, 0u, false), kD3D_OK,
             "documented presentation interval is accepted");
   }
   for (uint32_t iv : {3u, 5u, 7u, 16u, 0x40000000u}) {
-    checkEq(mirrorPresentParamsHResult(kSwapDiscard, 1u, iv, false),
+    checkEq(mirrorPresentParamsHResult(kSwapDiscard, 1u, iv, kMsNone, 0u, false),
             kD3DERR_INVALIDCALL, "undocumented presentation interval is rejected");
   }
+}
+
+void testPresentParamsMultiSample() {
+  // Windows D3D9 (wined3d_swapchain_state_init): multisampling requires
+  // D3DSWAPEFFECT_DISCARD.  test_swapchain_multisample_reset resets with
+  // DISCARD + 2_SAMPLES, the only legal combination.
+  checkEq(mirrorPresentParamsHResult(kSwapDiscard, 1u, kIntervalDefault, kMs2, 0u, false),
+          kD3D_OK, "DISCARD + 2x MSAA is valid");
+  checkEq(mirrorPresentParamsHResult(kSwapDiscard, 1u, kIntervalDefault, kMs4, 0u, false),
+          kD3D_OK, "DISCARD + 4x MSAA is valid");
+  // Non-DISCARD swap effects reject any non-NONE multisample type.
+  checkEq(mirrorPresentParamsHResult(kSwapCopy, 1u, kIntervalDefault, kMs2, 0u, false),
+          kD3DERR_INVALIDCALL, "COPY + MSAA is rejected");
+  checkEq(mirrorPresentParamsHResult(kSwapFlip, 2u, kIntervalDefault, kMs2, 0u, false),
+          kD3DERR_INVALIDCALL, "FLIP + MSAA is rejected");
+  checkEq(mirrorPresentParamsHResult(kSwapFlipEx, 1u, kIntervalDefault, kMs4, 0u, true),
+          kD3DERR_INVALIDCALL, "FLIPEX + MSAA is rejected even on extended");
+  // A quality level cannot be requested without a sample type.
+  checkEq(mirrorPresentParamsHResult(kSwapDiscard, 1u, kIntervalDefault, kMsNone, 1u, false),
+          kD3DERR_INVALIDCALL, "non-zero quality with NONE sample type is rejected");
+  // NONE + zero quality is the default and stays valid.
+  checkEq(mirrorPresentParamsHResult(kSwapDiscard, 1u, kIntervalDefault, kMsNone, 0u, false),
+          kD3D_OK, "NONE + zero quality is valid");
 }
 
 void testResetExModeValidation() {
@@ -288,6 +328,7 @@ int main() {
     testPresentParamsValidation();
     testPresentParamsExtendedLane();
     testPresentParamsValidIntervals();
+    testPresentParamsMultiSample();
     testResetExModeValidation();
     testBackBufferCountNormalization();
     testQueryDataSizePerType();

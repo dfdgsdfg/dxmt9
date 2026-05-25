@@ -94,6 +94,17 @@ static bool isValidPresentationIntervalRaw(UINT interval) {
     if (!isValidPresentationIntervalRaw(pp.PresentationInterval)) {
         return D3DERR_INVALIDCALL;
     }
+    // Windows D3D9 (wined3d_swapchain_state_init): multisampling is only
+    // legal with D3DSWAPEFFECT_DISCARD, and a non-zero MultiSampleQuality
+    // requires a non-NONE MultiSampleType. Mirrors pePresentParamsHResult
+    // in d3d9_pe_device.cpp (Reset / ResetEx / CreateAdditionalSwapChain).
+    if (pp.MultiSampleType != D3DMULTISAMPLE_NONE &&
+        pp.SwapEffect != D3DSWAPEFFECT_DISCARD) {
+        return D3DERR_INVALIDCALL;
+    }
+    if (pp.MultiSampleType == D3DMULTISAMPLE_NONE && pp.MultiSampleQuality != 0u) {
+        return D3DERR_INVALIDCALL;
+    }
     return D3D_OK;
 }
 
@@ -701,6 +712,10 @@ public:
                              pPP->Windowed ? 1u : 0u,
                              (unsigned)pPP->BackBufferWidth, (unsigned)pPP->BackBufferHeight,
                              (unsigned)pPP->BackBufferFormat);
+        if (adapter >= dxmt9c_factory_adapter_count(f_)) {
+            dxmt9FactoryDebugLog("CreateDevice -> invalid adapter=%u", adapter);
+            return D3DERR_INVALIDCALL;
+        }
         if (!isKnownDeviceType(deviceType)) return D3DERR_INVALIDCALL;
         if (!hasValidVertexProcessingFlags(behaviorFlags)) return D3DERR_INVALIDCALL;
         if (!isSupportedDeviceType(deviceType)) {
@@ -802,6 +817,10 @@ public:
                              pPP->Windowed ? 1u : 0u,
                              (unsigned)pPP->BackBufferWidth, (unsigned)pPP->BackBufferHeight,
                              (unsigned)pPP->BackBufferFormat, pFsMode ? 1 : 0);
+        if (adapter >= dxmt9c_factory_adapter_count(f_)) {
+            dxmt9FactoryDebugLog("CreateDeviceEx -> invalid adapter=%u", adapter);
+            return D3DERR_INVALIDCALL;
+        }
         if (!isKnownDeviceType(deviceType)) return D3DERR_INVALIDCALL;
         if (!hasValidVertexProcessingFlags(behaviorFlags)) return D3DERR_INVALIDCALL;
         if (!isSupportedDeviceType(deviceType)) {
