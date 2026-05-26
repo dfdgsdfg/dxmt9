@@ -52,6 +52,24 @@ capture_frame = 0
 reference_optional = true
 
 [[app]]
+name = "conf-d3d9-ffp-texture"
+source = "repo-local"
+license = "mit"
+source_kind = "project-authored"
+license_scope = "project-mit"
+binary = "experiments/apps/conf-d3d9-ffp-texture/conf-d3d9-ffp-texture-x64.exe"
+launcher = "experiments/launchers/conf-d3d9-fast-sanity.sh"
+reference = "experiments/references/conf-d3d9-ffp-texture.png"
+features = ["fast-sanity", "fixed-function", "texturing", "texture-stage-state", "self-validated"]
+status = "exploratory"
+requires_wine = true
+window_title = "conf-d3d9-ffp-texture"
+capture_delay_sec = 0.5
+run_timeout_sec = 20
+capture_frame = 0
+reference_optional = true
+
+[[app]]
 name = "conf-d3d9-lock-matrix"
 source = "repo-local"
 license = "mit"
