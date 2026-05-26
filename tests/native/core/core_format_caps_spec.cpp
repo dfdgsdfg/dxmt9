@@ -416,11 +416,13 @@ void testFourccPseudoFormatClassification() {
   checkEq(factory.checkDeviceFormat(0, Format::NullRt, UsageRenderTarget),
           D3D_OK, "NULL render-target usage supported");
 
-  // R-FORMAT-11: CheckDeviceFormat(RESZ, ..., SURFACE) -> D3D_OK. A surface
-  // query carries no usage flags (usage == 0); assume Apple GPUs support
-  // MSAA depth resolve. RESZ is a command surface, not a color RT.
-  checkEq(factory.checkDeviceFormat(0, Format::Resz, 0u), D3D_OK,
-          "RESZ surface usage supported");
+  // R-FORMAT-11: CheckDeviceFormat(RESZ) -> D3DERR_NOTAVAILABLE. RESZ is a
+  // write-only MSAA-depth-resolve trigger (the D3DRS_POINTSIZE sentinel), NOT
+  // a queryable/creatable surface, so the cap query must report no support
+  // (Wine vendor_policy_resz_caps). The resolve trigger path is separate and
+  // does not consult CheckDeviceFormat.
+  checkEq(factory.checkDeviceFormat(0, Format::Resz, 0u), D3DERR_NOTAVAILABLE,
+          "RESZ CheckDeviceFormat reports NOTAVAILABLE");
 
   // R-FORMAT-13: CheckDeviceFormat(ATOC) -> D3D_OK consistently. ATOC is a
   // render-state hack surfaced as a creatable-looking FOURCC; classification
