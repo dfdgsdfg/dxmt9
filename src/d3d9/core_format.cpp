@@ -158,12 +158,14 @@ const std::vector<FormatEntry> &formatEntries() {
       // behaviour deferred to follow-up agents. See
       // specs/d3d9/formats/requirements.md R-FORMAT-11..14.
       //
-      // RESZ (R-FORMAT-11) — MSAA depth-resolve *command* surface. Carries
-      // no storage and is not a color render target, so renderTarget=false
-      // (a SURFACE query passes via the Optional classification with no
-      // usage flags). Benign Unknown backend placeholder: RESZ never
-      // allocates a Metal texture; the resolve trigger is a follow-up agent.
-      {{Format::Resz, BackendPixelFormat::Unknown, FormatClass::Optional, 0,
+      // RESZ (R-FORMAT-11) — MSAA depth-resolve *command* token, NOT a
+      // creatable/queryable surface. CheckDeviceFormat(RESZ) must report
+      // D3DERR_NOTAVAILABLE (Wine vendor_policy_resz_caps): RESZ is a
+      // write-only trigger (D3DRS_POINTSIZE sentinel → depth resolve), so it
+      // is classified Unsupported like NVDB/RAWZ below. The resolve trigger
+      // path does not consult CheckDeviceFormat and is unaffected. Benign
+      // Unknown backend placeholder: RESZ never allocates a Metal texture.
+      {{Format::Resz, BackendPixelFormat::Unknown, FormatClass::Unsupported, 0,
         false, false, false, false}},
       // NULL (R-FORMAT-12) — null render target with no color storage.
       // renderTarget=true so CheckDeviceFormat(NULL, RENDERTARGET) -> D3D_OK.

@@ -77,8 +77,14 @@ inline bool dxmt9FormatPair_isDepthStencilCompatible(uint32_t adapterFmt,
   // Adapter format is consulted only to reject D3DFMT_UNKNOWN at the call
   // site; the deeper adapter-vs-RT pairing is enforced by CheckDeviceType.
   (void)adapterFmt;
-  const uint32_t rtBits = detail::rtBitDepth(rtFmt);
   const uint32_t dsBits = detail::dsBitDepth(dsFmt);
+  // NULL (FOURCC 'NULL', 0x4C4C554E) is a colorless render target used for
+  // depth-only passes; it carries no colour bit-depth and pairs with any
+  // valid depth-stencil format (Wine surface_format_null_policy / R-FORMAT-12).
+  if (rtFmt == 0x4C4C554Eu) {
+    return dsBits != 0;
+  }
+  const uint32_t rtBits = detail::rtBitDepth(rtFmt);
   if (rtBits == 0 || dsBits == 0) {
     return false;
   }

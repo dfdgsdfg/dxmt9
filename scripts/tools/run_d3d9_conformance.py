@@ -233,7 +233,10 @@ def run_aux_exe(args: argparse.Namespace, exe_path: Path,
 
 def build_env(prefix: Path) -> dict[str, str]:
     env = os.environ.copy()
-    env["WINEPREFIX"] = str(prefix)
+    # Wine requires an absolute WINEPREFIX; a relative path silently resolves
+    # to the wrong/default prefix (without the staged dxmt9 trio), so the
+    # conformance exe loads no dxmt9 and emits no verdicts -> false all-skip.
+    env["WINEPREFIX"] = str(prefix.resolve())
     env["WINEDLLOVERRIDES"] = "d3d9,winemetal=n,b"
     env["DXMT9_PREWARM"] = "disabled"
     # Quiet down Wine FIXMEs that would otherwise drown our parse loop.
