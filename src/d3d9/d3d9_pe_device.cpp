@@ -3714,12 +3714,15 @@ public:
     }
     HRESULT STDMETHODCALLTYPE EndStateBlock(IDirect3DStateBlock9** ppSB) noexcept override {
         if (!ppSB) return D3DERR_INVALIDCALL;
-        // D3D9 creation contract: a failed create must leave the out-pointer
-        // NULL before the error HRESULT is returned.
-        *ppSB = nullptr;
+        // EndStateBlock without a matching BeginStateBlock returns INVALIDCALL
+        // and MUST leave the out-pointer UNTOUCHED — the Wine d3d9 oracle checks
+        // `stateblock == sentinel` here (begin_end_state_block_policy /
+        // stateblock_invalid_type_recording_invalid_calls). So null the
+        // out-pointer only once we are actually attempting the create.
         if (!stateBlockRecording_) {
             return D3DERR_INVALIDCALL;
         }
+        *ppSB = nullptr;
         const HRESULT flushHr = flushPeRecorder(PeRecorderFlushReason::StateBlock);
         if (FAILED(flushHr)) return flushHr;
         dxmt9DeviceDebugLog("device_end_state_block device=%p", this);
