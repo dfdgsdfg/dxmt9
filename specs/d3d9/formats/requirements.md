@@ -88,8 +88,11 @@ return `D3D_OK`. A NULL render target must allocate no color backing;
 when it is the bound render target the backend must configure a render
 pass with no color writes (color attachment omitted or store action
 `DontCare`), leaving the depth/stencil attachment as the effective
-target. `Lock`/readback of a NULL surface must return
-`D3DERR_INVALIDCALL`.
+target. `LockRect` of a NULL surface must succeed (`D3D_OK`) and return
+a lockable dummy buffer (`pBits != NULL`, non-zero `Pitch`) whose
+contents are meaningless and discarded on `UnlockRect` (Wine
+`dlls/d3d9/tests/device.c::test_surface_format_null`). `GetRenderTargetData`
+of a NULL surface returns `D3DERR_INVALIDCALL`.
 
 **R-FORMAT-13** Alpha-to-coverage is enabled through a cross-vendor
 render-state hack, not a creatable format: writing

@@ -24,12 +24,15 @@ Surface::Surface(std::shared_ptr<Device> owner, SurfaceHandle handle,
   if (auto ownerPtr = owner_.lock()) {
     backend_ = ownerPtr->upperDevice();
   }
-  // R-FORMAT-12: a D3DFMT_NULL render target is colorless. Creation must
-  // succeed but allocate no color backing — it exists only to drive a
-  // depth/stencil-only render pass (shadow depth / stencil-shadow volume).
-  // Leave standalonePitch_ == 0 / standaloneBytes_ empty; lockRect() and
-  // the GPU readback path key off isNullRenderTarget() to reject mapping.
-  if (desc_.width != 0 && desc_.height != 0 && !isNullRenderTarget()) {
+  // R-FORMAT-12: a D3DFMT_NULL render target is colorless and allocates no
+  // GPU color backing (the depth-only render pass omits the color
+  // attachment). It IS still lockable, though: Wine
+  // (test_surface_format_null) returns a dummy CPU buffer from LockRect with
+  // a valid pBits/Pitch (contents meaningless, discarded on Unlock). NullRt
+  // carries a 4-byte (BGRA8 placeholder) bpp in the format table, so the
+  // standalone scratch below sizes correctly. GetRenderTargetData still keys
+  // off isNullRenderTarget() to reject readback.
+  if (desc_.width != 0 && desc_.height != 0) {
     standalonePitch_ = formatRowPitch(desc_.format, desc_.width);
     standaloneBytes_.resize(
         formatByteSize(desc_.format, desc_.width, desc_.height), 0);
@@ -61,13 +64,11 @@ LockedRegion Surface::lockRect(const Rect *rect, u32 flags) {
   if (!valid_) {
     return {};
   }
-  // R-FORMAT-12: a NULL render target has no color storage; Lock/LockRect
-  // must fail. Return an empty region — the C bridge maps a null/zero
-  // region to D3DERR_INVALIDCALL. Reject before flipping locked_ so a NULL
-  // surface is never spuriously marked locked.
-  if (isNullRenderTarget()) {
-    return {};
-  }
+  // R-FORMAT-12: a NULL render target is lockable — it returns the dummy
+  // standalone scratch allocated in the ctor (contents meaningless). Wine
+  // test_surface_format_null expects LockRect -> D3D_OK with a valid
+  // pBits/Pitch, so NULL falls through to the standalone path below;
+  // GetRenderTargetData still rejects readback via isNullRenderTarget().
   if (containerKind_ == ContainerKind::Texture) {
     if (auto tex = textureContainer_.lock()) {
       return tex->lockRect(level_, rect, flags);
