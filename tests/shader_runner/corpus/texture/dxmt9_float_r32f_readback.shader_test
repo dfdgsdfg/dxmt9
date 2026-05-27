@@ -3,8 +3,8 @@
 ; source_kind: project-authored
 ; license: MIT
 ; license_scope: project-mit
-; oracle: Wine d3d9 visual.c float_texture_test behavior, reduced to R32F texture sampling
-; oracle-date: 2026-05-17
+; oracle: Wine d3d9 visual.c float_texture_test behavior and DXVK D3D9 swizzle policy; R32F texture sampling fills missing G/B/A channels with one
+; oracle-date: 2026-05-27
 
 [pixel shader d3dbc-hex]
 ffff0200 0200001f 80000000 b0030000 0200001f 90000000 a00f0800
@@ -17,4 +17,4 @@ dxmt9-texture-raw 0 1 1 R32F 0000003f
 dxmt9-sampler 0 address_u=clamp address_v=clamp min_filter=point mag_filter=point mip_filter=point
 dxmt9-bind-texture 0 0
 dxmt9-draw-textured-quad
-probe (32, 32) rgba(0.5, 0.0, 0.0, 1.0) 1
+probe (32, 32) rgba(0.5, 1.0, 1.0, 1.0) 1

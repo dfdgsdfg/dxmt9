@@ -328,7 +328,7 @@ void testSamplerInfoReflectsSamplerSnapshot() {
   snapshot.states[SAMP_MIN_FILTER] = 2u;
   snapshot.states[SAMP_MAG_FILTER] = 1u;
   snapshot.states[SAMP_MIP_FILTER] = 2u;
-  snapshot.states[SAMP_ADDRESS_U] = 3u;
+  snapshot.states[SAMP_ADDRESS_U] = 5u;
   snapshot.states[SAMP_ADDRESS_V] = 2u;
   snapshot.states[SAMP_ADDRESS_W] = 4u;
   snapshot.states[SAMP_BORDER_COLOR] = 0xffffffffu;
@@ -344,7 +344,8 @@ void testSamplerInfoReflectsSamplerSnapshot() {
   checkEq(info.min_filter, WMTSamplerMinMagFilterLinear, "linear min filter maps to Metal linear");
   checkEq(info.mag_filter, WMTSamplerMinMagFilterNearest, "point mag filter maps to Metal nearest");
   checkEq(info.mip_filter, WMTSamplerMipFilterLinear, "linear mip filter maps to Metal linear");
-  checkEq(info.s_address_mode, WMTSamplerAddressModeClampToEdge, "address U clamp maps to Metal clamp-to-edge");
+  checkEq(info.s_address_mode, WMTSamplerAddressModeMirrorClampToEdge,
+          "address U mirror-once maps to Metal mirror-clamp-to-edge");
   checkEq(info.t_address_mode, WMTSamplerAddressModeMirrorRepeat, "address V mirror maps to Metal mirror-repeat");
   checkEq(info.r_address_mode, WMTSamplerAddressModeClampToBorderColor,
           "address W border maps to Metal clamp-to-border");

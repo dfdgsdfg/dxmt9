@@ -104,6 +104,7 @@ class CommandQueue {
                           std::uint32_t pitch,
                           std::uint32_t slicePitch,
                           std::span<const std::uint8_t> bytes);
+  void initializeTextureZero(core::TextureHandle handle);
   core::HResult generateTextureMipSublevels(core::TextureHandle handle);
 
   // Flush any pending deferred uploads. Returned (event, value) is what

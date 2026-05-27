@@ -6,6 +6,7 @@
 
 #include "../../../src/dxmt9/dxmt9_draw_encoder.hpp"
 #include "../../../src/dxmt9/dxmt9_draw_state.hpp"
+#include "../../../src/dxmt9/dxmt9_ffp_shaders.hpp"
 #include "../../../src/dxmt9/dxmt9_pipeline_cache.hpp"
 #include "../../../src/dxmt9/dxmt9_resource_pool.hpp"
 #include "../../../src/dxmt9/dxmt9_ring_arena.hpp"
@@ -556,6 +557,7 @@ void testBaseStateRecorderCapturesRasterTextureSamplerOrdering() {
   state.hot.renderStates.count = 2u;
   state.hot.textures[0] = harness.createBoundTexture(kTexture0, 64u, 64u);
   state.hot.textures[1] = harness.createBoundTexture(kTexture1, 32u, 32u);
+  state.hot.textureMask = 0x3u;
   state.hot.streamBuffers[0] = harness.createBoundBuffer(kBoundVertex, 4096u);
   state.hot.streamOffsets[0] = 48u;
 
@@ -689,6 +691,7 @@ void testArgbufModeKeepsDirectTextureSamplerBinds() {
   state.hot.colorAttachments[0].handle =
       harness.createRenderTargetSurface(kRenderTarget, 640u, 480u);
   state.hot.textures[0] = harness.createBoundTexture(kTexture0, 64u, 64u);
+  state.hot.textureMask = 0x1u;
   state.hot.streamBuffers[0] = harness.createBoundBuffer(kBoundVertex, 4096u);
 
   dxmt9::core::DrawParam param{};
@@ -741,6 +744,7 @@ void testArgbufModeKeepsDirectVertexTextureSamplerBinds() {
       harness.createRenderTargetSurface(kRenderTarget, 640u, 480u);
   state.hot.textures[dxmt9::core::kVertexTextureSampler0] =
       harness.createBoundTexture(kVertexTexture0, 64u, 64u);
+  state.hot.textureMask = 1u << dxmt9::core::kVertexTextureSampler0;
   state.hot.streamBuffers[0] = harness.createBoundBuffer(kBoundVertex, 4096u);
 
   dxmt9::core::DrawParam param{};
@@ -1307,6 +1311,70 @@ void testIndexedProgrammableDrawPreservesSparseStreamOffsets() {
           "indexed sparse-stream base instance");
 }
 
+void testProgrammableIndexedBlendHeuristicStaysDirect() {
+  Harness harness;
+  Capture capture;
+  auto recorder = makeRecorder(capture);
+
+  constexpr obj_handle_t kUploadedVertex = 0x5200005200005acull;
+  constexpr obj_handle_t kUploadedIndex = 0x6200006200006bdull;
+  constexpr u32 kStride = 20u;
+  constexpr u32 kIndexOffset = 6u * kStride;
+
+  auto state = makeProgrammableState(kStride);
+  state.shaderLayout.vertexDecl.fvf =
+      dxmt9::ffp::kFvfXyz | (1u << dxmt9::ffp::kFvfTexCountShift);
+  state.hot.textureMask = 0x3fu;
+  state.hot.renderStates.entries[0] = dxmt9::core::FlatStateEntry{
+      dxmt9::core::RS_SRC_BLEND,
+      static_cast<u32>(dxmt9::core::BlendFactor::InvDestColor)};
+  state.hot.renderStates.entries[1] = dxmt9::core::FlatStateEntry{
+      dxmt9::core::RS_DEST_BLEND,
+      static_cast<u32>(dxmt9::core::BlendFactor::One)};
+  state.hot.renderStates.entries[2] = dxmt9::core::FlatStateEntry{
+      dxmt9::core::RS_ALPHABLEND_ENABLE,
+      1u};
+  state.hot.renderStates.count = 3u;
+
+  std::array<std::uint8_t, kIndexOffset + 12u> arena{};
+  const std::array<std::uint16_t, 6> indices{{0u, 1u, 2u, 3u, 4u, 5u}};
+  std::memcpy(arena.data() + kIndexOffset, indices.data(),
+              indices.size() * sizeof(indices[0]));
+
+  dxmt9::core::DrawParam param{};
+  param.primitiveType = PrimitiveType::TriangleList;
+  param.primitiveCount = 2u;
+  param.baseVertexIndex = 0;
+  param.startIndex = 0u;
+  param.indexType = IndexType::UInt16;
+  param.indexed = true;
+  param.userVertexRange = dxmt9::core::DrawPayloadRange{0u, kIndexOffset};
+  param.userIndexRange = dxmt9::core::DrawPayloadRange{kIndexOffset, 12u};
+
+  PreUploadedDrawData preUploaded{};
+  preUploaded.vertex.buffer.handle = kUploadedVertex;
+  preUploaded.vertex.offset = 320u;
+  preUploaded.vertex.size = kIndexOffset;
+  preUploaded.index.buffer.handle = kUploadedIndex;
+  preUploaded.index.offset = 640u;
+  preUploaded.index.size = 12u;
+
+  runEncodeDraw(harness, recorder, state, param, preUploaded, arena);
+
+  const RecordedCommand* indexedDraw = nullptr;
+  for (const auto& command : capture.commands) {
+    check(command.kind != RecordedKind::DrawPrimitives,
+          "programmable indexed draw must not be expanded to drawPrimitives");
+    if (command.kind == RecordedKind::DrawIndexedPrimitives) {
+      indexedDraw = &command;
+    }
+  }
+
+  check(indexedDraw != nullptr,
+        "programmable indexed blend heuristic emits direct indexed draw");
+  assertIndexedDrawCommand(*indexedDraw, kUploadedIndex, 640u, 6u);
+}
+
 void testBoundVertexAndUserIndexOrdering() {
   Harness harness;
   Capture capture;
@@ -1640,6 +1708,7 @@ int main() {
     testProgrammableVsBindsExtraBoundStreamBeforeDraw();
     testProgrammableVsSkipsMissingExtraStreamWithoutStaleBind();
     testIndexedProgrammableDrawPreservesSparseStreamOffsets();
+    testProgrammableIndexedBlendHeuristicStaysDirect();
     testBoundVertexAndUserIndexOrdering();
     testBoundVertexAndBoundIndexOrdering();
     testUserVertexAndUserIndexOrdering();

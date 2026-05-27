@@ -187,6 +187,11 @@ bool formatNeedsShaderReadSwizzle(Format format) {
   switch (format) {
     case Format::X8R8G8B8:
     case Format::X8B8G8R8:
+    case Format::G16R16:
+    case Format::R16F:
+    case Format::G16R16F:
+    case Format::R32F:
+    case Format::G32R32F:
     case Format::L8:
     case Format::L16:
     case Format::A8L8:
@@ -203,6 +208,17 @@ WMTTextureSwizzleChannels toShaderReadSwizzle(Format format) {
       return WMTTextureSwizzleChannels{
           WMTTextureSwizzleRed, WMTTextureSwizzleGreen,
           WMTTextureSwizzleBlue, WMTTextureSwizzleOne};
+    case Format::R16F:
+    case Format::R32F:
+      return WMTTextureSwizzleChannels{
+          WMTTextureSwizzleRed, WMTTextureSwizzleOne,
+          WMTTextureSwizzleOne, WMTTextureSwizzleOne};
+    case Format::G16R16F:
+    case Format::G32R32F:
+    case Format::G16R16:
+      return WMTTextureSwizzleChannels{
+          WMTTextureSwizzleRed, WMTTextureSwizzleGreen,
+          WMTTextureSwizzleOne, WMTTextureSwizzleOne};
     case Format::L8:
     case Format::L16:
       return WMTTextureSwizzleChannels{

@@ -34,8 +34,13 @@ constexpr u32 kD3DFmtA8B8G8R8 = 32u;
 constexpr u32 kD3DFmtX8B8G8R8 = 33u;
 constexpr u32 kD3DFmtA2R10G10B10 = 35u;
 constexpr u32 kD3DFmtA2B10G10R10 = 31u;
+constexpr u32 kD3DFmtG16R16 = 34u;
 constexpr u32 kD3DFmtL8 = 50u;
 constexpr u32 kD3DFmtA8L8 = 51u;
+constexpr u32 kD3DFmtR16F = 111u;
+constexpr u32 kD3DFmtG16R16F = 112u;
+constexpr u32 kD3DFmtR32F = 114u;
+constexpr u32 kD3DFmtG32R32F = 115u;
 constexpr u32 kD3DFmtD24S8 = 75u;
 constexpr u32 kD3DFmtD24X8 = 77u;
 constexpr u32 kD3DFmtDXT5 = 894720068u;
@@ -423,11 +428,21 @@ void testLuminanceDefaultChannelPolicy() {
     const char* label = "";
   };
 
-  const std::array<Case, 2> cases{{
+  const std::array<Case, 7> cases{{
       {kD3DFmtL8, Format::L8, WMTPixelFormatR8Unorm,
        WMTTextureSwizzleOne, {0x55u, 0x00u}, 1u, "L8"},
       {kD3DFmtA8L8, Format::A8L8, WMTPixelFormatRG8Unorm,
        WMTTextureSwizzleGreen, {0x55u, 0x40u}, 2u, "A8L8"},
+      {kD3DFmtG16R16, Format::G16R16, WMTPixelFormatRG16Unorm,
+       WMTTextureSwizzleOne, {}, 0u, "G16R16"},
+      {kD3DFmtR16F, Format::R16F, WMTPixelFormatR16Float,
+       WMTTextureSwizzleOne, {}, 0u, "R16F"},
+      {kD3DFmtG16R16F, Format::G16R16F, WMTPixelFormatRG16Float,
+       WMTTextureSwizzleOne, {}, 0u, "G16R16F"},
+      {kD3DFmtR32F, Format::R32F, WMTPixelFormatR32Float,
+       WMTTextureSwizzleOne, {}, 0u, "R32F"},
+      {kD3DFmtG32R32F, Format::G32R32F, WMTPixelFormatRG32Float,
+       WMTTextureSwizzleOne, {}, 0u, "G32R32F"},
   }};
 
   PublicDevice fixture;
@@ -448,16 +463,33 @@ void testLuminanceDefaultChannelPolicy() {
     check(hasWmtUsage(dxmt9::convert::toTextureUsage(backendDesc),
                       WMTTextureUsagePixelFormatView),
           testCase.label);
+    const bool luminance = backendDesc.format == Format::L8 ||
+                           backendDesc.format == Format::L16 ||
+                           backendDesc.format == Format::A8L8;
+    const auto expectedGreen = luminance
+                                   ? WMTTextureSwizzleRed
+                                   : ((backendDesc.format == Format::G16R16 ||
+                                       backendDesc.format == Format::G16R16F ||
+                                       backendDesc.format == Format::G32R32F)
+                                          ? WMTTextureSwizzleGreen
+                                          : WMTTextureSwizzleOne);
+    const auto expectedBlue = (backendDesc.format == Format::L8 ||
+                               backendDesc.format == Format::L16 ||
+                               backendDesc.format == Format::A8L8)
+                                  ? WMTTextureSwizzleRed
+                                  : WMTTextureSwizzleOne;
     checkSwizzle(dxmt9::convert::toShaderReadSwizzle(backendDesc.format),
-                 WMTTextureSwizzleRed, WMTTextureSwizzleRed,
-                 WMTTextureSwizzleRed, testCase.alphaSwizzle,
+                 WMTTextureSwizzleRed, expectedGreen,
+                 expectedBlue, testCase.alphaSwizzle,
                  testCase.label);
 
-    texture->obj->fillColor(nullptr, ColorRGBA{1.0f, 0.0f, 0.0f, 0.25f});
-    checkBytesPrefix(texture->obj->levelBytes(0),
-                     std::span<const u8>(testCase.expectedBytes.data(),
-                                         testCase.expectedByteCount),
-                     testCase.label);
+    if (testCase.expectedByteCount != 0u) {
+      texture->obj->fillColor(nullptr, ColorRGBA{1.0f, 0.0f, 0.0f, 0.25f});
+      checkBytesPrefix(texture->obj->levelBytes(0),
+                       std::span<const u8>(testCase.expectedBytes.data(),
+                                           testCase.expectedByteCount),
+                       testCase.label);
+    }
   }
 }
 

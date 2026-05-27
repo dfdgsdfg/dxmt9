@@ -251,9 +251,19 @@ void testD24S8FallbackPolicy() {
           "Factory does not advertise D24S8 as a color render target");
 }
 
-void testShaderReadSwizzlePolicyForLuminanceFormats() {
+void testShaderReadSwizzlePolicyForExpandedShaderReadFormats() {
   check(!dxmt9::convert::formatNeedsShaderReadSwizzle(Format::A8R8G8B8),
         "A8R8G8B8 samples without a shader-read swizzle view");
+  check(dxmt9::convert::formatNeedsShaderReadSwizzle(Format::G16R16),
+        "G16R16 needs shader-read swizzle");
+  check(dxmt9::convert::formatNeedsShaderReadSwizzle(Format::R16F),
+        "R16F needs shader-read swizzle");
+  check(dxmt9::convert::formatNeedsShaderReadSwizzle(Format::G16R16F),
+        "G16R16F needs shader-read swizzle");
+  check(dxmt9::convert::formatNeedsShaderReadSwizzle(Format::R32F),
+        "R32F needs shader-read swizzle");
+  check(dxmt9::convert::formatNeedsShaderReadSwizzle(Format::G32R32F),
+        "G32R32F needs shader-read swizzle");
   check(dxmt9::convert::formatNeedsShaderReadSwizzle(Format::L8),
         "L8 needs shader-read swizzle");
   check(dxmt9::convert::formatNeedsShaderReadSwizzle(Format::L16),
@@ -265,6 +275,26 @@ void testShaderReadSwizzlePolicyForLuminanceFormats() {
                WMTTextureSwizzleRed, WMTTextureSwizzleGreen,
                WMTTextureSwizzleBlue, WMTTextureSwizzleAlpha,
                "ordinary RGBA shader-read swizzle is identity");
+  checkSwizzle(dxmt9::convert::toShaderReadSwizzle(Format::R16F),
+               WMTTextureSwizzleRed, WMTTextureSwizzleOne,
+               WMTTextureSwizzleOne, WMTTextureSwizzleOne,
+               "R16F shader-read swizzle fills missing channels with one");
+  checkSwizzle(dxmt9::convert::toShaderReadSwizzle(Format::R32F),
+               WMTTextureSwizzleRed, WMTTextureSwizzleOne,
+               WMTTextureSwizzleOne, WMTTextureSwizzleOne,
+               "R32F shader-read swizzle fills missing channels with one");
+  checkSwizzle(dxmt9::convert::toShaderReadSwizzle(Format::G16R16),
+               WMTTextureSwizzleRed, WMTTextureSwizzleGreen,
+               WMTTextureSwizzleOne, WMTTextureSwizzleOne,
+               "G16R16 shader-read swizzle fills missing channels with one");
+  checkSwizzle(dxmt9::convert::toShaderReadSwizzle(Format::G16R16F),
+               WMTTextureSwizzleRed, WMTTextureSwizzleGreen,
+               WMTTextureSwizzleOne, WMTTextureSwizzleOne,
+               "G16R16F shader-read swizzle fills missing channels with one");
+  checkSwizzle(dxmt9::convert::toShaderReadSwizzle(Format::G32R32F),
+               WMTTextureSwizzleRed, WMTTextureSwizzleGreen,
+               WMTTextureSwizzleOne, WMTTextureSwizzleOne,
+               "G32R32F shader-read swizzle fills missing channels with one");
   checkSwizzle(dxmt9::convert::toShaderReadSwizzle(Format::L8),
                WMTTextureSwizzleRed, WMTTextureSwizzleRed,
                WMTTextureSwizzleRed, WMTTextureSwizzleOne,
@@ -282,10 +312,18 @@ void testShaderReadSwizzlePolicyForLuminanceFormats() {
                          Pool::Managed, UsageTexture};
   TextureDesc l8Desc = normalDesc;
   l8Desc.format = Format::L8;
+  TextureDesc g16r16Desc = normalDesc;
+  g16r16Desc.format = Format::G16R16;
+  TextureDesc r32fDesc = normalDesc;
+  r32fDesc.format = Format::R32F;
   check(!hasUsage(dxmt9::convert::toTextureUsage(normalDesc), WMTTextureUsagePixelFormatView),
         "ordinary textures do not request pixel-format views");
   check(hasUsage(dxmt9::convert::toTextureUsage(l8Desc), WMTTextureUsagePixelFormatView),
         "L8 textures request pixel-format views for shader-read swizzle");
+  check(hasUsage(dxmt9::convert::toTextureUsage(g16r16Desc), WMTTextureUsagePixelFormatView),
+        "G16R16 textures request pixel-format views for shader-read swizzle");
+  check(hasUsage(dxmt9::convert::toTextureUsage(r32fDesc), WMTTextureUsagePixelFormatView),
+        "R32F textures request pixel-format views for shader-read swizzle");
   checkEq(dxmt9::convert::toShaderReadViewSliceCount(TextureType::TwoD), std::uint16_t{1},
           "2D shader-read view covers one slice");
   checkEq(dxmt9::convert::toShaderReadViewSliceCount(TextureType::Cube), std::uint16_t{6},
@@ -477,7 +515,7 @@ int main() {
   testYuvAndColorKeyPolicyAreExplicitlyUnsupported();
   testCompressedRenderTargetFactoryRejection();
   testD24S8FallbackPolicy();
-  testShaderReadSwizzlePolicyForLuminanceFormats();
+  testShaderReadSwizzlePolicyForExpandedShaderReadFormats();
   testStateValueTablesDirtyHashContracts();
 
   std::cout << "dod_state_format_spec passed\n";

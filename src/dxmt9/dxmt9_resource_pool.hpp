@@ -91,10 +91,11 @@ struct BufferRecord {
 struct TextureRecord {
   core::TextureDesc desc{};
   WMT::Reference<WMT::Texture> texture;
-  // D3D9 luminance formats store compact Metal R/RG data but sample as
-  // RGB-expanded colors. `shaderReadTexture` is an optional swizzled view
-  // used only for shader binding; uploads, copies, and surface aliases keep
-  // using the storage texture above.
+  // Some D3D9 formats store compact Metal R/RG data but sample with expanded
+  // channels (luminance replication, float missing channels as one, XRGB alpha
+  // as one). `shaderReadTexture` is an optional swizzled view used only for
+  // shader binding; uploads, copies, and surface aliases keep using the storage
+  // texture above.
   WMT::Reference<WMT::Texture> shaderReadTexture;
   WMT::Reference<WMT::Texture> srgbShaderReadTexture;
   // R-BACK-5.7: storage-mode classification recorded at create time and

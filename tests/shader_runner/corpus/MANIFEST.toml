@@ -2419,8 +2419,8 @@ license = "MIT"
 license_scope = "project-mit"
 models = ["ps_2_0"]
 opcodes = ["DCL", "MOV", "TEX"]
-oracle = "Wine d3d9 visual.c float_texture_test behavior, reduced to R32F texture sampling"
-oracle-date = "2026-05-17"
+oracle = "Wine d3d9 visual.c float_texture_test behavior and DXVK D3D9 swizzle policy; R32F texture sampling fills missing G/B/A channels with one"
+oracle-date = "2026-05-27"
 
 [[test]]
 file = "texture/dxmt9_g16r16_texture_readback.shader_test"
@@ -2431,8 +2431,8 @@ license = "MIT"
 license_scope = "project-mit"
 models = ["ps_2_0"]
 opcodes = ["DCL", "MOV", "TEX"]
-oracle = "Wine d3d9 visual.c g16r16_texture_test behavior, reduced to RG16_UNORM texture sampling"
-oracle-date = "2026-05-17"
+oracle = "Wine d3d9 visual.c alpha_blending_texture_format_test behavior and DXVK D3D9 swizzle policy; G16R16 texture sampling fills missing B/A channels with one"
+oracle-date = "2026-05-27"
 
 [[test]]
 file = "texture/dxmt9_v16u16_2d_signed_texture_readback.shader_test"

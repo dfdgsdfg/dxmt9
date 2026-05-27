@@ -39,6 +39,11 @@ class Initializer {
                            std::uint32_t slicePitch,
                            std::span<const std::uint8_t> bytes);
 
+  // Queue an initial zero fill for backend-owned render target textures.
+  // Private-mode textures use the same deferred staging path as app uploads;
+  // shared-mode textures are written immediately by Pool::stageTextureUpload.
+  void initializeTextureZero(core::TextureHandle handle);
+
   // Result of flushing any pending deferred uploads.
   //   event: the SharedEvent that will be signaled by our command
   //          buffer when the uploads finish on the GPU. Empty if the

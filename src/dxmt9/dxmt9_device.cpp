@@ -33,6 +33,12 @@ core::BackendLimits finalizeLimits(core::BackendLimits base, WMT::Device device)
   return base;
 }
 
+bool shouldInitializeTextureWithZero(const core::TextureDesc& desc) {
+  return desc.pool == core::Pool::Default &&
+         (desc.usage & core::UsageRenderTarget) != 0u &&
+         (desc.usage & core::UsageDepthStencil) == 0u;
+}
+
 // M6 — sampled once at device init and logged so triage on a bug report
 // can immediately see which Metal counter / family features the running
 // device exposes. Cheap: ~10 selector dispatches at process start.
@@ -157,8 +163,15 @@ class DeviceImpl final : public Device {
     return queue_.pool().createBuffer(wmt_device_, desc);
   }
   core::TextureHandle createTexture(const core::TextureDesc& desc) override {
-    std::lock_guard lock(queue_.mutex_);
-    return queue_.pool().createTexture(wmt_device_, limits_, desc);
+    core::TextureHandle handle{};
+    {
+      std::lock_guard lock(queue_.mutex_);
+      handle = queue_.pool().createTexture(wmt_device_, limits_, desc);
+    }
+    if (handle && shouldInitializeTextureWithZero(desc)) {
+      queue_.initializeTextureZero(handle);
+    }
+    return handle;
   }
   core::SurfaceHandle createSurface(const core::SurfaceDesc& desc) override {
     std::lock_guard lock(queue_.mutex_);

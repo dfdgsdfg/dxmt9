@@ -3,8 +3,8 @@
 ; source_kind: project-authored
 ; license: MIT
 ; license_scope: project-mit
-; oracle: Wine d3d9 visual.c g16r16_texture_test behavior, reduced to RG16_UNORM texture sampling
-; oracle-date: 2026-05-17
+; oracle: Wine d3d9 visual.c alpha_blending_texture_format_test behavior and DXVK D3D9 swizzle policy; G16R16 texture sampling fills missing B/A channels with one
+; oracle-date: 2026-05-27
 
 [pixel shader d3dbc-hex]
 ffff0200 0200001f 80000000 b0030000 0200001f 90000000 a00f0800
@@ -17,4 +17,4 @@ dxmt9-texture-raw 0 1 1 G16R16 004000c0
 dxmt9-sampler 0 address_u=clamp address_v=clamp min_filter=point mag_filter=point mip_filter=point
 dxmt9-bind-texture 0 0
 dxmt9-draw-textured-quad
-probe (32, 32) rgba(0.25, 0.75, 0.0, 1.0) 2
+probe (32, 32) rgba(0.25, 0.75, 1.0, 1.0) 2

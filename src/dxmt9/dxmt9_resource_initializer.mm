@@ -15,6 +15,7 @@
 #include <chrono>
 #include <cstring>
 #include <iomanip>
+#include <limits>
 #include <mutex>
 #include <sstream>
 #include <utility>
@@ -84,6 +85,33 @@ void emitUploadTrace(Pool& pool, TextureHandle handle, u32 level,
     if (i) out << ',';
     out << std::hex << std::setw(2) << std::setfill('0') << static_cast<unsigned>(bytes[i]) << std::dec;
   }
+  emitTextureTraceLine(out.str());
+}
+
+bool shouldZeroInitializeTexture(const TextureDesc& desc) {
+  return desc.pool == core::Pool::Default &&
+         (desc.usage & core::UsageRenderTarget) != 0u &&
+         (desc.usage & core::UsageDepthStencil) == 0u &&
+         desc.type != core::TextureType::Volume &&
+         core::bytesPerPixel(desc.format) != 0u;
+}
+
+u32 subresourceIndexForZeroInit(const TextureDesc& desc, u32 slice, u32 mipLevel) {
+  const u32 mipLevels = std::max(1u, desc.levels);
+  return desc.type == core::TextureType::Cube ? slice * mipLevels + mipLevel : mipLevel;
+}
+
+void emitZeroInitTrace(TextureHandle handle, const TextureDesc& desc, u32 subresourceCount) {
+  if (!debug::shouldTraceTexture(handle)) {
+    return;
+  }
+  std::ostringstream out;
+  out << "[dxmt9-texture] zero-init handle=0x" << std::hex << handle.value << std::dec
+      << " size=" << desc.width << "x" << desc.height << "x" << desc.depth
+      << " levels=" << std::max(1u, desc.levels)
+      << " subresources=" << subresourceCount
+      << " fmt=" << static_cast<unsigned>(desc.format)
+      << " usage=0x" << std::hex << desc.usage << std::dec;
   emitTextureTraceLine(out.str());
 }
 
@@ -231,6 +259,47 @@ void Initializer::uploadTextureLevel(core::TextureHandle handle,
     }
     if (auto* rec = pool_->findTexture(handle.value); rec && rec->texture) {
       dumpTextureSnapshotUnlocked(*queue_, *pool_, device_, handle, rec->desc, rec->texture.handle);
+    }
+  }
+}
+
+void Initializer::initializeTextureZero(core::TextureHandle handle) {
+  std::lock_guard lock(queue_->mutex_);
+  auto* record = pool_->findTexture(handle.value);
+  if (!record || !record->texture || !shouldZeroInitializeTexture(record->desc)) {
+    return;
+  }
+
+  const auto& desc = record->desc;
+  const u32 mipLevels = std::max(1u, desc.levels);
+  const u32 sliceCount = desc.type == core::TextureType::Cube ? 6u : 1u;
+  emitZeroInitTrace(handle, desc, sliceCount * mipLevels);
+
+  std::vector<u8> zeros;
+  for (u32 slice = 0; slice < sliceCount; ++slice) {
+    for (u32 mip = 0; mip < mipLevels; ++mip) {
+      const u32 width = std::max(1u, desc.width >> mip);
+      const u32 height = std::max(1u, desc.height >> mip);
+      const u32 depth = desc.type == core::TextureType::Volume
+                            ? std::max(1u, desc.depth >> mip)
+                            : 1u;
+      const u32 pitch = core::formatRowPitch(desc.format, width);
+      const std::size_t slicePitchBytes = core::formatByteSize(desc.format, width, height);
+      if (pitch == 0 || slicePitchBytes == 0 ||
+          slicePitchBytes > std::numeric_limits<u32>::max()) {
+        continue;
+      }
+      const std::size_t byteCount = slicePitchBytes * static_cast<std::size_t>(depth);
+      if (byteCount == 0 || byteCount > std::numeric_limits<u32>::max()) {
+        continue;
+      }
+      zeros.assign(byteCount, 0u);
+      auto staging = pool_->stageTextureUpload(
+          device_, handle, subresourceIndexForZeroInit(desc, slice, mip), width, height,
+          depth, pitch, static_cast<u32>(slicePitchBytes), zeros.data(), zeros.size());
+      if (staging) {
+        pendingUploads_.push_back(std::move(*staging));
+      }
     }
   }
 }

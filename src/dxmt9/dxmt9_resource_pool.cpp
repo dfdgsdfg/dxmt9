@@ -550,6 +550,21 @@ core::SurfaceHandle Pool::createSurfaceForTexture(core::TextureHandle textureHan
     record.texture = view ? std::move(view) : WMT::Reference<WMT::Texture>(parentTexture);
     usedParentTexture = !view;
   }
+  if (record.texture) {
+    const auto srgbFormat = convert::toSrgbPixelFormat(parentTexture.pixelFormat());
+    if (srgbFormat != parentTexture.pixelFormat()) {
+      WMTTextureSwizzleChannels swizzle{
+          WMTTextureSwizzleRed, WMTTextureSwizzleGreen,
+          WMTTextureSwizzleBlue, WMTTextureSwizzleAlpha};
+      uint64_t gpuId = 0;
+      const auto viewType = textureRecord->desc.type == core::TextureType::Cube
+                                ? WMTTextureType2D
+                                : parentTexture.textureType();
+      record.srgbTexture = parentTexture.newTextureView(
+          srgbFormat, viewType, subresource.mipLevel, 1,
+          subresource.slice, 1, swizzle, gpuId);
+    }
+  }
   const auto handle = surfaceArena_.insert(std::move(record));
   const auto* stored = surfaceArena_.find(handle.value);
   traceSurfaceAlias(handle, textureHandle, level, subresource, desc, usedParentTexture,

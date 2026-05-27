@@ -139,6 +139,54 @@ WMT::String makeLabelStringFmt(const char* fmt, ...) {
   return WMT::String::string(buf, WMTUTF8StringEncoding);
 }
 
+bool colorAttachmentAliasesTracedTexture(resources::Pool& pool,
+                                         const core::FlatDrawStateRecord& hot,
+                                         std::size_t* attachmentIndex = nullptr) {
+  const u64 wanted = debug::traceTextureHandle();
+  if (wanted == 0) {
+    return false;
+  }
+  for (std::size_t i = 0; i < hot.colorAttachments.size(); ++i) {
+    const auto handle = hot.colorAttachments[i].handle;
+    if (!handle) {
+      continue;
+    }
+    const auto* surface = pool.findSurface(handle.value);
+    if (surface && surface->aliasTexture.value == wanted) {
+      if (attachmentIndex) {
+        *attachmentIndex = i;
+      }
+      return true;
+    }
+  }
+  return false;
+}
+
+void traceRenderTargetWriteForTexture(resources::Pool& pool,
+                                      const core::FlatDrawStateRecord& hot,
+                                      u64 seqId,
+                                      u64 drawOrdinal) {
+  std::size_t attachmentIndex = 0;
+  if (!colorAttachmentAliasesTracedTexture(pool, hot, &attachmentIndex)) {
+    return;
+  }
+  const auto handle = hot.colorAttachments[attachmentIndex].handle;
+  std::ostringstream out;
+  out << "[dxmt9-texture] render-target-write seq="
+      << static_cast<unsigned long long>(seqId)
+      << " ordinal=" << static_cast<unsigned long long>(drawOrdinal)
+      << " colorIndex=" << attachmentIndex
+      << " surface=0x" << std::hex << handle.value << std::dec
+      << " texture=0x" << std::hex << debug::traceTextureHandle() << std::dec
+      << " colorWrite=" << core::flatStateOr(hot.renderStates, RS_COLOR_WRITE_ENABLE, 0xfu)
+      << " srgbWrite=" << core::flatStateOr(hot.renderStates, core::RS_SRGB_WRITE_ENABLE, 0u)
+      << " alphaBlend=" << core::flatStateOr(hot.renderStates, RS_ALPHABLEND_ENABLE, 0u)
+      << " srcBlend=" << core::flatStateOr(hot.renderStates, RS_SRC_BLEND, 0u)
+      << " dstBlend=" << core::flatStateOr(hot.renderStates, RS_DEST_BLEND, 0u)
+      << " tex0=0x" << std::hex << hot.textures[0].value << std::dec;
+  emitTextureTraceLine(out.str());
+}
+
 thread_local DrawBindingPacketCache gDrawBindingPacketCache;
 
 // M2 — RAII debug-group helper. Pairs a pushDebugGroup with the
@@ -690,6 +738,7 @@ WMTSamplerAddressMode resolveSamplerAddressMode(u32 value) {
   switch (value) {
     case 1u: return WMTSamplerAddressModeRepeat;
     case 2u: return WMTSamplerAddressModeMirrorRepeat;
+    case 5u: return WMTSamplerAddressModeMirrorClampToEdge;
     case 4u: return WMTSamplerAddressModeClampToBorderColor;
     case 3u:
     default: return WMTSamplerAddressModeClampToEdge;
@@ -703,6 +752,24 @@ WMTSamplerBorderColor resolveSamplerBorderColor(u32 value) {
     case 0xffffffffu: return WMTSamplerBorderColorOpaqueWhite;
     default: return (value >> 24) == 0u ? WMTSamplerBorderColorTransparentBlack : WMTSamplerBorderColorOpaqueBlack;
   }
+}
+
+void appendSamplerTrace(std::ostringstream& out,
+                        const core::FlatStateSet<core::kMaxSamplerStates>& states,
+                        bool srgbTexture) {
+  const auto minFilter = samplerStateOr(states, SAMP_MIN_FILTER, 0u);
+  const auto magFilter = samplerStateOr(states, SAMP_MAG_FILTER, 0u);
+  const auto mipFilter = samplerStateOr(states, SAMP_MIP_FILTER, 0u);
+  const auto addressU = samplerStateOr(states, SAMP_ADDRESS_U, 1u);
+  const auto addressV = samplerStateOr(states, SAMP_ADDRESS_V, 1u);
+  const auto addressW = samplerStateOr(states, SAMP_ADDRESS_W, 1u);
+  const auto borderColor = samplerStateOr(states, SAMP_BORDER_COLOR, 0u);
+  const auto maxMipLevel = samplerStateOr(states, SAMP_MAX_MIP_LEVEL, 0u);
+  out << " addr=(" << addressU << "," << addressV << "," << addressW << ")"
+      << " filter=(" << minFilter << "," << magFilter << "," << mipFilter << ")"
+      << " border=0x" << std::hex << borderColor << std::dec
+      << " maxMip=" << maxMipLevel
+      << " srgbTex=" << (srgbTexture ? 1 : 0);
 }
 
 }  // namespace
@@ -1316,7 +1383,8 @@ bool encodeDraw(EncodeContext& ctx,
                   false,
                   {},
                   {}};
-  const bool traceEncode = debug::shouldTraceEncode(hot, seqId);
+  const bool traceEncode = debug::shouldTraceEncode(hot, seqId) ||
+                           colorAttachmentAliasesTracedTexture(ctx.pool, hot);
   if (debug::skipAllDraws()) {
     if (queueTraceEnabled() || traceEncode) {
       std::ostringstream out;
@@ -1337,6 +1405,7 @@ bool encodeDraw(EncodeContext& ctx,
     return false;
   }
   const u64 drawOrdinal = debug::nextDrawOrdinal();
+  traceRenderTargetWriteForTexture(ctx.pool, hot, seqId, drawOrdinal);
   if (debug::shouldSkipDrawOrdinal(drawOrdinal)) {
     if (queueTraceEnabled() || traceEncode) {
       std::ostringstream out;
@@ -2240,6 +2309,8 @@ bool encodeDraw(EncodeContext& ctx,
         u32 textureLod = 0;
         const resources::TextureRecord* textureRecord = nullptr;
         WMT::Texture texture{};
+        core::FlatStateSet<core::kMaxSamplerStates> samplerStates{};
+        bool srgbTexture = false;
         WMT::Reference<WMT::SamplerState> samplerRef{};
         WMT::SamplerState sampler{};
       };
@@ -2264,9 +2335,11 @@ bool encodeDraw(EncodeContext& ctx,
         resolved.stage = stage;
         resolved.textureHandle = textureHandle;
         resolved.textureLod = binding.textureLod;
+        resolved.samplerStates = binding.samplerStates;
         if (auto* texture = ctx.pool.findTexture(textureHandle.value); texture && texture->texture) {
           const bool srgbTexture =
               core::flatStateOr(hot.samplerStates[stage], core::SAMP_SRGB_TEXTURE, 0u) != 0;
+          resolved.srgbTexture = srgbTexture;
           resolved.textureRecord = texture;
           resolved.texture = resources::textureForShaderRead(*texture, srgbTexture);
         }
@@ -2321,7 +2394,8 @@ bool encodeDraw(EncodeContext& ctx,
           if (binding.stage >= dxmt9::shaders::kArgbufResourceArrayStageCount) {
             continue;
           }
-          if (debug::shouldTraceTexture(binding.textureHandle) && binding.textureRecord) {
+          if ((traceEncode || debug::shouldTraceTexture(binding.textureHandle)) &&
+              binding.textureRecord) {
             std::ostringstream out;
             out << "[dxmt9-texture] bind stage=" << binding.stage
                 << " handle=0x" << std::hex << binding.textureHandle.value << std::dec
@@ -2330,6 +2404,7 @@ bool encodeDraw(EncodeContext& ctx,
                 << binding.textureRecord->desc.height
                 << " levels=" << binding.textureRecord->desc.levels
                 << " lod=" << binding.textureLod;
+            appendSamplerTrace(out, binding.samplerStates, binding.srgbTexture);
             emitTextureTraceLine(out.str());
           }
           auto& slot = argbufBindings[argbufBindingCount++];
@@ -2350,7 +2425,8 @@ bool encodeDraw(EncodeContext& ctx,
       for (std::size_t i = 0; i < resolvedFragmentBindingCount; ++i) {
         const auto& binding = resolvedFragmentBindings[i];
         if (binding.texture) {
-          if (debug::shouldTraceTexture(binding.textureHandle) && binding.textureRecord) {
+          if ((traceEncode || debug::shouldTraceTexture(binding.textureHandle)) &&
+              binding.textureRecord) {
             std::ostringstream out;
             out << "[dxmt9-texture] bind stage=" << binding.stage
                 << " handle=0x" << std::hex << binding.textureHandle.value << std::dec
@@ -2359,6 +2435,7 @@ bool encodeDraw(EncodeContext& ctx,
                 << binding.textureRecord->desc.height
                 << " levels=" << binding.textureRecord->desc.levels
                 << " lod=" << binding.textureLod;
+            appendSamplerTrace(out, binding.samplerStates, binding.srgbTexture);
             emitTextureTraceLine(out.str());
           }
           recordedSetFragmentTexture(ctx, encoder, binding.texture,
@@ -2433,7 +2510,8 @@ bool encodeDraw(EncodeContext& ctx,
       for (std::size_t i = 0; i < resolvedVertexBindingCount; ++i) {
         const auto& binding = resolvedVertexBindings[i];
         if (binding.texture) {
-          if (debug::shouldTraceTexture(binding.textureHandle) && binding.textureRecord) {
+          if ((traceEncode || debug::shouldTraceTexture(binding.textureHandle)) &&
+              binding.textureRecord) {
             std::ostringstream out;
             out << "[dxmt9-texture] bind vertex stage=" << binding.stage
                 << " handle=0x" << std::hex << binding.textureHandle.value << std::dec
@@ -2507,6 +2585,7 @@ bool encodeDraw(EncodeContext& ctx,
   }
   if (indexedDraw) {
     const bool autoExpandFfpIndexed =
+        fixedFunctionPath &&
         ffLayout.has_value() &&
         (hot.textureMask & 0x3fu) == 0x3fu &&
         core::flatStateOr(hot.renderStates, RS_ALPHABLEND_ENABLE, 0u) != 0u &&

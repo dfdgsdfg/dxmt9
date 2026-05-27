@@ -2,6 +2,7 @@
 #include "dxmt9/assert.hpp"
 #include "dxmt9_archive_prewarm.hpp"
 #include "dxmt9_debug_alloc_guard.hpp"
+#include "dxmt9_debug_trace.hpp"
 #include "dxmt9_device.hpp"
 #include "dxmt9_blit_encoders.hpp"
 #include "dxmt9_compat.hpp"
@@ -9,6 +10,7 @@
 #include "dxmt9_perf_counters.hpp"
 #include "dxmt9_pipeline_cache.hpp"
 #include "dxmt9_presenter.hpp"
+#include "dxmt9_queue.hpp"
 #include "dxmt9_resource_initializer.hpp"
 #include "dxmt9_resource_pool.hpp"
 #include "dxmt9_ring_arena.hpp"
@@ -62,6 +64,53 @@ bool forceDedicatedTransientUploads() {
     return env && env[0] != '\0' && std::strcmp(env, "0") != 0;
   }();
   return value;
+}
+
+bool surfaceAliasesTracedTexture(resources::Pool& pool, core::Handle handle) {
+  const auto wanted = debug::traceTextureHandle();
+  if (wanted == 0 || !handle) {
+    return false;
+  }
+  const auto* surface = pool.findSurface(handle.value);
+  return surface && surface->aliasTexture.value == wanted;
+}
+
+void traceTextureSurfaceOp(resources::Pool& pool, const char* op,
+                           core::Handle a = {}, core::Handle b = {},
+                           core::Handle c = {}) {
+  if (!op ||
+      (!surfaceAliasesTracedTexture(pool, a) &&
+       !surfaceAliasesTracedTexture(pool, b) &&
+       !surfaceAliasesTracedTexture(pool, c))) {
+    return;
+  }
+  std::ostringstream out;
+  out << "[dxmt9-texture] surface-op " << op;
+  if (a) out << " a=0x" << std::hex << a.value << std::dec;
+  if (b) out << " b=0x" << std::hex << b.value << std::dec;
+  if (c) out << " c=0x" << std::hex << c.value << std::dec;
+  core::metalqueue::emitTextureTraceLine(out.str());
+}
+
+void traceTextureClear(resources::Pool& pool, const core::ClearDesc& desc) {
+  bool tracesTexture = false;
+  for (const auto& attachment : desc.colorAttachments) {
+    tracesTexture = tracesTexture || surfaceAliasesTracedTexture(pool, attachment.handle);
+  }
+  tracesTexture = tracesTexture || surfaceAliasesTracedTexture(pool, desc.depthStencil.handle);
+  if (!tracesTexture) {
+    return;
+  }
+  std::ostringstream out;
+  out << "[dxmt9-texture] clear flags color=" << (desc.clearColor ? 1 : 0)
+      << " depth=" << (desc.clearDepth ? 1 : 0)
+      << " stencil=" << (desc.clearStencil ? 1 : 0)
+      << " rgba=(" << desc.color.r << "," << desc.color.g << ","
+      << desc.color.b << "," << desc.color.a << ")"
+      << " depthValue=" << desc.depth
+      << " stencilValue=" << desc.stencil
+      << " rects=" << desc.rects.size();
+  core::metalqueue::emitTextureTraceLine(out.str());
 }
 
 std::size_t alignUp(std::size_t value, std::size_t alignment) {
@@ -357,6 +406,12 @@ void CommandQueue::uploadTextureLevel(core::TextureHandle handle,
   if (initializer_) {
     initializer_->uploadTextureLevel(handle, level, width, height, depth, pitch,
                                      slicePitch, bytes);
+  }
+}
+
+void CommandQueue::initializeTextureZero(core::TextureHandle handle) {
+  if (initializer_) {
+    initializer_->initializeTextureZero(handle);
   }
 }
 
@@ -1080,6 +1135,10 @@ void CommandQueue::submitClear(const core::ClearDesc& desc) {
   perf::countSubmitClear();
   std::unique_lock lock(mutex_);
   ensureWritingSlotUnlocked(*this, lock);
+  traceTextureClear(pool_, desc);
+  for (const auto& attachment : desc.colorAttachments) {
+    traceTextureSurfaceOp(pool_, "Clear", attachment.handle, desc.depthStencil.handle);
+  }
   currentSlotUnlocked(*this).appendClear(desc);
   if (desc.colorAttachments[0].handle) {
     currentBackBuffer_ = desc.colorAttachments[0].handle;
@@ -1090,6 +1149,7 @@ void CommandQueue::submitClear(const core::ClearDesc& desc) {
 void CommandQueue::submitSurfaceCopy(const core::SurfaceCopyDesc& desc) {
   std::unique_lock lock(mutex_);
   ensureWritingSlotUnlocked(*this, lock);
+  traceTextureSurfaceOp(pool_, "SurfaceCopy", desc.source, desc.destination);
   currentSlotUnlocked(*this).appendSurfaceCopy(desc);
   currentBackBuffer_ = desc.destination;
   pool_.markSurfaceCopyResources(desc, seqIdForMark(*this, 0));
@@ -1105,6 +1165,7 @@ void CommandQueue::submitStretchRect(const core::StretchRectDesc& desc) {
         });
   }
   ensureWritingSlotUnlocked(*this, lock);
+  traceTextureSurfaceOp(pool_, "StretchRect", desc.source, desc.destination);
   currentSlotUnlocked(*this).appendStretchRect(desc);
   currentBackBuffer_ = desc.destination;
   pool_.markStretchResources(desc, seqIdForMark(*this, 0));
@@ -1120,12 +1181,14 @@ void CommandQueue::submitReadback(const core::ReadbackDesc& desc) {
   std::lock_guard lock(mutex_);
   // Readback is satisfied synchronously in CommandQueue::readbackSurface.
   // Still mark resources so NoUseAfterFree remains meaningful.
+  traceTextureSurfaceOp(pool_, "Readback", desc.source, desc.destination);
   pool_.markReadbackResources(desc, seqIdForMark(*this, 0));
 }
 
 void CommandQueue::submitColorFill(const core::ColorFillDesc& desc) {
   std::unique_lock lock(mutex_);
   ensureWritingSlotUnlocked(*this, lock);
+  traceTextureSurfaceOp(pool_, "ColorFill", desc.destination);
   currentSlotUnlocked(*this).appendColorFill(desc);
   currentBackBuffer_ = desc.destination;
   pool_.markColorFillResources(desc, seqIdForMark(*this, 0));
@@ -1138,6 +1201,7 @@ void CommandQueue::submitDepthResolve(const core::DepthResolveDesc& desc) {
   // so currentBackBuffer_ is left untouched.
   std::unique_lock lock(mutex_);
   ensureWritingSlotUnlocked(*this, lock);
+  traceTextureSurfaceOp(pool_, "DepthResolve", desc.msaaDepth, desc.intzDest);
   currentSlotUnlocked(*this).appendDepthResolve(desc);
   pool_.markDepthResolveResources(desc, seqIdForMark(*this, 0));
 }
