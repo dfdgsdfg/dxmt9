@@ -127,26 +127,12 @@ inline void bumpShaderDecoderReject(DecoderRejectReason reason) {
   }
 }
 
-// D3DDECLUSAGE / D3DDECLMETHOD support tables — anything outside the
-// "supported" set safe-rejects via DecoderReject above. The boundaries
-// are documented in specs/gap.md §A.4 / §A.5; the helpers stay local to
-// keep the decoder TU self-contained.
+// D3DDECLUSAGE / D3DDECLMETHOD support tables. D3DDECLUSAGE values 0..13
+// are legal shader semantics; unsupported-by-name usages still flow through
+// generic vin[] / texcoord slots. Non-default declaration methods describe
+// fixed-function tessellator stages that dxmt9 does not implement.
 inline bool isSupportedDeclUsage(u32 usage) {
-  // 0..5, 9, 10 are the eight codes dxmt9 lowers (POSITION, BLENDWEIGHT,
-  // BLENDINDICES, NORMAL, PSIZE, TEXCOORD, POSITIONT, COLOR).
-  switch (usage) {
-    case kD3DDeclUsagePosition:
-    case kD3DDeclUsageBlendWeight:
-    case kD3DDeclUsageBlendIndices:
-    case kD3DDeclUsageNormal:
-    case kD3DDeclUsagePSize:
-    case kD3DDeclUsageTexcoord:
-    case kD3DDeclUsagePositionT:
-    case kD3DDeclUsageColor:
-      return true;
-    default:
-      return false;
-  }
+  return usage <= kD3DDeclUsageSample;
 }
 
 inline bool isSupportedDeclMethod(u32 method) {
@@ -1323,14 +1309,9 @@ SpirvModule translateD3DBytecodeToSpirv(const ShaderRef& shader,
   module.words.reserve(bytes.size() / sizeof(u32));
   module.stage = vertex ? D3DShaderStage::Vertex : D3DShaderStage::Pixel;
 
-  // Validate the bound vertex declaration eagerly so an unsupported
-  // D3DDECLUSAGE / D3DDECLMETHOD short-circuits to an empty SpirvModule
-  // before any downstream binding consumer (decodeVertexShaderInputLayout
-  // for SM2+/SM3 inputs, the FFP layout decoder for legacy paths) silently
-  // misbinds the attribute. The check runs for both stages because a pixel
-  // shader can share the same context.vertexDecl, and a malformed decl
-  // should surface on the first translate call regardless of which side
-  // hit the cache first.
+  // Validate declaration methods eagerly. All D3DDECLUSAGE values 0..13 are
+  // legal semantics and can be lowered as generic shader inputs; methods
+  // outside DEFAULT need fixed-function tessellator behavior we do not have.
   for (const auto& element : context.vertexDecl.elements) {
     if (!isSupportedDeclMethod(element.method)) {
       throw DecoderReject{DecoderRejectReason::DeclMethodUnsupported,

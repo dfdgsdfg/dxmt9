@@ -841,6 +841,82 @@ void testDrawBindingPacketPlanTextureFreeHasEmptyFragmentBindings() {
         "texture-free binding packet has no fragment texture/sampler plan");
 }
 
+void testFfpDisabledStageTextureDoesNotMaterializeFragmentBinding() {
+  DrawDesc desc{};
+  desc.pixelShader.kind = ShaderRef::Kind::FixedFunctionPixel;
+  FfpPixelKey disabledKey{};
+  for (auto& stage : disabledKey.stages) {
+    stage.colorOp = static_cast<u32>(TextureOp::Disable);
+    stage.alphaOp = static_cast<u32>(TextureOp::Disable);
+  }
+  desc.pixelShader.pixelKey = disabledKey;
+  desc.textures[2].handle = Handle{0x2222u};
+  desc.samplers[2].states[SAMP_MIN_FILTER] = 2u;
+  desc.viewport.viewport = Viewport{0u, 0u, 16u, 16u, 0.0f, 1.0f};
+
+  const auto disabledHot = makeFlatDrawStateRecord(desc);
+  const auto disabledLayout = makeDrawShaderLayoutContext(desc);
+  const auto disabledContext =
+      dxmt9::drawshader::makeShaderSourceContext(disabledLayout, disabledHot);
+  check(!disabledContext.textures[2],
+        "disabled FFP texture stage is not a shader texture input");
+
+  const auto disabledPacket = dxmt9::encoders::makeDrawBindingPacketPlan(
+      desc.vertexDecl,
+      disabledHot,
+      makeBindingPacketKeyParamView(),
+      16u,
+      16u,
+      false,
+      false,
+      false,
+      &disabledLayout.pixelShader);
+  check(disabledPacket.fragmentTextureSamplers.empty(),
+        "disabled FFP texture stage is not bound on the Metal fragment lane");
+
+  desc.pixelShader.pixelKey = makeSingleTextureStageKey(2u);
+  const auto enabledHot = makeFlatDrawStateRecord(desc);
+  const auto enabledLayout = makeDrawShaderLayoutContext(desc);
+  const auto enabledPacket = dxmt9::encoders::makeDrawBindingPacketPlan(
+      desc.vertexDecl,
+      enabledHot,
+      makeBindingPacketKeyParamView(),
+      16u,
+      16u,
+      false,
+      false,
+      false,
+      &enabledLayout.pixelShader);
+  checkEq(enabledPacket.fragmentTextureSamplers.size(), std::size_t{1},
+          "enabled FFP texture stage still materializes a fragment binding");
+  checkEq(enabledPacket.fragmentTextureSamplers[0].stage, 2u,
+          "enabled FFP texture stage preserves the stage index");
+}
+
+void testProgrammablePixelShaderSurvivesGenericDeclUsage() {
+  DrawDesc desc{};
+  desc.pixelShader = makePixelShaderSamplingStage(0u);
+  desc.textures[0].handle = Handle{0x5000u};
+  desc.vertexDecl.elements = {
+      VertexElement{0, 0, dxmt9::ffp::kD3DDeclTypeFloat3, 0,
+                    dxmt9::ffp::kD3DDeclUsagePosition, 0},
+      VertexElement{0, 12, dxmt9::ffp::kD3DDeclTypeFloat3, 0,
+                    dxmt9::ffp::kD3DDeclUsageTangent, 0},
+  };
+  desc.vertexDecl.streams[0].stride = 24u;
+
+  const auto hot = makeFlatDrawStateRecord(desc);
+  const auto layout = makeDrawShaderLayoutContext(desc);
+  auto context = dxmt9::drawshader::makeShaderSourceContext(layout, hot);
+  const auto source = dxmt9::translator::makeTranslatedFragmentSource(
+      desc.pixelShader, context);
+
+  checkContains(source, "tex0.sample",
+                "pixel shader with TANGENT declaration usage still translates");
+  checkNotContains(source, "decoded d3d hash 0",
+                   "TANGENT declaration usage must not trigger fallback shader");
+}
+
 }  // namespace
 
 int main() {
@@ -861,6 +937,8 @@ int main() {
     testDrawBindingPacketCacheReusesStableValuePacket();
     testDrawBindingPacketPlanPreResolvesTextureBoundEncoderValues();
     testDrawBindingPacketPlanTextureFreeHasEmptyFragmentBindings();
+    testFfpDisabledStageTextureDoesNotMaterializeFragmentBinding();
+    testProgrammablePixelShaderSurvivesGenericDeclUsage();
   } catch (const TestFailure& failure) {
     std::cerr << "shader_argbuf_binding_value_spec failed: "
               << failure.what() << '\n';

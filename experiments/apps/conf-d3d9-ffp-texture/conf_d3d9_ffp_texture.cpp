@@ -16,6 +16,9 @@
 //
 // This is the controlled repro for the 3DMark05 "white scene" symptom, where
 // FFP draws appeared to output white diffuse instead of their bound texture.
+// It also verifies an enabled texture-stage combiner with no bound texture:
+// D3DTA_TFACTOR must still be evaluated instead of skipping the stage and
+// returning diffuse white.
 
 namespace {
 
@@ -32,6 +35,7 @@ struct Vertex {
 };
 
 bool runFfpTextureApp(HINSTANCE instance) {
+  const CaptureConfig capture = loadCaptureConfig();
   HWND hwnd = createWindow(instance, kWindowClass, kWindowTitle,
                            static_cast<int>(kWidth), static_cast<int>(kHeight));
   if (!hwnd) {
@@ -128,6 +132,10 @@ bool runFfpTextureApp(HINSTANCE instance) {
 
   D3DCOLOR pixel = 0;
   const bool readOk = readBackbufferPixel(device.ptr(), kWidth / 2, kHeight / 2, pixel);
+  if (!captureBackbuffer(device.ptr(), capture)) {
+    destroyWindow(instance, kWindowClass, hwnd);
+    return false;
+  }
   device->PresentEx(nullptr, nullptr, nullptr, nullptr, 0);
   destroyWindow(instance, kWindowClass, hwnd);
   if (!readOk) {
@@ -144,6 +152,50 @@ bool runFfpTextureApp(HINSTANCE instance) {
   }
 
   logf("PASS: ffp-texture pixel rgb=(%u,%u,%u)",
+       static_cast<unsigned>(channelR(pixel)),
+       static_cast<unsigned>(channelG(pixel)),
+       static_cast<unsigned>(channelB(pixel)));
+
+  device->SetTexture(0, nullptr);
+  device->SetRenderState(D3DRS_TEXTUREFACTOR, D3DCOLOR_ARGB(128, 64, 32, 16));
+  device->SetTextureStageState(0, D3DTSS_COLOROP, D3DTOP_SELECTARG1);
+  device->SetTextureStageState(0, D3DTSS_COLORARG1, D3DTA_TFACTOR);
+  device->SetTextureStageState(0, D3DTSS_ALPHAOP, D3DTOP_SELECTARG1);
+  device->SetTextureStageState(0, D3DTSS_ALPHAARG1, D3DTA_TFACTOR);
+
+  hr = device->Clear(0, nullptr, D3DCLEAR_TARGET, D3DCOLOR_XRGB(0, 0, 255), 1.0f, 0);
+  if (FAILED(hr)) {
+    log_hresult("Clear unbound TFACTOR", hr);
+    destroyWindow(instance, kWindowClass, hwnd);
+    return false;
+  }
+  device->BeginScene();
+  hr = device->DrawPrimitive(D3DPT_TRIANGLESTRIP, 0, 2);
+  device->EndScene();
+  if (FAILED(hr)) {
+    log_hresult("DrawPrimitive unbound TFACTOR", hr);
+    destroyWindow(instance, kWindowClass, hwnd);
+    return false;
+  }
+
+  pixel = 0;
+  const bool tfactorReadOk = readBackbufferPixel(device.ptr(), kWidth / 2, kHeight / 2, pixel);
+  device->PresentEx(nullptr, nullptr, nullptr, nullptr, 0);
+  destroyWindow(instance, kWindowClass, hwnd);
+  if (!tfactorReadOk) {
+    return false;
+  }
+
+  if (!colorNear(pixel, 64, 32, 16, 16)) {
+    logf("FAIL: ffp-unbound-tfactor pixel rgb=(%u,%u,%u) expected "
+         "tfactor(64,32,16) — FFP skipped an enabled unbound stage",
+         static_cast<unsigned>(channelR(pixel)),
+         static_cast<unsigned>(channelG(pixel)),
+         static_cast<unsigned>(channelB(pixel)));
+    return false;
+  }
+
+  logf("PASS: ffp-unbound-tfactor pixel rgb=(%u,%u,%u)",
        static_cast<unsigned>(channelR(pixel)),
        static_cast<unsigned>(channelG(pixel)),
        static_cast<unsigned>(channelB(pixel)));

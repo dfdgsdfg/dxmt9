@@ -2171,6 +2171,18 @@ oracle = "Wine d3d9 visual.c texture_blending_ops behavior, reduced to D3DTA_TFA
 oracle-date = "2026-05-17"
 
 [[test]]
+file = "texture/dxmt9_ffp_tss_tfactor_unbound_readback.shader_test"
+status = "passing"
+source = "dxmt9"
+source_kind = "project-authored"
+license = "MIT"
+license_scope = "project-mit"
+models = ["ffp"]
+opcodes = ["TEX"]
+oracle = "Wine D3D9 FFP texture-stage state applies D3DTA_TFACTOR even when no texture is bound"
+oracle-date = "2026-05-27"
+
+[[test]]
 file = "vs_specific/dxmt9_positiont_diffuse_varying_readback.shader_test"
 status = "passing"
 source = "dxmt9"

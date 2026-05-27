@@ -836,24 +836,28 @@ std::string makeFfpVertexSource(const FfpVertexKey& key,
 std::string makeFfpPixelSource(const FfpPixelKey& key,
                                const drawshader::ShaderSourceContext& context) {
   std::ostringstream out;
-  std::vector<size_t> activeStages;
-  activeStages.reserve(kMaxTextureStages);
+  std::vector<size_t> sampledStages;
+  sampledStages.reserve(kMaxTextureStages);
+  bool hasEnabledStages = false;
   for (size_t stage = 0; stage < kMaxTextureStages; ++stage) {
     const bool stageEnabled =
         key.stages[stage].colorOp != static_cast<u32>(TextureOp::Disable) ||
         key.stages[stage].alphaOp != static_cast<u32>(TextureOp::Disable);
-    if (stageEnabled && context.textures[stage]) {
-      activeStages.push_back(stage);
+    if (stageEnabled) {
+      hasEnabledStages = true;
+      if (context.textures[stage]) {
+        sampledStages.push_back(stage);
+      }
     }
   }
-  const bool textured = !activeStages.empty();
+  const bool hasTextureParams = !sampledStages.empty();
   // D3DSAMP_MIPMAPLODBIAS (gap_d3d9 B.3) PSO-variant gate: only when the variant
   // key flagged a non-zero sampler LOD bias do we declare the slot-4
   // SamplerLodBias uniform and thread bias() through the stage samples. When
   // clear (the common case) the emitted MSL is byte-identical to the
   // pre-MIPMAPLODBIAS plain-sample form, and the encoder skips the slot-4 bind
   // on the same predicate. Only meaningful on a textured fragment.
-  const bool emitLodBias = context.samplerLodBias && textured;
+  const bool emitLodBias = context.samplerLodBias && hasTextureParams;
   // Per-stage bias() argument appended to a sample() call, or empty when the
   // gate is clear. Keeping this in one place keeps every sample site in sync
   // with the slot-4 param emit decision.
@@ -883,7 +887,7 @@ std::string makeFfpPixelSource(const FfpPixelKey& key,
   // alias block re-binds the `tex<stage>` / `samp<stage>` names off the
   // argbuf so every downstream sample site is byte-identical.
   const bool argbufResourceArray =
-      argbufHybrid && context.argbufResourceArray && textured;
+      argbufHybrid && context.argbufResourceArray && hasTextureParams;
   if (argbufResourceArray) {
     out << shaders::makeShaderPreludeArgbufResourceArray(context.clipPlaneMask != 0);
   } else if (argbufHybrid) {
@@ -918,7 +922,7 @@ std::string makeFfpPixelSource(const FfpPixelKey& key,
       out << ", float2 dxmt9_pointCoord [[point_coord]]";
     }
   };
-  if (textured) {
+  if (hasTextureParams) {
     if (argbufResourceArray) {
       // R-BACK-12.22..12.26 (resource-array sub-mode) — texture/sampler
       // resources ride the slot-30 argbuf arrays; the entry point declares
@@ -937,8 +941,8 @@ std::string makeFfpPixelSource(const FfpPixelKey& key,
       out << "  constant PsConsts& psConsts = *abuf.psConsts;\n";
       out << "  constant FfpPsConsts& ffpPs = *abuf.ffpPs;\n";
       // FFP textures are always texture2d<float>; alias each active stage.
-      for (size_t i = 0; i < activeStages.size(); ++i) {
-        const size_t stage = activeStages[i];
+      for (size_t i = 0; i < sampledStages.size(); ++i) {
+        const size_t stage = sampledStages[i];
         out << "  texture2d<float> tex" << stage << " = abuf.textures["
             << stage << "];\n";
         out << "  sampler samp" << stage << " = abuf.samplers[" << stage
@@ -950,8 +954,8 @@ std::string makeFfpPixelSource(const FfpPixelKey& key,
           << shaders::kArgbufHybridBindSlot << ")]]";
       emitPointCoordParam();
       out << ", ";
-      for (size_t i = 0; i < activeStages.size(); ++i) {
-        const size_t stage = activeStages[i];
+      for (size_t i = 0; i < sampledStages.size(); ++i) {
+        const size_t stage = sampledStages[i];
         if (i != 0) {
           out << ", ";
         }
@@ -970,8 +974,8 @@ std::string makeFfpPixelSource(const FfpPixelKey& key,
              "constant FfpPsConsts& ffpPs [[buffer(3)]]";
       emitPointCoordParam();
       out << ", ";
-      for (size_t i = 0; i < activeStages.size(); ++i) {
-        const size_t stage = activeStages[i];
+      for (size_t i = 0; i < sampledStages.size(); ++i) {
+        const size_t stage = sampledStages[i];
         if (i != 0) {
           out << ", ";
         }
@@ -1026,7 +1030,7 @@ std::string makeFfpPixelSource(const FfpPixelKey& key,
     s << "dxmt9_select_texcoord(in, " << coordIndex << "u).xy";
     return s.str();
   };
-  if (textured) {
+  if (hasEnabledStages) {
     if (debugFfpUv) {
       if (key.pointSpriteEnable) {
         out << "  return float4(dxmt9_pointCoord.x, dxmt9_pointCoord.y, 0.0, 1.0);\n";
@@ -1037,8 +1041,8 @@ std::string makeFfpPixelSource(const FfpPixelKey& key,
       out << "// ffp pixel hash " << key.hash << "\n";
       return out.str();
     }
-    if (debugFfpTexture) {
-      const size_t stage = activeStages.front();
+    if (debugFfpTexture && hasTextureParams) {
+      const size_t stage = sampledStages.front();
       // FFP texcoord routing: the FFP vertex shader has already resolved
       // TSS_TEXCOORDINDEX *and* applied the per-stage texture-transform
       // matrix into `out.texcoord<stage>` (see `makeFfpVertexSource`).
@@ -1054,8 +1058,8 @@ std::string makeFfpPixelSource(const FfpPixelKey& key,
       out << "// ffp pixel hash " << key.hash << "\n";
       return out.str();
     }
-    if (debugFfpAlpha) {
-      const size_t stage = activeStages.front();
+    if (debugFfpAlpha && hasTextureParams) {
+      const size_t stage = sampledStages.front();
       // Same per-stage routing as the debugFfpTexture branch above:
       // the FFP VS already wrote the transformed coord into
       // `out.texcoord<stage>`.

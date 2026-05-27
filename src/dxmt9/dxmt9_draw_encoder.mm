@@ -1700,7 +1700,8 @@ bool encodeDraw(EncodeContext& ctx,
       bindingPacketHasRasterTarget ? bindingPacketSurface->desc.height : 1u,
       ffLayout && ffLayout->preTransformed,
       debug::disableScissor(),
-      debug::disableCull());
+      debug::disableCull(),
+      &drawState.shaderContext().pixelShader);
   const auto& bindingPacket =
       cacheDrawBindingPacket(gDrawBindingPacketCache, bindingPacketPlan);
   // Apply FFP preTransformed viewport override to the FfpVs host copy
@@ -1931,6 +1932,7 @@ bool encodeDraw(EncodeContext& ctx,
               << " fvf=0x" << std::hex << vertexDecl.fvf << std::dec
               << " ffLayout=1"
               << " preT=" << (ffLayout->preTransformed ? 1 : 0)
+              << " startVertex=" << pv.startVertex
               << " baseVertex=" << pv.baseVertexIndex
               << " startIndex=" << pv.startIndex
               << " primCount=" << pv.primitiveCount
@@ -2031,10 +2033,12 @@ bool encodeDraw(EncodeContext& ctx,
           }
         }
 
-        if (hot.indexBuffer) {
+        if (hot.indexBuffer || !pv.userIndexData.empty()) {
           const auto* indexRecord = ctx.pool.findBuffer(hot.indexBuffer.value);
           std::span<const u8> indexBytes;
-          if (indexRecord && !indexRecord->shadow.empty()) {
+          if (!pv.userIndexData.empty()) {
+            indexBytes = pv.userIndexData;
+          } else if (indexRecord && !indexRecord->shadow.empty()) {
             indexBytes = indexRecord->shadow;
           } else if (indexRecord && indexRecord->buffer && indexRecord->contents) {
             indexBytes = std::span<const u8>(static_cast<const u8*>(indexRecord->contents),
@@ -2468,6 +2472,14 @@ bool encodeDraw(EncodeContext& ctx,
         << " draw rt0=" << static_cast<unsigned long long>(hot.colorAttachments[0].handle.value)
         << " ds=" << static_cast<unsigned long long>(hot.depthStencil.handle.value)
         << " tex0=" << static_cast<unsigned long long>(hot.textures[0].value)
+        << " tex1=" << static_cast<unsigned long long>(hot.textures[1].value)
+        << " tex2=" << static_cast<unsigned long long>(hot.textures[2].value)
+        << " tex3=" << static_cast<unsigned long long>(hot.textures[3].value)
+        << " tex4=" << static_cast<unsigned long long>(hot.textures[4].value)
+        << " tex5=" << static_cast<unsigned long long>(hot.textures[5].value)
+        << " textureMask=0x" << std::hex << hot.textureMask << std::dec
+        << " vsHash=" << static_cast<unsigned long long>(drawState.shaderContext().vertexShader.hash)
+        << " psHash=" << static_cast<unsigned long long>(drawState.shaderContext().pixelShader.hash)
         << " ffLayout=" << (ffLayout ? 1 : 0)
         << " preT=" << (preTransformed ? 1 : 0)
         << " indexed=" << (indexedDraw ? 1 : 0)
@@ -2494,7 +2506,33 @@ bool encodeDraw(EncodeContext& ctx,
     emitQueueTraceLine(out.str());
   }
   if (indexedDraw) {
-    const bool forceExpandIndexed = debug::forceExpandIndexed();
+    const bool autoExpandFfpIndexed =
+        ffLayout.has_value() &&
+        (hot.textureMask & 0x3fu) == 0x3fu &&
+        core::flatStateOr(hot.renderStates, RS_ALPHABLEND_ENABLE, 0u) != 0u &&
+        core::flatStateOr(hot.renderStates, RS_SRC_BLEND, 0u) ==
+            static_cast<u32>(core::BlendFactor::InvDestColor) &&
+        core::flatStateOr(hot.renderStates, RS_DEST_BLEND, 0u) ==
+            static_cast<u32>(core::BlendFactor::One);
+    const bool forceExpandIndexed =
+        debug::forceExpandIndexed() || autoExpandFfpIndexed;
+    if (traceEncode) {
+      std::ostringstream out;
+      out << "[dxmt9-expand-policy] seq=" << static_cast<unsigned long long>(seqId)
+          << " ordinal=" << static_cast<unsigned long long>(drawOrdinal)
+          << " auto=" << (autoExpandFfpIndexed ? 1 : 0)
+          << " env=" << (debug::forceExpandIndexed() ? 1 : 0)
+          << " active=" << (forceExpandIndexed ? 1 : 0)
+          << " ff=" << (fixedFunctionPath ? 1 : 0)
+          << " ffLayout=" << (ffLayout ? 1 : 0)
+          << " textureMask=0x" << std::hex << hot.textureMask << std::dec
+          << " alphaBlend=" << core::flatStateOr(hot.renderStates, RS_ALPHABLEND_ENABLE, 0u)
+          << " srcBlend=" << core::flatStateOr(hot.renderStates, RS_SRC_BLEND, 0u)
+          << " dstBlend=" << core::flatStateOr(hot.renderStates, RS_DEST_BLEND, 0u)
+          << " primCount=" << pv.primitiveCount
+          << " vertexCount=" << static_cast<unsigned long long>(vertexCount);
+      emitQueueTraceLine(out.str());
+    }
     if (forceExpandIndexed) {
       PerfScope fvfDecodeExpandedScope(perf::countEncodeDrawFvfDecodeCpuTime);
       std::span<const u8> indexBytes;
@@ -2515,16 +2553,18 @@ bool encodeDraw(EncodeContext& ctx,
       const std::size_t streamBase = static_cast<std::size_t>(hot.streamOffsets[0]);
       const std::size_t firstIndexByte =
           static_cast<std::size_t>(pv.startIndex) * indexElementSize(pv.indexType);
-      std::ostringstream out;
-      out << "[dxmt9-expanded-check] seq=" << static_cast<unsigned long long>(seqId)
-          << " tex0=" << static_cast<unsigned long long>(hot.textures[0].value)
-          << " ff=" << (ffLayout ? 1 : 0)
-          << " vertexBytes=" << vertexBytes.size()
-          << " indexBytes=" << indexBytes.size()
-          << " stride=" << stride
-          << " startIndex=" << pv.startIndex
-          << " baseVertex=" << pv.baseVertexIndex;
-      emitQueueTraceLine(out.str());
+      if (traceEncode) {
+        std::ostringstream out;
+        out << "[dxmt9-expanded-check] seq=" << static_cast<unsigned long long>(seqId)
+            << " tex0=" << static_cast<unsigned long long>(hot.textures[0].value)
+            << " ff=" << (ffLayout ? 1 : 0)
+            << " vertexBytes=" << vertexBytes.size()
+            << " indexBytes=" << indexBytes.size()
+            << " stride=" << stride
+            << " startIndex=" << pv.startIndex
+            << " baseVertex=" << pv.baseVertexIndex;
+        emitQueueTraceLine(out.str());
+      }
 
       if (!vertexBytes.empty() && !indexBytes.empty() && stride != 0) {
         std::vector<u8> expandedVertices(static_cast<std::size_t>(vertexCount) * stride, 0);
@@ -2606,11 +2646,13 @@ bool encodeDraw(EncodeContext& ctx,
         }
       }
 
-      std::ostringstream resultTrace;
-      resultTrace << "[dxmt9-expanded-check] seq=" << static_cast<unsigned long long>(seqId)
-                  << " tex0=" << static_cast<unsigned long long>(hot.textures[0].value)
-                  << " expanded=" << (expandedIndexedDraw ? 1 : 0);
-      emitQueueTraceLine(resultTrace.str());
+      if (traceEncode) {
+        std::ostringstream resultTrace;
+        resultTrace << "[dxmt9-expanded-check] seq=" << static_cast<unsigned long long>(seqId)
+                    << " tex0=" << static_cast<unsigned long long>(hot.textures[0].value)
+                    << " expanded=" << (expandedIndexedDraw ? 1 : 0);
+        emitQueueTraceLine(resultTrace.str());
+      }
     }
     auto pushDrawVolatile = [&] {
       const DrawVolatile vol = buildDrawVolatile(drawVertexBaseIndex, drawVertexStreamOffset,

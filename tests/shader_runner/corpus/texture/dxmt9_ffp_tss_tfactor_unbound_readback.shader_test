@@ -1,0 +1,14 @@
+; [provenance]
+; source: dxmt9
+; source_kind: project-authored
+; license: MIT
+; license_scope: project-mit
+; oracle: Wine D3D9 FFP texture-stage state applies D3DTA_TFACTOR even when no texture is bound
+; oracle-date: 2026-05-27
+
+[test]
+clear rgba(0.0, 0.0, 0.0, 1.0)
+dxmt9-render-state z_enable=disable z_write=disable texture_factor=0x80402010
+dxmt9-texture-stage 0 color_op=selectarg1 alpha_op=selectarg1 color_arg1=tfactor alpha_arg1=tfactor texcoord_index=0
+dxmt9-draw-textured-quad
+probe (32, 32) rgba(0.251, 0.125, 0.063, 0.502) 2

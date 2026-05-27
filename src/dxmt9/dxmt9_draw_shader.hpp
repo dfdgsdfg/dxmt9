@@ -73,6 +73,14 @@ ShaderSourceContext makeShaderSourceContext(const core::DrawShaderLayoutContext&
 // a DrawDesc-shaped state fixture. Hot pipeline code uses the flat overload.
 ShaderSourceContext makeShaderSourceContext(const core::fixture::DrawDesc& desc);
 
+// Fragment texture slots that the current pixel shader can actually read.
+// For programmable shaders this is the bound fragment mask; for FFP we trim
+// disabled texture stages so stale D3D texture bindings are not materialized as
+// Metal shader params or encoder bindings.
+std::uint32_t activeFragmentTextureMaskForShader(
+    const core::ShaderRef& pixelShader,
+    std::uint32_t textureMask);
+
 // Returns a complete MSL translation unit for either the vertex or pixel
 // shader corresponding to `context`. Also writes the source to
 // $DXMT_DUMP_SHADER_DIR/<label>-<hash>.metal if the env var is set.

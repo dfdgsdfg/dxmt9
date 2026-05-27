@@ -1054,11 +1054,12 @@ void testIntzDepthSampleableFormatMapping() {
 
 // D3DFMT_NULL — colorless render target (R-FORMAT-12,
 // specs/d3d9/formats/design.md "NULL render target"). Creating a NULL
-// render-target surface must SUCCEED but allocate no color backing; the
+// render-target surface must SUCCEED but allocate no GPU color backing; the
 // surface is flagged as a null render target so the backend render pass
-// can omit the color attachment. Lock/LockRect/readback on a NULL surface
-// must return D3DERR_INVALIDCALL. The render-pass color-attachment omission
-// itself is ObjC++/Metal and validated at the GPU/runtime level, not here.
+// can omit the color attachment. Lock/LockRect returns dummy CPU scratch per
+// Wine, while readback on a NULL surface must return D3DERR_INVALIDCALL. The
+// render-pass color-attachment omission itself is ObjC++/Metal and validated
+// at the GPU/runtime level, not here.
 void testNullRenderTargetColorlessBehavior() {
   // Classification prerequisite landed in 2f619f0: NULL FOURCC maps to
   // Format::NullRt, renderTarget-capable, placeholder BGRA8Unorm backend.
@@ -1089,13 +1090,13 @@ void testNullRenderTargetColorlessBehavior() {
   checkEq(nullDesc.format, Format::NullRt, "NULL backend format");
   check(nullDesc.renderTarget, "NULL backend render-target flag");
 
-  // (a) No color backing: the core surface must report itself as a null
-  // render target and allocate ZERO bytes of color storage even though the
-  // surface is 64x64 (a normal RT would allocate width*height*bpp bytes).
+  // (a) No GPU color backing: the core surface must report itself as a null
+  // render target. It still owns dummy CPU scratch so LockRect can return
+  // S_OK with valid pBits/Pitch like Wine's test_surface_format_null.
   check(nullRt->obj->isNullRenderTarget(),
         "core surface reports NULL render-target marker");
-  checkEq(nullRt->obj->colorBackingByteSize(), size_t{0},
-          "NULL render target allocates no color backing bytes");
+  checkEq(nullRt->obj->colorBackingByteSize(), size_t{64u * 64u * 4u},
+          "NULL render target allocates dummy lock scratch bytes");
 
   const auto nullPublic = surfaceDesc(nullRt.get(), "NULL public desc");
   checkEq(nullPublic.format, kD3DFmtNULL, "NULL public format round-trip");
@@ -1104,23 +1105,29 @@ void testNullRenderTargetColorlessBehavior() {
   checkEq(nullPublic.width, 64u, "NULL public width preserved");
   checkEq(nullPublic.height, 64u, "NULL public height preserved");
 
-  // (c) Lock/LockRect on a NULL surface must be rejected — there is no
-  // color storage to map.
+  // (c) Lock/LockRect on a NULL surface must return dummy scratch.
   D9CLockedRect lock{};
   checkEq(dxmt9c_surface_lock_rect(nullRt.get(), &lock, nullptr, 0),
-          D3DERR_INVALIDCALL, "NULL surface full Lock returns INVALIDCALL");
-  check(lock.bits == nullptr, "NULL surface lock yields no bits");
+          D3D_OK, "NULL surface full Lock returns S_OK");
+  check(lock.bits != nullptr, "NULL surface lock yields dummy bits");
+  checkEq(lock.pitch, 64 * 4, "NULL surface lock pitch uses placeholder BGRA8 bpp");
+  checkEq(dxmt9c_surface_unlock_rect(nullRt.get()), D3D_OK,
+          "NULL surface full Unlock returns S_OK");
 
   D9CLockedRect rectLock{};
   const D9CRect subRect{0, 0, 32, 32};
   checkEq(dxmt9c_surface_lock_rect(nullRt.get(), &rectLock, &subRect, 0),
-          D3DERR_INVALIDCALL, "NULL surface LockRect returns INVALIDCALL");
+          D3D_OK, "NULL surface LockRect returns S_OK");
+  check(rectLock.bits != nullptr, "NULL surface sub-rect lock yields dummy bits");
+  checkEq(rectLock.pitch, 64 * 4, "NULL surface sub-rect pitch uses full-row pitch");
+  checkEq(dxmt9c_surface_unlock_rect(nullRt.get()), D3D_OK,
+          "NULL surface sub-rect Unlock returns S_OK");
 
-  // The core-level lockRect must independently reject (the C bridge maps a
-  // null/zero region to INVALIDCALL, but verify the core contract too).
+  // The core-level lockRect must independently expose the same scratch.
   const auto coreLock = nullRt->obj->lockRect(nullptr, 0);
-  check(coreLock.data == nullptr && coreLock.pitch == 0,
-        "core NULL surface lockRect yields empty region");
+  check(coreLock.data != nullptr && coreLock.pitch == 64u * 4u,
+        "core NULL surface lockRect yields dummy region");
+  nullRt->obj->unlockRect();
 
   // (c) GetRenderTargetData with a NULL source must be rejected. Pair the
   // NULL surface against a normal offscreen system-memory destination.

@@ -94,6 +94,7 @@ struct ShaderVariantKey {
   u32 debugEnvSchemaVersion = kShaderDebugEnvSchemaVersion;
   u64 debugEnvKey = 0;
   bool textured = false;
+  u32 textureMask = 0;
   bool linear = false;
   bool clipPlanes = false;
   bool alphaTest = false;

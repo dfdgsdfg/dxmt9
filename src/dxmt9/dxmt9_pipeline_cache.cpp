@@ -256,6 +256,7 @@ std::size_t ShaderVariantKeyHash::operator()(const ShaderVariantKey& key) const 
   hash = mix(hash, key.debugEnvSchemaVersion);
   hash = mix(hash, key.debugEnvKey);
   hash = mix(hash, static_cast<u64>(key.textured));
+  hash = mix(hash, key.textureMask);
   hash = mix(hash, static_cast<u64>(key.linear));
   hash = mix(hash, static_cast<u64>(key.clipPlanes));
   hash = mix(hash, static_cast<u64>(key.alphaTest));
@@ -970,7 +971,9 @@ ShaderVariantKey makeShaderVariantKey(core::FlatDrawStateView state,
   const u64 layoutHash = layout ? layout->hash : ffp::hashVertexDeclaration(vertexDecl);
   key.hash = vertexShader.hash ^ (pixelShader.hash << 1) ^ hot.clipPlaneMask ^ depthFormat ^
              (stencilFormat << 1) ^ (layoutHash << 1) ^ vertexDecl.fvf;
-  key.textured = hot.textures[0] != core::Handle{};
+  key.textureMask =
+      drawshader::activeFragmentTextureMaskForShader(pixelShader, hot.textureMask);
+  key.textured = key.textureMask != 0;
   key.linear =
       core::flatStateOr(hot.samplerStates[0], core::SAMP_MIN_FILTER, 0u) == 2u ||
       core::flatStateOr(hot.samplerStates[0], core::SAMP_MAG_FILTER, 0u) == 2u;

@@ -60,14 +60,43 @@ TextureType textureTypeFromStateValue(u32 value) {
 
 }  // namespace
 
+std::uint32_t activeFragmentTextureMaskForShader(
+    const ShaderRef& pixelShader,
+    std::uint32_t textureMask) {
+  constexpr std::uint32_t fragmentMask =
+      (1u << core::kMaxFragmentSamplers) - 1u;
+  std::uint32_t activeMask = textureMask & fragmentMask;
+  if (pixelShader.kind != ShaderRef::Kind::FixedFunctionPixel ||
+      !pixelShader.pixelKey.has_value()) {
+    return activeMask;
+  }
+
+  std::uint32_t ffpMask = 0u;
+  const auto& key = *pixelShader.pixelKey;
+  for (std::size_t stage = 0; stage < core::kMaxTextureStages; ++stage) {
+    const bool stageEnabled =
+        key.stages[stage].colorOp != static_cast<u32>(TextureOp::Disable) ||
+        key.stages[stage].alphaOp != static_cast<u32>(TextureOp::Disable);
+    if (stageEnabled) {
+      ffpMask |= 1u << stage;
+    }
+  }
+  return activeMask & ffpMask;
+}
+
 ShaderSourceContext makeShaderSourceContext(const DrawShaderLayoutContext& layout,
                                             const FlatDrawStateRecord& hot) {
   ShaderSourceContext context{};
   context.vertexDecl = layout.vertexDecl;
   context.vertexShader = layout.vertexShader;
   context.pixelShader = layout.pixelShader;
+  const std::uint32_t activeFragmentTextureMask =
+      activeFragmentTextureMaskForShader(layout.pixelShader, hot.textureMask);
   for (std::size_t i = 0; i < context.textures.size(); ++i) {
-    context.textures[i] = hot.textures[i] != Handle{};
+    const bool fragmentSlot = i < core::kMaxFragmentSamplers;
+    context.textures[i] =
+        hot.textures[i] != Handle{} &&
+        (!fragmentSlot || ((activeFragmentTextureMask & (1u << i)) != 0u));
     if (i < hot.textureStageStates.size()) {
       context.textureTypes[i] = textureTypeFromStateValue(
           flatStateOr(hot.textureStageStates[i], TSS_TEXTURE_TYPE, static_cast<u32>(TextureType::TwoD)));

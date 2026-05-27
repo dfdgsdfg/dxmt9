@@ -58,6 +58,15 @@ void checkContains(const std::string& haystack, std::string_view needle,
   }
 }
 
+void checkNotContains(const std::string& haystack, std::string_view needle,
+                      std::string_view message) {
+  if (haystack.find(needle) != std::string::npos) {
+    std::ostringstream out;
+    out << message << " (unexpected substring '" << needle << "' found)";
+    fail(out.str());
+  }
+}
+
 // Build a ShaderSourceContext for a single-texture FFP pixel program from a
 // pixel key. A bound texture on stage 0 is needed so the generator samples
 // `texColor0` and runs the texop dispatch.
@@ -69,6 +78,28 @@ dxmt9::drawshader::ShaderSourceContext makeContext(const FfpPixelKey& key) {
   auto hot = makeFlatDrawStateRecord(desc);
   auto ctx = dxmt9::drawshader::makeShaderSourceContext(layout, hot);
   ctx.textures[0] = true;
+  return ctx;
+}
+
+dxmt9::drawshader::ShaderSourceContext makeUnboundContext(const FfpPixelKey& key) {
+  DrawDesc desc{};
+  desc.pixelShader.kind = ShaderRef::Kind::FixedFunctionPixel;
+  desc.pixelShader.pixelKey = key;
+  auto layout = makeDrawShaderLayoutContext(desc);
+  auto hot = makeFlatDrawStateRecord(desc);
+  return dxmt9::drawshader::makeShaderSourceContext(layout, hot);
+}
+
+dxmt9::drawshader::ShaderSourceContext makeSingleStageContext(
+    const FfpPixelKey& key, size_t stage, bool argbufHybrid) {
+  DrawDesc desc{};
+  desc.pixelShader.kind = ShaderRef::Kind::FixedFunctionPixel;
+  desc.pixelShader.pixelKey = key;
+  auto layout = makeDrawShaderLayoutContext(desc);
+  auto hot = makeFlatDrawStateRecord(desc);
+  auto ctx = dxmt9::drawshader::makeShaderSourceContext(layout, hot);
+  ctx.textures[stage] = true;
+  ctx.argbufHybridMode = argbufHybrid;
   return ctx;
 }
 
@@ -144,12 +175,75 @@ void testTriadicSourceEmission() {
                 "LERP body reads arg0 as the blend factor");
 }
 
+void testUnboundEnabledStageStillEmitsCombiner() {
+  DeviceState state;
+  state.reset();
+  state.textureStageStates[0][TSS_COLOR_OP] =
+      static_cast<u32>(TextureOp::SelectArg1);
+  state.textureStageStates[0][TSS_COLOR_ARG1] = 3u;  // D3DTA_TFACTOR
+  state.textureStageStates[0][TSS_ALPHA_OP] =
+      static_cast<u32>(TextureOp::SelectArg1);
+  state.textureStageStates[0][TSS_ALPHA_ARG1] = 3u;
+
+  const auto key = makeFfpPixelKey(state);
+  const auto src = dxmt9::ffp::makeFfpPixelSource(key, makeUnboundContext(key));
+
+  checkContains(src, "float4 texColor0 = float4(1.0f);",
+                "unbound enabled FFP stage emits the default texture color");
+  checkContains(src, "float4 colorArg1_0 = dxmt9_select_texture_arg(3u",
+                "unbound enabled FFP stage still resolves COLORARG1");
+  checkContains(src, "float4 alphaArg1_0 = dxmt9_select_texture_arg(3u",
+                "unbound enabled FFP stage still resolves ALPHAARG1");
+  checkContains(src, "color = current;",
+                "unbound enabled FFP stage writes the combiner result");
+  checkContains(src, "return color;",
+                "unbound enabled FFP stage returns the combiner result");
+  checkNotContains(src, "[[texture(0)]]",
+                   "unbound enabled FFP stage must not declare texture params");
+  checkNotContains(src, "tex0.sample",
+                   "unbound enabled FFP stage must not sample texture 0");
+}
+
+void testNonzeroTextureStageEmitsMatchingTextureParameter() {
+  DeviceState state;
+  state.reset();
+  state.textureStageStates[0][TSS_COLOR_OP] =
+      static_cast<u32>(TextureOp::Disable);
+  state.textureStageStates[0][TSS_ALPHA_OP] =
+      static_cast<u32>(TextureOp::Disable);
+  state.textureStageStates[1][TSS_COLOR_OP] =
+      static_cast<u32>(TextureOp::SelectArg1);
+  state.textureStageStates[1][TSS_COLOR_ARG1] = 2u;  // D3DTA_TEXTURE
+  state.textureStageStates[1][TSS_ALPHA_OP] =
+      static_cast<u32>(TextureOp::SelectArg1);
+  state.textureStageStates[1][TSS_ALPHA_ARG1] = 2u;
+
+  const auto key = makeFfpPixelKey(state);
+  const auto src = dxmt9::ffp::makeFfpPixelSource(
+      key, makeSingleStageContext(key, 1u, true));
+
+  checkContains(src, "[[buffer(30)]]",
+                "Stage 2 FFP source keeps constants on the argument buffer");
+  checkContains(src, "texture2d<float> tex1 [[texture(1)]], sampler samp1 [[sampler(1)]]",
+                "nonzero FFP texture stage declares matching texture/sampler params");
+  checkContains(src, "float4 texColor1 = tex1.sample(samp1",
+                "nonzero FFP texture stage samples the matching texture slot");
+  checkContains(src, "float4 colorArg1_1 = dxmt9_select_texture_arg(2u",
+                "nonzero FFP texture stage resolves D3DTA_TEXTURE");
+  checkNotContains(src, "[[texture(0)]]",
+                   "nonzero-only FFP texture stage must not declare texture 0");
+  checkNotContains(src, "tex0.sample",
+                   "nonzero-only FFP texture stage must not sample texture 0");
+}
+
 }  // namespace
 
 int main() {
   try {
     testArg0KeysAreSensitive();
     testTriadicSourceEmission();
+    testUnboundEnabledStageStillEmitsCombiner();
+    testNonzeroTextureStageEmitsMatchingTextureParameter();
   } catch (const TestFailure& failure) {
     std::cerr << "ffp_triadic_msl_spec failed: " << failure.what() << '\n';
     return 1;

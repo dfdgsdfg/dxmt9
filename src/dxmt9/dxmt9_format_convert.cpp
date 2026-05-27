@@ -185,6 +185,8 @@ WMTTextureType toTextureType(TextureType type, bool multisample) {
 
 bool formatNeedsShaderReadSwizzle(Format format) {
   switch (format) {
+    case Format::X8R8G8B8:
+    case Format::X8B8G8R8:
     case Format::L8:
     case Format::L16:
     case Format::A8L8:
@@ -196,6 +198,11 @@ bool formatNeedsShaderReadSwizzle(Format format) {
 
 WMTTextureSwizzleChannels toShaderReadSwizzle(Format format) {
   switch (format) {
+    case Format::X8R8G8B8:
+    case Format::X8B8G8R8:
+      return WMTTextureSwizzleChannels{
+          WMTTextureSwizzleRed, WMTTextureSwizzleGreen,
+          WMTTextureSwizzleBlue, WMTTextureSwizzleOne};
     case Format::L8:
     case Format::L16:
       return WMTTextureSwizzleChannels{

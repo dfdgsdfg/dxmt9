@@ -600,7 +600,8 @@ void emitPredicateBindings(std::ostringstream& out, bool usesPredicateRegisters)
 }
 
 std::string readPixelInputSemanticExpression(const PixelInputSemantic& semantic,
-                                             const std::string& pixelInputs) {
+                                             const std::string& pixelInputs,
+                                             u32 fallbackTexcoordIndex) {
   switch (semantic.usage) {
     case kD3DDeclUsagePosition:
     case kD3DDeclUsagePositionT:
@@ -622,7 +623,8 @@ std::string readPixelInputSemanticExpression(const PixelInputSemantic& semantic,
     default:
       break;
   }
-  return "float4(0.0f)";
+  return "dxmt9_select_texcoord(" + pixelInputs + ", " +
+         std::to_string(std::min<u32>(fallbackTexcoordIndex, kMaxTextureStages - 1u)) + "u)";
 }
 
 std::string readPixelInputFallbackExpression(u32 index, const std::string& pixelInputs) {
@@ -646,7 +648,7 @@ std::string readPixelInputExpression(u32 token,
   switch (type) {
     case kD3DSPR_INPUT:
       if (index < semantics.size() && semantics[index].valid) {
-        return readPixelInputSemanticExpression(semantics[index], pixelInputs);
+        return readPixelInputSemanticExpression(semantics[index], pixelInputs, index);
       }
       break;
     case kD3DSPR_ADDR:

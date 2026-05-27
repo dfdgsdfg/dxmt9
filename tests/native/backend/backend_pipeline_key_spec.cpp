@@ -266,6 +266,7 @@ void testShaderVariantKeyReflectsSamplerTextureAndFiltering() {
 
   const auto untextured = makeVariantKey(makeFlatDrawFixture(desc));
   check(!untextured.textured, "missing texture binding leaves variant untextured");
+  checkEq(untextured.textureMask, 0u, "missing texture binding leaves texture mask empty");
   check(!untextured.linear, "missing sampler filter state leaves variant nearest");
 
   desc.textures[0].handle = Handle{0x44u};
@@ -273,11 +274,26 @@ void testShaderVariantKeyReflectsSamplerTextureAndFiltering() {
   desc.samplers[0].states[SAMP_MAG_FILTER] = 1u;
   const auto nearest = makeVariantKey(makeFlatDrawFixture(desc));
   check(nearest.textured, "texture binding marks variant textured");
+  checkEq(nearest.textureMask, 1u << 0u, "slot 0 texture binding marks mask bit 0");
   check(!nearest.linear, "nearest min/mag filters keep variant nearest");
   check(dxmt9::pipeline::ShaderVariantKeyHash{}(nearest) !=
             dxmt9::pipeline::ShaderVariantKeyHash{}(untextured),
         "textured sampler key changes the PSO hash");
 
+  desc.textures[0].handle = Handle{};
+  desc.textures[1].handle = Handle{0x55u};
+  const auto stage1Textured = makeVariantKey(makeFlatDrawFixture(desc));
+  check(stage1Textured.textured, "nonzero texture slot marks variant textured");
+  checkEq(stage1Textured.textureMask, 1u << 1u, "slot 1 texture binding marks mask bit 1");
+  check(dxmt9::pipeline::ShaderVariantKeyHash{}(stage1Textured) !=
+            dxmt9::pipeline::ShaderVariantKeyHash{}(untextured),
+        "nonzero texture slot changes the PSO hash");
+  check(dxmt9::pipeline::makeShaderVariantProbeKey(stage1Textured) !=
+            dxmt9::pipeline::makeShaderVariantProbeKey(untextured),
+        "probe key keeps nonzero texture slots distinct before source hashing");
+
+  desc.textures[0].handle = Handle{0x44u};
+  desc.textures[1].handle = Handle{};
   desc.samplers[0].states[SAMP_MIN_FILTER] = 2u;
   const auto linearMin = makeVariantKey(makeFlatDrawFixture(desc));
   check(linearMin.linear, "linear min filter marks variant linear");
@@ -455,6 +471,8 @@ void testShaderVariantProbeKeyDropsOnlyActualSourceHashes() {
   sourceBacked.fragmentSourceHash = 0x5555666677778888ull;
   sourceBacked.tileSourceHash = 0x9999aaaabbbbccccull;
   sourceBacked.argbufHybridMode = true;
+  sourceBacked.textureMask = 1u << 3u;
+  sourceBacked.textured = true;
   sourceBacked.sampleCount = 4u;
 
   auto expectedProbe = sourceBacked;

@@ -6,6 +6,7 @@
 // reach hazard helpers and encodeDraw reach the geometry-trace recorder.
 
 #include "dxmt9_draw_encoder.hpp"
+#include "dxmt9_draw_shader.hpp"
 #include "dxmt9_ffp_shaders.hpp"
 #include "dxmt9_format_convert.hpp"
 
@@ -475,9 +476,16 @@ inline ProgrammableVsExtraStreamBindingList makeProgrammableVsExtraStreamBinding
 }
 
 inline FragmentTextureSamplerBindingList makeFragmentTextureSamplerBindings(
-    const core::FlatDrawStateRecord& hot) {
+    const core::FlatDrawStateRecord& hot,
+    const core::ShaderRef* pixelShader = nullptr) {
   FragmentTextureSamplerBindingList bindings;
+  const u32 activeMask = pixelShader
+      ? drawshader::activeFragmentTextureMaskForShader(*pixelShader, hot.textureMask)
+      : (hot.textureMask & ((1u << core::kMaxFragmentSamplers) - 1u));
   for (u32 stage = 0; stage < core::kMaxFragmentSamplers; ++stage) {
+    if ((activeMask & (1u << stage)) == 0u) {
+      continue;
+    }
     const auto textureHandle = hot.textures[stage];
     if (!textureHandle) {
       continue;
@@ -497,6 +505,9 @@ inline VertexTextureSamplerBindingList makeVertexTextureSamplerBindings(
   VertexTextureSamplerBindingList bindings;
   for (u32 stage = 0; stage < core::kMaxVertexTextureSamplers; ++stage) {
     const u32 textureSlot = core::kVertexTextureSampler0 + stage;
+    if ((hot.textureMask & (1u << textureSlot)) == 0u) {
+      continue;
+    }
     const auto textureHandle = hot.textures[textureSlot];
     if (!textureHandle) {
       continue;
@@ -574,9 +585,10 @@ inline DrawBindingPacketPlan makeDrawBindingPacketPlan(
     u32 surfaceHeight,
     bool preTransformed,
     bool scissorDisabled,
-    bool cullDisabled) {
+    bool cullDisabled,
+    const core::ShaderRef* pixelShader = nullptr) {
   return DrawBindingPacketPlan{
-      .fragmentTextureSamplers = makeFragmentTextureSamplerBindings(hot),
+      .fragmentTextureSamplers = makeFragmentTextureSamplerBindings(hot, pixelShader),
       .vertexTextureSamplers = makeVertexTextureSamplerBindings(hot),
       .extraStreams = makeProgrammableVsExtraStreamBindings(vertexDecl, hot, pv),
       .raster = makeEncoderRasterStatePlan(
