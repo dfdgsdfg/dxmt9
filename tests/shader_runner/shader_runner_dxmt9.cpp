@@ -186,6 +186,13 @@ struct CorpusTest {
   std::optional<TexturedQuadTex3Draw> drawDxmt9TexturedQuadTex3;
   bool drawDxmt9SolidQuad = false;
   bool drawDxmt9VsColorTriangle = false;
+  bool drawDxmt9VsIndexedColorTriangle = false;
+  bool drawDxmt9VsIndexedUpColorTriangle = false;
+  bool drawDxmt9VsMultistreamColorTriangle = false;
+  bool drawDxmt9VsNormalColorTriangle = false;
+  bool drawDxmt9VsNormalDeclTransition = false;
+  bool drawDxmt9FfpThenVsColorTriangle = false;
+  bool drawDxmt9VsColorTriangleThenFfp = false;
   bool drawDxmt9VFaceFacingQuads = false;
   bool drawDxmt9PositionIndexQuad = false;
   bool drawDxmt9VsMultistreamTexturedQuad = false;
@@ -378,6 +385,27 @@ struct ProgrammedColorVertex {
   u32 color = 0xffffffffu;
 };
 
+struct ProgrammedNormalVertex {
+  float x = 0.0f;
+  float y = 0.0f;
+  float z = 0.0f;
+  float w = 1.0f;
+  float nx = 0.0f;
+  float ny = 0.0f;
+  float nz = 1.0f;
+};
+
+struct ProgrammedNormalOffsetVertex {
+  float x = 0.0f;
+  float y = 0.0f;
+  float z = 0.0f;
+  float w = 1.0f;
+  float guard = 1.0f;
+  float nx = 0.0f;
+  float ny = 0.0f;
+  float nz = 1.0f;
+};
+
 struct Float16ColorVertex {
   float x = 0.0f;
   float y = 0.0f;
@@ -412,6 +440,11 @@ struct MultiStreamTexcoordVertex {
   float v0 = 0.0f;
   float u1 = 0.0f;
   float v1 = 0.0f;
+};
+
+struct MultiStreamColorVertex {
+  u32 pad = 0xffffffffu;
+  u32 color = 0xffffffffu;
 };
 
 struct SkinnedPositionVertex {
@@ -2004,6 +2037,41 @@ void parseTestLine(CorpusTest& test, std::string_view rawLine) {
     return;
   }
 
+  if (line == "dxmt9-draw-vs-indexed-color-triangle") {
+    test.drawDxmt9VsIndexedColorTriangle = true;
+    return;
+  }
+
+  if (line == "dxmt9-draw-vs-indexed-up-color-triangle") {
+    test.drawDxmt9VsIndexedUpColorTriangle = true;
+    return;
+  }
+
+  if (line == "dxmt9-draw-vs-multistream-color-triangle") {
+    test.drawDxmt9VsMultistreamColorTriangle = true;
+    return;
+  }
+
+  if (line == "dxmt9-draw-vs-normal-color-triangle") {
+    test.drawDxmt9VsNormalColorTriangle = true;
+    return;
+  }
+
+  if (line == "dxmt9-draw-vs-normal-decl-transition") {
+    test.drawDxmt9VsNormalDeclTransition = true;
+    return;
+  }
+
+  if (line == "dxmt9-draw-ffp-then-vs-color-triangle") {
+    test.drawDxmt9FfpThenVsColorTriangle = true;
+    return;
+  }
+
+  if (line == "dxmt9-draw-vs-color-triangle-then-ffp") {
+    test.drawDxmt9VsColorTriangleThenFfp = true;
+    return;
+  }
+
   if (line == "dxmt9-draw-vface-facing-quads") {
     test.drawDxmt9VFaceFacingQuads = true;
     return;
@@ -3350,6 +3418,258 @@ std::shared_ptr<Buffer> createVertexBufferWithData(
   return buffer;
 }
 
+template <typename T, size_t N>
+std::shared_ptr<Buffer> createIndexBufferWithData(
+    Device& device,
+    const std::array<T, N>& data) {
+  auto buffer = device.createBuffer({
+      static_cast<u32>(sizeof(T) * N),
+      Pool::Default,
+      UsageIndexBuffer,
+  });
+  if (!buffer) {
+    fail("dxmt9 index buffer creation failed");
+  }
+  auto region = buffer->lock(0, sizeof(T) * N, 0);
+  if (!region.data || region.pitch < sizeof(T) * N) {
+    fail("dxmt9 index buffer lock failed");
+  }
+  std::memcpy(region.data, data.data(), sizeof(T) * N);
+  buffer->unlock();
+  return buffer;
+}
+
+void drawDxmt9VsIndexedColorTriangle(Device& device) {
+  const std::vector<VertexElement> declaration{
+      VertexElement{0, 0, kDeclTypeFloat4, 0, kDeclUsagePosition, 0},
+      VertexElement{0, 16, kDeclTypeD3DColor, 0, kDeclUsageColor, 0},
+  };
+  if (device.setVertexDeclaration(declaration) != D3D_OK) {
+    fail("dxmt9 VS indexed color triangle vertex declaration setup failed");
+  }
+
+  constexpr u32 kRed = 0xffff0000u;
+  constexpr u32 kGreen = 0xff00ff00u;
+  const std::array<ProgrammedColorVertex, 6> vertices{
+      ProgrammedColorVertex{-1.0f, -1.0f, 0.0f, 1.0f, kRed},
+      ProgrammedColorVertex{-1.0f, 1.0f, 0.0f, 1.0f, kRed},
+      ProgrammedColorVertex{0.0f, -1.0f, 0.0f, 1.0f, kRed},
+      ProgrammedColorVertex{0.0f, -1.0f, 0.0f, 1.0f, kGreen},
+      ProgrammedColorVertex{0.0f, 1.0f, 0.0f, 1.0f, kGreen},
+      ProgrammedColorVertex{1.0f, -1.0f, 0.0f, 1.0f, kGreen},
+  };
+  const std::array<u16, 6> indices{{0u, 1u, 2u, 3u, 4u, 5u}};
+
+  auto vertexBuffer = createVertexBufferWithData(device, vertices);
+  auto indexBuffer = createIndexBufferWithData(device, indices);
+  if (device.setStreamSource(0, vertexBuffer, 0,
+                             sizeof(ProgrammedColorVertex)) != D3D_OK) {
+    fail("dxmt9 VS indexed color triangle stream setup failed");
+  }
+  if (device.setIndices(indexBuffer, IndexType::UInt16) != D3D_OK) {
+    fail("dxmt9 VS indexed color triangle index setup failed");
+  }
+  if (device.drawIndexedPrimitive(PrimitiveType::TriangleList, 1,
+                                  /*startVertex=*/0,
+                                  /*baseVertexIndex=*/0,
+                                  /*startIndex=*/3,
+                                  IndexType::UInt16) != D3D_OK) {
+    fail("dxmt9 VS indexed color triangle draw failed");
+  }
+}
+
+void drawDxmt9VsIndexedUpColorTriangle(Device& device) {
+  const std::vector<VertexElement> declaration{
+      VertexElement{0, 0, kDeclTypeFloat4, 0, kDeclUsagePosition, 0},
+      VertexElement{0, 16, kDeclTypeD3DColor, 0, kDeclUsageColor, 0},
+  };
+  if (device.setVertexDeclaration(declaration) != D3D_OK) {
+    fail("dxmt9 VS indexed UP color triangle vertex declaration setup failed");
+  }
+
+  constexpr u32 kRed = 0xffff0000u;
+  constexpr u32 kGreen = 0xff00ff00u;
+  const std::array<ProgrammedColorVertex, 6> vertices{
+      ProgrammedColorVertex{-1.0f, -1.0f, 0.0f, 1.0f, kRed},
+      ProgrammedColorVertex{-1.0f, 1.0f, 0.0f, 1.0f, kRed},
+      ProgrammedColorVertex{0.0f, -1.0f, 0.0f, 1.0f, kRed},
+      ProgrammedColorVertex{0.0f, -1.0f, 0.0f, 1.0f, kGreen},
+      ProgrammedColorVertex{0.0f, 1.0f, 0.0f, 1.0f, kGreen},
+      ProgrammedColorVertex{1.0f, -1.0f, 0.0f, 1.0f, kGreen},
+  };
+  const std::array<u16, 3> indices{{3u, 4u, 5u}};
+  const auto vertexBytes =
+      std::span<const u8>(reinterpret_cast<const u8*>(vertices.data()),
+                          vertices.size() * sizeof(vertices[0]));
+  const auto indexBytes =
+      std::span<const u8>(reinterpret_cast<const u8*>(indices.data()),
+                          indices.size() * sizeof(indices[0]));
+
+  if (device.drawIndexedPrimitiveUP(
+          PrimitiveType::TriangleList, 1, vertexBytes, indexBytes,
+          IndexType::UInt16, sizeof(ProgrammedColorVertex)) != D3D_OK) {
+    fail("dxmt9 VS indexed UP color triangle draw failed");
+  }
+}
+
+void drawDxmt9VsMultistreamColorTriangle(Device& device) {
+  const std::vector<VertexElement> declaration{
+      VertexElement{0, 0, kDeclTypeFloat4, 0, kDeclUsagePosition, 0},
+      VertexElement{1, 4, kDeclTypeD3DColor, 0, kDeclUsageColor, 0},
+  };
+  if (device.setVertexDeclaration(declaration) != D3D_OK) {
+    fail("dxmt9 VS multistream color triangle vertex declaration setup failed");
+  }
+
+  constexpr u32 kRed = 0xffff0000u;
+  constexpr u32 kGreen = 0xff00ff00u;
+  const std::array<MultiStreamPositionVertex, 3> positions{
+      MultiStreamPositionVertex{0.0f, -1.0f, 0.0f, 1.0f},
+      MultiStreamPositionVertex{0.0f, 1.0f, 0.0f, 1.0f},
+      MultiStreamPositionVertex{1.0f, -1.0f, 0.0f, 1.0f},
+  };
+  const std::array<MultiStreamColorVertex, 3> colors{
+      MultiStreamColorVertex{kRed, kGreen},
+      MultiStreamColorVertex{kRed, kGreen},
+      MultiStreamColorVertex{kRed, kGreen},
+  };
+
+  auto positionBuffer = createVertexBufferWithData(device, positions);
+  auto colorBuffer = createVertexBufferWithData(device, colors);
+  if (device.setStreamSource(0, positionBuffer, 0,
+                             sizeof(MultiStreamPositionVertex)) != D3D_OK) {
+    fail("dxmt9 VS multistream color stream0 setup failed");
+  }
+  if (device.setStreamSource(1, colorBuffer, 0,
+                             sizeof(MultiStreamColorVertex)) != D3D_OK) {
+    fail("dxmt9 VS multistream color stream1 setup failed");
+  }
+  if (device.drawPrimitive(PrimitiveType::TriangleList, 1, 0) != D3D_OK) {
+    fail("dxmt9 VS multistream color triangle draw failed");
+  }
+}
+
+void drawDxmt9VsNormalColorTriangle(Device& device) {
+  constexpr u32 kDeclUsageNormal = 3u;
+  const std::vector<VertexElement> declaration{
+      VertexElement{0, 0, kDeclTypeFloat4, 0, kDeclUsagePosition, 0},
+      VertexElement{0, 16, kDeclTypeFloat3, 0, kDeclUsageNormal, 0},
+  };
+  if (device.setVertexDeclaration(declaration) != D3D_OK) {
+    fail("dxmt9 VS normal color triangle vertex declaration setup failed");
+  }
+
+  const std::array<ProgrammedNormalVertex, 3> triangle{
+      ProgrammedNormalVertex{0.0f, -1.0f, 0.0f, 1.0f, 0.0f, 1.0f, 0.0f},
+      ProgrammedNormalVertex{0.0f, 1.0f, 0.0f, 1.0f, 0.0f, 1.0f, 0.0f},
+      ProgrammedNormalVertex{1.0f, -1.0f, 0.0f, 1.0f, 0.0f, 1.0f, 0.0f},
+  };
+  const auto* bytes = reinterpret_cast<const u8*>(triangle.data());
+  if (device.drawPrimitiveUP(PrimitiveType::TriangleList, 1,
+                             std::span<const u8>(bytes, sizeof(triangle)),
+                             sizeof(ProgrammedNormalVertex)) != D3D_OK) {
+    fail("dxmt9 VS normal color triangle draw failed");
+  }
+}
+
+void drawDxmt9VsNormalDeclTransition(Device& device) {
+  constexpr u32 kDeclUsageNormal = 3u;
+  const std::vector<VertexElement> compactDeclaration{
+      VertexElement{0, 0, kDeclTypeFloat4, 0, kDeclUsagePosition, 0},
+      VertexElement{0, 16, kDeclTypeFloat3, 0, kDeclUsageNormal, 0},
+  };
+  if (device.setVertexDeclaration(compactDeclaration) != D3D_OK) {
+    fail("dxmt9 VS normal decl transition compact declaration setup failed");
+  }
+
+  const std::array<ProgrammedNormalVertex, 3> leftTriangle{
+      ProgrammedNormalVertex{-1.0f, -1.0f, 0.0f, 1.0f, 1.0f, 0.0f, 0.0f},
+      ProgrammedNormalVertex{-1.0f, 1.0f, 0.0f, 1.0f, 1.0f, 0.0f, 0.0f},
+      ProgrammedNormalVertex{0.0f, -1.0f, 0.0f, 1.0f, 1.0f, 0.0f, 0.0f},
+  };
+  const auto* leftBytes = reinterpret_cast<const u8*>(leftTriangle.data());
+  if (device.drawPrimitiveUP(PrimitiveType::TriangleList, 1,
+                             std::span<const u8>(leftBytes,
+                                                 sizeof(leftTriangle)),
+                             sizeof(ProgrammedNormalVertex)) != D3D_OK) {
+    fail("dxmt9 VS normal decl transition compact draw failed");
+  }
+
+  const std::vector<VertexElement> paddedDeclaration{
+      VertexElement{0, 0, kDeclTypeFloat4, 0, kDeclUsagePosition, 0},
+      VertexElement{0, 20, kDeclTypeFloat3, 0, kDeclUsageNormal, 0},
+  };
+  if (device.setVertexDeclaration(paddedDeclaration) != D3D_OK) {
+    fail("dxmt9 VS normal decl transition padded declaration setup failed");
+  }
+
+  const std::array<ProgrammedNormalOffsetVertex, 3> rightTriangle{
+      ProgrammedNormalOffsetVertex{0.0f, -1.0f, 0.0f, 1.0f,
+                                   1.0f, 0.0f, 1.0f, 0.0f},
+      ProgrammedNormalOffsetVertex{0.0f, 1.0f, 0.0f, 1.0f,
+                                   1.0f, 0.0f, 1.0f, 0.0f},
+      ProgrammedNormalOffsetVertex{1.0f, -1.0f, 0.0f, 1.0f,
+                                   1.0f, 0.0f, 1.0f, 0.0f},
+  };
+  const auto* rightBytes = reinterpret_cast<const u8*>(rightTriangle.data());
+  if (device.drawPrimitiveUP(PrimitiveType::TriangleList, 1,
+                             std::span<const u8>(rightBytes,
+                                                 sizeof(rightTriangle)),
+                             sizeof(ProgrammedNormalOffsetVertex)) != D3D_OK) {
+    fail("dxmt9 VS normal decl transition padded draw failed");
+  }
+}
+
+void drawDxmt9FfpRedRect(Device& device) {
+  if (device.setRenderState(RS_LIGHTING, 0u) != D3D_OK ||
+      device.setFVF(kFvfXyzrhw | kFvfDiffuse) != D3D_OK) {
+    fail("dxmt9 FFP transition red rect FVF setup failed");
+  }
+
+  constexpr u32 kRed = 0xffff0000u;
+  const std::array<ScreenSpaceColorVertex, 6> quad{
+      ScreenSpaceColorVertex{0.0f, 0.0f, 0.0f, 1.0f, kRed},
+      ScreenSpaceColorVertex{32.0f, 0.0f, 0.0f, 1.0f, kRed},
+      ScreenSpaceColorVertex{0.0f, 64.0f, 0.0f, 1.0f, kRed},
+      ScreenSpaceColorVertex{32.0f, 0.0f, 0.0f, 1.0f, kRed},
+      ScreenSpaceColorVertex{32.0f, 64.0f, 0.0f, 1.0f, kRed},
+      ScreenSpaceColorVertex{0.0f, 64.0f, 0.0f, 1.0f, kRed},
+  };
+  const auto* bytes = reinterpret_cast<const u8*>(quad.data());
+  if (device.drawPrimitiveUP(PrimitiveType::TriangleList, 2,
+                             std::span<const u8>(bytes, sizeof(quad)),
+                             sizeof(ScreenSpaceColorVertex)) != D3D_OK) {
+    fail("dxmt9 FFP transition red rect draw failed");
+  }
+}
+
+void drawDxmt9FfpThenVsColorTriangle(Device& device) {
+  const auto vertexShader = device.state().vertexShader;
+  const auto pixelShader = device.state().pixelShader;
+
+  if (device.setVertexShader(ShaderRef{}) != D3D_OK ||
+      device.setPixelShader(ShaderRef{}) != D3D_OK) {
+    fail("dxmt9 FFP->VS transition failed to clear programmable shaders");
+  }
+  drawDxmt9FfpRedRect(device);
+
+  if (device.setVertexShader(vertexShader) != D3D_OK ||
+      device.setPixelShader(pixelShader) != D3D_OK) {
+    fail("dxmt9 FFP->VS transition failed to restore programmable shaders");
+  }
+  drawDxmt9VsColorTriangle(device);
+}
+
+void drawDxmt9VsColorTriangleThenFfp(Device& device) {
+  drawDxmt9VsColorTriangle(device);
+
+  if (device.setVertexShader(ShaderRef{}) != D3D_OK ||
+      device.setPixelShader(ShaderRef{}) != D3D_OK) {
+    fail("dxmt9 VS->FFP transition failed to clear programmable shaders");
+  }
+  drawDxmt9FfpRedRect(device);
+}
+
 void drawDxmt9VsMultistreamTexturedQuad(Device& device) {
   constexpr u32 kDeclUsageTexcoord = 5u;
   const std::vector<VertexElement> declaration{
@@ -3685,6 +4005,13 @@ void runCorpusFile(const std::string& path) {
                             test.drawDxmt9TexturedQuadOverscan ||
                             test.drawDxmt9TexturedQuadXyz || test.drawDxmt9SolidQuad ||
                             test.drawDxmt9VsColorTriangle ||
+                            test.drawDxmt9VsIndexedColorTriangle ||
+                            test.drawDxmt9VsIndexedUpColorTriangle ||
+                            test.drawDxmt9VsMultistreamColorTriangle ||
+                            test.drawDxmt9FfpThenVsColorTriangle ||
+                            test.drawDxmt9VsColorTriangleThenFfp ||
+                            test.drawDxmt9VsNormalColorTriangle ||
+                            test.drawDxmt9VsNormalDeclTransition ||
                             test.drawDxmt9VFaceFacingQuads ||
                             test.drawDxmt9PositionIndexQuad ||
                             test.drawDxmt9VsMultistreamTexturedQuad ||
@@ -3856,6 +4183,13 @@ void runCorpusFile(const std::string& path) {
                           test.drawDxmt9TexturedQuadOverscan ||
                           test.drawDxmt9TexturedQuadXyz || test.drawDxmt9SolidQuad ||
                           test.drawDxmt9VsColorTriangle ||
+                          test.drawDxmt9VsIndexedColorTriangle ||
+                          test.drawDxmt9VsIndexedUpColorTriangle ||
+                          test.drawDxmt9VsMultistreamColorTriangle ||
+                          test.drawDxmt9FfpThenVsColorTriangle ||
+                          test.drawDxmt9VsColorTriangleThenFfp ||
+                          test.drawDxmt9VsNormalColorTriangle ||
+                          test.drawDxmt9VsNormalDeclTransition ||
                           test.drawDxmt9VFaceFacingQuads ||
                           test.drawDxmt9PositionIndexQuad ||
                           test.drawDxmt9VsMultistreamTexturedQuad ||
@@ -4025,6 +4359,76 @@ void runCorpusFile(const std::string& path) {
       fail("beginScene failed");
     }
     drawDxmt9VsColorTriangle(*device);
+    if (device->endScene() != D3D_OK) {
+      fail("endScene failed");
+    }
+  }
+
+  if (test.drawDxmt9VsIndexedColorTriangle) {
+    if (device->beginScene() != D3D_OK) {
+      fail("beginScene failed");
+    }
+    drawDxmt9VsIndexedColorTriangle(*device);
+    if (device->endScene() != D3D_OK) {
+      fail("endScene failed");
+    }
+  }
+
+  if (test.drawDxmt9VsIndexedUpColorTriangle) {
+    if (device->beginScene() != D3D_OK) {
+      fail("beginScene failed");
+    }
+    drawDxmt9VsIndexedUpColorTriangle(*device);
+    if (device->endScene() != D3D_OK) {
+      fail("endScene failed");
+    }
+  }
+
+  if (test.drawDxmt9VsMultistreamColorTriangle) {
+    if (device->beginScene() != D3D_OK) {
+      fail("beginScene failed");
+    }
+    drawDxmt9VsMultistreamColorTriangle(*device);
+    if (device->endScene() != D3D_OK) {
+      fail("endScene failed");
+    }
+  }
+
+  if (test.drawDxmt9FfpThenVsColorTriangle) {
+    if (device->beginScene() != D3D_OK) {
+      fail("beginScene failed");
+    }
+    drawDxmt9FfpThenVsColorTriangle(*device);
+    if (device->endScene() != D3D_OK) {
+      fail("endScene failed");
+    }
+  }
+
+  if (test.drawDxmt9VsColorTriangleThenFfp) {
+    if (device->beginScene() != D3D_OK) {
+      fail("beginScene failed");
+    }
+    drawDxmt9VsColorTriangleThenFfp(*device);
+    if (device->endScene() != D3D_OK) {
+      fail("endScene failed");
+    }
+  }
+
+  if (test.drawDxmt9VsNormalColorTriangle) {
+    if (device->beginScene() != D3D_OK) {
+      fail("beginScene failed");
+    }
+    drawDxmt9VsNormalColorTriangle(*device);
+    if (device->endScene() != D3D_OK) {
+      fail("endScene failed");
+    }
+  }
+
+  if (test.drawDxmt9VsNormalDeclTransition) {
+    if (device->beginScene() != D3D_OK) {
+      fail("beginScene failed");
+    }
+    drawDxmt9VsNormalDeclTransition(*device);
     if (device->endScene() != D3D_OK) {
       fail("endScene failed");
     }

@@ -34,6 +34,12 @@ using dxmt9::encoders::EncodeDrawRecorder;
 using dxmt9::encoders::PreUploadedDrawData;
 using dxmt9::state::DrawVolatile;
 
+constexpr u32 kD3DDeclTypeFloat2 = 1u;
+constexpr u32 kD3DDeclTypeFloat3 = 2u;
+constexpr u32 kD3DDeclMethodDefault = 0u;
+constexpr u32 kD3DDeclUsagePosition = dxmt9::ffp::kD3DDeclUsagePosition;
+constexpr u32 kD3DDeclUsageTexcoord = dxmt9::ffp::kD3DDeclUsageTexcoord;
+
 enum class RecordedKind {
   SetRenderPipelineState,
   SetDepthStencilState,
@@ -436,6 +442,28 @@ dxmt9::core::CanonicalDrawState makeProgrammableState(u32 stride) {
   state.shaderLayout.vertexShader.kind = dxmt9::core::ShaderRef::Kind::Bytecode;
   state.shaderLayout.pixelShader.kind = dxmt9::core::ShaderRef::Kind::Bytecode;
   return state;
+}
+
+void setFvfXyzTex1(dxmt9::core::CanonicalDrawState& state) {
+  state.shaderLayout.vertexDecl.fvf =
+      dxmt9::ffp::kFvfXyz | (1u << dxmt9::ffp::kFvfTexCountShift);
+}
+
+void setDeclPositionTexcoord(dxmt9::core::CanonicalDrawState& state,
+                             u32 texcoordOffset,
+                             u32 stride) {
+  state.shaderLayout.vertexDecl.fvf = 0u;
+  state.shaderLayout.vertexDecl.streams[0].stride = stride;
+  state.hot.streamStrides[0] = stride;
+  state.shaderLayout.vertexDecl.elements = {
+      dxmt9::core::VertexElement{0, 0, kD3DDeclTypeFloat3,
+                                 kD3DDeclMethodDefault,
+                                 kD3DDeclUsagePosition, 0},
+      dxmt9::core::VertexElement{0, static_cast<std::uint16_t>(texcoordOffset),
+                                 kD3DDeclTypeFloat2,
+                                 kD3DDeclMethodDefault,
+                                 kD3DDeclUsageTexcoord, 0},
+  };
 }
 
 dxmt9::encoders::EncodeContext makeContext(Harness& harness,
@@ -1375,6 +1403,316 @@ void testProgrammableIndexedBlendHeuristicStaysDirect() {
   assertIndexedDrawCommand(*indexedDraw, kUploadedIndex, 640u, 6u);
 }
 
+void testMixedShaderPathsBindProgrammableDrawInputs() {
+  struct Case {
+    dxmt9::core::ShaderRef::Kind vertexKind;
+    dxmt9::core::ShaderRef::Kind pixelKind;
+    const char* label;
+  };
+
+  const std::array<Case, 4> cases{{
+      {dxmt9::core::ShaderRef::Kind::Bytecode,
+       dxmt9::core::ShaderRef::Kind::FixedFunctionPixel,
+       "programmable VS plus FFP PS"},
+      {dxmt9::core::ShaderRef::Kind::FixedFunctionVertex,
+       dxmt9::core::ShaderRef::Kind::Bytecode,
+       "FFP VS plus programmable PS"},
+      {dxmt9::core::ShaderRef::Kind::None,
+       dxmt9::core::ShaderRef::Kind::Bytecode,
+       "null VS plus programmable PS"},
+      {dxmt9::core::ShaderRef::Kind::Bytecode,
+       dxmt9::core::ShaderRef::Kind::None,
+       "programmable VS plus null PS"},
+  }};
+
+  for (const auto& testCase : cases) {
+    Harness harness;
+    Capture capture;
+    auto recorder = makeRecorder(capture);
+
+    constexpr obj_handle_t kBoundVertex = 0x5200005200007d0ull;
+    auto state = makeProgrammableState(20u);
+    state.shaderLayout.vertexShader.kind = testCase.vertexKind;
+    state.shaderLayout.pixelShader.kind = testCase.pixelKind;
+    setFvfXyzTex1(state);
+    state.hot.streamBuffers[0] =
+        harness.createBoundBuffer(kBoundVertex, 4096u);
+    state.hot.streamOffsets[0] = 40u;
+
+    dxmt9::core::DrawParam param{};
+    param.primitiveType = PrimitiveType::TriangleList;
+    param.primitiveCount = 1u;
+    param.startVertex = 2u;
+    param.baseVertexIndex = 17;
+    param.indexed = false;
+
+    PreUploadedDrawData preUploaded{};
+    runEncodeDraw(harness, recorder, state, param, preUploaded, {});
+
+    checkEq(capture.commands.size(), std::size_t{3},
+            std::string(testCase.label) + " command count");
+
+    const auto& stream = commandAt(
+        capture, 0, std::string(testCase.label) + " stream bind");
+    check(stream.kind == RecordedKind::SetVertexBuffer,
+          std::string(testCase.label) + " binds vertex stream");
+    checkEq(stream.bufferHandle, kBoundVertex,
+            std::string(testCase.label) + " stream source");
+    checkEq(stream.offset, std::uint64_t{80},
+            std::string(testCase.label) + " folds non-indexed startVertex");
+    checkEq(static_cast<unsigned>(stream.index), 1u,
+            std::string(testCase.label) + " stream slot");
+
+    const auto& volCommand = commandAt(
+        capture, 1, std::string(testCase.label) + " DrawVolatile");
+    check(volCommand.kind == RecordedKind::SetVertexBytes,
+          std::string(testCase.label) + " pushes DrawVolatile");
+    const auto vol = volatileBytes(volCommand);
+    checkEq(vol.vertexBaseIndex, std::int32_t{0},
+            std::string(testCase.label) + " clears non-indexed base vertex");
+    checkEq(vol.vertexStreamOffset, std::uint32_t{0},
+            std::string(testCase.label) + " stream offset");
+    checkEq(vol.vertexStreamStride, std::uint32_t{20},
+            std::string(testCase.label) + " stream stride");
+    checkEq(vol._pad, std::uint32_t{0},
+            std::string(testCase.label) + " DrawVolatile pad");
+
+    assertDrawPrimitivesCommand(
+        commandAt(capture, 2, std::string(testCase.label) + " draw"),
+        WMTPrimitiveTypeTriangle,
+        0u,
+        3u);
+  }
+}
+
+void testProgrammableDrawFvfAndDeclTransitionsDoNotReuseLayout() {
+  struct Case {
+    bool firstUsesFvf = false;
+    const char* label = "";
+  };
+
+  const std::array<Case, 2> cases{{
+      {true, "FVF then vertex declaration"},
+      {false, "vertex declaration then FVF"},
+  }};
+
+  for (const auto& testCase : cases) {
+    Harness harness;
+    Capture capture;
+    auto recorder = makeRecorder(capture);
+
+    constexpr obj_handle_t kFirstVertex = 0x5300005300007d1ull;
+    constexpr obj_handle_t kSecondVertex = 0x6300006300008d2ull;
+    auto first = makeProgrammableState(testCase.firstUsesFvf ? 20u : 28u);
+    auto second = makeProgrammableState(testCase.firstUsesFvf ? 28u : 20u);
+
+    if (testCase.firstUsesFvf) {
+      setFvfXyzTex1(first);
+      setDeclPositionTexcoord(second, 20u, 28u);
+    } else {
+      setDeclPositionTexcoord(first, 20u, 28u);
+      setFvfXyzTex1(second);
+    }
+
+    first.hot.streamBuffers[0] = harness.createBoundBuffer(kFirstVertex, 4096u);
+    first.hot.streamOffsets[0] = 32u;
+    second.hot.streamBuffers[0] =
+        harness.createBoundBuffer(kSecondVertex, 4096u);
+    second.hot.streamOffsets[0] = 96u;
+
+    dxmt9::core::DrawParam param{};
+    param.primitiveType = PrimitiveType::TriangleList;
+    param.primitiveCount = 1u;
+    param.startVertex = 1u;
+    param.indexed = false;
+
+    PreUploadedDrawData preUploaded{};
+    runEncodeDraw(harness, recorder, first, param, preUploaded, {});
+    runEncodeDraw(harness, recorder, second, param, preUploaded, {});
+
+    checkEq(capture.commands.size(), std::size_t{6},
+            std::string(testCase.label) + " command count");
+
+    const u32 firstStride = testCase.firstUsesFvf ? 20u : 28u;
+    const u32 secondStride = testCase.firstUsesFvf ? 28u : 20u;
+
+    const auto& firstStream = commandAt(
+        capture, 0, std::string(testCase.label) + " first stream");
+    check(firstStream.kind == RecordedKind::SetVertexBuffer,
+          std::string(testCase.label) + " first draw binds stream");
+    checkEq(firstStream.bufferHandle, kFirstVertex,
+            std::string(testCase.label) + " first stream source");
+    checkEq(firstStream.offset, static_cast<std::uint64_t>(32u + firstStride),
+            std::string(testCase.label) + " first layout stride");
+    const auto firstVol = volatileBytes(
+        commandAt(capture, 1, std::string(testCase.label) + " first volatile"));
+    checkEq(firstVol.vertexStreamStride, firstStride,
+            std::string(testCase.label) + " first volatile stride");
+    assertDrawPrimitivesCommand(
+        commandAt(capture, 2, std::string(testCase.label) + " first draw"),
+        WMTPrimitiveTypeTriangle,
+        0u,
+        3u);
+
+    const auto& secondStream = commandAt(
+        capture, 3, std::string(testCase.label) + " second stream");
+    check(secondStream.kind == RecordedKind::SetVertexBuffer,
+          std::string(testCase.label) + " second draw binds stream");
+    checkEq(secondStream.bufferHandle, kSecondVertex,
+            std::string(testCase.label) + " second stream source");
+    checkEq(secondStream.offset,
+            static_cast<std::uint64_t>(96u + secondStride),
+            std::string(testCase.label) + " second layout stride");
+    const auto secondVol = volatileBytes(commandAt(
+        capture, 4, std::string(testCase.label) + " second volatile"));
+    checkEq(secondVol.vertexStreamStride, secondStride,
+            std::string(testCase.label) + " second volatile stride");
+    assertDrawPrimitivesCommand(
+        commandAt(capture, 5, std::string(testCase.label) + " second draw"),
+        WMTPrimitiveTypeTriangle,
+        0u,
+        3u);
+  }
+}
+
+void testProgrammableArgbufIndexedDrawKeepsDirectResourceLanes() {
+  Harness harness;
+  Capture capture;
+  auto recorder = makeRecorder(capture);
+
+  constexpr obj_handle_t kVertexBuffer = 0x5400005400007e0ull;
+  constexpr obj_handle_t kIndexBuffer = 0x6400006400008f1ull;
+  auto state = makeProgrammableState(24u);
+  state.hot.streamBuffers[0] =
+      harness.createBoundBuffer(kVertexBuffer, 8192u);
+  state.hot.streamOffsets[0] = 128u;
+  state.hot.indexBuffer = harness.createBoundBuffer(kIndexBuffer, 4096u);
+
+  dxmt9::core::DrawParam param{};
+  param.primitiveType = PrimitiveType::TriangleList;
+  param.primitiveCount = 2u;
+  param.startVertex = 4u;
+  param.baseVertexIndex = 3;
+  param.startIndex = 5u;
+  param.indexType = IndexType::UInt16;
+  param.indexed = true;
+
+  PreUploadedDrawData preUploaded{};
+  runEncodeDraw(harness, recorder, state, param, preUploaded, {},
+                /*skipBaseStateBind=*/true,
+                /*argbufHybridMode=*/true);
+
+  checkEq(capture.commands.size(), std::size_t{3},
+          "argbuf indexed programmable draw command count");
+
+  const auto& stream = commandAt(capture, 0,
+                                 "missing argbuf indexed stream bind");
+  check(stream.kind == RecordedKind::SetVertexBuffer,
+        "argbuf indexed draw binds vertex stream directly");
+  checkEq(stream.bufferHandle, kVertexBuffer,
+          "argbuf indexed draw vertex buffer source");
+  checkEq(stream.offset, std::uint64_t{128},
+          "argbuf indexed draw keeps stream offset");
+  checkEq(static_cast<unsigned>(stream.index), 1u,
+          "argbuf indexed draw stream slot");
+
+  const auto& volCommand =
+      commandAt(capture, 1, "missing argbuf indexed DrawVolatile");
+  check(volCommand.kind == RecordedKind::SetVertexBytes,
+        "argbuf indexed draw still pushes DrawVolatile bytes");
+  checkEq(static_cast<unsigned>(volCommand.index), 5u,
+          "argbuf indexed DrawVolatile slot");
+  const auto vol = volatileBytes(volCommand);
+  checkEq(vol.vertexBaseIndex, std::int32_t{3},
+          "argbuf indexed DrawVolatile carries base vertex");
+  checkEq(vol.vertexStreamStride, std::uint32_t{24},
+          "argbuf indexed DrawVolatile stride");
+
+  assertIndexedDrawCommand(
+      commandAt(capture, 2, "missing argbuf indexed draw"),
+      kIndexBuffer,
+      10u,
+      6u);
+}
+
+void testProgrammableArgbufMultistreamDrawKeepsDirectResourceLanes() {
+  Harness harness;
+  Capture capture;
+  auto recorder = makeRecorder(capture);
+
+  constexpr obj_handle_t kStream0 = 0x5500005500007e0ull;
+  constexpr obj_handle_t kStream1 = 0x6500006500008f1ull;
+  auto state = makeProgrammableState(12u);
+  state.hot.streamBuffers[0] = harness.createBoundBuffer(kStream0, 8192u);
+  state.hot.streamBuffers[1] = harness.createBoundBuffer(kStream1, 8192u);
+  state.hot.streamOffsets[0] = 48u;
+  state.hot.streamOffsets[1] = 208u;
+  state.hot.streamStrides[1] = 16u;
+  state.shaderLayout.vertexDecl.elements = {
+      dxmt9::core::VertexElement{0, 0, kD3DDeclTypeFloat3,
+                                 kD3DDeclMethodDefault,
+                                 kD3DDeclUsagePosition, 0},
+      dxmt9::core::VertexElement{1, 0, kD3DDeclTypeFloat2,
+                                 kD3DDeclMethodDefault,
+                                 kD3DDeclUsageTexcoord, 0},
+  };
+  state.shaderLayout.vertexDecl.streams[1].stride = 16u;
+
+  dxmt9::core::DrawParam param{};
+  param.primitiveType = PrimitiveType::TriangleList;
+  param.primitiveCount = 1u;
+  param.startVertex = 2u;
+  param.indexed = false;
+
+  PreUploadedDrawData preUploaded{};
+  runEncodeDraw(harness, recorder, state, param, preUploaded, {},
+                /*skipBaseStateBind=*/true,
+                /*argbufHybridMode=*/true);
+
+  checkEq(capture.commands.size(), std::size_t{4},
+          "argbuf multistream programmable draw command count");
+
+  const auto& stream0 = commandAt(capture, 0,
+                                  "missing argbuf multistream stream0 bind");
+  check(stream0.kind == RecordedKind::SetVertexBuffer,
+        "argbuf multistream draw binds stream0 directly");
+  checkEq(stream0.bufferHandle, kStream0,
+          "argbuf multistream stream0 source");
+  checkEq(stream0.offset, std::uint64_t{72},
+          "argbuf multistream stream0 folds start vertex");
+  checkEq(static_cast<unsigned>(stream0.index), 1u,
+          "argbuf multistream stream0 slot");
+
+  const auto& stream1 = commandAt(capture, 1,
+                                  "missing argbuf multistream stream1 bind");
+  check(stream1.kind == RecordedKind::SetVertexBuffer,
+        "argbuf multistream draw binds stream1 directly");
+  checkEq(stream1.bufferHandle, kStream1,
+          "argbuf multistream stream1 source");
+  checkEq(stream1.offset, std::uint64_t{240},
+          "argbuf multistream stream1 folds start vertex");
+  checkEq(static_cast<unsigned>(stream1.index), 6u,
+          "argbuf multistream stream1 generated slot");
+
+  const auto& volCommand =
+      commandAt(capture, 2, "missing argbuf multistream DrawVolatile");
+  check(volCommand.kind == RecordedKind::SetVertexBytes,
+        "argbuf multistream draw still pushes DrawVolatile bytes");
+  checkEq(static_cast<unsigned>(volCommand.index), 5u,
+          "argbuf multistream DrawVolatile slot");
+  const auto vol = volatileBytes(volCommand);
+  checkEq(vol.vertexBaseIndex, std::int32_t{0},
+          "argbuf multistream DrawVolatile clears base vertex");
+  checkEq(vol.vertexStreamStride, std::uint32_t{12},
+          "argbuf multistream DrawVolatile primary stride");
+
+  assertDrawPrimitivesCommand(
+      commandAt(capture, 3, "missing argbuf multistream draw"),
+      WMTPrimitiveTypeTriangle,
+      0u,
+      3u);
+}
+
 void testBoundVertexAndUserIndexOrdering() {
   Harness harness;
   Capture capture;
@@ -1709,6 +2047,10 @@ int main() {
     testProgrammableVsSkipsMissingExtraStreamWithoutStaleBind();
     testIndexedProgrammableDrawPreservesSparseStreamOffsets();
     testProgrammableIndexedBlendHeuristicStaysDirect();
+    testMixedShaderPathsBindProgrammableDrawInputs();
+    testProgrammableDrawFvfAndDeclTransitionsDoNotReuseLayout();
+    testProgrammableArgbufIndexedDrawKeepsDirectResourceLanes();
+    testProgrammableArgbufMultistreamDrawKeepsDirectResourceLanes();
     testBoundVertexAndUserIndexOrdering();
     testBoundVertexAndBoundIndexOrdering();
     testUserVertexAndUserIndexOrdering();

@@ -1367,6 +1367,78 @@ oracle = "math-derivation"
 oracle-date = "2026-05-04"
 
 [[test]]
+file = "vs_specific/dxmt9_prog_indexed_color_readback.shader_test"
+status = "passing"
+source = "dxmt9"
+source_kind = "project-authored"
+license = "MIT"
+license_scope = "project-mit"
+models = ["ps_3_0", "vs_3_0"]
+opcodes = ["DCL", "MOV"]
+oracle = "math-derivation"
+oracle-date = "2026-05-28"
+
+[[test]]
+file = "vs_specific/dxmt9_prog_indexed_up_color_readback.shader_test"
+status = "passing"
+source = "dxmt9"
+source_kind = "project-authored"
+license = "MIT"
+license_scope = "project-mit"
+models = ["ps_3_0", "vs_3_0"]
+opcodes = ["DCL", "MOV"]
+oracle = "math-derivation"
+oracle-date = "2026-05-28"
+
+[[test]]
+file = "vs_specific/dxmt9_prog_indexed_vsconst_argbuf_readback.shader_test"
+status = "passing"
+source = "dxmt9"
+source_kind = "project-authored"
+license = "MIT"
+license_scope = "project-mit"
+models = ["ps_3_0", "vs_3_0"]
+opcodes = ["DCL", "MOV"]
+oracle = "math-derivation"
+oracle-date = "2026-05-28"
+
+[[test]]
+file = "vs_specific/dxmt9_prog_multistream_color_readback.shader_test"
+status = "passing"
+source = "dxmt9"
+source_kind = "project-authored"
+license = "MIT"
+license_scope = "project-mit"
+models = ["ps_3_0", "vs_3_0"]
+opcodes = ["DCL", "MOV"]
+oracle = "math-derivation"
+oracle-date = "2026-05-28"
+
+[[test]]
+file = "vs_specific/dxmt9_prog_ffp_decodable_normal_readback.shader_test"
+status = "passing"
+source = "dxmt9"
+source_kind = "project-authored"
+license = "MIT"
+license_scope = "project-mit"
+models = ["ps_3_0", "vs_3_0"]
+opcodes = ["DCL", "MOV"]
+oracle = "math-derivation"
+oracle-date = "2026-05-28"
+
+[[test]]
+file = "vs_specific/dxmt9_prog_decl_transition_normal_readback.shader_test"
+status = "passing"
+source = "dxmt9"
+source_kind = "project-authored"
+license = "MIT"
+license_scope = "project-mit"
+models = ["ps_3_0", "vs_3_0"]
+opcodes = ["DCL", "MOV"]
+oracle = "math-derivation"
+oracle-date = "2026-05-28"
+
+[[test]]
 file = "vs_specific/dxmt9_vs2_color_triangle.shader_test"
 status = "passing"
 source = "dxmt9"
@@ -2037,6 +2109,30 @@ models = ["vs_2_0", "ps_2_0"]
 opcodes = ["DCL", "MOV"]
 oracle = "Wine d3d9 visual.c test_uninitialized_varyings behavior, reduced to vs_2_0 writes only oPos + ps_2_0 reads undeclared v1 (specular) → FS reads (0,0,0,*)"
 oracle-date = "2026-05-23"
+
+[[test]]
+file = "render_state/dxmt9_prog_after_ffp_state_transition_readback.shader_test"
+status = "passing"
+source = "dxmt9"
+source_kind = "project-authored"
+license = "MIT"
+license_scope = "project-mit"
+models = ["ffp", "ps_3_0", "vs_3_0"]
+opcodes = ["DCL", "MOV"]
+oracle = "math-derivation"
+oracle-date = "2026-05-28"
+
+[[test]]
+file = "render_state/dxmt9_ffp_after_prog_state_transition_readback.shader_test"
+status = "passing"
+source = "dxmt9"
+source_kind = "project-authored"
+license = "MIT"
+license_scope = "project-mit"
+models = ["ffp", "ps_3_0", "vs_3_0"]
+opcodes = ["DCL", "MOV"]
+oracle = "math-derivation"
+oracle-date = "2026-05-28"
 
 [[test]]
 file = "render_state/dxmt9_alpha_depth_color_mask_combined_readback.shader_test"
