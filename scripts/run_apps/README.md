@@ -17,3 +17,7 @@ wired to Meson tests; they are evidence-gathering tools.
 - `run_app-d3d9-sfiv-benchmark_experiment.sh` — Street Fighter IV benchmark (extracts
   the public installer's MSI, installs prefix-native `d3dx9_41`, picks the
   Heroic vs CrossOver host lane).
+- `run_app-d3d9-3dmark05-verify_direct.sh` — direct foreground runner for the
+  existing 3DMark05 verify prefix. It enables `DXMT_3DMARK05_DIRECT=1` on the
+  regular 3DMark05 launcher and uses `DXMT_3DMARK05_ARGS` when a manual
+  heuristic run needs different switches.
