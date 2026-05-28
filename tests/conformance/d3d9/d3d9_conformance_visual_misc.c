@@ -1864,6 +1864,13 @@ void test_visual_process_vertices_xyzhw_policy(const struct d3d9_api *api)
         {400.0f, 300.0f, 1.0f, 1.0f, 0xff0000ffu, 0.50f, 0.75f},
         {400.0f, 180.0f, 1.0f, 1.0f, 0xffffffffu, 1.00f, 1.00f},
     };
+    const struct dst_vertex expected_lit[] =
+    {
+        {240.0f, 300.0f, 0.0f, 1.0f, 0xffff8000u, 0.00f, 0.25f},
+        {240.0f, 180.0f, 0.0f, 1.0f, 0xffff8000u, 0.25f, 0.50f},
+        {400.0f, 300.0f, 0.0f, 1.0f, 0xffff8000u, 0.50f, 0.75f},
+        {400.0f, 180.0f, 0.0f, 1.0f, 0xffff8000u, 1.00f, 1.00f},
+    };
     const struct dst_vertex expected_tangent[] =
     {
         {480.0f, 300.0f, 0.0f, 1.0f, 0xffff0000u, 0.00f, 0.25f},
@@ -1901,6 +1908,7 @@ void test_visual_process_vertices_xyzhw_policy(const struct d3d9_api *api)
     IDirect3DVertexBuffer9 *src_fvf_normal_vb = NULL;
     IDirect3DVertexBuffer9 *src_extra_vb = NULL;
     IDirect3DVertexBuffer9 *dst_vb = NULL;
+    IDirect3DVertexBuffer9 *lit_dst_vb = NULL;
     IDirect3DVertexBuffer9 *offset_dst_vb = NULL;
     IDirect3DVertexBuffer9 *decl_dst_vb = NULL;
     IDirect3DVertexBuffer9 *src_decl_dst_vb = NULL;
@@ -1935,6 +1943,8 @@ void test_visual_process_vertices_xyzhw_policy(const struct d3d9_api *api)
     IDirect3DVertexShader9 *vs = NULL;
     IDirect3DDevice9 *device = NULL;
     struct dst_vertex *mapped = NULL;
+    D3DMATERIAL9 material;
+    D3DLIGHT9 light;
     const float vs_constants[4][4] =
     {
         {0.5f, 0.0f, 0.0f, 0.0f},
@@ -2220,6 +2230,78 @@ void test_visual_process_vertices_xyzhw_policy(const struct d3d9_api *api)
         }
         CHECK_HR(IDirect3DVertexBuffer9_Unlock(dst_vb), D3D_OK);
     }
+
+    hr = IDirect3DDevice9_CreateVertexBuffer(device, sizeof(expected_lit), 0,
+            D3DFVF_XYZRHW | D3DFVF_DIFFUSE | D3DFVF_TEX1,
+            D3DPOOL_SYSTEMMEM, &lit_dst_vb, NULL);
+    CHECK_HR(hr, D3D_OK);
+    if (FAILED(hr))
+        goto done_device;
+    memset(&material, 0, sizeof(material));
+    material.Diffuse.r = 1.0f;
+    material.Diffuse.g = 0.5f;
+    material.Diffuse.a = 1.0f;
+    CHECK_HR(IDirect3DDevice9_SetMaterial(device, &material), D3D_OK);
+    memset(&light, 0, sizeof(light));
+    light.Type = D3DLIGHT_DIRECTIONAL;
+    light.Diffuse.r = 1.0f;
+    light.Diffuse.g = 1.0f;
+    light.Diffuse.b = 1.0f;
+    light.Direction.z = -1.0f;
+    CHECK_HR(IDirect3DDevice9_SetLight(device, 0, &light), D3D_OK);
+    CHECK_HR(IDirect3DDevice9_LightEnable(device, 0, TRUE), D3D_OK);
+    CHECK_HR(IDirect3DDevice9_SetRenderState(device, D3DRS_AMBIENT, 0),
+            D3D_OK);
+    CHECK_HR(IDirect3DDevice9_SetRenderState(device, D3DRS_COLORVERTEX, FALSE),
+            D3D_OK);
+    CHECK_HR(IDirect3DDevice9_SetRenderState(device, D3DRS_LIGHTING, TRUE),
+            D3D_OK);
+    CHECK_HR(IDirect3DDevice9_SetFVF(device,
+            D3DFVF_XYZ | D3DFVF_NORMAL | D3DFVF_DIFFUSE | D3DFVF_TEX1),
+            D3D_OK);
+    CHECK_HR(IDirect3DDevice9_SetStreamSource(device, 0, src_fvf_normal_vb, 0,
+            sizeof(src_fvf_normal[0])), D3D_OK);
+    CHECK_HR(IDirect3DDevice9_ProcessVertices(device, 0, 0,
+            ARRAY_SIZE(src_fvf_normal), lit_dst_vb, NULL, 0), D3D_OK);
+
+    hr = IDirect3DVertexBuffer9_Lock(lit_dst_vb, 0, sizeof(expected_lit),
+            (void **)&mapped, D3DLOCK_READONLY);
+    CHECK_HR(hr, D3D_OK);
+    if (SUCCEEDED(hr))
+    {
+        for (i = 0; i < ARRAY_SIZE(expected_lit); ++i)
+        {
+            float dx = mapped[i].x - expected_lit[i].x;
+            float dy = mapped[i].y - expected_lit[i].y;
+            float dz = mapped[i].z - expected_lit[i].z;
+            float dw = mapped[i].rhw - expected_lit[i].rhw;
+            float du = mapped[i].u - expected_lit[i].u;
+            float dv = mapped[i].v - expected_lit[i].v;
+            if (dx < 0.0f) dx = -dx;
+            if (dy < 0.0f) dy = -dy;
+            if (dz < 0.0f) dz = -dz;
+            if (dw < 0.0f) dw = -dw;
+            if (du < 0.0f) du = -du;
+            if (dv < 0.0f) dv = -dv;
+            CHECK_TRUE(dx < 0.01f);
+            CHECK_TRUE(dy < 0.01f);
+            CHECK_TRUE(dz < 0.01f);
+            CHECK_TRUE(dw < 0.01f);
+            CHECK_TRUE(mapped[i].color == expected_lit[i].color);
+            CHECK_TRUE(du < 0.01f);
+            CHECK_TRUE(dv < 0.01f);
+        }
+        CHECK_HR(IDirect3DVertexBuffer9_Unlock(lit_dst_vb), D3D_OK);
+    }
+    CHECK_HR(IDirect3DDevice9_SetRenderState(device, D3DRS_LIGHTING, FALSE),
+            D3D_OK);
+    CHECK_HR(IDirect3DDevice9_SetRenderState(device, D3DRS_COLORVERTEX, TRUE),
+            D3D_OK);
+    CHECK_HR(IDirect3DDevice9_LightEnable(device, 0, FALSE), D3D_OK);
+    CHECK_HR(IDirect3DDevice9_SetStreamSource(device, 0, src_vb, 0,
+            sizeof(src[0])), D3D_OK);
+    CHECK_HR(IDirect3DDevice9_SetFVF(device,
+            D3DFVF_XYZ | D3DFVF_DIFFUSE | D3DFVF_TEX1), D3D_OK);
 
     hr = IDirect3DDevice9_CreateVertexBuffer(device, sizeof(expected_offset), 0,
             D3DFVF_XYZRHW | D3DFVF_DIFFUSE | D3DFVF_TEX1,
@@ -3631,6 +3713,7 @@ done_device:
     if (src_decl_dst_vb) IDirect3DVertexBuffer9_Release(src_decl_dst_vb);
     if (decl_dst_vb) IDirect3DVertexBuffer9_Release(decl_dst_vb);
     if (offset_dst_vb) IDirect3DVertexBuffer9_Release(offset_dst_vb);
+    if (lit_dst_vb) IDirect3DVertexBuffer9_Release(lit_dst_vb);
     if (dst_vb) IDirect3DVertexBuffer9_Release(dst_vb);
     if (src_extra_vb) IDirect3DVertexBuffer9_Release(src_extra_vb);
     if (src_fvf_normal_vb) IDirect3DVertexBuffer9_Release(src_fvf_normal_vb);

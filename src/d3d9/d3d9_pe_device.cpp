@@ -1087,6 +1087,62 @@ static DWORD packD3DColor(const float in[4]) {
            static_cast<DWORD>(floatColorByte(in[2]));
 }
 
+static float dot3(const float a[3], const float b[3]) {
+    return a[0] * b[0] + a[1] * b[1] + a[2] * b[2];
+}
+
+static bool normalize3(float v[3]) {
+    const float lenSq = dot3(v, v);
+    if (lenSq <= 0.0f) return false;
+    const float invLen = 1.0f / std::sqrt(lenSq);
+    v[0] *= invLen;
+    v[1] *= invLen;
+    v[2] *= invLen;
+    return true;
+}
+
+static void addColorProduct(float out[4], const D9CColorRGBA& a,
+                            const D9CColorRGBA& b, float scale) {
+    out[0] += a.r * b.r * scale;
+    out[1] += a.g * b.g * scale;
+    out[2] += a.b * b.b * scale;
+}
+
+static DWORD processDirectionalLightingColor(const float normalIn[3],
+                                             const D9CMaterial& material,
+                                             DWORD ambient,
+                                             const D9CLight lights[8],
+                                             DWORD lightEnableMask) {
+    float normal[3]{normalIn[0], normalIn[1], normalIn[2]};
+    normalize3(normal);
+
+    float ambientColor[4]{};
+    unpackD3DColor(ambient, ambientColor);
+    float lit[4]{
+        material.emissive.r + material.ambient.r * ambientColor[0],
+        material.emissive.g + material.ambient.g * ambientColor[1],
+        material.emissive.b + material.ambient.b * ambientColor[2],
+        material.diffuse.a,
+    };
+
+    for (UINT i = 0; i < 8u; ++i) {
+        if ((lightEnableMask & (1u << i)) == 0) continue;
+        const D9CLight& light = lights[i];
+        if (light.type != D3DLIGHT_DIRECTIONAL) continue;
+
+        addColorProduct(lit, material.ambient, light.ambient, 1.0f);
+        float toLight[3]{
+            -light.direction[0],
+            -light.direction[1],
+            -light.direction[2],
+        };
+        if (!normalize3(toLight)) continue;
+        const float diffuse = std::max(0.0f, dot3(normal, toLight));
+        addColorProduct(lit, material.diffuse, light.diffuse, diffuse);
+    }
+    return packD3DColor(lit);
+}
+
 static float snorm16ToFloat(int16_t value) {
     if (value <= -32768) return -1.0f;
     return static_cast<float>(value) / 32767.0f;
@@ -6171,6 +6227,15 @@ public:
         if (dstLayout.positionBytes != 16u) {
             return invalid("destination lacks POSITIONT");
         }
+        auto renderStateValue = [&](D3DRENDERSTATETYPE state) -> DWORD {
+            uint32_t shadowValue = 0;
+            if (peState_.renderStateShadow.get(static_cast<DWORD>(state), shadowValue)) {
+                return shadowValue;
+            }
+            return dxmt9c_device_get_render_state(dev_, static_cast<uint32_t>(state));
+        };
+        const bool processLighting =
+            !programmable && srcLayout.normal && renderStateValue(D3DRS_LIGHTING) != 0;
         UINT srcReadBytes[D9C_DRAW_PACKET_MAX_STREAMS]{};
         auto requirePositionRead = [&]() {
             srcReadBytes[srcLayout.positionStream] =
@@ -6258,7 +6323,13 @@ public:
             }
         } else {
             requirePositionRead();
-            if (dstLayout.diffuse && !requireDiffuseRead()) return invalid("diffuse passthrough missing");
+            if (dstLayout.diffuse) {
+                if (processLighting) {
+                    if (!requireNormalRead()) return invalid("lighting normal input missing");
+                } else if (!requireDiffuseRead()) {
+                    return invalid("diffuse passthrough missing");
+                }
+            }
             if (dstLayout.specular && !requireSpecularRead()) return invalid("specular passthrough missing");
             if (dstLayout.texCount > srcLayout.texCount) return invalid("texcoord count mismatch");
             for (UINT i = 0; i < dstLayout.texCount; ++i) {
@@ -6353,6 +6424,7 @@ public:
         const float offsetY = static_cast<float>(vp.y) + scaleY;
         const float zScale = vp.maxZ - vp.minZ;
         const D9CMatrix wvp = worldViewProjectionTransform();
+        const DWORD processAmbient = processLighting ? renderStateValue(D3DRS_AMBIENT) : 0u;
         const uint8_t* srcBase[D9C_DRAW_PACKET_MAX_STREAMS]{};
         for (UINT stream = 0; stream < D9C_DRAW_PACKET_MAX_STREAMS; ++stream) {
             srcBase[stream] = static_cast<const uint8_t*>(srcBytes[stream]);
@@ -6646,6 +6718,18 @@ public:
             if (dstLayout.diffuse) {
                 if (programmable) {
                     const DWORD color = packD3DColor(diffuseOut);
+                    std::memcpy(dstVertex + dstLayout.diffuseOffset, &color, sizeof(color));
+                } else if (processLighting) {
+                    float normal[3]{};
+                    const auto* normalSource =
+                        srcBase[srcLayout.normalStream] +
+                        srcByteStart[srcLayout.normalStream] +
+                        static_cast<uint64_t>(i) * streamStr_[srcLayout.normalStream] +
+                        srcLayout.normalOffset;
+                    std::memcpy(normal, normalSource, sizeof(normal));
+                    const DWORD color = processDirectionalLightingColor(
+                        normal, peState_.materialShadow, processAmbient,
+                        peState_.lightShadow, peState_.lightEnableShadow);
                     std::memcpy(dstVertex + dstLayout.diffuseOffset, &color, sizeof(color));
                 } else {
                     const auto* diffuseSource =
