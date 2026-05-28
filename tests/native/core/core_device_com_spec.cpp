@@ -457,6 +457,55 @@ void testPalettizedTextureExpansion() {
     }
     {
       auto* texture = dxmt9c_device_create_texture(&cDevice, 2, 1, 1, 0,
+                                                   41u, 1u);
+      check(texture != nullptr, "create locked P8 palette texture");
+
+      std::array<uint32_t, 256> palette{};
+      palette[1] = 0xff010203u;
+      palette[2] = 0xff040506u;
+      checkEq(dxmt9c_texture_set_palette(texture, palette.data(),
+                                          static_cast<uint32_t>(palette.size())),
+              D3D_OK, "locked P8 initial palette upload");
+
+      D9CLockedRect locked{};
+      checkEq(dxmt9c_texture_lock_rect(texture, 0, &locked, nullptr, 0),
+              D3D_OK, "locked P8 lock before palette switch");
+      auto* indices = static_cast<uint8_t*>(locked.bits);
+      indices[0] = 1;
+      indices[1] = 2;
+
+      const size_t uploadCount = backend->textureUploads.size();
+      palette[1] = 0xff102030u;
+      palette[2] = 0xff405060u;
+      checkEq(dxmt9c_texture_set_palette(texture, palette.data(),
+                                          static_cast<uint32_t>(palette.size())),
+              D3D_OK, "locked P8 palette switch");
+      checkEq(backend->textureUploads.size(), uploadCount,
+              "locked P8 palette switch skips locked backend upload");
+
+      checkEq(dxmt9c_texture_unlock_rect(texture, 0), D3D_OK,
+              "locked P8 unlock after palette switch");
+      auto bytes = texture->obj->levelBytes(0);
+      check(bytes.size() >= 8,
+            "locked P8 expanded backing has two BGRA pixels");
+      checkEq(bytes[0], uint8_t{0x30},
+              "locked P8 pixel0 blue from latest palette");
+      checkEq(bytes[1], uint8_t{0x20},
+              "locked P8 pixel0 green from latest palette");
+      checkEq(bytes[2], uint8_t{0x10},
+              "locked P8 pixel0 red from latest palette");
+      checkEq(bytes[4], uint8_t{0x60},
+              "locked P8 pixel1 blue from latest palette");
+      checkEq(bytes[5], uint8_t{0x50},
+              "locked P8 pixel1 green from latest palette");
+      checkEq(bytes[6], uint8_t{0x40},
+              "locked P8 pixel1 red from latest palette");
+
+      checkEq(dxmt9c_texture_release(texture), 0u,
+              "locked P8 palette texture release");
+    }
+    {
+      auto* texture = dxmt9c_device_create_texture(&cDevice, 2, 1, 1, 0,
                                                    40u, 1u);
       check(texture != nullptr, "create A8P8 texture");
       checkEq(texture->obj->desc().format, Format::A8R8G8B8,
