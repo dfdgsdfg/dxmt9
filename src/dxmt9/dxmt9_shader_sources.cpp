@@ -37,6 +37,10 @@ bool fsHalfPrecisionEnabled() {
   return value;
 }
 
+std::string centroidAttribute(bool enabled) {
+  return enabled ? " [[centroid_perspective]]" : "";
+}
+
 u64 makeHash(const std::string& source) {
   return core::hashString(source);
 }
@@ -166,7 +170,7 @@ void persistShaderArchive(WMT::BinaryArchive& archive, const std::string& path) 
   archive.serialize(path.c_str(), err);
 }
 
-std::string makeShaderPrelude(bool withClipDistances) {
+std::string makeShaderPrelude(const ShaderPreludeOptions& options) {
   using namespace dxmt9::core;
   std::ostringstream out;
   out << "#include <metal_stdlib>\nusing namespace metal;\n";
@@ -269,19 +273,20 @@ std::string makeShaderPrelude(bool withClipDistances) {
   out << "};\n";
   out << "struct VSOut {\n";
   out << "  float4 position [[position]];\n";
-  out << "  float4 color;\n";
-  out << "  float4 secondaryColor;\n";
+  out << "  float4 color" << centroidAttribute(options.centroidColor) << ";\n";
+  out << "  float4 secondaryColor" << centroidAttribute(options.centroidSecondaryColor) << ";\n";
   const auto maxTex = vsoutMaxTexcoord();
   for (size_t i = 0; i < maxTex; ++i) {
-    out << "  float4 texcoord" << i << ";\n";
+    const bool centroid = (options.centroidTexcoordMask & (1u << i)) != 0u;
+    out << "  float4 texcoord" << i << centroidAttribute(centroid) << ";\n";
   }
   if (vsoutEmitFogFactor()) {
-    out << "  float fogFactor;\n";
+    out << "  float fogFactor" << centroidAttribute(options.centroidFogFactor) << ";\n";
   }
   if (vsoutEmitPointSize()) {
     out << "  float pointSize [[point_size]];\n";
   }
-  if (withClipDistances) {
+  if (options.withClipDistances) {
     // Apple Metal (Apple7+) only honours a single `[[clip_distance]]`
     // declaration per vertex output. Both the array form
     // (`float clipDistance [[clip_distance]] [N]`) and multiple
@@ -475,7 +480,13 @@ std::string makeShaderPrelude(bool withClipDistances) {
   return out.str();
 }
 
-std::string makeShaderPreludeArgbufHybrid(bool withClipDistances) {
+std::string makeShaderPrelude(bool withClipDistances) {
+  ShaderPreludeOptions options;
+  options.withClipDistances = withClipDistances;
+  return makeShaderPrelude(options);
+}
+
+std::string makeShaderPreludeArgbufHybrid(const ShaderPreludeOptions& options) {
   using namespace dxmt9::core;
   // Reuse the Stage 1 prelude as the canonical source of truth for the
   // five per-category uniform struct layouts + helper inlines. Append
@@ -486,7 +497,7 @@ std::string makeShaderPreludeArgbufHybrid(bool withClipDistances) {
   // it by `constant FfpVsConsts&`) — the wrapper only changes the
   // entry-point binding shape.
   std::ostringstream out;
-  out << makeShaderPrelude(withClipDistances);
+  out << makeShaderPrelude(options);
   // ArgbufLayout mirrors the per-encoder argbuf shape (design.md §11.2).
   // [[id(N)]] attributes pin the descriptor indices so the host-side
   // MTLArgumentEncoder layout stays compatible across MSL versions.
@@ -503,6 +514,12 @@ std::string makeShaderPreludeArgbufHybrid(bool withClipDistances) {
   return out.str();
 }
 
+std::string makeShaderPreludeArgbufHybrid(bool withClipDistances) {
+  ShaderPreludeOptions options;
+  options.withClipDistances = withClipDistances;
+  return makeShaderPreludeArgbufHybrid(options);
+}
+
 bool argbufResourceArrayEnabled() {
   static const bool value = [] {
     const char* env = std::getenv("DXMT9_ARGBUF_RESOURCE_ARRAY");
@@ -511,7 +528,7 @@ bool argbufResourceArrayEnabled() {
   return value;
 }
 
-std::string makeShaderPreludeArgbufResourceArray(bool withClipDistances) {
+std::string makeShaderPreludeArgbufResourceArray(const ShaderPreludeOptions& options) {
   // Reuse the constants-only Stage 2 prelude verbatim for the five uniform
   // struct definitions + helper inlines, then re-emit the ArgbufLayout
   // struct EXTENDED with the texture/sampler arrays. We intentionally do
@@ -520,7 +537,7 @@ std::string makeShaderPreludeArgbufResourceArray(bool withClipDistances) {
   // twice. Instead we emit makeShaderPrelude (no ArgbufLayout) and then the
   // extended struct here.
   std::ostringstream out;
-  out << makeShaderPrelude(withClipDistances);
+  out << makeShaderPrelude(options);
   // ArgbufLayout mirrors the per-encoder argbuf shape with texture/sampler
   // arrays appended (design.md §11.2, resource-array sub-mode). [[id(N)]]
   // attributes pin the descriptor indices so the host MTLArgumentEncoder
@@ -539,6 +556,12 @@ std::string makeShaderPreludeArgbufResourceArray(bool withClipDistances) {
       << "> samplers [[id(" << kArgbufResourceArraySamplerBaseId << ")]];\n";
   out << "};\n";
   return out.str();
+}
+
+std::string makeShaderPreludeArgbufResourceArray(bool withClipDistances) {
+  ShaderPreludeOptions options;
+  options.withClipDistances = withClipDistances;
+  return makeShaderPreludeArgbufResourceArray(options);
 }
 
 }  // namespace dxmt9::shaders

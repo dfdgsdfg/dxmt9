@@ -25,6 +25,7 @@ u64 hashFfpVertexKeyForState(const FfpVertexKey &key) {
   hash = hashCombineForState(hash, static_cast<u64>(key.lightingEnabled));
   hash = hashCombineForState(hash, static_cast<u64>(key.specularEnabled));
   hash = hashCombineForState(hash, static_cast<u64>(key.normalizeNormals));
+  hash = hashCombineForState(hash, static_cast<u64>(key.colorVertexEnabled));
   for (bool enabled : key.lightEnabled) {
     hash = hashCombineForState(hash, static_cast<u64>(enabled));
   }
@@ -129,10 +130,16 @@ void DeviceState::reset() {
 
   renderStates.set(RS_LIGHTING, 1);
   // Wine d3d9: RS_SHADEMODE default is D3DSHADE_GOURAUD (2);
-  // RS_MULTISAMPLEMASK = 0xffffffff; RS_MULTISAMPLEANTIALIAS = TRUE.
+  // RS_LASTPIXEL = TRUE; RS_CLIPPING = TRUE; RS_COLORVERTEX = TRUE;
+  // RS_LOCALVIEWER = TRUE; RS_MULTISAMPLEMASK = 0xffffffff;
+  // RS_MULTISAMPLEANTIALIAS = TRUE.
   // visual_shademode_render_state_policy /
   // visual_sample_mask_render_state_policy.
   renderStates.set(9u /*RS_SHADEMODE*/, 2u);
+  renderStates.set(16u /*RS_LASTPIXEL*/, 1u);
+  renderStates.set(136u /*RS_CLIPPING*/, 1u);
+  renderStates.set(141u /*RS_COLORVERTEX*/, 1u);
+  renderStates.set(142u /*RS_LOCALVIEWER*/, 1u);
   renderStates.set(161u /*RS_MULTISAMPLEANTIALIAS*/, 1u);
   renderStates.set(162u /*RS_MULTISAMPLEMASK*/, 0xffffffffu);
   renderStates.set(RS_SPECULAR_ENABLE, 0);

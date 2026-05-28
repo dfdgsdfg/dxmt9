@@ -749,6 +749,7 @@ struct FfpVertexKey {
   bool lightingEnabled = false;
   bool specularEnabled = false;
   bool normalizeNormals = false;
+  bool colorVertexEnabled = true;
   std::array<bool, kMaxLights> lightEnabled{};
   std::array<u32, kMaxLights> lightType{};
   std::array<u32, 4> colorMaterialMode{};

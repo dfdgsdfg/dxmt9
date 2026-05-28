@@ -879,9 +879,16 @@ void testWrapRenderStateRoundTrip() {
   auto device = factory.createDevice(0, params);
   check(device != nullptr, "wrap render-state device creation");
 
-  // Representative slots spanning both contiguous WRAP ranges.
-  const std::array<std::pair<u32, u32>, 4> cases{{
+  // Full WRAP0..7 coverage plus representative slots from the high
+  // WRAP8..15 range.
+  const std::array<std::pair<u32, u32>, 10> cases{{
       {RS_WRAP0, 128u},
+      {RS_WRAP1, 129u},
+      {RS_WRAP2, 130u},
+      {RS_WRAP3, 131u},
+      {RS_WRAP4, 132u},
+      {RS_WRAP5, 133u},
+      {RS_WRAP6, 134u},
       {RS_WRAP7, 135u},
       {RS_WRAP8, 198u},
       {RS_WRAP15, 205u},
@@ -914,6 +921,54 @@ void testWrapRenderStateRoundTrip() {
   for (u32 i = 0; i < cases.size(); ++i) {
     checkEq(device->getRenderState(cases[i].first), 0xC0DE0000u + i,
             "GetRenderState(WRAP) returns the exact per-slot shadowed value");
+  }
+}
+
+void testAcceptedRenderStateRoundTripPolicies() {
+  auto backend = std::make_shared<dxmt9::core::spec::RecordingBackend>();
+  Factory factory(BackendLimits{}, backend);
+  PresentParameters params{};
+  params.backBufferWidth = 32;
+  params.backBufferHeight = 32;
+  params.backBufferFormat = Format::A8R8G8B8;
+  params.windowed = true;
+  params.deviceWindow = Handle{0x5152};
+
+  auto device = factory.createDevice(0, params);
+  check(device != nullptr, "accepted render-state device creation");
+
+  constexpr u32 kRsShadeMode = 9u;
+  constexpr u32 kRsLastPixel = 16u;
+  constexpr u32 kRsDitherEnable = 26u;
+  constexpr u32 kRsClipping = 136u;
+  constexpr u32 kRsColorVertex = 141u;
+  constexpr u32 kRsLocalViewer = 142u;
+  const std::array<std::pair<u32, u32>, 6> defaults{{
+      {kRsShadeMode, 2u},
+      {kRsLastPixel, 1u},
+      {kRsDitherEnable, 0u},
+      {kRsClipping, 1u},
+      {kRsColorVertex, 1u},
+      {kRsLocalViewer, 1u},
+  }};
+  for (const auto& [slot, expected] : defaults) {
+    checkEq(device->getRenderState(slot), expected,
+            "accepted render state exposes the D3D9 default value");
+  }
+
+  const std::array<std::pair<u32, u32>, 6> updates{{
+      {kRsShadeMode, 1u},
+      {kRsLastPixel, 0u},
+      {kRsDitherEnable, 1u},
+      {kRsClipping, 0u},
+      {kRsColorVertex, 0u},
+      {kRsLocalViewer, 0u},
+  }};
+  for (const auto& [slot, value] : updates) {
+    checkEq(device->setRenderState(slot, value), D3D_OK,
+            "accepted render state SetRenderState succeeds");
+    checkEq(device->getRenderState(slot), value,
+            "accepted render state round-trips through GetRenderState");
   }
 }
 
@@ -2420,6 +2475,7 @@ int main() {
   testExtendedWorldMatrixTransformRoundTrip();
   testClipPlaneLimitsAtCoreBoundary();
   testWrapRenderStateRoundTrip();
+  testAcceptedRenderStateRoundTripPolicies();
   testClipPlaneTransformPayloadAndMaskBounds();
   testConstantsAndShaderRefs();
   testShaderConstantPayloadSurvivesDrawRunCommandView();

@@ -40,6 +40,7 @@ using f32 = float;
 using ::dxmt9::shaders::makeShaderPrelude;
 using ::dxmt9::shaders::makeShaderPreludeArgbufHybrid;
 using ::dxmt9::shaders::makeShaderPreludeArgbufResourceArray;
+using ::dxmt9::shaders::ShaderPreludeOptions;
 using ::dxmt9::shaders::kArgbufHybridBindSlot;
 using ::dxmt9::shaders::kArgbufResourceArrayStageCount;
 
@@ -650,6 +651,60 @@ std::string readPixelInputFallbackExpression(u32 index, const std::string& pixel
   return "float4(0.0f)";
 }
 
+void markCentroidInput(ShaderPreludeOptions& options,
+                       const PixelInputSemantic& semantic,
+                       u32 fallbackTexcoordIndex) {
+  if (!semantic.centroid) {
+    return;
+  }
+  switch (semantic.usage) {
+    case kD3DDeclUsageTexcoord:
+      if (semantic.usageIndex < kMaxTextureStages) {
+        options.centroidTexcoordMask |= 1u << semantic.usageIndex;
+      }
+      return;
+    case kD3DDeclUsageColor:
+      if (semantic.usageIndex == 0u) {
+        options.centroidColor = true;
+        return;
+      }
+      if (semantic.usageIndex == 1u) {
+        options.centroidSecondaryColor = true;
+        return;
+      }
+      break;
+    case kD3DDeclUsageFog:
+      options.centroidFogFactor = true;
+      return;
+    case kD3DDeclUsagePosition:
+    case kD3DDeclUsagePositionT:
+    case kD3DDeclUsagePSize:
+      return;
+    default:
+      break;
+  }
+  if (fallbackTexcoordIndex < kMaxTextureStages) {
+    options.centroidTexcoordMask |= 1u << fallbackTexcoordIndex;
+  }
+}
+
+ShaderPreludeOptions makePreludeOptions(const SpirvModule& module,
+                                        const ShaderSourceContext& context,
+                                        bool vertex) {
+  ShaderPreludeOptions options;
+  options.withClipDistances = context.clipPlaneMask != 0;
+  if (vertex) {
+    return options;
+  }
+  const auto semantics = collectPixelInputSemantics(module);
+  for (u32 index = 0; index < semantics.size(); ++index) {
+    if (semantics[index].valid) {
+      markCentroidInput(options, semantics[index], index);
+    }
+  }
+  return options;
+}
+
 std::string readPixelInputExpression(u32 token,
                                      const std::string& pixelInputs,
                                      const PixelInputSemantics& semantics) {
@@ -872,12 +927,13 @@ std::string translateSpirvToMsl(const SpirvModule& module,
         std::any_of(usage.begin(), usage.end(), [](bool u) { return u; });
     return anyUsed && pixelResourceArrayEligible(module, context, usage);
   }();
+  const auto preludeOptions = makePreludeOptions(module, context, vertex);
   if (fragmentArgbufResourceArray) {
-    out << makeShaderPreludeArgbufResourceArray(context.clipPlaneMask != 0);
+    out << makeShaderPreludeArgbufResourceArray(preludeOptions);
   } else if (argbufHybrid) {
-    out << makeShaderPreludeArgbufHybrid(context.clipPlaneMask != 0);
+    out << makeShaderPreludeArgbufHybrid(preludeOptions);
   } else {
-    out << makeShaderPrelude(context.clipPlaneMask != 0);
+    out << makeShaderPrelude(preludeOptions);
   }
   if (vertex) {
     const auto inputLayout = decodeVertexShaderInputLayout(module, context);

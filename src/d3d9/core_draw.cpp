@@ -915,6 +915,7 @@ u64 hashFfpVertexKey(const FfpVertexKey &key) {
   hash = hashCombine(hash, static_cast<u64>(key.lightingEnabled));
   hash = hashCombine(hash, static_cast<u64>(key.specularEnabled));
   hash = hashCombine(hash, static_cast<u64>(key.normalizeNormals));
+  hash = hashCombine(hash, static_cast<u64>(key.colorVertexEnabled));
   for (bool enabled : key.lightEnabled) {
     hash = hashCombine(hash, static_cast<u64>(enabled));
   }
@@ -2165,26 +2166,22 @@ FfpVertexKey makeFfpVertexKey(const DeviceState &state) {
                         state.renderStates.at(RS_SPECULAR_ENABLE) != 0;
   key.normalizeNormals = state.renderStates.contains(RS_NORMALIZE_NORMALS) &&
                          state.renderStates.at(RS_NORMALIZE_NORMALS) != 0;
+  key.colorVertexEnabled = !state.renderStates.contains(141u /*RS_COLORVERTEX*/) ||
+                           state.renderStates.at(141u /*RS_COLORVERTEX*/) != 0;
   for (size_t i = 0; i < kMaxLights; ++i) {
     key.lightEnabled[i] = state.lightEnabled[i];
     key.lightType[i] = static_cast<u32>(state.lights[i].type);
   }
-  key.colorMaterialMode[0] =
-      state.renderStates.contains(RS_EMISSIVE_MATERIAL_SOURCE)
-          ? state.renderStates.at(RS_EMISSIVE_MATERIAL_SOURCE)
-          : 0;
-  key.colorMaterialMode[1] =
-      state.renderStates.contains(RS_AMBIENT_MATERIAL_SOURCE)
-          ? state.renderStates.at(RS_AMBIENT_MATERIAL_SOURCE)
-          : 0;
-  key.colorMaterialMode[2] =
-      state.renderStates.contains(RS_DIFFUSE_MATERIAL_SOURCE)
-          ? state.renderStates.at(RS_DIFFUSE_MATERIAL_SOURCE)
-          : 0;
-  key.colorMaterialMode[3] =
-      state.renderStates.contains(RS_SPECULAR_MATERIAL_SOURCE)
-          ? state.renderStates.at(RS_SPECULAR_MATERIAL_SOURCE)
-          : 0;
+  auto materialSourceState = [&](u32 stateKey) {
+    if (!key.colorVertexEnabled) {
+      return 0u;
+    }
+    return state.renderStates.contains(stateKey) ? state.renderStates.at(stateKey) : 0u;
+  };
+  key.colorMaterialMode[0] = materialSourceState(RS_EMISSIVE_MATERIAL_SOURCE);
+  key.colorMaterialMode[1] = materialSourceState(RS_AMBIENT_MATERIAL_SOURCE);
+  key.colorMaterialMode[2] = materialSourceState(RS_DIFFUSE_MATERIAL_SOURCE);
+  key.colorMaterialMode[3] = materialSourceState(RS_SPECULAR_MATERIAL_SOURCE);
   const auto tableFogMode =
       static_cast<FogMode>(state.renderStates.contains(RS_FOG_TABLE_MODE)
                                ? state.renderStates.at(RS_FOG_TABLE_MODE)

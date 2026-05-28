@@ -245,6 +245,19 @@ void testVertexKeySensitiveToVsStatePerturbations() {
   checkNe(makeFfpVertexKey(materialSource), baseKey,
           "vertex key insensitive to RS_EMISSIVE_MATERIAL_SOURCE change");
 
+  // COLORVERTEX gates all vertex-color material sources back to material.
+  auto colorVertexOff = base;
+  colorVertexOff.renderStates[141u /*RS_COLORVERTEX*/] = 0u;
+  const auto colorVertexOffKey = makeFfpVertexKey(colorVertexOff);
+  checkNe(colorVertexOffKey, baseKey,
+          "vertex key insensitive to RS_COLORVERTEX toggle");
+  check(!colorVertexOffKey.colorVertexEnabled,
+        "RS_COLORVERTEX=false is preserved in the FFP vertex key");
+  for (u32 mode : colorVertexOffKey.colorMaterialMode) {
+    checkEq(mode, 0u,
+            "RS_COLORVERTEX=false forces material-source modes to material");
+  }
+
   // Lighting toggle.
   auto lightingOff = base;
   lightingOff.renderStates[RS_LIGHTING] = 0u;

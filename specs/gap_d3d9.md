@@ -282,26 +282,26 @@ track even after Wave 1 / Wave 2 of `specs/d3d9.plan.md` landed.
 | NORMAL | 3 | ✅ | dxmt9_ffp_shaders.hpp:63; dxmt9_ffp_shaders.cpp:274; d3d9_pe_device.cpp:378 | shader_argbuf_binding_value_spec.cpp:482 | |
 | PSIZE | 4 | ✅ | dxmt9_ffp_shaders.hpp:64; dxmt9_ffp_shaders.cpp:278; d3d9_pe_device.cpp:384 | ❌ none | |
 | TEXCOORD | 5 | ✅ | dxmt9_ffp_shaders.hpp:65; dxmt9_ffp_shaders.cpp:291; d3d9_pe_device.cpp:413 | core_shader_translator_spec.cpp:254 | |
-| TANGENT | 6 | ⚠️ | dxmt9_ffp_shaders.hpp:66 | ❌ none | constant defined; not handled in FFP / PE layouts — silent fall-through |
-| BINORMAL | 7 | ⚠️ | dxmt9_ffp_shaders.hpp:67 | ❌ none | constant defined; not handled in FFP / PE layouts — silent fall-through |
-| TESSFACTOR | 8 | ⚠️ | dxmt9_ffp_shaders.hpp:68 | ❌ none | constant defined; not handled (D3D9 has no tessellation) |
+| TANGENT | 6 | ✅ | dxmt9_ffp_shaders.hpp:66; dxmt9_shader_decoder.cpp:isSupportedDeclUsage; decodeVertexShaderInputLayout | shader_bytecode_validation_spec.cpp:testGenericDeclUsagesDecodeCleanly | programmable VS accepts as a generic vin[] semantic; FFP treats it as an extra non-FFP element |
+| BINORMAL | 7 | ✅ | dxmt9_ffp_shaders.hpp:67; dxmt9_shader_decoder.cpp:isSupportedDeclUsage; decodeVertexShaderInputLayout | shader_bytecode_validation_spec.cpp:testGenericDeclUsagesDecodeCleanly | programmable VS accepts as a generic vin[] semantic; FFP treats it as an extra non-FFP element |
+| TESSFACTOR | 8 | ✅ | dxmt9_ffp_shaders.hpp:68; dxmt9_shader_decoder.cpp:isSupportedDeclUsage; decodeVertexShaderInputLayout | shader_bytecode_validation_spec.cpp:testGenericDeclUsagesDecodeCleanly | programmable VS accepts as a generic vin[] semantic; no fixed-function tessellation lowering |
 | POSITIONT | 9 | ✅ | dxmt9_ffp_shaders.hpp:69; dxmt9_ffp_shaders.cpp:254; d3d9_pe_device.cpp:348 | core_ffp_state_key_spec.cpp:183; d3d9_conformance_device.c:751 | XYZRHW pre-transformed |
 | COLOR | 10 | ✅ | dxmt9_ffp_shaders.hpp:70; dxmt9_ffp_shaders.cpp:266; d3d9_pe_device.cpp:390 | core_spec_fixtures.hpp:209; backend_key_descriptor_spec.cpp:167 | usage_index 0=diffuse, 1=specular |
-| FOG | 11 | ⚠️ | dxmt9_ffp_shaders.hpp:71 | ❌ none | constant defined; not handled in FFP decode — silent fall-through |
-| DEPTH | 12 | ⚠️ | dxmt9_ffp_shaders.hpp:72 | ❌ none | constant defined; not handled in vertex decl decode |
-| SAMPLE | 13 | ⚠️ | dxmt9_ffp_shaders.hpp:73 | ❌ none | constant defined; not handled |
+| FOG | 11 | ✅ | dxmt9_ffp_shaders.hpp:71; dxmt9_shader_decoder.cpp:isSupportedDeclUsage; decodeVertexShaderInputLayout | shader_bytecode_validation_spec.cpp:testGenericDeclUsagesDecodeCleanly | programmable VS accepts as a generic vin[] semantic; FFP fog still uses render-state/uniform path |
+| DEPTH | 12 | ✅ | dxmt9_ffp_shaders.hpp:72; dxmt9_shader_decoder.cpp:isSupportedDeclUsage; decodeVertexShaderInputLayout | shader_bytecode_validation_spec.cpp:testGenericDeclUsagesDecodeCleanly | programmable VS accepts as a generic vin[] semantic |
+| SAMPLE | 13 | ✅ | dxmt9_ffp_shaders.hpp:73; dxmt9_shader_decoder.cpp:isSupportedDeclUsage; decodeVertexShaderInputLayout | shader_bytecode_validation_spec.cpp:testGenericDeclUsagesDecodeCleanly | programmable VS accepts as a generic vin[] semantic |
 
 ### A.5 D3DDECLMETHOD
 
 | Method | Code | Status | Source anchor | Test anchor | Notes |
 |---|---|---|---|---|---|
 | DEFAULT | 0 | ✅ | d3d9_pe_device.cpp:342, 347, 352, 359, 370, 412, 420 | backend_key_descriptor_spec.cpp:164 (kD3DDeclMethodDefault); d3d9_conformance_query_stateblock.c:375 | only method ever consumed |
-| PARTIALU | 1 | ❌ | not defined / not handled | ❌ none | N-patch tessellation method; D3D9 spec exposes it but dxmt9 never produces or accepts it (no validation reject either) |
-| PARTIALV | 2 | ❌ | not defined / not handled | ❌ none | ditto |
-| CROSSUV | 3 | ❌ | not defined / not handled | ❌ none | ditto |
-| UV | 4 | ❌ | not defined / not handled | ❌ none | ditto |
-| LOOKUP | 5 | ❌ | not defined / not handled | ❌ none | ditto |
-| LOOKUPPRESAMPLED | 6 | ❌ | not defined / not handled | ❌ none | ditto |
+| PARTIALU | 1 | 🔵 | dxmt9_shader_decoder.cpp:isSupportedDeclMethod; translateD3DBytecodeToSpirv | shader_bytecode_validation_spec.cpp:testNonDefaultDeclMethodsRejectCleanly | explicit safe-reject; N-patch/tessellator method has no Metal lowering |
+| PARTIALV | 2 | 🔵 | dxmt9_shader_decoder.cpp:isSupportedDeclMethod; translateD3DBytecodeToSpirv | shader_bytecode_validation_spec.cpp:testNonDefaultDeclMethodsRejectCleanly | explicit safe-reject |
+| CROSSUV | 3 | 🔵 | dxmt9_shader_decoder.cpp:isSupportedDeclMethod; translateD3DBytecodeToSpirv | shader_bytecode_validation_spec.cpp:testNonDefaultDeclMethodsRejectCleanly | explicit safe-reject |
+| UV | 4 | 🔵 | dxmt9_shader_decoder.cpp:isSupportedDeclMethod; translateD3DBytecodeToSpirv | shader_bytecode_validation_spec.cpp:testNonDefaultDeclMethodsRejectCleanly | explicit safe-reject |
+| LOOKUP | 5 | 🔵 | dxmt9_shader_decoder.cpp:isSupportedDeclMethod; translateD3DBytecodeToSpirv | shader_bytecode_validation_spec.cpp:testNonDefaultDeclMethodsRejectCleanly | explicit safe-reject |
+| LOOKUPPRESAMPLED | 6 | 🔵 | dxmt9_shader_decoder.cpp:isSupportedDeclMethod; translateD3DBytecodeToSpirv | shader_bytecode_validation_spec.cpp:testNonDefaultDeclMethodsRejectCleanly | explicit safe-reject |
 
 ### A.6 Token modifiers
 
@@ -312,7 +312,7 @@ track even after Wave 1 / Wave 2 of `specs/d3d9.plan.md` landed.
 | NONE | _NONE | 0 | ✅ | dxmt9_shader_decoder.cpp:decodeDestModifier; dxmt9_shader_metal_ir.cpp:applyDestModifier | shader_transform_spec.cpp:testD3DBCDestModifierPartialPrecisionLowering | default; emitter leaves the value unchanged |
 | SATURATE | _SATURATE | 0x1 | ✅ | dxmt9_shader_metal_ir.cpp:applyDestModifier | shader_transform_spec.cpp:testD3DBCDestModifierPartialPrecisionLowering | applied as `clamp(..., 0, 1)` and bitmask-composable with `_pp` |
 | PARTIAL_PRECISION | _PARTIALPRECISION | 0x2 | ✅ | dxmt9_shader_metal_ir.cpp:applyDestModifier | shader_transform_spec.cpp:testD3DBCDestModifierPartialPrecisionLowering | lowers the destination value through `float4(half4(...))`; cross-ref `DXMT9_FS_HALF_PRECISION` env remains a separate whole-fragment-source experiment |
-| CENTROID | _MSAMPCENTROID | 0x4 | ❌ | not handled (silent fall-through; default sample interp) | ❌ none | D3DSPDM_MSAMPCENTROID bit ignored |
+| CENTROID | _MSAMPCENTROID | 0x4 | ✅ | dxmt9_shader_decoder.cpp:collectPixelInputSemantics; dxmt9_shader_metal_ir.cpp:makePreludeOptions; dxmt9_shader_sources.cpp:makeShaderPrelude | shader_transform_spec.cpp:testPs30CentroidInputModifierLowersToMslInterpolation | pixel-input DCL modifier lowers to `[[centroid_perspective]]` on matching VSOut varyings |
 | PREDICATED-instr bit | n/a | bit 28 of instr token | ✅ | dxmt9_shader_decoder.cpp:1387; dxmt9_shader_metal_ir.cpp:1142, 2188 | shader_transform_spec.cpp:1289 (`predicated == true`) | per-instruction predicate guard |
 
 #### A.6.2 Src token swizzle + source modifiers (`_src` token, bits 24..27)
@@ -336,17 +336,17 @@ track even after Wave 1 / Wave 2 of `specs/d3d9.plan.md` landed.
 | NOT | _NOT | 13 | ✅ | dxmt9_shader_metal_ir.cpp:242 | ❌ none | predicate-style select |
 | Relative addressing | n/a | bit 13 | ✅ | dxmt9_shader_decoder.cpp:198 (tokenHasRelativeAddressing); 1404-1422 (per-opcode register-vs-literal probe) | shader_transform_spec.cpp:1324 (tokenHasRelativeAddressingForTest) | extra DWORD per rel-addr operand |
 | WriteMask (dst) | n/a | bits 16..19 | ✅ | dxmt9_shader_decoder.cpp:194 (decodeWriteMask) | shader_transform_spec.cpp:1298 | 4-bit per-component write mask |
-| Coissue (instr) | n/a | bit 30 | ⚠️ | dxmt9_shader_decoder.cpp:1388 (decoded but unused downstream) | ❌ none | parsed into `coissue` field; emitter ignores it (SM1 pixel-shader co-issue had no SM2/3 equivalent) |
+| Coissue (instr) | n/a | bit 30 | ✅ | dxmt9_shader_decoder.cpp:decoded `coissue`; dxmt9_shader_metal_ir.cpp:CND PS1.x branch | shader_runner/corpus/legacy_sm1/dxmt9_ps13_cnd_coissue_readback.shader_test | PS1.x coissued CND alpha path is lowered; other coissue uses are scheduling hints and execute serially |
 
 ### A.7 Section summary
 
 - **D3DSIO opcodes**: 96 named + 3 sentinels (PHASE/COMMENT/END) defined; 93 fully lowered (✅), 3 with `kUnsupportedFixedOperandCount` audit-marked but control-flow-emitted (⚠️ LOOP, SINCOS, REP — they execute via shared paths; the audit row simply notes the decoder uses a variable operand-count path). 0 missing. All 99 covered by `opcode_audit_spec`.
 - **D3DSPR register kinds**: 20 codes (0..19, with code 6 being TEXCRDOUT/OUTPUT alias and codes 3/ADDR/TEXTURE alias). 14 fully tested (✅), 3 aliased to ConstFloat (🟡 CONST2/3/4 — Wine parity), 2 safe-rejected (🔵 TEMPFLOAT16, LABEL), 2 defined+decoded but no dedicated test (⚠️ CONSTINT, LOOP). 0 missing.
 - **D3DDECLTYPE**: 18 codes (0..17 incl. UNUSED). 16 fully tested or trivially covered (✅), 1 sized but no dedicated test (⚠️ UDEC3), 1 missing test coverage from the inventory tests but referenced in production layouts (FLOAT1). 0 missing constants.
-- **D3DDECLUSAGE**: 14 codes (0..13). 8 fully tested (✅), 6 with constants only and no decode path / no test (⚠️ TANGENT, BINORMAL, TESSFACTOR, FOG, DEPTH, SAMPLE — the FFP decoder + PE-side `convertFvfToElements` ignore them, silently dropping the element). 0 missing constants.
-- **D3DDECLMETHOD**: 7 codes (0..6). 1 tested (✅ DEFAULT). 6 missing (❌ PARTIALU, PARTIALV, CROSSUV, UV, LOOKUP, LOOKUPPRESAMPLED — neither defined nor validation-rejected; N-patch tessellation surfaces).
-- **Dst token modifiers**: 3 D3DSPDM bits + predicated-instr bit. 2 covered (✅ SATURATE, PARTIALPRECISION), 1 missing (❌ MSAMPCENTROID — silent fall-through), predicate-bit ✅.
-- **Src token modifiers**: 14 D3DSPSM codes (0..13) + swizzle + rel-addr + writeMask + coissue. 14/14 source modifiers implemented (✅), but only 2 directly exercised by `shader_transform_spec` (NONE via mod 11, ABS). Swizzle/writeMask/rel-addr all ✅. Coissue parsed but ignored (⚠️).
+- **D3DDECLUSAGE**: 14 codes (0..13). All are accepted by the programmable VS declaration matcher; the uncommon usages (TANGENT, BINORMAL, TESSFACTOR, FOG, DEPTH, SAMPLE) are covered as generic input semantics. FFP still consumes only the fixed-function subset.
+- **D3DDECLMETHOD**: 7 codes (0..6). DEFAULT is consumed; methods 1..6 explicitly safe-reject because dxmt9 has no N-patch/tessellator lowering.
+- **Dst token modifiers**: 3 D3DSPDM bits + predicated-instr bit. SATURATE, PARTIALPRECISION, and MSAMPCENTROID are covered; predicate-bit ✅.
+- **Src token modifiers**: 14 D3DSPSM codes (0..13) + swizzle + rel-addr + writeMask + coissue. 14/14 source modifiers implemented (✅), but only 2 directly exercised by `shader_transform_spec` (NONE via mod 11, ABS). Swizzle/writeMask/rel-addr all ✅. Coissue has PS1.x CND readback coverage; non-CND coissue remains a serial scheduling hint.
 
 **Totals**: D3DSIO: 99 defined / 99 tested / 0 missing. D3DSPR: 20 defined / 16 tested / 0 missing constants (4 alias/reject). D3DDECLTYPE: 18 defined / 8 directly tested / 0 missing. D3DDECLUSAGE: 14 defined / 8 tested / 6 unhandled in decode path. D3DDECLMETHOD: 1 / 1 / 6. Dst-mods: 3 / 2 / 1. Src-mods: 14 / 2 directly / 0 missing impl.
 
@@ -415,14 +415,14 @@ Anchors are the **first defining or emitting** line; for opcodes the audit table
 |---|---|---|---|---|---|---|---|
 | ZENABLE | 7 | ✅ `core::RS_Z_ENABLE` (core_constants.hpp:385) | ✅ | ⚠️ | ✅ `dxmt9_draw_state.cpp:231` (depthEnable) | ✅ ffp_key_determinism_spec / state_draw_transform_spec | Default 1 (core_state.cpp:165) |
 | FILLMODE | 8 | ✅ `kRsFillMode` (core_state.cpp:345) — file-static, no core_constants alias | ✅ | ⚠️ | ✅ `dxmt9_draw_encoder.mm:542` (wireframe check) | ⚠️ no direct backend-key spec | Used by encoder triangleFillMode |
-| SHADEMODE | 9 | ⚠️ inline literal `9u /*RS_SHADEMODE*/` (core_state.cpp:133) | ✅ | ⚠️ | ❌ not consumed by backend | ❌ | Default Gouraud (2). Stateblock-tracked but no backend effect — Metal lacks per-primitive flat shading without code-gen change. |
+| SHADEMODE | 9 | ⚠️ inline literal `9u /*RS_SHADEMODE*/` (core_state.cpp:133) | ✅ | ⚠️ | accepted no-op | ✅ state_draw_transform_spec:testAcceptedRenderStateRoundTripPolicies | Default Gouraud (2). Shadowed/readable; Metal lacks per-primitive flat shading without code-gen change. |
 | (10 dead) | 10 | n/a | n/a | n/a | n/a | n/a | D3D9 unused |
 | (11 dead) | 11 | n/a | n/a | n/a | n/a | n/a | |
 | (12 dead) | 12 | n/a | n/a | n/a | n/a | n/a | |
 | (13 dead) | 13 | n/a | n/a | n/a | n/a | n/a | |
 | ZWRITEENABLE | 14 | ✅ `core::RS_Z_WRITE_ENABLE` (core_constants.hpp:378) | ✅ | ⚠️ | ✅ `dxmt9_draw_state.cpp:232` | ✅ state_draw_transform_spec | |
 | ALPHATESTENABLE | 15 | ✅ `core::RS_ALPHA_TEST_ENABLE` (core_constants.hpp:352) | ✅ | ⚠️ | ✅ `dxmt9_draw_state.cpp:176`, `dxmt9_pipeline_cache.cpp:780` | ✅ ffp_key_determinism_spec:85, state_draw_transform_spec | |
-| LASTPIXEL | 16 | ⚠️ `kRsLastPixel` (core_state.cpp:347) file-static | ✅ | ⚠️ | ❌ not consumed | ❌ | Stateblock-only |
+| LASTPIXEL | 16 | ⚠️ `kRsLastPixel` (core_state.cpp:347) file-static | ✅ | ⚠️ | accepted no-op | ✅ state_draw_transform_spec:testAcceptedRenderStateRoundTripPolicies | Default TRUE; line-raster last-pixel policy has no Metal toggle |
 | (17 dead) | 17 | n/a | n/a | n/a | n/a | n/a | |
 | (18 dead) | 18 | n/a | n/a | n/a | n/a | n/a | |
 | SRCBLEND | 19 | ✅ `core::RS_SRC_BLEND` (core_constants.hpp:380) | ✅ | ⚠️ | ✅ `dxmt9_pipeline_cache.cpp:152` (makeBlendAttachmentKeys) | ✅ blend_op_family_spec | |
@@ -432,7 +432,7 @@ Anchors are the **first defining or emitting** line; for opcodes the audit table
 | ZFUNC | 23 | ✅ `core::RS_Z_FUNC` (core_constants.hpp:379) | ✅ | ⚠️ | ✅ `dxmt9_draw_state.cpp:234` | ✅ state_draw_transform_spec | |
 | ALPHAREF | 24 | ✅ `core::RS_ALPHA_REF` (core_constants.hpp:354) | ✅ | ⚠️ | ✅ `dxmt9_draw_state.cpp:191`, `dxmt9_pipeline_cache.cpp:716` | ⚠️ implicit via ffp key | Wire 0..255, FS receives /255.0f normalized |
 | ALPHAFUNC | 25 | ✅ `core::RS_ALPHA_FUNC` (core_constants.hpp:353) | ✅ | ⚠️ | ✅ `dxmt9_draw_state.cpp:178` | ✅ ffp_key_determinism_spec:86 | |
-| DITHERENABLE | 26 | ⚠️ `kRsDitherEnable` (core_state.cpp:348) | ✅ | ⚠️ | ❌ not consumed (Metal has no per-encoder dither toggle) | ❌ | Stateblock-only |
+| DITHERENABLE | 26 | ⚠️ `kRsDitherEnable` (core_state.cpp:348) | ✅ | ⚠️ | accepted no-op | ✅ state_draw_transform_spec:testAcceptedRenderStateRoundTripPolicies | Default FALSE; Metal has no per-encoder dither toggle |
 | ALPHABLENDENABLE | 27 | ✅ `core::RS_ALPHABLEND_ENABLE` (core_constants.hpp:386) | ✅ | ⚠️ | ✅ `dxmt9_pipeline_cache.cpp:143` | ✅ blend_op_family_spec | |
 | FOGENABLE | 28 | ✅ `core::RS_FOG_ENABLE` (core_constants.hpp:355) | ✅ | ⚠️ | ✅ `dxmt9_draw_state.cpp:179` | ⚠️ via ffp key | |
 | SPECULARENABLE | 29 | ✅ `core::RS_SPECULAR_ENABLE` (core_constants.hpp:347) | ✅ | ⚠️ | ✅ `core_draw.cpp:2152` (FFP key.specularEnabled) | ✅ ffp_key_determinism_spec:66 | |
@@ -460,21 +460,21 @@ Anchors are the **first defining or emitting** line; for opcodes the audit table
 | STENCILWRITEMASK | 59 | ✅ `core::RS_STENCIL_WRITEMASK` (core_constants.hpp:400) | ✅ | ⚠️ | ✅ `dxmt9_draw_state.cpp:246` | ⚠️ | |
 | TEXTUREFACTOR | 60 | ✅ `core::RS_TEXTURE_FACTOR` (core_constants.hpp:408) | ✅ | ⚠️ | ✅ `dxmt9_draw_state.cpp:172`, `chunk_replay.cpp:138` | ⚠️ | Uniform fed via draw uniforms |
 | (61..127 dead) | 61-127 | n/a | n/a | n/a | n/a | n/a | 67 unused slots |
-| WRAP0 | 128 | ⚠️ `kRsWrap0` (core_state.cpp:349) | ✅ | ⚠️ | ❌ not consumed (no UV-wrap mode in Metal sampler) | ❌ | Stateblock-only |
-| WRAP1 | 129 | ⚠️ `kRsWrap1` | ✅ | ⚠️ | ❌ | ❌ | |
-| WRAP2 | 130 | ⚠️ `kRsWrap2` | ✅ | ⚠️ | ❌ | ❌ | |
-| WRAP3 | 131 | ⚠️ `kRsWrap3` | ✅ | ⚠️ | ❌ | ❌ | |
-| WRAP4 | 132 | ⚠️ `kRsWrap4` | ✅ | ⚠️ | ❌ | ❌ | |
-| WRAP5 | 133 | ⚠️ `kRsWrap5` | ✅ | ⚠️ | ❌ | ❌ | |
-| WRAP6 | 134 | ⚠️ `kRsWrap6` | ✅ | ⚠️ | ❌ | ❌ | |
-| WRAP7 | 135 | ⚠️ `kRsWrap7` | ✅ | ⚠️ | ❌ | ❌ | |
-| CLIPPING | 136 | ⚠️ `kRsClipping` (core_state.cpp:357) | ✅ | ⚠️ | ❌ not consumed (no D3D-level frustum clip toggle in dxmt9; Metal does it) | ❌ | Stateblock-only |
+| WRAP0 | 128 | ⚠️ `kRsWrap0` (core_state.cpp:349) | ✅ | ⚠️ | accepted no-op | ✅ state_draw_transform_spec:testWrapRenderStateRoundTrip | Shadowed/readable; no UV cylindrical-wrap lowering in Metal sampler path |
+| WRAP1 | 129 | ⚠️ `kRsWrap1` | ✅ | ⚠️ | accepted no-op | ✅ state_draw_transform_spec:testWrapRenderStateRoundTrip | |
+| WRAP2 | 130 | ⚠️ `kRsWrap2` | ✅ | ⚠️ | accepted no-op | ✅ state_draw_transform_spec:testWrapRenderStateRoundTrip | |
+| WRAP3 | 131 | ⚠️ `kRsWrap3` | ✅ | ⚠️ | accepted no-op | ✅ state_draw_transform_spec:testWrapRenderStateRoundTrip | |
+| WRAP4 | 132 | ⚠️ `kRsWrap4` | ✅ | ⚠️ | accepted no-op | ✅ state_draw_transform_spec:testWrapRenderStateRoundTrip | |
+| WRAP5 | 133 | ⚠️ `kRsWrap5` | ✅ | ⚠️ | accepted no-op | ✅ state_draw_transform_spec:testWrapRenderStateRoundTrip | |
+| WRAP6 | 134 | ⚠️ `kRsWrap6` | ✅ | ⚠️ | accepted no-op | ✅ state_draw_transform_spec:testWrapRenderStateRoundTrip | |
+| WRAP7 | 135 | ⚠️ `kRsWrap7` | ✅ | ⚠️ | accepted no-op | ✅ state_draw_transform_spec:testWrapRenderStateRoundTrip | |
+| CLIPPING | 136 | ⚠️ `kRsClipping` (core_state.cpp:357) | ✅ | ⚠️ | accepted no-op | ✅ state_draw_transform_spec:testAcceptedRenderStateRoundTripPolicies | Default TRUE; no D3D-level frustum clip toggle in dxmt9; Metal clips |
 | LIGHTING | 137 | ✅ `core::RS_LIGHTING` (core_constants.hpp:346) | ✅ | ⚠️ | ✅ `core_draw.cpp:1916,2150` (FFP key.lightingEnabled) | ✅ ffp_key_determinism_spec:65 | |
 | (138 dead) | 138 | n/a | n/a | n/a | n/a | n/a | |
 | AMBIENT | 139 | ✅ `core::RS_AMBIENT` (core_constants.hpp:360) | ✅ | ⚠️ | ✅ `dxmt9_draw_state.cpp:108` (uniform) | ⚠️ | |
 | FOGVERTEXMODE | 140 | ✅ `core::RS_FOG_FROM_VERTEX` (core_constants.hpp:350) | ✅ | ⚠️ | ✅ `dxmt9_draw_state.cpp:148,185`, `core_draw.cpp:2181` | ✅ ffp_key_determinism_spec:73 | |
-| COLORVERTEX | 141 | ⚠️ `kRsColorVertex` (core_state.cpp:358) | ✅ | ⚠️ | ❌ not consumed (FFP key.colorMaterialMode bypasses this gate) | ❌ | Stateblock-only |
-| LOCALVIEWER | 142 | ⚠️ `kRsLocalViewer` (core_state.cpp:359) | ✅ | ⚠️ | ❌ not consumed | ❌ | Stateblock-only |
+| COLORVERTEX | 141 | ⚠️ `kRsColorVertex` (core_state.cpp:358) | ✅ | ⚠️ | ✅ `core_draw.cpp:makeFfpVertexKey` gates color material sources | ✅ ffp_key_determinism_spec; state_draw_transform_spec:testAcceptedRenderStateRoundTripPolicies | Default TRUE; FALSE forces FFP material sources to material constants |
+| LOCALVIEWER | 142 | ⚠️ `kRsLocalViewer` (core_state.cpp:359) | ✅ | ⚠️ | accepted no-op | ✅ state_draw_transform_spec:testAcceptedRenderStateRoundTripPolicies | Default TRUE; current FFP specular uses existing local-eye approximation |
 | NORMALIZENORMALS | 143 | ✅ `core::RS_NORMALIZE_NORMALS` (core_constants.hpp:348) | ✅ | ⚠️ | ✅ `core_draw.cpp:2154` (FFP key.normalizeNormals) | ✅ ffp_key_determinism_spec:67 | |
 | (144 dead) | 144 | n/a | n/a | n/a | n/a | n/a | |
 | DIFFUSEMATERIALSOURCE | 145 | ✅ `core::RS_DIFFUSE_MATERIAL_SOURCE` (core_constants.hpp:361) | ✅ | ⚠️ | ✅ `core_draw.cpp:2169` (FFP key.colorMaterialMode[2]) | ✅ ffp_key_determinism_spec:70 | |

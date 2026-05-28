@@ -205,7 +205,17 @@ constexpr u32 kD3DSPR_LABEL = 18u;
 // dxmt9_shader_decoder.hpp / Wine d3d9types.h. See
 // specs/gap_d3d9.md §A.4/§A.5.
 constexpr u32 kD3DDeclUsageTangent = 6u;
+constexpr u32 kD3DDeclUsageBinormal = 7u;
+constexpr u32 kD3DDeclUsageTessFactor = 8u;
+constexpr u32 kD3DDeclUsageFog = 11u;
+constexpr u32 kD3DDeclUsageDepth = 12u;
+constexpr u32 kD3DDeclUsageSample = 13u;
 constexpr u32 kD3DDeclMethodPartialU = 1u;
+constexpr u32 kD3DDeclMethodPartialV = 2u;
+constexpr u32 kD3DDeclMethodCrossUV = 3u;
+constexpr u32 kD3DDeclMethodUV = 4u;
+constexpr u32 kD3DDeclMethodLookup = 5u;
+constexpr u32 kD3DDeclMethodLookupPresampled = 6u;
 
 // Single non-terminator vertex-declaration element for the decoder's
 // up-front element-loop validation. Stream 0, offset 0, float4 type
@@ -295,56 +305,85 @@ void testLabelRegisterRejectsCleanly() {
           "LABEL does not double-count as invalid_opcode");
 }
 
-void testTangentUsageRejectsCleanly() {
-  // A vertex declaration that names D3DDECLUSAGE_TANGENT must safe-reject
-  // — dxmt9 has no Metal lowering for tangent vertex streams and silently
-  // matching them against a TEXCOORD DCL token would misbind the
-  // attribute. The valid vs_2_0 MOV body confirms the reject fires from
-  // the vertex-declaration path, not from the operand parser.
-  const auto words = makeVertexBytecode();
-  ShaderRef shader{};
-  shader.kind = ShaderRef::Kind::Bytecode;
-  shader.bytecode.bytes.assign(reinterpret_cast<const u8*>(words.data()),
-                               reinterpret_cast<const u8*>(words.data() + words.size()));
-  DrawDesc desc{};
-  desc.vertexShader = shader;
-  desc.vertexDecl = makeSingleElementDecl(/*method=*/0u, /*usage=*/kD3DDeclUsageTangent);
-  const auto before = rejectSnapshot();
-  const auto module = dxmt9::translator::test::decodeD3DBytecodeForTest(shader, /*vertex=*/true, desc);
-  const auto after = rejectSnapshot();
-  expectReject(module, "vertex decl with D3DDECLUSAGE_TANGENT");
-  checkEq(after.declUsageUnsupported - before.declUsageUnsupported, 1ull,
-          "TANGENT increments shader_decoder_reject_decl_usage_unsupported");
-  checkEq(after.declMethodUnsupported - before.declMethodUnsupported, 0ull,
-          "TANGENT does not double-count as decl_method_unsupported");
-  checkEq(after.invalidOpcode - before.invalidOpcode, 0ull,
-          "TANGENT does not double-count as invalid_opcode");
+std::vector<u32> makeGenericUsageVertexBytecode(u32 usage) {
+  std::vector<u32> words;
+  words.push_back(makeVersionToken(true, 3, 0));
+  words.push_back(makeInstructionToken(kD3DSIO_DCL, 2));
+  words.push_back(makeDclSemanticToken(usage, 0u));
+  words.push_back(makeDstToken(dxmt9::d3d9bc::kD3DSPR_INPUT, 0));
+  words.push_back(makeInstructionToken(kD3DSIO_MOV, 2));
+  words.push_back(makeDstToken(kD3DSPR_RASTOUT, 0));
+  words.push_back(makeSrcToken(dxmt9::d3d9bc::kD3DSPR_INPUT, 0));
+  words.push_back(kD3DSIO_END);
+  return words;
 }
 
-void testPartialUMethodRejectsCleanly() {
-  // A vertex declaration whose method is D3DDECLMETHOD_PARTIALU must
-  // safe-reject — only the DEFAULT (0) read path is implemented and the
-  // other six methods drive tessellator stages that dxmt9 does not
-  // support. Usage is POSITION (0), which is otherwise valid, so the
-  // bucket increment isolates the method-side check.
+void testGenericDeclUsagesDecodeCleanly() {
+  // D3DDECLUSAGE values 0..13 are legal shader semantics. dxmt9 lowers
+  // the less common programmable VS usages as generic vin[] bindings
+  // rather than rejecting the declaration or silently remapping them.
+  const std::array<u32, 6> usages{{
+      kD3DDeclUsageTangent,
+      kD3DDeclUsageBinormal,
+      kD3DDeclUsageTessFactor,
+      kD3DDeclUsageFog,
+      kD3DDeclUsageDepth,
+      kD3DDeclUsageSample,
+  }};
+  for (u32 usage : usages) {
+    const auto words = makeGenericUsageVertexBytecode(usage);
+    ShaderRef shader{};
+    shader.kind = ShaderRef::Kind::Bytecode;
+    shader.bytecode.bytes.assign(reinterpret_cast<const u8*>(words.data()),
+                                 reinterpret_cast<const u8*>(words.data() + words.size()));
+    DrawDesc desc{};
+    desc.vertexShader = shader;
+    desc.vertexDecl = makeSingleElementDecl(/*method=*/0u, usage);
+    const auto before = rejectSnapshot();
+    const auto module = dxmt9::translator::test::decodeD3DBytecodeForTest(shader, /*vertex=*/true, desc);
+    const auto after = rejectSnapshot();
+    check(!module.instructions.empty(), "generic D3DDECLUSAGE decodes into module instructions");
+    checkEq(after.declUsageUnsupported - before.declUsageUnsupported, 0ull,
+            "generic D3DDECLUSAGE does not increment decl_usage_unsupported");
+    checkEq(after.declMethodUnsupported - before.declMethodUnsupported, 0ull,
+            "generic D3DDECLUSAGE does not increment decl_method_unsupported");
+    checkEq(after.invalidOpcode - before.invalidOpcode, 0ull,
+            "generic D3DDECLUSAGE does not increment invalid_opcode");
+  }
+}
+
+void testNonDefaultDeclMethodsRejectCleanly() {
+  // Only DEFAULT (0) is a direct vertex fetch. Methods 1..6 feed fixed-
+  // function tessellator stages; without that lowering they must reject
+  // explicitly instead of falling through as plain DEFAULT reads.
+  const std::array<u32, 6> methods{{
+      kD3DDeclMethodPartialU,
+      kD3DDeclMethodPartialV,
+      kD3DDeclMethodCrossUV,
+      kD3DDeclMethodUV,
+      kD3DDeclMethodLookup,
+      kD3DDeclMethodLookupPresampled,
+  }};
   const auto words = makeVertexBytecode();
   ShaderRef shader{};
   shader.kind = ShaderRef::Kind::Bytecode;
   shader.bytecode.bytes.assign(reinterpret_cast<const u8*>(words.data()),
                                reinterpret_cast<const u8*>(words.data() + words.size()));
-  DrawDesc desc{};
-  desc.vertexShader = shader;
-  desc.vertexDecl = makeSingleElementDecl(/*method=*/kD3DDeclMethodPartialU, /*usage=*/kD3DDeclUsagePosition);
-  const auto before = rejectSnapshot();
-  const auto module = dxmt9::translator::test::decodeD3DBytecodeForTest(shader, /*vertex=*/true, desc);
-  const auto after = rejectSnapshot();
-  expectReject(module, "vertex decl with D3DDECLMETHOD_PARTIALU");
-  checkEq(after.declMethodUnsupported - before.declMethodUnsupported, 1ull,
-          "PARTIALU increments shader_decoder_reject_decl_method_unsupported");
-  checkEq(after.declUsageUnsupported - before.declUsageUnsupported, 0ull,
-          "PARTIALU does not double-count as decl_usage_unsupported");
-  checkEq(after.invalidOpcode - before.invalidOpcode, 0ull,
-          "PARTIALU does not double-count as invalid_opcode");
+  for (u32 method : methods) {
+    DrawDesc desc{};
+    desc.vertexShader = shader;
+    desc.vertexDecl = makeSingleElementDecl(method, /*usage=*/kD3DDeclUsagePosition);
+    const auto before = rejectSnapshot();
+    const auto module = dxmt9::translator::test::decodeD3DBytecodeForTest(shader, /*vertex=*/true, desc);
+    const auto after = rejectSnapshot();
+    expectReject(module, "vertex decl with non-default D3DDECLMETHOD");
+    checkEq(after.declMethodUnsupported - before.declMethodUnsupported, 1ull,
+            "non-default D3DDECLMETHOD increments decl_method_unsupported");
+    checkEq(after.declUsageUnsupported - before.declUsageUnsupported, 0ull,
+            "non-default D3DDECLMETHOD does not double-count as decl_usage_unsupported");
+    checkEq(after.invalidOpcode - before.invalidOpcode, 0ull,
+            "non-default D3DDECLMETHOD does not double-count as invalid_opcode");
+  }
 }
 
 void testInvalidOpcode() {
@@ -460,8 +499,8 @@ int main() {
     testConst2RegisterAliasesToConstFloat();
     testTempFloat16RegisterRejectsCleanly();
     testLabelRegisterRejectsCleanly();
-    testTangentUsageRejectsCleanly();
-    testPartialUMethodRejectsCleanly();
+    testGenericDeclUsagesDecodeCleanly();
+    testNonDefaultDeclMethodsRejectCleanly();
     testFragmentSourceFallbackOnReject();
     testValidBytecodeDoesNotIncrement();
   } catch (const TestFailure& error) {

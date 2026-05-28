@@ -64,6 +64,15 @@ void persistShaderArchive(WMT::BinaryArchive& archive, const std::string& path);
 // FfpPsConsts, DrawVolatile), VSOut, and a library of helper inline
 // functions (dxmt9_load_*, dxmt9_apply_texture_*, dxmt9_select_*, etc).
 // When withClipDistances is true, VSOut gets a clipDistance[6] array.
+struct ShaderPreludeOptions {
+  bool withClipDistances = false;
+  bool centroidColor = false;
+  bool centroidSecondaryColor = false;
+  std::uint32_t centroidTexcoordMask = 0;
+  bool centroidFogFactor = false;
+};
+
+std::string makeShaderPrelude(const ShaderPreludeOptions& options);
 std::string makeShaderPrelude(bool withClipDistances);
 
 // DXMT9_TRIM_UNUSED_VARYINGS — opt-in trimming of VSOut fields that the
@@ -141,6 +150,7 @@ bool fsHalfPrecisionEnabled();
 // `DrawVolatile` (slot 5, setVertexBytes) and the vertex stream (slot 1)
 // also stay direct. See R-BACK-12.23 / design.md §11.2.
 std::string makeShaderPreludeArgbufHybrid(bool withClipDistances);
+std::string makeShaderPreludeArgbufHybrid(const ShaderPreludeOptions& options);
 
 // R-BACK-12.22..12.26 (resource-array sub-mode) — opt-in env gate. True
 // iff `DXMT9_ARGBUF_RESOURCE_ARRAY` is set to a non-empty, non-"0" value.
@@ -175,6 +185,7 @@ bool argbufResourceArrayEnabled();
 // fixed-function texture-stage count; matches the DXBC s0..s7 fragment
 // sampler range the FFP/IR emitters bind).
 std::string makeShaderPreludeArgbufResourceArray(bool withClipDistances);
+std::string makeShaderPreludeArgbufResourceArray(const ShaderPreludeOptions& options);
 
 // R-BACK-12.22 — argbuf bind slot. Mirrors DXMT's slot-30 convention so
 // frame captures and existing tooling stay consistent.

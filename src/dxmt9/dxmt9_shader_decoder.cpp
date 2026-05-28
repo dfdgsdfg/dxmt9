@@ -1022,6 +1022,7 @@ PixelInputSemantics collectPixelInputSemantics(const SpirvModule& module) {
         .valid = true,
         .usage = (semanticToken & kD3DSP_DCL_USAGE_MASK) >> kD3DSP_DCL_USAGE_SHIFT,
         .usageIndex = (semanticToken & kD3DSP_DCL_USAGEINDEX_MASK) >> kD3DSP_DCL_USAGEINDEX_SHIFT,
+        .centroid = (decodeDestModifier(instruction.operands[1]) & 0x4u) != 0u,
     };
   }
   return semantics;

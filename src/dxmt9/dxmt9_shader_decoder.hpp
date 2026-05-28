@@ -86,6 +86,7 @@ struct PixelInputSemantic {
   bool valid = false;
   u32 usage = 0;
   u32 usageIndex = 0;
+  bool centroid = false;
 };
 
 using PixelInputSemantics = std::array<PixelInputSemantic, 16>;

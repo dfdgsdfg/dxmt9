@@ -535,6 +535,30 @@ std::vector<u32> makePs30DestModifierCoverageBytecode() {
   };
 }
 
+std::vector<u32> makePs30CentroidInputBytecode() {
+  using namespace dxmt9::d3d9bc;
+  constexpr u32 kD3DSPDMMsampCentroid = 4u;
+  constexpr u32 kD3DDeclUsageTexcoord = 5u;
+  constexpr u32 kD3DDeclUsageColor = 10u;
+  constexpr u32 kD3DDeclUsageFog = 11u;
+  return {
+      makeVersionToken(false, 3, 0),
+      makeInstructionToken(kD3DSIO_DCL, 2),
+      makeDclSemanticToken(kD3DDeclUsageColor, 0u),
+      makeDstToken(kD3DSPR_INPUT, 0, 0xfu, kD3DSPDMMsampCentroid),
+      makeInstructionToken(kD3DSIO_DCL, 2),
+      makeDclSemanticToken(kD3DDeclUsageTexcoord, 3u),
+      makeDstToken(kD3DSPR_INPUT, 2, 0xfu, kD3DSPDMMsampCentroid),
+      makeInstructionToken(kD3DSIO_DCL, 2),
+      makeDclSemanticToken(kD3DDeclUsageFog, 0u),
+      makeDstToken(kD3DSPR_INPUT, 3, 0xfu, kD3DSPDMMsampCentroid),
+      makeInstructionToken(kD3DSIO_MOV, 2),
+      makeDstToken(kD3DSPR_COLOROUT, 0),
+      makeSrcToken(kD3DSPR_INPUT, 0),
+      kD3DSIO_END,
+  };
+}
+
 std::vector<u32> makeVs20DestModifierCoverageBytecode() {
   using namespace dxmt9::d3d9bc;
   constexpr u32 kD3DSPDMSaturate = 1u;
@@ -1899,6 +1923,18 @@ void testD3DBCDestModifierPartialPrecisionLowering() {
                 "vs_2_0 combined _sat/_pp destination preserves both modifier bits");
 }
 
+void testPs30CentroidInputModifierLowersToMslInterpolation() {
+  const auto source = translatePixel(makePs30CentroidInputBytecode());
+  checkContains(source, "float4 color [[centroid_perspective]];",
+                "PS input D3DSPDM_MSAMPCENTROID lowers COLOR0 to centroid interpolation");
+  checkContains(source, "float4 texcoord3 [[centroid_perspective]];",
+                "PS input D3DSPDM_MSAMPCENTROID lowers TEXCOORD3 to centroid interpolation");
+  checkContains(source, "float fogFactor [[centroid_perspective]];",
+                "PS input D3DSPDM_MSAMPCENTROID lowers FOG to centroid interpolation");
+  checkContains(source, "float4 secondaryColor;",
+                "non-centroid varyings keep the default interpolation");
+}
+
 void testPs30IfElseFlowControlTranslation() {
   const auto source = translatePixel(makePs30IfElseBytecode());
   checkContains(source, "if ((cFloat[0]).x != 0.0f) {", "ps_3_0 IF condition lowers to scalar branch");
@@ -2392,6 +2428,7 @@ int main() {
     testPs30WriteMaskSwizzleAndSourceModifiers();
     testPs30MissingSourceModifierCoverage();
     testD3DBCDestModifierPartialPrecisionLowering();
+    testPs30CentroidInputModifierLowersToMslInterpolation();
     testPs30IfElseFlowControlTranslation();
     testPs30LoopFlowControlTranslation();
     testPs30NestedLoopFlowControlTranslation();
