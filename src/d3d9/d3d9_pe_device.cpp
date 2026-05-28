@@ -4,6 +4,7 @@
 #include <algorithm>
 #include <array>
 #include <atomic>
+#include <cmath>
 #include <cstdarg>
 #include <cstdint>
 #include <cstdlib>
@@ -755,15 +756,26 @@ static UINT simpleProcessShaderOperandCount(UINT opcode, DWORD token) {
         case D3DSIO_RSQ:
         case D3DSIO_FRC:
         case D3DSIO_ABS:
+        case D3DSIO_NRM:
             return 2;
+        case D3DSIO_MAD:
+        case D3DSIO_LRP:
+            return 4;
         case D3DSIO_ADD:
         case D3DSIO_SUB:
         case D3DSIO_MUL:
         case D3DSIO_DP3:
         case D3DSIO_DP4:
+        case D3DSIO_SLT:
+        case D3DSIO_SGE:
         case D3DSIO_MIN:
         case D3DSIO_MAX:
+        case D3DSIO_POW:
+        case D3DSIO_CRS:
         case D3DSIO_M4x4:
+        case D3DSIO_M4x3:
+        case D3DSIO_M3x4:
+        case D3DSIO_M3x3:
             return 3;
         case D3DSIO_DCL:
             return 2;
@@ -1030,6 +1042,7 @@ static bool executeSimpleProcessVertexShader(const std::vector<DWORD>& words,
 
         float a[4]{};
         float b[4]{};
+        float c[4]{};
         float out[4]{};
         if (operandCount >= 2 &&
             !simpleVsReadSource(regs, io.major, operands[1], a)) {
@@ -1039,9 +1052,29 @@ static bool executeSimpleProcessVertexShader(const std::vector<DWORD>& words,
             !simpleVsReadSource(regs, io.major, operands[2], b)) {
             return false;
         }
+        if (operandCount >= 4 &&
+            !simpleVsReadSource(regs, io.major, operands[3], c)) {
+            return false;
+        }
         switch (opcode) {
             case D3DSIO_MOV:
                 std::memcpy(out, a, sizeof(out));
+                break;
+            case D3DSIO_RCP: {
+                const float value = a[0] != 0.0f ? 1.0f / a[0] : 0.0f;
+                out[0] = out[1] = out[2] = out[3] = value;
+                break;
+            }
+            case D3DSIO_RSQ: {
+                const float value = a[0] > 0.0f ? 1.0f / std::sqrt(a[0]) : 0.0f;
+                out[0] = out[1] = out[2] = out[3] = value;
+                break;
+            }
+            case D3DSIO_FRC:
+                for (UINT i = 0; i < 4; ++i) out[i] = a[i] - std::floor(a[i]);
+                break;
+            case D3DSIO_ABS:
+                for (UINT i = 0; i < 4; ++i) out[i] = std::fabs(a[i]);
                 break;
             case D3DSIO_ADD:
                 for (UINT i = 0; i < 4; ++i) out[i] = a[i] + b[i];
@@ -1051,6 +1084,18 @@ static bool executeSimpleProcessVertexShader(const std::vector<DWORD>& words,
                 break;
             case D3DSIO_MUL:
                 for (UINT i = 0; i < 4; ++i) out[i] = a[i] * b[i];
+                break;
+            case D3DSIO_MAD:
+                for (UINT i = 0; i < 4; ++i) out[i] = a[i] * b[i] + c[i];
+                break;
+            case D3DSIO_LRP:
+                for (UINT i = 0; i < 4; ++i) out[i] = a[i] * b[i] + (1.0f - a[i]) * c[i];
+                break;
+            case D3DSIO_SLT:
+                for (UINT i = 0; i < 4; ++i) out[i] = a[i] < b[i] ? 1.0f : 0.0f;
+                break;
+            case D3DSIO_SGE:
+                for (UINT i = 0; i < 4; ++i) out[i] = a[i] >= b[i] ? 1.0f : 0.0f;
                 break;
             case D3DSIO_MIN:
                 for (UINT i = 0; i < 4; ++i) out[i] = std::min(a[i], b[i]);
@@ -1069,6 +1114,26 @@ static bool executeSimpleProcessVertexShader(const std::vector<DWORD>& words,
                 out[0] = out[1] = out[2] = out[3] = dot;
                 break;
             }
+            case D3DSIO_POW: {
+                const float value = std::pow(a[0], b[0]);
+                out[0] = out[1] = out[2] = out[3] = value;
+                break;
+            }
+            case D3DSIO_CRS:
+                out[0] = a[1] * b[2] - a[2] * b[1];
+                out[1] = a[2] * b[0] - a[0] * b[2];
+                out[2] = a[0] * b[1] - a[1] * b[0];
+                out[3] = 1.0f;
+                break;
+            case D3DSIO_NRM: {
+                const float lenSq = a[0] * a[0] + a[1] * a[1] + a[2] * a[2];
+                const float invLen = lenSq > 0.0f ? 1.0f / std::sqrt(lenSq) : 0.0f;
+                out[0] = a[0] * invLen;
+                out[1] = a[1] * invLen;
+                out[2] = a[2] * invLen;
+                out[3] = 1.0f;
+                break;
+            }
             case D3DSIO_M4x4: {
                 if (shaderRegType(operands[2]) != D3DSPR_CONST) return false;
                 const UINT base = shaderRegIndex(operands[2]);
@@ -1078,6 +1143,39 @@ static bool executeSimpleProcessVertexShader(const std::vector<DWORD>& words,
                     out[row] = a[0] * c[0] + a[1] * c[1] +
                                a[2] * c[2] + a[3] * c[3];
                 }
+                break;
+            }
+            case D3DSIO_M4x3: {
+                if (shaderRegType(operands[2]) != D3DSPR_CONST) return false;
+                const UINT base = shaderRegIndex(operands[2]);
+                if (base + 2u >= regs.constant.size()) return false;
+                for (UINT row = 0; row < 3; ++row) {
+                    const auto& k = regs.constant[base + row];
+                    out[row] = a[0] * k[0] + a[1] * k[1] +
+                               a[2] * k[2] + a[3] * k[3];
+                }
+                out[3] = 1.0f;
+                break;
+            }
+            case D3DSIO_M3x4: {
+                if (shaderRegType(operands[2]) != D3DSPR_CONST) return false;
+                const UINT base = shaderRegIndex(operands[2]);
+                if (base + 3u >= regs.constant.size()) return false;
+                for (UINT row = 0; row < 4; ++row) {
+                    const auto& k = regs.constant[base + row];
+                    out[row] = a[0] * k[0] + a[1] * k[1] + a[2] * k[2];
+                }
+                break;
+            }
+            case D3DSIO_M3x3: {
+                if (shaderRegType(operands[2]) != D3DSPR_CONST) return false;
+                const UINT base = shaderRegIndex(operands[2]);
+                if (base + 2u >= regs.constant.size()) return false;
+                for (UINT row = 0; row < 3; ++row) {
+                    const auto& k = regs.constant[base + row];
+                    out[row] = a[0] * k[0] + a[1] * k[1] + a[2] * k[2];
+                }
+                out[3] = 1.0f;
                 break;
             }
             default:

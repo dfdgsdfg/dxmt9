@@ -33,7 +33,7 @@ Severity legend (used uniformly across the file):
 | Shader declaration/modifier coverage | D3DDECLUSAGE values are accepted for programmable VS semantics; non-default D3DDECLMETHOD values safe-reject; `_PARTIALPRECISION` and `_MSAMPCENTROID` are lowered/tested. |
 | Render/TSS/Sampler fixes | Depth bias, MRT color masks, two-sided stencil, COLORVERTEX, WRAP0..15 round-trip/no-op, TSS ARG0 triadic ops, sampler border color, mip LOD bias, and max mip level are closed. |
 | Remaining deferred/unsupported API surface | N-patch/adaptive tessellation, broad `ProcessVertices`/real SWVP shader execution beyond the fixed-function WVP XYZ→XYZRHW path, `D3DSAMP_ELEMENTINDEX`, `D3DSAMP_DMAPOFFSET`, per-draw multisample mask, AA line raster toggle, generic palettized `Format::*` exposure, `ComposeRects`, and convolution kernel. |
-| Remaining validation work | Broader conformance Wine-run sweeps remain ongoing; targeted `ProcessVertices` PE singleton validation now passes. |
+| Remaining validation work | Broader conformance Wine-run sweeps remain ongoing; the `ProcessVertices` M4x4 subset passed targeted PE singleton validation, and the expanded MAD scaffold is build-gated pending a fresh Wine runtime pass. |
 
 ## Original top-level summary (historical 2026-05-23 roll-up)
 
@@ -117,7 +117,7 @@ Current deferred/unsupported surface to keep visible:
 | `D3DDECLMETHOD` 1..6 | Explicit safe-reject. These are declaration **methods** for fixed-function tessellator/N-patch/displacement-map evaluation. `D3DDECLMETHOD_UV` is not ordinary texture coordinate input; ordinary UVs are `D3DDECLUSAGE_TEXCOORD` with `D3DDECLMETHOD_DEFAULT`, which is supported. |
 | `D3DSPR_TEMPFLOAT16`, `D3DSPR_LABEL` | Explicit safe-reject. |
 | N-patch / adaptive tessellation render states and patch draws | Deferred/unsupported: `PATCHEDGESTYLE`, `TWEENFACTOR`, `POSITIONDEGREE`, `NORMALDEGREE`, tessellation levels, `SetNPatchMode`, `DrawRectPatch`, `DrawTriPatch`, `DeletePatch` no-op contract. |
-| `ProcessVertices` / real software vertex processing | Partial. Device-lost gating remains first; fixed-function `D3DFVF_XYZ` or simple POSITION/COLOR/TEXCOORD source declaration input through WORLD/VIEW/PROJECTION to `D3DFVF_XYZRHW` or simple POSITIONT/COLOR/TEXCOORD destination declaration CPU transform is implemented, including matching diffuse/specular/texture-coordinate passthrough. Source declarations may read those supported attributes from multiple bound streams. A limited programmable VS path now executes simple straight-line DCL/DEF/MOV/basic arithmetic/DP/M4x4 bytecode over PE vertex shader constants for `ProcessVertices`, covered by a PE conformance scaffold with vs_3_0 DCL + M4x4/MOV and targeted Wine singleton validation (`visual_process_vertices_xyzhw_policy`, 146 checks). Full shader-model flow control, texture/sample opcodes, lighting, clipping, indexed variants, and broader declaration/multistream forms remain deferred. `SetSoftwareVertexProcessing` now tracks the mutable PE shadow. |
+| `ProcessVertices` / real software vertex processing | Partial. Device-lost gating remains first; fixed-function `D3DFVF_XYZ` or simple POSITION/COLOR/TEXCOORD source declaration input through WORLD/VIEW/PROJECTION to `D3DFVF_XYZRHW` or simple POSITIONT/COLOR/TEXCOORD destination declaration CPU transform is implemented, including matching diffuse/specular/texture-coordinate passthrough. Source declarations may read those supported attributes from multiple bound streams. A limited programmable VS path now executes simple straight-line DCL/DEF/MOV/basic arithmetic/comparison/DP/MAD/LRP/M3x3/M3x4/M4x3/M4x4 bytecode over PE vertex shader constants for `ProcessVertices`, covered by a PE conformance scaffold with vs_3_0 DCL + M4x4/MOV and MAD/MOV plus targeted Wine singleton validation (`visual_process_vertices_xyzhw_policy`, 146 checks before the MAD expansion). Full shader-model flow control, texture/sample opcodes, lighting, clipping, indexed variants, and broader declaration/multistream forms remain deferred. `SetSoftwareVertexProcessing` now tracks the mutable PE shadow. |
 | `D3DSAMP_ELEMENTINDEX`, `D3DSAMP_DMAPOFFSET` | Deferred. Texture-array/displacement-map sampler semantics are not represented in the backend. |
 | `D3DRS_MULTISAMPLEANTIALIAS`, `D3DRS_MULTISAMPLEMASK` | Shadow/default only. MSAA itself is attachment-driven; sample-mask programming is not currently wired. |
 | `D3DRS_ANTIALIASEDLINEENABLE` | Accepted no-op/deferred; Metal has no D3D9-style AA line raster toggle. |
@@ -125,11 +125,12 @@ Current deferred/unsupported surface to keep visible:
 | `SetConvolutionMonoKernel`, `ComposeRects` | Explicit `E_NOTIMPL`. |
 | SwapChain Ex present stats / GPU thread priority / residency | Benign stub contracts guarded by native tests where applicable; no real scheduler/stat backend. |
 
-Broad conformance Wine-run sweeps remain ongoing. The targeted
-`ProcessVertices` PE singleton (`visual_process_vertices_xyzhw_policy`) now
-passes with 146 checks, and the formerly deferred GPU-runtime pixel validations
-for RESZ MSAA→INTZ readback, NULL RT depth-only rendering, and MIPMAPLODBIAS
-mip selection are covered by shader-corpus readback probes.
+Broad conformance Wine-run sweeps remain ongoing. The tracked
+`ProcessVertices` PE singleton (`visual_process_vertices_xyzhw_policy`) passed
+the M4x4/MOV subset with 146 checks before the MAD expansion, and the formerly
+deferred GPU-runtime pixel validations for RESZ MSAA→INTZ readback, NULL RT
+depth-only rendering, and MIPMAPLODBIAS mip selection are covered by
+shader-corpus readback probes.
 
 ### Resolved as documented-unsupported / non-gap (no implementation planned)
 
@@ -152,7 +153,7 @@ after the silent-coverage fixes landed.
 | Finding | Section | Current status / suggested track |
 |---|---|---|
 | N-patch / adaptive tessellation family | A.5/B.1/D.* | Deferred/unsupported. Non-default declaration methods safe-reject because they describe fixed-function tessellator/N-patch/displacement-map evaluation, not ordinary vertex attributes; patch draw calls return `D3DERR_INVALIDCALL`; N-patch mode is a documented no-op/default contract. |
-| `ProcessVertices` / SWVP execution | D.4 | Partial. Fixed-function WORLD/VIEW/PROJECTION XYZ→XYZRHW CPU transform/readback is implemented for FVF and simple POSITION/COLOR/TEXCOORD source declarations, with matching diffuse/specular/texcoord passthrough into FVF or POSITIONT/COLOR/TEXCOORD declaration destinations; source declarations may split supported attributes across bound streams. Limited programmable VS execution covers simple straight-line DCL/DEF/MOV/basic arithmetic/DP/M4x4 bytecode over PE vertex shader constants. The targeted PE Wine singleton now passes (`visual_process_vertices_xyzhw_policy`, 146 checks). Full shader-model flow control, texture/sample opcodes, lighting, clipping, indexed variants, and broader declaration/multistream forms remain deferred. |
+| `ProcessVertices` / SWVP execution | D.4 | Partial. Fixed-function WORLD/VIEW/PROJECTION XYZ→XYZRHW CPU transform/readback is implemented for FVF and simple POSITION/COLOR/TEXCOORD source declarations, with matching diffuse/specular/texcoord passthrough into FVF or POSITIONT/COLOR/TEXCOORD declaration destinations; source declarations may split supported attributes across bound streams. Limited programmable VS execution covers simple straight-line DCL/DEF/MOV/basic arithmetic/comparison/DP/MAD/LRP/M3x3/M3x4/M4x3/M4x4 bytecode over PE vertex shader constants. The targeted PE Wine singleton passed before the MAD expansion (`visual_process_vertices_xyzhw_policy`, 146 checks). Full shader-model flow control, texture/sample opcodes, lighting, clipping, indexed variants, and broader declaration/multistream forms remain deferred. |
 | `D3DSAMP_ELEMENTINDEX`, `D3DSAMP_DMAPOFFSET` | B.3 | Deferred. Texture-array index and displacement-map sampler semantics are not wired. |
 | `D3DRS_MULTISAMPLEANTIALIAS`, `D3DRS_MULTISAMPLEMASK` | B.1 | Shadow/default only. Attachment MSAA is supported elsewhere; per-draw D3D9 sample mask is not wired. |
 | `D3DRS_ANTIALIASEDLINEENABLE` | B.1 | Accepted no-op/deferred; Metal exposes no equivalent D3D9 AA-line raster mode. |
@@ -727,7 +728,7 @@ LightEnable: ✅ `packet.lightEnableValidMask` + `lightEnableMask` (device_c.h:3
 **Current remaining deferred/no-op list, ordered by likely user-visible impact:**
 
 1. **N-patch / adaptive tessellation / patch draw path** — unsupported by design; declaration methods safe-reject and patch draws return invalid-call/no-op contracts.
-2. **Broad `ProcessVertices` / real SWVP execution** — fixed-function WORLD/VIEW/PROJECTION XYZ→XYZRHW CPU transform plus matching color/texcoord passthrough is implemented for FVF and simple source/destination declarations, including simple multistream source declarations; limited straight-line programmable VS execution covers DCL/DEF/MOV/basic arithmetic/DP/M4x4. The targeted PE Wine singleton passes. Full shader-model flow control, texture/sample opcodes, lighting, clipping, indexed variants, and broader declaration/multistream forms remain deferred.
+2. **Broad `ProcessVertices` / real SWVP execution** — fixed-function WORLD/VIEW/PROJECTION XYZ→XYZRHW CPU transform plus matching color/texcoord passthrough is implemented for FVF and simple source/destination declarations, including simple multistream source declarations; limited straight-line programmable VS execution covers DCL/DEF/MOV/basic arithmetic/comparison/DP/MAD/LRP/M3x3/M3x4/M4x3/M4x4. Full shader-model flow control, texture/sample opcodes, lighting, clipping, indexed variants, and broader declaration/multistream forms remain deferred.
 3. **`D3DRS_MULTISAMPLEMASK`** — default/shadow only; no per-draw Metal sample-mask programming.
 4. **Palette/P8 sampling breadth** — 2D P8/A8P8 caps are exposed and 2D/cube/volume locks expand through the active palette into an A8R8G8B8 sampling backing; generic palettized `Format::*` exposure remains deferred.
 5. **`D3DSAMP_ELEMENTINDEX` / `DMAPOFFSET`** — texture-array/displacement-map semantics deferred.
@@ -1292,7 +1293,7 @@ Source anchors are absolute paths in this repo. Source files referenced:
 | DrawIndexedPrimitive | ✅ | ✅ | ✅ | ✅ | `d3d9_pe_device.cpp:4004` | `test_visual_max_index16_draw_policy`, `test_null_stream_shader_draw_policy` |
 | DrawPrimitiveUP | ✅ | ✅ | ✅ | ❌ | `d3d9_pe_device.cpp:4025` | many visual tests |
 | DrawIndexedPrimitiveUP | ✅ | ✅ | ✅ | ❌ | `d3d9_pe_device.cpp:4043` | many visual tests |
-| ProcessVertices | ⚠️ | ✅ | ✅ | PE singleton | `d3d9_pe_device.cpp:5137` | device-lost gate plus fixed-function WORLD/VIEW/PROJECTION XYZ→XYZRHW CPU transform with matching diffuse/specular/texcoord passthrough for FVF and simple source/destination declarations, including supported source attributes split across bound streams; limited programmable VS path executes straight-line DCL/DEF/MOV/basic arithmetic/DP/M4x4 over PE vertex shader constants; unsupported shader/indexed/broader declaration variants return `D3DERR_INVALIDCALL`; `test_visual_process_vertices_xyzhw_policy` passes under Wine singleton with 146 checks |
+| ProcessVertices | ⚠️ | ✅ | ✅ | PE singleton | `d3d9_pe_device.cpp:5137` | device-lost gate plus fixed-function WORLD/VIEW/PROJECTION XYZ→XYZRHW CPU transform with matching diffuse/specular/texcoord passthrough for FVF and simple source/destination declarations, including supported source attributes split across bound streams; limited programmable VS path executes straight-line DCL/DEF/MOV/basic arithmetic/comparison/DP/MAD/LRP/M3x3/M3x4/M4x3/M4x4 over PE vertex shader constants; unsupported shader/indexed/broader declaration variants return `D3DERR_INVALIDCALL`; `test_visual_process_vertices_xyzhw_policy` covers M4x4/MOV and MAD/MOV paths |
 | CreateVertexDeclaration | ✅ | ✅ | ✅ | ❌ | `d3d9_pe_device.cpp:3629` | `test_vertex_declaration_fvf_policy`, `test_unused_declaration_type` |
 | SetVertexDeclaration | ✅ | ✅ | ✅ | ❌ | `d3d9_pe_device.cpp:3661` | `test_fvf_decl_management`, `test_vdecl_apply` |
 | GetVertexDeclaration | ✅ | ✅ | ✅ | ❌ | `d3d9_pe_device.cpp:3682` | `test_fvf_decl_management` |
@@ -1535,7 +1536,7 @@ Historical coverage snapshot:
 - The table is retained for audit history; use the 2026-05-29 current summary and re-audit delta above for live triage.
 
 Highest-leverage live gaps:
-1. **`ProcessVertices` breadth** — fixed-function WORLD/VIEW/PROJECTION XYZ→XYZRHW path plus matching color/texcoord passthrough for FVF and simple source/destination declarations is covered by a conformance scaffold, including a simple multistream source-declaration case and a limited straight-line vs_3_0 M4x4/MOV programmable case; the targeted PE Wine singleton passes with 146 checks. Full shader-model flow control, texture/sample opcodes, indexed SWVP, lighting/clipping, and broader declaration/multistream forms remain deferred.
+1. **`ProcessVertices` breadth** — fixed-function WORLD/VIEW/PROJECTION XYZ→XYZRHW path plus matching color/texcoord passthrough for FVF and simple source/destination declarations is covered by a conformance scaffold, including a simple multistream source-declaration case and limited straight-line vs_3_0 M4x4/MOV plus MAD/MOV programmable cases. Full shader-model flow control, texture/sample opcodes, indexed SWVP, lighting/clipping, and broader declaration/multistream forms remain deferred.
 2. **Palette/P8 breadth** — 2D P8/A8P8 texture caps and 2D/cube/volume sampler backing are wired through palette expansion; generic palettized `Format::*` exposure remains deferred.
 3. **N-patch / adaptive tessellation / patch draw path** — unsupported by design; declaration methods safe-reject and patch draws return invalid-call/no-op contracts.
 4. **Per-draw sample mask and legacy line AA** — `D3DRS_MULTISAMPLEMASK` remains shadow/default only; `D3DRS_ANTIALIASEDLINEENABLE` is accepted no-op/deferred.
