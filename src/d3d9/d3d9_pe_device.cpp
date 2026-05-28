@@ -595,6 +595,7 @@ struct FvfProcessLayout {
     UINT texStream[8]{};
     UINT texOffset[8]{};
     UINT texBytes[8]{};
+    UINT texType[8]{};
     UINT texCount = 0;
     bool normal = false;
     bool tangent = false;
@@ -676,6 +677,10 @@ static bool describeProcessFvf(DWORD fvf, FvfProcessLayout& layout) {
     for (UINT i = 0; i < layout.texCount; ++i) {
         layout.texOffset[i] = offset;
         layout.texBytes[i] = fvfTexcoordBytes(fvf, i);
+        layout.texType[i] = layout.texBytes[i] == 4u ? D3DDECLTYPE_FLOAT1
+                          : layout.texBytes[i] == 12u ? D3DDECLTYPE_FLOAT3
+                          : layout.texBytes[i] == 16u ? D3DDECLTYPE_FLOAT4
+                          : D3DDECLTYPE_FLOAT2;
         offset += layout.texBytes[i];
     }
     layout.stride = offset;
@@ -783,11 +788,13 @@ static bool describeProcessDeclaration(IDirect3DVertexDeclaration9* declaration,
             else if (e.type == D3DDECLTYPE_FLOAT2) texBytes = 8u;
             else if (e.type == D3DDECLTYPE_FLOAT3) texBytes = 12u;
             else if (e.type == D3DDECLTYPE_FLOAT4) texBytes = 16u;
+            else if (!destination && e.type == D3DDECLTYPE_SHORT2N) texBytes = 4u;
             else return false;
             layout.texCount = std::max<UINT>(layout.texCount, e.usageIndex + 1u);
             layout.texStream[e.usageIndex] = e.stream;
             layout.texOffset[e.usageIndex] = e.offset;
             layout.texBytes[e.usageIndex] = texBytes;
+            layout.texType[e.usageIndex] = e.type;
         } else {
             if (destination) return false;
         }
@@ -1058,6 +1065,11 @@ static DWORD packD3DColor(const float in[4]) {
            (static_cast<DWORD>(floatColorByte(in[0])) << 16u) |
            (static_cast<DWORD>(floatColorByte(in[1])) << 8u) |
            static_cast<DWORD>(floatColorByte(in[2]));
+}
+
+static float snorm16ToFloat(int16_t value) {
+    if (value <= -32768) return -1.0f;
+    return static_cast<float>(value) / 32767.0f;
 }
 
 struct SimpleVsRegisters {
@@ -6171,8 +6183,9 @@ public:
                          srcLayout.specularOffset + 4u);
             return true;
         };
-        auto requireTexRead = [&](UINT i) -> bool {
-            if (i >= srcLayout.texCount || dstLayout.texBytes[i] != srcLayout.texBytes[i]) {
+        auto requireTexRead = [&](UINT i, bool requireMatchingBytes) -> bool {
+            if (i >= srcLayout.texCount ||
+                (requireMatchingBytes && dstLayout.texBytes[i] != srcLayout.texBytes[i])) {
                 return false;
             }
             srcReadBytes[srcLayout.texStream[i]] =
@@ -6196,7 +6209,7 @@ public:
             if (shaderIo.inputDiffuse >= 0 && !requireDiffuseRead()) return invalid("shader diffuse input missing");
             if (shaderIo.inputSpecular >= 0 && !requireSpecularRead()) return invalid("shader specular input missing");
             for (UINT i = 0; i < 8; ++i) {
-                if (shaderIo.inputTex[i] >= 0 && !requireTexRead(i)) {
+                if (shaderIo.inputTex[i] >= 0 && !requireTexRead(i, false)) {
                     return invalid("shader texcoord input missing");
                 }
             }
@@ -6206,7 +6219,7 @@ public:
             if (dstLayout.specular && !requireSpecularRead()) return invalid("specular passthrough missing");
             if (dstLayout.texCount > srcLayout.texCount) return invalid("texcoord count mismatch");
             for (UINT i = 0; i < dstLayout.texCount; ++i) {
-                if (!requireTexRead(i)) return invalid("texcoord passthrough mismatch");
+                if (!requireTexRead(i, true)) return invalid("texcoord passthrough mismatch");
             }
         }
         D9CBuffer* srcRaw[D9C_DRAW_PACKET_MAX_STREAMS]{};
@@ -6392,11 +6405,27 @@ public:
                         srcByteStart[srcLayout.texStream[tex]] +
                         static_cast<uint64_t>(i) * streamStr_[srcLayout.texStream[tex]] +
                         srcLayout.texOffset[tex];
-                    const UINT components = srcLayout.texBytes[tex] / sizeof(float);
                     regs.input[reg] = {0.0f, 0.0f, 0.0f, 1.0f};
-                    std::memcpy(regs.input[reg].data(), texSource,
-                                std::min<UINT>(components, 4u) * sizeof(float));
-                    return true;
+                    switch (srcLayout.texType[tex]) {
+                        case D3DDECLTYPE_FLOAT1:
+                        case D3DDECLTYPE_FLOAT2:
+                        case D3DDECLTYPE_FLOAT3:
+                        case D3DDECLTYPE_FLOAT4: {
+                            const UINT components = srcLayout.texBytes[tex] / sizeof(float);
+                            std::memcpy(regs.input[reg].data(), texSource,
+                                        std::min<UINT>(components, 4u) * sizeof(float));
+                            return true;
+                        }
+                        case D3DDECLTYPE_SHORT2N: {
+                            int16_t in[2]{};
+                            std::memcpy(in, texSource, sizeof(in));
+                            regs.input[reg][0] = snorm16ToFloat(in[0]);
+                            regs.input[reg][1] = snorm16ToFloat(in[1]);
+                            return true;
+                        }
+                        default:
+                            return false;
+                    }
                 };
                 if (shaderIo.inputPosition >= 0 && !loadPositionInput(shaderIo.inputPosition)) {
                     hr = D3DERR_INVALIDCALL;
