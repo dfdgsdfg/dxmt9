@@ -827,6 +827,11 @@ static UINT simpleProcessShaderOperandCount(UINT opcode, DWORD token) {
         case D3DSIO_RSQ:
         case D3DSIO_FRC:
         case D3DSIO_ABS:
+        case D3DSIO_EXP:
+        case D3DSIO_LOG:
+        case D3DSIO_LIT:
+        case D3DSIO_EXPP:
+        case D3DSIO_LOGP:
         case D3DSIO_NRM:
             return 2;
         case D3DSIO_MAD:
@@ -843,6 +848,7 @@ static UINT simpleProcessShaderOperandCount(UINT opcode, DWORD token) {
         case D3DSIO_MAX:
         case D3DSIO_POW:
         case D3DSIO_CRS:
+        case D3DSIO_DST:
         case D3DSIO_M4x4:
         case D3DSIO_M4x3:
         case D3DSIO_M3x4:
@@ -1157,6 +1163,24 @@ static bool executeSimpleProcessVertexShader(const std::vector<DWORD>& words,
             case D3DSIO_ABS:
                 for (UINT i = 0; i < 4; ++i) out[i] = std::fabs(a[i]);
                 break;
+            case D3DSIO_EXP:
+            case D3DSIO_EXPP:
+                for (UINT i = 0; i < 4; ++i) out[i] = std::exp2(a[i]);
+                break;
+            case D3DSIO_LOG:
+            case D3DSIO_LOGP:
+                for (UINT i = 0; i < 4; ++i) out[i] = std::log2(std::fabs(a[i]));
+                break;
+            case D3DSIO_LIT: {
+                const float x = a[0];
+                const float y = a[1];
+                const float w = std::max(-128.0f, std::min(128.0f, a[3]));
+                out[0] = 1.0f;
+                out[1] = std::max(x, 0.0f);
+                out[2] = x > 0.0f ? std::pow(std::max(y, 0.0f), w) : 0.0f;
+                out[3] = 1.0f;
+                break;
+            }
             case D3DSIO_ADD:
                 for (UINT i = 0; i < 4; ++i) out[i] = a[i] + b[i];
                 break;
@@ -1205,6 +1229,12 @@ static bool executeSimpleProcessVertexShader(const std::vector<DWORD>& words,
                 out[1] = a[2] * b[0] - a[0] * b[2];
                 out[2] = a[0] * b[1] - a[1] * b[0];
                 out[3] = 1.0f;
+                break;
+            case D3DSIO_DST:
+                out[0] = 1.0f;
+                out[1] = a[1] * b[1];
+                out[2] = a[2];
+                out[3] = b[3];
                 break;
             case D3DSIO_NRM: {
                 const float lenSq = a[0] * a[0] + a[1] * a[1] + a[2] * a[2];
