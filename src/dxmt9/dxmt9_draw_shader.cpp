@@ -23,16 +23,17 @@ const char* shaderDumpDir() {
   return dir;
 }
 
-void maybeDumpShaderSource(const char* label, const std::string& source) {
+void maybeDumpShaderSource(const char* label, u64 shaderHash, const std::string& source) {
   const char* dir = shaderDumpDir();
   if (!dir || !label) {
     return;
   }
   std::error_code ec;
   std::filesystem::create_directories(dir, ec);
-  const u64 hash = hashBytes(std::as_bytes(std::span(source)));
+  const u64 sourceHash = hashBytes(std::as_bytes(std::span(source)));
   const auto path = std::filesystem::path(dir) /
-                    (std::string(label) + "-" + std::to_string(hash) + ".metal");
+                    (std::string(label) + "-shader-" + std::to_string(shaderHash) +
+                     "-source-" + std::to_string(sourceHash) + ".metal");
   if (std::filesystem::exists(path, ec)) {
     return;
   }
@@ -128,36 +129,36 @@ std::string makeDrawShaderSource(const ShaderSourceContext& context, bool vertex
   if (vertex) {
     if (context.vertexShader.kind == ShaderRef::Kind::Bytecode) {
       auto source = translator::makeTranslatedVertexSource(context.vertexShader, context);
-      maybeDumpShaderSource("translated-vs", source);
+      maybeDumpShaderSource("translated-vs", context.vertexShader.hash, source);
       return source;
     }
     if (context.vertexShader.kind == ShaderRef::Kind::FixedFunctionVertex && context.vertexShader.vertexKey) {
       auto source = ffp::makeFfpVertexSource(*context.vertexShader.vertexKey, context);
-      maybeDumpShaderSource("ffp-vs", source);
+      maybeDumpShaderSource("ffp-vs", context.vertexShader.hash, source);
       return source;
     }
     const u64 variantHash = context.vertexShader.hash ^ context.clipPlaneMask ^ context.sampleCount;
     auto source = context.textures[0] ? shaders::makeTexturedVertexSource(variantHash)
                                       : shaders::makeGenericVertexSource(variantHash);
-    maybeDumpShaderSource("builtin-vs", source);
+    maybeDumpShaderSource("builtin-vs", variantHash, source);
     return source;
   }
 
   if (context.pixelShader.kind == ShaderRef::Kind::Bytecode) {
     auto source = translator::makeTranslatedFragmentSource(context.pixelShader, context);
-    maybeDumpShaderSource("translated-fs", source);
+    maybeDumpShaderSource("translated-fs", context.pixelShader.hash, source);
     return source;
   }
   if (context.pixelShader.kind == ShaderRef::Kind::FixedFunctionPixel && context.pixelShader.pixelKey) {
     auto source = ffp::makeFfpPixelSource(*context.pixelShader.pixelKey, context);
-    maybeDumpShaderSource("ffp-fs", source);
+    maybeDumpShaderSource("ffp-fs", context.pixelShader.hash, source);
     return source;
   }
   const u64 variantHash = context.pixelShader.hash ^ context.clipPlaneMask ^ context.sampleCount;
   auto source = context.textures[0] ? shaders::makeTexturedFragmentSource(variantHash)
                                     : shaders::makeGenericFragmentSource(ColorRGBA{1.0f, 1.0f, 1.0f, 1.0f},
                                                                           variantHash);
-  maybeDumpShaderSource("builtin-fs", source);
+  maybeDumpShaderSource("builtin-fs", variantHash, source);
   return source;
 }
 

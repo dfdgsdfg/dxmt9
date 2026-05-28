@@ -83,7 +83,8 @@ std::uint32_t activeFragmentTextureMaskForShader(
 
 // Returns a complete MSL translation unit for either the vertex or pixel
 // shader corresponding to `context`. Also writes the source to
-// $DXMT_DUMP_SHADER_DIR/<label>-<hash>.metal if the env var is set.
+// $DXMT_DUMP_SHADER_DIR/<label>-shader-<shaderHash>-source-<sourceHash>.metal
+// if the env var is set.
 std::string makeDrawShaderSource(const ShaderSourceContext& context, bool vertex);
 
 }  // namespace dxmt9::drawshader
