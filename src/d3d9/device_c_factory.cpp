@@ -7,6 +7,7 @@ using namespace dxmt9::d3d9::devicec;
 
 namespace {
 
+constexpr uint32_t kD3DFmtA8P8 = 40u;
 constexpr uint32_t kD3DFmtP8 = 41u;
 constexpr uint32_t kD3DUsageRenderTarget = 0x00000001u;
 constexpr uint32_t kD3DUsageDepthStencil = 0x00000002u;
@@ -30,9 +31,10 @@ uint32_t usageFromResourceType(uint32_t resourceType) {
   }
 }
 
-bool supportedP8TextureQuery(uint32_t d3dFmt, uint32_t usage,
-                             uint32_t resourceType) {
-  if (d3dFmt != kD3DFmtP8 || resourceType != kD3DResourceTypeTexture) {
+bool supportedPalettizedTextureQuery(uint32_t d3dFmt, uint32_t usage,
+                                     uint32_t resourceType) {
+  if ((d3dFmt != kD3DFmtP8 && d3dFmt != kD3DFmtA8P8) ||
+      resourceType != kD3DResourceTypeTexture) {
     return false;
   }
   return (usage & (kD3DUsageRenderTarget | kD3DUsageDepthStencil)) == 0;
@@ -198,7 +200,7 @@ extern "C" int32_t dxmt9c_factory_check_device_format(D9CFactory* f, uint32_t ad
   // dxmt9 ships; report NOTAVAILABLE so app paths take the fallback.
   // vendor_policy_fetch4_caps.
   if (d3dFmt == 0x34544547u /*'GET4'*/) return dxmt9::core::D3DERR_NOTAVAILABLE;
-  if (d3dFmt == kD3DFmtP8 &&
+  if ((d3dFmt == kD3DFmtP8 || d3dFmt == kD3DFmtA8P8) &&
       (usage & (kD3DUsageRenderTarget | kD3DUsageDepthStencil)) == 0) {
     return dxmt9::core::D3D_OK;
   }
@@ -210,7 +212,7 @@ extern "C" int32_t dxmt9c_factory_check_device_format2(D9CFactory* f, uint32_t a
                                                        uint32_t d3dFmt, uint32_t usage,
                                                        uint32_t resourceType) {
   if (d3dFmt == 0x34544547u /*'GET4'*/) return dxmt9::core::D3DERR_NOTAVAILABLE;
-  if (supportedP8TextureQuery(d3dFmt, usage, resourceType)) {
+  if (supportedPalettizedTextureQuery(d3dFmt, usage, resourceType)) {
     return dxmt9::core::D3D_OK;
   }
   return f->iface->CheckDeviceFormat(adapter, fmtFromD3D(d3dFmt),

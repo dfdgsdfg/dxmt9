@@ -335,6 +335,7 @@ static uint32_t userMemoryBytesPerPixel(D3DFORMAT fmt) {
         case D3DFMT_A4R4G4B4:
         case D3DFMT_X4R4G4B4:
         case D3DFMT_A8L8:
+        case D3DFMT_A8P8:
         case D3DFMT_L16:
         case D3DFMT_D16:
         case D3DFMT_D15S1:

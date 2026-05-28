@@ -241,6 +241,7 @@ static uint32_t formatBytesPerPixel(uint32_t fmt) {
   case D3DFMT_X4R4G4B4:
   case D3DFMT_A8L8:
   case D3DFMT_V8U8:
+  case D3DFMT_A8P8:
     return 2;
   case D3DFMT_A8:
   case D3DFMT_L8:

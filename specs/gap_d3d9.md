@@ -32,7 +32,7 @@ Severity legend (used uniformly across the file):
 | Silent actionable D3D9 coverage gaps | **None in the current silent-coverage track.** Known formerly-silent gaps are implemented, tested, accepted as no-op/shadow-only, or explicitly unsupported. |
 | Shader declaration/modifier coverage | D3DDECLUSAGE values are accepted for programmable VS semantics; non-default D3DDECLMETHOD values safe-reject; `_PARTIALPRECISION` and `_MSAMPCENTROID` are lowered/tested. |
 | Render/TSS/Sampler fixes | Depth bias, MRT color masks, two-sided stencil, COLORVERTEX, WRAP0..15 round-trip/no-op, TSS ARG0 triadic ops, sampler border color, mip LOD bias, and max mip level are closed. |
-| Remaining deferred/unsupported API surface | N-patch/adaptive tessellation, broad `ProcessVertices`/real SWVP shader execution beyond the fixed-function WVP XYZ→XYZRHW path, `D3DSAMP_ELEMENTINDEX`, `D3DSAMP_DMAPOFFSET`, per-draw multisample mask, AA line raster toggle, A8P8 / non-2D P8 coverage, `ComposeRects`, and convolution kernel. |
+| Remaining deferred/unsupported API surface | N-patch/adaptive tessellation, broad `ProcessVertices`/real SWVP shader execution beyond the fixed-function WVP XYZ→XYZRHW path, `D3DSAMP_ELEMENTINDEX`, `D3DSAMP_DMAPOFFSET`, per-draw multisample mask, AA line raster toggle, non-2D palettized coverage, `ComposeRects`, and convolution kernel. |
 | Remaining validation work | Wine-run validation for PE gates. |
 
 ## Original top-level summary (historical 2026-05-23 roll-up)
@@ -121,7 +121,7 @@ Current deferred/unsupported surface to keep visible:
 | `D3DSAMP_ELEMENTINDEX`, `D3DSAMP_DMAPOFFSET` | Deferred. Texture-array/displacement-map sampler semantics are not represented in the backend. |
 | `D3DRS_MULTISAMPLEANTIALIAS`, `D3DRS_MULTISAMPLEMASK` | Shadow/default only. MSAA itself is attachment-driven; sample-mask programming is not currently wired. |
 | `D3DRS_ANTIALIASEDLINEENABLE` | Accepted no-op/deferred; Metal has no D3D9-style AA line raster toggle. |
-| Palette/P8 texture binding | Partial. PE palette methods still round-trip, 2D `D3DFMT_P8` texture caps are exposed, and P8 locks now expose 1-byte indices while expanding through the current palette into an A8R8G8B8 backend texture for sampling. A8P8, non-2D P8, and generic `Format::P8` exposure remain deferred. |
+| Palette/P8 texture binding | Partial. PE palette methods still round-trip; 2D `D3DFMT_P8` and `D3DFMT_A8P8` texture caps are exposed; locks now keep palette-index texels while expanding through the current palette into an A8R8G8B8 backend texture for sampling. Cube/volume palettized textures and generic palettized `Format::*` exposure remain deferred. |
 | `SetConvolutionMonoKernel`, `ComposeRects` | Explicit `E_NOTIMPL`. |
 | SwapChain Ex present stats / GPU thread priority / residency | Benign stub contracts guarded by native tests where applicable; no real scheduler/stat backend. |
 
@@ -155,7 +155,7 @@ after the silent-coverage fixes landed.
 | `D3DSAMP_ELEMENTINDEX`, `D3DSAMP_DMAPOFFSET` | B.3 | Deferred. Texture-array index and displacement-map sampler semantics are not wired. |
 | `D3DRS_MULTISAMPLEANTIALIAS`, `D3DRS_MULTISAMPLEMASK` | B.1 | Shadow/default only. Attachment MSAA is supported elsewhere; per-draw D3D9 sample mask is not wired. |
 | `D3DRS_ANTIALIASEDLINEENABLE` | B.1 | Accepted no-op/deferred; Metal exposes no equivalent D3D9 AA-line raster mode. |
-| Palette/P8 sampling | D.4/C.2 | Partial. 2D P8 texture caps are exposed; locks keep index data and expand through the current palette into an A8R8G8B8 backing texture; A8P8, non-2D P8, and generic `Format::P8` exposure remain deferred. |
+| Palette/P8 sampling | D.4/C.2 | Partial. 2D P8/A8P8 texture caps are exposed; locks keep index data (plus texel alpha for A8P8) and expand through the current palette into an A8R8G8B8 backing texture; cube/volume palettized textures and generic palettized `Format::*` exposure remain deferred. |
 | `SetConvolutionMonoKernel`, `ComposeRects` | D.5 | Explicit `E_NOTIMPL`. |
 | GPU-runtime validations | C.5/B.3 | Closed for the tracked cases: RESZ MSAA→INTZ readback, NULL RT depth-only rendering, and MIPMAPLODBIAS mip selection are covered by shader-corpus readback probes. |
 
@@ -728,7 +728,7 @@ LightEnable: ✅ `packet.lightEnableValidMask` + `lightEnableMask` (device_c.h:3
 1. **N-patch / adaptive tessellation / patch draw path** — unsupported by design; declaration methods safe-reject and patch draws return invalid-call/no-op contracts.
 2. **Broad `ProcessVertices` / real SWVP execution** — fixed-function stream-0 WORLD/VIEW/PROJECTION XYZ→XYZRHW CPU transform is implemented; programmable shader execution, declarations, lighting, clipping, multi-stream, and indexed variants remain deferred.
 3. **`D3DRS_MULTISAMPLEMASK`** — default/shadow only; no per-draw Metal sample-mask programming.
-4. **Palette/P8 sampling breadth** — 2D P8 caps are exposed and locks expand through the active palette into an A8R8G8B8 sampling backing; A8P8, non-2D P8, and generic `Format::P8` exposure remain deferred.
+4. **Palette/P8 sampling breadth** — 2D P8/A8P8 caps are exposed and locks expand through the active palette into an A8R8G8B8 sampling backing; cube/volume palettized textures and generic palettized `Format::*` exposure remain deferred.
 5. **`D3DSAMP_ELEMENTINDEX` / `DMAPOFFSET`** — texture-array/displacement-map semantics deferred.
 6. **`D3DRS_ANTIALIASEDLINEENABLE`** — accepted no-op/deferred due Metal rasterizer mismatch.
 7. **`SetConvolutionMonoKernel` / `ComposeRects`** — explicit `E_NOTIMPL`.
@@ -836,8 +836,8 @@ Source anchors used throughout:
 
 | Name | Code | defined | mapped | runtime-use | test | Notes |
 |---|---|---|---|---|---|---|
-| A8P8 | 40 | NO | NO | NO | NO | absent; combined alpha+palette index path is still deferred. |
-| P8 | 41 | PE | PE | partial | native | 2D PE `CheckDeviceFormat(TEXTURE)` reports support; `CreateTexture` uses an A8R8G8B8 core backing, exposes 1-byte index locks, and expands through the current palette before sampling (`dxmt9-core-device-com-spec`). `Format::P8` / generic `fmtFromD3D` exposure, A8P8, cube/volume P8, and non-texture caps remain deferred. |
+| A8P8 | 40 | PE | PE | partial | native | 2D PE `CheckDeviceFormat(TEXTURE)` reports support; `CreateTexture` uses an A8R8G8B8 core backing, exposes 2-byte index+alpha locks, and expands palette RGB plus texel alpha before sampling (`dxmt9-core-device-com-spec`). Generic `Format::A8P8`, cube/volume A8P8, and non-texture caps remain deferred. |
+| P8 | 41 | PE | PE | partial | native | 2D PE `CheckDeviceFormat(TEXTURE)` reports support; `CreateTexture` uses an A8R8G8B8 core backing, exposes 1-byte index locks, and expands through the current palette before sampling (`dxmt9-core-device-com-spec`). `Format::P8` / generic `fmtFromD3D` exposure, cube/volume P8, and non-texture caps remain deferred. |
 | L8 | 50 | OK | OK | OK | OK | -> `R8Unorm`; CheckDeviceFormat denies `UsageRenderTarget` (test `core_format_caps_spec.cpp:70`). |
 | A8L8 | 51 | OK | OK | OK | warn | -> `RG8Unorm`. |
 | A4L4 | 52 | NO | NO | NO | NO | absent; referenced only by `userMemoryBytesPerPixel` -> 1. |
@@ -1535,7 +1535,7 @@ Historical coverage snapshot:
 
 Highest-leverage live gaps:
 1. **`ProcessVertices` breadth** — fixed-function WORLD/VIEW/PROJECTION XYZ→XYZRHW path is covered by a conformance scaffold; programmable shader/decl/multistream SWVP remains deferred.
-2. **Palette/P8 breadth** — 2D P8 texture caps and sampler backing are wired through palette expansion; A8P8, non-2D P8, and generic `Format::P8` exposure remain deferred.
+2. **Palette/P8 breadth** — 2D P8/A8P8 texture caps and sampler backing are wired through palette expansion; cube/volume palettized textures and generic palettized `Format::*` exposure remain deferred.
 3. **N-patch / adaptive tessellation / patch draw path** — unsupported by design; declaration methods safe-reject and patch draws return invalid-call/no-op contracts.
 4. **Per-draw sample mask and legacy line AA** — `D3DRS_MULTISAMPLEMASK` remains shadow/default only; `D3DRS_ANTIALIASEDLINEENABLE` is accepted no-op/deferred.
 5. **`D3DSAMP_ELEMENTINDEX` / `D3DSAMP_DMAPOFFSET`** — texture-array and displacement-map sampler semantics remain deferred.
@@ -1573,6 +1573,6 @@ rg -n "return E_NOTIMPL|return D3DERR_INVALIDCALL.*noexcept override|return S_OK
 
 Status classification rules used:
 - `🟡` (silent stub) = method body is `return S_OK;` (or trivially writes a zero / default-out value then returns S_OK) with no recorder, no C ABI call, and no shadow side effect that downstream code reads.
-- `⚠️` (partial) = method body has real validation / state shadow / Wine-parity checks but is missing a documented sub-case (e.g., palette/P8 covers 2D index expansion but not A8P8 or non-2D P8).
+- `⚠️` (partial) = method body has real validation / state shadow / Wine-parity checks but is missing a documented sub-case (e.g., palette/P8 covers 2D index expansion but not cube/volume palettized textures).
 - `❌` (explicit failure) = `return E_NOTIMPL` or `return D3DERR_INVALIDCALL` as the entire body, with the intent documented inline that the method is unsupported (vs. partial).
 - `✅` (full) = method goes through to `dxmt9c_*` C ABI (or PE shadow that fully captures Wine semantics) and has at least one Wine-parity comment or test cross-reference.
