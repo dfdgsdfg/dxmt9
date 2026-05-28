@@ -4,6 +4,8 @@ set -euo pipefail
 script_dir=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
 source "$script_dir/common.sh"
 
+default_3dmark05_args="-gt1 -nosplash -nosysteminfo -noscreens"
+
 focus_app-d3d9-3dmark05() {
   osascript \
     -e 'tell application "System Events" to set frontmost of first process whose name contains "3DMark05" to true'
@@ -90,7 +92,7 @@ if [[ "${DXMT_3DMARK05_DIRECT:-0}" != "0" ]]; then
   mkdir -p "$(dirname -- "$log_path")"
   : > "$log_path"
 
-  read -r -a dxmt_3dmark05_args <<< "${DXMT_3DMARK05_ARGS:--gtall -batchall -featureall -cpuall -nosplash -nosysteminfo -noscreens}"
+  read -r -a dxmt_3dmark05_args <<< "${DXMT_3DMARK05_ARGS:-$default_3dmark05_args}"
 
   export DXMT_EXPERIMENT_WORKDIR
   DXMT_EXPERIMENT_WORKDIR="$exe_dir"
@@ -126,5 +128,5 @@ if [[ "${DXMT_3DMARK05_AUTO_ENTER:-1}" != "0" ]]; then
   schedule_app-d3d9-3dmark05_enter 120
 fi
 
-read -r -a dxmt_3dmark05_args <<< "${DXMT_3DMARK05_ARGS:--gtall -batchall -featureall -cpuall -nosplash -nosysteminfo -noscreens}"
+read -r -a dxmt_3dmark05_args <<< "${DXMT_3DMARK05_ARGS:-$default_3dmark05_args}"
 exp_run_wine_binary "$DXMT_EXPERIMENT_BINARY" "${dxmt_3dmark05_args[@]}"
