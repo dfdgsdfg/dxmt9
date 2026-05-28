@@ -309,9 +309,9 @@ track even after Wave 1 / Wave 2 of `specs/d3d9.plan.md` landed.
 
 | Modifier | D3DSPDM | Mask | Status | Source anchor | Test anchor | Notes |
 |---|---|---|---|---|---|---|
-| NONE | _NONE | 0 | ✅ | dxmt9_shader_decoder.cpp:190 (decodeDestModifier); dxmt9_shader_metal_ir.cpp:1084, 2095 | shader_transform_spec.cpp:1300 | default; emitter takes non-saturate path |
-| SATURATE | _SATURATE | 0x1 | ✅ | dxmt9_shader_metal_ir.cpp:1084, 1680, 2095, 2774 (`== 1u` clamp) | shader_transform_spec.cpp:1300 (decodes value 1u) | applied as `saturate(...)` |
-| PARTIAL_PRECISION | _PARTIALPRECISION | 0x2 | ❌ | not handled (silent fall-through; full fp32 emitted) | ❌ none | D3DSPDM bit ignored; cross-ref `DXMT9_FS_HALF_PRECISION` env (not functional) |
+| NONE | _NONE | 0 | ✅ | dxmt9_shader_decoder.cpp:decodeDestModifier; dxmt9_shader_metal_ir.cpp:applyDestModifier | shader_transform_spec.cpp:testD3DBCDestModifierPartialPrecisionLowering | default; emitter leaves the value unchanged |
+| SATURATE | _SATURATE | 0x1 | ✅ | dxmt9_shader_metal_ir.cpp:applyDestModifier | shader_transform_spec.cpp:testD3DBCDestModifierPartialPrecisionLowering | applied as `clamp(..., 0, 1)` and bitmask-composable with `_pp` |
+| PARTIAL_PRECISION | _PARTIALPRECISION | 0x2 | ✅ | dxmt9_shader_metal_ir.cpp:applyDestModifier | shader_transform_spec.cpp:testD3DBCDestModifierPartialPrecisionLowering | lowers the destination value through `float4(half4(...))`; cross-ref `DXMT9_FS_HALF_PRECISION` env remains a separate whole-fragment-source experiment |
 | CENTROID | _MSAMPCENTROID | 0x4 | ❌ | not handled (silent fall-through; default sample interp) | ❌ none | D3DSPDM_MSAMPCENTROID bit ignored |
 | PREDICATED-instr bit | n/a | bit 28 of instr token | ✅ | dxmt9_shader_decoder.cpp:1387; dxmt9_shader_metal_ir.cpp:1142, 2188 | shader_transform_spec.cpp:1289 (`predicated == true`) | per-instruction predicate guard |
 
@@ -345,10 +345,10 @@ track even after Wave 1 / Wave 2 of `specs/d3d9.plan.md` landed.
 - **D3DDECLTYPE**: 18 codes (0..17 incl. UNUSED). 16 fully tested or trivially covered (✅), 1 sized but no dedicated test (⚠️ UDEC3), 1 missing test coverage from the inventory tests but referenced in production layouts (FLOAT1). 0 missing constants.
 - **D3DDECLUSAGE**: 14 codes (0..13). 8 fully tested (✅), 6 with constants only and no decode path / no test (⚠️ TANGENT, BINORMAL, TESSFACTOR, FOG, DEPTH, SAMPLE — the FFP decoder + PE-side `convertFvfToElements` ignore them, silently dropping the element). 0 missing constants.
 - **D3DDECLMETHOD**: 7 codes (0..6). 1 tested (✅ DEFAULT). 6 missing (❌ PARTIALU, PARTIALV, CROSSUV, UV, LOOKUP, LOOKUPPRESAMPLED — neither defined nor validation-rejected; N-patch tessellation surfaces).
-- **Dst token modifiers**: 3 D3DSPDM bits + predicated-instr bit. 1 covered (✅ SATURATE), 2 missing (❌ PARTIALPRECISION, MSAMPCENTROID — silent fall-through), predicate-bit ✅.
+- **Dst token modifiers**: 3 D3DSPDM bits + predicated-instr bit. 2 covered (✅ SATURATE, PARTIALPRECISION), 1 missing (❌ MSAMPCENTROID — silent fall-through), predicate-bit ✅.
 - **Src token modifiers**: 14 D3DSPSM codes (0..13) + swizzle + rel-addr + writeMask + coissue. 14/14 source modifiers implemented (✅), but only 2 directly exercised by `shader_transform_spec` (NONE via mod 11, ABS). Swizzle/writeMask/rel-addr all ✅. Coissue parsed but ignored (⚠️).
 
-**Totals**: D3DSIO: 99 defined / 99 tested / 0 missing. D3DSPR: 20 defined / 16 tested / 0 missing constants (4 alias/reject). D3DDECLTYPE: 18 defined / 8 directly tested / 0 missing. D3DDECLUSAGE: 14 defined / 8 tested / 6 unhandled in decode path. D3DDECLMETHOD: 1 / 1 / 6. Dst-mods: 3 / 1 / 2. Src-mods: 14 / 2 directly / 0 missing impl.
+**Totals**: D3DSIO: 99 defined / 99 tested / 0 missing. D3DSPR: 20 defined / 16 tested / 0 missing constants (4 alias/reject). D3DDECLTYPE: 18 defined / 8 directly tested / 0 missing. D3DDECLUSAGE: 14 defined / 8 tested / 6 unhandled in decode path. D3DDECLMETHOD: 1 / 1 / 6. Dst-mods: 3 / 2 / 1. Src-mods: 14 / 2 directly / 0 missing impl.
 
 ## Methodology
 

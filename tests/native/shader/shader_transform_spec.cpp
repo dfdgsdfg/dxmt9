@@ -515,6 +515,46 @@ std::vector<u32> makePs30SourceModifierCoverageBytecode() {
   };
 }
 
+std::vector<u32> makePs30DestModifierCoverageBytecode() {
+  using namespace dxmt9::d3d9bc;
+  constexpr u32 kD3DSPDMSaturate = 1u;
+  constexpr u32 kD3DSPDMPartialPrecision = 2u;
+  return {
+      makeVersionToken(false, 3, 0),
+      makeInstructionToken(kD3DSIO_MOV, 2),
+      makeDstToken(kD3DSPR_TEMP, 0, 0xfu, kD3DSPDMPartialPrecision),
+      makeSrcToken(kD3DSPR_CONST, 0),
+      makeInstructionToken(kD3DSIO_ADD, 3),
+      makeDstToken(kD3DSPR_TEMP, 1, 0xfu, kD3DSPDMSaturate | kD3DSPDMPartialPrecision),
+      makeSrcToken(kD3DSPR_CONST, 1),
+      makeSrcToken(kD3DSPR_CONST, 2),
+      makeInstructionToken(kD3DSIO_MOV, 2),
+      makeDstToken(kD3DSPR_COLOROUT, 0),
+      makeSrcToken(kD3DSPR_TEMP, 1),
+      kD3DSIO_END,
+  };
+}
+
+std::vector<u32> makeVs20DestModifierCoverageBytecode() {
+  using namespace dxmt9::d3d9bc;
+  constexpr u32 kD3DSPDMSaturate = 1u;
+  constexpr u32 kD3DSPDMPartialPrecision = 2u;
+  return {
+      makeVersionToken(true, 2, 0),
+      makeInstructionToken(kD3DSIO_MOV, 2),
+      makeDstToken(kD3DSPR_TEMP, 0, 0xfu, kD3DSPDMPartialPrecision),
+      makeSrcToken(kD3DSPR_CONST, 0),
+      makeInstructionToken(kD3DSIO_ADD, 3),
+      makeDstToken(kD3DSPR_TEMP, 1, 0xfu, kD3DSPDMSaturate | kD3DSPDMPartialPrecision),
+      makeSrcToken(kD3DSPR_CONST, 1),
+      makeSrcToken(kD3DSPR_CONST, 2),
+      makeInstructionToken(kD3DSIO_MOV, 2),
+      makeDstToken(kD3DSPR_RASTOUT, 0),
+      makeSrcToken(kD3DSPR_TEMP, 1),
+      kD3DSIO_END,
+  };
+}
+
 std::vector<u32> makePs30IfElseBytecode() {
   using namespace dxmt9::d3d9bc;
   return {
@@ -1833,6 +1873,32 @@ void testPs30MissingSourceModifierCoverage() {
                 "ps_3_0 source modifier coverage result reaches color output");
 }
 
+void testD3DBCDestModifierPartialPrecisionLowering() {
+  using namespace dxmt9::d3d9bc;
+  namespace translator_test = dxmt9::translator::test;
+
+  constexpr u32 kD3DSPDMSaturate = 1u;
+  constexpr u32 kD3DSPDMPartialPrecision = 2u;
+  const u32 combinedDst = makeDstToken(kD3DSPR_TEMP, 7, 0xfu,
+                                       kD3DSPDMSaturate | kD3DSPDMPartialPrecision);
+  checkEqual(translator_test::decodeDestModifierForTest(combinedDst), 3u,
+             "D3DBC operand decode preserves combined destination modifier bits");
+
+  const auto pixelSource = translatePixel(makePs30DestModifierCoverageBytecode());
+  checkContains(pixelSource, "r[0] = float4(half4(cFloat[0]));",
+                "ps_3_0 _pp destination lowers through half precision");
+  checkContains(pixelSource,
+                "r[1] = clamp(float4(half4((cFloat[1] + cFloat[2]))), float4(0.0f), float4(1.0f));",
+                "ps_3_0 combined _sat/_pp destination preserves both modifier bits");
+
+  const auto vertexSource = translateVertex(makeVs20DestModifierCoverageBytecode());
+  checkContains(vertexSource, "r[0] = float4(half4(cFloat[0]));",
+                "vs_2_0 _pp destination lowers through half precision");
+  checkContains(vertexSource,
+                "r[1] = clamp(float4(half4((cFloat[1] + cFloat[2]))), float4(0.0f), float4(1.0f));",
+                "vs_2_0 combined _sat/_pp destination preserves both modifier bits");
+}
+
 void testPs30IfElseFlowControlTranslation() {
   const auto source = translatePixel(makePs30IfElseBytecode());
   checkContains(source, "if ((cFloat[0]).x != 0.0f) {", "ps_3_0 IF condition lowers to scalar branch");
@@ -2325,6 +2391,7 @@ int main() {
     testDefaultNoPixelVFlipAndNoVertexYFlip();
     testPs30WriteMaskSwizzleAndSourceModifiers();
     testPs30MissingSourceModifierCoverage();
+    testD3DBCDestModifierPartialPrecisionLowering();
     testPs30IfElseFlowControlTranslation();
     testPs30LoopFlowControlTranslation();
     testPs30NestedLoopFlowControlTranslation();

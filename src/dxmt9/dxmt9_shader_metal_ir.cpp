@@ -248,6 +248,16 @@ std::string applySourceModifier(std::string expr, u32 modifier) {
   }
 }
 
+std::string applyDestModifier(std::string expr, u32 modifier) {
+  if ((modifier & 0x2u) != 0u) {
+    expr = "float4(half4(" + expr + "))";
+  }
+  if ((modifier & 0x1u) != 0u) {
+    expr = "clamp(" + expr + ", float4(0.0f), float4(1.0f))";
+  }
+  return expr;
+}
+
 std::string applySwizzle(const std::string& expr, const std::array<u8, 4>& swizzle) {
   if (swizzle[0] == 0 && swizzle[1] == 1 && swizzle[2] == 2 && swizzle[3] == 3) {
     return expr;
@@ -1132,14 +1142,12 @@ std::string translateSpirvToMsl(const SpirvModule& module,
       };
 
 	    auto emitMaskedAssign = [&](const std::string& target, const std::string& value, u32 mask, bool scalar = false) {
+        const std::string finalValue =
+            applyDestModifier(value, decodeDestModifier(instruction.operands.empty() ? 0u : instruction.operands[0]));
 	      if (scalar) {
-	        out << "  " << target << " = " << value << ".x;\n";
+	        out << "  " << target << " = " << finalValue << ".x;\n";
 	        return;
 	      }
-        const std::string finalValue = decodeDestModifier(instruction.operands.empty() ? 0u : instruction.operands[0]) ==
-                                               1u
-                                           ? "clamp(" + value + ", float4(0.0f), float4(1.0f))"
-                                           : value;
         if (mask == 0xfu) {
           out << "  " << target << " = " << finalValue << ";\n";
         } else {
@@ -1732,9 +1740,6 @@ std::string translateSpirvToMsl(const SpirvModule& module,
             default:
               throw std::runtime_error("unsupported arithmetic opcode");
           }
-          if (decodeDestModifier(instruction.operands[0]) == 1u) {
-            value = "clamp(" + value + ", float4(0.0f), float4(1.0f))";
-          }
           switch (dst.kind) {
             case D3DRegisterKind::Temp:
               emitMaskedAssign(tempDestinationTarget(dst, 31u), value, dstMask);
@@ -2202,14 +2207,12 @@ std::string translateSpirvToMsl(const SpirvModule& module,
     };
 
     auto emitMaskedAssign = [&](const std::string& target, const std::string& value, u32 mask, bool scalar = false) {
+      const std::string finalValue =
+          applyDestModifier(value, decodeDestModifier(instruction.operands.empty() ? 0u : instruction.operands[0]));
       if (scalar) {
-        out << "  " << target << " = " << value << ".x;\n";
+        out << "  " << target << " = " << finalValue << ".x;\n";
         return;
       }
-      const std::string finalValue = decodeDestModifier(instruction.operands.empty() ? 0u : instruction.operands[0]) ==
-                                             1u
-                                         ? "clamp(" + value + ", float4(0.0f), float4(1.0f))"
-                                         : value;
       if (mask == 0xfu) {
         out << "  " << target << " = " << finalValue << ";\n";
       } else {
@@ -2895,9 +2898,6 @@ std::string translateSpirvToMsl(const SpirvModule& module,
 	            break;
           default:
             throw std::runtime_error("unsupported arithmetic opcode");
-        }
-        if (decodeDestModifier(instruction.operands[0]) == 1u) {
-          value = "clamp(" + value + ", float4(0.0f), float4(1.0f))";
         }
         switch (dst.kind) {
           case D3DRegisterKind::Temp:
