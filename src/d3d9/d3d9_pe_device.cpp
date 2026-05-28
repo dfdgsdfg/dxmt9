@@ -1015,6 +1015,7 @@ struct SimpleVsRegisters {
     std::array<std::array<float, 4>, 256> constant{};
     std::array<std::array<int32_t, 4>, 16> constantInt{};
     std::array<std::array<float, 4>, 16> predicate{};
+    std::array<float, 4> address{};
     std::array<float, 4> loop{};
     std::array<std::array<float, 4>, 16> output{};
     std::array<std::array<float, 4>, 3> rastOut{};
@@ -1033,6 +1034,8 @@ static std::array<float, 4>* simpleVsRegister(SimpleVsRegisters& regs,
             return index < regs.input.size() ? &regs.input[index] : nullptr;
         case D3DSPR_CONST:
             return index < regs.constant.size() ? &regs.constant[index] : nullptr;
+        case D3DSPR_ADDR:
+            return index == 0u ? &regs.address : nullptr;
         case D3DSPR_RASTOUT:
             return index < regs.rastOut.size() ? &regs.rastOut[index] : nullptr;
         case D3DSPR_ATTROUT:
@@ -1060,6 +1063,8 @@ static const std::array<float, 4>* simpleVsRegisterConst(
             return index < regs.input.size() ? &regs.input[index] : nullptr;
         case D3DSPR_CONST:
             return index < regs.constant.size() ? &regs.constant[index] : nullptr;
+        case D3DSPR_ADDR:
+            return index == 0u ? &regs.address : nullptr;
         case D3DSPR_RASTOUT:
             return index < regs.rastOut.size() ? &regs.rastOut[index] : nullptr;
         case D3DSPR_ATTROUT:
@@ -1487,6 +1492,22 @@ static SimpleVsExecResult executeSimpleProcessVertexShaderRange(
             if (simpleVsIfcCompare(token, condition[0], rhs[0])) {
                 return SimpleVsExecResult::Break;
             }
+            continue;
+        }
+        if (opcode == D3DSIO_MOVA) {
+            const UINT dstType = shaderRegType(operands[0]);
+            if (dstType != D3DSPR_ADDR && dstType != D3DSPR_LOOP) {
+                return SimpleVsExecResult::Fail;
+            }
+            auto* dst = simpleVsRegister(regs, io.major, dstType,
+                                         shaderRegIndex(operands[0]));
+            if (!dst) return SimpleVsExecResult::Fail;
+            float value[4]{};
+            if (!simpleVsReadSource(regs, io.major, operands[1], value)) {
+                return SimpleVsExecResult::Fail;
+            }
+            const float rounded = static_cast<float>(std::lround(value[0]));
+            *dst = {rounded, rounded, rounded, rounded};
             continue;
         }
         if (opcode == D3DSIO_SETP) {
