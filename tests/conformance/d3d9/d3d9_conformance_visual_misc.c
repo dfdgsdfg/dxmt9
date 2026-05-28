@@ -737,6 +737,8 @@ void test_visual_process_vertices_xyzhw_policy(const struct d3d9_api *api)
 #define PROCESS_VS_DST(type, index, mask) \
     (0x80000000u | PROCESS_VS_REGTYPE(type) \
             | (((DWORD)(mask) & 0xfu) << 16) | ((DWORD)(index) & 0x7ffu))
+#define PROCESS_VS_DST_MOD(type, index, mask, mod) \
+    (PROCESS_VS_DST(type, index, mask) | ((DWORD)(mod) & D3DSP_DSTMOD_MASK))
 #define PROCESS_VS_SRC(type, index) \
     (0x80000000u | PROCESS_VS_REGTYPE(type) | D3DSP_NOSWIZZLE \
             | ((DWORD)(index) & 0x7ffu))
@@ -802,6 +804,39 @@ void test_visual_process_vertices_xyzhw_policy(const struct d3d9_api *api)
         PROCESS_VS_DST(D3DSPR_OUTPUT, 2, 0xf),
         PROCESS_VS_INST(D3DSIO_M4x4, 3),
         PROCESS_VS_DST(D3DSPR_OUTPUT, 0, 0xf),
+        PROCESS_VS_SRC(D3DSPR_INPUT, 0),
+        PROCESS_VS_SRC(D3DSPR_CONST, 0),
+        PROCESS_VS_INST(D3DSIO_MOV, 2),
+        PROCESS_VS_DST(D3DSPR_OUTPUT, 1, 0xf),
+        PROCESS_VS_SRC(D3DSPR_INPUT, 1),
+        PROCESS_VS_INST(D3DSIO_MOV, 2),
+        PROCESS_VS_DST(D3DSPR_OUTPUT, 2, 0xf),
+        PROCESS_VS_SRC(D3DSPR_INPUT, 2),
+        D3DSIO_END
+    };
+    static const DWORD process_vs_partialprecision_3_0[] =
+    {
+        D3DVS_VERSION(3, 0),
+        PROCESS_VS_INST(D3DSIO_DCL, 2),
+        PROCESS_VS_DCL(D3DDECLUSAGE_POSITION, 0),
+        PROCESS_VS_DST(D3DSPR_INPUT, 0, 0xf),
+        PROCESS_VS_INST(D3DSIO_DCL, 2),
+        PROCESS_VS_DCL(D3DDECLUSAGE_COLOR, 0),
+        PROCESS_VS_DST(D3DSPR_INPUT, 1, 0xf),
+        PROCESS_VS_INST(D3DSIO_DCL, 2),
+        PROCESS_VS_DCL(D3DDECLUSAGE_TEXCOORD, 0),
+        PROCESS_VS_DST(D3DSPR_INPUT, 2, 0xf),
+        PROCESS_VS_INST(D3DSIO_DCL, 2),
+        PROCESS_VS_DCL(D3DDECLUSAGE_POSITION, 0),
+        PROCESS_VS_DST(D3DSPR_OUTPUT, 0, 0xf),
+        PROCESS_VS_INST(D3DSIO_DCL, 2),
+        PROCESS_VS_DCL(D3DDECLUSAGE_COLOR, 0),
+        PROCESS_VS_DST(D3DSPR_OUTPUT, 1, 0xf),
+        PROCESS_VS_INST(D3DSIO_DCL, 2),
+        PROCESS_VS_DCL(D3DDECLUSAGE_TEXCOORD, 0),
+        PROCESS_VS_DST(D3DSPR_OUTPUT, 2, 0xf),
+        PROCESS_VS_INST(D3DSIO_M4x4, 3),
+        PROCESS_VS_DST_MOD(D3DSPR_OUTPUT, 0, 0xf, D3DSPDM_PARTIALPRECISION),
         PROCESS_VS_SRC(D3DSPR_INPUT, 0),
         PROCESS_VS_SRC(D3DSPR_CONST, 0),
         PROCESS_VS_INST(D3DSIO_MOV, 2),
@@ -1208,6 +1243,7 @@ void test_visual_process_vertices_xyzhw_policy(const struct d3d9_api *api)
     IDirect3DVertexBuffer9 *prog_blendweight_dst_vb = NULL;
     IDirect3DVertexBuffer9 *prog_blendindices_dst_vb = NULL;
     IDirect3DVertexBuffer9 *prog_mad_dst_vb = NULL;
+    IDirect3DVertexBuffer9 *prog_partialprecision_dst_vb = NULL;
     IDirect3DVertexBuffer9 *prog_pos4_dst_vb = NULL;
     IDirect3DVertexBuffer9 *prog_xyzw_dst_vb = NULL;
     IDirect3DVertexDeclaration9 *src_decl = NULL;
@@ -1948,6 +1984,63 @@ void test_visual_process_vertices_xyzhw_policy(const struct d3d9_api *api)
 
     IDirect3DVertexShader9_Release(vs);
     vs = NULL;
+    hr = IDirect3DDevice9_CreateVertexShader(device,
+            process_vs_partialprecision_3_0, &vs);
+    CHECK_HR(hr, D3D_OK);
+    if (FAILED(hr))
+        goto done_device;
+    hr = IDirect3DDevice9_CreateVertexBuffer(device, sizeof(expected), 0,
+            0, D3DPOOL_SYSTEMMEM, &prog_partialprecision_dst_vb, NULL);
+    CHECK_HR(hr, D3D_OK);
+    if (FAILED(hr))
+        goto done_device;
+    CHECK_HR(IDirect3DDevice9_SetVertexShaderConstantF(device, 0,
+            (const float *)vs_constants, 4), D3D_OK);
+    CHECK_HR(IDirect3DDevice9_SetVertexDeclaration(device, src_extra_decl),
+            D3D_OK);
+    CHECK_HR(IDirect3DDevice9_SetStreamSource(device, 0, src_extra_vb, 0,
+            sizeof(struct src_extra_vertex)), D3D_OK);
+    CHECK_HR(IDirect3DDevice9_SetStreamSource(device, 1, NULL, 0, 0),
+            D3D_OK);
+    CHECK_HR(IDirect3DDevice9_SetVertexShader(device, vs), D3D_OK);
+    CHECK_HR(IDirect3DDevice9_ProcessVertices(device, 0, 0,
+            ARRAY_SIZE(src_extra), prog_partialprecision_dst_vb, dst_decl, 0),
+            D3D_OK);
+
+    hr = IDirect3DVertexBuffer9_Lock(prog_partialprecision_dst_vb, 0,
+            sizeof(expected), (void **)&mapped, D3DLOCK_READONLY);
+    CHECK_HR(hr, D3D_OK);
+    if (SUCCEEDED(hr))
+    {
+        for (i = 0; i < ARRAY_SIZE(expected); ++i)
+        {
+            float dx = mapped[i].x - expected[i].x;
+            float dy = mapped[i].y - expected[i].y;
+            float dz = mapped[i].z - expected[i].z;
+            float dw = mapped[i].rhw - expected[i].rhw;
+            float du = mapped[i].u - expected[i].u;
+            float dv = mapped[i].v - expected[i].v;
+            if (dx < 0.0f) dx = -dx;
+            if (dy < 0.0f) dy = -dy;
+            if (dz < 0.0f) dz = -dz;
+            if (dw < 0.0f) dw = -dw;
+            if (du < 0.0f) du = -du;
+            if (dv < 0.0f) dv = -dv;
+            CHECK_TRUE(dx < 0.01f);
+            CHECK_TRUE(dy < 0.01f);
+            CHECK_TRUE(dz < 0.01f);
+            CHECK_TRUE(dw < 0.01f);
+            CHECK_TRUE(mapped[i].color == expected[i].color);
+            CHECK_TRUE(du < 0.01f);
+            CHECK_TRUE(dv < 0.01f);
+        }
+        CHECK_HR(IDirect3DVertexBuffer9_Unlock(prog_partialprecision_dst_vb),
+                D3D_OK);
+    }
+    CHECK_HR(IDirect3DDevice9_SetVertexShader(device, NULL), D3D_OK);
+
+    IDirect3DVertexShader9_Release(vs);
+    vs = NULL;
     hr = IDirect3DDevice9_CreateVertexShader(device, process_vs_mad_3_0, &vs);
     CHECK_HR(hr, D3D_OK);
     if (FAILED(hr))
@@ -2111,6 +2204,7 @@ done_device:
     if (dst_decl) IDirect3DVertexDeclaration9_Release(dst_decl);
     if (prog_xyzw_dst_vb) IDirect3DVertexBuffer9_Release(prog_xyzw_dst_vb);
     if (prog_pos4_dst_vb) IDirect3DVertexBuffer9_Release(prog_pos4_dst_vb);
+    if (prog_partialprecision_dst_vb) IDirect3DVertexBuffer9_Release(prog_partialprecision_dst_vb);
     if (prog_mad_dst_vb) IDirect3DVertexBuffer9_Release(prog_mad_dst_vb);
     if (prog_blendindices_dst_vb) IDirect3DVertexBuffer9_Release(prog_blendindices_dst_vb);
     if (prog_blendweight_dst_vb) IDirect3DVertexBuffer9_Release(prog_blendweight_dst_vb);
@@ -2137,6 +2231,7 @@ done_d3d9:
 #undef PROCESS_VS_DCL
 #undef PROCESS_VS_INST
 #undef PROCESS_VS_SRC
+#undef PROCESS_VS_DST_MOD
 #undef PROCESS_VS_DST
 #undef PROCESS_VS_REGTYPE
 }
