@@ -14,6 +14,8 @@ struct LockFootprint {
 constexpr uint32_t kD3DLockDiscard = 0x00002000u;
 constexpr uint32_t kD3DLockNoOverwrite = 0x00001000u;
 constexpr uint32_t kD3DUsageAutoGenMipmap = 0x00000400u;
+constexpr uint32_t kD3DFmtA8R8G8B8 = 21u;
+constexpr uint32_t kD3DFmtP8 = 41u;
 
 uint32_t lockFlagsToCore(uint32_t flags) {
   uint32_t out = 0;
@@ -89,6 +91,72 @@ uint32_t resolveMipLevelCount(uint32_t levels,
   return fullMipLevelCount(width, height, depth);
 }
 
+uint32_t mipDimension(uint32_t base, uint32_t level) {
+  return std::max(1u, base >> std::min(level, 31u));
+}
+
+size_t p8SubresourceBytes(const dxmt9::core::TextureDesc& desc,
+                          uint32_t subresource) {
+  const uint32_t mipLevels = std::max(1u, desc.levels);
+  const uint32_t level = desc.type == dxmt9::core::TextureType::Cube
+                             ? subresource % mipLevels
+                             : subresource;
+  return static_cast<size_t>(mipDimension(desc.width, level)) *
+         static_cast<size_t>(mipDimension(desc.height, level));
+}
+
+void initP8Texture(D9CTexture* texture, uint32_t d3dFormat) {
+  if (!texture || d3dFormat != kD3DFmtP8) {
+    return;
+  }
+  texture->d3dFormat = d3dFormat;
+  texture->palettized = true;
+  for (uint32_t i = 0; i < texture->p8Palette.size(); ++i) {
+    texture->p8Palette[i] = 0xff000000u | (i << 16) | (i << 8) | i;
+  }
+  const auto& desc = texture->obj->desc();
+  texture->p8Levels.resize(texture->obj->subresourceCount());
+  for (uint32_t subresource = 0; subresource < texture->p8Levels.size(); ++subresource) {
+    texture->p8Levels[subresource].assign(p8SubresourceBytes(desc, subresource), 0);
+  }
+}
+
+void expandP8SubresourceToBackend(D9CTexture* texture, uint32_t subresource) {
+  if (!texture || !texture->palettized || subresource >= texture->p8Levels.size()) {
+    return;
+  }
+  const auto& desc = texture->obj->desc();
+  const uint32_t mipLevels = std::max(1u, desc.levels);
+  const uint32_t level = desc.type == dxmt9::core::TextureType::Cube
+                             ? subresource % mipLevels
+                             : subresource;
+  const uint32_t width = mipDimension(desc.width, level);
+  const uint32_t height = mipDimension(desc.height, level);
+  const auto& indices = texture->p8Levels[subresource];
+  if (indices.size() < static_cast<size_t>(width) * height) {
+    return;
+  }
+
+  auto lock = texture->obj->lockRect(subresource, nullptr, 0);
+  if (!lock.data || lock.pitch == 0) {
+    return;
+  }
+  auto* dst = static_cast<uint8_t*>(lock.data);
+  for (uint32_t y = 0; y < height; ++y) {
+    for (uint32_t x = 0; x < width; ++x) {
+      const uint8_t index = indices[static_cast<size_t>(y) * width + x];
+      const uint32_t color = texture->p8Palette[index];
+      auto* pixel = dst + static_cast<size_t>(y) * lock.pitch +
+                    static_cast<size_t>(x) * 4u;
+      pixel[0] = static_cast<uint8_t>(color & 0xffu);
+      pixel[1] = static_cast<uint8_t>((color >> 8) & 0xffu);
+      pixel[2] = static_cast<uint8_t>((color >> 16) & 0xffu);
+      pixel[3] = static_cast<uint8_t>((color >> 24) & 0xffu);
+    }
+  }
+  texture->obj->unlockRect(subresource);
+}
+
 void copyNativeToShadow(ShadowLock& shadow) {
   auto* dst = static_cast<uint8_t*>(shadow.shadow.ptr);
   auto* src = static_cast<const uint8_t*>(shadow.nativePtr);
@@ -121,7 +189,7 @@ extern "C" D9CTexture* dxmt9c_device_create_texture(D9CDevice* d, uint32_t w, ui
   desc.width = w;
   desc.height = h;
   desc.levels = resolveMipLevelCount(levels, usage, w, h, 1u);
-  desc.format = fmtFromD3D(fmt);
+  desc.format = fmtFromD3D(fmt == kD3DFmtP8 ? kD3DFmtA8R8G8B8 : fmt);
   desc.pool = poolFromD3D(pool);
   desc.usage = usageFromD3D(usage);
   desc.type = dxmt9::core::TextureType::TwoD;
@@ -137,7 +205,10 @@ extern "C" D9CTexture* dxmt9c_device_create_texture(D9CDevice* d, uint32_t w, ui
   }
   dxmt9DebugLog("device_create_texture ok texture=%p levels=%u",
                 static_cast<void*>(tex.get()), tex->levelCount());
-  return new D9CTexture{tex, d};
+  auto* out = new D9CTexture{tex, d};
+  out->d3dFormat = fmt;
+  initP8Texture(out, fmt);
+  return out;
 }
 
 extern "C" D9CTexture* dxmt9c_device_create_cube_texture(D9CDevice* d, uint32_t size,
@@ -308,6 +379,30 @@ extern "C" int32_t dxmt9c_texture_lock_rect(D9CTexture* t, uint32_t level, D9CLo
     dxmt9DebugLog("texture_lock_rect begin texture=%p level=%u flags=0x%x rect=<full>",
                   static_cast<void*>(t), level, flags);
   }
+  if (t->palettized) {
+    const auto& desc = t->obj->desc();
+    if (level >= t->p8Levels.size()) {
+      out->pitch = 0;
+      out->bits = nullptr;
+      return dxmt9::core::D3DERR_INVALIDCALL;
+    }
+    const uint32_t mipLevel = desc.type == dxmt9::core::TextureType::Cube
+                                  ? level % std::max(1u, desc.levels)
+                                  : level;
+    const uint32_t width = mipDimension(desc.width, mipLevel);
+    const uint32_t height = mipDimension(desc.height, mipLevel);
+    const uint32_t left = r ? static_cast<uint32_t>(std::clamp(r->left, 0, static_cast<int32_t>(width))) : 0u;
+    const uint32_t top = r ? static_cast<uint32_t>(std::clamp(r->top, 0, static_cast<int32_t>(height))) : 0u;
+    if (t->p8Levels[level].size() < static_cast<size_t>(width) * height) {
+      t->p8Levels[level].assign(static_cast<size_t>(width) * height, 0);
+    }
+    out->pitch = static_cast<int32_t>(width);
+    out->bits = t->p8Levels[level].data() + static_cast<size_t>(top) * width + left;
+    t->lockedLevels.insert(level);
+    dxmt9DebugLog("texture_lock_rect p8 texture=%p level=%u pitch=%d bits=%p",
+                  static_cast<void*>(t), level, out->pitch, out->bits);
+    return dxmt9::core::D3D_OK;
+  }
   auto* rect = r ? new dxmt9::core::Rect{r->left, r->top, r->right, r->bottom} : nullptr;
   auto lock = t->obj->lockRect(level, rect, lockFlagsToCore(flags));
   delete rect;
@@ -397,6 +492,11 @@ extern "C" int32_t dxmt9c_texture_unlock_rect(D9CTexture* t, uint32_t level) {
                   static_cast<void*>(t), level);
     return dxmt9::core::D3DERR_INVALIDCALL;
   }
+  if (t->palettized) {
+    expandP8SubresourceToBackend(t, level);
+    dxmt9DebugLog("texture_unlock_rect p8 texture=%p level=%u", static_cast<void*>(t), level);
+    return dxmt9::core::D3D_OK;
+  }
   if (auto it = t->wow64Locks.find(level); it != t->wow64Locks.end()) {
     auto& shadow = it->second;
     if (shadow.active) {
@@ -439,7 +539,7 @@ extern "C" int32_t dxmt9c_texture_get_level_desc(D9CTexture* t, uint32_t level,
   }
   auto& desc = t->obj->desc();
   const uint32_t shift = std::min<uint32_t>(level, 31);
-  out->format = fmtToD3D(desc.format);
+  out->format = t->d3dFormat ? t->d3dFormat : fmtToD3D(desc.format);
   out->resourceType = textureTypeToResourceType(desc.type);
   out->usage = usageToD3D(desc.usage);
   out->pool = poolToD3D(desc.pool);
@@ -469,6 +569,21 @@ extern "C" uint32_t dxmt9c_texture_set_lod(D9CTexture* t, uint32_t lod) {
     return 0;
   }
   return t->obj->setLod(lod);
+}
+
+extern "C" int32_t dxmt9c_texture_set_palette(D9CTexture* t,
+                                               const uint32_t* argbEntries,
+                                               uint32_t entryCount) {
+  if (!t || !t->palettized || !argbEntries || entryCount < 256u) {
+    return dxmt9::core::D3DERR_INVALIDCALL;
+  }
+  std::copy_n(argbEntries, 256u, t->p8Palette.begin());
+  for (uint32_t subresource = 0; subresource < t->p8Levels.size(); ++subresource) {
+    if (!t->lockedLevels.contains(subresource)) {
+      expandP8SubresourceToBackend(t, subresource);
+    }
+  }
+  return dxmt9::core::D3D_OK;
 }
 
 extern "C" void dxmt9c_buffer_addref(D9CBuffer* b) {

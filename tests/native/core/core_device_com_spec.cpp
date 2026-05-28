@@ -1,4 +1,5 @@
 #include "core_spec_fixtures.hpp"
+#include "device_c_common.hpp"
 
 #include <memory>
 
@@ -360,12 +361,105 @@ void testComWrappersEx() {
   checkEq(d3d->Release(), 0u, "factory ex release");
 }
 
+void testPalettizedTextureExpansion() {
+  using namespace dxmt9::com;
+
+  auto backend = std::make_shared<RecordingBackend>();
+  auto* d3d = Direct3DCreate9Ex(D3D_SDK_VERSION, backend);
+  check(d3d != nullptr, "factory for p8 texture");
+
+  {
+    d3d->AddRef();
+    D9CFactory cFactory(d3d);
+    checkEq(dxmt9c_factory_check_device_format2(&cFactory, 0, 41u, 0, 3u),
+            D3D_OK, "P8 texture CheckDeviceFormat support");
+    checkEq(dxmt9c_factory_check_device_format2(&cFactory, 0, 41u,
+                                                0x00000001u, 3u),
+            D3DERR_NOTAVAILABLE, "P8 render-target query rejected");
+  }
+
+  PresentParameters params{};
+  params.backBufferWidth = 320;
+  params.backBufferHeight = 240;
+  params.windowed = true;
+
+  auto* device = d3d->CreateDeviceEx(0, params, nullptr);
+  check(device != nullptr, "device for p8 texture");
+
+  {
+    device->AddRef();
+    D9CDevice cDevice(device);
+    auto* texture = dxmt9c_device_create_texture(&cDevice, 2, 2, 1, 0,
+                                                 41u, 1u);
+    check(texture != nullptr, "create P8 texture");
+    checkEq(texture->obj->desc().format, Format::A8R8G8B8,
+            "P8 texture uses RGBA backing");
+
+    D9CSurfaceDesc desc{};
+    checkEq(dxmt9c_texture_get_level_desc(texture, 0, &desc), D3D_OK,
+            "P8 level desc");
+    checkEq(desc.format, 41u, "P8 public format preserved");
+
+    D9CLockedRect locked{};
+    checkEq(dxmt9c_texture_lock_rect(texture, 0, &locked, nullptr, 0), D3D_OK,
+            "P8 lock");
+    checkEq(locked.pitch, int32_t{2}, "P8 lock pitch is one byte per texel");
+    auto* indices = static_cast<uint8_t*>(locked.bits);
+    indices[0] = 1;
+    indices[1] = 2;
+    indices[2] = 3;
+    indices[3] = 4;
+    checkEq(dxmt9c_texture_unlock_rect(texture, 0), D3D_OK, "P8 unlock");
+
+    std::array<uint32_t, 256> palette{};
+    palette[1] = 0xff112233u;
+    palette[2] = 0xff445566u;
+    palette[3] = 0xff778899u;
+    palette[4] = 0xffaabbccu;
+    checkEq(dxmt9c_texture_set_palette(texture, palette.data(),
+                                        static_cast<uint32_t>(palette.size())),
+            D3D_OK, "P8 palette upload");
+
+    auto bytes = texture->obj->levelBytes(0);
+    check(bytes.size() >= 16, "P8 expanded backing has four BGRA pixels");
+    checkEq(bytes[0], uint8_t{0x33}, "P8 pixel0 blue");
+    checkEq(bytes[1], uint8_t{0x22}, "P8 pixel0 green");
+    checkEq(bytes[2], uint8_t{0x11}, "P8 pixel0 red");
+    checkEq(bytes[3], uint8_t{0xff}, "P8 pixel0 alpha");
+    checkEq(bytes[12], uint8_t{0xcc}, "P8 pixel3 blue");
+    checkEq(bytes[13], uint8_t{0xbb}, "P8 pixel3 green");
+    checkEq(bytes[14], uint8_t{0xaa}, "P8 pixel3 red");
+    checkEq(bytes[15], uint8_t{0xff}, "P8 pixel3 alpha");
+    check(!backend->textureUploads.empty(),
+          "P8 expansion uploads converted BGRA bytes to backend");
+    const auto& upload = backend->textureUploads.back();
+    checkEq(upload.width, 2u, "P8 backend upload width");
+    checkEq(upload.height, 2u, "P8 backend upload height");
+    checkEq(upload.pitch, 8u, "P8 backend upload pitch");
+    check(upload.bytes.size() >= 16,
+          "P8 backend upload has four expanded BGRA pixels");
+    checkEq(upload.bytes[0], uint8_t{0x33}, "P8 backend pixel0 blue");
+    checkEq(upload.bytes[1], uint8_t{0x22}, "P8 backend pixel0 green");
+    checkEq(upload.bytes[2], uint8_t{0x11}, "P8 backend pixel0 red");
+    checkEq(upload.bytes[3], uint8_t{0xff}, "P8 backend pixel0 alpha");
+    checkEq(upload.bytes[12], uint8_t{0xcc}, "P8 backend pixel3 blue");
+    checkEq(upload.bytes[13], uint8_t{0xbb}, "P8 backend pixel3 green");
+    checkEq(upload.bytes[14], uint8_t{0xaa}, "P8 backend pixel3 red");
+    checkEq(upload.bytes[15], uint8_t{0xff}, "P8 backend pixel3 alpha");
+
+    checkEq(dxmt9c_texture_release(texture), 0u, "P8 texture release");
+  }
+  checkEq(device->Release(), 0u, "P8 device release");
+  checkEq(d3d->Release(), 0u, "P8 factory release");
+}
+
 }  // namespace
 
 int main() {
   try {
     testComWrappers();
     testComWrappersEx();
+    testPalettizedTextureExpansion();
   } catch (const TestFailure& error) {
     std::cerr << error.what() << '\n';
     return EXIT_FAILURE;

@@ -641,6 +641,7 @@ class D3D9DeviceImpl final : public IDirect3DDevice9Ex, public D3D9PeRecorderFlu
     UINT         adapter_ = 0;
     D3DDEVTYPE   deviceType_ = D3DDEVTYPE_HAL;
     DWORD        behaviorFlags_ = 0;
+    BOOL         softwareVertexProcessing_ = FALSE;
     // Wine d3d9ex test_frame_latency: default Ex device latency is 3.
     UINT         maxFrameLatencyShadow_ = 3;
     // Wine d3d9 base_vidmem_accounting_policy + ex_vidmem_accounting_policy:
@@ -717,10 +718,10 @@ class D3D9DeviceImpl final : public IDirect3DDevice9Ex, public D3D9PeRecorderFlu
     // Reset because the C ABI does not yet round-trip the field.
     DWORD implicitSwapchainFlagsShadow_ = 0;
 
-    /* palette shadow — Wine conformance round-trip. PE-only; the
-     * backend doesn't render through palette textures yet, so we just
-     * shadow Set/Get and gate SetCurrentTexturePalette on whether the
-     * index was ever set. */
+    /* Palette shadow for Wine conformance round-trip and active 2D P8
+     * texture expansion. Set/Get remain PE-owned state; when a current
+     * palette is selected, bound palettized textures push expanded
+     * A8R8G8B8 texels to the backend for sampling. */
     std::unordered_map<UINT, std::array<PALETTEENTRY, 256>> palettes_{};
     UINT currentPaletteIndex_ = 0;
     bool currentPaletteSet_ = false;
@@ -768,6 +769,59 @@ class D3D9DeviceImpl final : public IDirect3DDevice9Ex, public D3D9PeRecorderFlu
         if (newVal) newVal->AddRef();
         if (slot)   slot->Release();
         slot = newVal;
+    }
+
+    bool applyCurrentPaletteToTexture(IDirect3DBaseTexture9* texture) {
+        if (!texture || !currentPaletteSet_) return false;
+        const auto it = palettes_.find(currentPaletteIndex_);
+        if (it == palettes_.end()) return false;
+        D9CTexture* raw = rawTex(texture);
+        if (!raw) return false;
+        std::array<uint32_t, 256> argb{};
+        for (UINT i = 0; i < 256; ++i) {
+            const PALETTEENTRY& entry = it->second[i];
+            argb[i] = (static_cast<uint32_t>(entry.peFlags) << 24) |
+                      (static_cast<uint32_t>(entry.peRed) << 16) |
+                      (static_cast<uint32_t>(entry.peGreen) << 8) |
+                      static_cast<uint32_t>(entry.peBlue);
+        }
+        return SUCCEEDED(hr32(dxmt9c_texture_set_palette(
+            raw, argb.data(), static_cast<uint32_t>(argb.size()))));
+    }
+
+    void applyCurrentPaletteToBoundTextures() {
+        for (auto* texture : textures_) {
+            applyCurrentPaletteToTexture(texture);
+        }
+    }
+
+    D9CMatrix transformOrIdentity(D3DTRANSFORMSTATETYPE state) const {
+        D9CMatrix matrix = identityTransformMatrix();
+        (void)peState_.transformShadow.get(static_cast<uint32_t>(state), matrix);
+        return matrix;
+    }
+
+    static D9CMatrix multiplyTransformMatrix(const D9CMatrix& left,
+                                             const D9CMatrix& right) {
+        D9CMatrix result{};
+        for (UINT row = 0; row < 4; ++row) {
+            for (UINT col = 0; col < 4; ++col) {
+                float sum = 0.0f;
+                for (UINT k = 0; k < 4; ++k) {
+                    sum += left.m[row * 4 + k] * right.m[k * 4 + col];
+                }
+                result.m[row * 4 + col] = sum;
+            }
+        }
+        return result;
+    }
+
+    D9CMatrix worldViewProjectionTransform() const {
+        const D9CMatrix world = transformOrIdentity(D3DTS_WORLD);
+        const D9CMatrix view = transformOrIdentity(D3DTS_VIEW);
+        const D9CMatrix projection = transformOrIdentity(D3DTS_PROJECTION);
+        return multiplyTransformMatrix(multiplyTransformMatrix(world, view),
+                                       projection);
     }
 
     void releaseAllBound() {
@@ -1913,6 +1967,7 @@ public:
                    DWORD implicitSwapchainFlags)
         : dev_(dev), factory_(factory)
         , adapter_(adapter), deviceType_(deviceType), behaviorFlags_(behaviorFlags)
+        , softwareVertexProcessing_((behaviorFlags & D3DCREATE_SOFTWARE_VERTEXPROCESSING) ? TRUE : FALSE)
         , extended_(extended)
         , creationWindow_(window)
         , implicitSwapchainFlagsShadow_(implicitSwapchainFlags) {
@@ -3908,11 +3963,11 @@ public:
         if (pPasses) *pPasses = 1; return S_OK;
     }
 
-    /* ── palette — PE-only shadow for Wine conformance round-trip
+    /* ── palette — PE shadow plus 2D P8 backend expansion
      *    (test_set_palette_roundtrip, test_palette_alpha_caps_policy,
-     *     test_palette_current_entry_isolation). The backend doesn't
-     *     yet sample through palette textures; this state lives only
-     *     for the Get/Set contract.
+     *     test_palette_current_entry_isolation, dxmt9-core-device-com-spec).
+     *     P8 resources keep index data PE/C-side and re-expand through
+     *     the active palette into the backend A8R8G8B8 backing texture.
      * ─────────────────────────────────────────────────────────────── */
     HRESULT STDMETHODCALLTYPE SetPaletteEntries(UINT palette, const PALETTEENTRY* entries) noexcept override {
         dxmt9DeviceDebugLog("device_set_palette_entries device=%p palette=%u entries=%p",
@@ -3937,6 +3992,9 @@ public:
         }
         auto& slot = palettes_[palette];
         std::memcpy(slot.data(), entries, sizeof(PALETTEENTRY) * 256);
+        if (currentPaletteSet_ && currentPaletteIndex_ == palette) {
+            applyCurrentPaletteToBoundTextures();
+        }
         return S_OK;
     }
     HRESULT STDMETHODCALLTYPE GetPaletteEntries(UINT palette, PALETTEENTRY* out) noexcept override {
@@ -3955,6 +4013,7 @@ public:
         }
         currentPaletteIndex_ = palette;
         currentPaletteSet_ = true;
+        applyCurrentPaletteToBoundTextures();
         return S_OK;
     }
     HRESULT STDMETHODCALLTYPE GetCurrentTexturePalette(UINT* p) noexcept override {
@@ -3966,18 +4025,15 @@ public:
         return S_OK;
     }
 
-    /* ── soft VP / NPatches (stubs) ── */
+    /* ── soft VP / NPatches ── */
     HRESULT STDMETHODCALLTYPE SetSoftwareVertexProcessing(BOOL enable) noexcept override {
         dxmt9DeviceDebugLog("device_set_software_vertex_processing device=%p enable=%u", this, (unsigned)enable);
+        softwareVertexProcessing_ = enable ? TRUE : FALSE;
         return S_OK;
     }
     BOOL    STDMETHODCALLTYPE GetSoftwareVertexProcessing() noexcept override {
         dxmt9DeviceDebugLog("device_get_software_vertex_processing device=%p", this);
-        // Wine d3d9 contract: when the device was created with
-        // D3DCREATE_SOFTWARE_VERTEXPROCESSING, the default state is TRUE.
-        // (Apps may override via SetSoftwareVertexProcessing on a mixed-mode
-        // device, but dxmt9 does not yet expose mixed-mode.)
-        return (behaviorFlags_ & D3DCREATE_SOFTWARE_VERTEXPROCESSING) ? TRUE : FALSE;
+        return softwareVertexProcessing_;
     }
     HRESULT STDMETHODCALLTYPE SetNPatchMode(float segments) noexcept override {
         dxmt9DeviceDebugLog("device_set_npatch_mode device=%p segments=%f", this, segments);
@@ -4030,6 +4086,7 @@ public:
             return S_OK;
         }
         setRef(textures_[textureSlot], pTex);
+        applyCurrentPaletteToTexture(textures_[textureSlot]);
         peState_.pendingTextureMask |= 1u << textureSlot;
         return S_OK;
     }
@@ -4555,16 +4612,105 @@ public:
         }
         return hr;
     }
-    HRESULT STDMETHODCALLTYPE ProcessVertices(UINT, UINT, UINT,
-                                               IDirect3DVertexBuffer9*,
-                                               IDirect3DVertexDeclaration9*,
-                                               DWORD) noexcept override {
-        // T2 device-lost gate. ProcessVertices isn't implemented yet, but
-        // when the device is lost it must return D3DERR_DEVICELOST before
-        // the unimplemented INVALIDCALL fallback.
+    HRESULT STDMETHODCALLTYPE ProcessVertices(UINT srcStart, UINT dstIndex,
+                                               UINT vertexCount,
+                                               IDirect3DVertexBuffer9* dstBuffer,
+                                               IDirect3DVertexDeclaration9* declaration,
+                                               DWORD flags) noexcept override {
+        // T2 device-lost gate: lost devices must report DEVICELOST before
+        // any ProcessVertices validation or unsupported-path rejection.
         if (deviceNotReset_) return D3DERR_DEVICELOST;
-        dxmt9DeviceDebugLog("device_process_vertices device=%p", this);
-        return D3DERR_INVALIDCALL;
+        dxmt9DeviceDebugLog("device_process_vertices device=%p srcStart=%u dstIndex=%u vertexCount=%u dst=%p decl=%p flags=0x%x",
+                            this, srcStart, dstIndex, vertexCount, dstBuffer,
+                            declaration, (unsigned)flags);
+        if (!dstBuffer) return D3DERR_INVALIDCALL;
+        if (vertexCount == 0) return S_OK;
+        if (declaration || flags != 0 || vs_ != nullptr) return D3DERR_INVALIDCALL;
+        if (!streamSrc_[0] || streamStr_[0] < sizeof(float) * 3u) return D3DERR_INVALIDCALL;
+        if ((fvf_ & D3DFVF_POSITION_MASK) != D3DFVF_XYZ) return D3DERR_INVALIDCALL;
+
+        D9CBuffer* srcRaw = rawVBuf(streamSrc_[0]);
+        D9CBuffer* dstRaw = rawVBuf(dstBuffer);
+        if (!srcRaw || !dstRaw) return D3DERR_INVALIDCALL;
+        D9CBufferDesc srcDesc{};
+        D9CBufferDesc dstDesc{};
+        if (FAILED(hr32(dxmt9c_buffer_get_desc(srcRaw, &srcDesc))) ||
+            FAILED(hr32(dxmt9c_buffer_get_desc(dstRaw, &dstDesc)))) {
+            return D3DERR_INVALIDCALL;
+        }
+        if (dstDesc.fvf != D3DFVF_XYZRHW) {
+            return D3DERR_INVALIDCALL;
+        }
+        const uint64_t srcByteStart =
+            static_cast<uint64_t>(streamOff_[0]) +
+            static_cast<uint64_t>(srcStart) * streamStr_[0];
+        const uint64_t srcByteEnd =
+            srcByteStart + static_cast<uint64_t>(vertexCount - 1u) * streamStr_[0] +
+            sizeof(float) * 3u;
+        const uint64_t dstByteStart = static_cast<uint64_t>(dstIndex) * sizeof(float) * 4u;
+        const uint64_t dstByteEnd =
+            dstByteStart + static_cast<uint64_t>(vertexCount) * sizeof(float) * 4u;
+        if (srcByteEnd > srcDesc.size || dstByteEnd > dstDesc.size ||
+            srcByteEnd > UINT32_MAX || dstByteEnd > UINT32_MAX) {
+            return D3DERR_INVALIDCALL;
+        }
+
+        const HRESULT flushHr = flushPeRecorder();
+        if (FAILED(flushHr)) return flushHr;
+
+        void* srcBytes = nullptr;
+        void* dstBytes = nullptr;
+        const uint32_t srcLockSize = static_cast<uint32_t>(srcByteEnd);
+        const uint32_t dstLockOffset = static_cast<uint32_t>(dstByteStart);
+        const uint32_t dstLockSize = static_cast<uint32_t>(dstByteEnd - dstByteStart);
+        HRESULT hr = hr32(dxmt9c_buffer_lock(srcRaw, 0, srcLockSize, &srcBytes, D3DLOCK_READONLY));
+        if (FAILED(hr) || !srcBytes) return FAILED(hr) ? hr : D3DERR_INVALIDCALL;
+        hr = hr32(dxmt9c_buffer_lock(dstRaw, dstLockOffset, dstLockSize, &dstBytes, 0));
+        if (FAILED(hr) || !dstBytes) {
+            (void)dxmt9c_buffer_unlock(srcRaw);
+            return FAILED(hr) ? hr : D3DERR_INVALIDCALL;
+        }
+
+        const auto& vp = peState_.viewportShadow;
+        const float scaleX = static_cast<float>(vp.width) * 0.5f;
+        const float scaleY = static_cast<float>(vp.height) * 0.5f;
+        const float offsetX = static_cast<float>(vp.x) + scaleX;
+        const float offsetY = static_cast<float>(vp.y) + scaleY;
+        const float zScale = vp.maxZ - vp.minZ;
+        const D9CMatrix wvp = worldViewProjectionTransform();
+        auto* srcBase = static_cast<const uint8_t*>(srcBytes);
+        auto* dstBase = static_cast<uint8_t*>(dstBytes);
+        for (UINT i = 0; i < vertexCount; ++i) {
+            float in[3]{};
+            std::memcpy(in, srcBase + srcByteStart +
+                                static_cast<uint64_t>(i) * streamStr_[0],
+                        sizeof(in));
+            const float position[4] = {in[0], in[1], in[2], 1.0f};
+            float clip[4]{};
+            for (UINT col = 0; col < 4; ++col) {
+                clip[col] = position[0] * wvp.m[col] +
+                            position[1] * wvp.m[4 + col] +
+                            position[2] * wvp.m[8 + col] +
+                            position[3] * wvp.m[12 + col];
+            }
+            const float invW = clip[3] != 0.0f ? 1.0f / clip[3] : 1.0f;
+            const float ndcX = clip[0] * invW;
+            const float ndcY = clip[1] * invW;
+            const float ndcZ = clip[2] * invW;
+            float out[4] = {
+                ndcX * scaleX + offsetX,
+                -ndcY * scaleY + offsetY,
+                vp.minZ + ndcZ * zScale,
+                invW,
+            };
+            std::memcpy(dstBase + static_cast<size_t>(i) * sizeof(out), out,
+                        sizeof(out));
+        }
+        const HRESULT dstUnlockHr = hr32(dxmt9c_buffer_unlock(dstRaw));
+        const HRESULT srcUnlockHr = hr32(dxmt9c_buffer_unlock(srcRaw));
+        if (FAILED(dstUnlockHr)) return dstUnlockHr;
+        if (FAILED(srcUnlockHr)) return srcUnlockHr;
+        return S_OK;
     }
     HRESULT STDMETHODCALLTYPE DrawRectPatch(UINT, const float*, const D3DRECTPATCH_INFO*) noexcept override { return D3DERR_INVALIDCALL; }
     HRESULT STDMETHODCALLTYPE DrawTriPatch(UINT, const float*, const D3DTRIPATCH_INFO*) noexcept override { return D3DERR_INVALIDCALL; }

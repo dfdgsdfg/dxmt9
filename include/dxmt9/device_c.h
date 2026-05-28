@@ -1117,6 +1117,9 @@ uint32_t dxmt9c_texture_get_level_count(D9CTexture*);
 DXMT9_NODISCARD int32_t  dxmt9c_texture_get_level_desc(D9CTexture*, uint32_t level, D9CSurfaceDesc*);
 DXMT9_NODISCARD int32_t  dxmt9c_texture_generate_mip_sublevels(D9CTexture*);
 uint32_t dxmt9c_texture_set_lod(D9CTexture*, uint32_t lod);
+DXMT9_NODISCARD int32_t  dxmt9c_texture_set_palette(D9CTexture*,
+                                      const uint32_t* argbEntries,
+                                      uint32_t entryCount);
 
 /* ── buffer ──────────────────────────────────────────────────────────────── */
 

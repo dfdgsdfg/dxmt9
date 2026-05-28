@@ -519,6 +519,7 @@ void test_visual_yuv_layout_lock_policy(const struct d3d9_api *api);
 void test_visual_3dc_format_caps_policy(const struct d3d9_api *api);
 void test_visual_position_index_decl_policy(const struct d3d9_api *api);
 void test_visual_mvp_software_vp_policy(const struct d3d9_api *api);
+void test_visual_process_vertices_xyzhw_policy(const struct d3d9_api *api);
 
 /* Wine stateblock.c capture/apply matrix scaffolds. */
 void test_state_management_all_capture_apply_matrix(const struct d3d9_api *api);

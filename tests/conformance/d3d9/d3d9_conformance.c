@@ -313,6 +313,8 @@ static const struct test_case tests[] =
             test_visual_position_index_decl_policy},
     {"visual_mvp_software_vp_policy",
             test_visual_mvp_software_vp_policy},
+    {"visual_process_vertices_xyzhw_policy",
+            test_visual_process_vertices_xyzhw_policy},
     {"state_management_all_capture_apply_matrix",
             test_state_management_all_capture_apply_matrix},
     {"state_management_pixel_capture_apply_slice",

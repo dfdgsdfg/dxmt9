@@ -32,7 +32,7 @@ Severity legend (used uniformly across the file):
 | Silent actionable D3D9 coverage gaps | **None in the current silent-coverage track.** Known formerly-silent gaps are implemented, tested, accepted as no-op/shadow-only, or explicitly unsupported. |
 | Shader declaration/modifier coverage | D3DDECLUSAGE values are accepted for programmable VS semantics; non-default D3DDECLMETHOD values safe-reject; `_PARTIALPRECISION` and `_MSAMPCENTROID` are lowered/tested. |
 | Render/TSS/Sampler fixes | Depth bias, MRT color masks, two-sided stencil, COLORVERTEX, WRAP0..15 round-trip/no-op, TSS ARG0 triadic ops, sampler border color, mip LOD bias, and max mip level are closed. |
-| Remaining deferred/unsupported API surface | N-patch/adaptive tessellation, `ProcessVertices`/real SWVP, `D3DSAMP_ELEMENTINDEX`, `D3DSAMP_DMAPOFFSET`, per-draw multisample mask, AA line raster toggle, P8 palette sampling, `ComposeRects`, and convolution kernel. |
+| Remaining deferred/unsupported API surface | N-patch/adaptive tessellation, broad `ProcessVertices`/real SWVP shader execution beyond the fixed-function WVP XYZ→XYZRHW path, `D3DSAMP_ELEMENTINDEX`, `D3DSAMP_DMAPOFFSET`, per-draw multisample mask, AA line raster toggle, A8P8 / non-2D P8 coverage, `ComposeRects`, and convolution kernel. |
 | Remaining validation work | Wine-run validation for PE gates. |
 
 ## Original top-level summary (historical 2026-05-23 roll-up)
@@ -117,11 +117,11 @@ Current deferred/unsupported surface to keep visible:
 | `D3DDECLMETHOD` 1..6 | Explicit safe-reject. These are declaration **methods** for fixed-function tessellator/N-patch/displacement-map evaluation. `D3DDECLMETHOD_UV` is not ordinary texture coordinate input; ordinary UVs are `D3DDECLUSAGE_TEXCOORD` with `D3DDECLMETHOD_DEFAULT`, which is supported. |
 | `D3DSPR_TEMPFLOAT16`, `D3DSPR_LABEL` | Explicit safe-reject. |
 | N-patch / adaptive tessellation render states and patch draws | Deferred/unsupported: `PATCHEDGESTYLE`, `TWEENFACTOR`, `POSITIONDEGREE`, `NORMALDEGREE`, tessellation levels, `SetNPatchMode`, `DrawRectPatch`, `DrawTriPatch`, `DeletePatch` no-op contract. |
-| `ProcessVertices` / real software vertex processing | Deferred. The current path returns `D3DERR_INVALIDCALL` after device-lost gating; `SetSoftwareVertexProcessing` is PE shadow policy only. |
+| `ProcessVertices` / real software vertex processing | Partial. Device-lost gating remains first; fixed-function stream-0 `D3DFVF_XYZ` input through WORLD/VIEW/PROJECTION to `D3DFVF_XYZRHW` destination CPU transform is implemented and covered by a PE conformance scaffold. Programmable shader execution, declarations, lighting, clipping, multi-stream, and indexed variants remain deferred. `SetSoftwareVertexProcessing` now tracks the mutable PE shadow. |
 | `D3DSAMP_ELEMENTINDEX`, `D3DSAMP_DMAPOFFSET` | Deferred. Texture-array/displacement-map sampler semantics are not represented in the backend. |
 | `D3DRS_MULTISAMPLEANTIALIAS`, `D3DRS_MULTISAMPLEMASK` | Shadow/default only. MSAA itself is attachment-driven; sample-mask programming is not currently wired. |
 | `D3DRS_ANTIALIASEDLINEENABLE` | Accepted no-op/deferred; Metal has no D3D9-style AA line raster toggle. |
-| Palette/P8 texture binding | Palette methods round-trip PE-side, but there is no P8 sampler conversion path. |
+| Palette/P8 texture binding | Partial. PE palette methods still round-trip, 2D `D3DFMT_P8` texture caps are exposed, and P8 locks now expose 1-byte indices while expanding through the current palette into an A8R8G8B8 backend texture for sampling. A8P8, non-2D P8, and generic `Format::P8` exposure remain deferred. |
 | `SetConvolutionMonoKernel`, `ComposeRects` | Explicit `E_NOTIMPL`. |
 | SwapChain Ex present stats / GPU thread priority / residency | Benign stub contracts guarded by native tests where applicable; no real scheduler/stat backend. |
 
@@ -151,11 +151,11 @@ after the silent-coverage fixes landed.
 | Finding | Section | Current status / suggested track |
 |---|---|---|
 | N-patch / adaptive tessellation family | A.5/B.1/D.* | Deferred/unsupported. Non-default declaration methods safe-reject because they describe fixed-function tessellator/N-patch/displacement-map evaluation, not ordinary vertex attributes; patch draw calls return `D3DERR_INVALIDCALL`; N-patch mode is a documented no-op/default contract. |
-| `ProcessVertices` / SWVP execution | D.4 | Deferred. `SetSoftwareVertexProcessing` is PE shadow policy only; no software transform/readback path is implemented. |
+| `ProcessVertices` / SWVP execution | D.4 | Partial. Fixed-function stream-0 WORLD/VIEW/PROJECTION XYZ→XYZRHW CPU transform/readback is implemented; programmable shader execution, declarations, lighting, clipping, multi-stream, and indexed variants remain deferred. |
 | `D3DSAMP_ELEMENTINDEX`, `D3DSAMP_DMAPOFFSET` | B.3 | Deferred. Texture-array index and displacement-map sampler semantics are not wired. |
 | `D3DRS_MULTISAMPLEANTIALIAS`, `D3DRS_MULTISAMPLEMASK` | B.1 | Shadow/default only. Attachment MSAA is supported elsewhere; per-draw D3D9 sample mask is not wired. |
 | `D3DRS_ANTIALIASEDLINEENABLE` | B.1 | Accepted no-op/deferred; Metal exposes no equivalent D3D9 AA-line raster mode. |
-| Palette/P8 sampling | D.4/C.2 | Palette APIs round-trip PE-side, but P8-to-RGBA sampler conversion is not implemented. |
+| Palette/P8 sampling | D.4/C.2 | Partial. 2D P8 texture caps are exposed; locks keep index data and expand through the current palette into an A8R8G8B8 backing texture; A8P8, non-2D P8, and generic `Format::P8` exposure remain deferred. |
 | `SetConvolutionMonoKernel`, `ComposeRects` | D.5 | Explicit `E_NOTIMPL`. |
 | GPU-runtime validations | C.5/B.3 | Closed for the tracked cases: RESZ MSAA→INTZ readback, NULL RT depth-only rendering, and MIPMAPLODBIAS mip selection are covered by shader-corpus readback probes. |
 
@@ -726,9 +726,9 @@ LightEnable: ✅ `packet.lightEnableValidMask` + `lightEnableMask` (device_c.h:3
 **Current remaining deferred/no-op list, ordered by likely user-visible impact:**
 
 1. **N-patch / adaptive tessellation / patch draw path** — unsupported by design; declaration methods safe-reject and patch draws return invalid-call/no-op contracts.
-2. **`ProcessVertices` / real SWVP execution** — no software transform path; `SetSoftwareVertexProcessing` is shadow policy only.
+2. **Broad `ProcessVertices` / real SWVP execution** — fixed-function stream-0 WORLD/VIEW/PROJECTION XYZ→XYZRHW CPU transform is implemented; programmable shader execution, declarations, lighting, clipping, multi-stream, and indexed variants remain deferred.
 3. **`D3DRS_MULTISAMPLEMASK`** — default/shadow only; no per-draw Metal sample-mask programming.
-4. **Palette/P8 sampling** — palette APIs round-trip PE-side, but P8 sampler conversion is not implemented.
+4. **Palette/P8 sampling breadth** — 2D P8 caps are exposed and locks expand through the active palette into an A8R8G8B8 sampling backing; A8P8, non-2D P8, and generic `Format::P8` exposure remain deferred.
 5. **`D3DSAMP_ELEMENTINDEX` / `DMAPOFFSET`** — texture-array/displacement-map semantics deferred.
 6. **`D3DRS_ANTIALIASEDLINEENABLE`** — accepted no-op/deferred due Metal rasterizer mismatch.
 7. **`SetConvolutionMonoKernel` / `ComposeRects`** — explicit `E_NOTIMPL`.
@@ -836,8 +836,8 @@ Source anchors used throughout:
 
 | Name | Code | defined | mapped | runtime-use | test | Notes |
 |---|---|---|---|---|---|---|
-| A8P8 | 40 | NO | NO | NO | NO | absent. dxmt9 has no palette path. |
-| P8 | 41 | NO | NO | NO | NO | absent from `Format` enum; only in `userMemoryBytesPerPixel` -> 1. |
+| A8P8 | 40 | NO | NO | NO | NO | absent; combined alpha+palette index path is still deferred. |
+| P8 | 41 | PE | PE | partial | native | 2D PE `CheckDeviceFormat(TEXTURE)` reports support; `CreateTexture` uses an A8R8G8B8 core backing, exposes 1-byte index locks, and expands through the current palette before sampling (`dxmt9-core-device-com-spec`). `Format::P8` / generic `fmtFromD3D` exposure, A8P8, cube/volume P8, and non-texture caps remain deferred. |
 | L8 | 50 | OK | OK | OK | OK | -> `R8Unorm`; CheckDeviceFormat denies `UsageRenderTarget` (test `core_format_caps_spec.cpp:70`). |
 | A8L8 | 51 | OK | OK | OK | warn | -> `RG8Unorm`. |
 | A4L4 | 52 | NO | NO | NO | NO | absent; referenced only by `userMemoryBytesPerPixel` -> 1. |
@@ -1277,21 +1277,21 @@ Source anchors are absolute paths in this repo. Source files referenced:
 | GetSamplerState | ✅ | ✅ | ✅ | ❌ | `d3d9_pe_device.cpp:3408` | `test_sampler_state_edges` |
 | SetSamplerState | ✅ | ✅ | ✅ | ❌ | `d3d9_pe_device.cpp:3380` | `test_sampler_state_edges` |
 | ValidateDevice | 🟡 | ❌ | ❌ | ❌ | `d3d9_pe_device.cpp:3433` | writes `*pPasses=1`, returns S_OK without real validation |
-| SetPaletteEntries | ⚠️ | ❌ | ✅ | ❌ | `d3d9_pe_device.cpp:3444` | PE shadow only (no P8 sampler binding); `test_set_palette_roundtrip`, `test_palette_*_policy` |
-| GetPaletteEntries | ⚠️ | ❌ | ✅ | ❌ | `d3d9_pe_device.cpp:3469` | mirrors shadow |
-| SetCurrentTexturePalette | ⚠️ | ❌ | ✅ | ❌ | `d3d9_pe_device.cpp:3478` | shadow only; `test_palette_current_entry_isolation` |
-| GetCurrentTexturePalette | ✅ | ❌ | ✅ | ❌ | `d3d9_pe_device.cpp:3487` | |
+| SetPaletteEntries | ⚠️ | ✅ | ✅ | ✅ | `d3d9_pe_device.cpp:3972` | PE shadow plus active-palette upload to bound 2D P8 textures; `test_set_palette_roundtrip`, `test_palette_*_policy`, `dxmt9-core-device-com-spec` |
+| GetPaletteEntries | ⚠️ | ❌ | ✅ | ❌ | `d3d9_pe_device.cpp:4000` | mirrors shadow |
+| SetCurrentTexturePalette | ⚠️ | ✅ | ✅ | ✅ | `d3d9_pe_device.cpp:4009` | PE shadow plus bound 2D P8 re-expansion; `test_palette_current_entry_isolation`, `dxmt9-core-device-com-spec` |
+| GetCurrentTexturePalette | ✅ | ❌ | ✅ | ❌ | `d3d9_pe_device.cpp:4019` | |
 | SetScissorRect | ✅ | ✅ | ✅ | ❌ | `d3d9_pe_device.cpp:2996` | `test_viewport_scissor_state_getters` |
 | GetScissorRect | ✅ | ✅ | ✅ | ❌ | `d3d9_pe_device.cpp:3009` | |
-| SetSoftwareVertexProcessing | ⚠️ | ❌ | ✅ | ❌ | `d3d9_pe_device.cpp:3497` | PE shadow; `test_visual_mvp_software_vp_policy` |
-| GetSoftwareVertexProcessing | ✅ | ❌ | ✅ | ❌ | `d3d9_pe_device.cpp:3501` | |
-| SetNPatchMode | 🟡 | ❌ | ❌ | ❌ | `d3d9_pe_device.cpp:3509` | returns S_OK; N-patch unsupported |
-| GetNPatchMode | 🟡 | ❌ | ❌ | ❌ | `d3d9_pe_device.cpp:3513` | returns 0.0 |
+| SetSoftwareVertexProcessing | ⚠️ | ❌ | ✅ | ❌ | `d3d9_pe_device.cpp:4029` | mutable PE shadow; `test_visual_mvp_software_vp_policy` |
+| GetSoftwareVertexProcessing | ✅ | ❌ | ✅ | ❌ | `d3d9_pe_device.cpp:4034` | |
+| SetNPatchMode | 🟡 | ❌ | ❌ | ❌ | `d3d9_pe_device.cpp:4038` | returns S_OK; N-patch unsupported |
+| GetNPatchMode | 🟡 | ❌ | ❌ | ❌ | `d3d9_pe_device.cpp:4044` | returns 0.0 |
 | DrawPrimitive | ✅ | ✅ | ✅ | ✅ | `d3d9_pe_device.cpp:3987` | T2 device-lost gate; many visual tests + `state_draw_transform_spec`, `core_d3d9_multiply_transform_spec` |
 | DrawIndexedPrimitive | ✅ | ✅ | ✅ | ✅ | `d3d9_pe_device.cpp:4004` | `test_visual_max_index16_draw_policy`, `test_null_stream_shader_draw_policy` |
 | DrawPrimitiveUP | ✅ | ✅ | ✅ | ❌ | `d3d9_pe_device.cpp:4025` | many visual tests |
 | DrawIndexedPrimitiveUP | ✅ | ✅ | ✅ | ❌ | `d3d9_pe_device.cpp:4043` | many visual tests |
-| ProcessVertices | ❌ | ❌ | ❌ | ❌ | `d3d9_pe_device.cpp:4068` | T2 device-lost gate then `D3DERR_INVALIDCALL` (unimplemented per Wine SW-VP-only path) |
+| ProcessVertices | ⚠️ | ✅ | ✅ | scaffolded | `d3d9_pe_device.cpp:4615` | device-lost gate plus fixed-function stream-0 WORLD/VIEW/PROJECTION XYZ→XYZRHW CPU transform; unsupported shader/decl/multistream variants return `D3DERR_INVALIDCALL`; `test_visual_process_vertices_xyzhw_policy` |
 | CreateVertexDeclaration | ✅ | ✅ | ✅ | ❌ | `d3d9_pe_device.cpp:3629` | `test_vertex_declaration_fvf_policy`, `test_unused_declaration_type` |
 | SetVertexDeclaration | ✅ | ✅ | ✅ | ❌ | `d3d9_pe_device.cpp:3661` | `test_fvf_decl_management`, `test_vdecl_apply` |
 | GetVertexDeclaration | ✅ | ✅ | ✅ | ❌ | `d3d9_pe_device.cpp:3682` | `test_fvf_decl_management` |
@@ -1526,19 +1526,20 @@ Row counts per interface (counting each method on each derived class once for th
 | D.21 IDirect3DPixelShader9 | 2 | 2 | 0 | 0 | 0 | 2 | 0 |
 | **TOTAL (unique slots)** | **225** | **176** | **13** | **23** | **10** | **194** | **29** |
 
-Overall coverage:
-- **78%** of the 225 enumerated vtbl slots are fully (`✅`) implemented PE-side.
-- **6%** are partial (`⚠️`) implementations.
-- **10%** are silent stubs (`🟡`) returning S_OK or a benign default without backend coupling — these are the highest-risk silent-success surfaces (GammaRamp, DialogBoxMode, NPatch, ValidateDevice, GPU thread priority, residency, swapchain stats, PreLoad, etc.).
-- **4%** explicitly return `E_NOTIMPL` / `D3DERR_INVALIDCALL` (RegisterSoftwareDevice, ProcessVertices, DrawRectPatch, DrawTriPatch, SetConvolutionMonoKernel, ComposeRects, GetFrontBufferData, SetClipStatus).
-- **86%** are touched by at least one conformance test in `tests/conformance/d3d9/`.
-- **13%** are touched by a `tests/native/core/*.cpp` spec — native coverage is concentrated on lifecycle / stateblock / draw-transform / surface lock paths and falls off sharply outside the C ABI bridge.
+Historical coverage snapshot:
+- **78%** of the 225 enumerated vtbl slots were fully (`✅`) implemented PE-side at the original audit point.
+- **6%** were partial (`⚠️`) implementations.
+- **10%** were silent stubs (`🟡`) returning S_OK or a benign default without backend coupling.
+- **4%** explicitly returned `E_NOTIMPL` / `D3DERR_INVALIDCALL`.
+- The table is retained for audit history; use the 2026-05-29 current summary and re-audit delta above for live triage.
 
-Highest-leverage gaps:
-1. **Silent stubs (🟡) without test coverage** — `SetDialogBoxMode`, `SetGammaRamp`, `GetGammaRamp`, `SetNPatchMode`, `GetNPatchMode`, `ValidateDevice`, `GetGPUThreadPriority`, `SetGPUThreadPriority`, `CheckResourceResidency`, `GetLastPresentCount`, `GetPresentStats`, `GetClipStatus`, `DeletePatch`, `PreLoad`, `GenerateMipSubLevels`, `AddDirtyBox`, swapchain `GetRasterStatus`. These return S_OK without a recorder side effect; nothing currently asserts they should *not* be promoted to full implementations.
-2. **`GetFrontBufferData`** (device + swapchain paths) — both return `D3DERR_INVALIDCALL` even though `test_visual_multisample_get_front_buffer_data_policy` exercises the surrounding path.
-3. **`ProcessVertices`** — D3DERR_INVALIDCALL, no conformance test (matches Wine SW-VP-only path but undocumented in the gap matrix).
-4. **`PaletteEntries` family** — PE-side shadow only; no P8 sampler binding to the unix backend.
+Highest-leverage live gaps:
+1. **`ProcessVertices` breadth** — fixed-function WORLD/VIEW/PROJECTION XYZ→XYZRHW path is covered by a conformance scaffold; programmable shader/decl/multistream SWVP remains deferred.
+2. **Palette/P8 breadth** — 2D P8 texture caps and sampler backing are wired through palette expansion; A8P8, non-2D P8, and generic `Format::P8` exposure remain deferred.
+3. **N-patch / adaptive tessellation / patch draw path** — unsupported by design; declaration methods safe-reject and patch draws return invalid-call/no-op contracts.
+4. **Per-draw sample mask and legacy line AA** — `D3DRS_MULTISAMPLEMASK` remains shadow/default only; `D3DRS_ANTIALIASEDLINEENABLE` is accepted no-op/deferred.
+5. **`D3DSAMP_ELEMENTINDEX` / `D3DSAMP_DMAPOFFSET`** — texture-array and displacement-map sampler semantics remain deferred.
+6. **`GetFrontBufferData`, `SetConvolutionMonoKernel`, `ComposeRects`** — explicit failure / not-implemented paths.
 
 ## Methodology
 
@@ -1572,6 +1573,6 @@ rg -n "return E_NOTIMPL|return D3DERR_INVALIDCALL.*noexcept override|return S_OK
 
 Status classification rules used:
 - `🟡` (silent stub) = method body is `return S_OK;` (or trivially writes a zero / default-out value then returns S_OK) with no recorder, no C ABI call, and no shadow side effect that downstream code reads.
-- `⚠️` (partial) = method body has real validation / state shadow / Wine-parity checks but is missing a documented sub-case (e.g., `Reset` still pending T3/T4 work, palette family is shadow-only).
+- `⚠️` (partial) = method body has real validation / state shadow / Wine-parity checks but is missing a documented sub-case (e.g., palette/P8 covers 2D index expansion but not A8P8 or non-2D P8).
 - `❌` (explicit failure) = `return E_NOTIMPL` or `return D3DERR_INVALIDCALL` as the entire body, with the intent documented inline that the method is unsupported (vs. partial).
 - `✅` (full) = method goes through to `dxmt9c_*` C ABI (or PE shadow that fully captures Wine semantics) and has at least one Wine-parity comment or test cross-reference.

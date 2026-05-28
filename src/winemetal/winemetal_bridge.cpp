@@ -352,6 +352,7 @@ BridgeClass classifyBridgeClass(unsigned int code) {
   case BridgeOpcode::dxmt9c_texture_get_level_desc:
   case BridgeOpcode::dxmt9c_texture_generate_mip_sublevels:
   case BridgeOpcode::dxmt9c_texture_set_lod:
+  case BridgeOpcode::dxmt9c_texture_set_palette:
   case BridgeOpcode::dxmt9c_buffer_addref:
   case BridgeOpcode::dxmt9c_buffer_release:
   case BridgeOpcode::dxmt9c_buffer_lock:

@@ -116,6 +116,7 @@
 #undef dxmt9c_texture_get_level_desc
 #undef dxmt9c_texture_generate_mip_sublevels
 #undef dxmt9c_texture_set_lod
+#undef dxmt9c_texture_set_palette
 #undef dxmt9c_buffer_addref
 #undef dxmt9c_buffer_release
 #undef dxmt9c_buffer_lock

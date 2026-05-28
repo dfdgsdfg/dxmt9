@@ -723,3 +723,125 @@ void test_visual_mvp_software_vp_policy(const struct d3d9_api *api)
 done_d3d9:
     IDirect3D9_Release(d3d9);
 }
+
+/*
+ * Wine provenance: dlls/d3d9/tests/visual.c
+ * function: test_process_vertices
+ * commit: 6e073d28dee3af7f4c965daec94644e0f9f92727
+ */
+void test_visual_process_vertices_xyzhw_policy(const struct d3d9_api *api)
+{
+    struct src_vertex
+    {
+        float x, y, z;
+        DWORD color;
+    };
+    struct dst_vertex
+    {
+        float x, y, z, rhw;
+    };
+    const struct src_vertex src[] =
+    {
+        {-0.5f, -0.5f, 0.0f, 0xffff0000u},
+        {-0.5f,  0.5f, 0.0f, 0xff00ff00u},
+        { 0.5f, -0.5f, 0.0f, 0xff0000ffu},
+        { 0.5f,  0.5f, 0.0f, 0xffffffffu},
+    };
+    const struct dst_vertex expected[] =
+    {
+        {240.0f, 300.0f, 0.0f, 1.0f},
+        {240.0f, 180.0f, 0.0f, 1.0f},
+        {400.0f, 300.0f, 0.0f, 1.0f},
+        {400.0f, 180.0f, 0.0f, 1.0f},
+    };
+    IDirect3DVertexBuffer9 *src_vb = NULL;
+    IDirect3DVertexBuffer9 *dst_vb = NULL;
+    IDirect3DDevice9 *device = NULL;
+    struct dst_vertex *mapped = NULL;
+    D3DMATRIX world;
+    void *bits = NULL;
+    IDirect3D9 *d3d9;
+    HWND window;
+    HRESULT hr;
+    UINT i;
+
+    d3d9 = api->create9(D3D_SDK_VERSION);
+    if (!d3d9)
+    {
+        skip_current_test("Direct3DCreate9 returned NULL");
+        return;
+    }
+    window = create_test_window();
+    if (!window)
+        goto done_d3d9;
+    device = create_base_device(d3d9, window);
+    if (!device)
+        goto done_window;
+
+    hr = IDirect3DDevice9_CreateVertexBuffer(device, sizeof(src), 0,
+            D3DFVF_XYZ | D3DFVF_DIFFUSE, D3DPOOL_SYSTEMMEM, &src_vb, NULL);
+    CHECK_HR(hr, D3D_OK);
+    if (FAILED(hr))
+        goto done_device;
+    hr = IDirect3DVertexBuffer9_Lock(src_vb, 0, sizeof(src), &bits, 0);
+    CHECK_HR(hr, D3D_OK);
+    if (SUCCEEDED(hr))
+    {
+        memcpy(bits, src, sizeof(src));
+        CHECK_HR(IDirect3DVertexBuffer9_Unlock(src_vb), D3D_OK);
+    }
+
+    hr = IDirect3DDevice9_CreateVertexBuffer(device, sizeof(expected), 0,
+            D3DFVF_XYZRHW, D3DPOOL_SYSTEMMEM, &dst_vb, NULL);
+    CHECK_HR(hr, D3D_OK);
+    if (FAILED(hr))
+        goto done_device;
+
+    CHECK_HR(IDirect3DDevice9_SetRenderState(device, D3DRS_LIGHTING, FALSE),
+            D3D_OK);
+    memset(&world, 0, sizeof(world));
+    world.m[0][0] = 0.5f;
+    world.m[1][1] = 0.5f;
+    world.m[2][2] = 1.0f;
+    world.m[3][3] = 1.0f;
+    CHECK_HR(IDirect3DDevice9_SetTransform(device, D3DTS_WORLD, &world),
+            D3D_OK);
+    CHECK_HR(IDirect3DDevice9_SetFVF(device, D3DFVF_XYZ | D3DFVF_DIFFUSE),
+            D3D_OK);
+    CHECK_HR(IDirect3DDevice9_SetStreamSource(device, 0, src_vb, 0,
+            sizeof(src[0])), D3D_OK);
+    CHECK_HR(IDirect3DDevice9_ProcessVertices(device, 0, 0,
+            ARRAY_SIZE(src), dst_vb, NULL, 0), D3D_OK);
+
+    hr = IDirect3DVertexBuffer9_Lock(dst_vb, 0, sizeof(expected),
+            (void **)&mapped, D3DLOCK_READONLY);
+    CHECK_HR(hr, D3D_OK);
+    if (SUCCEEDED(hr))
+    {
+        for (i = 0; i < ARRAY_SIZE(expected); ++i)
+        {
+            float dx = mapped[i].x - expected[i].x;
+            float dy = mapped[i].y - expected[i].y;
+            float dz = mapped[i].z - expected[i].z;
+            float dw = mapped[i].rhw - expected[i].rhw;
+            if (dx < 0.0f) dx = -dx;
+            if (dy < 0.0f) dy = -dy;
+            if (dz < 0.0f) dz = -dz;
+            if (dw < 0.0f) dw = -dw;
+            CHECK_TRUE(dx < 0.01f);
+            CHECK_TRUE(dy < 0.01f);
+            CHECK_TRUE(dz < 0.01f);
+            CHECK_TRUE(dw < 0.01f);
+        }
+        CHECK_HR(IDirect3DVertexBuffer9_Unlock(dst_vb), D3D_OK);
+    }
+
+done_device:
+    if (dst_vb) IDirect3DVertexBuffer9_Release(dst_vb);
+    if (src_vb) IDirect3DVertexBuffer9_Release(src_vb);
+    IDirect3DDevice9_Release(device);
+done_window:
+    DestroyWindow(window);
+done_d3d9:
+    IDirect3D9_Release(d3d9);
+}

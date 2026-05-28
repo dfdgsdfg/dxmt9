@@ -177,6 +177,10 @@ struct D9CTexture {
   std::atomic<uint32_t> refs{1};
   std::unordered_map<uint32_t, dxmt9::d3d9::devicec::ShadowLock> wow64Locks;
   std::unordered_set<uint32_t> lockedLevels;
+  uint32_t d3dFormat = 0;
+  bool palettized = false;
+  std::vector<std::vector<uint8_t>> p8Levels;
+  std::array<uint32_t, 256> p8Palette{};
 
   D9CTexture(std::shared_ptr<dxmt9::core::Texture> o, D9CDevice* d)
       : obj(std::move(o)), device(d) {}

@@ -1521,6 +1521,23 @@ summary = "Sikarugir-CX 24.0.7 builtin lane x64 2026-05-24 — passing in chunke
 
 [[case]]
 executable = "dxmt9-d3d9-conformance.exe"
+source_file = "d3d9_conformance_visual_misc.c"
+function = "test_visual_process_vertices_xyzhw_policy"
+source = "wine/dlls/d3d9/tests/visual.c:test_process_vertices"
+source_kind = "behavioral-oracle"
+license = "LGPL-2.1-or-later"
+license_scope = "external-not-vendored"
+upstream_commit = "6e073d28dee3af7f4c965daec94644e0f9f92727"
+lanes = ["app-local", "builtin"]
+arches = ["x64", "x86"]
+area = "vertex-processing"
+owner = "core/device"
+requirements = ["R-TEST-12.3", "R-TEST-12.18"]
+acceptance = ["ProcessVertices transforms D3DFVF_XYZ vertices from stream 0 through the fixed-function WORLD/VIEW/PROJECTION path into a D3DFVF_XYZRHW SYSTEMMEM destination vertex buffer using the active 640x480 viewport"]
+status = "scaffolded"
+
+[[case]]
+executable = "dxmt9-d3d9-conformance.exe"
 source_file = "d3d9_conformance_query_stateblock.c"
 function = "test_stateblock_invalid_type_recording_invalid_calls"
 source = "wine/dlls/d3d9/tests/stateblock.c:test_state_management"
@@ -6014,4 +6031,3 @@ arch = "x64"
 status = "passing"
 source = "tests/conformance/d3d9/evidence/sikarugir-cx-24.0.7-builtin-x64.json:1"
 summary = "Sikarugir-cx-24.0.7 builtin x64: set_texture_set_render_target_self_feedback_policy passes (9 checks, 0 failures)."
-
