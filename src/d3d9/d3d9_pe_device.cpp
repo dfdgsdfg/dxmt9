@@ -571,6 +571,7 @@ inline void fvfToVertexElements(DWORD fvf,
 
 struct FvfProcessLayout {
     UINT stride = 0;
+    UINT positionOffset = 0;
     UINT positionBytes = 0;
     UINT diffuseOffset = 0;
     UINT specularOffset = 0;
@@ -593,10 +594,12 @@ static bool describeProcessFvf(DWORD fvf, FvfProcessLayout& layout) {
     layout = {};
     switch (fvf & D3DFVF_POSITION_MASK) {
         case D3DFVF_XYZ:
+            layout.positionOffset = 0u;
             layout.positionBytes = 12u;
             break;
         case D3DFVF_XYZRHW:
         case D3DFVF_XYZW:
+            layout.positionOffset = 0u;
             layout.positionBytes = 16u;
             break;
         default:
@@ -624,6 +627,58 @@ static bool describeProcessFvf(DWORD fvf, FvfProcessLayout& layout) {
     }
     layout.stride = offset;
     return layout.stride != 0u;
+}
+
+static bool describeProcessDeclaration(IDirect3DVertexDeclaration9* declaration,
+                                       FvfProcessLayout& layout) {
+    layout = {};
+    if (!declaration) return false;
+    D9CVertexElement elements[MAXD3DDECLLENGTH + 1]{};
+    uint32_t count = MAXD3DDECLLENGTH + 1;
+    if (FAILED(hr32(dxmt9c_vdecl_get_declaration(
+            D3D9PeRawVertexDecl(declaration), elements, &count)))) {
+        return false;
+    }
+    for (uint32_t i = 0; i < count; ++i) {
+        const D9CVertexElement& e = elements[i];
+        if (e.stream == 0xff && e.type == D3DDECLTYPE_UNUSED) {
+            break;
+        }
+        if (e.stream != 0 || e.method != D3DDECLMETHOD_DEFAULT) {
+            return false;
+        }
+        const UINT elementBytes = vertexElementTypeSize(e.type);
+        if (elementBytes == 0u) return false;
+        layout.stride = std::max<UINT>(layout.stride, e.offset + elementBytes);
+        if (e.usage == D3DDECLUSAGE_POSITIONT && e.usageIndex == 0) {
+            if (e.type != D3DDECLTYPE_FLOAT4 || layout.positionBytes != 0u) {
+                return false;
+            }
+            layout.positionOffset = e.offset;
+            layout.positionBytes = 16u;
+        } else if (e.usage == D3DDECLUSAGE_COLOR && e.usageIndex == 0) {
+            if (e.type != D3DDECLTYPE_D3DCOLOR || layout.diffuse) return false;
+            layout.diffuse = true;
+            layout.diffuseOffset = e.offset;
+        } else if (e.usage == D3DDECLUSAGE_COLOR && e.usageIndex == 1) {
+            if (e.type != D3DDECLTYPE_D3DCOLOR || layout.specular) return false;
+            layout.specular = true;
+            layout.specularOffset = e.offset;
+        } else if (e.usage == D3DDECLUSAGE_TEXCOORD && e.usageIndex < 8) {
+            UINT texBytes = 0u;
+            if (e.type == D3DDECLTYPE_FLOAT1) texBytes = 4u;
+            else if (e.type == D3DDECLTYPE_FLOAT2) texBytes = 8u;
+            else if (e.type == D3DDECLTYPE_FLOAT3) texBytes = 12u;
+            else if (e.type == D3DDECLTYPE_FLOAT4) texBytes = 16u;
+            else return false;
+            layout.texCount = std::max<UINT>(layout.texCount, e.usageIndex + 1u);
+            layout.texOffset[e.usageIndex] = e.offset;
+            layout.texBytes[e.usageIndex] = texBytes;
+        } else {
+            return false;
+        }
+    }
+    return layout.positionBytes == 16u && layout.stride != 0u;
 }
 
 }  // namespace
@@ -4683,7 +4738,7 @@ public:
                             declaration, (unsigned)flags);
         if (!dstBuffer) return D3DERR_INVALIDCALL;
         if (vertexCount == 0) return S_OK;
-        if (declaration || flags != 0 || vs_ != nullptr) return D3DERR_INVALIDCALL;
+        if (flags != 0 || vs_ != nullptr) return D3DERR_INVALIDCALL;
         if (!streamSrc_[0] || streamStr_[0] < sizeof(float) * 3u) return D3DERR_INVALIDCALL;
         if ((fvf_ & D3DFVF_POSITION_MASK) != D3DFVF_XYZ) return D3DERR_INVALIDCALL;
 
@@ -4696,15 +4751,21 @@ public:
             FAILED(hr32(dxmt9c_buffer_get_desc(dstRaw, &dstDesc)))) {
             return D3DERR_INVALIDCALL;
         }
-        if ((dstDesc.fvf & D3DFVF_POSITION_MASK) != D3DFVF_XYZRHW ||
-            (dstDesc.fvf & (D3DFVF_NORMAL | D3DFVF_PSIZE)) != 0) {
-            return D3DERR_INVALIDCALL;
-        }
         FvfProcessLayout srcLayout{};
         FvfProcessLayout dstLayout{};
-        if (!describeProcessFvf(fvf_, srcLayout) ||
-            !describeProcessFvf(dstDesc.fvf, dstLayout)) {
+        if (!describeProcessFvf(fvf_, srcLayout)) {
             return D3DERR_INVALIDCALL;
+        }
+        if (declaration) {
+            if (!describeProcessDeclaration(declaration, dstLayout)) {
+                return D3DERR_INVALIDCALL;
+            }
+        } else {
+            if ((dstDesc.fvf & D3DFVF_POSITION_MASK) != D3DFVF_XYZRHW ||
+                (dstDesc.fvf & (D3DFVF_NORMAL | D3DFVF_PSIZE)) != 0 ||
+                !describeProcessFvf(dstDesc.fvf, dstLayout)) {
+                return D3DERR_INVALIDCALL;
+            }
         }
         if (streamStr_[0] < srcLayout.stride || dstLayout.positionBytes != 16u) {
             return D3DERR_INVALIDCALL;
@@ -4790,7 +4851,7 @@ public:
                 vp.minZ + ndcZ * zScale,
                 invW,
             };
-            std::memcpy(dstVertex, out, sizeof(out));
+            std::memcpy(dstVertex + dstLayout.positionOffset, out, sizeof(out));
             if (dstLayout.diffuse) {
                 std::memcpy(dstVertex + dstLayout.diffuseOffset,
                             srcVertex + srcLayout.diffuseOffset, 4u);
