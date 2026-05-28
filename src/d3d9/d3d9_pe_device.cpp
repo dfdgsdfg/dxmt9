@@ -587,6 +587,27 @@ struct FvfProcessLayout {
     bool specular = false;
 };
 
+struct ProcessShaderReg {
+    UINT type = 0;
+    UINT index = 0;
+};
+
+struct ProcessShaderIo {
+    int inputPosition = -1;
+    int inputDiffuse = -1;
+    int inputSpecular = -1;
+    int inputTex[8]{-1, -1, -1, -1, -1, -1, -1, -1};
+    ProcessShaderReg outputPosition{};
+    ProcessShaderReg outputDiffuse{};
+    ProcessShaderReg outputSpecular{};
+    ProcessShaderReg outputTex[8]{};
+    bool hasOutputPosition = false;
+    bool hasOutputDiffuse = false;
+    bool hasOutputSpecular = false;
+    bool hasOutputTex[8]{};
+    UINT major = 0;
+};
+
 static UINT fvfTexcoordBytes(DWORD fvf, UINT index) {
     const DWORD sizeBits = (fvf >> (index * 2u + 16u)) & 0x3u;
     if (sizeBits == 1u) return 12u;
@@ -703,6 +724,370 @@ static bool describeProcessDeclaration(IDirect3DVertexDeclaration9* declaration,
     }
     return layout.positionBytes == (destination ? 16u : 12u) &&
            layout.stride != 0u;
+}
+
+static UINT shaderRegType(DWORD token) {
+    return ((token >> D3DSP_REGTYPE_SHIFT) & 0x7u) |
+           (((token & D3DSP_REGTYPE_MASK2) >> D3DSP_REGTYPE_SHIFT2) << 3u);
+}
+
+static UINT shaderRegIndex(DWORD token) {
+    return token & D3DSP_REGNUM_MASK;
+}
+
+static UINT shaderWriteMask(DWORD token) {
+    return (token & D3DSP_WRITEMASK_ALL) >> 16u;
+}
+
+static UINT shaderSwizzle(DWORD token) {
+    return (token & D3DSP_SWIZZLE_MASK) >> D3DSP_SWIZZLE_SHIFT;
+}
+
+static UINT simpleProcessShaderOperandCount(UINT opcode, DWORD token) {
+    switch (opcode) {
+        case D3DSIO_NOP:
+        case D3DSIO_RET:
+        case D3DSIO_PHASE:
+            return 0;
+        case D3DSIO_MOV:
+        case D3DSIO_MOVA:
+        case D3DSIO_RCP:
+        case D3DSIO_RSQ:
+        case D3DSIO_FRC:
+        case D3DSIO_ABS:
+            return 2;
+        case D3DSIO_ADD:
+        case D3DSIO_SUB:
+        case D3DSIO_MUL:
+        case D3DSIO_DP3:
+        case D3DSIO_DP4:
+        case D3DSIO_MIN:
+        case D3DSIO_MAX:
+        case D3DSIO_M4x4:
+            return 3;
+        case D3DSIO_DCL:
+            return 2;
+        case D3DSIO_DEF:
+            return 5;
+        default:
+            return (token >> D3DSI_INSTLENGTH_SHIFT) & 0xfu;
+    }
+}
+
+static bool shaderSkipComment(const std::vector<DWORD>& words, size_t& index,
+                              DWORD token) {
+    const size_t commentWords = (token >> 16u) & 0x7fffu;
+    if (commentWords > words.size() - index) return false;
+    index += commentWords;
+    return true;
+}
+
+static void noteProcessShaderInput(ProcessShaderIo& io, UINT usage,
+                                   UINT usageIndex, UINT reg) {
+    if (usage == D3DDECLUSAGE_POSITION && usageIndex == 0) {
+        io.inputPosition = static_cast<int>(reg);
+    } else if (usage == D3DDECLUSAGE_COLOR && usageIndex == 0) {
+        io.inputDiffuse = static_cast<int>(reg);
+    } else if (usage == D3DDECLUSAGE_COLOR && usageIndex == 1) {
+        io.inputSpecular = static_cast<int>(reg);
+    } else if (usage == D3DDECLUSAGE_TEXCOORD && usageIndex < 8) {
+        io.inputTex[usageIndex] = static_cast<int>(reg);
+    }
+}
+
+static void noteProcessShaderOutput(ProcessShaderIo& io, UINT usage,
+                                    UINT usageIndex, ProcessShaderReg reg) {
+    if (usage == D3DDECLUSAGE_POSITION && usageIndex == 0) {
+        io.outputPosition = reg;
+        io.hasOutputPosition = true;
+    } else if (usage == D3DDECLUSAGE_COLOR && usageIndex == 0) {
+        io.outputDiffuse = reg;
+        io.hasOutputDiffuse = true;
+    } else if (usage == D3DDECLUSAGE_COLOR && usageIndex == 1) {
+        io.outputSpecular = reg;
+        io.hasOutputSpecular = true;
+    } else if (usage == D3DDECLUSAGE_TEXCOORD && usageIndex < 8) {
+        io.outputTex[usageIndex] = reg;
+        io.hasOutputTex[usageIndex] = true;
+    }
+}
+
+static bool analyzeSimpleProcessVertexShader(const std::vector<DWORD>& words,
+                                             ProcessShaderIo& io) {
+    io = {};
+    for (int& tex : io.inputTex) tex = -1;
+    if (words.empty() || (words[0] >> 16u) != kShaderHeaderVS) return false;
+    io.major = (words[0] >> 8u) & 0xffu;
+    if (io.major < 3u) {
+        io.inputPosition = 0;
+        io.inputDiffuse = 5;
+        io.inputSpecular = 6;
+        for (UINT i = 0; i < 8; ++i) io.inputTex[i] = static_cast<int>(7u + i);
+        io.outputPosition = {D3DSPR_RASTOUT, D3DSRO_POSITION};
+        io.outputDiffuse = {D3DSPR_ATTROUT, 0};
+        io.outputSpecular = {D3DSPR_ATTROUT, 1};
+        io.hasOutputPosition = true;
+        io.hasOutputDiffuse = true;
+        io.hasOutputSpecular = true;
+        for (UINT i = 0; i < 8; ++i) {
+            io.outputTex[i] = {D3DSPR_TEXCRDOUT, i};
+            io.hasOutputTex[i] = true;
+        }
+    }
+
+    for (size_t index = 1; index < words.size();) {
+        const DWORD token = words[index++];
+        const UINT opcode = token & D3DSI_OPCODE_MASK;
+        if (opcode == D3DSIO_END) return io.hasOutputPosition;
+        if (opcode == D3DSIO_COMMENT) {
+            if (!shaderSkipComment(words, index, token)) return false;
+            continue;
+        }
+        const UINT operandCount = simpleProcessShaderOperandCount(opcode, token);
+        if (operandCount > words.size() - index) return false;
+        const DWORD* operands = words.data() + index;
+        index += operandCount;
+        if (opcode != D3DSIO_DCL) continue;
+        const UINT usage = (operands[0] & D3DSP_DCL_USAGE_MASK) >> D3DSP_DCL_USAGE_SHIFT;
+        const UINT usageIndex =
+            (operands[0] & D3DSP_DCL_USAGEINDEX_MASK) >> D3DSP_DCL_USAGEINDEX_SHIFT;
+        const ProcessShaderReg reg{shaderRegType(operands[1]),
+                                   shaderRegIndex(operands[1])};
+        if (reg.type == D3DSPR_INPUT) {
+            noteProcessShaderInput(io, usage, usageIndex, reg.index);
+        } else if (reg.type == D3DSPR_OUTPUT || reg.type == D3DSPR_TEXCRDOUT) {
+            noteProcessShaderOutput(io, usage, usageIndex, reg);
+        } else if (reg.type == D3DSPR_RASTOUT || reg.type == D3DSPR_ATTROUT) {
+            noteProcessShaderOutput(io, usage, usageIndex, reg);
+        }
+    }
+    return false;
+}
+
+static float clamp01(float value) {
+    if (value < 0.0f) return 0.0f;
+    if (value > 1.0f) return 1.0f;
+    return value;
+}
+
+static uint8_t floatColorByte(float value) {
+    return static_cast<uint8_t>(clamp01(value) * 255.0f + 0.5f);
+}
+
+static void unpackD3DColor(DWORD color, float out[4]) {
+    out[0] = static_cast<float>((color >> 16u) & 0xffu) / 255.0f;
+    out[1] = static_cast<float>((color >> 8u) & 0xffu) / 255.0f;
+    out[2] = static_cast<float>(color & 0xffu) / 255.0f;
+    out[3] = static_cast<float>((color >> 24u) & 0xffu) / 255.0f;
+}
+
+static DWORD packD3DColor(const float in[4]) {
+    return (static_cast<DWORD>(floatColorByte(in[3])) << 24u) |
+           (static_cast<DWORD>(floatColorByte(in[0])) << 16u) |
+           (static_cast<DWORD>(floatColorByte(in[1])) << 8u) |
+           static_cast<DWORD>(floatColorByte(in[2]));
+}
+
+struct SimpleVsRegisters {
+    std::array<std::array<float, 4>, 32> temp{};
+    std::array<std::array<float, 4>, 16> input{};
+    std::array<std::array<float, 4>, 256> constant{};
+    std::array<std::array<float, 4>, 16> output{};
+    std::array<std::array<float, 4>, 3> rastOut{};
+    std::array<std::array<float, 4>, 2> attrOut{};
+    std::array<std::array<float, 4>, 8> texOut{};
+};
+
+static std::array<float, 4>* simpleVsRegister(SimpleVsRegisters& regs,
+                                              UINT major,
+                                              UINT type,
+                                              UINT index) {
+    switch (type) {
+        case D3DSPR_TEMP:
+            return index < regs.temp.size() ? &regs.temp[index] : nullptr;
+        case D3DSPR_INPUT:
+            return index < regs.input.size() ? &regs.input[index] : nullptr;
+        case D3DSPR_CONST:
+            return index < regs.constant.size() ? &regs.constant[index] : nullptr;
+        case D3DSPR_RASTOUT:
+            return index < regs.rastOut.size() ? &regs.rastOut[index] : nullptr;
+        case D3DSPR_ATTROUT:
+            return index < regs.attrOut.size() ? &regs.attrOut[index] : nullptr;
+        case D3DSPR_TEXCRDOUT:
+            if (major >= 3u) {
+                return index < regs.output.size() ? &regs.output[index] : nullptr;
+            }
+            return index < regs.texOut.size() ? &regs.texOut[index] : nullptr;
+        default:
+            return nullptr;
+    }
+}
+
+static const std::array<float, 4>* simpleVsRegisterConst(
+        const SimpleVsRegisters& regs, UINT major, UINT type, UINT index) {
+    switch (type) {
+        case D3DSPR_TEMP:
+            return index < regs.temp.size() ? &regs.temp[index] : nullptr;
+        case D3DSPR_INPUT:
+            return index < regs.input.size() ? &regs.input[index] : nullptr;
+        case D3DSPR_CONST:
+            return index < regs.constant.size() ? &regs.constant[index] : nullptr;
+        case D3DSPR_RASTOUT:
+            return index < regs.rastOut.size() ? &regs.rastOut[index] : nullptr;
+        case D3DSPR_ATTROUT:
+            return index < regs.attrOut.size() ? &regs.attrOut[index] : nullptr;
+        case D3DSPR_TEXCRDOUT:
+            if (major >= 3u) {
+                return index < regs.output.size() ? &regs.output[index] : nullptr;
+            }
+            return index < regs.texOut.size() ? &regs.texOut[index] : nullptr;
+        default:
+            return nullptr;
+    }
+}
+
+static bool simpleVsReadSource(const SimpleVsRegisters& regs,
+                               UINT major,
+                               DWORD token,
+                               float out[4]) {
+    const auto* reg = simpleVsRegisterConst(regs, major,
+                                            shaderRegType(token),
+                                            shaderRegIndex(token));
+    if (!reg) return false;
+    const UINT swizzle = shaderSwizzle(token);
+    for (UINT i = 0; i < 4; ++i) {
+        out[i] = (*reg)[(swizzle >> (i * 2u)) & 0x3u];
+    }
+    const UINT modifier = (token & D3DSP_SRCMOD_MASK) >> D3DSP_SRCMOD_SHIFT;
+    switch (modifier) {
+        case 0: /* D3DSPSM_NONE */
+            return true;
+        case 1: /* D3DSPSM_NEG */
+            for (UINT i = 0; i < 4; ++i) out[i] = -out[i];
+            return true;
+        case 11: /* D3DSPSM_ABS */
+            for (UINT i = 0; i < 4; ++i) if (out[i] < 0.0f) out[i] = -out[i];
+            return true;
+        case 12: /* D3DSPSM_ABSNEG */
+            for (UINT i = 0; i < 4; ++i) {
+                if (out[i] < 0.0f) out[i] = -out[i];
+                out[i] = -out[i];
+            }
+            return true;
+        default:
+            return false;
+    }
+}
+
+static bool simpleVsWriteDest(SimpleVsRegisters& regs,
+                              UINT major,
+                              DWORD token,
+                              const float in[4]) {
+    auto* reg = simpleVsRegister(regs, major, shaderRegType(token),
+                                 shaderRegIndex(token));
+    if (!reg) return false;
+    float value[4] = {in[0], in[1], in[2], in[3]};
+    const UINT modifier = (token & D3DSP_DSTMOD_MASK) >> D3DSP_DSTMOD_SHIFT;
+    if (modifier & 0x1u) {
+        for (float& v : value) v = clamp01(v);
+    }
+    if ((modifier & ~0x3u) != 0u) return false;
+    const UINT mask = shaderWriteMask(token);
+    for (UINT i = 0; i < 4; ++i) {
+        if (mask & (1u << i)) {
+            (*reg)[i] = value[i];
+        }
+    }
+    return true;
+}
+
+static bool executeSimpleProcessVertexShader(const std::vector<DWORD>& words,
+                                             const ProcessShaderIo& io,
+                                             SimpleVsRegisters& regs) {
+    for (size_t index = 1; index < words.size();) {
+        const DWORD token = words[index++];
+        const UINT opcode = token & D3DSI_OPCODE_MASK;
+        if (opcode == D3DSIO_END) return true;
+        if (opcode == D3DSIO_COMMENT) {
+            if (!shaderSkipComment(words, index, token)) return false;
+            continue;
+        }
+        const UINT operandCount = simpleProcessShaderOperandCount(opcode, token);
+        if (operandCount > words.size() - index) return false;
+        const DWORD* operands = words.data() + index;
+        index += operandCount;
+        if (opcode == D3DSIO_NOP || opcode == D3DSIO_DCL || opcode == D3DSIO_PHASE) {
+            continue;
+        }
+        if (opcode == D3DSIO_DEF) {
+            if (shaderRegType(operands[0]) != D3DSPR_CONST) return false;
+            auto* dst = simpleVsRegister(regs, io.major, D3DSPR_CONST,
+                                         shaderRegIndex(operands[0]));
+            if (!dst) return false;
+            std::memcpy(dst->data(), operands + 1, sizeof(float) * 4u);
+            continue;
+        }
+
+        float a[4]{};
+        float b[4]{};
+        float out[4]{};
+        if (operandCount >= 2 &&
+            !simpleVsReadSource(regs, io.major, operands[1], a)) {
+            return false;
+        }
+        if (operandCount >= 3 &&
+            !simpleVsReadSource(regs, io.major, operands[2], b)) {
+            return false;
+        }
+        switch (opcode) {
+            case D3DSIO_MOV:
+                std::memcpy(out, a, sizeof(out));
+                break;
+            case D3DSIO_ADD:
+                for (UINT i = 0; i < 4; ++i) out[i] = a[i] + b[i];
+                break;
+            case D3DSIO_SUB:
+                for (UINT i = 0; i < 4; ++i) out[i] = a[i] - b[i];
+                break;
+            case D3DSIO_MUL:
+                for (UINT i = 0; i < 4; ++i) out[i] = a[i] * b[i];
+                break;
+            case D3DSIO_MIN:
+                for (UINT i = 0; i < 4; ++i) out[i] = std::min(a[i], b[i]);
+                break;
+            case D3DSIO_MAX:
+                for (UINT i = 0; i < 4; ++i) out[i] = std::max(a[i], b[i]);
+                break;
+            case D3DSIO_DP3: {
+                const float dot = a[0] * b[0] + a[1] * b[1] + a[2] * b[2];
+                out[0] = out[1] = out[2] = out[3] = dot;
+                break;
+            }
+            case D3DSIO_DP4: {
+                const float dot = a[0] * b[0] + a[1] * b[1] +
+                                  a[2] * b[2] + a[3] * b[3];
+                out[0] = out[1] = out[2] = out[3] = dot;
+                break;
+            }
+            case D3DSIO_M4x4: {
+                if (shaderRegType(operands[2]) != D3DSPR_CONST) return false;
+                const UINT base = shaderRegIndex(operands[2]);
+                if (base + 3u >= regs.constant.size()) return false;
+                for (UINT row = 0; row < 4; ++row) {
+                    const auto& c = regs.constant[base + row];
+                    out[row] = a[0] * c[0] + a[1] * c[1] +
+                               a[2] * c[2] + a[3] * c[3];
+                }
+                break;
+            }
+            default:
+                return false;
+        }
+        if (!simpleVsWriteDest(regs, io.major, operands[0], out)) {
+            return false;
+        }
+    }
+    return false;
 }
 
 }  // namespace
@@ -4762,7 +5147,24 @@ public:
                             declaration, (unsigned)flags);
         if (!dstBuffer) return D3DERR_INVALIDCALL;
         if (vertexCount == 0) return S_OK;
-        if (flags != 0 || vs_ != nullptr) return D3DERR_INVALIDCALL;
+        if (flags != 0) return D3DERR_INVALIDCALL;
+        const bool programmable = vs_ != nullptr;
+        std::vector<DWORD> shaderWords;
+        ProcessShaderIo shaderIo{};
+        if (programmable) {
+            UINT shaderBytes = 0;
+            HRESULT shaderHr = vs_->GetFunction(nullptr, &shaderBytes);
+            if (FAILED(shaderHr) || shaderBytes == 0 ||
+                (shaderBytes % sizeof(DWORD)) != 0) {
+                return D3DERR_INVALIDCALL;
+            }
+            shaderWords.resize(shaderBytes / sizeof(DWORD));
+            shaderHr = vs_->GetFunction(shaderWords.data(), &shaderBytes);
+            if (FAILED(shaderHr) ||
+                !analyzeSimpleProcessVertexShader(shaderWords, shaderIo)) {
+                return D3DERR_INVALIDCALL;
+            }
+        }
         D9CBuffer* dstRaw = rawVBuf(dstBuffer);
         if (!dstRaw) return D3DERR_INVALIDCALL;
         D9CBufferDesc dstDesc{};
@@ -4798,28 +5200,57 @@ public:
             return D3DERR_INVALIDCALL;
         }
         UINT srcReadBytes[D9C_DRAW_PACKET_MAX_STREAMS]{};
-        srcReadBytes[srcLayout.positionStream] =
-            srcLayout.positionOffset + srcLayout.positionBytes;
-        if (dstLayout.diffuse) {
-            if (!srcLayout.diffuse) return D3DERR_INVALIDCALL;
+        auto requirePositionRead = [&]() {
+            srcReadBytes[srcLayout.positionStream] =
+                std::max(srcReadBytes[srcLayout.positionStream],
+                         srcLayout.positionOffset + srcLayout.positionBytes);
+        };
+        auto requireDiffuseRead = [&]() -> bool {
+            if (!srcLayout.diffuse) return false;
             srcReadBytes[srcLayout.diffuseStream] =
                 std::max(srcReadBytes[srcLayout.diffuseStream],
                          srcLayout.diffuseOffset + 4u);
-        }
-        if (dstLayout.specular) {
-            if (!srcLayout.specular) return D3DERR_INVALIDCALL;
+            return true;
+        };
+        auto requireSpecularRead = [&]() -> bool {
+            if (!srcLayout.specular) return false;
             srcReadBytes[srcLayout.specularStream] =
                 std::max(srcReadBytes[srcLayout.specularStream],
                          srcLayout.specularOffset + 4u);
-        }
-        if (dstLayout.texCount > srcLayout.texCount) return D3DERR_INVALIDCALL;
-        for (UINT i = 0; i < dstLayout.texCount; ++i) {
-            if (dstLayout.texBytes[i] != srcLayout.texBytes[i]) {
-                return D3DERR_INVALIDCALL;
+            return true;
+        };
+        auto requireTexRead = [&](UINT i) -> bool {
+            if (i >= srcLayout.texCount || dstLayout.texBytes[i] != srcLayout.texBytes[i]) {
+                return false;
             }
             srcReadBytes[srcLayout.texStream[i]] =
                 std::max(srcReadBytes[srcLayout.texStream[i]],
                          srcLayout.texOffset[i] + srcLayout.texBytes[i]);
+            return true;
+        };
+        if (programmable) {
+            if (!shaderIo.hasOutputPosition) return D3DERR_INVALIDCALL;
+            if (dstLayout.diffuse && !shaderIo.hasOutputDiffuse) return D3DERR_INVALIDCALL;
+            if (dstLayout.specular && !shaderIo.hasOutputSpecular) return D3DERR_INVALIDCALL;
+            for (UINT i = 0; i < dstLayout.texCount; ++i) {
+                if (!shaderIo.hasOutputTex[i]) return D3DERR_INVALIDCALL;
+            }
+            if (shaderIo.inputPosition >= 0) requirePositionRead();
+            if (shaderIo.inputDiffuse >= 0 && !requireDiffuseRead()) return D3DERR_INVALIDCALL;
+            if (shaderIo.inputSpecular >= 0 && !requireSpecularRead()) return D3DERR_INVALIDCALL;
+            for (UINT i = 0; i < 8; ++i) {
+                if (shaderIo.inputTex[i] >= 0 && !requireTexRead(i)) {
+                    return D3DERR_INVALIDCALL;
+                }
+            }
+        } else {
+            requirePositionRead();
+            if (dstLayout.diffuse && !requireDiffuseRead()) return D3DERR_INVALIDCALL;
+            if (dstLayout.specular && !requireSpecularRead()) return D3DERR_INVALIDCALL;
+            if (dstLayout.texCount > srcLayout.texCount) return D3DERR_INVALIDCALL;
+            for (UINT i = 0; i < dstLayout.texCount; ++i) {
+                if (!requireTexRead(i)) return D3DERR_INVALIDCALL;
+            }
         }
         D9CBuffer* srcRaw[D9C_DRAW_PACKET_MAX_STREAMS]{};
         D9CBufferDesc srcDesc[D9C_DRAW_PACKET_MAX_STREAMS]{};
@@ -4916,22 +5347,139 @@ public:
         for (UINT stream = 0; stream < D9C_DRAW_PACKET_MAX_STREAMS; ++stream) {
             srcBase[stream] = static_cast<const uint8_t*>(srcBytes[stream]);
         }
+        std::array<std::array<float, 4>, 256> shaderConstF{};
+        if (programmable && !peConsts_.vsConstF.values.empty()) {
+            const size_t bytes = std::min(peConsts_.vsConstF.values.size(),
+                                          shaderConstF.size() * sizeof(shaderConstF[0]));
+            std::memcpy(shaderConstF.data(), peConsts_.vsConstF.values.data(), bytes);
+        }
         auto* dstBase = static_cast<uint8_t*>(dstBytes);
         for (UINT i = 0; i < vertexCount; ++i) {
             auto* dstVertex = dstBase + static_cast<size_t>(i) * dstLayout.stride;
-            float in[3]{};
-            const auto* positionSource =
-                srcBase[srcLayout.positionStream] + srcByteStart[srcLayout.positionStream] +
-                static_cast<uint64_t>(i) * streamStr_[srcLayout.positionStream] +
-                srcLayout.positionOffset;
-            std::memcpy(in, positionSource, sizeof(in));
-            const float position[4] = {in[0], in[1], in[2], 1.0f};
             float clip[4]{};
-            for (UINT col = 0; col < 4; ++col) {
-                clip[col] = position[0] * wvp.m[col] +
-                            position[1] * wvp.m[4 + col] +
-                            position[2] * wvp.m[8 + col] +
-                            position[3] * wvp.m[12 + col];
+            float diffuseOut[4]{};
+            float specularOut[4]{};
+            float texOut[8][4]{};
+            if (programmable) {
+                SimpleVsRegisters regs{};
+                regs.constant = shaderConstF;
+                auto loadPositionInput = [&](int reg) {
+                    if (reg < 0 || static_cast<size_t>(reg) >= regs.input.size()) return false;
+                    float in[3]{};
+                    const auto* positionSource =
+                        srcBase[srcLayout.positionStream] +
+                        srcByteStart[srcLayout.positionStream] +
+                        static_cast<uint64_t>(i) * streamStr_[srcLayout.positionStream] +
+                        srcLayout.positionOffset;
+                    std::memcpy(in, positionSource, sizeof(in));
+                    regs.input[reg] = {in[0], in[1], in[2], 1.0f};
+                    return true;
+                };
+                auto loadColorInput = [&](int reg, UINT stream, UINT offset) {
+                    if (reg < 0 || static_cast<size_t>(reg) >= regs.input.size()) return false;
+                    DWORD color = 0;
+                    const auto* colorSource =
+                        srcBase[stream] + srcByteStart[stream] +
+                        static_cast<uint64_t>(i) * streamStr_[stream] + offset;
+                    std::memcpy(&color, colorSource, sizeof(color));
+                    unpackD3DColor(color, regs.input[reg].data());
+                    return true;
+                };
+                auto loadTexInput = [&](int reg, UINT tex) {
+                    if (reg < 0 || static_cast<size_t>(reg) >= regs.input.size()) return false;
+                    const auto* texSource =
+                        srcBase[srcLayout.texStream[tex]] +
+                        srcByteStart[srcLayout.texStream[tex]] +
+                        static_cast<uint64_t>(i) * streamStr_[srcLayout.texStream[tex]] +
+                        srcLayout.texOffset[tex];
+                    const UINT components = srcLayout.texBytes[tex] / sizeof(float);
+                    regs.input[reg] = {0.0f, 0.0f, 0.0f, 1.0f};
+                    std::memcpy(regs.input[reg].data(), texSource,
+                                std::min<UINT>(components, 4u) * sizeof(float));
+                    return true;
+                };
+                if (shaderIo.inputPosition >= 0 && !loadPositionInput(shaderIo.inputPosition)) {
+                    hr = D3DERR_INVALIDCALL;
+                    break;
+                }
+                if (shaderIo.inputDiffuse >= 0 &&
+                    !loadColorInput(shaderIo.inputDiffuse, srcLayout.diffuseStream,
+                                    srcLayout.diffuseOffset)) {
+                    hr = D3DERR_INVALIDCALL;
+                    break;
+                }
+                if (shaderIo.inputSpecular >= 0 &&
+                    !loadColorInput(shaderIo.inputSpecular, srcLayout.specularStream,
+                                    srcLayout.specularOffset)) {
+                    hr = D3DERR_INVALIDCALL;
+                    break;
+                }
+                for (UINT tex = 0; tex < 8; ++tex) {
+                    if (shaderIo.inputTex[tex] >= 0 &&
+                        !loadTexInput(shaderIo.inputTex[tex], tex)) {
+                        hr = D3DERR_INVALIDCALL;
+                        break;
+                    }
+                }
+                if (FAILED(hr)) break;
+                if (!executeSimpleProcessVertexShader(shaderWords, shaderIo, regs)) {
+                    hr = D3DERR_INVALIDCALL;
+                    break;
+                }
+                const auto* positionReg =
+                    simpleVsRegister(regs, shaderIo.major, shaderIo.outputPosition.type,
+                                     shaderIo.outputPosition.index);
+                if (!positionReg) {
+                    hr = D3DERR_INVALIDCALL;
+                    break;
+                }
+                std::memcpy(clip, positionReg->data(), sizeof(clip));
+                if (dstLayout.diffuse) {
+                    const auto* colorReg =
+                        simpleVsRegister(regs, shaderIo.major, shaderIo.outputDiffuse.type,
+                                         shaderIo.outputDiffuse.index);
+                    if (!colorReg) {
+                        hr = D3DERR_INVALIDCALL;
+                        break;
+                    }
+                    std::memcpy(diffuseOut, colorReg->data(), sizeof(diffuseOut));
+                }
+                if (dstLayout.specular) {
+                    const auto* colorReg =
+                        simpleVsRegister(regs, shaderIo.major, shaderIo.outputSpecular.type,
+                                         shaderIo.outputSpecular.index);
+                    if (!colorReg) {
+                        hr = D3DERR_INVALIDCALL;
+                        break;
+                    }
+                    std::memcpy(specularOut, colorReg->data(), sizeof(specularOut));
+                }
+                for (UINT tex = 0; tex < dstLayout.texCount; ++tex) {
+                    const auto* texReg =
+                        simpleVsRegister(regs, shaderIo.major, shaderIo.outputTex[tex].type,
+                                         shaderIo.outputTex[tex].index);
+                    if (!texReg) {
+                        hr = D3DERR_INVALIDCALL;
+                        break;
+                    }
+                    std::memcpy(texOut[tex], texReg->data(), sizeof(texOut[tex]));
+                }
+                if (FAILED(hr)) break;
+            } else {
+                float in[3]{};
+                const auto* positionSource =
+                    srcBase[srcLayout.positionStream] +
+                    srcByteStart[srcLayout.positionStream] +
+                    static_cast<uint64_t>(i) * streamStr_[srcLayout.positionStream] +
+                    srcLayout.positionOffset;
+                std::memcpy(in, positionSource, sizeof(in));
+                const float position[4] = {in[0], in[1], in[2], 1.0f};
+                for (UINT col = 0; col < 4; ++col) {
+                    clip[col] = position[0] * wvp.m[col] +
+                                position[1] * wvp.m[4 + col] +
+                                position[2] * wvp.m[8 + col] +
+                                position[3] * wvp.m[12 + col];
+                }
             }
             const float invW = clip[3] != 0.0f ? 1.0f / clip[3] : 1.0f;
             const float ndcX = clip[0] * invW;
@@ -4945,28 +5493,44 @@ public:
             };
             std::memcpy(dstVertex + dstLayout.positionOffset, out, sizeof(out));
             if (dstLayout.diffuse) {
-                const auto* diffuseSource =
-                    srcBase[srcLayout.diffuseStream] + srcByteStart[srcLayout.diffuseStream] +
-                    static_cast<uint64_t>(i) * streamStr_[srcLayout.diffuseStream] +
-                    srcLayout.diffuseOffset;
-                std::memcpy(dstVertex + dstLayout.diffuseOffset,
-                            diffuseSource, 4u);
+                if (programmable) {
+                    const DWORD color = packD3DColor(diffuseOut);
+                    std::memcpy(dstVertex + dstLayout.diffuseOffset, &color, sizeof(color));
+                } else {
+                    const auto* diffuseSource =
+                        srcBase[srcLayout.diffuseStream] + srcByteStart[srcLayout.diffuseStream] +
+                        static_cast<uint64_t>(i) * streamStr_[srcLayout.diffuseStream] +
+                        srcLayout.diffuseOffset;
+                    std::memcpy(dstVertex + dstLayout.diffuseOffset,
+                                diffuseSource, 4u);
+                }
             }
             if (dstLayout.specular) {
-                const auto* specularSource =
-                    srcBase[srcLayout.specularStream] + srcByteStart[srcLayout.specularStream] +
-                    static_cast<uint64_t>(i) * streamStr_[srcLayout.specularStream] +
-                    srcLayout.specularOffset;
-                std::memcpy(dstVertex + dstLayout.specularOffset,
-                            specularSource, 4u);
+                if (programmable) {
+                    const DWORD color = packD3DColor(specularOut);
+                    std::memcpy(dstVertex + dstLayout.specularOffset, &color, sizeof(color));
+                } else {
+                    const auto* specularSource =
+                        srcBase[srcLayout.specularStream] +
+                        srcByteStart[srcLayout.specularStream] +
+                        static_cast<uint64_t>(i) * streamStr_[srcLayout.specularStream] +
+                        srcLayout.specularOffset;
+                    std::memcpy(dstVertex + dstLayout.specularOffset,
+                                specularSource, 4u);
+                }
             }
             for (UINT tex = 0; tex < dstLayout.texCount; ++tex) {
-                const auto* texSource =
-                    srcBase[srcLayout.texStream[tex]] + srcByteStart[srcLayout.texStream[tex]] +
-                    static_cast<uint64_t>(i) * streamStr_[srcLayout.texStream[tex]] +
-                    srcLayout.texOffset[tex];
-                std::memcpy(dstVertex + dstLayout.texOffset[tex],
-                            texSource, dstLayout.texBytes[tex]);
+                if (programmable) {
+                    std::memcpy(dstVertex + dstLayout.texOffset[tex],
+                                texOut[tex], dstLayout.texBytes[tex]);
+                } else {
+                    const auto* texSource =
+                        srcBase[srcLayout.texStream[tex]] + srcByteStart[srcLayout.texStream[tex]] +
+                        static_cast<uint64_t>(i) * streamStr_[srcLayout.texStream[tex]] +
+                        srcLayout.texOffset[tex];
+                    std::memcpy(dstVertex + dstLayout.texOffset[tex],
+                                texSource, dstLayout.texBytes[tex]);
+                }
             }
         }
         const HRESULT dstUnlockHr = hr32(dxmt9c_buffer_unlock(dstRaw));
@@ -4977,6 +5541,7 @@ public:
         }
         if (FAILED(dstUnlockHr)) return dstUnlockHr;
         if (FAILED(srcUnlockHr)) return srcUnlockHr;
+        if (FAILED(hr)) return hr;
         return S_OK;
     }
     HRESULT STDMETHODCALLTYPE DrawRectPatch(UINT, const float*, const D3DRECTPATCH_INFO*) noexcept override { return D3DERR_INVALIDCALL; }

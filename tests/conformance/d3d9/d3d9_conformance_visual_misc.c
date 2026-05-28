@@ -731,6 +731,21 @@ done_d3d9:
  */
 void test_visual_process_vertices_xyzhw_policy(const struct d3d9_api *api)
 {
+#define PROCESS_VS_REGTYPE(type) \
+    ((((DWORD)(type) & 0x7u) << D3DSP_REGTYPE_SHIFT) \
+            | (((((DWORD)(type) >> 3u) & 0x3u) << D3DSP_REGTYPE_SHIFT2)))
+#define PROCESS_VS_DST(type, index, mask) \
+    (0x80000000u | PROCESS_VS_REGTYPE(type) \
+            | (((DWORD)(mask) & 0xfu) << 16) | ((DWORD)(index) & 0x7ffu))
+#define PROCESS_VS_SRC(type, index) \
+    (0x80000000u | PROCESS_VS_REGTYPE(type) | D3DSP_NOSWIZZLE \
+            | ((DWORD)(index) & 0x7ffu))
+#define PROCESS_VS_INST(opcode, operands) \
+    (((DWORD)(opcode) & D3DSI_OPCODE_MASK) \
+            | (((DWORD)(operands) & 0xfu) << D3DSI_INSTLENGTH_SHIFT))
+#define PROCESS_VS_DCL(usage, usage_index) \
+    (((DWORD)(usage) & 0xfu) \
+            | (((DWORD)(usage_index) & 0xfu) << D3DSP_DCL_USAGEINDEX_SHIFT))
     static const D3DVERTEXELEMENT9 dst_decl_elements[] =
     {
         {0, 0, D3DDECLTYPE_FLOAT4, D3DDECLMETHOD_DEFAULT, D3DDECLUSAGE_POSITIONT, 0},
@@ -744,6 +759,39 @@ void test_visual_process_vertices_xyzhw_policy(const struct d3d9_api *api)
         {1, 0, D3DDECLTYPE_D3DCOLOR, D3DDECLMETHOD_DEFAULT, D3DDECLUSAGE_COLOR, 0},
         {1, 4, D3DDECLTYPE_FLOAT2, D3DDECLMETHOD_DEFAULT, D3DDECLUSAGE_TEXCOORD, 0},
         D3DDECL_END()
+    };
+    static const DWORD process_vs_3_0[] =
+    {
+        D3DVS_VERSION(3, 0),
+        PROCESS_VS_INST(D3DSIO_DCL, 2),
+        PROCESS_VS_DCL(D3DDECLUSAGE_POSITION, 0),
+        PROCESS_VS_DST(D3DSPR_INPUT, 0, 0xf),
+        PROCESS_VS_INST(D3DSIO_DCL, 2),
+        PROCESS_VS_DCL(D3DDECLUSAGE_COLOR, 0),
+        PROCESS_VS_DST(D3DSPR_INPUT, 1, 0xf),
+        PROCESS_VS_INST(D3DSIO_DCL, 2),
+        PROCESS_VS_DCL(D3DDECLUSAGE_TEXCOORD, 0),
+        PROCESS_VS_DST(D3DSPR_INPUT, 2, 0xf),
+        PROCESS_VS_INST(D3DSIO_DCL, 2),
+        PROCESS_VS_DCL(D3DDECLUSAGE_POSITION, 0),
+        PROCESS_VS_DST(D3DSPR_OUTPUT, 0, 0xf),
+        PROCESS_VS_INST(D3DSIO_DCL, 2),
+        PROCESS_VS_DCL(D3DDECLUSAGE_COLOR, 0),
+        PROCESS_VS_DST(D3DSPR_OUTPUT, 1, 0xf),
+        PROCESS_VS_INST(D3DSIO_DCL, 2),
+        PROCESS_VS_DCL(D3DDECLUSAGE_TEXCOORD, 0),
+        PROCESS_VS_DST(D3DSPR_OUTPUT, 2, 0xf),
+        PROCESS_VS_INST(D3DSIO_M4x4, 3),
+        PROCESS_VS_DST(D3DSPR_OUTPUT, 0, 0xf),
+        PROCESS_VS_SRC(D3DSPR_INPUT, 0),
+        PROCESS_VS_SRC(D3DSPR_CONST, 0),
+        PROCESS_VS_INST(D3DSIO_MOV, 2),
+        PROCESS_VS_DST(D3DSPR_OUTPUT, 1, 0xf),
+        PROCESS_VS_SRC(D3DSPR_INPUT, 1),
+        PROCESS_VS_INST(D3DSIO_MOV, 2),
+        PROCESS_VS_DST(D3DSPR_OUTPUT, 2, 0xf),
+        PROCESS_VS_SRC(D3DSPR_INPUT, 2),
+        D3DSIO_END
     };
     struct src_vertex
     {
@@ -781,10 +829,19 @@ void test_visual_process_vertices_xyzhw_policy(const struct d3d9_api *api)
     IDirect3DVertexBuffer9 *dst_vb = NULL;
     IDirect3DVertexBuffer9 *decl_dst_vb = NULL;
     IDirect3DVertexBuffer9 *src_decl_dst_vb = NULL;
+    IDirect3DVertexBuffer9 *prog_dst_vb = NULL;
     IDirect3DVertexDeclaration9 *src_decl = NULL;
     IDirect3DVertexDeclaration9 *dst_decl = NULL;
+    IDirect3DVertexShader9 *vs = NULL;
     IDirect3DDevice9 *device = NULL;
     struct dst_vertex *mapped = NULL;
+    const float vs_constants[4][4] =
+    {
+        {0.5f, 0.0f, 0.0f, 0.0f},
+        {0.0f, 0.5f, 0.0f, 0.0f},
+        {0.0f, 0.0f, 1.0f, 0.0f},
+        {0.0f, 0.0f, 0.0f, 1.0f},
+    };
     D3DMATRIX world;
     void *bits = NULL;
     IDirect3D9 *d3d9;
@@ -981,9 +1038,57 @@ void test_visual_process_vertices_xyzhw_policy(const struct d3d9_api *api)
         CHECK_HR(IDirect3DVertexBuffer9_Unlock(src_decl_dst_vb), D3D_OK);
     }
 
+    hr = IDirect3DDevice9_CreateVertexShader(device, process_vs_3_0, &vs);
+    CHECK_HR(hr, D3D_OK);
+    if (FAILED(hr))
+        goto done_device;
+    hr = IDirect3DDevice9_CreateVertexBuffer(device, sizeof(expected), 0,
+            0, D3DPOOL_SYSTEMMEM, &prog_dst_vb, NULL);
+    CHECK_HR(hr, D3D_OK);
+    if (FAILED(hr))
+        goto done_device;
+    CHECK_HR(IDirect3DDevice9_SetVertexShaderConstantF(device, 0,
+            (const float *)vs_constants, 4), D3D_OK);
+    CHECK_HR(IDirect3DDevice9_SetVertexShader(device, vs), D3D_OK);
+    CHECK_HR(IDirect3DDevice9_ProcessVertices(device, 0, 0,
+            ARRAY_SIZE(src), prog_dst_vb, dst_decl, 0), D3D_OK);
+
+    hr = IDirect3DVertexBuffer9_Lock(prog_dst_vb, 0, sizeof(expected),
+            (void **)&mapped, D3DLOCK_READONLY);
+    CHECK_HR(hr, D3D_OK);
+    if (SUCCEEDED(hr))
+    {
+        for (i = 0; i < ARRAY_SIZE(expected); ++i)
+        {
+            float dx = mapped[i].x - expected[i].x;
+            float dy = mapped[i].y - expected[i].y;
+            float dz = mapped[i].z - expected[i].z;
+            float dw = mapped[i].rhw - expected[i].rhw;
+            float du = mapped[i].u - expected[i].u;
+            float dv = mapped[i].v - expected[i].v;
+            if (dx < 0.0f) dx = -dx;
+            if (dy < 0.0f) dy = -dy;
+            if (dz < 0.0f) dz = -dz;
+            if (dw < 0.0f) dw = -dw;
+            if (du < 0.0f) du = -du;
+            if (dv < 0.0f) dv = -dv;
+            CHECK_TRUE(dx < 0.01f);
+            CHECK_TRUE(dy < 0.01f);
+            CHECK_TRUE(dz < 0.01f);
+            CHECK_TRUE(dw < 0.01f);
+            CHECK_TRUE(mapped[i].color == expected[i].color);
+            CHECK_TRUE(du < 0.01f);
+            CHECK_TRUE(dv < 0.01f);
+        }
+        CHECK_HR(IDirect3DVertexBuffer9_Unlock(prog_dst_vb), D3D_OK);
+    }
+    CHECK_HR(IDirect3DDevice9_SetVertexShader(device, NULL), D3D_OK);
+
 done_device:
+    if (vs) IDirect3DVertexShader9_Release(vs);
     if (src_decl) IDirect3DVertexDeclaration9_Release(src_decl);
     if (dst_decl) IDirect3DVertexDeclaration9_Release(dst_decl);
+    if (prog_dst_vb) IDirect3DVertexBuffer9_Release(prog_dst_vb);
     if (src_decl_dst_vb) IDirect3DVertexBuffer9_Release(src_decl_dst_vb);
     if (decl_dst_vb) IDirect3DVertexBuffer9_Release(decl_dst_vb);
     if (dst_vb) IDirect3DVertexBuffer9_Release(dst_vb);
@@ -994,4 +1099,9 @@ done_window:
     DestroyWindow(window);
 done_d3d9:
     IDirect3D9_Release(d3d9);
+#undef PROCESS_VS_DCL
+#undef PROCESS_VS_INST
+#undef PROCESS_VS_SRC
+#undef PROCESS_VS_DST
+#undef PROCESS_VS_REGTYPE
 }
