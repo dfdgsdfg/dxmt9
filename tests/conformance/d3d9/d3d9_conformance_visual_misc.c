@@ -742,6 +742,8 @@ void test_visual_process_vertices_xyzhw_policy(const struct d3d9_api *api)
 #define PROCESS_VS_SRC(type, index) \
     (0x80000000u | PROCESS_VS_REGTYPE(type) | D3DSP_NOSWIZZLE \
             | ((DWORD)(index) & 0x7ffu))
+#define PROCESS_VS_SRC_REL(type, index) \
+    (PROCESS_VS_SRC(type, index) | D3DSHADER_ADDRMODE_RELATIVE)
 #define PROCESS_VS_SRC_MOD(type, index, mod) \
     (PROCESS_VS_SRC(type, index) | ((DWORD)(mod) & D3DSP_SRCMOD_MASK))
 #define PROCESS_VS_INST(opcode, operands) \
@@ -1471,6 +1473,11 @@ void test_visual_process_vertices_xyzhw_policy(const struct d3d9_api *api)
         PROCESS_VS_DST(D3DSPR_OUTPUT, 0, 0x7),
         PROCESS_VS_SRC(D3DSPR_OUTPUT, 0),
         PROCESS_VS_SRC(D3DSPR_TEMP, 0),
+        PROCESS_VS_INST(D3DSIO_ADD, 3),
+        PROCESS_VS_DST(D3DSPR_OUTPUT, 0, 0x7),
+        PROCESS_VS_SRC(D3DSPR_OUTPUT, 0),
+        PROCESS_VS_SRC_REL(D3DSPR_CONST, 10),
+        PROCESS_VS_SRC(D3DSPR_LOOP, 0),
         PROCESS_VS_INST(D3DSIO_ENDLOOP, 0),
         PROCESS_VS_INST(D3DSIO_MOVA, 2),
         PROCESS_VS_DST(D3DSPR_ADDR, 0, 0xf),
@@ -1483,6 +1490,11 @@ void test_visual_process_vertices_xyzhw_policy(const struct d3d9_api *api)
         PROCESS_VS_DST(D3DSPR_OUTPUT, 0, 0x7),
         PROCESS_VS_SRC(D3DSPR_OUTPUT, 0),
         PROCESS_VS_SRC(D3DSPR_TEMP, 0),
+        PROCESS_VS_INST(D3DSIO_ADD, 3),
+        PROCESS_VS_DST(D3DSPR_OUTPUT, 0, 0x7),
+        PROCESS_VS_SRC(D3DSPR_OUTPUT, 0),
+        PROCESS_VS_SRC_REL(D3DSPR_CONST, 13),
+        PROCESS_VS_SRC(D3DSPR_ADDR, 0),
         PROCESS_VS_INST(D3DSIO_CALL, 1),
         PROCESS_VS_LABEL(7),
         PROCESS_VS_INST(D3DSIO_CALLNZ, 0),
@@ -1919,11 +1931,11 @@ void test_visual_process_vertices_xyzhw_policy(const struct d3d9_api *api)
         {1.0f, 0.0f, 0.0f, 0.0f},
         {0.0f, 0.0f, 0.0f, 0.0f},
     };
-    const float vs_rep_loop_constants[10][4] =
+    const float vs_rep_loop_constants[15][4] =
     {
         {0.25f, 0.0f, 0.0f, 0.0f},
         {0.0f, 0.25f, 0.0f, 0.0f},
-        {0.875f, 0.375f, -1.0f, 0.0f},
+        {1.0f, 0.375f, -1.0f, 0.0f},
         {100.0f, 100.0f, 100.0f, 0.0f},
         {2.0f, 0.0f, 0.0f, 0.0f},
         {1.0f, 0.0f, 0.0f, 0.0f},
@@ -1931,6 +1943,11 @@ void test_visual_process_vertices_xyzhw_policy(const struct d3d9_api *api)
         {0.0f, 0.125f, 0.0f, 0.0f},
         {1.0f, 0.0f, 0.0f, 0.0f},
         {0.125f, 0.0f, 0.0f, 0.0f},
+        {0.015625f, 0.0f, 0.0f, 0.0f},
+        {0.015625f, 0.0f, 0.0f, 0.0f},
+        {0.03125f, 0.0f, 0.0f, 0.0f},
+        {0.0f, 0.0f, 0.0f, 0.0f},
+        {0.0625f, 0.0f, 0.0f, 0.0f},
     };
     const float vs_matrix_special_constants[6][4] =
     {
