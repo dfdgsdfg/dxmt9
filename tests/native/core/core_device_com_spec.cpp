@@ -517,6 +517,130 @@ void testPalettizedTextureExpansion() {
 
       checkEq(dxmt9c_texture_release(texture), 0u, "A8P8 texture release");
     }
+    {
+      auto* texture = dxmt9c_device_create_cube_texture(&cDevice, 2, 1, 0,
+                                                        41u, 1u);
+      check(texture != nullptr, "create cube P8 texture");
+      checkEq(texture->obj->desc().format, Format::A8R8G8B8,
+              "cube P8 texture uses RGBA backing");
+      checkEq(texture->obj->subresourceCount(), 6u,
+              "cube P8 has one level per face");
+
+      D9CSurfaceDesc desc{};
+      checkEq(dxmt9c_texture_get_level_desc(texture, 0, &desc), D3D_OK,
+              "cube P8 level desc");
+      checkEq(desc.format, 41u, "cube P8 public format preserved");
+
+      std::array<uint32_t, 256> palette{};
+      palette[7] = 0xff010203u;
+      palette[8] = 0xffa0b0c0u;
+      palette[9] = 0xff112233u;
+      palette[10] = 0xff445566u;
+      checkEq(dxmt9c_texture_set_palette(texture, palette.data(),
+                                          static_cast<uint32_t>(palette.size())),
+              D3D_OK, "cube P8 palette upload");
+
+      D9CLockedRect locked{};
+      const uint32_t faceSubresource = 2u;
+      checkEq(dxmt9c_texture_lock_rect(texture, faceSubresource, &locked,
+                                       nullptr, 0),
+              D3D_OK, "cube P8 lock");
+      checkEq(locked.pitch, int32_t{2},
+              "cube P8 lock pitch is one byte per texel");
+      auto* indices = static_cast<uint8_t*>(locked.bits);
+      indices[0] = 7;
+      indices[1] = 8;
+      indices[2] = 9;
+      indices[3] = 10;
+      checkEq(dxmt9c_texture_unlock_rect(texture, faceSubresource), D3D_OK,
+              "cube P8 unlock");
+
+      auto bytes = texture->obj->levelBytes(faceSubresource);
+      check(bytes.size() >= 16,
+            "cube P8 expanded backing has four BGRA pixels");
+      checkEq(bytes[0], uint8_t{0x03}, "cube P8 pixel0 blue");
+      checkEq(bytes[1], uint8_t{0x02}, "cube P8 pixel0 green");
+      checkEq(bytes[2], uint8_t{0x01}, "cube P8 pixel0 red");
+      checkEq(bytes[12], uint8_t{0x66}, "cube P8 pixel3 blue");
+      checkEq(bytes[13], uint8_t{0x55}, "cube P8 pixel3 green");
+      checkEq(bytes[14], uint8_t{0x44}, "cube P8 pixel3 red");
+      check(!backend->textureUploads.empty(),
+            "cube P8 expansion uploads converted BGRA bytes to backend");
+      const auto& upload = backend->textureUploads.back();
+      checkEq(upload.level, faceSubresource, "cube P8 backend upload face");
+      checkEq(upload.width, 2u, "cube P8 backend upload width");
+      checkEq(upload.height, 2u, "cube P8 backend upload height");
+      checkEq(upload.depth, 1u, "cube P8 backend upload depth");
+      checkEq(upload.pitch, 8u, "cube P8 backend upload pitch");
+
+      checkEq(dxmt9c_texture_release(texture), 0u, "cube P8 texture release");
+    }
+    {
+      auto* texture = dxmt9c_device_create_volume_texture(&cDevice, 2, 1, 2,
+                                                          1, 0, 40u, 1u);
+      check(texture != nullptr, "create volume A8P8 texture");
+      checkEq(texture->obj->desc().format, Format::A8R8G8B8,
+              "volume A8P8 texture uses RGBA backing");
+
+      D9CSurfaceDesc desc{};
+      checkEq(dxmt9c_texture_get_level_desc(texture, 0, &desc), D3D_OK,
+              "volume A8P8 level desc");
+      checkEq(desc.format, 40u, "volume A8P8 public format preserved");
+      checkEq(desc.depth, 2u, "volume A8P8 depth preserved");
+
+      std::array<uint32_t, 256> palette{};
+      palette[11] = 0xff102030u;
+      palette[12] = 0xff405060u;
+      palette[13] = 0xff708090u;
+      palette[14] = 0xffa0b0c0u;
+      checkEq(dxmt9c_texture_set_palette(texture, palette.data(),
+                                          static_cast<uint32_t>(palette.size())),
+              D3D_OK, "volume A8P8 palette upload");
+
+      D9CLockedRect locked{};
+      checkEq(dxmt9c_texture_lock_rect(texture, 0, &locked, nullptr, 0),
+              D3D_OK, "volume A8P8 lock");
+      checkEq(locked.pitch, int32_t{4},
+              "volume A8P8 lock pitch is two bytes per texel");
+      auto* texels = static_cast<uint8_t*>(locked.bits);
+      texels[0] = 11;
+      texels[1] = 0x10;
+      texels[2] = 12;
+      texels[3] = 0x20;
+      texels[4] = 13;
+      texels[5] = 0x30;
+      texels[6] = 14;
+      texels[7] = 0x40;
+      checkEq(dxmt9c_texture_unlock_rect(texture, 0), D3D_OK,
+              "volume A8P8 unlock");
+
+      auto bytes = texture->obj->levelBytes(0);
+      check(bytes.size() >= 16,
+            "volume A8P8 expanded backing has two BGRA slices");
+      checkEq(bytes[0], uint8_t{0x30}, "volume A8P8 slice0 pixel0 blue");
+      checkEq(bytes[3], uint8_t{0x10}, "volume A8P8 slice0 pixel0 alpha");
+      checkEq(bytes[8], uint8_t{0x90}, "volume A8P8 slice1 pixel0 blue");
+      checkEq(bytes[11], uint8_t{0x30}, "volume A8P8 slice1 pixel0 alpha");
+      checkEq(bytes[12], uint8_t{0xc0}, "volume A8P8 slice1 pixel1 blue");
+      checkEq(bytes[15], uint8_t{0x40}, "volume A8P8 slice1 pixel1 alpha");
+      check(!backend->textureUploads.empty(),
+            "volume A8P8 expansion uploads converted BGRA bytes to backend");
+      const auto& upload = backend->textureUploads.back();
+      checkEq(upload.width, 2u, "volume A8P8 backend upload width");
+      checkEq(upload.height, 1u, "volume A8P8 backend upload height");
+      checkEq(upload.depth, 2u, "volume A8P8 backend upload depth");
+      checkEq(upload.pitch, 8u, "volume A8P8 backend upload pitch");
+      checkEq(upload.slicePitch, 8u, "volume A8P8 backend upload slice pitch");
+      check(upload.bytes.size() >= 16,
+            "volume A8P8 backend upload has two expanded slices");
+      checkEq(upload.bytes[8], uint8_t{0x90},
+              "volume A8P8 backend slice1 pixel0 blue");
+      checkEq(upload.bytes[15], uint8_t{0x40},
+              "volume A8P8 backend slice1 pixel1 alpha");
+
+      checkEq(dxmt9c_texture_release(texture), 0u,
+              "volume A8P8 texture release");
+    }
   }
   checkEq(device->Release(), 0u, "P8 device release");
   checkEq(d3d->Release(), 0u, "P8 factory release");

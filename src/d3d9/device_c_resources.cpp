@@ -114,6 +114,9 @@ size_t palettizedSubresourceBytes(const dxmt9::core::TextureDesc& desc,
                              : subresource;
   return static_cast<size_t>(mipDimension(desc.width, level)) *
          static_cast<size_t>(mipDimension(desc.height, level)) *
+         static_cast<size_t>(desc.type == dxmt9::core::TextureType::Volume
+                                 ? mipDimension(desc.depth, level)
+                                 : 1u) *
          texelBytes;
 }
 
@@ -146,9 +149,13 @@ void expandP8SubresourceToBackend(D9CTexture* texture, uint32_t subresource) {
                              : subresource;
   const uint32_t width = mipDimension(desc.width, level);
   const uint32_t height = mipDimension(desc.height, level);
+  const uint32_t depth = desc.type == dxmt9::core::TextureType::Volume
+                             ? mipDimension(desc.depth, level)
+                             : 1u;
   const uint32_t texelBytes = palettizedTexelBytes(texture->d3dFormat);
   const auto& indices = texture->p8Levels[subresource];
-  if (indices.size() < static_cast<size_t>(width) * height * texelBytes) {
+  if (indices.size() <
+      static_cast<size_t>(width) * height * depth * texelBytes) {
     return;
   }
 
@@ -157,20 +164,27 @@ void expandP8SubresourceToBackend(D9CTexture* texture, uint32_t subresource) {
     return;
   }
   auto* dst = static_cast<uint8_t*>(lock.data);
-  for (uint32_t y = 0; y < height; ++y) {
-    for (uint32_t x = 0; x < width; ++x) {
-      const size_t sourceOffset =
-          (static_cast<size_t>(y) * width + x) * texelBytes;
-      const uint8_t index = indices[sourceOffset];
-      const uint32_t color = texture->p8Palette[index];
-      auto* pixel = dst + static_cast<size_t>(y) * lock.pitch +
-                    static_cast<size_t>(x) * 4u;
-      pixel[0] = static_cast<uint8_t>(color & 0xffu);
-      pixel[1] = static_cast<uint8_t>((color >> 8) & 0xffu);
-      pixel[2] = static_cast<uint8_t>((color >> 16) & 0xffu);
-      pixel[3] = texture->d3dFormat == kD3DFmtA8P8
-                     ? indices[sourceOffset + 1u]
-                     : static_cast<uint8_t>((color >> 24) & 0xffu);
+  const size_t sourceSlicePitch =
+      static_cast<size_t>(width) * height * texelBytes;
+  const size_t destSlicePitch = static_cast<size_t>(lock.pitch) * height;
+  for (uint32_t z = 0; z < depth; ++z) {
+    for (uint32_t y = 0; y < height; ++y) {
+      for (uint32_t x = 0; x < width; ++x) {
+        const size_t sourceOffset =
+            static_cast<size_t>(z) * sourceSlicePitch +
+            (static_cast<size_t>(y) * width + x) * texelBytes;
+        const uint8_t index = indices[sourceOffset];
+        const uint32_t color = texture->p8Palette[index];
+        auto* pixel = dst + static_cast<size_t>(z) * destSlicePitch +
+                      static_cast<size_t>(y) * lock.pitch +
+                      static_cast<size_t>(x) * 4u;
+        pixel[0] = static_cast<uint8_t>(color & 0xffu);
+        pixel[1] = static_cast<uint8_t>((color >> 8) & 0xffu);
+        pixel[2] = static_cast<uint8_t>((color >> 16) & 0xffu);
+        pixel[3] = texture->d3dFormat == kD3DFmtA8P8
+                       ? indices[sourceOffset + 1u]
+                       : static_cast<uint8_t>((color >> 24) & 0xffu);
+      }
     }
   }
   texture->obj->unlockRect(subresource);
@@ -237,7 +251,7 @@ extern "C" D9CTexture* dxmt9c_device_create_cube_texture(D9CDevice* d, uint32_t 
   desc.width = size;
   desc.height = size;
   desc.levels = resolveMipLevelCount(levels, usage, size, size, 1u);
-  desc.format = fmtFromD3D(fmt);
+  desc.format = fmtFromD3D(isPalettizedD3DFormat(fmt) ? kD3DFmtA8R8G8B8 : fmt);
   desc.pool = poolFromD3D(pool);
   desc.usage = usageFromD3D(usage);
   desc.type = dxmt9::core::TextureType::Cube;
@@ -248,7 +262,10 @@ extern "C" D9CTexture* dxmt9c_device_create_cube_texture(D9CDevice* d, uint32_t 
   if (!tex) {
     return nullptr;
   }
-  return new D9CTexture{tex, d};
+  auto* out = new D9CTexture{tex, d};
+  out->d3dFormat = fmt;
+  initPalettizedTexture(out, fmt);
+  return out;
 }
 
 extern "C" D9CTexture* dxmt9c_device_create_volume_texture(D9CDevice* d, uint32_t w, uint32_t h,
@@ -260,7 +277,7 @@ extern "C" D9CTexture* dxmt9c_device_create_volume_texture(D9CDevice* d, uint32_
   desc.height = h;
   desc.depth = depth;
   desc.levels = resolveMipLevelCount(levels, usage, w, h, depth);
-  desc.format = fmtFromD3D(fmt);
+  desc.format = fmtFromD3D(isPalettizedD3DFormat(fmt) ? kD3DFmtA8R8G8B8 : fmt);
   desc.pool = poolFromD3D(pool);
   desc.usage = usageFromD3D(usage);
   desc.type = dxmt9::core::TextureType::Volume;
@@ -271,7 +288,10 @@ extern "C" D9CTexture* dxmt9c_device_create_volume_texture(D9CDevice* d, uint32_
   if (!tex) {
     return nullptr;
   }
-  return new D9CTexture{tex, d};
+  auto* out = new D9CTexture{tex, d};
+  out->d3dFormat = fmt;
+  initPalettizedTexture(out, fmt);
+  return out;
 }
 
 extern "C" D9CBuffer* dxmt9c_device_create_vertex_buffer(D9CDevice* d, uint32_t len,
@@ -410,11 +430,16 @@ extern "C" int32_t dxmt9c_texture_lock_rect(D9CTexture* t, uint32_t level, D9CLo
                                   : level;
     const uint32_t width = mipDimension(desc.width, mipLevel);
     const uint32_t height = mipDimension(desc.height, mipLevel);
+    const uint32_t depth = desc.type == dxmt9::core::TextureType::Volume
+                               ? mipDimension(desc.depth, mipLevel)
+                               : 1u;
     const uint32_t left = r ? static_cast<uint32_t>(std::clamp(r->left, 0, static_cast<int32_t>(width))) : 0u;
     const uint32_t top = r ? static_cast<uint32_t>(std::clamp(r->top, 0, static_cast<int32_t>(height))) : 0u;
     const uint32_t texelBytes = palettizedTexelBytes(t->d3dFormat);
-    if (t->p8Levels[level].size() < static_cast<size_t>(width) * height * texelBytes) {
-      t->p8Levels[level].assign(static_cast<size_t>(width) * height * texelBytes, 0);
+    if (t->p8Levels[level].size() <
+        static_cast<size_t>(width) * height * depth * texelBytes) {
+      t->p8Levels[level].assign(
+          static_cast<size_t>(width) * height * depth * texelBytes, 0);
     }
     out->pitch = static_cast<int32_t>(width * texelBytes);
     out->bits = t->p8Levels[level].data() +
