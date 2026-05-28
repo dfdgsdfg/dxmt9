@@ -5330,7 +5330,7 @@ public:
         };
         if (!dstBuffer) return invalid("null destination buffer");
         if (vertexCount == 0) return S_OK;
-        if (flags != 0) return invalid("flags unsupported");
+        if (flags & ~D3DPV_DONOTCOPYDATA) return invalid("flags unsupported");
         const bool programmable = vs_ != nullptr;
         std::vector<DWORD> shaderWords;
         ProcessShaderIo shaderIo{};
