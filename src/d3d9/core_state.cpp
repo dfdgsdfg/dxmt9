@@ -1004,8 +1004,10 @@ HResult Device::setRenderTarget(u32 index, std::shared_ptr<Surface> surface) {
               : RenderTargetAttachment{};
   if (index == 0 && surface) {
     const auto &desc = surface->desc();
-    state_.viewport = {
-        0, 0, std::max(1u, desc.width), std::max(1u, desc.height), 0.0f, 1.0f};
+    const u32 width = std::max(1u, desc.width);
+    const u32 height = std::max(1u, desc.height);
+    state_.viewport = {0, 0, width, height, 0.0f, 1.0f};
+    state_.scissorRect = {0, 0, static_cast<i32>(width), static_cast<i32>(height)};
   }
   invalidateDrawStateCache();
   return D3D_OK;

@@ -513,8 +513,11 @@ int32_t applyDrawPacketStateDirect(D9CDevice* d, const D9CDrawPrimitivePacket& p
     state.renderTargets[slot] = attachmentFromSurface(surface);
     if (slot == 0 && surface) {
       const auto& desc = surface->desc();
-      state.viewport = {0, 0, std::max(1u, desc.width), std::max(1u, desc.height),
-                        0.0f, 1.0f};
+      const auto width = std::max(1u, desc.width);
+      const auto height = std::max(1u, desc.height);
+      state.viewport = {0, 0, width, height, 0.0f, 1.0f};
+      state.scissorRect = {0, 0, static_cast<int32_t>(width),
+                           static_cast<int32_t>(height)};
     }
   }
 

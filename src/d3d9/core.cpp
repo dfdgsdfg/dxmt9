@@ -137,6 +137,7 @@ Device::Device(AdapterInfo adapter, BackendLimits limits,
   const u32 width = std::max(1u, presentParameters_.backBufferWidth);
   const u32 height = std::max(1u, presentParameters_.backBufferHeight);
   state_.viewport = {0, 0, width, height, 0.0f, 1.0f};
+  state_.scissorRect = {0, 0, static_cast<i32>(width), static_cast<i32>(height)};
   deviceLost_ = false;
   maximumFrameLatency_ = kDefaultFrameLatency;
   // Identity ramp baseline — entries[i] = i << 8 per channel. Apps that
@@ -277,9 +278,10 @@ HResult Device::resetValidated(const PresentParameters& params) {
   DXMT_ASSERT(completedSequenceId_ == submittedSequenceId_);
   invalidateDefaultPoolResources();
   state_.reset();
-  state_.viewport = {0, 0, std::max(1u, presentParameters_.backBufferWidth),
-                     std::max(1u, presentParameters_.backBufferHeight), 0.0f,
-                     1.0f};
+  const u32 width = std::max(1u, presentParameters_.backBufferWidth);
+  const u32 height = std::max(1u, presentParameters_.backBufferHeight);
+  state_.viewport = {0, 0, width, height, 0.0f, 1.0f};
+  state_.scissorRect = {0, 0, static_cast<i32>(width), static_cast<i32>(height)};
   for (auto& chain : swapChains_) {
     if (chain) {
       chain->resize(presentParameters_);

@@ -2576,6 +2576,10 @@ bool encodeDraw(EncodeContext& ctx,
         << " cullState=" << cullState
         << " cullRequested=" << static_cast<unsigned>(requestedCullMode)
         << " cullEffective=" << static_cast<unsigned>(effectiveCullMode)
+        << " scissor=" << (hot.viewport.scissorEnabled ? 1 : 0)
+        << " scissorRect=" << hot.viewport.scissor.left << ","
+        << hot.viewport.scissor.top << "-" << hot.viewport.scissor.right
+        << "," << hot.viewport.scissor.bottom
         << " alphaBlend="
         << core::flatStateOr(hot.renderStates, RS_ALPHABLEND_ENABLE, 0u)
         << " srcBlend=" << core::flatStateOr(hot.renderStates, RS_SRC_BLEND, 0u)

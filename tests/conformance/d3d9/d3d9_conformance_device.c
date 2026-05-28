@@ -1840,6 +1840,7 @@ done_d3d9:
 void test_viewport_scissor_state_getters(const struct d3d9_api *api)
 {
     IDirect3DDevice9 *device = NULL;
+    IDirect3DSurface9 *rt = NULL;
     D3DVIEWPORT9 expected_vp;
     D3DVIEWPORT9 actual_vp;
     IDirect3D9 *d3d9;
@@ -1914,6 +1915,78 @@ void test_viewport_scissor_state_getters(const struct d3d9_api *api)
     if (SUCCEEDED(hr))
         CHECK_TRUE(EqualRect(&actual_rect, &expected_rect));
 
+    hr = IDirect3DDevice9_CreateRenderTarget(device, 128, 128, D3DFMT_A8R8G8B8,
+            D3DMULTISAMPLE_NONE, 0, FALSE, &rt, NULL);
+    CHECK_HR(hr, D3D_OK);
+    if (FAILED(hr))
+        goto done_device;
+
+    CHECK_HR(IDirect3DDevice9_SetRenderTarget(device, 0, rt), D3D_OK);
+
+    memset(&actual_vp, 0xcc, sizeof(actual_vp));
+    hr = IDirect3DDevice9_GetViewport(device, &actual_vp);
+    CHECK_HR(hr, D3D_OK);
+    if (SUCCEEDED(hr))
+    {
+        CHECK_TRUE(actual_vp.X == 0);
+        CHECK_TRUE(actual_vp.Y == 0);
+        CHECK_TRUE(actual_vp.Width == 128);
+        CHECK_TRUE(actual_vp.Height == 128);
+        CHECK_TRUE(actual_vp.MinZ == 0.0f);
+        CHECK_TRUE(actual_vp.MaxZ == 1.0f);
+    }
+
+    memset(&actual_rect, 0xcc, sizeof(actual_rect));
+    hr = IDirect3DDevice9_GetScissorRect(device, &actual_rect);
+    CHECK_HR(hr, D3D_OK);
+    if (SUCCEEDED(hr))
+    {
+        CHECK_TRUE(actual_rect.left == 0);
+        CHECK_TRUE(actual_rect.top == 0);
+        CHECK_TRUE(actual_rect.right == 128);
+        CHECK_TRUE(actual_rect.bottom == 128);
+    }
+
+    expected_vp.X = 10;
+    expected_vp.Y = 20;
+    expected_vp.Width = 30;
+    expected_vp.Height = 40;
+    expected_vp.MinZ = 0.25f;
+    expected_vp.MaxZ = 0.75f;
+    CHECK_HR(IDirect3DDevice9_SetViewport(device, &expected_vp), D3D_OK);
+
+    SetRect(&expected_rect, 50, 60, 70, 80);
+    CHECK_HR(IDirect3DDevice9_SetScissorRect(device, &expected_rect), D3D_OK);
+
+    CHECK_HR(IDirect3DDevice9_SetRenderTarget(device, 0, rt), D3D_OK);
+
+    memset(&actual_vp, 0xcc, sizeof(actual_vp));
+    hr = IDirect3DDevice9_GetViewport(device, &actual_vp);
+    CHECK_HR(hr, D3D_OK);
+    if (SUCCEEDED(hr))
+    {
+        CHECK_TRUE(actual_vp.X == 0);
+        CHECK_TRUE(actual_vp.Y == 0);
+        CHECK_TRUE(actual_vp.Width == 128);
+        CHECK_TRUE(actual_vp.Height == 128);
+        CHECK_TRUE(actual_vp.MinZ == 0.0f);
+        CHECK_TRUE(actual_vp.MaxZ == 1.0f);
+    }
+
+    memset(&actual_rect, 0xcc, sizeof(actual_rect));
+    hr = IDirect3DDevice9_GetScissorRect(device, &actual_rect);
+    CHECK_HR(hr, D3D_OK);
+    if (SUCCEEDED(hr))
+    {
+        CHECK_TRUE(actual_rect.left == 0);
+        CHECK_TRUE(actual_rect.top == 0);
+        CHECK_TRUE(actual_rect.right == 128);
+        CHECK_TRUE(actual_rect.bottom == 128);
+    }
+
+done_device:
+    if (rt)
+        IDirect3DSurface9_Release(rt);
     IDirect3DDevice9_Release(device);
 
 done_window:

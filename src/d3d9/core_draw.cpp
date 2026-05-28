@@ -1908,7 +1908,8 @@ void Device::submitDrawRunInternal(
           "vsHash=0x%llx psHash=0x%llx stateHash=0x%llx fvf=0x%x lighting=%u "
           "cull=%u alphaTest=%u alphaBlend=%u srcBlend=%u dstBlend=%u "
           "colorOp0=%u alphaOp0=%u tcIdx0=0x%x ttff0=0x%x colorOp1=%u "
-          "alphaOp1=%u tcIdx1=0x%x ttff1=0x%x clipMask=0x%x indexed=%u",
+          "alphaOp1=%u tcIdx1=0x%x ttff1=0x%x scissor=%u "
+          "scissorRect=%d,%d-%d,%d clipMask=0x%x indexed=%u",
           static_cast<unsigned long long>(submittedSequenceId_ + 1 + i),
           static_cast<unsigned>(draw.primitiveType), draw.primitiveCount,
           draw.startVertex, draw.baseVertexIndex, draw.startIndex,
@@ -1929,7 +1930,11 @@ void Device::submitDrawRunInternal(
           stageState(0, TSS_TEXTURE_TRANSFORM_FLAGS),
           stageState(1, TSS_COLOR_OP), stageState(1, TSS_ALPHA_OP),
           stageState(1, TSS_TEXCOORD_INDEX),
-          stageState(1, TSS_TEXTURE_TRANSFORM_FLAGS), hot.clipPlaneMask,
+          stageState(1, TSS_TEXTURE_TRANSFORM_FLAGS),
+          hot.viewport.scissorEnabled ? 1u : 0u,
+          hot.viewport.scissor.left, hot.viewport.scissor.top,
+          hot.viewport.scissor.right, hot.viewport.scissor.bottom,
+          hot.clipPlaneMask,
           draw.indexed ? 1u : 0u);
     }
   }

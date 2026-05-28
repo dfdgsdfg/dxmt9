@@ -3036,6 +3036,18 @@ public:
         if (valueChanged || !wasExplicit) {
             peState_.pendingRtMask |= 1u << idx;
         }
+        if (idx == 0 && pSurf) {
+            D3DSURFACE_DESC desc{};
+            const HRESULT descHr = pSurf->GetDesc(&desc);
+            if (FAILED(descHr)) return descHr;
+            const uint32_t w = std::max<uint32_t>(1u, desc.Width);
+            const uint32_t h = std::max<uint32_t>(1u, desc.Height);
+            peState_.viewportShadow = D9CViewport{0, 0, w, h, 0.0f, 1.0f};
+            peState_.scissorShadow = D9CRect{0, 0, static_cast<int32_t>(w),
+                                             static_cast<int32_t>(h)};
+            peState_.pendingViewport = true;
+            peState_.pendingScissor = true;
+        }
         return S_OK;
     }
 

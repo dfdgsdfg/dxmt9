@@ -106,6 +106,8 @@ void testDeviceCoreFlow() {
   auto scratchSurface = device->createSurface({2, 2, Format::A8R8G8B8, Pool::Scratch, 0, false, false});
   auto copySurface = device->createSurface({2, 2, Format::A8R8G8B8, Pool::Default, 0, false, false});
   auto stretchSurface = device->createSurface({4, 4, Format::A8R8G8B8, Pool::Default, 0, false, false});
+  auto renderTargetSurface =
+      device->createSurface({128, 96, Format::A8R8G8B8, Pool::Default, UsageRenderTarget, true, false});
   auto readbackSurface = device->createSurface({2, 2, Format::A8R8G8B8, Pool::Scratch, 0, false, false});
 
   check(dynamicBuffer != nullptr, "default buffer");
@@ -119,7 +121,41 @@ void testDeviceCoreFlow() {
   check(scratchSurface != nullptr, "scratch surface");
   check(copySurface != nullptr, "copy surface");
   check(stretchSurface != nullptr, "stretch surface");
+  check(renderTargetSurface != nullptr, "render target surface");
   check(readbackSurface != nullptr, "readback surface");
+
+  checkEq(device->setViewport({10, 20, 30, 40, 0.25f, 0.75f}), D3D_OK,
+          "custom viewport before render target");
+  checkEq(device->setScissorRect({50, 60, 70, 80}), D3D_OK,
+          "custom scissor before render target");
+  checkEq(device->setRenderTarget(0, renderTargetSurface), D3D_OK,
+          "set render target resets viewport and scissor");
+  checkEq(device->state().viewport.x, 0u, "render target viewport x");
+  checkEq(device->state().viewport.y, 0u, "render target viewport y");
+  checkEq(device->state().viewport.width, 128u, "render target viewport width");
+  checkEq(device->state().viewport.height, 96u, "render target viewport height");
+  checkEq(device->state().scissorRect.left, 0, "render target scissor left");
+  checkEq(device->state().scissorRect.top, 0, "render target scissor top");
+  checkEq(device->state().scissorRect.right, 128, "render target scissor right");
+  checkEq(device->state().scissorRect.bottom, 96, "render target scissor bottom");
+
+  checkEq(device->setViewport({10, 20, 30, 40, 0.25f, 0.75f}), D3D_OK,
+          "custom viewport before same render target");
+  checkEq(device->setScissorRect({50, 60, 70, 80}), D3D_OK,
+          "custom scissor before same render target");
+  checkEq(device->setRenderTarget(0, renderTargetSurface), D3D_OK,
+          "same render target resets viewport and scissor");
+  checkEq(device->state().viewport.width, 128u, "same render target viewport width");
+  checkEq(device->state().viewport.height, 96u, "same render target viewport height");
+  checkEq(device->state().scissorRect.right, 128, "same render target scissor right");
+  checkEq(device->state().scissorRect.bottom, 96, "same render target scissor bottom");
+
+  checkEq(device->setRenderTarget(0, backBuffer), D3D_OK,
+          "restore back buffer render target");
+  checkEq(device->state().viewport.width, 640u, "back buffer viewport width restored");
+  checkEq(device->state().viewport.height, 480u, "back buffer viewport height restored");
+  checkEq(device->state().scissorRect.right, 640, "back buffer scissor right restored");
+  checkEq(device->state().scissorRect.bottom, 480, "back buffer scissor bottom restored");
 
   auto bufferRegion = dynamicBuffer->lock(0, 16, UsageDiscard);
   check(bufferRegion.data != nullptr, "buffer lock");
