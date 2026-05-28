@@ -820,6 +820,8 @@ static UINT simpleProcessShaderOperandCount(UINT opcode, DWORD token) {
         case D3DSIO_NOP:
         case D3DSIO_RET:
         case D3DSIO_PHASE:
+        case D3DSIO_ELSE:
+        case D3DSIO_ENDIF:
             return 0;
         case D3DSIO_MOV:
         case D3DSIO_MOVA:
@@ -855,6 +857,10 @@ static UINT simpleProcessShaderOperandCount(UINT opcode, DWORD token) {
         case D3DSIO_M3x3:
             return 3;
         case D3DSIO_DCL:
+            return 2;
+        case D3DSIO_IF:
+            return 1;
+        case D3DSIO_IFC:
             return 2;
         case D3DSIO_DEF:
             return 5;
@@ -1134,6 +1140,49 @@ static bool simpleVsWriteDest(SimpleVsRegisters& regs,
     return true;
 }
 
+static bool simpleVsIfcCompare(DWORD token, float a, float b) {
+    switch ((token >> 16u) & 0xfu) {
+        case 1: return a > b;   /* D3DSPC_GT */
+        case 2: return a == b;  /* D3DSPC_EQ */
+        case 3: return a >= b;  /* D3DSPC_GE */
+        case 4: return a < b;   /* D3DSPC_LT */
+        case 5: return a != b;  /* D3DSPC_NE */
+        case 6: return a <= b;  /* D3DSPC_LE */
+        default: return a == b;
+    }
+}
+
+static bool simpleVsSkipControlBlock(const std::vector<DWORD>& words,
+                                     size_t& index,
+                                     bool stopAtElse) {
+    UINT depth = 0;
+    for (size_t scan = index; scan < words.size();) {
+        const DWORD token = words[scan++];
+        const UINT opcode = token & D3DSI_OPCODE_MASK;
+        if (opcode == D3DSIO_END) return false;
+        if (opcode == D3DSIO_COMMENT) {
+            if (!shaderSkipComment(words, scan, token)) return false;
+            continue;
+        }
+        const UINT operandCount = simpleProcessShaderOperandCount(opcode, token);
+        if (operandCount > words.size() - scan) return false;
+        scan += operandCount;
+        if (opcode == D3DSIO_IF || opcode == D3DSIO_IFC) {
+            ++depth;
+        } else if (opcode == D3DSIO_ENDIF) {
+            if (depth == 0u) {
+                index = scan;
+                return true;
+            }
+            --depth;
+        } else if (opcode == D3DSIO_ELSE && stopAtElse && depth == 0u) {
+            index = scan;
+            return true;
+        }
+    }
+    return false;
+}
+
 static bool executeSimpleProcessVertexShader(const std::vector<DWORD>& words,
                                              const ProcessShaderIo& io,
                                              SimpleVsRegisters& regs) {
@@ -1150,6 +1199,34 @@ static bool executeSimpleProcessVertexShader(const std::vector<DWORD>& words,
         const DWORD* operands = words.data() + index;
         index += operandCount;
         if (opcode == D3DSIO_NOP || opcode == D3DSIO_DCL || opcode == D3DSIO_PHASE) {
+            continue;
+        }
+        if (opcode == D3DSIO_IF || opcode == D3DSIO_IFC) {
+            float condition[4]{};
+            float rhs[4]{};
+            if (!simpleVsReadSource(regs, io.major, operands[0], condition)) {
+                return false;
+            }
+            bool takeBranch = condition[0] != 0.0f;
+            if (opcode == D3DSIO_IFC) {
+                if (!simpleVsReadSource(regs, io.major, operands[1], rhs)) {
+                    return false;
+                }
+                takeBranch = simpleVsIfcCompare(token, condition[0], rhs[0]);
+            }
+            if (!takeBranch &&
+                !simpleVsSkipControlBlock(words, index, true)) {
+                return false;
+            }
+            continue;
+        }
+        if (opcode == D3DSIO_ELSE) {
+            if (!simpleVsSkipControlBlock(words, index, false)) {
+                return false;
+            }
+            continue;
+        }
+        if (opcode == D3DSIO_ENDIF) {
             continue;
         }
         if (opcode == D3DSIO_DEF) {
