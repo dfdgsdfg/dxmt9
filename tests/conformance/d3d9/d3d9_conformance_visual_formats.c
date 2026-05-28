@@ -389,9 +389,43 @@ void test_visual_signed_formats_caps_policy(const struct d3d9_api *api)
     IDirect3D9_Release(d3d9);
 }
 
+#define P8_PS_REGTYPE(type) \
+    ((((DWORD)(type) & 0x7u) << D3DSP_REGTYPE_SHIFT) \
+            | (((((DWORD)(type) >> 3u) & 0x3u) << D3DSP_REGTYPE_SHIFT2)))
+#define P8_PS_DST(type, index, mask) \
+    (0x80000000u | P8_PS_REGTYPE(type) \
+            | (((DWORD)(mask) & 0xfu) << 16) | ((DWORD)(index) & 0x7ffu))
+#define P8_PS_SRC(type, index) \
+    (0x80000000u | P8_PS_REGTYPE(type) | D3DSP_NOSWIZZLE \
+            | ((DWORD)(index) & 0x7ffu))
+#define P8_PS_INST(opcode, operands) \
+    (((DWORD)(opcode) & D3DSI_OPCODE_MASK) \
+            | (((DWORD)(operands) & 0xfu) << D3DSI_INSTLENGTH_SHIFT))
+
+static const DWORD p8_sample_ps_2_0[] =
+{
+    D3DPS_VERSION(2, 0),
+    P8_PS_INST(D3DSIO_DCL, 2),
+    D3DDECLUSAGE_TEXCOORD,
+    P8_PS_DST(D3DSPR_TEXTURE, 0, 0x3),
+    P8_PS_INST(D3DSIO_DCL, 2),
+    D3DSTT_2D,
+    P8_PS_DST(D3DSPR_SAMPLER, 0, 0xf),
+    P8_PS_INST(D3DSIO_TEX, 3),
+    P8_PS_DST(D3DSPR_TEMP, 0, 0xf),
+    P8_PS_SRC(D3DSPR_TEXTURE, 0),
+    P8_PS_SRC(D3DSPR_SAMPLER, 0),
+    D3DSIO_END
+};
+
+#undef P8_PS_INST
+#undef P8_PS_SRC
+#undef P8_PS_DST
+#undef P8_PS_REGTYPE
+
 static void check_visual_palettized_texture_sampler(IDirect3DDevice9 *device,
         D3DFORMAT format, const BYTE *texels, UINT texel_bytes,
-        const DWORD *expected)
+        const DWORD *expected, BOOL programmable_ps)
 {
     struct textured_point
     {
@@ -408,6 +442,7 @@ static void check_visual_palettized_texture_sampler(IDirect3DDevice9 *device,
     IDirect3DSurface9 *readback = NULL;
     IDirect3DSurface9 *rt = NULL;
     IDirect3DTexture9 *texture = NULL;
+    IDirect3DPixelShader9 *ps = NULL;
     D3DLOCKED_RECT locked;
     DWORD point_size;
     D3DVIEWPORT9 vp;
@@ -482,6 +517,15 @@ static void check_visual_palettized_texture_sampler(IDirect3DDevice9 *device,
             (IDirect3DBaseTexture9 *)texture), D3D_OK);
     CHECK_HR(IDirect3DDevice9_SetFVF(device, D3DFVF_XYZRHW | D3DFVF_TEX1),
             D3D_OK);
+    if (programmable_ps)
+    {
+        hr = IDirect3DDevice9_CreatePixelShader(device, p8_sample_ps_2_0,
+                &ps);
+        CHECK_HR(hr, D3D_OK);
+        if (FAILED(hr))
+            goto done_texture_bind;
+        CHECK_HR(IDirect3DDevice9_SetPixelShader(device, ps), D3D_OK);
+    }
 
     CHECK_HR(IDirect3DDevice9_BeginScene(device), D3D_OK);
     CHECK_HR(IDirect3DDevice9_Clear(device, 0, NULL, D3DCLEAR_TARGET,
@@ -508,6 +552,10 @@ static void check_visual_palettized_texture_sampler(IDirect3DDevice9 *device,
         CHECK_HR(IDirect3DSurface9_UnlockRect(readback), D3D_OK);
     }
 
+    if (programmable_ps)
+        CHECK_HR(IDirect3DDevice9_SetPixelShader(device, NULL), D3D_OK);
+    if (ps) IDirect3DPixelShader9_Release(ps);
+done_texture_bind:
     CHECK_HR(IDirect3DDevice9_SetTexture(device, 0, NULL), D3D_OK);
     IDirect3DSurface9_Release(readback);
 done_rt:
@@ -526,8 +574,8 @@ done:
  * Pins dxmt9's palettized runtime path beyond API round-trip state:
  * D3DFMT_P8 and D3DFMT_A8P8 textures must lock as index texels, expand
  * through the current texture palette into an A8R8G8B8 backing, and
- * sample those expanded color/alpha values through the fixed-function
- * texture stage.
+ * sample those expanded color/alpha values through both fixed-function
+ * texture-stage state and a ps_2_0 texld path.
  */
 void test_visual_p8_texture_sampler_policy(const struct d3d9_api *api)
 {
@@ -545,6 +593,7 @@ void test_visual_p8_texture_sampler_policy(const struct d3d9_api *api)
     };
     IDirect3DDevice9 *device = NULL;
     PALETTEENTRY palette[256];
+    D3DCAPS9 caps;
     IDirect3D9 *d3d9;
     HWND window;
     HRESULT hr;
@@ -582,6 +631,8 @@ void test_visual_p8_texture_sampler_policy(const struct d3d9_api *api)
     device = create_base_device(d3d9, window);
     if (!device)
         goto done_window;
+    memset(&caps, 0, sizeof(caps));
+    CHECK_HR(IDirect3DDevice9_GetDeviceCaps(device, &caps), D3D_OK);
 
     memset(palette, 0, sizeof(palette));
     for (i = 0; i < ARRAY_SIZE(palette); ++i)
@@ -600,9 +651,20 @@ void test_visual_p8_texture_sampler_policy(const struct d3d9_api *api)
             D3D_OK);
 
     check_visual_palettized_texture_sampler(device, D3DFMT_P8,
-            p8_texels, 1, p8_expected);
+            p8_texels, 1, p8_expected, FALSE);
     check_visual_palettized_texture_sampler(device, D3DFMT_A8P8,
-            a8p8_texels, 2, a8p8_expected);
+            a8p8_texels, 2, a8p8_expected, FALSE);
+    if (caps.PixelShaderVersion >= D3DPS_VERSION(2, 0))
+    {
+        check_visual_palettized_texture_sampler(device, D3DFMT_P8,
+                p8_texels, 1, p8_expected, TRUE);
+        check_visual_palettized_texture_sampler(device, D3DFMT_A8P8,
+                a8p8_texels, 2, a8p8_expected, TRUE);
+    }
+    else
+    {
+        skip_current_test("ps_2_0 is not supported");
+    }
     IDirect3DDevice9_Release(device);
 done_window:
     DestroyWindow(window);
