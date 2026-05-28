@@ -71,6 +71,8 @@ dxmt9::core::Format fmtFromD3D(uint32_t d3d) {
     case 50: return F::L8;
     case 81: return F::L16;
     case 51: return F::A8L8;
+    case 40: return F::A8P8;
+    case 41: return F::P8;
     case 60: return F::V8U8;
     case 63: return F::Q8W8V8U8;
     case 64: return F::V16U16;
@@ -143,6 +145,8 @@ uint32_t fmtToD3D(dxmt9::core::Format format) {
     case F::L8: return 50;
     case F::L16: return 81;
     case F::A8L8: return 51;
+    case F::A8P8: return 40;
+    case F::P8: return 41;
     case F::V8U8: return 60;
     case F::Q8W8V8U8: return 63;
     case F::V16U16: return 64;

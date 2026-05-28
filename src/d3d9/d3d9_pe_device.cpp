@@ -1338,7 +1338,7 @@ class D3D9DeviceImpl final : public IDirect3DDevice9Ex, public D3D9PeRecorderFlu
     // Reset because the C ABI does not yet round-trip the field.
     DWORD implicitSwapchainFlagsShadow_ = 0;
 
-    /* Palette shadow for Wine conformance round-trip and active 2D P8
+    /* Palette shadow for Wine conformance round-trip and active P8/A8P8
      * texture expansion. Set/Get remain PE-owned state; when a current
      * palette is selected, bound palettized textures push expanded
      * A8R8G8B8 texels to the backend for sampling. */
@@ -4583,7 +4583,7 @@ public:
         if (pPasses) *pPasses = 1; return S_OK;
     }
 
-    /* ── palette — PE shadow plus 2D P8 backend expansion
+    /* ── palette — PE shadow plus P8/A8P8 backend expansion
      *    (test_set_palette_roundtrip, test_palette_alpha_caps_policy,
      *     test_palette_current_entry_isolation, dxmt9-core-device-com-spec).
      *     P8 resources keep index data PE/C-side and re-expand through

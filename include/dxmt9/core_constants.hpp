@@ -274,6 +274,13 @@ enum class Format : u32 {
   L8,
   L16,
   A8L8,
+  // Palettized D3D9 formats. Runtime D3D9 texture sampling is implemented
+  // by the PE/C palettized shadow path, which expands indices into an
+  // A8R8G8B8 backing texture. These enum values exist so D3DFMT_A8P8/P8 are
+  // no longer collapsed to Unknown in generic format mapping; direct core
+  // storage remains classified unsupported.
+  A8P8,
+  P8,
   V8U8,
   Q8W8V8U8,
   V16U16,

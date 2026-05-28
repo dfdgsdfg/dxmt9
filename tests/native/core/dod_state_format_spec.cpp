@@ -100,6 +100,10 @@ void testFormatTableCoverageAndClassifierPolicy() {
             4u, true, false, false);
   checkInfo(Format::L8, BackendPixelFormat::R8Unorm, FormatClass::Required,
             1u, false, false, false);
+  checkInfo(Format::A8P8, BackendPixelFormat::Unknown, FormatClass::Unsupported,
+            2u, false, false, false);
+  checkInfo(Format::P8, BackendPixelFormat::Unknown, FormatClass::Unsupported,
+            1u, false, false, false);
   checkInfo(Format::A2B10G10R10, BackendPixelFormat::BGR10A2Unorm, FormatClass::Optional,
             4u, true, false, false);
   checkInfo(Format::D24S8, BackendPixelFormat::Depth24Unorm_Stencil8, FormatClass::Required,
@@ -117,6 +121,14 @@ void testFourCcAndPseudoFormatExplicitPolicy() {
   checkEq(fmtFromD3D(fourcc('D', 'X', 'T', '5')), Format::DXT5, "DXT5 FOURCC maps explicitly");
   checkEq(fmtToD3D(Format::DXT1), fourcc('D', 'X', 'T', '1'), "DXT1 maps back to FOURCC");
   checkEq(fmtToD3D(Format::DXT5), fourcc('D', 'X', 'T', '5'), "DXT5 maps back to FOURCC");
+  checkEq(fmtFromD3D(40u), Format::A8P8, "A8P8 maps explicitly");
+  checkEq(fmtFromD3D(41u), Format::P8, "P8 maps explicitly");
+  checkEq(fmtToD3D(Format::A8P8), 40u, "A8P8 maps back to D3DFORMAT");
+  checkEq(fmtToD3D(Format::P8), 41u, "P8 maps back to D3DFORMAT");
+  checkEq(formatRowPitch(Format::P8, 4u), 4u, "P8 row pitch is one byte per texel");
+  checkEq(formatRowPitch(Format::A8P8, 4u), 8u, "A8P8 row pitch is two bytes per texel");
+  checkEq(formatName(Format::P8), std::string{"P8"}, "P8 format name");
+  checkEq(formatName(Format::A8P8), std::string{"A8P8"}, "A8P8 format name");
 
   checkInfo(Format::ATI1, BackendPixelFormat::BC4_RUnorm, FormatClass::Required,
             0u, false, false, true);
@@ -169,6 +181,10 @@ void testUnsupportedFormatBehavior() {
             0u, false, false, false);
   checkInfo(Format::S8_LOCKABLE, BackendPixelFormat::Unknown, FormatClass::Unsupported,
             1u, false, false, false);
+  check(!formatSupportsUsage(Format::P8, UsageTexture, defaultLimits()),
+        "generic P8 core storage stays unsupported");
+  check(!formatSupportsUsage(Format::A8P8, UsageTexture, defaultLimits()),
+        "generic A8P8 core storage stays unsupported");
   check(!formatSupportsUsage(Format::R8G8B8, 0u, defaultLimits()),
         "R8G8B8 remains unsupported even without usage flags");
   check(!formatSupportsUsage(Format::S8_LOCKABLE, UsageDepthStencil, defaultLimits()),
@@ -179,6 +195,10 @@ void testUnsupportedFormatBehavior() {
           "Factory rejects Unknown texture format");
   checkEq(factory.checkDeviceFormat(0, Format::R8G8B8, UsageTexture), D3DERR_NOTAVAILABLE,
           "Factory rejects tabled unsupported texture format");
+  checkEq(factory.checkDeviceFormat(0, Format::P8, UsageTexture), D3DERR_NOTAVAILABLE,
+          "generic Factory rejects direct P8 texture storage");
+  checkEq(factory.checkDeviceFormat(0, Format::A8P8, UsageTexture), D3DERR_NOTAVAILABLE,
+          "generic Factory rejects direct A8P8 texture storage");
   checkEq(factory.checkDeviceFormat(0, unknown, UsageTexture), D3DERR_NOTAVAILABLE,
           "Factory rejects out-of-range texture format");
 }

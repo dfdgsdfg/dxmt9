@@ -85,6 +85,14 @@ const std::vector<FormatEntry> &formatEntries() {
         false, false, false, true}},
       {{Format::A8L8, BackendPixelFormat::RG8Unorm, FormatClass::Required, 2,
         false, false, false, true}},
+      // A8P8/P8 are explicit core enum values so D3DFMT mapping and byte
+      // layout helpers do not collapse them to Unknown. Direct core storage is
+      // unsupported: D3D9 runtime sampling uses a PE/C palette-index shadow
+      // that expands into an A8R8G8B8 backing texture.
+      {{Format::A8P8, BackendPixelFormat::Unknown, FormatClass::Unsupported, 2,
+        false, false, false, true}},
+      {{Format::P8, BackendPixelFormat::Unknown, FormatClass::Unsupported, 1,
+        false, false, false, true}},
       {{Format::V8U8, BackendPixelFormat::RG8Snorm, FormatClass::Required, 2,
         true, false, false, true}},
       {{Format::Q8W8V8U8, BackendPixelFormat::RGBA8Snorm, FormatClass::Required,
@@ -345,6 +353,10 @@ std::string formatName(Format format) {
     return "L16";
   case Format::A8L8:
     return "A8L8";
+  case Format::A8P8:
+    return "A8P8";
+  case Format::P8:
+    return "P8";
   case Format::V8U8:
     return "V8U8";
   case Format::Q8W8V8U8:
