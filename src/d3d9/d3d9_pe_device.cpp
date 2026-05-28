@@ -1015,6 +1015,7 @@ struct SimpleVsRegisters {
     std::array<std::array<float, 4>, 256> constant{};
     std::array<std::array<int32_t, 4>, 16> constantInt{};
     std::array<std::array<float, 4>, 16> predicate{};
+    std::array<float, 4> loop{};
     std::array<std::array<float, 4>, 16> output{};
     std::array<std::array<float, 4>, 3> rastOut{};
     std::array<std::array<float, 4>, 2> attrOut{};
@@ -1043,6 +1044,8 @@ static std::array<float, 4>* simpleVsRegister(SimpleVsRegisters& regs,
             return index < regs.texOut.size() ? &regs.texOut[index] : nullptr;
         case D3DSPR_PREDICATE:
             return index < regs.predicate.size() ? &regs.predicate[index] : nullptr;
+        case D3DSPR_LOOP:
+            return index == 0u ? &regs.loop : nullptr;
         default:
             return nullptr;
     }
@@ -1068,6 +1071,8 @@ static const std::array<float, 4>* simpleVsRegisterConst(
             return index < regs.texOut.size() ? &regs.texOut[index] : nullptr;
         case D3DSPR_PREDICATE:
             return index < regs.predicate.size() ? &regs.predicate[index] : nullptr;
+        case D3DSPR_LOOP:
+            return index == 0u ? &regs.loop : nullptr;
         default:
             return nullptr;
     }
@@ -1260,6 +1265,26 @@ static bool simpleVsLoopCount(const SimpleVsRegisters& regs,
     }
     if (rounded > 1024) return false;
     count = static_cast<UINT>(rounded);
+    return true;
+}
+
+static bool simpleVsLoopControl(const SimpleVsRegisters& regs,
+                                const ProcessShaderIo& io,
+                                DWORD source,
+                                UINT& count,
+                                int32_t& initial,
+                                int32_t& step) {
+    float value[4]{};
+    if (!simpleVsReadSource(regs, io.major, source, value)) return false;
+    const long roundedCount = std::lround(value[0]);
+    if (roundedCount <= 0) {
+        count = 0;
+    } else {
+        if (roundedCount > 1024) return false;
+        count = static_cast<UINT>(roundedCount);
+    }
+    initial = static_cast<int32_t>(std::lround(value[1]));
+    step = static_cast<int32_t>(std::lround(value[2]));
     return true;
 }
 
@@ -1491,23 +1516,41 @@ static SimpleVsExecResult executeSimpleProcessVertexShaderRange(
                                           ? operands[1]
                                           : operands[0];
             UINT count = 0;
-            if (!simpleVsLoopCount(regs, io, countSource, count)) {
+            int32_t loopValue = 0;
+            int32_t loopStep = 0;
+            const std::array<float, 4> savedLoop = regs.loop;
+            if (opcode == D3DSIO_LOOP) {
+                if (operandCount < 2u || shaderRegType(operands[0]) != D3DSPR_LOOP) {
+                    return SimpleVsExecResult::Fail;
+                }
+                if (!simpleVsLoopControl(regs, io, countSource, count, loopValue, loopStep)) {
+                    return SimpleVsExecResult::Fail;
+                }
+            } else if (!simpleVsLoopCount(regs, io, countSource, count)) {
                 return SimpleVsExecResult::Fail;
             }
             for (UINT iteration = 0; iteration < count; ++iteration) {
+                if (opcode == D3DSIO_LOOP) {
+                    const float loopFloat = static_cast<float>(loopValue);
+                    regs.loop = {loopFloat, loopFloat, loopFloat, loopFloat};
+                }
                 const SimpleVsExecResult loopResult =
                     executeSimpleProcessVertexShaderRange(
                         words, io, regs, index, bodyEnd, recursionDepth + 1u);
                 if (loopResult == SimpleVsExecResult::Fail) {
+                    if (opcode == D3DSIO_LOOP) regs.loop = savedLoop;
                     return SimpleVsExecResult::Fail;
                 }
                 if (loopResult == SimpleVsExecResult::Break) {
                     break;
                 }
                 if (loopResult == SimpleVsExecResult::Ret) {
+                    if (opcode == D3DSIO_LOOP) regs.loop = savedLoop;
                     return SimpleVsExecResult::Ret;
                 }
+                loopValue += loopStep;
             }
+            if (opcode == D3DSIO_LOOP) regs.loop = savedLoop;
             index = afterEnd;
             continue;
         }

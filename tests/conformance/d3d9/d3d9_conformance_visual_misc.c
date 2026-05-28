@@ -1414,6 +1414,9 @@ void test_visual_process_vertices_xyzhw_policy(const struct d3d9_api *api)
         PROCESS_VS_INST(D3DSIO_DEFI, 5),
         PROCESS_VS_DST(D3DSPR_CONSTINT, 1, 0xf),
         4, 0, 0, 0,
+        PROCESS_VS_INST(D3DSIO_DEFI, 5),
+        PROCESS_VS_DST(D3DSPR_CONSTINT, 2, 0xf),
+        3, 0, 1, 0,
         PROCESS_VS_INST(D3DSIO_MOV, 2),
         PROCESS_VS_DST(D3DSPR_OUTPUT, 0, 0xf),
         PROCESS_VS_SRC(D3DSPR_INPUT, 0),
@@ -1457,6 +1460,18 @@ void test_visual_process_vertices_xyzhw_policy(const struct d3d9_api *api)
         PROCESS_VS_SRC(D3DSPR_OUTPUT, 0),
         PROCESS_VS_SRC(D3DSPR_CONST, 3),
         PROCESS_VS_INST(D3DSIO_ENDREP, 0),
+        PROCESS_VS_INST(D3DSIO_LOOP, 2),
+        PROCESS_VS_SRC(D3DSPR_LOOP, 0),
+        PROCESS_VS_SRC(D3DSPR_CONSTINT, 2),
+        PROCESS_VS_INST(D3DSIO_MUL, 3),
+        PROCESS_VS_DST(D3DSPR_TEMP, 0, 0xf),
+        PROCESS_VS_SRC(D3DSPR_LOOP, 0),
+        PROCESS_VS_SRC(D3DSPR_CONST, 9),
+        PROCESS_VS_INST(D3DSIO_ADD, 3),
+        PROCESS_VS_DST(D3DSPR_OUTPUT, 0, 0x7),
+        PROCESS_VS_SRC(D3DSPR_OUTPUT, 0),
+        PROCESS_VS_SRC(D3DSPR_TEMP, 0),
+        PROCESS_VS_INST(D3DSIO_ENDLOOP, 0),
         PROCESS_VS_INST(D3DSIO_CALL, 1),
         PROCESS_VS_LABEL(7),
         PROCESS_VS_INST(D3DSIO_CALLNZ, 0),
@@ -1893,17 +1908,18 @@ void test_visual_process_vertices_xyzhw_policy(const struct d3d9_api *api)
         {1.0f, 0.0f, 0.0f, 0.0f},
         {0.0f, 0.0f, 0.0f, 0.0f},
     };
-    const float vs_rep_loop_constants[9][4] =
+    const float vs_rep_loop_constants[10][4] =
     {
         {0.25f, 0.0f, 0.0f, 0.0f},
         {0.0f, 0.25f, 0.0f, 0.0f},
-        {0.375f, 0.375f, -1.0f, 0.0f},
+        {0.75f, 0.375f, -1.0f, 0.0f},
         {100.0f, 100.0f, 100.0f, 0.0f},
         {2.0f, 0.0f, 0.0f, 0.0f},
         {1.0f, 0.0f, 0.0f, 0.0f},
         {0.125f, 0.0f, 0.0f, 0.0f},
         {0.0f, 0.125f, 0.0f, 0.0f},
         {1.0f, 0.0f, 0.0f, 0.0f},
+        {0.125f, 0.0f, 0.0f, 0.0f},
     };
     const float vs_matrix_special_constants[6][4] =
     {
@@ -2656,7 +2672,8 @@ void test_visual_process_vertices_xyzhw_policy(const struct d3d9_api *api)
     if (FAILED(hr))
         goto done_device;
     CHECK_HR(IDirect3DDevice9_SetVertexShaderConstantF(device, 0,
-            (const float *)vs_rep_loop_constants, 9), D3D_OK);
+            (const float *)vs_rep_loop_constants,
+            ARRAY_SIZE(vs_rep_loop_constants)), D3D_OK);
     CHECK_HR(IDirect3DDevice9_SetFVF(device,
             D3DFVF_XYZ | D3DFVF_DIFFUSE | D3DFVF_TEX1), D3D_OK);
     CHECK_HR(IDirect3DDevice9_SetStreamSource(device, 0, src_vb, 0,
