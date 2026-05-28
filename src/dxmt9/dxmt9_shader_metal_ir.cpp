@@ -1572,7 +1572,7 @@ std::string translateSpirvToMsl(const SpirvModule& module,
               break;
             case kD3DSIO_LOG:
             case kD3DSIO_LOGP:
-              value = "float4(log2(max(" + readSrc(1) + ", float4(1.0e-8f))))";
+              value = "float4(log2(abs(" + readSrc(1) + ")))";
               break;
             case kD3DSIO_LIT: {
               // D3D9 LIT: dst = (1, max(src.x, 0),
@@ -2717,7 +2717,7 @@ std::string translateSpirvToMsl(const SpirvModule& module,
             break;
           case kD3DSIO_LOG:
           case kD3DSIO_LOGP:
-            value = "float4(log2(max(" + readSrc(1) + ", float4(1.0e-8f))))";
+            value = "float4(log2(abs(" + readSrc(1) + ")))";
             break;
           case kD3DSIO_LIT: {
             // D3D9 LIT: see the corresponding emit in the SM2+ branch

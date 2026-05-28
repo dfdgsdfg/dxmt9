@@ -1956,8 +1956,8 @@ void testPs30TranscendentalOpcodeLoweringContracts() {
   const auto source = translatePixel(makePs30TranscendentalOpcodeBytecode());
   checkContains(source, "float4(sin(cFloat[0]), cos(cFloat[0]), 0.0f, 0.0f)",
                 "SINCOS lowers to sin/cos vector construction");
-  checkContains(source, "float4(log2(max(cFloat[1], float4(1.0e-8f))))",
-                "LOG lowers to clamped log2 expression");
+  checkContains(source, "float4(log2(abs(cFloat[1])))",
+                "LOG lowers to D3D9 abs log2 expression");
   checkContains(source, "float4(exp2(cFloat[2]))", "EXP lowers to exp2 expression");
   checkContains(source, "outColor[0] = r[2];", "transcendental opcode result reaches color output");
 }

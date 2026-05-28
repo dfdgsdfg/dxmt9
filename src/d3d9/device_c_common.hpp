@@ -52,6 +52,7 @@ void dxmt9DebugLog(const char* fmt, ...);
 void maybeDumpShaderBytecode(const char* label, const uint32_t* bytecode, size_t wordCount, uint64_t hash);
 
 uint32_t usageFromD3D(uint32_t usage);
+uint32_t checkDeviceFormatUsageFromD3D(uint32_t usage);
 uint32_t usageToD3D(uint32_t usage);
 dxmt9::core::Format fmtFromD3D(uint32_t d3d);
 uint32_t fmtToD3D(dxmt9::core::Format format);

@@ -5,6 +5,7 @@
 // DrawVolatile bytes, and command ordering at the draw-issue boundary.
 
 #include "../../../src/dxmt9/dxmt9_draw_encoder.hpp"
+#include "../../../src/dxmt9/dxmt9_draw_encoder_internal.hpp"
 #include "../../../src/dxmt9/dxmt9_draw_state.hpp"
 #include "../../../src/dxmt9/dxmt9_ffp_shaders.hpp"
 #include "../../../src/dxmt9/dxmt9_pipeline_cache.hpp"
@@ -464,6 +465,19 @@ void setDeclPositionTexcoord(dxmt9::core::CanonicalDrawState& state,
                                  kD3DDeclMethodDefault,
                                  kD3DDeclUsageTexcoord, 0},
   };
+}
+
+void setInvDestColorAddBlend(dxmt9::core::CanonicalDrawState& state) {
+  state.hot.renderStates.entries[0] = dxmt9::core::FlatStateEntry{
+      dxmt9::core::RS_SRC_BLEND,
+      static_cast<u32>(dxmt9::core::BlendFactor::InvDestColor)};
+  state.hot.renderStates.entries[1] = dxmt9::core::FlatStateEntry{
+      dxmt9::core::RS_DEST_BLEND,
+      static_cast<u32>(dxmt9::core::BlendFactor::One)};
+  state.hot.renderStates.entries[2] = dxmt9::core::FlatStateEntry{
+      dxmt9::core::RS_ALPHABLEND_ENABLE,
+      1u};
+  state.hot.renderStates.count = 3u;
 }
 
 dxmt9::encoders::EncodeContext makeContext(Harness& harness,
@@ -1353,16 +1367,7 @@ void testProgrammableIndexedBlendHeuristicStaysDirect() {
   state.shaderLayout.vertexDecl.fvf =
       dxmt9::ffp::kFvfXyz | (1u << dxmt9::ffp::kFvfTexCountShift);
   state.hot.textureMask = 0x3fu;
-  state.hot.renderStates.entries[0] = dxmt9::core::FlatStateEntry{
-      dxmt9::core::RS_SRC_BLEND,
-      static_cast<u32>(dxmt9::core::BlendFactor::InvDestColor)};
-  state.hot.renderStates.entries[1] = dxmt9::core::FlatStateEntry{
-      dxmt9::core::RS_DEST_BLEND,
-      static_cast<u32>(dxmt9::core::BlendFactor::One)};
-  state.hot.renderStates.entries[2] = dxmt9::core::FlatStateEntry{
-      dxmt9::core::RS_ALPHABLEND_ENABLE,
-      1u};
-  state.hot.renderStates.count = 3u;
+  setInvDestColorAddBlend(state);
 
   std::array<std::uint8_t, kIndexOffset + 12u> arena{};
   const std::array<std::uint16_t, 6> indices{{0u, 1u, 2u, 3u, 4u, 5u}};
@@ -1401,6 +1406,55 @@ void testProgrammableIndexedBlendHeuristicStaysDirect() {
   check(indexedDraw != nullptr,
         "programmable indexed blend heuristic emits direct indexed draw");
   assertIndexedDrawCommand(*indexedDraw, kUploadedIndex, 640u, 6u);
+}
+
+void testAutoExpandIndexedDrawHeuristicCoversProgrammableR32FCube() {
+  auto state = makeProgrammableState(20u);
+  setFvfXyzTex1(state);
+  setInvDestColorAddBlend(state);
+
+  check(!dxmt9::encoders::shouldAutoExpandIndexedDraw(
+            state.hot.renderStates,
+            0x3fu,
+            /*fixedFunctionPath=*/false,
+            /*ffpDecodableLayout=*/true,
+            /*texture0R32FCube=*/false),
+        "generic programmable indexed blend stays direct");
+  check(!dxmt9::encoders::shouldAutoExpandIndexedDraw(
+            state.hot.renderStates,
+            0x3fu,
+            /*fixedFunctionPath=*/false,
+            /*ffpDecodableLayout=*/false,
+            /*texture0R32FCube=*/false),
+        "generic programmable indexed blend without FFP-decodable layout stays direct");
+  check(dxmt9::encoders::shouldAutoExpandIndexedDraw(
+            state.hot.renderStates,
+            0x3fu,
+            /*fixedFunctionPath=*/true,
+            /*ffpDecodableLayout=*/true,
+            /*texture0R32FCube=*/false),
+        "existing FFP indexed blend heuristic still expands");
+  check(dxmt9::encoders::shouldAutoExpandIndexedDraw(
+            state.hot.renderStates,
+            0x1fu,
+            /*fixedFunctionPath=*/false,
+            /*ffpDecodableLayout=*/true,
+            /*texture0R32FCube=*/true),
+        "programmable R32F cube shadow indexed blend expands");
+  check(!dxmt9::encoders::shouldAutoExpandIndexedDraw(
+            state.hot.renderStates,
+            0x1fu,
+            /*fixedFunctionPath=*/false,
+            /*ffpDecodableLayout=*/false,
+            /*texture0R32FCube=*/true),
+        "programmable R32F cube requires FFP-decodable layout");
+  check(!dxmt9::encoders::shouldAutoExpandIndexedDraw(
+            state.hot.renderStates,
+            0x0fu,
+            /*fixedFunctionPath=*/false,
+            /*ffpDecodableLayout=*/true,
+            /*texture0R32FCube=*/true),
+        "programmable R32F cube requires observed shadow sampler mask");
 }
 
 void testMixedShaderPathsBindProgrammableDrawInputs() {
@@ -2047,6 +2101,7 @@ int main() {
     testProgrammableVsSkipsMissingExtraStreamWithoutStaleBind();
     testIndexedProgrammableDrawPreservesSparseStreamOffsets();
     testProgrammableIndexedBlendHeuristicStaysDirect();
+    testAutoExpandIndexedDrawHeuristicCoversProgrammableR32FCube();
     testMixedShaderPathsBindProgrammableDrawInputs();
     testProgrammableDrawFvfAndDeclTransitionsDoNotReuseLayout();
     testProgrammableArgbufIndexedDrawKeepsDirectResourceLanes();

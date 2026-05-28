@@ -35,7 +35,7 @@ using u64 = std::uint64_t;
 // Shader-source identity that is orthogonal to D3D9 input state. Bump the
 // emitter/layout versions when MSL text or host-visible source layout changes;
 // debugEnvKey covers source-affecting env toggles for the current process.
-inline constexpr u32 kShaderEmitterVersion = 1u;
+inline constexpr u32 kShaderEmitterVersion = 2u;
 inline constexpr u32 kShaderSourceLayoutVersion = 2u;
 inline constexpr u32 kShaderDebugEnvSchemaVersion = 1u;
 

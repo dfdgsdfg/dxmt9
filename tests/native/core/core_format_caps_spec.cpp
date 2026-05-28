@@ -130,6 +130,18 @@ void testFormatAndCaps() {
   checkEq(factory.checkDeviceFormat(0, Format::A8R8G8B8, UsageTexture), D3D_OK, "A8R8G8B8 texture support");
   checkEq(factory.checkDeviceFormat(0, Format::L8, UsageRenderTarget), D3DERR_NOTAVAILABLE,
           "L8 render-target support");
+  checkEq(factory.checkDeviceFormat(0, Format::A8R8G8B8,
+                                    UsageRenderTarget | UsageQueryPostPixelShaderBlending),
+          D3D_OK, "A8R8G8B8 post-pixel blending query support");
+  checkEq(factory.checkDeviceFormat(0, Format::R32F,
+                                    UsageRenderTarget | UsageQueryPostPixelShaderBlending),
+          D3D_OK, "R32F post-pixel blending query support");
+  checkEq(factory.checkDeviceFormat(0, Format::G32R32F,
+                                    UsageRenderTarget | UsageQueryPostPixelShaderBlending),
+          D3DERR_NOTAVAILABLE, "G32R32F post-pixel blending query is unavailable");
+  check((dxmt9::d3d9::devicec::checkDeviceFormatUsageFromD3D(0x00080000u) &
+         UsageQueryPostPixelShaderBlending) != 0u,
+        "D3DUSAGE_QUERY_POSTPIXELSHADER_BLENDING reaches CheckDeviceFormat core usage");
   checkEq(factory.checkDeviceFormat(0, Format::A2B10G10R10, UsageTexture), D3DERR_NOTAVAILABLE,
           "A2B10G10R10 support gate");
   checkEq(factory.checkDeviceFormat(1, Format::A8R8G8B8, UsageTexture), D3DERR_INVALIDCALL,

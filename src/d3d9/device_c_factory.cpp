@@ -185,7 +185,8 @@ extern "C" int32_t dxmt9c_factory_check_device_format(D9CFactory* f, uint32_t ad
   // dxmt9 ships; report NOTAVAILABLE so app paths take the fallback.
   // vendor_policy_fetch4_caps.
   if (d3dFmt == 0x34544547u /*'GET4'*/) return dxmt9::core::D3DERR_NOTAVAILABLE;
-  return f->iface->CheckDeviceFormat(adapter, fmtFromD3D(d3dFmt), usageFromD3D(usage));
+  return f->iface->CheckDeviceFormat(adapter, fmtFromD3D(d3dFmt),
+                                     checkDeviceFormatUsageFromD3D(usage));
 }
 
 extern "C" int32_t dxmt9c_factory_check_device_format2(D9CFactory* f, uint32_t adapter,
@@ -193,7 +194,8 @@ extern "C" int32_t dxmt9c_factory_check_device_format2(D9CFactory* f, uint32_t a
                                                        uint32_t resourceType) {
   if (d3dFmt == 0x34544547u /*'GET4'*/) return dxmt9::core::D3DERR_NOTAVAILABLE;
   return f->iface->CheckDeviceFormat(adapter, fmtFromD3D(d3dFmt),
-                                     usageFromD3D(usage) | usageFromResourceType(resourceType));
+                                     checkDeviceFormatUsageFromD3D(usage) |
+                                         usageFromResourceType(resourceType));
 }
 
 extern "C" int32_t dxmt9c_factory_check_device_multisample(D9CFactory* f, uint32_t adapter,

@@ -2584,26 +2584,32 @@ bool encodeDraw(EncodeContext& ctx,
     emitQueueTraceLine(out.str());
   }
   if (indexedDraw) {
-    const bool autoExpandFfpIndexed =
-        fixedFunctionPath &&
-        ffLayout.has_value() &&
-        (hot.textureMask & 0x3fu) == 0x3fu &&
-        core::flatStateOr(hot.renderStates, RS_ALPHABLEND_ENABLE, 0u) != 0u &&
-        core::flatStateOr(hot.renderStates, RS_SRC_BLEND, 0u) ==
-            static_cast<u32>(core::BlendFactor::InvDestColor) &&
-        core::flatStateOr(hot.renderStates, RS_DEST_BLEND, 0u) ==
-            static_cast<u32>(core::BlendFactor::One);
+    const bool texture0R32FCube = [&] {
+      if (!hot.textures[0]) {
+        return false;
+      }
+      const auto* texture = ctx.pool.findTexture(hot.textures[0].value);
+      return texture && texture->desc.format == core::Format::R32F &&
+             texture->desc.type == core::TextureType::Cube;
+    }();
+    const bool autoExpandIndexed =
+        shouldAutoExpandIndexedDraw(hot.renderStates,
+                                    hot.textureMask,
+                                    fixedFunctionPath,
+                                    ffLayout.has_value(),
+                                    texture0R32FCube);
     const bool forceExpandIndexed =
-        debug::forceExpandIndexed() || autoExpandFfpIndexed;
+        debug::forceExpandIndexed() || autoExpandIndexed;
     if (traceEncode) {
       std::ostringstream out;
       out << "[dxmt9-expand-policy] seq=" << static_cast<unsigned long long>(seqId)
           << " ordinal=" << static_cast<unsigned long long>(drawOrdinal)
-          << " auto=" << (autoExpandFfpIndexed ? 1 : 0)
+          << " auto=" << (autoExpandIndexed ? 1 : 0)
           << " env=" << (debug::forceExpandIndexed() ? 1 : 0)
           << " active=" << (forceExpandIndexed ? 1 : 0)
           << " ff=" << (fixedFunctionPath ? 1 : 0)
           << " ffLayout=" << (ffLayout ? 1 : 0)
+          << " r32fCube=" << (texture0R32FCube ? 1 : 0)
           << " textureMask=0x" << std::hex << hot.textureMask << std::dec
           << " alphaBlend=" << core::flatStateOr(hot.renderStates, RS_ALPHABLEND_ENABLE, 0u)
           << " srcBlend=" << core::flatStateOr(hot.renderStates, RS_SRC_BLEND, 0u)

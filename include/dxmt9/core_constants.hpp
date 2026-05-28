@@ -403,6 +403,7 @@ inline constexpr u32 UsageIndexBuffer = 1u << 6;
 inline constexpr u32 UsageWriteOnly = 1u << 7;
 inline constexpr u32 UsageDiscard = 1u << 8;
 inline constexpr u32 UsageNoOverwrite = 1u << 9;
+inline constexpr u32 UsageQueryPostPixelShaderBlending = 1u << 10;
 
 inline constexpr u32 RS_LIGHTING = 137;
 inline constexpr u32 RS_SPECULAR_ENABLE = 29;

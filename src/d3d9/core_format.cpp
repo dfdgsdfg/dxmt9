@@ -519,6 +519,19 @@ bool formatSupportsUsage(Format format, u32 usage,
     }
   }
 
+  if ((usage & UsageQueryPostPixelShaderBlending) != 0) {
+    if (!info->renderTarget || info->depthStencil || info->compressed) {
+      return false;
+    }
+    switch (format) {
+      case Format::G32R32F:
+      case Format::A32B32G32R32F:
+        return false;
+      default:
+        break;
+    }
+  }
+
   if (info->support == FormatClass::Optional) {
     if (format == Format::A2B10G10R10) {
       return limits.supportsBgr10A2;

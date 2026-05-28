@@ -4,6 +4,53 @@ set -euo pipefail
 script_dir=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
 source "$script_dir/common.sh"
 
+focus_app-d3d9-3dmark05() {
+  osascript \
+    -e 'tell application "System Events" to set frontmost of first process whose name contains "3DMark05" to true'
+}
+
+send_enter_app-d3d9-3dmark05() {
+  osascript \
+    -e 'tell application "System Events" to set frontmost of first process whose name contains "3DMark05" to true' \
+    -e 'tell application "System Events" to key code 36'
+}
+
+schedule_app-d3d9-3dmark05_enter() {
+  local default_focus_keepalive=${1:-120}
+  (
+    echo "[3dmark05-auto-enter] delay=${DXMT_3DMARK05_ENTER_DELAY_SEC:-20}s count=${DXMT_3DMARK05_ENTER_COUNT:-3} interval=${DXMT_3DMARK05_ENTER_INTERVAL_SEC:-2}s"
+    sleep "${DXMT_3DMARK05_ENTER_DELAY_SEC:-20}"
+
+    local enter_count=${DXMT_3DMARK05_ENTER_COUNT:-3}
+    local enter_interval=${DXMT_3DMARK05_ENTER_INTERVAL_SEC:-2}
+    if [[ ! "$enter_count" =~ ^[0-9]+$ ]]; then
+      enter_count=3
+    fi
+    if [[ ! "$enter_interval" =~ ^[0-9]+$ ]]; then
+      enter_interval=2
+    fi
+
+    local i=0
+    while (( i < enter_count )); do
+      echo "[3dmark05-auto-enter] enter attempt $((i + 1))/$enter_count"
+      if ! send_enter_app-d3d9-3dmark05; then
+        echo "[3dmark05-auto-enter] enter attempt failed"
+      fi
+      i=$((i + 1))
+      if (( i < enter_count )); then
+        sleep "$enter_interval"
+      fi
+    done
+
+    local remaining=${DXMT_3DMARK05_FOCUS_KEEPALIVE_SEC:-$default_focus_keepalive}
+    while [[ "$remaining" =~ ^[0-9]+$ ]] && (( remaining > 0 )); do
+      sleep 1
+      focus_app-d3d9-3dmark05 || true
+      remaining=$((remaining - 1))
+    done
+  ) &
+}
+
 if [[ "${DXMT_3DMARK05_DIRECT:-0}" != "0" ]]; then
   prefix=${DXMT_3DMARK05_PREFIX:-"$exp_repo_root/experiments/prefixs/app-d3d9-3dmark05-verify"}
   wine_root=${DXMT_3DMARK05_WINE_ROOT:-"$exp_repo_root/experiments/wine/sikarugir-cx-24.0.7"}
@@ -24,6 +71,18 @@ if [[ "${DXMT_3DMARK05_DIRECT:-0}" != "0" ]]; then
     exit 2
   fi
 
+  export DXMT_EXPERIMENT_PREFIX="$prefix"
+  export DXMT_EXPERIMENT_WINE_ROOT="$wine_root"
+  export DXMT_EXPERIMENT_PE_BUILD_DIR="${DXMT_3DMARK05_PE_BUILD_DIR:-${DXMT_EXPERIMENT_PE_BUILD_DIR:-$exp_repo_root/build-win32-x64-builtin/src/win32}}"
+  export DXMT_EXPERIMENT_RUNTIME_PE_BUILD_DIR="${DXMT_3DMARK05_RUNTIME_PE_BUILD_DIR:-${DXMT_EXPERIMENT_RUNTIME_PE_BUILD_DIR:-$exp_repo_root/build-win32-x64-builtin/src/winemetal}}"
+  export DXMT_EXPERIMENT_WOW64_PE_BUILD_DIR="${DXMT_3DMARK05_WOW64_PE_BUILD_DIR:-${DXMT_EXPERIMENT_WOW64_PE_BUILD_DIR:-$exp_repo_root/build-win32-x86-builtin/src/win32}}"
+  export DXMT_EXPERIMENT_WOW64_RUNTIME_PE_BUILD_DIR="${DXMT_3DMARK05_WOW64_RUNTIME_PE_BUILD_DIR:-${DXMT_EXPERIMENT_WOW64_RUNTIME_PE_BUILD_DIR:-$exp_repo_root/build-win32-x86-builtin/src/winemetal}}"
+  export DXMT_EXPERIMENT_UNIX_BUILD_DIR="${DXMT_3DMARK05_UNIX_BUILD_DIR:-${DXMT_EXPERIMENT_UNIX_BUILD_DIR:-$exp_repo_root/build-x86_64-builtin/src}}"
+
+  if [[ "${DXMT_3DMARK05_STAGE:-1}" != "0" ]]; then
+    exp_stage_dxmt9
+  fi
+
   if [[ "${DXMT_3DMARK05_KILL_SERVER:-1}" != "0" ]]; then
     WINEPREFIX="$prefix" "$wine_server" -k >/dev/null 2>&1 || true
   fi
@@ -42,20 +101,7 @@ if [[ "${DXMT_3DMARK05_DIRECT:-0}" != "0" ]]; then
   echo "[3dmark05-direct] args=${dxmt_3dmark05_args[*]}"
 
   if [[ "${DXMT_3DMARK05_AUTO_ENTER:-1}" != "0" ]]; then
-    (
-      sleep "${DXMT_3DMARK05_ENTER_DELAY_SEC:-20}"
-      osascript \
-        -e 'tell application "System Events" to set frontmost of first process whose name contains "3DMark05" to true' \
-        -e 'tell application "System Events" to key code 36' || true
-
-      remaining=${DXMT_3DMARK05_FOCUS_KEEPALIVE_SEC:-0}
-      while [[ "$remaining" =~ ^[0-9]+$ ]] && (( remaining > 0 )); do
-        sleep 1
-        osascript \
-          -e 'tell application "System Events" to set frontmost of first process whose name contains "3DMark05" to true' || true
-        remaining=$((remaining - 1))
-      done
-    ) &
+    schedule_app-d3d9-3dmark05_enter 0
   fi
 
   cd "$DXMT_EXPERIMENT_WORKDIR"
@@ -77,23 +123,7 @@ export DXMT_EXPERIMENT_WORKDIR
 DXMT_EXPERIMENT_WORKDIR="$exp_repo_root/experiments/prefixs/app-d3d9-3dmark05/drive_c/Program Files (x86)/Futuremark/3DMark05"
 
 if [[ "${DXMT_3DMARK05_AUTO_ENTER:-1}" != "0" ]]; then
-  (
-    focus_app-d3d9-3dmark05() {
-      osascript \
-        -e 'tell application "System Events" to set frontmost of first process whose name contains "3DMark05" to true'
-    }
-
-    sleep "${DXMT_3DMARK05_ENTER_DELAY_SEC:-20}"
-    focus_app-d3d9-3dmark05 || true
-    osascript -e 'tell application "System Events" to key code 36' || true
-
-    remaining=${DXMT_3DMARK05_FOCUS_KEEPALIVE_SEC:-120}
-    while [[ "$remaining" =~ ^[0-9]+$ ]] && (( remaining > 0 )); do
-      sleep 1
-      focus_app-d3d9-3dmark05 || true
-      remaining=$((remaining - 1))
-    done
-  ) &
+  schedule_app-d3d9-3dmark05_enter 120
 fi
 
 read -r -a dxmt_3dmark05_args <<< "${DXMT_3DMARK05_ARGS:--gtall -batchall -featureall -cpuall -nosplash -nosysteminfo -noscreens}"

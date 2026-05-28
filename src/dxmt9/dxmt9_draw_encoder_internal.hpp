@@ -500,6 +500,30 @@ inline FragmentTextureSamplerBindingList makeFragmentTextureSamplerBindings(
   return bindings;
 }
 
+template <std::size_t MaxEntries>
+inline bool shouldAutoExpandIndexedDraw(const core::FlatStateSet<MaxEntries>& renderStates,
+                                        u32 textureMask,
+                                        bool fixedFunctionPath,
+                                        bool ffpDecodableLayout,
+                                        bool texture0R32FCube) {
+  const bool alphaBlendEnabled =
+      core::flatStateOr(renderStates, core::RS_ALPHABLEND_ENABLE, 0u) != 0u;
+  const bool invDestColorAddBlend =
+      core::flatStateOr(renderStates, core::RS_SRC_BLEND, 0u) ==
+          static_cast<u32>(core::BlendFactor::InvDestColor) &&
+      core::flatStateOr(renderStates, core::RS_DEST_BLEND, 0u) ==
+          static_cast<u32>(core::BlendFactor::One);
+  if (!alphaBlendEnabled || !invDestColorAddBlend || !ffpDecodableLayout) {
+    return false;
+  }
+
+  if (fixedFunctionPath && (textureMask & 0x3fu) == 0x3fu) {
+    return true;
+  }
+
+  return texture0R32FCube && (textureMask & 0x1fu) == 0x1fu;
+}
+
 inline VertexTextureSamplerBindingList makeVertexTextureSamplerBindings(
     const core::FlatDrawStateRecord& hot) {
   VertexTextureSamplerBindingList bindings;

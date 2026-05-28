@@ -24,6 +24,15 @@ uint32_t usageFromD3D(uint32_t usage) {
   return out;
 }
 
+uint32_t checkDeviceFormatUsageFromD3D(uint32_t usage) {
+  using namespace dxmt9::core;
+  uint32_t out = usageFromD3D(usage);
+  if ((usage & 0x00080000u) != 0) {
+    out |= UsageQueryPostPixelShaderBlending;
+  }
+  return out;
+}
+
 uint32_t usageToD3D(uint32_t usage) {
   using namespace dxmt9::core;
   uint32_t out = 0;
