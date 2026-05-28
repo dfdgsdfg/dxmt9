@@ -9,6 +9,7 @@
 #include <cstdint>
 #include <cstdlib>
 #include <cstring>
+#include <limits>
 #include <mutex>
 #include <unordered_map>
 #include <utility>
@@ -640,6 +641,30 @@ static UINT fvfTexcoordBytes(DWORD fvf, UINT index) {
     return 8u;
 }
 
+static UINT processTexDeclBytes(UINT type, bool destination) {
+    switch (type) {
+        case D3DDECLTYPE_FLOAT1:
+            return 4u;
+        case D3DDECLTYPE_FLOAT2:
+            return 8u;
+        case D3DDECLTYPE_FLOAT3:
+            return 12u;
+        case D3DDECLTYPE_FLOAT4:
+            return 16u;
+        case D3DDECLTYPE_UBYTE4N:
+        case D3DDECLTYPE_SHORT2N:
+        case D3DDECLTYPE_USHORT2N:
+        case D3DDECLTYPE_FLOAT16_2:
+            return destination ? 0u : 4u;
+        case D3DDECLTYPE_SHORT4N:
+        case D3DDECLTYPE_USHORT4N:
+        case D3DDECLTYPE_FLOAT16_4:
+            return destination ? 0u : 8u;
+        default:
+            return 0u;
+    }
+}
+
 static bool describeProcessFvf(DWORD fvf, FvfProcessLayout& layout) {
     layout = {};
     switch (fvf & D3DFVF_POSITION_MASK) {
@@ -783,13 +808,8 @@ static bool describeProcessDeclaration(IDirect3DVertexDeclaration9* declaration,
             layout.specularStream = e.stream;
             layout.specularOffset = e.offset;
         } else if (e.usage == D3DDECLUSAGE_TEXCOORD && e.usageIndex < 8) {
-            UINT texBytes = 0u;
-            if (e.type == D3DDECLTYPE_FLOAT1) texBytes = 4u;
-            else if (e.type == D3DDECLTYPE_FLOAT2) texBytes = 8u;
-            else if (e.type == D3DDECLTYPE_FLOAT3) texBytes = 12u;
-            else if (e.type == D3DDECLTYPE_FLOAT4) texBytes = 16u;
-            else if (!destination && e.type == D3DDECLTYPE_SHORT2N) texBytes = 4u;
-            else return false;
+            const UINT texBytes = processTexDeclBytes(e.type, destination);
+            if (texBytes == 0u) return false;
             layout.texCount = std::max<UINT>(layout.texCount, e.usageIndex + 1u);
             layout.texStream[e.usageIndex] = e.stream;
             layout.texOffset[e.usageIndex] = e.offset;
@@ -1070,6 +1090,29 @@ static DWORD packD3DColor(const float in[4]) {
 static float snorm16ToFloat(int16_t value) {
     if (value <= -32768) return -1.0f;
     return static_cast<float>(value) / 32767.0f;
+}
+
+static float unorm16ToFloat(uint16_t value) {
+    return static_cast<float>(value) / 65535.0f;
+}
+
+static float halfToFloat(uint16_t value) {
+    const uint32_t sign = value & 0x8000u;
+    const uint32_t exponent = (value >> 10u) & 0x1fu;
+    const uint32_t mantissa = value & 0x3ffu;
+    float result = 0.0f;
+
+    if (exponent == 0u) {
+        result = std::ldexp(static_cast<float>(mantissa), -24);
+    } else if (exponent == 0x1fu) {
+        result = mantissa == 0u
+               ? std::numeric_limits<float>::infinity()
+               : std::numeric_limits<float>::quiet_NaN();
+    } else {
+        result = std::ldexp(static_cast<float>(1024u + mantissa),
+                            static_cast<int>(exponent) - 25);
+    }
+    return sign ? -result : result;
 }
 
 struct SimpleVsRegisters {
@@ -6421,6 +6464,52 @@ public:
                             std::memcpy(in, texSource, sizeof(in));
                             regs.input[reg][0] = snorm16ToFloat(in[0]);
                             regs.input[reg][1] = snorm16ToFloat(in[1]);
+                            return true;
+                        }
+                        case D3DDECLTYPE_SHORT4N: {
+                            int16_t in[4]{};
+                            std::memcpy(in, texSource, sizeof(in));
+                            for (UINT c = 0; c < 4u; ++c) {
+                                regs.input[reg][c] = snorm16ToFloat(in[c]);
+                            }
+                            return true;
+                        }
+                        case D3DDECLTYPE_USHORT2N: {
+                            uint16_t in[2]{};
+                            std::memcpy(in, texSource, sizeof(in));
+                            regs.input[reg][0] = unorm16ToFloat(in[0]);
+                            regs.input[reg][1] = unorm16ToFloat(in[1]);
+                            return true;
+                        }
+                        case D3DDECLTYPE_USHORT4N: {
+                            uint16_t in[4]{};
+                            std::memcpy(in, texSource, sizeof(in));
+                            for (UINT c = 0; c < 4u; ++c) {
+                                regs.input[reg][c] = unorm16ToFloat(in[c]);
+                            }
+                            return true;
+                        }
+                        case D3DDECLTYPE_UBYTE4N: {
+                            uint8_t in[4]{};
+                            std::memcpy(in, texSource, sizeof(in));
+                            for (UINT c = 0; c < 4u; ++c) {
+                                regs.input[reg][c] = static_cast<float>(in[c]) / 255.0f;
+                            }
+                            return true;
+                        }
+                        case D3DDECLTYPE_FLOAT16_2: {
+                            uint16_t in[2]{};
+                            std::memcpy(in, texSource, sizeof(in));
+                            regs.input[reg][0] = halfToFloat(in[0]);
+                            regs.input[reg][1] = halfToFloat(in[1]);
+                            return true;
+                        }
+                        case D3DDECLTYPE_FLOAT16_4: {
+                            uint16_t in[4]{};
+                            std::memcpy(in, texSource, sizeof(in));
+                            for (UINT c = 0; c < 4u; ++c) {
+                                regs.input[reg][c] = halfToFloat(in[c]);
+                            }
                             return true;
                         }
                         default:
