@@ -741,8 +741,8 @@ void test_visual_process_vertices_xyzhw_policy(const struct d3d9_api *api)
     static const D3DVERTEXELEMENT9 src_decl_elements[] =
     {
         {0, 0, D3DDECLTYPE_FLOAT3, D3DDECLMETHOD_DEFAULT, D3DDECLUSAGE_POSITION, 0},
-        {0, 12, D3DDECLTYPE_D3DCOLOR, D3DDECLMETHOD_DEFAULT, D3DDECLUSAGE_COLOR, 0},
-        {0, 16, D3DDECLTYPE_FLOAT2, D3DDECLMETHOD_DEFAULT, D3DDECLUSAGE_TEXCOORD, 0},
+        {1, 0, D3DDECLTYPE_D3DCOLOR, D3DDECLMETHOD_DEFAULT, D3DDECLUSAGE_COLOR, 0},
+        {1, 4, D3DDECLTYPE_FLOAT2, D3DDECLMETHOD_DEFAULT, D3DDECLUSAGE_TEXCOORD, 0},
         D3DDECL_END()
     };
     struct src_vertex
@@ -754,6 +754,11 @@ void test_visual_process_vertices_xyzhw_policy(const struct d3d9_api *api)
     struct dst_vertex
     {
         float x, y, z, rhw;
+        DWORD color;
+        float u, v;
+    };
+    struct attr_vertex
+    {
         DWORD color;
         float u, v;
     };
@@ -772,6 +777,7 @@ void test_visual_process_vertices_xyzhw_policy(const struct d3d9_api *api)
         {400.0f, 180.0f, 0.0f, 1.0f, 0xffffffffu, 1.00f, 1.00f},
     };
     IDirect3DVertexBuffer9 *src_vb = NULL;
+    IDirect3DVertexBuffer9 *src_attr_vb = NULL;
     IDirect3DVertexBuffer9 *dst_vb = NULL;
     IDirect3DVertexBuffer9 *decl_dst_vb = NULL;
     IDirect3DVertexBuffer9 *src_decl_dst_vb = NULL;
@@ -811,6 +817,26 @@ void test_visual_process_vertices_xyzhw_policy(const struct d3d9_api *api)
     {
         memcpy(bits, src, sizeof(src));
         CHECK_HR(IDirect3DVertexBuffer9_Unlock(src_vb), D3D_OK);
+    }
+    hr = IDirect3DDevice9_CreateVertexBuffer(device,
+            ARRAY_SIZE(src) * sizeof(struct attr_vertex), 0, 0,
+            D3DPOOL_SYSTEMMEM, &src_attr_vb, NULL);
+    CHECK_HR(hr, D3D_OK);
+    if (FAILED(hr))
+        goto done_device;
+    hr = IDirect3DVertexBuffer9_Lock(src_attr_vb, 0,
+            ARRAY_SIZE(src) * sizeof(struct attr_vertex), &bits, 0);
+    CHECK_HR(hr, D3D_OK);
+    if (SUCCEEDED(hr))
+    {
+        struct attr_vertex *attrs = bits;
+        for (i = 0; i < ARRAY_SIZE(src); ++i)
+        {
+            attrs[i].color = src[i].color;
+            attrs[i].u = src[i].u;
+            attrs[i].v = src[i].v;
+        }
+        CHECK_HR(IDirect3DVertexBuffer9_Unlock(src_attr_vb), D3D_OK);
     }
 
     hr = IDirect3DDevice9_CreateVertexBuffer(device, sizeof(expected), 0,
@@ -920,6 +946,8 @@ void test_visual_process_vertices_xyzhw_policy(const struct d3d9_api *api)
     if (FAILED(hr))
         goto done_device;
     CHECK_HR(IDirect3DDevice9_SetVertexDeclaration(device, src_decl), D3D_OK);
+    CHECK_HR(IDirect3DDevice9_SetStreamSource(device, 1, src_attr_vb, 0,
+            sizeof(struct attr_vertex)), D3D_OK);
     CHECK_HR(IDirect3DDevice9_ProcessVertices(device, 0, 0,
             ARRAY_SIZE(src), src_decl_dst_vb, dst_decl, 0), D3D_OK);
 
@@ -959,6 +987,7 @@ done_device:
     if (src_decl_dst_vb) IDirect3DVertexBuffer9_Release(src_decl_dst_vb);
     if (decl_dst_vb) IDirect3DVertexBuffer9_Release(decl_dst_vb);
     if (dst_vb) IDirect3DVertexBuffer9_Release(dst_vb);
+    if (src_attr_vb) IDirect3DVertexBuffer9_Release(src_attr_vb);
     if (src_vb) IDirect3DVertexBuffer9_Release(src_vb);
     IDirect3DDevice9_Release(device);
 done_window:

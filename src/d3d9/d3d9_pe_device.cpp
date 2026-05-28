@@ -571,10 +571,15 @@ inline void fvfToVertexElements(DWORD fvf,
 
 struct FvfProcessLayout {
     UINT stride = 0;
+    UINT streamStride[16]{};
+    UINT positionStream = 0;
     UINT positionOffset = 0;
     UINT positionBytes = 0;
+    UINT diffuseStream = 0;
     UINT diffuseOffset = 0;
+    UINT specularStream = 0;
     UINT specularOffset = 0;
+    UINT texStream[8]{};
     UINT texOffset[8]{};
     UINT texBytes[8]{};
     UINT texCount = 0;
@@ -626,6 +631,7 @@ static bool describeProcessFvf(DWORD fvf, FvfProcessLayout& layout) {
         offset += layout.texBytes[i];
     }
     layout.stride = offset;
+    layout.streamStride[0] = offset;
     return layout.stride != 0u;
 }
 
@@ -645,12 +651,16 @@ static bool describeProcessDeclaration(IDirect3DVertexDeclaration9* declaration,
         if (e.stream == 0xff && e.type == D3DDECLTYPE_UNUSED) {
             break;
         }
-        if (e.stream != 0 || e.method != D3DDECLMETHOD_DEFAULT) {
+        if ((destination && e.stream != 0) ||
+            (!destination && e.stream >= D9C_DRAW_PACKET_MAX_STREAMS) ||
+            e.method != D3DDECLMETHOD_DEFAULT) {
             return false;
         }
         const UINT elementBytes = vertexElementTypeSize(e.type);
         if (elementBytes == 0u) return false;
         layout.stride = std::max<UINT>(layout.stride, e.offset + elementBytes);
+        layout.streamStride[e.stream] =
+            std::max<UINT>(layout.streamStride[e.stream], e.offset + elementBytes);
         const bool expectedPosition =
             e.usageIndex == 0 &&
             ((destination && e.usage == D3DDECLUSAGE_POSITIONT) ||
@@ -664,14 +674,17 @@ static bool describeProcessDeclaration(IDirect3DVertexDeclaration9* declaration,
                 if (e.type != D3DDECLTYPE_FLOAT3) return false;
                 layout.positionBytes = 12u;
             }
+            layout.positionStream = e.stream;
             layout.positionOffset = e.offset;
         } else if (e.usage == D3DDECLUSAGE_COLOR && e.usageIndex == 0) {
             if (e.type != D3DDECLTYPE_D3DCOLOR || layout.diffuse) return false;
             layout.diffuse = true;
+            layout.diffuseStream = e.stream;
             layout.diffuseOffset = e.offset;
         } else if (e.usage == D3DDECLUSAGE_COLOR && e.usageIndex == 1) {
             if (e.type != D3DDECLTYPE_D3DCOLOR || layout.specular) return false;
             layout.specular = true;
+            layout.specularStream = e.stream;
             layout.specularOffset = e.offset;
         } else if (e.usage == D3DDECLUSAGE_TEXCOORD && e.usageIndex < 8) {
             UINT texBytes = 0u;
@@ -681,6 +694,7 @@ static bool describeProcessDeclaration(IDirect3DVertexDeclaration9* declaration,
             else if (e.type == D3DDECLTYPE_FLOAT4) texBytes = 16u;
             else return false;
             layout.texCount = std::max<UINT>(layout.texCount, e.usageIndex + 1u);
+            layout.texStream[e.usageIndex] = e.stream;
             layout.texOffset[e.usageIndex] = e.offset;
             layout.texBytes[e.usageIndex] = texBytes;
         } else {
@@ -4749,15 +4763,10 @@ public:
         if (!dstBuffer) return D3DERR_INVALIDCALL;
         if (vertexCount == 0) return S_OK;
         if (flags != 0 || vs_ != nullptr) return D3DERR_INVALIDCALL;
-        if (!streamSrc_[0] || streamStr_[0] < sizeof(float) * 3u) return D3DERR_INVALIDCALL;
-
-        D9CBuffer* srcRaw = rawVBuf(streamSrc_[0]);
         D9CBuffer* dstRaw = rawVBuf(dstBuffer);
-        if (!srcRaw || !dstRaw) return D3DERR_INVALIDCALL;
-        D9CBufferDesc srcDesc{};
+        if (!dstRaw) return D3DERR_INVALIDCALL;
         D9CBufferDesc dstDesc{};
-        if (FAILED(hr32(dxmt9c_buffer_get_desc(srcRaw, &srcDesc))) ||
-            FAILED(hr32(dxmt9c_buffer_get_desc(dstRaw, &dstDesc)))) {
+        if (FAILED(hr32(dxmt9c_buffer_get_desc(dstRaw, &dstDesc)))) {
             return D3DERR_INVALIDCALL;
         }
         FvfProcessLayout srcLayout{};
@@ -4785,54 +4794,114 @@ public:
                 return D3DERR_INVALIDCALL;
             }
         }
-        if (streamStr_[0] < srcLayout.stride || dstLayout.positionBytes != 16u) {
+        if (dstLayout.positionBytes != 16u) {
             return D3DERR_INVALIDCALL;
         }
-        UINT srcReadBytes = srcLayout.positionOffset + srcLayout.positionBytes;
+        UINT srcReadBytes[D9C_DRAW_PACKET_MAX_STREAMS]{};
+        srcReadBytes[srcLayout.positionStream] =
+            srcLayout.positionOffset + srcLayout.positionBytes;
         if (dstLayout.diffuse) {
             if (!srcLayout.diffuse) return D3DERR_INVALIDCALL;
-            srcReadBytes = std::max(srcReadBytes, srcLayout.diffuseOffset + 4u);
+            srcReadBytes[srcLayout.diffuseStream] =
+                std::max(srcReadBytes[srcLayout.diffuseStream],
+                         srcLayout.diffuseOffset + 4u);
         }
         if (dstLayout.specular) {
             if (!srcLayout.specular) return D3DERR_INVALIDCALL;
-            srcReadBytes = std::max(srcReadBytes, srcLayout.specularOffset + 4u);
+            srcReadBytes[srcLayout.specularStream] =
+                std::max(srcReadBytes[srcLayout.specularStream],
+                         srcLayout.specularOffset + 4u);
         }
         if (dstLayout.texCount > srcLayout.texCount) return D3DERR_INVALIDCALL;
         for (UINT i = 0; i < dstLayout.texCount; ++i) {
             if (dstLayout.texBytes[i] != srcLayout.texBytes[i]) {
                 return D3DERR_INVALIDCALL;
             }
-            srcReadBytes = std::max(srcReadBytes,
-                                    srcLayout.texOffset[i] + srcLayout.texBytes[i]);
+            srcReadBytes[srcLayout.texStream[i]] =
+                std::max(srcReadBytes[srcLayout.texStream[i]],
+                         srcLayout.texOffset[i] + srcLayout.texBytes[i]);
         }
-        const uint64_t srcByteStart =
-            static_cast<uint64_t>(streamOff_[0]) +
-            static_cast<uint64_t>(srcStart) * streamStr_[0];
-        const uint64_t srcByteEnd =
-            srcByteStart + static_cast<uint64_t>(vertexCount - 1u) * streamStr_[0] +
-            srcReadBytes;
+        D9CBuffer* srcRaw[D9C_DRAW_PACKET_MAX_STREAMS]{};
+        D9CBufferDesc srcDesc[D9C_DRAW_PACKET_MAX_STREAMS]{};
+        uint64_t srcByteStart[D9C_DRAW_PACKET_MAX_STREAMS]{};
+        uint64_t srcByteEnd[D9C_DRAW_PACKET_MAX_STREAMS]{};
+        D9CBuffer* uniqueSrcRaw[D9C_DRAW_PACKET_MAX_STREAMS]{};
+        uint64_t uniqueSrcLockSize[D9C_DRAW_PACKET_MAX_STREAMS]{};
+        void* uniqueSrcBytes[D9C_DRAW_PACKET_MAX_STREAMS]{};
+        UINT uniqueSrcCount = 0;
+        for (UINT stream = 0; stream < D9C_DRAW_PACKET_MAX_STREAMS; ++stream) {
+            if (srcReadBytes[stream] == 0u) continue;
+            if (!streamSrc_[stream] || streamStr_[stream] < srcLayout.streamStride[stream]) {
+                return D3DERR_INVALIDCALL;
+            }
+            srcRaw[stream] = rawVBuf(streamSrc_[stream]);
+            if (!srcRaw[stream] ||
+                FAILED(hr32(dxmt9c_buffer_get_desc(srcRaw[stream], &srcDesc[stream])))) {
+                return D3DERR_INVALIDCALL;
+            }
+            srcByteStart[stream] =
+                static_cast<uint64_t>(streamOff_[stream]) +
+                static_cast<uint64_t>(srcStart) * streamStr_[stream];
+            srcByteEnd[stream] =
+                srcByteStart[stream] +
+                static_cast<uint64_t>(vertexCount - 1u) * streamStr_[stream] +
+                srcReadBytes[stream];
+            if (srcByteEnd[stream] > srcDesc[stream].size ||
+                srcByteEnd[stream] > UINT32_MAX) {
+                return D3DERR_INVALIDCALL;
+            }
+            UINT unique = 0;
+            for (; unique < uniqueSrcCount; ++unique) {
+                if (uniqueSrcRaw[unique] == srcRaw[stream]) break;
+            }
+            if (unique == uniqueSrcCount) {
+                uniqueSrcRaw[uniqueSrcCount++] = srcRaw[stream];
+            }
+            uniqueSrcLockSize[unique] =
+                std::max(uniqueSrcLockSize[unique], srcByteEnd[stream]);
+        }
         const uint64_t dstByteStart =
             static_cast<uint64_t>(dstIndex) * dstLayout.stride;
         const uint64_t dstByteEnd =
             dstByteStart + static_cast<uint64_t>(vertexCount) * dstLayout.stride;
-        if (srcByteEnd > srcDesc.size || dstByteEnd > dstDesc.size ||
-            srcByteEnd > UINT32_MAX || dstByteEnd > UINT32_MAX) {
+        if (dstByteEnd > dstDesc.size || dstByteEnd > UINT32_MAX) {
             return D3DERR_INVALIDCALL;
         }
 
         const HRESULT flushHr = flushPeRecorder();
         if (FAILED(flushHr)) return flushHr;
 
-        void* srcBytes = nullptr;
         void* dstBytes = nullptr;
-        const uint32_t srcLockSize = static_cast<uint32_t>(srcByteEnd);
         const uint32_t dstLockOffset = static_cast<uint32_t>(dstByteStart);
         const uint32_t dstLockSize = static_cast<uint32_t>(dstByteEnd - dstByteStart);
-        HRESULT hr = hr32(dxmt9c_buffer_lock(srcRaw, 0, srcLockSize, &srcBytes, D3DLOCK_READONLY));
-        if (FAILED(hr) || !srcBytes) return FAILED(hr) ? hr : D3DERR_INVALIDCALL;
+        HRESULT hr = D3D_OK;
+        for (UINT unique = 0; unique < uniqueSrcCount; ++unique) {
+            hr = hr32(dxmt9c_buffer_lock(
+                uniqueSrcRaw[unique], 0,
+                static_cast<uint32_t>(uniqueSrcLockSize[unique]),
+                &uniqueSrcBytes[unique], D3DLOCK_READONLY));
+            if (FAILED(hr) || !uniqueSrcBytes[unique]) {
+                for (UINT unlock = 0; unlock < unique; ++unlock) {
+                    (void)dxmt9c_buffer_unlock(uniqueSrcRaw[unlock]);
+                }
+                return FAILED(hr) ? hr : D3DERR_INVALIDCALL;
+            }
+        }
+        void* srcBytes[D9C_DRAW_PACKET_MAX_STREAMS]{};
+        for (UINT stream = 0; stream < D9C_DRAW_PACKET_MAX_STREAMS; ++stream) {
+            if (srcReadBytes[stream] == 0u) continue;
+            for (UINT unique = 0; unique < uniqueSrcCount; ++unique) {
+                if (uniqueSrcRaw[unique] == srcRaw[stream]) {
+                    srcBytes[stream] = uniqueSrcBytes[unique];
+                    break;
+                }
+            }
+        }
         hr = hr32(dxmt9c_buffer_lock(dstRaw, dstLockOffset, dstLockSize, &dstBytes, 0));
         if (FAILED(hr) || !dstBytes) {
-            (void)dxmt9c_buffer_unlock(srcRaw);
+            for (UINT unique = 0; unique < uniqueSrcCount; ++unique) {
+                (void)dxmt9c_buffer_unlock(uniqueSrcRaw[unique]);
+            }
             return FAILED(hr) ? hr : D3DERR_INVALIDCALL;
         }
 
@@ -4843,14 +4912,19 @@ public:
         const float offsetY = static_cast<float>(vp.y) + scaleY;
         const float zScale = vp.maxZ - vp.minZ;
         const D9CMatrix wvp = worldViewProjectionTransform();
-        auto* srcBase = static_cast<const uint8_t*>(srcBytes);
+        const uint8_t* srcBase[D9C_DRAW_PACKET_MAX_STREAMS]{};
+        for (UINT stream = 0; stream < D9C_DRAW_PACKET_MAX_STREAMS; ++stream) {
+            srcBase[stream] = static_cast<const uint8_t*>(srcBytes[stream]);
+        }
         auto* dstBase = static_cast<uint8_t*>(dstBytes);
         for (UINT i = 0; i < vertexCount; ++i) {
-            const auto* srcVertex = srcBase + srcByteStart +
-                                    static_cast<uint64_t>(i) * streamStr_[0];
             auto* dstVertex = dstBase + static_cast<size_t>(i) * dstLayout.stride;
             float in[3]{};
-            std::memcpy(in, srcVertex + srcLayout.positionOffset, sizeof(in));
+            const auto* positionSource =
+                srcBase[srcLayout.positionStream] + srcByteStart[srcLayout.positionStream] +
+                static_cast<uint64_t>(i) * streamStr_[srcLayout.positionStream] +
+                srcLayout.positionOffset;
+            std::memcpy(in, positionSource, sizeof(in));
             const float position[4] = {in[0], in[1], in[2], 1.0f};
             float clip[4]{};
             for (UINT col = 0; col < 4; ++col) {
@@ -4871,21 +4945,36 @@ public:
             };
             std::memcpy(dstVertex + dstLayout.positionOffset, out, sizeof(out));
             if (dstLayout.diffuse) {
+                const auto* diffuseSource =
+                    srcBase[srcLayout.diffuseStream] + srcByteStart[srcLayout.diffuseStream] +
+                    static_cast<uint64_t>(i) * streamStr_[srcLayout.diffuseStream] +
+                    srcLayout.diffuseOffset;
                 std::memcpy(dstVertex + dstLayout.diffuseOffset,
-                            srcVertex + srcLayout.diffuseOffset, 4u);
+                            diffuseSource, 4u);
             }
             if (dstLayout.specular) {
+                const auto* specularSource =
+                    srcBase[srcLayout.specularStream] + srcByteStart[srcLayout.specularStream] +
+                    static_cast<uint64_t>(i) * streamStr_[srcLayout.specularStream] +
+                    srcLayout.specularOffset;
                 std::memcpy(dstVertex + dstLayout.specularOffset,
-                            srcVertex + srcLayout.specularOffset, 4u);
+                            specularSource, 4u);
             }
             for (UINT tex = 0; tex < dstLayout.texCount; ++tex) {
+                const auto* texSource =
+                    srcBase[srcLayout.texStream[tex]] + srcByteStart[srcLayout.texStream[tex]] +
+                    static_cast<uint64_t>(i) * streamStr_[srcLayout.texStream[tex]] +
+                    srcLayout.texOffset[tex];
                 std::memcpy(dstVertex + dstLayout.texOffset[tex],
-                            srcVertex + srcLayout.texOffset[tex],
-                            dstLayout.texBytes[tex]);
+                            texSource, dstLayout.texBytes[tex]);
             }
         }
         const HRESULT dstUnlockHr = hr32(dxmt9c_buffer_unlock(dstRaw));
-        const HRESULT srcUnlockHr = hr32(dxmt9c_buffer_unlock(srcRaw));
+        HRESULT srcUnlockHr = D3D_OK;
+        for (UINT unique = 0; unique < uniqueSrcCount; ++unique) {
+            const HRESULT oneHr = hr32(dxmt9c_buffer_unlock(uniqueSrcRaw[unique]));
+            if (SUCCEEDED(srcUnlockHr) && FAILED(oneHr)) srcUnlockHr = oneHr;
+        }
         if (FAILED(dstUnlockHr)) return dstUnlockHr;
         if (FAILED(srcUnlockHr)) return srcUnlockHr;
         return S_OK;
