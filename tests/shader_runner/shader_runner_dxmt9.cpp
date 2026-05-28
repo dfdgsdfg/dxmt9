@@ -217,6 +217,8 @@ struct CorpusTest {
   bool drawDxmt9FfpPointDefault = false;
   bool drawDxmt9ODepthOverlap = false;
   bool drawDxmt9ZWriteDisableOverlap = false;
+  bool drawDxmt9NullRtDepthOcclusion = false;
+  bool drawDxmt9ReszIntzSample = false;
   u32 clipPlaneMask = 0;
   std::optional<u32> colorWriteMask;
   std::optional<u32> zEnable;
@@ -2191,6 +2193,16 @@ void parseTestLine(CorpusTest& test, std::string_view rawLine) {
     return;
   }
 
+  if (line == "dxmt9-draw-null-rt-depth-occlusion") {
+    test.drawDxmt9NullRtDepthOcclusion = true;
+    return;
+  }
+
+  if (line == "dxmt9-draw-resz-intz-sample") {
+    test.drawDxmt9ReszIntzSample = true;
+    return;
+  }
+
   if (auto clear = parseClear(line)) {
     test.clearColor = *clear;
     return;
@@ -3307,6 +3319,32 @@ void drawDxmt9ColoredDepthQuad(Device& device, u32 width, u32 height, float z, u
   }
 }
 
+void drawDxmt9ColoredDepthRect(Device& device,
+                               float left,
+                               float top,
+                               float right,
+                               float bottom,
+                               float z,
+                               u32 color) {
+  if (device.setFVF(kFvfXyzrhw | kFvfDiffuse) != D3D_OK) {
+    fail("dxmt9 colored depth rect FVF setup failed");
+  }
+
+  const std::array<ScreenSpaceColorVertex, 6> quad{
+      ScreenSpaceColorVertex{left, top, z, 1.0f, color},
+      ScreenSpaceColorVertex{right, top, z, 1.0f, color},
+      ScreenSpaceColorVertex{left, bottom, z, 1.0f, color},
+      ScreenSpaceColorVertex{right, top, z, 1.0f, color},
+      ScreenSpaceColorVertex{right, bottom, z, 1.0f, color},
+      ScreenSpaceColorVertex{left, bottom, z, 1.0f, color},
+  };
+  const auto* bytes = reinterpret_cast<const u8*>(quad.data());
+  if (device.drawPrimitiveUP(PrimitiveType::TriangleList, 2, std::span<const u8>(bytes, sizeof(quad)),
+                             sizeof(ScreenSpaceColorVertex)) != D3D_OK) {
+    fail("dxmt9 colored depth rect draw failed");
+  }
+}
+
 void drawDxmt9ZWriteDisableOverlap(Device& device, u32 width, u32 height) {
   if (device.setRenderState(RS_Z_ENABLE, 1u) != D3D_OK ||
       device.setRenderState(RS_Z_FUNC, static_cast<u32>(CompareFunc::Less)) != D3D_OK ||
@@ -3319,6 +3357,137 @@ void drawDxmt9ZWriteDisableOverlap(Device& device, u32 width, u32 height) {
     fail("dxmt9 zwrite-disable overlap far state setup failed");
   }
   drawDxmt9ColoredDepthQuad(device, width, height, 0.75f, 0xff0000ffu);
+}
+
+void drawDxmt9NullRtDepthOcclusion(Device& device,
+                                   const std::shared_ptr<Surface>& backBuffer,
+                                   u32 width, u32 height) {
+  auto nullRt = device.createSurface(
+      {width, height, Format::NullRt, Pool::Default, UsageRenderTarget, true, false});
+  if (!nullRt) {
+    fail("dxmt9 NULL RT creation failed");
+  }
+
+  if (device.setRenderState(RS_Z_ENABLE, 1u) != D3D_OK ||
+      device.setRenderState(RS_Z_FUNC, static_cast<u32>(CompareFunc::Less)) != D3D_OK ||
+      device.setRenderState(RS_Z_WRITE_ENABLE, 1u) != D3D_OK) {
+    fail("dxmt9 NULL RT depth-occlusion state setup failed");
+  }
+
+  if (device.setRenderTarget(0, nullRt) != D3D_OK) {
+    fail("dxmt9 NULL RT bind failed");
+  }
+  if (device.beginScene() != D3D_OK) {
+    fail("beginScene failed");
+  }
+  drawDxmt9ColoredDepthQuad(device, width, height, 0.25f, 0xffff0000u);
+  if (device.endScene() != D3D_OK) {
+    fail("endScene failed");
+  }
+
+  if (device.setRenderTarget(0, backBuffer) != D3D_OK) {
+    fail("dxmt9 backbuffer restore after NULL RT failed");
+  }
+  if (device.setRenderState(RS_Z_FUNC, static_cast<u32>(CompareFunc::Equal)) != D3D_OK ||
+      device.setRenderState(RS_Z_WRITE_ENABLE, 0u) != D3D_OK) {
+    fail("dxmt9 NULL RT depth-equal probe state setup failed");
+  }
+  if (device.beginScene() != D3D_OK) {
+    fail("beginScene failed");
+  }
+  (void)width;
+  (void)height;
+  drawDxmt9ColoredDepthRect(device, 24.0f, 24.0f, 40.0f, 40.0f, 0.25f, 0xff00ff00u);
+  if (device.endScene() != D3D_OK) {
+    fail("endScene failed");
+  }
+}
+
+void drawDxmt9ReszIntzSample(Device& device,
+                             const std::shared_ptr<Surface>& backBuffer,
+                             u32 width, u32 height) {
+  SurfaceDesc msaaDepthDesc{};
+  msaaDepthDesc.width = width;
+  msaaDepthDesc.height = height;
+  msaaDepthDesc.format = Format::D24S8;
+  msaaDepthDesc.pool = Pool::Default;
+  msaaDepthDesc.usage = UsageDepthStencil;
+  msaaDepthDesc.depthStencil = true;
+  msaaDepthDesc.multiSampleType = MultiSampleType::Four;
+  auto msaaDepth = device.createSurface(msaaDepthDesc);
+  if (!msaaDepth) {
+    fail("dxmt9 RESZ MSAA depth creation failed");
+  }
+
+  SurfaceDesc nullRtDesc{};
+  nullRtDesc.width = width;
+  nullRtDesc.height = height;
+  nullRtDesc.format = Format::NullRt;
+  nullRtDesc.pool = Pool::Default;
+  nullRtDesc.usage = UsageRenderTarget;
+  nullRtDesc.renderTarget = true;
+  nullRtDesc.multiSampleType = MultiSampleType::Four;
+  auto nullRt = device.createSurface(nullRtDesc);
+  if (!nullRt) {
+    fail("dxmt9 RESZ NULL RT creation failed");
+  }
+
+  TextureDesc intzDesc{};
+  intzDesc.width = width;
+  intzDesc.height = height;
+  intzDesc.levels = 1;
+  intzDesc.format = Format::INTZ;
+  intzDesc.type = TextureType::TwoD;
+  intzDesc.pool = Pool::Default;
+  intzDesc.usage = UsageTexture | UsageDepthStencil;
+  auto intz = device.createTexture(intzDesc);
+  if (!intz) {
+    fail("dxmt9 RESZ INTZ texture creation failed");
+  }
+
+  if (device.setRenderTarget(0, nullRt) != D3D_OK ||
+      device.setDepthStencilSurface(msaaDepth) != D3D_OK) {
+    fail("dxmt9 RESZ depth-pass target setup failed");
+  }
+
+  ClearDesc depthClear{};
+  depthClear.clearDepth = true;
+  depthClear.depth = 1.0f;
+  depthClear.depthStencil = {msaaDepth->handle(), msaaDepth->level(), msaaDepth->multiSampleCount()};
+  if (device.clear(depthClear) != D3D_OK) {
+    fail("dxmt9 RESZ MSAA depth clear failed");
+  }
+
+  if (device.setRenderState(RS_Z_ENABLE, 1u) != D3D_OK ||
+      device.setRenderState(RS_Z_FUNC, static_cast<u32>(CompareFunc::Less)) != D3D_OK ||
+      device.setRenderState(RS_Z_WRITE_ENABLE, 1u) != D3D_OK) {
+    fail("dxmt9 RESZ depth draw state setup failed");
+  }
+  if (device.beginScene() != D3D_OK) {
+    fail("beginScene failed");
+  }
+  drawDxmt9ColoredDepthQuad(device, width, height, 0.25f, 0xffff0000u);
+  if (device.endScene() != D3D_OK) {
+    fail("endScene failed");
+  }
+
+  if (device.reszDepthResolve(msaaDepth, intz) != D3D_OK) {
+    fail("dxmt9 RESZ depth resolve failed");
+  }
+
+  if (device.setRenderTarget(0, backBuffer) != D3D_OK ||
+      device.setDepthStencilSurface(nullptr) != D3D_OK ||
+      device.setRenderState(RS_Z_ENABLE, 0u) != D3D_OK ||
+      device.setTexture(0, intz) != D3D_OK) {
+    fail("dxmt9 RESZ INTZ sample setup failed");
+  }
+  if (device.beginScene() != D3D_OK) {
+    fail("beginScene failed");
+  }
+  drawDxmt9TexturedQuad(device, width, height);
+  if (device.endScene() != D3D_OK) {
+    fail("endScene failed");
+  }
 }
 
 void drawDxmt9VsColorTriangle(Device& device) {
@@ -4032,6 +4201,8 @@ void runCorpusFile(const std::string& path) {
                             test.drawDxmt9FfpPointDefault ||
                             test.drawDxmt9ODepthOverlap ||
                             test.drawDxmt9ZWriteDisableOverlap ||
+                            test.drawDxmt9NullRtDepthOcclusion ||
+                            test.drawDxmt9ReszIntzSample ||
                             !test.solidRectDraws.empty() ||
                             !test.solidQuadXyzDepthDraws.empty() ||
                             !test.textureSetups.empty() || !test.samplerSetups.empty() ||
@@ -4052,6 +4223,8 @@ void runCorpusFile(const std::string& path) {
   }
   const bool needsDepthStencil = test.clearDepth.has_value() || test.drawDxmt9ODepthOverlap ||
                                  test.drawDxmt9ZWriteDisableOverlap ||
+                                 test.drawDxmt9NullRtDepthOcclusion ||
+                                 test.drawDxmt9ReszIntzSample ||
                                  (test.zEnable.has_value() && *test.zEnable != 0u);
 
   BackendLimits limits{};
@@ -4210,6 +4383,8 @@ void runCorpusFile(const std::string& path) {
                           test.drawDxmt9FfpPointDefault ||
                           test.drawDxmt9ODepthOverlap ||
                           test.drawDxmt9ZWriteDisableOverlap ||
+                          test.drawDxmt9NullRtDepthOcclusion ||
+                          test.drawDxmt9ReszIntzSample ||
                           !test.solidRectDraws.empty() ||
                           !test.solidQuadXyzDepthDraws.empty() ||
                           !test.renderTargetSetups.empty();
@@ -4672,6 +4847,14 @@ void runCorpusFile(const std::string& path) {
     if (device->endScene() != D3D_OK) {
       fail("endScene failed");
     }
+  }
+
+  if (test.drawDxmt9NullRtDepthOcclusion) {
+    drawDxmt9NullRtDepthOcclusion(*device, backBuffer, params.backBufferWidth, params.backBufferHeight);
+  }
+
+  if (test.drawDxmt9ReszIntzSample) {
+    drawDxmt9ReszIntzSample(*device, backBuffer, params.backBufferWidth, params.backBufferHeight);
   }
 
   if (!test.probes.empty()) {

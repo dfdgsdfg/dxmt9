@@ -2615,6 +2615,30 @@ oracle = "Wine d3d9 visual.c zwriteenable_test behavior, reduced to ordered zwri
 oracle-date = "2026-05-17"
 
 [[test]]
+file = "render_state/dxmt9_null_rt_depth_occlusion_readback.shader_test"
+status = "passing"
+source = "dxmt9"
+source_kind = "project-authored"
+license = "MIT"
+license_scope = "project-mit"
+models = ["ffp"]
+opcodes = ["PROBE"]
+oracle = "R-FORMAT-12 NULL render-target contract, reduced to depth-only render-pass occlusion readback"
+oracle-date = "2026-05-29"
+
+[[test]]
+file = "render_state/dxmt9_resz_intz_sample_readback.shader_test"
+status = "passing"
+source = "dxmt9"
+source_kind = "project-authored"
+license = "MIT"
+license_scope = "project-mit"
+models = ["ps_2_0"]
+opcodes = ["DCL", "MOV", "TEXLD"]
+oracle = "R-FORMAT-11 RESZ MSAA depth resolve, reduced to INTZ sample readback"
+oracle-date = "2026-05-29"
+
+[[test]]
 file = "render_state/dxmt9_shader_table_fog_readback.shader_test"
 status = "passing"
 source = "dxmt9"

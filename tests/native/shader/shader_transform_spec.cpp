@@ -504,6 +504,18 @@ std::vector<u32> makePs30SourceModifierCoverageBytecode() {
       makeInstructionToken(kD3DSIO_MOV, 2),
       makeDstToken(kD3DSPR_TEMP, 6),
       makeSrcToken(kD3DSPR_CONSTBOOL, 0, 0xe4u, 13u),
+      makeInstructionToken(kD3DSIO_MOV, 2),
+      makeDstToken(kD3DSPR_TEMP, 8),
+      makeSrcToken(kD3DSPR_CONST, 8, 0xe4u, 2u),
+      makeInstructionToken(kD3DSIO_MOV, 2),
+      makeDstToken(kD3DSPR_TEMP, 9),
+      makeSrcToken(kD3DSPR_CONST, 9, 0xe4u, 3u),
+      makeInstructionToken(kD3DSIO_MOV, 2),
+      makeDstToken(kD3DSPR_TEMP, 10),
+      makeSrcToken(kD3DSPR_CONST, 10, 0xe4u, 4u),
+      makeInstructionToken(kD3DSIO_MOV, 2),
+      makeDstToken(kD3DSPR_TEMP, 11),
+      makeSrcToken(kD3DSPR_CONST, 11, 0xe4u, 12u),
       makeInstructionToken(kD3DSIO_ADD, 3),
       makeDstToken(kD3DSPR_TEMP, 7),
       makeSrcToken(kD3DSPR_TEMP, 0),
@@ -511,6 +523,50 @@ std::vector<u32> makePs30SourceModifierCoverageBytecode() {
       makeInstructionToken(kD3DSIO_MOV, 2),
       makeDstToken(kD3DSPR_COLOROUT, 0),
       makeSrcToken(kD3DSPR_TEMP, 7),
+      kD3DSIO_END,
+  };
+}
+
+std::vector<u32> makePs30ConstIntSourceBytecode() {
+  using namespace dxmt9::d3d9bc;
+  return {
+      makeVersionToken(false, 3, 0),
+      makeInstructionToken(kD3DSIO_DEFI, 5),
+      makeDstToken(kD3DSPR_CONSTINT, 0),
+      1u,
+      2u,
+      3u,
+      4u,
+      makeInstructionToken(kD3DSIO_MOV, 2),
+      makeDstToken(kD3DSPR_TEMP, 0),
+      makeSrcToken(kD3DSPR_CONSTINT, 0),
+      makeInstructionToken(kD3DSIO_MOV, 2),
+      makeDstToken(kD3DSPR_COLOROUT, 0),
+      makeSrcToken(kD3DSPR_TEMP, 0),
+      kD3DSIO_END,
+  };
+}
+
+std::vector<u32> makePs30LoopRegisterConstIntBytecode() {
+  using namespace dxmt9::d3d9bc;
+  return {
+      makeVersionToken(false, 3, 0),
+      makeInstructionToken(kD3DSIO_DEFI, 5),
+      makeDstToken(kD3DSPR_CONSTINT, 0),
+      2u,
+      0u,
+      0u,
+      0u,
+      makeInstructionToken(kD3DSIO_LOOP, 2),
+      makeSrcToken(kD3DSPR_LOOP, 0),
+      makeSrcToken(kD3DSPR_CONSTINT, 0),
+      makeInstructionToken(kD3DSIO_MOV, 2),
+      makeDstToken(kD3DSPR_TEMP, 0),
+      makeSrcToken(kD3DSPR_CONST, 1),
+      makeInstructionToken(kD3DSIO_ENDLOOP, 0),
+      makeInstructionToken(kD3DSIO_MOV, 2),
+      makeDstToken(kD3DSPR_COLOROUT, 0),
+      makeSrcToken(kD3DSPR_TEMP, 0),
       kD3DSIO_END,
   };
 }
@@ -1753,6 +1809,31 @@ void testVs30VertexDeclarationTypeLoads() {
                 "declared stream stride participates in shader input fetch");
 }
 
+void testVs30VertexDeclarationUDec3Load() {
+  constexpr u32 kD3DDeclTypeFloat3 = 2u;
+  constexpr u32 kD3DDeclTypeUDec3 = 13u;
+  constexpr u32 kD3DDeclMethodDefault = 0u;
+  constexpr u32 kD3DDeclUsagePosition = 0u;
+  constexpr u32 kD3DDeclUsageTexcoord = 5u;
+
+  const auto source = translateVertex(
+      makeVs30InputSemanticBytecode(),
+      {
+          VertexElement{0, 0, kD3DDeclTypeFloat3, kD3DDeclMethodDefault, kD3DDeclUsagePosition, 0},
+          VertexElement{0, 12, kD3DDeclTypeUDec3, kD3DDeclMethodDefault, kD3DDeclUsageTexcoord, 0},
+      },
+      [] {
+        std::array<u32, kMaxStreams> strides{};
+        strides[0] = 16u;
+        return strides;
+      }());
+
+  checkContains(source, "dxmt9_load_udec3(stream0, base + 12u)",
+                "UDEC3 vertex declaration type loads through the dedicated unpack helper");
+  checkContains(source, "outTexcoord[2] = vin[3]",
+                "UDEC3 TEXCOORD input remains visible through the programmable VS output");
+}
+
 void testVs30InputLayoutPreservesStreamBoundaries() {
   constexpr u32 kD3DDeclTypeFloat2 = 1u;
   constexpr u32 kD3DDeclTypeFloat3 = 2u;
@@ -1893,8 +1974,37 @@ void testPs30MissingSourceModifierCoverage() {
                 "r[6] = select(float4(1.0f), float4(0.0f), "
                 "((cBool[0] != 0u ? float4(1.0f) : float4(0.0f))) != float4(0.0f));",
                 "ps_3_0 not source modifier lowers boolean-like source to inverted 0/1 float mask");
+  checkContains(source, "r[8] = (cFloat[8] - float4(0.5f));",
+                "ps_3_0 bias source modifier lowers to src-0.5");
+  checkContains(source, "r[9] = -((cFloat[9]) - float4(0.5f));",
+                "ps_3_0 biasneg source modifier lowers to negated src-0.5");
+  checkContains(source, "r[10] = (cFloat[10] * float4(2.0f) - float4(1.0f));",
+                "ps_3_0 sign source modifier lowers to signed x2 bias");
+  checkContains(source, "r[11] = -abs(cFloat[11]);",
+                "ps_3_0 absneg source modifier lowers to negated absolute value");
   checkContains(source, "outColor[0] = r[7];",
                 "ps_3_0 source modifier coverage result reaches color output");
+}
+
+void testPs30ConstIntSourceLowering() {
+  const auto source = translatePixel(makePs30ConstIntSourceBytecode());
+  checkContains(source, "cInt[0] = int4(1, 2, 3, 4);",
+                "ps_3_0 DEFI writes the integer constant register file");
+  checkContains(source, "r[0] = float4(cInt[0]);",
+                "ps_3_0 CONSTINT source register lowers through cInt[]");
+  checkContains(source, "outColor[0] = r[0];",
+                "ps_3_0 CONSTINT source result reaches color output");
+}
+
+void testPs30LoopRegisterConstIntLowering() {
+  const auto source = translatePixel(makePs30LoopRegisterConstIntBytecode());
+  checkContains(source, "cInt[0] = int4(2, 0, 0, 0);",
+                "ps_3_0 DEFI initializes the loop count constant");
+  checkContains(source,
+                "for (int dxmt9_loop_1 = 0, dxmt9_loopCount_1 = max(0, int(round(float4(cInt[0]).x)));",
+                "ps_3_0 LOOP aL, i# uses the CONSTINT operand as the loop count");
+  checkContains(source, "r[0] = cFloat[1];",
+                "ps_3_0 LOOP body remains translated after the aL operand");
 }
 
 void testD3DBCDestModifierPartialPrecisionLowering() {
@@ -2422,11 +2532,14 @@ int main() {
     testVertexDepthOutThrowsDeterministically();
     testVs30HighOutputRegisterSemanticMapping();
     testVs30VertexDeclarationTypeLoads();
+    testVs30VertexDeclarationUDec3Load();
     testVs30InputLayoutPreservesStreamBoundaries();
     testVs30MultiStreamVertexDeclarationLoads();
     testDefaultNoPixelVFlipAndNoVertexYFlip();
     testPs30WriteMaskSwizzleAndSourceModifiers();
     testPs30MissingSourceModifierCoverage();
+    testPs30ConstIntSourceLowering();
+    testPs30LoopRegisterConstIntLowering();
     testD3DBCDestModifierPartialPrecisionLowering();
     testPs30CentroidInputModifierLowersToMslInterpolation();
     testPs30IfElseFlowControlTranslation();

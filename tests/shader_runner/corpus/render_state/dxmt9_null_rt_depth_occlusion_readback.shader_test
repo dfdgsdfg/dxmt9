@@ -1,0 +1,13 @@
+; [provenance]
+; source: dxmt9
+; source_kind: project-authored
+; license: MIT
+; license_scope: project-mit
+; oracle: R-FORMAT-12 NULL render-target contract, reduced to depth-only render-pass occlusion readback
+; oracle-date: 2026-05-29
+
+[test]
+clear rgba(0.0, 0.0, 0.0, 1.0)
+dxmt9-clear-depth 1.0
+dxmt9-draw-null-rt-depth-occlusion
+probe (32, 32) rgba(0.0, 1.0, 0.0, 1.0) 1

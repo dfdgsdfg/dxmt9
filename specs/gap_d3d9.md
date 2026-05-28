@@ -25,7 +25,20 @@ Severity legend (used uniformly across the file):
 | 🚫 | E_NOTIMPL / D3DERR_INVALIDCALL (honest failure) |
 | ❌ | silently dropped / undefined / dead-code |
 
-## Top-level summary (rolled up from the four parts)
+## Current status summary (2026-05-29)
+
+| Area | Current status |
+|---|---|
+| Silent actionable D3D9 coverage gaps | **None in the current silent-coverage track.** Known formerly-silent gaps are implemented, tested, accepted as no-op/shadow-only, or explicitly unsupported. |
+| Shader declaration/modifier coverage | D3DDECLUSAGE values are accepted for programmable VS semantics; non-default D3DDECLMETHOD values safe-reject; `_PARTIALPRECISION` and `_MSAMPCENTROID` are lowered/tested. |
+| Render/TSS/Sampler fixes | Depth bias, MRT color masks, two-sided stencil, COLORVERTEX, WRAP0..15 round-trip/no-op, TSS ARG0 triadic ops, sampler border color, mip LOD bias, and max mip level are closed. |
+| Remaining deferred/unsupported API surface | N-patch/adaptive tessellation, `ProcessVertices`/real SWVP, `D3DSAMP_ELEMENTINDEX`, `D3DSAMP_DMAPOFFSET`, per-draw multisample mask, AA line raster toggle, P8 palette sampling, `ComposeRects`, and convolution kernel. |
+| Remaining validation work | Wine-run validation for PE gates. |
+
+## Original top-level summary (historical 2026-05-23 roll-up)
+
+> This table is preserved as the original audit snapshot. It is not the current
+> triage source; use the current status summary and re-audit delta below.
 
 | Category | Total rows | ✅ full | ⚠️ partial | ❌ silent gap | Source |
 |---|---|---|---|---|---|
@@ -33,7 +46,7 @@ Severity legend (used uniformly across the file):
 | A. SPR register kinds (0..18) | 19 | 14 | 0 | 0 | A.2 (3 🟡 + 2 🔵) |
 | A. DECLTYPE (0..17 + UNUSED) | 18 | 17 | 0 | 1 | A.3 (UNUSED implicit) |
 | A. DECLUSAGE (0..13) | 14 | 8 | 0 | 6 | A.4 (TANGENT/BINORMAL/TESSFACTOR/FOG/DEPTH/SAMPLE) |
-| A. DECLMETHOD | 7 | 1 | 0 | 6 | A.5 (only DEFAULT honored) |
+| A. DECLMETHOD | 7 | 1 | 0 | 6 | A.5 (only DEFAULT direct vertex fetch is honored; ordinary UVs use `D3DDECLUSAGE_TEXCOORD`, not `D3DDECLMETHOD_UV`) |
 | B. D3DRENDERSTATETYPE | 102 | ~52 | ~12 | ~38 | B.1 |
 | B. D3DTEXTURESTAGESTATETYPE | 22 | 17 | 0 | 5 | B.2 |
 | B. D3DSAMPLERSTATETYPE | 13 | 10 | 1 | 2 | B.3 (incl. **SAMP_BORDER_COLOR code-mismatch bug**) |
@@ -51,7 +64,7 @@ Severity legend (used uniformly across the file):
 > below; the detail tables are regenerated on demand via the methodology
 > footers.
 
-## Re-audit delta (2026-05-24, against `master`)
+## Re-audit delta (2026-05-24, refreshed 2026-05-29, against `master`)
 
 A read-only re-audit confirmed that a number of items authored as gaps on
 2026-05-23 have since been implemented on `master`. Verdicts below carry
@@ -62,7 +75,7 @@ a `file:line` anchor checked against the live tree.
 | Item | Section | Evidence |
 |---|---|---|
 | `SAMP_BORDER_COLOR` slot fixed to 4 (+ regression `static_assert`) | B.3 | `include/dxmt9/core_constants.hpp:443,472` |
-| 6 D3DDECLUSAGE + 6 D3DDECLMETHOD → `DecoderReject` + perf counter | A.4/A.5 | `src/dxmt9/dxmt9_shader_decoder.cpp:83,89,121-126,134-158,1335` |
+| 6 formerly-unhandled D3DDECLUSAGE values → generic programmable VS semantics; 6 non-default D3DDECLMETHOD values → explicit safe-reject + perf counter | A.4/A.5 | `src/dxmt9/dxmt9_shader_decoder.cpp:83,89,121-126,134-158,1335`; `shader_bytecode_validation_spec.cpp:testGenericDeclUsagesDecodeCleanly`, `testNonDefaultDeclMethodsRejectCleanly` |
 | `AlphaCmpCaps` sourced from `alphaCmpCaps` | C.7 | `src/d3d9/device_c_format_utils.cpp:295`; `src/d3d9/d3d9_pe_factory.cpp:268` |
 | `AdapterIdentifier9` DeviceIdentifier GUID + WHQLLevel populated (stable FNV-1a) | C.9 | `src/d3d9/core_factory.cpp:276-299,303-327` |
 | `D3DRASTER_STATUS::ScanLine` synthesized (monotonic) | C.10/C.11 | `src/d3d9/d3d9_pe_device.cpp:2203-2226` |
@@ -81,21 +94,41 @@ a `file:line` anchor checked against the live tree.
 | TSS `COLORARG0`/`ALPHAARG0` + MULTIPLYADD/LERP triadic ops, arg0 default `D3DTA_CURRENT` (closed 2026-05-24) | B.10#10 | `dxmt9_ffp_shaders.cpp`/`core_draw.cpp`; gates `dxmt9-ffp-triadic-msl-spec` + tss_multiplyadd/lerp/alpha_lerp GPU readbacks |
 | `D32_LOCKABLE` (84) + `Q16W16V16U16` (110) formats end-to-end (closed 2026-05-24) | C.12#7 | mirror D32F_LOCKABLE→Depth32Float / A16B16G16R16→RGBA16Snorm; gate `dxmt9-core-format-caps-spec`. Caveat: Q16W16V16U16 FormatInfo mirrors its analog's `renderTarget=true` — real D3D9 may not advertise RT for it (minor caps over-report) |
 | `ATOC` alpha-to-coverage — classification + behavioral (closed 2026-05-24) | C.5 | R-FORMAT-13; `RS_ADAPTIVETESS_Y`(181) ATOC/A2M1/A2M0 token → PSO `alphaToCoverage` bit → bridge `alphaToCoverageEnabled` (already exposed). `3293e39`, gate `dxmt9-backend-pipeline-key-spec` |
-| `NULL` colorless render target — classification + behavioral (closed 2026-05-24) | C.5 | R-FORMAT-12; no color backing, `beginRenderPass` omits color attachment, Lock/readback→INVALIDCALL. `2f7b04e`, gate `dxmt9-resource-format-boundary-spec` (render-pass omission deferred to GPU validation) |
-| `RESZ` MSAA depth-resolve — **end-to-end code-complete** (closed 2026-05-24) | C.5 | R-FORMAT-11. Full pipeline: PE sentinel detect (`82c89fc`) → wire record + validate/classify (`1e914a4`) → recorder retention + replay-execute + `MetalCommandKind::DepthResolve` + encoder dispatch (`d5572fc`) → `encodeDepthResolve` primitive + winemetal depth-resolve ABI (`8568fab`). Classification `2f619f0`. Gates: `dxmt9-wmt-depth-resolve-abi-spec`, `dxmt9-chunk-record-hazard-spec`, `dxmt9-state-draw-transform-spec`, `dxmt9-dod-replay-observer-spec`; full lockstep build clean. **GPU MSAA+INTZ-readback pixel validation deferred** (needs a runtime probe). |
-| `SAMP_MIPMAPLODBIAS` per-sampler mip LOD bias — shader-side (closed 2026-05-24) | B.3/B.10#4 | `bfb8a2d`; `SamplerLodBias` uniform (fragment slot 4) + `sample(…, bias(b))` at FFP (4) + translated-texld (1) sites; `bias(0)` no-op. Gate `dxmt9-shader-transform-spec` (+ texture readbacks confirm no-op). GPU mip-bias validation deferred. NOT an ABI change. |
+| `NULL` colorless render target — classification + runtime depth-only probe (closed 2026-05-29) | C.5 | R-FORMAT-12; no color backing, `beginRenderPass` omits color attachment, Lock/readback→INVALIDCALL. Gates: `dxmt9-resource-format-boundary-spec`, `dxmt9-null-rt-attachment-spec`, `dxmt9-shader-corpus-render_state-dxmt9_null_rt_depth_occlusion_readback`. |
+| `RESZ` MSAA depth-resolve — **end-to-end + runtime readback** (closed 2026-05-29) | C.5 | R-FORMAT-11. Full pipeline: PE sentinel detect (`82c89fc`) → wire record + validate/classify (`1e914a4`) → recorder retention + replay-execute + `MetalCommandKind::DepthResolve` + encoder dispatch (`d5572fc`) → `encodeDepthResolve` primitive + winemetal depth-resolve ABI (`8568fab`). Classification `2f619f0`. Gates: `dxmt9-wmt-depth-resolve-abi-spec`, `dxmt9-chunk-record-hazard-spec`, `dxmt9-state-draw-transform-spec`, `dxmt9-dod-replay-observer-spec`, `dxmt9-resz-depth-resolve-spec`, `dxmt9-shader-corpus-render_state-dxmt9_resz_intz_sample_readback`. |
+| `SAMP_MIPMAPLODBIAS` per-sampler mip LOD bias — shader-side + readback validation (closed 2026-05-29) | B.3/B.10#4 | `bfb8a2d`; `SamplerLodBias` uniform (fragment slot 4) + `sample(…, bias(b))` at FFP (4) + translated-texld (1) sites; `bias(0)` no-op. Gates: `dxmt9-shader-transform-spec`, `dxmt9-shader-corpus-texture-dxmt9_mipmaplodbias_readback`, `dxmt9-shader-corpus-texture-dxmt9_mipmaplodbias_zero_control_readback`. NOT an ABI change. |
+| `D3DSAMP_MAXMIPLEVEL` → sampler `lod_min_clamp` | B.3 | `include/dxmt9/core_constants.hpp:SAMP_MAX_MIP_LEVEL`; `src/dxmt9/dxmt9_draw_encoder.mm:824-829,883-885`; gate `backend_key_descriptor_spec.cpp` |
 | `D3DRS_TWOSIDEDSTENCILMODE` (185) per-face stencil ops (closed 2026-05-24) | B.10#7 | `19f4274`+`fc10a5b`; mode-on → back-face ops from CCW render states (`MTLDepthStencilDescriptor.backFaceStencil`); mode-off mirrors front (byte-identical default). Also fixed a latent CCW-state leak. Gate `dxmt9-stencil-ref-spec`. |
 | `D3DCLIPSTATUS9` Set/GetClipStatus — Wine-matching stub + defined default (closed 2026-05-24) | B.8/D.* | `6f190b9`+`fbfd917` (A'); reject null, accept-without-store, GetClipStatus returns the defined all-visible default. No HW clip-flag accumulation exists (matches wined3d). Gate `dxmt9-core-device-com-spec` (native) + `d3d9_device_misc.cpp` (conformance, compiles; Wine-run deferred). |
 | COM silent-`S_OK` stub gates — SetNPatchMode/GetNPatchMode, DeletePatch, Set/GetClipStatus (closed 2026-05-24) | D.* | `6f190b9`; conformance gates in `d3d9_device_misc.cpp` pin the documented no-op/INVALIDCALL contracts (compiles in the win32 PE build; Wine-run validation deferred). |
+| Shader dst modifiers `_PARTIALPRECISION` and `_MSAMPCENTROID` | A.6 | `_PARTIALPRECISION` lowers through half precision; `_MSAMPCENTROID` marks matching PS inputs as `[[centroid_perspective]]`; gate `shader_transform_spec.cpp:testD3DBCDestModifierPartialPrecisionLowering`, `testPs30CentroidInputModifierLowersToMslInterpolation` |
+| `D3DRS_COLORVERTEX` FFP material-source gate | B.1 | `src/d3d9/core_draw.cpp:2169-2170`; gate `ffp_key_determinism_spec.cpp` |
 
 ### Remaining actionable gaps (verified still open)
 
-**None.** All actionable D3D9 API-coverage gaps are closed — implemented (and
-build/unit-verified) or resolved as documented-unsupported/non-gap (below).
-Outstanding work is limited to **deferred GPU-runtime pixel validations**
-(RESZ MSAA→INTZ readback, NULL color-attachment omission, MIPMAPLODBIAS mip
-selection) and **conformance Wine-run validation** of the new PE gates — each
-needs a Wine + GPU readback probe, not further implementation.
+**None in the current silent-coverage track.** The remaining items are either
+implemented, explicitly accepted as no-op/shadow-only, or documented as
+unsupported/deferred.
+
+Current deferred/unsupported surface to keep visible:
+
+| Item | Current decision |
+|---|---|
+| `D3DDECLMETHOD` 1..6 | Explicit safe-reject. These are declaration **methods** for fixed-function tessellator/N-patch/displacement-map evaluation. `D3DDECLMETHOD_UV` is not ordinary texture coordinate input; ordinary UVs are `D3DDECLUSAGE_TEXCOORD` with `D3DDECLMETHOD_DEFAULT`, which is supported. |
+| `D3DSPR_TEMPFLOAT16`, `D3DSPR_LABEL` | Explicit safe-reject. |
+| N-patch / adaptive tessellation render states and patch draws | Deferred/unsupported: `PATCHEDGESTYLE`, `TWEENFACTOR`, `POSITIONDEGREE`, `NORMALDEGREE`, tessellation levels, `SetNPatchMode`, `DrawRectPatch`, `DrawTriPatch`, `DeletePatch` no-op contract. |
+| `ProcessVertices` / real software vertex processing | Deferred. The current path returns `D3DERR_INVALIDCALL` after device-lost gating; `SetSoftwareVertexProcessing` is PE shadow policy only. |
+| `D3DSAMP_ELEMENTINDEX`, `D3DSAMP_DMAPOFFSET` | Deferred. Texture-array/displacement-map sampler semantics are not represented in the backend. |
+| `D3DRS_MULTISAMPLEANTIALIAS`, `D3DRS_MULTISAMPLEMASK` | Shadow/default only. MSAA itself is attachment-driven; sample-mask programming is not currently wired. |
+| `D3DRS_ANTIALIASEDLINEENABLE` | Accepted no-op/deferred; Metal has no D3D9-style AA line raster toggle. |
+| Palette/P8 texture binding | Palette methods round-trip PE-side, but there is no P8 sampler conversion path. |
+| `SetConvolutionMonoKernel`, `ComposeRects` | Explicit `E_NOTIMPL`. |
+| SwapChain Ex present stats / GPU thread priority / residency | Benign stub contracts guarded by native tests where applicable; no real scheduler/stat backend. |
+
+Outstanding validation work is limited to **conformance Wine-run validation**
+of the new PE gates. The formerly deferred GPU-runtime pixel validations for
+RESZ MSAA→INTZ readback, NULL RT depth-only rendering, and MIPMAPLODBIAS mip
+selection are covered by shader-corpus readback probes.
 
 ### Resolved as documented-unsupported / non-gap (no implementation planned)
 
@@ -106,28 +139,25 @@ needs a Wine + GPU readback probe, not further implementation.
 | `D3DFMT_RAWZ` legacy raw depth | C.5 | **Unsupported — implemented + tested 2026-05-24.** Classified `Format::Rawz`, `CheckDeviceFormat`→`NOTAVAILABLE`; gate `dxmt9-core-format-caps-spec`. |
 | `D3DRS_DEBUGMONITORTOKEN` (165) | B.10#9 | **Non-gap** — PE shadow already stores all RS slots ≤255 generically; a named constant adds nothing functional. |
 
-## Cross-cutting high-priority findings
+## Cross-cutting current findings
 
-> Several rows in this table closed on 2026-05-24 — see the re-audit
-> delta above for the authoritative status. Rows kept here for the
-> original audit record.
+> This section is the current short list. The detailed A/B/C/D matrices below
+> still preserve original audit rows and may show stale `❌` markers; prefer
+> this list plus the re-audit delta above when triaging new work.
 
-Items below are surfaced from the four parts as deserving a dedicated
-track even after Wave 1 / Wave 2 of `specs/d3d9.plan.md` landed.
+Items below are surfaced from the four parts as deserving a dedicated track
+after the silent-coverage fixes landed.
 
-| Finding | Section | Risk | Suggested track |
-|---|---|---|---|
-| **`core::SAMP_BORDER_COLOR = 15`** (Wine `D3DSAMP_BORDERCOLOR = 4`) — wrong slot | B.3 | High — every sampler with `BORDERCOLOR` mode silently misreads | Verify the constant against Wine; fix to 4 with regression test |
-| 6 D3DDECLUSAGE (TANGENT/BINORMAL/TESSFACTOR/FOG/DEPTH/SAMPLE) silent fall-through | A.4 | Medium — normal-mapped assets misbind | DecoderReject + perf counter, same pattern as P1-2 |
-| 6 D3DDECLMETHOD (only DEFAULT honored) silent fall-through | A.5 | Low-Med — N-patch / tessellation niche | DecoderReject + perf counter |
-| **23 silent-S_OK COM stubs** (GammaRamp, DialogBox, NPatch, ValidateDevice, GPU thread priority, CheckResourceResidency, SwapChain stats…) | D.* | High aggregate — tests cannot tell a working call from a no-op | Convert each to either ✅ honest impl or 🚫 E_NOTIMPL + test gate |
-| Point/Spot lighting: D9CLight carries Position/Range/Falloff/Attenuation but FFP emits directional only | B.5 | Medium — most legacy 3D scenes have ≥ 1 point light | New FFP-PS / lighting track |
-| `D3DCLIPSTATUS9` and `D3DGAMMARAMP` are log-only — no wire struct, no shadow | B.8/B.9 | Low — apps rarely consume | Mark 🚫 properly OR full impl |
-| `INTZ` / `DF16` / `DF24` / `RAWZ` / `RESZ` / `NULL` / `ATOC` / `NVDB` / `GET4` — vendor pseudo-formats all NOTAVAILABLE | C.5 | Medium — UE3/UE4-era shadow maps depend on `INTZ` | Promote INTZ first (most common) |
-| `AlphaCmpCaps` sourced from `alphaBlendCaps` not `alphaCmpCaps` — dedicated field dead code | C.7 | Low — produces wrong caps report for apps that introspect | Wire `alphaCmpCaps` field, one-line fix |
-| `D3DRASTER_STATUS::ScanLine` always 0 | C.10 | Low — apps that VBlank-poll get stuck | Wire to `CADisplayLink` or document as deferred |
-| `DeviceIdentifier` GUID + `WHQLLevel` always 0 in `AdapterIdentifier9` | C.9 | Low — DRM / fingerprint paths break | Generate stable GUID per-adapter |
-| **`SAMP_MIPMAPLODBIAS` (P1-3 deferred)** | B.3 | Medium | Per-sampler bias uniform → 4 MSL emit-site plumbing, see `specs/d3d9.plan.md` §3 P1-3 |
+| Finding | Section | Current status / suggested track |
+|---|---|---|
+| N-patch / adaptive tessellation family | A.5/B.1/D.* | Deferred/unsupported. Non-default declaration methods safe-reject because they describe fixed-function tessellator/N-patch/displacement-map evaluation, not ordinary vertex attributes; patch draw calls return `D3DERR_INVALIDCALL`; N-patch mode is a documented no-op/default contract. |
+| `ProcessVertices` / SWVP execution | D.4 | Deferred. `SetSoftwareVertexProcessing` is PE shadow policy only; no software transform/readback path is implemented. |
+| `D3DSAMP_ELEMENTINDEX`, `D3DSAMP_DMAPOFFSET` | B.3 | Deferred. Texture-array index and displacement-map sampler semantics are not wired. |
+| `D3DRS_MULTISAMPLEANTIALIAS`, `D3DRS_MULTISAMPLEMASK` | B.1 | Shadow/default only. Attachment MSAA is supported elsewhere; per-draw D3D9 sample mask is not wired. |
+| `D3DRS_ANTIALIASEDLINEENABLE` | B.1 | Accepted no-op/deferred; Metal exposes no equivalent D3D9 AA-line raster mode. |
+| Palette/P8 sampling | D.4/C.2 | Palette APIs round-trip PE-side, but P8-to-RGBA sampler conversion is not implemented. |
+| `SetConvolutionMonoKernel`, `ComposeRects` | D.5 | Explicit `E_NOTIMPL`. |
+| GPU-runtime validations | C.5/B.3 | Closed for the tracked cases: RESZ MSAA→INTZ readback, NULL RT depth-only rendering, and MIPMAPLODBIAS mip selection are covered by shader-corpus readback probes. |
 
 ---
 
@@ -235,7 +265,7 @@ track even after Wave 1 / Wave 2 of `specs/d3d9.plan.md` landed.
 | RASTOUT | 4 | ✅ | dxmt9_d3d9_bytecode.hpp:176; dxmt9_shader_decoder.cpp:212 | core_spec_fixtures.hpp:199; shader_bytecode_validation_spec.cpp:145 | |
 | ATTROUT | 5 | ✅ | dxmt9_d3d9_bytecode.hpp:177; dxmt9_shader_decoder.cpp:214 | shader_transform_spec.cpp:1112 | |
 | TEXCRDOUT / OUTPUT | 6 | ✅ | dxmt9_d3d9_bytecode.hpp:178; dxmt9_shader_decoder.cpp:216 | core_shader_translator_spec.cpp:252 | OUTPUT alias = TEXCRDOUT (same code 6) |
-| CONSTINT | 7 | ⚠️ | dxmt9_d3d9_bytecode.hpp:179; dxmt9_shader_decoder.cpp:218 | ❌ none | defined + decoded; OOB bounded to kMaxIntegerConstants; no dedicated test |
+| CONSTINT | 7 | ✅ | dxmt9_d3d9_bytecode.hpp:179; dxmt9_shader_decoder.cpp:218 | shader_transform_spec.cpp:testPs30ConstIntSourceLowering | defined + decoded; OOB bounded to kMaxIntegerConstants; DEFI + cInt source lowering covered |
 | COLOROUT | 8 | ✅ | dxmt9_d3d9_bytecode.hpp:180; dxmt9_shader_decoder.cpp:220 | core_spec_fixtures.hpp:201; shader_transform_spec.cpp:272 | |
 | DEPTHOUT | 9 | ✅ | dxmt9_d3d9_bytecode.hpp:181; dxmt9_shader_decoder.cpp:222 | shader_transform_spec.cpp:372 | |
 | SAMPLER | 10 | ✅ | dxmt9_d3d9_bytecode.hpp:182; dxmt9_shader_decoder.cpp:224 | shader_transform_spec.cpp:266 | OOB bounded to kMaxSamplers |
@@ -243,7 +273,7 @@ track even after Wave 1 / Wave 2 of `specs/d3d9.plan.md` landed.
 | CONST3 | 12 | 🟡 | dxmt9_d3d9_bytecode.hpp:191; dxmt9_shader_decoder.cpp:234-236 | ❌ none | aliased to ConstFloat (Wine parity) |
 | CONST4 | 13 | 🟡 | dxmt9_d3d9_bytecode.hpp:192; dxmt9_shader_decoder.cpp:235-236 | ❌ none | aliased to ConstFloat (Wine parity) |
 | CONSTBOOL | 14 | ✅ | dxmt9_d3d9_bytecode.hpp:193; dxmt9_shader_decoder.cpp:237 | shader_transform_spec.cpp:296; shader_transform_spec.cpp:1314 | OOB bounded to kMaxBoolConstants |
-| LOOP | 15 | ⚠️ | dxmt9_d3d9_bytecode.hpp:194; dxmt9_shader_decoder.cpp:239 | ❌ none | defined + decoded; no dedicated source-modifier test |
+| LOOP | 15 | ✅ | dxmt9_d3d9_bytecode.hpp:194; dxmt9_shader_decoder.cpp:239 | shader_transform_spec.cpp:testPs30LoopRegisterConstIntLowering | defined + decoded; LOOP aL, i# lowering covered |
 | TEMPFLOAT16 | 16 | 🔵 | dxmt9_d3d9_bytecode.hpp:202; dxmt9_shader_decoder.cpp:241-243 | shader_bytecode_validation_spec.cpp:200, 237 | safe-reject via DecoderRejectReason::TempFloat16Unsupported |
 | MISCTYPE | 17 | ✅ | dxmt9_d3d9_bytecode.hpp:203; dxmt9_shader_decoder.cpp:244; dxmt9_shader_metal_ir.cpp:802, 2087 | shader_transform_spec.cpp:750 | vPos / vFace SM3 inputs |
 | LABEL | 18 | 🔵 | dxmt9_d3d9_bytecode.hpp:210; dxmt9_shader_decoder.cpp:246-248 | shader_bytecode_validation_spec.cpp:201, 261 | safe-reject via DecoderRejectReason::LabelUnsupported (post b9a99d1) |
@@ -266,7 +296,7 @@ track even after Wave 1 / Wave 2 of `specs/d3d9.plan.md` landed.
 | SHORT4N | 10 | ✅ | dxmt9_ffp_shaders.hpp:53; dxmt9_ffp_shaders.cpp:39; d3d9_pe_device.cpp:286 | shader_transform_spec.cpp:1560, 1572 | |
 | USHORT2N | 11 | ✅ | dxmt9_ffp_shaders.hpp:54; dxmt9_ffp_shaders.cpp:33; d3d9_pe_device.cpp:287 | ❌ none | |
 | USHORT4N | 12 | ✅ | dxmt9_ffp_shaders.hpp:55; dxmt9_ffp_shaders.cpp:40; d3d9_pe_device.cpp:288 | ❌ none | |
-| UDEC3 | 13 | ⚠️ | dxmt9_ffp_shaders.hpp:56; dxmt9_ffp_shaders.cpp:34; d3d9_pe_device.cpp:289 | ❌ none | size known, FFP decoding path present; no test |
+| UDEC3 | 13 | ✅ | dxmt9_ffp_shaders.hpp:56; dxmt9_ffp_shaders.cpp:34; d3d9_pe_device.cpp:289 | shader_transform_spec.cpp:testVs30VertexDeclarationUDec3Load | size known; programmable VS declaration load path covered |
 | DEC3N | 14 | ✅ | dxmt9_ffp_shaders.hpp:57; dxmt9_ffp_shaders.cpp:35; d3d9_pe_device.cpp:290 | ❌ none | |
 | FLOAT16_2 | 15 | ✅ | dxmt9_ffp_shaders.hpp:58; dxmt9_ffp_shaders.cpp:36; d3d9_pe_device.cpp:291 | shader_transform_spec.cpp:1561 | |
 | FLOAT16_4 | 16 | ✅ | dxmt9_ffp_shaders.hpp:59; dxmt9_ffp_shaders.cpp:41; d3d9_pe_device.cpp:292 | ❌ none | |
@@ -292,6 +322,12 @@ track even after Wave 1 / Wave 2 of `specs/d3d9.plan.md` landed.
 | SAMPLE | 13 | ✅ | dxmt9_ffp_shaders.hpp:73; dxmt9_shader_decoder.cpp:isSupportedDeclUsage; decodeVertexShaderInputLayout | shader_bytecode_validation_spec.cpp:testGenericDeclUsagesDecodeCleanly | programmable VS accepts as a generic vin[] semantic |
 
 ### A.5 D3DDECLMETHOD
+
+These are not semantic usages. Ordinary texture coordinates are represented by
+`D3DDECLUSAGE_TEXCOORD` with `D3DDECLMETHOD_DEFAULT`; that path is supported.
+The non-default methods below belong to the legacy fixed-function
+tessellator/N-patch/displacement-map evaluation path, so they are rejected
+explicitly instead of being silently treated as direct vertex fetches.
 
 | Method | Code | Status | Source anchor | Test anchor | Notes |
 |---|---|---|---|---|---|
@@ -320,20 +356,20 @@ track even after Wave 1 / Wave 2 of `specs/d3d9.plan.md` landed.
 | Modifier | D3DSPSM | Code | Status | Source anchor | Test anchor | Notes |
 |---|---|---|---|---|---|---|
 | Swizzle | n/a | bits 16..23 | ✅ | dxmt9_shader_decoder.cpp:173 (decodeSwizzle); dxmt9_shader_metal_ir.cpp:applySwizzle | shader_transform_spec.cpp:1295, 1304 | 4×2-bit component selector |
-| NONE | _NONE | 0 | ✅ | dxmt9_shader_metal_ir.cpp:216 | shader_transform_spec.cpp:1308 (via mod=11 case) | passthrough |
-| NEG | _NEG | 1 | ✅ | dxmt9_shader_metal_ir.cpp:218 | ❌ none | unary minus |
-| BIAS | _BIAS | 2 | ✅ | dxmt9_shader_metal_ir.cpp:220 | ❌ none | (x - 0.5) |
-| BIASNEG | _BIASNEG | 3 | ✅ | dxmt9_shader_metal_ir.cpp:222 | ❌ none | -(x - 0.5) |
-| SIGN | _SIGN | 4 | ✅ | dxmt9_shader_metal_ir.cpp:224 | ❌ none | (x*2 - 1) |
-| SIGNNEG | _SIGNNEG | 5 | ✅ | dxmt9_shader_metal_ir.cpp:226 | ❌ none | -(x*2 - 1) |
-| COMP | _COMP | 6 | ✅ | dxmt9_shader_metal_ir.cpp:228 | ❌ none | (1 - x) |
-| X2 | _X2 | 7 | ✅ | dxmt9_shader_metal_ir.cpp:230 | ❌ none | (x*2) |
-| X2NEG | _X2NEG | 8 | ✅ | dxmt9_shader_metal_ir.cpp:232 | ❌ none | -(x*2) |
-| DZ | _DZ | 9 | ✅ | dxmt9_shader_metal_ir.cpp:234 | ❌ none | (x / x.z) |
-| DW | _DW | 10 | ✅ | dxmt9_shader_metal_ir.cpp:236 | ❌ none | (x / x.w) |
+| NONE | _NONE | 0 | ✅ | dxmt9_shader_metal_ir.cpp:216 | shader_transform_spec.cpp:testPs30WriteMaskSwizzleAndSourceModifiers | passthrough |
+| NEG | _NEG | 1 | ✅ | dxmt9_shader_metal_ir.cpp:218 | shader_transform_spec.cpp:testPs30WriteMaskSwizzleAndSourceModifiers | unary minus |
+| BIAS | _BIAS | 2 | ✅ | dxmt9_shader_metal_ir.cpp:220 | shader_transform_spec.cpp:testPs30MissingSourceModifierCoverage | (x - 0.5) |
+| BIASNEG | _BIASNEG | 3 | ✅ | dxmt9_shader_metal_ir.cpp:222 | shader_transform_spec.cpp:testPs30MissingSourceModifierCoverage | -(x - 0.5) |
+| SIGN | _SIGN | 4 | ✅ | dxmt9_shader_metal_ir.cpp:224 | shader_transform_spec.cpp:testPs30MissingSourceModifierCoverage | (x*2 - 1) |
+| SIGNNEG | _SIGNNEG | 5 | ✅ | dxmt9_shader_metal_ir.cpp:226 | shader_transform_spec.cpp:testPs30MissingSourceModifierCoverage | -(x*2 - 1) |
+| COMP | _COMP | 6 | ✅ | dxmt9_shader_metal_ir.cpp:228 | shader_transform_spec.cpp:testPs30MissingSourceModifierCoverage | (1 - x) |
+| X2 | _X2 | 7 | ✅ | dxmt9_shader_metal_ir.cpp:230 | shader_transform_spec.cpp:testPs30MissingSourceModifierCoverage | (x*2) |
+| X2NEG | _X2NEG | 8 | ✅ | dxmt9_shader_metal_ir.cpp:232 | shader_transform_spec.cpp:testPs30MissingSourceModifierCoverage | -(x*2) |
+| DZ | _DZ | 9 | ✅ | dxmt9_shader_metal_ir.cpp:234 | shader_transform_spec.cpp:testPs30MissingSourceModifierCoverage | (x / x.z) |
+| DW | _DW | 10 | ✅ | dxmt9_shader_metal_ir.cpp:236 | shader_transform_spec.cpp:testPs30MissingSourceModifierCoverage | (x / x.w) |
 | ABS | _ABS | 11 | ✅ | dxmt9_shader_metal_ir.cpp:238 | shader_transform_spec.cpp:1308 (`modifier == 11u`) | abs(x) |
-| ABSNEG | _ABSNEG | 12 | ✅ | dxmt9_shader_metal_ir.cpp:240 | ❌ none | -abs(x) |
-| NOT | _NOT | 13 | ✅ | dxmt9_shader_metal_ir.cpp:242 | ❌ none | predicate-style select |
+| ABSNEG | _ABSNEG | 12 | ✅ | dxmt9_shader_metal_ir.cpp:240 | shader_transform_spec.cpp:testPs30MissingSourceModifierCoverage | -abs(x) |
+| NOT | _NOT | 13 | ✅ | dxmt9_shader_metal_ir.cpp:242 | shader_transform_spec.cpp:testPs30MissingSourceModifierCoverage | predicate-style select |
 | Relative addressing | n/a | bit 13 | ✅ | dxmt9_shader_decoder.cpp:198 (tokenHasRelativeAddressing); 1404-1422 (per-opcode register-vs-literal probe) | shader_transform_spec.cpp:1324 (tokenHasRelativeAddressingForTest) | extra DWORD per rel-addr operand |
 | WriteMask (dst) | n/a | bits 16..19 | ✅ | dxmt9_shader_decoder.cpp:194 (decodeWriteMask) | shader_transform_spec.cpp:1298 | 4-bit per-component write mask |
 | Coissue (instr) | n/a | bit 30 | ✅ | dxmt9_shader_decoder.cpp:decoded `coissue`; dxmt9_shader_metal_ir.cpp:CND PS1.x branch | shader_runner/corpus/legacy_sm1/dxmt9_ps13_cnd_coissue_readback.shader_test | PS1.x coissued CND alpha path is lowered; other coissue uses are scheduling hints and execute serially |
@@ -341,14 +377,14 @@ track even after Wave 1 / Wave 2 of `specs/d3d9.plan.md` landed.
 ### A.7 Section summary
 
 - **D3DSIO opcodes**: 96 named + 3 sentinels (PHASE/COMMENT/END) defined; 93 fully lowered (✅), 3 with `kUnsupportedFixedOperandCount` audit-marked but control-flow-emitted (⚠️ LOOP, SINCOS, REP — they execute via shared paths; the audit row simply notes the decoder uses a variable operand-count path). 0 missing. All 99 covered by `opcode_audit_spec`.
-- **D3DSPR register kinds**: 20 codes (0..19, with code 6 being TEXCRDOUT/OUTPUT alias and codes 3/ADDR/TEXTURE alias). 14 fully tested (✅), 3 aliased to ConstFloat (🟡 CONST2/3/4 — Wine parity), 2 safe-rejected (🔵 TEMPFLOAT16, LABEL), 2 defined+decoded but no dedicated test (⚠️ CONSTINT, LOOP). 0 missing.
-- **D3DDECLTYPE**: 18 codes (0..17 incl. UNUSED). 16 fully tested or trivially covered (✅), 1 sized but no dedicated test (⚠️ UDEC3), 1 missing test coverage from the inventory tests but referenced in production layouts (FLOAT1). 0 missing constants.
+- **D3DSPR register kinds**: 20 codes (0..19, with code 6 being TEXCRDOUT/OUTPUT alias and code 3 being ADDR/TEXTURE stage-dependent). 15 fully tested (✅), 3 aliased to ConstFloat (🟡 CONST2/3/4 — Wine parity), 2 safe-rejected (🔵 TEMPFLOAT16, LABEL). CONSTINT and LOOP now have dedicated lowering tests. 0 missing.
+- **D3DDECLTYPE**: 18 codes (0..17 incl. UNUSED). 17 fully tested or trivially covered (✅), 1 missing test coverage from the inventory tests but referenced in production layouts (FLOAT1). UDEC3 now has a programmable VS declaration load test. 0 missing constants.
 - **D3DDECLUSAGE**: 14 codes (0..13). All are accepted by the programmable VS declaration matcher; the uncommon usages (TANGENT, BINORMAL, TESSFACTOR, FOG, DEPTH, SAMPLE) are covered as generic input semantics. FFP still consumes only the fixed-function subset.
 - **D3DDECLMETHOD**: 7 codes (0..6). DEFAULT is consumed; methods 1..6 explicitly safe-reject because dxmt9 has no N-patch/tessellator lowering.
 - **Dst token modifiers**: 3 D3DSPDM bits + predicated-instr bit. SATURATE, PARTIALPRECISION, and MSAMPCENTROID are covered; predicate-bit ✅.
-- **Src token modifiers**: 14 D3DSPSM codes (0..13) + swizzle + rel-addr + writeMask + coissue. 14/14 source modifiers implemented (✅), but only 2 directly exercised by `shader_transform_spec` (NONE via mod 11, ABS). Swizzle/writeMask/rel-addr all ✅. Coissue has PS1.x CND readback coverage; non-CND coissue remains a serial scheduling hint.
+- **Src token modifiers**: 14 D3DSPSM codes (0..13) + swizzle + rel-addr + writeMask + coissue. 14/14 source modifiers implemented and directly exercised by `shader_transform_spec`. Swizzle/writeMask/rel-addr all ✅. Coissue has PS1.x CND readback coverage; non-CND coissue remains a serial scheduling hint.
 
-**Totals**: D3DSIO: 99 defined / 99 tested / 0 missing. D3DSPR: 20 defined / 16 tested / 0 missing constants (4 alias/reject). D3DDECLTYPE: 18 defined / 8 directly tested / 0 missing. D3DDECLUSAGE: 14 defined / 8 tested / 6 unhandled in decode path. D3DDECLMETHOD: 1 / 1 / 6. Dst-mods: 3 / 2 / 1. Src-mods: 14 / 2 directly / 0 missing impl.
+**Totals**: D3DSIO: 99 defined / 99 tested / 0 missing. D3DSPR: 20 defined / 15 directly tested + 3 alias + 2 safe-reject / 0 missing constants. D3DDECLTYPE: 18 defined / 9 directly tested / 0 missing. D3DDECLUSAGE: 14 defined / 14 accepted (fixed-function subset plus generic programmable VS semantics) / 0 missing. D3DDECLMETHOD: 7 defined / 1 consumed / 6 explicit safe-reject. Dst-mods: SATURATE, PARTIALPRECISION, MSAMPCENTROID plus predicate-bit covered / 0 missing. Src-mods: 14 / 14 directly tested / 0 missing impl.
 
 ## Methodology
 
@@ -507,37 +543,37 @@ Anchors are the **first defining or emitting** line; for opcodes the audit table
 | POSITIONDEGREE | 172 | ⚠️ `kRsPositionDegree` (core_state.cpp:365) | ✅ | ⚠️ | ❌ | 🚫 | N-patch — deferred |
 | NORMALDEGREE | 173 | ⚠️ `kRsNormalDegree` (core_state.cpp:366) | ✅ | ⚠️ | ❌ | 🚫 | N-patch — deferred |
 | SCISSORTESTENABLE | 174 | ✅ `core::RS_SCISSOR_TEST_ENABLE` (core_constants.hpp:383) | ✅ | ⚠️ | ✅ `chunk_replay.cpp:458`, `core_state.cpp:541` | ⚠️ no dedicated spec | Forwarded to encoder scissorRect logic |
-| SLOPESCALEDEPTHBIAS | 175 | ⚠️ `kRsSlopeScaleDepthBias` (core_state.cpp:367) | ✅ | ⚠️ | ❌ not consumed (Metal depth-bias is set elsewhere) | ❌ | Wireable but no MTL bind |
+| SLOPESCALEDEPTHBIAS | 175 | ✅ `core::RS_SLOPE_SCALE_DEPTH_BIAS` (core_constants.hpp) | ✅ | ⚠️ | ✅ `dxmt9_draw_encoder.mm` feeds Metal depth bias slope scale | ✅ backend depth-bias gate | Closed 2026-05-24; paired with `DEPTHBIAS` |
 | ANTIALIASEDLINEENABLE | 176 | ⚠️ `kRsAntialiasedLineEnable` (core_state.cpp:368) | ✅ | ⚠️ | ❌ | ❌ | Metal has no AA-line mode |
 | (177 dead) | 177 | n/a | n/a | n/a | n/a | n/a | |
 | MINTESSELLATIONLEVEL | 178 | ⚠️ `kRsMinTessellationLevel` (core_state.cpp:369) | ✅ | ⚠️ | ❌ | 🚫 | N-patch tessellation — deferred |
 | MAXTESSELLATIONLEVEL | 179 | ⚠️ `kRsMaxTessellationLevel` (core_state.cpp:370) | ✅ | ⚠️ | ❌ | 🚫 | |
 | ADAPTIVETESS_X | 180 | ⚠️ `kRsAdaptiveTessX` (core_state.cpp:371) | ✅ | ⚠️ | ❌ | 🚫 | |
-| ADAPTIVETESS_Y | 181 | ⚠️ `kRsAdaptiveTessY` (core_state.cpp:372) | ✅ | ⚠️ | ❌ | 🚫 | Some apps abuse as A2C — not done |
+| ADAPTIVETESS_Y | 181 | ⚠️ `kRsAdaptiveTessY` (core_state.cpp:372) | ✅ | ⚠️ | ⚠️ ATOC token path implemented; N-patch tessellation still deferred | ✅ backend pipeline-key ATOC gate | D3D9 adaptive tessellation remains unsupported; vendor ATOC/A2M token behavior is wired |
 | ADAPTIVETESS_Z | 182 | ⚠️ `kRsAdaptiveTessZ` (core_state.cpp:373) | ✅ | ⚠️ | ❌ | 🚫 | |
 | ADAPTIVETESS_W | 183 | ⚠️ `kRsAdaptiveTessW` (core_state.cpp:374) | ✅ | ⚠️ | ❌ | 🚫 | |
 | ENABLEADAPTIVETESSELLATION | 184 | ⚠️ `kRsEnableAdaptiveTessellation` (core_state.cpp:375) | ✅ | ⚠️ | ❌ | 🚫 | |
-| TWOSIDEDSTENCILMODE | 185 | ⚠️ `kRsTwoSidedStencilMode` (core_state.cpp:376) | ✅ | ⚠️ | ⚠️ implicit (CCW_* RS values are read unconditionally; toggle not gated) | ⚠️ stencil_ref_spec (twoSided branch) | dxmt9 always uses both faces |
+| TWOSIDEDSTENCILMODE | 185 | ✅ `core::RS_TWO_SIDED_STENCIL_MODE` (core_constants.hpp) | ✅ | ⚠️ | ✅ mode gates front/back stencil descriptors | ✅ stencil_ref_spec (twoSided branch) | Closed 2026-05-24; mode-off mirrors front face |
 | CCW_STENCILFAIL | 186 | ✅ `core::RS_STENCIL_CCW_FAIL` (core_constants.hpp:402) | ✅ | ⚠️ | ✅ `dxmt9_draw_state.cpp:250` | ⚠️ | |
 | CCW_STENCILZFAIL | 187 | ✅ `core::RS_STENCIL_CCW_ZFAIL` (core_constants.hpp:403) | ✅ | ⚠️ | ✅ `dxmt9_draw_state.cpp:252` | ⚠️ | |
 | CCW_STENCILPASS | 188 | ✅ `core::RS_STENCIL_CCW_PASS` (core_constants.hpp:404) | ✅ | ⚠️ | ✅ `dxmt9_draw_state.cpp:254` | ⚠️ | |
 | CCW_STENCILFUNC | 189 | ✅ `core::RS_STENCIL_CCW_FUNC` (core_constants.hpp:401) | ✅ | ⚠️ | ✅ `dxmt9_draw_state.cpp:248` | ⚠️ | |
-| COLORWRITEENABLE1 | 190 | ⚠️ `kRsColorWriteEnable1` (core_state.cpp:377) | ✅ | ⚠️ | ❌ not consumed (only RT0 channel mask is wired) | ❌ | Per-RT masks unwired |
-| COLORWRITEENABLE2 | 191 | ⚠️ `kRsColorWriteEnable2` | ✅ | ⚠️ | ❌ | ❌ | |
-| COLORWRITEENABLE3 | 192 | ⚠️ `kRsColorWriteEnable3` | ✅ | ⚠️ | ❌ | ❌ | |
+| COLORWRITEENABLE1 | 190 | ✅ `core::RS_COLOR_WRITE_ENABLE1` | ✅ | ⚠️ | ✅ per-RT blend attachment mask | ✅ backend pipeline-key gate | Closed 2026-05-24 |
+| COLORWRITEENABLE2 | 191 | ✅ `core::RS_COLOR_WRITE_ENABLE2` | ✅ | ⚠️ | ✅ per-RT blend attachment mask | ✅ backend pipeline-key gate | Closed 2026-05-24 |
+| COLORWRITEENABLE3 | 192 | ✅ `core::RS_COLOR_WRITE_ENABLE3` | ✅ | ⚠️ | ✅ per-RT blend attachment mask | ✅ backend pipeline-key gate | Closed 2026-05-24 |
 | BLENDFACTOR | 193 | ✅ `core::RS_BLEND_FACTOR` (core_constants.hpp:387) | ✅ | ⚠️ | ✅ `dxmt9_draw_encoder.mm:62` (using-decl); fed into setBlendColor | ⚠️ no spec | RGBA u32 split to 4 floats |
 | SRGBWRITEENABLE | 194 | ✅ `core::RS_SRGB_WRITE_ENABLE` (core_constants.hpp:388) | ✅ | ⚠️ | ✅ `dxmt9_pipeline_cache.cpp:629`, `dxmt9_draw_encoder.mm:951` | ⚠️ implicit via pipeline key | |
-| DEPTHBIAS | 195 | ⚠️ `kRsDepthBias` (core_state.cpp:380) | ✅ | ⚠️ | ❌ not consumed | ❌ | No `setDepthBias` callsite |
+| DEPTHBIAS | 195 | ✅ `core::RS_DEPTH_BIAS` (core_constants.hpp) | ✅ | ⚠️ | ✅ `dxmt9_draw_encoder.mm` feeds Metal depth bias | ✅ backend depth-bias gate | Closed 2026-05-24 |
 | (196 dead) | 196 | n/a | n/a | n/a | n/a | n/a | |
 | (197 dead) | 197 | n/a | n/a | n/a | n/a | n/a | |
-| WRAP8 | 198 | ⚠️ `kRsWrap8` | ✅ | ⚠️ | ❌ | ❌ | |
-| WRAP9 | 199 | ⚠️ `kRsWrap9` | ✅ | ⚠️ | ❌ | ❌ | |
-| WRAP10 | 200 | ⚠️ `kRsWrap10` | ✅ | ⚠️ | ❌ | ❌ | |
-| WRAP11 | 201 | ⚠️ `kRsWrap11` | ✅ | ⚠️ | ❌ | ❌ | |
-| WRAP12 | 202 | ⚠️ `kRsWrap12` | ✅ | ⚠️ | ❌ | ❌ | |
-| WRAP13 | 203 | ⚠️ `kRsWrap13` | ✅ | ⚠️ | ❌ | ❌ | |
-| WRAP14 | 204 | ⚠️ `kRsWrap14` | ✅ | ⚠️ | ❌ | ❌ | |
-| WRAP15 | 205 | ⚠️ `kRsWrap15` | ✅ | ⚠️ | ❌ | ❌ | |
+| WRAP8 | 198 | ✅ `core::RS_WRAP8` | ✅ | ⚠️ | accepted no-op | ✅ state_draw_transform_spec:testWrapRenderStateRoundTrip | Shadowed/readable; representative high-range wrap coverage |
+| WRAP9 | 199 | ✅ `core::RS_WRAP9` | ✅ | ⚠️ | accepted no-op | ✅ state_draw_transform_spec:testWrapRenderStateRoundTrip | |
+| WRAP10 | 200 | ✅ `core::RS_WRAP10` | ✅ | ⚠️ | accepted no-op | ✅ state_draw_transform_spec:testWrapRenderStateRoundTrip | |
+| WRAP11 | 201 | ✅ `core::RS_WRAP11` | ✅ | ⚠️ | accepted no-op | ✅ state_draw_transform_spec:testWrapRenderStateRoundTrip | |
+| WRAP12 | 202 | ✅ `core::RS_WRAP12` | ✅ | ⚠️ | accepted no-op | ✅ state_draw_transform_spec:testWrapRenderStateRoundTrip | |
+| WRAP13 | 203 | ✅ `core::RS_WRAP13` | ✅ | ⚠️ | accepted no-op | ✅ state_draw_transform_spec:testWrapRenderStateRoundTrip | |
+| WRAP14 | 204 | ✅ `core::RS_WRAP14` | ✅ | ⚠️ | accepted no-op | ✅ state_draw_transform_spec:testWrapRenderStateRoundTrip | |
+| WRAP15 | 205 | ✅ `core::RS_WRAP15` | ✅ | ⚠️ | accepted no-op | ✅ state_draw_transform_spec:testWrapRenderStateRoundTrip | |
 | SEPARATEALPHABLENDENABLE | 206 | ✅ `core::RS_SEPARATE_ALPHA_BLEND_ENABLE` (core_constants.hpp:389) | ✅ | ⚠️ | ✅ `dxmt9_pipeline_cache.cpp:145` | ✅ blend_op_family_spec | |
 | SRCBLENDALPHA | 207 | ✅ `core::RS_SRC_BLEND_ALPHA` (core_constants.hpp:390) | ✅ | ⚠️ | ✅ `dxmt9_pipeline_cache.cpp:156` | ✅ blend_op_family_spec | |
 | DESTBLENDALPHA | 208 | ✅ `core::RS_DEST_BLEND_ALPHA` (core_constants.hpp:391) | ✅ | ⚠️ | ✅ `dxmt9_pipeline_cache.cpp:159` | ✅ blend_op_family_spec | |
@@ -565,8 +601,8 @@ Each entry below is replicated across stage 0..7 (8 stages × table). Backend-re
 | BUMPENVLOFFSET | 23 | ✅ `core::TSS_BUMPENVLOFFSET` (core_constants.hpp:423) | ✅ | ⚠️ | ✅ `dxmt9_draw_state.cpp:210` | ⚠️ ebde43e | |
 | TEXTURETRANSFORMFLAGS | 24 | ✅ `core::TSS_TEXTURE_TRANSFORM_FLAGS` (core_constants.hpp:424) | ✅ | ⚠️ | ✅ `dxmt9_draw_encoder.mm:82` | ✅ ffp_key_determinism_spec:238, state_draw_transform_spec:620 | |
 | (25 dead) | 25 | n/a | n/a | n/a | n/a | n/a | |
-| COLORARG0 | 26 | ❌ not defined as `TSS_COLOR_ARG0` | ✅ shadow generic | ⚠️ | ❌ not consumed (FFP only uses ARG1/ARG2) | ❌ | D3DTA-style triadic ops only |
-| ALPHAARG0 | 27 | ❌ not defined | ✅ shadow generic | ⚠️ | ❌ | ❌ | |
+| COLORARG0 | 26 | ✅ `core::TSS_COLOR_ARG0` | ✅ | ⚠️ | ✅ consumed by FFP triadic ops | ✅ ffp_triadic_msl_spec + GPU readbacks | Closed 2026-05-24; default `D3DTA_CURRENT` |
+| ALPHAARG0 | 27 | ✅ `core::TSS_ALPHA_ARG0` | ✅ | ⚠️ | ✅ consumed by FFP triadic ops | ✅ ffp_triadic_msl_spec + GPU readbacks | Closed 2026-05-24; default `D3DTA_CURRENT` |
 | RESULTARG | 28 | ✅ `core::TSS_RESULT_ARG` (core_constants.hpp:420) | ✅ | ⚠️ | ⚠️ pipeline-key bucketed (`ffp_key_determinism_spec:161` lists it) but no encoder branch on the value | ⚠️ | |
 | (29..31 dead) | 29-31 | n/a | n/a | n/a | n/a | n/a | |
 | CONSTANT | 32 | ✅ `core::TSS_CONSTANT` (core_constants.hpp:425) | ✅ | ⚠️ | ✅ `dxmt9_draw_state.cpp:201` (uniform), `chunk_replay.cpp:143` | ⚠️ | |
@@ -578,12 +614,12 @@ Each entry below is replicated across stage 0..7 (8 stages × table). Backend-re
 | ADDRESSU | 1 | ✅ `core::SAMP_ADDRESS_U` (core_constants.hpp:428) | ✅ | ⚠️ via `D9CDrawPacketSamplerState` (`device_c.h:236`) | ✅ `dxmt9_draw_encoder.mm:48` | ✅ state_draw_transform_spec:621 | |
 | ADDRESSV | 2 | ✅ `core::SAMP_ADDRESS_V` (core_constants.hpp:429) | ✅ | ⚠️ | ✅ `dxmt9_draw_encoder.mm:49` | ⚠️ | |
 | ADDRESSW | 3 | ✅ `core::SAMP_ADDRESS_W` (core_constants.hpp:430) | ✅ | ⚠️ | ✅ `dxmt9_draw_encoder.mm:50` | ⚠️ | |
-| BORDERCOLOR | 4 | ⚠️ `core::SAMP_BORDER_COLOR = 15` (core_constants.hpp:437) — **wrong code**, should be 4 | ✅ generic at code 4 via shadow | ⚠️ | ❌ encoder using-decl present (`dxmt9_draw_encoder.mm:51`) but reads from slot 15, not 4 | ❌ | Real D3D9 slot 4 unreadable; ⚠️ defined-but-wrong |
+| BORDERCOLOR | 4 | ✅ `core::SAMP_BORDER_COLOR = 4` + static_assert | ✅ | ⚠️ | ✅ encoder reads slot 4 | ✅ backend_key_descriptor_spec + lifecycle/coverage gates | Closed 2026-05-24 |
 | MAGFILTER | 5 | ✅ `core::SAMP_MAG_FILTER` (core_constants.hpp:431) | ✅ | ⚠️ | ✅ `dxmt9_pipeline_cache.cpp:778`, `dxmt9_draw_encoder.mm:52` | ⚠️ | |
 | MINFILTER | 6 | ✅ `core::SAMP_MIN_FILTER` (core_constants.hpp:432) | ✅ | ⚠️ | ✅ `dxmt9_pipeline_cache.cpp:777`, `dxmt9_draw_encoder.mm:54` | ⚠️ | |
 | MIPFILTER | 7 | ✅ `core::SAMP_MIP_FILTER` (core_constants.hpp:433) | ✅ | ⚠️ | ✅ `dxmt9_draw_encoder.mm:55,714,765` | ⚠️ | |
-| MIPMAPLODBIAS | 8 | ✅ `core::SAMP_MIPMAP_LOD_BIAS` (core_constants.hpp:434) | ✅ | ⚠️ | ❌ not consumed in encoder | ❌ | Defined + default 0 set (`core_state.cpp:216`) but never read by draw_encoder |
-| MAXMIPLEVEL | 9 | ❌ not defined as `core::SAMP_MAXMIPLEVEL` | ✅ shadow generic | ⚠️ | ❌ | ❌ | |
+| MIPMAPLODBIAS | 8 | ✅ `core::SAMP_MIPMAP_LOD_BIAS` | ✅ | ⚠️ | ✅ shader-side `sample(..., bias(b))` at FFP/translated texld sites | ✅ shader_transform_spec + readback mip-selection/zero-control gates | Closed; shader-corpus pixel readbacks validate biased mip selection and zero-bias control |
+| MAXMIPLEVEL | 9 | ✅ `core::SAMP_MAX_MIP_LEVEL` | ✅ | ⚠️ | ✅ sampler `lod_min_clamp = max(SetLOD, MAXMIPLEVEL)` | ✅ backend_key_descriptor_spec | Closed; D3D9 SetLOD interaction is modeled as max/coarser clamp |
 | MAXANISOTROPY | 10 | ✅ `core::SAMP_MAX_ANISOTROPY` (core_constants.hpp:435) | ✅ | ⚠️ | ✅ `dxmt9_draw_encoder.mm:53` | ✅ state_draw_transform_spec:622,648 | |
 | SRGBTEXTURE | 11 | ✅ `core::SAMP_SRGB_TEXTURE` (core_constants.hpp:436) | ✅ | ⚠️ | ✅ `dxmt9_draw_encoder.mm:2077,2139` | ⚠️ | |
 | ELEMENTINDEX | 12 | ❌ not defined | ✅ generic | ⚠️ | ❌ | ❌ | Texture-array index; deferred |
@@ -613,27 +649,27 @@ D3DLIGHTTYPE (`d3d9types.h:873-879`):
 
 | Type | Code | defined | PE-shadow | chunk | backend-read | test | Notes |
 |---|---|---|---|---|---|---|---|
-| D3DLIGHT_POINT | 1 | ✅ wire only — `D9CLight.type` u32 (device_c.h:169) | ✅ via `lightShadow[]` (d3d9_pe_state_shadow.hpp:469) | ✅ slot mask + array (`packet.lightSlotMask`, `packet.lights[8]`, device_c.h:341-342) | ❌ `ffp_shaders.cpp:188` gates `LightType::Directional` only — point light type ignored | ❌ | FFP key reserves slot but emits nothing |
-| D3DLIGHT_SPOT | 2 | ✅ wire | ✅ | ✅ | ❌ same gate — spot not emitted | ❌ | |
+| D3DLIGHT_POINT | 1 | ✅ `D9CLight.type` u32 (device_c.h:169) | ✅ via `lightShadow[]` (d3d9_pe_state_shadow.hpp:469) | ✅ slot mask + array (`packet.lightSlotMask`, `packet.lights[8]`, device_c.h:341-342) | ✅ FFP point-light branch uses position/range/attenuation | ✅ FFP lighting gates | Closed 2026-05-24 |
+| D3DLIGHT_SPOT | 2 | ✅ wire | ✅ | ✅ | ✅ FFP spot-light branch uses direction/theta/phi/falloff | ✅ FFP lighting gates | Closed 2026-05-24 |
 | D3DLIGHT_DIRECTIONAL | 3 | ✅ wire | ✅ | ✅ | ✅ `ffp_shaders.cpp:164,188` (only supported type) | ⚠️ ffp_key_determinism_spec light fields | |
 
 D3DLIGHT9 struct fields (`d3d9types.h:1408-1422`):
 
 | Field | defined | PE-shadow | chunk | backend-read | test | Notes |
 |---|---|---|---|---|---|---|
-| Type | ✅ `D9CLight.type` (device_c.h:169) | ✅ | ✅ | ⚠️ gated to Directional only | ⚠️ | |
+| Type | ✅ `D9CLight.type` (device_c.h:169) | ✅ | ✅ | ✅ directional/point/spot branches | ⚠️ | |
 | Diffuse | ✅ `diffuse` D9CColorRGBA | ✅ | ✅ | ✅ `dxmt9_draw_state.cpp:112` (`lightDiffuse[i]`) | ⚠️ | |
 | Specular | ✅ `specular` | ✅ | ✅ | ✅ `dxmt9_draw_state.cpp:113` | ⚠️ | |
 | Ambient | ✅ `ambient` | ✅ | ✅ | ✅ `dxmt9_draw_state.cpp:114` | ⚠️ | |
-| Position | ✅ `position[3]` | ✅ | ✅ | ❌ unused (point/spot path stubbed) | ❌ | |
+| Position | ✅ `position[3]` | ✅ | ✅ | ✅ point/spot branch | ⚠️ | |
 | Direction | ✅ `direction[3]` | ✅ | ✅ | ✅ `dxmt9_draw_state.cpp:115` | ⚠️ | |
-| Range | ✅ float | ✅ | ✅ | ❌ point/spot only | ❌ | |
-| Falloff | ✅ | ✅ | ✅ | ❌ spot only | ❌ | |
-| Attenuation0 | ✅ | ✅ | ✅ | ❌ point/spot only | ❌ | |
-| Attenuation1 | ✅ | ✅ | ✅ | ❌ | ❌ | |
-| Attenuation2 | ✅ | ✅ | ✅ | ❌ | ❌ | |
-| Theta | ✅ | ✅ | ✅ | ❌ spot only | ❌ | |
-| Phi | ✅ | ✅ | ✅ | ❌ spot only | ❌ | |
+| Range | ✅ float | ✅ | ✅ | ✅ point/spot branch | ⚠️ | |
+| Falloff | ✅ | ✅ | ✅ | ✅ spot branch | ⚠️ | |
+| Attenuation0 | ✅ | ✅ | ✅ | ✅ point/spot branch | ⚠️ | |
+| Attenuation1 | ✅ | ✅ | ✅ | ✅ point/spot branch | ⚠️ | |
+| Attenuation2 | ✅ | ✅ | ✅ | ✅ point/spot branch | ⚠️ | |
+| Theta | ✅ | ✅ | ✅ | ✅ spot branch | ⚠️ | |
+| Phi | ✅ | ✅ | ✅ | ✅ spot branch | ⚠️ | |
 
 LightEnable: ✅ `packet.lightEnableValidMask` + `lightEnableMask` (device_c.h:343-344); shadow `lightEnableShadow` (d3d9_pe_state_shadow.hpp:472); read into `key.lightEnabled[]` in FFP key.
 
@@ -662,43 +698,41 @@ LightEnable: ✅ `packet.lightEnableValidMask` + `lightEnableMask` (device_c.h:3
 
 | Field | defined | PE-shadow | chunk | backend-read | test | Notes |
 |---|---|---|---|---|---|---|
-| ClipUnion | ❌ no `D9CClipStatus` wire struct | ❌ no PE shadow | ❌ | ❌ `SetClipStatus`/`GetClipStatus` are stubs (d3d9_pe_device.cpp:3171,3175) | ❌ | Whole API logged-only; Get zero-fills |
-| ClipIntersection | ❌ | ❌ | ❌ | ❌ | ❌ | |
+| ClipUnion | 🟡 no hardware clip accumulation | 🟡 Wine-matching default policy | n/a | 🟡 `SetClipStatus` accepts without storing; `GetClipStatus` returns defined all-visible default | ✅ core_device_com_spec + conformance gate | Closed as Wine-matching stub/default; not a rendering backend feature |
+| ClipIntersection | 🟡 | 🟡 | n/a | 🟡 same policy | ✅ | |
 
 ### B.9 D3DGAMMARAMP (`d3d9types.h:1385-1389`)
 
 | Field | defined | PE-shadow | chunk | backend-read | test | Notes |
 |---|---|---|---|---|---|---|
-| red[256] | ❌ no `D9CGammaRamp` wire | ❌ | ❌ | ❌ `SetGammaRamp` log-only (d3d9_pe_device.cpp:2160); `GetGammaRamp` zero-fills | ❌ | No CAMetalLayer gamma override on macOS |
-| green[256] | ❌ | ❌ | ❌ | ❌ | ❌ | |
-| blue[256] | ❌ | ❌ | ❌ | ❌ | ❌ | |
+| red[256] | ✅ `D9CGammaRamp`/gamma shadow | ✅ | ✅ unix bridge | ✅ Set/Get round-trip and present-path gamma application | ✅ core_d3d9_gamma_ramp_spec | Closed; identity ramp is default |
+| green[256] | ✅ | ✅ | ✅ | ✅ | ✅ | |
+| blue[256] | ✅ | ✅ | ✅ | ✅ | ✅ | |
 
 ### B.10 Section summary
 
 | Category | Total slots | ✅ defined | ✅ backend-read | ✅ tested (named-spec) | ❌ gaps (worst 5) |
 |---|---|---|---|---|---|
-| RS (named D3D9 slots) | 102 | 62 named via `core::RS_*`, 28 file-static `kRs*`, 2 inline literals, 1 ❌ (DEBUGMONITORTOKEN); ~140 dead/reserved | 47 wired into draw_state / pipeline_cache / encoder | 26 covered by named specs (ffp_key_determinism, blend_op_family, stencil_ref, state_draw_transform) | DITHERENABLE; WRAP0..15 (16); CLIPPING; LASTPIXEL; COLORWRITEENABLE1/2/3 |
-| TSS | 21 named (1..28 minus 13 dead) | 17 via `core::TSS_*` + 1 internal (`TSS_TEXTURE_TYPE=63`); ❌ COLORARG0 / ALPHAARG0 | 17 (all defined ones read by encoder or draw_state) | 11 covered by ffp_key_determinism_spec | COLORARG0; ALPHAARG0; RESULTARG (no encoder branch); BUMPENVMAT (no per-stage spec) |
-| SAMP | 13 named | 9 via `core::SAMP_*`; 1 broken (BORDERCOLOR defined at code 15 not 4); ❌ MAXMIPLEVEL / ELEMENTINDEX / DMAPOFFSET | 7 (MIPMAPLODBIAS defined but unread; BORDERCOLOR unread) | 3 covered (ADDRESSU, MAXANISOTROPY by state_draw_transform_spec) | BORDERCOLOR code mismatch; MIPMAPLODBIAS unread; MAXMIPLEVEL undefined; ELEMENTINDEX undefined; DMAPOFFSET undefined |
+| RS (named D3D9 slots) | 102 | Named/default/shadow coverage now includes depth bias, MRT color-write masks, WRAP0..15, COLORVERTEX, and two-sided stencil | Core rendering states wired into draw_state / pipeline_cache / encoder; accepted no-op states are documented | Covered by ffp_key_determinism, blend_op_family, stencil_ref, state_draw_transform, backend pipeline-key gates | Remaining deferred/no-op: MULTISAMPLEANTIALIAS/MULTISAMPLEMASK, ANTIALIASEDLINEENABLE, N-patch/adaptive tessellation states |
+| TSS | 21 named (1..28 minus 13 dead) | Triadic ARG0 states are defined (`TSS_COLOR_ARG0`, `TSS_ALPHA_ARG0`) | COLOR/ALPHA ops, bump-env uniforms, transform flags, constants, and triadic ARG0 path are consumed | ffp_key_determinism_spec, ffp_triadic_msl_spec, GPU readbacks | RESULTARG remains key-bucketed/limited; BUMPENVMAP has partial per-stage coverage |
+| SAMP | 13 named | `BORDERCOLOR`, `MIPMAPLODBIAS`, `MAXMIPLEVEL` are defined and consumed | Address/filter/border/aniso/sRGB/lod-bias/max-mip wired | state_draw_transform_spec, backend_key_descriptor_spec, shader_transform_spec/readbacks | Deferred: ELEMENTINDEX, DMAPOFFSET |
 | Transform | 266 unique D3D9 codes (2, 3, 16-23, 256-511) | All 266 mapped via `transformStateFromD3D`; widened to (0..255) by 9980d5c | All read by core_draw + draw_state | Covered by state_draw_transform_spec (VIEW, PROJECTION, WORLD(0,5,254), TEXTURE0) | WORLD(4..253) not individually tested (only 5 and 254 sampled) |
-| D3DLIGHT9 | 13 fields × 8 slots + Type + LightEnable | All fields defined in `D9CLight` | Only Type=DIRECTIONAL + Diffuse/Specular/Ambient/Direction read; Position/Range/Falloff/Attenuation0/1/2/Theta/Phi unread | Light fields exercised by ffp_key_determinism_spec but no point/spot probe | Point light (Position+Attenuation); Spot light (Direction+Theta+Phi+Falloff); Range cutoff |
+| D3DLIGHT9 | 13 fields × 8 slots + Type + LightEnable | All fields defined in `D9CLight` | Directional, point, and spot FFP branches consume the relevant fields | Light fields exercised by ffp_key_determinism/lighting gates | No current point/spot implementation gap; residual risk is visual edge coverage |
 | D3DMATERIAL9 | 5 fields | All 5 in `D9CMaterial` | All 5 read | No dedicated material-roundtrip spec | No isolated material spec — implicitly covered via ffp probes |
 | D3DVIEWPORT9 | 6 fields | All in `D9CViewport` | All read | ⚠️ no dedicated viewport-roundtrip spec | Same — implicitly covered by encoder layer |
-| D3DCLIPSTATUS9 | 2 fields | ❌ no wire struct | ❌ stub | ❌ | API entirely stubbed |
-| D3DGAMMARAMP | 3 × 256 fields | ❌ no wire struct | ❌ stub | ❌ | API entirely stubbed |
+| D3DCLIPSTATUS9 | 2 fields | Wine-matching default policy | Stub/default by design | core_device_com_spec + conformance gate | No hardware clip-status accumulation planned |
+| D3DGAMMARAMP | 3 × 256 fields | Gamma ramp shadow + unix bridge | Present path applies non-identity ramp | core_d3d9_gamma_ramp_spec | Closed; identity ramp remains fast path |
 
-**Worst global gaps (top 10), ordered by visible-rendering impact:**
+**Current remaining deferred/no-op list, ordered by likely user-visible impact:**
 
-1. **D3DRS_DEPTHBIAS (195) + SLOPESCALEDEPTHBIAS (175)** — file-static defined, never reach Metal `setDepthBias`. Shadow-mapping rigs render Z-fighting.
-2. **D3DRS_COLORWRITEENABLE1..3 (190..192)** — MRT channel masks unwired; only RT0 mask honored. Visible on apps with deferred / G-buffer MRT.
-3. **D3DSAMP_BORDERCOLOR code mismatch** — `SAMP_BORDER_COLOR = 15` in `core_constants.hpp:437` does not match Wine slot 4. Border-mode samplers silently miss.
-4. **D3DSAMP_MIPMAPLODBIAS (8)** — defined + defaulted but no consumer. `lodMinClamp`/per-sampler bias never applied.
-5. **D3DLIGHT_POINT / D3DLIGHT_SPOT** — every D3D9 app with lit point/spot lights gets directional fallback only; Position/Range/Theta/Phi/Attenuation* all ignored in `dxmt9_ffp_shaders.cpp:188`.
-6. **D3DRS_WRAP0..15 (128..135, 198..205)** — 16 slots, zero consumers. Affects tangent-space normal mapping continuity.
-7. **D3DRS_TWOSIDEDSTENCILMODE (185)** — file-static; backend always uses both faces unconditionally, no behavioral gate. Apps that draw front-only stencil get unexpected back-face writes.
-8. **D3DCLIPSTATUS9 + D3DGAMMARAMP** — entire APIs stubbed; no wire/shadow path, no chunk field.
-9. **D3DRS_DEBUGMONITORTOKEN (165)** — not defined anywhere; should at least PE-shadow generic.
-10. **D3DTSS_COLORARG0 / ALPHAARG0 (26, 27)** — triadic ops (D3DTOP_MULTIPLYADD, LERP) silently fall back to the binary path.
+1. **N-patch / adaptive tessellation / patch draw path** — unsupported by design; declaration methods safe-reject and patch draws return invalid-call/no-op contracts.
+2. **`ProcessVertices` / real SWVP execution** — no software transform path; `SetSoftwareVertexProcessing` is shadow policy only.
+3. **`D3DRS_MULTISAMPLEMASK`** — default/shadow only; no per-draw Metal sample-mask programming.
+4. **Palette/P8 sampling** — palette APIs round-trip PE-side, but P8 sampler conversion is not implemented.
+5. **`D3DSAMP_ELEMENTINDEX` / `DMAPOFFSET`** — texture-array/displacement-map semantics deferred.
+6. **`D3DRS_ANTIALIASEDLINEENABLE`** — accepted no-op/deferred due Metal rasterizer mismatch.
+7. **`SetConvolutionMonoKernel` / `ComposeRects`** — explicit `E_NOTIMPL`.
+8. **Runtime validation** — tracked GPU probes for RESZ, NULL RT, and MIPMAPLODBIAS are covered; remaining validation work is Wine-run coverage of PE gates.
 
 ## Methodology
 
@@ -863,18 +897,20 @@ Source anchors used throughout:
 
 ### C.6 D3DFORMAT — FOURCC vendor pseudo (INTZ, DF16, etc.)
 
-These are vendor-defined pseudo-formats not in `d3d9types.h`. Apps fall back when CheckDeviceFormat returns NOTAVAILABLE.
+These are vendor-defined pseudo-formats not in `d3d9types.h`. Current status
+is summarized here; the re-audit delta above remains the authoritative
+closure list for behavioral gates.
 
 | Name | FOURCC | defined | mapped | runtime-use | test | Notes |
 |---|---|---|---|---|---|---|
-| INTZ | 'INTZ' (0x5a544e49) | NO | NO | NO | NO | absent; `fmtFromD3D` returns Unknown -> CheckDeviceFormat NOTAVAILABLE. Apps targeting INTZ depth-readback fall back to a copy. |
-| DF16 | 'DF16' (0x36314644) | NO | NO | NO | NO | absent. |
-| DF24 | 'DF24' (0x34324644) | NO | NO | NO | NO | absent. |
-| RAWZ | 'RAWZ' (0x5a574152) | NO | NO | NO | NO | absent. |
-| RESZ | 'RESZ' (0x5a534552) | NO | NO | NO | NO | absent. |
-| NULL | 'NULL' (0x4c4c554e) | NO | NO | NO | warn | absent from core; conformance queries it 8x to assert NOTAVAILABLE / explicit rejection (`d3d9_conformance_*`). dxmt9 does NOT emulate a NULL RT. |
-| ATOC | 'ATOC' (0x434f5441) | NO | NO | NO | NO | absent. AlphaToCoverage MSAA quality knob. |
-| NVDB | 'NVDB' (0x4244564e) | NO | NO | NO | warn | absent. Conformance queries 4x to confirm rejection. |
+| INTZ | 'INTZ' (0x5a544e49) | OK | OK | OK | OK | depth-as-texture pseudo-format backed by Depth32Float; shader read + depth usage covered. |
+| DF16 | 'DF16' (0x36314644) | OK | OK | OK | OK | DF16 vendor depth-as-texture path mirrors INTZ policy with Depth16Unorm storage. |
+| DF24 | 'DF24' (0x34324644) | OK | OK | OK | OK | DF24 vendor depth-as-texture path mirrors INTZ/Depth32Float policy. |
+| RAWZ | 'RAWZ' (0x5a574152) | OK | OK | NO | OK | explicitly classified unsupported; CheckDeviceFormat returns NOTAVAILABLE. |
+| RESZ | 'RESZ' (0x5a534552) | OK | OK | OK | OK | write-only sentinel command; MSAA depth resolve into INTZ has shader-corpus readback coverage. |
+| NULL | 'NULL' (0x4c4c554e) | OK | OK | OK | OK | colorless render target with no color backing; NULL RT depth-only runtime probe covered. |
+| ATOC | 'ATOC' (0x434f5441) | OK | OK | OK | OK | alpha-to-coverage token path wired through pipeline key. |
+| NVDB | 'NVDB' (0x4244564e) | OK | OK | NO | OK | explicitly classified unsupported; Metal has no depth-bounds equivalent. |
 | GET4 | 'GET4' (0x34544547) | NO | NO | partial | warn | absent from `Format` enum, but explicitly short-circuited as NOTAVAILABLE in `device_c_factory.cpp:179, 186` (CheckDeviceFormat path) with a Wine-policy comment. |
 | GET1 | 'GET1' (0x31544547) | NO | NO | NO | NO | absent. |
 | R2VB | 'R2VB' | NO | NO | NO | NO | absent. |
@@ -1060,7 +1096,11 @@ Top defects worth flagging:
 2. `AlphaCmpCaps` is filled from `alphaBlendCaps` (not `alphaCmpCaps`) in both `fillCCaps` and `fillD3DCaps9` — the dedicated `core::DeviceCaps::alphaCmpCaps` is dead code.
 3. `D3DADAPTER_IDENTIFIER9::DeviceIdentifier` (GUID) and `WHQLLevel` are always zero — neither core nor D9C ever sets them.
 4. `D3DRASTER_STATUS` is unconditionally zero. `IDirect3D9::GetAdapterMonitor` is wired, but no scanline-read code exists. Apps that gate on `InVBlank` will see "never in vblank".
-5. Vendor pseudo-formats `INTZ` / `DF16` / `DF24` / `NULL` / `NVDB` / `ATOC` / `RESZ` are all rejected by default. Of these, **INTZ** (depth-as-texture) is the highest impact — many shipping D3D9 titles depend on it for shadow / SSAO. dxmt9 currently routes them through `fmtFromD3D -> Unknown -> NOTAVAILABLE` with no faux-acceptance.
+5. Vendor pseudo-formats have been reclassified since the original audit:
+   `INTZ`/`DF16`/`DF24` are depth-as-texture formats, `RESZ` is a write-only
+   MSAA-depth resolve command, `NULL` is a colorless render target, `ATOC` is
+   wired as alpha-to-coverage, and `RAWZ`/`NVDB` are explicit unsupported
+   classifications rather than silent `Unknown` fallthroughs.
 6. `R8G8B8` (24-bit, code 20) is declared but `FormatClass::Unsupported` with no Metal mapping — Wine's CheckDeviceFormat tests sometimes expect Windows to NOTAVAILABLE this, which matches dxmt9.
 7. `D32_LOCKABLE` (code 84) and `Q16W16V16U16` (code 110) are not represented at all (no `Format::` enum entry, no `fmtFromD3D` case). They were added in DX9b and are rarely used; mention them here for completeness.
 8. `D9CCaps::adapterOrdinal` is zero-init in `fillCCaps` (never explicitly assigned from `adapterIndex`), but the value `0` happens to be correct for the single-adapter case dxmt9 supports today.
