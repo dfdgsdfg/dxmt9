@@ -834,6 +834,8 @@ static UINT simpleProcessShaderOperandCount(UINT opcode, DWORD token) {
         case D3DSIO_LIT:
         case D3DSIO_EXPP:
         case D3DSIO_LOGP:
+        case D3DSIO_SGN:
+        case D3DSIO_SINCOS:
         case D3DSIO_NRM:
             return 2;
         case D3DSIO_MAD:
@@ -855,6 +857,7 @@ static UINT simpleProcessShaderOperandCount(UINT opcode, DWORD token) {
         case D3DSIO_M4x3:
         case D3DSIO_M3x4:
         case D3DSIO_M3x3:
+        case D3DSIO_M3x2:
             return 3;
         case D3DSIO_DCL:
             return 2;
@@ -1274,6 +1277,17 @@ static bool executeSimpleProcessVertexShader(const std::vector<DWORD>& words,
             case D3DSIO_ABS:
                 for (UINT i = 0; i < 4; ++i) out[i] = std::fabs(a[i]);
                 break;
+            case D3DSIO_SGN:
+                for (UINT i = 0; i < 4; ++i) {
+                    out[i] = a[i] > 0.0f ? 1.0f : (a[i] < 0.0f ? -1.0f : 0.0f);
+                }
+                break;
+            case D3DSIO_SINCOS:
+                out[0] = std::sin(a[0]);
+                out[1] = std::cos(a[0]);
+                out[2] = 0.0f;
+                out[3] = 0.0f;
+                break;
             case D3DSIO_EXP:
             case D3DSIO_EXPP:
                 for (UINT i = 0; i < 4; ++i) out[i] = std::exp2(a[i]);
@@ -1398,6 +1412,18 @@ static bool executeSimpleProcessVertexShader(const std::vector<DWORD>& words,
                     out[row] = a[0] * k[0] + a[1] * k[1] + a[2] * k[2];
                 }
                 out[3] = 1.0f;
+                break;
+            }
+            case D3DSIO_M3x2: {
+                if (shaderRegType(operands[2]) != D3DSPR_CONST) return false;
+                const UINT base = shaderRegIndex(operands[2]);
+                if (base + 1u >= regs.constant.size()) return false;
+                for (UINT row = 0; row < 2; ++row) {
+                    const auto& k = regs.constant[base + row];
+                    out[row] = a[0] * k[0] + a[1] * k[1] + a[2] * k[2];
+                }
+                out[2] = 0.0f;
+                out[3] = 0.0f;
                 break;
             }
             default:
