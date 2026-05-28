@@ -1273,9 +1273,33 @@ static bool simpleVsReadSource(const SimpleVsRegisters& regs,
 static bool simpleVsWriteDest(SimpleVsRegisters& regs,
                               UINT major,
                               DWORD token,
-                              const float in[4]) {
-    auto* reg = simpleVsRegister(regs, major, shaderRegType(token),
-                                 shaderRegIndex(token));
+                              const float in[4],
+                              DWORD relAddrToken = 0u) {
+    const UINT type = shaderRegType(token);
+    UINT index = shaderRegIndex(token);
+    if (simpleProcessShaderTokenHasRelAddr(token)) {
+        UINT maxCount = 0;
+        switch (type) {
+            case D3DSPR_TEMP:
+                maxCount = static_cast<UINT>(regs.temp.size());
+                break;
+            case D3DSPR_CONST:
+                maxCount = static_cast<UINT>(regs.constant.size());
+                break;
+            case D3DSPR_TEXCRDOUT:
+                maxCount = major >= 3u
+                               ? static_cast<UINT>(regs.output.size())
+                               : static_cast<UINT>(regs.texOut.size());
+                break;
+            default:
+                return false;
+        }
+        if (!simpleVsSourceIndex(regs, major, token, relAddrToken,
+                                 maxCount, index)) {
+            return false;
+        }
+    }
+    auto* reg = simpleVsRegister(regs, major, type, index);
     if (!reg) return false;
     float value[4] = {in[0], in[1], in[2], in[3]};
     const UINT modifier = (token & D3DSP_DSTMOD_MASK) >> D3DSP_DSTMOD_SHIFT;
@@ -1957,7 +1981,8 @@ static SimpleVsExecResult executeSimpleProcessVertexShaderRange(
             default:
                 return SimpleVsExecResult::Fail;
         }
-        if (!simpleVsWriteDest(regs, io.major, operands[0], out)) {
+        if (!simpleVsWriteDest(regs, io.major, operands[0], out,
+                               relAddrOperands[0])) {
             return SimpleVsExecResult::Fail;
         }
     }
