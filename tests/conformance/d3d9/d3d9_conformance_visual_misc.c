@@ -735,24 +735,27 @@ void test_visual_process_vertices_xyzhw_policy(const struct d3d9_api *api)
     {
         float x, y, z;
         DWORD color;
+        float u, v;
     };
     struct dst_vertex
     {
         float x, y, z, rhw;
+        DWORD color;
+        float u, v;
     };
     const struct src_vertex src[] =
     {
-        {-0.5f, -0.5f, 0.0f, 0xffff0000u},
-        {-0.5f,  0.5f, 0.0f, 0xff00ff00u},
-        { 0.5f, -0.5f, 0.0f, 0xff0000ffu},
-        { 0.5f,  0.5f, 0.0f, 0xffffffffu},
+        {-0.5f, -0.5f, 0.0f, 0xffff0000u, 0.00f, 0.25f},
+        {-0.5f,  0.5f, 0.0f, 0xff00ff00u, 0.25f, 0.50f},
+        { 0.5f, -0.5f, 0.0f, 0xff0000ffu, 0.50f, 0.75f},
+        { 0.5f,  0.5f, 0.0f, 0xffffffffu, 1.00f, 1.00f},
     };
     const struct dst_vertex expected[] =
     {
-        {240.0f, 300.0f, 0.0f, 1.0f},
-        {240.0f, 180.0f, 0.0f, 1.0f},
-        {400.0f, 300.0f, 0.0f, 1.0f},
-        {400.0f, 180.0f, 0.0f, 1.0f},
+        {240.0f, 300.0f, 0.0f, 1.0f, 0xffff0000u, 0.00f, 0.25f},
+        {240.0f, 180.0f, 0.0f, 1.0f, 0xff00ff00u, 0.25f, 0.50f},
+        {400.0f, 300.0f, 0.0f, 1.0f, 0xff0000ffu, 0.50f, 0.75f},
+        {400.0f, 180.0f, 0.0f, 1.0f, 0xffffffffu, 1.00f, 1.00f},
     };
     IDirect3DVertexBuffer9 *src_vb = NULL;
     IDirect3DVertexBuffer9 *dst_vb = NULL;
@@ -779,7 +782,8 @@ void test_visual_process_vertices_xyzhw_policy(const struct d3d9_api *api)
         goto done_window;
 
     hr = IDirect3DDevice9_CreateVertexBuffer(device, sizeof(src), 0,
-            D3DFVF_XYZ | D3DFVF_DIFFUSE, D3DPOOL_SYSTEMMEM, &src_vb, NULL);
+            D3DFVF_XYZ | D3DFVF_DIFFUSE | D3DFVF_TEX1,
+            D3DPOOL_SYSTEMMEM, &src_vb, NULL);
     CHECK_HR(hr, D3D_OK);
     if (FAILED(hr))
         goto done_device;
@@ -792,7 +796,8 @@ void test_visual_process_vertices_xyzhw_policy(const struct d3d9_api *api)
     }
 
     hr = IDirect3DDevice9_CreateVertexBuffer(device, sizeof(expected), 0,
-            D3DFVF_XYZRHW, D3DPOOL_SYSTEMMEM, &dst_vb, NULL);
+            D3DFVF_XYZRHW | D3DFVF_DIFFUSE | D3DFVF_TEX1,
+            D3DPOOL_SYSTEMMEM, &dst_vb, NULL);
     CHECK_HR(hr, D3D_OK);
     if (FAILED(hr))
         goto done_device;
@@ -806,8 +811,8 @@ void test_visual_process_vertices_xyzhw_policy(const struct d3d9_api *api)
     world.m[3][3] = 1.0f;
     CHECK_HR(IDirect3DDevice9_SetTransform(device, D3DTS_WORLD, &world),
             D3D_OK);
-    CHECK_HR(IDirect3DDevice9_SetFVF(device, D3DFVF_XYZ | D3DFVF_DIFFUSE),
-            D3D_OK);
+    CHECK_HR(IDirect3DDevice9_SetFVF(device,
+            D3DFVF_XYZ | D3DFVF_DIFFUSE | D3DFVF_TEX1), D3D_OK);
     CHECK_HR(IDirect3DDevice9_SetStreamSource(device, 0, src_vb, 0,
             sizeof(src[0])), D3D_OK);
     CHECK_HR(IDirect3DDevice9_ProcessVertices(device, 0, 0,
@@ -824,14 +829,21 @@ void test_visual_process_vertices_xyzhw_policy(const struct d3d9_api *api)
             float dy = mapped[i].y - expected[i].y;
             float dz = mapped[i].z - expected[i].z;
             float dw = mapped[i].rhw - expected[i].rhw;
+            float du = mapped[i].u - expected[i].u;
+            float dv = mapped[i].v - expected[i].v;
             if (dx < 0.0f) dx = -dx;
             if (dy < 0.0f) dy = -dy;
             if (dz < 0.0f) dz = -dz;
             if (dw < 0.0f) dw = -dw;
+            if (du < 0.0f) du = -du;
+            if (dv < 0.0f) dv = -dv;
             CHECK_TRUE(dx < 0.01f);
             CHECK_TRUE(dy < 0.01f);
             CHECK_TRUE(dz < 0.01f);
             CHECK_TRUE(dw < 0.01f);
+            CHECK_TRUE(mapped[i].color == expected[i].color);
+            CHECK_TRUE(du < 0.01f);
+            CHECK_TRUE(dv < 0.01f);
         }
         CHECK_HR(IDirect3DVertexBuffer9_Unlock(dst_vb), D3D_OK);
     }

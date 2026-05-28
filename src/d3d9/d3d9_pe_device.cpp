@@ -569,6 +569,63 @@ inline void fvfToVertexElements(DWORD fvf,
     out.push_back({0xFF, 0, D3DDECLTYPE_UNUSED, 0, 0, 0});
 }
 
+struct FvfProcessLayout {
+    UINT stride = 0;
+    UINT positionBytes = 0;
+    UINT diffuseOffset = 0;
+    UINT specularOffset = 0;
+    UINT texOffset[8]{};
+    UINT texBytes[8]{};
+    UINT texCount = 0;
+    bool diffuse = false;
+    bool specular = false;
+};
+
+static UINT fvfTexcoordBytes(DWORD fvf, UINT index) {
+    const DWORD sizeBits = (fvf >> (index * 2u + 16u)) & 0x3u;
+    if (sizeBits == 1u) return 12u;
+    if (sizeBits == 2u) return 16u;
+    if (sizeBits == 3u) return 4u;
+    return 8u;
+}
+
+static bool describeProcessFvf(DWORD fvf, FvfProcessLayout& layout) {
+    layout = {};
+    switch (fvf & D3DFVF_POSITION_MASK) {
+        case D3DFVF_XYZ:
+            layout.positionBytes = 12u;
+            break;
+        case D3DFVF_XYZRHW:
+        case D3DFVF_XYZW:
+            layout.positionBytes = 16u;
+            break;
+        default:
+            return false;
+    }
+    UINT offset = layout.positionBytes;
+    if (fvf & D3DFVF_NORMAL) offset += 12u;
+    if (fvf & D3DFVF_PSIZE) offset += 4u;
+    if (fvf & D3DFVF_DIFFUSE) {
+        layout.diffuse = true;
+        layout.diffuseOffset = offset;
+        offset += 4u;
+    }
+    if (fvf & D3DFVF_SPECULAR) {
+        layout.specular = true;
+        layout.specularOffset = offset;
+        offset += 4u;
+    }
+    layout.texCount = (fvf & D3DFVF_TEXCOUNT_MASK) >> D3DFVF_TEXCOUNT_SHIFT;
+    if (layout.texCount > 8u) return false;
+    for (UINT i = 0; i < layout.texCount; ++i) {
+        layout.texOffset[i] = offset;
+        layout.texBytes[i] = fvfTexcoordBytes(fvf, i);
+        offset += layout.texBytes[i];
+    }
+    layout.stride = offset;
+    return layout.stride != 0u;
+}
+
 }  // namespace
 
 /* =========================================================================
@@ -4639,18 +4696,46 @@ public:
             FAILED(hr32(dxmt9c_buffer_get_desc(dstRaw, &dstDesc)))) {
             return D3DERR_INVALIDCALL;
         }
-        if (dstDesc.fvf != D3DFVF_XYZRHW) {
+        if ((dstDesc.fvf & D3DFVF_POSITION_MASK) != D3DFVF_XYZRHW ||
+            (dstDesc.fvf & (D3DFVF_NORMAL | D3DFVF_PSIZE)) != 0) {
             return D3DERR_INVALIDCALL;
+        }
+        FvfProcessLayout srcLayout{};
+        FvfProcessLayout dstLayout{};
+        if (!describeProcessFvf(fvf_, srcLayout) ||
+            !describeProcessFvf(dstDesc.fvf, dstLayout)) {
+            return D3DERR_INVALIDCALL;
+        }
+        if (streamStr_[0] < srcLayout.stride || dstLayout.positionBytes != 16u) {
+            return D3DERR_INVALIDCALL;
+        }
+        UINT srcReadBytes = 12u;
+        if (dstLayout.diffuse) {
+            if (!srcLayout.diffuse) return D3DERR_INVALIDCALL;
+            srcReadBytes = std::max(srcReadBytes, srcLayout.diffuseOffset + 4u);
+        }
+        if (dstLayout.specular) {
+            if (!srcLayout.specular) return D3DERR_INVALIDCALL;
+            srcReadBytes = std::max(srcReadBytes, srcLayout.specularOffset + 4u);
+        }
+        if (dstLayout.texCount > srcLayout.texCount) return D3DERR_INVALIDCALL;
+        for (UINT i = 0; i < dstLayout.texCount; ++i) {
+            if (dstLayout.texBytes[i] != srcLayout.texBytes[i]) {
+                return D3DERR_INVALIDCALL;
+            }
+            srcReadBytes = std::max(srcReadBytes,
+                                    srcLayout.texOffset[i] + srcLayout.texBytes[i]);
         }
         const uint64_t srcByteStart =
             static_cast<uint64_t>(streamOff_[0]) +
             static_cast<uint64_t>(srcStart) * streamStr_[0];
         const uint64_t srcByteEnd =
             srcByteStart + static_cast<uint64_t>(vertexCount - 1u) * streamStr_[0] +
-            sizeof(float) * 3u;
-        const uint64_t dstByteStart = static_cast<uint64_t>(dstIndex) * sizeof(float) * 4u;
+            srcReadBytes;
+        const uint64_t dstByteStart =
+            static_cast<uint64_t>(dstIndex) * dstLayout.stride;
         const uint64_t dstByteEnd =
-            dstByteStart + static_cast<uint64_t>(vertexCount) * sizeof(float) * 4u;
+            dstByteStart + static_cast<uint64_t>(vertexCount) * dstLayout.stride;
         if (srcByteEnd > srcDesc.size || dstByteEnd > dstDesc.size ||
             srcByteEnd > UINT32_MAX || dstByteEnd > UINT32_MAX) {
             return D3DERR_INVALIDCALL;
@@ -4682,10 +4767,11 @@ public:
         auto* srcBase = static_cast<const uint8_t*>(srcBytes);
         auto* dstBase = static_cast<uint8_t*>(dstBytes);
         for (UINT i = 0; i < vertexCount; ++i) {
+            const auto* srcVertex = srcBase + srcByteStart +
+                                    static_cast<uint64_t>(i) * streamStr_[0];
+            auto* dstVertex = dstBase + static_cast<size_t>(i) * dstLayout.stride;
             float in[3]{};
-            std::memcpy(in, srcBase + srcByteStart +
-                                static_cast<uint64_t>(i) * streamStr_[0],
-                        sizeof(in));
+            std::memcpy(in, srcVertex, sizeof(in));
             const float position[4] = {in[0], in[1], in[2], 1.0f};
             float clip[4]{};
             for (UINT col = 0; col < 4; ++col) {
@@ -4704,8 +4790,20 @@ public:
                 vp.minZ + ndcZ * zScale,
                 invW,
             };
-            std::memcpy(dstBase + static_cast<size_t>(i) * sizeof(out), out,
-                        sizeof(out));
+            std::memcpy(dstVertex, out, sizeof(out));
+            if (dstLayout.diffuse) {
+                std::memcpy(dstVertex + dstLayout.diffuseOffset,
+                            srcVertex + srcLayout.diffuseOffset, 4u);
+            }
+            if (dstLayout.specular) {
+                std::memcpy(dstVertex + dstLayout.specularOffset,
+                            srcVertex + srcLayout.specularOffset, 4u);
+            }
+            for (UINT tex = 0; tex < dstLayout.texCount; ++tex) {
+                std::memcpy(dstVertex + dstLayout.texOffset[tex],
+                            srcVertex + srcLayout.texOffset[tex],
+                            dstLayout.texBytes[tex]);
+            }
         }
         const HRESULT dstUnlockHr = hr32(dxmt9c_buffer_unlock(dstRaw));
         const HRESULT srcUnlockHr = hr32(dxmt9c_buffer_unlock(srcRaw));
