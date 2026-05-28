@@ -389,17 +389,9 @@ void test_visual_signed_formats_caps_policy(const struct d3d9_api *api)
     IDirect3D9_Release(d3d9);
 }
 
-/*
- * Wine provenance: dlls/d3d9/tests/visual.c
- * function: palette_test
- * commit: 6e073d28dee3af7f4c965daec94644e0f9f92727
- *
- * Pins dxmt9's palettized runtime path beyond API round-trip state:
- * a D3DFMT_P8 texture must lock as index bytes, expand through the
- * current texture palette into its A8R8G8B8 backing, and sample those
- * expanded colors through the fixed-function texture stage.
- */
-void test_visual_p8_texture_sampler_policy(const struct d3d9_api *api)
+static void check_visual_palettized_texture_sampler(IDirect3DDevice9 *device,
+        D3DFORMAT format, const BYTE *texels, UINT texel_bytes,
+        const DWORD *expected)
 {
     struct textured_point
     {
@@ -413,54 +405,19 @@ void test_visual_p8_texture_sampler_policy(const struct d3d9_api *api)
         {0.5f, 1.5f, 0.0f, 1.0f, 0.25f, 0.75f},
         {1.5f, 1.5f, 0.0f, 1.0f, 0.75f, 0.75f},
     };
-    static const DWORD expected[] =
-    {
-        0xff112233u, 0xff445566u,
-        0xff778899u, 0xffaabbccu,
-    };
     IDirect3DSurface9 *readback = NULL;
     IDirect3DSurface9 *rt = NULL;
     IDirect3DTexture9 *texture = NULL;
-    IDirect3DDevice9 *device = NULL;
     D3DLOCKED_RECT locked;
-    PALETTEENTRY palette[256];
-    IDirect3D9 *d3d9;
     DWORD point_size;
     D3DVIEWPORT9 vp;
-    HWND window;
     HRESULT hr;
-    UINT i;
 
-    d3d9 = api->create9(D3D_SDK_VERSION);
-    if (!d3d9)
-    {
-        skip_current_test("Direct3DCreate9 returned NULL");
-        return;
-    }
-
-    hr = IDirect3D9_CheckDeviceFormat(d3d9, D3DADAPTER_DEFAULT,
-            D3DDEVTYPE_HAL, D3DFMT_X8R8G8B8, 0, D3DRTYPE_TEXTURE,
-            D3DFMT_P8);
-    if (hr != D3D_OK)
-    {
-        skip_current_test("D3DFMT_P8 textures are not supported");
-        goto done_d3d9;
-    }
-
-    window = create_test_window();
-    CHECK_TRUE(window != NULL);
-    if (!window)
-        goto done_d3d9;
-
-    device = create_base_device(d3d9, window);
-    if (!device)
-        goto done_window;
-
-    hr = IDirect3DDevice9_CreateTexture(device, 2, 2, 1, 0, D3DFMT_P8,
+    hr = IDirect3DDevice9_CreateTexture(device, 2, 2, 1, 0, format,
             D3DPOOL_MANAGED, &texture, NULL);
     CHECK_HR(hr, D3D_OK);
     if (FAILED(hr))
-        goto done_device;
+        goto done;
 
     memset(&locked, 0xcc, sizeof(locked));
     hr = IDirect3DTexture9_LockRect(texture, 0, &locked, NULL, 0);
@@ -469,31 +426,17 @@ void test_visual_p8_texture_sampler_policy(const struct d3d9_api *api)
         goto done_texture;
     if (SUCCEEDED(hr))
     {
+        INT row_bytes = (INT)(2 * texel_bytes);
         BYTE *row0 = locked.pBits;
         BYTE *row1 = row0 + locked.Pitch;
-        CHECK_TRUE(locked.Pitch >= 2);
-        row0[0] = 1;
-        row0[1] = 2;
-        row1[0] = 3;
-        row1[1] = 4;
+        CHECK_TRUE(locked.Pitch >= row_bytes);
+        if (locked.Pitch >= row_bytes)
+        {
+            memcpy(row0, texels, row_bytes);
+            memcpy(row1, texels + row_bytes, row_bytes);
+        }
         CHECK_HR(IDirect3DTexture9_UnlockRect(texture, 0), D3D_OK);
     }
-
-    memset(palette, 0, sizeof(palette));
-    for (i = 0; i < ARRAY_SIZE(palette); ++i)
-        palette[i].peFlags = 0xff;
-    palette[1].peRed = 0x11; palette[1].peGreen = 0x22;
-    palette[1].peBlue = 0x33; palette[1].peFlags = 0xff;
-    palette[2].peRed = 0x44; palette[2].peGreen = 0x55;
-    palette[2].peBlue = 0x66; palette[2].peFlags = 0xff;
-    palette[3].peRed = 0x77; palette[3].peGreen = 0x88;
-    palette[3].peBlue = 0x99; palette[3].peFlags = 0xff;
-    palette[4].peRed = 0xaa; palette[4].peGreen = 0xbb;
-    palette[4].peBlue = 0xcc; palette[4].peFlags = 0xff;
-    CHECK_HR(IDirect3DDevice9_SetPaletteEntries(device, 0, palette),
-            D3D_OK);
-    CHECK_HR(IDirect3DDevice9_SetCurrentTexturePalette(device, 0),
-            D3D_OK);
 
     hr = IDirect3DDevice9_CreateRenderTarget(device, 2, 2,
             D3DFMT_A8R8G8B8, D3DMULTISAMPLE_NONE, 0, FALSE, &rt, NULL);
@@ -571,7 +514,95 @@ done_rt:
     IDirect3DSurface9_Release(rt);
 done_texture:
     IDirect3DTexture9_Release(texture);
-done_device:
+done:
+    return;
+}
+
+/*
+ * Wine provenance: dlls/d3d9/tests/visual.c
+ * function: palette_test
+ * commit: 6e073d28dee3af7f4c965daec94644e0f9f92727
+ *
+ * Pins dxmt9's palettized runtime path beyond API round-trip state:
+ * D3DFMT_P8 and D3DFMT_A8P8 textures must lock as index texels, expand
+ * through the current texture palette into an A8R8G8B8 backing, and
+ * sample those expanded color/alpha values through the fixed-function
+ * texture stage.
+ */
+void test_visual_p8_texture_sampler_policy(const struct d3d9_api *api)
+{
+    static const BYTE p8_texels[] = {1, 2, 3, 4};
+    static const BYTE a8p8_texels[] = {1, 0x80, 2, 0x40, 3, 0x20, 4, 0x10};
+    static const DWORD p8_expected[] =
+    {
+        0xff112233u, 0xff445566u,
+        0xff778899u, 0xffaabbccu,
+    };
+    static const DWORD a8p8_expected[] =
+    {
+        0x80112233u, 0x40445566u,
+        0x20778899u, 0x10aabbccu,
+    };
+    IDirect3DDevice9 *device = NULL;
+    PALETTEENTRY palette[256];
+    IDirect3D9 *d3d9;
+    HWND window;
+    HRESULT hr;
+    UINT i;
+
+    d3d9 = api->create9(D3D_SDK_VERSION);
+    if (!d3d9)
+    {
+        skip_current_test("Direct3DCreate9 returned NULL");
+        return;
+    }
+
+    hr = IDirect3D9_CheckDeviceFormat(d3d9, D3DADAPTER_DEFAULT,
+            D3DDEVTYPE_HAL, D3DFMT_X8R8G8B8, 0, D3DRTYPE_TEXTURE,
+            D3DFMT_P8);
+    if (hr != D3D_OK)
+    {
+        skip_current_test("D3DFMT_P8 textures are not supported");
+        goto done_d3d9;
+    }
+    hr = IDirect3D9_CheckDeviceFormat(d3d9, D3DADAPTER_DEFAULT,
+            D3DDEVTYPE_HAL, D3DFMT_X8R8G8B8, 0, D3DRTYPE_TEXTURE,
+            D3DFMT_A8P8);
+    if (hr != D3D_OK)
+    {
+        skip_current_test("D3DFMT_A8P8 textures are not supported");
+        goto done_d3d9;
+    }
+
+    window = create_test_window();
+    CHECK_TRUE(window != NULL);
+    if (!window)
+        goto done_d3d9;
+
+    device = create_base_device(d3d9, window);
+    if (!device)
+        goto done_window;
+
+    memset(palette, 0, sizeof(palette));
+    for (i = 0; i < ARRAY_SIZE(palette); ++i)
+        palette[i].peFlags = 0xff;
+    palette[1].peRed = 0x11; palette[1].peGreen = 0x22;
+    palette[1].peBlue = 0x33; palette[1].peFlags = 0xff;
+    palette[2].peRed = 0x44; palette[2].peGreen = 0x55;
+    palette[2].peBlue = 0x66; palette[2].peFlags = 0xff;
+    palette[3].peRed = 0x77; palette[3].peGreen = 0x88;
+    palette[3].peBlue = 0x99; palette[3].peFlags = 0xff;
+    palette[4].peRed = 0xaa; palette[4].peGreen = 0xbb;
+    palette[4].peBlue = 0xcc; palette[4].peFlags = 0xff;
+    CHECK_HR(IDirect3DDevice9_SetPaletteEntries(device, 0, palette),
+            D3D_OK);
+    CHECK_HR(IDirect3DDevice9_SetCurrentTexturePalette(device, 0),
+            D3D_OK);
+
+    check_visual_palettized_texture_sampler(device, D3DFMT_P8,
+            p8_texels, 1, p8_expected);
+    check_visual_palettized_texture_sampler(device, D3DFMT_A8P8,
+            a8p8_texels, 2, a8p8_expected);
     IDirect3DDevice9_Release(device);
 done_window:
     DestroyWindow(window);
