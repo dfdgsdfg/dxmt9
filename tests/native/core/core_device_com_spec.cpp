@@ -522,6 +522,62 @@ void testPalettizedTextureExpansion() {
   checkEq(d3d->Release(), 0u, "P8 factory release");
 }
 
+void testReadOnlyBufferUnlockSkipsUpload() {
+  using namespace dxmt9::com;
+
+  auto backend = std::make_shared<RecordingBackend>();
+  auto* d3d = Direct3DCreate9Ex(D3D_SDK_VERSION, backend);
+  check(d3d != nullptr, "factory for readonly buffer unlock");
+
+  PresentParameters params{};
+  params.backBufferWidth = 320;
+  params.backBufferHeight = 240;
+  params.windowed = true;
+
+  auto* device = d3d->CreateDeviceEx(0, params, nullptr);
+  check(device != nullptr, "device for readonly buffer unlock");
+
+  {
+    device->AddRef();
+    D9CDevice cDevice(device);
+    auto* buffer = dxmt9c_device_create_vertex_buffer(&cDevice, 4, 0, 0, 2u);
+    check(buffer != nullptr, "create readonly unlock buffer");
+
+    void* data = nullptr;
+    checkEq(dxmt9c_buffer_lock(buffer, 0, 4, &data, 0), D3D_OK,
+            "initial write lock");
+    auto* bytes = static_cast<uint8_t*>(data);
+    bytes[0] = 0x11;
+    bytes[1] = 0x22;
+    bytes[2] = 0x33;
+    bytes[3] = 0x44;
+    checkEq(dxmt9c_buffer_unlock(buffer), D3D_OK, "initial write unlock");
+    checkEq(backend->bufferUploads.size(), size_t{1},
+            "write unlock uploads buffer");
+
+    data = nullptr;
+    checkEq(dxmt9c_buffer_lock(buffer, 0, 4, &data, 0x10u), D3D_OK,
+            "readonly lock");
+    check(data != nullptr, "readonly lock returns data");
+    checkEq(dxmt9c_buffer_unlock(buffer), D3D_OK, "readonly unlock");
+    checkEq(backend->bufferUploads.size(), size_t{1},
+            "readonly unlock does not upload buffer");
+
+    data = nullptr;
+    checkEq(dxmt9c_buffer_lock(buffer, 0, 4, &data, 0), D3D_OK,
+            "second write lock");
+    bytes = static_cast<uint8_t*>(data);
+    bytes[0] = 0x55;
+    checkEq(dxmt9c_buffer_unlock(buffer), D3D_OK, "second write unlock");
+    checkEq(backend->bufferUploads.size(), size_t{2},
+            "write unlock after readonly uploads buffer");
+
+    checkEq(dxmt9c_buffer_release(buffer), 0u, "readonly unlock buffer release");
+  }
+  checkEq(device->Release(), 0u, "readonly unlock device release");
+  checkEq(d3d->Release(), 0u, "readonly unlock factory release");
+}
+
 }  // namespace
 
 int main() {
@@ -529,6 +585,7 @@ int main() {
     testComWrappers();
     testComWrappersEx();
     testPalettizedTextureExpansion();
+    testReadOnlyBufferUnlockSkipsUpload();
   } catch (const TestFailure& error) {
     std::cerr << error.what() << '\n';
     return EXIT_FAILURE;

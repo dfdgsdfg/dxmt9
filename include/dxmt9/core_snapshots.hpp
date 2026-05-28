@@ -1100,7 +1100,7 @@ class Buffer {
   bool valid() const noexcept { return valid_; }
   std::shared_ptr<Device> device() const noexcept { return owner_.lock(); }
   LockedRegion lock(u64 offset, u64 size, u32 flags);
-  void unlock();
+  void unlock(bool upload = true);
   void invalidate();
   std::span<const u8> bytes() const noexcept { return storage_; }
 

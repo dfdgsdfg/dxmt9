@@ -13,6 +13,7 @@ struct LockFootprint {
 
 constexpr uint32_t kD3DLockDiscard = 0x00002000u;
 constexpr uint32_t kD3DLockNoOverwrite = 0x00001000u;
+constexpr uint32_t kD3DLockReadOnly = 0x00000010u;
 constexpr uint32_t kD3DUsageAutoGenMipmap = 0x00000400u;
 constexpr uint32_t kD3DFmtA8R8G8B8 = 21u;
 constexpr uint32_t kD3DFmtA8P8 = 40u;
@@ -632,6 +633,7 @@ extern "C" int32_t dxmt9c_buffer_lock(D9CBuffer* b, uint32_t offset, uint32_t si
   }
   dxmt9DebugLog("buffer_lock begin buffer=%p offset=%u size=%u flags=0x%x",
                 static_cast<void*>(b), offset, size, flags);
+  b->lastLockReadOnly = (flags & kD3DLockReadOnly) != 0;
   const uint32_t actualSize = size ? size : b->obj->desc().size;
   auto lock = b->obj->lock(offset, actualSize, lockFlagsToCore(flags));
   *data = lock.data;
@@ -666,7 +668,8 @@ extern "C" int32_t dxmt9c_buffer_unlock(D9CBuffer* b) {
                   b->wow64Lock.rowBytes);
     releaseShadowLock(b->wow64Lock);
   }
-  b->obj->unlock();
+  b->obj->unlock(!b->lastLockReadOnly);
+  b->lastLockReadOnly = false;
   return dxmt9::core::D3D_OK;
 }
 

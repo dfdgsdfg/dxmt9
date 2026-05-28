@@ -501,6 +501,10 @@ struct RecordingBackend final : BackendDevice {
     unmappedBuffers.push_back(handle);
   }
 
+  void uploadBufferData(BufferHandle handle, std::span<const u8> bytes) override {
+    bufferUploads.push_back({handle, std::vector<u8>(bytes.begin(), bytes.end())});
+  }
+
   void uploadTextureLevel(TextureHandle handle, u32 level, u32 width, u32 height,
                           u32 depth, u32 pitch, u32 slicePitch,
                           std::span<const u8> bytes) override {
@@ -605,6 +609,7 @@ struct RecordingBackend final : BackendDevice {
   std::vector<SurfaceHandle> destroyedSurfaces;
   std::vector<std::pair<BufferHandle, u32>> mappedBuffers;
   std::vector<BufferHandle> unmappedBuffers;
+  std::vector<std::pair<BufferHandle, std::vector<u8>>> bufferUploads;
   std::vector<TextureUploadRecord> textureUploads;
   std::vector<RecordedDrawRun> drawRuns;
   std::vector<RecordedDraw> draws;

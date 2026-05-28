@@ -191,6 +191,7 @@ struct D9CBuffer {
   std::atomic<uint32_t> refs{1};
   dxmt9::d3d9::devicec::ShadowLock wow64Lock;
   D9CBufferDesc desc{};
+  bool lastLockReadOnly = false;
 
   explicit D9CBuffer(std::shared_ptr<dxmt9::core::Buffer> o) : obj(std::move(o)) {}
 };

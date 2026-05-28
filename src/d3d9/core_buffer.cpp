@@ -38,9 +38,11 @@ LockedRegion Buffer::lock(u64 offset, u64 size, u32 flags) {
   return {storage_.data() + offset, static_cast<u32>(size)};
 }
 
-void Buffer::unlock() {
-  if (backend_ && handle_) {
+void Buffer::unlock(bool upload) {
+  if (upload && backend_ && handle_) {
     backend_->uploadBufferData(handle_, storage_);
+  }
+  if (backend_ && handle_) {
     backend_->unmapBuffer(handle_);
   }
   locked_ = false;

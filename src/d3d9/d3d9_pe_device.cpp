@@ -5145,9 +5145,13 @@ public:
         dxmt9DeviceDebugLog("device_process_vertices device=%p srcStart=%u dstIndex=%u vertexCount=%u dst=%p decl=%p flags=0x%x",
                             this, srcStart, dstIndex, vertexCount, dstBuffer,
                             declaration, (unsigned)flags);
-        if (!dstBuffer) return D3DERR_INVALIDCALL;
+        auto invalid = [&](const char* reason) {
+            dxmt9DeviceDebugLog("device_process_vertices invalid: %s", reason);
+            return D3DERR_INVALIDCALL;
+        };
+        if (!dstBuffer) return invalid("null destination buffer");
         if (vertexCount == 0) return S_OK;
-        if (flags != 0) return D3DERR_INVALIDCALL;
+        if (flags != 0) return invalid("flags unsupported");
         const bool programmable = vs_ != nullptr;
         std::vector<DWORD> shaderWords;
         ProcessShaderIo shaderIo{};
@@ -5156,48 +5160,48 @@ public:
             HRESULT shaderHr = vs_->GetFunction(nullptr, &shaderBytes);
             if (FAILED(shaderHr) || shaderBytes == 0 ||
                 (shaderBytes % sizeof(DWORD)) != 0) {
-                return D3DERR_INVALIDCALL;
+                return invalid("shader bytecode query failed");
             }
             shaderWords.resize(shaderBytes / sizeof(DWORD));
             shaderHr = vs_->GetFunction(shaderWords.data(), &shaderBytes);
             if (FAILED(shaderHr) ||
                 !analyzeSimpleProcessVertexShader(shaderWords, shaderIo)) {
-                return D3DERR_INVALIDCALL;
+                return invalid("shader analysis failed");
             }
         }
         D9CBuffer* dstRaw = rawVBuf(dstBuffer);
-        if (!dstRaw) return D3DERR_INVALIDCALL;
+        if (!dstRaw) return invalid("raw destination buffer missing");
         D9CBufferDesc dstDesc{};
         if (FAILED(hr32(dxmt9c_buffer_get_desc(dstRaw, &dstDesc)))) {
-            return D3DERR_INVALIDCALL;
+            return invalid("destination desc failed");
         }
         FvfProcessLayout srcLayout{};
         FvfProcessLayout dstLayout{};
         if (fvf_ != 0) {
             if ((fvf_ & D3DFVF_POSITION_MASK) != D3DFVF_XYZ ||
                 !describeProcessFvf(fvf_, srcLayout)) {
-                return D3DERR_INVALIDCALL;
+                return invalid("source FVF unsupported");
             }
         } else if (vdecl_) {
             if (!describeProcessDeclaration(vdecl_, srcLayout, false)) {
-                return D3DERR_INVALIDCALL;
+                return invalid("source declaration unsupported");
             }
         } else {
-            return D3DERR_INVALIDCALL;
+            return invalid("no source layout");
         }
         if (declaration) {
             if (!describeProcessDeclaration(declaration, dstLayout, true)) {
-                return D3DERR_INVALIDCALL;
+                return invalid("destination declaration unsupported");
             }
         } else {
             if ((dstDesc.fvf & D3DFVF_POSITION_MASK) != D3DFVF_XYZRHW ||
                 (dstDesc.fvf & (D3DFVF_NORMAL | D3DFVF_PSIZE)) != 0 ||
                 !describeProcessFvf(dstDesc.fvf, dstLayout)) {
-                return D3DERR_INVALIDCALL;
+                return invalid("destination FVF unsupported");
             }
         }
         if (dstLayout.positionBytes != 16u) {
-            return D3DERR_INVALIDCALL;
+            return invalid("destination lacks POSITIONT");
         }
         UINT srcReadBytes[D9C_DRAW_PACKET_MAX_STREAMS]{};
         auto requirePositionRead = [&]() {
@@ -5229,27 +5233,27 @@ public:
             return true;
         };
         if (programmable) {
-            if (!shaderIo.hasOutputPosition) return D3DERR_INVALIDCALL;
-            if (dstLayout.diffuse && !shaderIo.hasOutputDiffuse) return D3DERR_INVALIDCALL;
-            if (dstLayout.specular && !shaderIo.hasOutputSpecular) return D3DERR_INVALIDCALL;
+            if (!shaderIo.hasOutputPosition) return invalid("shader lacks position output");
+            if (dstLayout.diffuse && !shaderIo.hasOutputDiffuse) return invalid("shader lacks diffuse output");
+            if (dstLayout.specular && !shaderIo.hasOutputSpecular) return invalid("shader lacks specular output");
             for (UINT i = 0; i < dstLayout.texCount; ++i) {
-                if (!shaderIo.hasOutputTex[i]) return D3DERR_INVALIDCALL;
+                if (!shaderIo.hasOutputTex[i]) return invalid("shader lacks texcoord output");
             }
             if (shaderIo.inputPosition >= 0) requirePositionRead();
-            if (shaderIo.inputDiffuse >= 0 && !requireDiffuseRead()) return D3DERR_INVALIDCALL;
-            if (shaderIo.inputSpecular >= 0 && !requireSpecularRead()) return D3DERR_INVALIDCALL;
+            if (shaderIo.inputDiffuse >= 0 && !requireDiffuseRead()) return invalid("shader diffuse input missing");
+            if (shaderIo.inputSpecular >= 0 && !requireSpecularRead()) return invalid("shader specular input missing");
             for (UINT i = 0; i < 8; ++i) {
                 if (shaderIo.inputTex[i] >= 0 && !requireTexRead(i)) {
-                    return D3DERR_INVALIDCALL;
+                    return invalid("shader texcoord input missing");
                 }
             }
         } else {
             requirePositionRead();
-            if (dstLayout.diffuse && !requireDiffuseRead()) return D3DERR_INVALIDCALL;
-            if (dstLayout.specular && !requireSpecularRead()) return D3DERR_INVALIDCALL;
-            if (dstLayout.texCount > srcLayout.texCount) return D3DERR_INVALIDCALL;
+            if (dstLayout.diffuse && !requireDiffuseRead()) return invalid("diffuse passthrough missing");
+            if (dstLayout.specular && !requireSpecularRead()) return invalid("specular passthrough missing");
+            if (dstLayout.texCount > srcLayout.texCount) return invalid("texcoord count mismatch");
             for (UINT i = 0; i < dstLayout.texCount; ++i) {
-                if (!requireTexRead(i)) return D3DERR_INVALIDCALL;
+                if (!requireTexRead(i)) return invalid("texcoord passthrough mismatch");
             }
         }
         D9CBuffer* srcRaw[D9C_DRAW_PACKET_MAX_STREAMS]{};
@@ -5263,12 +5267,12 @@ public:
         for (UINT stream = 0; stream < D9C_DRAW_PACKET_MAX_STREAMS; ++stream) {
             if (srcReadBytes[stream] == 0u) continue;
             if (!streamSrc_[stream] || streamStr_[stream] < srcLayout.streamStride[stream]) {
-                return D3DERR_INVALIDCALL;
+                return invalid("source stream missing or stride too small");
             }
             srcRaw[stream] = rawVBuf(streamSrc_[stream]);
             if (!srcRaw[stream] ||
                 FAILED(hr32(dxmt9c_buffer_get_desc(srcRaw[stream], &srcDesc[stream])))) {
-                return D3DERR_INVALIDCALL;
+                return invalid("source stream desc failed");
             }
             srcByteStart[stream] =
                 static_cast<uint64_t>(streamOff_[stream]) +
@@ -5279,7 +5283,7 @@ public:
                 srcReadBytes[stream];
             if (srcByteEnd[stream] > srcDesc[stream].size ||
                 srcByteEnd[stream] > UINT32_MAX) {
-                return D3DERR_INVALIDCALL;
+                return invalid("source range out of bounds");
             }
             UINT unique = 0;
             for (; unique < uniqueSrcCount; ++unique) {
@@ -5296,11 +5300,8 @@ public:
         const uint64_t dstByteEnd =
             dstByteStart + static_cast<uint64_t>(vertexCount) * dstLayout.stride;
         if (dstByteEnd > dstDesc.size || dstByteEnd > UINT32_MAX) {
-            return D3DERR_INVALIDCALL;
+            return invalid("destination range out of bounds");
         }
-
-        const HRESULT flushHr = flushPeRecorder();
-        if (FAILED(flushHr)) return flushHr;
 
         void* dstBytes = nullptr;
         const uint32_t dstLockOffset = static_cast<uint32_t>(dstByteStart);
@@ -5310,7 +5311,7 @@ public:
             hr = hr32(dxmt9c_buffer_lock(
                 uniqueSrcRaw[unique], 0,
                 static_cast<uint32_t>(uniqueSrcLockSize[unique]),
-                &uniqueSrcBytes[unique], D3DLOCK_READONLY));
+                &uniqueSrcBytes[unique], D3DLOCK_READONLY | D3DLOCK_NOOVERWRITE));
             if (FAILED(hr) || !uniqueSrcBytes[unique]) {
                 for (UINT unlock = 0; unlock < unique; ++unlock) {
                     (void)dxmt9c_buffer_unlock(uniqueSrcRaw[unlock]);
