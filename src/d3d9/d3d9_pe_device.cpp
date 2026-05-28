@@ -1064,6 +1064,37 @@ static bool simpleVsReadSource(const SimpleVsRegisters& regs,
         case 1: /* D3DSPSM_NEG */
             for (UINT i = 0; i < 4; ++i) out[i] = -out[i];
             return true;
+        case 2: /* D3DSPSM_BIAS */
+            for (UINT i = 0; i < 4; ++i) out[i] -= 0.5f;
+            return true;
+        case 3: /* D3DSPSM_BIASNEG */
+            for (UINT i = 0; i < 4; ++i) out[i] = -(out[i] - 0.5f);
+            return true;
+        case 4: /* D3DSPSM_SIGN */
+            for (UINT i = 0; i < 4; ++i) out[i] = out[i] * 2.0f - 1.0f;
+            return true;
+        case 5: /* D3DSPSM_SIGNNEG */
+            for (UINT i = 0; i < 4; ++i) out[i] = -(out[i] * 2.0f - 1.0f);
+            return true;
+        case 6: /* D3DSPSM_COMP */
+            for (UINT i = 0; i < 4; ++i) out[i] = 1.0f - out[i];
+            return true;
+        case 7: /* D3DSPSM_X2 */
+            for (UINT i = 0; i < 4; ++i) out[i] *= 2.0f;
+            return true;
+        case 8: /* D3DSPSM_X2NEG */
+            for (UINT i = 0; i < 4; ++i) out[i] *= -2.0f;
+            return true;
+        case 9: { /* D3DSPSM_DZ */
+            const float z = out[2];
+            for (UINT i = 0; i < 4; ++i) out[i] = z != 0.0f ? out[i] / z : 0.0f;
+            return true;
+        }
+        case 10: { /* D3DSPSM_DW */
+            const float w = out[3];
+            for (UINT i = 0; i < 4; ++i) out[i] = w != 0.0f ? out[i] / w : 0.0f;
+            return true;
+        }
         case 11: /* D3DSPSM_ABS */
             for (UINT i = 0; i < 4; ++i) if (out[i] < 0.0f) out[i] = -out[i];
             return true;
@@ -1072,6 +1103,9 @@ static bool simpleVsReadSource(const SimpleVsRegisters& regs,
                 if (out[i] < 0.0f) out[i] = -out[i];
                 out[i] = -out[i];
             }
+            return true;
+        case 13: /* D3DSPSM_NOT */
+            for (UINT i = 0; i < 4; ++i) out[i] = out[i] != 0.0f ? 0.0f : 1.0f;
             return true;
         default:
             return false;
