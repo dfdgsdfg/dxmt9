@@ -576,6 +576,18 @@ struct FvfProcessLayout {
     UINT positionStream = 0;
     UINT positionOffset = 0;
     UINT positionBytes = 0;
+    UINT normalStream = 0;
+    UINT normalOffset = 0;
+    UINT tangentStream = 0;
+    UINT tangentOffset = 0;
+    UINT binormalStream = 0;
+    UINT binormalOffset = 0;
+    UINT blendWeightStream = 0;
+    UINT blendWeightOffset = 0;
+    UINT blendWeightBytes = 0;
+    UINT blendIndicesStream = 0;
+    UINT blendIndicesOffset = 0;
+    UINT blendIndicesBytes = 0;
     UINT diffuseStream = 0;
     UINT diffuseOffset = 0;
     UINT specularStream = 0;
@@ -584,6 +596,11 @@ struct FvfProcessLayout {
     UINT texOffset[8]{};
     UINT texBytes[8]{};
     UINT texCount = 0;
+    bool normal = false;
+    bool tangent = false;
+    bool binormal = false;
+    bool blendWeight = false;
+    bool blendIndices = false;
     bool diffuse = false;
     bool specular = false;
 };
@@ -595,6 +612,11 @@ struct ProcessShaderReg {
 
 struct ProcessShaderIo {
     int inputPosition = -1;
+    int inputNormal = -1;
+    int inputTangent = -1;
+    int inputBinormal = -1;
+    int inputBlendWeight = -1;
+    int inputBlendIndices = -1;
     int inputDiffuse = -1;
     int inputSpecular = -1;
     int inputTex[8]{-1, -1, -1, -1, -1, -1, -1, -1};
@@ -633,7 +655,11 @@ static bool describeProcessFvf(DWORD fvf, FvfProcessLayout& layout) {
             return false;
     }
     UINT offset = layout.positionBytes;
-    if (fvf & D3DFVF_NORMAL) offset += 12u;
+    if (fvf & D3DFVF_NORMAL) {
+        layout.normal = true;
+        layout.normalOffset = offset;
+        offset += 12u;
+    }
     if (fvf & D3DFVF_PSIZE) offset += 4u;
     if (fvf & D3DFVF_DIFFUSE) {
         layout.diffuse = true;
@@ -693,8 +719,13 @@ static bool describeProcessDeclaration(IDirect3DVertexDeclaration9* declaration,
                 if (e.type != D3DDECLTYPE_FLOAT4) return false;
                 layout.positionBytes = 16u;
             } else {
-                if (e.type != D3DDECLTYPE_FLOAT3) return false;
-                layout.positionBytes = 12u;
+                if (e.type == D3DDECLTYPE_FLOAT3) {
+                    layout.positionBytes = 12u;
+                } else if (e.type == D3DDECLTYPE_FLOAT4) {
+                    layout.positionBytes = 16u;
+                } else {
+                    return false;
+                }
             }
             layout.positionStream = e.stream;
             layout.positionOffset = e.offset;
@@ -703,6 +734,44 @@ static bool describeProcessDeclaration(IDirect3DVertexDeclaration9* declaration,
             layout.diffuse = true;
             layout.diffuseStream = e.stream;
             layout.diffuseOffset = e.offset;
+        } else if (!destination && e.usage == D3DDECLUSAGE_NORMAL &&
+                   e.usageIndex == 0) {
+            if (e.type != D3DDECLTYPE_FLOAT3 || layout.normal) return false;
+            layout.normal = true;
+            layout.normalStream = e.stream;
+            layout.normalOffset = e.offset;
+        } else if (!destination && e.usage == D3DDECLUSAGE_TANGENT &&
+                   e.usageIndex == 0) {
+            if (e.type != D3DDECLTYPE_FLOAT3 || layout.tangent) return false;
+            layout.tangent = true;
+            layout.tangentStream = e.stream;
+            layout.tangentOffset = e.offset;
+        } else if (!destination && e.usage == D3DDECLUSAGE_BINORMAL &&
+                   e.usageIndex == 0) {
+            if (e.type != D3DDECLTYPE_FLOAT3 || layout.binormal) return false;
+            layout.binormal = true;
+            layout.binormalStream = e.stream;
+            layout.binormalOffset = e.offset;
+        } else if (!destination && e.usage == D3DDECLUSAGE_BLENDWEIGHT &&
+                   e.usageIndex == 0) {
+            UINT blendBytes = 0u;
+            if (e.type == D3DDECLTYPE_FLOAT1) blendBytes = 4u;
+            else if (e.type == D3DDECLTYPE_FLOAT2) blendBytes = 8u;
+            else if (e.type == D3DDECLTYPE_FLOAT3) blendBytes = 12u;
+            else if (e.type == D3DDECLTYPE_FLOAT4) blendBytes = 16u;
+            else return false;
+            if (layout.blendWeight) return false;
+            layout.blendWeight = true;
+            layout.blendWeightStream = e.stream;
+            layout.blendWeightOffset = e.offset;
+            layout.blendWeightBytes = blendBytes;
+        } else if (!destination && e.usage == D3DDECLUSAGE_BLENDINDICES &&
+                   e.usageIndex == 0) {
+            if (e.type != D3DDECLTYPE_UBYTE4 || layout.blendIndices) return false;
+            layout.blendIndices = true;
+            layout.blendIndicesStream = e.stream;
+            layout.blendIndicesOffset = e.offset;
+            layout.blendIndicesBytes = 4u;
         } else if (e.usage == D3DDECLUSAGE_COLOR && e.usageIndex == 1) {
             if (e.type != D3DDECLTYPE_D3DCOLOR || layout.specular) return false;
             layout.specular = true;
@@ -720,10 +789,12 @@ static bool describeProcessDeclaration(IDirect3DVertexDeclaration9* declaration,
             layout.texOffset[e.usageIndex] = e.offset;
             layout.texBytes[e.usageIndex] = texBytes;
         } else {
-            return false;
+            if (destination) return false;
         }
     }
-    return layout.positionBytes == (destination ? 16u : 12u) &&
+    return (destination ? layout.positionBytes == 16u
+                        : (layout.positionBytes == 12u ||
+                           layout.positionBytes == 16u)) &&
            layout.stride != 0u;
 }
 
@@ -798,6 +869,16 @@ static void noteProcessShaderInput(ProcessShaderIo& io, UINT usage,
                                    UINT usageIndex, UINT reg) {
     if (usage == D3DDECLUSAGE_POSITION && usageIndex == 0) {
         io.inputPosition = static_cast<int>(reg);
+    } else if (usage == D3DDECLUSAGE_NORMAL && usageIndex == 0) {
+        io.inputNormal = static_cast<int>(reg);
+    } else if (usage == D3DDECLUSAGE_TANGENT && usageIndex == 0) {
+        io.inputTangent = static_cast<int>(reg);
+    } else if (usage == D3DDECLUSAGE_BINORMAL && usageIndex == 0) {
+        io.inputBinormal = static_cast<int>(reg);
+    } else if (usage == D3DDECLUSAGE_BLENDWEIGHT && usageIndex == 0) {
+        io.inputBlendWeight = static_cast<int>(reg);
+    } else if (usage == D3DDECLUSAGE_BLENDINDICES && usageIndex == 0) {
+        io.inputBlendIndices = static_cast<int>(reg);
     } else if (usage == D3DDECLUSAGE_COLOR && usageIndex == 0) {
         io.inputDiffuse = static_cast<int>(reg);
     } else if (usage == D3DDECLUSAGE_COLOR && usageIndex == 1) {
@@ -5276,13 +5357,18 @@ public:
         FvfProcessLayout srcLayout{};
         FvfProcessLayout dstLayout{};
         if (fvf_ != 0) {
-            if ((fvf_ & D3DFVF_POSITION_MASK) != D3DFVF_XYZ ||
+            const DWORD positionMask = fvf_ & D3DFVF_POSITION_MASK;
+            if ((positionMask != D3DFVF_XYZ &&
+                 (!programmable || positionMask != D3DFVF_XYZW)) ||
                 !describeProcessFvf(fvf_, srcLayout)) {
                 return invalid("source FVF unsupported");
             }
         } else if (vdecl_) {
             if (!describeProcessDeclaration(vdecl_, srcLayout, false)) {
                 return invalid("source declaration unsupported");
+            }
+            if (!programmable && srcLayout.positionBytes != 12u) {
+                return invalid("fixed-function source declaration position unsupported");
             }
         } else {
             return invalid("no source layout");
@@ -5306,6 +5392,41 @@ public:
             srcReadBytes[srcLayout.positionStream] =
                 std::max(srcReadBytes[srcLayout.positionStream],
                          srcLayout.positionOffset + srcLayout.positionBytes);
+        };
+        auto requireNormalRead = [&]() -> bool {
+            if (!srcLayout.normal) return false;
+            srcReadBytes[srcLayout.normalStream] =
+                std::max(srcReadBytes[srcLayout.normalStream],
+                         srcLayout.normalOffset + 12u);
+            return true;
+        };
+        auto requireTangentRead = [&]() -> bool {
+            if (!srcLayout.tangent) return false;
+            srcReadBytes[srcLayout.tangentStream] =
+                std::max(srcReadBytes[srcLayout.tangentStream],
+                         srcLayout.tangentOffset + 12u);
+            return true;
+        };
+        auto requireBinormalRead = [&]() -> bool {
+            if (!srcLayout.binormal) return false;
+            srcReadBytes[srcLayout.binormalStream] =
+                std::max(srcReadBytes[srcLayout.binormalStream],
+                         srcLayout.binormalOffset + 12u);
+            return true;
+        };
+        auto requireBlendWeightRead = [&]() -> bool {
+            if (!srcLayout.blendWeight) return false;
+            srcReadBytes[srcLayout.blendWeightStream] =
+                std::max(srcReadBytes[srcLayout.blendWeightStream],
+                         srcLayout.blendWeightOffset + srcLayout.blendWeightBytes);
+            return true;
+        };
+        auto requireBlendIndicesRead = [&]() -> bool {
+            if (!srcLayout.blendIndices) return false;
+            srcReadBytes[srcLayout.blendIndicesStream] =
+                std::max(srcReadBytes[srcLayout.blendIndicesStream],
+                         srcLayout.blendIndicesOffset + srcLayout.blendIndicesBytes);
+            return true;
         };
         auto requireDiffuseRead = [&]() -> bool {
             if (!srcLayout.diffuse) return false;
@@ -5338,6 +5459,11 @@ public:
                 if (!shaderIo.hasOutputTex[i]) return invalid("shader lacks texcoord output");
             }
             if (shaderIo.inputPosition >= 0) requirePositionRead();
+            if (shaderIo.inputNormal >= 0 && !requireNormalRead()) return invalid("shader normal input missing");
+            if (shaderIo.inputTangent >= 0 && !requireTangentRead()) return invalid("shader tangent input missing");
+            if (shaderIo.inputBinormal >= 0 && !requireBinormalRead()) return invalid("shader binormal input missing");
+            if (shaderIo.inputBlendWeight >= 0 && !requireBlendWeightRead()) return invalid("shader blendweight input missing");
+            if (shaderIo.inputBlendIndices >= 0 && !requireBlendIndicesRead()) return invalid("shader blendindices input missing");
             if (shaderIo.inputDiffuse >= 0 && !requireDiffuseRead()) return invalid("shader diffuse input missing");
             if (shaderIo.inputSpecular >= 0 && !requireSpecularRead()) return invalid("shader specular input missing");
             for (UINT i = 0; i < 8; ++i) {
@@ -5464,14 +5590,15 @@ public:
                 regs.constant = shaderConstF;
                 auto loadPositionInput = [&](int reg) {
                     if (reg < 0 || static_cast<size_t>(reg) >= regs.input.size()) return false;
-                    float in[3]{};
+                    float in[4]{0.0f, 0.0f, 0.0f, 1.0f};
                     const auto* positionSource =
                         srcBase[srcLayout.positionStream] +
                         srcByteStart[srcLayout.positionStream] +
                         static_cast<uint64_t>(i) * streamStr_[srcLayout.positionStream] +
                         srcLayout.positionOffset;
-                    std::memcpy(in, positionSource, sizeof(in));
-                    regs.input[reg] = {in[0], in[1], in[2], 1.0f};
+                    std::memcpy(in, positionSource,
+                                std::min<UINT>(srcLayout.positionBytes, sizeof(in)));
+                    regs.input[reg] = {in[0], in[1], in[2], in[3]};
                     return true;
                 };
                 auto loadColorInput = [&](int reg, UINT stream, UINT offset) {
@@ -5482,6 +5609,44 @@ public:
                         static_cast<uint64_t>(i) * streamStr_[stream] + offset;
                     std::memcpy(&color, colorSource, sizeof(color));
                     unpackD3DColor(color, regs.input[reg].data());
+                    return true;
+                };
+                auto loadFloat3Input = [&](int reg, UINT stream, UINT offset) {
+                    if (reg < 0 || static_cast<size_t>(reg) >= regs.input.size()) return false;
+                    float in[3]{};
+                    const auto* source =
+                        srcBase[stream] + srcByteStart[stream] +
+                        static_cast<uint64_t>(i) * streamStr_[stream] + offset;
+                    std::memcpy(in, source, sizeof(in));
+                    regs.input[reg] = {in[0], in[1], in[2], 1.0f};
+                    return true;
+                };
+                auto loadFloatVectorInput =
+                    [&](int reg, UINT stream, UINT offset, UINT bytes) {
+                        if (reg < 0 || static_cast<size_t>(reg) >= regs.input.size()) return false;
+                        if (bytes == 0u || bytes > sizeof(float) * 4u ||
+                            (bytes % sizeof(float)) != 0u) return false;
+                        float in[4]{0.0f, 0.0f, 0.0f, 1.0f};
+                        const auto* source =
+                            srcBase[stream] + srcByteStart[stream] +
+                            static_cast<uint64_t>(i) * streamStr_[stream] + offset;
+                        std::memcpy(in, source, bytes);
+                        regs.input[reg] = {in[0], in[1], in[2], in[3]};
+                        return true;
+                    };
+                auto loadUbyte4Input = [&](int reg, UINT stream, UINT offset) {
+                    if (reg < 0 || static_cast<size_t>(reg) >= regs.input.size()) return false;
+                    uint8_t in[4]{};
+                    const auto* source =
+                        srcBase[stream] + srcByteStart[stream] +
+                        static_cast<uint64_t>(i) * streamStr_[stream] + offset;
+                    std::memcpy(in, source, sizeof(in));
+                    regs.input[reg] = {
+                        static_cast<float>(in[0]),
+                        static_cast<float>(in[1]),
+                        static_cast<float>(in[2]),
+                        static_cast<float>(in[3]),
+                    };
                     return true;
                 };
                 auto loadTexInput = [&](int reg, UINT tex) {
@@ -5498,6 +5663,39 @@ public:
                     return true;
                 };
                 if (shaderIo.inputPosition >= 0 && !loadPositionInput(shaderIo.inputPosition)) {
+                    hr = D3DERR_INVALIDCALL;
+                    break;
+                }
+                if (shaderIo.inputNormal >= 0 &&
+                    !loadFloat3Input(shaderIo.inputNormal, srcLayout.normalStream,
+                                     srcLayout.normalOffset)) {
+                    hr = D3DERR_INVALIDCALL;
+                    break;
+                }
+                if (shaderIo.inputTangent >= 0 &&
+                    !loadFloat3Input(shaderIo.inputTangent, srcLayout.tangentStream,
+                                     srcLayout.tangentOffset)) {
+                    hr = D3DERR_INVALIDCALL;
+                    break;
+                }
+                if (shaderIo.inputBinormal >= 0 &&
+                    !loadFloat3Input(shaderIo.inputBinormal, srcLayout.binormalStream,
+                                     srcLayout.binormalOffset)) {
+                    hr = D3DERR_INVALIDCALL;
+                    break;
+                }
+                if (shaderIo.inputBlendWeight >= 0 &&
+                    !loadFloatVectorInput(shaderIo.inputBlendWeight,
+                                          srcLayout.blendWeightStream,
+                                          srcLayout.blendWeightOffset,
+                                          srcLayout.blendWeightBytes)) {
+                    hr = D3DERR_INVALIDCALL;
+                    break;
+                }
+                if (shaderIo.inputBlendIndices >= 0 &&
+                    !loadUbyte4Input(shaderIo.inputBlendIndices,
+                                     srcLayout.blendIndicesStream,
+                                     srcLayout.blendIndicesOffset)) {
                     hr = D3DERR_INVALIDCALL;
                     break;
                 }
