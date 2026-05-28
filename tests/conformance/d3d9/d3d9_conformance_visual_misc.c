@@ -738,6 +738,13 @@ void test_visual_process_vertices_xyzhw_policy(const struct d3d9_api *api)
         {0, 20, D3DDECLTYPE_FLOAT2, D3DDECLMETHOD_DEFAULT, D3DDECLUSAGE_TEXCOORD, 0},
         D3DDECL_END()
     };
+    static const D3DVERTEXELEMENT9 src_decl_elements[] =
+    {
+        {0, 0, D3DDECLTYPE_FLOAT3, D3DDECLMETHOD_DEFAULT, D3DDECLUSAGE_POSITION, 0},
+        {0, 12, D3DDECLTYPE_D3DCOLOR, D3DDECLMETHOD_DEFAULT, D3DDECLUSAGE_COLOR, 0},
+        {0, 16, D3DDECLTYPE_FLOAT2, D3DDECLMETHOD_DEFAULT, D3DDECLUSAGE_TEXCOORD, 0},
+        D3DDECL_END()
+    };
     struct src_vertex
     {
         float x, y, z;
@@ -767,6 +774,8 @@ void test_visual_process_vertices_xyzhw_policy(const struct d3d9_api *api)
     IDirect3DVertexBuffer9 *src_vb = NULL;
     IDirect3DVertexBuffer9 *dst_vb = NULL;
     IDirect3DVertexBuffer9 *decl_dst_vb = NULL;
+    IDirect3DVertexBuffer9 *src_decl_dst_vb = NULL;
+    IDirect3DVertexDeclaration9 *src_decl = NULL;
     IDirect3DVertexDeclaration9 *dst_decl = NULL;
     IDirect3DDevice9 *device = NULL;
     struct dst_vertex *mapped = NULL;
@@ -900,8 +909,54 @@ void test_visual_process_vertices_xyzhw_policy(const struct d3d9_api *api)
         CHECK_HR(IDirect3DVertexBuffer9_Unlock(decl_dst_vb), D3D_OK);
     }
 
+    hr = IDirect3DDevice9_CreateVertexDeclaration(device, src_decl_elements,
+            &src_decl);
+    CHECK_HR(hr, D3D_OK);
+    if (FAILED(hr))
+        goto done_device;
+    hr = IDirect3DDevice9_CreateVertexBuffer(device, sizeof(expected), 0,
+            0, D3DPOOL_SYSTEMMEM, &src_decl_dst_vb, NULL);
+    CHECK_HR(hr, D3D_OK);
+    if (FAILED(hr))
+        goto done_device;
+    CHECK_HR(IDirect3DDevice9_SetVertexDeclaration(device, src_decl), D3D_OK);
+    CHECK_HR(IDirect3DDevice9_ProcessVertices(device, 0, 0,
+            ARRAY_SIZE(src), src_decl_dst_vb, dst_decl, 0), D3D_OK);
+
+    hr = IDirect3DVertexBuffer9_Lock(src_decl_dst_vb, 0, sizeof(expected),
+            (void **)&mapped, D3DLOCK_READONLY);
+    CHECK_HR(hr, D3D_OK);
+    if (SUCCEEDED(hr))
+    {
+        for (i = 0; i < ARRAY_SIZE(expected); ++i)
+        {
+            float dx = mapped[i].x - expected[i].x;
+            float dy = mapped[i].y - expected[i].y;
+            float dz = mapped[i].z - expected[i].z;
+            float dw = mapped[i].rhw - expected[i].rhw;
+            float du = mapped[i].u - expected[i].u;
+            float dv = mapped[i].v - expected[i].v;
+            if (dx < 0.0f) dx = -dx;
+            if (dy < 0.0f) dy = -dy;
+            if (dz < 0.0f) dz = -dz;
+            if (dw < 0.0f) dw = -dw;
+            if (du < 0.0f) du = -du;
+            if (dv < 0.0f) dv = -dv;
+            CHECK_TRUE(dx < 0.01f);
+            CHECK_TRUE(dy < 0.01f);
+            CHECK_TRUE(dz < 0.01f);
+            CHECK_TRUE(dw < 0.01f);
+            CHECK_TRUE(mapped[i].color == expected[i].color);
+            CHECK_TRUE(du < 0.01f);
+            CHECK_TRUE(dv < 0.01f);
+        }
+        CHECK_HR(IDirect3DVertexBuffer9_Unlock(src_decl_dst_vb), D3D_OK);
+    }
+
 done_device:
+    if (src_decl) IDirect3DVertexDeclaration9_Release(src_decl);
     if (dst_decl) IDirect3DVertexDeclaration9_Release(dst_decl);
+    if (src_decl_dst_vb) IDirect3DVertexBuffer9_Release(src_decl_dst_vb);
     if (decl_dst_vb) IDirect3DVertexBuffer9_Release(decl_dst_vb);
     if (dst_vb) IDirect3DVertexBuffer9_Release(dst_vb);
     if (src_vb) IDirect3DVertexBuffer9_Release(src_vb);

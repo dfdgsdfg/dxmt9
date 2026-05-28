@@ -630,7 +630,8 @@ static bool describeProcessFvf(DWORD fvf, FvfProcessLayout& layout) {
 }
 
 static bool describeProcessDeclaration(IDirect3DVertexDeclaration9* declaration,
-                                       FvfProcessLayout& layout) {
+                                       FvfProcessLayout& layout,
+                                       bool destination) {
     layout = {};
     if (!declaration) return false;
     D9CVertexElement elements[MAXD3DDECLLENGTH + 1]{};
@@ -650,12 +651,20 @@ static bool describeProcessDeclaration(IDirect3DVertexDeclaration9* declaration,
         const UINT elementBytes = vertexElementTypeSize(e.type);
         if (elementBytes == 0u) return false;
         layout.stride = std::max<UINT>(layout.stride, e.offset + elementBytes);
-        if (e.usage == D3DDECLUSAGE_POSITIONT && e.usageIndex == 0) {
-            if (e.type != D3DDECLTYPE_FLOAT4 || layout.positionBytes != 0u) {
-                return false;
+        const bool expectedPosition =
+            e.usageIndex == 0 &&
+            ((destination && e.usage == D3DDECLUSAGE_POSITIONT) ||
+             (!destination && e.usage == D3DDECLUSAGE_POSITION));
+        if (expectedPosition) {
+            if (layout.positionBytes != 0u) return false;
+            if (destination) {
+                if (e.type != D3DDECLTYPE_FLOAT4) return false;
+                layout.positionBytes = 16u;
+            } else {
+                if (e.type != D3DDECLTYPE_FLOAT3) return false;
+                layout.positionBytes = 12u;
             }
             layout.positionOffset = e.offset;
-            layout.positionBytes = 16u;
         } else if (e.usage == D3DDECLUSAGE_COLOR && e.usageIndex == 0) {
             if (e.type != D3DDECLTYPE_D3DCOLOR || layout.diffuse) return false;
             layout.diffuse = true;
@@ -678,7 +687,8 @@ static bool describeProcessDeclaration(IDirect3DVertexDeclaration9* declaration,
             return false;
         }
     }
-    return layout.positionBytes == 16u && layout.stride != 0u;
+    return layout.positionBytes == (destination ? 16u : 12u) &&
+           layout.stride != 0u;
 }
 
 }  // namespace
@@ -4740,7 +4750,6 @@ public:
         if (vertexCount == 0) return S_OK;
         if (flags != 0 || vs_ != nullptr) return D3DERR_INVALIDCALL;
         if (!streamSrc_[0] || streamStr_[0] < sizeof(float) * 3u) return D3DERR_INVALIDCALL;
-        if ((fvf_ & D3DFVF_POSITION_MASK) != D3DFVF_XYZ) return D3DERR_INVALIDCALL;
 
         D9CBuffer* srcRaw = rawVBuf(streamSrc_[0]);
         D9CBuffer* dstRaw = rawVBuf(dstBuffer);
@@ -4753,11 +4762,20 @@ public:
         }
         FvfProcessLayout srcLayout{};
         FvfProcessLayout dstLayout{};
-        if (!describeProcessFvf(fvf_, srcLayout)) {
+        if (fvf_ != 0) {
+            if ((fvf_ & D3DFVF_POSITION_MASK) != D3DFVF_XYZ ||
+                !describeProcessFvf(fvf_, srcLayout)) {
+                return D3DERR_INVALIDCALL;
+            }
+        } else if (vdecl_) {
+            if (!describeProcessDeclaration(vdecl_, srcLayout, false)) {
+                return D3DERR_INVALIDCALL;
+            }
+        } else {
             return D3DERR_INVALIDCALL;
         }
         if (declaration) {
-            if (!describeProcessDeclaration(declaration, dstLayout)) {
+            if (!describeProcessDeclaration(declaration, dstLayout, true)) {
                 return D3DERR_INVALIDCALL;
             }
         } else {
@@ -4770,7 +4788,7 @@ public:
         if (streamStr_[0] < srcLayout.stride || dstLayout.positionBytes != 16u) {
             return D3DERR_INVALIDCALL;
         }
-        UINT srcReadBytes = 12u;
+        UINT srcReadBytes = srcLayout.positionOffset + srcLayout.positionBytes;
         if (dstLayout.diffuse) {
             if (!srcLayout.diffuse) return D3DERR_INVALIDCALL;
             srcReadBytes = std::max(srcReadBytes, srcLayout.diffuseOffset + 4u);
@@ -4832,7 +4850,7 @@ public:
                                     static_cast<uint64_t>(i) * streamStr_[0];
             auto* dstVertex = dstBase + static_cast<size_t>(i) * dstLayout.stride;
             float in[3]{};
-            std::memcpy(in, srcVertex, sizeof(in));
+            std::memcpy(in, srcVertex + srcLayout.positionOffset, sizeof(in));
             const float position[4] = {in[0], in[1], in[2], 1.0f};
             float clip[4]{};
             for (UINT col = 0; col < 4; ++col) {

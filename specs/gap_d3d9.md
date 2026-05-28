@@ -117,7 +117,7 @@ Current deferred/unsupported surface to keep visible:
 | `D3DDECLMETHOD` 1..6 | Explicit safe-reject. These are declaration **methods** for fixed-function tessellator/N-patch/displacement-map evaluation. `D3DDECLMETHOD_UV` is not ordinary texture coordinate input; ordinary UVs are `D3DDECLUSAGE_TEXCOORD` with `D3DDECLMETHOD_DEFAULT`, which is supported. |
 | `D3DSPR_TEMPFLOAT16`, `D3DSPR_LABEL` | Explicit safe-reject. |
 | N-patch / adaptive tessellation render states and patch draws | Deferred/unsupported: `PATCHEDGESTYLE`, `TWEENFACTOR`, `POSITIONDEGREE`, `NORMALDEGREE`, tessellation levels, `SetNPatchMode`, `DrawRectPatch`, `DrawTriPatch`, `DeletePatch` no-op contract. |
-| `ProcessVertices` / real software vertex processing | Partial. Device-lost gating remains first; fixed-function stream-0 `D3DFVF_XYZ` input through WORLD/VIEW/PROJECTION to `D3DFVF_XYZRHW` destination CPU transform is implemented, including matching diffuse/specular/texture-coordinate passthrough for FVF destinations and simple stream-0 POSITIONT/COLOR/TEXCOORD destination declarations, and covered by a PE conformance scaffold. Programmable shader execution, source declarations, lighting, clipping, multi-stream, and indexed variants remain deferred. `SetSoftwareVertexProcessing` now tracks the mutable PE shadow. |
+| `ProcessVertices` / real software vertex processing | Partial. Device-lost gating remains first; fixed-function stream-0 `D3DFVF_XYZ` or simple POSITION/COLOR/TEXCOORD source declaration input through WORLD/VIEW/PROJECTION to `D3DFVF_XYZRHW` or simple POSITIONT/COLOR/TEXCOORD destination declaration CPU transform is implemented, including matching diffuse/specular/texture-coordinate passthrough, and covered by a PE conformance scaffold. Programmable shader execution, lighting, clipping, multi-stream, and indexed variants remain deferred. `SetSoftwareVertexProcessing` now tracks the mutable PE shadow. |
 | `D3DSAMP_ELEMENTINDEX`, `D3DSAMP_DMAPOFFSET` | Deferred. Texture-array/displacement-map sampler semantics are not represented in the backend. |
 | `D3DRS_MULTISAMPLEANTIALIAS`, `D3DRS_MULTISAMPLEMASK` | Shadow/default only. MSAA itself is attachment-driven; sample-mask programming is not currently wired. |
 | `D3DRS_ANTIALIASEDLINEENABLE` | Accepted no-op/deferred; Metal has no D3D9-style AA line raster toggle. |
@@ -151,7 +151,7 @@ after the silent-coverage fixes landed.
 | Finding | Section | Current status / suggested track |
 |---|---|---|
 | N-patch / adaptive tessellation family | A.5/B.1/D.* | Deferred/unsupported. Non-default declaration methods safe-reject because they describe fixed-function tessellator/N-patch/displacement-map evaluation, not ordinary vertex attributes; patch draw calls return `D3DERR_INVALIDCALL`; N-patch mode is a documented no-op/default contract. |
-| `ProcessVertices` / SWVP execution | D.4 | Partial. Fixed-function stream-0 WORLD/VIEW/PROJECTION XYZ→XYZRHW CPU transform/readback is implemented with matching diffuse/specular/texcoord passthrough for FVF destinations and simple POSITIONT/COLOR/TEXCOORD destination declarations; programmable shader execution, source declarations, lighting, clipping, multi-stream, and indexed variants remain deferred. |
+| `ProcessVertices` / SWVP execution | D.4 | Partial. Fixed-function stream-0 WORLD/VIEW/PROJECTION XYZ→XYZRHW CPU transform/readback is implemented for FVF and simple POSITION/COLOR/TEXCOORD source declarations, with matching diffuse/specular/texcoord passthrough into FVF or POSITIONT/COLOR/TEXCOORD declaration destinations; programmable shader execution, lighting, clipping, multi-stream, and indexed variants remain deferred. |
 | `D3DSAMP_ELEMENTINDEX`, `D3DSAMP_DMAPOFFSET` | B.3 | Deferred. Texture-array index and displacement-map sampler semantics are not wired. |
 | `D3DRS_MULTISAMPLEANTIALIAS`, `D3DRS_MULTISAMPLEMASK` | B.1 | Shadow/default only. Attachment MSAA is supported elsewhere; per-draw D3D9 sample mask is not wired. |
 | `D3DRS_ANTIALIASEDLINEENABLE` | B.1 | Accepted no-op/deferred; Metal exposes no equivalent D3D9 AA-line raster mode. |
@@ -726,7 +726,7 @@ LightEnable: ✅ `packet.lightEnableValidMask` + `lightEnableMask` (device_c.h:3
 **Current remaining deferred/no-op list, ordered by likely user-visible impact:**
 
 1. **N-patch / adaptive tessellation / patch draw path** — unsupported by design; declaration methods safe-reject and patch draws return invalid-call/no-op contracts.
-2. **Broad `ProcessVertices` / real SWVP execution** — fixed-function stream-0 WORLD/VIEW/PROJECTION XYZ→XYZRHW CPU transform plus matching FVF color/texcoord passthrough and simple destination declarations are implemented; programmable shader execution, source declarations, lighting, clipping, multi-stream, and indexed variants remain deferred.
+2. **Broad `ProcessVertices` / real SWVP execution** — fixed-function stream-0 WORLD/VIEW/PROJECTION XYZ→XYZRHW CPU transform plus matching color/texcoord passthrough is implemented for FVF and simple source/destination declarations; programmable shader execution, lighting, clipping, multi-stream, and indexed variants remain deferred.
 3. **`D3DRS_MULTISAMPLEMASK`** — default/shadow only; no per-draw Metal sample-mask programming.
 4. **Palette/P8 sampling breadth** — 2D P8/A8P8 caps are exposed and locks expand through the active palette into an A8R8G8B8 sampling backing; cube/volume palettized textures and generic palettized `Format::*` exposure remain deferred.
 5. **`D3DSAMP_ELEMENTINDEX` / `DMAPOFFSET`** — texture-array/displacement-map semantics deferred.
@@ -1291,7 +1291,7 @@ Source anchors are absolute paths in this repo. Source files referenced:
 | DrawIndexedPrimitive | ✅ | ✅ | ✅ | ✅ | `d3d9_pe_device.cpp:4004` | `test_visual_max_index16_draw_policy`, `test_null_stream_shader_draw_policy` |
 | DrawPrimitiveUP | ✅ | ✅ | ✅ | ❌ | `d3d9_pe_device.cpp:4025` | many visual tests |
 | DrawIndexedPrimitiveUP | ✅ | ✅ | ✅ | ❌ | `d3d9_pe_device.cpp:4043` | many visual tests |
-| ProcessVertices | ⚠️ | ✅ | ✅ | scaffolded | `d3d9_pe_device.cpp:4673` | device-lost gate plus fixed-function stream-0 WORLD/VIEW/PROJECTION XYZ→XYZRHW CPU transform with matching FVF diffuse/specular/texcoord passthrough and simple destination declarations; unsupported shader/source-decl/multistream variants return `D3DERR_INVALIDCALL`; `test_visual_process_vertices_xyzhw_policy` |
+| ProcessVertices | ⚠️ | ✅ | ✅ | scaffolded | `d3d9_pe_device.cpp:4728` | device-lost gate plus fixed-function stream-0 WORLD/VIEW/PROJECTION XYZ→XYZRHW CPU transform with matching diffuse/specular/texcoord passthrough for FVF and simple source/destination declarations; unsupported shader/multistream/indexed variants return `D3DERR_INVALIDCALL`; `test_visual_process_vertices_xyzhw_policy` |
 | CreateVertexDeclaration | ✅ | ✅ | ✅ | ❌ | `d3d9_pe_device.cpp:3629` | `test_vertex_declaration_fvf_policy`, `test_unused_declaration_type` |
 | SetVertexDeclaration | ✅ | ✅ | ✅ | ❌ | `d3d9_pe_device.cpp:3661` | `test_fvf_decl_management`, `test_vdecl_apply` |
 | GetVertexDeclaration | ✅ | ✅ | ✅ | ❌ | `d3d9_pe_device.cpp:3682` | `test_fvf_decl_management` |
@@ -1534,7 +1534,7 @@ Historical coverage snapshot:
 - The table is retained for audit history; use the 2026-05-29 current summary and re-audit delta above for live triage.
 
 Highest-leverage live gaps:
-1. **`ProcessVertices` breadth** — fixed-function WORLD/VIEW/PROJECTION XYZ→XYZRHW path plus matching FVF color/texcoord passthrough and simple destination declarations are covered by a conformance scaffold; programmable shader/source-decl/multistream SWVP remains deferred.
+1. **`ProcessVertices` breadth** — fixed-function WORLD/VIEW/PROJECTION XYZ→XYZRHW path plus matching color/texcoord passthrough for FVF and simple source/destination declarations is covered by a conformance scaffold; programmable shader/multistream/indexed SWVP remains deferred.
 2. **Palette/P8 breadth** — 2D P8/A8P8 texture caps and sampler backing are wired through palette expansion; cube/volume palettized textures and generic palettized `Format::*` exposure remain deferred.
 3. **N-patch / adaptive tessellation / patch draw path** — unsupported by design; declaration methods safe-reject and patch draws return invalid-call/no-op contracts.
 4. **Per-draw sample mask and legacy line AA** — `D3DRS_MULTISAMPLEMASK` remains shadow/default only; `D3DRS_ANTIALIASEDLINEENABLE` is accepted no-op/deferred.
