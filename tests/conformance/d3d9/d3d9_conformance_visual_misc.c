@@ -752,6 +752,8 @@ void test_visual_process_vertices_xyzhw_policy(const struct d3d9_api *api)
 #define PROCESS_VS_DCL(usage, usage_index) \
     (((DWORD)(usage) & 0xfu) \
             | (((DWORD)(usage_index) & 0xfu) << D3DSP_DCL_USAGEINDEX_SHIFT))
+#define PROCESS_VS_LABEL(label) \
+    (0x80000000u | ((DWORD)(label) & 0x7ffu))
     static const D3DVERTEXELEMENT9 dst_decl_elements[] =
     {
         {0, 0, D3DDECLTYPE_FLOAT4, D3DDECLMETHOD_DEFAULT, D3DDECLUSAGE_POSITIONT, 0},
@@ -1442,6 +1444,11 @@ void test_visual_process_vertices_xyzhw_policy(const struct d3d9_api *api)
         PROCESS_VS_SRC(D3DSPR_OUTPUT, 0),
         PROCESS_VS_SRC(D3DSPR_CONST, 3),
         PROCESS_VS_INST(D3DSIO_ENDLOOP, 0),
+        PROCESS_VS_INST(D3DSIO_CALL, 1),
+        PROCESS_VS_LABEL(7),
+        PROCESS_VS_INST(D3DSIO_CALLNZ, 0),
+        PROCESS_VS_LABEL(9),
+        PROCESS_VS_SRC(D3DSPR_CONST, 8),
         PROCESS_VS_INST(D3DSIO_SUB, 3),
         PROCESS_VS_DST(D3DSPR_OUTPUT, 0, 0x7),
         PROCESS_VS_SRC(D3DSPR_OUTPUT, 0),
@@ -1452,6 +1459,20 @@ void test_visual_process_vertices_xyzhw_policy(const struct d3d9_api *api)
         PROCESS_VS_INST(D3DSIO_MOV, 2),
         PROCESS_VS_DST(D3DSPR_OUTPUT, 2, 0xf),
         PROCESS_VS_SRC(D3DSPR_INPUT, 2),
+        PROCESS_VS_INST(D3DSIO_LABEL, 1),
+        PROCESS_VS_LABEL(7),
+        PROCESS_VS_INST(D3DSIO_ADD, 3),
+        PROCESS_VS_DST(D3DSPR_OUTPUT, 0, 0x7),
+        PROCESS_VS_SRC(D3DSPR_OUTPUT, 0),
+        PROCESS_VS_SRC(D3DSPR_CONST, 6),
+        PROCESS_VS_INST(D3DSIO_RET, 0),
+        PROCESS_VS_INST(D3DSIO_LABEL, 1),
+        PROCESS_VS_LABEL(9),
+        PROCESS_VS_INST(D3DSIO_ADD, 3),
+        PROCESS_VS_DST(D3DSPR_OUTPUT, 0, 0x7),
+        PROCESS_VS_SRC(D3DSPR_OUTPUT, 0),
+        PROCESS_VS_SRC(D3DSPR_CONST, 7),
+        PROCESS_VS_INST(D3DSIO_RET, 0),
         D3DSIO_END
     };
     static const DWORD process_vs_matrix_special_3_0[] =
@@ -1859,13 +1880,16 @@ void test_visual_process_vertices_xyzhw_policy(const struct d3d9_api *api)
         {1.0f, 0.0f, 0.0f, 0.0f},
         {0.0f, 0.0f, 0.0f, 0.0f},
     };
-    const float vs_rep_loop_constants[6][4] =
+    const float vs_rep_loop_constants[9][4] =
     {
         {0.25f, 0.0f, 0.0f, 0.0f},
         {0.0f, 0.25f, 0.0f, 0.0f},
-        {0.25f, 0.25f, -1.0f, 0.0f},
+        {0.375f, 0.375f, -1.0f, 0.0f},
         {100.0f, 100.0f, 100.0f, 0.0f},
         {2.0f, 0.0f, 0.0f, 0.0f},
+        {1.0f, 0.0f, 0.0f, 0.0f},
+        {0.125f, 0.0f, 0.0f, 0.0f},
+        {0.0f, 0.125f, 0.0f, 0.0f},
         {1.0f, 0.0f, 0.0f, 0.0f},
     };
     const float vs_matrix_special_constants[6][4] =
@@ -2619,7 +2643,7 @@ void test_visual_process_vertices_xyzhw_policy(const struct d3d9_api *api)
     if (FAILED(hr))
         goto done_device;
     CHECK_HR(IDirect3DDevice9_SetVertexShaderConstantF(device, 0,
-            (const float *)vs_rep_loop_constants, 6), D3D_OK);
+            (const float *)vs_rep_loop_constants, 9), D3D_OK);
     CHECK_HR(IDirect3DDevice9_SetFVF(device,
             D3DFVF_XYZ | D3DFVF_DIFFUSE | D3DFVF_TEX1), D3D_OK);
     CHECK_HR(IDirect3DDevice9_SetStreamSource(device, 0, src_vb, 0,

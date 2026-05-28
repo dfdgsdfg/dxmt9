@@ -866,9 +866,12 @@ static UINT simpleProcessShaderOperandCount(UINT opcode, DWORD token) {
             return 2;
         case D3DSIO_IF:
         case D3DSIO_REP:
+        case D3DSIO_LABEL:
+        case D3DSIO_CALL:
             return 1;
         case D3DSIO_IFC:
         case D3DSIO_BREAKC:
+        case D3DSIO_CALLNZ:
             return 2;
         case D3DSIO_LOOP:
             return (token >> D3DSI_INSTLENGTH_SHIFT) & 0xfu;
@@ -1253,10 +1256,120 @@ static bool simpleVsLoopCount(const SimpleVsRegisters& regs,
     return true;
 }
 
+static UINT simpleVsLabelIndex(DWORD token) {
+    return token & D3DSP_REGNUM_MASK;
+}
+
+static bool simpleVsFindRet(const std::vector<DWORD>& words,
+                            size_t bodyBegin,
+                            size_t& retIndex,
+                            size_t& afterRet) {
+    UINT depth = 0;
+    for (size_t scan = bodyBegin; scan < words.size();) {
+        const size_t tokenIndex = scan;
+        const DWORD token = words[scan++];
+        const UINT opcode = token & D3DSI_OPCODE_MASK;
+        if (opcode == D3DSIO_END) return false;
+        if (opcode == D3DSIO_COMMENT) {
+            if (!shaderSkipComment(words, scan, token)) return false;
+            continue;
+        }
+        const UINT operandCount = simpleProcessShaderOperandCount(opcode, token);
+        if (operandCount > words.size() - scan) return false;
+        scan += operandCount;
+        if (opcode == D3DSIO_IF || opcode == D3DSIO_IFC ||
+            opcode == D3DSIO_LOOP || opcode == D3DSIO_REP) {
+            ++depth;
+        } else if (opcode == D3DSIO_ENDIF || opcode == D3DSIO_ENDLOOP ||
+                   opcode == D3DSIO_ENDREP) {
+            if (depth == 0u) return false;
+            --depth;
+        } else if (opcode == D3DSIO_RET && depth == 0u) {
+            retIndex = tokenIndex;
+            afterRet = scan;
+            return true;
+        } else if (opcode == D3DSIO_LABEL && depth == 0u) {
+            return false;
+        }
+    }
+    return false;
+}
+
+static bool simpleVsSkipLabelBody(const std::vector<DWORD>& words,
+                                  size_t& index) {
+    while (index < words.size()) {
+        const size_t tokenIndex = index;
+        const DWORD token = words[index++];
+        const UINT opcode = token & D3DSI_OPCODE_MASK;
+        if (opcode == D3DSIO_COMMENT) {
+            if (!shaderSkipComment(words, index, token)) return false;
+            continue;
+        }
+        const UINT operandCount = simpleProcessShaderOperandCount(opcode, token);
+        if (operandCount > words.size() - index) return false;
+        if (opcode != D3DSIO_LABEL) {
+            index = tokenIndex;
+            break;
+        }
+        index += operandCount;
+    }
+    size_t retIndex = 0;
+    size_t afterRet = 0;
+    if (!simpleVsFindRet(words, index, retIndex, afterRet)) return false;
+    index = afterRet;
+    return true;
+}
+
+static bool simpleVsFindLabelRange(const std::vector<DWORD>& words,
+                                   UINT targetLabel,
+                                   size_t& bodyBegin,
+                                   size_t& retIndex) {
+    for (size_t scan = 1; scan < words.size();) {
+        const DWORD token = words[scan++];
+        const UINT opcode = token & D3DSI_OPCODE_MASK;
+        if (opcode == D3DSIO_END) return false;
+        if (opcode == D3DSIO_COMMENT) {
+            if (!shaderSkipComment(words, scan, token)) return false;
+            continue;
+        }
+        UINT operandCount = simpleProcessShaderOperandCount(opcode, token);
+        if (operandCount > words.size() - scan) return false;
+        if (opcode != D3DSIO_LABEL) {
+            scan += operandCount;
+            continue;
+        }
+
+        bool found = false;
+        for (;;) {
+            if (operandCount < 1u) return false;
+            if (simpleVsLabelIndex(words[scan]) == targetLabel) found = true;
+            scan += operandCount;
+            if (scan >= words.size()) return false;
+            const DWORD nextToken = words[scan];
+            if ((nextToken & D3DSI_OPCODE_MASK) != D3DSIO_LABEL) break;
+            ++scan;
+            const UINT nextOperandCount =
+                simpleProcessShaderOperandCount(D3DSIO_LABEL, nextToken);
+            if (nextOperandCount > words.size() - scan) return false;
+            operandCount = nextOperandCount;
+        }
+
+        size_t afterRet = 0;
+        if (!simpleVsFindRet(words, scan, retIndex, afterRet)) return false;
+        if (found) {
+            bodyBegin = scan;
+            return true;
+        }
+        scan = afterRet;
+    }
+    return false;
+}
+
 enum class SimpleVsExecResult {
     Ok,
     Fail,
     Break,
+    Ret,
 };
 
 static SimpleVsExecResult executeSimpleProcessVertexShaderRange(
@@ -1280,6 +1393,43 @@ static SimpleVsExecResult executeSimpleProcessVertexShaderRange(
         const DWORD* operands = words.data() + index;
         index += operandCount;
         if (opcode == D3DSIO_NOP || opcode == D3DSIO_DCL || opcode == D3DSIO_PHASE) {
+            continue;
+        }
+        if (opcode == D3DSIO_RET) {
+            return SimpleVsExecResult::Ret;
+        }
+        if (opcode == D3DSIO_LABEL) {
+            if (!simpleVsSkipLabelBody(words, index)) {
+                return SimpleVsExecResult::Fail;
+            }
+            continue;
+        }
+        if (opcode == D3DSIO_CALL || opcode == D3DSIO_CALLNZ) {
+            if (operandCount < 1u) return SimpleVsExecResult::Fail;
+            bool takeCall = true;
+            if (opcode == D3DSIO_CALLNZ) {
+                if (operandCount < 2u) return SimpleVsExecResult::Fail;
+                float condition[4]{};
+                if (!simpleVsReadSource(regs, io.major, operands[1], condition)) {
+                    return SimpleVsExecResult::Fail;
+                }
+                takeCall = condition[0] != 0.0f;
+            }
+            if (!takeCall) continue;
+            size_t bodyBegin = 0;
+            size_t retIndex = 0;
+            if (!simpleVsFindLabelRange(
+                    words, simpleVsLabelIndex(operands[0]), bodyBegin, retIndex)) {
+                return SimpleVsExecResult::Fail;
+            }
+            const SimpleVsExecResult callResult =
+                executeSimpleProcessVertexShaderRange(
+                    words, io, regs, bodyBegin, retIndex + 1u,
+                    recursionDepth + 1u);
+            if (callResult == SimpleVsExecResult::Fail ||
+                callResult == SimpleVsExecResult::Break) {
+                return SimpleVsExecResult::Fail;
+            }
             continue;
         }
         if (opcode == D3DSIO_BREAK) {
@@ -1321,6 +1471,9 @@ static SimpleVsExecResult executeSimpleProcessVertexShaderRange(
                 }
                 if (loopResult == SimpleVsExecResult::Break) {
                     break;
+                }
+                if (loopResult == SimpleVsExecResult::Ret) {
+                    return SimpleVsExecResult::Ret;
                 }
             }
             index = afterEnd;
@@ -1573,8 +1726,10 @@ static SimpleVsExecResult executeSimpleProcessVertexShaderRange(
 static bool executeSimpleProcessVertexShader(const std::vector<DWORD>& words,
                                              const ProcessShaderIo& io,
                                              SimpleVsRegisters& regs) {
-    return executeSimpleProcessVertexShaderRange(
-        words, io, regs, 1, words.size(), 0) == SimpleVsExecResult::Ok;
+    const SimpleVsExecResult result =
+        executeSimpleProcessVertexShaderRange(
+            words, io, regs, 1, words.size(), 0);
+    return result == SimpleVsExecResult::Ok || result == SimpleVsExecResult::Ret;
 }
 
 }  // namespace
