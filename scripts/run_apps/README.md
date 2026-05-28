@@ -20,8 +20,10 @@ wired to Meson tests; they are evidence-gathering tools.
 - `run_app-d3d9-3dmark05-verify_direct.sh` — direct foreground runner for the
   existing 3DMark05 verify prefix. It enables `DXMT_3DMARK05_DIRECT=1` on the
   regular 3DMark05 launcher and uses `DXMT_3DMARK05_ARGS` when a manual
-  heuristic run needs different switches. The default run is GT1 only:
-  `-gt1 -nosplash -nosysteminfo -noscreens`. Use
+  heuristic run needs different switches. The default run enables only the first
+  benchmark, GT1:
+  `-gt1 -nosplash -nosysteminfo -noscreens`. GT2/GT3/CPU/feature tests stay
+  disabled unless requested explicitly. Use
   `DXMT_3DMARK05_ARGS='-gtall -batchall -featureall -cpuall -nosplash -nosysteminfo -noscreens'`
   for the full suite. By default it stages the current dxmt9 x64/x86 PE DLLs
   plus the unix provider into the verify prefix before launch; set

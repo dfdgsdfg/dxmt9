@@ -4,7 +4,11 @@ set -euo pipefail
 script_dir=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
 source "$script_dir/common.sh"
 
-default_3dmark05_args="-gt1 -nosplash -nosysteminfo -noscreens"
+# Keep heuristic runs scoped to the first benchmark by default. Broader suites
+# must be requested explicitly through DXMT_3DMARK05_ARGS.
+default_3dmark05_selection_args="-gt1"
+default_3dmark05_runner_args="-nosplash -nosysteminfo -noscreens"
+default_3dmark05_args="$default_3dmark05_selection_args $default_3dmark05_runner_args"
 
 focus_app-d3d9-3dmark05() {
   osascript \
@@ -100,6 +104,7 @@ if [[ "${DXMT_3DMARK05_DIRECT:-0}" != "0" ]]; then
   echo "[3dmark05-direct] prefix=$prefix"
   echo "[3dmark05-direct] wine=$wine_bin"
   echo "[3dmark05-direct] log=$log_path"
+  echo "[3dmark05-direct] default_selection=GT1-only"
   echo "[3dmark05-direct] args=${dxmt_3dmark05_args[*]}"
 
   if [[ "${DXMT_3DMARK05_AUTO_ENTER:-1}" != "0" ]]; then
@@ -129,4 +134,6 @@ if [[ "${DXMT_3DMARK05_AUTO_ENTER:-1}" != "0" ]]; then
 fi
 
 read -r -a dxmt_3dmark05_args <<< "${DXMT_3DMARK05_ARGS:-$default_3dmark05_args}"
+echo "[3dmark05] default_selection=GT1-only"
+echo "[3dmark05] args=${dxmt_3dmark05_args[*]}"
 exp_run_wine_binary "$DXMT_EXPERIMENT_BINARY" "${dxmt_3dmark05_args[@]}"
