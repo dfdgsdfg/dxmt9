@@ -824,6 +824,7 @@ static UINT simpleProcessShaderOperandCount(UINT opcode, DWORD token) {
         case D3DSIO_ENDIF:
         case D3DSIO_ENDLOOP:
         case D3DSIO_ENDREP:
+        case D3DSIO_BREAK:
             return 0;
         case D3DSIO_MOV:
         case D3DSIO_MOVA:
@@ -867,6 +868,7 @@ static UINT simpleProcessShaderOperandCount(UINT opcode, DWORD token) {
         case D3DSIO_REP:
             return 1;
         case D3DSIO_IFC:
+        case D3DSIO_BREAKC:
             return 2;
         case D3DSIO_LOOP:
             return (token >> D3DSI_INSTLENGTH_SHIFT) & 0xfu;
@@ -1251,78 +1253,104 @@ static bool simpleVsLoopCount(const SimpleVsRegisters& regs,
     return true;
 }
 
-static bool executeSimpleProcessVertexShaderRange(
+enum class SimpleVsExecResult {
+    Ok,
+    Fail,
+    Break,
+};
+
+static SimpleVsExecResult executeSimpleProcessVertexShaderRange(
         const std::vector<DWORD>& words,
         const ProcessShaderIo& io,
         SimpleVsRegisters& regs,
         size_t begin,
         size_t end,
         UINT recursionDepth) {
-    if (recursionDepth > 32u) return false;
+    if (recursionDepth > 32u) return SimpleVsExecResult::Fail;
     for (size_t index = begin; index < end;) {
         const DWORD token = words[index++];
         const UINT opcode = token & D3DSI_OPCODE_MASK;
-        if (opcode == D3DSIO_END) return true;
+        if (opcode == D3DSIO_END) return SimpleVsExecResult::Ok;
         if (opcode == D3DSIO_COMMENT) {
-            if (!shaderSkipComment(words, index, token)) return false;
+            if (!shaderSkipComment(words, index, token)) return SimpleVsExecResult::Fail;
             continue;
         }
         const UINT operandCount = simpleProcessShaderOperandCount(opcode, token);
-        if (operandCount > words.size() - index) return false;
+        if (operandCount > words.size() - index) return SimpleVsExecResult::Fail;
         const DWORD* operands = words.data() + index;
         index += operandCount;
         if (opcode == D3DSIO_NOP || opcode == D3DSIO_DCL || opcode == D3DSIO_PHASE) {
             continue;
         }
+        if (opcode == D3DSIO_BREAK) {
+            return SimpleVsExecResult::Break;
+        }
+        if (opcode == D3DSIO_BREAKC) {
+            float condition[4]{};
+            float rhs[4]{};
+            if (!simpleVsReadSource(regs, io.major, operands[0], condition) ||
+                !simpleVsReadSource(regs, io.major, operands[1], rhs)) {
+                return SimpleVsExecResult::Fail;
+            }
+            if (simpleVsIfcCompare(token, condition[0], rhs[0])) {
+                return SimpleVsExecResult::Break;
+            }
+            continue;
+        }
         if (opcode == D3DSIO_REP || opcode == D3DSIO_LOOP) {
-            if (operandCount == 0u) return false;
+            if (operandCount == 0u) return SimpleVsExecResult::Fail;
             size_t bodyEnd = 0;
             size_t afterEnd = 0;
             const UINT endOpcode = opcode == D3DSIO_REP ? D3DSIO_ENDREP : D3DSIO_ENDLOOP;
             if (!simpleVsFindLoopEnd(words, index, endOpcode, bodyEnd, afterEnd)) {
-                return false;
+                return SimpleVsExecResult::Fail;
             }
             const DWORD countSource = opcode == D3DSIO_LOOP && operandCount > 1u
                                           ? operands[1]
                                           : operands[0];
             UINT count = 0;
             if (!simpleVsLoopCount(regs, io, countSource, count)) {
-                return false;
+                return SimpleVsExecResult::Fail;
             }
             for (UINT iteration = 0; iteration < count; ++iteration) {
-                if (!executeSimpleProcessVertexShaderRange(
-                        words, io, regs, index, bodyEnd, recursionDepth + 1u)) {
-                    return false;
+                const SimpleVsExecResult loopResult =
+                    executeSimpleProcessVertexShaderRange(
+                        words, io, regs, index, bodyEnd, recursionDepth + 1u);
+                if (loopResult == SimpleVsExecResult::Fail) {
+                    return SimpleVsExecResult::Fail;
+                }
+                if (loopResult == SimpleVsExecResult::Break) {
+                    break;
                 }
             }
             index = afterEnd;
             continue;
         }
         if (opcode == D3DSIO_ENDREP || opcode == D3DSIO_ENDLOOP) {
-            return false;
+            return SimpleVsExecResult::Fail;
         }
         if (opcode == D3DSIO_IF || opcode == D3DSIO_IFC) {
             float condition[4]{};
             float rhs[4]{};
             if (!simpleVsReadSource(regs, io.major, operands[0], condition)) {
-                return false;
+                return SimpleVsExecResult::Fail;
             }
             bool takeBranch = condition[0] != 0.0f;
             if (opcode == D3DSIO_IFC) {
                 if (!simpleVsReadSource(regs, io.major, operands[1], rhs)) {
-                    return false;
+                    return SimpleVsExecResult::Fail;
                 }
                 takeBranch = simpleVsIfcCompare(token, condition[0], rhs[0]);
             }
             if (!takeBranch &&
                 !simpleVsSkipControlBlock(words, index, true)) {
-                return false;
+                return SimpleVsExecResult::Fail;
             }
             continue;
         }
         if (opcode == D3DSIO_ELSE) {
             if (!simpleVsSkipControlBlock(words, index, false)) {
-                return false;
+                return SimpleVsExecResult::Fail;
             }
             continue;
         }
@@ -1330,17 +1358,17 @@ static bool executeSimpleProcessVertexShaderRange(
             continue;
         }
         if (opcode == D3DSIO_DEF) {
-            if (shaderRegType(operands[0]) != D3DSPR_CONST) return false;
+            if (shaderRegType(operands[0]) != D3DSPR_CONST) return SimpleVsExecResult::Fail;
             auto* dst = simpleVsRegister(regs, io.major, D3DSPR_CONST,
                                          shaderRegIndex(operands[0]));
-            if (!dst) return false;
+            if (!dst) return SimpleVsExecResult::Fail;
             std::memcpy(dst->data(), operands + 1, sizeof(float) * 4u);
             continue;
         }
         if (opcode == D3DSIO_DEFI) {
-            if (shaderRegType(operands[0]) != D3DSPR_CONSTINT) return false;
+            if (shaderRegType(operands[0]) != D3DSPR_CONSTINT) return SimpleVsExecResult::Fail;
             const UINT indexConst = shaderRegIndex(operands[0]);
-            if (indexConst >= regs.constantInt.size()) return false;
+            if (indexConst >= regs.constantInt.size()) return SimpleVsExecResult::Fail;
             for (UINT i = 0; i < 4; ++i) {
                 regs.constantInt[indexConst][i] = static_cast<int32_t>(operands[i + 1u]);
             }
@@ -1353,15 +1381,15 @@ static bool executeSimpleProcessVertexShaderRange(
         float out[4]{};
         if (operandCount >= 2 &&
             !simpleVsReadSource(regs, io.major, operands[1], a)) {
-            return false;
+            return SimpleVsExecResult::Fail;
         }
         if (operandCount >= 3 &&
             !simpleVsReadSource(regs, io.major, operands[2], b)) {
-            return false;
+            return SimpleVsExecResult::Fail;
         }
         if (operandCount >= 4 &&
             !simpleVsReadSource(regs, io.major, operands[3], c)) {
-            return false;
+            return SimpleVsExecResult::Fail;
         }
         switch (opcode) {
             case D3DSIO_MOV:
@@ -1477,9 +1505,9 @@ static bool executeSimpleProcessVertexShaderRange(
                 break;
             }
             case D3DSIO_M4x4: {
-                if (shaderRegType(operands[2]) != D3DSPR_CONST) return false;
+                if (shaderRegType(operands[2]) != D3DSPR_CONST) return SimpleVsExecResult::Fail;
                 const UINT base = shaderRegIndex(operands[2]);
-                if (base + 3u >= regs.constant.size()) return false;
+                if (base + 3u >= regs.constant.size()) return SimpleVsExecResult::Fail;
                 for (UINT row = 0; row < 4; ++row) {
                     const auto& c = regs.constant[base + row];
                     out[row] = a[0] * c[0] + a[1] * c[1] +
@@ -1488,9 +1516,9 @@ static bool executeSimpleProcessVertexShaderRange(
                 break;
             }
             case D3DSIO_M4x3: {
-                if (shaderRegType(operands[2]) != D3DSPR_CONST) return false;
+                if (shaderRegType(operands[2]) != D3DSPR_CONST) return SimpleVsExecResult::Fail;
                 const UINT base = shaderRegIndex(operands[2]);
-                if (base + 2u >= regs.constant.size()) return false;
+                if (base + 2u >= regs.constant.size()) return SimpleVsExecResult::Fail;
                 for (UINT row = 0; row < 3; ++row) {
                     const auto& k = regs.constant[base + row];
                     out[row] = a[0] * k[0] + a[1] * k[1] +
@@ -1500,9 +1528,9 @@ static bool executeSimpleProcessVertexShaderRange(
                 break;
             }
             case D3DSIO_M3x4: {
-                if (shaderRegType(operands[2]) != D3DSPR_CONST) return false;
+                if (shaderRegType(operands[2]) != D3DSPR_CONST) return SimpleVsExecResult::Fail;
                 const UINT base = shaderRegIndex(operands[2]);
-                if (base + 3u >= regs.constant.size()) return false;
+                if (base + 3u >= regs.constant.size()) return SimpleVsExecResult::Fail;
                 for (UINT row = 0; row < 4; ++row) {
                     const auto& k = regs.constant[base + row];
                     out[row] = a[0] * k[0] + a[1] * k[1] + a[2] * k[2];
@@ -1510,9 +1538,9 @@ static bool executeSimpleProcessVertexShaderRange(
                 break;
             }
             case D3DSIO_M3x3: {
-                if (shaderRegType(operands[2]) != D3DSPR_CONST) return false;
+                if (shaderRegType(operands[2]) != D3DSPR_CONST) return SimpleVsExecResult::Fail;
                 const UINT base = shaderRegIndex(operands[2]);
-                if (base + 2u >= regs.constant.size()) return false;
+                if (base + 2u >= regs.constant.size()) return SimpleVsExecResult::Fail;
                 for (UINT row = 0; row < 3; ++row) {
                     const auto& k = regs.constant[base + row];
                     out[row] = a[0] * k[0] + a[1] * k[1] + a[2] * k[2];
@@ -1521,9 +1549,9 @@ static bool executeSimpleProcessVertexShaderRange(
                 break;
             }
             case D3DSIO_M3x2: {
-                if (shaderRegType(operands[2]) != D3DSPR_CONST) return false;
+                if (shaderRegType(operands[2]) != D3DSPR_CONST) return SimpleVsExecResult::Fail;
                 const UINT base = shaderRegIndex(operands[2]);
-                if (base + 1u >= regs.constant.size()) return false;
+                if (base + 1u >= regs.constant.size()) return SimpleVsExecResult::Fail;
                 for (UINT row = 0; row < 2; ++row) {
                     const auto& k = regs.constant[base + row];
                     out[row] = a[0] * k[0] + a[1] * k[1] + a[2] * k[2];
@@ -1533,20 +1561,20 @@ static bool executeSimpleProcessVertexShaderRange(
                 break;
             }
             default:
-                return false;
+                return SimpleVsExecResult::Fail;
         }
         if (!simpleVsWriteDest(regs, io.major, operands[0], out)) {
-            return false;
+            return SimpleVsExecResult::Fail;
         }
     }
-    return false;
+    return SimpleVsExecResult::Ok;
 }
 
 static bool executeSimpleProcessVertexShader(const std::vector<DWORD>& words,
                                              const ProcessShaderIo& io,
                                              SimpleVsRegisters& regs) {
     return executeSimpleProcessVertexShaderRange(
-        words, io, regs, 1, words.size(), 0);
+        words, io, regs, 1, words.size(), 0) == SimpleVsExecResult::Ok;
 }
 
 }  // namespace
