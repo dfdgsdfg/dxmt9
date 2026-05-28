@@ -1745,6 +1745,13 @@ void test_visual_process_vertices_xyzhw_policy(const struct d3d9_api *api)
         DWORD color;
         float u, v;
     };
+    struct dst_specular_vertex
+    {
+        float x, y, z, rhw;
+        DWORD color;
+        DWORD specular;
+        float u, v;
+    };
     struct attr_vertex
     {
         DWORD color;
@@ -1871,6 +1878,13 @@ void test_visual_process_vertices_xyzhw_policy(const struct d3d9_api *api)
         {400.0f, 300.0f, 0.0f, 1.0f, 0xffff8000u, 0.50f, 0.75f},
         {400.0f, 180.0f, 0.0f, 1.0f, 0xffff8000u, 1.00f, 1.00f},
     };
+    const struct dst_specular_vertex expected_spot_specular[] =
+    {
+        {240.0f, 300.0f, 0.0f, 1.0f, 0xffff8000u, 0x000000ffu, 0.00f, 0.25f},
+        {240.0f, 180.0f, 0.0f, 1.0f, 0xffff8000u, 0x000000ffu, 0.25f, 0.50f},
+        {400.0f, 300.0f, 0.0f, 1.0f, 0xffff8000u, 0x000000ffu, 0.50f, 0.75f},
+        {400.0f, 180.0f, 0.0f, 1.0f, 0xffff8000u, 0x000000ffu, 1.00f, 1.00f},
+    };
     const struct dst_vertex expected_tangent[] =
     {
         {480.0f, 300.0f, 0.0f, 1.0f, 0xffff0000u, 0.00f, 0.25f},
@@ -1909,6 +1923,7 @@ void test_visual_process_vertices_xyzhw_policy(const struct d3d9_api *api)
     IDirect3DVertexBuffer9 *src_extra_vb = NULL;
     IDirect3DVertexBuffer9 *dst_vb = NULL;
     IDirect3DVertexBuffer9 *lit_dst_vb = NULL;
+    IDirect3DVertexBuffer9 *lit_specular_dst_vb = NULL;
     IDirect3DVertexBuffer9 *offset_dst_vb = NULL;
     IDirect3DVertexBuffer9 *decl_dst_vb = NULL;
     IDirect3DVertexBuffer9 *src_decl_dst_vb = NULL;
@@ -1943,6 +1958,7 @@ void test_visual_process_vertices_xyzhw_policy(const struct d3d9_api *api)
     IDirect3DVertexShader9 *vs = NULL;
     IDirect3DDevice9 *device = NULL;
     struct dst_vertex *mapped = NULL;
+    struct dst_specular_vertex *mapped_specular = NULL;
     D3DMATERIAL9 material;
     D3DLIGHT9 light;
     const float vs_constants[4][4] =
@@ -2334,6 +2350,68 @@ void test_visual_process_vertices_xyzhw_policy(const struct d3d9_api *api)
         }
         CHECK_HR(IDirect3DVertexBuffer9_Unlock(lit_dst_vb), D3D_OK);
     }
+    hr = IDirect3DDevice9_CreateVertexBuffer(device,
+            sizeof(expected_spot_specular), 0,
+            D3DFVF_XYZRHW | D3DFVF_DIFFUSE | D3DFVF_SPECULAR | D3DFVF_TEX1,
+            D3DPOOL_SYSTEMMEM, &lit_specular_dst_vb, NULL);
+    CHECK_HR(hr, D3D_OK);
+    if (FAILED(hr))
+        goto done_device;
+    material.Specular.b = 1.0f;
+    material.Power = 1.0f;
+    CHECK_HR(IDirect3DDevice9_SetMaterial(device, &material), D3D_OK);
+    memset(&light, 0, sizeof(light));
+    light.Type = D3DLIGHT_SPOT;
+    light.Diffuse.r = 1.0f;
+    light.Diffuse.g = 1.0f;
+    light.Diffuse.b = 1.0f;
+    light.Specular.b = 1.0f;
+    light.Position.z = 100000.0f;
+    light.Direction.z = -1.0f;
+    light.Range = 200000.0f;
+    light.Attenuation0 = 1.0f;
+    light.Falloff = 1.0f;
+    light.Theta = 0.5f;
+    light.Phi = 1.0f;
+    CHECK_HR(IDirect3DDevice9_SetLight(device, 0, &light), D3D_OK);
+    CHECK_HR(IDirect3DDevice9_SetRenderState(device, D3DRS_SPECULARENABLE, TRUE),
+            D3D_OK);
+    CHECK_HR(IDirect3DDevice9_ProcessVertices(device, 0, 0,
+            ARRAY_SIZE(src_fvf_normal), lit_specular_dst_vb, NULL, 0), D3D_OK);
+
+    hr = IDirect3DVertexBuffer9_Lock(lit_specular_dst_vb, 0,
+            sizeof(expected_spot_specular), (void **)&mapped_specular,
+            D3DLOCK_READONLY);
+    CHECK_HR(hr, D3D_OK);
+    if (SUCCEEDED(hr))
+    {
+        for (i = 0; i < ARRAY_SIZE(expected_spot_specular); ++i)
+        {
+            float dx = mapped_specular[i].x - expected_spot_specular[i].x;
+            float dy = mapped_specular[i].y - expected_spot_specular[i].y;
+            float dz = mapped_specular[i].z - expected_spot_specular[i].z;
+            float dw = mapped_specular[i].rhw - expected_spot_specular[i].rhw;
+            float du = mapped_specular[i].u - expected_spot_specular[i].u;
+            float dv = mapped_specular[i].v - expected_spot_specular[i].v;
+            if (dx < 0.0f) dx = -dx;
+            if (dy < 0.0f) dy = -dy;
+            if (dz < 0.0f) dz = -dz;
+            if (dw < 0.0f) dw = -dw;
+            if (du < 0.0f) du = -du;
+            if (dv < 0.0f) dv = -dv;
+            CHECK_TRUE(dx < 0.01f);
+            CHECK_TRUE(dy < 0.01f);
+            CHECK_TRUE(dz < 0.01f);
+            CHECK_TRUE(dw < 0.01f);
+            CHECK_TRUE(mapped_specular[i].color == expected_spot_specular[i].color);
+            CHECK_TRUE(mapped_specular[i].specular == expected_spot_specular[i].specular);
+            CHECK_TRUE(du < 0.01f);
+            CHECK_TRUE(dv < 0.01f);
+        }
+        CHECK_HR(IDirect3DVertexBuffer9_Unlock(lit_specular_dst_vb), D3D_OK);
+    }
+    CHECK_HR(IDirect3DDevice9_SetRenderState(device, D3DRS_SPECULARENABLE, FALSE),
+            D3D_OK);
     CHECK_HR(IDirect3DDevice9_SetRenderState(device, D3DRS_LIGHTING, FALSE),
             D3D_OK);
     CHECK_HR(IDirect3DDevice9_SetRenderState(device, D3DRS_COLORVERTEX, TRUE),
@@ -3754,6 +3832,7 @@ done_device:
     if (src_decl_dst_vb) IDirect3DVertexBuffer9_Release(src_decl_dst_vb);
     if (decl_dst_vb) IDirect3DVertexBuffer9_Release(decl_dst_vb);
     if (offset_dst_vb) IDirect3DVertexBuffer9_Release(offset_dst_vb);
+    if (lit_specular_dst_vb) IDirect3DVertexBuffer9_Release(lit_specular_dst_vb);
     if (lit_dst_vb) IDirect3DVertexBuffer9_Release(lit_dst_vb);
     if (dst_vb) IDirect3DVertexBuffer9_Release(dst_vb);
     if (src_extra_vb) IDirect3DVertexBuffer9_Release(src_extra_vb);

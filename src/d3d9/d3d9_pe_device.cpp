@@ -1108,12 +1108,19 @@ static void addColorProduct(float out[4], const D9CColorRGBA& a,
     out[2] += a.b * b.b * scale;
 }
 
-static DWORD processFixedFunctionLightingColor(const float position[3],
-                                               const float normalIn[3],
-                                               const D9CMaterial& material,
-                                               DWORD ambient,
-                                               const D9CLight lights[8],
-                                               DWORD lightEnableMask) {
+struct ProcessFixedFunctionLightingColors {
+    DWORD diffuse;
+    DWORD specular;
+};
+
+static ProcessFixedFunctionLightingColors processFixedFunctionLightingColors(
+    const float position[3],
+    const float normalIn[3],
+    const D9CMaterial& material,
+    DWORD ambient,
+    const D9CLight lights[8],
+    DWORD lightEnableMask,
+    bool specularEnabled) {
     float normal[3]{normalIn[0], normalIn[1], normalIn[2]};
     normalize3(normal);
 
@@ -1125,6 +1132,7 @@ static DWORD processFixedFunctionLightingColor(const float position[3],
         material.emissive.b + material.ambient.b * ambientColor[2],
         material.diffuse.a,
     };
+    float specular[4]{0.0f, 0.0f, 0.0f, 0.0f};
 
     for (UINT i = 0; i < 8u; ++i) {
         if ((lightEnableMask & (1u << i)) == 0) continue;
@@ -1132,12 +1140,14 @@ static DWORD processFixedFunctionLightingColor(const float position[3],
 
         float toLight[3]{};
         float attenuation = 1.0f;
+        bool directional = false;
         if (light.type == D3DLIGHT_DIRECTIONAL) {
+            directional = true;
             toLight[0] = -light.direction[0];
             toLight[1] = -light.direction[1];
             toLight[2] = -light.direction[2];
             if (!normalize3(toLight)) continue;
-        } else if (light.type == D3DLIGHT_POINT) {
+        } else if (light.type == D3DLIGHT_POINT || light.type == D3DLIGHT_SPOT) {
             toLight[0] = light.position[0] - position[0];
             toLight[1] = light.position[1] - position[1];
             toLight[2] = light.position[2] - position[2];
@@ -1148,18 +1158,49 @@ static DWORD processFixedFunctionLightingColor(const float position[3],
             const float denom = light.attenuation0 +
                                 light.attenuation1 * distance +
                                 light.attenuation2 * distanceSq;
-            if (denom > 0.0f) attenuation = 1.0f / denom;
+            if (denom > 0.0f) attenuation = clamp01(1.0f / denom);
             toLight[0] /= distance;
             toLight[1] /= distance;
             toLight[2] /= distance;
+            if (light.type == D3DLIGHT_SPOT) {
+                float spotDirection[3]{
+                    -light.direction[0],
+                    -light.direction[1],
+                    -light.direction[2],
+                };
+                if (!normalize3(spotDirection)) continue;
+                const float rho = dot3(spotDirection, toLight);
+                const float cosInner = std::cos(0.5f * light.theta);
+                const float cosOuter = std::cos(0.5f * light.phi);
+                float spotFactor = 0.0f;
+                if (rho >= cosInner) {
+                    spotFactor = 1.0f;
+                } else if (rho > cosOuter) {
+                    const float denom = std::max(cosInner - cosOuter, 1.0e-6f);
+                    const float cone = clamp01((rho - cosOuter) / denom);
+                    spotFactor = std::pow(cone, std::max(light.falloff, 0.0f));
+                }
+                attenuation *= spotFactor;
+            }
         } else {
             continue;
         }
-        addColorProduct(lit, material.ambient, light.ambient, 1.0f);
-        const float diffuse = std::max(0.0f, dot3(normal, toLight)) * attenuation;
+        addColorProduct(lit, material.ambient, light.ambient,
+                        directional ? 1.0f : attenuation);
+        const float ndotl = std::max(0.0f, dot3(normal, toLight));
+        const float diffuse = ndotl * attenuation;
         addColorProduct(lit, material.diffuse, light.diffuse, diffuse);
+        if (specularEnabled && ndotl > 0.0f) {
+            float halfVec[3]{toLight[0], toLight[1], toLight[2] + 1.0f};
+            if (normalize3(halfVec)) {
+                const float shininess = std::max(material.power, 1.0f);
+                const float factor = std::pow(std::max(0.0f, dot3(normal, halfVec)),
+                                              shininess) * attenuation;
+                addColorProduct(specular, material.specular, light.specular, factor);
+            }
+        }
     }
-    return packD3DColor(lit);
+    return {packD3DColor(lit), packD3DColor(specular)};
 }
 
 static float snorm16ToFloat(int16_t value) {
@@ -6255,6 +6296,8 @@ public:
         };
         const bool processLighting =
             !programmable && srcLayout.normal && renderStateValue(D3DRS_LIGHTING) != 0;
+        const bool processSpecularLighting =
+            processLighting && renderStateValue(D3DRS_SPECULARENABLE) != 0;
         UINT srcReadBytes[D9C_DRAW_PACKET_MAX_STREAMS]{};
         auto requirePositionRead = [&]() {
             srcReadBytes[srcLayout.positionStream] =
@@ -6349,7 +6392,11 @@ public:
                     return invalid("diffuse passthrough missing");
                 }
             }
-            if (dstLayout.specular && !requireSpecularRead()) return invalid("specular passthrough missing");
+            if (dstLayout.specular && processSpecularLighting) {
+                if (!requireNormalRead()) return invalid("specular lighting normal input missing");
+            } else if (dstLayout.specular && !requireSpecularRead()) {
+                return invalid("specular passthrough missing");
+            }
             if (dstLayout.texCount > srcLayout.texCount) return invalid("texcoord count mismatch");
             for (UINT i = 0; i < dstLayout.texCount; ++i) {
                 if (!requireTexRead(i, true)) return invalid("texcoord passthrough mismatch");
@@ -6738,11 +6785,10 @@ public:
                 invW,
             };
             std::memcpy(dstVertex + dstLayout.positionOffset, out, sizeof(out));
-            if (dstLayout.diffuse) {
-                if (programmable) {
-                    const DWORD color = packD3DColor(diffuseOut);
-                    std::memcpy(dstVertex + dstLayout.diffuseOffset, &color, sizeof(color));
-                } else if (processLighting) {
+            ProcessFixedFunctionLightingColors lightingColors{};
+            bool lightingColorsReady = false;
+            auto fixedFunctionLightingColors = [&]() -> const ProcessFixedFunctionLightingColors& {
+                if (!lightingColorsReady) {
                     float normal[3]{};
                     const auto* normalSource =
                         srcBase[srcLayout.normalStream] +
@@ -6750,9 +6796,20 @@ public:
                         static_cast<uint64_t>(i) * streamStr_[srcLayout.normalStream] +
                         srcLayout.normalOffset;
                     std::memcpy(normal, normalSource, sizeof(normal));
-                    const DWORD color = processFixedFunctionLightingColor(
+                    lightingColors = processFixedFunctionLightingColors(
                         fixedPosition, normal, peState_.materialShadow, processAmbient,
-                        peState_.lightShadow, peState_.lightEnableShadow);
+                        peState_.lightShadow, peState_.lightEnableShadow,
+                        processSpecularLighting);
+                    lightingColorsReady = true;
+                }
+                return lightingColors;
+            };
+            if (dstLayout.diffuse) {
+                if (programmable) {
+                    const DWORD color = packD3DColor(diffuseOut);
+                    std::memcpy(dstVertex + dstLayout.diffuseOffset, &color, sizeof(color));
+                } else if (processLighting) {
+                    const DWORD color = fixedFunctionLightingColors().diffuse;
                     std::memcpy(dstVertex + dstLayout.diffuseOffset, &color, sizeof(color));
                 } else {
                     const auto* diffuseSource =
@@ -6766,6 +6823,9 @@ public:
             if (dstLayout.specular) {
                 if (programmable) {
                     const DWORD color = packD3DColor(specularOut);
+                    std::memcpy(dstVertex + dstLayout.specularOffset, &color, sizeof(color));
+                } else if (processSpecularLighting) {
+                    const DWORD color = fixedFunctionLightingColors().specular;
                     std::memcpy(dstVertex + dstLayout.specularOffset, &color, sizeof(color));
                 } else {
                     const auto* specularSource =
