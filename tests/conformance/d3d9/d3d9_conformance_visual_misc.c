@@ -2293,6 +2293,47 @@ void test_visual_process_vertices_xyzhw_policy(const struct d3d9_api *api)
         }
         CHECK_HR(IDirect3DVertexBuffer9_Unlock(lit_dst_vb), D3D_OK);
     }
+    memset(&light, 0, sizeof(light));
+    light.Type = D3DLIGHT_POINT;
+    light.Diffuse.r = 1.0f;
+    light.Diffuse.g = 1.0f;
+    light.Diffuse.b = 1.0f;
+    light.Position.z = 100000.0f;
+    light.Range = 200000.0f;
+    light.Attenuation0 = 1.0f;
+    CHECK_HR(IDirect3DDevice9_SetLight(device, 0, &light), D3D_OK);
+    CHECK_HR(IDirect3DDevice9_ProcessVertices(device, 0, 0,
+            ARRAY_SIZE(src_fvf_normal), lit_dst_vb, NULL, 0), D3D_OK);
+
+    hr = IDirect3DVertexBuffer9_Lock(lit_dst_vb, 0, sizeof(expected_lit),
+            (void **)&mapped, D3DLOCK_READONLY);
+    CHECK_HR(hr, D3D_OK);
+    if (SUCCEEDED(hr))
+    {
+        for (i = 0; i < ARRAY_SIZE(expected_lit); ++i)
+        {
+            float dx = mapped[i].x - expected_lit[i].x;
+            float dy = mapped[i].y - expected_lit[i].y;
+            float dz = mapped[i].z - expected_lit[i].z;
+            float dw = mapped[i].rhw - expected_lit[i].rhw;
+            float du = mapped[i].u - expected_lit[i].u;
+            float dv = mapped[i].v - expected_lit[i].v;
+            if (dx < 0.0f) dx = -dx;
+            if (dy < 0.0f) dy = -dy;
+            if (dz < 0.0f) dz = -dz;
+            if (dw < 0.0f) dw = -dw;
+            if (du < 0.0f) du = -du;
+            if (dv < 0.0f) dv = -dv;
+            CHECK_TRUE(dx < 0.01f);
+            CHECK_TRUE(dy < 0.01f);
+            CHECK_TRUE(dz < 0.01f);
+            CHECK_TRUE(dw < 0.01f);
+            CHECK_TRUE(mapped[i].color == expected_lit[i].color);
+            CHECK_TRUE(du < 0.01f);
+            CHECK_TRUE(dv < 0.01f);
+        }
+        CHECK_HR(IDirect3DVertexBuffer9_Unlock(lit_dst_vb), D3D_OK);
+    }
     CHECK_HR(IDirect3DDevice9_SetRenderState(device, D3DRS_LIGHTING, FALSE),
             D3D_OK);
     CHECK_HR(IDirect3DDevice9_SetRenderState(device, D3DRS_COLORVERTEX, TRUE),

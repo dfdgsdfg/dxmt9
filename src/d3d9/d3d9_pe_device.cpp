@@ -1108,11 +1108,12 @@ static void addColorProduct(float out[4], const D9CColorRGBA& a,
     out[2] += a.b * b.b * scale;
 }
 
-static DWORD processDirectionalLightingColor(const float normalIn[3],
-                                             const D9CMaterial& material,
-                                             DWORD ambient,
-                                             const D9CLight lights[8],
-                                             DWORD lightEnableMask) {
+static DWORD processFixedFunctionLightingColor(const float position[3],
+                                               const float normalIn[3],
+                                               const D9CMaterial& material,
+                                               DWORD ambient,
+                                               const D9CLight lights[8],
+                                               DWORD lightEnableMask) {
     float normal[3]{normalIn[0], normalIn[1], normalIn[2]};
     normalize3(normal);
 
@@ -1128,16 +1129,34 @@ static DWORD processDirectionalLightingColor(const float normalIn[3],
     for (UINT i = 0; i < 8u; ++i) {
         if ((lightEnableMask & (1u << i)) == 0) continue;
         const D9CLight& light = lights[i];
-        if (light.type != D3DLIGHT_DIRECTIONAL) continue;
 
+        float toLight[3]{};
+        float attenuation = 1.0f;
+        if (light.type == D3DLIGHT_DIRECTIONAL) {
+            toLight[0] = -light.direction[0];
+            toLight[1] = -light.direction[1];
+            toLight[2] = -light.direction[2];
+            if (!normalize3(toLight)) continue;
+        } else if (light.type == D3DLIGHT_POINT) {
+            toLight[0] = light.position[0] - position[0];
+            toLight[1] = light.position[1] - position[1];
+            toLight[2] = light.position[2] - position[2];
+            const float distanceSq = dot3(toLight, toLight);
+            if (distanceSq <= 0.0f) continue;
+            const float distance = std::sqrt(distanceSq);
+            if (light.range > 0.0f && distance > light.range) continue;
+            const float denom = light.attenuation0 +
+                                light.attenuation1 * distance +
+                                light.attenuation2 * distanceSq;
+            if (denom > 0.0f) attenuation = 1.0f / denom;
+            toLight[0] /= distance;
+            toLight[1] /= distance;
+            toLight[2] /= distance;
+        } else {
+            continue;
+        }
         addColorProduct(lit, material.ambient, light.ambient, 1.0f);
-        float toLight[3]{
-            -light.direction[0],
-            -light.direction[1],
-            -light.direction[2],
-        };
-        if (!normalize3(toLight)) continue;
-        const float diffuse = std::max(0.0f, dot3(normal, toLight));
+        const float diffuse = std::max(0.0f, dot3(normal, toLight)) * attenuation;
         addColorProduct(lit, material.diffuse, light.diffuse, diffuse);
     }
     return packD3DColor(lit);
@@ -6448,6 +6467,7 @@ public:
             float diffuseOut[4]{};
             float specularOut[4]{};
             float texOut[8][4]{};
+            float fixedPosition[3]{};
             if (programmable) {
                 SimpleVsRegisters regs{};
                 regs.constant = shaderConstF;
@@ -6696,6 +6716,9 @@ public:
                     static_cast<uint64_t>(i) * streamStr_[srcLayout.positionStream] +
                     srcLayout.positionOffset;
                 std::memcpy(in, positionSource, sizeof(in));
+                fixedPosition[0] = in[0];
+                fixedPosition[1] = in[1];
+                fixedPosition[2] = in[2];
                 const float position[4] = {in[0], in[1], in[2], 1.0f};
                 for (UINT col = 0; col < 4; ++col) {
                     clip[col] = position[0] * wvp.m[col] +
@@ -6727,8 +6750,8 @@ public:
                         static_cast<uint64_t>(i) * streamStr_[srcLayout.normalStream] +
                         srcLayout.normalOffset;
                     std::memcpy(normal, normalSource, sizeof(normal));
-                    const DWORD color = processDirectionalLightingColor(
-                        normal, peState_.materialShadow, processAmbient,
+                    const DWORD color = processFixedFunctionLightingColor(
+                        fixedPosition, normal, peState_.materialShadow, processAmbient,
                         peState_.lightShadow, peState_.lightEnableShadow);
                     std::memcpy(dstVertex + dstLayout.diffuseOffset, &color, sizeof(color));
                 } else {
