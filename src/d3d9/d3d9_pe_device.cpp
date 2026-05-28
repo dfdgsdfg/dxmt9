@@ -822,6 +822,8 @@ static UINT simpleProcessShaderOperandCount(UINT opcode, DWORD token) {
         case D3DSIO_PHASE:
         case D3DSIO_ELSE:
         case D3DSIO_ENDIF:
+        case D3DSIO_ENDLOOP:
+        case D3DSIO_ENDREP:
             return 0;
         case D3DSIO_MOV:
         case D3DSIO_MOVA:
@@ -862,10 +864,14 @@ static UINT simpleProcessShaderOperandCount(UINT opcode, DWORD token) {
         case D3DSIO_DCL:
             return 2;
         case D3DSIO_IF:
+        case D3DSIO_REP:
             return 1;
         case D3DSIO_IFC:
             return 2;
+        case D3DSIO_LOOP:
+            return (token >> D3DSI_INSTLENGTH_SHIFT) & 0xfu;
         case D3DSIO_DEF:
+        case D3DSIO_DEFI:
             return 5;
         default:
             return (token >> D3DSI_INSTLENGTH_SHIFT) & 0xfu;
@@ -1000,6 +1006,7 @@ struct SimpleVsRegisters {
     std::array<std::array<float, 4>, 32> temp{};
     std::array<std::array<float, 4>, 16> input{};
     std::array<std::array<float, 4>, 256> constant{};
+    std::array<std::array<int32_t, 4>, 16> constantInt{};
     std::array<std::array<float, 4>, 16> output{};
     std::array<std::array<float, 4>, 3> rastOut{};
     std::array<std::array<float, 4>, 2> attrOut{};
@@ -1061,10 +1068,19 @@ static bool simpleVsReadSource(const SimpleVsRegisters& regs,
     const auto* reg = simpleVsRegisterConst(regs, major,
                                             shaderRegType(token),
                                             shaderRegIndex(token));
-    if (!reg) return false;
     const UINT swizzle = shaderSwizzle(token);
-    for (UINT i = 0; i < 4; ++i) {
-        out[i] = (*reg)[(swizzle >> (i * 2u)) & 0x3u];
+    if (shaderRegType(token) == D3DSPR_CONSTINT) {
+        const UINT index = shaderRegIndex(token);
+        if (index >= regs.constantInt.size()) return false;
+        const auto& intReg = regs.constantInt[index];
+        for (UINT i = 0; i < 4; ++i) {
+            out[i] = static_cast<float>(intReg[(swizzle >> (i * 2u)) & 0x3u]);
+        }
+    } else {
+        if (!reg) return false;
+        for (UINT i = 0; i < 4; ++i) {
+            out[i] = (*reg)[(swizzle >> (i * 2u)) & 0x3u];
+        }
     }
     const UINT modifier = (token & D3DSP_SRCMOD_MASK) >> D3DSP_SRCMOD_SHIFT;
     switch (modifier) {
@@ -1186,10 +1202,64 @@ static bool simpleVsSkipControlBlock(const std::vector<DWORD>& words,
     return false;
 }
 
-static bool executeSimpleProcessVertexShader(const std::vector<DWORD>& words,
-                                             const ProcessShaderIo& io,
-                                             SimpleVsRegisters& regs) {
-    for (size_t index = 1; index < words.size();) {
+static bool simpleVsFindLoopEnd(const std::vector<DWORD>& words,
+                                size_t bodyBegin,
+                                UINT endOpcode,
+                                size_t& bodyEnd,
+                                size_t& afterEnd) {
+    UINT depth = 0;
+    for (size_t scan = bodyBegin; scan < words.size();) {
+        const size_t tokenIndex = scan;
+        const DWORD token = words[scan++];
+        const UINT opcode = token & D3DSI_OPCODE_MASK;
+        if (opcode == D3DSIO_END) return false;
+        if (opcode == D3DSIO_COMMENT) {
+            if (!shaderSkipComment(words, scan, token)) return false;
+            continue;
+        }
+        const UINT operandCount = simpleProcessShaderOperandCount(opcode, token);
+        if (operandCount > words.size() - scan) return false;
+        scan += operandCount;
+        if (opcode == D3DSIO_LOOP || opcode == D3DSIO_REP) {
+            ++depth;
+        } else if (opcode == D3DSIO_ENDLOOP || opcode == D3DSIO_ENDREP) {
+            if (depth == 0u) {
+                if (opcode != endOpcode) return false;
+                bodyEnd = tokenIndex;
+                afterEnd = scan;
+                return true;
+            }
+            --depth;
+        }
+    }
+    return false;
+}
+
+static bool simpleVsLoopCount(const SimpleVsRegisters& regs,
+                              const ProcessShaderIo& io,
+                              DWORD source,
+                              UINT& count) {
+    float value[4]{};
+    if (!simpleVsReadSource(regs, io.major, source, value)) return false;
+    const long rounded = std::lround(value[0]);
+    if (rounded <= 0) {
+        count = 0;
+        return true;
+    }
+    if (rounded > 1024) return false;
+    count = static_cast<UINT>(rounded);
+    return true;
+}
+
+static bool executeSimpleProcessVertexShaderRange(
+        const std::vector<DWORD>& words,
+        const ProcessShaderIo& io,
+        SimpleVsRegisters& regs,
+        size_t begin,
+        size_t end,
+        UINT recursionDepth) {
+    if (recursionDepth > 32u) return false;
+    for (size_t index = begin; index < end;) {
         const DWORD token = words[index++];
         const UINT opcode = token & D3DSI_OPCODE_MASK;
         if (opcode == D3DSIO_END) return true;
@@ -1203,6 +1273,33 @@ static bool executeSimpleProcessVertexShader(const std::vector<DWORD>& words,
         index += operandCount;
         if (opcode == D3DSIO_NOP || opcode == D3DSIO_DCL || opcode == D3DSIO_PHASE) {
             continue;
+        }
+        if (opcode == D3DSIO_REP || opcode == D3DSIO_LOOP) {
+            if (operandCount == 0u) return false;
+            size_t bodyEnd = 0;
+            size_t afterEnd = 0;
+            const UINT endOpcode = opcode == D3DSIO_REP ? D3DSIO_ENDREP : D3DSIO_ENDLOOP;
+            if (!simpleVsFindLoopEnd(words, index, endOpcode, bodyEnd, afterEnd)) {
+                return false;
+            }
+            const DWORD countSource = opcode == D3DSIO_LOOP && operandCount > 1u
+                                          ? operands[1]
+                                          : operands[0];
+            UINT count = 0;
+            if (!simpleVsLoopCount(regs, io, countSource, count)) {
+                return false;
+            }
+            for (UINT iteration = 0; iteration < count; ++iteration) {
+                if (!executeSimpleProcessVertexShaderRange(
+                        words, io, regs, index, bodyEnd, recursionDepth + 1u)) {
+                    return false;
+                }
+            }
+            index = afterEnd;
+            continue;
+        }
+        if (opcode == D3DSIO_ENDREP || opcode == D3DSIO_ENDLOOP) {
+            return false;
         }
         if (opcode == D3DSIO_IF || opcode == D3DSIO_IFC) {
             float condition[4]{};
@@ -1238,6 +1335,15 @@ static bool executeSimpleProcessVertexShader(const std::vector<DWORD>& words,
                                          shaderRegIndex(operands[0]));
             if (!dst) return false;
             std::memcpy(dst->data(), operands + 1, sizeof(float) * 4u);
+            continue;
+        }
+        if (opcode == D3DSIO_DEFI) {
+            if (shaderRegType(operands[0]) != D3DSPR_CONSTINT) return false;
+            const UINT indexConst = shaderRegIndex(operands[0]);
+            if (indexConst >= regs.constantInt.size()) return false;
+            for (UINT i = 0; i < 4; ++i) {
+                regs.constantInt[indexConst][i] = static_cast<int32_t>(operands[i + 1u]);
+            }
             continue;
         }
 
@@ -1434,6 +1540,13 @@ static bool executeSimpleProcessVertexShader(const std::vector<DWORD>& words,
         }
     }
     return false;
+}
+
+static bool executeSimpleProcessVertexShader(const std::vector<DWORD>& words,
+                                             const ProcessShaderIo& io,
+                                             SimpleVsRegisters& regs) {
+    return executeSimpleProcessVertexShaderRange(
+        words, io, regs, 1, words.size(), 0);
 }
 
 }  // namespace
@@ -5745,6 +5858,12 @@ public:
                                           shaderConstF.size() * sizeof(shaderConstF[0]));
             std::memcpy(shaderConstF.data(), peConsts_.vsConstF.values.data(), bytes);
         }
+        std::array<std::array<int32_t, 4>, 16> shaderConstI{};
+        if (programmable && !peConsts_.vsConstI.values.empty()) {
+            const size_t bytes = std::min(peConsts_.vsConstI.values.size(),
+                                          shaderConstI.size() * sizeof(shaderConstI[0]));
+            std::memcpy(shaderConstI.data(), peConsts_.vsConstI.values.data(), bytes);
+        }
         auto* dstBase = static_cast<uint8_t*>(dstBytes);
         for (UINT i = 0; i < vertexCount; ++i) {
             auto* dstVertex = dstBase + static_cast<size_t>(i) * dstLayout.stride;
@@ -5755,6 +5874,7 @@ public:
             if (programmable) {
                 SimpleVsRegisters regs{};
                 regs.constant = shaderConstF;
+                regs.constantInt = shaderConstI;
                 auto loadPositionInput = [&](int reg) {
                     if (reg < 0 || static_cast<size_t>(reg) >= regs.input.size()) return false;
                     float in[4]{0.0f, 0.0f, 0.0f, 1.0f};

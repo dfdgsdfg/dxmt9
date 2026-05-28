@@ -1385,6 +1385,63 @@ void test_visual_process_vertices_xyzhw_policy(const struct d3d9_api *api)
         PROCESS_VS_SRC(D3DSPR_INPUT, 2),
         D3DSIO_END
     };
+    static const DWORD process_vs_rep_loop_3_0[] =
+    {
+        D3DVS_VERSION(3, 0),
+        PROCESS_VS_INST(D3DSIO_DCL, 2),
+        PROCESS_VS_DCL(D3DDECLUSAGE_POSITION, 0),
+        PROCESS_VS_DST(D3DSPR_INPUT, 0, 0xf),
+        PROCESS_VS_INST(D3DSIO_DCL, 2),
+        PROCESS_VS_DCL(D3DDECLUSAGE_COLOR, 0),
+        PROCESS_VS_DST(D3DSPR_INPUT, 1, 0xf),
+        PROCESS_VS_INST(D3DSIO_DCL, 2),
+        PROCESS_VS_DCL(D3DDECLUSAGE_TEXCOORD, 0),
+        PROCESS_VS_DST(D3DSPR_INPUT, 2, 0xf),
+        PROCESS_VS_INST(D3DSIO_DCL, 2),
+        PROCESS_VS_DCL(D3DDECLUSAGE_POSITION, 0),
+        PROCESS_VS_DST(D3DSPR_OUTPUT, 0, 0xf),
+        PROCESS_VS_INST(D3DSIO_DCL, 2),
+        PROCESS_VS_DCL(D3DDECLUSAGE_COLOR, 0),
+        PROCESS_VS_DST(D3DSPR_OUTPUT, 1, 0xf),
+        PROCESS_VS_INST(D3DSIO_DCL, 2),
+        PROCESS_VS_DCL(D3DDECLUSAGE_TEXCOORD, 0),
+        PROCESS_VS_DST(D3DSPR_OUTPUT, 2, 0xf),
+        PROCESS_VS_INST(D3DSIO_DEFI, 5),
+        PROCESS_VS_DST(D3DSPR_CONSTINT, 0, 0xf),
+        2, 0, 0, 0,
+        PROCESS_VS_INST(D3DSIO_DEFI, 5),
+        PROCESS_VS_DST(D3DSPR_CONSTINT, 1, 0xf),
+        2, 0, 0, 0,
+        PROCESS_VS_INST(D3DSIO_MOV, 2),
+        PROCESS_VS_DST(D3DSPR_OUTPUT, 0, 0xf),
+        PROCESS_VS_SRC(D3DSPR_INPUT, 0),
+        PROCESS_VS_INST(D3DSIO_REP, 1),
+        PROCESS_VS_SRC(D3DSPR_CONSTINT, 0),
+        PROCESS_VS_INST(D3DSIO_ADD, 3),
+        PROCESS_VS_DST(D3DSPR_OUTPUT, 0, 0x7),
+        PROCESS_VS_SRC(D3DSPR_OUTPUT, 0),
+        PROCESS_VS_SRC(D3DSPR_CONST, 0),
+        PROCESS_VS_INST(D3DSIO_ENDREP, 0),
+        PROCESS_VS_INST(D3DSIO_LOOP, 2),
+        PROCESS_VS_SRC(D3DSPR_LOOP, 0),
+        PROCESS_VS_SRC(D3DSPR_CONSTINT, 1),
+        PROCESS_VS_INST(D3DSIO_ADD, 3),
+        PROCESS_VS_DST(D3DSPR_OUTPUT, 0, 0x7),
+        PROCESS_VS_SRC(D3DSPR_OUTPUT, 0),
+        PROCESS_VS_SRC(D3DSPR_CONST, 1),
+        PROCESS_VS_INST(D3DSIO_ENDLOOP, 0),
+        PROCESS_VS_INST(D3DSIO_SUB, 3),
+        PROCESS_VS_DST(D3DSPR_OUTPUT, 0, 0x7),
+        PROCESS_VS_SRC(D3DSPR_OUTPUT, 0),
+        PROCESS_VS_SRC(D3DSPR_CONST, 2),
+        PROCESS_VS_INST(D3DSIO_MOV, 2),
+        PROCESS_VS_DST(D3DSPR_OUTPUT, 1, 0xf),
+        PROCESS_VS_SRC(D3DSPR_INPUT, 1),
+        PROCESS_VS_INST(D3DSIO_MOV, 2),
+        PROCESS_VS_DST(D3DSPR_OUTPUT, 2, 0xf),
+        PROCESS_VS_SRC(D3DSPR_INPUT, 2),
+        D3DSIO_END
+    };
     static const DWORD process_vs_matrix_special_3_0[] =
     {
         D3DVS_VERSION(3, 0),
@@ -1704,6 +1761,7 @@ void test_visual_process_vertices_xyzhw_policy(const struct d3d9_api *api)
     IDirect3DVertexBuffer9 *prog_transcendent_dst_vb = NULL;
     IDirect3DVertexBuffer9 *prog_source_modifiers_dst_vb = NULL;
     IDirect3DVertexBuffer9 *prog_flow_if_dst_vb = NULL;
+    IDirect3DVertexBuffer9 *prog_rep_loop_dst_vb = NULL;
     IDirect3DVertexBuffer9 *prog_matrix_special_dst_vb = NULL;
     IDirect3DVertexBuffer9 *prog_binormal_dst_vb = NULL;
     IDirect3DVertexBuffer9 *prog_blendweight_dst_vb = NULL;
@@ -1788,6 +1846,12 @@ void test_visual_process_vertices_xyzhw_policy(const struct d3d9_api *api)
         {2.0f, 0.0f, 0.0f, 0.0f},
         {1.0f, 0.0f, 0.0f, 0.0f},
         {0.0f, 0.0f, 0.0f, 0.0f},
+    };
+    const float vs_rep_loop_constants[3][4] =
+    {
+        {0.25f, 0.0f, 0.0f, 0.0f},
+        {0.0f, 0.25f, 0.0f, 0.0f},
+        {0.5f, 0.5f, -1.0f, 0.0f},
     };
     const float vs_matrix_special_constants[6][4] =
     {
@@ -2530,6 +2594,62 @@ void test_visual_process_vertices_xyzhw_policy(const struct d3d9_api *api)
     vs = NULL;
 
     hr = IDirect3DDevice9_CreateVertexShader(device,
+            process_vs_rep_loop_3_0, &vs);
+    CHECK_HR(hr, D3D_OK);
+    if (FAILED(hr))
+        goto done_device;
+    hr = IDirect3DDevice9_CreateVertexBuffer(device, sizeof(expected_normal),
+            0, 0, D3DPOOL_SYSTEMMEM, &prog_rep_loop_dst_vb, NULL);
+    CHECK_HR(hr, D3D_OK);
+    if (FAILED(hr))
+        goto done_device;
+    CHECK_HR(IDirect3DDevice9_SetVertexShaderConstantF(device, 0,
+            (const float *)vs_rep_loop_constants, 3), D3D_OK);
+    CHECK_HR(IDirect3DDevice9_SetFVF(device,
+            D3DFVF_XYZ | D3DFVF_DIFFUSE | D3DFVF_TEX1), D3D_OK);
+    CHECK_HR(IDirect3DDevice9_SetStreamSource(device, 0, src_vb, 0,
+            sizeof(src[0])), D3D_OK);
+    CHECK_HR(IDirect3DDevice9_SetStreamSource(device, 1, NULL, 0, 0),
+            D3D_OK);
+    CHECK_HR(IDirect3DDevice9_SetVertexShader(device, vs), D3D_OK);
+    CHECK_HR(IDirect3DDevice9_ProcessVertices(device, 0, 0,
+            ARRAY_SIZE(src), prog_rep_loop_dst_vb, dst_decl, 0), D3D_OK);
+
+    hr = IDirect3DVertexBuffer9_Lock(prog_rep_loop_dst_vb, 0,
+            sizeof(expected_normal), (void **)&mapped, D3DLOCK_READONLY);
+    CHECK_HR(hr, D3D_OK);
+    if (SUCCEEDED(hr))
+    {
+        for (i = 0; i < ARRAY_SIZE(expected_normal); ++i)
+        {
+            float dx = mapped[i].x - expected_normal[i].x;
+            float dy = mapped[i].y - expected_normal[i].y;
+            float dz = mapped[i].z - expected_normal[i].z;
+            float dw = mapped[i].rhw - expected_normal[i].rhw;
+            float du = mapped[i].u - expected_normal[i].u;
+            float dv = mapped[i].v - expected_normal[i].v;
+            if (dx < 0.0f) dx = -dx;
+            if (dy < 0.0f) dy = -dy;
+            if (dz < 0.0f) dz = -dz;
+            if (dw < 0.0f) dw = -dw;
+            if (du < 0.0f) du = -du;
+            if (dv < 0.0f) dv = -dv;
+            CHECK_TRUE(dx < 0.01f);
+            CHECK_TRUE(dy < 0.01f);
+            CHECK_TRUE(dz < 0.01f);
+            CHECK_TRUE(dw < 0.01f);
+            CHECK_TRUE(mapped[i].color == expected_normal[i].color);
+            CHECK_TRUE(du < 0.01f);
+            CHECK_TRUE(dv < 0.01f);
+        }
+        CHECK_HR(IDirect3DVertexBuffer9_Unlock(prog_rep_loop_dst_vb),
+                D3D_OK);
+    }
+    CHECK_HR(IDirect3DDevice9_SetVertexShader(device, NULL), D3D_OK);
+    IDirect3DVertexShader9_Release(vs);
+    vs = NULL;
+
+    hr = IDirect3DDevice9_CreateVertexShader(device,
             process_vs_matrix_special_3_0, &vs);
     CHECK_HR(hr, D3D_OK);
     if (FAILED(hr))
@@ -3138,6 +3258,7 @@ done_device:
     if (prog_blendweight_dst_vb) IDirect3DVertexBuffer9_Release(prog_blendweight_dst_vb);
     if (prog_binormal_dst_vb) IDirect3DVertexBuffer9_Release(prog_binormal_dst_vb);
     if (prog_matrix_special_dst_vb) IDirect3DVertexBuffer9_Release(prog_matrix_special_dst_vb);
+    if (prog_rep_loop_dst_vb) IDirect3DVertexBuffer9_Release(prog_rep_loop_dst_vb);
     if (prog_flow_if_dst_vb) IDirect3DVertexBuffer9_Release(prog_flow_if_dst_vb);
     if (prog_source_modifiers_dst_vb) IDirect3DVertexBuffer9_Release(prog_source_modifiers_dst_vb);
     if (prog_transcendent_dst_vb) IDirect3DVertexBuffer9_Release(prog_transcendent_dst_vb);
