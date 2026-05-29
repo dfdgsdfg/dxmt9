@@ -6424,6 +6424,9 @@ public:
             processLighting && renderStateValue(D3DRS_SPECULARENABLE) != 0;
         const bool processColorVertex =
             processLighting && renderStateValue(D3DRS_COLORVERTEX) != 0;
+        auto processStreamInstanced = [&](UINT stream) {
+            return (streamFreq_[stream] & D3DSTREAMSOURCE_INSTANCEDATA) != 0u;
+        };
         UINT srcReadBytes[D9C_DRAW_PACKET_MAX_STREAMS]{};
         auto requirePositionRead = [&]() {
             srcReadBytes[srcLayout.positionStream] =
@@ -6574,12 +6577,16 @@ public:
                 FAILED(hr32(dxmt9c_buffer_get_desc(srcRaw[stream], &srcDesc[stream])))) {
                 return invalid("source stream desc failed");
             }
+            const bool instancedStream = processStreamInstanced(stream);
+            const uint64_t firstElement = instancedStream ? 0u : srcStart;
+            const uint64_t lastElement =
+                firstElement + (instancedStream ? 0u : vertexCount - 1u);
             srcByteStart[stream] =
                 static_cast<uint64_t>(streamOff_[stream]) +
-                static_cast<uint64_t>(srcStart) * streamStr_[stream];
+                firstElement * streamStr_[stream];
             srcByteEnd[stream] =
                 srcByteStart[stream] +
-                static_cast<uint64_t>(vertexCount - 1u) * streamStr_[stream] +
+                (lastElement - firstElement) * streamStr_[stream] +
                 srcReadBytes[stream];
             if (srcByteEnd[stream] > srcDesc[stream].size ||
                 srcByteEnd[stream] > UINT32_MAX) {
@@ -6649,6 +6656,10 @@ public:
         for (UINT stream = 0; stream < D9C_DRAW_PACKET_MAX_STREAMS; ++stream) {
             srcBase[stream] = static_cast<const uint8_t*>(srcBytes[stream]);
         }
+        auto sourceOffset = [&](UINT stream, UINT vertex) {
+            const uint64_t element = processStreamInstanced(stream) ? 0u : vertex;
+            return srcByteStart[stream] + element * streamStr_[stream];
+        };
         std::array<std::array<float, 4>, 256> shaderConstF{};
         if (programmable && !peConsts_.vsConstF.values.empty()) {
             const size_t bytes = std::min(peConsts_.vsConstF.values.size(),
@@ -6678,8 +6689,7 @@ public:
                     float in[4]{0.0f, 0.0f, 0.0f, 1.0f};
                     const auto* positionSource =
                         srcBase[srcLayout.positionStream] +
-                        srcByteStart[srcLayout.positionStream] +
-                        static_cast<uint64_t>(i) * streamStr_[srcLayout.positionStream] +
+                        sourceOffset(srcLayout.positionStream, i) +
                         srcLayout.positionOffset;
                     std::memcpy(in, positionSource,
                                 std::min<UINT>(srcLayout.positionBytes, sizeof(in)));
@@ -6690,8 +6700,7 @@ public:
                     if (reg < 0 || static_cast<size_t>(reg) >= regs.input.size()) return false;
                     DWORD color = 0;
                     const auto* colorSource =
-                        srcBase[stream] + srcByteStart[stream] +
-                        static_cast<uint64_t>(i) * streamStr_[stream] + offset;
+                        srcBase[stream] + sourceOffset(stream, i) + offset;
                     std::memcpy(&color, colorSource, sizeof(color));
                     unpackD3DColor(color, regs.input[reg].data());
                     return true;
@@ -6700,8 +6709,7 @@ public:
                     [&](int reg, UINT stream, UINT offset, UINT type, UINT bytes) {
                     if (reg < 0 || static_cast<size_t>(reg) >= regs.input.size()) return false;
                     const auto* source =
-                        srcBase[stream] + srcByteStart[stream] +
-                        static_cast<uint64_t>(i) * streamStr_[stream] + offset;
+                        srcBase[stream] + sourceOffset(stream, i) + offset;
                     regs.input[reg] = {0.0f, 0.0f, 0.0f, 1.0f};
                     switch (type) {
                         case D3DDECLTYPE_FLOAT1:
@@ -6811,8 +6819,7 @@ public:
                             (bytes % sizeof(float)) != 0u) return false;
                         float in[4]{0.0f, 0.0f, 0.0f, 1.0f};
                         const auto* source =
-                            srcBase[stream] + srcByteStart[stream] +
-                            static_cast<uint64_t>(i) * streamStr_[stream] + offset;
+                            srcBase[stream] + sourceOffset(stream, i) + offset;
                         std::memcpy(in, source, bytes);
                         regs.input[reg] = {in[0], in[1], in[2], in[3]};
                         return true;
@@ -6821,8 +6828,7 @@ public:
                     if (reg < 0 || static_cast<size_t>(reg) >= regs.input.size()) return false;
                     uint8_t in[4]{};
                     const auto* source =
-                        srcBase[stream] + srcByteStart[stream] +
-                        static_cast<uint64_t>(i) * streamStr_[stream] + offset;
+                        srcBase[stream] + sourceOffset(stream, i) + offset;
                     std::memcpy(in, source, sizeof(in));
                     regs.input[reg] = {
                         static_cast<float>(in[0]),
@@ -6836,8 +6842,7 @@ public:
                     if (reg < 0 || static_cast<size_t>(reg) >= regs.input.size()) return false;
                     const auto* texSource =
                         srcBase[srcLayout.texStream[tex]] +
-                        srcByteStart[srcLayout.texStream[tex]] +
-                        static_cast<uint64_t>(i) * streamStr_[srcLayout.texStream[tex]] +
+                        sourceOffset(srcLayout.texStream[tex], i) +
                         srcLayout.texOffset[tex];
                     regs.input[reg] = {0.0f, 0.0f, 0.0f, 1.0f};
                     switch (srcLayout.texType[tex]) {
@@ -7046,8 +7051,7 @@ public:
                 float in[3]{};
                 const auto* positionSource =
                     srcBase[srcLayout.positionStream] +
-                    srcByteStart[srcLayout.positionStream] +
-                    static_cast<uint64_t>(i) * streamStr_[srcLayout.positionStream] +
+                    sourceOffset(srcLayout.positionStream, i) +
                     srcLayout.positionOffset;
                 std::memcpy(in, positionSource, sizeof(in));
                 fixedPosition[0] = in[0];
@@ -7079,8 +7083,7 @@ public:
                     float normal[3]{};
                     const auto* normalSource =
                         srcBase[srcLayout.normalStream] +
-                        srcByteStart[srcLayout.normalStream] +
-                        static_cast<uint64_t>(i) * streamStr_[srcLayout.normalStream] +
+                        sourceOffset(srcLayout.normalStream, i) +
                         srcLayout.normalOffset;
                     std::memcpy(normal, normalSource, sizeof(normal));
                     D9CMaterial material = peState_.materialShadow;
@@ -7102,8 +7105,7 @@ public:
                         }
                         DWORD color = 0;
                         const auto* colorSource =
-                            srcBase[stream] + srcByteStart[stream] +
-                            static_cast<uint64_t>(i) * streamStr_[stream] +
+                            srcBase[stream] + sourceOffset(stream, i) +
                             offset;
                         std::memcpy(&color, colorSource, sizeof(color));
                         target = d3dColorToRgba(color);
@@ -7139,8 +7141,7 @@ public:
                     std::memcpy(dstVertex + dstLayout.diffuseOffset, &color, sizeof(color));
                 } else {
                     const auto* diffuseSource =
-                        srcBase[srcLayout.diffuseStream] + srcByteStart[srcLayout.diffuseStream] +
-                        static_cast<uint64_t>(i) * streamStr_[srcLayout.diffuseStream] +
+                        srcBase[srcLayout.diffuseStream] + sourceOffset(srcLayout.diffuseStream, i) +
                         srcLayout.diffuseOffset;
                     std::memcpy(dstVertex + dstLayout.diffuseOffset,
                                 diffuseSource, 4u);
@@ -7156,8 +7157,7 @@ public:
                 } else {
                     const auto* specularSource =
                         srcBase[srcLayout.specularStream] +
-                        srcByteStart[srcLayout.specularStream] +
-                        static_cast<uint64_t>(i) * streamStr_[srcLayout.specularStream] +
+                        sourceOffset(srcLayout.specularStream, i) +
                         srcLayout.specularOffset;
                     std::memcpy(dstVertex + dstLayout.specularOffset,
                                 specularSource, 4u);
@@ -7170,8 +7170,7 @@ public:
                                 texOut[tex], dstLayout.texBytes[tex]);
                 } else {
                     const auto* texSource =
-                        srcBase[srcLayout.texStream[tex]] + srcByteStart[srcLayout.texStream[tex]] +
-                        static_cast<uint64_t>(i) * streamStr_[srcLayout.texStream[tex]] +
+                        srcBase[srcLayout.texStream[tex]] + sourceOffset(srcLayout.texStream[tex], i) +
                         srcLayout.texOffset[tex];
                     std::memcpy(dstVertex + dstLayout.texOffset[tex],
                                 texSource, dstLayout.texBytes[tex]);

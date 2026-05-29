@@ -2290,6 +2290,13 @@ void test_visual_process_vertices_xyzhw_policy(const struct d3d9_api *api)
         {400.0f, 300.0f, 0.0f, 1.0f, 0xff0000ffu, 0.50f, 0.75f},
         {400.0f, 180.0f, 0.0f, 1.0f, 0xffffffffu, 1.00f, 1.00f},
     };
+    const struct dst_vertex expected_instanced_source[] =
+    {
+        {240.0f, 300.0f, 0.0f, 1.0f, 0xffff0000u, 0.00f, 0.25f},
+        {240.0f, 180.0f, 0.0f, 1.0f, 0xffff0000u, 0.00f, 0.25f},
+        {400.0f, 300.0f, 0.0f, 1.0f, 0xffff0000u, 0.00f, 0.25f},
+        {400.0f, 180.0f, 0.0f, 1.0f, 0xffff0000u, 0.00f, 0.25f},
+    };
     const struct dst_vertex sentinel =
         {13.0f, 17.0f, 19.0f, 23.0f, 0xff123456u, 0.125f, 0.875f};
     const struct dst_vertex expected_offset[] =
@@ -3636,6 +3643,42 @@ void test_visual_process_vertices_xyzhw_policy(const struct d3d9_api *api)
         }
         CHECK_HR(IDirect3DVertexBuffer9_Unlock(src_decl_dst_vb), D3D_OK);
     }
+    CHECK_HR(IDirect3DDevice9_SetStreamSourceFreq(device, 1,
+            D3DSTREAMSOURCE_INSTANCEDATA | 1), D3D_OK);
+    CHECK_HR(IDirect3DDevice9_ProcessVertices(device, 0, 0,
+            ARRAY_SIZE(src), src_decl_dst_vb, dst_decl, 0), D3D_OK);
+
+    hr = IDirect3DVertexBuffer9_Lock(src_decl_dst_vb, 0,
+            sizeof(expected_instanced_source), (void **)&mapped,
+            D3DLOCK_READONLY);
+    CHECK_HR(hr, D3D_OK);
+    if (SUCCEEDED(hr))
+    {
+        for (i = 0; i < ARRAY_SIZE(expected_instanced_source); ++i)
+        {
+            float dx = mapped[i].x - expected_instanced_source[i].x;
+            float dy = mapped[i].y - expected_instanced_source[i].y;
+            float dz = mapped[i].z - expected_instanced_source[i].z;
+            float dw = mapped[i].rhw - expected_instanced_source[i].rhw;
+            float du = mapped[i].u - expected_instanced_source[i].u;
+            float dv = mapped[i].v - expected_instanced_source[i].v;
+            if (dx < 0.0f) dx = -dx;
+            if (dy < 0.0f) dy = -dy;
+            if (dz < 0.0f) dz = -dz;
+            if (dw < 0.0f) dw = -dw;
+            if (du < 0.0f) du = -du;
+            if (dv < 0.0f) dv = -dv;
+            CHECK_TRUE(dx < 0.01f);
+            CHECK_TRUE(dy < 0.01f);
+            CHECK_TRUE(dz < 0.01f);
+            CHECK_TRUE(dw < 0.01f);
+            CHECK_TRUE(mapped[i].color == expected_instanced_source[i].color);
+            CHECK_TRUE(du < 0.01f);
+            CHECK_TRUE(dv < 0.01f);
+        }
+        CHECK_HR(IDirect3DVertexBuffer9_Unlock(src_decl_dst_vb), D3D_OK);
+    }
+    CHECK_HR(IDirect3DDevice9_SetStreamSourceFreq(device, 1, 1), D3D_OK);
 
     hr = IDirect3DDevice9_CreateVertexDeclaration(device,
             src_extra_decl_elements, &src_extra_decl);
