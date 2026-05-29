@@ -375,6 +375,14 @@ void testPalettizedTextureExpansion() {
             D3D_OK, "P8 texture CheckDeviceFormat support");
     checkEq(dxmt9c_factory_check_device_format2(&cFactory, 0, 40u, 0, 3u),
             D3D_OK, "A8P8 texture CheckDeviceFormat support");
+    checkEq(dxmt9c_factory_check_device_format2(&cFactory, 0, 41u, 0, 5u),
+            D3D_OK, "P8 cube texture CheckDeviceFormat support");
+    checkEq(dxmt9c_factory_check_device_format2(&cFactory, 0, 40u, 0, 5u),
+            D3D_OK, "A8P8 cube texture CheckDeviceFormat support");
+    checkEq(dxmt9c_factory_check_device_format2(&cFactory, 0, 41u, 0, 4u),
+            D3D_OK, "P8 volume texture CheckDeviceFormat support");
+    checkEq(dxmt9c_factory_check_device_format2(&cFactory, 0, 40u, 0, 4u),
+            D3D_OK, "A8P8 volume texture CheckDeviceFormat support");
     checkEq(dxmt9c_factory_check_device_format2(&cFactory, 0, 41u,
                                                 0x00000001u, 3u),
             D3DERR_NOTAVAILABLE, "P8 render-target query rejected");

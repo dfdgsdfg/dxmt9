@@ -12,6 +12,8 @@ constexpr uint32_t kD3DFmtP8 = 41u;
 constexpr uint32_t kD3DUsageRenderTarget = 0x00000001u;
 constexpr uint32_t kD3DUsageDepthStencil = 0x00000002u;
 constexpr uint32_t kD3DResourceTypeTexture = 3u;
+constexpr uint32_t kD3DResourceTypeVolumeTexture = 4u;
+constexpr uint32_t kD3DResourceTypeCubeTexture = 5u;
 
 uint32_t usageFromResourceType(uint32_t resourceType) {
   using namespace dxmt9::core;
@@ -34,7 +36,9 @@ uint32_t usageFromResourceType(uint32_t resourceType) {
 bool supportedPalettizedTextureQuery(uint32_t d3dFmt, uint32_t usage,
                                      uint32_t resourceType) {
   if ((d3dFmt != kD3DFmtP8 && d3dFmt != kD3DFmtA8P8) ||
-      resourceType != kD3DResourceTypeTexture) {
+      (resourceType != kD3DResourceTypeTexture &&
+       resourceType != kD3DResourceTypeVolumeTexture &&
+       resourceType != kD3DResourceTypeCubeTexture)) {
     return false;
   }
   return (usage & (kD3DUsageRenderTarget | kD3DUsageDepthStencil)) == 0;
