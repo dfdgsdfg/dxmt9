@@ -186,6 +186,8 @@ struct D9CTexture {
       : obj(std::move(o)), device(d) {}
 };
 
+void dxmt9c_expand_palettized_subresource(D9CTexture* texture, uint32_t subresource);
+
 struct D9CBuffer {
   std::shared_ptr<dxmt9::core::Buffer> obj;
   std::atomic<uint32_t> refs{1};

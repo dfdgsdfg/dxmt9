@@ -1,5 +1,6 @@
 #include "device_c_provider.hpp"
 
+#include <algorithm>
 #include <cstdint>
 #include <span>
 
@@ -242,10 +243,31 @@ extern "C" int32_t dxmt9c_device_update_surface(D9CDevice* d, D9CSurface* src,
 
 extern "C" int32_t dxmt9c_device_update_texture(D9CDevice* d, D9CTexture* src,
                                                 D9CTexture* dst) {
-  if (!src || !dst) {
+  if (!d || !src || !dst) {
     return dxmt9::core::D3DERR_INVALIDCALL;
   }
-  return d->iface->UpdateTexture(src->obj, dst->obj);
+  if (src->palettized != dst->palettized) {
+    return dxmt9::core::D3DERR_INVALIDCALL;
+  }
+  if (src->palettized && src->d3dFormat != dst->d3dFormat) {
+    return dxmt9::core::D3DERR_INVALIDCALL;
+  }
+
+  const int32_t hr = d->iface->UpdateTexture(src->obj, dst->obj);
+  if (failed(hr) || !src->palettized) {
+    return hr;
+  }
+
+  dst->p8Palette = src->p8Palette;
+  const size_t count = std::min(src->p8Levels.size(), dst->p8Levels.size());
+  for (size_t subresource = 0; subresource < count; ++subresource) {
+    dst->p8Levels[subresource] = src->p8Levels[subresource];
+    const auto level = static_cast<uint32_t>(subresource);
+    if (dst->lockedLevels.find(level) == dst->lockedLevels.end()) {
+      dxmt9c_expand_palettized_subresource(dst, level);
+    }
+  }
+  return hr;
 }
 
 extern "C" int32_t dxmt9c_device_stretch_rect(D9CDevice* d, D9CSurface* src, const D9CRect* sr,

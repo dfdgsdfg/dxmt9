@@ -513,6 +513,72 @@ void testPalettizedTextureExpansion() {
               "locked P8 palette texture release");
     }
     {
+      auto* srcTexture = dxmt9c_device_create_texture(&cDevice, 2, 1, 1, 0,
+                                                      41u, 1u);
+      auto* dstTexture = dxmt9c_device_create_texture(&cDevice, 2, 1, 1, 0,
+                                                      41u, 1u);
+      check(srcTexture != nullptr, "create source P8 update texture");
+      check(dstTexture != nullptr, "create destination P8 update texture");
+
+      D9CLockedRect locked{};
+      checkEq(dxmt9c_texture_lock_rect(srcTexture, 0, &locked, nullptr, 0),
+              D3D_OK, "P8 update source lock");
+      auto* indices = static_cast<uint8_t*>(locked.bits);
+      indices[0] = 1;
+      indices[1] = 2;
+      checkEq(dxmt9c_texture_unlock_rect(srcTexture, 0), D3D_OK,
+              "P8 update source unlock");
+
+      std::array<uint32_t, 256> palette{};
+      palette[1] = 0xff102030u;
+      palette[2] = 0xff405060u;
+      checkEq(dxmt9c_texture_set_palette(srcTexture, palette.data(),
+                                          static_cast<uint32_t>(palette.size())),
+              D3D_OK, "P8 update source palette");
+      checkEq(dxmt9c_device_update_texture(&cDevice, srcTexture, dstTexture),
+              D3D_OK, "P8 UpdateTexture");
+
+      auto bytes = dstTexture->obj->levelBytes(0);
+      check(bytes.size() >= 8, "P8 update copied expanded backing");
+      checkEq(bytes[0], uint8_t{0x30}, "P8 update pixel0 blue");
+      checkEq(bytes[1], uint8_t{0x20}, "P8 update pixel0 green");
+      checkEq(bytes[2], uint8_t{0x10}, "P8 update pixel0 red");
+      checkEq(bytes[4], uint8_t{0x60}, "P8 update pixel1 blue");
+      checkEq(bytes[5], uint8_t{0x50}, "P8 update pixel1 green");
+      checkEq(bytes[6], uint8_t{0x40}, "P8 update pixel1 red");
+
+      palette[1] = 0xff010203u;
+      palette[2] = 0xffa0b0c0u;
+      checkEq(dxmt9c_texture_set_palette(dstTexture, palette.data(),
+                                          static_cast<uint32_t>(palette.size())),
+              D3D_OK, "P8 update destination palette switch");
+      bytes = dstTexture->obj->levelBytes(0);
+      check(bytes.size() >= 8, "P8 update palette switch expanded backing");
+      checkEq(bytes[0], uint8_t{0x03},
+              "P8 update shadow pixel0 blue after palette switch");
+      checkEq(bytes[2], uint8_t{0x01},
+              "P8 update shadow pixel0 red after palette switch");
+      checkEq(bytes[4], uint8_t{0xc0},
+              "P8 update shadow pixel1 blue after palette switch");
+      checkEq(bytes[6], uint8_t{0xa0},
+              "P8 update shadow pixel1 red after palette switch");
+
+      checkEq(dxmt9c_texture_lock_rect(dstTexture, 0, &locked, nullptr, 0),
+              D3D_OK, "P8 update destination lock");
+      indices = static_cast<uint8_t*>(locked.bits);
+      checkEq(indices[0], uint8_t{1},
+              "P8 update copied destination index0 shadow");
+      checkEq(indices[1], uint8_t{2},
+              "P8 update copied destination index1 shadow");
+      checkEq(dxmt9c_texture_unlock_rect(dstTexture, 0), D3D_OK,
+              "P8 update destination unlock");
+
+      checkEq(dxmt9c_texture_release(dstTexture), 0u,
+              "destination P8 update texture release");
+      checkEq(dxmt9c_texture_release(srcTexture), 0u,
+              "source P8 update texture release");
+    }
+    {
       auto* texture = dxmt9c_device_create_texture(&cDevice, 2, 1, 1, 0,
                                                    40u, 1u);
       check(texture != nullptr, "create A8P8 texture");

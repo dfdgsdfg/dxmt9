@@ -212,6 +212,10 @@ void copyShadowToNative(const ShadowLock& shadow) {
 
 }  // namespace
 
+void dxmt9c_expand_palettized_subresource(D9CTexture* texture, uint32_t subresource) {
+  expandP8SubresourceToBackend(texture, subresource);
+}
+
 extern "C" D9CTexture* dxmt9c_device_create_texture(D9CDevice* d, uint32_t w, uint32_t h,
                                                     uint32_t levels, uint32_t usage,
                                                     uint32_t fmt, uint32_t pool) {
