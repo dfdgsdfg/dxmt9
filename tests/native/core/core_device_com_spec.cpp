@@ -641,6 +641,84 @@ void testPalettizedTextureExpansion() {
       checkEq(dxmt9c_texture_release(texture), 0u, "A8P8 texture release");
     }
     {
+      auto* srcTexture = dxmt9c_device_create_texture(&cDevice, 2, 1, 1, 0,
+                                                      40u, 1u);
+      auto* dstTexture = dxmt9c_device_create_texture(&cDevice, 2, 1, 1, 0,
+                                                      40u, 1u);
+      check(srcTexture != nullptr, "create source A8P8 update texture");
+      check(dstTexture != nullptr, "create destination A8P8 update texture");
+
+      D9CLockedRect locked{};
+      checkEq(dxmt9c_texture_lock_rect(srcTexture, 0, &locked, nullptr, 0),
+              D3D_OK, "A8P8 update source lock");
+      auto* texels = static_cast<uint8_t*>(locked.bits);
+      texels[0] = 5;
+      texels[1] = 0x70;
+      texels[2] = 6;
+      texels[3] = 0x30;
+      checkEq(dxmt9c_texture_unlock_rect(srcTexture, 0), D3D_OK,
+              "A8P8 update source unlock");
+
+      std::array<uint32_t, 256> palette{};
+      palette[5] = 0xff102030u;
+      palette[6] = 0xff405060u;
+      checkEq(dxmt9c_texture_set_palette(srcTexture, palette.data(),
+                                          static_cast<uint32_t>(palette.size())),
+              D3D_OK, "A8P8 update source palette");
+      checkEq(dxmt9c_device_update_texture(&cDevice, srcTexture, dstTexture),
+              D3D_OK, "A8P8 UpdateTexture");
+
+      auto bytes = dstTexture->obj->levelBytes(0);
+      check(bytes.size() >= 8, "A8P8 update copied expanded backing");
+      checkEq(bytes[0], uint8_t{0x30}, "A8P8 update pixel0 blue");
+      checkEq(bytes[2], uint8_t{0x10}, "A8P8 update pixel0 red");
+      checkEq(bytes[3], uint8_t{0x70},
+              "A8P8 update pixel0 alpha from texel");
+      checkEq(bytes[4], uint8_t{0x60}, "A8P8 update pixel1 blue");
+      checkEq(bytes[6], uint8_t{0x40}, "A8P8 update pixel1 red");
+      checkEq(bytes[7], uint8_t{0x30},
+              "A8P8 update pixel1 alpha from texel");
+
+      palette[5] = 0xff010203u;
+      palette[6] = 0xffa0b0c0u;
+      checkEq(dxmt9c_texture_set_palette(dstTexture, palette.data(),
+                                          static_cast<uint32_t>(palette.size())),
+              D3D_OK, "A8P8 update destination palette switch");
+      bytes = dstTexture->obj->levelBytes(0);
+      check(bytes.size() >= 8, "A8P8 update palette switch backing");
+      checkEq(bytes[0], uint8_t{0x03},
+              "A8P8 update shadow pixel0 blue after palette switch");
+      checkEq(bytes[2], uint8_t{0x01},
+              "A8P8 update shadow pixel0 red after palette switch");
+      checkEq(bytes[3], uint8_t{0x70},
+              "A8P8 update shadow pixel0 alpha after palette switch");
+      checkEq(bytes[4], uint8_t{0xc0},
+              "A8P8 update shadow pixel1 blue after palette switch");
+      checkEq(bytes[6], uint8_t{0xa0},
+              "A8P8 update shadow pixel1 red after palette switch");
+      checkEq(bytes[7], uint8_t{0x30},
+              "A8P8 update shadow pixel1 alpha after palette switch");
+
+      checkEq(dxmt9c_texture_lock_rect(dstTexture, 0, &locked, nullptr, 0),
+              D3D_OK, "A8P8 update destination lock");
+      texels = static_cast<uint8_t*>(locked.bits);
+      checkEq(texels[0], uint8_t{5},
+              "A8P8 update copied destination index0 shadow");
+      checkEq(texels[1], uint8_t{0x70},
+              "A8P8 update copied destination alpha0 shadow");
+      checkEq(texels[2], uint8_t{6},
+              "A8P8 update copied destination index1 shadow");
+      checkEq(texels[3], uint8_t{0x30},
+              "A8P8 update copied destination alpha1 shadow");
+      checkEq(dxmt9c_texture_unlock_rect(dstTexture, 0), D3D_OK,
+              "A8P8 update destination unlock");
+
+      checkEq(dxmt9c_texture_release(dstTexture), 0u,
+              "destination A8P8 update texture release");
+      checkEq(dxmt9c_texture_release(srcTexture), 0u,
+              "source A8P8 update texture release");
+    }
+    {
       auto* texture = dxmt9c_device_create_cube_texture(&cDevice, 2, 1, 0,
                                                         41u, 1u);
       check(texture != nullptr, "create cube P8 texture");
