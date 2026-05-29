@@ -1446,6 +1446,7 @@ struct SimpleVsTextureState {
     std::array<DWORD, kPeVertexTextureSamplerSlots> addressU{};
     std::array<DWORD, kPeVertexTextureSamplerSlots> addressV{};
     std::array<DWORD, kPeVertexTextureSamplerSlots> borderColor{};
+    std::array<DWORD, kPeVertexTextureSamplerSlots> minMipLevel{};
 };
 
 static std::array<float, 4>* simpleVsRegister(SimpleVsRegisters& regs,
@@ -1660,8 +1661,10 @@ static bool simpleVsSampleTexture2D(const SimpleVsTextureState* textures,
     const UINT levels = dxmt9c_texture_get_level_count(texture);
     if (levels == 0u) return false;
     const long requestedLevel = std::lround(coord[3]);
+    const long minMipLevel = static_cast<long>(textures->minMipLevel[sampler]);
     const UINT level = static_cast<UINT>(
-        std::clamp<long>(requestedLevel, 0, static_cast<long>(levels - 1u)));
+        std::clamp<long>(std::max(requestedLevel, minMipLevel), 0,
+                         static_cast<long>(levels - 1u)));
     bool border = false;
     const auto addressCoord = [&](float value, DWORD mode) -> float {
         if (!std::isfinite(value)) value = 0.0f;
@@ -6891,6 +6894,10 @@ public:
                     samplerStateValue(D3DSAMP_ADDRESSV, D3DTADDRESS_WRAP);
                 shaderTextures.borderColor[sampler] =
                     samplerStateValue(D3DSAMP_BORDERCOLOR, 0u);
+                shaderTextures.minMipLevel[sampler] =
+                    std::max<DWORD>(
+                        textures_[samplerSlot] ? textures_[samplerSlot]->GetLOD() : 0u,
+                        samplerStateValue(D3DSAMP_MAXMIPLEVEL, 0u));
             }
         }
         auto* dstBase = static_cast<uint8_t*>(dstBytes);
