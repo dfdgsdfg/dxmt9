@@ -1974,6 +1974,21 @@ void test_visual_process_vertices_xyzhw_policy(const struct d3d9_api *api)
         DWORD color;
         float u, v;
     };
+    struct src_fvf_blendweight_vertex
+    {
+        float x, y, z;
+        float bw0, bw1, bw2, bw3;
+        DWORD color;
+        float u, v;
+    };
+    struct src_fvf_blendindices_vertex
+    {
+        float x, y, z;
+        float bw0, bw1, bw2, bw3;
+        BYTE bi0, bi1, bi2, bi3;
+        DWORD color;
+        float u, v;
+    };
     struct src_extra_vertex
     {
         float x, y, z;
@@ -2139,6 +2154,20 @@ void test_visual_process_vertices_xyzhw_policy(const struct d3d9_api *api)
         { 0.5f, -0.5f, 0.0f, 0.0f, 0.0f, 1.0f, 0xff0000ffu, 0.50f, 0.75f},
         { 0.5f,  0.5f, 0.0f, 0.0f, 0.0f, 1.0f, 0xffffffffu, 1.00f, 1.00f},
     };
+    const struct src_fvf_blendweight_vertex src_fvf_blendweight[] =
+    {
+        {-0.5f, -0.5f, 0.0f, 0.25f, 0.25f, 0.0f, 0.0f, 0xffff0000u, 0.00f, 0.25f},
+        {-0.5f,  0.5f, 0.0f, 0.25f, 0.25f, 0.0f, 0.0f, 0xff00ff00u, 0.25f, 0.50f},
+        { 0.5f, -0.5f, 0.0f, 0.25f, 0.25f, 0.0f, 0.0f, 0xff0000ffu, 0.50f, 0.75f},
+        { 0.5f,  0.5f, 0.0f, 0.25f, 0.25f, 0.0f, 0.0f, 0xffffffffu, 1.00f, 1.00f},
+    };
+    const struct src_fvf_blendindices_vertex src_fvf_blendindices[] =
+    {
+        {-0.5f, -0.5f, 0.0f, 0.25f, 0.25f, 0.0f, 0.0f, 1, 1, 0, 0, 0xffff0000u, 0.00f, 0.25f},
+        {-0.5f,  0.5f, 0.0f, 0.25f, 0.25f, 0.0f, 0.0f, 1, 1, 0, 0, 0xff00ff00u, 0.25f, 0.50f},
+        { 0.5f, -0.5f, 0.0f, 0.25f, 0.25f, 0.0f, 0.0f, 1, 1, 0, 0, 0xff0000ffu, 0.50f, 0.75f},
+        { 0.5f,  0.5f, 0.0f, 0.25f, 0.25f, 0.0f, 0.0f, 1, 1, 0, 0, 0xffffffffu, 1.00f, 1.00f},
+    };
     const struct src_extra_vertex src_extra[] =
     {
         {-0.5f, -0.5f, 0.0f, 0.0f, 0.0f, 1.0f, 0xffff0000u, 1.0f, 0.0f, 0.0f, 0.0f, -0.25f, 0.0f, 0.00f, 0.25f, 0.25f, 0.25f, 0.0f, 0.0f, 1, 1, 0, 0},
@@ -2278,6 +2307,8 @@ void test_visual_process_vertices_xyzhw_policy(const struct d3d9_api *api)
     IDirect3DVertexBuffer9 *src_attr_udec3_vb = NULL;
     IDirect3DVertexBuffer9 *src_pos4_vb = NULL;
     IDirect3DVertexBuffer9 *src_fvf_normal_vb = NULL;
+    IDirect3DVertexBuffer9 *src_fvf_blendweight_vb = NULL;
+    IDirect3DVertexBuffer9 *src_fvf_blendindices_vb = NULL;
     IDirect3DVertexBuffer9 *src_extra_vb = NULL;
     IDirect3DVertexBuffer9 *src_short4_normal_vb = NULL;
     IDirect3DVertexBuffer9 *src_ubyte4_normal_vb = NULL;
@@ -2686,6 +2717,36 @@ void test_visual_process_vertices_xyzhw_policy(const struct d3d9_api *api)
     {
         memcpy(bits, src_fvf_normal, sizeof(src_fvf_normal));
         CHECK_HR(IDirect3DVertexBuffer9_Unlock(src_fvf_normal_vb), D3D_OK);
+    }
+    hr = IDirect3DDevice9_CreateVertexBuffer(device,
+            sizeof(src_fvf_blendweight), 0, 0, D3DPOOL_SYSTEMMEM,
+            &src_fvf_blendweight_vb, NULL);
+    CHECK_HR(hr, D3D_OK);
+    if (FAILED(hr))
+        goto done_device;
+    hr = IDirect3DVertexBuffer9_Lock(src_fvf_blendweight_vb, 0,
+            sizeof(src_fvf_blendweight), &bits, 0);
+    CHECK_HR(hr, D3D_OK);
+    if (SUCCEEDED(hr))
+    {
+        memcpy(bits, src_fvf_blendweight, sizeof(src_fvf_blendweight));
+        CHECK_HR(IDirect3DVertexBuffer9_Unlock(src_fvf_blendweight_vb),
+                D3D_OK);
+    }
+    hr = IDirect3DDevice9_CreateVertexBuffer(device,
+            sizeof(src_fvf_blendindices), 0, 0, D3DPOOL_SYSTEMMEM,
+            &src_fvf_blendindices_vb, NULL);
+    CHECK_HR(hr, D3D_OK);
+    if (FAILED(hr))
+        goto done_device;
+    hr = IDirect3DVertexBuffer9_Lock(src_fvf_blendindices_vb, 0,
+            sizeof(src_fvf_blendindices), &bits, 0);
+    CHECK_HR(hr, D3D_OK);
+    if (SUCCEEDED(hr))
+    {
+        memcpy(bits, src_fvf_blendindices, sizeof(src_fvf_blendindices));
+        CHECK_HR(IDirect3DVertexBuffer9_Unlock(src_fvf_blendindices_vb),
+                D3D_OK);
     }
     hr = IDirect3DDevice9_CreateVertexBuffer(device, sizeof(src_extra), 0,
             0, D3DPOOL_SYSTEMMEM, &src_extra_vb, NULL);
@@ -4198,6 +4259,48 @@ void test_visual_process_vertices_xyzhw_policy(const struct d3d9_api *api)
         CHECK_HR(IDirect3DVertexBuffer9_Unlock(prog_blendweight_dst_vb),
                 D3D_OK);
     }
+
+    CHECK_HR(IDirect3DDevice9_SetFVF(device,
+            D3DFVF_XYZB4 | D3DFVF_DIFFUSE | D3DFVF_TEX1), D3D_OK);
+    CHECK_HR(IDirect3DDevice9_SetStreamSource(device, 0,
+            src_fvf_blendweight_vb, 0,
+            sizeof(struct src_fvf_blendweight_vertex)), D3D_OK);
+    CHECK_HR(IDirect3DDevice9_SetStreamSource(device, 1, NULL, 0, 0),
+            D3D_OK);
+    CHECK_HR(IDirect3DDevice9_ProcessVertices(device, 0, 0,
+            ARRAY_SIZE(src_fvf_blendweight), prog_blendweight_dst_vb,
+            dst_decl, 0), D3D_OK);
+
+    hr = IDirect3DVertexBuffer9_Lock(prog_blendweight_dst_vb, 0,
+            sizeof(expected_blendweight), (void **)&mapped, D3DLOCK_READONLY);
+    CHECK_HR(hr, D3D_OK);
+    if (SUCCEEDED(hr))
+    {
+        for (i = 0; i < ARRAY_SIZE(expected_blendweight); ++i)
+        {
+            float dx = mapped[i].x - expected_blendweight[i].x;
+            float dy = mapped[i].y - expected_blendweight[i].y;
+            float dz = mapped[i].z - expected_blendweight[i].z;
+            float dw = mapped[i].rhw - expected_blendweight[i].rhw;
+            float du = mapped[i].u - expected_blendweight[i].u;
+            float dv = mapped[i].v - expected_blendweight[i].v;
+            if (dx < 0.0f) dx = -dx;
+            if (dy < 0.0f) dy = -dy;
+            if (dz < 0.0f) dz = -dz;
+            if (dw < 0.0f) dw = -dw;
+            if (du < 0.0f) du = -du;
+            if (dv < 0.0f) dv = -dv;
+            CHECK_TRUE(dx < 0.01f);
+            CHECK_TRUE(dy < 0.01f);
+            CHECK_TRUE(dz < 0.01f);
+            CHECK_TRUE(dw < 0.01f);
+            CHECK_TRUE(mapped[i].color == expected_blendweight[i].color);
+            CHECK_TRUE(du < 0.01f);
+            CHECK_TRUE(dv < 0.01f);
+        }
+        CHECK_HR(IDirect3DVertexBuffer9_Unlock(prog_blendweight_dst_vb),
+                D3D_OK);
+    }
     CHECK_HR(IDirect3DDevice9_SetVertexShader(device, NULL), D3D_OK);
     IDirect3DVertexShader9_Release(vs);
     vs = NULL;
@@ -4225,6 +4328,49 @@ void test_visual_process_vertices_xyzhw_policy(const struct d3d9_api *api)
     CHECK_HR(IDirect3DDevice9_ProcessVertices(device, 0, 0,
             ARRAY_SIZE(src_extra), prog_blendindices_dst_vb, dst_decl, 0),
             D3D_OK);
+
+    hr = IDirect3DVertexBuffer9_Lock(prog_blendindices_dst_vb, 0,
+            sizeof(expected_blendweight), (void **)&mapped, D3DLOCK_READONLY);
+    CHECK_HR(hr, D3D_OK);
+    if (SUCCEEDED(hr))
+    {
+        for (i = 0; i < ARRAY_SIZE(expected_blendweight); ++i)
+        {
+            float dx = mapped[i].x - expected_blendweight[i].x;
+            float dy = mapped[i].y - expected_blendweight[i].y;
+            float dz = mapped[i].z - expected_blendweight[i].z;
+            float dw = mapped[i].rhw - expected_blendweight[i].rhw;
+            float du = mapped[i].u - expected_blendweight[i].u;
+            float dv = mapped[i].v - expected_blendweight[i].v;
+            if (dx < 0.0f) dx = -dx;
+            if (dy < 0.0f) dy = -dy;
+            if (dz < 0.0f) dz = -dz;
+            if (dw < 0.0f) dw = -dw;
+            if (du < 0.0f) du = -du;
+            if (dv < 0.0f) dv = -dv;
+            CHECK_TRUE(dx < 0.01f);
+            CHECK_TRUE(dy < 0.01f);
+            CHECK_TRUE(dz < 0.01f);
+            CHECK_TRUE(dw < 0.01f);
+            CHECK_TRUE(mapped[i].color == expected_blendweight[i].color);
+            CHECK_TRUE(du < 0.01f);
+            CHECK_TRUE(dv < 0.01f);
+        }
+        CHECK_HR(IDirect3DVertexBuffer9_Unlock(prog_blendindices_dst_vb),
+                D3D_OK);
+    }
+
+    CHECK_HR(IDirect3DDevice9_SetFVF(device, D3DFVF_XYZB5
+            | D3DFVF_LASTBETA_UBYTE4 | D3DFVF_DIFFUSE | D3DFVF_TEX1),
+            D3D_OK);
+    CHECK_HR(IDirect3DDevice9_SetStreamSource(device, 0,
+            src_fvf_blendindices_vb, 0,
+            sizeof(struct src_fvf_blendindices_vertex)), D3D_OK);
+    CHECK_HR(IDirect3DDevice9_SetStreamSource(device, 1, NULL, 0, 0),
+            D3D_OK);
+    CHECK_HR(IDirect3DDevice9_ProcessVertices(device, 0, 0,
+            ARRAY_SIZE(src_fvf_blendindices), prog_blendindices_dst_vb,
+            dst_decl, 0), D3D_OK);
 
     hr = IDirect3DVertexBuffer9_Lock(prog_blendindices_dst_vb, 0,
             sizeof(expected_blendweight), (void **)&mapped, D3DLOCK_READONLY);
@@ -5072,6 +5218,8 @@ done_device:
     if (src_ubyte4n_normal_vb) IDirect3DVertexBuffer9_Release(src_ubyte4n_normal_vb);
     if (src_ubyte4_normal_vb) IDirect3DVertexBuffer9_Release(src_ubyte4_normal_vb);
     if (src_short4_normal_vb) IDirect3DVertexBuffer9_Release(src_short4_normal_vb);
+    if (src_fvf_blendindices_vb) IDirect3DVertexBuffer9_Release(src_fvf_blendindices_vb);
+    if (src_fvf_blendweight_vb) IDirect3DVertexBuffer9_Release(src_fvf_blendweight_vb);
     if (src_fvf_normal_vb) IDirect3DVertexBuffer9_Release(src_fvf_normal_vb);
     if (src_pos4_vb) IDirect3DVertexBuffer9_Release(src_pos4_vb);
     if (src_attr_ubyte4n_vb) IDirect3DVertexBuffer9_Release(src_attr_ubyte4n_vb);

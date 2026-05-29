@@ -507,17 +507,31 @@ inline void fvfToVertexElements(DWORD fvf,
                        D3DDECLMETHOD_DEFAULT,
                        D3DDECLUSAGE_POSITION, 0});
         offset += 12;
-        const int blend = (posMask - D3DFVF_XYZB1) / 2 + 1;
-        if (blend >= 1) {
-            const uint8_t blendType = blend == 1
+        const uint32_t blend = (posMask - D3DFVF_XYZB1) / 2u + 1u;
+        const bool lastBetaUbyte4 = (fvf & D3DFVF_LASTBETA_UBYTE4) != 0;
+        const bool lastBetaD3dcolor = (fvf & D3DFVF_LASTBETA_D3DCOLOR) != 0;
+        const uint32_t weightCount =
+            (lastBetaUbyte4 || lastBetaD3dcolor) ? blend - 1u : blend;
+        if (weightCount >= 1) {
+            const uint8_t blendType = weightCount == 1
                 ? D3DDECLTYPE_FLOAT1
-                : (blend == 2 ? D3DDECLTYPE_FLOAT2
-                              : (blend == 3 ? D3DDECLTYPE_FLOAT3
-                                            : D3DDECLTYPE_FLOAT4));
+                : (weightCount == 2 ? D3DDECLTYPE_FLOAT2
+                                    : (weightCount == 3 ? D3DDECLTYPE_FLOAT3
+                                                        : D3DDECLTYPE_FLOAT4));
             out.push_back({0, offset, blendType,
                            D3DDECLMETHOD_DEFAULT,
                            D3DDECLUSAGE_BLENDWEIGHT, 0});
             offset += vertexElementTypeSize(blendType);
+        }
+        if (lastBetaUbyte4 || lastBetaD3dcolor) {
+            out.push_back({0, offset,
+                           static_cast<uint8_t>(lastBetaD3dcolor
+                               ? D3DDECLTYPE_D3DCOLOR : D3DDECLTYPE_UBYTE4),
+                           D3DDECLMETHOD_DEFAULT,
+                           D3DDECLUSAGE_BLENDINDICES, 0});
+            offset += 4;
+        } else if (blend > 4u) {
+            offset += 4;
         }
     }
     if (fvf & D3DFVF_NORMAL) {
@@ -647,6 +661,14 @@ static UINT fvfTexcoordBytes(DWORD fvf, UINT index) {
     return 8u;
 }
 
+static bool processFvfXyzbPosition(DWORD positionMask) {
+    return positionMask == D3DFVF_XYZB1 ||
+           positionMask == D3DFVF_XYZB2 ||
+           positionMask == D3DFVF_XYZB3 ||
+           positionMask == D3DFVF_XYZB4 ||
+           positionMask == D3DFVF_XYZB5;
+}
+
 static UINT processTexDeclBytes(UINT type, bool destination) {
     switch (type) {
         case D3DDECLTYPE_FLOAT1:
@@ -713,6 +735,14 @@ static bool describeProcessFvf(DWORD fvf, FvfProcessLayout& layout) {
             layout.positionOffset = 0u;
             layout.positionBytes = 12u;
             break;
+        case D3DFVF_XYZB1:
+        case D3DFVF_XYZB2:
+        case D3DFVF_XYZB3:
+        case D3DFVF_XYZB4:
+        case D3DFVF_XYZB5:
+            layout.positionOffset = 0u;
+            layout.positionBytes = 12u;
+            break;
         case D3DFVF_XYZRHW:
         case D3DFVF_XYZW:
             layout.positionOffset = 0u;
@@ -722,6 +752,33 @@ static bool describeProcessFvf(DWORD fvf, FvfProcessLayout& layout) {
             return false;
     }
     UINT offset = layout.positionBytes;
+    if (processFvfXyzbPosition(fvf & D3DFVF_POSITION_MASK)) {
+        const UINT betaCount =
+            ((fvf & D3DFVF_POSITION_MASK) - D3DFVF_XYZB1) / 2u + 1u;
+        const bool lastBetaUbyte4 = (fvf & D3DFVF_LASTBETA_UBYTE4) != 0;
+        const bool lastBetaD3dcolor = (fvf & D3DFVF_LASTBETA_D3DCOLOR) != 0;
+        if (lastBetaUbyte4 && lastBetaD3dcolor) return false;
+        if (lastBetaUbyte4 || lastBetaD3dcolor) {
+            const UINT weightCount = betaCount - 1u;
+            if (weightCount > 4u) return false;
+            if (weightCount != 0u) {
+                layout.blendWeight = true;
+                layout.blendWeightOffset = offset;
+                layout.blendWeightBytes = weightCount * sizeof(float);
+                offset += layout.blendWeightBytes;
+            }
+            layout.blendIndices = true;
+            layout.blendIndicesOffset = offset;
+            layout.blendIndicesBytes = 4u;
+            offset += 4u;
+        } else {
+            if (betaCount > 4u) return false;
+            layout.blendWeight = true;
+            layout.blendWeightOffset = offset;
+            layout.blendWeightBytes = betaCount * sizeof(float);
+            offset += layout.blendWeightBytes;
+        }
+    }
     if (fvf & D3DFVF_NORMAL) {
         layout.normal = true;
         layout.normalOffset = offset;
@@ -6318,7 +6375,9 @@ public:
         if (fvf_ != 0) {
             const DWORD positionMask = fvf_ & D3DFVF_POSITION_MASK;
             if ((positionMask != D3DFVF_XYZ &&
-                 (!programmable || positionMask != D3DFVF_XYZW)) ||
+                 (!programmable ||
+                  (positionMask != D3DFVF_XYZW &&
+                   !processFvfXyzbPosition(positionMask)))) ||
                 !describeProcessFvf(fvf_, srcLayout)) {
                 return invalid("source FVF unsupported");
             }
