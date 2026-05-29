@@ -618,6 +618,16 @@ struct FvfProcessLayout {
     UINT texBytes[8]{};
     UINT texType[8]{};
     UINT texCount = 0;
+    struct GenericInput {
+        UINT usage = 0;
+        UINT usageIndex = 0;
+        UINT stream = 0;
+        UINT offset = 0;
+        UINT type = D3DDECLTYPE_FLOAT4;
+        UINT bytes = 0;
+    };
+    GenericInput genericInput[16]{};
+    UINT genericInputCount = 0;
     bool normal = false;
     bool tangent = false;
     bool binormal = false;
@@ -642,6 +652,14 @@ struct ProcessShaderIo {
     int inputDiffuse = -1;
     int inputSpecular = -1;
     int inputTex[8]{-1, -1, -1, -1, -1, -1, -1, -1};
+    struct GenericInput {
+        UINT usage = 0;
+        UINT usageIndex = 0;
+        int reg = -1;
+    };
+    GenericInput inputGeneric[16]{};
+    UINT inputGenericCount = 0;
+    bool inputGenericOverflow = false;
     ProcessShaderReg outputPosition{};
     ProcessShaderReg outputDiffuse{};
     ProcessShaderReg outputSpecular{};
@@ -926,6 +944,25 @@ static bool describeProcessDeclaration(IDirect3DVertexDeclaration9* declaration,
             layout.texType[e.usageIndex] = e.type;
         } else {
             if (destination) return false;
+            const UINT genericBytes = processFloatVectorDeclBytes(e.type, true);
+            if (genericBytes == 0u ||
+                layout.genericInputCount >= std::size(layout.genericInput)) {
+                return false;
+            }
+            for (UINT generic = 0; generic < layout.genericInputCount; ++generic) {
+                if (layout.genericInput[generic].usage == e.usage &&
+                    layout.genericInput[generic].usageIndex == e.usageIndex) {
+                    return false;
+                }
+            }
+            layout.genericInput[layout.genericInputCount++] = {
+                e.usage,
+                e.usageIndex,
+                e.stream,
+                e.offset,
+                e.type,
+                genericBytes,
+            };
         }
     }
     return (destination ? layout.positionBytes == 16u
@@ -1098,6 +1135,14 @@ static void noteProcessShaderInput(ProcessShaderIo& io, UINT usage,
         io.inputSpecular = static_cast<int>(reg);
     } else if (usage == D3DDECLUSAGE_TEXCOORD && usageIndex < 8) {
         io.inputTex[usageIndex] = static_cast<int>(reg);
+    } else if (io.inputGenericCount < std::size(io.inputGeneric)) {
+        io.inputGeneric[io.inputGenericCount++] = {
+            usage,
+            usageIndex,
+            static_cast<int>(reg),
+        };
+    } else {
+        io.inputGenericOverflow = true;
     }
 }
 
@@ -1144,7 +1189,9 @@ static bool analyzeSimpleProcessVertexShader(const std::vector<DWORD>& words,
     for (size_t index = 1; index < words.size();) {
         const DWORD token = words[index++];
         const UINT opcode = token & D3DSI_OPCODE_MASK;
-        if (opcode == D3DSIO_END) return io.hasOutputPosition;
+        if (opcode == D3DSIO_END) {
+            return io.hasOutputPosition && !io.inputGenericOverflow;
+        }
         if (opcode == D3DSIO_COMMENT) {
             if (!shaderSkipComment(words, index, token)) return false;
             continue;
@@ -6504,6 +6551,25 @@ public:
                          srcLayout.texOffset[i] + srcLayout.texBytes[i]);
             return true;
         };
+        auto findGenericInput = [&](UINT usage, UINT usageIndex)
+            -> const FvfProcessLayout::GenericInput* {
+            for (UINT i = 0; i < srcLayout.genericInputCount; ++i) {
+                const auto& generic = srcLayout.genericInput[i];
+                if (generic.usage == usage &&
+                    generic.usageIndex == usageIndex) {
+                    return &generic;
+                }
+            }
+            return nullptr;
+        };
+        auto requireGenericRead = [&](UINT usage, UINT usageIndex) -> bool {
+            const auto* generic = findGenericInput(usage, usageIndex);
+            if (!generic) return false;
+            srcReadBytes[generic->stream] =
+                std::max(srcReadBytes[generic->stream],
+                         generic->offset + generic->bytes);
+            return true;
+        };
         if (programmable) {
             if (!shaderIo.hasOutputPosition) return invalid("shader lacks position output");
             if (dstLayout.diffuse && !shaderIo.hasOutputDiffuse) return invalid("shader lacks diffuse output");
@@ -6523,6 +6589,12 @@ public:
             for (UINT i = 0; i < 8; ++i) {
                 if (shaderIo.inputTex[i] >= 0 && !requireTexRead(i, false)) {
                     return invalid("shader texcoord input missing");
+                }
+            }
+            for (UINT i = 0; i < shaderIo.inputGenericCount; ++i) {
+                const auto& generic = shaderIo.inputGeneric[i];
+                if (!requireGenericRead(generic.usage, generic.usageIndex)) {
+                    return invalid("shader generic input missing");
                 }
             }
         } else {
@@ -7004,6 +7076,22 @@ public:
                 for (UINT tex = 0; tex < 8; ++tex) {
                     if (shaderIo.inputTex[tex] >= 0 &&
                         !loadTexInput(shaderIo.inputTex[tex], tex)) {
+                        hr = D3DERR_INVALIDCALL;
+                        break;
+                    }
+                }
+                if (FAILED(hr)) break;
+                for (UINT genericIndex = 0;
+                     genericIndex < shaderIo.inputGenericCount; ++genericIndex) {
+                    const auto& shaderGeneric = shaderIo.inputGeneric[genericIndex];
+                    const auto* generic = findGenericInput(
+                        shaderGeneric.usage, shaderGeneric.usageIndex);
+                    if (!generic ||
+                        !loadDeclVectorInput(shaderGeneric.reg,
+                                             generic->stream,
+                                             generic->offset,
+                                             generic->type,
+                                             generic->bytes)) {
                         hr = D3DERR_INVALIDCALL;
                         break;
                     }
