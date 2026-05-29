@@ -434,6 +434,22 @@ static const DWORD p8_cube_sample_ps_2_0[] =
     D3DSIO_END
 };
 
+static const DWORD p8_volume_sample_ps_2_0[] =
+{
+    D3DPS_VERSION(2, 0),
+    P8_PS_INST(D3DSIO_DCL, 2),
+    D3DDECLUSAGE_TEXCOORD,
+    P8_PS_DST(D3DSPR_TEXTURE, 0, 0x7),
+    P8_PS_INST(D3DSIO_DCL, 2),
+    D3DSTT_VOLUME,
+    P8_PS_DST(D3DSPR_SAMPLER, 0, 0xf),
+    P8_PS_INST(D3DSIO_TEX, 3),
+    P8_PS_DST(D3DSPR_TEMP, 0, 0xf),
+    P8_PS_SRC(D3DSPR_TEXTURE, 0),
+    P8_PS_SRC(D3DSPR_SAMPLER, 0),
+    D3DSIO_END
+};
+
 #undef P8_PS_INST
 #undef P8_PS_SRC
 #undef P8_PS_DST
@@ -608,6 +624,134 @@ done:
     return;
 }
 
+static void check_visual_palettized_volume_texture_sampler(
+        IDirect3DDevice9 *device, D3DFORMAT format, const BYTE *texels,
+        UINT texel_bytes, const DWORD *expected)
+{
+    struct volume_point
+    {
+        float x, y, z, rhw;
+        float u, v, w;
+    };
+    static const struct volume_point points[] =
+    {
+        {0.5f, 0.5f, 0.0f, 1.0f, 0.5f, 0.5f, 0.125f},
+        {1.5f, 0.5f, 0.0f, 1.0f, 0.5f, 0.5f, 0.375f},
+        {2.5f, 0.5f, 0.0f, 1.0f, 0.5f, 0.5f, 0.625f},
+        {3.5f, 0.5f, 0.0f, 1.0f, 0.5f, 0.5f, 0.875f},
+    };
+    IDirect3DVolumeTexture9 *texture = NULL;
+    IDirect3DSurface9 *readback = NULL;
+    IDirect3DPixelShader9 *ps = NULL;
+    IDirect3DSurface9 *rt = NULL;
+    D3DLOCKED_BOX locked;
+    D3DLOCKED_RECT rb;
+    D3DVIEWPORT9 vp;
+    DWORD point_size;
+    HRESULT hr;
+    UINT z;
+
+    hr = IDirect3DDevice9_CreateVolumeTexture(device, 1, 1, 4, 1, 0,
+            format, D3DPOOL_MANAGED, &texture, NULL);
+    CHECK_HR(hr, D3D_OK);
+    if (FAILED(hr))
+        goto done;
+
+    memset(&locked, 0xcc, sizeof(locked));
+    hr = IDirect3DVolumeTexture9_LockBox(texture, 0, &locked, NULL, 0);
+    CHECK_HR(hr, D3D_OK);
+    if (FAILED(hr))
+        goto done_texture;
+    CHECK_TRUE(locked.RowPitch >= (INT)texel_bytes);
+    CHECK_TRUE(locked.SlicePitch >= locked.RowPitch);
+    if (locked.RowPitch >= (INT)texel_bytes
+            && locked.SlicePitch >= locked.RowPitch)
+    {
+        BYTE *base = locked.pBits;
+        for (z = 0; z < 4; ++z)
+            memcpy(base + z * locked.SlicePitch, texels + z * texel_bytes,
+                    texel_bytes);
+    }
+    CHECK_HR(IDirect3DVolumeTexture9_UnlockBox(texture, 0), D3D_OK);
+
+    hr = IDirect3DDevice9_CreateRenderTarget(device, 4, 1,
+            D3DFMT_A8R8G8B8, D3DMULTISAMPLE_NONE, 0, FALSE, &rt, NULL);
+    CHECK_HR(hr, D3D_OK);
+    if (FAILED(hr))
+        goto done_texture;
+    hr = IDirect3DDevice9_CreateOffscreenPlainSurface(device, 4, 1,
+            D3DFMT_A8R8G8B8, D3DPOOL_SYSTEMMEM, &readback, NULL);
+    CHECK_HR(hr, D3D_OK);
+    if (FAILED(hr))
+        goto done_rt;
+
+    CHECK_HR(IDirect3DDevice9_SetRenderTarget(device, 0, rt), D3D_OK);
+    vp.X = 0;
+    vp.Y = 0;
+    vp.Width = 4;
+    vp.Height = 1;
+    vp.MinZ = 0.0f;
+    vp.MaxZ = 1.0f;
+    CHECK_HR(IDirect3DDevice9_SetViewport(device, &vp), D3D_OK);
+    CHECK_HR(IDirect3DDevice9_SetRenderState(device, D3DRS_LIGHTING, FALSE),
+            D3D_OK);
+    CHECK_HR(IDirect3DDevice9_SetRenderState(device, D3DRS_ZENABLE, FALSE),
+            D3D_OK);
+    point_size = 0x3f800000u;
+    CHECK_HR(IDirect3DDevice9_SetRenderState(device, D3DRS_POINTSIZE,
+            point_size), D3D_OK);
+    CHECK_HR(IDirect3DDevice9_SetSamplerState(device, 0, D3DSAMP_MINFILTER,
+            D3DTEXF_POINT), D3D_OK);
+    CHECK_HR(IDirect3DDevice9_SetSamplerState(device, 0, D3DSAMP_MAGFILTER,
+            D3DTEXF_POINT), D3D_OK);
+    CHECK_HR(IDirect3DDevice9_SetSamplerState(device, 0, D3DSAMP_MIPFILTER,
+            D3DTEXF_NONE), D3D_OK);
+    CHECK_HR(IDirect3DDevice9_SetTexture(device, 0,
+            (IDirect3DBaseTexture9 *)texture), D3D_OK);
+    hr = IDirect3DDevice9_CreatePixelShader(device, p8_volume_sample_ps_2_0,
+            &ps);
+    CHECK_HR(hr, D3D_OK);
+    if (FAILED(hr))
+        goto done_texture_bind;
+    CHECK_HR(IDirect3DDevice9_SetPixelShader(device, ps), D3D_OK);
+    CHECK_HR(IDirect3DDevice9_SetFVF(device, D3DFVF_XYZRHW | D3DFVF_TEX1
+            | D3DFVF_TEXCOORDSIZE3(0)), D3D_OK);
+
+    CHECK_HR(IDirect3DDevice9_BeginScene(device), D3D_OK);
+    CHECK_HR(IDirect3DDevice9_Clear(device, 0, NULL, D3DCLEAR_TARGET,
+            0xff000000u, 0.0f, 0), D3D_OK);
+    CHECK_HR(IDirect3DDevice9_DrawPrimitiveUP(device, D3DPT_POINTLIST,
+            ARRAY_SIZE(points), points, sizeof(points[0])), D3D_OK);
+    CHECK_HR(IDirect3DDevice9_EndScene(device), D3D_OK);
+    CHECK_HR(IDirect3DDevice9_GetRenderTargetData(device, rt, readback),
+            D3D_OK);
+
+    memset(&rb, 0xcc, sizeof(rb));
+    hr = IDirect3DSurface9_LockRect(readback, &rb, NULL, D3DLOCK_READONLY);
+    CHECK_HR(hr, D3D_OK);
+    if (SUCCEEDED(hr))
+    {
+        const DWORD *row = rb.pBits;
+        CHECK_TRUE(row[0] == expected[0]);
+        CHECK_TRUE(row[1] == expected[1]);
+        CHECK_TRUE(row[2] == expected[2]);
+        CHECK_TRUE(row[3] == expected[3]);
+        CHECK_HR(IDirect3DSurface9_UnlockRect(readback), D3D_OK);
+    }
+
+    CHECK_HR(IDirect3DDevice9_SetPixelShader(device, NULL), D3D_OK);
+    if (ps) IDirect3DPixelShader9_Release(ps);
+done_texture_bind:
+    CHECK_HR(IDirect3DDevice9_SetTexture(device, 0, NULL), D3D_OK);
+    IDirect3DSurface9_Release(readback);
+done_rt:
+    IDirect3DSurface9_Release(rt);
+done_texture:
+    IDirect3DVolumeTexture9_Release(texture);
+done:
+    return;
+}
+
 static void check_visual_palettized_cube_texture_sampler(
         IDirect3DDevice9 *device, D3DFORMAT format, const BYTE *texels,
         UINT texel_bytes, const DWORD *expected)
@@ -767,10 +911,15 @@ void test_visual_p8_texture_sampler_policy(const struct d3d9_api *api)
     static const BYTE p8_lod_texels[] = {5};
     static const BYTE a8p8_lod_texels[] = {5, 0x60};
     static const BYTE p8_cube_texels[] = {1, 2, 3, 4, 5, 6};
+    static const BYTE p8_volume_texels[] = {1, 2, 5, 6};
     static const BYTE a8p8_cube_texels[] =
     {
         1, 0xf0, 2, 0xd0, 3, 0xb0,
         4, 0x90, 5, 0x70, 6, 0x50,
+    };
+    static const BYTE a8p8_volume_texels[] =
+    {
+        1, 0xe0, 2, 0xc0, 5, 0xa0, 6, 0x80,
     };
     static const DWORD p8_expected[] =
     {
@@ -811,6 +960,14 @@ void test_visual_p8_texture_sampler_policy(const struct d3d9_api *api)
     {
         0xf0112233u, 0xd0445566u, 0xb0778899u,
         0x90aabbccu, 0x70ddee11u, 0x503366ccu,
+    };
+    static const DWORD p8_volume_expected[] =
+    {
+        0xff112233u, 0xff445566u, 0xffddee11u, 0xff3366ccu,
+    };
+    static const DWORD a8p8_volume_expected[] =
+    {
+        0xe0112233u, 0xc0445566u, 0xa0ddee11u, 0x803366ccu,
     };
     IDirect3DDevice9 *device = NULL;
     PALETTEENTRY updated_palette[256];
@@ -858,6 +1015,22 @@ void test_visual_p8_texture_sampler_policy(const struct d3d9_api *api)
     if (hr != D3D_OK)
     {
         skip_current_test("D3DFMT_A8P8 cube textures are not supported");
+        goto done_d3d9;
+    }
+    hr = IDirect3D9_CheckDeviceFormat(d3d9, D3DADAPTER_DEFAULT,
+            D3DDEVTYPE_HAL, D3DFMT_X8R8G8B8, 0, D3DRTYPE_VOLUMETEXTURE,
+            D3DFMT_P8);
+    if (hr != D3D_OK)
+    {
+        skip_current_test("D3DFMT_P8 volume textures are not supported");
+        goto done_d3d9;
+    }
+    hr = IDirect3D9_CheckDeviceFormat(d3d9, D3DADAPTER_DEFAULT,
+            D3DDEVTYPE_HAL, D3DFMT_X8R8G8B8, 0, D3DRTYPE_VOLUMETEXTURE,
+            D3DFMT_A8P8);
+    if (hr != D3D_OK)
+    {
+        skip_current_test("D3DFMT_A8P8 volume textures are not supported");
         goto done_d3d9;
     }
 
@@ -927,6 +1100,10 @@ void test_visual_p8_texture_sampler_policy(const struct d3d9_api *api)
                 p8_cube_texels, 1, p8_cube_expected);
         check_visual_palettized_cube_texture_sampler(device, D3DFMT_A8P8,
                 a8p8_cube_texels, 2, a8p8_cube_expected);
+        check_visual_palettized_volume_texture_sampler(device, D3DFMT_P8,
+                p8_volume_texels, 1, p8_volume_expected);
+        check_visual_palettized_volume_texture_sampler(device, D3DFMT_A8P8,
+                a8p8_volume_texels, 2, a8p8_volume_expected);
     }
     else
     {

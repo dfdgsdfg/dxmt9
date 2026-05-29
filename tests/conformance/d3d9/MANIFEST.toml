@@ -3971,7 +3971,7 @@ arches = ["x64", "x86"]
 area = "palette-texture"
 owner = "core/resources"
 requirements = ["R-TEST-12.3", "R-TEST-12.13"]
-acceptance = ["D3DFMT_P8 textures expose one-byte index locks, D3DFMT_A8P8 textures expose index+alpha locks, SetPaletteEntries/SetCurrentTexturePalette select the active palette, 2D/cube texture CheckDeviceFormat queries report support, and fixed-function plus ps_2_0 texld sampling read the palette-expanded A8R8G8B8 backing through 2x2 render-target readbacks including A8P8 texel alpha, level-1 SetLOD sampling, palette updates while the texture is bound, and ps_2_0 samplerCUBE readbacks across all six P8/A8P8 cube faces"]
+acceptance = ["D3DFMT_P8 textures expose one-byte index locks, D3DFMT_A8P8 textures expose index+alpha locks, SetPaletteEntries/SetCurrentTexturePalette select the active palette, 2D/cube/volume texture CheckDeviceFormat queries report support, and fixed-function plus ps_2_0 texld sampling read the palette-expanded A8R8G8B8 backing through 2x2 render-target readbacks including A8P8 texel alpha, level-1 SetLOD sampling, palette updates while the texture is bound, ps_2_0 samplerCUBE readbacks across all six P8/A8P8 cube faces, and ps_2_0 sampler3D readbacks across four P8/A8P8 volume slices"]
 status = "scaffolded"
 
 [[case]]
