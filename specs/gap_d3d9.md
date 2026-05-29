@@ -130,6 +130,8 @@ Broad conformance Wine-run sweeps remain ongoing. The tracked
 the M4x4/MOV subset with 146 checks before the MAD/FLOAT4-POSITION expansion;
 the latest targeted app-local replay skips before D3D entry because Sikarugir
 cannot attach `winemetal.dll` (`abi-hash unix-call failed status=0xc0000003`).
+The scaffold now also covers `D3DFVF_PSIZE` as a programmable source input,
+separate from declaration PSIZE generic input and destination PSIZE writeback.
 The formerly
 deferred GPU-runtime pixel validations for RESZ MSAA→INTZ readback, NULL RT
 depth-only rendering, and MIPMAPLODBIAS mip selection are covered by
@@ -315,7 +317,7 @@ after the silent-coverage fixes landed.
 | BLENDWEIGHT | 1 | ✅ | dxmt9_ffp_shaders.hpp:61; dxmt9_ffp_shaders.cpp:282; d3d9_pe_device.cpp:371 | shader_transform_spec.cpp:418 | |
 | BLENDINDICES | 2 | ✅ | dxmt9_ffp_shaders.hpp:62; dxmt9_ffp_shaders.cpp:287 | shader_transform_spec.cpp:419 | |
 | NORMAL | 3 | ✅ | dxmt9_ffp_shaders.hpp:63; dxmt9_ffp_shaders.cpp:274; d3d9_pe_device.cpp:378 | shader_argbuf_binding_value_spec.cpp:482 | |
-| PSIZE | 4 | ✅ | dxmt9_ffp_shaders.hpp:64; dxmt9_ffp_shaders.cpp:278; d3d9_pe_device.cpp:384 | d3d9_conformance_visual_misc.c | ProcessVertices generic programmable source readback covers PE declaration decode; destination FVF/declaration readbacks cover fixed-function passthrough and programmable PSIZE output |
+| PSIZE | 4 | ✅ | dxmt9_ffp_shaders.hpp:64; dxmt9_ffp_shaders.cpp:278; d3d9_pe_device.cpp:384 | d3d9_conformance_visual_misc.c | ProcessVertices declaration and FVF programmable source readbacks cover PE decode; destination FVF/declaration readbacks cover fixed-function passthrough and programmable PSIZE output |
 | TEXCOORD | 5 | ✅ | dxmt9_ffp_shaders.hpp:65; dxmt9_ffp_shaders.cpp:291; d3d9_pe_device.cpp:413 | core_shader_translator_spec.cpp:254 | |
 | TANGENT | 6 | ✅ | dxmt9_ffp_shaders.hpp:66; dxmt9_shader_decoder.cpp:isSupportedDeclUsage; decodeVertexShaderInputLayout | shader_bytecode_validation_spec.cpp:testGenericDeclUsagesDecodeCleanly | programmable VS accepts as a generic vin[] semantic; FFP treats it as an extra non-FFP element |
 | BINORMAL | 7 | ✅ | dxmt9_ffp_shaders.hpp:67; dxmt9_shader_decoder.cpp:isSupportedDeclUsage; decodeVertexShaderInputLayout | shader_bytecode_validation_spec.cpp:testGenericDeclUsagesDecodeCleanly | programmable VS accepts as a generic vin[] semantic; FFP treats it as an extra non-FFP element |

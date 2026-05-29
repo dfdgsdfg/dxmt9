@@ -652,6 +652,7 @@ struct ProcessShaderIo {
     int inputBinormal = -1;
     int inputBlendWeight = -1;
     int inputBlendIndices = -1;
+    int inputPSize = -1;
     int inputDiffuse = -1;
     int inputSpecular = -1;
     int inputTex[8]{-1, -1, -1, -1, -1, -1, -1, -1};
@@ -938,6 +939,12 @@ static bool describeProcessDeclaration(IDirect3DVertexDeclaration9* declaration,
             layout.blendIndicesStream = e.stream;
             layout.blendIndicesOffset = e.offset;
             layout.blendIndicesBytes = 4u;
+        } else if (!destination && e.usage == D3DDECLUSAGE_PSIZE &&
+                   e.usageIndex == 0) {
+            if (e.type != D3DDECLTYPE_FLOAT1 || layout.psize) return false;
+            layout.psize = true;
+            layout.psizeStream = e.stream;
+            layout.psizeOffset = e.offset;
         } else if (destination && e.usage == D3DDECLUSAGE_PSIZE &&
                    e.usageIndex == 0) {
             if (e.type != D3DDECLTYPE_FLOAT1 || layout.psize) return false;
@@ -1144,6 +1151,8 @@ static void noteProcessShaderInput(ProcessShaderIo& io, UINT usage,
         io.inputBlendWeight = static_cast<int>(reg);
     } else if (usage == D3DDECLUSAGE_BLENDINDICES && usageIndex == 0) {
         io.inputBlendIndices = static_cast<int>(reg);
+    } else if (usage == D3DDECLUSAGE_PSIZE && usageIndex == 0) {
+        io.inputPSize = static_cast<int>(reg);
     } else if (usage == D3DDECLUSAGE_COLOR && usageIndex == 0) {
         io.inputDiffuse = static_cast<int>(reg);
     } else if (usage == D3DDECLUSAGE_COLOR && usageIndex == 1) {
@@ -6610,6 +6619,7 @@ public:
             if (shaderIo.inputBinormal >= 0 && !requireBinormalRead()) return invalid("shader binormal input missing");
             if (shaderIo.inputBlendWeight >= 0 && !requireBlendWeightRead()) return invalid("shader blendweight input missing");
             if (shaderIo.inputBlendIndices >= 0 && !requireBlendIndicesRead()) return invalid("shader blendindices input missing");
+            if (shaderIo.inputPSize >= 0 && !requirePSizeRead()) return invalid("shader psize input missing");
             if (shaderIo.inputDiffuse >= 0 && !requireDiffuseRead()) return invalid("shader diffuse input missing");
             if (shaderIo.inputSpecular >= 0 && !requireSpecularRead()) return invalid("shader specular input missing");
             for (UINT i = 0; i < 8; ++i) {
@@ -7088,6 +7098,13 @@ public:
                     !loadUbyte4Input(shaderIo.inputBlendIndices,
                                      srcLayout.blendIndicesStream,
                                      srcLayout.blendIndicesOffset)) {
+                    hr = D3DERR_INVALIDCALL;
+                    break;
+                }
+                if (shaderIo.inputPSize >= 0 &&
+                    !loadFloatVectorInput(shaderIo.inputPSize,
+                                          srcLayout.psizeStream,
+                                          srcLayout.psizeOffset, 4u)) {
                     hr = D3DERR_INVALIDCALL;
                     break;
                 }

@@ -1053,6 +1053,39 @@ void test_visual_process_vertices_xyzhw_policy(const struct d3d9_api *api)
         PROCESS_VS_SRC(D3DSPR_CONST, 4),
         D3DSIO_END
     };
+    static const DWORD process_vs_fvf_psize_input_3_0[] =
+    {
+        D3DVS_VERSION(3, 0),
+        PROCESS_VS_INST(D3DSIO_DCL, 2),
+        PROCESS_VS_DCL(D3DDECLUSAGE_POSITION, 0),
+        PROCESS_VS_DST(D3DSPR_INPUT, 0, 0xf),
+        PROCESS_VS_INST(D3DSIO_DCL, 2),
+        PROCESS_VS_DCL(D3DDECLUSAGE_COLOR, 0),
+        PROCESS_VS_DST(D3DSPR_INPUT, 1, 0xf),
+        PROCESS_VS_INST(D3DSIO_DCL, 2),
+        PROCESS_VS_DCL(D3DDECLUSAGE_PSIZE, 0),
+        PROCESS_VS_DST(D3DSPR_INPUT, 2, 0xf),
+        PROCESS_VS_INST(D3DSIO_DCL, 2),
+        PROCESS_VS_DCL(D3DDECLUSAGE_POSITION, 0),
+        PROCESS_VS_DST(D3DSPR_OUTPUT, 0, 0xf),
+        PROCESS_VS_INST(D3DSIO_DCL, 2),
+        PROCESS_VS_DCL(D3DDECLUSAGE_COLOR, 0),
+        PROCESS_VS_DST(D3DSPR_OUTPUT, 1, 0xf),
+        PROCESS_VS_INST(D3DSIO_DCL, 2),
+        PROCESS_VS_DCL(D3DDECLUSAGE_TEXCOORD, 0),
+        PROCESS_VS_DST(D3DSPR_OUTPUT, 2, 0xf),
+        PROCESS_VS_INST(D3DSIO_M4x4, 3),
+        PROCESS_VS_DST(D3DSPR_OUTPUT, 0, 0xf),
+        PROCESS_VS_SRC(D3DSPR_INPUT, 0),
+        PROCESS_VS_SRC(D3DSPR_CONST, 0),
+        PROCESS_VS_INST(D3DSIO_MOV, 2),
+        PROCESS_VS_DST(D3DSPR_OUTPUT, 1, 0xf),
+        PROCESS_VS_SRC(D3DSPR_INPUT, 1),
+        PROCESS_VS_INST(D3DSIO_MOV, 2),
+        PROCESS_VS_DST(D3DSPR_OUTPUT, 2, 0xf),
+        PROCESS_VS_SRC(D3DSPR_INPUT, 2),
+        D3DSIO_END
+    };
     static const DWORD process_vs_sparse_texcoord_3_0[] =
     {
         D3DVS_VERSION(3, 0),
@@ -2586,6 +2619,13 @@ void test_visual_process_vertices_xyzhw_policy(const struct d3d9_api *api)
         {400.0f, 300.0f, 0.0f, 1.0f, 6.25f, 0xff0000ffu, 0.50f, 0.75f},
         {400.0f, 180.0f, 0.0f, 1.0f, 6.25f, 0xffffffffu, 1.00f, 1.00f},
     };
+    const struct dst_vertex expected_fvf_psize_input[] =
+    {
+        {240.0f, 300.0f, 0.0f, 1.0f, 0xffff0000u, 1.25f, 0.00f},
+        {240.0f, 180.0f, 0.0f, 1.0f, 0xff00ff00u, 2.50f, 0.00f},
+        {400.0f, 300.0f, 0.0f, 1.0f, 0xff0000ffu, 3.75f, 0.00f},
+        {400.0f, 180.0f, 0.0f, 1.0f, 0xffffffffu, 5.00f, 0.00f},
+    };
     const struct dst_vertex expected_instanced_source[] =
     {
         {240.0f, 300.0f, 0.0f, 1.0f, 0xffff0000u, 0.00f, 0.25f},
@@ -2865,6 +2905,7 @@ void test_visual_process_vertices_xyzhw_policy(const struct d3d9_api *api)
     IDirect3DVertexBuffer9 *prog_sparse_tex_dst_vb = NULL;
     IDirect3DVertexBuffer9 *prog_sparse_tex7_dst_vb = NULL;
     IDirect3DVertexBuffer9 *prog_psize_dst_vb = NULL;
+    IDirect3DVertexBuffer9 *prog_fvf_psize_dst_vb = NULL;
     IDirect3DVertexBuffer9 *prog_normal_dst_vb = NULL;
     IDirect3DVertexBuffer9 *prog_raw_normal_dst_vb = NULL;
     IDirect3DVertexBuffer9 *prog_ubyte4n_normal_dst_vb = NULL;
@@ -4170,6 +4211,64 @@ void test_visual_process_vertices_xyzhw_policy(const struct d3d9_api *api)
             CHECK_TRUE(dv < 0.01f);
         }
         CHECK_HR(IDirect3DVertexBuffer9_Unlock(prog_psize_dst_vb), D3D_OK);
+    }
+    CHECK_HR(IDirect3DDevice9_SetVertexShader(device, NULL), D3D_OK);
+    IDirect3DVertexShader9_Release(vs);
+    vs = NULL;
+
+    hr = IDirect3DDevice9_CreateVertexShader(device,
+            process_vs_fvf_psize_input_3_0, &vs);
+    CHECK_HR(hr, D3D_OK);
+    if (FAILED(hr))
+        goto done_device;
+    hr = IDirect3DDevice9_CreateVertexBuffer(device,
+            sizeof(expected_fvf_psize_input), 0, 0, D3DPOOL_SYSTEMMEM,
+            &prog_fvf_psize_dst_vb, NULL);
+    CHECK_HR(hr, D3D_OK);
+    if (FAILED(hr))
+        goto done_device;
+    CHECK_HR(IDirect3DDevice9_SetVertexShaderConstantF(device, 0,
+            (const float *)vs_constants, 4), D3D_OK);
+    CHECK_HR(IDirect3DDevice9_SetStreamSource(device, 0, src_psize_vb, 0,
+            sizeof(struct src_psize_vertex)), D3D_OK);
+    CHECK_HR(IDirect3DDevice9_SetFVF(device,
+            D3DFVF_XYZ | D3DFVF_PSIZE | D3DFVF_DIFFUSE | D3DFVF_TEX1),
+            D3D_OK);
+    CHECK_HR(IDirect3DDevice9_SetVertexShader(device, vs), D3D_OK);
+    CHECK_HR(IDirect3DDevice9_ProcessVertices(device, 0, 0,
+            ARRAY_SIZE(src_psize), prog_fvf_psize_dst_vb, dst_decl, 0),
+            D3D_OK);
+
+    hr = IDirect3DVertexBuffer9_Lock(prog_fvf_psize_dst_vb, 0,
+            sizeof(expected_fvf_psize_input), (void **)&mapped,
+            D3DLOCK_READONLY);
+    CHECK_HR(hr, D3D_OK);
+    if (SUCCEEDED(hr))
+    {
+        for (i = 0; i < ARRAY_SIZE(expected_fvf_psize_input); ++i)
+        {
+            float dx = mapped[i].x - expected_fvf_psize_input[i].x;
+            float dy = mapped[i].y - expected_fvf_psize_input[i].y;
+            float dz = mapped[i].z - expected_fvf_psize_input[i].z;
+            float dw = mapped[i].rhw - expected_fvf_psize_input[i].rhw;
+            float du = mapped[i].u - expected_fvf_psize_input[i].u;
+            float dv = mapped[i].v - expected_fvf_psize_input[i].v;
+            if (dx < 0.0f) dx = -dx;
+            if (dy < 0.0f) dy = -dy;
+            if (dz < 0.0f) dz = -dz;
+            if (dw < 0.0f) dw = -dw;
+            if (du < 0.0f) du = -du;
+            if (dv < 0.0f) dv = -dv;
+            CHECK_TRUE(dx < 0.01f);
+            CHECK_TRUE(dy < 0.01f);
+            CHECK_TRUE(dz < 0.01f);
+            CHECK_TRUE(dw < 0.01f);
+            CHECK_TRUE(mapped[i].color == expected_fvf_psize_input[i].color);
+            CHECK_TRUE(du < 0.01f);
+            CHECK_TRUE(dv < 0.01f);
+        }
+        CHECK_HR(IDirect3DVertexBuffer9_Unlock(prog_fvf_psize_dst_vb),
+                D3D_OK);
     }
     CHECK_HR(IDirect3DDevice9_SetVertexShader(device, NULL), D3D_OK);
     IDirect3DVertexShader9_Release(vs);
@@ -6633,6 +6732,7 @@ done_device:
     if (prog_raw_normal_dst_vb) IDirect3DVertexBuffer9_Release(prog_raw_normal_dst_vb);
     if (prog_normal_dst_vb) IDirect3DVertexBuffer9_Release(prog_normal_dst_vb);
     if (prog_specular_dst_vb) IDirect3DVertexBuffer9_Release(prog_specular_dst_vb);
+    if (prog_fvf_psize_dst_vb) IDirect3DVertexBuffer9_Release(prog_fvf_psize_dst_vb);
     if (prog_psize_dst_vb) IDirect3DVertexBuffer9_Release(prog_psize_dst_vb);
     if (prog_sparse_tex7_dst_vb) IDirect3DVertexBuffer9_Release(prog_sparse_tex7_dst_vb);
     if (prog_sparse_tex_dst_vb) IDirect3DVertexBuffer9_Release(prog_sparse_tex_dst_vb);
