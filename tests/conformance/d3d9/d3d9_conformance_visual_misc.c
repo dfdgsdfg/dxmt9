@@ -948,6 +948,21 @@ void test_visual_process_vertices_xyzhw_policy(const struct d3d9_api *api)
         PROCESS_VS_SRC(D3DSPR_INPUT, 2),
         D3DSIO_END
     };
+    static const DWORD process_vs_1_1[] =
+    {
+        D3DVS_VERSION(1, 1),
+        PROCESS_VS_INST(D3DSIO_M4x4, 3),
+        PROCESS_VS_DST(D3DSPR_RASTOUT, D3DSRO_POSITION, 0xf),
+        PROCESS_VS_SRC(D3DSPR_INPUT, 0),
+        PROCESS_VS_SRC(D3DSPR_CONST, 0),
+        PROCESS_VS_INST(D3DSIO_MOV, 2),
+        PROCESS_VS_DST(D3DSPR_ATTROUT, 0, 0xf),
+        PROCESS_VS_SRC(D3DSPR_INPUT, 5),
+        PROCESS_VS_INST(D3DSIO_MOV, 2),
+        PROCESS_VS_DST(D3DSPR_TEXCRDOUT, 0, 0xf),
+        PROCESS_VS_SRC(D3DSPR_INPUT, 7),
+        D3DSIO_END
+    };
     static const DWORD process_vs_output_relative_3_0[] =
     {
         D3DVS_VERSION(3, 0),
@@ -2277,6 +2292,7 @@ void test_visual_process_vertices_xyzhw_policy(const struct d3d9_api *api)
     IDirect3DVertexBuffer9 *src_decl_dst_vb = NULL;
     IDirect3DVertexBuffer9 *src_extra_dst_vb = NULL;
     IDirect3DVertexBuffer9 *prog_dst_vb = NULL;
+    IDirect3DVertexBuffer9 *prog_legacy_dst_vb = NULL;
     IDirect3DVertexBuffer9 *prog_normal_dst_vb = NULL;
     IDirect3DVertexBuffer9 *prog_raw_normal_dst_vb = NULL;
     IDirect3DVertexBuffer9 *prog_ubyte4n_normal_dst_vb = NULL;
@@ -4291,6 +4307,60 @@ void test_visual_process_vertices_xyzhw_policy(const struct d3d9_api *api)
 
     IDirect3DVertexShader9_Release(vs);
     vs = NULL;
+    hr = IDirect3DDevice9_CreateVertexShader(device, process_vs_1_1, &vs);
+    CHECK_HR(hr, D3D_OK);
+    if (FAILED(hr))
+        goto done_device;
+    hr = IDirect3DDevice9_CreateVertexBuffer(device, sizeof(expected), 0,
+            0, D3DPOOL_SYSTEMMEM, &prog_legacy_dst_vb, NULL);
+    CHECK_HR(hr, D3D_OK);
+    if (FAILED(hr))
+        goto done_device;
+    CHECK_HR(IDirect3DDevice9_SetVertexShaderConstantF(device, 0,
+            (const float *)vs_constants, 4), D3D_OK);
+    CHECK_HR(IDirect3DDevice9_SetFVF(device,
+            D3DFVF_XYZ | D3DFVF_DIFFUSE | D3DFVF_TEX1), D3D_OK);
+    CHECK_HR(IDirect3DDevice9_SetStreamSource(device, 0, src_vb, 0,
+            sizeof(src[0])), D3D_OK);
+    CHECK_HR(IDirect3DDevice9_SetStreamSource(device, 1, NULL, 0, 0),
+            D3D_OK);
+    CHECK_HR(IDirect3DDevice9_SetVertexShader(device, vs), D3D_OK);
+    CHECK_HR(IDirect3DDevice9_ProcessVertices(device, 0, 0,
+            ARRAY_SIZE(src), prog_legacy_dst_vb, dst_decl, 0), D3D_OK);
+
+    hr = IDirect3DVertexBuffer9_Lock(prog_legacy_dst_vb, 0,
+            sizeof(expected), (void **)&mapped, D3DLOCK_READONLY);
+    CHECK_HR(hr, D3D_OK);
+    if (SUCCEEDED(hr))
+    {
+        for (i = 0; i < ARRAY_SIZE(expected); ++i)
+        {
+            float dx = mapped[i].x - expected[i].x;
+            float dy = mapped[i].y - expected[i].y;
+            float dz = mapped[i].z - expected[i].z;
+            float dw = mapped[i].rhw - expected[i].rhw;
+            float du = mapped[i].u - expected[i].u;
+            float dv = mapped[i].v - expected[i].v;
+            if (dx < 0.0f) dx = -dx;
+            if (dy < 0.0f) dy = -dy;
+            if (dz < 0.0f) dz = -dz;
+            if (dw < 0.0f) dw = -dw;
+            if (du < 0.0f) du = -du;
+            if (dv < 0.0f) dv = -dv;
+            CHECK_TRUE(dx < 0.01f);
+            CHECK_TRUE(dy < 0.01f);
+            CHECK_TRUE(dz < 0.01f);
+            CHECK_TRUE(dw < 0.01f);
+            CHECK_TRUE(mapped[i].color == expected[i].color);
+            CHECK_TRUE(du < 0.01f);
+            CHECK_TRUE(dv < 0.01f);
+        }
+        CHECK_HR(IDirect3DVertexBuffer9_Unlock(prog_legacy_dst_vb),
+                D3D_OK);
+    }
+
+    IDirect3DVertexShader9_Release(vs);
+    vs = NULL;
     hr = IDirect3DDevice9_CreateVertexShader(device,
             process_vs_output_relative_3_0, &vs);
     CHECK_HR(hr, D3D_OK);
@@ -4987,6 +5057,7 @@ done_device:
     if (prog_ubyte4n_normal_dst_vb) IDirect3DVertexBuffer9_Release(prog_ubyte4n_normal_dst_vb);
     if (prog_raw_normal_dst_vb) IDirect3DVertexBuffer9_Release(prog_raw_normal_dst_vb);
     if (prog_normal_dst_vb) IDirect3DVertexBuffer9_Release(prog_normal_dst_vb);
+    if (prog_legacy_dst_vb) IDirect3DVertexBuffer9_Release(prog_legacy_dst_vb);
     if (prog_dst_vb) IDirect3DVertexBuffer9_Release(prog_dst_vb);
     if (src_extra_dst_vb) IDirect3DVertexBuffer9_Release(src_extra_dst_vb);
     if (src_decl_dst_vb) IDirect3DVertexBuffer9_Release(src_decl_dst_vb);
