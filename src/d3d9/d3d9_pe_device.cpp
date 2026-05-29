@@ -579,10 +579,16 @@ struct FvfProcessLayout {
     UINT positionBytes = 0;
     UINT normalStream = 0;
     UINT normalOffset = 0;
+    UINT normalType = D3DDECLTYPE_FLOAT3;
+    UINT normalBytes = 12u;
     UINT tangentStream = 0;
     UINT tangentOffset = 0;
+    UINT tangentType = D3DDECLTYPE_FLOAT3;
+    UINT tangentBytes = 12u;
     UINT binormalStream = 0;
     UINT binormalOffset = 0;
+    UINT binormalType = D3DDECLTYPE_FLOAT3;
+    UINT binormalBytes = 12u;
     UINT blendWeightStream = 0;
     UINT blendWeightOffset = 0;
     UINT blendWeightBytes = 0;
@@ -665,6 +671,30 @@ static UINT processTexDeclBytes(UINT type, bool destination) {
     }
 }
 
+static UINT processFloatVectorDeclBytes(UINT type, bool allowTwoComponent) {
+    switch (type) {
+        case D3DDECLTYPE_FLOAT1:
+            return allowTwoComponent ? 4u : 0u;
+        case D3DDECLTYPE_FLOAT2:
+            return allowTwoComponent ? 8u : 0u;
+        case D3DDECLTYPE_FLOAT3:
+            return 12u;
+        case D3DDECLTYPE_FLOAT4:
+            return 16u;
+        case D3DDECLTYPE_UBYTE4N:
+        case D3DDECLTYPE_SHORT2N:
+        case D3DDECLTYPE_USHORT2N:
+        case D3DDECLTYPE_FLOAT16_2:
+            return allowTwoComponent ? 4u : 0u;
+        case D3DDECLTYPE_SHORT4N:
+        case D3DDECLTYPE_USHORT4N:
+        case D3DDECLTYPE_FLOAT16_4:
+            return 8u;
+        default:
+            return 0u;
+    }
+}
+
 static bool describeProcessFvf(DWORD fvf, FvfProcessLayout& layout) {
     layout = {};
     switch (fvf & D3DFVF_POSITION_MASK) {
@@ -684,6 +714,8 @@ static bool describeProcessFvf(DWORD fvf, FvfProcessLayout& layout) {
     if (fvf & D3DFVF_NORMAL) {
         layout.normal = true;
         layout.normalOffset = offset;
+        layout.normalType = D3DDECLTYPE_FLOAT3;
+        layout.normalBytes = 12u;
         offset += 12u;
     }
     if (fvf & D3DFVF_PSIZE) offset += 4u;
@@ -766,22 +798,31 @@ static bool describeProcessDeclaration(IDirect3DVertexDeclaration9* declaration,
             layout.diffuseOffset = e.offset;
         } else if (!destination && e.usage == D3DDECLUSAGE_NORMAL &&
                    e.usageIndex == 0) {
-            if (e.type != D3DDECLTYPE_FLOAT3 || layout.normal) return false;
+            const UINT bytes = processFloatVectorDeclBytes(e.type, false);
+            if (bytes == 0u || layout.normal) return false;
             layout.normal = true;
             layout.normalStream = e.stream;
             layout.normalOffset = e.offset;
+            layout.normalType = e.type;
+            layout.normalBytes = bytes;
         } else if (!destination && e.usage == D3DDECLUSAGE_TANGENT &&
                    e.usageIndex == 0) {
-            if (e.type != D3DDECLTYPE_FLOAT3 || layout.tangent) return false;
+            const UINT bytes = processFloatVectorDeclBytes(e.type, false);
+            if (bytes == 0u || layout.tangent) return false;
             layout.tangent = true;
             layout.tangentStream = e.stream;
             layout.tangentOffset = e.offset;
+            layout.tangentType = e.type;
+            layout.tangentBytes = bytes;
         } else if (!destination && e.usage == D3DDECLUSAGE_BINORMAL &&
                    e.usageIndex == 0) {
-            if (e.type != D3DDECLTYPE_FLOAT3 || layout.binormal) return false;
+            const UINT bytes = processFloatVectorDeclBytes(e.type, false);
+            if (bytes == 0u || layout.binormal) return false;
             layout.binormal = true;
             layout.binormalStream = e.stream;
             layout.binormalOffset = e.offset;
+            layout.binormalType = e.type;
+            layout.binormalBytes = bytes;
         } else if (!destination && e.usage == D3DDECLUSAGE_BLENDWEIGHT &&
                    e.usageIndex == 0) {
             UINT blendBytes = 0u;
@@ -6308,21 +6349,21 @@ public:
             if (!srcLayout.normal) return false;
             srcReadBytes[srcLayout.normalStream] =
                 std::max(srcReadBytes[srcLayout.normalStream],
-                         srcLayout.normalOffset + 12u);
+                         srcLayout.normalOffset + srcLayout.normalBytes);
             return true;
         };
         auto requireTangentRead = [&]() -> bool {
             if (!srcLayout.tangent) return false;
             srcReadBytes[srcLayout.tangentStream] =
                 std::max(srcReadBytes[srcLayout.tangentStream],
-                         srcLayout.tangentOffset + 12u);
+                         srcLayout.tangentOffset + srcLayout.tangentBytes);
             return true;
         };
         auto requireBinormalRead = [&]() -> bool {
             if (!srcLayout.binormal) return false;
             srcReadBytes[srcLayout.binormalStream] =
                 std::max(srcReadBytes[srcLayout.binormalStream],
-                         srcLayout.binormalOffset + 12u);
+                         srcLayout.binormalOffset + srcLayout.binormalBytes);
             return true;
         };
         auto requireBlendWeightRead = [&]() -> bool {
@@ -6387,12 +6428,18 @@ public:
             requirePositionRead();
             if (dstLayout.diffuse) {
                 if (processLighting) {
+                    if (srcLayout.normalType != D3DDECLTYPE_FLOAT3) {
+                        return invalid("fixed-function lighting normal type unsupported");
+                    }
                     if (!requireNormalRead()) return invalid("lighting normal input missing");
                 } else if (!requireDiffuseRead()) {
                     return invalid("diffuse passthrough missing");
                 }
             }
             if (dstLayout.specular && processSpecularLighting) {
+                if (srcLayout.normalType != D3DDECLTYPE_FLOAT3) {
+                    return invalid("fixed-function specular normal type unsupported");
+                }
                 if (!requireNormalRead()) return invalid("specular lighting normal input missing");
             } else if (dstLayout.specular && !requireSpecularRead()) {
                 return invalid("specular passthrough missing");
@@ -6542,15 +6589,81 @@ public:
                     unpackD3DColor(color, regs.input[reg].data());
                     return true;
                 };
-                auto loadFloat3Input = [&](int reg, UINT stream, UINT offset) {
+                auto loadDeclVectorInput =
+                    [&](int reg, UINT stream, UINT offset, UINT type, UINT bytes) {
                     if (reg < 0 || static_cast<size_t>(reg) >= regs.input.size()) return false;
-                    float in[3]{};
                     const auto* source =
                         srcBase[stream] + srcByteStart[stream] +
                         static_cast<uint64_t>(i) * streamStr_[stream] + offset;
-                    std::memcpy(in, source, sizeof(in));
-                    regs.input[reg] = {in[0], in[1], in[2], 1.0f};
-                    return true;
+                    regs.input[reg] = {0.0f, 0.0f, 0.0f, 1.0f};
+                    switch (type) {
+                        case D3DDECLTYPE_FLOAT1:
+                        case D3DDECLTYPE_FLOAT2:
+                        case D3DDECLTYPE_FLOAT3:
+                        case D3DDECLTYPE_FLOAT4: {
+                            if (bytes == 0u || bytes > sizeof(float) * 4u ||
+                                (bytes % sizeof(float)) != 0u) return false;
+                            const UINT components = bytes / sizeof(float);
+                            std::memcpy(regs.input[reg].data(), source,
+                                        std::min<UINT>(components, 4u) * sizeof(float));
+                            return true;
+                        }
+                        case D3DDECLTYPE_SHORT2N: {
+                            int16_t in[2]{};
+                            std::memcpy(in, source, sizeof(in));
+                            regs.input[reg][0] = snorm16ToFloat(in[0]);
+                            regs.input[reg][1] = snorm16ToFloat(in[1]);
+                            return true;
+                        }
+                        case D3DDECLTYPE_SHORT4N: {
+                            int16_t in[4]{};
+                            std::memcpy(in, source, sizeof(in));
+                            for (UINT c = 0; c < 4u; ++c) {
+                                regs.input[reg][c] = snorm16ToFloat(in[c]);
+                            }
+                            return true;
+                        }
+                        case D3DDECLTYPE_USHORT2N: {
+                            uint16_t in[2]{};
+                            std::memcpy(in, source, sizeof(in));
+                            regs.input[reg][0] = unorm16ToFloat(in[0]);
+                            regs.input[reg][1] = unorm16ToFloat(in[1]);
+                            return true;
+                        }
+                        case D3DDECLTYPE_USHORT4N: {
+                            uint16_t in[4]{};
+                            std::memcpy(in, source, sizeof(in));
+                            for (UINT c = 0; c < 4u; ++c) {
+                                regs.input[reg][c] = unorm16ToFloat(in[c]);
+                            }
+                            return true;
+                        }
+                        case D3DDECLTYPE_UBYTE4N: {
+                            uint8_t in[4]{};
+                            std::memcpy(in, source, sizeof(in));
+                            for (UINT c = 0; c < 4u; ++c) {
+                                regs.input[reg][c] = static_cast<float>(in[c]) / 255.0f;
+                            }
+                            return true;
+                        }
+                        case D3DDECLTYPE_FLOAT16_2: {
+                            uint16_t in[2]{};
+                            std::memcpy(in, source, sizeof(in));
+                            regs.input[reg][0] = halfToFloat(in[0]);
+                            regs.input[reg][1] = halfToFloat(in[1]);
+                            return true;
+                        }
+                        case D3DDECLTYPE_FLOAT16_4: {
+                            uint16_t in[4]{};
+                            std::memcpy(in, source, sizeof(in));
+                            for (UINT c = 0; c < 4u; ++c) {
+                                regs.input[reg][c] = halfToFloat(in[c]);
+                            }
+                            return true;
+                        }
+                        default:
+                            return false;
+                    }
                 };
                 auto loadFloatVectorInput =
                     [&](int reg, UINT stream, UINT offset, UINT bytes) {
@@ -6660,20 +6773,23 @@ public:
                     break;
                 }
                 if (shaderIo.inputNormal >= 0 &&
-                    !loadFloat3Input(shaderIo.inputNormal, srcLayout.normalStream,
-                                     srcLayout.normalOffset)) {
+                    !loadDeclVectorInput(shaderIo.inputNormal, srcLayout.normalStream,
+                                         srcLayout.normalOffset, srcLayout.normalType,
+                                         srcLayout.normalBytes)) {
                     hr = D3DERR_INVALIDCALL;
                     break;
                 }
                 if (shaderIo.inputTangent >= 0 &&
-                    !loadFloat3Input(shaderIo.inputTangent, srcLayout.tangentStream,
-                                     srcLayout.tangentOffset)) {
+                    !loadDeclVectorInput(shaderIo.inputTangent, srcLayout.tangentStream,
+                                         srcLayout.tangentOffset, srcLayout.tangentType,
+                                         srcLayout.tangentBytes)) {
                     hr = D3DERR_INVALIDCALL;
                     break;
                 }
                 if (shaderIo.inputBinormal >= 0 &&
-                    !loadFloat3Input(shaderIo.inputBinormal, srcLayout.binormalStream,
-                                     srcLayout.binormalOffset)) {
+                    !loadDeclVectorInput(shaderIo.inputBinormal, srcLayout.binormalStream,
+                                         srcLayout.binormalOffset, srcLayout.binormalType,
+                                         srcLayout.binormalBytes)) {
                     hr = D3DERR_INVALIDCALL;
                     break;
                 }
