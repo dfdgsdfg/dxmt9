@@ -7069,10 +7069,16 @@ public:
             const float ndcX = clip[0] * invW;
             const float ndcY = clip[1] * invW;
             const float ndcZ = clip[2] * invW;
+            float viewportZ = vp.minZ + ndcZ * zScale;
+            if (renderStateValue(D3DRS_CLIPPING) == 0u) {
+                const float minDepth = std::min(vp.minZ, vp.maxZ);
+                const float maxDepth = std::max(vp.minZ, vp.maxZ);
+                viewportZ = std::clamp(viewportZ, minDepth, maxDepth);
+            }
             float out[4] = {
                 ndcX * scaleX + offsetX,
                 -ndcY * scaleY + offsetY,
-                vp.minZ + ndcZ * zScale,
+                viewportZ,
                 invW,
             };
             std::memcpy(dstVertex + dstLayout.positionOffset, out, sizeof(out));

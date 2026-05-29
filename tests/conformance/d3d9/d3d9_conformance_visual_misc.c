@@ -2199,6 +2199,13 @@ void test_visual_process_vertices_xyzhw_policy(const struct d3d9_api *api)
         { 0.5f, -0.5f, 0.0f, 0xff0000ffu, 0.50f, 0.75f},
         { 0.5f,  0.5f, 0.0f, 0xffffffffu, 1.00f, 1.00f},
     };
+    const struct src_vertex src_depth_clamp[] =
+    {
+        {-0.5f, -0.5f, -0.5f, 0xffff0000u, 0.00f, 0.25f},
+        {-0.5f,  0.5f,  0.5f, 0xff00ff00u, 0.25f, 0.50f},
+        { 0.5f, -0.5f,  1.5f, 0xff0000ffu, 0.50f, 0.75f},
+        { 0.5f,  0.5f,  2.0f, 0xffffffffu, 1.00f, 1.00f},
+    };
     const struct src_specular_vertex src_specular[] =
     {
         {-0.5f, -0.5f, 0.0f, 0xffff0000u, 0xff001122u, 0.00f, 0.25f},
@@ -2289,6 +2296,13 @@ void test_visual_process_vertices_xyzhw_policy(const struct d3d9_api *api)
         {240.0f, 180.0f, 0.0f, 1.0f, 0xff00ff00u, 0.25f, 0.50f},
         {400.0f, 300.0f, 0.0f, 1.0f, 0xff0000ffu, 0.50f, 0.75f},
         {400.0f, 180.0f, 0.0f, 1.0f, 0xffffffffu, 1.00f, 1.00f},
+    };
+    const struct dst_vertex expected_depth_clamp[] =
+    {
+        {240.0f, 300.0f, 0.0f, 1.0f, 0xffff0000u, 0.00f, 0.25f},
+        {240.0f, 180.0f, 0.5f, 1.0f, 0xff00ff00u, 0.25f, 0.50f},
+        {400.0f, 300.0f, 1.0f, 1.0f, 0xff0000ffu, 0.50f, 0.75f},
+        {400.0f, 180.0f, 1.0f, 1.0f, 0xffffffffu, 1.00f, 1.00f},
     };
     const struct dst_vertex expected_instanced_source[] =
     {
@@ -2499,6 +2513,7 @@ void test_visual_process_vertices_xyzhw_policy(const struct d3d9_api *api)
         {400.0f, 180.0f, 0.0f, 1.0f, 0xffffffffu, 1023.0f, 512.0f, 255.0f, 1.0f},
     };
     IDirect3DVertexBuffer9 *src_vb = NULL;
+    IDirect3DVertexBuffer9 *src_depth_clamp_vb = NULL;
     IDirect3DVertexBuffer9 *src_specular_vb = NULL;
     IDirect3DVertexBuffer9 *src_attr_vb = NULL;
     IDirect3DVertexBuffer9 *src_attr_short2_vb = NULL;
@@ -2732,6 +2747,20 @@ void test_visual_process_vertices_xyzhw_policy(const struct d3d9_api *api)
     {
         memcpy(bits, src, sizeof(src));
         CHECK_HR(IDirect3DVertexBuffer9_Unlock(src_vb), D3D_OK);
+    }
+    hr = IDirect3DDevice9_CreateVertexBuffer(device, sizeof(src_depth_clamp),
+            0, D3DFVF_XYZ | D3DFVF_DIFFUSE | D3DFVF_TEX1,
+            D3DPOOL_SYSTEMMEM, &src_depth_clamp_vb, NULL);
+    CHECK_HR(hr, D3D_OK);
+    if (FAILED(hr))
+        goto done_device;
+    hr = IDirect3DVertexBuffer9_Lock(src_depth_clamp_vb, 0,
+            sizeof(src_depth_clamp), &bits, 0);
+    CHECK_HR(hr, D3D_OK);
+    if (SUCCEEDED(hr))
+    {
+        memcpy(bits, src_depth_clamp, sizeof(src_depth_clamp));
+        CHECK_HR(IDirect3DVertexBuffer9_Unlock(src_depth_clamp_vb), D3D_OK);
     }
     hr = IDirect3DDevice9_CreateVertexBuffer(device, sizeof(src_specular), 0,
             D3DFVF_XYZ | D3DFVF_DIFFUSE | D3DFVF_SPECULAR | D3DFVF_TEX1,
@@ -3131,6 +3160,47 @@ void test_visual_process_vertices_xyzhw_policy(const struct d3d9_api *api)
         }
         CHECK_HR(IDirect3DVertexBuffer9_Unlock(dst_vb), D3D_OK);
     }
+
+    CHECK_HR(IDirect3DDevice9_SetRenderState(device, D3DRS_CLIPPING, FALSE),
+            D3D_OK);
+    CHECK_HR(IDirect3DDevice9_SetStreamSource(device, 0, src_depth_clamp_vb, 0,
+            sizeof(src_depth_clamp[0])), D3D_OK);
+    CHECK_HR(IDirect3DDevice9_ProcessVertices(device, 0, 0,
+            ARRAY_SIZE(src_depth_clamp), dst_vb, NULL, 0), D3D_OK);
+
+    hr = IDirect3DVertexBuffer9_Lock(dst_vb, 0, sizeof(expected_depth_clamp),
+            (void **)&mapped, D3DLOCK_READONLY);
+    CHECK_HR(hr, D3D_OK);
+    if (SUCCEEDED(hr))
+    {
+        for (i = 0; i < ARRAY_SIZE(expected_depth_clamp); ++i)
+        {
+            float dx = mapped[i].x - expected_depth_clamp[i].x;
+            float dy = mapped[i].y - expected_depth_clamp[i].y;
+            float dz = mapped[i].z - expected_depth_clamp[i].z;
+            float dw = mapped[i].rhw - expected_depth_clamp[i].rhw;
+            float du = mapped[i].u - expected_depth_clamp[i].u;
+            float dv = mapped[i].v - expected_depth_clamp[i].v;
+            if (dx < 0.0f) dx = -dx;
+            if (dy < 0.0f) dy = -dy;
+            if (dz < 0.0f) dz = -dz;
+            if (dw < 0.0f) dw = -dw;
+            if (du < 0.0f) du = -du;
+            if (dv < 0.0f) dv = -dv;
+            CHECK_TRUE(dx < 0.01f);
+            CHECK_TRUE(dy < 0.01f);
+            CHECK_TRUE(dz < 0.01f);
+            CHECK_TRUE(dw < 0.01f);
+            CHECK_TRUE(mapped[i].color == expected_depth_clamp[i].color);
+            CHECK_TRUE(du < 0.01f);
+            CHECK_TRUE(dv < 0.01f);
+        }
+        CHECK_HR(IDirect3DVertexBuffer9_Unlock(dst_vb), D3D_OK);
+    }
+    CHECK_HR(IDirect3DDevice9_SetRenderState(device, D3DRS_CLIPPING, TRUE),
+            D3D_OK);
+    CHECK_HR(IDirect3DDevice9_SetStreamSource(device, 0, src_vb, 0,
+            sizeof(src[0])), D3D_OK);
 
     hr = IDirect3DDevice9_CreateVertexBuffer(device, sizeof(expected_lit), 0,
             D3DFVF_XYZRHW | D3DFVF_DIFFUSE | D3DFVF_TEX1,
@@ -5829,6 +5899,7 @@ done_device:
     if (src_attr_short2_vb) IDirect3DVertexBuffer9_Release(src_attr_short2_vb);
     if (src_attr_vb) IDirect3DVertexBuffer9_Release(src_attr_vb);
     if (src_specular_vb) IDirect3DVertexBuffer9_Release(src_specular_vb);
+    if (src_depth_clamp_vb) IDirect3DVertexBuffer9_Release(src_depth_clamp_vb);
     if (src_vb) IDirect3DVertexBuffer9_Release(src_vb);
     IDirect3DDevice9_Release(device);
 done_window:
