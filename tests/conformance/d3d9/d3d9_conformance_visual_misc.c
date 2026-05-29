@@ -963,6 +963,48 @@ void test_visual_process_vertices_xyzhw_policy(const struct d3d9_api *api)
         PROCESS_VS_SRC(D3DSPR_INPUT, 7),
         D3DSIO_END
     };
+    static const DWORD process_vs_specular_3_0[] =
+    {
+        D3DVS_VERSION(3, 0),
+        PROCESS_VS_INST(D3DSIO_DCL, 2),
+        PROCESS_VS_DCL(D3DDECLUSAGE_POSITION, 0),
+        PROCESS_VS_DST(D3DSPR_INPUT, 0, 0xf),
+        PROCESS_VS_INST(D3DSIO_DCL, 2),
+        PROCESS_VS_DCL(D3DDECLUSAGE_COLOR, 0),
+        PROCESS_VS_DST(D3DSPR_INPUT, 1, 0xf),
+        PROCESS_VS_INST(D3DSIO_DCL, 2),
+        PROCESS_VS_DCL(D3DDECLUSAGE_COLOR, 1),
+        PROCESS_VS_DST(D3DSPR_INPUT, 2, 0xf),
+        PROCESS_VS_INST(D3DSIO_DCL, 2),
+        PROCESS_VS_DCL(D3DDECLUSAGE_TEXCOORD, 0),
+        PROCESS_VS_DST(D3DSPR_INPUT, 3, 0xf),
+        PROCESS_VS_INST(D3DSIO_DCL, 2),
+        PROCESS_VS_DCL(D3DDECLUSAGE_POSITION, 0),
+        PROCESS_VS_DST(D3DSPR_OUTPUT, 0, 0xf),
+        PROCESS_VS_INST(D3DSIO_DCL, 2),
+        PROCESS_VS_DCL(D3DDECLUSAGE_COLOR, 0),
+        PROCESS_VS_DST(D3DSPR_OUTPUT, 1, 0xf),
+        PROCESS_VS_INST(D3DSIO_DCL, 2),
+        PROCESS_VS_DCL(D3DDECLUSAGE_COLOR, 1),
+        PROCESS_VS_DST(D3DSPR_OUTPUT, 2, 0xf),
+        PROCESS_VS_INST(D3DSIO_DCL, 2),
+        PROCESS_VS_DCL(D3DDECLUSAGE_TEXCOORD, 0),
+        PROCESS_VS_DST(D3DSPR_OUTPUT, 3, 0xf),
+        PROCESS_VS_INST(D3DSIO_M4x4, 3),
+        PROCESS_VS_DST(D3DSPR_OUTPUT, 0, 0xf),
+        PROCESS_VS_SRC(D3DSPR_INPUT, 0),
+        PROCESS_VS_SRC(D3DSPR_CONST, 0),
+        PROCESS_VS_INST(D3DSIO_MOV, 2),
+        PROCESS_VS_DST(D3DSPR_OUTPUT, 1, 0xf),
+        PROCESS_VS_SRC(D3DSPR_INPUT, 1),
+        PROCESS_VS_INST(D3DSIO_MOV, 2),
+        PROCESS_VS_DST(D3DSPR_OUTPUT, 2, 0xf),
+        PROCESS_VS_SRC(D3DSPR_INPUT, 2),
+        PROCESS_VS_INST(D3DSIO_MOV, 2),
+        PROCESS_VS_DST(D3DSPR_OUTPUT, 3, 0xf),
+        PROCESS_VS_SRC(D3DSPR_INPUT, 3),
+        D3DSIO_END
+    };
     static const DWORD process_vs_output_relative_3_0[] =
     {
         D3DVS_VERSION(3, 0),
@@ -1897,6 +1939,13 @@ void test_visual_process_vertices_xyzhw_policy(const struct d3d9_api *api)
         DWORD color;
         float u, v;
     };
+    struct src_specular_vertex
+    {
+        float x, y, z;
+        DWORD color;
+        DWORD specular;
+        float u, v;
+    };
     struct dst_vertex
     {
         float x, y, z, rhw;
@@ -2041,6 +2090,13 @@ void test_visual_process_vertices_xyzhw_policy(const struct d3d9_api *api)
         {-0.5f,  0.5f, 0.0f, 0xff00ff00u, 0.25f, 0.50f},
         { 0.5f, -0.5f, 0.0f, 0xff0000ffu, 0.50f, 0.75f},
         { 0.5f,  0.5f, 0.0f, 0xffffffffu, 1.00f, 1.00f},
+    };
+    const struct src_specular_vertex src_specular[] =
+    {
+        {-0.5f, -0.5f, 0.0f, 0xffff0000u, 0xff001122u, 0.00f, 0.25f},
+        {-0.5f,  0.5f, 0.0f, 0xff00ff00u, 0xff334455u, 0.25f, 0.50f},
+        { 0.5f, -0.5f, 0.0f, 0xff0000ffu, 0xff667788u, 0.50f, 0.75f},
+        { 0.5f,  0.5f, 0.0f, 0xffffffffu, 0xff99aabbu, 1.00f, 1.00f},
     };
     const struct attr_short2n_vertex src_attr_short2[] =
     {
@@ -2236,6 +2292,13 @@ void test_visual_process_vertices_xyzhw_policy(const struct d3d9_api *api)
         {400.0f, 300.0f, 0.0f, 1.0f, 0xffff8000u, 0x000000ffu, 0.50f, 0.75f},
         {400.0f, 180.0f, 0.0f, 1.0f, 0xffff8000u, 0x000000ffu, 1.00f, 1.00f},
     };
+    const struct dst_specular_vertex expected_specular[] =
+    {
+        {240.0f, 300.0f, 0.0f, 1.0f, 0xffff0000u, 0xff001122u, 0.00f, 0.25f},
+        {240.0f, 180.0f, 0.0f, 1.0f, 0xff00ff00u, 0xff334455u, 0.25f, 0.50f},
+        {400.0f, 300.0f, 0.0f, 1.0f, 0xff0000ffu, 0xff667788u, 0.50f, 0.75f},
+        {400.0f, 180.0f, 0.0f, 1.0f, 0xffffffffu, 0xff99aabbu, 1.00f, 1.00f},
+    };
     const struct dst_vertex expected_tangent[] =
     {
         {480.0f, 300.0f, 0.0f, 1.0f, 0xffff0000u, 0.00f, 0.25f},
@@ -2293,6 +2356,7 @@ void test_visual_process_vertices_xyzhw_policy(const struct d3d9_api *api)
         {400.0f, 180.0f, 0.0f, 1.0f, 0xffffffffu, 1023.0f, 512.0f, 255.0f, 1.0f},
     };
     IDirect3DVertexBuffer9 *src_vb = NULL;
+    IDirect3DVertexBuffer9 *src_specular_vb = NULL;
     IDirect3DVertexBuffer9 *src_attr_vb = NULL;
     IDirect3DVertexBuffer9 *src_attr_short2_vb = NULL;
     IDirect3DVertexBuffer9 *src_attr_short2n_vb = NULL;
@@ -2324,6 +2388,7 @@ void test_visual_process_vertices_xyzhw_policy(const struct d3d9_api *api)
     IDirect3DVertexBuffer9 *src_extra_dst_vb = NULL;
     IDirect3DVertexBuffer9 *prog_dst_vb = NULL;
     IDirect3DVertexBuffer9 *prog_legacy_dst_vb = NULL;
+    IDirect3DVertexBuffer9 *prog_specular_dst_vb = NULL;
     IDirect3DVertexBuffer9 *prog_normal_dst_vb = NULL;
     IDirect3DVertexBuffer9 *prog_raw_normal_dst_vb = NULL;
     IDirect3DVertexBuffer9 *prog_ubyte4n_normal_dst_vb = NULL;
@@ -2516,6 +2581,20 @@ void test_visual_process_vertices_xyzhw_policy(const struct d3d9_api *api)
     {
         memcpy(bits, src, sizeof(src));
         CHECK_HR(IDirect3DVertexBuffer9_Unlock(src_vb), D3D_OK);
+    }
+    hr = IDirect3DDevice9_CreateVertexBuffer(device, sizeof(src_specular), 0,
+            D3DFVF_XYZ | D3DFVF_DIFFUSE | D3DFVF_SPECULAR | D3DFVF_TEX1,
+            D3DPOOL_SYSTEMMEM, &src_specular_vb, NULL);
+    CHECK_HR(hr, D3D_OK);
+    if (FAILED(hr))
+        goto done_device;
+    hr = IDirect3DVertexBuffer9_Lock(src_specular_vb, 0,
+            sizeof(src_specular), &bits, 0);
+    CHECK_HR(hr, D3D_OK);
+    if (SUCCEEDED(hr))
+    {
+        memcpy(bits, src_specular, sizeof(src_specular));
+        CHECK_HR(IDirect3DVertexBuffer9_Unlock(src_specular_vb), D3D_OK);
     }
     hr = IDirect3DDevice9_CreateVertexBuffer(device,
             ARRAY_SIZE(src) * sizeof(struct attr_vertex), 0, 0,
@@ -4453,6 +4532,66 @@ void test_visual_process_vertices_xyzhw_policy(const struct d3d9_api *api)
 
     IDirect3DVertexShader9_Release(vs);
     vs = NULL;
+    hr = IDirect3DDevice9_CreateVertexShader(device, process_vs_specular_3_0,
+            &vs);
+    CHECK_HR(hr, D3D_OK);
+    if (FAILED(hr))
+        goto done_device;
+    hr = IDirect3DDevice9_CreateVertexBuffer(device, sizeof(expected_specular),
+            0, D3DFVF_XYZRHW | D3DFVF_DIFFUSE | D3DFVF_SPECULAR
+            | D3DFVF_TEX1, D3DPOOL_SYSTEMMEM, &prog_specular_dst_vb, NULL);
+    CHECK_HR(hr, D3D_OK);
+    if (FAILED(hr))
+        goto done_device;
+    CHECK_HR(IDirect3DDevice9_SetVertexShaderConstantF(device, 0,
+            (const float *)vs_constants, 4), D3D_OK);
+    CHECK_HR(IDirect3DDevice9_SetFVF(device,
+            D3DFVF_XYZ | D3DFVF_DIFFUSE | D3DFVF_SPECULAR | D3DFVF_TEX1),
+            D3D_OK);
+    CHECK_HR(IDirect3DDevice9_SetStreamSource(device, 0, src_specular_vb, 0,
+            sizeof(src_specular[0])), D3D_OK);
+    CHECK_HR(IDirect3DDevice9_SetStreamSource(device, 1, NULL, 0, 0),
+            D3D_OK);
+    CHECK_HR(IDirect3DDevice9_SetVertexShader(device, vs), D3D_OK);
+    CHECK_HR(IDirect3DDevice9_ProcessVertices(device, 0, 0,
+            ARRAY_SIZE(src_specular), prog_specular_dst_vb, NULL, 0),
+            D3D_OK);
+
+    hr = IDirect3DVertexBuffer9_Lock(prog_specular_dst_vb, 0,
+            sizeof(expected_specular), (void **)&mapped_specular,
+            D3DLOCK_READONLY);
+    CHECK_HR(hr, D3D_OK);
+    if (SUCCEEDED(hr))
+    {
+        for (i = 0; i < ARRAY_SIZE(expected_specular); ++i)
+        {
+            float dx = mapped_specular[i].x - expected_specular[i].x;
+            float dy = mapped_specular[i].y - expected_specular[i].y;
+            float dz = mapped_specular[i].z - expected_specular[i].z;
+            float dw = mapped_specular[i].rhw - expected_specular[i].rhw;
+            float du = mapped_specular[i].u - expected_specular[i].u;
+            float dv = mapped_specular[i].v - expected_specular[i].v;
+            if (dx < 0.0f) dx = -dx;
+            if (dy < 0.0f) dy = -dy;
+            if (dz < 0.0f) dz = -dz;
+            if (dw < 0.0f) dw = -dw;
+            if (du < 0.0f) du = -du;
+            if (dv < 0.0f) dv = -dv;
+            CHECK_TRUE(dx < 0.01f);
+            CHECK_TRUE(dy < 0.01f);
+            CHECK_TRUE(dz < 0.01f);
+            CHECK_TRUE(dw < 0.01f);
+            CHECK_TRUE(mapped_specular[i].color == expected_specular[i].color);
+            CHECK_TRUE(mapped_specular[i].specular == expected_specular[i].specular);
+            CHECK_TRUE(du < 0.01f);
+            CHECK_TRUE(dv < 0.01f);
+        }
+        CHECK_HR(IDirect3DVertexBuffer9_Unlock(prog_specular_dst_vb),
+                D3D_OK);
+    }
+
+    IDirect3DVertexShader9_Release(vs);
+    vs = NULL;
     hr = IDirect3DDevice9_CreateVertexShader(device, process_vs_1_1, &vs);
     CHECK_HR(hr, D3D_OK);
     if (FAILED(hr))
@@ -5203,6 +5342,7 @@ done_device:
     if (prog_ubyte4n_normal_dst_vb) IDirect3DVertexBuffer9_Release(prog_ubyte4n_normal_dst_vb);
     if (prog_raw_normal_dst_vb) IDirect3DVertexBuffer9_Release(prog_raw_normal_dst_vb);
     if (prog_normal_dst_vb) IDirect3DVertexBuffer9_Release(prog_normal_dst_vb);
+    if (prog_specular_dst_vb) IDirect3DVertexBuffer9_Release(prog_specular_dst_vb);
     if (prog_legacy_dst_vb) IDirect3DVertexBuffer9_Release(prog_legacy_dst_vb);
     if (prog_dst_vb) IDirect3DVertexBuffer9_Release(prog_dst_vb);
     if (src_extra_dst_vb) IDirect3DVertexBuffer9_Release(src_extra_dst_vb);
@@ -5234,6 +5374,7 @@ done_device:
     if (src_attr_short2n_vb) IDirect3DVertexBuffer9_Release(src_attr_short2n_vb);
     if (src_attr_short2_vb) IDirect3DVertexBuffer9_Release(src_attr_short2_vb);
     if (src_attr_vb) IDirect3DVertexBuffer9_Release(src_attr_vb);
+    if (src_specular_vb) IDirect3DVertexBuffer9_Release(src_specular_vb);
     if (src_vb) IDirect3DVertexBuffer9_Release(src_vb);
     IDirect3DDevice9_Release(device);
 done_window:
