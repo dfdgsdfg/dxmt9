@@ -132,6 +132,8 @@ the latest targeted app-local replay skips before D3D entry because Sikarugir
 cannot attach `winemetal.dll` (`abi-hash unix-call failed status=0xc0000003`).
 The scaffold now also covers `D3DFVF_PSIZE` as a programmable source input,
 separate from declaration PSIZE generic input and destination PSIZE writeback.
+Destination declaration `COLOR1`/specular readback is covered for both
+fixed-function passthrough and programmable shader output.
 The formerly
 deferred GPU-runtime pixel validations for RESZ MSAA→INTZ readback, NULL RT
 depth-only rendering, and MIPMAPLODBIAS mip selection are covered by
