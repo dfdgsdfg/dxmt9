@@ -426,7 +426,8 @@ static const DWORD p8_sample_ps_2_0[] =
 static void check_visual_palettized_texture_sampler(IDirect3DDevice9 *device,
         D3DFORMAT format, const BYTE *texels, UINT texel_bytes,
         const DWORD *expected, BOOL programmable_ps, const BYTE *lod_texels,
-        const DWORD *lod_expected)
+        const DWORD *lod_expected, const PALETTEENTRY *updated_palette,
+        const DWORD *updated_expected)
 {
     struct textured_point
     {
@@ -534,6 +535,12 @@ static void check_visual_palettized_texture_sampler(IDirect3DDevice9 *device,
             D3DTSS_ALPHAARG1, D3DTA_TEXTURE), D3D_OK);
     CHECK_HR(IDirect3DDevice9_SetTexture(device, 0,
             (IDirect3DBaseTexture9 *)texture), D3D_OK);
+    if (updated_palette)
+    {
+        CHECK_HR(IDirect3DDevice9_SetPaletteEntries(device, 0,
+                updated_palette), D3D_OK);
+        expected = updated_expected;
+    }
     CHECK_HR(IDirect3DDevice9_SetFVF(device, D3DFVF_XYZRHW | D3DFVF_TEX1),
             D3D_OK);
     if (programmable_ps)
@@ -622,7 +629,18 @@ void test_visual_p8_texture_sampler_policy(const struct d3d9_api *api)
         0x60ddee11u, 0x60ddee11u,
         0x60ddee11u, 0x60ddee11u,
     };
+    static const DWORD p8_updated_expected[] =
+    {
+        0xff224466u, 0xff6688aau,
+        0xff99bbddu, 0xffccdd22u,
+    };
+    static const DWORD a8p8_updated_expected[] =
+    {
+        0x80224466u, 0x406688aau,
+        0x2099bbddu, 0x10ccdd22u,
+    };
     IDirect3DDevice9 *device = NULL;
+    PALETTEENTRY updated_palette[256];
     PALETTEENTRY palette[256];
     D3DCAPS9 caps;
     IDirect3D9 *d3d9;
@@ -678,37 +696,61 @@ void test_visual_p8_texture_sampler_policy(const struct d3d9_api *api)
     palette[4].peBlue = 0xcc; palette[4].peFlags = 0xff;
     palette[5].peRed = 0xdd; palette[5].peGreen = 0xee;
     palette[5].peBlue = 0x11; palette[5].peFlags = 0xff;
+    memcpy(updated_palette, palette, sizeof(palette));
+    updated_palette[1].peRed = 0x22; updated_palette[1].peGreen = 0x44;
+    updated_palette[1].peBlue = 0x66; updated_palette[1].peFlags = 0xff;
+    updated_palette[2].peRed = 0x66; updated_palette[2].peGreen = 0x88;
+    updated_palette[2].peBlue = 0xaa; updated_palette[2].peFlags = 0xff;
+    updated_palette[3].peRed = 0x99; updated_palette[3].peGreen = 0xbb;
+    updated_palette[3].peBlue = 0xdd; updated_palette[3].peFlags = 0xff;
+    updated_palette[4].peRed = 0xcc; updated_palette[4].peGreen = 0xdd;
+    updated_palette[4].peBlue = 0x22; updated_palette[4].peFlags = 0xff;
     CHECK_HR(IDirect3DDevice9_SetPaletteEntries(device, 0, palette),
             D3D_OK);
     CHECK_HR(IDirect3DDevice9_SetCurrentTexturePalette(device, 0),
             D3D_OK);
 
     check_visual_palettized_texture_sampler(device, D3DFMT_P8,
-            p8_texels, 1, p8_expected, FALSE, NULL, NULL);
+            p8_texels, 1, p8_expected, FALSE, NULL, NULL, NULL, NULL);
     check_visual_palettized_texture_sampler(device, D3DFMT_A8P8,
-            a8p8_texels, 2, a8p8_expected, FALSE, NULL, NULL);
+            a8p8_texels, 2, a8p8_expected, FALSE, NULL, NULL, NULL, NULL);
     check_visual_palettized_texture_sampler(device, D3DFMT_P8,
             p8_texels, 1, p8_expected, FALSE, p8_lod_texels,
-            p8_lod_expected);
+            p8_lod_expected, NULL, NULL);
     check_visual_palettized_texture_sampler(device, D3DFMT_A8P8,
             a8p8_texels, 2, a8p8_expected, FALSE, a8p8_lod_texels,
-            a8p8_lod_expected);
+            a8p8_lod_expected, NULL, NULL);
     if (caps.PixelShaderVersion >= D3DPS_VERSION(2, 0))
     {
         check_visual_palettized_texture_sampler(device, D3DFMT_P8,
-                p8_texels, 1, p8_expected, TRUE, NULL, NULL);
+                p8_texels, 1, p8_expected, TRUE, NULL, NULL, NULL, NULL);
         check_visual_palettized_texture_sampler(device, D3DFMT_A8P8,
-                a8p8_texels, 2, a8p8_expected, TRUE, NULL, NULL);
+                a8p8_texels, 2, a8p8_expected, TRUE, NULL, NULL, NULL, NULL);
         check_visual_palettized_texture_sampler(device, D3DFMT_P8,
                 p8_texels, 1, p8_expected, TRUE, p8_lod_texels,
-                p8_lod_expected);
+                p8_lod_expected, NULL, NULL);
         check_visual_palettized_texture_sampler(device, D3DFMT_A8P8,
                 a8p8_texels, 2, a8p8_expected, TRUE, a8p8_lod_texels,
-                a8p8_lod_expected);
+                a8p8_lod_expected, NULL, NULL);
     }
     else
     {
         skip_current_test("ps_2_0 is not supported");
+    }
+    check_visual_palettized_texture_sampler(device, D3DFMT_P8,
+            p8_texels, 1, p8_expected, FALSE, NULL, NULL,
+            updated_palette, p8_updated_expected);
+    check_visual_palettized_texture_sampler(device, D3DFMT_A8P8,
+            a8p8_texels, 2, a8p8_expected, FALSE, NULL, NULL,
+            updated_palette, a8p8_updated_expected);
+    if (caps.PixelShaderVersion >= D3DPS_VERSION(2, 0))
+    {
+        check_visual_palettized_texture_sampler(device, D3DFMT_P8,
+                p8_texels, 1, p8_expected, TRUE, NULL, NULL,
+                updated_palette, p8_updated_expected);
+        check_visual_palettized_texture_sampler(device, D3DFMT_A8P8,
+                a8p8_texels, 2, a8p8_expected, TRUE, NULL, NULL,
+                updated_palette, a8p8_updated_expected);
     }
     IDirect3DDevice9_Release(device);
 done_window:
