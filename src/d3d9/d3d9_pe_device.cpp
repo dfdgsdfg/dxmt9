@@ -658,6 +658,7 @@ static UINT processTexDeclBytes(UINT type, bool destination) {
         case D3DDECLTYPE_FLOAT4:
             return 16u;
         case D3DDECLTYPE_UBYTE4N:
+        case D3DDECLTYPE_UDEC3:
         case D3DDECLTYPE_SHORT2N:
         case D3DDECLTYPE_USHORT2N:
         case D3DDECLTYPE_FLOAT16_2:
@@ -6773,6 +6774,14 @@ public:
                             for (UINT c = 0; c < 4u; ++c) {
                                 regs.input[reg][c] = static_cast<float>(in[c]) / 255.0f;
                             }
+                            return true;
+                        }
+                        case D3DDECLTYPE_UDEC3: {
+                            uint32_t packed = 0;
+                            std::memcpy(&packed, texSource, sizeof(packed));
+                            regs.input[reg][0] = static_cast<float>(packed & 0x3ffu);
+                            regs.input[reg][1] = static_cast<float>((packed >> 10u) & 0x3ffu);
+                            regs.input[reg][2] = static_cast<float>((packed >> 20u) & 0x3ffu);
                             return true;
                         }
                         case D3DDECLTYPE_FLOAT16_2: {
