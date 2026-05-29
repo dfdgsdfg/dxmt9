@@ -657,12 +657,15 @@ static UINT processTexDeclBytes(UINT type, bool destination) {
             return 12u;
         case D3DDECLTYPE_FLOAT4:
             return 16u;
+        case D3DDECLTYPE_UBYTE4:
+        case D3DDECLTYPE_SHORT2:
         case D3DDECLTYPE_UBYTE4N:
         case D3DDECLTYPE_UDEC3:
         case D3DDECLTYPE_SHORT2N:
         case D3DDECLTYPE_USHORT2N:
         case D3DDECLTYPE_FLOAT16_2:
             return destination ? 0u : 4u;
+        case D3DDECLTYPE_SHORT4:
         case D3DDECLTYPE_SHORT4N:
         case D3DDECLTYPE_USHORT4N:
         case D3DDECLTYPE_FLOAT16_4:
@@ -6736,6 +6739,29 @@ public:
                             const UINT components = srcLayout.texBytes[tex] / sizeof(float);
                             std::memcpy(regs.input[reg].data(), texSource,
                                         std::min<UINT>(components, 4u) * sizeof(float));
+                            return true;
+                        }
+                        case D3DDECLTYPE_SHORT2: {
+                            int16_t in[2]{};
+                            std::memcpy(in, texSource, sizeof(in));
+                            regs.input[reg][0] = static_cast<float>(in[0]);
+                            regs.input[reg][1] = static_cast<float>(in[1]);
+                            return true;
+                        }
+                        case D3DDECLTYPE_SHORT4: {
+                            int16_t in[4]{};
+                            std::memcpy(in, texSource, sizeof(in));
+                            for (UINT c = 0; c < 4u; ++c) {
+                                regs.input[reg][c] = static_cast<float>(in[c]);
+                            }
+                            return true;
+                        }
+                        case D3DDECLTYPE_UBYTE4: {
+                            uint8_t in[4]{};
+                            std::memcpy(in, texSource, sizeof(in));
+                            for (UINT c = 0; c < 4u; ++c) {
+                                regs.input[reg][c] = static_cast<float>(in[c]);
+                            }
                             return true;
                         }
                         case D3DDECLTYPE_SHORT2N: {
