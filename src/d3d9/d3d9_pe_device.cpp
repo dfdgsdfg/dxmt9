@@ -6472,7 +6472,7 @@ public:
             return true;
         };
         auto requireTexRead = [&](UINT i, bool requireMatchingBytes) -> bool {
-            if (i >= srcLayout.texCount ||
+            if (i >= srcLayout.texCount || srcLayout.texBytes[i] == 0u ||
                 (requireMatchingBytes && dstLayout.texBytes[i] != srcLayout.texBytes[i])) {
                 return false;
             }
@@ -6486,6 +6486,7 @@ public:
             if (dstLayout.diffuse && !shaderIo.hasOutputDiffuse) return invalid("shader lacks diffuse output");
             if (dstLayout.specular && !shaderIo.hasOutputSpecular) return invalid("shader lacks specular output");
             for (UINT i = 0; i < dstLayout.texCount; ++i) {
+                if (dstLayout.texBytes[i] == 0u) continue;
                 if (!shaderIo.hasOutputTex[i]) return invalid("shader lacks texcoord output");
             }
             if (shaderIo.inputPosition >= 0) requirePositionRead();
@@ -6521,8 +6522,8 @@ public:
             } else if (dstLayout.specular && !requireSpecularRead()) {
                 return invalid("specular passthrough missing");
             }
-            if (dstLayout.texCount > srcLayout.texCount) return invalid("texcoord count mismatch");
             for (UINT i = 0; i < dstLayout.texCount; ++i) {
+                if (dstLayout.texBytes[i] == 0u) continue;
                 if (!requireTexRead(i, true)) return invalid("texcoord passthrough mismatch");
             }
         }
@@ -7001,6 +7002,7 @@ public:
                     std::memcpy(specularOut, colorReg->data(), sizeof(specularOut));
                 }
                 for (UINT tex = 0; tex < dstLayout.texCount; ++tex) {
+                    if (dstLayout.texBytes[tex] == 0u) continue;
                     const auto* texReg =
                         simpleVsRegister(regs, shaderIo.major, shaderIo.outputTex[tex].type,
                                          shaderIo.outputTex[tex].index);
@@ -7094,6 +7096,7 @@ public:
                 }
             }
             for (UINT tex = 0; tex < dstLayout.texCount; ++tex) {
+                if (dstLayout.texBytes[tex] == 0u) continue;
                 if (programmable) {
                     std::memcpy(dstVertex + dstLayout.texOffset[tex],
                                 texOut[tex], dstLayout.texBytes[tex]);
