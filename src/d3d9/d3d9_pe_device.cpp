@@ -609,6 +609,8 @@ struct FvfProcessLayout {
     UINT blendIndicesStream = 0;
     UINT blendIndicesOffset = 0;
     UINT blendIndicesBytes = 0;
+    UINT psizeStream = 0;
+    UINT psizeOffset = 0;
     UINT diffuseStream = 0;
     UINT diffuseOffset = 0;
     UINT specularStream = 0;
@@ -633,6 +635,7 @@ struct FvfProcessLayout {
     bool binormal = false;
     bool blendWeight = false;
     bool blendIndices = false;
+    bool psize = false;
     bool diffuse = false;
     bool specular = false;
 };
@@ -661,10 +664,12 @@ struct ProcessShaderIo {
     UINT inputGenericCount = 0;
     bool inputGenericOverflow = false;
     ProcessShaderReg outputPosition{};
+    ProcessShaderReg outputPSize{};
     ProcessShaderReg outputDiffuse{};
     ProcessShaderReg outputSpecular{};
     ProcessShaderReg outputTex[8]{};
     bool hasOutputPosition = false;
+    bool hasOutputPSize = false;
     bool hasOutputDiffuse = false;
     bool hasOutputSpecular = false;
     bool hasOutputTex[8]{};
@@ -804,7 +809,11 @@ static bool describeProcessFvf(DWORD fvf, FvfProcessLayout& layout) {
         layout.normalBytes = 12u;
         offset += 12u;
     }
-    if (fvf & D3DFVF_PSIZE) offset += 4u;
+    if (fvf & D3DFVF_PSIZE) {
+        layout.psize = true;
+        layout.psizeOffset = offset;
+        offset += 4u;
+    }
     if (fvf & D3DFVF_DIFFUSE) {
         layout.diffuse = true;
         layout.diffuseOffset = offset;
@@ -929,6 +938,12 @@ static bool describeProcessDeclaration(IDirect3DVertexDeclaration9* declaration,
             layout.blendIndicesStream = e.stream;
             layout.blendIndicesOffset = e.offset;
             layout.blendIndicesBytes = 4u;
+        } else if (destination && e.usage == D3DDECLUSAGE_PSIZE &&
+                   e.usageIndex == 0) {
+            if (e.type != D3DDECLTYPE_FLOAT1 || layout.psize) return false;
+            layout.psize = true;
+            layout.psizeStream = e.stream;
+            layout.psizeOffset = e.offset;
         } else if (e.usage == D3DDECLUSAGE_COLOR && e.usageIndex == 1) {
             if (e.type != D3DDECLTYPE_D3DCOLOR || layout.specular) return false;
             layout.specular = true;
@@ -1151,6 +1166,9 @@ static void noteProcessShaderOutput(ProcessShaderIo& io, UINT usage,
     if (usage == D3DDECLUSAGE_POSITION && usageIndex == 0) {
         io.outputPosition = reg;
         io.hasOutputPosition = true;
+    } else if (usage == D3DDECLUSAGE_PSIZE && usageIndex == 0) {
+        io.outputPSize = reg;
+        io.hasOutputPSize = true;
     } else if (usage == D3DDECLUSAGE_COLOR && usageIndex == 0) {
         io.outputDiffuse = reg;
         io.hasOutputDiffuse = true;
@@ -6456,7 +6474,7 @@ public:
             }
         } else {
             if ((dstDesc.fvf & D3DFVF_POSITION_MASK) != D3DFVF_XYZRHW ||
-                (dstDesc.fvf & (D3DFVF_NORMAL | D3DFVF_PSIZE)) != 0 ||
+                (dstDesc.fvf & D3DFVF_NORMAL) != 0 ||
                 !describeProcessFvf(dstDesc.fvf, dstLayout)) {
                 return invalid("destination FVF unsupported");
             }
@@ -6521,6 +6539,13 @@ public:
                          srcLayout.blendIndicesOffset + srcLayout.blendIndicesBytes);
             return true;
         };
+        auto requirePSizeRead = [&]() -> bool {
+            if (!srcLayout.psize) return false;
+            srcReadBytes[srcLayout.psizeStream] =
+                std::max(srcReadBytes[srcLayout.psizeStream],
+                         srcLayout.psizeOffset + 4u);
+            return true;
+        };
         auto requireDiffuseRead = [&]() -> bool {
             if (!srcLayout.diffuse) return false;
             srcReadBytes[srcLayout.diffuseStream] =
@@ -6572,6 +6597,7 @@ public:
         };
         if (programmable) {
             if (!shaderIo.hasOutputPosition) return invalid("shader lacks position output");
+            if (dstLayout.psize && !shaderIo.hasOutputPSize) return invalid("shader lacks psize output");
             if (dstLayout.diffuse && !shaderIo.hasOutputDiffuse) return invalid("shader lacks diffuse output");
             if (dstLayout.specular && !shaderIo.hasOutputSpecular) return invalid("shader lacks specular output");
             for (UINT i = 0; i < dstLayout.texCount; ++i) {
@@ -6616,6 +6642,9 @@ public:
                 if (!requireNormalRead()) return invalid("specular lighting normal input missing");
             } else if (dstLayout.specular && !requireSpecularRead()) {
                 return invalid("specular passthrough missing");
+            }
+            if (dstLayout.psize && !requirePSizeRead()) {
+                return invalid("psize passthrough missing");
             }
             if (processLighting) {
                 if (!requireMaterialColorRead(renderStateValue(D3DRS_DIFFUSEMATERIALSOURCE))) {
@@ -6754,6 +6783,7 @@ public:
         for (UINT i = 0; i < vertexCount; ++i) {
             auto* dstVertex = dstBase + static_cast<size_t>(i) * dstLayout.stride;
             float clip[4]{};
+            float psizeOut = 0.0f;
             float diffuseOut[4]{};
             float specularOut[4]{};
             float texOut[8][4]{};
@@ -7109,6 +7139,16 @@ public:
                     break;
                 }
                 std::memcpy(clip, positionReg->data(), sizeof(clip));
+                if (dstLayout.psize) {
+                    const auto* psizeReg =
+                        simpleVsRegister(regs, shaderIo.major, shaderIo.outputPSize.type,
+                                         shaderIo.outputPSize.index);
+                    if (!psizeReg) {
+                        hr = D3DERR_INVALIDCALL;
+                        break;
+                    }
+                    psizeOut = (*psizeReg)[0];
+                }
                 if (dstLayout.diffuse) {
                     const auto* colorReg =
                         simpleVsRegister(regs, shaderIo.major, shaderIo.outputDiffuse.type,
@@ -7151,6 +7191,13 @@ public:
                 fixedPosition[0] = in[0];
                 fixedPosition[1] = in[1];
                 fixedPosition[2] = in[2];
+                if (dstLayout.psize) {
+                    const auto* psizeSource =
+                        srcBase[srcLayout.psizeStream] +
+                        sourceOffset(srcLayout.psizeStream, i) +
+                        srcLayout.psizeOffset;
+                    std::memcpy(&psizeOut, psizeSource, sizeof(psizeOut));
+                }
                 const float position[4] = {in[0], in[1], in[2], 1.0f};
                 for (UINT col = 0; col < 4; ++col) {
                     clip[col] = position[0] * wvp.m[col] +
@@ -7176,6 +7223,10 @@ public:
                 invW,
             };
             std::memcpy(dstVertex + dstLayout.positionOffset, out, sizeof(out));
+            if (dstLayout.psize) {
+                std::memcpy(dstVertex + dstLayout.psizeOffset,
+                            &psizeOut, sizeof(psizeOut));
+            }
             ProcessFixedFunctionLightingColors lightingColors{};
             bool lightingColorsReady = false;
             auto fixedFunctionLightingColors = [&]() -> const ProcessFixedFunctionLightingColors& {
