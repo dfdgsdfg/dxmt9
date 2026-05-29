@@ -685,6 +685,10 @@ static UINT processFloatVectorDeclBytes(UINT type, bool allowTwoComponent) {
             return 12u;
         case D3DDECLTYPE_FLOAT4:
             return 16u;
+        case D3DDECLTYPE_UBYTE4:
+            return 4u;
+        case D3DDECLTYPE_SHORT4:
+            return 8u;
         case D3DDECLTYPE_DEC3N:
         case D3DDECLTYPE_UDEC3:
         case D3DDECLTYPE_UBYTE4N:
@@ -6620,6 +6624,22 @@ public:
                             const UINT components = bytes / sizeof(float);
                             std::memcpy(regs.input[reg].data(), source,
                                         std::min<UINT>(components, 4u) * sizeof(float));
+                            return true;
+                        }
+                        case D3DDECLTYPE_SHORT4: {
+                            int16_t in[4]{};
+                            std::memcpy(in, source, sizeof(in));
+                            for (UINT c = 0; c < 4u; ++c) {
+                                regs.input[reg][c] = static_cast<float>(in[c]);
+                            }
+                            return true;
+                        }
+                        case D3DDECLTYPE_UBYTE4: {
+                            uint8_t in[4]{};
+                            std::memcpy(in, source, sizeof(in));
+                            for (UINT c = 0; c < 4u; ++c) {
+                                regs.input[reg][c] = static_cast<float>(in[c]);
+                            }
                             return true;
                         }
                         case D3DDECLTYPE_SHORT2N: {
