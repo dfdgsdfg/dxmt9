@@ -2855,6 +2855,13 @@ void test_visual_process_vertices_xyzhw_policy(const struct d3d9_api *api)
         {400.0f, 300.0f, 0.0f, 1.0f, 0xffff8000u, 0x000000ffu, 0.50f, 0.75f},
         {400.0f, 180.0f, 0.0f, 1.0f, 0xffff8000u, 0x000000ffu, 1.00f, 1.00f},
     };
+    const struct dst_specular_vertex expected_spot_falloff[] =
+    {
+        {240.0f, 300.0f, 0.0f, 1.0f, 0xff402000u, 0x00000040u, 0.00f, 0.25f},
+        {240.0f, 180.0f, 0.0f, 1.0f, 0xff402000u, 0x00000040u, 0.25f, 0.50f},
+        {400.0f, 300.0f, 0.0f, 1.0f, 0xff402000u, 0x00000040u, 0.50f, 0.75f},
+        {400.0f, 180.0f, 0.0f, 1.0f, 0xff402000u, 0x00000040u, 1.00f, 1.00f},
+    };
     const struct dst_specular_vertex expected_spot_unlit[] =
     {
         {240.0f, 300.0f, 0.0f, 1.0f, 0xff000000u, 0x00000000u, 0.00f, 0.25f},
@@ -3940,8 +3947,51 @@ void test_visual_process_vertices_xyzhw_policy(const struct d3d9_api *api)
         }
         CHECK_HR(IDirect3DVertexBuffer9_Unlock(lit_specular_dst_vb), D3D_OK);
     }
+    light.Direction.x = -0.8660254f;
+    light.Direction.z = -0.5f;
+    light.Falloff = 2.0f;
+    light.Theta = 0.0f;
+    light.Phi = 3.1415927f;
+    CHECK_HR(IDirect3DDevice9_SetLight(device, 0, &light), D3D_OK);
+    CHECK_HR(IDirect3DDevice9_ProcessVertices(device, 0, 0,
+            ARRAY_SIZE(src_fvf_normal), lit_specular_dst_vb, NULL, 0), D3D_OK);
+
+    hr = IDirect3DVertexBuffer9_Lock(lit_specular_dst_vb, 0,
+            sizeof(expected_spot_falloff), (void **)&mapped_specular,
+            D3DLOCK_READONLY);
+    CHECK_HR(hr, D3D_OK);
+    if (SUCCEEDED(hr))
+    {
+        for (i = 0; i < ARRAY_SIZE(expected_spot_falloff); ++i)
+        {
+            float dx = mapped_specular[i].x - expected_spot_falloff[i].x;
+            float dy = mapped_specular[i].y - expected_spot_falloff[i].y;
+            float dz = mapped_specular[i].z - expected_spot_falloff[i].z;
+            float dw = mapped_specular[i].rhw - expected_spot_falloff[i].rhw;
+            float du = mapped_specular[i].u - expected_spot_falloff[i].u;
+            float dv = mapped_specular[i].v - expected_spot_falloff[i].v;
+            if (dx < 0.0f) dx = -dx;
+            if (dy < 0.0f) dy = -dy;
+            if (dz < 0.0f) dz = -dz;
+            if (dw < 0.0f) dw = -dw;
+            if (du < 0.0f) du = -du;
+            if (dv < 0.0f) dv = -dv;
+            CHECK_TRUE(dx < 0.01f);
+            CHECK_TRUE(dy < 0.01f);
+            CHECK_TRUE(dz < 0.01f);
+            CHECK_TRUE(dw < 0.01f);
+            CHECK_TRUE(mapped_specular[i].color == expected_spot_falloff[i].color);
+            CHECK_TRUE(mapped_specular[i].specular == expected_spot_falloff[i].specular);
+            CHECK_TRUE(du < 0.01f);
+            CHECK_TRUE(dv < 0.01f);
+        }
+        CHECK_HR(IDirect3DVertexBuffer9_Unlock(lit_specular_dst_vb), D3D_OK);
+    }
     light.Direction.x = 1.0f;
     light.Direction.z = 0.0f;
+    light.Falloff = 1.0f;
+    light.Theta = 0.5f;
+    light.Phi = 1.0f;
     CHECK_HR(IDirect3DDevice9_SetLight(device, 0, &light), D3D_OK);
     CHECK_HR(IDirect3DDevice9_ProcessVertices(device, 0, 0,
             ARRAY_SIZE(src_fvf_normal), lit_specular_dst_vb, NULL, 0), D3D_OK);
