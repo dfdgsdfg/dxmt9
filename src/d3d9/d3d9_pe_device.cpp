@@ -1490,6 +1490,12 @@ static bool simpleVsReadSource(const SimpleVsRegisters& regs,
                 return false;
             }
             break;
+        case D3DSPR_INPUT:
+            if (!simpleVsSourceIndex(regs, major, token, relAddrToken,
+                                     static_cast<UINT>(regs.input.size()), index)) {
+                return false;
+            }
+            break;
         default:
             if (simpleProcessShaderTokenHasRelAddr(token)) return false;
             index = shaderRegIndex(token);
