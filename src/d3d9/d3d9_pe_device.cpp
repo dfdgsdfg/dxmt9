@@ -1441,6 +1441,10 @@ struct SimpleVsRegisters {
     std::array<std::array<float, 4>, 8> texOut{};
 };
 
+struct SimpleVsTextureState {
+    std::array<D9CTexture*, kPeVertexTextureSamplerSlots> vertexTextures{};
+};
+
 static std::array<float, 4>* simpleVsRegister(SimpleVsRegisters& regs,
                                               UINT major,
                                               UINT type,
@@ -1641,6 +1645,22 @@ static bool simpleVsReadSource(const SimpleVsRegisters& regs,
         default:
             return false;
     }
+}
+
+static bool simpleVsSampleTexture2D(const SimpleVsTextureState* textures,
+                                    UINT sampler,
+                                    const float coord[4],
+                                    float out[4]) {
+    if (!textures || sampler >= textures->vertexTextures.size()) return false;
+    auto* texture = textures->vertexTextures[sampler];
+    if (!texture) return false;
+    const UINT levels = dxmt9c_texture_get_level_count(texture);
+    if (levels == 0u) return false;
+    const long requestedLevel = std::lround(coord[3]);
+    const UINT level = static_cast<UINT>(
+        std::clamp<long>(requestedLevel, 0, static_cast<long>(levels - 1u)));
+    return SUCCEEDED(hr32(dxmt9c_texture_sample_2d(
+        texture, level, coord[0], coord[1], out)));
 }
 
 static bool simpleVsWriteDest(SimpleVsRegisters& regs,
@@ -1934,6 +1954,7 @@ static SimpleVsExecResult executeSimpleProcessVertexShaderRange(
         const std::vector<DWORD>& words,
         const ProcessShaderIo& io,
         SimpleVsRegisters& regs,
+        const SimpleVsTextureState* textures,
         size_t begin,
         size_t end,
         UINT recursionDepth) {
@@ -1987,7 +2008,7 @@ static SimpleVsExecResult executeSimpleProcessVertexShaderRange(
             }
             const SimpleVsExecResult callResult =
                 executeSimpleProcessVertexShaderRange(
-                    words, io, regs, bodyBegin, retIndex + 1u,
+                    words, io, regs, textures, bodyBegin, retIndex + 1u,
                     recursionDepth + 1u);
             if (callResult == SimpleVsExecResult::Fail ||
                 callResult == SimpleVsExecResult::Break) {
@@ -2094,7 +2115,8 @@ static SimpleVsExecResult executeSimpleProcessVertexShaderRange(
                 }
                 const SimpleVsExecResult loopResult =
                     executeSimpleProcessVertexShaderRange(
-                        words, io, regs, index, bodyEnd, recursionDepth + 1u);
+                        words, io, regs, textures, index, bodyEnd,
+                        recursionDepth + 1u);
                 if (loopResult == SimpleVsExecResult::Fail) {
                     if (opcode == D3DSIO_LOOP) regs.loop = savedLoop;
                     return SimpleVsExecResult::Fail;
@@ -2159,6 +2181,22 @@ static SimpleVsExecResult executeSimpleProcessVertexShaderRange(
             if (indexConst >= regs.constantInt.size()) return SimpleVsExecResult::Fail;
             for (UINT i = 0; i < 4; ++i) {
                 regs.constantInt[indexConst][i] = static_cast<int32_t>(operands[i + 1u]);
+            }
+            continue;
+        }
+        if (opcode == D3DSIO_TEXLDL) {
+            if (operandCount < 3u ||
+                shaderRegType(operands[2]) != D3DSPR_SAMPLER) {
+                return SimpleVsExecResult::Fail;
+            }
+            float coord[4]{};
+            if (!simpleVsReadSource(regs, io.major, operands[1], coord,
+                                    relAddrOperands[1]) ||
+                !simpleVsSampleTexture2D(textures, shaderRegIndex(operands[2]),
+                                         coord, coord) ||
+                !simpleVsWriteDest(regs, io.major, operands[0], coord,
+                                   relAddrOperands[0])) {
+                return SimpleVsExecResult::Fail;
             }
             continue;
         }
@@ -2364,10 +2402,11 @@ static SimpleVsExecResult executeSimpleProcessVertexShaderRange(
 
 static bool executeSimpleProcessVertexShader(const std::vector<DWORD>& words,
                                              const ProcessShaderIo& io,
-                                             SimpleVsRegisters& regs) {
+                                             SimpleVsRegisters& regs,
+                                             const SimpleVsTextureState* textures) {
     const SimpleVsExecResult result =
         executeSimpleProcessVertexShaderRange(
-            words, io, regs, 1, words.size(), 0);
+            words, io, regs, textures, 1, words.size(), 0);
     return result == SimpleVsExecResult::Ok || result == SimpleVsExecResult::Ret;
 }
 
@@ -6789,6 +6828,13 @@ public:
                                           shaderConstI.size() * sizeof(shaderConstI[0]));
             std::memcpy(shaderConstI.data(), peConsts_.vsConstI.values.data(), bytes);
         }
+        SimpleVsTextureState shaderTextures{};
+        if (programmable) {
+            for (UINT sampler = 0; sampler < shaderTextures.vertexTextures.size(); ++sampler) {
+                shaderTextures.vertexTextures[sampler] =
+                    rawTex(textures_[kPeFragmentSamplerSlots + sampler]);
+            }
+        }
         auto* dstBase = static_cast<uint8_t*>(dstBytes);
         for (UINT i = 0; i < vertexCount; ++i) {
             auto* dstVertex = dstBase + static_cast<size_t>(i) * dstLayout.stride;
@@ -7144,7 +7190,8 @@ public:
                     }
                 }
                 if (FAILED(hr)) break;
-                if (!executeSimpleProcessVertexShader(shaderWords, shaderIo, regs)) {
+                if (!executeSimpleProcessVertexShader(
+                        shaderWords, shaderIo, regs, &shaderTextures)) {
                     hr = D3DERR_INVALIDCALL;
                     break;
                 }

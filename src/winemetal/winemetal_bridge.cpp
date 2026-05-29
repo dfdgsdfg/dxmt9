@@ -257,6 +257,7 @@ BridgeClass classifyBridgeClass(unsigned int code) {
   case BridgeOpcode::dxmt9c_device_reset_ex:
   case BridgeOpcode::dxmt9c_device_begin_scene:
   case BridgeOpcode::dxmt9c_device_end_scene:
+  case BridgeOpcode::dxmt9c_device_set_gamma_ramp:
   case BridgeOpcode::dxmt9c_device_check_device_multisample:
     return BridgeClass::Lifecycle;
 
@@ -352,6 +353,7 @@ BridgeClass classifyBridgeClass(unsigned int code) {
   case BridgeOpcode::dxmt9c_texture_get_level_desc:
   case BridgeOpcode::dxmt9c_texture_generate_mip_sublevels:
   case BridgeOpcode::dxmt9c_texture_set_lod:
+  case BridgeOpcode::dxmt9c_texture_sample_2d:
   case BridgeOpcode::dxmt9c_texture_set_palette:
   case BridgeOpcode::dxmt9c_buffer_addref:
   case BridgeOpcode::dxmt9c_buffer_release:
@@ -465,6 +467,7 @@ bool classifyBridgeDetail(unsigned int code, BridgeDetail& detail) {
     detail = BridgeDetail::ResourceCreate;
     return true;
   case BridgeOpcode::dxmt9c_texture_lock_rect:
+  case BridgeOpcode::dxmt9c_texture_sample_2d:
   case BridgeOpcode::dxmt9c_buffer_lock:
   case BridgeOpcode::dxmt9c_surface_lock_rect:
     detail = BridgeDetail::ResourceLock;

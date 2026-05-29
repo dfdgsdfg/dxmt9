@@ -1,6 +1,7 @@
 #include "core_spec_fixtures.hpp"
 #include "device_c_common.hpp"
 
+#include <cmath>
 #include <memory>
 
 using namespace dxmt9::core;
@@ -201,6 +202,46 @@ void testComWrappersEx() {
     checkEq(discardBytes[0], static_cast<u8>(0x00), "d3d discard lock maps to core discard");
     checkEq(dxmt9c_texture_unlock_rect(discardTexture, 0), D3D_OK, "unlock c discard texture");
     checkEq(dxmt9c_texture_release(discardTexture), 0u, "release c discard texture");
+
+    auto* sampleTexture = dxmt9c_device_create_texture(
+        &cDevice, 2, 2, 1, 0, dxmt9::d3d9::devicec::fmtToD3D(Format::A8R8G8B8), 1);
+    check(sampleTexture != nullptr, "create c sample texture");
+    D9CLockedRect sampleLocked{};
+    checkEq(dxmt9c_texture_lock_rect(sampleTexture, 0, &sampleLocked, nullptr, 0), D3D_OK,
+            "lock c sample texture");
+    auto* samplePixels = static_cast<uint32_t*>(sampleLocked.bits);
+    samplePixels[0] = 0xff112233u;
+    samplePixels[1] = 0xff445566u;
+    samplePixels[2] = 0xff778899u;
+    samplePixels[3] = 0xffaabbccu;
+    checkEq(dxmt9c_texture_unlock_rect(sampleTexture, 0), D3D_OK, "unlock c sample texture");
+
+    const auto checkSample = [](float actual, uint32_t byte, std::string_view message) {
+      const float expected = static_cast<float>(byte) / 255.0f;
+      check(std::fabs(actual - expected) < 0.0001f, message);
+    };
+    float rgba[4]{};
+    checkEq(dxmt9c_texture_sample_2d(sampleTexture, 0, 0.10f, 0.10f, rgba), D3D_OK,
+            "sample c texture top-left");
+    checkSample(rgba[0], 0x11u, "sample top-left red");
+    checkSample(rgba[1], 0x22u, "sample top-left green");
+    checkSample(rgba[2], 0x33u, "sample top-left blue");
+    checkSample(rgba[3], 0xffu, "sample top-left alpha");
+    checkEq(dxmt9c_texture_sample_2d(sampleTexture, 0, 0.75f, 0.10f, rgba), D3D_OK,
+            "sample c texture top-right");
+    checkSample(rgba[0], 0x44u, "sample top-right red");
+    checkSample(rgba[1], 0x55u, "sample top-right green");
+    checkSample(rgba[2], 0x66u, "sample top-right blue");
+    checkEq(dxmt9c_texture_sample_2d(sampleTexture, 0, -1.0f, 2.0f, rgba), D3D_OK,
+            "sample c texture clamps coords");
+    checkSample(rgba[0], 0x77u, "sample clamp red");
+    checkSample(rgba[1], 0x88u, "sample clamp green");
+    checkSample(rgba[2], 0x99u, "sample clamp blue");
+    checkEq(dxmt9c_texture_sample_2d(sampleTexture, 1, 0.0f, 0.0f, rgba), D3DERR_INVALIDCALL,
+            "sample c texture rejects invalid level");
+    checkEq(dxmt9c_texture_sample_2d(sampleTexture, 0, 0.0f, 0.0f, nullptr), D3DERR_INVALIDCALL,
+            "sample c texture rejects null output");
+    checkEq(dxmt9c_texture_release(sampleTexture), 0u, "release c sample texture");
 
     constexpr uint32_t d3dUsageRenderTarget = 0x00000001u;
     auto* renderTargetTexture = dxmt9c_device_create_texture(

@@ -68,6 +68,12 @@ extern "C" uint32_t dxmt9c_texture_set_lod(D9CTexture* arg0, uint32_t lod) {
   return dxmt9p_texture_set_lod(arg0, lod);
 }
 
+extern "C" int32_t dxmt9c_texture_sample_2d(D9CTexture* arg0, uint32_t level,
+                                             float u, float v,
+                                             float* outRgba4) {
+  return dxmt9p_texture_sample_2d(arg0, level, u, v, outRgba4);
+}
+
 extern "C" int32_t dxmt9c_texture_set_palette(D9CTexture* arg0,
                                                const uint32_t* argbEntries,
                                                uint32_t entryCount) {

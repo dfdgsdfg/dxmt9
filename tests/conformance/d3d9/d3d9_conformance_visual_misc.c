@@ -1306,6 +1306,46 @@ void test_visual_process_vertices_xyzhw_policy(const struct d3d9_api *api)
         PROCESS_VS_SRC(D3DSPR_ADDR, 0),
         D3DSIO_END
     };
+    static const DWORD process_vs_texldl_3_0[] =
+    {
+        D3DVS_VERSION(3, 0),
+        PROCESS_VS_INST(D3DSIO_DCL, 2),
+        PROCESS_VS_DCL(D3DDECLUSAGE_POSITION, 0),
+        PROCESS_VS_DST(D3DSPR_INPUT, 0, 0xf),
+        PROCESS_VS_INST(D3DSIO_DCL, 2),
+        PROCESS_VS_DCL(D3DDECLUSAGE_TEXCOORD, 0),
+        PROCESS_VS_DST(D3DSPR_INPUT, 2, 0xf),
+        PROCESS_VS_INST(D3DSIO_DCL, 2),
+        D3DSTT_2D,
+        PROCESS_VS_DST(D3DSPR_SAMPLER, 0, 0xf),
+        PROCESS_VS_INST(D3DSIO_DCL, 2),
+        PROCESS_VS_DCL(D3DDECLUSAGE_POSITION, 0),
+        PROCESS_VS_DST(D3DSPR_OUTPUT, 0, 0xf),
+        PROCESS_VS_INST(D3DSIO_DCL, 2),
+        PROCESS_VS_DCL(D3DDECLUSAGE_COLOR, 0),
+        PROCESS_VS_DST(D3DSPR_OUTPUT, 1, 0xf),
+        PROCESS_VS_INST(D3DSIO_DCL, 2),
+        PROCESS_VS_DCL(D3DDECLUSAGE_TEXCOORD, 0),
+        PROCESS_VS_DST(D3DSPR_OUTPUT, 2, 0xf),
+        PROCESS_VS_INST(D3DSIO_M4x4, 3),
+        PROCESS_VS_DST(D3DSPR_OUTPUT, 0, 0xf),
+        PROCESS_VS_SRC(D3DSPR_INPUT, 0),
+        PROCESS_VS_SRC(D3DSPR_CONST, 0),
+        PROCESS_VS_INST(D3DSIO_MOV, 2),
+        PROCESS_VS_DST(D3DSPR_TEMP, 0, 0xf),
+        PROCESS_VS_SRC(D3DSPR_INPUT, 2),
+        PROCESS_VS_INST(D3DSIO_MOV, 2),
+        PROCESS_VS_DST(D3DSPR_TEMP, 0, 0x8),
+        PROCESS_VS_SRC_SWZ(D3DSPR_CONST, 0, 2, 2, 2, 2),
+        PROCESS_VS_INST(D3DSIO_TEXLDL, 3),
+        PROCESS_VS_DST(D3DSPR_OUTPUT, 1, 0xf),
+        PROCESS_VS_SRC(D3DSPR_TEMP, 0),
+        PROCESS_VS_SRC(D3DSPR_SAMPLER, 0),
+        PROCESS_VS_INST(D3DSIO_MOV, 2),
+        PROCESS_VS_DST(D3DSPR_OUTPUT, 2, 0xf),
+        PROCESS_VS_SRC(D3DSPR_INPUT, 2),
+        D3DSIO_END
+    };
     static const DWORD process_vs_partialprecision_3_0[] =
     {
         D3DVS_VERSION(3, 0),
@@ -2714,6 +2754,13 @@ void test_visual_process_vertices_xyzhw_policy(const struct d3d9_api *api)
         {400.0f, 300.0f, 1.0f, 1.0f, 0xff0000ffu, 0.50f, 0.75f},
         {400.0f, 180.0f, 1.0f, 1.0f, 0xffffffffu, 1.00f, 1.00f},
     };
+    const struct dst_vertex expected_texldl[] =
+    {
+        {240.0f, 300.0f, 0.0f, 1.0f, 0xff336699u, 0.00f, 0.25f},
+        {240.0f, 180.0f, 0.0f, 1.0f, 0xff336699u, 0.25f, 0.50f},
+        {400.0f, 300.0f, 0.0f, 1.0f, 0xff336699u, 0.50f, 0.75f},
+        {400.0f, 180.0f, 0.0f, 1.0f, 0xff336699u, 1.00f, 1.00f},
+    };
     const struct dst_psize_vertex expected_psize[] =
     {
         {240.0f, 300.0f, 0.0f, 1.0f, 1.25f, 0xffff0000u, 0.00f, 0.25f},
@@ -3086,6 +3133,7 @@ void test_visual_process_vertices_xyzhw_policy(const struct d3d9_api *api)
     IDirect3DVertexBuffer9 *prog_mad_dst_vb = NULL;
     IDirect3DVertexBuffer9 *prog_output_relative_dst_vb = NULL;
     IDirect3DVertexBuffer9 *prog_input_relative_dst_vb = NULL;
+    IDirect3DVertexBuffer9 *prog_texldl_dst_vb = NULL;
     IDirect3DVertexBuffer9 *prog_partialprecision_dst_vb = NULL;
     IDirect3DVertexBuffer9 *prog_saturate_dst_vb = NULL;
     IDirect3DVertexBuffer9 *prog_pos4_dst_vb = NULL;
@@ -3124,12 +3172,14 @@ void test_visual_process_vertices_xyzhw_policy(const struct d3d9_api *api)
     IDirect3DVertexDeclaration9 *dst_specular_decl = NULL;
     IDirect3DVertexDeclaration9 *dst_tex4_decl = NULL;
     IDirect3DVertexShader9 *vs = NULL;
+    IDirect3DTexture9 *vs_texldl_texture = NULL;
     IDirect3DDevice9 *device = NULL;
     struct dst_vertex *mapped = NULL;
     struct dst_tex1_vertex *mapped_tex1 = NULL;
     struct dst_tex4_vertex *mapped_tex4 = NULL;
     struct dst_specular_vertex *mapped_specular = NULL;
     struct dst_psize_vertex *mapped_psize = NULL;
+    D3DLOCKED_RECT locked_rect;
     D3DMATERIAL9 material;
     D3DLIGHT9 light;
     const float vs_constants[4][4] =
@@ -6595,6 +6645,78 @@ void test_visual_process_vertices_xyzhw_policy(const struct d3d9_api *api)
 
     IDirect3DVertexShader9_Release(vs);
     vs = NULL;
+    hr = IDirect3DDevice9_CreateTexture(device, 1, 1, 1, 0,
+            D3DFMT_A8R8G8B8, D3DPOOL_MANAGED, &vs_texldl_texture, NULL);
+    CHECK_HR(hr, D3D_OK);
+    if (FAILED(hr))
+        goto done_device;
+    hr = IDirect3DTexture9_LockRect(vs_texldl_texture, 0, &locked_rect, NULL, 0);
+    CHECK_HR(hr, D3D_OK);
+    if (SUCCEEDED(hr))
+    {
+        *(DWORD *)locked_rect.pBits = 0xff336699u;
+        CHECK_HR(IDirect3DTexture9_UnlockRect(vs_texldl_texture, 0), D3D_OK);
+    }
+    hr = IDirect3DDevice9_CreateVertexShader(device,
+            process_vs_texldl_3_0, &vs);
+    CHECK_HR(hr, D3D_OK);
+    if (FAILED(hr))
+        goto done_device;
+    hr = IDirect3DDevice9_CreateVertexBuffer(device,
+            sizeof(expected_texldl), 0, 0, D3DPOOL_SYSTEMMEM,
+            &prog_texldl_dst_vb, NULL);
+    CHECK_HR(hr, D3D_OK);
+    if (FAILED(hr))
+        goto done_device;
+    CHECK_HR(IDirect3DDevice9_SetVertexShaderConstantF(device, 0,
+            (const float *)vs_constants, 4), D3D_OK);
+    CHECK_HR(IDirect3DDevice9_SetFVF(device,
+            D3DFVF_XYZ | D3DFVF_DIFFUSE | D3DFVF_TEX1), D3D_OK);
+    CHECK_HR(IDirect3DDevice9_SetStreamSource(device, 0, src_vb, 0,
+            sizeof(src[0])), D3D_OK);
+    CHECK_HR(IDirect3DDevice9_SetTexture(device, D3DVERTEXTEXTURESAMPLER0,
+            (IDirect3DBaseTexture9 *)vs_texldl_texture), D3D_OK);
+    CHECK_HR(IDirect3DDevice9_SetVertexShader(device, vs), D3D_OK);
+    CHECK_HR(IDirect3DDevice9_ProcessVertices(device, 0, 0,
+            ARRAY_SIZE(src), prog_texldl_dst_vb, dst_decl, 0),
+            D3D_OK);
+
+    hr = IDirect3DVertexBuffer9_Lock(prog_texldl_dst_vb, 0,
+            sizeof(expected_texldl), (void **)&mapped, D3DLOCK_READONLY);
+    CHECK_HR(hr, D3D_OK);
+    if (SUCCEEDED(hr))
+    {
+        for (i = 0; i < ARRAY_SIZE(expected_texldl); ++i)
+        {
+            float dx = mapped[i].x - expected_texldl[i].x;
+            float dy = mapped[i].y - expected_texldl[i].y;
+            float dz = mapped[i].z - expected_texldl[i].z;
+            float dw = mapped[i].rhw - expected_texldl[i].rhw;
+            float du = mapped[i].u - expected_texldl[i].u;
+            float dv = mapped[i].v - expected_texldl[i].v;
+            if (dx < 0.0f) dx = -dx;
+            if (dy < 0.0f) dy = -dy;
+            if (dz < 0.0f) dz = -dz;
+            if (dw < 0.0f) dw = -dw;
+            if (du < 0.0f) du = -du;
+            if (dv < 0.0f) dv = -dv;
+            CHECK_TRUE(dx < 0.01f);
+            CHECK_TRUE(dy < 0.01f);
+            CHECK_TRUE(dz < 0.01f);
+            CHECK_TRUE(dw < 0.01f);
+            CHECK_TRUE(mapped[i].color == expected_texldl[i].color);
+            CHECK_TRUE(du < 0.01f);
+            CHECK_TRUE(dv < 0.01f);
+        }
+        CHECK_HR(IDirect3DVertexBuffer9_Unlock(prog_texldl_dst_vb),
+                D3D_OK);
+    }
+    CHECK_HR(IDirect3DDevice9_SetVertexShader(device, NULL), D3D_OK);
+    CHECK_HR(IDirect3DDevice9_SetTexture(device, D3DVERTEXTEXTURESAMPLER0,
+            NULL), D3D_OK);
+    IDirect3DVertexShader9_Release(vs);
+    vs = NULL;
+
     hr = IDirect3DDevice9_CreateVertexShader(device, process_vs_3_0, &vs);
     CHECK_HR(hr, D3D_OK);
     if (FAILED(hr))
@@ -7281,6 +7403,7 @@ done_device:
     if (prog_pos4_dst_vb) IDirect3DVertexBuffer9_Release(prog_pos4_dst_vb);
     if (prog_partialprecision_dst_vb) IDirect3DVertexBuffer9_Release(prog_partialprecision_dst_vb);
     if (prog_saturate_dst_vb) IDirect3DVertexBuffer9_Release(prog_saturate_dst_vb);
+    if (prog_texldl_dst_vb) IDirect3DVertexBuffer9_Release(prog_texldl_dst_vb);
     if (prog_input_relative_dst_vb) IDirect3DVertexBuffer9_Release(prog_input_relative_dst_vb);
     if (prog_output_relative_dst_vb) IDirect3DVertexBuffer9_Release(prog_output_relative_dst_vb);
     if (prog_mad_dst_vb) IDirect3DVertexBuffer9_Release(prog_mad_dst_vb);
@@ -7350,6 +7473,7 @@ done_device:
     if (src_specular_vb) IDirect3DVertexBuffer9_Release(src_specular_vb);
     if (src_depth_clamp_vb) IDirect3DVertexBuffer9_Release(src_depth_clamp_vb);
     if (src_vb) IDirect3DVertexBuffer9_Release(src_vb);
+    if (vs_texldl_texture) IDirect3DTexture9_Release(vs_texldl_texture);
     IDirect3DDevice9_Release(device);
 done_window:
     DestroyWindow(window);

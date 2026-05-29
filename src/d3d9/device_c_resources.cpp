@@ -1,6 +1,7 @@
 #include "device_c_provider.hpp"
 
 #include <algorithm>
+#include <cmath>
 
 using namespace dxmt9::d3d9::devicec;
 
@@ -620,6 +621,43 @@ extern "C" uint32_t dxmt9c_texture_set_lod(D9CTexture* t, uint32_t lod) {
     return 0;
   }
   return t->obj->setLod(lod);
+}
+
+extern "C" int32_t dxmt9c_texture_sample_2d(D9CTexture* t, uint32_t level,
+                                            float u, float v,
+                                            float* outRgba4) {
+  if (!t || !t->obj || !outRgba4) {
+    return dxmt9::core::D3DERR_INVALIDCALL;
+  }
+  const auto& desc = t->obj->desc();
+  if (desc.type != dxmt9::core::TextureType::TwoD ||
+      dxmt9::core::bytesPerPixel(desc.format) != 4u ||
+      level >= t->obj->levelCount()) {
+    return dxmt9::core::D3DERR_INVALIDCALL;
+  }
+  const uint32_t width = mipDimension(desc.width, level);
+  const uint32_t height = mipDimension(desc.height, level);
+  auto lock = t->obj->lockRect(level, nullptr, 0);
+  if (!lock.data || lock.pitch == 0u) {
+    return dxmt9::core::D3DERR_INVALIDCALL;
+  }
+  const auto clampTexel = [](float value, uint32_t size) -> uint32_t {
+    const long texel =
+        static_cast<long>(std::floor(value * static_cast<float>(size)));
+    return static_cast<uint32_t>(
+        std::clamp<long>(texel, 0, static_cast<long>(size - 1u)));
+  };
+  const uint32_t x = clampTexel(u, width);
+  const uint32_t y = clampTexel(v, height);
+  const auto* pixel = static_cast<const uint8_t*>(lock.data) +
+                      static_cast<size_t>(y) * lock.pitch +
+                      static_cast<size_t>(x) * 4u;
+  outRgba4[0] = static_cast<float>(pixel[2]) / 255.0f;
+  outRgba4[1] = static_cast<float>(pixel[1]) / 255.0f;
+  outRgba4[2] = static_cast<float>(pixel[0]) / 255.0f;
+  outRgba4[3] = static_cast<float>(pixel[3]) / 255.0f;
+  t->obj->unlockRect(level);
+  return dxmt9::core::D3D_OK;
 }
 
 extern "C" int32_t dxmt9c_texture_set_palette(D9CTexture* t,
