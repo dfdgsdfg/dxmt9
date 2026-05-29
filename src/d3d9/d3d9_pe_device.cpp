@@ -681,7 +681,9 @@ static UINT processFloatVectorDeclBytes(UINT type, bool allowTwoComponent) {
             return 12u;
         case D3DDECLTYPE_FLOAT4:
             return 16u;
+        case D3DDECLTYPE_DEC3N:
         case D3DDECLTYPE_UBYTE4N:
+            return 4u;
         case D3DDECLTYPE_SHORT2N:
         case D3DDECLTYPE_USHORT2N:
         case D3DDECLTYPE_FLOAT16_2:
@@ -1251,6 +1253,13 @@ static float snorm16ToFloat(int16_t value) {
 
 static float unorm16ToFloat(uint16_t value) {
     return static_cast<float>(value) / 65535.0f;
+}
+
+static float snorm10ToFloat(uint32_t value) {
+    int32_t signedValue = static_cast<int32_t>(value & 0x3ffu);
+    if (signedValue & 0x200) signedValue |= ~0x3ff;
+    if (signedValue <= -512) return -1.0f;
+    return static_cast<float>(signedValue) / 511.0f;
 }
 
 static float halfToFloat(uint16_t value) {
@@ -6644,6 +6653,14 @@ public:
                             for (UINT c = 0; c < 4u; ++c) {
                                 regs.input[reg][c] = static_cast<float>(in[c]) / 255.0f;
                             }
+                            return true;
+                        }
+                        case D3DDECLTYPE_DEC3N: {
+                            uint32_t packed = 0;
+                            std::memcpy(&packed, source, sizeof(packed));
+                            regs.input[reg][0] = snorm10ToFloat(packed);
+                            regs.input[reg][1] = snorm10ToFloat(packed >> 10u);
+                            regs.input[reg][2] = snorm10ToFloat(packed >> 20u);
                             return true;
                         }
                         case D3DDECLTYPE_FLOAT16_2: {
