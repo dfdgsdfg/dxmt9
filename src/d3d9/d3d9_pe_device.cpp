@@ -1196,6 +1196,12 @@ static DWORD packD3DColor(const float in[4]) {
            static_cast<DWORD>(floatColorByte(in[2]));
 }
 
+static D9CColorRGBA d3dColorToRgba(DWORD color) {
+    float rgba[4]{};
+    unpackD3DColor(color, rgba);
+    return {rgba[0], rgba[1], rgba[2], rgba[3]};
+}
+
 static float dot3(const float a[3], const float b[3]) {
     return a[0] * b[0] + a[1] * b[1] + a[2] * b[2];
 }
@@ -6416,6 +6422,8 @@ public:
             !programmable && srcLayout.normal && renderStateValue(D3DRS_LIGHTING) != 0;
         const bool processSpecularLighting =
             processLighting && renderStateValue(D3DRS_SPECULARENABLE) != 0;
+        const bool processColorVertex =
+            processLighting && renderStateValue(D3DRS_COLORVERTEX) != 0;
         UINT srcReadBytes[D9C_DRAW_PACKET_MAX_STREAMS]{};
         auto requirePositionRead = [&]() {
             srcReadBytes[srcLayout.positionStream] =
@@ -6471,6 +6479,12 @@ public:
                          srcLayout.specularOffset + 4u);
             return true;
         };
+        auto requireMaterialColorRead = [&](DWORD source) -> bool {
+            if (!processColorVertex) return true;
+            if (source == D3DMCS_COLOR1) return requireDiffuseRead();
+            if (source == D3DMCS_COLOR2) return requireSpecularRead();
+            return source == D3DMCS_MATERIAL;
+        };
         auto requireTexRead = [&](UINT i, bool requireMatchingBytes) -> bool {
             if (i >= srcLayout.texCount || srcLayout.texBytes[i] == 0u ||
                 (requireMatchingBytes && dstLayout.texBytes[i] != srcLayout.texBytes[i])) {
@@ -6521,6 +6535,21 @@ public:
                 if (!requireNormalRead()) return invalid("specular lighting normal input missing");
             } else if (dstLayout.specular && !requireSpecularRead()) {
                 return invalid("specular passthrough missing");
+            }
+            if (processLighting) {
+                if (!requireMaterialColorRead(renderStateValue(D3DRS_DIFFUSEMATERIALSOURCE))) {
+                    return invalid("diffuse material source color missing");
+                }
+                if (!requireMaterialColorRead(renderStateValue(D3DRS_AMBIENTMATERIALSOURCE))) {
+                    return invalid("ambient material source color missing");
+                }
+                if (!requireMaterialColorRead(renderStateValue(D3DRS_EMISSIVEMATERIALSOURCE))) {
+                    return invalid("emissive material source color missing");
+                }
+                if (processSpecularLighting &&
+                    !requireMaterialColorRead(renderStateValue(D3DRS_SPECULARMATERIALSOURCE))) {
+                    return invalid("specular material source color missing");
+                }
             }
             for (UINT i = 0; i < dstLayout.texCount; ++i) {
                 if (dstLayout.texBytes[i] == 0u) continue;
@@ -7054,8 +7083,47 @@ public:
                         static_cast<uint64_t>(i) * streamStr_[srcLayout.normalStream] +
                         srcLayout.normalOffset;
                     std::memcpy(normal, normalSource, sizeof(normal));
+                    D9CMaterial material = peState_.materialShadow;
+                    auto readMaterialColor = [&](DWORD source,
+                                                 D9CColorRGBA& target) {
+                        if (!processColorVertex || source == D3DMCS_MATERIAL) {
+                            return true;
+                        }
+                        UINT stream = 0;
+                        UINT offset = 0;
+                        if (source == D3DMCS_COLOR1 && srcLayout.diffuse) {
+                            stream = srcLayout.diffuseStream;
+                            offset = srcLayout.diffuseOffset;
+                        } else if (source == D3DMCS_COLOR2 && srcLayout.specular) {
+                            stream = srcLayout.specularStream;
+                            offset = srcLayout.specularOffset;
+                        } else {
+                            return false;
+                        }
+                        DWORD color = 0;
+                        const auto* colorSource =
+                            srcBase[stream] + srcByteStart[stream] +
+                            static_cast<uint64_t>(i) * streamStr_[stream] +
+                            offset;
+                        std::memcpy(&color, colorSource, sizeof(color));
+                        target = d3dColorToRgba(color);
+                        return true;
+                    };
+                    if (!readMaterialColor(renderStateValue(D3DRS_DIFFUSEMATERIALSOURCE),
+                                           material.diffuse) ||
+                        !readMaterialColor(renderStateValue(D3DRS_AMBIENTMATERIALSOURCE),
+                                           material.ambient) ||
+                        !readMaterialColor(renderStateValue(D3DRS_EMISSIVEMATERIALSOURCE),
+                                           material.emissive) ||
+                        (processSpecularLighting &&
+                         !readMaterialColor(renderStateValue(D3DRS_SPECULARMATERIALSOURCE),
+                                            material.specular))) {
+                        lightingColors = {};
+                        lightingColorsReady = true;
+                        return lightingColors;
+                    }
                     lightingColors = processFixedFunctionLightingColors(
-                        fixedPosition, normal, peState_.materialShadow, processAmbient,
+                        fixedPosition, normal, material, processAmbient,
                         peState_.lightShadow, peState_.lightEnableShadow,
                         processSpecularLighting);
                     lightingColorsReady = true;

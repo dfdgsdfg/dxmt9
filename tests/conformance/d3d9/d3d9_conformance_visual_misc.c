@@ -2392,6 +2392,13 @@ void test_visual_process_vertices_xyzhw_policy(const struct d3d9_api *api)
         {400.0f, 300.0f, 0.0f, 1.0f, 0xffff8000u, 0.50f, 0.75f},
         {400.0f, 180.0f, 0.0f, 1.0f, 0xffff8000u, 1.00f, 1.00f},
     };
+    const struct dst_vertex expected_lit_colorvertex[] =
+    {
+        {240.0f, 300.0f, 0.0f, 1.0f, 0xff800000u, 0.00f, 0.25f},
+        {240.0f, 180.0f, 0.0f, 1.0f, 0xff008000u, 0.25f, 0.50f},
+        {400.0f, 300.0f, 0.0f, 1.0f, 0xff000080u, 0.50f, 0.75f},
+        {400.0f, 180.0f, 0.0f, 1.0f, 0xff808080u, 1.00f, 1.00f},
+    };
     const struct dst_specular_vertex expected_spot_specular[] =
     {
         {240.0f, 300.0f, 0.0f, 1.0f, 0xffff8000u, 0x000000ffu, 0.00f, 0.25f},
@@ -3242,6 +3249,66 @@ void test_visual_process_vertices_xyzhw_policy(const struct d3d9_api *api)
             CHECK_TRUE(dv < 0.01f);
         }
         CHECK_HR(IDirect3DVertexBuffer9_Unlock(lit_specular_dst_vb), D3D_OK);
+    }
+    CHECK_HR(IDirect3DDevice9_SetRenderState(device, D3DRS_SPECULARENABLE, FALSE),
+            D3D_OK);
+    memset(&material, 0, sizeof(material));
+    material.Diffuse.r = 1.0f;
+    material.Diffuse.g = 1.0f;
+    material.Diffuse.b = 1.0f;
+    material.Diffuse.a = 1.0f;
+    CHECK_HR(IDirect3DDevice9_SetMaterial(device, &material), D3D_OK);
+    memset(&light, 0, sizeof(light));
+    light.Type = D3DLIGHT_DIRECTIONAL;
+    light.Diffuse.r = 0.5f;
+    light.Diffuse.g = 0.5f;
+    light.Diffuse.b = 0.5f;
+    light.Direction.z = -1.0f;
+    CHECK_HR(IDirect3DDevice9_SetLight(device, 0, &light), D3D_OK);
+    CHECK_HR(IDirect3DDevice9_SetRenderState(device, D3DRS_COLORVERTEX, TRUE),
+            D3D_OK);
+    CHECK_HR(IDirect3DDevice9_SetRenderState(device,
+            D3DRS_DIFFUSEMATERIALSOURCE, D3DMCS_COLOR1), D3D_OK);
+    CHECK_HR(IDirect3DDevice9_SetRenderState(device,
+            D3DRS_AMBIENTMATERIALSOURCE, D3DMCS_MATERIAL), D3D_OK);
+    CHECK_HR(IDirect3DDevice9_SetRenderState(device,
+            D3DRS_EMISSIVEMATERIALSOURCE, D3DMCS_MATERIAL), D3D_OK);
+    CHECK_HR(IDirect3DDevice9_SetRenderState(device,
+            D3DRS_SPECULARMATERIALSOURCE, D3DMCS_MATERIAL), D3D_OK);
+    CHECK_HR(IDirect3DDevice9_SetRenderState(device, D3DRS_LIGHTING, TRUE),
+            D3D_OK);
+    CHECK_HR(IDirect3DDevice9_ProcessVertices(device, 0, 0,
+            ARRAY_SIZE(src_fvf_normal), lit_dst_vb, NULL, 0), D3D_OK);
+
+    hr = IDirect3DVertexBuffer9_Lock(lit_dst_vb, 0,
+            sizeof(expected_lit_colorvertex), (void **)&mapped,
+            D3DLOCK_READONLY);
+    CHECK_HR(hr, D3D_OK);
+    if (SUCCEEDED(hr))
+    {
+        for (i = 0; i < ARRAY_SIZE(expected_lit_colorvertex); ++i)
+        {
+            float dx = mapped[i].x - expected_lit_colorvertex[i].x;
+            float dy = mapped[i].y - expected_lit_colorvertex[i].y;
+            float dz = mapped[i].z - expected_lit_colorvertex[i].z;
+            float dw = mapped[i].rhw - expected_lit_colorvertex[i].rhw;
+            float du = mapped[i].u - expected_lit_colorvertex[i].u;
+            float dv = mapped[i].v - expected_lit_colorvertex[i].v;
+            if (dx < 0.0f) dx = -dx;
+            if (dy < 0.0f) dy = -dy;
+            if (dz < 0.0f) dz = -dz;
+            if (dw < 0.0f) dw = -dw;
+            if (du < 0.0f) du = -du;
+            if (dv < 0.0f) dv = -dv;
+            CHECK_TRUE(dx < 0.01f);
+            CHECK_TRUE(dy < 0.01f);
+            CHECK_TRUE(dz < 0.01f);
+            CHECK_TRUE(dw < 0.01f);
+            CHECK_TRUE(mapped[i].color == expected_lit_colorvertex[i].color);
+            CHECK_TRUE(du < 0.01f);
+            CHECK_TRUE(dv < 0.01f);
+        }
+        CHECK_HR(IDirect3DVertexBuffer9_Unlock(lit_dst_vb), D3D_OK);
     }
     CHECK_HR(IDirect3DDevice9_SetRenderState(device, D3DRS_SPECULARENABLE, FALSE),
             D3D_OK);
