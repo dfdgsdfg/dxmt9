@@ -415,6 +415,9 @@ static const DWORD p8_sample_ps_2_0[] =
     P8_PS_DST(D3DSPR_TEMP, 0, 0xf),
     P8_PS_SRC(D3DSPR_TEXTURE, 0),
     P8_PS_SRC(D3DSPR_SAMPLER, 0),
+    P8_PS_INST(D3DSIO_MOV, 2),
+    P8_PS_DST(D3DSPR_COLOROUT, 0, 0xf),
+    P8_PS_SRC(D3DSPR_TEMP, 0),
     D3DSIO_END
 };
 
@@ -431,6 +434,9 @@ static const DWORD p8_cube_sample_ps_2_0[] =
     P8_PS_DST(D3DSPR_TEMP, 0, 0xf),
     P8_PS_SRC(D3DSPR_TEXTURE, 0),
     P8_PS_SRC(D3DSPR_SAMPLER, 0),
+    P8_PS_INST(D3DSIO_MOV, 2),
+    P8_PS_DST(D3DSPR_COLOROUT, 0, 0xf),
+    P8_PS_SRC(D3DSPR_TEMP, 0),
     D3DSIO_END
 };
 
@@ -447,6 +453,9 @@ static const DWORD p8_volume_sample_ps_2_0[] =
     P8_PS_DST(D3DSPR_TEMP, 0, 0xf),
     P8_PS_SRC(D3DSPR_TEXTURE, 0),
     P8_PS_SRC(D3DSPR_SAMPLER, 0),
+    P8_PS_INST(D3DSIO_MOV, 2),
+    P8_PS_DST(D3DSPR_COLOROUT, 0, 0xf),
+    P8_PS_SRC(D3DSPR_TEMP, 0),
     D3DSIO_END
 };
 
@@ -459,7 +468,8 @@ static void check_visual_palettized_texture_sampler(IDirect3DDevice9 *device,
         D3DFORMAT format, const BYTE *texels, UINT texel_bytes,
         const DWORD *expected, BOOL programmable_ps, const BYTE *lod_texels,
         const DWORD *lod_expected, const PALETTEENTRY *updated_palette,
-        const DWORD *updated_expected)
+        const DWORD *updated_expected, UINT updated_palette_index,
+        BOOL update_palette_before_bind)
 {
     struct textured_point
     {
@@ -565,12 +575,26 @@ static void check_visual_palettized_texture_sampler(IDirect3DDevice9 *device,
             D3DTSS_ALPHAOP, D3DTOP_SELECTARG1), D3D_OK);
     CHECK_HR(IDirect3DDevice9_SetTextureStageState(device, 0,
             D3DTSS_ALPHAARG1, D3DTA_TEXTURE), D3D_OK);
+    if (updated_palette && update_palette_before_bind)
+    {
+        CHECK_HR(IDirect3DDevice9_SetPaletteEntries(device,
+                updated_palette_index,
+                updated_palette), D3D_OK);
+        if (updated_palette_index)
+            CHECK_HR(IDirect3DDevice9_SetCurrentTexturePalette(device,
+                    updated_palette_index), D3D_OK);
+        expected = updated_expected;
+    }
     CHECK_HR(IDirect3DDevice9_SetTexture(device, 0,
             (IDirect3DBaseTexture9 *)texture), D3D_OK);
-    if (updated_palette)
+    if (updated_palette && !update_palette_before_bind)
     {
-        CHECK_HR(IDirect3DDevice9_SetPaletteEntries(device, 0,
+        CHECK_HR(IDirect3DDevice9_SetPaletteEntries(device,
+                updated_palette_index,
                 updated_palette), D3D_OK);
+        if (updated_palette_index)
+            CHECK_HR(IDirect3DDevice9_SetCurrentTexturePalette(device,
+                    updated_palette_index), D3D_OK);
         expected = updated_expected;
     }
     CHECK_HR(IDirect3DDevice9_SetFVF(device, D3DFVF_XYZRHW | D3DFVF_TEX1),
@@ -614,12 +638,201 @@ static void check_visual_palettized_texture_sampler(IDirect3DDevice9 *device,
         CHECK_HR(IDirect3DDevice9_SetPixelShader(device, NULL), D3D_OK);
     if (ps) IDirect3DPixelShader9_Release(ps);
 done_texture_bind:
+    if (updated_palette && updated_palette_index)
+        CHECK_HR(IDirect3DDevice9_SetCurrentTexturePalette(device, 0),
+                D3D_OK);
     CHECK_HR(IDirect3DDevice9_SetTexture(device, 0, NULL), D3D_OK);
     IDirect3DSurface9_Release(readback);
 done_rt:
     IDirect3DSurface9_Release(rt);
 done_texture:
     IDirect3DTexture9_Release(texture);
+done:
+    return;
+}
+
+static void check_visual_palettized_update_texture_sampler(
+        IDirect3DDevice9 *device, D3DFORMAT format, const BYTE *texels,
+        UINT texel_bytes, const DWORD *expected,
+        const PALETTEENTRY *updated_palette, const DWORD *updated_expected,
+        BOOL programmable_ps)
+{
+    struct textured_point
+    {
+        float x, y, z, rhw;
+        float u, v;
+    };
+    static const struct textured_point points[] =
+    {
+        {0.5f, 0.5f, 0.0f, 1.0f, 0.25f, 0.25f},
+        {1.5f, 0.5f, 0.0f, 1.0f, 0.75f, 0.25f},
+        {0.5f, 1.5f, 0.0f, 1.0f, 0.25f, 0.75f},
+        {1.5f, 1.5f, 0.0f, 1.0f, 0.75f, 0.75f},
+    };
+    IDirect3DSurface9 *readback = NULL;
+    IDirect3DTexture9 *dst_texture = NULL;
+    IDirect3DTexture9 *src_texture = NULL;
+    IDirect3DPixelShader9 *ps = NULL;
+    IDirect3DSurface9 *rt = NULL;
+    D3DLOCKED_RECT locked;
+    DWORD point_size;
+    D3DVIEWPORT9 vp;
+    HRESULT hr;
+
+    hr = IDirect3DDevice9_CreateTexture(device, 2, 2, 1, 0, format,
+            D3DPOOL_SYSTEMMEM, &src_texture, NULL);
+    CHECK_HR(hr, D3D_OK);
+    if (FAILED(hr))
+        goto done;
+    hr = IDirect3DDevice9_CreateTexture(device, 2, 2, 1, 0, format,
+            D3DPOOL_DEFAULT, &dst_texture, NULL);
+    CHECK_HR(hr, D3D_OK);
+    if (FAILED(hr))
+        goto done_src_texture;
+
+    memset(&locked, 0xcc, sizeof(locked));
+    hr = IDirect3DTexture9_LockRect(src_texture, 0, &locked, NULL, 0);
+    CHECK_HR(hr, D3D_OK);
+    if (FAILED(hr))
+        goto done_dst_texture;
+    if (SUCCEEDED(hr))
+    {
+        INT row_bytes = (INT)(2 * texel_bytes);
+        BYTE *row0 = locked.pBits;
+        BYTE *row1 = row0 + locked.Pitch;
+        CHECK_TRUE(locked.Pitch >= row_bytes);
+        if (locked.Pitch >= row_bytes)
+        {
+            memcpy(row0, texels, row_bytes);
+            memcpy(row1, texels + row_bytes, row_bytes);
+        }
+        CHECK_HR(IDirect3DTexture9_UnlockRect(src_texture, 0), D3D_OK);
+    }
+
+    CHECK_HR(IDirect3DDevice9_UpdateTexture(device,
+            (IDirect3DBaseTexture9 *)src_texture,
+            (IDirect3DBaseTexture9 *)dst_texture), D3D_OK);
+
+    hr = IDirect3DDevice9_CreateRenderTarget(device, 2, 2,
+            D3DFMT_A8R8G8B8, D3DMULTISAMPLE_NONE, 0, FALSE, &rt, NULL);
+    CHECK_HR(hr, D3D_OK);
+    if (FAILED(hr))
+        goto done_dst_texture;
+    hr = IDirect3DDevice9_CreateOffscreenPlainSurface(device, 2, 2,
+            D3DFMT_A8R8G8B8, D3DPOOL_SYSTEMMEM, &readback, NULL);
+    CHECK_HR(hr, D3D_OK);
+    if (FAILED(hr))
+        goto done_rt;
+
+    CHECK_HR(IDirect3DDevice9_SetRenderTarget(device, 0, rt), D3D_OK);
+    vp.X = 0;
+    vp.Y = 0;
+    vp.Width = 2;
+    vp.Height = 2;
+    vp.MinZ = 0.0f;
+    vp.MaxZ = 1.0f;
+    CHECK_HR(IDirect3DDevice9_SetViewport(device, &vp), D3D_OK);
+    CHECK_HR(IDirect3DDevice9_SetRenderState(device, D3DRS_LIGHTING, FALSE),
+            D3D_OK);
+    CHECK_HR(IDirect3DDevice9_SetRenderState(device, D3DRS_ZENABLE, FALSE),
+            D3D_OK);
+    point_size = 0x3f800000u;
+    CHECK_HR(IDirect3DDevice9_SetRenderState(device, D3DRS_POINTSIZE,
+            point_size), D3D_OK);
+    CHECK_HR(IDirect3DDevice9_SetSamplerState(device, 0, D3DSAMP_MINFILTER,
+            D3DTEXF_POINT), D3D_OK);
+    CHECK_HR(IDirect3DDevice9_SetSamplerState(device, 0, D3DSAMP_MAGFILTER,
+            D3DTEXF_POINT), D3D_OK);
+    CHECK_HR(IDirect3DDevice9_SetSamplerState(device, 0, D3DSAMP_MIPFILTER,
+            D3DTEXF_NONE), D3D_OK);
+    CHECK_HR(IDirect3DDevice9_SetTextureStageState(device, 0,
+            D3DTSS_COLOROP, D3DTOP_SELECTARG1), D3D_OK);
+    CHECK_HR(IDirect3DDevice9_SetTextureStageState(device, 0,
+            D3DTSS_COLORARG1, D3DTA_TEXTURE), D3D_OK);
+    CHECK_HR(IDirect3DDevice9_SetTextureStageState(device, 0,
+            D3DTSS_ALPHAOP, D3DTOP_SELECTARG1), D3D_OK);
+    CHECK_HR(IDirect3DDevice9_SetTextureStageState(device, 0,
+            D3DTSS_ALPHAARG1, D3DTA_TEXTURE), D3D_OK);
+    CHECK_HR(IDirect3DDevice9_SetTexture(device, 0,
+            (IDirect3DBaseTexture9 *)dst_texture), D3D_OK);
+    CHECK_HR(IDirect3DDevice9_SetFVF(device, D3DFVF_XYZRHW | D3DFVF_TEX1),
+            D3D_OK);
+    if (programmable_ps)
+    {
+        hr = IDirect3DDevice9_CreatePixelShader(device, p8_sample_ps_2_0,
+                &ps);
+        CHECK_HR(hr, D3D_OK);
+        if (FAILED(hr))
+            goto done_texture_bind;
+        CHECK_HR(IDirect3DDevice9_SetPixelShader(device, ps), D3D_OK);
+    }
+
+    CHECK_HR(IDirect3DDevice9_BeginScene(device), D3D_OK);
+    CHECK_HR(IDirect3DDevice9_Clear(device, 0, NULL, D3DCLEAR_TARGET,
+            0xff000000u, 0.0f, 0), D3D_OK);
+    CHECK_HR(IDirect3DDevice9_DrawPrimitiveUP(device, D3DPT_POINTLIST,
+            ARRAY_SIZE(points), points, sizeof(points[0])), D3D_OK);
+    CHECK_HR(IDirect3DDevice9_EndScene(device), D3D_OK);
+    CHECK_HR(IDirect3DDevice9_GetRenderTargetData(device, rt, readback),
+            D3D_OK);
+
+    memset(&locked, 0xcc, sizeof(locked));
+    hr = IDirect3DSurface9_LockRect(readback, &locked, NULL,
+            D3DLOCK_READONLY);
+    CHECK_HR(hr, D3D_OK);
+    if (SUCCEEDED(hr))
+    {
+        const DWORD *row0 = locked.pBits;
+        const DWORD *row1 = (const DWORD *)((const BYTE *)locked.pBits
+                + locked.Pitch);
+        CHECK_TRUE(row0[0] == expected[0]);
+        CHECK_TRUE(row0[1] == expected[1]);
+        CHECK_TRUE(row1[0] == expected[2]);
+        CHECK_TRUE(row1[1] == expected[3]);
+        CHECK_HR(IDirect3DSurface9_UnlockRect(readback), D3D_OK);
+    }
+
+    CHECK_HR(IDirect3DDevice9_SetPaletteEntries(device, 1, updated_palette),
+            D3D_OK);
+    CHECK_HR(IDirect3DDevice9_SetCurrentTexturePalette(device, 1), D3D_OK);
+    CHECK_HR(IDirect3DDevice9_BeginScene(device), D3D_OK);
+    CHECK_HR(IDirect3DDevice9_Clear(device, 0, NULL, D3DCLEAR_TARGET,
+            0xff000000u, 0.0f, 0), D3D_OK);
+    CHECK_HR(IDirect3DDevice9_DrawPrimitiveUP(device, D3DPT_POINTLIST,
+            ARRAY_SIZE(points), points, sizeof(points[0])), D3D_OK);
+    CHECK_HR(IDirect3DDevice9_EndScene(device), D3D_OK);
+    CHECK_HR(IDirect3DDevice9_GetRenderTargetData(device, rt, readback),
+            D3D_OK);
+
+    memset(&locked, 0xcc, sizeof(locked));
+    hr = IDirect3DSurface9_LockRect(readback, &locked, NULL,
+            D3DLOCK_READONLY);
+    CHECK_HR(hr, D3D_OK);
+    if (SUCCEEDED(hr))
+    {
+        const DWORD *row0 = locked.pBits;
+        const DWORD *row1 = (const DWORD *)((const BYTE *)locked.pBits
+                + locked.Pitch);
+        CHECK_TRUE(row0[0] == updated_expected[0]);
+        CHECK_TRUE(row0[1] == updated_expected[1]);
+        CHECK_TRUE(row1[0] == updated_expected[2]);
+        CHECK_TRUE(row1[1] == updated_expected[3]);
+        CHECK_HR(IDirect3DSurface9_UnlockRect(readback), D3D_OK);
+    }
+
+    if (programmable_ps)
+        CHECK_HR(IDirect3DDevice9_SetPixelShader(device, NULL), D3D_OK);
+    if (ps) IDirect3DPixelShader9_Release(ps);
+done_texture_bind:
+    CHECK_HR(IDirect3DDevice9_SetCurrentTexturePalette(device, 0), D3D_OK);
+    CHECK_HR(IDirect3DDevice9_SetTexture(device, 0, NULL), D3D_OK);
+    IDirect3DSurface9_Release(readback);
+done_rt:
+    IDirect3DSurface9_Release(rt);
+done_dst_texture:
+    IDirect3DTexture9_Release(dst_texture);
+done_src_texture:
+    IDirect3DTexture9_Release(src_texture);
 done:
     return;
 }
@@ -1075,27 +1288,31 @@ void test_visual_p8_texture_sampler_policy(const struct d3d9_api *api)
             D3D_OK);
 
     check_visual_palettized_texture_sampler(device, D3DFMT_P8,
-            p8_texels, 1, p8_expected, FALSE, NULL, NULL, NULL, NULL);
+            p8_texels, 1, p8_expected, FALSE, NULL, NULL, NULL, NULL, 0,
+            FALSE);
     check_visual_palettized_texture_sampler(device, D3DFMT_A8P8,
-            a8p8_texels, 2, a8p8_expected, FALSE, NULL, NULL, NULL, NULL);
+            a8p8_texels, 2, a8p8_expected, FALSE, NULL, NULL, NULL, NULL,
+            0, FALSE);
     check_visual_palettized_texture_sampler(device, D3DFMT_P8,
             p8_texels, 1, p8_expected, FALSE, p8_lod_texels,
-            p8_lod_expected, NULL, NULL);
+            p8_lod_expected, NULL, NULL, 0, FALSE);
     check_visual_palettized_texture_sampler(device, D3DFMT_A8P8,
             a8p8_texels, 2, a8p8_expected, FALSE, a8p8_lod_texels,
-            a8p8_lod_expected, NULL, NULL);
+            a8p8_lod_expected, NULL, NULL, 0, FALSE);
     if (caps.PixelShaderVersion >= D3DPS_VERSION(2, 0))
     {
         check_visual_palettized_texture_sampler(device, D3DFMT_P8,
-                p8_texels, 1, p8_expected, TRUE, NULL, NULL, NULL, NULL);
+                p8_texels, 1, p8_expected, TRUE, NULL, NULL, NULL, NULL, 0,
+                FALSE);
         check_visual_palettized_texture_sampler(device, D3DFMT_A8P8,
-                a8p8_texels, 2, a8p8_expected, TRUE, NULL, NULL, NULL, NULL);
+                a8p8_texels, 2, a8p8_expected, TRUE, NULL, NULL, NULL,
+                NULL, 0, FALSE);
         check_visual_palettized_texture_sampler(device, D3DFMT_P8,
                 p8_texels, 1, p8_expected, TRUE, p8_lod_texels,
-                p8_lod_expected, NULL, NULL);
+                p8_lod_expected, NULL, NULL, 0, FALSE);
         check_visual_palettized_texture_sampler(device, D3DFMT_A8P8,
                 a8p8_texels, 2, a8p8_expected, TRUE, a8p8_lod_texels,
-                a8p8_lod_expected, NULL, NULL);
+                a8p8_lod_expected, NULL, NULL, 0, FALSE);
         check_visual_palettized_cube_texture_sampler(device, D3DFMT_P8,
                 p8_cube_texels, 1, p8_cube_expected);
         check_visual_palettized_cube_texture_sampler(device, D3DFMT_A8P8,
@@ -1111,18 +1328,54 @@ void test_visual_p8_texture_sampler_policy(const struct d3d9_api *api)
     }
     check_visual_palettized_texture_sampler(device, D3DFMT_P8,
             p8_texels, 1, p8_expected, FALSE, NULL, NULL,
-            updated_palette, p8_updated_expected);
+            updated_palette, p8_updated_expected, 0, FALSE);
     check_visual_palettized_texture_sampler(device, D3DFMT_A8P8,
             a8p8_texels, 2, a8p8_expected, FALSE, NULL, NULL,
-            updated_palette, a8p8_updated_expected);
+            updated_palette, a8p8_updated_expected, 0, FALSE);
+    check_visual_palettized_texture_sampler(device, D3DFMT_P8,
+            p8_texels, 1, p8_expected, FALSE, NULL, NULL,
+            updated_palette, p8_updated_expected, 1, FALSE);
+    check_visual_palettized_texture_sampler(device, D3DFMT_A8P8,
+            a8p8_texels, 2, a8p8_expected, FALSE, NULL, NULL,
+            updated_palette, a8p8_updated_expected, 1, FALSE);
+    check_visual_palettized_texture_sampler(device, D3DFMT_P8,
+            p8_texels, 1, p8_expected, FALSE, NULL, NULL,
+            updated_palette, p8_updated_expected, 1, TRUE);
+    check_visual_palettized_texture_sampler(device, D3DFMT_A8P8,
+            a8p8_texels, 2, a8p8_expected, FALSE, NULL, NULL,
+            updated_palette, a8p8_updated_expected, 1, TRUE);
+    check_visual_palettized_update_texture_sampler(device, D3DFMT_P8,
+            p8_texels, 1, p8_expected, updated_palette,
+            p8_updated_expected, FALSE);
+    check_visual_palettized_update_texture_sampler(device, D3DFMT_A8P8,
+            a8p8_texels, 2, a8p8_expected, updated_palette,
+            a8p8_updated_expected, FALSE);
     if (caps.PixelShaderVersion >= D3DPS_VERSION(2, 0))
     {
         check_visual_palettized_texture_sampler(device, D3DFMT_P8,
                 p8_texels, 1, p8_expected, TRUE, NULL, NULL,
-                updated_palette, p8_updated_expected);
+                updated_palette, p8_updated_expected, 0, FALSE);
         check_visual_palettized_texture_sampler(device, D3DFMT_A8P8,
                 a8p8_texels, 2, a8p8_expected, TRUE, NULL, NULL,
-                updated_palette, a8p8_updated_expected);
+                updated_palette, a8p8_updated_expected, 0, FALSE);
+        check_visual_palettized_texture_sampler(device, D3DFMT_P8,
+                p8_texels, 1, p8_expected, TRUE, NULL, NULL,
+                updated_palette, p8_updated_expected, 1, FALSE);
+        check_visual_palettized_texture_sampler(device, D3DFMT_A8P8,
+                a8p8_texels, 2, a8p8_expected, TRUE, NULL, NULL,
+                updated_palette, a8p8_updated_expected, 1, FALSE);
+        check_visual_palettized_texture_sampler(device, D3DFMT_P8,
+                p8_texels, 1, p8_expected, TRUE, NULL, NULL,
+                updated_palette, p8_updated_expected, 1, TRUE);
+        check_visual_palettized_texture_sampler(device, D3DFMT_A8P8,
+                a8p8_texels, 2, a8p8_expected, TRUE, NULL, NULL,
+                updated_palette, a8p8_updated_expected, 1, TRUE);
+        check_visual_palettized_update_texture_sampler(device, D3DFMT_P8,
+                p8_texels, 1, p8_expected, updated_palette,
+                p8_updated_expected, TRUE);
+        check_visual_palettized_update_texture_sampler(device, D3DFMT_A8P8,
+                a8p8_texels, 2, a8p8_expected, updated_palette,
+                a8p8_updated_expected, TRUE);
     }
     IDirect3DDevice9_Release(device);
 done_window:

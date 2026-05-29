@@ -439,6 +439,10 @@ void testPalettizedTextureExpansion() {
 
   auto* device = d3d->CreateDeviceEx(0, params, nullptr);
   check(device != nullptr, "device for p8 texture");
+  const auto checkSample = [](float actual, uint32_t byte, std::string_view message) {
+    const float expected = static_cast<float>(byte) / 255.0f;
+    check(std::fabs(actual - expected) < 0.0001f, message);
+  };
 
   {
     device->AddRef();
@@ -501,6 +505,19 @@ void testPalettizedTextureExpansion() {
       checkEq(upload.bytes[13], uint8_t{0xbb}, "P8 backend pixel3 green");
       checkEq(upload.bytes[14], uint8_t{0xaa}, "P8 backend pixel3 red");
       checkEq(upload.bytes[15], uint8_t{0xff}, "P8 backend pixel3 alpha");
+      float rgba[4]{};
+      checkEq(dxmt9c_texture_sample_2d(texture, 0, 0.10f, 0.10f, rgba),
+              D3D_OK, "P8 sample reads expanded top-left texel");
+      checkSample(rgba[0], 0x11u, "P8 sample top-left red");
+      checkSample(rgba[1], 0x22u, "P8 sample top-left green");
+      checkSample(rgba[2], 0x33u, "P8 sample top-left blue");
+      checkSample(rgba[3], 0xffu, "P8 sample top-left alpha");
+      checkEq(dxmt9c_texture_sample_2d(texture, 0, 0.75f, 0.75f, rgba),
+              D3D_OK, "P8 sample reads expanded bottom-right texel");
+      checkSample(rgba[0], 0xaau, "P8 sample bottom-right red");
+      checkSample(rgba[1], 0xbbu, "P8 sample bottom-right green");
+      checkSample(rgba[2], 0xccu, "P8 sample bottom-right blue");
+      checkSample(rgba[3], 0xffu, "P8 sample bottom-right alpha");
 
       checkEq(dxmt9c_texture_release(texture), 0u, "P8 texture release");
     }
@@ -549,6 +566,19 @@ void testPalettizedTextureExpansion() {
               "locked P8 pixel1 green from latest palette");
       checkEq(bytes[6], uint8_t{0x40},
               "locked P8 pixel1 red from latest palette");
+      float rgba[4]{};
+      checkEq(dxmt9c_texture_sample_2d(texture, 0, 0.10f, 0.10f, rgba),
+              D3D_OK, "locked P8 sample reads latest palette pixel0");
+      checkSample(rgba[0], 0x10u, "locked P8 sample pixel0 red");
+      checkSample(rgba[1], 0x20u, "locked P8 sample pixel0 green");
+      checkSample(rgba[2], 0x30u, "locked P8 sample pixel0 blue");
+      checkSample(rgba[3], 0xffu, "locked P8 sample pixel0 alpha");
+      checkEq(dxmt9c_texture_sample_2d(texture, 0, 0.75f, 0.10f, rgba),
+              D3D_OK, "locked P8 sample reads latest palette pixel1");
+      checkSample(rgba[0], 0x40u, "locked P8 sample pixel1 red");
+      checkSample(rgba[1], 0x50u, "locked P8 sample pixel1 green");
+      checkSample(rgba[2], 0x60u, "locked P8 sample pixel1 blue");
+      checkSample(rgba[3], 0xffu, "locked P8 sample pixel1 alpha");
 
       checkEq(dxmt9c_texture_release(texture), 0u,
               "locked P8 palette texture release");
@@ -603,6 +633,19 @@ void testPalettizedTextureExpansion() {
               "P8 update shadow pixel1 blue after palette switch");
       checkEq(bytes[6], uint8_t{0xa0},
               "P8 update shadow pixel1 red after palette switch");
+      float rgba[4]{};
+      checkEq(dxmt9c_texture_sample_2d(dstTexture, 0, 0.10f, 0.10f, rgba),
+              D3D_OK, "P8 update sample reads switched palette pixel0");
+      checkSample(rgba[0], 0x01u, "P8 update sample pixel0 red");
+      checkSample(rgba[1], 0x02u, "P8 update sample pixel0 green");
+      checkSample(rgba[2], 0x03u, "P8 update sample pixel0 blue");
+      checkSample(rgba[3], 0xffu, "P8 update sample pixel0 alpha");
+      checkEq(dxmt9c_texture_sample_2d(dstTexture, 0, 0.75f, 0.10f, rgba),
+              D3D_OK, "P8 update sample reads switched palette pixel1");
+      checkSample(rgba[0], 0xa0u, "P8 update sample pixel1 red");
+      checkSample(rgba[1], 0xb0u, "P8 update sample pixel1 green");
+      checkSample(rgba[2], 0xc0u, "P8 update sample pixel1 blue");
+      checkSample(rgba[3], 0xffu, "P8 update sample pixel1 alpha");
 
       checkEq(dxmt9c_texture_lock_rect(dstTexture, 0, &locked, nullptr, 0),
               D3D_OK, "P8 update destination lock");
@@ -678,8 +721,89 @@ void testPalettizedTextureExpansion() {
       checkEq(upload.bytes[6], uint8_t{0x40}, "A8P8 backend pixel1 red");
       checkEq(upload.bytes[7], uint8_t{0x40},
               "A8P8 backend pixel1 alpha from texel");
+      float rgba[4]{};
+      checkEq(dxmt9c_texture_sample_2d(texture, 0, 0.10f, 0.10f, rgba),
+              D3D_OK, "A8P8 sample reads expanded first texel");
+      checkSample(rgba[0], 0x10u, "A8P8 sample first red");
+      checkSample(rgba[1], 0x20u, "A8P8 sample first green");
+      checkSample(rgba[2], 0x30u, "A8P8 sample first blue");
+      checkSample(rgba[3], 0x80u, "A8P8 sample first alpha");
+      checkEq(dxmt9c_texture_sample_2d(texture, 0, 0.75f, 0.10f, rgba),
+              D3D_OK, "A8P8 sample reads expanded second texel");
+      checkSample(rgba[0], 0x40u, "A8P8 sample second red");
+      checkSample(rgba[1], 0x50u, "A8P8 sample second green");
+      checkSample(rgba[2], 0x60u, "A8P8 sample second blue");
+      checkSample(rgba[3], 0x40u, "A8P8 sample second alpha");
 
       checkEq(dxmt9c_texture_release(texture), 0u, "A8P8 texture release");
+    }
+    {
+      auto* texture = dxmt9c_device_create_texture(&cDevice, 2, 1, 1, 0,
+                                                   40u, 1u);
+      check(texture != nullptr, "create locked A8P8 palette texture");
+
+      std::array<uint32_t, 256> palette{};
+      palette[5] = 0xff010203u;
+      palette[6] = 0xff040506u;
+      checkEq(dxmt9c_texture_set_palette(texture, palette.data(),
+                                          static_cast<uint32_t>(palette.size())),
+              D3D_OK, "locked A8P8 initial palette upload");
+
+      D9CLockedRect locked{};
+      checkEq(dxmt9c_texture_lock_rect(texture, 0, &locked, nullptr, 0),
+              D3D_OK, "locked A8P8 lock before palette switch");
+      auto* texels = static_cast<uint8_t*>(locked.bits);
+      texels[0] = 5;
+      texels[1] = 0x90;
+      texels[2] = 6;
+      texels[3] = 0x50;
+
+      const size_t uploadCount = backend->textureUploads.size();
+      palette[5] = 0xff102030u;
+      palette[6] = 0xff405060u;
+      checkEq(dxmt9c_texture_set_palette(texture, palette.data(),
+                                          static_cast<uint32_t>(palette.size())),
+              D3D_OK, "locked A8P8 palette switch");
+      checkEq(backend->textureUploads.size(), uploadCount,
+              "locked A8P8 palette switch skips locked backend upload");
+
+      checkEq(dxmt9c_texture_unlock_rect(texture, 0), D3D_OK,
+              "locked A8P8 unlock after palette switch");
+      auto bytes = texture->obj->levelBytes(0);
+      check(bytes.size() >= 8,
+            "locked A8P8 expanded backing has two BGRA pixels");
+      checkEq(bytes[0], uint8_t{0x30},
+              "locked A8P8 pixel0 blue from latest palette");
+      checkEq(bytes[1], uint8_t{0x20},
+              "locked A8P8 pixel0 green from latest palette");
+      checkEq(bytes[2], uint8_t{0x10},
+              "locked A8P8 pixel0 red from latest palette");
+      checkEq(bytes[3], uint8_t{0x90},
+              "locked A8P8 pixel0 alpha from texel");
+      checkEq(bytes[4], uint8_t{0x60},
+              "locked A8P8 pixel1 blue from latest palette");
+      checkEq(bytes[5], uint8_t{0x50},
+              "locked A8P8 pixel1 green from latest palette");
+      checkEq(bytes[6], uint8_t{0x40},
+              "locked A8P8 pixel1 red from latest palette");
+      checkEq(bytes[7], uint8_t{0x50},
+              "locked A8P8 pixel1 alpha from texel");
+      float rgba[4]{};
+      checkEq(dxmt9c_texture_sample_2d(texture, 0, 0.10f, 0.10f, rgba),
+              D3D_OK, "locked A8P8 sample reads latest palette pixel0");
+      checkSample(rgba[0], 0x10u, "locked A8P8 sample pixel0 red");
+      checkSample(rgba[1], 0x20u, "locked A8P8 sample pixel0 green");
+      checkSample(rgba[2], 0x30u, "locked A8P8 sample pixel0 blue");
+      checkSample(rgba[3], 0x90u, "locked A8P8 sample pixel0 alpha");
+      checkEq(dxmt9c_texture_sample_2d(texture, 0, 0.75f, 0.10f, rgba),
+              D3D_OK, "locked A8P8 sample reads latest palette pixel1");
+      checkSample(rgba[0], 0x40u, "locked A8P8 sample pixel1 red");
+      checkSample(rgba[1], 0x50u, "locked A8P8 sample pixel1 green");
+      checkSample(rgba[2], 0x60u, "locked A8P8 sample pixel1 blue");
+      checkSample(rgba[3], 0x50u, "locked A8P8 sample pixel1 alpha");
+
+      checkEq(dxmt9c_texture_release(texture), 0u,
+              "locked A8P8 palette texture release");
     }
     {
       auto* srcTexture = dxmt9c_device_create_texture(&cDevice, 2, 1, 1, 0,
@@ -739,6 +863,19 @@ void testPalettizedTextureExpansion() {
               "A8P8 update shadow pixel1 red after palette switch");
       checkEq(bytes[7], uint8_t{0x30},
               "A8P8 update shadow pixel1 alpha after palette switch");
+      float rgba[4]{};
+      checkEq(dxmt9c_texture_sample_2d(dstTexture, 0, 0.10f, 0.10f, rgba),
+              D3D_OK, "A8P8 update sample reads switched palette pixel0");
+      checkSample(rgba[0], 0x01u, "A8P8 update sample pixel0 red");
+      checkSample(rgba[1], 0x02u, "A8P8 update sample pixel0 green");
+      checkSample(rgba[2], 0x03u, "A8P8 update sample pixel0 blue");
+      checkSample(rgba[3], 0x70u, "A8P8 update sample pixel0 alpha");
+      checkEq(dxmt9c_texture_sample_2d(dstTexture, 0, 0.75f, 0.10f, rgba),
+              D3D_OK, "A8P8 update sample reads switched palette pixel1");
+      checkSample(rgba[0], 0xa0u, "A8P8 update sample pixel1 red");
+      checkSample(rgba[1], 0xb0u, "A8P8 update sample pixel1 green");
+      checkSample(rgba[2], 0xc0u, "A8P8 update sample pixel1 blue");
+      checkSample(rgba[3], 0x30u, "A8P8 update sample pixel1 alpha");
 
       checkEq(dxmt9c_texture_lock_rect(dstTexture, 0, &locked, nullptr, 0),
               D3D_OK, "A8P8 update destination lock");
@@ -816,6 +953,139 @@ void testPalettizedTextureExpansion() {
       checkEq(upload.pitch, 8u, "cube P8 backend upload pitch");
 
       checkEq(dxmt9c_texture_release(texture), 0u, "cube P8 texture release");
+    }
+    {
+      auto* texture = dxmt9c_device_create_cube_texture(&cDevice, 2, 1, 0,
+                                                        40u, 1u);
+      check(texture != nullptr, "create cube A8P8 texture");
+      checkEq(texture->obj->desc().format, Format::A8R8G8B8,
+              "cube A8P8 texture uses RGBA backing");
+      checkEq(texture->obj->subresourceCount(), 6u,
+              "cube A8P8 has one level per face");
+
+      D9CSurfaceDesc desc{};
+      checkEq(dxmt9c_texture_get_level_desc(texture, 0, &desc), D3D_OK,
+              "cube A8P8 level desc");
+      checkEq(desc.format, 40u, "cube A8P8 public format preserved");
+
+      std::array<uint32_t, 256> palette{};
+      palette[15] = 0xff102030u;
+      palette[16] = 0xff405060u;
+      palette[17] = 0xff708090u;
+      palette[18] = 0xffa0b0c0u;
+      checkEq(dxmt9c_texture_set_palette(texture, palette.data(),
+                                          static_cast<uint32_t>(palette.size())),
+              D3D_OK, "cube A8P8 palette upload");
+
+      D9CLockedRect locked{};
+      const uint32_t faceSubresource = 4u;
+      checkEq(dxmt9c_texture_lock_rect(texture, faceSubresource, &locked,
+                                       nullptr, 0),
+              D3D_OK, "cube A8P8 lock");
+      checkEq(locked.pitch, int32_t{4},
+              "cube A8P8 lock pitch is two bytes per texel");
+      auto* texels = static_cast<uint8_t*>(locked.bits);
+      texels[0] = 15;
+      texels[1] = 0x10;
+      texels[2] = 16;
+      texels[3] = 0x20;
+      texels[4] = 17;
+      texels[5] = 0x30;
+      texels[6] = 18;
+      texels[7] = 0x40;
+      checkEq(dxmt9c_texture_unlock_rect(texture, faceSubresource), D3D_OK,
+              "cube A8P8 unlock");
+
+      auto bytes = texture->obj->levelBytes(faceSubresource);
+      check(bytes.size() >= 16,
+            "cube A8P8 expanded backing has four BGRA pixels");
+      checkEq(bytes[0], uint8_t{0x30}, "cube A8P8 pixel0 blue");
+      checkEq(bytes[1], uint8_t{0x20}, "cube A8P8 pixel0 green");
+      checkEq(bytes[2], uint8_t{0x10}, "cube A8P8 pixel0 red");
+      checkEq(bytes[3], uint8_t{0x10}, "cube A8P8 pixel0 alpha");
+      checkEq(bytes[12], uint8_t{0xc0}, "cube A8P8 pixel3 blue");
+      checkEq(bytes[13], uint8_t{0xb0}, "cube A8P8 pixel3 green");
+      checkEq(bytes[14], uint8_t{0xa0}, "cube A8P8 pixel3 red");
+      checkEq(bytes[15], uint8_t{0x40}, "cube A8P8 pixel3 alpha");
+      check(!backend->textureUploads.empty(),
+            "cube A8P8 expansion uploads converted BGRA bytes to backend");
+      const auto& upload = backend->textureUploads.back();
+      checkEq(upload.level, faceSubresource, "cube A8P8 backend upload face");
+      checkEq(upload.width, 2u, "cube A8P8 backend upload width");
+      checkEq(upload.height, 2u, "cube A8P8 backend upload height");
+      checkEq(upload.depth, 1u, "cube A8P8 backend upload depth");
+      checkEq(upload.pitch, 8u, "cube A8P8 backend upload pitch");
+      check(upload.bytes.size() >= 16,
+            "cube A8P8 backend upload has expanded face");
+      checkEq(upload.bytes[3], uint8_t{0x10},
+              "cube A8P8 backend pixel0 alpha");
+      checkEq(upload.bytes[15], uint8_t{0x40},
+              "cube A8P8 backend pixel3 alpha");
+
+      checkEq(dxmt9c_texture_release(texture), 0u,
+              "cube A8P8 texture release");
+    }
+    {
+      auto* texture = dxmt9c_device_create_volume_texture(&cDevice, 2, 1, 2,
+                                                          1, 0, 41u, 1u);
+      check(texture != nullptr, "create volume P8 texture");
+      checkEq(texture->obj->desc().format, Format::A8R8G8B8,
+              "volume P8 texture uses RGBA backing");
+
+      D9CSurfaceDesc desc{};
+      checkEq(dxmt9c_texture_get_level_desc(texture, 0, &desc), D3D_OK,
+              "volume P8 level desc");
+      checkEq(desc.format, 41u, "volume P8 public format preserved");
+      checkEq(desc.depth, 2u, "volume P8 depth preserved");
+
+      std::array<uint32_t, 256> palette{};
+      palette[19] = 0xff010203u;
+      palette[20] = 0xff405060u;
+      palette[21] = 0xff708090u;
+      palette[22] = 0xffa0b0c0u;
+      checkEq(dxmt9c_texture_set_palette(texture, palette.data(),
+                                          static_cast<uint32_t>(palette.size())),
+              D3D_OK, "volume P8 palette upload");
+
+      D9CLockedRect locked{};
+      checkEq(dxmt9c_texture_lock_rect(texture, 0, &locked, nullptr, 0),
+              D3D_OK, "volume P8 lock");
+      checkEq(locked.pitch, int32_t{2},
+              "volume P8 lock pitch is one byte per texel");
+      auto* indices = static_cast<uint8_t*>(locked.bits);
+      indices[0] = 19;
+      indices[1] = 20;
+      indices[2] = 21;
+      indices[3] = 22;
+      checkEq(dxmt9c_texture_unlock_rect(texture, 0), D3D_OK,
+              "volume P8 unlock");
+
+      auto bytes = texture->obj->levelBytes(0);
+      check(bytes.size() >= 16,
+            "volume P8 expanded backing has two BGRA slices");
+      checkEq(bytes[0], uint8_t{0x03}, "volume P8 slice0 pixel0 blue");
+      checkEq(bytes[2], uint8_t{0x01}, "volume P8 slice0 pixel0 red");
+      checkEq(bytes[3], uint8_t{0xff}, "volume P8 slice0 pixel0 alpha");
+      checkEq(bytes[8], uint8_t{0x90}, "volume P8 slice1 pixel0 blue");
+      checkEq(bytes[10], uint8_t{0x70}, "volume P8 slice1 pixel0 red");
+      checkEq(bytes[15], uint8_t{0xff}, "volume P8 slice1 pixel1 alpha");
+      check(!backend->textureUploads.empty(),
+            "volume P8 expansion uploads converted BGRA bytes to backend");
+      const auto& upload = backend->textureUploads.back();
+      checkEq(upload.width, 2u, "volume P8 backend upload width");
+      checkEq(upload.height, 1u, "volume P8 backend upload height");
+      checkEq(upload.depth, 2u, "volume P8 backend upload depth");
+      checkEq(upload.pitch, 8u, "volume P8 backend upload pitch");
+      checkEq(upload.slicePitch, 8u, "volume P8 backend upload slice pitch");
+      check(upload.bytes.size() >= 16,
+            "volume P8 backend upload has two expanded slices");
+      checkEq(upload.bytes[8], uint8_t{0x90},
+              "volume P8 backend slice1 pixel0 blue");
+      checkEq(upload.bytes[15], uint8_t{0xff},
+              "volume P8 backend slice1 pixel1 alpha");
+
+      checkEq(dxmt9c_texture_release(texture), 0u,
+              "volume P8 texture release");
     }
     {
       auto* texture = dxmt9c_device_create_volume_texture(&cDevice, 2, 1, 2,

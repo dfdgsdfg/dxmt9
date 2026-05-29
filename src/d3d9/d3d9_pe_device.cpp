@@ -590,6 +590,7 @@ struct FvfProcessLayout {
     UINT streamStride[16]{};
     UINT positionStream = 0;
     UINT positionOffset = 0;
+    UINT positionType = D3DDECLTYPE_FLOAT3;
     UINT positionBytes = 0;
     UINT normalStream = 0;
     UINT normalOffset = 0;
@@ -605,9 +606,11 @@ struct FvfProcessLayout {
     UINT binormalBytes = 12u;
     UINT blendWeightStream = 0;
     UINT blendWeightOffset = 0;
+    UINT blendWeightType = D3DDECLTYPE_FLOAT4;
     UINT blendWeightBytes = 0;
     UINT blendIndicesStream = 0;
     UINT blendIndicesOffset = 0;
+    UINT blendIndicesType = D3DDECLTYPE_UBYTE4;
     UINT blendIndicesBytes = 0;
     UINT psizeStream = 0;
     UINT psizeOffset = 0;
@@ -693,7 +696,7 @@ static bool processFvfXyzbPosition(DWORD positionMask) {
            positionMask == D3DFVF_XYZB5;
 }
 
-static UINT processTexDeclBytes(UINT type, bool destination) {
+static UINT processTexDeclBytes(UINT type, bool /*destination*/) {
     switch (type) {
         case D3DDECLTYPE_FLOAT1:
             return 4u;
@@ -703,19 +706,22 @@ static UINT processTexDeclBytes(UINT type, bool destination) {
             return 12u;
         case D3DDECLTYPE_FLOAT4:
             return 16u;
+        case D3DDECLTYPE_D3DCOLOR:
+            return 4u;
         case D3DDECLTYPE_UBYTE4:
         case D3DDECLTYPE_SHORT2:
         case D3DDECLTYPE_UBYTE4N:
         case D3DDECLTYPE_UDEC3:
+        case D3DDECLTYPE_DEC3N:
         case D3DDECLTYPE_SHORT2N:
         case D3DDECLTYPE_USHORT2N:
         case D3DDECLTYPE_FLOAT16_2:
-            return destination ? 0u : 4u;
+            return 4u;
         case D3DDECLTYPE_SHORT4:
         case D3DDECLTYPE_SHORT4N:
         case D3DDECLTYPE_USHORT4N:
         case D3DDECLTYPE_FLOAT16_4:
-            return destination ? 0u : 8u;
+            return 8u;
         default:
             return 0u;
     }
@@ -731,6 +737,8 @@ static UINT processFloatVectorDeclBytes(UINT type, bool allowTwoComponent) {
             return 12u;
         case D3DDECLTYPE_FLOAT4:
             return 16u;
+        case D3DDECLTYPE_SHORT2:
+            return allowTwoComponent ? 4u : 0u;
         case D3DDECLTYPE_UBYTE4:
             return 4u;
         case D3DDECLTYPE_SHORT4:
@@ -752,11 +760,17 @@ static UINT processFloatVectorDeclBytes(UINT type, bool allowTwoComponent) {
     }
 }
 
+static UINT processGenericDeclBytes(UINT type) {
+    if (type == D3DDECLTYPE_D3DCOLOR) return 4u;
+    return processFloatVectorDeclBytes(type, true);
+}
+
 static bool describeProcessFvf(DWORD fvf, FvfProcessLayout& layout) {
     layout = {};
     switch (fvf & D3DFVF_POSITION_MASK) {
         case D3DFVF_XYZ:
             layout.positionOffset = 0u;
+            layout.positionType = D3DDECLTYPE_FLOAT3;
             layout.positionBytes = 12u;
             break;
         case D3DFVF_XYZB1:
@@ -765,11 +779,13 @@ static bool describeProcessFvf(DWORD fvf, FvfProcessLayout& layout) {
         case D3DFVF_XYZB4:
         case D3DFVF_XYZB5:
             layout.positionOffset = 0u;
+            layout.positionType = D3DDECLTYPE_FLOAT3;
             layout.positionBytes = 12u;
             break;
         case D3DFVF_XYZRHW:
         case D3DFVF_XYZW:
             layout.positionOffset = 0u;
+            layout.positionType = D3DDECLTYPE_FLOAT4;
             layout.positionBytes = 16u;
             break;
         default:
@@ -788,17 +804,29 @@ static bool describeProcessFvf(DWORD fvf, FvfProcessLayout& layout) {
             if (weightCount != 0u) {
                 layout.blendWeight = true;
                 layout.blendWeightOffset = offset;
+                layout.blendWeightType =
+                    weightCount == 1u ? D3DDECLTYPE_FLOAT1 :
+                    weightCount == 2u ? D3DDECLTYPE_FLOAT2 :
+                    weightCount == 3u ? D3DDECLTYPE_FLOAT3 :
+                                        D3DDECLTYPE_FLOAT4;
                 layout.blendWeightBytes = weightCount * sizeof(float);
                 offset += layout.blendWeightBytes;
             }
             layout.blendIndices = true;
             layout.blendIndicesOffset = offset;
+            layout.blendIndicesType =
+                lastBetaD3dcolor ? D3DDECLTYPE_D3DCOLOR : D3DDECLTYPE_UBYTE4;
             layout.blendIndicesBytes = 4u;
             offset += 4u;
         } else {
             if (betaCount > 4u) return false;
             layout.blendWeight = true;
             layout.blendWeightOffset = offset;
+            layout.blendWeightType =
+                betaCount == 1u ? D3DDECLTYPE_FLOAT1 :
+                betaCount == 2u ? D3DDECLTYPE_FLOAT2 :
+                betaCount == 3u ? D3DDECLTYPE_FLOAT3 :
+                                  D3DDECLTYPE_FLOAT4;
             layout.blendWeightBytes = betaCount * sizeof(float);
             offset += layout.blendWeightBytes;
         }
@@ -875,15 +903,13 @@ static bool describeProcessDeclaration(IDirect3DVertexDeclaration9* declaration,
             if (layout.positionBytes != 0u) return false;
             if (destination) {
                 if (e.type != D3DDECLTYPE_FLOAT4) return false;
+                layout.positionType = D3DDECLTYPE_FLOAT4;
                 layout.positionBytes = 16u;
             } else {
-                if (e.type == D3DDECLTYPE_FLOAT3) {
-                    layout.positionBytes = 12u;
-                } else if (e.type == D3DDECLTYPE_FLOAT4) {
-                    layout.positionBytes = 16u;
-                } else {
-                    return false;
-                }
+                const UINT bytes = processFloatVectorDeclBytes(e.type, true);
+                if (bytes == 0u) return false;
+                layout.positionType = e.type;
+                layout.positionBytes = bytes;
             }
             layout.positionStream = e.stream;
             layout.positionOffset = e.offset;
@@ -921,23 +947,23 @@ static bool describeProcessDeclaration(IDirect3DVertexDeclaration9* declaration,
             layout.binormalBytes = bytes;
         } else if (!destination && e.usage == D3DDECLUSAGE_BLENDWEIGHT &&
                    e.usageIndex == 0) {
-            UINT blendBytes = 0u;
-            if (e.type == D3DDECLTYPE_FLOAT1) blendBytes = 4u;
-            else if (e.type == D3DDECLTYPE_FLOAT2) blendBytes = 8u;
-            else if (e.type == D3DDECLTYPE_FLOAT3) blendBytes = 12u;
-            else if (e.type == D3DDECLTYPE_FLOAT4) blendBytes = 16u;
-            else return false;
+            const UINT blendBytes = processFloatVectorDeclBytes(e.type, true);
+            if (blendBytes == 0u) return false;
             if (layout.blendWeight) return false;
             layout.blendWeight = true;
             layout.blendWeightStream = e.stream;
             layout.blendWeightOffset = e.offset;
+            layout.blendWeightType = e.type;
             layout.blendWeightBytes = blendBytes;
         } else if (!destination && e.usage == D3DDECLUSAGE_BLENDINDICES &&
                    e.usageIndex == 0) {
-            if (e.type != D3DDECLTYPE_UBYTE4 || layout.blendIndices) return false;
+            if ((e.type != D3DDECLTYPE_UBYTE4 &&
+                 e.type != D3DDECLTYPE_D3DCOLOR) ||
+                layout.blendIndices) return false;
             layout.blendIndices = true;
             layout.blendIndicesStream = e.stream;
             layout.blendIndicesOffset = e.offset;
+            layout.blendIndicesType = e.type;
             layout.blendIndicesBytes = 4u;
         } else if (!destination && e.usage == D3DDECLUSAGE_PSIZE &&
                    e.usageIndex == 0) {
@@ -966,7 +992,7 @@ static bool describeProcessDeclaration(IDirect3DVertexDeclaration9* declaration,
             layout.texType[e.usageIndex] = e.type;
         } else {
             if (destination) return false;
-            const UINT genericBytes = processFloatVectorDeclBytes(e.type, true);
+            const UINT genericBytes = processGenericDeclBytes(e.type);
             if (genericBytes == 0u ||
                 layout.genericInputCount >= std::size(layout.genericInput)) {
                 return false;
@@ -988,8 +1014,7 @@ static bool describeProcessDeclaration(IDirect3DVertexDeclaration9* declaration,
         }
     }
     return (destination ? layout.positionBytes == 16u
-                        : (layout.positionBytes == 12u ||
-                           layout.positionBytes == 16u)) &&
+                        : layout.positionBytes != 0u) &&
            layout.stride != 0u;
 }
 
@@ -1427,11 +1452,272 @@ static float halfToFloat(uint16_t value) {
     return sign ? -result : result;
 }
 
+static uint16_t floatToHalf(float value) {
+    uint32_t bits = 0;
+    std::memcpy(&bits, &value, sizeof(bits));
+    const uint32_t sign = (bits >> 16u) & 0x8000u;
+    int32_t exponent = static_cast<int32_t>((bits >> 23u) & 0xffu) - 127 + 15;
+    uint32_t mantissa = bits & 0x7fffffu;
+
+    if (((bits >> 23u) & 0xffu) == 0xffu) {
+        if (mantissa == 0u) return static_cast<uint16_t>(sign | 0x7c00u);
+        return static_cast<uint16_t>(sign | 0x7e00u);
+    }
+    if (exponent >= 31) return static_cast<uint16_t>(sign | 0x7c00u);
+    if (exponent <= 0) {
+        if (exponent < -10) return static_cast<uint16_t>(sign);
+        mantissa |= 0x800000u;
+        const uint32_t shift = static_cast<uint32_t>(14 - exponent);
+        uint32_t halfMantissa = mantissa >> shift;
+        if ((mantissa >> (shift - 1u)) & 1u) ++halfMantissa;
+        return static_cast<uint16_t>(sign | halfMantissa);
+    }
+
+    uint32_t halfMantissa = mantissa >> 13u;
+    if (mantissa & 0x1000u) {
+        ++halfMantissa;
+        if (halfMantissa == 0x400u) {
+            halfMantissa = 0u;
+            ++exponent;
+            if (exponent >= 31) return static_cast<uint16_t>(sign | 0x7c00u);
+        }
+    }
+    return static_cast<uint16_t>(sign |
+                                 (static_cast<uint32_t>(exponent) << 10u) |
+                                 halfMantissa);
+}
+
+static int16_t floatToSnorm16(float value) {
+    if (value <= -1.0f) return static_cast<int16_t>(-32768);
+    if (value >= 1.0f) return static_cast<int16_t>(32767);
+    return static_cast<int16_t>(std::lround(value * 32767.0f));
+}
+
+static uint16_t floatToUnorm16(float value) {
+    return static_cast<uint16_t>(std::lround(clamp01(value) * 65535.0f));
+}
+
+static int32_t floatToSnorm10Bits(float value) {
+    if (value <= -1.0f) return 0x200;
+    if (value >= 1.0f) return 0x1ff;
+    return static_cast<int32_t>(std::lround(value * 511.0f)) & 0x3ff;
+}
+
+static bool encodeProcessDeclVector(const float in[4],
+                                    UINT type,
+                                    uint8_t* destination) {
+    switch (type) {
+    case D3DDECLTYPE_FLOAT1:
+    case D3DDECLTYPE_FLOAT2:
+    case D3DDECLTYPE_FLOAT3:
+    case D3DDECLTYPE_FLOAT4: {
+        const UINT bytes = processTexDeclBytes(type, true);
+        std::memcpy(destination, in, bytes);
+        return true;
+    }
+    case D3DDECLTYPE_D3DCOLOR: {
+        const DWORD color = packD3DColor(in);
+        std::memcpy(destination, &color, sizeof(color));
+        return true;
+    }
+    case D3DDECLTYPE_SHORT2: {
+        int16_t out[2] = {
+            static_cast<int16_t>(std::clamp<long>(std::lround(in[0]), -32768, 32767)),
+            static_cast<int16_t>(std::clamp<long>(std::lround(in[1]), -32768, 32767)),
+        };
+        std::memcpy(destination, out, sizeof(out));
+        return true;
+    }
+    case D3DDECLTYPE_SHORT4: {
+        int16_t out[4]{};
+        for (UINT c = 0; c < 4u; ++c) {
+            out[c] = static_cast<int16_t>(
+                std::clamp<long>(std::lround(in[c]), -32768, 32767));
+        }
+        std::memcpy(destination, out, sizeof(out));
+        return true;
+    }
+    case D3DDECLTYPE_UBYTE4: {
+        uint8_t out[4]{};
+        for (UINT c = 0; c < 4u; ++c) {
+            out[c] = static_cast<uint8_t>(
+                std::clamp<long>(std::lround(in[c]), 0, 255));
+        }
+        std::memcpy(destination, out, sizeof(out));
+        return true;
+    }
+    case D3DDECLTYPE_SHORT2N: {
+        int16_t out[2] = {floatToSnorm16(in[0]), floatToSnorm16(in[1])};
+        std::memcpy(destination, out, sizeof(out));
+        return true;
+    }
+    case D3DDECLTYPE_SHORT4N: {
+        int16_t out[4]{};
+        for (UINT c = 0; c < 4u; ++c) out[c] = floatToSnorm16(in[c]);
+        std::memcpy(destination, out, sizeof(out));
+        return true;
+    }
+    case D3DDECLTYPE_USHORT2N: {
+        uint16_t out[2] = {floatToUnorm16(in[0]), floatToUnorm16(in[1])};
+        std::memcpy(destination, out, sizeof(out));
+        return true;
+    }
+    case D3DDECLTYPE_USHORT4N: {
+        uint16_t out[4]{};
+        for (UINT c = 0; c < 4u; ++c) out[c] = floatToUnorm16(in[c]);
+        std::memcpy(destination, out, sizeof(out));
+        return true;
+    }
+    case D3DDECLTYPE_UBYTE4N: {
+        uint8_t out[4]{};
+        for (UINT c = 0; c < 4u; ++c) out[c] = floatColorByte(in[c]);
+        std::memcpy(destination, out, sizeof(out));
+        return true;
+    }
+    case D3DDECLTYPE_UDEC3: {
+        const DWORD packed =
+            (static_cast<DWORD>(std::clamp<long>(std::lround(in[0]), 0, 1023)) & 0x3ffu) |
+            ((static_cast<DWORD>(std::clamp<long>(std::lround(in[1]), 0, 1023)) & 0x3ffu) << 10u) |
+            ((static_cast<DWORD>(std::clamp<long>(std::lround(in[2]), 0, 1023)) & 0x3ffu) << 20u);
+        std::memcpy(destination, &packed, sizeof(packed));
+        return true;
+    }
+    case D3DDECLTYPE_DEC3N: {
+        const DWORD packed =
+            (static_cast<DWORD>(floatToSnorm10Bits(in[0])) & 0x3ffu) |
+            ((static_cast<DWORD>(floatToSnorm10Bits(in[1])) & 0x3ffu) << 10u) |
+            ((static_cast<DWORD>(floatToSnorm10Bits(in[2])) & 0x3ffu) << 20u);
+        std::memcpy(destination, &packed, sizeof(packed));
+        return true;
+    }
+    case D3DDECLTYPE_FLOAT16_2: {
+        uint16_t out[2] = {floatToHalf(in[0]), floatToHalf(in[1])};
+        std::memcpy(destination, out, sizeof(out));
+        return true;
+    }
+    case D3DDECLTYPE_FLOAT16_4: {
+        uint16_t out[4]{};
+        for (UINT c = 0; c < 4u; ++c) out[c] = floatToHalf(in[c]);
+        std::memcpy(destination, out, sizeof(out));
+        return true;
+    }
+    default:
+        return false;
+    }
+}
+
+static bool decodeProcessDeclVector(const uint8_t* source,
+                                    UINT type,
+                                    UINT bytes,
+                                    std::array<float, 4>& out) {
+    out = {0.0f, 0.0f, 0.0f, 1.0f};
+    switch (type) {
+    case D3DDECLTYPE_FLOAT1:
+    case D3DDECLTYPE_FLOAT2:
+    case D3DDECLTYPE_FLOAT3:
+    case D3DDECLTYPE_FLOAT4: {
+        if (bytes == 0u || bytes > sizeof(float) * 4u ||
+            (bytes % sizeof(float)) != 0u) {
+            return false;
+        }
+        const UINT components = bytes / sizeof(float);
+        std::memcpy(out.data(), source,
+                    std::min<UINT>(components, 4u) * sizeof(float));
+        return true;
+    }
+    case D3DDECLTYPE_SHORT4: {
+        int16_t in[4]{};
+        std::memcpy(in, source, sizeof(in));
+        for (UINT c = 0; c < 4u; ++c) out[c] = static_cast<float>(in[c]);
+        return true;
+    }
+    case D3DDECLTYPE_SHORT2: {
+        int16_t in[2]{};
+        std::memcpy(in, source, sizeof(in));
+        out[0] = static_cast<float>(in[0]);
+        out[1] = static_cast<float>(in[1]);
+        return true;
+    }
+    case D3DDECLTYPE_UBYTE4: {
+        uint8_t in[4]{};
+        std::memcpy(in, source, sizeof(in));
+        for (UINT c = 0; c < 4u; ++c) out[c] = static_cast<float>(in[c]);
+        return true;
+    }
+    case D3DDECLTYPE_SHORT2N: {
+        int16_t in[2]{};
+        std::memcpy(in, source, sizeof(in));
+        out[0] = snorm16ToFloat(in[0]);
+        out[1] = snorm16ToFloat(in[1]);
+        return true;
+    }
+    case D3DDECLTYPE_SHORT4N: {
+        int16_t in[4]{};
+        std::memcpy(in, source, sizeof(in));
+        for (UINT c = 0; c < 4u; ++c) out[c] = snorm16ToFloat(in[c]);
+        return true;
+    }
+    case D3DDECLTYPE_USHORT2N: {
+        uint16_t in[2]{};
+        std::memcpy(in, source, sizeof(in));
+        out[0] = unorm16ToFloat(in[0]);
+        out[1] = unorm16ToFloat(in[1]);
+        return true;
+    }
+    case D3DDECLTYPE_USHORT4N: {
+        uint16_t in[4]{};
+        std::memcpy(in, source, sizeof(in));
+        for (UINT c = 0; c < 4u; ++c) out[c] = unorm16ToFloat(in[c]);
+        return true;
+    }
+    case D3DDECLTYPE_UBYTE4N: {
+        uint8_t in[4]{};
+        std::memcpy(in, source, sizeof(in));
+        for (UINT c = 0; c < 4u; ++c) {
+            out[c] = static_cast<float>(in[c]) / 255.0f;
+        }
+        return true;
+    }
+    case D3DDECLTYPE_DEC3N: {
+        uint32_t packed = 0;
+        std::memcpy(&packed, source, sizeof(packed));
+        out[0] = snorm10ToFloat(packed);
+        out[1] = snorm10ToFloat(packed >> 10u);
+        out[2] = snorm10ToFloat(packed >> 20u);
+        return true;
+    }
+    case D3DDECLTYPE_UDEC3: {
+        uint32_t packed = 0;
+        std::memcpy(&packed, source, sizeof(packed));
+        out[0] = static_cast<float>(packed & 0x3ffu);
+        out[1] = static_cast<float>((packed >> 10u) & 0x3ffu);
+        out[2] = static_cast<float>((packed >> 20u) & 0x3ffu);
+        return true;
+    }
+    case D3DDECLTYPE_FLOAT16_2: {
+        uint16_t in[2]{};
+        std::memcpy(in, source, sizeof(in));
+        out[0] = halfToFloat(in[0]);
+        out[1] = halfToFloat(in[1]);
+        return true;
+    }
+    case D3DDECLTYPE_FLOAT16_4: {
+        uint16_t in[4]{};
+        std::memcpy(in, source, sizeof(in));
+        for (UINT c = 0; c < 4u; ++c) out[c] = halfToFloat(in[c]);
+        return true;
+    }
+    default:
+        return false;
+    }
+}
+
 struct SimpleVsRegisters {
     std::array<std::array<float, 4>, 32> temp{};
     std::array<std::array<float, 4>, 16> input{};
     std::array<std::array<float, 4>, 256> constant{};
     std::array<std::array<int32_t, 4>, 16> constantInt{};
+    std::array<uint32_t, 16> constantBool{};
     std::array<std::array<float, 4>, 16> predicate{};
     std::array<float, 4> address{};
     std::array<float, 4> loop{};
@@ -1572,6 +1858,12 @@ static bool simpleVsReadSource(const SimpleVsRegisters& regs,
                 return false;
             }
             break;
+        case D3DSPR_CONSTBOOL:
+            if (!simpleVsSourceIndex(regs, major, token, relAddrToken,
+                                     static_cast<UINT>(regs.constantBool.size()), index)) {
+                return false;
+            }
+            break;
         case D3DSPR_INPUT:
             if (!simpleVsSourceIndex(regs, major, token, relAddrToken,
                                      static_cast<UINT>(regs.input.size()), index)) {
@@ -1590,6 +1882,9 @@ static bool simpleVsReadSource(const SimpleVsRegisters& regs,
         for (UINT i = 0; i < 4; ++i) {
             out[i] = static_cast<float>(intReg[(swizzle >> (i * 2u)) & 0x3u]);
         }
+    } else if (type == D3DSPR_CONSTBOOL) {
+        const float value = regs.constantBool[index] != 0u ? 1.0f : 0.0f;
+        out[0] = out[1] = out[2] = out[3] = value;
     } else {
         if (!reg) return false;
         for (UINT i = 0; i < 4; ++i) {
@@ -1867,6 +2162,20 @@ static bool simpleVsLoopControl(const SimpleVsRegisters& regs,
     return true;
 }
 
+static bool simpleVsConstantMatrixBase(const SimpleVsRegisters& regs,
+                                       UINT major,
+                                       DWORD token,
+                                       DWORD relAddrToken,
+                                       UINT rowCount,
+                                       UINT& base) {
+    if (shaderRegType(token) != D3DSPR_CONST) return false;
+    if (!simpleVsSourceIndex(regs, major, token, relAddrToken,
+                             static_cast<UINT>(regs.constant.size()), base)) {
+        return false;
+    }
+    return rowCount != 0u && base <= regs.constant.size() - rowCount;
+}
+
 static UINT simpleVsLabelIndex(DWORD token) {
     return token & D3DSP_REGNUM_MASK;
 }
@@ -2018,6 +2327,23 @@ static SimpleVsExecResult executeSimpleProcessVertexShaderRange(
         if (opcode == D3DSIO_NOP || opcode == D3DSIO_DCL || opcode == D3DSIO_PHASE) {
             continue;
         }
+        const bool predicatedInstruction = ((token >> 28u) & 0x1u) != 0u;
+        const bool predicateAllows =
+            !predicatedInstruction || regs.predicate[0][0] != 0.0f;
+        const bool flowInstruction =
+            opcode == D3DSIO_IF || opcode == D3DSIO_IFC ||
+            opcode == D3DSIO_ELSE || opcode == D3DSIO_ENDIF ||
+            opcode == D3DSIO_REP || opcode == D3DSIO_ENDREP ||
+            opcode == D3DSIO_LOOP || opcode == D3DSIO_ENDLOOP ||
+            opcode == D3DSIO_CALL || opcode == D3DSIO_CALLNZ ||
+            opcode == D3DSIO_LABEL || opcode == D3DSIO_RET ||
+            opcode == D3DSIO_BREAK || opcode == D3DSIO_BREAKC ||
+            opcode == D3DSIO_BREAKP;
+        if (predicatedInstruction && !flowInstruction) {
+            if (!predicateAllows) {
+                continue;
+            }
+        }
         if (opcode == D3DSIO_RET) {
             return SimpleVsExecResult::Ret;
         }
@@ -2029,7 +2355,7 @@ static SimpleVsExecResult executeSimpleProcessVertexShaderRange(
         }
         if (opcode == D3DSIO_CALL || opcode == D3DSIO_CALLNZ) {
             if (operandCount < 1u) return SimpleVsExecResult::Fail;
-            bool takeCall = true;
+            bool takeCall = predicateAllows;
             if (opcode == D3DSIO_CALLNZ) {
                 if (operandCount < 2u) return SimpleVsExecResult::Fail;
                 float condition[4]{};
@@ -2037,7 +2363,7 @@ static SimpleVsExecResult executeSimpleProcessVertexShaderRange(
                                         relAddrOperands[1])) {
                     return SimpleVsExecResult::Fail;
                 }
-                takeCall = condition[0] != 0.0f;
+                takeCall = takeCall && condition[0] != 0.0f;
             }
             if (!takeCall) continue;
             size_t bodyBegin = 0;
@@ -2057,9 +2383,11 @@ static SimpleVsExecResult executeSimpleProcessVertexShaderRange(
             continue;
         }
         if (opcode == D3DSIO_BREAK) {
+            if (!predicateAllows) continue;
             return SimpleVsExecResult::Break;
         }
         if (opcode == D3DSIO_BREAKP) {
+            if (!predicateAllows) continue;
             float predicate[4]{};
             if (!simpleVsReadSource(regs, io.major, operands[0], predicate,
                                     relAddrOperands[0])) {
@@ -2071,6 +2399,7 @@ static SimpleVsExecResult executeSimpleProcessVertexShaderRange(
             continue;
         }
         if (opcode == D3DSIO_BREAKC) {
+            if (!predicateAllows) continue;
             float condition[4]{};
             float rhs[4]{};
             if (!simpleVsReadSource(regs, io.major, operands[0], condition,
@@ -2097,8 +2426,9 @@ static SimpleVsExecResult executeSimpleProcessVertexShaderRange(
                                     relAddrOperands[1])) {
                 return SimpleVsExecResult::Fail;
             }
-            const float rounded = static_cast<float>(std::lround(value[0]));
-            *dst = {rounded, rounded, rounded, rounded};
+            for (UINT component = 0; component < 4u; ++component) {
+                (*dst)[component] = static_cast<float>(std::lround(value[component]));
+            }
             continue;
         }
         if (opcode == D3DSIO_SETP) {
@@ -2124,6 +2454,10 @@ static SimpleVsExecResult executeSimpleProcessVertexShaderRange(
             const UINT endOpcode = opcode == D3DSIO_REP ? D3DSIO_ENDREP : D3DSIO_ENDLOOP;
             if (!simpleVsFindLoopEnd(words, index, endOpcode, bodyEnd, afterEnd)) {
                 return SimpleVsExecResult::Fail;
+            }
+            if (!predicateAllows) {
+                index = afterEnd;
+                continue;
             }
             const DWORD countSource = opcode == D3DSIO_LOOP && operandCount > 1u
                                           ? operands[1]
@@ -2180,6 +2514,12 @@ static SimpleVsExecResult executeSimpleProcessVertexShaderRange(
         if (opcode == D3DSIO_IF || opcode == D3DSIO_IFC) {
             float condition[4]{};
             float rhs[4]{};
+            if (!predicateAllows) {
+                if (!simpleVsSkipControlBlock(words, index, false)) {
+                    return SimpleVsExecResult::Fail;
+                }
+                continue;
+            }
             if (!simpleVsReadSource(regs, io.major, operands[0], condition,
                                     relAddrOperands[0])) {
                 return SimpleVsExecResult::Fail;
@@ -2222,6 +2562,23 @@ static SimpleVsExecResult executeSimpleProcessVertexShaderRange(
             for (UINT i = 0; i < 4; ++i) {
                 regs.constantInt[indexConst][i] = static_cast<int32_t>(operands[i + 1u]);
             }
+            continue;
+        }
+        if (opcode == D3DSIO_DEFB) {
+            if (operandCount < 2u) return SimpleVsExecResult::Fail;
+            if (shaderRegType(operands[0]) != D3DSPR_CONSTBOOL) return SimpleVsExecResult::Fail;
+            UINT indexConst = shaderRegIndex(operands[0]);
+            if (simpleProcessShaderTokenHasRelAddr(operands[0])) {
+                if (!simpleVsSourceIndex(regs, io.major, operands[0],
+                                         relAddrOperands[0],
+                                         static_cast<UINT>(regs.constantBool.size()),
+                                         indexConst)) {
+                    return SimpleVsExecResult::Fail;
+                }
+            } else if (indexConst >= regs.constantBool.size()) {
+                return SimpleVsExecResult::Fail;
+            }
+            regs.constantBool[indexConst] = operands[1] != 0u ? 1u : 0u;
             continue;
         }
         if (opcode == D3DSIO_TEXLDL) {
@@ -2336,6 +2693,12 @@ static SimpleVsExecResult executeSimpleProcessVertexShaderRange(
             case D3DSIO_MAX:
                 for (UINT i = 0; i < 4; ++i) out[i] = std::max(a[i], b[i]);
                 break;
+            case D3DSIO_CND:
+                for (UINT i = 0; i < 4; ++i) out[i] = a[i] > 0.5f ? b[i] : c[i];
+                break;
+            case D3DSIO_CMP:
+                for (UINT i = 0; i < 4; ++i) out[i] = a[i] >= 0.0f ? b[i] : c[i];
+                break;
             case D3DSIO_DP3: {
                 const float dot = a[0] * b[0] + a[1] * b[1] + a[2] * b[2];
                 out[0] = out[1] = out[2] = out[3] = dot;
@@ -2345,6 +2708,11 @@ static SimpleVsExecResult executeSimpleProcessVertexShaderRange(
                 const float dot = a[0] * b[0] + a[1] * b[1] +
                                   a[2] * b[2] + a[3] * b[3];
                 out[0] = out[1] = out[2] = out[3] = dot;
+                break;
+            }
+            case D3DSIO_DP2ADD: {
+                const float value = a[0] * b[0] + a[1] * b[1] + c[0];
+                out[0] = out[1] = out[2] = out[3] = value;
                 break;
             }
             case D3DSIO_POW: {
@@ -2374,9 +2742,11 @@ static SimpleVsExecResult executeSimpleProcessVertexShaderRange(
                 break;
             }
             case D3DSIO_M4x4: {
-                if (shaderRegType(operands[2]) != D3DSPR_CONST) return SimpleVsExecResult::Fail;
-                const UINT base = shaderRegIndex(operands[2]);
-                if (base + 3u >= regs.constant.size()) return SimpleVsExecResult::Fail;
+                UINT base = 0;
+                if (!simpleVsConstantMatrixBase(regs, io.major, operands[2],
+                                                relAddrOperands[2], 4u, base)) {
+                    return SimpleVsExecResult::Fail;
+                }
                 for (UINT row = 0; row < 4; ++row) {
                     const auto& c = regs.constant[base + row];
                     out[row] = a[0] * c[0] + a[1] * c[1] +
@@ -2385,9 +2755,11 @@ static SimpleVsExecResult executeSimpleProcessVertexShaderRange(
                 break;
             }
             case D3DSIO_M4x3: {
-                if (shaderRegType(operands[2]) != D3DSPR_CONST) return SimpleVsExecResult::Fail;
-                const UINT base = shaderRegIndex(operands[2]);
-                if (base + 2u >= regs.constant.size()) return SimpleVsExecResult::Fail;
+                UINT base = 0;
+                if (!simpleVsConstantMatrixBase(regs, io.major, operands[2],
+                                                relAddrOperands[2], 3u, base)) {
+                    return SimpleVsExecResult::Fail;
+                }
                 for (UINT row = 0; row < 3; ++row) {
                     const auto& k = regs.constant[base + row];
                     out[row] = a[0] * k[0] + a[1] * k[1] +
@@ -2397,9 +2769,11 @@ static SimpleVsExecResult executeSimpleProcessVertexShaderRange(
                 break;
             }
             case D3DSIO_M3x4: {
-                if (shaderRegType(operands[2]) != D3DSPR_CONST) return SimpleVsExecResult::Fail;
-                const UINT base = shaderRegIndex(operands[2]);
-                if (base + 3u >= regs.constant.size()) return SimpleVsExecResult::Fail;
+                UINT base = 0;
+                if (!simpleVsConstantMatrixBase(regs, io.major, operands[2],
+                                                relAddrOperands[2], 4u, base)) {
+                    return SimpleVsExecResult::Fail;
+                }
                 for (UINT row = 0; row < 4; ++row) {
                     const auto& k = regs.constant[base + row];
                     out[row] = a[0] * k[0] + a[1] * k[1] + a[2] * k[2];
@@ -2407,9 +2781,11 @@ static SimpleVsExecResult executeSimpleProcessVertexShaderRange(
                 break;
             }
             case D3DSIO_M3x3: {
-                if (shaderRegType(operands[2]) != D3DSPR_CONST) return SimpleVsExecResult::Fail;
-                const UINT base = shaderRegIndex(operands[2]);
-                if (base + 2u >= regs.constant.size()) return SimpleVsExecResult::Fail;
+                UINT base = 0;
+                if (!simpleVsConstantMatrixBase(regs, io.major, operands[2],
+                                                relAddrOperands[2], 3u, base)) {
+                    return SimpleVsExecResult::Fail;
+                }
                 for (UINT row = 0; row < 3; ++row) {
                     const auto& k = regs.constant[base + row];
                     out[row] = a[0] * k[0] + a[1] * k[1] + a[2] * k[2];
@@ -2418,9 +2794,11 @@ static SimpleVsExecResult executeSimpleProcessVertexShaderRange(
                 break;
             }
             case D3DSIO_M3x2: {
-                if (shaderRegType(operands[2]) != D3DSPR_CONST) return SimpleVsExecResult::Fail;
-                const UINT base = shaderRegIndex(operands[2]);
-                if (base + 1u >= regs.constant.size()) return SimpleVsExecResult::Fail;
+                UINT base = 0;
+                if (!simpleVsConstantMatrixBase(regs, io.major, operands[2],
+                                                relAddrOperands[2], 2u, base)) {
+                    return SimpleVsExecResult::Fail;
+                }
                 for (UINT row = 0; row < 2; ++row) {
                     const auto& k = regs.constant[base + row];
                     out[row] = a[0] * k[0] + a[1] * k[1] + a[2] * k[2];
@@ -2704,6 +3082,14 @@ class D3D9DeviceImpl final : public IDirect3DDevice9Ex, public D3D9PeRecorderFlu
         const D9CMatrix projection = transformOrIdentity(D3DTS_PROJECTION);
         return multiplyTransformMatrix(multiplyTransformMatrix(world, view),
                                        projection);
+    }
+
+    DWORD renderStateValue(D3DRENDERSTATETYPE state) const {
+        uint32_t shadowValue = 0;
+        if (peState_.renderStateShadow.get(static_cast<DWORD>(state), shadowValue)) {
+            return shadowValue;
+        }
+        return dxmt9c_device_get_render_state(dev_, static_cast<uint32_t>(state));
     }
 
     void releaseAllBound() {
@@ -3051,6 +3437,1990 @@ class D3D9DeviceImpl final : public IDirect3DDevice9Ex, public D3D9PeRecorderFlu
         return true;
     }
 
+    struct SoftwareFfpDrawData {
+        std::vector<std::uint8_t> vertices;
+        DWORD fvf = 0;
+        UINT stride = 0;
+        UINT primitiveCount = 0;
+        D3DPRIMITIVETYPE primitiveType = D3DPT_POINTLIST;
+        bool bypassVertexShader = false;
+    };
+
+    enum : std::uint32_t {
+        kSwvpClipOutsideEye = 1u << 0,
+        kSwvpClipOutsideLeft = 1u << 1,
+        kSwvpClipOutsideRight = 1u << 2,
+        kSwvpClipOutsideTop = 1u << 3,
+        kSwvpClipOutsideBottom = 1u << 4,
+        kSwvpClipOutsideNear = 1u << 5,
+        kSwvpClipOutsideFar = 1u << 6,
+        kSwvpClipOutsideUserPlane0 = 1u << 7,
+        kSwvpClipOutsideAll = kSwvpClipOutsideEye |
+                              kSwvpClipOutsideLeft |
+                              kSwvpClipOutsideRight |
+                              kSwvpClipOutsideTop |
+                              kSwvpClipOutsideBottom |
+                              kSwvpClipOutsideNear |
+                              kSwvpClipOutsideFar |
+                              (0x3fu << 7),
+    };
+
+    std::uint32_t transformedSwvpVertexClipFlags(
+            const std::vector<std::uint8_t>& vertices,
+            UINT stride,
+            UINT index) const {
+        if (stride < 16u) return 0u;
+        const std::uint64_t offset = static_cast<std::uint64_t>(index) * stride;
+        if (offset > vertices.size() ||
+            16u > vertices.size() - static_cast<size_t>(offset)) {
+            return kSwvpClipOutsideAll;
+        }
+        float x = 0.0f, y = 0.0f, z = 0.0f, rhw = 0.0f;
+        std::memcpy(&x, vertices.data() + static_cast<size_t>(offset),
+                    sizeof(x));
+        std::memcpy(&y, vertices.data() + static_cast<size_t>(offset) + 4u,
+                    sizeof(y));
+        std::memcpy(&z, vertices.data() + static_cast<size_t>(offset) + 8u,
+                    sizeof(z));
+        std::memcpy(&rhw,
+                    vertices.data() + static_cast<size_t>(offset) + 12u,
+                    sizeof(rhw));
+        if (!std::isfinite(x) || !std::isfinite(y) ||
+            !std::isfinite(z) || !std::isfinite(rhw)) {
+            return kSwvpClipOutsideAll;
+        }
+
+        std::uint32_t flags = 0u;
+        if (rhw <= 0.0f) flags |= kSwvpClipOutsideEye;
+
+        const auto& vp = peState_.viewportShadow;
+        const float left = static_cast<float>(vp.x);
+        const float right = left + static_cast<float>(vp.width);
+        const float top = static_cast<float>(vp.y);
+        const float bottom = top + static_cast<float>(vp.height);
+        if (vp.width != 0u) {
+            if (x < left) flags |= kSwvpClipOutsideLeft;
+            if (x > right) flags |= kSwvpClipOutsideRight;
+        }
+        if (vp.height != 0u) {
+            if (y < top) flags |= kSwvpClipOutsideTop;
+            if (y > bottom) flags |= kSwvpClipOutsideBottom;
+        }
+        const float nearZ = std::min(vp.minZ, vp.maxZ);
+        const float farZ = std::max(vp.minZ, vp.maxZ);
+        if (z < nearZ) flags |= kSwvpClipOutsideNear;
+        if (z > farZ) flags |= kSwvpClipOutsideFar;
+        const DWORD userClipMask =
+            renderStateValue(D3DRS_CLIPPLANEENABLE) & 0x3fu;
+        const float zScale = vp.maxZ - vp.minZ;
+        if (userClipMask != 0u && rhw != 0.0f && vp.width != 0u &&
+            vp.height != 0u && zScale != 0.0f) {
+            const float scaleX = static_cast<float>(vp.width) * 0.5f;
+            const float scaleY = static_cast<float>(vp.height) * 0.5f;
+            const float offsetX = static_cast<float>(vp.x) + scaleX;
+            const float offsetY = static_cast<float>(vp.y) + scaleY;
+            const float w = 1.0f / rhw;
+            const float clip[4] = {
+                ((x - offsetX) / scaleX) * w,
+                (-(y - offsetY) / scaleY) * w,
+                ((z - vp.minZ) / zScale) * w,
+                w,
+            };
+            for (UINT i = 0; i < 6u; ++i) {
+                if ((userClipMask & (1u << i)) == 0u) continue;
+                const float* plane = &peState_.clipPlaneShadow[i * 4u];
+                const float distance = plane[0] * clip[0] +
+                                       plane[1] * clip[1] +
+                                       plane[2] * clip[2] +
+                                       plane[3] * clip[3];
+                if (!std::isfinite(distance) || distance < 0.0f) {
+                    flags |= kSwvpClipOutsideUserPlane0 << i;
+                }
+            }
+        }
+        return flags;
+    }
+
+	    static HRESULT appendTransformedSwvpVertex(
+	            const std::vector<std::uint8_t>& source,
+	            UINT stride,
+	            UINT index,
+	            std::vector<std::uint8_t>& out) {
+        if (stride == 0u) return D3DERR_INVALIDCALL;
+        const std::uint64_t offset =
+            static_cast<std::uint64_t>(index) * stride;
+        if (offset > source.size() ||
+            stride > source.size() - static_cast<size_t>(offset)) {
+            return D3DERR_INVALIDCALL;
+        }
+        out.insert(out.end(),
+                   source.begin() + static_cast<size_t>(offset),
+                   source.begin() + static_cast<size_t>(offset) + stride);
+	        return S_OK;
+	    }
+
+	    struct SwvpClippedVertex {
+	        std::vector<std::uint8_t> bytes;
+	    };
+
+	    static HRESULT copyTransformedSwvpVertex(
+	            const std::vector<std::uint8_t>& source,
+	            UINT stride,
+	            UINT index,
+	            SwvpClippedVertex& out) {
+	        if (stride == 0u) return D3DERR_INVALIDCALL;
+	        const std::uint64_t offset =
+	            static_cast<std::uint64_t>(index) * stride;
+	        if (offset > source.size() ||
+	            stride > source.size() - static_cast<size_t>(offset)) {
+	            return D3DERR_INVALIDCALL;
+	        }
+	        out.bytes.assign(source.begin() + static_cast<size_t>(offset),
+	                         source.begin() + static_cast<size_t>(offset) + stride);
+	        return S_OK;
+	    }
+
+	    static float swvpReadFloat(const std::vector<std::uint8_t>& bytes,
+	                               UINT offset) {
+	        float value = 0.0f;
+	        if (offset + sizeof(value) <= bytes.size()) {
+	            std::memcpy(&value, bytes.data() + offset, sizeof(value));
+	        }
+	        return value;
+	    }
+
+	    static void swvpWriteFloat(std::vector<std::uint8_t>& bytes,
+	                               UINT offset,
+	                               float value) {
+	        if (offset + sizeof(value) <= bytes.size()) {
+	            std::memcpy(bytes.data() + offset, &value, sizeof(value));
+	        }
+	    }
+
+	    static DWORD swvpReadDword(const std::vector<std::uint8_t>& bytes,
+	                               UINT offset) {
+	        DWORD value = 0;
+	        if (offset + sizeof(value) <= bytes.size()) {
+	            std::memcpy(&value, bytes.data() + offset, sizeof(value));
+	        }
+	        return value;
+	    }
+
+	    static void swvpWriteDword(std::vector<std::uint8_t>& bytes,
+	                               UINT offset,
+	                               DWORD value) {
+	        if (offset + sizeof(value) <= bytes.size()) {
+	            std::memcpy(bytes.data() + offset, &value, sizeof(value));
+	        }
+	    }
+
+	    static DWORD interpolateD3dColor(DWORD a, DWORD b, float t) {
+	        auto channel = [&](UINT shift) -> DWORD {
+	            const float av = static_cast<float>((a >> shift) & 0xffu);
+	            const float bv = static_cast<float>((b >> shift) & 0xffu);
+	            const float v = av + (bv - av) * t;
+	            return static_cast<DWORD>(
+	                std::clamp<int>(static_cast<int>(std::lround(v)), 0, 255));
+	        };
+	        return (channel(24u) << 24u) |
+	               (channel(16u) << 16u) |
+	               (channel(8u) << 8u) |
+	               channel(0u);
+	    }
+
+	    static SwvpClippedVertex interpolateTransformedSwvpVertex(
+	            const SwvpClippedVertex& a,
+	            const SwvpClippedVertex& b,
+	            DWORD fvf,
+	            UINT stride,
+	            float t) {
+	        SwvpClippedVertex out{a.bytes};
+	        if (out.bytes.size() != stride) out.bytes.resize(stride);
+	        t = std::clamp(t, 0.0f, 1.0f);
+
+	        FvfProcessLayout layout{};
+	        if (!describeProcessFvf(fvf, layout) || layout.stride > stride ||
+	            layout.positionBytes < 16u) {
+	            for (UINT offset = 0; offset + sizeof(float) <= stride; offset += 4u) {
+	                const float av = swvpReadFloat(a.bytes, offset);
+	                const float bv = swvpReadFloat(b.bytes, offset);
+	                swvpWriteFloat(out.bytes, offset, av + (bv - av) * t);
+	            }
+	            return out;
+	        }
+
+	        auto lerpFloat = [&](UINT offset) {
+	            const float av = swvpReadFloat(a.bytes, offset);
+	            const float bv = swvpReadFloat(b.bytes, offset);
+	            swvpWriteFloat(out.bytes, offset, av + (bv - av) * t);
+	        };
+	        for (UINT offset = layout.positionOffset;
+	             offset < layout.positionOffset + layout.positionBytes;
+	             offset += 4u) {
+	            lerpFloat(offset);
+	        }
+	        if (layout.psize) lerpFloat(layout.psizeOffset);
+	        if (layout.diffuse) {
+	            swvpWriteDword(out.bytes, layout.diffuseOffset,
+	                interpolateD3dColor(swvpReadDword(a.bytes, layout.diffuseOffset),
+	                                    swvpReadDword(b.bytes, layout.diffuseOffset),
+	                                    t));
+	        }
+	        if (layout.specular) {
+	            swvpWriteDword(out.bytes, layout.specularOffset,
+	                interpolateD3dColor(swvpReadDword(a.bytes, layout.specularOffset),
+	                                    swvpReadDword(b.bytes, layout.specularOffset),
+	                                    t));
+	        }
+	        for (UINT tex = 0; tex < layout.texCount; ++tex) {
+	            for (UINT offset = layout.texOffset[tex];
+	                 offset < layout.texOffset[tex] + layout.texBytes[tex];
+	                 offset += 4u) {
+	                lerpFloat(offset);
+	            }
+	        }
+	        return out;
+	    }
+
+	    std::vector<std::uint32_t> transformedSwvpActiveClipPlanes() const {
+	        std::vector<std::uint32_t> planes;
+	        planes.reserve(13u);
+	        planes.push_back(kSwvpClipOutsideEye);
+	        const auto& vp = peState_.viewportShadow;
+	        if (vp.width != 0u) {
+	            planes.push_back(kSwvpClipOutsideLeft);
+	            planes.push_back(kSwvpClipOutsideRight);
+	        }
+	        if (vp.height != 0u) {
+	            planes.push_back(kSwvpClipOutsideTop);
+	            planes.push_back(kSwvpClipOutsideBottom);
+	        }
+	        planes.push_back(kSwvpClipOutsideNear);
+	        planes.push_back(kSwvpClipOutsideFar);
+	        const DWORD userClipMask =
+	            renderStateValue(D3DRS_CLIPPLANEENABLE) & 0x3fu;
+	        for (UINT i = 0; i < 6u; ++i) {
+	            if (userClipMask & (1u << i)) {
+	                planes.push_back(kSwvpClipOutsideUserPlane0 << i);
+	            }
+	        }
+	        return planes;
+	    }
+
+	    float transformedSwvpVertexPlaneDistance(
+	            const SwvpClippedVertex& vertex,
+	            std::uint32_t planeFlag) const {
+	        const float x = swvpReadFloat(vertex.bytes, 0u);
+	        const float y = swvpReadFloat(vertex.bytes, 4u);
+	        const float z = swvpReadFloat(vertex.bytes, 8u);
+	        const float rhw = swvpReadFloat(vertex.bytes, 12u);
+	        if (!std::isfinite(x) || !std::isfinite(y) ||
+	            !std::isfinite(z) || !std::isfinite(rhw)) {
+	            return -1.0f;
+	        }
+	        const auto& vp = peState_.viewportShadow;
+	        const float left = static_cast<float>(vp.x);
+	        const float right = left + static_cast<float>(vp.width);
+	        const float top = static_cast<float>(vp.y);
+	        const float bottom = top + static_cast<float>(vp.height);
+	        switch (planeFlag) {
+	            case kSwvpClipOutsideEye:
+	                return rhw - 1.0e-6f;
+	            case kSwvpClipOutsideLeft:
+	                return x - left;
+	            case kSwvpClipOutsideRight:
+	                return right - x;
+	            case kSwvpClipOutsideTop:
+	                return y - top;
+	            case kSwvpClipOutsideBottom:
+	                return bottom - y;
+	            case kSwvpClipOutsideNear:
+	                return z - std::min(vp.minZ, vp.maxZ);
+	            case kSwvpClipOutsideFar:
+	                return std::max(vp.minZ, vp.maxZ) - z;
+	            default:
+	                break;
+	        }
+	        if (planeFlag >= kSwvpClipOutsideUserPlane0 &&
+	            planeFlag < (kSwvpClipOutsideUserPlane0 << 6u) && rhw != 0.0f &&
+	            vp.width != 0u && vp.height != 0u &&
+	            vp.maxZ != vp.minZ) {
+	            UINT userPlane = 0u;
+	            for (; userPlane < 6u; ++userPlane) {
+	                if (planeFlag == (kSwvpClipOutsideUserPlane0 << userPlane)) break;
+	            }
+	            if (userPlane < 6u) {
+	                const float scaleX = static_cast<float>(vp.width) * 0.5f;
+	                const float scaleY = static_cast<float>(vp.height) * 0.5f;
+	                const float offsetX = static_cast<float>(vp.x) + scaleX;
+	                const float offsetY = static_cast<float>(vp.y) + scaleY;
+	                const float w = 1.0f / rhw;
+	                const float clip[4] = {
+	                    ((x - offsetX) / scaleX) * w,
+	                    (-(y - offsetY) / scaleY) * w,
+	                    ((z - vp.minZ) / (vp.maxZ - vp.minZ)) * w,
+	                    w,
+	                };
+	                const float* plane = &peState_.clipPlaneShadow[userPlane * 4u];
+	                const float distance = plane[0] * clip[0] +
+	                                       plane[1] * clip[1] +
+	                                       plane[2] * clip[2] +
+	                                       plane[3] * clip[3];
+	                return std::isfinite(distance) ? distance : -1.0f;
+	            }
+	        }
+	        return 1.0f;
+	    }
+
+	    HRESULT clipTransformedSwvpTriangle(
+	            DWORD fvf,
+	            UINT stride,
+	            const SwvpClippedVertex& a,
+	            const SwvpClippedVertex& b,
+	            const SwvpClippedVertex& c,
+	            std::vector<std::uint8_t>& out,
+	            UINT& primitiveCount) const {
+	        if (stride < 16u || a.bytes.size() != stride ||
+	            b.bytes.size() != stride || c.bytes.size() != stride) {
+	            return D3DERR_INVALIDCALL;
+	        }
+	        std::vector<SwvpClippedVertex> polygon{a, b, c};
+	        std::vector<SwvpClippedVertex> clipped;
+	        const auto planes = transformedSwvpActiveClipPlanes();
+	        for (std::uint32_t plane : planes) {
+	            if (polygon.empty()) break;
+	            clipped.clear();
+	            clipped.reserve(polygon.size() + 1u);
+	            SwvpClippedVertex previous = polygon.back();
+	            float previousDistance =
+	                transformedSwvpVertexPlaneDistance(previous, plane);
+	            bool previousInside = previousDistance >= -1.0e-5f;
+	            for (const auto& current : polygon) {
+	                const float currentDistance =
+	                    transformedSwvpVertexPlaneDistance(current, plane);
+	                const bool currentInside = currentDistance >= -1.0e-5f;
+	                if (currentInside != previousInside) {
+	                    const float denom = previousDistance - currentDistance;
+	                    const float t = std::fabs(denom) > 1.0e-12f
+	                        ? previousDistance / denom : 0.0f;
+	                    clipped.push_back(interpolateTransformedSwvpVertex(
+	                        previous, current, fvf, stride, t));
+	                }
+	                if (currentInside) clipped.push_back(current);
+	                previous = current;
+	                previousDistance = currentDistance;
+	                previousInside = currentInside;
+	            }
+	            polygon = clipped;
+	        }
+	        if (polygon.size() < 3u) return S_OK;
+	        for (size_t i = 1; i + 1u < polygon.size(); ++i) {
+	            out.insert(out.end(), polygon[0].bytes.begin(), polygon[0].bytes.end());
+	            out.insert(out.end(), polygon[i].bytes.begin(), polygon[i].bytes.end());
+	            out.insert(out.end(), polygon[i + 1u].bytes.begin(),
+	                       polygon[i + 1u].bytes.end());
+	            ++primitiveCount;
+	        }
+	        return S_OK;
+	    }
+
+	    HRESULT clipTransformedSwvpLine(
+	            DWORD fvf,
+	            UINT stride,
+	            const SwvpClippedVertex& a,
+	            const SwvpClippedVertex& b,
+	            std::vector<std::uint8_t>& out,
+	            UINT& primitiveCount) const {
+	        if (stride < 16u || a.bytes.size() != stride ||
+	            b.bytes.size() != stride) {
+	            return D3DERR_INVALIDCALL;
+	        }
+	        SwvpClippedVertex start = a;
+	        SwvpClippedVertex end = b;
+	        const auto planes = transformedSwvpActiveClipPlanes();
+	        for (std::uint32_t plane : planes) {
+	            const float startDistance =
+	                transformedSwvpVertexPlaneDistance(start, plane);
+	            const float endDistance =
+	                transformedSwvpVertexPlaneDistance(end, plane);
+	            const bool startInside = startDistance >= -1.0e-5f;
+	            const bool endInside = endDistance >= -1.0e-5f;
+	            if (!startInside && !endInside) return S_OK;
+	            if (startInside && endInside) continue;
+
+	            const float denom = startDistance - endDistance;
+	            const float t = std::fabs(denom) > 1.0e-12f
+	                ? startDistance / denom : 0.0f;
+	            SwvpClippedVertex intersection =
+	                interpolateTransformedSwvpVertex(start, end, fvf, stride, t);
+	            if (!startInside) {
+	                start = std::move(intersection);
+	            } else {
+	                end = std::move(intersection);
+	            }
+	        }
+	        out.insert(out.end(), start.bytes.begin(), start.bytes.end());
+	        out.insert(out.end(), end.bytes.begin(), end.bytes.end());
+	        ++primitiveCount;
+	        return S_OK;
+	    }
+
+    static DWORD processFfpDeclarationOutputFvf(
+            const FvfProcessLayout& srcLayout,
+            bool lighting,
+            bool specularLighting,
+            bool allowBlendAttributes) {
+        if (srcLayout.positionBytes == 0u) {
+            return 0u;
+        }
+        if (!allowBlendAttributes &&
+            (srcLayout.blendWeight || srcLayout.blendIndices)) {
+            return 0u;
+        }
+        DWORD outputFvf = D3DFVF_XYZRHW;
+        if (srcLayout.psize) outputFvf |= D3DFVF_PSIZE;
+        if (lighting || srcLayout.diffuse) outputFvf |= D3DFVF_DIFFUSE;
+        if (specularLighting || srcLayout.specular) outputFvf |= D3DFVF_SPECULAR;
+        if (srcLayout.texCount > 8u) return 0u;
+        for (UINT i = 0; i < srcLayout.texCount; ++i) {
+            switch (srcLayout.texBytes[i]) {
+                case 4u:
+                    outputFvf |= D3DFVF_TEXCOORDSIZE1(i);
+                    break;
+                case 8u:
+                    outputFvf |= D3DFVF_TEXCOORDSIZE2(i);
+                    break;
+                case 12u:
+                    outputFvf |= D3DFVF_TEXCOORDSIZE3(i);
+                    break;
+                case 16u:
+                    outputFvf |= D3DFVF_TEXCOORDSIZE4(i);
+                    break;
+                default:
+                    return 0u;
+            }
+        }
+        outputFvf |= srcLayout.texCount << D3DFVF_TEXCOUNT_SHIFT;
+        return outputFvf;
+    }
+
+    HRESULT describeSoftwareFfpDrawTarget(DWORD& outputFvf,
+                                          FvfProcessLayout& srcLayout,
+                                          FvfProcessLayout& dstLayout) {
+        outputFvf = 0;
+        srcLayout = {};
+        dstLayout = {};
+        if (!softwareVertexProcessing_ || vs_ != nullptr) {
+            return S_FALSE;
+        }
+        const bool lighting = renderStateValue(D3DRS_LIGHTING) != FALSE;
+        const bool specularLighting =
+            lighting && renderStateValue(D3DRS_SPECULARENABLE) != FALSE;
+        if (fvf_ != 0) {
+            const DWORD positionMask = fvf_ & D3DFVF_POSITION_MASK;
+            if ((positionMask != D3DFVF_XYZ &&
+                 !processFvfXyzbPosition(positionMask)) ||
+                !describeProcessFvf(fvf_, srcLayout)) {
+                return S_FALSE;
+            }
+            outputFvf = processFfpDeclarationOutputFvf(
+                srcLayout, lighting, specularLighting, true);
+            if (outputFvf == 0u) return S_FALSE;
+        } else if (vdecl_) {
+            if (!describeProcessDeclaration(vdecl_, srcLayout, false)) {
+                return S_FALSE;
+            }
+            outputFvf = processFfpDeclarationOutputFvf(
+                srcLayout, lighting, specularLighting, true);
+            if (outputFvf == 0u) return S_FALSE;
+        } else {
+            return S_FALSE;
+        }
+        if (lighting && !srcLayout.normal) {
+            return S_FALSE;
+        }
+        if (!describeProcessFvf(outputFvf, dstLayout) ||
+            dstLayout.positionBytes != 16u) {
+            return S_FALSE;
+        }
+        return S_OK;
+    }
+
+    static DWORD processProgrammableOutputFvf(const ProcessShaderIo& shaderIo) {
+        DWORD outputFvf = D3DFVF_XYZRHW;
+        if (shaderIo.hasOutputPSize) outputFvf |= D3DFVF_PSIZE;
+        if (shaderIo.hasOutputDiffuse) outputFvf |= D3DFVF_DIFFUSE;
+        if (shaderIo.hasOutputSpecular) outputFvf |= D3DFVF_SPECULAR;
+        int highestTex = -1;
+        for (UINT i = 0; i < 8u; ++i) {
+            if (shaderIo.hasOutputTex[i]) highestTex = static_cast<int>(i);
+        }
+        if (highestTex >= 0) {
+            for (int i = 0; i <= highestTex; ++i) {
+                if (!shaderIo.hasOutputTex[i]) return 0u;
+                outputFvf |= D3DFVF_TEXCOORDSIZE4(i);
+            }
+            outputFvf |= static_cast<DWORD>(highestTex + 1)
+                         << D3DFVF_TEXCOUNT_SHIFT;
+        }
+        return outputFvf;
+    }
+
+    static bool processLayoutUsesOnlyStream0(const FvfProcessLayout& layout) {
+        for (UINT stream = 1; stream < D9C_DRAW_PACKET_MAX_STREAMS; ++stream) {
+            if (layout.streamStride[stream] != 0u) return false;
+        }
+        return true;
+    }
+
+    static bool softwareDrawCanConcatenateInstances(D3DPRIMITIVETYPE type) {
+        return type == D3DPT_POINTLIST ||
+               type == D3DPT_LINELIST ||
+               type == D3DPT_TRIANGLELIST;
+    }
+
+    static bool softwareDrawCanExpandInstances(D3DPRIMITIVETYPE type) {
+        return softwareDrawCanConcatenateInstances(type) ||
+               type == D3DPT_LINESTRIP ||
+               type == D3DPT_TRIANGLESTRIP ||
+               type == D3DPT_TRIANGLEFAN;
+    }
+
+    static D3DPRIMITIVETYPE softwareDrawExpandedPrimitiveType(
+            D3DPRIMITIVETYPE type) {
+        if (type == D3DPT_LINESTRIP) return D3DPT_LINELIST;
+        if (type == D3DPT_TRIANGLESTRIP || type == D3DPT_TRIANGLEFAN) {
+            return D3DPT_TRIANGLELIST;
+        }
+        return type;
+    }
+
+    static HRESULT appendSoftwarePrimitiveVertices(
+            const std::vector<std::uint8_t>& source,
+            UINT stride,
+            D3DPRIMITIVETYPE type,
+            UINT primitiveCount,
+            std::vector<std::uint8_t>& out) {
+        if (stride == 0u) return D3DERR_INVALIDCALL;
+        auto appendVertex = [&](UINT index) -> HRESULT {
+            const std::uint64_t offset =
+                static_cast<std::uint64_t>(index) * stride;
+            if (offset > source.size() ||
+                stride > source.size() - static_cast<size_t>(offset)) {
+                return D3DERR_INVALIDCALL;
+            }
+            out.insert(out.end(),
+                       source.begin() + static_cast<size_t>(offset),
+                       source.begin() + static_cast<size_t>(offset) + stride);
+            return S_OK;
+        };
+        switch (type) {
+            case D3DPT_POINTLIST:
+            case D3DPT_LINELIST:
+            case D3DPT_TRIANGLELIST:
+                out.insert(out.end(), source.begin(), source.end());
+                return S_OK;
+            case D3DPT_LINESTRIP:
+                for (UINT i = 0; i < primitiveCount; ++i) {
+                    HRESULT hr = appendVertex(i);
+                    if (FAILED(hr)) return hr;
+                    hr = appendVertex(i + 1u);
+                    if (FAILED(hr)) return hr;
+                }
+                return S_OK;
+            case D3DPT_TRIANGLESTRIP:
+                for (UINT i = 0; i < primitiveCount; ++i) {
+                    const UINT a = (i & 1u) ? i + 1u : i;
+                    const UINT b = (i & 1u) ? i : i + 1u;
+                    HRESULT hr = appendVertex(a);
+                    if (FAILED(hr)) return hr;
+                    hr = appendVertex(b);
+                    if (FAILED(hr)) return hr;
+                    hr = appendVertex(i + 2u);
+                    if (FAILED(hr)) return hr;
+                }
+                return S_OK;
+            case D3DPT_TRIANGLEFAN:
+                for (UINT i = 0; i < primitiveCount; ++i) {
+                    HRESULT hr = appendVertex(0u);
+                    if (FAILED(hr)) return hr;
+                    hr = appendVertex(i + 1u);
+                    if (FAILED(hr)) return hr;
+                    hr = appendVertex(i + 2u);
+                    if (FAILED(hr)) return hr;
+                }
+                return S_OK;
+	    default:
+                return D3DERR_INVALIDCALL;
+        }
+    }
+
+    HRESULT filterSoftwareDrawOutsideClipPrimitives(SoftwareFfpDrawData& draw) {
+        if (renderStateValue(D3DRS_CLIPPING) == FALSE ||
+            draw.vertices.empty() || draw.stride < 16u ||
+            draw.primitiveCount == 0u) {
+            return S_OK;
+        }
+        if (draw.vertices.size() % draw.stride != 0u) {
+            return D3DERR_INVALIDCALL;
+        }
+        const UINT vertexCount =
+            static_cast<UINT>(draw.vertices.size() / draw.stride);
+        const UINT expectedVertexCount =
+            primitiveVertexCount(draw.primitiveType, draw.primitiveCount);
+        if (expectedVertexCount > vertexCount) {
+            return D3DERR_INVALIDCALL;
+        }
+
+	        std::vector<std::uint8_t> filtered;
+	        filtered.reserve(draw.vertices.size());
+	        UINT keptPrimitiveCount = 0u;
+	        bool droppedAny = false;
+	        bool clippedTriangles = false;
+	        bool clippedLines = false;
+
+        auto clipFlags = [&](UINT index) {
+            return transformedSwvpVertexClipFlags(
+                draw.vertices, draw.stride, index);
+        };
+        auto vertexInside = [&](UINT index) {
+            return clipFlags(index) == 0u;
+        };
+	        auto appendVertex = [&](UINT index) {
+	            return appendTransformedSwvpVertex(
+	                draw.vertices, draw.stride, index, filtered);
+        };
+
+        switch (draw.primitiveType) {
+            case D3DPT_POINTLIST:
+                for (UINT i = 0; i < draw.primitiveCount; ++i) {
+                    if (!vertexInside(i)) {
+                        droppedAny = true;
+                        continue;
+                    }
+                    HRESULT hr = appendVertex(i);
+                    if (FAILED(hr)) return hr;
+                    ++keptPrimitiveCount;
+                }
+                break;
+	            case D3DPT_LINELIST:
+	                for (UINT i = 0; i < draw.primitiveCount; ++i) {
+	                    const UINT a = i * 2u;
+	                    const UINT b = a + 1u;
+	                    SwvpClippedVertex av{}, bv{};
+	                    HRESULT hr = copyTransformedSwvpVertex(
+	                        draw.vertices, draw.stride, a, av);
+	                    if (FAILED(hr)) return hr;
+	                    hr = copyTransformedSwvpVertex(draw.vertices, draw.stride, b, bv);
+	                    if (FAILED(hr)) return hr;
+	                    const UINT beforeCount = keptPrimitiveCount;
+	                    hr = clipTransformedSwvpLine(
+	                        draw.fvf, draw.stride, av, bv, filtered,
+	                        keptPrimitiveCount);
+	                    if (FAILED(hr)) return hr;
+	                    if (keptPrimitiveCount != beforeCount + 1u ||
+	                        (clipFlags(a) | clipFlags(b)) != 0u) {
+	                        clippedLines = true;
+	                    }
+	                }
+	                break;
+	            case D3DPT_LINESTRIP:
+	                for (UINT i = 0; i < draw.primitiveCount; ++i) {
+	                    SwvpClippedVertex av{}, bv{};
+	                    HRESULT hr = copyTransformedSwvpVertex(
+	                        draw.vertices, draw.stride, i, av);
+	                    if (FAILED(hr)) return hr;
+	                    hr = copyTransformedSwvpVertex(
+	                        draw.vertices, draw.stride, i + 1u, bv);
+	                    if (FAILED(hr)) return hr;
+	                    const UINT beforeCount = keptPrimitiveCount;
+	                    hr = clipTransformedSwvpLine(
+	                        draw.fvf, draw.stride, av, bv, filtered,
+	                        keptPrimitiveCount);
+	                    if (FAILED(hr)) return hr;
+	                    if (keptPrimitiveCount != beforeCount + 1u ||
+	                        (clipFlags(i) | clipFlags(i + 1u)) != 0u) {
+	                        clippedLines = true;
+	                    }
+	                }
+	                draw.primitiveType = D3DPT_LINELIST;
+	                clippedLines = true;
+	                break;
+	            case D3DPT_TRIANGLELIST:
+	                for (UINT i = 0; i < draw.primitiveCount; ++i) {
+	                    const UINT a = i * 3u;
+	                    const UINT b = a + 1u;
+	                    const UINT c = a + 2u;
+	                    SwvpClippedVertex av{}, bv{}, cv{};
+	                    HRESULT hr = copyTransformedSwvpVertex(
+	                        draw.vertices, draw.stride, a, av);
+	                    if (FAILED(hr)) return hr;
+	                    hr = copyTransformedSwvpVertex(draw.vertices, draw.stride, b, bv);
+	                    if (FAILED(hr)) return hr;
+	                    hr = copyTransformedSwvpVertex(draw.vertices, draw.stride, c, cv);
+	                    if (FAILED(hr)) return hr;
+	                    const UINT beforeCount = keptPrimitiveCount;
+	                    hr = clipTransformedSwvpTriangle(
+	                        draw.fvf, draw.stride, av, bv, cv, filtered,
+	                        keptPrimitiveCount);
+	                    if (FAILED(hr)) return hr;
+	                    if (keptPrimitiveCount != beforeCount + 1u ||
+	                        (clipFlags(a) | clipFlags(b) | clipFlags(c)) != 0u) {
+	                        clippedTriangles = true;
+	                    }
+	                }
+	                clippedTriangles = clippedTriangles || droppedAny;
+	                break;
+	            case D3DPT_TRIANGLESTRIP:
+	                for (UINT i = 0; i < draw.primitiveCount; ++i) {
+	                    const UINT a = (i & 1u) ? i + 1u : i;
+	                    const UINT b = (i & 1u) ? i : i + 1u;
+	                    const UINT c = i + 2u;
+	                    SwvpClippedVertex av{}, bv{}, cv{};
+	                    HRESULT hr = copyTransformedSwvpVertex(
+	                        draw.vertices, draw.stride, a, av);
+	                    if (FAILED(hr)) return hr;
+	                    hr = copyTransformedSwvpVertex(draw.vertices, draw.stride, b, bv);
+	                    if (FAILED(hr)) return hr;
+	                    hr = copyTransformedSwvpVertex(draw.vertices, draw.stride, c, cv);
+	                    if (FAILED(hr)) return hr;
+	                    const UINT beforeCount = keptPrimitiveCount;
+	                    hr = clipTransformedSwvpTriangle(
+	                        draw.fvf, draw.stride, av, bv, cv, filtered,
+	                        keptPrimitiveCount);
+	                    if (FAILED(hr)) return hr;
+	                    if (keptPrimitiveCount != beforeCount + 1u ||
+	                        (clipFlags(a) | clipFlags(b) | clipFlags(c)) != 0u) {
+	                        clippedTriangles = true;
+	                    }
+	                }
+	                draw.primitiveType = D3DPT_TRIANGLELIST;
+	                clippedTriangles = true;
+	                break;
+	            case D3DPT_TRIANGLEFAN:
+	                for (UINT i = 0; i < draw.primitiveCount; ++i) {
+	                    const UINT a = 0u;
+	                    const UINT b = i + 1u;
+	                    const UINT c = i + 2u;
+	                    SwvpClippedVertex av{}, bv{}, cv{};
+	                    HRESULT hr = copyTransformedSwvpVertex(
+	                        draw.vertices, draw.stride, a, av);
+	                    if (FAILED(hr)) return hr;
+	                    hr = copyTransformedSwvpVertex(draw.vertices, draw.stride, b, bv);
+	                    if (FAILED(hr)) return hr;
+	                    hr = copyTransformedSwvpVertex(draw.vertices, draw.stride, c, cv);
+	                    if (FAILED(hr)) return hr;
+	                    const UINT beforeCount = keptPrimitiveCount;
+	                    hr = clipTransformedSwvpTriangle(
+	                        draw.fvf, draw.stride, av, bv, cv, filtered,
+	                        keptPrimitiveCount);
+	                    if (FAILED(hr)) return hr;
+	                    if (keptPrimitiveCount != beforeCount + 1u ||
+	                        (clipFlags(a) | clipFlags(b) | clipFlags(c)) != 0u) {
+	                        clippedTriangles = true;
+	                    }
+	                }
+	                draw.primitiveType = D3DPT_TRIANGLELIST;
+	                clippedTriangles = true;
+	                break;
+            default:
+                return D3DERR_INVALIDCALL;
+        }
+
+	        if (!droppedAny && !clippedTriangles && !clippedLines) return S_OK;
+	        if (clippedTriangles) draw.primitiveType = D3DPT_TRIANGLELIST;
+	        if (clippedLines) draw.primitiveType = D3DPT_LINELIST;
+	        draw.vertices = std::move(filtered);
+	        draw.primitiveCount = keptPrimitiveCount;
+	        return S_OK;
+    }
+
+    static HRESULT readSoftwareIndexValue(const std::vector<std::uint8_t>& indices,
+                                          D3DFORMAT indexFormat,
+                                          UINT ordinal,
+                                          DWORD& out) {
+        if (indexFormat != D3DFMT_INDEX16 && indexFormat != D3DFMT_INDEX32) {
+            return D3DERR_INVALIDCALL;
+        }
+        const UINT indexSize = indexFormat == D3DFMT_INDEX32 ? 4u : 2u;
+        const std::uint64_t offset =
+            static_cast<std::uint64_t>(ordinal) * indexSize;
+        if (offset > indices.size() ||
+            indexSize > indices.size() - static_cast<size_t>(offset)) {
+            return D3DERR_INVALIDCALL;
+        }
+        if (indexFormat == D3DFMT_INDEX32) {
+            std::memcpy(&out, indices.data() + static_cast<size_t>(offset),
+                        sizeof(out));
+        } else {
+            WORD index16 = 0;
+            std::memcpy(&index16, indices.data() + static_cast<size_t>(offset),
+                        sizeof(index16));
+            out = index16;
+        }
+        return S_OK;
+    }
+
+    static HRESULT appendSoftwareIndex32(std::vector<std::uint8_t>& indices,
+                                         DWORD index) {
+        const auto oldSize = indices.size();
+        indices.resize(oldSize + sizeof(index));
+        std::memcpy(indices.data() + oldSize, &index, sizeof(index));
+        return S_OK;
+    }
+
+    HRESULT filterSoftwareIndexedDrawOutsideClipPrimitives(
+            SoftwareFfpDrawData& draw,
+            std::vector<std::uint8_t>& indices,
+            D3DFORMAT& indexFormat) {
+        if (renderStateValue(D3DRS_CLIPPING) == FALSE ||
+            draw.vertices.empty() || draw.stride < 16u ||
+            draw.primitiveCount == 0u) {
+            return S_OK;
+        }
+        if (draw.vertices.size() % draw.stride != 0u) {
+            return D3DERR_INVALIDCALL;
+        }
+        const UINT vertexCount =
+            static_cast<UINT>(draw.vertices.size() / draw.stride);
+        const UINT sourceIndexCount =
+            primitiveVertexCount(draw.primitiveType, draw.primitiveCount);
+        const UINT sourceIndexSize = indexFormat == D3DFMT_INDEX32 ? 4u : 2u;
+        if ((indexFormat != D3DFMT_INDEX16 && indexFormat != D3DFMT_INDEX32) ||
+            static_cast<std::uint64_t>(sourceIndexCount) * sourceIndexSize >
+                indices.size()) {
+            return D3DERR_INVALIDCALL;
+        }
+
+	        std::vector<std::uint8_t> filtered;
+	        filtered.reserve(static_cast<size_t>(sourceIndexCount) * sizeof(DWORD));
+	        std::vector<std::uint8_t> clippedVertices;
+	        UINT keptPrimitiveCount = 0u;
+	        bool clippedTriangles = false;
+	        bool clippedLines = false;
+
+        auto readIndex = [&](UINT ordinal, DWORD& outIndex) -> HRESULT {
+            HRESULT hr = readSoftwareIndexValue(indices, indexFormat, ordinal,
+                                                outIndex);
+            if (FAILED(hr)) return hr;
+            if (outIndex >= vertexCount) return D3DERR_INVALIDCALL;
+            return S_OK;
+        };
+        auto clipFlags = [&](DWORD index) {
+            return transformedSwvpVertexClipFlags(
+                draw.vertices, draw.stride, index);
+        };
+        auto vertexInside = [&](DWORD index) {
+            return clipFlags(index) == 0u;
+        };
+        auto appendIndex = [&](DWORD index) -> HRESULT {
+            return appendSoftwareIndex32(filtered, index);
+        };
+	        switch (draw.primitiveType) {
+            case D3DPT_POINTLIST:
+                for (UINT i = 0; i < draw.primitiveCount; ++i) {
+                    DWORD a = 0;
+                    HRESULT hr = readIndex(i, a);
+                    if (FAILED(hr)) return hr;
+                    if (!vertexInside(a)) continue;
+                    hr = appendIndex(a);
+                    if (FAILED(hr)) return hr;
+                    ++keptPrimitiveCount;
+                }
+                break;
+	            case D3DPT_LINELIST:
+	                for (UINT i = 0; i < draw.primitiveCount; ++i) {
+	                    DWORD a = 0, b = 0;
+	                    HRESULT hr = readIndex(i * 2u, a);
+	                    if (FAILED(hr)) return hr;
+	                    hr = readIndex(i * 2u + 1u, b);
+	                    if (FAILED(hr)) return hr;
+	                    SwvpClippedVertex av{}, bv{};
+	                    hr = copyTransformedSwvpVertex(draw.vertices, draw.stride, a, av);
+	                    if (FAILED(hr)) return hr;
+	                    hr = copyTransformedSwvpVertex(draw.vertices, draw.stride, b, bv);
+	                    if (FAILED(hr)) return hr;
+	                    const UINT beforeCount = keptPrimitiveCount;
+	                    hr = clipTransformedSwvpLine(
+	                        draw.fvf, draw.stride, av, bv, clippedVertices,
+	                        keptPrimitiveCount);
+	                    if (FAILED(hr)) return hr;
+	                    if (keptPrimitiveCount != beforeCount + 1u ||
+	                        (clipFlags(a) | clipFlags(b)) != 0u) {
+	                        clippedLines = true;
+	                    }
+	                }
+	                clippedLines = true;
+	                break;
+	            case D3DPT_LINESTRIP:
+	                for (UINT i = 0; i < draw.primitiveCount; ++i) {
+	                    DWORD a = 0, b = 0;
+	                    HRESULT hr = readIndex(i, a);
+	                    if (FAILED(hr)) return hr;
+	                    hr = readIndex(i + 1u, b);
+	                    if (FAILED(hr)) return hr;
+	                    SwvpClippedVertex av{}, bv{};
+	                    hr = copyTransformedSwvpVertex(draw.vertices, draw.stride, a, av);
+	                    if (FAILED(hr)) return hr;
+	                    hr = copyTransformedSwvpVertex(draw.vertices, draw.stride, b, bv);
+	                    if (FAILED(hr)) return hr;
+	                    hr = clipTransformedSwvpLine(
+	                        draw.fvf, draw.stride, av, bv, clippedVertices,
+	                        keptPrimitiveCount);
+	                    if (FAILED(hr)) return hr;
+	                }
+	                draw.primitiveType = D3DPT_LINELIST;
+	                clippedLines = true;
+	                break;
+	            case D3DPT_TRIANGLELIST:
+	                for (UINT i = 0; i < draw.primitiveCount; ++i) {
+	                    DWORD a = 0, b = 0, c = 0;
+	                    HRESULT hr = readIndex(i * 3u, a);
+                    if (FAILED(hr)) return hr;
+                    hr = readIndex(i * 3u + 1u, b);
+                    if (FAILED(hr)) return hr;
+	                    hr = readIndex(i * 3u + 2u, c);
+	                    if (FAILED(hr)) return hr;
+	                    SwvpClippedVertex av{}, bv{}, cv{};
+	                    hr = copyTransformedSwvpVertex(draw.vertices, draw.stride, a, av);
+	                    if (FAILED(hr)) return hr;
+	                    hr = copyTransformedSwvpVertex(draw.vertices, draw.stride, b, bv);
+	                    if (FAILED(hr)) return hr;
+	                    hr = copyTransformedSwvpVertex(draw.vertices, draw.stride, c, cv);
+	                    if (FAILED(hr)) return hr;
+	                    const UINT beforeCount = keptPrimitiveCount;
+	                    hr = clipTransformedSwvpTriangle(
+	                        draw.fvf, draw.stride, av, bv, cv, clippedVertices,
+	                        keptPrimitiveCount);
+	                    if (FAILED(hr)) return hr;
+	                    if (keptPrimitiveCount != beforeCount + 1u ||
+	                        (clipFlags(a) | clipFlags(b) | clipFlags(c)) != 0u) {
+	                        clippedTriangles = true;
+	                    }
+	                }
+	                clippedTriangles = true;
+	                break;
+	            case D3DPT_TRIANGLESTRIP:
+	                for (UINT i = 0; i < draw.primitiveCount; ++i) {
+                    DWORD a = 0, b = 0, c = 0;
+                    HRESULT hr = readIndex((i & 1u) ? i + 1u : i, a);
+                    if (FAILED(hr)) return hr;
+                    hr = readIndex((i & 1u) ? i : i + 1u, b);
+                    if (FAILED(hr)) return hr;
+	                    hr = readIndex(i + 2u, c);
+	                    if (FAILED(hr)) return hr;
+	                    SwvpClippedVertex av{}, bv{}, cv{};
+	                    hr = copyTransformedSwvpVertex(draw.vertices, draw.stride, a, av);
+	                    if (FAILED(hr)) return hr;
+	                    hr = copyTransformedSwvpVertex(draw.vertices, draw.stride, b, bv);
+	                    if (FAILED(hr)) return hr;
+	                    hr = copyTransformedSwvpVertex(draw.vertices, draw.stride, c, cv);
+	                    if (FAILED(hr)) return hr;
+	                    hr = clipTransformedSwvpTriangle(
+	                        draw.fvf, draw.stride, av, bv, cv, clippedVertices,
+	                        keptPrimitiveCount);
+	                    if (FAILED(hr)) return hr;
+	                }
+	                draw.primitiveType = D3DPT_TRIANGLELIST;
+	                clippedTriangles = true;
+	                break;
+	            case D3DPT_TRIANGLEFAN:
+	                for (UINT i = 0; i < draw.primitiveCount; ++i) {
+                    DWORD a = 0, b = 0, c = 0;
+                    HRESULT hr = readIndex(0u, a);
+                    if (FAILED(hr)) return hr;
+                    hr = readIndex(i + 1u, b);
+                    if (FAILED(hr)) return hr;
+	                    hr = readIndex(i + 2u, c);
+	                    if (FAILED(hr)) return hr;
+	                    SwvpClippedVertex av{}, bv{}, cv{};
+	                    hr = copyTransformedSwvpVertex(draw.vertices, draw.stride, a, av);
+	                    if (FAILED(hr)) return hr;
+	                    hr = copyTransformedSwvpVertex(draw.vertices, draw.stride, b, bv);
+	                    if (FAILED(hr)) return hr;
+	                    hr = copyTransformedSwvpVertex(draw.vertices, draw.stride, c, cv);
+	                    if (FAILED(hr)) return hr;
+	                    hr = clipTransformedSwvpTriangle(
+	                        draw.fvf, draw.stride, av, bv, cv, clippedVertices,
+	                        keptPrimitiveCount);
+	                    if (FAILED(hr)) return hr;
+	                }
+	                draw.primitiveType = D3DPT_TRIANGLELIST;
+	                clippedTriangles = true;
+	                break;
+            default:
+                return D3DERR_INVALIDCALL;
+        }
+
+	        if (clippedLines || clippedTriangles) {
+	            const UINT vertexCount =
+	                draw.stride != 0u
+	                    ? static_cast<UINT>(clippedVertices.size() / draw.stride)
+	                    : 0u;
+	            filtered.clear();
+	            filtered.reserve(static_cast<size_t>(vertexCount) * sizeof(DWORD));
+	            for (UINT i = 0; i < vertexCount; ++i) {
+	                HRESULT hr = appendSoftwareIndex32(filtered, i);
+	                if (FAILED(hr)) return hr;
+	            }
+	            draw.vertices = std::move(clippedVertices);
+	            draw.primitiveType = clippedTriangles
+	                ? D3DPT_TRIANGLELIST : D3DPT_LINELIST;
+	        }
+	        indices = std::move(filtered);
+	        indexFormat = D3DFMT_INDEX32;
+	        draw.primitiveCount = keptPrimitiveCount;
+	        return S_OK;
+	    }
+
+    UINT softwareDrawInstanceCount() const {
+        if ((streamFreq_[0] & D3DSTREAMSOURCE_INDEXEDDATA) == 0u) {
+            return 1u;
+        }
+        const UINT count = streamFreq_[0] & 0x00ffffffu;
+        return count ? count : 1u;
+    }
+
+    HRESULT applySoftwareInstanceStreamOffsets(UINT instance,
+                                               UINT savedOffsets[16]) {
+        for (UINT stream = 0; stream < 16u; ++stream) {
+            savedOffsets[stream] = streamOff_[stream];
+        }
+        for (UINT stream = 1; stream < 16u; ++stream) {
+            if ((streamFreq_[stream] & D3DSTREAMSOURCE_INSTANCEDATA) == 0u) {
+                continue;
+            }
+            const UINT divider = std::max<UINT>(streamFreq_[stream] & 0x00ffffffu, 1u);
+            const UINT element = instance / divider;
+            const std::uint64_t offset =
+                static_cast<std::uint64_t>(streamOff_[stream]) +
+                static_cast<std::uint64_t>(element) * streamStr_[stream];
+            if (offset > 0xffffffffull) {
+                return D3DERR_INVALIDCALL;
+            }
+            streamOff_[stream] = static_cast<UINT>(offset);
+        }
+        return S_OK;
+    }
+
+    void restoreSoftwareInstanceStreamOffsets(const UINT savedOffsets[16]) {
+        for (UINT stream = 0; stream < 16u; ++stream) {
+            streamOff_[stream] = savedOffsets[stream];
+        }
+    }
+
+    HRESULT describeSoftwareProgrammableDrawTarget(
+        DWORD& outputFvf,
+        FvfProcessLayout& srcLayout,
+        FvfProcessLayout& dstLayout) {
+        outputFvf = 0;
+        srcLayout = {};
+        dstLayout = {};
+        if (!softwareVertexProcessing_ || !vs_) {
+            return S_FALSE;
+        }
+        if (fvf_ != 0) {
+            const DWORD positionMask = fvf_ & D3DFVF_POSITION_MASK;
+            if ((positionMask != D3DFVF_XYZ &&
+                 positionMask != D3DFVF_XYZW &&
+                 !processFvfXyzbPosition(positionMask)) ||
+                !describeProcessFvf(fvf_, srcLayout)) {
+                return S_FALSE;
+            }
+        } else if (vdecl_) {
+            if (!describeProcessDeclaration(vdecl_, srcLayout, false)) {
+                return S_FALSE;
+            }
+        } else {
+            return S_FALSE;
+        }
+        UINT shaderBytes = 0;
+        HRESULT hr = vs_->GetFunction(nullptr, &shaderBytes);
+        if (FAILED(hr) || shaderBytes == 0u ||
+            (shaderBytes % sizeof(DWORD)) != 0u) {
+            return S_FALSE;
+        }
+        std::vector<DWORD> shaderWords(shaderBytes / sizeof(DWORD));
+        hr = vs_->GetFunction(shaderWords.data(), &shaderBytes);
+        ProcessShaderIo shaderIo{};
+        if (FAILED(hr) ||
+            !analyzeSimpleProcessVertexShader(shaderWords, shaderIo)) {
+            return S_FALSE;
+        }
+        outputFvf = processProgrammableOutputFvf(shaderIo);
+        if (outputFvf == 0u ||
+            !describeProcessFvf(outputFvf, dstLayout) ||
+            dstLayout.positionBytes != 16u) {
+            outputFvf = 0;
+            return S_FALSE;
+        }
+        return S_OK;
+    }
+
+    HRESULT readTransformedVertexBuffer(IDirect3DVertexBuffer9* dstBuffer,
+                                        UINT bytes,
+                                        SoftwareFfpDrawData& out,
+                                        DWORD outputFvf,
+                                        UINT outputStride) {
+        out = {};
+        if (bytes == 0u) return S_FALSE;
+        void* mapped = nullptr;
+        HRESULT hr = dstBuffer->Lock(0, bytes, &mapped, D3DLOCK_READONLY);
+        if (FAILED(hr)) return hr;
+        if (!mapped) {
+            (void)dstBuffer->Unlock();
+            return D3DERR_INVALIDCALL;
+        }
+        out.vertices.resize(bytes);
+        std::memcpy(out.vertices.data(), mapped, bytes);
+        hr = dstBuffer->Unlock();
+        if (FAILED(hr)) return hr;
+        out.fvf = outputFvf;
+        out.stride = outputStride;
+        return S_OK;
+    }
+
+    HRESULT trySoftwareProgrammableTransformBoundVertices(
+        UINT startVertex,
+        UINT vertexCount,
+        SoftwareFfpDrawData& out) {
+        out = {};
+        if (vertexCount == 0u) return S_FALSE;
+        DWORD outputFvf = 0;
+        FvfProcessLayout srcLayout{};
+        FvfProcessLayout dstLayout{};
+        HRESULT hr = describeSoftwareProgrammableDrawTarget(
+            outputFvf, srcLayout, dstLayout);
+        if (hr != S_OK) return hr;
+        std::uint32_t outputBytes = 0;
+        if (!checkedByteCount(vertexCount, dstLayout.stride, outputBytes)) {
+            return D3DERR_INVALIDCALL;
+        }
+        IDirect3DVertexBuffer9* dstBuffer = nullptr;
+        hr = CreateVertexBuffer(outputBytes, 0, outputFvf, D3DPOOL_SYSTEMMEM,
+                                &dstBuffer, nullptr);
+        if (FAILED(hr)) return hr;
+        hr = ProcessVertices(startVertex, 0, vertexCount, dstBuffer, nullptr, 0);
+        if (SUCCEEDED(hr)) {
+            hr = readTransformedVertexBuffer(dstBuffer, outputBytes, out,
+                                             outputFvf, dstLayout.stride);
+            if (SUCCEEDED(hr)) out.bypassVertexShader = true;
+        }
+        dstBuffer->Release();
+        return hr;
+    }
+
+    HRESULT trySoftwareFfpTransformBoundVertices(UINT startVertex,
+                                                 UINT vertexCount,
+                                                 SoftwareFfpDrawData& out) {
+        out = {};
+        if (vertexCount == 0u) return S_FALSE;
+        DWORD outputFvf = 0;
+        FvfProcessLayout srcLayout{};
+        FvfProcessLayout dstLayout{};
+        HRESULT hr = describeSoftwareFfpDrawTarget(outputFvf, srcLayout, dstLayout);
+        if (hr != S_OK) return hr;
+        if (!streamSrc_[0] || streamStr_[0] < srcLayout.stride) {
+            return S_FALSE;
+        }
+        std::uint32_t outputBytes = 0;
+        if (!checkedByteCount(vertexCount, dstLayout.stride, outputBytes)) {
+            return D3DERR_INVALIDCALL;
+        }
+        IDirect3DVertexBuffer9* dstBuffer = nullptr;
+        hr = CreateVertexBuffer(outputBytes, 0, outputFvf, D3DPOOL_SYSTEMMEM,
+                                &dstBuffer, nullptr);
+        if (FAILED(hr)) return hr;
+        hr = ProcessVertices(startVertex, 0, vertexCount, dstBuffer, nullptr, 0);
+        if (SUCCEEDED(hr)) {
+            hr = readTransformedVertexBuffer(dstBuffer, outputBytes, out,
+                                             outputFvf, dstLayout.stride);
+        }
+        dstBuffer->Release();
+        return hr;
+    }
+
+    HRESULT trySoftwareFfpDrawPrimitive(D3DPRIMITIVETYPE type,
+                                        UINT startVertex,
+                                        UINT primitiveCount,
+                                        SoftwareFfpDrawData& out) {
+        out = {};
+        const UINT vertexCount = primitiveVertexCount(type, primitiveCount);
+        const UINT instanceCount = softwareDrawInstanceCount();
+        if (instanceCount <= 1u) {
+            HRESULT hr = trySoftwareFfpTransformBoundVertices(startVertex, vertexCount, out);
+            if (SUCCEEDED(hr) && hr != S_FALSE) {
+                out.primitiveType = type;
+                out.primitiveCount = primitiveCount;
+            }
+            return hr;
+        }
+        if (!softwareDrawCanExpandInstances(type) ||
+            primitiveCount > 0xffffffffu / instanceCount) {
+            return S_FALSE;
+        }
+        out.primitiveType = softwareDrawExpandedPrimitiveType(type);
+        for (UINT instance = 0; instance < instanceCount; ++instance) {
+            UINT savedOffsets[16]{};
+            HRESULT hr = applySoftwareInstanceStreamOffsets(instance, savedOffsets);
+            if (SUCCEEDED(hr)) {
+                SoftwareFfpDrawData instanceDraw{};
+                hr = trySoftwareFfpTransformBoundVertices(startVertex, vertexCount,
+                                                          instanceDraw);
+                if (SUCCEEDED(hr) && hr != S_FALSE) {
+                    if (out.vertices.empty()) {
+                        out.fvf = instanceDraw.fvf;
+                        out.stride = instanceDraw.stride;
+                        out.bypassVertexShader = instanceDraw.bypassVertexShader;
+                    } else if (out.fvf != instanceDraw.fvf ||
+                               out.stride != instanceDraw.stride ||
+                               out.bypassVertexShader != instanceDraw.bypassVertexShader) {
+                        hr = D3DERR_INVALIDCALL;
+                    }
+                    if (SUCCEEDED(hr)) {
+                        hr = appendSoftwarePrimitiveVertices(
+                            instanceDraw.vertices, instanceDraw.stride, type,
+                            primitiveCount, out.vertices);
+                    }
+                }
+            }
+            restoreSoftwareInstanceStreamOffsets(savedOffsets);
+            if (FAILED(hr) || hr == S_FALSE) {
+                out = {};
+                return hr;
+            }
+        }
+        out.primitiveCount = primitiveCount * instanceCount;
+        return S_OK;
+    }
+
+    HRESULT trySoftwareProgrammableDrawPrimitive(D3DPRIMITIVETYPE type,
+                                                 UINT startVertex,
+                                                 UINT primitiveCount,
+                                                 SoftwareFfpDrawData& out) {
+        out = {};
+        const UINT vertexCount = primitiveVertexCount(type, primitiveCount);
+        const UINT instanceCount = softwareDrawInstanceCount();
+        if (instanceCount <= 1u) {
+            HRESULT hr = trySoftwareProgrammableTransformBoundVertices(
+                startVertex, vertexCount, out);
+            if (SUCCEEDED(hr) && hr != S_FALSE) {
+                out.primitiveType = type;
+                out.primitiveCount = primitiveCount;
+            }
+            return hr;
+        }
+        if (!softwareDrawCanExpandInstances(type) ||
+            primitiveCount > 0xffffffffu / instanceCount) {
+            return S_FALSE;
+        }
+        out.primitiveType = softwareDrawExpandedPrimitiveType(type);
+        for (UINT instance = 0; instance < instanceCount; ++instance) {
+            UINT savedOffsets[16]{};
+            HRESULT hr = applySoftwareInstanceStreamOffsets(instance, savedOffsets);
+            if (SUCCEEDED(hr)) {
+                SoftwareFfpDrawData instanceDraw{};
+                hr = trySoftwareProgrammableTransformBoundVertices(
+                    startVertex, vertexCount, instanceDraw);
+                if (SUCCEEDED(hr) && hr != S_FALSE) {
+                    if (out.vertices.empty()) {
+                        out.fvf = instanceDraw.fvf;
+                        out.stride = instanceDraw.stride;
+                        out.bypassVertexShader = instanceDraw.bypassVertexShader;
+                    } else if (out.fvf != instanceDraw.fvf ||
+                               out.stride != instanceDraw.stride ||
+                               out.bypassVertexShader != instanceDraw.bypassVertexShader) {
+                        hr = D3DERR_INVALIDCALL;
+                    }
+                    if (SUCCEEDED(hr)) {
+                        hr = appendSoftwarePrimitiveVertices(
+                            instanceDraw.vertices, instanceDraw.stride, type,
+                            primitiveCount, out.vertices);
+                    }
+                }
+            }
+            restoreSoftwareInstanceStreamOffsets(savedOffsets);
+            if (FAILED(hr) || hr == S_FALSE) {
+                out = {};
+                return hr;
+            }
+        }
+        out.primitiveCount = primitiveCount * instanceCount;
+        return S_OK;
+    }
+
+    HRESULT readSoftwareFfpAdjustedIndices(UINT startIndex,
+                                           UINT indexCount,
+                                           UINT minVertex,
+                                           UINT numVertices,
+                                           std::vector<std::uint8_t>& out,
+                                           D3DFORMAT& indexFormat) {
+        out.clear();
+        indexFormat = D3DFMT_UNKNOWN;
+        if (!indexBuf_ || indexCount == 0u || numVertices == 0u) return S_FALSE;
+        D3DINDEXBUFFER_DESC desc{};
+        HRESULT hr = indexBuf_->GetDesc(&desc);
+        if (FAILED(hr)) return S_FALSE;
+        if (desc.Format != D3DFMT_INDEX16 && desc.Format != D3DFMT_INDEX32) {
+            return S_FALSE;
+        }
+        const UINT indexSize = desc.Format == D3DFMT_INDEX32 ? 4u : 2u;
+        std::uint32_t indexBytes = 0;
+        if (!checkedByteCount(indexCount, indexSize, indexBytes)) {
+            return D3DERR_INVALIDCALL;
+        }
+        const std::uint64_t byteOffset =
+            static_cast<std::uint64_t>(startIndex) * indexSize;
+        if (byteOffset > 0xffffffffull ||
+            indexBytes > desc.Size ||
+            byteOffset > desc.Size - indexBytes) {
+            return D3DERR_INVALIDCALL;
+        }
+        void* mapped = nullptr;
+        hr = indexBuf_->Lock(static_cast<UINT>(byteOffset), indexBytes,
+                             &mapped, D3DLOCK_READONLY);
+        if (FAILED(hr)) return S_FALSE;
+        if (!mapped) {
+            (void)indexBuf_->Unlock();
+            return D3DERR_INVALIDCALL;
+        }
+        out.resize(indexBytes);
+        bool supportedRange = true;
+        if (desc.Format == D3DFMT_INDEX16) {
+            const auto* src = static_cast<const std::uint8_t*>(mapped);
+            for (UINT i = 0; i < indexCount; ++i) {
+                WORD index = 0;
+                std::memcpy(&index, src + i * indexSize, sizeof(index));
+                if (index < minVertex || index - minVertex >= numVertices) {
+                    supportedRange = false;
+                    break;
+                }
+                const WORD adjusted = static_cast<WORD>(index - minVertex);
+                std::memcpy(out.data() + i * indexSize, &adjusted, sizeof(adjusted));
+            }
+        } else {
+            const auto* src = static_cast<const std::uint8_t*>(mapped);
+            for (UINT i = 0; i < indexCount; ++i) {
+                DWORD index = 0;
+                std::memcpy(&index, src + i * indexSize, sizeof(index));
+                if (index < minVertex || index - minVertex >= numVertices) {
+                    supportedRange = false;
+                    break;
+                }
+                const DWORD adjusted = index - minVertex;
+                std::memcpy(out.data() + i * indexSize, &adjusted, sizeof(adjusted));
+            }
+        }
+        hr = indexBuf_->Unlock();
+        if (FAILED(hr)) return hr;
+        if (!supportedRange) {
+            out.clear();
+            return S_FALSE;
+        }
+        indexFormat = desc.Format;
+        return S_OK;
+    }
+
+    static HRESULT appendSoftwareIndicesWithBase32(
+        const std::vector<std::uint8_t>& source,
+        D3DFORMAT sourceFormat,
+        UINT indexCount,
+        UINT baseVertex,
+        std::vector<std::uint8_t>& out) {
+        if (sourceFormat != D3DFMT_INDEX16 && sourceFormat != D3DFMT_INDEX32) {
+            return D3DERR_INVALIDCALL;
+        }
+        const UINT sourceIndexSize = sourceFormat == D3DFMT_INDEX32 ? 4u : 2u;
+        const std::uint64_t required =
+            static_cast<std::uint64_t>(indexCount) * sourceIndexSize;
+        if (required > source.size()) {
+            return D3DERR_INVALIDCALL;
+        }
+        const auto* bytes = source.data();
+        for (UINT i = 0; i < indexCount; ++i) {
+            DWORD index = 0;
+            if (sourceFormat == D3DFMT_INDEX32) {
+                std::memcpy(&index, bytes + i * sourceIndexSize, sizeof(index));
+            } else {
+                WORD index16 = 0;
+                std::memcpy(&index16, bytes + i * sourceIndexSize, sizeof(index16));
+                index = index16;
+            }
+            const std::uint64_t adjusted =
+                static_cast<std::uint64_t>(index) + baseVertex;
+            if (adjusted > 0xffffffffull) {
+                return D3DERR_INVALIDCALL;
+            }
+            const DWORD adjusted32 = static_cast<DWORD>(adjusted);
+            const auto oldSize = out.size();
+            out.resize(oldSize + sizeof(adjusted32));
+            std::memcpy(out.data() + oldSize, &adjusted32, sizeof(adjusted32));
+        }
+        return S_OK;
+    }
+
+    static HRESULT appendSoftwarePrimitiveIndicesWithBase32(
+        const std::vector<std::uint8_t>& source,
+        D3DFORMAT sourceFormat,
+        D3DPRIMITIVETYPE type,
+        UINT primitiveCount,
+        UINT baseVertex,
+        std::vector<std::uint8_t>& out) {
+        if (sourceFormat != D3DFMT_INDEX16 && sourceFormat != D3DFMT_INDEX32) {
+            return D3DERR_INVALIDCALL;
+        }
+        const UINT sourceIndexSize = sourceFormat == D3DFMT_INDEX32 ? 4u : 2u;
+        const UINT sourceIndexCount = primitiveVertexCount(type, primitiveCount);
+        const std::uint64_t required =
+            static_cast<std::uint64_t>(sourceIndexCount) * sourceIndexSize;
+        if (required > source.size()) {
+            return D3DERR_INVALIDCALL;
+        }
+        auto readIndex = [&](UINT index, DWORD& outIndex) -> HRESULT {
+            if (index >= sourceIndexCount) return D3DERR_INVALIDCALL;
+            const auto* bytes = source.data() +
+                static_cast<size_t>(index) * sourceIndexSize;
+            if (sourceFormat == D3DFMT_INDEX32) {
+                std::memcpy(&outIndex, bytes, sizeof(outIndex));
+            } else {
+                WORD index16 = 0;
+                std::memcpy(&index16, bytes, sizeof(index16));
+                outIndex = index16;
+            }
+            return S_OK;
+        };
+        auto appendIndex = [&](UINT index) -> HRESULT {
+            DWORD value = 0;
+            HRESULT hr = readIndex(index, value);
+            if (FAILED(hr)) return hr;
+            const std::uint64_t adjusted =
+                static_cast<std::uint64_t>(value) + baseVertex;
+            if (adjusted > 0xffffffffull) return D3DERR_INVALIDCALL;
+            const DWORD adjusted32 = static_cast<DWORD>(adjusted);
+            const auto oldSize = out.size();
+            out.resize(oldSize + sizeof(adjusted32));
+            std::memcpy(out.data() + oldSize, &adjusted32, sizeof(adjusted32));
+            return S_OK;
+        };
+        switch (type) {
+            case D3DPT_POINTLIST:
+            case D3DPT_LINELIST:
+            case D3DPT_TRIANGLELIST:
+                return appendSoftwareIndicesWithBase32(
+                    source, sourceFormat, sourceIndexCount, baseVertex, out);
+            case D3DPT_LINESTRIP:
+                for (UINT i = 0; i < primitiveCount; ++i) {
+                    HRESULT hr = appendIndex(i);
+                    if (FAILED(hr)) return hr;
+                    hr = appendIndex(i + 1u);
+                    if (FAILED(hr)) return hr;
+                }
+                return S_OK;
+            case D3DPT_TRIANGLESTRIP:
+                for (UINT i = 0; i < primitiveCount; ++i) {
+                    const UINT a = (i & 1u) ? i + 1u : i;
+                    const UINT b = (i & 1u) ? i : i + 1u;
+                    HRESULT hr = appendIndex(a);
+                    if (FAILED(hr)) return hr;
+                    hr = appendIndex(b);
+                    if (FAILED(hr)) return hr;
+                    hr = appendIndex(i + 2u);
+                    if (FAILED(hr)) return hr;
+                }
+                return S_OK;
+            case D3DPT_TRIANGLEFAN:
+                for (UINT i = 0; i < primitiveCount; ++i) {
+                    HRESULT hr = appendIndex(0u);
+                    if (FAILED(hr)) return hr;
+                    hr = appendIndex(i + 1u);
+                    if (FAILED(hr)) return hr;
+                    hr = appendIndex(i + 2u);
+                    if (FAILED(hr)) return hr;
+                }
+                return S_OK;
+            default:
+                return D3DERR_INVALIDCALL;
+        }
+    }
+
+    HRESULT trySoftwareFfpDrawIndexedPrimitive(D3DPRIMITIVETYPE type,
+                                               INT baseVertex,
+                                               UINT minVertex,
+                                               UINT numVertices,
+                                               UINT startIndex,
+                                               UINT primitiveCount,
+                                               SoftwareFfpDrawData& out,
+                                               std::vector<std::uint8_t>& indices,
+                                               D3DFORMAT& indexFormat) {
+        out = {};
+        indices.clear();
+        indexFormat = D3DFMT_UNKNOWN;
+        const UINT indexCount = primitiveVertexCount(type, primitiveCount);
+        if (indexCount == 0u || numVertices == 0u) return S_FALSE;
+        const std::int64_t srcStart =
+            static_cast<std::int64_t>(baseVertex) +
+            static_cast<std::int64_t>(minVertex);
+        if (srcStart < 0 || srcStart > 0xffffffffll) return S_FALSE;
+        HRESULT hr = readSoftwareFfpAdjustedIndices(
+            startIndex, indexCount, minVertex, numVertices, indices, indexFormat);
+        if (hr != S_OK) return hr;
+        const UINT instanceCount = softwareDrawInstanceCount();
+        if (instanceCount <= 1u) {
+            hr = trySoftwareFfpTransformBoundVertices(
+                static_cast<UINT>(srcStart), numVertices, out);
+            if (SUCCEEDED(hr) && hr != S_FALSE) {
+                out.primitiveType = type;
+                out.primitiveCount = primitiveCount;
+            }
+        } else {
+            if (!softwareDrawCanExpandInstances(type) ||
+                primitiveCount > 0xffffffffu / instanceCount ||
+                indexCount > 0xffffffffu / instanceCount ||
+                numVertices > 0xffffffffu / instanceCount) {
+                indices.clear();
+                return S_FALSE;
+            }
+            const std::vector<std::uint8_t> sourceIndices = indices;
+            const D3DFORMAT sourceIndexFormat = indexFormat;
+            indices.clear();
+            indexFormat = D3DFMT_INDEX32;
+            out.primitiveType = softwareDrawExpandedPrimitiveType(type);
+            for (UINT instance = 0; instance < instanceCount; ++instance) {
+                UINT savedOffsets[16]{};
+                hr = applySoftwareInstanceStreamOffsets(instance, savedOffsets);
+                if (SUCCEEDED(hr)) {
+                    SoftwareFfpDrawData instanceDraw{};
+                    hr = trySoftwareFfpTransformBoundVertices(
+                        static_cast<UINT>(srcStart), numVertices, instanceDraw);
+                    if (SUCCEEDED(hr) && hr != S_FALSE) {
+                        if (out.vertices.empty()) {
+                            out.fvf = instanceDraw.fvf;
+                            out.stride = instanceDraw.stride;
+                            out.bypassVertexShader = instanceDraw.bypassVertexShader;
+                        } else if (out.fvf != instanceDraw.fvf ||
+                                   out.stride != instanceDraw.stride ||
+                                   out.bypassVertexShader != instanceDraw.bypassVertexShader) {
+                            hr = D3DERR_INVALIDCALL;
+                        }
+                        if (SUCCEEDED(hr)) {
+                            out.vertices.insert(out.vertices.end(),
+                                                instanceDraw.vertices.begin(),
+                                                instanceDraw.vertices.end());
+                            hr = appendSoftwarePrimitiveIndicesWithBase32(
+                                sourceIndices, sourceIndexFormat, type, primitiveCount,
+                                instance * numVertices, indices);
+                        }
+                    }
+                }
+                restoreSoftwareInstanceStreamOffsets(savedOffsets);
+                if (FAILED(hr) || hr == S_FALSE) {
+                    break;
+                }
+            }
+            if (SUCCEEDED(hr) && hr != S_FALSE) {
+                out.primitiveCount = primitiveCount * instanceCount;
+            }
+        }
+        if (FAILED(hr) || hr == S_FALSE) {
+            out = {};
+            indices.clear();
+        }
+        return hr;
+    }
+
+    HRESULT trySoftwareProgrammableDrawIndexedPrimitive(
+        D3DPRIMITIVETYPE type,
+        INT baseVertex,
+        UINT minVertex,
+        UINT numVertices,
+        UINT startIndex,
+        UINT primitiveCount,
+        SoftwareFfpDrawData& out,
+        std::vector<std::uint8_t>& indices,
+        D3DFORMAT& indexFormat) {
+        out = {};
+        indices.clear();
+        indexFormat = D3DFMT_UNKNOWN;
+        const UINT indexCount = primitiveVertexCount(type, primitiveCount);
+        if (indexCount == 0u || numVertices == 0u) return S_FALSE;
+        const std::int64_t srcStart =
+            static_cast<std::int64_t>(baseVertex) +
+            static_cast<std::int64_t>(minVertex);
+        if (srcStart < 0 || srcStart > 0xffffffffll) return S_FALSE;
+        HRESULT hr = readSoftwareFfpAdjustedIndices(
+            startIndex, indexCount, minVertex, numVertices, indices, indexFormat);
+        if (hr != S_OK) return hr;
+        const UINT instanceCount = softwareDrawInstanceCount();
+        if (instanceCount <= 1u) {
+            hr = trySoftwareProgrammableTransformBoundVertices(
+                static_cast<UINT>(srcStart), numVertices, out);
+            if (SUCCEEDED(hr) && hr != S_FALSE) {
+                out.primitiveType = type;
+                out.primitiveCount = primitiveCount;
+            }
+        } else {
+            if (!softwareDrawCanExpandInstances(type) ||
+                primitiveCount > 0xffffffffu / instanceCount ||
+                indexCount > 0xffffffffu / instanceCount ||
+                numVertices > 0xffffffffu / instanceCount) {
+                indices.clear();
+                return S_FALSE;
+            }
+            const std::vector<std::uint8_t> sourceIndices = indices;
+            const D3DFORMAT sourceIndexFormat = indexFormat;
+            indices.clear();
+            indexFormat = D3DFMT_INDEX32;
+            out.primitiveType = softwareDrawExpandedPrimitiveType(type);
+            for (UINT instance = 0; instance < instanceCount; ++instance) {
+                UINT savedOffsets[16]{};
+                hr = applySoftwareInstanceStreamOffsets(instance, savedOffsets);
+                if (SUCCEEDED(hr)) {
+                    SoftwareFfpDrawData instanceDraw{};
+                    hr = trySoftwareProgrammableTransformBoundVertices(
+                        static_cast<UINT>(srcStart), numVertices, instanceDraw);
+                    if (SUCCEEDED(hr) && hr != S_FALSE) {
+                        if (out.vertices.empty()) {
+                            out.fvf = instanceDraw.fvf;
+                            out.stride = instanceDraw.stride;
+                            out.bypassVertexShader = instanceDraw.bypassVertexShader;
+                        } else if (out.fvf != instanceDraw.fvf ||
+                                   out.stride != instanceDraw.stride ||
+                                   out.bypassVertexShader != instanceDraw.bypassVertexShader) {
+                            hr = D3DERR_INVALIDCALL;
+                        }
+                        if (SUCCEEDED(hr)) {
+                            out.vertices.insert(out.vertices.end(),
+                                                instanceDraw.vertices.begin(),
+                                                instanceDraw.vertices.end());
+                            hr = appendSoftwarePrimitiveIndicesWithBase32(
+                                sourceIndices, sourceIndexFormat, type, primitiveCount,
+                                instance * numVertices, indices);
+                        }
+                    }
+                }
+                restoreSoftwareInstanceStreamOffsets(savedOffsets);
+                if (FAILED(hr) || hr == S_FALSE) {
+                    break;
+                }
+            }
+            if (SUCCEEDED(hr) && hr != S_FALSE) {
+                out.primitiveCount = primitiveCount * instanceCount;
+            }
+        }
+        if (FAILED(hr) || hr == S_FALSE) {
+            out = {};
+            indices.clear();
+        }
+        return hr;
+    }
+
+    HRESULT trySoftwareFfpDrawPrimitiveUP(D3DPRIMITIVETYPE type,
+                                          UINT primitiveCount,
+                                          const void* data,
+                                          UINT stride,
+                                          SoftwareFfpDrawData& out) {
+        out = {};
+        const UINT vertexCount = primitiveVertexCount(type, primitiveCount);
+        if (vertexCount == 0u) return S_FALSE;
+        DWORD outputFvf = 0;
+        FvfProcessLayout srcLayout{};
+        FvfProcessLayout dstLayout{};
+        HRESULT hr = describeSoftwareFfpDrawTarget(outputFvf, srcLayout, dstLayout);
+        if (hr != S_OK) return hr;
+        if (stride < srcLayout.stride) return S_FALSE;
+        std::uint32_t inputBytes = 0;
+        std::uint32_t outputBytes = 0;
+        if (!checkedByteCount(vertexCount, stride, inputBytes) ||
+            !checkedByteCount(vertexCount, dstLayout.stride, outputBytes) ||
+            (inputBytes != 0u && !data)) {
+            return D3DERR_INVALIDCALL;
+        }
+        IDirect3DVertexBuffer9* srcBuffer = nullptr;
+        IDirect3DVertexBuffer9* dstBuffer = nullptr;
+        hr = CreateVertexBuffer(inputBytes, 0, fvf_, D3DPOOL_SYSTEMMEM,
+                                &srcBuffer, nullptr);
+        if (FAILED(hr)) return hr;
+        void* mapped = nullptr;
+        hr = srcBuffer->Lock(0, inputBytes, &mapped, 0);
+        if (SUCCEEDED(hr) && mapped) {
+            std::memcpy(mapped, data, inputBytes);
+            hr = srcBuffer->Unlock();
+        } else if (SUCCEEDED(hr)) {
+            hr = D3DERR_INVALIDCALL;
+        }
+        if (FAILED(hr)) {
+            srcBuffer->Release();
+            return hr;
+        }
+        hr = CreateVertexBuffer(outputBytes, 0, outputFvf, D3DPOOL_SYSTEMMEM,
+                                &dstBuffer, nullptr);
+        if (FAILED(hr)) {
+            srcBuffer->Release();
+            return hr;
+        }
+
+        IDirect3DVertexBuffer9* savedStream0 = streamSrc_[0];
+        if (savedStream0) savedStream0->AddRef();
+        const UINT savedOffset0 = streamOff_[0];
+        const UINT savedStride0 = streamStr_[0];
+        setRef(streamSrc_[0], srcBuffer);
+        streamOff_[0] = 0;
+        streamStr_[0] = stride;
+        hr = ProcessVertices(0, 0, vertexCount, dstBuffer, nullptr, 0);
+        setRef(streamSrc_[0], savedStream0);
+        streamOff_[0] = savedOffset0;
+        streamStr_[0] = savedStride0;
+        if (savedStream0) savedStream0->Release();
+
+        if (SUCCEEDED(hr)) {
+            hr = readTransformedVertexBuffer(dstBuffer, outputBytes, out,
+                                             outputFvf, dstLayout.stride);
+            if (SUCCEEDED(hr)) {
+                out.primitiveType = type;
+                out.primitiveCount = primitiveCount;
+            }
+        }
+        dstBuffer->Release();
+        srcBuffer->Release();
+        return hr;
+    }
+
+    HRESULT trySoftwareProgrammableDrawPrimitiveUP(D3DPRIMITIVETYPE type,
+                                                   UINT primitiveCount,
+                                                   const void* data,
+                                                   UINT stride,
+                                                   SoftwareFfpDrawData& out) {
+        out = {};
+        const UINT vertexCount = primitiveVertexCount(type, primitiveCount);
+        if (vertexCount == 0u) return S_FALSE;
+        DWORD outputFvf = 0;
+        FvfProcessLayout srcLayout{};
+        FvfProcessLayout dstLayout{};
+        HRESULT hr = describeSoftwareProgrammableDrawTarget(
+            outputFvf, srcLayout, dstLayout);
+        if (hr != S_OK) return hr;
+        if (!processLayoutUsesOnlyStream0(srcLayout) || stride < srcLayout.stride) {
+            return S_FALSE;
+        }
+        std::uint32_t inputBytes = 0;
+        std::uint32_t outputBytes = 0;
+        if (!checkedByteCount(vertexCount, stride, inputBytes) ||
+            !checkedByteCount(vertexCount, dstLayout.stride, outputBytes) ||
+            (inputBytes != 0u && !data)) {
+            return D3DERR_INVALIDCALL;
+        }
+        IDirect3DVertexBuffer9* srcBuffer = nullptr;
+        IDirect3DVertexBuffer9* dstBuffer = nullptr;
+        hr = CreateVertexBuffer(inputBytes, 0, fvf_, D3DPOOL_SYSTEMMEM,
+                                &srcBuffer, nullptr);
+        if (FAILED(hr)) return hr;
+        void* mapped = nullptr;
+        hr = srcBuffer->Lock(0, inputBytes, &mapped, 0);
+        if (SUCCEEDED(hr) && mapped) {
+            std::memcpy(mapped, data, inputBytes);
+            hr = srcBuffer->Unlock();
+        } else if (SUCCEEDED(hr)) {
+            hr = D3DERR_INVALIDCALL;
+        }
+        if (FAILED(hr)) {
+            srcBuffer->Release();
+            return hr;
+        }
+        hr = CreateVertexBuffer(outputBytes, 0, outputFvf, D3DPOOL_SYSTEMMEM,
+                                &dstBuffer, nullptr);
+        if (FAILED(hr)) {
+            srcBuffer->Release();
+            return hr;
+        }
+
+        IDirect3DVertexBuffer9* savedStream0 = streamSrc_[0];
+        if (savedStream0) savedStream0->AddRef();
+        const UINT savedOffset0 = streamOff_[0];
+        const UINT savedStride0 = streamStr_[0];
+        setRef(streamSrc_[0], srcBuffer);
+        streamOff_[0] = 0;
+        streamStr_[0] = stride;
+        hr = ProcessVertices(0, 0, vertexCount, dstBuffer, nullptr, 0);
+        setRef(streamSrc_[0], savedStream0);
+        streamOff_[0] = savedOffset0;
+        streamStr_[0] = savedStride0;
+        if (savedStream0) savedStream0->Release();
+
+        if (SUCCEEDED(hr)) {
+            hr = readTransformedVertexBuffer(dstBuffer, outputBytes, out,
+                                             outputFvf, dstLayout.stride);
+            if (SUCCEEDED(hr)) {
+                out.primitiveType = type;
+                out.primitiveCount = primitiveCount;
+                out.bypassVertexShader = true;
+            }
+        }
+        dstBuffer->Release();
+        srcBuffer->Release();
+        return hr;
+    }
+
+    HRESULT trySoftwareFfpDrawIndexedPrimitiveUP(D3DPRIMITIVETYPE type,
+                                                 UINT minVertex,
+                                                 UINT numVertices,
+                                                 UINT primitiveCount,
+                                                 const void* vertexData,
+                                                 UINT stride,
+                                                 SoftwareFfpDrawData& out) {
+        out = {};
+        if (primitiveVertexCount(type, primitiveCount) == 0u || numVertices == 0u) {
+            return S_FALSE;
+        }
+        if (minVertex > 0xffffffffu - numVertices) {
+            return D3DERR_INVALIDCALL;
+        }
+        DWORD outputFvf = 0;
+        FvfProcessLayout srcLayout{};
+        FvfProcessLayout dstLayout{};
+        HRESULT hr = describeSoftwareFfpDrawTarget(outputFvf, srcLayout, dstLayout);
+        if (hr != S_OK) return hr;
+        if (stride < srcLayout.stride) return S_FALSE;
+        const UINT vertexCount = minVertex + numVertices;
+        std::uint32_t inputBytes = 0;
+        std::uint32_t outputBytes = 0;
+        if (!checkedByteCount(vertexCount, stride, inputBytes) ||
+            !checkedByteCount(vertexCount, dstLayout.stride, outputBytes) ||
+            (inputBytes != 0u && !vertexData)) {
+            return D3DERR_INVALIDCALL;
+        }
+        IDirect3DVertexBuffer9* srcBuffer = nullptr;
+        IDirect3DVertexBuffer9* dstBuffer = nullptr;
+        hr = CreateVertexBuffer(inputBytes, 0, fvf_, D3DPOOL_SYSTEMMEM,
+                                &srcBuffer, nullptr);
+        if (FAILED(hr)) return hr;
+        void* mapped = nullptr;
+        hr = srcBuffer->Lock(0, inputBytes, &mapped, 0);
+        if (SUCCEEDED(hr) && mapped) {
+            std::memcpy(mapped, vertexData, inputBytes);
+            hr = srcBuffer->Unlock();
+        } else if (SUCCEEDED(hr)) {
+            hr = D3DERR_INVALIDCALL;
+        }
+        if (FAILED(hr)) {
+            srcBuffer->Release();
+            return hr;
+        }
+        hr = CreateVertexBuffer(outputBytes, 0, outputFvf, D3DPOOL_SYSTEMMEM,
+                                &dstBuffer, nullptr);
+        if (FAILED(hr)) {
+            srcBuffer->Release();
+            return hr;
+        }
+
+        IDirect3DVertexBuffer9* savedStream0 = streamSrc_[0];
+        if (savedStream0) savedStream0->AddRef();
+        const UINT savedOffset0 = streamOff_[0];
+        const UINT savedStride0 = streamStr_[0];
+        setRef(streamSrc_[0], srcBuffer);
+        streamOff_[0] = 0;
+        streamStr_[0] = stride;
+        hr = ProcessVertices(0, 0, vertexCount, dstBuffer, nullptr, 0);
+        setRef(streamSrc_[0], savedStream0);
+        streamOff_[0] = savedOffset0;
+        streamStr_[0] = savedStride0;
+        if (savedStream0) savedStream0->Release();
+
+        if (SUCCEEDED(hr)) {
+            hr = readTransformedVertexBuffer(dstBuffer, outputBytes, out,
+                                             outputFvf, dstLayout.stride);
+            if (SUCCEEDED(hr)) {
+                out.primitiveType = type;
+                out.primitiveCount = primitiveCount;
+            }
+        }
+        dstBuffer->Release();
+        srcBuffer->Release();
+        return hr;
+    }
+
+    HRESULT trySoftwareProgrammableDrawIndexedPrimitiveUP(
+        D3DPRIMITIVETYPE type,
+        UINT minVertex,
+        UINT numVertices,
+        UINT primitiveCount,
+        const void* vertexData,
+        UINT stride,
+        SoftwareFfpDrawData& out) {
+        out = {};
+        if (primitiveVertexCount(type, primitiveCount) == 0u || numVertices == 0u) {
+            return S_FALSE;
+        }
+        if (minVertex > 0xffffffffu - numVertices) {
+            return D3DERR_INVALIDCALL;
+        }
+        DWORD outputFvf = 0;
+        FvfProcessLayout srcLayout{};
+        FvfProcessLayout dstLayout{};
+        HRESULT hr = describeSoftwareProgrammableDrawTarget(
+            outputFvf, srcLayout, dstLayout);
+        if (hr != S_OK) return hr;
+        if (!processLayoutUsesOnlyStream0(srcLayout) || stride < srcLayout.stride) {
+            return S_FALSE;
+        }
+        const UINT vertexCount = minVertex + numVertices;
+        std::uint32_t inputBytes = 0;
+        std::uint32_t outputBytes = 0;
+        if (!checkedByteCount(vertexCount, stride, inputBytes) ||
+            !checkedByteCount(vertexCount, dstLayout.stride, outputBytes) ||
+            (inputBytes != 0u && !vertexData)) {
+            return D3DERR_INVALIDCALL;
+        }
+        IDirect3DVertexBuffer9* srcBuffer = nullptr;
+        IDirect3DVertexBuffer9* dstBuffer = nullptr;
+        hr = CreateVertexBuffer(inputBytes, 0, fvf_, D3DPOOL_SYSTEMMEM,
+                                &srcBuffer, nullptr);
+        if (FAILED(hr)) return hr;
+        void* mapped = nullptr;
+        hr = srcBuffer->Lock(0, inputBytes, &mapped, 0);
+        if (SUCCEEDED(hr) && mapped) {
+            std::memcpy(mapped, vertexData, inputBytes);
+            hr = srcBuffer->Unlock();
+        } else if (SUCCEEDED(hr)) {
+            hr = D3DERR_INVALIDCALL;
+        }
+        if (FAILED(hr)) {
+            srcBuffer->Release();
+            return hr;
+        }
+        hr = CreateVertexBuffer(outputBytes, 0, outputFvf, D3DPOOL_SYSTEMMEM,
+                                &dstBuffer, nullptr);
+        if (FAILED(hr)) {
+            srcBuffer->Release();
+            return hr;
+        }
+
+        IDirect3DVertexBuffer9* savedStream0 = streamSrc_[0];
+        if (savedStream0) savedStream0->AddRef();
+        const UINT savedOffset0 = streamOff_[0];
+        const UINT savedStride0 = streamStr_[0];
+        setRef(streamSrc_[0], srcBuffer);
+        streamOff_[0] = 0;
+        streamStr_[0] = stride;
+        hr = ProcessVertices(0, 0, vertexCount, dstBuffer, nullptr, 0);
+        setRef(streamSrc_[0], savedStream0);
+        streamOff_[0] = savedOffset0;
+        streamStr_[0] = savedStride0;
+        if (savedStream0) savedStream0->Release();
+
+        if (SUCCEEDED(hr)) {
+            hr = readTransformedVertexBuffer(dstBuffer, outputBytes, out,
+                                             outputFvf, dstLayout.stride);
+            if (SUCCEEDED(hr)) {
+                out.primitiveType = type;
+                out.primitiveCount = primitiveCount;
+                out.bypassVertexShader = true;
+            }
+        }
+        dstBuffer->Release();
+        srcBuffer->Release();
+        return hr;
+    }
+
     // Draw records consume the effective server state, not only the handles
     // present in their delta packet. Capture these at append time so coarser
     // chunks can survive later Set* mutations and wrapper releases.
@@ -3391,12 +5761,59 @@ class D3D9DeviceImpl final : public IDirect3DDevice9Ex, public D3D9PeRecorderFlu
                                         UINT count,
                                         const void* data,
                                         UINT stride) {
+        return appendDrawPrimitiveUPRecordWithFvf(type, count, data, stride,
+                                                  false, 0);
+    }
+
+    HRESULT appendDrawPrimitiveUPRecordWithFvf(D3DPRIMITIVETYPE type,
+                                               UINT count,
+                                               const void* data,
+                                               UINT stride,
+                                               bool overrideFvf,
+                                               DWORD packetFvf,
+                                               bool overrideVertexShaderNull = false) {
         const HRESULT constHr = flushPendingConsts();
         if (FAILED(constHr)) return constHr;
         D9CCommandRecordDrawPrimitiveUP header{};
         header.header.type = D9C_COMMAND_RECORD_DRAW_PRIMITIVE_UP;
+        const DWORD savedFvf = fvf_;
+        IDirect3DVertexDeclaration9* savedVdecl = vdecl_;
+        IDirect3DVertexShader9* savedVs = vs_;
+        const bool savedPendingFvf = peState_.pendingFvf;
+        const bool savedPendingVdecl = peState_.pendingVdecl;
+        const bool savedPendingVs = peState_.pendingVs;
+        if (overrideFvf) {
+            fvf_ = packetFvf;
+            vdecl_ = implicitDeclForFvf(packetFvf);
+            peState_.pendingFvf = true;
+            peState_.pendingVdecl = true;
+        }
+        if (overrideVertexShaderNull) {
+            vs_ = nullptr;
+            peState_.pendingVs = true;
+        }
         if (!buildDrawPrimitivePacket(type, 0, count, header.packet.state)) {
+            if (overrideFvf) {
+                fvf_ = savedFvf;
+                vdecl_ = savedVdecl;
+                peState_.pendingFvf = savedPendingFvf;
+                peState_.pendingVdecl = savedPendingVdecl;
+            }
+            if (overrideVertexShaderNull) {
+                vs_ = savedVs;
+                peState_.pendingVs = savedPendingVs;
+            }
             return D3DERR_INVALIDCALL;
+        }
+        if (overrideFvf) {
+            fvf_ = savedFvf;
+            vdecl_ = savedVdecl;
+            peState_.pendingFvf = savedPendingFvf;
+            peState_.pendingVdecl = savedPendingVdecl;
+        }
+        if (overrideVertexShaderNull) {
+            vs_ = savedVs;
+            peState_.pendingVs = savedPendingVs;
         }
 
         std::uint32_t vertexBytes = 0;
@@ -3432,12 +5849,64 @@ class D3D9DeviceImpl final : public IDirect3DDevice9Ex, public D3D9PeRecorderFlu
                                                D3DFORMAT indexFormat,
                                                const void* vertexData,
                                                UINT stride) {
+        return appendDrawIndexedPrimitiveUPRecordWithFvf(
+            type, minVertex, numVertices, count, indexData, indexFormat,
+            vertexData, stride, false, 0);
+    }
+
+    HRESULT appendDrawIndexedPrimitiveUPRecordWithFvf(D3DPRIMITIVETYPE type,
+                                                      UINT minVertex,
+                                                      UINT numVertices,
+                                                      UINT count,
+                                                      const void* indexData,
+                                                      D3DFORMAT indexFormat,
+                                                      const void* vertexData,
+                                                      UINT stride,
+                                                      bool overrideFvf,
+                                                      DWORD packetFvf,
+                                                      bool overrideVertexShaderNull = false) {
         const HRESULT constHr = flushPendingConsts();
         if (FAILED(constHr)) return constHr;
         D9CCommandRecordDrawIndexedPrimitiveUP header{};
         header.header.type = D9C_COMMAND_RECORD_DRAW_INDEXED_PRIMITIVE_UP;
+        const DWORD savedFvf = fvf_;
+        IDirect3DVertexDeclaration9* savedVdecl = vdecl_;
+        IDirect3DVertexShader9* savedVs = vs_;
+        const bool savedPendingFvf = peState_.pendingFvf;
+        const bool savedPendingVdecl = peState_.pendingVdecl;
+        const bool savedPendingVs = peState_.pendingVs;
+        if (overrideFvf) {
+            fvf_ = packetFvf;
+            vdecl_ = implicitDeclForFvf(packetFvf);
+            peState_.pendingFvf = true;
+            peState_.pendingVdecl = true;
+        }
+        if (overrideVertexShaderNull) {
+            vs_ = nullptr;
+            peState_.pendingVs = true;
+        }
         if (!buildDrawPrimitivePacket(type, 0, count, header.packet.state)) {
+            if (overrideFvf) {
+                fvf_ = savedFvf;
+                vdecl_ = savedVdecl;
+                peState_.pendingFvf = savedPendingFvf;
+                peState_.pendingVdecl = savedPendingVdecl;
+            }
+            if (overrideVertexShaderNull) {
+                vs_ = savedVs;
+                peState_.pendingVs = savedPendingVs;
+            }
             return D3DERR_INVALIDCALL;
+        }
+        if (overrideFvf) {
+            fvf_ = savedFvf;
+            vdecl_ = savedVdecl;
+            peState_.pendingFvf = savedPendingFvf;
+            peState_.pendingVdecl = savedPendingVdecl;
+        }
+        if (overrideVertexShaderNull) {
+            vs_ = savedVs;
+            peState_.pendingVs = savedPendingVs;
         }
 
         const UINT indexSize = indexFormat == D3DFMT_INDEX32 ? 4u : 2u;
@@ -6424,9 +8893,41 @@ public:
             const HRESULT barrierHr = chunkBarrierFlush();
             if (FAILED(barrierHr)) return barrierHr;
         }
-        const HRESULT hr = appendDrawPrimitiveRecord(type, startVertex, count);
-        if (SUCCEEDED(hr)) {
+        SoftwareFfpDrawData swvpDraw{};
+        HRESULT hr = trySoftwareFfpDrawPrimitive(type, startVertex, count, swvpDraw);
+        if (hr == S_FALSE) {
+            hr = trySoftwareProgrammableDrawPrimitive(
+                type, startVertex, count, swvpDraw);
+        }
+        bool appendedDraw = false;
+        if (hr == S_OK) {
+            hr = filterSoftwareDrawOutsideClipPrimitives(swvpDraw);
+        }
+        if (hr == S_OK) {
+            dxmt9DeviceDebugLog("device_draw_primitive swvp_fallback device=%p fvf=0x%x stride=%u bytes=%zu",
+                                this, (unsigned)swvpDraw.fvf, swvpDraw.stride,
+                                swvpDraw.vertices.size());
+            const UINT swvpPrimitiveCount = swvpDraw.primitiveCount
+                ? swvpDraw.primitiveCount
+                : count;
+            if (swvpPrimitiveCount != 0u && !swvpDraw.vertices.empty()) {
+                hr = appendDrawPrimitiveUPRecordWithFvf(
+                    swvpDraw.primitiveType, swvpPrimitiveCount,
+                    swvpDraw.vertices.data(), swvpDraw.stride,
+                    true, swvpDraw.fvf, swvpDraw.bypassVertexShader);
+                appendedDraw = SUCCEEDED(hr);
+            }
+        } else if (hr == S_FALSE) {
+            hr = appendDrawPrimitiveRecord(type, startVertex, count);
+            appendedDraw = SUCCEEDED(hr);
+        }
+        if (SUCCEEDED(hr) && appendedDraw) {
             clearPendingHotState();
+            if (!swvpDraw.vertices.empty()) {
+                peState_.pendingFvf = true;
+                peState_.pendingVdecl = true;
+                if (swvpDraw.bypassVertexShader) peState_.pendingVs = true;
+            }
         }
         return hr;
     }
@@ -6444,10 +8945,54 @@ public:
             const HRESULT barrierHr = chunkBarrierFlush();
             if (FAILED(barrierHr)) return barrierHr;
         }
-        const HRESULT hr = appendDrawIndexedPrimitiveRecord(type, baseVertex, minVertex,
-                                                            numVertices, startIndex, count);
-        if (SUCCEEDED(hr)) {
+        SoftwareFfpDrawData swvpDraw{};
+        std::vector<std::uint8_t> swvpIndices{};
+        D3DFORMAT swvpIndexFormat = D3DFMT_UNKNOWN;
+        HRESULT hr = trySoftwareFfpDrawIndexedPrimitive(
+            type, baseVertex, minVertex, numVertices, startIndex, count,
+            swvpDraw, swvpIndices, swvpIndexFormat);
+        if (hr == S_FALSE) {
+            hr = trySoftwareProgrammableDrawIndexedPrimitive(
+                type, baseVertex, minVertex, numVertices, startIndex, count,
+                swvpDraw, swvpIndices, swvpIndexFormat);
+        }
+        bool appendedDraw = false;
+        if (hr == S_OK) {
+            hr = filterSoftwareIndexedDrawOutsideClipPrimitives(
+                swvpDraw, swvpIndices, swvpIndexFormat);
+        }
+        if (hr == S_OK) {
+            dxmt9DeviceDebugLog("device_draw_indexed_primitive swvp_fallback device=%p fvf=0x%x stride=%u vertexBytes=%zu indexBytes=%zu",
+                                this, (unsigned)swvpDraw.fvf, swvpDraw.stride,
+                                swvpDraw.vertices.size(), swvpIndices.size());
+            const UINT swvpNumVertices = swvpDraw.stride
+                ? static_cast<UINT>(swvpDraw.vertices.size() / swvpDraw.stride)
+                : numVertices;
+            const UINT swvpPrimitiveCount = swvpDraw.primitiveCount
+                ? swvpDraw.primitiveCount
+                : count;
+            if (swvpPrimitiveCount != 0u && !swvpDraw.vertices.empty() &&
+                !swvpIndices.empty()) {
+                hr = appendDrawIndexedPrimitiveUPRecordWithFvf(
+                    swvpDraw.primitiveType, 0, swvpNumVertices, swvpPrimitiveCount,
+                    swvpIndices.data(), swvpIndexFormat, swvpDraw.vertices.data(),
+                    swvpDraw.stride, true, swvpDraw.fvf,
+                    swvpDraw.bypassVertexShader);
+                appendedDraw = SUCCEEDED(hr);
+            }
+        } else if (hr == S_FALSE) {
+            hr = appendDrawIndexedPrimitiveRecord(type, baseVertex, minVertex,
+                                                 numVertices, startIndex, count);
+            appendedDraw = SUCCEEDED(hr);
+        }
+        if (SUCCEEDED(hr) && appendedDraw) {
             clearPendingHotState();
+            if (!swvpDraw.vertices.empty()) {
+                peState_.pendingFvf = true;
+                peState_.pendingVdecl = true;
+                peState_.pendingIb = indexBuf_ != nullptr;
+                if (swvpDraw.bypassVertexShader) peState_.pendingVs = true;
+            }
         }
         return hr;
     }
@@ -6463,9 +9008,41 @@ public:
             const HRESULT barrierHr = chunkBarrierFlush();
             if (FAILED(barrierHr)) return barrierHr;
         }
-        const HRESULT hr = appendDrawPrimitiveUPRecord(type, count, pData, stride);
-        if (SUCCEEDED(hr)) {
+        SoftwareFfpDrawData swvpDraw{};
+        HRESULT hr = trySoftwareFfpDrawPrimitiveUP(type, count, pData, stride, swvpDraw);
+        if (hr == S_FALSE) {
+            hr = trySoftwareProgrammableDrawPrimitiveUP(
+                type, count, pData, stride, swvpDraw);
+        }
+        bool appendedDraw = false;
+        if (hr == S_OK) {
+            hr = filterSoftwareDrawOutsideClipPrimitives(swvpDraw);
+        }
+        if (hr == S_OK) {
+            dxmt9DeviceDebugLog("device_draw_primitive_up swvp_fallback device=%p fvf=0x%x stride=%u bytes=%zu",
+                                this, (unsigned)swvpDraw.fvf, swvpDraw.stride,
+                                swvpDraw.vertices.size());
+            const UINT swvpPrimitiveCount = swvpDraw.primitiveCount
+                ? swvpDraw.primitiveCount
+                : count;
+            if (swvpPrimitiveCount != 0u && !swvpDraw.vertices.empty()) {
+                hr = appendDrawPrimitiveUPRecordWithFvf(
+                    swvpDraw.primitiveType, swvpPrimitiveCount,
+                    swvpDraw.vertices.data(), swvpDraw.stride,
+                    true, swvpDraw.fvf, swvpDraw.bypassVertexShader);
+                appendedDraw = SUCCEEDED(hr);
+            }
+        } else if (hr == S_FALSE) {
+            hr = appendDrawPrimitiveUPRecord(type, count, pData, stride);
+            appendedDraw = SUCCEEDED(hr);
+        }
+        if (SUCCEEDED(hr) && appendedDraw) {
             clearPendingHotState();
+            if (!swvpDraw.vertices.empty()) {
+                peState_.pendingFvf = true;
+                peState_.pendingVdecl = true;
+                if (swvpDraw.bypassVertexShader) peState_.pendingVs = true;
+            }
         }
         return hr;
     }
@@ -6486,11 +9063,71 @@ public:
             const HRESULT barrierHr = chunkBarrierFlush();
             if (FAILED(barrierHr)) return barrierHr;
         }
-        const HRESULT hr = appendDrawIndexedPrimitiveUPRecord(type, minVertex, numVertices,
-                                                              count, pIdxData, idxFmt,
-                                                              pVtxData, stride);
-        if (SUCCEEDED(hr)) {
+        SoftwareFfpDrawData swvpDraw{};
+        std::vector<std::uint8_t> swvpIndices{};
+        D3DFORMAT swvpIndexFormat = idxFmt;
+        HRESULT hr = trySoftwareFfpDrawIndexedPrimitiveUP(
+            type, minVertex, numVertices, count, pVtxData, stride, swvpDraw);
+        if (hr == S_FALSE) {
+            hr = trySoftwareProgrammableDrawIndexedPrimitiveUP(
+                type, minVertex, numVertices, count, pVtxData, stride, swvpDraw);
+        }
+        bool appendedDraw = false;
+        bool useSwvpIndices = false;
+        if (hr == S_OK && renderStateValue(D3DRS_CLIPPING) != FALSE) {
+            const UINT indexSize = idxFmt == D3DFMT_INDEX32 ? 4u : 2u;
+            std::uint32_t indexBytes = 0;
+            if (!checkedByteCount(primitiveVertexCount(type, count), indexSize,
+                                  indexBytes) ||
+                (indexBytes != 0u && !pIdxData)) {
+                hr = D3DERR_INVALIDCALL;
+            } else {
+                swvpIndices.resize(indexBytes);
+                if (indexBytes != 0u) {
+                    std::memcpy(swvpIndices.data(), pIdxData, indexBytes);
+                }
+                hr = filterSoftwareIndexedDrawOutsideClipPrimitives(
+                    swvpDraw, swvpIndices, swvpIndexFormat);
+                useSwvpIndices = SUCCEEDED(hr);
+            }
+        }
+        if (hr == S_OK) {
+            dxmt9DeviceDebugLog("device_draw_indexed_primitive_up swvp_fallback device=%p fvf=0x%x stride=%u bytes=%zu",
+                                this, (unsigned)swvpDraw.fvf, swvpDraw.stride,
+                                swvpDraw.vertices.size());
+	            const UINT swvpPrimitiveCount = swvpDraw.primitiveCount
+	                ? swvpDraw.primitiveCount
+	                : count;
+	            const void* indexData = useSwvpIndices ? swvpIndices.data() : pIdxData;
+	            const D3DFORMAT indexFormat =
+	                useSwvpIndices ? swvpIndexFormat : idxFmt;
+	            const UINT swvpMinVertex = useSwvpIndices ? 0u : minVertex;
+	            const UINT swvpNumVertices =
+	                useSwvpIndices && swvpDraw.stride != 0u
+	                    ? static_cast<UINT>(swvpDraw.vertices.size() / swvpDraw.stride)
+	                    : numVertices;
+	            if (swvpPrimitiveCount != 0u && !swvpDraw.vertices.empty() &&
+	                indexData) {
+	                hr = appendDrawIndexedPrimitiveUPRecordWithFvf(
+	                    swvpDraw.primitiveType, swvpMinVertex, swvpNumVertices,
+	                    swvpPrimitiveCount, indexData, indexFormat,
+	                    swvpDraw.vertices.data(), swvpDraw.stride, true, swvpDraw.fvf,
+	                    swvpDraw.bypassVertexShader);
+                appendedDraw = SUCCEEDED(hr);
+            }
+        } else if (hr == S_FALSE) {
+            hr = appendDrawIndexedPrimitiveUPRecord(type, minVertex, numVertices,
+                                                   count, pIdxData, idxFmt,
+                                                   pVtxData, stride);
+            appendedDraw = SUCCEEDED(hr);
+        }
+        if (SUCCEEDED(hr) && appendedDraw) {
             clearPendingHotState();
+            if (!swvpDraw.vertices.empty()) {
+                peState_.pendingFvf = true;
+                peState_.pendingVdecl = true;
+                if (swvpDraw.bypassVertexShader) peState_.pendingVs = true;
+            }
         }
         return hr;
     }
@@ -6540,18 +9177,16 @@ public:
         if (fvf_ != 0) {
             const DWORD positionMask = fvf_ & D3DFVF_POSITION_MASK;
             if ((positionMask != D3DFVF_XYZ &&
-                 (!programmable ||
-                  (positionMask != D3DFVF_XYZW &&
-                   !processFvfXyzbPosition(positionMask)))) ||
+                 (programmable
+                      ? (positionMask != D3DFVF_XYZW &&
+                         !processFvfXyzbPosition(positionMask))
+                      : !processFvfXyzbPosition(positionMask))) ||
                 !describeProcessFvf(fvf_, srcLayout)) {
                 return invalid("source FVF unsupported");
             }
         } else if (vdecl_) {
             if (!describeProcessDeclaration(vdecl_, srcLayout, false)) {
                 return invalid("source declaration unsupported");
-            }
-            if (!programmable && srcLayout.positionBytes != 12u) {
-                return invalid("fixed-function source declaration position unsupported");
             }
         } else {
             return invalid("no source layout");
@@ -6583,6 +9218,27 @@ public:
             processLighting && renderStateValue(D3DRS_SPECULARENABLE) != 0;
         const bool processColorVertex =
             processLighting && renderStateValue(D3DRS_COLORVERTEX) != 0;
+        UINT fixedBlendWeightCount = 0;
+        bool fixedIndexedVertexBlend = false;
+        const DWORD vertexBlendState =
+            programmable ? D3DVBF_DISABLE : renderStateValue(D3DRS_VERTEXBLEND);
+        if (!programmable && vertexBlendState != D3DVBF_DISABLE) {
+            fixedIndexedVertexBlend =
+                renderStateValue(D3DRS_INDEXEDVERTEXBLENDENABLE) != FALSE;
+            switch (vertexBlendState) {
+                case D3DVBF_1WEIGHTS:
+                    fixedBlendWeightCount = 1;
+                    break;
+                case D3DVBF_2WEIGHTS:
+                    fixedBlendWeightCount = 2;
+                    break;
+                case D3DVBF_3WEIGHTS:
+                    fixedBlendWeightCount = 3;
+                    break;
+                default:
+                    return invalid("vertex blending mode unsupported");
+            }
+        }
         auto processStreamInstanced = [&](UINT stream) {
             return (streamFreq_[stream] & D3DSTREAMSOURCE_INSTANCEDATA) != 0u;
         };
@@ -6656,7 +9312,9 @@ public:
         };
         auto requireTexRead = [&](UINT i, bool requireMatchingBytes) -> bool {
             if (i >= srcLayout.texCount || srcLayout.texBytes[i] == 0u ||
-                (requireMatchingBytes && dstLayout.texBytes[i] != srcLayout.texBytes[i])) {
+                (requireMatchingBytes &&
+                 (dstLayout.texBytes[i] != srcLayout.texBytes[i] ||
+                  dstLayout.texType[i] != srcLayout.texType[i]))) {
                 return false;
             }
             srcReadBytes[srcLayout.texStream[i]] =
@@ -6714,20 +9372,20 @@ public:
             }
         } else {
             requirePositionRead();
+            if (fixedBlendWeightCount != 0u && !requireBlendWeightRead()) {
+                return invalid("vertex blending weight input missing");
+            }
+            if (fixedIndexedVertexBlend && !requireBlendIndicesRead()) {
+                return invalid("indexed vertex blending indices missing");
+            }
             if (dstLayout.diffuse) {
                 if (processLighting) {
-                    if (srcLayout.normalType != D3DDECLTYPE_FLOAT3) {
-                        return invalid("fixed-function lighting normal type unsupported");
-                    }
                     if (!requireNormalRead()) return invalid("lighting normal input missing");
                 } else if (!requireDiffuseRead()) {
                     return invalid("diffuse passthrough missing");
                 }
             }
             if (dstLayout.specular && processSpecularLighting) {
-                if (srcLayout.normalType != D3DDECLTYPE_FLOAT3) {
-                    return invalid("fixed-function specular normal type unsupported");
-                }
                 if (!requireNormalRead()) return invalid("specular lighting normal input missing");
             } else if (dstLayout.specular && !requireSpecularRead()) {
                 return invalid("specular passthrough missing");
@@ -6847,6 +9505,9 @@ public:
         const float offsetY = static_cast<float>(vp.y) + scaleY;
         const float zScale = vp.maxZ - vp.minZ;
         const D9CMatrix wvp = worldViewProjectionTransform();
+        const D9CMatrix viewProjection = multiplyTransformMatrix(
+            transformOrIdentity(D3DTS_VIEW),
+            transformOrIdentity(D3DTS_PROJECTION));
         const DWORD processAmbient = processLighting ? renderStateValue(D3DRS_AMBIENT) : 0u;
         const uint8_t* srcBase[D9C_DRAW_PACKET_MAX_STREAMS]{};
         for (UINT stream = 0; stream < D9C_DRAW_PACKET_MAX_STREAMS; ++stream) {
@@ -6867,6 +9528,12 @@ public:
             const size_t bytes = std::min(peConsts_.vsConstI.values.size(),
                                           shaderConstI.size() * sizeof(shaderConstI[0]));
             std::memcpy(shaderConstI.data(), peConsts_.vsConstI.values.data(), bytes);
+        }
+        std::array<uint32_t, 16> shaderConstB{};
+        if (programmable && !peConsts_.vsConstB.values.empty()) {
+            const size_t bytes = std::min(peConsts_.vsConstB.values.size(),
+                                          shaderConstB.size() * sizeof(shaderConstB[0]));
+            std::memcpy(shaderConstB.data(), peConsts_.vsConstB.values.data(), bytes);
         }
         SimpleVsTextureState shaderTextures{};
         if (programmable) {
@@ -6909,21 +9576,31 @@ public:
             float specularOut[4]{};
             float texOut[8][4]{};
             float fixedPosition[3]{};
+            auto transformPoint = [](const float position[4],
+                                     const D9CMatrix& matrix,
+                                     float out[4]) {
+                for (UINT col = 0; col < 4; ++col) {
+                    out[col] = position[0] * matrix.m[col] +
+                               position[1] * matrix.m[4 + col] +
+                               position[2] * matrix.m[8 + col] +
+                               position[3] * matrix.m[12 + col];
+                }
+            };
             if (programmable) {
                 SimpleVsRegisters regs{};
                 regs.constant = shaderConstF;
                 regs.constantInt = shaderConstI;
+                regs.constantBool = shaderConstB;
                 auto loadPositionInput = [&](int reg) {
                     if (reg < 0 || static_cast<size_t>(reg) >= regs.input.size()) return false;
-                    float in[4]{0.0f, 0.0f, 0.0f, 1.0f};
                     const auto* positionSource =
                         srcBase[srcLayout.positionStream] +
                         sourceOffset(srcLayout.positionStream, i) +
                         srcLayout.positionOffset;
-                    std::memcpy(in, positionSource,
-                                std::min<UINT>(srcLayout.positionBytes, sizeof(in)));
-                    regs.input[reg] = {in[0], in[1], in[2], in[3]};
-                    return true;
+                    return decodeProcessDeclVector(positionSource,
+                                                   srcLayout.positionType,
+                                                   srcLayout.positionBytes,
+                                                   regs.input[reg]);
                 };
                 auto loadColorInput = [&](int reg, UINT stream, UINT offset) {
                     if (reg < 0 || static_cast<size_t>(reg) >= regs.input.size()) return false;
@@ -6958,6 +9635,13 @@ public:
                             for (UINT c = 0; c < 4u; ++c) {
                                 regs.input[reg][c] = static_cast<float>(in[c]);
                             }
+                            return true;
+                        }
+                        case D3DDECLTYPE_SHORT2: {
+                            int16_t in[2]{};
+                            std::memcpy(in, source, sizeof(in));
+                            regs.input[reg][0] = static_cast<float>(in[0]);
+                            regs.input[reg][1] = static_cast<float>(in[1]);
                             return true;
                         }
                         case D3DDECLTYPE_UBYTE4: {
@@ -7037,6 +9721,12 @@ public:
                             }
                             return true;
                         }
+                        case D3DDECLTYPE_D3DCOLOR: {
+                            DWORD color = 0;
+                            std::memcpy(&color, source, sizeof(color));
+                            unpackD3DColor(color, regs.input[reg].data());
+                            return true;
+                        }
                         default:
                             return false;
                     }
@@ -7067,6 +9757,22 @@ public:
                     };
                     return true;
                 };
+                auto loadBlendIndicesInput =
+                    [&](int reg, UINT stream, UINT offset, UINT type) {
+                        if (type == D3DDECLTYPE_UBYTE4) {
+                            return loadUbyte4Input(reg, stream, offset);
+                        }
+                        if (type != D3DDECLTYPE_D3DCOLOR ||
+                            reg < 0 || static_cast<size_t>(reg) >= regs.input.size()) {
+                            return false;
+                        }
+                        DWORD color = 0;
+                        const auto* source =
+                            srcBase[stream] + sourceOffset(stream, i) + offset;
+                        std::memcpy(&color, source, sizeof(color));
+                        unpackD3DColor(color, regs.input[reg].data());
+                        return true;
+                    };
                 auto loadTexInput = [&](int reg, UINT tex) {
                     if (reg < 0 || static_cast<size_t>(reg) >= regs.input.size()) return false;
                     const auto* texSource =
@@ -7082,6 +9788,12 @@ public:
                             const UINT components = srcLayout.texBytes[tex] / sizeof(float);
                             std::memcpy(regs.input[reg].data(), texSource,
                                         std::min<UINT>(components, 4u) * sizeof(float));
+                            return true;
+                        }
+                        case D3DDECLTYPE_D3DCOLOR: {
+                            DWORD color = 0;
+                            std::memcpy(&color, texSource, sizeof(color));
+                            unpackD3DColor(color, regs.input[reg].data());
                             return true;
                         }
                         case D3DDECLTYPE_SHORT2: {
@@ -7153,6 +9865,14 @@ public:
                             regs.input[reg][2] = static_cast<float>((packed >> 20u) & 0x3ffu);
                             return true;
                         }
+                        case D3DDECLTYPE_DEC3N: {
+                            uint32_t packed = 0;
+                            std::memcpy(&packed, texSource, sizeof(packed));
+                            regs.input[reg][0] = snorm10ToFloat(packed);
+                            regs.input[reg][1] = snorm10ToFloat(packed >> 10u);
+                            regs.input[reg][2] = snorm10ToFloat(packed >> 20u);
+                            return true;
+                        }
                         case D3DDECLTYPE_FLOAT16_2: {
                             uint16_t in[2]{};
                             std::memcpy(in, texSource, sizeof(in));
@@ -7198,17 +9918,19 @@ public:
                     break;
                 }
                 if (shaderIo.inputBlendWeight >= 0 &&
-                    !loadFloatVectorInput(shaderIo.inputBlendWeight,
-                                          srcLayout.blendWeightStream,
-                                          srcLayout.blendWeightOffset,
-                                          srcLayout.blendWeightBytes)) {
+                    !loadDeclVectorInput(shaderIo.inputBlendWeight,
+                                         srcLayout.blendWeightStream,
+                                         srcLayout.blendWeightOffset,
+                                         srcLayout.blendWeightType,
+                                         srcLayout.blendWeightBytes)) {
                     hr = D3DERR_INVALIDCALL;
                     break;
                 }
                 if (shaderIo.inputBlendIndices >= 0 &&
-                    !loadUbyte4Input(shaderIo.inputBlendIndices,
-                                     srcLayout.blendIndicesStream,
-                                     srcLayout.blendIndicesOffset)) {
+                    !loadBlendIndicesInput(shaderIo.inputBlendIndices,
+                                           srcLayout.blendIndicesStream,
+                                           srcLayout.blendIndicesOffset,
+                                           srcLayout.blendIndicesType)) {
                     hr = D3DERR_INVALIDCALL;
                     break;
                 }
@@ -7311,12 +10033,18 @@ public:
                 }
                 if (FAILED(hr)) break;
             } else {
-                float in[3]{};
+                std::array<float, 4> in{};
                 const auto* positionSource =
                     srcBase[srcLayout.positionStream] +
                     sourceOffset(srcLayout.positionStream, i) +
                     srcLayout.positionOffset;
-                std::memcpy(in, positionSource, sizeof(in));
+                if (!decodeProcessDeclVector(positionSource,
+                                             srcLayout.positionType,
+                                             srcLayout.positionBytes,
+                                             in)) {
+                    hr = D3DERR_INVALIDCALL;
+                    break;
+                }
                 fixedPosition[0] = in[0];
                 fixedPosition[1] = in[1];
                 fixedPosition[2] = in[2];
@@ -7328,11 +10056,75 @@ public:
                     std::memcpy(&psizeOut, psizeSource, sizeof(psizeOut));
                 }
                 const float position[4] = {in[0], in[1], in[2], 1.0f};
-                for (UINT col = 0; col < 4; ++col) {
-                    clip[col] = position[0] * wvp.m[col] +
-                                position[1] * wvp.m[4 + col] +
-                                position[2] * wvp.m[8 + col] +
-                                position[3] * wvp.m[12 + col];
+                if (fixedBlendWeightCount != 0u) {
+                    std::array<float, 4> blendWeights{0.0f, 0.0f, 0.0f, 0.0f};
+                    std::array<UINT, 4> blendIndices{0u, 1u, 2u, 3u};
+                    const auto* blendSource =
+                        srcBase[srcLayout.blendWeightStream] +
+                        sourceOffset(srcLayout.blendWeightStream, i) +
+                        srcLayout.blendWeightOffset;
+                    if (!decodeProcessDeclVector(blendSource,
+                                                 srcLayout.blendWeightType,
+                                                 srcLayout.blendWeightBytes,
+                                                 blendWeights)) {
+                        hr = D3DERR_INVALIDCALL;
+                        break;
+                    }
+                    if (fixedIndexedVertexBlend) {
+                        const auto* indicesSource =
+                            srcBase[srcLayout.blendIndicesStream] +
+                            sourceOffset(srcLayout.blendIndicesStream, i) +
+                            srcLayout.blendIndicesOffset;
+                        if (srcLayout.blendIndicesType == D3DDECLTYPE_UBYTE4) {
+                            uint8_t indices[4]{};
+                            std::memcpy(indices, indicesSource, sizeof(indices));
+                            for (UINT c = 0; c < 4u; ++c) {
+                                blendIndices[c] = indices[c];
+                            }
+                        } else if (srcLayout.blendIndicesType == D3DDECLTYPE_D3DCOLOR) {
+                            float color[4]{};
+                            DWORD packed = 0;
+                            std::memcpy(&packed, indicesSource, sizeof(packed));
+                            unpackD3DColor(packed, color);
+                            for (UINT c = 0; c < 4u; ++c) {
+                                blendIndices[c] = static_cast<UINT>(
+                                    std::lround(std::clamp(color[c], 0.0f, 1.0f) * 255.0f));
+                            }
+                        } else {
+                            hr = D3DERR_INVALIDCALL;
+                            break;
+                        }
+                    }
+                    float worldPosition[4]{};
+                    float explicitWeightSum = 0.0f;
+                    for (UINT weightIndex = 0;
+                         weightIndex < fixedBlendWeightCount; ++weightIndex) {
+                        const float weight = blendWeights[weightIndex];
+                        explicitWeightSum += weight;
+                        float transformed[4]{};
+                        transformPoint(position,
+                                       transformOrIdentity(D3DTS_WORLDMATRIX(
+                                           blendIndices[weightIndex])),
+                                       transformed);
+                        for (UINT c = 0; c < 4; ++c) {
+                            worldPosition[c] += transformed[c] * weight;
+                        }
+                    }
+                    const float implicitWeight = 1.0f - explicitWeightSum;
+                    float transformed[4]{};
+                    transformPoint(position,
+                                   transformOrIdentity(D3DTS_WORLDMATRIX(
+                                       blendIndices[fixedBlendWeightCount])),
+                                   transformed);
+                    for (UINT c = 0; c < 4; ++c) {
+                        worldPosition[c] += transformed[c] * implicitWeight;
+                    }
+                    fixedPosition[0] = worldPosition[0];
+                    fixedPosition[1] = worldPosition[1];
+                    fixedPosition[2] = worldPosition[2];
+                    transformPoint(worldPosition, viewProjection, clip);
+                } else {
+                    transformPoint(position, wvp, clip);
                 }
             }
             const float invW = clip[3] != 0.0f ? 1.0f / clip[3] : 1.0f;
@@ -7360,12 +10152,20 @@ public:
             bool lightingColorsReady = false;
             auto fixedFunctionLightingColors = [&]() -> const ProcessFixedFunctionLightingColors& {
                 if (!lightingColorsReady) {
-                    float normal[3]{};
+                    std::array<float, 4> normalIn{};
                     const auto* normalSource =
                         srcBase[srcLayout.normalStream] +
                         sourceOffset(srcLayout.normalStream, i) +
                         srcLayout.normalOffset;
-                    std::memcpy(normal, normalSource, sizeof(normal));
+                    if (!decodeProcessDeclVector(normalSource,
+                                                 srcLayout.normalType,
+                                                 srcLayout.normalBytes,
+                                                 normalIn)) {
+                        lightingColors = {};
+                        lightingColorsReady = true;
+                        return lightingColors;
+                    }
+                    float normal[3]{normalIn[0], normalIn[1], normalIn[2]};
                     D9CMaterial material = peState_.materialShadow;
                     auto readMaterialColor = [&](DWORD source,
                                                  D9CColorRGBA& target) {
@@ -7446,8 +10246,12 @@ public:
             for (UINT tex = 0; tex < dstLayout.texCount; ++tex) {
                 if (dstLayout.texBytes[tex] == 0u) continue;
                 if (programmable) {
-                    std::memcpy(dstVertex + dstLayout.texOffset[tex],
-                                texOut[tex], dstLayout.texBytes[tex]);
+                    if (!encodeProcessDeclVector(
+                            texOut[tex], dstLayout.texType[tex],
+                            dstVertex + dstLayout.texOffset[tex])) {
+                        hr = D3DERR_INVALIDCALL;
+                        break;
+                    }
                 } else {
                     const auto* texSource =
                         srcBase[srcLayout.texStream[tex]] + sourceOffset(srcLayout.texStream[tex], i) +
