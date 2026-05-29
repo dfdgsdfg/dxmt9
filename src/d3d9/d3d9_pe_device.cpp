@@ -1443,6 +1443,9 @@ struct SimpleVsRegisters {
 
 struct SimpleVsTextureState {
     std::array<D9CTexture*, kPeVertexTextureSamplerSlots> vertexTextures{};
+    std::array<DWORD, kPeVertexTextureSamplerSlots> addressU{};
+    std::array<DWORD, kPeVertexTextureSamplerSlots> addressV{};
+    std::array<DWORD, kPeVertexTextureSamplerSlots> borderColor{};
 };
 
 static std::array<float, 4>* simpleVsRegister(SimpleVsRegisters& regs,
@@ -1659,8 +1662,42 @@ static bool simpleVsSampleTexture2D(const SimpleVsTextureState* textures,
     const long requestedLevel = std::lround(coord[3]);
     const UINT level = static_cast<UINT>(
         std::clamp<long>(requestedLevel, 0, static_cast<long>(levels - 1u)));
+    bool border = false;
+    const auto addressCoord = [&](float value, DWORD mode) -> float {
+        if (!std::isfinite(value)) value = 0.0f;
+        switch (mode) {
+            case D3DTADDRESS_WRAP: {
+                float wrapped = std::fmod(value, 1.0f);
+                if (wrapped < 0.0f) wrapped += 1.0f;
+                return wrapped;
+            }
+            case D3DTADDRESS_MIRROR: {
+                float mirrored = std::fmod(value, 2.0f);
+                if (mirrored < 0.0f) mirrored += 2.0f;
+                return mirrored <= 1.0f ? mirrored : 2.0f - mirrored;
+            }
+            case D3DTADDRESS_BORDER:
+                if (value < 0.0f || value > 1.0f) border = true;
+                return std::clamp(value, 0.0f, 1.0f);
+            case D3DTADDRESS_MIRRORONCE:
+                return std::clamp(std::fabs(value), 0.0f, 1.0f);
+            case D3DTADDRESS_CLAMP:
+            default:
+                return std::clamp(value, 0.0f, 1.0f);
+        }
+    };
+    const float u = addressCoord(coord[0], textures->addressU[sampler]);
+    const float v = addressCoord(coord[1], textures->addressV[sampler]);
+    if (border) {
+        const DWORD color = textures->borderColor[sampler];
+        out[0] = static_cast<float>((color >> 16) & 0xffu) / 255.0f;
+        out[1] = static_cast<float>((color >> 8) & 0xffu) / 255.0f;
+        out[2] = static_cast<float>(color & 0xffu) / 255.0f;
+        out[3] = static_cast<float>((color >> 24) & 0xffu) / 255.0f;
+        return true;
+    }
     return SUCCEEDED(hr32(dxmt9c_texture_sample_2d(
-        texture, level, coord[0], coord[1], out)));
+        texture, level, u, v, out)));
 }
 
 static bool simpleVsWriteDest(SimpleVsRegisters& regs,
@@ -6831,8 +6868,29 @@ public:
         SimpleVsTextureState shaderTextures{};
         if (programmable) {
             for (UINT sampler = 0; sampler < shaderTextures.vertexTextures.size(); ++sampler) {
+                const UINT samplerSlot = kPeFragmentSamplerSlots + sampler;
+                const auto samplerStateValue =
+                    [&](D3DSAMPLERSTATETYPE type, DWORD fallback) -> DWORD {
+                        uint32_t stateSlot = 0;
+                        uint32_t value = 0;
+                        if (!samplerStateSlot(type, stateSlot)) {
+                            return fallback;
+                        }
+                        if (peState_.samplerStateShadow.get(
+                                samplerSlot, stateSlot, value)) {
+                            return value;
+                        }
+                        return dxmt9c_device_get_sampler_state(
+                            dev_, samplerSlot, static_cast<uint32_t>(type));
+                    };
                 shaderTextures.vertexTextures[sampler] =
-                    rawTex(textures_[kPeFragmentSamplerSlots + sampler]);
+                    rawTex(textures_[samplerSlot]);
+                shaderTextures.addressU[sampler] =
+                    samplerStateValue(D3DSAMP_ADDRESSU, D3DTADDRESS_WRAP);
+                shaderTextures.addressV[sampler] =
+                    samplerStateValue(D3DSAMP_ADDRESSV, D3DTADDRESS_WRAP);
+                shaderTextures.borderColor[sampler] =
+                    samplerStateValue(D3DSAMP_BORDERCOLOR, 0u);
             }
         }
         auto* dstBase = static_cast<uint8_t*>(dstBytes);
