@@ -1408,6 +1408,35 @@ std::vector<u32> makeVs30RelAddrYComponentBytecode() {
   };
 }
 
+std::vector<u32> makeVs30MovaWriteMaskBytecode() {
+  using namespace dxmt9::d3d9bc;
+  return {
+      makeVersionToken(true, 3, 0),
+      // dcl_blendindices v1
+      makeInstructionToken(kD3DSIO_DCL, 2),
+      makeDclSemanticToken(2u, 0u),
+      makeDstToken(kD3DSPR_INPUT, 1),
+      // mova a0.x, v1
+      makeInstructionToken(kD3DSIO_MOVA, 2),
+      makeDstToken(kD3DSPR_ADDR, 0, 0x1u),
+      makeSrcToken(kD3DSPR_INPUT, 1),
+      // mova a0.y, c0
+      makeInstructionToken(kD3DSIO_MOVA, 2),
+      makeDstToken(kD3DSPR_ADDR, 0, 0x2u),
+      makeSrcToken(kD3DSPR_CONST, 0),
+      // mov r0, c[a0.y + 0]
+      makeInstructionToken(kD3DSIO_MOV, 2),
+      makeDstToken(kD3DSPR_TEMP, 0),
+      makeRelativeSrcToken(kD3DSPR_CONST, 0),
+      makeSrcToken(kD3DSPR_ADDR, 0, 0x55u),
+      // mov oPos, r0
+      makeInstructionToken(kD3DSIO_MOV, 2),
+      makeDstToken(kD3DSPR_RASTOUT, 0),
+      makeSrcToken(kD3DSPR_TEMP, 0),
+      kD3DSIO_END,
+  };
+}
+
 std::vector<u32> makeVs30VertexTextureBytecode() {
   return {
       0xfffe0300,
@@ -2489,9 +2518,9 @@ void testVs20IndexedConstSourceLowersToClampedConstAccess() {
   // full vsFloatConst[256] range (kMaxVertexConstants - 1 = 255).
   checkContains(source, "cFloat[clamp(a0.x + 5, 0, 255)]",
                 "indexed const source emits clamped a0+N access");
-  // The mova lowers to the a0 = int4(round(...)) address-register write.
-  checkContains(source, "a0 = int4(round(",
-                "MOVA still lowers to the address-register assignment");
+  // The mova lowers through the address-register write-mask.
+  checkContains(source, "a0.x = dxmt9_mova.x;",
+                "MOVA still lowers to a masked address-register assignment");
   // Indexed access forces pointer aliasing onto the full constant
   // buffer so the clamp range stays valid.
   checkContains(source, "constant float4* cFloat = ",
@@ -2513,6 +2542,19 @@ void testVsRelativeAddrHonorsAddressComponent() {
                 "rel-addr source honors the a0.y component selector");
   checkNotContains(source, "cFloat[clamp(a0 + 0, 0, 255)]",
                    "rel-addr source no longer collapses a0.y to scalar a0");
+}
+
+void testVsMovaHonorsDestinationWriteMask() {
+  const auto source = translateVertex(makeVs30MovaWriteMaskBytecode());
+
+  checkContains(source, "a0.x = dxmt9_mova.x;",
+                "MOVA a0.x writes only the x address component");
+  checkContains(source, "a0.y = dxmt9_mova.y;",
+                "MOVA a0.y writes only the y address component");
+  checkNotContains(source, "a0 = int4(round(",
+                   "partial MOVA does not overwrite unrelated address components");
+  checkContains(source, "cFloat[clamp(a0.y + 0, 0, 255)]",
+                "relative constant read still uses the selected a0 component");
 }
 
 void testVs30VertexTextureFetchLowersDeterministically() {
@@ -2622,6 +2664,7 @@ int main() {
     testVs20IndexedConstSourceParserConsumesRelAddrDword();
     testVs20IndexedConstSourceLowersToClampedConstAccess();
     testVsRelativeAddrHonorsAddressComponent();
+    testVsMovaHonorsDestinationWriteMask();
     testVs30VertexTextureFetchLowersDeterministically();
     testPs14ConstantSourcesClampBeforeArithmetic();
   } catch (const TestFailure& error) {

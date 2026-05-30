@@ -286,6 +286,26 @@ std::string texkillMaskCondition(const std::string& value, u32 mask) {
   return first ? std::string("false") : condition.str();
 }
 
+void emitMovaAddressAssign(std::ostream& out, const std::string& value, u32 mask) {
+  if ((mask & 0xfu) == 0xfu) {
+    out << "  a0 = int4(round(" << value << "));\n";
+    return;
+  }
+  if ((mask & 0xfu) == 0u) {
+    return;
+  }
+
+  out << "  {\n";
+  out << "    int4 dxmt9_mova = int4(round(" << value << "));\n";
+  for (u32 component = 0; component < 4; ++component) {
+    if ((mask & (1u << component)) != 0u) {
+      const std::string name = componentName(component);
+      out << "    a0." << name << " = dxmt9_mova." << name << ";\n";
+    }
+  }
+  out << "  }\n";
+}
+
 std::string combineBooleanTerms(const std::vector<std::string>& terms) {
   std::ostringstream out;
   bool first = true;
@@ -1541,13 +1561,14 @@ std::string translateSpirvToMsl(const SpirvModule& module,
         }
         const auto dst = decodeOperandRegister(instruction, 0, module.stage);
         requireSupportedDestinationAddressing(dst);
+        const auto dstMask = decodeWriteMask(instruction.operands[0]);
         const auto value = readSrc(1);
         switch (dst.kind) {
           case D3DRegisterKind::Address:
             // a0 is a 4-component address register; MOVA rounds each
             // component so later relative addressing can index by any of
             // a0.x/.y/.z/.w (matrix-palette skinning uses a0.x and a0.y).
-            out << "  a0 = int4(round(" << value << "));\n";
+            emitMovaAddressAssign(out, value, dstMask);
             break;
           case D3DRegisterKind::Loop:
             out << "  aL = int(round(" << value << ".x));\n";
@@ -2667,13 +2688,14 @@ std::string translateSpirvToMsl(const SpirvModule& module,
         }
         const auto dst = decodeOperandRegister(instruction, 0, module.stage);
         requireSupportedDestinationAddressing(dst);
+        const auto dstMask = decodeWriteMask(instruction.operands[0]);
         const auto value = readSrc(1);
         switch (dst.kind) {
           case D3DRegisterKind::Address:
             // a0 is a 4-component address register; MOVA rounds each
             // component so later relative addressing can index by any of
             // a0.x/.y/.z/.w (matrix-palette skinning uses a0.x and a0.y).
-            out << "  a0 = int4(round(" << value << "));\n";
+            emitMovaAddressAssign(out, value, dstMask);
             break;
           case D3DRegisterKind::Loop:
             out << "  aL = int(round(" << value << ".x));\n";
