@@ -258,7 +258,12 @@ extern "C" int32_t dxmt9c_device_update_texture(D9CDevice* d, D9CTexture* src,
     return hr;
   }
 
-  dst->p8Palette = src->p8Palette;
+  // Copy indices but PRESERVE dst's palette. The dxmt9 PE shim pushes the
+  // device-current palette into the bound texture via SetTexture →
+  // applyCurrentPaletteToTexture; that direct-bridge call lands BEFORE this
+  // queued UpdateTexture record runs, so overwriting dst's palette here
+  // would clobber the user's bound palette with src's default and the
+  // following sample would return the DEFAULT-palette expansion.
   const size_t count = std::min(src->p8Levels.size(), dst->p8Levels.size());
   for (size_t subresource = 0; subresource < count; ++subresource) {
     dst->p8Levels[subresource] = src->p8Levels[subresource];
