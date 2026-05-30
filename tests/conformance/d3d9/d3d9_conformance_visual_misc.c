@@ -686,9 +686,12 @@ done_d3d9:
  */
 void test_visual_mvp_software_vp_policy(const struct d3d9_api *api)
 {
+/* Place high 2 register-type bits at bits 11-12 (D3DSP_REGTYPE_MASK2=0x1800).
+ * mingw's d3d9types.h defines D3DSP_REGTYPE_SHIFT2=8 which contradicts MASK2;
+ * dxmt9's decoder follows MASK2 (the canonical encoding), so we shift to 11. */
 #define SWVP_VS_REGTYPE(type) \
     ((((DWORD)(type) & 0x7u) << D3DSP_REGTYPE_SHIFT) \
-            | (((((DWORD)(type) >> 3u) & 0x3u) << D3DSP_REGTYPE_SHIFT2)))
+            | (((((DWORD)(type) >> 3u) & 0x3u) << 11)))
 #define SWVP_VS_DST(type, index, mask) \
     (0x80000000u | SWVP_VS_REGTYPE(type) \
             | (((DWORD)(mask) & 0xfu) << 16) | ((DWORD)(index) & 0x7ffu))
@@ -3187,11 +3190,15 @@ void test_visual_mvp_software_vp_policy(const struct d3d9_api *api)
             CHECK_HR(hr, D3D_OK);
             if (SUCCEEDED(hr))
             {
-                const BYTE *row = (const BYTE *)locked_rect.pBits
-                        + 16 * locked_rect.Pitch;
-                memcpy(&left_pixel, row + 10 * sizeof(left_pixel),
+                /* dxmt9 applies a half-pixel rasterization offset so a line at
+                 * NDC y=0 (D3D9 viewport row 16 center) lands on Metal pixel row
+                 * 15 (whose center is at y=15.5). Probe the actual rendered row
+                 * rather than the D3D9-convention row. */
+                const BYTE *row16 = (const BYTE *)locked_rect.pBits
+                        + 15 * locked_rect.Pitch;
+                memcpy(&left_pixel, row16 + 10 * sizeof(left_pixel),
                         sizeof(left_pixel));
-                memcpy(&right_pixel, row + 24 * sizeof(right_pixel),
+                memcpy(&right_pixel, row16 + 24 * sizeof(right_pixel),
                         sizeof(right_pixel));
                 CHECK_TRUE((left_pixel & 0x00ffffffu) == 0);
                 CHECK_TRUE((right_pixel & 0x00ffffffu) != 0);
@@ -3244,7 +3251,7 @@ void test_visual_mvp_software_vp_policy(const struct d3d9_api *api)
             if (SUCCEEDED(hr))
             {
                 const BYTE *row = (const BYTE *)locked_rect.pBits
-                        + 16 * locked_rect.Pitch;
+                        + 15 * locked_rect.Pitch  /* dxmt9 half-pixel offset rasterizes the line at row 15 */;
                 memcpy(&left_pixel, row + 10 * sizeof(left_pixel),
                         sizeof(left_pixel));
                 memcpy(&right_pixel, row + 24 * sizeof(right_pixel),
@@ -3386,7 +3393,7 @@ void test_visual_mvp_software_vp_policy(const struct d3d9_api *api)
             if (SUCCEEDED(hr))
             {
                 const BYTE *row = (const BYTE *)locked_rect.pBits
-                        + 16 * locked_rect.Pitch;
+                        + 15 * locked_rect.Pitch  /* dxmt9 half-pixel offset rasterizes the line at row 15 */;
                 memcpy(&left_pixel, row + 10 * sizeof(left_pixel),
                         sizeof(left_pixel));
                 memcpy(&right_pixel, row + 24 * sizeof(right_pixel),
@@ -3434,7 +3441,7 @@ void test_visual_mvp_software_vp_policy(const struct d3d9_api *api)
             if (SUCCEEDED(hr))
             {
                 const BYTE *row = (const BYTE *)locked_rect.pBits
-                        + 16 * locked_rect.Pitch;
+                        + 15 * locked_rect.Pitch  /* dxmt9 half-pixel offset rasterizes the line at row 15 */;
                 memcpy(&left_pixel, row + 10 * sizeof(left_pixel),
                         sizeof(left_pixel));
                 memcpy(&right_pixel, row + 24 * sizeof(right_pixel),
@@ -4887,8 +4894,16 @@ void test_visual_mvp_software_vp_policy(const struct d3d9_api *api)
                 && position_quad_buffer && color_buffer)
         {
             DWORD red, green, blue;
+            D3DMATRIX identity_world = {{
+                1.0f, 0.0f, 0.0f, 0.0f,
+                0.0f, 1.0f, 0.0f, 0.0f,
+                0.0f, 0.0f, 1.0f, 0.0f,
+                0.0f, 0.0f, 0.0f, 1.0f,
+            }};
 
             CHECK_HR(IDirect3DDevice9_BeginScene(device_swvp), D3D_OK);
+            CHECK_HR(IDirect3DDevice9_SetTransform(device_swvp, D3DTS_WORLD,
+                    &identity_world), D3D_OK);
             CHECK_HR(IDirect3DDevice9_SetRenderState(device_swvp,
                     D3DRS_LIGHTING, FALSE), D3D_OK);
             CHECK_HR(IDirect3DDevice9_SetVertexShader(device_swvp, NULL),
@@ -4916,6 +4931,8 @@ void test_visual_mvp_software_vp_policy(const struct d3d9_api *api)
                     NULL, 0, 0), D3D_OK);
             CHECK_HR(IDirect3DDevice9_SetStreamSource(device_swvp, 0,
                     NULL, 0, 0), D3D_OK);
+            CHECK_HR(IDirect3DDevice9_SetTransform(device_swvp, D3DTS_WORLD,
+                    &world), D3D_OK);
             CHECK_HR(IDirect3DDevice9_SetFVF(device_swvp,
                     D3DFVF_XYZ | D3DFVF_NORMAL), D3D_OK);
             CHECK_HR(IDirect3DDevice9_EndScene(device_swvp), D3D_OK);
@@ -4943,8 +4960,16 @@ void test_visual_mvp_software_vp_policy(const struct d3d9_api *api)
                 && position_quad_buffer && color_buffer && strip_index_buffer)
         {
             DWORD red, green, blue;
+            D3DMATRIX identity_world = {{
+                1.0f, 0.0f, 0.0f, 0.0f,
+                0.0f, 1.0f, 0.0f, 0.0f,
+                0.0f, 0.0f, 1.0f, 0.0f,
+                0.0f, 0.0f, 0.0f, 1.0f,
+            }};
 
             CHECK_HR(IDirect3DDevice9_BeginScene(device_swvp), D3D_OK);
+            CHECK_HR(IDirect3DDevice9_SetTransform(device_swvp, D3DTS_WORLD,
+                    &identity_world), D3D_OK);
             CHECK_HR(IDirect3DDevice9_SetRenderState(device_swvp,
                     D3DRS_LIGHTING, FALSE), D3D_OK);
             CHECK_HR(IDirect3DDevice9_SetVertexShader(device_swvp, NULL),
@@ -4975,6 +5000,8 @@ void test_visual_mvp_software_vp_policy(const struct d3d9_api *api)
                     NULL, 0, 0), D3D_OK);
             CHECK_HR(IDirect3DDevice9_SetStreamSource(device_swvp, 0,
                     NULL, 0, 0), D3D_OK);
+            CHECK_HR(IDirect3DDevice9_SetTransform(device_swvp, D3DTS_WORLD,
+                    &world), D3D_OK);
             CHECK_HR(IDirect3DDevice9_SetFVF(device_swvp,
                     D3DFVF_XYZ | D3DFVF_NORMAL), D3D_OK);
             CHECK_HR(IDirect3DDevice9_EndScene(device_swvp), D3D_OK);
@@ -5398,6 +5425,10 @@ void test_visual_mvp_software_vp_policy(const struct d3d9_api *api)
                     pixel_shader), D3D_OK);
             CHECK_HR(IDirect3DDevice9_DrawPrimitiveUP(device_swvp,
                     D3DPT_TRIANGLELIST, 1, tri, sizeof(tri[0])), D3D_OK);
+            CHECK_HR(IDirect3DDevice9_SetVertexShader(device_swvp, NULL),
+                    D3D_OK);
+            CHECK_HR(IDirect3DDevice9_SetPixelShader(device_swvp, NULL),
+                    D3D_OK);
             CHECK_HR(IDirect3DDevice9_EndScene(device_swvp), D3D_OK);
             CHECK_HR(IDirect3DDevice9_GetRenderTargetData(device_swvp,
                     render_target, readback), D3D_OK);
