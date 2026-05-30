@@ -678,6 +678,14 @@ struct ProcessShaderIo {
     bool hasOutputSpecular = false;
     bool hasOutputTex[8]{};
     UINT major = 0;
+    // vs_1_x: shader does not need to DCL inputs because the v# registers have
+    // fixed FFP semantics. We still default-map v0=POSITION/v3=NORMAL/v5=DIFFUSE
+    // /v6=SPECULAR/v7..14=TEXCOORD0..7 so that a shader which reads those
+    // registers without a DCL still binds the right stream — but we must NOT
+    // require streams for inputs the shader never reads. This bitmask tracks
+    // which v# registers actually appear as a source operand in the parsed
+    // instructions; the SWVP-programmable validator gates require*Read() on it.
+    std::uint32_t usedInputMask = 0;
 };
 
 static UINT fvfTexcoordBytes(DWORD fvf, UINT index) {
@@ -1254,18 +1262,33 @@ static bool analyzeSimpleProcessVertexShader(const std::vector<DWORD>& words,
             return false;
         }
         const DWORD* operands = parsedOperands.operands.data();
-        if (opcode != D3DSIO_DCL) continue;
-        const UINT usage = (operands[0] & D3DSP_DCL_USAGE_MASK) >> D3DSP_DCL_USAGE_SHIFT;
-        const UINT usageIndex =
-            (operands[0] & D3DSP_DCL_USAGEINDEX_MASK) >> D3DSP_DCL_USAGEINDEX_SHIFT;
-        const ProcessShaderReg reg{shaderRegType(operands[1]),
-                                   shaderRegIndex(operands[1])};
-        if (reg.type == D3DSPR_INPUT) {
-            noteProcessShaderInput(io, usage, usageIndex, reg.index);
-        } else if (reg.type == D3DSPR_OUTPUT || reg.type == D3DSPR_TEXCRDOUT) {
-            noteProcessShaderOutput(io, usage, usageIndex, reg);
-        } else if (reg.type == D3DSPR_RASTOUT || reg.type == D3DSPR_ATTROUT) {
-            noteProcessShaderOutput(io, usage, usageIndex, reg);
+        if (opcode == D3DSIO_DCL) {
+            const UINT usage = (operands[0] & D3DSP_DCL_USAGE_MASK) >> D3DSP_DCL_USAGE_SHIFT;
+            const UINT usageIndex =
+                (operands[0] & D3DSP_DCL_USAGEINDEX_MASK) >> D3DSP_DCL_USAGEINDEX_SHIFT;
+            const ProcessShaderReg reg{shaderRegType(operands[1]),
+                                       shaderRegIndex(operands[1])};
+            if (reg.type == D3DSPR_INPUT) {
+                noteProcessShaderInput(io, usage, usageIndex, reg.index);
+                if (reg.index < 32u) io.usedInputMask |= (1u << reg.index);
+            } else if (reg.type == D3DSPR_OUTPUT || reg.type == D3DSPR_TEXCRDOUT) {
+                noteProcessShaderOutput(io, usage, usageIndex, reg);
+            } else if (reg.type == D3DSPR_RASTOUT || reg.type == D3DSPR_ATTROUT) {
+                noteProcessShaderOutput(io, usage, usageIndex, reg);
+            }
+            continue;
+        }
+        // Non-DCL: track v# registers actually used as source operands. For
+        // vs_1_x this is the only signal we have that DIFFUSE/SPECULAR/TEXCOORD
+        // slots are read (DCL is not required there). Operand 0 is the
+        // destination for the ALU/CTRL ops we care about; operands [1..count) are
+        // sources.
+        for (UINT i = 1; i < parsedOperands.count; ++i) {
+            if (shaderRegType(operands[i]) != D3DSPR_INPUT) continue;
+            const UINT regIdx = shaderRegIndex(operands[i]);
+            if (regIdx < 32u) {
+                io.usedInputMask |= (1u << regIdx);
+            }
         }
     }
     return false;
@@ -9350,17 +9373,28 @@ public:
                 if (dstLayout.texBytes[i] == 0u) continue;
                 if (!shaderIo.hasOutputTex[i]) return invalid("shader lacks texcoord output");
             }
-            if (shaderIo.inputPosition >= 0) requirePositionRead();
-            if (shaderIo.inputNormal >= 0 && !requireNormalRead()) return invalid("shader normal input missing");
-            if (shaderIo.inputTangent >= 0 && !requireTangentRead()) return invalid("shader tangent input missing");
-            if (shaderIo.inputBinormal >= 0 && !requireBinormalRead()) return invalid("shader binormal input missing");
-            if (shaderIo.inputBlendWeight >= 0 && !requireBlendWeightRead()) return invalid("shader blendweight input missing");
-            if (shaderIo.inputBlendIndices >= 0 && !requireBlendIndicesRead()) return invalid("shader blendindices input missing");
-            if (shaderIo.inputPSize >= 0 && !requirePSizeRead()) return invalid("shader psize input missing");
-            if (shaderIo.inputDiffuse >= 0 && !requireDiffuseRead()) return invalid("shader diffuse input missing");
-            if (shaderIo.inputSpecular >= 0 && !requireSpecularRead()) return invalid("shader specular input missing");
+            // vs_1_x maps every v# to a fixed FFP semantic by default. We must
+            // only require streams for v# that the shader actually reads as a
+            // source operand (or DCL'd, for vs_2.0+/3.0). usedInputMask was
+            // populated by the operand scan in analyzeSimpleProcessVertexShader.
+            auto inputUsed = [&](int regIdx) {
+                if (regIdx < 0 || regIdx >= 32) return false;
+                if (shaderIo.major < 3u) {
+                    return (shaderIo.usedInputMask & (1u << regIdx)) != 0u;
+                }
+                return true;  // sm3 requires DCL — presence implies use
+            };
+            if (inputUsed(shaderIo.inputPosition)) requirePositionRead();
+            if (inputUsed(shaderIo.inputNormal) && !requireNormalRead()) return invalid("shader normal input missing");
+            if (inputUsed(shaderIo.inputTangent) && !requireTangentRead()) return invalid("shader tangent input missing");
+            if (inputUsed(shaderIo.inputBinormal) && !requireBinormalRead()) return invalid("shader binormal input missing");
+            if (inputUsed(shaderIo.inputBlendWeight) && !requireBlendWeightRead()) return invalid("shader blendweight input missing");
+            if (inputUsed(shaderIo.inputBlendIndices) && !requireBlendIndicesRead()) return invalid("shader blendindices input missing");
+            if (inputUsed(shaderIo.inputPSize) && !requirePSizeRead()) return invalid("shader psize input missing");
+            if (inputUsed(shaderIo.inputDiffuse) && !requireDiffuseRead()) return invalid("shader diffuse input missing");
+            if (inputUsed(shaderIo.inputSpecular) && !requireSpecularRead()) return invalid("shader specular input missing");
             for (UINT i = 0; i < 8; ++i) {
-                if (shaderIo.inputTex[i] >= 0 && !requireTexRead(i, false)) {
+                if (inputUsed(shaderIo.inputTex[i]) && !requireTexRead(i, false)) {
                     return invalid("shader texcoord input missing");
                 }
             }
@@ -9892,32 +9926,44 @@ public:
                             return false;
                     }
                 };
-                if (shaderIo.inputPosition >= 0 && !loadPositionInput(shaderIo.inputPosition)) {
+                // Mirror the validator's usedInputMask gating so we only load
+                // v# the shader actually reads. vs_1_x maps every v# to a fixed
+                // FFP semantic by default, but issuing a load for a v# that the
+                // shader never references would dereference srcBase[stream]
+                // for a stream the caller deliberately left unbound.
+                auto inputLoadGate = [&](int regIdx) {
+                    if (regIdx < 0 || regIdx >= 32) return false;
+                    if (shaderIo.major < 3u) {
+                        return (shaderIo.usedInputMask & (1u << regIdx)) != 0u;
+                    }
+                    return true;
+                };
+                if (inputLoadGate(shaderIo.inputPosition) && !loadPositionInput(shaderIo.inputPosition)) {
                     hr = D3DERR_INVALIDCALL;
                     break;
                 }
-                if (shaderIo.inputNormal >= 0 &&
+                if (inputLoadGate(shaderIo.inputNormal) &&
                     !loadDeclVectorInput(shaderIo.inputNormal, srcLayout.normalStream,
                                          srcLayout.normalOffset, srcLayout.normalType,
                                          srcLayout.normalBytes)) {
                     hr = D3DERR_INVALIDCALL;
                     break;
                 }
-                if (shaderIo.inputTangent >= 0 &&
+                if (inputLoadGate(shaderIo.inputTangent) &&
                     !loadDeclVectorInput(shaderIo.inputTangent, srcLayout.tangentStream,
                                          srcLayout.tangentOffset, srcLayout.tangentType,
                                          srcLayout.tangentBytes)) {
                     hr = D3DERR_INVALIDCALL;
                     break;
                 }
-                if (shaderIo.inputBinormal >= 0 &&
+                if (inputLoadGate(shaderIo.inputBinormal) &&
                     !loadDeclVectorInput(shaderIo.inputBinormal, srcLayout.binormalStream,
                                          srcLayout.binormalOffset, srcLayout.binormalType,
                                          srcLayout.binormalBytes)) {
                     hr = D3DERR_INVALIDCALL;
                     break;
                 }
-                if (shaderIo.inputBlendWeight >= 0 &&
+                if (inputLoadGate(shaderIo.inputBlendWeight) &&
                     !loadDeclVectorInput(shaderIo.inputBlendWeight,
                                          srcLayout.blendWeightStream,
                                          srcLayout.blendWeightOffset,
@@ -9926,7 +9972,7 @@ public:
                     hr = D3DERR_INVALIDCALL;
                     break;
                 }
-                if (shaderIo.inputBlendIndices >= 0 &&
+                if (inputLoadGate(shaderIo.inputBlendIndices) &&
                     !loadBlendIndicesInput(shaderIo.inputBlendIndices,
                                            srcLayout.blendIndicesStream,
                                            srcLayout.blendIndicesOffset,
@@ -9934,27 +9980,27 @@ public:
                     hr = D3DERR_INVALIDCALL;
                     break;
                 }
-                if (shaderIo.inputPSize >= 0 &&
+                if (inputLoadGate(shaderIo.inputPSize) &&
                     !loadFloatVectorInput(shaderIo.inputPSize,
                                           srcLayout.psizeStream,
                                           srcLayout.psizeOffset, 4u)) {
                     hr = D3DERR_INVALIDCALL;
                     break;
                 }
-                if (shaderIo.inputDiffuse >= 0 &&
+                if (inputLoadGate(shaderIo.inputDiffuse) &&
                     !loadColorInput(shaderIo.inputDiffuse, srcLayout.diffuseStream,
                                     srcLayout.diffuseOffset)) {
                     hr = D3DERR_INVALIDCALL;
                     break;
                 }
-                if (shaderIo.inputSpecular >= 0 &&
+                if (inputLoadGate(shaderIo.inputSpecular) &&
                     !loadColorInput(shaderIo.inputSpecular, srcLayout.specularStream,
                                     srcLayout.specularOffset)) {
                     hr = D3DERR_INVALIDCALL;
                     break;
                 }
                 for (UINT tex = 0; tex < 8; ++tex) {
-                    if (shaderIo.inputTex[tex] >= 0 &&
+                    if (inputLoadGate(shaderIo.inputTex[tex]) &&
                         !loadTexInput(shaderIo.inputTex[tex], tex)) {
                         hr = D3DERR_INVALIDCALL;
                         break;
