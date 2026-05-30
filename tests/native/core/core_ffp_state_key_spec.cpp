@@ -202,6 +202,8 @@ void testVisualDerivedFfpCoverage() {
   checkContains(declDefaultSource,
                 "out.pointSize = clamp(dxmt9_pointSize, ffpVs.pointSizeMin, ffpVs.pointSizeMax);",
                 "pre-transformed pointSize is clamped by min/max uniforms");
+  check(declDefaultSource.find("out.position.xy += ffpVs.halfPixelFixup") == std::string::npos,
+        "pre-transformed POSITIONT does not apply transformed half-pixel fixup");
 
   // behavioral oracle: Wine visual.c:texop_test
   DeviceState texopState;

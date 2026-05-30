@@ -584,6 +584,252 @@ void testProgrammableTextureOrientationSmoke() {
 #endif
 }
 
+void testProgrammablePalettizedTextureDrawSmoke() {
+#if !defined(__APPLE__)
+  return;
+#else
+  if (!getenvFlag("DXMT9_CORE_SPEC_METAL_INTEGRATION")) {
+    return;
+  }
+
+  BackendLimits limits{};
+  limits.maxTextureSize = 1024;
+  limits.maxColorAttachments = 4;
+  limits.maxAnisotropy = 16;
+  limits.supportsBgr10A2 = true;
+  limits.supportsDepth32FloatStencil8 = true;
+
+  Factory factory(limits);
+  PresentParameters params{};
+  params.backBufferWidth = 8;
+  params.backBufferHeight = 8;
+  params.backBufferFormat = Format::A8R8G8B8;
+  params.windowed = true;
+  params.presentationInterval = PresentInterval::Immediate;
+  params.deviceWindow = Handle{5252};
+
+  auto coreDevice = factory.createDevice(0, params);
+  check(coreDevice != nullptr, "programmable palettized texture device");
+  auto backBuffer = coreDevice->swapChain()->backBuffer();
+  auto readbackSurface =
+      coreDevice->createSurface({8, 8, Format::A8R8G8B8, Pool::Scratch, 0, false, false});
+  check(backBuffer != nullptr, "programmable palettized texture back buffer");
+  check(readbackSurface != nullptr, "programmable palettized texture readback");
+
+  const auto pixelWords = makeTexturedPixelShaderBytecode(0);
+  ShaderRef pixelShader{};
+  pixelShader.kind = ShaderRef::Kind::Bytecode;
+  pixelShader.bytecode.bytes.assign(reinterpret_cast<const u8*>(pixelWords.data()),
+                                    reinterpret_cast<const u8*>(pixelWords.data() + pixelWords.size()));
+  pixelShader.bytecode.hash = hashBytes(std::as_bytes(std::span<const u32>(pixelWords.data(), pixelWords.size())));
+
+  checkEq(coreDevice->setRenderTarget(0, backBuffer), D3D_OK,
+          "programmable palettized texture render target");
+  checkEq(coreDevice->setViewport({0, 0, 8, 8, 0.0f, 1.0f}), D3D_OK,
+          "programmable palettized texture viewport");
+  checkEq(coreDevice->setFVF(kFvfXyzrhw | kFvfTex1), D3D_OK,
+          "programmable palettized texture fvf");
+  checkEq(coreDevice->setPixelShader(pixelShader), D3D_OK,
+          "programmable palettized texture pixel shader");
+  checkEq(coreDevice->setSamplerState(0, SAMP_MIN_FILTER, 1), D3D_OK,
+          "programmable palettized texture min filter");
+  checkEq(coreDevice->setSamplerState(0, SAMP_MAG_FILTER, 1), D3D_OK,
+          "programmable palettized texture mag filter");
+  checkEq(coreDevice->setSamplerState(0, SAMP_ADDRESS_U, kTextureAddressClamp), D3D_OK,
+          "programmable palettized texture address u");
+  checkEq(coreDevice->setSamplerState(0, SAMP_ADDRESS_V, kTextureAddressClamp), D3D_OK,
+          "programmable palettized texture address v");
+
+  const std::array<ScreenSpaceTexturedVertex, 6> quad{
+      ScreenSpaceTexturedVertex{0.0f, 0.0f, 0.0f, 1.0f, 0.0f, 0.0f},
+      ScreenSpaceTexturedVertex{8.0f, 0.0f, 0.0f, 1.0f, 1.0f, 0.0f},
+      ScreenSpaceTexturedVertex{0.0f, 8.0f, 0.0f, 1.0f, 0.0f, 1.0f},
+      ScreenSpaceTexturedVertex{8.0f, 0.0f, 0.0f, 1.0f, 1.0f, 0.0f},
+      ScreenSpaceTexturedVertex{8.0f, 8.0f, 0.0f, 1.0f, 1.0f, 1.0f},
+      ScreenSpaceTexturedVertex{0.0f, 8.0f, 0.0f, 1.0f, 0.0f, 1.0f},
+  };
+  const auto* quadBytes = reinterpret_cast<const u8*>(quad.data());
+
+  const auto topLeft = bgra(0x33, 0x22, 0x11, 0xff);
+  const auto topRight = bgra(0x66, 0x55, 0x44, 0xff);
+  const auto bottomLeft = bgra(0x99, 0x88, 0x77, 0xff);
+  const auto bottomRight = bgra(0xcc, 0xbb, 0xaa, 0xff);
+  const auto checkPixel = [](const LockedRegion& region, u32 x, u32 y,
+                             const std::array<u8, 4>& expected,
+                             const std::string& label) {
+    const auto actual = readPixel(region, x, y);
+    if (actual != expected) {
+      std::ostringstream out;
+      out << label << " got=0x"
+          << std::hex << static_cast<unsigned>(actual[3])
+          << static_cast<unsigned>(actual[2])
+          << static_cast<unsigned>(actual[1])
+          << static_cast<unsigned>(actual[0])
+          << " expected=0x"
+          << static_cast<unsigned>(expected[3])
+          << static_cast<unsigned>(expected[2])
+          << static_cast<unsigned>(expected[1])
+          << static_cast<unsigned>(expected[0]);
+      fail(out.str());
+    }
+  };
+  const auto checkExpanded = [&](const D9CTexture& texture, std::string_view label) {
+    const auto levelBytes = texture.obj->levelBytes(0);
+    check(levelBytes.size() >= 16, std::string(label) + " expanded bytes");
+    checkEq(std::array<u8, 4>{levelBytes[0], levelBytes[1], levelBytes[2], levelBytes[3]},
+            topLeft, std::string(label) + " expanded top-left");
+    checkEq(std::array<u8, 4>{levelBytes[4], levelBytes[5], levelBytes[6], levelBytes[7]},
+            topRight, std::string(label) + " expanded top-right");
+    checkEq(std::array<u8, 4>{levelBytes[8], levelBytes[9], levelBytes[10], levelBytes[11]},
+            bottomLeft, std::string(label) + " expanded bottom-left");
+    checkEq(std::array<u8, 4>{levelBytes[12], levelBytes[13], levelBytes[14], levelBytes[15]},
+            bottomRight, std::string(label) + " expanded bottom-right");
+  };
+  const auto drawAndCheck = [&](const D9CTexture& texture, std::string_view label) {
+    checkEq(coreDevice->setTexture(0, texture.obj), D3D_OK,
+            std::string(label) + " bind texture");
+    ClearDesc clear{};
+    clear.clearColor = true;
+    clear.color = {0.0f, 0.0f, 0.0f, 1.0f};
+    clear.colorAttachments[0] = {backBuffer->handle(), backBuffer->level(), backBuffer->multiSampleCount()};
+    checkEq(coreDevice->clear(clear), D3D_OK, std::string(label) + " clear");
+    checkEq(coreDevice->drawPrimitiveUP(PrimitiveType::TriangleList, 2,
+                                       std::span<const u8>(quadBytes, sizeof(quad)),
+                                       sizeof(ScreenSpaceTexturedVertex)),
+            D3D_OK, std::string(label) + " draw");
+    checkEq(coreDevice->getRenderTargetData(backBuffer, readbackSurface), D3D_OK,
+            std::string(label) + " readback");
+
+    auto region = readbackSurface->lockRect(nullptr, 0);
+    check(region.data != nullptr, std::string(label) + " lock readback");
+    checkPixel(region, 1, 1, topLeft, std::string(label) + " top-left");
+    checkPixel(region, 6, 1, topRight, std::string(label) + " top-right");
+    checkPixel(region, 1, 6, bottomLeft, std::string(label) + " bottom-left");
+    checkPixel(region, 6, 6, bottomRight, std::string(label) + " bottom-right");
+    readbackSurface->unlockRect();
+
+    checkEq(coreDevice->setTexture(0, nullptr), D3D_OK,
+            std::string(label) + " unbind texture");
+  };
+
+  const auto runCase = [&](uint32_t format, std::string_view label) {
+    auto textureObject = coreDevice->createTexture(
+        {2, 2, 1, 1, Format::A8R8G8B8, TextureType::TwoD, Pool::Managed, UsageTexture});
+    check(textureObject != nullptr, std::string(label) + " create texture");
+
+    D9CTexture texture{textureObject, nullptr};
+    texture.d3dFormat = format;
+    texture.palettized = true;
+    texture.p8Levels.resize(1);
+    const uint32_t texelBytes = format == 40u ? 2u : 1u;
+    texture.p8Levels[0].assign(static_cast<size_t>(2u * 2u * texelBytes), 0);
+    auto* texels = texture.p8Levels[0].data();
+    if (format == 40u) {
+      texels[0] = 1;
+      texels[1] = 0xff;
+      texels[2] = 2;
+      texels[3] = 0xff;
+      texels[4] = 3;
+      texels[5] = 0xff;
+      texels[6] = 4;
+      texels[7] = 0xff;
+    } else {
+      texels[0] = 1;
+      texels[1] = 2;
+      texels[2] = 3;
+      texels[3] = 4;
+    }
+
+    std::array<uint32_t, 256> palette{};
+    palette[1] = 0xff112233u;
+    palette[2] = 0xff445566u;
+    palette[3] = 0xff778899u;
+    palette[4] = 0xffaabbccu;
+    checkEq(dxmt9c_texture_set_palette(&texture, palette.data(),
+                                        static_cast<uint32_t>(palette.size())),
+            D3D_OK, std::string(label) + " set palette");
+    checkExpanded(texture, label);
+    drawAndCheck(texture, label);
+  };
+
+  const auto runUpdateTextureCase = [&](uint32_t format, std::string_view label) {
+    const auto makePalettizedObject = [&](std::string_view createLabel) {
+      auto object = coreDevice->createTexture(
+          {2, 2, 1, 1, Format::A8R8G8B8, TextureType::TwoD, Pool::Managed, UsageTexture});
+      check(object != nullptr, std::string(createLabel) + " create texture");
+      return object;
+    };
+    const auto initPalettized = [&](D9CTexture& texture) {
+      texture.d3dFormat = format;
+      texture.palettized = true;
+      texture.p8Levels.resize(1);
+      const uint32_t texelBytes = format == 40u ? 2u : 1u;
+      texture.p8Levels[0].assign(static_cast<size_t>(2u * 2u * texelBytes), 0);
+    };
+
+    D9CTexture src{makePalettizedObject(std::string(label) + " source"), nullptr};
+    D9CTexture dst{makePalettizedObject(std::string(label) + " destination"), nullptr};
+    initPalettized(src);
+    initPalettized(dst);
+    auto* srcTexels = src.p8Levels[0].data();
+    if (format == 40u) {
+      srcTexels[0] = 1;
+      srcTexels[1] = 0xff;
+      srcTexels[2] = 2;
+      srcTexels[3] = 0xff;
+      srcTexels[4] = 3;
+      srcTexels[5] = 0xff;
+      srcTexels[6] = 4;
+      srcTexels[7] = 0xff;
+    } else {
+      srcTexels[0] = 1;
+      srcTexels[1] = 2;
+      srcTexels[2] = 3;
+      srcTexels[3] = 4;
+    }
+
+    std::array<uint32_t, 256> sourcePalette{};
+    sourcePalette[1] = 0xff010203u;
+    sourcePalette[2] = 0xff040506u;
+    sourcePalette[3] = 0xff070809u;
+    sourcePalette[4] = 0xff0a0b0cu;
+    checkEq(dxmt9c_texture_set_palette(&src, sourcePalette.data(),
+                                        static_cast<uint32_t>(sourcePalette.size())),
+            D3D_OK, std::string(label) + " set source palette");
+
+    std::array<uint32_t, 256> destinationPalette{};
+    destinationPalette[1] = 0xff112233u;
+    destinationPalette[2] = 0xff445566u;
+    destinationPalette[3] = 0xff778899u;
+    destinationPalette[4] = 0xffaabbccu;
+    checkEq(dxmt9c_texture_set_palette(&dst, destinationPalette.data(),
+                                        static_cast<uint32_t>(destinationPalette.size())),
+            D3D_OK, std::string(label) + " set destination palette");
+
+    checkEq(coreDevice->updateTexture(src.obj, dst.obj), D3D_OK,
+            std::string(label) + " core UpdateTexture");
+    auto updateBarrier = coreDevice->createQuery(QueryType::Event);
+    check(updateBarrier != nullptr, std::string(label) + " update barrier query");
+    checkEq(coreDevice->getQueryData(updateBarrier, nullptr, 0, QUERY_GETDATA_FLUSH),
+            S_OK, std::string(label) + " update barrier flush");
+    // Match the PE path ordering: the GPU copy must be flushed before the
+    // destination's palettized shadow is re-expanded through its own palette.
+    dst.p8Levels[0] = src.p8Levels[0];
+    dxmt9c_expand_palettized_subresource(&dst, 0);
+
+    checkExpanded(dst, label);
+    drawAndCheck(dst, label);
+  };
+
+  runCase(41u, "programmable P8 texture");
+  runCase(40u, "programmable A8P8 texture");
+  runUpdateTextureCase(41u, "programmable P8 UpdateTexture destination");
+  runUpdateTextureCase(40u, "programmable A8P8 UpdateTexture destination");
+
+  checkEq(coreDevice->setPixelShader({}), D3D_OK, "programmable palettized texture reset pixel shader");
+#endif
+}
+
 }  // namespace
 
 int main() {
@@ -594,6 +840,7 @@ int main() {
     testCubeTextureSubresourceFlow();
     testAutogenUpdateTextureRegeneratesMipShadow();
     testProgrammableTextureOrientationSmoke();
+    testProgrammablePalettizedTextureDrawSmoke();
   } catch (const TestFailure& error) {
     std::cerr << error.what() << '\n';
     return EXIT_FAILURE;

@@ -140,7 +140,7 @@ void testShaderThunk() {
   checkContains(controlSource, "} else {", "control flow else translation");
   checkContains(controlSource, "for (int dxmt9_loop_", "control flow loop translation");
   checkContains(controlSource, "for (int dxmt9_rep_", "control flow rep translation");
-  checkContains(controlSource, "a0 = int(round(", "control flow mova translation");
+  checkContains(controlSource, "a0 = int4(round(", "control flow mova translation");
   checkContains(controlSource, "float4(sin(", "control flow sin translation");
   checkContains(controlSource, "cos(", "control flow cos translation");
   checkContains(controlSource, "float4(log2(", "control flow log translation");

@@ -1349,7 +1349,7 @@ std::vector<u32> makeVs20DefLiteralWithRelAddrBitBytecode() {
 // and reads a constant via `c[a0+5]` — the canonical D3D9 hardware
 // skinning shape. Used to validate the parser consumes the rel-addr
 // DWORD correctly and the emitter lowers indexed const access into
-// `cFloat[clamp(a0 + 5, 0, 255)]`.
+// `cFloat[clamp(a0.x + 5, 0, 255)]`.
 std::vector<u32> makeVs20IndexedConstSourceBytecode() {
   using namespace dxmt9::d3d9bc;
   return {
@@ -1369,6 +1369,38 @@ std::vector<u32> makeVs20IndexedConstSourceBytecode() {
       makeSrcToken(kD3DSPR_ADDR, 0),
       // mov oPos, r0 — keeps the test bytecode well-formed for the
       // vertex translator's output-semantics validator.
+      makeInstructionToken(kD3DSIO_MOV, 2),
+      makeDstToken(kD3DSPR_RASTOUT, 0),
+      makeSrcToken(kD3DSPR_TEMP, 0),
+      kD3DSIO_END,
+  };
+}
+
+// vs_3_0 matrix-palette skinning shape (3DMark05 GT1): two bone indices
+// are loaded into a0.x and a0.y via `mova a0.xy, v1` and the two bone
+// matrices are read via `c[a0.y + 0]` and `c[a0.x + 0]`. The address
+// register a0 is a 4-component vector in D3D9; a translator that models
+// it as a scalar (only a0.x) reads the wrong bone matrix for the a0.y
+// term and the blended vertex flies off to a garbage position.
+std::vector<u32> makeVs30RelAddrYComponentBytecode() {
+  using namespace dxmt9::d3d9bc;
+  return {
+      makeVersionToken(true, 3, 0),
+      // dcl_blendindices v1
+      makeInstructionToken(kD3DSIO_DCL, 2),
+      makeDclSemanticToken(2u, 0u),
+      makeDstToken(kD3DSPR_INPUT, 1),
+      // mova a0.xy, v1  (writes both a0.x and a0.y)
+      makeInstructionToken(kD3DSIO_MOVA, 2),
+      makeDstToken(kD3DSPR_ADDR, 0, 0x3u),
+      makeSrcToken(kD3DSPR_INPUT, 1),
+      // mov r0, c[a0.y + 0]  — rel-addr register selects the .y component
+      makeInstructionToken(kD3DSIO_MOV, 2),
+      makeDstToken(kD3DSPR_TEMP, 0),
+      makeRelativeSrcToken(kD3DSPR_CONST, 0),
+      makeSrcToken(kD3DSPR_ADDR, 0, 0x55u),
+      // mov oPos, r0 — keep the bytecode well-formed for the vertex
+      // translator's output-semantics validator.
       makeInstructionToken(kD3DSIO_MOV, 2),
       makeDstToken(kD3DSPR_RASTOUT, 0),
       makeSrcToken(kD3DSPR_TEMP, 0),
@@ -2318,20 +2350,20 @@ void testD3DBCFixedOperandCountDecodeContract() {
 void testPs30RelativeAddressingLowersTempDestinationIndex() {
   const auto source = translatePixel(makePs30RelativeAddressingBytecode());
   checkContains(source,
-                "r[clamp(a0 + 0, 0, 31)] = cFloat[0];",
+                "r[clamp(a0.x + 0, 0, 31)] = cFloat[0];",
                 "ps_3_0 temp destination relative addressing lowers to a clamped r[] write");
 }
 
 void testPs30RelativeAddressingLowersTempSourceIndex() {
   const auto source = translatePixel(makePs30TempRelativeSourceBytecode());
   checkContains(source,
-                "r[clamp(a0 + 1, 0, 31)]",
+                "r[clamp(a0.x + 1, 0, 31)]",
                 "ps_3_0 temp source relative addressing lowers to a clamped r[] read");
 }
 
 void testPs30IndexedConstSourceLowersToClampedConstAccess() {
   const auto source = translatePixel(makePs30IndexedConstSourceBytecode());
-  checkContains(source, "cFloat[clamp(a0 + 7, 0, 223)]",
+  checkContains(source, "cFloat[clamp(a0.x + 7, 0, 223)]",
                 "ps_3_0 indexed const source emits clamped a0+N access");
   checkContains(source, "constant float4* cFloat = psConsts.psFloatConst;",
                 "ps_3_0 indexed const source aliases the full pixel constant buffer");
@@ -2343,7 +2375,7 @@ void testPs30IndexedConstDestinationLowersToClampedMutableConstWrite() {
                 "ps_3_0 indexed const destination keeps a mutable full-size cFloat array");
   checkContains(source, "cFloat[i] = psConsts.psFloatConst[i];",
                 "mutable pixel constants are initialized from host constants before shader writes");
-  checkContains(source, "cFloat[clamp(a0 + 7, 0, 223)] = cFloat[1];",
+  checkContains(source, "cFloat[clamp(a0.x + 7, 0, 223)] = cFloat[1];",
                 "ps_3_0 indexed const destination emits clamped a0+N write");
   checkNotContains(source, "constant float4* cFloat = ",
                    "ps_3_0 indexed const destination must not alias cFloat through a read-only constant pointer");
@@ -2370,7 +2402,7 @@ void testVs30MissingInputDefaultsToZero() {
 void testVs30RelativeAddressingLowersTexcoordDestinationIndex() {
   const auto source = translateVertex(makeVs30TexcoordRelativeDestinationBytecode());
   checkContains(source,
-                "outTexcoord[clamp(a0 + 1, 0, 7)] = cFloat[1];",
+                "outTexcoord[clamp(a0.x + 1, 0, 7)] = cFloat[1];",
                 "vs_3_0 texcoord output relative destination lowers to a clamped output write");
 }
 
@@ -2381,7 +2413,7 @@ void testVs20IndexedConstDestinationLowersToClampedMutableConstWrite() {
                 "indexed const destination keeps a mutable full-size cFloat array");
   checkContains(source, "cFloat[i] = vsConsts.vsFloatConst[i];",
                 "mutable vertex constants are initialized from host constants before shader writes");
-  checkContains(source, "cFloat[clamp(a0 + 5, 0, 255)] = cFloat[1];",
+  checkContains(source, "cFloat[clamp(a0.x + 5, 0, 255)] = cFloat[1];",
                 "indexed const destination emits clamped a0+N write");
   checkNotContains(source, "constant float4* cFloat = ",
                    "indexed const destination must not alias cFloat through a read-only constant pointer");
@@ -2455,10 +2487,10 @@ void testVs20IndexedConstSourceLowersToClampedConstAccess() {
 
   // Source-side rel-addr produces clamped indexed access into the
   // full vsFloatConst[256] range (kMaxVertexConstants - 1 = 255).
-  checkContains(source, "cFloat[clamp(a0 + 5, 0, 255)]",
+  checkContains(source, "cFloat[clamp(a0.x + 5, 0, 255)]",
                 "indexed const source emits clamped a0+N access");
-  // The mova lowers to the existing a0 = int(round(...)) pattern.
-  checkContains(source, "a0 = int(round(",
+  // The mova lowers to the a0 = int4(round(...)) address-register write.
+  checkContains(source, "a0 = int4(round(",
                 "MOVA still lowers to the address-register assignment");
   // Indexed access forces pointer aliasing onto the full constant
   // buffer so the clamp range stays valid.
@@ -2467,6 +2499,20 @@ void testVs20IndexedConstSourceLowersToClampedConstAccess() {
   // Explicit guarantee against the previous silent-drop bug.
   checkNotContains(source, "cFloat[5]u",
                    "indexed access is no longer rewritten as a static cFloat[5] read");
+}
+
+void testVsRelativeAddrHonorsAddressComponent() {
+  const auto source = translateVertex(makeVs30RelAddrYComponentBytecode());
+
+  // D3D9 a0 is a 4-component address register. `c[a0.y + 0]` must index
+  // with the a0.y component, not collapse to the a0.x scalar. Collapsing
+  // to a0.x is the 3DMark05 GT1 skinning corruption (a vertex straddling
+  // two bones reads the wrong bone matrix for the second weight and
+  // explodes into a spike).
+  checkContains(source, "cFloat[clamp(a0.y + 0, 0, 255)]",
+                "rel-addr source honors the a0.y component selector");
+  checkNotContains(source, "cFloat[clamp(a0 + 0, 0, 255)]",
+                   "rel-addr source no longer collapses a0.y to scalar a0");
 }
 
 void testVs30VertexTextureFetchLowersDeterministically() {
@@ -2575,6 +2621,7 @@ int main() {
     testVs20DefLiteralWithRelAddrBitDoesNotDriftParser();
     testVs20IndexedConstSourceParserConsumesRelAddrDword();
     testVs20IndexedConstSourceLowersToClampedConstAccess();
+    testVsRelativeAddrHonorsAddressComponent();
     testVs30VertexTextureFetchLowersDeterministically();
     testPs14ConstantSourcesClampBeforeArithmetic();
   } catch (const TestFailure& error) {

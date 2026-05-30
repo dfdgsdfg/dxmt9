@@ -331,7 +331,16 @@ std::string relAddrExpression(u32 relAddrToken) {
     return {};
   }
   const auto relReg = decodeRegisterRef(relAddrToken, D3DShaderStage::Vertex);
-  return relReg.kind == D3DRegisterKind::Loop ? "aL" : "a0";
+  // The loop counter aL is genuinely scalar.
+  if (relReg.kind == D3DRegisterKind::Loop) {
+    return "aL";
+  }
+  // D3D9 a0 is a 4-component address register. The rel-addr source token
+  // names which component replicates as the index via its first swizzle
+  // selector (bits [17:16]); matrix-palette skinning loads independent
+  // bone indices into a0.x/a0.y and reads c[a0.y] / c[a0.x]. Collapsing
+  // to a0.x reads the wrong bone matrix and explodes the vertex.
+  return "a0." + componentName((relAddrToken >> 16) & 0x3u);
 }
 
 u32 constantRegisterMaxIndex(D3DRegisterKind kind, bool vertexStage) {
@@ -1132,7 +1141,7 @@ std::string translateSpirvToMsl(const SpirvModule& module,
         }
       }
     }
-	    out << "  int a0 = 0;\n";
+	    out << "  int4 a0 = int4(0);\n";
 	    out << "  int aL = 0;\n";
 	    // R-SHADER-AIR-SIZE: VS path keeps the full 32-temp array. FS
 	    // sizing alone gives us the bulk of the GPU-register-pressure
@@ -1535,7 +1544,10 @@ std::string translateSpirvToMsl(const SpirvModule& module,
         const auto value = readSrc(1);
         switch (dst.kind) {
           case D3DRegisterKind::Address:
-            out << "  a0 = int(round(" << value << ".x));\n";
+            // a0 is a 4-component address register; MOVA rounds each
+            // component so later relative addressing can index by any of
+            // a0.x/.y/.z/.w (matrix-palette skinning uses a0.x and a0.y).
+            out << "  a0 = int4(round(" << value << "));\n";
             break;
           case D3DRegisterKind::Loop:
             out << "  aL = int(round(" << value << ".x));\n";
@@ -2658,7 +2670,10 @@ std::string translateSpirvToMsl(const SpirvModule& module,
         const auto value = readSrc(1);
         switch (dst.kind) {
           case D3DRegisterKind::Address:
-            out << "  a0 = int(round(" << value << ".x));\n";
+            // a0 is a 4-component address register; MOVA rounds each
+            // component so later relative addressing can index by any of
+            // a0.x/.y/.z/.w (matrix-palette skinning uses a0.x and a0.y).
+            out << "  a0 = int4(round(" << value << "));\n";
             break;
           case D3DRegisterKind::Loop:
             out << "  aL = int(round(" << value << ".x));\n";

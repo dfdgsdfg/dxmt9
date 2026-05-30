@@ -63,6 +63,17 @@ enum class BridgeLocatorMode {
 
 extern "C" IMAGE_DOS_HEADER __ImageBase;
 
+HMODULE bridgeModuleHandle() {
+  HMODULE module = nullptr;
+  if (GetModuleHandleExW(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS |
+                             GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
+                         reinterpret_cast<LPCWSTR>(&bridgeModuleHandle),
+                         &module) && module) {
+    return module;
+  }
+  return reinterpret_cast<HMODULE>(&__ImageBase);
+}
+
 #if DXMT9_BRIDGE_PERF_COUNTERS
 enum class BridgeClass : std::size_t {
   Factory,
@@ -582,8 +593,9 @@ NTSTATUS initializeDispatcherOnlyFallback(BridgeState& state) {
   // PE callers use the base info class. Wine's 32-bit wow64 ntdll translates it
   // to the host-side wow64 query and selects __wine_unix_call_wow64_funcs.
   unixlib_handle_t handle = 0;
+  const HMODULE module = bridgeModuleHandle();
   const NTSTATUS status = state.nt_query_virtual_memory(GetCurrentProcess(),
-                                                        reinterpret_cast<void *>(&__ImageBase),
+                                                        reinterpret_cast<void *>(module),
                                                         kMemoryWineLoadUnixLib,
                                                         &handle,
                                                         sizeof(handle),
@@ -719,7 +731,7 @@ NTSTATUS loadAppLocalUnixlib(BridgeState& state) {
   }
 
   const std::wstring module_path =
-      moduleSiblingPath(reinterpret_cast<HMODULE>(&__ImageBase), L"winemetal.so");
+      moduleSiblingPath(bridgeModuleHandle(), L"winemetal.so");
   last_status = loadUnixlibExplicitPath(state, module_path, "module-dir");
   if (last_status == DXMT9_STATUS_SUCCESS) {
     return last_status;

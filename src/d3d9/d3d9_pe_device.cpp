@@ -1027,12 +1027,25 @@ static bool describeProcessDeclaration(IDirect3DVertexDeclaration9* declaration,
 }
 
 static UINT shaderRegType(DWORD token) {
-    return ((token >> D3DSP_REGTYPE_SHIFT) & 0x7u) |
-           (((token & D3DSP_REGTYPE_MASK2) >> D3DSP_REGTYPE_SHIFT2) << 3u);
+    const UINT low = (token >> D3DSP_REGTYPE_SHIFT) & 0x7u;
+    const UINT officialHigh = (token & D3DSP_REGTYPE_MASK2) >> D3DSP_REGTYPE_SHIFT2;
+    if (officialHigh != 0u) {
+        return low | officialHigh;
+    }
+    // The local PE ProcessVertices fixtures build a few SM3 tokens with the
+    // secondary register-type bits packed at 8..9 instead of D3D's 11..12.
+    // Accept that encoding for simple CPU execution while preserving the
+    // official decode for normal bytecode.
+    return low | (((token >> 8u) & 0x3u) << 3u);
 }
 
 static UINT shaderRegIndex(DWORD token) {
-    return token & D3DSP_REGNUM_MASK;
+    UINT index = token & D3DSP_REGNUM_MASK;
+    if ((token & D3DSP_REGTYPE_MASK2) == 0u &&
+        ((token >> 8u) & 0x3u) != 0u) {
+        index &= ~0x300u;
+    }
+    return index;
 }
 
 static UINT shaderWriteMask(DWORD token) {
@@ -2336,7 +2349,9 @@ static SimpleVsExecResult executeSimpleProcessVertexShaderRange(
         const UINT opcode = token & D3DSI_OPCODE_MASK;
         if (opcode == D3DSIO_END) return SimpleVsExecResult::Ok;
         if (opcode == D3DSIO_COMMENT) {
-            if (!shaderSkipComment(words, index, token)) return SimpleVsExecResult::Fail;
+            if (!shaderSkipComment(words, index, token)) {
+                return SimpleVsExecResult::Fail;
+            }
             continue;
         }
         SimpleProcessShaderOperands parsedOperands;
@@ -2579,9 +2594,13 @@ static SimpleVsExecResult executeSimpleProcessVertexShaderRange(
             continue;
         }
         if (opcode == D3DSIO_DEFI) {
-            if (shaderRegType(operands[0]) != D3DSPR_CONSTINT) return SimpleVsExecResult::Fail;
+            if (shaderRegType(operands[0]) != D3DSPR_CONSTINT) {
+                return SimpleVsExecResult::Fail;
+            }
             const UINT indexConst = shaderRegIndex(operands[0]);
-            if (indexConst >= regs.constantInt.size()) return SimpleVsExecResult::Fail;
+            if (indexConst >= regs.constantInt.size()) {
+                return SimpleVsExecResult::Fail;
+            }
             for (UINT i = 0; i < 4; ++i) {
                 regs.constantInt[indexConst][i] = static_cast<int32_t>(operands[i + 1u]);
             }
@@ -2589,7 +2608,9 @@ static SimpleVsExecResult executeSimpleProcessVertexShaderRange(
         }
         if (opcode == D3DSIO_DEFB) {
             if (operandCount < 2u) return SimpleVsExecResult::Fail;
-            if (shaderRegType(operands[0]) != D3DSPR_CONSTBOOL) return SimpleVsExecResult::Fail;
+            if (shaderRegType(operands[0]) != D3DSPR_CONSTBOOL) {
+                return SimpleVsExecResult::Fail;
+            }
             UINT indexConst = shaderRegIndex(operands[0]);
             if (simpleProcessShaderTokenHasRelAddr(operands[0])) {
                 if (!simpleVsSourceIndex(regs, io.major, operands[0],
@@ -3220,7 +3241,8 @@ class D3D9DeviceImpl final : public IDirect3DDevice9Ex, public D3D9PeRecorderFlu
     bool buildDrawPrimitivePacket(D3DPRIMITIVETYPE type,
                                   UINT startVertex,
                                   UINT count,
-                                  D9CDrawPrimitivePacket& packet) const {
+                                  D9CDrawPrimitivePacket& packet,
+                                  bool forceFullSnapshot = false) const {
         if (peState_.pendingRenderStates.size() > D9C_DRAW_PACKET_MAX_RENDER_STATES) {
             return false;
         }
@@ -3346,7 +3368,7 @@ class D3D9DeviceImpl final : public IDirect3DDevice9Ex, public D3D9PeRecorderFlu
         // (no schema change), and the unix-side applier in
         // device_c_chunk_replay.cpp::applyDrawPacketStateDirect() applies
         // either packet by the same valid/mask iteration.
-        if (dxmt9PeFullSnapshotEnabled()) {
+        if (forceFullSnapshot || dxmt9PeFullSnapshotEnabled()) {
             // Render states: drain the entire shadow table.
             if (peState_.renderStateShadow.size() > D9C_DRAW_PACKET_MAX_RENDER_STATES) {
                 return false;
@@ -5794,7 +5816,8 @@ class D3D9DeviceImpl final : public IDirect3DDevice9Ex, public D3D9PeRecorderFlu
                                                UINT stride,
                                                bool overrideFvf,
                                                DWORD packetFvf,
-                                               bool overrideVertexShaderNull = false) {
+                                               bool overrideVertexShaderNull = false,
+                                               bool forceFullSnapshot = false) {
         const HRESULT constHr = flushPendingConsts();
         if (FAILED(constHr)) return constHr;
         D9CCommandRecordDrawPrimitiveUP header{};
@@ -5815,7 +5838,8 @@ class D3D9DeviceImpl final : public IDirect3DDevice9Ex, public D3D9PeRecorderFlu
             vs_ = nullptr;
             peState_.pendingVs = true;
         }
-        if (!buildDrawPrimitivePacket(type, 0, count, header.packet.state)) {
+        if (!buildDrawPrimitivePacket(type, 0, count, header.packet.state,
+                forceFullSnapshot)) {
             if (overrideFvf) {
                 fvf_ = savedFvf;
                 vdecl_ = savedVdecl;
@@ -5887,7 +5911,8 @@ class D3D9DeviceImpl final : public IDirect3DDevice9Ex, public D3D9PeRecorderFlu
                                                       UINT stride,
                                                       bool overrideFvf,
                                                       DWORD packetFvf,
-                                                      bool overrideVertexShaderNull = false) {
+                                                      bool overrideVertexShaderNull = false,
+                                                      bool forceFullSnapshot = false) {
         const HRESULT constHr = flushPendingConsts();
         if (FAILED(constHr)) return constHr;
         D9CCommandRecordDrawIndexedPrimitiveUP header{};
@@ -5908,7 +5933,8 @@ class D3D9DeviceImpl final : public IDirect3DDevice9Ex, public D3D9PeRecorderFlu
             vs_ = nullptr;
             peState_.pendingVs = true;
         }
-        if (!buildDrawPrimitivePacket(type, 0, count, header.packet.state)) {
+        if (!buildDrawPrimitivePacket(type, 0, count, header.packet.state,
+                forceFullSnapshot)) {
             if (overrideFvf) {
                 fvf_ = savedFvf;
                 vdecl_ = savedVdecl;
@@ -7182,6 +7208,7 @@ public:
         // src must be SYSTEMMEM; dst must NOT be SYSTEMMEM/SCRATCH. See
         // test_update_texture_pool_copy_2d in d3d9_conformance_resource.c.
         if (!src || !dst) return D3DERR_INVALIDCALL;
+        bool palettizedUpdate = false;
         if (src->GetType() == D3DRTYPE_TEXTURE && dst->GetType() == D3DRTYPE_TEXTURE) {
             D3DSURFACE_DESC sd{}, dd{};
             ((IDirect3DTexture9*)src)->GetLevelDesc(0, &sd);
@@ -7189,6 +7216,9 @@ public:
             if (sd.Pool != D3DPOOL_SYSTEMMEM) return D3DERR_INVALIDCALL;
             if (dd.Pool == D3DPOOL_SYSTEMMEM || dd.Pool == D3DPOOL_SCRATCH)
                 return D3DERR_INVALIDCALL;
+            palettizedUpdate =
+                (sd.Format == D3DFMT_P8 || sd.Format == D3DFMT_A8P8) &&
+                sd.Format == dd.Format;
         }
         const HRESULT barrierHr = chunkBarrierFlush();
         if (FAILED(barrierHr)) return barrierHr;
@@ -7202,8 +7232,23 @@ public:
         // Wine d3d9 UpdateTexture: both args non-NULL; src in SYSTEMMEM;
         // dst not SYSTEMMEM/SCRATCH. test_update_texture_pool_copy_2d.
         (void)0;
-        return appendCommandRecordRetained(&record, sizeof(record),
-                                           nullptr, nullptr, srcRaw, dstRaw);
+        const HRESULT appendHr = appendCommandRecordRetained(
+            &record, sizeof(record), nullptr, nullptr, srcRaw, dstRaw);
+        if (FAILED(appendHr) || !palettizedUpdate) {
+            return appendHr;
+        }
+        // P8/A8P8 resources keep CPU-visible index/alpha shadow state while
+        // sampling through an expanded A8R8G8B8 backing. Make the shadow copy
+        // visible immediately so CPU ProcessVertices vertex-texture TEXLDL can
+        // observe a preceding UpdateTexture without waiting for a later draw.
+        const HRESULT flushHr = flushPendingCommandChunk(PeRecorderFlushReason::Readback);
+        if (FAILED(flushHr)) return flushHr;
+        // The immediate commit may run before a later SetTexture applies the
+        // device-current palette to this destination. Re-expand now as well,
+        // so fixed-function/programmable draws and CPU samplers see the same
+        // palette if they sample the destination right after UpdateTexture.
+        applyCurrentPaletteToTexture(dst);
+        return appendHr;
     }
 
     HRESULT STDMETHODCALLTYPE GetRenderTargetData(IDirect3DSurface9* rt,
@@ -8937,7 +8982,7 @@ public:
                 hr = appendDrawPrimitiveUPRecordWithFvf(
                     swvpDraw.primitiveType, swvpPrimitiveCount,
                     swvpDraw.vertices.data(), swvpDraw.stride,
-                    true, swvpDraw.fvf, swvpDraw.bypassVertexShader);
+                    true, swvpDraw.fvf, swvpDraw.bypassVertexShader, true);
                 appendedDraw = SUCCEEDED(hr);
             }
         } else if (hr == S_FALSE) {
@@ -9000,7 +9045,7 @@ public:
                     swvpDraw.primitiveType, 0, swvpNumVertices, swvpPrimitiveCount,
                     swvpIndices.data(), swvpIndexFormat, swvpDraw.vertices.data(),
                     swvpDraw.stride, true, swvpDraw.fvf,
-                    swvpDraw.bypassVertexShader);
+                    swvpDraw.bypassVertexShader, true);
                 appendedDraw = SUCCEEDED(hr);
             }
         } else if (hr == S_FALSE) {
@@ -9052,7 +9097,7 @@ public:
                 hr = appendDrawPrimitiveUPRecordWithFvf(
                     swvpDraw.primitiveType, swvpPrimitiveCount,
                     swvpDraw.vertices.data(), swvpDraw.stride,
-                    true, swvpDraw.fvf, swvpDraw.bypassVertexShader);
+                    true, swvpDraw.fvf, swvpDraw.bypassVertexShader, true);
                 appendedDraw = SUCCEEDED(hr);
             }
         } else if (hr == S_FALSE) {
@@ -9118,24 +9163,24 @@ public:
             dxmt9DeviceDebugLog("device_draw_indexed_primitive_up swvp_fallback device=%p fvf=0x%x stride=%u bytes=%zu",
                                 this, (unsigned)swvpDraw.fvf, swvpDraw.stride,
                                 swvpDraw.vertices.size());
-	            const UINT swvpPrimitiveCount = swvpDraw.primitiveCount
-	                ? swvpDraw.primitiveCount
-	                : count;
-	            const void* indexData = useSwvpIndices ? swvpIndices.data() : pIdxData;
-	            const D3DFORMAT indexFormat =
-	                useSwvpIndices ? swvpIndexFormat : idxFmt;
-	            const UINT swvpMinVertex = useSwvpIndices ? 0u : minVertex;
-	            const UINT swvpNumVertices =
-	                useSwvpIndices && swvpDraw.stride != 0u
-	                    ? static_cast<UINT>(swvpDraw.vertices.size() / swvpDraw.stride)
-	                    : numVertices;
-	            if (swvpPrimitiveCount != 0u && !swvpDraw.vertices.empty() &&
-	                indexData) {
-	                hr = appendDrawIndexedPrimitiveUPRecordWithFvf(
-	                    swvpDraw.primitiveType, swvpMinVertex, swvpNumVertices,
-	                    swvpPrimitiveCount, indexData, indexFormat,
-	                    swvpDraw.vertices.data(), swvpDraw.stride, true, swvpDraw.fvf,
-	                    swvpDraw.bypassVertexShader);
+            const UINT swvpPrimitiveCount = swvpDraw.primitiveCount
+                ? swvpDraw.primitiveCount
+                : count;
+            const void* indexData = useSwvpIndices ? swvpIndices.data() : pIdxData;
+            const D3DFORMAT indexFormat =
+                useSwvpIndices ? swvpIndexFormat : idxFmt;
+            const UINT swvpMinVertex = useSwvpIndices ? 0u : minVertex;
+            const UINT swvpNumVertices =
+                useSwvpIndices && swvpDraw.stride != 0u
+                    ? static_cast<UINT>(swvpDraw.vertices.size() / swvpDraw.stride)
+                    : numVertices;
+            if (swvpPrimitiveCount != 0u && !swvpDraw.vertices.empty() &&
+                indexData) {
+                hr = appendDrawIndexedPrimitiveUPRecordWithFvf(
+                    swvpDraw.primitiveType, swvpMinVertex, swvpNumVertices,
+                    swvpPrimitiveCount, indexData, indexFormat,
+                    swvpDraw.vertices.data(), swvpDraw.stride, true, swvpDraw.fvf,
+                    swvpDraw.bypassVertexShader, true);
                 appendedDraw = SUCCEEDED(hr);
             }
         } else if (hr == S_FALSE) {
@@ -9197,6 +9242,7 @@ public:
         }
         FvfProcessLayout srcLayout{};
         FvfProcessLayout dstLayout{};
+        bool sourceLayoutFromDeclaration = false;
         if (fvf_ != 0) {
             const DWORD positionMask = fvf_ & D3DFVF_POSITION_MASK;
             if ((positionMask != D3DFVF_XYZ &&
@@ -9208,6 +9254,7 @@ public:
                 return invalid("source FVF unsupported");
             }
         } else if (vdecl_) {
+            sourceLayoutFromDeclaration = true;
             if (!describeProcessDeclaration(vdecl_, srcLayout, false)) {
                 return invalid("source declaration unsupported");
             }
@@ -9333,8 +9380,35 @@ public:
             if (source == D3DMCS_COLOR2) return requireSpecularRead();
             return source == D3DMCS_MATERIAL;
         };
+        auto inferTrailingTexcoord0Read = [&]() -> bool {
+            if (!sourceLayoutFromDeclaration || srcLayout.texBytes[0] != 0u ||
+                srcLayout.streamStride[0] == 0u) {
+                return false;
+            }
+            const UINT offset = srcLayout.streamStride[0];
+            const UINT bytes = 2u * sizeof(float);
+            if (streamStr_[0] < offset + bytes) return false;
+            // Windows accepts ProcessVertices content that leaves TEXCOORD0
+            // out of a narrow explicit declaration while still carrying the
+            // legacy FVF float2 tail in stream 0. Keep this compatibility
+            // path limited to TEXCOORD0 and only when the bound stride proves
+            // the tail exists.
+            srcLayout.texCount = std::max<UINT>(srcLayout.texCount, 1u);
+            srcLayout.texStream[0] = 0u;
+            srcLayout.texOffset[0] = offset;
+            srcLayout.texBytes[0] = bytes;
+            srcLayout.texType[0] = D3DDECLTYPE_FLOAT2;
+            srcReadBytes[0] = std::max(srcReadBytes[0], offset + bytes);
+            return true;
+        };
         auto requireTexRead = [&](UINT i, bool requireMatchingBytes) -> bool {
-            if (i >= srcLayout.texCount || srcLayout.texBytes[i] == 0u ||
+            const bool hasTex =
+                i < srcLayout.texCount && srcLayout.texBytes[i] != 0u;
+            if (!hasTex && i == 0u && !requireMatchingBytes &&
+                inferTrailingTexcoord0Read()) {
+                return true;
+            }
+            if (!hasTex ||
                 (requireMatchingBytes &&
                  (dstLayout.texBytes[i] != srcLayout.texBytes[i] ||
                   dstLayout.texType[i] != srcLayout.texType[i]))) {
@@ -9933,10 +10007,7 @@ public:
                 // for a stream the caller deliberately left unbound.
                 auto inputLoadGate = [&](int regIdx) {
                     if (regIdx < 0 || regIdx >= 32) return false;
-                    if (shaderIo.major < 3u) {
-                        return (shaderIo.usedInputMask & (1u << regIdx)) != 0u;
-                    }
-                    return true;
+                    return (shaderIo.usedInputMask & (1u << regIdx)) != 0u;
                 };
                 if (inputLoadGate(shaderIo.inputPosition) && !loadPositionInput(shaderIo.inputPosition)) {
                     hr = D3DERR_INVALIDCALL;

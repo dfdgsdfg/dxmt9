@@ -43,6 +43,7 @@ import argparse
 import json
 import os
 import re
+import shutil
 import subprocess
 import sys
 import tomllib
@@ -56,6 +57,7 @@ DEFAULT_WINE = REPO_ROOT / "experiments/wine/sikarugir-cx-24.0.7/bin/wine"
 DEFAULT_PREFIX = REPO_ROOT / "tmp/conformance-prefix"
 DEFAULT_OUTPUT = REPO_ROOT / "tmp/d3d9-conformance-results.json"
 DEFAULT_MANIFEST = REPO_ROOT / "tests/conformance/d3d9/MANIFEST.toml"
+DEFAULT_WINEMETAL_SO = REPO_ROOT / "build-x86_64-builtin/src/winemetal/unix/winemetal.so"
 TEST_SOURCE = REPO_ROOT / "tests/conformance/d3d9/d3d9_conformance.c"
 
 # Executables that follow the same `RUN [N:name] ... PASS/FAIL/SKIP [name]`
@@ -97,6 +99,12 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--manifest", type=Path, default=DEFAULT_MANIFEST,
                    help=f"MANIFEST.toml describing all cases "
                         f"(default: {DEFAULT_MANIFEST.relative_to(REPO_ROOT)}).")
+    p.add_argument("--winemetal-so", type=Path,
+                   default=Path(os.environ.get("DXMT9_CONFORMANCE_WINEMETAL_SO",
+                                               str(DEFAULT_WINEMETAL_SO))),
+                   help="winemetal.so to stage next to the conformance exe "
+                        f"(default: {DEFAULT_WINEMETAL_SO.relative_to(REPO_ROOT)}, "
+                        "or DXMT9_CONFORMANCE_WINEMETAL_SO).")
     p.add_argument("--skip-aux", action="store_true",
                    help="Skip auxiliary executables; only run the main chunked exe.")
     p.add_argument("--aux-timeout", type=float, default=120.0,
@@ -181,7 +189,7 @@ def run_aux_exe(args: argparse.Namespace, exe_path: Path,
       - timeout         -> all timeout
     """
     cmd = [str(args.wine), str(exe_path)]
-    env = build_env(args.prefix)
+    env = build_env(args)
     timed_out = False
     rc: int | None = None
     try:
@@ -231,13 +239,28 @@ def run_aux_exe(args: argparse.Namespace, exe_path: Path,
     return verdicts, stdout, False
 
 
-def build_env(prefix: Path) -> dict[str, str]:
+def stage_app_local_unixlib(args: argparse.Namespace) -> None:
+    """Stage winemetal.so beside app-local winemetal.dll when available."""
+    src = args.winemetal_so
+    if not src.exists():
+        return
+    dst = args.exe.parent / "winemetal.so"
+    if src.resolve() != dst.resolve():
+        shutil.copy2(src, dst)
+    args.staged_winemetal_so = dst
+
+
+def build_env(args: argparse.Namespace) -> dict[str, str]:
     env = os.environ.copy()
     # Wine requires an absolute WINEPREFIX; a relative path silently resolves
     # to the wrong/default prefix (without the staged dxmt9 trio), so the
     # conformance exe loads no dxmt9 and emits no verdicts -> false all-skip.
-    env["WINEPREFIX"] = str(prefix.resolve())
-    env["WINEDLLOVERRIDES"] = "d3d9,winemetal=n,b"
+    env["WINEPREFIX"] = str(args.prefix.resolve())
+    env["WINEDLLOVERRIDES"] = os.environ.get(
+        "DXMT9_CONFORMANCE_DLLOVERRIDES", "d3d9,winemetal=n,b")
+    if getattr(args, "staged_winemetal_so", None):
+        env.setdefault("DXMT9_WINEMETAL_SO",
+                       str(args.staged_winemetal_so.resolve()))
     env["DXMT9_PREWARM"] = "disabled"
     # Quiet down Wine FIXMEs that would otherwise drown our parse loop.
     env.setdefault("WINEDEBUG", "-all")
@@ -253,7 +276,7 @@ def run_chunk(args: argparse.Namespace, start: int, end: int,
         f"start={start}",
         f"end={end}",
     ]
-    env = build_env(args.prefix)
+    env = build_env(args)
     timed_out = False
     try:
         proc = subprocess.run(
@@ -300,6 +323,7 @@ def main() -> int:
         sys.exit(f"wine binary not found: {args.wine}")
     if not args.prefix.exists():
         sys.exit(f"wine prefix not found: {args.prefix} — run wineboot first")
+    stage_app_local_unixlib(args)
 
     names = discover_test_names()
     total = len(names)

@@ -600,12 +600,18 @@ void testPalettizedTextureExpansion() {
       checkEq(dxmt9c_texture_unlock_rect(srcTexture, 0), D3D_OK,
               "P8 update source unlock");
 
-      std::array<uint32_t, 256> palette{};
-      palette[1] = 0xff102030u;
-      palette[2] = 0xff405060u;
-      checkEq(dxmt9c_texture_set_palette(srcTexture, palette.data(),
-                                          static_cast<uint32_t>(palette.size())),
+      std::array<uint32_t, 256> sourcePalette{};
+      sourcePalette[1] = 0xff8899aau;
+      sourcePalette[2] = 0xffbbccddu;
+      checkEq(dxmt9c_texture_set_palette(srcTexture, sourcePalette.data(),
+                                          static_cast<uint32_t>(sourcePalette.size())),
               D3D_OK, "P8 update source palette");
+      std::array<uint32_t, 256> destinationPalette{};
+      destinationPalette[1] = 0xff102030u;
+      destinationPalette[2] = 0xff405060u;
+      checkEq(dxmt9c_texture_set_palette(dstTexture, destinationPalette.data(),
+                                          static_cast<uint32_t>(destinationPalette.size())),
+              D3D_OK, "P8 update destination palette before copy");
       checkEq(dxmt9c_device_update_texture(&cDevice, srcTexture, dstTexture),
               D3D_OK, "P8 UpdateTexture");
 
@@ -618,10 +624,10 @@ void testPalettizedTextureExpansion() {
       checkEq(bytes[5], uint8_t{0x50}, "P8 update pixel1 green");
       checkEq(bytes[6], uint8_t{0x40}, "P8 update pixel1 red");
 
-      palette[1] = 0xff010203u;
-      palette[2] = 0xffa0b0c0u;
-      checkEq(dxmt9c_texture_set_palette(dstTexture, palette.data(),
-                                          static_cast<uint32_t>(palette.size())),
+      destinationPalette[1] = 0xff010203u;
+      destinationPalette[2] = 0xffa0b0c0u;
+      checkEq(dxmt9c_texture_set_palette(dstTexture, destinationPalette.data(),
+                                          static_cast<uint32_t>(destinationPalette.size())),
               D3D_OK, "P8 update destination palette switch");
       bytes = dstTexture->obj->levelBytes(0);
       check(bytes.size() >= 8, "P8 update palette switch expanded backing");
@@ -824,12 +830,18 @@ void testPalettizedTextureExpansion() {
       checkEq(dxmt9c_texture_unlock_rect(srcTexture, 0), D3D_OK,
               "A8P8 update source unlock");
 
-      std::array<uint32_t, 256> palette{};
-      palette[5] = 0xff102030u;
-      palette[6] = 0xff405060u;
-      checkEq(dxmt9c_texture_set_palette(srcTexture, palette.data(),
-                                          static_cast<uint32_t>(palette.size())),
+      std::array<uint32_t, 256> sourcePalette{};
+      sourcePalette[5] = 0xff8899aau;
+      sourcePalette[6] = 0xffbbccddu;
+      checkEq(dxmt9c_texture_set_palette(srcTexture, sourcePalette.data(),
+                                          static_cast<uint32_t>(sourcePalette.size())),
               D3D_OK, "A8P8 update source palette");
+      std::array<uint32_t, 256> destinationPalette{};
+      destinationPalette[5] = 0xff102030u;
+      destinationPalette[6] = 0xff405060u;
+      checkEq(dxmt9c_texture_set_palette(dstTexture, destinationPalette.data(),
+                                          static_cast<uint32_t>(destinationPalette.size())),
+              D3D_OK, "A8P8 update destination palette before copy");
       checkEq(dxmt9c_device_update_texture(&cDevice, srcTexture, dstTexture),
               D3D_OK, "A8P8 UpdateTexture");
 
@@ -844,10 +856,10 @@ void testPalettizedTextureExpansion() {
       checkEq(bytes[7], uint8_t{0x30},
               "A8P8 update pixel1 alpha from texel");
 
-      palette[5] = 0xff010203u;
-      palette[6] = 0xffa0b0c0u;
-      checkEq(dxmt9c_texture_set_palette(dstTexture, palette.data(),
-                                          static_cast<uint32_t>(palette.size())),
+      destinationPalette[5] = 0xff010203u;
+      destinationPalette[6] = 0xffa0b0c0u;
+      checkEq(dxmt9c_texture_set_palette(dstTexture, destinationPalette.data(),
+                                          static_cast<uint32_t>(destinationPalette.size())),
               D3D_OK, "A8P8 update destination palette switch");
       bytes = dstTexture->obj->levelBytes(0);
       check(bytes.size() >= 8, "A8P8 update palette switch backing");

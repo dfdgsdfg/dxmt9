@@ -593,7 +593,6 @@ std::string makeFfpVertexSource(const FfpVertexKey& key,
     out << "  float2 ndc = float2(((inPosition.x - ffpVs.viewportOrigin.x) / viewportSize.x) * 2.0f - 1.0f,\n";
     out << "                     1.0f - ((inPosition.y - ffpVs.viewportOrigin.y) / viewportSize.y) * 2.0f);\n";
     out << "  out.position = float4(ndc * clipW, inPosition.z * clipW, clipW);\n";
-    out << "  out.position.xy += ffpVs.halfPixelFixup * out.position.w;\n";
     if (layout->hasDiffuse) {
       out << "  out.color = dxmt9_load_d3dcolor(stream0, base + " << layout->diffuseOffset << "u);\n";
     } else {
