@@ -730,6 +730,15 @@ void test_visual_mvp_software_vp_policy(const struct d3d9_api *api)
         BYTE bi0, bi1, bi2, bi3;
         DWORD color;
     };
+    struct swvp_blendweight_stream_vertex
+    {
+        float bw0, bw1, bw2, bw3;
+    };
+    struct swvp_blendindices_stream_vertex
+    {
+        float bw0, bw1, bw2, bw3;
+        BYTE bi0, bi1, bi2, bi3;
+    };
     struct swvp_position_vertex
     {
         float x, y, z;
@@ -813,6 +822,18 @@ void test_visual_mvp_software_vp_policy(const struct d3d9_api *api)
         {-0.5f, -0.5f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0, 0, 0, 0, 0xffff0000u},
         {-0.5f,  0.5f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0, 0, 0, 0, 0xff00ff00u},
         { 0.5f, -0.5f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0, 0, 0, 0, 0xff0000ffu},
+    };
+    static const struct swvp_blendweight_stream_vertex split_blendweights[] =
+    {
+        {0.0f, 0.0f, 0.0f, 0.0f},
+        {0.0f, 0.0f, 0.0f, 0.0f},
+        {0.0f, 0.0f, 0.0f, 0.0f},
+    };
+    static const struct swvp_blendindices_stream_vertex split_blendindices[] =
+    {
+        {0.0f, 0.0f, 0.0f, 0.0f, 0, 0, 0, 0},
+        {0.0f, 0.0f, 0.0f, 0.0f, 0, 0, 0, 0},
+        {0.0f, 0.0f, 0.0f, 0.0f, 0, 0, 0, 0},
     };
     static const struct swvp_position_vertex split_positions[] =
     {
@@ -944,6 +965,21 @@ void test_visual_mvp_software_vp_policy(const struct d3d9_api *api)
         {0, 32, D3DDECLTYPE_D3DCOLOR, D3DDECLMETHOD_DEFAULT, D3DDECLUSAGE_COLOR, 0},
         D3DDECL_END()
     };
+    static const D3DVERTEXELEMENT9 swvp_split_blendweight_decl_elements[] =
+    {
+        {0, 0, D3DDECLTYPE_FLOAT3, D3DDECLMETHOD_DEFAULT, D3DDECLUSAGE_POSITION, 0},
+        {0, 12, D3DDECLTYPE_D3DCOLOR, D3DDECLMETHOD_DEFAULT, D3DDECLUSAGE_COLOR, 0},
+        {1, 0, D3DDECLTYPE_FLOAT4, D3DDECLMETHOD_DEFAULT, D3DDECLUSAGE_BLENDWEIGHT, 0},
+        D3DDECL_END()
+    };
+    static const D3DVERTEXELEMENT9 swvp_split_blendindices_decl_elements[] =
+    {
+        {0, 0, D3DDECLTYPE_FLOAT3, D3DDECLMETHOD_DEFAULT, D3DDECLUSAGE_POSITION, 0},
+        {0, 12, D3DDECLTYPE_D3DCOLOR, D3DDECLMETHOD_DEFAULT, D3DDECLUSAGE_COLOR, 0},
+        {1, 0, D3DDECLTYPE_FLOAT4, D3DDECLMETHOD_DEFAULT, D3DDECLUSAGE_BLENDWEIGHT, 0},
+        {1, 16, D3DDECLTYPE_UBYTE4, D3DDECLMETHOD_DEFAULT, D3DDECLUSAGE_BLENDINDICES, 0},
+        D3DDECL_END()
+    };
     static const D3DVERTEXELEMENT9 swvp_tangent_decl_elements[] =
     {
         {0, 0, D3DDECLTYPE_FLOAT3, D3DDECLMETHOD_DEFAULT, D3DDECLUSAGE_POSITION, 0},
@@ -1073,12 +1109,16 @@ void test_visual_mvp_software_vp_policy(const struct d3d9_api *api)
     IDirect3DVertexDeclaration9 *short4n_vertex_decl = NULL;
     IDirect3DVertexDeclaration9 *blendweight_vertex_decl = NULL;
     IDirect3DVertexDeclaration9 *blendindices_vertex_decl = NULL;
+    IDirect3DVertexDeclaration9 *split_blendweight_vertex_decl = NULL;
+    IDirect3DVertexDeclaration9 *split_blendindices_vertex_decl = NULL;
     IDirect3DVertexDeclaration9 *split_vertex_decl = NULL;
     IDirect3DVertexDeclaration9 *tangent_vertex_decl = NULL;
     IDirect3DVertexDeclaration9 *split_tangent_vertex_decl = NULL;
     IDirect3DVertexBuffer9 *vertex_buffer = NULL;
     IDirect3DVertexBuffer9 *blendweight_vertex_buffer = NULL;
     IDirect3DVertexBuffer9 *blendindices_vertex_buffer = NULL;
+    IDirect3DVertexBuffer9 *split_blendweight_stream_buffer = NULL;
+    IDirect3DVertexBuffer9 *split_blendindices_stream_buffer = NULL;
     IDirect3DVertexBuffer9 *padded_vertex_buffer = NULL;
     IDirect3DVertexBuffer9 *strip_vertex_buffer = NULL;
     IDirect3DVertexBuffer9 *tangent_vertex_buffer = NULL;
@@ -1184,6 +1224,14 @@ void test_visual_mvp_software_vp_policy(const struct d3d9_api *api)
         CHECK_HR(hr, D3D_OK);
         hr = IDirect3DDevice9_CreateVertexDeclaration(device_swvp,
                 swvp_blendindices_decl_elements, &blendindices_vertex_decl);
+        CHECK_HR(hr, D3D_OK);
+        hr = IDirect3DDevice9_CreateVertexDeclaration(device_swvp,
+                swvp_split_blendweight_decl_elements,
+                &split_blendweight_vertex_decl);
+        CHECK_HR(hr, D3D_OK);
+        hr = IDirect3DDevice9_CreateVertexDeclaration(device_swvp,
+                swvp_split_blendindices_decl_elements,
+                &split_blendindices_vertex_decl);
         CHECK_HR(hr, D3D_OK);
         hr = IDirect3DDevice9_CreateVertexDeclaration(device_swvp,
                 swvp_split_decl_elements, &split_vertex_decl);
@@ -1420,6 +1468,38 @@ void test_visual_mvp_software_vp_policy(const struct d3d9_api *api)
                 memcpy(mapped, blendindices_tri, sizeof(blendindices_tri));
                 CHECK_HR(IDirect3DVertexBuffer9_Unlock(
                         blendindices_vertex_buffer), D3D_OK);
+            }
+        }
+        hr = IDirect3DDevice9_CreateVertexBuffer(device_swvp,
+                sizeof(split_blendweights), 0, 0, D3DPOOL_MANAGED,
+                &split_blendweight_stream_buffer, NULL);
+        CHECK_HR(hr, D3D_OK);
+        if (SUCCEEDED(hr))
+        {
+            hr = IDirect3DVertexBuffer9_Lock(split_blendweight_stream_buffer,
+                    0, sizeof(split_blendweights), &mapped, 0);
+            CHECK_HR(hr, D3D_OK);
+            if (SUCCEEDED(hr))
+            {
+                memcpy(mapped, split_blendweights, sizeof(split_blendweights));
+                CHECK_HR(IDirect3DVertexBuffer9_Unlock(
+                        split_blendweight_stream_buffer), D3D_OK);
+            }
+        }
+        hr = IDirect3DDevice9_CreateVertexBuffer(device_swvp,
+                sizeof(split_blendindices), 0, 0, D3DPOOL_MANAGED,
+                &split_blendindices_stream_buffer, NULL);
+        CHECK_HR(hr, D3D_OK);
+        if (SUCCEEDED(hr))
+        {
+            hr = IDirect3DVertexBuffer9_Lock(split_blendindices_stream_buffer,
+                    0, sizeof(split_blendindices), &mapped, 0);
+            CHECK_HR(hr, D3D_OK);
+            if (SUCCEEDED(hr))
+            {
+                memcpy(mapped, split_blendindices, sizeof(split_blendindices));
+                CHECK_HR(IDirect3DVertexBuffer9_Unlock(
+                        split_blendindices_stream_buffer), D3D_OK);
             }
         }
         hr = IDirect3DDevice9_CreateIndexBuffer(device_swvp,
@@ -2373,6 +2453,117 @@ void test_visual_mvp_software_vp_policy(const struct d3d9_api *api)
                     D3DRS_INDEXEDVERTEXBLENDENABLE, FALSE), D3D_OK);
             CHECK_HR(IDirect3DDevice9_SetRenderState(device_swvp,
                     D3DRS_VERTEXBLEND, D3DVBF_DISABLE), D3D_OK);
+            CHECK_HR(IDirect3DDevice9_SetStreamSource(device_swvp, 0,
+                    NULL, 0, 0), D3D_OK);
+            CHECK_HR(IDirect3DDevice9_SetFVF(device_swvp,
+                    D3DFVF_XYZ | D3DFVF_NORMAL), D3D_OK);
+            CHECK_HR(IDirect3DDevice9_EndScene(device_swvp), D3D_OK);
+            CHECK_HR(IDirect3DDevice9_GetRenderTargetData(device_swvp,
+                    render_target, readback), D3D_OK);
+            memset(&locked_rect, 0, sizeof(locked_rect));
+            hr = IDirect3DSurface9_LockRect(readback, &locked_rect, NULL,
+                    D3DLOCK_READONLY);
+            CHECK_HR(hr, D3D_OK);
+            if (SUCCEEDED(hr))
+            {
+                const BYTE *row = (const BYTE *)locked_rect.pBits
+                        + 18 * locked_rect.Pitch;
+                memcpy(&probe_pixel, row + 14 * sizeof(probe_pixel),
+                        sizeof(probe_pixel));
+                CHECK_TRUE((probe_pixel & 0x00ffffffu) != 0);
+                CHECK_HR(IDirect3DSurface9_UnlockRect(readback), D3D_OK);
+            }
+        }
+        if (render_target && readback && split_blendweight_vertex_decl
+                && vertex_buffer && split_blendweight_stream_buffer)
+        {
+            CHECK_HR(IDirect3DDevice9_BeginScene(device_swvp), D3D_OK);
+            CHECK_HR(IDirect3DDevice9_SetRenderState(device_swvp,
+                    D3DRS_LIGHTING, FALSE), D3D_OK);
+            CHECK_HR(IDirect3DDevice9_SetVertexShader(device_swvp, NULL),
+                    D3D_OK);
+            for (i = 0; i < 4; ++i)
+            {
+                CHECK_HR(IDirect3DDevice9_SetTransform(device_swvp,
+                        D3DTS_WORLDMATRIX(i), &world), D3D_OK);
+            }
+            CHECK_HR(IDirect3DDevice9_SetRenderState(device_swvp,
+                    D3DRS_VERTEXBLEND, D3DVBF_3WEIGHTS), D3D_OK);
+            CHECK_HR(IDirect3DDevice9_SetVertexDeclaration(device_swvp,
+                    split_blendweight_vertex_decl), D3D_OK);
+            CHECK_HR(IDirect3DDevice9_SetStreamSource(device_swvp, 0,
+                    vertex_buffer, 0, sizeof(tri[0])), D3D_OK);
+            CHECK_HR(IDirect3DDevice9_SetStreamSource(device_swvp, 1,
+                    split_blendweight_stream_buffer, 0,
+                    sizeof(split_blendweights[0])), D3D_OK);
+            CHECK_HR(IDirect3DDevice9_Clear(device_swvp, 0, NULL,
+                    D3DCLEAR_TARGET, 0xff000000u, 1.0f, 0), D3D_OK);
+            CHECK_HR(IDirect3DDevice9_DrawPrimitive(device_swvp,
+                    D3DPT_TRIANGLELIST, 0, 1), D3D_OK);
+            CHECK_HR(IDirect3DDevice9_SetRenderState(device_swvp,
+                    D3DRS_VERTEXBLEND, D3DVBF_DISABLE), D3D_OK);
+            CHECK_HR(IDirect3DDevice9_SetStreamSource(device_swvp, 1,
+                    NULL, 0, 0), D3D_OK);
+            CHECK_HR(IDirect3DDevice9_SetStreamSource(device_swvp, 0,
+                    NULL, 0, 0), D3D_OK);
+            CHECK_HR(IDirect3DDevice9_SetFVF(device_swvp,
+                    D3DFVF_XYZ | D3DFVF_NORMAL), D3D_OK);
+            CHECK_HR(IDirect3DDevice9_EndScene(device_swvp), D3D_OK);
+            CHECK_HR(IDirect3DDevice9_GetRenderTargetData(device_swvp,
+                    render_target, readback), D3D_OK);
+            memset(&locked_rect, 0, sizeof(locked_rect));
+            hr = IDirect3DSurface9_LockRect(readback, &locked_rect, NULL,
+                    D3DLOCK_READONLY);
+            CHECK_HR(hr, D3D_OK);
+            if (SUCCEEDED(hr))
+            {
+                const BYTE *row = (const BYTE *)locked_rect.pBits
+                        + 18 * locked_rect.Pitch;
+                memcpy(&probe_pixel, row + 14 * sizeof(probe_pixel),
+                        sizeof(probe_pixel));
+                CHECK_TRUE((probe_pixel & 0x00ffffffu) != 0);
+                CHECK_HR(IDirect3DSurface9_UnlockRect(readback), D3D_OK);
+            }
+        }
+        if (render_target && readback && split_blendindices_vertex_decl
+                && vertex_buffer && split_blendindices_stream_buffer
+                && index_buffer)
+        {
+            CHECK_HR(IDirect3DDevice9_BeginScene(device_swvp), D3D_OK);
+            CHECK_HR(IDirect3DDevice9_SetRenderState(device_swvp,
+                    D3DRS_LIGHTING, FALSE), D3D_OK);
+            CHECK_HR(IDirect3DDevice9_SetVertexShader(device_swvp, NULL),
+                    D3D_OK);
+            for (i = 0; i < 4; ++i)
+            {
+                CHECK_HR(IDirect3DDevice9_SetTransform(device_swvp,
+                        D3DTS_WORLDMATRIX(i), &world), D3D_OK);
+            }
+            CHECK_HR(IDirect3DDevice9_SetRenderState(device_swvp,
+                    D3DRS_VERTEXBLEND, D3DVBF_3WEIGHTS), D3D_OK);
+            CHECK_HR(IDirect3DDevice9_SetRenderState(device_swvp,
+                    D3DRS_INDEXEDVERTEXBLENDENABLE, TRUE), D3D_OK);
+            CHECK_HR(IDirect3DDevice9_SetVertexDeclaration(device_swvp,
+                    split_blendindices_vertex_decl), D3D_OK);
+            CHECK_HR(IDirect3DDevice9_SetStreamSource(device_swvp, 0,
+                    vertex_buffer, 0, sizeof(tri[0])), D3D_OK);
+            CHECK_HR(IDirect3DDevice9_SetStreamSource(device_swvp, 1,
+                    split_blendindices_stream_buffer, 0,
+                    sizeof(split_blendindices[0])), D3D_OK);
+            CHECK_HR(IDirect3DDevice9_SetIndices(device_swvp, index_buffer),
+                    D3D_OK);
+            CHECK_HR(IDirect3DDevice9_Clear(device_swvp, 0, NULL,
+                    D3DCLEAR_TARGET, 0xff000000u, 1.0f, 0), D3D_OK);
+            CHECK_HR(IDirect3DDevice9_DrawIndexedPrimitive(device_swvp,
+                    D3DPT_TRIANGLELIST, 0, 0, ARRAY_SIZE(tri), 0, 1),
+                    D3D_OK);
+            CHECK_HR(IDirect3DDevice9_SetIndices(device_swvp, NULL), D3D_OK);
+            CHECK_HR(IDirect3DDevice9_SetRenderState(device_swvp,
+                    D3DRS_INDEXEDVERTEXBLENDENABLE, FALSE), D3D_OK);
+            CHECK_HR(IDirect3DDevice9_SetRenderState(device_swvp,
+                    D3DRS_VERTEXBLEND, D3DVBF_DISABLE), D3D_OK);
+            CHECK_HR(IDirect3DDevice9_SetStreamSource(device_swvp, 1,
+                    NULL, 0, 0), D3D_OK);
             CHECK_HR(IDirect3DDevice9_SetStreamSource(device_swvp, 0,
                     NULL, 0, 0), D3D_OK);
             CHECK_HR(IDirect3DDevice9_SetFVF(device_swvp,
@@ -8343,6 +8534,10 @@ void test_visual_mvp_software_vp_policy(const struct d3d9_api *api)
             IDirect3DVertexBuffer9_Release(strip_vertex_buffer);
         if (padded_vertex_buffer)
             IDirect3DVertexBuffer9_Release(padded_vertex_buffer);
+        if (split_blendindices_stream_buffer)
+            IDirect3DVertexBuffer9_Release(split_blendindices_stream_buffer);
+        if (split_blendweight_stream_buffer)
+            IDirect3DVertexBuffer9_Release(split_blendweight_stream_buffer);
         if (blendindices_vertex_buffer)
             IDirect3DVertexBuffer9_Release(blendindices_vertex_buffer);
         if (blendweight_vertex_buffer)
@@ -8355,6 +8550,10 @@ void test_visual_mvp_software_vp_policy(const struct d3d9_api *api)
             IDirect3DVertexDeclaration9_Release(tangent_vertex_decl);
         if (split_vertex_decl)
             IDirect3DVertexDeclaration9_Release(split_vertex_decl);
+        if (split_blendindices_vertex_decl)
+            IDirect3DVertexDeclaration9_Release(split_blendindices_vertex_decl);
+        if (split_blendweight_vertex_decl)
+            IDirect3DVertexDeclaration9_Release(split_blendweight_vertex_decl);
         if (blendindices_vertex_decl)
             IDirect3DVertexDeclaration9_Release(blendindices_vertex_decl);
         if (blendweight_vertex_decl)
