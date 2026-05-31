@@ -18,6 +18,7 @@
 
 #include <array>
 #include <cstdint>
+#include <limits>
 #include <optional>
 #include <span>
 #include <string>
@@ -343,7 +344,11 @@ bool encodeDraw(EncodeContext& ctx,
                  // the currently open Metal render encoder state and unchanged
                  // setTexture/setSampler calls are skipped. Callers must reset
                  // it whenever a render encoder boundary is crossed.
-                 TextureSamplerBindShadow* textureSamplerShadow = nullptr);
+                 TextureSamplerBindShadow* textureSamplerShadow = nullptr,
+                 // Chunk-local command index used only for stale handle
+                 // provenance logs. Direct encodeDraw callers can leave it
+                 // invalid.
+                 std::uint32_t commandIndex = std::numeric_limits<std::uint32_t>::max());
 
 // Encode a single chunk's commands into a fresh WMT::CommandBuffer.
 // Returns a QueueSubmissionRecord that the finish loop commits; nullopt

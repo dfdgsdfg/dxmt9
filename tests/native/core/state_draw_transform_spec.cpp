@@ -178,10 +178,10 @@ void testChunkSlotU32GuardBoundaries() {
   check(!detail::chunkSlotCanAppendCommandPayload(0, u32Max),
         "slot command payload guard rejects payload append past u32 range");
 
-  u32 payloadIndex = 0;
+  CommandPayloadIndex payloadIndex{};
   check(detail::chunkSlotTryMakeCommandPayloadIndex(3, 7, payloadIndex),
         "slot command payload helper accepts in-range payload index");
-  checkEq(payloadIndex, 7u,
+  checkEq(payloadIndex.value, 7u,
           "slot command payload helper casts payload index after validating range");
 
   if constexpr (sizeof(std::size_t) > sizeof(u32)) {
@@ -263,7 +263,7 @@ void testChunkSlotSimpleCommandSoAViews() {
           "slot simple command append stores one depth-resolve payload");
 
   for (const auto& header : slot.commandHeaders) {
-    checkEq(header.payloadIndex, 0u,
+    checkEq(header.payloadIndex.value, 0u,
             "slot simple command header stores a u32 payload index");
   }
 
@@ -327,6 +327,23 @@ void testChunkSlotSimpleCommandSoAViews() {
   check(slot.commandsEmpty(), "slot clearCommands removes command headers");
   check(!slot.lastUniformHandle.valid(),
         "slot clearCommands resets recent uniform handle");
+}
+
+void testChunkSlotPrefetchSealLifecycle() {
+  ChunkSlot slot{};
+  slot.appendClear(ClearDesc{});
+  check(!slot.prefetchedPipelinesSealed(),
+        "slot starts unsealed while commands are being recorded");
+
+  slot.sealPrefetchedPipelines();
+  check(slot.prefetchedPipelinesSealed(),
+        "slot records that prefetch-time pipeline patching is sealed");
+
+  slot.clearCommands();
+  check(!slot.prefetchedPipelinesSealed(),
+        "slot clearCommands reopens mutation for the next writer");
+  check(slot.commandsEmpty(),
+        "slot clearCommands still clears the command stream after seal");
 }
 
 void testBlitReadbackPresentCommandViewPayloadCopies() {
@@ -2467,6 +2484,7 @@ void testReszDepthResolveSentinelClassification() {
 int main() {
   testChunkSlotU32GuardBoundaries();
   testChunkSlotSimpleCommandSoAViews();
+  testChunkSlotPrefetchSealLifecycle();
   testBlitReadbackPresentCommandViewPayloadCopies();
   testChunkSlotDirectDrawRunUniformLookup();
   testStateValueTableDirtyHashContract();

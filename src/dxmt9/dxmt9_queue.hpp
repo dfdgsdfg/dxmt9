@@ -174,6 +174,9 @@ struct QueueSubmissionRecord {
     u32 startIndex = 0;
     u32 endIndex = 0;
     RenderEncoderGpuPassType passType = RenderEncoderGpuPassType::Unknown;
+    u64 seqId = 0;
+    u32 slotIndex = 0;
+    u32 commandIndex = 0;
     u64 rtHandle = 0;
     u64 depthHandle = 0;
     u64 psoHandle = 0;

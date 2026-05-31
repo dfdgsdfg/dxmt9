@@ -24,6 +24,49 @@ enum class MetalCommandKind : std::uint8_t {
   Present,
 };
 
+namespace detail {
+
+template <typename Tag>
+struct ChunkSoaIndex {
+  std::uint32_t value = 0;
+
+  static constexpr ChunkSoaIndex fromU32(std::uint32_t index) noexcept {
+    return ChunkSoaIndex{index};
+  }
+
+  friend constexpr bool operator==(const ChunkSoaIndex&, const ChunkSoaIndex&) = default;
+  friend constexpr bool operator==(ChunkSoaIndex lhs, std::uint32_t rhs) noexcept {
+    return lhs.value == rhs;
+  }
+  friend constexpr bool operator==(std::uint32_t lhs, ChunkSoaIndex rhs) noexcept {
+    return lhs == rhs.value;
+  }
+};
+
+}  // namespace detail
+
+struct CommandPayloadIndexTag;
+struct DrawRunRecordIndexTag;
+struct ClearRecordIndexTag;
+struct SurfaceCopyRecordIndexTag;
+struct StretchRectRecordIndexTag;
+struct ReadbackRecordIndexTag;
+struct ColorFillRecordIndexTag;
+struct DepthResolveRecordIndexTag;
+struct PresentRecordIndexTag;
+
+using CommandPayloadIndex = detail::ChunkSoaIndex<CommandPayloadIndexTag>;
+using DrawRunRecordIndex = detail::ChunkSoaIndex<DrawRunRecordIndexTag>;
+using ClearRecordIndex = detail::ChunkSoaIndex<ClearRecordIndexTag>;
+using SurfaceCopyRecordIndex = detail::ChunkSoaIndex<SurfaceCopyRecordIndexTag>;
+using StretchRectRecordIndex = detail::ChunkSoaIndex<StretchRectRecordIndexTag>;
+using ReadbackRecordIndex = detail::ChunkSoaIndex<ReadbackRecordIndexTag>;
+using ColorFillRecordIndex = detail::ChunkSoaIndex<ColorFillRecordIndexTag>;
+using DepthResolveRecordIndex = detail::ChunkSoaIndex<DepthResolveRecordIndexTag>;
+using PresentRecordIndex = detail::ChunkSoaIndex<PresentRecordIndexTag>;
+static_assert(sizeof(CommandPayloadIndex) == sizeof(std::uint32_t));
+static_assert(sizeof(DrawRunRecordIndex) == sizeof(std::uint32_t));
+
 struct PresentCommandRecord {
   SwapDesc present{};
   Handle presentSource{};
@@ -81,7 +124,7 @@ struct DrawUniformPayloadRecord {
 
 struct MetalCommandHeader {
   MetalCommandKind kind = MetalCommandKind::DrawRun;
-  std::uint32_t payloadIndex = 0;
+  CommandPayloadIndex payloadIndex{};
 };
 
 struct MetalCommandView {
@@ -141,7 +184,7 @@ inline constexpr bool chunkSlotCanAppendCommandPayload(std::size_t commandHeader
 
 inline bool chunkSlotTryMakeCommandPayloadIndex(std::size_t commandHeaderCount,
                                                 std::size_t payloadRecordCount,
-                                                std::uint32_t& payloadIndex) noexcept {
+                                                CommandPayloadIndex& payloadIndex) noexcept {
   const bool canAppend = chunkSlotCanAppendCommandPayload(commandHeaderCount,
                                                          payloadRecordCount);
   DXMT_ASSERT(canAppend && "command payload SoA storage exceeded 32-bit range storage");
@@ -149,8 +192,20 @@ inline bool chunkSlotTryMakeCommandPayloadIndex(std::size_t commandHeaderCount,
     return false;
   }
 
-  payloadIndex = static_cast<std::uint32_t>(payloadRecordCount);
+  payloadIndex = CommandPayloadIndex::fromU32(
+      static_cast<std::uint32_t>(payloadRecordCount));
   return true;
+}
+
+template <typename Index>
+inline constexpr Index chunkSlotPayloadIndex(CommandPayloadIndex index) noexcept {
+  return Index::fromU32(index.value);
+}
+
+template <typename Index, typename Record>
+inline bool chunkSlotIndexInRange(Index index,
+                                  const std::vector<Record>& records) noexcept {
+  return index.value < records.size();
 }
 
 inline DrawParamPayloadView chunkSlotPayloadAt(std::span<const DrawParamPayloadView> payloads,
@@ -210,6 +265,7 @@ struct ChunkSlot {
 
   State state = State::Free;
   u64 seqId = 0;
+  bool pipelinePrefetchSealed = false;
 
   // Data-oriented execution storage. The replay loop walks commandHeaders
   // linearly and indexes into type-specific payload arrays. This avoids the
@@ -258,6 +314,7 @@ struct ChunkSlot {
   }
 
   void clearCommands() {
+    pipelinePrefetchSealed = false;
     commandHeaders.clear();
     drawHotStates.clear();
     drawShaderLayouts.clear();
@@ -282,7 +339,11 @@ struct ChunkSlot {
 
   template <typename Record>
   void appendCommandRecord(MetalCommandKind kind, std::vector<Record>& records, Record record) {
-    std::uint32_t payloadIndex = 0;
+    DXMT_ASSERT(!pipelinePrefetchSealed && "cannot append commands after slot prefetch seal");
+    if (pipelinePrefetchSealed) {
+      return;
+    }
+    CommandPayloadIndex payloadIndex{};
     if (!detail::chunkSlotTryMakeCommandPayloadIndex(commandHeaders.size(), records.size(),
                                                      payloadIndex)) {
       return;
@@ -290,6 +351,14 @@ struct ChunkSlot {
 
     commandHeaders.push_back({kind, payloadIndex});
     records.push_back(std::move(record));
+  }
+
+  bool prefetchedPipelinesSealed() const noexcept {
+    return pipelinePrefetchSealed;
+  }
+
+  void sealPrefetchedPipelines() noexcept {
+    pipelinePrefetchSealed = true;
   }
 
   const DrawUniformPayloadRecord* drawUniformPayloadRecord(DrawUniformHandle handle) const noexcept {
@@ -517,10 +586,14 @@ struct ChunkSlot {
     if (draws.empty()) {
       return;
     }
+    DXMT_ASSERT(!pipelinePrefetchSealed && "cannot append draw-runs after slot prefetch seal");
+    if (pipelinePrefetchSealed) {
+      return;
+    }
 
     DrawUniformHandle uniformHandle = findDrawUniformPayload(uniformPayload, uniformHandleCandidate);
     const bool needsUniformAppend = !uniformHandle.valid();
-    std::uint32_t drawRunRecordIndex = 0;
+    CommandPayloadIndex drawRunRecordIndex{};
     if (!detail::chunkSlotTryMakeCommandPayloadIndex(commandHeaders.size(), drawRunRecords.size(),
                                                      drawRunRecordIndex)) {
       return;
@@ -615,30 +688,42 @@ struct ChunkSlot {
   void setDrawRunPsoHandles(std::size_t commandIndex,
                             PsoHandle renderPsoHandle,
                             PsoHandle tilePsoHandle = {}) {
+    DXMT_ASSERT(!pipelinePrefetchSealed && "cannot patch draw-run PSO handles after slot prefetch seal");
+    if (pipelinePrefetchSealed) {
+      return;
+    }
     if (commandIndex >= commandHeaders.size()) {
       return;
     }
     const auto& header = commandHeaders[commandIndex];
+    const auto payloadIndex =
+        detail::chunkSlotPayloadIndex<DrawRunRecordIndex>(header.payloadIndex);
     if (header.kind != MetalCommandKind::DrawRun ||
-        header.payloadIndex >= drawRunRecords.size()) {
+        !detail::chunkSlotIndexInRange(payloadIndex, drawRunRecords)) {
       return;
     }
-    auto& record = drawRunRecords[header.payloadIndex];
+    auto& record = drawRunRecords[payloadIndex.value];
     record.renderPsoHandle = renderPsoHandle;
     record.tilePsoHandle = tilePsoHandle;
   }
 
   void setDrawRunDepthStencilHandle(std::size_t commandIndex,
                                     DepthStencilHandle depthStencilHandle) {
+    DXMT_ASSERT(!pipelinePrefetchSealed && "cannot patch draw-run depth/stencil handle after slot prefetch seal");
+    if (pipelinePrefetchSealed) {
+      return;
+    }
     if (commandIndex >= commandHeaders.size()) {
       return;
     }
     const auto& header = commandHeaders[commandIndex];
+    const auto payloadIndex =
+        detail::chunkSlotPayloadIndex<DrawRunRecordIndex>(header.payloadIndex);
     if (header.kind != MetalCommandKind::DrawRun ||
-        header.payloadIndex >= drawRunRecords.size()) {
+        !detail::chunkSlotIndexInRange(payloadIndex, drawRunRecords)) {
       return;
     }
-    auto& record = drawRunRecords[header.payloadIndex];
+    auto& record = drawRunRecords[payloadIndex.value];
     record.depthStencilHandle = depthStencilHandle;
   }
 
@@ -678,33 +763,53 @@ struct ChunkSlot {
       return {};
     }
     const auto& header = commandHeaders[index];
-    const std::size_t payloadIndex = header.payloadIndex;
     MetalCommandView view{.kind = header.kind};
     switch (header.kind) {
     case MetalCommandKind::DrawRun:
       view = drawRunCommandAt(index);
       break;
-    case MetalCommandKind::Clear:
-      if (payloadIndex < clearRecords.size()) view.clear = &clearRecords[payloadIndex];
+    case MetalCommandKind::Clear: {
+      const auto payloadIndex =
+          detail::chunkSlotPayloadIndex<ClearRecordIndex>(header.payloadIndex);
+      if (detail::chunkSlotIndexInRange(payloadIndex, clearRecords)) view.clear = &clearRecords[payloadIndex.value];
       break;
-    case MetalCommandKind::SurfaceCopy:
-      if (payloadIndex < surfaceCopyRecords.size()) view.surfaceCopy = &surfaceCopyRecords[payloadIndex];
+    }
+    case MetalCommandKind::SurfaceCopy: {
+      const auto payloadIndex =
+          detail::chunkSlotPayloadIndex<SurfaceCopyRecordIndex>(header.payloadIndex);
+      if (detail::chunkSlotIndexInRange(payloadIndex, surfaceCopyRecords)) view.surfaceCopy = &surfaceCopyRecords[payloadIndex.value];
       break;
-    case MetalCommandKind::StretchRect:
-      if (payloadIndex < stretchRectRecords.size()) view.stretchRect = &stretchRectRecords[payloadIndex];
+    }
+    case MetalCommandKind::StretchRect: {
+      const auto payloadIndex =
+          detail::chunkSlotPayloadIndex<StretchRectRecordIndex>(header.payloadIndex);
+      if (detail::chunkSlotIndexInRange(payloadIndex, stretchRectRecords)) view.stretchRect = &stretchRectRecords[payloadIndex.value];
       break;
-    case MetalCommandKind::Readback:
-      if (payloadIndex < readbackRecords.size()) view.readback = &readbackRecords[payloadIndex];
+    }
+    case MetalCommandKind::Readback: {
+      const auto payloadIndex =
+          detail::chunkSlotPayloadIndex<ReadbackRecordIndex>(header.payloadIndex);
+      if (detail::chunkSlotIndexInRange(payloadIndex, readbackRecords)) view.readback = &readbackRecords[payloadIndex.value];
       break;
-    case MetalCommandKind::ColorFill:
-      if (payloadIndex < colorFillRecords.size()) view.colorFill = &colorFillRecords[payloadIndex];
+    }
+    case MetalCommandKind::ColorFill: {
+      const auto payloadIndex =
+          detail::chunkSlotPayloadIndex<ColorFillRecordIndex>(header.payloadIndex);
+      if (detail::chunkSlotIndexInRange(payloadIndex, colorFillRecords)) view.colorFill = &colorFillRecords[payloadIndex.value];
       break;
-    case MetalCommandKind::DepthResolve:
-      if (payloadIndex < depthResolveRecords.size()) view.depthResolve = &depthResolveRecords[payloadIndex];
+    }
+    case MetalCommandKind::DepthResolve: {
+      const auto payloadIndex =
+          detail::chunkSlotPayloadIndex<DepthResolveRecordIndex>(header.payloadIndex);
+      if (detail::chunkSlotIndexInRange(payloadIndex, depthResolveRecords)) view.depthResolve = &depthResolveRecords[payloadIndex.value];
       break;
-    case MetalCommandKind::Present:
-      if (payloadIndex < presentRecords.size()) view.present = &presentRecords[payloadIndex];
+    }
+    case MetalCommandKind::Present: {
+      const auto payloadIndex =
+          detail::chunkSlotPayloadIndex<PresentRecordIndex>(header.payloadIndex);
+      if (detail::chunkSlotIndexInRange(payloadIndex, presentRecords)) view.present = &presentRecords[payloadIndex.value];
       break;
+    }
     }
     return view;
   }
@@ -718,16 +823,17 @@ struct ChunkSlot {
     if (header.kind != MetalCommandKind::DrawRun) {
       return view;
     }
-    const std::size_t payloadIndex = header.payloadIndex;
-    if (payloadIndex >= drawRunRecords.size()) {
+    const auto payloadIndex =
+        detail::chunkSlotPayloadIndex<DrawRunRecordIndex>(header.payloadIndex);
+    if (!detail::chunkSlotIndexInRange(payloadIndex, drawRunRecords)) {
       return view;
     }
 
-    const auto& record = drawRunRecords[payloadIndex];
+    const auto& record = drawRunRecords[payloadIndex.value];
     view.drawRunRecord = &record;
     view.drawRunInvariant = &record.invariant;
-    if (payloadIndex < drawPsoSubviews.size()) {
-      view.drawPsoSubview = &drawPsoSubviews[payloadIndex];
+    if (payloadIndex.value < drawPsoSubviews.size()) {
+      view.drawPsoSubview = &drawPsoSubviews[payloadIndex.value];
     }
     if (record.payloadSize > 0 &&
         record.payloadOffset <= drawPayloadArena.size() &&

@@ -309,7 +309,10 @@ encoders::EncodeContext CommandQueue::makeEncodeContext() {
 }
 
 void CommandQueue::prefetchSlotPipelines(core::ChunkSlot& slot) {
+  DXMT_ASSERT(!slot.prefetchedPipelinesSealed() &&
+              "prefetchSlotPipelines called after slot prefetch seal");
   if (!device_) {
+    slot.sealPrefetchedPipelines();
     return;
   }
   for (std::size_t i = 0; i < slot.commandCount(); ++i) {
@@ -358,6 +361,7 @@ void CommandQueue::prefetchSlotPipelines(core::ChunkSlot& slot) {
         argbufResourceArray);
     slot.setDrawRunPsoHandles(i, lookup.handle);
   }
+  slot.sealPrefetchedPipelines();
 }
 
 uniform::DirtyState CommandQueue::consumePendingDirty() {

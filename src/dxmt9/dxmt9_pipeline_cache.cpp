@@ -97,6 +97,60 @@ makeReadyPipelineFuture(WMT::Reference<WMT::RenderPipelineState> value = {}) {
   return promise.get_future().share();
 }
 
+const char* lookupRole(HandleLookupContext context) noexcept {
+  return context.role ? context.role : "unknown";
+}
+
+void logStaleDrawHandle(core::PsoHandle handle,
+                        HandleLookupContext context,
+                        const char* reason,
+                        std::size_t snapshotSize,
+                        const PsoSlot* slot = nullptr) {
+  static std::atomic<std::uint64_t> logged{0};
+  if (!handle.valid() || logged.fetch_add(1, std::memory_order_relaxed) >= 32u) {
+    return;
+  }
+  const u32 actualGeneration = slot ? slot->generation : 0u;
+  const u64 keyHash = slot && slot->occupied ? slot->key.hash : 0u;
+  util::logf(util::LogLevel::Warn, "dxmt9-pipeline-cache",
+             "stale draw PSO handle role=%s reason=%s chunk=%llu command=%u "
+             "slot=%u generation=%u actual_generation=%u snapshot_size=%zu key_hash=0x%llx",
+             lookupRole(context), reason,
+             static_cast<unsigned long long>(context.chunkSeqId),
+             static_cast<unsigned>(context.commandIndex),
+             static_cast<unsigned>(handle.slot),
+             static_cast<unsigned>(handle.generation),
+             static_cast<unsigned>(actualGeneration),
+             snapshotSize,
+             static_cast<unsigned long long>(keyHash));
+}
+
+void logStaleDepthHandle(core::DepthStencilHandle handle,
+                         HandleLookupContext context,
+                         const char* reason,
+                         std::size_t snapshotSize,
+                         const DepthStencilSlot* slot = nullptr) {
+  static std::atomic<std::uint64_t> logged{0};
+  if (!handle.valid() || logged.fetch_add(1, std::memory_order_relaxed) >= 32u) {
+    return;
+  }
+  const u32 actualGeneration = slot ? slot->generation : 0u;
+  const u64 keyHash = slot && slot->occupied
+      ? static_cast<u64>(DepthStencilKeyHash{}(slot->key))
+      : 0u;
+  util::logf(util::LogLevel::Warn, "dxmt9-pipeline-cache",
+             "stale depth/stencil handle role=%s reason=%s chunk=%llu command=%u "
+             "slot=%u generation=%u actual_generation=%u snapshot_size=%zu key_hash=0x%llx",
+             lookupRole(context), reason,
+             static_cast<unsigned long long>(context.chunkSeqId),
+             static_cast<unsigned>(context.commandIndex),
+             static_cast<unsigned>(handle.slot),
+             static_cast<unsigned>(handle.generation),
+             static_cast<unsigned>(actualGeneration),
+             snapshotSize,
+             static_cast<unsigned long long>(keyHash));
+}
+
 core::PsoHandle internDrawHandleLocked(Cache& cache,
                                        const ShaderVariantKey& key,
                                        const Entry& entry) {
@@ -562,14 +616,26 @@ DepthStencilLookup Cache::depthStencilStateHandleFor(WMT::Device& device,
 }
 
 WMT::Reference<WMT::DepthStencilState>
-Cache::depthStencilStateForHandle(core::DepthStencilHandle handle) {
+Cache::depthStencilStateForHandle(core::DepthStencilHandle handle,
+                                  HandleLookupContext context) {
   auto snapshot = std::atomic_load_explicit(&depthSlotSnapshot,
                                             std::memory_order_acquire);
-  if (!snapshot || !handle.valid() || handle.slot >= snapshot->size()) {
+  if (!handle.valid()) {
+    return {};
+  }
+  if (!snapshot) {
+    logStaleDepthHandle(handle, context, "no-snapshot", 0u);
+    return {};
+  }
+  if (handle.slot >= snapshot->size()) {
+    logStaleDepthHandle(handle, context, "slot-out-of-range", snapshot->size());
     return {};
   }
   const auto& slot = (*snapshot)[handle.slot];
   if (!slot.occupied || slot.generation != handle.generation) {
+    logStaleDepthHandle(handle, context,
+                        slot.occupied ? "generation-mismatch" : "empty-slot",
+                        snapshot->size(), &slot);
     return {};
   }
   return slot.state;
@@ -905,14 +971,26 @@ Cache::getOrBuildDrawPipelineHandle(WMT::Reference<WMT::Device> device,
 }
 
 std::shared_future<WMT::Reference<WMT::RenderPipelineState>>
-Cache::drawPipelineForHandle(core::PsoHandle handle) {
+Cache::drawPipelineForHandle(core::PsoHandle handle,
+                             HandleLookupContext context) {
   auto snapshot = std::atomic_load_explicit(&drawSlotSnapshot,
                                             std::memory_order_acquire);
-  if (!snapshot || !handle.valid() || handle.slot >= snapshot->size()) {
+  if (!handle.valid()) {
+    return makeReadyPipelineFuture();
+  }
+  if (!snapshot) {
+    logStaleDrawHandle(handle, context, "no-snapshot", 0u);
+    return makeReadyPipelineFuture();
+  }
+  if (handle.slot >= snapshot->size()) {
+    logStaleDrawHandle(handle, context, "slot-out-of-range", snapshot->size());
     return makeReadyPipelineFuture();
   }
   const auto& slot = (*snapshot)[handle.slot];
   if (!slot.occupied || slot.generation != handle.generation) {
+    logStaleDrawHandle(handle, context,
+                       slot.occupied ? "generation-mismatch" : "empty-slot",
+                       snapshot->size(), &slot);
     return makeReadyPipelineFuture();
   }
   perf::countPipelineCacheHit(perf::PipelineKind::Draw);

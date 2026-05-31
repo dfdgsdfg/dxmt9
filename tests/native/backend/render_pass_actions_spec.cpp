@@ -45,6 +45,7 @@ namespace {
 using dxmt9::core::ChunkSlot;
 using dxmt9::core::ClearDesc;
 using dxmt9::core::ColorFillDesc;
+using dxmt9::core::CommandPayloadIndex;
 using dxmt9::core::DrawRunCommandRecord;
 using dxmt9::core::DrawDebugSnapshot;
 using dxmt9::core::DrawShaderLayoutContext;
@@ -103,7 +104,7 @@ void appendDrawRunWithDepth(ChunkSlot& slot, Handle depthHandle) {
   });
   slot.commandHeaders.push_back(MetalCommandHeader{
       .kind = MetalCommandKind::DrawRun,
-      .payloadIndex = recordIndex,
+      .payloadIndex = CommandPayloadIndex::fromU32(recordIndex),
   });
 }
 
@@ -349,7 +350,7 @@ void testDepthShadowMapSampleForcesStore() {
   });
   slot.commandHeaders.push_back(MetalCommandHeader{
       .kind = MetalCommandKind::DrawRun,
-      .payloadIndex = recordIndex,
+      .payloadIndex = CommandPayloadIndex::fromU32(recordIndex),
   });
   appendClearOnDepth(slot, depth);  // would otherwise allow DontCare
   check(!dxmt9::encoders::nextDepthOperationIsClear(slot, 0u, depth),
@@ -381,7 +382,7 @@ void testDepthShadowMapSampleForcesStore() {
   });
   maskedSlot.commandHeaders.push_back(MetalCommandHeader{
       .kind = MetalCommandKind::DrawRun,
-      .payloadIndex = staleRecordIndex,
+      .payloadIndex = CommandPayloadIndex::fromU32(staleRecordIndex),
   });
   appendClearOnDepth(maskedSlot, depth);
   check(dxmt9::encoders::nextDepthOperationIsClear(maskedSlot, 0u, depth),
@@ -658,7 +659,7 @@ void testDepthShadowMapBit3() {
   });
   slot.commandHeaders.push_back(MetalCommandHeader{
       .kind = MetalCommandKind::DrawRun,
-      .payloadIndex = recordIndex,
+      .payloadIndex = CommandPayloadIndex::fromU32(recordIndex),
   });
   appendClearOnDepth(slot, depth);  // would otherwise allow DontCare
   check(!dxmt9::encoders::nextDepthOperationIsClear(slot, 0u, depth),
@@ -690,7 +691,7 @@ void testDepthShadowMapBit3() {
   });
   maskedSlot.commandHeaders.push_back(MetalCommandHeader{
       .kind = MetalCommandKind::DrawRun,
-      .payloadIndex = staleRecordIndex,
+      .payloadIndex = CommandPayloadIndex::fromU32(staleRecordIndex),
   });
   appendClearOnDepth(maskedSlot, depth);
   check(dxmt9::encoders::nextDepthOperationIsClear(maskedSlot, 0u, depth),

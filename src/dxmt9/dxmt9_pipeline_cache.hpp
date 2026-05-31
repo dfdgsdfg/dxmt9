@@ -18,6 +18,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <future>
+#include <limits>
 #include <memory>
 #include <mutex>
 #include <optional>
@@ -262,6 +263,12 @@ struct DepthStencilLookup {
   core::DepthStencilHandle handle{};
 };
 
+struct HandleLookupContext {
+  u64 chunkSeqId = 0;
+  u32 commandIndex = std::numeric_limits<u32>::max();
+  const char* role = nullptr;
+};
+
 using PipelineMap = std::unordered_map<ShaderVariantKey, Entry, ShaderVariantKeyHash>;
 using DrawProbeMap = std::unordered_map<ShaderVariantKey, ShaderVariantKey, ShaderVariantKeyHash>;
 using DrawHandleMap = std::unordered_map<ShaderVariantKey, core::PsoHandle, ShaderVariantKeyHash>;
@@ -289,7 +296,8 @@ class Cache {
   DepthStencilLookup depthStencilStateHandleFor(WMT::Device& device,
                                                 const DepthStencilKey& key);
   WMT::Reference<WMT::DepthStencilState>
-  depthStencilStateForHandle(core::DepthStencilHandle handle);
+  depthStencilStateForHandle(core::DepthStencilHandle handle,
+                             HandleLookupContext context = {});
 
   // Immutable Metal sampler states are cached by the full D3D9 sampler state
   // set plus LOD clamp and the argument-buffer support bit. Returning a
@@ -403,7 +411,8 @@ class Cache {
                                                    const std::string* archivePath);
 
   std::shared_future<WMT::Reference<WMT::RenderPipelineState>>
-  drawPipelineForHandle(core::PsoHandle handle);
+  drawPipelineForHandle(core::PsoHandle handle,
+                        HandleLookupContext context = {});
 
   std::mutex mutex{};
   PipelineMap draw{};
