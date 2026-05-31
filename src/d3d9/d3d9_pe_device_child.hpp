@@ -40,6 +40,7 @@ struct D3D9PeRecorderFlush {
   virtual void ReleaseDefaultPoolResourceRefForChild() = 0;
   virtual bool IsChunkRecorderEnabledForChild() const = 0;
   virtual HRESULT AppendRecordForChild(const void *data, size_t bytes) = 0;
+  virtual HRESULT FlushPeRecorderForBufferHazardForChild(D9CBuffer *buffer) = 0;
 
   // PE-shadow stateblock support. Captures the device's current transform /
   // shader-constant / vdecl shadow into `out`, AddRef'ing any held COM

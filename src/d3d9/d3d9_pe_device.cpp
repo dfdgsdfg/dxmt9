@@ -6274,6 +6274,18 @@ public:
     HRESULT FlushPeRecorderForChild() noexcept override {
         return flushPeRecorder(PeRecorderFlushReason::Child);
     }
+    HRESULT FlushPeRecorderForBufferHazardForChild(D9CBuffer *buffer) noexcept override {
+        if (!buffer) {
+            return S_OK;
+        }
+        std::lock_guard<std::recursive_mutex> recorderLock(recorderMutex_);
+        const auto wire = static_cast<std::uint64_t>(
+            reinterpret_cast<std::uintptr_t>(buffer));
+        if (!commandChunk_.referencesWireHandle(D9C_CHUNK_HANDLE_KIND_BUFFER, wire)) {
+            return S_OK;
+        }
+        return flushPeRecorder(PeRecorderFlushReason::Child);
+    }
     bool IsStateBlockRecordingForChild() const noexcept override {
         return stateBlockRecording_;
     }

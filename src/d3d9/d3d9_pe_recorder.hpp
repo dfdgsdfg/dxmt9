@@ -303,6 +303,19 @@ public:
         return chunk_.retainer;
     }
 
+    bool referencesWireHandle(std::uint32_t kind,
+                              std::uint64_t handle) const noexcept {
+        if (handle == 0) {
+            return false;
+        }
+        for (const auto& entry : chunk_.handleArena) {
+            if (entry.kind == kind && entry.opaqueHandle == handle) {
+                return true;
+            }
+        }
+        return false;
+    }
+
     bool shouldFlushBeforeAppend(std::size_t bytes,
                                  std::uint32_t maxRecords,
                                  std::size_t maxBytes) const noexcept {
