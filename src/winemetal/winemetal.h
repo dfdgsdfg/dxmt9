@@ -719,14 +719,23 @@ struct WMTStencilAttachmentInfo {
   uint8_t clear_stencil;
 };
 
+struct WMTSampleBufferAttachmentInfo {
+  obj_handle_t sample_buffer;
+  uint64_t start_of_encoder_sample_index;
+  uint64_t end_of_encoder_sample_index;
+};
+
 struct WMTRenderPassInfo {
   struct WMTColorAttachmentInfo colors[8];
   struct WMTDepthAttachmentInfo depth;
   struct WMTStencilAttachmentInfo stencil;
+  struct WMTSampleBufferAttachmentInfo sample_buffer_attachments[4];
   uint8_t default_raster_sample_count;
   uint8_t render_target_array_length;
   uint8_t tile_width;
   uint8_t tile_height;
+  uint8_t num_sample_buffer_attachments;
+  uint8_t padding[3];
   uint32_t render_target_height;
   uint32_t render_target_width;
   obj_handle_t visibility_buffer;
@@ -2015,12 +2024,6 @@ MTLCounterSampleBuffer_newTimestampBuffer(obj_handle_t device, uint32_t sample_c
 WINEMETAL_API void MTLCounterSampleBuffer_resolveCounterRange(
     obj_handle_t sample_buffer, uint32_t start, uint32_t len, void *data_out, uint64_t data_length
 );
-
-struct WMTSampleBufferAttachmentInfo {
-  obj_handle_t sample_buffer;
-  uint64_t start_of_encoder_sample_index;
-  uint64_t end_of_encoder_sample_index;
-};
 
 WINEMETAL_API obj_handle_t MTLCommandBuffer_blitCommandEncoderWithSampleBuffers(
     obj_handle_t cmdbuf, struct WMTSampleBufferAttachmentInfo *sample_buffer_attachments,

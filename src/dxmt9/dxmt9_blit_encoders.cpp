@@ -30,6 +30,21 @@ WMT::Reference<WMT::SamplerState> makeLinearOrNearestSampler(WMT::Reference<WMT:
   return device.newSamplerState(info);
 }
 
+void attachCounterSampleBuffers(
+    WMTRenderPassInfo& passInfo,
+    std::span<const WMTSampleBufferAttachmentInfo> sampleBufferAttachments) {
+  constexpr std::size_t kMaxSampleBufferAttachments =
+      sizeof(passInfo.sample_buffer_attachments) /
+      sizeof(passInfo.sample_buffer_attachments[0]);
+  const auto attachmentCount =
+      std::min(sampleBufferAttachments.size(), kMaxSampleBufferAttachments);
+  for (std::size_t i = 0; i < attachmentCount; ++i) {
+    passInfo.sample_buffer_attachments[i] = sampleBufferAttachments[i];
+  }
+  passInfo.num_sample_buffer_attachments =
+      static_cast<std::uint8_t>(attachmentCount);
+}
+
 bool canCopyStretchRect(const resources::SurfaceRecord& src,
                         const resources::SurfaceRecord& dst,
                         const core::StretchRectDesc& stretch) {
@@ -156,7 +171,8 @@ void encodeStretchRect(WMT::CommandBuffer& commandBuffer,
                         const core::BackendLimits& limits,
                         WMT::Reference<WMT::BinaryArchive>* archive,
                         const std::string* archivePath,
-                        const core::StretchRectDesc& stretch) {
+                        const core::StretchRectDesc& stretch,
+                        std::span<const WMTSampleBufferAttachmentInfo> sampleBufferAttachments) {
   auto* src = pool.findSurface(stretch.source.value);
   auto* dst = pool.findSurface(stretch.destination.value);
   if (!src || !dst || !src->texture || !dst->texture) {
@@ -204,6 +220,7 @@ void encodeStretchRect(WMT::CommandBuffer& commandBuffer,
     passInfo.colors[0].resolve_texture = dst->resolveTexture.handle;
     passInfo.colors[0].store_action = WMTStoreActionMultisampleResolve;
   }
+  attachCounterSampleBuffers(passInfo, sampleBufferAttachments);
   auto encoder = commandBuffer.renderCommandEncoder(passInfo);
   if (!encoder) return;
   encoder.setLabel(labels::makeLabelStringFmt(
@@ -236,7 +253,8 @@ void encodeSurfaceCopy(WMT::CommandBuffer& commandBuffer,
                        const core::BackendLimits& limits,
                        WMT::Reference<WMT::BinaryArchive>* archive,
                        const std::string* archivePath,
-                       const core::SurfaceCopyDesc& copy) {
+                       const core::SurfaceCopyDesc& copy,
+                       std::span<const WMTSampleBufferAttachmentInfo> sampleBufferAttachments) {
   auto* src = pool.findSurface(copy.source.value);
   auto* dst = pool.findSurface(copy.destination.value);
   if (!src || !dst || !src->texture || !dst->texture) {
@@ -285,7 +303,8 @@ void encodeSurfaceCopy(WMT::CommandBuffer& commandBuffer,
       src->desc.multiSampleType == core::MultiSampleType::None ? 1u : core::sampleCount(src->desc.multiSampleType);
   stretch.destinationSampleCount =
       dst->desc.multiSampleType == core::MultiSampleType::None ? 1u : core::sampleCount(dst->desc.multiSampleType);
-  encodeStretchRect(commandBuffer, pool, pipelineCache, device, limits, archive, archivePath, stretch);
+  encodeStretchRect(commandBuffer, pool, pipelineCache, device, limits, archive,
+                    archivePath, stretch, sampleBufferAttachments);
 }
 
 void encodeColorFill(WMT::CommandBuffer& commandBuffer,
@@ -295,7 +314,8 @@ void encodeColorFill(WMT::CommandBuffer& commandBuffer,
                       const core::BackendLimits& limits,
                       WMT::Reference<WMT::BinaryArchive>* archive,
                       const std::string* archivePath,
-                      const core::ColorFillDesc& fill) {
+                      const core::ColorFillDesc& fill,
+                      std::span<const WMTSampleBufferAttachmentInfo> sampleBufferAttachments) {
   auto* surface = pool.findSurface(fill.destination.value);
   if (!surface || !surface->texture) {
     return;
@@ -312,6 +332,7 @@ void encodeColorFill(WMT::CommandBuffer& commandBuffer,
     passInfo.colors[0].clear_color = WMTClearColor{fill.color.r, fill.color.g,
                                                    fill.color.b, fill.color.a};
   }
+  attachCounterSampleBuffers(passInfo, sampleBufferAttachments);
   auto encoder = commandBuffer.renderCommandEncoder(passInfo);
   if (!encoder) {
     return;
@@ -339,7 +360,8 @@ void encodeColorFill(WMT::CommandBuffer& commandBuffer,
 
 void encodeClearPass(WMT::CommandBuffer& commandBuffer,
                       resources::Pool& pool,
-                      const core::ClearDesc& clear) {
+                      const core::ClearDesc& clear,
+                      std::span<const WMTSampleBufferAttachmentInfo> sampleBufferAttachments) {
   const bool hasDepthStencilTarget =
       (clear.clearDepth || clear.clearStencil) && clear.depthStencil.handle;
   const bool hasColorTarget = clear.clearColor &&
@@ -391,6 +413,7 @@ void encodeClearPass(WMT::CommandBuffer& commandBuffer,
   if (!hasAttachment) {
     return;
   }
+  attachCounterSampleBuffers(passInfo, sampleBufferAttachments);
   auto encoder = commandBuffer.renderCommandEncoder(passInfo);
   if (encoder) {
     const auto rt0 = static_cast<unsigned long long>(
@@ -406,7 +429,8 @@ void encodeClearPass(WMT::CommandBuffer& commandBuffer,
 void encodeDepthResolve(WMT::CommandBuffer& commandBuffer,
                         resources::Pool& pool,
                         core::Handle msaaDepthSource,
-                        core::Handle intzDestination) {
+                        core::Handle intzDestination,
+                        std::span<const WMTSampleBufferAttachmentInfo> sampleBufferAttachments) {
   // R-FORMAT-11 — RESZ multisample depth resolve. The DEPTH twin of the
   // color MSAA resolve in encodeStretchRect/encodeColorFill/encodeClearPass:
   // open a render pass whose depth attachment binds the multisampled depth
@@ -434,6 +458,7 @@ void encodeDepthResolve(WMT::CommandBuffer& commandBuffer,
   passInfo.depth.store_action = WMTStoreActionMultisampleResolve;
   passInfo.depth.resolve_texture = dst->texture.handle;
   passInfo.depth.resolve_filter = WMTMultisampleDepthResolveFilterSample;
+  attachCounterSampleBuffers(passInfo, sampleBufferAttachments);
   auto encoder = commandBuffer.renderCommandEncoder(passInfo);
   if (!encoder) {
     return;

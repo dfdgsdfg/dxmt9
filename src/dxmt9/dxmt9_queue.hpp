@@ -24,6 +24,17 @@ namespace dxmt9::core::metalqueue {
 using u32 = std::uint32_t;
 using u64 = std::uint64_t;
 
+enum class RenderEncoderGpuPassType : u32 {
+  Unknown = 0,
+  Draw,
+  Clear,
+  SurfaceCopy,
+  StretchRect,
+  ColorFill,
+  DepthResolve,
+  Present,
+};
+
 struct CommandBufferDiagnostics {
   u64 seqId = 0;
   size_t slotIndex = 0;
@@ -159,6 +170,15 @@ struct QueueTransitionRecord {
 };
 
 struct QueueSubmissionRecord {
+  struct RenderEncoderGpuSample {
+    u32 startIndex = 0;
+    u32 endIndex = 0;
+    RenderEncoderGpuPassType passType = RenderEncoderGpuPassType::Unknown;
+    u64 rtHandle = 0;
+    u64 depthHandle = 0;
+    u64 psoHandle = 0;
+  };
+
   // RAII-owned command buffer for the tail of this chunk's Metal command
   // buffer chain. encodeChunk may commit earlier sub-CBs internally; the
   // finish/completion pipeline commits and waits only this tail CB, relying
@@ -180,6 +200,8 @@ struct QueueSubmissionRecord {
   u64 seqId = 0;
   CommandBufferDiagnostics diagnostics{};
   const char* context = "queue";
+  WMT::Reference<WMT::CounterSampleBuffer> renderEncoderGpuSampleBuffer{};
+  std::vector<RenderEncoderGpuSample> renderEncoderGpuSamples{};
   std::vector<std::function<void()>> postCommitCallbacks;
 };
 
@@ -413,15 +435,15 @@ class QueueLifecycleController {
                         size_t inflightLimit,
                         const SwapDesc& present,
                         Handle sourceHandle,
-                        const std::function<void(const ChunkSlot&)>& onBeforePublish = {});
+                        const std::function<void(ChunkSlot&)>& onBeforePublish = {});
   // TLA+: CommitPublish followed by waitForSequence(lastCommittedSeqId).
   void flushAndWait(std::unique_lock<std::mutex>& lock,
                     size_t inflightLimit,
-                    const std::function<void(const ChunkSlot&)>& onBeforePublish = {});
+                    const std::function<void(ChunkSlot&)>& onBeforePublish = {});
   // TLA+: CommitEmpty or CommitPublish.
   bool commitCurrentChunk(std::unique_lock<std::mutex>& lock,
                           size_t inflightLimit,
-                          const std::function<void(const ChunkSlot&)>& onBeforePublish = {});
+                          const std::function<void(ChunkSlot&)>& onBeforePublish = {});
   // TLA+: EncodeDequeue.
   bool dequeueReadySlot(std::unique_lock<std::mutex>& lock, size_t& slotIndex, ChunkSlot& slotCopy);
   // TLA+: EncodeDequeue followed by EncodeSubmitToGpu or EncodeCompleteInline.
@@ -548,6 +570,8 @@ class QueueLifecycleController {
     size_t slotIndex = 0;
     u64 seqId = 0;
     u64 commandBufferChainLength = 1;
+    WMT::Reference<WMT::CounterSampleBuffer> renderEncoderGpuSampleBuffer{};
+    std::vector<QueueSubmissionRecord::RenderEncoderGpuSample> renderEncoderGpuSamples{};
   };
 
   // Drain one pending completion — blocks on waitUntilCompleted() and then

@@ -34,7 +34,8 @@ void encodeSurfaceCopy(WMT::CommandBuffer& commandBuffer,
                        const core::BackendLimits& limits,
                        WMT::Reference<WMT::BinaryArchive>* archive,
                        const std::string* archivePath,
-                       const core::SurfaceCopyDesc& copy);
+                       const core::SurfaceCopyDesc& copy,
+                       std::span<const WMTSampleBufferAttachmentInfo> sampleBufferAttachments = {});
 
 // Textured-blit clear-less rect; builds (or reuses) a stretch pipeline.
 void encodeStretchRect(WMT::CommandBuffer& commandBuffer,
@@ -44,7 +45,8 @@ void encodeStretchRect(WMT::CommandBuffer& commandBuffer,
                         const core::BackendLimits& limits,
                         WMT::Reference<WMT::BinaryArchive>* archive,
                         const std::string* archivePath,
-                        const core::StretchRectDesc& stretch);
+                        const core::StretchRectDesc& stretch,
+                        std::span<const WMTSampleBufferAttachmentInfo> sampleBufferAttachments = {});
 
 // Solid-color fill. If `fill.hasRect`, builds (or reuses) a fill pipeline
 // and draws a scissored fullscreen triangle; otherwise just sets the clear
@@ -56,13 +58,15 @@ void encodeColorFill(WMT::CommandBuffer& commandBuffer,
                       const core::BackendLimits& limits,
                       WMT::Reference<WMT::BinaryArchive>* archive,
                       const std::string* archivePath,
-                      const core::ColorFillDesc& fill);
+                      const core::ColorFillDesc& fill,
+                      std::span<const WMTSampleBufferAttachmentInfo> sampleBufferAttachments = {});
 
 // Render-pass with LoadActionClear that targets color attachment 0 (and its
 // resolve if present). Used for D3DClear-style non-scissored clears.
 void encodeClearPass(WMT::CommandBuffer& commandBuffer,
                       resources::Pool& pool,
-                      const core::ClearDesc& clear);
+                      const core::ClearDesc& clear,
+                      std::span<const WMTSampleBufferAttachmentInfo> sampleBufferAttachments = {});
 
 // R-FORMAT-11 — RESZ multisample depth resolve. Resolves the bound
 // multisampled depth surface (`msaaDepthSource`) into the bound INTZ depth
@@ -74,7 +78,8 @@ void encodeClearPass(WMT::CommandBuffer& commandBuffer,
 void encodeDepthResolve(WMT::CommandBuffer& commandBuffer,
                         resources::Pool& pool,
                         core::Handle msaaDepthSource,
-                        core::Handle intzDestination);
+                        core::Handle intzDestination,
+                        std::span<const WMTSampleBufferAttachmentInfo> sampleBufferAttachments = {});
 
 }  // namespace dxmt9::encoders
 

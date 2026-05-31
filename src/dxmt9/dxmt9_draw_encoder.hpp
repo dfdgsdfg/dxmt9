@@ -230,7 +230,18 @@ struct TextureSamplerBindShadowSlot {
   obj_handle_t handle = 0;
 };
 
+struct BufferBindShadowSlot {
+  bool valid = false;
+  obj_handle_t handle = 0;
+  std::uint64_t offset = 0;
+};
+
 struct TextureSamplerBindShadow {
+  TextureSamplerBindShadowSlot renderPipeline{};
+  TextureSamplerBindShadowSlot depthStencil{};
+  bool argbufTableValid = false;
+  std::uint64_t argbufTableHash = 0;
+  std::array<BufferBindShadowSlot, 32> vertexBuffers{};
   std::array<TextureSamplerBindShadowSlot, core::kMaxSamplers> fragmentTextures{};
   std::array<TextureSamplerBindShadowSlot, core::kMaxSamplers> fragmentSamplers{};
   std::array<TextureSamplerBindShadowSlot, core::kMaxVertexTextureSamplers> vertexTextures{};

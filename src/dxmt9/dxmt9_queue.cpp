@@ -8,6 +8,7 @@
 #include "../winemetal/Metal.hpp"
 #include "util/log/log.hpp"
 
+#include <algorithm>
 #include <chrono>
 #include <cstdlib>
 #include <sstream>
@@ -430,7 +431,7 @@ void QueueLifecycleController::presentAndCommit(
     size_t inflightLimit,
     const SwapDesc& present,
     Handle sourceHandle,
-    const std::function<void(const ChunkSlot&)>& onBeforePublish) {
+    const std::function<void(ChunkSlot&)>& onBeforePublish) {
   // TLA+: PresentFrameLatency / CommitPresent.
   if (!ensureWriterSlot(lock, inflightLimit)) {
     return;
@@ -442,7 +443,7 @@ void QueueLifecycleController::presentAndCommit(
 void QueueLifecycleController::flushAndWait(
     std::unique_lock<std::mutex>& lock,
     size_t inflightLimit,
-    const std::function<void(const ChunkSlot&)>& onBeforePublish) {
+    const std::function<void(ChunkSlot&)>& onBeforePublish) {
   // TLA+: QueueLifecycleRefinement / CommitPublish then WaitForSequence.
   (void)commitCurrentChunk(lock, inflightLimit, onBeforePublish);
 
@@ -454,7 +455,7 @@ void QueueLifecycleController::flushAndWait(
 bool QueueLifecycleController::commitCurrentChunk(
     std::unique_lock<std::mutex>& lock,
     size_t inflightLimit,
-    const std::function<void(const ChunkSlot&)>& onBeforePublish) {
+    const std::function<void(ChunkSlot&)>& onBeforePublish) {
   // TLA+: QueueLifecycleRefinement / CommitEmpty or CommitPublish.
   auto* writingSlot = submissionBinding_.writingSlot;
   auto* writeIndex = submissionBinding_.writeIndex;
@@ -1159,6 +1160,10 @@ void QueueLifecycleController::submit(QueueSubmissionRecord& record) {
     pending.slotIndex = record.slotIndex;
     pending.seqId = record.seqId;
     pending.commandBufferChainLength = record.commandBufferChainLength;
+    pending.renderEncoderGpuSampleBuffer =
+        std::move(record.renderEncoderGpuSampleBuffer);
+    pending.renderEncoderGpuSamples =
+        std::move(record.renderEncoderGpuSamples);
     pendingCompletion_.push_back(std::move(pending));
 #ifndef NDEBUG
     assertPendingCompletionInvariantsLocked();
@@ -1201,8 +1206,38 @@ bool QueueLifecycleController::processOnePendingCompletion(bool& stop) {
   auto* diagnosticsController = binding.submissionDiagnostics;
   if (diagnosticsController && pending.commandBuffer) {
     (void)diagnosticsController->observeQueueSubmission(pending.commandBuffer.handle,
-                                                         pending.diagnostics,
-                                                         pending.contextValue.c_str());
+                                                        pending.diagnostics,
+                                                        pending.contextValue.c_str());
+  }
+  if (pending.renderEncoderGpuSampleBuffer &&
+      !pending.renderEncoderGpuSamples.empty()) {
+    std::uint32_t sampleCount = 0;
+    for (const auto& sample : pending.renderEncoderGpuSamples) {
+      sampleCount = std::max(sampleCount, sample.endIndex + 1u);
+    }
+    if (sampleCount > 0) {
+      std::vector<std::uint64_t> timestamps(sampleCount, 0);
+      pending.renderEncoderGpuSampleBuffer.resolveCounterRange(
+          0, sampleCount, timestamps.data(),
+          timestamps.size() * sizeof(timestamps[0]));
+      for (const auto& sample : pending.renderEncoderGpuSamples) {
+        if (sample.startIndex >= timestamps.size() ||
+            sample.endIndex >= timestamps.size()) {
+          continue;
+        }
+        const auto start = timestamps[sample.startIndex];
+        const auto end = timestamps[sample.endIndex];
+        if (start == 0 || end <= start) {
+          continue;
+        }
+        perf::countRenderEncoderGpuTime(
+            end - start,
+            static_cast<std::uint32_t>(sample.passType),
+            sample.rtHandle,
+            sample.depthHandle,
+            sample.psoHandle);
+      }
+    }
   }
   if (binding.mutex && binding.completedSeqQueue) {
     std::lock_guard completionLock(*binding.mutex);

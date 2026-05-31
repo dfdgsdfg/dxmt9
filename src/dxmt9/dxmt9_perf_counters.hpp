@@ -136,6 +136,16 @@ void countSubmitDrawCpuTime(std::uint64_t nanoseconds);
 // GPUStartTime) in nanoseconds. Driver-returned 0/non-monotonic values
 // must be filtered at the call site.
 void countGpuCommandBufferTime(std::uint64_t nanoseconds);
+// Stage-boundary counter sample path: per-render-encoder GPU duration
+// resolved from MTLCounterSampleBuffer timestamps. rt/depth handles are kept
+// as the first DOD buckets. passType is the MetalCommandKind-aligned render
+// helper bucket; psoHandle is (generation << 32) | slot when the encoder
+// carries a resolved PsoHandle.
+void countRenderEncoderGpuTime(std::uint64_t nanoseconds,
+                               std::uint32_t passType,
+                               std::uint64_t rtHandle,
+                               std::uint64_t depthHandle,
+                               std::uint64_t psoHandle);
 void countEncodeChunkCpuTime(std::uint64_t nanoseconds);
 void countEncodeDrawCpuTime(std::uint64_t nanoseconds);
 void countEncodeDrawPipelineLookupCpuTime(std::uint64_t nanoseconds);
@@ -389,6 +399,12 @@ struct CounterSnapshot {
   // visible without grepping the cumulative line at exit.
   std::uint64_t gpuCommandBufferTimeNs = 0;
   std::uint64_t gpuCommandBufferTimeSamples = 0;
+  std::uint64_t renderEncoderGpuTimeNs = 0;
+  std::uint64_t renderEncoderGpuTimeSamples = 0;
+  std::uint64_t renderEncoderGpuLastPassType = 0;
+  std::uint64_t renderEncoderGpuLastRt = 0;
+  std::uint64_t renderEncoderGpuLastDepth = 0;
+  std::uint64_t renderEncoderGpuLastPso = 0;
   std::uint64_t gpuCommandBufferErrors = 0;
 };
 

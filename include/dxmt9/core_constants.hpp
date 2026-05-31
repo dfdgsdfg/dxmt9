@@ -4,6 +4,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <functional>
+#include <limits>
 #include <memory>
 #include <optional>
 #include <span>
@@ -72,6 +73,32 @@ struct Handle {
 
   constexpr explicit operator bool() const noexcept { return value != 0; }
   friend constexpr bool operator==(const Handle&, const Handle&) = default;
+};
+
+struct PsoHandle {
+  static constexpr u32 kInvalidSlot = std::numeric_limits<u32>::max();
+
+  u32 slot = kInvalidSlot;
+  u32 generation = 0;
+
+  constexpr bool valid() const noexcept {
+    return slot != kInvalidSlot && generation != 0;
+  }
+
+  friend constexpr bool operator==(const PsoHandle&, const PsoHandle&) = default;
+};
+
+struct DepthStencilHandle {
+  static constexpr u32 kInvalidSlot = std::numeric_limits<u32>::max();
+
+  u32 slot = kInvalidSlot;
+  u32 generation = 0;
+
+  constexpr bool valid() const noexcept {
+    return slot != kInvalidSlot && generation != 0;
+  }
+
+  friend constexpr bool operator==(const DepthStencilHandle&, const DepthStencilHandle&) = default;
 };
 
 using BufferHandle = Handle;

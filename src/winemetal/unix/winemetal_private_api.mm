@@ -1180,6 +1180,20 @@ extern "C" obj_handle_t MTLCommandBuffer_renderCommandEncoder(obj_handle_t cmdbu
   desc.renderTargetHeight        = info->render_target_height;
   desc.renderTargetWidth         = info->render_target_width;
   desc.visibilityResultBuffer    = (id<MTLBuffer>)info->visibility_buffer;
+  const uint8_t sampleBufferAttachmentCount =
+      MIN(info->num_sample_buffer_attachments, (uint8_t)4);
+  for (uint8_t i = 0; i < sampleBufferAttachmentCount; ++i) {
+    const auto& attachment = info->sample_buffer_attachments[i];
+    if (!attachment.sample_buffer) continue;
+    desc.sampleBufferAttachments[i].sampleBuffer =
+        (id<MTLCounterSampleBuffer>)attachment.sample_buffer;
+    desc.sampleBufferAttachments[i].startOfVertexSampleIndex =
+        (NSUInteger)attachment.start_of_encoder_sample_index;
+    desc.sampleBufferAttachments[i].endOfVertexSampleIndex = MTLCounterDontSample;
+    desc.sampleBufferAttachments[i].startOfFragmentSampleIndex = MTLCounterDontSample;
+    desc.sampleBufferAttachments[i].endOfFragmentSampleIndex =
+        (NSUInteger)attachment.end_of_encoder_sample_index;
+  }
   if (info->tile_width && info->tile_height) {
     desc.tileWidth  = info->tile_width;
     desc.tileHeight = info->tile_height;
@@ -1257,6 +1271,53 @@ extern "C" bool MTLDevice_supportsCounterSampling(obj_handle_t device, enum WMTC
   id<MTLDevice> d = (id<MTLDevice>)device;
   if (![d respondsToSelector:@selector(supportsCounterSampling:)]) return false;
   return [d supportsCounterSampling:(MTLCounterSamplingPoint)point];
+}
+
+extern "C" obj_handle_t
+MTLCounterSampleBuffer_newTimestampBuffer(obj_handle_t device, uint32_t sample_count, bool shared) {
+  if (!device || sample_count == 0) return NULL_OBJECT_HANDLE;
+  id<MTLDevice> d = (id<MTLDevice>)device;
+  if (![d respondsToSelector:@selector(counterSets)] ||
+      ![d respondsToSelector:@selector(newCounterSampleBufferWithDescriptor:error:)]) {
+    return NULL_OBJECT_HANDLE;
+  }
+
+  id<MTLCounterSet> timestampSet = nil;
+  for (id<MTLCounterSet> counterSet in [d counterSets]) {
+    if ([[counterSet name] isEqualToString:MTLCommonCounterSetTimestamp]) {
+      timestampSet = counterSet;
+      break;
+    }
+  }
+  if (!timestampSet) return NULL_OBJECT_HANDLE;
+
+  MTLCounterSampleBufferDescriptor *desc =
+      [[MTLCounterSampleBufferDescriptor alloc] init];
+  desc.counterSet = timestampSet;
+  desc.sampleCount = sample_count;
+  desc.storageMode = shared ? MTLStorageModeShared : MTLStorageModePrivate;
+  NSError *err = nil;
+  id<MTLCounterSampleBuffer> buffer =
+      [d newCounterSampleBufferWithDescriptor:desc error:&err];
+  [desc release];
+  return (obj_handle_t)buffer;
+}
+
+extern "C" void MTLCounterSampleBuffer_resolveCounterRange(
+    obj_handle_t sample_buffer, uint32_t start, uint32_t len, void *data_out,
+    uint64_t data_length) {
+  if (!sample_buffer || !data_out || len == 0) return;
+  const uint64_t required = (uint64_t)len * sizeof(MTLCounterResultTimestamp);
+  if (data_length < required) return;
+  NSRange range = NSMakeRange((NSUInteger)start, (NSUInteger)len);
+  NSData *data = [(id<MTLCounterSampleBuffer>)sample_buffer resolveCounterRange:range];
+  if (!data || [data length] < required) return;
+  const auto* timestamps =
+      reinterpret_cast<const MTLCounterResultTimestamp*>([data bytes]);
+  auto* out = reinterpret_cast<uint64_t*>(data_out);
+  for (uint32_t i = 0; i < len; ++i) {
+    out[i] = timestamps[i].timestamp;
+  }
 }
 
 extern "C" uint64_t MTLCommandBuffer_property(obj_handle_t cmdbuf, enum WMTCommandBufferProperty prop) {

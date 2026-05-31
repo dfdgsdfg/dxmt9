@@ -7,6 +7,7 @@
 #include "dxmt9_blit_encoders.hpp"
 #include "dxmt9_compat.hpp"
 #include "dxmt9_draw_encoder.hpp"
+#include "dxmt9_draw_state.hpp"
 #include "dxmt9_perf_counters.hpp"
 #include "dxmt9_pipeline_cache.hpp"
 #include "dxmt9_presenter.hpp"
@@ -259,7 +260,7 @@ encoders::EncodeContext CommandQueue::makeEncodeContext() {
   };
 }
 
-void CommandQueue::prefetchSlotPipelines(const core::ChunkSlot& slot) {
+void CommandQueue::prefetchSlotPipelines(core::ChunkSlot& slot) {
   if (!device_) {
     return;
   }
@@ -278,18 +279,22 @@ void CommandQueue::prefetchSlotPipelines(const core::ChunkSlot& slot) {
     // formats and tile/argbuf selectors are Metal-device/pool dependent.
     auto drawState = command.drawState;
     drawState.uniforms = command.drawUniformPayload;
+    auto depthLookup = pipelineCache_.depthStencilStateHandleFor(
+        device_, state::makeDepthStencilKey(drawState));
+    slot.setDrawRunDepthStencilHandle(i, depthLookup.handle);
     const auto tileSelection =
         pipeline::selectTileFfpForPass(drawState, pool_.supportsApple3());
     const bool tileFfpMode =
         tileSelection.decision == pipeline::TileFfpDecision::Tile;
     if (tileFfpMode) {
-      (void)pipelineCache_.getOrBuildTileFfpBaseColorPipelineForState(
+      auto baseLookup = pipelineCache_.getOrBuildTileFfpBaseColorPipelineHandleForState(
           device_, limits_, pool_, drawState, &shaderArchive_.reference(),
           &shaderArchive_.path());
-      (void)pipelineCache_.getOrBuildDrawPipelineForState(
+      auto tileLookup = pipelineCache_.getOrBuildDrawPipelineHandleForState(
           device_, limits_, pool_, drawState, &shaderArchive_.reference(),
           &shaderArchive_.path(), /*tileFfpMode=*/true,
           /*argbufHybridMode=*/false, /*argbufResourceArray=*/false);
+      slot.setDrawRunPsoHandles(i, baseLookup.handle, tileLookup.handle);
       continue;
     }
 
@@ -299,10 +304,11 @@ void CommandQueue::prefetchSlotPipelines(const core::ChunkSlot& slot) {
     const bool argbufResourceArray =
         argbufHybridMode && resourceArrayLaneActive_ &&
         resourceArrayEncoderResource_.initialized();
-    (void)pipelineCache_.getOrBuildDrawPipelineForState(
+    auto lookup = pipelineCache_.getOrBuildDrawPipelineHandleForState(
         device_, limits_, pool_, drawState, &shaderArchive_.reference(),
         &shaderArchive_.path(), /*tileFfpMode=*/false, argbufHybridMode,
         argbufResourceArray);
+    slot.setDrawRunPsoHandles(i, lookup.handle);
   }
 }
 
@@ -713,7 +719,7 @@ void markSlotResourcesUnlocked(resources::Pool& pool, const core::ChunkSlot& slo
 
 void prepareSlotForPublish(CommandQueue& q,
                            resources::Pool& pool,
-                           const core::ChunkSlot& slot) {
+                           core::ChunkSlot& slot) {
   markSlotResourcesUnlocked(pool, slot);
   q.prefetchSlotPipelines(slot);
 }
@@ -730,7 +736,7 @@ void maybeCommitDrawChunkUnlocked(
     return;
   }
   q.queueLifecycle_.commitCurrentChunk(
-      lock, kMaxQueuedChunks, [&q, &pool](const core::ChunkSlot& slot) {
+      lock, kMaxQueuedChunks, [&q, &pool](core::ChunkSlot& slot) {
         prepareSlotForPublish(q, pool, slot);
       });
 }
@@ -855,7 +861,7 @@ void CommandQueue::submitStretchRect(const core::StretchRectDesc& desc) {
   std::unique_lock lock(mutex_);
   if (splitStretchChunk()) {
     queueLifecycle_.commitCurrentChunk(
-        lock, kMaxQueuedChunks, [this](const core::ChunkSlot& slot) {
+        lock, kMaxQueuedChunks, [this](core::ChunkSlot& slot) {
           prepareSlotForPublish(*this, pool_, slot);
         });
   }
@@ -866,7 +872,7 @@ void CommandQueue::submitStretchRect(const core::StretchRectDesc& desc) {
   pool_.markStretchResources(desc, seqIdForMark(*this, 0));
   if (splitStretchChunk()) {
     queueLifecycle_.commitCurrentChunk(
-        lock, kMaxQueuedChunks, [this](const core::ChunkSlot& slot) {
+        lock, kMaxQueuedChunks, [this](core::ChunkSlot& slot) {
           prepareSlotForPublish(*this, pool_, slot);
         });
   }
@@ -929,7 +935,7 @@ std::uint64_t CommandQueue::submitPresent(const core::SwapDesc& desc) {
         {
           std::unique_lock lock(mutex_);
           queueLifecycle_.commitCurrentChunk(
-              lock, kMaxQueuedChunks, [this](const core::ChunkSlot& slot) {
+              lock, kMaxQueuedChunks, [this](core::ChunkSlot& slot) {
                 prepareSlotForPublish(*this, pool_, slot);
               });
         }
@@ -956,20 +962,20 @@ std::uint64_t CommandQueue::submitPresent(const core::SwapDesc& desc) {
                                           sourceHandle.value == currentBackBuffer_.value);
     if (splitPresentChunk()) {
       queueLifecycle_.commitCurrentChunk(
-          lock, kMaxQueuedChunks, [this](const core::ChunkSlot& slot) {
+          lock, kMaxQueuedChunks, [this](core::ChunkSlot& slot) {
             prepareSlotForPublish(*this, pool_, slot);
           });
       ensureWritingSlotUnlocked(*this, lock);
       queueLifecycle_.appendPresentCommand(queuedDesc, sourceHandle);
       queueLifecycle_.commitCurrentChunk(
-          lock, kMaxQueuedChunks, [this](const core::ChunkSlot& slot) {
+          lock, kMaxQueuedChunks, [this](core::ChunkSlot& slot) {
             prepareSlotForPublish(*this, pool_, slot);
           });
       presentSeqId = lastCommittedSeqId_;
     } else {
       queueLifecycle_.presentAndCommit(
           lock, kMaxQueuedChunks, queuedDesc, sourceHandle,
-          [this](const core::ChunkSlot& slot) {
+          [this](core::ChunkSlot& slot) {
             prepareSlotForPublish(*this, pool_, slot);
           });
       presentSeqId = lastCommittedSeqId_;
@@ -1068,7 +1074,7 @@ void CommandQueue::submitFlush() {
   perf::countSubmitFlush();
   std::unique_lock lock(mutex_);
   queueLifecycle_.flushAndWait(
-      lock, kMaxQueuedChunks, [this](const core::ChunkSlot& slot) {
+      lock, kMaxQueuedChunks, [this](core::ChunkSlot& slot) {
         prepareSlotForPublish(*this, pool_, slot);
       });
 }
@@ -1095,7 +1101,7 @@ void* CommandQueue::mapBuffer(core::BufferHandle handle, std::uint32_t flags) {
   // chunk into the submit pipeline first.
   if (waitSeq > lastCommittedSeqId_) {
     queueLifecycle_.commitCurrentChunk(
-        lock, kMaxQueuedChunks, [this](const core::ChunkSlot& slot) {
+        lock, kMaxQueuedChunks, [this](core::ChunkSlot& slot) {
           prepareSlotForPublish(*this, pool_, slot);
         });
   }

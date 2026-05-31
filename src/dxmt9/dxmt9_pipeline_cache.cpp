@@ -11,6 +11,7 @@
 #include "util/log/log.hpp"
 
 #include <algorithm>
+#include <atomic>
 #include <bit>
 #include <cstdint>
 #include <cstdlib>
@@ -94,6 +95,63 @@ makeReadyPipelineFuture(WMT::Reference<WMT::RenderPipelineState> value = {}) {
   std::promise<WMT::Reference<WMT::RenderPipelineState>> promise;
   promise.set_value(std::move(value));
   return promise.get_future().share();
+}
+
+core::PsoHandle internDrawHandleLocked(Cache& cache,
+                                       const ShaderVariantKey& key,
+                                       const Entry& entry) {
+  if (auto it = cache.drawHandles.find(key); it != cache.drawHandles.end()) {
+    return it->second;
+  }
+  if (cache.drawSlots.size() >= core::PsoHandle::kInvalidSlot) {
+    return {};
+  }
+  const core::PsoHandle handle{
+      .slot = static_cast<std::uint32_t>(cache.drawSlots.size()),
+      .generation = 1u,
+  };
+  cache.drawSlots.push_back(PsoSlot{
+      .generation = handle.generation,
+      .key = key,
+      .entry = entry,
+      .occupied = true,
+  });
+  cache.drawHandles.emplace(key, handle);
+  std::atomic_store_explicit(
+      &cache.drawSlotSnapshot,
+      std::shared_ptr<const std::vector<PsoSlot>>(
+          std::make_shared<std::vector<PsoSlot>>(cache.drawSlots)),
+      std::memory_order_release);
+  return handle;
+}
+
+core::DepthStencilHandle internDepthStencilHandleLocked(
+    Cache& cache,
+    const DepthStencilKey& key,
+    WMT::Reference<WMT::DepthStencilState> state) {
+  if (auto it = cache.depthHandles.find(key); it != cache.depthHandles.end()) {
+    return it->second;
+  }
+  if (cache.depthSlots.size() >= core::DepthStencilHandle::kInvalidSlot) {
+    return {};
+  }
+  const core::DepthStencilHandle handle{
+      .slot = static_cast<std::uint32_t>(cache.depthSlots.size()),
+      .generation = 1u,
+  };
+  cache.depthSlots.push_back(DepthStencilSlot{
+      .generation = handle.generation,
+      .key = key,
+      .state = state,
+      .occupied = true,
+  });
+  cache.depthHandles.emplace(key, handle);
+  std::atomic_store_explicit(
+      &cache.depthSlotSnapshot,
+      std::shared_ptr<const std::vector<DepthStencilSlot>>(
+          std::make_shared<std::vector<DepthStencilSlot>>(cache.depthSlots)),
+      std::memory_order_release);
+  return handle;
 }
 
 class PipelineCompileQueue {
@@ -448,9 +506,17 @@ std::size_t SamplerKeyHash::operator()(const SamplerKey& key) const noexcept {
 
 WMT::Reference<WMT::DepthStencilState> Cache::depthStencilStateFor(WMT::Device& device,
                                                                      const DepthStencilKey& key) {
+  return depthStencilStateHandleFor(device, key).state;
+}
+
+DepthStencilLookup Cache::depthStencilStateHandleFor(WMT::Device& device,
+                                                     const DepthStencilKey& key) {
   std::lock_guard lock(mutex);
   if (auto it = depth.find(key); it != depth.end()) {
-    return it->second;
+    return DepthStencilLookup{
+        .state = it->second,
+        .handle = internDepthStencilHandleLocked(*this, key, it->second),
+    };
   }
   WMTDepthStencilInfo info{};
   info.depth_compare_function =
@@ -474,8 +540,26 @@ WMT::Reference<WMT::DepthStencilState> Cache::depthStencilStateFor(WMT::Device& 
     applyFace(info.back_stencil, key.back.enabled ? key.back : key.front);
   }
   auto state = device.newDepthStencilState(info);
-  depth.emplace(key, state);
-  return state;
+  auto [it, inserted] = depth.emplace(key, state);
+  (void)inserted;
+  return DepthStencilLookup{
+      .state = it->second,
+      .handle = internDepthStencilHandleLocked(*this, key, it->second),
+  };
+}
+
+WMT::Reference<WMT::DepthStencilState>
+Cache::depthStencilStateForHandle(core::DepthStencilHandle handle) {
+  auto snapshot = std::atomic_load_explicit(&depthSlotSnapshot,
+                                            std::memory_order_acquire);
+  if (!snapshot || !handle.valid() || handle.slot >= snapshot->size()) {
+    return {};
+  }
+  const auto& slot = (*snapshot)[handle.slot];
+  if (!slot.occupied || slot.generation != handle.generation) {
+    return {};
+  }
+  return slot.state;
 }
 
 WMT::Reference<WMT::SamplerState>
@@ -607,6 +691,16 @@ Cache::getOrBuildDrawPipeline(WMT::Reference<WMT::Device> device,
                                 drawshader::ShaderSourceContext shaderSource,
                                 WMT::Reference<WMT::BinaryArchive>* archive,
                                 const std::string* archivePath) {
+  return getOrBuildDrawPipelineHandle(device, key, std::move(shaderSource),
+                                      archive, archivePath).future;
+}
+
+DrawPipelineLookup
+Cache::getOrBuildDrawPipelineHandle(WMT::Reference<WMT::Device> device,
+                                    const ShaderVariantKey& key,
+                                    drawshader::ShaderSourceContext shaderSource,
+                                    WMT::Reference<WMT::BinaryArchive>* archive,
+                                    const std::string* archivePath) {
   (void)archivePath;
   const ShaderVariantKey probeKey = makeShaderVariantProbeKey(key);
   {
@@ -614,7 +708,10 @@ Cache::getOrBuildDrawPipeline(WMT::Reference<WMT::Device> device,
     if (auto probe = this->drawProbe.find(probeKey); probe != this->drawProbe.end()) {
       if (auto it = this->draw.find(probe->second); it != this->draw.end()) {
         perf::countPipelineCacheHit(perf::PipelineKind::Draw);
-        return it->second.future;
+        return DrawPipelineLookup{
+            .future = it->second.future,
+            .handle = internDrawHandleLocked(*this, probe->second, it->second),
+        };
       }
     }
   }
@@ -640,12 +737,12 @@ Cache::getOrBuildDrawPipeline(WMT::Reference<WMT::Device> device,
                  "tile shader source generation failed: %s variant=0x%llx",
                  ex.what(),
                  static_cast<unsigned long long>(key.hash));
-      return makeReadyPipelineFuture();
+      return DrawPipelineLookup{.future = makeReadyPipelineFuture(), .handle = {}};
     } catch (...) {
       util::logf(util::LogLevel::Error, "dxmt9-pipeline-cache",
                  "tile shader source generation failed: unknown exception variant=0x%llx",
                  static_cast<unsigned long long>(key.hash));
-      return makeReadyPipelineFuture();
+      return DrawPipelineLookup{.future = makeReadyPipelineFuture(), .handle = {}};
     }
     sourceKey.tileSourceHash = shaders::makeHash(tileSource);
 
@@ -653,7 +750,10 @@ Cache::getOrBuildDrawPipeline(WMT::Reference<WMT::Device> device,
     if (auto it = this->draw.find(sourceKey); it != this->draw.end()) {
       this->drawProbe[probeKey] = sourceKey;
       perf::countPipelineCacheHit(perf::PipelineKind::Draw);
-      return it->second.future;
+      return DrawPipelineLookup{
+          .future = it->second.future,
+          .handle = internDrawHandleLocked(*this, sourceKey, it->second),
+      };
     }
     perf::countPipelineCacheMiss(perf::PipelineKind::Draw);
     auto shared = submitPipelineBuild(
@@ -696,13 +796,17 @@ Cache::getOrBuildDrawPipeline(WMT::Reference<WMT::Device> device,
           (void)archive;
           return pso;
         });
-    this->draw.emplace(sourceKey, Entry{shared});
+    auto [it, inserted] = this->draw.emplace(sourceKey, Entry{shared});
+    (void)inserted;
     this->drawProbe[probeKey] = sourceKey;
-    return shared;
+    return DrawPipelineLookup{
+        .future = shared,
+        .handle = internDrawHandleLocked(*this, sourceKey, it->second),
+    };
   }
   auto sources = detail::makeContainedDrawShaderSources(shaderSource, key.hash);
   if (!sources) {
-    return makeReadyPipelineFuture();
+    return DrawPipelineLookup{.future = makeReadyPipelineFuture(), .handle = {}};
   }
   sourceKey.vertexSourceHash = sources->vertexHash;
   sourceKey.fragmentSourceHash = sources->fragmentHash;
@@ -711,7 +815,10 @@ Cache::getOrBuildDrawPipeline(WMT::Reference<WMT::Device> device,
     if (auto it = this->draw.find(sourceKey); it != this->draw.end()) {
       this->drawProbe[probeKey] = sourceKey;
       perf::countPipelineCacheHit(perf::PipelineKind::Draw);
-      return it->second.future;
+      return DrawPipelineLookup{
+          .future = it->second.future,
+          .handle = internDrawHandleLocked(*this, sourceKey, it->second),
+      };
     }
     perf::countPipelineCacheMiss(perf::PipelineKind::Draw);
     auto shared = submitPipelineBuild(
@@ -774,10 +881,29 @@ Cache::getOrBuildDrawPipeline(WMT::Reference<WMT::Device> device,
           }
           return pso;
         });
-    this->draw.emplace(sourceKey, Entry{shared});
+    auto [it, inserted] = this->draw.emplace(sourceKey, Entry{shared});
+    (void)inserted;
     this->drawProbe[probeKey] = sourceKey;
-    return shared;
+    return DrawPipelineLookup{
+        .future = shared,
+        .handle = internDrawHandleLocked(*this, sourceKey, it->second),
+    };
   }
+}
+
+std::shared_future<WMT::Reference<WMT::RenderPipelineState>>
+Cache::drawPipelineForHandle(core::PsoHandle handle) {
+  auto snapshot = std::atomic_load_explicit(&drawSlotSnapshot,
+                                            std::memory_order_acquire);
+  if (!snapshot || !handle.valid() || handle.slot >= snapshot->size()) {
+    return makeReadyPipelineFuture();
+  }
+  const auto& slot = (*snapshot)[handle.slot];
+  if (!slot.occupied || slot.generation != handle.generation) {
+    return makeReadyPipelineFuture();
+  }
+  perf::countPipelineCacheHit(perf::PipelineKind::Draw);
+  return slot.entry.future;
 }
 
 std::shared_future<WMT::Reference<WMT::RenderPipelineState>>
@@ -856,6 +982,21 @@ Cache::getOrBuildDrawPipelineForState(WMT::Reference<WMT::Device> device,
                                       bool tileFfpMode,
                                       bool argbufHybridMode,
                                       bool argbufResourceArray) {
+  return getOrBuildDrawPipelineHandleForState(
+      device, limits, pool, state, archive, archivePath, tileFfpMode,
+      argbufHybridMode, argbufResourceArray).future;
+}
+
+DrawPipelineLookup
+Cache::getOrBuildDrawPipelineHandleForState(WMT::Reference<WMT::Device> device,
+                                            const core::BackendLimits& limits,
+                                            resources::Pool& pool,
+                                            core::FlatDrawStateView state,
+                                            WMT::Reference<WMT::BinaryArchive>* archive,
+                                            const std::string* archivePath,
+                                            bool tileFfpMode,
+                                            bool argbufHybridMode,
+                                            bool argbufResourceArray) {
   const bool srgbWrite =
       core::flatStateOr(state.hot->renderStates, core::RS_SRGB_WRITE_ENABLE, 0u) != 0;
   auto resolvePixelFormat = [&](core::Handle handle) -> u32 {
@@ -914,7 +1055,8 @@ Cache::getOrBuildDrawPipelineForState(WMT::Reference<WMT::Device> device,
   // a sampler carries a non-zero LOD bias. makeShaderVariantKey already
   // computed key.samplerLodBias from the same predicate the encoder bind reads.
   shaderSource.samplerLodBias = key.samplerLodBias;
-  return getOrBuildDrawPipeline(device, key, std::move(shaderSource), archive, archivePath);
+  return getOrBuildDrawPipelineHandle(device, key, std::move(shaderSource),
+                                      archive, archivePath);
 }
 
 std::shared_future<WMT::Reference<WMT::RenderPipelineState>>
@@ -924,6 +1066,18 @@ Cache::getOrBuildTileFfpBaseColorPipelineForState(WMT::Reference<WMT::Device> de
                                                   core::FlatDrawStateView state,
                                                   WMT::Reference<WMT::BinaryArchive>* archive,
                                                   const std::string* archivePath) {
+  return getOrBuildTileFfpBaseColorPipelineHandleForState(
+      device, limits, pool, state, archive, archivePath).future;
+}
+
+DrawPipelineLookup
+Cache::getOrBuildTileFfpBaseColorPipelineHandleForState(
+    WMT::Reference<WMT::Device> device,
+    const core::BackendLimits& limits,
+    resources::Pool& pool,
+    core::FlatDrawStateView state,
+    WMT::Reference<WMT::BinaryArchive>* archive,
+    const std::string* archivePath) {
   // R-BACK-13.1 — assemble the same render-pipeline key as the portable
   // fragment path, then re-stamp it for the base-colour tile-FFP sub-variant:
   //   * tileFfpBaseColor = true   -> distinct cache slot + source-strip gate
@@ -978,7 +1132,8 @@ Cache::getOrBuildTileFfpBaseColorPipelineForState(WMT::Reference<WMT::Device> de
   // R-BACK-13.1: drop fog blend + alpha-test discard from the emitted FFP
   // fragment; the tile kernel re-applies them over the rasterized base colour.
   shaderSource.stripFogAlphaTestForTileBase = true;
-  return getOrBuildDrawPipeline(device, key, std::move(shaderSource), archive, archivePath);
+  return getOrBuildDrawPipelineHandle(device, key, std::move(shaderSource),
+                                      archive, archivePath);
 }
 
 TileFfpSelection selectTileFfpForPass(core::FlatDrawStateView state, bool supportsApple3) {

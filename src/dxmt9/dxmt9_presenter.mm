@@ -17,6 +17,21 @@ namespace dxmt9 {
 
 namespace {
 
+void attachCounterSampleBuffers(
+    WMTRenderPassInfo& passInfo,
+    std::span<const WMTSampleBufferAttachmentInfo> sampleBufferAttachments) {
+  constexpr std::size_t kMaxSampleBufferAttachments =
+      sizeof(passInfo.sample_buffer_attachments) /
+      sizeof(passInfo.sample_buffer_attachments[0]);
+  const auto attachmentCount =
+      std::min(sampleBufferAttachments.size(), kMaxSampleBufferAttachments);
+  for (std::size_t i = 0; i < attachmentCount; ++i) {
+    passInfo.sample_buffer_attachments[i] = sampleBufferAttachments[i];
+  }
+  passInfo.num_sample_buffer_attachments =
+      static_cast<std::uint8_t>(attachmentCount);
+}
+
 bool envFlagSet(const char* env) {
   return env && env[0] != '\0' && std::strcmp(env, "0") != 0;
 }
@@ -581,6 +596,7 @@ Presenter::EncodeResult Presenter::encodeCommands(WMT::CommandBuffer& commandBuf
   passInfo.colors[0].texture = drawableTex.handle;
   passInfo.colors[0].load_action = WMTLoadActionDontCare;
   passInfo.colors[0].store_action = WMTStoreActionStore;
+  attachCounterSampleBuffers(passInfo, params.sampleBufferAttachments);
 
   auto encoder = commandBuffer.renderCommandEncoder(passInfo);
   if (!encoder) {
@@ -655,7 +671,8 @@ bool encodePresent(WMT::CommandBuffer& commandBuffer,
                    std::shared_ptr<PresentDrawableToken> drawableToken,
                    const core::SwapDesc& present,
                    core::Handle sourceHandle,
-                   std::uint64_t seqId) {
+                   std::uint64_t seqId,
+                   std::span<const WMTSampleBufferAttachmentInfo> sampleBufferAttachments) {
   using namespace dxmt9::core::metalqueue;
   presentimpl::traceEvent("begin", seqId, present.window.value);
   if (queueTraceEnabled()) {
@@ -786,6 +803,7 @@ bool encodePresent(WMT::CommandBuffer& commandBuffer,
   // pointer is safe here. The identity flag is the fast-path selector.
   params.gammaRamp = &present.gammaRamp;
   params.gammaRampIsIdentity = present.gammaRampIsIdentity;
+  params.sampleBufferAttachments = sampleBufferAttachments;
 
   const auto presentResult = presenter->encodeCommands(commandBuffer, params);
   if (presentResult.encoded) {

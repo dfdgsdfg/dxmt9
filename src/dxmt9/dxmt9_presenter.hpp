@@ -19,6 +19,7 @@
 #include <future>
 #include <memory>
 #include <mutex>
+#include <span>
 #include <string>
 #include <thread>
 #include <utility>
@@ -168,6 +169,7 @@ class Presenter {
     // from the SwapDesc snapshot.
     const core::GammaRamp* gammaRamp = nullptr;
     bool gammaRampIsIdentity = true;
+    std::span<const WMTSampleBufferAttachmentInfo> sampleBufferAttachments{};
   };
 
   struct EncodeResult {
@@ -282,6 +284,7 @@ bool encodePresent(WMT::CommandBuffer& commandBuffer,
                    std::shared_ptr<PresentDrawableToken> drawableToken,
                    const core::SwapDesc& present,
                    core::Handle sourceHandle,
-                   std::uint64_t seqId);
+                   std::uint64_t seqId,
+                   std::span<const WMTSampleBufferAttachmentInfo> sampleBufferAttachments = {});
 
 }  // namespace dxmt9

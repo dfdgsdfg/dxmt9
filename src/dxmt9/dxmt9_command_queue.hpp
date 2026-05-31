@@ -320,7 +320,7 @@ class CommandQueue {
       std::uint64_t seqId);
   using ResolveSurfaceFlagsFn = std::function<std::uint32_t(core::Handle)>;
   void bindSelfLifecycle(ResolveSurfaceFlagsFn resolveSurfaceFlags);
-  void prefetchSlotPipelines(const core::ChunkSlot& slot);
+  void prefetchSlotPipelines(core::ChunkSlot& slot);
   void startThreads(std::function<void()> encodeLoop,
                     std::function<void()> finishLoop,
                     std::function<void()> completionLoop);

@@ -29,6 +29,23 @@ struct PresentCommandRecord {
   Handle presentSource{};
 };
 
+struct DrawRunInvariant {
+  PsoHandle renderPsoHandle{};
+  PsoHandle tilePsoHandle{};
+  DepthStencilHandle depthStencilHandle{};
+  u64 viewportScissorHash = 0;
+  u64 runStableBindingHash = 0;
+  u32 streamMask = 0;
+  u32 textureMask = 0;
+  u32 samplerStateMask = 0;
+};
+
+// DrawParam is the per-draw item payload: index/vertex range, primitive
+// shape, instance-adjacent base indices, volatile draw constants, and the
+// user-buffer changed spans. Keep the alias explicit so command views can
+// talk in RunInvariant / DrawItem terms without duplicating storage.
+using DrawItem = DrawParam;
+
 struct DrawRunCommandRecord {
   std::uint32_t stateIndex = 0;
   std::uint32_t firstParam = 0;
@@ -36,6 +53,10 @@ struct DrawRunCommandRecord {
   std::uint32_t payloadOffset = 0;
   std::uint32_t payloadSize = 0;
   DrawUniformHandle uniformHandle{};
+  PsoHandle renderPsoHandle{};
+  PsoHandle tilePsoHandle{};
+  DepthStencilHandle depthStencilHandle{};
+  DrawRunInvariant invariant{};
 };
 
 struct DrawPsoSubview {
@@ -68,9 +89,11 @@ struct MetalCommandView {
   MetalCommandKind kind = MetalCommandKind::DrawRun;
   const DrawRunCommandRecord* drawRunRecord = nullptr;
   const DrawPsoSubview* drawPsoSubview = nullptr;
+  const DrawRunInvariant* drawRunInvariant = nullptr;
   FlatDrawStateView drawState{};
   const DrawUniformPayload* drawUniformPayload = nullptr;
   std::span<const DrawParam> drawParams{};
+  std::span<const DrawItem> drawItems{};
   std::span<const u8> drawPayloadBytes{};
   const ClearDesc* clear = nullptr;
   const SurfaceCopyDesc* surfaceCopy = nullptr;
@@ -523,6 +546,16 @@ struct ChunkSlot {
     }
 
     const auto psoSubview = makeDrawPsoSubview(state);
+    const DrawRunInvariant invariant{
+        .viewportScissorHash = state.hot.key.viewportHash,
+        .runStableBindingHash =
+            state.hot.key.renderStateHash ^ (state.hot.key.vertexDeclHash << 1) ^
+            (static_cast<u64>(state.hot.textureMask) << 2) ^
+            (static_cast<u64>(state.hot.key.samplerStateMask) << 3),
+        .streamMask = state.hot.streamMask,
+        .textureMask = state.hot.textureMask,
+        .samplerStateMask = state.hot.key.samplerStateMask,
+    };
     const auto stateIndex = appendDrawState(std::move(state));
     const auto firstParam = static_cast<std::uint32_t>(drawParams.size());
     const auto payloadOffset = static_cast<std::uint32_t>(drawPayloadArena.size());
@@ -556,8 +589,42 @@ struct ChunkSlot {
         .payloadOffset = payloadOffset,
         .payloadSize = recordPayloadSize,
         .uniformHandle = uniformHandle,
+        .invariant = invariant,
     });
     drawPsoSubviews.push_back(psoSubview);
+  }
+
+  void setDrawRunPsoHandles(std::size_t commandIndex,
+                            PsoHandle renderPsoHandle,
+                            PsoHandle tilePsoHandle = {}) {
+    if (commandIndex >= commandHeaders.size()) {
+      return;
+    }
+    const auto& header = commandHeaders[commandIndex];
+    if (header.kind != MetalCommandKind::DrawRun ||
+        header.payloadIndex >= drawRunRecords.size()) {
+      return;
+    }
+    auto& record = drawRunRecords[header.payloadIndex];
+    record.renderPsoHandle = renderPsoHandle;
+    record.tilePsoHandle = tilePsoHandle;
+    record.invariant.renderPsoHandle = renderPsoHandle;
+    record.invariant.tilePsoHandle = tilePsoHandle;
+  }
+
+  void setDrawRunDepthStencilHandle(std::size_t commandIndex,
+                                    DepthStencilHandle depthStencilHandle) {
+    if (commandIndex >= commandHeaders.size()) {
+      return;
+    }
+    const auto& header = commandHeaders[commandIndex];
+    if (header.kind != MetalCommandKind::DrawRun ||
+        header.payloadIndex >= drawRunRecords.size()) {
+      return;
+    }
+    auto& record = drawRunRecords[header.payloadIndex];
+    record.depthStencilHandle = depthStencilHandle;
+    record.invariant.depthStencilHandle = depthStencilHandle;
   }
 
   void appendClear(const ClearDesc& clear) {
@@ -643,6 +710,7 @@ struct ChunkSlot {
 
     const auto& record = drawRunRecords[payloadIndex];
     view.drawRunRecord = &record;
+    view.drawRunInvariant = &record.invariant;
     if (payloadIndex < drawPsoSubviews.size()) {
       view.drawPsoSubview = &drawPsoSubviews[payloadIndex];
     }
@@ -666,6 +734,8 @@ struct ChunkSlot {
     if (record.firstParam <= drawParams.size() &&
         record.paramCount <= drawParams.size() - record.firstParam) {
       view.drawParams = std::span<const DrawParam>(
+          drawParams.data() + record.firstParam, record.paramCount);
+      view.drawItems = std::span<const DrawItem>(
           drawParams.data() + record.firstParam, record.paramCount);
     }
     return view;

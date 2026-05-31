@@ -227,6 +227,30 @@ struct Counters {
   std::atomic<std::uint64_t> gpuCommandBufferTimeNs{0};
   std::atomic<std::uint64_t> gpuCommandBufferTimeMaxNs{0};
   std::atomic<std::uint64_t> gpuCommandBufferTimeSamples{0};
+  // Stage-boundary MTLCounterSampleBuffer path. These counters close the
+  // in-process feedback loop that previously required xctrace's
+  // metal-gpu-intervals table for per-render-encoder timings.
+  std::atomic<std::uint64_t> renderEncoderGpuTimeNs{0};
+  std::atomic<std::uint64_t> renderEncoderGpuTimeMaxNs{0};
+  std::atomic<std::uint64_t> renderEncoderGpuTimeSamples{0};
+  std::atomic<std::uint64_t> renderEncoderGpuDrawTimeNs{0};
+  std::atomic<std::uint64_t> renderEncoderGpuDrawSamples{0};
+  std::atomic<std::uint64_t> renderEncoderGpuClearTimeNs{0};
+  std::atomic<std::uint64_t> renderEncoderGpuClearSamples{0};
+  std::atomic<std::uint64_t> renderEncoderGpuSurfaceCopyTimeNs{0};
+  std::atomic<std::uint64_t> renderEncoderGpuSurfaceCopySamples{0};
+  std::atomic<std::uint64_t> renderEncoderGpuStretchTimeNs{0};
+  std::atomic<std::uint64_t> renderEncoderGpuStretchSamples{0};
+  std::atomic<std::uint64_t> renderEncoderGpuColorFillTimeNs{0};
+  std::atomic<std::uint64_t> renderEncoderGpuColorFillSamples{0};
+  std::atomic<std::uint64_t> renderEncoderGpuDepthResolveTimeNs{0};
+  std::atomic<std::uint64_t> renderEncoderGpuDepthResolveSamples{0};
+  std::atomic<std::uint64_t> renderEncoderGpuPresentTimeNs{0};
+  std::atomic<std::uint64_t> renderEncoderGpuPresentSamples{0};
+  std::atomic<std::uint64_t> renderEncoderGpuLastPassType{0};
+  std::atomic<std::uint64_t> renderEncoderGpuLastRt{0};
+  std::atomic<std::uint64_t> renderEncoderGpuLastDepth{0};
+  std::atomic<std::uint64_t> renderEncoderGpuLastPso{0};
   std::atomic<std::uint64_t> encodeChunkCalls{0};
   std::atomic<std::uint64_t> encodeChunkCpuNs{0};
   std::atomic<std::uint64_t> encodeChunkCpuMaxNs{0};
@@ -481,6 +505,7 @@ struct Counters {
   // so regression detection isn't outlier-driven by a single GC pause.
   PercentileRing submitDrawCpuRing;
   PercentileRing gpuCommandBufferTimeRing;
+  PercentileRing renderEncoderGpuTimeRing;
   PercentileRing encodeChunkCpuRing;
   PercentileRing encodeDrawCpuRing;
   PercentileRing encodeDrawPipelineLookupCpuRing;
@@ -803,6 +828,30 @@ constexpr CounterEntry kCounterTable[] = {
     {"gpu_command_buffer_time_p50_ms", CounterEntry::Kind::PercentileMs, nullptr, nullptr, &Counters::gpuCommandBufferTimeRing, 0.5},
     {"gpu_command_buffer_time_p95_ms", CounterEntry::Kind::PercentileMs, nullptr, nullptr, &Counters::gpuCommandBufferTimeRing, 0.95},
     {"gpu_command_buffer_time_p99_ms", CounterEntry::Kind::PercentileMs, nullptr, nullptr, &Counters::gpuCommandBufferTimeRing, 0.99},
+    {"render_encoder_gpu_time_ms", CounterEntry::Kind::Milliseconds, &Counters::renderEncoderGpuTimeNs, nullptr, nullptr, 0.0},
+    {"render_encoder_gpu_time_max_ms", CounterEntry::Kind::Milliseconds, &Counters::renderEncoderGpuTimeMaxNs, nullptr, nullptr, 0.0},
+    {"render_encoder_gpu_time_samples", CounterEntry::Kind::UnsignedCount, &Counters::renderEncoderGpuTimeSamples, nullptr, nullptr, 0.0},
+    {"render_encoder_gpu_time_p50_ms", CounterEntry::Kind::PercentileMs, nullptr, nullptr, &Counters::renderEncoderGpuTimeRing, 0.5},
+    {"render_encoder_gpu_time_p95_ms", CounterEntry::Kind::PercentileMs, nullptr, nullptr, &Counters::renderEncoderGpuTimeRing, 0.95},
+    {"render_encoder_gpu_time_p99_ms", CounterEntry::Kind::PercentileMs, nullptr, nullptr, &Counters::renderEncoderGpuTimeRing, 0.99},
+    {"render_encoder_gpu_draw_ms", CounterEntry::Kind::Milliseconds, &Counters::renderEncoderGpuDrawTimeNs, nullptr, nullptr, 0.0},
+    {"render_encoder_gpu_draw_samples", CounterEntry::Kind::UnsignedCount, &Counters::renderEncoderGpuDrawSamples, nullptr, nullptr, 0.0},
+    {"render_encoder_gpu_clear_ms", CounterEntry::Kind::Milliseconds, &Counters::renderEncoderGpuClearTimeNs, nullptr, nullptr, 0.0},
+    {"render_encoder_gpu_clear_samples", CounterEntry::Kind::UnsignedCount, &Counters::renderEncoderGpuClearSamples, nullptr, nullptr, 0.0},
+    {"render_encoder_gpu_surface_copy_ms", CounterEntry::Kind::Milliseconds, &Counters::renderEncoderGpuSurfaceCopyTimeNs, nullptr, nullptr, 0.0},
+    {"render_encoder_gpu_surface_copy_samples", CounterEntry::Kind::UnsignedCount, &Counters::renderEncoderGpuSurfaceCopySamples, nullptr, nullptr, 0.0},
+    {"render_encoder_gpu_stretch_ms", CounterEntry::Kind::Milliseconds, &Counters::renderEncoderGpuStretchTimeNs, nullptr, nullptr, 0.0},
+    {"render_encoder_gpu_stretch_samples", CounterEntry::Kind::UnsignedCount, &Counters::renderEncoderGpuStretchSamples, nullptr, nullptr, 0.0},
+    {"render_encoder_gpu_color_fill_ms", CounterEntry::Kind::Milliseconds, &Counters::renderEncoderGpuColorFillTimeNs, nullptr, nullptr, 0.0},
+    {"render_encoder_gpu_color_fill_samples", CounterEntry::Kind::UnsignedCount, &Counters::renderEncoderGpuColorFillSamples, nullptr, nullptr, 0.0},
+    {"render_encoder_gpu_depth_resolve_ms", CounterEntry::Kind::Milliseconds, &Counters::renderEncoderGpuDepthResolveTimeNs, nullptr, nullptr, 0.0},
+    {"render_encoder_gpu_depth_resolve_samples", CounterEntry::Kind::UnsignedCount, &Counters::renderEncoderGpuDepthResolveSamples, nullptr, nullptr, 0.0},
+    {"render_encoder_gpu_present_ms", CounterEntry::Kind::Milliseconds, &Counters::renderEncoderGpuPresentTimeNs, nullptr, nullptr, 0.0},
+    {"render_encoder_gpu_present_samples", CounterEntry::Kind::UnsignedCount, &Counters::renderEncoderGpuPresentSamples, nullptr, nullptr, 0.0},
+    {"render_encoder_gpu_last_pass_type", CounterEntry::Kind::UnsignedCount, &Counters::renderEncoderGpuLastPassType, nullptr, nullptr, 0.0},
+    {"render_encoder_gpu_last_rt", CounterEntry::Kind::Hex64, &Counters::renderEncoderGpuLastRt, nullptr, nullptr, 0.0},
+    {"render_encoder_gpu_last_depth", CounterEntry::Kind::Hex64, &Counters::renderEncoderGpuLastDepth, nullptr, nullptr, 0.0},
+    {"render_encoder_gpu_last_pso", CounterEntry::Kind::Hex64, &Counters::renderEncoderGpuLastPso, nullptr, nullptr, 0.0},
     {"encode_chunk_calls", CounterEntry::Kind::UnsignedCount, &Counters::encodeChunkCalls, nullptr, nullptr, 0.0},
     {"encode_chunk_cpu_ms", CounterEntry::Kind::Milliseconds, &Counters::encodeChunkCpuNs, nullptr, nullptr, 0.0},
     {"encode_chunk_cpu_max_ms", CounterEntry::Kind::Milliseconds, &Counters::encodeChunkCpuMaxNs, nullptr, nullptr, 0.0},
@@ -1535,6 +1584,54 @@ void countGpuCommandBufferTime(std::uint64_t nanoseconds) {
   recordRing(counters().gpuCommandBufferTimeRing, nanoseconds);
 }
 
+void countRenderEncoderGpuTime(std::uint64_t nanoseconds,
+                               std::uint32_t passType,
+                               std::uint64_t rtHandle,
+                               std::uint64_t depthHandle,
+                               std::uint64_t psoHandle) {
+  auto& c = counters();
+  add(c.renderEncoderGpuTimeNs, nanoseconds);
+  add(c.renderEncoderGpuTimeSamples);
+  updateMax(c.renderEncoderGpuTimeMaxNs, nanoseconds);
+  recordRing(c.renderEncoderGpuTimeRing, nanoseconds);
+  switch (passType) {
+    case 1:
+      add(c.renderEncoderGpuDrawTimeNs, nanoseconds);
+      add(c.renderEncoderGpuDrawSamples);
+      break;
+    case 2:
+      add(c.renderEncoderGpuClearTimeNs, nanoseconds);
+      add(c.renderEncoderGpuClearSamples);
+      break;
+    case 3:
+      add(c.renderEncoderGpuSurfaceCopyTimeNs, nanoseconds);
+      add(c.renderEncoderGpuSurfaceCopySamples);
+      break;
+    case 4:
+      add(c.renderEncoderGpuStretchTimeNs, nanoseconds);
+      add(c.renderEncoderGpuStretchSamples);
+      break;
+    case 5:
+      add(c.renderEncoderGpuColorFillTimeNs, nanoseconds);
+      add(c.renderEncoderGpuColorFillSamples);
+      break;
+    case 6:
+      add(c.renderEncoderGpuDepthResolveTimeNs, nanoseconds);
+      add(c.renderEncoderGpuDepthResolveSamples);
+      break;
+    case 7:
+      add(c.renderEncoderGpuPresentTimeNs, nanoseconds);
+      add(c.renderEncoderGpuPresentSamples);
+      break;
+    default:
+      break;
+  }
+  c.renderEncoderGpuLastPassType.store(passType, std::memory_order_relaxed);
+  c.renderEncoderGpuLastRt.store(rtHandle, std::memory_order_relaxed);
+  c.renderEncoderGpuLastDepth.store(depthHandle, std::memory_order_relaxed);
+  c.renderEncoderGpuLastPso.store(psoHandle, std::memory_order_relaxed);
+}
+
 void countEncodeChunkCpuTime(std::uint64_t nanoseconds) {
   add(counters().encodeChunkCalls);
   add(counters().encodeChunkCpuNs, nanoseconds);
@@ -2259,6 +2356,12 @@ CounterSnapshot snapshot() {
   s.presentTokenWaitNs = load(c.presentTokenWaitNs);
   s.gpuCommandBufferTimeNs = load(c.gpuCommandBufferTimeNs);
   s.gpuCommandBufferTimeSamples = load(c.gpuCommandBufferTimeSamples);
+  s.renderEncoderGpuTimeNs = load(c.renderEncoderGpuTimeNs);
+  s.renderEncoderGpuTimeSamples = load(c.renderEncoderGpuTimeSamples);
+  s.renderEncoderGpuLastPassType = load(c.renderEncoderGpuLastPassType);
+  s.renderEncoderGpuLastRt = load(c.renderEncoderGpuLastRt);
+  s.renderEncoderGpuLastDepth = load(c.renderEncoderGpuLastDepth);
+  s.renderEncoderGpuLastPso = load(c.renderEncoderGpuLastPso);
   s.gpuCommandBufferErrors = load(c.gpuCommandBufferErrors);
   s.subCommandBufferCommits = load(c.subCommandBufferCommits);
   return s;
@@ -2293,6 +2396,7 @@ void emitFrameDelta(std::uint64_t frameId,
       "completion_wait_ms=%.3f present_acquire_wait_ms=%.3f "
       "present_boundary_wait_ms=%.3f present_token_wait_ms=%.3f "
       "gpu_command_buffer_time_ms=%.3f gpu_command_buffer_time_samples=%llu "
+      "render_encoder_gpu_time_ms=%.3f render_encoder_gpu_time_samples=%llu "
       "gpu_command_buffer_errors=%llu sub_command_buffers=%llu]\n",
       static_cast<unsigned long long>(frameId),
       static_cast<unsigned long long>(delta(prev.submitDraw, curr.submitDraw)),
@@ -2347,6 +2451,10 @@ void emitFrameDelta(std::uint64_t frameId,
           1000000.0,
       static_cast<unsigned long long>(
           delta(prev.gpuCommandBufferTimeSamples, curr.gpuCommandBufferTimeSamples)),
+      static_cast<double>(delta(prev.renderEncoderGpuTimeNs, curr.renderEncoderGpuTimeNs)) /
+          1000000.0,
+      static_cast<unsigned long long>(
+          delta(prev.renderEncoderGpuTimeSamples, curr.renderEncoderGpuTimeSamples)),
       static_cast<unsigned long long>(
           delta(prev.gpuCommandBufferErrors, curr.gpuCommandBufferErrors)),
       static_cast<unsigned long long>(

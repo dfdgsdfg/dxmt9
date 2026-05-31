@@ -18,6 +18,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <future>
+#include <memory>
 #include <mutex>
 #include <optional>
 #include <span>
@@ -237,10 +238,37 @@ struct Entry {
   std::shared_future<WMT::Reference<WMT::RenderPipelineState>> future;
 };
 
+struct PsoSlot {
+  u32 generation = 0;
+  ShaderVariantKey key{};
+  Entry entry{};
+  bool occupied = false;
+};
+
+struct DepthStencilSlot {
+  u32 generation = 0;
+  DepthStencilKey key{};
+  WMT::Reference<WMT::DepthStencilState> state{};
+  bool occupied = false;
+};
+
+struct DrawPipelineLookup {
+  std::shared_future<WMT::Reference<WMT::RenderPipelineState>> future;
+  core::PsoHandle handle{};
+};
+
+struct DepthStencilLookup {
+  WMT::Reference<WMT::DepthStencilState> state{};
+  core::DepthStencilHandle handle{};
+};
+
 using PipelineMap = std::unordered_map<ShaderVariantKey, Entry, ShaderVariantKeyHash>;
 using DrawProbeMap = std::unordered_map<ShaderVariantKey, ShaderVariantKey, ShaderVariantKeyHash>;
+using DrawHandleMap = std::unordered_map<ShaderVariantKey, core::PsoHandle, ShaderVariantKeyHash>;
 using DepthMap =
     std::unordered_map<DepthStencilKey, WMT::Reference<WMT::DepthStencilState>, DepthStencilKeyHash>;
+using DepthHandleMap =
+    std::unordered_map<DepthStencilKey, core::DepthStencilHandle, DepthStencilKeyHash>;
 using SamplerMap =
     std::unordered_map<SamplerKey, WMT::Reference<WMT::SamplerState>, SamplerKeyHash>;
 
@@ -258,6 +286,10 @@ class Cache {
   // Thread-safe; builds the WMT state object under `mutex`.
   WMT::Reference<WMT::DepthStencilState> depthStencilStateFor(WMT::Device& device,
                                                                 const DepthStencilKey& key);
+  DepthStencilLookup depthStencilStateHandleFor(WMT::Device& device,
+                                                const DepthStencilKey& key);
+  WMT::Reference<WMT::DepthStencilState>
+  depthStencilStateForHandle(core::DepthStencilHandle handle);
 
   // Immutable Metal sampler states are cached by the full D3D9 sampler state
   // set plus LOD clamp and the argument-buffer support bit. Returning a
@@ -299,6 +331,13 @@ class Cache {
                           WMT::Reference<WMT::BinaryArchive>* archive,
                           const std::string* archivePath);
 
+  DrawPipelineLookup
+  getOrBuildDrawPipelineHandle(WMT::Reference<WMT::Device> device,
+                               const ShaderVariantKey& key,
+                               drawshader::ShaderSourceContext shaderSource,
+                               WMT::Reference<WMT::BinaryArchive>* archive,
+                               const std::string* archivePath);
+
   // High-level entry point used by the encoder: resolves color/depth
   // pixel formats from the pool's surfaces, assembles blend attachment
   // keys from the flat render-state values, composes a ShaderVariantKey,
@@ -327,6 +366,17 @@ class Cache {
                                   // through the slot-30 argbuf arrays.
                                   bool argbufResourceArray = false);
 
+  DrawPipelineLookup
+  getOrBuildDrawPipelineHandleForState(WMT::Reference<WMT::Device> device,
+                                       const core::BackendLimits& limits,
+                                       resources::Pool& pool,
+                                       core::FlatDrawStateView state,
+                                       WMT::Reference<WMT::BinaryArchive>* archive,
+                                       const std::string* archivePath,
+                                       bool tileFfpMode = false,
+                                       bool argbufHybridMode = false,
+                                       bool argbufResourceArray = false);
+
   // R-BACK-13.1 — companion to getOrBuildDrawPipelineForState for the
   // tile-FFP two-stage encode. Returns the BASE-COLOUR render pipeline: an
   // ordinary fragment PSO that rasterizes the FFP geometry colour with fog,
@@ -344,12 +394,31 @@ class Cache {
                                              WMT::Reference<WMT::BinaryArchive>* archive,
                                              const std::string* archivePath);
 
+  DrawPipelineLookup
+  getOrBuildTileFfpBaseColorPipelineHandleForState(WMT::Reference<WMT::Device> device,
+                                                   const core::BackendLimits& limits,
+                                                   resources::Pool& pool,
+                                                   core::FlatDrawStateView state,
+                                                   WMT::Reference<WMT::BinaryArchive>* archive,
+                                                   const std::string* archivePath);
+
+  std::shared_future<WMT::Reference<WMT::RenderPipelineState>>
+  drawPipelineForHandle(core::PsoHandle handle);
+
   std::mutex mutex{};
   PipelineMap draw{};
   DrawProbeMap drawProbe{};
+  DrawHandleMap drawHandles{};
+  std::vector<PsoSlot> drawSlots{};
+  std::shared_ptr<const std::vector<PsoSlot>> drawSlotSnapshot =
+      std::make_shared<const std::vector<PsoSlot>>();
   PipelineMap fill{};
   PipelineMap stretch{};
   DepthMap depth{};
+  DepthHandleMap depthHandles{};
+  std::vector<DepthStencilSlot> depthSlots{};
+  std::shared_ptr<const std::vector<DepthStencilSlot>> depthSlotSnapshot =
+      std::make_shared<const std::vector<DepthStencilSlot>>();
   SamplerMap sampler{};
 };
 
