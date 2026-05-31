@@ -151,6 +151,15 @@ struct Counters {
   std::atomic<std::uint64_t> commitChunkDrawRunBreakType{0};
   std::atomic<std::uint64_t> commitChunkDrawRunBreakEnd{0};
   std::atomic<std::uint64_t> commitChunkDrawRunBreakInvalid{0};
+  std::atomic<std::uint64_t> commitChunkDrawRunBreakTypeConstantUpload{0};
+  std::atomic<std::uint64_t> commitChunkDrawRunBreakTypeStateApply{0};
+  std::atomic<std::uint64_t> commitChunkDrawRunBreakTypeDrawUp{0};
+  std::atomic<std::uint64_t> commitChunkDrawRunBreakTypeClear{0};
+  std::atomic<std::uint64_t> commitChunkDrawRunBreakTypePresent{0};
+  std::atomic<std::uint64_t> commitChunkDrawRunBreakTypeSurfaceOp{0};
+  std::atomic<std::uint64_t> commitChunkDrawRunBreakTypeQueryIssue{0};
+  std::atomic<std::uint64_t> commitChunkDrawRunBreakTypeReadback{0};
+  std::atomic<std::uint64_t> commitChunkDrawRunBreakTypeOther{0};
   std::atomic<std::uint64_t> commitChunkDrawDeltaRenderState{0};
   std::atomic<std::uint64_t> commitChunkDrawDeltaTexture{0};
   std::atomic<std::uint64_t> commitChunkDrawDeltaStream{0};
@@ -383,6 +392,19 @@ struct Counters {
   std::atomic<std::uint64_t> renderPassStoreActionStencilStore{0};
   std::atomic<std::uint64_t> renderPassStoreActionStencilDontCare{0};
   std::atomic<std::uint64_t> renderPassTilePreservationBytes{0};
+  std::atomic<std::uint64_t> renderPassDepthProofAllowNextClear{0};
+  std::atomic<std::uint64_t> renderPassDepthProofAllowDeadNoPresent{0};
+  std::atomic<std::uint64_t> renderPassDepthProofBlockNullDepth{0};
+  std::atomic<std::uint64_t> renderPassDepthProofBlockNoLookahead{0};
+  std::atomic<std::uint64_t> renderPassDepthProofBlockMsaaResolve{0};
+  std::atomic<std::uint64_t> renderPassDepthProofBlockDrawDepth{0};
+  std::atomic<std::uint64_t> renderPassDepthProofBlockShadowSample{0};
+  std::atomic<std::uint64_t> renderPassDepthProofBlockSurfaceCopy{0};
+  std::atomic<std::uint64_t> renderPassDepthProofBlockStretchRect{0};
+  std::atomic<std::uint64_t> renderPassDepthProofBlockReadback{0};
+  std::atomic<std::uint64_t> renderPassDepthProofBlockColorFill{0};
+  std::atomic<std::uint64_t> renderPassDepthProofBlockDepthResolve{0};
+  std::atomic<std::uint64_t> renderPassDepthProofBlockPresent{0};
   std::atomic<std::uint64_t> commandBufferCreateCpuNs{0};
   std::atomic<std::uint64_t> commandBufferCreateCpuMaxNs{0};
   std::atomic<std::uint64_t> commandBufferCommitCpuNs{0};
@@ -749,6 +771,15 @@ constexpr CounterEntry kCounterTable[] = {
     {"commit_chunk_draw_run_break_type", CounterEntry::Kind::UnsignedCount, &Counters::commitChunkDrawRunBreakType, nullptr, nullptr, 0.0},
     {"commit_chunk_draw_run_break_end", CounterEntry::Kind::UnsignedCount, &Counters::commitChunkDrawRunBreakEnd, nullptr, nullptr, 0.0},
     {"commit_chunk_draw_run_break_invalid", CounterEntry::Kind::UnsignedCount, &Counters::commitChunkDrawRunBreakInvalid, nullptr, nullptr, 0.0},
+    {"commit_chunk_draw_run_break_type_const_upload", CounterEntry::Kind::UnsignedCount, &Counters::commitChunkDrawRunBreakTypeConstantUpload, nullptr, nullptr, 0.0},
+    {"commit_chunk_draw_run_break_type_apply_state", CounterEntry::Kind::UnsignedCount, &Counters::commitChunkDrawRunBreakTypeStateApply, nullptr, nullptr, 0.0},
+    {"commit_chunk_draw_run_break_type_draw_up", CounterEntry::Kind::UnsignedCount, &Counters::commitChunkDrawRunBreakTypeDrawUp, nullptr, nullptr, 0.0},
+    {"commit_chunk_draw_run_break_type_clear", CounterEntry::Kind::UnsignedCount, &Counters::commitChunkDrawRunBreakTypeClear, nullptr, nullptr, 0.0},
+    {"commit_chunk_draw_run_break_type_present", CounterEntry::Kind::UnsignedCount, &Counters::commitChunkDrawRunBreakTypePresent, nullptr, nullptr, 0.0},
+    {"commit_chunk_draw_run_break_type_surface_op", CounterEntry::Kind::UnsignedCount, &Counters::commitChunkDrawRunBreakTypeSurfaceOp, nullptr, nullptr, 0.0},
+    {"commit_chunk_draw_run_break_type_query_issue", CounterEntry::Kind::UnsignedCount, &Counters::commitChunkDrawRunBreakTypeQueryIssue, nullptr, nullptr, 0.0},
+    {"commit_chunk_draw_run_break_type_readback", CounterEntry::Kind::UnsignedCount, &Counters::commitChunkDrawRunBreakTypeReadback, nullptr, nullptr, 0.0},
+    {"commit_chunk_draw_run_break_type_other", CounterEntry::Kind::UnsignedCount, &Counters::commitChunkDrawRunBreakTypeOther, nullptr, nullptr, 0.0},
     {"commit_chunk_draw_delta_render_state", CounterEntry::Kind::UnsignedCount, &Counters::commitChunkDrawDeltaRenderState, nullptr, nullptr, 0.0},
     {"commit_chunk_draw_delta_texture", CounterEntry::Kind::UnsignedCount, &Counters::commitChunkDrawDeltaTexture, nullptr, nullptr, 0.0},
     {"commit_chunk_draw_delta_stream", CounterEntry::Kind::UnsignedCount, &Counters::commitChunkDrawDeltaStream, nullptr, nullptr, 0.0},
@@ -991,6 +1022,19 @@ constexpr CounterEntry kCounterTable[] = {
     {"render_pass_store_action_stencil_store", CounterEntry::Kind::UnsignedCount, &Counters::renderPassStoreActionStencilStore, nullptr, nullptr, 0.0},
     {"render_pass_store_action_stencil_dontcare", CounterEntry::Kind::UnsignedCount, &Counters::renderPassStoreActionStencilDontCare, nullptr, nullptr, 0.0},
     {"render_pass_tile_preservation_bytes", CounterEntry::Kind::UnsignedCount, &Counters::renderPassTilePreservationBytes, nullptr, nullptr, 0.0},
+    {"render_pass_depth_proof_allow_next_clear", CounterEntry::Kind::UnsignedCount, &Counters::renderPassDepthProofAllowNextClear, nullptr, nullptr, 0.0},
+    {"render_pass_depth_proof_allow_dead_no_present", CounterEntry::Kind::UnsignedCount, &Counters::renderPassDepthProofAllowDeadNoPresent, nullptr, nullptr, 0.0},
+    {"render_pass_depth_proof_block_null_depth", CounterEntry::Kind::UnsignedCount, &Counters::renderPassDepthProofBlockNullDepth, nullptr, nullptr, 0.0},
+    {"render_pass_depth_proof_block_no_lookahead", CounterEntry::Kind::UnsignedCount, &Counters::renderPassDepthProofBlockNoLookahead, nullptr, nullptr, 0.0},
+    {"render_pass_depth_proof_block_msaa_resolve", CounterEntry::Kind::UnsignedCount, &Counters::renderPassDepthProofBlockMsaaResolve, nullptr, nullptr, 0.0},
+    {"render_pass_depth_proof_block_draw_depth", CounterEntry::Kind::UnsignedCount, &Counters::renderPassDepthProofBlockDrawDepth, nullptr, nullptr, 0.0},
+    {"render_pass_depth_proof_block_shadow_sample", CounterEntry::Kind::UnsignedCount, &Counters::renderPassDepthProofBlockShadowSample, nullptr, nullptr, 0.0},
+    {"render_pass_depth_proof_block_surface_copy", CounterEntry::Kind::UnsignedCount, &Counters::renderPassDepthProofBlockSurfaceCopy, nullptr, nullptr, 0.0},
+    {"render_pass_depth_proof_block_stretch_rect", CounterEntry::Kind::UnsignedCount, &Counters::renderPassDepthProofBlockStretchRect, nullptr, nullptr, 0.0},
+    {"render_pass_depth_proof_block_readback", CounterEntry::Kind::UnsignedCount, &Counters::renderPassDepthProofBlockReadback, nullptr, nullptr, 0.0},
+    {"render_pass_depth_proof_block_color_fill", CounterEntry::Kind::UnsignedCount, &Counters::renderPassDepthProofBlockColorFill, nullptr, nullptr, 0.0},
+    {"render_pass_depth_proof_block_depth_resolve", CounterEntry::Kind::UnsignedCount, &Counters::renderPassDepthProofBlockDepthResolve, nullptr, nullptr, 0.0},
+    {"render_pass_depth_proof_block_present", CounterEntry::Kind::UnsignedCount, &Counters::renderPassDepthProofBlockPresent, nullptr, nullptr, 0.0},
     {"command_buffer_create_cpu_ms", CounterEntry::Kind::Milliseconds, &Counters::commandBufferCreateCpuNs, nullptr, nullptr, 0.0},
     {"command_buffer_create_cpu_max_ms", CounterEntry::Kind::Milliseconds, &Counters::commandBufferCreateCpuMaxNs, nullptr, nullptr, 0.0},
     {"command_buffer_create_cpu_p50_ms", CounterEntry::Kind::PercentileMs, nullptr, nullptr, &Counters::commandBufferCreateCpuRing, 0.5},
@@ -1429,7 +1473,9 @@ void countCommitChunkDrawReplay(bool indexed, std::uint32_t deltaMask) {
   addIf(CommitChunkDrawDeltaIndexBuffer, c.commitChunkDrawDeltaIndexBuffer);
 }
 
-void countCommitChunkDrawRunScan(std::uint32_t stop, std::uint32_t recordCount) {
+void countCommitChunkDrawRunScan(std::uint32_t stop,
+                                 std::uint32_t recordCount,
+                                 std::uint32_t stopRecordType) {
   auto& c = counters();
   add(c.commitChunkDrawRunScans);
   if (recordCount >= 2u) {
@@ -1451,6 +1497,45 @@ void countCommitChunkDrawRunScan(std::uint32_t stop, std::uint32_t recordCount) 
     break;
   case 4:
     add(c.commitChunkDrawRunBreakType);
+    switch (stopRecordType) {
+    case 3:
+    case 4:
+      add(c.commitChunkDrawRunBreakTypeDrawUp);
+      break;
+    case 14:
+    case 15:
+    case 16:
+    case 17:
+    case 18:
+    case 19:
+      add(c.commitChunkDrawRunBreakTypeConstantUpload);
+      break;
+    case 20:
+      add(c.commitChunkDrawRunBreakTypeClear);
+      break;
+    case 21:
+      add(c.commitChunkDrawRunBreakTypePresent);
+      break;
+    case 22:
+    case 23:
+    case 24:
+    case 25:
+    case 29:
+      add(c.commitChunkDrawRunBreakTypeSurfaceOp);
+      break;
+    case 26:
+      add(c.commitChunkDrawRunBreakTypeQueryIssue);
+      break;
+    case 27:
+      add(c.commitChunkDrawRunBreakTypeReadback);
+      break;
+    case 28:
+      add(c.commitChunkDrawRunBreakTypeStateApply);
+      break;
+    default:
+      add(c.commitChunkDrawRunBreakTypeOther);
+      break;
+    }
     break;
   case 5:
     add(c.commitChunkDrawRunBreakStateDelta);
@@ -1955,6 +2040,51 @@ void countRenderPassStoreActionStencil(std::uint32_t action) {
 
 void countRenderPassTilePreservationBytes(std::uint64_t bytes) {
   add(counters().renderPassTilePreservationBytes, bytes);
+}
+
+void countRenderPassDepthStoreProof(RenderPassDepthStoreProof proof) {
+  auto& c = counters();
+  switch (proof) {
+  case RenderPassDepthStoreProof::AllowNextClear:
+    add(c.renderPassDepthProofAllowNextClear);
+    break;
+  case RenderPassDepthStoreProof::AllowDeadNoPresent:
+    add(c.renderPassDepthProofAllowDeadNoPresent);
+    break;
+  case RenderPassDepthStoreProof::BlockNullDepth:
+    add(c.renderPassDepthProofBlockNullDepth);
+    break;
+  case RenderPassDepthStoreProof::BlockNoLookahead:
+    add(c.renderPassDepthProofBlockNoLookahead);
+    break;
+  case RenderPassDepthStoreProof::BlockMsaaResolve:
+    add(c.renderPassDepthProofBlockMsaaResolve);
+    break;
+  case RenderPassDepthStoreProof::BlockDrawDepth:
+    add(c.renderPassDepthProofBlockDrawDepth);
+    break;
+  case RenderPassDepthStoreProof::BlockShadowSample:
+    add(c.renderPassDepthProofBlockShadowSample);
+    break;
+  case RenderPassDepthStoreProof::BlockSurfaceCopy:
+    add(c.renderPassDepthProofBlockSurfaceCopy);
+    break;
+  case RenderPassDepthStoreProof::BlockStretchRect:
+    add(c.renderPassDepthProofBlockStretchRect);
+    break;
+  case RenderPassDepthStoreProof::BlockReadback:
+    add(c.renderPassDepthProofBlockReadback);
+    break;
+  case RenderPassDepthStoreProof::BlockColorFill:
+    add(c.renderPassDepthProofBlockColorFill);
+    break;
+  case RenderPassDepthStoreProof::BlockDepthResolve:
+    add(c.renderPassDepthProofBlockDepthResolve);
+    break;
+  case RenderPassDepthStoreProof::BlockPresent:
+    add(c.renderPassDepthProofBlockPresent);
+    break;
+  }
 }
 
 void countCommandBufferCreateCpuTime(std::uint64_t nanoseconds) {

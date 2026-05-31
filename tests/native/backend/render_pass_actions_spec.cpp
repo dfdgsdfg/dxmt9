@@ -2,14 +2,13 @@
 //
 // Spec: specs/backend/render-pass-actions/design.md sections 2 + 6.
 // Implementation under test:
-//   - encoders::nextDepthOperationIsClear (G3, file-local helper promoted
-//     to the public encoder API for this test fixture).
-//   - perf::countRenderPassLoadActionColor / *Store* (G1).
+//   - encoders::depthStoreProofForLookahead / nextDepthOperationIsClear.
+//   - perf::countRenderPassLoadActionColor / *Store* / depth proof counters.
 //
 // We use Option A from the G4 task: a hybrid decision-table fixture.
-// `nextDepthOperationIsClear` is exercised against real `core::ChunkSlot`
-// SoA records (R-BACK-15.7 / 15.9 / 15.15 cases). The color-attachment
-// load/store cases (R-BACK-15.1, 15.2, 15.3) live entirely inside
+// The depth proof helpers are exercised against real `core::ChunkSlot` SoA
+// records (R-BACK-15.7 / 15.9 / 15.15 cases). The color-attachment
+// load/store cases (R-BACK-15.1, 15.2, 15.3) still live inside
 // `beginRenderPass` and need a fully populated `EncodeContext` + Metal
 // device, so we mirror the spec's decision tree as a pure `applyColorPolicy`
 // transcription and assert the four ordered-precedence branches against
@@ -18,11 +17,10 @@
 // + counter coverage in G1/G3 picks up the regression in
 // dxmt9-allocation-counter-spec and the perf-counter histogram.
 //
-// The `nextDepthOperationIsClear` promotion is justified in the G4 return
-// notes — the helper is a pure value transform on `core::ChunkSlot`, with
-// no Metal types in its signature, so it can ship as a public symbol
-// without leaking `WMTRenderPassInfo` into headers. The encoder still
-// owns the call site in `beginRenderPass`.
+// The depth-proof promotion is justified because the helper is a pure value
+// transform on `core::ChunkSlot`, with no Metal types in its signature, so it
+// can ship as a public symbol without leaking `WMTRenderPassInfo` into
+// headers. The encoder still owns the call site in `beginRenderPass`.
 
 #include <cstddef>
 #include <cstdint>
@@ -57,6 +55,7 @@ using dxmt9::core::ReadbackDesc;
 using dxmt9::core::StretchRectDesc;
 using dxmt9::core::SurfaceCopyDesc;
 using dxmt9::core::SwapDesc;
+using DepthProof = dxmt9::perf::RenderPassDepthStoreProof;
 
 struct TestFailure : std::runtime_error {
   using std::runtime_error::runtime_error;
@@ -190,6 +189,9 @@ void testDefaultsLoadAndStore() {
   appendDrawRunWithDepth(slot, depth);
   check(dxmt9::encoders::nextDepthOperationIsClear(slot, 0u, depth),
         "R-BACK-15.7 end-of-chunk with no Present allows DontCare-store");
+  checkEq(dxmt9::encoders::depthStoreProofForLookahead(slot, 0u, depth),
+          DepthProof::AllowDeadNoPresent,
+          "R-BACK-15.7 end-of-chunk proof is dead/no-present");
 }
 
 void testClearPrecedesDontCare() {
@@ -219,6 +221,9 @@ void testClearPrecedesDontCare() {
   appendDrawRunWithDepth(slot, depth);
   check(dxmt9::encoders::nextDepthOperationIsClear(slot, 0u, depth),
         "R-BACK-15.3 clear precedence on depth: DontCare allowed");
+  checkEq(dxmt9::encoders::depthStoreProofForLookahead(slot, 0u, depth),
+          DepthProof::AllowNextClear,
+          "R-BACK-15.3 depth proof reports next clear");
 }
 
 void testDepthDontCareStoreOnNextClear() {
@@ -270,6 +275,9 @@ void testDepthForcedStoreOnNextRead() {
   appendClearOnDepth(drawSlot, depth);  // would otherwise allow DontCare
   check(!dxmt9::encoders::nextDepthOperationIsClear(drawSlot, 0u, depth),
         "R-BACK-15.15 subsequent draw on same depth handle forces Store");
+  checkEq(dxmt9::encoders::depthStoreProofForLookahead(drawSlot, 0u, depth),
+          DepthProof::BlockDrawDepth,
+          "R-BACK-15.15 subsequent draw proof blocks on depth draw");
 
   // R-BACK-15.15: a Readback that touches the depth handle must force
   // Store so the host-visible read is served correct tile contents.
@@ -279,6 +287,9 @@ void testDepthForcedStoreOnNextRead() {
   appendClearOnDepth(readbackSlot, depth);
   check(!dxmt9::encoders::nextDepthOperationIsClear(readbackSlot, 0u, depth),
         "R-BACK-15.15 readback on depth handle forces Store");
+  checkEq(dxmt9::encoders::depthStoreProofForLookahead(readbackSlot, 0u, depth),
+          DepthProof::BlockReadback,
+          "R-BACK-15.15 readback proof reason");
 
   // SurfaceCopy with depth as source or destination: same defensive
   // Store contract.
@@ -316,6 +327,9 @@ void testDepthForcedStoreOnNextRead() {
   appendPresent(presentSlot, depth);
   check(!dxmt9::encoders::nextDepthOperationIsClear(presentSlot, 0u, depth),
         "R-BACK-15.13 present at end of slot forces defensive Store");
+  checkEq(dxmt9::encoders::depthStoreProofForLookahead(presentSlot, 0u, depth),
+          DepthProof::BlockPresent,
+          "R-BACK-15.13 present proof reason");
 }
 
 void testDepthShadowMapSampleForcesStore() {
@@ -355,6 +369,9 @@ void testDepthShadowMapSampleForcesStore() {
   appendClearOnDepth(slot, depth);  // would otherwise allow DontCare
   check(!dxmt9::encoders::nextDepthOperationIsClear(slot, 0u, depth),
         "H1 depth-as-shadow-map sample forces defensive Store");
+  checkEq(dxmt9::encoders::depthStoreProofForLookahead(slot, 0u, depth),
+          DepthProof::BlockShadowSample,
+          "H1 depth-as-shadow-map proof reason");
 
   // Inactive texture slots (mask bit clear) must NOT trip the proof —
   // the binding array can hold stale handles for slots the draw never
@@ -536,6 +553,8 @@ void testCounterEmission() {
   countRenderPassStoreActionStencil(
       static_cast<std::uint32_t>(WMTStoreActionDontCare));
   countRenderPassTilePreservationBytes(7'372'800u);  // 1280×720×4 (RGBA8)
+  countRenderPassDepthStoreProof(RenderPassDepthStoreProof::AllowNextClear);
+  countRenderPassDepthStoreProof(RenderPassDepthStoreProof::BlockPresent);
 }
 
 // H4 integration tests for the touched-set hooks introduced by H3.

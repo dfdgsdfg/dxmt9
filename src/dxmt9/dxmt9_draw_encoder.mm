@@ -1064,11 +1064,13 @@ WMT::Reference<WMT::SamplerState> makeSampler(
 //
 // Public so the G4 render-pass-actions fixture can exercise the
 // contract without a Metal device.
-bool nextDepthOperationIsClear(const core::ChunkSlot& slot,
-                               std::size_t startCommandIndex,
-                               core::Handle depthHandle) {
+perf::RenderPassDepthStoreProof depthStoreProofForLookahead(
+    const core::ChunkSlot& slot,
+    std::size_t startCommandIndex,
+    core::Handle depthHandle) {
+  using Proof = perf::RenderPassDepthStoreProof;
   if (!depthHandle) {
-    return false;
+    return Proof::BlockNullDepth;
   }
   using Kind = core::MetalCommandKind;
   bool sawPresent = false;
@@ -1079,14 +1081,14 @@ bool nextDepthOperationIsClear(const core::ChunkSlot& slot,
         if (next.clear && next.clear->depthStencil.handle == depthHandle) {
           // R-BACK-15.7: the next op on this depth handle is a clear,
           // so storing tile contents would be wasted bandwidth.
-          return true;
+          return Proof::AllowNextClear;
         }
         break;
       case Kind::DrawRun:
         if (next.drawState.hot) {
           if (next.drawState.hot->depthStencil.handle == depthHandle) {
             // Depth is read by a subsequent draw — must Store.
-            return false;
+            return Proof::BlockDrawDepth;
           }
           // R-BACK-15.7 extension: depth-as-shadow-map sample. Walk the
           // active texture bindings and bail if any matches the depth
@@ -1097,7 +1099,7 @@ bool nextDepthOperationIsClear(const core::ChunkSlot& slot,
           for (std::size_t s = 0; s < textures.size(); ++s) {
             if ((mask & (1u << s)) == 0) continue;
             if (textures[s] == depthHandle) {
-              return false;
+              return Proof::BlockShadowSample;
             }
           }
         }
@@ -1106,14 +1108,14 @@ bool nextDepthOperationIsClear(const core::ChunkSlot& slot,
         if (next.surfaceCopy &&
             (next.surfaceCopy->source == depthHandle ||
              next.surfaceCopy->destination == depthHandle)) {
-          return false;
+          return Proof::BlockSurfaceCopy;
         }
         break;
       case Kind::StretchRect:
         if (next.stretchRect &&
             (next.stretchRect->source == depthHandle ||
              next.stretchRect->destination == depthHandle)) {
-          return false;
+          return Proof::BlockStretchRect;
         }
         break;
       case Kind::Readback:
@@ -1122,12 +1124,12 @@ bool nextDepthOperationIsClear(const core::ChunkSlot& slot,
         if (next.readback &&
             (next.readback->source == depthHandle ||
              next.readback->destination == depthHandle)) {
-          return false;
+          return Proof::BlockReadback;
         }
         break;
       case Kind::ColorFill:
         if (next.colorFill && next.colorFill->destination == depthHandle) {
-          return false;
+          return Proof::BlockColorFill;
         }
         break;
       case Kind::DepthResolve:
@@ -1138,7 +1140,7 @@ bool nextDepthOperationIsClear(const core::ChunkSlot& slot,
         if (next.depthResolve &&
             (next.depthResolve->msaaDepth == depthHandle ||
              next.depthResolve->intzDest == depthHandle)) {
-          return false;
+          return Proof::BlockDepthResolve;
         }
         break;
       case Kind::Present:
@@ -1169,9 +1171,18 @@ bool nextDepthOperationIsClear(const core::ChunkSlot& slot,
     return false;
   }();
   if (aggressive) {
-    return true;
+    return Proof::AllowDeadNoPresent;
   }
-  return !sawPresent;
+  return sawPresent ? Proof::BlockPresent : Proof::AllowDeadNoPresent;
+}
+
+bool nextDepthOperationIsClear(const core::ChunkSlot& slot,
+                               std::size_t startCommandIndex,
+                               core::Handle depthHandle) {
+  const auto proof =
+      depthStoreProofForLookahead(slot, startCommandIndex, depthHandle);
+  return proof == perf::RenderPassDepthStoreProof::AllowNextClear ||
+         proof == perf::RenderPassDepthStoreProof::AllowDeadNoPresent;
 }
 
 WMT::Reference<WMT::RenderCommandEncoder> beginRenderPass(
@@ -1251,12 +1262,20 @@ WMT::Reference<WMT::RenderCommandEncoder> beginRenderPass(
     // immediately discarded, so we can DontCare-store. R-BACK-15.14:
     // never DontCare an MSAA depth target with an attached resolve.
     const bool hasResolveTarget = static_cast<bool>(depthSurface->resolveTexture);
+    auto depthStoreProof = lookaheadSlot != nullptr
+        ? depthStoreProofForLookahead(*lookaheadSlot, lookaheadStartIndex,
+                                      hot.depthStencil.handle)
+        : perf::RenderPassDepthStoreProof::BlockNoLookahead;
+    if (hasResolveTarget &&
+        (depthStoreProof == perf::RenderPassDepthStoreProof::AllowNextClear ||
+         depthStoreProof == perf::RenderPassDepthStoreProof::AllowDeadNoPresent)) {
+      depthStoreProof = perf::RenderPassDepthStoreProof::BlockMsaaResolve;
+    }
+    perf::countRenderPassDepthStoreProof(depthStoreProof);
     const bool depthDontCareStore =
-        lookaheadSlot != nullptr &&
-        hot.depthStencil.handle &&
         !hasResolveTarget &&
-        nextDepthOperationIsClear(*lookaheadSlot, lookaheadStartIndex,
-                                  hot.depthStencil.handle);
+        (depthStoreProof == perf::RenderPassDepthStoreProof::AllowNextClear ||
+         depthStoreProof == perf::RenderPassDepthStoreProof::AllowDeadNoPresent);
     if (formatHasDepthAspect(depthSurface->desc.format)) {
       passInfo.depth.texture = depthSurface->texture.handle;
       passInfo.depth.load_action = clearDepth ? WMTLoadActionClear : WMTLoadActionLoad;

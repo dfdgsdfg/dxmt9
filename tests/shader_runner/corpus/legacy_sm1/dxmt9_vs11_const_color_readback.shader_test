@@ -22,6 +22,6 @@ ffff0300
 [test]
 clear rgba(0.0, 0.0, 0.0, 1.0)
 dxmt9-draw-vs-color-triangle
-expect-source vertex contains "outPosition = vin[0];"
+expect-source vertex contains "outPosition = vin0;"
 expect-source vertex contains "outColor = cFloat[0];"
 probe (32, 32) rgba(0.0, 1.0, 0.0, 1.0) 1

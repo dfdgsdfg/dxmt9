@@ -281,11 +281,12 @@ typedef struct D9CDrawPacketStreamSource {
  *                                         packet_N.delta)
  * The encoder reads server_shadow_after(N) when issuing draw N.
  *
- * Run-coalescing (drawPrimitiveRun fast path) keys off "every Valid /
- * Mask / Count is zero" — a delta-empty packet means the effective
- * state is unchanged from the prior draw, so the encoder can reuse
- * its already-bound state. The delta encoding is load-bearing for
- * this optimization.
+ * Run-coalescing (drawPrimitiveRun fast path) applies the first
+ * record's delta as the run base, then accepts later records whose
+ * delta is empty or repeats the same base delta. A delta-empty packet
+ * means the effective state is unchanged from the prior draw; a
+ * repeated base delta is idempotent against the run base. The delta
+ * encoding is load-bearing for this optimization.
  *
  * Full-snapshot mode (DXMT9_PE_DRAW_FULL_SNAPSHOT=1, Phase 16) is a
  * DEBUG / STRESS knob — not the canonical wire form. When set, every

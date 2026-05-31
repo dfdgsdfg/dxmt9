@@ -461,6 +461,34 @@ std::vector<u32> makeVs30InputSemanticBytecode() {
   };
 }
 
+std::vector<u32> makeVs30SparseInputReadBytecode() {
+  using namespace dxmt9::d3d9bc;
+  constexpr u32 kD3DDeclUsagePosition = 0u;
+  constexpr u32 kD3DDeclUsageTexcoord = 5u;
+  return {
+      makeVersionToken(true, 3, 0),
+      makeInstructionToken(kD3DSIO_DCL, 2),
+      makeDclSemanticToken(kD3DDeclUsagePosition, 0u),
+      makeDstToken(kD3DSPR_INPUT, 0),
+      makeInstructionToken(kD3DSIO_DCL, 2),
+      makeDclSemanticToken(kD3DDeclUsageTexcoord, 0u),
+      makeDstToken(kD3DSPR_INPUT, 7),
+      makeInstructionToken(kD3DSIO_DCL, 2),
+      makeDclSemanticToken(kD3DDeclUsagePosition, 0u),
+      makeDstToken(kD3DSPR_TEXCRDOUT, 0),
+      makeInstructionToken(kD3DSIO_DCL, 2),
+      makeDclSemanticToken(kD3DDeclUsageTexcoord, 0u),
+      makeDstToken(kD3DSPR_TEXCRDOUT, 1),
+      makeInstructionToken(kD3DSIO_MOV, 2),
+      makeDstToken(kD3DSPR_TEXCRDOUT, 0),
+      makeSrcToken(kD3DSPR_CONST, 0),
+      makeInstructionToken(kD3DSIO_MOV, 2),
+      makeDstToken(kD3DSPR_TEXCRDOUT, 1),
+      makeSrcToken(kD3DSPR_INPUT, 7),
+      kD3DSIO_END,
+  };
+}
+
 std::vector<u32> makePs30WriteMaskSwizzleModifierBytecode() {
   using namespace dxmt9::d3d9bc;
   return {
@@ -1821,15 +1849,15 @@ void testVs30HighOutputRegisterSemanticMapping() {
                 "high-output VS loads TEXCOORD0 from stream1 offset 12");
   checkContains(source, "dxmt9_load_f32x2(stream1, base1 + 20u)",
                 "high-output VS loads TEXCOORD1 from stream1 offset 20");
-  checkContains(source, "outPosition = vin[0]",
+  checkContains(source, "outPosition = vin0",
                 "POSITION semantic maps to Metal position despite high o-register index");
-  checkContains(source, "outTexcoord[0] = vin[1]",
+  checkContains(source, "outTexcoord[0] = vin1",
                 "TEXCOORD0 semantic maps by semantic index, not output register 3");
-  checkContains(source, "outTexcoord[1] = vin[2]",
+  checkContains(source, "outTexcoord[1] = vin2",
                 "TEXCOORD1 semantic maps by semantic index, not output register 4");
-  checkNotContains(source, "outTexcoord[3] = vin[1]",
+  checkNotContains(source, "outTexcoord[3] = vin1",
                    "TEXCOORD0 must not fall back to raw output register 3");
-  checkNotContains(source, "outTexcoord[4] = vin[2]",
+  checkNotContains(source, "outTexcoord[4] = vin2",
                    "TEXCOORD1 must not fall back to raw output register 4");
 }
 
@@ -1891,8 +1919,39 @@ void testVs30VertexDeclarationUDec3Load() {
 
   checkContains(source, "dxmt9_load_udec3(stream0, base + 12u)",
                 "UDEC3 vertex declaration type loads through the dedicated unpack helper");
-  checkContains(source, "outTexcoord[2] = vin[3]",
+  checkContains(source, "outTexcoord[2] = vin3",
                 "UDEC3 TEXCOORD input remains visible through the programmable VS output");
+}
+
+void testVs30MaterializesOnlyReadInputs() {
+  constexpr u32 kD3DDeclTypeFloat2 = 1u;
+  constexpr u32 kD3DDeclTypeFloat4 = 3u;
+  constexpr u32 kD3DDeclMethodDefault = 0u;
+  constexpr u32 kD3DDeclUsagePosition = 0u;
+  constexpr u32 kD3DDeclUsageTexcoord = 5u;
+
+  const auto source = translateVertex(
+      makeVs30SparseInputReadBytecode(),
+      {
+          VertexElement{0, 0, kD3DDeclTypeFloat4, kD3DDeclMethodDefault, kD3DDeclUsagePosition, 0},
+          VertexElement{0, 16, kD3DDeclTypeFloat2, kD3DDeclMethodDefault, kD3DDeclUsageTexcoord, 0},
+      },
+      [] {
+        std::array<u32, kMaxStreams> strides{};
+        strides[0] = 24u;
+        return strides;
+      }());
+
+  checkNotContains(source, "float4 vin[16];",
+                   "programmable VS does not materialize the full input register file");
+  checkContains(source, "float4 vin7;",
+                "programmable VS materializes the sparse input register that is actually read");
+  checkContains(source, "vin7 = float4(dxmt9_load_f32x2(stream0, base + 16u), 0.0f, 1.0f);",
+                "programmable VS loads the sparse read input from the declaration binding");
+  checkContains(source, "outTexcoord[0] = vin7;",
+                "sparse input local remains visible to VS output mapping");
+  checkNotContains(source, "vin0",
+                   "declared but unread input registers are not materialized");
 }
 
 void testVs30InputLayoutPreservesStreamBoundaries() {
@@ -2289,7 +2348,7 @@ void testPs11LegacyTexcoordTexLoweringContract() {
 
 void testVs11FixedFunctionOutputLoweringContract() {
   const auto source = translateVertex(makeVs11FixedFunctionOutputBytecode());
-  checkContains(source, "outPosition = vin[0];",
+  checkContains(source, "outPosition = vin0;",
                 "vs_1_1 oPos writes lower to the Metal position output");
   checkContains(source, "outColor = cFloat[0];",
                 "vs_1_1 oD0 writes lower to the primary color output");
@@ -2422,9 +2481,9 @@ void testPs30FragmentPositionAndMissingInputContracts() {
 
 void testVs30MissingInputDefaultsToZero() {
   const auto source = translateVertex(makeVs30MissingInputBytecode());
-  checkContains(source, "for (uint i = 0; i < 16u; ++i) { vin[i] = float4(0.0f); }",
-                "vs_3_0 input register file is zero-initialized before declaration loads");
-  checkContains(source, "outTexcoord[0] = vin[5];",
+  checkContains(source, "float4 vin5 = float4(0.0f);",
+                "vs_3_0 missing input read gets an explicit zero-default local");
+  checkContains(source, "outTexcoord[0] = vin5;",
                 "undeclared vs_3_0 input reads preserve the zero-default source");
 }
 
@@ -2621,6 +2680,7 @@ int main() {
     testVs30HighOutputRegisterSemanticMapping();
     testVs30VertexDeclarationTypeLoads();
     testVs30VertexDeclarationUDec3Load();
+    testVs30MaterializesOnlyReadInputs();
     testVs30InputLayoutPreservesStreamBoundaries();
     testVs30MultiStreamVertexDeclarationLoads();
     testDefaultNoPixelVFlipAndNoVertexYFlip();

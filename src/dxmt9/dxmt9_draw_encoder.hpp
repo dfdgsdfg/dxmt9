@@ -27,6 +27,10 @@ namespace dxmt9 {
 
 class Device;
 
+namespace perf {
+enum class RenderPassDepthStoreProof : std::uint8_t;
+}
+
 namespace resources { struct Pool; }
 namespace pipeline { class Cache; }
 namespace scratch { struct FrameAllocators; }
@@ -151,11 +155,11 @@ WMT::Reference<WMT::SamplerState> makeSampler(
 // buffer. Reads (and clears, on entry) ctx.queue.backBufferDiscardAfterPresent_
 // so the next draw to the same RT can choose DontCare over Load.
 //
-// `lookaheadSlot` + `lookaheadStartIndex` (R-BACK-15.7 simple form): when
-// non-null, the encoder runs the depth/stencil DontCare-store look-ahead
-// described in specs/backend/render-pass-actions/design.md section 4.2.
-// Pass nullptr to keep the legacy unconditional-Store behavior (e.g. for
-// callers that don't have access to the imported chunk records).
+// `lookaheadSlot` + `lookaheadStartIndex` (R-BACK-15.7): when non-null,
+// the encoder runs the depth/stencil DontCare-store proof described in
+// specs/backend/render-pass-actions/design.md section 4.2 and records the
+// reason in render_pass_depth_proof_* counters. Pass nullptr to keep the
+// legacy unconditional-Store behavior for callers without chunk records.
 WMT::Reference<WMT::RenderCommandEncoder> beginRenderPass(
     EncodeContext& ctx,
     WMT::CommandBuffer& commandBuffer,
@@ -164,19 +168,22 @@ WMT::Reference<WMT::RenderCommandEncoder> beginRenderPass(
     const core::ChunkSlot* lookaheadSlot = nullptr,
     std::size_t lookaheadStartIndex = 0);
 
-// Depth/stencil DontCare-store look-ahead (R-BACK-15.7 simple form,
-// specs/backend/render-pass-actions/design.md section 4.2). Returns true
-// when the very next record in `slot` after `startCommandIndex` that
-// touches `depthHandle` is a Clear of that handle. Any prior live read
-// or surface op on the handle (Readback / SurfaceCopy / StretchRect /
-// ColorFill source-or-dest, or a DrawRun that re-binds the handle as
-// depth target) — or hitting a Present / end of slot before such a
-// Clear — flips the proof to defensive Store (returns false).
+// Depth/stencil DontCare-store look-ahead (R-BACK-15.7,
+// specs/backend/render-pass-actions/design.md section 4.2). Returns the
+// specific proof result for the remaining records in `slot` after
+// `startCommandIndex`. Allow results mean DontCare-store is safe. Block
+// results explain why the encoder must Store instead.
 //
 // Exposed publicly so the render-pass-actions test fixture
 // (tests/native/backend/render_pass_actions_spec.cpp, R-BACK-15.16) can
 // drive R-BACK-15.7 / 15.9 / 15.15 cases without standing up a Metal
-// device. Always returns false on a null/zero `depthHandle`.
+// device.
+dxmt9::perf::RenderPassDepthStoreProof depthStoreProofForLookahead(
+    const core::ChunkSlot& slot,
+    std::size_t startCommandIndex,
+    core::Handle depthHandle);
+
+// Compatibility bool used by existing callers/tests.
 bool nextDepthOperationIsClear(const core::ChunkSlot& slot,
                                std::size_t startCommandIndex,
                                core::Handle depthHandle);

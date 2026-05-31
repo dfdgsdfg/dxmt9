@@ -27,6 +27,22 @@ enum class EncoderSplitReason : std::uint8_t {
   PresentAcquire,
 };
 
+enum class RenderPassDepthStoreProof : std::uint8_t {
+  AllowNextClear,
+  AllowDeadNoPresent,
+  BlockNullDepth,
+  BlockNoLookahead,
+  BlockMsaaResolve,
+  BlockDrawDepth,
+  BlockShadowSample,
+  BlockSurfaceCopy,
+  BlockStretchRect,
+  BlockReadback,
+  BlockColorFill,
+  BlockDepthResolve,
+  BlockPresent,
+};
+
 // Frame-allocator arena identity for ring_arena_heap_fallback_*
 // counters (R-BACK-2.27). Aggregate (`Unknown`) is reported when the
 // caller does not have access to the FrameAllocators tag.
@@ -97,7 +113,9 @@ enum CommitChunkDrawDeltaBits : std::uint32_t {
   CommitChunkDrawDeltaIndexBuffer = 1u << 17,
 };
 void countCommitChunkDrawReplay(bool indexed, std::uint32_t deltaMask);
-void countCommitChunkDrawRunScan(std::uint32_t stop, std::uint32_t recordCount);
+void countCommitChunkDrawRunScan(std::uint32_t stop,
+                                 std::uint32_t recordCount,
+                                 std::uint32_t stopRecordType);
 void countDrawCall(std::uint32_t primitiveType,
                    std::uint32_t primitiveCount,
                    std::uint64_t vertexCount,
@@ -286,6 +304,7 @@ void countRenderPassStoreActionColor(std::uint32_t action);
 void countRenderPassStoreActionDepth(std::uint32_t action);
 void countRenderPassStoreActionStencil(std::uint32_t action);
 void countRenderPassTilePreservationBytes(std::uint64_t bytes);
+void countRenderPassDepthStoreProof(RenderPassDepthStoreProof proof);
 void countCommandBufferCreateCpuTime(std::uint64_t nanoseconds);
 void countCommandBufferCommitCpuTime(std::uint64_t nanoseconds);
 // R-VERIF / V1 boundary B2 — wall-clock latency of one commit_chunk()

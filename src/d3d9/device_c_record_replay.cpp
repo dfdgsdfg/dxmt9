@@ -7,26 +7,161 @@
 namespace dxmt9::d3d9::devicec {
 namespace {
 
-bool importedDrawRecordHasNoStateDelta(
-    const ImportedRecordView& record) noexcept {
-  if (!record.valid() || !record.record) {
+bool wireHandleEquals(const D9CWireHandle& a, const D9CWireHandle& b) noexcept {
+  return a.lo == b.lo && a.hi == b.hi;
+}
+
+bool importedRecordIsDrawRunCandidate(const ImportedRecordView& record) noexcept {
+  return record.header.type == D9C_COMMAND_RECORD_DRAW_PRIMITIVE ||
+         record.header.type == D9C_COMMAND_RECORD_DRAW_INDEXED_PRIMITIVE;
+}
+
+bool drawPacketStateDeltaEquals(const D9CDrawPrimitivePacket& a,
+                                const D9CDrawPrimitivePacket& b) noexcept {
+  if (a.renderStateCount != b.renderStateCount ||
+      a.textureMask != b.textureMask ||
+      a.streamSourceMask != b.streamSourceMask ||
+      a.fvfValid != b.fvfValid ||
+      a.vsValid != b.vsValid ||
+      a.psValid != b.psValid ||
+      a.vdeclValid != b.vdeclValid ||
+      a.rtMask != b.rtMask ||
+      a.dsValid != b.dsValid ||
+      a.viewportValid != b.viewportValid ||
+      a.scissorValid != b.scissorValid ||
+      a.tssCount != b.tssCount ||
+      a.samplerStateCount != b.samplerStateCount ||
+      a.materialValid != b.materialValid ||
+      a.clipPlaneMask != b.clipPlaneMask ||
+      a.transformCount != b.transformCount ||
+      a.lightSlotMask != b.lightSlotMask ||
+      a.lightEnableValidMask != b.lightEnableValidMask ||
+      a.lightEnableMask != b.lightEnableMask) {
     return false;
   }
 
+  if (std::memcmp(a.renderStates, b.renderStates,
+                  sizeof(a.renderStates[0]) * a.renderStateCount) != 0 ||
+      std::memcmp(a.textures, b.textures, sizeof(a.textures)) != 0 ||
+      std::memcmp(a.streamSources, b.streamSources, sizeof(a.streamSources)) != 0) {
+    return false;
+  }
+  if (a.fvfValid && a.fvf != b.fvf) return false;
+  if (a.vsValid && !wireHandleEquals(a.vsHandle, b.vsHandle)) return false;
+  if (a.psValid && !wireHandleEquals(a.psHandle, b.psHandle)) return false;
+  if (a.vdeclValid && !wireHandleEquals(a.vdeclHandle, b.vdeclHandle)) return false;
+  if (std::memcmp(a.rtHandles, b.rtHandles, sizeof(a.rtHandles)) != 0) return false;
+  if (a.dsValid && !wireHandleEquals(a.dsHandle, b.dsHandle)) return false;
+  if (a.viewportValid && std::memcmp(&a.viewport, &b.viewport, sizeof(a.viewport)) != 0) return false;
+  if (a.scissorValid && std::memcmp(&a.scissor, &b.scissor, sizeof(a.scissor)) != 0) return false;
+  if (std::memcmp(a.tss, b.tss, sizeof(a.tss[0]) * a.tssCount) != 0 ||
+      std::memcmp(a.samplerStates, b.samplerStates,
+                  sizeof(a.samplerStates[0]) * a.samplerStateCount) != 0) {
+    return false;
+  }
+  if (a.materialValid && std::memcmp(&a.material, &b.material, sizeof(a.material)) != 0) return false;
+  if (a.clipPlaneMask != 0 && std::memcmp(a.clipPlanes, b.clipPlanes, sizeof(a.clipPlanes)) != 0) return false;
+  if (std::memcmp(a.transforms, b.transforms, sizeof(a.transforms[0]) * a.transformCount) != 0) return false;
+  if (a.lightSlotMask != 0 && std::memcmp(a.lights, b.lights, sizeof(a.lights)) != 0) return false;
+  return true;
+}
+
+bool drawPacketStateDeltaCompatibleWithRunBase(
+    const D9CDrawPrimitivePacket& base,
+    const D9CDrawPrimitivePacket& candidate) noexcept {
+  if (packetHasNoStateDelta(candidate)) {
+    return true;
+  }
+  return !packetHasNoStateDelta(base) &&
+         drawPacketStateDeltaEquals(base, candidate);
+}
+
+struct ImportedDrawRecordDelta {
+  D9CDrawPrimitivePacket state{};
+  bool indexed = false;
+  bool ibValid = false;
+  D9CWireHandle ibHandle{};
+  bool valid = false;
+};
+
+ImportedDrawRecordDelta importedDrawRecordDelta(
+    const ImportedRecordView& record) noexcept {
+  if (!record.valid() || !record.record) {
+    return {};
+  }
   switch (record.header.type) {
   case D9C_COMMAND_RECORD_DRAW_PRIMITIVE: {
     D9CCommandRecordDrawPrimitive decoded{};
     std::memcpy(&decoded, record.record, sizeof(decoded));
-    return packetHasNoStateDelta(decoded.packet);
+    return ImportedDrawRecordDelta{
+        .state = decoded.packet,
+        .indexed = false,
+        .ibValid = false,
+        .ibHandle = {},
+        .valid = true,
+    };
   }
   case D9C_COMMAND_RECORD_DRAW_INDEXED_PRIMITIVE: {
     D9CCommandRecordDrawIndexedPrimitive decoded{};
     std::memcpy(&decoded, record.record, sizeof(decoded));
-    return decoded.packet.ibValid == 0 && packetHasNoStateDelta(decoded.packet.state);
+    return ImportedDrawRecordDelta{
+        .state = decoded.packet.state,
+        .indexed = true,
+        .ibValid = decoded.packet.ibValid != 0,
+        .ibHandle = decoded.packet.ibHandle,
+        .valid = true,
+    };
   }
   default:
+    return {};
+  }
+}
+
+bool importedDrawRecordCompatibleWithRunBase(
+    const ImportedRecordView& base,
+    const ImportedRecordView& candidate) noexcept {
+  if (!base.valid() || !candidate.valid() ||
+      !importedRecordIsDrawRunCandidate(base) ||
+      !importedRecordIsDrawRunCandidate(candidate)) {
     return false;
   }
+
+  const auto baseDelta = importedDrawRecordDelta(base);
+  const auto candidateDelta = importedDrawRecordDelta(candidate);
+  if (!baseDelta.valid || !candidateDelta.valid ||
+      !drawPacketStateDeltaCompatibleWithRunBase(baseDelta.state,
+                                                candidateDelta.state)) {
+    return false;
+  }
+
+  if (!candidateDelta.indexed || !candidateDelta.ibValid) {
+    return true;
+  }
+  return baseDelta.indexed && baseDelta.ibValid &&
+         wireHandleEquals(candidateDelta.ibHandle, baseDelta.ibHandle);
+}
+
+bool importedDrawRecordHasSameType(
+    const ImportedRecordView& base,
+    const ImportedRecordView& candidate) noexcept {
+  return base.header.type == candidate.header.type;
+}
+
+void scanStopForIncompatibleDrawRecord(
+    ImportedDrawRunScan& scan,
+    const ImportedRecordView& firstRecord,
+    const ImportedRecordView& record) noexcept {
+  scan.stop = importedDrawRecordHasSameType(firstRecord, record)
+      ? ImportedDrawRunScanStop::StateDelta
+      : ImportedDrawRunScanStop::DifferentRecordType;
+  scan.stopRecord = record;
+}
+
+void scanStopForNonDrawRecord(
+    ImportedDrawRunScan& scan,
+    const ImportedRecordView& record) noexcept {
+  scan.stop = ImportedDrawRunScanStop::DifferentRecordType;
+  scan.stopRecord = record;
 }
 
 }  // namespace
@@ -46,20 +181,13 @@ ImportedDrawRunScan scanImportedDrawRun(
     return scan;
   }
 
-  if (firstRecord.header.type != D9C_COMMAND_RECORD_DRAW_PRIMITIVE &&
-      firstRecord.header.type != D9C_COMMAND_RECORD_DRAW_INDEXED_PRIMITIVE) {
+  if (!importedRecordIsDrawRunCandidate(firstRecord)) {
     scan.stop = ImportedDrawRunScanStop::NotDrawRecord;
     scan.stopRecord = firstRecord;
     return scan;
   }
 
   scan.recordType = firstRecord.header.type;
-  if (!importedDrawRecordHasNoStateDelta(firstRecord)) {
-    scan.stop = ImportedDrawRunScanStop::FirstRecordHasStateDelta;
-    scan.stopRecord = firstRecord;
-    return scan;
-  }
-
   scan.recordCount = 1u;
   scan.endOffset = firstRecord.nextOffset();
   scan.endIndex = firstRecord.nextIndex();
@@ -69,14 +197,12 @@ ImportedDrawRunScan scanImportedDrawRun(
       scan.stopRecord = *record;
       return scan;
     }
-    if (record->header.type != scan.recordType) {
-      scan.stop = ImportedDrawRunScanStop::DifferentRecordType;
-      scan.stopRecord = *record;
+    if (!importedRecordIsDrawRunCandidate(*record)) {
+      scanStopForNonDrawRecord(scan, *record);
       return scan;
     }
-    if (!importedDrawRecordHasNoStateDelta(*record)) {
-      scan.stop = ImportedDrawRunScanStop::StateDelta;
-      scan.stopRecord = *record;
+    if (!importedDrawRecordCompatibleWithRunBase(firstRecord, *record)) {
+      scanStopForIncompatibleDrawRecord(scan, firstRecord, *record);
       return scan;
     }
     ++scan.recordCount;
@@ -103,20 +229,13 @@ ImportedDrawRunScan scanImportedDrawRun(
     return scan;
   }
 
-  if (firstRecord.header.type != D9C_COMMAND_RECORD_DRAW_PRIMITIVE &&
-      firstRecord.header.type != D9C_COMMAND_RECORD_DRAW_INDEXED_PRIMITIVE) {
+  if (!importedRecordIsDrawRunCandidate(firstRecord)) {
     scan.stop = ImportedDrawRunScanStop::NotDrawRecord;
     scan.stopRecord = firstRecord;
     return scan;
   }
 
   scan.recordType = firstRecord.header.type;
-  if (!importedDrawRecordHasNoStateDelta(firstRecord)) {
-    scan.stop = ImportedDrawRunScanStop::FirstRecordHasStateDelta;
-    scan.stopRecord = firstRecord;
-    return scan;
-  }
-
   scan.recordCount = 1u;
   scan.endOffset = firstRecord.nextOffset();
   scan.endIndex = firstRecord.nextIndex();
@@ -126,14 +245,12 @@ ImportedDrawRunScan scanImportedDrawRun(
       scan.stopRecord = *record;
       return scan;
     }
-    if (record->header.type != scan.recordType) {
-      scan.stop = ImportedDrawRunScanStop::DifferentRecordType;
-      scan.stopRecord = *record;
+    if (!importedRecordIsDrawRunCandidate(*record)) {
+      scanStopForNonDrawRecord(scan, *record);
       return scan;
     }
-    if (!importedDrawRecordHasNoStateDelta(*record)) {
-      scan.stop = ImportedDrawRunScanStop::StateDelta;
-      scan.stopRecord = *record;
+    if (!importedDrawRecordCompatibleWithRunBase(firstRecord, *record)) {
+      scanStopForIncompatibleDrawRecord(scan, firstRecord, *record);
       return scan;
     }
     ++scan.recordCount;

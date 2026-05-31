@@ -235,7 +235,9 @@ void countCommitChunkDrawReplay(const D9CDrawIndexedPrimitivePacket& packet) {
 
 void countCommitChunkDrawRunScan(const ImportedDrawRunScan& scan) {
   dxmt9::perf::countCommitChunkDrawRunScan(
-      static_cast<std::uint32_t>(scan.stop), scan.recordCount);
+      static_cast<std::uint32_t>(scan.stop),
+      scan.recordCount,
+      scan.stopRecord.header.type);
 }
 
 void recordStateBlockRenderState(D9CDevice* d, uint32_t state, uint32_t value) {
@@ -984,10 +986,10 @@ extern "C" int32_t dxmt9c_device_commit_chunk(D9CDevice* d, const D9CCommandChun
       // draw via applyDrawPacketState; mark the matching dirty bits so
       // C2 sees the same categories the canonical state changed.
       markDirtyFromDrawPacketState(findDirtyQueue(d), decoded.packet);
-      // Try to coalesce into a draw run: scan ahead for consecutive
-      // DRAW_PRIMITIVE records that also have empty state deltas, append
-      // scanned DrawParam records into a flat span, then submit once (single
-      // canonical hot-state build + single queue submission).
+      // Try to coalesce into a draw run: scan ahead for compatible direct
+      // or indexed draw records whose deltas resolve to the same run base,
+      // append scanned DrawParam records into a flat span, then submit once
+      // (single canonical hot-state build + single queue submission).
       // Falls through to per-record path if the run is just length-1.
       const auto scan = scanImportedDrawRun(importedChunk, *recordView);
       countCommitChunkDrawRunScan(scan);
@@ -1003,10 +1005,19 @@ extern "C" int32_t dxmt9c_device_commit_chunk(D9CDevice* d, const D9CCommandChun
           if (!nextRecord || !nextRecord->valid()) {
             return commitChunkFail("draw-run-record", runIndex, header.type);
           }
-          D9CCommandRecordDrawPrimitive nextDecoded{};
-          std::memcpy(&nextDecoded, nextRecord->record, sizeof(nextDecoded));
-          runParams.push_back(makeRunParam(nextDecoded.packet));
-          countCommitChunkDrawReplay(nextDecoded.packet);
+          if (nextRecord->header.type == D9C_COMMAND_RECORD_DRAW_PRIMITIVE) {
+            D9CCommandRecordDrawPrimitive nextDecoded{};
+            std::memcpy(&nextDecoded, nextRecord->record, sizeof(nextDecoded));
+            runParams.push_back(makeRunParam(nextDecoded.packet));
+            countCommitChunkDrawReplay(nextDecoded.packet);
+          } else if (nextRecord->header.type == D9C_COMMAND_RECORD_DRAW_INDEXED_PRIMITIVE) {
+            D9CCommandRecordDrawIndexedPrimitive nextDecoded{};
+            std::memcpy(&nextDecoded, nextRecord->record, sizeof(nextDecoded));
+            runParams.push_back(makeRunParam(nextDecoded.packet));
+            countCommitChunkDrawReplay(nextDecoded.packet);
+          } else {
+            return commitChunkFail("draw-run-type", runIndex, nextRecord->header.type);
+          }
           runIndex = nextRecord->nextIndex();
         }
         if (runParams.size() != scan.recordCount) {
@@ -1015,9 +1026,12 @@ extern "C" int32_t dxmt9c_device_commit_chunk(D9CDevice* d, const D9CCommandChun
 
         hr = flushPendingDrawSubmissions();
         if (failed(hr)) return commitChunkFail("draw-run-flush", recordIndex, header.type, hr);
-        // applyDrawPacketState would be a no-op here (delta is empty),
-        // so skip directly to drawPrimitiveRun. Bypasses N-1
-        // applyDrawPrimitivePacket / canonical-state builds.
+        // Apply the first record's delta once, then issue all compatible
+        // draws against that effective state. Later records in the scan have
+        // either no delta or repeat the same base delta, so replaying them
+        // would only rebuild identical canonical state.
+        hr = applyDrawPacketState(d, decoded.packet);
+        if (failed(hr)) return commitChunkFail("draw-run-state", recordIndex, header.type, hr);
         hr = d->dev().drawPrimitiveRun(runParams);
         if (failed(hr)) return commitChunkFail("draw-run", recordIndex, header.type, hr);
         recordIndex = scan.endIndex;
@@ -1038,8 +1052,8 @@ extern "C" int32_t dxmt9c_device_commit_chunk(D9CDevice* d, const D9CCommandChun
       D9CCommandRecordDrawIndexedPrimitive decoded{};
       std::memcpy(&decoded, record, sizeof(decoded));
       markDirtyFromDrawPacketState(findDirtyQueue(d), decoded.packet.state);
-      // Same coalescing as DRAW_PRIMITIVE — separate run per indexed
-      // flag because DrawParam encodes that as a static field used by
+      // Same coalescing as DRAW_PRIMITIVE. Direct and indexed records may
+      // share a run; DrawParam carries the per-draw indexed flag used by
       // the encoder to dispatch drawIndexed vs draw.
       const auto scan = scanImportedDrawRun(importedChunk, *recordView);
       countCommitChunkDrawRunScan(scan);
@@ -1055,10 +1069,19 @@ extern "C" int32_t dxmt9c_device_commit_chunk(D9CDevice* d, const D9CCommandChun
           if (!nextRecord || !nextRecord->valid()) {
             return commitChunkFail("indexed-draw-run-record", runIndex, header.type);
           }
-          D9CCommandRecordDrawIndexedPrimitive nextDecoded{};
-          std::memcpy(&nextDecoded, nextRecord->record, sizeof(nextDecoded));
-          runParams.push_back(makeRunParam(nextDecoded.packet));
-          countCommitChunkDrawReplay(nextDecoded.packet);
+          if (nextRecord->header.type == D9C_COMMAND_RECORD_DRAW_PRIMITIVE) {
+            D9CCommandRecordDrawPrimitive nextDecoded{};
+            std::memcpy(&nextDecoded, nextRecord->record, sizeof(nextDecoded));
+            runParams.push_back(makeRunParam(nextDecoded.packet));
+            countCommitChunkDrawReplay(nextDecoded.packet);
+          } else if (nextRecord->header.type == D9C_COMMAND_RECORD_DRAW_INDEXED_PRIMITIVE) {
+            D9CCommandRecordDrawIndexedPrimitive nextDecoded{};
+            std::memcpy(&nextDecoded, nextRecord->record, sizeof(nextDecoded));
+            runParams.push_back(makeRunParam(nextDecoded.packet));
+            countCommitChunkDrawReplay(nextDecoded.packet);
+          } else {
+            return commitChunkFail("indexed-draw-run-type", runIndex, nextRecord->header.type);
+          }
           runIndex = nextRecord->nextIndex();
         }
         if (runParams.size() != scan.recordCount) {
@@ -1067,6 +1090,13 @@ extern "C" int32_t dxmt9c_device_commit_chunk(D9CDevice* d, const D9CCommandChun
 
         hr = flushPendingDrawSubmissions();
         if (failed(hr)) return commitChunkFail("indexed-draw-run-flush", recordIndex, header.type, hr);
+        hr = applyDrawPacketState(d, decoded.packet.state);
+        if (failed(hr)) return commitChunkFail("indexed-draw-run-state", recordIndex, header.type, hr);
+        if (decoded.packet.ibValid) {
+          auto* ib = wireHandlePtr<D9CBuffer>(decoded.packet.ibHandle);
+          hr = dxmt9c_device_set_indices(d, ib);
+          if (failed(hr)) return commitChunkFail("indexed-draw-run-ib", recordIndex, header.type, hr);
+        }
         hr = d->dev().drawPrimitiveRun(runParams);
         if (failed(hr)) return commitChunkFail("indexed-draw-run", recordIndex, header.type, hr);
         recordIndex = scan.endIndex;

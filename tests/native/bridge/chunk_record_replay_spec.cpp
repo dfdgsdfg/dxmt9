@@ -104,6 +104,132 @@ void testDrawRunScanBoundary() {
   checkEq(afterBoundary->index, 3u, "draw-run scan does not consume trailing draw");
 }
 
+void testDrawRunScanUsesFirstStateDeltaAsRunBase() {
+  auto firstDraw = makeDrawPrimitiveRecord(0u, 1u, true);
+  const auto secondDraw = makeDrawPrimitiveRecord(3u, 1u);
+  auto repeatedStateDraw = makeDrawPrimitiveRecord(6u, 1u, true);
+  auto differentStateDraw = makeDrawPrimitiveRecord(9u, 1u, true);
+  differentStateDraw.packet.renderStates[0].value = 12u;
+
+  std::vector<std::uint8_t> bytes;
+  appendRecord(bytes, firstDraw);
+  appendRecord(bytes, secondDraw);
+  appendRecord(bytes, repeatedStateDraw);
+  appendRecord(bytes, differentStateDraw);
+
+  const auto chunk = makeImportedChunkView(
+      bytes.data(), static_cast<std::uint32_t>(bytes.size()), 4u);
+  const auto first = nextImportedRecord(chunk, 0u, 0u);
+  check(first.has_value(), "state-base draw-run scan first record exists");
+  check(first->valid(), "state-base draw-run scan first record validates");
+
+  const auto scan = scanImportedDrawRun(chunk, *first);
+  check(scan.replayAsRun(), "first state delta becomes the draw-run base");
+  checkEq(scan.recordCount, 3u,
+          "draw-run scan accepts no-delta and repeated base-delta records");
+  checkEq(scan.endIndex, 3u, "state-base draw-run scan stops before changed state");
+  checkEq(static_cast<int>(scan.stop),
+          static_cast<int>(ImportedDrawRunScanStop::StateDelta),
+          "state-base draw-run scan reports changed-state boundary");
+}
+
+void testDrawRunScanAllowsRepeatedStreamDelta() {
+  auto firstDraw = makeDrawPrimitiveRecord(0u, 1u);
+  firstDraw.packet.streamSourceMask = 1u;
+  firstDraw.packet.streamSources[0].buffer.lo = 0x1000u;
+  firstDraw.packet.streamSources[0].offset = 16u;
+  firstDraw.packet.streamSources[0].stride = 32u;
+  auto repeatedStreamDraw = makeDrawPrimitiveRecord(3u, 1u);
+  repeatedStreamDraw.packet.streamSourceMask = 1u;
+  repeatedStreamDraw.packet.streamSources[0].buffer.lo = 0x1000u;
+  repeatedStreamDraw.packet.streamSources[0].offset = 16u;
+  repeatedStreamDraw.packet.streamSources[0].stride = 32u;
+  auto changedStreamDraw = makeDrawPrimitiveRecord(6u, 1u);
+  changedStreamDraw.packet.streamSourceMask = 1u;
+  changedStreamDraw.packet.streamSources[0].buffer.lo = 0x2000u;
+  changedStreamDraw.packet.streamSources[0].offset = 16u;
+  changedStreamDraw.packet.streamSources[0].stride = 32u;
+
+  std::vector<std::uint8_t> bytes;
+  appendRecord(bytes, firstDraw);
+  appendRecord(bytes, repeatedStreamDraw);
+  appendRecord(bytes, changedStreamDraw);
+
+  const auto chunk = makeImportedChunkView(
+      bytes.data(), static_cast<std::uint32_t>(bytes.size()), 3u);
+  const auto first = nextImportedRecord(chunk, 0u, 0u);
+  check(first.has_value(), "stream-delta draw-run scan first record exists");
+  check(first->valid(), "stream-delta draw-run scan first record validates");
+
+  const auto scan = scanImportedDrawRun(chunk, *first);
+  check(scan.replayAsRun(), "repeated stream delta keeps the same run invariant");
+  checkEq(scan.recordCount, 2u,
+          "draw-run scan accepts repeated stream delta");
+  checkEq(scan.endIndex, 2u,
+          "draw-run scan stops before changed stream binding");
+  checkEq(static_cast<int>(scan.stop),
+          static_cast<int>(ImportedDrawRunScanStop::StateDelta),
+          "changed stream delta remains a run boundary");
+}
+
+void testDrawRunScanAllowsMixedDirectAndIndexedNoDelta() {
+  const auto directDraw = makeDrawPrimitiveRecord(0u, 1u);
+  auto indexedDraw = makeDrawIndexedPrimitiveRecord(3u, 2u);
+  indexedDraw.packet.state.primitiveType = directDraw.packet.primitiveType;
+  const auto trailingDirectDraw = makeDrawPrimitiveRecord(9u, 1u);
+
+  std::vector<std::uint8_t> bytes;
+  appendRecord(bytes, directDraw);
+  appendRecord(bytes, indexedDraw);
+  appendRecord(bytes, trailingDirectDraw);
+
+  const auto chunk = makeImportedChunkView(
+      bytes.data(), static_cast<std::uint32_t>(bytes.size()), 3u);
+  const auto first = nextImportedRecord(chunk, 0u, 0u);
+  check(first.has_value(), "mixed direct/indexed scan first record exists");
+  check(first->valid(), "mixed direct/indexed scan first record validates");
+
+  const auto scan = scanImportedDrawRun(chunk, *first);
+  check(scan.replayAsRun(), "mixed direct/indexed no-delta records share run state");
+  checkEq(scan.recordCount, 3u,
+          "draw-run scan accepts direct/indexed/direct records");
+  checkEq(static_cast<int>(scan.stop),
+          static_cast<int>(ImportedDrawRunScanStop::EndOfChunk),
+          "mixed direct/indexed scan reaches chunk end");
+
+  const auto directParam = makeRunParam(directDraw.packet);
+  const auto indexedParam = makeRunParam(indexedDraw.packet);
+  check(!directParam.indexed, "mixed run preserves direct draw params");
+  check(indexedParam.indexed, "mixed run preserves indexed draw params");
+}
+
+void testDrawRunScanRejectsLateIndexBufferDeltaInMixedRun() {
+  const auto directDraw = makeDrawPrimitiveRecord(0u, 1u);
+  auto indexedDraw = makeDrawIndexedPrimitiveRecord(3u, 1u);
+  indexedDraw.packet.state.primitiveType = directDraw.packet.primitiveType;
+  indexedDraw.packet.ibValid = 1u;
+  indexedDraw.packet.ibHandle.lo = 0x1000u;
+
+  std::vector<std::uint8_t> bytes;
+  appendRecord(bytes, directDraw);
+  appendRecord(bytes, indexedDraw);
+
+  const auto chunk = makeImportedChunkView(
+      bytes.data(), static_cast<std::uint32_t>(bytes.size()), 2u);
+  const auto first = nextImportedRecord(chunk, 0u, 0u);
+  check(first.has_value(), "late-ib mixed scan first record exists");
+  check(first->valid(), "late-ib mixed scan first record validates");
+
+  const auto scan = scanImportedDrawRun(chunk, *first);
+  check(!scan.replayAsRun(),
+        "late index-buffer delta is not applied mid-run");
+  checkEq(scan.recordCount, 1u,
+          "late-ib mixed scan keeps only the direct base record");
+  checkEq(static_cast<int>(scan.stop),
+          static_cast<int>(ImportedDrawRunScanStop::DifferentRecordType),
+          "late-ib mixed scan reports the incompatible indexed boundary");
+}
+
 void testIndexedDrawRunScanPreservesPerRecordParams() {
   auto firstDraw = makeDrawIndexedPrimitiveRecord(2u, 3u);
   firstDraw.packet.state.primitiveType = 5u;
@@ -171,7 +297,7 @@ void testIndexedDrawRunScanPreservesPerRecordParams() {
           "indexed draw-run scan does not consume stateful boundary");
 }
 
-void testIndexedDrawRunScanStopsAtIndexBufferDelta() {
+void testIndexedDrawRunScanUsesFirstIndexBufferDeltaAsRunBase() {
   auto firstDraw = makeDrawIndexedPrimitiveRecord(0u, 1u);
   firstDraw.packet.ibValid = 1u;
   firstDraw.packet.ibHandle.lo = 0x1000u;
@@ -188,13 +314,113 @@ void testIndexedDrawRunScanStopsAtIndexBufferDelta() {
   check(first->valid(), "indexed ib-delta scan first record validates");
 
   const auto scan = scanImportedDrawRun(chunk, *first);
-  check(!scan.replayAsRun(), "indexed ib-delta draw is not replayed as a run");
-  checkEq(scan.recordCount, 0u, "indexed ib-delta scan rejects first record");
+  check(scan.replayAsRun(), "indexed first ib-delta draw becomes the run base");
+  checkEq(scan.recordCount, 2u, "indexed ib-delta scan includes following no-delta draw");
   checkEq(static_cast<int>(scan.stop),
-          static_cast<int>(ImportedDrawRunScanStop::FirstRecordHasStateDelta),
-          "indexed ib-delta scan reports first-record state delta");
-  checkEq(scan.stopRecord.index, 0u,
-          "indexed ib-delta scan leaves first draw for normal replay");
+          static_cast<int>(ImportedDrawRunScanStop::EndOfChunk),
+          "indexed ib-delta scan reaches chunk end");
+  checkEq(scan.endIndex, 2u,
+          "indexed ib-delta scan consumes the compatible run");
+}
+
+void testIndexedDrawRunScanAllowsRepeatedIndexBufferDelta() {
+  auto firstDraw = makeDrawIndexedPrimitiveRecord(0u, 1u);
+  firstDraw.packet.ibValid = 1u;
+  firstDraw.packet.ibHandle.lo = 0x1000u;
+  auto repeatedIbDraw = makeDrawIndexedPrimitiveRecord(3u, 1u);
+  repeatedIbDraw.packet.ibValid = 1u;
+  repeatedIbDraw.packet.ibHandle.lo = 0x1000u;
+  auto changedIbDraw = makeDrawIndexedPrimitiveRecord(6u, 1u);
+  changedIbDraw.packet.ibValid = 1u;
+  changedIbDraw.packet.ibHandle.lo = 0x2000u;
+
+  std::vector<std::uint8_t> bytes;
+  appendRecord(bytes, firstDraw);
+  appendRecord(bytes, repeatedIbDraw);
+  appendRecord(bytes, changedIbDraw);
+
+  const auto chunk = makeImportedChunkView(
+      bytes.data(), static_cast<std::uint32_t>(bytes.size()), 3u);
+  const auto first = nextImportedRecord(chunk, 0u, 0u);
+  check(first.has_value(), "indexed repeated-ib scan first record exists");
+  check(first->valid(), "indexed repeated-ib scan first record validates");
+
+  const auto scan = scanImportedDrawRun(chunk, *first);
+  check(scan.replayAsRun(), "repeated index buffer delta keeps the same run invariant");
+  checkEq(scan.recordCount, 2u,
+          "indexed draw-run scan accepts repeated IB delta");
+  checkEq(scan.endIndex, 2u,
+          "indexed draw-run scan stops before changed IB binding");
+  checkEq(static_cast<int>(scan.stop),
+          static_cast<int>(ImportedDrawRunScanStop::StateDelta),
+          "changed IB delta remains a run boundary");
+}
+
+void testIndexedDrawRunScanAllowsMixedDirectWithBaseIndexBuffer() {
+  auto firstDraw = makeDrawIndexedPrimitiveRecord(0u, 1u);
+  firstDraw.packet.ibValid = 1u;
+  firstDraw.packet.ibHandle.lo = 0x1000u;
+  auto directDraw = makeDrawPrimitiveRecord(3u, 1u);
+  directDraw.packet.primitiveType = firstDraw.packet.state.primitiveType;
+  auto repeatedIbDraw = makeDrawIndexedPrimitiveRecord(6u, 1u);
+  repeatedIbDraw.packet.state.primitiveType = firstDraw.packet.state.primitiveType;
+  repeatedIbDraw.packet.ibValid = 1u;
+  repeatedIbDraw.packet.ibHandle.lo = 0x1000u;
+  auto changedIbDraw = makeDrawIndexedPrimitiveRecord(9u, 1u);
+  changedIbDraw.packet.state.primitiveType = firstDraw.packet.state.primitiveType;
+  changedIbDraw.packet.ibValid = 1u;
+  changedIbDraw.packet.ibHandle.lo = 0x2000u;
+
+  std::vector<std::uint8_t> bytes;
+  appendRecord(bytes, firstDraw);
+  appendRecord(bytes, directDraw);
+  appendRecord(bytes, repeatedIbDraw);
+  appendRecord(bytes, changedIbDraw);
+
+  const auto chunk = makeImportedChunkView(
+      bytes.data(), static_cast<std::uint32_t>(bytes.size()), 4u);
+  const auto first = nextImportedRecord(chunk, 0u, 0u);
+  check(first.has_value(), "indexed/direct mixed scan first record exists");
+  check(first->valid(), "indexed/direct mixed scan first record validates");
+
+  const auto scan = scanImportedDrawRun(chunk, *first);
+  check(scan.replayAsRun(),
+        "indexed base IB can support mixed direct and repeated-IB indexed draws");
+  checkEq(scan.recordCount, 3u,
+          "indexed/direct mixed scan accepts compatible records");
+  checkEq(scan.endIndex, 3u,
+          "indexed/direct mixed scan stops before changed IB");
+  checkEq(static_cast<int>(scan.stop),
+          static_cast<int>(ImportedDrawRunScanStop::StateDelta),
+          "changed IB after indexed base remains a state boundary");
+}
+
+void testIndexedDrawRunScanStopsAtDifferentIndexBufferDelta() {
+  auto firstDraw = makeDrawIndexedPrimitiveRecord(0u, 1u);
+  firstDraw.packet.ibValid = 1u;
+  firstDraw.packet.ibHandle.lo = 0x1000u;
+  auto secondDraw = makeDrawIndexedPrimitiveRecord(3u, 1u);
+  secondDraw.packet.ibValid = 1u;
+  secondDraw.packet.ibHandle.lo = 0x2000u;
+
+  std::vector<std::uint8_t> bytes;
+  appendRecord(bytes, firstDraw);
+  appendRecord(bytes, secondDraw);
+
+  const auto chunk = makeImportedChunkView(
+      bytes.data(), static_cast<std::uint32_t>(bytes.size()), 2u);
+  const auto first = nextImportedRecord(chunk, 0u, 0u);
+  check(first.has_value(), "indexed different-ib scan first record exists");
+  check(first->valid(), "indexed different-ib scan first record validates");
+
+  const auto scan = scanImportedDrawRun(chunk, *first);
+  check(!scan.replayAsRun(), "different index buffer delta breaks the run");
+  checkEq(scan.recordCount, 1u, "different ib scan keeps only the base record");
+  checkEq(static_cast<int>(scan.stop),
+          static_cast<int>(ImportedDrawRunScanStop::StateDelta),
+          "different ib scan reports state-delta boundary");
+  checkEq(scan.stopRecord.index, 1u,
+          "different ib scan leaves the changed-ib draw for normal replay");
 }
 
 void testImportedRecordReplayInfoClassifiesOrderingBoundaries() {
@@ -289,8 +515,15 @@ int main() {
   try {
     testImportedWireDrawRunScansRecordTableOrder();
     testDrawRunScanBoundary();
+    testDrawRunScanUsesFirstStateDeltaAsRunBase();
+    testDrawRunScanAllowsRepeatedStreamDelta();
+    testDrawRunScanAllowsMixedDirectAndIndexedNoDelta();
+    testDrawRunScanRejectsLateIndexBufferDeltaInMixedRun();
     testIndexedDrawRunScanPreservesPerRecordParams();
-    testIndexedDrawRunScanStopsAtIndexBufferDelta();
+    testIndexedDrawRunScanUsesFirstIndexBufferDeltaAsRunBase();
+    testIndexedDrawRunScanAllowsRepeatedIndexBufferDelta();
+    testIndexedDrawRunScanAllowsMixedDirectWithBaseIndexBuffer();
+    testIndexedDrawRunScanStopsAtDifferentIndexBufferDelta();
     testImportedRecordReplayInfoClassifiesOrderingBoundaries();
     testDrawRunHelpers();
   } catch (const dxmt9::d3d9::devicec::spec::TestFailure& e) {

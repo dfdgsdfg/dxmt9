@@ -1423,8 +1423,8 @@ class Device : public std::enable_shared_from_this<Device> {
                                  IndexType indexType, u32 vertexStride = 0);
   // Compact draw-run: snapshots BaseDrawState ONCE from current state_ and
   // submits the supplied DrawParam span through the immediate flat path. Used
-  // by the chunk importer when N consecutive D9C_COMMAND_RECORD_DRAW_* records
-  // carry no state delta.
+  // by the chunk importer when consecutive D9C_COMMAND_RECORD_DRAW_* records
+  // resolve to the same run-invariant state after applying the first delta.
   HResult drawPrimitiveRun(std::span<const DrawParam> draws);
   HResult snapshotDrawSubmissionFromCurrentState(DrawParam draw,
                                                  DrawRunSubmission& submission);

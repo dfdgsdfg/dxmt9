@@ -109,6 +109,10 @@ std::string vertexStreamBaseName(u32 stream) {
   return stream == 0 ? "base" : "base" + std::to_string(stream);
 }
 
+std::string vertexInputName(u32 index) {
+  return "vin" + std::to_string(index);
+}
+
 void emitExtraVertexStreamParameters(std::ostringstream& out,
                                      const std::optional<VertexShaderInputLayout>& inputLayout) {
   if (!inputLayout) {
@@ -464,9 +468,52 @@ void requireSupportedDestinationAddressing(const D3DRegisterRef& dst) {
   throw std::runtime_error("destination relative addressing is only supported for temp, texcoord output, and constant registers");
 }
 
+struct VertexInputReadUsage {
+  std::array<bool, 16> reads{};
+  bool indexedRead = false;
+};
+
+VertexInputReadUsage collectVertexInputReadUsage(const SpirvModule& module) {
+  VertexInputReadUsage usage{};
+  if (module.stage != D3DShaderStage::Vertex) {
+    return usage;
+  }
+
+  for (const auto& instruction : module.instructions) {
+    switch (instruction.opcode) {
+      case kD3DSIO_COMMENT:
+      case kD3DSIO_PHASE:
+      case kD3DSIO_DCL:
+      case kD3DSIO_DEF:
+      case kD3DSIO_DEFI:
+      case kD3DSIO_DEFB:
+        continue;
+      default:
+        break;
+    }
+
+    const size_t firstSource = opcodeWritesFirstOperand(instruction.opcode) ? 1u : 0u;
+    for (size_t i = firstSource; i < instruction.operands.size(); ++i) {
+      const auto reg = decodeOperandRegister(instruction, i, module.stage);
+      if (reg.kind != D3DRegisterKind::Input) {
+        continue;
+      }
+      if (reg.relAddrToken != 0u) {
+        usage.indexedRead = true;
+      }
+      if (reg.index < usage.reads.size()) {
+        usage.reads[reg.index] = true;
+      }
+    }
+  }
+
+  return usage;
+}
+
 std::string readOperandExpression(const D3DDecodedInstruction& instruction, const D3DRegisterRef& reg,
                                   const std::string& vertexInputs, const std::string& pixelInputs,
-                                  bool vertexStage, const std::string& outPosition, const std::string& outColor,
+                                  bool vertexStage, bool vertexInputArray,
+                                  const std::string& outPosition, const std::string& outColor,
                                   const std::string& outSecondaryColor, const std::string& outTexcoord,
                                   const std::string& outFogFactor, const std::string& outPointSize,
                                   const std::string& tempPrefix, const std::string& constPrefix,
@@ -506,7 +553,14 @@ std::string readOperandExpression(const D3DDecodedInstruction& instruction, cons
       return "(" + boolPrefix + "[" + std::to_string(reg.index) + "] != 0u ? float4(1.0f) : float4(0.0f))";
     case D3DRegisterKind::Input:
       if (vertexStage) {
-        return vertexInputs + "[" + std::to_string(reg.index) + "]";
+        if (vertexInputArray) {
+          if (reg.relAddrToken != 0u) {
+            return vertexInputs + "[clamp(" + relAddrExpression(reg.relAddrToken) + " + " +
+                   std::to_string(reg.index) + ", 0, 15)]";
+          }
+          return vertexInputs + "[" + std::to_string(reg.index) + "]";
+        }
+        return vertexInputName(reg.index);
       }
       if (reg.index == 0) {
         return "float4(" + pixelInputs + ".color)";
@@ -1075,10 +1129,105 @@ std::string translateSpirvToMsl(const SpirvModule& module,
       out << "// decoded d3d hash " << module.hash << "\n";
       return out.str();
     }
-    out << "  float4 vin[16];\n";
-    out << "  for (uint i = 0; i < 16u; ++i) { vin[i] = float4(0.0f); }\n";
-    out << "  vin[0] = float4(dxmt9_positions[vid % 3], 0.0f, 1.0f);\n";
+    const auto inputReadUsage = collectVertexInputReadUsage(module);
+    const bool useVertexInputArray = inputReadUsage.indexedRead;
+    bool needsVertexFetch = false;
     if (inputLayout) {
+      for (size_t i = 0; i < inputLayout->inputs.size(); ++i) {
+        if ((useVertexInputArray || inputReadUsage.reads[i]) && inputLayout->inputs[i].valid) {
+          needsVertexFetch = true;
+          break;
+        }
+      }
+    }
+    auto emitVertexInputLoad = [&](const VertexInputBinding& binding, const std::string& target) {
+      const std::string streamName = vertexStreamName(binding.stream);
+      const std::string baseName = vertexStreamBaseName(binding.stream);
+      switch (binding.type) {
+        case kD3DDeclTypeFloat1:
+          out << "  " << target << " = float4(dxmt9_load_f32(" << streamName << ", " << baseName << " + " << binding.offset
+              << "u), 0.0f, 0.0f, 1.0f);\n";
+          break;
+        case kD3DDeclTypeFloat2:
+          out << "  " << target << " = float4(dxmt9_load_f32x2(" << streamName << ", " << baseName << " + " << binding.offset
+              << "u), 0.0f, 1.0f);\n";
+          break;
+        case kD3DDeclTypeFloat3:
+          out << "  " << target << " = float4(dxmt9_load_f32x3(" << streamName << ", " << baseName << " + " << binding.offset
+              << "u), 1.0f);\n";
+          break;
+        case kD3DDeclTypeFloat4:
+          out << "  " << target << " = dxmt9_load_f32x4(" << streamName << ", " << baseName << " + " << binding.offset << "u);\n";
+          break;
+        case kD3DDeclTypeD3DColor:
+          out << "  " << target << " = dxmt9_load_d3dcolor(" << streamName << ", " << baseName << " + " << binding.offset << "u);\n";
+          break;
+        case kD3DDeclTypeUByte4:
+          out << "  " << target << " = dxmt9_load_u8x4(" << streamName << ", " << baseName << " + " << binding.offset << "u);\n";
+          break;
+        case kD3DDeclTypeShort2:
+          out << "  " << target << " = float4(dxmt9_load_i16x2(" << streamName << ", " << baseName << " + " << binding.offset
+              << "u), 0.0f, 1.0f);\n";
+          break;
+        case kD3DDeclTypeShort4:
+          out << "  " << target << " = dxmt9_load_i16x4(" << streamName << ", " << baseName << " + " << binding.offset << "u);\n";
+          break;
+        case kD3DDeclTypeUByte4N:
+          out << "  " << target << " = dxmt9_load_u8x4_unorm(" << streamName << ", " << baseName << " + " << binding.offset << "u);\n";
+          break;
+        case kD3DDeclTypeShort2N:
+          out << "  " << target << " = float4(dxmt9_load_i16x2_snorm(" << streamName << ", " << baseName << " + " << binding.offset
+              << "u), 0.0f, 1.0f);\n";
+          break;
+        case kD3DDeclTypeShort4N:
+          out << "  " << target << " = dxmt9_load_i16x4_snorm(" << streamName << ", " << baseName << " + " << binding.offset << "u);\n";
+          break;
+        case kD3DDeclTypeUShort2N:
+          out << "  " << target << " = float4(dxmt9_load_u16x2_unorm(" << streamName << ", " << baseName << " + " << binding.offset
+              << "u), 0.0f, 1.0f);\n";
+          break;
+        case kD3DDeclTypeUShort4N:
+          out << "  " << target << " = dxmt9_load_u16x4_unorm(" << streamName << ", " << baseName << " + " << binding.offset << "u);\n";
+          break;
+        case kD3DDeclTypeUDec3:
+          out << "  " << target << " = dxmt9_load_udec3(" << streamName << ", " << baseName << " + " << binding.offset << "u);\n";
+          break;
+        case kD3DDeclTypeDec3N:
+          out << "  " << target << " = dxmt9_load_dec3n(" << streamName << ", " << baseName << " + " << binding.offset << "u);\n";
+          break;
+        case kD3DDeclTypeFloat16_2:
+          out << "  " << target << " = float4(dxmt9_load_f16x2(" << streamName << ", " << baseName << " + " << binding.offset
+              << "u), 0.0f, 1.0f);\n";
+          break;
+        case kD3DDeclTypeFloat16_4:
+          out << "  " << target << " = dxmt9_load_f16x4(" << streamName << ", " << baseName << " + " << binding.offset << "u);\n";
+          break;
+        default:
+          break;
+      }
+    };
+
+    if (useVertexInputArray) {
+      out << "  float4 vin[16];\n";
+      out << "  for (uint i = 0; i < 16u; ++i) { vin[i] = float4(0.0f); }\n";
+      out << "  vin[0] = float4(dxmt9_positions[vid % 3], 0.0f, 1.0f);\n";
+    } else {
+      for (size_t i = 0; i < inputReadUsage.reads.size(); ++i) {
+        if (!inputReadUsage.reads[i]) {
+          continue;
+        }
+        const auto binding = inputLayout ? inputLayout->inputs[i] : VertexInputBinding{};
+        if (binding.valid) {
+          out << "  float4 " << vertexInputName(static_cast<u32>(i)) << ";\n";
+        } else if (i == 0) {
+          out << "  float4 " << vertexInputName(static_cast<u32>(i))
+              << " = float4(dxmt9_positions[vid % 3], 0.0f, 1.0f);\n";
+        } else {
+          out << "  float4 " << vertexInputName(static_cast<u32>(i)) << " = float4(0.0f);\n";
+        }
+      }
+    }
+    if (inputLayout && needsVertexFetch) {
       out << "  const uint stride = drawVolatile.vertexStreamStride != 0u ? drawVolatile.vertexStreamStride : "
           << inputLayout->stride << "u;\n";
       out << "  const int vertexIndex = max(0, int(vid) + drawVolatile.vertexBaseIndex);\n";
@@ -1092,73 +1241,13 @@ std::string translateSpirvToMsl(const SpirvModule& module,
       }
       for (size_t i = 0; i < inputLayout->inputs.size(); ++i) {
         const auto& binding = inputLayout->inputs[i];
-        if (!binding.valid) {
+        if (!binding.valid || (!useVertexInputArray && !inputReadUsage.reads[i])) {
           continue;
         }
-        const std::string streamName = vertexStreamName(binding.stream);
-        const std::string baseName = vertexStreamBaseName(binding.stream);
-        switch (binding.type) {
-          case kD3DDeclTypeFloat1:
-            out << "  vin[" << i << "] = float4(dxmt9_load_f32(" << streamName << ", " << baseName << " + " << binding.offset
-                << "u), 0.0f, 0.0f, 1.0f);\n";
-            break;
-          case kD3DDeclTypeFloat2:
-            out << "  vin[" << i << "] = float4(dxmt9_load_f32x2(" << streamName << ", " << baseName << " + " << binding.offset
-                << "u), 0.0f, 1.0f);\n";
-            break;
-          case kD3DDeclTypeFloat3:
-            out << "  vin[" << i << "] = float4(dxmt9_load_f32x3(" << streamName << ", " << baseName << " + " << binding.offset
-                << "u), 1.0f);\n";
-            break;
-          case kD3DDeclTypeFloat4:
-            out << "  vin[" << i << "] = dxmt9_load_f32x4(" << streamName << ", " << baseName << " + " << binding.offset << "u);\n";
-            break;
-          case kD3DDeclTypeD3DColor:
-            out << "  vin[" << i << "] = dxmt9_load_d3dcolor(" << streamName << ", " << baseName << " + " << binding.offset << "u);\n";
-            break;
-          case kD3DDeclTypeUByte4:
-            out << "  vin[" << i << "] = dxmt9_load_u8x4(" << streamName << ", " << baseName << " + " << binding.offset << "u);\n";
-            break;
-          case kD3DDeclTypeShort2:
-            out << "  vin[" << i << "] = float4(dxmt9_load_i16x2(" << streamName << ", " << baseName << " + " << binding.offset
-                << "u), 0.0f, 1.0f);\n";
-            break;
-          case kD3DDeclTypeShort4:
-            out << "  vin[" << i << "] = dxmt9_load_i16x4(" << streamName << ", " << baseName << " + " << binding.offset << "u);\n";
-            break;
-          case kD3DDeclTypeUByte4N:
-            out << "  vin[" << i << "] = dxmt9_load_u8x4_unorm(" << streamName << ", " << baseName << " + " << binding.offset << "u);\n";
-            break;
-          case kD3DDeclTypeShort2N:
-            out << "  vin[" << i << "] = float4(dxmt9_load_i16x2_snorm(" << streamName << ", " << baseName << " + " << binding.offset
-                << "u), 0.0f, 1.0f);\n";
-            break;
-          case kD3DDeclTypeShort4N:
-            out << "  vin[" << i << "] = dxmt9_load_i16x4_snorm(" << streamName << ", " << baseName << " + " << binding.offset << "u);\n";
-            break;
-          case kD3DDeclTypeUShort2N:
-            out << "  vin[" << i << "] = float4(dxmt9_load_u16x2_unorm(" << streamName << ", " << baseName << " + " << binding.offset
-                << "u), 0.0f, 1.0f);\n";
-            break;
-          case kD3DDeclTypeUShort4N:
-            out << "  vin[" << i << "] = dxmt9_load_u16x4_unorm(" << streamName << ", " << baseName << " + " << binding.offset << "u);\n";
-            break;
-          case kD3DDeclTypeUDec3:
-            out << "  vin[" << i << "] = dxmt9_load_udec3(" << streamName << ", " << baseName << " + " << binding.offset << "u);\n";
-            break;
-          case kD3DDeclTypeDec3N:
-            out << "  vin[" << i << "] = dxmt9_load_dec3n(" << streamName << ", " << baseName << " + " << binding.offset << "u);\n";
-            break;
-          case kD3DDeclTypeFloat16_2:
-            out << "  vin[" << i << "] = float4(dxmt9_load_f16x2(" << streamName << ", " << baseName << " + " << binding.offset
-                << "u), 0.0f, 1.0f);\n";
-            break;
-          case kD3DDeclTypeFloat16_4:
-            out << "  vin[" << i << "] = dxmt9_load_f16x4(" << streamName << ", " << baseName << " + " << binding.offset << "u);\n";
-            break;
-          default:
-            break;
-        }
+        const std::string target =
+            useVertexInputArray ? ("vin[" + std::to_string(i) + "]")
+                                : vertexInputName(static_cast<u32>(i));
+        emitVertexInputLoad(binding, target);
       }
     }
 	    out << "  int4 a0 = int4(0);\n";
@@ -1218,6 +1307,7 @@ std::string translateSpirvToMsl(const SpirvModule& module,
         const auto token = instruction.operands[index];
         auto reg = decodeOperandRegister(instruction, index, module.stage);
         std::string expr = readOperandExpression(instruction, reg, "vin", "in", true,
+                                                 useVertexInputArray,
                                                  "outPosition", "outColor", "outSecondaryColor", "outTexcoord",
                                                  "outFogFactor", "outPointSize", "r", "cFloat", "cInt", "cBool",
                                                  "p", &outputSemantics);
@@ -2275,7 +2365,7 @@ std::string translateSpirvToMsl(const SpirvModule& module,
       } else if (reg.kind == D3DRegisterKind::Input) {
         expr = readPixelInputExpression(token, "in", pixelInputSemantics);
       } else {
-        expr = readOperandExpression(instruction, reg, "float4(0.0f)", "in", false, "outPosition",
+        expr = readOperandExpression(instruction, reg, "float4(0.0f)", "in", false, false, "outPosition",
                                      "outColor", "outSecondaryColor", "outTexcoord", "outFogFactor",
                                      "outPointSize", "r", "cFloat", "cInt", "cBool", "p",
                                      nullptr, tempCount - 1u);
@@ -2731,7 +2821,7 @@ std::string translateSpirvToMsl(const SpirvModule& module,
         if (reg.kind == D3DRegisterKind::Input) {
           value = readPixelInputExpression(instruction.operands[0], "in", pixelInputSemantics);
         } else {
-          value = readOperandExpression(instruction, reg, "float4(0.0f)", "in", false, "outPosition",
+          value = readOperandExpression(instruction, reg, "float4(0.0f)", "in", false, false, "outPosition",
                                         "outColor", "outSecondaryColor", "outTexcoord", "outFogFactor",
                                         "outPointSize", "r", "cFloat", "cInt", "cBool", "p",
                                         nullptr, tempCount - 1u);
