@@ -53,6 +53,12 @@ struct EncodeDrawRecorder {
   void (*setDepthStencilState)(void* userdata,
                                WMT::DepthStencilState depthStencil,
                                std::uint8_t stencilRef) = nullptr;
+  void (*setBlendColorAndStencilRef)(void* userdata,
+                                     float red,
+                                     float green,
+                                     float blue,
+                                     float alpha,
+                                     std::uint8_t stencilRef) = nullptr;
   void (*setViewport)(void* userdata, WMTViewport viewport) = nullptr;
   void (*setScissorRect)(void* userdata, WMTScissorRect rect) = nullptr;
   void (*setRasterizerState)(void* userdata,

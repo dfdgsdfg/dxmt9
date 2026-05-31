@@ -23,6 +23,7 @@
 #include "dxmt9_signposts.hpp"
 
 #include <algorithm>
+#include <array>
 #include <atomic>
 #include <bit>
 #include <chrono>
@@ -65,10 +66,14 @@ using core::RS_ALPHABLEND_ENABLE;
 using core::RS_ALPHA_FUNC;
 using core::RS_ALPHA_REF;
 using core::RS_ALPHA_TEST_ENABLE;
+using core::RS_BLEND_FACTOR;
 using core::RS_COLOR_WRITE_ENABLE;
 using core::RS_CULL_MODE;
 using core::RS_DEST_BLEND;
+using core::RS_DEST_BLEND_ALPHA;
+using core::RS_SEPARATE_ALPHA_BLEND_ENABLE;
 using core::RS_SRC_BLEND;
+using core::RS_SRC_BLEND_ALPHA;
 using core::RS_TEXTURE_FACTOR;
 using core::RS_Z_ENABLE;
 using core::RS_Z_FUNC;
@@ -271,6 +276,23 @@ void recordedSetDepthStencilState(EncodeContext& ctx,
   }
   if (!suppressRecordedMetalCalls(ctx)) {
     encoder.setDepthStencilState(depthStencil, stencilRef);
+  }
+}
+
+void recordedSetBlendColorAndStencilRef(EncodeContext& ctx,
+                                        WMT::RenderCommandEncoder& encoder,
+                                        float red,
+                                        float green,
+                                        float blue,
+                                        float alpha,
+                                        std::uint8_t stencilRef) {
+  if (auto* recorder = ctx.drawRecorder;
+      recorder && recorder->setBlendColorAndStencilRef) {
+    recorder->setBlendColorAndStencilRef(
+        recorder->userdata, red, green, blue, alpha, stencilRef);
+  }
+  if (!suppressRecordedMetalCalls(ctx)) {
+    encoder.setBlendColorAndStencilRef(red, green, blue, alpha, stencilRef);
   }
 }
 
@@ -531,6 +553,39 @@ void bufferBindShadowStore(BufferBindShadowSlot& slot,
   slot.valid = true;
   slot.handle = handle;
   slot.offset = offset;
+}
+
+bool blendFactorNeedsConstantColor(const core::FlatStateSet<core::kMaxStateSlots>& rs) {
+  const auto isConstantBlend = [](u32 factor) {
+    return factor == static_cast<u32>(core::BlendFactor::BlendFactor) ||
+           factor == static_cast<u32>(core::BlendFactor::InvBlendFactor);
+  };
+  if (core::flatStateOr(rs, RS_ALPHABLEND_ENABLE, 0u) == 0u) {
+    return false;
+  }
+  if (isConstantBlend(core::flatStateOr(rs, RS_SRC_BLEND,
+                                        static_cast<u32>(core::BlendFactor::One))) ||
+      isConstantBlend(core::flatStateOr(rs, RS_DEST_BLEND,
+                                        static_cast<u32>(core::BlendFactor::Zero)))) {
+    return true;
+  }
+  if (core::flatStateOr(rs, RS_SEPARATE_ALPHA_BLEND_ENABLE, 0u) == 0u) {
+    return false;
+  }
+  return isConstantBlend(core::flatStateOr(rs, RS_SRC_BLEND_ALPHA,
+                                           static_cast<u32>(core::BlendFactor::One))) ||
+         isConstantBlend(core::flatStateOr(rs, RS_DEST_BLEND_ALPHA,
+                                           static_cast<u32>(core::BlendFactor::Zero)));
+}
+
+std::array<float, 4> decodeD3DBlendFactor(u32 argb) {
+  constexpr float scale = 1.0f / 255.0f;
+  return {
+      static_cast<float>((argb >> 16) & 0xffu) * scale,
+      static_cast<float>((argb >> 8) & 0xffu) * scale,
+      static_cast<float>(argb & 0xffu) * scale,
+      static_cast<float>((argb >> 24) & 0xffu) * scale,
+  };
 }
 
 u64 argbufTableShadowHash(obj_handle_t storage, u64 offset) noexcept {
@@ -1526,6 +1581,7 @@ bool encodeDraw(EncodeContext& ctx,
   if (!skipBaseStateBind) {
     PerfScope pipelineLookupScope(perf::countEncodeDrawPipelineLookupCpuTime);
     const auto depthKey = makeDepthStencilKey(drawState);
+    const std::uint8_t stencilRef = state::computeStencilRef(drawState);
     // R-BACK-13.3: pass `tileFfpMode` through so the cache returns the
     // tile-stage MTLRenderPipelineState (built via
     // newRenderPipelineStateWithTileDescriptor) when the selector chose
@@ -1602,7 +1658,6 @@ bool encodeDraw(EncodeContext& ctx,
       // one stencil ref slot (Wine `wined3d_device_apply_stencil_ref`),
       // so the same byte applies to front and back faces — WMT's
       // `setStencilReferenceValue` mirrors that.
-      const std::uint8_t stencilRef = state::computeStencilRef(drawState);
       const bool depthUnchanged =
           textureSamplerShadow &&
           textureSamplerShadowMatches(textureSamplerShadow->depthStencil,
@@ -1615,6 +1670,12 @@ bool encodeDraw(EncodeContext& ctx,
         }
         countDepthStateBind();
       }
+    }
+    if (blendFactorNeedsConstantColor(hot.renderStates)) {
+      const auto factor = decodeD3DBlendFactor(
+          core::flatStateOr(hot.renderStates, RS_BLEND_FACTOR, 0xffffffffu));
+      recordedSetBlendColorAndStencilRef(
+          ctx, encoder, factor[0], factor[1], factor[2], factor[3], stencilRef);
     }
     // M1: label the pipeline with the shader-variant hash so frame
     // captures show "pso_h<hash>" instead of an anonymous pipeline.

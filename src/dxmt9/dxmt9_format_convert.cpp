@@ -328,7 +328,7 @@ WMTBlendOperation toBlendOperation(u32 value) {
   return WMTBlendOperationAdd;
 }
 
-WMTBlendFactor toBlendFactor(u32 value) {
+WMTBlendFactor toBlendFactor(u32 value, bool alphaLane) {
   switch (static_cast<BlendFactor>(value)) {
     case BlendFactor::Zero:            return WMTBlendFactorZero;
     case BlendFactor::One:             return WMTBlendFactorOne;
@@ -341,10 +341,12 @@ WMTBlendFactor toBlendFactor(u32 value) {
     case BlendFactor::DestColor:       return WMTBlendFactorDestinationColor;
     case BlendFactor::InvDestColor:    return WMTBlendFactorOneMinusDestinationColor;
     case BlendFactor::SrcAlphaSat:     return WMTBlendFactorSourceAlphaSaturated;
-    case BlendFactor::BothSrcAlpha:    return WMTBlendFactorBlendAlpha;
-    case BlendFactor::BothInvSrcAlpha: return WMTBlendFactorOneMinusBlendAlpha;
-    case BlendFactor::BlendFactor:     return WMTBlendFactorBlendColor;
-    case BlendFactor::InvBlendFactor:  return WMTBlendFactorOneMinusBlendColor;
+    case BlendFactor::BothSrcAlpha:    return WMTBlendFactorSourceAlpha;
+    case BlendFactor::BothInvSrcAlpha: return WMTBlendFactorOneMinusSourceAlpha;
+    case BlendFactor::BlendFactor:
+      return alphaLane ? WMTBlendFactorBlendAlpha : WMTBlendFactorBlendColor;
+    case BlendFactor::InvBlendFactor:
+      return alphaLane ? WMTBlendFactorOneMinusBlendAlpha : WMTBlendFactorOneMinusBlendColor;
   }
   return WMTBlendFactorOne;
 }

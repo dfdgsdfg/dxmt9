@@ -340,16 +340,29 @@ detail::makeBlendAttachmentKeys(core::FlatDrawStateView state, bool forceVisible
   const u32 alphaBlendOperation =
       separateAlphaBlend ? core::flatStateOr(rs, core::RS_BLEND_OP_ALPHA, rgbBlendOperation)
                          : rgbBlendOperation;
-  const u32 sourceRGBBlendFactor =
+  u32 sourceRGBBlendFactor =
       core::flatStateOr(rs, core::RS_SRC_BLEND, static_cast<u32>(core::BlendFactor::One));
-  const u32 destinationRGBBlendFactor =
+  u32 destinationRGBBlendFactor =
       core::flatStateOr(rs, core::RS_DEST_BLEND, static_cast<u32>(core::BlendFactor::Zero));
-  const u32 sourceAlphaBlendFactor =
-      separateAlphaBlend ? core::flatStateOr(rs, core::RS_SRC_BLEND_ALPHA, sourceRGBBlendFactor)
-                         : sourceRGBBlendFactor;
-  const u32 destinationAlphaBlendFactor =
-      separateAlphaBlend ? core::flatStateOr(rs, core::RS_DEST_BLEND_ALPHA, destinationRGBBlendFactor)
-                         : destinationRGBBlendFactor;
+  auto fixLegacyBothSrcAlpha = [](u32& src, u32& dst) {
+    if (src == static_cast<u32>(core::BlendFactor::BothSrcAlpha)) {
+      src = static_cast<u32>(core::BlendFactor::SrcAlpha);
+      dst = static_cast<u32>(core::BlendFactor::InvSrcAlpha);
+    } else if (src == static_cast<u32>(core::BlendFactor::BothInvSrcAlpha)) {
+      src = static_cast<u32>(core::BlendFactor::InvSrcAlpha);
+      dst = static_cast<u32>(core::BlendFactor::SrcAlpha);
+    }
+  };
+  fixLegacyBothSrcAlpha(sourceRGBBlendFactor, destinationRGBBlendFactor);
+  u32 sourceAlphaBlendFactor = sourceRGBBlendFactor;
+  u32 destinationAlphaBlendFactor = destinationRGBBlendFactor;
+  if (separateAlphaBlend) {
+    sourceAlphaBlendFactor =
+        core::flatStateOr(rs, core::RS_SRC_BLEND_ALPHA, sourceAlphaBlendFactor);
+    destinationAlphaBlendFactor =
+        core::flatStateOr(rs, core::RS_DEST_BLEND_ALPHA, destinationAlphaBlendFactor);
+    fixLegacyBothSrcAlpha(sourceAlphaBlendFactor, destinationAlphaBlendFactor);
+  }
   // D3D9 exposes one color-write mask per render target: RS_COLOR_WRITE_ENABLE
   // drives RT0, ...ENABLE1/2/3 drive RT1/2/3. Each mask defaults independently
   // to all channels (0xf) and per-RT slots do NOT inherit RT0's mask, matching
@@ -857,9 +870,9 @@ Cache::getOrBuildDrawPipelineHandle(WMT::Reference<WMT::Device> device,
             ca.dst_rgb_blend_factor =
                 convert::toBlendFactor(sourceKey.blend[i].destinationRGBBlendFactor);
             ca.src_alpha_blend_factor =
-                convert::toBlendFactor(sourceKey.blend[i].sourceAlphaBlendFactor);
+                convert::toBlendFactor(sourceKey.blend[i].sourceAlphaBlendFactor, true);
             ca.dst_alpha_blend_factor =
-                convert::toBlendFactor(sourceKey.blend[i].destinationAlphaBlendFactor);
+                convert::toBlendFactor(sourceKey.blend[i].destinationAlphaBlendFactor, true);
             ca.write_mask = convert::toColorWriteMask(sourceKey.blend[i].colorWriteMask);
           }
           WMT::Error err{};

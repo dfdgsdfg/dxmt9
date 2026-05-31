@@ -45,6 +45,7 @@ constexpr u32 kD3DDeclUsageTexcoord = dxmt9::ffp::kD3DDeclUsageTexcoord;
 enum class RecordedKind {
   SetRenderPipelineState,
   SetDepthStencilState,
+  SetBlendColorAndStencilRef,
   SetViewport,
   SetScissorRect,
   SetRasterizerState,
@@ -78,6 +79,7 @@ struct RecordedCommand {
   WMTCullMode cullMode = WMTCullModeNone;
   WMTDepthClipMode depthClipMode = WMTDepthClipModeClip;
   WMTWinding winding = WMTWindingClockwise;
+  std::array<float, 4> color{};
 };
 
 struct Capture {
@@ -104,6 +106,15 @@ void checkEq(const A& left, const B& right, std::string_view message) {
 void check(bool value, std::string_view message) {
   if (!value) {
     fail(std::string(message));
+  }
+}
+
+void checkNear(float actual, float expected, float epsilon, std::string_view message) {
+  const float delta = actual > expected ? actual - expected : expected - actual;
+  if (delta > epsilon) {
+    std::ostringstream out;
+    out << message << " (" << actual << " vs " << expected << ")";
+    fail(out.str());
   }
 }
 
@@ -150,6 +161,20 @@ void recordSetDepthStencilState(void* userdata,
   RecordedCommand command{};
   command.kind = RecordedKind::SetDepthStencilState;
   command.bufferHandle = depthStencil.handle;
+  command.index = stencilRef;
+  capture->commands.push_back(command);
+}
+
+void recordSetBlendColorAndStencilRef(void* userdata,
+                                      float red,
+                                      float green,
+                                      float blue,
+                                      float alpha,
+                                      std::uint8_t stencilRef) {
+  auto* capture = static_cast<Capture*>(userdata);
+  RecordedCommand command{};
+  command.kind = RecordedKind::SetBlendColorAndStencilRef;
+  command.color = {red, green, blue, alpha};
   command.index = stencilRef;
   capture->commands.push_back(command);
 }
@@ -304,6 +329,7 @@ EncodeDrawRecorder makeRecorder(Capture& capture) {
       .suppressMetalCalls = true,
       .setRenderPipelineState = recordSetRenderPipelineState,
       .setDepthStencilState = recordSetDepthStencilState,
+      .setBlendColorAndStencilRef = recordSetBlendColorAndStencilRef,
       .setViewport = recordSetViewport,
       .setScissorRect = recordSetScissorRect,
       .setRasterizerState = recordSetRasterizerState,
@@ -721,6 +747,58 @@ void testBaseStateRecorderCapturesRasterTextureSamplerOrdering() {
       WMTPrimitiveTypeTriangle,
       0u,
       3u);
+}
+
+void testBlendFactorBindsMetalBlendColor() {
+  Harness harness;
+  Capture capture;
+  auto recorder = makeRecorder(capture);
+
+  constexpr obj_handle_t kPipeline = 0x710000710000701ull;
+  constexpr obj_handle_t kDepthState = 0x710000710000702ull;
+  constexpr obj_handle_t kBoundVertex = 0x710000710000703ull;
+
+  recorder.suppressBaseStateLookup = true;
+  recorder.renderPipelineState.handle = kPipeline;
+  recorder.depthStencilState.handle = kDepthState;
+
+  auto state = makeProgrammableState(20u);
+  state.hot.streamBuffers[0] = harness.createBoundBuffer(kBoundVertex, 256u);
+  state.hot.renderStates.entries[0] = dxmt9::core::FlatStateEntry{
+      dxmt9::core::RS_SRC_BLEND,
+      static_cast<u32>(dxmt9::core::BlendFactor::BlendFactor)};
+  state.hot.renderStates.entries[1] = dxmt9::core::FlatStateEntry{
+      dxmt9::core::RS_DEST_BLEND,
+      static_cast<u32>(dxmt9::core::BlendFactor::InvBlendFactor)};
+  state.hot.renderStates.entries[2] = dxmt9::core::FlatStateEntry{
+      dxmt9::core::RS_ALPHABLEND_ENABLE,
+      1u};
+  state.hot.renderStates.entries[3] = dxmt9::core::FlatStateEntry{
+      dxmt9::core::RS_STENCIL_REF,
+      0x7au};
+  state.hot.renderStates.entries[4] = dxmt9::core::FlatStateEntry{
+      dxmt9::core::RS_BLEND_FACTOR,
+      0x80402010u};
+  state.hot.renderStates.count = 5u;
+
+  dxmt9::core::DrawParam param{};
+  param.primitiveType = PrimitiveType::TriangleList;
+  param.primitiveCount = 1u;
+  param.indexed = false;
+
+  PreUploadedDrawData preUploaded{};
+  runEncodeDraw(harness, recorder, state, param, preUploaded, {},
+                /*skipBaseStateBind=*/false);
+
+  const auto& blend = commandAt(capture, 1, "missing blend factor bind");
+  check(blend.kind == RecordedKind::SetBlendColorAndStencilRef,
+        "D3DRS_BLENDFACTOR binds Metal blend color");
+  checkNear(blend.color[0], 64.0f / 255.0f, 0.0001f, "blend red");
+  checkNear(blend.color[1], 32.0f / 255.0f, 0.0001f, "blend green");
+  checkNear(blend.color[2], 16.0f / 255.0f, 0.0001f, "blend blue");
+  checkNear(blend.color[3], 128.0f / 255.0f, 0.0001f, "blend alpha");
+  checkEq(static_cast<unsigned>(blend.index), 0x7au,
+          "blend bind preserves current stencil ref");
 }
 
 void testArgbufModeKeepsDirectTextureSamplerBinds() {
@@ -2278,6 +2356,7 @@ void testPreUploadedNonIndexedUserVertexFoldsStartVertex() {
 int main() {
   try {
     testBaseStateRecorderCapturesRasterTextureSamplerOrdering();
+    testBlendFactorBindsMetalBlendColor();
     testArgbufModeKeepsDirectTextureSamplerBinds();
     testArgbufModeKeepsDirectVertexTextureSamplerBinds();
     testTextureSamplerShadowDedupsDirectFragmentAndVertexBinds();

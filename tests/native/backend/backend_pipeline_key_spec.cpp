@@ -192,6 +192,58 @@ void testBlendFactorFallbacks() {
           "destination alpha blend factor override is reflected");
 }
 
+void testLegacyBothSrcAlphaBlendFixup() {
+  DrawDesc desc{};
+  desc.rs.values[RS_SRC_BLEND] = static_cast<u32>(BlendFactor::BothSrcAlpha);
+  desc.rs.values[RS_DEST_BLEND] = static_cast<u32>(BlendFactor::Zero);
+
+  auto keys = makeBlendKeys(makeFlatDrawFixture(desc).hot);
+  checkEq(keys[0].sourceRGBBlendFactor,
+          static_cast<u32>(BlendFactor::SrcAlpha),
+          "BOTHSRCALPHA source is normalized to SRCALPHA");
+  checkEq(keys[0].destinationRGBBlendFactor,
+          static_cast<u32>(BlendFactor::InvSrcAlpha),
+          "BOTHSRCALPHA destination is normalized to INVSRCALPHA");
+  checkEq(keys[0].sourceAlphaBlendFactor,
+          static_cast<u32>(BlendFactor::SrcAlpha),
+          "BOTHSRCALPHA alpha source follows normalized RGB source");
+  checkEq(keys[0].destinationAlphaBlendFactor,
+          static_cast<u32>(BlendFactor::InvSrcAlpha),
+          "BOTHSRCALPHA alpha destination follows normalized RGB destination");
+
+  desc.rs.values[RS_SRC_BLEND] = static_cast<u32>(BlendFactor::BothInvSrcAlpha);
+  keys = makeBlendKeys(makeFlatDrawFixture(desc).hot);
+  checkEq(keys[0].sourceRGBBlendFactor,
+          static_cast<u32>(BlendFactor::InvSrcAlpha),
+          "BOTHINVSRCALPHA source is normalized to INVSRCALPHA");
+  checkEq(keys[0].destinationRGBBlendFactor,
+          static_cast<u32>(BlendFactor::SrcAlpha),
+          "BOTHINVSRCALPHA destination is normalized to SRCALPHA");
+}
+
+void testBlendFactorWmtLaneMapping() {
+  checkEq(static_cast<int>(dxmt9::convert::toBlendFactor(
+              static_cast<u32>(BlendFactor::BlendFactor), false)),
+          static_cast<int>(WMTBlendFactorBlendColor),
+          "D3DBLEND_BLENDFACTOR maps to BlendColor on RGB lanes");
+  checkEq(static_cast<int>(dxmt9::convert::toBlendFactor(
+              static_cast<u32>(BlendFactor::BlendFactor), true)),
+          static_cast<int>(WMTBlendFactorBlendAlpha),
+          "D3DBLEND_BLENDFACTOR maps to BlendAlpha on alpha lanes");
+  checkEq(static_cast<int>(dxmt9::convert::toBlendFactor(
+              static_cast<u32>(BlendFactor::InvBlendFactor), false)),
+          static_cast<int>(WMTBlendFactorOneMinusBlendColor),
+          "D3DBLEND_INVBLENDFACTOR maps to inverse BlendColor on RGB lanes");
+  checkEq(static_cast<int>(dxmt9::convert::toBlendFactor(
+              static_cast<u32>(BlendFactor::InvBlendFactor), true)),
+          static_cast<int>(WMTBlendFactorOneMinusBlendAlpha),
+          "D3DBLEND_INVBLENDFACTOR maps to inverse BlendAlpha on alpha lanes");
+  checkEq(static_cast<int>(dxmt9::convert::toBlendFactor(
+              static_cast<u32>(BlendFactor::BothSrcAlpha), false)),
+          static_cast<int>(WMTBlendFactorSourceAlpha),
+          "legacy BOTHSRCALPHA direct conversion stays source-alpha");
+}
+
 void testMrtColorWriteMaskDefaultAndOverride() {
   DrawDesc desc{};
   auto keys = makeBlendKeys(makeFlatDrawFixture(desc).hot);
@@ -769,6 +821,8 @@ int main() {
     testAlphaBlendEnableAndDisable();
     testBlendOperationFallbacks();
     testBlendFactorFallbacks();
+    testLegacyBothSrcAlphaBlendFixup();
+    testBlendFactorWmtLaneMapping();
     testMrtColorWriteMaskDefaultAndOverride();
     testMrtPerRenderTargetColorWriteMask();
     testShaderVariantKeyReflectsSamplerTextureAndFiltering();

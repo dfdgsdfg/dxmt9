@@ -46,7 +46,7 @@ WMTIndexType toIndexType(core::IndexType type);
 
 WMTCompareFunction toCompareFunction(u32 value);
 WMTBlendOperation toBlendOperation(u32 value);
-WMTBlendFactor toBlendFactor(u32 value);
+WMTBlendFactor toBlendFactor(u32 value, bool alphaLane = false);
 WMTCullMode toCullMode(u32 value);
 WMTStencilOperation toStencilOperation(u32 value);
 
