@@ -41,9 +41,6 @@ WMT::String makeLabelStringFmt(const char* fmt, ...) {
   return WMT::String::string(buf, WMTUTF8StringEncoding);
 }
 
-// Monotonic counter family for resources where the call site lacks a
-// stable id (e.g. transient slabs that don't have a Pool handle).
-std::atomic_uint64_t gTransientLabelCounter{0};
 std::atomic_uint64_t gCommandBufferLabelCounter{0};
 
 // R-BACK-3.7 / R-BACK-3.8 / R-BACK-4.8 — archive path resolution moved
@@ -54,16 +51,6 @@ std::atomic_uint64_t gCommandBufferLabelCounter{0};
 std::string resolveShaderCachePath(WMT::Device device) {
   const auto mode = archive_prewarm::resolveMode();
   return archive_prewarm::resolveArchivePath(device, mode);
-}
-
-constexpr std::size_t kTransientBufferInitialCapacity = 8ull << 20;
-
-bool forceDedicatedTransientUploads() {
-  static const bool value = [] {
-    const char* env = std::getenv("DXMT_DEBUG_FORCE_TRANSIENT_DEDICATED");
-    return env && env[0] != '\0' && std::strcmp(env, "0") != 0;
-  }();
-  return value;
 }
 
 bool surfaceAliasesTracedTexture(resources::Pool& pool, core::Handle handle) {
@@ -111,24 +98,6 @@ void traceTextureClear(resources::Pool& pool, const core::ClearDesc& desc) {
       << " stencilValue=" << desc.stencil
       << " rects=" << desc.rects.size();
   core::metalqueue::emitTextureTraceLine(out.str());
-}
-
-std::size_t alignUp(std::size_t value, std::size_t alignment) {
-  if (alignment <= 1) {
-    return value;
-  }
-  return (value + alignment - 1) & ~(alignment - 1);
-}
-
-std::size_t nextPowerOfTwo(std::size_t value) {
-  if (value <= 1) {
-    return 1;
-  }
-  --value;
-  for (std::size_t shift = 1; shift < sizeof(std::size_t) * 8; shift <<= 1) {
-    value |= value >> shift;
-  }
-  return value + 1;
 }
 
 class PerfScope {
@@ -179,6 +148,7 @@ CommandQueue::CommandQueue(WMT::Device device, core::BackendLimits limits)
   // good enough to disambiguate multi-GPU configs in Xcode captures.
   queueView_.setLabel(makeLabelStringFmt("dxmt9-q-0x%llx",
       static_cast<unsigned long long>(device_.handle)));
+  transientArena_.init(device_);
 
   // R-BACK-5.7: probe `MTLDevice.hasUnifiedMemory` ONCE at queue/device
   // init and cache the result on the resource pool. Per-resource code
@@ -296,11 +266,16 @@ void CommandQueue::prefetchSlotPipelines(const core::ChunkSlot& slot) {
   for (std::size_t i = 0; i < slot.commandCount(); ++i) {
     const auto command = slot.commandAt(i);
     if (command.kind != core::MetalCommandKind::DrawRun ||
+        !command.drawPsoSubview ||
+        !command.drawPsoSubview->hasShaderContext ||
         !command.drawState.hot ||
         !command.drawState.hasShaderContext()) {
       continue;
     }
 
+    // DrawPsoSubview is the PE/draw-run-side summary that proves this run has
+    // PSO-bearing state. Final key completion still happens below because RT/DS
+    // formats and tile/argbuf selectors are Metal-device/pool dependent.
     auto drawState = command.drawState;
     drawState.uniforms = command.drawUniformPayload;
     const auto tileSelection =
@@ -532,428 +507,45 @@ WMT::Reference<WMT::CommandBuffer> CommandQueue::newCommandBuffer() {
   return commandBuffer;
 }
 
-void CommandQueue::reclaimTransientBuffersUnlocked(std::uint64_t completedSeqId) {
-  while (!transientBufferAllocations_.empty() &&
-         transientBufferAllocations_.front().seqId <= completedSeqId) {
-    transientBufferAllocations_.pop_front();
-  }
-  if (transientBufferAllocations_.empty()) {
-    transientBufferCursor_ = 0;
-  }
-
-  while (!retainedTransientBuffers_.empty() &&
-         retainedTransientBuffers_.front().seqId <= completedSeqId) {
-    retainedTransientBuffers_.pop_front();
-  }
-
-  while (!retainedSamplerStates_.empty() &&
-         retainedSamplerStates_.front().seqId <= completedSeqId) {
-    retainedSamplerStates_.pop_front();
-  }
-}
-
-bool CommandQueue::ensureTransientBufferUnlocked(std::size_t minimumCapacity) {
-  if (transientBuffer_) {
-    return transientBufferCapacity_ >= minimumCapacity && transientBufferContents_ != nullptr;
-  }
-
-  const std::size_t capacity =
-      nextPowerOfTwo(std::max(kTransientBufferInitialCapacity, minimumCapacity));
-  WMTBufferInfo info{};
-  info.length = capacity;
-  info.options = WMTResourceStorageModeShared;
-  auto buffer = device_.newBuffer(info);
-  if (!buffer || !info.memory.ptr) {
-    return false;
-  }
-
-  perf::countMetalBuffer(capacity);
-  // M1: label the freshly-allocated transient slab. Each ensure-call
-  // gets a fresh counter id so back-to-back rotations are
-  // disambiguated in captures.
-  {
-    const auto id = gTransientLabelCounter.fetch_add(1, std::memory_order_relaxed);
-    WMT::Buffer view{buffer.handle};
-    view.setLabel(makeLabelStringFmt("dxmt9-transient-slab-%llu-cap%zu",
-        static_cast<unsigned long long>(id), capacity));
-  }
-  transientBuffer_ = std::move(buffer);
-  transientBufferContents_ = static_cast<std::byte*>(info.memory.ptr);
-  transientBufferCapacity_ = capacity;
-  transientBufferCursor_ = 0;
-  return true;
-}
-
-bool CommandQueue::rotateTransientBufferUnlocked(std::size_t minimumCapacity, std::uint64_t seqId) {
-  if (transientBuffer_) {
-    if (!transientBufferAllocations_.empty()) {
-      retainedTransientBuffers_.push_back(RetainedTransientBuffer{
-          .buffer = std::move(transientBuffer_),
-          .seqId = seqId,
-      });
-    } else {
-      transientBuffer_ = nullptr;
-    }
-  }
-  transientBufferContents_ = nullptr;
-  transientBufferCapacity_ = 0;
-  transientBufferCursor_ = 0;
-  transientBufferAllocations_.clear();
-  return ensureTransientBufferUnlocked(minimumCapacity);
-}
-
 CommandQueue::TransientBufferSlice CommandQueue::uploadTransientBuffer(
     std::span<const std::byte> bytes,
     std::size_t alignment,
     std::uint64_t seqId) {
-  if (!device_ || bytes.empty()) {
-    return {};
-  }
-  const auto uploadStarted = std::chrono::steady_clock::now();
-  const auto recordUploadTime = [&] {
-    const auto elapsed = std::chrono::steady_clock::now() - uploadStarted;
-    perf::countTransientUploadCpuTime(
-        static_cast<std::uint64_t>(
-            std::chrono::duration_cast<std::chrono::nanoseconds>(elapsed).count()),
-        bytes.size());
-  };
-
   std::uint64_t completedSeqId = 0;
   {
     std::lock_guard lock(mutex_);
     completedSeqId = completedSeqId_;
   }
-
-  std::lock_guard lock(transientBufferMutex_);
-  reclaimTransientBuffersUnlocked(completedSeqId);
-
-  auto uploadDedicated = [&]() -> TransientBufferSlice {
-    WMTBufferInfo info{};
-    info.length = bytes.size();
-    info.options = WMTResourceStorageModeShared;
-    info.memory.set((void*)bytes.data());
-    auto buffer = device_.newBuffer(info);
-    if (!buffer) {
-      recordUploadTime();
-      return {};
-    }
-    perf::countMetalBuffer(static_cast<std::size_t>(info.length));
-    // M1: dedicated transient slabs (oversized payloads bypass the
-    // shared slab) — label with seq + size so captures distinguish
-    // them from ring-allocated transients.
-    {
-      WMT::Buffer view{buffer.handle};
-      view.setLabel(makeLabelStringFmt("dxmt9-transient-dedicated-seq%llu-bytes%zu",
-          static_cast<unsigned long long>(seqId), bytes.size()));
-    }
-    retainedTransientBuffers_.push_back(RetainedTransientBuffer{
-        .buffer = std::move(buffer),
-        .seqId = seqId,
-    });
-    auto slice = TransientBufferSlice{
-        .buffer = WMT::Buffer{retainedTransientBuffers_.back().buffer.handle},
-        .offset = 0,
-        .size = bytes.size(),
-    };
-    recordUploadTime();
-    return slice;
-  };
-
-  alignment = std::max<std::size_t>(alignment, 1);
-  if (forceDedicatedTransientUploads()) {
-    return uploadDedicated();
-  }
-  const std::size_t alignedSize = alignUp(bytes.size(), alignment);
-  if (!ensureTransientBufferUnlocked(alignedSize)) {
-    return uploadDedicated();
-  }
-
-  auto canPlace = [&](std::size_t offset) {
-    if (offset + alignedSize > transientBufferCapacity_) {
-      return false;
-    }
-    for (const auto& allocation : transientBufferAllocations_) {
-      const std::size_t begin = allocation.offset;
-      const std::size_t end = allocation.offset + allocation.size;
-      const std::size_t newBegin = offset;
-      const std::size_t newEnd = offset + alignedSize;
-      if (!(newEnd <= begin || newBegin >= end)) {
-        return false;
-      }
-    }
-    return true;
-  };
-
-  std::size_t offset = alignUp(transientBufferCursor_, alignment);
-  if (!canPlace(offset)) {
-    offset = 0;
-    if (!canPlace(offset)) {
-      if (!rotateTransientBufferUnlocked(alignedSize, seqId)) {
-        return uploadDedicated();
-      }
-      offset = alignUp(transientBufferCursor_, alignment);
-      if (!canPlace(offset)) {
-        return uploadDedicated();
-      }
-    }
-  }
-
-  std::memcpy(transientBufferContents_ + offset, bytes.data(), bytes.size());
-  transientBufferAllocations_.push_back(TransientBufferAllocation{
-      .offset = offset,
-      .size = alignedSize,
-      .seqId = seqId,
-  });
-  transientBufferCursor_ = offset + alignedSize;
-
-  auto slice = TransientBufferSlice{
-      .buffer = WMT::Buffer{transientBuffer_.handle},
-      .offset = offset,
-      .size = bytes.size(),
-  };
-  recordUploadTime();
-  return slice;
+  return transientArena_.uploadBuffer(bytes, alignment, seqId, completedSeqId);
 }
 
 std::vector<CommandQueue::TransientBufferSlice> CommandQueue::uploadTransientBufferBatch(
     std::span<const std::span<const std::byte>> payloads,
     std::size_t alignment,
     std::uint64_t seqId) {
-  std::vector<TransientBufferSlice> result;
-  if (!device_ || payloads.empty()) {
-    return result;
-  }
-  result.reserve(payloads.size());
-
-  const auto uploadStarted = std::chrono::steady_clock::now();
-  std::size_t totalBytes = 0;
-  for (const auto& p : payloads) totalBytes += p.size();
-
-  // Snapshot completedSeqId ONCE for the whole batch.
   std::uint64_t completedSeqId = 0;
   {
     std::lock_guard lock(mutex_);
     completedSeqId = completedSeqId_;
   }
-
-  // Hold transientBufferMutex_ for the entire batch — single reclaim,
-  // single mutex acquire, no inter-call lock thrash.
-  std::lock_guard lock(transientBufferMutex_);
-  reclaimTransientBuffersUnlocked(completedSeqId);
-
-  alignment = std::max<std::size_t>(alignment, 1);
-
-  for (const auto& bytes : payloads) {
-    if (bytes.empty()) {
-      result.push_back(TransientBufferSlice{});
-      continue;
-    }
-    const std::size_t alignedSize = alignUp(bytes.size(), alignment);
-
-    // Try slab placement; fall through to dedicated buffer if the slab
-    // can't accommodate (rotation also tried).
-    auto canPlace = [&](std::size_t offset) {
-      if (offset + alignedSize > transientBufferCapacity_) return false;
-      for (const auto& a : transientBufferAllocations_) {
-        const std::size_t begin = a.offset;
-        const std::size_t end = a.offset + a.size;
-        const std::size_t newBegin = offset;
-        const std::size_t newEnd = offset + alignedSize;
-        if (!(newEnd <= begin || newBegin >= end)) return false;
-      }
-      return true;
-    };
-
-    auto uploadDedicated = [&]() -> TransientBufferSlice {
-      WMTBufferInfo info{};
-      info.length = bytes.size();
-      info.options = WMTResourceStorageModeShared;
-      info.memory.set((void*)bytes.data());
-      auto buffer = device_.newBuffer(info);
-      if (!buffer) return {};
-      perf::countMetalBuffer(static_cast<std::size_t>(info.length));
-      // M1: same labeling as single-payload uploadDedicated above.
-      {
-        WMT::Buffer view{buffer.handle};
-        view.setLabel(makeLabelStringFmt("dxmt9-transient-dedicated-seq%llu-bytes%zu",
-            static_cast<unsigned long long>(seqId), bytes.size()));
-      }
-      retainedTransientBuffers_.push_back(RetainedTransientBuffer{
-          .buffer = std::move(buffer), .seqId = seqId});
-      return TransientBufferSlice{
-          .buffer = WMT::Buffer{retainedTransientBuffers_.back().buffer.handle},
-          .offset = 0,
-          .size = bytes.size(),
-      };
-    };
-
-    if (forceDedicatedTransientUploads()) {
-      result.push_back(uploadDedicated());
-      continue;
-    }
-
-    if (!ensureTransientBufferUnlocked(alignedSize)) {
-      result.push_back(uploadDedicated());
-      continue;
-    }
-    std::size_t offset = alignUp(transientBufferCursor_, alignment);
-    if (!canPlace(offset)) {
-      offset = 0;
-      if (!canPlace(offset)) {
-        if (!rotateTransientBufferUnlocked(alignedSize, seqId)) {
-          result.push_back(uploadDedicated());
-          continue;
-        }
-        offset = alignUp(transientBufferCursor_, alignment);
-        if (!canPlace(offset)) {
-          result.push_back(uploadDedicated());
-          continue;
-        }
-      }
-    }
-    std::memcpy(transientBufferContents_ + offset, bytes.data(), bytes.size());
-    transientBufferAllocations_.push_back(TransientBufferAllocation{
-        .offset = offset, .size = alignedSize, .seqId = seqId});
-    transientBufferCursor_ = offset + alignedSize;
-    result.push_back(TransientBufferSlice{
-        .buffer = WMT::Buffer{transientBuffer_.handle},
-        .offset = offset,
-        .size = bytes.size(),
-    });
-  }
-
-  const auto elapsed = std::chrono::steady_clock::now() - uploadStarted;
-  perf::countTransientUploadCpuTime(
-      static_cast<std::uint64_t>(
-          std::chrono::duration_cast<std::chrono::nanoseconds>(elapsed).count()),
-      totalBytes);
-  return result;
+  return transientArena_.uploadBufferBatch(payloads, alignment, seqId, completedSeqId);
 }
 
 void CommandQueue::retainSamplerForSeq(WMT::Reference<WMT::SamplerState> sampler,
                                        std::uint64_t seqId) {
-  if (!sampler) {
-    return;
-  }
-  std::lock_guard lock(transientBufferMutex_);
-  retainedSamplerStates_.push_back(RetainedSamplerState{
-      .sampler = std::move(sampler),
-      .seqId = seqId,
-  });
+  transientArena_.retainSamplerForSeq(std::move(sampler), seqId);
 }
 
 CommandQueue::TransientBufferReservation CommandQueue::reserveTransientBuffer(
     std::size_t size,
     std::size_t alignment,
     std::uint64_t seqId) {
-  TransientBufferReservation reservation{};
-  if (!device_ || size == 0) {
-    return reservation;
-  }
-  const auto uploadStarted = std::chrono::steady_clock::now();
-  const auto recordUploadTime = [&] {
-    const auto elapsed = std::chrono::steady_clock::now() - uploadStarted;
-    perf::countTransientUploadCpuTime(
-        static_cast<std::uint64_t>(
-            std::chrono::duration_cast<std::chrono::nanoseconds>(elapsed).count()),
-        size);
-  };
-
   std::uint64_t completedSeqId = 0;
   {
     std::lock_guard lock(mutex_);
     completedSeqId = completedSeqId_;
   }
-
-  std::lock_guard lock(transientBufferMutex_);
-  reclaimTransientBuffersUnlocked(completedSeqId);
-
-  alignment = std::max<std::size_t>(alignment, 1);
-  const std::size_t alignedSize = alignUp(size, alignment);
-
-  auto reserveDedicated = [&]() -> TransientBufferReservation {
-    WMTBufferInfo info{};
-    info.length = size;
-    info.options = WMTResourceStorageModeShared;
-    auto buffer = device_.newBuffer(info);
-    if (!buffer || !info.memory.ptr) {
-      recordUploadTime();
-      return {};
-    }
-    perf::countMetalBuffer(static_cast<std::size_t>(info.length));
-    // M1: reserved-slab dedicated path mirrors uploadDedicated naming.
-    {
-      WMT::Buffer view{buffer.handle};
-      view.setLabel(makeLabelStringFmt("dxmt9-transient-reserved-seq%llu-bytes%zu",
-          static_cast<unsigned long long>(seqId), size));
-    }
-    retainedTransientBuffers_.push_back(RetainedTransientBuffer{
-        .buffer = std::move(buffer),
-        .seqId = seqId,
-    });
-    TransientBufferReservation r{};
-    r.slice = TransientBufferSlice{
-        .buffer = WMT::Buffer{retainedTransientBuffers_.back().buffer.handle},
-        .offset = 0,
-        .size = size,
-    };
-    r.contents = static_cast<std::byte*>(info.memory.ptr);
-    recordUploadTime();
-    return r;
-  };
-
-  if (forceDedicatedTransientUploads()) {
-    return reserveDedicated();
-  }
-  if (!ensureTransientBufferUnlocked(alignedSize)) {
-    return reserveDedicated();
-  }
-
-  auto canPlace = [&](std::size_t offset) {
-    if (offset + alignedSize > transientBufferCapacity_) {
-      return false;
-    }
-    for (const auto& a : transientBufferAllocations_) {
-      const std::size_t begin = a.offset;
-      const std::size_t end = a.offset + a.size;
-      const std::size_t newBegin = offset;
-      const std::size_t newEnd = offset + alignedSize;
-      if (!(newEnd <= begin || newBegin >= end)) {
-        return false;
-      }
-    }
-    return true;
-  };
-
-  std::size_t offset = alignUp(transientBufferCursor_, alignment);
-  if (!canPlace(offset)) {
-    offset = 0;
-    if (!canPlace(offset)) {
-      if (!rotateTransientBufferUnlocked(alignedSize, seqId)) {
-        return reserveDedicated();
-      }
-      offset = alignUp(transientBufferCursor_, alignment);
-      if (!canPlace(offset)) {
-        return reserveDedicated();
-      }
-    }
-  }
-
-  transientBufferAllocations_.push_back(TransientBufferAllocation{
-      .offset = offset,
-      .size = alignedSize,
-      .seqId = seqId,
-  });
-  transientBufferCursor_ = offset + alignedSize;
-
-  reservation.slice = TransientBufferSlice{
-      .buffer = WMT::Buffer{transientBuffer_.handle},
-      .offset = offset,
-      .size = size,
-  };
-  reservation.contents = transientBufferContents_ + offset;
-  recordUploadTime();
-  return reservation;
+  return transientArena_.reserveBuffer(size, alignment, seqId, completedSeqId);
 }
 
 void CommandQueue::startThreads(std::function<void()> encodeLoop,
@@ -1539,10 +1131,7 @@ void CommandQueue::runFinishLoop() {
     if (!queueLifecycle_.runFinishIteration(lock, [this](std::uint64_t) {
           allocators_.reclaim(completedSeqId_);
           pool_.reclaimCompleted(completedSeqId_);
-          {
-            std::lock_guard transientLock(transientBufferMutex_);
-            reclaimTransientBuffersUnlocked(completedSeqId_);
-          }
+          transientArena_.reclaim(completedSeqId_);
         })) {
       return;
     }

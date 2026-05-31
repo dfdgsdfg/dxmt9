@@ -3444,11 +3444,272 @@ std::optional<core::metalqueue::QueueSubmissionRecord> encodeChunk(
     splitMidChunk();
   };
 
+  auto encodeDrawRunCommand = [&](std::size_t commandIndex,
+                                  const core::MetalCommandView& command) {
+    if (!command.drawState.hot || !command.drawState.shaderLayout ||
+        !command.drawUniformPayload ||
+        core::drawRunDrawCount(command) == 0) return;
+    auto stateView = command.drawState;
+    stateView.uniforms = command.drawUniformPayload;
+    const auto& hot = *stateView.hot;
+    const auto drawParams = command.drawParams;
+    // Compact draw-run: state bound from base ONCE (render-pass +
+    // resource-binding decisions key off base.rts), then loop over
+    // per-DrawParam emits. FlatDrawStateKey is the hot-path decision
+    // object for skipping base-state rebinding across compatible
+    // Draw/DrawRun records on the same Metal render encoder.
+    flushBlit();
+    assertEncoderLifecycleInvariant();
+    const auto drawKey = makeAttachmentKey(hot);
+    const auto drawReadHazard = makeDrawReadHazard(stateView);
+    auto hasExactRenderHazard = [&] {
+      const bool bloomOverlap = activeWriteHazard.bloomOverlaps(drawReadHazard);
+      const bool exactOverlap = activeWriteHazard.exactOverlaps(drawReadHazard);
+      perf::countHazardProbe(bloomOverlap, exactOverlap);
+      return exactOverlap;
+    };
+    // R-BACK-13.6 — mid-pass eligibility. When the active encoder is on
+    // the tile path and the next draw's state has become ineligible
+    // (e.g. alpha-test reference flipped out of [0,1], fog mode flipped
+    // to Exp/Exp2), force a render-pass split so the next encoder opens
+    // on the portable path. A pass that opened on the portable path
+    // stays portable regardless (portable handles every state).
+    auto tileMidPassIneligible = [&]() {
+      if (!hasActiveRender || !activePassUsesTileFfp) return false;
+      const auto sel =
+          dxmt9::pipeline::selectTileFfpForPass(stateView, ctx.pool.supportsApple3());
+      return sel.decision != dxmt9::pipeline::TileFfpDecision::Tile;
+    };
+    if (pendingClear.has_value()) {
+      const auto clearKey = makeAttachmentKey(*pendingClear);
+      const auto clearHazard = makeAttachmentHazard(*pendingClear);
+      if (clearKey == drawKey && !clearHazard.exactOverlaps(drawReadHazard)) {
+        startRenderPass(stateView, pendingClear, commandIndex);
+        pendingClear.reset();
+      } else {
+        flushPendingClear();
+        const bool renderTargetChanged = hasActiveRender && activeKey != drawKey;
+        const bool hazardDetected =
+            hasActiveRender && !renderTargetChanged && hasExactRenderHazard();
+        const bool tileResplit =
+            hasActiveRender && !renderTargetChanged && !hazardDetected &&
+            tileMidPassIneligible();
+        if (tileResplit) {
+          // R-BACK-13.6: tile path can't host this draw; fall back
+          // to portable for a fresh encoder. The split is a real
+          // change of pipeline kind (not a Bloom false positive),
+          // so it does not violate R-BACK-2.28's no-false-positive
+          // policy.
+          perf::countTileFfpMidPassResplit();
+          perf::countTileFfpFallbackMidPassIneligible();
+        }
+        if (!hasActiveRender || renderTargetChanged || hazardDetected || tileResplit) {
+          if (renderTargetChanged) {
+            // TLA+: EncoderLifecycle / RenderTargetChange(newRT)
+            DXMT_ASSERT(hasActiveRender);
+          }
+          if (hazardDetected) {
+            // TLA+: EncoderLifecycle / HazardDetected
+            DXMT_ASSERT(hasActiveRender);
+            DXMT_ASSERT(activeKey == drawKey);
+          }
+          const auto splitReason = renderTargetChanged
+              ? perf::EncoderSplitReason::RenderTargetChange
+              : (hazardDetected ? perf::EncoderSplitReason::Hazard
+                                : perf::EncoderSplitReason::ClearBarrier);
+          flushRender(splitReason);
+          // R-BACK-2.29..2.32 — per-render-pass policy commits the
+          // current sub-CB at every non-Final flushRender. Encoder is
+          // already ended by flushRender, so the splitMidChunk
+          // invariant (no active encoder) holds. Skip when policy
+          // is off so the default 1 CB/chunk behavior is preserved.
+          if (commitPolicy == MidChunkCommitPolicy::PerRenderPass) {
+            splitMidChunkUnderCap();
+          }
+          startRenderPass(stateView, std::nullopt, commandIndex);
+        } else {
+          // TLA+: EncoderLifecycle / MergeRenderDraw(rt)
+          DXMT_ASSERT(hasActiveRender);
+          DXMT_ASSERT(activeKey == drawKey);
+          DXMT_ASSERT(!activeWriteHazard.exactOverlaps(drawReadHazard));
+        }
+      }
+    } else {
+      const bool renderTargetChanged = hasActiveRender && activeKey != drawKey;
+      const bool hazardDetected =
+          hasActiveRender && !renderTargetChanged && hasExactRenderHazard();
+      const bool tileResplit =
+          hasActiveRender && !renderTargetChanged && !hazardDetected &&
+          tileMidPassIneligible();
+      if (tileResplit) {
+        // R-BACK-13.6 — see twin call site above.
+        perf::countTileFfpMidPassResplit();
+        perf::countTileFfpFallbackMidPassIneligible();
+      }
+      if (!hasActiveRender || renderTargetChanged || hazardDetected || tileResplit) {
+        if (renderTargetChanged) {
+          // TLA+: EncoderLifecycle / RenderTargetChange(newRT)
+          DXMT_ASSERT(hasActiveRender);
+        }
+        if (hazardDetected) {
+          // TLA+: EncoderLifecycle / HazardDetected
+          DXMT_ASSERT(hasActiveRender);
+          DXMT_ASSERT(activeKey == drawKey);
+        }
+        const auto splitReason = renderTargetChanged
+            ? perf::EncoderSplitReason::RenderTargetChange
+            : (hazardDetected ? perf::EncoderSplitReason::Hazard
+                              : perf::EncoderSplitReason::Final);
+        flushRender(splitReason);
+        // R-BACK-2.29..2.32 — see twin call site above. The split
+        // reason here can be Final when neither RT-change nor hazard
+        // forced the flush, but per-render-pass policy still
+        // commits to start a new sub-CB before the next pass opens.
+        if (commitPolicy == MidChunkCommitPolicy::PerRenderPass) {
+          splitMidChunkUnderCap();
+        }
+        startRenderPass(stateView, std::nullopt, commandIndex);
+      } else {
+        // TLA+: EncoderLifecycle / MergeRenderDraw(rt)
+        DXMT_ASSERT(hasActiveRender);
+        DXMT_ASSERT(activeKey == drawKey);
+        DXMT_ASSERT(!activeWriteHazard.exactOverlaps(drawReadHazard));
+      }
+    }
+    // Phase 3-E: bind BaseDrawState ONCE on iter 0, then issue-only
+    // path on iters 1..N — the Metal render encoder retains
+    // pipeline / depth / viewport / scissor / cull / texture /
+    // sampler state across draw calls.
+    //
+    // Phase 5-B: pre-scan for UP vertex/index payloads + batch-
+    // upload them all in ONE uploadTransientBufferBatch call
+    // (single TransientResourceArena acquire, single completedSeqId
+    // snapshot, single reclaim pass for the whole run). Per-draw
+    // pre-resolved slices are handed to encodeDraw via
+    // PreUploadedDrawData.
+    //
+    // Layout of the batch payload vector (interleaved per draw):
+    //   [0]   = draw 0 vertex (empty if no UP)
+    //   [1]   = draw 0 index  (empty if no UP)
+    //   [2]   = draw 1 vertex
+    //   [3]   = draw 1 index
+    //   …
+    // Returned slices use the same indexing.
+    const std::size_t drawCount = core::drawRunDrawCount(command);
+    const auto recordPayloadArena = core::drawRunPayloadBytes(command);
+    bool anyUpData = false;
+    bool hasUpPayloadRanges = false;
+    for (const auto& param : drawParams) {
+      if (!param.userVertexRange.empty() || !param.userIndexRange.empty()) {
+        hasUpPayloadRanges = true;
+        break;
+      }
+    }
+    std::vector<CommandQueue::TransientBufferSlice> upSlices;
+    if (hasUpPayloadRanges) {
+      std::vector<std::span<const std::byte>> upPayloads;
+      upPayloads.reserve(drawCount * 2);
+      for (const auto& param : drawParams) {
+        const auto vertexBytes = drawParamVertexBytes(param, recordPayloadArena);
+        if (!vertexBytes.empty()) anyUpData = true;
+        upPayloads.emplace_back(reinterpret_cast<const std::byte*>(vertexBytes.data()),
+                                vertexBytes.size());
+        const auto indexBytes = drawParamIndexBytes(param, recordPayloadArena);
+        if (!indexBytes.empty()) anyUpData = true;
+        upPayloads.emplace_back(reinterpret_cast<const std::byte*>(indexBytes.data()),
+                                indexBytes.size());
+      }
+      if (anyUpData) {
+        upSlices = ctx.queue.uploadTransientBufferBatch(upPayloads, /*alignment=*/16, slot.seqId);
+      }
+    }
+
+    // encodeDraw receives the per-draw fields through DrawParam while
+    // all base state is read from the canonical hot/shader view.
+    // Per-frequency UBOs (VsConsts/PsConsts/FfpVsConsts/FfpPsConsts)
+    // bind only on dirty (R-BACK-12.5/12.8); DrawVolatile is pushed
+    // via setVertexBytes per draw with no slab traffic.
+    bool baseBound =
+        activeDrawStateKey.has_value() && *activeDrawStateKey == hot.key;
+    // R-BACK-12.22..12.26 — constants-only argbuf reopen gate. Every draw
+    // in one DrawRun shares the same uniform payload, so at most the first
+    // draw needs a fresh argbuf table, and only when this run's payload
+    // differs from the previous one on this encoder. The resource-array
+    // lane always reopens (texture/sampler descriptors are written inline
+    // and can change between runs independently of the const hash).
+    const u64 runArgbufPayloadHash = command.drawUniformPayload->hash;
+    const bool argbufPayloadChanged =
+        !lastArgbufPayloadHash.has_value() ||
+        *lastArgbufPayloadHash != runArgbufPayloadHash;
+    for (std::size_t i = 0; i < drawCount; ++i) {
+      const auto& param = drawParams[i];
+      PreUploadedDrawData preData{};
+      if (i * 2u + 1u < upSlices.size()) {
+        preData.vertex = upSlices[i * 2u];
+        preData.index = upSlices[i * 2u + 1u];
+      }
+      const bool reopenArgbuf =
+          activePassUsesArgbufResourceArray ||
+          (i == 0 && argbufPayloadChanged);
+      if (encodeDraw(ctx, commandBuffer, activeRenderEncoder, stateView, slot.seqId,
+                     /*skipBaseStateBind=*/baseBound,
+                     anyUpData ? &preData : nullptr,
+                     &param,
+                     recordPayloadArena,
+                     &uniformDirty,
+                     /*tileFfpMode=*/activePassUsesTileFfp,
+                     /*argbufHybridMode=*/activePassUsesArgbufHybrid,
+                     /*argbufResourceArray=*/activePassUsesArgbufResourceArray,
+                     /*reopenArgbufHybrid=*/reopenArgbuf,
+                     &textureSamplerShadow)) {
+        baseBound = true;
+        activeDrawStateKey = hot.key;
+      }
+    }
+    lastArgbufPayloadHash = runArgbufPayloadHash;
+    commandBufferHasWork = true;
+  };
+
+  auto applyPerRecordSplitPolicy = [&](bool presentRecord) {
+    // R-BACK-2.29..2.32 — per-N-records policy. Counts every replayed
+    // record (including helper-encoder commands), and fires a mid-chunk
+    // commit when the threshold is hit AND there is no active encoder.
+    // The flushBlit + flushRender(non-Final) sequence enforces the
+    // splitMidChunk invariant: encoder must be ended before commit.
+    // Final reason is used here because we are not opening a new render
+    // pass after the commit; the next iteration will start one fresh.
+    //
+    // R-BACK-2.30: Present records attach drawable + presentDrawable to
+    // the CURRENT command buffer; a split right after Present would
+    // promote the present-bearing CB out of the chain tail position and
+    // violate the "present metadata on the last sub-CB only" rule.
+    // Suppress the per-N-records split immediately after a Present
+    // record; splitBeforeBlockingPresent owns the present-tail boundary.
+    ++recordsSinceLastSplit;
+    if (commitPolicy == MidChunkCommitPolicy::PerNRecords &&
+        recordsSinceLastSplit >= splitNRecords &&
+        !presentRecord) {
+      flushBlit();
+      flushRender(perf::EncoderSplitReason::Final);
+      assertNoActiveEncoder();
+      splitMidChunkUnderCap();
+      recordsSinceLastSplit = 0;
+    }
+  };
+
   using Kind = core::MetalCommandKind;
-  for (std::size_t commandIndex = 0; commandIndex < slot.commandCount(); ++commandIndex) {
-    const auto command = slot.commandAt(commandIndex);
-    // TLA+: EncoderLifecycle / opCount observes command replay progress.
-    switch (command.kind) {
+  if (slot.drawOnlyCommandStream()) {
+    for (std::size_t commandIndex = 0; commandIndex < slot.commandCount(); ++commandIndex) {
+      const auto command = slot.drawRunCommandAt(commandIndex);
+      // TLA+: EncoderLifecycle / opCount observes command replay progress.
+      encodeDrawRunCommand(commandIndex, command);
+      applyPerRecordSplitPolicy(/*presentRecord=*/false);
+    }
+  } else {
+    for (std::size_t commandIndex = 0; commandIndex < slot.commandCount(); ++commandIndex) {
+      const auto command = slot.commandAt(commandIndex);
+      // TLA+: EncoderLifecycle / opCount observes command replay progress.
+      switch (command.kind) {
       case Kind::Clear: {
         if (!command.clear) break;
         const auto& clear = *command.clear;
@@ -3464,228 +3725,7 @@ std::optional<core::metalqueue::QueueSubmissionRecord> encodeChunk(
         break;
       }
       case Kind::DrawRun: {
-        if (!command.drawState.hot || !command.drawState.shaderLayout ||
-            !command.drawUniformPayload ||
-            core::drawRunDrawCount(command) == 0) break;
-        auto stateView = command.drawState;
-        stateView.uniforms = command.drawUniformPayload;
-        const auto& hot = *stateView.hot;
-        const auto drawParams = command.drawParams;
-        // Compact draw-run: state bound from base ONCE (render-pass +
-        // resource-binding decisions key off base.rts), then loop over
-        // per-DrawParam emits. FlatDrawStateKey is the hot-path decision
-        // object for skipping base-state rebinding across compatible
-        // Draw/DrawRun records on the same Metal render encoder.
-        flushBlit();
-        assertEncoderLifecycleInvariant();
-        const auto drawKey = makeAttachmentKey(hot);
-        const auto drawReadHazard = makeDrawReadHazard(stateView);
-        auto hasExactRenderHazard = [&] {
-          const bool bloomOverlap = activeWriteHazard.bloomOverlaps(drawReadHazard);
-          const bool exactOverlap = activeWriteHazard.exactOverlaps(drawReadHazard);
-          perf::countHazardProbe(bloomOverlap, exactOverlap);
-          return exactOverlap;
-        };
-        // R-BACK-13.6 — mid-pass eligibility. When the active encoder is on
-        // the tile path and the next draw's state has become ineligible
-        // (e.g. alpha-test reference flipped out of [0,1], fog mode flipped
-        // to Exp/Exp2), force a render-pass split so the next encoder opens
-        // on the portable path. A pass that opened on the portable path
-        // stays portable regardless (portable handles every state).
-        auto tileMidPassIneligible = [&]() {
-          if (!hasActiveRender || !activePassUsesTileFfp) return false;
-          const auto sel =
-              dxmt9::pipeline::selectTileFfpForPass(stateView, ctx.pool.supportsApple3());
-          return sel.decision != dxmt9::pipeline::TileFfpDecision::Tile;
-        };
-        if (pendingClear.has_value()) {
-          const auto clearKey = makeAttachmentKey(*pendingClear);
-          const auto clearHazard = makeAttachmentHazard(*pendingClear);
-          if (clearKey == drawKey && !clearHazard.exactOverlaps(drawReadHazard)) {
-            startRenderPass(stateView, pendingClear, commandIndex);
-            pendingClear.reset();
-          } else {
-            flushPendingClear();
-            const bool renderTargetChanged = hasActiveRender && activeKey != drawKey;
-            const bool hazardDetected =
-                hasActiveRender && !renderTargetChanged && hasExactRenderHazard();
-            const bool tileResplit =
-                hasActiveRender && !renderTargetChanged && !hazardDetected &&
-                tileMidPassIneligible();
-            if (tileResplit) {
-              // R-BACK-13.6: tile path can't host this draw; fall back
-              // to portable for a fresh encoder. The split is a real
-              // change of pipeline kind (not a Bloom false positive),
-              // so it does not violate R-BACK-2.28's no-false-positive
-              // policy.
-              perf::countTileFfpMidPassResplit();
-              perf::countTileFfpFallbackMidPassIneligible();
-            }
-            if (!hasActiveRender || renderTargetChanged || hazardDetected || tileResplit) {
-              if (renderTargetChanged) {
-                // TLA+: EncoderLifecycle / RenderTargetChange(newRT)
-                DXMT_ASSERT(hasActiveRender);
-              }
-              if (hazardDetected) {
-                // TLA+: EncoderLifecycle / HazardDetected
-                DXMT_ASSERT(hasActiveRender);
-                DXMT_ASSERT(activeKey == drawKey);
-              }
-              const auto splitReason = renderTargetChanged
-                  ? perf::EncoderSplitReason::RenderTargetChange
-                  : (hazardDetected ? perf::EncoderSplitReason::Hazard
-                                    : perf::EncoderSplitReason::ClearBarrier);
-              flushRender(splitReason);
-              // R-BACK-2.29..2.32 — per-render-pass policy commits the
-              // current sub-CB at every non-Final flushRender. Encoder is
-              // already ended by flushRender, so the splitMidChunk
-              // invariant (no active encoder) holds. Skip when policy
-              // is off so the default 1 CB/chunk behavior is preserved.
-              if (commitPolicy == MidChunkCommitPolicy::PerRenderPass) {
-                splitMidChunkUnderCap();
-              }
-              startRenderPass(stateView, std::nullopt, commandIndex);
-            } else {
-              // TLA+: EncoderLifecycle / MergeRenderDraw(rt)
-              DXMT_ASSERT(hasActiveRender);
-              DXMT_ASSERT(activeKey == drawKey);
-              DXMT_ASSERT(!activeWriteHazard.exactOverlaps(drawReadHazard));
-            }
-          }
-        } else {
-          const bool renderTargetChanged = hasActiveRender && activeKey != drawKey;
-          const bool hazardDetected =
-              hasActiveRender && !renderTargetChanged && hasExactRenderHazard();
-          const bool tileResplit =
-              hasActiveRender && !renderTargetChanged && !hazardDetected &&
-              tileMidPassIneligible();
-          if (tileResplit) {
-            // R-BACK-13.6 — see twin call site above.
-            perf::countTileFfpMidPassResplit();
-            perf::countTileFfpFallbackMidPassIneligible();
-          }
-          if (!hasActiveRender || renderTargetChanged || hazardDetected || tileResplit) {
-            if (renderTargetChanged) {
-              // TLA+: EncoderLifecycle / RenderTargetChange(newRT)
-              DXMT_ASSERT(hasActiveRender);
-            }
-            if (hazardDetected) {
-              // TLA+: EncoderLifecycle / HazardDetected
-              DXMT_ASSERT(hasActiveRender);
-              DXMT_ASSERT(activeKey == drawKey);
-            }
-            const auto splitReason = renderTargetChanged
-                ? perf::EncoderSplitReason::RenderTargetChange
-                : (hazardDetected ? perf::EncoderSplitReason::Hazard
-                                  : perf::EncoderSplitReason::Final);
-            flushRender(splitReason);
-            // R-BACK-2.29..2.32 — see twin call site above. The split
-            // reason here can be Final when neither RT-change nor hazard
-            // forced the flush, but per-render-pass policy still
-            // commits to start a new sub-CB before the next pass opens.
-            if (commitPolicy == MidChunkCommitPolicy::PerRenderPass) {
-              splitMidChunkUnderCap();
-            }
-            startRenderPass(stateView, std::nullopt, commandIndex);
-          } else {
-            // TLA+: EncoderLifecycle / MergeRenderDraw(rt)
-            DXMT_ASSERT(hasActiveRender);
-            DXMT_ASSERT(activeKey == drawKey);
-            DXMT_ASSERT(!activeWriteHazard.exactOverlaps(drawReadHazard));
-          }
-        }
-        // Phase 3-E: bind BaseDrawState ONCE on iter 0, then issue-only
-        // path on iters 1..N — the Metal render encoder retains
-        // pipeline / depth / viewport / scissor / cull / texture /
-        // sampler state across draw calls.
-        //
-        // Phase 5-B: pre-scan for UP vertex/index payloads + batch-
-        // upload them all in ONE uploadTransientBufferBatch call
-        // (single transientBufferMutex_ acquire, single completedSeqId
-        // snapshot, single reclaim pass for the whole run). Per-draw
-        // pre-resolved slices are handed to encodeDraw via
-        // PreUploadedDrawData.
-        //
-        // Layout of the batch payload vector (interleaved per draw):
-        //   [0]   = draw 0 vertex (empty if no UP)
-        //   [1]   = draw 0 index  (empty if no UP)
-        //   [2]   = draw 1 vertex
-        //   [3]   = draw 1 index
-        //   …
-        // Returned slices use the same indexing.
-        const std::size_t drawCount = core::drawRunDrawCount(command);
-        const auto recordPayloadArena = core::drawRunPayloadBytes(command);
-        bool anyUpData = false;
-        bool hasUpPayloadRanges = false;
-        for (const auto& param : drawParams) {
-          if (!param.userVertexRange.empty() || !param.userIndexRange.empty()) {
-            hasUpPayloadRanges = true;
-            break;
-          }
-        }
-        std::vector<CommandQueue::TransientBufferSlice> upSlices;
-        if (hasUpPayloadRanges) {
-          std::vector<std::span<const std::byte>> upPayloads;
-          upPayloads.reserve(drawCount * 2);
-          for (const auto& param : drawParams) {
-            const auto vertexBytes = drawParamVertexBytes(param, recordPayloadArena);
-            if (!vertexBytes.empty()) anyUpData = true;
-            upPayloads.emplace_back(reinterpret_cast<const std::byte*>(vertexBytes.data()),
-                                    vertexBytes.size());
-            const auto indexBytes = drawParamIndexBytes(param, recordPayloadArena);
-            if (!indexBytes.empty()) anyUpData = true;
-            upPayloads.emplace_back(reinterpret_cast<const std::byte*>(indexBytes.data()),
-                                    indexBytes.size());
-          }
-          if (anyUpData) {
-            upSlices = ctx.queue.uploadTransientBufferBatch(upPayloads, /*alignment=*/16, slot.seqId);
-          }
-        }
-
-        // encodeDraw receives the per-draw fields through DrawParam while
-        // all base state is read from the canonical hot/shader view.
-        // Per-frequency UBOs (VsConsts/PsConsts/FfpVsConsts/FfpPsConsts)
-        // bind only on dirty (R-BACK-12.5/12.8); DrawVolatile is pushed
-        // via setVertexBytes per draw with no slab traffic.
-        bool baseBound =
-            activeDrawStateKey.has_value() && *activeDrawStateKey == hot.key;
-        // R-BACK-12.22..12.26 — constants-only argbuf reopen gate. Every draw
-        // in one DrawRun shares the same uniform payload, so at most the first
-        // draw needs a fresh argbuf table, and only when this run's payload
-        // differs from the previous one on this encoder. The resource-array
-        // lane always reopens (texture/sampler descriptors are written inline
-        // and can change between runs independently of the const hash).
-        const u64 runArgbufPayloadHash = command.drawUniformPayload->hash;
-        const bool argbufPayloadChanged =
-            !lastArgbufPayloadHash.has_value() ||
-            *lastArgbufPayloadHash != runArgbufPayloadHash;
-        for (std::size_t i = 0; i < drawCount; ++i) {
-          const auto& param = drawParams[i];
-          PreUploadedDrawData preData{};
-          if (i * 2u + 1u < upSlices.size()) {
-            preData.vertex = upSlices[i * 2u];
-            preData.index = upSlices[i * 2u + 1u];
-          }
-          const bool reopenArgbuf =
-              activePassUsesArgbufResourceArray ||
-              (i == 0 && argbufPayloadChanged);
-          if (encodeDraw(ctx, commandBuffer, activeRenderEncoder, stateView, slot.seqId,
-                         /*skipBaseStateBind=*/baseBound,
-                         anyUpData ? &preData : nullptr,
-                         &param,
-                         recordPayloadArena,
-                         &uniformDirty,
-                         /*tileFfpMode=*/activePassUsesTileFfp,
-                         /*argbufHybridMode=*/activePassUsesArgbufHybrid,
-                         /*argbufResourceArray=*/activePassUsesArgbufResourceArray,
-                         /*reopenArgbufHybrid=*/reopenArgbuf,
-                         &textureSamplerShadow)) {
-            baseBound = true;
-            activeDrawStateKey = hot.key;
-          }
-        }
-        lastArgbufPayloadHash = runArgbufPayloadHash;
-        commandBufferHasWork = true;
+        encodeDrawRunCommand(commandIndex, command);
         break;
       }
       case Kind::SurfaceCopy: {
@@ -3848,30 +3888,8 @@ std::optional<core::metalqueue::QueueSubmissionRecord> encodeChunk(
         }
         break;
       }
-    }
-    // R-BACK-2.29..2.32 — per-N-records policy. Counts every replayed
-    // record (including helper-encoder commands), and fires a mid-chunk
-    // commit when the threshold is hit AND there is no active encoder.
-    // The flushBlit + flushRender(non-Final) sequence enforces the
-    // splitMidChunk invariant: encoder must be ended before commit.
-    // Final reason is used here because we are not opening a new render
-    // pass after the commit; the next iteration will start one fresh.
-    //
-    // R-BACK-2.30: Present records attach drawable + presentDrawable to
-    // the CURRENT command buffer; a split right after Present would
-    // promote the present-bearing CB out of the chain tail position and
-    // violate the "present metadata on the last sub-CB only" rule.
-    // Suppress the per-N-records split immediately after a Present
-    // record; splitBeforeBlockingPresent owns the present-tail boundary.
-    ++recordsSinceLastSplit;
-    if (commitPolicy == MidChunkCommitPolicy::PerNRecords &&
-        recordsSinceLastSplit >= splitNRecords &&
-        command.kind != Kind::Present) {
-      flushBlit();
-      flushRender(perf::EncoderSplitReason::Final);
-      assertNoActiveEncoder();
-      splitMidChunkUnderCap();
-      recordsSinceLastSplit = 0;
+      }
+      applyPerRecordSplitPolicy(command.kind == Kind::Present);
     }
   }
 

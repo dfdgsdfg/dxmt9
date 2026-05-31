@@ -3,6 +3,8 @@
 #include "dxmt9/core.hpp"
 #include "dxmt9/assert.hpp"
 
+#include <array>
+#include <bit>
 #include <cstdint>
 #include <limits>
 #include <span>
@@ -36,6 +38,22 @@ struct DrawRunCommandRecord {
   DrawUniformHandle uniformHandle{};
 };
 
+struct DrawPsoSubview {
+  bool hasShaderContext = false;
+  u64 vertexShaderHash = 0;
+  u64 pixelShaderHash = 0;
+  u64 vertexDeclHash = 0;
+  u64 renderStateHash = 0;
+  u32 textureMask = 0;
+  u32 samplerStateMask = 0;
+  u32 renderTargetMask = 0;
+  bool samplerLodBias = false;
+  std::array<Handle, kMaxRenderTargets> colorAttachmentHandles{};
+  Handle depthStencilHandle{};
+
+  friend constexpr bool operator==(const DrawPsoSubview&, const DrawPsoSubview&) = default;
+};
+
 struct DrawUniformPayloadRecord {
   DrawUniformHandle handle{};
   DrawUniformPayload payload{};
@@ -49,6 +67,7 @@ struct MetalCommandHeader {
 struct MetalCommandView {
   MetalCommandKind kind = MetalCommandKind::DrawRun;
   const DrawRunCommandRecord* drawRunRecord = nullptr;
+  const DrawPsoSubview* drawPsoSubview = nullptr;
   FlatDrawStateView drawState{};
   const DrawUniformPayload* drawUniformPayload = nullptr;
   std::span<const DrawParam> drawParams{};
@@ -158,6 +177,7 @@ struct ChunkSlot {
   std::vector<FlatDrawStateRecord> drawHotStates;
   std::vector<DrawShaderLayoutContext> drawShaderLayouts;
   std::vector<DrawDebugSnapshot> drawDebugSnapshots;
+  std::vector<DrawPsoSubview> drawPsoSubviews;
   std::vector<DrawUniformPayloadRecord> drawUniformPayloads;
   // Slot-local hash chains for uniform interning; indices point into
   // drawUniformPayloads.
@@ -184,11 +204,24 @@ struct ChunkSlot {
     return commandHeaders.size();
   }
 
+  bool drawOnlyCommandStream() const noexcept {
+    if (commandHeaders.empty() || commandHeaders.size() != drawRunRecords.size()) {
+      return false;
+    }
+    for (const auto& header : commandHeaders) {
+      if (header.kind != MetalCommandKind::DrawRun) {
+        return false;
+      }
+    }
+    return true;
+  }
+
   void clearCommands() {
     commandHeaders.clear();
     drawHotStates.clear();
     drawShaderLayouts.clear();
     drawDebugSnapshots.clear();
+    drawPsoSubviews.clear();
     drawUniformPayloads.clear();
     drawUniformPayloadLookupHeads.clear();
     drawUniformPayloadLookupTails.clear();
@@ -405,6 +438,36 @@ struct ChunkSlot {
            detail::chunkSlotCanAppendU32Range(drawPayloadArena.size(), payloadBytes);
   }
 
+  static DrawPsoSubview makeDrawPsoSubview(const CanonicalDrawState& state) noexcept {
+    DrawPsoSubview view{};
+    const auto& hot = state.hot;
+    const auto& key = hot.key;
+    view.hasShaderContext =
+        state.shaderLayout.vertexShader.kind != ShaderRef::Kind::None ||
+        state.shaderLayout.pixelShader.kind != ShaderRef::Kind::None;
+    view.vertexShaderHash = key.vertexShaderHash;
+    view.pixelShaderHash = key.pixelShaderHash;
+    view.vertexDeclHash = key.vertexDeclHash;
+    view.renderStateHash = key.renderStateHash;
+    view.textureMask = hot.textureMask;
+    view.samplerStateMask = key.samplerStateMask;
+    view.renderTargetMask = hot.renderTargetMask;
+    for (std::size_t i = 0; i < kMaxRenderTargets; ++i) {
+      view.colorAttachmentHandles[i] = hot.colorAttachments[i].handle;
+    }
+    view.depthStencilHandle = hot.depthStencil.handle;
+    for (u32 stage = 0; stage < kMaxTextureStages; ++stage) {
+      const f32 bias = std::bit_cast<f32>(flatStateOr(
+          hot.samplerStates[stage], SAMP_MIPMAP_LOD_BIAS,
+          std::bit_cast<u32>(0.0f)));
+      if (bias != 0.0f) {
+        view.samplerLodBias = true;
+        break;
+      }
+    }
+    return view;
+  }
+
   void appendDrawRun(CanonicalDrawState state,
                      const DrawUniformPayload& uniformPayload,
                      std::span<const DrawParam> draws,
@@ -444,6 +507,7 @@ struct ChunkSlot {
     commandHeaders.reserve(commandHeaders.size() + 1u);
     drawRunRecords.reserve(drawRunRecords.size() + 1u);
     reserveDrawStateStorage(drawHotStates.size() + 1u);
+    drawPsoSubviews.reserve(drawPsoSubviews.size() + 1u);
     drawParams.reserve(drawParams.size() + draws.size());
     drawPayloadArena.reserve(drawPayloadArena.size() + payloadBytes);
     if (needsUniformAppend) {
@@ -458,6 +522,7 @@ struct ChunkSlot {
       }
     }
 
+    const auto psoSubview = makeDrawPsoSubview(state);
     const auto stateIndex = appendDrawState(std::move(state));
     const auto firstParam = static_cast<std::uint32_t>(drawParams.size());
     const auto payloadOffset = static_cast<std::uint32_t>(drawPayloadArena.size());
@@ -492,6 +557,7 @@ struct ChunkSlot {
         .payloadSize = recordPayloadSize,
         .uniformHandle = uniformHandle,
     });
+    drawPsoSubviews.push_back(psoSubview);
   }
 
   void appendClear(const ClearDesc& clear) {
@@ -534,32 +600,7 @@ struct ChunkSlot {
     MetalCommandView view{.kind = header.kind};
     switch (header.kind) {
     case MetalCommandKind::DrawRun:
-      if (payloadIndex < drawRunRecords.size()) {
-        const auto& record = drawRunRecords[payloadIndex];
-        view.drawRunRecord = &record;
-        if (record.payloadSize > 0 &&
-            record.payloadOffset <= drawPayloadArena.size() &&
-            record.payloadSize <= drawPayloadArena.size() - record.payloadOffset) {
-          view.drawPayloadBytes = std::span<const u8>(
-              drawPayloadArena.data() + record.payloadOffset, record.payloadSize);
-        }
-        if (record.stateIndex < drawHotStates.size() &&
-            record.stateIndex < drawShaderLayouts.size() &&
-            record.stateIndex < drawDebugSnapshots.size()) {
-          view.drawState.hot = &drawHotStates[record.stateIndex];
-          view.drawState.shaderLayout = &drawShaderLayouts[record.stateIndex];
-          view.drawState.debug = &drawDebugSnapshots[record.stateIndex];
-        }
-        if (const auto* uniformRecord = drawUniformPayloadRecord(record.uniformHandle)) {
-          view.drawUniformPayload = &uniformRecord->payload;
-          view.drawState.uniforms = &uniformRecord->payload;
-        }
-        if (record.firstParam <= drawParams.size() &&
-            record.paramCount <= drawParams.size() - record.firstParam) {
-          view.drawParams = std::span<const DrawParam>(
-              drawParams.data() + record.firstParam, record.paramCount);
-        }
-      }
+      view = drawRunCommandAt(index);
       break;
     case MetalCommandKind::Clear:
       if (payloadIndex < clearRecords.size()) view.clear = &clearRecords[payloadIndex];
@@ -582,6 +623,50 @@ struct ChunkSlot {
     case MetalCommandKind::Present:
       if (payloadIndex < presentRecords.size()) view.present = &presentRecords[payloadIndex];
       break;
+    }
+    return view;
+  }
+
+  MetalCommandView drawRunCommandAt(std::size_t index) const {
+    MetalCommandView view{.kind = MetalCommandKind::DrawRun};
+    if (index >= commandHeaders.size()) {
+      return view;
+    }
+    const auto& header = commandHeaders[index];
+    if (header.kind != MetalCommandKind::DrawRun) {
+      return view;
+    }
+    const std::size_t payloadIndex = header.payloadIndex;
+    if (payloadIndex >= drawRunRecords.size()) {
+      return view;
+    }
+
+    const auto& record = drawRunRecords[payloadIndex];
+    view.drawRunRecord = &record;
+    if (payloadIndex < drawPsoSubviews.size()) {
+      view.drawPsoSubview = &drawPsoSubviews[payloadIndex];
+    }
+    if (record.payloadSize > 0 &&
+        record.payloadOffset <= drawPayloadArena.size() &&
+        record.payloadSize <= drawPayloadArena.size() - record.payloadOffset) {
+      view.drawPayloadBytes = std::span<const u8>(
+          drawPayloadArena.data() + record.payloadOffset, record.payloadSize);
+    }
+    if (record.stateIndex < drawHotStates.size() &&
+        record.stateIndex < drawShaderLayouts.size() &&
+        record.stateIndex < drawDebugSnapshots.size()) {
+      view.drawState.hot = &drawHotStates[record.stateIndex];
+      view.drawState.shaderLayout = &drawShaderLayouts[record.stateIndex];
+      view.drawState.debug = &drawDebugSnapshots[record.stateIndex];
+    }
+    if (const auto* uniformRecord = drawUniformPayloadRecord(record.uniformHandle)) {
+      view.drawUniformPayload = &uniformRecord->payload;
+      view.drawState.uniforms = &uniformRecord->payload;
+    }
+    if (record.firstParam <= drawParams.size() &&
+        record.paramCount <= drawParams.size() - record.firstParam) {
+      view.drawParams = std::span<const DrawParam>(
+          drawParams.data() + record.firstParam, record.paramCount);
     }
     return view;
   }

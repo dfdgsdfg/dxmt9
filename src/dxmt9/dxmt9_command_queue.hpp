@@ -27,6 +27,7 @@
 #include "dxmt9_resource_pool.hpp"
 #include "dxmt9_ring_arena.hpp"
 #include "dxmt9_shader_archive.hpp"
+#include "dxmt9_transient_resource_arena.hpp"
 #include "dxmt9_uniform_dirty.hpp"
 
 #include <array>
@@ -204,18 +205,12 @@ class CommandQueue {
   WMT::CommandQueue& raw() noexcept { return queueView_; }
   const WMT::CommandQueue& raw() const noexcept { return queueView_; }
 
-  struct TransientBufferSlice {
-    WMT::Buffer buffer{};
-    std::uint64_t offset = 0;
-    std::size_t size = 0;
-
-    explicit operator bool() const noexcept { return static_cast<bool>(buffer); }
-  };
+  using TransientBufferSlice = transient::BufferSlice;
 
   TransientBufferSlice uploadTransientBuffer(std::span<const std::byte> bytes,
                                              std::size_t alignment,
                                              std::uint64_t seqId);
-  // Batched transient upload — single transientBufferMutex_ acquire +
+  // Batched transient upload — single TransientResourceArena acquire +
   // single completedSeqId_ snapshot for N payloads. Returns one slice
   // per input payload in order. Each payload still gets its own
   // (offset, size) within the shared slab; the wins are amortized
@@ -234,7 +229,7 @@ class CommandQueue {
   void retainSamplerForSeq(WMT::Reference<WMT::SamplerState> sampler,
                            std::uint64_t seqId);
 
-  // Reserved slab for arena-style writes — single transientBufferMutex_
+  // Reserved slab for arena-style writes — single TransientResourceArena
   // acquire reserves `size` bytes of contiguous transient memory and
   // returns both a binding-side slice (buffer + offset + size) and a
   // writable pointer the caller fills in directly. Lifetime tracking
@@ -243,14 +238,7 @@ class CommandQueue {
   // path once the chunk's command buffer completes. Returns a
   // reservation with `contents == nullptr` on failure (caller falls
   // back to per-draw uploadTransientBuffer).
-  struct TransientBufferReservation {
-    TransientBufferSlice slice{};
-    std::byte* contents = nullptr;
-
-    explicit operator bool() const noexcept {
-      return contents != nullptr && static_cast<bool>(slice);
-    }
-  };
+  using TransientBufferReservation = transient::BufferReservation;
   TransientBufferReservation reserveTransientBuffer(std::size_t size,
                                                     std::size_t alignment,
                                                     std::uint64_t seqId);
@@ -446,34 +434,10 @@ class CommandQueue {
   std::unique_ptr<resources::Initializer> initializer_;
   core::metalcapture::MetalCaptureController metalCapture_{};
 
-  struct TransientBufferAllocation {
-    std::size_t offset = 0;
-    std::size_t size = 0;
-    std::uint64_t seqId = 0;
-  };
-
-  struct RetainedTransientBuffer {
-    WMT::Reference<WMT::Buffer> buffer{};
-    std::uint64_t seqId = 0;
-  };
-
-  struct RetainedSamplerState {
-    WMT::Reference<WMT::SamplerState> sampler{};
-    std::uint64_t seqId = 0;
-  };
-
-  void reclaimTransientBuffersUnlocked(std::uint64_t completedSeqId);
-  bool ensureTransientBufferUnlocked(std::size_t minimumCapacity);
-  bool rotateTransientBufferUnlocked(std::size_t minimumCapacity, std::uint64_t seqId);
-
-  std::mutex transientBufferMutex_{};
-  WMT::Reference<WMT::Buffer> transientBuffer_{};
-  std::byte* transientBufferContents_ = nullptr;
-  std::size_t transientBufferCapacity_ = 0;
-  std::size_t transientBufferCursor_ = 0;
-  std::deque<TransientBufferAllocation> transientBufferAllocations_{};
-  std::deque<RetainedTransientBuffer> retainedTransientBuffers_{};
-  std::deque<RetainedSamplerState> retainedSamplerStates_{};
+  // SeqId-scoped transient resource owner: shared slabs, dedicated transient
+  // buffers, argbuf reservations, and argbuf sampler retention all reclaim
+  // through ResourceArena::reclaim(completedSeqId).
+  transient::ResourceArena transientArena_{};
 
   // C1 chunk-record-import dirty accumulator. The d3d9 chunk-record
   // dispatcher (device_c_device_state_draw.cpp commit_chunk) calls
