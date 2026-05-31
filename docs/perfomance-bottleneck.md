@@ -31,14 +31,21 @@ Scope:
 
 ```mermaid
 flowchart TD
-  subgraph CPU["CPU-bound: app/API/bridge/queue/encode work"]
+  subgraph PECPU["PE-side CPU: D3D9 calls record into the current chunk"]
     App[D3D9 app]
     D3D9PE[PE d3d9.dll]
-    WinemetalPE[PE winemetal.dll]
-    UnixCall[Wine unix-call bridge]
-    WinemetalSO[winemetal.so]
-    Core[dxmt9 core Device]
     Recorder[Command recorder]
+    ChunkBuffer[current chunk buffer]
+    ChunkBoundary[chunk boundary: flush/present/ring pressure]
+  end
+
+  subgraph ImportBoundary["PE/unix boundary: crossed at chunk import, not per D3D9 call"]
+    UnixCall[Wine unix-call bridge]
+  end
+
+  subgraph UnixCPU["Unix-side CPU: import, queue lifecycle, encode replay"]
+    WinemetalSO[winemetal.so Metal transport]
+    Core[dxmt9 core import]
     CQ[CommandQueue]
     ChunkRing[32-slot chunk ring]
     Pending[ready chunk queue]
@@ -59,27 +66,29 @@ flowchart TD
     Completed[completedSeqId]
     PresentCompleted[presentCompletedSeqId]
     PresentToken[present frame token]
-    Boundary[present/query/readback boundary waits]
+    BoundaryWait[present/query/readback boundary waits]
     Reclaim[resource/transient reclaim]
   end
 
-  App --> D3D9PE --> WinemetalPE --> UnixCall --> WinemetalSO --> Core
-  Core --> Recorder --> CQ --> ChunkRing --> Pending --> EncodeThread --> Replay --> DrawEnc
+  App --> D3D9PE --> Recorder --> ChunkBuffer --> ChunkBoundary --> UnixCall
+  UnixCall --> Core --> CQ --> ChunkRing --> Pending --> EncodeThread --> Replay --> DrawEnc
+  Core -. Metal resource/device transport .-> WinemetalSO
+  DrawEnc -. Metal object access .-> WinemetalSO
   DrawEnc --> RenderPass --> SubCB
   DrawEnc --> Presenter --> Layer --> Present --> SubCB
   SubCB --> Completed
   SubCB --> PresentCompleted
   Completed --> Reclaim
   PresentCompleted --> PresentToken
-  PresentToken --> Boundary
-  Completed -. query/readback fence .-> Boundary
+  PresentToken --> BoundaryWait
+  Completed -. query/readback fence .-> BoundaryWait
 
   classDef cpu fill:#eaf4ff,stroke:#2f6fad,color:#0b2239
   classDef gpu fill:#fff0d6,stroke:#b26b00,color:#2b1900
   classDef sync fill:#ffe8e8,stroke:#b64242,color:#2b0d0d
-  class App,D3D9PE,WinemetalPE,UnixCall,WinemetalSO,Core,Recorder,CQ,ChunkRing,Pending,EncodeThread,Replay,DrawEnc cpu
+  class App,D3D9PE,Recorder,ChunkBuffer,ChunkBoundary,UnixCall,WinemetalSO,Core,CQ,ChunkRing,Pending,EncodeThread,Replay,DrawEnc cpu
   class SubCB,RenderPass,Presenter,Layer,Present gpu
-  class Completed,PresentCompleted,PresentToken,Boundary,Reclaim sync
+  class Completed,PresentCompleted,PresentToken,BoundaryWait,Reclaim sync
 ```
 
 ### Current Sequence
@@ -87,8 +96,8 @@ flowchart TD
 ```mermaid
 sequenceDiagram
   participant App as D3D9 app
-  participant Core as dxmt9 core
-  participant Bridge as PE/unix bridge
+  participant PE as PE d3d9 recorder
+  participant Bridge as PE/unix chunk import
   participant CQ as CommandQueue
   participant QLC as QueueLifecycleController
   participant Encode as encode thread
@@ -96,13 +105,19 @@ sequenceDiagram
   participant Metal as Metal command buffers
   participant Complete as completion path
 
-  Note over App,CQ: CPU-bound: D3D9 state, recorder packets, bridge/import validation, resource marking
+  Note over App,PE: CPU-bound hot path: D3D9 state validation and chunk packet recording
+  Note over Bridge,CQ: CPU-bound chunk boundary: unix-call import, validation, resource marking, queue publish
   Note over Encode,Metal: CPU/GPU boundary: replay, render-pass decisions, PSO lookup, binds, draws, commits
   Note over Presenter,Complete: Driver/sync-bound: drawable acquire, present pacing, completion fences
 
-  App->>Core: Draw / Clear / Copy / Lock / Present
-  Core->>Bridge: marshal command records
-  Bridge->>CQ: commit_chunk / submit resource work
+  loop many D3D9 calls inside one chunk
+    App->>PE: Draw / Clear / Copy / Lock
+    PE->>PE: append records, payloads, and resource references
+  end
+
+  App->>PE: Present / Flush / chunk rollover
+  PE->>Bridge: publish chunk buffer
+  Bridge->>CQ: import chunk records and submit resource work
   CQ->>QLC: reserve writer slot
   CQ->>QLC: publish pending chunk
   QLC-->>Encode: dequeue ready chunk
@@ -119,7 +134,8 @@ sequenceDiagram
   Complete->>Metal: observe completion
   Complete->>QLC: advance completedSeqId
   Complete->>CQ: advance presentCompletedSeqId when present-bearing
-  CQ-->>Core: release present/query/readback boundary waiters
+  CQ-->>Bridge: release present/query/readback boundary waiters
+  Bridge-->>PE: return from boundary wait when required
 ```
 
 ### Current Chunk State
@@ -130,15 +146,14 @@ stateDiagram-v2
   Free --> Writing: writer slot reserved / CPU
   Writing --> Pending: chunk published / CPU
   Pending --> Encoding: encode thread dequeues / CPU
-  Encoding --> SubCBChain: encode 1..N Metal command buffers
-  SubCBChain --> Submitted: final command buffer committed
-  Submitted --> Completed: final completion handler fires
-  Completed --> Free: seqId reclaim and slot reuse
+  Encoding --> GPU: tail command buffer submitted
+  GPU --> Free: tail completion advances seqId and reclaims slot
 
-  Encoding --> Free: empty/no-work chunk
+  Writing --> Free: empty commit
+  Encoding --> Free: no-work chunk completes inline
 
   note right of Writing
-    App and bridge-side work.
+    PE-side app/API work.
     Hot spots: packet construction,
     state normalization, validation,
     resource handle retention.
@@ -150,16 +165,18 @@ stateDiagram-v2
     PSO lookup, FVF/declaration decode,
     stream/IB/texture/sampler binds,
     transient uploads.
-  end note
-
-  note right of SubCBChain
-    Current production policy:
     per-render-pass mid-chunk split
-    with cap=4. Present attaches to
-    the final command buffer only.
+    can create a 1..N sub-CB chain.
   end note
 
-  note right of Submitted
+  note right of GPU
+    Slot state stays GPU while the
+    committed tail command buffer is
+    pending. Earlier sub-CBs are ordered
+    on the same Metal queue; tail
+    completion is the public seqId
+    completion point. Present attaches
+    to the final command buffer only.
     Sync waits must key off the
     chunk final completion, not an
     intermediate sub-command buffer.
