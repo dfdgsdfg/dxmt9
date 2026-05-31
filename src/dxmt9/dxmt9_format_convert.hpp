@@ -51,7 +51,6 @@ WMTCullMode toCullMode(u32 value);
 WMTStencilOperation toStencilOperation(u32 value);
 
 // D3D9-style color-write-mask bits (RGBA = 1|2|4|8) → WMT color-write-mask.
-// Returns WMTColorWriteMaskAll if the input is 0 (matches prior behavior).
 std::uint8_t toColorWriteMask(u32 value);
 
 }  // namespace dxmt9::convert

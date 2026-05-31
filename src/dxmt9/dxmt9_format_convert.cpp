@@ -340,7 +340,12 @@ WMTBlendFactor toBlendFactor(u32 value, bool alphaLane) {
     case BlendFactor::InvDestAlpha:    return WMTBlendFactorOneMinusDestinationAlpha;
     case BlendFactor::DestColor:       return WMTBlendFactorDestinationColor;
     case BlendFactor::InvDestColor:    return WMTBlendFactorOneMinusDestinationColor;
-    case BlendFactor::SrcAlphaSat:     return WMTBlendFactorSourceAlphaSaturated;
+    case BlendFactor::SrcAlphaSat:
+      // D3DBLEND_SRCALPHASAT is (f, f, f, 1), where
+      // f = min(src.a, 1 - dst.a). Metal's SourceAlphaSaturated factor is
+      // valid for the RGB lanes; the alpha lane must use One to preserve
+      // D3D9 destination-alpha feedback for repeated additive light passes.
+      return alphaLane ? WMTBlendFactorOne : WMTBlendFactorSourceAlphaSaturated;
     case BlendFactor::BothSrcAlpha:    return WMTBlendFactorSourceAlpha;
     case BlendFactor::BothInvSrcAlpha: return WMTBlendFactorOneMinusSourceAlpha;
     case BlendFactor::BlendFactor:
@@ -382,7 +387,7 @@ std::uint8_t toColorWriteMask(u32 value) {
   if ((value & 0x2u) != 0) mask |= WMTColorWriteMaskGreen;
   if ((value & 0x4u) != 0) mask |= WMTColorWriteMaskBlue;
   if ((value & 0x8u) != 0) mask |= WMTColorWriteMaskAlpha;
-  return mask == 0 ? WMTColorWriteMaskAll : mask;
+  return mask;
 }
 
 }  // namespace dxmt9::convert

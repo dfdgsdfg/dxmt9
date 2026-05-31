@@ -239,9 +239,23 @@ void testBlendFactorWmtLaneMapping() {
           static_cast<int>(WMTBlendFactorOneMinusBlendAlpha),
           "D3DBLEND_INVBLENDFACTOR maps to inverse BlendAlpha on alpha lanes");
   checkEq(static_cast<int>(dxmt9::convert::toBlendFactor(
+              static_cast<u32>(BlendFactor::SrcAlphaSat), false)),
+          static_cast<int>(WMTBlendFactorSourceAlphaSaturated),
+          "D3DBLEND_SRCALPHASAT maps to SourceAlphaSaturated on RGB lanes");
+  checkEq(static_cast<int>(dxmt9::convert::toBlendFactor(
+              static_cast<u32>(BlendFactor::SrcAlphaSat), true)),
+          static_cast<int>(WMTBlendFactorOne),
+          "D3DBLEND_SRCALPHASAT maps to One on alpha lanes");
+  checkEq(static_cast<int>(dxmt9::convert::toBlendFactor(
               static_cast<u32>(BlendFactor::BothSrcAlpha), false)),
           static_cast<int>(WMTBlendFactorSourceAlpha),
           "legacy BOTHSRCALPHA direct conversion stays source-alpha");
+  checkEq(static_cast<int>(dxmt9::convert::toColorWriteMask(0x0u)),
+          static_cast<int>(WMTColorWriteMaskNone),
+          "D3D color write mask 0 disables all Metal color writes");
+  checkEq(static_cast<int>(dxmt9::convert::toColorWriteMask(0xfu)),
+          static_cast<int>(WMTColorWriteMaskAll),
+          "D3D color write mask 0xf maps to all Metal color writes");
 }
 
 void testMrtColorWriteMaskDefaultAndOverride() {
