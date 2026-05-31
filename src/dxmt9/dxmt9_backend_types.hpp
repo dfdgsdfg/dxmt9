@@ -184,6 +184,25 @@ inline std::size_t chunkSlotUniformLookupBucket(u64 hash, std::size_t bucketCoun
   return static_cast<std::size_t>(mixedHash % bucketCount);
 }
 
+template <typename Vector>
+void chunkSlotReserveAtLeast(Vector& storage, std::size_t required) {
+  if (storage.capacity() >= required) {
+    return;
+  }
+
+  std::size_t capacity = storage.capacity();
+  if (capacity == 0) {
+    capacity = 8u;
+  }
+  while (capacity < required && capacity <= kChunkSlotU32Max / 2u) {
+    capacity *= 2u;
+  }
+  if (capacity < required) {
+    capacity = required;
+  }
+  storage.reserve(capacity);
+}
+
 }  // namespace detail
 
 struct ChunkSlot {
@@ -292,9 +311,9 @@ struct ChunkSlot {
   }
 
   void reserveDrawStateStorage(std::size_t stateCount) {
-    drawHotStates.reserve(stateCount);
-    drawShaderLayouts.reserve(stateCount);
-    drawDebugSnapshots.reserve(stateCount);
+    detail::chunkSlotReserveAtLeast(drawHotStates, stateCount);
+    detail::chunkSlotReserveAtLeast(drawShaderLayouts, stateCount);
+    detail::chunkSlotReserveAtLeast(drawDebugSnapshots, stateCount);
   }
 
   std::uint32_t appendDrawState(CanonicalDrawState state) {
@@ -350,7 +369,7 @@ struct ChunkSlot {
       return;
     }
 
-    drawUniformPayloadLookupNext.reserve(payloadCount);
+    detail::chunkSlotReserveAtLeast(drawUniformPayloadLookupNext, payloadCount);
     auto bucketCount = detail::chunkSlotUniformLookupBucketCount(payloadCount);
     if (bucketCount < drawUniformPayloadLookupHeads.size()) {
       bucketCount = drawUniformPayloadLookupHeads.size();
@@ -526,14 +545,14 @@ struct ChunkSlot {
       return;
     }
 
-    commandHeaders.reserve(commandHeaders.size() + 1u);
-    drawRunRecords.reserve(drawRunRecords.size() + 1u);
+    detail::chunkSlotReserveAtLeast(commandHeaders, commandHeaders.size() + 1u);
+    detail::chunkSlotReserveAtLeast(drawRunRecords, drawRunRecords.size() + 1u);
     reserveDrawStateStorage(drawHotStates.size() + 1u);
-    drawPsoSubviews.reserve(drawPsoSubviews.size() + 1u);
-    drawParams.reserve(drawParams.size() + draws.size());
-    drawPayloadArena.reserve(drawPayloadArena.size() + payloadBytes);
+    detail::chunkSlotReserveAtLeast(drawPsoSubviews, drawPsoSubviews.size() + 1u);
+    detail::chunkSlotReserveAtLeast(drawParams, drawParams.size() + draws.size());
+    detail::chunkSlotReserveAtLeast(drawPayloadArena, drawPayloadArena.size() + payloadBytes);
     if (needsUniformAppend) {
-      drawUniformPayloads.reserve(drawUniformPayloads.size() + 1u);
+      detail::chunkSlotReserveAtLeast(drawUniformPayloads, drawUniformPayloads.size() + 1u);
       reserveDrawUniformPayloadLookup(drawUniformPayloads.size() + 1u);
     }
 
