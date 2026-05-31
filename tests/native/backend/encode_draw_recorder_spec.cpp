@@ -1457,6 +1457,68 @@ void testAutoExpandIndexedDrawHeuristicCoversProgrammableR32FCube() {
         "programmable R32F cube requires observed shadow sampler mask");
 }
 
+void testExpandedIndexedProgrammableDrawExpandsExtraStreamBytes() {
+  constexpr std::size_t kStream0Base = 24u;
+  constexpr std::size_t kStream0Stride = 12u;
+  constexpr std::size_t kStream1Base = 40u;
+  constexpr std::size_t kStream1Stride = 8u;
+  const std::array<std::uint16_t, 6> indices{{2u, 0u, 3u, 3u, 1u, 2u}};
+
+  std::array<std::uint8_t, 128> stream0Bytes{};
+  std::array<std::uint8_t, 128> stream1Bytes{};
+  for (std::size_t i = 0; i < stream0Bytes.size(); ++i) {
+    stream0Bytes[i] = static_cast<std::uint8_t>(i & 0xffu);
+  }
+  for (std::size_t i = 0; i < stream1Bytes.size(); ++i) {
+    stream1Bytes[i] = static_cast<std::uint8_t>((0x80u + i) & 0xffu);
+  }
+  const std::span<const std::uint8_t> indexBytes{
+      reinterpret_cast<const std::uint8_t*>(indices.data()),
+      indices.size() * sizeof(indices[0])};
+
+  std::vector<std::uint8_t> expanded0;
+  std::vector<std::uint8_t> expanded1;
+  check(dxmt9::encoders::expandIndexedStreamToFlatVertexBytes(
+            stream0Bytes,
+            indexBytes,
+            IndexType::UInt16,
+            0u,
+            0,
+            indices.size(),
+            kStream0Base,
+            kStream0Stride,
+            expanded0),
+        "stream0 indexed expansion succeeds");
+  check(dxmt9::encoders::expandIndexedStreamToFlatVertexBytes(
+            stream1Bytes,
+            indexBytes,
+            IndexType::UInt16,
+            0u,
+            0,
+            indices.size(),
+            kStream1Base,
+            kStream1Stride,
+            expanded1),
+        "stream1 indexed expansion succeeds");
+
+  checkEq(expanded0.size(), indices.size() * kStream0Stride,
+          "expanded stream0 byte count");
+  checkEq(expanded1.size(), indices.size() * kStream1Stride,
+          "expanded stream1 byte count");
+  for (std::size_t i = 0; i < indices.size(); ++i) {
+    const std::size_t src0 = kStream0Base + indices[i] * kStream0Stride;
+    const std::size_t src1 = kStream1Base + indices[i] * kStream1Stride;
+    check(std::memcmp(expanded0.data() + i * kStream0Stride,
+                      stream0Bytes.data() + src0,
+                      kStream0Stride) == 0,
+          "stream0 expanded vertex matches indexed source");
+    check(std::memcmp(expanded1.data() + i * kStream1Stride,
+                      stream1Bytes.data() + src1,
+                      kStream1Stride) == 0,
+          "stream1 expanded vertex matches indexed source");
+  }
+}
+
 void testMixedShaderPathsBindProgrammableDrawInputs() {
   struct Case {
     dxmt9::core::ShaderRef::Kind vertexKind;
@@ -2102,6 +2164,7 @@ int main() {
     testIndexedProgrammableDrawPreservesSparseStreamOffsets();
     testProgrammableIndexedBlendHeuristicStaysDirect();
     testAutoExpandIndexedDrawHeuristicCoversProgrammableR32FCube();
+    testExpandedIndexedProgrammableDrawExpandsExtraStreamBytes();
     testMixedShaderPathsBindProgrammableDrawInputs();
     testProgrammableDrawFvfAndDeclTransitionsDoNotReuseLayout();
     testProgrammableArgbufIndexedDrawKeepsDirectResourceLanes();

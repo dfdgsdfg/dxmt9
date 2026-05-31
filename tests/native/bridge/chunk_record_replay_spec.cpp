@@ -171,6 +171,32 @@ void testIndexedDrawRunScanPreservesPerRecordParams() {
           "indexed draw-run scan does not consume stateful boundary");
 }
 
+void testIndexedDrawRunScanStopsAtIndexBufferDelta() {
+  auto firstDraw = makeDrawIndexedPrimitiveRecord(0u, 1u);
+  firstDraw.packet.ibValid = 1u;
+  firstDraw.packet.ibHandle.lo = 0x1000u;
+  const auto secondDraw = makeDrawIndexedPrimitiveRecord(3u, 1u);
+
+  std::vector<std::uint8_t> bytes;
+  appendRecord(bytes, firstDraw);
+  appendRecord(bytes, secondDraw);
+
+  const auto chunk = makeImportedChunkView(
+      bytes.data(), static_cast<std::uint32_t>(bytes.size()), 2u);
+  const auto first = nextImportedRecord(chunk, 0u, 0u);
+  check(first.has_value(), "indexed ib-delta scan first record exists");
+  check(first->valid(), "indexed ib-delta scan first record validates");
+
+  const auto scan = scanImportedDrawRun(chunk, *first);
+  check(!scan.replayAsRun(), "indexed ib-delta draw is not replayed as a run");
+  checkEq(scan.recordCount, 0u, "indexed ib-delta scan rejects first record");
+  checkEq(static_cast<int>(scan.stop),
+          static_cast<int>(ImportedDrawRunScanStop::FirstRecordHasStateDelta),
+          "indexed ib-delta scan reports first-record state delta");
+  checkEq(scan.stopRecord.index, 0u,
+          "indexed ib-delta scan leaves first draw for normal replay");
+}
+
 void testImportedRecordReplayInfoClassifiesOrderingBoundaries() {
   const auto draw = replayInfoForCommandRecordType(D9C_COMMAND_RECORD_DRAW_PRIMITIVE);
   checkEq(static_cast<int>(draw.category), static_cast<int>(ImportedRecordReplayCategory::Draw),
@@ -264,6 +290,7 @@ int main() {
     testImportedWireDrawRunScansRecordTableOrder();
     testDrawRunScanBoundary();
     testIndexedDrawRunScanPreservesPerRecordParams();
+    testIndexedDrawRunScanStopsAtIndexBufferDelta();
     testImportedRecordReplayInfoClassifiesOrderingBoundaries();
     testDrawRunHelpers();
   } catch (const dxmt9::d3d9::devicec::spec::TestFailure& e) {

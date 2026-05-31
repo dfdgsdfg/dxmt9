@@ -9576,8 +9576,11 @@ void test_visual_process_vertices_xyzhw_policy(const struct d3d9_api *api)
         PROCESS_VS_DCL(D3DDECLUSAGE_TEXCOORD, 0),
         PROCESS_VS_DST(D3DSPR_OUTPUT, 2, 0xf),
         PROCESS_VS_INST(D3DSIO_MOVA, 2),
-        PROCESS_VS_DST(D3DSPR_ADDR, 0, 0xf),
+        PROCESS_VS_DST(D3DSPR_ADDR, 0, 0x1),
         PROCESS_VS_SRC(D3DSPR_CONST, 4),
+        PROCESS_VS_INST(D3DSIO_MOVA, 2),
+        PROCESS_VS_DST(D3DSPR_ADDR, 0, 0x2),
+        PROCESS_VS_SRC(D3DSPR_CONST, 9),
         PROCESS_VS_INST(D3DSIO_M4x4, 3),
         PROCESS_VS_DST(D3DSPR_OUTPUT, 0, 0xf),
         PROCESS_VS_SRC(D3DSPR_INPUT, 0),
@@ -9588,7 +9591,8 @@ void test_visual_process_vertices_xyzhw_policy(const struct d3d9_api *api)
         PROCESS_VS_SRC(D3DSPR_INPUT, 1),
         PROCESS_VS_INST(D3DSIO_MOV, 2),
         PROCESS_VS_DST(D3DSPR_OUTPUT, 2, 0xf),
-        PROCESS_VS_SRC(D3DSPR_INPUT, 2),
+        PROCESS_VS_SRC_REL(D3DSPR_CONST, 0),
+        PROCESS_VS_SRC_SWZ(D3DSPR_ADDR, 0, 0, 0, 0, 0),
         D3DSIO_END
     };
     static const DWORD process_vs_texldl_3_0[] =
@@ -11484,6 +11488,13 @@ void test_visual_process_vertices_xyzhw_policy(const struct d3d9_api *api)
         {400.0f, 300.0f, 0.0f, 1.0f, 0xffff0080u, 0.50f, 0.75f},
         {400.0f, 180.0f, 0.0f, 1.0f, 0xffff0080u, 1.00f, 1.00f},
     };
+    const struct dst_vertex expected_mova_component_relative[] =
+    {
+        {240.0f, 300.0f, 0.0f, 1.0f, 0xffff0000u, 4.00f, 5.00f},
+        {240.0f, 180.0f, 0.0f, 1.0f, 0xff00ff00u, 4.00f, 5.00f},
+        {400.0f, 300.0f, 0.0f, 1.0f, 0xff0000ffu, 4.00f, 5.00f},
+        {400.0f, 180.0f, 0.0f, 1.0f, 0xffffffffu, 4.00f, 5.00f},
+    };
     const struct dst_vertex expected_bool_false[] =
     {
         {240.0f, 300.0f, 0.0f, 1.0f, 0xff00ffffu, 0.00f, 0.25f},
@@ -12002,17 +12013,18 @@ void test_visual_process_vertices_xyzhw_policy(const struct d3d9_api *api)
         {0.0f, 0.0f, 1.0f, 0.0f},
         {0.0f, 0.0f, 0.0f, 1.0f},
     };
-    const float vs_mova_component_relative_constants[9][4] =
+    const float vs_mova_component_relative_constants[10][4] =
     {
         {1.0f, 0.0f, 0.0f, 0.0f},
         {0.0f, 1.0f, 0.0f, 0.0f},
         {0.0f, 0.0f, 1.0f, 0.0f},
         {0.0f, 0.0f, 0.0f, 1.0f},
-        {0.0f, 5.0f, 0.0f, 0.0f},
+        {4.0f, 5.0f, 0.0f, 0.0f},
         {0.5f, 0.0f, 0.0f, 0.0f},
         {0.0f, 0.5f, 0.0f, 0.0f},
         {0.0f, 0.0f, 1.0f, 0.0f},
         {0.0f, 0.0f, 0.0f, 1.0f},
+        {0.0f, 5.0f, 0.0f, 0.0f},
     };
     const float vs_saturate_constants[5][4] =
     {
@@ -16426,7 +16438,7 @@ void test_visual_process_vertices_xyzhw_policy(const struct d3d9_api *api)
     if (FAILED(hr))
         goto done_device;
     CHECK_HR(IDirect3DDevice9_SetVertexShaderConstantF(device, 0,
-            (const float *)vs_mova_component_relative_constants, 9), D3D_OK);
+            (const float *)vs_mova_component_relative_constants, 10), D3D_OK);
     CHECK_HR(IDirect3DDevice9_SetFVF(device,
             D3DFVF_XYZ | D3DFVF_DIFFUSE | D3DFVF_TEX1), D3D_OK);
     CHECK_HR(IDirect3DDevice9_SetStreamSource(device, 0, src_vb, 0,
@@ -16443,14 +16455,14 @@ void test_visual_process_vertices_xyzhw_policy(const struct d3d9_api *api)
     CHECK_HR(hr, D3D_OK);
     if (SUCCEEDED(hr))
     {
-        for (i = 0; i < ARRAY_SIZE(expected); ++i)
+        for (i = 0; i < ARRAY_SIZE(expected_mova_component_relative); ++i)
         {
-            float dx = mapped[i].x - expected[i].x;
-            float dy = mapped[i].y - expected[i].y;
-            float dz = mapped[i].z - expected[i].z;
-            float dw = mapped[i].rhw - expected[i].rhw;
-            float du = mapped[i].u - expected[i].u;
-            float dv = mapped[i].v - expected[i].v;
+            float dx = mapped[i].x - expected_mova_component_relative[i].x;
+            float dy = mapped[i].y - expected_mova_component_relative[i].y;
+            float dz = mapped[i].z - expected_mova_component_relative[i].z;
+            float dw = mapped[i].rhw - expected_mova_component_relative[i].rhw;
+            float du = mapped[i].u - expected_mova_component_relative[i].u;
+            float dv = mapped[i].v - expected_mova_component_relative[i].v;
             if (dx < 0.0f) dx = -dx;
             if (dy < 0.0f) dy = -dy;
             if (dz < 0.0f) dz = -dz;
@@ -16461,7 +16473,7 @@ void test_visual_process_vertices_xyzhw_policy(const struct d3d9_api *api)
             CHECK_TRUE(dy < 0.01f);
             CHECK_TRUE(dz < 0.01f);
             CHECK_TRUE(dw < 0.01f);
-            CHECK_TRUE(mapped[i].color == expected[i].color);
+            CHECK_TRUE(mapped[i].color == expected_mova_component_relative[i].color);
             CHECK_TRUE(du < 0.01f);
             CHECK_TRUE(dv < 0.01f);
         }

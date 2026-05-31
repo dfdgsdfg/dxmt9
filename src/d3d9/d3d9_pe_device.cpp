@@ -2464,8 +2464,11 @@ static SimpleVsExecResult executeSimpleProcessVertexShaderRange(
                                     relAddrOperands[1])) {
                 return SimpleVsExecResult::Fail;
             }
+            const UINT mask = shaderWriteMask(operands[0]);
             for (UINT component = 0; component < 4u; ++component) {
-                (*dst)[component] = static_cast<float>(std::lround(value[component]));
+                if (mask & (1u << component)) {
+                    (*dst)[component] = static_cast<float>(std::lround(value[component]));
+                }
             }
             continue;
         }
@@ -2987,6 +2990,8 @@ class D3D9DeviceImpl final : public IDirect3DDevice9Ex, public D3D9PeRecorderFlu
     UINT                       streamStr_[16]   = {};
     UINT                       streamFreq_[16]  = {};
     IDirect3DIndexBuffer9*     indexBuf_        = nullptr;
+    std::uint64_t              submittedIndexBufferWireValue_ = 0;
+    bool                       submittedIndexBufferKnown_ = false;
     IDirect3DVertexDeclaration9* vdecl_         = nullptr;
     DWORD                      fvf_             = 0;
     /* Cache of implicit FVF→decl shadow objects. Wine's
@@ -3184,6 +3189,8 @@ class D3D9DeviceImpl final : public IDirect3DDevice9Ex, public D3D9PeRecorderFlu
         peState_.clearPendingHotState();
         peConsts_.reset();
         clearPendingCommandChunk();
+        submittedIndexBufferWireValue_ = 0;
+        submittedIndexBufferKnown_ = false;
         fvf_ = 0;
         std::memset(streamOff_, 0, sizeof(streamOff_));
         std::memset(streamStr_, 0, sizeof(streamStr_));
@@ -5794,12 +5801,25 @@ class D3D9DeviceImpl final : public IDirect3DDevice9Ex, public D3D9PeRecorderFlu
         record.packet.numVertices = numVertices;
         record.packet.startIndex = startIndex;
         record.packet.primitiveCount = count;
-        // Phase 12: index buffer delta. Server applies before
-        // dxmt9c_device_draw_indexed_primitive.
-        record.packet.ibValid = peState_.pendingIb ? 1u : 0u;
+        // Indexed draw packets are the only recorder packet type that can
+        // carry an index-buffer delta. A prior non-indexed draw may clear
+        // general pending state without ever submitting the current IB, so
+        // key this on the last IB handle actually emitted into the command
+        // stream, not only on SetIndices' pending bit.
         record.packet.ibHandle = toWireHandle(rawIBuf(indexBuf_));
-        peState_.pendingIb = false;
-        return appendCommandRecord(&record, sizeof(record));
+        const std::uint64_t ibWireValue = d9cWireHandleValue(record.packet.ibHandle);
+        record.packet.ibValid =
+            (peState_.pendingIb || !submittedIndexBufferKnown_ ||
+             submittedIndexBufferWireValue_ != ibWireValue) ? 1u : 0u;
+        const HRESULT hr = appendCommandRecord(&record, sizeof(record));
+        if (SUCCEEDED(hr)) {
+            if (record.packet.ibValid != 0) {
+                submittedIndexBufferWireValue_ = ibWireValue;
+                submittedIndexBufferKnown_ = true;
+            }
+            peState_.pendingIb = false;
+        }
+        return hr;
     }
 
     HRESULT appendDrawPrimitiveUPRecord(D3DPRIMITIVETYPE type,

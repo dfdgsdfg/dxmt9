@@ -22,7 +22,7 @@ bool importedDrawRecordHasNoStateDelta(
   case D9C_COMMAND_RECORD_DRAW_INDEXED_PRIMITIVE: {
     D9CCommandRecordDrawIndexedPrimitive decoded{};
     std::memcpy(&decoded, record.record, sizeof(decoded));
-    return packetHasNoStateDelta(decoded.packet.state);
+    return decoded.packet.ibValid == 0 && packetHasNoStateDelta(decoded.packet.state);
   }
   default:
     return false;

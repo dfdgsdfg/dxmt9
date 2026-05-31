@@ -2640,8 +2640,6 @@ bool encodeDraw(EncodeContext& ctx,
           ffLayout ? (drawVertexStreamStride ? drawVertexStreamStride : ffLayout->stride)
                    : computeVertexDeclStride(vertexDecl));
       const std::size_t streamBase = static_cast<std::size_t>(hot.streamOffsets[0]);
-      const std::size_t firstIndexByte =
-          static_cast<std::size_t>(pv.startIndex) * indexElementSize(pv.indexType);
       if (traceEncode) {
         std::ostringstream out;
         out << "[dxmt9-expanded-check] seq=" << static_cast<unsigned long long>(seqId)
@@ -2656,37 +2654,67 @@ bool encodeDraw(EncodeContext& ctx,
       }
 
       if (!vertexBytes.empty() && !indexBytes.empty() && stride != 0) {
-        std::vector<u8> expandedVertices(static_cast<std::size_t>(vertexCount) * stride, 0);
-        bool expansionComplete = true;
-        for (uint64_t i = 0; i < vertexCount; ++i) {
-          i32 vertexIndex = pv.baseVertexIndex;
-          bool haveIndex = false;
-          if (pv.indexType == IndexType::UInt16 &&
-              firstIndexByte + static_cast<std::size_t>(i + 1) * sizeof(u16) <= indexBytes.size()) {
-            u16 index = 0;
-            std::memcpy(&index, indexBytes.data() + firstIndexByte + static_cast<std::size_t>(i) * sizeof(u16),
-                        sizeof(u16));
-            vertexIndex += static_cast<i32>(index);
-            haveIndex = true;
-          } else if (pv.indexType == IndexType::UInt32 &&
-                     firstIndexByte + static_cast<std::size_t>(i + 1) * sizeof(u32) <= indexBytes.size()) {
-            u32 index = 0;
-            std::memcpy(&index, indexBytes.data() + firstIndexByte + static_cast<std::size_t>(i) * sizeof(u32),
-                        sizeof(u32));
-            vertexIndex += static_cast<i32>(index);
-            haveIndex = true;
+        struct ExpandedExtraStream {
+          u32 metalSlot = 0;
+          CommandQueue::TransientBufferSlice slice;
+        };
+        std::vector<ExpandedExtraStream> expandedExtraStreams;
+        std::vector<u8> expandedVertices;
+        auto resolveStreamBytes = [&](u32 stream) -> std::span<const u8> {
+          if (hot.streamBuffers[stream]) {
+            if (auto* buffer = ctx.pool.findBuffer(hot.streamBuffers[stream].value);
+                buffer) {
+              if (!buffer->shadow.empty()) {
+                return buffer->shadow;
+              }
+              if (buffer->contents) {
+                return std::span<const u8>(static_cast<const u8*>(buffer->contents),
+                                           static_cast<std::size_t>(buffer->desc.size));
+              }
+            }
           }
-          if (!haveIndex || vertexIndex < 0) {
-            expansionComplete = false;
-            break;
+          if (vertexDecl.streams[stream].buffer) {
+            return vertexDecl.streams[stream].buffer->bytes();
           }
-          const std::size_t sourceOffset = streamBase + static_cast<std::size_t>(vertexIndex) * stride;
-          if (sourceOffset + stride > vertexBytes.size()) {
-            expansionComplete = false;
-            break;
+          return {};
+        };
+        bool expansionComplete =
+            expandIndexedStreamToFlatVertexBytes(vertexBytes,
+                                                 indexBytes,
+                                                 pv.indexType,
+                                                 pv.startIndex,
+                                                 pv.baseVertexIndex,
+                                                 vertexCount,
+                                                 streamBase,
+                                                 stride,
+                                                 expandedVertices);
+        if (expansionComplete) {
+          for (const auto& streamBinding : bindingPacket.extraStreams) {
+            std::vector<u8> expandedStream;
+            const auto sourceBytes = resolveStreamBytes(streamBinding.stream);
+            if (!expandIndexedStreamToFlatVertexBytes(
+                    sourceBytes,
+                    indexBytes,
+                    pv.indexType,
+                    pv.startIndex,
+                    pv.baseVertexIndex,
+                    vertexCount,
+                    static_cast<std::size_t>(hot.streamOffsets[streamBinding.stream]),
+                    static_cast<std::size_t>(streamBinding.stride),
+                    expandedStream)) {
+              expansionComplete = false;
+              break;
+            }
+            auto slice = makeTransientBuffer(expandedStream.data(), expandedStream.size());
+            if (!slice) {
+              expansionComplete = false;
+              break;
+            }
+            expandedExtraStreams.push_back(ExpandedExtraStream{
+                .metalSlot = streamBinding.metalSlot,
+                .slice = slice,
+            });
           }
-          std::memcpy(expandedVertices.data() + static_cast<std::size_t>(i) * stride,
-                      vertexBytes.data() + sourceOffset, stride);
         }
         if (expansionComplete) {
           transientVertexBuffer = makeTransientBuffer(expandedVertices.data(), expandedVertices.size());
@@ -2695,6 +2723,12 @@ bool encodeDraw(EncodeContext& ctx,
           recordedSetVertexBuffer(ctx, encoder, transientVertexBuffer.buffer,
                                   transientVertexBuffer.offset, 1);
           countVertexBufferBind();
+          for (const auto& stream : expandedExtraStreams) {
+            recordedSetVertexBuffer(ctx, encoder, stream.slice.buffer,
+                                    stream.slice.offset,
+                                    stream.metalSlot);
+            countVertexBufferBind();
+          }
           if (ffLayout && ffLayout->preTransformed && vertexCount >= 6 && hot.textures[0]) {
             const bool traceExpanded = [] {
               const char* env = std::getenv("DXMT_TRACE_FVF_EXPANDED");

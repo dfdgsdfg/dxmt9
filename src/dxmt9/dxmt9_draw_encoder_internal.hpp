@@ -15,7 +15,9 @@
 #include <bit>
 #include <cstddef>
 #include <cstdint>
+#include <cstring>
 #include <span>
+#include <vector>
 
 namespace dxmt9::encoders {
 
@@ -444,6 +446,58 @@ inline bool vertexDeclUsesStream(const core::VertexDeclSnapshot& vertexDecl, u32
     }
   }
   return false;
+}
+
+inline bool expandIndexedStreamToFlatVertexBytes(std::span<const u8> sourceBytes,
+                                                 std::span<const u8> indexBytes,
+                                                 core::IndexType indexType,
+                                                 u32 startIndex,
+                                                 i32 baseVertexIndex,
+                                                 u64 vertexCount,
+                                                 std::size_t sourceBase,
+                                                 std::size_t sourceStride,
+                                                 std::vector<u8>& outBytes) {
+  if (sourceBytes.empty() || indexBytes.empty() || sourceStride == 0) {
+    return false;
+  }
+
+  const std::size_t indexSize = indexType == core::IndexType::UInt16 ? sizeof(u16) : sizeof(u32);
+  const std::size_t firstIndexByte = static_cast<std::size_t>(startIndex) * indexSize;
+  outBytes.assign(static_cast<std::size_t>(vertexCount) * sourceStride, 0);
+
+  for (u64 i = 0; i < vertexCount; ++i) {
+    i32 vertexIndex = baseVertexIndex;
+    const std::size_t indexOffset = firstIndexByte + static_cast<std::size_t>(i) * indexSize;
+    if (indexType == core::IndexType::UInt16) {
+      if (indexOffset + sizeof(u16) > indexBytes.size()) {
+        return false;
+      }
+      u16 index = 0;
+      std::memcpy(&index, indexBytes.data() + indexOffset, sizeof(index));
+      vertexIndex += static_cast<i32>(index);
+    } else {
+      if (indexOffset + sizeof(u32) > indexBytes.size()) {
+        return false;
+      }
+      u32 index = 0;
+      std::memcpy(&index, indexBytes.data() + indexOffset, sizeof(index));
+      vertexIndex += static_cast<i32>(index);
+    }
+
+    if (vertexIndex < 0) {
+      return false;
+    }
+    const std::size_t sourceOffset =
+        sourceBase + static_cast<std::size_t>(vertexIndex) * sourceStride;
+    if (sourceOffset + sourceStride > sourceBytes.size()) {
+      return false;
+    }
+    std::memcpy(outBytes.data() + static_cast<std::size_t>(i) * sourceStride,
+                sourceBytes.data() + sourceOffset,
+                sourceStride);
+  }
+
+  return true;
 }
 
 inline ProgrammableVsExtraStreamBindingList makeProgrammableVsExtraStreamBindings(
