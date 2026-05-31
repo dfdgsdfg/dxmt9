@@ -107,8 +107,8 @@ core::PsoHandle internDrawHandleLocked(Cache& cache,
     return {};
   }
   const core::PsoHandle handle{
-      .slot = static_cast<std::uint32_t>(cache.drawSlots.size()),
-      .generation = 1u,
+      .slot = static_cast<std::uint16_t>(cache.drawSlots.size()),
+      .generation = static_cast<std::uint16_t>(1u),
   };
   cache.drawSlots.push_back(PsoSlot{
       .generation = handle.generation,
@@ -136,8 +136,8 @@ core::DepthStencilHandle internDepthStencilHandleLocked(
     return {};
   }
   const core::DepthStencilHandle handle{
-      .slot = static_cast<std::uint32_t>(cache.depthSlots.size()),
-      .generation = 1u,
+      .slot = static_cast<std::uint16_t>(cache.depthSlots.size()),
+      .generation = static_cast<std::uint16_t>(1u),
   };
   cache.depthSlots.push_back(DepthStencilSlot{
       .generation = handle.generation,

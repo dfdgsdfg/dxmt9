@@ -76,10 +76,10 @@ struct Handle {
 };
 
 struct PsoHandle {
-  static constexpr u32 kInvalidSlot = std::numeric_limits<u32>::max();
+  static constexpr u16 kInvalidSlot = std::numeric_limits<u16>::max();
 
-  u32 slot = kInvalidSlot;
-  u32 generation = 0;
+  u16 slot = kInvalidSlot;
+  u16 generation = 0;
 
   constexpr bool valid() const noexcept {
     return slot != kInvalidSlot && generation != 0;
@@ -87,12 +87,14 @@ struct PsoHandle {
 
   friend constexpr bool operator==(const PsoHandle&, const PsoHandle&) = default;
 };
+static_assert(sizeof(PsoHandle) == sizeof(u32),
+              "PsoHandle must stay packed for draw-run SoA cache density");
 
 struct DepthStencilHandle {
-  static constexpr u32 kInvalidSlot = std::numeric_limits<u32>::max();
+  static constexpr u16 kInvalidSlot = std::numeric_limits<u16>::max();
 
-  u32 slot = kInvalidSlot;
-  u32 generation = 0;
+  u16 slot = kInvalidSlot;
+  u16 generation = 0;
 
   constexpr bool valid() const noexcept {
     return slot != kInvalidSlot && generation != 0;
@@ -100,6 +102,8 @@ struct DepthStencilHandle {
 
   friend constexpr bool operator==(const DepthStencilHandle&, const DepthStencilHandle&) = default;
 };
+static_assert(sizeof(DepthStencilHandle) == sizeof(u32),
+              "DepthStencilHandle must stay packed for draw-run SoA cache density");
 
 using BufferHandle = Handle;
 using TextureHandle = Handle;

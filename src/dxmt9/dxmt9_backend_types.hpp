@@ -30,9 +30,6 @@ struct PresentCommandRecord {
 };
 
 struct DrawRunInvariant {
-  PsoHandle renderPsoHandle{};
-  PsoHandle tilePsoHandle{};
-  DepthStencilHandle depthStencilHandle{};
   u64 viewportScissorHash = 0;
   u64 runStableBindingHash = 0;
   u32 streamMask = 0;
@@ -58,6 +55,8 @@ struct DrawRunCommandRecord {
   DepthStencilHandle depthStencilHandle{};
   DrawRunInvariant invariant{};
 };
+static_assert(sizeof(DrawRunCommandRecord) <= 96,
+              "DrawRunCommandRecord must keep hot draw-run metadata compact");
 
 struct DrawPsoSubview {
   bool hasShaderContext = false;
@@ -608,8 +607,6 @@ struct ChunkSlot {
     auto& record = drawRunRecords[header.payloadIndex];
     record.renderPsoHandle = renderPsoHandle;
     record.tilePsoHandle = tilePsoHandle;
-    record.invariant.renderPsoHandle = renderPsoHandle;
-    record.invariant.tilePsoHandle = tilePsoHandle;
   }
 
   void setDrawRunDepthStencilHandle(std::size_t commandIndex,
@@ -624,7 +621,6 @@ struct ChunkSlot {
     }
     auto& record = drawRunRecords[header.payloadIndex];
     record.depthStencilHandle = depthStencilHandle;
-    record.invariant.depthStencilHandle = depthStencilHandle;
   }
 
   void appendClear(const ClearDesc& clear) {

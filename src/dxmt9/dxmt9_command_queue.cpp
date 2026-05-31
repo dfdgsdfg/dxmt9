@@ -25,6 +25,11 @@
 #include <cstring>
 #include <utility>
 
+#if defined(__APPLE__)
+#include <pthread.h>
+#include <pthread/qos.h>
+#endif
+
 namespace dxmt9 {
 
 namespace {
@@ -43,6 +48,49 @@ WMT::String makeLabelStringFmt(const char* fmt, ...) {
 }
 
 std::atomic_uint64_t gCommandBufferLabelCounter{0};
+
+enum class QueueWorkerRole {
+  Encode,
+  Finish,
+  Completion,
+};
+
+#if defined(__APPLE__)
+struct QueueWorkerThreadProfile {
+  const char* name;
+  qos_class_t qos;
+};
+
+QueueWorkerThreadProfile queueWorkerThreadProfile(QueueWorkerRole role) noexcept {
+  switch (role) {
+    case QueueWorkerRole::Encode:
+      return {.name = "dxmt9-encode", .qos = QOS_CLASS_USER_INITIATED};
+    case QueueWorkerRole::Finish:
+      return {.name = "dxmt9-finish", .qos = QOS_CLASS_DEFAULT};
+    case QueueWorkerRole::Completion:
+      return {.name = "dxmt9-completion", .qos = QOS_CLASS_UTILITY};
+  }
+  return {.name = "dxmt9-worker", .qos = QOS_CLASS_DEFAULT};
+}
+#endif
+
+void configureQueueWorkerThread(QueueWorkerRole role) noexcept {
+#if defined(__APPLE__)
+  const auto profile = queueWorkerThreadProfile(role);
+  pthread_setname_np(profile.name);
+  (void)pthread_set_qos_class_self_np(profile.qos, 0);
+#else
+  (void)role;
+#endif
+}
+
+std::function<void()> makeQueueWorkerLoop(QueueWorkerRole role,
+                                          std::function<void()> loop) {
+  return [role, loop = std::move(loop)]() mutable {
+    configureQueueWorkerThread(role);
+    loop();
+  };
+}
 
 // R-BACK-3.7 / R-BACK-3.8 / R-BACK-4.8 — archive path resolution moved
 // into archive_prewarm. The path now embeds the dxmt9 archive ABI
@@ -561,9 +609,12 @@ void CommandQueue::startThreads(std::function<void()> encodeLoop,
     return;
   }
   stop_ = false;
-  encodeThread_ = std::thread(std::move(encodeLoop));
-  finishThread_ = std::thread(std::move(finishLoop));
-  completionThread_ = std::thread(std::move(completionLoop));
+  encodeThread_ = std::thread(
+      makeQueueWorkerLoop(QueueWorkerRole::Encode, std::move(encodeLoop)));
+  finishThread_ = std::thread(
+      makeQueueWorkerLoop(QueueWorkerRole::Finish, std::move(finishLoop)));
+  completionThread_ = std::thread(
+      makeQueueWorkerLoop(QueueWorkerRole::Completion, std::move(completionLoop)));
   threadsStarted_ = true;
 }
 
