@@ -78,6 +78,7 @@ void countCommandBuffer();
 // table surfaces both total mid-chunk commits and the worst-case per-chunk
 // chain length.
 void countSubCommandBufferCommit();
+void countSubCommandBufferSplitSuppressedByCap();
 // R-BACK-2.29..2.32 — fold a chunk's local sub-CB chain length into the
 // chunkSubCBCountMax atomic via updateMax. Encode thread calls this once
 // at encodeChunk exit; not a counting-style helper, so it is excluded from
@@ -89,6 +90,17 @@ void countPipelineBuild();
 void countPipelineCacheHit(PipelineKind kind);
 void countPipelineCacheMiss(PipelineKind kind);
 void countPipelineBuild(PipelineKind kind);
+void recordDrawPsoSlotCount(std::uint64_t count);
+void countDrawPsoSlotExhausted();
+void countDrawPsoVariantArgbufStage2();
+void countDrawPsoVariantTileFfp();
+void recordSourceLibraryEntryCount(std::uint64_t count);
+void countPipelineBuildFailDraw();
+void countPipelineBuildFailLibrary();
+void countPipelineBuildFailFunction();
+void countPipelineBuildFailPso();
+void countDrawSkippedNoPipeline();
+void countShaderVariantKeyHashCpuTime(std::uint64_t nanoseconds);
 void countRenderPassBegin();
 void countRenderPassEnd(EncoderSplitReason reason);
 void countHazardProbe(bool bloomOverlap, bool exactOverlap);

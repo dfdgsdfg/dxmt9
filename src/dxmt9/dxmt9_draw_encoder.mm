@@ -21,6 +21,7 @@
 #include "dxmt9_resource_pool.hpp"
 #include "dxmt9_ring_arena.hpp"
 #include "dxmt9_signposts.hpp"
+#include "util/log/log.hpp"
 
 #include <algorithm>
 #include <array>
@@ -35,10 +36,12 @@
 #include <cstring>
 #include <functional>
 #include <iomanip>
+#include <mutex>
 #include <optional>
 #include <sstream>
 #include <span>
 #include <string>
+#include <unordered_set>
 #include <vector>
 
 namespace dxmt9::encoders {
@@ -1648,6 +1651,33 @@ bool encodeDraw(EncodeContext& ctx,
       pipeline = WMT::RenderPipelineState{pipelineRef.handle};
     }
     if (!pipeline) {
+      perf::countDrawSkippedNoPipeline();
+      static std::mutex logMutex;
+      static std::unordered_set<std::uint64_t> loggedNoPipelineKeys;
+      const std::uint64_t noPipelineKey =
+          hot.key.vertexShaderHash ^ (hot.key.pixelShaderHash << 1u) ^
+          (static_cast<std::uint64_t>(tileFfpMode) << 2u) ^
+          (static_cast<std::uint64_t>(argbufHybridMode) << 3u) ^
+          (static_cast<std::uint64_t>(argbufResourceArray) << 4u);
+      bool shouldLog = false;
+      {
+        std::lock_guard lock(logMutex);
+        shouldLog = loggedNoPipelineKeys.size() < 64u &&
+                    loggedNoPipelineKeys.insert(noPipelineKey).second;
+      }
+      if (shouldLog) {
+        util::logf(util::LogLevel::Error, "dxmt9-encode",
+                   "draw skipped: no render pipeline seq=%llu command=%u vs=0x%llx ps=0x%llx tile=%u argbuf=%u resource_array=%u rt0=0x%llx ds=0x%llx",
+                   static_cast<unsigned long long>(seqId),
+                   commandIndex,
+                   static_cast<unsigned long long>(hot.key.vertexShaderHash),
+                   static_cast<unsigned long long>(hot.key.pixelShaderHash),
+                   tileFfpMode ? 1u : 0u,
+                   argbufHybridMode ? 1u : 0u,
+                   argbufResourceArray ? 1u : 0u,
+                   static_cast<unsigned long long>(hot.colorAttachments[0].handle.value),
+                   static_cast<unsigned long long>(hot.depthStencil.handle.value));
+      }
       if (traceEncode) {
         std::ostringstream out;
         out << "[dxmt9-encode] seq=" << static_cast<unsigned long long>(seqId)
@@ -3793,6 +3823,7 @@ std::optional<core::metalqueue::QueueSubmissionRecord> encodeChunk(
   // applies to mid-chunk commits + 1 = chain length.
   auto splitMidChunkUnderCap = [&] {
     if (splitChainCap > 0 && perChunkSubCBCount + 1 >= splitChainCap) {
+      perf::countSubCommandBufferSplitSuppressedByCap();
       return;
     }
     splitMidChunk();

@@ -13,6 +13,7 @@
 #include <algorithm>
 #include <atomic>
 #include <bit>
+#include <chrono>
 #include <cstdint>
 #include <cstdlib>
 #include <cstring>
@@ -20,9 +21,11 @@
 #include <deque>
 #include <exception>
 #include <future>
+#include <mutex>
 #include <optional>
 #include <string_view>
 #include <thread>
+#include <unordered_set>
 #include <utility>
 #include <vector>
 
@@ -158,6 +161,11 @@ core::PsoHandle internDrawHandleLocked(Cache& cache,
     return it->second;
   }
   if (cache.drawSlots.size() >= core::PsoHandle::kInvalidSlot) {
+    perf::countDrawPsoSlotExhausted();
+    util::logf(util::LogLevel::Error, "dxmt9-pipeline-cache",
+               "draw PSO handle table exhausted slots=%llu variant=0x%llx",
+               static_cast<unsigned long long>(cache.drawSlots.size()),
+               static_cast<unsigned long long>(key.hash));
     return {};
   }
   const core::PsoHandle handle{
@@ -170,6 +178,13 @@ core::PsoHandle internDrawHandleLocked(Cache& cache,
       .entry = entry,
       .occupied = true,
   });
+  perf::recordDrawPsoSlotCount(cache.drawSlots.size());
+  if (key.argbufHybridMode) {
+    perf::countDrawPsoVariantArgbufStage2();
+  }
+  if (key.tileFfpMode) {
+    perf::countDrawPsoVariantTileFfp();
+  }
   cache.drawHandles.emplace(key, handle);
   std::atomic_store_explicit(
       &cache.drawSlotSnapshot,
@@ -325,7 +340,58 @@ getOrSubmitSourceLibraryLocked(Cache& cache,
         return shaders::makeLibrary(device, source);
       });
   cache.sourceLibraries.emplace(sourceHash, SourceLibraryEntry{future});
+  perf::recordSourceLibraryEntryCount(cache.sourceLibraries.size());
   return future;
+}
+
+enum class PipelineBuildFailureStage : std::uint8_t {
+  Library,
+  Function,
+  Pso,
+};
+
+void countPipelineBuildFailure(PipelineBuildFailureStage stage) {
+  perf::countPipelineBuildFailDraw();
+  switch (stage) {
+    case PipelineBuildFailureStage::Library:
+      perf::countPipelineBuildFailLibrary();
+      break;
+    case PipelineBuildFailureStage::Function:
+      perf::countPipelineBuildFailFunction();
+      break;
+    case PipelineBuildFailureStage::Pso:
+      perf::countPipelineBuildFailPso();
+      break;
+  }
+}
+
+void logPipelineBuildFailureOnce(const char* stage,
+                                 const ShaderVariantKey& key,
+                                 u64 sourceHash) {
+  static std::mutex mutex;
+  static std::unordered_set<u64> logged;
+  const u64 stageHash = core::hashString(stage ? std::string_view(stage) : std::string_view{});
+  const u64 logKey = key.hash ^ (sourceHash << 1u) ^ (stageHash << 2u);
+  bool shouldLog = false;
+  {
+    std::lock_guard lock(mutex);
+    shouldLog = logged.size() < 64u && logged.insert(logKey).second;
+  }
+  if (!shouldLog) {
+    return;
+  }
+  util::logf(util::LogLevel::Error, "dxmt9-pipeline-cache",
+             "draw pipeline build failed: stage=%s variant=0x%llx source=0x%llx tile=%u tile_base=%u argbuf=%u resource_array=%u color0fmt=%u depthfmt=%u stencilfmt=%u",
+             stage ? stage : "unknown",
+             static_cast<unsigned long long>(key.hash),
+             static_cast<unsigned long long>(sourceHash),
+             key.tileFfpMode ? 1u : 0u,
+             key.tileFfpBaseColor ? 1u : 0u,
+             key.argbufHybridMode ? 1u : 0u,
+             key.argbufResourceArray ? 1u : 0u,
+             static_cast<unsigned>(key.colorFormats[0]),
+             static_cast<unsigned>(key.depthFormat),
+             static_cast<unsigned>(key.stencilFormat));
 }
 
 }  // namespace
@@ -518,6 +584,9 @@ std::size_t StencilFaceKeyHash::operator()(const StencilFaceKey& key) const noex
 }
 
 std::size_t ShaderVariantKeyHash::operator()(const ShaderVariantKey& key) const noexcept {
+  const bool measure = perf::enabled();
+  const auto started = measure ? std::chrono::steady_clock::now()
+                               : std::chrono::steady_clock::time_point{};
   u64 hash = key.hash;
   hash = mix(hash, key.vertexSourceHash);
   hash = mix(hash, key.fragmentSourceHash);
@@ -575,6 +644,11 @@ std::size_t ShaderVariantKeyHash::operator()(const ShaderVariantKey& key) const 
   }
   hash = mix(hash, key.depthFormat);
   hash = mix(hash, key.stencilFormat);
+  if (measure) {
+    perf::countShaderVariantKeyHashCpuTime(static_cast<std::uint64_t>(
+        std::chrono::duration_cast<std::chrono::nanoseconds>(
+            std::chrono::steady_clock::now() - started).count()));
+  }
   return static_cast<std::size_t>(hash);
 }
 
@@ -849,11 +923,13 @@ Cache::getOrBuildDrawPipelineHandle(WMT::Reference<WMT::Device> device,
                  "tile shader source generation failed: %s variant=0x%llx",
                  ex.what(),
                  static_cast<unsigned long long>(key.hash));
+      perf::countPipelineBuildFailDraw();
       return DrawPipelineLookup{.future = makeReadyPipelineFuture(), .handle = {}};
     } catch (...) {
       util::logf(util::LogLevel::Error, "dxmt9-pipeline-cache",
                  "tile shader source generation failed: unknown exception variant=0x%llx",
                  static_cast<unsigned long long>(key.hash));
+      perf::countPipelineBuildFailDraw();
       return DrawPipelineLookup{.future = makeReadyPipelineFuture(), .handle = {}};
     }
     sourceKey.tileSourceHash = shaders::makeHash(tileSource);
@@ -874,10 +950,14 @@ Cache::getOrBuildDrawPipelineHandle(WMT::Reference<WMT::Device> device,
         [device, sourceKey, tileLibrary, archive]() mutable {
           auto tileLib = tileLibrary.get();
           if (!tileLib) {
+            countPipelineBuildFailure(PipelineBuildFailureStage::Library);
+            logPipelineBuildFailureOnce("tile-library", sourceKey, sourceKey.tileSourceHash);
             return WMT::Reference<WMT::RenderPipelineState>{};
           }
           auto tileFn = tileLib.newFunction("ffp_tile");
           if (!tileFn) {
+            countPipelineBuildFailure(PipelineBuildFailureStage::Function);
+            logPipelineBuildFailureOnce("tile-function", sourceKey, sourceKey.tileSourceHash);
             return WMT::Reference<WMT::RenderPipelineState>{};
           }
           WMTTileRenderPipelineDescriptor desc{};
@@ -901,6 +981,10 @@ Cache::getOrBuildDrawPipelineHandle(WMT::Reference<WMT::Device> device,
           perf::countPipelineBuild(perf::PipelineKind::Draw);
           perf::countColdCompileAfterWarm();
           auto pso = device.newRenderPipelineState(desc, err);
+          if (!pso) {
+            countPipelineBuildFailure(PipelineBuildFailureStage::Pso);
+            logPipelineBuildFailureOnce("tile-pso", sourceKey, sourceKey.tileSourceHash);
+          }
           if (pso) {
             pso.setLabel(labels::makeLabelStringFmt(
                 "pso_tile_ffp_h0x%llx_color0fmt%u",
@@ -920,6 +1004,7 @@ Cache::getOrBuildDrawPipelineHandle(WMT::Reference<WMT::Device> device,
   }
   auto sources = detail::makeContainedDrawShaderSources(shaderSource, key.hash);
   if (!sources) {
+    perf::countPipelineBuildFailDraw();
     return DrawPipelineLookup{.future = makeReadyPipelineFuture(), .handle = {}};
   }
   sourceKey.vertexSourceHash = sources->vertexHash;
@@ -944,11 +1029,21 @@ Cache::getOrBuildDrawPipelineHandle(WMT::Reference<WMT::Device> device,
           auto vsLib = vertexLibrary.get();
           auto fsLib = fragmentLibrary.get();
           if (!vsLib || !fsLib) {
+            countPipelineBuildFailure(PipelineBuildFailureStage::Library);
+            logPipelineBuildFailureOnce(!vsLib ? "vertex-library" : "fragment-library",
+                                        sourceKey,
+                                        !vsLib ? sourceKey.vertexSourceHash
+                                               : sourceKey.fragmentSourceHash);
             return WMT::Reference<WMT::RenderPipelineState>{};
           }
           auto vs = vsLib.newFunction("dxmt9_vs");
           auto fs = fsLib.newFunction("dxmt9_fs");
           if (!vs || !fs) {
+            countPipelineBuildFailure(PipelineBuildFailureStage::Function);
+            logPipelineBuildFailureOnce(!vs ? "vertex-function" : "fragment-function",
+                                        sourceKey,
+                                        !vs ? sourceKey.vertexSourceHash
+                                            : sourceKey.fragmentSourceHash);
             return WMT::Reference<WMT::RenderPipelineState>{};
           }
           WMTRenderPipelineInfo info{};
@@ -990,6 +1085,12 @@ Cache::getOrBuildDrawPipelineHandle(WMT::Reference<WMT::Device> device,
           // current emitter / variant key).
           perf::countColdCompileAfterWarm();
           auto pso = device.newRenderPipelineState(info, err);
+          if (!pso) {
+            countPipelineBuildFailure(PipelineBuildFailureStage::Pso);
+            logPipelineBuildFailureOnce("render-pso", sourceKey,
+                                        sourceKey.vertexSourceHash ^
+                                            (sourceKey.fragmentSourceHash << 1u));
+          }
           if (pso) {
             pso.setLabel(labels::makeLabelStringFmt(
                 "pso_draw_h0x%llx_msaa%u_color0fmt%u",

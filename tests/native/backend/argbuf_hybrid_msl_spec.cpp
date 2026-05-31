@@ -29,6 +29,7 @@
 #include <vector>
 
 #include "dxmt9/core.hpp"
+#include "../../../src/dxmt9/dxmt9_argbuf_hybrid.hpp"
 #include "../../../src/dxmt9/dxmt9_draw_shader.hpp"
 #include "../../../src/dxmt9/dxmt9_ffp_shaders.hpp"
 #include "../../../src/dxmt9/dxmt9_shader_sources.hpp"
@@ -54,6 +55,15 @@ struct TestFailure : std::runtime_error {
 void check(bool condition, std::string_view message) {
   if (!condition) {
     fail(std::string(message));
+  }
+}
+
+template <typename A, typename B>
+void checkEq(A actual, B expected, std::string_view message) {
+  if (!(actual == expected)) {
+    std::ostringstream out;
+    out << message << " (" << actual << " vs " << expected << ")";
+    fail(out.str());
   }
 }
 
@@ -449,6 +459,52 @@ void testArgbufLayoutStructPresentOnlyForStage2() {
         "argbuf descriptor count equals the four constant-buffer pointers");
 }
 
+void testArgbufDescriptorTablesMirrorPinnedMslIds() {
+  const auto constants = dxmt9::argbuf_hybrid::buildArgumentDescriptors();
+  checkEq(constants.count(),
+          static_cast<std::size_t>(dxmt9::shaders::kArgbufHybridDescriptorCount),
+          "constants-only descriptor count matches public constant");
+  for (u32 i = 0; i < dxmt9::shaders::kArgbufHybridConstantBufferCount; ++i) {
+    const auto& d = constants.entries[i];
+    checkEq(d.argumentType, static_cast<u32>(WMTArgumentTypeBuffer),
+            "constants-only descriptor is a buffer");
+    checkEq(d.index, i, "constants-only descriptor id mirrors MSL [[id]]");
+    checkEq(d.arrayLength, 0u, "constants-only descriptor is not an array entry");
+    checkEq(d.constantBlockAlignment, 16u,
+            "constants-only descriptor keeps the 16-byte constant alignment");
+  }
+
+  const auto resources =
+      dxmt9::argbuf_hybrid::buildResourceArrayArgumentDescriptors();
+  checkEq(resources.count(),
+          static_cast<std::size_t>(dxmt9::shaders::kArgbufResourceArrayDescriptorCount),
+          "resource-array descriptor count matches public constant");
+  for (u32 i = 0; i < dxmt9::shaders::kArgbufHybridConstantBufferCount; ++i) {
+    const auto& d = resources.entries[i];
+    checkEq(d.argumentType, static_cast<u32>(WMTArgumentTypeBuffer),
+            "resource-array cbuf descriptor is a buffer");
+    checkEq(d.index, i, "resource-array cbuf id mirrors MSL [[id]]");
+  }
+  for (u32 stage = 0; stage < dxmt9::shaders::kArgbufResourceArrayStageCount; ++stage) {
+    const auto& texture =
+        resources.entries[dxmt9::shaders::kArgbufHybridConstantBufferCount + stage];
+    checkEq(texture.argumentType, static_cast<u32>(WMTArgumentTypeTexture),
+            "resource-array texture descriptor is a texture");
+    checkEq(texture.index, dxmt9::shaders::kArgbufResourceArrayTextureBaseId + stage,
+            "resource-array texture id mirrors MSL texture [[id]]");
+    checkEq(texture.textureType, static_cast<u32>(WMTTextureType2D),
+            "resource-array texture descriptor uses texture2d");
+
+    const auto& sampler =
+        resources.entries[dxmt9::shaders::kArgbufHybridConstantBufferCount +
+                          dxmt9::shaders::kArgbufResourceArrayStageCount + stage];
+    checkEq(sampler.argumentType, static_cast<u32>(WMTArgumentTypeSampler),
+            "resource-array sampler descriptor is a sampler");
+    checkEq(sampler.index, dxmt9::shaders::kArgbufResourceArraySamplerBaseId + stage,
+            "resource-array sampler id mirrors MSL sampler [[id]]");
+  }
+}
+
 // ---------------------------------------------------------------------
 // R-BACK-12.22..12.26 (resource-array sub-mode) — texture/sampler via argbuf
 
@@ -589,6 +645,7 @@ int main() {
     testTranslatedVertexStage1Bindings();
     testTranslatedVertexStage2Bindings();
     testArgbufLayoutStructPresentOnlyForStage2();
+    testArgbufDescriptorTablesMirrorPinnedMslIds();
   } catch (const TestFailure& failure) {
     std::cerr << "argbuf_hybrid_msl_spec failed: " << failure.what() << '\n';
     return 1;

@@ -105,6 +105,7 @@ struct Counters {
   // combined), folded in at encodeChunk exit via updateMax.
   std::atomic<std::uint64_t> subCommandBufferCommits{0};
   std::atomic<std::uint64_t> chunkSubCBCountMax{0};
+  std::atomic<std::uint64_t> subCommandBufferSplitSuppressedByCap{0};
   // M5 — gpu_command_buffer_errors. Incremented once per Metal
   // CommandBuffer that surfaces WMTCommandBufferStatusError; intended as
   // a regression sentinel (R-BACK GPU faults) — paired with an
@@ -123,6 +124,20 @@ struct Counters {
   std::atomic<std::uint64_t> pipelineBuildFill{0};
   std::atomic<std::uint64_t> pipelineBuildStretch{0};
   std::atomic<std::uint64_t> pipelineBuildPresent{0};
+  std::atomic<std::uint64_t> psoSlotsDraw{0};
+  std::atomic<std::uint64_t> psoSlotsDrawMax{0};
+  std::atomic<std::uint64_t> psoSlotExhausted{0};
+  std::atomic<std::uint64_t> psoVariantArgbufStage2{0};
+  std::atomic<std::uint64_t> psoVariantTileFfp{0};
+  std::atomic<std::uint64_t> sourceLibraryEntries{0};
+  std::atomic<std::uint64_t> sourceLibraryEntriesMax{0};
+  std::atomic<std::uint64_t> pipelineBuildFailDraw{0};
+  std::atomic<std::uint64_t> pipelineBuildFailLibrary{0};
+  std::atomic<std::uint64_t> pipelineBuildFailFunction{0};
+  std::atomic<std::uint64_t> pipelineBuildFailPso{0};
+  std::atomic<std::uint64_t> drawSkippedNoPipeline{0};
+  std::atomic<std::uint64_t> shaderVariantKeyHashCpuNs{0};
+  std::atomic<std::uint64_t> shaderVariantKeyHashCpuMaxNs{0};
   std::atomic<std::uint64_t> renderPassBegin{0};
   std::atomic<std::uint64_t> renderPassEnd{0};
   std::atomic<std::uint64_t> renderSplitFinal{0};
@@ -531,6 +546,7 @@ struct Counters {
   PercentileRing encodeChunkCpuRing;
   PercentileRing encodeDrawCpuRing;
   PercentileRing encodeDrawPipelineLookupCpuRing;
+  PercentileRing shaderVariantKeyHashCpuRing;
   PercentileRing encodeDrawUniformBuildCpuRing;
   PercentileRing encodeDrawFvfDecodeCpuRing;
   PercentileRing encodeDrawStreamBindCpuRing;
@@ -729,6 +745,7 @@ constexpr CounterEntry kCounterTable[] = {
     {"command_buffers", CounterEntry::Kind::UnsignedCount, &Counters::commandBuffers, nullptr, nullptr, 0.0},
     {"sub_command_buffers", CounterEntry::Kind::UnsignedCount, &Counters::subCommandBufferCommits, nullptr, nullptr, 0.0},
     {"chunk_subcb_count_max", CounterEntry::Kind::UnsignedCount, &Counters::chunkSubCBCountMax, nullptr, nullptr, 0.0},
+    {"subcb_split_suppressed_by_cap", CounterEntry::Kind::UnsignedCount, &Counters::subCommandBufferSplitSuppressedByCap, nullptr, nullptr, 0.0},
     {"gpu_command_buffer_errors", CounterEntry::Kind::UnsignedCount, &Counters::gpuCommandBufferErrors, nullptr, nullptr, 0.0},
     {"metal_buffers", CounterEntry::Kind::UnsignedCount, &Counters::metalBuffers, nullptr, nullptr, 0.0},
     {"metal_buffer_bytes", CounterEntry::Kind::UnsignedCount, &Counters::metalBufferBytes, nullptr, nullptr, 0.0},
@@ -743,6 +760,18 @@ constexpr CounterEntry kCounterTable[] = {
     {"pipeline_build_fill", CounterEntry::Kind::UnsignedCount, &Counters::pipelineBuildFill, nullptr, nullptr, 0.0},
     {"pipeline_build_stretch", CounterEntry::Kind::UnsignedCount, &Counters::pipelineBuildStretch, nullptr, nullptr, 0.0},
     {"pipeline_build_present", CounterEntry::Kind::UnsignedCount, &Counters::pipelineBuildPresent, nullptr, nullptr, 0.0},
+    {"pso_slots_draw", CounterEntry::Kind::UnsignedCount, &Counters::psoSlotsDraw, nullptr, nullptr, 0.0},
+    {"pso_slots_draw_max", CounterEntry::Kind::UnsignedCount, &Counters::psoSlotsDrawMax, nullptr, nullptr, 0.0},
+    {"pso_slot_exhausted", CounterEntry::Kind::UnsignedCount, &Counters::psoSlotExhausted, nullptr, nullptr, 0.0},
+    {"pso_variant_argbuf_stage2", CounterEntry::Kind::UnsignedCount, &Counters::psoVariantArgbufStage2, nullptr, nullptr, 0.0},
+    {"pso_variant_tile_ffp", CounterEntry::Kind::UnsignedCount, &Counters::psoVariantTileFfp, nullptr, nullptr, 0.0},
+    {"source_library_entries", CounterEntry::Kind::UnsignedCount, &Counters::sourceLibraryEntries, nullptr, nullptr, 0.0},
+    {"source_library_entries_max", CounterEntry::Kind::UnsignedCount, &Counters::sourceLibraryEntriesMax, nullptr, nullptr, 0.0},
+    {"pipeline_build_fail_draw", CounterEntry::Kind::UnsignedCount, &Counters::pipelineBuildFailDraw, nullptr, nullptr, 0.0},
+    {"pipeline_build_fail_library", CounterEntry::Kind::UnsignedCount, &Counters::pipelineBuildFailLibrary, nullptr, nullptr, 0.0},
+    {"pipeline_build_fail_function", CounterEntry::Kind::UnsignedCount, &Counters::pipelineBuildFailFunction, nullptr, nullptr, 0.0},
+    {"pipeline_build_fail_pso", CounterEntry::Kind::UnsignedCount, &Counters::pipelineBuildFailPso, nullptr, nullptr, 0.0},
+    {"draw_skipped_no_pipeline", CounterEntry::Kind::UnsignedCount, &Counters::drawSkippedNoPipeline, nullptr, nullptr, 0.0},
     {"render_pass_begin", CounterEntry::Kind::UnsignedCount, &Counters::renderPassBegin, nullptr, nullptr, 0.0},
     {"render_pass_end", CounterEntry::Kind::UnsignedCount, &Counters::renderPassEnd, nullptr, nullptr, 0.0},
     {"render_split_final", CounterEntry::Kind::UnsignedCount, &Counters::renderSplitFinal, nullptr, nullptr, 0.0},
@@ -899,6 +928,11 @@ constexpr CounterEntry kCounterTable[] = {
     {"encode_draw_pipeline_lookup_cpu_p50_ms", CounterEntry::Kind::PercentileMs, nullptr, nullptr, &Counters::encodeDrawPipelineLookupCpuRing, 0.5},
     {"encode_draw_pipeline_lookup_cpu_p95_ms", CounterEntry::Kind::PercentileMs, nullptr, nullptr, &Counters::encodeDrawPipelineLookupCpuRing, 0.95},
     {"encode_draw_pipeline_lookup_cpu_p99_ms", CounterEntry::Kind::PercentileMs, nullptr, nullptr, &Counters::encodeDrawPipelineLookupCpuRing, 0.99},
+    {"shader_variant_key_hash_cpu_ms", CounterEntry::Kind::Milliseconds, &Counters::shaderVariantKeyHashCpuNs, nullptr, nullptr, 0.0},
+    {"shader_variant_key_hash_cpu_max_ms", CounterEntry::Kind::Milliseconds, &Counters::shaderVariantKeyHashCpuMaxNs, nullptr, nullptr, 0.0},
+    {"shader_variant_key_hash_cpu_p50_ms", CounterEntry::Kind::PercentileMs, nullptr, nullptr, &Counters::shaderVariantKeyHashCpuRing, 0.5},
+    {"shader_variant_key_hash_cpu_p95_ms", CounterEntry::Kind::PercentileMs, nullptr, nullptr, &Counters::shaderVariantKeyHashCpuRing, 0.95},
+    {"shader_variant_key_hash_cpu_p99_ms", CounterEntry::Kind::PercentileMs, nullptr, nullptr, &Counters::shaderVariantKeyHashCpuRing, 0.99},
     {"encode_draw_uniform_build_cpu_ms", CounterEntry::Kind::Milliseconds, &Counters::encodeDrawUniformBuildCpuNs, nullptr, nullptr, 0.0},
     {"encode_draw_uniform_build_cpu_max_ms", CounterEntry::Kind::Milliseconds, &Counters::encodeDrawUniformBuildCpuMaxNs, nullptr, nullptr, 0.0},
     {"encode_draw_uniform_build_cpu_p50_ms", CounterEntry::Kind::PercentileMs, nullptr, nullptr, &Counters::encodeDrawUniformBuildCpuRing, 0.5},
@@ -1384,6 +1418,10 @@ void countSubCommandBufferCommit() {
   add(counters().subCommandBufferCommits);
 }
 
+void countSubCommandBufferSplitSuppressedByCap() {
+  add(counters().subCommandBufferSplitSuppressedByCap);
+}
+
 void recordChunkSubCBCount(std::uint64_t perChunkCount) {
   updateMax(counters().chunkSubCBCountMax, perChunkCount);
 }
@@ -1412,6 +1450,54 @@ void countPipelineCacheMiss(PipelineKind kind) {
 void countPipelineBuild(PipelineKind kind) {
   countPipelineBuild();
   add(pipelineBuildCounter(counters(), kind));
+}
+
+void recordDrawPsoSlotCount(std::uint64_t count) {
+  counters().psoSlotsDraw.store(count, std::memory_order_relaxed);
+  updateMax(counters().psoSlotsDrawMax, count);
+}
+
+void countDrawPsoSlotExhausted() {
+  add(counters().psoSlotExhausted);
+}
+
+void countDrawPsoVariantArgbufStage2() {
+  add(counters().psoVariantArgbufStage2);
+}
+
+void countDrawPsoVariantTileFfp() {
+  add(counters().psoVariantTileFfp);
+}
+
+void recordSourceLibraryEntryCount(std::uint64_t count) {
+  counters().sourceLibraryEntries.store(count, std::memory_order_relaxed);
+  updateMax(counters().sourceLibraryEntriesMax, count);
+}
+
+void countPipelineBuildFailDraw() {
+  add(counters().pipelineBuildFailDraw);
+}
+
+void countPipelineBuildFailLibrary() {
+  add(counters().pipelineBuildFailLibrary);
+}
+
+void countPipelineBuildFailFunction() {
+  add(counters().pipelineBuildFailFunction);
+}
+
+void countPipelineBuildFailPso() {
+  add(counters().pipelineBuildFailPso);
+}
+
+void countDrawSkippedNoPipeline() {
+  add(counters().drawSkippedNoPipeline);
+}
+
+void countShaderVariantKeyHashCpuTime(std::uint64_t nanoseconds) {
+  add(counters().shaderVariantKeyHashCpuNs, nanoseconds);
+  updateMax(counters().shaderVariantKeyHashCpuMaxNs, nanoseconds);
+  recordRing(counters().shaderVariantKeyHashCpuRing, nanoseconds);
 }
 
 void countRenderPassBegin() {
