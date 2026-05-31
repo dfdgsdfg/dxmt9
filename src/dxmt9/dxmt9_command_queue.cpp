@@ -1457,8 +1457,12 @@ core::HResult CommandQueue::waitForVBlank() {
 
 void* CommandQueue::mapBuffer(core::BufferHandle handle, std::uint32_t flags) {
   // Pool storage + queue's wait-for-sequence rule under one mutex.
+  const auto totalStart = std::chrono::steady_clock::now();
   std::unique_lock lock(mutex_);
+  const auto lockAcquired = std::chrono::steady_clock::now();
   const std::uint64_t waitSeq = pool_.mapWaitSeqId(handle, flags);
+  const bool hasWaitSeq = waitSeq != 0;
+  const auto waitStart = std::chrono::steady_clock::now();
   // Wine writeonly_vertex_buffer_readback_policy (#66): a Draw followed
   // by a Lock without an intervening Present must still observe the
   // draw on read. The drawn slot's seqId is set as soon as the draw is
@@ -1475,6 +1479,16 @@ void* CommandQueue::mapBuffer(core::BufferHandle handle, std::uint32_t flags) {
   if (waitSeq > completedSeqId_) {
     queueLifecycle_.waitForSequence(lock, waitSeq);
   }
+  const auto waitEnd = std::chrono::steady_clock::now();
+  perf::countMapBufferWait(
+      static_cast<std::uint64_t>(std::chrono::duration_cast<std::chrono::nanoseconds>(
+          waitEnd - totalStart).count()),
+      static_cast<std::uint64_t>(std::chrono::duration_cast<std::chrono::nanoseconds>(
+          lockAcquired - totalStart).count()),
+      static_cast<std::uint64_t>(std::chrono::duration_cast<std::chrono::nanoseconds>(
+          waitEnd - waitStart).count()),
+      flags,
+      hasWaitSeq);
   // R-BACK-5.8 — pass the GPU completion watermark and the device
   // reference so the rename ring can rotate / fresh-allocate on
   // DISCARD without blocking on prior completion. Non-DYNAMIC paths

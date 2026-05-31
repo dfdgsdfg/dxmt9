@@ -122,6 +122,15 @@ void countEncodeDrawFvfDecodeCpuTime(std::uint64_t nanoseconds);
 void countEncodeDrawStreamBindCpuTime(std::uint64_t nanoseconds);
 void countEncodeDrawIssueCpuTime(std::uint64_t nanoseconds);
 void countTransientUploadCpuTime(std::uint64_t nanoseconds, std::size_t bytes);
+void countD3D9BufferLock(std::uint64_t nanoseconds,
+                         std::uint64_t bytes,
+                         std::uint64_t shadowAllocNanoseconds,
+                         std::uint64_t shadowCopyNanoseconds,
+                         std::uint32_t d3dFlags,
+                         std::uint32_t usage,
+                         std::uint32_t pool,
+                         bool fullResource,
+                         bool shadowCopy);
 void countUniformVsConsts(std::size_t bytes);
 void countUniformPsConsts(std::size_t bytes);
 void countUniformFfpVs(std::size_t bytes);
@@ -268,6 +277,11 @@ void countSyncWait(std::uint64_t nanoseconds);
 void countQueueWriterWait(std::uint64_t nanoseconds);
 void countQueueCommitWait(std::uint64_t nanoseconds);
 void countQueueSequenceWait(std::uint64_t nanoseconds);
+void countMapBufferWait(std::uint64_t totalNanoseconds,
+                        std::uint64_t mutexNanoseconds,
+                        std::uint64_t sequenceNanoseconds,
+                        std::uint32_t flags,
+                        bool waited);
 void countPresentBoundaryApplied();
 void countPresentBoundarySkipped();
 void countPresentBoundaryWait(std::uint64_t nanoseconds);

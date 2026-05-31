@@ -1,6 +1,8 @@
 #include "device_c_provider.hpp"
+#include "dxmt9/dxmt9_perf_counters.hpp"
 
 #include <algorithm>
+#include <chrono>
 #include <cmath>
 
 using namespace dxmt9::d3d9::devicec;
@@ -702,12 +704,20 @@ extern "C" int32_t dxmt9c_buffer_lock(D9CBuffer* b, uint32_t offset, uint32_t si
                 static_cast<void*>(b), offset, size, flags);
   b->lastLockReadOnly = (flags & kD3DLockReadOnly) != 0;
   const uint32_t actualSize = size ? size : b->obj->desc().size;
+  const auto start = std::chrono::steady_clock::now();
   auto lock = b->obj->lock(offset, actualSize, lockFlagsToCore(flags));
   *data = lock.data;
+  bool shadowCopy = false;
+  std::uint64_t shadowAllocNs = 0;
+  std::uint64_t shadowCopyNs = 0;
   if (lock.data && requiresWow64PointerShadow() && !pointerFits32Bit(lock.data)) {
     if (!b->wow64Lock.shadow || b->wow64Lock.shadow.size < actualSize) {
       releaseShadowLock(b->wow64Lock);
+      const auto allocStart = std::chrono::steady_clock::now();
       b->wow64Lock.shadow = allocateLow4GB(actualSize);
+      shadowAllocNs += static_cast<std::uint64_t>(
+          std::chrono::duration_cast<std::chrono::nanoseconds>(
+              std::chrono::steady_clock::now() - allocStart).count());
     }
     if (!b->wow64Lock.shadow) {
       dxmt9DebugLog("buffer_lock shadow alloc failed buffer=%p native=%p size=%u",
@@ -718,22 +728,50 @@ extern "C" int32_t dxmt9c_buffer_lock(D9CBuffer* b, uint32_t offset, uint32_t si
     b->wow64Lock.nativePtr = lock.data;
     b->wow64Lock.rowBytes = actualSize;
     b->wow64Lock.rows = 1;
+    b->wow64Lock.active = true;
+    const auto copyStart = std::chrono::steady_clock::now();
     std::memcpy(b->wow64Lock.shadow.ptr, lock.data, actualSize);
+    shadowCopyNs += static_cast<std::uint64_t>(
+        std::chrono::duration_cast<std::chrono::nanoseconds>(
+            std::chrono::steady_clock::now() - copyStart).count());
+    shadowCopy = true;
     *data = b->wow64Lock.shadow.ptr;
     dxmt9DebugLog("buffer_lock shadow buffer=%p native=%p shadow=%p size=%u",
                   static_cast<void*>(b), lock.data, *data, actualSize);
   }
+  const auto elapsedNs = std::chrono::duration_cast<std::chrono::nanoseconds>(
+      std::chrono::steady_clock::now() - start).count();
+  dxmt9::perf::countD3D9BufferLock(
+      static_cast<std::uint64_t>(elapsedNs),
+      actualSize,
+      shadowAllocNs,
+      shadowCopyNs,
+      flags,
+      b->desc.usage,
+      static_cast<std::uint32_t>(b->desc.pool),
+      size == 0 || actualSize == b->obj->desc().size,
+      shadowCopy);
   dxmt9DebugLog("buffer_lock ok buffer=%p data=%p", static_cast<void*>(b), *data);
   return dxmt9::core::D3D_OK;
 }
 
 extern "C" int32_t dxmt9c_buffer_unlock(D9CBuffer* b) {
-  if (b->wow64Lock.shadow) {
-    std::memcpy(b->wow64Lock.nativePtr, b->wow64Lock.shadow.ptr, b->wow64Lock.rowBytes);
-    dxmt9DebugLog("buffer_unlock shadow buffer=%p native=%p shadow=%p size=%u",
-                  static_cast<void*>(b), b->wow64Lock.nativePtr, b->wow64Lock.shadow.ptr,
-                  b->wow64Lock.rowBytes);
-    releaseShadowLock(b->wow64Lock);
+  if (b->wow64Lock.active) {
+    if (!b->lastLockReadOnly) {
+      std::memcpy(b->wow64Lock.nativePtr, b->wow64Lock.shadow.ptr, b->wow64Lock.rowBytes);
+      dxmt9DebugLog("buffer_unlock shadow writeback buffer=%p native=%p shadow=%p size=%u",
+                    static_cast<void*>(b), b->wow64Lock.nativePtr, b->wow64Lock.shadow.ptr,
+                    b->wow64Lock.rowBytes);
+    } else {
+      dxmt9DebugLog("buffer_unlock shadow readonly buffer=%p native=%p shadow=%p size=%u",
+                    static_cast<void*>(b), b->wow64Lock.nativePtr, b->wow64Lock.shadow.ptr,
+                    b->wow64Lock.rowBytes);
+    }
+    b->wow64Lock.nativePtr = nullptr;
+    b->wow64Lock.nativePitch = 0;
+    b->wow64Lock.rowBytes = 0;
+    b->wow64Lock.rows = 0;
+    b->wow64Lock.active = false;
   }
   b->obj->unlock(!b->lastLockReadOnly);
   b->lastLockReadOnly = false;

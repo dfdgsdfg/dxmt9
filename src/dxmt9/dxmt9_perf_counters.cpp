@@ -1,5 +1,7 @@
 #include "dxmt9_perf_counters.hpp"
 
+#include "dxmt9/core.hpp"
+
 #include <algorithm>
 #include <array>
 #include <atomic>
@@ -214,6 +216,27 @@ struct Counters {
   std::atomic<std::uint64_t> transientUploadBytes{0};
   std::atomic<std::uint64_t> transientUploadCpuNs{0};
   std::atomic<std::uint64_t> transientUploadCpuMaxNs{0};
+  std::atomic<std::uint64_t> d3d9BufferLockCalls{0};
+  std::atomic<std::uint64_t> d3d9BufferLockNs{0};
+  std::atomic<std::uint64_t> d3d9BufferLockMaxNs{0};
+  std::atomic<std::uint64_t> d3d9BufferLockBytes{0};
+  std::atomic<std::uint64_t> d3d9BufferLockDiscard{0};
+  std::atomic<std::uint64_t> d3d9BufferLockNoOverwrite{0};
+  std::atomic<std::uint64_t> d3d9BufferLockReadOnly{0};
+  std::atomic<std::uint64_t> d3d9BufferLockPlain{0};
+  std::atomic<std::uint64_t> d3d9BufferLockFullResource{0};
+  std::atomic<std::uint64_t> d3d9BufferLockShadow{0};
+  std::atomic<std::uint64_t> d3d9BufferLockShadowBytes{0};
+  std::atomic<std::uint64_t> d3d9BufferLockShadowAllocNs{0};
+  std::atomic<std::uint64_t> d3d9BufferLockShadowAllocMaxNs{0};
+  std::atomic<std::uint64_t> d3d9BufferLockShadowCopyNs{0};
+  std::atomic<std::uint64_t> d3d9BufferLockShadowCopyMaxNs{0};
+  std::atomic<std::uint64_t> d3d9BufferLockDefaultPool{0};
+  std::atomic<std::uint64_t> d3d9BufferLockManagedPool{0};
+  std::atomic<std::uint64_t> d3d9BufferLockSystemMemPool{0};
+  std::atomic<std::uint64_t> d3d9BufferLockScratchPool{0};
+  std::atomic<std::uint64_t> d3d9BufferLockDynamic{0};
+  std::atomic<std::uint64_t> d3d9BufferLockWriteOnly{0};
   std::atomic<std::uint64_t> uniformVsConstsCalls{0};
   std::atomic<std::uint64_t> uniformVsConstsBytes{0};
   std::atomic<std::uint64_t> uniformPsConstsCalls{0};
@@ -358,6 +381,18 @@ struct Counters {
   std::atomic<std::uint64_t> queueSequenceWaits{0};
   std::atomic<std::uint64_t> queueSequenceWaitNs{0};
   std::atomic<std::uint64_t> queueSequenceWaitMaxNs{0};
+  std::atomic<std::uint64_t> mapBufferCalls{0};
+  std::atomic<std::uint64_t> mapBufferWaitSeq{0};
+  std::atomic<std::uint64_t> mapBufferNoWaitSeq{0};
+  std::atomic<std::uint64_t> mapBufferTotalNs{0};
+  std::atomic<std::uint64_t> mapBufferTotalMaxNs{0};
+  std::atomic<std::uint64_t> mapBufferMutexWaitNs{0};
+  std::atomic<std::uint64_t> mapBufferMutexWaitMaxNs{0};
+  std::atomic<std::uint64_t> mapBufferWaitNs{0};
+  std::atomic<std::uint64_t> mapBufferWaitMaxNs{0};
+  std::atomic<std::uint64_t> mapBufferDiscard{0};
+  std::atomic<std::uint64_t> mapBufferNoOverwrite{0};
+  std::atomic<std::uint64_t> mapBufferPlain{0};
   std::atomic<std::uint64_t> presentBoundaryApplied{0};
   std::atomic<std::uint64_t> presentBoundarySkipped{0};
   std::atomic<std::uint64_t> presentBoundaryWaits{0};
@@ -423,6 +458,9 @@ struct Counters {
   PercentileRing encodeDrawStreamBindCpuRing;
   PercentileRing encodeDrawIssueCpuRing;
   PercentileRing transientUploadCpuRing;
+  PercentileRing d3d9BufferLockRing;
+  PercentileRing d3d9BufferLockShadowAllocRing;
+  PercentileRing d3d9BufferLockShadowCopyRing;
   PercentileRing commandBufferCreateCpuRing;
   PercentileRing commandBufferCommitCpuRing;
   // V1 boundary B2 — paired with bridgeCommitLatency*Ns above.
@@ -441,6 +479,9 @@ struct Counters {
   PercentileRing queueWriterWaitRing;
   PercentileRing queueCommitWaitRing;
   PercentileRing queueSequenceWaitRing;
+  PercentileRing mapBufferTotalRing;
+  PercentileRing mapBufferMutexWaitRing;
+  PercentileRing mapBufferWaitRing;
   PercentileRing presentBoundaryWaitRing;
   PercentileRing presentAcquireWaitRing;
   PercentileRing presentAsyncAcquireWaitRing;
@@ -590,7 +631,7 @@ struct CounterEntry {
   double percentile;
 };
 
-constexpr std::array<CounterEntry, 385> kCounterTable = {{
+constexpr std::array<CounterEntry, 435> kCounterTable = {{
     {"chunk_admit", CounterEntry::Kind::UnsignedCount, &Counters::chunkAdmit, nullptr, nullptr, 0.0},
     {"chunk_reject", CounterEntry::Kind::UnsignedCount, &Counters::chunkReject, nullptr, nullptr, 0.0},
     {"ring_arena_heap_fallback_count", CounterEntry::Kind::UnsignedCount, &Counters::ringArenaHeapFallbackCount, nullptr, nullptr, 0.0},
@@ -744,6 +785,36 @@ constexpr std::array<CounterEntry, 385> kCounterTable = {{
     {"transient_upload_cpu_p50_ms", CounterEntry::Kind::PercentileMs, nullptr, nullptr, &Counters::transientUploadCpuRing, 0.5},
     {"transient_upload_cpu_p95_ms", CounterEntry::Kind::PercentileMs, nullptr, nullptr, &Counters::transientUploadCpuRing, 0.95},
     {"transient_upload_cpu_p99_ms", CounterEntry::Kind::PercentileMs, nullptr, nullptr, &Counters::transientUploadCpuRing, 0.99},
+    {"d3d9_buffer_lock_calls", CounterEntry::Kind::UnsignedCount, &Counters::d3d9BufferLockCalls, nullptr, nullptr, 0.0},
+    {"d3d9_buffer_lock_ms", CounterEntry::Kind::Milliseconds, &Counters::d3d9BufferLockNs, nullptr, nullptr, 0.0},
+    {"d3d9_buffer_lock_max_ms", CounterEntry::Kind::Milliseconds, &Counters::d3d9BufferLockMaxNs, nullptr, nullptr, 0.0},
+    {"d3d9_buffer_lock_p50_ms", CounterEntry::Kind::PercentileMs, nullptr, nullptr, &Counters::d3d9BufferLockRing, 0.5},
+    {"d3d9_buffer_lock_p95_ms", CounterEntry::Kind::PercentileMs, nullptr, nullptr, &Counters::d3d9BufferLockRing, 0.95},
+    {"d3d9_buffer_lock_p99_ms", CounterEntry::Kind::PercentileMs, nullptr, nullptr, &Counters::d3d9BufferLockRing, 0.99},
+    {"d3d9_buffer_lock_bytes", CounterEntry::Kind::UnsignedCount, &Counters::d3d9BufferLockBytes, nullptr, nullptr, 0.0},
+    {"d3d9_buffer_lock_discard", CounterEntry::Kind::UnsignedCount, &Counters::d3d9BufferLockDiscard, nullptr, nullptr, 0.0},
+    {"d3d9_buffer_lock_nooverwrite", CounterEntry::Kind::UnsignedCount, &Counters::d3d9BufferLockNoOverwrite, nullptr, nullptr, 0.0},
+    {"d3d9_buffer_lock_readonly", CounterEntry::Kind::UnsignedCount, &Counters::d3d9BufferLockReadOnly, nullptr, nullptr, 0.0},
+    {"d3d9_buffer_lock_plain", CounterEntry::Kind::UnsignedCount, &Counters::d3d9BufferLockPlain, nullptr, nullptr, 0.0},
+    {"d3d9_buffer_lock_full_resource", CounterEntry::Kind::UnsignedCount, &Counters::d3d9BufferLockFullResource, nullptr, nullptr, 0.0},
+    {"d3d9_buffer_lock_shadow", CounterEntry::Kind::UnsignedCount, &Counters::d3d9BufferLockShadow, nullptr, nullptr, 0.0},
+    {"d3d9_buffer_lock_shadow_bytes", CounterEntry::Kind::UnsignedCount, &Counters::d3d9BufferLockShadowBytes, nullptr, nullptr, 0.0},
+    {"d3d9_buffer_lock_shadow_alloc_ms", CounterEntry::Kind::Milliseconds, &Counters::d3d9BufferLockShadowAllocNs, nullptr, nullptr, 0.0},
+    {"d3d9_buffer_lock_shadow_alloc_max_ms", CounterEntry::Kind::Milliseconds, &Counters::d3d9BufferLockShadowAllocMaxNs, nullptr, nullptr, 0.0},
+    {"d3d9_buffer_lock_shadow_alloc_p50_ms", CounterEntry::Kind::PercentileMs, nullptr, nullptr, &Counters::d3d9BufferLockShadowAllocRing, 0.5},
+    {"d3d9_buffer_lock_shadow_alloc_p95_ms", CounterEntry::Kind::PercentileMs, nullptr, nullptr, &Counters::d3d9BufferLockShadowAllocRing, 0.95},
+    {"d3d9_buffer_lock_shadow_alloc_p99_ms", CounterEntry::Kind::PercentileMs, nullptr, nullptr, &Counters::d3d9BufferLockShadowAllocRing, 0.99},
+    {"d3d9_buffer_lock_shadow_copy_ms", CounterEntry::Kind::Milliseconds, &Counters::d3d9BufferLockShadowCopyNs, nullptr, nullptr, 0.0},
+    {"d3d9_buffer_lock_shadow_copy_max_ms", CounterEntry::Kind::Milliseconds, &Counters::d3d9BufferLockShadowCopyMaxNs, nullptr, nullptr, 0.0},
+    {"d3d9_buffer_lock_shadow_copy_p50_ms", CounterEntry::Kind::PercentileMs, nullptr, nullptr, &Counters::d3d9BufferLockShadowCopyRing, 0.5},
+    {"d3d9_buffer_lock_shadow_copy_p95_ms", CounterEntry::Kind::PercentileMs, nullptr, nullptr, &Counters::d3d9BufferLockShadowCopyRing, 0.95},
+    {"d3d9_buffer_lock_shadow_copy_p99_ms", CounterEntry::Kind::PercentileMs, nullptr, nullptr, &Counters::d3d9BufferLockShadowCopyRing, 0.99},
+    {"d3d9_buffer_lock_default_pool", CounterEntry::Kind::UnsignedCount, &Counters::d3d9BufferLockDefaultPool, nullptr, nullptr, 0.0},
+    {"d3d9_buffer_lock_managed_pool", CounterEntry::Kind::UnsignedCount, &Counters::d3d9BufferLockManagedPool, nullptr, nullptr, 0.0},
+    {"d3d9_buffer_lock_systemmem_pool", CounterEntry::Kind::UnsignedCount, &Counters::d3d9BufferLockSystemMemPool, nullptr, nullptr, 0.0},
+    {"d3d9_buffer_lock_scratch_pool", CounterEntry::Kind::UnsignedCount, &Counters::d3d9BufferLockScratchPool, nullptr, nullptr, 0.0},
+    {"d3d9_buffer_lock_dynamic", CounterEntry::Kind::UnsignedCount, &Counters::d3d9BufferLockDynamic, nullptr, nullptr, 0.0},
+    {"d3d9_buffer_lock_writeonly", CounterEntry::Kind::UnsignedCount, &Counters::d3d9BufferLockWriteOnly, nullptr, nullptr, 0.0},
     {"uniform_vs_consts_calls", CounterEntry::Kind::UnsignedCount, &Counters::uniformVsConstsCalls, nullptr, nullptr, 0.0},
     {"uniform_vs_consts_bytes", CounterEntry::Kind::UnsignedCount, &Counters::uniformVsConstsBytes, nullptr, nullptr, 0.0},
     {"uniform_ps_consts_calls", CounterEntry::Kind::UnsignedCount, &Counters::uniformPsConstsCalls, nullptr, nullptr, 0.0},
@@ -911,6 +982,27 @@ constexpr std::array<CounterEntry, 385> kCounterTable = {{
     {"queue_sequence_wait_p50_ms", CounterEntry::Kind::PercentileMs, nullptr, nullptr, &Counters::queueSequenceWaitRing, 0.5},
     {"queue_sequence_wait_p95_ms", CounterEntry::Kind::PercentileMs, nullptr, nullptr, &Counters::queueSequenceWaitRing, 0.95},
     {"queue_sequence_wait_p99_ms", CounterEntry::Kind::PercentileMs, nullptr, nullptr, &Counters::queueSequenceWaitRing, 0.99},
+    {"map_buffer_calls", CounterEntry::Kind::UnsignedCount, &Counters::mapBufferCalls, nullptr, nullptr, 0.0},
+    {"map_buffer_wait_seq", CounterEntry::Kind::UnsignedCount, &Counters::mapBufferWaitSeq, nullptr, nullptr, 0.0},
+    {"map_buffer_no_wait_seq", CounterEntry::Kind::UnsignedCount, &Counters::mapBufferNoWaitSeq, nullptr, nullptr, 0.0},
+    {"map_buffer_total_ms", CounterEntry::Kind::Milliseconds, &Counters::mapBufferTotalNs, nullptr, nullptr, 0.0},
+    {"map_buffer_total_max_ms", CounterEntry::Kind::Milliseconds, &Counters::mapBufferTotalMaxNs, nullptr, nullptr, 0.0},
+    {"map_buffer_total_p50_ms", CounterEntry::Kind::PercentileMs, nullptr, nullptr, &Counters::mapBufferTotalRing, 0.5},
+    {"map_buffer_total_p95_ms", CounterEntry::Kind::PercentileMs, nullptr, nullptr, &Counters::mapBufferTotalRing, 0.95},
+    {"map_buffer_total_p99_ms", CounterEntry::Kind::PercentileMs, nullptr, nullptr, &Counters::mapBufferTotalRing, 0.99},
+    {"map_buffer_mutex_wait_ms", CounterEntry::Kind::Milliseconds, &Counters::mapBufferMutexWaitNs, nullptr, nullptr, 0.0},
+    {"map_buffer_mutex_wait_max_ms", CounterEntry::Kind::Milliseconds, &Counters::mapBufferMutexWaitMaxNs, nullptr, nullptr, 0.0},
+    {"map_buffer_mutex_wait_p50_ms", CounterEntry::Kind::PercentileMs, nullptr, nullptr, &Counters::mapBufferMutexWaitRing, 0.5},
+    {"map_buffer_mutex_wait_p95_ms", CounterEntry::Kind::PercentileMs, nullptr, nullptr, &Counters::mapBufferMutexWaitRing, 0.95},
+    {"map_buffer_mutex_wait_p99_ms", CounterEntry::Kind::PercentileMs, nullptr, nullptr, &Counters::mapBufferMutexWaitRing, 0.99},
+    {"map_buffer_wait_ms", CounterEntry::Kind::Milliseconds, &Counters::mapBufferWaitNs, nullptr, nullptr, 0.0},
+    {"map_buffer_wait_max_ms", CounterEntry::Kind::Milliseconds, &Counters::mapBufferWaitMaxNs, nullptr, nullptr, 0.0},
+    {"map_buffer_wait_p50_ms", CounterEntry::Kind::PercentileMs, nullptr, nullptr, &Counters::mapBufferWaitRing, 0.5},
+    {"map_buffer_wait_p95_ms", CounterEntry::Kind::PercentileMs, nullptr, nullptr, &Counters::mapBufferWaitRing, 0.95},
+    {"map_buffer_wait_p99_ms", CounterEntry::Kind::PercentileMs, nullptr, nullptr, &Counters::mapBufferWaitRing, 0.99},
+    {"map_buffer_discard", CounterEntry::Kind::UnsignedCount, &Counters::mapBufferDiscard, nullptr, nullptr, 0.0},
+    {"map_buffer_nooverwrite", CounterEntry::Kind::UnsignedCount, &Counters::mapBufferNoOverwrite, nullptr, nullptr, 0.0},
+    {"map_buffer_plain", CounterEntry::Kind::UnsignedCount, &Counters::mapBufferPlain, nullptr, nullptr, 0.0},
     {"present_boundary_applied", CounterEntry::Kind::UnsignedCount, &Counters::presentBoundaryApplied, nullptr, nullptr, 0.0},
     {"present_boundary_skipped", CounterEntry::Kind::UnsignedCount, &Counters::presentBoundarySkipped, nullptr, nullptr, 0.0},
     {"present_boundary_waits", CounterEntry::Kind::UnsignedCount, &Counters::presentBoundaryWaits, nullptr, nullptr, 0.0},
@@ -1364,6 +1456,63 @@ void countTransientUploadCpuTime(std::uint64_t nanoseconds, std::size_t bytes) {
   recordRing(counters().transientUploadCpuRing, nanoseconds);
 }
 
+void countD3D9BufferLock(std::uint64_t nanoseconds,
+                         std::uint64_t bytes,
+                         std::uint64_t shadowAllocNanoseconds,
+                         std::uint64_t shadowCopyNanoseconds,
+                         std::uint32_t d3dFlags,
+                         std::uint32_t usage,
+                         std::uint32_t pool,
+                         bool fullResource,
+                         bool shadowCopy) {
+  static constexpr std::uint32_t kD3DLockReadOnly = 0x00000010u;
+  static constexpr std::uint32_t kD3DLockNoOverwrite = 0x00001000u;
+  static constexpr std::uint32_t kD3DLockDiscard = 0x00002000u;
+  static constexpr std::uint32_t kUsageDynamic = 1u << 3;
+  static constexpr std::uint32_t kUsageWriteOnly = 1u << 7;
+  auto& c = counters();
+  add(c.d3d9BufferLockCalls);
+  add(c.d3d9BufferLockNs, nanoseconds);
+  updateMax(c.d3d9BufferLockMaxNs, nanoseconds);
+  recordRing(c.d3d9BufferLockRing, nanoseconds);
+  add(c.d3d9BufferLockBytes, bytes);
+  const bool discard = (d3dFlags & kD3DLockDiscard) != 0;
+  const bool noOverwrite = (d3dFlags & kD3DLockNoOverwrite) != 0;
+  if (discard) add(c.d3d9BufferLockDiscard);
+  if (noOverwrite) add(c.d3d9BufferLockNoOverwrite);
+  if ((d3dFlags & kD3DLockReadOnly) != 0) add(c.d3d9BufferLockReadOnly);
+  if (!discard && !noOverwrite) add(c.d3d9BufferLockPlain);
+  if (fullResource) add(c.d3d9BufferLockFullResource);
+  if (shadowCopy) {
+    add(c.d3d9BufferLockShadow);
+    add(c.d3d9BufferLockShadowBytes, bytes);
+    add(c.d3d9BufferLockShadowAllocNs, shadowAllocNanoseconds);
+    updateMax(c.d3d9BufferLockShadowAllocMaxNs, shadowAllocNanoseconds);
+    recordRing(c.d3d9BufferLockShadowAllocRing, shadowAllocNanoseconds);
+    add(c.d3d9BufferLockShadowCopyNs, shadowCopyNanoseconds);
+    updateMax(c.d3d9BufferLockShadowCopyMaxNs, shadowCopyNanoseconds);
+    recordRing(c.d3d9BufferLockShadowCopyRing, shadowCopyNanoseconds);
+  }
+  switch (pool) {
+    case 0:
+      add(c.d3d9BufferLockDefaultPool);
+      break;
+    case 1:
+      add(c.d3d9BufferLockManagedPool);
+      break;
+    case 2:
+      add(c.d3d9BufferLockSystemMemPool);
+      break;
+    case 3:
+      add(c.d3d9BufferLockScratchPool);
+      break;
+    default:
+      break;
+  }
+  if ((usage & kUsageDynamic) != 0) add(c.d3d9BufferLockDynamic);
+  if ((usage & kUsageWriteOnly) != 0) add(c.d3d9BufferLockWriteOnly);
+}
+
 void countUniformVsConsts(std::size_t bytes) {
   add(counters().uniformVsConstsCalls);
   add(counters().uniformVsConstsBytes, static_cast<std::uint64_t>(bytes));
@@ -1728,6 +1877,34 @@ void countQueueSequenceWait(std::uint64_t nanoseconds) {
   add(counters().queueSequenceWaitNs, nanoseconds);
   updateMax(counters().queueSequenceWaitMaxNs, nanoseconds);
   recordRing(counters().queueSequenceWaitRing, nanoseconds);
+}
+
+void countMapBufferWait(std::uint64_t totalNanoseconds,
+                        std::uint64_t mutexNanoseconds,
+                        std::uint64_t sequenceNanoseconds,
+                        std::uint32_t flags,
+                        bool waited) {
+  auto& c = counters();
+  add(c.mapBufferCalls);
+  add(c.mapBufferTotalNs, totalNanoseconds);
+  updateMax(c.mapBufferTotalMaxNs, totalNanoseconds);
+  recordRing(c.mapBufferTotalRing, totalNanoseconds);
+  add(c.mapBufferMutexWaitNs, mutexNanoseconds);
+  updateMax(c.mapBufferMutexWaitMaxNs, mutexNanoseconds);
+  recordRing(c.mapBufferMutexWaitRing, mutexNanoseconds);
+  if (waited) {
+    add(c.mapBufferWaitSeq);
+    add(c.mapBufferWaitNs, sequenceNanoseconds);
+    updateMax(c.mapBufferWaitMaxNs, sequenceNanoseconds);
+    recordRing(c.mapBufferWaitRing, sequenceNanoseconds);
+  } else {
+    add(c.mapBufferNoWaitSeq);
+  }
+  const bool discard = (flags & core::UsageDiscard) != 0;
+  const bool noOverwrite = (flags & core::UsageNoOverwrite) != 0;
+  if (discard) add(c.mapBufferDiscard);
+  if (noOverwrite) add(c.mapBufferNoOverwrite);
+  if (!discard && !noOverwrite) add(c.mapBufferPlain);
 }
 
 void countPresentBoundaryApplied() {
