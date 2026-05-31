@@ -62,6 +62,12 @@ Commercial / 3rd-party titles (require external prefix):
 - Each launcher sources `common.sh` first, then calls `exp_stage_dxmt9`
   and `exp_run_wine_binary`. Per-app variation comes from CATALOGUE
   fields (`binary`, `window_title`, `capture_frame`, env vars).
+- `DXMT_EXPERIMENT_PROFILE` selects shared runtime defaults:
+  - `debug` (default): `DXMT_VALIDATE=1`, `DXMT_LOG_LEVEL=debug`.
+  - `perf`: `DXMT_VALIDATE=0`, `DXMT_LOG_LEVEL=warn`,
+    `DXMT_PERF_COUNTERS=1`, `DXMT_PERF_COUNTERS_PERIODIC_PRESENTS=60`,
+    `WINEDEBUG=-all`.
+  Explicit environment variables still override profile defaults.
 - Launcher filename must exactly match `CATALOGUE.name`. Adding a new app:
   1. Add `[[app]]` entry to `experiments/CATALOGUE.toml` with `name`,
      `binary`, `launcher`, `reference` (optional), `features`, `status`.
@@ -74,5 +80,6 @@ Commercial / 3rd-party titles (require external prefix):
 - Run via:
   ```
   python3 scripts/run_apps/run_experiment.py run <name>
+  DXMT_EXPERIMENT_PROFILE=perf python3 scripts/run_apps/run_experiment.py run <name>
   python3 scripts/run_apps/run_experiment.py run <name> --build
   ```

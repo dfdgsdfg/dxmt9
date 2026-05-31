@@ -43,6 +43,31 @@ exp_wine_unix_dir() {
   fi
 }
 
+exp_resolve_profile_defaults() {
+  EXP_PROFILE_NAME=$(printf '%s' "${DXMT_EXPERIMENT_PROFILE:-${DXMT_PROFILE:-debug}}" | tr '[:upper:]' '[:lower:]')
+
+  case "$EXP_PROFILE_NAME" in
+    debug)
+      EXP_DEFAULT_DXMT_VALIDATE=1
+      EXP_DEFAULT_DXMT_LOG_LEVEL=debug
+      EXP_DEFAULT_DXMT_PERF_COUNTERS=
+      EXP_DEFAULT_DXMT_PERF_COUNTERS_PERIODIC_PRESENTS=
+      EXP_DEFAULT_WINEDEBUG=
+      ;;
+    perf)
+      EXP_DEFAULT_DXMT_VALIDATE=0
+      EXP_DEFAULT_DXMT_LOG_LEVEL=warn
+      EXP_DEFAULT_DXMT_PERF_COUNTERS=1
+      EXP_DEFAULT_DXMT_PERF_COUNTERS_PERIODIC_PRESENTS=60
+      EXP_DEFAULT_WINEDEBUG=-all
+      ;;
+    *)
+      exp_log "invalid DXMT_EXPERIMENT_PROFILE: $EXP_PROFILE_NAME (expected debug or perf)"
+      exit 2
+      ;;
+  esac
+}
+
 exp_stage_dxmt9() {
   if [[ "${DXMT_EXPERIMENT_SKIP_STAGE:-}" == "1" ]]; then
     exp_log "skipping dxmt9 staging"
@@ -101,17 +126,21 @@ exp_run_wine_binary() {
   if [[ -z "$winemetal_so" && -f "${DXMT_EXPERIMENT_UNIX_BUILD_DIR:-}/winemetal/unix/winemetal.so" ]]; then
     winemetal_so="$DXMT_EXPERIMENT_UNIX_BUILD_DIR/winemetal/unix/winemetal.so"
   fi
+  exp_resolve_profile_defaults
 
-  exp_log "running $binary"
+  exp_log "running $binary profile=$EXP_PROFILE_NAME"
   if [[ -n "${DXMT_EXPERIMENT_CX_BOTTLE:-}" ]]; then
     (
       cd "$workdir"
       CX_ROOT="${DXMT_EXPERIMENT_WINE_ROOT:-}" \
       CX_BOTTLE="$DXMT_EXPERIMENT_CX_BOTTLE" \
+      WINEDEBUG="${WINEDEBUG:-$EXP_DEFAULT_WINEDEBUG}" \
       DYLD_LIBRARY_PATH="$dyld_library_path" \
-      DXMT_VALIDATE="${DXMT_VALIDATE:-1}" \
+      DXMT_VALIDATE="${DXMT_VALIDATE:-$EXP_DEFAULT_DXMT_VALIDATE}" \
+      DXMT_PERF_COUNTERS="${DXMT_PERF_COUNTERS:-$EXP_DEFAULT_DXMT_PERF_COUNTERS}" \
+      DXMT_PERF_COUNTERS_PERIODIC_PRESENTS="${DXMT_PERF_COUNTERS_PERIODIC_PRESENTS:-$EXP_DEFAULT_DXMT_PERF_COUNTERS_PERIODIC_PRESENTS}" \
       DXMT9_WINEMETAL_SO="$winemetal_so" \
-      DXMT_LOG_LEVEL="${DXMT_LOG_LEVEL:-debug}" \
+      DXMT_LOG_LEVEL="${DXMT_LOG_LEVEL:-$EXP_DEFAULT_DXMT_LOG_LEVEL}" \
       DXMT_LOG_PATH="$log_dir" \
       "$DXMT_EXPERIMENT_WINE_BIN" --bottle "$DXMT_EXPERIMENT_CX_BOTTLE" --wait-all --dll "$dll_overrides" "$binary" "$@"
     )
@@ -120,10 +149,13 @@ exp_run_wine_binary() {
       cd "$workdir"
       WINEPREFIX="$DXMT_EXPERIMENT_PREFIX" \
       WINEDLLOVERRIDES="$dll_overrides" \
+      WINEDEBUG="${WINEDEBUG:-$EXP_DEFAULT_WINEDEBUG}" \
       DYLD_LIBRARY_PATH="$dyld_library_path" \
-      DXMT_VALIDATE="${DXMT_VALIDATE:-1}" \
+      DXMT_VALIDATE="${DXMT_VALIDATE:-$EXP_DEFAULT_DXMT_VALIDATE}" \
+      DXMT_PERF_COUNTERS="${DXMT_PERF_COUNTERS:-$EXP_DEFAULT_DXMT_PERF_COUNTERS}" \
+      DXMT_PERF_COUNTERS_PERIODIC_PRESENTS="${DXMT_PERF_COUNTERS_PERIODIC_PRESENTS:-$EXP_DEFAULT_DXMT_PERF_COUNTERS_PERIODIC_PRESENTS}" \
       DXMT9_WINEMETAL_SO="$winemetal_so" \
-      DXMT_LOG_LEVEL="${DXMT_LOG_LEVEL:-debug}" \
+      DXMT_LOG_LEVEL="${DXMT_LOG_LEVEL:-$EXP_DEFAULT_DXMT_LOG_LEVEL}" \
       DXMT_LOG_PATH="$log_dir" \
       "$DXMT_EXPERIMENT_WINE_BIN" "$binary" "$@"
     )
