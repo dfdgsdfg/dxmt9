@@ -128,6 +128,7 @@ class CommandQueue {
                      const core::DrawUniformPayload& uniforms,
                      std::span<const core::DrawParam> draws,
                      std::span<const core::DrawParamPayloadView> payloads = {});
+  void submitDrawRunBatch(std::span<core::DrawRunSubmission> submissions);
   // Bulk resource retention — chunk importer hands the deduped handle
   // set from D9CCommandChunk.handles[] in one call. Single mutex
   // acquire, dispatches per-kind to pool_.markBufferUse / markTextureUse

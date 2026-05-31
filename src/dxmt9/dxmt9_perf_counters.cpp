@@ -139,6 +139,36 @@ struct Counters {
   std::atomic<std::uint64_t> hazardBloomOverlaps{0};
   std::atomic<std::uint64_t> hazardExactOverlaps{0};
   std::atomic<std::uint64_t> hazardBloomFalsePositive{0};
+  std::atomic<std::uint64_t> commitChunkDrawRecords{0};
+  std::atomic<std::uint64_t> commitChunkDrawIndexed{0};
+  std::atomic<std::uint64_t> commitChunkDrawNoDelta{0};
+  std::atomic<std::uint64_t> commitChunkDrawStateDelta{0};
+  std::atomic<std::uint64_t> commitChunkDrawRunScans{0};
+  std::atomic<std::uint64_t> commitChunkDrawRunSubmits{0};
+  std::atomic<std::uint64_t> commitChunkDrawRunRecords{0};
+  std::atomic<std::uint64_t> commitChunkDrawRunBreakFirstDelta{0};
+  std::atomic<std::uint64_t> commitChunkDrawRunBreakStateDelta{0};
+  std::atomic<std::uint64_t> commitChunkDrawRunBreakType{0};
+  std::atomic<std::uint64_t> commitChunkDrawRunBreakEnd{0};
+  std::atomic<std::uint64_t> commitChunkDrawRunBreakInvalid{0};
+  std::atomic<std::uint64_t> commitChunkDrawDeltaRenderState{0};
+  std::atomic<std::uint64_t> commitChunkDrawDeltaTexture{0};
+  std::atomic<std::uint64_t> commitChunkDrawDeltaStream{0};
+  std::atomic<std::uint64_t> commitChunkDrawDeltaFvf{0};
+  std::atomic<std::uint64_t> commitChunkDrawDeltaShader{0};
+  std::atomic<std::uint64_t> commitChunkDrawDeltaVertexDecl{0};
+  std::atomic<std::uint64_t> commitChunkDrawDeltaRenderTarget{0};
+  std::atomic<std::uint64_t> commitChunkDrawDeltaDepthStencil{0};
+  std::atomic<std::uint64_t> commitChunkDrawDeltaViewport{0};
+  std::atomic<std::uint64_t> commitChunkDrawDeltaScissor{0};
+  std::atomic<std::uint64_t> commitChunkDrawDeltaTextureStageState{0};
+  std::atomic<std::uint64_t> commitChunkDrawDeltaSamplerState{0};
+  std::atomic<std::uint64_t> commitChunkDrawDeltaMaterial{0};
+  std::atomic<std::uint64_t> commitChunkDrawDeltaClipPlane{0};
+  std::atomic<std::uint64_t> commitChunkDrawDeltaTransform{0};
+  std::atomic<std::uint64_t> commitChunkDrawDeltaLight{0};
+  std::atomic<std::uint64_t> commitChunkDrawDeltaLightEnable{0};
+  std::atomic<std::uint64_t> commitChunkDrawDeltaIndexBuffer{0};
   std::atomic<std::uint64_t> drawCalls{0};
   std::atomic<std::uint64_t> drawIndexedCalls{0};
   std::atomic<std::uint64_t> drawExpandedIndexedCalls{0};
@@ -632,7 +662,7 @@ struct CounterEntry {
   double percentile;
 };
 
-constexpr std::array<CounterEntry, 436> kCounterTable = {{
+constexpr CounterEntry kCounterTable[] = {
     {"chunk_admit", CounterEntry::Kind::UnsignedCount, &Counters::chunkAdmit, nullptr, nullptr, 0.0},
     {"chunk_reject", CounterEntry::Kind::UnsignedCount, &Counters::chunkReject, nullptr, nullptr, 0.0},
     {"ring_arena_heap_fallback_count", CounterEntry::Kind::UnsignedCount, &Counters::ringArenaHeapFallbackCount, nullptr, nullptr, 0.0},
@@ -682,6 +712,36 @@ constexpr std::array<CounterEntry, 436> kCounterTable = {{
     {"hazard_bloom", CounterEntry::Kind::UnsignedCount, &Counters::hazardBloomOverlaps, nullptr, nullptr, 0.0},
     {"hazard_exact", CounterEntry::Kind::UnsignedCount, &Counters::hazardExactOverlaps, nullptr, nullptr, 0.0},
     {"hazard_bloom_false_positive", CounterEntry::Kind::UnsignedCount, &Counters::hazardBloomFalsePositive, nullptr, nullptr, 0.0},
+    {"commit_chunk_draw_records", CounterEntry::Kind::UnsignedCount, &Counters::commitChunkDrawRecords, nullptr, nullptr, 0.0},
+    {"commit_chunk_draw_indexed", CounterEntry::Kind::UnsignedCount, &Counters::commitChunkDrawIndexed, nullptr, nullptr, 0.0},
+    {"commit_chunk_draw_no_delta", CounterEntry::Kind::UnsignedCount, &Counters::commitChunkDrawNoDelta, nullptr, nullptr, 0.0},
+    {"commit_chunk_draw_state_delta", CounterEntry::Kind::UnsignedCount, &Counters::commitChunkDrawStateDelta, nullptr, nullptr, 0.0},
+    {"commit_chunk_draw_run_scans", CounterEntry::Kind::UnsignedCount, &Counters::commitChunkDrawRunScans, nullptr, nullptr, 0.0},
+    {"commit_chunk_draw_run_submits", CounterEntry::Kind::UnsignedCount, &Counters::commitChunkDrawRunSubmits, nullptr, nullptr, 0.0},
+    {"commit_chunk_draw_run_records", CounterEntry::Kind::UnsignedCount, &Counters::commitChunkDrawRunRecords, nullptr, nullptr, 0.0},
+    {"commit_chunk_draw_run_break_first_delta", CounterEntry::Kind::UnsignedCount, &Counters::commitChunkDrawRunBreakFirstDelta, nullptr, nullptr, 0.0},
+    {"commit_chunk_draw_run_break_state_delta", CounterEntry::Kind::UnsignedCount, &Counters::commitChunkDrawRunBreakStateDelta, nullptr, nullptr, 0.0},
+    {"commit_chunk_draw_run_break_type", CounterEntry::Kind::UnsignedCount, &Counters::commitChunkDrawRunBreakType, nullptr, nullptr, 0.0},
+    {"commit_chunk_draw_run_break_end", CounterEntry::Kind::UnsignedCount, &Counters::commitChunkDrawRunBreakEnd, nullptr, nullptr, 0.0},
+    {"commit_chunk_draw_run_break_invalid", CounterEntry::Kind::UnsignedCount, &Counters::commitChunkDrawRunBreakInvalid, nullptr, nullptr, 0.0},
+    {"commit_chunk_draw_delta_render_state", CounterEntry::Kind::UnsignedCount, &Counters::commitChunkDrawDeltaRenderState, nullptr, nullptr, 0.0},
+    {"commit_chunk_draw_delta_texture", CounterEntry::Kind::UnsignedCount, &Counters::commitChunkDrawDeltaTexture, nullptr, nullptr, 0.0},
+    {"commit_chunk_draw_delta_stream", CounterEntry::Kind::UnsignedCount, &Counters::commitChunkDrawDeltaStream, nullptr, nullptr, 0.0},
+    {"commit_chunk_draw_delta_fvf", CounterEntry::Kind::UnsignedCount, &Counters::commitChunkDrawDeltaFvf, nullptr, nullptr, 0.0},
+    {"commit_chunk_draw_delta_shader", CounterEntry::Kind::UnsignedCount, &Counters::commitChunkDrawDeltaShader, nullptr, nullptr, 0.0},
+    {"commit_chunk_draw_delta_vdecl", CounterEntry::Kind::UnsignedCount, &Counters::commitChunkDrawDeltaVertexDecl, nullptr, nullptr, 0.0},
+    {"commit_chunk_draw_delta_rt", CounterEntry::Kind::UnsignedCount, &Counters::commitChunkDrawDeltaRenderTarget, nullptr, nullptr, 0.0},
+    {"commit_chunk_draw_delta_ds", CounterEntry::Kind::UnsignedCount, &Counters::commitChunkDrawDeltaDepthStencil, nullptr, nullptr, 0.0},
+    {"commit_chunk_draw_delta_viewport", CounterEntry::Kind::UnsignedCount, &Counters::commitChunkDrawDeltaViewport, nullptr, nullptr, 0.0},
+    {"commit_chunk_draw_delta_scissor", CounterEntry::Kind::UnsignedCount, &Counters::commitChunkDrawDeltaScissor, nullptr, nullptr, 0.0},
+    {"commit_chunk_draw_delta_tss", CounterEntry::Kind::UnsignedCount, &Counters::commitChunkDrawDeltaTextureStageState, nullptr, nullptr, 0.0},
+    {"commit_chunk_draw_delta_sampler", CounterEntry::Kind::UnsignedCount, &Counters::commitChunkDrawDeltaSamplerState, nullptr, nullptr, 0.0},
+    {"commit_chunk_draw_delta_material", CounterEntry::Kind::UnsignedCount, &Counters::commitChunkDrawDeltaMaterial, nullptr, nullptr, 0.0},
+    {"commit_chunk_draw_delta_clip", CounterEntry::Kind::UnsignedCount, &Counters::commitChunkDrawDeltaClipPlane, nullptr, nullptr, 0.0},
+    {"commit_chunk_draw_delta_transform", CounterEntry::Kind::UnsignedCount, &Counters::commitChunkDrawDeltaTransform, nullptr, nullptr, 0.0},
+    {"commit_chunk_draw_delta_light", CounterEntry::Kind::UnsignedCount, &Counters::commitChunkDrawDeltaLight, nullptr, nullptr, 0.0},
+    {"commit_chunk_draw_delta_light_enable", CounterEntry::Kind::UnsignedCount, &Counters::commitChunkDrawDeltaLightEnable, nullptr, nullptr, 0.0},
+    {"commit_chunk_draw_delta_ib", CounterEntry::Kind::UnsignedCount, &Counters::commitChunkDrawDeltaIndexBuffer, nullptr, nullptr, 0.0},
     {"draw_calls", CounterEntry::Kind::UnsignedCount, &Counters::drawCalls, nullptr, nullptr, 0.0},
     {"draw_indexed", CounterEntry::Kind::UnsignedCount, &Counters::drawIndexedCalls, nullptr, nullptr, 0.0},
     {"draw_expanded_indexed", CounterEntry::Kind::UnsignedCount, &Counters::drawExpandedIndexedCalls, nullptr, nullptr, 0.0},
@@ -1071,7 +1131,7 @@ constexpr std::array<CounterEntry, 436> kCounterTable = {{
     {"present_set_props_wait_p50_ms", CounterEntry::Kind::PercentileMs, nullptr, nullptr, &Counters::presentSetPropsWaitRing, 0.5},
     {"present_set_props_wait_p95_ms", CounterEntry::Kind::PercentileMs, nullptr, nullptr, &Counters::presentSetPropsWaitRing, 0.95},
     {"present_set_props_wait_p99_ms", CounterEntry::Kind::PercentileMs, nullptr, nullptr, &Counters::presentSetPropsWaitRing, 0.99},
-}};
+};
 
 void report() {
   if (!enabledFlag()) {
@@ -1280,6 +1340,74 @@ void countHazardProbe(bool bloomOverlap, bool exactOverlap) {
   }
   if (bloomOverlap && !exactOverlap) {
     add(counters().hazardBloomFalsePositive);
+  }
+}
+
+void countCommitChunkDrawReplay(bool indexed, std::uint32_t deltaMask) {
+  auto& c = counters();
+  add(c.commitChunkDrawRecords);
+  if (indexed) {
+    add(c.commitChunkDrawIndexed);
+  }
+  if (deltaMask == 0) {
+    add(c.commitChunkDrawNoDelta);
+    return;
+  }
+
+  add(c.commitChunkDrawStateDelta);
+  auto addIf = [&](std::uint32_t bit, std::atomic<std::uint64_t>& counter) {
+    if ((deltaMask & bit) != 0) {
+      add(counter);
+    }
+  };
+  addIf(CommitChunkDrawDeltaRenderState, c.commitChunkDrawDeltaRenderState);
+  addIf(CommitChunkDrawDeltaTexture, c.commitChunkDrawDeltaTexture);
+  addIf(CommitChunkDrawDeltaStream, c.commitChunkDrawDeltaStream);
+  addIf(CommitChunkDrawDeltaFvf, c.commitChunkDrawDeltaFvf);
+  addIf(CommitChunkDrawDeltaShader, c.commitChunkDrawDeltaShader);
+  addIf(CommitChunkDrawDeltaVertexDecl, c.commitChunkDrawDeltaVertexDecl);
+  addIf(CommitChunkDrawDeltaRenderTarget, c.commitChunkDrawDeltaRenderTarget);
+  addIf(CommitChunkDrawDeltaDepthStencil, c.commitChunkDrawDeltaDepthStencil);
+  addIf(CommitChunkDrawDeltaViewport, c.commitChunkDrawDeltaViewport);
+  addIf(CommitChunkDrawDeltaScissor, c.commitChunkDrawDeltaScissor);
+  addIf(CommitChunkDrawDeltaTextureStageState, c.commitChunkDrawDeltaTextureStageState);
+  addIf(CommitChunkDrawDeltaSamplerState, c.commitChunkDrawDeltaSamplerState);
+  addIf(CommitChunkDrawDeltaMaterial, c.commitChunkDrawDeltaMaterial);
+  addIf(CommitChunkDrawDeltaClipPlane, c.commitChunkDrawDeltaClipPlane);
+  addIf(CommitChunkDrawDeltaTransform, c.commitChunkDrawDeltaTransform);
+  addIf(CommitChunkDrawDeltaLight, c.commitChunkDrawDeltaLight);
+  addIf(CommitChunkDrawDeltaLightEnable, c.commitChunkDrawDeltaLightEnable);
+  addIf(CommitChunkDrawDeltaIndexBuffer, c.commitChunkDrawDeltaIndexBuffer);
+}
+
+void countCommitChunkDrawRunScan(std::uint32_t stop, std::uint32_t recordCount) {
+  auto& c = counters();
+  add(c.commitChunkDrawRunScans);
+  if (recordCount >= 2u) {
+    add(c.commitChunkDrawRunSubmits);
+    add(c.commitChunkDrawRunRecords, recordCount);
+    return;
+  }
+
+  // Mirrors ImportedDrawRunScanStop without exposing device_c headers here.
+  switch (stop) {
+  case 1:
+    add(c.commitChunkDrawRunBreakFirstDelta);
+    break;
+  case 2:
+    add(c.commitChunkDrawRunBreakEnd);
+    break;
+  case 3:
+    add(c.commitChunkDrawRunBreakInvalid);
+    break;
+  case 4:
+    add(c.commitChunkDrawRunBreakType);
+    break;
+  case 5:
+    add(c.commitChunkDrawRunBreakStateDelta);
+    break;
+  default:
+    break;
   }
 }
 

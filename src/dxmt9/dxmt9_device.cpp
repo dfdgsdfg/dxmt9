@@ -220,6 +220,9 @@ class DeviceImpl final : public Device {
                      std::span<const core::DrawParamPayloadView> payloads) override {
     queue_.submitDrawRun(std::move(state), uniforms, draws, payloads);
   }
+  void submitDrawRunBatch(std::span<core::DrawRunSubmission> submissions) override {
+    queue_.submitDrawRunBatch(submissions);
+  }
   void markChunkResources(std::span<const core::ChunkHandleEntry> entries) override {
     queue_.markChunkResources(entries);
   }

@@ -1871,6 +1871,31 @@ void Device::submitDrawRunInternalFromCurrentState(
   submitDrawRunInternal(std::move(state), cached.uniforms, draws, payloads);
 }
 
+HResult Device::snapshotDrawSubmissionFromCurrentState(
+    DrawParam draw, DrawRunSubmission &submission) {
+  if (draw.primitiveType == PrimitiveType::TriangleFan) {
+    return D3DERR_INVALIDCALL;
+  }
+
+  draw.primitiveType = canonicalPrimitiveType(draw.primitiveType);
+  const auto &cached =
+      cachedBaseDrawState(drawRunUsesBoundIndexBuffer(
+          std::span<const DrawParam>(&draw, 1), {}));
+  submission.uniforms = cached.uniforms;
+  submission.draw = draw;
+  submission.payload = {};
+  submission.state = CanonicalDrawState{
+      cached.hot,
+      cached.shaderLayout,
+      makeDrawDebugSnapshot(
+          DrawCallArgs{draw.primitiveType, draw.primitiveCount,
+                       draw.startVertex, draw.baseVertexIndex,
+                       draw.startIndex, draw.indexType},
+          cached.hot),
+  };
+  return D3D_OK;
+}
+
 void Device::submitDrawRunInternal(
     CanonicalDrawState state, const DrawUniformPayload &uniforms,
     std::span<const DrawParam> draws,
@@ -1948,6 +1973,36 @@ void Device::submitDrawRunInternal(
   }
   upperDevice_->submitDrawRun(std::move(state), uniforms, draws, payloads);
   submittedSequenceId_ += drawCount;
+  DXMT_ASSERT(submittedSequenceId_ >= completedSequenceId_);
+}
+
+void Device::submitDrawSubmissionBatch(
+    std::span<DrawRunSubmission> submissions) {
+  if (submissions.empty()) {
+    return;
+  }
+
+  if (renderTraceEnabled()) {
+    for (auto &submission : submissions) {
+      const std::span<const DrawParam> draws(&submission.draw, 1);
+      std::span<const DrawParamPayloadView> payloads{};
+      if (!submission.payload.userVertexData.empty() ||
+          !submission.payload.userIndexData.empty()) {
+        payloads = std::span<const DrawParamPayloadView>(&submission.payload, 1);
+      }
+      submitDrawRunInternal(std::move(submission.state), submission.uniforms,
+                            draws, payloads);
+    }
+    return;
+  }
+
+  if (activeOcclusionQuery_) {
+    for (const auto &submission : submissions) {
+      activeOcclusionCount_ += submission.draw.primitiveCount;
+    }
+  }
+  upperDevice_->submitDrawRunBatch(submissions);
+  submittedSequenceId_ += static_cast<u64>(submissions.size());
   DXMT_ASSERT(submittedSequenceId_ >= completedSequenceId_);
 }
 

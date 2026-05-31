@@ -139,6 +139,7 @@ class Device {
                              const core::DrawUniformPayload&,
                              std::span<const core::DrawParam>,
                              std::span<const core::DrawParamPayloadView>) {}
+  virtual void submitDrawRunBatch(std::span<core::DrawRunSubmission>) {}
   virtual void submitClear(const core::ClearDesc&) {}
   virtual void submitSurfaceCopy(const core::SurfaceCopyDesc&) {}
   virtual void submitStretchRect(const core::StretchRectDesc&) {}

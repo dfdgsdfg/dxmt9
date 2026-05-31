@@ -801,6 +801,13 @@ struct DrawParamPayloadView {
   std::span<const u8> userIndexData{};
 };
 
+struct DrawRunSubmission {
+  CanonicalDrawState state{};
+  DrawUniformPayload uniforms{};
+  DrawParam draw{};
+  DrawParamPayloadView payload{};
+};
+
 namespace fixture {
 
 // Fixture/offline draw shape kept out of production draw submission. Runtime
@@ -1419,6 +1426,9 @@ class Device : public std::enable_shared_from_this<Device> {
   // by the chunk importer when N consecutive D9C_COMMAND_RECORD_DRAW_* records
   // carry no state delta.
   HResult drawPrimitiveRun(std::span<const DrawParam> draws);
+  HResult snapshotDrawSubmissionFromCurrentState(DrawParam draw,
+                                                 DrawRunSubmission& submission);
+  void submitDrawSubmissionBatch(std::span<DrawRunSubmission> submissions);
   HResult present();
   HResult reset(const PresentParameters& params);
   HResult checkDeviceMultiSampleType(Format format, MultiSampleType type) const;

@@ -795,6 +795,37 @@ void CommandQueue::submitDrawRun(core::CanonicalDrawState state,
   maybeCommitDrawChunkUnlocked(*this, pool_, lock);
 }
 
+void CommandQueue::submitDrawRunBatch(
+    std::span<core::DrawRunSubmission> submissions) {
+  if (submissions.empty()) {
+    return;
+  }
+  DXMT_DEBUG_NO_HEAP_ALLOC_SCOPE("submitDrawRunBatch");
+  for (std::size_t i = 0; i < submissions.size(); ++i) {
+    perf::countSubmitDraw();
+  }
+  PerfScope scope(perf::countSubmitDrawCpuTime);
+  std::unique_lock lock(mutex_);
+  for (auto& submission : submissions) {
+    ensureWritingSlotUnlocked(*this, lock);
+    if (!skipDrawResourceMarking_) {
+      pool_.markDrawResources(submission.state.hot, seqIdForMark(*this, 0));
+    }
+    currentBackBuffer_ = submission.state.hot.colorAttachments[0].handle;
+
+    const std::span<const core::DrawParam> draws(&submission.draw, 1);
+    std::span<const core::DrawParamPayloadView> payloads{};
+    if (!submission.payload.userVertexData.empty() ||
+        !submission.payload.userIndexData.empty()) {
+      payloads = std::span<const core::DrawParamPayloadView>(&submission.payload, 1);
+    }
+    currentSlotUnlocked(*this).appendDrawRun(std::move(submission.state),
+                                             submission.uniforms, draws,
+                                             payloads);
+    maybeCommitDrawChunkUnlocked(*this, pool_, lock);
+  }
+}
+
 void CommandQueue::submitClear(const core::ClearDesc& desc) {
   perf::countSubmitClear();
   std::unique_lock lock(mutex_);
