@@ -426,10 +426,18 @@ core::HResult CommandQueue::generateTextureMipSublevels(core::TextureHandle hand
         flushResult.value, /*timeout-ms*/ 1000);
   }
 
-  std::lock_guard lock(mutex_);
-  auto* record = pool_.findTexture(handle.value);
-  if (!record || !record->texture || record->desc.levels <= 1) {
-    return record ? core::D3D_OK : core::D3DERR_INVALIDCALL;
+  WMT::Reference<WMT::Texture> texture;
+  WMT::Heap heap{};
+  bool isHeapBacked = false;
+  {
+    std::lock_guard lock(mutex_);
+    auto* record = pool_.findTexture(handle.value);
+    if (!record || !record->texture || record->desc.levels <= 1) {
+      return record ? core::D3D_OK : core::D3DERR_INVALIDCALL;
+    }
+    texture = record->texture;
+    heap = record->heap;
+    isHeapBacked = record->isHeapBacked;
   }
 
   auto commandBuffer = newCommandBuffer();
@@ -440,11 +448,11 @@ core::HResult CommandQueue::generateTextureMipSublevels(core::TextureHandle hand
   if (!blit) {
     return core::D3DERR_INVALIDCALL;
   }
-  if (record->isHeapBacked && record->heap.handle != 0) {
-    blit.useHeap(record->heap);
+  if (isHeapBacked && heap.handle != 0) {
+    blit.useHeap(heap);
     perf::countUseHeap();
   }
-  blit.generateMipmaps(WMT::Texture{record->texture.handle});
+  blit.generateMipmaps(WMT::Texture{texture.handle});
   blit.endEncoding();
   commandBuffer.commit();
   const auto started = std::chrono::steady_clock::now();

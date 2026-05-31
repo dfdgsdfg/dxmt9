@@ -200,6 +200,11 @@ makeContainedDrawShaderSources(const drawshader::ShaderSourceContext& shaderSour
 std::array<BlendAttachmentKey, core::kMaxRenderTargets>
 makeBlendAttachmentKeys(core::FlatDrawStateView state, bool forceVisibleDraw = false);
 
+// Fill PSOs embed the fill colour directly into the generated fragment source,
+// so every RGBA channel must participate in the immutable pipeline key.
+ShaderVariantKey makeFillPipelineKey(const core::ColorRGBA& color,
+                                     u32 pixelFormat) noexcept;
+
 }  // namespace detail
 
 struct DepthStencilKey {

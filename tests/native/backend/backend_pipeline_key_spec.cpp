@@ -488,6 +488,33 @@ void testShaderVariantProbeKeyDropsOnlyActualSourceHashes() {
         "probe and source-backed keys occupy distinct hash identities");
 }
 
+void testFillPipelineKeyUsesFullRgbaSourceIdentity() {
+  const ColorRGBA base{0.25f, 0.5f, 0.75f, 1.0f};
+  const auto baseKey =
+      dxmt9::pipeline::detail::makeFillPipelineKey(base, WMTPixelFormatBGRA8Unorm);
+  const auto sameKey =
+      dxmt9::pipeline::detail::makeFillPipelineKey(base, WMTPixelFormatBGRA8Unorm);
+  check(baseKey == sameKey, "identical fill color and format reuse the same fill PSO key");
+
+  auto blueChanged = base;
+  blueChanged.b = 0.125f;
+  const auto blueKey =
+      dxmt9::pipeline::detail::makeFillPipelineKey(blueChanged, WMTPixelFormatBGRA8Unorm);
+  check(!(baseKey == blueKey), "fill PSO key changes when embedded blue source changes");
+  check(dxmt9::pipeline::ShaderVariantKeyHash{}(baseKey) !=
+            dxmt9::pipeline::ShaderVariantKeyHash{}(blueKey),
+        "fill PSO hash changes when embedded blue source changes");
+
+  auto alphaChanged = base;
+  alphaChanged.a = 0.5f;
+  const auto alphaKey =
+      dxmt9::pipeline::detail::makeFillPipelineKey(alphaChanged, WMTPixelFormatBGRA8Unorm);
+  check(!(baseKey == alphaKey), "fill PSO key changes when embedded alpha source changes");
+  check(dxmt9::pipeline::ShaderVariantKeyHash{}(baseKey) !=
+            dxmt9::pipeline::ShaderVariantKeyHash{}(alphaKey),
+        "fill PSO hash changes when embedded alpha source changes");
+}
+
 void testContainedDrawShaderSourcesCarryActualSourceHashes() {
   DrawDesc desc{};
   desc.vertexShader.hash = 0x1001u;
@@ -749,6 +776,7 @@ int main() {
     testShaderVariantKeyHashRespondsToLayoutAndBlendState();
     testShaderVariantKeyCarriesSourceIdentity();
     testShaderVariantProbeKeyDropsOnlyActualSourceHashes();
+    testFillPipelineKeyUsesFullRgbaSourceIdentity();
     testContainedDrawShaderSourcesCarryActualSourceHashes();
     testProgrammableShaderVariantKeyUsesFullVertexDeclHash();
     testPipelineHelpersUseExplicitFlatInputs();

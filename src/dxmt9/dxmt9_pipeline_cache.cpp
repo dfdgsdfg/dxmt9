@@ -14,17 +14,22 @@
 #include <cstdint>
 #include <cstdlib>
 #include <cstring>
+#include <condition_variable>
+#include <deque>
 #include <exception>
 #include <future>
 #include <optional>
 #include <string_view>
+#include <thread>
 #include <utility>
+#include <vector>
 
 namespace dxmt9::pipeline {
 
 namespace {
 constexpr u64 kFnvOffset = 1469598103934665603ull;
 constexpr u64 kFnvPrime = 1099511628211ull;
+constexpr u64 kFillPipelineKeyTag = 0x66696c6c5f70736full; // "fill_pso"
 
 inline u64 mix(u64 hash, u64 value) {
   hash ^= value;
@@ -83,6 +88,94 @@ makeReadyPipelineFuture(WMT::Reference<WMT::RenderPipelineState> value = {}) {
   std::promise<WMT::Reference<WMT::RenderPipelineState>> promise;
   promise.set_value(std::move(value));
   return promise.get_future().share();
+}
+
+class PipelineCompileQueue {
+ public:
+  using Result = WMT::Reference<WMT::RenderPipelineState>;
+
+  PipelineCompileQueue() {
+    std::size_t workers = 0;
+    if (const char* env = std::getenv("DXMT9_PSO_COMPILE_THREADS");
+        env && env[0] != '\0') {
+      char* end = nullptr;
+      const auto parsed = std::strtoull(env, &end, 10);
+      if (end != env) {
+        workers = static_cast<std::size_t>(parsed);
+      }
+    }
+    if (workers == 0) {
+      const auto hw = std::thread::hardware_concurrency();
+      workers = hw == 0 ? 2u : std::min<std::size_t>(4u, std::max<std::size_t>(2u, hw / 2u));
+    }
+    workers = std::clamp<std::size_t>(workers, 1u, 8u);
+    workers_.reserve(workers);
+    for (std::size_t i = 0; i < workers; ++i) {
+      workers_.emplace_back([this] { run(); });
+    }
+  }
+
+  ~PipelineCompileQueue() {
+    {
+      std::lock_guard lock(mutex_);
+      stop_ = true;
+    }
+    cv_.notify_all();
+    for (auto& worker : workers_) {
+      if (worker.joinable()) {
+        worker.join();
+      }
+    }
+  }
+
+  PipelineCompileQueue(const PipelineCompileQueue&) = delete;
+  PipelineCompileQueue& operator=(const PipelineCompileQueue&) = delete;
+
+  template <typename Fn>
+  std::shared_future<Result> submit(Fn&& fn) {
+    std::packaged_task<Result()> task(std::forward<Fn>(fn));
+    auto future = task.get_future().share();
+    {
+      std::lock_guard lock(mutex_);
+      jobs_.push_back(std::move(task));
+    }
+    cv_.notify_one();
+    return future;
+  }
+
+ private:
+  void run() {
+    while (true) {
+      std::packaged_task<Result()> task;
+      {
+        std::unique_lock lock(mutex_);
+        cv_.wait(lock, [this] { return stop_ || !jobs_.empty(); });
+        if (stop_ && jobs_.empty()) {
+          return;
+        }
+        task = std::move(jobs_.front());
+        jobs_.pop_front();
+      }
+      task();
+    }
+  }
+
+  std::mutex mutex_{};
+  std::condition_variable cv_{};
+  bool stop_ = false;
+  std::deque<std::packaged_task<Result()>> jobs_{};
+  std::vector<std::thread> workers_{};
+};
+
+PipelineCompileQueue& pipelineCompileQueue() {
+  static PipelineCompileQueue queue;
+  return queue;
+}
+
+template <typename Fn>
+std::shared_future<WMT::Reference<WMT::RenderPipelineState>>
+submitPipelineBuild(Fn&& fn) {
+  return pipelineCompileQueue().submit(std::forward<Fn>(fn));
 }
 
 }  // namespace
@@ -218,6 +311,21 @@ detail::makeBlendAttachmentKeys(core::FlatDrawStateView state, bool forceVisible
         forceVisibleDraw ? 0xfu : core::flatStateOr(rs, kColorWriteSlots[i], 0xfu);
   }
   return blendAttachments;
+}
+
+ShaderVariantKey detail::makeFillPipelineKey(const core::ColorRGBA& color,
+                                             u32 pixelFormat) noexcept {
+  ShaderVariantKey key{};
+  key.hash = kFnvOffset;
+  key.hash = mix(key.hash, kFillPipelineKeyTag);
+  key.hash = mix(key.hash, static_cast<u64>(std::bit_cast<u32>(color.r)));
+  key.hash = mix(key.hash, static_cast<u64>(std::bit_cast<u32>(color.g)));
+  key.hash = mix(key.hash, static_cast<u64>(std::bit_cast<u32>(color.b)));
+  key.hash = mix(key.hash, static_cast<u64>(std::bit_cast<u32>(color.a)));
+  key.hash = mix(key.hash, pixelFormat);
+  key.colorFormats[0] = pixelFormat;
+  key.blend[0].pixelFormat = pixelFormat;
+  return key;
 }
 
 std::size_t BlendAttachmentKeyHash::operator()(const BlendAttachmentKey& key) const noexcept {
@@ -356,20 +464,14 @@ Cache::getOrBuildFillPipeline(WMT::Reference<WMT::Device> device,
                                 WMT::Reference<WMT::BinaryArchive>* archive,
                                 const std::string* archivePath) {
   (void)archivePath;
-  ShaderVariantKey key{};
-  // Hash includes color channels + format so matching fills share a pipeline.
-  key.hash = static_cast<u64>(std::bit_cast<u32>(color.r)) ^
-             (static_cast<u64>(std::bit_cast<u32>(color.g)) << 1) ^ pixelFormat;
-  key.colorFormats[0] = pixelFormat;
-  key.blend[0].pixelFormat = pixelFormat;
+  const ShaderVariantKey key = detail::makeFillPipelineKey(color, pixelFormat);
   std::lock_guard lock(mutex);
   if (auto it = fill.find(key); it != fill.end()) {
     perf::countPipelineCacheHit(perf::PipelineKind::Fill);
     return it->second.future;
   }
   perf::countPipelineCacheMiss(perf::PipelineKind::Fill);
-  auto future = std::async(std::launch::async,
-                            [device, color, pixelFormat, archive]() mutable {
+  auto shared = submitPipelineBuild([device, color, pixelFormat, archive]() mutable {
     auto vsLib = shaders::makeLibrary(device, shaders::makeGenericVertexSource(shaders::makeHash("fill")));
     auto fsLib = shaders::makeLibrary(device, shaders::makeGenericFragmentSource(color, shaders::makeHash("fill")));
     if (!vsLib || !fsLib) {
@@ -401,7 +503,6 @@ Cache::getOrBuildFillPipeline(WMT::Reference<WMT::Device> device,
     }
     return pso;
   });
-  auto shared = future.share();
   fill.emplace(key, Entry{shared});
   return shared;
 }
@@ -427,8 +528,7 @@ Cache::getOrBuildStretchPipeline(WMT::Reference<WMT::Device> device,
   }
   perf::countPipelineCacheMiss(perf::PipelineKind::Stretch);
   const u32 sampleCountVal = key.sampleCount;
-  auto future = std::async(std::launch::async,
-                            [device, sampleCountVal, pixelFormat, archive]() mutable {
+  auto shared = submitPipelineBuild([device, sampleCountVal, pixelFormat, archive]() mutable {
     auto vsLib = shaders::makeLibrary(device, shaders::makeTexturedVertexSource(shaders::makeHash("stretch")));
     auto fsLib = shaders::makeLibrary(device, shaders::makeTexturedFragmentSource(shaders::makeHash("stretch")));
     if (!vsLib || !fsLib) return WMT::Reference<WMT::RenderPipelineState>{};
@@ -454,7 +554,6 @@ Cache::getOrBuildStretchPipeline(WMT::Reference<WMT::Device> device,
     }
     return pso;
   });
-  auto shared = future.share();
   this->stretch.emplace(key, Entry{shared});
   return shared;
 }
@@ -514,8 +613,7 @@ Cache::getOrBuildDrawPipeline(WMT::Reference<WMT::Device> device,
       return it->second.future;
     }
     perf::countPipelineCacheMiss(perf::PipelineKind::Draw);
-    auto future = std::async(
-        std::launch::async,
+    auto shared = submitPipelineBuild(
         [device, sourceKey, tileSource = std::move(tileSource), archive]() mutable {
           auto tileLib = shaders::makeLibrary(device, tileSource);
           if (!tileLib) {
@@ -555,7 +653,6 @@ Cache::getOrBuildDrawPipeline(WMT::Reference<WMT::Device> device,
           (void)archive;
           return pso;
         });
-    auto shared = future.share();
     this->draw.emplace(sourceKey, Entry{shared});
     this->drawProbe[probeKey] = sourceKey;
     return shared;
@@ -574,8 +671,7 @@ Cache::getOrBuildDrawPipeline(WMT::Reference<WMT::Device> device,
       return it->second.future;
     }
     perf::countPipelineCacheMiss(perf::PipelineKind::Draw);
-    auto future = std::async(
-        std::launch::async,
+    auto shared = submitPipelineBuild(
         [device, sourceKey, sources = std::move(*sources), archive]() mutable {
           auto vsLib = shaders::makeLibrary(device, sources.vertex);
           auto fsLib = shaders::makeLibrary(device, sources.fragment);
@@ -635,7 +731,6 @@ Cache::getOrBuildDrawPipeline(WMT::Reference<WMT::Device> device,
           }
           return pso;
         });
-    auto shared = future.share();
     this->draw.emplace(sourceKey, Entry{shared});
     this->drawProbe[probeKey] = sourceKey;
     return shared;
@@ -647,8 +742,7 @@ buildPresentPipeline(WMT::Reference<WMT::Device> device, bool opaqueAlpha,
                      WMT::Reference<WMT::BinaryArchive>* archive,
                      const std::string* archivePath) {
   (void)archivePath;
-  auto future = std::async(std::launch::async,
-                            [device, opaqueAlpha, archive]() mutable {
+  return submitPipelineBuild([device, opaqueAlpha, archive]() mutable {
     auto vsLib = shaders::makeLibrary(device, shaders::makeTexturedVertexSource(shaders::makeHash("present")));
     auto fsLib = shaders::makeLibrary(device, shaders::makeTexturedFragmentSource(
                                           shaders::makeHash(opaqueAlpha ? "present-opaque" : "present"),
@@ -674,7 +768,6 @@ buildPresentPipeline(WMT::Reference<WMT::Device> device, bool opaqueAlpha,
     }
     return pso;
   });
-  return future.share();
 }
 
 std::shared_future<WMT::Reference<WMT::RenderPipelineState>>
@@ -682,8 +775,7 @@ buildGammaApplyPresentPipeline(WMT::Reference<WMT::Device> device, bool opaqueAl
                                WMT::Reference<WMT::BinaryArchive>* archive,
                                const std::string* archivePath) {
   (void)archivePath;
-  auto future = std::async(std::launch::async,
-                            [device, opaqueAlpha, archive]() mutable {
+  return submitPipelineBuild([device, opaqueAlpha, archive]() mutable {
     auto vsLib = shaders::makeLibrary(device, shaders::makeTexturedVertexSource(shaders::makeHash("present-gamma")));
     auto fsLib = shaders::makeLibrary(device, shaders::makeGammaApplyFragmentSource(
                                           shaders::makeHash(opaqueAlpha ? "present-gamma-opaque" : "present-gamma"),
@@ -709,7 +801,6 @@ buildGammaApplyPresentPipeline(WMT::Reference<WMT::Device> device, bool opaqueAl
     }
     return pso;
   });
-  return future.share();
 }
 
 std::shared_future<WMT::Reference<WMT::RenderPipelineState>>
