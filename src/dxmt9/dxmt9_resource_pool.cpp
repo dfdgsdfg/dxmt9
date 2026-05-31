@@ -151,7 +151,7 @@ void releaseHeapIfBacked(HeapManager* heapManager, const TextureRecord& record) 
 
 template <typename Arena>
 void gcArena(Arena& arena, u64 completedSeqId, HeapManager* heapManager) {
-  arena.reclaimCompleted(completedSeqId, [heapManager, completedSeqId](const auto& record) {
+  arena.reclaimCompleted(completedSeqId, [heapManager](const auto& record) {
     // TLA+ NoUseAfterFree (R-VERIF-3.1) — the watermark gate that also
     // implements R-VERIF-3.4 EncoderPointerStable in C++: by the time
     // record.lastUsedSeqId <= completedSeqId, no in-flight encoder can
@@ -178,31 +178,31 @@ void Pool::reclaimCompleted(u64 completedSeqId) {
 }
 
 bool Pool::markBufferDestroyAndGc(u64 handleValue, u64 completedSeqId) {
-  auto* record = bufferArena_.find(handleValue);
-  if (!record) {
+  if (!bufferArena_.update(handleValue, [](BufferRecord& record) {
+        record.destroyPending = true;
+      })) {
     return false;
   }
-  record->destroyPending = true;
   reclaimCompleted(completedSeqId);
   return true;
 }
 
 bool Pool::markTextureDestroyAndGc(u64 handleValue, u64 completedSeqId) {
-  auto* record = textureArena_.find(handleValue);
-  if (!record) {
+  if (!textureArena_.update(handleValue, [](TextureRecord& record) {
+        record.destroyPending = true;
+      })) {
     return false;
   }
-  record->destroyPending = true;
   reclaimCompleted(completedSeqId);
   return true;
 }
 
 bool Pool::markSurfaceDestroyAndGc(u64 handleValue, u64 completedSeqId) {
-  auto* record = surfaceArena_.find(handleValue);
-  if (!record) {
+  if (!surfaceArena_.update(handleValue, [](SurfaceRecord& record) {
+        record.destroyPending = true;
+      })) {
     return false;
   }
-  record->destroyPending = true;
   reclaimCompleted(completedSeqId);
   return true;
 }
@@ -846,23 +846,23 @@ void Pool::uploadTextureLevel(WMT::Device device,
 
 void Pool::markBufferUse(core::Handle handle, u64 seqId) {
   if (!handle) return;
-  if (auto* rec = findBuffer(handle.value)) {
-    rec->lastUsedSeqId = std::max(rec->lastUsedSeqId, seqId);
-  }
+  bufferArena_.update(handle.value, [seqId](BufferRecord& rec) {
+    rec.lastUsedSeqId = std::max(rec.lastUsedSeqId, seqId);
+  });
 }
 
 void Pool::markTextureUse(core::Handle handle, u64 seqId) {
   if (!handle) return;
-  if (auto* rec = findTexture(handle.value)) {
-    rec->lastUsedSeqId = std::max(rec->lastUsedSeqId, seqId);
-  }
+  textureArena_.update(handle.value, [seqId](TextureRecord& rec) {
+    rec.lastUsedSeqId = std::max(rec.lastUsedSeqId, seqId);
+  });
 }
 
 void Pool::markSurfaceUse(core::Handle handle, u64 seqId) {
   if (!handle) return;
-  if (auto* rec = findSurface(handle.value)) {
-    rec->lastUsedSeqId = std::max(rec->lastUsedSeqId, seqId);
-  }
+  surfaceArena_.update(handle.value, [seqId](SurfaceRecord& rec) {
+    rec.lastUsedSeqId = std::max(rec.lastUsedSeqId, seqId);
+  });
 }
 
 void Pool::markDrawResources(const core::FlatDrawStateRecord& hot, u64 seqId) {
@@ -919,28 +919,25 @@ void Pool::markDepthResolveResources(const core::DepthResolveDesc& desc, u64 seq
 }
 
 bool Pool::uploadBufferData(u64 handleValue, const std::uint8_t* bytes, std::size_t byteCount) {
-  auto* record = findBuffer(handleValue);
-  if (!record) {
-    return false;
-  }
-  record->shadow.assign(bytes, bytes + byteCount);
-  if (!record->buffer || byteCount == 0 || !record->contents) {
-    return true;
-  }
-  const std::size_t copySize = std::min(byteCount, static_cast<std::size_t>(record->desc.size));
-  std::memcpy(record->contents, bytes, copySize);
-  return true;
+  return bufferArena_.update(handleValue, [&](BufferRecord& record) {
+    record.shadow.assign(bytes, bytes + byteCount);
+    if (!record.buffer || byteCount == 0 || !record.contents) {
+      return;
+    }
+    const std::size_t copySize = std::min(byteCount, static_cast<std::size_t>(record.desc.size));
+    std::memcpy(record.contents, bytes, copySize);
+  });
 }
 
 u64 Pool::mapWaitSeqId(core::BufferHandle handle, u32 flags) const noexcept {
   if ((flags & core::UsageDiscard) != 0 || (flags & core::UsageNoOverwrite) != 0) {
     return 0;
   }
-  auto* record = findBuffer(handle.value);
-  if (!record) {
-    return 0;
-  }
-  return record->lastUsedSeqId;
+  u64 waitSeqId = 0;
+  bufferArena_.inspect(handle.value, [&waitSeqId](const BufferRecord& record) {
+    waitSeqId = record.lastUsedSeqId;
+  });
+  return waitSeqId;
 }
 
 // R-BACK-5.8 — rotate a DYNAMIC + DEFAULT buffer's rename ring on
@@ -1019,27 +1016,25 @@ void* Pool::finalizeBufferMap(WMT::Device device,
                               core::BufferHandle handle,
                               u32 flags,
                               u64 completedSeqId) {
-  auto* record = findBuffer(handle.value);
-  if (!record) {
-    return nullptr;
-  }
-  // R-BACK-5.8 — rotate the rename ring before zero-fill so the bytes
-  // we clear belong to the freshly active allocation, not the old
-  // (possibly still-in-flight) one. Non-DYNAMIC paths skip this.
-  if ((flags & core::UsageDiscard) != 0 && record->isDynamicRename &&
-      !record->renameRing.empty()) {
-    rotateDynamicRename(device, *record, completedSeqId);
-  }
-  if ((flags & core::UsageDiscard) != 0) {
-    std::fill(record->shadow.begin(), record->shadow.end(), 0);
-    if (record->contents) {
-      std::memset(record->contents, 0, record->shadow.size());
+  void* result = nullptr;
+  bufferArena_.update(handle.value, [&](BufferRecord& record) {
+    // R-BACK-5.8 — rotate the rename ring before zero-fill so the bytes
+    // we clear belong to the freshly active allocation, not the old
+    // (possibly still-in-flight) one. Non-DYNAMIC paths skip this.
+    if ((flags & core::UsageDiscard) != 0 && record.isDynamicRename &&
+        !record.renameRing.empty()) {
+      rotateDynamicRename(device, record, completedSeqId);
     }
-  }
-  if (record->contents) {
-    return record->contents;
-  }
-  return record->shadow.empty() ? nullptr : record->shadow.data();
+    if ((flags & core::UsageDiscard) != 0) {
+      std::fill(record.shadow.begin(), record.shadow.end(), 0);
+      if (record.contents) {
+        std::memset(record.contents, 0, record.shadow.size());
+      }
+    }
+    result = record.contents ? record.contents
+                             : (record.shadow.empty() ? nullptr : record.shadow.data());
+  });
+  return result;
 }
 
 }  // namespace dxmt9::resources

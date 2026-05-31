@@ -221,6 +221,18 @@ struct DepthStencilKeyHash {
   std::size_t operator()(const DepthStencilKey& key) const noexcept;
 };
 
+struct SamplerKey {
+  core::FlatStateSet<core::kMaxSamplerStates> states{};
+  u32 lodMinClampBits = 0;
+  bool supportArgumentBuffers = false;
+
+  friend bool operator==(const SamplerKey&, const SamplerKey&) = default;
+};
+
+struct SamplerKeyHash {
+  std::size_t operator()(const SamplerKey& key) const noexcept;
+};
+
 struct Entry {
   std::shared_future<WMT::Reference<WMT::RenderPipelineState>> future;
 };
@@ -229,6 +241,8 @@ using PipelineMap = std::unordered_map<ShaderVariantKey, Entry, ShaderVariantKey
 using DrawProbeMap = std::unordered_map<ShaderVariantKey, ShaderVariantKey, ShaderVariantKeyHash>;
 using DepthMap =
     std::unordered_map<DepthStencilKey, WMT::Reference<WMT::DepthStencilState>, DepthStencilKeyHash>;
+using SamplerMap =
+    std::unordered_map<SamplerKey, WMT::Reference<WMT::SamplerState>, SamplerKeyHash>;
 
 // Container for the draw-side pipeline caches + the depth/stencil state
 // cache. Members are public (same shape as the earlier in-file struct) so
@@ -244,6 +258,16 @@ class Cache {
   // Thread-safe; builds the WMT state object under `mutex`.
   WMT::Reference<WMT::DepthStencilState> depthStencilStateFor(WMT::Device& device,
                                                                 const DepthStencilKey& key);
+
+  // Immutable Metal sampler states are cached by the full D3D9 sampler state
+  // set plus LOD clamp and the argument-buffer support bit. Returning a
+  // Reference lets callers retain it for argbuf-backed draws without creating
+  // a fresh MTL sampler per bind.
+  WMT::Reference<WMT::SamplerState>
+  samplerStateFor(WMT::Reference<WMT::Device> device,
+                  const core::FlatStateSet<core::kMaxSamplerStates>& states,
+                  float lodMinClamp,
+                  bool supportArgumentBuffers);
 
   // Look up or build a solid-color fill pipeline keyed by (color, pixelFormat).
   // archive + archivePath are borrowed pointers for cache persistence; pass
@@ -326,6 +350,7 @@ class Cache {
   PipelineMap fill{};
   PipelineMap stretch{};
   DepthMap depth{};
+  SamplerMap sampler{};
 };
 
 // Build the textured blit (present) pipeline on a background task. Used by

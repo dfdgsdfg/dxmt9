@@ -1,4 +1,5 @@
 #include "dxmt9_pipeline_cache.hpp"
+#include "dxmt9/assert.hpp"
 #include "dxmt9_draw_shader.hpp"
 #include "dxmt9_draw_state.hpp"
 #include "dxmt9_ffp_shaders.hpp"
@@ -23,6 +24,11 @@
 #include <thread>
 #include <utility>
 #include <vector>
+
+namespace dxmt9::encoders {
+WMTSamplerInfo makeSamplerInfo(const core::FlatStateSet<core::kMaxSamplerStates>& states,
+                               float lodMinClamp);
+}
 
 namespace dxmt9::pipeline {
 
@@ -425,6 +431,21 @@ std::size_t DepthStencilKeyHash::operator()(const DepthStencilKey& key) const no
   return static_cast<std::size_t>(hash);
 }
 
+std::size_t SamplerKeyHash::operator()(const SamplerKey& key) const noexcept {
+  u64 hash = kFnvOffset;
+  hash = mix(hash, key.states.hash);
+  hash = mix(hash, key.states.count);
+  hash = mix(hash, static_cast<u64>(key.states.overflow));
+  const auto count = std::min<std::size_t>(key.states.count, key.states.entries.size());
+  for (std::size_t i = 0; i < count; ++i) {
+    hash = mix(hash, key.states.entries[i].state);
+    hash = mix(hash, key.states.entries[i].value);
+  }
+  hash = mix(hash, key.lodMinClampBits);
+  hash = mix(hash, static_cast<u64>(key.supportArgumentBuffers));
+  return static_cast<std::size_t>(hash);
+}
+
 WMT::Reference<WMT::DepthStencilState> Cache::depthStencilStateFor(WMT::Device& device,
                                                                      const DepthStencilKey& key) {
   std::lock_guard lock(mutex);
@@ -454,6 +475,28 @@ WMT::Reference<WMT::DepthStencilState> Cache::depthStencilStateFor(WMT::Device& 
   }
   auto state = device.newDepthStencilState(info);
   depth.emplace(key, state);
+  return state;
+}
+
+WMT::Reference<WMT::SamplerState>
+Cache::samplerStateFor(WMT::Reference<WMT::Device> device,
+                       const core::FlatStateSet<core::kMaxSamplerStates>& states,
+                       float lodMinClamp,
+                       bool supportArgumentBuffers) {
+  SamplerKey key{
+      .states = states,
+      .lodMinClampBits = std::bit_cast<u32>(lodMinClamp),
+      .supportArgumentBuffers = supportArgumentBuffers,
+  };
+  std::lock_guard lock(mutex);
+  if (auto it = sampler.find(key); it != sampler.end()) {
+    return it->second;
+  }
+  auto info = dxmt9::encoders::makeSamplerInfo(states, lodMinClamp);
+  info.support_argument_buffers = supportArgumentBuffers;
+  DXMT_ASSERT(device && "samplerStateFor called with stale/null Metal device handle");
+  auto state = device.newSamplerState(info);
+  sampler.emplace(std::move(key), state);
   return state;
 }
 

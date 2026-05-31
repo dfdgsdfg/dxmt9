@@ -2381,9 +2381,10 @@ bool encodeDraw(EncodeContext& ctx,
         if (suppressBaseStateLookup(ctx)) {
           resolved.sampler = ctx.drawRecorder->fragmentSamplerState;
         } else {
-          resolved.samplerRef =
-              makeSampler(ctx.device, binding.samplerStates,
-                          static_cast<float>(binding.textureLod));
+          resolved.samplerRef = ctx.cache.samplerStateFor(
+              ctx.device, binding.samplerStates,
+              static_cast<float>(binding.textureLod),
+              dxmt9::shaders::argbufResourceArrayEnabled());
           resolved.sampler = WMT::SamplerState{resolved.samplerRef.handle};
         }
       }
@@ -2446,6 +2447,9 @@ bool encodeDraw(EncodeContext& ctx,
           slot.stage = binding.stage;
           slot.texture = binding.texture;
           slot.sampler = binding.sampler;
+          if (binding.samplerRef) {
+            ctx.queue.retainSamplerForSeq(binding.samplerRef, seqId);
+          }
           if (binding.texture) countTextureBind();
           if (binding.sampler) countSamplerBind();
         }
@@ -2569,9 +2573,10 @@ bool encodeDraw(EncodeContext& ctx,
         if (suppressBaseStateLookup(ctx)) {
           resolved.sampler = ctx.drawRecorder->fragmentSamplerState;
         } else {
-          resolved.samplerRef =
-              makeSampler(ctx.device, binding.samplerStates,
-                          static_cast<float>(binding.textureLod));
+          resolved.samplerRef = ctx.cache.samplerStateFor(
+              ctx.device, binding.samplerStates,
+              static_cast<float>(binding.textureLod),
+              dxmt9::shaders::argbufResourceArrayEnabled());
           resolved.sampler = WMT::SamplerState{resolved.samplerRef.handle};
         }
       }

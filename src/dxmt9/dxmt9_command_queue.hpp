@@ -228,6 +228,12 @@ class CommandQueue {
       std::size_t alignment,
       std::uint64_t seqId);
 
+  // Retain an immutable sampler state until the chunk carrying an argument
+  // buffer reference to it has completed. Direct encoder binds are retained by
+  // Metal; argbuf descriptor writes only carry the resource id.
+  void retainSamplerForSeq(WMT::Reference<WMT::SamplerState> sampler,
+                           std::uint64_t seqId);
+
   // Reserved slab for arena-style writes — single transientBufferMutex_
   // acquire reserves `size` bytes of contiguous transient memory and
   // returns both a binding-side slice (buffer + offset + size) and a
@@ -325,6 +331,7 @@ class CommandQueue {
       std::uint64_t seqId);
   using ResolveSurfaceFlagsFn = std::function<std::uint32_t(core::Handle)>;
   void bindSelfLifecycle(ResolveSurfaceFlagsFn resolveSurfaceFlags);
+  void prefetchSlotPipelines(const core::ChunkSlot& slot);
   void startThreads(std::function<void()> encodeLoop,
                     std::function<void()> finishLoop,
                     std::function<void()> completionLoop);
@@ -450,6 +457,11 @@ class CommandQueue {
     std::uint64_t seqId = 0;
   };
 
+  struct RetainedSamplerState {
+    WMT::Reference<WMT::SamplerState> sampler{};
+    std::uint64_t seqId = 0;
+  };
+
   void reclaimTransientBuffersUnlocked(std::uint64_t completedSeqId);
   bool ensureTransientBufferUnlocked(std::size_t minimumCapacity);
   bool rotateTransientBufferUnlocked(std::size_t minimumCapacity, std::uint64_t seqId);
@@ -461,6 +473,7 @@ class CommandQueue {
   std::size_t transientBufferCursor_ = 0;
   std::deque<TransientBufferAllocation> transientBufferAllocations_{};
   std::deque<RetainedTransientBuffer> retainedTransientBuffers_{};
+  std::deque<RetainedSamplerState> retainedSamplerStates_{};
 
   // C1 chunk-record-import dirty accumulator. The d3d9 chunk-record
   // dispatcher (device_c_device_state_draw.cpp commit_chunk) calls

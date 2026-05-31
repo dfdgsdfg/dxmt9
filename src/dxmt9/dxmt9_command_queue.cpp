@@ -289,6 +289,48 @@ encoders::EncodeContext CommandQueue::makeEncodeContext() {
   };
 }
 
+void CommandQueue::prefetchSlotPipelines(const core::ChunkSlot& slot) {
+  if (!device_) {
+    return;
+  }
+  for (std::size_t i = 0; i < slot.commandCount(); ++i) {
+    const auto command = slot.commandAt(i);
+    if (command.kind != core::MetalCommandKind::DrawRun ||
+        !command.drawState.hot ||
+        !command.drawState.hasShaderContext()) {
+      continue;
+    }
+
+    auto drawState = command.drawState;
+    drawState.uniforms = command.drawUniformPayload;
+    const auto tileSelection =
+        pipeline::selectTileFfpForPass(drawState, pool_.supportsApple3());
+    const bool tileFfpMode =
+        tileSelection.decision == pipeline::TileFfpDecision::Tile;
+    if (tileFfpMode) {
+      (void)pipelineCache_.getOrBuildTileFfpBaseColorPipelineForState(
+          device_, limits_, pool_, drawState, &shaderArchive_.reference(),
+          &shaderArchive_.path());
+      (void)pipelineCache_.getOrBuildDrawPipelineForState(
+          device_, limits_, pool_, drawState, &shaderArchive_.reference(),
+          &shaderArchive_.path(), /*tileFfpMode=*/true,
+          /*argbufHybridMode=*/false, /*argbufResourceArray=*/false);
+      continue;
+    }
+
+    const bool argbufHybridMode =
+        pipeline::selectArgbufHybridForPass(drawState, pool_.argbufHybridEnabled()) ==
+        pipeline::ArgbufHybridDecision::Stage2;
+    const bool argbufResourceArray =
+        argbufHybridMode && resourceArrayLaneActive_ &&
+        resourceArrayEncoderResource_.initialized();
+    (void)pipelineCache_.getOrBuildDrawPipelineForState(
+        device_, limits_, pool_, drawState, &shaderArchive_.reference(),
+        &shaderArchive_.path(), /*tileFfpMode=*/false, argbufHybridMode,
+        argbufResourceArray);
+  }
+}
+
 uniform::DirtyState CommandQueue::consumePendingDirty() {
   std::lock_guard<std::mutex> guard(dirtyMutex_);
   uniform::DirtyState snapshot = pendingDirty_;
@@ -502,6 +544,11 @@ void CommandQueue::reclaimTransientBuffersUnlocked(std::uint64_t completedSeqId)
   while (!retainedTransientBuffers_.empty() &&
          retainedTransientBuffers_.front().seqId <= completedSeqId) {
     retainedTransientBuffers_.pop_front();
+  }
+
+  while (!retainedSamplerStates_.empty() &&
+         retainedSamplerStates_.front().seqId <= completedSeqId) {
+    retainedSamplerStates_.pop_front();
   }
 }
 
@@ -783,6 +830,18 @@ std::vector<CommandQueue::TransientBufferSlice> CommandQueue::uploadTransientBuf
   return result;
 }
 
+void CommandQueue::retainSamplerForSeq(WMT::Reference<WMT::SamplerState> sampler,
+                                       std::uint64_t seqId) {
+  if (!sampler) {
+    return;
+  }
+  std::lock_guard lock(transientBufferMutex_);
+  retainedSamplerStates_.push_back(RetainedSamplerState{
+      .sampler = std::move(sampler),
+      .seqId = seqId,
+  });
+}
+
 CommandQueue::TransientBufferReservation CommandQueue::reserveTransientBuffer(
     std::size_t size,
     std::size_t alignment,
@@ -1053,13 +1112,18 @@ void markSlotResourcesUnlocked(resources::Pool& pool, const core::ChunkSlot& slo
         break;
       case core::MetalCommandKind::Present:
         if (command.present && command.present->presentSource) {
-          if (auto* surface = pool.findSurface(command.present->presentSource.value)) {
-            surface->lastUsedSeqId = std::max(surface->lastUsedSeqId, slot.seqId);
-          }
+          pool.markSurfaceUse(command.present->presentSource, slot.seqId);
         }
         break;
     }
   }
+}
+
+void prepareSlotForPublish(CommandQueue& q,
+                           resources::Pool& pool,
+                           const core::ChunkSlot& slot) {
+  markSlotResourcesUnlocked(pool, slot);
+  q.prefetchSlotPipelines(slot);
 }
 
 void maybeCommitDrawChunkUnlocked(
@@ -1074,8 +1138,8 @@ void maybeCommitDrawChunkUnlocked(
     return;
   }
   q.queueLifecycle_.commitCurrentChunk(
-      lock, kMaxQueuedChunks, [&pool](const core::ChunkSlot& slot) {
-        markSlotResourcesUnlocked(pool, slot);
+      lock, kMaxQueuedChunks, [&q, &pool](const core::ChunkSlot& slot) {
+        prepareSlotForPublish(q, pool, slot);
       });
 }
 
@@ -1169,7 +1233,7 @@ void CommandQueue::submitStretchRect(const core::StretchRectDesc& desc) {
   if (splitStretchChunk()) {
     queueLifecycle_.commitCurrentChunk(
         lock, kMaxQueuedChunks, [this](const core::ChunkSlot& slot) {
-          markSlotResourcesUnlocked(pool_, slot);
+          prepareSlotForPublish(*this, pool_, slot);
         });
   }
   ensureWritingSlotUnlocked(*this, lock);
@@ -1180,7 +1244,7 @@ void CommandQueue::submitStretchRect(const core::StretchRectDesc& desc) {
   if (splitStretchChunk()) {
     queueLifecycle_.commitCurrentChunk(
         lock, kMaxQueuedChunks, [this](const core::ChunkSlot& slot) {
-          markSlotResourcesUnlocked(pool_, slot);
+          prepareSlotForPublish(*this, pool_, slot);
         });
   }
 }
@@ -1243,7 +1307,7 @@ std::uint64_t CommandQueue::submitPresent(const core::SwapDesc& desc) {
           std::unique_lock lock(mutex_);
           queueLifecycle_.commitCurrentChunk(
               lock, kMaxQueuedChunks, [this](const core::ChunkSlot& slot) {
-                markSlotResourcesUnlocked(pool_, slot);
+                prepareSlotForPublish(*this, pool_, slot);
               });
         }
         auto token = presenter->acquireDrawable(makePresentAcquireParams(queuedDesc));
@@ -1270,20 +1334,20 @@ std::uint64_t CommandQueue::submitPresent(const core::SwapDesc& desc) {
     if (splitPresentChunk()) {
       queueLifecycle_.commitCurrentChunk(
           lock, kMaxQueuedChunks, [this](const core::ChunkSlot& slot) {
-            markSlotResourcesUnlocked(pool_, slot);
+            prepareSlotForPublish(*this, pool_, slot);
           });
       ensureWritingSlotUnlocked(*this, lock);
       queueLifecycle_.appendPresentCommand(queuedDesc, sourceHandle);
       queueLifecycle_.commitCurrentChunk(
           lock, kMaxQueuedChunks, [this](const core::ChunkSlot& slot) {
-            markSlotResourcesUnlocked(pool_, slot);
+            prepareSlotForPublish(*this, pool_, slot);
           });
       presentSeqId = lastCommittedSeqId_;
     } else {
       queueLifecycle_.presentAndCommit(
           lock, kMaxQueuedChunks, queuedDesc, sourceHandle,
           [this](const core::ChunkSlot& slot) {
-            markSlotResourcesUnlocked(pool_, slot);
+            prepareSlotForPublish(*this, pool_, slot);
           });
       presentSeqId = lastCommittedSeqId_;
     }
@@ -1382,7 +1446,7 @@ void CommandQueue::submitFlush() {
   std::unique_lock lock(mutex_);
   queueLifecycle_.flushAndWait(
       lock, kMaxQueuedChunks, [this](const core::ChunkSlot& slot) {
-        markSlotResourcesUnlocked(pool_, slot);
+        prepareSlotForPublish(*this, pool_, slot);
       });
 }
 
@@ -1405,7 +1469,7 @@ void* CommandQueue::mapBuffer(core::BufferHandle handle, std::uint32_t flags) {
   if (waitSeq > lastCommittedSeqId_) {
     queueLifecycle_.commitCurrentChunk(
         lock, kMaxQueuedChunks, [this](const core::ChunkSlot& slot) {
-          markSlotResourcesUnlocked(pool_, slot);
+          prepareSlotForPublish(*this, pool_, slot);
         });
   }
   if (waitSeq > completedSeqId_) {
@@ -1461,6 +1525,10 @@ void CommandQueue::runFinishLoop() {
     if (!queueLifecycle_.runFinishIteration(lock, [this](std::uint64_t) {
           allocators_.reclaim(completedSeqId_);
           pool_.reclaimCompleted(completedSeqId_);
+          {
+            std::lock_guard transientLock(transientBufferMutex_);
+            reclaimTransientBuffersUnlocked(completedSeqId_);
+          }
         })) {
       return;
     }

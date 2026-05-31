@@ -12,16 +12,19 @@
 //    entry point with `std::lock_guard lock(queue_.mutex_)`.
 //
 //  * **Lookup ops** (`findBuffer`/`findTexture`/`findSurface`) may be
-//    called without the queue mutex — they only read arena storage. The
-//    encoder thread runs `encodeChunk` with `mutex_` released and walks
-//    the pool freely through this surface.
+//    called without the queue mutex. HandleArena serializes its own slot
+//    metadata with a shared mutex, so encoder-side lookups do not race
+//    with PE-thread insert/reclaim even though `encodeChunk` runs with
+//    `CommandQueue::mutex_` released.
 //
 //  * **Pointer stability**: a record pointer returned by `find*()`
 //    stays valid for the entire lifetime of a single `encodeChunk`
 //    even if a PE-thread `createBuffer`/`createTexture` runs in
 //    parallel. Two reasons:
 //      - `HandleArena::slots_` is a `std::deque`, whose `push_back`
-//        preserves every previously-handed-out element address.
+//        preserves every previously-handed-out element address. Arena
+//        mutation is serialized against lookup before the pointer is
+//        handed out.
 //      - The TLA+ `NoUseAfterFree` invariant guarantees a record is
 //        not released into the free list while its `lastUsedSeqId`
 //        is ahead of the GPU-completed watermark; chunk N's encoder
@@ -35,7 +38,9 @@
 #include <cstdint>
 #include <deque>
 #include <limits>
+#include <mutex>
 #include <optional>
+#include <shared_mutex>
 #include <type_traits>
 #include <unordered_set>
 #include <utility>
@@ -159,6 +164,7 @@ class HandleArena {
   using RecordType = Record;
 
   core::Handle insert(Record&& record) {
+    std::unique_lock lock(mutex_);
     u32 index = 0;
     if (!freeList_.empty()) {
       index = freeList_.back();
@@ -180,6 +186,71 @@ class HandleArena {
   }
 
   Record* find(u64 handleValue) noexcept {
+    std::shared_lock lock(mutex_);
+    return findUnlocked(handleValue);
+  }
+
+  const Record* find(u64 handleValue) const noexcept {
+    std::shared_lock lock(mutex_);
+    return findUnlocked(handleValue);
+  }
+
+  template <typename Fn>
+  bool update(u64 handleValue, Fn&& fn) {
+    std::unique_lock lock(mutex_);
+    auto* record = findUnlocked(handleValue);
+    if (!record) {
+      return false;
+    }
+    fn(*record);
+    return true;
+  }
+
+  template <typename Fn>
+  bool inspect(u64 handleValue, Fn&& fn) const {
+    std::shared_lock lock(mutex_);
+    const auto* record = findUnlocked(handleValue);
+    if (!record) {
+      return false;
+    }
+    fn(*record);
+    return true;
+  }
+
+  template <typename BeforeErase>
+  void reclaimCompleted(u64 completedSeqId, BeforeErase&& beforeErase) {
+    std::unique_lock lock(mutex_);
+    for (std::size_t i = 0; i < slots_.size(); ++i) {
+      auto& slot = slots_[i];
+      if (!slot.record) {
+        continue;
+      }
+      auto& record = *slot.record;
+      if (record.destroyPending && record.lastUsedSeqId <= completedSeqId) {
+        beforeErase(record);
+        releaseSlot(static_cast<u32>(i));
+      }
+    }
+  }
+
+  void clear() noexcept {
+    std::unique_lock lock(mutex_);
+    slots_.clear();
+    freeList_.clear();
+  }
+
+ private:
+  struct DecodedHandle {
+    u32 index = 0;
+    u32 generation = 0;
+  };
+
+  struct Slot {
+    std::optional<Record> record;
+    u32 generation = 1;
+  };
+
+  Record* findUnlocked(u64 handleValue) noexcept {
     const auto decoded = decode(handleValue);
     if (!decoded) {
       return nullptr;
@@ -195,7 +266,7 @@ class HandleArena {
     return &*slot.record;
   }
 
-  const Record* find(u64 handleValue) const noexcept {
+  const Record* findUnlocked(u64 handleValue) const noexcept {
     const auto decoded = decode(handleValue);
     if (!decoded) {
       return nullptr;
@@ -210,37 +281,6 @@ class HandleArena {
     }
     return &*slot.record;
   }
-
-  template <typename BeforeErase>
-  void reclaimCompleted(u64 completedSeqId, BeforeErase&& beforeErase) {
-    for (std::size_t i = 0; i < slots_.size(); ++i) {
-      auto& slot = slots_[i];
-      if (!slot.record) {
-        continue;
-      }
-      auto& record = *slot.record;
-      if (record.destroyPending && record.lastUsedSeqId <= completedSeqId) {
-        beforeErase(record);
-        releaseSlot(static_cast<u32>(i));
-      }
-    }
-  }
-
-  void clear() noexcept {
-    slots_.clear();
-    freeList_.clear();
-  }
-
- private:
-  struct DecodedHandle {
-    u32 index = 0;
-    u32 generation = 0;
-  };
-
-  struct Slot {
-    std::optional<Record> record;
-    u32 generation = 1;
-  };
 
   static constexpr u32 kIndexBits = 32;
   static constexpr u32 kGenerationBits = 24;
@@ -303,6 +343,7 @@ class HandleArena {
   // The static_assert below pins this at compile time so a casual edit
   // tripping the TLC invariant in `ResourceLifetime.tla` would also
   // refuse to build.
+  mutable std::shared_mutex mutex_;
   std::deque<Slot> slots_;
   std::vector<u32> freeList_;
 
