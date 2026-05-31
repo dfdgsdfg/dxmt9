@@ -152,6 +152,7 @@ test('dxmt9-perf-counter-callsite-audit', python3,
 # deps that silently break the PE/unix bridge lookup.
 test('dxmt9-winemetal-install-name-audit', python3,
      args: [join_paths(meson.project_source_root(), 'scripts/check/audit_winemetal_install_names.py')],
+     depends: dxmt9_winemetal_unix_install_name_fixup,
      is_parallel: false)
 test('dxmt9-corpus-sync-smoke', python3,
      args: [join_paths(meson.project_source_root(), 'tests/shader_runner/corpus_sync_smoke.py')],

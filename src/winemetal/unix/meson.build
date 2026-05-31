@@ -7,6 +7,7 @@ dxmt9_winemetal_unix_common_link_args = []
 dxmt9_winemetal_unix_override_options = {}
 dxmt9_winemetal_unix_build_rpath = '@loader_path/:@loader_path/../../'
 dxmt9_winemetal_unix_needs_install_name_fixup = false
+dxmt9_winemetal_unix_install_name_fixup = []
 
 wine_build_path = get_option('wine_build_path')
 wine_install_path = get_option('wine_install_path')
@@ -133,7 +134,7 @@ dxmt9_winemetal_unix_module = shared_library(
 )
 
 if host_machine.system() == 'darwin' and dxmt9_winemetal_unix_needs_install_name_fixup
-  custom_target(
+  dxmt9_winemetal_unix_install_name_fixup = custom_target(
     'winemetal_unix_install_name_fixup',
     input: dxmt9_winemetal_unix_module,
     # depends: forces stamp invalidation when the shared_library is

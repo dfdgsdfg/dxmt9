@@ -250,7 +250,9 @@ allocation_counter_spec = executable(
 )
 
 test('dxmt9-allocation-counter-spec', assert_perf_counters,
-     args: [allocation_counter_spec])
+     args: [allocation_counter_spec],
+     env: dxmt9_native_test_env,
+     depends: dxmt9_winemetal_unix_install_name_fixup)
 
 # R-BACK-5.9 / R-BACK-5.10 / R-BACK-14.* — MTLHeap small-resource pooling.
 # Pure-CPU classify + lifetime test (no Metal device required); deeper
