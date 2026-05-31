@@ -30,6 +30,9 @@ uint32_t lockFlagsToCore(uint32_t flags) {
   if ((flags & kD3DLockNoOverwrite) != 0) {
     out |= dxmt9::core::UsageNoOverwrite;
   }
+  if ((flags & kD3DLockReadOnly) != 0) {
+    out |= dxmt9::core::UsageReadOnly;
+  }
   return out;
 }
 

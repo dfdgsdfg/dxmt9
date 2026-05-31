@@ -392,6 +392,7 @@ struct Counters {
   std::atomic<std::uint64_t> mapBufferWaitMaxNs{0};
   std::atomic<std::uint64_t> mapBufferDiscard{0};
   std::atomic<std::uint64_t> mapBufferNoOverwrite{0};
+  std::atomic<std::uint64_t> mapBufferReadOnly{0};
   std::atomic<std::uint64_t> mapBufferPlain{0};
   std::atomic<std::uint64_t> presentBoundaryApplied{0};
   std::atomic<std::uint64_t> presentBoundarySkipped{0};
@@ -631,7 +632,7 @@ struct CounterEntry {
   double percentile;
 };
 
-constexpr std::array<CounterEntry, 435> kCounterTable = {{
+constexpr std::array<CounterEntry, 436> kCounterTable = {{
     {"chunk_admit", CounterEntry::Kind::UnsignedCount, &Counters::chunkAdmit, nullptr, nullptr, 0.0},
     {"chunk_reject", CounterEntry::Kind::UnsignedCount, &Counters::chunkReject, nullptr, nullptr, 0.0},
     {"ring_arena_heap_fallback_count", CounterEntry::Kind::UnsignedCount, &Counters::ringArenaHeapFallbackCount, nullptr, nullptr, 0.0},
@@ -1002,6 +1003,7 @@ constexpr std::array<CounterEntry, 435> kCounterTable = {{
     {"map_buffer_wait_p99_ms", CounterEntry::Kind::PercentileMs, nullptr, nullptr, &Counters::mapBufferWaitRing, 0.99},
     {"map_buffer_discard", CounterEntry::Kind::UnsignedCount, &Counters::mapBufferDiscard, nullptr, nullptr, 0.0},
     {"map_buffer_nooverwrite", CounterEntry::Kind::UnsignedCount, &Counters::mapBufferNoOverwrite, nullptr, nullptr, 0.0},
+    {"map_buffer_readonly", CounterEntry::Kind::UnsignedCount, &Counters::mapBufferReadOnly, nullptr, nullptr, 0.0},
     {"map_buffer_plain", CounterEntry::Kind::UnsignedCount, &Counters::mapBufferPlain, nullptr, nullptr, 0.0},
     {"present_boundary_applied", CounterEntry::Kind::UnsignedCount, &Counters::presentBoundaryApplied, nullptr, nullptr, 0.0},
     {"present_boundary_skipped", CounterEntry::Kind::UnsignedCount, &Counters::presentBoundarySkipped, nullptr, nullptr, 0.0},
@@ -1902,8 +1904,10 @@ void countMapBufferWait(std::uint64_t totalNanoseconds,
   }
   const bool discard = (flags & core::UsageDiscard) != 0;
   const bool noOverwrite = (flags & core::UsageNoOverwrite) != 0;
+  const bool readOnly = (flags & core::UsageReadOnly) != 0;
   if (discard) add(c.mapBufferDiscard);
   if (noOverwrite) add(c.mapBufferNoOverwrite);
+  if (readOnly) add(c.mapBufferReadOnly);
   if (!discard && !noOverwrite) add(c.mapBufferPlain);
 }
 

@@ -934,7 +934,10 @@ u64 Pool::mapWaitSeqId(core::BufferHandle handle, u32 flags) const noexcept {
     return 0;
   }
   u64 waitSeqId = 0;
-  bufferArena_.inspect(handle.value, [&waitSeqId](const BufferRecord& record) {
+  bufferArena_.inspect(handle.value, [flags, &waitSeqId](const BufferRecord& record) {
+    if ((flags & core::UsageReadOnly) != 0 && record.desc.pool == core::Pool::Managed) {
+      return;
+    }
     waitSeqId = record.lastUsedSeqId;
   });
   return waitSeqId;
