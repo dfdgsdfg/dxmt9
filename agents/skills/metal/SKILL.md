@@ -176,6 +176,107 @@ xcrun xctrace export --input "$TRACE_DIR/capture.trace" \
 
 **Schema availability varies** by Xcode version, template, and GPU. Always check the TOC first and export what's there. Don't fail if a schema is missing — report what was found.
 
+### Step 2b: Xcode `.gputrace` performance export
+
+For `.gputrace` frame captures, `xcrun xctrace export` may not expose the
+useful replay/counter tables. In that case, use Xcode through Computer Use and
+export the data from the UI into files under the same trace run directory.
+Do this before relying on screenshots or manual transcription.
+
+Use this artifact convention:
+
+```bash
+export TRACE_DIR=./traces/<app-runid>
+export ANALYSIS_DIR="$TRACE_DIR/analysis"
+mkdir -p "$ANALYSIS_DIR"
+
+# Xcode GUI outputs:
+#   "$ANALYSIS_DIR/frame<N>-performance.gputrace"
+#   "$ANALYSIS_DIR/frame<N>-counters-xcode.csv"
+# Optional derived output:
+#   "$ANALYSIS_DIR/frame<N>-counters-summary.csv"
+```
+
+Required Xcode sequence:
+
+1. Open `frame<N>.gputrace` in Xcode.
+2. On **Summary**, choose **Export**, enable **Embed Performance Data**, and
+   save the replayed capture as
+   `$ANALYSIS_DIR/frame<N>-performance.gputrace`. Also enable **Embed External
+   Files** when Xcode offers it and the capture may be moved between machines.
+3. On **Summary**, choose **Show Performance**.
+4. Open **Counters**.
+5. Wait for counter profiling to finish. The counters table must be populated
+   and the Xcode activity/progress indicator must no longer be profiling
+   counters.
+6. Use **Export Encoder Counters** and save the CSV as
+   `$ANALYSIS_DIR/frame<N>-counters-xcode.csv`.
+7. Parse the CSV from the terminal and create a reduced summary CSV when useful.
+
+Example summary extraction:
+
+```bash
+python3 - <<'PY'
+import csv
+from pathlib import Path
+
+analysis = Path("traces/<app-runid>/analysis")
+src = analysis / "frame<N>-counters-xcode.csv"
+dst = analysis / "frame<N>-counters-summary.csv"
+
+with src.open(newline="") as f:
+    rows = list(csv.reader(f))
+
+header, data = rows[0], rows[1:]
+
+def idx(name, occurrence=0):
+    seen = 0
+    for i, h in enumerate(header):
+        if h == name:
+            if seen == occurrence:
+                return i
+            seen += 1
+    raise KeyError(name)
+
+def number(row, name):
+    s = row[idx(name)]
+    return float(s.rstrip("%")) if s.endswith("%") else float(s or 0)
+
+total_ns = sum(number(row, "GPU Time") for row in data)
+cols = [
+    "index", "command_buffer", "encoder", "gpu_time_ms", "gpu_share_pct",
+    "alu_limiter_pct", "texture_read_limiter_pct", "buffer_read_limiter_pct",
+    "buffer_write_limiter_pct", "mmu_limiter_pct", "llc_limiter_pct",
+]
+
+with dst.open("w", newline="") as f:
+    w = csv.writer(f)
+    w.writerow(cols)
+    for row in sorted(data, key=lambda r: number(r, "GPU Time"), reverse=True):
+        gpu_ns = number(row, "GPU Time")
+        w.writerow([
+            row[idx("Index")],
+            row[idx("CommandBuffer Label")],
+            row[idx("Encoder Label")],
+            f"{gpu_ns / 1e6:.6f}",
+            f"{gpu_ns / total_ns * 100:.6f}",
+            row[idx("ALU Limiter")].rstrip("%"),
+            row[idx("Texture Read Limiter")].rstrip("%"),
+            row[idx("Buffer Read Limiter")].rstrip("%"),
+            row[idx("Buffer Write Limiter")].rstrip("%"),
+            row[idx("MMU Limiter")].rstrip("%"),
+            row[idx("Last Level Cache Limiter")].rstrip("%"),
+        ])
+
+print(dst)
+PY
+```
+
+When reporting findings, treat the exported encoder counter CSV as the
+authoritative source for execution cost, limiter, bandwidth, vertex/primitive,
+and fragment metrics. Use the Xcode UI to navigate, select encoders, and inspect
+resources, but back final notes with the exported files.
+
 ### Step 3: Parse — Convert XML to structured data
 
 Use the `parse_trace.py` helper (included in this repo) or inline Python to extract actionable data.

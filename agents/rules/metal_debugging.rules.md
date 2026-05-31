@@ -38,6 +38,49 @@ and Xcode screenshots if captured. Use subdirectories such as `analysis/`,
 bundles in `experiments/output/` unless an experiment harness explicitly emits
 them as part of its own contract.
 
+## Xcode `.gputrace` performance export discipline
+
+When a `.gputrace` is opened in Xcode for real performance debugging, do not
+leave the useful data trapped in the Xcode UI. Export both the replayed capture
+and encoder counters into the run's `analysis/` directory so later analysis can
+be done from files.
+
+Recommended file names:
+
+```sh
+TRACE_DIR=traces/<app-runid>
+ANALYSIS_DIR="$TRACE_DIR/analysis"
+mkdir -p "$ANALYSIS_DIR"
+
+# Xcode GUI outputs:
+#   $ANALYSIS_DIR/frame<N>-performance.gputrace
+#   $ANALYSIS_DIR/frame<N>-counters-xcode.csv
+# Optional derived file:
+#   $ANALYSIS_DIR/frame<N>-counters-summary.csv
+```
+
+Required Xcode GUI sequence:
+
+1. Open `frame<N>.gputrace` in Xcode.
+2. In **Summary**, use **Export** and enable **Embed Performance Data** before
+   saving the replayed capture as `analysis/frame<N>-performance.gputrace`.
+   Enable **Embed External Files** too if Xcode offers it and the capture may be
+   inspected on another machine.
+3. In **Summary**, click **Show Performance**.
+4. Open **Counters**.
+5. Wait until counter profiling is complete. The table must be populated and
+   Xcode's activity/progress indicator must no longer be profiling counters.
+6. Use **Export Encoder Counters** from the Counters view and save the CSV as
+   `analysis/frame<N>-counters-xcode.csv`.
+7. After export, parse the CSV from the terminal and, when useful, create a
+   reduced sortable summary such as `analysis/frame<N>-counters-summary.csv`.
+
+The CSV is the authoritative source for encoder cost, limiter, bandwidth,
+vertex, primitive, and fragment counters. Prefer citing values from that file
+over transcribing Xcode UI text. The UI remains useful for navigation and
+resource inspection, but final bottleneck notes should be backed by exported
+files.
+
 ## 1. Programmatic frame capture (.gputrace)
 
 `MetalCaptureController` (`src/dxmt9/dxmt9_capture.{hpp,cpp}`) triggers a
