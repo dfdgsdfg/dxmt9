@@ -23,6 +23,7 @@
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <limits>
 #include <utility>
 
 #if defined(__APPLE__)
@@ -670,9 +671,49 @@ std::size_t drawChunkCommandLimit() {
     if (end == env || parsed == 0) {
       return std::size_t{0};
     }
+    if (parsed > std::numeric_limits<std::size_t>::max()) {
+      return std::numeric_limits<std::size_t>::max();
+    }
     return static_cast<std::size_t>(parsed);
   }();
   return limit;
+}
+
+std::size_t drawPayloadArenaLimitBytes() {
+  static const std::size_t limit = [] {
+    const char* env = std::getenv("DXMT9_CHUNK_DRAW_PAYLOAD_ARENA_LIMIT_BYTES");
+    if (!env || env[0] == '\0') {
+      return std::size_t{0};
+    }
+    char* end = nullptr;
+    const auto parsed = std::strtoull(env, &end, 10);
+    if (end == env || parsed == 0) {
+      return std::size_t{0};
+    }
+    return static_cast<std::size_t>(parsed);
+  }();
+  return limit;
+}
+
+std::size_t drawRunPayloadBytes(
+    std::span<const core::DrawParam> draws,
+    std::span<const core::DrawParamPayloadView> payloads) {
+  std::size_t bytes = 0;
+  for (std::size_t i = 0; i < draws.size(); ++i) {
+    const core::DrawParamPayloadView payload =
+        i < payloads.size() ? payloads[i] : core::DrawParamPayloadView{};
+    if (payload.userIndexData.size() >
+        std::numeric_limits<std::size_t>::max() - payload.userVertexData.size()) {
+      return std::numeric_limits<std::size_t>::max();
+    }
+    const std::size_t payloadBytes =
+        payload.userVertexData.size() + payload.userIndexData.size();
+    if (payloadBytes > std::numeric_limits<std::size_t>::max() - bytes) {
+      return std::numeric_limits<std::size_t>::max();
+    }
+    bytes += payloadBytes;
+  }
+  return bytes;
 }
 
 bool splitPresentChunk() {
@@ -779,21 +820,57 @@ void prepareSlotForPublish(CommandQueue& q,
   q.prefetchSlotPipelines(slot);
 }
 
-void maybeCommitDrawChunkUnlocked(
+bool maybeCommitDrawChunkUnlocked(
     CommandQueue& q,
     resources::Pool& pool,
     std::unique_lock<std::mutex>& lock) {
   const std::size_t limit = drawChunkCommandLimit();
   if (limit == 0 || !q.writingSlot_) {
-    return;
+    return false;
   }
   if (currentSlotUnlocked(q).commandCount() < limit) {
-    return;
+    return false;
   }
-  q.queueLifecycle_.commitCurrentChunk(
+  const bool committed = q.queueLifecycle_.commitCurrentChunk(
       lock, kMaxQueuedChunks, [&q, &pool](core::ChunkSlot& slot) {
         prepareSlotForPublish(q, pool, slot);
       });
+  if (committed && q.skipDrawResourceMarking_) {
+    q.forceDrawResourceMarkingAfterSplit_ = true;
+  }
+  return committed;
+}
+
+bool maybeCommitDrawPayloadArenaUnlocked(
+    CommandQueue& q,
+    resources::Pool& pool,
+    std::unique_lock<std::mutex>& lock,
+    std::size_t pendingPayloadBytes) {
+  const std::size_t limit = drawPayloadArenaLimitBytes();
+  if (limit == 0 || pendingPayloadBytes == 0 || !q.writingSlot_) {
+    return false;
+  }
+
+  auto& slot = currentSlotUnlocked(q);
+  if (slot.commandsEmpty()) {
+    return false;
+  }
+  if (slot.drawPayloadArena.size() <= limit &&
+      pendingPayloadBytes <= limit - slot.drawPayloadArena.size()) {
+    return false;
+  }
+
+  const bool committed = q.queueLifecycle_.commitCurrentChunk(
+      lock, kMaxQueuedChunks, [&q, &pool](core::ChunkSlot& publishSlot) {
+        prepareSlotForPublish(q, pool, publishSlot);
+      });
+  if (committed) {
+    if (q.skipDrawResourceMarking_) {
+      q.forceDrawResourceMarkingAfterSplit_ = true;
+    }
+    ensureWritingSlotUnlocked(q, lock);
+  }
+  return committed;
 }
 
 }  // namespace
@@ -801,6 +878,7 @@ void maybeCommitDrawChunkUnlocked(
 void CommandQueue::setSkipDrawResourceMarking(bool skip) {
   std::unique_lock lock(mutex_);
   skipDrawResourceMarking_ = skip;
+  forceDrawResourceMarkingAfterSplit_ = false;
 }
 
 void CommandQueue::markChunkResources(std::span<const core::ChunkHandleEntry> entries) {
@@ -846,14 +924,16 @@ void CommandQueue::submitDrawRun(core::CanonicalDrawState state,
     perf::countSubmitDraw();
   }
   PerfScope scope(perf::countSubmitDrawCpuTime);
+  const std::size_t pendingPayloadBytes = drawRunPayloadBytes(draws, payloads);
   std::unique_lock lock(mutex_);
   ensureWritingSlotUnlocked(*this, lock);
-  if (!skipDrawResourceMarking_) {
+  maybeCommitDrawPayloadArenaUnlocked(*this, pool_, lock, pendingPayloadBytes);
+  if (!skipDrawResourceMarking_ || forceDrawResourceMarkingAfterSplit_) {
     pool_.markDrawResources(state.hot, seqIdForMark(*this, 0));
   }
   currentBackBuffer_ = state.hot.colorAttachments[0].handle;
   currentSlotUnlocked(*this).appendDrawRun(std::move(state), uniforms, draws, payloads);
-  maybeCommitDrawChunkUnlocked(*this, pool_, lock);
+  (void)maybeCommitDrawChunkUnlocked(*this, pool_, lock);
 }
 
 void CommandQueue::submitDrawRunBatch(
@@ -868,22 +948,24 @@ void CommandQueue::submitDrawRunBatch(
   PerfScope scope(perf::countSubmitDrawCpuTime);
   std::unique_lock lock(mutex_);
   for (auto& submission : submissions) {
-    ensureWritingSlotUnlocked(*this, lock);
-    if (!skipDrawResourceMarking_) {
-      pool_.markDrawResources(submission.state.hot, seqIdForMark(*this, 0));
-    }
-    currentBackBuffer_ = submission.state.hot.colorAttachments[0].handle;
-
     const std::span<const core::DrawParam> draws(&submission.draw, 1);
     std::span<const core::DrawParamPayloadView> payloads{};
     if (!submission.payload.userVertexData.empty() ||
         !submission.payload.userIndexData.empty()) {
       payloads = std::span<const core::DrawParamPayloadView>(&submission.payload, 1);
     }
+    const std::size_t pendingPayloadBytes = drawRunPayloadBytes(draws, payloads);
+    ensureWritingSlotUnlocked(*this, lock);
+    maybeCommitDrawPayloadArenaUnlocked(*this, pool_, lock, pendingPayloadBytes);
+    if (!skipDrawResourceMarking_ || forceDrawResourceMarkingAfterSplit_) {
+      pool_.markDrawResources(submission.state.hot, seqIdForMark(*this, 0));
+    }
+    currentBackBuffer_ = submission.state.hot.colorAttachments[0].handle;
+
     currentSlotUnlocked(*this).appendDrawRun(std::move(submission.state),
                                              submission.uniforms, draws,
                                              payloads);
-    maybeCommitDrawChunkUnlocked(*this, pool_, lock);
+    (void)maybeCommitDrawChunkUnlocked(*this, pool_, lock);
   }
 }
 

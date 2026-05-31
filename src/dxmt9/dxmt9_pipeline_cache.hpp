@@ -243,6 +243,10 @@ struct Entry {
   std::shared_future<WMT::Reference<WMT::RenderPipelineState>> future;
 };
 
+struct SourceLibraryEntry {
+  std::shared_future<WMT::Reference<WMT::Library>> future;
+};
+
 struct PsoSlot {
   u32 generation = 0;
   ShaderVariantKey key{};
@@ -276,6 +280,7 @@ struct HandleLookupContext {
 using PipelineMap = std::unordered_map<ShaderVariantKey, Entry, ShaderVariantKeyHash>;
 using DrawProbeMap = std::unordered_map<ShaderVariantKey, ShaderVariantKey, ShaderVariantKeyHash>;
 using DrawHandleMap = std::unordered_map<ShaderVariantKey, core::PsoHandle, ShaderVariantKeyHash>;
+using SourceLibraryMap = std::unordered_map<u64, SourceLibraryEntry>;
 using DepthMap =
     std::unordered_map<DepthStencilKey, WMT::Reference<WMT::DepthStencilState>, DepthStencilKeyHash>;
 using DepthHandleMap =
@@ -422,6 +427,7 @@ class Cache {
   PipelineMap draw{};
   DrawProbeMap drawProbe{};
   DrawHandleMap drawHandles{};
+  SourceLibraryMap sourceLibraries{};
   std::vector<PsoSlot> drawSlots{};
   std::shared_ptr<const std::vector<PsoSlot>> drawSlotSnapshot =
       std::make_shared<const std::vector<PsoSlot>>();

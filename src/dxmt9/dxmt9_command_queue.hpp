@@ -379,6 +379,10 @@ class CommandQueue {
   std::unordered_set<std::uint64_t> touchedColorHandles_{};
   // Phase 14: see setSkipDrawResourceMarking() doc.
   bool skipDrawResourceMarking_ = false;
+  // If a diagnostic record-side split fires while chunk replay has disabled
+  // per-draw marking, subsequent draw-runs land under new seqIds that were
+  // not covered by the importer's bulk markChunkResources() snapshot.
+  bool forceDrawResourceMarkingAfterSplit_ = false;
 
   core::metalqueue::QueueLifecycleController queueLifecycle_{};
   core::metalhud::SubmissionDiagnosticsController submissionDiagnostics_{};

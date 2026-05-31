@@ -208,11 +208,10 @@ core::DepthStencilHandle internDepthStencilHandleLocked(
   return handle;
 }
 
-class PipelineCompileQueue {
+template <typename Result>
+class CompileQueue {
  public:
-  using Result = WMT::Reference<WMT::RenderPipelineState>;
-
-  PipelineCompileQueue() {
+  CompileQueue() {
     std::size_t workers = 0;
     if (const char* env = std::getenv("DXMT9_PSO_COMPILE_THREADS");
         env && env[0] != '\0') {
@@ -233,7 +232,7 @@ class PipelineCompileQueue {
     }
   }
 
-  ~PipelineCompileQueue() {
+  ~CompileQueue() {
     {
       std::lock_guard lock(mutex_);
       stop_ = true;
@@ -246,8 +245,8 @@ class PipelineCompileQueue {
     }
   }
 
-  PipelineCompileQueue(const PipelineCompileQueue&) = delete;
-  PipelineCompileQueue& operator=(const PipelineCompileQueue&) = delete;
+  CompileQueue(const CompileQueue&) = delete;
+  CompileQueue& operator=(const CompileQueue&) = delete;
 
   template <typename Fn>
   std::shared_future<Result> submit(Fn&& fn) {
@@ -285,7 +284,16 @@ class PipelineCompileQueue {
   std::vector<std::thread> workers_{};
 };
 
+using PipelineCompileQueue = CompileQueue<WMT::Reference<WMT::RenderPipelineState>>;
+using LibraryCompileQueue = CompileQueue<WMT::Reference<WMT::Library>>;
+
+LibraryCompileQueue& libraryCompileQueue() {
+  static LibraryCompileQueue queue;
+  return queue;
+}
+
 PipelineCompileQueue& pipelineCompileQueue() {
+  (void)libraryCompileQueue();
   static PipelineCompileQueue queue;
   return queue;
 }
@@ -294,6 +302,30 @@ template <typename Fn>
 std::shared_future<WMT::Reference<WMT::RenderPipelineState>>
 submitPipelineBuild(Fn&& fn) {
   return pipelineCompileQueue().submit(std::forward<Fn>(fn));
+}
+
+template <typename Fn>
+std::shared_future<WMT::Reference<WMT::Library>>
+submitLibraryBuild(Fn&& fn) {
+  return libraryCompileQueue().submit(std::forward<Fn>(fn));
+}
+
+std::shared_future<WMT::Reference<WMT::Library>>
+getOrSubmitSourceLibraryLocked(Cache& cache,
+                               WMT::Reference<WMT::Device> device,
+                               u64 sourceHash,
+                               const std::string& source) {
+  if (auto it = cache.sourceLibraries.find(sourceHash);
+      it != cache.sourceLibraries.end()) {
+    return it->second.future;
+  }
+
+  auto future = submitLibraryBuild(
+      [device, source]() mutable {
+        return shaders::makeLibrary(device, source);
+      });
+  cache.sourceLibraries.emplace(sourceHash, SourceLibraryEntry{future});
+  return future;
 }
 
 }  // namespace
@@ -835,10 +867,12 @@ Cache::getOrBuildDrawPipelineHandle(WMT::Reference<WMT::Device> device,
           .handle = internDrawHandleLocked(*this, sourceKey, it->second),
       };
     }
+    auto tileLibrary =
+        getOrSubmitSourceLibraryLocked(*this, device, sourceKey.tileSourceHash, tileSource);
     perf::countPipelineCacheMiss(perf::PipelineKind::Draw);
     auto shared = submitPipelineBuild(
-        [device, sourceKey, tileSource = std::move(tileSource), archive]() mutable {
-          auto tileLib = shaders::makeLibrary(device, tileSource);
+        [device, sourceKey, tileLibrary, archive]() mutable {
+          auto tileLib = tileLibrary.get();
           if (!tileLib) {
             return WMT::Reference<WMT::RenderPipelineState>{};
           }
@@ -900,11 +934,15 @@ Cache::getOrBuildDrawPipelineHandle(WMT::Reference<WMT::Device> device,
           .handle = internDrawHandleLocked(*this, sourceKey, it->second),
       };
     }
+    auto vertexLibrary =
+        getOrSubmitSourceLibraryLocked(*this, device, sources->vertexHash, sources->vertex);
+    auto fragmentLibrary =
+        getOrSubmitSourceLibraryLocked(*this, device, sources->fragmentHash, sources->fragment);
     perf::countPipelineCacheMiss(perf::PipelineKind::Draw);
     auto shared = submitPipelineBuild(
-        [device, sourceKey, sources = std::move(*sources), archive]() mutable {
-          auto vsLib = shaders::makeLibrary(device, sources.vertex);
-          auto fsLib = shaders::makeLibrary(device, sources.fragment);
+        [device, sourceKey, vertexLibrary, fragmentLibrary, archive]() mutable {
+          auto vsLib = vertexLibrary.get();
+          auto fsLib = fragmentLibrary.get();
           if (!vsLib || !fsLib) {
             return WMT::Reference<WMT::RenderPipelineState>{};
           }
