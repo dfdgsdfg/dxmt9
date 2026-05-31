@@ -20,6 +20,6 @@ ffff0300 0200001f 8000000a 900f0000 02000001 800f0800 90e40000
 [test]
 clear rgba(0.0, 0.0, 0.0, 1.0)
 dxmt9-draw-vs-color-triangle
-expect-source vertex contains "a0 = int4(round("
+expect-source vertex contains "int4 dxmt9_mova = int4(round("
 probe (48, 32) rgba(0.0, 1.0, 0.0, 1.0) 1
 probe (16, 32) rgba(0.0, 0.0, 0.0, 1.0) 1

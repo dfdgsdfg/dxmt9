@@ -2392,9 +2392,11 @@ std::string translateSpirvToMsl(const SpirvModule& module,
     };
     auto legacyBumpCoord = [&](u32 stage, const std::string& base, const std::string& bump) {
       const auto s = std::to_string(stage);
-      return "float4((" + base + ").xy + float2(ffpPs.bumpEnvMat[" + s + "].x * (" + bump +
-             ").x + ffpPs.bumpEnvMat[" + s + "].z * (" + bump + ").y, ffpPs.bumpEnvMat[" + s +
-             "].y * (" + bump + ").x + ffpPs.bumpEnvMat[" + s + "].w * (" + bump + ").y), 0.0f, 1.0f)";
+      return "float4((" + base + ").xy + float2(ffpPs.bumpEnvMat[" + s + "].x * ((" + bump +
+             ").x - 0.5f) + ffpPs.bumpEnvMat[" + s + "].z * ((" + bump +
+             ").y - 0.5f), ffpPs.bumpEnvMat[" + s + "].y * ((" + bump +
+             ").x - 0.5f) + ffpPs.bumpEnvMat[" + s + "].w * ((" + bump +
+             ").y - 0.5f)), 0.0f, 1.0f)";
     };
 
     auto currentGuard = [&](const D3DDecodedInstruction& guardedInstruction) {

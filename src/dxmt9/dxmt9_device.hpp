@@ -139,7 +139,17 @@ class Device {
                              const core::DrawUniformPayload&,
                              std::span<const core::DrawParam>,
                              std::span<const core::DrawParamPayloadView>) {}
-  virtual void submitDrawRunBatch(std::span<core::DrawRunSubmission>) {}
+  virtual void submitDrawRunBatch(std::span<core::DrawRunSubmission> submissions) {
+    for (auto& submission : submissions) {
+      const std::span<const core::DrawParam> draws(&submission.draw, 1);
+      std::span<const core::DrawParamPayloadView> payloads{};
+      if (!submission.payload.userVertexData.empty() ||
+          !submission.payload.userIndexData.empty()) {
+        payloads = std::span<const core::DrawParamPayloadView>(&submission.payload, 1);
+      }
+      submitDrawRun(submission.state, submission.uniforms, draws, payloads);
+    }
+  }
   virtual void submitClear(const core::ClearDesc&) {}
   virtual void submitSurfaceCopy(const core::SurfaceCopyDesc&) {}
   virtual void submitStretchRect(const core::StretchRectDesc&) {}

@@ -1113,12 +1113,12 @@ std::string makeFfpPixelSource(const FfpPixelKey& key,
           out << "  float2 baseUV" << stage << " = dxmt9_select_texcoord(in, "
               << coordIndex << "u).xy;\n";
           out << "  float2 bumpDelta" << stage
-              << " = float2(ffpPs.bumpEnvMat[" << s << "].x * texColor"
-              << bumpStage << ".r + ffpPs.bumpEnvMat[" << s
-              << "].z * texColor" << bumpStage << ".g, ffpPs.bumpEnvMat["
-              << s << "].y * texColor" << bumpStage
-              << ".r + ffpPs.bumpEnvMat[" << s << "].w * texColor"
-              << bumpStage << ".g);\n";
+              << " = float2(ffpPs.bumpEnvMat[" << s << "].x * (texColor"
+              << bumpStage << ".r - 0.5f) + ffpPs.bumpEnvMat[" << s
+              << "].z * (texColor" << bumpStage << ".g - 0.5f), ffpPs.bumpEnvMat["
+              << s << "].y * (texColor" << bumpStage
+              << ".r - 0.5f) + ffpPs.bumpEnvMat[" << s << "].w * (texColor"
+              << bumpStage << ".g - 0.5f));\n";
           out << "  float4 texColor" << stage << " = tex" << stage
               << ".sample(samp" << stage << ", baseUV" << stage
               << " + bumpDelta" << stage << biasArg(stage) << ");\n";

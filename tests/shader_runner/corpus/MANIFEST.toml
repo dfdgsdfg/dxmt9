@@ -2634,7 +2634,7 @@ source_kind = "project-authored"
 license = "MIT"
 license_scope = "project-mit"
 models = ["ps_2_0"]
-opcodes = ["DCL", "MOV", "TEXLD"]
+opcodes = ["DCL", "MOV", "TEX"]
 oracle = "R-FORMAT-11 RESZ MSAA depth resolve, reduced to INTZ sample readback"
 oracle-date = "2026-05-29"
 
