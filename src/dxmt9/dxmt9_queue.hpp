@@ -159,10 +159,16 @@ struct QueueTransitionRecord {
 };
 
 struct QueueSubmissionRecord {
-  // RAII-owned command buffer — released when the record is destroyed (after
-  // finish-thread processing). Matches dxmt's CommandChunk::attached_cmdbuf
-  // ownership model.
+  // RAII-owned command buffer for the tail of this chunk's Metal command
+  // buffer chain. encodeChunk may commit earlier sub-CBs internally; the
+  // finish/completion pipeline commits and waits only this tail CB, relying
+  // on Metal same-queue in-order execution to make tail completion imply all
+  // earlier sub-CBs in this chunk have completed.
   WMT::Reference<WMT::CommandBuffer> commandBuffer{};
+  // Total command buffers in the chunk chain, including the tail above.
+  // 1 means the public record is the whole chunk; >1 means earlier sub-CBs
+  // were already committed during encodeChunk.
+  u64 commandBufferChainLength = 1;
   WMT::Device metalCaptureDevice{};
   std::optional<metalcapture::MetalCaptureRequest> metalCapture{};
   // True when MTLCaptureManager.startCapture was already issued at
@@ -541,6 +547,7 @@ class QueueLifecycleController {
     std::string contextValue{};
     size_t slotIndex = 0;
     u64 seqId = 0;
+    u64 commandBufferChainLength = 1;
   };
 
   // Drain one pending completion — blocks on waitUntilCompleted() and then

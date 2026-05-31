@@ -1142,10 +1142,12 @@ void QueueLifecycleController::submit(QueueSubmissionRecord& record) {
     preparedDiagnostics = diagnosticsController->prepareQueueSubmission(diagnostics);
   }
 
-  // Commit and hand the record (including the retained WMT::CommandBuffer) to
-  // the completion-watcher thread via pendingCompletion_. That thread will
-  // call waitUntilCompleted() — the upstream-dxmt finish-thread shape — then
-  // push the seqId into completedSeqQueue and fire the transition callbacks.
+  // Commit and hand the tail record (including the retained WMT::CommandBuffer)
+  // to the completion-watcher thread via pendingCompletion_. That thread calls
+  // waitUntilCompleted() only on this tail CB. For records with
+  // commandBufferChainLength > 1, completion of the tail is the public seqId
+  // completion point because earlier sub-CBs were committed in encodeChunk on
+  // the same Metal queue.
   commitCommandBuffer();
 
   {
@@ -1156,6 +1158,7 @@ void QueueLifecycleController::submit(QueueSubmissionRecord& record) {
     pending.contextValue = record.context ? record.context : "queue";
     pending.slotIndex = record.slotIndex;
     pending.seqId = record.seqId;
+    pending.commandBufferChainLength = record.commandBufferChainLength;
     pendingCompletion_.push_back(std::move(pending));
 #ifndef NDEBUG
     assertPendingCompletionInvariantsLocked();

@@ -93,6 +93,8 @@ void countBaseStateBind(std::uint32_t textureBinds,
                         std::uint32_t viewportBinds,
                         std::uint32_t scissorBinds,
                         std::uint32_t rasterizerBinds);
+void countBaseStateBindSkip(std::uint32_t textureBinds,
+                            std::uint32_t samplerBinds);
 void countDrawShaderBucket(std::uint64_t vertexShaderHash,
                            std::uint64_t pixelShaderHash,
                            std::uint64_t variantHash);

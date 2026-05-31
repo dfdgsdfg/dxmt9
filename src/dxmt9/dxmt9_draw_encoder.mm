@@ -446,6 +446,14 @@ void countSamplerBind() {
   perf::countBaseStateBind(0, 1, 0, 0, 0, 0, 0, 0, 0, 0);
 }
 
+void countTextureBindSkipped() {
+  perf::countBaseStateBindSkip(1, 0);
+}
+
+void countSamplerBindSkipped() {
+  perf::countBaseStateBindSkip(0, 1);
+}
+
 void countVertexBufferBind() {
   perf::countBaseStateBind(0, 0, 1, 0, 0, 0, 0, 0, 0, 0);
 }
@@ -477,6 +485,32 @@ void countScissorBind() {
 void countRasterizerBind() {
   perf::countBaseStateBind(0, 0, 0, 0, 0, 0, 0, 0, 0, 1);
 }
+
+u64 textureSamplerShadowHash(u64 tag,
+                             std::uint8_t stage,
+                             obj_handle_t handle) noexcept {
+  u64 seed = drawBindingPacketHashMix(tag, stage);
+  return drawBindingPacketHashMix(seed, static_cast<u64>(handle));
+}
+
+bool textureSamplerShadowMatches(const TextureSamplerBindShadowSlot& slot,
+                                 u64 hash,
+                                 obj_handle_t handle) noexcept {
+  return slot.valid && slot.hash == hash && slot.handle == handle;
+}
+
+void textureSamplerShadowStore(TextureSamplerBindShadowSlot& slot,
+                               u64 hash,
+                               obj_handle_t handle) noexcept {
+  slot.valid = true;
+  slot.hash = hash;
+  slot.handle = handle;
+}
+
+constexpr u64 kFragmentTextureShadowTag = 0x667261675f746578ull;
+constexpr u64 kFragmentSamplerShadowTag = 0x667261675f73616dull;
+constexpr u64 kVertexTextureShadowTag = 0x766572745f746578ull;
+constexpr u64 kVertexSamplerShadowTag = 0x766572745f73616dull;
 
 bool splitPresentBeforeAcquireEnabled() {
   static const bool enabled = [] {
@@ -1326,7 +1360,8 @@ bool encodeDraw(EncodeContext& ctx,
                  bool tileFfpMode,
                  bool argbufHybridMode,
                  bool argbufResourceArray,
-                 bool reopenArgbufHybrid) {
+                 bool reopenArgbufHybrid,
+                 TextureSamplerBindShadow* textureSamplerShadow) {
   // Hot per-draw entry. Per codebase_conventions.rules.md, no heap allocation
   // is permitted on this path; the guard is debug-only and asserts this when
   // DXMT_DEBUG_NO_PER_DRAW_ALLOC=1 is set in env. See dxmt9_debug_alloc_guard.
@@ -2422,32 +2457,66 @@ bool encodeDraw(EncodeContext& ctx,
               /*recorder=*/nullptr, encoder);
         }
       } else {
-      for (std::size_t i = 0; i < resolvedFragmentBindingCount; ++i) {
-        const auto& binding = resolvedFragmentBindings[i];
-        if (binding.texture) {
-          if ((traceEncode || debug::shouldTraceTexture(binding.textureHandle)) &&
-              binding.textureRecord) {
-            std::ostringstream out;
-            out << "[dxmt9-texture] bind stage=" << binding.stage
-                << " handle=0x" << std::hex << binding.textureHandle.value << std::dec
-                << " format=" << static_cast<unsigned>(binding.textureRecord->desc.format)
-                << " size=" << binding.textureRecord->desc.width << "x"
-                << binding.textureRecord->desc.height
-                << " levels=" << binding.textureRecord->desc.levels
-                << " lod=" << binding.textureLod;
-            appendSamplerTrace(out, binding.samplerStates, binding.srgbTexture);
-            emitTextureTraceLine(out.str());
+        for (std::size_t i = 0; i < resolvedFragmentBindingCount; ++i) {
+          const auto& binding = resolvedFragmentBindings[i];
+          if (binding.texture) {
+            bool skipTextureBind = false;
+            if (textureSamplerShadow && binding.stage < core::kMaxSamplers) {
+              auto& slot = textureSamplerShadow->fragmentTextures[binding.stage];
+              const auto hash = textureSamplerShadowHash(
+                  kFragmentTextureShadowTag,
+                  static_cast<std::uint8_t>(binding.stage),
+                  binding.texture.handle);
+              skipTextureBind = textureSamplerShadowMatches(
+                  slot, hash, binding.texture.handle);
+              if (!skipTextureBind) {
+                textureSamplerShadowStore(slot, hash, binding.texture.handle);
+              }
+            }
+            if (skipTextureBind) {
+              countTextureBindSkipped();
+            } else {
+              if ((traceEncode || debug::shouldTraceTexture(binding.textureHandle)) &&
+                  binding.textureRecord) {
+                std::ostringstream out;
+                out << "[dxmt9-texture] bind stage=" << binding.stage
+                    << " handle=0x" << std::hex << binding.textureHandle.value << std::dec
+                    << " format=" << static_cast<unsigned>(binding.textureRecord->desc.format)
+                    << " size=" << binding.textureRecord->desc.width << "x"
+                    << binding.textureRecord->desc.height
+                    << " levels=" << binding.textureRecord->desc.levels
+                    << " lod=" << binding.textureLod;
+                appendSamplerTrace(out, binding.samplerStates, binding.srgbTexture);
+                emitTextureTraceLine(out.str());
+              }
+              recordedSetFragmentTexture(ctx, encoder, binding.texture,
+                                         static_cast<std::uint8_t>(binding.stage));
+              countTextureBind();
+            }
           }
-          recordedSetFragmentTexture(ctx, encoder, binding.texture,
-                                     static_cast<std::uint8_t>(binding.stage));
-          countTextureBind();
+          if (binding.sampler) {
+            bool skipSamplerBind = false;
+            if (textureSamplerShadow && binding.stage < core::kMaxSamplers) {
+              auto& slot = textureSamplerShadow->fragmentSamplers[binding.stage];
+              const auto hash = textureSamplerShadowHash(
+                  kFragmentSamplerShadowTag,
+                  static_cast<std::uint8_t>(binding.stage),
+                  binding.sampler.handle);
+              skipSamplerBind = textureSamplerShadowMatches(
+                  slot, hash, binding.sampler.handle);
+              if (!skipSamplerBind) {
+                textureSamplerShadowStore(slot, hash, binding.sampler.handle);
+              }
+            }
+            if (skipSamplerBind) {
+              countSamplerBindSkipped();
+            } else {
+              recordedSetFragmentSamplerState(ctx, encoder, binding.sampler,
+                                              static_cast<std::uint8_t>(binding.stage));
+              countSamplerBind();
+            }
+          }
         }
-        if (binding.sampler) {
-          recordedSetFragmentSamplerState(ctx, encoder, binding.sampler,
-                                          static_cast<std::uint8_t>(binding.stage));
-          countSamplerBind();
-        }
-      }
       }
     }
     // D3DSAMP_MIPMAPLODBIAS (gap_d3d9 B.3): the per-sampler mip LOD bias is
@@ -2510,26 +2579,60 @@ bool encodeDraw(EncodeContext& ctx,
       for (std::size_t i = 0; i < resolvedVertexBindingCount; ++i) {
         const auto& binding = resolvedVertexBindings[i];
         if (binding.texture) {
-          if ((traceEncode || debug::shouldTraceTexture(binding.textureHandle)) &&
-              binding.textureRecord) {
-            std::ostringstream out;
-            out << "[dxmt9-texture] bind vertex stage=" << binding.stage
-                << " handle=0x" << std::hex << binding.textureHandle.value << std::dec
-                << " format=" << static_cast<unsigned>(binding.textureRecord->desc.format)
-                << " size=" << binding.textureRecord->desc.width << "x"
-                << binding.textureRecord->desc.height
-                << " levels=" << binding.textureRecord->desc.levels
-                << " lod=" << binding.textureLod;
-            emitTextureTraceLine(out.str());
+          bool skipTextureBind = false;
+          if (textureSamplerShadow && binding.stage < core::kMaxVertexTextureSamplers) {
+            auto& slot = textureSamplerShadow->vertexTextures[binding.stage];
+            const auto hash = textureSamplerShadowHash(
+                kVertexTextureShadowTag,
+                static_cast<std::uint8_t>(binding.stage),
+                binding.texture.handle);
+            skipTextureBind = textureSamplerShadowMatches(
+                slot, hash, binding.texture.handle);
+            if (!skipTextureBind) {
+              textureSamplerShadowStore(slot, hash, binding.texture.handle);
+            }
           }
-          recordedSetVertexTexture(ctx, encoder, binding.texture,
-                                   static_cast<std::uint8_t>(binding.stage));
-          countTextureBind();
+          if (skipTextureBind) {
+            countTextureBindSkipped();
+          } else {
+            if ((traceEncode || debug::shouldTraceTexture(binding.textureHandle)) &&
+                binding.textureRecord) {
+              std::ostringstream out;
+              out << "[dxmt9-texture] bind vertex stage=" << binding.stage
+                  << " handle=0x" << std::hex << binding.textureHandle.value << std::dec
+                  << " format=" << static_cast<unsigned>(binding.textureRecord->desc.format)
+                  << " size=" << binding.textureRecord->desc.width << "x"
+                  << binding.textureRecord->desc.height
+                  << " levels=" << binding.textureRecord->desc.levels
+                  << " lod=" << binding.textureLod;
+              emitTextureTraceLine(out.str());
+            }
+            recordedSetVertexTexture(ctx, encoder, binding.texture,
+                                     static_cast<std::uint8_t>(binding.stage));
+            countTextureBind();
+          }
         }
         if (binding.sampler) {
-          recordedSetVertexSamplerState(ctx, encoder, binding.sampler,
-                                        static_cast<std::uint8_t>(binding.stage));
-          countSamplerBind();
+          bool skipSamplerBind = false;
+          if (textureSamplerShadow && binding.stage < core::kMaxVertexTextureSamplers) {
+            auto& slot = textureSamplerShadow->vertexSamplers[binding.stage];
+            const auto hash = textureSamplerShadowHash(
+                kVertexSamplerShadowTag,
+                static_cast<std::uint8_t>(binding.stage),
+                binding.sampler.handle);
+            skipSamplerBind = textureSamplerShadowMatches(
+                slot, hash, binding.sampler.handle);
+            if (!skipSamplerBind) {
+              textureSamplerShadowStore(slot, hash, binding.sampler.handle);
+            }
+          }
+          if (skipSamplerBind) {
+            countSamplerBindSkipped();
+          } else {
+            recordedSetVertexSamplerState(ctx, encoder, binding.sampler,
+                                          static_cast<std::uint8_t>(binding.stage));
+            countSamplerBind();
+          }
         }
       }
     }
@@ -3024,6 +3127,7 @@ std::optional<core::metalqueue::QueueSubmissionRecord> encodeChunk(
   // table so draws can't observe last-write-wins on a shared table. Reset
   // whenever a new encoder opens (its argbuf table starts empty).
   std::optional<u64> lastArgbufPayloadHash;
+  TextureSamplerBindShadow textureSamplerShadow{};
 
   // TLA+: EncoderLifecycle variable binding:
   // activeKind  := activeRenderEncoder ? "Render" : activeBlitEncoder ? "Blit" : "None"
@@ -3070,6 +3174,7 @@ std::optional<core::metalqueue::QueueSubmissionRecord> encodeChunk(
       activeRenderEncoder = {};
       hasActiveRender = false;
       activeDrawStateKey.reset();
+      textureSamplerShadow.reset();
       assertEncoderLifecycleInvariant();
     }
   };
@@ -3100,6 +3205,7 @@ std::optional<core::metalqueue::QueueSubmissionRecord> encodeChunk(
     activeKey = makeAttachmentKey(*drawState.hot);
     activeWriteHazard = makeAttachmentHazard(*drawState.hot);
     activeDrawStateKey.reset();
+    textureSamplerShadow.reset();
     // R-BACK-13.1 — per-pass tile-shader FFP selector. Eligibility is
     // computed once at encoder open; the choice is sticky for the pass.
     // Counters: each opened pass bumps exactly one of
@@ -3567,7 +3673,8 @@ std::optional<core::metalqueue::QueueSubmissionRecord> encodeChunk(
                          /*tileFfpMode=*/activePassUsesTileFfp,
                          /*argbufHybridMode=*/activePassUsesArgbufHybrid,
                          /*argbufResourceArray=*/activePassUsesArgbufResourceArray,
-                         /*reopenArgbufHybrid=*/reopenArgbuf)) {
+                         /*reopenArgbufHybrid=*/reopenArgbuf,
+                         &textureSamplerShadow)) {
             baseBound = true;
             activeDrawStateKey = hot.key;
           }
@@ -3779,6 +3886,7 @@ std::optional<core::metalqueue::QueueSubmissionRecord> encodeChunk(
   const u64 seqId = slot.seqId;
   core::metalqueue::QueueSubmissionRecord record;
   record.commandBuffer = std::move(commandBuffer);
+  record.commandBufferChainLength = perChunkSubCBCount + 1;
   if (metalCaptureRequest.has_value()) {
     record.metalCaptureDevice = WMT::Device{ctx.device.handle};
     record.metalCapture = std::move(metalCaptureRequest);

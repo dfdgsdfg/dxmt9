@@ -43,6 +43,12 @@ inline constexpr uint32_t kDefaultMetalDrawableCount = 3;
 // async branch was checked before the sync-on-submit branch). For the
 // common case where at most one env-var is set, behavior is
 // unchanged.
+//
+// This is intentionally still a policy surface, not a hard-coded winner:
+// drawable acquisition is workload/compositor sensitive. Keep alternate
+// modes behind env selection and compare present_acquire_wait_*,
+// present_token_wait_*, present_boundary_wait_*, and frame pacing counters
+// before changing the default.
 enum class AcquirePolicy : uint32_t {
   Sync = 0,        // default — acquire inline in encodeCommands.
   SyncOnSubmit,    // DXMT9_PRESENT_ACQUIRE_ON_SUBMIT — sync acquire at submit.
@@ -83,6 +89,10 @@ AcquirePolicy resolveAcquirePolicyFromEnv();
 // is PresentCompletion or Completion (those branches do not consult
 // presentDequeuedSeqId_), so collapsing it into the lower-priority
 // enum slot preserves behavior exactly.
+//
+// Like AcquirePolicy, this remains an A/B policy surface until a workload
+// class has enough latency/stutter/drawable-wait data to justify a new
+// default. Env overrides are the app-class escape hatch.
 enum class BoundaryPolicy : uint32_t {
   Default = 0,         // wait on presentDequeuedSeqId_ — note dequeued before encode.
   AfterAcquire,        // DXMT9_PRESENT_BOUNDARY_AFTER_ACQUIRE — same wait, note after encode.

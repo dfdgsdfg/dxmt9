@@ -224,6 +224,23 @@ struct PreUploadedDrawData {
   CommandQueue::TransientBufferSlice index{};
 };
 
+struct TextureSamplerBindShadowSlot {
+  bool valid = false;
+  std::uint64_t hash = 0;
+  obj_handle_t handle = 0;
+};
+
+struct TextureSamplerBindShadow {
+  std::array<TextureSamplerBindShadowSlot, core::kMaxSamplers> fragmentTextures{};
+  std::array<TextureSamplerBindShadowSlot, core::kMaxSamplers> fragmentSamplers{};
+  std::array<TextureSamplerBindShadowSlot, core::kMaxVertexTextureSamplers> vertexTextures{};
+  std::array<TextureSamplerBindShadowSlot, core::kMaxVertexTextureSamplers> vertexSamplers{};
+
+  void reset() noexcept {
+    *this = TextureSamplerBindShadow{};
+  }
+};
+
 // Main per-draw encoder. Previously MetalBackendDevice::encodeDraw.
 // Consumes ctx.cache for pipeline lookup, ctx.pool for resource reads,
 // and ctx.queue for transient buffer slabs (per-frequency UBOs).
@@ -303,7 +320,13 @@ bool encodeDraw(EncodeContext& ctx,
                  // on the same encoder). The caller decides via the uniform
                  // payload hash; default true preserves the per-draw-reopen
                  // safe floor for direct callers/tests.
-                 bool reopenArgbufHybrid = true);
+                 bool reopenArgbufHybrid = true,
+                 // Encoder-local direct resource binding shadow. When present,
+                 // texture/sampler direct lane binds are hash-checked against
+                 // the currently open Metal render encoder state and unchanged
+                 // setTexture/setSampler calls are skipped. Callers must reset
+                 // it whenever a render encoder boundary is crossed.
+                 TextureSamplerBindShadow* textureSamplerShadow = nullptr);
 
 // Encode a single chunk's commands into a fresh WMT::CommandBuffer.
 // Returns a QueueSubmissionRecord that the finish loop commits; nullopt

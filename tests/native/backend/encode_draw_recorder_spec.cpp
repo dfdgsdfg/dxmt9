@@ -33,6 +33,7 @@ using dxmt9::core::IndexType;
 using dxmt9::core::PrimitiveType;
 using dxmt9::encoders::EncodeDrawRecorder;
 using dxmt9::encoders::PreUploadedDrawData;
+using dxmt9::encoders::TextureSamplerBindShadow;
 using dxmt9::state::DrawVolatile;
 
 constexpr u32 kD3DDeclTypeFloat2 = 1u;
@@ -113,6 +114,16 @@ const RecordedCommand& commandAt(const Capture& capture,
     fail(std::string(message));
   }
   return capture.commands[index];
+}
+
+std::size_t countCommands(const Capture& capture, RecordedKind kind) {
+  std::size_t count = 0;
+  for (const auto& command : capture.commands) {
+    if (command.kind == kind) {
+      ++count;
+    }
+  }
+  return count;
 }
 
 DrawVolatile volatileBytes(const RecordedCommand& command) {
@@ -539,7 +550,8 @@ void runEncodeDraw(Harness& harness,
                    const PreUploadedDrawData& preUploaded,
                    std::span<const std::uint8_t> arena,
                    bool skipBaseStateBind = true,
-                   bool argbufHybridMode = false) {
+                   bool argbufHybridMode = false,
+                   TextureSamplerBindShadow* textureSamplerShadow = nullptr) {
   auto ctx = makeContext(harness, recorder);
   WMT::CommandBuffer commandBuffer{};
   WMT::RenderCommandEncoder encoder{};
@@ -558,7 +570,10 @@ void runEncodeDraw(Harness& harness,
       arena,
       &cleanDirty,
       /*tileFfpMode=*/false,
-      argbufHybridMode);
+      argbufHybridMode,
+      /*argbufResourceArray=*/false,
+      /*reopenArgbufHybrid=*/true,
+      textureSamplerShadow);
 
   check(encoded, "encodeDraw emits a draw");
 }
@@ -820,6 +835,116 @@ void testArgbufModeKeepsDirectVertexTextureSamplerBinds() {
         "Stage 2 argbuf mode keeps the direct setVertexTexture bind");
   check(sawVertexSampler,
         "Stage 2 argbuf mode keeps the direct setVertexSamplerState bind");
+}
+
+void testTextureSamplerShadowDedupsDirectFragmentAndVertexBinds() {
+  Harness harness;
+  Capture capture;
+  auto recorder = makeRecorder(capture);
+
+  constexpr obj_handle_t kPipeline = 0x700000700000751ull;
+  constexpr obj_handle_t kDepthState = 0x700000700000752ull;
+  constexpr obj_handle_t kSampler = 0x700000700000753ull;
+  constexpr obj_handle_t kRenderTarget = 0x700000700000754ull;
+  constexpr obj_handle_t kFragmentTexture0 = 0x700000700000755ull;
+  constexpr obj_handle_t kVertexTexture0 = 0x700000700000756ull;
+  constexpr obj_handle_t kBoundVertex = 0x700000700000757ull;
+
+  recorder.suppressBaseStateLookup = true;
+  recorder.renderPipelineState.handle = kPipeline;
+  recorder.depthStencilState.handle = kDepthState;
+  recorder.fragmentSamplerState.handle = kSampler;
+
+  auto state = makeProgrammableState(20u);
+  state.hot.colorAttachments[0].handle =
+      harness.createRenderTargetSurface(kRenderTarget, 640u, 480u);
+  state.hot.textures[0] = harness.createBoundTexture(kFragmentTexture0, 64u, 64u);
+  state.hot.textures[dxmt9::core::kVertexTextureSampler0] =
+      harness.createBoundTexture(kVertexTexture0, 32u, 32u);
+  state.hot.textureMask =
+      (1u << 0u) | (1u << dxmt9::core::kVertexTextureSampler0);
+  state.hot.streamBuffers[0] = harness.createBoundBuffer(kBoundVertex, 4096u);
+
+  dxmt9::core::DrawParam param{};
+  param.primitiveType = PrimitiveType::TriangleList;
+  param.primitiveCount = 1u;
+  param.indexed = false;
+
+  PreUploadedDrawData preUploaded{};
+  TextureSamplerBindShadow shadow{};
+  runEncodeDraw(harness, recorder, state, param, preUploaded, {},
+                /*skipBaseStateBind=*/false,
+                /*argbufHybridMode=*/false,
+                &shadow);
+  runEncodeDraw(harness, recorder, state, param, preUploaded, {},
+                /*skipBaseStateBind=*/false,
+                /*argbufHybridMode=*/false,
+                &shadow);
+
+  checkEq(countCommands(capture, RecordedKind::SetFragmentTexture),
+          std::size_t{1},
+          "fragment texture bind is deduped across base-state rebinds");
+  checkEq(countCommands(capture, RecordedKind::SetFragmentSamplerState),
+          std::size_t{1},
+          "fragment sampler bind is deduped across base-state rebinds");
+  checkEq(countCommands(capture, RecordedKind::SetVertexTexture),
+          std::size_t{1},
+          "vertex texture bind is deduped across base-state rebinds");
+  checkEq(countCommands(capture, RecordedKind::SetVertexSamplerState),
+          std::size_t{1},
+          "vertex sampler bind is deduped across base-state rebinds");
+  checkEq(countCommands(capture, RecordedKind::DrawPrimitives),
+          std::size_t{2},
+          "dedup keeps both draws");
+}
+
+void testTextureSamplerShadowResetForcesDirectRebind() {
+  Harness harness;
+  Capture capture;
+  auto recorder = makeRecorder(capture);
+
+  constexpr obj_handle_t kPipeline = 0x700000700000761ull;
+  constexpr obj_handle_t kDepthState = 0x700000700000762ull;
+  constexpr obj_handle_t kSampler = 0x700000700000763ull;
+  constexpr obj_handle_t kRenderTarget = 0x700000700000764ull;
+  constexpr obj_handle_t kTexture0 = 0x700000700000765ull;
+  constexpr obj_handle_t kBoundVertex = 0x700000700000766ull;
+
+  recorder.suppressBaseStateLookup = true;
+  recorder.renderPipelineState.handle = kPipeline;
+  recorder.depthStencilState.handle = kDepthState;
+  recorder.fragmentSamplerState.handle = kSampler;
+
+  auto state = makeProgrammableState(20u);
+  state.hot.colorAttachments[0].handle =
+      harness.createRenderTargetSurface(kRenderTarget, 640u, 480u);
+  state.hot.textures[0] = harness.createBoundTexture(kTexture0, 64u, 64u);
+  state.hot.textureMask = 0x1u;
+  state.hot.streamBuffers[0] = harness.createBoundBuffer(kBoundVertex, 4096u);
+
+  dxmt9::core::DrawParam param{};
+  param.primitiveType = PrimitiveType::TriangleList;
+  param.primitiveCount = 1u;
+  param.indexed = false;
+
+  PreUploadedDrawData preUploaded{};
+  TextureSamplerBindShadow shadow{};
+  runEncodeDraw(harness, recorder, state, param, preUploaded, {},
+                /*skipBaseStateBind=*/false,
+                /*argbufHybridMode=*/false,
+                &shadow);
+  shadow.reset();
+  runEncodeDraw(harness, recorder, state, param, preUploaded, {},
+                /*skipBaseStateBind=*/false,
+                /*argbufHybridMode=*/false,
+                &shadow);
+
+  checkEq(countCommands(capture, RecordedKind::SetFragmentTexture),
+          std::size_t{2},
+          "shadow reset forces fragment texture rebind");
+  checkEq(countCommands(capture, RecordedKind::SetFragmentSamplerState),
+          std::size_t{2},
+          "shadow reset forces fragment sampler rebind");
 }
 
 void testNonIndexedDrawPrimitivesAbsorbsStartVertexIntoOffset() {
@@ -2155,6 +2280,8 @@ int main() {
     testBaseStateRecorderCapturesRasterTextureSamplerOrdering();
     testArgbufModeKeepsDirectTextureSamplerBinds();
     testArgbufModeKeepsDirectVertexTextureSamplerBinds();
+    testTextureSamplerShadowDedupsDirectFragmentAndVertexBinds();
+    testTextureSamplerShadowResetForcesDirectRebind();
     testNonIndexedDrawPrimitivesAbsorbsStartVertexIntoOffset();
     testNonIndexedDrawIgnoresStaleIndexIntent();
     testIndexedPrimitiveTopologyAndIndexWidthBoundaries();

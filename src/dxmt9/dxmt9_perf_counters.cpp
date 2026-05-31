@@ -147,6 +147,8 @@ struct Counters {
   std::atomic<std::uint64_t> drawUpIndexBytes{0};
   std::atomic<std::uint64_t> bindTexture{0};
   std::atomic<std::uint64_t> bindSampler{0};
+  std::atomic<std::uint64_t> bindTextureSkipped{0};
+  std::atomic<std::uint64_t> bindSamplerSkipped{0};
   std::atomic<std::uint64_t> bindVertexBuffer{0};
   std::atomic<std::uint64_t> bindIndexBuffer{0};
   std::atomic<std::uint64_t> bindUniformBuffer{0};
@@ -588,7 +590,7 @@ struct CounterEntry {
   double percentile;
 };
 
-constexpr std::array<CounterEntry, 383> kCounterTable = {{
+constexpr std::array<CounterEntry, 385> kCounterTable = {{
     {"chunk_admit", CounterEntry::Kind::UnsignedCount, &Counters::chunkAdmit, nullptr, nullptr, 0.0},
     {"chunk_reject", CounterEntry::Kind::UnsignedCount, &Counters::chunkReject, nullptr, nullptr, 0.0},
     {"ring_arena_heap_fallback_count", CounterEntry::Kind::UnsignedCount, &Counters::ringArenaHeapFallbackCount, nullptr, nullptr, 0.0},
@@ -648,6 +650,8 @@ constexpr std::array<CounterEntry, 383> kCounterTable = {{
     {"draw_up_index_bytes", CounterEntry::Kind::UnsignedCount, &Counters::drawUpIndexBytes, nullptr, nullptr, 0.0},
     {"bind_texture", CounterEntry::Kind::UnsignedCount, &Counters::bindTexture, nullptr, nullptr, 0.0},
     {"bind_sampler", CounterEntry::Kind::UnsignedCount, &Counters::bindSampler, nullptr, nullptr, 0.0},
+    {"bind_texture_skipped", CounterEntry::Kind::UnsignedCount, &Counters::bindTextureSkipped, nullptr, nullptr, 0.0},
+    {"bind_sampler_skipped", CounterEntry::Kind::UnsignedCount, &Counters::bindSamplerSkipped, nullptr, nullptr, 0.0},
     {"bind_vertex_buffer", CounterEntry::Kind::UnsignedCount, &Counters::bindVertexBuffer, nullptr, nullptr, 0.0},
     {"bind_index_buffer", CounterEntry::Kind::UnsignedCount, &Counters::bindIndexBuffer, nullptr, nullptr, 0.0},
     {"bind_uniform_buffer", CounterEntry::Kind::UnsignedCount, &Counters::bindUniformBuffer, nullptr, nullptr, 0.0},
@@ -1226,6 +1230,12 @@ void countBaseStateBind(std::uint32_t textureBinds,
   add(counters().bindViewport, viewportBinds);
   add(counters().bindScissor, scissorBinds);
   add(counters().bindRasterizer, rasterizerBinds);
+}
+
+void countBaseStateBindSkip(std::uint32_t textureBinds,
+                            std::uint32_t samplerBinds) {
+  add(counters().bindTextureSkipped, textureBinds);
+  add(counters().bindSamplerSkipped, samplerBinds);
 }
 
 void countDrawShaderBucket(std::uint64_t vertexShaderHash,
