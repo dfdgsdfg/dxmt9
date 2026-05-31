@@ -9,8 +9,6 @@
 
 namespace dxmt9::shaders {
 
-namespace {
-
 bool vsoutTrimEnabled() {
   static const bool value = [] {
     const char* env = std::getenv("DXMT9_TRIM_UNUSED_VARYINGS");
@@ -19,15 +17,39 @@ bool vsoutTrimEnabled() {
   return value;
 }
 
-}  // namespace
-
-std::size_t vsoutMaxTexcoord() {
-  return vsoutTrimEnabled() ? 5u : static_cast<std::size_t>(core::kMaxTextureStages);
+VSOutLayout minimalVSOutLayout() {
+  VSOutLayout layout{};
+  layout.texcoordMask = 0x1u;
+  layout.color = false;
+  layout.secondaryColor = false;
+  layout.fogFactor = false;
+  layout.pointSize = false;
+  return layout;
 }
 
-bool vsoutEmitFogFactor() { return !vsoutTrimEnabled(); }
+std::uint32_t vsoutLayoutKey(const VSOutLayout& layout) {
+  std::uint32_t key = layout.texcoordMask & 0xffu;
+  if (layout.color) key |= 1u << 8;
+  if (layout.secondaryColor) key |= 1u << 9;
+  if (layout.fogFactor) key |= 1u << 10;
+  if (layout.pointSize) key |= 1u << 11;
+  return key;
+}
 
-bool vsoutEmitPointSize() { return !vsoutTrimEnabled(); }
+bool vsoutEmitTexcoord(const VSOutLayout& layout, std::size_t index) {
+  return index < core::kMaxTextureStages &&
+         ((layout.texcoordMask & (1u << index)) != 0u);
+}
+
+bool vsoutEmitColor(const VSOutLayout& layout) { return layout.color; }
+
+bool vsoutEmitSecondaryColor(const VSOutLayout& layout) {
+  return layout.secondaryColor;
+}
+
+bool vsoutEmitFogFactor(const VSOutLayout& layout) { return layout.fogFactor; }
+
+bool vsoutEmitPointSize(const VSOutLayout& layout) { return layout.pointSize; }
 
 bool fsHalfPrecisionEnabled() {
   static const bool value = [] {
@@ -273,17 +295,23 @@ std::string makeShaderPrelude(const ShaderPreludeOptions& options) {
   out << "};\n";
   out << "struct VSOut {\n";
   out << "  float4 position [[position]];\n";
-  out << "  float4 color" << centroidAttribute(options.centroidColor) << ";\n";
-  out << "  float4 secondaryColor" << centroidAttribute(options.centroidSecondaryColor) << ";\n";
-  const auto maxTex = vsoutMaxTexcoord();
-  for (size_t i = 0; i < maxTex; ++i) {
+  if (vsoutEmitColor(options.vsOutLayout)) {
+    out << "  float4 color" << centroidAttribute(options.centroidColor) << ";\n";
+  }
+  if (vsoutEmitSecondaryColor(options.vsOutLayout)) {
+    out << "  float4 secondaryColor" << centroidAttribute(options.centroidSecondaryColor) << ";\n";
+  }
+  for (size_t i = 0; i < core::kMaxTextureStages; ++i) {
+    if (!vsoutEmitTexcoord(options.vsOutLayout, i)) {
+      continue;
+    }
     const bool centroid = (options.centroidTexcoordMask & (1u << i)) != 0u;
     out << "  float4 texcoord" << i << centroidAttribute(centroid) << ";\n";
   }
-  if (vsoutEmitFogFactor()) {
+  if (vsoutEmitFogFactor(options.vsOutLayout)) {
     out << "  float fogFactor" << centroidAttribute(options.centroidFogFactor) << ";\n";
   }
-  if (vsoutEmitPointSize()) {
+  if (vsoutEmitPointSize(options.vsOutLayout)) {
     out << "  float pointSize [[point_size]];\n";
   }
   if (options.withClipDistances) {
@@ -419,10 +447,19 @@ std::string makeShaderPrelude(const ShaderPreludeOptions& options) {
   out << "}\n";
   out << "inline float4 dxmt9_select_texcoord(VSOut in, uint index) {\n";
   out << "  switch (index) {\n";
-  for (size_t i = 0; i < vsoutMaxTexcoord(); ++i) {
+  bool hasTexcoord0 = false;
+  for (size_t i = 0; i < core::kMaxTextureStages; ++i) {
+    if (!vsoutEmitTexcoord(options.vsOutLayout, i)) {
+      continue;
+    }
+    hasTexcoord0 = hasTexcoord0 || i == 0u;
     out << "    case " << i << "u: return in.texcoord" << i << ";\n";
   }
-  out << "    default: return in.texcoord0;\n";
+  if (hasTexcoord0) {
+    out << "    default: return in.texcoord0;\n";
+  } else {
+    out << "    default: return float4(0.0f, 0.0f, 0.0f, 1.0f);\n";
+  }
   out << "  }\n";
   out << "}\n";
   if (fsHalfPrecisionEnabled()) {

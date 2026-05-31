@@ -498,13 +498,9 @@ std::string makeFfpVertexSource(const FfpVertexKey& key,
   constexpr u32 kTciCameraSpacePosition = 0x00020000u;
   constexpr u32 kTciCameraSpaceReflection = 0x00030000u;
   constexpr u32 kTciSphereMap = 0x00040000u;
-  const auto maxTexOut = shaders::vsoutMaxTexcoord();
   const auto emitStageTexcoords = [&](std::ostringstream& shader) {
     for (size_t stage = 0; stage < kMaxTextureStages; ++stage) {
-      // DXMT9_TRIM_UNUSED_VARYINGS: skip stages that the trimmed VSOut
-      // doesn't declare; the local `dxmt9_texcoordN` would still compute
-      // but the `out.texcoordN` write would target an undefined field.
-      if (stage >= maxTexOut) continue;
+      if (!shaders::vsoutEmitTexcoord(context.vsOutLayout, stage)) continue;
       const u32 texCoordIndex = key.texCoordGen[stage] & kTciIndexMask;
       const u32 texCoordGen = key.texCoordGen[stage] & kTciGenMask;
       shader << "  float4 dxmt9_texcoord" << stage << " = float4(0.0f, 0.0f, 1.0f, 1.0f);\n";
@@ -546,10 +542,13 @@ std::string makeFfpVertexSource(const FfpVertexKey& key,
              << "u), dxmt9_texcoord" << stage << ".zw);\n";
     }
   };
+  shaders::ShaderPreludeOptions preludeOptions{};
+  preludeOptions.withClipDistances = key.clipPlaneMask != 0;
+  preludeOptions.vsOutLayout = context.vsOutLayout;
   if (argbufHybrid) {
-    out << shaders::makeShaderPreludeArgbufHybrid(key.clipPlaneMask != 0);
+    out << shaders::makeShaderPreludeArgbufHybrid(preludeOptions);
   } else {
-    out << shaders::makeShaderPrelude(key.clipPlaneMask != 0);
+    out << shaders::makeShaderPrelude(preludeOptions);
   }
   // R-BACK-12.22..12.26 MSL routing — when argbufHybrid is set the entry
   // point takes a single argument buffer at slot 30 instead of dedicated
@@ -593,15 +592,15 @@ std::string makeFfpVertexSource(const FfpVertexKey& key,
     out << "  float2 ndc = float2(((inPosition.x - ffpVs.viewportOrigin.x) / viewportSize.x) * 2.0f - 1.0f,\n";
     out << "                     1.0f - ((inPosition.y - ffpVs.viewportOrigin.y) / viewportSize.y) * 2.0f);\n";
     out << "  out.position = float4(ndc * clipW, inPosition.z * clipW, clipW);\n";
-    if (layout->hasDiffuse) {
+    if (shaders::vsoutEmitColor(context.vsOutLayout) && layout->hasDiffuse) {
       out << "  out.color = dxmt9_load_d3dcolor(stream0, base + " << layout->diffuseOffset << "u);\n";
-    } else {
+    } else if (shaders::vsoutEmitColor(context.vsOutLayout)) {
       out << "  out.color = float4(1.0);\n";
     }
-    if (layout->hasSpecular) {
+    if (shaders::vsoutEmitSecondaryColor(context.vsOutLayout) && layout->hasSpecular) {
       out << "  out.secondaryColor = dxmt9_load_d3dcolor(stream0, base + "
           << layout->specularOffset << "u);\n";
-    } else {
+    } else if (shaders::vsoutEmitSecondaryColor(context.vsOutLayout)) {
       out << "  out.secondaryColor = float4(0.0);\n";
     }
     out << "  float3 dxmt9_lightingNormal = float3(0.0f, 0.0f, 1.0f);\n";
@@ -612,8 +611,8 @@ std::string makeFfpVertexSource(const FfpVertexKey& key,
     // compile when key.lightingEnabled is set.
     out << "  float4 dxmt9_cameraPosition = float4(0.0f, 0.0f, 0.0f, 1.0f);\n";
     emitStageTexcoords(out);
-    if (shaders::vsoutEmitFogFactor()) out << "  out.fogFactor = 1.0;\n";
-    if (shaders::vsoutEmitPointSize()) {
+    if (shaders::vsoutEmitFogFactor(context.vsOutLayout)) out << "  out.fogFactor = 1.0;\n";
+    if (shaders::vsoutEmitPointSize(context.vsOutLayout)) {
       if (layout->hasPointSize) {
         out << "  float dxmt9_pointSize = dxmt9_load_f32(stream0, base + "
             << layout->pointSizeOffset << "u);\n";
@@ -752,26 +751,26 @@ std::string makeFfpVertexSource(const FfpVertexKey& key,
     out << "  }\n";
     out << "  out.position = clip;\n";
     out << "  out.position.xy += ffpVs.halfPixelFixup * out.position.w;\n";
-    if (layout->hasDiffuse) {
+    if (shaders::vsoutEmitColor(context.vsOutLayout) && layout->hasDiffuse) {
       out << "  out.color = dxmt9_load_d3dcolor(stream0, base + " << layout->diffuseOffset << "u);\n";
-    } else {
+    } else if (shaders::vsoutEmitColor(context.vsOutLayout)) {
       out << "  out.color = float4(1.0);\n";
     }
-    if (layout->hasSpecular) {
+    if (shaders::vsoutEmitSecondaryColor(context.vsOutLayout) && layout->hasSpecular) {
       out << "  out.secondaryColor = dxmt9_load_d3dcolor(stream0, base + "
           << layout->specularOffset << "u);\n";
-    } else {
+    } else if (shaders::vsoutEmitSecondaryColor(context.vsOutLayout)) {
       out << "  out.secondaryColor = float4(0.0);\n";
     }
     out << "  float3 dxmt9_lightingNormal = dxmt9_cameraUnitNormal;\n";
     emitStageTexcoords(out);
-    if (shaders::vsoutEmitFogFactor()) {
+    if (shaders::vsoutEmitFogFactor(context.vsOutLayout)) {
       out << "  float dxmt9_fogDepth = ffpVs.rangeFog != 0u ? length(dxmt9_cameraPosition.xyz) : fabs(dxmt9_cameraPosition.z);\n";
       out << "  out.fogFactor = dxmt9_compute_fog_factor(ffpVs.fogMode, dxmt9_fogDepth,\n";
       out << "                                           ffpVs.fogStart, ffpVs.fogEnd,\n";
       out << "                                           ffpVs.fogDensity);\n";
     }
-    if (shaders::vsoutEmitPointSize()) {
+    if (shaders::vsoutEmitPointSize(context.vsOutLayout)) {
       if (layout->hasPointSize) {
         out << "  float dxmt9_pointSize = dxmt9_load_f32(stream0, base + "
             << layout->pointSizeOffset << "u);\n";
@@ -793,19 +792,30 @@ std::string makeFfpVertexSource(const FfpVertexKey& key,
     out << "  float2 p[3] = { float2(-1.0, -1.0), float2(3.0, -1.0), float2(-1.0, 3.0) };\n";
     out << "  out.position = float4(p[vid % 3], 0.0, 1.0);\n";
     out << "  out.position.xy += ffpVs.halfPixelFixup * out.position.w;\n";
-    out << "  out.color = float4(1.0);\n";
-    out << "  out.secondaryColor = float4(0.0);\n";
+    if (shaders::vsoutEmitColor(context.vsOutLayout)) {
+      out << "  out.color = float4(1.0);\n";
+    }
+    if (shaders::vsoutEmitSecondaryColor(context.vsOutLayout)) {
+      out << "  out.secondaryColor = float4(0.0);\n";
+    }
     out << "  float3 dxmt9_lightingNormal = float3(0.0f, 0.0f, 1.0f);\n";
     // Fallback (no vertex layout) path: emit a zero camera position so
     // Point/Spot lighting (D3D9 §B.5) compiles even when no real
     // geometry stream is bound.
     out << "  float4 dxmt9_cameraPosition = float4(0.0f, 0.0f, 0.0f, 1.0f);\n";
-    out << "  out.texcoord0 = float4(float2(vid & 1u, (vid >> 1u) & 1u), 0.0f, 1.0f);\n";
-    for (size_t i = 1; i < maxTexOut; ++i) {
-      out << "  out.texcoord" << i << " = out.texcoord0;\n";
+    if (shaders::vsoutEmitTexcoord(context.vsOutLayout, 0u)) {
+      out << "  out.texcoord0 = float4(float2(vid & 1u, (vid >> 1u) & 1u), 0.0f, 1.0f);\n";
     }
-    if (shaders::vsoutEmitFogFactor()) out << "  out.fogFactor = 1.0;\n";
-    if (shaders::vsoutEmitPointSize()) {
+    for (size_t i = 1; i < kMaxTextureStages; ++i) {
+      if (!shaders::vsoutEmitTexcoord(context.vsOutLayout, i)) continue;
+      if (shaders::vsoutEmitTexcoord(context.vsOutLayout, 0u)) {
+        out << "  out.texcoord" << i << " = out.texcoord0;\n";
+      } else {
+        out << "  out.texcoord" << i << " = float4(0.0f, 0.0f, 0.0f, 1.0f);\n";
+      }
+    }
+    if (shaders::vsoutEmitFogFactor(context.vsOutLayout)) out << "  out.fogFactor = 1.0;\n";
+    if (shaders::vsoutEmitPointSize(context.vsOutLayout)) {
       out << "  out.pointSize = clamp(ffpVs.pointSize, ffpVs.pointSizeMin, ffpVs.pointSizeMax);\n";
     }
   }
@@ -887,12 +897,15 @@ std::string makeFfpPixelSource(const FfpPixelKey& key,
   // argbuf so every downstream sample site is byte-identical.
   const bool argbufResourceArray =
       argbufHybrid && context.argbufResourceArray && hasTextureParams;
+  shaders::ShaderPreludeOptions preludeOptions{};
+  preludeOptions.withClipDistances = context.clipPlaneMask != 0;
+  preludeOptions.vsOutLayout = context.vsOutLayout;
   if (argbufResourceArray) {
-    out << shaders::makeShaderPreludeArgbufResourceArray(context.clipPlaneMask != 0);
+    out << shaders::makeShaderPreludeArgbufResourceArray(preludeOptions);
   } else if (argbufHybrid) {
-    out << shaders::makeShaderPreludeArgbufHybrid(context.clipPlaneMask != 0);
+    out << shaders::makeShaderPreludeArgbufHybrid(preludeOptions);
   } else {
-    out << shaders::makeShaderPrelude(context.clipPlaneMask != 0);
+    out << shaders::makeShaderPrelude(preludeOptions);
   }
   emitFfpTextureOpHelper(out);
   // D3DSAMP_MIPMAPLODBIAS (gap_d3d9 B.3): per-sampler mip LOD bias is applied

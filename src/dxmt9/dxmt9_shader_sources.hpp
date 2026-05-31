@@ -70,28 +70,33 @@ struct ShaderPreludeOptions {
   bool centroidSecondaryColor = false;
   std::uint32_t centroidTexcoordMask = 0;
   bool centroidFogFactor = false;
+  struct VSOutLayout {
+    std::uint32_t texcoordMask = 0xffu;
+    bool color = true;
+    bool secondaryColor = true;
+    bool fogFactor = true;
+    bool pointSize = true;
+  } vsOutLayout{};
 };
 
 std::string makeShaderPrelude(const ShaderPreludeOptions& options);
 std::string makeShaderPrelude(bool withClipDistances);
 
-// DXMT9_TRIM_UNUSED_VARYINGS — opt-in trimming of VSOut fields that the
-// configured app's fragment shaders never read. Inspected once at first
-// call, cached. When enabled, drops texcoord5/6/7 + fogFactor + pointSize
-// from both the VSOut struct emit and every VS-body write to those
-// fields, shrinking the inter-stage parameter buffer by 56 bytes/vertex.
-// Default off — the trim is workload-specific (verified for
-// `app-d3d9-sfiv-benchmark`'s 15 dumped FS); apps that DO sample
-// texcoord5..7 or read fogFactor/pointSize will produce wrong pixels.
-//
-// vsoutMaxTexcoord: 8 by default, 5 when trim is active. Loops over
-// texture stages in the VS emitters and the
-// `dxmt9_select_texcoord(in, N)` helper switch read this.
-// vsoutEmitFogFactor / vsoutEmitPointSize: true by default, false when
-// trim is active. Guards prelude declaration + VS body writes.
-std::size_t vsoutMaxTexcoord();
-bool vsoutEmitFogFactor();
-bool vsoutEmitPointSize();
+using VSOutLayout = ShaderPreludeOptions::VSOutLayout;
+
+// DXMT9_TRIM_UNUSED_VARYINGS — opt-in pair-local VSOut trimming. The env
+// flag only enables the optimization; the actual layout must come from the
+// VS/FS pair's fragment-input liveness. This prevents SFIV-style global
+// trimming from deleting GT1 inputs such as texcoord5..7 or fogFactor.
+bool vsoutTrimEnabled();
+constexpr VSOutLayout fullVSOutLayout() { return VSOutLayout{}; }
+VSOutLayout minimalVSOutLayout();
+std::uint32_t vsoutLayoutKey(const VSOutLayout& layout);
+bool vsoutEmitTexcoord(const VSOutLayout& layout, std::size_t index);
+bool vsoutEmitColor(const VSOutLayout& layout);
+bool vsoutEmitSecondaryColor(const VSOutLayout& layout);
+bool vsoutEmitFogFactor(const VSOutLayout& layout);
+bool vsoutEmitPointSize(const VSOutLayout& layout);
 
 // DXMT9_FS_HALF_PRECISION — **EXPERIMENTAL — NOT FUNCTIONAL** opt-in
 // half (fp16) emission for the DXBC translator's fragment shader path.

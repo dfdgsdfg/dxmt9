@@ -549,9 +549,28 @@ void testShaderVariantProbeKeyDropsOnlyActualSourceHashes() {
   const auto probe = dxmt9::pipeline::makeShaderVariantProbeKey(sourceBacked);
   check(probe == expectedProbe,
         "probe key preserves canonical variant fields and drops only actual source hashes");
+  checkEq(probe.vsOutLayoutKey, sourceBacked.vsOutLayoutKey,
+          "probe key preserves VSOut layout identity");
   check(dxmt9::pipeline::ShaderVariantKeyHash{}(probe) !=
             dxmt9::pipeline::ShaderVariantKeyHash{}(sourceBacked),
         "probe and source-backed keys occupy distinct hash identities");
+}
+
+void testShaderVariantKeyHashDifferentiatesVsOutLayout() {
+  dxmt9::pipeline::ShaderVariantKey full{};
+  full.hash = 0x4444u;
+  full.vsOutLayoutKey =
+      dxmt9::shaders::vsoutLayoutKey(dxmt9::shaders::fullVSOutLayout());
+
+  auto trimmed = full;
+  auto layout = dxmt9::shaders::minimalVSOutLayout();
+  layout.texcoordMask |= 1u << 7u;
+  layout.fogFactor = true;
+  trimmed.vsOutLayoutKey = dxmt9::shaders::vsoutLayoutKey(layout);
+
+  dxmt9::pipeline::ShaderVariantKeyHash hash{};
+  check(hash(full) != hash(trimmed),
+        "VSOut layout participates in the draw PSO cache key");
 }
 
 void testFillPipelineKeyUsesFullRgbaSourceIdentity() {
@@ -844,6 +863,7 @@ int main() {
     testShaderVariantKeyHashRespondsToLayoutAndBlendState();
     testShaderVariantKeyCarriesSourceIdentity();
     testShaderVariantProbeKeyDropsOnlyActualSourceHashes();
+    testShaderVariantKeyHashDifferentiatesVsOutLayout();
     testFillPipelineKeyUsesFullRgbaSourceIdentity();
     testContainedDrawShaderSourcesCarryActualSourceHashes();
     testProgrammableShaderVariantKeyUsesFullVertexDeclHash();

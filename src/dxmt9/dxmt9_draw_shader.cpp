@@ -85,6 +85,76 @@ std::uint32_t activeFragmentTextureMaskForShader(
   return activeMask & ffpMask;
 }
 
+namespace {
+
+bool envFlag(const char* name) {
+  const char* env = std::getenv(name);
+  return env && env[0] != '\0' && std::strcmp(env, "0") != 0;
+}
+
+void keepTexcoord(shaders::VSOutLayout& layout, std::uint32_t index) {
+  if (index < core::kMaxTextureStages) {
+    layout.texcoordMask |= 1u << index;
+  }
+}
+
+shaders::VSOutLayout ffpPixelVaryingLiveness(const ShaderSourceContext& context) {
+  auto layout = shaders::minimalVSOutLayout();
+  keepTexcoord(layout, 0u);
+  if (context.pixelShader.kind != ShaderRef::Kind::FixedFunctionPixel ||
+      !context.pixelShader.pixelKey.has_value()) {
+    return layout;
+  }
+
+  const auto& key = *context.pixelShader.pixelKey;
+  // makeFfpPixelSource currently materializes these unconditionally as
+  // `color`, `current`, `diffuse`, and `specular`.
+  layout.color = true;
+  layout.secondaryColor = true;
+  if (!context.stripFogAlphaTestForTileBase && key.fogMode != FogMode::None) {
+    layout.fogFactor = true;
+  }
+
+  const bool debugFfpUv = envFlag("DXMT_DEBUG_FFP_UV");
+  const bool debugFfpTexture = envFlag("DXMT_DEBUG_FFP_TEXTURE");
+  const bool debugFfpAlpha = envFlag("DXMT_DEBUG_FFP_ALPHA");
+  if (debugFfpUv) {
+    keepTexcoord(layout, 0u);
+  }
+
+  for (std::size_t stage = 0; stage < core::kMaxTextureStages; ++stage) {
+    const auto& stageKey = key.stages[stage];
+    const bool stageEnabled =
+        stageKey.colorOp != static_cast<u32>(TextureOp::Disable) ||
+        stageKey.alphaOp != static_cast<u32>(TextureOp::Disable);
+    if (!stageEnabled || !context.textures[stage]) {
+      continue;
+    }
+    if (!key.pointSpriteEnable || debugFfpTexture || debugFfpAlpha ||
+        ((stageKey.colorOp == 22u || stageKey.colorOp == 23u) && stage > 0u)) {
+      keepTexcoord(layout, static_cast<std::uint32_t>(stage));
+    }
+  }
+  return layout;
+}
+
+}  // namespace
+
+shaders::VSOutLayout resolveVSOutLayoutForShaderPair(const ShaderSourceContext& context) {
+  if (!shaders::vsoutTrimEnabled()) {
+    return shaders::fullVSOutLayout();
+  }
+
+  if (context.pixelShader.kind == ShaderRef::Kind::Bytecode) {
+    return translator::collectTranslatedFragmentVaryingLiveness(context.pixelShader, context);
+  }
+  if (context.pixelShader.kind == ShaderRef::Kind::FixedFunctionPixel &&
+      context.pixelShader.pixelKey.has_value()) {
+    return ffpPixelVaryingLiveness(context);
+  }
+  return shaders::fullVSOutLayout();
+}
+
 ShaderSourceContext makeShaderSourceContext(const DrawShaderLayoutContext& layout,
                                             const FlatDrawStateRecord& hot) {
   ShaderSourceContext context{};

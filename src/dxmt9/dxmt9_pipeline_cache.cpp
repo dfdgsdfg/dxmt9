@@ -522,6 +522,7 @@ std::size_t ShaderVariantKeyHash::operator()(const ShaderVariantKey& key) const 
   // bias-on (slot-4 + bias()) and bias-off (plain sample) variants of the same
   // shader hit distinct cache slots.
   hash = mix(hash, static_cast<u64>(key.samplerLodBias));
+  hash = mix(hash, key.vsOutLayoutKey);
   hash = mix(hash, key.sampleCount);
   for (auto type : key.textureTypes) {
     hash = mix(hash, type);
@@ -1146,6 +1147,8 @@ Cache::getOrBuildDrawPipelineHandleForState(WMT::Reference<WMT::Device> device,
   // a sampler carries a non-zero LOD bias. makeShaderVariantKey already
   // computed key.samplerLodBias from the same predicate the encoder bind reads.
   shaderSource.samplerLodBias = key.samplerLodBias;
+  shaderSource.vsOutLayout = drawshader::resolveVSOutLayoutForShaderPair(shaderSource);
+  key.vsOutLayoutKey = shaders::vsoutLayoutKey(shaderSource.vsOutLayout);
   return getOrBuildDrawPipelineHandle(device, key, std::move(shaderSource),
                                       archive, archivePath);
 }
@@ -1223,6 +1226,8 @@ Cache::getOrBuildTileFfpBaseColorPipelineHandleForState(
   // R-BACK-13.1: drop fog blend + alpha-test discard from the emitted FFP
   // fragment; the tile kernel re-applies them over the rasterized base colour.
   shaderSource.stripFogAlphaTestForTileBase = true;
+  shaderSource.vsOutLayout = drawshader::resolveVSOutLayoutForShaderPair(shaderSource);
+  key.vsOutLayoutKey = shaders::vsoutLayoutKey(shaderSource.vsOutLayout);
   return getOrBuildDrawPipelineHandle(device, key, std::move(shaderSource),
                                       archive, archivePath);
 }

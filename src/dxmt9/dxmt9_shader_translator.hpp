@@ -8,6 +8,7 @@
 
 #include "dxmt9/core.hpp"
 #include "dxmt9_d3d9_bytecode.hpp"
+#include "dxmt9_shader_sources.hpp"
 
 #include <array>
 #include <cstdint>
@@ -28,6 +29,13 @@ std::string makeTranslatedVertexSource(const core::ShaderRef& shader,
 // Translate a D3D9 pixel shader into MSL source. Mirrors the vertex entry.
 std::string makeTranslatedFragmentSource(const core::ShaderRef& shader,
                                          const drawshader::ShaderSourceContext& context);
+
+// Conservative liveness of VSOut fields referenced by the emitted translated
+// fragment MSL for this pixel shader. Used to build pair-local VSOut layouts
+// before the final VS/FS sources are generated.
+shaders::VSOutLayout collectTranslatedFragmentVaryingLiveness(
+    const core::ShaderRef& shader,
+    const drawshader::ShaderSourceContext& context);
 
 namespace test {
 

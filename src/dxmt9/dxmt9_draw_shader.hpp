@@ -9,6 +9,7 @@
 // in dxmt9::pipeline::Cache + the WinemetalShaderCompileRequest service.
 
 #include "dxmt9/core.hpp"
+#include "dxmt9_shader_sources.hpp"
 
 #include <array>
 #include <cstdint>
@@ -65,6 +66,9 @@ struct ShaderSourceContext {
   // off on the base-colour build). Only ever set alongside a tile-FFP draw
   // selection; default off keeps the portable FFP fragment byte-identical.
   bool stripFogAlphaTestForTileBase = false;
+  // Pair-local VSOut layout selected from fragment-input liveness when
+  // DXMT9_TRIM_UNUSED_VARYINGS is enabled. Full layout by default.
+  shaders::VSOutLayout vsOutLayout{};
 };
 
 ShaderSourceContext makeShaderSourceContext(const core::DrawShaderLayoutContext& layout,
@@ -80,6 +84,12 @@ ShaderSourceContext makeShaderSourceContext(const core::fixture::DrawDesc& desc)
 std::uint32_t activeFragmentTextureMaskForShader(
     const core::ShaderRef& pixelShader,
     std::uint32_t textureMask);
+
+// Returns the VSOut layout that the current VS/FS pair must share. With
+// DXMT9_TRIM_UNUSED_VARYINGS disabled this is the full legacy layout. With it
+// enabled, the layout keeps only fields that the emitted fragment MSL can read
+// (plus texcoord0 as the helper fallback lane).
+shaders::VSOutLayout resolveVSOutLayoutForShaderPair(const ShaderSourceContext& context);
 
 // Returns a complete MSL translation unit for either the vertex or pixel
 // shader corresponding to `context`. Also writes the source to

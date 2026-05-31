@@ -776,6 +776,7 @@ ShaderPreludeOptions makePreludeOptions(const SpirvModule& module,
                                         bool vertex) {
   ShaderPreludeOptions options;
   options.withClipDistances = context.clipPlaneMask != 0;
+  options.vsOutLayout = context.vsOutLayout;
   if (vertex) {
     return options;
   }
@@ -786,6 +787,151 @@ ShaderPreludeOptions makePreludeOptions(const SpirvModule& module,
     }
   }
   return options;
+}
+
+void markTexcoord(shaders::VSOutLayout& layout, u32 index) {
+  if (index < kMaxTextureStages) {
+    layout.texcoordMask |= 1u << index;
+  }
+}
+
+void markPixelSemanticRead(shaders::VSOutLayout& layout,
+                           const PixelInputSemantic& semantic,
+                           u32 fallbackTexcoordIndex) {
+  switch (semantic.usage) {
+    case kD3DDeclUsagePSize:
+      layout.pointSize = true;
+      return;
+    case kD3DDeclUsageTexcoord:
+      markTexcoord(layout, semantic.usageIndex);
+      return;
+    case kD3DDeclUsageColor:
+      if (semantic.usageIndex == 0u) {
+        layout.color = true;
+      } else if (semantic.usageIndex == 1u) {
+        layout.secondaryColor = true;
+      }
+      return;
+    case kD3DDeclUsageFog:
+      layout.fogFactor = true;
+      return;
+    case kD3DDeclUsagePosition:
+    case kD3DDeclUsagePositionT:
+      return;
+    default:
+      markTexcoord(layout, fallbackTexcoordIndex);
+      return;
+  }
+}
+
+void markPixelInputTokenRead(shaders::VSOutLayout& layout,
+                             u32 token,
+                             const PixelInputSemantics& semantics) {
+  const u32 type = decodeRegisterType(token);
+  const u32 index = decodeRegisterIndex(token);
+  switch (type) {
+    case kD3DSPR_INPUT:
+      if (index < semantics.size() && semantics[index].valid) {
+        markPixelSemanticRead(layout, semantics[index], index);
+        return;
+      }
+      // SM1.x and undeclared-input fallbacks used by readOperandExpression /
+      // readPixelInputExpression. Mark conservatively when the historical
+      // fallback maps are ambiguous.
+      if (index == 0u) {
+        layout.color = true;
+      } else if (index == 1u) {
+        markTexcoord(layout, 0u);
+        layout.secondaryColor = true;
+      } else if (index == 2u) {
+        layout.secondaryColor = true;
+      } else if (index == 3u) {
+        layout.fogFactor = true;
+      } else {
+        markTexcoord(layout, index);
+      }
+      return;
+    case kD3DSPR_ADDR:
+      markTexcoord(layout, index);
+      return;
+    case kD3DSPR_RASTOUT:
+      if (index == 1u) {
+        layout.fogFactor = true;
+      } else if (index == 2u) {
+        layout.pointSize = true;
+      }
+      return;
+    default:
+      return;
+  }
+}
+
+size_t sourceOperandBegin(const D3DDecodedInstruction& instruction) {
+  size_t sourceBegin = opcodeWritesFirstOperand(instruction.opcode) ? 1u : 0u;
+  switch (instruction.opcode) {
+    case kD3DSIO_IF:
+    case kD3DSIO_IFC:
+    case kD3DSIO_BREAKP:
+    case kD3DSIO_TEXDEPTH:
+      sourceBegin = 0u;
+      break;
+    case kD3DSIO_LOOP:
+      sourceBegin = instruction.operands.size() > 1u ? 1u : 0u;
+      break;
+    case kD3DSIO_REP:
+      sourceBegin = 0u;
+      break;
+    case kD3DSIO_DEF:
+    case kD3DSIO_DEFI:
+    case kD3DSIO_DEFB:
+    case kD3DSIO_DCL:
+    case kD3DSIO_LABEL:
+    case kD3DSIO_CALL:
+      sourceBegin = instruction.operands.size();
+      break;
+    default:
+      break;
+  }
+  return sourceBegin;
+}
+
+shaders::VSOutLayout collectFragmentVaryingLiveness(const SpirvModule& module) {
+  auto layout = shaders::minimalVSOutLayout();
+  // texcoord0 stays present so dxmt9_select_texcoord's fallback lane is always
+  // valid even when an emitted helper is present but no shader body calls it.
+  markTexcoord(layout, 0u);
+  if (module.stage != D3DShaderStage::Pixel) {
+    return layout;
+  }
+
+  const auto semantics = collectPixelInputSemantics(module);
+  for (const auto& instruction : module.instructions) {
+    const size_t begin = sourceOperandBegin(instruction);
+    for (size_t i = begin; i < instruction.operands.size(); ++i) {
+      markPixelInputTokenRead(layout, instruction.operands[i], semantics);
+    }
+    if (module.major == 1u && isTextureSampleOpcode(instruction.opcode) &&
+        !instruction.operands.empty()) {
+      markPixelInputTokenRead(layout, instruction.operands[0], semantics);
+    }
+  }
+
+  // The translated fragment tail always emits runtime D3D9 alpha/fog handling
+  // and passes in.fogFactor to dxmt9_apply_fog. Even when ffpPs.fogMode is zero
+  // at runtime, Metal must type-check the field.
+  layout.fogFactor = true;
+
+  if (const char* mode = std::getenv("DXMT_DEBUG_FRAGMENT_MODE");
+      mode && mode[0] != '\0') {
+    if (std::strcmp(mode, "uv") == 0 ||
+        std::strcmp(mode, "uv_saturate") == 0 ||
+        std::strcmp(mode, "tex0_uv") == 0 ||
+        std::strcmp(mode, "tex0_uv_clamp") == 0 ||
+        std::strcmp(mode, "tex0_uv_flip") == 0) {
+      markTexcoord(layout, 0u);
+    }
+  }
+  return layout;
 }
 
 std::string readPixelInputExpression(u32 token,
@@ -1106,16 +1252,20 @@ std::string translateSpirvToMsl(const SpirvModule& module,
     out << "  float outPointSize = 1.0f;\n";
     if (::dxmt9::debug::forceFullscreenVertexShader()) {
       out << "  out.position = outPosition;\n";
-      out << "  out.color = outColor;\n";
-      out << "  out.secondaryColor = outSecondaryColor;\n";
-      const auto maxTex = shaders::vsoutMaxTexcoord();
-      for (size_t i = 0; i < maxTex; ++i) {
+      if (shaders::vsoutEmitColor(context.vsOutLayout)) {
+        out << "  out.color = outColor;\n";
+      }
+      if (shaders::vsoutEmitSecondaryColor(context.vsOutLayout)) {
+        out << "  out.secondaryColor = outSecondaryColor;\n";
+      }
+      for (size_t i = 0; i < kMaxTextureStages; ++i) {
+        if (!shaders::vsoutEmitTexcoord(context.vsOutLayout, i)) continue;
         out << "  out.texcoord" << i << " = outTexcoord[" << i << "];\n";
       }
-      if (shaders::vsoutEmitFogFactor()) {
+      if (shaders::vsoutEmitFogFactor(context.vsOutLayout)) {
         out << "  out.fogFactor = outFogFactor;\n";
       }
-      if (shaders::vsoutEmitPointSize()) {
+      if (shaders::vsoutEmitPointSize(context.vsOutLayout)) {
         out << "  out.pointSize = outPointSize;\n";
       }
       if (context.clipPlaneMask != 0) {
@@ -2055,18 +2205,22 @@ std::string translateSpirvToMsl(const SpirvModule& module,
     if (::dxmt9::debug::flipTranslatedVertexY()) {
       out << "  out.position.y = -out.position.y;\n";
     }
-    out << "  out.color = outColor;\n";
-    out << "  out.secondaryColor = outSecondaryColor;\n";
+    if (shaders::vsoutEmitColor(context.vsOutLayout)) {
+      out << "  out.color = outColor;\n";
+    }
+    if (shaders::vsoutEmitSecondaryColor(context.vsOutLayout)) {
+      out << "  out.secondaryColor = outSecondaryColor;\n";
+    }
     {
-      const auto maxTex = shaders::vsoutMaxTexcoord();
-      for (size_t i = 0; i < maxTex; ++i) {
+      for (size_t i = 0; i < kMaxTextureStages; ++i) {
+        if (!shaders::vsoutEmitTexcoord(context.vsOutLayout, i)) continue;
         out << "  out.texcoord" << i << " = outTexcoord[" << i << "];\n";
       }
     }
-    if (shaders::vsoutEmitFogFactor()) {
+    if (shaders::vsoutEmitFogFactor(context.vsOutLayout)) {
       out << "  out.fogFactor = outFogFactor;\n";
     }
-    if (shaders::vsoutEmitPointSize()) {
+    if (shaders::vsoutEmitPointSize(context.vsOutLayout)) {
       out << "  out.pointSize = outPointSize;\n";
     }
     out << "  out.position.xy += ffpVs.halfPixelFixup * out.position.w;\n";
@@ -3517,6 +3671,13 @@ std::string makeTranslatedVertexSource(const ::dxmt9::core::ShaderRef& shader,
 std::string makeTranslatedFragmentSource(const ::dxmt9::core::ShaderRef& shader,
                                           const ::dxmt9::drawshader::ShaderSourceContext& context) {
   return detail_::makeTranslatedFragmentSource(shader, context);
+}
+
+::dxmt9::shaders::VSOutLayout collectTranslatedFragmentVaryingLiveness(
+    const ::dxmt9::core::ShaderRef& shader,
+    const ::dxmt9::drawshader::ShaderSourceContext& context) {
+  auto module = detail_::translateD3DBytecodeToSpirv(shader, /*vertex=*/false, context);
+  return detail_::collectFragmentVaryingLiveness(module);
 }
 
 namespace test {

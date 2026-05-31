@@ -333,6 +333,21 @@ std::vector<u32> makePs30InputSemanticBytecode() {
   };
 }
 
+std::vector<u32> makePs30HighTexcoordInputBytecode() {
+  using namespace dxmt9::d3d9bc;
+  constexpr u32 kD3DDeclUsageTexcoord = 5u;
+  return {
+      makeVersionToken(false, 3, 0),
+      makeInstructionToken(kD3DSIO_DCL, 2),
+      makeDclSemanticToken(kD3DDeclUsageTexcoord, 7u),
+      makeDstToken(kD3DSPR_INPUT, 0),
+      makeInstructionToken(kD3DSIO_MOV, 2),
+      makeDstToken(kD3DSPR_COLOROUT, 0),
+      makeSrcToken(kD3DSPR_INPUT, 0),
+      kD3DSIO_END,
+  };
+}
+
 std::vector<u32> makePs20ColorInputBytecode(u32 inputIndex = 0) {
   using namespace dxmt9::d3d9bc;
   constexpr u32 kD3DDeclUsagePosition = 0u;
@@ -1781,6 +1796,33 @@ void testPs30InputSemanticTexcoordMapping() {
   checkContains(source, "tex2.sample(samp2", "ps_3_0 texture sample preserves sampler register mapping");
 }
 
+void testPairLocalVaryingLivenessKeepsHighTexcoordAndFog() {
+  const auto shader = makeShader(makePs30HighTexcoordInputBytecode());
+  DrawDesc desc{};
+  desc.pixelShader = shader;
+  auto context = dxmt9::drawshader::makeShaderSourceContext(desc);
+  const auto layout =
+      dxmt9::translator::collectTranslatedFragmentVaryingLiveness(shader, context);
+
+  check((layout.texcoordMask & (1u << 7u)) != 0u,
+        "FS liveness keeps texcoord7 when the pixel shader reads it");
+  check((layout.texcoordMask & (1u << 5u)) == 0u,
+        "FS liveness does not keep unrelated texcoord5");
+  check(layout.fogFactor,
+        "translated fragment liveness keeps fogFactor for the emitted D3D9 fog tail");
+
+  context.vsOutLayout = layout;
+  const auto source = dxmt9::translator::makeTranslatedFragmentSource(shader, context);
+  checkContains(source, "float4 texcoord7;",
+                "pair-local VSOut declares the high texcoord read by FS");
+  checkNotContains(source, "float4 texcoord5;",
+                   "pair-local VSOut trims unrelated high texcoords");
+  checkContains(source, "float fogFactor",
+                "pair-local VSOut keeps fogFactor for the emitted fog tail");
+  checkContains(source, "dxmt9_select_texcoord(in, 7u)",
+                "fragment source reads the preserved high texcoord");
+}
+
 void testPs30TexkillLoweringContract() {
   const auto source = translatePixel(makePs30TexkillBytecode());
   checkContains(source, "// texkill r0", "ps_3_0 TEXKILL is named in emitted instruction comments");
@@ -2673,6 +2715,7 @@ int main() {
     testFfpMipLodBiasEmitsShaderSideBias();
     testFfpMipLodBiasClearOmitsShaderSideBias();
     testPs30InputSemanticTexcoordMapping();
+    testPairLocalVaryingLivenessKeepsHighTexcoordAndFog();
     testPs30TexkillLoweringContract();
     testPs20ColorInputUsesLegacyInputMapping();
     testVs30OutputSemanticMappingBySemanticIndex();

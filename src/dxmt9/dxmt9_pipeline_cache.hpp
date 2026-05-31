@@ -144,6 +144,10 @@ struct ShaderVariantKey {
   // the common no-bias draw skips the per-draw slot-4 upload + bind. bias-on
   // and bias-off draws therefore hash to distinct PSOs (mirrors tileFfpMode).
   bool samplerLodBias = false;
+  // Pair-local VSOut layout selected from fragment liveness when
+  // DXMT9_TRIM_UNUSED_VARYINGS is enabled. Participates in the probe key so
+  // two shader pairs with different stage-in structs never share a stale PSO.
+  u32 vsOutLayoutKey = 0;
   u32 sampleCount = 1;
   std::array<u32, core::kMaxTextureStages> textureTypes{};
   std::array<u32, core::kMaxRenderTargets> colorFormats{};
