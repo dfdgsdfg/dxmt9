@@ -49,13 +49,31 @@ system_profiler SPDisplaysDataType | grep -A5 "Chipset\|Metal"
 
 Every Metal debugging session follows a strict pipeline: **Doctor → Record → Export → Parse → Analyze → Report → Cleanup**. Claude should execute this pipeline autonomously, not just suggest commands.
 
+### dxmt9 trace artifact convention
+
+For this repository, manual trace output belongs under a dedicated ignored
+trace tree keyed by the app run id:
+
+```bash
+export TRACE_DIR=./traces/<app-runid>
+mkdir -p "$TRACE_DIR/analysis"
+```
+
+For `run_experiment.py` catalogue apps, `<app-runid>` starts with the app id
+and may add a timestamp or short tag, for example
+`app-d3d9-3dmark05-20260531-gt1`. Store `.trace`, `.gputrace`, exported XML,
+parsed summaries, stderr logs, and screenshots under this per-run directory.
+Use subdirectories such as `analysis/`, `cpu/`, and `screenshots/` as needed.
+`./traces` is gitignored; do not commit raw trace bundles.
+
 ### Step 0: Doctor — Verify environment
 
 **Run this FIRST before any debugging session.** If any check fails, stop and tell the user what's missing.
 
 ```bash
-# Create working directories
-mkdir -p ./traces/analysis
+# Create working directories. For dxmt9 catalogue apps, prefer:
+export TRACE_DIR=./traces/<app-runid>
+mkdir -p "$TRACE_DIR/analysis"
 
 # Verify toolchain
 xcode-select -p                          # Must show Xcode.app path, NOT CommandLineTools
@@ -87,7 +105,7 @@ xcrun xctrace record \
   --template 'Metal System Trace' \
   --time-limit 10s \
   --no-prompt \
-  --output ./traces/capture.trace \
+  --output "$TRACE_DIR/capture.trace" \
   --launch -- /path/to/app [args...]
 
 # MODE B: Attach to running process
@@ -96,7 +114,7 @@ xcrun xctrace record \
   --attach <PID_OR_NAME> \
   --time-limit 10s \
   --no-prompt \
-  --output ./traces/capture.trace
+  --output "$TRACE_DIR/capture.trace"
 
 # MODE C: With validation enabled (for debugging errors)
 xcrun xctrace record \
@@ -105,7 +123,7 @@ xcrun xctrace record \
   --env MTL_SHADER_VALIDATION=1 \
   --time-limit 10s \
   --no-prompt \
-  --output ./traces/capture.trace \
+  --output "$TRACE_DIR/capture.trace" \
   --launch -- /path/to/app
 
 # MODE D: iOS device (over USB)
@@ -115,7 +133,7 @@ xcrun xctrace record \
   --attach <APP_NAME> \
   --time-limit 10s \
   --no-prompt \
-  --output ./traces/capture.trace
+  --output "$TRACE_DIR/capture.trace"
 ```
 
 **Decision guide:**
@@ -132,26 +150,26 @@ First discover what's in the trace, then export the relevant tables.
 
 ```bash
 # 2a. Get table of contents (ALWAYS do this first)
-xcrun xctrace export --input ./traces/capture.trace --toc \
-  > ./traces/analysis/toc.xml
+xcrun xctrace export --input "$TRACE_DIR/capture.trace" --toc \
+  > "$TRACE_DIR/analysis/toc.xml"
 
 # 2b. Show available schemas to decide what to export
-grep 'schema=' ./traces/analysis/toc.xml
+grep 'schema=' "$TRACE_DIR/analysis/toc.xml"
 
 # 2c. Export Metal GPU driver events (primary data source)
-xcrun xctrace export --input ./traces/capture.trace \
-  --output ./traces/analysis/gpu_events.xml \
+xcrun xctrace export --input "$TRACE_DIR/capture.trace" \
+  --output "$TRACE_DIR/analysis/gpu_events.xml" \
   --xpath '/trace-toc/run[@number="1"]/data/table[@schema="metal-driver-event-intervals"]'
 
 # 2d. Export GPU hardware counters (if available — Apple Silicon)
-xcrun xctrace export --input ./traces/capture.trace \
-  --output ./traces/analysis/gpu_counters.xml \
+xcrun xctrace export --input "$TRACE_DIR/capture.trace" \
+  --output "$TRACE_DIR/analysis/gpu_counters.xml" \
   --xpath '/trace-toc/run[@number="1"]/data/table[@schema="gpu-counter-intervals"]' \
   2>/dev/null || echo "No GPU counter data in this trace"
 
 # 2e. Export Metal GPU execution intervals (if available)
-xcrun xctrace export --input ./traces/capture.trace \
-  --output ./traces/analysis/gpu_intervals.xml \
+xcrun xctrace export --input "$TRACE_DIR/capture.trace" \
+  --output "$TRACE_DIR/analysis/gpu_intervals.xml" \
   --xpath '/trace-toc/run[@number="1"]/data/table[@schema="metal-gpu-intervals"]' \
   2>/dev/null || echo "No GPU interval data in this trace"
 ```
@@ -164,20 +182,21 @@ Use the `parse_trace.py` helper (included in this repo) or inline Python to extr
 
 ```bash
 # Summary of what was captured
-python3 parse_trace.py ./traces/analysis/gpu_events.xml --summary
+python3 parse_trace.py "$TRACE_DIR/analysis/gpu_events.xml" --summary
 
 # Get structured data as JSON
-python3 parse_trace.py ./traces/analysis/gpu_events.xml --format json --limit 50
+python3 parse_trace.py "$TRACE_DIR/analysis/gpu_events.xml" --format json --limit 50
 
 # Get as TSV for scanning
-python3 parse_trace.py ./traces/analysis/gpu_events.xml --format tsv --limit 30
+python3 parse_trace.py "$TRACE_DIR/analysis/gpu_events.xml" --format tsv --limit 30
 
 # If parse_trace.py is not available, use inline Python:
 python3 << 'PARSE_SCRIPT'
 import xml.etree.ElementTree as ET
 import json
+import os
 
-tree = ET.parse('./traces/analysis/gpu_events.xml')
+tree = ET.parse(f'{os.environ["TRACE_DIR"]}/analysis/gpu_events.xml')
 root = tree.getroot()
 
 # Build ref resolution map
@@ -246,12 +265,12 @@ Structure the report as:
 ### Step 6: Cleanup
 
 ```bash
-# Remove large trace files when analysis is complete
-# (only if user doesn't need the raw trace)
-rm -rf ./traces/capture.trace
+# Remove large trace files when analysis is complete.
+# Do this only if the user does not need the raw trace.
+rm -rf "$TRACE_DIR/capture.trace"
 
 # Keep analysis outputs for reference
-ls -la ./traces/analysis/
+ls -la "$TRACE_DIR/analysis/"
 ```
 
 ### Complete automated workflow example
@@ -262,7 +281,7 @@ This is what Claude should execute end-to-end when a user says "profile my Metal
 #!/bin/bash
 set -e
 APP_PATH="$1"
-TRACE_DIR="./traces"
+export TRACE_DIR="${TRACE_DIR:-./traces/<app-runid>}"
 ANALYSIS_DIR="$TRACE_DIR/analysis"
 
 # Doctor
@@ -317,6 +336,10 @@ Claude can run multiple debugging streams simultaneously for maximum signal:
 
 ```bash
 # Record trace with all validation layers AND HUD logging in one shot
+export TRACE_DIR="${TRACE_DIR:-./traces/<app-runid>}"
+ANALYSIS_DIR="$TRACE_DIR/analysis"
+mkdir -p "$ANALYSIS_DIR"
+
 xcrun xctrace record \
   --template 'Metal System Trace' \
   --env MTL_DEBUG_LAYER=1 \
@@ -325,14 +348,14 @@ xcrun xctrace record \
   --env MTL_HUD_LOGGING_ENABLED=1 \
   --time-limit 10s \
   --no-prompt \
-  --output ./traces/full_debug.trace \
-  --launch -- /path/to/app 2> ./traces/analysis/stderr.log &
+  --output "$TRACE_DIR/full_debug.trace" \
+  --launch -- /path/to/app 2> "$ANALYSIS_DIR/stderr.log" &
 
 TRACE_PID=$!
 
 # Simultaneously capture Metal logs from unified log
 log stream --predicate 'subsystem == "com.apple.Metal"' \
-  --timeout 15 > ./traces/analysis/metal_log.txt 2>/dev/null &
+  --timeout 15 > "$ANALYSIS_DIR/metal_log.txt" 2>/dev/null &
 
 LOG_PID=$!
 
@@ -345,14 +368,14 @@ kill $LOG_PID 2>/dev/null
 
 # Now analyze ALL data sources:
 echo "=== Validation Errors (stderr) ==="
-grep -i "error\|warning\|invalid\|fault" ./traces/analysis/stderr.log || echo "None"
+grep -i "error\|warning\|invalid\|fault" "$ANALYSIS_DIR/stderr.log" || echo "None"
 
 echo "=== Metal Log Entries ==="
-wc -l < ./traces/analysis/metal_log.txt
-grep -i "error" ./traces/analysis/metal_log.txt || echo "No errors in log"
+wc -l < "$ANALYSIS_DIR/metal_log.txt"
+grep -i "error" "$ANALYSIS_DIR/metal_log.txt" || echo "No errors in log"
 
 echo "=== Trace Data ==="
-xcrun xctrace export --input ./traces/full_debug.trace --toc
+xcrun xctrace export --input "$TRACE_DIR/full_debug.trace" --toc
 ```
 
 ### Session state awareness
@@ -603,7 +626,7 @@ Capture Metal frames to `.gputrace` files without Xcode attached, then inspect b
 # For Vulkan apps via MoltenVK:
 export METAL_CAPTURE_ENABLED=1
 export MVK_CONFIG_AUTO_GPU_CAPTURE_SCOPE=2          # 1=device lifecycle, 2=first frame
-export MVK_CONFIG_AUTO_GPU_CAPTURE_OUTPUT_FILE=/tmp/capture.gputrace
+export MVK_CONFIG_AUTO_GPU_CAPTURE_OUTPUT_FILE="$TRACE_DIR/capture.gputrace"
 /path/to/vulkan/app
 
 # For native Metal apps (requires Info.plist MetalCaptureEnabled=true
@@ -621,7 +644,8 @@ if captureManager.supportsDestination(.gpuTraceDocument) {
     let descriptor = MTLCaptureDescriptor()
     descriptor.captureObject = device
     descriptor.destination = .gpuTraceDocument
-    descriptor.outputURL = URL(fileURLWithPath: "./capture.gputrace")
+    let traceOutputPath = ProcessInfo.processInfo.environment["DXMT_TRACE_OUTPUT"] ?? "./traces/manual/capture.gputrace"
+    descriptor.outputURL = URL(fileURLWithPath: traceOutputPath)
     try captureManager.startCapture(with: descriptor)
 
     // ... encode and submit Metal work ...
@@ -635,7 +659,7 @@ Run with: `METAL_CAPTURE_ENABLED=1 ./your_app`
 ### Open .gputrace in Xcode
 
 ```bash
-open /tmp/capture.gputrace
+open "$TRACE_DIR/capture.gputrace"
 # Opens in Xcode's Metal Debugger with full inspection capabilities:
 # - Draw call list and stepping
 # - Pipeline state at each draw
@@ -659,7 +683,7 @@ Launch these data-gathering steps simultaneously — they are independent:
 # OR: screencapture -w -x output.png   # fallback: macOS window capture
 
 # B. Capture .gputrace (programmatic)
-METAL_CAPTURE_ENABLED=1 ./your_app     # produces capture.gputrace
+METAL_CAPTURE_ENABLED=1 ./your_app     # write to $TRACE_DIR/capture.gputrace when supported
 
 # C. Compile shaders with maximum warnings
 xcrun -sdk macosx metal -c -Weverything Shaders.metal -o /dev/null 2>&1
@@ -671,19 +695,19 @@ xcrun -sdk macosx metal -c -Weverything Shaders.metal -o /dev/null 2>&1
 
 ```bash
 # 2a. List all resources and shader functions
-python3 parse_gputrace.py capture.gputrace
+python3 parse_gputrace.py "$TRACE_DIR/capture.gputrace"
 
 # 2b. Check what data files exist in the capture
-ls capture.gputrace/MTLBuffer-* 2>/dev/null && echo "BUFFER DATA AVAILABLE" || echo "NO BUFFER FILES"
-ls capture.gputrace/MTLTexture-* 2>/dev/null && echo "TEXTURE DATA AVAILABLE" || echo "NO TEXTURE FILES"
+ls "$TRACE_DIR"/capture.gputrace/MTLBuffer-* 2>/dev/null && echo "BUFFER DATA AVAILABLE" || echo "NO BUFFER FILES"
+ls "$TRACE_DIR"/capture.gputrace/MTLTexture-* 2>/dev/null && echo "TEXTURE DATA AVAILABLE" || echo "NO TEXTURE FILES"
 ```
 
 **Branch on buffer availability:**
 
 - **MTLBuffer files exist** (Xcode-initiated captures): Parse buffer data directly
   ```bash
-  python3 parse_gputrace.py capture.gputrace --buffer "Vertex" --layout float4 --index 0-10
-  python3 parse_gputrace.py capture.gputrace --dump-all
+  python3 parse_gputrace.py "$TRACE_DIR/capture.gputrace" --buffer "Vertex" --layout float4 --index 0-10
+  python3 parse_gputrace.py "$TRACE_DIR/capture.gputrace" --dump-all
   ```
 - **No MTLBuffer files** (typical for programmatic captures): Fall back to source code analysis
   - Read the Swift/ObjC code that creates and fills buffers
@@ -746,19 +770,19 @@ encoder.label = "Main Render Pass"
 
 ```bash
 # List all captured resources with their labels
-python3 parse_gputrace.py capture.gputrace
+python3 parse_gputrace.py "$TRACE_DIR/capture.gputrace"
 
 # Read specific buffer by label (partial match works)
-python3 parse_gputrace.py capture.gputrace --buffer "Color Output" --layout float4 --index 100
+python3 parse_gputrace.py "$TRACE_DIR/capture.gputrace" --buffer "Color Output" --layout float4 --index 100
 
 # Read compound struct (e.g., Particle = position + velocity + color)
-python3 parse_gputrace.py capture.gputrace --buffer "Particle" --layout "float4,float4,float4" --index 0-10
+python3 parse_gputrace.py "$TRACE_DIR/capture.gputrace" --buffer "Particle" --layout "float4,float4,float4" --index 0-10
 
 # Dump summary statistics for all buffers
-python3 parse_gputrace.py capture.gputrace --dump-all
+python3 parse_gputrace.py "$TRACE_DIR/capture.gputrace" --dump-all
 
 # Output as JSON
-python3 parse_gputrace.py capture.gputrace --buffer "Color Output" --layout float4 --index 100 --json
+python3 parse_gputrace.py "$TRACE_DIR/capture.gputrace" --buffer "Color Output" --layout float4 --index 100 --json
 ```
 
 #### Supported layout types
@@ -1008,11 +1032,11 @@ kill $APP_PID
 # For Vulkan apps (via MoltenVK)
 METAL_CAPTURE_ENABLED=1 \
 MVK_CONFIG_AUTO_GPU_CAPTURE_SCOPE=2 \
-MVK_CONFIG_AUTO_GPU_CAPTURE_OUTPUT_FILE=/tmp/frame.gputrace \
+MVK_CONFIG_AUTO_GPU_CAPTURE_OUTPUT_FILE="$TRACE_DIR/frame.gputrace" \
 /path/to/vulkan/app
 
 # Open in Xcode Metal Debugger
-open /tmp/frame.gputrace
+open "$TRACE_DIR/frame.gputrace"
 ```
 
 ### Recipe: Debug Metal rendering issues (visual + data)

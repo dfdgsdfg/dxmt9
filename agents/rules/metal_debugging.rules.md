@@ -19,6 +19,25 @@ The CPU-side measurement story is documented separately in
 | GPU fault count as counter | `DXMT_PERF_COUNTERS=1` (M5) | `gpu_command_buffer_errors` row |
 | Device capabilities at startup | Always-on (M6) | One log line at process init |
 
+## Artifact location
+
+Keep manual trace artifacts under a dedicated ignored trace tree:
+
+```
+traces/<app-runid>/
+```
+
+For app catalogue runs, `<app-runid>` starts with the `run_experiment.py` app
+id and may add a timestamp or short tag, for example
+`app-d3d9-3dmark05-20260531-gt1`. Put every manual profiling artifact there:
+`.gputrace`, `.trace`, exported XML/TSV/JSON, stderr logs, parsed summaries,
+and Xcode screenshots if captured. Use subdirectories such as `analysis/`,
+`cpu/`, and `screenshots/` inside that per-run directory.
+
+`traces/` is intentionally gitignored. Do not put raw `.trace` / `.gputrace`
+bundles in `experiments/output/` unless an experiment harness explicitly emits
+them as part of its own contract.
+
 ## 1. Programmatic frame capture (.gputrace)
 
 `MetalCaptureController` (`src/dxmt9/dxmt9_capture.{hpp,cpp}`) triggers a
@@ -27,9 +46,9 @@ Metal frame capture on a target frame number, writing the result to a
 
 ```sh
 export DXMT_METAL_CAPTURE_FRAME=120          # capture the 120th present
-export DXMT_METAL_CAPTURE_PATH=/tmp/f.gputrace
+export DXMT_METAL_CAPTURE_PATH=traces/app-d3d9-3dmark05-20260531-gt1/frame120.gputrace
 ./your-app
-# → /tmp/f.gputrace, openable from Xcode (File ▸ Open…)
+# → traces/app-d3d9-3dmark05-20260531-gt1/frame120.gputrace, openable from Xcode
 ```
 
 Trigger sites: `dxmt9_command_queue.cpp:1083` (request) and
@@ -196,14 +215,14 @@ typical causes are older macOS / unsupported hardware family.
 
 ```sh
 DXMT_METAL_CAPTURE_FRAME=$frame_num \
-DXMT_METAL_CAPTURE_PATH=/tmp/bug.gputrace \
+DXMT_METAL_CAPTURE_PATH=traces/<app-runid>/bug.gputrace \
 DXMT_PERF_COUNTERS=1 \
 ./repro-app
 ```
 
-Open `/tmp/bug.gputrace` in Xcode. The render-pass debug groups + draw
-labels narrate what happened. Cross-reference with the
-`[dxmt9-perf]` line in stderr for the same run.
+Open the `.gputrace` in Xcode. The render-pass debug groups + draw labels
+narrate what happened. Cross-reference with the `[dxmt9-perf]` line in stderr
+or the matching run's `experiments/output/<app-id>/result.json` counters.
 
 ### "GPU appears slower in policy X — quantify"
 

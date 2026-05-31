@@ -22,6 +22,7 @@ states/
 .cache/
 .venv/
 tmp
+traces/
 experiments/output/*
 !experiments/output/.gitkeep
 # Runtime spec — see specs/experiments/runtime/.
