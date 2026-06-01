@@ -122,6 +122,24 @@ def state_churn(row: dict[str, str]) -> float:
     )
 
 
+def geometry_signature_duplicates(row: dict[str, str]) -> float:
+    return as_float(row.get("dxmt_draw_geometry_signature_duplicates"))
+
+
+def large_primitive_draws(row: dict[str, str]) -> float:
+    return (
+        as_float(row.get("dxmt_draw_primitive_bucket_1024_4095")) +
+        as_float(row.get("dxmt_draw_primitive_bucket_4096_plus"))
+    )
+
+
+def large_vertex_draws(row: dict[str, str]) -> float:
+    return (
+        as_float(row.get("dxmt_draw_vertex_bucket_4096_16383")) +
+        as_float(row.get("dxmt_draw_vertex_bucket_16384_plus"))
+    )
+
+
 def metric_value(row: dict[str, str], metric: str) -> float:
     if metric in row and str(row.get(metric, "")).strip():
         return as_float(row.get(metric))
@@ -131,6 +149,9 @@ def metric_value(row: dict[str, str], metric: str) -> float:
         "stream0_input_mib": stream0_input_mib,
         "tiled_buffer_mib": tiled_buffer_mib,
         "state_churn": state_churn,
+        "geometry_signature_duplicates": geometry_signature_duplicates,
+        "large_primitive_draws": large_primitive_draws,
+        "large_vertex_draws": large_vertex_draws,
     }
     if metric in special:
         return special[metric](row)
@@ -153,6 +174,9 @@ def aggregate(rows: list[dict[str, str]], top_n: int) -> dict[str, Any]:
     tiled_mib = sum(tiled_buffer_mib(row) for row in top)
     cpu_writer = sum(dxmt_cpu_writer_mib(row) for row in top)
     churn = sum(state_churn(row) for row in top)
+    draws = sum(as_float(row.get("dxmt_draw_calls")) for row in top)
+    large_prims = sum(large_primitive_draws(row) for row in top)
+    large_vertices = sum(large_vertex_draws(row) for row in top)
     return {
         "run": top[0].get("run", "") if top else "",
         "source": top[0].get("_source", "") if top else "",
@@ -183,8 +207,19 @@ def aggregate(rows: list[dict[str, str]], top_n: int) -> dict[str, Any]:
         "pixels_rasterized": pixels,
         "fs_invocations": sum(as_float(row.get("fs_invocations")) for row in top),
         "state_churn": churn,
-        "state_churn_per_draw": ratio(
-            churn, sum(as_float(row.get("dxmt_draw_calls")) for row in top)),
+        "geometry_signature_duplicates": sum(
+            geometry_signature_duplicates(row) for row in top),
+        "large_primitive_draws": large_prims,
+        "large_vertex_draws": large_vertices,
+        "large_primitive_draw_share": ratio(large_prims, draws),
+        "large_vertex_draw_share": ratio(large_vertices, draws),
+        "draw_primitive_max": max(
+            (as_float(row.get("dxmt_draw_primitive_max")) for row in top),
+            default=0.0),
+        "draw_vertex_max": max(
+            (as_float(row.get("dxmt_draw_vertex_max")) for row in top),
+            default=0.0),
+        "state_churn_per_draw": ratio(churn, draws),
         "weighted_vs_write_limiter": weighted(top, "vs_buffer_write_limiter_pct"),
         "weighted_vertex_stage_time": weighted(top, "vertex_stage_time_pct"),
         "weighted_vs_alu_limiter": weighted(top, "vs_alu_limiter_pct"),
@@ -211,6 +246,11 @@ def correlation_rows(rows: list[dict[str, str]]) -> list[dict[str, Any]]:
         ("tiled_buffer_mib", "tiled vertex+primitive bytes"),
         ("cpu_writer_mib", "dxmt CPU writer bytes"),
         ("state_churn", "stream/IB state churn"),
+        ("geometry_signature_duplicates", "geometry signature duplicates"),
+        ("large_primitive_draws", "large primitive draws"),
+        ("large_vertex_draws", "large vertex draws"),
+        ("dxmt_draw_primitive_max", "max primitive count/draw"),
+        ("dxmt_draw_vertex_max", "max vertex count/draw"),
         ("vs_buffer_write_limiter_pct", "VS buffer-write limiter"),
         ("vertex_stage_time_pct", "vertex stage time pct"),
     )
@@ -500,6 +540,13 @@ def write_aggregate_csv(path: Path, aggregates: list[dict[str, Any]]) -> None:
         "vs_b_per_pixel",
         "vs_b_per_dxmt_vertex",
         "state_churn",
+        "geometry_signature_duplicates",
+        "large_primitive_draws",
+        "large_vertex_draws",
+        "large_primitive_draw_share",
+        "large_vertex_draw_share",
+        "draw_primitive_max",
+        "draw_vertex_max",
         "state_churn_per_draw",
         "weighted_vs_write_limiter",
         "weighted_vertex_stage_time",

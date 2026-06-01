@@ -631,12 +631,15 @@ struct ActiveEncoderBreakdown {
   UniqueHandleSet<2048> psoUniqueHandles{};
   UniqueHandleSet<2048> shaderVariantUnique{};
   UniqueHandleSet<2048> vsOutLayoutUnique{};
+  UniqueHandleSet<4096> drawGeometrySignatures{};
   std::array<VsOutLayoutCacheEntry, 128> vsOutLayoutCache{};
   std::size_t vsOutLayoutCacheNext = 0;
   std::array<ShaderSourceHashCacheEntry, 128> shaderSourceHashCache{};
   std::size_t shaderSourceHashCacheNext = 0;
   CbufHistory<sizeof(VsConsts)> vsHistory{};
   CbufHistory<sizeof(FfpVsConsts)> ffpVsHistory{};
+  bool drawGeometrySignatureValid = false;
+  u64 drawGeometrySignatureLast = 0;
 
   void begin(u64 seqId, u64 encoderIndex, u64 rtHandle, u64 depthHandle) {
     enabled = perf::encoderBreakdownEnabled();
@@ -656,12 +659,15 @@ struct ActiveEncoderBreakdown {
     psoUniqueHandles = {};
     shaderVariantUnique = {};
     vsOutLayoutUnique = {};
+    drawGeometrySignatures = {};
     vsOutLayoutCache = {};
     vsOutLayoutCacheNext = 0;
     shaderSourceHashCache = {};
     shaderSourceHashCacheNext = 0;
     vsHistory = {};
     ffpVsHistory = {};
+    drawGeometrySignatureValid = false;
+    drawGeometrySignatureLast = 0;
     if (!enabled) {
       return;
     }
@@ -692,6 +698,145 @@ struct ActiveEncoderBreakdown {
     }
   }
 
+  static u64 mixSignature(u64 seed, u64 value) {
+    return drawBindingPacketHashMix(seed, value);
+  }
+
+  u64 makeDrawGeometrySignature(core::PrimitiveType primitiveType,
+                                u32 primitiveCount,
+                                u64 vertexCount,
+                                bool indexed,
+                                bool expandedIndexed,
+                                bool fixedFunction,
+                                bool preTransformed,
+                                u32 textureMask,
+                                u32 stream0Stride,
+                                i32 drawVertexBaseIndex,
+                                u32 drawVertexStreamOffset,
+                                u32 startIndex,
+                                core::IndexType indexType,
+                                const core::FlatStateSet<core::kMaxStateSlots>& renderStates,
+                                const core::ViewportScissor& viewport,
+                                WMTCullMode cullMode,
+                                WMTTriangleFillMode fillMode) const {
+    u64 seed = 0x7be1d1f73c46a715ull;
+    seed = mixSignature(seed, static_cast<u32>(primitiveType));
+    seed = mixSignature(seed, primitiveCount);
+    seed = mixSignature(seed, vertexCount);
+    seed = mixSignature(seed, indexed ? 1ull : 0ull);
+    seed = mixSignature(seed, expandedIndexed ? 1ull : 0ull);
+    seed = mixSignature(seed, fixedFunction ? 1ull : 0ull);
+    seed = mixSignature(seed, preTransformed ? 1ull : 0ull);
+    seed = mixSignature(seed, textureMask);
+    seed = mixSignature(seed, stream0Stride);
+    seed = mixSignature(seed, static_cast<u64>(static_cast<std::int64_t>(drawVertexBaseIndex)));
+    seed = mixSignature(seed, drawVertexStreamOffset);
+    seed = mixSignature(seed, startIndex);
+    seed = mixSignature(seed, static_cast<u32>(indexType));
+    seed = mixSignature(seed, psoHandle);
+    seed = mixSignature(seed, shaderVariant);
+    seed = mixSignature(seed, vertexShaderHashForSignature());
+    seed = mixSignature(seed, pixelShaderHashForSignature());
+    seed = mixSignature(seed, vsOutLayout);
+    seed = mixSignature(seed, ibValid ? ibHandle : 0ull);
+    for (const auto& stream : stats.streams) {
+      if (!stream.valid) {
+        continue;
+      }
+      seed = mixSignature(seed, stream.lastHandle);
+      seed = mixSignature(seed, stream.lastOffset);
+      seed = mixSignature(seed, stream.lastStride);
+    }
+    seed = mixSignature(seed, core::flatStateOr(renderStates, RS_COLOR_WRITE_ENABLE, 0xfu));
+    seed = mixSignature(seed, core::flatStateOr(renderStates, RS_Z_ENABLE, 0u));
+    seed = mixSignature(seed, core::flatStateOr(renderStates, RS_Z_WRITE_ENABLE, 0u));
+    seed = mixSignature(seed, core::flatStateOr(renderStates, RS_Z_FUNC, 0u));
+    seed = mixSignature(seed, core::flatStateOr(renderStates, RS_ALPHABLEND_ENABLE, 0u));
+    seed = mixSignature(seed, core::flatStateOr(renderStates, RS_SRC_BLEND, 0u));
+    seed = mixSignature(seed, core::flatStateOr(renderStates, RS_DEST_BLEND, 0u));
+    seed = mixSignature(seed, static_cast<u32>(cullMode));
+    seed = mixSignature(seed, static_cast<u32>(fillMode));
+    seed = mixSignature(seed, viewport.scissorEnabled ? 1ull : 0ull);
+    seed = mixSignature(seed, static_cast<u32>(viewport.scissor.left));
+    seed = mixSignature(seed, static_cast<u32>(viewport.scissor.top));
+    seed = mixSignature(seed, static_cast<u32>(viewport.scissor.right));
+    seed = mixSignature(seed, static_cast<u32>(viewport.scissor.bottom));
+    return seed ? seed : 1ull;
+  }
+
+  u64 vertexShaderHashForSignature() const {
+    return stats.vertexShaderLast;
+  }
+
+  u64 pixelShaderHashForSignature() const {
+    return stats.pixelShaderLast;
+  }
+
+  void recordDrawGeometrySignature(u64 signature) {
+    ++stats.drawGeometrySignatureSamples;
+    stats.drawGeometrySignatureLast = signature;
+    if (drawGeometrySignatureValid && drawGeometrySignatureLast == signature) {
+      ++stats.drawGeometrySignatureConsecutiveDuplicates;
+    }
+    drawGeometrySignatureValid = true;
+    drawGeometrySignatureLast = signature;
+
+    for (std::size_t i = 0; i < drawGeometrySignatures.count; ++i) {
+      if (drawGeometrySignatures.handles[i] == signature) {
+        ++stats.drawGeometrySignatureDuplicates;
+        return;
+      }
+    }
+    if (drawGeometrySignatures.count >= drawGeometrySignatures.handles.size()) {
+      if (!drawGeometrySignatures.overflowed) {
+        drawGeometrySignatures.overflowed = true;
+        ++stats.drawGeometrySignatureUniqueOverflows;
+      }
+      return;
+    }
+    drawGeometrySignatures.handles[drawGeometrySignatures.count++] = signature;
+    ++stats.drawGeometrySignatureUnique;
+  }
+
+  void recordDrawSize(u32 primitiveCount, u64 vertexCount) {
+    if (stats.drawPrimitiveCountMin == 0 || primitiveCount < stats.drawPrimitiveCountMin) {
+      stats.drawPrimitiveCountMin = primitiveCount;
+    }
+    if (primitiveCount > stats.drawPrimitiveCountMax) {
+      stats.drawPrimitiveCountMax = primitiveCount;
+    }
+    if (stats.drawVertexCountMin == 0 || vertexCount < stats.drawVertexCountMin) {
+      stats.drawVertexCountMin = vertexCount;
+    }
+    if (vertexCount > stats.drawVertexCountMax) {
+      stats.drawVertexCountMax = vertexCount;
+    }
+
+    if (primitiveCount < 64) {
+      ++stats.drawPrimitiveBucket1_63;
+    } else if (primitiveCount < 256) {
+      ++stats.drawPrimitiveBucket64_255;
+    } else if (primitiveCount < 1024) {
+      ++stats.drawPrimitiveBucket256_1023;
+    } else if (primitiveCount < 4096) {
+      ++stats.drawPrimitiveBucket1024_4095;
+    } else {
+      ++stats.drawPrimitiveBucket4096Plus;
+    }
+
+    if (vertexCount < 256) {
+      ++stats.drawVertexBucket1_255;
+    } else if (vertexCount < 1024) {
+      ++stats.drawVertexBucket256_1023;
+    } else if (vertexCount < 4096) {
+      ++stats.drawVertexBucket1024_4095;
+    } else if (vertexCount < 16384) {
+      ++stats.drawVertexBucket4096_16383;
+    } else {
+      ++stats.drawVertexBucket16384Plus;
+    }
+  }
+
   void recordDrawIssue(core::PrimitiveType primitiveType,
                        u32 primitiveCount,
                        u64 vertexCount,
@@ -701,6 +846,10 @@ struct ActiveEncoderBreakdown {
                        bool preTransformed,
                        u32 textureMask,
                        u32 stream0Stride,
+                       i32 drawVertexBaseIndex,
+                       u32 drawVertexStreamOffset,
+                       u32 startIndex,
+                       core::IndexType indexType,
                        const core::FlatStateSet<core::kMaxStateSlots>& renderStates,
                        const core::ViewportScissor& viewport,
                        WMTCullMode cullMode,
@@ -798,6 +947,25 @@ struct ActiveEncoderBreakdown {
     stats.triangleEstimate += triangleEstimateFor(primitiveType, primitiveCount);
     stats.vertexCount += vertexCount;
     stats.textureMaskOr |= textureMask;
+    recordDrawSize(primitiveCount, vertexCount);
+    recordDrawGeometrySignature(makeDrawGeometrySignature(
+        primitiveType,
+        primitiveCount,
+        vertexCount,
+        indexed,
+        expandedIndexed,
+        fixedFunction,
+        preTransformed,
+        textureMask,
+        stream0Stride,
+        drawVertexBaseIndex,
+        drawVertexStreamOffset,
+        startIndex,
+        indexType,
+        renderStates,
+        viewport,
+        cullMode,
+        fillMode));
     if (stream0Stride != 0) {
       if (stats.stream0StrideMin == 0 || stream0Stride < stats.stream0StrideMin) {
         stats.stream0StrideMin = stream0Stride;
@@ -4649,6 +4817,10 @@ bool encodeDraw(EncodeContext& ctx,
           preTransformed,
           hot.textureMask,
           drawVertexStreamStride,
+          drawVertexBaseIndex,
+          drawVertexStreamOffset,
+          pv.startIndex,
+          pv.indexType,
           hot.renderStates,
           hot.viewport,
           effectiveCullMode,
@@ -4785,6 +4957,10 @@ bool encodeDraw(EncodeContext& ctx,
         preTransformed,
         hot.textureMask,
         drawVertexStreamStride,
+        drawVertexBaseIndex,
+        drawVertexStreamOffset,
+        pv.startIndex,
+        pv.indexType,
         hot.renderStates,
         hot.viewport,
         effectiveCullMode,

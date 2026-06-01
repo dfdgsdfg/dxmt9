@@ -136,6 +136,28 @@ JOINED_EXTRA_FIELDS = (
     "dxmt_primitive_count",
     "dxmt_triangle_estimate",
     "dxmt_vertex_count",
+    "dxmt_draw_primitive_min",
+    "dxmt_draw_primitive_max",
+    "dxmt_draw_vertex_min",
+    "dxmt_draw_vertex_max",
+    "dxmt_draw_primitive_bucket_1_63",
+    "dxmt_draw_primitive_bucket_64_255",
+    "dxmt_draw_primitive_bucket_256_1023",
+    "dxmt_draw_primitive_bucket_1024_4095",
+    "dxmt_draw_primitive_bucket_4096_plus",
+    "dxmt_draw_vertex_bucket_1_255",
+    "dxmt_draw_vertex_bucket_256_1023",
+    "dxmt_draw_vertex_bucket_1024_4095",
+    "dxmt_draw_vertex_bucket_4096_16383",
+    "dxmt_draw_vertex_bucket_16384_plus",
+    "dxmt_draw_geometry_signature_samples",
+    "dxmt_draw_geometry_signature_unique",
+    "dxmt_draw_geometry_signature_unique_overflows",
+    "dxmt_draw_geometry_signature_duplicates",
+    "dxmt_draw_geometry_signature_consecutive_duplicates",
+    "dxmt_draw_geometry_signature_duplicate_ratio",
+    "dxmt_draw_geometry_signature_consecutive_duplicate_ratio",
+    "dxmt_draw_geometry_signature_last",
     "dxmt_texture_mask_or",
     "dxmt_stream0_stride_min",
     "dxmt_stream0_stride_max",
@@ -228,6 +250,10 @@ JOINED_EXTRA_FIELDS = (
     "dxmt_stream_offset_changes_per_draw",
     "dxmt_stream_stride_changes_per_draw",
     "dxmt_ib_handle_changes_per_draw",
+    "dxmt_primitives_per_draw",
+    "dxmt_vertices_per_draw",
+    "dxmt_large_primitive_draw_share",
+    "dxmt_large_vertex_draw_share",
     "dxmt_vs_buffer_bytes_per_dxmt_vertex",
     "dxmt_vs_invocations_per_dxmt_vertex",
     "dxmt_stream0_input_min_mib",
@@ -534,6 +560,26 @@ def join_dxmt(row: dict[str, Any], dxmt: dict[tuple[int, int], dict[str, Any]]) 
         "dxmt_primitive_count": "primitive_count",
         "dxmt_triangle_estimate": "triangle_estimate",
         "dxmt_vertex_count": "vertex_count",
+        "dxmt_draw_primitive_min": "draw_primitive_min",
+        "dxmt_draw_primitive_max": "draw_primitive_max",
+        "dxmt_draw_vertex_min": "draw_vertex_min",
+        "dxmt_draw_vertex_max": "draw_vertex_max",
+        "dxmt_draw_primitive_bucket_1_63": "draw_primitive_bucket_1_63",
+        "dxmt_draw_primitive_bucket_64_255": "draw_primitive_bucket_64_255",
+        "dxmt_draw_primitive_bucket_256_1023": "draw_primitive_bucket_256_1023",
+        "dxmt_draw_primitive_bucket_1024_4095": "draw_primitive_bucket_1024_4095",
+        "dxmt_draw_primitive_bucket_4096_plus": "draw_primitive_bucket_4096_plus",
+        "dxmt_draw_vertex_bucket_1_255": "draw_vertex_bucket_1_255",
+        "dxmt_draw_vertex_bucket_256_1023": "draw_vertex_bucket_256_1023",
+        "dxmt_draw_vertex_bucket_1024_4095": "draw_vertex_bucket_1024_4095",
+        "dxmt_draw_vertex_bucket_4096_16383": "draw_vertex_bucket_4096_16383",
+        "dxmt_draw_vertex_bucket_16384_plus": "draw_vertex_bucket_16384_plus",
+        "dxmt_draw_geometry_signature_samples": "draw_geometry_signature_samples",
+        "dxmt_draw_geometry_signature_unique": "draw_geometry_signature_unique",
+        "dxmt_draw_geometry_signature_unique_overflows": "draw_geometry_signature_unique_overflows",
+        "dxmt_draw_geometry_signature_duplicates": "draw_geometry_signature_duplicates",
+        "dxmt_draw_geometry_signature_consecutive_duplicates": "draw_geometry_signature_consecutive_duplicates",
+        "dxmt_draw_geometry_signature_last": "draw_geometry_signature_last",
         "dxmt_texture_mask_or": "texture_mask_or",
         "dxmt_stream0_stride_min": "stream0_stride_min",
         "dxmt_stream0_stride_max": "stream0_stride_max",
@@ -640,7 +686,12 @@ def derive_dxmt_attribution(joined: dict[str, Any]) -> None:
     buffer_write_bytes = as_float(joined.get("buffer_write_mib")) * 1024.0 * 1024.0
     vs_buffer_write_bytes = as_float(joined.get("vs_buffer_write_mib")) * 1024.0 * 1024.0
     draw_calls = as_int(joined.get("dxmt_draw_calls"))
+    signature_samples = as_int(joined.get("dxmt_draw_geometry_signature_samples"))
+    signature_duplicates = as_int(joined.get("dxmt_draw_geometry_signature_duplicates"))
+    consecutive_signature_duplicates = as_int(
+        joined.get("dxmt_draw_geometry_signature_consecutive_duplicates"))
     dxmt_vertices = as_int(joined.get("dxmt_vertex_count"))
+    dxmt_primitives = as_int(joined.get("dxmt_primitive_count"))
     vs_invocations = as_float(joined.get("vs_invocations"))
     stream0_stride_min = as_int(joined.get("dxmt_stream0_stride_min"))
     stream0_stride_max = as_int(joined.get("dxmt_stream0_stride_max"))
@@ -653,6 +704,10 @@ def derive_dxmt_attribution(joined: dict[str, Any]) -> None:
     joined["dxmt_geometry_transient_bytes"] = geometry_transient_bytes
     joined["dxmt_pso_state_samples_per_draw"] = ratio(
         float(pso_state_samples), float(draw_calls))
+    joined["dxmt_draw_geometry_signature_duplicate_ratio"] = ratio(
+        float(signature_duplicates), float(signature_samples))
+    joined["dxmt_draw_geometry_signature_consecutive_duplicate_ratio"] = ratio(
+        float(consecutive_signature_duplicates), float(signature_samples))
     joined["dxmt_cpu_writer_bytes"] = cpu_writer_bytes
     joined["dxmt_cpu_writer_mib"] = cpu_writer_bytes / (1024.0 * 1024.0)
     joined["dxmt_cpu_writer_to_buffer_write_ratio"] = ratio(
@@ -676,6 +731,22 @@ def derive_dxmt_attribution(joined: dict[str, Any]) -> None:
         float(stream_stride_changes), float(draw_calls))
     joined["dxmt_ib_handle_changes_per_draw"] = ratio(
         float(ib_handle_changes), float(draw_calls))
+    large_primitive_draws = (
+        as_int(joined.get("dxmt_draw_primitive_bucket_1024_4095")) +
+        as_int(joined.get("dxmt_draw_primitive_bucket_4096_plus"))
+    )
+    large_vertex_draws = (
+        as_int(joined.get("dxmt_draw_vertex_bucket_4096_16383")) +
+        as_int(joined.get("dxmt_draw_vertex_bucket_16384_plus"))
+    )
+    joined["dxmt_primitives_per_draw"] = ratio(
+        float(dxmt_primitives), float(draw_calls))
+    joined["dxmt_vertices_per_draw"] = ratio(
+        float(dxmt_vertices), float(draw_calls))
+    joined["dxmt_large_primitive_draw_share"] = ratio(
+        float(large_primitive_draws), float(draw_calls))
+    joined["dxmt_large_vertex_draw_share"] = ratio(
+        float(large_vertex_draws), float(draw_calls))
     joined["dxmt_vs_buffer_bytes_per_dxmt_vertex"] = ratio(
         vs_buffer_write_bytes, float(dxmt_vertices))
     joined["dxmt_vs_invocations_per_dxmt_vertex"] = ratio(
@@ -935,6 +1006,24 @@ def write_report(
     top_clip_plane_draws = sum(as_int(row.get("dxmt_clip_plane_enabled_draws")) for row in top)
     top_dxmt_vertex_count = sum(as_int(row.get("dxmt_vertex_count")) for row in top)
     top_dxmt_triangle_estimate = sum(as_int(row.get("dxmt_triangle_estimate")) for row in top)
+    top_draw_geometry_signature_samples = sum(
+        as_int(row.get("dxmt_draw_geometry_signature_samples")) for row in top)
+    top_draw_geometry_signature_unique = sum(
+        as_int(row.get("dxmt_draw_geometry_signature_unique")) for row in top)
+    top_draw_geometry_signature_duplicates = sum(
+        as_int(row.get("dxmt_draw_geometry_signature_duplicates")) for row in top)
+    top_draw_geometry_signature_consecutive_duplicates = sum(
+        as_int(row.get("dxmt_draw_geometry_signature_consecutive_duplicates"))
+        for row in top)
+    top_draw_geometry_signature_duplicate_ratio = (
+        top_draw_geometry_signature_duplicates / top_draw_geometry_signature_samples
+        if top_draw_geometry_signature_samples else 0.0
+    )
+    top_draw_geometry_signature_consecutive_duplicate_ratio = (
+        top_draw_geometry_signature_consecutive_duplicates /
+        top_draw_geometry_signature_samples
+        if top_draw_geometry_signature_samples else 0.0
+    )
     top_dxmt_stream0_input_min_mib = sum(
         as_float(row.get("dxmt_stream0_input_min_mib")) for row in top
     )
@@ -1227,6 +1316,19 @@ def write_report(
     lines.append(f"| dxmt clip-plane enabled draws | `{fmt_int(top_clip_plane_draws)}` |")
     lines.append(f"| dxmt vertex count | `{fmt_int(top_dxmt_vertex_count)}` |")
     lines.append(f"| dxmt triangle estimate | `{fmt_int(top_dxmt_triangle_estimate)}` |")
+    lines.append(
+        f"| dxmt draw geometry signatures unique/duplicates | "
+        f"`{fmt_int(top_draw_geometry_signature_unique)} / "
+        f"{fmt_int(top_draw_geometry_signature_duplicates)}` |"
+    )
+    lines.append(
+        f"| dxmt draw geometry signature duplicate ratio | "
+        f"`{fmt_float(top_draw_geometry_signature_duplicate_ratio, 3)}x` |"
+    )
+    lines.append(
+        f"| dxmt consecutive geometry duplicate ratio | "
+        f"`{fmt_float(top_draw_geometry_signature_consecutive_duplicate_ratio, 3)}x` |"
+    )
     lines.append(f"| dxmt stream handle changes | `{fmt_int(top_stream_handles)}` |")
     lines.append(f"| dxmt stream offset changes | `{fmt_int(top_stream_offsets)}` |")
     lines.append(f"| dxmt stream stride changes | `{fmt_int(top_stream_strides)}` |")
@@ -1317,7 +1419,8 @@ def write_report(
     lines.append("## DXMT Encoder Writer/State Breakdown")
     lines.append("")
     breakdown_header = [
-        "seq", "enc", "GPU ms", "draws", "stream h/o/s", "stream h/o/s per draw",
+        "seq", "enc", "GPU ms", "draws", "prim/draw", "prim min/max",
+        "vert/draw", "vert min/max", "large prim/vert", "stream h/o/s", "stream h/o/s per draw",
         "IB hdl chg", "IB hdl/draw", "argbuf table KiB", "cbuf VS KiB",
         "cbuf FFPVS KiB", "cbuf PS KiB", "cbuf FFPPS KiB",
         "setVertexBytes KiB", "transient V KiB", "transient I KiB",
@@ -1341,6 +1444,20 @@ def write_report(
                 str(row.get("enc", "")),
                 fmt_float(row.get("gpu_ms")),
                 fmt_int(draws),
+                fmt_float(row.get("dxmt_primitives_per_draw"), 1),
+                (
+                    f"{fmt_int(row.get('dxmt_draw_primitive_min'))}/"
+                    f"{fmt_int(row.get('dxmt_draw_primitive_max'))}"
+                ),
+                fmt_float(row.get("dxmt_vertices_per_draw"), 1),
+                (
+                    f"{fmt_int(row.get('dxmt_draw_vertex_min'))}/"
+                    f"{fmt_int(row.get('dxmt_draw_vertex_max'))}"
+                ),
+                (
+                    f"{fmt_float(row.get('dxmt_large_primitive_draw_share'), 2)}/"
+                    f"{fmt_float(row.get('dxmt_large_vertex_draw_share'), 2)}"
+                ),
                 f"{fmt_int(stream_handle)}/{fmt_int(stream_offset)}/{fmt_int(stream_stride)}",
                 fmt_float(stream_total / draws if draws else 0.0, 2),
                 fmt_int(ib_handle),
@@ -1442,7 +1559,10 @@ def write_report(
         "FS buffer MiB", "varyings/fragment", "buffer write limiter %",
         "LLC limiter %", "MMU limiter %", "draws", "FFP", "preT",
         "cull n/f/b", "depth e/w", "scissor", "alpha b/t", "clip planes",
-        "dxmt vertices", "dxmt tris", "stream hdl chg", "stream off chg",
+        "dxmt vertices", "dxmt tris", "prim/draw", "prim min/max",
+        "vert/draw", "vert min/max", "large prim/vert",
+        "geom sig uniq/dup", "geom dup",
+        "stream hdl chg", "stream off chg",
         "stream stride chg", "stream unique", "stream unique KiB",
         "stream0 h/o/s", "IB hdl chg", "IB unique", "IB unique KiB",
         "IB last", "PSO handle", "shader variant", "VS hash", "PS hash", "VSOut key",
@@ -1520,6 +1640,25 @@ def write_report(
                 fmt_int(row.get("dxmt_clip_plane_enabled_draws")),
                 fmt_int(row.get("dxmt_vertex_count")),
                 fmt_int(row.get("dxmt_triangle_estimate")),
+                fmt_float(row.get("dxmt_primitives_per_draw"), 1),
+                (
+                    f"{fmt_int(row.get('dxmt_draw_primitive_min'))}/"
+                    f"{fmt_int(row.get('dxmt_draw_primitive_max'))}"
+                ),
+                fmt_float(row.get("dxmt_vertices_per_draw"), 1),
+                (
+                    f"{fmt_int(row.get('dxmt_draw_vertex_min'))}/"
+                    f"{fmt_int(row.get('dxmt_draw_vertex_max'))}"
+                ),
+                (
+                    f"{fmt_float(row.get('dxmt_large_primitive_draw_share'), 2)}/"
+                    f"{fmt_float(row.get('dxmt_large_vertex_draw_share'), 2)}"
+                ),
+                (
+                    f"{fmt_int(row.get('dxmt_draw_geometry_signature_unique'))}/"
+                    f"{fmt_int(row.get('dxmt_draw_geometry_signature_duplicates'))}"
+                ),
+                fmt_float(row.get("dxmt_draw_geometry_signature_duplicate_ratio"), 2),
                 fmt_int(row.get("dxmt_stream_handle_changes")),
                 fmt_int(row.get("dxmt_stream_offset_changes")),
                 fmt_int(row.get("dxmt_stream_stride_changes")),

@@ -192,6 +192,11 @@ ENCODER_SUM_KEYS = (
     "primitive_count",
     "triangle_estimate",
     "vertex_count",
+    "draw_geometry_signature_samples",
+    "draw_geometry_signature_unique",
+    "draw_geometry_signature_unique_overflows",
+    "draw_geometry_signature_duplicates",
+    "draw_geometry_signature_consecutive_duplicates",
     "stream_state_samples",
     "stream_metal_binds",
     "stream_metal_bind_firsts",
@@ -280,6 +285,23 @@ TOP_ENCODER_KEYS = (
     "scissor_enabled_draws",
     "vertex_count",
     "triangle_estimate",
+    "draw_primitive_min",
+    "draw_primitive_max",
+    "draw_vertex_min",
+    "draw_vertex_max",
+    "draw_primitive_bucket_1_63",
+    "draw_primitive_bucket_64_255",
+    "draw_primitive_bucket_256_1023",
+    "draw_primitive_bucket_1024_4095",
+    "draw_primitive_bucket_4096_plus",
+    "draw_vertex_bucket_1_255",
+    "draw_vertex_bucket_256_1023",
+    "draw_vertex_bucket_1024_4095",
+    "draw_vertex_bucket_4096_16383",
+    "draw_vertex_bucket_16384_plus",
+    "draw_geometry_signature_unique",
+    "draw_geometry_signature_duplicates",
+    "draw_geometry_signature_duplicate_ratio",
     "pso_handle_changes",
     "pso_state_samples_per_draw",
     "shader_variant_changes",
@@ -328,6 +350,28 @@ ENCODER_CSV_KEYS = (
     "triangle_estimate",
     "vertex_count",
     "texture_mask_or",
+    "draw_primitive_min",
+    "draw_primitive_max",
+    "draw_vertex_min",
+    "draw_vertex_max",
+    "draw_primitive_bucket_1_63",
+    "draw_primitive_bucket_64_255",
+    "draw_primitive_bucket_256_1023",
+    "draw_primitive_bucket_1024_4095",
+    "draw_primitive_bucket_4096_plus",
+    "draw_vertex_bucket_1_255",
+    "draw_vertex_bucket_256_1023",
+    "draw_vertex_bucket_1024_4095",
+    "draw_vertex_bucket_4096_16383",
+    "draw_vertex_bucket_16384_plus",
+    "draw_geometry_signature_samples",
+    "draw_geometry_signature_unique",
+    "draw_geometry_signature_unique_overflows",
+    "draw_geometry_signature_duplicates",
+    "draw_geometry_signature_consecutive_duplicates",
+    "draw_geometry_signature_duplicate_ratio",
+    "draw_geometry_signature_consecutive_duplicate_ratio",
+    "draw_geometry_signature_last",
     "stream0_stride_min",
     "stream0_stride_max",
     "stream_state_samples",
@@ -665,7 +709,15 @@ def enrich_encoder_rows(encoders: list[dict[str, Any]]) -> None:
     for row in encoders:
         draws = numeric_value(row, "draw_calls")
         pso_samples = numeric_value(row, "pso_state_samples")
+        signature_samples = numeric_value(row, "draw_geometry_signature_samples")
+        signature_duplicates = numeric_value(row, "draw_geometry_signature_duplicates")
+        consecutive_duplicates = numeric_value(
+            row, "draw_geometry_signature_consecutive_duplicates")
         row["pso_state_samples_per_draw"] = (pso_samples / draws) if draws else 0.0
+        row["draw_geometry_signature_duplicate_ratio"] = (
+            signature_duplicates / signature_samples) if signature_samples else 0.0
+        row["draw_geometry_signature_consecutive_duplicate_ratio"] = (
+            consecutive_duplicates / signature_samples) if signature_samples else 0.0
 
 
 def write_markdown(

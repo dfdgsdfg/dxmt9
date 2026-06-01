@@ -3019,6 +3019,24 @@ void emitEncoderBreakdown(const EncoderBreakdown& b) {
       "alpha_test_enabled_draws=%llu clip_plane_enabled_draws=%llu "
       "point_draws=%llu line_draws=%llu triangle_draws=%llu primitive_count=%llu "
       "triangle_estimate=%llu vertex_count=%llu texture_mask_or=0x%llx "
+      "draw_primitive_min=%llu draw_primitive_max=%llu "
+      "draw_vertex_min=%llu draw_vertex_max=%llu "
+      "draw_primitive_bucket_1_63=%llu "
+      "draw_primitive_bucket_64_255=%llu "
+      "draw_primitive_bucket_256_1023=%llu "
+      "draw_primitive_bucket_1024_4095=%llu "
+      "draw_primitive_bucket_4096_plus=%llu "
+      "draw_vertex_bucket_1_255=%llu "
+      "draw_vertex_bucket_256_1023=%llu "
+      "draw_vertex_bucket_1024_4095=%llu "
+      "draw_vertex_bucket_4096_16383=%llu "
+      "draw_vertex_bucket_16384_plus=%llu "
+      "draw_geometry_signature_samples=%llu "
+      "draw_geometry_signature_unique=%llu "
+      "draw_geometry_signature_unique_overflows=%llu "
+      "draw_geometry_signature_duplicates=%llu "
+      "draw_geometry_signature_consecutive_duplicates=%llu "
+      "draw_geometry_signature_last=0x%llx "
       "stream0_stride_min=%llu stream0_stride_max=%llu "
       "stream_state_samples=%llu stream_metal_binds=%llu "
       "stream_metal_bind_firsts=%llu "
@@ -3129,6 +3147,26 @@ void emitEncoderBreakdown(const EncoderBreakdown& b) {
       static_cast<unsigned long long>(b.triangleEstimate),
       static_cast<unsigned long long>(b.vertexCount),
       static_cast<unsigned long long>(b.textureMaskOr),
+      static_cast<unsigned long long>(b.drawPrimitiveCountMin),
+      static_cast<unsigned long long>(b.drawPrimitiveCountMax),
+      static_cast<unsigned long long>(b.drawVertexCountMin),
+      static_cast<unsigned long long>(b.drawVertexCountMax),
+      static_cast<unsigned long long>(b.drawPrimitiveBucket1_63),
+      static_cast<unsigned long long>(b.drawPrimitiveBucket64_255),
+      static_cast<unsigned long long>(b.drawPrimitiveBucket256_1023),
+      static_cast<unsigned long long>(b.drawPrimitiveBucket1024_4095),
+      static_cast<unsigned long long>(b.drawPrimitiveBucket4096Plus),
+      static_cast<unsigned long long>(b.drawVertexBucket1_255),
+      static_cast<unsigned long long>(b.drawVertexBucket256_1023),
+      static_cast<unsigned long long>(b.drawVertexBucket1024_4095),
+      static_cast<unsigned long long>(b.drawVertexBucket4096_16383),
+      static_cast<unsigned long long>(b.drawVertexBucket16384Plus),
+      static_cast<unsigned long long>(b.drawGeometrySignatureSamples),
+      static_cast<unsigned long long>(b.drawGeometrySignatureUnique),
+      static_cast<unsigned long long>(b.drawGeometrySignatureUniqueOverflows),
+      static_cast<unsigned long long>(b.drawGeometrySignatureDuplicates),
+      static_cast<unsigned long long>(b.drawGeometrySignatureConsecutiveDuplicates),
+      static_cast<unsigned long long>(b.drawGeometrySignatureLast),
       static_cast<unsigned long long>(b.stream0StrideMin),
       static_cast<unsigned long long>(b.stream0StrideMax),
       static_cast<unsigned long long>(b.streamStateSamples),
