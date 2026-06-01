@@ -8018,6 +8018,104 @@ flowchart TD
   class Capture,Xcode,Finalizer,Hot,Writers,Opaque,Alpha,Mixed,RejectUpload known
 ```
 
+#### Bounded Split-Large Indexed Probe Tooling
+
+2026-06-02 added row/state filters to the existing
+`DXMT9_SPLIT_LARGE_INDEXED_DRAWS` diagnostic so bounded primitive-partition
+probes can target one hot row or one indexed triangle state class instead of
+perturbing the whole GT1 frame.
+
+New controls:
+
+```text
+DXMT9_SPLIT_LARGE_INDEXED_DRAWS_ROW=SEQ/ENC
+DXMT9_SPLIT_LARGE_INDEXED_DRAWS_ROWS=SEQ/ENC,...
+DXMT9_SPLIT_LARGE_INDEXED_DRAWS_CLASS=any|opaque-depth-write|nonopaque|depth-read|alpha-blend|scissor|textured|large4096
+
+scripts/tools/run_3dmark05_perf_probe.sh \
+  --split-large-indexed-draws N \
+  --split-large-indexed-draws-row 60/3 \
+  --split-large-indexed-draws-class opaque-depth-write
+```
+
+The class filter intentionally mirrors the encoder attribution buckets added
+above:
+
+- `opaque-depth-write`: solid indexed triangle-list draw, depth write enabled,
+  depth func `Less`/`LessEqual`, no alpha blend/test, no stencil, no clip plane.
+- `depth-read`: depth test enabled and depth write disabled.
+- `alpha-blend`, `scissor`, and `textured`: direct state/texture buckets.
+- `large4096`: draw primitive count `>= 4096`.
+- `nonopaque`: everything outside the opaque-depth-write bucket.
+
+Initial no-gputrace smoke:
+
+```bash
+scripts/tools/run_3dmark05_perf_probe.sh \
+  --suffix split-row-60-3-opaque-4096-nogputrace-r1 \
+  --no-gputrace \
+  --split-large-indexed-draws 4096 \
+  --split-large-indexed-draws-row 60/3 \
+  --split-large-indexed-draws-class opaque-depth-write \
+  --measure-index-reuse
+```
+
+Artifacts:
+
+```text
+experiments/output/app-d3d9-3dmark05-split-row-60-3-opaque-4096-nogputrace-r1/3dmark05-perf-summary.md
+experiments/output/app-d3d9-3dmark05-split-row-60-3-opaque-4096-nogputrace-r1/3dmark05-perf-encoders.csv
+experiments/output/app-d3d9-3dmark05-split-row-60-3-opaque-4096-nogputrace-r1/3dmark05-perf-encoder-streams.csv
+```
+
+The run passed and confirms that the selector is scoped correctly. Only
+`60/3` had split counters:
+
+| Row | Split source draws | Metal draws | Extra Metal draws | Split primitives | Class evidence |
+|---|---:|---:|---:|---:|---|
+| `60/3` | `9` | `23` | `14` | `72,305` | `170/255,916` opaque-depth-write, `0` depth-read, `0` alpha, `0` textured |
+| `60/1` | `0` | `0` | `0` | `0` | unchanged split scope |
+| `60/4` | `0` | `0` | `0` | `0` | unchanged split scope |
+| `60/0` | `0` | `0` | `0` | `0` | unchanged split scope |
+
+This is not yet a GPU bottleneck result. It only proves the bounded split
+mechanism is ready for Xcode-counter A/B runs. The first Xcode candidate should
+use the same strict finalizer gates as the state-class run and compare against
+`measure-index-cache-gputrace-r1`:
+
+```bash
+scripts/tools/run_3dmark05_perf_probe.sh \
+  --suffix split-row-60-3-opaque-4096-gputrace-r1 \
+  --split-large-indexed-draws 4096 \
+  --split-large-indexed-draws-row 60/3 \
+  --split-large-indexed-draws-class opaque-depth-write \
+  --measure-index-reuse \
+  --baseline-joined traces/app-d3d9-3dmark05-measure-index-cache-gputrace-r1/analysis/frame60-xcode-dxmt-joined-summary.csv \
+  --require-top-row-key-match \
+  --require-top-pso-attribution \
+  --require-xcode-counter-coverage \
+  --require-dxmt-join-coverage \
+  --max-top-draw-call-delta-ratio 0.05 \
+  --max-top-vertex-count-delta-ratio 0.05 \
+  --max-top-triangle-delta-ratio 0.05
+```
+
+```mermaid
+flowchart TD
+  Evidence["state-class attribution\n60/3 opaque depth-write hot row"] --> Probe["bounded split probe\nlimit 4096 / row 60/3 / class opaque-depth-write"]
+  Probe --> Smoke["no-gputrace smoke\nactive split rows = 1"]
+  Smoke --> Scoped["60/3 only\n9 source draws -> 23 Metal draws\n72305 primitives"]
+  Scoped --> XcodeNext["next: gputrace + Xcode counters\nstrict top-row/geometry gates"]
+  XcodeNext --> Verdict{"VS buffer write moves?"}
+  Verdict -- "Yes" --> Narrow["investigate production-safe primitive clustering\nwithout broad draw-count amplification"]
+  Verdict -- "No" --> Reject["reject bounded split for 60/3\ntry 60/1 or 60/4 class separately"]
+
+  classDef hot fill:#ffe8e8,stroke:#b64242,color:#2b0d0d
+  classDef known fill:#e8f0ff,stroke:#476cb6,color:#0d1833
+  class Evidence,Probe,XcodeNext,Verdict hot
+  class Smoke,Scoped,Narrow,Reject known
+```
+
 ### Offline Metal Codegen Classifier
 
 After the depth-compare run, the top shader dumps were compiled offline with

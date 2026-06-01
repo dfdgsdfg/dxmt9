@@ -146,6 +146,38 @@ void testRenderEncoderSelectorListParsesHotRows() {
         "render encoder selector list rejects missing row");
 }
 
+void testIndexedTriangleClassFilterParsesProbeBuckets() {
+  using dxmt9::debug::IndexedTriangleClassFilter;
+  using dxmt9::debug::makeIndexedTriangleClassFilter;
+
+  check(makeIndexedTriangleClassFilter("") == IndexedTriangleClassFilter::Any,
+        "empty indexed triangle class filter defaults to any");
+  check(makeIndexedTriangleClassFilter("OPAQUE_DEPTH_WRITE") ==
+            IndexedTriangleClassFilter::OpaqueDepthWrite,
+        "indexed triangle class filter accepts uppercase underscore opaque bucket");
+  check(makeIndexedTriangleClassFilter("non-opaque") ==
+            IndexedTriangleClassFilter::NonOpaque,
+        "indexed triangle class filter accepts non-opaque bucket");
+  check(makeIndexedTriangleClassFilter("depth_read") ==
+            IndexedTriangleClassFilter::DepthRead,
+        "indexed triangle class filter accepts depth-read bucket");
+  check(makeIndexedTriangleClassFilter("alpha-blend") ==
+            IndexedTriangleClassFilter::AlphaBlend,
+        "indexed triangle class filter accepts alpha-blend bucket");
+  check(makeIndexedTriangleClassFilter("scissor") ==
+            IndexedTriangleClassFilter::Scissor,
+        "indexed triangle class filter accepts scissor bucket");
+  check(makeIndexedTriangleClassFilter("textured") ==
+            IndexedTriangleClassFilter::Textured,
+        "indexed triangle class filter accepts textured bucket");
+  check(makeIndexedTriangleClassFilter("large-4096") ==
+            IndexedTriangleClassFilter::Large4096,
+        "indexed triangle class filter accepts large4096 bucket");
+  check(makeIndexedTriangleClassFilter("not-a-class") ==
+            IndexedTriangleClassFilter::Any,
+        "unknown indexed triangle class filter falls back to any");
+}
+
 }  // namespace
 
 int main() {
@@ -158,6 +190,7 @@ int main() {
     testDrawOrdinalRangeMatchesSeqRangeBoundaries();
     testRenderEncoderSelectorParsesSingleRow();
     testRenderEncoderSelectorListParsesHotRows();
+    testIndexedTriangleClassFilterParsesProbeBuckets();
   } catch (const TestFailure& failure) {
     std::cerr << "draw_seq_filter_spec failed: "
               << failure.what() << '\n';

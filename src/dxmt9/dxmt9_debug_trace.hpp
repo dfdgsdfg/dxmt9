@@ -44,6 +44,20 @@ struct RenderEncoderSelectorList {
   std::size_t count = 0;
 };
 
+enum class IndexedTriangleClassFilter : std::uint8_t {
+  Any,
+  OpaqueDepthWrite,
+  NonOpaque,
+  DepthRead,
+  AlphaBlend,
+  Scissor,
+  Textured,
+  Large4096,
+};
+
+IndexedTriangleClassFilter makeIndexedTriangleClassFilter(
+    std::string_view spec) noexcept;
+
 DrawSeqRange makeDrawSeqRange(std::optional<u64> min, std::optional<u64> max) noexcept;
 bool drawSeqRangeEnabled(DrawSeqRange range) noexcept;
 bool shouldSkipDrawSeq(u64 seqId, DrawSeqRange range) noexcept;
@@ -148,6 +162,23 @@ bool useNativeMetalBaseVertex();
 // multiple Metal drawIndexed calls. Zero disables it.
 // Env: DXMT9_SPLIT_LARGE_INDEXED_DRAWS.
 std::uint32_t splitLargeIndexedDrawPrimitiveLimit();
+
+// Optional class filter for DXMT9_SPLIT_LARGE_INDEXED_DRAWS. Accepted values:
+// any, opaque-depth-write, nonopaque, depth-read, alpha-blend, scissor,
+// textured, and large4096.
+// Env: DXMT9_SPLIT_LARGE_INDEXED_DRAWS_CLASS.
+IndexedTriangleClassFilter splitLargeIndexedDrawClassFilter();
+
+// Optional selector for DXMT9_SPLIT_LARGE_INDEXED_DRAWS. Format is
+// "<seq>/<encoder>", for example "60/3".
+// Env: DXMT9_SPLIT_LARGE_INDEXED_DRAWS_ROW.
+RenderEncoderSelector splitLargeIndexedDrawRow();
+
+// Optional selector list for DXMT9_SPLIT_LARGE_INDEXED_DRAWS. Format is a
+// comma/semicolon/space separated list of "<seq>/<encoder>", for example
+// "60/1,60/3".
+// Env: DXMT9_SPLIT_LARGE_INDEXED_DRAWS_ROWS.
+RenderEncoderSelectorList splitLargeIndexedDrawRows();
 
 // Diagnostic-only: keep indexed draws and render state intact, but submit a
 // transient index buffer with triangle-list primitive order reversed.

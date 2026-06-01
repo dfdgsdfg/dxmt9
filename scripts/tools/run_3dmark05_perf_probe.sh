@@ -22,6 +22,9 @@ suppress_x8_rt_pixel_format_view=0
 x8_shader_alpha_fill=0
 native_metal_base_vertex=0
 split_large_indexed_draws=
+split_large_indexed_draws_row=
+split_large_indexed_draws_rows=
+split_large_indexed_draws_class=
 force_expand_indexed=0
 probe_reverse_indexed_triangles=0
 probe_reverse_opaque_indexed_triangles=0
@@ -138,6 +141,18 @@ Options:
   --split-large-indexed-draws N
                       Set DXMT9_SPLIT_LARGE_INDEXED_DRAWS=N to split indexed
                       triangle-list draws above N primitives
+  --split-large-indexed-draws-row SEQ/ENC
+                      Set DXMT9_SPLIT_LARGE_INDEXED_DRAWS_ROW=SEQ/ENC to
+                      constrain split-large-indexed-draws to one
+                      Xcode/DXMT RenderPass row, e.g. 60/3
+  --split-large-indexed-draws-rows ROWS
+                      Set DXMT9_SPLIT_LARGE_INDEXED_DRAWS_ROWS=ROWS to
+                      constrain split-large-indexed-draws to a
+                      comma/semicolon/space separated row set
+  --split-large-indexed-draws-class CLASS
+                      Set DXMT9_SPLIT_LARGE_INDEXED_DRAWS_CLASS=CLASS.
+                      Accepted values: any, opaque-depth-write, nonopaque,
+                      depth-read, alpha-blend, scissor, textured, large4096
   --force-expand-indexed
                       Set DXMT_FORCE_EXPAND_INDEXED=1 to expand indexed draws
                       into flat vertex lists for primitive/backend pressure
@@ -356,6 +371,18 @@ while (($#)); do
       ;;
     --split-large-indexed-draws)
       split_large_indexed_draws=${2:?missing value for --split-large-indexed-draws}
+      shift 2
+      ;;
+    --split-large-indexed-draws-row)
+      split_large_indexed_draws_row=${2:?missing value for --split-large-indexed-draws-row}
+      shift 2
+      ;;
+    --split-large-indexed-draws-rows)
+      split_large_indexed_draws_rows=${2:?missing value for --split-large-indexed-draws-rows}
+      shift 2
+      ;;
+    --split-large-indexed-draws-class)
+      split_large_indexed_draws_class=${2:?missing value for --split-large-indexed-draws-class}
       shift 2
       ;;
     --force-expand-indexed)
@@ -892,6 +919,18 @@ fi
 
 if [[ -n "$split_large_indexed_draws" ]]; then
   env_args+=("DXMT9_SPLIT_LARGE_INDEXED_DRAWS=$split_large_indexed_draws")
+fi
+
+if [[ -n "$split_large_indexed_draws_row" ]]; then
+  env_args+=("DXMT9_SPLIT_LARGE_INDEXED_DRAWS_ROW=$split_large_indexed_draws_row")
+fi
+
+if [[ -n "$split_large_indexed_draws_rows" ]]; then
+  env_args+=("DXMT9_SPLIT_LARGE_INDEXED_DRAWS_ROWS=$split_large_indexed_draws_rows")
+fi
+
+if [[ -n "$split_large_indexed_draws_class" ]]; then
+  env_args+=("DXMT9_SPLIT_LARGE_INDEXED_DRAWS_CLASS=$split_large_indexed_draws_class")
 fi
 
 if (( force_expand_indexed )); then

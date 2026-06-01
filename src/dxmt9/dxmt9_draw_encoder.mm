@@ -2622,9 +2622,9 @@ bool isOpaqueDepthWritingReorderProbeEligible(
   }
 }
 
-bool reverseIndexedTriangleRowMatches(const ActiveEncoderBreakdown* encoderBreakdown) {
-  const auto rowSelector = debug::probeReverseIndexedTrianglesRow();
-  const auto rowSelectors = debug::probeReverseIndexedTrianglesRows();
+bool renderEncoderSelectionMatches(const ActiveEncoderBreakdown* encoderBreakdown,
+                                   debug::RenderEncoderSelector rowSelector,
+                                   const debug::RenderEncoderSelectorList& rowSelectors) {
   if (!rowSelector.enabled && !rowSelectors.enabled) {
     return true;
   }
@@ -2635,6 +2635,87 @@ bool reverseIndexedTriangleRowMatches(const ActiveEncoderBreakdown* encoderBreak
   const auto encoderIndex = encoderBreakdown->stats.encoderIndex;
   return debug::renderEncoderSelectorMatches(rowSelector, seqId, encoderIndex) ||
          debug::renderEncoderSelectorListMatches(rowSelectors, seqId, encoderIndex);
+}
+
+bool reverseIndexedTriangleRowMatches(const ActiveEncoderBreakdown* encoderBreakdown) {
+  return renderEncoderSelectionMatches(encoderBreakdown,
+                                       debug::probeReverseIndexedTrianglesRow(),
+                                       debug::probeReverseIndexedTrianglesRows());
+}
+
+bool splitLargeIndexedDrawRowMatches(const ActiveEncoderBreakdown* encoderBreakdown) {
+  return renderEncoderSelectionMatches(encoderBreakdown,
+                                       debug::splitLargeIndexedDrawRow(),
+                                       debug::splitLargeIndexedDrawRows());
+}
+
+bool indexedTriangleOpaqueDepthWriteClass(
+    const core::FlatStateSet<core::kMaxStateSlots>& renderStates,
+    WMTTriangleFillMode fillMode) {
+  if (fillMode != WMTTriangleFillModeFill) {
+    return false;
+  }
+  const bool depthEnabled =
+      core::flatStateOr(renderStates, RS_Z_ENABLE, 0u) != 0u;
+  const bool depthWrite =
+      depthEnabled && core::flatStateOr(renderStates, RS_Z_WRITE_ENABLE, 0u) != 0u;
+  const auto depthFunc = static_cast<core::CompareFunc>(core::flatStateOr(
+      renderStates, RS_Z_FUNC, static_cast<u32>(core::CompareFunc::LessEqual)));
+  const bool alphaBlendEnabled =
+      core::flatStateOr(renderStates, RS_ALPHABLEND_ENABLE, 0u) != 0u;
+  const bool alphaTestEnabled =
+      core::flatStateOr(renderStates, RS_ALPHA_TEST_ENABLE, 0u) != 0u;
+  const bool stencilEnabled =
+      core::flatStateOr(renderStates, core::RS_STENCIL_ENABLE, 0u) != 0u;
+  const bool clipPlaneEnabled =
+      core::flatStateOr(renderStates, core::RS_CLIP_PLANE_ENABLE, 0u) != 0u;
+  const bool depthFuncPreservesOpaqueOrder =
+      depthFunc == core::CompareFunc::Less ||
+      depthFunc == core::CompareFunc::LessEqual;
+  return depthWrite && depthFuncPreservesOpaqueOrder &&
+         !alphaBlendEnabled && !alphaTestEnabled && !stencilEnabled &&
+         !clipPlaneEnabled;
+}
+
+bool splitLargeIndexedDrawClassMatches(
+    debug::IndexedTriangleClassFilter filter,
+    u32 primitiveCount,
+    u32 textureMask,
+    const core::FlatStateSet<core::kMaxStateSlots>& renderStates,
+    const core::ViewportScissor& viewport,
+    WMTTriangleFillMode fillMode) {
+  if (filter == debug::IndexedTriangleClassFilter::Any) {
+    return true;
+  }
+
+  const bool depthEnabled =
+      core::flatStateOr(renderStates, RS_Z_ENABLE, 0u) != 0u;
+  const bool depthWrite =
+      depthEnabled && core::flatStateOr(renderStates, RS_Z_WRITE_ENABLE, 0u) != 0u;
+  const bool alphaBlendEnabled =
+      core::flatStateOr(renderStates, RS_ALPHABLEND_ENABLE, 0u) != 0u;
+  const bool opaqueDepthWrite =
+      indexedTriangleOpaqueDepthWriteClass(renderStates, fillMode);
+
+  switch (filter) {
+    case debug::IndexedTriangleClassFilter::Any:
+      return true;
+    case debug::IndexedTriangleClassFilter::OpaqueDepthWrite:
+      return opaqueDepthWrite;
+    case debug::IndexedTriangleClassFilter::NonOpaque:
+      return !opaqueDepthWrite;
+    case debug::IndexedTriangleClassFilter::DepthRead:
+      return depthEnabled && !depthWrite;
+    case debug::IndexedTriangleClassFilter::AlphaBlend:
+      return alphaBlendEnabled;
+    case debug::IndexedTriangleClassFilter::Scissor:
+      return viewport.scissorEnabled;
+    case debug::IndexedTriangleClassFilter::Textured:
+      return textureMask != 0u;
+    case debug::IndexedTriangleClassFilter::Large4096:
+      return primitiveCount >= 4096u;
+  }
+  return true;
 }
 
 u32 samplerStateOr(const SamplerSnapshot& snapshot, u32 state, u32 fallback) {
@@ -5480,7 +5561,15 @@ bool encodeDraw(EncodeContext& ctx,
         const bool splitLargeIndexed =
             splitPrimitiveLimit != 0u &&
             pv.primitiveType == core::PrimitiveType::TriangleList &&
-            primitiveCount > splitPrimitiveLimit;
+            primitiveCount > splitPrimitiveLimit &&
+            splitLargeIndexedDrawRowMatches(encoderBreakdown) &&
+            splitLargeIndexedDrawClassMatches(
+                debug::splitLargeIndexedDrawClassFilter(),
+                primitiveCount,
+                hot.textureMask,
+                hot.renderStates,
+                hot.viewport,
+                fillMode);
         if (splitLargeIndexed) {
           const u64 indexSize = indexElementSize(pv.indexType);
           u32 primitivesEmitted = 0;

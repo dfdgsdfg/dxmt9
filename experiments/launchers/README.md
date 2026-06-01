@@ -366,6 +366,19 @@ Commercial / 3rd-party titles (require external prefix):
     indexed geometry intent but changes vertex submission/cache behavior, so use
     it only as a primitive/backend pressure classifier and expect possible CPU
     and GPU regressions.
+    `--split-large-indexed-draws N` sets
+    `DXMT9_SPLIT_LARGE_INDEXED_DRAWS=N`; it splits large indexed triangle-list
+    draws into multiple Metal indexed draws while preserving the original index
+    path. This is a backend/tiler pressure classifier, not a production
+    optimization by itself because it increases Metal draw count.
+    `--split-large-indexed-draws-row SEQ/ENC` and
+    `--split-large-indexed-draws-rows ROWS` constrain that split probe to one
+    Xcode/DXMT render encoder row or a comma/semicolon/space separated row set.
+    `--split-large-indexed-draws-class CLASS` further limits it to one indexed
+    triangle state bucket. Accepted classes are `any`, `opaque-depth-write`,
+    `nonopaque`, `depth-read`, `alpha-blend`, `scissor`, `textured`, and
+    `large4096`. Use these filters for bounded primitive-partition probes after
+    broad full-frame split/reverse runs have been rejected by shape gates.
     `--probe-reverse-indexed-triangles` sets
     `DXMT9_PROBE_REVERSE_INDEXED_TRIANGLES=1`; it keeps indexed draw count and
     render state stable while submitting a transient IB with triangle-list

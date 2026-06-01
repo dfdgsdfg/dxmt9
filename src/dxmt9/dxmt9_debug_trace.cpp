@@ -84,6 +84,73 @@ bool parseRenderEncoderSelectorAt(std::string_view spec,
   return true;
 }
 
+char normalizedTokenChar(char ch) noexcept {
+  if (ch == '_') {
+    return '-';
+  }
+  if (ch >= 'A' && ch <= 'Z') {
+    return static_cast<char>(ch - 'A' + 'a');
+  }
+  return ch;
+}
+
+std::string_view trimToken(std::string_view token) noexcept {
+  while (!token.empty() && isSpace(token.front())) {
+    token.remove_prefix(1);
+  }
+  while (!token.empty() && isSpace(token.back())) {
+    token.remove_suffix(1);
+  }
+  return token;
+}
+
+bool tokenEquals(std::string_view token, std::string_view expected) noexcept {
+  token = trimToken(token);
+  if (token.size() != expected.size()) {
+    return false;
+  }
+  for (std::size_t i = 0; i < token.size(); ++i) {
+    if (normalizedTokenChar(token[i]) != expected[i]) {
+      return false;
+    }
+  }
+  return true;
+}
+
+IndexedTriangleClassFilter parseIndexedTriangleClassFilter(
+    std::string_view spec) noexcept {
+  if (spec.empty() || tokenEquals(spec, "any")) {
+    return IndexedTriangleClassFilter::Any;
+  }
+  if (tokenEquals(spec, "opaque") ||
+      tokenEquals(spec, "opaque-depth-write")) {
+    return IndexedTriangleClassFilter::OpaqueDepthWrite;
+  }
+  if (tokenEquals(spec, "nonopaque") ||
+      tokenEquals(spec, "non-opaque")) {
+    return IndexedTriangleClassFilter::NonOpaque;
+  }
+  if (tokenEquals(spec, "depth-read")) {
+    return IndexedTriangleClassFilter::DepthRead;
+  }
+  if (tokenEquals(spec, "alpha-blend") ||
+      tokenEquals(spec, "blend")) {
+    return IndexedTriangleClassFilter::AlphaBlend;
+  }
+  if (tokenEquals(spec, "scissor")) {
+    return IndexedTriangleClassFilter::Scissor;
+  }
+  if (tokenEquals(spec, "textured") ||
+      tokenEquals(spec, "texture")) {
+    return IndexedTriangleClassFilter::Textured;
+  }
+  if (tokenEquals(spec, "large4096") ||
+      tokenEquals(spec, "large-4096")) {
+    return IndexedTriangleClassFilter::Large4096;
+  }
+  return IndexedTriangleClassFilter::Any;
+}
+
 }  // namespace
 
 RenderEncoderSelector makeRenderEncoderSelector(std::string_view spec) noexcept {
@@ -122,6 +189,11 @@ RenderEncoderSelectorList makeRenderEncoderSelectorList(std::string_view spec) n
 
   result.enabled = result.count != 0;
   return result;
+}
+
+IndexedTriangleClassFilter makeIndexedTriangleClassFilter(
+    std::string_view spec) noexcept {
+  return parseIndexedTriangleClassFilter(spec);
 }
 
 bool renderEncoderSelectorMatches(RenderEncoderSelector selector,
@@ -315,6 +387,26 @@ std::uint32_t splitLargeIndexedDrawPrimitiveLimit() {
         std::min<std::uint64_t>(*value, std::numeric_limits<std::uint32_t>::max()));
   }();
   return limit;
+}
+
+IndexedTriangleClassFilter splitLargeIndexedDrawClassFilter() {
+  static const IndexedTriangleClassFilter filter =
+      makeIndexedTriangleClassFilter(
+          util::getenvString("DXMT9_SPLIT_LARGE_INDEXED_DRAWS_CLASS"));
+  return filter;
+}
+
+RenderEncoderSelector splitLargeIndexedDrawRow() {
+  static const RenderEncoderSelector selector =
+      parseRenderEncoderSelector("DXMT9_SPLIT_LARGE_INDEXED_DRAWS_ROW");
+  return selector;
+}
+
+RenderEncoderSelectorList splitLargeIndexedDrawRows() {
+  static const RenderEncoderSelectorList selectors =
+      makeRenderEncoderSelectorList(
+          util::getenvString("DXMT9_SPLIT_LARGE_INDEXED_DRAWS_ROWS"));
+  return selectors;
 }
 
 bool probeReverseIndexedTriangles() {
