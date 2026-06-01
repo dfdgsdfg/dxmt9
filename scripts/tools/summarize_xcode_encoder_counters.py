@@ -1056,16 +1056,138 @@ def fmt_int(value: Any) -> str:
     return f"{as_int(value):,}"
 
 
+def pick_gpu_hot_set(
+    rows: list[dict[str, Any]],
+    total_gpu_ms: float,
+    target_share_pct: float,
+) -> list[dict[str, Any]]:
+    """Pick GPU-time-ranked rows until they represent the frame hot set."""
+    if not rows:
+        return []
+    selected: list[dict[str, Any]] = []
+    selected_gpu_ms = 0.0
+    min_rows = min(3, len(rows))
+    target = max(0.0, target_share_pct)
+    for row in rows:
+        selected.append(row)
+        selected_gpu_ms += as_float(row.get("gpu_ms"))
+        share = selected_gpu_ms / total_gpu_ms * 100.0 if total_gpu_ms else 0.0
+        if len(selected) >= min_rows and (share >= target or len(selected) == len(rows)):
+            break
+    return selected
+
+
+def count_field(rows: list[dict[str, Any]], field: str) -> str:
+    counts: dict[str, int] = {}
+    for row in rows:
+        value = str(row.get(field) or "")
+        if value:
+            counts[value] = counts.get(value, 0) + 1
+    return ", ".join(f"{key}:{value}" for key, value in sorted(counts.items()))
+
+
+def encoder_keys(rows: list[dict[str, Any]]) -> str:
+    keys = []
+    for row in rows:
+        seq = row.get("seq")
+        enc = row.get("enc")
+        if isinstance(seq, int) and isinstance(enc, int):
+            keys.append(f"{seq}/{enc}")
+        else:
+            keys.append(str(row.get("xcode_index", "")))
+    return ", ".join(key for key in keys if key)
+
+
+def aggregate_brief(rows: list[dict[str, Any]], total_gpu_ms: float) -> dict[str, Any]:
+    gpu_ms = sum(as_float(row.get("gpu_ms")) for row in rows)
+    buffer_write_mib = sum(as_float(row.get("buffer_write_mib")) for row in rows)
+    vs_buffer_write_mib = sum(as_float(row.get("vs_buffer_write_mib")) for row in rows)
+    vs_invocations = sum(as_float(row.get("vs_invocations")) for row in rows)
+    indexed_refs = sum(as_int(row.get("dxmt_indexed_vertex_reference_count")) for row in rows)
+    indexed_unique = sum(as_int(row.get("dxmt_indexed_unique_vertex_estimate")) for row in rows)
+    cache_miss_64 = sum(
+        as_int(row.get("dxmt_indexed_vertex_cache_miss_estimate_64")) for row in rows
+    )
+    named_tiled_mib = sum(as_float(row.get("dxmt_named_tiled_buffer_mib")) for row in rows)
+    hidden_backend_mib = sum(
+        as_float(row.get("dxmt_hidden_backend_write_mib")) for row in rows
+    )
+    cpu_writer_bytes = sum(as_int(row.get("dxmt_cpu_writer_bytes")) for row in rows)
+    vsout_expected_weight = sum(
+        as_int(row.get("dxmt_vsout_expected_stage_out_bytes_per_vertex")) *
+        as_float(row.get("vs_invocations"))
+        for row in rows
+    )
+    vsout_invocations = sum(
+        as_float(row.get("vs_invocations"))
+        for row in rows
+        if as_int(row.get("dxmt_vsout_expected_stage_out_bytes_per_vertex"))
+    )
+    vs_write_bytes = vs_buffer_write_mib * 1024.0 * 1024.0
+    return {
+        "encoder_count": len(rows),
+        "encoder_keys": encoder_keys(rows),
+        "gpu_ms": gpu_ms,
+        "gpu_share_pct": gpu_ms / total_gpu_ms * 100.0 if total_gpu_ms else 0.0,
+        "buffer_write_mib": buffer_write_mib,
+        "vs_buffer_write_mib": vs_buffer_write_mib,
+        "vs_buffer_write_share": (
+            vs_buffer_write_mib / buffer_write_mib if buffer_write_mib else 0.0
+        ),
+        "vs_invocations": vs_invocations,
+        "vs_bytes_per_invocation": (
+            vs_write_bytes / vs_invocations if vs_invocations else 0.0
+        ),
+        "indexed_refs": indexed_refs,
+        "indexed_unique": indexed_unique,
+        "indexed_reuse_ratio": indexed_refs / indexed_unique if indexed_unique else 0.0,
+        "vs_invocations_per_indexed_unique": (
+            vs_invocations / indexed_unique if indexed_unique else 0.0
+        ),
+        "vs_bytes_per_indexed_unique": (
+            vs_write_bytes / indexed_unique if indexed_unique else 0.0
+        ),
+        "cache_miss_64": cache_miss_64,
+        "cache_miss_64_over_unique": (
+            cache_miss_64 / indexed_unique if indexed_unique else 0.0
+        ),
+        "vs_invocations_per_cache_miss_64": (
+            vs_invocations / cache_miss_64 if cache_miss_64 else 0.0
+        ),
+        "vs_bytes_per_cache_miss_64": (
+            vs_write_bytes / cache_miss_64 if cache_miss_64 else 0.0
+        ),
+        "expected_vsout_bytes_per_vertex": (
+            vsout_expected_weight / vsout_invocations if vsout_invocations else 0.0
+        ),
+        "vs_buffer_to_expected_vsout": (
+            vs_write_bytes / vsout_expected_weight if vsout_expected_weight else 0.0
+        ),
+        "named_tiled_buffer_mib": named_tiled_mib,
+        "hidden_backend_mib": hidden_backend_mib,
+        "hidden_backend_ratio": (
+            hidden_backend_mib / vs_buffer_write_mib if vs_buffer_write_mib else 0.0
+        ),
+        "cpu_writer_mib": cpu_writer_bytes / (1024.0 * 1024.0),
+        "backend_class_summary": count_field(rows, "dxmt_backend_storage_class"),
+        "backend_probe_summary": count_field(rows, "dxmt_backend_probe_hint"),
+        "hint_summary": count_field(rows, "dxmt_gpu_write_hint"),
+    }
+
+
 def write_report(
     path: Path,
     joined: list[dict[str, Any]],
     run_label: str,
     dxmt_streams: dict[tuple[int, int], list[dict[str, Any]]] | None = None,
+    hot_gpu_share_target: float = 95.0,
 ) -> None:
     total_gpu_ms = sum(as_float(row.get("gpu_ms")) for row in joined)
     total_buffer_write_mib = sum(as_float(row.get("buffer_write_mib")) for row in joined)
     total_device_write_mib = sum(as_float(row.get("device_write_mib")) for row in joined)
     top = joined[:3]
+    hot_set = pick_gpu_hot_set(joined, total_gpu_ms, hot_gpu_share_target)
+    hot = aggregate_brief(hot_set, total_gpu_ms)
     top_gpu_ms = sum(as_float(row.get("gpu_ms")) for row in top)
     top_buffer_write_mib = sum(as_float(row.get("buffer_write_mib")) for row in top)
     top_device_write_mib = sum(as_float(row.get("device_write_mib")) for row in top)
@@ -1474,6 +1596,11 @@ def write_report(
         notes.append("Stream stride changes are frequent enough to check vertex-decl/run batching.")
     if top_draws and top_ib_handles / top_draws > 0.75:
         notes.append("IB handle churn is near draw frequency in the top encoders.")
+    if len(hot_set) > len(top):
+        notes.append(
+            "Top three encoders do not cover the configured hot-set GPU share; "
+            "use the Hot Set Aggregate for whole-frame bottleneck conclusions."
+        )
     if top_draws and top_dxmt_vertex_count == 0:
         notes.append(
             "dxmt geometry-shape attribution is absent for these joined rows; "
@@ -1503,6 +1630,11 @@ def write_report(
     lines.append(f"- Total buffer write: `{fmt_float(total_buffer_write_mib)} MiB`")
     lines.append(f"- Total device write: `{fmt_float(total_device_write_mib)} MiB`")
     lines.append(f"- Top 3 GPU share: `{fmt_float(top_gpu_share, 2)}%`")
+    lines.append(
+        f"- Hot set GPU share: `{fmt_float(hot.get('gpu_share_pct'), 2)}%` "
+        f"(`top {fmt_int(hot.get('encoder_count'))}`, target "
+        f"`{fmt_float(hot_gpu_share_target, 2)}%`)"
+    )
     lines.append("")
     lines.append("## Top 3 Aggregate")
     lines.append("")
@@ -1774,6 +1906,86 @@ def write_report(
             f"| dxmt transient shadow index bytes | `{fmt_float(top_transient_index_shadow_bytes / (1024.0 * 1024.0))} MiB` |"
         )
     lines.append("")
+    if len(hot_set) > len(top):
+        lines.append("## Hot Set Aggregate")
+        lines.append("")
+        lines.append(
+            f"Selected the top `{fmt_int(hot.get('encoder_count'))}` GPU-time encoders "
+            f"to cover `{fmt_float(hot.get('gpu_share_pct'), 2)}%` of frame GPU time "
+            f"(target `{fmt_float(hot_gpu_share_target, 2)}%`)."
+        )
+        lines.append("")
+        lines.append("| Metric | Value |")
+        lines.append("|---|---:|")
+        lines.append(f"| Encoders | `{hot.get('encoder_keys', '')}` |")
+        lines.append(f"| GPU time | `{fmt_float(hot.get('gpu_ms'))} ms` |")
+        lines.append(f"| Buffer write | `{fmt_float(hot.get('buffer_write_mib'))} MiB` |")
+        lines.append(f"| VS buffer write | `{fmt_float(hot.get('vs_buffer_write_mib'))} MiB` |")
+        lines.append(
+            f"| VS buffer / Xcode buffer write | `{fmt_float(hot.get('vs_buffer_write_share'), 3)}x` |"
+        )
+        lines.append(
+            f"| VS invocations | `{fmt_int(hot.get('vs_invocations'))}` |"
+        )
+        lines.append(
+            f"| VS buffer bytes / VS invocation | `{fmt_float(hot.get('vs_bytes_per_invocation'), 1)} B` |"
+        )
+        lines.append(
+            f"| dxmt indexed references / unique estimate | "
+            f"`{fmt_int(hot.get('indexed_refs'))} / {fmt_int(hot.get('indexed_unique'))}` |"
+        )
+        lines.append(
+            f"| dxmt indexed reference reuse ratio | `{fmt_float(hot.get('indexed_reuse_ratio'), 3)}x` |"
+        )
+        lines.append(
+            f"| VS invocations / dxmt indexed unique estimate | "
+            f"`{fmt_float(hot.get('vs_invocations_per_indexed_unique'), 3)}x` |"
+        )
+        lines.append(
+            f"| VS buffer bytes / dxmt indexed unique estimate | "
+            f"`{fmt_float(hot.get('vs_bytes_per_indexed_unique'), 1)} B` |"
+        )
+        lines.append(
+            f"| dxmt indexed cache miss estimate 64 | `{fmt_int(hot.get('cache_miss_64'))}` |"
+        )
+        lines.append(
+            f"| cache miss / unique estimate 64 | "
+            f"`{fmt_float(hot.get('cache_miss_64_over_unique'), 3)}x` |"
+        )
+        lines.append(
+            f"| VS invocations / cache miss 64 | "
+            f"`{fmt_float(hot.get('vs_invocations_per_cache_miss_64'), 3)}x` |"
+        )
+        lines.append(
+            f"| VS buffer bytes / cache miss 64 | "
+            f"`{fmt_float(hot.get('vs_bytes_per_cache_miss_64'), 1)} B` |"
+        )
+        lines.append(
+            f"| Expected VSOut bytes / vertex | "
+            f"`{fmt_float(hot.get('expected_vsout_bytes_per_vertex'), 1)} B` |"
+        )
+        lines.append(
+            f"| VS buffer / expected VSOut | "
+            f"`{fmt_float(hot.get('vs_buffer_to_expected_vsout'), 1)}x` |"
+        )
+        lines.append(
+            f"| Named tiled buffer total | `{fmt_float(hot.get('named_tiled_buffer_mib'))} MiB` |"
+        )
+        lines.append(
+            f"| Hidden backend write estimate | `{fmt_float(hot.get('hidden_backend_mib'))} MiB` |"
+        )
+        lines.append(
+            f"| Hidden backend / VS buffer write | "
+            f"`{fmt_float(hot.get('hidden_backend_ratio'), 3)}x` |"
+        )
+        lines.append(f"| dxmt CPU writer bytes | `{fmt_float(hot.get('cpu_writer_mib'))} MiB` |")
+        if hot.get("hint_summary"):
+            lines.append(f"| dxmt hint buckets | `{hot.get('hint_summary')}` |")
+        if hot.get("backend_class_summary"):
+            lines.append(f"| backend storage class | `{hot.get('backend_class_summary')}` |")
+        if hot.get("backend_probe_summary"):
+            lines.append(f"| backend next probe | `{hot.get('backend_probe_summary')}` |")
+        lines.append("")
     lines.append("## Heuristic Notes")
     lines.append("")
     for note in notes:
@@ -2278,6 +2490,12 @@ def main() -> int:
         default=3,
         help="number of GPU-time-ranked encoder rows used by attribution coverage checks",
     )
+    parser.add_argument(
+        "--hot-gpu-share",
+        type=float,
+        default=95.0,
+        help="GPU-time share target for the report's Hot Set Aggregate",
+    )
     args = parser.parse_args()
 
     summary_output, joined_output, report_output = default_output_paths(args.xcode_csv)
@@ -2305,7 +2523,7 @@ def main() -> int:
 
     write_rows(summary_output, summaries, SUMMARY_FIELDS)
     write_rows(joined_output, joined, SUMMARY_FIELDS + JOINED_EXTRA_FIELDS)
-    write_report(report_output, joined, args.run_label, dxmt_streams)
+    write_report(report_output, joined, args.run_label, dxmt_streams, args.hot_gpu_share)
 
     print(summary_output)
     print(joined_output)

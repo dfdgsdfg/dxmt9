@@ -46,6 +46,8 @@ min_top_dxmt_joined_fraction=${DXMT_3DMARK05_MIN_TOP_DXMT_JOINED_FRACTION:-1.0}
 max_top_gpu_regression_ms=${DXMT_3DMARK05_MAX_TOP_GPU_REGRESSION_MS:-}
 max_top_buffer_write_regression_mib=${DXMT_3DMARK05_MAX_TOP_BUFFER_WRITE_REGRESSION_MIB:-}
 max_top_unexplained_buffer_write_ratio=${DXMT_3DMARK05_MAX_TOP_UNEXPLAINED_BUFFER_WRITE_RATIO:-}
+top_n=${DXMT_3DMARK05_TOP_N:-3}
+hot_gpu_share=${DXMT_3DMARK05_HOT_GPU_SHARE:-95.0}
 
 usage() {
   cat <<'USAGE'
@@ -101,6 +103,10 @@ Options:
   --max-top-gpu-regression-ms N
   --max-top-buffer-write-regression-mib N
   --max-top-unexplained-buffer-write-ratio N
+  --top N             GPU-time-ranked encoder count for top-N gates and comparison
+                      (default: 3)
+  --hot-gpu-share PCT GPU share target for report-only Hot Set Aggregate
+                      (default: 95.0)
   --dry-run           Print derived paths and commands without running them
   -h, --help          Show this help
 USAGE
@@ -268,6 +274,14 @@ while (($#)); do
       max_top_unexplained_buffer_write_ratio=${2:?missing value for --max-top-unexplained-buffer-write-ratio}
       shift 2
       ;;
+    --top)
+      top_n=${2:?missing value for --top}
+      shift 2
+      ;;
+    --hot-gpu-share)
+      hot_gpu_share=${2:?missing value for --hot-gpu-share}
+      shift 2
+      ;;
     --dry-run)
       dry_run=1
       shift
@@ -316,6 +330,11 @@ validate_optional_number "--min-top-dxmt-joined-fraction" "$min_top_dxmt_joined_
 validate_optional_number "--max-top-gpu-regression-ms" "$max_top_gpu_regression_ms"
 validate_optional_number "--max-top-buffer-write-regression-mib" "$max_top_buffer_write_regression_mib"
 validate_optional_number "--max-top-unexplained-buffer-write-ratio" "$max_top_unexplained_buffer_write_ratio"
+if [[ ! "$top_n" =~ ^[0-9]+$ ]] || (( top_n == 0 )); then
+  echo "--top must be a positive integer" >&2
+  exit 2
+fi
+validate_optional_number "--hot-gpu-share" "$hot_gpu_share"
 
 run_level_compare_requested=0
 if (( require_color_dontcare_increase ||
@@ -440,6 +459,8 @@ xcode_summary_cmd=(
   --summary-output "$xcode_summary_csv"
   --joined-output "$joined_csv"
   --report-output "$xcode_report"
+  --top "$top_n"
+  --hot-gpu-share "$hot_gpu_share"
 )
 if (( require_top_pso_attribution )); then
   xcode_summary_cmd+=(
@@ -525,6 +546,7 @@ if [[ -n "$baseline_joined" ]]; then
     --before-label "$before_label"
     --after-label "$after_label"
     --output "$xcode_compare_report"
+    --top "$top_n"
   )
   if (( require_top_gpu_decrease )); then
     xcode_compare_cmd+=(--require-top-gpu-decrease)
@@ -596,6 +618,8 @@ echo "encoder_csv: $encoders_csv"
 echo "stream_csv: $stream_csv"
 echo "joined_csv: $joined_csv"
 echo "xcode_report: $xcode_report"
+echo "top_n: $top_n"
+echo "hot_gpu_share: $hot_gpu_share"
 echo "shader_msl_dir: $shader_msl_dir"
 echo "shader_dump_report: $shader_dump_report"
 echo "shader_dump_csv: $shader_dump_csv"

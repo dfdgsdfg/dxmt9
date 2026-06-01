@@ -84,6 +84,62 @@ def write_joined(path: Path, gpu_ms: float, buffer_write_mib: float,
         })
 
 
+def write_joined_rows(path: Path, rows: list[dict[str, object]]) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    fields = [
+        "seq",
+        "enc",
+        "gpu_ms",
+        "gpu_share_pct",
+        "buffer_write_mib",
+        "device_write_mib",
+        "vs_buffer_write_mib",
+        "vs_invocations",
+        "vs_buffer_bytes_per_vs_invocation",
+        "tiled_vertex_buffer_mib",
+        "tiled_primitive_block_mib",
+        "clip_unit_limiter_pct",
+        "dxmt_vertex_count",
+        "dxmt_draw_calls",
+        "dxmt_pso_state_samples",
+        "dxmt_stream_handle_changes",
+        "dxmt_ib_handle_changes",
+        "dxmt_argbuf_cbuf_bytes",
+        "dxmt_transient_vertex_bytes",
+        "dxmt_transient_index_bytes",
+        "dxmt_unexplained_buffer_write_mib",
+        "dxmt_unexplained_buffer_write_ratio",
+        "dxmt_vsout_layout_last",
+    ]
+    with path.open("w", newline="", encoding="utf-8") as handle:
+        writer = csv.DictWriter(handle, fieldnames=fields)
+        writer.writeheader()
+        for row in rows:
+            defaults = {
+                "gpu_share_pct": 50.0,
+                "device_write_mib": row.get("buffer_write_mib", 0.0),
+                "vs_buffer_write_mib": row.get("buffer_write_mib", 0.0),
+                "vs_invocations": 1000,
+                "vs_buffer_bytes_per_vs_invocation": 1024.0,
+                "tiled_vertex_buffer_mib": 1.0,
+                "tiled_primitive_block_mib": 0.5,
+                "clip_unit_limiter_pct": 1.0,
+                "dxmt_vertex_count": 1000,
+                "dxmt_draw_calls": 10,
+                "dxmt_pso_state_samples": 10,
+                "dxmt_stream_handle_changes": 10,
+                "dxmt_ib_handle_changes": 10,
+                "dxmt_argbuf_cbuf_bytes": 0,
+                "dxmt_transient_vertex_bytes": 0,
+                "dxmt_transient_index_bytes": 0,
+                "dxmt_unexplained_buffer_write_mib": row.get("buffer_write_mib", 0.0),
+                "dxmt_unexplained_buffer_write_ratio": 1.0,
+                "dxmt_vsout_layout_last": "0xfff",
+            }
+            defaults.update(row)
+            writer.writerow(defaults)
+
+
 class CompareXcodeDxmtBottlenecksTests(unittest.TestCase):
     def test_output_parent_directory_is_created(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -251,6 +307,47 @@ class CompareXcodeDxmtBottlenecksTests(unittest.TestCase):
                 "`top_vsout_expected_stage_out_bytes_per_vertex` | `184.000` | `16.000`",
                 report,
             )
+
+    def test_top_row_deltas_match_by_seq_enc_not_rank_when_shapes_differ(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            before = root / "before.csv"
+            after = root / "after.csv"
+            output = root / "comparison.md"
+            write_joined_rows(before, [
+                {"seq": 60, "enc": 2, "gpu_ms": 20.0, "buffer_write_mib": 900.0},
+                {"seq": 60, "enc": 8, "gpu_ms": 1.0, "buffer_write_mib": 1.0},
+            ])
+            write_joined_rows(after, [
+                {"seq": 60, "enc": 3, "gpu_ms": 11.0, "buffer_write_mib": 450.0},
+                {"seq": 60, "enc": 4, "gpu_ms": 9.0, "buffer_write_mib": 350.0},
+            ])
+
+            result = subprocess.run(
+                [
+                    sys.executable,
+                    str(SCRIPT),
+                    str(before),
+                    str(after),
+                    "--output",
+                    str(output),
+                    "--top",
+                    "2",
+                ],
+                text=True,
+                capture_output=True,
+                check=False,
+            )
+
+            self.assertEqual(result.returncode, 0, result.stderr)
+            report = output.read_text(encoding="utf-8")
+            self.assertIn("## Top Row Key Coverage", report)
+            self.assertIn("| Shared | `none` |", report)
+            self.assertIn("| Before only | `60/2, 60/8` |", report)
+            self.assertIn("| After only | `60/3, 60/4` |", report)
+            self.assertIn("| `none` | `n/a` |", report)
+            self.assertIn("| `matched rows total` | `0.000`", report)
+            self.assertNotIn("`60/2` | `20.000 -> 11.000", report)
 
 
 if __name__ == "__main__":

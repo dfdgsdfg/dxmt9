@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import csv
+import importlib.util
 import subprocess
 import sys
 import tempfile
@@ -14,6 +15,15 @@ from pathlib import Path
 REPO_ROOT = Path(__file__).resolve().parents[2]
 SCRIPT = REPO_ROOT / "scripts" / "tools" / "summarize_xcode_encoder_counters.py"
 MIB = 1024 * 1024
+
+
+def load_xcode_summarizer():
+    spec = importlib.util.spec_from_file_location("summarize_xcode_encoder_counters", SCRIPT)
+    assert spec is not None
+    module = importlib.util.module_from_spec(spec)
+    assert spec.loader is not None
+    spec.loader.exec_module(module)
+    return module
 
 
 class SummarizeXcodeEncoderCountersTests(unittest.TestCase):
@@ -276,6 +286,50 @@ class SummarizeXcodeEncoderCountersTests(unittest.TestCase):
             self.assertIn("dxmt cull none/front/back draws", report_text)
             self.assertIn("## DXMT Per-Stream Breakdown", report_text)
             self.assertIn("0xabc/32/48", report_text)
+
+    def test_report_emits_hot_set_when_top_three_miss_gpu_share_target(self) -> None:
+        summarizer = load_xcode_summarizer()
+        rows = []
+        for enc, gpu_ms in enumerate([40.0, 25.0, 15.0, 18.0, 2.0]):
+            rows.append({
+                "seq": 60,
+                "enc": enc,
+                "xcode_index": enc,
+                "gpu_ms": gpu_ms,
+                "buffer_write_mib": 100.0 + enc,
+                "vs_buffer_write_mib": 99.0 + enc,
+                "vs_invocations": 1000.0 + enc,
+                "dxmt_indexed_vertex_reference_count": 2000 + enc,
+                "dxmt_indexed_unique_vertex_estimate": 1000 + enc,
+                "dxmt_indexed_vertex_cache_miss_estimate_64": 1200 + enc,
+                "dxmt_vsout_expected_stage_out_bytes_per_vertex": 184,
+                "dxmt_named_tiled_buffer_mib": 1.0,
+                "dxmt_hidden_backend_write_mib": 98.0 + enc,
+                "dxmt_cpu_writer_bytes": 1024,
+                "dxmt_gpu_write_hint": "gpu_vs_buffer_write",
+                "dxmt_backend_storage_class": "hidden_vertex_tiler_parameter_storage",
+                "dxmt_backend_probe_hint": "primitive-backend-pressure-or-state-shape-ab",
+            })
+
+        with tempfile.TemporaryDirectory() as tmp:
+            report = Path(tmp) / "report.md"
+            summarizer.write_report(
+                report,
+                rows,
+                "hot-fixture",
+                hot_gpu_share_target=95.0,
+            )
+            text = report.read_text(encoding="utf-8")
+
+        self.assertIn("- Top 3 GPU share: `80.00%`", text)
+        self.assertIn("- Hot set GPU share: `98.00%` (`top 4`, target `95.00%`)", text)
+        self.assertIn("## Hot Set Aggregate", text)
+        self.assertIn("| Encoders | `60/0, 60/1, 60/2, 60/3` |", text)
+        self.assertIn("| VS invocations / cache miss 64 |", text)
+        self.assertIn(
+            "use the Hot Set Aggregate for whole-frame bottleneck conclusions",
+            text,
+        )
 
     def test_zero_vsout_layout_still_counts_position(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

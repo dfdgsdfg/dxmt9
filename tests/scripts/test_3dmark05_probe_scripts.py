@@ -180,6 +180,28 @@ class ThreeDMark05ProbeScriptTests(unittest.TestCase):
         self.assertIn("--max-top-unexplained-buffer-write-ratio", finalize_line)
         self.assertIn("0.50", finalize_line)
 
+    def test_wrapper_forwards_top_and_hot_share_to_finalizer(self) -> None:
+        result = self.run_script(
+            RUN_WRAPPER,
+            "--suffix",
+            "forward-hot-set",
+            "--top",
+            "4",
+            "--hot-gpu-share",
+            "98",
+            "--min-free-mb",
+            "0",
+            "--dry-run",
+        )
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+        finalize_line = next(
+            line for line in result.stdout.splitlines()
+            if line.startswith("finalize_cmd_after_xcode_export:")
+        )
+        self.assertIn("--top 4", finalize_line)
+        self.assertIn("--hot-gpu-share 98", finalize_line)
+
     def test_wrapper_dry_run_includes_sparse_const_split_env(self) -> None:
         result = self.run_script(
             RUN_WRAPPER,
@@ -386,6 +408,8 @@ class ThreeDMark05ProbeScriptTests(unittest.TestCase):
             "--probe-disable-alpha-blend",
             "--probe-disable-depth-write",
             "--probe-depth-func-always",
+            "--force-cull-mode",
+            "back",
             "--force-visible",
             "--dry-run",
         )
@@ -396,7 +420,31 @@ class ThreeDMark05ProbeScriptTests(unittest.TestCase):
         self.assertIn("DXMT9_PROBE_DISABLE_ALPHA_BLEND=1", result.stdout)
         self.assertIn("DXMT9_PROBE_DISABLE_DEPTH_WRITE=1", result.stdout)
         self.assertIn("DXMT9_PROBE_DEPTH_FUNC_ALWAYS=1", result.stdout)
+        self.assertIn("DXMT_DEBUG_FORCE_CULL_MODE=back", result.stdout)
         self.assertIn("DXMT_DEBUG_FORCE_VISIBLE=1", result.stdout)
+
+    def test_wrapper_dry_run_includes_force_expand_indexed_env(self) -> None:
+        result = self.run_script(
+            RUN_WRAPPER,
+            "--no-gputrace",
+            "--force-expand-indexed",
+            "--dry-run",
+        )
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("DXMT_FORCE_EXPAND_INDEXED=1", result.stdout)
+
+    def test_wrapper_rejects_invalid_force_cull_mode(self) -> None:
+        result = self.run_script(
+            RUN_WRAPPER,
+            "--no-gputrace",
+            "--force-cull-mode",
+            "sideways",
+            "--dry-run",
+        )
+
+        self.assertEqual(result.returncode, 2)
+        self.assertIn("--force-cull-mode must be one of", result.stderr)
 
     def test_wrapper_dry_run_includes_metal_capture_layer_env_for_gputrace(self) -> None:
         result = self.run_script(

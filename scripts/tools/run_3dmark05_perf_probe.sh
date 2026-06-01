@@ -22,6 +22,8 @@ suppress_x8_rt_pixel_format_view=0
 x8_shader_alpha_fill=0
 native_metal_base_vertex=0
 split_large_indexed_draws=
+force_expand_indexed=0
+force_cull_mode=
 measure_index_reuse=0
 aggressive_color_dontcare=0
 aggressive_depth_dontcare=0
@@ -67,6 +69,8 @@ min_top_dxmt_joined_fraction=${DXMT_3DMARK05_MIN_TOP_DXMT_JOINED_FRACTION:-1.0}
 max_top_gpu_regression_ms=${DXMT_3DMARK05_MAX_TOP_GPU_REGRESSION_MS:-}
 max_top_buffer_write_regression_mib=${DXMT_3DMARK05_MAX_TOP_BUFFER_WRITE_REGRESSION_MIB:-}
 max_top_unexplained_buffer_write_ratio=${DXMT_3DMARK05_MAX_TOP_UNEXPLAINED_BUFFER_WRITE_RATIO:-}
+top_n=${DXMT_3DMARK05_TOP_N:-3}
+hot_gpu_share=${DXMT_3DMARK05_HOT_GPU_SHARE:-95.0}
 min_free_mb=${DXMT_3DMARK05_MIN_TRACE_FREE_MB:-}
 
 usage() {
@@ -125,6 +129,13 @@ Options:
   --split-large-indexed-draws N
                       Set DXMT9_SPLIT_LARGE_INDEXED_DRAWS=N to split indexed
                       triangle-list draws above N primitives
+  --force-expand-indexed
+                      Set DXMT_FORCE_EXPAND_INDEXED=1 to expand indexed draws
+                      into flat vertex lists for primitive/backend pressure
+                      classification
+  --force-cull-mode MODE
+                      Set DXMT_DEBUG_FORCE_CULL_MODE=MODE where MODE is one of
+                      none, front, or back for cull/backend shape A/B probes
   --measure-index-reuse
                       Set DXMT9_MEASURE_INDEX_REUSE=1 to scan accessible
                       index buffers and report per-encoder unique index counts
@@ -222,6 +233,10 @@ Options:
   --max-top-unexplained-buffer-write-ratio N
                       Finalizer Xcode gate: max allowed unexplained top-N
                       buffer write / buffer write ratio
+  --top N             GPU-time-ranked encoder count for finalizer top-N gates
+                      and Xcode comparison (default: 3)
+  --hot-gpu-share PCT GPU share target for finalizer report-only Hot Set
+                      Aggregate (default: 95.0)
   --min-free-mb N     Required free space before launch (default: 2048 with gputrace, 256 without)
   --dry-run           Print paths, env, and command without launching
   -h, --help          Show this help
@@ -304,6 +319,14 @@ while (($#)); do
       ;;
     --split-large-indexed-draws)
       split_large_indexed_draws=${2:?missing value for --split-large-indexed-draws}
+      shift 2
+      ;;
+    --force-expand-indexed)
+      force_expand_indexed=1
+      shift
+      ;;
+    --force-cull-mode)
+      force_cull_mode=${2:?missing value for --force-cull-mode}
       shift 2
       ;;
     --measure-index-reuse)
@@ -482,6 +505,14 @@ while (($#)); do
       max_top_unexplained_buffer_write_ratio=${2:?missing value for --max-top-unexplained-buffer-write-ratio}
       shift 2
       ;;
+    --top)
+      top_n=${2:?missing value for --top}
+      shift 2
+      ;;
+    --hot-gpu-share)
+      hot_gpu_share=${2:?missing value for --hot-gpu-share}
+      shift 2
+      ;;
     --min-free-mb)
       min_free_mb=${2:?missing value for --min-free-mb}
       shift 2
@@ -549,6 +580,24 @@ fi
 
 if [[ ! "$min_top_dxmt_joined_fraction" =~ ^[0-9]+([.][0-9]+)?$ ]]; then
   echo "--min-top-dxmt-joined-fraction must be numeric" >&2
+  exit 2
+fi
+
+if [[ ! "$top_n" =~ ^[0-9]+$ ]] || (( top_n == 0 )); then
+  echo "--top must be a positive integer" >&2
+  exit 2
+fi
+
+if [[ ! "$hot_gpu_share" =~ ^[0-9]+([.][0-9]+)?$ ]]; then
+  echo "--hot-gpu-share must be numeric" >&2
+  exit 2
+fi
+
+if [[ -n "$force_cull_mode" &&
+      "$force_cull_mode" != none &&
+      "$force_cull_mode" != front &&
+      "$force_cull_mode" != back ]]; then
+  echo "--force-cull-mode must be one of: none, front, back" >&2
   exit 2
 fi
 
@@ -753,6 +802,14 @@ if [[ -n "$split_large_indexed_draws" ]]; then
   env_args+=("DXMT9_SPLIT_LARGE_INDEXED_DRAWS=$split_large_indexed_draws")
 fi
 
+if (( force_expand_indexed )); then
+  env_args+=("DXMT_FORCE_EXPAND_INDEXED=1")
+fi
+
+if [[ -n "$force_cull_mode" ]]; then
+  env_args+=("DXMT_DEBUG_FORCE_CULL_MODE=$force_cull_mode")
+fi
+
 if (( measure_index_reuse )); then
   env_args+=("DXMT9_MEASURE_INDEX_REUSE=1")
 fi
@@ -872,6 +929,8 @@ if (( capture_gputrace )); then
     scripts/tools/finalize_3dmark05_perf_probe.sh
     --suffix "$suffix"
     --frame "$frame"
+    --top "$top_n"
+    --hot-gpu-share "$hot_gpu_share"
   )
   if [[ -n "$compare_baseline_output" ]]; then
     finalize_cmd+=(--baseline-output "$compare_baseline_output")
@@ -1031,6 +1090,12 @@ if (( probe_disable_depth_write )); then
 fi
 if (( probe_depth_func_always )); then
   echo "warning: --probe-depth-func-always is diagnostic only and can corrupt depth-dependent frame output; use it only to isolate depth-compare backend effects."
+fi
+if (( force_expand_indexed )); then
+  echo "warning: --force-expand-indexed is diagnostic only; it preserves indexed geometry intent but changes vertex submission/cache behavior and can heavily regress GPU/CPU cost."
+fi
+if [[ -n "$force_cull_mode" ]]; then
+  echo "warning: --force-cull-mode is diagnostic only and can corrupt visibility; use it only to classify cull/backend state-shape effects."
 fi
 
 if (( dry_run )); then

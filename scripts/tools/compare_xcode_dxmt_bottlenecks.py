@@ -357,6 +357,28 @@ def row_match_key(row: dict[str, str]) -> tuple[str, str] | None:
     return None
 
 
+def key_label(key: tuple[str, str]) -> str:
+    return f"{key[0]}/{key[1]}"
+
+
+def key_sort_value(key: tuple[str, str]) -> tuple[int, int, str, str]:
+    return as_int(key[0]), as_int(key[1]), key[0], key[1]
+
+
+def top_key_set(rows: list[dict[str, str]], top_n: int) -> set[tuple[str, str]]:
+    return {
+        key
+        for row in rows[:top_n]
+        if (key := row_match_key(row)) is not None
+    }
+
+
+def format_key_set(keys: set[tuple[str, str]]) -> str:
+    if not keys:
+        return "none"
+    return ", ".join(key_label(key) for key in sorted(keys, key=key_sort_value))
+
+
 def row_metric(row: dict[str, str], key: str) -> float:
     return as_float(first(row, key))
 
@@ -395,22 +417,29 @@ def matched_top_rows(
     after_rows: list[dict[str, str]],
     top_n: int,
 ) -> list[tuple[int, dict[str, str], dict[str, str]]]:
+    before_top = before_rows[:top_n]
+    after_top = after_rows[:top_n]
+    before_has_keys = any(row_match_key(row) is not None for row in before_top)
+    after_has_keys = any(row_match_key(row) is not None for row in after_top)
+    matched: list[tuple[int, dict[str, str], dict[str, str]]] = []
+    if not before_has_keys and not after_has_keys:
+        for index, before_row in enumerate(before_top):
+            after_row = after_top[index] if index < len(after_top) else {}
+            matched.append((index + 1, before_row, after_row))
+        return matched
+
     after_by_key = {
         key: row
-        for row in after_rows[:top_n]
+        for row in after_top
         if (key := row_match_key(row)) is not None
     }
-    matched: list[tuple[int, dict[str, str], dict[str, str]]] = []
-    for index, before_row in enumerate(before_rows[:top_n]):
-        after_row: dict[str, str] | None = None
+    for index, before_row in enumerate(before_top):
         key = row_match_key(before_row)
-        if key is not None:
-            after_row = after_by_key.get(key)
-        if after_row is None and index < len(after_rows):
-            after_row = after_rows[index]
-        if after_row is None:
-            after_row = {}
-        matched.append((index + 1, before_row, after_row))
+        if key is None:
+            continue
+        after_row = after_by_key.get(key)
+        if after_row is not None:
+            matched.append((index + 1, before_row, after_row))
     return matched
 
 
@@ -610,6 +639,28 @@ def write_report(path: Path, before: dict[str, float], after: dict[str, float],
         )
     lines.append("")
 
+    before_keys = top_key_set(before_rows, top_n)
+    after_keys = top_key_set(after_rows, top_n)
+    key_sets_present = bool(before_keys or after_keys)
+    if key_sets_present:
+        shared_keys = before_keys & after_keys
+        before_only = before_keys - after_keys
+        after_only = after_keys - before_keys
+        lines.append("## Top Row Key Coverage")
+        lines.append("")
+        lines.append(
+            "Per-row deltas below are restricted to shared `seq/enc` rows. "
+            "Top-N aggregate metrics above still compare the GPU-time-ranked "
+            "hot rows for each capture."
+        )
+        lines.append("")
+        lines.append("| Set | Rows |")
+        lines.append("|---|---|")
+        lines.append(f"| Shared | `{format_key_set(shared_keys)}` |")
+        lines.append(f"| Before only | `{format_key_set(before_only)}` |")
+        lines.append(f"| After only | `{format_key_set(after_only)}` |")
+        lines.append("")
+
     lines.append("## Top Encoder Deltas")
     lines.append("")
     lines.append(
@@ -648,6 +699,8 @@ def write_report(path: Path, before: dict[str, float], after: dict[str, float],
             f"({pct_delta(after_clip, before_clip)})` | "
             f"`{before_vsout} -> {after_vsout}` |"
         )
+    if not matched_top_rows(before_rows, after_rows, top_n):
+        lines.append("| `none` | `n/a` | `n/a` | `n/a` | `n/a` | `n/a` | `n/a` | `n/a` |")
     lines.append("")
 
     lines.append("## VS Write Delta Attribution")
@@ -661,7 +714,8 @@ def write_report(path: Path, before: dict[str, float], after: dict[str, float],
     total_invocation_effect = 0.0
     total_bpi_effect = 0.0
     total_residual = 0.0
-    for rank, before_row, after_row in matched_top_rows(before_rows, after_rows, top_n):
+    matched_rows = matched_top_rows(before_rows, after_rows, top_n)
+    for rank, before_row, after_row in matched_rows:
         label = seq_enc_label(before_row, rank)
         components = vs_write_delta_components(before_row, after_row)
         row_total_delta = float(components["total_delta_mib"])
@@ -678,6 +732,8 @@ def write_report(path: Path, before: dict[str, float], after: dict[str, float],
             f"`{fmt_signed(row_bpi_effect)}` | "
             f"`{fmt_signed(row_residual)}` | `{components['primary']}` |"
         )
+    if not matched_rows:
+        lines.append("| `none` | `0.000` | `0.000` | `0.000` | `0.000` | `none` |")
     total_primary = "none"
     if max(abs(total_invocation_effect), abs(total_bpi_effect)) >= 0.001:
         total_primary = (
@@ -685,8 +741,9 @@ def write_report(path: Path, before: dict[str, float], after: dict[str, float],
             if abs(total_invocation_effect) >= abs(total_bpi_effect)
             else "bytes_per_invocation"
         )
+    total_label = "matched rows total" if key_sets_present else f"top {top_n} total"
     lines.append(
-        f"| `top {top_n} total` | `{fmt_signed(total_delta)}` | "
+        f"| `{total_label}` | `{fmt_signed(total_delta)}` | "
         f"`{fmt_signed(total_invocation_effect)}` | "
         f"`{fmt_signed(total_bpi_effect)}` | "
         f"`{fmt_signed(total_residual)}` | `{total_primary}` |"

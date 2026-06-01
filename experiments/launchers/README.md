@@ -349,6 +349,15 @@ Commercial / 3rd-party titles (require external prefix):
     `DXMT9_PROBE_DISABLE_DEPTH_WRITE=1` and keeps depth tests but forces depth
     writes off. Gate both with Xcode `VS Buffer Device Memory Bytes Written`
     deltas; they are not correctness-preserving optimizations by themselves.
+    `--force-cull-mode none|front|back` sets
+    `DXMT_DEBUG_FORCE_CULL_MODE` and is the narrow cull/backend shape classifier
+    to use when broad `--disable-cull` has already been rejected. Pair it with
+    Xcode counters and check whether `VS Invocations`, `VS B/invocation`, or
+    named tiled counters move.
+    `--force-expand-indexed` sets `DXMT_FORCE_EXPAND_INDEXED=1`; it preserves
+    indexed geometry intent but changes vertex submission/cache behavior, so use
+    it only as a primitive/backend pressure classifier and expect possible CPU
+    and GPU regressions.
     `--disable-alpha-test` is the narrower fragment/raster classifier for the
     alpha-test discard path and should be tried before more invasive shader
     substitutions when `--force-fragment-color` changes hidden VS-write
