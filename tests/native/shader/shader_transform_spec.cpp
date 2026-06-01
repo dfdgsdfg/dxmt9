@@ -128,6 +128,31 @@ private:
   std::optional<std::string> previous_;
 };
 
+class ScopedSetEnv {
+public:
+  ScopedSetEnv(const char* name, const char* value) : name_(name) {
+    if (const char* previous = std::getenv(name)) {
+      previous_ = previous;
+    }
+    setenv(name_, value, 1);
+  }
+
+  ~ScopedSetEnv() {
+    if (previous_) {
+      setenv(name_, previous_->c_str(), 1);
+    } else {
+      unsetenv(name_);
+    }
+  }
+
+  ScopedSetEnv(const ScopedSetEnv&) = delete;
+  ScopedSetEnv& operator=(const ScopedSetEnv&) = delete;
+
+private:
+  const char* name_ = nullptr;
+  std::optional<std::string> previous_;
+};
+
 u32 encodeRegisterType(u32 regType) {
   return ((regType & 0x7u) << 28) | (((regType >> 3) & 0x3u) << 11);
 }
@@ -227,6 +252,17 @@ std::string translateVertex(std::span<const u32> words) {
   desc.vertexShader = shader;
   return dxmt9::translator::makeTranslatedVertexSource(
       shader, dxmt9::drawshader::makeShaderSourceContext(desc));
+}
+
+std::string translateVertexWithVSOutLayout(
+    std::span<const u32> words,
+    dxmt9::shaders::VSOutLayout layout) {
+  const auto shader = makeShader(words);
+  DrawDesc desc{};
+  desc.vertexShader = shader;
+  auto context = dxmt9::drawshader::makeShaderSourceContext(desc);
+  context.vsOutLayout = layout;
+  return dxmt9::translator::makeTranslatedVertexSource(shader, context);
 }
 
 std::string translateVertex(std::span<const u32> words, std::vector<VertexElement> elements,
@@ -388,6 +424,24 @@ std::vector<u32> makeVs30OutputSemanticBytecode() {
       makeInstructionToken(kD3DSIO_MOV, 2),
       makeDstToken(kD3DSPR_TEXCRDOUT, 2),
       makeSrcToken(kD3DSPR_CONST, 2),
+      kD3DSIO_END,
+  };
+}
+
+std::vector<u32> makeVs30TempFiveOutputBytecode() {
+  using namespace dxmt9::d3d9bc;
+  constexpr u32 kD3DDeclUsagePosition = 0u;
+  return {
+      makeVersionToken(true, 3, 0),
+      makeInstructionToken(kD3DSIO_DCL, 2),
+      makeDclSemanticToken(kD3DDeclUsagePosition, 0u),
+      makeDstToken(kD3DSPR_TEXCRDOUT, 0),
+      makeInstructionToken(kD3DSIO_MOV, 2),
+      makeDstToken(kD3DSPR_TEMP, 5),
+      makeSrcToken(kD3DSPR_CONST, 0),
+      makeInstructionToken(kD3DSIO_MOV, 2),
+      makeDstToken(kD3DSPR_TEXCRDOUT, 0),
+      makeSrcToken(kD3DSPR_TEMP, 5),
       kD3DSIO_END,
   };
 }
@@ -1791,7 +1845,7 @@ void testFfpMipLodBiasClearOmitsShaderSideBias() {
 
 void testPs30InputSemanticTexcoordMapping() {
   const auto source = translatePixel(makePs30InputSemanticBytecode());
-  checkContains(source, "dxmt9_select_texcoord(in, 3u)",
+  checkContains(source, "in.texcoord3",
                 "ps_3_0 dcl_texcoord semantic index maps input register reads by semantic index");
   checkContains(source, "tex2.sample(samp2", "ps_3_0 texture sample preserves sampler register mapping");
 }
@@ -1819,7 +1873,7 @@ void testPairLocalVaryingLivenessKeepsHighTexcoordAndFog() {
                    "pair-local VSOut trims unrelated high texcoords");
   checkContains(source, "float fogFactor",
                 "pair-local VSOut keeps fogFactor for the emitted fog tail");
-  checkContains(source, "dxmt9_select_texcoord(in, 7u)",
+  checkContains(source, "in.texcoord7",
                 "fragment source reads the preserved high texcoord");
 }
 
@@ -1854,6 +1908,55 @@ void testVs30OutputSemanticMappingBySemanticIndex() {
   checkContains(source, "outSecondaryColor = cFloat[2]", "vs_3_0 color1 semantic maps to secondary color output");
   checkNotContains(source, "outTexcoord[1] = cFloat[1]",
                    "vs_3_0 texcoord semantic does not fall back to raw output register index");
+}
+
+void testVsTempTrimIsOptInAndUsesObservedTempRange() {
+  {
+    const ScopedUnsetEnv noTrim("DXMT9_TRIM_VERTEX_TEMPS");
+    const auto source = translateVertex(makeVs30OutputSemanticBytecode());
+    checkContains(source, "float4 r[32];",
+                  "vertex temp array remains conservative by default");
+  }
+  {
+    const ScopedSetEnv trim("DXMT9_TRIM_VERTEX_TEMPS", "1");
+    const auto noTempSource = translateVertex(makeVs30OutputSemanticBytecode());
+    checkContains(noTempSource, "float4 r[1];",
+                  "vertex temp trim keeps one slot when the shader has no temp use");
+    checkNotContains(noTempSource, "float4 r[32];",
+                     "vertex temp trim removes the conservative 32-slot array");
+
+    const auto tempFiveSource = translateVertex(makeVs30TempFiveOutputBytecode());
+    checkContains(tempFiveSource, "float4 r[6];",
+                  "vertex temp trim sizes through the highest observed temp source/dest");
+    checkContains(tempFiveSource, "r[5]",
+                  "trimmed vertex temp source still references the highest used temp");
+  }
+}
+
+void testVsOutputScratchTrimIsOptInAndUsesObservedOutputRange() {
+  {
+    const ScopedUnsetEnv noTrim("DXMT9_TRIM_VS_OUTPUT_SCRATCH");
+    const auto source = translateVertex(makeVs30TempFiveOutputBytecode());
+    checkContains(source, "float4 outTexcoord[8];",
+                  "vertex output texcoord scratch remains conservative by default");
+  }
+  {
+    const ScopedSetEnv trim("DXMT9_TRIM_VS_OUTPUT_SCRATCH", "1");
+    const auto minimalLayout = dxmt9::shaders::minimalVSOutLayout();
+    const auto noTexcoordSource =
+        translateVertexWithVSOutLayout(makeVs30TempFiveOutputBytecode(), minimalLayout);
+    checkContains(noTexcoordSource, "float4 outTexcoord[1];",
+                  "vertex output scratch trim keeps one slot when no texcoord output is used");
+    checkNotContains(noTexcoordSource, "float4 outTexcoord[8];",
+                     "vertex output scratch trim removes the conservative 8-slot array");
+
+    const auto texcoordTwoSource =
+        translateVertexWithVSOutLayout(makeVs30OutputSemanticBytecode(), minimalLayout);
+    checkContains(texcoordTwoSource, "float4 outTexcoord[3];",
+                  "vertex output scratch trim sizes through the highest mapped texcoord semantic");
+    checkContains(texcoordTwoSource, "outTexcoord[2] = cFloat[1]",
+                  "trimmed vertex output scratch still references the highest mapped texcoord");
+  }
 }
 
 void testVertexDepthOutThrowsDeterministically() {
@@ -2377,7 +2480,7 @@ void testPs11LegacyTexcoordTexLoweringContract() {
   const auto source = translatePixel(makePs11TexcoordTexBytecode());
   checkContains(source, "for (uint i = 0; i < 8u; ++i) { outTexcoord[i] = dxmt9_select_texcoord(in, i); }",
                 "ps_1_1 initializes mutable t# registers from interpolated texcoords");
-  checkContains(source, "outTexcoord[0] = float4(saturate((dxmt9_select_texcoord(in, 0u)).xyz), 1.0f);",
+  checkContains(source, "outTexcoord[0] = float4(saturate((in.texcoord0).xyz), 1.0f);",
                 "ps_1_1 TEXCOORD clamps the stage texcoord and forces w=1");
   checkContains(source, "texture2d<float> tex0 [[texture(0)]]", "ps_1_1 TEX binds the destination stage texture");
   // samplerLodBias variant flag is clear here (general TEX-lowering contract),
@@ -2404,11 +2507,11 @@ void testVs11FixedFunctionOutputLoweringContract() {
 
 void testPs14TexcrdTexldTexdepthLoweringContract() {
   const auto source = translatePixel(makePs14TexcrdTexldDepthBytecode());
-  checkContains(source, "r[0] = dxmt9_select_texcoord(in, 0u);",
+  checkContains(source, "r[0] = in.texcoord0;",
                 "ps_1_4 TEXCRD copies explicit t# source to r#");
   checkContains(source, "texture2d<float> tex1 [[texture(1)]]", "ps_1_4 TEXLD binds destination stage texture");
   // samplerLodBias variant flag clear (general lowering contract) → plain sample.
-  checkContains(source, "r[1] = tex1.sample(samp1, (dxmt9_select_texcoord(in, 1u)).xy);",
+  checkContains(source, "r[1] = tex1.sample(samp1, (in.texcoord1).xy);",
                 "ps_1_4 TEXLD samples destination stage with explicit source coords (no LOD bias when variant flag clear)");
   checkContains(source, "outDepth = clamp((r[5]).x / min((r[5]).y, 1.0f), 0.0f, 1.0f);",
                 "ps_1_4 TEXDEPTH writes fragment depth from r5-style source");
@@ -2439,7 +2542,7 @@ void testPs13LegacyTextureFamilyLoweringContract() {
 
 void testPs14BemLoweringContract() {
   const auto source = translatePixel(makePs14BemBytecode());
-  checkContains(source, "r[0] = float4((dxmt9_select_texcoord(in, 0u)).xy + float2(ffpPs.bumpEnvMat[0].x",
+  checkContains(source, "r[0] = float4((in.texcoord0).xy + float2(ffpPs.bumpEnvMat[0].x",
                 "ps_1_4 BEM writes bumped coordinates using destination-stage bump matrix");
 }
 
@@ -2702,6 +2805,8 @@ int main() {
     const ScopedUnsetEnv noFullscreenVertex("DXMT_DEBUG_FORCE_FULLSCREEN_VERTEX");
     const ScopedUnsetEnv noPixelVFlip("DXMT_DEBUG_FORCE_PIXEL_V_FLIP");
     const ScopedUnsetEnv noVertexYFlip("DXMT_DEBUG_FLIP_VERTEX_Y");
+    const ScopedUnsetEnv noVertexTempTrim("DXMT9_TRIM_VERTEX_TEMPS");
+    const ScopedUnsetEnv noVsOutputScratchTrim("DXMT9_TRIM_VS_OUTPUT_SCRATCH");
 
     testD3DBCDecodeAndClassificationFixtures();
     testPs30VFaceDecodeAndSourceContract();
@@ -2719,6 +2824,8 @@ int main() {
     testPs30TexkillLoweringContract();
     testPs20ColorInputUsesLegacyInputMapping();
     testVs30OutputSemanticMappingBySemanticIndex();
+    testVsTempTrimIsOptInAndUsesObservedTempRange();
+    testVsOutputScratchTrimIsOptInAndUsesObservedOutputRange();
     testVertexDepthOutThrowsDeterministically();
     testVs30HighOutputRegisterSemanticMapping();
     testVs30VertexDeclarationTypeLoads();

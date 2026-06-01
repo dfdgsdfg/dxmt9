@@ -235,7 +235,7 @@ void testPixelShaderInputSemanticTranslation() {
   desc.pixelShader = shader;
   const auto source = dxmt9::translator::makeTranslatedFragmentSource(
       shader, dxmt9::drawshader::makeShaderSourceContext(desc));
-  checkContains(source, "dxmt9_select_texcoord(in, 0u)", "ps_3_0 dcl_texcoord input maps to texcoord");
+  checkContains(source, "in.texcoord0", "ps_3_0 dcl_texcoord input maps to texcoord");
   checkContains(source, "tex2.sample(samp2", "ps_3_0 input semantic sample keeps sampler register");
   if (getenvFlag("DXMT_DEBUG_FORCE_PIXEL_V_FLIP")) {
     checkContains(source, "1.0f -", "ps_3_0 forced V flip source contract");

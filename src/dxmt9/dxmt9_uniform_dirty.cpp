@@ -100,6 +100,27 @@ ShaderConstantUploadPlan makeConstantUploadPlan(
   };
 }
 
+void resetRangesForMask(DirtyState& state, std::uint16_t mask) {
+  if (mask & static_cast<std::uint16_t>(DirtyBit::VsF)) {
+    state.maxChangedVsF = 0;
+  }
+  if (mask & static_cast<std::uint16_t>(DirtyBit::VsI)) {
+    state.maxChangedVsI = 0;
+  }
+  if (mask & static_cast<std::uint16_t>(DirtyBit::VsB)) {
+    state.maxChangedVsB = 0;
+  }
+  if (mask & static_cast<std::uint16_t>(DirtyBit::PsF)) {
+    state.maxChangedPsF = 0;
+  }
+  if (mask & static_cast<std::uint16_t>(DirtyBit::PsI)) {
+    state.maxChangedPsI = 0;
+  }
+  if (mask & static_cast<std::uint16_t>(DirtyBit::PsB)) {
+    state.maxChangedPsB = 0;
+  }
+}
+
 }  // namespace
 
 void markAllDirty(DirtyState& state) {
@@ -111,11 +132,12 @@ void markAllDirty(DirtyState& state) {
 }
 
 void clearBit(DirtyState& state, DirtyBit bit) {
-  state.mask &= static_cast<std::uint16_t>(~static_cast<std::uint16_t>(bit));
+  clearBits(state, static_cast<std::uint16_t>(bit));
 }
 
 void clearBits(DirtyState& state, std::uint16_t mask) {
   state.mask = static_cast<std::uint16_t>(state.mask & ~mask);
+  resetRangesForMask(state, mask);
 }
 
 void setBit(DirtyState& state, DirtyBit bit) {

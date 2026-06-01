@@ -171,6 +171,8 @@ ShaderVariantKey makeShaderVariantProbeKey(ShaderVariantKey key) noexcept;
 // Stable value transform for source-affecting debug flags. Kept public so
 // native tests can verify the key shape without mutating process env.
 u64 makeShaderSourceDebugEnvKey(bool trimUnusedVaryings,
+                                bool trimVertexTemps,
+                                bool trimVsOutputScratch,
                                 bool fsHalfPrecision,
                                 bool forceFullscreenVertex,
                                 bool flipTranslatedVertexY,

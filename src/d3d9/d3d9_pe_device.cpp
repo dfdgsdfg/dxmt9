@@ -49,6 +49,12 @@ static bool dxmt9PeRecorderStatsEnabled() {
     return enabled;
 }
 
+static bool dxmt9SplitSparseConstRecordsEnabled() {
+    static const bool enabled =
+        dxmt9::util::getenvFlag("DXMT9_SPLIT_SPARSE_CONST_RECORDS");
+    return enabled;
+}
+
 static bool dxmt9PeRecorderChunkLogEnabled() {
     static const bool enabled = dxmt9::util::getenvFlag("DXMT9_PE_RECORDER_CHUNK_LOG");
     return enabled;
@@ -6058,13 +6064,51 @@ class D3D9DeviceImpl final : public IDirect3DDevice9Ex, public D3D9PeRecorderFlu
             });
     }
 
-    // Emit one record covering the merged dirty range, then clear it.
+    static std::vector<std::pair<uint32_t, uint32_t>>
+    collectConstDirtyRuns(const ConstShadow& shadow) {
+        std::vector<std::pair<uint32_t, uint32_t>> runs;
+        if (!shadow.dirty()) return runs;
+        uint32_t runStart = 0;
+        bool inRun = false;
+        const uint32_t dirtyEnd = std::min<uint32_t>(
+            shadow.dirtyEnd, static_cast<uint32_t>(shadow.dirtyElems.size()));
+        for (uint32_t reg = shadow.dirtyStart; reg < dirtyEnd; ++reg) {
+            const bool dirty = shadow.dirtyElems[reg] != 0;
+            if (dirty && !inRun) {
+                runStart = reg;
+                inRun = true;
+            } else if (!dirty && inRun) {
+                runs.emplace_back(runStart, reg);
+                inRun = false;
+            }
+        }
+        if (inRun) {
+            runs.emplace_back(runStart, dirtyEnd);
+        }
+        return runs;
+    }
+
+    // Emit records covering pending dirty constants, then clear them. Default
+    // behavior keeps the historical merged range. DXMT9_SPLIT_SPARSE_CONST_RECORDS
+    // is an opt-in perf experiment for sparse constant updates.
     HRESULT flushConstShadow(ConstShadow& shadow, uint32_t recordType, std::size_t elemSize) {
         if (!shadow.dirty()) return S_OK;
-        const uint32_t start = shadow.dirtyStart;
-        const uint32_t count = shadow.dirtyEnd - shadow.dirtyStart;
-        const auto* data = shadow.values.data() + static_cast<std::size_t>(start) * elemSize;
-        const HRESULT hr = appendSetConstRecord(recordType, start, count, data, elemSize);
+        std::vector<std::pair<uint32_t, uint32_t>> runs;
+        if (dxmt9SplitSparseConstRecordsEnabled()) {
+            runs = collectConstDirtyRuns(shadow);
+        }
+        if (runs.empty()) {
+            runs.emplace_back(shadow.dirtyStart, shadow.dirtyEnd);
+        }
+        HRESULT hr = S_OK;
+        for (const auto& [start, end] : runs) {
+            if (end <= start) continue;
+            const uint32_t count = end - start;
+            const auto* data =
+                shadow.values.data() + static_cast<std::size_t>(start) * elemSize;
+            hr = appendSetConstRecord(recordType, start, count, data, elemSize);
+            if (FAILED(hr)) break;
+        }
         if (SUCCEEDED(hr)) {
             shadow.clear();
         }

@@ -2103,6 +2103,17 @@ void testFlatDrawStateKey() {
   drawParamB.indexed = true;
   const std::vector<u8> drawParamBVertexData{0xde, 0xad, 0xbe, 0xef};
   const std::vector<u8> drawParamBIndexData{0x01, 0x02, 0x03, 0x04};
+  DrawBindingOverride drawParamBBindingOverride{};
+  drawParamBBindingOverride.streamMask = 1u;
+  drawParamBBindingOverride.streams[0].buffer = Handle{0x4444u};
+  drawParamBBindingOverride.streams[0].offset = 64u;
+  drawParamBBindingOverride.streams[0].stride = 16u;
+  drawParamBBindingOverride.indexBuffer = Handle{0x5555u};
+  drawParamBBindingOverride.indexType = IndexType::UInt32;
+  drawParamBBindingOverride.indexBufferValid = true;
+  const auto drawParamBBindingBytes = std::span<const u8>(
+      reinterpret_cast<const u8*>(&drawParamBBindingOverride),
+      sizeof(drawParamBBindingOverride));
 
   DrawRunDesc run{};
   run.state = makeCanonicalDrawStateForTest(first);
@@ -2115,9 +2126,15 @@ void testFlatDrawStateKey() {
                                                       drawParamBVertexData.size()),
                 .userIndexData = std::span<const u8>(drawParamBIndexData.data(),
                                                      drawParamBIndexData.size()),
+                .bindingOverrideData = drawParamBBindingBytes,
             }),
-        "test draw param B payload packs into run arena");
+        "test draw param B payload and binding override pack into run arena");
   check(drawRunValidate(run), "test draw run validates after append");
+  const auto runDraws = drawRunDraws(run);
+  const auto bindingOverrideBytes =
+      drawRunPayloadBytes(run, runDraws[1].bindingOverrideRange);
+  checkEq(bindingOverrideBytes.size(), sizeof(DrawBindingOverride),
+          "draw-run binding override range stores the override payload");
 
   const auto drawDescForParam = [&first, &run](const DrawParam& param) {
     DrawDesc desc = first;

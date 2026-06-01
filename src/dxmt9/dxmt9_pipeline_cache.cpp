@@ -397,6 +397,8 @@ void logPipelineBuildFailureOnce(const char* stage,
 }  // namespace
 
 u64 makeShaderSourceDebugEnvKey(bool trimUnusedVaryings,
+                                bool trimVertexTemps,
+                                bool trimVsOutputScratch,
                                 bool fsHalfPrecision,
                                 bool forceFullscreenVertex,
                                 bool flipTranslatedVertexY,
@@ -409,6 +411,8 @@ u64 makeShaderSourceDebugEnvKey(bool trimUnusedVaryings,
   u64 hash = kFnvOffset;
   hash = mix(hash, kShaderDebugEnvSchemaVersion);
   hash = mix(hash, static_cast<u64>(trimUnusedVaryings));
+  hash = mix(hash, static_cast<u64>(trimVertexTemps));
+  hash = mix(hash, static_cast<u64>(trimVsOutputScratch));
   hash = mix(hash, static_cast<u64>(fsHalfPrecision));
   hash = mix(hash, static_cast<u64>(forceFullscreenVertex));
   hash = mix(hash, static_cast<u64>(flipTranslatedVertexY));
@@ -425,6 +429,8 @@ u64 currentShaderSourceDebugEnvKey() noexcept {
   const char* fragmentMode = std::getenv("DXMT_DEBUG_FRAGMENT_MODE");
   return makeShaderSourceDebugEnvKey(
       envFlag("DXMT9_TRIM_UNUSED_VARYINGS"),
+      envFlag("DXMT9_TRIM_VERTEX_TEMPS"),
+      envFlag("DXMT9_TRIM_VS_OUTPUT_SCRATCH"),
       envFlag("DXMT9_FS_HALF_PRECISION"),
       envFlag("DXMT_DEBUG_FORCE_FULLSCREEN_VERTEX"),
       envFlag("DXMT_DEBUG_FLIP_VERTEX_Y"),
@@ -1093,8 +1099,9 @@ Cache::getOrBuildDrawPipelineHandle(WMT::Reference<WMT::Device> device,
           }
           if (pso) {
             pso.setLabel(labels::makeLabelStringFmt(
-                "pso_draw_h0x%llx_msaa%u_color0fmt%u",
+                "pso_draw_h0x%llx_vso0x%03x_msaa%u_color0fmt%u",
                 static_cast<unsigned long long>(sourceKey.hash),
+                static_cast<unsigned>(sourceKey.vsOutLayoutKey),
                 static_cast<unsigned>(std::max(1u, sourceKey.sampleCount)),
                 static_cast<unsigned>(sourceKey.colorFormats[0])));
           }

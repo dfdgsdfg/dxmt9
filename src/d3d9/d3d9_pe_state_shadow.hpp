@@ -1,5 +1,6 @@
 #pragma once
 
+#include "d3d9_pe_const_shadow.hpp"
 #include "d3d9_pe.hpp"
 
 #include <algorithm>
@@ -355,70 +356,6 @@ inline D9CMatrix identityTransformMatrix() noexcept {
 
 inline bool matrixEquals(const D9CMatrix& a, const D9CMatrix& b) noexcept {
     return std::memcmp(&a, &b, sizeof(D9CMatrix)) == 0;
-}
-
-struct ConstShadow {
-    std::vector<std::uint8_t> values;
-    std::uint32_t dirtyStart = 0;
-    std::uint32_t dirtyEnd = 0;
-
-    bool dirty() const {
-        return dirtyEnd > dirtyStart;
-    }
-    void clear() {
-        dirtyStart = dirtyEnd = 0;
-    }
-    void reset() {
-        values.clear();
-        clear();
-    }
-};
-
-struct PeConstShadowBlock {
-    ConstShadow vsConstF{};
-    ConstShadow vsConstI{};
-    ConstShadow vsConstB{};
-    ConstShadow psConstF{};
-    ConstShadow psConstI{};
-    ConstShadow psConstB{};
-
-    void reset() {
-        vsConstF.reset();
-        vsConstI.reset();
-        vsConstB.reset();
-        psConstF.reset();
-        psConstI.reset();
-        psConstB.reset();
-    }
-};
-
-inline void touchConstShadow(ConstShadow& shadow,
-                             UINT start,
-                             UINT count,
-                             const void* data,
-                             std::size_t elemSize) {
-    const std::uint64_t needed64 =
-        (static_cast<std::uint64_t>(start) + count) * elemSize;
-    if (needed64 > 0xffffffffull) {
-        return;
-    }
-    const auto needed = static_cast<std::size_t>(needed64);
-    if (shadow.values.size() < needed) {
-        shadow.values.resize(needed);
-    }
-    if (count > 0 && data) {
-        std::memcpy(shadow.values.data() + start * elemSize,
-                    data,
-                    count * elemSize);
-    }
-    const std::uint32_t end = start + count;
-    if (!shadow.dirty()) {
-        shadow.dirtyStart = start;
-        shadow.dirtyEnd = end;
-    } else {
-        shadow.dirtyStart = std::min<std::uint32_t>(shadow.dirtyStart, start);
-        shadow.dirtyEnd = std::max<std::uint32_t>(shadow.dirtyEnd, end);
-    }
 }
 
 struct PeHotStateShadow {

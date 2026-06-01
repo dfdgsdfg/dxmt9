@@ -1235,17 +1235,15 @@ void testImportedIndexedDrawRunCoalescesParamOnlyPackets() {
     checkEq(dxmt9c_device_commit_chunk(&cDevice, &chunk), D3D_OK,
             "commit imported indexed draw-run chunk");
 
-    checkEq(recorder->events.size(), static_cast<std::size_t>(5),
+    checkEq(recorder->events.size(), static_cast<std::size_t>(4),
             "indexed draw-run import event count");
     checkEventKind(recorder->events, 0u, EventKind::MarkChunkResources,
                    "indexed draw-run bulk retention happens first");
     checkEventKind(recorder->events, 1u, EventKind::SetSkipDrawResourceMarking,
                    "indexed draw-run replay enables bulk-retention skip");
     checkEventKind(recorder->events, 2u, EventKind::SubmitDraw,
-                   "stateful indexed draw replays before param-only run");
-    checkEventKind(recorder->events, 3u, EventKind::SubmitDraw,
-                   "param-only indexed records coalesce into one draw run");
-    checkEventKind(recorder->events, 4u, EventKind::SetSkipDrawResourceMarking,
+                   "stateful and param-only indexed records coalesce");
+    checkEventKind(recorder->events, 3u, EventKind::SetSkipDrawResourceMarking,
                    "indexed draw-run replay resets bulk-retention skip");
 
     const auto& retained = recorder->events[0].chunkHandles;
@@ -1261,27 +1259,9 @@ void testImportedIndexedDrawRunCoalescesParamOnlyPackets() {
                               indexBuffer->handle()),
           "indexed draw-run retention includes index buffer");
 
-    const auto& first = recorder->events[2].drawRun;
-    checkEq(first.draws.size(), static_cast<std::size_t>(1),
-            "stateful indexed import stays a single draw");
-    checkEq(first.hot.streamBuffers[0].value, vertexBuffer->handle().value,
-            "stateful indexed import binds stream buffer");
-    checkEq(first.hot.streamOffsets[0], 36u,
-            "stateful indexed import applies stream source offset");
-    checkEq(first.hot.streamStrides[0], 28u,
-            "stateful indexed import applies stream source stride");
-    checkEq(first.hot.indexBuffer.value, indexBuffer->handle().value,
-            "stateful indexed import binds index buffer");
-    check(first.state.shaderLayout.vertexDecl.elements == vertexDeclWire.elements,
-          "stateful indexed import snapshots vertex declaration elements");
-    checkEq(first.state.shaderLayout.vertexDecl.streams[0].offset, 36u,
-            "stateful indexed import snapshots vertex decl stream offset");
-    checkEq(first.state.shaderLayout.vertexDecl.streams[0].stride, 28u,
-            "stateful indexed import snapshots vertex decl stream stride");
-
-    const auto& run = recorder->events[3].drawRun;
-    checkEq(run.draws.size(), static_cast<std::size_t>(2),
-            "param-only imported indexed records submit as one draw run");
+    const auto& run = recorder->events[2].drawRun;
+    checkEq(run.draws.size(), static_cast<std::size_t>(3),
+            "stateful and param-only imported indexed records submit as one draw run");
     check(run.hot == run.state.hot,
           "coalesced indexed draw run records canonical and flat hot state together");
     checkEq(run.hot.streamBuffers[0].value, vertexBuffer->handle().value,
@@ -1294,19 +1274,30 @@ void testImportedIndexedDrawRunCoalescesParamOnlyPackets() {
             "coalesced indexed run inherits index buffer");
     check(run.state.shaderLayout.vertexDecl.elements == vertexDeclWire.elements,
           "coalesced indexed run inherits vertex declaration snapshot");
-    check(run.draws[0].indexed, "first coalesced draw remains indexed");
-    check(run.draws[1].indexed, "second coalesced draw remains indexed");
-    checkEq(run.draws[0].primitiveCount, 2u,
+    checkEq(run.state.shaderLayout.vertexDecl.streams[0].offset, 36u,
+            "coalesced indexed run snapshots vertex decl stream offset");
+    checkEq(run.state.shaderLayout.vertexDecl.streams[0].stride, 28u,
+            "coalesced indexed run snapshots vertex decl stream stride");
+    check(run.draws[0].indexed, "stateful coalesced draw remains indexed");
+    check(run.draws[1].indexed, "first param-only coalesced draw remains indexed");
+    check(run.draws[2].indexed, "second param-only coalesced draw remains indexed");
+    checkEq(run.draws[0].primitiveCount, 1u,
+            "stateful coalesced draw keeps primitive count");
+    checkEq(run.draws[0].baseVertexIndex, -1,
+            "stateful coalesced draw keeps base vertex");
+    checkEq(run.draws[0].startIndex, 3u,
+            "stateful coalesced draw keeps start index");
+    checkEq(run.draws[1].primitiveCount, 2u,
             "first coalesced draw keeps primitive count");
-    checkEq(run.draws[0].baseVertexIndex, -4,
+    checkEq(run.draws[1].baseVertexIndex, -4,
             "first coalesced draw keeps base vertex");
-    checkEq(run.draws[0].startIndex, 9u,
+    checkEq(run.draws[1].startIndex, 9u,
             "first coalesced draw keeps start index");
-    checkEq(run.draws[1].primitiveCount, 3u,
+    checkEq(run.draws[2].primitiveCount, 3u,
             "second coalesced draw keeps primitive count");
-    checkEq(run.draws[1].baseVertexIndex, 5,
+    checkEq(run.draws[2].baseVertexIndex, 5,
             "second coalesced draw keeps base vertex");
-    checkEq(run.draws[1].startIndex, 15u,
+    checkEq(run.draws[2].startIndex, 15u,
             "second coalesced draw keeps start index");
     check(run.payloadArena.empty(),
           "coalesced indexed run uses bound buffers, not UP payloads");

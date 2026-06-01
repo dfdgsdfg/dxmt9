@@ -1653,17 +1653,21 @@ bool packDrawParamPayload(DrawParam &param,
                           DrawParamPayloadView payload) {
   const auto vertexBytes = payload.userVertexData;
   const auto indexBytes = payload.userIndexData;
+  const auto bindingOverrideBytes = payload.bindingOverrideData;
   constexpr auto kMaxRange = std::numeric_limits<u32>::max();
   const std::uint64_t requiredSize =
       static_cast<std::uint64_t>(drawPayloadStorageSize(payloadArena)) +
       static_cast<std::uint64_t>(vertexBytes.size()) +
-      static_cast<std::uint64_t>(indexBytes.size());
+      static_cast<std::uint64_t>(indexBytes.size()) +
+      static_cast<std::uint64_t>(bindingOverrideBytes.size());
   if (requiredSize > kMaxRange) {
     return false;
   }
 
   return appendDrawPayload(payloadArena, vertexBytes, param.userVertexRange) &&
-         appendDrawPayload(payloadArena, indexBytes, param.userIndexRange);
+         appendDrawPayload(payloadArena, indexBytes, param.userIndexRange) &&
+         appendDrawPayload(payloadArena, bindingOverrideBytes,
+                           param.bindingOverrideRange);
 }
 
 bool drawPayloadRangeValid(std::size_t payloadSize,
@@ -1700,6 +1704,7 @@ bool drawRunAppend(DrawRunDesc &run, DrawParam param,
                    DrawParamPayloadView payload) {
   param.userVertexRange = {};
   param.userIndexRange = {};
+  param.bindingOverrideRange = {};
   if (!packDrawParamPayload(param, run.scratch_.payload, payload)) {
     return false;
   }
@@ -1762,7 +1767,8 @@ bool drawRunValidate(const DrawRunDesc &run) noexcept {
   const auto payloadSize = drawRunPayloadSize(run);
   for (const auto &param : drawRunDraws(run)) {
     if (!drawPayloadRangeValid(payloadSize, param.userVertexRange) ||
-        !drawPayloadRangeValid(payloadSize, param.userIndexRange)) {
+        !drawPayloadRangeValid(payloadSize, param.userIndexRange) ||
+        !drawPayloadRangeValid(payloadSize, param.bindingOverrideRange)) {
       return false;
     }
   }
@@ -1987,7 +1993,8 @@ void Device::submitDrawSubmissionBatch(
       const std::span<const DrawParam> draws(&submission.draw, 1);
       std::span<const DrawParamPayloadView> payloads{};
       if (!submission.payload.userVertexData.empty() ||
-          !submission.payload.userIndexData.empty()) {
+          !submission.payload.userIndexData.empty() ||
+          !submission.payload.bindingOverrideData.empty()) {
         payloads = std::span<const DrawParamPayloadView>(&submission.payload, 1);
       }
       submitDrawRunInternal(std::move(submission.state), submission.uniforms,
@@ -2007,6 +2014,11 @@ void Device::submitDrawSubmissionBatch(
 }
 
 HResult Device::drawPrimitiveRun(std::span<const DrawParam> draws) {
+  return drawPrimitiveRun(draws, {});
+}
+
+HResult Device::drawPrimitiveRun(std::span<const DrawParam> draws,
+                                 std::span<const DrawParamPayloadView> externalPayloads) {
   if (draws.empty()) {
     return D3D_OK;
   }
@@ -2014,6 +2026,9 @@ HResult Device::drawPrimitiveRun(std::span<const DrawParam> draws) {
   std::vector<DrawParam> normalized(draws.begin(), draws.end());
   std::vector<std::vector<u8>> indexPayloadStorage(normalized.size());
   std::vector<DrawParamPayloadView> payloads(normalized.size());
+  for (std::size_t i = 0; i < payloads.size(); ++i) {
+    payloads[i] = drawPayloadAt(externalPayloads, i);
+  }
 
   for (std::size_t i = 0; i < normalized.size(); ++i) {
     auto &draw = normalized[i];

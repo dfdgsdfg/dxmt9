@@ -104,6 +104,38 @@ void testDrawRunScanBoundary() {
   checkEq(afterBoundary->index, 3u, "draw-run scan does not consume trailing draw");
 }
 
+void testDrawRunScanReportsConstantUploadBoundary() {
+  const auto firstDraw = makeDrawPrimitiveRecord(0u, 1u);
+  const auto constUpload = makeSetConstRecord(
+      D9C_COMMAND_RECORD_SET_VS_CONST_F, 1u, sizeof(float) * 4u);
+  const auto secondDraw = makeDrawPrimitiveRecord(3u, 1u);
+
+  std::vector<std::uint8_t> bytes;
+  appendRecord(bytes, firstDraw);
+  appendRecord(bytes, constUpload, constUpload.header.size);
+  appendRecord(bytes, secondDraw);
+
+  const auto chunk = makeImportedChunkView(
+      bytes.data(), static_cast<std::uint32_t>(bytes.size()), 3u);
+  const auto first = nextImportedRecord(chunk, 0u, 0u);
+  check(first.has_value(), "const-boundary scan first record exists");
+  check(first->valid(), "const-boundary scan first record validates");
+
+  const auto scan = scanImportedDrawRun(chunk, *first);
+  check(!scan.replayAsRun(),
+        "const upload is not folded into a single-uniform draw run");
+  checkEq(scan.recordCount, 1u,
+          "const-boundary scan keeps only the draw before the upload");
+  checkEq(scan.endIndex, 1u,
+          "const-boundary scan stops at the constant upload");
+  checkEq(static_cast<int>(scan.stop),
+          static_cast<int>(ImportedDrawRunScanStop::ConstantUpload),
+          "const-boundary scan reports constant-upload stop reason");
+  checkEq(scan.stopRecord.header.type,
+          static_cast<std::uint32_t>(D9C_COMMAND_RECORD_SET_VS_CONST_F),
+          "const-boundary scan exposes the constant upload record");
+}
+
 void testDrawRunScanUsesFirstStateDeltaAsRunBase() {
   auto firstDraw = makeDrawPrimitiveRecord(0u, 1u, true);
   const auto secondDraw = makeDrawPrimitiveRecord(3u, 1u);
@@ -162,14 +194,14 @@ void testDrawRunScanAllowsRepeatedStreamDelta() {
   check(first->valid(), "stream-delta draw-run scan first record validates");
 
   const auto scan = scanImportedDrawRun(chunk, *first);
-  check(scan.replayAsRun(), "repeated stream delta keeps the same run invariant");
-  checkEq(scan.recordCount, 2u,
-          "draw-run scan accepts repeated stream delta");
-  checkEq(scan.endIndex, 2u,
-          "draw-run scan stops before changed stream binding");
+  check(scan.replayAsRun(), "stream deltas can be carried as per-draw overrides");
+  checkEq(scan.recordCount, 3u,
+          "draw-run scan accepts repeated and changed stream deltas");
+  checkEq(scan.endIndex, 3u,
+          "draw-run scan consumes stream-only binding changes");
   checkEq(static_cast<int>(scan.stop),
-          static_cast<int>(ImportedDrawRunScanStop::StateDelta),
-          "changed stream delta remains a run boundary");
+          static_cast<int>(ImportedDrawRunScanStop::EndOfChunk),
+          "stream-only delta scan reaches chunk end");
 }
 
 void testDrawRunScanAllowsMixedDirectAndIndexedNoDelta() {
@@ -203,7 +235,7 @@ void testDrawRunScanAllowsMixedDirectAndIndexedNoDelta() {
   check(indexedParam.indexed, "mixed run preserves indexed draw params");
 }
 
-void testDrawRunScanRejectsLateIndexBufferDeltaInMixedRun() {
+void testDrawRunScanAllowsLateIndexBufferDeltaInMixedRun() {
   const auto directDraw = makeDrawPrimitiveRecord(0u, 1u);
   auto indexedDraw = makeDrawIndexedPrimitiveRecord(3u, 1u);
   indexedDraw.packet.state.primitiveType = directDraw.packet.primitiveType;
@@ -221,13 +253,13 @@ void testDrawRunScanRejectsLateIndexBufferDeltaInMixedRun() {
   check(first->valid(), "late-ib mixed scan first record validates");
 
   const auto scan = scanImportedDrawRun(chunk, *first);
-  check(!scan.replayAsRun(),
-        "late index-buffer delta is not applied mid-run");
-  checkEq(scan.recordCount, 1u,
-          "late-ib mixed scan keeps only the direct base record");
+  check(scan.replayAsRun(),
+        "late index-buffer delta can be carried as a per-draw override");
+  checkEq(scan.recordCount, 2u,
+          "late-ib mixed scan includes the indexed record");
   checkEq(static_cast<int>(scan.stop),
-          static_cast<int>(ImportedDrawRunScanStop::DifferentRecordType),
-          "late-ib mixed scan reports the incompatible indexed boundary");
+          static_cast<int>(ImportedDrawRunScanStop::EndOfChunk),
+          "late-ib mixed scan reaches chunk end");
 }
 
 void testIndexedDrawRunScanPreservesPerRecordParams() {
@@ -346,14 +378,14 @@ void testIndexedDrawRunScanAllowsRepeatedIndexBufferDelta() {
   check(first->valid(), "indexed repeated-ib scan first record validates");
 
   const auto scan = scanImportedDrawRun(chunk, *first);
-  check(scan.replayAsRun(), "repeated index buffer delta keeps the same run invariant");
-  checkEq(scan.recordCount, 2u,
-          "indexed draw-run scan accepts repeated IB delta");
-  checkEq(scan.endIndex, 2u,
-          "indexed draw-run scan stops before changed IB binding");
+  check(scan.replayAsRun(), "index-buffer deltas can be carried as per-draw overrides");
+  checkEq(scan.recordCount, 3u,
+          "indexed draw-run scan accepts repeated and changed IB deltas");
+  checkEq(scan.endIndex, 3u,
+          "indexed draw-run scan consumes IB binding changes");
   checkEq(static_cast<int>(scan.stop),
-          static_cast<int>(ImportedDrawRunScanStop::StateDelta),
-          "changed IB delta remains a run boundary");
+          static_cast<int>(ImportedDrawRunScanStop::EndOfChunk),
+          "IB-delta scan reaches chunk end");
 }
 
 void testIndexedDrawRunScanAllowsMixedDirectWithBaseIndexBuffer() {
@@ -385,17 +417,17 @@ void testIndexedDrawRunScanAllowsMixedDirectWithBaseIndexBuffer() {
 
   const auto scan = scanImportedDrawRun(chunk, *first);
   check(scan.replayAsRun(),
-        "indexed base IB can support mixed direct and repeated-IB indexed draws");
-  checkEq(scan.recordCount, 3u,
-          "indexed/direct mixed scan accepts compatible records");
-  checkEq(scan.endIndex, 3u,
-          "indexed/direct mixed scan stops before changed IB");
+        "indexed base IB can support mixed direct and per-draw IB overrides");
+  checkEq(scan.recordCount, 4u,
+          "indexed/direct mixed scan accepts changed IB records");
+  checkEq(scan.endIndex, 4u,
+          "indexed/direct mixed scan consumes changed IB");
   checkEq(static_cast<int>(scan.stop),
-          static_cast<int>(ImportedDrawRunScanStop::StateDelta),
-          "changed IB after indexed base remains a state boundary");
+          static_cast<int>(ImportedDrawRunScanStop::EndOfChunk),
+          "indexed/direct mixed scan reaches chunk end");
 }
 
-void testIndexedDrawRunScanStopsAtDifferentIndexBufferDelta() {
+void testIndexedDrawRunScanAllowsDifferentIndexBufferDelta() {
   auto firstDraw = makeDrawIndexedPrimitiveRecord(0u, 1u);
   firstDraw.packet.ibValid = 1u;
   firstDraw.packet.ibHandle.lo = 0x1000u;
@@ -414,13 +446,11 @@ void testIndexedDrawRunScanStopsAtDifferentIndexBufferDelta() {
   check(first->valid(), "indexed different-ib scan first record validates");
 
   const auto scan = scanImportedDrawRun(chunk, *first);
-  check(!scan.replayAsRun(), "different index buffer delta breaks the run");
-  checkEq(scan.recordCount, 1u, "different ib scan keeps only the base record");
+  check(scan.replayAsRun(), "different index buffer delta remains in the run");
+  checkEq(scan.recordCount, 2u, "different ib scan includes both records");
   checkEq(static_cast<int>(scan.stop),
-          static_cast<int>(ImportedDrawRunScanStop::StateDelta),
-          "different ib scan reports state-delta boundary");
-  checkEq(scan.stopRecord.index, 1u,
-          "different ib scan leaves the changed-ib draw for normal replay");
+          static_cast<int>(ImportedDrawRunScanStop::EndOfChunk),
+          "different ib scan reaches chunk end");
 }
 
 void testImportedRecordReplayInfoClassifiesOrderingBoundaries() {
@@ -515,15 +545,16 @@ int main() {
   try {
     testImportedWireDrawRunScansRecordTableOrder();
     testDrawRunScanBoundary();
+    testDrawRunScanReportsConstantUploadBoundary();
     testDrawRunScanUsesFirstStateDeltaAsRunBase();
     testDrawRunScanAllowsRepeatedStreamDelta();
     testDrawRunScanAllowsMixedDirectAndIndexedNoDelta();
-    testDrawRunScanRejectsLateIndexBufferDeltaInMixedRun();
+    testDrawRunScanAllowsLateIndexBufferDeltaInMixedRun();
     testIndexedDrawRunScanPreservesPerRecordParams();
     testIndexedDrawRunScanUsesFirstIndexBufferDeltaAsRunBase();
     testIndexedDrawRunScanAllowsRepeatedIndexBufferDelta();
     testIndexedDrawRunScanAllowsMixedDirectWithBaseIndexBuffer();
-    testIndexedDrawRunScanStopsAtDifferentIndexBufferDelta();
+    testIndexedDrawRunScanAllowsDifferentIndexBufferDelta();
     testImportedRecordReplayInfoClassifiesOrderingBoundaries();
     testDrawRunHelpers();
   } catch (const dxmt9::d3d9::devicec::spec::TestFailure& e) {

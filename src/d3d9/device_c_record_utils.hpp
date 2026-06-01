@@ -159,6 +159,7 @@ enum class ImportedDrawRunScanStop : std::uint8_t {
   InvalidRecord,
   DifferentRecordType,
   StateDelta,
+  ConstantUpload,
 };
 
 enum class ImportedRecordReplayCategory : std::uint8_t {

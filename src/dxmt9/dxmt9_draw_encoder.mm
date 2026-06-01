@@ -558,6 +558,909 @@ void bufferBindShadowStore(BufferBindShadowSlot& slot,
   slot.offset = offset;
 }
 
+struct ActiveEncoderBreakdown {
+  static_assert(core::kMaxStreams <= perf::kEncoderBreakdownMaxStreams);
+
+  template <std::size_t Size>
+  struct CbufHistory {
+    bool valid = false;
+    u64 validBytes = 0;
+    std::array<std::byte, Size> bytes{};
+  };
+
+  struct StreamBindReason {
+    bool first = false;
+    bool handleChange = false;
+    bool offsetChange = false;
+  };
+
+  struct VsOutLayoutCacheEntry {
+    bool valid = false;
+    u64 sourceKey = 0;
+    bool tileFfpMode = false;
+    u32 layoutKey = 0;
+  };
+
+  struct ShaderSourceHashCacheEntry {
+    bool valid = false;
+    u64 sourceKey = 0;
+    bool tileFfpBaseColor = false;
+    bool argbufHybridMode = false;
+    bool argbufResourceArray = false;
+    bool samplerLodBias = false;
+    u64 vertexSourceHash = 0;
+    u64 pixelSourceHash = 0;
+  };
+
+  template <std::size_t Capacity>
+  struct UniqueHandleSet {
+    static constexpr std::size_t kCapacity = Capacity;
+    std::array<u64, kCapacity> handles{};
+    std::size_t count = 0;
+    bool overflowed = false;
+  };
+
+  enum class TransientVertexSource {
+    User,
+    Preupload,
+    DeclFallback,
+    ExpandedMain,
+    ExpandedExtra,
+  };
+
+  enum class TransientIndexSource {
+    User,
+    Preupload,
+    ShadowFallback,
+  };
+
+  bool enabled = false;
+  perf::EncoderBreakdown stats{};
+  bool ibValid = false;
+  u64 ibHandle = 0;
+  bool psoValid = false;
+  u64 psoHandle = 0;
+  bool shaderVariantValid = false;
+  u64 shaderVariant = 0;
+  bool vsOutLayoutValid = false;
+  u32 vsOutLayout = 0;
+  std::array<StreamBindReason, perf::kEncoderBreakdownMaxStreams> streamBindReasons{};
+  UniqueHandleSet<2048> streamUniqueHandles{};
+  std::array<UniqueHandleSet<512>, perf::kEncoderBreakdownMaxStreams> streamUniqueHandlesByStream{};
+  UniqueHandleSet<2048> ibUniqueHandles{};
+  UniqueHandleSet<2048> psoUniqueHandles{};
+  UniqueHandleSet<2048> shaderVariantUnique{};
+  UniqueHandleSet<2048> vsOutLayoutUnique{};
+  std::array<VsOutLayoutCacheEntry, 128> vsOutLayoutCache{};
+  std::size_t vsOutLayoutCacheNext = 0;
+  std::array<ShaderSourceHashCacheEntry, 128> shaderSourceHashCache{};
+  std::size_t shaderSourceHashCacheNext = 0;
+  CbufHistory<sizeof(VsConsts)> vsHistory{};
+  CbufHistory<sizeof(FfpVsConsts)> ffpVsHistory{};
+
+  void begin(u64 seqId, u64 encoderIndex, u64 rtHandle, u64 depthHandle) {
+    enabled = perf::encoderBreakdownEnabled();
+    stats = {};
+    ibValid = false;
+    ibHandle = 0;
+    psoValid = false;
+    psoHandle = 0;
+    shaderVariantValid = false;
+    shaderVariant = 0;
+    vsOutLayoutValid = false;
+    vsOutLayout = 0;
+    streamBindReasons = {};
+    streamUniqueHandles = {};
+    streamUniqueHandlesByStream = {};
+    ibUniqueHandles = {};
+    psoUniqueHandles = {};
+    shaderVariantUnique = {};
+    vsOutLayoutUnique = {};
+    vsOutLayoutCache = {};
+    vsOutLayoutCacheNext = 0;
+    shaderSourceHashCache = {};
+    shaderSourceHashCacheNext = 0;
+    vsHistory = {};
+    ffpVsHistory = {};
+    if (!enabled) {
+      return;
+    }
+    stats.seqId = seqId;
+    stats.encoderIndex = encoderIndex;
+    stats.rtHandle = rtHandle;
+    stats.depthHandle = depthHandle;
+  }
+
+  void emit(perf::EncoderSplitReason reason) {
+    if (!enabled) {
+      return;
+    }
+    stats.endReason = reason;
+    perf::emitEncoderBreakdown(stats);
+    enabled = false;
+  }
+
+  static u64 triangleEstimateFor(core::PrimitiveType primitiveType,
+                                 u32 primitiveCount) {
+    switch (primitiveType) {
+      case core::PrimitiveType::TriangleList:
+      case core::PrimitiveType::TriangleStrip:
+      case core::PrimitiveType::TriangleFan:
+        return primitiveCount;
+      default:
+        return 0;
+    }
+  }
+
+  void recordDrawIssue(core::PrimitiveType primitiveType,
+                       u32 primitiveCount,
+                       u64 vertexCount,
+                       bool indexed,
+                       bool expandedIndexed,
+                       bool fixedFunction,
+                       bool preTransformed,
+                       u32 textureMask,
+                       u32 stream0Stride,
+                       const core::FlatStateSet<core::kMaxStateSlots>& renderStates,
+                       const core::ViewportScissor& viewport,
+                       WMTCullMode cullMode,
+                       WMTTriangleFillMode fillMode) {
+    if (!enabled) {
+      return;
+    }
+    ++stats.drawCalls;
+    if (indexed) {
+      ++stats.indexedDraws;
+    }
+    if (expandedIndexed) {
+      ++stats.expandedIndexedDraws;
+    }
+    if (fixedFunction) {
+      ++stats.ffpDraws;
+    } else {
+      ++stats.programmableDraws;
+    }
+    if (preTransformed) {
+      ++stats.preTransformedDraws;
+    }
+    if (textureMask != 0) {
+      ++stats.texturedDraws;
+    }
+    switch (cullMode) {
+      case WMTCullModeNone:
+        ++stats.cullNoneDraws;
+        break;
+      case WMTCullModeFront:
+        ++stats.cullFrontDraws;
+        break;
+      case WMTCullModeBack:
+        ++stats.cullBackDraws;
+        break;
+    }
+    switch (fillMode) {
+      case WMTTriangleFillModeFill:
+        ++stats.fillSolidDraws;
+        break;
+      case WMTTriangleFillModeLines:
+        ++stats.fillWireframeDraws;
+        break;
+    }
+    const bool depthEnabled =
+        core::flatStateOr(renderStates, RS_Z_ENABLE, 0u) != 0u;
+    if (depthEnabled) {
+      ++stats.depthEnabledDraws;
+      if (core::flatStateOr(renderStates, RS_Z_WRITE_ENABLE, 0u) != 0u) {
+        ++stats.depthWriteDraws;
+      }
+      switch (static_cast<core::CompareFunc>(core::flatStateOr(
+          renderStates, RS_Z_FUNC, static_cast<u32>(core::CompareFunc::LessEqual)))) {
+        case core::CompareFunc::Less:
+          ++stats.depthFuncLessDraws;
+          break;
+        case core::CompareFunc::LessEqual:
+          ++stats.depthFuncLessEqualDraws;
+          break;
+        case core::CompareFunc::Always:
+          ++stats.depthFuncAlwaysDraws;
+          break;
+        default:
+          ++stats.depthFuncOtherDraws;
+          break;
+      }
+    }
+    if (viewport.scissorEnabled) {
+      ++stats.scissorEnabledDraws;
+    }
+    if (core::flatStateOr(renderStates, RS_ALPHABLEND_ENABLE, 0u) != 0u) {
+      ++stats.alphaBlendEnabledDraws;
+    }
+    if (core::flatStateOr(renderStates, RS_ALPHA_TEST_ENABLE, 0u) != 0u) {
+      ++stats.alphaTestEnabledDraws;
+    }
+    if (core::flatStateOr(renderStates, core::RS_CLIP_PLANE_ENABLE, 0u) != 0u) {
+      ++stats.clipPlaneEnabledDraws;
+    }
+    switch (primitiveType) {
+      case core::PrimitiveType::PointList:
+        ++stats.pointDraws;
+        break;
+      case core::PrimitiveType::LineList:
+      case core::PrimitiveType::LineStrip:
+        ++stats.lineDraws;
+        break;
+      case core::PrimitiveType::TriangleList:
+      case core::PrimitiveType::TriangleStrip:
+      case core::PrimitiveType::TriangleFan:
+        ++stats.triangleDraws;
+        break;
+    }
+    stats.primitiveCount += primitiveCount;
+    stats.triangleEstimate += triangleEstimateFor(primitiveType, primitiveCount);
+    stats.vertexCount += vertexCount;
+    stats.textureMaskOr |= textureMask;
+    if (stream0Stride != 0) {
+      if (stats.stream0StrideMin == 0 || stream0Stride < stats.stream0StrideMin) {
+        stats.stream0StrideMin = stream0Stride;
+      }
+      stats.stream0StrideMax = std::max<std::uint64_t>(stats.stream0StrideMax,
+                                                       stream0Stride);
+    }
+  }
+
+  void recordStreamState(u32 stream, u64 handle, u64 offset, u64 stride) {
+    if (!enabled || stream >= stats.streams.size()) {
+      return;
+    }
+    auto& last = stats.streams[stream];
+    const bool firstSample = last.samples == 0;
+    bool handleChanged = false;
+    bool offsetChanged = false;
+    last.valid = true;
+    ++last.samples;
+    ++stats.streamStateSamples;
+    if (!firstSample) {
+      if (last.lastHandle != handle) {
+        ++last.handleChanges;
+        ++stats.streamHandleChanges;
+        handleChanged = true;
+      }
+      if (last.lastOffset != offset) {
+        ++last.offsetChanges;
+        ++stats.streamOffsetChanges;
+        offsetChanged = true;
+      }
+      if (last.lastStride != stride) {
+        ++last.strideChanges;
+        ++stats.streamStrideChanges;
+      }
+    }
+    streamBindReasons[stream] = StreamBindReason{
+        .first = firstSample,
+        .handleChange = handleChanged,
+        .offsetChange = offsetChanged,
+    };
+    last.lastHandle = handle;
+    last.lastOffset = offset;
+    last.lastStride = stride;
+    if (stream == 0) {
+      stats.stream0LastHandle = handle;
+      stats.stream0LastOffset = offset;
+      stats.stream0LastStride = stride;
+    }
+  }
+
+  void recordStreamMetalBind(u32 stream) {
+    if (!enabled) {
+      return;
+    }
+    ++stats.streamMetalBinds;
+    if (stream < stats.streams.size()) {
+      auto& slot = stats.streams[stream];
+      auto& reason = streamBindReasons[stream];
+      slot.valid = true;
+      ++slot.metalBinds;
+      if (reason.first) {
+        ++slot.metalBindFirsts;
+        ++stats.streamMetalBindFirsts;
+      }
+      if (reason.handleChange) {
+        ++slot.metalBindHandleChanges;
+        ++stats.streamMetalBindHandleChanges;
+      }
+      if (reason.offsetChange) {
+        ++slot.metalBindOffsetChanges;
+        ++stats.streamMetalBindOffsetChanges;
+      }
+      reason = {};
+    }
+  }
+
+  template <std::size_t Capacity>
+  bool recordUnique(UniqueHandleSet<Capacity>& set, u64 handle, u64& uniqueCounter,
+                    u64& overflowCounter) {
+    if (!enabled || handle == 0) {
+      return false;
+    }
+    for (std::size_t i = 0; i < set.count; ++i) {
+      if (set.handles[i] == handle) {
+        return false;
+      }
+    }
+    if (set.count >= set.handles.size()) {
+      if (!set.overflowed) {
+        set.overflowed = true;
+        ++overflowCounter;
+      }
+      return false;
+    }
+    set.handles[set.count++] = handle;
+    ++uniqueCounter;
+    return true;
+  }
+
+  static void addPoolBucket(core::Pool pool,
+                            u64& defaultPool,
+                            u64& managedPool,
+                            u64& systemMemPool,
+                            u64& scratchPool) {
+    switch (pool) {
+      case core::Pool::Default:
+        ++defaultPool;
+        break;
+      case core::Pool::Managed:
+        ++managedPool;
+        break;
+      case core::Pool::SystemMem:
+        ++systemMemPool;
+        break;
+      case core::Pool::Scratch:
+        ++scratchPool;
+        break;
+    }
+  }
+
+  void recordStreamResource(u32 stream, u64 handle, const core::BufferDesc& desc) {
+    if (recordUnique(streamUniqueHandles, handle, stats.streamUniqueHandles,
+                     stats.streamUniqueHandleOverflows)) {
+      stats.streamUniqueBytes += desc.size;
+      if ((desc.usage & core::UsageDynamic) != 0) {
+        ++stats.streamUniqueDynamicHandles;
+      }
+      if ((desc.usage & core::UsageWriteOnly) != 0) {
+        ++stats.streamUniqueWriteOnlyHandles;
+      }
+      addPoolBucket(desc.pool,
+                    stats.streamUniqueDefaultPoolHandles,
+                    stats.streamUniqueManagedPoolHandles,
+                    stats.streamUniqueSystemMemPoolHandles,
+                    stats.streamUniqueScratchPoolHandles);
+    }
+    if (stream >= stats.streams.size()) {
+      return;
+    }
+    auto& slot = stats.streams[stream];
+    slot.valid = true;
+    if (!recordUnique(streamUniqueHandlesByStream[stream], handle,
+                      slot.uniqueHandles, slot.uniqueHandleOverflows)) {
+      return;
+    }
+    slot.uniqueBytes += desc.size;
+    if ((desc.usage & core::UsageDynamic) != 0) {
+      ++slot.uniqueDynamicHandles;
+    }
+    if ((desc.usage & core::UsageWriteOnly) != 0) {
+      ++slot.uniqueWriteOnlyHandles;
+    }
+    addPoolBucket(desc.pool,
+                  slot.uniqueDefaultPoolHandles,
+                  slot.uniqueManagedPoolHandles,
+                  slot.uniqueSystemMemPoolHandles,
+                  slot.uniqueScratchPoolHandles);
+  }
+
+  void recordIndexBufferResource(u64 handle, const core::BufferDesc& desc) {
+    if (!recordUnique(ibUniqueHandles, handle, stats.ibUniqueHandles,
+                      stats.ibUniqueHandleOverflows)) {
+      return;
+    }
+    stats.ibUniqueBytes += desc.size;
+    if ((desc.usage & core::UsageDynamic) != 0) {
+      ++stats.ibUniqueDynamicHandles;
+    }
+    if ((desc.usage & core::UsageWriteOnly) != 0) {
+      ++stats.ibUniqueWriteOnlyHandles;
+    }
+    addPoolBucket(desc.pool,
+                  stats.ibUniqueDefaultPoolHandles,
+                  stats.ibUniqueManagedPoolHandles,
+                  stats.ibUniqueSystemMemPoolHandles,
+                  stats.ibUniqueScratchPoolHandles);
+  }
+
+  void recordIndexBufferState(u64 handle) {
+    if (!enabled) {
+      return;
+    }
+    ++stats.ibStateSamples;
+    if (ibValid && ibHandle != handle) {
+      ++stats.ibHandleChanges;
+    }
+    ibValid = true;
+    ibHandle = handle;
+    stats.ibLastHandle = handle;
+  }
+
+  void recordIndexBufferMetalBind() {
+    if (enabled) {
+      ++stats.ibMetalBinds;
+    }
+  }
+
+  void recordPsoState(u64 handle,
+                      u64 variantHash,
+                      u32 layoutKey,
+                      u64 vertexShaderHash,
+                      u64 pixelShaderHash,
+                      u64 vertexShaderSourceHash,
+                      u64 pixelShaderSourceHash) {
+    if (!enabled) {
+      return;
+    }
+    ++stats.psoStateSamples;
+    if (psoValid && psoHandle != handle) {
+      ++stats.psoHandleChanges;
+    }
+    psoValid = true;
+    psoHandle = handle;
+    stats.psoLastHandle = handle;
+    recordUnique(psoUniqueHandles, handle, stats.psoUniqueHandles,
+                 stats.psoUniqueHandleOverflows);
+
+    if (shaderVariantValid && shaderVariant != variantHash) {
+      ++stats.shaderVariantChanges;
+    }
+    shaderVariantValid = true;
+    shaderVariant = variantHash;
+    stats.shaderVariantLast = variantHash;
+    stats.vertexShaderLast = vertexShaderHash;
+    stats.pixelShaderLast = pixelShaderHash;
+    stats.vertexShaderSourceLast = vertexShaderSourceHash;
+    stats.pixelShaderSourceLast = pixelShaderSourceHash;
+    recordUnique(shaderVariantUnique, variantHash, stats.shaderVariantUnique,
+                 stats.shaderVariantUniqueOverflows);
+
+    if (vsOutLayoutValid && vsOutLayout != layoutKey) {
+      ++stats.vsOutLayoutChanges;
+    }
+    vsOutLayoutValid = true;
+    vsOutLayout = layoutKey;
+    stats.vsOutLayoutLast = layoutKey;
+    recordUnique(vsOutLayoutUnique, static_cast<u64>(layoutKey),
+                 stats.vsOutLayoutUnique, stats.vsOutLayoutUniqueOverflows);
+  }
+
+  bool findCachedVsOutLayout(u64 sourceKey, bool tileFfpMode, u32& layoutKey) {
+    if (!enabled) {
+      return false;
+    }
+    for (const auto& entry : vsOutLayoutCache) {
+      if (entry.valid && entry.sourceKey == sourceKey &&
+          entry.tileFfpMode == tileFfpMode) {
+        layoutKey = entry.layoutKey;
+        ++stats.vsOutLayoutCacheHits;
+        return true;
+      }
+    }
+    ++stats.vsOutLayoutCacheMisses;
+    return false;
+  }
+
+  void storeCachedVsOutLayout(u64 sourceKey, bool tileFfpMode, u32 layoutKey) {
+    if (!enabled || vsOutLayoutCache.empty()) {
+      return;
+    }
+    auto& entry = vsOutLayoutCache[vsOutLayoutCacheNext++ % vsOutLayoutCache.size()];
+    entry = VsOutLayoutCacheEntry{
+        .valid = true,
+        .sourceKey = sourceKey,
+        .tileFfpMode = tileFfpMode,
+        .layoutKey = layoutKey,
+    };
+  }
+
+  bool findCachedShaderSourceHashes(u64 sourceKey,
+                                    bool tileFfpBaseColor,
+                                    bool argbufHybridMode,
+                                    bool argbufResourceArray,
+                                    bool samplerLodBias,
+                                    u64& vertexSourceHash,
+                                    u64& pixelSourceHash) const {
+    if (!enabled) {
+      return false;
+    }
+    for (const auto& entry : shaderSourceHashCache) {
+      if (entry.valid &&
+          entry.sourceKey == sourceKey &&
+          entry.tileFfpBaseColor == tileFfpBaseColor &&
+          entry.argbufHybridMode == argbufHybridMode &&
+          entry.argbufResourceArray == argbufResourceArray &&
+          entry.samplerLodBias == samplerLodBias) {
+        vertexSourceHash = entry.vertexSourceHash;
+        pixelSourceHash = entry.pixelSourceHash;
+        return true;
+      }
+    }
+    return false;
+  }
+
+  void storeCachedShaderSourceHashes(u64 sourceKey,
+                                     bool tileFfpBaseColor,
+                                     bool argbufHybridMode,
+                                     bool argbufResourceArray,
+                                     bool samplerLodBias,
+                                     u64 vertexSourceHash,
+                                     u64 pixelSourceHash) {
+    if (!enabled || shaderSourceHashCache.empty()) {
+      return;
+    }
+    auto& entry =
+        shaderSourceHashCache[shaderSourceHashCacheNext++ %
+                              shaderSourceHashCache.size()];
+    entry = ShaderSourceHashCacheEntry{
+        .valid = true,
+        .sourceKey = sourceKey,
+        .tileFfpBaseColor = tileFfpBaseColor,
+        .argbufHybridMode = argbufHybridMode,
+        .argbufResourceArray = argbufResourceArray,
+        .samplerLodBias = samplerLodBias,
+        .vertexSourceHash = vertexSourceHash,
+        .pixelSourceHash = pixelSourceHash,
+    };
+  }
+
+  void addArgbufTableBytes(u64 bytes) {
+    if (enabled) {
+      stats.argbufTableBytes += bytes;
+    }
+  }
+
+  void addArgbufCbufBytes(u64 bytes) {
+    if (enabled) {
+      stats.argbufCbufBytes += bytes;
+    }
+  }
+
+  void addArgbufCbufBytes(u32 argbufIndex, u64 bytes) {
+    if (!enabled || bytes == 0) {
+      return;
+    }
+    stats.argbufCbufBytes += bytes;
+    switch (argbufIndex) {
+      case dxmt9::argbuf_hybrid::kConstantBufferVsIndex:
+        stats.argbufCbufVsBytes += bytes;
+        break;
+      case dxmt9::argbuf_hybrid::kConstantBufferFfpVsIndex:
+        stats.argbufCbufFfpVsBytes += bytes;
+        break;
+      case dxmt9::argbuf_hybrid::kConstantBufferPsIndex:
+        stats.argbufCbufPsBytes += bytes;
+        break;
+      case dxmt9::argbuf_hybrid::kConstantBufferFfpPsIndex:
+        stats.argbufCbufFfpPsBytes += bytes;
+        break;
+      default:
+        break;
+    }
+  }
+
+  void addArgbufCbufBindings(
+      const dxmt9::argbuf_hybrid::ConstantBufferBindings& bindings) {
+    if (!enabled) {
+      return;
+    }
+    for (u32 i = 0; i < bindings.entries.size(); ++i) {
+      addArgbufCbufBytes(i, bindings.entries[i].bytes);
+    }
+  }
+
+  struct ByteDelta {
+    u64 first = 0;
+    u64 changed = 0;
+    u64 unchanged = 0;
+  };
+
+  template <std::size_t Size>
+  ByteDelta compareRange(CbufHistory<Size>& history,
+                         const std::byte* current,
+                         u64 uploadBytes,
+                         u64 offset,
+                         u64 length) {
+    ByteDelta delta{};
+    const u64 begin = std::min(offset, uploadBytes);
+    const u64 end = std::min(offset + length, uploadBytes);
+    if (begin >= end) {
+      return delta;
+    }
+    for (u64 i = begin; i < end; ++i) {
+      if (!history.valid || i >= history.validBytes) {
+        ++delta.first;
+      } else if (history.bytes[static_cast<std::size_t>(i)] !=
+                 current[static_cast<std::size_t>(i)]) {
+        ++delta.changed;
+      } else {
+        ++delta.unchanged;
+      }
+    }
+    return delta;
+  }
+
+  template <std::size_t Size>
+  ByteDelta compareWhole(CbufHistory<Size>& history,
+                         const std::byte* current,
+                         u64 uploadBytes) {
+    return compareRange(history, current, uploadBytes, 0, Size);
+  }
+
+  template <std::size_t Size>
+  void updateHistory(CbufHistory<Size>& history,
+                     const std::byte* current,
+                     u64 uploadBytes) {
+    const u64 clampedBytes = std::min<u64>(uploadBytes, Size);
+    std::memcpy(history.bytes.data(), current, static_cast<std::size_t>(clampedBytes));
+    history.valid = true;
+    history.validBytes = std::max(history.validBytes, clampedBytes);
+  }
+
+  void recordVsUploadContent(const void* data, u64 bytes) {
+    if (!enabled || !data || bytes == 0) {
+      return;
+    }
+    const auto* current = static_cast<const std::byte*>(data);
+    const u64 uploadBytes = std::min<u64>(bytes, sizeof(VsConsts));
+    const auto total = compareWhole(vsHistory, current, uploadBytes);
+    stats.argbufCbufVsFirstBytes += total.first;
+    stats.argbufCbufVsRewriteChangedBytes += total.changed;
+    stats.argbufCbufVsRewriteUnchangedBytes += total.unchanged;
+
+    auto addVsGroup = [&](u64 offset, u64 length, u64& counter) {
+      const auto delta = compareRange(vsHistory, current, uploadBytes, offset, length);
+      counter += delta.changed;
+    };
+    addVsGroup(offsetof(VsConsts, vsFloatConst), sizeof(VsConsts::vsFloatConst),
+               stats.argbufCbufVsFloatChangedBytes);
+    addVsGroup(offsetof(VsConsts, vsIntConst), sizeof(VsConsts::vsIntConst),
+               stats.argbufCbufVsIntChangedBytes);
+    addVsGroup(offsetof(VsConsts, vsBoolConst), sizeof(VsConsts::vsBoolConst),
+               stats.argbufCbufVsBoolChangedBytes);
+    updateHistory(vsHistory, current, uploadBytes);
+  }
+
+  void recordVsUploadPlan(const uniform::DirtyState& dirty,
+                          uniform::ShaderConstantUsageBounds usage,
+                          uniform::ShaderConstantUploadPlan plan) {
+    if (!enabled) {
+      return;
+    }
+    ++stats.argbufCbufVsUploads;
+    if (plan.fullStructRequired) {
+      ++stats.argbufCbufVsFullStructUploads;
+    }
+    if (usage.unknown) {
+      ++stats.argbufCbufVsUsageUnknownUploads;
+    }
+    if (usage.indexedFloat) {
+      ++stats.argbufCbufVsUsageIndexedFloatUploads;
+    }
+    stats.argbufCbufVsPlanFloatRegsSum += plan.floatCount;
+    stats.argbufCbufVsPlanFloatRegsMax =
+        std::max<u64>(stats.argbufCbufVsPlanFloatRegsMax, plan.floatCount);
+    stats.argbufCbufVsDirtyFloatRegsSum += dirty.maxChangedVsF;
+    stats.argbufCbufVsDirtyFloatRegsMax =
+        std::max<u64>(stats.argbufCbufVsDirtyFloatRegsMax, dirty.maxChangedVsF);
+    stats.argbufCbufVsUsageFloatRegsSum += usage.floatCount;
+    stats.argbufCbufVsUsageFloatRegsMax =
+        std::max<u64>(stats.argbufCbufVsUsageFloatRegsMax, usage.floatCount);
+  }
+
+  void recordFfpVsUploadContent(const void* data, u64 bytes) {
+    if (!enabled || !data || bytes == 0) {
+      return;
+    }
+    const auto* current = static_cast<const std::byte*>(data);
+    const u64 uploadBytes = std::min<u64>(bytes, sizeof(FfpVsConsts));
+    const auto total = compareWhole(ffpVsHistory, current, uploadBytes);
+    stats.argbufCbufFfpVsFirstBytes += total.first;
+    stats.argbufCbufFfpVsRewriteChangedBytes += total.changed;
+    stats.argbufCbufFfpVsRewriteUnchangedBytes += total.unchanged;
+
+    auto addFfpVsGroup = [&](u64 offset, u64 length, u64& counter) {
+      const auto delta = compareRange(ffpVsHistory, current, uploadBytes, offset, length);
+      counter += delta.changed;
+    };
+    addFfpVsGroup(offsetof(FfpVsConsts, ffpWorldViewProj),
+                  offsetof(FfpVsConsts, materialEmissive) -
+                      offsetof(FfpVsConsts, ffpWorldViewProj),
+                  stats.argbufCbufFfpVsMatrixChangedBytes);
+    addFfpVsGroup(offsetof(FfpVsConsts, materialEmissive),
+                  offsetof(FfpVsConsts, lightDiffuse) -
+                      offsetof(FfpVsConsts, materialEmissive),
+                  stats.argbufCbufFfpVsMaterialChangedBytes);
+    addFfpVsGroup(offsetof(FfpVsConsts, lightDiffuse),
+                  offsetof(FfpVsConsts, ffpBlendWorldViewProj) -
+                      offsetof(FfpVsConsts, lightDiffuse),
+                  stats.argbufCbufFfpVsLightChangedBytes);
+    addFfpVsGroup(offsetof(FfpVsConsts, ffpBlendWorldViewProj),
+                  sizeof(FfpVsConsts::ffpBlendWorldViewProj),
+                  stats.argbufCbufFfpVsBlendChangedBytes);
+    addFfpVsGroup(offsetof(FfpVsConsts, ffpTextureTransforms),
+                  sizeof(FfpVsConsts::ffpTextureTransforms),
+                  stats.argbufCbufFfpVsTexTransformChangedBytes);
+    addFfpVsGroup(offsetof(FfpVsConsts, clipPlanes),
+                  sizeof(FfpVsConsts::clipPlanes),
+                  stats.argbufCbufFfpVsClipChangedBytes);
+    addFfpVsGroup(offsetof(FfpVsConsts, halfPixelFixup),
+                  offsetof(FfpVsConsts, fogStart) -
+                      offsetof(FfpVsConsts, halfPixelFixup),
+                  stats.argbufCbufFfpVsViewportChangedBytes);
+    addFfpVsGroup(offsetof(FfpVsConsts, fogStart),
+                  sizeof(FfpVsConsts) - offsetof(FfpVsConsts, fogStart),
+                  stats.argbufCbufFfpVsFogPointChangedBytes);
+    updateHistory(ffpVsHistory, current, uploadBytes);
+  }
+
+  void recordArgbufCbufUploadContent(u32 argbufIndex,
+                                     const void* data,
+                                     u64 bytes,
+                                     u64 /*hostStructBytes*/) {
+    switch (argbufIndex) {
+      case dxmt9::argbuf_hybrid::kConstantBufferVsIndex:
+        recordVsUploadContent(data, bytes);
+        break;
+      case dxmt9::argbuf_hybrid::kConstantBufferFfpVsIndex:
+        recordFfpVsUploadContent(data, bytes);
+        break;
+      default:
+        break;
+    }
+  }
+
+  void addSetVertexBytes(u64 bytes, u32 slot) {
+    if (!enabled) {
+      return;
+    }
+    ++stats.setVertexBytesCalls;
+    stats.setVertexBytesBytes += bytes;
+    if (slot == 5) {
+      ++stats.setVertexBytesSlot5Calls;
+      stats.setVertexBytesSlot5Bytes += bytes;
+    } else {
+      ++stats.setVertexBytesOtherCalls;
+      stats.setVertexBytesOtherBytes += bytes;
+    }
+  }
+
+  void addTransientVertexBytes(u64 bytes, TransientVertexSource source) {
+    if (!enabled) {
+      return;
+    }
+    stats.transientVertexBytes += bytes;
+    switch (source) {
+      case TransientVertexSource::User:
+        stats.transientVertexUserBytes += bytes;
+        break;
+      case TransientVertexSource::Preupload:
+        stats.transientVertexPreuploadBytes += bytes;
+        break;
+      case TransientVertexSource::DeclFallback:
+        stats.transientVertexDeclFallbackBytes += bytes;
+        break;
+      case TransientVertexSource::ExpandedMain:
+        stats.transientVertexExpandedMainBytes += bytes;
+        break;
+      case TransientVertexSource::ExpandedExtra:
+        stats.transientVertexExpandedExtraBytes += bytes;
+        break;
+    }
+  }
+
+  void addTransientIndexBytes(u64 bytes, TransientIndexSource source) {
+    if (!enabled) {
+      return;
+    }
+    stats.transientIndexBytes += bytes;
+    switch (source) {
+      case TransientIndexSource::User:
+        stats.transientIndexUserBytes += bytes;
+        break;
+      case TransientIndexSource::Preupload:
+        stats.transientIndexPreuploadBytes += bytes;
+        break;
+      case TransientIndexSource::ShadowFallback:
+        stats.transientIndexShadowFallbackBytes += bytes;
+        break;
+    }
+  }
+};
+
+struct ArgbufCbufCache {
+  bool valid = false;
+  u64 payloadHash = 0;
+  dxmt9::argbuf_hybrid::ConstantBufferBindings bindings{};
+  bool ffpVsValid = false;
+  std::array<std::byte, sizeof(FfpVsConsts)> ffpVsBytes{};
+
+  void reset() noexcept {
+    valid = false;
+    payloadHash = 0;
+    bindings = {};
+    ffpVsValid = false;
+    ffpVsBytes = {};
+  }
+
+  bool matches(u64 hash) const noexcept {
+    return valid && payloadHash == hash && bindings.complete();
+  }
+
+  bool hasMatchingFfpVs(const FfpVsConsts& host) const noexcept {
+    const auto& binding =
+        bindings.entries[dxmt9::argbuf_hybrid::kConstantBufferFfpVsIndex];
+    return ffpVsValid && binding &&
+           std::memcmp(ffpVsBytes.data(), &host, sizeof(FfpVsConsts)) == 0;
+  }
+
+  dxmt9::argbuf_hybrid::ConstantBufferBinding ffpVsBinding() const noexcept {
+    return bindings.entries[dxmt9::argbuf_hybrid::kConstantBufferFfpVsIndex];
+  }
+
+  void merge(u64 hash,
+             const dxmt9::argbuf_hybrid::ConstantBufferBindings& written) noexcept {
+    for (std::size_t i = 0; i < bindings.entries.size(); ++i) {
+      if (written.entries[i]) {
+        bindings.entries[i] = written.entries[i];
+      }
+    }
+    if (bindings.complete()) {
+      payloadHash = hash;
+      valid = true;
+    } else {
+      valid = false;
+    }
+  }
+
+  void storeFfpVs(u64 hash,
+                  const FfpVsConsts& host,
+                  WMT::Buffer buffer,
+                  u64 offset,
+                  u64 bytes) noexcept {
+    bindings.entries[dxmt9::argbuf_hybrid::kConstantBufferFfpVsIndex] =
+        dxmt9::argbuf_hybrid::ConstantBufferBinding{
+            .buffer = buffer,
+            .offset = offset,
+            .bytes = bytes,
+        };
+    std::memcpy(ffpVsBytes.data(), &host, sizeof(FfpVsConsts));
+    ffpVsValid = true;
+    if (bindings.complete()) {
+      payloadHash = hash;
+      valid = true;
+    } else {
+      valid = false;
+    }
+  }
+};
+
+void recordArgbufCbufUploadForBreakdown(void* userdata,
+                                        u32 argbufIndex,
+                                        const void* data,
+                                        u64 bytes,
+                                        u64 hostStructBytes) {
+  if (!userdata) {
+    return;
+  }
+  static_cast<ActiveEncoderBreakdown*>(userdata)->recordArgbufCbufUploadContent(
+      argbufIndex, data, bytes, hostStructBytes);
+}
+
 bool blendFactorNeedsConstantColor(const core::FlatStateSet<core::kMaxStateSlots>& rs) {
   const auto isConstantBlend = [](u32 factor) {
     return factor == static_cast<u32>(core::BlendFactor::BlendFactor) ||
@@ -782,6 +1685,120 @@ AttachmentKey makeAttachmentKey(const core::ClearDesc& clear) {
   return key;
 }
 
+struct RenderPassFrameKey {
+  u64 color0 = 0;
+  u64 depth = 0;
+  u32 sampleCount = 1;
+
+  bool valid() const noexcept {
+    return color0 != 0 || depth != 0;
+  }
+
+  friend bool operator==(const RenderPassFrameKey&, const RenderPassFrameKey&) = default;
+};
+
+RenderPassFrameKey makeRenderPassFrameKey(const core::FlatDrawStateRecord& hot) {
+  return RenderPassFrameKey{
+      .color0 = hot.colorAttachments[0].handle.value,
+      .depth = hot.depthStencil.handle.value,
+      .sampleCount = std::max(hot.colorAttachments[0].sampleCount,
+                              hot.depthStencil.sampleCount),
+  };
+}
+
+struct RenderPassAttachmentFootprint {
+  std::uint64_t color0Bytes = 0;
+  std::uint64_t depthBytes = 0;
+
+  std::uint64_t totalBytes() const noexcept {
+    return color0Bytes + depthBytes;
+  }
+};
+
+RenderPassAttachmentFootprint estimateRenderPassAttachmentFootprintBytes(
+    EncodeContext& ctx,
+    const core::FlatDrawStateRecord& hot) {
+  RenderPassAttachmentFootprint footprint{};
+  auto addSurface = [&](core::Handle handle) {
+    if (!handle) {
+      return std::uint64_t{0};
+    }
+    const auto* surface = ctx.pool.findSurface(handle.value);
+    if (!surface || !surface->texture) {
+      return std::uint64_t{0};
+    }
+    return static_cast<std::uint64_t>(surface->desc.width) *
+           static_cast<std::uint64_t>(surface->desc.height) *
+           static_cast<std::uint64_t>(core::bytesPerPixel(surface->desc.format));
+  };
+  footprint.color0Bytes = addSurface(hot.colorAttachments[0].handle);
+  footprint.depthBytes = addSurface(hot.depthStencil.handle);
+  return footprint;
+}
+
+struct RenderPassFrameTracker {
+  std::array<RenderPassFrameKey, 64> seen{};
+  std::size_t seenCount = 0;
+  std::optional<RenderPassFrameKey> last{};
+
+  void reset() noexcept {
+    seenCount = 0;
+    last.reset();
+  }
+
+  bool hasSeen(RenderPassFrameKey key) const noexcept {
+    for (std::size_t i = 0; i < seenCount; ++i) {
+      if (seen[i] == key) {
+        return true;
+      }
+    }
+    return false;
+  }
+
+  void remember(RenderPassFrameKey key) noexcept {
+    if (seenCount < seen.size()) {
+      seen[seenCount++] = key;
+    }
+  }
+
+  void noteStart(RenderPassFrameKey key, RenderPassAttachmentFootprint footprint) {
+    if (!key.valid()) {
+      return;
+    }
+    if (last.has_value() && *last != key) {
+      const bool sameRt = last->color0 != 0 && last->color0 == key.color0;
+      const bool sameDepth = last->depth != 0 && last->depth == key.depth;
+      if (!sameRt && sameDepth) {
+        perf::countRenderPassTransitionRtChangeSameDepth();
+      } else if (sameRt && !sameDepth) {
+        perf::countRenderPassTransitionSameRtDepthChange();
+      } else if (!sameRt && !sameDepth) {
+        perf::countRenderPassTransitionRtDepthChange();
+      }
+    }
+    const bool seenBefore = hasSeen(key);
+    if (seenBefore) {
+      if (last.has_value() && *last == key) {
+        perf::countRenderPassSameKeyAdjacent();
+      } else {
+        perf::countRenderPassSameKeyReentry();
+        // A same-key re-entry generally implies the previous pass stored
+        // the attachment contents and this pass loads them again. Count
+        // that store+load footprint as the preservation budget to attack.
+        perf::countRenderPassSameKeyReentryPreservationBytes(
+            footprint.totalBytes() * 2u);
+        perf::countRenderPassSameKeyReentryColorPreservationBytes(
+            footprint.color0Bytes * 2u);
+        perf::countRenderPassSameKeyReentryDepthPreservationBytes(
+            footprint.depthBytes * 2u);
+      }
+    } else {
+      remember(key);
+    }
+    last = key;
+  }
+};
+
 bool clearMatchesColorAttachment(const std::optional<ClearDesc>& clear,
                                  std::size_t index,
                                  Handle attachment) {
@@ -826,11 +1843,144 @@ u64 shaderVariantHashForDraw(core::FlatDrawStateView drawState) {
   return hash;
 }
 
+u64 shaderSourceAttributionKeyForDraw(core::FlatDrawStateView drawState) {
+  if (!drawState.hot || !drawState.hasShaderContext()) {
+    return 0;
+  }
+  const auto& hot = *drawState.hot;
+  const auto& shader = drawState.shaderContext();
+  auto mix = [](u64 seed, u64 value) {
+    seed ^= value + 0x9e3779b97f4a7c15ull + (seed << 6u) + (seed >> 2u);
+    return seed;
+  };
+
+  u64 hash = shader.vertexShader.hash;
+  hash = mix(hash, shader.pixelShader.hash);
+  hash = mix(hash, hot.key.vertexDeclHash);
+  hash = mix(hash, hot.key.renderStateHash);
+  hash = mix(hash, hot.textureMask);
+  hash = mix(hash, hot.renderTargetMask);
+  hash = mix(hash, hot.clipPlaneMask);
+  hash = mix(hash, hot.colorAttachments[0].sampleCount);
+  for (const auto textureTypeHash : hot.key.textureStageStateHashes) {
+    hash = mix(hash, textureTypeHash);
+  }
+  for (const auto samplerHash : hot.key.samplerStateHashes) {
+    hash = mix(hash, samplerHash);
+  }
+  return hash;
+}
+
+u32 vsOutLayoutKeyForDraw(core::FlatDrawStateView drawState,
+                          bool tileFfpBaseColor) {
+  if (!drawState.hot || !drawState.hasShaderContext()) {
+    return 0;
+  }
+  auto context =
+      drawshader::makeShaderSourceContext(drawState.shaderContext(), *drawState.hot);
+  context.stripFogAlphaTestForTileBase = tileFfpBaseColor;
+  try {
+    context.vsOutLayout = drawshader::resolveVSOutLayoutForShaderPair(context);
+    return shaders::vsoutLayoutKey(context.vsOutLayout);
+  } catch (...) {
+    return shaders::vsoutLayoutKey(shaders::fullVSOutLayout());
+  }
+}
+
+struct ShaderSourceHashes {
+  u64 vertex = 0;
+  u64 pixel = 0;
+};
+
+bool shaderSourceHashAttributionEnabled() {
+  static const bool enabled = [] {
+    const char* dir = std::getenv("DXMT_DUMP_SHADER_DIR");
+    return dir && dir[0] != '\0';
+  }();
+  return enabled;
+}
+
+ShaderSourceHashes shaderSourceHashesForDraw(core::FlatDrawStateView drawState,
+                                             bool tileFfpBaseColor,
+                                             bool argbufHybridMode,
+                                             bool argbufResourceArray,
+                                             bool samplerLodBias) {
+  ShaderSourceHashes hashes{};
+  if (!shaderSourceHashAttributionEnabled() || !drawState.hot ||
+      !drawState.hasShaderContext()) {
+    return hashes;
+  }
+  auto context =
+      drawshader::makeShaderSourceContext(drawState.shaderContext(), *drawState.hot);
+  context.stripFogAlphaTestForTileBase = tileFfpBaseColor;
+  context.argbufHybridMode = argbufHybridMode;
+  context.argbufResourceArray = argbufHybridMode && argbufResourceArray;
+  context.samplerLodBias = samplerLodBias;
+  try {
+    context.vsOutLayout = drawshader::resolveVSOutLayoutForShaderPair(context);
+    const auto vertex = drawshader::makeDrawShaderSource(context, true);
+    const auto pixel = drawshader::makeDrawShaderSource(context, false);
+    hashes.vertex = core::hashString(vertex);
+    hashes.pixel = core::hashString(pixel);
+  } catch (...) {
+    hashes = {};
+  }
+  return hashes;
+}
+
 u64 psoHandleBucket(core::PsoHandle handle) noexcept {
   return handle.valid()
              ? (static_cast<u64>(handle.generation) << 32) |
                    static_cast<u64>(handle.slot)
              : 0ull;
+}
+
+void recordPsoAttributionForDraw(ActiveEncoderBreakdown* encoderBreakdown,
+                                 core::FlatDrawStateView drawState,
+                                 core::PsoHandle renderPsoHandle,
+                                 bool tileFfpMode,
+                                 bool argbufHybridMode,
+                                 bool argbufResourceArray) {
+  if (!encoderBreakdown || !encoderBreakdown->enabled) {
+    return;
+  }
+  const auto variantHash = shaderVariantHashForDraw(drawState);
+  const auto sourceKey = shaderSourceAttributionKeyForDraw(drawState);
+  u64 vertexShaderHash = 0;
+  u64 pixelShaderHash = 0;
+  if (drawState.hasShaderContext()) {
+    const auto& shader = drawState.shaderContext();
+    vertexShaderHash = shader.vertexShader.hash;
+    pixelShaderHash = shader.pixelShader.hash;
+  }
+  u32 vsOutLayoutKey = 0;
+  if (!encoderBreakdown->findCachedVsOutLayout(sourceKey, tileFfpMode,
+                                               vsOutLayoutKey)) {
+    vsOutLayoutKey = vsOutLayoutKeyForDraw(drawState, tileFfpMode);
+    encoderBreakdown->storeCachedVsOutLayout(sourceKey, tileFfpMode,
+                                             vsOutLayoutKey);
+  }
+  const bool samplerLodBias = anySamplerLodBiasNonzero(drawState);
+  u64 vertexShaderSourceHash = 0;
+  u64 pixelShaderSourceHash = 0;
+  if (!encoderBreakdown->findCachedShaderSourceHashes(
+          sourceKey, tileFfpMode, argbufHybridMode,
+          argbufHybridMode && argbufResourceArray, samplerLodBias,
+          vertexShaderSourceHash, pixelShaderSourceHash)) {
+    const auto sourceHashes = shaderSourceHashesForDraw(
+        drawState, tileFfpMode, argbufHybridMode, argbufResourceArray,
+        samplerLodBias);
+    vertexShaderSourceHash = sourceHashes.vertex;
+    pixelShaderSourceHash = sourceHashes.pixel;
+    encoderBreakdown->storeCachedShaderSourceHashes(
+        sourceKey, tileFfpMode, argbufHybridMode,
+        argbufHybridMode && argbufResourceArray, samplerLodBias,
+        vertexShaderSourceHash, pixelShaderSourceHash);
+  }
+  encoderBreakdown->recordPsoState(
+      psoHandleBucket(renderPsoHandle), variantHash, vsOutLayoutKey,
+      vertexShaderHash, pixelShaderHash, vertexShaderSourceHash,
+      pixelShaderSourceHash);
 }
 
 void countDrawIssue(core::FlatDrawStateView drawState,
@@ -1188,6 +2338,102 @@ bool nextDepthOperationIsClear(const core::ChunkSlot& slot,
          proof == perf::RenderPassDepthStoreProof::AllowDeadNoPresent;
 }
 
+perf::RenderPassColorStoreProof colorStoreProofForLookahead(
+    const core::ChunkSlot& slot,
+    std::size_t startCommandIndex,
+    core::Handle colorHandle) {
+  using Proof = perf::RenderPassColorStoreProof;
+  if (!colorHandle) {
+    return Proof::BlockNullColor;
+  }
+  using Kind = core::MetalCommandKind;
+  bool sawPresent = false;
+  for (std::size_t i = startCommandIndex + 1; i < slot.commandCount(); ++i) {
+    const auto next = slot.commandAt(i);
+    switch (next.kind) {
+      case Kind::Clear:
+        if (next.clear && next.clear->clearColor) {
+          for (const auto& attachment : next.clear->colorAttachments) {
+            if (attachment.handle == colorHandle) {
+              return Proof::AllowNextClear;
+            }
+          }
+        }
+        break;
+      case Kind::DrawRun:
+        if (next.drawState.hot) {
+          const auto& hot = *next.drawState.hot;
+          for (const auto& attachment : hot.colorAttachments) {
+            if (attachment.handle == colorHandle) {
+              return Proof::BlockDrawTarget;
+            }
+          }
+          const auto& textures = hot.textures;
+          const std::uint32_t mask = hot.textureMask;
+          for (std::size_t s = 0; s < textures.size(); ++s) {
+            if ((mask & (1u << s)) == 0) continue;
+            if (textures[s] == colorHandle) {
+              return Proof::BlockTextureSample;
+            }
+          }
+        }
+        break;
+      case Kind::SurfaceCopy:
+        if (next.surfaceCopy &&
+            (next.surfaceCopy->source == colorHandle ||
+             next.surfaceCopy->destination == colorHandle)) {
+          return Proof::BlockSurfaceCopy;
+        }
+        break;
+      case Kind::StretchRect:
+        if (next.stretchRect &&
+            (next.stretchRect->source == colorHandle ||
+             next.stretchRect->destination == colorHandle)) {
+          return Proof::BlockStretchRect;
+        }
+        break;
+      case Kind::Readback:
+        if (next.readback &&
+            (next.readback->source == colorHandle ||
+             next.readback->destination == colorHandle)) {
+          return Proof::BlockReadback;
+        }
+        break;
+      case Kind::ColorFill:
+        if (next.colorFill && next.colorFill->destination == colorHandle) {
+          return Proof::BlockColorFill;
+        }
+        break;
+      case Kind::Present:
+        if (next.present && next.present->presentSource == colorHandle) {
+          return Proof::BlockPresent;
+        }
+        sawPresent = true;
+        break;
+      case Kind::DepthResolve:
+        break;
+    }
+  }
+  static const bool aggressive = []() {
+    if (const char* v = std::getenv("DXMT9_AGGRESSIVE_COLOR_DONTCARE")) {
+      return v[0] != '\0' && v[0] != '0';
+    }
+    return false;
+  }();
+  if (sawPresent) {
+    return Proof::BlockPresent;
+  }
+  return aggressive ? Proof::AllowDeadNoPresent
+                    : Proof::BlockDeadNoPresentDisabled;
+}
+
+bool nextColorOperationIsClear(const core::ChunkSlot& slot,
+                               std::size_t startCommandIndex,
+                               core::Handle colorHandle) {
+  return colorStoreProofForLookahead(slot, startCommandIndex, colorHandle) ==
+         perf::RenderPassColorStoreProof::AllowNextClear;
+}
+
 WMT::Reference<WMT::RenderCommandEncoder> beginRenderPass(
     EncodeContext& ctx,
     WMT::CommandBuffer& commandBuffer,
@@ -1244,7 +2490,21 @@ WMT::Reference<WMT::RenderCommandEncoder> beginRenderPass(
                            : discardAttachment     ? WMTLoadActionDontCare
                            : firstUseAttachment    ? WMTLoadActionDontCare
                                                    : WMTLoadActionLoad;
-    attachment.store_action = WMTStoreActionStore;
+    auto colorStoreProof = lookaheadSlot != nullptr
+        ? colorStoreProofForLookahead(*lookaheadSlot, lookaheadStartIndex,
+                                      hot.colorAttachments[i].handle)
+        : perf::RenderPassColorStoreProof::BlockNoLookahead;
+    if (surface->resolveTexture &&
+        (colorStoreProof == perf::RenderPassColorStoreProof::AllowNextClear ||
+         colorStoreProof == perf::RenderPassColorStoreProof::AllowDeadNoPresent)) {
+      colorStoreProof = perf::RenderPassColorStoreProof::BlockMsaaResolve;
+    }
+    perf::countRenderPassColorStoreProof(colorStoreProof);
+    const bool colorDontCareStore =
+        colorStoreProof == perf::RenderPassColorStoreProof::AllowNextClear ||
+        colorStoreProof == perf::RenderPassColorStoreProof::AllowDeadNoPresent;
+    attachment.store_action =
+        colorDontCareStore ? WMTStoreActionDontCare : WMTStoreActionStore;
     if (surface->resolveTexture) {
       attachment.resolve_texture = surface->resolveTexture.handle;
       attachment.store_action = WMTStoreActionMultisampleResolve;
@@ -1474,6 +2734,43 @@ std::span<const u8> drawParamIndexBytes(const core::DrawParam& param,
   return {};
 }
 
+bool drawParamBindingOverride(const core::DrawParam& param,
+                              std::span<const u8> arena,
+                              core::DrawBindingOverride& out) {
+  const auto bytes = core::drawRunPayloadBytes(param.bindingOverrideRange, arena);
+  if (bytes.size() != sizeof(core::DrawBindingOverride)) {
+    return false;
+  }
+  std::memcpy(&out, bytes.data(), sizeof(out));
+  return out.streamMask != 0 || out.indexBufferValid;
+}
+
+void applyDrawBindingOverride(core::FlatDrawStateRecord& hot,
+                              const core::DrawBindingOverride& binding) {
+  for (u32 stream = 0; stream < core::kMaxStreams; ++stream) {
+    if ((binding.streamMask & (1u << stream)) == 0) {
+      continue;
+    }
+    hot.streamBuffers[stream] = binding.streams[stream].buffer;
+    hot.streamOffsets[stream] = binding.streams[stream].offset;
+    hot.streamStrides[stream] = binding.streams[stream].stride;
+    hot.key.streamBuffers[stream] = hot.streamBuffers[stream];
+    hot.key.streamOffsets[stream] = hot.streamOffsets[stream];
+    hot.key.streamStrides[stream] = hot.streamStrides[stream];
+  }
+  hot.streamMask = 0;
+  for (u32 stream = 0; stream < core::kMaxStreams; ++stream) {
+    if (hot.streamBuffers[stream]) {
+      hot.streamMask |= 1u << stream;
+    }
+  }
+  hot.key.streamMask = hot.streamMask;
+  if (binding.indexBufferValid) {
+    hot.indexBuffer = binding.indexBuffer;
+    hot.key.indexBuffer = binding.indexBuffer;
+  }
+}
+
 bool drawUsesFixedFunctionPath(core::FlatDrawStateView drawState, bool hasFfpLayout) {
   if (!drawState.hasShaderContext()) {
     return hasFfpLayout;
@@ -1499,7 +2796,9 @@ bool encodeDraw(EncodeContext& ctx,
                  core::PsoHandle tilePsoHandle,
                  core::DepthStencilHandle depthStencilHandle,
                  TextureSamplerBindShadow* textureSamplerShadow,
-                 std::uint32_t commandIndex) {
+                 std::uint32_t commandIndex,
+                 ActiveEncoderBreakdown* encoderBreakdown,
+                 ArgbufCbufCache* argbufCbufCache) {
   // Hot per-draw entry. Per codebase_conventions.rules.md, no heap allocation
   // is permitted on this path; the guard is debug-only and asserts this when
   // DXMT_DEBUG_NO_PER_DRAW_ALLOC=1 is set in env. See dxmt9_debug_alloc_guard.
@@ -1597,6 +2896,11 @@ bool encodeDraw(EncodeContext& ctx,
                          " skipped reason=no-encoder");
     }
     return false;
+  }
+  if (skipBaseStateBind) {
+    recordPsoAttributionForDraw(encoderBreakdown, drawState, renderPsoHandle,
+                                tileFfpMode, argbufHybridMode,
+                                argbufResourceArray);
   }
   // Phase 3-E: pipeline lookup + depth state + setRenderPipelineState
   // are BaseDrawState-only and survive across iterations of a
@@ -1741,16 +3045,30 @@ bool encodeDraw(EncodeContext& ctx,
           ctx, encoder, factor[0], factor[1], factor[2], factor[3], stencilRef);
     }
     // M1: label the pipeline with the shader-variant hash so frame
-    // captures show "pso_h<hash>" instead of an anonymous pipeline.
-    // The MTL setLabel: API is idempotent — no harm if the same PSO
-    // is bound across frames; we keep the most recent label. Skipping
-    // when hash == 0 (no shader context) is intentional.
+    // captures show "pso_h<hash>" instead of an anonymous pipeline. When
+    // encoder breakdown is active, also retain the pair-local VSOut layout
+    // key in both the log and label so Xcode's VS buffer-write counters can
+    // be tied back to a concrete stage-in shape.
     {
       const auto variantHash = shaderVariantHashForDraw(drawState);
+      const bool recordPsoBreakdown = encoderBreakdown && encoderBreakdown->enabled;
+      u32 vsOutLayoutKey = 0;
+      if (recordPsoBreakdown) {
+        recordPsoAttributionForDraw(encoderBreakdown, drawState, renderPsoHandle,
+                                    tileFfpMode, argbufHybridMode,
+                                    argbufResourceArray);
+        vsOutLayoutKey = encoderBreakdown->stats.vsOutLayoutLast;
+      }
       if (variantHash != 0 && !suppressRecordedMetalCalls(ctx)) {
         WMT::RenderPipelineState psoView{pipeline.handle};
-        psoView.setLabel(makeLabelStringFmt("pso_h%016llx",
-            static_cast<unsigned long long>(variantHash)));
+        if (recordPsoBreakdown) {
+          psoView.setLabel(makeLabelStringFmt("pso_h%016llx_vso0x%03x",
+              static_cast<unsigned long long>(variantHash),
+              static_cast<unsigned>(vsOutLayoutKey)));
+        } else {
+          psoView.setLabel(makeLabelStringFmt("pso_h%016llx",
+              static_cast<unsigned long long>(variantHash)));
+        }
       }
     }
     // R-BACK-13.1: in BOTH the portable and the tile-FFP base-colour cases
@@ -1898,6 +3216,10 @@ bool encodeDraw(EncodeContext& ctx,
   auto& argbufEncoderForDraw = useResourceArrayArgbuf
                                    ? ctx.queue.resourceArrayEncoderResource()
                                    : ctx.queue.argbufEncoderResource();
+  const auto argbufConsumedBits = static_cast<std::uint16_t>(
+      uniform::kVsAny | uniform::kPsAny | uniform::kFfpVsAny | uniform::kFfpPsAny);
+  const u64 argbufPayloadHash =
+      drawState.hasUniformPayload() ? drawState.uniformPayload().hash : 0;
   // R-BACK-12.22..12.26 (argbuf lifetime across draws). Reserve a FRESH
   // argbuf per draw and rebind slot 30 so each draw's argbuf is
   // self-contained. This applies to BOTH Stage 2 lanes:
@@ -1915,8 +3237,10 @@ bool encodeDraw(EncodeContext& ctx,
   //     (last-write-wins on constants — dxut-simple overlay PassMix bug).
   //     Re-opening per draw gives each draw its own descriptor table.
   //
-  // All four constant categories are forced dirty so the dirty mirror below
-  // repopulates them into the fresh slab.
+  // A fresh table still needs all four cbuf entries. When an encoder-local
+  // cache has slices for the same uniform payload and no pending cbuf dirty
+  // bits, point the fresh table at those slices. Otherwise force all cbuf
+  // categories dirty so the mirror below repopulates the table.
   //
   // `reopenArgbufHybrid` is the caller's optimisation gate (encodeChunk):
   // the resource-array lane always reopens (texture/sampler inline writes),
@@ -1951,27 +3275,65 @@ bool encodeDraw(EncodeContext& ctx,
         }
       }
       perf::countArgbufHybridBytes(populated.length);
-      uniform::markAllDirty(*dirtyPtr);
+      if (encoderBreakdown) {
+        encoderBreakdown->addArgbufTableBytes(populated.length);
+      }
+      const bool canRepointCachedCbufs =
+          argbufCbufCache &&
+          argbufCbufCache->matches(argbufPayloadHash) &&
+          !uniform::anyDirty(*dirtyPtr, argbufConsumedBits);
+      if (canRepointCachedCbufs) {
+        for (u32 i = 0; i < argbufCbufCache->bindings.entries.size(); ++i) {
+          dxmt9::argbuf_hybrid::pointConstantBufferBinding(
+              argbufEncoderForDraw, i, argbufCbufCache->bindings.entries[i],
+              nullptr, encoder);
+        }
+      } else {
+        uniform::markAllDirty(*dirtyPtr);
+      }
     }
   }
   // R-BACK-12.24 — Stage 2 argbuf dirty mirror.
   //
   // When the encoder is on the argbuf-hybrid path AND any per-frequency
-  // bit is dirty, mirror the dirty regions into the argbuf so the cbuf
-  // [[id(0..3)]] entries point at fresh transient slabs. Stage 2 shaders
-  // dereference these cbuf entries through slot 30, so the direct slot 0 /
-  // slot 3 Stage 1 binds below are skipped once the argbuf owns the data.
+  // bit is dirty, mirror the dirty VS/PS/FFPPS regions into the argbuf so
+  // the cbuf entries point at fresh transient slabs. FFPVS is deferred until
+  // after the pre-transformed viewport override below; that lets the final
+  // host bytes reuse a cached stable slice instead of re-uploading an
+  // unchanged block on every draw.
   if (argbufHybridMode) {
+    dxmt9::argbuf_hybrid::ConstantBufferBindings writtenCbufBindings{};
+    dxmt9::argbuf_hybrid::ConstantBufferUploadObserver cbufUploadObserver{};
+    if (encoderBreakdown && encoderBreakdown->enabled) {
+      cbufUploadObserver.userdata = encoderBreakdown;
+      cbufUploadObserver.upload = recordArgbufCbufUploadForBreakdown;
+    }
+    auto dirtyForArgbuf = *dirtyPtr;
+    uniform::clearBits(dirtyForArgbuf, uniform::kFfpVsAny);
+    if (encoderBreakdown && encoderBreakdown->enabled &&
+        uniform::anyDirty(dirtyForArgbuf, uniform::kVsAny)) {
+      encoderBreakdown->recordVsUploadPlan(
+          dirtyForArgbuf, shaderUsage.vertexConstantUsage,
+          uniform::makeVsConstantUploadPlan(
+              dirtyForArgbuf, shaderUsage.vertexConstantUsage));
+    }
     const auto bytes = dxmt9::argbuf_hybrid::updateDirtyArgbufRegions(
-        ctx.queue, argbufEncoderForDraw, drawState, *dirtyPtr,
+        ctx.queue, argbufEncoderForDraw, drawState, dirtyForArgbuf,
         shaderUsage.vertexConstantUsage, shaderUsage.pixelConstantUsage, seqId,
-        nullptr, encoder);
+        nullptr, encoder, &writtenCbufBindings,
+        cbufUploadObserver.upload ? &cbufUploadObserver : nullptr);
     if (bytes != 0) {
       perf::countArgbufHybridBytes(bytes);
+      if (encoderBreakdown) {
+        encoderBreakdown->addArgbufCbufBindings(writtenCbufBindings);
+      }
+      if (argbufCbufCache) {
+        argbufCbufCache->merge(argbufPayloadHash, writtenCbufBindings);
+      }
     }
-    const auto argbufConsumedBits = static_cast<std::uint16_t>(
-        uniform::kVsAny | uniform::kPsAny | uniform::kFfpVsAny | uniform::kFfpPsAny);
-    uniform::clearBits(*dirtyPtr, argbufConsumedBits);
+    uniform::clearBits(
+        *dirtyPtr,
+        static_cast<std::uint16_t>(argbufConsumedBits & ~uniform::kFfpVsAny));
   }
   {
     PerfScope uniformBuildScope(perf::countEncodeDrawUniformBuildCpuTime);
@@ -2033,6 +3395,16 @@ bool encodeDraw(EncodeContext& ctx,
       return;
     }
     auto* host = ensureFfpVs();
+    if (argbufHybridMode && argbufCbufCache &&
+        argbufCbufCache->hasMatchingFfpVs(*host)) {
+      dxmt9::argbuf_hybrid::pointConstantBufferBinding(
+          argbufEncoderForDraw,
+          dxmt9::argbuf_hybrid::kConstantBufferFfpVsIndex,
+          argbufCbufCache->ffpVsBinding(), nullptr, encoder);
+      uniform::clearBits(*dirtyPtr, uniform::kFfpVsAny);
+      ffpVsBound = true;
+      return;
+    }
     auto slice = uploadTransientBuffer(host, sizeof(FfpVsConsts), alignof(FfpVsConsts));
     if (slice) {
       if (argbufHybridMode) {
@@ -2040,6 +3412,19 @@ bool encodeDraw(EncodeContext& ctx,
             argbufEncoderForDraw, slice.buffer, slice.offset,
             nullptr, encoder);
         perf::countArgbufHybridBytes(sizeof(FfpVsConsts));
+        if (encoderBreakdown) {
+          encoderBreakdown->addArgbufCbufBytes(
+              dxmt9::argbuf_hybrid::kConstantBufferFfpVsIndex,
+              sizeof(FfpVsConsts));
+          encoderBreakdown->recordArgbufCbufUploadContent(
+              dxmt9::argbuf_hybrid::kConstantBufferFfpVsIndex,
+              host, sizeof(FfpVsConsts), sizeof(FfpVsConsts));
+        }
+        if (argbufCbufCache) {
+          argbufCbufCache->storeFfpVs(
+              argbufPayloadHash, *host, slice.buffer, slice.offset,
+              sizeof(FfpVsConsts));
+        }
       } else {
         if (setVertexBufferCached(slice.buffer, slice.offset, 3)) {
           countUniformBufferBinds(1);
@@ -2112,10 +3497,27 @@ bool encodeDraw(EncodeContext& ctx,
   const bool indexedDraw = pv.indexed && (hot.indexBuffer || !pv.userIndexData.empty());
   CommandQueue::TransientBufferSlice transientVertexBuffer;
   std::span<const u8> vertexBytes;
+  const resources::BufferRecord* stream0Record = nullptr;
   WMT::Buffer vertexBuffer{};
   uint64_t vertexBufferOffset = 0;
   auto makeTransientBuffer = [&](const void* data, std::size_t len) {
     return uploadTransientBuffer(data, len, 16);
+  };
+  auto makeTransientVertexBuffer = [&](const void* data, std::size_t len,
+                                       ActiveEncoderBreakdown::TransientVertexSource source) {
+    auto slice = makeTransientBuffer(data, len);
+    if (slice && encoderBreakdown) {
+      encoderBreakdown->addTransientVertexBytes(static_cast<u64>(len), source);
+    }
+    return slice;
+  };
+  auto makeTransientIndexBuffer = [&](const void* data, std::size_t len,
+                                      ActiveEncoderBreakdown::TransientIndexSource source) {
+    auto slice = makeTransientBuffer(data, len);
+    if (slice && encoderBreakdown) {
+      encoderBreakdown->addTransientIndexBytes(static_cast<u64>(len), source);
+    }
+    return slice;
   };
   {
     PerfScope fvfDecodeBytesScope(perf::countEncodeDrawFvfDecodeCpuTime);
@@ -2126,8 +3528,10 @@ bool encodeDraw(EncodeContext& ctx,
       if (preUploaded && preUploaded->vertex) {
         transientVertexBuffer = preUploaded->vertex;
       } else {
-        transientVertexBuffer = makeTransientBuffer(pv.userVertexData.data(),
-                                                   pv.userVertexData.size());
+        transientVertexBuffer = makeTransientVertexBuffer(
+            pv.userVertexData.data(),
+            pv.userVertexData.size(),
+            ActiveEncoderBreakdown::TransientVertexSource::User);
       }
       if (transientVertexBuffer) {
         vertexBuffer = transientVertexBuffer.buffer;
@@ -2137,6 +3541,7 @@ bool encodeDraw(EncodeContext& ctx,
     } else if (hot.streamBuffers[0]) {
       if (auto* buffer = ctx.pool.findBuffer(hot.streamBuffers[0].value);
           buffer && buffer->buffer) {
+        stream0Record = buffer;
         vertexBuffer = WMT::Buffer{buffer->buffer.handle};
         vertexBufferOffset = hot.streamOffsets[0];
         if (traceEncode) {
@@ -2165,7 +3570,9 @@ bool encodeDraw(EncodeContext& ctx,
       } else if (vertexDecl.streams[0].buffer) {
         const auto bytes = vertexDecl.streams[0].buffer->bytes();
         if (!bytes.empty()) {
-          transientVertexBuffer = makeTransientBuffer(bytes.data(), bytes.size());
+          transientVertexBuffer = makeTransientVertexBuffer(
+              bytes.data(), bytes.size(),
+              ActiveEncoderBreakdown::TransientVertexSource::DeclFallback);
           if (transientVertexBuffer) {
             vertexBuffer = transientVertexBuffer.buffer;
             vertexBufferOffset = transientVertexBuffer.offset + hot.streamOffsets[0];
@@ -2270,8 +3677,20 @@ bool encodeDraw(EncodeContext& ctx,
     }
     {
       PerfScope streamBindFfScope(perf::countEncodeDrawStreamBindCpuTime);
+      if (encoderBreakdown) {
+        if (stream0Record) {
+          encoderBreakdown->recordStreamResource(0, hot.streamBuffers[0].value,
+                                                 stream0Record->desc);
+        }
+        encoderBreakdown->recordStreamState(
+            0, hot.streamBuffers[0].value, hot.streamOffsets[0],
+            drawVertexStreamStride);
+      }
       if (setVertexBufferCached(vertexBuffer, vertexBufferOffset, 1)) {
         countVertexBufferBind();
+        if (encoderBreakdown) {
+          encoderBreakdown->recordStreamMetalBind(0);
+        }
       }
     }
 
@@ -2539,8 +3958,20 @@ bool encodeDraw(EncodeContext& ctx,
     }
     {
       PerfScope streamBindVsScope(perf::countEncodeDrawStreamBindCpuTime);
+      if (encoderBreakdown) {
+        if (stream0Record) {
+          encoderBreakdown->recordStreamResource(0, hot.streamBuffers[0].value,
+                                                 stream0Record->desc);
+        }
+        encoderBreakdown->recordStreamState(
+            0, hot.streamBuffers[0].value, hot.streamOffsets[0],
+            drawVertexStreamStride);
+      }
       if (setVertexBufferCached(vertexBuffer, vertexBufferOffset, 1)) {
         countVertexBufferBind();
+        if (encoderBreakdown) {
+          encoderBreakdown->recordStreamMetalBind(0);
+        }
       }
       for (const auto& streamBinding : bindingPacket.extraStreams) {
         WMT::Buffer extraVertexBuffer{};
@@ -2550,9 +3981,11 @@ bool encodeDraw(EncodeContext& ctx,
         std::size_t shadowBytes = 0;
         bool hasContents = false;
         bool usedDeclBytes = false;
+        const resources::BufferRecord* extraRecord = nullptr;
         if (hot.streamBuffers[stream]) {
           if (auto* buffer = ctx.pool.findBuffer(hot.streamBuffers[stream].value);
               buffer && buffer->buffer) {
+            extraRecord = buffer;
             extraVertexBuffer = WMT::Buffer{buffer->buffer.handle};
             liveMetalHandle = buffer->buffer.handle;
             shadowBytes = buffer->shadow.size();
@@ -2562,7 +3995,9 @@ bool encodeDraw(EncodeContext& ctx,
         if (!extraVertexBuffer && vertexDecl.streams[stream].buffer) {
           const auto bytes = vertexDecl.streams[stream].buffer->bytes();
           if (!bytes.empty()) {
-            if (auto slice = makeTransientBuffer(bytes.data(), bytes.size())) {
+            if (auto slice = makeTransientVertexBuffer(
+                    bytes.data(), bytes.size(),
+                    ActiveEncoderBreakdown::TransientVertexSource::DeclFallback)) {
               extraVertexBuffer = slice.buffer;
               extraVertexBufferOffset += slice.offset;
               usedDeclBytes = true;
@@ -2590,9 +4025,21 @@ bool encodeDraw(EncodeContext& ctx,
           emitQueueTraceLine(trace.str());
         }
         if (extraVertexBuffer) {
+          if (encoderBreakdown) {
+            if (extraRecord) {
+              encoderBreakdown->recordStreamResource(
+                  stream, hot.streamBuffers[stream].value, extraRecord->desc);
+            }
+            encoderBreakdown->recordStreamState(
+                stream, hot.streamBuffers[stream].value,
+                hot.streamOffsets[stream], streamBinding.stride);
+          }
           if (setVertexBufferCached(extraVertexBuffer, extraVertexBufferOffset,
                                     streamBinding.metalSlot)) {
             countVertexBufferBind();
+            if (encoderBreakdown) {
+              encoderBreakdown->recordStreamMetalBind(stream);
+            }
           }
         }
       }
@@ -2911,14 +4358,15 @@ bool encodeDraw(EncodeContext& ctx,
   }
   const auto primitiveType = toPrimitiveType(pv.primitiveType);
   bool expandedIndexedDraw = false;
+  const bool preTransformed = ffLayout && ffLayout->preTransformed;
+  const u32 cullState = core::flatStateOr(
+      hot.renderStates, RS_CULL_MODE, static_cast<u32>(core::CullMode::Ccw));
+  const auto requestedCullMode = (preTransformed || debug::disableCull())
+                                     ? WMTCullModeNone
+                                     : static_cast<WMTCullMode>(toCullMode(cullState));
+  const auto effectiveCullMode = applyDebugCullOverride(requestedCullMode);
+  const auto fillMode = triangleFillModeFromRenderState(hot.renderStates);
   if (traceEncode) {
-    const u32 cullState = core::flatStateOr(
-        hot.renderStates, RS_CULL_MODE, static_cast<u32>(core::CullMode::Ccw));
-    const bool preTransformed = ffLayout && ffLayout->preTransformed;
-    const auto requestedCullMode = (preTransformed || debug::disableCull())
-                                       ? WMTCullModeNone
-                                       : static_cast<WMTCullMode>(toCullMode(cullState));
-    const auto effectiveCullMode = applyDebugCullOverride(requestedCullMode);
     std::ostringstream out;
     out << "[dxmt9-encode] seq=" << static_cast<unsigned long long>(seqId)
         << " ordinal=" << static_cast<unsigned long long>(drawOrdinal)
@@ -2978,13 +4426,15 @@ bool encodeDraw(EncodeContext& ctx,
                                     ffLayout.has_value(),
                                     texture0R32FCube);
     const bool forceExpandIndexed =
-        debug::forceExpandIndexed() || autoExpandIndexed;
+        debug::forceExpandIndexed() ||
+        (autoExpandIndexed && !debug::disableAutoExpandIndexed());
     if (traceEncode) {
       std::ostringstream out;
       out << "[dxmt9-expand-policy] seq=" << static_cast<unsigned long long>(seqId)
           << " ordinal=" << static_cast<unsigned long long>(drawOrdinal)
           << " auto=" << (autoExpandIndexed ? 1 : 0)
           << " env=" << (debug::forceExpandIndexed() ? 1 : 0)
+          << " disabled=" << (debug::disableAutoExpandIndexed() ? 1 : 0)
           << " active=" << (forceExpandIndexed ? 1 : 0)
           << " ff=" << (fixedFunctionPath ? 1 : 0)
           << " ffLayout=" << (ffLayout ? 1 : 0)
@@ -3030,6 +4480,7 @@ bool encodeDraw(EncodeContext& ctx,
 
       if (!vertexBytes.empty() && !indexBytes.empty() && stride != 0) {
         struct ExpandedExtraStream {
+          u32 stream = 0;
           u32 metalSlot = 0;
           CommandQueue::TransientBufferSlice slice;
         };
@@ -3080,29 +4531,40 @@ bool encodeDraw(EncodeContext& ctx,
               expansionComplete = false;
               break;
             }
-            auto slice = makeTransientBuffer(expandedStream.data(), expandedStream.size());
+            auto slice = makeTransientVertexBuffer(
+                expandedStream.data(), expandedStream.size(),
+                ActiveEncoderBreakdown::TransientVertexSource::ExpandedExtra);
             if (!slice) {
               expansionComplete = false;
               break;
             }
             expandedExtraStreams.push_back(ExpandedExtraStream{
+                .stream = streamBinding.stream,
                 .metalSlot = streamBinding.metalSlot,
                 .slice = slice,
             });
           }
         }
         if (expansionComplete) {
-          transientVertexBuffer = makeTransientBuffer(expandedVertices.data(), expandedVertices.size());
+          transientVertexBuffer = makeTransientVertexBuffer(
+              expandedVertices.data(), expandedVertices.size(),
+              ActiveEncoderBreakdown::TransientVertexSource::ExpandedMain);
         }
         if (transientVertexBuffer) {
           if (setVertexBufferCached(transientVertexBuffer.buffer,
                                     transientVertexBuffer.offset, 1)) {
             countVertexBufferBind();
+            if (encoderBreakdown) {
+              encoderBreakdown->recordStreamMetalBind(0);
+            }
           }
           for (const auto& stream : expandedExtraStreams) {
             if (setVertexBufferCached(stream.slice.buffer, stream.slice.offset,
                                       stream.metalSlot)) {
               countVertexBufferBind();
+              if (encoderBreakdown) {
+                encoderBreakdown->recordStreamMetalBind(stream.stream);
+              }
             }
           }
           if (ffLayout && ffLayout->preTransformed && vertexCount >= 6 && hot.textures[0]) {
@@ -3158,8 +4620,34 @@ bool encodeDraw(EncodeContext& ctx,
                                                   drawVertexStreamStride);
       recordedSetVertexBytes(ctx, encoder, &vol, sizeof(DrawVolatile), 5);
       perf::countUniformVolatilePush();
+      if (encoderBreakdown) {
+        encoderBreakdown->addSetVertexBytes(sizeof(DrawVolatile), 5);
+      }
+    };
+    auto recordEncoderDrawIssue = [&](bool indexed, bool expanded) {
+      if (!encoderBreakdown) {
+        return;
+      }
+      encoderBreakdown->recordDrawIssue(
+          pv.primitiveType,
+          primitiveCount,
+          vertexCount,
+          indexed,
+          expanded,
+          fixedFunctionPath,
+          preTransformed,
+          hot.textureMask,
+          drawVertexStreamStride,
+          hot.renderStates,
+          hot.viewport,
+          effectiveCullMode,
+          fillMode);
     };
     if (expandedIndexedDraw) {
+      if (encoderBreakdown && indexedDraw) {
+        encoderBreakdown->recordIndexBufferState(hot.indexBuffer.value);
+      }
+      recordEncoderDrawIssue(true, true);
       recordDrawGeometryDiagnostics(drawState,
                                     pv,
                                     seqId,
@@ -3191,6 +4679,7 @@ bool encodeDraw(EncodeContext& ctx,
     }
     CommandQueue::TransientBufferSlice transientIndexBuffer;
     WMT::Buffer indexBuffer{};
+    const resources::BufferRecord* indexBufferRecord = nullptr;
     uint64_t indexBufferOffset = static_cast<uint64_t>(pv.startIndex) * indexElementSize(pv.indexType);
     {
       PerfScope streamBindIndexScope(perf::countEncodeDrawStreamBindCpuTime);
@@ -3200,7 +4689,9 @@ bool encodeDraw(EncodeContext& ctx,
         if (preUploaded && preUploaded->index) {
           transientIndexBuffer = preUploaded->index;
         } else {
-          transientIndexBuffer = makeTransientBuffer(pv.userIndexData.data(), pv.userIndexData.size());
+          transientIndexBuffer = makeTransientIndexBuffer(
+              pv.userIndexData.data(), pv.userIndexData.size(),
+              ActiveEncoderBreakdown::TransientIndexSource::User);
         }
         if (transientIndexBuffer) {
           indexBuffer = transientIndexBuffer.buffer;
@@ -3208,10 +4699,13 @@ bool encodeDraw(EncodeContext& ctx,
         }
       } else {
         auto* buffer = ctx.pool.findBuffer(hot.indexBuffer.value);
+        indexBufferRecord = buffer;
         if (buffer && buffer->buffer) {
           indexBuffer = WMT::Buffer{buffer->buffer.handle};
         } else if (buffer && !buffer->shadow.empty()) {
-          transientIndexBuffer = makeTransientBuffer(buffer->shadow.data(), buffer->shadow.size());
+          transientIndexBuffer = makeTransientIndexBuffer(
+              buffer->shadow.data(), buffer->shadow.size(),
+              ActiveEncoderBreakdown::TransientIndexSource::ShadowFallback);
           if (transientIndexBuffer) {
             indexBuffer = transientIndexBuffer.buffer;
             indexBufferOffset += transientIndexBuffer.offset;
@@ -3219,11 +4713,22 @@ bool encodeDraw(EncodeContext& ctx,
         }
       }
       if (indexBuffer) {
+        if (encoderBreakdown) {
+          if (indexBufferRecord) {
+            encoderBreakdown->recordIndexBufferResource(
+                hot.indexBuffer.value, indexBufferRecord->desc);
+          }
+          encoderBreakdown->recordIndexBufferState(hot.indexBuffer.value);
+        }
         countIndexBufferBind();
+        if (encoderBreakdown) {
+          encoderBreakdown->recordIndexBufferMetalBind();
+        }
       }
     }
     if (indexBuffer) {
       const bool upDraw = !pv.userVertexData.empty() || !pv.userIndexData.empty();
+      recordEncoderDrawIssue(true, false);
       recordDrawGeometryDiagnostics(drawState,
                                     pv,
                                     seqId,
@@ -3258,6 +4763,22 @@ bool encodeDraw(EncodeContext& ctx,
     }
   }
   const bool upDraw = !pv.userVertexData.empty();
+  if (encoderBreakdown) {
+    encoderBreakdown->recordDrawIssue(
+        pv.primitiveType,
+        primitiveCount,
+        vertexCount,
+        false,
+        false,
+        fixedFunctionPath,
+        preTransformed,
+        hot.textureMask,
+        drawVertexStreamStride,
+        hot.renderStates,
+        hot.viewport,
+        effectiveCullMode,
+        fillMode);
+  }
   recordDrawGeometryDiagnostics(drawState,
                                 pv,
                                 seqId,
@@ -3283,6 +4804,9 @@ bool encodeDraw(EncodeContext& ctx,
                                                 drawVertexStreamStride);
     recordedSetVertexBytes(ctx, encoder, &vol, sizeof(DrawVolatile), 5);
     perf::countUniformVolatilePush();
+    if (encoderBreakdown) {
+      encoderBreakdown->addSetVertexBytes(sizeof(DrawVolatile), 5);
+    }
     PerfScope issueScope(perf::countEncodeDrawIssueCpuTime);
     recordedDrawPrimitives(ctx, encoder, primitiveType, 0, (uint64_t)vertexCount);
   }
@@ -3312,7 +4836,7 @@ bool encodeDraw(EncodeContext& ctx,
                     paramPayloadArena, dirty, tileFfpMode, argbufHybridMode,
                     argbufResourceArray, reopenArgbufHybrid, core::PsoHandle{},
                     core::PsoHandle{}, core::DepthStencilHandle{},
-                    textureSamplerShadow, commandIndex);
+                    textureSamplerShadow, commandIndex, nullptr, nullptr);
 }
 
 std::optional<core::metalqueue::QueueSubmissionRecord> encodeChunk(
@@ -3496,7 +5020,11 @@ std::optional<core::metalqueue::QueueSubmissionRecord> encodeChunk(
   // table so draws can't observe last-write-wins on a shared table. Reset
   // whenever a new encoder opens (its argbuf table starts empty).
   std::optional<u64> lastArgbufPayloadHash;
+  ArgbufCbufCache argbufCbufCache;
   TextureSamplerBindShadow textureSamplerShadow{};
+  ActiveEncoderBreakdown activeEncoderBreakdown;
+  static thread_local RenderPassFrameTracker renderPassFrameTracker;
+  u64 renderEncoderIndex = 0;
 
   // TLA+: EncoderLifecycle variable binding:
   // activeKind  := activeRenderEncoder ? "Render" : activeBlitEncoder ? "Blit" : "None"
@@ -3529,11 +5057,13 @@ std::optional<core::metalqueue::QueueSubmissionRecord> encodeChunk(
       activeRenderEncoder.popDebugGroup();
       activeRenderEncoder.endEncoding();
       perf::countRenderPassEnd(reason);
+      activeEncoderBreakdown.emit(reason);
       // R-BACK-15.4: color attachments stored on this pass become "touched"
       // on the queue so the next pass on the same handle Loads instead of
-      // DontCare-loads. Color store_action is currently always Store or
-      // MultisampleResolve (R-BACK-15.8 color DontCare-store not yet
-      // implemented), so every active color handle qualifies.
+      // DontCare-loads. The current color DontCare-store proof only fires
+      // when the next touch is a Clear, whose load action ignores this
+      // touched bit, so conservatively marking every active color handle
+      // keeps the touched-set contract simple without losing that win.
       for (auto& handle : activeColorHandles) {
         if (handle) {
           ctx.queue.markColorHandleTouched(handle);
@@ -3575,11 +5105,20 @@ std::optional<core::metalqueue::QueueSubmissionRecord> encodeChunk(
         drawState.hot->colorAttachments[0].handle.value,
         drawState.hot->depthStencil.handle.value,
         psoHandleBucket(renderPsoHandle));
+    const u64 openedRenderEncoderIndex = renderEncoderIndex;
     activeRenderEncoder = beginRenderPass(ctx, commandBuffer, drawState, clear,
                                           &slot, lookaheadStartIndex,
                                           sampleAttachment.span());
     hasActiveRender = static_cast<bool>(activeRenderEncoder);
     if (hasActiveRender) {
+      renderPassFrameTracker.noteStart(
+          makeRenderPassFrameKey(*drawState.hot),
+          estimateRenderPassAttachmentFootprintBytes(ctx, *drawState.hot));
+      activeEncoderBreakdown.begin(
+          encodeChunkSeqId, openedRenderEncoderIndex,
+          drawState.hot->colorAttachments[0].handle.value,
+          drawState.hot->depthStencil.handle.value);
+      ++renderEncoderIndex;
       recordRenderEncoderGpuAttachment(sampleAttachment);
     }
     activeKey = makeAttachmentKey(*drawState.hot);
@@ -3640,7 +5179,10 @@ std::optional<core::metalqueue::QueueSubmissionRecord> encodeChunk(
       const auto depth = static_cast<unsigned long long>(
           drawState.hot->depthStencil.handle.value);
       auto passLabel = makeLabelStringFmt(
-          "RenderPass[rt=0x%llx,depth=0x%llx]", rt0, depth);
+          "RenderPass[seq=%llu,enc=%llu,rt=0x%llx,depth=0x%llx]",
+          static_cast<unsigned long long>(encodeChunkSeqId),
+          static_cast<unsigned long long>(openedRenderEncoderIndex), rt0,
+          depth);
       activeRenderEncoder.setLabel(passLabel);
       activeRenderEncoder.pushDebugGroup(passLabel);
     }
@@ -3701,6 +5243,7 @@ std::optional<core::metalqueue::QueueSubmissionRecord> encodeChunk(
           // encodedLength); per-frequency cbuf bytes are bumped by
           // updateDirtyArgbufRegions on the first draw.
           perf::countArgbufHybridBytes(populated.length);
+          activeEncoderBreakdown.addArgbufTableBytes(populated.length);
           activePassUsesArgbufHybrid = true;
           activePassUsesArgbufResourceArray = resourceArrayLane;
           activeArgbufStorage = populated.storage;
@@ -3734,6 +5277,7 @@ std::optional<core::metalqueue::QueueSubmissionRecord> encodeChunk(
     // first draw of this pass must reopen + populate regardless of its
     // payload hash.
     lastArgbufPayloadHash.reset();
+    argbufCbufCache.reset();
     assertEncoderLifecycleInvariant();
   };
 
@@ -4017,6 +5561,18 @@ std::optional<core::metalqueue::QueueSubmissionRecord> encodeChunk(
       }
       if (anyUpData) {
         upSlices = ctx.queue.uploadTransientBufferBatch(upPayloads, /*alignment=*/16, slot.seqId);
+        if (!upSlices.empty()) {
+          for (const auto& param : drawItems) {
+            const auto vertexBytes = drawParamVertexBytes(param, recordPayloadArena);
+            const auto indexBytes = drawParamIndexBytes(param, recordPayloadArena);
+            activeEncoderBreakdown.addTransientVertexBytes(
+                static_cast<u64>(vertexBytes.size()),
+                ActiveEncoderBreakdown::TransientVertexSource::Preupload);
+            activeEncoderBreakdown.addTransientIndexBytes(
+                static_cast<u64>(indexBytes.size()),
+                ActiveEncoderBreakdown::TransientIndexSource::Preupload);
+          }
+        }
       }
     }
 
@@ -4027,28 +5583,39 @@ std::optional<core::metalqueue::QueueSubmissionRecord> encodeChunk(
     // via setVertexBytes per draw with no slab traffic.
     bool baseBound =
         activeDrawStateKey.has_value() && *activeDrawStateKey == hot.key;
-    // R-BACK-12.22..12.26 — constants-only argbuf reopen gate. Every draw
-    // in one DrawRun shares the same uniform payload, so at most the first
-    // draw needs a fresh argbuf table, and only when this run's payload
-    // differs from the previous one on this encoder. The resource-array
-    // lane always reopens (texture/sampler descriptors are written inline
-    // and can change between runs independently of the const hash).
-    const u64 runArgbufPayloadHash = command.drawUniformPayload->hash;
-    const bool argbufPayloadChanged =
-        !lastArgbufPayloadHash.has_value() ||
-        *lastArgbufPayloadHash != runArgbufPayloadHash;
     for (std::size_t i = 0; i < drawCount; ++i) {
       const auto& param = drawItems[i];
+      const auto* drawUniformPayload =
+          core::drawRunUniformPayloadForParam(command, param);
+      if (!drawUniformPayload) {
+        continue;
+      }
       PreUploadedDrawData preData{};
       if (i * 2u + 1u < upSlices.size()) {
         preData.vertex = upSlices[i * 2u];
         preData.index = upSlices[i * 2u + 1u];
       }
+      core::DrawBindingOverride bindingOverride{};
+      core::FlatDrawStateRecord overrideHot{};
+      auto drawStateView = stateView;
+      bool hasBindingOverride =
+          drawParamBindingOverride(param, recordPayloadArena, bindingOverride);
+      if (hasBindingOverride) {
+        overrideHot = hot;
+        applyDrawBindingOverride(overrideHot, bindingOverride);
+        drawStateView.hot = &overrideHot;
+      }
+      drawStateView.uniforms = drawUniformPayload;
+      const u64 drawArgbufPayloadHash = drawUniformPayload->hash;
+      const bool argbufPayloadChanged =
+          !lastArgbufPayloadHash.has_value() ||
+          *lastArgbufPayloadHash != drawArgbufPayloadHash;
       const bool reopenArgbuf =
           activePassUsesArgbufResourceArray ||
-          (i == 0 && argbufPayloadChanged);
-      if (encodeDraw(ctx, commandBuffer, activeRenderEncoder, stateView, slot.seqId,
-                     /*skipBaseStateBind=*/baseBound,
+          argbufPayloadChanged;
+      const bool skipBaseStateBind = hasBindingOverride ? false : baseBound;
+      if (encodeDraw(ctx, commandBuffer, activeRenderEncoder, drawStateView, slot.seqId,
+                     /*skipBaseStateBind=*/skipBaseStateBind,
                      anyUpData ? &preData : nullptr,
                      &param,
                      recordPayloadArena,
@@ -4063,12 +5630,14 @@ std::optional<core::metalqueue::QueueSubmissionRecord> encodeChunk(
                      &textureSamplerShadow,
                      commandIndex <= std::numeric_limits<std::uint32_t>::max()
                          ? static_cast<std::uint32_t>(commandIndex)
-                         : std::numeric_limits<std::uint32_t>::max())) {
-        baseBound = true;
-        activeDrawStateKey = hot.key;
+                         : std::numeric_limits<std::uint32_t>::max(),
+                     &activeEncoderBreakdown,
+                     &argbufCbufCache)) {
+        activeDrawStateKey = drawStateView.hot->key;
+        baseBound = *activeDrawStateKey == hot.key;
+        lastArgbufPayloadHash = drawArgbufPayloadHash;
       }
     }
-    lastArgbufPayloadHash = runArgbufPayloadHash;
     commandBufferHasWork = true;
   };
 
@@ -4313,6 +5882,7 @@ std::optional<core::metalqueue::QueueSubmissionRecord> encodeChunk(
           perf::emitFrameDelta(frameId++, prevSnapshot, curr);
           prevSnapshot = curr;
         }
+        renderPassFrameTracker.reset();
         // M3 — Instruments "frame" interval. End the frame that just
         // got a Present commit, then immediately begin the next one so
         // any encode work on this thread before the next Present is

@@ -29,6 +29,7 @@ class Device;
 
 namespace perf {
 enum class RenderPassDepthStoreProof : std::uint8_t;
+enum class RenderPassColorStoreProof : std::uint8_t;
 }
 
 namespace resources { struct Pool; }
@@ -155,11 +156,12 @@ WMT::Reference<WMT::SamplerState> makeSampler(
 // buffer. Reads (and clears, on entry) ctx.queue.backBufferDiscardAfterPresent_
 // so the next draw to the same RT can choose DontCare over Load.
 //
-// `lookaheadSlot` + `lookaheadStartIndex` (R-BACK-15.7): when non-null,
+// `lookaheadSlot` + `lookaheadStartIndex` (R-BACK-15.7/15.8): when non-null,
 // the encoder runs the depth/stencil DontCare-store proof described in
-// specs/backend/render-pass-actions/design.md section 4.2 and records the
-// reason in render_pass_depth_proof_* counters. Pass nullptr to keep the
-// legacy unconditional-Store behavior for callers without chunk records.
+// specs/backend/render-pass-actions/design.md section 4.2 and the narrower
+// color next-clear DontCare-store proof. Depth records the reason in
+// render_pass_depth_proof_* counters. Pass nullptr to keep the legacy
+// unconditional-Store behavior for callers without chunk records.
 WMT::Reference<WMT::RenderCommandEncoder> beginRenderPass(
     EncodeContext& ctx,
     WMT::CommandBuffer& commandBuffer,
@@ -187,6 +189,20 @@ dxmt9::perf::RenderPassDepthStoreProof depthStoreProofForLookahead(
 bool nextDepthOperationIsClear(const core::ChunkSlot& slot,
                                std::size_t startCommandIndex,
                                core::Handle depthHandle);
+
+// Conservative color twin of the depth next-clear proof. Returns true only
+// when the next later record that touches `colorHandle` is a color Clear of
+// that handle. It intentionally does not use the broader dead-at-end proof:
+// color surfaces are more commonly presented, sampled, or reused across
+// chunk boundaries.
+bool nextColorOperationIsClear(const core::ChunkSlot& slot,
+                               std::size_t startCommandIndex,
+                               core::Handle colorHandle);
+
+dxmt9::perf::RenderPassColorStoreProof colorStoreProofForLookahead(
+    const core::ChunkSlot& slot,
+    std::size_t startCommandIndex,
+    core::Handle colorHandle);
 
 // R-FORMAT-12 — colorless (D3DFMT_NULL) render-pass attachment decisions,
 // extracted as pure value transforms so the depth-only-pass policy is

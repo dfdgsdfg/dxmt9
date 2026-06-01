@@ -144,7 +144,8 @@ class Device {
       const std::span<const core::DrawParam> draws(&submission.draw, 1);
       std::span<const core::DrawParamPayloadView> payloads{};
       if (!submission.payload.userVertexData.empty() ||
-          !submission.payload.userIndexData.empty()) {
+          !submission.payload.userIndexData.empty() ||
+          !submission.payload.bindingOverrideData.empty()) {
         payloads = std::span<const core::DrawParamPayloadView>(&submission.payload, 1);
       }
       submitDrawRun(submission.state, submission.uniforms, draws, payloads);

@@ -92,6 +92,10 @@ bool disableAlphaTest();
 // Env: DXMT_FORCE_EXPAND_INDEXED.
 bool forceExpandIndexed();
 
+// Disable the compatibility heuristic that auto-expands selected indexed
+// draws. Env: DXMT_DISABLE_AUTO_EXPAND_INDEXED.
+bool disableAutoExpandIndexed();
+
 // Trace budget for the FFP path (emits N trace lines then stops).
 // Env: DXMT_TRACE_FVF.
 int fixedFunctionTraceBudget();

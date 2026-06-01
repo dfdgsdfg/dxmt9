@@ -14,6 +14,7 @@
 #include "dxmt9/dxmt9_device.hpp"
 
 #include <algorithm>
+#include <array>
 #include <chrono>
 #include <cmath>
 #include <cstdlib>
@@ -71,6 +72,9 @@ extern "C" int32_t dxmt9c_device_present(D9CDevice* d, const D9CRect* src, const
 extern "C" int32_t dxmt9c_device_clear(D9CDevice* d, uint32_t count, const D9CRect* rects,
                                        uint32_t flags, uint32_t colorARGB, float z,
                                        uint32_t stencil);
+extern "C" int32_t dxmt9c_device_set_stream_source(D9CDevice* d, uint32_t stream,
+                                                   D9CBuffer* buf, uint32_t off,
+                                                   uint32_t stride);
 extern "C" int32_t dxmt9c_device_set_vertex_declaration(D9CDevice* d, D9CVertexDecl* vd);
 extern "C" int32_t dxmt9c_device_set_indices(D9CDevice* d, D9CBuffer* buf);
 extern "C" int32_t dxmt9c_device_set_vertex_shader(D9CDevice* d, D9CShader* s);
@@ -188,8 +192,73 @@ T* wireHandlePtr(const D9CWireHandle& handle) {
   return wireValuePtr<T>(wireHandleValue(handle));
 }
 
+uint64_t bufferObjectHandleValue(const std::shared_ptr<dxmt9::core::Buffer>& buffer) {
+  return buffer ? buffer->handle().value : 0ull;
+}
+
+uint64_t wireBufferObjectHandleValue(const D9CWireHandle& handle) {
+  auto* buffer = wireHandlePtr<D9CBuffer>(handle);
+  return buffer && buffer->obj ? buffer->obj->handle().value : 0ull;
+}
+
 bool failed(int32_t hr) {
   return hr < 0;
+}
+
+bool commitChunkRecordAllowsPendingDrawBatchThrough(std::uint32_t type) {
+  switch (type) {
+  case D9C_COMMAND_RECORD_SET_VS_CONST_F:
+  case D9C_COMMAND_RECORD_SET_VS_CONST_I:
+  case D9C_COMMAND_RECORD_SET_VS_CONST_B:
+  case D9C_COMMAND_RECORD_SET_PS_CONST_F:
+  case D9C_COMMAND_RECORD_SET_PS_CONST_I:
+  case D9C_COMMAND_RECORD_SET_PS_CONST_B:
+    return true;
+  default:
+    return false;
+  }
+}
+
+bool commitChunkRecordIsConstantUpload(std::uint32_t type) {
+  return commitChunkRecordAllowsPendingDrawBatchThrough(type);
+}
+
+struct ConstantUploadRecordSize {
+  std::uint64_t payloadBytes = 0;
+  std::uint32_t registerCount = 0;
+};
+
+ConstantUploadRecordSize constantUploadRecordSize(
+    const ImportedRecordView& record) {
+  if (!record.valid() || !record.record ||
+      !commitChunkRecordIsConstantUpload(record.header.type) ||
+      record.header.size < sizeof(D9CCommandRecordSetConst)) {
+    return {};
+  }
+  D9CCommandRecordSetConst decoded{};
+  std::memcpy(&decoded, record.record, sizeof(decoded));
+  const auto availableBytes =
+      static_cast<std::uint64_t>(record.header.size - sizeof(decoded));
+  std::uint64_t expectedBytes = 0;
+  switch (record.header.type) {
+  case D9C_COMMAND_RECORD_SET_VS_CONST_F:
+  case D9C_COMMAND_RECORD_SET_VS_CONST_I:
+  case D9C_COMMAND_RECORD_SET_PS_CONST_F:
+  case D9C_COMMAND_RECORD_SET_PS_CONST_I:
+    expectedBytes =
+        static_cast<std::uint64_t>(decoded.count) * 4u * sizeof(std::uint32_t);
+    break;
+  case D9C_COMMAND_RECORD_SET_VS_CONST_B:
+  case D9C_COMMAND_RECORD_SET_PS_CONST_B:
+    expectedBytes = static_cast<std::uint64_t>(decoded.count) * sizeof(std::uint32_t);
+    break;
+  default:
+    break;
+  }
+  return ConstantUploadRecordSize{
+      .payloadBytes = std::min(availableBytes, expectedBytes),
+      .registerCount = decoded.count,
+  };
 }
 
 std::uint32_t commitChunkDrawDeltaMask(const D9CDrawPrimitivePacket& packet) {
@@ -223,21 +292,209 @@ std::uint32_t commitChunkDrawDeltaMask(const D9CDrawIndexedPrimitivePacket& pack
   return mask;
 }
 
-void countCommitChunkDrawReplay(const D9CDrawPrimitivePacket& packet) {
-  dxmt9::perf::countCommitChunkDrawReplay(
-      /*indexed=*/false, commitChunkDrawDeltaMask(packet));
+void countCommitChunkDrawStreamDeltaDetails(
+    D9CDevice* d, const D9CDrawPrimitivePacket& packet) {
+  if (!d || packet.streamSourceMask == 0) {
+    return;
+  }
+  const auto& state = d->dev().state();
+  std::uint32_t handleChanges = 0;
+  std::uint32_t offsetChanges = 0;
+  std::uint32_t strideChanges = 0;
+  for (uint32_t stream = 0; stream < D9C_DRAW_PACKET_MAX_STREAMS; ++stream) {
+    if ((packet.streamSourceMask & (1u << stream)) == 0) {
+      continue;
+    }
+    const auto& source = packet.streamSources[stream];
+    if (bufferObjectHandleValue(state.streamBuffers[stream]) !=
+        wireBufferObjectHandleValue(source.buffer)) {
+      ++handleChanges;
+    }
+    if (state.streamOffsets[stream] != source.offset) {
+      ++offsetChanges;
+    }
+    if (state.streamStrides[stream] != source.stride) {
+      ++strideChanges;
+    }
+  }
+  dxmt9::perf::countCommitChunkDrawStreamDeltaDetails(
+      handleChanges, offsetChanges, strideChanges);
 }
 
-void countCommitChunkDrawReplay(const D9CDrawIndexedPrimitivePacket& packet) {
+void countCommitChunkDrawReplay(D9CDevice* d,
+                                const D9CDrawPrimitivePacket& packet) {
+  dxmt9::perf::countCommitChunkDrawReplay(
+      /*indexed=*/false, commitChunkDrawDeltaMask(packet));
+  countCommitChunkDrawStreamDeltaDetails(d, packet);
+}
+
+void countCommitChunkDrawReplay(D9CDevice* d,
+                                const D9CDrawIndexedPrimitivePacket& packet) {
   dxmt9::perf::countCommitChunkDrawReplay(
       /*indexed=*/true, commitChunkDrawDeltaMask(packet));
+  countCommitChunkDrawStreamDeltaDetails(d, packet.state);
+  if (d && packet.ibValid) {
+    const auto& state = d->dev().state();
+    if (bufferObjectHandleValue(state.indexBuffer) !=
+        wireBufferObjectHandleValue(packet.ibHandle)) {
+      dxmt9::perf::countCommitChunkDrawIndexBufferHandleDelta();
+    }
+  }
 }
 
 void countCommitChunkDrawRunScan(const ImportedDrawRunScan& scan) {
+  const auto constSize = constantUploadRecordSize(scan.stopRecord);
   dxmt9::perf::countCommitChunkDrawRunScan(
       static_cast<std::uint32_t>(scan.stop),
       scan.recordCount,
-      scan.stopRecord.header.type);
+      scan.stopRecord.header.type,
+      constSize.payloadBytes,
+      constSize.registerCount);
+  if (scan.replayAsRun() ||
+      scan.stop != ImportedDrawRunScanStop::StateDelta ||
+      !scan.stopRecord.valid()) {
+    return;
+  }
+  switch (scan.stopRecord.header.type) {
+    case D9C_COMMAND_RECORD_DRAW_PRIMITIVE: {
+      D9CCommandRecordDrawPrimitive decoded{};
+      std::memcpy(&decoded, scan.stopRecord.record, sizeof(decoded));
+      dxmt9::perf::countCommitChunkDrawRunStateDeltaBucket(
+          commitChunkDrawDeltaMask(decoded.packet));
+      break;
+    }
+    case D9C_COMMAND_RECORD_DRAW_INDEXED_PRIMITIVE: {
+      D9CCommandRecordDrawIndexedPrimitive decoded{};
+      std::memcpy(&decoded, scan.stopRecord.record, sizeof(decoded));
+      dxmt9::perf::countCommitChunkDrawRunStateDeltaBucket(
+          commitChunkDrawDeltaMask(decoded.packet));
+      break;
+    }
+    default:
+      break;
+  }
+}
+
+struct EffectiveDrawBindings {
+  std::array<dxmt9::core::Handle, dxmt9::core::kMaxStreams> streamHandles{};
+  std::array<D9CBuffer*, dxmt9::core::kMaxStreams> streamBuffers{};
+  std::array<std::uint32_t, dxmt9::core::kMaxStreams> streamOffsets{};
+  std::array<std::uint32_t, dxmt9::core::kMaxStreams> streamStrides{};
+  dxmt9::core::Handle indexHandle{};
+  D9CBuffer* indexBuffer = nullptr;
+  dxmt9::core::IndexType indexType = dxmt9::core::IndexType::UInt16;
+};
+
+dxmt9::core::Handle bufferHandle(const D9CBuffer* buffer) {
+  return buffer && buffer->obj ? buffer->obj->handle() : dxmt9::core::Handle{};
+}
+
+EffectiveDrawBindings effectiveBindingsFromState(const dxmt9::core::DeviceState& state) {
+  EffectiveDrawBindings bindings{};
+  for (std::uint32_t stream = 0; stream < dxmt9::core::kMaxStreams; ++stream) {
+    bindings.streamHandles[stream] =
+        state.streamBuffers[stream] ? state.streamBuffers[stream]->handle()
+                                    : dxmt9::core::Handle{};
+    bindings.streamOffsets[stream] = state.streamOffsets[stream];
+    bindings.streamStrides[stream] = state.streamStrides[stream];
+  }
+  bindings.indexHandle = state.indexBuffer ? state.indexBuffer->handle()
+                                           : dxmt9::core::Handle{};
+  bindings.indexType = state.indexType;
+  return bindings;
+}
+
+void applyStreamBindingDeltas(EffectiveDrawBindings& bindings,
+                              const D9CDrawPrimitivePacket& packet) {
+  for (std::uint32_t stream = 0;
+       stream < std::min<std::uint32_t>(D9C_DRAW_PACKET_MAX_STREAMS,
+                                        dxmt9::core::kMaxStreams);
+       ++stream) {
+    if ((packet.streamSourceMask & (1u << stream)) == 0) {
+      continue;
+    }
+    const auto& source = packet.streamSources[stream];
+    auto* buffer = wireHandlePtr<D9CBuffer>(source.buffer);
+    bindings.streamBuffers[stream] = buffer;
+    bindings.streamHandles[stream] = bufferHandle(buffer);
+    bindings.streamOffsets[stream] = source.offset;
+    bindings.streamStrides[stream] = source.stride;
+  }
+}
+
+void applyIndexBindingDelta(EffectiveDrawBindings& bindings,
+                            const D9CDrawIndexedPrimitivePacket& packet) {
+  if (!packet.ibValid) {
+    return;
+  }
+  auto* buffer = wireHandlePtr<D9CBuffer>(packet.ibHandle);
+  bindings.indexBuffer = buffer;
+  bindings.indexHandle = bufferHandle(buffer);
+  bindings.indexType =
+      buffer ? idxTypeFromD3D(buffer->desc.format) : dxmt9::core::IndexType::UInt16;
+}
+
+bool makeBindingOverride(const EffectiveDrawBindings& base,
+                         const EffectiveDrawBindings& effective,
+                         dxmt9::core::DrawBindingOverride& out) {
+  out = {};
+  bool changed = false;
+  for (std::uint32_t stream = 0; stream < dxmt9::core::kMaxStreams; ++stream) {
+    if (base.streamHandles[stream] == effective.streamHandles[stream] &&
+        base.streamOffsets[stream] == effective.streamOffsets[stream] &&
+        base.streamStrides[stream] == effective.streamStrides[stream]) {
+      continue;
+    }
+    out.streamMask |= 1u << stream;
+    out.streams[stream].buffer = effective.streamHandles[stream];
+    out.streams[stream].offset = effective.streamOffsets[stream];
+    out.streams[stream].stride = effective.streamStrides[stream];
+    changed = true;
+  }
+  if (base.indexHandle != effective.indexHandle ||
+      base.indexType != effective.indexType) {
+    out.indexBuffer = effective.indexHandle;
+    out.indexType = effective.indexType;
+    out.indexBufferValid = true;
+    changed = true;
+  }
+  return changed;
+}
+
+dxmt9::core::DrawParamPayloadView bindingOverridePayloadView(
+    const dxmt9::core::DrawBindingOverride& override) {
+  return {
+      .bindingOverrideData =
+          std::span<const dxmt9::core::u8>(
+              reinterpret_cast<const dxmt9::core::u8*>(&override),
+              sizeof(dxmt9::core::DrawBindingOverride)),
+  };
+}
+
+int32_t applyFinalBindingState(D9CDevice* d,
+                               const EffectiveDrawBindings& base,
+                               const EffectiveDrawBindings& effective) {
+  for (std::uint32_t stream = 0; stream < dxmt9::core::kMaxStreams; ++stream) {
+    if (base.streamHandles[stream] == effective.streamHandles[stream] &&
+        base.streamOffsets[stream] == effective.streamOffsets[stream] &&
+        base.streamStrides[stream] == effective.streamStrides[stream]) {
+      continue;
+    }
+    const int32_t hr = dxmt9c_device_set_stream_source(
+        d, stream, effective.streamBuffers[stream], effective.streamOffsets[stream],
+        effective.streamStrides[stream]);
+    if (failed(hr)) {
+      return hr;
+    }
+  }
+  if (base.indexHandle != effective.indexHandle ||
+      base.indexType != effective.indexType) {
+    const int32_t hr = dxmt9c_device_set_indices(d, effective.indexBuffer);
+    if (failed(hr)) {
+      return hr;
+    }
+  }
+  return dxmt9::core::D3D_OK;
 }
 
 void recordStateBlockRenderState(D9CDevice* d, uint32_t state, uint32_t value) {
@@ -955,6 +1212,8 @@ extern "C" int32_t dxmt9c_device_commit_chunk(D9CDevice* d, const D9CCommandChun
     if (pendingDrawSubmissions.empty()) {
       return dxmt9::core::D3D_OK;
     }
+    dxmt9::perf::countCommitChunkDrawSubmissionBatch(
+        static_cast<std::uint32_t>(pendingDrawSubmissions.size()));
     d->dev().submitDrawSubmissionBatch(pendingDrawSubmissions);
     pendingDrawSubmissions.clear();
     return dxmt9::core::D3D_OK;
@@ -972,11 +1231,15 @@ extern "C" int32_t dxmt9c_device_commit_chunk(D9CDevice* d, const D9CCommandChun
     const bool batchableDrawRecord =
         header.type == D9C_COMMAND_RECORD_DRAW_PRIMITIVE ||
         header.type == D9C_COMMAND_RECORD_DRAW_INDEXED_PRIMITIVE;
-    if (!batchableDrawRecord) {
+    const bool batchThroughRecord =
+        commitChunkRecordAllowsPendingDrawBatchThrough(header.type);
+    if (!batchableDrawRecord && !batchThroughRecord) {
       hr = flushPendingDrawSubmissions();
       if (failed(hr)) {
         return commitChunkFail("draw-batch-flush", recordIndex, header.type, hr);
       }
+    } else if (batchThroughRecord && !pendingDrawSubmissions.empty()) {
+      dxmt9::perf::countCommitChunkDrawBatchConstUploadPassthrough();
     }
     switch (header.type) {
     case D9C_COMMAND_RECORD_DRAW_PRIMITIVE: {
@@ -994,10 +1257,55 @@ extern "C" int32_t dxmt9c_device_commit_chunk(D9CDevice* d, const D9CCommandChun
       const auto scan = scanImportedDrawRun(importedChunk, *recordView);
       countCommitChunkDrawRunScan(scan);
       if (scan.replayAsRun()) {
+        hr = flushPendingDrawSubmissions();
+        if (failed(hr)) return commitChunkFail("draw-run-flush", recordIndex, header.type, hr);
+        // Apply the first record's full state once. Stream/IB changes from
+        // later records ride alongside each DrawParam as low-level binding
+        // overrides, then the public D3D state is advanced to the final
+        // binding after the run is submitted.
+        hr = applyDrawPacketState(d, decoded.packet);
+        if (failed(hr)) return commitChunkFail("draw-run-state", recordIndex, header.type, hr);
+        const auto baseBindings = effectiveBindingsFromState(d->dev().state());
+        auto effectiveBindings = baseBindings;
         std::vector<dxmt9::core::DrawParam> runParams;
         runParams.reserve(scan.recordCount);
-        runParams.push_back(makeRunParam(decoded.packet));
-        countCommitChunkDrawReplay(decoded.packet);
+        std::vector<dxmt9::core::DrawBindingOverride> bindingOverrides;
+        bindingOverrides.reserve(scan.recordCount);
+        std::vector<dxmt9::core::DrawParamPayloadView> runPayloads;
+        runPayloads.reserve(scan.recordCount);
+        const auto appendDirectRunParam = [&](const D9CDrawPrimitivePacket& packet) {
+          applyStreamBindingDeltas(effectiveBindings, packet);
+          auto param = makeRunParam(packet);
+          param.indexType = effectiveBindings.indexType;
+          dxmt9::core::DrawBindingOverride override{};
+          if (makeBindingOverride(baseBindings, effectiveBindings, override)) {
+            dxmt9::perf::countCommitChunkDrawRunBindingOverride(
+                override.streamMask != 0, override.indexBufferValid, sizeof(override));
+            bindingOverrides.push_back(override);
+            runPayloads.push_back(bindingOverridePayloadView(bindingOverrides.back()));
+          } else {
+            runPayloads.push_back({});
+          }
+          runParams.push_back(param);
+        };
+        const auto appendIndexedRunParam = [&](const D9CDrawIndexedPrimitivePacket& packet) {
+          applyStreamBindingDeltas(effectiveBindings, packet.state);
+          applyIndexBindingDelta(effectiveBindings, packet);
+          auto param = makeRunParam(packet);
+          param.indexType = effectiveBindings.indexType;
+          dxmt9::core::DrawBindingOverride override{};
+          if (makeBindingOverride(baseBindings, effectiveBindings, override)) {
+            dxmt9::perf::countCommitChunkDrawRunBindingOverride(
+                override.streamMask != 0, override.indexBufferValid, sizeof(override));
+            bindingOverrides.push_back(override);
+            runPayloads.push_back(bindingOverridePayloadView(bindingOverrides.back()));
+          } else {
+            runPayloads.push_back({});
+          }
+          runParams.push_back(param);
+        };
+        appendDirectRunParam(decoded.packet);
+        countCommitChunkDrawReplay(d, decoded.packet);
 
         std::uint32_t runIndex = recordView->nextIndex();
         while (runIndex < scan.endIndex) {
@@ -1008,13 +1316,13 @@ extern "C" int32_t dxmt9c_device_commit_chunk(D9CDevice* d, const D9CCommandChun
           if (nextRecord->header.type == D9C_COMMAND_RECORD_DRAW_PRIMITIVE) {
             D9CCommandRecordDrawPrimitive nextDecoded{};
             std::memcpy(&nextDecoded, nextRecord->record, sizeof(nextDecoded));
-            runParams.push_back(makeRunParam(nextDecoded.packet));
-            countCommitChunkDrawReplay(nextDecoded.packet);
+            appendDirectRunParam(nextDecoded.packet);
+            countCommitChunkDrawReplay(d, nextDecoded.packet);
           } else if (nextRecord->header.type == D9C_COMMAND_RECORD_DRAW_INDEXED_PRIMITIVE) {
             D9CCommandRecordDrawIndexedPrimitive nextDecoded{};
             std::memcpy(&nextDecoded, nextRecord->record, sizeof(nextDecoded));
-            runParams.push_back(makeRunParam(nextDecoded.packet));
-            countCommitChunkDrawReplay(nextDecoded.packet);
+            appendIndexedRunParam(nextDecoded.packet);
+            countCommitChunkDrawReplay(d, nextDecoded.packet);
           } else {
             return commitChunkFail("draw-run-type", runIndex, nextRecord->header.type);
           }
@@ -1023,21 +1331,18 @@ extern "C" int32_t dxmt9c_device_commit_chunk(D9CDevice* d, const D9CCommandChun
         if (runParams.size() != scan.recordCount) {
           return commitChunkFail("draw-run-count", recordIndex, header.type);
         }
+        if (runPayloads.size() != runParams.size()) {
+          return commitChunkFail("draw-run-payload-count", recordIndex, header.type);
+        }
 
-        hr = flushPendingDrawSubmissions();
-        if (failed(hr)) return commitChunkFail("draw-run-flush", recordIndex, header.type, hr);
-        // Apply the first record's delta once, then issue all compatible
-        // draws against that effective state. Later records in the scan have
-        // either no delta or repeat the same base delta, so replaying them
-        // would only rebuild identical canonical state.
-        hr = applyDrawPacketState(d, decoded.packet);
-        if (failed(hr)) return commitChunkFail("draw-run-state", recordIndex, header.type, hr);
-        hr = d->dev().drawPrimitiveRun(runParams);
+        hr = d->dev().drawPrimitiveRun(runParams, runPayloads);
         if (failed(hr)) return commitChunkFail("draw-run", recordIndex, header.type, hr);
+        hr = applyFinalBindingState(d, baseBindings, effectiveBindings);
+        if (failed(hr)) return commitChunkFail("draw-run-final-bind", recordIndex, header.type, hr);
         recordIndex = scan.endIndex;
         continue;
       }
-      countCommitChunkDrawReplay(decoded.packet);
+      countCommitChunkDrawReplay(d, decoded.packet);
       if (canBatchDrawPacket(d, decoded.packet)) {
         hr = queueDrawPrimitiveSubmission(d, decoded.packet,
                                           pendingDrawSubmissions);
@@ -1058,10 +1363,56 @@ extern "C" int32_t dxmt9c_device_commit_chunk(D9CDevice* d, const D9CCommandChun
       const auto scan = scanImportedDrawRun(importedChunk, *recordView);
       countCommitChunkDrawRunScan(scan);
       if (scan.replayAsRun()) {
+        hr = flushPendingDrawSubmissions();
+        if (failed(hr)) return commitChunkFail("indexed-draw-run-flush", recordIndex, header.type, hr);
+        hr = applyDrawPacketState(d, decoded.packet.state);
+        if (failed(hr)) return commitChunkFail("indexed-draw-run-state", recordIndex, header.type, hr);
+        if (decoded.packet.ibValid) {
+          auto* ib = wireHandlePtr<D9CBuffer>(decoded.packet.ibHandle);
+          hr = dxmt9c_device_set_indices(d, ib);
+          if (failed(hr)) return commitChunkFail("indexed-draw-run-ib", recordIndex, header.type, hr);
+        }
+        const auto baseBindings = effectiveBindingsFromState(d->dev().state());
+        auto effectiveBindings = baseBindings;
         std::vector<dxmt9::core::DrawParam> runParams;
         runParams.reserve(scan.recordCount);
-        runParams.push_back(makeRunParam(decoded.packet));
-        countCommitChunkDrawReplay(decoded.packet);
+        std::vector<dxmt9::core::DrawBindingOverride> bindingOverrides;
+        bindingOverrides.reserve(scan.recordCount);
+        std::vector<dxmt9::core::DrawParamPayloadView> runPayloads;
+        runPayloads.reserve(scan.recordCount);
+        const auto appendDirectRunParam = [&](const D9CDrawPrimitivePacket& packet) {
+          applyStreamBindingDeltas(effectiveBindings, packet);
+          auto param = makeRunParam(packet);
+          param.indexType = effectiveBindings.indexType;
+          dxmt9::core::DrawBindingOverride override{};
+          if (makeBindingOverride(baseBindings, effectiveBindings, override)) {
+            dxmt9::perf::countCommitChunkDrawRunBindingOverride(
+                override.streamMask != 0, override.indexBufferValid, sizeof(override));
+            bindingOverrides.push_back(override);
+            runPayloads.push_back(bindingOverridePayloadView(bindingOverrides.back()));
+          } else {
+            runPayloads.push_back({});
+          }
+          runParams.push_back(param);
+        };
+        const auto appendIndexedRunParam = [&](const D9CDrawIndexedPrimitivePacket& packet) {
+          applyStreamBindingDeltas(effectiveBindings, packet.state);
+          applyIndexBindingDelta(effectiveBindings, packet);
+          auto param = makeRunParam(packet);
+          param.indexType = effectiveBindings.indexType;
+          dxmt9::core::DrawBindingOverride override{};
+          if (makeBindingOverride(baseBindings, effectiveBindings, override)) {
+            dxmt9::perf::countCommitChunkDrawRunBindingOverride(
+                override.streamMask != 0, override.indexBufferValid, sizeof(override));
+            bindingOverrides.push_back(override);
+            runPayloads.push_back(bindingOverridePayloadView(bindingOverrides.back()));
+          } else {
+            runPayloads.push_back({});
+          }
+          runParams.push_back(param);
+        };
+        appendIndexedRunParam(decoded.packet);
+        countCommitChunkDrawReplay(d, decoded.packet);
 
         std::uint32_t runIndex = recordView->nextIndex();
         while (runIndex < scan.endIndex) {
@@ -1072,13 +1423,13 @@ extern "C" int32_t dxmt9c_device_commit_chunk(D9CDevice* d, const D9CCommandChun
           if (nextRecord->header.type == D9C_COMMAND_RECORD_DRAW_PRIMITIVE) {
             D9CCommandRecordDrawPrimitive nextDecoded{};
             std::memcpy(&nextDecoded, nextRecord->record, sizeof(nextDecoded));
-            runParams.push_back(makeRunParam(nextDecoded.packet));
-            countCommitChunkDrawReplay(nextDecoded.packet);
+            appendDirectRunParam(nextDecoded.packet);
+            countCommitChunkDrawReplay(d, nextDecoded.packet);
           } else if (nextRecord->header.type == D9C_COMMAND_RECORD_DRAW_INDEXED_PRIMITIVE) {
             D9CCommandRecordDrawIndexedPrimitive nextDecoded{};
             std::memcpy(&nextDecoded, nextRecord->record, sizeof(nextDecoded));
-            runParams.push_back(makeRunParam(nextDecoded.packet));
-            countCommitChunkDrawReplay(nextDecoded.packet);
+            appendIndexedRunParam(nextDecoded.packet);
+            countCommitChunkDrawReplay(d, nextDecoded.packet);
           } else {
             return commitChunkFail("indexed-draw-run-type", runIndex, nextRecord->header.type);
           }
@@ -1087,22 +1438,18 @@ extern "C" int32_t dxmt9c_device_commit_chunk(D9CDevice* d, const D9CCommandChun
         if (runParams.size() != scan.recordCount) {
           return commitChunkFail("indexed-draw-run-count", recordIndex, header.type);
         }
-
-        hr = flushPendingDrawSubmissions();
-        if (failed(hr)) return commitChunkFail("indexed-draw-run-flush", recordIndex, header.type, hr);
-        hr = applyDrawPacketState(d, decoded.packet.state);
-        if (failed(hr)) return commitChunkFail("indexed-draw-run-state", recordIndex, header.type, hr);
-        if (decoded.packet.ibValid) {
-          auto* ib = wireHandlePtr<D9CBuffer>(decoded.packet.ibHandle);
-          hr = dxmt9c_device_set_indices(d, ib);
-          if (failed(hr)) return commitChunkFail("indexed-draw-run-ib", recordIndex, header.type, hr);
+        if (runPayloads.size() != runParams.size()) {
+          return commitChunkFail("indexed-draw-run-payload-count", recordIndex, header.type);
         }
-        hr = d->dev().drawPrimitiveRun(runParams);
+
+        hr = d->dev().drawPrimitiveRun(runParams, runPayloads);
         if (failed(hr)) return commitChunkFail("indexed-draw-run", recordIndex, header.type, hr);
+        hr = applyFinalBindingState(d, baseBindings, effectiveBindings);
+        if (failed(hr)) return commitChunkFail("indexed-draw-run-final-bind", recordIndex, header.type, hr);
         recordIndex = scan.endIndex;
         continue;
       }
-      countCommitChunkDrawReplay(decoded.packet);
+      countCommitChunkDrawReplay(d, decoded.packet);
       if (canBatchDrawPacket(d, decoded.packet)) {
         hr = queueDrawIndexedPrimitiveSubmission(d, decoded.packet,
                                                  pendingDrawSubmissions);

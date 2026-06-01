@@ -247,9 +247,30 @@ void testClearBit() {
   check((s.mask & bitValue(DirtyBit::FfpVsTransforms)) != 0,
         "FfpVsTransforms still dirty after clearing VsF");
 
-  // Range counters are not zeroed by clearBit — they remain valid as
-  // upper bounds on slots that were ever written.
-  checkEq(s.maxChangedVsF, 4u, "clearBit does not reset range counter");
+  // Range counters describe pending dirty work. Once the matching bit is
+  // consumed, the high-water counter must reset so old high-register writes
+  // do not inflate later unrelated range uploads.
+  checkEq(s.maxChangedVsF, 0u, "clearBit resets consumed VS range counter");
+  checkEq(s.maxChangedPsF, 8u, "clearBit leaves unrelated PS range counter");
+}
+
+void testClearBitsResetsOnlyConsumedRanges() {
+  DirtyState s{};
+  dxmt9::uniform::applyConstantSetVsF(s, 2, 5);
+  dxmt9::uniform::applyConstantSetVsI(s, 1, 3);
+  dxmt9::uniform::applyConstantSetPsF(s, 4, 6);
+  dxmt9::uniform::applyConstantSetPsB(s, 3, 2);
+
+  dxmt9::uniform::clearBits(s, dxmt9::uniform::kVsAny);
+  checkEq(s.maxChangedVsF, 0u, "clearBits(kVsAny) resets VsF range");
+  checkEq(s.maxChangedVsI, 0u, "clearBits(kVsAny) resets VsI range");
+  checkEq(s.maxChangedVsB, 0u, "clearBits(kVsAny) keeps absent VsB at zero");
+  checkEq(s.maxChangedPsF, 10u, "clearBits(kVsAny) does not reset PsF range");
+  checkEq(s.maxChangedPsB, 5u, "clearBits(kVsAny) does not reset PsB range");
+
+  dxmt9::uniform::clearBits(s, dxmt9::uniform::kPsAny);
+  checkEq(s.maxChangedPsF, 0u, "clearBits(kPsAny) resets PsF range");
+  checkEq(s.maxChangedPsB, 0u, "clearBits(kPsAny) resets PsB range");
 }
 
 // R-BACK-12.12 — markAllDirty asserts every category bit at once. Used by
@@ -372,6 +393,7 @@ int main() {
   testApplyHelpersSetMatchingBit();
   testRangeCounters();
   testClearBit();
+  testClearBitsResetsOnlyConsumedRanges();
   testMarkAllDirty();
   testIsDirtyConsistency();
   testShaderUsageAwareUploadPlanIsConservative();

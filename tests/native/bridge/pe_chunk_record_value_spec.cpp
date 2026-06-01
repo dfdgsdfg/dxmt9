@@ -1,5 +1,6 @@
 #include "chunk_record_import_spec_fixtures.hpp"
 #include "d3d9_pe_draw_packet.hpp"
+#include "d3d9_pe_const_shadow.hpp"
 
 #include <array>
 #include <cstdint>
@@ -601,6 +602,33 @@ void testSetConstTailBytesRecordOrderAndWireHandleRange() {
         "wire range retains DS");
 }
 
+void testConstShadowTracksSparseDirtyElements() {
+  ConstShadow shadow;
+  const std::array<std::uint32_t, 4> first{10u, 20u, 30u, 40u};
+  touchConstShadow(shadow, 2u, 4u, first.data(), sizeof(std::uint32_t));
+  check(shadow.dirty(), "initial const write marks shadow dirty");
+  checkEq(shadow.dirtyStart, 2u, "initial dirty start");
+  checkEq(shadow.dirtyEnd, 6u, "initial dirty end");
+  for (std::uint32_t reg = 2u; reg < 6u; ++reg) {
+    check(shadow.dirtyElems[reg] != 0, "initial dirty element marked");
+  }
+
+  shadow.clear();
+  const std::array<std::uint32_t, 4> sparse{10u, 200u, 30u, 400u};
+  touchConstShadow(shadow, 2u, 4u, sparse.data(), sizeof(std::uint32_t));
+  check(shadow.dirty(), "sparse const write marks shadow dirty");
+  checkEq(shadow.dirtyStart, 3u, "sparse dirty start skips clean prefix");
+  checkEq(shadow.dirtyEnd, 6u, "sparse dirty end skips clean suffix");
+  check(shadow.dirtyElems[2u] == 0, "unchanged leading element stays clean");
+  check(shadow.dirtyElems[3u] != 0, "changed middle element marked");
+  check(shadow.dirtyElems[4u] == 0, "unchanged gap stays clean");
+  check(shadow.dirtyElems[5u] != 0, "changed trailing element marked");
+
+  shadow.clear();
+  touchConstShadow(shadow, 2u, 4u, sparse.data(), sizeof(std::uint32_t));
+  check(!shadow.dirty(), "identical const write stays clean");
+}
+
 }  // namespace
 
 int main() {
@@ -610,6 +638,7 @@ int main() {
     testRichDrawRecordPreservesPacketValuesAndHandles();
     testMaxTextureStageAndSamplerDeltaPacketBoundaries();
     testSetConstTailBytesRecordOrderAndWireHandleRange();
+    testConstShadowTracksSparseDirtyElements();
   } catch (const TestFailure& e) {
     std::cerr << "pe_chunk_record_value_spec failed: " << e.what() << '\n';
     return EXIT_FAILURE;

@@ -260,6 +260,56 @@ void testPointFfpVsAtSliceRecordsArgbufEntry() {
           "FfpVs repoint writes argbuf id 1");
 }
 
+void testConstantBufferBindingsRequireAllEntries() {
+  dxmt9::argbuf_hybrid::ConstantBufferBindings bindings{};
+  check(!bindings.complete(), "empty cbuf binding cache is incomplete");
+
+  for (std::size_t i = 0; i < bindings.entries.size(); ++i) {
+    WMT::Buffer buffer{};
+    buffer.handle = static_cast<obj_handle_t>(0x7000000000000000ull + i);
+    bindings.entries[i] = dxmt9::argbuf_hybrid::ConstantBufferBinding{
+        .buffer = buffer,
+        .offset = static_cast<std::uint64_t>(64u * i),
+        .bytes = 16u,
+    };
+  }
+
+  check(bindings.complete(),
+        "cbuf binding cache is complete only after all argbuf entries exist");
+}
+
+void testPointConstantBufferBindingRecordsArbitraryEntry() {
+  constexpr obj_handle_t kBuffer = 0x6000000000000040ull;
+  constexpr std::uint64_t kOffset = 384u;
+
+  dxmt9::argbuf_hybrid::ArgbufEncoderResource encoderResource;
+  encoderResource.initForTest(/*encodedLength=*/512u, /*alignment=*/16u);
+  Capture capture;
+  auto recorder = makeRecorder(capture);
+
+  WMT::Buffer buffer{};
+  buffer.handle = kBuffer;
+  dxmt9::argbuf_hybrid::pointConstantBufferBinding(
+      encoderResource,
+      dxmt9::argbuf_hybrid::kConstantBufferPsIndex,
+      dxmt9::argbuf_hybrid::ConstantBufferBinding{
+          .buffer = buffer,
+          .offset = kOffset,
+          .bytes = 64u,
+      },
+      &recorder);
+
+  checkEq(capture.commands.size(), std::size_t{1},
+          "constant-buffer repoint records one argbuf write");
+  const auto& command = commandAt(capture, 0, "missing cbuf setBuffer write");
+  checkEq(command.handle, kBuffer,
+          "constant-buffer repoint uses cached slice buffer");
+  checkEq(command.offset, kOffset,
+          "constant-buffer repoint uses cached slice offset");
+  checkEq(command.index, dxmt9::argbuf_hybrid::kConstantBufferPsIndex,
+          "constant-buffer repoint writes requested argbuf id");
+}
+
 }  // namespace
 
 int main() {
@@ -277,6 +327,8 @@ int main() {
     testDirtyBytesEstimateAdditive();
     testPopulatedArgbufDefaultIsEmpty();
     testPointFfpVsAtSliceRecordsArgbufEntry();
+    testConstantBufferBindingsRequireAllEntries();
+    testPointConstantBufferBindingRecordsArbitraryEntry();
   } catch (const TestFailure& failure) {
     std::cerr << "argbuf_populator_spec failed: " << failure.what() << '\n';
     return 1;

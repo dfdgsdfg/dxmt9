@@ -46,8 +46,23 @@ using ::dxmt9::shaders::kArgbufResourceArrayStageCount;
 
 namespace {
 
+bool trimVertexTempsEnabled() {
+  const char* env = std::getenv("DXMT9_TRIM_VERTEX_TEMPS");
+  return env && env[0] != '\0' && env[0] != '0';
+}
+
+bool trimVertexOutputScratchEnabled() {
+  const char* env = std::getenv("DXMT9_TRIM_VS_OUTPUT_SCRATCH");
+  return env && env[0] != '\0' && env[0] != '0';
+}
+
 std::string pixelPositionExpression(const std::string& pixelInputs) {
   return pixelInputs + ".position";
+}
+
+std::string texcoordInputExpression(const std::string& pixelInputs, u32 index) {
+  return pixelInputs + ".texcoord" +
+         std::to_string(std::min<u32>(index, kMaxTextureStages - 1u));
 }
 
 std::string formatFloatLiteral(f32 value) {
@@ -332,12 +347,13 @@ std::string readVertexOutputMapping(const VertexOutputMapping& mapping,
                                     const std::string& outSecondaryColor,
                                     const std::string& outTexcoord,
                                     const std::string& outFogFactor,
-                                    const std::string& outPointSize) {
+                                    const std::string& outPointSize,
+                                    u32 maxTexcoordIndex = kMaxTextureStages - 1u) {
   switch (mapping.target) {
     case VertexOutputMapping::Target::Position:
       return outPosition;
     case VertexOutputMapping::Target::Texcoord:
-      return outTexcoord + "[" + std::to_string(std::min<u32>(mapping.index, kMaxTextureStages - 1u)) + "]";
+      return outTexcoord + "[" + std::to_string(std::min<u32>(mapping.index, maxTexcoordIndex)) + "]";
     case VertexOutputMapping::Target::Color:
       return outColor;
     case VertexOutputMapping::Target::SecondaryColor:
@@ -413,12 +429,12 @@ std::string tempDestinationTarget(const D3DRegisterRef& dst, u32 maxIndex) {
          ", 0, " + std::to_string(maxIndex) + ")]";
 }
 
-std::string texcoordDestinationTarget(const D3DRegisterRef& dst) {
+std::string texcoordDestinationTarget(const D3DRegisterRef& dst, u32 maxIndex = kMaxTextureStages - 1u) {
   if (dst.relAddrToken == 0u) {
-    return "outTexcoord[" + std::to_string(std::min<u32>(dst.index, kMaxTextureStages - 1u)) + "]";
+    return "outTexcoord[" + std::to_string(std::min<u32>(dst.index, maxIndex)) + "]";
   }
   return "outTexcoord[clamp(" + relAddrExpression(dst.relAddrToken) + " + " +
-         std::to_string(dst.index) + ", 0, " + std::to_string(kMaxTextureStages - 1u) + ")]";
+         std::to_string(dst.index) + ", 0, " + std::to_string(maxIndex) + ")]";
 }
 
 void promoteIndexedConstantDestinations(ConstantUsage& usage, const SpirvModule& module, bool vertexStage) {
@@ -473,6 +489,71 @@ struct VertexInputReadUsage {
   bool indexedRead = false;
 };
 
+struct VertexOutputScratchUsage {
+  u32 maxTexcoordIndex = 0;
+  bool indexedTexcoordAccess = false;
+};
+
+void markVertexOutputTexcoordScratch(VertexOutputScratchUsage& usage, u32 index) {
+  usage.maxTexcoordIndex = std::max(usage.maxTexcoordIndex,
+                                    std::min<u32>(index, kMaxTextureStages - 1u));
+}
+
+void markVertexOutputScratchMapping(VertexOutputScratchUsage& usage,
+                                    const VertexOutputMapping& mapping) {
+  if (mapping.target == VertexOutputMapping::Target::Texcoord) {
+    markVertexOutputTexcoordScratch(usage, mapping.index);
+  }
+}
+
+VertexOutputScratchUsage collectVertexOutputScratchUsage(
+    const SpirvModule& module,
+    const VertexOutputSemantics& outputSemantics,
+    const shaders::VSOutLayout& layout) {
+  VertexOutputScratchUsage usage{};
+  for (u32 index = 0; index < kMaxTextureStages; ++index) {
+    if (shaders::vsoutEmitTexcoord(layout, index)) {
+      markVertexOutputTexcoordScratch(usage, index);
+    }
+  }
+  for (u32 output = 0; output < outputSemantics.size(); ++output) {
+    D3DRegisterRef reg{};
+    reg.kind = D3DRegisterKind::TexCoordOut;
+    reg.index = output;
+    if (auto mapped = vertexOutputMapping(reg, &outputSemantics)) {
+      markVertexOutputScratchMapping(usage, *mapped);
+    }
+  }
+
+  if (module.stage != D3DShaderStage::Vertex) {
+    return usage;
+  }
+  for (const auto& instruction : module.instructions) {
+    if (instruction.opcode == kD3DSIO_DCL || instruction.opcode == kD3DSIO_DEF ||
+        instruction.opcode == kD3DSIO_DEFI || instruction.opcode == kD3DSIO_DEFB ||
+        instruction.opcode == kD3DSIO_COMMENT || instruction.opcode == kD3DSIO_PHASE) {
+      continue;
+    }
+    for (size_t i = 0; i < instruction.operands.size(); ++i) {
+      const auto reg = decodeOperandRegister(instruction, i, module.stage);
+      if (reg.kind != D3DRegisterKind::TexCoordOut) {
+        continue;
+      }
+      if (reg.relAddrToken != 0u) {
+        usage.indexedTexcoordAccess = true;
+        usage.maxTexcoordIndex = kMaxTextureStages - 1u;
+        continue;
+      }
+      if (auto mapped = vertexOutputMapping(reg, &outputSemantics)) {
+        markVertexOutputScratchMapping(usage, *mapped);
+      } else {
+        markVertexOutputTexcoordScratch(usage, reg.index);
+      }
+    }
+  }
+  return usage;
+}
+
 VertexInputReadUsage collectVertexInputReadUsage(const SpirvModule& module) {
   VertexInputReadUsage usage{};
   if (module.stage != D3DShaderStage::Vertex) {
@@ -520,7 +601,8 @@ std::string readOperandExpression(const D3DDecodedInstruction& instruction, cons
                                   const std::string& intPrefix, const std::string& boolPrefix,
                                   const std::string& predicatePrefix,
                                   const VertexOutputSemantics* vertexOutputSemantics = nullptr,
-                                  u32 maxTempIndex = 31u) {
+                                  u32 maxTempIndex = 31u,
+                                  u32 maxTexcoordIndex = kMaxTextureStages - 1u) {
   (void)instruction;
   switch (reg.kind) {
     case D3DRegisterKind::Temp:
@@ -598,10 +680,11 @@ std::string readOperandExpression(const D3DDecodedInstruction& instruction, cons
       if (vertexStage) {
         if (auto mapped = vertexOutputMapping(reg, vertexOutputSemantics)) {
           return readVertexOutputMapping(*mapped, outPosition, outColor, outSecondaryColor,
-                                         outTexcoord, outFogFactor, outPointSize);
+                                         outTexcoord, outFogFactor, outPointSize,
+                                         maxTexcoordIndex);
         }
       }
-      return outTexcoord + "[" + std::to_string(std::min<u32>(reg.index, kMaxTextureStages - 1u)) + "]";
+      return outTexcoord + "[" + std::to_string(std::min<u32>(reg.index, maxTexcoordIndex)) + "]";
     case D3DRegisterKind::ColorOut:
       if (!vertexStage) {
         return outColor + "[" + std::to_string(std::min<u32>(reg.index, kMaxRenderTargets - 1u)) + "]";
@@ -703,7 +786,7 @@ std::string readPixelInputSemanticExpression(const PixelInputSemantic& semantic,
     case kD3DDeclUsagePSize:
       return "float4(" + pixelInputs + ".pointSize)";
     case kD3DDeclUsageTexcoord:
-      return "dxmt9_select_texcoord(" + pixelInputs + ", " + std::to_string(semantic.usageIndex) + "u)";
+      return texcoordInputExpression(pixelInputs, semantic.usageIndex);
     case kD3DDeclUsageColor:
       if (semantic.usageIndex == 0) {
         return "float4(" + pixelInputs + ".color)";
@@ -717,8 +800,7 @@ std::string readPixelInputSemanticExpression(const PixelInputSemantic& semantic,
     default:
       break;
   }
-  return "dxmt9_select_texcoord(" + pixelInputs + ", " +
-         std::to_string(std::min<u32>(fallbackTexcoordIndex, kMaxTextureStages - 1u)) + "u)";
+  return texcoordInputExpression(pixelInputs, fallbackTexcoordIndex);
 }
 
 std::string readPixelInputFallbackExpression(u32 index, const std::string& pixelInputs) {
@@ -946,7 +1028,7 @@ std::string readPixelInputExpression(u32 token,
       }
       break;
     case kD3DSPR_ADDR:
-      return "dxmt9_select_texcoord(" + pixelInputs + ", " + std::to_string(index) + "u)";
+      return texcoordInputExpression(pixelInputs, index);
     case kD3DSPR_RASTOUT:
       if (index == 0) {
         return pixelPositionExpression(pixelInputs);
@@ -1167,6 +1249,12 @@ std::string translateSpirvToMsl(const SpirvModule& module,
   if (vertex) {
     const auto inputLayout = decodeVertexShaderInputLayout(module, context);
     const auto outputSemantics = collectVertexOutputSemantics(module);
+    const auto outputScratchUsage =
+        collectVertexOutputScratchUsage(module, outputSemantics, context.vsOutLayout);
+    const u32 texcoordScratchCount = trimVertexOutputScratchEnabled()
+        ? std::max<u32>(1u, outputScratchUsage.maxTexcoordIndex + 1u)
+        : kMaxTextureStages;
+    const u32 texcoordScratchMaxIndex = texcoordScratchCount - 1u;
     const auto vertexSamplerUsage = collectVertexSamplerUsage(module);
     const bool traceShaderInputs = [] {
       const char* env = std::getenv("DXMT_TRACE_SHADER_INPUTS");
@@ -1244,8 +1332,8 @@ std::string translateSpirvToMsl(const SpirvModule& module,
     out << "  float4 outPosition = float4(dxmt9_positions[vid % 3], 0.0, 1.0);\n";
     out << "  float4 outColor = float4(1.0f);\n";
     out << "  float4 outSecondaryColor = float4(0.0f);\n";
-    out << "  float4 outTexcoord[" << kMaxTextureStages << "];\n";
-    out << "  for (uint i = 0; i < " << kMaxTextureStages
+    out << "  float4 outTexcoord[" << texcoordScratchCount << "];\n";
+    out << "  for (uint i = 0; i < " << texcoordScratchCount
         << "u; ++i) { outTexcoord[i] = float4(0.0f, 0.0f, 0.0f, 1.0f); }\n";
     out << "  float4 ignoredTexcoord = float4(0.0f);\n";
     out << "  float outFogFactor = 1.0f;\n";
@@ -1402,20 +1490,22 @@ std::string translateSpirvToMsl(const SpirvModule& module,
     }
 	    out << "  int4 a0 = int4(0);\n";
 	    out << "  int aL = 0;\n";
-	    // R-SHADER-AIR-SIZE: VS path keeps the full 32-temp array. FS
-	    // sizing alone gives us the bulk of the GPU-register-pressure
-	    // win (per-fragment thread runs in parallel × hundreds of
-	    // thousands of pixels — each saved alloca matters), while VS
-	    // is one thread per vertex and the analysis miss surface
-	    // (subroutine bodies, indexed reads in CALL targets, control-
-	    // flow joins) is wider. Visual regressions on SFIV stage-
-	    // transition overlays (pink gradient on the loading screen)
-	    // when both VS and FS were sized suggest the VS scan misses
-	    // a corner case; keep VS conservative until that's audited.
-	    out << "  float4 r[32];\n";
-	    out << "  for (uint i = 0; i < 32u; ++i) { r[i] = float4(0.0f); }\n";
       auto constantUsage = collectConstantUsage(module);
       promoteIndexedConstantDestinations(constantUsage, module, true);
+      // R-SHADER-AIR-SIZE: VS path keeps the full 32-temp array by
+      // default. FS sizing is already always-on, but a prior shared VS+FS
+      // trim produced a visual regression in SFIV stage-transition overlays.
+      // 3DMark05 GT1 frame60 now shows top VS shaders paying the full
+      // r[32] zero-init despite little or no actual temp use, so expose the
+      // VS version as an opt-in perf experiment until it has broader corpus
+      // coverage.
+      const u32 tempCount = trimVertexTempsEnabled()
+                                ? static_cast<u32>(std::max<std::int32_t>(
+                                      1, constantUsage.maxTempIndex + 1))
+                                : 32u;
+	    out << "  float4 r[" << tempCount << "];\n";
+	    out << "  for (uint i = 0; i < " << tempCount
+	        << "u; ++i) { r[i] = float4(0.0f); }\n";
 	    emitConstantBindings(out, true, constantUsage);
     emitPredicateBindings(out, shaderUsesPredicateRegisters(module));
     std::vector<FlowBlock> controlStack;
@@ -1460,7 +1550,8 @@ std::string translateSpirvToMsl(const SpirvModule& module,
                                                  useVertexInputArray,
                                                  "outPosition", "outColor", "outSecondaryColor", "outTexcoord",
                                                  "outFogFactor", "outPointSize", "r", "cFloat", "cInt", "cBool",
-                                                 "p", &outputSemantics);
+                                                 "p", &outputSemantics, tempCount - 1u,
+                                                 texcoordScratchMaxIndex);
         expr = applySwizzle(expr, decodeSwizzle(token));
         expr = applySourceModifier(std::move(expr), decodeSourceModifier(token));
         return expr;
@@ -1485,8 +1576,8 @@ std::string translateSpirvToMsl(const SpirvModule& module,
 	      }
 	      return std::string("outColor[") + std::to_string(index) + "]";
 	    };
-	    auto texcoordTarget = [](u32 index) {
-	      if (index >= kMaxTextureStages) {
+	    auto texcoordTarget = [&](u32 index) {
+	      if (index >= texcoordScratchCount) {
 	        return std::string("ignoredTexcoord");
 	      }
 	      return std::string("outTexcoord[") + std::to_string(index) + "]";
@@ -1503,8 +1594,8 @@ std::string translateSpirvToMsl(const SpirvModule& module,
           case VertexOutputMapping::Target::Position:
             emitMaskedAssign("outPosition", value, mask);
             break;
-          case VertexOutputMapping::Target::Texcoord:
-            emitMaskedAssign(texcoordTarget(mapped->index), value, mask);
+            case VertexOutputMapping::Target::Texcoord:
+              emitMaskedAssign(texcoordTarget(mapped->index), value, mask);
             break;
           case VertexOutputMapping::Target::Color:
             emitMaskedAssign("outColor", value, mask);
@@ -1746,7 +1837,7 @@ std::string translateSpirvToMsl(const SpirvModule& module,
           const auto value = readSrc(1);
           switch (dst.kind) {
             case D3DRegisterKind::Temp:
-              emitMaskedAssign(tempDestinationTarget(dst, 31u), value, dstMask);
+              emitMaskedAssign(tempDestinationTarget(dst, tempCount - 1u), value, dstMask);
               break;
             case D3DRegisterKind::RastOut:
               if (dst.index == 0) {
@@ -1770,9 +1861,9 @@ std::string translateSpirvToMsl(const SpirvModule& module,
               break;
             case D3DRegisterKind::TexCoordOut:
               if (dst.relAddrToken != 0u) {
-                emitMaskedAssign(texcoordDestinationTarget(dst), value, dstMask);
+                emitMaskedAssign(texcoordDestinationTarget(dst, texcoordScratchMaxIndex), value, dstMask);
               } else if (!emitVertexOutputAssign(dst, value, dstMask)) {
-                emitMaskedAssign(texcoordDestinationTarget(dst), value, dstMask);
+                emitMaskedAssign(texcoordDestinationTarget(dst, texcoordScratchMaxIndex), value, dstMask);
               }
               break;
             case D3DRegisterKind::ColorOut:
@@ -2071,7 +2162,7 @@ std::string translateSpirvToMsl(const SpirvModule& module,
           }
           switch (dst.kind) {
             case D3DRegisterKind::Temp:
-              emitMaskedAssign(tempDestinationTarget(dst, 31u), value, dstMask);
+              emitMaskedAssign(tempDestinationTarget(dst, tempCount - 1u), value, dstMask);
               break;
             case D3DRegisterKind::RastOut:
               if (dst.index == 0) {
@@ -2095,9 +2186,9 @@ std::string translateSpirvToMsl(const SpirvModule& module,
               break;
             case D3DRegisterKind::TexCoordOut:
               if (dst.relAddrToken != 0u) {
-                emitMaskedAssign(texcoordDestinationTarget(dst), value, dstMask);
+                emitMaskedAssign(texcoordDestinationTarget(dst, texcoordScratchMaxIndex), value, dstMask);
               } else if (!emitVertexOutputAssign(dst, value, dstMask)) {
-                emitMaskedAssign(texcoordDestinationTarget(dst), value, dstMask);
+                emitMaskedAssign(texcoordDestinationTarget(dst, texcoordScratchMaxIndex), value, dstMask);
               }
               break;
             case D3DRegisterKind::ColorOut:
@@ -2401,17 +2492,17 @@ std::string translateSpirvToMsl(const SpirvModule& module,
   }
   if (const char* mode = std::getenv("DXMT_DEBUG_FRAGMENT_MODE"); mode && mode[0] != '\0') {
     if (std::strcmp(mode, "uv") == 0) {
-      emitFragmentDebugReturn("float4(fract(dxmt9_select_texcoord(in, 0u).xy), 0.0f, 1.0f)");
+      emitFragmentDebugReturn("float4(fract(in.texcoord0.xy), 0.0f, 1.0f)");
     } else if (std::strcmp(mode, "uv_saturate") == 0) {
-      emitFragmentDebugReturn("float4(saturate(dxmt9_select_texcoord(in, 0u).xy), 0.0f, 1.0f)");
+      emitFragmentDebugReturn("float4(saturate(in.texcoord0.xy), 0.0f, 1.0f)");
     } else if (textured && std::strcmp(mode, "tex0_center") == 0) {
       emitFragmentDebugReturn("tex0.sample(samp0, float2(0.5f, 0.5f))");
     } else if (textured && std::strcmp(mode, "tex0_uv") == 0) {
-      emitFragmentDebugReturn("tex0.sample(samp0, dxmt9_select_texcoord(in, 0u).xy)");
+      emitFragmentDebugReturn("tex0.sample(samp0, in.texcoord0.xy)");
     } else if (textured && std::strcmp(mode, "tex0_uv_clamp") == 0) {
-      emitFragmentDebugReturn("tex0.sample(samp0, clamp(dxmt9_select_texcoord(in, 0u).xy, float2(0.0f), float2(1.0f)))");
+      emitFragmentDebugReturn("tex0.sample(samp0, clamp(in.texcoord0.xy, float2(0.0f), float2(1.0f)))");
     } else if (textured && std::strcmp(mode, "tex0_uv_flip") == 0) {
-      emitFragmentDebugReturn("tex0.sample(samp0, float2(dxmt9_select_texcoord(in, 0u).x, 1.0f - dxmt9_select_texcoord(in, 0u).y))");
+      emitFragmentDebugReturn("tex0.sample(samp0, float2(in.texcoord0.x, 1.0f - in.texcoord0.y))");
     } else {
       emitFragmentDebugReturn("float4(0.0f, 1.0f, 0.0f, 1.0f)");
     }
@@ -2597,7 +2688,7 @@ std::string translateSpirvToMsl(const SpirvModule& module,
       return std::min<u32>(decodeRegisterIndex(instruction.operands[0]), kMaxTextureStages - 1u);
     };
     auto legacyTexcoordInput = [](u32 stage) {
-      return "dxmt9_select_texcoord(in, " + std::to_string(stage) + "u)";
+      return texcoordInputExpression("in", stage);
     };
     auto legacySample = [&](u32 stage, const std::string& coord) {
       return sampleTexture(stage, coord);

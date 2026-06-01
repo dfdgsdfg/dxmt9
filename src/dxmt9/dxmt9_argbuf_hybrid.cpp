@@ -249,7 +249,9 @@ u64 uploadAndPointEntry(CommandQueue& queue,
                          u32 argbufIdx,
                          u64 seqId,
                          const ArgbufRecorder* recorder,
-                         WMT::RenderCommandEncoder residencyEncoder) {
+                         WMT::RenderCommandEncoder residencyEncoder,
+                         ConstantBufferBindings* writtenBindings = nullptr,
+                         const ConstantBufferUploadObserver* uploadObserver = nullptr) {
   if (byteCount == 0) return 0;
   auto slice = queue.uploadTransientBuffer(
       std::span<const std::byte>(
@@ -258,6 +260,19 @@ u64 uploadAndPointEntry(CommandQueue& queue,
   if (!slice) return 0;
   recordedSetBuffer(encoderResource, slice.buffer, slice.offset, argbufIdx,
                     recorder, residencyEncoder);
+  if (writtenBindings &&
+      argbufIdx < writtenBindings->entries.size()) {
+    writtenBindings->entries[argbufIdx] = ConstantBufferBinding{
+        .buffer = slice.buffer,
+        .offset = slice.offset,
+        .bytes = static_cast<u64>(byteCount),
+    };
+  }
+  if (uploadObserver && uploadObserver->upload) {
+    uploadObserver->upload(
+        uploadObserver->userdata, argbufIdx, &host,
+        static_cast<u64>(byteCount), sizeof(HostStruct));
+  }
   return byteCount;
 }
 
@@ -268,10 +283,12 @@ u64 uploadAndPointEntry(CommandQueue& queue,
                          u32 argbufIdx,
                          u64 seqId,
                          const ArgbufRecorder* recorder,
-                         WMT::RenderCommandEncoder residencyEncoder) {
+                         WMT::RenderCommandEncoder residencyEncoder,
+                         ConstantBufferBindings* writtenBindings = nullptr,
+                         const ConstantBufferUploadObserver* uploadObserver = nullptr) {
   return uploadAndPointEntry(
       queue, encoderResource, host, sizeof(HostStruct), argbufIdx, seqId,
-      recorder, residencyEncoder);
+      recorder, residencyEncoder, writtenBindings, uploadObserver);
 }
 
 }  // namespace
@@ -281,7 +298,9 @@ u64 populateConstantBuffers(CommandQueue& queue,
                              core::FlatDrawStateView state,
                              std::uint64_t seqId,
                              const ArgbufRecorder* recorder,
-                             WMT::RenderCommandEncoder residencyEncoder) {
+                             WMT::RenderCommandEncoder residencyEncoder,
+                             ConstantBufferBindings* writtenBindings,
+                             const ConstantBufferUploadObserver* uploadObserver) {
   if (!encoderResource.initialized()) return 0;
   u64 bytes = 0;
   // VsConsts / FfpVsConsts / PsConsts / FfpPsConsts mirror the Stage 1
@@ -290,16 +309,20 @@ u64 populateConstantBuffers(CommandQueue& queue,
   // of the slot 0 / 3 vert/frag slots.
   const auto vs = state::buildVsConsts(state);
   bytes += uploadAndPointEntry(queue, encoderResource, vs,
-                                kVsConstsArgbufIdx, seqId, recorder, residencyEncoder);
+                                kVsConstsArgbufIdx, seqId, recorder, residencyEncoder,
+                                writtenBindings, uploadObserver);
   const auto ffpVs = state::buildFfpVsConsts(state);
   bytes += uploadAndPointEntry(queue, encoderResource, ffpVs,
-                                kFfpVsArgbufIdx, seqId, recorder, residencyEncoder);
+                                kFfpVsArgbufIdx, seqId, recorder, residencyEncoder,
+                                writtenBindings, uploadObserver);
   const auto ps = state::buildPsConsts(state);
   bytes += uploadAndPointEntry(queue, encoderResource, ps,
-                                kPsConstsArgbufIdx, seqId, recorder, residencyEncoder);
+                                kPsConstsArgbufIdx, seqId, recorder, residencyEncoder,
+                                writtenBindings, uploadObserver);
   const auto ffpPs = state::buildFfpPsConsts(state);
   bytes += uploadAndPointEntry(queue, encoderResource, ffpPs,
-                                kFfpPsArgbufIdx, seqId, recorder, residencyEncoder);
+                                kFfpPsArgbufIdx, seqId, recorder, residencyEncoder,
+                                writtenBindings, uploadObserver);
   return bytes;
 }
 
@@ -309,11 +332,13 @@ u64 updateDirtyArgbufRegions(CommandQueue& queue,
                               const uniform::DirtyState& dirty,
                               std::uint64_t seqId,
                               const ArgbufRecorder* recorder,
-                              WMT::RenderCommandEncoder residencyEncoder) {
+                              WMT::RenderCommandEncoder residencyEncoder,
+                              ConstantBufferBindings* writtenBindings,
+                              const ConstantBufferUploadObserver* uploadObserver) {
   uniform::ShaderConstantUsageBounds unknown{};
   return updateDirtyArgbufRegions(
       queue, encoderResource, state, dirty, unknown, unknown, seqId,
-      recorder, residencyEncoder);
+      recorder, residencyEncoder, writtenBindings, uploadObserver);
 }
 
 u64 updateDirtyArgbufRegions(CommandQueue& queue,
@@ -324,7 +349,9 @@ u64 updateDirtyArgbufRegions(CommandQueue& queue,
                               uniform::ShaderConstantUsageBounds psUsage,
                               std::uint64_t seqId,
                               const ArgbufRecorder* recorder,
-                              WMT::RenderCommandEncoder residencyEncoder) {
+                              WMT::RenderCommandEncoder residencyEncoder,
+                              ConstantBufferBindings* writtenBindings,
+                              const ConstantBufferUploadObserver* uploadObserver) {
   if (!encoderResource.initialized()) return 0;
   u64 bytes = 0;
   if (uniform::anyDirty(dirty, uniform::kVsAny)) {
@@ -333,12 +360,14 @@ u64 updateDirtyArgbufRegions(CommandQueue& queue,
     bytes += uploadAndPointEntry(queue, encoderResource, vs,
                                   static_cast<std::size_t>(
                                       uniform::vsConstantUploadBytes(plan)),
-                                  kVsConstsArgbufIdx, seqId, recorder, residencyEncoder);
+                                  kVsConstsArgbufIdx, seqId, recorder, residencyEncoder,
+                                  writtenBindings, uploadObserver);
   }
   if (uniform::anyDirty(dirty, uniform::kFfpVsAny)) {
     const auto ffpVs = state::buildFfpVsConsts(state);
     bytes += uploadAndPointEntry(queue, encoderResource, ffpVs,
-                                  kFfpVsArgbufIdx, seqId, recorder, residencyEncoder);
+                                  kFfpVsArgbufIdx, seqId, recorder, residencyEncoder,
+                                  writtenBindings, uploadObserver);
   }
   if (uniform::anyDirty(dirty, uniform::kPsAny)) {
     const auto ps = state::buildPsConsts(state);
@@ -346,12 +375,14 @@ u64 updateDirtyArgbufRegions(CommandQueue& queue,
     bytes += uploadAndPointEntry(queue, encoderResource, ps,
                                   static_cast<std::size_t>(
                                       uniform::psConstantUploadBytes(plan)),
-                                  kPsConstsArgbufIdx, seqId, recorder, residencyEncoder);
+                                  kPsConstsArgbufIdx, seqId, recorder, residencyEncoder,
+                                  writtenBindings, uploadObserver);
   }
   if (uniform::anyDirty(dirty, uniform::kFfpPsAny)) {
     const auto ffpPs = state::buildFfpPsConsts(state);
     bytes += uploadAndPointEntry(queue, encoderResource, ffpPs,
-                                  kFfpPsArgbufIdx, seqId, recorder, residencyEncoder);
+                                  kFfpPsArgbufIdx, seqId, recorder, residencyEncoder,
+                                  writtenBindings, uploadObserver);
   }
   return bytes;
 }
@@ -424,6 +455,19 @@ void pointFfpVsAtSlice(ArgbufEncoderResource& encoderResource,
                        WMT::RenderCommandEncoder residencyEncoder) {
   if (!encoderResource.initialized() || !buffer) return;
   recordedSetBuffer(encoderResource, buffer, offset, kFfpVsArgbufIdx,
+                    recorder, residencyEncoder);
+}
+
+void pointConstantBufferBinding(ArgbufEncoderResource& encoderResource,
+                                u32 argbufIndex,
+                                ConstantBufferBinding binding,
+                                const ArgbufRecorder* recorder,
+                                WMT::RenderCommandEncoder residencyEncoder) {
+  if (!encoderResource.initialized() || !binding ||
+      argbufIndex >= shaders::kArgbufHybridConstantBufferCount) {
+    return;
+  }
+  recordedSetBuffer(encoderResource, binding.buffer, binding.offset, argbufIndex,
                     recorder, residencyEncoder);
 }
 

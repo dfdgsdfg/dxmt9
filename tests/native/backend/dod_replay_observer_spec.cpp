@@ -591,6 +591,59 @@ void testChunkSlotDrawRunSoAReuseKeepsReservedCapacitiesStable() {
           "clearCommands preserves SoA capacities for queue-local reuse");
 }
 
+void testChunkSlotDrawRunBatchKeepsPerDrawUniformPayloads() {
+  DrawDesc desc{};
+  desc.primitiveCount = 1u;
+  desc.rts.color[0] = RenderTargetAttachment{.handle = Handle{0x3000u}};
+
+  DrawDesc firstDesc = desc;
+  DrawDesc secondDesc = desc;
+  firstDesc.vsConst.float4[0][0] = 11.0f;
+  secondDesc.vsConst.float4[0][0] = 22.0f;
+
+  std::array<DrawRunSubmission, 2> submissions{
+      DrawRunSubmission{
+          .state = makeCanonicalDrawStateForTest(desc),
+          .uniforms = makeDrawUniformPayload(firstDesc),
+          .draw = makeDrawParam(1u, 0u),
+      },
+      DrawRunSubmission{
+          .state = makeCanonicalDrawStateForTest(desc),
+          .uniforms = makeDrawUniformPayload(secondDesc),
+          .draw = makeDrawParam(1u, 3u),
+      },
+  };
+
+  ChunkSlot slot{};
+  slot.appendDrawRunBatch(
+      std::span<DrawRunSubmission>(submissions.data(), submissions.size()));
+
+  checkEq(slot.commandCount(), std::size_t{1},
+          "uniform-varying batch appends one backend draw-run command");
+  checkEq(slot.drawRunRecords.size(), std::size_t{1},
+          "uniform-varying batch stores one draw-run record");
+  checkEq(slot.drawParams.size(), std::size_t{2},
+          "uniform-varying batch stores both draw params in the run");
+  checkEq(slot.drawUniformPayloads.size(), std::size_t{2},
+          "uniform-varying batch interns both uniform snapshots");
+
+  const auto command = slot.drawRunCommandAt(0u);
+  checkEq(drawRunDrawCount(command), std::size_t{2},
+          "command view exposes both batched draws");
+  const auto* firstUniform =
+      drawRunUniformPayloadForParam(command, command.drawParams[0]);
+  const auto* secondUniform =
+      drawRunUniformPayloadForParam(command, command.drawParams[1]);
+  check(firstUniform && secondUniform,
+        "per-draw uniform lookup returns payloads for both draws");
+  check(firstUniform != secondUniform,
+        "per-draw uniform lookup can select distinct snapshots");
+  check(firstUniform->vsConst.float4[0][0] == 11.0f,
+        "first draw sees pre-update uniform payload");
+  check(secondUniform->vsConst.float4[0][0] == 22.0f,
+        "second draw sees post-update uniform payload");
+}
+
 } // namespace
 
 int main() {
@@ -598,6 +651,7 @@ int main() {
     testImportedReplayObserverRetainsHandlesAndBoundariesInOrder();
     testChunkSlotReplayObserverAndQueueSummarySeeSameCategories();
     testChunkSlotDrawRunSoAReuseKeepsReservedCapacitiesStable();
+    testChunkSlotDrawRunBatchKeepsPerDrawUniformPayloads();
   } catch (const TestFailure &e) {
     std::cerr << "dod_replay_observer_spec failed: " << e.what() << '\n';
     return EXIT_FAILURE;

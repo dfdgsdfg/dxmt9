@@ -142,6 +142,10 @@ extern "C" obj_handle_t MTLCaptureManager_sharedCaptureManager() {
 
 extern "C" bool MTLCaptureManager_startCapture(obj_handle_t mgr, struct WMTCaptureInfo *info) {
   if (!mgr || !info) {
+    std::fprintf(stderr,
+                 "[dxmt9-capture] startCapture invalid mgr=0x%llx info=0x%llx\n",
+                 static_cast<unsigned long long>(mgr),
+                 static_cast<unsigned long long>(reinterpret_cast<uintptr_t>(info)));
     return false;
   }
   @autoreleasepool {
@@ -159,6 +163,30 @@ extern "C" bool MTLCaptureManager_startCapture(obj_handle_t mgr, struct WMTCaptu
 
     NSError *error = nil;
     const bool started = [(MTLCaptureManager *)mgr startCaptureWithDescriptor:desc error:&error];
+    if (!started) {
+      NSString *domain = error ? [error domain] : nil;
+      NSString *message = error ? [error localizedDescription] : nil;
+      NSString *reason = error ? [error localizedFailureReason] : nil;
+      const bool canCheckDestination =
+          [(MTLCaptureManager *)mgr respondsToSelector:@selector(supportsDestination:)];
+      const bool destinationSupported =
+          canCheckDestination
+              ? [(MTLCaptureManager *)mgr supportsDestination:desc.destination]
+              : false;
+      std::fprintf(
+          stderr,
+          "[dxmt9-capture] startCapture failed destination=%ld "
+          "destination_supported=%d capture_object=0x%llx path=%s "
+          "error_domain=%s error_code=%ld error=%s reason=%s\n",
+          static_cast<long>(desc.destination),
+          canCheckDestination ? (destinationSupported ? 1 : 0) : -1,
+          static_cast<unsigned long long>(info->capture_object),
+          path && path[0] != '\0' ? path : "",
+          domain ? [domain UTF8String] : "",
+          error ? static_cast<long>([error code]) : 0L,
+          message ? [message UTF8String] : "",
+          reason ? [reason UTF8String] : "");
+    }
     [pathString release];
     [desc release];
     return started;

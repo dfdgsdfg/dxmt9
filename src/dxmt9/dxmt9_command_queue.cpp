@@ -708,12 +708,72 @@ std::size_t drawRunPayloadBytes(
     }
     const std::size_t payloadBytes =
         payload.userVertexData.size() + payload.userIndexData.size();
-    if (payloadBytes > std::numeric_limits<std::size_t>::max() - bytes) {
+    if (payload.bindingOverrideData.size() >
+        std::numeric_limits<std::size_t>::max() - payloadBytes) {
       return std::numeric_limits<std::size_t>::max();
     }
-    bytes += payloadBytes;
+    const std::size_t payloadAndBindingBytes =
+        payloadBytes + payload.bindingOverrideData.size();
+    if (payloadAndBindingBytes > std::numeric_limits<std::size_t>::max() - bytes) {
+      return std::numeric_limits<std::size_t>::max();
+    }
+    bytes += payloadAndBindingBytes;
   }
   return bytes;
+}
+
+std::size_t drawRunSubmissionPayloadBytes(
+    std::span<const core::DrawRunSubmission> submissions) {
+  std::size_t bytes = 0;
+  for (const auto& submission : submissions) {
+    const auto& payload = submission.payload;
+    if (payload.userIndexData.size() >
+        std::numeric_limits<std::size_t>::max() - payload.userVertexData.size()) {
+      return std::numeric_limits<std::size_t>::max();
+    }
+    const std::size_t payloadBytes =
+        payload.userVertexData.size() + payload.userIndexData.size();
+    if (payload.bindingOverrideData.size() >
+        std::numeric_limits<std::size_t>::max() - payloadBytes) {
+      return std::numeric_limits<std::size_t>::max();
+    }
+    const std::size_t payloadAndBindingBytes =
+        payloadBytes + payload.bindingOverrideData.size();
+    if (payloadAndBindingBytes > std::numeric_limits<std::size_t>::max() - bytes) {
+      return std::numeric_limits<std::size_t>::max();
+    }
+    bytes += payloadAndBindingBytes;
+  }
+  return bytes;
+}
+
+bool drawSubmissionStatesCompatible(
+    const core::DrawRunSubmission& a,
+    const core::DrawRunSubmission& b) noexcept {
+  return a.state.hot == b.state.hot &&
+         a.state.shaderLayout == b.state.shaderLayout;
+}
+
+void markDrawBindingOverrideResources(
+    resources::Pool& pool,
+    std::span<const core::DrawParamPayloadView> payloads,
+    std::uint64_t seqId) {
+  for (const auto& payload : payloads) {
+    if (payload.bindingOverrideData.size() != sizeof(core::DrawBindingOverride)) {
+      continue;
+    }
+    core::DrawBindingOverride binding{};
+    std::memcpy(&binding, payload.bindingOverrideData.data(), sizeof(binding));
+    for (std::uint32_t stream = 0; stream < core::kMaxStreams; ++stream) {
+      if ((binding.streamMask & (1u << stream)) == 0) {
+        continue;
+      }
+      pool.markBufferUse(binding.streams[stream].buffer, seqId);
+    }
+    if (binding.indexBufferValid) {
+      pool.markBufferUse(binding.indexBuffer, seqId);
+    }
+  }
 }
 
 bool splitPresentChunk() {
@@ -929,7 +989,9 @@ void CommandQueue::submitDrawRun(core::CanonicalDrawState state,
   ensureWritingSlotUnlocked(*this, lock);
   maybeCommitDrawPayloadArenaUnlocked(*this, pool_, lock, pendingPayloadBytes);
   if (!skipDrawResourceMarking_ || forceDrawResourceMarkingAfterSplit_) {
-    pool_.markDrawResources(state.hot, seqIdForMark(*this, 0));
+    const std::uint64_t seqId = seqIdForMark(*this, 0);
+    pool_.markDrawResources(state.hot, seqId);
+    markDrawBindingOverrideResources(pool_, payloads, seqId);
   }
   currentBackBuffer_ = state.hot.colorAttachments[0].handle;
   currentSlotUnlocked(*this).appendDrawRun(std::move(state), uniforms, draws, payloads);
@@ -947,25 +1009,36 @@ void CommandQueue::submitDrawRunBatch(
   }
   PerfScope scope(perf::countSubmitDrawCpuTime);
   std::unique_lock lock(mutex_);
-  for (auto& submission : submissions) {
-    const std::span<const core::DrawParam> draws(&submission.draw, 1);
-    std::span<const core::DrawParamPayloadView> payloads{};
-    if (!submission.payload.userVertexData.empty() ||
-        !submission.payload.userIndexData.empty()) {
-      payloads = std::span<const core::DrawParamPayloadView>(&submission.payload, 1);
+  std::size_t batchStart = 0;
+  while (batchStart < submissions.size()) {
+    std::size_t batchEnd = batchStart + 1u;
+    while (batchEnd < submissions.size() &&
+           drawSubmissionStatesCompatible(submissions[batchStart], submissions[batchEnd])) {
+      ++batchEnd;
     }
-    const std::size_t pendingPayloadBytes = drawRunPayloadBytes(draws, payloads);
+    auto batch = submissions.subspan(batchStart, batchEnd - batchStart);
+    const std::size_t pendingPayloadBytes = drawRunSubmissionPayloadBytes(batch);
     ensureWritingSlotUnlocked(*this, lock);
     maybeCommitDrawPayloadArenaUnlocked(*this, pool_, lock, pendingPayloadBytes);
-    if (!skipDrawResourceMarking_ || forceDrawResourceMarkingAfterSplit_) {
-      pool_.markDrawResources(submission.state.hot, seqIdForMark(*this, 0));
+    for (auto& submission : batch) {
+      std::span<const core::DrawParamPayloadView> payloads{};
+      if (!submission.payload.userVertexData.empty() ||
+          !submission.payload.userIndexData.empty() ||
+          !submission.payload.bindingOverrideData.empty()) {
+        payloads = std::span<const core::DrawParamPayloadView>(&submission.payload, 1);
+      }
+      if (!skipDrawResourceMarking_ || forceDrawResourceMarkingAfterSplit_) {
+        const std::uint64_t seqId = seqIdForMark(*this, 0);
+        pool_.markDrawResources(submission.state.hot, seqId);
+        markDrawBindingOverrideResources(pool_, payloads, seqId);
+      }
     }
-    currentBackBuffer_ = submission.state.hot.colorAttachments[0].handle;
+    currentBackBuffer_ = batch.back().state.hot.colorAttachments[0].handle;
 
-    currentSlotUnlocked(*this).appendDrawRun(std::move(submission.state),
-                                             submission.uniforms, draws,
-                                             payloads);
+    perf::countSubmitDrawRunBatchGroup(static_cast<std::uint32_t>(batch.size()));
+    currentSlotUnlocked(*this).appendDrawRunBatch(batch);
     (void)maybeCommitDrawChunkUnlocked(*this, pool_, lock);
+    batchStart = batchEnd;
   }
 }
 

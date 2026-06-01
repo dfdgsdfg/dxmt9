@@ -208,7 +208,10 @@ Required Xcode sequence:
 4. Open **Counters**.
 5. Wait for counter profiling to finish. The counters table must be populated
    and the Xcode activity/progress indicator must no longer be profiling
-   counters.
+   counters. For dxmt9/3DMark05 captures, Xcode's draw-counter profiling
+   commonly takes about 1 minute even after the encoder rows appear; wait at
+   least 60 seconds after opening **Counters** and only continue once
+   **Profiling Draw Counters...** has disappeared.
 6. Use **Export Encoder Counters** and save the CSV as
    `$ANALYSIS_DIR/frame<N>-counters-xcode.csv`.
 7. Parse the CSV from the terminal and create a reduced summary CSV when useful.

@@ -96,6 +96,9 @@ struct Counters {
   std::atomic<std::uint64_t> stretchFullscreen{0};
   std::atomic<std::uint64_t> submitPresent{0};
   std::atomic<std::uint64_t> submitFlush{0};
+  std::atomic<std::uint64_t> submitDrawRunBatchGroups{0};
+  std::atomic<std::uint64_t> submitDrawRunBatchRecords{0};
+  std::atomic<std::uint64_t> submitDrawRunBatchMaxRecords{0};
   std::atomic<std::uint64_t> commandBuffers{0};
   // R-BACK-2.29..2.32 — sub-command-buffer chain instrumentation.
   // subCommandBufferCommits aggregates every mid-chunk commit that a
@@ -161,12 +164,47 @@ struct Counters {
   std::atomic<std::uint64_t> commitChunkDrawRunScans{0};
   std::atomic<std::uint64_t> commitChunkDrawRunSubmits{0};
   std::atomic<std::uint64_t> commitChunkDrawRunRecords{0};
+  std::atomic<std::uint64_t> commitChunkDrawRunBindingOverrideRecords{0};
+  std::atomic<std::uint64_t> commitChunkDrawRunBindingOverrideBytes{0};
+  std::atomic<std::uint64_t> commitChunkDrawRunBindingOverrideStreamRecords{0};
+  std::atomic<std::uint64_t> commitChunkDrawRunBindingOverrideIbRecords{0};
+  std::atomic<std::uint64_t> commitChunkDrawBatchConstUploadPassthrough{0};
+  std::atomic<std::uint64_t> commitChunkDrawSubmissionBatchSubmits{0};
+  std::atomic<std::uint64_t> commitChunkDrawSubmissionBatchRecords{0};
+  std::atomic<std::uint64_t> commitChunkDrawSubmissionBatchMaxRecords{0};
+  std::atomic<std::uint64_t> commitChunkDrawSubmissionBatchSize1{0};
+  std::atomic<std::uint64_t> commitChunkDrawSubmissionBatchSize2{0};
+  std::atomic<std::uint64_t> commitChunkDrawSubmissionBatchSize3To4{0};
+  std::atomic<std::uint64_t> commitChunkDrawSubmissionBatchSize5To8{0};
+  std::atomic<std::uint64_t> commitChunkDrawSubmissionBatchSize9To16{0};
+  std::atomic<std::uint64_t> commitChunkDrawSubmissionBatchSize17To32{0};
+  std::atomic<std::uint64_t> commitChunkDrawSubmissionBatchSize33Plus{0};
   std::atomic<std::uint64_t> commitChunkDrawRunBreakFirstDelta{0};
   std::atomic<std::uint64_t> commitChunkDrawRunBreakStateDelta{0};
   std::atomic<std::uint64_t> commitChunkDrawRunBreakType{0};
   std::atomic<std::uint64_t> commitChunkDrawRunBreakEnd{0};
   std::atomic<std::uint64_t> commitChunkDrawRunBreakInvalid{0};
   std::atomic<std::uint64_t> commitChunkDrawRunBreakTypeConstantUpload{0};
+  std::atomic<std::uint64_t> commitChunkDrawRunBreakTypeConstantUploadBytes{0};
+  std::atomic<std::uint64_t> commitChunkDrawRunBreakTypeConstantUploadRegisters{0};
+  std::atomic<std::uint64_t> commitChunkDrawRunBreakTypeConstVsF{0};
+  std::atomic<std::uint64_t> commitChunkDrawRunBreakTypeConstVsFBytes{0};
+  std::atomic<std::uint64_t> commitChunkDrawRunBreakTypeConstVsFRegisters{0};
+  std::atomic<std::uint64_t> commitChunkDrawRunBreakTypeConstVsI{0};
+  std::atomic<std::uint64_t> commitChunkDrawRunBreakTypeConstVsIBytes{0};
+  std::atomic<std::uint64_t> commitChunkDrawRunBreakTypeConstVsIRegisters{0};
+  std::atomic<std::uint64_t> commitChunkDrawRunBreakTypeConstVsB{0};
+  std::atomic<std::uint64_t> commitChunkDrawRunBreakTypeConstVsBBytes{0};
+  std::atomic<std::uint64_t> commitChunkDrawRunBreakTypeConstVsBRegisters{0};
+  std::atomic<std::uint64_t> commitChunkDrawRunBreakTypeConstPsF{0};
+  std::atomic<std::uint64_t> commitChunkDrawRunBreakTypeConstPsFBytes{0};
+  std::atomic<std::uint64_t> commitChunkDrawRunBreakTypeConstPsFRegisters{0};
+  std::atomic<std::uint64_t> commitChunkDrawRunBreakTypeConstPsI{0};
+  std::atomic<std::uint64_t> commitChunkDrawRunBreakTypeConstPsIBytes{0};
+  std::atomic<std::uint64_t> commitChunkDrawRunBreakTypeConstPsIRegisters{0};
+  std::atomic<std::uint64_t> commitChunkDrawRunBreakTypeConstPsB{0};
+  std::atomic<std::uint64_t> commitChunkDrawRunBreakTypeConstPsBBytes{0};
+  std::atomic<std::uint64_t> commitChunkDrawRunBreakTypeConstPsBRegisters{0};
   std::atomic<std::uint64_t> commitChunkDrawRunBreakTypeStateApply{0};
   std::atomic<std::uint64_t> commitChunkDrawRunBreakTypeDrawUp{0};
   std::atomic<std::uint64_t> commitChunkDrawRunBreakTypeClear{0};
@@ -175,6 +213,33 @@ struct Counters {
   std::atomic<std::uint64_t> commitChunkDrawRunBreakTypeQueryIssue{0};
   std::atomic<std::uint64_t> commitChunkDrawRunBreakTypeReadback{0};
   std::atomic<std::uint64_t> commitChunkDrawRunBreakTypeOther{0};
+  std::atomic<std::uint64_t> commitChunkDrawRunBreakStateDeltaStreamOnly{0};
+  std::atomic<std::uint64_t> commitChunkDrawRunBreakStateDeltaIbOnly{0};
+  std::atomic<std::uint64_t> commitChunkDrawRunBreakStateDeltaTextureOnly{0};
+  std::atomic<std::uint64_t> commitChunkDrawRunBreakStateDeltaShaderOnly{0};
+  std::atomic<std::uint64_t> commitChunkDrawRunBreakStateDeltaFvfVdeclOnly{0};
+  std::atomic<std::uint64_t> commitChunkDrawRunBreakStateDeltaOtherOnly{0};
+  std::atomic<std::uint64_t> commitChunkDrawRunBreakStateDeltaMixed{0};
+  std::atomic<std::uint64_t> commitChunkDrawRunBreakStateDeltaMixedGroup2{0};
+  std::atomic<std::uint64_t> commitChunkDrawRunBreakStateDeltaMixedGroup3{0};
+  std::atomic<std::uint64_t> commitChunkDrawRunBreakStateDeltaMixedGroup4Plus{0};
+  std::atomic<std::uint64_t> commitChunkDrawRunBreakStateDeltaStreamIbOnly{0};
+  std::atomic<std::uint64_t> commitChunkDrawRunBreakStateDeltaMixedWithStream{0};
+  std::atomic<std::uint64_t> commitChunkDrawRunBreakStateDeltaMixedWithIb{0};
+  std::atomic<std::uint64_t> commitChunkDrawRunBreakStateDeltaMixedWithTexture{0};
+  std::atomic<std::uint64_t> commitChunkDrawRunBreakStateDeltaMixedWithShader{0};
+  std::atomic<std::uint64_t> commitChunkDrawRunBreakStateDeltaMixedWithFvfVdecl{0};
+  std::atomic<std::uint64_t> commitChunkDrawRunBreakStateDeltaMixedWithOther{0};
+  std::atomic<std::uint64_t> commitChunkDrawRunBreakStateDeltaMixedPairStreamIb{0};
+  std::atomic<std::uint64_t> commitChunkDrawRunBreakStateDeltaMixedPairStreamTexture{0};
+  std::atomic<std::uint64_t> commitChunkDrawRunBreakStateDeltaMixedPairStreamShader{0};
+  std::atomic<std::uint64_t> commitChunkDrawRunBreakStateDeltaMixedPairStreamFvfVdecl{0};
+  std::atomic<std::uint64_t> commitChunkDrawRunBreakStateDeltaMixedPairIbTexture{0};
+  std::atomic<std::uint64_t> commitChunkDrawRunBreakStateDeltaMixedPairIbShader{0};
+  std::atomic<std::uint64_t> commitChunkDrawRunBreakStateDeltaMixedPairIbFvfVdecl{0};
+  std::atomic<std::uint64_t> commitChunkDrawRunBreakStateDeltaMixedPairTextureShader{0};
+  std::atomic<std::uint64_t> commitChunkDrawRunBreakStateDeltaMixedPairTextureFvfVdecl{0};
+  std::atomic<std::uint64_t> commitChunkDrawRunBreakStateDeltaMixedPairShaderFvfVdecl{0};
   std::atomic<std::uint64_t> commitChunkDrawDeltaRenderState{0};
   std::atomic<std::uint64_t> commitChunkDrawDeltaTexture{0};
   std::atomic<std::uint64_t> commitChunkDrawDeltaStream{0};
@@ -193,6 +258,10 @@ struct Counters {
   std::atomic<std::uint64_t> commitChunkDrawDeltaLight{0};
   std::atomic<std::uint64_t> commitChunkDrawDeltaLightEnable{0};
   std::atomic<std::uint64_t> commitChunkDrawDeltaIndexBuffer{0};
+  std::atomic<std::uint64_t> commitChunkDrawDeltaStreamHandle{0};
+  std::atomic<std::uint64_t> commitChunkDrawDeltaStreamOffset{0};
+  std::atomic<std::uint64_t> commitChunkDrawDeltaStreamStride{0};
+  std::atomic<std::uint64_t> commitChunkDrawDeltaIndexBufferHandle{0};
   std::atomic<std::uint64_t> drawCalls{0};
   std::atomic<std::uint64_t> drawIndexedCalls{0};
   std::atomic<std::uint64_t> drawExpandedIndexedCalls{0};
@@ -407,6 +476,27 @@ struct Counters {
   std::atomic<std::uint64_t> renderPassStoreActionStencilStore{0};
   std::atomic<std::uint64_t> renderPassStoreActionStencilDontCare{0};
   std::atomic<std::uint64_t> renderPassTilePreservationBytes{0};
+  std::atomic<std::uint64_t> renderPassSameKeyAdjacent{0};
+  std::atomic<std::uint64_t> renderPassSameKeyReentry{0};
+  std::atomic<std::uint64_t> renderPassSameKeyReentryPreservationBytes{0};
+  std::atomic<std::uint64_t> renderPassSameKeyReentryColorPreservationBytes{0};
+  std::atomic<std::uint64_t> renderPassSameKeyReentryDepthPreservationBytes{0};
+  std::atomic<std::uint64_t> renderPassTransitionRtChangeSameDepth{0};
+  std::atomic<std::uint64_t> renderPassTransitionSameRtDepthChange{0};
+  std::atomic<std::uint64_t> renderPassTransitionRtDepthChange{0};
+  std::atomic<std::uint64_t> renderPassColorProofAllowNextClear{0};
+  std::atomic<std::uint64_t> renderPassColorProofAllowDeadNoPresent{0};
+  std::atomic<std::uint64_t> renderPassColorProofBlockNullColor{0};
+  std::atomic<std::uint64_t> renderPassColorProofBlockNoLookahead{0};
+  std::atomic<std::uint64_t> renderPassColorProofBlockDrawTarget{0};
+  std::atomic<std::uint64_t> renderPassColorProofBlockTextureSample{0};
+  std::atomic<std::uint64_t> renderPassColorProofBlockSurfaceCopy{0};
+  std::atomic<std::uint64_t> renderPassColorProofBlockStretchRect{0};
+  std::atomic<std::uint64_t> renderPassColorProofBlockReadback{0};
+  std::atomic<std::uint64_t> renderPassColorProofBlockColorFill{0};
+  std::atomic<std::uint64_t> renderPassColorProofBlockMsaaResolve{0};
+  std::atomic<std::uint64_t> renderPassColorProofBlockPresent{0};
+  std::atomic<std::uint64_t> renderPassColorProofBlockDeadNoPresentDisabled{0};
   std::atomic<std::uint64_t> renderPassDepthProofAllowNextClear{0};
   std::atomic<std::uint64_t> renderPassDepthProofAllowDeadNoPresent{0};
   std::atomic<std::uint64_t> renderPassDepthProofBlockNullDepth{0};
@@ -693,6 +783,32 @@ std::atomic<std::uint64_t>& splitReasonCounter(Counters& c, EncoderSplitReason r
   return c.renderSplitFinal;
 }
 
+const char* splitReasonName(EncoderSplitReason reason) {
+  switch (reason) {
+    case EncoderSplitReason::Final:
+      return "final";
+    case EncoderSplitReason::RenderTargetChange:
+      return "rt_change";
+    case EncoderSplitReason::Hazard:
+      return "hazard";
+    case EncoderSplitReason::ClearBarrier:
+      return "clear";
+    case EncoderSplitReason::SurfaceCopy:
+      return "surface_copy";
+    case EncoderSplitReason::StretchRect:
+      return "stretch";
+    case EncoderSplitReason::Readback:
+      return "readback";
+    case EncoderSplitReason::ColorFill:
+      return "color_fill";
+    case EncoderSplitReason::Present:
+      return "present";
+    case EncoderSplitReason::PresentAcquire:
+      return "present_acquire";
+  }
+  return "unknown";
+}
+
 // Data-driven counter table for the shutdown report. Each entry maps a stable
 // counter key to either a Counters atomic field (UnsignedCount/Milliseconds/
 // Hex64), a pair of fields (WidthByHeight), or a PercentileRing member with a
@@ -772,6 +888,9 @@ constexpr CounterEntry kCounterTable[] = {
     {"pipeline_build_fail_function", CounterEntry::Kind::UnsignedCount, &Counters::pipelineBuildFailFunction, nullptr, nullptr, 0.0},
     {"pipeline_build_fail_pso", CounterEntry::Kind::UnsignedCount, &Counters::pipelineBuildFailPso, nullptr, nullptr, 0.0},
     {"draw_skipped_no_pipeline", CounterEntry::Kind::UnsignedCount, &Counters::drawSkippedNoPipeline, nullptr, nullptr, 0.0},
+    {"submit_draw_run_batch_groups", CounterEntry::Kind::UnsignedCount, &Counters::submitDrawRunBatchGroups, nullptr, nullptr, 0.0},
+    {"submit_draw_run_batch_records", CounterEntry::Kind::UnsignedCount, &Counters::submitDrawRunBatchRecords, nullptr, nullptr, 0.0},
+    {"submit_draw_run_batch_max_records", CounterEntry::Kind::UnsignedCount, &Counters::submitDrawRunBatchMaxRecords, nullptr, nullptr, 0.0},
     {"render_pass_begin", CounterEntry::Kind::UnsignedCount, &Counters::renderPassBegin, nullptr, nullptr, 0.0},
     {"render_pass_end", CounterEntry::Kind::UnsignedCount, &Counters::renderPassEnd, nullptr, nullptr, 0.0},
     {"render_split_final", CounterEntry::Kind::UnsignedCount, &Counters::renderSplitFinal, nullptr, nullptr, 0.0},
@@ -795,12 +914,47 @@ constexpr CounterEntry kCounterTable[] = {
     {"commit_chunk_draw_run_scans", CounterEntry::Kind::UnsignedCount, &Counters::commitChunkDrawRunScans, nullptr, nullptr, 0.0},
     {"commit_chunk_draw_run_submits", CounterEntry::Kind::UnsignedCount, &Counters::commitChunkDrawRunSubmits, nullptr, nullptr, 0.0},
     {"commit_chunk_draw_run_records", CounterEntry::Kind::UnsignedCount, &Counters::commitChunkDrawRunRecords, nullptr, nullptr, 0.0},
+    {"commit_chunk_draw_run_binding_override_records", CounterEntry::Kind::UnsignedCount, &Counters::commitChunkDrawRunBindingOverrideRecords, nullptr, nullptr, 0.0},
+    {"commit_chunk_draw_run_binding_override_bytes", CounterEntry::Kind::UnsignedCount, &Counters::commitChunkDrawRunBindingOverrideBytes, nullptr, nullptr, 0.0},
+    {"commit_chunk_draw_run_binding_override_stream_records", CounterEntry::Kind::UnsignedCount, &Counters::commitChunkDrawRunBindingOverrideStreamRecords, nullptr, nullptr, 0.0},
+    {"commit_chunk_draw_run_binding_override_ib_records", CounterEntry::Kind::UnsignedCount, &Counters::commitChunkDrawRunBindingOverrideIbRecords, nullptr, nullptr, 0.0},
+    {"commit_chunk_draw_batch_const_upload_passthrough", CounterEntry::Kind::UnsignedCount, &Counters::commitChunkDrawBatchConstUploadPassthrough, nullptr, nullptr, 0.0},
+    {"commit_chunk_draw_submission_batch_submits", CounterEntry::Kind::UnsignedCount, &Counters::commitChunkDrawSubmissionBatchSubmits, nullptr, nullptr, 0.0},
+    {"commit_chunk_draw_submission_batch_records", CounterEntry::Kind::UnsignedCount, &Counters::commitChunkDrawSubmissionBatchRecords, nullptr, nullptr, 0.0},
+    {"commit_chunk_draw_submission_batch_max_records", CounterEntry::Kind::UnsignedCount, &Counters::commitChunkDrawSubmissionBatchMaxRecords, nullptr, nullptr, 0.0},
+    {"commit_chunk_draw_submission_batch_size_1", CounterEntry::Kind::UnsignedCount, &Counters::commitChunkDrawSubmissionBatchSize1, nullptr, nullptr, 0.0},
+    {"commit_chunk_draw_submission_batch_size_2", CounterEntry::Kind::UnsignedCount, &Counters::commitChunkDrawSubmissionBatchSize2, nullptr, nullptr, 0.0},
+    {"commit_chunk_draw_submission_batch_size_3_4", CounterEntry::Kind::UnsignedCount, &Counters::commitChunkDrawSubmissionBatchSize3To4, nullptr, nullptr, 0.0},
+    {"commit_chunk_draw_submission_batch_size_5_8", CounterEntry::Kind::UnsignedCount, &Counters::commitChunkDrawSubmissionBatchSize5To8, nullptr, nullptr, 0.0},
+    {"commit_chunk_draw_submission_batch_size_9_16", CounterEntry::Kind::UnsignedCount, &Counters::commitChunkDrawSubmissionBatchSize9To16, nullptr, nullptr, 0.0},
+    {"commit_chunk_draw_submission_batch_size_17_32", CounterEntry::Kind::UnsignedCount, &Counters::commitChunkDrawSubmissionBatchSize17To32, nullptr, nullptr, 0.0},
+    {"commit_chunk_draw_submission_batch_size_33_plus", CounterEntry::Kind::UnsignedCount, &Counters::commitChunkDrawSubmissionBatchSize33Plus, nullptr, nullptr, 0.0},
     {"commit_chunk_draw_run_break_first_delta", CounterEntry::Kind::UnsignedCount, &Counters::commitChunkDrawRunBreakFirstDelta, nullptr, nullptr, 0.0},
     {"commit_chunk_draw_run_break_state_delta", CounterEntry::Kind::UnsignedCount, &Counters::commitChunkDrawRunBreakStateDelta, nullptr, nullptr, 0.0},
     {"commit_chunk_draw_run_break_type", CounterEntry::Kind::UnsignedCount, &Counters::commitChunkDrawRunBreakType, nullptr, nullptr, 0.0},
     {"commit_chunk_draw_run_break_end", CounterEntry::Kind::UnsignedCount, &Counters::commitChunkDrawRunBreakEnd, nullptr, nullptr, 0.0},
     {"commit_chunk_draw_run_break_invalid", CounterEntry::Kind::UnsignedCount, &Counters::commitChunkDrawRunBreakInvalid, nullptr, nullptr, 0.0},
     {"commit_chunk_draw_run_break_type_const_upload", CounterEntry::Kind::UnsignedCount, &Counters::commitChunkDrawRunBreakTypeConstantUpload, nullptr, nullptr, 0.0},
+    {"commit_chunk_draw_run_break_type_const_upload_bytes", CounterEntry::Kind::UnsignedCount, &Counters::commitChunkDrawRunBreakTypeConstantUploadBytes, nullptr, nullptr, 0.0},
+    {"commit_chunk_draw_run_break_type_const_upload_registers", CounterEntry::Kind::UnsignedCount, &Counters::commitChunkDrawRunBreakTypeConstantUploadRegisters, nullptr, nullptr, 0.0},
+    {"commit_chunk_draw_run_break_type_const_vs_f", CounterEntry::Kind::UnsignedCount, &Counters::commitChunkDrawRunBreakTypeConstVsF, nullptr, nullptr, 0.0},
+    {"commit_chunk_draw_run_break_type_const_vs_f_bytes", CounterEntry::Kind::UnsignedCount, &Counters::commitChunkDrawRunBreakTypeConstVsFBytes, nullptr, nullptr, 0.0},
+    {"commit_chunk_draw_run_break_type_const_vs_f_registers", CounterEntry::Kind::UnsignedCount, &Counters::commitChunkDrawRunBreakTypeConstVsFRegisters, nullptr, nullptr, 0.0},
+    {"commit_chunk_draw_run_break_type_const_vs_i", CounterEntry::Kind::UnsignedCount, &Counters::commitChunkDrawRunBreakTypeConstVsI, nullptr, nullptr, 0.0},
+    {"commit_chunk_draw_run_break_type_const_vs_i_bytes", CounterEntry::Kind::UnsignedCount, &Counters::commitChunkDrawRunBreakTypeConstVsIBytes, nullptr, nullptr, 0.0},
+    {"commit_chunk_draw_run_break_type_const_vs_i_registers", CounterEntry::Kind::UnsignedCount, &Counters::commitChunkDrawRunBreakTypeConstVsIRegisters, nullptr, nullptr, 0.0},
+    {"commit_chunk_draw_run_break_type_const_vs_b", CounterEntry::Kind::UnsignedCount, &Counters::commitChunkDrawRunBreakTypeConstVsB, nullptr, nullptr, 0.0},
+    {"commit_chunk_draw_run_break_type_const_vs_b_bytes", CounterEntry::Kind::UnsignedCount, &Counters::commitChunkDrawRunBreakTypeConstVsBBytes, nullptr, nullptr, 0.0},
+    {"commit_chunk_draw_run_break_type_const_vs_b_registers", CounterEntry::Kind::UnsignedCount, &Counters::commitChunkDrawRunBreakTypeConstVsBRegisters, nullptr, nullptr, 0.0},
+    {"commit_chunk_draw_run_break_type_const_ps_f", CounterEntry::Kind::UnsignedCount, &Counters::commitChunkDrawRunBreakTypeConstPsF, nullptr, nullptr, 0.0},
+    {"commit_chunk_draw_run_break_type_const_ps_f_bytes", CounterEntry::Kind::UnsignedCount, &Counters::commitChunkDrawRunBreakTypeConstPsFBytes, nullptr, nullptr, 0.0},
+    {"commit_chunk_draw_run_break_type_const_ps_f_registers", CounterEntry::Kind::UnsignedCount, &Counters::commitChunkDrawRunBreakTypeConstPsFRegisters, nullptr, nullptr, 0.0},
+    {"commit_chunk_draw_run_break_type_const_ps_i", CounterEntry::Kind::UnsignedCount, &Counters::commitChunkDrawRunBreakTypeConstPsI, nullptr, nullptr, 0.0},
+    {"commit_chunk_draw_run_break_type_const_ps_i_bytes", CounterEntry::Kind::UnsignedCount, &Counters::commitChunkDrawRunBreakTypeConstPsIBytes, nullptr, nullptr, 0.0},
+    {"commit_chunk_draw_run_break_type_const_ps_i_registers", CounterEntry::Kind::UnsignedCount, &Counters::commitChunkDrawRunBreakTypeConstPsIRegisters, nullptr, nullptr, 0.0},
+    {"commit_chunk_draw_run_break_type_const_ps_b", CounterEntry::Kind::UnsignedCount, &Counters::commitChunkDrawRunBreakTypeConstPsB, nullptr, nullptr, 0.0},
+    {"commit_chunk_draw_run_break_type_const_ps_b_bytes", CounterEntry::Kind::UnsignedCount, &Counters::commitChunkDrawRunBreakTypeConstPsBBytes, nullptr, nullptr, 0.0},
+    {"commit_chunk_draw_run_break_type_const_ps_b_registers", CounterEntry::Kind::UnsignedCount, &Counters::commitChunkDrawRunBreakTypeConstPsBRegisters, nullptr, nullptr, 0.0},
     {"commit_chunk_draw_run_break_type_apply_state", CounterEntry::Kind::UnsignedCount, &Counters::commitChunkDrawRunBreakTypeStateApply, nullptr, nullptr, 0.0},
     {"commit_chunk_draw_run_break_type_draw_up", CounterEntry::Kind::UnsignedCount, &Counters::commitChunkDrawRunBreakTypeDrawUp, nullptr, nullptr, 0.0},
     {"commit_chunk_draw_run_break_type_clear", CounterEntry::Kind::UnsignedCount, &Counters::commitChunkDrawRunBreakTypeClear, nullptr, nullptr, 0.0},
@@ -809,6 +963,33 @@ constexpr CounterEntry kCounterTable[] = {
     {"commit_chunk_draw_run_break_type_query_issue", CounterEntry::Kind::UnsignedCount, &Counters::commitChunkDrawRunBreakTypeQueryIssue, nullptr, nullptr, 0.0},
     {"commit_chunk_draw_run_break_type_readback", CounterEntry::Kind::UnsignedCount, &Counters::commitChunkDrawRunBreakTypeReadback, nullptr, nullptr, 0.0},
     {"commit_chunk_draw_run_break_type_other", CounterEntry::Kind::UnsignedCount, &Counters::commitChunkDrawRunBreakTypeOther, nullptr, nullptr, 0.0},
+    {"commit_chunk_draw_run_break_state_delta_stream_only", CounterEntry::Kind::UnsignedCount, &Counters::commitChunkDrawRunBreakStateDeltaStreamOnly, nullptr, nullptr, 0.0},
+    {"commit_chunk_draw_run_break_state_delta_ib_only", CounterEntry::Kind::UnsignedCount, &Counters::commitChunkDrawRunBreakStateDeltaIbOnly, nullptr, nullptr, 0.0},
+    {"commit_chunk_draw_run_break_state_delta_texture_only", CounterEntry::Kind::UnsignedCount, &Counters::commitChunkDrawRunBreakStateDeltaTextureOnly, nullptr, nullptr, 0.0},
+    {"commit_chunk_draw_run_break_state_delta_shader_only", CounterEntry::Kind::UnsignedCount, &Counters::commitChunkDrawRunBreakStateDeltaShaderOnly, nullptr, nullptr, 0.0},
+    {"commit_chunk_draw_run_break_state_delta_fvf_vdecl_only", CounterEntry::Kind::UnsignedCount, &Counters::commitChunkDrawRunBreakStateDeltaFvfVdeclOnly, nullptr, nullptr, 0.0},
+    {"commit_chunk_draw_run_break_state_delta_other_only", CounterEntry::Kind::UnsignedCount, &Counters::commitChunkDrawRunBreakStateDeltaOtherOnly, nullptr, nullptr, 0.0},
+    {"commit_chunk_draw_run_break_state_delta_mixed", CounterEntry::Kind::UnsignedCount, &Counters::commitChunkDrawRunBreakStateDeltaMixed, nullptr, nullptr, 0.0},
+    {"commit_chunk_draw_run_break_state_delta_mixed_group2", CounterEntry::Kind::UnsignedCount, &Counters::commitChunkDrawRunBreakStateDeltaMixedGroup2, nullptr, nullptr, 0.0},
+    {"commit_chunk_draw_run_break_state_delta_mixed_group3", CounterEntry::Kind::UnsignedCount, &Counters::commitChunkDrawRunBreakStateDeltaMixedGroup3, nullptr, nullptr, 0.0},
+    {"commit_chunk_draw_run_break_state_delta_mixed_group4plus", CounterEntry::Kind::UnsignedCount, &Counters::commitChunkDrawRunBreakStateDeltaMixedGroup4Plus, nullptr, nullptr, 0.0},
+    {"commit_chunk_draw_run_break_state_delta_stream_ib_only", CounterEntry::Kind::UnsignedCount, &Counters::commitChunkDrawRunBreakStateDeltaStreamIbOnly, nullptr, nullptr, 0.0},
+    {"commit_chunk_draw_run_break_state_delta_mixed_with_stream", CounterEntry::Kind::UnsignedCount, &Counters::commitChunkDrawRunBreakStateDeltaMixedWithStream, nullptr, nullptr, 0.0},
+    {"commit_chunk_draw_run_break_state_delta_mixed_with_ib", CounterEntry::Kind::UnsignedCount, &Counters::commitChunkDrawRunBreakStateDeltaMixedWithIb, nullptr, nullptr, 0.0},
+    {"commit_chunk_draw_run_break_state_delta_mixed_with_texture", CounterEntry::Kind::UnsignedCount, &Counters::commitChunkDrawRunBreakStateDeltaMixedWithTexture, nullptr, nullptr, 0.0},
+    {"commit_chunk_draw_run_break_state_delta_mixed_with_shader", CounterEntry::Kind::UnsignedCount, &Counters::commitChunkDrawRunBreakStateDeltaMixedWithShader, nullptr, nullptr, 0.0},
+    {"commit_chunk_draw_run_break_state_delta_mixed_with_fvf_vdecl", CounterEntry::Kind::UnsignedCount, &Counters::commitChunkDrawRunBreakStateDeltaMixedWithFvfVdecl, nullptr, nullptr, 0.0},
+    {"commit_chunk_draw_run_break_state_delta_mixed_with_other", CounterEntry::Kind::UnsignedCount, &Counters::commitChunkDrawRunBreakStateDeltaMixedWithOther, nullptr, nullptr, 0.0},
+    {"commit_chunk_draw_run_break_state_delta_mixed_pair_stream_ib", CounterEntry::Kind::UnsignedCount, &Counters::commitChunkDrawRunBreakStateDeltaMixedPairStreamIb, nullptr, nullptr, 0.0},
+    {"commit_chunk_draw_run_break_state_delta_mixed_pair_stream_texture", CounterEntry::Kind::UnsignedCount, &Counters::commitChunkDrawRunBreakStateDeltaMixedPairStreamTexture, nullptr, nullptr, 0.0},
+    {"commit_chunk_draw_run_break_state_delta_mixed_pair_stream_shader", CounterEntry::Kind::UnsignedCount, &Counters::commitChunkDrawRunBreakStateDeltaMixedPairStreamShader, nullptr, nullptr, 0.0},
+    {"commit_chunk_draw_run_break_state_delta_mixed_pair_stream_fvf_vdecl", CounterEntry::Kind::UnsignedCount, &Counters::commitChunkDrawRunBreakStateDeltaMixedPairStreamFvfVdecl, nullptr, nullptr, 0.0},
+    {"commit_chunk_draw_run_break_state_delta_mixed_pair_ib_texture", CounterEntry::Kind::UnsignedCount, &Counters::commitChunkDrawRunBreakStateDeltaMixedPairIbTexture, nullptr, nullptr, 0.0},
+    {"commit_chunk_draw_run_break_state_delta_mixed_pair_ib_shader", CounterEntry::Kind::UnsignedCount, &Counters::commitChunkDrawRunBreakStateDeltaMixedPairIbShader, nullptr, nullptr, 0.0},
+    {"commit_chunk_draw_run_break_state_delta_mixed_pair_ib_fvf_vdecl", CounterEntry::Kind::UnsignedCount, &Counters::commitChunkDrawRunBreakStateDeltaMixedPairIbFvfVdecl, nullptr, nullptr, 0.0},
+    {"commit_chunk_draw_run_break_state_delta_mixed_pair_texture_shader", CounterEntry::Kind::UnsignedCount, &Counters::commitChunkDrawRunBreakStateDeltaMixedPairTextureShader, nullptr, nullptr, 0.0},
+    {"commit_chunk_draw_run_break_state_delta_mixed_pair_texture_fvf_vdecl", CounterEntry::Kind::UnsignedCount, &Counters::commitChunkDrawRunBreakStateDeltaMixedPairTextureFvfVdecl, nullptr, nullptr, 0.0},
+    {"commit_chunk_draw_run_break_state_delta_mixed_pair_shader_fvf_vdecl", CounterEntry::Kind::UnsignedCount, &Counters::commitChunkDrawRunBreakStateDeltaMixedPairShaderFvfVdecl, nullptr, nullptr, 0.0},
     {"commit_chunk_draw_delta_render_state", CounterEntry::Kind::UnsignedCount, &Counters::commitChunkDrawDeltaRenderState, nullptr, nullptr, 0.0},
     {"commit_chunk_draw_delta_texture", CounterEntry::Kind::UnsignedCount, &Counters::commitChunkDrawDeltaTexture, nullptr, nullptr, 0.0},
     {"commit_chunk_draw_delta_stream", CounterEntry::Kind::UnsignedCount, &Counters::commitChunkDrawDeltaStream, nullptr, nullptr, 0.0},
@@ -827,6 +1008,10 @@ constexpr CounterEntry kCounterTable[] = {
     {"commit_chunk_draw_delta_light", CounterEntry::Kind::UnsignedCount, &Counters::commitChunkDrawDeltaLight, nullptr, nullptr, 0.0},
     {"commit_chunk_draw_delta_light_enable", CounterEntry::Kind::UnsignedCount, &Counters::commitChunkDrawDeltaLightEnable, nullptr, nullptr, 0.0},
     {"commit_chunk_draw_delta_ib", CounterEntry::Kind::UnsignedCount, &Counters::commitChunkDrawDeltaIndexBuffer, nullptr, nullptr, 0.0},
+    {"commit_chunk_draw_delta_stream_handle", CounterEntry::Kind::UnsignedCount, &Counters::commitChunkDrawDeltaStreamHandle, nullptr, nullptr, 0.0},
+    {"commit_chunk_draw_delta_stream_offset", CounterEntry::Kind::UnsignedCount, &Counters::commitChunkDrawDeltaStreamOffset, nullptr, nullptr, 0.0},
+    {"commit_chunk_draw_delta_stream_stride", CounterEntry::Kind::UnsignedCount, &Counters::commitChunkDrawDeltaStreamStride, nullptr, nullptr, 0.0},
+    {"commit_chunk_draw_delta_ib_handle", CounterEntry::Kind::UnsignedCount, &Counters::commitChunkDrawDeltaIndexBufferHandle, nullptr, nullptr, 0.0},
     {"draw_calls", CounterEntry::Kind::UnsignedCount, &Counters::drawCalls, nullptr, nullptr, 0.0},
     {"draw_indexed", CounterEntry::Kind::UnsignedCount, &Counters::drawIndexedCalls, nullptr, nullptr, 0.0},
     {"draw_expanded_indexed", CounterEntry::Kind::UnsignedCount, &Counters::drawExpandedIndexedCalls, nullptr, nullptr, 0.0},
@@ -1056,6 +1241,27 @@ constexpr CounterEntry kCounterTable[] = {
     {"render_pass_store_action_stencil_store", CounterEntry::Kind::UnsignedCount, &Counters::renderPassStoreActionStencilStore, nullptr, nullptr, 0.0},
     {"render_pass_store_action_stencil_dontcare", CounterEntry::Kind::UnsignedCount, &Counters::renderPassStoreActionStencilDontCare, nullptr, nullptr, 0.0},
     {"render_pass_tile_preservation_bytes", CounterEntry::Kind::UnsignedCount, &Counters::renderPassTilePreservationBytes, nullptr, nullptr, 0.0},
+    {"render_pass_same_key_adjacent", CounterEntry::Kind::UnsignedCount, &Counters::renderPassSameKeyAdjacent, nullptr, nullptr, 0.0},
+    {"render_pass_same_key_reentry", CounterEntry::Kind::UnsignedCount, &Counters::renderPassSameKeyReentry, nullptr, nullptr, 0.0},
+    {"render_pass_same_key_reentry_preservation_bytes", CounterEntry::Kind::UnsignedCount, &Counters::renderPassSameKeyReentryPreservationBytes, nullptr, nullptr, 0.0},
+    {"render_pass_same_key_reentry_color_preservation_bytes", CounterEntry::Kind::UnsignedCount, &Counters::renderPassSameKeyReentryColorPreservationBytes, nullptr, nullptr, 0.0},
+    {"render_pass_same_key_reentry_depth_preservation_bytes", CounterEntry::Kind::UnsignedCount, &Counters::renderPassSameKeyReentryDepthPreservationBytes, nullptr, nullptr, 0.0},
+    {"render_pass_transition_rt_change_same_depth", CounterEntry::Kind::UnsignedCount, &Counters::renderPassTransitionRtChangeSameDepth, nullptr, nullptr, 0.0},
+    {"render_pass_transition_same_rt_depth_change", CounterEntry::Kind::UnsignedCount, &Counters::renderPassTransitionSameRtDepthChange, nullptr, nullptr, 0.0},
+    {"render_pass_transition_rt_depth_change", CounterEntry::Kind::UnsignedCount, &Counters::renderPassTransitionRtDepthChange, nullptr, nullptr, 0.0},
+    {"render_pass_color_proof_allow_next_clear", CounterEntry::Kind::UnsignedCount, &Counters::renderPassColorProofAllowNextClear, nullptr, nullptr, 0.0},
+    {"render_pass_color_proof_allow_dead_no_present", CounterEntry::Kind::UnsignedCount, &Counters::renderPassColorProofAllowDeadNoPresent, nullptr, nullptr, 0.0},
+    {"render_pass_color_proof_block_null_color", CounterEntry::Kind::UnsignedCount, &Counters::renderPassColorProofBlockNullColor, nullptr, nullptr, 0.0},
+    {"render_pass_color_proof_block_no_lookahead", CounterEntry::Kind::UnsignedCount, &Counters::renderPassColorProofBlockNoLookahead, nullptr, nullptr, 0.0},
+    {"render_pass_color_proof_block_draw_target", CounterEntry::Kind::UnsignedCount, &Counters::renderPassColorProofBlockDrawTarget, nullptr, nullptr, 0.0},
+    {"render_pass_color_proof_block_texture_sample", CounterEntry::Kind::UnsignedCount, &Counters::renderPassColorProofBlockTextureSample, nullptr, nullptr, 0.0},
+    {"render_pass_color_proof_block_surface_copy", CounterEntry::Kind::UnsignedCount, &Counters::renderPassColorProofBlockSurfaceCopy, nullptr, nullptr, 0.0},
+    {"render_pass_color_proof_block_stretch_rect", CounterEntry::Kind::UnsignedCount, &Counters::renderPassColorProofBlockStretchRect, nullptr, nullptr, 0.0},
+    {"render_pass_color_proof_block_readback", CounterEntry::Kind::UnsignedCount, &Counters::renderPassColorProofBlockReadback, nullptr, nullptr, 0.0},
+    {"render_pass_color_proof_block_color_fill", CounterEntry::Kind::UnsignedCount, &Counters::renderPassColorProofBlockColorFill, nullptr, nullptr, 0.0},
+    {"render_pass_color_proof_block_msaa_resolve", CounterEntry::Kind::UnsignedCount, &Counters::renderPassColorProofBlockMsaaResolve, nullptr, nullptr, 0.0},
+    {"render_pass_color_proof_block_present", CounterEntry::Kind::UnsignedCount, &Counters::renderPassColorProofBlockPresent, nullptr, nullptr, 0.0},
+    {"render_pass_color_proof_block_dead_no_present_disabled", CounterEntry::Kind::UnsignedCount, &Counters::renderPassColorProofBlockDeadNoPresentDisabled, nullptr, nullptr, 0.0},
     {"render_pass_depth_proof_allow_next_clear", CounterEntry::Kind::UnsignedCount, &Counters::renderPassDepthProofAllowNextClear, nullptr, nullptr, 0.0},
     {"render_pass_depth_proof_allow_dead_no_present", CounterEntry::Kind::UnsignedCount, &Counters::renderPassDepthProofAllowDeadNoPresent, nullptr, nullptr, 0.0},
     {"render_pass_depth_proof_block_null_depth", CounterEntry::Kind::UnsignedCount, &Counters::renderPassDepthProofBlockNullDepth, nullptr, nullptr, 0.0},
@@ -1559,9 +1765,24 @@ void countCommitChunkDrawReplay(bool indexed, std::uint32_t deltaMask) {
   addIf(CommitChunkDrawDeltaIndexBuffer, c.commitChunkDrawDeltaIndexBuffer);
 }
 
+void countCommitChunkDrawStreamDeltaDetails(std::uint32_t handleChanges,
+                                            std::uint32_t offsetChanges,
+                                            std::uint32_t strideChanges) {
+  auto& c = counters();
+  add(c.commitChunkDrawDeltaStreamHandle, handleChanges);
+  add(c.commitChunkDrawDeltaStreamOffset, offsetChanges);
+  add(c.commitChunkDrawDeltaStreamStride, strideChanges);
+}
+
+void countCommitChunkDrawIndexBufferHandleDelta() {
+  add(counters().commitChunkDrawDeltaIndexBufferHandle);
+}
+
 void countCommitChunkDrawRunScan(std::uint32_t stop,
                                  std::uint32_t recordCount,
-                                 std::uint32_t stopRecordType) {
+                                 std::uint32_t stopRecordType,
+                                 std::uint64_t stopRecordPayloadBytes,
+                                 std::uint32_t stopRecordConstCount) {
   auto& c = counters();
   add(c.commitChunkDrawRunScans);
   if (recordCount >= 2u) {
@@ -1582,6 +1803,7 @@ void countCommitChunkDrawRunScan(std::uint32_t stop,
     add(c.commitChunkDrawRunBreakInvalid);
     break;
   case 4:
+  case 6:
     add(c.commitChunkDrawRunBreakType);
     switch (stopRecordType) {
     case 3:
@@ -1595,6 +1817,42 @@ void countCommitChunkDrawRunScan(std::uint32_t stop,
     case 18:
     case 19:
       add(c.commitChunkDrawRunBreakTypeConstantUpload);
+      add(c.commitChunkDrawRunBreakTypeConstantUploadBytes, stopRecordPayloadBytes);
+      add(c.commitChunkDrawRunBreakTypeConstantUploadRegisters, stopRecordConstCount);
+      switch (stopRecordType) {
+      case 14:
+        add(c.commitChunkDrawRunBreakTypeConstVsF);
+        add(c.commitChunkDrawRunBreakTypeConstVsFBytes, stopRecordPayloadBytes);
+        add(c.commitChunkDrawRunBreakTypeConstVsFRegisters, stopRecordConstCount);
+        break;
+      case 15:
+        add(c.commitChunkDrawRunBreakTypeConstVsI);
+        add(c.commitChunkDrawRunBreakTypeConstVsIBytes, stopRecordPayloadBytes);
+        add(c.commitChunkDrawRunBreakTypeConstVsIRegisters, stopRecordConstCount);
+        break;
+      case 16:
+        add(c.commitChunkDrawRunBreakTypeConstVsB);
+        add(c.commitChunkDrawRunBreakTypeConstVsBBytes, stopRecordPayloadBytes);
+        add(c.commitChunkDrawRunBreakTypeConstVsBRegisters, stopRecordConstCount);
+        break;
+      case 17:
+        add(c.commitChunkDrawRunBreakTypeConstPsF);
+        add(c.commitChunkDrawRunBreakTypeConstPsFBytes, stopRecordPayloadBytes);
+        add(c.commitChunkDrawRunBreakTypeConstPsFRegisters, stopRecordConstCount);
+        break;
+      case 18:
+        add(c.commitChunkDrawRunBreakTypeConstPsI);
+        add(c.commitChunkDrawRunBreakTypeConstPsIBytes, stopRecordPayloadBytes);
+        add(c.commitChunkDrawRunBreakTypeConstPsIRegisters, stopRecordConstCount);
+        break;
+      case 19:
+        add(c.commitChunkDrawRunBreakTypeConstPsB);
+        add(c.commitChunkDrawRunBreakTypeConstPsBBytes, stopRecordPayloadBytes);
+        add(c.commitChunkDrawRunBreakTypeConstPsBRegisters, stopRecordConstCount);
+        break;
+      default:
+        break;
+      }
       break;
     case 20:
       add(c.commitChunkDrawRunBreakTypeClear);
@@ -1629,6 +1887,125 @@ void countCommitChunkDrawRunScan(std::uint32_t stop,
   default:
     break;
   }
+}
+
+void countCommitChunkDrawRunStateDeltaBucket(std::uint32_t deltaMask) {
+  auto& c = counters();
+  constexpr std::uint32_t streamMask = CommitChunkDrawDeltaStream;
+  constexpr std::uint32_t ibMask = CommitChunkDrawDeltaIndexBuffer;
+  constexpr std::uint32_t textureMask =
+      CommitChunkDrawDeltaTexture |
+      CommitChunkDrawDeltaTextureStageState |
+      CommitChunkDrawDeltaSamplerState;
+  constexpr std::uint32_t shaderMask = CommitChunkDrawDeltaShader;
+  constexpr std::uint32_t fvfVdeclMask =
+      CommitChunkDrawDeltaFvf |
+      CommitChunkDrawDeltaVertexDecl;
+  constexpr std::uint32_t knownMask =
+      streamMask | ibMask | textureMask | shaderMask | fvfVdeclMask;
+
+  const bool stream = (deltaMask & streamMask) != 0;
+  const bool ib = (deltaMask & ibMask) != 0;
+  const bool texture = (deltaMask & textureMask) != 0;
+  const bool shader = (deltaMask & shaderMask) != 0;
+  const bool fvfVdecl = (deltaMask & fvfVdeclMask) != 0;
+  const bool other = (deltaMask & ~knownMask) != 0;
+  const unsigned groups =
+      (stream ? 1u : 0u) +
+      (ib ? 1u : 0u) +
+      (texture ? 1u : 0u) +
+      (shader ? 1u : 0u) +
+      (fvfVdecl ? 1u : 0u) +
+      (other ? 1u : 0u);
+
+  if (groups != 1u) {
+    add(c.commitChunkDrawRunBreakStateDeltaMixed);
+    if (groups == 2u) {
+      add(c.commitChunkDrawRunBreakStateDeltaMixedGroup2);
+      if (stream && ib) {
+        add(c.commitChunkDrawRunBreakStateDeltaStreamIbOnly);
+      }
+    } else if (groups == 3u) {
+      add(c.commitChunkDrawRunBreakStateDeltaMixedGroup3);
+    } else {
+      add(c.commitChunkDrawRunBreakStateDeltaMixedGroup4Plus);
+    }
+    if (stream) add(c.commitChunkDrawRunBreakStateDeltaMixedWithStream);
+    if (ib) add(c.commitChunkDrawRunBreakStateDeltaMixedWithIb);
+    if (texture) add(c.commitChunkDrawRunBreakStateDeltaMixedWithTexture);
+    if (shader) add(c.commitChunkDrawRunBreakStateDeltaMixedWithShader);
+    if (fvfVdecl) add(c.commitChunkDrawRunBreakStateDeltaMixedWithFvfVdecl);
+    if (other) add(c.commitChunkDrawRunBreakStateDeltaMixedWithOther);
+    if (stream && ib) add(c.commitChunkDrawRunBreakStateDeltaMixedPairStreamIb);
+    if (stream && texture) add(c.commitChunkDrawRunBreakStateDeltaMixedPairStreamTexture);
+    if (stream && shader) add(c.commitChunkDrawRunBreakStateDeltaMixedPairStreamShader);
+    if (stream && fvfVdecl) add(c.commitChunkDrawRunBreakStateDeltaMixedPairStreamFvfVdecl);
+    if (ib && texture) add(c.commitChunkDrawRunBreakStateDeltaMixedPairIbTexture);
+    if (ib && shader) add(c.commitChunkDrawRunBreakStateDeltaMixedPairIbShader);
+    if (ib && fvfVdecl) add(c.commitChunkDrawRunBreakStateDeltaMixedPairIbFvfVdecl);
+    if (texture && shader) add(c.commitChunkDrawRunBreakStateDeltaMixedPairTextureShader);
+    if (texture && fvfVdecl) add(c.commitChunkDrawRunBreakStateDeltaMixedPairTextureFvfVdecl);
+    if (shader && fvfVdecl) add(c.commitChunkDrawRunBreakStateDeltaMixedPairShaderFvfVdecl);
+  } else if (stream) {
+    add(c.commitChunkDrawRunBreakStateDeltaStreamOnly);
+  } else if (ib) {
+    add(c.commitChunkDrawRunBreakStateDeltaIbOnly);
+  } else if (texture) {
+    add(c.commitChunkDrawRunBreakStateDeltaTextureOnly);
+  } else if (shader) {
+    add(c.commitChunkDrawRunBreakStateDeltaShaderOnly);
+  } else if (fvfVdecl) {
+    add(c.commitChunkDrawRunBreakStateDeltaFvfVdeclOnly);
+  } else {
+    add(c.commitChunkDrawRunBreakStateDeltaOtherOnly);
+  }
+}
+
+void countCommitChunkDrawRunBindingOverride(bool streamOverride,
+                                            bool indexBufferOverride,
+                                            std::size_t bytes) {
+  auto& c = counters();
+  add(c.commitChunkDrawRunBindingOverrideRecords);
+  add(c.commitChunkDrawRunBindingOverrideBytes, static_cast<std::uint64_t>(bytes));
+  if (streamOverride) {
+    add(c.commitChunkDrawRunBindingOverrideStreamRecords);
+  }
+  if (indexBufferOverride) {
+    add(c.commitChunkDrawRunBindingOverrideIbRecords);
+  }
+}
+
+void countCommitChunkDrawBatchConstUploadPassthrough() {
+  add(counters().commitChunkDrawBatchConstUploadPassthrough);
+}
+
+void countCommitChunkDrawSubmissionBatch(std::uint32_t recordCount) {
+  auto& c = counters();
+  add(c.commitChunkDrawSubmissionBatchSubmits);
+  add(c.commitChunkDrawSubmissionBatchRecords, recordCount);
+  updateMax(c.commitChunkDrawSubmissionBatchMaxRecords, recordCount);
+  if (recordCount <= 1u) {
+    add(c.commitChunkDrawSubmissionBatchSize1);
+  } else if (recordCount == 2u) {
+    add(c.commitChunkDrawSubmissionBatchSize2);
+  } else if (recordCount <= 4u) {
+    add(c.commitChunkDrawSubmissionBatchSize3To4);
+  } else if (recordCount <= 8u) {
+    add(c.commitChunkDrawSubmissionBatchSize5To8);
+  } else if (recordCount <= 16u) {
+    add(c.commitChunkDrawSubmissionBatchSize9To16);
+  } else if (recordCount <= 32u) {
+    add(c.commitChunkDrawSubmissionBatchSize17To32);
+  } else {
+    add(c.commitChunkDrawSubmissionBatchSize33Plus);
+  }
+}
+
+void countSubmitDrawRunBatchGroup(std::uint32_t recordCount) {
+  auto& c = counters();
+  add(c.submitDrawRunBatchGroups);
+  add(c.submitDrawRunBatchRecords, recordCount);
+  updateMax(c.submitDrawRunBatchMaxRecords, recordCount);
 }
 
 void countDrawCall(std::uint32_t primitiveType,
@@ -2128,6 +2505,83 @@ void countRenderPassTilePreservationBytes(std::uint64_t bytes) {
   add(counters().renderPassTilePreservationBytes, bytes);
 }
 
+void countRenderPassSameKeyAdjacent() {
+  add(counters().renderPassSameKeyAdjacent);
+}
+
+void countRenderPassSameKeyReentry() {
+  add(counters().renderPassSameKeyReentry);
+}
+
+void countRenderPassSameKeyReentryPreservationBytes(std::uint64_t bytes) {
+  add(counters().renderPassSameKeyReentryPreservationBytes, bytes);
+}
+
+void countRenderPassSameKeyReentryColorPreservationBytes(std::uint64_t bytes) {
+  add(counters().renderPassSameKeyReentryColorPreservationBytes, bytes);
+}
+
+void countRenderPassSameKeyReentryDepthPreservationBytes(std::uint64_t bytes) {
+  add(counters().renderPassSameKeyReentryDepthPreservationBytes, bytes);
+}
+
+void countRenderPassTransitionRtChangeSameDepth() {
+  add(counters().renderPassTransitionRtChangeSameDepth);
+}
+
+void countRenderPassTransitionSameRtDepthChange() {
+  add(counters().renderPassTransitionSameRtDepthChange);
+}
+
+void countRenderPassTransitionRtDepthChange() {
+  add(counters().renderPassTransitionRtDepthChange);
+}
+
+void countRenderPassColorStoreProof(RenderPassColorStoreProof proof) {
+  auto& c = counters();
+  switch (proof) {
+  case RenderPassColorStoreProof::AllowNextClear:
+    add(c.renderPassColorProofAllowNextClear);
+    break;
+  case RenderPassColorStoreProof::AllowDeadNoPresent:
+    add(c.renderPassColorProofAllowDeadNoPresent);
+    break;
+  case RenderPassColorStoreProof::BlockNullColor:
+    add(c.renderPassColorProofBlockNullColor);
+    break;
+  case RenderPassColorStoreProof::BlockNoLookahead:
+    add(c.renderPassColorProofBlockNoLookahead);
+    break;
+  case RenderPassColorStoreProof::BlockDrawTarget:
+    add(c.renderPassColorProofBlockDrawTarget);
+    break;
+  case RenderPassColorStoreProof::BlockTextureSample:
+    add(c.renderPassColorProofBlockTextureSample);
+    break;
+  case RenderPassColorStoreProof::BlockSurfaceCopy:
+    add(c.renderPassColorProofBlockSurfaceCopy);
+    break;
+  case RenderPassColorStoreProof::BlockStretchRect:
+    add(c.renderPassColorProofBlockStretchRect);
+    break;
+  case RenderPassColorStoreProof::BlockReadback:
+    add(c.renderPassColorProofBlockReadback);
+    break;
+  case RenderPassColorStoreProof::BlockColorFill:
+    add(c.renderPassColorProofBlockColorFill);
+    break;
+  case RenderPassColorStoreProof::BlockMsaaResolve:
+    add(c.renderPassColorProofBlockMsaaResolve);
+    break;
+  case RenderPassColorStoreProof::BlockPresent:
+    add(c.renderPassColorProofBlockPresent);
+    break;
+  case RenderPassColorStoreProof::BlockDeadNoPresentDisabled:
+    add(c.renderPassColorProofBlockDeadNoPresentDisabled);
+    break;
+  }
+}
+
 void countRenderPassDepthStoreProof(RenderPassDepthStoreProof proof) {
   auto& c = counters();
   switch (proof) {
@@ -2534,6 +2988,291 @@ bool frameSamplingEnabled() {
     return false;
   }();
   return value;
+}
+
+bool encoderBreakdownEnabled() {
+  static const bool value = []() {
+    if (const char* v = std::getenv("DXMT9_PERF_ENCODER_BREAKDOWN")) {
+      return v[0] != '\0' && v[0] != '0';
+    }
+    return false;
+  }();
+  return enabled() && value;
+}
+
+void emitEncoderBreakdown(const EncoderBreakdown& b) {
+  if (!encoderBreakdownEnabled()) {
+    return;
+  }
+  std::fprintf(
+      stderr,
+      "[dxmt9-perf-encoder seq=%llu encoder=%llu rt=0x%llx depth=0x%llx "
+      "end_reason=%s draw_calls=%llu indexed_draws=%llu "
+      "expanded_indexed_draws=%llu ffp_draws=%llu programmable_draws=%llu "
+      "pretransformed_draws=%llu textured_draws=%llu "
+      "cull_none_draws=%llu cull_front_draws=%llu cull_back_draws=%llu "
+      "fill_solid_draws=%llu fill_wireframe_draws=%llu "
+      "depth_enabled_draws=%llu depth_write_draws=%llu "
+      "depth_func_less_draws=%llu depth_func_lessequal_draws=%llu "
+      "depth_func_always_draws=%llu depth_func_other_draws=%llu "
+      "scissor_enabled_draws=%llu alpha_blend_enabled_draws=%llu "
+      "alpha_test_enabled_draws=%llu clip_plane_enabled_draws=%llu "
+      "point_draws=%llu line_draws=%llu triangle_draws=%llu primitive_count=%llu "
+      "triangle_estimate=%llu vertex_count=%llu texture_mask_or=0x%llx "
+      "stream0_stride_min=%llu stream0_stride_max=%llu "
+      "stream_state_samples=%llu stream_metal_binds=%llu "
+      "stream_metal_bind_firsts=%llu "
+      "stream_metal_bind_handle_changes=%llu "
+      "stream_metal_bind_offset_changes=%llu "
+      "stream_unique_handles=%llu stream_unique_handle_overflows=%llu "
+      "stream_unique_bytes=%llu stream_unique_dynamic_handles=%llu "
+      "stream_unique_writeonly_handles=%llu "
+      "stream_unique_default_pool_handles=%llu "
+      "stream_unique_managed_pool_handles=%llu "
+      "stream_unique_systemmem_pool_handles=%llu "
+      "stream_unique_scratch_pool_handles=%llu "
+      "stream_handle_changes=%llu stream_offset_changes=%llu "
+      "stream_stride_changes=%llu stream0_last_handle=0x%llx "
+      "stream0_last_offset=%llu stream0_last_stride=%llu "
+      "ib_state_samples=%llu ib_metal_binds=%llu ib_handle_changes=%llu "
+      "ib_unique_handles=%llu ib_unique_handle_overflows=%llu "
+      "ib_unique_bytes=%llu ib_unique_dynamic_handles=%llu "
+      "ib_unique_writeonly_handles=%llu "
+      "ib_unique_default_pool_handles=%llu "
+      "ib_unique_managed_pool_handles=%llu "
+      "ib_unique_systemmem_pool_handles=%llu "
+      "ib_unique_scratch_pool_handles=%llu "
+      "ib_last_handle=0x%llx pso_state_samples=%llu "
+      "pso_handle_changes=%llu pso_unique_handles=%llu "
+      "pso_unique_handle_overflows=%llu pso_last_handle=0x%llx "
+      "shader_variant_changes=%llu shader_variant_unique=%llu "
+      "shader_variant_unique_overflows=%llu shader_variant_last=0x%llx "
+      "vertex_shader_last=0x%llx pixel_shader_last=0x%llx "
+      "vertex_shader_source_last=%llu pixel_shader_source_last=%llu "
+      "vsout_layout_changes=%llu vsout_layout_unique=%llu "
+      "vsout_layout_unique_overflows=%llu vsout_layout_last=0x%x "
+      "vsout_layout_cache_hits=%llu vsout_layout_cache_misses=%llu "
+      "argbuf_table_bytes=%llu argbuf_cbuf_bytes=%llu "
+      "argbuf_cbuf_vs_bytes=%llu argbuf_cbuf_ffp_vs_bytes=%llu "
+      "argbuf_cbuf_ps_bytes=%llu argbuf_cbuf_ffp_ps_bytes=%llu "
+      "argbuf_cbuf_vs_first_bytes=%llu "
+      "argbuf_cbuf_vs_rewrite_changed_bytes=%llu "
+      "argbuf_cbuf_vs_rewrite_unchanged_bytes=%llu "
+      "argbuf_cbuf_vs_float_changed_bytes=%llu "
+      "argbuf_cbuf_vs_int_changed_bytes=%llu "
+      "argbuf_cbuf_vs_bool_changed_bytes=%llu "
+      "argbuf_cbuf_vs_uploads=%llu "
+      "argbuf_cbuf_vs_full_struct_uploads=%llu "
+      "argbuf_cbuf_vs_usage_unknown_uploads=%llu "
+      "argbuf_cbuf_vs_usage_indexed_float_uploads=%llu "
+      "argbuf_cbuf_vs_plan_float_regs_sum=%llu "
+      "argbuf_cbuf_vs_plan_float_regs_max=%llu "
+      "argbuf_cbuf_vs_dirty_float_regs_sum=%llu "
+      "argbuf_cbuf_vs_dirty_float_regs_max=%llu "
+      "argbuf_cbuf_vs_usage_float_regs_sum=%llu "
+      "argbuf_cbuf_vs_usage_float_regs_max=%llu "
+      "argbuf_cbuf_ffp_vs_first_bytes=%llu "
+      "argbuf_cbuf_ffp_vs_rewrite_changed_bytes=%llu "
+      "argbuf_cbuf_ffp_vs_rewrite_unchanged_bytes=%llu "
+      "argbuf_cbuf_ffp_vs_matrix_changed_bytes=%llu "
+      "argbuf_cbuf_ffp_vs_material_changed_bytes=%llu "
+      "argbuf_cbuf_ffp_vs_light_changed_bytes=%llu "
+      "argbuf_cbuf_ffp_vs_blend_changed_bytes=%llu "
+      "argbuf_cbuf_ffp_vs_tex_transform_changed_bytes=%llu "
+      "argbuf_cbuf_ffp_vs_clip_changed_bytes=%llu "
+      "argbuf_cbuf_ffp_vs_viewport_changed_bytes=%llu "
+      "argbuf_cbuf_ffp_vs_fog_point_changed_bytes=%llu "
+      "set_vertex_bytes_calls=%llu set_vertex_bytes_bytes=%llu "
+      "set_vertex_bytes_slot5_calls=%llu set_vertex_bytes_slot5_bytes=%llu "
+      "set_vertex_bytes_other_calls=%llu set_vertex_bytes_other_bytes=%llu "
+      "transient_vertex_bytes=%llu "
+      "transient_vertex_user_bytes=%llu "
+      "transient_vertex_preupload_bytes=%llu "
+      "transient_vertex_decl_fallback_bytes=%llu "
+      "transient_vertex_expanded_main_bytes=%llu "
+      "transient_vertex_expanded_extra_bytes=%llu "
+      "transient_index_bytes=%llu "
+      "transient_index_user_bytes=%llu "
+      "transient_index_preupload_bytes=%llu "
+      "transient_index_shadow_fallback_bytes=%llu]\n",
+      static_cast<unsigned long long>(b.seqId),
+      static_cast<unsigned long long>(b.encoderIndex),
+      static_cast<unsigned long long>(b.rtHandle),
+      static_cast<unsigned long long>(b.depthHandle),
+      splitReasonName(b.endReason),
+      static_cast<unsigned long long>(b.drawCalls),
+      static_cast<unsigned long long>(b.indexedDraws),
+      static_cast<unsigned long long>(b.expandedIndexedDraws),
+      static_cast<unsigned long long>(b.ffpDraws),
+      static_cast<unsigned long long>(b.programmableDraws),
+      static_cast<unsigned long long>(b.preTransformedDraws),
+      static_cast<unsigned long long>(b.texturedDraws),
+      static_cast<unsigned long long>(b.cullNoneDraws),
+      static_cast<unsigned long long>(b.cullFrontDraws),
+      static_cast<unsigned long long>(b.cullBackDraws),
+      static_cast<unsigned long long>(b.fillSolidDraws),
+      static_cast<unsigned long long>(b.fillWireframeDraws),
+      static_cast<unsigned long long>(b.depthEnabledDraws),
+      static_cast<unsigned long long>(b.depthWriteDraws),
+      static_cast<unsigned long long>(b.depthFuncLessDraws),
+      static_cast<unsigned long long>(b.depthFuncLessEqualDraws),
+      static_cast<unsigned long long>(b.depthFuncAlwaysDraws),
+      static_cast<unsigned long long>(b.depthFuncOtherDraws),
+      static_cast<unsigned long long>(b.scissorEnabledDraws),
+      static_cast<unsigned long long>(b.alphaBlendEnabledDraws),
+      static_cast<unsigned long long>(b.alphaTestEnabledDraws),
+      static_cast<unsigned long long>(b.clipPlaneEnabledDraws),
+      static_cast<unsigned long long>(b.pointDraws),
+      static_cast<unsigned long long>(b.lineDraws),
+      static_cast<unsigned long long>(b.triangleDraws),
+      static_cast<unsigned long long>(b.primitiveCount),
+      static_cast<unsigned long long>(b.triangleEstimate),
+      static_cast<unsigned long long>(b.vertexCount),
+      static_cast<unsigned long long>(b.textureMaskOr),
+      static_cast<unsigned long long>(b.stream0StrideMin),
+      static_cast<unsigned long long>(b.stream0StrideMax),
+      static_cast<unsigned long long>(b.streamStateSamples),
+      static_cast<unsigned long long>(b.streamMetalBinds),
+      static_cast<unsigned long long>(b.streamMetalBindFirsts),
+      static_cast<unsigned long long>(b.streamMetalBindHandleChanges),
+      static_cast<unsigned long long>(b.streamMetalBindOffsetChanges),
+      static_cast<unsigned long long>(b.streamUniqueHandles),
+      static_cast<unsigned long long>(b.streamUniqueHandleOverflows),
+      static_cast<unsigned long long>(b.streamUniqueBytes),
+      static_cast<unsigned long long>(b.streamUniqueDynamicHandles),
+      static_cast<unsigned long long>(b.streamUniqueWriteOnlyHandles),
+      static_cast<unsigned long long>(b.streamUniqueDefaultPoolHandles),
+      static_cast<unsigned long long>(b.streamUniqueManagedPoolHandles),
+      static_cast<unsigned long long>(b.streamUniqueSystemMemPoolHandles),
+      static_cast<unsigned long long>(b.streamUniqueScratchPoolHandles),
+      static_cast<unsigned long long>(b.streamHandleChanges),
+      static_cast<unsigned long long>(b.streamOffsetChanges),
+      static_cast<unsigned long long>(b.streamStrideChanges),
+      static_cast<unsigned long long>(b.stream0LastHandle),
+      static_cast<unsigned long long>(b.stream0LastOffset),
+      static_cast<unsigned long long>(b.stream0LastStride),
+      static_cast<unsigned long long>(b.ibStateSamples),
+      static_cast<unsigned long long>(b.ibMetalBinds),
+      static_cast<unsigned long long>(b.ibHandleChanges),
+      static_cast<unsigned long long>(b.ibUniqueHandles),
+      static_cast<unsigned long long>(b.ibUniqueHandleOverflows),
+      static_cast<unsigned long long>(b.ibUniqueBytes),
+      static_cast<unsigned long long>(b.ibUniqueDynamicHandles),
+      static_cast<unsigned long long>(b.ibUniqueWriteOnlyHandles),
+      static_cast<unsigned long long>(b.ibUniqueDefaultPoolHandles),
+      static_cast<unsigned long long>(b.ibUniqueManagedPoolHandles),
+      static_cast<unsigned long long>(b.ibUniqueSystemMemPoolHandles),
+      static_cast<unsigned long long>(b.ibUniqueScratchPoolHandles),
+      static_cast<unsigned long long>(b.ibLastHandle),
+      static_cast<unsigned long long>(b.psoStateSamples),
+      static_cast<unsigned long long>(b.psoHandleChanges),
+      static_cast<unsigned long long>(b.psoUniqueHandles),
+      static_cast<unsigned long long>(b.psoUniqueHandleOverflows),
+      static_cast<unsigned long long>(b.psoLastHandle),
+      static_cast<unsigned long long>(b.shaderVariantChanges),
+      static_cast<unsigned long long>(b.shaderVariantUnique),
+      static_cast<unsigned long long>(b.shaderVariantUniqueOverflows),
+      static_cast<unsigned long long>(b.shaderVariantLast),
+      static_cast<unsigned long long>(b.vertexShaderLast),
+      static_cast<unsigned long long>(b.pixelShaderLast),
+      static_cast<unsigned long long>(b.vertexShaderSourceLast),
+      static_cast<unsigned long long>(b.pixelShaderSourceLast),
+      static_cast<unsigned long long>(b.vsOutLayoutChanges),
+      static_cast<unsigned long long>(b.vsOutLayoutUnique),
+      static_cast<unsigned long long>(b.vsOutLayoutUniqueOverflows),
+      static_cast<unsigned>(b.vsOutLayoutLast),
+      static_cast<unsigned long long>(b.vsOutLayoutCacheHits),
+      static_cast<unsigned long long>(b.vsOutLayoutCacheMisses),
+      static_cast<unsigned long long>(b.argbufTableBytes),
+      static_cast<unsigned long long>(b.argbufCbufBytes),
+      static_cast<unsigned long long>(b.argbufCbufVsBytes),
+      static_cast<unsigned long long>(b.argbufCbufFfpVsBytes),
+      static_cast<unsigned long long>(b.argbufCbufPsBytes),
+      static_cast<unsigned long long>(b.argbufCbufFfpPsBytes),
+      static_cast<unsigned long long>(b.argbufCbufVsFirstBytes),
+      static_cast<unsigned long long>(b.argbufCbufVsRewriteChangedBytes),
+      static_cast<unsigned long long>(b.argbufCbufVsRewriteUnchangedBytes),
+      static_cast<unsigned long long>(b.argbufCbufVsFloatChangedBytes),
+      static_cast<unsigned long long>(b.argbufCbufVsIntChangedBytes),
+      static_cast<unsigned long long>(b.argbufCbufVsBoolChangedBytes),
+      static_cast<unsigned long long>(b.argbufCbufVsUploads),
+      static_cast<unsigned long long>(b.argbufCbufVsFullStructUploads),
+      static_cast<unsigned long long>(b.argbufCbufVsUsageUnknownUploads),
+      static_cast<unsigned long long>(b.argbufCbufVsUsageIndexedFloatUploads),
+      static_cast<unsigned long long>(b.argbufCbufVsPlanFloatRegsSum),
+      static_cast<unsigned long long>(b.argbufCbufVsPlanFloatRegsMax),
+      static_cast<unsigned long long>(b.argbufCbufVsDirtyFloatRegsSum),
+      static_cast<unsigned long long>(b.argbufCbufVsDirtyFloatRegsMax),
+      static_cast<unsigned long long>(b.argbufCbufVsUsageFloatRegsSum),
+      static_cast<unsigned long long>(b.argbufCbufVsUsageFloatRegsMax),
+      static_cast<unsigned long long>(b.argbufCbufFfpVsFirstBytes),
+      static_cast<unsigned long long>(b.argbufCbufFfpVsRewriteChangedBytes),
+      static_cast<unsigned long long>(b.argbufCbufFfpVsRewriteUnchangedBytes),
+      static_cast<unsigned long long>(b.argbufCbufFfpVsMatrixChangedBytes),
+      static_cast<unsigned long long>(b.argbufCbufFfpVsMaterialChangedBytes),
+      static_cast<unsigned long long>(b.argbufCbufFfpVsLightChangedBytes),
+      static_cast<unsigned long long>(b.argbufCbufFfpVsBlendChangedBytes),
+      static_cast<unsigned long long>(b.argbufCbufFfpVsTexTransformChangedBytes),
+      static_cast<unsigned long long>(b.argbufCbufFfpVsClipChangedBytes),
+      static_cast<unsigned long long>(b.argbufCbufFfpVsViewportChangedBytes),
+      static_cast<unsigned long long>(b.argbufCbufFfpVsFogPointChangedBytes),
+      static_cast<unsigned long long>(b.setVertexBytesCalls),
+      static_cast<unsigned long long>(b.setVertexBytesBytes),
+      static_cast<unsigned long long>(b.setVertexBytesSlot5Calls),
+      static_cast<unsigned long long>(b.setVertexBytesSlot5Bytes),
+      static_cast<unsigned long long>(b.setVertexBytesOtherCalls),
+      static_cast<unsigned long long>(b.setVertexBytesOtherBytes),
+      static_cast<unsigned long long>(b.transientVertexBytes),
+      static_cast<unsigned long long>(b.transientVertexUserBytes),
+      static_cast<unsigned long long>(b.transientVertexPreuploadBytes),
+      static_cast<unsigned long long>(b.transientVertexDeclFallbackBytes),
+      static_cast<unsigned long long>(b.transientVertexExpandedMainBytes),
+      static_cast<unsigned long long>(b.transientVertexExpandedExtraBytes),
+      static_cast<unsigned long long>(b.transientIndexBytes),
+      static_cast<unsigned long long>(b.transientIndexUserBytes),
+      static_cast<unsigned long long>(b.transientIndexPreuploadBytes),
+      static_cast<unsigned long long>(b.transientIndexShadowFallbackBytes));
+  for (std::size_t i = 0; i < b.streams.size(); ++i) {
+    const auto& s = b.streams[i];
+    if (!s.valid) {
+      continue;
+    }
+    std::fprintf(
+        stderr,
+        "[dxmt9-perf-encoder-stream seq=%llu encoder=%llu stream=%zu "
+        "samples=%llu metal_binds=%llu metal_bind_firsts=%llu "
+        "metal_bind_handle_changes=%llu metal_bind_offset_changes=%llu "
+        "unique_handles=%llu unique_handle_overflows=%llu unique_bytes=%llu "
+        "unique_dynamic_handles=%llu unique_writeonly_handles=%llu "
+        "unique_default_pool_handles=%llu unique_managed_pool_handles=%llu "
+        "unique_systemmem_pool_handles=%llu unique_scratch_pool_handles=%llu "
+        "handle_changes=%llu "
+        "offset_changes=%llu stride_changes=%llu last_handle=0x%llx "
+        "last_offset=%llu last_stride=%llu]\n",
+        static_cast<unsigned long long>(b.seqId),
+        static_cast<unsigned long long>(b.encoderIndex),
+        i,
+        static_cast<unsigned long long>(s.samples),
+        static_cast<unsigned long long>(s.metalBinds),
+        static_cast<unsigned long long>(s.metalBindFirsts),
+        static_cast<unsigned long long>(s.metalBindHandleChanges),
+        static_cast<unsigned long long>(s.metalBindOffsetChanges),
+        static_cast<unsigned long long>(s.uniqueHandles),
+        static_cast<unsigned long long>(s.uniqueHandleOverflows),
+        static_cast<unsigned long long>(s.uniqueBytes),
+        static_cast<unsigned long long>(s.uniqueDynamicHandles),
+        static_cast<unsigned long long>(s.uniqueWriteOnlyHandles),
+        static_cast<unsigned long long>(s.uniqueDefaultPoolHandles),
+        static_cast<unsigned long long>(s.uniqueManagedPoolHandles),
+        static_cast<unsigned long long>(s.uniqueSystemMemPoolHandles),
+        static_cast<unsigned long long>(s.uniqueScratchPoolHandles),
+        static_cast<unsigned long long>(s.handleChanges),
+        static_cast<unsigned long long>(s.offsetChanges),
+        static_cast<unsigned long long>(s.strideChanges),
+        static_cast<unsigned long long>(s.lastHandle),
+        static_cast<unsigned long long>(s.lastOffset),
+        static_cast<unsigned long long>(s.lastStride));
+  }
 }
 
 CounterSnapshot snapshot() {

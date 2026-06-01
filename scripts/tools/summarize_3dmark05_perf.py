@@ -1,0 +1,975 @@
+#!/usr/bin/env python3
+"""Summarize a 3DMark05 dxmt9 perf output directory.
+
+The script consumes `result.json` and, when present, `[dxmt9-perf-encoder]`
+lines from `dxmt9.log`. It is intentionally narrow: the output is a compact
+triage report for the GT1 bottleneck work tracked in specs/perfomance.plan.md.
+"""
+
+from __future__ import annotations
+
+import argparse
+import csv
+import json
+import re
+import sys
+from pathlib import Path
+from typing import Any
+
+KEY_VALUE_RE = re.compile(r"\b([A-Za-z0-9_]+)=([^\s]+)")
+ENCODER_PREFIX = "[dxmt9-perf-encoder "
+STREAM_PREFIX = "[dxmt9-perf-encoder-stream "
+
+RUN_COUNTERS = (
+    "present_encoded",
+    "draw_calls",
+    "draw_indexed",
+    "draw_expanded_indexed",
+    "render_pass_begin",
+    "render_pass_end",
+    "render_pass_load_action_load",
+    "render_pass_load_action_clear",
+    "render_pass_load_action_dontcare",
+    "render_pass_load_action_depth_load",
+    "render_pass_load_action_depth_clear",
+    "render_pass_load_action_depth_dontcare",
+    "render_pass_load_action_stencil_load",
+    "render_pass_load_action_stencil_clear",
+    "render_pass_load_action_stencil_dontcare",
+    "render_pass_store_action_store",
+    "render_pass_store_action_dontcare",
+    "render_pass_store_action_resolve",
+    "render_pass_store_action_depth_store",
+    "render_pass_store_action_depth_dontcare",
+    "render_pass_store_action_stencil_store",
+    "render_pass_store_action_stencil_dontcare",
+    "render_pass_tile_preservation_bytes",
+    "render_pass_same_key_adjacent",
+    "render_pass_same_key_reentry",
+    "render_pass_same_key_reentry_preservation_bytes",
+    "render_pass_same_key_reentry_color_preservation_bytes",
+    "render_pass_same_key_reentry_depth_preservation_bytes",
+    "render_pass_transition_rt_change_same_depth",
+    "render_pass_transition_same_rt_depth_change",
+    "render_pass_transition_rt_depth_change",
+    "render_pass_color_proof_allow_next_clear",
+    "render_pass_color_proof_allow_dead_no_present",
+    "render_pass_color_proof_block_null_color",
+    "render_pass_color_proof_block_no_lookahead",
+    "render_pass_color_proof_block_draw_target",
+    "render_pass_color_proof_block_texture_sample",
+    "render_pass_color_proof_block_surface_copy",
+    "render_pass_color_proof_block_stretch_rect",
+    "render_pass_color_proof_block_readback",
+    "render_pass_color_proof_block_color_fill",
+    "render_pass_color_proof_block_msaa_resolve",
+    "render_pass_color_proof_block_present",
+    "render_pass_color_proof_block_dead_no_present_disabled",
+    "render_pass_depth_proof_allow_next_clear",
+    "render_pass_depth_proof_allow_dead_no_present",
+    "render_pass_depth_proof_block_null_depth",
+    "render_pass_depth_proof_block_no_lookahead",
+    "render_pass_depth_proof_block_msaa_resolve",
+    "render_pass_depth_proof_block_draw_depth",
+    "render_pass_depth_proof_block_shadow_sample",
+    "render_pass_depth_proof_block_surface_copy",
+    "render_pass_depth_proof_block_stretch_rect",
+    "render_pass_depth_proof_block_readback",
+    "render_pass_depth_proof_block_color_fill",
+    "render_pass_depth_proof_block_depth_resolve",
+    "render_pass_depth_proof_block_present",
+    "commit_chunk_draw_run_scans",
+    "commit_chunk_draw_run_submits",
+    "commit_chunk_draw_run_records",
+    "commit_chunk_draw_run_binding_override_records",
+    "commit_chunk_draw_run_binding_override_bytes",
+    "commit_chunk_draw_run_binding_override_stream_records",
+    "commit_chunk_draw_run_binding_override_ib_records",
+    "commit_chunk_draw_batch_const_upload_passthrough",
+    "commit_chunk_draw_submission_batch_submits",
+    "commit_chunk_draw_submission_batch_records",
+    "commit_chunk_draw_submission_batch_max_records",
+    "commit_chunk_draw_submission_batch_size_1",
+    "commit_chunk_draw_submission_batch_size_2",
+    "commit_chunk_draw_submission_batch_size_3_4",
+    "commit_chunk_draw_submission_batch_size_5_8",
+    "commit_chunk_draw_submission_batch_size_9_16",
+    "commit_chunk_draw_submission_batch_size_17_32",
+    "commit_chunk_draw_submission_batch_size_33_plus",
+    "submit_draw_run_batch_groups",
+    "submit_draw_run_batch_records",
+    "submit_draw_run_batch_max_records",
+    "commit_chunk_draw_run_break_type_const_upload",
+    "commit_chunk_draw_run_break_type_const_upload_bytes",
+    "commit_chunk_draw_run_break_type_const_upload_registers",
+    "commit_chunk_draw_run_break_type_const_vs_f",
+    "commit_chunk_draw_run_break_type_const_vs_f_bytes",
+    "commit_chunk_draw_run_break_type_const_vs_f_registers",
+    "commit_chunk_draw_run_break_type_const_vs_i",
+    "commit_chunk_draw_run_break_type_const_vs_i_bytes",
+    "commit_chunk_draw_run_break_type_const_vs_i_registers",
+    "commit_chunk_draw_run_break_type_const_vs_b",
+    "commit_chunk_draw_run_break_type_const_vs_b_bytes",
+    "commit_chunk_draw_run_break_type_const_vs_b_registers",
+    "commit_chunk_draw_run_break_type_const_ps_f",
+    "commit_chunk_draw_run_break_type_const_ps_f_bytes",
+    "commit_chunk_draw_run_break_type_const_ps_f_registers",
+    "commit_chunk_draw_run_break_type_const_ps_i",
+    "commit_chunk_draw_run_break_type_const_ps_i_bytes",
+    "commit_chunk_draw_run_break_type_const_ps_i_registers",
+    "commit_chunk_draw_run_break_type_const_ps_b",
+    "commit_chunk_draw_run_break_type_const_ps_b_bytes",
+    "commit_chunk_draw_run_break_type_const_ps_b_registers",
+    "commit_chunk_draw_run_break_state_delta",
+    "commit_chunk_draw_run_break_state_delta_stream_only",
+    "commit_chunk_draw_run_break_state_delta_ib_only",
+    "commit_chunk_draw_run_break_state_delta_texture_only",
+    "commit_chunk_draw_run_break_state_delta_shader_only",
+    "commit_chunk_draw_run_break_state_delta_fvf_vdecl_only",
+    "commit_chunk_draw_run_break_state_delta_other_only",
+    "commit_chunk_draw_run_break_state_delta_mixed",
+    "commit_chunk_draw_run_break_state_delta_mixed_group2",
+    "commit_chunk_draw_run_break_state_delta_mixed_group3",
+    "commit_chunk_draw_run_break_state_delta_mixed_group4plus",
+    "commit_chunk_draw_run_break_state_delta_stream_ib_only",
+    "commit_chunk_draw_run_break_state_delta_mixed_with_stream",
+    "commit_chunk_draw_run_break_state_delta_mixed_with_ib",
+    "commit_chunk_draw_run_break_state_delta_mixed_with_texture",
+    "commit_chunk_draw_run_break_state_delta_mixed_with_shader",
+    "commit_chunk_draw_run_break_state_delta_mixed_with_fvf_vdecl",
+    "commit_chunk_draw_run_break_state_delta_mixed_with_other",
+    "commit_chunk_draw_run_break_state_delta_mixed_pair_stream_ib",
+    "commit_chunk_draw_run_break_state_delta_mixed_pair_stream_texture",
+    "commit_chunk_draw_run_break_state_delta_mixed_pair_stream_shader",
+    "commit_chunk_draw_run_break_state_delta_mixed_pair_stream_fvf_vdecl",
+    "commit_chunk_draw_run_break_state_delta_mixed_pair_ib_texture",
+    "commit_chunk_draw_run_break_state_delta_mixed_pair_ib_shader",
+    "commit_chunk_draw_run_break_state_delta_mixed_pair_ib_fvf_vdecl",
+    "commit_chunk_draw_run_break_state_delta_mixed_pair_texture_shader",
+    "commit_chunk_draw_run_break_state_delta_mixed_pair_texture_fvf_vdecl",
+    "commit_chunk_draw_run_break_state_delta_mixed_pair_shader_fvf_vdecl",
+    "commit_chunk_draw_delta_stream",
+    "commit_chunk_draw_delta_stream_handle",
+    "commit_chunk_draw_delta_stream_offset",
+    "commit_chunk_draw_delta_stream_stride",
+    "commit_chunk_draw_delta_ib",
+    "commit_chunk_draw_delta_ib_handle",
+    "argbuf_hybrid_bytes_per_encoder",
+    "transient_upload_bytes",
+    "transient_upload_cpu_ms",
+    "encode_draw_cpu_ms",
+    "submit_draw_cpu_ms",
+    "encode_draw_stream_bind_cpu_ms",
+    "gpu_command_buffer_time_ms",
+    "completion_wait_ms",
+    "map_buffer_wait_ms",
+    "queue_sequence_wait_ms",
+)
+
+ENCODER_SUM_KEYS = (
+    "draw_calls",
+    "indexed_draws",
+    "expanded_indexed_draws",
+    "ffp_draws",
+    "programmable_draws",
+    "pretransformed_draws",
+    "textured_draws",
+    "cull_none_draws",
+    "cull_front_draws",
+    "cull_back_draws",
+    "fill_solid_draws",
+    "fill_wireframe_draws",
+    "depth_enabled_draws",
+    "depth_write_draws",
+    "depth_func_less_draws",
+    "depth_func_lessequal_draws",
+    "depth_func_always_draws",
+    "depth_func_other_draws",
+    "scissor_enabled_draws",
+    "alpha_blend_enabled_draws",
+    "alpha_test_enabled_draws",
+    "clip_plane_enabled_draws",
+    "primitive_count",
+    "triangle_estimate",
+    "vertex_count",
+    "stream_state_samples",
+    "stream_metal_binds",
+    "stream_metal_bind_firsts",
+    "stream_metal_bind_handle_changes",
+    "stream_metal_bind_offset_changes",
+    "stream_unique_handles",
+    "stream_unique_bytes",
+    "stream_handle_changes",
+    "stream_offset_changes",
+    "stream_stride_changes",
+    "ib_state_samples",
+    "ib_metal_binds",
+    "ib_handle_changes",
+    "ib_unique_handles",
+    "ib_unique_bytes",
+    "pso_state_samples",
+    "pso_state_samples_per_draw",
+    "pso_handle_changes",
+    "pso_unique_handles",
+    "shader_variant_changes",
+    "shader_variant_unique",
+    "vsout_layout_changes",
+    "vsout_layout_unique",
+    "vsout_layout_cache_hits",
+    "vsout_layout_cache_misses",
+    "argbuf_table_bytes",
+    "argbuf_cbuf_bytes",
+    "argbuf_cbuf_vs_bytes",
+    "argbuf_cbuf_ffp_vs_bytes",
+    "argbuf_cbuf_ps_bytes",
+    "argbuf_cbuf_ffp_ps_bytes",
+    "argbuf_cbuf_vs_first_bytes",
+    "argbuf_cbuf_vs_rewrite_changed_bytes",
+    "argbuf_cbuf_vs_rewrite_unchanged_bytes",
+    "argbuf_cbuf_vs_float_changed_bytes",
+    "argbuf_cbuf_vs_int_changed_bytes",
+    "argbuf_cbuf_vs_bool_changed_bytes",
+    "argbuf_cbuf_vs_uploads",
+    "argbuf_cbuf_vs_full_struct_uploads",
+    "argbuf_cbuf_vs_usage_unknown_uploads",
+    "argbuf_cbuf_vs_usage_indexed_float_uploads",
+    "argbuf_cbuf_vs_plan_float_regs_sum",
+    "argbuf_cbuf_vs_plan_float_regs_max",
+    "argbuf_cbuf_vs_dirty_float_regs_sum",
+    "argbuf_cbuf_vs_dirty_float_regs_max",
+    "argbuf_cbuf_vs_usage_float_regs_sum",
+    "argbuf_cbuf_vs_usage_float_regs_max",
+    "argbuf_cbuf_ffp_vs_first_bytes",
+    "argbuf_cbuf_ffp_vs_rewrite_changed_bytes",
+    "argbuf_cbuf_ffp_vs_rewrite_unchanged_bytes",
+    "argbuf_cbuf_ffp_vs_matrix_changed_bytes",
+    "argbuf_cbuf_ffp_vs_material_changed_bytes",
+    "argbuf_cbuf_ffp_vs_light_changed_bytes",
+    "argbuf_cbuf_ffp_vs_blend_changed_bytes",
+    "argbuf_cbuf_ffp_vs_tex_transform_changed_bytes",
+    "argbuf_cbuf_ffp_vs_clip_changed_bytes",
+    "argbuf_cbuf_ffp_vs_viewport_changed_bytes",
+    "argbuf_cbuf_ffp_vs_fog_point_changed_bytes",
+    "set_vertex_bytes_bytes",
+    "set_vertex_bytes_slot5_bytes",
+    "set_vertex_bytes_other_bytes",
+    "transient_vertex_bytes",
+    "transient_vertex_user_bytes",
+    "transient_vertex_preupload_bytes",
+    "transient_vertex_decl_fallback_bytes",
+    "transient_vertex_expanded_main_bytes",
+    "transient_vertex_expanded_extra_bytes",
+    "transient_index_bytes",
+    "transient_index_user_bytes",
+    "transient_index_preupload_bytes",
+    "transient_index_shadow_fallback_bytes",
+)
+
+TOP_ENCODER_KEYS = (
+    "draw_calls",
+    "stream_metal_binds",
+    "stream_metal_bind_handle_changes",
+    "ib_metal_binds",
+    "ib_handle_changes",
+    "ffp_draws",
+    "pretransformed_draws",
+    "cull_none_draws",
+    "cull_back_draws",
+    "depth_enabled_draws",
+    "depth_write_draws",
+    "scissor_enabled_draws",
+    "vertex_count",
+    "triangle_estimate",
+    "pso_handle_changes",
+    "pso_state_samples_per_draw",
+    "shader_variant_changes",
+    "vsout_layout_changes",
+    "vsout_layout_cache_hits",
+    "vsout_layout_cache_misses",
+    "argbuf_cbuf_bytes",
+    "argbuf_table_bytes",
+    "set_vertex_bytes_bytes",
+    "transient_vertex_bytes",
+    "transient_index_bytes",
+)
+
+ENCODER_CSV_KEYS = (
+    "seq",
+    "encoder",
+    "rt",
+    "depth",
+    "end_reason",
+    "draw_calls",
+    "indexed_draws",
+    "expanded_indexed_draws",
+    "ffp_draws",
+    "programmable_draws",
+    "pretransformed_draws",
+    "textured_draws",
+    "cull_none_draws",
+    "cull_front_draws",
+    "cull_back_draws",
+    "fill_solid_draws",
+    "fill_wireframe_draws",
+    "depth_enabled_draws",
+    "depth_write_draws",
+    "depth_func_less_draws",
+    "depth_func_lessequal_draws",
+    "depth_func_always_draws",
+    "depth_func_other_draws",
+    "scissor_enabled_draws",
+    "alpha_blend_enabled_draws",
+    "alpha_test_enabled_draws",
+    "clip_plane_enabled_draws",
+    "point_draws",
+    "line_draws",
+    "triangle_draws",
+    "primitive_count",
+    "triangle_estimate",
+    "vertex_count",
+    "texture_mask_or",
+    "stream0_stride_min",
+    "stream0_stride_max",
+    "stream_state_samples",
+    "stream_metal_binds",
+    "stream_metal_bind_firsts",
+    "stream_metal_bind_handle_changes",
+    "stream_metal_bind_offset_changes",
+    "stream_unique_handles",
+    "stream_unique_handle_overflows",
+    "stream_unique_bytes",
+    "stream_unique_dynamic_handles",
+    "stream_unique_writeonly_handles",
+    "stream_unique_default_pool_handles",
+    "stream_unique_managed_pool_handles",
+    "stream_unique_systemmem_pool_handles",
+    "stream_unique_scratch_pool_handles",
+    "stream_handle_changes",
+    "stream_offset_changes",
+    "stream_stride_changes",
+    "stream0_last_handle",
+    "stream0_last_offset",
+    "stream0_last_stride",
+    "ib_state_samples",
+    "ib_metal_binds",
+    "ib_handle_changes",
+    "ib_unique_handles",
+    "ib_unique_handle_overflows",
+    "ib_unique_bytes",
+    "ib_unique_dynamic_handles",
+    "ib_unique_writeonly_handles",
+    "ib_unique_default_pool_handles",
+    "ib_unique_managed_pool_handles",
+    "ib_unique_systemmem_pool_handles",
+    "ib_unique_scratch_pool_handles",
+    "ib_last_handle",
+    "pso_state_samples",
+    "pso_state_samples_per_draw",
+    "pso_handle_changes",
+    "pso_unique_handles",
+    "pso_unique_handle_overflows",
+    "pso_last_handle",
+    "shader_variant_changes",
+    "shader_variant_unique",
+    "shader_variant_unique_overflows",
+    "shader_variant_last",
+    "vertex_shader_last",
+    "pixel_shader_last",
+    "vertex_shader_source_last",
+    "pixel_shader_source_last",
+    "vsout_layout_changes",
+    "vsout_layout_unique",
+    "vsout_layout_unique_overflows",
+    "vsout_layout_last",
+    "vsout_layout_cache_hits",
+    "vsout_layout_cache_misses",
+    "argbuf_table_bytes",
+    "argbuf_cbuf_bytes",
+    "argbuf_cbuf_vs_bytes",
+    "argbuf_cbuf_ffp_vs_bytes",
+    "argbuf_cbuf_ps_bytes",
+    "argbuf_cbuf_ffp_ps_bytes",
+    "argbuf_cbuf_vs_first_bytes",
+    "argbuf_cbuf_vs_rewrite_changed_bytes",
+    "argbuf_cbuf_vs_rewrite_unchanged_bytes",
+    "argbuf_cbuf_vs_float_changed_bytes",
+    "argbuf_cbuf_vs_int_changed_bytes",
+    "argbuf_cbuf_vs_bool_changed_bytes",
+    "argbuf_cbuf_vs_uploads",
+    "argbuf_cbuf_vs_full_struct_uploads",
+    "argbuf_cbuf_vs_usage_unknown_uploads",
+    "argbuf_cbuf_vs_usage_indexed_float_uploads",
+    "argbuf_cbuf_vs_plan_float_regs_sum",
+    "argbuf_cbuf_vs_plan_float_regs_max",
+    "argbuf_cbuf_vs_dirty_float_regs_sum",
+    "argbuf_cbuf_vs_dirty_float_regs_max",
+    "argbuf_cbuf_vs_usage_float_regs_sum",
+    "argbuf_cbuf_vs_usage_float_regs_max",
+    "argbuf_cbuf_ffp_vs_first_bytes",
+    "argbuf_cbuf_ffp_vs_rewrite_changed_bytes",
+    "argbuf_cbuf_ffp_vs_rewrite_unchanged_bytes",
+    "argbuf_cbuf_ffp_vs_matrix_changed_bytes",
+    "argbuf_cbuf_ffp_vs_material_changed_bytes",
+    "argbuf_cbuf_ffp_vs_light_changed_bytes",
+    "argbuf_cbuf_ffp_vs_blend_changed_bytes",
+    "argbuf_cbuf_ffp_vs_tex_transform_changed_bytes",
+    "argbuf_cbuf_ffp_vs_clip_changed_bytes",
+    "argbuf_cbuf_ffp_vs_viewport_changed_bytes",
+    "argbuf_cbuf_ffp_vs_fog_point_changed_bytes",
+    "set_vertex_bytes_calls",
+    "set_vertex_bytes_bytes",
+    "set_vertex_bytes_slot5_calls",
+    "set_vertex_bytes_slot5_bytes",
+    "set_vertex_bytes_other_calls",
+    "set_vertex_bytes_other_bytes",
+    "transient_vertex_bytes",
+    "transient_vertex_user_bytes",
+    "transient_vertex_preupload_bytes",
+    "transient_vertex_decl_fallback_bytes",
+    "transient_vertex_expanded_main_bytes",
+    "transient_vertex_expanded_extra_bytes",
+    "transient_index_bytes",
+    "transient_index_user_bytes",
+    "transient_index_preupload_bytes",
+    "transient_index_shadow_fallback_bytes",
+)
+
+STREAM_CSV_KEYS = (
+    "seq",
+    "encoder",
+    "stream",
+    "samples",
+    "metal_binds",
+    "metal_bind_firsts",
+    "metal_bind_handle_changes",
+    "metal_bind_offset_changes",
+    "unique_handles",
+    "unique_handle_overflows",
+    "unique_bytes",
+    "unique_dynamic_handles",
+    "unique_writeonly_handles",
+    "unique_default_pool_handles",
+    "unique_managed_pool_handles",
+    "unique_systemmem_pool_handles",
+    "unique_scratch_pool_handles",
+    "handle_changes",
+    "offset_changes",
+    "stride_changes",
+    "last_handle",
+    "last_offset",
+    "last_stride",
+)
+
+RENDER_PASS_ACTION_GROUPS = (
+    ("Color Load", (
+        "render_pass_load_action_load",
+        "render_pass_load_action_clear",
+        "render_pass_load_action_dontcare",
+    )),
+    ("Depth Load", (
+        "render_pass_load_action_depth_load",
+        "render_pass_load_action_depth_clear",
+        "render_pass_load_action_depth_dontcare",
+    )),
+    ("Stencil Load", (
+        "render_pass_load_action_stencil_load",
+        "render_pass_load_action_stencil_clear",
+        "render_pass_load_action_stencil_dontcare",
+    )),
+    ("Color Store", (
+        "render_pass_store_action_store",
+        "render_pass_store_action_dontcare",
+        "render_pass_store_action_resolve",
+    )),
+    ("Depth Store", (
+        "render_pass_store_action_depth_store",
+        "render_pass_store_action_depth_dontcare",
+    )),
+    ("Stencil Store", (
+        "render_pass_store_action_stencil_store",
+        "render_pass_store_action_stencil_dontcare",
+    )),
+)
+
+RENDER_PASS_REENTRY_KEYS = (
+    "render_pass_tile_preservation_bytes",
+    "render_pass_same_key_adjacent",
+    "render_pass_same_key_reentry",
+    "render_pass_same_key_reentry_preservation_bytes",
+    "render_pass_same_key_reentry_color_preservation_bytes",
+    "render_pass_same_key_reentry_depth_preservation_bytes",
+    "render_pass_transition_rt_change_same_depth",
+    "render_pass_transition_same_rt_depth_change",
+    "render_pass_transition_rt_depth_change",
+)
+
+STATE_DELTA_BREAK_KEYS = (
+    "commit_chunk_draw_run_break_state_delta_stream_only",
+    "commit_chunk_draw_run_break_state_delta_ib_only",
+    "commit_chunk_draw_run_break_state_delta_texture_only",
+    "commit_chunk_draw_run_break_state_delta_shader_only",
+    "commit_chunk_draw_run_break_state_delta_fvf_vdecl_only",
+    "commit_chunk_draw_run_break_state_delta_other_only",
+    "commit_chunk_draw_run_break_state_delta_mixed",
+    "commit_chunk_draw_run_break_state_delta_mixed_group2",
+    "commit_chunk_draw_run_break_state_delta_mixed_group3",
+    "commit_chunk_draw_run_break_state_delta_mixed_group4plus",
+    "commit_chunk_draw_run_break_state_delta_stream_ib_only",
+    "commit_chunk_draw_run_break_state_delta_mixed_with_stream",
+    "commit_chunk_draw_run_break_state_delta_mixed_with_ib",
+    "commit_chunk_draw_run_break_state_delta_mixed_with_texture",
+    "commit_chunk_draw_run_break_state_delta_mixed_with_shader",
+    "commit_chunk_draw_run_break_state_delta_mixed_with_fvf_vdecl",
+    "commit_chunk_draw_run_break_state_delta_mixed_with_other",
+    "commit_chunk_draw_run_break_state_delta_mixed_pair_stream_ib",
+    "commit_chunk_draw_run_break_state_delta_mixed_pair_stream_texture",
+    "commit_chunk_draw_run_break_state_delta_mixed_pair_stream_shader",
+    "commit_chunk_draw_run_break_state_delta_mixed_pair_stream_fvf_vdecl",
+    "commit_chunk_draw_run_break_state_delta_mixed_pair_ib_texture",
+    "commit_chunk_draw_run_break_state_delta_mixed_pair_ib_shader",
+    "commit_chunk_draw_run_break_state_delta_mixed_pair_ib_fvf_vdecl",
+    "commit_chunk_draw_run_break_state_delta_mixed_pair_texture_shader",
+    "commit_chunk_draw_run_break_state_delta_mixed_pair_texture_fvf_vdecl",
+    "commit_chunk_draw_run_break_state_delta_mixed_pair_shader_fvf_vdecl",
+)
+
+RENDER_PASS_DEPTH_PROOF_KEYS = (
+    "render_pass_depth_proof_allow_next_clear",
+    "render_pass_depth_proof_allow_dead_no_present",
+    "render_pass_depth_proof_block_null_depth",
+    "render_pass_depth_proof_block_no_lookahead",
+    "render_pass_depth_proof_block_msaa_resolve",
+    "render_pass_depth_proof_block_draw_depth",
+    "render_pass_depth_proof_block_shadow_sample",
+    "render_pass_depth_proof_block_surface_copy",
+    "render_pass_depth_proof_block_stretch_rect",
+    "render_pass_depth_proof_block_readback",
+    "render_pass_depth_proof_block_color_fill",
+    "render_pass_depth_proof_block_depth_resolve",
+    "render_pass_depth_proof_block_present",
+)
+
+RENDER_PASS_COLOR_PROOF_KEYS = (
+    "render_pass_color_proof_allow_next_clear",
+    "render_pass_color_proof_allow_dead_no_present",
+    "render_pass_color_proof_block_null_color",
+    "render_pass_color_proof_block_no_lookahead",
+    "render_pass_color_proof_block_draw_target",
+    "render_pass_color_proof_block_texture_sample",
+    "render_pass_color_proof_block_surface_copy",
+    "render_pass_color_proof_block_stretch_rect",
+    "render_pass_color_proof_block_readback",
+    "render_pass_color_proof_block_color_fill",
+    "render_pass_color_proof_block_msaa_resolve",
+    "render_pass_color_proof_block_present",
+    "render_pass_color_proof_block_dead_no_present_disabled",
+)
+
+
+def parse_number(value: Any) -> int | float | str | None:
+    if value is None:
+        return None
+    if isinstance(value, (int, float)):
+        return value
+    text = str(value).rstrip("]")
+    if text.startswith("0x"):
+        return text
+    try:
+        if "." in text:
+            return float(text)
+        return int(text)
+    except ValueError:
+        return text
+
+
+def load_result(path: Path) -> dict[str, Any]:
+    result_path = path / "result.json"
+    if not result_path.exists():
+        raise SystemExit(f"missing result.json: {result_path}")
+    return json.loads(result_path.read_text(encoding="utf-8"))
+
+
+def parse_kv_line(line: str) -> dict[str, int | float | str]:
+    parsed: dict[str, int | float | str] = {}
+    for key, raw in KEY_VALUE_RE.findall(line):
+        value = parse_number(raw)
+        if value is not None:
+            parsed[key] = value
+    return parsed
+
+
+def parse_encoder_lines(log_path: Path) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+    encoders: list[dict[str, Any]] = []
+    streams: list[dict[str, Any]] = []
+    if not log_path.exists():
+        return encoders, streams
+    for line in log_path.read_text(encoding="utf-8", errors="replace").splitlines():
+        if line.startswith(ENCODER_PREFIX):
+            encoders.append(parse_kv_line(line))
+        elif line.startswith(STREAM_PREFIX):
+            streams.append(parse_kv_line(line))
+    return encoders, streams
+
+
+def sum_key(rows: list[dict[str, Any]], key: str) -> int | float:
+    total: int | float = 0
+    for row in rows:
+        value = row.get(key, 0)
+        if isinstance(value, (int, float)):
+            total += value
+    return total
+
+
+def fmt(value: Any) -> str:
+    if value is None:
+        return "missing"
+    if isinstance(value, float):
+        return f"{value:.3f}"
+    if isinstance(value, int):
+        return f"{value:,}"
+    return str(value)
+
+
+def pct(part: Any, total: Any) -> str:
+    if not isinstance(part, (int, float)) or not isinstance(total, (int, float)) or total == 0:
+        return "n/a"
+    return f"{(part / total) * 100.0:.2f}%"
+
+
+def ratio_text(numerator: Any, denominator: Any) -> str:
+    if (
+        not isinstance(numerator, (int, float)) or
+        not isinstance(denominator, (int, float)) or
+        denominator == 0
+    ):
+        return "n/a"
+    return f"{numerator / denominator:.3f}"
+
+
+def numeric_value(row: dict[str, Any], key: str) -> int | float:
+    value = row.get(key, 0)
+    if isinstance(value, (int, float)):
+        return value
+    return 0
+
+
+def write_csv(path: Path, rows: list[dict[str, Any]], keys: tuple[str, ...]) -> None:
+    with path.open("w", newline="", encoding="utf-8") as handle:
+        writer = csv.DictWriter(handle, fieldnames=keys, extrasaction="ignore")
+        writer.writeheader()
+        for row in rows:
+            writer.writerow({key: row.get(key, "") for key in keys})
+
+
+def enrich_encoder_rows(encoders: list[dict[str, Any]]) -> None:
+    for row in encoders:
+        draws = numeric_value(row, "draw_calls")
+        pso_samples = numeric_value(row, "pso_state_samples")
+        row["pso_state_samples_per_draw"] = (pso_samples / draws) if draws else 0.0
+
+
+def write_markdown(
+    output: Path,
+    run_dir: Path,
+    result: dict[str, Any],
+    encoders: list[dict[str, Any]],
+    streams: list[dict[str, Any]],
+    encoder_csv: Path,
+    stream_csv: Path,
+) -> None:
+    counters = result.get("dxmt9_perf_counters", {})
+    bridge = result.get("dxmt9_bridge_counters", {})
+    lines: list[str] = []
+
+    lines.append("# 3DMark05 Perf Summary")
+    lines.append("")
+    lines.append(f"- Output: `{run_dir}`")
+    lines.append(f"- Status: `{result.get('status', 'unknown')}`")
+    lines.append(f"- Capture error: `{result.get('capture_error')}`")
+    lines.append(f"- Encoder lines: `{len(encoders)}`")
+    lines.append(f"- Stream lines: `{len(streams)}`")
+    lines.append(f"- Encoder CSV: `{encoder_csv}`")
+    lines.append(f"- Stream CSV: `{stream_csv}`")
+    lines.append("")
+
+    lines.append("## Run Counters")
+    lines.append("")
+    lines.append("| Counter | Value |")
+    lines.append("|---|---:|")
+    for key in RUN_COUNTERS:
+        lines.append(f"| `{key}` | `{fmt(counters.get(key))}` |")
+    lines.append("")
+
+    draw_run_submits = counters.get("commit_chunk_draw_run_submits")
+    draw_run_records = counters.get("commit_chunk_draw_run_records")
+    submission_submits = counters.get("commit_chunk_draw_submission_batch_submits")
+    submission_records = counters.get("commit_chunk_draw_submission_batch_records")
+    backend_batch_groups = counters.get("submit_draw_run_batch_groups")
+    backend_batch_records = counters.get("submit_draw_run_batch_records")
+    lines.append("## Draw Batching Derived")
+    lines.append("")
+    lines.append("| Metric | Value |")
+    lines.append("|---|---:|")
+    lines.append(
+        "| `draw_run_records_per_submit` | "
+        f"`{ratio_text(draw_run_records, draw_run_submits)}` |"
+    )
+    lines.append(
+        "| `draw_submission_batch_records_per_submit` | "
+        f"`{ratio_text(submission_records, submission_submits)}` |"
+    )
+    lines.append(
+        "| `draw_submission_batch_max_records` | "
+        f"`{fmt(counters.get('commit_chunk_draw_submission_batch_max_records'))}` |"
+    )
+    lines.append(
+        "| `backend_draw_run_batch_records_per_group` | "
+        f"`{ratio_text(backend_batch_records, backend_batch_groups)}` |"
+    )
+    lines.append(
+        "| `backend_draw_run_batch_max_records` | "
+        f"`{fmt(counters.get('submit_draw_run_batch_max_records'))}` |"
+    )
+    lines.append(
+        "| `const_upload_passthrough_per_submission_batch` | "
+        f"`{ratio_text(counters.get('commit_chunk_draw_batch_const_upload_passthrough'), submission_submits)}` |"
+    )
+    lines.append("")
+
+    submission_batch_size_keys = (
+        "commit_chunk_draw_submission_batch_size_1",
+        "commit_chunk_draw_submission_batch_size_2",
+        "commit_chunk_draw_submission_batch_size_3_4",
+        "commit_chunk_draw_submission_batch_size_5_8",
+        "commit_chunk_draw_submission_batch_size_9_16",
+        "commit_chunk_draw_submission_batch_size_17_32",
+        "commit_chunk_draw_submission_batch_size_33_plus",
+    )
+    lines.append("### Submission Batch Size Histogram")
+    lines.append("")
+    lines.append("| Counter | Value | Share |")
+    lines.append("|---|---:|---:|")
+    for key in submission_batch_size_keys:
+        value = counters.get(key)
+        lines.append(f"| `{key}` | `{fmt(value)}` | `{pct(value, submission_submits)}` |")
+    lines.append("")
+
+    lines.append("## Render Pass Action Split")
+    lines.append("")
+    for title, keys in RENDER_PASS_ACTION_GROUPS:
+        total = sum(
+            counters.get(key, 0)
+            for key in keys
+            if isinstance(counters.get(key), (int, float))
+        )
+        lines.append(f"### {title}")
+        lines.append("")
+        lines.append("| Counter | Value | Share |")
+        lines.append("|---|---:|---:|")
+        for key in keys:
+            value = counters.get(key)
+            lines.append(f"| `{key}` | `{fmt(value)}` | `{pct(value, total)}` |")
+        lines.append("")
+
+    lines.append("## Render Pass Re-entry / Preservation")
+    lines.append("")
+    lines.append("| Counter | Value |")
+    lines.append("|---|---:|")
+    for key in RENDER_PASS_REENTRY_KEYS:
+        lines.append(f"| `{key}` | `{fmt(counters.get(key))}` |")
+    lines.append("")
+
+    color_proof_total = sum(
+        counters.get(key, 0)
+        for key in RENDER_PASS_COLOR_PROOF_KEYS
+        if isinstance(counters.get(key), (int, float))
+    )
+    lines.append("## Color Store Proof Split")
+    lines.append("")
+    lines.append("| Counter | Value | Share |")
+    lines.append("|---|---:|---:|")
+    for key in RENDER_PASS_COLOR_PROOF_KEYS:
+        value = counters.get(key)
+        lines.append(f"| `{key}` | `{fmt(value)}` | `{pct(value, color_proof_total)}` |")
+    lines.append("")
+
+    depth_proof_total = sum(
+        counters.get(key, 0)
+        for key in RENDER_PASS_DEPTH_PROOF_KEYS
+        if isinstance(counters.get(key), (int, float))
+    )
+    lines.append("## Depth Store Proof Split")
+    lines.append("")
+    lines.append("| Counter | Value | Share |")
+    lines.append("|---|---:|---:|")
+    for key in RENDER_PASS_DEPTH_PROOF_KEYS:
+        value = counters.get(key)
+        lines.append(f"| `{key}` | `{fmt(value)}` | `{pct(value, depth_proof_total)}` |")
+    lines.append("")
+
+    state_delta_total = counters.get("commit_chunk_draw_run_break_state_delta")
+    lines.append("## State-Delta Break Split")
+    lines.append("")
+    lines.append("| Counter | Value | Share |")
+    lines.append("|---|---:|---:|")
+    for key in STATE_DELTA_BREAK_KEYS:
+        value = counters.get(key)
+        lines.append(f"| `{key}` | `{fmt(value)}` | `{pct(value, state_delta_total)}` |")
+    lines.append("")
+
+    const_total = counters.get("commit_chunk_draw_run_break_type_const_upload")
+    const_keys = [
+        "commit_chunk_draw_run_break_type_const_vs_f",
+        "commit_chunk_draw_run_break_type_const_vs_i",
+        "commit_chunk_draw_run_break_type_const_vs_b",
+        "commit_chunk_draw_run_break_type_const_ps_f",
+        "commit_chunk_draw_run_break_type_const_ps_i",
+        "commit_chunk_draw_run_break_type_const_ps_b",
+    ]
+    lines.append("## Const-Upload Break Split")
+    lines.append("")
+    lines.append("| Counter | Value | Share |")
+    lines.append("|---|---:|---:|")
+    for key in const_keys:
+        value = counters.get(key)
+        lines.append(f"| `{key}` | `{fmt(value)}` | `{pct(value, const_total)}` |")
+    lines.append("")
+
+    if encoders:
+        lines.append("## Encoder Aggregates")
+        lines.append("")
+        lines.append("| Metric | Sum |")
+        lines.append("|---|---:|")
+        for key in ENCODER_SUM_KEYS:
+            lines.append(f"| `{key}` | `{fmt(sum_key(encoders, key))}` |")
+        lines.append("")
+
+        cbuf_total = sum_key(encoders, "argbuf_cbuf_bytes")
+        cbuf_class_keys = (
+            "argbuf_cbuf_vs_bytes",
+            "argbuf_cbuf_ffp_vs_bytes",
+            "argbuf_cbuf_ps_bytes",
+            "argbuf_cbuf_ffp_ps_bytes",
+            "argbuf_cbuf_vs_first_bytes",
+            "argbuf_cbuf_vs_rewrite_changed_bytes",
+            "argbuf_cbuf_vs_rewrite_unchanged_bytes",
+            "argbuf_cbuf_ffp_vs_first_bytes",
+            "argbuf_cbuf_ffp_vs_rewrite_changed_bytes",
+            "argbuf_cbuf_ffp_vs_rewrite_unchanged_bytes",
+        )
+        lines.append("## Argbuf Cbuf Split")
+        lines.append("")
+        lines.append("| Metric | Sum | Share of cbuf |")
+        lines.append("|---|---:|---:|")
+        for key in cbuf_class_keys:
+            value = sum_key(encoders, key)
+            lines.append(f"| `{key}` | `{fmt(value)}` | `{pct(value, cbuf_total)}` |")
+        lines.append("")
+
+        transient_vertex_total = sum_key(encoders, "transient_vertex_bytes")
+        transient_index_total = sum_key(encoders, "transient_index_bytes")
+        transient_keys = (
+            ("transient_vertex_user_bytes", transient_vertex_total),
+            ("transient_vertex_preupload_bytes", transient_vertex_total),
+            ("transient_vertex_decl_fallback_bytes", transient_vertex_total),
+            ("transient_vertex_expanded_main_bytes", transient_vertex_total),
+            ("transient_vertex_expanded_extra_bytes", transient_vertex_total),
+            ("transient_index_user_bytes", transient_index_total),
+            ("transient_index_preupload_bytes", transient_index_total),
+            ("transient_index_shadow_fallback_bytes", transient_index_total),
+        )
+        lines.append("## Transient Upload Source Split")
+        lines.append("")
+        lines.append("| Metric | Sum | Share of class |")
+        lines.append("|---|---:|---:|")
+        for key, total in transient_keys:
+            value = sum_key(encoders, key)
+            lines.append(f"| `{key}` | `{fmt(value)}` | `{pct(value, total)}` |")
+        lines.append("")
+
+        def add_top_section(title: str, sort_key: str) -> None:
+            top_rows = sorted(encoders, key=lambda row: numeric_value(row, sort_key), reverse=True)[:10]
+            lines.append(f"## {title}")
+            lines.append("")
+            header = "| seq | enc | rt | depth | " + " | ".join(f"`{k}`" for k in TOP_ENCODER_KEYS) + " |"
+            lines.append(header)
+            lines.append("|---:|---:|---|---|" + "---:|" * len(TOP_ENCODER_KEYS))
+            for row in top_rows:
+                values = [
+                    fmt(row.get("seq")),
+                    fmt(row.get("encoder")),
+                    fmt(row.get("rt")),
+                    fmt(row.get("depth")),
+                ]
+                values.extend(fmt(row.get(key)) for key in TOP_ENCODER_KEYS)
+                lines.append("| " + " | ".join(values) + " |")
+            lines.append("")
+
+        top = sorted(
+            encoders,
+            key=lambda row: numeric_value(row, "argbuf_cbuf_bytes"),
+            reverse=True,
+        )[:10]
+        lines.append("## Top Encoders By Argbuf Cbuf Bytes")
+        lines.append("")
+        header = "| seq | enc | rt | depth | " + " | ".join(f"`{k}`" for k in TOP_ENCODER_KEYS) + " |"
+        lines.append(header)
+        lines.append("|---:|---:|---|---|" + "---:|" * len(TOP_ENCODER_KEYS))
+        for row in top:
+            values = [
+                fmt(row.get("seq")),
+                fmt(row.get("encoder")),
+                fmt(row.get("rt")),
+                fmt(row.get("depth")),
+            ]
+            values.extend(fmt(row.get(key)) for key in TOP_ENCODER_KEYS)
+            lines.append("| " + " | ".join(values) + " |")
+        lines.append("")
+
+        add_top_section("Top Encoders By Transient Vertex Bytes", "transient_vertex_bytes")
+        add_top_section("Top Encoders By Transient Index Bytes", "transient_index_bytes")
+        add_top_section("Top Encoders By setVertexBytes", "set_vertex_bytes_bytes")
+        add_top_section("Top Encoders By Argbuf Table Bytes", "argbuf_table_bytes")
+        add_top_section("Top Encoders By Stream Handle Changes", "stream_handle_changes")
+        add_top_section("Top Encoders By Stream Offset Changes", "stream_offset_changes")
+        add_top_section("Top Encoders By Stream Stride Changes", "stream_stride_changes")
+        add_top_section("Top Encoders By IB Handle Changes", "ib_handle_changes")
+
+    if bridge:
+        lines.append("## Bridge Launch Check")
+        lines.append("")
+        lines.append("| Counter | Value |")
+        lines.append("|---|---:|")
+        for key in ("bridge_factory", "bridge_draw", "bridge_present", "bridge_commit_chunk"):
+            lines.append(f"| `{key}` | `{fmt(bridge.get(key))}` |")
+        lines.append("")
+
+    output.write_text("\n".join(lines) + "\n", encoding="utf-8")
+
+
+def main() -> int:
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("output_dir", type=Path, help="experiment output directory")
+    parser.add_argument(
+        "--output",
+        type=Path,
+        help="markdown output path (default: <output_dir>/3dmark05-perf-summary.md)",
+    )
+    args = parser.parse_args()
+
+    run_dir = args.output_dir
+    result = load_result(run_dir)
+    encoders, streams = parse_encoder_lines(run_dir / "dxmt9.log")
+    enrich_encoder_rows(encoders)
+    output = args.output or (run_dir / "3dmark05-perf-summary.md")
+    encoder_csv = output.parent / "3dmark05-perf-encoders.csv"
+    stream_csv = output.parent / "3dmark05-perf-encoder-streams.csv"
+    write_csv(encoder_csv, encoders, ENCODER_CSV_KEYS)
+    write_csv(stream_csv, streams, STREAM_CSV_KEYS)
+    write_markdown(output, run_dir, result, encoders, streams, encoder_csv, stream_csv)
+    print(output)
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

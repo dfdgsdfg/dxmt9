@@ -66,14 +66,35 @@ bool drawPacketStateDeltaEquals(const D9CDrawPrimitivePacket& a,
   return true;
 }
 
+D9CDrawPrimitivePacket drawPacketWithoutStreamDelta(
+    D9CDrawPrimitivePacket packet) noexcept {
+  packet.streamSourceMask = 0;
+  std::memset(packet.streamSources, 0, sizeof(packet.streamSources));
+  return packet;
+}
+
+bool packetHasNoStateDeltaExceptStream(const D9CDrawPrimitivePacket& p) noexcept {
+  return packetHasNoStateDelta(drawPacketWithoutStreamDelta(p));
+}
+
+bool drawPacketStateDeltaEqualsExceptStream(
+    const D9CDrawPrimitivePacket& a,
+    const D9CDrawPrimitivePacket& b) noexcept {
+  return drawPacketStateDeltaEquals(drawPacketWithoutStreamDelta(a),
+                                    drawPacketWithoutStreamDelta(b));
+}
+
 bool drawPacketStateDeltaCompatibleWithRunBase(
     const D9CDrawPrimitivePacket& base,
     const D9CDrawPrimitivePacket& candidate) noexcept {
   if (packetHasNoStateDelta(candidate)) {
     return true;
   }
+  if (packetHasNoStateDeltaExceptStream(candidate)) {
+    return true;
+  }
   return !packetHasNoStateDelta(base) &&
-         drawPacketStateDeltaEquals(base, candidate);
+         drawPacketStateDeltaEqualsExceptStream(base, candidate);
 }
 
 struct ImportedDrawRecordDelta {
@@ -134,17 +155,28 @@ bool importedDrawRecordCompatibleWithRunBase(
     return false;
   }
 
-  if (!candidateDelta.indexed || !candidateDelta.ibValid) {
-    return true;
-  }
-  return baseDelta.indexed && baseDelta.ibValid &&
-         wireHandleEquals(candidateDelta.ibHandle, baseDelta.ibHandle);
+  return true;
 }
 
 bool importedDrawRecordHasSameType(
     const ImportedRecordView& base,
     const ImportedRecordView& candidate) noexcept {
   return base.header.type == candidate.header.type;
+}
+
+bool importedRecordIsConstantUpload(
+    const ImportedRecordView& record) noexcept {
+  switch (record.header.type) {
+  case D9C_COMMAND_RECORD_SET_VS_CONST_F:
+  case D9C_COMMAND_RECORD_SET_VS_CONST_I:
+  case D9C_COMMAND_RECORD_SET_VS_CONST_B:
+  case D9C_COMMAND_RECORD_SET_PS_CONST_F:
+  case D9C_COMMAND_RECORD_SET_PS_CONST_I:
+  case D9C_COMMAND_RECORD_SET_PS_CONST_B:
+    return true;
+  default:
+    return false;
+  }
 }
 
 void scanStopForIncompatibleDrawRecord(
@@ -160,7 +192,9 @@ void scanStopForIncompatibleDrawRecord(
 void scanStopForNonDrawRecord(
     ImportedDrawRunScan& scan,
     const ImportedRecordView& record) noexcept {
-  scan.stop = ImportedDrawRunScanStop::DifferentRecordType;
+  scan.stop = importedRecordIsConstantUpload(record)
+      ? ImportedDrawRunScanStop::ConstantUpload
+      : ImportedDrawRunScanStop::DifferentRecordType;
   scan.stopRecord = record;
 }
 

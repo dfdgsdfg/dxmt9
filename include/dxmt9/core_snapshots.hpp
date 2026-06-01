@@ -756,6 +756,22 @@ struct DrawPayloadRange {
   constexpr bool empty() const noexcept { return size == 0; }
 };
 
+struct DrawStreamBindingOverride {
+  Handle buffer{};
+  u32 offset = 0;
+  u32 stride = 0;
+};
+
+struct DrawBindingOverride {
+  std::array<DrawStreamBindingOverride, kMaxStreams> streams{};
+  u32 streamMask = 0;
+  Handle indexBuffer{};
+  IndexType indexType = IndexType::UInt16;
+  bool indexBufferValid = false;
+};
+static_assert(std::is_trivially_copyable_v<DrawBindingOverride>,
+              "DrawBindingOverride is serialized into draw-run payload bytes.");
+
 struct CanonicalDrawState {
   FlatDrawStateRecord hot{};
   DrawShaderLayoutContext shaderLayout{};
@@ -792,6 +808,8 @@ struct DrawParam {
   bool indexed = false;                    // true when using drawIndexedPrimitive
   DrawPayloadRange userVertexRange{};      // draw-run payload slice, if present
   DrawPayloadRange userIndexRange{};       // draw-run payload slice, if present
+  DrawPayloadRange bindingOverrideRange{}; // DrawBindingOverride payload slice
+  DrawUniformHandle uniformHandle{};       // optional per-draw uniform snapshot
 };
 static_assert(std::is_trivially_copyable_v<DrawParam>,
               "DrawParam is hot-path draw metadata and must remain flat.");
@@ -799,6 +817,7 @@ static_assert(std::is_trivially_copyable_v<DrawParam>,
 struct DrawParamPayloadView {
   std::span<const u8> userVertexData{};
   std::span<const u8> userIndexData{};
+  std::span<const u8> bindingOverrideData{};
 };
 
 struct DrawRunSubmission {
@@ -1426,6 +1445,8 @@ class Device : public std::enable_shared_from_this<Device> {
   // by the chunk importer when consecutive D9C_COMMAND_RECORD_DRAW_* records
   // resolve to the same run-invariant state after applying the first delta.
   HResult drawPrimitiveRun(std::span<const DrawParam> draws);
+  HResult drawPrimitiveRun(std::span<const DrawParam> draws,
+                           std::span<const DrawParamPayloadView> payloads);
   HResult snapshotDrawSubmissionFromCurrentState(DrawParam draw,
                                                  DrawRunSubmission& submission);
   void submitDrawSubmissionBatch(std::span<DrawRunSubmission> submissions);

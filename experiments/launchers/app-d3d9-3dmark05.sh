@@ -10,6 +10,12 @@ default_3dmark05_selection_args="-gt1"
 default_3dmark05_runner_args="-nosplash -nosysteminfo -noscreens"
 default_3dmark05_args="$default_3dmark05_selection_args $default_3dmark05_runner_args"
 
+append_result_file_app-d3d9-3dmark05() {
+  if [[ -n "${DXMT_3DMARK05_RESULT_FILE:-}" ]]; then
+    dxmt_3dmark05_args+=("$DXMT_3DMARK05_RESULT_FILE")
+  fi
+}
+
 focus_app-d3d9-3dmark05() {
   osascript \
     -e 'tell application "System Events" to set frontmost of first process whose name contains "3DMark05" to true'
@@ -19,6 +25,20 @@ send_enter_app-d3d9-3dmark05() {
   osascript \
     -e 'tell application "System Events" to set frontmost of first process whose name contains "3DMark05" to true' \
     -e 'tell application "System Events" to key code 36'
+}
+
+require_unlocked_session_app-d3d9-3dmark05() {
+  if [[ "${DXMT_3DMARK05_REQUIRE_UNLOCKED:-1}" == "0" ]]; then
+    return 0
+  fi
+  if command -v ioreg >/dev/null 2>&1; then
+    local session_state
+    session_state=$(ioreg -n Root -d1 2>/dev/null || true)
+    if [[ "$session_state" == *'"CGSSessionScreenIsLocked"=Yes'* ]]; then
+      echo "[3dmark05] macOS session is locked; unlock the desktop or set DXMT_3DMARK05_REQUIRE_UNLOCKED=0 to bypass" >&2
+      exit 2
+    fi
+  fi
 }
 
 schedule_app-d3d9-3dmark05_enter() {
@@ -97,6 +117,7 @@ if [[ "${DXMT_3DMARK05_DIRECT:-0}" != "0" ]]; then
   : > "$log_path"
 
   read -r -a dxmt_3dmark05_args <<< "${DXMT_3DMARK05_ARGS:-$default_3dmark05_args}"
+  append_result_file_app-d3d9-3dmark05
 
   export DXMT_EXPERIMENT_WORKDIR
   DXMT_EXPERIMENT_WORKDIR="$exe_dir"
@@ -106,6 +127,8 @@ if [[ "${DXMT_3DMARK05_DIRECT:-0}" != "0" ]]; then
   echo "[3dmark05-direct] log=$log_path"
   echo "[3dmark05-direct] default_selection=GT1-only"
   echo "[3dmark05-direct] args=${dxmt_3dmark05_args[*]}"
+
+  require_unlocked_session_app-d3d9-3dmark05
 
   if [[ "${DXMT_3DMARK05_AUTO_ENTER:-1}" != "0" ]]; then
     schedule_app-d3d9-3dmark05_enter 0
@@ -135,11 +158,14 @@ exp_stage_dxmt9
 export DXMT_EXPERIMENT_WORKDIR
 DXMT_EXPERIMENT_WORKDIR="$exp_repo_root/experiments/prefixs/app-d3d9-3dmark05/drive_c/Program Files (x86)/Futuremark/3DMark05"
 
+require_unlocked_session_app-d3d9-3dmark05
+
 if [[ "${DXMT_3DMARK05_AUTO_ENTER:-1}" != "0" ]]; then
   schedule_app-d3d9-3dmark05_enter 120
 fi
 
 read -r -a dxmt_3dmark05_args <<< "${DXMT_3DMARK05_ARGS:-$default_3dmark05_args}"
+append_result_file_app-d3d9-3dmark05
 echo "[3dmark05] default_selection=GT1-only"
 echo "[3dmark05] args=${dxmt_3dmark05_args[*]}"
 exp_run_wine_binary "$DXMT_EXPERIMENT_BINARY" "${dxmt_3dmark05_args[@]}"

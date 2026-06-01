@@ -1,5 +1,6 @@
 #pragma once
 
+#include <array>
 #include <cstddef>
 #include <cstdint>
 
@@ -41,6 +42,22 @@ enum class RenderPassDepthStoreProof : std::uint8_t {
   BlockColorFill,
   BlockDepthResolve,
   BlockPresent,
+};
+
+enum class RenderPassColorStoreProof : std::uint8_t {
+  AllowNextClear,
+  AllowDeadNoPresent,
+  BlockNullColor,
+  BlockNoLookahead,
+  BlockDrawTarget,
+  BlockTextureSample,
+  BlockSurfaceCopy,
+  BlockStretchRect,
+  BlockReadback,
+  BlockColorFill,
+  BlockMsaaResolve,
+  BlockPresent,
+  BlockDeadNoPresentDisabled,
 };
 
 // Frame-allocator arena identity for ring_arena_heap_fallback_*
@@ -125,9 +142,22 @@ enum CommitChunkDrawDeltaBits : std::uint32_t {
   CommitChunkDrawDeltaIndexBuffer = 1u << 17,
 };
 void countCommitChunkDrawReplay(bool indexed, std::uint32_t deltaMask);
+void countCommitChunkDrawStreamDeltaDetails(std::uint32_t handleChanges,
+                                            std::uint32_t offsetChanges,
+                                            std::uint32_t strideChanges);
+void countCommitChunkDrawIndexBufferHandleDelta();
 void countCommitChunkDrawRunScan(std::uint32_t stop,
                                  std::uint32_t recordCount,
-                                 std::uint32_t stopRecordType);
+                                 std::uint32_t stopRecordType,
+                                 std::uint64_t stopRecordPayloadBytes = 0,
+                                 std::uint32_t stopRecordConstCount = 0);
+void countCommitChunkDrawRunStateDeltaBucket(std::uint32_t deltaMask);
+void countCommitChunkDrawRunBindingOverride(bool streamOverride,
+                                            bool indexBufferOverride,
+                                            std::size_t bytes);
+void countCommitChunkDrawBatchConstUploadPassthrough();
+void countCommitChunkDrawSubmissionBatch(std::uint32_t recordCount);
+void countSubmitDrawRunBatchGroup(std::uint32_t recordCount);
 void countDrawCall(std::uint32_t primitiveType,
                    std::uint32_t primitiveCount,
                    std::uint64_t vertexCount,
@@ -316,6 +346,15 @@ void countRenderPassStoreActionColor(std::uint32_t action);
 void countRenderPassStoreActionDepth(std::uint32_t action);
 void countRenderPassStoreActionStencil(std::uint32_t action);
 void countRenderPassTilePreservationBytes(std::uint64_t bytes);
+void countRenderPassSameKeyAdjacent();
+void countRenderPassSameKeyReentry();
+void countRenderPassSameKeyReentryPreservationBytes(std::uint64_t bytes);
+void countRenderPassSameKeyReentryColorPreservationBytes(std::uint64_t bytes);
+void countRenderPassSameKeyReentryDepthPreservationBytes(std::uint64_t bytes);
+void countRenderPassTransitionRtChangeSameDepth();
+void countRenderPassTransitionSameRtDepthChange();
+void countRenderPassTransitionRtDepthChange();
+void countRenderPassColorStoreProof(RenderPassColorStoreProof proof);
 void countRenderPassDepthStoreProof(RenderPassDepthStoreProof proof);
 void countCommandBufferCreateCpuTime(std::uint64_t nanoseconds);
 void countCommandBufferCommitCpuTime(std::uint64_t nanoseconds);
@@ -444,5 +483,182 @@ CounterSnapshot snapshot();
 void emitFrameDelta(std::uint64_t frameId,
                     const CounterSnapshot& prev,
                     const CounterSnapshot& curr);
+
+inline constexpr std::size_t kEncoderBreakdownMaxStreams = 16;
+
+struct EncoderStreamBreakdown {
+  bool valid = false;
+  std::uint64_t samples = 0;
+  std::uint64_t metalBinds = 0;
+  std::uint64_t metalBindFirsts = 0;
+  std::uint64_t metalBindHandleChanges = 0;
+  std::uint64_t metalBindOffsetChanges = 0;
+  std::uint64_t uniqueHandles = 0;
+  std::uint64_t uniqueHandleOverflows = 0;
+  std::uint64_t uniqueBytes = 0;
+  std::uint64_t uniqueDynamicHandles = 0;
+  std::uint64_t uniqueWriteOnlyHandles = 0;
+  std::uint64_t uniqueDefaultPoolHandles = 0;
+  std::uint64_t uniqueManagedPoolHandles = 0;
+  std::uint64_t uniqueSystemMemPoolHandles = 0;
+  std::uint64_t uniqueScratchPoolHandles = 0;
+  std::uint64_t handleChanges = 0;
+  std::uint64_t offsetChanges = 0;
+  std::uint64_t strideChanges = 0;
+  std::uint64_t lastHandle = 0;
+  std::uint64_t lastOffset = 0;
+  std::uint64_t lastStride = 0;
+};
+
+// Per-render-encoder write/state breakdown (opt-in via
+// DXMT9_PERF_ENCODER_BREAKDOWN=1). This emits one
+// `[dxmt9-perf-encoder ...]` summary line plus one
+// `[dxmt9-perf-encoder-stream ...]` line for each used stream when a render
+// encoder closes. The data is intentionally not part of the cumulative counter
+// table: it is high-cardinality diagnostic output meant to be joined with Xcode
+// encoder labels/counters.
+struct EncoderBreakdown {
+  std::uint64_t seqId = 0;
+  std::uint64_t encoderIndex = 0;
+  std::uint64_t rtHandle = 0;
+  std::uint64_t depthHandle = 0;
+  EncoderSplitReason endReason = EncoderSplitReason::Final;
+  std::uint64_t drawCalls = 0;
+  std::uint64_t indexedDraws = 0;
+  std::uint64_t expandedIndexedDraws = 0;
+  std::uint64_t ffpDraws = 0;
+  std::uint64_t programmableDraws = 0;
+  std::uint64_t preTransformedDraws = 0;
+  std::uint64_t texturedDraws = 0;
+  std::uint64_t cullNoneDraws = 0;
+  std::uint64_t cullFrontDraws = 0;
+  std::uint64_t cullBackDraws = 0;
+  std::uint64_t fillSolidDraws = 0;
+  std::uint64_t fillWireframeDraws = 0;
+  std::uint64_t depthEnabledDraws = 0;
+  std::uint64_t depthWriteDraws = 0;
+  std::uint64_t depthFuncLessDraws = 0;
+  std::uint64_t depthFuncLessEqualDraws = 0;
+  std::uint64_t depthFuncAlwaysDraws = 0;
+  std::uint64_t depthFuncOtherDraws = 0;
+  std::uint64_t scissorEnabledDraws = 0;
+  std::uint64_t alphaBlendEnabledDraws = 0;
+  std::uint64_t alphaTestEnabledDraws = 0;
+  std::uint64_t clipPlaneEnabledDraws = 0;
+  std::uint64_t pointDraws = 0;
+  std::uint64_t lineDraws = 0;
+  std::uint64_t triangleDraws = 0;
+  std::uint64_t primitiveCount = 0;
+  std::uint64_t triangleEstimate = 0;
+  std::uint64_t vertexCount = 0;
+  std::uint64_t textureMaskOr = 0;
+  std::uint64_t stream0StrideMin = 0;
+  std::uint64_t stream0StrideMax = 0;
+  std::uint64_t streamStateSamples = 0;
+  std::uint64_t streamMetalBinds = 0;
+  std::uint64_t streamMetalBindFirsts = 0;
+  std::uint64_t streamMetalBindHandleChanges = 0;
+  std::uint64_t streamMetalBindOffsetChanges = 0;
+  std::uint64_t streamUniqueHandles = 0;
+  std::uint64_t streamUniqueHandleOverflows = 0;
+  std::uint64_t streamUniqueBytes = 0;
+  std::uint64_t streamUniqueDynamicHandles = 0;
+  std::uint64_t streamUniqueWriteOnlyHandles = 0;
+  std::uint64_t streamUniqueDefaultPoolHandles = 0;
+  std::uint64_t streamUniqueManagedPoolHandles = 0;
+  std::uint64_t streamUniqueSystemMemPoolHandles = 0;
+  std::uint64_t streamUniqueScratchPoolHandles = 0;
+  std::uint64_t streamHandleChanges = 0;
+  std::uint64_t streamOffsetChanges = 0;
+  std::uint64_t streamStrideChanges = 0;
+  std::uint64_t stream0LastHandle = 0;
+  std::uint64_t stream0LastOffset = 0;
+  std::uint64_t stream0LastStride = 0;
+  std::uint64_t ibStateSamples = 0;
+  std::uint64_t ibMetalBinds = 0;
+  std::uint64_t ibHandleChanges = 0;
+  std::uint64_t ibUniqueHandles = 0;
+  std::uint64_t ibUniqueHandleOverflows = 0;
+  std::uint64_t ibUniqueBytes = 0;
+  std::uint64_t ibUniqueDynamicHandles = 0;
+  std::uint64_t ibUniqueWriteOnlyHandles = 0;
+  std::uint64_t ibUniqueDefaultPoolHandles = 0;
+  std::uint64_t ibUniqueManagedPoolHandles = 0;
+  std::uint64_t ibUniqueSystemMemPoolHandles = 0;
+  std::uint64_t ibUniqueScratchPoolHandles = 0;
+  std::uint64_t ibLastHandle = 0;
+  std::uint64_t psoStateSamples = 0;
+  std::uint64_t psoHandleChanges = 0;
+  std::uint64_t psoUniqueHandles = 0;
+  std::uint64_t psoUniqueHandleOverflows = 0;
+  std::uint64_t psoLastHandle = 0;
+  std::uint64_t shaderVariantChanges = 0;
+  std::uint64_t shaderVariantUnique = 0;
+  std::uint64_t shaderVariantUniqueOverflows = 0;
+  std::uint64_t shaderVariantLast = 0;
+  std::uint64_t vertexShaderLast = 0;
+  std::uint64_t pixelShaderLast = 0;
+  std::uint64_t vertexShaderSourceLast = 0;
+  std::uint64_t pixelShaderSourceLast = 0;
+  std::uint64_t vsOutLayoutChanges = 0;
+  std::uint64_t vsOutLayoutUnique = 0;
+  std::uint64_t vsOutLayoutUniqueOverflows = 0;
+  std::uint32_t vsOutLayoutLast = 0;
+  std::uint64_t vsOutLayoutCacheHits = 0;
+  std::uint64_t vsOutLayoutCacheMisses = 0;
+  std::uint64_t argbufTableBytes = 0;
+  std::uint64_t argbufCbufBytes = 0;
+  std::uint64_t argbufCbufVsBytes = 0;
+  std::uint64_t argbufCbufFfpVsBytes = 0;
+  std::uint64_t argbufCbufPsBytes = 0;
+  std::uint64_t argbufCbufFfpPsBytes = 0;
+  std::uint64_t argbufCbufVsFirstBytes = 0;
+  std::uint64_t argbufCbufVsRewriteChangedBytes = 0;
+  std::uint64_t argbufCbufVsRewriteUnchangedBytes = 0;
+  std::uint64_t argbufCbufVsFloatChangedBytes = 0;
+  std::uint64_t argbufCbufVsIntChangedBytes = 0;
+  std::uint64_t argbufCbufVsBoolChangedBytes = 0;
+  std::uint64_t argbufCbufVsUploads = 0;
+  std::uint64_t argbufCbufVsFullStructUploads = 0;
+  std::uint64_t argbufCbufVsUsageUnknownUploads = 0;
+  std::uint64_t argbufCbufVsUsageIndexedFloatUploads = 0;
+  std::uint64_t argbufCbufVsPlanFloatRegsSum = 0;
+  std::uint64_t argbufCbufVsPlanFloatRegsMax = 0;
+  std::uint64_t argbufCbufVsDirtyFloatRegsSum = 0;
+  std::uint64_t argbufCbufVsDirtyFloatRegsMax = 0;
+  std::uint64_t argbufCbufVsUsageFloatRegsSum = 0;
+  std::uint64_t argbufCbufVsUsageFloatRegsMax = 0;
+  std::uint64_t argbufCbufFfpVsFirstBytes = 0;
+  std::uint64_t argbufCbufFfpVsRewriteChangedBytes = 0;
+  std::uint64_t argbufCbufFfpVsRewriteUnchangedBytes = 0;
+  std::uint64_t argbufCbufFfpVsMatrixChangedBytes = 0;
+  std::uint64_t argbufCbufFfpVsMaterialChangedBytes = 0;
+  std::uint64_t argbufCbufFfpVsLightChangedBytes = 0;
+  std::uint64_t argbufCbufFfpVsBlendChangedBytes = 0;
+  std::uint64_t argbufCbufFfpVsTexTransformChangedBytes = 0;
+  std::uint64_t argbufCbufFfpVsClipChangedBytes = 0;
+  std::uint64_t argbufCbufFfpVsViewportChangedBytes = 0;
+  std::uint64_t argbufCbufFfpVsFogPointChangedBytes = 0;
+  std::uint64_t setVertexBytesCalls = 0;
+  std::uint64_t setVertexBytesBytes = 0;
+  std::uint64_t setVertexBytesSlot5Calls = 0;
+  std::uint64_t setVertexBytesSlot5Bytes = 0;
+  std::uint64_t setVertexBytesOtherCalls = 0;
+  std::uint64_t setVertexBytesOtherBytes = 0;
+  std::uint64_t transientVertexBytes = 0;
+  std::uint64_t transientVertexUserBytes = 0;
+  std::uint64_t transientVertexPreuploadBytes = 0;
+  std::uint64_t transientVertexDeclFallbackBytes = 0;
+  std::uint64_t transientVertexExpandedMainBytes = 0;
+  std::uint64_t transientVertexExpandedExtraBytes = 0;
+  std::uint64_t transientIndexBytes = 0;
+  std::uint64_t transientIndexUserBytes = 0;
+  std::uint64_t transientIndexPreuploadBytes = 0;
+  std::uint64_t transientIndexShadowFallbackBytes = 0;
+  std::array<EncoderStreamBreakdown, kEncoderBreakdownMaxStreams> streams{};
+};
+
+bool encoderBreakdownEnabled();
+void emitEncoderBreakdown(const EncoderBreakdown& breakdown);
 
 }  // namespace dxmt9::perf

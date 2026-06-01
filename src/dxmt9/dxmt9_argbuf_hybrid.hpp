@@ -35,6 +35,11 @@ namespace dxmt9::argbuf_hybrid {
 using u32 = std::uint32_t;
 using u64 = std::uint64_t;
 
+inline constexpr u32 kConstantBufferVsIndex = 0u;
+inline constexpr u32 kConstantBufferFfpVsIndex = 1u;
+inline constexpr u32 kConstantBufferPsIndex = 2u;
+inline constexpr u32 kConstantBufferFfpPsIndex = 3u;
+
 // R-BACK-12.23 — argbuf descriptor layout. Mirrors the MSL ArgbufLayout
 // struct emitted by `shaders::makeShaderPreludeArgbufHybrid`. The
 // encoder calls `buildArgumentDescriptors` once at queue init and feeds
@@ -194,6 +199,40 @@ struct ArgbufRecorder {
                     u32 index) = nullptr;
 };
 
+// Captured backing slice for one argbuf constant-buffer entry. The Metal
+// argument buffer table is per draw in the resource-array lane, but the
+// cbuf backing slabs can be reused while the uniform payload is unchanged.
+struct ConstantBufferBinding {
+  WMT::Buffer buffer{};
+  u64 offset = 0;
+  u64 bytes = 0;
+
+  explicit operator bool() const noexcept {
+    return static_cast<bool>(buffer) && bytes != 0;
+  }
+};
+
+struct ConstantBufferBindings {
+  std::array<ConstantBufferBinding, shaders::kArgbufHybridConstantBufferCount>
+      entries{};
+
+  bool complete() const noexcept {
+    for (const auto& entry : entries) {
+      if (!entry) return false;
+    }
+    return true;
+  }
+};
+
+struct ConstantBufferUploadObserver {
+  void* userdata = nullptr;
+  void (*upload)(void* userdata,
+                 u32 argbufIndex,
+                 const void* data,
+                 u64 bytes,
+                 u64 hostStructBytes) = nullptr;
+};
+
 // Pure value-transform: bytes the encoder would re-write for the given
 // dirty mask. Sums the four per-frequency host-struct sizes for the
 // matching kVsAny / kPsAny / kFfpVsAny / kFfpPsAny categories. Returns
@@ -242,7 +281,9 @@ u64 populateConstantBuffers(CommandQueue& queue,
                              core::FlatDrawStateView state,
                              std::uint64_t seqId,
                              const ArgbufRecorder* recorder = nullptr,
-                             WMT::RenderCommandEncoder residencyEncoder = {});
+                             WMT::RenderCommandEncoder residencyEncoder = {},
+                             ConstantBufferBindings* writtenBindings = nullptr,
+                             const ConstantBufferUploadObserver* uploadObserver = nullptr);
 
 // R-BACK-12.24 — mid-pass dirty rewrite. Re-uploads the per-frequency
 // host structs corresponding to the dirty bits and re-points the
@@ -259,7 +300,9 @@ u64 updateDirtyArgbufRegions(CommandQueue& queue,
                               const uniform::DirtyState& dirty,
                               std::uint64_t seqId,
                               const ArgbufRecorder* recorder = nullptr,
-                              WMT::RenderCommandEncoder residencyEncoder = {});
+                              WMT::RenderCommandEncoder residencyEncoder = {},
+                              ConstantBufferBindings* writtenBindings = nullptr,
+                              const ConstantBufferUploadObserver* uploadObserver = nullptr);
 u64 updateDirtyArgbufRegions(CommandQueue& queue,
                               ArgbufEncoderResource& encoderResource,
                               core::FlatDrawStateView state,
@@ -268,7 +311,9 @@ u64 updateDirtyArgbufRegions(CommandQueue& queue,
                               uniform::ShaderConstantUsageBounds psUsage,
                               std::uint64_t seqId,
                               const ArgbufRecorder* recorder = nullptr,
-                              WMT::RenderCommandEncoder residencyEncoder = {});
+                              WMT::RenderCommandEncoder residencyEncoder = {},
+                              ConstantBufferBindings* writtenBindings = nullptr,
+                              const ConstantBufferUploadObserver* uploadObserver = nullptr);
 
 // R-BACK-12.22..12.26 (resource-array sub-mode) — one resolved
 // texture/sampler binding the encoder hands to the resource-array
@@ -333,5 +378,11 @@ void pointFfpVsAtSlice(ArgbufEncoderResource& encoderResource,
                        u64 offset,
                        const ArgbufRecorder* recorder = nullptr,
                        WMT::RenderCommandEncoder residencyEncoder = {});
+
+void pointConstantBufferBinding(ArgbufEncoderResource& encoderResource,
+                                u32 argbufIndex,
+                                ConstantBufferBinding binding,
+                                const ArgbufRecorder* recorder = nullptr,
+                                WMT::RenderCommandEncoder residencyEncoder = {});
 
 }  // namespace dxmt9::argbuf_hybrid

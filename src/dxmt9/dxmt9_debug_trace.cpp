@@ -127,6 +127,11 @@ bool forceExpandIndexed() {
   return v;
 }
 
+bool disableAutoExpandIndexed() {
+  static const bool v = util::getenvFlag("DXMT_DISABLE_AUTO_EXPAND_INDEXED");
+  return v;
+}
+
 int fixedFunctionTraceBudget() {
   static const int budget = [] {
     const auto env = util::getenvString("DXMT_TRACE_FVF");

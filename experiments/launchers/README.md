@@ -67,6 +67,210 @@ Commercial / 3rd-party titles (require external prefix):
   - `perf`: `DXMT_VALIDATE=0`, `DXMT_LOG_LEVEL=warn`,
     `DXMT_PERF_COUNTERS=1`, `DXMT_PERF_COUNTERS_PERIODIC_PRESENTS=60`,
     `WINEDEBUG=-all`.
+  - For encoder-level attribution runs, add
+    `DXMT9_PERF_ENCODER_BREAKDOWN=1`; it emits one
+    `[dxmt9-perf-encoder ...]` summary line per render encoder plus
+    `[dxmt9-perf-encoder-stream ...]` lines for used vertex streams. The
+    summary includes stream handle/offset/stride churn, stream Metal-bind
+    first/handle/offset reasons, stream/IB unique handle bytes/usage/pool
+    buckets, IB handle changes, argbuf
+    table/cbuf bytes split by VS/FFPVS/PS/FFPPS plus VS/FFPVS
+    first/rewrite/field-attribution buckets, setVertexBytes slot-5/other
+    bytes, transient vertex/index bytes split by UP preupload, decl/shadow
+    fallback, and indexed expansion, primitive/vertex/FFP/pre-transformed
+    geometry shape, PSO/shader-variant/VS/PS-hash/VSOut-layout attribution, VSOut
+    layout-cache hit/miss counts, and VS float upload-plan ranges. It is
+    intentionally not enabled by the shared perf profile. After the run,
+    `python3 scripts/tools/summarize_3dmark05_perf.py experiments/output/<run>`
+    writes `3dmark05-perf-encoders.csv` and
+    `3dmark05-perf-encoder-streams.csv` for UI-free per-encoder analysis, with
+    top-encoder tables for cbuf bytes, transient vertex bytes, transient source
+    split, stream handle churn, and IB handle churn. The stream CSV includes
+    per-stream handle/offset/stride churn plus per-stream unique handle count,
+    bytes, usage, and pool buckets.
+  - `app-d3d9-3dmark05` requires an unlocked macOS desktop for its GUI
+    launcher and foreground Wine window. The launcher fails early when
+    `CGSSessionScreenIsLocked=Yes` unless
+    `DXMT_3DMARK05_REQUIRE_UNLOCKED=0` is set deliberately; locked-session
+    attempts otherwise produce factory-only perf logs and misleading black
+    captures.
+  - `DXMT_3DMARK05_RESULT_FILE=<name>.3dr` appends the documented result-file
+    argument after the test options, for example `-gt1 ... dxmt9_gt1.3dr`.
+    Use it for unattended perf runs together with an unlocked desktop; keep
+    `DXMT_3DMARK05_AUTO_ENTER=1` available as a fallback for editions that do
+    not honor command-line result runs.
+  - `scripts/tools/run_3dmark05_perf_probe.sh` wraps the current GT1 perf probe
+    recipe: perf profile, direct 3DMark05 launcher, no auto indexed expansion,
+    encoder breakdown, optional `DXMT_METAL_CAPTURE_FRAME/PATH`, trace output
+    under `traces/app-d3d9-3dmark05-<suffix>/`, `MTL_CAPTURE_ENABLED=1` when
+    gputrace capture is enabled, and automatic
+    `3dmark05-perf-summary.md` / CSV generation after the run. Use `--dry-run`
+    first to verify paths, desktop lock state, and free-space guard. The
+    wrapper requires `2048MiB` free by default when gputrace capture is enabled
+    (`--min-free-mb N` / `DXMT_3DMARK05_MIN_TRACE_FREE_MB=N` overrides it).
+    Dry-run and guard failures print `traces/`, `experiments/output/`, and
+    the largest trace/output files when free space is below the guard, so
+    cleanup can happen before launching Wine. If `--baseline-joined` or
+    `--require-top-pso-attribution` is passed to the wrapper, dry-run also
+    prints the exact `finalize_cmd_after_xcode_export` command to run after
+    Xcode exports `frame<N>-counters-xcode.csv`.
+    Add `--dump-shaders` only for root-cause captures that need shader source
+    inspection; it writes translated MSL under
+    `traces/<run-id>/analysis/shaders/msl` and D3D shader bytecode under
+    `traces/<run-id>/analysis/shaders/bytecode` so top
+    `dxmt_shader_variant_*` / `dxmt_vsout_layout_*` rows can be inspected
+    without rerunning the app. The finalizer writes
+    `frame<N>-shader-dump-report.md` and `frame<N>-shader-dump-summary.csv` by
+    matching joined-summary `dxmt_vertex_shader_last` /
+    `dxmt_pixel_shader_last` plus current-log
+    `dxmt_vertex_shader_source_last` / `dxmt_pixel_shader_source_last` to
+    `analysis/shaders/msl/*-shader-<hash>-source-<source>.metal`. If multiple
+    dumped source hashes exist for the same shader hash and the log has no
+    source hash, the report marks the row as `ambiguous_*_dump`; inspect the
+    candidate count before making exact source-level claims. For shader
+    root-cause captures, add
+    `--require-shader-dump-matches` with `--dump-shaders`; the finalizer fails
+    when top render rows have zero shader hashes, no matching dumped MSL, or
+    only ambiguous dumped-source candidates. The shader dump report also
+    records approximate `VSOut` byte width, `VSOut` field types, and
+    stage-output assignment count from the matched MSL, plus fragment
+    stage-in `VSOut` read fields, texcoord read mask, and emitted-but-unread
+    `VSOut` fields with estimated bytes, plus
+    local translated-VS `outTexcoord[]` scratch size/literal span/zero-init
+    bytes, plus `VS Buffer Bytes/Invocation` to dumped-MSL-`VSOut` ratio and
+    unread `VSOut` byte share. This lets Xcode VS buffer-write traffic be
+    compared against both the translated output shape, source-visible local
+    scratch, and the FS-visible liveness without reopening Xcode.
+    For the current VS-buffer-write hypothesis, run a paired candidate with
+    `--trim-unused-varyings`; this sets `DXMT9_TRIM_UNUSED_VARYINGS=1` so the
+    pair-local VSOut liveness path is active. Compare it to the baseline joined
+    CSV with `--baseline-joined <csv> --require-top-vs-buffer-write-decrease`
+    to prove whether trimming moves the Xcode VS buffer-write counter.
+    If VSOut trimming leaves Xcode's VS buffer-write bucket unchanged, run the
+    next paired candidate with `--trim-vertex-temps`; this sets
+    `DXMT9_TRIM_VERTEX_TEMPS=1` so translated VS `float4 r[]` is sized from
+    observed temp source/dest usage instead of the conservative 32-slot array.
+    Keep this as an experiment until a shader-corpus run and gputrace A/B prove
+    it does not reproduce the older VS trim visual regression.
+    If that also leaves Xcode's VS buffer-write bucket unchanged, run the next
+    paired candidate with `--trim-vs-output-scratch`; this sets
+    `DXMT9_TRIM_VS_OUTPUT_SCRATCH=1` so translated VS `float4 outTexcoord[]`
+    is sized from emitted/mapped texcoord output usage instead of the
+    conservative 8-slot local scratch array. Gate it the same way with
+    `--baseline-joined <csv> --require-top-vs-buffer-write-decrease` and keep
+    shader dumps enabled so the `VS outT[]` columns show whether the source
+    shape actually changed.
+    After Xcode exports
+    `analysis/frame<N>-counters-xcode.csv`, run
+    `scripts/tools/finalize_3dmark05_perf_probe.sh --suffix <suffix> --frame <N>`.
+    It regenerates the dxmt summary, joins the Xcode-only summary with dxmt
+    encoder attribution, writes the Markdown bottleneck report, and optionally
+    runs baseline comparisons. The report includes VS/FS buffer-write split,
+    texture and depth writes, tiled vertex/primitive-block bytes, stream/IB
+    churn, cbuf bytes and cbuf class split, transient bytes, VS-write density,
+    VS L1/LLC write, primitive/tile counters, cull/clip/shaded-vertex-read
+    limiter shape, and PSO/shader-variant/VS/PS hash/VSOut attribution. The
+    report also includes a DXMT encoder writer/state table
+    with stream handle/offset/stride churn, IB handle churn, argbuf table
+    bytes, cbuf bytes split by VS/FFPVS/PS/FFPPS, `setVertexBytes`,
+    transient vertex/index bytes, writer-to-buffer ratio, stream0 input-byte
+    bounds, VS-buffer-to-stream0-input ratio, and VS-invocation-to-dxmt-vertex
+    ratio per top encoder. When `3dmark05-perf-encoder-streams.csv` is
+    present, it also embeds a per-stream table for top encoders so stream
+    handle/offset/stride churn can be attributed to the exact stream slot
+    without opening a separate CSV.
+    The joined CSV also derives `dxmt_cpu_writer_bytes`,
+    writer-to-Xcode-buffer-write ratios,
+    `dxmt_vs_buffer_write_share`,
+    `dxmt_unexplained_buffer_write_mib`,
+    `dxmt_unexplained_buffer_write_ratio`, per-draw stream/IB churn rates,
+    `dxmt_vs_buffer_bytes_per_dxmt_vertex`, decoded `dxmt_vsout_*` layout
+    fields, VS-buffer-to-expected-stage-out ratio,
+    `dxmt_vsout_layout_cache_hits` / `dxmt_vsout_layout_cache_misses`, and
+    `dxmt_vertex_shader_last` / `dxmt_pixel_shader_last` shader hashes,
+    `dxmt_vertex_shader_source_last` / `dxmt_pixel_shader_source_last`
+    shader-source hashes,
+    plus `dxmt_gpu_write_hint` / `dxmt_write_owner_confidence` so a run can
+    distinguish dxmt upload pressure from unexplained GPU-side VS buffer-write
+    pressure without reopening Xcode.
+    `dxmt_pso_state_samples_per_draw` should be near `1.0` on logs produced
+    after the DrawRun attribution update; lower values indicate an older log
+    where PSO/VSOut attribution was sampled only on base-state binds. Add
+    `--require-xcode-counter-coverage --require-dxmt-join-coverage
+    --require-top-pso-attribution` to the finalizer when the run is intended to
+    prove a shader/VSOut root cause. The first gate fails incomplete Xcode
+    exports that lack the required GPU counter columns or
+    `RenderPass[seq=...,enc=...]` labels; the second fails when top Xcode rows
+    do not join to dxmt encoder attribution; the third fails if top-encoder
+    `dxmt_pso_state_samples / dxmt_draw_calls` is below `0.90` by default.
+    Compare candidate fixes by passing `--baseline-joined
+    <baseline-joined.csv>` to the wrapper or finalizer. Add requirement flags
+    such as `--require-top-gpu-decrease`,
+    `--require-top-buffer-write-decrease`,
+    `--require-top-vs-buffer-write-decrease`,
+    `--require-top-unexplained-buffer-write-decrease`,
+    `--require-stream-handle-churn-decrease`, or
+    `--require-ib-handle-churn-decrease` so Xcode counter regressions fail the
+    comparison automatically. The wrapper rejects these Xcode comparison gates
+    unless `--baseline-joined` is present, and the finalizer does the same,
+    because otherwise there is no before/after CSV to compare.
+    Use `--max-top-unexplained-buffer-write-ratio N` when a candidate is
+    expected to make Xcode buffer writes explainable by dxmt writers; it fails
+    if the residual top-encoder write ratio remains above `N`.
+    Compare run-level mechanisms such as store-action policy, same-key
+    preservation bytes, draw-run formation, and queue waits with
+    `scripts/tools/finalize_3dmark05_perf_probe.sh --baseline-output
+    <baseline-output-dir>`. For DontCare-store experiments, add
+    `--require-color-dontcare-increase`,
+    `--require-depth-dontcare-increase`, or
+    `--require-tile-preservation-decrease` so the comparison exits nonzero
+    when the intended mechanism did not move. The probe wrapper can also run
+    this run-level comparison automatically after the candidate run with
+    `--compare-baseline-output <baseline-output-dir>` plus the same gates.
+    For draw-run and CPU encode experiments, add
+    `--require-draw-run-records-increase`,
+    `--require-draw-run-records-per-submit-increase`,
+    `--require-binding-overrides-present`,
+    `--require-const-upload-passthrough-present`, or
+    `--require-encode-draw-cpu-decrease` so the run-level comparison proves the
+    intended batching mechanism moved before treating the run as a perf result.
+    For sparse/coalesced constant-upload experiments, add
+    `--require-const-upload-break-bytes-decrease` and
+    `--max-const-upload-break-count-ratio <N>` to require fewer const-upload
+    bytes while bounding record-count churn.
+    The same comparison report now derives const-upload breaks per draw/present,
+    const-upload break bytes per draw/present/break, registers per break,
+    const-upload passthrough per draw/present, const-upload-to-state-delta
+    ratio, state-delta subtype/pair shares, stream/IB deltas per draw, and
+    VS/PS F/I/B subtype count/byte shares plus subtype coverage, so
+    a constant-upload coalescing candidate can be checked without hand-dividing
+    the raw counters.
+    For a paired sparse-constant candidate, add
+    `--split-sparse-const-records`; it sets
+    `DXMT9_SPLIT_SPARSE_CONST_RECORDS=1`, which keeps default merged-constant
+    behavior off the baseline but splits an opt-in dirty const range into
+    actual changed register runs when the app updates sparse registers.
+    Run-level comparison gates require `--compare-baseline-output` in the
+    wrapper or `--baseline-output` in the finalizer; the scripts reject them
+    without a baseline and validate that the baseline resolves to an existing
+    `result.json` before launching or finalizing.
+    The run summary also reports draw-run binding override counters
+    (`commit_chunk_draw_run_binding_override_*`) so stream/IB per-draw payloads
+    can be separated from remaining draw-run break causes. It also reports
+    `commit_chunk_draw_batch_const_upload_passthrough`, which counts
+    constant-upload records crossed without flushing the pending draw
+    submission batch. Pair it with
+    `--require-draw-submission-batch-present` after adding a baseline to ensure
+    `commit_chunk_draw_submission_batch_{submits,records,max_records}` are
+    populated and the fallback batch size can be judged from the report.
+    Render-pass
+    load/store action, same-key re-entry/preservation, transition, and depth
+    store-proof counters are grouped in the same summary so store-traffic
+    changes can be checked without reopening Xcode. Color store proof counters
+    also distinguish the default next-clear win from the opt-in
+    `DXMT9_AGGRESSIVE_COLOR_DONTCARE=1` dead-at-end experiment.
+    The probe wrapper has `--aggressive-color-dontcare` and
+    `--aggressive-depth-dontcare` switches for paired baseline/candidate runs.
   Explicit environment variables still override profile defaults.
 - Launcher filename must exactly match `CATALOGUE.name`. Adding a new app:
   1. Add `[[app]]` entry to `experiments/CATALOGUE.toml` with `name`,

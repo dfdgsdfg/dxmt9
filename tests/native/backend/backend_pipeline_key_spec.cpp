@@ -480,6 +480,8 @@ void testShaderVariantKeyCarriesSourceIdentity() {
 
   const auto debugOff = dxmt9::pipeline::makeShaderSourceDebugEnvKey(
       /*trimUnusedVaryings=*/false,
+      /*trimVertexTemps=*/false,
+      /*trimVsOutputScratch=*/false,
       /*fsHalfPrecision=*/false,
       /*forceFullscreenVertex=*/false,
       /*flipTranslatedVertexY=*/false,
@@ -491,6 +493,8 @@ void testShaderVariantKeyCarriesSourceIdentity() {
       /*debugFfpAlpha=*/false);
   const auto debugUv = dxmt9::pipeline::makeShaderSourceDebugEnvKey(
       /*trimUnusedVaryings=*/true,
+      /*trimVertexTemps=*/true,
+      /*trimVsOutputScratch=*/true,
       /*fsHalfPrecision=*/false,
       /*forceFullscreenVertex=*/false,
       /*flipTranslatedVertexY=*/false,

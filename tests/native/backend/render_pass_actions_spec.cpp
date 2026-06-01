@@ -3,6 +3,7 @@
 // Spec: specs/backend/render-pass-actions/design.md sections 2 + 6.
 // Implementation under test:
 //   - encoders::depthStoreProofForLookahead / nextDepthOperationIsClear.
+//   - encoders::nextColorOperationIsClear.
 //   - perf::countRenderPassLoadActionColor / *Store* / depth proof counters.
 //
 // We use Option A from the G4 task: a hybrid decision-table fixture.
@@ -56,6 +57,7 @@ using dxmt9::core::StretchRectDesc;
 using dxmt9::core::SurfaceCopyDesc;
 using dxmt9::core::SwapDesc;
 using DepthProof = dxmt9::perf::RenderPassDepthStoreProof;
+using ColorProof = dxmt9::perf::RenderPassColorStoreProof;
 
 struct TestFailure : std::runtime_error {
   using std::runtime_error::runtime_error;
@@ -107,10 +109,44 @@ void appendDrawRunWithDepth(ChunkSlot& slot, Handle depthHandle) {
   });
 }
 
+void appendDrawRunWithColor(ChunkSlot& slot, Handle colorHandle, Handle sampledHandle = {}) {
+  FlatDrawStateRecord hot{};
+  hot.colorAttachments[0].handle = colorHandle;
+  if (sampledHandle) {
+    hot.textures[0] = sampledHandle;
+    hot.textureMask = 1u;
+  }
+  const auto stateIndex = static_cast<std::uint32_t>(slot.drawHotStates.size());
+  slot.drawHotStates.push_back(hot);
+  slot.drawShaderLayouts.push_back(DrawShaderLayoutContext{});
+  slot.drawDebugSnapshots.push_back(DrawDebugSnapshot{});
+  const auto recordIndex =
+      static_cast<std::uint32_t>(slot.drawRunRecords.size());
+  slot.drawRunRecords.push_back(DrawRunCommandRecord{
+      .stateIndex = stateIndex,
+      .firstParam = 0u,
+      .paramCount = 0u,
+      .payloadOffset = 0u,
+      .payloadSize = 0u,
+      .uniformHandle = {},
+  });
+  slot.commandHeaders.push_back(MetalCommandHeader{
+      .kind = MetalCommandKind::DrawRun,
+      .payloadIndex = CommandPayloadIndex::fromU32(recordIndex),
+  });
+}
+
 void appendClearOnDepth(ChunkSlot& slot, Handle depthHandle) {
   ClearDesc desc{};
   desc.depthStencil.handle = depthHandle;
   desc.clearDepth = true;
+  slot.appendClear(desc);
+}
+
+void appendClearOnColor(ChunkSlot& slot, Handle colorHandle) {
+  ClearDesc desc{};
+  desc.colorAttachments[0].handle = colorHandle;
+  desc.clearColor = true;
   slot.appendClear(desc);
 }
 
@@ -261,6 +297,63 @@ void testDepthDontCareStoreOnNextClear() {
   appendClearOnDepth(zeroSlot, Handle{0});
   check(!dxmt9::encoders::nextDepthOperationIsClear(zeroSlot, 0u, Handle{0}),
         "R-BACK-15.7 null depth handle never enables DontCare-store");
+}
+
+void testColorDontCareStoreOnNextClear() {
+  // Color StoreActionDontCare is intentionally narrower than depth by
+  // default: only the next-touch-is-clear proof is allowed. Dead-at-end
+  // broadening exists only behind DXMT9_AGGRESSIVE_COLOR_DONTCARE, because
+  // color surfaces are commonly presented, sampled, or reused across chunk
+  // boundaries.
+  ChunkSlot slot;
+  Handle color{0xC007u};
+  appendDrawRunWithColor(slot, color);
+  appendClearOnColor(slot, color);
+  appendDrawRunWithColor(slot, color);
+  check(dxmt9::encoders::nextColorOperationIsClear(slot, 0u, color),
+        "R-BACK-15.8 next-op-is-clear on color handle allows DontCare-store");
+  checkEq(dxmt9::encoders::colorStoreProofForLookahead(slot, 0u, color),
+          ColorProof::AllowNextClear,
+          "R-BACK-15.8 color proof reports next clear");
+
+  ChunkSlot drawSlot;
+  appendDrawRunWithColor(drawSlot, color);
+  appendDrawRunWithColor(drawSlot, color);
+  appendClearOnColor(drawSlot, color);
+  check(!dxmt9::encoders::nextColorOperationIsClear(drawSlot, 0u, color),
+        "R-BACK-15.8 later draw target blocks color next-clear proof");
+  checkEq(dxmt9::encoders::colorStoreProofForLookahead(drawSlot, 0u, color),
+          ColorProof::BlockDrawTarget,
+          "R-BACK-15.8 color proof blocks on later draw target");
+
+  ChunkSlot sampleSlot;
+  Handle other{0xC008u};
+  appendDrawRunWithColor(sampleSlot, other);
+  appendDrawRunWithColor(sampleSlot, other, color);
+  appendClearOnColor(sampleSlot, color);
+  check(!dxmt9::encoders::nextColorOperationIsClear(sampleSlot, 0u, color),
+        "R-BACK-15.8 later texture sample blocks color next-clear proof");
+  checkEq(dxmt9::encoders::colorStoreProofForLookahead(sampleSlot, 0u, color),
+          ColorProof::BlockTextureSample,
+          "R-BACK-15.8 color proof blocks on later texture sample");
+
+  ChunkSlot presentSlot;
+  appendDrawRunWithColor(presentSlot, color);
+  appendPresent(presentSlot, color);
+  appendClearOnColor(presentSlot, color);
+  check(!dxmt9::encoders::nextColorOperationIsClear(presentSlot, 0u, color),
+        "R-BACK-15.8 present blocks color next-clear proof");
+  checkEq(dxmt9::encoders::colorStoreProofForLookahead(presentSlot, 0u, color),
+          ColorProof::BlockPresent,
+          "R-BACK-15.8 color proof blocks on present source");
+
+  ChunkSlot deadSlot;
+  appendDrawRunWithColor(deadSlot, color);
+  check(!dxmt9::encoders::nextColorOperationIsClear(deadSlot, 0u, color),
+        "R-BACK-15.8 color dead-at-end is not next-clear");
+  checkEq(dxmt9::encoders::colorStoreProofForLookahead(deadSlot, 0u, color),
+          ColorProof::BlockDeadNoPresentDisabled,
+          "R-BACK-15.8 color dead-at-end broadening is opt-in only");
 }
 
 void testDepthForcedStoreOnNextRead() {
@@ -721,9 +814,12 @@ void testDepthShadowMapBit3() {
 
 int main() {
   try {
+    unsetenv("DXMT9_AGGRESSIVE_DEPTH_DONTCARE");
+    unsetenv("DXMT9_AGGRESSIVE_COLOR_DONTCARE");
     testDefaultsLoadAndStore();
     testClearPrecedesDontCare();
     testDepthDontCareStoreOnNextClear();
+    testColorDontCareStoreOnNextClear();
     testDepthForcedStoreOnNextRead();
     testDepthShadowMapSampleForcesStore();
     testNoCrossChunkLookahead();

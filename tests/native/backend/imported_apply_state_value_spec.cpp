@@ -190,6 +190,11 @@ struct RecordingDxmt9Device final : dxmt9::Device {
     events.push_back(std::move(event));
   }
 
+  void submitDrawRunBatch(std::span<DrawRunSubmission> submissions) override {
+    drawBatchSizes.push_back(submissions.size());
+    dxmt9::Device::submitDrawRunBatch(submissions);
+  }
+
   void flush() override {
     RecordedEvent event;
     event.kind = EventKind::Flush;
@@ -200,6 +205,7 @@ struct RecordingDxmt9Device final : dxmt9::Device {
   dxmt9::CommandQueue queue_;
   std::uint64_t nextHandle = 1;
   std::vector<RecordedEvent> events;
+  std::vector<std::size_t> drawBatchSizes;
   BackendDevice::DeviceLostObserver deviceLostObserver;
   BackendDevice::PresentationStatusObserver presentationStatusObserver;
 };
@@ -1092,6 +1098,79 @@ void testImportedApplyStateCanDetachRtAndDepthStencil() {
   checkEq(d3d->Release(), 0u, "release detach d3d factory");
 }
 
+void testConstUploadDoesNotFlushPendingDrawBatch() {
+  auto upper = std::make_unique<RecordingDxmt9Device>();
+  auto* recorder = upper.get();
+  auto* d3d = dxmt9::com::Direct3DCreate9Ex(dxmt9::com::D3D_SDK_VERSION,
+                                            std::move(upper));
+  check(d3d != nullptr, "create const-batch recording d3d factory");
+
+  PresentParameters params{};
+  params.backBufferWidth = 16u;
+  params.backBufferHeight = 16u;
+  params.backBufferFormat = Format::A8R8G8B8;
+  params.windowed = true;
+  params.deviceWindow = Handle{995};
+  params.presentationInterval = PresentInterval::Immediate;
+
+  auto* device = d3d->CreateDeviceEx(0u, params, nullptr);
+  check(device != nullptr, "create const-batch d3d device");
+  device->AddRef();
+
+  {
+    D9CDevice cDevice(device);
+
+    const auto firstDraw = makeDrawRecord(0u, 1u);
+    const auto secondDraw = makeDrawRecord(3u, 1u);
+    const std::array<float, 4> vsConstF{21.0f, 22.0f, 23.0f, 24.0f};
+
+    std::vector<std::uint8_t> payload;
+    const auto firstOffset = appendRecord(payload, firstDraw);
+    const auto constOffset = appendConstRecord<float>(
+        payload, D9C_COMMAND_RECORD_SET_VS_CONST_F, 0u, 1u, vsConstF);
+    const auto secondOffset = appendRecord(payload, secondDraw);
+
+    const std::vector<D9CCommandChunkWireRecordHeader> records{
+        wireRecordHeader(D9C_COMMAND_RECORD_DRAW_PRIMITIVE, firstOffset,
+                         sizeof(firstDraw)),
+        wireRecordHeader(D9C_COMMAND_RECORD_SET_VS_CONST_F, constOffset,
+                         static_cast<std::uint32_t>(
+                             sizeof(D9CCommandRecordSetConst) +
+                             vsConstF.size() * sizeof(vsConstF[0]))),
+        wireRecordHeader(D9C_COMMAND_RECORD_DRAW_PRIMITIVE, secondOffset,
+                         sizeof(secondDraw)),
+    };
+    const auto wireBlob = makeWireChunkBlob(payload, records, {});
+
+    recorder->events.clear();
+    recorder->drawBatchSizes.clear();
+    checkEq(commitWireChunk(cDevice, wireBlob,
+                            static_cast<std::uint32_t>(records.size()), 0u),
+            D3D_OK, "commit const-batch passthrough chunk");
+
+    checkEq(recorder->drawBatchSizes.size(), static_cast<std::size_t>(1),
+            "const upload does not split submitDrawRunBatch");
+    checkEq(recorder->drawBatchSizes[0], static_cast<std::size_t>(2),
+            "const-separated draws submit as one pending batch");
+    checkEq(recorder->events.size(), static_cast<std::size_t>(2),
+            "const-batch emits one event per draw from the same batch");
+    checkEventKind(recorder->events, 0u, EventKind::SubmitDraw,
+                   "const-batch first draw event");
+    checkEventKind(recorder->events, 1u, EventKind::SubmitDraw,
+                   "const-batch second draw event");
+
+    checkNear(recorder->events[0].drawRun.uniforms.vsConst.float4[0][0],
+              0.0f, "first draw snapshots pre-const uniform state");
+    checkNear(recorder->events[1].drawRun.uniforms.vsConst.float4[0][0],
+              21.0f, "second draw snapshots post-const uniform state");
+    checkNear(device->coreDevice().state().vsConst.float4[0][3],
+              24.0f, "const upload still mutates final device state");
+  }
+
+  checkEq(device->Release(), 0u, "release const-batch d3d device");
+  checkEq(d3d->Release(), 0u, "release const-batch d3d factory");
+}
+
 void testImportedSparseRtAndDepthStencilBindingBoundary() {
   auto upper = std::make_unique<RecordingDxmt9Device>();
   auto* recorder = upper.get();
@@ -1496,6 +1575,7 @@ int main() {
   try {
     testImportedApplyStateAndSetConstValuePropagation();
     testImportedApplyStateCanDetachRtAndDepthStencil();
+    testConstUploadDoesNotFlushPendingDrawBatch();
     testImportedSparseRtAndDepthStencilBindingBoundary();
     testStampedSurfaceGenerationMismatchRejectsBeforeReplay();
     testStampedTextureAndBufferGenerationMismatchRejectBeforeReplay();
