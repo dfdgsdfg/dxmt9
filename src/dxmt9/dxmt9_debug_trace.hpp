@@ -139,7 +139,14 @@ bool probeReverseIndexedTriangles();
 // Env: DXMT9_PROBE_REVERSE_OPAQUE_INDEXED_TRIANGLES.
 bool probeReverseOpaqueIndexedTriangles();
 
-// Optional selector for both reverse-indexed-triangle probes. Format is
+// Diagnostic-only: same as DXMT9_PROBE_REVERSE_INDEXED_TRIANGLES, but applies
+// only to triangle-list draws outside the opaque depth-writing subset. This
+// isolates blended/depth-write-off/visibility-sensitive rows after the opaque
+// classifier rejects the production-safe subset.
+// Env: DXMT9_PROBE_REVERSE_NONOPAQUE_INDEXED_TRIANGLES.
+bool probeReverseNonOpaqueIndexedTriangles();
+
+// Optional selector for reverse-indexed-triangle probes. Format is
 // "<seq>/<encoder>", for example "60/3".
 // Env: DXMT9_PROBE_REVERSE_INDEXED_TRIANGLES_ROW.
 RenderEncoderSelector probeReverseIndexedTrianglesRow();

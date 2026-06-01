@@ -368,8 +368,13 @@ Commercial / 3rd-party titles (require external prefix):
     transient-IB reversal to solid, depth-writing, non-blended,
     non-alpha-tested, non-stencil triangle-list draws so blended visibility
     stays intact during narrower backend-locality probes.
+    `--probe-reverse-nonopaque-indexed-triangles` sets
+    `DXMT9_PROBE_REVERSE_NONOPAQUE_INDEXED_TRIANGLES=1`; it applies the same
+    reversal only outside that opaque depth-writing subset. Use it to isolate
+    whether full reverse-order wins come from blended, depth-write-off, or
+    other visibility-sensitive rows.
     `--probe-reverse-indexed-triangles-row SEQ/ENC` sets
-    `DXMT9_PROBE_REVERSE_INDEXED_TRIANGLES_ROW=SEQ/ENC`; it constrains either
+    `DXMT9_PROBE_REVERSE_INDEXED_TRIANGLES_ROW=SEQ/ENC`; it constrains any
     reverse-indexed-triangle probe to one `RenderPass[seq=...,enc=...]` row so
     row-scoped A/B runs can keep hot-row membership stable enough for
     attribution.

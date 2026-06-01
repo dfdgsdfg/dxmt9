@@ -215,6 +215,12 @@ bool probeReverseOpaqueIndexedTriangles() {
   return v;
 }
 
+bool probeReverseNonOpaqueIndexedTriangles() {
+  static const bool v =
+      util::getenvFlag("DXMT9_PROBE_REVERSE_NONOPAQUE_INDEXED_TRIANGLES");
+  return v;
+}
+
 RenderEncoderSelector probeReverseIndexedTrianglesRow() {
   static const RenderEncoderSelector selector =
       parseRenderEncoderSelector("DXMT9_PROBE_REVERSE_INDEXED_TRIANGLES_ROW");

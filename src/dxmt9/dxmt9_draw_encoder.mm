@@ -5328,15 +5328,21 @@ bool encodeDraw(EncodeContext& ctx,
       const bool reverseAllIndexedTriangles = debug::probeReverseIndexedTriangles();
       const bool reverseOpaqueIndexedTriangles =
           debug::probeReverseOpaqueIndexedTriangles();
+      const bool reverseNonOpaqueIndexedTriangles =
+          debug::probeReverseNonOpaqueIndexedTriangles();
       const bool reverseTriangleProbeRequested =
-          (reverseAllIndexedTriangles || reverseOpaqueIndexedTriangles) &&
+          (reverseAllIndexedTriangles || reverseOpaqueIndexedTriangles ||
+           reverseNonOpaqueIndexedTriangles) &&
           pv.primitiveType == core::PrimitiveType::TriangleList;
       if (reverseTriangleProbeRequested &&
           reverseIndexedTriangleRowMatches(encoderBreakdown)) {
         bool probeApplied = false;
+        const bool opaqueDepthWritingEligible =
+            isOpaqueDepthWritingReorderProbeEligible(hot.renderStates, fillMode);
         const bool probeEligible =
             reverseAllIndexedTriangles ||
-            isOpaqueDepthWritingReorderProbeEligible(hot.renderStates, fillMode);
+            (reverseOpaqueIndexedTriangles && opaqueDepthWritingEligible) ||
+            (reverseNonOpaqueIndexedTriangles && !opaqueDepthWritingEligible);
         if (probeEligible &&
             buildReverseTriangleOrderIndexBytes(indexBytesForReuse,
                                                 pv.indexType,

@@ -434,6 +434,17 @@ class ThreeDMark05ProbeScriptTests(unittest.TestCase):
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertIn("DXMT_FORCE_EXPAND_INDEXED=1", result.stdout)
 
+    def test_wrapper_dry_run_includes_reverse_nonopaque_env(self) -> None:
+        result = self.run_script(
+            RUN_WRAPPER,
+            "--no-gputrace",
+            "--probe-reverse-nonopaque-indexed-triangles",
+            "--dry-run",
+        )
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("DXMT9_PROBE_REVERSE_NONOPAQUE_INDEXED_TRIANGLES=1", result.stdout)
+
     def test_wrapper_rejects_invalid_force_cull_mode(self) -> None:
         result = self.run_script(
             RUN_WRAPPER,
