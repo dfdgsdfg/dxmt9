@@ -849,10 +849,11 @@ if (( dump_shaders )); then
   mkdir -p "$shader_msl_dump_dir" "$shader_bytecode_dump_dir"
 fi
 
+run_status=0
 (
   cd "$repo_root"
   env "${env_args[@]}" "${cmd[@]}"
-)
+) || run_status=$?
 
 python3 "$repo_root/scripts/tools/summarize_3dmark05_perf.py" "$output_dir" --output "$summary_path"
 
@@ -886,4 +887,9 @@ if (( capture_gputrace )); then
 fi
 if (( dump_shaders )); then
   echo "wrote shader dump dir: $shader_dump_dir"
+fi
+
+if (( run_status != 0 )); then
+  echo "3DMark05 perf run exited with status $run_status after writing available postprocess artifacts" >&2
+  exit "$run_status"
 fi
