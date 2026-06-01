@@ -159,6 +159,12 @@ Commercial / 3rd-party titles (require external prefix):
     return a constant color so the reduced stage-in shape can compile. Accept
     it only as evidence about whether visible stage-out shape can move
     `VS Buffer Device Memory Bytes Written`.
+    To separate the constant-fragment side of that probe from the VSOut-layout
+    side, use `--force-fragment-color`. This sets
+    `DXMT_DEBUG_FORCE_FRAGMENT_COLOR=1`, keeps the current VSOut layout, and
+    forces translated/FFP fragment shaders to return a constant color. Compare
+    it against the same baseline before attributing position-only movement to
+    VSOut width.
     If VSOut trimming leaves Xcode's VS buffer-write bucket unchanged, run the
     next paired candidate with `--trim-vertex-temps`; this sets
     `DXMT9_TRIM_VERTEX_TEMPS=1` so translated VS `float4 r[]` is sized from

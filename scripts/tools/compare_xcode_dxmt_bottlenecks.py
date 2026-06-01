@@ -15,6 +15,9 @@ from pathlib import Path
 from typing import Any
 
 
+MIB = 1024.0 * 1024.0
+
+
 def as_float(value: Any) -> float:
     try:
         return float(str(value))
@@ -73,9 +76,10 @@ def dxmt_vsout_expected_bytes(row: dict[str, str]) -> int:
     explicit = first(row, "dxmt_vsout_expected_stage_out_bytes_per_vertex")
     if explicit:
         return as_int(explicit)
-    layout_key = as_int(first(row, "dxmt_vsout_layout_last", "vsout_layout_last"))
-    if not layout_key:
+    layout_text = first(row, "dxmt_vsout_layout_last", "vsout_layout_last")
+    if not layout_text:
         return 0
+    layout_key = as_int(layout_text)
     texcoord_count = int((layout_key & 0xff).bit_count())
     has_color = 1 if (layout_key & (1 << 8)) else 0
     has_secondary = 1 if (layout_key & (1 << 9)) else 0
@@ -337,6 +341,133 @@ def delta(after: float, before: float) -> tuple[float, str]:
     return diff, f"{diff / before * 100.0:+.2f}%"
 
 
+def seq_enc_label(row: dict[str, str], fallback_rank: int) -> str:
+    seq = first(row, "seq")
+    enc = first(row, "enc")
+    if seq and enc:
+        return f"{seq}/{enc}"
+    return f"rank {fallback_rank}"
+
+
+def row_match_key(row: dict[str, str]) -> tuple[str, str] | None:
+    seq = first(row, "seq")
+    enc = first(row, "enc")
+    if seq and enc:
+        return seq, enc
+    return None
+
+
+def row_metric(row: dict[str, str], key: str) -> float:
+    return as_float(first(row, key))
+
+
+def row_int_metric(row: dict[str, str], key: str) -> int:
+    return as_int(first(row, key))
+
+
+def row_tiled_mib(row: dict[str, str]) -> float:
+    return (
+        row_metric(row, "tiled_vertex_buffer_mib") +
+        row_metric(row, "tiled_primitive_block_mib")
+    )
+
+
+def row_vs_write_mib(row: dict[str, str]) -> float:
+    return row_metric(row, "vs_buffer_write_mib")
+
+
+def row_vs_invocations(row: dict[str, str]) -> float:
+    return row_metric(row, "vs_invocations")
+
+
+def row_vs_bytes_per_invocation(row: dict[str, str]) -> float:
+    explicit = row_metric(row, "vs_buffer_bytes_per_vs_invocation")
+    if explicit:
+        return explicit
+    invocations = row_vs_invocations(row)
+    if invocations <= 0.0:
+        return 0.0
+    return row_vs_write_mib(row) * MIB / invocations
+
+
+def matched_top_rows(
+    before_rows: list[dict[str, str]],
+    after_rows: list[dict[str, str]],
+    top_n: int,
+) -> list[tuple[int, dict[str, str], dict[str, str]]]:
+    after_by_key = {
+        key: row
+        for row in after_rows[:top_n]
+        if (key := row_match_key(row)) is not None
+    }
+    matched: list[tuple[int, dict[str, str], dict[str, str]]] = []
+    for index, before_row in enumerate(before_rows[:top_n]):
+        after_row: dict[str, str] | None = None
+        key = row_match_key(before_row)
+        if key is not None:
+            after_row = after_by_key.get(key)
+        if after_row is None and index < len(after_rows):
+            after_row = after_rows[index]
+        if after_row is None:
+            after_row = {}
+        matched.append((index + 1, before_row, after_row))
+    return matched
+
+
+def pct_delta(after: float, before: float) -> str:
+    return delta(after, before)[1]
+
+
+def fmt_int(value: int) -> str:
+    return f"{value:,}"
+
+
+def fmt_signed(value: float) -> str:
+    prefix = "+" if value > 0.0 else ""
+    return f"{prefix}{fmt(value)}"
+
+
+def vs_write_delta_components(
+    before_row: dict[str, str],
+    after_row: dict[str, str],
+) -> dict[str, float | str]:
+    before_mib = row_vs_write_mib(before_row)
+    after_mib = row_vs_write_mib(after_row)
+    before_invocations = row_vs_invocations(before_row)
+    after_invocations = row_vs_invocations(after_row)
+    before_bpi = row_vs_bytes_per_invocation(before_row)
+    after_bpi = row_vs_bytes_per_invocation(after_row)
+    invocation_effect_mib = (
+        (after_invocations - before_invocations) *
+        ((before_bpi + after_bpi) / 2.0) /
+        MIB
+    )
+    bytes_per_invocation_effect_mib = (
+        (after_bpi - before_bpi) *
+        ((before_invocations + after_invocations) / 2.0) /
+        MIB
+    )
+    total_delta_mib = after_mib - before_mib
+    effects = {
+        "invocations": abs(invocation_effect_mib),
+        "bytes_per_invocation": abs(bytes_per_invocation_effect_mib),
+    }
+    primary = max(effects, key=effects.get)
+    if effects[primary] < 0.001:
+        primary = "none"
+    return {
+        "total_delta_mib": total_delta_mib,
+        "invocation_effect_mib": invocation_effect_mib,
+        "bytes_per_invocation_effect_mib": bytes_per_invocation_effect_mib,
+        "residual_mib": (
+            total_delta_mib -
+            invocation_effect_mib -
+            bytes_per_invocation_effect_mib
+        ),
+        "primary": primary,
+    }
+
+
 def verdict(before: dict[str, float], after: dict[str, float]) -> list[str]:
     notes: list[str] = []
     gpu_delta, gpu_pct = delta(after["top_gpu_ms"], before["top_gpu_ms"])
@@ -385,7 +516,10 @@ def verdict(before: dict[str, float], after: dict[str, float]) -> list[str]:
 
 
 def write_report(path: Path, before: dict[str, float], after: dict[str, float],
-                 before_label: str, after_label: str) -> None:
+                 before_rows: list[dict[str, str]],
+                 after_rows: list[dict[str, str]],
+                 before_label: str, after_label: str,
+                 top_n: int) -> None:
     keys = (
         "encoders",
         "total_gpu_ms",
@@ -474,6 +608,89 @@ def write_report(path: Path, before: dict[str, float], after: dict[str, float],
             f"| `{key}` | `{fmt(before[key])}` | `{fmt(after[key])}` | "
             f"`{fmt(diff)}` | `{pct}` |"
         )
+    lines.append("")
+
+    lines.append("## Top Encoder Deltas")
+    lines.append("")
+    lines.append(
+        "| Row | GPU ms | VS write MiB | VS invocations | VS B/inv | "
+        "named tiled MiB | clip limiter % | VSOut key |"
+    )
+    lines.append("|---|---:|---:|---:|---:|---:|---:|---|")
+    for rank, before_row, after_row in matched_top_rows(before_rows, after_rows, top_n):
+        label = seq_enc_label(before_row, rank)
+        before_gpu = row_metric(before_row, "gpu_ms")
+        after_gpu = row_metric(after_row, "gpu_ms")
+        before_vs = row_metric(before_row, "vs_buffer_write_mib")
+        after_vs = row_metric(after_row, "vs_buffer_write_mib")
+        before_inv = row_int_metric(before_row, "vs_invocations")
+        after_inv = row_int_metric(after_row, "vs_invocations")
+        before_b_inv = row_metric(before_row, "vs_buffer_bytes_per_vs_invocation")
+        after_b_inv = row_metric(after_row, "vs_buffer_bytes_per_vs_invocation")
+        before_tiled = row_tiled_mib(before_row)
+        after_tiled = row_tiled_mib(after_row)
+        before_clip = row_metric(before_row, "clip_unit_limiter_pct")
+        after_clip = row_metric(after_row, "clip_unit_limiter_pct")
+        before_vsout = first(before_row, "dxmt_vsout_layout_last", "vsout_layout_last") or "n/a"
+        after_vsout = first(after_row, "dxmt_vsout_layout_last", "vsout_layout_last") or "n/a"
+        lines.append(
+            f"| `{label}` | `{fmt(before_gpu)} -> {fmt(after_gpu)} "
+            f"({pct_delta(after_gpu, before_gpu)})` | "
+            f"`{fmt(before_vs)} -> {fmt(after_vs)} "
+            f"({pct_delta(after_vs, before_vs)})` | "
+            f"`{fmt_int(before_inv)} -> {fmt_int(after_inv)} "
+            f"({pct_delta(float(after_inv), float(before_inv))})` | "
+            f"`{fmt(before_b_inv)} -> {fmt(after_b_inv)} "
+            f"({pct_delta(after_b_inv, before_b_inv)})` | "
+            f"`{fmt(before_tiled)} -> {fmt(after_tiled)} "
+            f"({pct_delta(after_tiled, before_tiled)})` | "
+            f"`{fmt(before_clip)} -> {fmt(after_clip)} "
+            f"({pct_delta(after_clip, before_clip)})` | "
+            f"`{before_vsout} -> {after_vsout}` |"
+        )
+    lines.append("")
+
+    lines.append("## VS Write Delta Attribution")
+    lines.append("")
+    lines.append(
+        "| Row | Total VS write delta MiB | Invocation-count effect MiB | "
+        "Bytes/inv effect MiB | Residual MiB | Primary mover |"
+    )
+    lines.append("|---|---:|---:|---:|---:|---|")
+    total_delta = 0.0
+    total_invocation_effect = 0.0
+    total_bpi_effect = 0.0
+    total_residual = 0.0
+    for rank, before_row, after_row in matched_top_rows(before_rows, after_rows, top_n):
+        label = seq_enc_label(before_row, rank)
+        components = vs_write_delta_components(before_row, after_row)
+        row_total_delta = float(components["total_delta_mib"])
+        row_invocation_effect = float(components["invocation_effect_mib"])
+        row_bpi_effect = float(components["bytes_per_invocation_effect_mib"])
+        row_residual = float(components["residual_mib"])
+        total_delta += row_total_delta
+        total_invocation_effect += row_invocation_effect
+        total_bpi_effect += row_bpi_effect
+        total_residual += row_residual
+        lines.append(
+            f"| `{label}` | `{fmt_signed(row_total_delta)}` | "
+            f"`{fmt_signed(row_invocation_effect)}` | "
+            f"`{fmt_signed(row_bpi_effect)}` | "
+            f"`{fmt_signed(row_residual)}` | `{components['primary']}` |"
+        )
+    total_primary = "none"
+    if max(abs(total_invocation_effect), abs(total_bpi_effect)) >= 0.001:
+        total_primary = (
+            "invocations"
+            if abs(total_invocation_effect) >= abs(total_bpi_effect)
+            else "bytes_per_invocation"
+        )
+    lines.append(
+        f"| `top {top_n} total` | `{fmt_signed(total_delta)}` | "
+        f"`{fmt_signed(total_invocation_effect)}` | "
+        f"`{fmt_signed(total_bpi_effect)}` | "
+        f"`{fmt_signed(total_residual)}` | `{total_primary}` |"
+    )
     lines.append("")
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text("\n".join(lines), encoding="utf-8")
@@ -613,9 +830,20 @@ def main() -> int:
     )
     args = parser.parse_args()
 
-    before = summarize(load_rows(args.before), args.top)
-    after = summarize(load_rows(args.after), args.top)
-    write_report(args.output, before, after, args.before_label, args.after_label)
+    before_rows = load_rows(args.before)
+    after_rows = load_rows(args.after)
+    before = summarize(before_rows, args.top)
+    after = summarize(after_rows, args.top)
+    write_report(
+        args.output,
+        before,
+        after,
+        before_rows,
+        after_rows,
+        args.before_label,
+        args.after_label,
+        args.top,
+    )
     print(args.output)
     failures = failed_requirements(args, before, after)
     if failures:

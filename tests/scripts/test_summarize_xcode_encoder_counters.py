@@ -269,12 +269,86 @@ class SummarizeXcodeEncoderCountersTests(unittest.TestCase):
                 float(row["vs_buffer_bytes_per_primitive_tile_estimate"]),
                 250 * MIB / 200,
             )
+            self.assertEqual(row["dxmt_vsout_expected_stage_out_bytes_per_vertex"], "32")
             report_text = report.read_text(encoding="utf-8")
             self.assertIn("unexplained Xcode buffer write", report_text)
             self.assertIn("VS buffer bytes / post-clipped primitive", report_text)
             self.assertIn("dxmt cull none/front/back draws", report_text)
             self.assertIn("## DXMT Per-Stream Breakdown", report_text)
             self.assertIn("0xabc/32/48", report_text)
+
+    def test_zero_vsout_layout_still_counts_position(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            xcode_csv = root / "frame60-counters-xcode.csv"
+            dxmt_csv = root / "3dmark05-perf-encoders.csv"
+            joined_csv = root / "joined.csv"
+            summary_csv = root / "summary.csv"
+            report = root / "report.md"
+
+            with xcode_csv.open("w", newline="", encoding="utf-8") as handle:
+                writer = csv.DictWriter(handle, fieldnames=[
+                    "Index",
+                    "Encoder Label",
+                    "GPU Time",
+                    "Buffer Device Memory Bytes Written",
+                    "VS Buffer Device Memory Bytes Written",
+                    "VS Invocations",
+                ])
+                writer.writeheader()
+                writer.writerow({
+                    "Index": 0,
+                    "Encoder Label": "RenderPass[seq=1,enc=2,rt=0x10,depth=0x20]",
+                    "GPU Time": 10_000_000,
+                    "Buffer Device Memory Bytes Written": 256 * MIB,
+                    "VS Buffer Device Memory Bytes Written": 16 * MIB,
+                    "VS Invocations": 1024,
+                })
+
+            with dxmt_csv.open("w", newline="", encoding="utf-8") as handle:
+                writer = csv.DictWriter(handle, fieldnames=[
+                    "seq",
+                    "encoder",
+                    "draw_calls",
+                    "pso_state_samples",
+                    "vsout_layout_last",
+                ])
+                writer.writeheader()
+                writer.writerow({
+                    "seq": 1,
+                    "encoder": 2,
+                    "draw_calls": 1,
+                    "pso_state_samples": 1,
+                    "vsout_layout_last": "0x0",
+                })
+
+            result = subprocess.run(
+                [
+                    sys.executable,
+                    str(SCRIPT),
+                    str(xcode_csv),
+                    "--dxmt-encoders-csv",
+                    str(dxmt_csv),
+                    "--summary-output",
+                    str(summary_csv),
+                    "--joined-output",
+                    str(joined_csv),
+                    "--report-output",
+                    str(report),
+                ],
+                text=True,
+                capture_output=True,
+                check=False,
+            )
+
+            self.assertEqual(result.returncode, 0, result.stderr)
+            with joined_csv.open(newline="", encoding="utf-8") as handle:
+                row = next(csv.DictReader(handle))
+            self.assertEqual(row["dxmt_vsout_expected_stage_out_bytes_per_vertex"], "16")
+            self.assertAlmostEqual(
+                float(row["dxmt_vs_buffer_to_expected_stage_out_ratio"]),
+                (16 * MIB / 1024) / 16,
+            )
 
     def test_top_pso_attribution_gate_accepts_current_source_coverage(self) -> None:
         result = self.run_pso_attribution_fixture(pso_state_samples=10)

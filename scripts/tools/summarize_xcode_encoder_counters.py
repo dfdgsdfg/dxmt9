@@ -852,8 +852,9 @@ def derive_dxmt_attribution(joined: dict[str, Any]) -> None:
     joined["dxmt_vs_buffer_to_stream0_input_max_ratio"] = ratio(
         vs_buffer_write_bytes, float(stream0_input_max_bytes))
 
-    layout_key = as_int(joined.get("dxmt_vsout_layout_last"))
-    if layout_key:
+    layout_text = str(joined.get("dxmt_vsout_layout_last", "")).strip()
+    if layout_text:
+        layout_key = as_int(layout_text)
         texcoord_mask = layout_key & 0xff
         texcoord_count = int(texcoord_mask.bit_count())
         has_color = 1 if (layout_key & (1 << 8)) else 0

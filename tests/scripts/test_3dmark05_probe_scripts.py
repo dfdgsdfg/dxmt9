@@ -213,6 +213,17 @@ class ThreeDMark05ProbeScriptTests(unittest.TestCase):
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertIn("DXMT9_PROBE_DROP_VSOUT_POINT_SIZE=1", result.stdout)
 
+    def test_wrapper_dry_run_includes_force_fragment_color_env(self) -> None:
+        result = self.run_script(
+            RUN_WRAPPER,
+            "--no-gputrace",
+            "--force-fragment-color",
+            "--dry-run",
+        )
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("DXMT_DEBUG_FORCE_FRAGMENT_COLOR=1", result.stdout)
+
     def test_wrapper_dry_run_includes_x8_shader_alpha_fill_env(self) -> None:
         result = self.run_script(
             RUN_WRAPPER,

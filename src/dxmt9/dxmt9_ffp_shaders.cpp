@@ -1,4 +1,5 @@
 #include "dxmt9_ffp_shaders.hpp"
+#include "dxmt9_debug_trace.hpp"
 #include "dxmt9_draw_shader.hpp"
 #include "dxmt9_shader_sources.hpp"
 
@@ -1030,7 +1031,8 @@ std::string makeFfpPixelSource(const FfpPixelKey& key,
       out << "  (void)dxmt9_pointCoord;\n";
     }
   }
-  if (shaders::vsoutProbePositionOnlyEnabled()) {
+  if (shaders::vsoutProbePositionOnlyEnabled() ||
+      ::dxmt9::debug::forceFragmentShaderColor()) {
     out << "  return float4(1.0f, 0.0f, 1.0f, 1.0f);\n";
     out << "}\n";
     out << "// ffp pixel hash " << key.hash << "\n";

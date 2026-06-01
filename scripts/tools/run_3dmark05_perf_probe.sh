@@ -13,6 +13,7 @@ dump_shaders=0
 trim_unused_varyings=0
 drop_vsout_point_size=0
 probe_position_only_vsout=0
+force_fragment_color=0
 trim_vertex_temps=0
 trim_vs_output_scratch=0
 split_sparse_const_records=0
@@ -91,6 +92,10 @@ Options:
                       Set DXMT9_PROBE_POSITION_ONLY_VSOUT=1 to force
                       position-only VSOut and constant fragment output for a
                       correctness-invalid hidden VS-write lower-bound probe
+  --force-fragment-color
+                      Set DXMT_DEBUG_FORCE_FRAGMENT_COLOR=1 to keep the
+                      current VSOut layout while forcing translated/FFP
+                      fragment shaders to a constant color
   --trim-vertex-temps
                       Set DXMT9_TRIM_VERTEX_TEMPS=1 for translated VS temp
                       register/spill experiments
@@ -244,6 +249,10 @@ while (($#)); do
       ;;
     --probe-position-only-vsout)
       probe_position_only_vsout=1
+      shift
+      ;;
+    --force-fragment-color)
+      force_fragment_color=1
       shift
       ;;
     --trim-vertex-temps)
@@ -667,6 +676,10 @@ fi
 
 if (( probe_position_only_vsout )); then
   env_args+=("DXMT9_PROBE_POSITION_ONLY_VSOUT=1")
+fi
+
+if (( force_fragment_color )); then
+  env_args+=("DXMT_DEBUG_FORCE_FRAGMENT_COLOR=1")
 fi
 
 if (( trim_vertex_temps )); then
