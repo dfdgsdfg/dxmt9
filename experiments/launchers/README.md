@@ -303,6 +303,16 @@ Commercial / 3rd-party titles (require external prefix):
     `DXMT9_AGGRESSIVE_COLOR_DONTCARE=1` dead-at-end experiment.
     The probe wrapper has `--aggressive-color-dontcare` and
     `--aggressive-depth-dontcare` switches for paired baseline/candidate runs.
+    For hidden vertex/tiler/backend state-shape probes, use the narrow
+    diagnostic switches before broad visibility changes:
+    `--probe-disable-alpha-blend` sets
+    `DXMT9_PROBE_DISABLE_ALPHA_BLEND=1` and disables Metal color blending while
+    preserving color-write masks, and `--probe-disable-depth-write` sets
+    `DXMT9_PROBE_DISABLE_DEPTH_WRITE=1` and keeps depth tests but forces depth
+    writes off. Gate both with Xcode `VS Buffer Device Memory Bytes Written`
+    deltas; they are not correctness-preserving optimizations by themselves.
+    A solid yellow/clear-like GT1 frame from the alpha-blend probe is expected
+    evidence that the probe invalidated final pixels, not a valid target state.
   Explicit environment variables still override profile defaults.
 - Launcher filename must exactly match `CATALOGUE.name`. Adding a new app:
   1. Add `[[app]]` entry to `experiments/CATALOGUE.toml` with `name`,

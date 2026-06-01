@@ -24,6 +24,8 @@ aggressive_color_dontcare=0
 aggressive_depth_dontcare=0
 disable_cull=0
 disable_scissor=0
+probe_disable_alpha_blend=0
+probe_disable_depth_write=0
 force_visible=0
 compare_baseline_output=${DXMT_3DMARK05_COMPARE_BASELINE_OUTPUT:-}
 compare_baseline_joined=${DXMT_3DMARK05_COMPARE_BASELINE_JOINED:-}
@@ -114,6 +116,10 @@ Options:
                       Set DXMT9_AGGRESSIVE_DEPTH_DONTCARE=1 for the run
   --disable-cull      Set DXMT_DISABLE_CULL=1 for render-state shape A/B
   --disable-scissor   Set DXMT_DISABLE_SCISSOR=1 for render-state shape A/B
+  --probe-disable-alpha-blend
+                      Set DXMT9_PROBE_DISABLE_ALPHA_BLEND=1 for blend state A/B
+  --probe-disable-depth-write
+                      Set DXMT9_PROBE_DISABLE_DEPTH_WRITE=1 for depth-write A/B
   --force-visible     Set DXMT_DEBUG_FORCE_VISIBLE=1 for visibility/state A/B
   --compare-baseline-output PATH
                       After the run, compare result.json counters against this baseline output dir/result.json
@@ -277,6 +283,14 @@ while (($#)); do
       ;;
     --disable-scissor)
       disable_scissor=1
+      shift
+      ;;
+    --probe-disable-alpha-blend)
+      probe_disable_alpha_blend=1
+      shift
+      ;;
+    --probe-disable-depth-write)
+      probe_disable_depth_write=1
       shift
       ;;
     --force-visible)
@@ -686,6 +700,14 @@ if (( disable_scissor )); then
   env_args+=("DXMT_DISABLE_SCISSOR=1")
 fi
 
+if (( probe_disable_alpha_blend )); then
+  env_args+=("DXMT9_PROBE_DISABLE_ALPHA_BLEND=1")
+fi
+
+if (( probe_disable_depth_write )); then
+  env_args+=("DXMT9_PROBE_DISABLE_DEPTH_WRITE=1")
+fi
+
 if (( force_visible )); then
   env_args+=("DXMT_DEBUG_FORCE_VISIBLE=1")
 fi
@@ -906,6 +928,12 @@ if ((${#finalize_cmd[@]})); then
   printf 'finalize_cmd_after_xcode_export:'
   printf ' %q' "${finalize_cmd[@]}"
   printf '\n'
+fi
+if (( probe_disable_alpha_blend )); then
+  echo "warning: --probe-disable-alpha-blend is diagnostic only and can corrupt frame output (for example solid yellow/clear-like GT1 output); do not treat it as correctness-preserving."
+fi
+if (( probe_disable_depth_write )); then
+  echo "warning: --probe-disable-depth-write is diagnostic only and can corrupt depth-dependent frame output; do not treat it as correctness-preserving."
 fi
 
 if (( dry_run )); then

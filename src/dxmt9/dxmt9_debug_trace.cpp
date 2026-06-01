@@ -123,6 +123,16 @@ bool disableAlphaTest() {
   return v;
 }
 
+bool probeDisableAlphaBlend() {
+  static const bool v = util::getenvFlag("DXMT9_PROBE_DISABLE_ALPHA_BLEND");
+  return v;
+}
+
+bool probeDisableDepthWrite() {
+  static const bool v = util::getenvFlag("DXMT9_PROBE_DISABLE_DEPTH_WRITE");
+  return v;
+}
+
 bool forceExpandIndexed() {
   static const bool v = util::getenvFlag("DXMT_FORCE_EXPAND_INDEXED");
   return v;

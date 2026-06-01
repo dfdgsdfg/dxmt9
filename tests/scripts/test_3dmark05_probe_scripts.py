@@ -279,6 +279,41 @@ class ThreeDMark05ProbeScriptTests(unittest.TestCase):
         self.assertEqual(joined["dxmt_x8_shader_alpha_fill_samples"], 2)
         self.assertEqual(joined["dxmt_x8_shader_alpha_fill_mask_or"], "0x3")
 
+    def test_xcode_summarizer_classifies_hidden_backend_storage(self) -> None:
+        summarizer = load_xcode_summarizer()
+        joined = {
+            "buffer_write_mib": 225.0,
+            "vs_buffer_write_mib": 224.0,
+            "vs_buffer_bytes_per_vs_invocation": 1500.0,
+            "vs_buffer_bytes_per_primitive": 2400.0,
+            "tiled_vertex_buffer_mib": 10.0,
+            "tiled_primitive_block_mib": 1.0,
+            "vs_invocations": 1000.0,
+            "dxmt_draw_calls": 10,
+            "dxmt_vertex_count": 1000,
+            "dxmt_primitive_count": 400,
+            "dxmt_vsout_layout_last": "0xfff",
+            "dxmt_argbuf_table_bytes": 1024,
+            "dxmt_argbuf_cbuf_bytes": 1024,
+            "dxmt_set_vertex_bytes_bytes": 0,
+            "dxmt_transient_vertex_bytes": 0,
+            "dxmt_transient_index_bytes": 0,
+            "dxmt_stream0_stride_min": 24,
+            "dxmt_stream0_stride_max": 24,
+            "dxmt_stream_handle_changes": 10,
+            "dxmt_ib_handle_changes": 10,
+        }
+
+        summarizer.derive_dxmt_attribution(joined)
+
+        self.assertEqual(joined["dxmt_gpu_write_hint"], "gpu_vs_buffer_write")
+        self.assertEqual(
+            joined["dxmt_backend_storage_class"],
+            "hidden_vertex_tiler_parameter_storage",
+        )
+        self.assertEqual(joined["dxmt_backend_storage_confidence"], "high")
+        self.assertGreater(joined["dxmt_hidden_backend_write_ratio"], 0.90)
+
     def test_wrapper_dry_run_includes_vs_output_scratch_trim_env(self) -> None:
         result = self.run_script(
             RUN_WRAPPER,
@@ -296,6 +331,8 @@ class ThreeDMark05ProbeScriptTests(unittest.TestCase):
             "--no-gputrace",
             "--disable-cull",
             "--disable-scissor",
+            "--probe-disable-alpha-blend",
+            "--probe-disable-depth-write",
             "--force-visible",
             "--dry-run",
         )
@@ -303,6 +340,8 @@ class ThreeDMark05ProbeScriptTests(unittest.TestCase):
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertIn("DXMT_DISABLE_CULL=1", result.stdout)
         self.assertIn("DXMT_DISABLE_SCISSOR=1", result.stdout)
+        self.assertIn("DXMT9_PROBE_DISABLE_ALPHA_BLEND=1", result.stdout)
+        self.assertIn("DXMT9_PROBE_DISABLE_DEPTH_WRITE=1", result.stdout)
         self.assertIn("DXMT_DEBUG_FORCE_VISIBLE=1", result.stdout)
 
     def test_wrapper_dry_run_includes_metal_capture_layer_env_for_gputrace(self) -> None:

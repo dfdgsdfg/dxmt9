@@ -3409,7 +3409,8 @@ bool encodeDraw(EncodeContext& ctx,
         countDepthStateBind();
       }
     }
-    if (blendFactorNeedsConstantColor(hot.renderStates)) {
+    if (!debug::probeDisableAlphaBlend() &&
+        blendFactorNeedsConstantColor(hot.renderStates)) {
       const auto factor = decodeD3DBlendFactor(
           core::flatStateOr(hot.renderStates, RS_BLEND_FACTOR, 0xffffffffu));
       recordedSetBlendColorAndStencilRef(

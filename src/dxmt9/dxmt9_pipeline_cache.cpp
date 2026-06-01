@@ -64,6 +64,11 @@ bool x8ShaderAlphaFillEnabled() {
   return enabled;
 }
 
+bool probeDisableAlphaBlendEnabled() {
+  static const bool enabled = envFlag("DXMT9_PROBE_DISABLE_ALPHA_BLEND");
+  return enabled;
+}
+
 bool isX8Format(core::Format format) noexcept {
   return format == core::Format::X8R8G8B8 ||
          format == core::Format::X8B8G8R8;
@@ -538,7 +543,8 @@ detail::makeBlendAttachmentKeys(core::FlatDrawStateView state, bool forceVisible
   std::array<BlendAttachmentKey, core::kMaxRenderTargets> blendAttachments{};
   const auto& rs = state.hot->renderStates;
   const bool blendEnabled =
-      !forceVisibleDraw && core::flatStateOr(rs, core::RS_ALPHABLEND_ENABLE, 0u) != 0;
+      !forceVisibleDraw && !probeDisableAlphaBlendEnabled() &&
+      core::flatStateOr(rs, core::RS_ALPHABLEND_ENABLE, 0u) != 0;
   const bool separateAlphaBlend =
       core::flatStateOr(rs, core::RS_SEPARATE_ALPHA_BLEND_ENABLE, 0u) != 0;
   const u32 rgbBlendOperation =

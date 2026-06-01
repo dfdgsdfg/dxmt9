@@ -310,6 +310,12 @@ JOINED_EXTRA_FIELDS = (
     "dxmt_vsout_has_point_size",
     "dxmt_vsout_expected_stage_out_bytes_per_vertex",
     "dxmt_vs_buffer_to_expected_stage_out_ratio",
+    "dxmt_named_tiled_buffer_mib",
+    "dxmt_hidden_backend_write_mib",
+    "dxmt_hidden_backend_write_ratio",
+    "dxmt_backend_storage_class",
+    "dxmt_backend_storage_confidence",
+    "dxmt_backend_probe_hint",
     "dxmt_gpu_write_hint",
     "dxmt_write_owner_confidence",
 )
@@ -887,10 +893,21 @@ def derive_dxmt_attribution(joined: dict[str, Any]) -> None:
     transient_ratio = as_float(joined.get("dxmt_transient_to_buffer_write_ratio"))
     vs_buffer_ratio = ratio(vs_buffer_write_bytes, buffer_write_bytes)
     vsout_ratio = as_float(joined.get("dxmt_vs_buffer_to_expected_stage_out_ratio"))
+    vs_bytes_per_primitive = as_float(joined.get("vs_buffer_bytes_per_primitive"))
+    named_tiled_buffer_mib = (
+        as_float(joined.get("tiled_vertex_buffer_mib")) +
+        as_float(joined.get("tiled_primitive_block_mib"))
+    )
+    named_tiled_buffer_bytes = named_tiled_buffer_mib * 1024.0 * 1024.0
+    hidden_backend_write_bytes = max(
+        vs_buffer_write_bytes - named_tiled_buffer_bytes - float(cpu_writer_bytes),
+        0.0)
+    hidden_backend_ratio = ratio(hidden_backend_write_bytes, vs_buffer_write_bytes)
     stream_per_draw = as_float(joined.get("dxmt_stream_handle_changes_per_draw"))
     ib_per_draw = as_float(joined.get("dxmt_ib_handle_changes_per_draw"))
     confidence = "low"
-    if (buffer_write_bytes >= 256.0 * 1024.0 * 1024.0 and
+    significant_vs_buffer_write = vs_buffer_write_bytes >= 128.0 * 1024.0 * 1024.0
+    if (significant_vs_buffer_write and
             vs_buffer_ratio > 0.90 and cpu_writer_ratio < 0.10 and
             (vsout_ratio == 0.0 or vsout_ratio > 4.0)):
         hint = "gpu_vs_buffer_write"
@@ -912,6 +929,40 @@ def derive_dxmt_attribution(joined: dict[str, Any]) -> None:
         confidence = "medium"
     else:
         hint = "mixed"
+
+    backend_class = "unclassified"
+    backend_confidence = "low"
+    backend_probe_hint = "inspect-row"
+    if (hint == "gpu_vs_buffer_write" and hidden_backend_ratio > 0.90 and
+            vsout_ratio > 4.0 and vs_bytes_per_primitive > 1024.0):
+        backend_class = "hidden_vertex_tiler_parameter_storage"
+        backend_confidence = "high"
+        backend_probe_hint = "primitive-backend-pressure-or-state-shape-ab"
+    elif (hint == "gpu_vs_buffer_write" and named_tiled_buffer_mib > 0.0 and
+            hidden_backend_ratio <= 0.90):
+        backend_class = "named_tiled_vertex_or_primitive_storage"
+        backend_confidence = "medium"
+        backend_probe_hint = "tile-density-or-render-pass-ab"
+    elif hint == "gpu_vs_buffer_write":
+        backend_class = "gpu_vertex_buffer_write_unknown"
+        backend_confidence = "medium"
+        backend_probe_hint = "shader-codegen-and-state-shape-ab"
+    elif hint == "stream_ib_churn":
+        backend_class = "cpu_state_churn_secondary"
+        backend_confidence = "medium"
+        backend_probe_hint = "draw-run-binding-coalescing"
+    elif hint in {"argbuf_cbuf_upload", "geometry_transient_upload"}:
+        backend_class = "explicit_dxmt_writer"
+        backend_confidence = confidence
+        backend_probe_hint = "reduce-explicit-writer-bytes"
+
+    joined["dxmt_named_tiled_buffer_mib"] = named_tiled_buffer_mib
+    joined["dxmt_hidden_backend_write_mib"] = (
+        hidden_backend_write_bytes / (1024.0 * 1024.0))
+    joined["dxmt_hidden_backend_write_ratio"] = hidden_backend_ratio
+    joined["dxmt_backend_storage_class"] = backend_class
+    joined["dxmt_backend_storage_confidence"] = backend_confidence
+    joined["dxmt_backend_probe_hint"] = backend_probe_hint
     joined["dxmt_gpu_write_hint"] = hint
     joined["dxmt_write_owner_confidence"] = confidence
 
@@ -977,6 +1028,12 @@ def write_report(
     top_tiled_primitive_block_mib = sum(
         as_float(row.get("tiled_primitive_block_mib")) for row in top
     )
+    top_named_tiled_buffer_mib = sum(
+        as_float(row.get("dxmt_named_tiled_buffer_mib")) for row in top
+    )
+    top_hidden_backend_write_mib = sum(
+        as_float(row.get("dxmt_hidden_backend_write_mib")) for row in top
+    )
     top_vs_invocations = sum(as_float(row.get("vs_invocations")) for row in top)
     top_fs_invocations = sum(as_float(row.get("fs_invocations")) for row in top)
     top_primitives = sum(as_float(row.get("primitives")) for row in top)
@@ -1038,6 +1095,10 @@ def write_report(
     top_vs_to_tiled_ratio = (
         top_vs_buffer_write_mib / top_tiled_buffer_mib
         if top_tiled_buffer_mib else 0.0
+    )
+    top_hidden_backend_write_ratio = (
+        top_hidden_backend_write_mib / top_vs_buffer_write_mib
+        if top_vs_buffer_write_mib else 0.0
     )
     top_vs_l1_to_device_ratio = (
         top_vs_l1_write_mib / top_vs_buffer_write_mib
@@ -1229,6 +1290,8 @@ def write_report(
     )
     hint_counts: dict[str, int] = {}
     confidence_counts: dict[str, int] = {}
+    backend_class_counts: dict[str, int] = {}
+    backend_probe_counts: dict[str, int] = {}
     for row in top:
         hint = str(row.get("dxmt_gpu_write_hint") or "")
         if hint:
@@ -1236,9 +1299,21 @@ def write_report(
         confidence = str(row.get("dxmt_write_owner_confidence") or "")
         if confidence:
             confidence_counts[confidence] = confidence_counts.get(confidence, 0) + 1
+        backend_class = str(row.get("dxmt_backend_storage_class") or "")
+        if backend_class:
+            backend_class_counts[backend_class] = backend_class_counts.get(backend_class, 0) + 1
+        backend_probe = str(row.get("dxmt_backend_probe_hint") or "")
+        if backend_probe:
+            backend_probe_counts[backend_probe] = backend_probe_counts.get(backend_probe, 0) + 1
     hint_summary = ", ".join(f"{key}:{value}" for key, value in sorted(hint_counts.items()))
     confidence_summary = ", ".join(
         f"{key}:{value}" for key, value in sorted(confidence_counts.items())
+    )
+    backend_class_summary = ", ".join(
+        f"{key}:{value}" for key, value in sorted(backend_class_counts.items())
+    )
+    backend_probe_summary = ", ".join(
+        f"{key}:{value}" for key, value in sorted(backend_probe_counts.items())
     )
 
     notes: list[str] = []
@@ -1272,6 +1347,11 @@ def write_report(
         notes.append(
             "VS buffer writes are far larger than Xcode tiled vertex/primitive-block bytes; "
             "do not equate the bucket with explicit tiled-vertex storage only."
+        )
+    if top_hidden_backend_write_ratio > 0.90:
+        notes.append(
+            "After subtracting named tiled-buffer counters and dxmt CPU writers, "
+            "more than 90% of top VS buffer writes remain hidden backend traffic."
         )
     if top_tile_intersections_pct > 0 and top_vs_to_tiled_ratio > 16.0:
         notes.append(
@@ -1408,6 +1488,13 @@ def write_report(
     lines.append(
         f"| Tiled primitive-block buffer | `{fmt_float(top_tiled_primitive_block_mib)} MiB` |"
     )
+    lines.append(f"| Named tiled buffer total | `{fmt_float(top_named_tiled_buffer_mib)} MiB` |")
+    lines.append(
+        f"| Hidden backend write estimate | `{fmt_float(top_hidden_backend_write_mib)} MiB` |"
+    )
+    lines.append(
+        f"| Hidden backend / VS buffer write | `{fmt_float(top_hidden_backend_write_ratio, 3)}x` |"
+    )
     lines.append(f"| Device write | `{fmt_float(top_device_write_mib)} MiB` |")
     lines.append(f"| dxmt draw calls | `{fmt_int(top_draws)}` |")
     lines.append(f"| dxmt FFP draws | `{fmt_int(top_ffp_draws)}` |")
@@ -1501,6 +1588,10 @@ def write_report(
         lines.append(f"| dxmt hint buckets | `{hint_summary}` |")
     if confidence_summary:
         lines.append(f"| dxmt hint confidence | `{confidence_summary}` |")
+    if backend_class_summary:
+        lines.append(f"| backend storage class | `{backend_class_summary}` |")
+    if backend_probe_summary:
+        lines.append(f"| backend next probe | `{backend_probe_summary}` |")
     if top_set_vertex_bytes:
         lines.append(
             f"| dxmt setVertexBytes slot5 | `{fmt_float(top_set_vertex_bytes_slot5 / (1024.0 * 1024.0))} MiB` |"
@@ -1543,6 +1634,39 @@ def write_report(
     lines.append("")
     for note in notes:
         lines.append(f"- {note}")
+    lines.append("")
+    lines.append("## Hidden Backend Storage Classifier")
+    lines.append("")
+    lines.append(
+        "The hidden estimate subtracts Xcode's named tiled vertex/primitive-block "
+        "counters and dxmt-attributed CPU writer bytes from Xcode's VS buffer-write "
+        "bucket. It is an attribution heuristic, not a separate hardware counter."
+    )
+    lines.append("")
+    backend_header = [
+        "seq", "enc", "VS buffer MiB", "named tiled MiB", "hidden est MiB",
+        "hidden/VS", "VS B/prim", "VS/VSOut", "class", "confidence", "next probe",
+    ]
+    lines.append("| " + " | ".join(backend_header) + " |")
+    lines.append("|" + "|".join("---:" for _ in backend_header) + "|")
+    for row in joined[:10]:
+        lines.append(
+            "| "
+            + " | ".join([
+                str(row.get("seq", "")),
+                str(row.get("enc", "")),
+                fmt_float(row.get("vs_buffer_write_mib")),
+                fmt_float(row.get("dxmt_named_tiled_buffer_mib")),
+                fmt_float(row.get("dxmt_hidden_backend_write_mib")),
+                fmt_float(row.get("dxmt_hidden_backend_write_ratio"), 3),
+                fmt_float(row.get("vs_buffer_bytes_per_primitive"), 1),
+                fmt_float(row.get("dxmt_vs_buffer_to_expected_stage_out_ratio"), 1),
+                str(row.get("dxmt_backend_storage_class", "")),
+                str(row.get("dxmt_backend_storage_confidence", "")),
+                str(row.get("dxmt_backend_probe_hint", "")),
+            ])
+            + " |"
+        )
     lines.append("")
     lines.append("## DXMT Encoder Writer/State Breakdown")
     lines.append("")

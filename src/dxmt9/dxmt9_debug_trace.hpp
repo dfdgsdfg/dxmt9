@@ -88,6 +88,14 @@ bool forcePixelVFlip();
 // Disable alpha-test programmatic emulation. Env: DXMT_DISABLE_ALPHA_TEST.
 bool disableAlphaTest();
 
+// Diagnostic render-state A/B: force color blending off while preserving
+// color-write masks. Env: DXMT9_PROBE_DISABLE_ALPHA_BLEND.
+bool probeDisableAlphaBlend();
+
+// Diagnostic render-state A/B: keep depth testing but force depth writes off.
+// Env: DXMT9_PROBE_DISABLE_DEPTH_WRITE.
+bool probeDisableDepthWrite();
+
 // When set, force indexed draws to be expanded into flat vertex lists.
 // Env: DXMT_FORCE_EXPAND_INDEXED.
 bool forceExpandIndexed();
