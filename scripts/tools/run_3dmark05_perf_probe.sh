@@ -14,6 +14,8 @@ trim_unused_varyings=0
 trim_vertex_temps=0
 trim_vs_output_scratch=0
 split_sparse_const_records=0
+native_metal_base_vertex=0
+split_large_indexed_draws=
 aggressive_color_dontcare=0
 aggressive_depth_dontcare=0
 disable_cull=0
@@ -80,6 +82,12 @@ Options:
   --split-sparse-const-records
                       Set DXMT9_SPLIT_SPARSE_CONST_RECORDS=1 for sparse
                       constant-upload record splitting experiments
+  --native-metal-base-vertex
+                      Set DXMT9_USE_NATIVE_METAL_BASE_VERTEX=1 for indexed
+                      draw baseVertex / VS buffer-write experiments
+  --split-large-indexed-draws N
+                      Set DXMT9_SPLIT_LARGE_INDEXED_DRAWS=N to split indexed
+                      triangle-list draws above N primitives
   --aggressive-color-dontcare
                       Set DXMT9_AGGRESSIVE_COLOR_DONTCARE=1 for the run
   --aggressive-depth-dontcare
@@ -206,6 +214,14 @@ while (($#)); do
     --split-sparse-const-records)
       split_sparse_const_records=1
       shift
+      ;;
+    --native-metal-base-vertex)
+      native_metal_base_vertex=1
+      shift
+      ;;
+    --split-large-indexed-draws)
+      split_large_indexed_draws=${2:?missing value for --split-large-indexed-draws}
+      shift 2
       ;;
     --aggressive-color-dontcare)
       aggressive_color_dontcare=1
@@ -588,6 +604,14 @@ fi
 
 if (( split_sparse_const_records )); then
   env_args+=("DXMT9_SPLIT_SPARSE_CONST_RECORDS=1")
+fi
+
+if (( native_metal_base_vertex )); then
+  env_args+=("DXMT9_USE_NATIVE_METAL_BASE_VERTEX=1")
+fi
+
+if [[ -n "$split_large_indexed_draws" ]]; then
+  env_args+=("DXMT9_SPLIT_LARGE_INDEXED_DRAWS=$split_large_indexed_draws")
 fi
 
 if (( aggressive_depth_dontcare )); then

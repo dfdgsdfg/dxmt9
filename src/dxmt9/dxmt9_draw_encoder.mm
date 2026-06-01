@@ -837,6 +837,25 @@ struct ActiveEncoderBreakdown {
     }
   }
 
+  void recordSplitLargeIndexedDraw(u32 primitiveCount,
+                                   u32 primitiveLimit,
+                                   u32 metalDraws) {
+    if (!enabled || metalDraws <= 1u) {
+      return;
+    }
+    ++stats.splitLargeIndexedSourceDraws;
+    stats.splitLargeIndexedMetalDraws += metalDraws;
+    stats.splitLargeIndexedExtraDraws += static_cast<u64>(metalDraws - 1u);
+    stats.splitLargeIndexedPrimitiveCount += primitiveCount;
+    if (primitiveLimit != 0u) {
+      stats.splitLargeIndexedPrimitiveLimit =
+          stats.splitLargeIndexedPrimitiveLimit == 0
+              ? primitiveLimit
+              : std::min<std::uint64_t>(stats.splitLargeIndexedPrimitiveLimit,
+                                        primitiveLimit);
+    }
+  }
+
   void recordDrawIssue(core::PrimitiveType primitiveType,
                        u32 primitiveCount,
                        u64 vertexCount,
@@ -848,6 +867,9 @@ struct ActiveEncoderBreakdown {
                        u32 stream0Stride,
                        i32 drawVertexBaseIndex,
                        u32 drawVertexStreamOffset,
+                       i32 d3dBaseVertexIndex,
+                       bool nativeBaseVertexRequested,
+                       bool nativeBaseVertexUsed,
                        u32 startIndex,
                        core::IndexType indexType,
                        const core::FlatStateSet<core::kMaxStateSlots>& renderStates,
@@ -860,6 +882,31 @@ struct ActiveEncoderBreakdown {
     ++stats.drawCalls;
     if (indexed) {
       ++stats.indexedDraws;
+      ++stats.indexedBaseVertexSamples;
+      if (d3dBaseVertexIndex != 0) {
+        ++stats.indexedBaseVertexNonZeroDraws;
+      }
+      if (d3dBaseVertexIndex < 0) {
+        ++stats.indexedBaseVertexNegativeDraws;
+      } else if (d3dBaseVertexIndex > 0) {
+        ++stats.indexedBaseVertexPositiveDraws;
+      }
+      if (stats.indexedBaseVertexSamples == 1 ||
+          d3dBaseVertexIndex < stats.indexedBaseVertexMin) {
+        stats.indexedBaseVertexMin = d3dBaseVertexIndex;
+      }
+      if (stats.indexedBaseVertexSamples == 1 ||
+          d3dBaseVertexIndex > stats.indexedBaseVertexMax) {
+        stats.indexedBaseVertexMax = d3dBaseVertexIndex;
+      }
+      if (nativeBaseVertexRequested) {
+        ++stats.nativeBaseVertexRequestedDraws;
+        if (nativeBaseVertexUsed) {
+          ++stats.nativeBaseVertexUsedDraws;
+        } else if (d3dBaseVertexIndex < 0) {
+          ++stats.nativeBaseVertexSkippedNegativeDraws;
+        }
+      }
     }
     if (expandedIndexed) {
       ++stats.expandedIndexedDraws;
@@ -958,7 +1005,7 @@ struct ActiveEncoderBreakdown {
         preTransformed,
         textureMask,
         stream0Stride,
-        drawVertexBaseIndex,
+        indexed ? d3dBaseVertexIndex : drawVertexBaseIndex,
         drawVertexStreamOffset,
         startIndex,
         indexType,
@@ -4794,6 +4841,13 @@ bool encodeDraw(EncodeContext& ctx,
         emitQueueTraceLine(resultTrace.str());
       }
     }
+    const bool nativeBaseVertexRequested =
+        indexedDraw && !expandedIndexedDraw && debug::useNativeMetalBaseVertex();
+    const bool nativeBaseVertexUsed =
+        nativeBaseVertexRequested && pv.baseVertexIndex >= 0;
+    if (nativeBaseVertexUsed) {
+      drawVertexBaseIndex = 0;
+    }
     auto pushDrawVolatile = [&] {
       const DrawVolatile vol = buildDrawVolatile(drawVertexBaseIndex, drawVertexStreamOffset,
                                                   drawVertexStreamStride);
@@ -4819,6 +4873,9 @@ bool encodeDraw(EncodeContext& ctx,
           drawVertexStreamStride,
           drawVertexBaseIndex,
           drawVertexStreamOffset,
+          pv.baseVertexIndex,
+          nativeBaseVertexRequested,
+          nativeBaseVertexUsed,
           pv.startIndex,
           pv.indexType,
           hot.renderStates,
@@ -4935,10 +4992,40 @@ bool encodeDraw(EncodeContext& ctx,
       pushDrawVolatile();
       {
         PerfScope issueScope(perf::countEncodeDrawIssueCpuTime);
-        recordedDrawIndexedPrimitives(ctx, encoder, primitiveType,
-                                      toIndexType(pv.indexType),
-                                      (uint64_t)vertexCount, indexBuffer,
-                                      indexBufferOffset, 1, 0, 0);
+        const i32 metalBaseVertex = nativeBaseVertexUsed ? pv.baseVertexIndex : 0;
+        const auto metalIndexType = toIndexType(pv.indexType);
+        const u32 splitPrimitiveLimit = debug::splitLargeIndexedDrawPrimitiveLimit();
+        const bool splitLargeIndexed =
+            splitPrimitiveLimit != 0u &&
+            pv.primitiveType == core::PrimitiveType::TriangleList &&
+            primitiveCount > splitPrimitiveLimit;
+        if (splitLargeIndexed) {
+          const u64 indexSize = indexElementSize(pv.indexType);
+          u32 primitivesEmitted = 0;
+          u32 metalDraws = 0;
+          while (primitivesEmitted < primitiveCount) {
+            const u32 chunkPrimitives =
+                std::min(splitPrimitiveLimit, primitiveCount - primitivesEmitted);
+            const u64 chunkIndexOffset =
+                indexBufferOffset + static_cast<u64>(primitivesEmitted) * 3u * indexSize;
+            recordedDrawIndexedPrimitives(ctx, encoder, primitiveType,
+                                          metalIndexType,
+                                          static_cast<u64>(chunkPrimitives) * 3u,
+                                          indexBuffer, chunkIndexOffset, 1,
+                                          metalBaseVertex, 0);
+            primitivesEmitted += chunkPrimitives;
+            ++metalDraws;
+          }
+          if (encoderBreakdown) {
+            encoderBreakdown->recordSplitLargeIndexedDraw(
+                primitiveCount, splitPrimitiveLimit, metalDraws);
+          }
+        } else {
+          recordedDrawIndexedPrimitives(ctx, encoder, primitiveType,
+                                        metalIndexType,
+                                        (uint64_t)vertexCount, indexBuffer,
+                                        indexBufferOffset, 1, metalBaseVertex, 0);
+        }
       }
       // R-BACK-13.1: run the tile-FFP imageblock post-pass after this draw.
       emitTileFfpPostPass();
@@ -4959,6 +5046,9 @@ bool encodeDraw(EncodeContext& ctx,
         drawVertexStreamStride,
         drawVertexBaseIndex,
         drawVertexStreamOffset,
+        pv.baseVertexIndex,
+        false,
+        false,
         pv.startIndex,
         pv.indexType,
         hot.renderStates,

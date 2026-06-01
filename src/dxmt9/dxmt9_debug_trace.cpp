@@ -4,6 +4,7 @@
 #include <algorithm>
 #include <atomic>
 #include <cstdlib>
+#include <limits>
 
 namespace dxmt9::debug {
 
@@ -130,6 +131,23 @@ bool forceExpandIndexed() {
 bool disableAutoExpandIndexed() {
   static const bool v = util::getenvFlag("DXMT_DISABLE_AUTO_EXPAND_INDEXED");
   return v;
+}
+
+bool useNativeMetalBaseVertex() {
+  static const bool v = util::getenvFlag("DXMT9_USE_NATIVE_METAL_BASE_VERTEX");
+  return v;
+}
+
+std::uint32_t splitLargeIndexedDrawPrimitiveLimit() {
+  static const std::uint32_t limit = [] {
+    const auto value = util::getenvU64Auto("DXMT9_SPLIT_LARGE_INDEXED_DRAWS");
+    if (!value.has_value()) {
+      return 0u;
+    }
+    return static_cast<std::uint32_t>(
+        std::min<std::uint64_t>(*value, std::numeric_limits<std::uint32_t>::max()));
+  }();
+  return limit;
 }
 
 int fixedFunctionTraceBudget() {

@@ -197,6 +197,17 @@ ENCODER_SUM_KEYS = (
     "draw_geometry_signature_unique_overflows",
     "draw_geometry_signature_duplicates",
     "draw_geometry_signature_consecutive_duplicates",
+    "indexed_base_vertex_samples",
+    "indexed_base_vertex_nonzero_draws",
+    "indexed_base_vertex_negative_draws",
+    "indexed_base_vertex_positive_draws",
+    "native_base_vertex_requested_draws",
+    "native_base_vertex_used_draws",
+    "native_base_vertex_skipped_negative_draws",
+    "split_large_indexed_source_draws",
+    "split_large_indexed_metal_draws",
+    "split_large_indexed_extra_draws",
+    "split_large_indexed_primitive_count",
     "stream_state_samples",
     "stream_metal_binds",
     "stream_metal_bind_firsts",
@@ -302,6 +313,11 @@ TOP_ENCODER_KEYS = (
     "draw_geometry_signature_unique",
     "draw_geometry_signature_duplicates",
     "draw_geometry_signature_duplicate_ratio",
+    "indexed_base_vertex_nonzero_draws",
+    "indexed_base_vertex_negative_draws",
+    "native_base_vertex_used_draws",
+    "split_large_indexed_source_draws",
+    "split_large_indexed_extra_draws",
     "pso_handle_changes",
     "pso_state_samples_per_draw",
     "shader_variant_changes",
@@ -372,6 +388,20 @@ ENCODER_CSV_KEYS = (
     "draw_geometry_signature_duplicate_ratio",
     "draw_geometry_signature_consecutive_duplicate_ratio",
     "draw_geometry_signature_last",
+    "indexed_base_vertex_samples",
+    "indexed_base_vertex_nonzero_draws",
+    "indexed_base_vertex_negative_draws",
+    "indexed_base_vertex_positive_draws",
+    "indexed_base_vertex_min",
+    "indexed_base_vertex_max",
+    "native_base_vertex_requested_draws",
+    "native_base_vertex_used_draws",
+    "native_base_vertex_skipped_negative_draws",
+    "split_large_indexed_source_draws",
+    "split_large_indexed_metal_draws",
+    "split_large_indexed_extra_draws",
+    "split_large_indexed_primitive_limit",
+    "split_large_indexed_primitive_count",
     "stream0_stride_min",
     "stream0_stride_max",
     "stream_state_samples",
@@ -705,6 +735,17 @@ def write_csv(path: Path, rows: list[dict[str, Any]], keys: tuple[str, ...]) -> 
             writer.writerow({key: row.get(key, "") for key in keys})
 
 
+def load_existing_csv(path: Path) -> list[dict[str, Any]]:
+    if not path.exists():
+        return []
+    with path.open(newline="", encoding="utf-8") as handle:
+        rows = [dict(row) for row in csv.DictReader(handle)]
+    for row in rows:
+        for key, value in tuple(row.items()):
+            row[key] = parse_number(value)
+    return rows
+
+
 def enrich_encoder_rows(encoders: list[dict[str, Any]]) -> None:
     for row in encoders:
         draws = numeric_value(row, "draw_calls")
@@ -1011,13 +1052,19 @@ def main() -> int:
 
     run_dir = args.output_dir
     result = load_result(run_dir)
-    encoders, streams = parse_encoder_lines(run_dir / "dxmt9.log")
-    enrich_encoder_rows(encoders)
     output = args.output or (run_dir / "3dmark05-perf-summary.md")
     encoder_csv = output.parent / "3dmark05-perf-encoders.csv"
     stream_csv = output.parent / "3dmark05-perf-encoder-streams.csv"
-    write_csv(encoder_csv, encoders, ENCODER_CSV_KEYS)
-    write_csv(stream_csv, streams, STREAM_CSV_KEYS)
+    log_path = run_dir / "dxmt9.log"
+    encoders, streams = parse_encoder_lines(log_path)
+    if not log_path.exists():
+        encoders = load_existing_csv(encoder_csv)
+        streams = load_existing_csv(stream_csv)
+    enrich_encoder_rows(encoders)
+    if log_path.exists() or not encoder_csv.exists():
+        write_csv(encoder_csv, encoders, ENCODER_CSV_KEYS)
+    if log_path.exists() or not stream_csv.exists():
+        write_csv(stream_csv, streams, STREAM_CSV_KEYS)
     write_markdown(output, run_dir, result, encoders, streams, encoder_csv, stream_csv)
     print(output)
     return 0

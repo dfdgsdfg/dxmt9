@@ -3037,6 +3037,19 @@ void emitEncoderBreakdown(const EncoderBreakdown& b) {
       "draw_geometry_signature_duplicates=%llu "
       "draw_geometry_signature_consecutive_duplicates=%llu "
       "draw_geometry_signature_last=0x%llx "
+      "indexed_base_vertex_samples=%llu "
+      "indexed_base_vertex_nonzero_draws=%llu "
+      "indexed_base_vertex_negative_draws=%llu "
+      "indexed_base_vertex_positive_draws=%llu "
+      "indexed_base_vertex_min=%lld indexed_base_vertex_max=%lld "
+      "native_base_vertex_requested_draws=%llu "
+      "native_base_vertex_used_draws=%llu "
+      "native_base_vertex_skipped_negative_draws=%llu "
+      "split_large_indexed_source_draws=%llu "
+      "split_large_indexed_metal_draws=%llu "
+      "split_large_indexed_extra_draws=%llu "
+      "split_large_indexed_primitive_limit=%llu "
+      "split_large_indexed_primitive_count=%llu "
       "stream0_stride_min=%llu stream0_stride_max=%llu "
       "stream_state_samples=%llu stream_metal_binds=%llu "
       "stream_metal_bind_firsts=%llu "
@@ -3167,6 +3180,20 @@ void emitEncoderBreakdown(const EncoderBreakdown& b) {
       static_cast<unsigned long long>(b.drawGeometrySignatureDuplicates),
       static_cast<unsigned long long>(b.drawGeometrySignatureConsecutiveDuplicates),
       static_cast<unsigned long long>(b.drawGeometrySignatureLast),
+      static_cast<unsigned long long>(b.indexedBaseVertexSamples),
+      static_cast<unsigned long long>(b.indexedBaseVertexNonZeroDraws),
+      static_cast<unsigned long long>(b.indexedBaseVertexNegativeDraws),
+      static_cast<unsigned long long>(b.indexedBaseVertexPositiveDraws),
+      static_cast<long long>(b.indexedBaseVertexMin),
+      static_cast<long long>(b.indexedBaseVertexMax),
+      static_cast<unsigned long long>(b.nativeBaseVertexRequestedDraws),
+      static_cast<unsigned long long>(b.nativeBaseVertexUsedDraws),
+      static_cast<unsigned long long>(b.nativeBaseVertexSkippedNegativeDraws),
+      static_cast<unsigned long long>(b.splitLargeIndexedSourceDraws),
+      static_cast<unsigned long long>(b.splitLargeIndexedMetalDraws),
+      static_cast<unsigned long long>(b.splitLargeIndexedExtraDraws),
+      static_cast<unsigned long long>(b.splitLargeIndexedPrimitiveLimit),
+      static_cast<unsigned long long>(b.splitLargeIndexedPrimitiveCount),
       static_cast<unsigned long long>(b.stream0StrideMin),
       static_cast<unsigned long long>(b.stream0StrideMax),
       static_cast<unsigned long long>(b.streamStateSamples),

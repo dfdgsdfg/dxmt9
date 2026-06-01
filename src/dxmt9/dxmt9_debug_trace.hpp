@@ -96,6 +96,15 @@ bool forceExpandIndexed();
 // draws. Env: DXMT_DISABLE_AUTO_EXPAND_INDEXED.
 bool disableAutoExpandIndexed();
 
+// Use Metal's native baseVertex for indexed draws and keep the shader-side
+// vertexBaseIndex at zero. Env: DXMT9_USE_NATIVE_METAL_BASE_VERTEX.
+bool useNativeMetalBaseVertex();
+
+// Split indexed triangle-list draws larger than this primitive count into
+// multiple Metal drawIndexed calls. Zero disables it.
+// Env: DXMT9_SPLIT_LARGE_INDEXED_DRAWS.
+std::uint32_t splitLargeIndexedDrawPrimitiveLimit();
+
 // Trace budget for the FFP path (emits N trace lines then stops).
 // Env: DXMT_TRACE_FVF.
 int fixedFunctionTraceBudget();

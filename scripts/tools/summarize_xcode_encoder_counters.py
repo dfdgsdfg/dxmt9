@@ -158,6 +158,20 @@ JOINED_EXTRA_FIELDS = (
     "dxmt_draw_geometry_signature_duplicate_ratio",
     "dxmt_draw_geometry_signature_consecutive_duplicate_ratio",
     "dxmt_draw_geometry_signature_last",
+    "dxmt_indexed_base_vertex_samples",
+    "dxmt_indexed_base_vertex_nonzero_draws",
+    "dxmt_indexed_base_vertex_negative_draws",
+    "dxmt_indexed_base_vertex_positive_draws",
+    "dxmt_indexed_base_vertex_min",
+    "dxmt_indexed_base_vertex_max",
+    "dxmt_native_base_vertex_requested_draws",
+    "dxmt_native_base_vertex_used_draws",
+    "dxmt_native_base_vertex_skipped_negative_draws",
+    "dxmt_split_large_indexed_source_draws",
+    "dxmt_split_large_indexed_metal_draws",
+    "dxmt_split_large_indexed_extra_draws",
+    "dxmt_split_large_indexed_primitive_limit",
+    "dxmt_split_large_indexed_primitive_count",
     "dxmt_texture_mask_or",
     "dxmt_stream0_stride_min",
     "dxmt_stream0_stride_max",
@@ -580,6 +594,20 @@ def join_dxmt(row: dict[str, Any], dxmt: dict[tuple[int, int], dict[str, Any]]) 
         "dxmt_draw_geometry_signature_duplicates": "draw_geometry_signature_duplicates",
         "dxmt_draw_geometry_signature_consecutive_duplicates": "draw_geometry_signature_consecutive_duplicates",
         "dxmt_draw_geometry_signature_last": "draw_geometry_signature_last",
+        "dxmt_indexed_base_vertex_samples": "indexed_base_vertex_samples",
+        "dxmt_indexed_base_vertex_nonzero_draws": "indexed_base_vertex_nonzero_draws",
+        "dxmt_indexed_base_vertex_negative_draws": "indexed_base_vertex_negative_draws",
+        "dxmt_indexed_base_vertex_positive_draws": "indexed_base_vertex_positive_draws",
+        "dxmt_indexed_base_vertex_min": "indexed_base_vertex_min",
+        "dxmt_indexed_base_vertex_max": "indexed_base_vertex_max",
+        "dxmt_native_base_vertex_requested_draws": "native_base_vertex_requested_draws",
+        "dxmt_native_base_vertex_used_draws": "native_base_vertex_used_draws",
+        "dxmt_native_base_vertex_skipped_negative_draws": "native_base_vertex_skipped_negative_draws",
+        "dxmt_split_large_indexed_source_draws": "split_large_indexed_source_draws",
+        "dxmt_split_large_indexed_metal_draws": "split_large_indexed_metal_draws",
+        "dxmt_split_large_indexed_extra_draws": "split_large_indexed_extra_draws",
+        "dxmt_split_large_indexed_primitive_limit": "split_large_indexed_primitive_limit",
+        "dxmt_split_large_indexed_primitive_count": "split_large_indexed_primitive_count",
         "dxmt_texture_mask_or": "texture_mask_or",
         "dxmt_stream0_stride_min": "stream0_stride_min",
         "dxmt_stream0_stride_max": "stream0_stride_max",
@@ -1024,6 +1052,28 @@ def write_report(
         top_draw_geometry_signature_samples
         if top_draw_geometry_signature_samples else 0.0
     )
+    top_indexed_base_vertex_samples = sum(
+        as_int(row.get("dxmt_indexed_base_vertex_samples")) for row in top)
+    top_indexed_base_vertex_nonzero = sum(
+        as_int(row.get("dxmt_indexed_base_vertex_nonzero_draws")) for row in top)
+    top_indexed_base_vertex_negative = sum(
+        as_int(row.get("dxmt_indexed_base_vertex_negative_draws")) for row in top)
+    top_indexed_base_vertex_positive = sum(
+        as_int(row.get("dxmt_indexed_base_vertex_positive_draws")) for row in top)
+    top_native_base_vertex_requested = sum(
+        as_int(row.get("dxmt_native_base_vertex_requested_draws")) for row in top)
+    top_native_base_vertex_used = sum(
+        as_int(row.get("dxmt_native_base_vertex_used_draws")) for row in top)
+    top_native_base_vertex_skipped_negative = sum(
+        as_int(row.get("dxmt_native_base_vertex_skipped_negative_draws")) for row in top)
+    top_split_large_source_draws = sum(
+        as_int(row.get("dxmt_split_large_indexed_source_draws")) for row in top)
+    top_split_large_metal_draws = sum(
+        as_int(row.get("dxmt_split_large_indexed_metal_draws")) for row in top)
+    top_split_large_extra_draws = sum(
+        as_int(row.get("dxmt_split_large_indexed_extra_draws")) for row in top)
+    top_split_large_primitives = sum(
+        as_int(row.get("dxmt_split_large_indexed_primitive_count")) for row in top)
     top_dxmt_stream0_input_min_mib = sum(
         as_float(row.get("dxmt_stream0_input_min_mib")) for row in top
     )
@@ -1329,6 +1379,28 @@ def write_report(
         f"| dxmt consecutive geometry duplicate ratio | "
         f"`{fmt_float(top_draw_geometry_signature_consecutive_duplicate_ratio, 3)}x` |"
     )
+    lines.append(
+        f"| dxmt indexed baseVertex samples/nonzero/neg/pos | "
+        f"`{fmt_int(top_indexed_base_vertex_samples)} / "
+        f"{fmt_int(top_indexed_base_vertex_nonzero)} / "
+        f"{fmt_int(top_indexed_base_vertex_negative)} / "
+        f"{fmt_int(top_indexed_base_vertex_positive)}` |"
+    )
+    lines.append(
+        f"| dxmt native Metal baseVertex requested/used/skipped-neg | "
+        f"`{fmt_int(top_native_base_vertex_requested)} / "
+        f"{fmt_int(top_native_base_vertex_used)} / "
+        f"{fmt_int(top_native_base_vertex_skipped_negative)}` |"
+    )
+    lines.append(
+        f"| dxmt split large indexed source/metal/extra draws | "
+        f"`{fmt_int(top_split_large_source_draws)} / "
+        f"{fmt_int(top_split_large_metal_draws)} / "
+        f"{fmt_int(top_split_large_extra_draws)}` |"
+    )
+    lines.append(
+        f"| dxmt split large indexed primitives | `{fmt_int(top_split_large_primitives)}` |"
+    )
     lines.append(f"| dxmt stream handle changes | `{fmt_int(top_stream_handles)}` |")
     lines.append(f"| dxmt stream offset changes | `{fmt_int(top_stream_offsets)}` |")
     lines.append(f"| dxmt stream stride changes | `{fmt_int(top_stream_strides)}` |")
@@ -1420,7 +1492,9 @@ def write_report(
     lines.append("")
     breakdown_header = [
         "seq", "enc", "GPU ms", "draws", "prim/draw", "prim min/max",
-        "vert/draw", "vert min/max", "large prim/vert", "stream h/o/s", "stream h/o/s per draw",
+        "vert/draw", "vert min/max", "large prim/vert", "baseV nz/neg/native", "baseV min/max",
+        "split src/extra",
+        "stream h/o/s", "stream h/o/s per draw",
         "IB hdl chg", "IB hdl/draw", "argbuf table KiB", "cbuf VS KiB",
         "cbuf FFPVS KiB", "cbuf PS KiB", "cbuf FFPPS KiB",
         "setVertexBytes KiB", "transient V KiB", "transient I KiB",
@@ -1457,6 +1531,19 @@ def write_report(
                 (
                     f"{fmt_float(row.get('dxmt_large_primitive_draw_share'), 2)}/"
                     f"{fmt_float(row.get('dxmt_large_vertex_draw_share'), 2)}"
+                ),
+                (
+                    f"{fmt_int(row.get('dxmt_indexed_base_vertex_nonzero_draws'))}/"
+                    f"{fmt_int(row.get('dxmt_indexed_base_vertex_negative_draws'))}/"
+                    f"{fmt_int(row.get('dxmt_native_base_vertex_used_draws'))}"
+                ),
+                (
+                    f"{fmt_int(row.get('dxmt_indexed_base_vertex_min'))}/"
+                    f"{fmt_int(row.get('dxmt_indexed_base_vertex_max'))}"
+                ),
+                (
+                    f"{fmt_int(row.get('dxmt_split_large_indexed_source_draws'))}/"
+                    f"{fmt_int(row.get('dxmt_split_large_indexed_extra_draws'))}"
                 ),
                 f"{fmt_int(stream_handle)}/{fmt_int(stream_offset)}/{fmt_int(stream_stride)}",
                 fmt_float(stream_total / draws if draws else 0.0, 2),
