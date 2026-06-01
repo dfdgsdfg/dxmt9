@@ -157,10 +157,15 @@ source-level claims. For root-cause captures where shader source attribution is
 required, add `--require-shader-dump-matches` together with wrapper
 `--dump-shaders`; the finalizer then fails if top render rows have zero shader
 hashes, cannot match dumped MSL files, or only match ambiguously.
-For the VS-buffer-write hypothesis, run a paired candidate with wrapper
-`--trim-unused-varyings` and gate it with
-`--baseline-joined <csv> --require-top-vs-buffer-write-decrease`; this proves
-whether pair-local VSOut liveness moves Xcode's VS buffer-write counter.
+For the VS-buffer-write hypothesis, pair-local VSOut liveness is exposed through
+wrapper `--trim-unused-varyings`, but 3DMark05 GT1 evidence currently rejects
+visible VSOut width as the first-order owner: trim-varyings, direct-texcoord,
+point-size-only, and position-only probes leave the dominant Xcode
+VS-buffer-write bucket mostly hidden. Use
+`--baseline-joined <csv> --require-top-vs-buffer-write-decrease` only when
+revalidating that path on a new baseline; otherwise prioritize hidden
+vertex/backend storage probes that can move VS invocations or bytes per
+invocation.
 
 Before starting a new 3DMark05 `.gputrace`, keep at least 2GiB free on the
 repository volume. The standard wrapper enforces this with

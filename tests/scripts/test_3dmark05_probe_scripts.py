@@ -344,6 +344,7 @@ class ThreeDMark05ProbeScriptTests(unittest.TestCase):
             "--disable-scissor",
             "--probe-disable-alpha-blend",
             "--probe-disable-depth-write",
+            "--probe-depth-func-always",
             "--force-visible",
             "--dry-run",
         )
@@ -353,6 +354,7 @@ class ThreeDMark05ProbeScriptTests(unittest.TestCase):
         self.assertIn("DXMT_DISABLE_SCISSOR=1", result.stdout)
         self.assertIn("DXMT9_PROBE_DISABLE_ALPHA_BLEND=1", result.stdout)
         self.assertIn("DXMT9_PROBE_DISABLE_DEPTH_WRITE=1", result.stdout)
+        self.assertIn("DXMT9_PROBE_DEPTH_FUNC_ALWAYS=1", result.stdout)
         self.assertIn("DXMT_DEBUG_FORCE_VISIBLE=1", result.stdout)
 
     def test_wrapper_dry_run_includes_metal_capture_layer_env_for_gputrace(self) -> None:

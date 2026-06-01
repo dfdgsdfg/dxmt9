@@ -143,6 +143,11 @@ bool probeDisableDepthWrite() {
   return v;
 }
 
+bool probeDepthFuncAlways() {
+  static const bool v = util::getenvFlag("DXMT9_PROBE_DEPTH_FUNC_ALWAYS");
+  return v;
+}
+
 bool forceExpandIndexed() {
   static const bool v = util::getenvFlag("DXMT_FORCE_EXPAND_INDEXED");
   return v;

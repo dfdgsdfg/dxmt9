@@ -102,6 +102,10 @@ bool probeDisableAlphaBlend();
 // Env: DXMT9_PROBE_DISABLE_DEPTH_WRITE.
 bool probeDisableDepthWrite();
 
+// Diagnostic render-state A/B: keep depth enable/write state but force the
+// depth compare function to Always. Env: DXMT9_PROBE_DEPTH_FUNC_ALWAYS.
+bool probeDepthFuncAlways();
+
 // When set, force indexed draws to be expanded into flat vertex lists.
 // Env: DXMT_FORCE_EXPAND_INDEXED.
 bool forceExpandIndexed();

@@ -282,9 +282,10 @@ pipeline::DepthStencilKey makeDepthStencilKey(core::FlatDrawStateView state) {
   key.depthEnable = core::flatStateOr(rs, RS_Z_ENABLE, 0u) != 0;
   key.depthWrite = key.depthEnable && !debug::probeDisableDepthWrite() &&
                    core::flatStateOr(rs, RS_Z_WRITE_ENABLE, 0u) != 0;
-  key.depthFunc = key.depthEnable
-                      ? core::flatStateOr(rs, RS_Z_FUNC, static_cast<u32>(CompareFunc::Always))
-                      : static_cast<u32>(CompareFunc::Always);
+  key.depthFunc =
+      key.depthEnable && !debug::probeDepthFuncAlways()
+          ? core::flatStateOr(rs, RS_Z_FUNC, static_cast<u32>(CompareFunc::Always))
+          : static_cast<u32>(CompareFunc::Always);
   key.front.enabled = core::flatStateOr(rs, RS_STENCIL_ENABLE, 0u) != 0;
   key.front.compareFunction =
       core::flatStateOr(rs, RS_STENCIL_FUNC, static_cast<u32>(CompareFunc::Always));

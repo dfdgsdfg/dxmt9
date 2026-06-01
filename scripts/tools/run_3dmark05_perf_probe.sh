@@ -31,6 +31,7 @@ disable_fog=0
 force_texture_white=0
 probe_disable_alpha_blend=0
 probe_disable_depth_write=0
+probe_depth_func_always=0
 force_visible=0
 compare_baseline_output=${DXMT_3DMARK05_COMPARE_BASELINE_OUTPUT:-}
 compare_baseline_joined=${DXMT_3DMARK05_COMPARE_BASELINE_JOINED:-}
@@ -141,6 +142,9 @@ Options:
                       Set DXMT9_PROBE_DISABLE_ALPHA_BLEND=1 for blend state A/B
   --probe-disable-depth-write
                       Set DXMT9_PROBE_DISABLE_DEPTH_WRITE=1 for depth-write A/B
+  --probe-depth-func-always
+                      Set DXMT9_PROBE_DEPTH_FUNC_ALWAYS=1 to keep depth writes
+                      but force the depth compare function to Always
   --force-visible     Set DXMT_DEBUG_FORCE_VISIBLE=1 for visibility/state A/B
   --compare-baseline-output PATH
                       After the run, compare result.json counters against this baseline output dir/result.json
@@ -332,6 +336,10 @@ while (($#)); do
       ;;
     --probe-disable-depth-write)
       probe_disable_depth_write=1
+      shift
+      ;;
+    --probe-depth-func-always)
+      probe_depth_func_always=1
       shift
       ;;
     --force-visible)
@@ -769,6 +777,10 @@ if (( probe_disable_depth_write )); then
   env_args+=("DXMT9_PROBE_DISABLE_DEPTH_WRITE=1")
 fi
 
+if (( probe_depth_func_always )); then
+  env_args+=("DXMT9_PROBE_DEPTH_FUNC_ALWAYS=1")
+fi
+
 if (( force_visible )); then
   env_args+=("DXMT_DEBUG_FORCE_VISIBLE=1")
 fi
@@ -1004,6 +1016,9 @@ if (( force_texture_white )); then
 fi
 if (( probe_disable_depth_write )); then
   echo "warning: --probe-disable-depth-write is diagnostic only and can corrupt depth-dependent frame output; do not treat it as correctness-preserving."
+fi
+if (( probe_depth_func_always )); then
+  echo "warning: --probe-depth-func-always is diagnostic only and can corrupt depth-dependent frame output; use it only to isolate depth-compare backend effects."
 fi
 
 if (( dry_run )); then
