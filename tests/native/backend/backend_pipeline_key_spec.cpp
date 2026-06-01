@@ -491,7 +491,8 @@ void testShaderVariantKeyCarriesSourceIdentity() {
       /*debugFfpUv=*/false,
       /*debugFfpTexture=*/false,
       /*debugFfpAlpha=*/false,
-      /*probeDropVSOutPointSize=*/false);
+      /*probeDropVSOutPointSize=*/false,
+      /*probePositionOnlyVSOut=*/false);
   const auto debugUv = dxmt9::pipeline::makeShaderSourceDebugEnvKey(
       /*trimUnusedVaryings=*/true,
       /*trimVertexTemps=*/true,
@@ -505,7 +506,8 @@ void testShaderVariantKeyCarriesSourceIdentity() {
       /*debugFfpUv=*/false,
       /*debugFfpTexture=*/false,
       /*debugFfpAlpha=*/false,
-      /*probeDropVSOutPointSize=*/true);
+      /*probeDropVSOutPointSize=*/true,
+      /*probePositionOnlyVSOut=*/true);
   check(debugOff != debugUv, "pure debug env key responds to source-affecting values");
 
   auto debugEnvChanged = base;

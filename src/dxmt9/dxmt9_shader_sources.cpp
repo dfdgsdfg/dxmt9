@@ -22,6 +22,11 @@ bool vsoutProbeDropPointSizeEnabled() {
   return env && env[0] != '\0' && std::strcmp(env, "0") != 0;
 }
 
+bool vsoutProbePositionOnlyEnabled() {
+  const char* env = std::getenv("DXMT9_PROBE_POSITION_ONLY_VSOUT");
+  return env && env[0] != '\0' && std::strcmp(env, "0") != 0;
+}
+
 VSOutLayout minimalVSOutLayout() {
   VSOutLayout layout{};
   layout.texcoordMask = 0x1u;
@@ -32,7 +37,20 @@ VSOutLayout minimalVSOutLayout() {
   return layout;
 }
 
+VSOutLayout positionOnlyVSOutLayout() {
+  VSOutLayout layout{};
+  layout.texcoordMask = 0u;
+  layout.color = false;
+  layout.secondaryColor = false;
+  layout.fogFactor = false;
+  layout.pointSize = false;
+  return layout;
+}
+
 VSOutLayout applyVSOutProbeOverrides(VSOutLayout layout) {
+  if (vsoutProbePositionOnlyEnabled()) {
+    return positionOnlyVSOutLayout();
+  }
   if (vsoutProbeDropPointSizeEnabled()) {
     layout.pointSize = false;
   }

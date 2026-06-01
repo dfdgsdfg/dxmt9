@@ -12,6 +12,7 @@ dry_run=0
 dump_shaders=0
 trim_unused_varyings=0
 drop_vsout_point_size=0
+probe_position_only_vsout=0
 trim_vertex_temps=0
 trim_vs_output_scratch=0
 split_sparse_const_records=0
@@ -86,6 +87,10 @@ Options:
   --drop-vsout-point-size
                       Set DXMT9_PROBE_DROP_VSOUT_POINT_SIZE=1 to remove only
                       VSOut [[point_size]] for pipeline-shape A/B probes
+  --probe-position-only-vsout
+                      Set DXMT9_PROBE_POSITION_ONLY_VSOUT=1 to force
+                      position-only VSOut and constant fragment output for a
+                      correctness-invalid hidden VS-write lower-bound probe
   --trim-vertex-temps
                       Set DXMT9_TRIM_VERTEX_TEMPS=1 for translated VS temp
                       register/spill experiments
@@ -235,6 +240,10 @@ while (($#)); do
       ;;
     --drop-vsout-point-size)
       drop_vsout_point_size=1
+      shift
+      ;;
+    --probe-position-only-vsout)
+      probe_position_only_vsout=1
       shift
       ;;
     --trim-vertex-temps)
@@ -654,6 +663,10 @@ fi
 
 if (( drop_vsout_point_size )); then
   env_args+=("DXMT9_PROBE_DROP_VSOUT_POINT_SIZE=1")
+fi
+
+if (( probe_position_only_vsout )); then
+  env_args+=("DXMT9_PROBE_POSITION_ONLY_VSOUT=1")
 fi
 
 if (( trim_vertex_temps )); then

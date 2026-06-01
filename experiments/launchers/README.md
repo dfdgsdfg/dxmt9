@@ -152,6 +152,13 @@ Commercial / 3rd-party titles (require external prefix):
     `VSOut.pointSize [[point_size]]` while preserving texcoords/color/fog, so
     any counter movement is attributable to the Metal point-size path rather
     than ordinary FS liveness.
+    If live VSOut and point-size probes still leave Xcode's bucket unchanged,
+    use `--probe-position-only-vsout` as a correctness-invalid lower-bound
+    diagnostic. This sets `DXMT9_PROBE_POSITION_ONLY_VSOUT=1`, forces a
+    position-only VSOut layout, and makes translated/FFP fragment shaders
+    return a constant color so the reduced stage-in shape can compile. Accept
+    it only as evidence about whether visible stage-out shape can move
+    `VS Buffer Device Memory Bytes Written`.
     If VSOut trimming leaves Xcode's VS buffer-write bucket unchanged, run the
     next paired candidate with `--trim-vertex-temps`; this sets
     `DXMT9_TRIM_VERTEX_TEMPS=1` so translated VS `float4 r[]` is sized from

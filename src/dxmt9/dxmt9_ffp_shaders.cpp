@@ -1030,6 +1030,12 @@ std::string makeFfpPixelSource(const FfpPixelKey& key,
       out << "  (void)dxmt9_pointCoord;\n";
     }
   }
+  if (shaders::vsoutProbePositionOnlyEnabled()) {
+    out << "  return float4(1.0f, 0.0f, 1.0f, 1.0f);\n";
+    out << "}\n";
+    out << "// ffp pixel hash " << key.hash << "\n";
+    return out.str();
+  }
   out << "  float4 color = in.color;\n";
   out << "  float4 current = color;\n";
   out << "  float4 diffuse = in.color;\n";

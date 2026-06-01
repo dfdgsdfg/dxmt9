@@ -456,7 +456,8 @@ u64 makeShaderSourceDebugEnvKey(bool trimUnusedVaryings,
                                 bool debugFfpUv,
                                 bool debugFfpTexture,
                                 bool debugFfpAlpha,
-                                bool probeDropVSOutPointSize) noexcept {
+                                bool probeDropVSOutPointSize,
+                                bool probePositionOnlyVSOut) noexcept {
   u64 hash = kFnvOffset;
   hash = mix(hash, kShaderDebugEnvSchemaVersion);
   hash = mix(hash, static_cast<u64>(trimUnusedVaryings));
@@ -473,6 +474,9 @@ u64 makeShaderSourceDebugEnvKey(bool trimUnusedVaryings,
   hash = mix(hash, static_cast<u64>(debugFfpAlpha));
   if (probeDropVSOutPointSize) {
     hash = mix(hash, 0x9f3b7c2d4a11e905ull);
+  }
+  if (probePositionOnlyVSOut) {
+    hash = mix(hash, 0x3b08d0a9d08c0fb1ull);
   }
   return hash;
 }
@@ -492,7 +496,8 @@ u64 currentShaderSourceDebugEnvKey() noexcept {
       envFlag("DXMT_DEBUG_FFP_UV"),
       envFlag("DXMT_DEBUG_FFP_TEXTURE"),
       envFlag("DXMT_DEBUG_FFP_ALPHA"),
-      envFlag("DXMT9_PROBE_DROP_VSOUT_POINT_SIZE"));
+      envFlag("DXMT9_PROBE_DROP_VSOUT_POINT_SIZE"),
+      envFlag("DXMT9_PROBE_POSITION_ONLY_VSOUT"));
 }
 
 ShaderVariantKey makeShaderVariantProbeKey(ShaderVariantKey key) noexcept {

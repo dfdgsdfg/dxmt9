@@ -186,7 +186,8 @@ u64 makeShaderSourceDebugEnvKey(bool trimUnusedVaryings,
                                 bool debugFfpUv,
                                 bool debugFfpTexture,
                                 bool debugFfpAlpha,
-                                bool probeDropVSOutPointSize) noexcept;
+                                bool probeDropVSOutPointSize,
+                                bool probePositionOnlyVSOut) noexcept;
 
 // Reads the current process env knobs that can change emitted draw MSL.
 u64 currentShaderSourceDebugEnvKey() noexcept;

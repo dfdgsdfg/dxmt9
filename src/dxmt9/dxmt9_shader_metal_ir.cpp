@@ -2490,7 +2490,8 @@ std::string translateSpirvToMsl(const SpirvModule& module,
       out << "  return " << valueExpr << ";\n";
     }
   };
-  if (::dxmt9::debug::forceFragmentShaderColor()) {
+  if (::dxmt9::shaders::vsoutProbePositionOnlyEnabled() ||
+      ::dxmt9::debug::forceFragmentShaderColor()) {
     emitFragmentDebugReturn("float4(1.0f, 0.0f, 1.0f, 1.0f)");
     out << "}\n";
     out << "// decoded d3d hash " << module.hash << "\n";
