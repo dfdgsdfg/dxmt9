@@ -7899,6 +7899,125 @@ flowchart TD
   class Base,Row4,Scope,Shape known
 ```
 
+#### Indexed Triangle State-Class Attribution
+
+2026-06-02 `indexed-triangle-class-gputrace-r1` added per-encoder indexed
+triangle-list state-class counters. This is instrumentation only; it does not
+change draw submission. The purpose is to split the hot indexed geometry by
+backend-relevant state so the next primitive/backend probes can target a
+stable material class instead of perturbing the whole frame.
+
+Artifacts:
+
+```text
+experiments/output/app-d3d9-3dmark05-indexed-triangle-class-nogputrace-r1/3dmark05-perf-summary.md
+experiments/output/app-d3d9-3dmark05-indexed-triangle-class-gputrace-r1/3dmark05-perf-summary.md
+experiments/output/app-d3d9-3dmark05-indexed-triangle-class-gputrace-r1/3dmark05-perf-encoders.csv
+experiments/output/app-d3d9-3dmark05-indexed-triangle-class-gputrace-r1/3dmark05-perf-encoder-streams.csv
+traces/app-d3d9-3dmark05-indexed-triangle-class-gputrace-r1/frame60.gputrace
+traces/app-d3d9-3dmark05-indexed-triangle-class-gputrace-r1/analysis/frame60-performance.gputrace
+traces/app-d3d9-3dmark05-indexed-triangle-class-gputrace-r1/analysis/frame60-counters-xcode.csv
+traces/app-d3d9-3dmark05-indexed-triangle-class-gputrace-r1/analysis/frame60-xcode-dxmt-joined-summary.csv
+traces/app-d3d9-3dmark05-indexed-triangle-class-gputrace-r1/analysis/frame60-xcode-dxmt-bottleneck-report.md
+traces/app-d3d9-3dmark05-indexed-triangle-class-gputrace-r1/analysis/frame60-xcode-dxmt-comparison.md
+```
+
+The Xcode replay image looked like a normal GT1 frame. Xcode Summary reported
+`4` command buffers, `12` render encoders, `728` draw calls, `3,122,697`
+vertices, `34.62ms` GPU time, and `Medium` performance state. The Xcode export
+used the standard path: export embedded performance data, open Performance >
+Counters, wait until `Profiling Draw Counters...` disappears, export encoder
+counters, then run the finalizer.
+
+Finalizer comparison against `measure-index-cache-gputrace-r1` passed Xcode
+counter coverage, dxmt join coverage, top-PSO attribution, top-row set matching,
+and the 5% draw/vertex/triangle drift gates.
+
+| Metric | Baseline | State-class run | Delta |
+|---|---:|---:|---:|
+| Total GPU time | `34.391ms` | `34.617ms` | `+0.66%` |
+| Hot/top GPU time | `33.741ms` | `34.016ms` | `+0.81%` |
+| Hot/top VS buffer write | `1472.747MiB` | `1472.796MiB` | `+0.00%` |
+| Hot/top unexplained buffer write | `1472.905MiB` | `1472.915MiB` | `+0.00%` |
+| Hot/top VS bytes / invocation | `856.265B` | `856.161B` | `-0.01%` |
+| Hot/top draw calls | `711` | `716` | `+0.70%` |
+| Hot/top vertices | `3,121,680` | `3,122,460` | `+0.02%` |
+| Hot/top triangle estimate | `1,040,560` | `1,040,820` | `+0.02%` |
+| Hot/top dxmt CPU writer bytes | `0.709MiB` | `0.711MiB` | `+0.37%` |
+
+Hot-set aggregate for this run:
+
+| Metric | Value |
+|---|---:|
+| Hot rows | `60/3, 60/4, 60/1, 60/0` |
+| Hot GPU share | `98.26%` |
+| VS buffer write | `1472.796MiB` |
+| Hidden backend estimate | `1455.709MiB` |
+| Hidden backend / VS buffer write | `0.988x` |
+| VS buffer bytes / VS invocation | `856.2B` |
+| VS buffer / expected VSOut | `4.7x` |
+| dxmt indexed references / unique estimate | `3,122,460 / 1,523,235` |
+| dxmt indexed reference reuse ratio | `2.050x` |
+| dxmt cache64 estimate | `1,847,457` |
+| VS invocations / cache64 | `0.976x` |
+| VS buffer bytes / cache64 | `835.9B` |
+
+The new counters are non-mutually-exclusive buckets. They split only indexed
+triangle-list draws:
+
+| seq/enc | GPU ms | VS write | opaque depth-write d/p/v | depth-read d/p/v | alpha-blend d/p/v | scissor d/p/v | textured d/p/v | large4096 d/p/v |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|
+| `60/3` | `10.942` | `437.378MiB` | `169/255,809/767,427` | `0/0/0` | `0/0/0` | `0/0/0` | `0/0/0` | `9/72,305/216,915` |
+| `60/4` | `8.817` | `370.346MiB` | `0/0/0` | `265/370,367/1,111,101` | `243/340,364/1,021,092` | `44/54,904/164,712` | `265/370,367/1,111,101` | `19/104,721/314,163` |
+| `60/1` | `8.397` | `437.402MiB` | `156/234,309/702,927` | `0/0/0` | `0/0/0` | `0/0/0` | `0/0/0` | `9/72,305/216,915` |
+| `60/0` | `5.860` | `227.671MiB` | `74/105,169/315,507` | `52/75,166/225,498` | `0/0/0` | `52/75,166/225,498` | `126/180,335/541,005` | `7/39,952/119,856` |
+
+Interpretation:
+
+- The new instrumentation is behavior-neutral within the strict shape gates.
+  It confirms the existing owner instead of removing it: hot VS buffer write
+  remains `~1.473GiB`, `~0.711MiB` is explained by dxmt CPU writers, and the
+  hidden backend estimate remains `~1.456GiB`.
+- The hot frame is not one homogeneous material. `60/3` and `60/1` are entirely
+  opaque depth-writing triangle lists with no texture bucket, while `60/4` is
+  entirely depth-read and textured, mostly alpha-blended, and partly scissored.
+  `60/0` is mixed opaque plus depth-read/scissor/textured geometry.
+- The two opaque depth-writing rows alone produce `874.780MiB` of VS write
+  (`60/3 + 60/1`) and `490,118` triangles. The depth-read/textured row `60/4`
+  contributes another `370.346MiB` and `370,367` triangles. These are now the
+  primary row/material classes for bounded primitive/backend probes.
+- Broad full-frame, opaque-only, nonopaque-only, and single-row reverse probes
+  are all rejected as direct optimizations. The next probe should preserve the
+  same top-row and geometry gates while changing a narrower axis inside one
+  state class: bounded primitive partition, meshlet/cluster diagnostic, or a
+  legal backend-state variant for the `60/3`/`60/1` opaque class and the `60/4`
+  depth-read/alpha/textured class separately.
+
+```mermaid
+flowchart TD
+  Capture["indexed-triangle-class-gputrace-r1\nnormal GT1 frame"] --> Xcode["Xcode Summary\n728 draws / 34.62ms GPU"]
+  Xcode --> Finalizer["strict finalizer gates pass\ntop rows and geometry stable"]
+  Finalizer --> Hot["hot set 60/3,60/4,60/1,60/0\n34.016ms / 98.26%"]
+  Hot --> VSWrite["VS buffer write\n1472.796MiB"]
+  Hot --> Writers["dxmt CPU writers\n0.711MiB"]
+  VSWrite --> Hidden["hidden backend estimate\n1455.709MiB"]
+
+  Hot --> Opaque["opaque depth-write class\n60/3 + 60/1\n874.780MiB VS write"]
+  Hot --> Alpha["depth-read/textured/alpha class\n60/4\n370.346MiB VS write"]
+  Hot --> Mixed["mixed row\n60/0\n227.671MiB VS write"]
+
+  Opaque --> Next["next probes\nbounded partition or backend-shape variant\nwith same row/geometry gates"]
+  Alpha --> Next
+  Mixed --> Next
+  Hidden --> Next
+  Writers --> RejectUpload["reject explicit writer ownership"]
+
+  classDef hot fill:#ffe8e8,stroke:#b64242,color:#2b0d0d
+  classDef known fill:#e8f0ff,stroke:#476cb6,color:#0d1833
+  class VSWrite,Hidden,Next hot
+  class Capture,Xcode,Finalizer,Hot,Writers,Opaque,Alpha,Mixed,RejectUpload known
+```
+
 ### Offline Metal Codegen Classifier
 
 After the depth-compare run, the top shader dumps were compiled offline with
