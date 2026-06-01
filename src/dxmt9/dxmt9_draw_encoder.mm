@@ -1173,6 +1173,32 @@ struct ActiveEncoderBreakdown {
         addIndexedTriangleClass(stats.indexedTriangleLarge4096Draws,
                                 stats.indexedTriangleLarge4096Primitives,
                                 stats.indexedTriangleLarge4096Vertices);
+        if (opaqueDepthWrite) {
+          addIndexedTriangleClass(
+              stats.indexedTriangleLarge4096OpaqueDepthWriteDraws,
+              stats.indexedTriangleLarge4096OpaqueDepthWritePrimitives,
+              stats.indexedTriangleLarge4096OpaqueDepthWriteVertices);
+        }
+        if (depthEnabled && !depthWrite) {
+          addIndexedTriangleClass(stats.indexedTriangleLarge4096DepthReadDraws,
+                                  stats.indexedTriangleLarge4096DepthReadPrimitives,
+                                  stats.indexedTriangleLarge4096DepthReadVertices);
+        }
+        if (alphaBlendEnabled) {
+          addIndexedTriangleClass(stats.indexedTriangleLarge4096AlphaBlendDraws,
+                                  stats.indexedTriangleLarge4096AlphaBlendPrimitives,
+                                  stats.indexedTriangleLarge4096AlphaBlendVertices);
+        }
+        if (scissorEnabled) {
+          addIndexedTriangleClass(stats.indexedTriangleLarge4096ScissorDraws,
+                                  stats.indexedTriangleLarge4096ScissorPrimitives,
+                                  stats.indexedTriangleLarge4096ScissorVertices);
+        }
+        if (textureMask != 0) {
+          addIndexedTriangleClass(stats.indexedTriangleLarge4096TexturedDraws,
+                                  stats.indexedTriangleLarge4096TexturedPrimitives,
+                                  stats.indexedTriangleLarge4096TexturedVertices);
+        }
       }
     }
     switch (primitiveType) {

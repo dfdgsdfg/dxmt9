@@ -3066,6 +3066,21 @@ void emitEncoderBreakdown(const EncoderBreakdown& b) {
       "indexed_triangle_large_4096_draws=%llu "
       "indexed_triangle_large_4096_primitives=%llu "
       "indexed_triangle_large_4096_vertices=%llu "
+      "indexed_triangle_large_4096_opaque_depth_write_draws=%llu "
+      "indexed_triangle_large_4096_opaque_depth_write_primitives=%llu "
+      "indexed_triangle_large_4096_opaque_depth_write_vertices=%llu "
+      "indexed_triangle_large_4096_depth_read_draws=%llu "
+      "indexed_triangle_large_4096_depth_read_primitives=%llu "
+      "indexed_triangle_large_4096_depth_read_vertices=%llu "
+      "indexed_triangle_large_4096_alpha_blend_draws=%llu "
+      "indexed_triangle_large_4096_alpha_blend_primitives=%llu "
+      "indexed_triangle_large_4096_alpha_blend_vertices=%llu "
+      "indexed_triangle_large_4096_scissor_draws=%llu "
+      "indexed_triangle_large_4096_scissor_primitives=%llu "
+      "indexed_triangle_large_4096_scissor_vertices=%llu "
+      "indexed_triangle_large_4096_textured_draws=%llu "
+      "indexed_triangle_large_4096_textured_primitives=%llu "
+      "indexed_triangle_large_4096_textured_vertices=%llu "
       "texture_mask_or=0x%llx "
       "fragment_texture_binding_samples=%llu "
       "fragment_texture_binding_mask_or=0x%llx "
@@ -3265,6 +3280,21 @@ void emitEncoderBreakdown(const EncoderBreakdown& b) {
       static_cast<unsigned long long>(b.indexedTriangleLarge4096Draws),
       static_cast<unsigned long long>(b.indexedTriangleLarge4096Primitives),
       static_cast<unsigned long long>(b.indexedTriangleLarge4096Vertices),
+      static_cast<unsigned long long>(b.indexedTriangleLarge4096OpaqueDepthWriteDraws),
+      static_cast<unsigned long long>(b.indexedTriangleLarge4096OpaqueDepthWritePrimitives),
+      static_cast<unsigned long long>(b.indexedTriangleLarge4096OpaqueDepthWriteVertices),
+      static_cast<unsigned long long>(b.indexedTriangleLarge4096DepthReadDraws),
+      static_cast<unsigned long long>(b.indexedTriangleLarge4096DepthReadPrimitives),
+      static_cast<unsigned long long>(b.indexedTriangleLarge4096DepthReadVertices),
+      static_cast<unsigned long long>(b.indexedTriangleLarge4096AlphaBlendDraws),
+      static_cast<unsigned long long>(b.indexedTriangleLarge4096AlphaBlendPrimitives),
+      static_cast<unsigned long long>(b.indexedTriangleLarge4096AlphaBlendVertices),
+      static_cast<unsigned long long>(b.indexedTriangleLarge4096ScissorDraws),
+      static_cast<unsigned long long>(b.indexedTriangleLarge4096ScissorPrimitives),
+      static_cast<unsigned long long>(b.indexedTriangleLarge4096ScissorVertices),
+      static_cast<unsigned long long>(b.indexedTriangleLarge4096TexturedDraws),
+      static_cast<unsigned long long>(b.indexedTriangleLarge4096TexturedPrimitives),
+      static_cast<unsigned long long>(b.indexedTriangleLarge4096TexturedVertices),
       static_cast<unsigned long long>(b.textureMaskOr),
       static_cast<unsigned long long>(b.fragmentTextureBindingSamples),
       static_cast<unsigned long long>(b.fragmentTextureBindingMaskOr),

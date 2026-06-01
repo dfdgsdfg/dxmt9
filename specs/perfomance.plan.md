@@ -8457,6 +8457,114 @@ optimization. The positive result points to primitive/locality-dependent
 hidden vertex/tiler/parameter storage, with row interactions across the shared
 RT/depth frame.
 
+To decide whether the positive signal can move into a correctness-preserving
+path, encoder breakdown now also reports `large4096` intersections with the
+state buckets used by the probes:
+
+```text
+indexed_triangle_large_4096_opaque_depth_write_draws/primitives/vertices
+indexed_triangle_large_4096_depth_read_draws/primitives/vertices
+indexed_triangle_large_4096_alpha_blend_draws/primitives/vertices
+indexed_triangle_large_4096_scissor_draws/primitives/vertices
+indexed_triangle_large_4096_textured_draws/primitives/vertices
+```
+
+Validation run:
+
+```bash
+scripts/tools/run_3dmark05_perf_probe.sh \
+  --suffix large4096-cross-baseline-r1 \
+  --frame 60 \
+  --encoder-breakdown-seq 60 \
+  --timeout 180 \
+  --no-gputrace \
+  --measure-index-reuse \
+  --top 4 \
+  --hot-gpu-share 95
+```
+
+Artifacts:
+
+```text
+experiments/output/app-d3d9-3dmark05-large4096-cross-baseline-r1/3dmark05-perf-summary.md
+experiments/output/app-d3d9-3dmark05-large4096-cross-baseline-r1/3dmark05-perf-encoders.csv
+experiments/output/app-d3d9-3dmark05-large4096-cross-baseline-r1/3dmark05-perf-encoder-streams.csv
+```
+
+Frame-60 cross-bucket result:
+
+| Row | `large4096` d/p/v | `large4096 opaque` d/p | `large4096 depth-read` d/p | `large4096 alpha` d/p | `large4096 scissor` d/p | `large4096 textured` d/p |
+|---|---:|---:|---:|---:|---:|---:|
+| `60/0` | `7/39,952/119,856` | `5/27,815` | `2/12,137` | `0/0` | `2/12,137` | `7/39,952` |
+| `60/1` | `9/72,305/216,915` | `9/72,305` | `0/0` | `0/0` | `0/0` | `0/0` |
+| `60/3` | `9/72,305/216,915` | `9/72,305` | `0/0` | `0/0` | `0/0` | `0/0` |
+| `60/4` | `19/104,721/314,163` | `0/0` | `19/104,721` | `16/89,043` | `4/21,276` | `19/104,721` |
+
+This splits the optimization path from the diagnostic signal. The direct
+positive `60/4 large4096` target is entirely depth-read, mostly alpha-blended,
+and textured; it is not production-safe for primitive reordering. The
+correctness-preserving candidate set is instead `60/1` and `60/3` `large4096`
+opaque-depth-write, plus the `5` opaque `large4096` draws inside `60/0`. Since
+the earlier single-row `60/3` reverse was negative, the next Xcode probe should
+not assume that opaque-large alone carries the same signal. It should test the
+opaque-large set explicitly with the new cross buckets visible in the joined
+report, then compare whether hidden VS/tiler write moves without touching the
+visibility-sensitive `60/4` path.
+
+Smoke candidate for that safe set:
+
+```bash
+scripts/tools/run_3dmark05_perf_probe.sh \
+  --suffix reverse-opaque-large4096-smoke-r1 \
+  --frame 60 \
+  --encoder-breakdown-seq 60 \
+  --timeout 180 \
+  --no-gputrace \
+  --probe-reverse-opaque-indexed-triangles \
+  --probe-reverse-indexed-triangles-rows 60/0,60/1,60/3 \
+  --probe-reverse-indexed-triangles-class large4096 \
+  --measure-index-reuse \
+  --top 4 \
+  --hot-gpu-share 95
+```
+
+Artifacts:
+
+```text
+experiments/output/app-d3d9-3dmark05-reverse-opaque-large4096-smoke-r1/3dmark05-perf-summary.md
+experiments/output/app-d3d9-3dmark05-reverse-opaque-large4096-smoke-r1/3dmark05-perf-encoders.csv
+experiments/output/app-d3d9-3dmark05-reverse-opaque-large4096-smoke-r1/3dmark05-perf-encoder-streams.csv
+```
+
+The smoke run passed and hit exactly the intended `23` opaque-large draws:
+`5` in `60/0`, `9` in `60/1`, and `9` in `60/3`. It left `60/4` untouched.
+Compared with `large4096-cross-baseline-r1`, the hot-row total stayed within
+shape-gate range: draw calls `716 -> 710` (`-0.84%`), primitives
+`1,021,592 -> 1,013,075` (`-0.83%`), and vertices
+`3,064,776 -> 3,039,225` (`-0.83%`). The next Xcode probe is therefore:
+
+```bash
+scripts/tools/run_3dmark05_perf_probe.sh \
+  --suffix reverse-opaque-large4096-gputrace-r1 \
+  --frame 60 \
+  --encoder-breakdown-seq 60 \
+  --timeout 240 \
+  --probe-reverse-opaque-indexed-triangles \
+  --probe-reverse-indexed-triangles-rows 60/0,60/1,60/3 \
+  --probe-reverse-indexed-triangles-class large4096 \
+  --measure-index-reuse \
+  --top 4 \
+  --hot-gpu-share 95 \
+  --baseline-joined traces/app-d3d9-3dmark05-measure-index-cache-gputrace-r1/analysis/frame60-xcode-dxmt-joined-summary.csv \
+  --require-xcode-counter-coverage \
+  --require-dxmt-join-coverage \
+  --require-top-pso-attribution \
+  --require-top-row-key-match \
+  --max-top-draw-call-delta-ratio 0.05 \
+  --max-top-vertex-count-delta-ratio 0.05 \
+  --max-top-triangle-delta-ratio 0.05
+```
+
 The current primitive-order classifier state is:
 
 | Probe | Shape gate | VS-write result | Interpretation |
@@ -8468,6 +8576,8 @@ The current primitive-order classifier state is:
 | `60/4` row reverse | passes | unchanged/regresses | reject whole `60/4` reverse |
 | `60/4` alpha reverse | passes | unchanged, GPU time `-5.73%` on target row | reject alpha subset as VS-write owner |
 | `60/4` large4096 reverse | passes | hot VS write `-7.46%`, target row `-22.33%` | positive classifier for primitive/locality-dependent hidden backend traffic |
+| `large4096` cross-bucket baseline | no Xcode counters | `60/4` positive target has `0` opaque draws | separates diagnostic signal from production-safe candidate set |
+| Opaque `large4096` smoke (`60/0,60/1,60/3`) | no Xcode counters | applies expected `23` draws, hot geometry drift `<1%` | ready for Xcode/gputrace validation |
 
 Workspace disk headroom was restored before this capture; after the export the
 filesystem has about `15GiB` free. Raw `.gputrace` and embedded-performance
@@ -8485,10 +8595,12 @@ flowchart TD
 
   Alpha --> AlphaResult["Xcode result\nshape gates pass\nVS write unchanged\nGPU time small win"]
   Large --> LargeResult["Xcode result\nshape gates pass\nhot VS write -7.46%\n60/4 VS write -22.33%"]
+  LargeResult --> Cross["encoder cross buckets\n60/4 large4096 = depth-read/alpha\n60/1+60/3 = opaque large4096"]
   Scissor --> Gate
   DepthRead --> Gate
   AlphaResult --> RejectAlpha["reject alpha subset\nas VS-write owner"]
-  LargeResult --> Positive["positive classifier\nprimitive/locality-dependent\nhidden backend traffic"]
+  Cross --> Positive["positive classifier\nprimitive/locality-dependent\nhidden backend traffic"]
+  Cross --> SafeNext["next safe probe\nopaque large4096 set\n60/0 + 60/1 + 60/3"]
 
   Gate --> Move{"VS buffer write moves?"}
   Move -- "yes" --> Design["investigate correctness-preserving\nmaterial/locality strategy"]
@@ -8496,8 +8608,8 @@ flowchart TD
 
   classDef hot fill:#ffe8e8,stroke:#b64242,color:#2b0d0d
   classDef known fill:#e8f0ff,stroke:#476cb6,color:#0d1833
-  class Need,Class,Gate,Move,Design hot
-  class AlphaResult,RejectAlpha,LargeResult,Positive hot
+  class Need,Class,Gate,Move,Design,SafeNext hot
+  class AlphaResult,RejectAlpha,LargeResult,Cross,Positive hot
   class Prior,Alpha,Scissor,DepthRead,Large,Reject known
 ```
 
