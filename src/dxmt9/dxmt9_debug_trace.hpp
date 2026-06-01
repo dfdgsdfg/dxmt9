@@ -6,8 +6,11 @@
 
 #include "dxmt9/core.hpp"
 
+#include <array>
+#include <cstddef>
 #include <cstdint>
 #include <optional>
+#include <string_view>
 
 namespace dxmt9::debug {
 
@@ -33,6 +36,14 @@ struct RenderEncoderSelector {
   u64 encoderIndex = 0;
 };
 
+struct RenderEncoderSelectorList {
+  static constexpr std::size_t MaxSelectors = 32;
+
+  bool enabled = false;
+  std::array<RenderEncoderSelector, MaxSelectors> selectors = {};
+  std::size_t count = 0;
+};
+
 DrawSeqRange makeDrawSeqRange(std::optional<u64> min, std::optional<u64> max) noexcept;
 bool drawSeqRangeEnabled(DrawSeqRange range) noexcept;
 bool shouldSkipDrawSeq(u64 seqId, DrawSeqRange range) noexcept;
@@ -40,6 +51,15 @@ bool shouldSkipDrawSeq(u64 seqId, DrawSeqRange range) noexcept;
 DrawOrdinalRange makeDrawOrdinalRange(std::optional<u64> min, std::optional<u64> max) noexcept;
 bool drawOrdinalRangeEnabled(DrawOrdinalRange range) noexcept;
 bool shouldSkipDrawOrdinal(u64 ordinal, DrawOrdinalRange range) noexcept;
+
+RenderEncoderSelector makeRenderEncoderSelector(std::string_view spec) noexcept;
+RenderEncoderSelectorList makeRenderEncoderSelectorList(std::string_view spec) noexcept;
+bool renderEncoderSelectorMatches(RenderEncoderSelector selector,
+                                  u64 seqId,
+                                  u64 encoderIndex) noexcept;
+bool renderEncoderSelectorListMatches(const RenderEncoderSelectorList& selectors,
+                                      u64 seqId,
+                                      u64 encoderIndex) noexcept;
 
 // Force blend-disable + writeMask=0xf to make all draws visible, for
 // rendering-bisect work. Env: DXMT_DEBUG_FORCE_VISIBLE.
@@ -150,6 +170,12 @@ bool probeReverseNonOpaqueIndexedTriangles();
 // "<seq>/<encoder>", for example "60/3".
 // Env: DXMT9_PROBE_REVERSE_INDEXED_TRIANGLES_ROW.
 RenderEncoderSelector probeReverseIndexedTrianglesRow();
+
+// Optional selector list for reverse-indexed-triangle probes. Format is a
+// comma/semicolon/space separated list of "<seq>/<encoder>", for example
+// "60/0,60/1,60/3,60/4".
+// Env: DXMT9_PROBE_REVERSE_INDEXED_TRIANGLES_ROWS.
+RenderEncoderSelectorList probeReverseIndexedTrianglesRows();
 
 // Diagnostic-only: scan accessible index-buffer bytes and report the sum of
 // per-draw unique index references in encoder breakdown logs.

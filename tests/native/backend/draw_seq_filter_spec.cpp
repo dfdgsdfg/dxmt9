@@ -119,6 +119,33 @@ void testDrawOrdinalRangeMatchesSeqRangeBoundaries() {
         "inverted draw ordinal range skips between inverted bounds");
 }
 
+void testRenderEncoderSelectorParsesSingleRow() {
+  const auto slash = dxmt9::debug::makeRenderEncoderSelector("60/3");
+  check(slash.enabled, "slash render encoder selector is enabled");
+  check(dxmt9::debug::renderEncoderSelectorMatches(slash, 60u, 3u),
+        "slash render encoder selector matches row");
+  check(!dxmt9::debug::renderEncoderSelectorMatches(slash, 60u, 4u),
+        "slash render encoder selector rejects other encoder");
+
+  const auto comma = dxmt9::debug::makeRenderEncoderSelector("60,3");
+  check(comma.enabled, "legacy comma render encoder selector is enabled");
+  check(dxmt9::debug::renderEncoderSelectorMatches(comma, 60u, 3u),
+        "legacy comma render encoder selector matches row");
+}
+
+void testRenderEncoderSelectorListParsesHotRows() {
+  const auto rows =
+      dxmt9::debug::makeRenderEncoderSelectorList("60/0,60/1; 60/3 60/4");
+  check(rows.enabled, "render encoder selector list is enabled");
+  check(rows.count == 4u, "render encoder selector list parses four rows");
+  check(dxmt9::debug::renderEncoderSelectorListMatches(rows, 60u, 0u),
+        "render encoder selector list matches first row");
+  check(dxmt9::debug::renderEncoderSelectorListMatches(rows, 60u, 4u),
+        "render encoder selector list matches last row");
+  check(!dxmt9::debug::renderEncoderSelectorListMatches(rows, 60u, 2u),
+        "render encoder selector list rejects missing row");
+}
+
 }  // namespace
 
 int main() {
@@ -129,6 +156,8 @@ int main() {
     testClosedRangeIsInclusive();
     testInvertedRangeSkipsEverySeq();
     testDrawOrdinalRangeMatchesSeqRangeBoundaries();
+    testRenderEncoderSelectorParsesSingleRow();
+    testRenderEncoderSelectorListParsesHotRows();
   } catch (const TestFailure& failure) {
     std::cerr << "draw_seq_filter_spec failed: "
               << failure.what() << '\n';

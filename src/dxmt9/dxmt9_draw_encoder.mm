@@ -2566,15 +2566,18 @@ bool isOpaqueDepthWritingReorderProbeEligible(
 }
 
 bool reverseIndexedTriangleRowMatches(const ActiveEncoderBreakdown* encoderBreakdown) {
-  const auto selector = debug::probeReverseIndexedTrianglesRow();
-  if (!selector.enabled) {
+  const auto rowSelector = debug::probeReverseIndexedTrianglesRow();
+  const auto rowSelectors = debug::probeReverseIndexedTrianglesRows();
+  if (!rowSelector.enabled && !rowSelectors.enabled) {
     return true;
   }
   if (!encoderBreakdown) {
     return false;
   }
-  return encoderBreakdown->stats.seqId == selector.seqId &&
-         encoderBreakdown->stats.encoderIndex == selector.encoderIndex;
+  const auto seqId = encoderBreakdown->stats.seqId;
+  const auto encoderIndex = encoderBreakdown->stats.encoderIndex;
+  return debug::renderEncoderSelectorMatches(rowSelector, seqId, encoderIndex) ||
+         debug::renderEncoderSelectorListMatches(rowSelectors, seqId, encoderIndex);
 }
 
 u32 samplerStateOr(const SamplerSnapshot& snapshot, u32 state, u32 fallback) {

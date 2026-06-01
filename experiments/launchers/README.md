@@ -388,6 +388,12 @@ Commercial / 3rd-party titles (require external prefix):
     attribution. Pair row-scoped reverse probes with the top-row and geometry
     drift gates above; if those gates fail, keep the run as a classifier only
     and do not promote the result as a correctness-preserving optimization.
+    `--probe-reverse-indexed-triangles-rows ROWS` sets
+    `DXMT9_PROBE_REVERSE_INDEXED_TRIANGLES_ROWS=ROWS`; it accepts a
+    comma/semicolon/space separated row set such as `60/0,60/1,60/3,60/4`.
+    Use it after single-row probes fail to move the hidden VS-write bucket, so
+    the full hot-row set can be tested without broad full-frame primitive-order
+    changes.
     `--disable-alpha-test` is the narrower fragment/raster classifier for the
     alpha-test discard path and should be tried before more invasive shader
     substitutions when `--force-fragment-color` changes hidden VS-write

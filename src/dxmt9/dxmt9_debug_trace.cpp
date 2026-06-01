@@ -8,34 +8,146 @@
 
 namespace dxmt9::debug {
 
-RenderEncoderSelector parseRenderEncoderSelector(const char* envName) {
-  const auto env = util::getenvString(envName);
-  if (env.empty()) {
+namespace {
+
+bool isSpace(char ch) noexcept {
+  return ch == ' ' || ch == '\t' || ch == '\r' || ch == '\n';
+}
+
+bool isListSeparator(char ch) noexcept {
+  return ch == ',' || ch == ';' || isSpace(ch);
+}
+
+void skipSpaces(std::string_view spec, std::size_t& pos) noexcept {
+  while (pos < spec.size() && isSpace(spec[pos])) {
+    ++pos;
+  }
+}
+
+void skipListSeparators(std::string_view spec, std::size_t& pos) noexcept {
+  while (pos < spec.size() && isListSeparator(spec[pos])) {
+    ++pos;
+  }
+}
+
+bool parseU64(std::string_view spec, std::size_t& pos, u64& value) noexcept {
+  skipSpaces(spec, pos);
+  if (pos >= spec.size() || spec[pos] < '0' || spec[pos] > '9') {
+    return false;
+  }
+
+  u64 parsed = 0;
+  while (pos < spec.size() && spec[pos] >= '0' && spec[pos] <= '9') {
+    const auto digit = static_cast<u64>(spec[pos] - '0');
+    if (parsed > (std::numeric_limits<u64>::max() - digit) / 10u) {
+      return false;
+    }
+    parsed = parsed * 10u + digit;
+    ++pos;
+  }
+
+  value = parsed;
+  return true;
+}
+
+bool parseRenderEncoderSelectorAt(std::string_view spec,
+                                  std::size_t& pos,
+                                  bool allowCommaPairSeparator,
+                                  RenderEncoderSelector& selector) noexcept {
+  u64 seq = 0;
+  u64 encoder = 0;
+  if (!parseU64(spec, pos, seq)) {
+    return false;
+  }
+
+  skipSpaces(spec, pos);
+  if (pos >= spec.size()) {
+    return false;
+  }
+
+  const char separator = spec[pos];
+  if (separator != '/' && separator != ':' &&
+      !(allowCommaPairSeparator && separator == ',')) {
+    return false;
+  }
+  ++pos;
+
+  if (!parseU64(spec, pos, encoder)) {
+    return false;
+  }
+
+  selector = RenderEncoderSelector{
+      .enabled = true,
+      .seqId = seq,
+      .encoderIndex = encoder,
+  };
+  return true;
+}
+
+}  // namespace
+
+RenderEncoderSelector makeRenderEncoderSelector(std::string_view spec) noexcept {
+  if (spec.empty()) {
     return {};
   }
 
-  const char* ptr = env.c_str();
-  char* end = nullptr;
-  const auto seq = std::strtoull(ptr, &end, 0);
-  if (end == ptr) {
+  std::size_t pos = 0;
+  RenderEncoderSelector selector = {};
+  if (!parseRenderEncoderSelectorAt(spec, pos, true, selector)) {
     return {};
   }
-  while (*end == ' ' || *end == '\t') {
-    ++end;
+  return selector;
+}
+
+RenderEncoderSelectorList makeRenderEncoderSelectorList(std::string_view spec) noexcept {
+  RenderEncoderSelectorList result = {};
+  std::size_t pos = 0;
+
+  while (pos < spec.size() && result.count < RenderEncoderSelectorList::MaxSelectors) {
+    skipListSeparators(spec, pos);
+    if (pos >= spec.size()) {
+      break;
+    }
+
+    RenderEncoderSelector selector = {};
+    if (parseRenderEncoderSelectorAt(spec, pos, false, selector)) {
+      result.selectors[result.count++] = selector;
+      continue;
+    }
+
+    while (pos < spec.size() && !isListSeparator(spec[pos])) {
+      ++pos;
+    }
   }
-  if (*end != '/' && *end != ':' && *end != ',') {
-    return {};
+
+  result.enabled = result.count != 0;
+  return result;
+}
+
+bool renderEncoderSelectorMatches(RenderEncoderSelector selector,
+                                  u64 seqId,
+                                  u64 encoderIndex) noexcept {
+  return selector.enabled &&
+         selector.seqId == seqId &&
+         selector.encoderIndex == encoderIndex;
+}
+
+bool renderEncoderSelectorListMatches(const RenderEncoderSelectorList& selectors,
+                                      u64 seqId,
+                                      u64 encoderIndex) noexcept {
+  if (!selectors.enabled) {
+    return false;
   }
-  ptr = end + 1;
-  const auto encoder = std::strtoull(ptr, &end, 0);
-  if (end == ptr) {
-    return {};
+  for (std::size_t i = 0; i < selectors.count; ++i) {
+    if (renderEncoderSelectorMatches(selectors.selectors[i], seqId, encoderIndex)) {
+      return true;
+    }
   }
-  return RenderEncoderSelector{
-      .enabled = true,
-      .seqId = static_cast<u64>(seq),
-      .encoderIndex = static_cast<u64>(encoder),
-  };
+  return false;
+}
+
+RenderEncoderSelector parseRenderEncoderSelector(const char* envName) {
+  return makeRenderEncoderSelector(util::getenvString(envName));
 }
 
 DrawSeqRange makeDrawSeqRange(std::optional<u64> min, std::optional<u64> max) noexcept {
@@ -225,6 +337,13 @@ RenderEncoderSelector probeReverseIndexedTrianglesRow() {
   static const RenderEncoderSelector selector =
       parseRenderEncoderSelector("DXMT9_PROBE_REVERSE_INDEXED_TRIANGLES_ROW");
   return selector;
+}
+
+RenderEncoderSelectorList probeReverseIndexedTrianglesRows() {
+  static const RenderEncoderSelectorList selectors =
+      makeRenderEncoderSelectorList(
+          util::getenvString("DXMT9_PROBE_REVERSE_INDEXED_TRIANGLES_ROWS"));
+  return selectors;
 }
 
 bool measureIndexReuse() {
