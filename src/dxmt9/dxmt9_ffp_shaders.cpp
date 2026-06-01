@@ -1057,6 +1057,9 @@ std::string makeFfpPixelSource(const FfpPixelKey& key,
     return s.str();
   };
   const auto sampleExpr = [&](size_t stage, std::string coord) {
+    if (context.forceTextureWhiteForDebug) {
+      return std::string("float4(1.0f)");
+    }
     std::string sample = "tex" + std::to_string(stage) + ".sample(samp" +
                          std::to_string(stage) + ", " + coord +
                          biasArg(stage) + ")";

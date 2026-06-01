@@ -176,6 +176,11 @@ Commercial / 3rd-party titles (require external prefix):
     shape, but strips generated fog blending from translated, FFP, and
     tile-FFP paths. Treat it as a correctness-invalid fog/raster backend
     probe.
+    Use `--force-texture-white` as the matching texture-source classifier.
+    This sets `DXMT_FORCE_TEXTURE_WHITE=1`, keeps the normal fragment shader
+    body and VSOut shape, but replaces generated fragment texture sample
+    results with `float4(1.0f)`. Treat it as a correctness-invalid
+    texture/raster backend probe.
     If VSOut trimming leaves Xcode's VS buffer-write bucket unchanged, run the
     next paired candidate with `--trim-vertex-temps`; this sets
     `DXMT9_TRIM_VERTEX_TEMPS=1` so translated VS `float4 r[]` is sized from
@@ -339,7 +344,8 @@ Commercial / 3rd-party titles (require external prefix):
     alpha-test discard path and should be tried before more invasive shader
     substitutions when `--force-fragment-color` changes hidden VS-write
     counters. `--disable-fog` is the matching classifier for the fog blend /
-    fog-factor read path.
+    fog-factor read path, and `--force-texture-white` isolates texture sample
+    results without removing the rest of the fragment body.
     A solid yellow/clear-like GT1 frame from the alpha-blend probe is expected
     evidence that the probe invalidated final pixels, not a valid target state.
   Explicit environment variables still override profile defaults.

@@ -28,6 +28,7 @@ disable_cull=0
 disable_scissor=0
 disable_alpha_test=0
 disable_fog=0
+force_texture_white=0
 probe_disable_alpha_blend=0
 probe_disable_depth_write=0
 force_visible=0
@@ -133,6 +134,9 @@ Options:
                       discard and isolate it from force-fragment-color
   --disable-fog       Set DXMT_DISABLE_FOG=1 to strip shader fog blend and
                       isolate fog source shape from force-fragment-color
+  --force-texture-white
+                      Set DXMT_FORCE_TEXTURE_WHITE=1 to replace fragment
+                      texture samples with float4(1) while keeping shader body
   --probe-disable-alpha-blend
                       Set DXMT9_PROBE_DISABLE_ALPHA_BLEND=1 for blend state A/B
   --probe-disable-depth-write
@@ -316,6 +320,10 @@ while (($#)); do
       ;;
     --disable-fog)
       disable_fog=1
+      shift
+      ;;
+    --force-texture-white)
+      force_texture_white=1
       shift
       ;;
     --probe-disable-alpha-blend)
@@ -749,6 +757,10 @@ if (( disable_fog )); then
   env_args+=("DXMT_DISABLE_FOG=1")
 fi
 
+if (( force_texture_white )); then
+  env_args+=("DXMT_FORCE_TEXTURE_WHITE=1")
+fi
+
 if (( probe_disable_alpha_blend )); then
   env_args+=("DXMT9_PROBE_DISABLE_ALPHA_BLEND=1")
 fi
@@ -986,6 +998,9 @@ if (( disable_alpha_test )); then
 fi
 if (( disable_fog )); then
   echo "warning: --disable-fog is diagnostic only and can corrupt fogged geometry; use it only to isolate fog/raster backend effects."
+fi
+if (( force_texture_white )); then
+  echo "warning: --force-texture-white is diagnostic only and corrupts textured output; use it only to isolate texture-source backend effects."
 fi
 if (( probe_disable_depth_write )); then
   echo "warning: --probe-disable-depth-write is diagnostic only and can corrupt depth-dependent frame output; do not treat it as correctness-preserving."

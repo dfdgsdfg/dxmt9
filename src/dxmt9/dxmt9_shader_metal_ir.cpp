@@ -2676,6 +2676,9 @@ std::string translateSpirvToMsl(const SpirvModule& module,
       return sample;
     };
     auto sampleTexture = [&](u32 sampler, const std::string& coord) {
+      if (context.forceTextureWhiteForDebug) {
+        return std::string("float4(1.0f)");
+      }
       if (context.unboundTextureFallback &&
           (sampler >= context.textures.size() || !context.textures[sampler])) {
         return std::string("float4(0.0f, 0.0f, 0.0f, 1.0f)");
@@ -3318,7 +3321,9 @@ std::string translateSpirvToMsl(const SpirvModule& module,
               const auto coord = readSrc(1);
               const auto ddx = readSrc(3);
               const auto ddy = readSrc(4);
-              if (context.unboundTextureFallback &&
+              if (context.forceTextureWhiteForDebug) {
+                value = "float4(1.0f)";
+              } else if (context.unboundTextureFallback &&
                   (sampler >= context.textures.size() || !context.textures[sampler])) {
                 value = "float4(0.0f, 0.0f, 0.0f, 1.0f)";
               } else {
@@ -3334,7 +3339,9 @@ std::string translateSpirvToMsl(const SpirvModule& module,
 	            {
 	              const auto sampler = textureSamplerIndex(instruction, module.stage);
 	              const auto coord = readSrc(1);
-	              if (context.unboundTextureFallback &&
+	              if (context.forceTextureWhiteForDebug) {
+	                value = "float4(1.0f)";
+	              } else if (context.unboundTextureFallback &&
 	                  (sampler >= context.textures.size() || !context.textures[sampler])) {
 	                value = "float4(0.0f, 0.0f, 0.0f, 1.0f)";
 	              } else {

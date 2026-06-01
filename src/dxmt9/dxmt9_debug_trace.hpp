@@ -91,6 +91,9 @@ bool disableAlphaTest();
 // Disable fog programmatic emulation. Env: DXMT_DISABLE_FOG.
 bool disableFog();
 
+// Force fragment texture samples to white. Env: DXMT_FORCE_TEXTURE_WHITE.
+bool forceTextureWhite();
+
 // Diagnostic render-state A/B: force color blending off while preserving
 // color-write masks. Env: DXMT9_PROBE_DISABLE_ALPHA_BLEND.
 bool probeDisableAlphaBlend();

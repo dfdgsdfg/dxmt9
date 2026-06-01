@@ -453,6 +453,7 @@ u64 makeShaderSourceDebugEnvKey(bool trimUnusedVaryings,
                                 bool forceFragmentShaderColor,
                                 bool disableAlphaTest,
                                 bool disableFog,
+                                bool forceTextureWhite,
                                 std::string_view fragmentMode,
                                 bool forcePixelVFlip,
                                 bool debugFfpUv,
@@ -471,6 +472,7 @@ u64 makeShaderSourceDebugEnvKey(bool trimUnusedVaryings,
   hash = mix(hash, static_cast<u64>(forceFragmentShaderColor));
   hash = mix(hash, static_cast<u64>(disableAlphaTest));
   hash = mix(hash, static_cast<u64>(disableFog));
+  hash = mix(hash, static_cast<u64>(forceTextureWhite));
   hash = mix(hash, core::hashString(fragmentMode));
   hash = mix(hash, static_cast<u64>(forcePixelVFlip));
   hash = mix(hash, static_cast<u64>(debugFfpUv));
@@ -497,6 +499,7 @@ u64 currentShaderSourceDebugEnvKey() noexcept {
       envFlag("DXMT_DEBUG_FORCE_FRAGMENT_COLOR"),
       envFlag("DXMT_DISABLE_ALPHA_TEST"),
       envFlag("DXMT_DISABLE_FOG"),
+      envFlag("DXMT_FORCE_TEXTURE_WHITE"),
       fragmentMode ? std::string_view(fragmentMode) : std::string_view{},
       envFlag("DXMT_DEBUG_FORCE_PIXEL_V_FLIP"),
       envFlag("DXMT_DEBUG_FFP_UV"),
@@ -1361,6 +1364,7 @@ Cache::getOrBuildDrawPipelineHandleForState(WMT::Reference<WMT::Device> device,
   shaderSource.samplerLodBias = key.samplerLodBias;
   shaderSource.stripAlphaTestForDebug = envFlag("DXMT_DISABLE_ALPHA_TEST");
   shaderSource.stripFogForDebug = envFlag("DXMT_DISABLE_FOG");
+  shaderSource.forceTextureWhiteForDebug = envFlag("DXMT_FORCE_TEXTURE_WHITE");
   stampX8AlphaOneTextureMask(
       key, shaderSource,
       x8AlphaOneTextureMask(pool, *state.hot, key.textureMask));
@@ -1442,6 +1446,7 @@ Cache::getOrBuildTileFfpBaseColorPipelineHandleForState(
   shaderSource.samplerLodBias = key.samplerLodBias;
   shaderSource.stripAlphaTestForDebug = envFlag("DXMT_DISABLE_ALPHA_TEST");
   shaderSource.stripFogForDebug = envFlag("DXMT_DISABLE_FOG");
+  shaderSource.forceTextureWhiteForDebug = envFlag("DXMT_FORCE_TEXTURE_WHITE");
   stampX8AlphaOneTextureMask(
       key, shaderSource,
       x8AlphaOneTextureMask(pool, *state.hot, key.textureMask));

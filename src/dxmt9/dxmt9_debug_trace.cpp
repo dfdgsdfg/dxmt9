@@ -128,6 +128,11 @@ bool disableFog() {
   return v;
 }
 
+bool forceTextureWhite() {
+  static const bool v = util::getenvFlag("DXMT_FORCE_TEXTURE_WHITE");
+  return v;
+}
+
 bool probeDisableAlphaBlend() {
   static const bool v = util::getenvFlag("DXMT9_PROBE_DISABLE_ALPHA_BLEND");
   return v;
