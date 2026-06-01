@@ -3095,6 +3095,9 @@ void emitEncoderBreakdown(const EncoderBreakdown& b) {
       "indexed_vertex_reuse_skipped=%llu "
       "indexed_vertex_reference_count=%llu "
       "indexed_unique_vertex_estimate=%llu "
+      "indexed_vertex_cache_miss_estimate_16=%llu "
+      "indexed_vertex_cache_miss_estimate_32=%llu "
+      "indexed_vertex_cache_miss_estimate_64=%llu "
       "stream0_stride_min=%llu stream0_stride_max=%llu "
       "stream_state_samples=%llu stream_metal_binds=%llu "
       "stream_metal_bind_firsts=%llu "
@@ -3272,6 +3275,9 @@ void emitEncoderBreakdown(const EncoderBreakdown& b) {
       static_cast<unsigned long long>(b.indexedVertexReuseSkipped),
       static_cast<unsigned long long>(b.indexedVertexReferenceCount),
       static_cast<unsigned long long>(b.indexedUniqueVertexEstimate),
+      static_cast<unsigned long long>(b.indexedVertexCacheMissEstimate16),
+      static_cast<unsigned long long>(b.indexedVertexCacheMissEstimate32),
+      static_cast<unsigned long long>(b.indexedVertexCacheMissEstimate64),
       static_cast<unsigned long long>(b.stream0StrideMin),
       static_cast<unsigned long long>(b.stream0StrideMax),
       static_cast<unsigned long long>(b.streamStateSamples),

@@ -563,6 +563,9 @@ bool x8ShaderAlphaFillEnabledForDiagnostics();
 struct IndexReuseMeasure {
   u64 references = 0;
   u64 unique = 0;
+  u64 cacheMiss16 = 0;
+  u64 cacheMiss32 = 0;
+  u64 cacheMiss64 = 0;
   bool available = false;
 };
 
@@ -972,6 +975,9 @@ struct ActiveEncoderBreakdown {
     }
     ++stats.indexedVertexReuseSamples;
     stats.indexedUniqueVertexEstimate += measure.unique;
+    stats.indexedVertexCacheMissEstimate16 += measure.cacheMiss16;
+    stats.indexedVertexCacheMissEstimate32 += measure.cacheMiss32;
+    stats.indexedVertexCacheMissEstimate64 += measure.cacheMiss64;
   }
 
   void recordDrawIssue(core::PrimitiveType primitiveType,
@@ -2400,6 +2406,38 @@ std::size_t indexElementSize(IndexType type) {
   return type == IndexType::UInt16 ? 2u : 4u;
 }
 
+template <std::size_t Capacity>
+u64 estimateVertexCacheMisses(std::span<const u32> indices) {
+  std::array<u32, Capacity> cache{};
+  std::size_t valid = 0;
+  u64 misses = 0;
+
+  for (const u32 index : indices) {
+    std::size_t hit = valid;
+    for (std::size_t i = 0; i < valid; ++i) {
+      if (cache[i] == index) {
+        hit = i;
+        break;
+      }
+    }
+
+    if (hit == valid) {
+      ++misses;
+      hit = std::min(valid, Capacity - 1u);
+      if (valid < Capacity) {
+        ++valid;
+      }
+    }
+
+    for (std::size_t i = hit; i > 0; --i) {
+      cache[i] = cache[i - 1u];
+    }
+    cache[0] = index;
+  }
+
+  return misses;
+}
+
 IndexReuseMeasure measureIndexReuseForDraw(std::span<const u8> indexBytes,
                                            IndexType indexType,
                                            u32 startIndex,
@@ -2433,6 +2471,9 @@ IndexReuseMeasure measureIndexReuseForDraw(std::span<const u8> indexBytes,
       indices.push_back(value);
     }
   }
+  out.cacheMiss16 = estimateVertexCacheMisses<16>(indices);
+  out.cacheMiss32 = estimateVertexCacheMisses<32>(indices);
+  out.cacheMiss64 = estimateVertexCacheMisses<64>(indices);
   std::sort(indices.begin(), indices.end());
   out.unique = static_cast<u64>(std::unique(indices.begin(), indices.end()) -
                                 indices.begin());

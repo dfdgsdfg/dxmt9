@@ -217,6 +217,9 @@ ENCODER_SUM_KEYS = (
     "indexed_vertex_reuse_skipped",
     "indexed_vertex_reference_count",
     "indexed_unique_vertex_estimate",
+    "indexed_vertex_cache_miss_estimate_16",
+    "indexed_vertex_cache_miss_estimate_32",
+    "indexed_vertex_cache_miss_estimate_64",
     "stream_state_samples",
     "stream_metal_binds",
     "stream_metal_bind_firsts",
@@ -332,6 +335,12 @@ TOP_ENCODER_KEYS = (
     "indexed_vertex_reference_count",
     "indexed_unique_vertex_estimate",
     "indexed_vertex_reuse_ratio",
+    "indexed_vertex_cache_miss_estimate_16",
+    "indexed_vertex_cache_miss_estimate_32",
+    "indexed_vertex_cache_miss_estimate_64",
+    "indexed_vertex_cache_miss_over_unique_16",
+    "indexed_vertex_cache_miss_over_unique_32",
+    "indexed_vertex_cache_miss_over_unique_64",
     "pso_handle_changes",
     "pso_state_samples_per_draw",
     "shader_variant_changes",
@@ -450,6 +459,12 @@ ENCODER_CSV_KEYS = (
     "indexed_vertex_reference_count",
     "indexed_unique_vertex_estimate",
     "indexed_vertex_reuse_ratio",
+    "indexed_vertex_cache_miss_estimate_16",
+    "indexed_vertex_cache_miss_estimate_32",
+    "indexed_vertex_cache_miss_estimate_64",
+    "indexed_vertex_cache_miss_over_unique_16",
+    "indexed_vertex_cache_miss_over_unique_32",
+    "indexed_vertex_cache_miss_over_unique_64",
     "stream0_stride_min",
     "stream0_stride_max",
     "stream_state_samples",
@@ -828,6 +843,11 @@ def enrich_encoder_rows(encoders: list[dict[str, Any]]) -> None:
         indexed_refs = numeric_value(row, "indexed_vertex_reference_count")
         row["indexed_vertex_reuse_ratio"] = (
             indexed_refs / indexed_unique) if indexed_unique else 0.0
+        for cache_size in (16, 32, 64):
+            cache_misses = numeric_value(
+                row, f"indexed_vertex_cache_miss_estimate_{cache_size}")
+            row[f"indexed_vertex_cache_miss_over_unique_{cache_size}"] = (
+                cache_misses / indexed_unique) if indexed_unique else 0.0
 
 
 def write_markdown(

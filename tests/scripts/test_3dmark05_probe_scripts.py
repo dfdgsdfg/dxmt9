@@ -306,8 +306,8 @@ class ThreeDMark05ProbeScriptTests(unittest.TestCase):
             encoder_csv = Path(tmp) / "encoders.csv"
             encoder_csv.write_text(
                 "\n".join([
-                    "seq,encoder,indexed_vertex_reference_count,indexed_unique_vertex_estimate,indexed_vertex_reuse_samples,indexed_vertex_reuse_skipped",
-                    "60,2,300,120,1,0",
+                    "seq,encoder,indexed_vertex_reference_count,indexed_unique_vertex_estimate,indexed_vertex_reuse_samples,indexed_vertex_reuse_skipped,indexed_vertex_cache_miss_estimate_16,indexed_vertex_cache_miss_estimate_32,indexed_vertex_cache_miss_estimate_64",
+                    "60,2,300,120,1,0,150,120,120",
                 ]),
                 encoding="utf-8",
             )
@@ -327,6 +327,9 @@ class ThreeDMark05ProbeScriptTests(unittest.TestCase):
         self.assertEqual(joined["dxmt_indexed_unique_vertex_estimate"], 120)
         self.assertEqual(joined["dxmt_indexed_vertex_reuse_ratio"], 2.5)
         self.assertEqual(joined["dxmt_vs_invocations_per_indexed_unique_vertex"], 1.0)
+        self.assertEqual(joined["dxmt_indexed_vertex_cache_miss_estimate_16"], 150)
+        self.assertEqual(joined["dxmt_indexed_vertex_cache_miss_over_unique_16"], 1.25)
+        self.assertEqual(joined["dxmt_vs_invocations_per_indexed_cache_miss_32"], 1.0)
 
     def test_xcode_summarizer_classifies_hidden_backend_storage(self) -> None:
         summarizer = load_xcode_summarizer()

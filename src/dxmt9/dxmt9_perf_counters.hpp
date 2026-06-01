@@ -620,6 +620,9 @@ struct EncoderBreakdown {
   std::uint64_t indexedVertexReuseSkipped = 0;
   std::uint64_t indexedVertexReferenceCount = 0;
   std::uint64_t indexedUniqueVertexEstimate = 0;
+  std::uint64_t indexedVertexCacheMissEstimate16 = 0;
+  std::uint64_t indexedVertexCacheMissEstimate32 = 0;
+  std::uint64_t indexedVertexCacheMissEstimate64 = 0;
   std::uint64_t stream0StrideMin = 0;
   std::uint64_t stream0StrideMax = 0;
   std::uint64_t streamStateSamples = 0;
