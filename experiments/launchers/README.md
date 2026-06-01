@@ -165,6 +165,12 @@ Commercial / 3rd-party titles (require external prefix):
     forces translated/FFP fragment shaders to return a constant color. Compare
     it against the same baseline before attributing position-only movement to
     VSOut width.
+    If `--force-fragment-color` moves Xcode's VS-write counters, use
+    `--disable-alpha-test` as the next narrower classifier. This sets
+    `DXMT_DISABLE_ALPHA_TEST=1`, keeps the normal fragment shader body apart
+    from the alpha-test branch, strips the generated `discard_fragment()` path,
+    and also forces `FfpPsConsts.alphaTestEnable = 0`. Treat it as a
+    correctness-invalid discard/raster backend probe, not as an optimization.
     If VSOut trimming leaves Xcode's VS buffer-write bucket unchanged, run the
     next paired candidate with `--trim-vertex-temps`; this sets
     `DXMT9_TRIM_VERTEX_TEMPS=1` so translated VS `float4 r[]` is sized from
@@ -324,6 +330,10 @@ Commercial / 3rd-party titles (require external prefix):
     `DXMT9_PROBE_DISABLE_DEPTH_WRITE=1` and keeps depth tests but forces depth
     writes off. Gate both with Xcode `VS Buffer Device Memory Bytes Written`
     deltas; they are not correctness-preserving optimizations by themselves.
+    `--disable-alpha-test` is the narrower fragment/raster classifier for the
+    alpha-test discard path and should be tried before more invasive shader
+    substitutions when `--force-fragment-color` changes hidden VS-write
+    counters.
     A solid yellow/clear-like GT1 frame from the alpha-blend probe is expected
     evidence that the probe invalidated final pixels, not a valid target state.
   Explicit environment variables still override profile defaults.

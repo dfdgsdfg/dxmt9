@@ -148,6 +148,7 @@ JOINED_EXTRA_FIELDS = (
     "dxmt_scissor_enabled_draws",
     "dxmt_alpha_blend_enabled_draws",
     "dxmt_alpha_test_enabled_draws",
+    "dxmt_alpha_test_effective_draws",
     "dxmt_clip_plane_enabled_draws",
     "dxmt_primitive_count",
     "dxmt_triangle_estimate",
@@ -620,6 +621,7 @@ def join_dxmt(row: dict[str, Any], dxmt: dict[tuple[int, int], dict[str, Any]]) 
         "dxmt_scissor_enabled_draws": "scissor_enabled_draws",
         "dxmt_alpha_blend_enabled_draws": "alpha_blend_enabled_draws",
         "dxmt_alpha_test_enabled_draws": "alpha_test_enabled_draws",
+        "dxmt_alpha_test_effective_draws": "alpha_test_effective_draws",
         "dxmt_clip_plane_enabled_draws": "clip_plane_enabled_draws",
         "dxmt_primitive_count": "primitive_count",
         "dxmt_triangle_estimate": "triangle_estimate",
@@ -1149,6 +1151,7 @@ def write_report(
     top_scissor_enabled_draws = sum(as_int(row.get("dxmt_scissor_enabled_draws")) for row in top)
     top_alpha_blend_draws = sum(as_int(row.get("dxmt_alpha_blend_enabled_draws")) for row in top)
     top_alpha_test_draws = sum(as_int(row.get("dxmt_alpha_test_enabled_draws")) for row in top)
+    top_alpha_test_effective_draws = sum(as_int(row.get("dxmt_alpha_test_effective_draws")) for row in top)
     top_clip_plane_draws = sum(as_int(row.get("dxmt_clip_plane_enabled_draws")) for row in top)
     top_dxmt_vertex_count = sum(as_int(row.get("dxmt_vertex_count")) for row in top)
     top_dxmt_triangle_estimate = sum(as_int(row.get("dxmt_triangle_estimate")) for row in top)
@@ -1506,7 +1509,10 @@ def write_report(
     )
     lines.append(f"| dxmt depth enabled/write draws | `{fmt_int(top_depth_enabled_draws)} / {fmt_int(top_depth_write_draws)}` |")
     lines.append(f"| dxmt scissor enabled draws | `{fmt_int(top_scissor_enabled_draws)}` |")
-    lines.append(f"| dxmt alpha blend/test draws | `{fmt_int(top_alpha_blend_draws)} / {fmt_int(top_alpha_test_draws)}` |")
+    lines.append(
+        "| dxmt alpha blend/test/effective-test draws | "
+        f"`{fmt_int(top_alpha_blend_draws)} / {fmt_int(top_alpha_test_draws)} / "
+        f"{fmt_int(top_alpha_test_effective_draws)}` |")
     lines.append(f"| dxmt clip-plane enabled draws | `{fmt_int(top_clip_plane_draws)}` |")
     lines.append(f"| dxmt vertex count | `{fmt_int(top_dxmt_vertex_count)}` |")
     lines.append(f"| dxmt triangle estimate | `{fmt_int(top_dxmt_triangle_estimate)}` |")
@@ -1828,7 +1834,7 @@ def write_report(
         "tile intersects", "tiling util %", "prim/tile",
         "FS buffer MiB", "varyings/fragment", "buffer write limiter %",
         "LLC limiter %", "MMU limiter %", "draws", "FFP", "preT",
-        "cull n/f/b", "depth e/w", "scissor", "alpha b/t", "clip planes",
+        "cull n/f/b", "depth e/w", "scissor", "alpha b/t/e", "clip planes",
         "dxmt vertices", "dxmt tris", "prim/draw", "prim min/max",
         "vert/draw", "vert min/max", "large prim/vert",
         "geom sig uniq/dup", "geom dup",
@@ -1929,7 +1935,8 @@ def write_report(
                 fmt_int(row.get("dxmt_scissor_enabled_draws")),
                 (
                     f"{fmt_int(row.get('dxmt_alpha_blend_enabled_draws'))}/"
-                    f"{fmt_int(row.get('dxmt_alpha_test_enabled_draws'))}"
+                    f"{fmt_int(row.get('dxmt_alpha_test_enabled_draws'))}/"
+                    f"{fmt_int(row.get('dxmt_alpha_test_effective_draws'))}"
                 ),
                 fmt_int(row.get("dxmt_clip_plane_enabled_draws")),
                 fmt_int(row.get("dxmt_vertex_count")),

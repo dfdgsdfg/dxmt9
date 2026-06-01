@@ -1210,7 +1210,8 @@ std::string makeFfpPixelSource(const FfpPixelKey& key,
   // kernel reads back the imageblock color, so a discarded base fragment
   // would never reach it).
   const bool emitFogAlphaTest = !context.stripFogAlphaTestForTileBase;
-  if (emitFogAlphaTest && key.alphaTestEnable) {
+  const bool emitAlphaTest = emitFogAlphaTest && !context.stripAlphaTestForDebug;
+  if (emitAlphaTest && key.alphaTestEnable) {
     out << "  bool pass = true;\n";
     out << "  switch (ffpPs.alphaTestFunc) {\n";
     out << "    case 2u: pass = color.a < ffpPs.alphaRef; break;\n";
@@ -1349,7 +1350,7 @@ std::string makeFfpTilePixelSource(const FfpPixelKey& key,
   // then write back the modified slot.
   out << "  TileColorData tileSlot = imageblock_data.read(tid);\n";
   out << "  float4 color = float4(tileSlot.color);\n";
-  if (key.alphaTestEnable) {
+  if (!context.stripAlphaTestForDebug && key.alphaTestEnable) {
     out << "  if (ffpPs.alphaTestEnable != 0u) {\n";
     out << "    bool pass = true;\n";
     out << "    switch (ffpPs.alphaTestFunc) {\n";

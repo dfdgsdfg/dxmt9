@@ -246,6 +246,15 @@ std::string translatePixel(std::span<const u32> words, bool samplerLodBias) {
   return dxmt9::translator::makeTranslatedFragmentSource(shader, context);
 }
 
+std::string translatePixelWithAlphaTestStrip(std::span<const u32> words) {
+  const auto shader = makeShader(words);
+  DrawDesc desc{};
+  desc.pixelShader = shader;
+  auto context = dxmt9::drawshader::makeShaderSourceContext(desc);
+  context.stripAlphaTestForDebug = true;
+  return dxmt9::translator::makeTranslatedFragmentSource(shader, context);
+}
+
 std::string translateVertex(std::span<const u32> words) {
   const auto shader = makeShader(words);
   DrawDesc desc{};
@@ -1843,6 +1852,46 @@ void testFfpMipLodBiasClearOmitsShaderSideBias() {
                 "bias-off FFP PS still samples its bound texture");
 }
 
+void testTranslatedAlphaTestDebugStripOmitsTailDiscard() {
+  const auto normal = translatePixel(makePs20ColorInputBytecode());
+  checkContains(normal, "ffpPs.alphaTestEnable",
+                "normal translated PS emits runtime alpha-test guard");
+  checkContains(normal, "discard_fragment()",
+                "normal translated PS emits alpha-test discard tail");
+
+  const auto stripped = translatePixelWithAlphaTestStrip(makePs20ColorInputBytecode());
+  checkNotContains(stripped, "ffpPs.alphaTestEnable",
+                   "alpha-test debug strip removes translated PS alpha-test guard");
+  checkNotContains(stripped, "discard_fragment()",
+                   "alpha-test debug strip removes translated PS alpha-test discard");
+}
+
+void testFfpAlphaTestDebugStripOmitsDiscard() {
+  FfpPixelKey key{};
+  key.alphaTestEnable = true;
+  key.alphaTestFunc = static_cast<u32>(CompareFunc::GreaterEqual);
+  key.stages[0].colorOp = static_cast<u32>(TextureOp::SelectArg1);
+  key.stages[0].colorArg1 = 2u;  // D3DTA_TEXTURE
+  DrawDesc desc{};
+  desc.pixelShader.kind = ShaderRef::Kind::FixedFunctionPixel;
+  desc.pixelShader.pixelKey = key;
+  desc.textures[0].handle = Handle{1u};
+  auto context = dxmt9::drawshader::makeShaderSourceContext(desc);
+
+  const auto normal = dxmt9::ffp::makeFfpPixelSource(key, context);
+  checkContains(normal, "ffpPs.alphaTestFunc",
+                "normal FFP PS emits alpha-test function switch");
+  checkContains(normal, "discard_fragment()",
+                "normal FFP PS emits alpha-test discard");
+
+  context.stripAlphaTestForDebug = true;
+  const auto stripped = dxmt9::ffp::makeFfpPixelSource(key, context);
+  checkNotContains(stripped, "ffpPs.alphaTestFunc",
+                   "alpha-test debug strip removes FFP alpha-test branch");
+  checkNotContains(stripped, "discard_fragment()",
+                   "alpha-test debug strip removes FFP alpha-test discard");
+}
+
 void testPs30InputSemanticTexcoordMapping() {
   const auto source = translatePixel(makePs30InputSemanticBytecode());
   checkContains(source, "in.texcoord3",
@@ -2853,6 +2902,8 @@ int main() {
     testPs20MipLodBiasClearOmitsShaderSideBias();
     testFfpMipLodBiasEmitsShaderSideBias();
     testFfpMipLodBiasClearOmitsShaderSideBias();
+    testTranslatedAlphaTestDebugStripOmitsTailDiscard();
+    testFfpAlphaTestDebugStripOmitsDiscard();
     testPs30InputSemanticTexcoordMapping();
     testPairLocalVaryingLivenessKeepsHighTexcoordAndFog();
     testPs30TexkillLoweringContract();

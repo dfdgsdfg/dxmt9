@@ -3516,22 +3516,24 @@ std::string translateSpirvToMsl(const SpirvModule& module,
   } else {
     out << "  color = outColor[0];\n";
   }
-	  out << "  if (ffpPs.alphaTestEnable != 0u) {\n";
-  out << "    bool pass = true;\n";
-  out << "    switch (ffpPs.alphaTestFunc) {\n";
-  out << "      case 2u: pass = color.a < ffpPs.alphaRef; break;\n";
-  out << "      case 3u: pass = color.a == ffpPs.alphaRef; break;\n";
-  out << "      case 4u: pass = color.a <= ffpPs.alphaRef; break;\n";
-  out << "      case 5u: pass = color.a > ffpPs.alphaRef; break;\n";
-  out << "      case 6u: pass = color.a != ffpPs.alphaRef; break;\n";
-  out << "      case 7u: pass = color.a >= ffpPs.alphaRef; break;\n";
-  out << "      case 8u: pass = true; break;\n";
-  out << "      default: pass = true; break;\n";
-  out << "    }\n";
-  out << "    if (!pass) {\n";
-	  out << "      discard_fragment();\n";
-	  out << "    }\n";
-		  out << "  }\n";
+  if (!context.stripAlphaTestForDebug) {
+    out << "  if (ffpPs.alphaTestEnable != 0u) {\n";
+    out << "    bool pass = true;\n";
+    out << "    switch (ffpPs.alphaTestFunc) {\n";
+    out << "      case 2u: pass = color.a < ffpPs.alphaRef; break;\n";
+    out << "      case 3u: pass = color.a == ffpPs.alphaRef; break;\n";
+    out << "      case 4u: pass = color.a <= ffpPs.alphaRef; break;\n";
+    out << "      case 5u: pass = color.a > ffpPs.alphaRef; break;\n";
+    out << "      case 6u: pass = color.a != ffpPs.alphaRef; break;\n";
+    out << "      case 7u: pass = color.a >= ffpPs.alphaRef; break;\n";
+    out << "      case 8u: pass = true; break;\n";
+    out << "      default: pass = true; break;\n";
+    out << "    }\n";
+    out << "    if (!pass) {\n";
+    out << "      discard_fragment();\n";
+    out << "    }\n";
+    out << "  }\n";
+  }
 		  out << "  if (ffpPs.fogMode != 0u) {\n";
 		  out << "    color = dxmt9_apply_fog(color, ffpPs, in.position.z, in.fogFactor);\n";
 		  out << "  }\n";

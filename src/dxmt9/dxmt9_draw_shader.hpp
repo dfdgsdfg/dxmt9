@@ -66,6 +66,11 @@ struct ShaderSourceContext {
   // off on the base-colour build). Only ever set alongside a tile-FFP draw
   // selection; default off keeps the portable FFP fragment byte-identical.
   bool stripFogAlphaTestForTileBase = false;
+  // Diagnostic alpha-test source stripper. When DXMT_DISABLE_ALPHA_TEST is set,
+  // generated fragment shaders omit the alpha-test discard path instead of only
+  // guarding it with a runtime uniform. This isolates Metal backend shape
+  // changes caused by possible discard.
+  bool stripAlphaTestForDebug = false;
   // Pair-local VSOut layout selected from fragment-input liveness when
   // DXMT9_TRIM_UNUSED_VARYINGS is enabled. Full layout by default.
   shaders::VSOutLayout vsOutLayout{};

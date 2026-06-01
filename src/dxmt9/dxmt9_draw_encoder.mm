@@ -1069,8 +1069,13 @@ struct ActiveEncoderBreakdown {
     if (core::flatStateOr(renderStates, RS_ALPHABLEND_ENABLE, 0u) != 0u) {
       ++stats.alphaBlendEnabledDraws;
     }
-    if (core::flatStateOr(renderStates, RS_ALPHA_TEST_ENABLE, 0u) != 0u) {
+    const bool alphaTestEnabled =
+        core::flatStateOr(renderStates, RS_ALPHA_TEST_ENABLE, 0u) != 0u;
+    if (alphaTestEnabled) {
       ++stats.alphaTestEnabledDraws;
+      if (!debug::disableAlphaTest()) {
+        ++stats.alphaTestEffectiveDraws;
+      }
     }
     if (core::flatStateOr(renderStates, core::RS_CLIP_PLANE_ENABLE, 0u) != 0u) {
       ++stats.clipPlaneEnabledDraws;
@@ -2233,6 +2238,7 @@ u32 vsOutLayoutKeyForDraw(core::FlatDrawStateView drawState,
   auto context =
       drawshader::makeShaderSourceContext(drawState.shaderContext(), *drawState.hot);
   context.stripFogAlphaTestForTileBase = tileFfpBaseColor;
+  context.stripAlphaTestForDebug = debug::disableAlphaTest();
   try {
     context.vsOutLayout = drawshader::resolveVSOutLayoutForShaderPair(context);
     return shaders::vsoutLayoutKey(context.vsOutLayout);
@@ -2268,6 +2274,7 @@ ShaderSourceHashes shaderSourceHashesForDraw(core::FlatDrawStateView drawState,
   auto context =
       drawshader::makeShaderSourceContext(drawState.shaderContext(), *drawState.hot);
   context.stripFogAlphaTestForTileBase = tileFfpBaseColor;
+  context.stripAlphaTestForDebug = debug::disableAlphaTest();
   context.argbufHybridMode = argbufHybridMode;
   context.argbufResourceArray = argbufHybridMode && argbufResourceArray;
   context.samplerLodBias = samplerLodBias;

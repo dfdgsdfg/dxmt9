@@ -561,6 +561,7 @@ struct EncoderBreakdown {
   std::uint64_t scissorEnabledDraws = 0;
   std::uint64_t alphaBlendEnabledDraws = 0;
   std::uint64_t alphaTestEnabledDraws = 0;
+  std::uint64_t alphaTestEffectiveDraws = 0;
   std::uint64_t clipPlaneEnabledDraws = 0;
   std::uint64_t pointDraws = 0;
   std::uint64_t lineDraws = 0;

@@ -39,7 +39,7 @@ using u64 = std::uint64_t;
 // debugEnvKey covers source-affecting env toggles for the current process.
 inline constexpr u32 kShaderEmitterVersion = 2u;
 inline constexpr u32 kShaderSourceLayoutVersion = 2u;
-inline constexpr u32 kShaderDebugEnvSchemaVersion = 1u;
+inline constexpr u32 kShaderDebugEnvSchemaVersion = 2u;
 
 struct BlendAttachmentKey {
   bool blendingEnabled = false;
@@ -181,6 +181,7 @@ u64 makeShaderSourceDebugEnvKey(bool trimUnusedVaryings,
                                 bool forceFullscreenVertex,
                                 bool flipTranslatedVertexY,
                                 bool forceFragmentShaderColor,
+                                bool disableAlphaTest,
                                 std::string_view fragmentMode,
                                 bool forcePixelVFlip,
                                 bool debugFfpUv,

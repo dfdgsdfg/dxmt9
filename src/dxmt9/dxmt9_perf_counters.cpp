@@ -3044,7 +3044,8 @@ void emitEncoderBreakdown(const EncoderBreakdown& b) {
       "depth_func_less_draws=%llu depth_func_lessequal_draws=%llu "
       "depth_func_always_draws=%llu depth_func_other_draws=%llu "
       "scissor_enabled_draws=%llu alpha_blend_enabled_draws=%llu "
-      "alpha_test_enabled_draws=%llu clip_plane_enabled_draws=%llu "
+      "alpha_test_enabled_draws=%llu alpha_test_effective_draws=%llu "
+      "clip_plane_enabled_draws=%llu "
       "point_draws=%llu line_draws=%llu triangle_draws=%llu primitive_count=%llu "
       "triangle_estimate=%llu vertex_count=%llu texture_mask_or=0x%llx "
       "fragment_texture_binding_samples=%llu "
@@ -3208,6 +3209,7 @@ void emitEncoderBreakdown(const EncoderBreakdown& b) {
       static_cast<unsigned long long>(b.scissorEnabledDraws),
       static_cast<unsigned long long>(b.alphaBlendEnabledDraws),
       static_cast<unsigned long long>(b.alphaTestEnabledDraws),
+      static_cast<unsigned long long>(b.alphaTestEffectiveDraws),
       static_cast<unsigned long long>(b.clipPlaneEnabledDraws),
       static_cast<unsigned long long>(b.pointDraws),
       static_cast<unsigned long long>(b.lineDraws),
