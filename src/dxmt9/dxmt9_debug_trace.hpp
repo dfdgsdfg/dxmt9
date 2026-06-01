@@ -27,6 +27,12 @@ struct DrawOrdinalRange {
   u64 max = 0;
 };
 
+struct RenderEncoderSelector {
+  bool enabled = false;
+  u64 seqId = 0;
+  u64 encoderIndex = 0;
+};
+
 DrawSeqRange makeDrawSeqRange(std::optional<u64> min, std::optional<u64> max) noexcept;
 bool drawSeqRangeEnabled(DrawSeqRange range) noexcept;
 bool shouldSkipDrawSeq(u64 seqId, DrawSeqRange range) noexcept;
@@ -132,6 +138,11 @@ bool probeReverseIndexedTriangles();
 // only to opaque depth-writing triangle-list draws.
 // Env: DXMT9_PROBE_REVERSE_OPAQUE_INDEXED_TRIANGLES.
 bool probeReverseOpaqueIndexedTriangles();
+
+// Optional selector for both reverse-indexed-triangle probes. Format is
+// "<seq>/<encoder>", for example "60/3".
+// Env: DXMT9_PROBE_REVERSE_INDEXED_TRIANGLES_ROW.
+RenderEncoderSelector probeReverseIndexedTrianglesRow();
 
 // Diagnostic-only: scan accessible index-buffer bytes and report the sum of
 // per-draw unique index references in encoder breakdown logs.

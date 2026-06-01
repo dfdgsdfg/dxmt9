@@ -8,6 +8,36 @@
 
 namespace dxmt9::debug {
 
+RenderEncoderSelector parseRenderEncoderSelector(const char* envName) {
+  const auto env = util::getenvString(envName);
+  if (env.empty()) {
+    return {};
+  }
+
+  const char* ptr = env.c_str();
+  char* end = nullptr;
+  const auto seq = std::strtoull(ptr, &end, 0);
+  if (end == ptr) {
+    return {};
+  }
+  while (*end == ' ' || *end == '\t') {
+    ++end;
+  }
+  if (*end != '/' && *end != ':' && *end != ',') {
+    return {};
+  }
+  ptr = end + 1;
+  const auto encoder = std::strtoull(ptr, &end, 0);
+  if (end == ptr) {
+    return {};
+  }
+  return RenderEncoderSelector{
+      .enabled = true,
+      .seqId = static_cast<u64>(seq),
+      .encoderIndex = static_cast<u64>(encoder),
+  };
+}
+
 DrawSeqRange makeDrawSeqRange(std::optional<u64> min, std::optional<u64> max) noexcept {
   return DrawSeqRange{
       .hasMin = min.has_value(),
@@ -183,6 +213,12 @@ bool probeReverseIndexedTriangles() {
 bool probeReverseOpaqueIndexedTriangles() {
   static const bool v = util::getenvFlag("DXMT9_PROBE_REVERSE_OPAQUE_INDEXED_TRIANGLES");
   return v;
+}
+
+RenderEncoderSelector probeReverseIndexedTrianglesRow() {
+  static const RenderEncoderSelector selector =
+      parseRenderEncoderSelector("DXMT9_PROBE_REVERSE_INDEXED_TRIANGLES_ROW");
+  return selector;
 }
 
 bool measureIndexReuse() {

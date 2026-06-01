@@ -368,6 +368,11 @@ Commercial / 3rd-party titles (require external prefix):
     transient-IB reversal to solid, depth-writing, non-blended,
     non-alpha-tested, non-stencil triangle-list draws so blended visibility
     stays intact during narrower backend-locality probes.
+    `--probe-reverse-indexed-triangles-row SEQ/ENC` sets
+    `DXMT9_PROBE_REVERSE_INDEXED_TRIANGLES_ROW=SEQ/ENC`; it constrains either
+    reverse-indexed-triangle probe to one `RenderPass[seq=...,enc=...]` row so
+    row-scoped A/B runs can keep hot-row membership stable enough for
+    attribution.
     `--disable-alpha-test` is the narrower fragment/raster classifier for the
     alpha-test discard path and should be tried before more invasive shader
     substitutions when `--force-fragment-color` changes hidden VS-write

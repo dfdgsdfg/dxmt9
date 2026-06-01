@@ -25,6 +25,7 @@ split_large_indexed_draws=
 force_expand_indexed=0
 probe_reverse_indexed_triangles=0
 probe_reverse_opaque_indexed_triangles=0
+probe_reverse_indexed_triangles_row=
 force_cull_mode=
 measure_index_reuse=0
 aggressive_color_dontcare=0
@@ -143,6 +144,10 @@ Options:
                       Set DXMT9_PROBE_REVERSE_OPAQUE_INDEXED_TRIANGLES=1 to
                       reverse only opaque depth-writing triangle-list indexed
                       draws, leaving blended/alpha-test/stencil draws intact
+  --probe-reverse-indexed-triangles-row SEQ/ENC
+                      Set DXMT9_PROBE_REVERSE_INDEXED_TRIANGLES_ROW=SEQ/ENC to
+                      constrain either reverse-indexed-triangles probe to one
+                      Xcode/DXMT RenderPass row, e.g. 60/3
   --force-cull-mode MODE
                       Set DXMT_DEBUG_FORCE_CULL_MODE=MODE where MODE is one of
                       none, front, or back for cull/backend shape A/B probes
@@ -342,6 +347,10 @@ while (($#)); do
     --probe-reverse-opaque-indexed-triangles)
       probe_reverse_opaque_indexed_triangles=1
       shift
+      ;;
+    --probe-reverse-indexed-triangles-row)
+      probe_reverse_indexed_triangles_row=${2:?missing value for --probe-reverse-indexed-triangles-row}
+      shift 2
       ;;
     --force-cull-mode)
       force_cull_mode=${2:?missing value for --force-cull-mode}
@@ -830,6 +839,10 @@ fi
 
 if (( probe_reverse_opaque_indexed_triangles )); then
   env_args+=("DXMT9_PROBE_REVERSE_OPAQUE_INDEXED_TRIANGLES=1")
+fi
+
+if [[ -n "$probe_reverse_indexed_triangles_row" ]]; then
+  env_args+=("DXMT9_PROBE_REVERSE_INDEXED_TRIANGLES_ROW=$probe_reverse_indexed_triangles_row")
 fi
 
 if [[ -n "$force_cull_mode" ]]; then

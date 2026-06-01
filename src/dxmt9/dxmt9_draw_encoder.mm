@@ -687,13 +687,13 @@ struct ActiveEncoderBreakdown {
     ffpVsHistory = {};
     drawGeometrySignatureValid = false;
     drawGeometrySignatureLast = 0;
-    if (!enabled) {
-      return;
-    }
     stats.seqId = seqId;
     stats.encoderIndex = encoderIndex;
     stats.rtHandle = rtHandle;
     stats.depthHandle = depthHandle;
+    if (!enabled) {
+      return;
+    }
   }
 
   void recordAttachmentMetadata(const resources::Pool& pool,
@@ -2563,6 +2563,18 @@ bool isOpaqueDepthWritingReorderProbeEligible(
     default:
       return false;
   }
+}
+
+bool reverseIndexedTriangleRowMatches(const ActiveEncoderBreakdown* encoderBreakdown) {
+  const auto selector = debug::probeReverseIndexedTrianglesRow();
+  if (!selector.enabled) {
+    return true;
+  }
+  if (!encoderBreakdown) {
+    return false;
+  }
+  return encoderBreakdown->stats.seqId == selector.seqId &&
+         encoderBreakdown->stats.encoderIndex == selector.encoderIndex;
 }
 
 u32 samplerStateOr(const SamplerSnapshot& snapshot, u32 state, u32 fallback) {
@@ -5319,7 +5331,8 @@ bool encodeDraw(EncodeContext& ctx,
       const bool reverseTriangleProbeRequested =
           (reverseAllIndexedTriangles || reverseOpaqueIndexedTriangles) &&
           pv.primitiveType == core::PrimitiveType::TriangleList;
-      if (reverseTriangleProbeRequested) {
+      if (reverseTriangleProbeRequested &&
+          reverseIndexedTriangleRowMatches(encoderBreakdown)) {
         bool probeApplied = false;
         const bool probeEligible =
             reverseAllIndexedTriangles ||
