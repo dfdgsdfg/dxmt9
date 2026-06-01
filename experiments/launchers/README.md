@@ -269,6 +269,14 @@ Commercial / 3rd-party titles (require external prefix):
     Use `--max-top-unexplained-buffer-write-ratio N` when a candidate is
     expected to make Xcode buffer writes explainable by dxmt writers; it fails
     if the residual top-encoder write ratio remains above `N`.
+    For primitive-order, visibility, or backend-shape classifiers, also add
+    `--require-top-row-key-match` and bounded shape drift gates such as
+    `--max-top-draw-call-delta-ratio 0.05`,
+    `--max-top-vertex-count-delta-ratio 0.05`, and
+    `--max-top-triangle-delta-ratio 0.05`. These fail comparisons where the
+    top `RenderPass[seq=...,enc=...]` set, draw count, or submitted geometry
+    changes enough that an Xcode VS-buffer-write delta could be a different
+    frame shape instead of the candidate mechanism.
     Compare run-level mechanisms such as store-action policy, same-key
     preservation bytes, draw-run formation, and queue waits with
     `scripts/tools/finalize_3dmark05_perf_probe.sh --baseline-output
@@ -377,7 +385,9 @@ Commercial / 3rd-party titles (require external prefix):
     `DXMT9_PROBE_REVERSE_INDEXED_TRIANGLES_ROW=SEQ/ENC`; it constrains any
     reverse-indexed-triangle probe to one `RenderPass[seq=...,enc=...]` row so
     row-scoped A/B runs can keep hot-row membership stable enough for
-    attribution.
+    attribution. Pair row-scoped reverse probes with the top-row and geometry
+    drift gates above; if those gates fail, keep the run as a classifier only
+    and do not promote the result as a correctness-preserving optimization.
     `--disable-alpha-test` is the narrower fragment/raster classifier for the
     alpha-test discard path and should be tried before more invasive shader
     substitutions when `--force-fragment-color` changes hidden VS-write
