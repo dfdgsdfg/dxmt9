@@ -1080,13 +1080,16 @@ struct ActiveEncoderBreakdown {
     }
     const bool depthEnabled =
         core::flatStateOr(renderStates, RS_Z_ENABLE, 0u) != 0u;
+    const bool depthWrite =
+        depthEnabled && core::flatStateOr(renderStates, RS_Z_WRITE_ENABLE, 0u) != 0u;
+    const auto depthFunc = static_cast<core::CompareFunc>(core::flatStateOr(
+        renderStates, RS_Z_FUNC, static_cast<u32>(core::CompareFunc::LessEqual)));
     if (depthEnabled) {
       ++stats.depthEnabledDraws;
-      if (core::flatStateOr(renderStates, RS_Z_WRITE_ENABLE, 0u) != 0u) {
+      if (depthWrite) {
         ++stats.depthWriteDraws;
       }
-      switch (static_cast<core::CompareFunc>(core::flatStateOr(
-          renderStates, RS_Z_FUNC, static_cast<u32>(core::CompareFunc::LessEqual)))) {
+      switch (depthFunc) {
         case core::CompareFunc::Less:
           ++stats.depthFuncLessDraws;
           break;
@@ -1101,10 +1104,13 @@ struct ActiveEncoderBreakdown {
           break;
       }
     }
-    if (viewport.scissorEnabled) {
+    const bool scissorEnabled = viewport.scissorEnabled;
+    if (scissorEnabled) {
       ++stats.scissorEnabledDraws;
     }
-    if (core::flatStateOr(renderStates, RS_ALPHABLEND_ENABLE, 0u) != 0u) {
+    const bool alphaBlendEnabled =
+        core::flatStateOr(renderStates, RS_ALPHABLEND_ENABLE, 0u) != 0u;
+    if (alphaBlendEnabled) {
       ++stats.alphaBlendEnabledDraws;
     }
     const bool alphaTestEnabled =
@@ -1115,8 +1121,59 @@ struct ActiveEncoderBreakdown {
         ++stats.alphaTestEffectiveDraws;
       }
     }
-    if (core::flatStateOr(renderStates, core::RS_CLIP_PLANE_ENABLE, 0u) != 0u) {
+    const bool clipPlaneEnabled =
+        core::flatStateOr(renderStates, core::RS_CLIP_PLANE_ENABLE, 0u) != 0u;
+    if (clipPlaneEnabled) {
       ++stats.clipPlaneEnabledDraws;
+    }
+    if (indexed && primitiveType == core::PrimitiveType::TriangleList) {
+      auto addIndexedTriangleClass =
+          [&](std::uint64_t& draws, std::uint64_t& primitives,
+              std::uint64_t& vertices) {
+            ++draws;
+            primitives += primitiveCount;
+            vertices += vertexCount;
+          };
+      const bool solidFill = fillMode == WMTTriangleFillModeFill;
+      const bool stencilEnabled =
+          core::flatStateOr(renderStates, core::RS_STENCIL_ENABLE, 0u) != 0u;
+      const bool depthFuncPreservesOpaqueOrder =
+          depthFunc == core::CompareFunc::Less ||
+          depthFunc == core::CompareFunc::LessEqual;
+      const bool opaqueDepthWrite =
+          solidFill && depthWrite && depthFuncPreservesOpaqueOrder &&
+          !alphaBlendEnabled && !alphaTestEnabled && !stencilEnabled &&
+          !clipPlaneEnabled;
+      if (opaqueDepthWrite) {
+        addIndexedTriangleClass(stats.indexedTriangleOpaqueDepthWriteDraws,
+                                stats.indexedTriangleOpaqueDepthWritePrimitives,
+                                stats.indexedTriangleOpaqueDepthWriteVertices);
+      }
+      if (depthEnabled && !depthWrite) {
+        addIndexedTriangleClass(stats.indexedTriangleDepthReadDraws,
+                                stats.indexedTriangleDepthReadPrimitives,
+                                stats.indexedTriangleDepthReadVertices);
+      }
+      if (alphaBlendEnabled) {
+        addIndexedTriangleClass(stats.indexedTriangleAlphaBlendDraws,
+                                stats.indexedTriangleAlphaBlendPrimitives,
+                                stats.indexedTriangleAlphaBlendVertices);
+      }
+      if (scissorEnabled) {
+        addIndexedTriangleClass(stats.indexedTriangleScissorDraws,
+                                stats.indexedTriangleScissorPrimitives,
+                                stats.indexedTriangleScissorVertices);
+      }
+      if (textureMask != 0) {
+        addIndexedTriangleClass(stats.indexedTriangleTexturedDraws,
+                                stats.indexedTriangleTexturedPrimitives,
+                                stats.indexedTriangleTexturedVertices);
+      }
+      if (primitiveCount >= 4096) {
+        addIndexedTriangleClass(stats.indexedTriangleLarge4096Draws,
+                                stats.indexedTriangleLarge4096Primitives,
+                                stats.indexedTriangleLarge4096Vertices);
+      }
     }
     switch (primitiveType) {
       case core::PrimitiveType::PointList:

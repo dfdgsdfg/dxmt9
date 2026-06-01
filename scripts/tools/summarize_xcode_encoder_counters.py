@@ -175,6 +175,24 @@ JOINED_EXTRA_FIELDS = (
     "dxmt_draw_geometry_signature_duplicate_ratio",
     "dxmt_draw_geometry_signature_consecutive_duplicate_ratio",
     "dxmt_draw_geometry_signature_last",
+    "dxmt_indexed_triangle_opaque_depth_write_draws",
+    "dxmt_indexed_triangle_opaque_depth_write_primitives",
+    "dxmt_indexed_triangle_opaque_depth_write_vertices",
+    "dxmt_indexed_triangle_depth_read_draws",
+    "dxmt_indexed_triangle_depth_read_primitives",
+    "dxmt_indexed_triangle_depth_read_vertices",
+    "dxmt_indexed_triangle_alpha_blend_draws",
+    "dxmt_indexed_triangle_alpha_blend_primitives",
+    "dxmt_indexed_triangle_alpha_blend_vertices",
+    "dxmt_indexed_triangle_scissor_draws",
+    "dxmt_indexed_triangle_scissor_primitives",
+    "dxmt_indexed_triangle_scissor_vertices",
+    "dxmt_indexed_triangle_textured_draws",
+    "dxmt_indexed_triangle_textured_primitives",
+    "dxmt_indexed_triangle_textured_vertices",
+    "dxmt_indexed_triangle_large_4096_draws",
+    "dxmt_indexed_triangle_large_4096_primitives",
+    "dxmt_indexed_triangle_large_4096_vertices",
     "dxmt_indexed_base_vertex_samples",
     "dxmt_indexed_base_vertex_nonzero_draws",
     "dxmt_indexed_base_vertex_negative_draws",
@@ -669,6 +687,24 @@ def join_dxmt(row: dict[str, Any], dxmt: dict[tuple[int, int], dict[str, Any]]) 
         "dxmt_draw_geometry_signature_duplicates": "draw_geometry_signature_duplicates",
         "dxmt_draw_geometry_signature_consecutive_duplicates": "draw_geometry_signature_consecutive_duplicates",
         "dxmt_draw_geometry_signature_last": "draw_geometry_signature_last",
+        "dxmt_indexed_triangle_opaque_depth_write_draws": "indexed_triangle_opaque_depth_write_draws",
+        "dxmt_indexed_triangle_opaque_depth_write_primitives": "indexed_triangle_opaque_depth_write_primitives",
+        "dxmt_indexed_triangle_opaque_depth_write_vertices": "indexed_triangle_opaque_depth_write_vertices",
+        "dxmt_indexed_triangle_depth_read_draws": "indexed_triangle_depth_read_draws",
+        "dxmt_indexed_triangle_depth_read_primitives": "indexed_triangle_depth_read_primitives",
+        "dxmt_indexed_triangle_depth_read_vertices": "indexed_triangle_depth_read_vertices",
+        "dxmt_indexed_triangle_alpha_blend_draws": "indexed_triangle_alpha_blend_draws",
+        "dxmt_indexed_triangle_alpha_blend_primitives": "indexed_triangle_alpha_blend_primitives",
+        "dxmt_indexed_triangle_alpha_blend_vertices": "indexed_triangle_alpha_blend_vertices",
+        "dxmt_indexed_triangle_scissor_draws": "indexed_triangle_scissor_draws",
+        "dxmt_indexed_triangle_scissor_primitives": "indexed_triangle_scissor_primitives",
+        "dxmt_indexed_triangle_scissor_vertices": "indexed_triangle_scissor_vertices",
+        "dxmt_indexed_triangle_textured_draws": "indexed_triangle_textured_draws",
+        "dxmt_indexed_triangle_textured_primitives": "indexed_triangle_textured_primitives",
+        "dxmt_indexed_triangle_textured_vertices": "indexed_triangle_textured_vertices",
+        "dxmt_indexed_triangle_large_4096_draws": "indexed_triangle_large_4096_draws",
+        "dxmt_indexed_triangle_large_4096_primitives": "indexed_triangle_large_4096_primitives",
+        "dxmt_indexed_triangle_large_4096_vertices": "indexed_triangle_large_4096_vertices",
         "dxmt_indexed_base_vertex_samples": "indexed_base_vertex_samples",
         "dxmt_indexed_base_vertex_nonzero_draws": "indexed_base_vertex_nonzero_draws",
         "dxmt_indexed_base_vertex_negative_draws": "indexed_base_vertex_negative_draws",
@@ -2116,6 +2152,47 @@ def write_report(
                 str(row.get("dxmt_pixel_shader_last", "")),
                 str(row.get("dxmt_pixel_shader_source_last", "")),
                 str(row.get("dxmt_vsout_layout_last", "")),
+            ])
+            + " |"
+        )
+    lines.append("")
+    lines.append("## DXMT Indexed Triangle State Class Breakdown")
+    lines.append("")
+    lines.append(
+        "These buckets are not mutually exclusive. They split indexed triangle-list "
+        "draws by backend-relevant state so row/material probes can target the "
+        "geometry that actually dominates a hot encoder."
+    )
+    lines.append("")
+    state_header = [
+        "seq", "enc", "GPU ms", "VS write MiB",
+        "opaque dw d/p/v", "depth-read d/p/v", "alpha-blend d/p/v",
+        "scissor d/p/v", "textured d/p/v", "large4096 d/p/v",
+    ]
+    lines.append("| " + " | ".join(state_header) + " |")
+    lines.append("|" + "|".join("---:" for _ in state_header) + "|")
+
+    def state_triplet(row: dict[str, Any], prefix: str) -> str:
+        return (
+            f"{fmt_int(row.get(prefix + '_draws'))}/"
+            f"{fmt_int(row.get(prefix + '_primitives'))}/"
+            f"{fmt_int(row.get(prefix + '_vertices'))}"
+        )
+
+    for row in joined[:10]:
+        lines.append(
+            "| "
+            + " | ".join([
+                str(row.get("seq", "")),
+                str(row.get("enc", "")),
+                fmt_float(row.get("gpu_ms")),
+                fmt_float(row.get("vs_buffer_write_mib")),
+                state_triplet(row, "dxmt_indexed_triangle_opaque_depth_write"),
+                state_triplet(row, "dxmt_indexed_triangle_depth_read"),
+                state_triplet(row, "dxmt_indexed_triangle_alpha_blend"),
+                state_triplet(row, "dxmt_indexed_triangle_scissor"),
+                state_triplet(row, "dxmt_indexed_triangle_textured"),
+                state_triplet(row, "dxmt_indexed_triangle_large_4096"),
             ])
             + " |"
         )
