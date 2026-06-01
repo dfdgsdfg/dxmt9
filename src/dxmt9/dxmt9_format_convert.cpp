@@ -1,4 +1,5 @@
 #include "dxmt9_format_convert.hpp"
+#include "../util/config/config.hpp"
 
 namespace dxmt9::convert {
 
@@ -201,6 +202,43 @@ bool formatNeedsShaderReadSwizzle(Format format) {
   }
 }
 
+bool suppressRenderTargetPixelFormatViewEnabled() {
+  static const bool enabled = util::getenvFlag("DXMT9_SUPPRESS_RT_PIXEL_FORMAT_VIEW");
+  return enabled;
+}
+
+bool suppressX8RenderTargetPixelFormatViewEnabled() {
+  static const bool enabled = util::getenvFlag("DXMT9_SUPPRESS_X8_RT_PIXEL_FORMAT_VIEW");
+  return enabled;
+}
+
+bool textureNeedsShaderReadView(const TextureDesc& desc,
+                                bool suppressRenderTargetPixelFormatView,
+                                bool suppressX8RenderTargetPixelFormatView) {
+  if (!formatNeedsShaderReadSwizzle(desc.format)) {
+    return false;
+  }
+  const bool isRenderTarget =
+      (desc.usage & UsageRenderTarget) != 0 || (desc.usage & UsageDepthStencil) != 0;
+  const bool suppressibleR32FRtFormat = desc.format == Format::R32F;
+  const bool suppressibleX8RtFormat =
+      desc.format == Format::X8R8G8B8 || desc.format == Format::X8B8G8R8;
+  return !(isRenderTarget &&
+           ((suppressRenderTargetPixelFormatView && suppressibleR32FRtFormat) ||
+            (suppressX8RenderTargetPixelFormatView && suppressibleX8RtFormat)));
+}
+
+bool textureNeedsShaderReadView(const TextureDesc& desc,
+                                bool suppressRenderTargetPixelFormatView) {
+  return textureNeedsShaderReadView(desc, suppressRenderTargetPixelFormatView, false);
+}
+
+bool textureNeedsShaderReadView(const TextureDesc& desc) {
+  return textureNeedsShaderReadView(desc,
+                                    suppressRenderTargetPixelFormatViewEnabled(),
+                                    suppressX8RenderTargetPixelFormatViewEnabled());
+}
+
 WMTTextureSwizzleChannels toShaderReadSwizzle(Format format) {
   switch (format) {
     case Format::X8R8G8B8:
@@ -271,15 +309,30 @@ WMTTextureUsage toTextureUsage(const SurfaceDesc& desc) {
   return usage;
 }
 
-WMTTextureUsage toTextureUsage(const TextureDesc& desc) {
+WMTTextureUsage toTextureUsage(const TextureDesc& desc,
+                               bool suppressRenderTargetPixelFormatView,
+                               bool suppressX8RenderTargetPixelFormatView) {
   WMTTextureUsage usage = WMTTextureUsageShaderRead;
   if ((desc.usage & UsageRenderTarget) != 0 || (desc.usage & UsageDepthStencil) != 0) {
     usage = static_cast<WMTTextureUsage>(usage | WMTTextureUsageRenderTarget);
   }
-  if (formatNeedsShaderReadSwizzle(desc.format)) {
+  if (textureNeedsShaderReadView(desc,
+                                 suppressRenderTargetPixelFormatView,
+                                 suppressX8RenderTargetPixelFormatView)) {
     usage = static_cast<WMTTextureUsage>(usage | WMTTextureUsagePixelFormatView);
   }
   return usage;
+}
+
+WMTTextureUsage toTextureUsage(const TextureDesc& desc,
+                               bool suppressRenderTargetPixelFormatView) {
+  return toTextureUsage(desc, suppressRenderTargetPixelFormatView, false);
+}
+
+WMTTextureUsage toTextureUsage(const TextureDesc& desc) {
+  return toTextureUsage(desc,
+                        suppressRenderTargetPixelFormatViewEnabled(),
+                        suppressX8RenderTargetPixelFormatViewEnabled());
 }
 
 WMTPrimitiveType toPrimitiveType(PrimitiveType type) {

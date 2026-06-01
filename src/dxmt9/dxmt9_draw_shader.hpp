@@ -69,6 +69,11 @@ struct ShaderSourceContext {
   // Pair-local VSOut layout selected from fragment-input liveness when
   // DXMT9_TRIM_UNUSED_VARYINGS is enabled. Full layout by default.
   shaders::VSOutLayout vsOutLayout{};
+  // Opt-in X8 render-target compression probe. Bits mark fragment samplers
+  // whose D3D format has no alpha channel and therefore need `sample.a = 1`
+  // when the backend binds the raw Metal texture instead of a swizzled
+  // PixelFormatView.
+  std::uint32_t x8AlphaOneTextureMask = 0;
 };
 
 ShaderSourceContext makeShaderSourceContext(const core::DrawShaderLayoutContext& layout,

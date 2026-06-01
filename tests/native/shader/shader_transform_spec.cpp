@@ -1959,6 +1959,39 @@ void testVsOutputScratchTrimIsOptInAndUsesObservedOutputRange() {
   }
 }
 
+void testVsOutPointSizeProbeDropsOnlyPointSize() {
+  {
+    const ScopedUnsetEnv noProbe("DXMT9_PROBE_DROP_VSOUT_POINT_SIZE");
+    const auto layout = dxmt9::shaders::applyVSOutProbeOverrides(
+        dxmt9::shaders::fullVSOutLayout());
+    check(layout.pointSize, "VSOut point-size probe is off by default");
+    checkEqual(dxmt9::shaders::vsoutLayoutKey(layout), 0xfffu,
+               "default full VSOut layout key includes pointSize");
+  }
+
+  {
+    const ScopedSetEnv probe("DXMT9_PROBE_DROP_VSOUT_POINT_SIZE", "1");
+    const auto layout = dxmt9::shaders::applyVSOutProbeOverrides(
+        dxmt9::shaders::fullVSOutLayout());
+    check(!layout.pointSize, "VSOut point-size probe drops pointSize");
+    check(layout.color, "VSOut point-size probe keeps color");
+    check(layout.secondaryColor, "VSOut point-size probe keeps secondaryColor");
+    check(layout.fogFactor, "VSOut point-size probe keeps fogFactor");
+    checkEqual(layout.texcoordMask, 0xffu, "VSOut point-size probe keeps all texcoords");
+    checkEqual(dxmt9::shaders::vsoutLayoutKey(layout), 0x7ffu,
+               "VSOut point-size probe clears only the pointSize layout bit");
+
+    dxmt9::shaders::ShaderPreludeOptions options{};
+    options.vsOutLayout = layout;
+    const auto prelude = dxmt9::shaders::makeShaderPrelude(options);
+    checkNotContains(prelude, "[[point_size]]",
+                     "VSOut point-size probe removes Metal point_size attribute");
+    checkContains(prelude, "float fogFactor", "VSOut point-size probe leaves fogFactor");
+    checkContains(prelude, "float4 texcoord0", "VSOut point-size probe leaves texcoord0");
+    checkContains(prelude, "float4 texcoord7", "VSOut point-size probe leaves texcoord7");
+  }
+}
+
 void testVertexDepthOutThrowsDeterministically() {
   checkThrowsContains([] { translateVertex(makeVs20DepthOutBytecode()); },
                       "vertex depth output register is invalid",
@@ -2807,6 +2840,7 @@ int main() {
     const ScopedUnsetEnv noVertexYFlip("DXMT_DEBUG_FLIP_VERTEX_Y");
     const ScopedUnsetEnv noVertexTempTrim("DXMT9_TRIM_VERTEX_TEMPS");
     const ScopedUnsetEnv noVsOutputScratchTrim("DXMT9_TRIM_VS_OUTPUT_SCRATCH");
+    const ScopedUnsetEnv noVsOutPointSizeProbe("DXMT9_PROBE_DROP_VSOUT_POINT_SIZE");
 
     testD3DBCDecodeAndClassificationFixtures();
     testPs30VFaceDecodeAndSourceContract();
@@ -2826,6 +2860,7 @@ int main() {
     testVs30OutputSemanticMappingBySemanticIndex();
     testVsTempTrimIsOptInAndUsesObservedTempRange();
     testVsOutputScratchTrimIsOptInAndUsesObservedOutputRange();
+    testVsOutPointSizeProbeDropsOnlyPointSize();
     testVertexDepthOutThrowsDeterministically();
     testVs30HighOutputRegisterSemanticMapping();
     testVs30VertexDeclarationTypeLoads();

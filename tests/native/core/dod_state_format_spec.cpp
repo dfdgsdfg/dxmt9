@@ -336,6 +336,11 @@ void testShaderReadSwizzlePolicyForExpandedShaderReadFormats() {
   g16r16Desc.format = Format::G16R16;
   TextureDesc r32fDesc = normalDesc;
   r32fDesc.format = Format::R32F;
+  TextureDesc r32fRtDesc = r32fDesc;
+  r32fRtDesc.usage = UsageTexture | UsageRenderTarget;
+  TextureDesc x8RtDesc = normalDesc;
+  x8RtDesc.format = Format::X8R8G8B8;
+  x8RtDesc.usage = UsageTexture | UsageRenderTarget;
   check(!hasUsage(dxmt9::convert::toTextureUsage(normalDesc), WMTTextureUsagePixelFormatView),
         "ordinary textures do not request pixel-format views");
   check(hasUsage(dxmt9::convert::toTextureUsage(l8Desc), WMTTextureUsagePixelFormatView),
@@ -344,6 +349,37 @@ void testShaderReadSwizzlePolicyForExpandedShaderReadFormats() {
         "G16R16 textures request pixel-format views for shader-read swizzle");
   check(hasUsage(dxmt9::convert::toTextureUsage(r32fDesc), WMTTextureUsagePixelFormatView),
         "R32F textures request pixel-format views for shader-read swizzle");
+  check(dxmt9::convert::textureNeedsShaderReadView(r32fRtDesc, false),
+        "R32F render targets normally keep shader-read swizzle views");
+  check(hasUsage(dxmt9::convert::toTextureUsage(r32fRtDesc, false),
+                 WMTTextureUsagePixelFormatView),
+        "R32F render targets normally request pixel-format views");
+  check(!dxmt9::convert::textureNeedsShaderReadView(r32fRtDesc, true),
+        "opt-in RT PixelFormatView suppression drops shader-read swizzle views");
+  check(!hasUsage(dxmt9::convert::toTextureUsage(r32fRtDesc, true),
+                  WMTTextureUsagePixelFormatView),
+        "opt-in RT PixelFormatView suppression removes PixelFormatView usage");
+  check(hasUsage(dxmt9::convert::toTextureUsage(r32fRtDesc, true),
+                 WMTTextureUsageRenderTarget),
+        "opt-in RT PixelFormatView suppression preserves RenderTarget usage");
+  check(hasUsage(dxmt9::convert::toTextureUsage(r32fRtDesc, true),
+                 WMTTextureUsageShaderRead),
+        "opt-in RT PixelFormatView suppression preserves ShaderRead usage");
+  check(dxmt9::convert::textureNeedsShaderReadView(x8RtDesc, false),
+        "X8 render targets normally keep alpha-fill shader-read swizzle views");
+  check(dxmt9::convert::textureNeedsShaderReadView(x8RtDesc, true),
+        "R32F-only RT PixelFormatView suppression does not affect X8 render targets");
+  check(!dxmt9::convert::textureNeedsShaderReadView(x8RtDesc, false, true),
+        "opt-in X8 RT PixelFormatView suppression drops X8 shader-read swizzle views");
+  check(!hasUsage(dxmt9::convert::toTextureUsage(x8RtDesc, false, true),
+                  WMTTextureUsagePixelFormatView),
+        "opt-in X8 RT PixelFormatView suppression removes PixelFormatView usage");
+  check(hasUsage(dxmt9::convert::toTextureUsage(x8RtDesc, false, true),
+                 WMTTextureUsageRenderTarget),
+        "opt-in X8 RT PixelFormatView suppression preserves RenderTarget usage");
+  check(hasUsage(dxmt9::convert::toTextureUsage(x8RtDesc, false, true),
+                 WMTTextureUsageShaderRead),
+        "opt-in X8 RT PixelFormatView suppression preserves ShaderRead usage");
   checkEq(dxmt9::convert::toShaderReadViewSliceCount(TextureType::TwoD), std::uint16_t{1},
           "2D shader-read view covers one slice");
   checkEq(dxmt9::convert::toShaderReadViewSliceCount(TextureType::Cube), std::uint16_t{6},

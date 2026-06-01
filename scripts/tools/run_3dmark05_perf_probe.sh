@@ -11,9 +11,13 @@ capture_gputrace=1
 dry_run=0
 dump_shaders=0
 trim_unused_varyings=0
+drop_vsout_point_size=0
 trim_vertex_temps=0
 trim_vs_output_scratch=0
 split_sparse_const_records=0
+suppress_rt_pixel_format_view=0
+suppress_x8_rt_pixel_format_view=0
+x8_shader_alpha_fill=0
 native_metal_base_vertex=0
 split_large_indexed_draws=
 aggressive_color_dontcare=0
@@ -23,6 +27,7 @@ disable_scissor=0
 force_visible=0
 compare_baseline_output=${DXMT_3DMARK05_COMPARE_BASELINE_OUTPUT:-}
 compare_baseline_joined=${DXMT_3DMARK05_COMPARE_BASELINE_JOINED:-}
+encoder_breakdown_seq=${DXMT_3DMARK05_ENCODER_BREAKDOWN_SEQ:-}
 require_color_dontcare_increase=0
 require_depth_dontcare_increase=0
 require_tile_preservation_decrease=0
@@ -68,11 +73,17 @@ Options:
   --timeout SEC       run_experiment timeout seconds (default: 180)
   --result-file NAME  3DMark05 result filename argument (default: dxmt9_gt1.3dr)
   --no-gputrace       Do not set DXMT_METAL_CAPTURE_FRAME/PATH
+  --encoder-breakdown-seq N
+                      Set DXMT9_PERF_ENCODER_BREAKDOWN_SEQ=N to emit only one
+                      RenderPass[seq=N,...] frame's encoder breakdown
   --dump-shaders      Dump translated MSL and D3D shader bytecode under
                       traces/<run-id>/analysis/shaders
   --trim-unused-varyings
                       Set DXMT9_TRIM_UNUSED_VARYINGS=1 for pair-local VSOut
                       liveness/VS buffer-write experiments
+  --drop-vsout-point-size
+                      Set DXMT9_PROBE_DROP_VSOUT_POINT_SIZE=1 to remove only
+                      VSOut [[point_size]] for pipeline-shape A/B probes
   --trim-vertex-temps
                       Set DXMT9_TRIM_VERTEX_TEMPS=1 for translated VS temp
                       register/spill experiments
@@ -82,6 +93,15 @@ Options:
   --split-sparse-const-records
                       Set DXMT9_SPLIT_SPARSE_CONST_RECORDS=1 for sparse
                       constant-upload record splitting experiments
+  --suppress-rt-pixel-format-view
+                      Set DXMT9_SUPPRESS_RT_PIXEL_FORMAT_VIEW=1 to test
+                      RT-only swizzle formats without PixelFormatView usage
+  --suppress-x8-rt-pixel-format-view
+                      Set DXMT9_SUPPRESS_X8_RT_PIXEL_FORMAT_VIEW=1 to test
+                      X8 RT-only swizzle formats without PixelFormatView usage
+  --x8-shader-alpha-fill
+                      Set DXMT9_X8_SHADER_ALPHA_FILL=1 to force sampled X8
+                      texture alpha to 1.0 in shader variants
   --native-metal-base-vertex
                       Set DXMT9_USE_NATIVE_METAL_BASE_VERTEX=1 for indexed
                       draw baseVertex / VS buffer-write experiments
@@ -191,6 +211,10 @@ while (($#)); do
       result_file=${2:?missing value for --result-file}
       shift 2
       ;;
+    --encoder-breakdown-seq)
+      encoder_breakdown_seq=${2:?missing value for --encoder-breakdown-seq}
+      shift 2
+      ;;
     --no-gputrace)
       capture_gputrace=0
       shift
@@ -203,6 +227,10 @@ while (($#)); do
       trim_unused_varyings=1
       shift
       ;;
+    --drop-vsout-point-size)
+      drop_vsout_point_size=1
+      shift
+      ;;
     --trim-vertex-temps)
       trim_vertex_temps=1
       shift
@@ -213,6 +241,18 @@ while (($#)); do
       ;;
     --split-sparse-const-records)
       split_sparse_const_records=1
+      shift
+      ;;
+    --suppress-rt-pixel-format-view)
+      suppress_rt_pixel_format_view=1
+      shift
+      ;;
+    --suppress-x8-rt-pixel-format-view)
+      suppress_x8_rt_pixel_format_view=1
+      shift
+      ;;
+    --x8-shader-alpha-fill)
+      x8_shader_alpha_fill=1
       shift
       ;;
     --native-metal-base-vertex)
@@ -578,6 +618,10 @@ env_args=(
   "DXMT_3DMARK05_LOG=$output_dir/3dmark05-direct.log"
 )
 
+if [[ -n "$encoder_breakdown_seq" ]]; then
+  env_args+=("DXMT9_PERF_ENCODER_BREAKDOWN_SEQ=$encoder_breakdown_seq")
+fi
+
 if (( capture_gputrace )); then
   env_args+=(
     "MTL_CAPTURE_ENABLED=1"
@@ -594,6 +638,10 @@ if (( trim_unused_varyings )); then
   env_args+=("DXMT9_TRIM_UNUSED_VARYINGS=1")
 fi
 
+if (( drop_vsout_point_size )); then
+  env_args+=("DXMT9_PROBE_DROP_VSOUT_POINT_SIZE=1")
+fi
+
 if (( trim_vertex_temps )); then
   env_args+=("DXMT9_TRIM_VERTEX_TEMPS=1")
 fi
@@ -604,6 +652,18 @@ fi
 
 if (( split_sparse_const_records )); then
   env_args+=("DXMT9_SPLIT_SPARSE_CONST_RECORDS=1")
+fi
+
+if (( suppress_rt_pixel_format_view )); then
+  env_args+=("DXMT9_SUPPRESS_RT_PIXEL_FORMAT_VIEW=1")
+fi
+
+if (( suppress_x8_rt_pixel_format_view )); then
+  env_args+=("DXMT9_SUPPRESS_X8_RT_PIXEL_FORMAT_VIEW=1")
+fi
+
+if (( x8_shader_alpha_fill )); then
+  env_args+=("DXMT9_X8_SHADER_ALPHA_FILL=1")
 fi
 
 if (( native_metal_base_vertex )); then

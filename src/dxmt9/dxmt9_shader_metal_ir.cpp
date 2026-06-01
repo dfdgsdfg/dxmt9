@@ -2389,6 +2389,12 @@ std::string translateSpirvToMsl(const SpirvModule& module,
     out << "  float bias[" << kMaxTextureStages << "];\n";
     out << "};\n";
   }
+  if (context.x8AlphaOneTextureMask != 0u) {
+    out << "inline float4 dxmt9_x8_alpha_one(float4 color) {\n";
+    out << "  color.a = 1.0f;\n";
+    out << "  return color;\n";
+    out << "}\n";
+  }
   const char* fragmentReturnType = usesFragmentOutStruct ? "FSOut" : "float4";
   auto emitFrontFacingParameter = [&] {
     if (usesVFaceInput) {
@@ -2662,6 +2668,12 @@ std::string translateSpirvToMsl(const SpirvModule& module,
     auto sampleCoord = [&](u32 sampler, const std::string& coord) {
       return sampleCoordExpression(samplerTextureType(module, context, sampler), coord, forcePixelVFlip);
     };
+    auto wrapTextureSample = [&](u32 sampler, std::string sample) {
+      if ((context.x8AlphaOneTextureMask & (1u << sampler)) != 0u) {
+        return "dxmt9_x8_alpha_one(" + sample + ")";
+      }
+      return sample;
+    };
     auto sampleTexture = [&](u32 sampler, const std::string& coord) {
       if (context.unboundTextureFallback &&
           (sampler >= context.textures.size() || !context.textures[sampler])) {
@@ -2678,8 +2690,10 @@ std::string translateSpirvToMsl(const SpirvModule& module,
       if (emitLodBias && sampler < kMaxTextureStages) {
         biasArg = ", bias(samplerLodBias.bias[" + std::to_string(sampler) + "])";
       }
-      return "tex" + std::to_string(sampler) + ".sample(samp" + std::to_string(sampler) + ", "
-             + sampleCoord(sampler, coord) + biasArg + ")";
+      return wrapTextureSample(
+          sampler,
+          "tex" + std::to_string(sampler) + ".sample(samp" + std::to_string(sampler) + ", "
+          + sampleCoord(sampler, coord) + biasArg + ")");
     };
     auto legacyStage = [&] {
       if (instruction.operands.empty()) {
@@ -3307,9 +3321,11 @@ std::string translateSpirvToMsl(const SpirvModule& module,
                   (sampler >= context.textures.size() || !context.textures[sampler])) {
                 value = "float4(0.0f, 0.0f, 0.0f, 1.0f)";
               } else {
-                value = "tex" + std::to_string(sampler) + ".sample(samp" + std::to_string(sampler) + ", " +
-                        sampleCoord(sampler, coord) + ", " +
-                        textureGradientExpression(samplerTextureType(module, context, sampler), ddx, ddy) + ")";
+                value = wrapTextureSample(
+                    sampler,
+                    "tex" + std::to_string(sampler) + ".sample(samp" + std::to_string(sampler) + ", " +
+                    sampleCoord(sampler, coord) + ", " +
+                    textureGradientExpression(samplerTextureType(module, context, sampler), ddx, ddy) + ")");
               }
             }
             break;
@@ -3321,8 +3337,10 @@ std::string translateSpirvToMsl(const SpirvModule& module,
 	                  (sampler >= context.textures.size() || !context.textures[sampler])) {
 	                value = "float4(0.0f, 0.0f, 0.0f, 1.0f)";
 	              } else {
-	                value = "tex" + std::to_string(sampler) + ".sample(samp" + std::to_string(sampler) + ", " +
-                        sampleCoord(sampler, coord) + ", level(" + coord + ".w))";
+	                value = wrapTextureSample(
+                      sampler,
+                      "tex" + std::to_string(sampler) + ".sample(samp" + std::to_string(sampler) + ", " +
+                      sampleCoord(sampler, coord) + ", level(" + coord + ".w))");
 	              }
 	            }
 	            break;

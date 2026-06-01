@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import json
+import importlib.util
 import subprocess
 import tempfile
 import unittest
@@ -13,6 +14,17 @@ from pathlib import Path
 REPO_ROOT = Path(__file__).resolve().parents[2]
 RUN_WRAPPER = REPO_ROOT / "scripts" / "tools" / "run_3dmark05_perf_probe.sh"
 FINALIZER = REPO_ROOT / "scripts" / "tools" / "finalize_3dmark05_perf_probe.sh"
+SUMMARIZER = REPO_ROOT / "scripts" / "tools" / "summarize_3dmark05_perf.py"
+XCODE_SUMMARIZER = REPO_ROOT / "scripts" / "tools" / "summarize_xcode_encoder_counters.py"
+
+
+def load_xcode_summarizer():
+    spec = importlib.util.spec_from_file_location("summarize_xcode_encoder_counters", XCODE_SUMMARIZER)
+    assert spec is not None
+    module = importlib.util.module_from_spec(spec)
+    assert spec.loader is not None
+    spec.loader.exec_module(module)
+    return module
 
 
 def write_result(path: Path) -> None:
@@ -189,6 +201,83 @@ class ThreeDMark05ProbeScriptTests(unittest.TestCase):
 
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertIn("DXMT9_TRIM_VERTEX_TEMPS=1", result.stdout)
+
+    def test_wrapper_dry_run_includes_vsout_point_size_probe_env(self) -> None:
+        result = self.run_script(
+            RUN_WRAPPER,
+            "--no-gputrace",
+            "--drop-vsout-point-size",
+            "--dry-run",
+        )
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("DXMT9_PROBE_DROP_VSOUT_POINT_SIZE=1", result.stdout)
+
+    def test_wrapper_dry_run_includes_x8_shader_alpha_fill_env(self) -> None:
+        result = self.run_script(
+            RUN_WRAPPER,
+            "--no-gputrace",
+            "--suppress-x8-rt-pixel-format-view",
+            "--x8-shader-alpha-fill",
+            "--dry-run",
+        )
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("DXMT9_SUPPRESS_X8_RT_PIXEL_FORMAT_VIEW=1", result.stdout)
+        self.assertIn("DXMT9_X8_SHADER_ALPHA_FILL=1", result.stdout)
+
+    def test_summarizer_accepts_partial_log_without_result_json(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            output_dir = Path(tmp) / "run"
+            output_dir.mkdir()
+            output_dir.joinpath("dxmt9.log").write_text(
+                "\n".join([
+                    "[dxmt9-bridge-perf] bridge_factory=1 bridge_draw=2",
+                    "[dxmt9-perf-encoder seq=60 encoder=2 draw_calls=3 "
+                    "pso_state_samples=3 stream_handle_changes=4]",
+                    "[dxmt9-perf-encoder-stream seq=60 encoder=2 stream=0 samples=3 "
+                    "metal_binds=3]",
+                    "[dxmt9-perf] present_encoded=5 draw_calls=7 "
+                    "map_buffer_total_ms=0.250 completion_wait_ms=1.500",
+                ]),
+                encoding="utf-8",
+            )
+
+            result = subprocess.run(
+                ["python3", str(SUMMARIZER), str(output_dir)],
+                cwd=REPO_ROOT,
+                text=True,
+                capture_output=True,
+                check=False,
+            )
+
+            summary = output_dir / "3dmark05-perf-summary.md"
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertTrue(summary.exists())
+            text = summary.read_text(encoding="utf-8")
+            self.assertIn("- Status: `partial-log`", text)
+            self.assertIn("| `present_encoded` | `5` |", text)
+            self.assertTrue(output_dir.joinpath("3dmark05-perf-encoders.csv").exists())
+            self.assertTrue(output_dir.joinpath("3dmark05-perf-encoder-streams.csv").exists())
+
+    def test_xcode_summarizer_joins_x8_shader_alpha_fill_fields(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            encoder_csv = Path(tmp) / "encoders.csv"
+            encoder_csv.write_text(
+                "\n".join([
+                    "seq,encoder,x8_rt_texture_binding_samples,x8_shader_alpha_fill_samples,x8_shader_alpha_fill_mask_or",
+                    "60,8,2,2,0x3",
+                ]),
+                encoding="utf-8",
+            )
+
+            summarizer = load_xcode_summarizer()
+            dxmt = summarizer.load_dxmt_from_csv(encoder_csv)
+            joined = summarizer.join_dxmt({"seq": 60, "enc": 8}, dxmt)
+
+        self.assertEqual(joined["dxmt_x8_rt_texture_binding_samples"], 2)
+        self.assertEqual(joined["dxmt_x8_shader_alpha_fill_samples"], 2)
+        self.assertEqual(joined["dxmt_x8_shader_alpha_fill_mask_or"], "0x3")
 
     def test_wrapper_dry_run_includes_vs_output_scratch_trim_env(self) -> None:
         result = self.run_script(

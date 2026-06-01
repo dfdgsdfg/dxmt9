@@ -919,6 +919,12 @@ std::string makeFfpPixelSource(const FfpPixelKey& key,
     out << "  float bias[" << kMaxTextureStages << "];\n";
     out << "};\n";
   }
+  if (context.x8AlphaOneTextureMask != 0u) {
+    out << "inline float4 dxmt9_x8_alpha_one(float4 color) {\n";
+    out << "  color.a = 1.0f;\n";
+    out << "  return color;\n";
+    out << "}\n";
+  }
   // R-BACK-12.22..12.26 MSL routing — when argbufHybrid is set, the
   // fragment entry point takes a single argument buffer at slot 30 for
   // `psConsts`/`ffpPs`. Texture/sampler parameters remain direct so
@@ -1042,6 +1048,15 @@ std::string makeFfpPixelSource(const FfpPixelKey& key,
     s << "dxmt9_select_texcoord(in, " << coordIndex << "u).xy";
     return s.str();
   };
+  const auto sampleExpr = [&](size_t stage, std::string coord) {
+    std::string sample = "tex" + std::to_string(stage) + ".sample(samp" +
+                         std::to_string(stage) + ", " + coord +
+                         biasArg(stage) + ")";
+    if ((context.x8AlphaOneTextureMask & (1u << stage)) != 0u) {
+      sample = "dxmt9_x8_alpha_one(" + sample + ")";
+    }
+    return sample;
+  };
   if (hasEnabledStages) {
     if (debugFfpUv) {
       if (key.pointSpriteEnable) {
@@ -1064,8 +1079,7 @@ std::string makeFfpPixelSource(const FfpPixelKey& key,
       // + a TEXTURE0 transform). conf-d3d9-intent-probe regression coverage:
       // `texcoord-index-matrix`.
       const u32 coordIndex = static_cast<u32>(stage);
-      out << "  return tex" << stage << ".sample(samp" << stage
-          << ", " << sampleCoord(coordIndex) << biasArg(stage) << ");\n";
+      out << "  return " << sampleExpr(stage, sampleCoord(coordIndex)) << ";\n";
       out << "}\n";
       out << "// ffp pixel hash " << key.hash << "\n";
       return out.str();
@@ -1076,8 +1090,7 @@ std::string makeFfpPixelSource(const FfpPixelKey& key,
       // the FFP VS already wrote the transformed coord into
       // `out.texcoord<stage>`.
       const u32 coordIndex = static_cast<u32>(stage);
-      out << "  float alpha = tex" << stage << ".sample(samp" << stage
-          << ", " << sampleCoord(coordIndex) << biasArg(stage) << ").a;\n";
+      out << "  float alpha = " << sampleExpr(stage, sampleCoord(coordIndex)) << ".a;\n";
       out << "  return float4(alpha, alpha, alpha, 1.0);\n";
       out << "}\n";
       out << "// ffp pixel hash " << key.hash << "\n";
@@ -1132,9 +1145,10 @@ std::string makeFfpPixelSource(const FfpPixelKey& key,
               << s << "].y * (texColor" << bumpStage
               << ".r - 0.5f) + ffpPs.bumpEnvMat[" << s << "].w * (texColor"
               << bumpStage << ".g - 0.5f));\n";
-          out << "  float4 texColor" << stage << " = tex" << stage
-              << ".sample(samp" << stage << ", baseUV" << stage
-              << " + bumpDelta" << stage << biasArg(stage) << ");\n";
+          out << "  float4 texColor" << stage << " = "
+              << sampleExpr(stage, std::string("baseUV") + std::to_string(stage) +
+                                       " + bumpDelta" + std::to_string(stage))
+              << ";\n";
           if (isBumpEnvLum) {
             out << "  float bumpLum" << stage
                 << " = saturate(texColor" << bumpStage << ".b * ffpPs.bumpEnvLum["
@@ -1142,8 +1156,8 @@ std::string makeFfpPixelSource(const FfpPixelKey& key,
             out << "  texColor" << stage << ".rgb *= bumpLum" << stage << ";\n";
           }
         } else {
-          out << "  float4 texColor" << stage << " = tex" << stage << ".sample(samp" << stage
-              << ", " << sampleCoord(coordIndex) << biasArg(stage) << ");\n";
+          out << "  float4 texColor" << stage << " = "
+              << sampleExpr(stage, sampleCoord(coordIndex)) << ";\n";
         }
       } else {
         out << "  float4 texColor" << stage << " = float4(1.0f);\n";

@@ -398,6 +398,8 @@ struct Counters {
   // staging-copy fallback was hit when it should not have been.
   std::atomic<std::uint64_t> managedTextureUploadBlitCount{0};
   std::atomic<std::uint64_t> managedTextureUploadBlitBytes{0};
+  std::atomic<std::uint64_t> texturePixelFormatViewSuppressedRtCount{0};
+  std::atomic<std::uint64_t> texturePixelFormatViewSuppressedRtBytes{0};
   // R-BACK-14.* — MTLHeap small-resource pooling counters. Aggregate across
   // all heap families (priv-tex / shared-tex-um / shared-buf); per-family
   // breakdown can be added later if profiling shows mis-allocation between
@@ -1186,6 +1188,8 @@ constexpr CounterEntry kCounterTable[] = {
     {"uniform_volatile_pushes", CounterEntry::Kind::UnsignedCount, &Counters::uniformVolatilePushes, nullptr, nullptr, 0.0},
     {"managed_texture_upload_blit_count", CounterEntry::Kind::UnsignedCount, &Counters::managedTextureUploadBlitCount, nullptr, nullptr, 0.0},
     {"managed_texture_upload_blit_bytes", CounterEntry::Kind::UnsignedCount, &Counters::managedTextureUploadBlitBytes, nullptr, nullptr, 0.0},
+    {"texture_pixel_format_view_suppressed_rt_count", CounterEntry::Kind::UnsignedCount, &Counters::texturePixelFormatViewSuppressedRtCount, nullptr, nullptr, 0.0},
+    {"texture_pixel_format_view_suppressed_rt_bytes", CounterEntry::Kind::UnsignedCount, &Counters::texturePixelFormatViewSuppressedRtBytes, nullptr, nullptr, 0.0},
     {"heap_alloc_count", CounterEntry::Kind::UnsignedCount, &Counters::heapAllocCount, nullptr, nullptr, 0.0},
     {"heap_bytes_allocated", CounterEntry::Kind::UnsignedCount, &Counters::heapBytesAllocated, nullptr, nullptr, 0.0},
     {"heap_instance_count", CounterEntry::Kind::UnsignedCount, &Counters::heapInstanceCount, nullptr, nullptr, 0.0},
@@ -2320,6 +2324,11 @@ void countManagedTextureUploadBlit(std::uint64_t bytes) {
   add(counters().managedTextureUploadBlitBytes, bytes);
 }
 
+void countTexturePixelFormatViewSuppressedRt(std::uint64_t bytes) {
+  add(counters().texturePixelFormatViewSuppressedRtCount);
+  add(counters().texturePixelFormatViewSuppressedRtBytes, bytes);
+}
+
 // R-BACK-14.* — MTLHeap pooling counters.
 void countHeapAlloc(std::uint64_t bytes) {
   add(counters().heapAllocCount);
@@ -3000,6 +3009,19 @@ bool encoderBreakdownEnabled() {
   return enabled() && value;
 }
 
+std::uint64_t encoderBreakdownSeqFilter() {
+  static const std::uint64_t value = []() -> std::uint64_t {
+    const char* env = std::getenv("DXMT9_PERF_ENCODER_BREAKDOWN_SEQ");
+    if (!env || env[0] == '\0') {
+      return 0;
+    }
+    char* end = nullptr;
+    const auto parsed = std::strtoull(env, &end, 10);
+    return end != env ? static_cast<std::uint64_t>(parsed) : 0;
+  }();
+  return value;
+}
+
 void emitEncoderBreakdown(const EncoderBreakdown& b) {
   if (!encoderBreakdownEnabled()) {
     return;
@@ -3007,6 +3029,12 @@ void emitEncoderBreakdown(const EncoderBreakdown& b) {
   std::fprintf(
       stderr,
       "[dxmt9-perf-encoder seq=%llu encoder=%llu rt=0x%llx depth=0x%llx "
+      "rt_format=%llu rt_width=%llu rt_height=%llu rt_bpp=%llu "
+      "rt_alias_texture=0x%llx rt_texture_usage=0x%llx "
+      "rt_format_swizzle=%llu rt_texture_needs_shader_read_view=%llu "
+      "depth_format=%llu depth_width=%llu depth_height=%llu depth_bpp=%llu "
+      "depth_alias_texture=0x%llx depth_texture_usage=0x%llx "
+      "depth_format_swizzle=%llu depth_texture_needs_shader_read_view=%llu "
       "end_reason=%s draw_calls=%llu indexed_draws=%llu "
       "expanded_indexed_draws=%llu ffp_draws=%llu programmable_draws=%llu "
       "pretransformed_draws=%llu textured_draws=%llu "
@@ -3019,6 +3047,18 @@ void emitEncoderBreakdown(const EncoderBreakdown& b) {
       "alpha_test_enabled_draws=%llu clip_plane_enabled_draws=%llu "
       "point_draws=%llu line_draws=%llu triangle_draws=%llu primitive_count=%llu "
       "triangle_estimate=%llu vertex_count=%llu texture_mask_or=0x%llx "
+      "fragment_texture_binding_samples=%llu "
+      "fragment_texture_binding_mask_or=0x%llx "
+      "x8_rt_texture_binding_samples=%llu "
+      "x8_rt_texture_binding_mask_or=0x%llx "
+      "x8_rt_texture_binding_unique_handles=%llu "
+      "x8_rt_texture_binding_unique_handle_overflows=%llu "
+      "x8_rt_texture_binding_shader_read_view_samples=%llu "
+      "x8_rt_texture_binding_active_rt_alias_samples=%llu "
+      "x8_shader_alpha_fill_samples=%llu "
+      "x8_shader_alpha_fill_mask_or=0x%llx "
+      "x8_rt_texture_binding_last_stage=%llu "
+      "x8_rt_texture_binding_last_handle=0x%llx "
       "draw_primitive_min=%llu draw_primitive_max=%llu "
       "draw_vertex_min=%llu draw_vertex_max=%llu "
       "draw_primitive_bucket_1_63=%llu "
@@ -3130,6 +3170,22 @@ void emitEncoderBreakdown(const EncoderBreakdown& b) {
       static_cast<unsigned long long>(b.encoderIndex),
       static_cast<unsigned long long>(b.rtHandle),
       static_cast<unsigned long long>(b.depthHandle),
+      static_cast<unsigned long long>(b.rtFormat),
+      static_cast<unsigned long long>(b.rtWidth),
+      static_cast<unsigned long long>(b.rtHeight),
+      static_cast<unsigned long long>(b.rtBytesPerPixel),
+      static_cast<unsigned long long>(b.rtAliasTexture),
+      static_cast<unsigned long long>(b.rtTextureUsage),
+      static_cast<unsigned long long>(b.rtFormatNeedsShaderReadSwizzle),
+      static_cast<unsigned long long>(b.rtTextureNeedsShaderReadView),
+      static_cast<unsigned long long>(b.depthFormat),
+      static_cast<unsigned long long>(b.depthWidth),
+      static_cast<unsigned long long>(b.depthHeight),
+      static_cast<unsigned long long>(b.depthBytesPerPixel),
+      static_cast<unsigned long long>(b.depthAliasTexture),
+      static_cast<unsigned long long>(b.depthTextureUsage),
+      static_cast<unsigned long long>(b.depthFormatNeedsShaderReadSwizzle),
+      static_cast<unsigned long long>(b.depthTextureNeedsShaderReadView),
       splitReasonName(b.endReason),
       static_cast<unsigned long long>(b.drawCalls),
       static_cast<unsigned long long>(b.indexedDraws),
@@ -3160,6 +3216,18 @@ void emitEncoderBreakdown(const EncoderBreakdown& b) {
       static_cast<unsigned long long>(b.triangleEstimate),
       static_cast<unsigned long long>(b.vertexCount),
       static_cast<unsigned long long>(b.textureMaskOr),
+      static_cast<unsigned long long>(b.fragmentTextureBindingSamples),
+      static_cast<unsigned long long>(b.fragmentTextureBindingMaskOr),
+      static_cast<unsigned long long>(b.x8RtTextureBindingSamples),
+      static_cast<unsigned long long>(b.x8RtTextureBindingMaskOr),
+      static_cast<unsigned long long>(b.x8RtTextureBindingUniqueHandles),
+      static_cast<unsigned long long>(b.x8RtTextureBindingUniqueHandleOverflows),
+      static_cast<unsigned long long>(b.x8RtTextureBindingShaderReadViewSamples),
+      static_cast<unsigned long long>(b.x8RtTextureBindingActiveRtAliasSamples),
+      static_cast<unsigned long long>(b.x8ShaderAlphaFillSamples),
+      static_cast<unsigned long long>(b.x8ShaderAlphaFillMaskOr),
+      static_cast<unsigned long long>(b.x8RtTextureBindingLastStage),
+      static_cast<unsigned long long>(b.x8RtTextureBindingLastHandle),
       static_cast<unsigned long long>(b.drawPrimitiveCountMin),
       static_cast<unsigned long long>(b.drawPrimitiveCountMax),
       static_cast<unsigned long long>(b.drawVertexCountMin),

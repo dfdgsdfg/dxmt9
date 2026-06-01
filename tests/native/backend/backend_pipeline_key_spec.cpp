@@ -490,7 +490,8 @@ void testShaderVariantKeyCarriesSourceIdentity() {
       /*forcePixelVFlip=*/false,
       /*debugFfpUv=*/false,
       /*debugFfpTexture=*/false,
-      /*debugFfpAlpha=*/false);
+      /*debugFfpAlpha=*/false,
+      /*probeDropVSOutPointSize=*/false);
   const auto debugUv = dxmt9::pipeline::makeShaderSourceDebugEnvKey(
       /*trimUnusedVaryings=*/true,
       /*trimVertexTemps=*/true,
@@ -503,7 +504,8 @@ void testShaderVariantKeyCarriesSourceIdentity() {
       /*forcePixelVFlip=*/false,
       /*debugFfpUv=*/false,
       /*debugFfpTexture=*/false,
-      /*debugFfpAlpha=*/false);
+      /*debugFfpAlpha=*/false,
+      /*probeDropVSOutPointSize=*/true);
   check(debugOff != debugUv, "pure debug env key responds to source-affecting values");
 
   auto debugEnvChanged = base;
@@ -529,6 +531,12 @@ void testShaderVariantKeyCarriesSourceIdentity() {
   check(!(tileSourceChanged == base), "actual tile source hash changes key equality");
   check(dxmt9::pipeline::ShaderVariantKeyHash{}(tileSourceChanged) != baseHash,
         "actual tile source hash changes key hash");
+
+  auto x8AlphaFillChanged = base;
+  x8AlphaFillChanged.x8AlphaOneTextureMask = 1u << 2u;
+  check(!(x8AlphaFillChanged == base), "X8 alpha-fill sampler mask changes key equality");
+  check(dxmt9::pipeline::ShaderVariantKeyHash{}(x8AlphaFillChanged) != baseHash,
+        "X8 alpha-fill sampler mask changes key hash");
 }
 
 void testShaderVariantProbeKeyDropsOnlyActualSourceHashes() {
@@ -544,6 +552,7 @@ void testShaderVariantProbeKeyDropsOnlyActualSourceHashes() {
   sourceBacked.textureMask = 1u << 3u;
   sourceBacked.textured = true;
   sourceBacked.sampleCount = 4u;
+  sourceBacked.x8AlphaOneTextureMask = 1u << 3u;
 
   auto expectedProbe = sourceBacked;
   expectedProbe.vertexSourceHash = 0;
@@ -555,6 +564,8 @@ void testShaderVariantProbeKeyDropsOnlyActualSourceHashes() {
         "probe key preserves canonical variant fields and drops only actual source hashes");
   checkEq(probe.vsOutLayoutKey, sourceBacked.vsOutLayoutKey,
           "probe key preserves VSOut layout identity");
+  checkEq(probe.x8AlphaOneTextureMask, sourceBacked.x8AlphaOneTextureMask,
+          "probe key preserves X8 alpha-fill sampler identity");
   check(dxmt9::pipeline::ShaderVariantKeyHash{}(probe) !=
             dxmt9::pipeline::ShaderVariantKeyHash{}(sourceBacked),
         "probe and source-backed keys occupy distinct hash identities");

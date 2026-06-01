@@ -2,8 +2,10 @@
 """Summarize a 3DMark05 dxmt9 perf output directory.
 
 The script consumes `result.json` and, when present, `[dxmt9-perf-encoder]`
-lines from `dxmt9.log`. It is intentionally narrow: the output is a compact
-triage report for the GT1 bottleneck work tracked in specs/perfomance.plan.md.
+lines from `dxmt9.log`. If a diagnostic run is interrupted before result.json
+is written, it can synthesize a partial result from the final `[dxmt9-perf]`
+line. It is intentionally narrow: the output is a compact triage report for
+the GT1 bottleneck work tracked in specs/perfomance.plan.md.
 """
 
 from __future__ import annotations
@@ -19,6 +21,8 @@ from typing import Any
 KEY_VALUE_RE = re.compile(r"\b([A-Za-z0-9_]+)=([^\s]+)")
 ENCODER_PREFIX = "[dxmt9-perf-encoder "
 STREAM_PREFIX = "[dxmt9-perf-encoder-stream "
+PERF_PREFIX = "[dxmt9-perf] "
+BRIDGE_PREFIX = "[dxmt9-bridge-perf] "
 
 RUN_COUNTERS = (
     "present_encoded",
@@ -294,6 +298,8 @@ TOP_ENCODER_KEYS = (
     "depth_enabled_draws",
     "depth_write_draws",
     "scissor_enabled_draws",
+    "x8_rt_texture_binding_samples",
+    "x8_shader_alpha_fill_samples",
     "vertex_count",
     "triangle_estimate",
     "draw_primitive_min",
@@ -336,6 +342,22 @@ ENCODER_CSV_KEYS = (
     "encoder",
     "rt",
     "depth",
+    "rt_format",
+    "rt_width",
+    "rt_height",
+    "rt_bpp",
+    "rt_alias_texture",
+    "rt_texture_usage",
+    "rt_format_swizzle",
+    "rt_texture_needs_shader_read_view",
+    "depth_format",
+    "depth_width",
+    "depth_height",
+    "depth_bpp",
+    "depth_alias_texture",
+    "depth_texture_usage",
+    "depth_format_swizzle",
+    "depth_texture_needs_shader_read_view",
     "end_reason",
     "draw_calls",
     "indexed_draws",
@@ -366,6 +388,18 @@ ENCODER_CSV_KEYS = (
     "triangle_estimate",
     "vertex_count",
     "texture_mask_or",
+    "fragment_texture_binding_samples",
+    "fragment_texture_binding_mask_or",
+    "x8_rt_texture_binding_samples",
+    "x8_rt_texture_binding_mask_or",
+    "x8_rt_texture_binding_unique_handles",
+    "x8_rt_texture_binding_unique_handle_overflows",
+    "x8_rt_texture_binding_shader_read_view_samples",
+    "x8_rt_texture_binding_active_rt_alias_samples",
+    "x8_shader_alpha_fill_samples",
+    "x8_shader_alpha_fill_mask_or",
+    "x8_rt_texture_binding_last_stage",
+    "x8_rt_texture_binding_last_handle",
     "draw_primitive_min",
     "draw_primitive_max",
     "draw_vertex_min",
@@ -658,9 +692,26 @@ def parse_number(value: Any) -> int | float | str | None:
 
 def load_result(path: Path) -> dict[str, Any]:
     result_path = path / "result.json"
-    if not result_path.exists():
-        raise SystemExit(f"missing result.json: {result_path}")
-    return json.loads(result_path.read_text(encoding="utf-8"))
+    if result_path.exists():
+        return json.loads(result_path.read_text(encoding="utf-8"))
+    log_path = path / "dxmt9.log"
+    if not log_path.exists():
+        raise SystemExit(f"missing result.json and dxmt9.log: {result_path}")
+    counters: dict[str, Any] = {}
+    bridge: dict[str, Any] = {}
+    for line in log_path.read_text(encoding="utf-8", errors="replace").splitlines():
+        if line.startswith(PERF_PREFIX):
+            counters = parse_kv_line(line)
+        elif line.startswith(BRIDGE_PREFIX):
+            bridge = parse_kv_line(line)
+    if not counters and not bridge:
+        raise SystemExit(f"missing result.json and perf counters in dxmt9.log: {result_path}")
+    return {
+        "status": "partial-log",
+        "capture_error": "missing result.json; synthesized from dxmt9.log",
+        "dxmt9_perf_counters": counters,
+        "dxmt9_bridge_counters": bridge,
+    }
 
 
 def parse_kv_line(line: str) -> dict[str, int | float | str]:

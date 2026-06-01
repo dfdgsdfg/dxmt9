@@ -142,17 +142,18 @@ shaders::VSOutLayout ffpPixelVaryingLiveness(const ShaderSourceContext& context)
 
 shaders::VSOutLayout resolveVSOutLayoutForShaderPair(const ShaderSourceContext& context) {
   if (!shaders::vsoutTrimEnabled()) {
-    return shaders::fullVSOutLayout();
+    return shaders::applyVSOutProbeOverrides(shaders::fullVSOutLayout());
   }
 
   if (context.pixelShader.kind == ShaderRef::Kind::Bytecode) {
-    return translator::collectTranslatedFragmentVaryingLiveness(context.pixelShader, context);
+    return shaders::applyVSOutProbeOverrides(
+        translator::collectTranslatedFragmentVaryingLiveness(context.pixelShader, context));
   }
   if (context.pixelShader.kind == ShaderRef::Kind::FixedFunctionPixel &&
       context.pixelShader.pixelKey.has_value()) {
-    return ffpPixelVaryingLiveness(context);
+    return shaders::applyVSOutProbeOverrides(ffpPixelVaryingLiveness(context));
   }
-  return shaders::fullVSOutLayout();
+  return shaders::applyVSOutProbeOverrides(shaders::fullVSOutLayout());
 }
 
 ShaderSourceContext makeShaderSourceContext(const DrawShaderLayoutContext& layout,

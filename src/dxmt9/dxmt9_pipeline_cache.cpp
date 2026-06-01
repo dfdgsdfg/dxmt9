@@ -59,6 +59,49 @@ bool envFlag(const char* name) noexcept {
   return env && env[0] != '\0' && std::strcmp(env, "0") != 0;
 }
 
+bool x8ShaderAlphaFillEnabled() {
+  static const bool enabled = envFlag("DXMT9_X8_SHADER_ALPHA_FILL");
+  return enabled;
+}
+
+bool isX8Format(core::Format format) noexcept {
+  return format == core::Format::X8R8G8B8 ||
+         format == core::Format::X8B8G8R8;
+}
+
+u32 x8AlphaOneTextureMask(resources::Pool& pool,
+                          const core::FlatDrawStateRecord& hot,
+                          u32 activeFragmentTextureMask) {
+  if (!x8ShaderAlphaFillEnabled()) {
+    return 0;
+  }
+  u32 mask = 0;
+  for (u32 stage = 0; stage < core::kMaxFragmentSamplers; ++stage) {
+    if ((activeFragmentTextureMask & (1u << stage)) == 0u) {
+      continue;
+    }
+    const auto textureHandle = hot.textures[stage];
+    if (!textureHandle) {
+      continue;
+    }
+    const auto* texture = pool.findTexture(textureHandle.value);
+    if (texture && isX8Format(texture->desc.format)) {
+      mask |= 1u << stage;
+    }
+  }
+  return mask;
+}
+
+void stampX8AlphaOneTextureMask(ShaderVariantKey& key,
+                                drawshader::ShaderSourceContext& shaderSource,
+                                u32 mask) noexcept {
+  key.x8AlphaOneTextureMask = mask;
+  shaderSource.x8AlphaOneTextureMask = mask;
+  if (mask != 0u) {
+    key.hash = mix(mix(key.hash, 0x78385f616c706861ull), mask);
+  }
+}
+
 // R-BACK-13.* tile-FFP ↔ portable equality escape hatch. Mirrors the
 // DXMT9_DISABLE_ARGBUF_HYBRID one-shot-static pattern: read once at first
 // use (process-init semantics — env changes after dxmt9 load do not take
@@ -407,7 +450,8 @@ u64 makeShaderSourceDebugEnvKey(bool trimUnusedVaryings,
                                 bool forcePixelVFlip,
                                 bool debugFfpUv,
                                 bool debugFfpTexture,
-                                bool debugFfpAlpha) noexcept {
+                                bool debugFfpAlpha,
+                                bool probeDropVSOutPointSize) noexcept {
   u64 hash = kFnvOffset;
   hash = mix(hash, kShaderDebugEnvSchemaVersion);
   hash = mix(hash, static_cast<u64>(trimUnusedVaryings));
@@ -422,6 +466,9 @@ u64 makeShaderSourceDebugEnvKey(bool trimUnusedVaryings,
   hash = mix(hash, static_cast<u64>(debugFfpUv));
   hash = mix(hash, static_cast<u64>(debugFfpTexture));
   hash = mix(hash, static_cast<u64>(debugFfpAlpha));
+  if (probeDropVSOutPointSize) {
+    hash = mix(hash, 0x9f3b7c2d4a11e905ull);
+  }
   return hash;
 }
 
@@ -439,7 +486,8 @@ u64 currentShaderSourceDebugEnvKey() noexcept {
       envFlag("DXMT_DEBUG_FORCE_PIXEL_V_FLIP"),
       envFlag("DXMT_DEBUG_FFP_UV"),
       envFlag("DXMT_DEBUG_FFP_TEXTURE"),
-      envFlag("DXMT_DEBUG_FFP_ALPHA"));
+      envFlag("DXMT_DEBUG_FFP_ALPHA"),
+      envFlag("DXMT9_PROBE_DROP_VSOUT_POINT_SIZE"));
 }
 
 ShaderVariantKey makeShaderVariantProbeKey(ShaderVariantKey key) noexcept {
@@ -630,6 +678,7 @@ std::size_t ShaderVariantKeyHash::operator()(const ShaderVariantKey& key) const 
   // shader hit distinct cache slots.
   hash = mix(hash, static_cast<u64>(key.samplerLodBias));
   hash = mix(hash, key.vsOutLayoutKey);
+  hash = mix(hash, key.x8AlphaOneTextureMask);
   hash = mix(hash, key.sampleCount);
   for (auto type : key.textureTypes) {
     hash = mix(hash, type);
@@ -1293,6 +1342,9 @@ Cache::getOrBuildDrawPipelineHandleForState(WMT::Reference<WMT::Device> device,
   // a sampler carries a non-zero LOD bias. makeShaderVariantKey already
   // computed key.samplerLodBias from the same predicate the encoder bind reads.
   shaderSource.samplerLodBias = key.samplerLodBias;
+  stampX8AlphaOneTextureMask(
+      key, shaderSource,
+      x8AlphaOneTextureMask(pool, *state.hot, key.textureMask));
   shaderSource.vsOutLayout = drawshader::resolveVSOutLayoutForShaderPair(shaderSource);
   key.vsOutLayoutKey = shaders::vsoutLayoutKey(shaderSource.vsOutLayout);
   return getOrBuildDrawPipelineHandle(device, key, std::move(shaderSource),
@@ -1369,6 +1421,9 @@ Cache::getOrBuildTileFfpBaseColorPipelineHandleForState(
   drawshader::ShaderSourceContext shaderSource =
       drawshader::makeShaderSourceContext(state.shaderContext(), *state.hot);
   shaderSource.samplerLodBias = key.samplerLodBias;
+  stampX8AlphaOneTextureMask(
+      key, shaderSource,
+      x8AlphaOneTextureMask(pool, *state.hot, key.textureMask));
   // R-BACK-13.1: drop fog blend + alpha-test discard from the emitted FFP
   // fragment; the tile kernel re-applies them over the rasterized base colour.
   shaderSource.stripFogAlphaTestForTileBase = true;

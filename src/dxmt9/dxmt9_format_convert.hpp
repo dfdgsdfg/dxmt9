@@ -26,6 +26,14 @@ bool formatHasDepthAspect(core::Format format);
 
 WMTTextureType toTextureType(core::TextureType type, bool multisample);
 bool formatNeedsShaderReadSwizzle(core::Format format);
+bool suppressRenderTargetPixelFormatViewEnabled();
+bool suppressX8RenderTargetPixelFormatViewEnabled();
+bool textureNeedsShaderReadView(const core::TextureDesc& desc,
+                                bool suppressRenderTargetPixelFormatView,
+                                bool suppressX8RenderTargetPixelFormatView);
+bool textureNeedsShaderReadView(const core::TextureDesc& desc,
+                                bool suppressRenderTargetPixelFormatView);
+bool textureNeedsShaderReadView(const core::TextureDesc& desc);
 WMTTextureSwizzleChannels toShaderReadSwizzle(core::Format format);
 std::uint16_t toShaderReadViewSliceCount(core::TextureType type);
 // R-BACK-5.7: Pool/usage → Metal storage mode mapping. `hasUnifiedMemory`
@@ -39,6 +47,11 @@ std::uint16_t toShaderReadViewSliceCount(core::TextureType type);
 // counted via `perf::countManagedTextureUploadBlit`.
 WMTResourceOptions toResourceOptions(core::Pool pool, u32 usage, bool hasUnifiedMemory);
 WMTTextureUsage toTextureUsage(const core::SurfaceDesc& desc);
+WMTTextureUsage toTextureUsage(const core::TextureDesc& desc,
+                               bool suppressRenderTargetPixelFormatView,
+                               bool suppressX8RenderTargetPixelFormatView);
+WMTTextureUsage toTextureUsage(const core::TextureDesc& desc,
+                               bool suppressRenderTargetPixelFormatView);
 WMTTextureUsage toTextureUsage(const core::TextureDesc& desc);
 
 WMTPrimitiveType toPrimitiveType(core::PrimitiveType type);

@@ -148,6 +148,10 @@ struct ShaderVariantKey {
   // DXMT9_TRIM_UNUSED_VARYINGS is enabled. Participates in the probe key so
   // two shader pairs with different stage-in structs never share a stale PSO.
   u32 vsOutLayoutKey = 0;
+  // Fragment sampler mask for the X8 alpha-fill shader variant. This is
+  // separate from textureTypes because it is format/contract state, not Metal
+  // dimensionality state.
+  u32 x8AlphaOneTextureMask = 0;
   u32 sampleCount = 1;
   std::array<u32, core::kMaxTextureStages> textureTypes{};
   std::array<u32, core::kMaxRenderTargets> colorFormats{};
@@ -181,7 +185,8 @@ u64 makeShaderSourceDebugEnvKey(bool trimUnusedVaryings,
                                 bool forcePixelVFlip,
                                 bool debugFfpUv,
                                 bool debugFfpTexture,
-                                bool debugFfpAlpha) noexcept;
+                                bool debugFfpAlpha,
+                                bool probeDropVSOutPointSize) noexcept;
 
 // Reads the current process env knobs that can change emitted draw MSL.
 u64 currentShaderSourceDebugEnvKey() noexcept;

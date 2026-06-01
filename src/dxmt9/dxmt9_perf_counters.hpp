@@ -230,6 +230,7 @@ void countUniformFfpPs(std::size_t bytes);
 void countUniformVolatilePush();
 // R-BACK-5.7. Bumps only on the discrete (non-unified-memory) blit path.
 void countManagedTextureUploadBlit(std::uint64_t bytes);
+void countTexturePixelFormatViewSuppressedRt(std::uint64_t bytes);
 // R-BACK-14.* — MTLHeap pooling counters.
 void countHeapAlloc(std::uint64_t bytes);
 void countHeapInstance();
@@ -522,6 +523,22 @@ struct EncoderBreakdown {
   std::uint64_t encoderIndex = 0;
   std::uint64_t rtHandle = 0;
   std::uint64_t depthHandle = 0;
+  std::uint64_t rtFormat = 0;
+  std::uint64_t rtWidth = 0;
+  std::uint64_t rtHeight = 0;
+  std::uint64_t rtBytesPerPixel = 0;
+  std::uint64_t rtAliasTexture = 0;
+  std::uint64_t rtTextureUsage = 0;
+  std::uint64_t rtFormatNeedsShaderReadSwizzle = 0;
+  std::uint64_t rtTextureNeedsShaderReadView = 0;
+  std::uint64_t depthFormat = 0;
+  std::uint64_t depthWidth = 0;
+  std::uint64_t depthHeight = 0;
+  std::uint64_t depthBytesPerPixel = 0;
+  std::uint64_t depthAliasTexture = 0;
+  std::uint64_t depthTextureUsage = 0;
+  std::uint64_t depthFormatNeedsShaderReadSwizzle = 0;
+  std::uint64_t depthTextureNeedsShaderReadView = 0;
   EncoderSplitReason endReason = EncoderSplitReason::Final;
   std::uint64_t drawCalls = 0;
   std::uint64_t indexedDraws = 0;
@@ -566,6 +583,18 @@ struct EncoderBreakdown {
   std::uint64_t drawVertexBucket4096_16383 = 0;
   std::uint64_t drawVertexBucket16384Plus = 0;
   std::uint64_t textureMaskOr = 0;
+  std::uint64_t fragmentTextureBindingSamples = 0;
+  std::uint64_t fragmentTextureBindingMaskOr = 0;
+  std::uint64_t x8RtTextureBindingSamples = 0;
+  std::uint64_t x8RtTextureBindingMaskOr = 0;
+  std::uint64_t x8RtTextureBindingUniqueHandles = 0;
+  std::uint64_t x8RtTextureBindingUniqueHandleOverflows = 0;
+  std::uint64_t x8RtTextureBindingShaderReadViewSamples = 0;
+  std::uint64_t x8RtTextureBindingActiveRtAliasSamples = 0;
+  std::uint64_t x8ShaderAlphaFillSamples = 0;
+  std::uint64_t x8ShaderAlphaFillMaskOr = 0;
+  std::uint64_t x8RtTextureBindingLastStage = 0;
+  std::uint64_t x8RtTextureBindingLastHandle = 0;
   std::uint64_t drawGeometrySignatureSamples = 0;
   std::uint64_t drawGeometrySignatureUnique = 0;
   std::uint64_t drawGeometrySignatureUniqueOverflows = 0;
@@ -693,6 +722,7 @@ struct EncoderBreakdown {
 };
 
 bool encoderBreakdownEnabled();
+std::uint64_t encoderBreakdownSeqFilter();
 void emitEncoderBreakdown(const EncoderBreakdown& breakdown);
 
 }  // namespace dxmt9::perf

@@ -345,6 +345,12 @@ core::TextureHandle Pool::createTexture(WMT::Device device,
                             static_cast<std::uint64_t>(info.width) *
                             static_cast<std::uint64_t>(info.height) *
                             static_cast<std::uint64_t>(info.depth);
+    if (convert::formatNeedsShaderReadSwizzle(desc.format) &&
+        !convert::textureNeedsShaderReadView(desc) &&
+        ((desc.usage & core::UsageRenderTarget) != 0 ||
+         (desc.usage & core::UsageDepthStencil) != 0)) {
+      perf::countTexturePixelFormatViewSuppressedRt(footprint);
+    }
     const auto eligibility = heapManager_.classifyTexture(footprint, desc.pool, desc.usage);
     if (eligibility.eligible) {
       WMT::Heap heap{};
@@ -360,7 +366,7 @@ core::TextureHandle Pool::createTexture(WMT::Device device,
     if (!record.texture) {
       record.texture = device.newTexture(info);
     }
-    if (record.texture && convert::formatNeedsShaderReadSwizzle(desc.format)) {
+    if (record.texture && convert::textureNeedsShaderReadView(desc)) {
       uint64_t gpuId = 0;
       record.shaderReadTexture = record.texture.newTextureView(
           info.pixel_format, info.type, 0, info.mipmap_level_count,
@@ -374,7 +380,7 @@ core::TextureHandle Pool::createTexture(WMT::Device device,
         record.srgbShaderReadTexture = record.texture.newTextureView(
             srgbFormat, info.type, 0, info.mipmap_level_count,
             0, convert::toShaderReadViewSliceCount(desc.type),
-            convert::formatNeedsShaderReadSwizzle(desc.format)
+            convert::textureNeedsShaderReadView(desc)
                 ? convert::toShaderReadSwizzle(desc.format)
                 : WMTTextureSwizzleChannels{WMTTextureSwizzleRed, WMTTextureSwizzleGreen,
                                             WMTTextureSwizzleBlue, WMTTextureSwizzleAlpha},

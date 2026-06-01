@@ -208,6 +208,12 @@ void testPixelShaderSamplerRegisterTranslation() {
   checkContains(source, "texture2d<float> tex2 [[texture(2)]]", "pixel shader declares sampler texture slot");
   checkContains(source, "sampler samp2 [[sampler(2)]]", "pixel shader declares sampler state slot");
   checkContains(source, "tex2.sample(samp2", "pixel shader samples declared sampler register");
+  auto x8Context = dxmt9::drawshader::makeShaderSourceContext(desc);
+  x8Context.x8AlphaOneTextureMask = 1u << 2u;
+  const auto x8Source = dxmt9::translator::makeTranslatedFragmentSource(shader, x8Context);
+  checkContains(x8Source, "dxmt9_x8_alpha_one", "X8 alpha-fill helper is emitted for marked samplers");
+  checkContains(x8Source, "dxmt9_x8_alpha_one(tex2.sample(samp2",
+                "marked sampler sample is wrapped with alpha-one fixup");
   if (getenvFlag("DXMT_DEBUG_FORCE_PIXEL_V_FLIP")) {
     checkContains(source, "1.0f -", "pixel shader forced V flip source contract");
   } else {

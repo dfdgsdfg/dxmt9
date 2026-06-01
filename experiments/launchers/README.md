@@ -146,6 +146,12 @@ Commercial / 3rd-party titles (require external prefix):
     pair-local VSOut liveness path is active. Compare it to the baseline joined
     CSV with `--baseline-joined <csv> --require-top-vs-buffer-write-decrease`
     to prove whether trimming moves the Xcode VS buffer-write counter.
+    If the broad trim does not move Xcode's bucket, use
+    `--drop-vsout-point-size` for a narrower pipeline-shape A/B. This sets
+    `DXMT9_PROBE_DROP_VSOUT_POINT_SIZE=1` and removes only
+    `VSOut.pointSize [[point_size]]` while preserving texcoords/color/fog, so
+    any counter movement is attributable to the Metal point-size path rather
+    than ordinary FS liveness.
     If VSOut trimming leaves Xcode's VS buffer-write bucket unchanged, run the
     next paired candidate with `--trim-vertex-temps`; this sets
     `DXMT9_TRIM_VERTEX_TEMPS=1` so translated VS `float4 r[]` is sized from
@@ -196,6 +202,14 @@ Commercial / 3rd-party titles (require external prefix):
     `dxmt_pso_state_samples_per_draw` should be near `1.0` on logs produced
     after the DrawRun attribution update; lower values indicate an older log
     where PSO/VSOut attribution was sampled only on base-state binds. Add
+    `--encoder-breakdown-seq <N>` for targeted frame probes when the full
+    encoder breakdown log would become too large; this sets
+    `DXMT9_PERF_ENCODER_BREAKDOWN_SEQ=<N>` and keeps only matching
+    `RenderPass[seq=<N>,...]` rows while preserving the run-level perf
+    counters. Use it for quick no-gputrace validation of a known frame such as
+    `--encoder-breakdown-seq 60`; omit it for whole-run attribution or when
+    comparing top encoders across arbitrary frames.
+    Add
     `--require-xcode-counter-coverage --require-dxmt-join-coverage
     --require-top-pso-attribution` to the finalizer when the run is intended to
     prove a shader/VSOut root cause. The first gate fails incomplete Xcode
@@ -250,6 +264,24 @@ Commercial / 3rd-party titles (require external prefix):
     `DXMT9_SPLIT_SPARSE_CONST_RECORDS=1`, which keeps default merged-constant
     behavior off the baseline but splits an opt-in dirty const range into
     actual changed register runs when the app updates sparse registers.
+    For the R32F render-target compression hypothesis, add
+    `--suppress-rt-pixel-format-view`; it sets
+    `DXMT9_SUPPRESS_RT_PIXEL_FORMAT_VIEW=1`, which keeps the default D3D9
+    shader-read swizzle path intact but, for opt-in probes only, stops R32F
+    render targets from requesting `PixelFormatView` and creating the swizzled
+    shader-read view. Validate with Xcode encoder counters before considering
+    any broader policy change.
+    For the X8 render-target compression hypothesis, add
+    `--suppress-x8-rt-pixel-format-view`; it sets
+    `DXMT9_SUPPRESS_X8_RT_PIXEL_FORMAT_VIEW=1`, which applies the same
+    diagnostic policy to `X8R8G8B8`/`X8B8G8R8` render targets. This is more
+    correctness-risky than the R32F probe because X8 shader reads depend on
+    the D3D alpha-fill contract; use it only to classify Xcode
+    lossless-compression and texture/pass-store counters.
+    Pair it with `--x8-shader-alpha-fill` when testing whether the alpha-fill
+    contract can be preserved in shader code while the Metal texture view is
+    suppressed; this sets `DXMT9_X8_SHADER_ALPHA_FILL=1` and creates PSO
+    variants for active X8 fragment samplers.
     Run-level comparison gates require `--compare-baseline-output` in the
     wrapper or `--baseline-output` in the finalizer; the scripts reject them
     without a baseline and validate that the baseline resolves to an existing

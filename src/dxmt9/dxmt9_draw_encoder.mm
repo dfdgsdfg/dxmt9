@@ -558,6 +558,8 @@ void bufferBindShadowStore(BufferBindShadowSlot& slot,
   slot.offset = offset;
 }
 
+bool x8ShaderAlphaFillEnabledForDiagnostics();
+
 struct ActiveEncoderBreakdown {
   static_assert(core::kMaxStreams <= perf::kEncoderBreakdownMaxStreams);
 
@@ -588,6 +590,7 @@ struct ActiveEncoderBreakdown {
     bool argbufHybridMode = false;
     bool argbufResourceArray = false;
     bool samplerLodBias = false;
+    u32 x8AlphaOneTextureMask = 0;
     u64 vertexSourceHash = 0;
     u64 pixelSourceHash = 0;
   };
@@ -631,6 +634,7 @@ struct ActiveEncoderBreakdown {
   UniqueHandleSet<2048> psoUniqueHandles{};
   UniqueHandleSet<2048> shaderVariantUnique{};
   UniqueHandleSet<2048> vsOutLayoutUnique{};
+  UniqueHandleSet<2048> x8RtTextureBindingUniqueHandles{};
   UniqueHandleSet<4096> drawGeometrySignatures{};
   std::array<VsOutLayoutCacheEntry, 128> vsOutLayoutCache{};
   std::size_t vsOutLayoutCacheNext = 0;
@@ -643,6 +647,10 @@ struct ActiveEncoderBreakdown {
 
   void begin(u64 seqId, u64 encoderIndex, u64 rtHandle, u64 depthHandle) {
     enabled = perf::encoderBreakdownEnabled();
+    const auto seqFilter = perf::encoderBreakdownSeqFilter();
+    if (enabled && seqFilter != 0 && seqId != seqFilter) {
+      enabled = false;
+    }
     stats = {};
     ibValid = false;
     ibHandle = 0;
@@ -659,6 +667,7 @@ struct ActiveEncoderBreakdown {
     psoUniqueHandles = {};
     shaderVariantUnique = {};
     vsOutLayoutUnique = {};
+    x8RtTextureBindingUniqueHandles = {};
     drawGeometrySignatures = {};
     vsOutLayoutCache = {};
     vsOutLayoutCacheNext = 0;
@@ -675,6 +684,96 @@ struct ActiveEncoderBreakdown {
     stats.encoderIndex = encoderIndex;
     stats.rtHandle = rtHandle;
     stats.depthHandle = depthHandle;
+  }
+
+  void recordAttachmentMetadata(const resources::Pool& pool,
+                                const core::FlatDrawStateRecord& hot) {
+    if (!enabled) {
+      return;
+    }
+    auto fillSurface = [&](core::Handle handle,
+                           u64& format,
+                           u64& width,
+                           u64& height,
+                           u64& bytesPerPixel,
+                           u64& aliasTexture,
+                           u64& textureUsage,
+                           u64& formatSwizzle,
+                           u64& textureNeedsView) {
+      const auto* surface = pool.findSurface(handle.value);
+      if (!surface) {
+        return;
+      }
+      format = static_cast<u64>(surface->desc.format);
+      width = surface->desc.width;
+      height = surface->desc.height;
+      bytesPerPixel = core::bytesPerPixel(surface->desc.format);
+      formatSwizzle = convert::formatNeedsShaderReadSwizzle(surface->desc.format) ? 1u : 0u;
+      aliasTexture = surface->aliasTexture.value;
+      const auto* texture =
+          surface->aliasTexture ? pool.findTexture(surface->aliasTexture.value) : nullptr;
+      if (!texture) {
+        return;
+      }
+      textureUsage = texture->desc.usage;
+      textureNeedsView = convert::textureNeedsShaderReadView(texture->desc) ? 1u : 0u;
+    };
+
+    fillSurface(hot.colorAttachments[0].handle,
+                stats.rtFormat,
+                stats.rtWidth,
+                stats.rtHeight,
+                stats.rtBytesPerPixel,
+                stats.rtAliasTexture,
+                stats.rtTextureUsage,
+                stats.rtFormatNeedsShaderReadSwizzle,
+                stats.rtTextureNeedsShaderReadView);
+    fillSurface(hot.depthStencil.handle,
+                stats.depthFormat,
+                stats.depthWidth,
+                stats.depthHeight,
+                stats.depthBytesPerPixel,
+                stats.depthAliasTexture,
+                stats.depthTextureUsage,
+                stats.depthFormatNeedsShaderReadSwizzle,
+                stats.depthTextureNeedsShaderReadView);
+  }
+
+  void recordFragmentTextureBinding(u32 stage,
+                                    core::Handle textureHandle,
+                                    const resources::TextureRecord* texture) {
+    if (!enabled || !texture || !textureHandle || stage >= 64u) {
+      return;
+    }
+    ++stats.fragmentTextureBindingSamples;
+    stats.fragmentTextureBindingMaskOr |= 1ull << stage;
+    const bool x8Format =
+        texture->desc.format == core::Format::X8R8G8B8 ||
+        texture->desc.format == core::Format::X8B8G8R8;
+    const bool renderTargetTexture =
+        (texture->desc.usage & core::UsageRenderTarget) != 0u ||
+        (texture->desc.usage & core::UsageDepthStencil) != 0u;
+    if (!x8Format || !renderTargetTexture) {
+      return;
+    }
+    ++stats.x8RtTextureBindingSamples;
+    stats.x8RtTextureBindingMaskOr |= 1ull << stage;
+    stats.x8RtTextureBindingLastStage = stage;
+    stats.x8RtTextureBindingLastHandle = textureHandle.value;
+    if (convert::textureNeedsShaderReadView(texture->desc)) {
+      ++stats.x8RtTextureBindingShaderReadViewSamples;
+    }
+    if (x8ShaderAlphaFillEnabledForDiagnostics()) {
+      ++stats.x8ShaderAlphaFillSamples;
+      stats.x8ShaderAlphaFillMaskOr |= 1ull << stage;
+    }
+    if (stats.rtAliasTexture != 0 && textureHandle.value == stats.rtAliasTexture) {
+      ++stats.x8RtTextureBindingActiveRtAliasSamples;
+    }
+    recordUnique(x8RtTextureBindingUniqueHandles,
+                 textureHandle.value,
+                 stats.x8RtTextureBindingUniqueHandles,
+                 stats.x8RtTextureBindingUniqueHandleOverflows);
   }
 
   void emit(perf::EncoderSplitReason reason) {
@@ -1288,6 +1387,7 @@ struct ActiveEncoderBreakdown {
                                     bool argbufHybridMode,
                                     bool argbufResourceArray,
                                     bool samplerLodBias,
+                                    u32 x8AlphaOneTextureMask,
                                     u64& vertexSourceHash,
                                     u64& pixelSourceHash) const {
     if (!enabled) {
@@ -1299,7 +1399,8 @@ struct ActiveEncoderBreakdown {
           entry.tileFfpBaseColor == tileFfpBaseColor &&
           entry.argbufHybridMode == argbufHybridMode &&
           entry.argbufResourceArray == argbufResourceArray &&
-          entry.samplerLodBias == samplerLodBias) {
+          entry.samplerLodBias == samplerLodBias &&
+          entry.x8AlphaOneTextureMask == x8AlphaOneTextureMask) {
         vertexSourceHash = entry.vertexSourceHash;
         pixelSourceHash = entry.pixelSourceHash;
         return true;
@@ -1313,6 +1414,7 @@ struct ActiveEncoderBreakdown {
                                      bool argbufHybridMode,
                                      bool argbufResourceArray,
                                      bool samplerLodBias,
+                                     u32 x8AlphaOneTextureMask,
                                      u64 vertexSourceHash,
                                      u64 pixelSourceHash) {
     if (!enabled || shaderSourceHashCache.empty()) {
@@ -1328,6 +1430,7 @@ struct ActiveEncoderBreakdown {
         .argbufHybridMode = argbufHybridMode,
         .argbufResourceArray = argbufResourceArray,
         .samplerLodBias = samplerLodBias,
+        .x8AlphaOneTextureMask = x8AlphaOneTextureMask,
         .vertexSourceHash = vertexSourceHash,
         .pixelSourceHash = pixelSourceHash,
     };
@@ -2031,6 +2134,38 @@ bool clearMatchesDepthStencilAttachment(const std::optional<ClearDesc>& clear,
   return requested && clear->depthStencil.handle == attachment;
 }
 
+bool x8ShaderAlphaFillEnabledForDiagnostics() {
+  static const bool enabled = [] {
+    const char* env = std::getenv("DXMT9_X8_SHADER_ALPHA_FILL");
+    return env && env[0] != '\0' && std::strcmp(env, "0") != 0;
+  }();
+  return enabled;
+}
+
+bool isX8TextureFormat(core::Format format) {
+  return format == core::Format::X8R8G8B8 ||
+         format == core::Format::X8B8G8R8;
+}
+
+u32 x8AlphaOneTextureMaskForDraw(core::FlatDrawStateView drawState,
+                                 const resources::Pool& pool) {
+  if (!x8ShaderAlphaFillEnabledForDiagnostics() || !drawState.hot) {
+    return 0;
+  }
+  const auto& hot = *drawState.hot;
+  u32 mask = 0;
+  for (u32 stage = 0; stage < core::kMaxFragmentSamplers; ++stage) {
+    if ((hot.textureMask & (1u << stage)) == 0u || !hot.textures[stage]) {
+      continue;
+    }
+    const auto* texture = pool.findTexture(hot.textures[stage].value);
+    if (texture && isX8TextureFormat(texture->desc.format)) {
+      mask |= 1u << stage;
+    }
+  }
+  return mask;
+}
+
 u32 primitiveVertexCount(core::PrimitiveType type, u32 primitiveCount) {
   switch (type) {
     case core::PrimitiveType::PointList: return primitiveCount;
@@ -2044,7 +2179,8 @@ u32 primitiveVertexCount(core::PrimitiveType type, u32 primitiveCount) {
   return 0u;
 }
 
-u64 shaderVariantHashForDraw(core::FlatDrawStateView drawState) {
+u64 shaderVariantHashForDraw(core::FlatDrawStateView drawState,
+                             const resources::Pool* pool = nullptr) {
   if (!drawState.hot || !drawState.hasShaderContext()) {
     return 0;
   }
@@ -2055,6 +2191,9 @@ u64 shaderVariantHashForDraw(core::FlatDrawStateView drawState) {
              (hot.textureMask << 3) ^ (hot.renderTargetMask << 4);
   hash ^= hot.vertexConstantsHash << 1;
   hash ^= hot.pixelConstantsHash << 2;
+  if (pool) {
+    hash ^= static_cast<u64>(x8AlphaOneTextureMaskForDraw(drawState, *pool)) << 5;
+  }
   return hash;
 }
 
@@ -2119,7 +2258,8 @@ ShaderSourceHashes shaderSourceHashesForDraw(core::FlatDrawStateView drawState,
                                              bool tileFfpBaseColor,
                                              bool argbufHybridMode,
                                              bool argbufResourceArray,
-                                             bool samplerLodBias) {
+                                             bool samplerLodBias,
+                                             u32 x8AlphaOneTextureMask) {
   ShaderSourceHashes hashes{};
   if (!shaderSourceHashAttributionEnabled() || !drawState.hot ||
       !drawState.hasShaderContext()) {
@@ -2131,6 +2271,7 @@ ShaderSourceHashes shaderSourceHashesForDraw(core::FlatDrawStateView drawState,
   context.argbufHybridMode = argbufHybridMode;
   context.argbufResourceArray = argbufHybridMode && argbufResourceArray;
   context.samplerLodBias = samplerLodBias;
+  context.x8AlphaOneTextureMask = x8AlphaOneTextureMask;
   try {
     context.vsOutLayout = drawshader::resolveVSOutLayoutForShaderPair(context);
     const auto vertex = drawshader::makeDrawShaderSource(context, true);
@@ -2152,6 +2293,7 @@ u64 psoHandleBucket(core::PsoHandle handle) noexcept {
 
 void recordPsoAttributionForDraw(ActiveEncoderBreakdown* encoderBreakdown,
                                  core::FlatDrawStateView drawState,
+                                 const resources::Pool& pool,
                                  core::PsoHandle renderPsoHandle,
                                  bool tileFfpMode,
                                  bool argbufHybridMode,
@@ -2159,7 +2301,7 @@ void recordPsoAttributionForDraw(ActiveEncoderBreakdown* encoderBreakdown,
   if (!encoderBreakdown || !encoderBreakdown->enabled) {
     return;
   }
-  const auto variantHash = shaderVariantHashForDraw(drawState);
+  const auto variantHash = shaderVariantHashForDraw(drawState, &pool);
   const auto sourceKey = shaderSourceAttributionKeyForDraw(drawState);
   u64 vertexShaderHash = 0;
   u64 pixelShaderHash = 0;
@@ -2176,20 +2318,23 @@ void recordPsoAttributionForDraw(ActiveEncoderBreakdown* encoderBreakdown,
                                              vsOutLayoutKey);
   }
   const bool samplerLodBias = anySamplerLodBiasNonzero(drawState);
+  const u32 x8AlphaOneTextureMask = x8AlphaOneTextureMaskForDraw(drawState, pool);
   u64 vertexShaderSourceHash = 0;
   u64 pixelShaderSourceHash = 0;
   if (!encoderBreakdown->findCachedShaderSourceHashes(
           sourceKey, tileFfpMode, argbufHybridMode,
           argbufHybridMode && argbufResourceArray, samplerLodBias,
+          x8AlphaOneTextureMask,
           vertexShaderSourceHash, pixelShaderSourceHash)) {
     const auto sourceHashes = shaderSourceHashesForDraw(
         drawState, tileFfpMode, argbufHybridMode, argbufResourceArray,
-        samplerLodBias);
+        samplerLodBias, x8AlphaOneTextureMask);
     vertexShaderSourceHash = sourceHashes.vertex;
     pixelShaderSourceHash = sourceHashes.pixel;
     encoderBreakdown->storeCachedShaderSourceHashes(
         sourceKey, tileFfpMode, argbufHybridMode,
         argbufHybridMode && argbufResourceArray, samplerLodBias,
+        x8AlphaOneTextureMask,
         vertexShaderSourceHash, pixelShaderSourceHash);
   }
   encoderBreakdown->recordPsoState(
@@ -3124,7 +3269,7 @@ bool encodeDraw(EncodeContext& ctx,
     return false;
   }
   if (skipBaseStateBind) {
-    recordPsoAttributionForDraw(encoderBreakdown, drawState, renderPsoHandle,
+    recordPsoAttributionForDraw(encoderBreakdown, drawState, ctx.pool, renderPsoHandle,
                                 tileFfpMode, argbufHybridMode,
                                 argbufResourceArray);
   }
@@ -3276,11 +3421,11 @@ bool encodeDraw(EncodeContext& ctx,
     // key in both the log and label so Xcode's VS buffer-write counters can
     // be tied back to a concrete stage-in shape.
     {
-      const auto variantHash = shaderVariantHashForDraw(drawState);
+      const auto variantHash = shaderVariantHashForDraw(drawState, &ctx.pool);
       const bool recordPsoBreakdown = encoderBreakdown && encoderBreakdown->enabled;
       u32 vsOutLayoutKey = 0;
       if (recordPsoBreakdown) {
-        recordPsoAttributionForDraw(encoderBreakdown, drawState, renderPsoHandle,
+        recordPsoAttributionForDraw(encoderBreakdown, drawState, ctx.pool, renderPsoHandle,
                                     tileFfpMode, argbufHybridMode,
                                     argbufResourceArray);
         vsOutLayoutKey = encoderBreakdown->stats.vsOutLayoutLast;
@@ -3684,6 +3829,14 @@ bool encodeDraw(EncodeContext& ctx,
       &drawState.shaderContext().pixelShader);
   const auto& bindingPacket =
       cacheDrawBindingPacket(gDrawBindingPacketCache, bindingPacketPlan);
+  if (encoderBreakdown) {
+    for (const auto& binding : bindingPacket.fragmentTextureSamplers) {
+      const auto* texture = ctx.pool.findTexture(binding.texture.value);
+      encoderBreakdown->recordFragmentTextureBinding(binding.stage,
+                                                     binding.texture,
+                                                     texture);
+    }
+  }
   // Apply FFP preTransformed viewport override to the FfpVs host copy
   // before any bindFfpVsIfDirty call uploads it (R-BACK-12.5). The
   // override values come from run-stable sources (ffLayout +
@@ -5395,6 +5548,7 @@ std::optional<core::metalqueue::QueueSubmissionRecord> encodeChunk(
           encodeChunkSeqId, openedRenderEncoderIndex,
           drawState.hot->colorAttachments[0].handle.value,
           drawState.hot->depthStencil.handle.value);
+      activeEncoderBreakdown.recordAttachmentMetadata(ctx.pool, *drawState.hot);
       ++renderEncoderIndex;
       recordRenderEncoderGpuAttachment(sampleAttachment);
     }

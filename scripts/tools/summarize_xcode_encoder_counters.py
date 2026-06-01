@@ -111,6 +111,22 @@ SUMMARY_FIELDS = (
 )
 
 JOINED_EXTRA_FIELDS = (
+    "dxmt_rt_format",
+    "dxmt_rt_width",
+    "dxmt_rt_height",
+    "dxmt_rt_bpp",
+    "dxmt_rt_alias_texture",
+    "dxmt_rt_texture_usage",
+    "dxmt_rt_format_swizzle",
+    "dxmt_rt_texture_needs_shader_read_view",
+    "dxmt_depth_format",
+    "dxmt_depth_width",
+    "dxmt_depth_height",
+    "dxmt_depth_bpp",
+    "dxmt_depth_alias_texture",
+    "dxmt_depth_texture_usage",
+    "dxmt_depth_format_swizzle",
+    "dxmt_depth_texture_needs_shader_read_view",
     "dxmt_draw_calls",
     "dxmt_indexed_draws",
     "dxmt_expanded_indexed_draws",
@@ -173,6 +189,18 @@ JOINED_EXTRA_FIELDS = (
     "dxmt_split_large_indexed_primitive_limit",
     "dxmt_split_large_indexed_primitive_count",
     "dxmt_texture_mask_or",
+    "dxmt_fragment_texture_binding_samples",
+    "dxmt_fragment_texture_binding_mask_or",
+    "dxmt_x8_rt_texture_binding_samples",
+    "dxmt_x8_rt_texture_binding_mask_or",
+    "dxmt_x8_rt_texture_binding_unique_handles",
+    "dxmt_x8_rt_texture_binding_unique_handle_overflows",
+    "dxmt_x8_rt_texture_binding_shader_read_view_samples",
+    "dxmt_x8_rt_texture_binding_active_rt_alias_samples",
+    "dxmt_x8_shader_alpha_fill_samples",
+    "dxmt_x8_shader_alpha_fill_mask_or",
+    "dxmt_x8_rt_texture_binding_last_stage",
+    "dxmt_x8_rt_texture_binding_last_handle",
     "dxmt_stream0_stride_min",
     "dxmt_stream0_stride_max",
     "dxmt_stream_state_samples",
@@ -549,6 +577,22 @@ def join_dxmt(row: dict[str, Any], dxmt: dict[tuple[int, int], dict[str, Any]]) 
         joined["rt"] = source.get("rt", "")
         joined["depth"] = source.get("depth", "")
     mapping = {
+        "dxmt_rt_format": "rt_format",
+        "dxmt_rt_width": "rt_width",
+        "dxmt_rt_height": "rt_height",
+        "dxmt_rt_bpp": "rt_bpp",
+        "dxmt_rt_alias_texture": "rt_alias_texture",
+        "dxmt_rt_texture_usage": "rt_texture_usage",
+        "dxmt_rt_format_swizzle": "rt_format_swizzle",
+        "dxmt_rt_texture_needs_shader_read_view": "rt_texture_needs_shader_read_view",
+        "dxmt_depth_format": "depth_format",
+        "dxmt_depth_width": "depth_width",
+        "dxmt_depth_height": "depth_height",
+        "dxmt_depth_bpp": "depth_bpp",
+        "dxmt_depth_alias_texture": "depth_alias_texture",
+        "dxmt_depth_texture_usage": "depth_texture_usage",
+        "dxmt_depth_format_swizzle": "depth_format_swizzle",
+        "dxmt_depth_texture_needs_shader_read_view": "depth_texture_needs_shader_read_view",
         "dxmt_draw_calls": "draw_calls",
         "dxmt_indexed_draws": "indexed_draws",
         "dxmt_expanded_indexed_draws": "expanded_indexed_draws",
@@ -609,6 +653,18 @@ def join_dxmt(row: dict[str, Any], dxmt: dict[tuple[int, int], dict[str, Any]]) 
         "dxmt_split_large_indexed_primitive_limit": "split_large_indexed_primitive_limit",
         "dxmt_split_large_indexed_primitive_count": "split_large_indexed_primitive_count",
         "dxmt_texture_mask_or": "texture_mask_or",
+        "dxmt_fragment_texture_binding_samples": "fragment_texture_binding_samples",
+        "dxmt_fragment_texture_binding_mask_or": "fragment_texture_binding_mask_or",
+        "dxmt_x8_rt_texture_binding_samples": "x8_rt_texture_binding_samples",
+        "dxmt_x8_rt_texture_binding_mask_or": "x8_rt_texture_binding_mask_or",
+        "dxmt_x8_rt_texture_binding_unique_handles": "x8_rt_texture_binding_unique_handles",
+        "dxmt_x8_rt_texture_binding_unique_handle_overflows": "x8_rt_texture_binding_unique_handle_overflows",
+        "dxmt_x8_rt_texture_binding_shader_read_view_samples": "x8_rt_texture_binding_shader_read_view_samples",
+        "dxmt_x8_rt_texture_binding_active_rt_alias_samples": "x8_rt_texture_binding_active_rt_alias_samples",
+        "dxmt_x8_shader_alpha_fill_samples": "x8_shader_alpha_fill_samples",
+        "dxmt_x8_shader_alpha_fill_mask_or": "x8_shader_alpha_fill_mask_or",
+        "dxmt_x8_rt_texture_binding_last_stage": "x8_rt_texture_binding_last_stage",
+        "dxmt_x8_rt_texture_binding_last_handle": "x8_rt_texture_binding_last_handle",
         "dxmt_stream0_stride_min": "stream0_stride_min",
         "dxmt_stream0_stride_max": "stream0_stride_max",
         "dxmt_stream_state_samples": "stream_state_samples",
@@ -1635,7 +1691,9 @@ def write_report(
     lines.append("## Top Encoders")
     lines.append("")
     top_header = [
-        "seq", "enc", "GPU ms", "GPU %", "buffer write MiB",
+        "seq", "enc", "RT fmt/size usage/view", "Depth fmt/size usage/view",
+        "X8 RT tex samples", "X8 alpha fill", "X8 RT tex mask/last", "GPU ms", "GPU %",
+        "buffer write MiB",
         "device write MiB", "VS buffer MiB", "VS B/VS inv", "VS B/frag",
         "VS B/prim", "VS B/postclip", "VS B/primTile", "VS B/pixel",
         "VS/tiled", "VSOut B/V", "VS/VSOut",
@@ -1663,6 +1721,18 @@ def write_report(
     lines.append("| " + " | ".join(top_header) + " |")
     lines.append("|" + "|".join("---:" for _ in top_header) + "|")
     for row in joined[:10]:
+        def attachment_summary(prefix: str) -> str:
+            fmt = as_int(row.get(f"dxmt_{prefix}_format"))
+            width = as_int(row.get(f"dxmt_{prefix}_width"))
+            height = as_int(row.get(f"dxmt_{prefix}_height"))
+            usage = row.get(f"dxmt_{prefix}_texture_usage", "")
+            needs_view = fmt_int(row.get(f"dxmt_{prefix}_texture_needs_shader_read_view"))
+            swizzle = fmt_int(row.get(f"dxmt_{prefix}_format_swizzle"))
+            alias = row.get(f"dxmt_{prefix}_alias_texture", "")
+            if fmt == 0 and width == 0 and height == 0:
+                return ""
+            return f"fmt{fmt} {width}x{height} alias={alias} usage={usage} swz/view={swizzle}/{needs_view}"
+
         stream_unique_kib = as_int(row.get("dxmt_stream_unique_bytes")) / 1024.0
         ib_unique_kib = as_int(row.get("dxmt_ib_unique_bytes")) / 1024.0
         argbuf_table_kib = as_int(row.get("dxmt_argbuf_table_bytes")) / 1024.0
@@ -1678,6 +1748,18 @@ def write_report(
             + " | ".join([
                 str(row.get("seq", "")),
                 str(row.get("enc", "")),
+                attachment_summary("rt"),
+                attachment_summary("depth"),
+                fmt_int(row.get("dxmt_x8_rt_texture_binding_samples")),
+                (
+                    f"{fmt_int(row.get('dxmt_x8_shader_alpha_fill_samples'))}/"
+                    f"{row.get('dxmt_x8_shader_alpha_fill_mask_or', '')}"
+                ),
+                (
+                    f"{row.get('dxmt_x8_rt_texture_binding_mask_or', '')}/"
+                    f"{row.get('dxmt_x8_rt_texture_binding_last_stage', '')}/"
+                    f"{row.get('dxmt_x8_rt_texture_binding_last_handle', '')}"
+                ),
                 fmt_float(row.get("gpu_ms")),
                 fmt_float(row.get("gpu_share_pct"), 2),
                 fmt_float(row.get("buffer_write_mib")),
