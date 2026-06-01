@@ -317,9 +317,10 @@ core::TextureHandle Pool::createTexture(WMT::Device device,
   // samples. `toResourceOptions` already returns Shared for SYSTEMMEM,
   // so the storage mode is correct on both unified and discrete devices.
   {
+    const auto formatPolicy = convert::toFormatMetalPolicy(desc, limits);
     WMTTextureInfo info{};
     info.type = convert::toTextureType(desc.type, false);
-    info.pixel_format = convert::toPixelFormat(desc.format, limits);
+    info.pixel_format = formatPolicy.pixelFormat;
     info.width = std::max(1u, desc.width);
     info.height = std::max(1u, desc.height);
     info.depth = std::max(1u, desc.depth);
@@ -331,7 +332,7 @@ core::TextureHandle Pool::createTexture(WMT::Device device,
     // on discrete, MANAGED becomes Managed (staging blit is wired up
     // below). Selection is one-shot at create time.
     info.options = convert::toResourceOptions(desc.pool, desc.usage, hasUnifiedMemory_);
-    info.usage = convert::toTextureUsage(desc);
+    info.usage = formatPolicy.usage;
     // R-BACK-14.* — heap-eligibility probe. The footprint estimate uses
     // bytesPerPixel + width*height*depth (compressed-format rows are
     // tiny in absolute terms — well under the 64 KB threshold either
@@ -346,7 +347,7 @@ core::TextureHandle Pool::createTexture(WMT::Device device,
                             static_cast<std::uint64_t>(info.height) *
                             static_cast<std::uint64_t>(info.depth);
     if (convert::formatNeedsShaderReadSwizzle(desc.format) &&
-        !convert::textureNeedsShaderReadView(desc) &&
+        !formatPolicy.needsShaderReadView &&
         ((desc.usage & core::UsageRenderTarget) != 0 ||
          (desc.usage & core::UsageDepthStencil) != 0)) {
       perf::countTexturePixelFormatViewSuppressedRt(footprint);
@@ -366,26 +367,23 @@ core::TextureHandle Pool::createTexture(WMT::Device device,
     if (!record.texture) {
       record.texture = device.newTexture(info);
     }
-    if (record.texture && convert::textureNeedsShaderReadView(desc)) {
+    if (record.texture && formatPolicy.needsShaderReadView) {
       uint64_t gpuId = 0;
       record.shaderReadTexture = record.texture.newTextureView(
           info.pixel_format, info.type, 0, info.mipmap_level_count,
           0, convert::toShaderReadViewSliceCount(desc.type),
-          convert::toShaderReadSwizzle(desc.format), gpuId);
+          formatPolicy.shaderReadSwizzle, gpuId);
     }
-    if (record.texture) {
-      const auto srgbFormat = convert::toPixelFormat(desc.format, limits, true);
-      if (srgbFormat != info.pixel_format) {
-        uint64_t gpuId = 0;
-        record.srgbShaderReadTexture = record.texture.newTextureView(
-            srgbFormat, info.type, 0, info.mipmap_level_count,
-            0, convert::toShaderReadViewSliceCount(desc.type),
-            convert::textureNeedsShaderReadView(desc)
-                ? convert::toShaderReadSwizzle(desc.format)
-                : WMTTextureSwizzleChannels{WMTTextureSwizzleRed, WMTTextureSwizzleGreen,
-                                            WMTTextureSwizzleBlue, WMTTextureSwizzleAlpha},
-            gpuId);
-      }
+    if (record.texture && formatPolicy.supportsSrgbView) {
+      uint64_t gpuId = 0;
+      record.srgbShaderReadTexture = record.texture.newTextureView(
+          formatPolicy.srgbPixelFormat, info.type, 0, info.mipmap_level_count,
+          0, convert::toShaderReadViewSliceCount(desc.type),
+          formatPolicy.needsShaderReadView
+              ? formatPolicy.shaderReadSwizzle
+              : WMTTextureSwizzleChannels{WMTTextureSwizzleRed, WMTTextureSwizzleGreen,
+                                          WMTTextureSwizzleBlue, WMTTextureSwizzleAlpha},
+          gpuId);
     }
     // Both Private and Managed (discrete) reach the texture through a
     // staging-blit upload path — for Private because the CPU cannot
@@ -452,11 +450,12 @@ core::SurfaceHandle Pool::createSurface(WMT::Device device,
   // from `toResourceOptions` — Shared for SYSTEMMEM/SCRATCH on every
   // device, so a CPU-driven `replaceRegion` works on Lock/Unlock.
   {
+    const auto formatPolicy = convert::toFormatMetalPolicy(desc, limits);
     const uint32_t sc = std::max(1u, core::sampleCount(desc.multiSampleType));
     WMTTextureInfo info{};
     info.type = convert::toTextureType(core::TextureType::TwoD,
                                          desc.multiSampleType != core::MultiSampleType::None);
-    info.pixel_format = convert::toPixelFormat(desc.format, limits);
+    info.pixel_format = formatPolicy.pixelFormat;
     info.width = std::max(1u, desc.width);
     info.height = std::max(1u, desc.height);
     info.depth = 1;
@@ -470,16 +469,15 @@ core::SurfaceHandle Pool::createSurface(WMT::Device device,
     // texture path so a future surface category change picks the right
     // mode automatically.
     info.options = convert::toResourceOptions(desc.pool, desc.usage, hasUnifiedMemory_);
-    info.usage = convert::toTextureUsage(desc);
+    info.usage = formatPolicy.usage;
     record.texture = device.newTexture(info);
-    const auto srgbFormat = convert::toPixelFormat(desc.format, limits, true);
-    if (record.texture && srgbFormat != info.pixel_format) {
+    if (record.texture && formatPolicy.supportsSrgbView) {
       WMTTextureSwizzleChannels swizzle{
           WMTTextureSwizzleRed, WMTTextureSwizzleGreen,
           WMTTextureSwizzleBlue, WMTTextureSwizzleAlpha};
       uint64_t gpuId = 0;
       record.srgbTexture = record.texture.newTextureView(
-          srgbFormat, record.texture.textureType(), 0, 1, 0, 1, swizzle, gpuId);
+          formatPolicy.srgbPixelFormat, record.texture.textureType(), 0, 1, 0, 1, swizzle, gpuId);
     }
     if (sc > 1) {
       WMTTextureInfo resolveInfo = info;

@@ -328,8 +328,10 @@ void testShaderReadSwizzlePolicyForExpandedShaderReadFormats() {
                WMTTextureSwizzleRed, WMTTextureSwizzleGreen,
                "A8L8 shader-read swizzle expands luminance and preserves alpha");
 
-  TextureDesc normalDesc{64, 64, 1, 1, Format::A8R8G8B8, TextureType::TwoD,
+  TextureDesc normalDesc{64, 64, 1, 1, Format::R5G6B5, TextureType::TwoD,
                          Pool::Managed, UsageTexture};
+  TextureDesc srgbDesc = normalDesc;
+  srgbDesc.format = Format::A8R8G8B8;
   TextureDesc l8Desc = normalDesc;
   l8Desc.format = Format::L8;
   TextureDesc g16r16Desc = normalDesc;
@@ -342,7 +344,12 @@ void testShaderReadSwizzlePolicyForExpandedShaderReadFormats() {
   x8RtDesc.format = Format::X8R8G8B8;
   x8RtDesc.usage = UsageTexture | UsageRenderTarget;
   check(!hasUsage(dxmt9::convert::toTextureUsage(normalDesc), WMTTextureUsagePixelFormatView),
-        "ordinary textures do not request pixel-format views");
+        "formats without shader-read swizzle or sRGB views do not request pixel-format views");
+  const auto srgbPolicy = dxmt9::convert::toFormatMetalPolicy(srgbDesc, BackendLimits{});
+  check(srgbPolicy.supportsSrgbView,
+        "sRGB-compatible texture formats advertise sRGB views through the format policy");
+  check(hasUsage(srgbPolicy.usage, WMTTextureUsagePixelFormatView),
+        "sRGB-compatible texture formats request PixelFormatView usage");
   check(hasUsage(dxmt9::convert::toTextureUsage(l8Desc), WMTTextureUsagePixelFormatView),
         "L8 textures request pixel-format views for shader-read swizzle");
   check(hasUsage(dxmt9::convert::toTextureUsage(g16r16Desc), WMTTextureUsagePixelFormatView),
@@ -371,6 +378,10 @@ void testShaderReadSwizzlePolicyForExpandedShaderReadFormats() {
         "R32F-only RT PixelFormatView suppression does not affect X8 render targets");
   check(!dxmt9::convert::textureNeedsShaderReadView(x8RtDesc, false, true),
         "opt-in X8 RT PixelFormatView suppression drops X8 shader-read swizzle views");
+  const auto x8SuppressedPolicy =
+      dxmt9::convert::toFormatMetalPolicy(x8RtDesc, BackendLimits{}, false, true);
+  check(!x8SuppressedPolicy.supportsSrgbView,
+        "opt-in X8 RT PixelFormatView suppression also drops sRGB views");
   check(!hasUsage(dxmt9::convert::toTextureUsage(x8RtDesc, false, true),
                   WMTTextureUsagePixelFormatView),
         "opt-in X8 RT PixelFormatView suppression removes PixelFormatView usage");

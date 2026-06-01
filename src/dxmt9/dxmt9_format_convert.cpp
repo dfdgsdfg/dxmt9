@@ -19,6 +19,82 @@ using core::UsageDepthStencil;
 using core::UsageDynamic;
 using core::UsageRenderTarget;
 
+namespace {
+
+constexpr WMTTextureSwizzleChannels kIdentitySwizzle{
+    WMTTextureSwizzleRed, WMTTextureSwizzleGreen,
+    WMTTextureSwizzleBlue, WMTTextureSwizzleAlpha};
+
+struct ShaderReadSwizzlePolicy {
+  bool needsSwizzle = false;
+  WMTTextureSwizzleChannels swizzle = kIdentitySwizzle;
+};
+
+ShaderReadSwizzlePolicy shaderReadSwizzlePolicy(Format format) {
+  switch (format) {
+    case Format::X8R8G8B8:
+    case Format::X8B8G8R8:
+      return {true,
+              WMTTextureSwizzleChannels{
+                  WMTTextureSwizzleRed, WMTTextureSwizzleGreen,
+                  WMTTextureSwizzleBlue, WMTTextureSwizzleOne}};
+    case Format::R16F:
+    case Format::R32F:
+      return {true,
+              WMTTextureSwizzleChannels{
+                  WMTTextureSwizzleRed, WMTTextureSwizzleOne,
+                  WMTTextureSwizzleOne, WMTTextureSwizzleOne}};
+    case Format::G16R16F:
+    case Format::G32R32F:
+    case Format::G16R16:
+      return {true,
+              WMTTextureSwizzleChannels{
+                  WMTTextureSwizzleRed, WMTTextureSwizzleGreen,
+                  WMTTextureSwizzleOne, WMTTextureSwizzleOne}};
+    case Format::L8:
+    case Format::L16:
+      return {true,
+              WMTTextureSwizzleChannels{
+                  WMTTextureSwizzleRed, WMTTextureSwizzleRed,
+                  WMTTextureSwizzleRed, WMTTextureSwizzleOne}};
+    case Format::A8L8:
+      return {true,
+              WMTTextureSwizzleChannels{
+                  WMTTextureSwizzleRed, WMTTextureSwizzleRed,
+                  WMTTextureSwizzleRed, WMTTextureSwizzleGreen}};
+    default:
+      return {};
+  }
+}
+
+bool isRenderTargetTexture(const TextureDesc& desc) {
+  return (desc.usage & UsageRenderTarget) != 0 ||
+         (desc.usage & UsageDepthStencil) != 0;
+}
+
+bool suppressesTexturePixelFormatViews(const TextureDesc& desc,
+                                       bool suppressRenderTargetPixelFormatView,
+                                       bool suppressX8RenderTargetPixelFormatView) {
+  if (!isRenderTargetTexture(desc)) {
+    return false;
+  }
+  const bool suppressibleR32FRtFormat = desc.format == Format::R32F;
+  const bool suppressibleX8RtFormat =
+      desc.format == Format::X8R8G8B8 || desc.format == Format::X8B8G8R8;
+  return (suppressRenderTargetPixelFormatView && suppressibleR32FRtFormat) ||
+         (suppressX8RenderTargetPixelFormatView && suppressibleX8RtFormat);
+}
+
+WMTTextureUsage textureUsageWithPixelFormatView(WMTTextureUsage usage,
+                                                bool needsPixelFormatView) {
+  if (!needsPixelFormatView) {
+    return usage;
+  }
+  return static_cast<WMTTextureUsage>(usage | WMTTextureUsagePixelFormatView);
+}
+
+}  // namespace
+
 WMTPixelFormat toPixelFormat(Format format, const core::BackendLimits& limits) {
   switch (format) {
     case Format::A8R8G8B8:
@@ -185,21 +261,7 @@ WMTTextureType toTextureType(TextureType type, bool multisample) {
 }
 
 bool formatNeedsShaderReadSwizzle(Format format) {
-  switch (format) {
-    case Format::X8R8G8B8:
-    case Format::X8B8G8R8:
-    case Format::G16R16:
-    case Format::R16F:
-    case Format::G16R16F:
-    case Format::R32F:
-    case Format::G32R32F:
-    case Format::L8:
-    case Format::L16:
-    case Format::A8L8:
-      return true;
-    default:
-      return false;
-  }
+  return shaderReadSwizzlePolicy(format).needsSwizzle;
 }
 
 bool suppressRenderTargetPixelFormatViewEnabled() {
@@ -215,17 +277,10 @@ bool suppressX8RenderTargetPixelFormatViewEnabled() {
 bool textureNeedsShaderReadView(const TextureDesc& desc,
                                 bool suppressRenderTargetPixelFormatView,
                                 bool suppressX8RenderTargetPixelFormatView) {
-  if (!formatNeedsShaderReadSwizzle(desc.format)) {
-    return false;
-  }
-  const bool isRenderTarget =
-      (desc.usage & UsageRenderTarget) != 0 || (desc.usage & UsageDepthStencil) != 0;
-  const bool suppressibleR32FRtFormat = desc.format == Format::R32F;
-  const bool suppressibleX8RtFormat =
-      desc.format == Format::X8R8G8B8 || desc.format == Format::X8B8G8R8;
-  return !(isRenderTarget &&
-           ((suppressRenderTargetPixelFormatView && suppressibleR32FRtFormat) ||
-            (suppressX8RenderTargetPixelFormatView && suppressibleX8RtFormat)));
+  return formatNeedsShaderReadSwizzle(desc.format) &&
+         !suppressesTexturePixelFormatViews(desc,
+                                            suppressRenderTargetPixelFormatView,
+                                            suppressX8RenderTargetPixelFormatView);
 }
 
 bool textureNeedsShaderReadView(const TextureDesc& desc,
@@ -240,41 +295,69 @@ bool textureNeedsShaderReadView(const TextureDesc& desc) {
 }
 
 WMTTextureSwizzleChannels toShaderReadSwizzle(Format format) {
-  switch (format) {
-    case Format::X8R8G8B8:
-    case Format::X8B8G8R8:
-      return WMTTextureSwizzleChannels{
-          WMTTextureSwizzleRed, WMTTextureSwizzleGreen,
-          WMTTextureSwizzleBlue, WMTTextureSwizzleOne};
-    case Format::R16F:
-    case Format::R32F:
-      return WMTTextureSwizzleChannels{
-          WMTTextureSwizzleRed, WMTTextureSwizzleOne,
-          WMTTextureSwizzleOne, WMTTextureSwizzleOne};
-    case Format::G16R16F:
-    case Format::G32R32F:
-    case Format::G16R16:
-      return WMTTextureSwizzleChannels{
-          WMTTextureSwizzleRed, WMTTextureSwizzleGreen,
-          WMTTextureSwizzleOne, WMTTextureSwizzleOne};
-    case Format::L8:
-    case Format::L16:
-      return WMTTextureSwizzleChannels{
-          WMTTextureSwizzleRed, WMTTextureSwizzleRed,
-          WMTTextureSwizzleRed, WMTTextureSwizzleOne};
-    case Format::A8L8:
-      return WMTTextureSwizzleChannels{
-          WMTTextureSwizzleRed, WMTTextureSwizzleRed,
-          WMTTextureSwizzleRed, WMTTextureSwizzleGreen};
-    default:
-      return WMTTextureSwizzleChannels{
-          WMTTextureSwizzleRed, WMTTextureSwizzleGreen,
-          WMTTextureSwizzleBlue, WMTTextureSwizzleAlpha};
-  }
+  return shaderReadSwizzlePolicy(format).swizzle;
 }
 
 std::uint16_t toShaderReadViewSliceCount(TextureType type) {
   return type == TextureType::Cube ? 6u : 1u;
+}
+
+FormatMetalPolicy toFormatMetalPolicy(const SurfaceDesc& desc,
+                                      const core::BackendLimits& limits) {
+  FormatMetalPolicy policy{};
+  policy.pixelFormat = toPixelFormat(desc.format, limits);
+  policy.srgbPixelFormat = toSrgbPixelFormat(policy.pixelFormat);
+  policy.shaderReadSwizzle = kIdentitySwizzle;
+  policy.needsShaderReadView = false;
+  policy.supportsSrgbView = policy.srgbPixelFormat != policy.pixelFormat;
+
+  WMTTextureUsage usage = WMTTextureUsageShaderRead;
+  if (desc.renderTarget || desc.depthStencil) {
+    usage = static_cast<WMTTextureUsage>(usage | WMTTextureUsageRenderTarget);
+  }
+  policy.usage = textureUsageWithPixelFormatView(usage, policy.supportsSrgbView);
+  return policy;
+}
+
+FormatMetalPolicy toFormatMetalPolicy(const TextureDesc& desc,
+                                      const core::BackendLimits& limits,
+                                      bool suppressRenderTargetPixelFormatView,
+                                      bool suppressX8RenderTargetPixelFormatView) {
+  FormatMetalPolicy policy{};
+  policy.pixelFormat = toPixelFormat(desc.format, limits);
+  policy.srgbPixelFormat = toSrgbPixelFormat(policy.pixelFormat);
+  const auto swizzlePolicy = shaderReadSwizzlePolicy(desc.format);
+  policy.shaderReadSwizzle = swizzlePolicy.swizzle;
+
+  const bool suppressPixelFormatViews =
+      suppressesTexturePixelFormatViews(desc,
+                                        suppressRenderTargetPixelFormatView,
+                                        suppressX8RenderTargetPixelFormatView);
+  policy.needsShaderReadView = swizzlePolicy.needsSwizzle && !suppressPixelFormatViews;
+  policy.supportsSrgbView = policy.srgbPixelFormat != policy.pixelFormat &&
+                            !suppressPixelFormatViews;
+
+  WMTTextureUsage usage = WMTTextureUsageShaderRead;
+  if (isRenderTargetTexture(desc)) {
+    usage = static_cast<WMTTextureUsage>(usage | WMTTextureUsageRenderTarget);
+  }
+  policy.usage = textureUsageWithPixelFormatView(
+      usage, policy.needsShaderReadView || policy.supportsSrgbView);
+  return policy;
+}
+
+FormatMetalPolicy toFormatMetalPolicy(const TextureDesc& desc,
+                                      const core::BackendLimits& limits,
+                                      bool suppressRenderTargetPixelFormatView) {
+  return toFormatMetalPolicy(desc, limits, suppressRenderTargetPixelFormatView, false);
+}
+
+FormatMetalPolicy toFormatMetalPolicy(const TextureDesc& desc,
+                                      const core::BackendLimits& limits) {
+  return toFormatMetalPolicy(desc,
+                             limits,
+                             suppressRenderTargetPixelFormatViewEnabled(),
+                             suppressX8RenderTargetPixelFormatViewEnabled());
 }
 
 WMTResourceOptions toResourceOptions(Pool pool, u32 usage, bool hasUnifiedMemory) {
@@ -312,16 +395,10 @@ WMTTextureUsage toTextureUsage(const SurfaceDesc& desc) {
 WMTTextureUsage toTextureUsage(const TextureDesc& desc,
                                bool suppressRenderTargetPixelFormatView,
                                bool suppressX8RenderTargetPixelFormatView) {
-  WMTTextureUsage usage = WMTTextureUsageShaderRead;
-  if ((desc.usage & UsageRenderTarget) != 0 || (desc.usage & UsageDepthStencil) != 0) {
-    usage = static_cast<WMTTextureUsage>(usage | WMTTextureUsageRenderTarget);
-  }
-  if (textureNeedsShaderReadView(desc,
-                                 suppressRenderTargetPixelFormatView,
-                                 suppressX8RenderTargetPixelFormatView)) {
-    usage = static_cast<WMTTextureUsage>(usage | WMTTextureUsagePixelFormatView);
-  }
-  return usage;
+  return toFormatMetalPolicy(desc,
+                             core::BackendLimits{},
+                             suppressRenderTargetPixelFormatView,
+                             suppressX8RenderTargetPixelFormatView).usage;
 }
 
 WMTTextureUsage toTextureUsage(const TextureDesc& desc,

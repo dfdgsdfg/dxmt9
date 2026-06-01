@@ -15,6 +15,17 @@ namespace dxmt9::convert {
 using u32 = std::uint32_t;
 using u64 = std::uint64_t;
 
+struct FormatMetalPolicy {
+  WMTPixelFormat pixelFormat = WMTPixelFormatInvalid;
+  WMTPixelFormat srgbPixelFormat = WMTPixelFormatInvalid;
+  WMTTextureUsage usage = WMTTextureUsageUnknown;
+  WMTTextureSwizzleChannels shaderReadSwizzle{
+      WMTTextureSwizzleRed, WMTTextureSwizzleGreen,
+      WMTTextureSwizzleBlue, WMTTextureSwizzleAlpha};
+  bool needsShaderReadView = false;
+  bool supportsSrgbView = false;
+};
+
 // Core format → WMT pixel format. Depth formats consult BackendLimits to pick
 // between Depth24Stencil8 / Depth32FloatStencil8 based on device support.
 WMTPixelFormat toPixelFormat(core::Format format, const core::BackendLimits& limits);
@@ -36,6 +47,17 @@ bool textureNeedsShaderReadView(const core::TextureDesc& desc,
 bool textureNeedsShaderReadView(const core::TextureDesc& desc);
 WMTTextureSwizzleChannels toShaderReadSwizzle(core::Format format);
 std::uint16_t toShaderReadViewSliceCount(core::TextureType type);
+FormatMetalPolicy toFormatMetalPolicy(const core::SurfaceDesc& desc,
+                                      const core::BackendLimits& limits);
+FormatMetalPolicy toFormatMetalPolicy(const core::TextureDesc& desc,
+                                      const core::BackendLimits& limits,
+                                      bool suppressRenderTargetPixelFormatView,
+                                      bool suppressX8RenderTargetPixelFormatView);
+FormatMetalPolicy toFormatMetalPolicy(const core::TextureDesc& desc,
+                                      const core::BackendLimits& limits,
+                                      bool suppressRenderTargetPixelFormatView);
+FormatMetalPolicy toFormatMetalPolicy(const core::TextureDesc& desc,
+                                      const core::BackendLimits& limits);
 // R-BACK-5.7: Pool/usage → Metal storage mode mapping. `hasUnifiedMemory`
 // must come from a single MTLDevice.hasUnifiedMemory() probe cached at
 // device init (do not call per-resource). On unified-memory devices
