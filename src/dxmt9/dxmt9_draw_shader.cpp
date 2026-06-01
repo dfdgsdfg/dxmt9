@@ -111,7 +111,8 @@ shaders::VSOutLayout ffpPixelVaryingLiveness(const ShaderSourceContext& context)
   // `color`, `current`, `diffuse`, and `specular`.
   layout.color = true;
   layout.secondaryColor = true;
-  if (!context.stripFogAlphaTestForTileBase && key.fogMode != FogMode::None) {
+  if (!context.stripFogAlphaTestForTileBase && !context.stripFogForDebug &&
+      key.fogMode != FogMode::None) {
     layout.fogFactor = true;
   }
 

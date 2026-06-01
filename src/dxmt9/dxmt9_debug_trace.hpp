@@ -88,6 +88,9 @@ bool forcePixelVFlip();
 // Disable alpha-test programmatic emulation. Env: DXMT_DISABLE_ALPHA_TEST.
 bool disableAlphaTest();
 
+// Disable fog programmatic emulation. Env: DXMT_DISABLE_FOG.
+bool disableFog();
+
 // Diagnostic render-state A/B: force color blending off while preserving
 // color-write masks. Env: DXMT9_PROBE_DISABLE_ALPHA_BLEND.
 bool probeDisableAlphaBlend();

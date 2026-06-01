@@ -71,6 +71,10 @@ struct ShaderSourceContext {
   // guarding it with a runtime uniform. This isolates Metal backend shape
   // changes caused by possible discard.
   bool stripAlphaTestForDebug = false;
+  // Diagnostic fog source stripper. When DXMT_DISABLE_FOG is set, generated
+  // fragment shaders omit the D3D9 fog blend path. This isolates backend shape
+  // changes caused by fog-source reads and fog blending.
+  bool stripFogForDebug = false;
   // Pair-local VSOut layout selected from fragment-input liveness when
   // DXMT9_TRIM_UNUSED_VARYINGS is enabled. Full layout by default.
   shaders::VSOutLayout vsOutLayout{};

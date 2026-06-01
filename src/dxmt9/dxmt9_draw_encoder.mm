@@ -2239,6 +2239,7 @@ u32 vsOutLayoutKeyForDraw(core::FlatDrawStateView drawState,
       drawshader::makeShaderSourceContext(drawState.shaderContext(), *drawState.hot);
   context.stripFogAlphaTestForTileBase = tileFfpBaseColor;
   context.stripAlphaTestForDebug = debug::disableAlphaTest();
+  context.stripFogForDebug = debug::disableFog();
   try {
     context.vsOutLayout = drawshader::resolveVSOutLayoutForShaderPair(context);
     return shaders::vsoutLayoutKey(context.vsOutLayout);
@@ -2275,6 +2276,7 @@ ShaderSourceHashes shaderSourceHashesForDraw(core::FlatDrawStateView drawState,
       drawshader::makeShaderSourceContext(drawState.shaderContext(), *drawState.hot);
   context.stripFogAlphaTestForTileBase = tileFfpBaseColor;
   context.stripAlphaTestForDebug = debug::disableAlphaTest();
+  context.stripFogForDebug = debug::disableFog();
   context.argbufHybridMode = argbufHybridMode;
   context.argbufResourceArray = argbufHybridMode && argbufResourceArray;
   context.samplerLodBias = samplerLodBias;

@@ -1210,6 +1210,7 @@ std::string makeFfpPixelSource(const FfpPixelKey& key,
   // kernel reads back the imageblock color, so a discarded base fragment
   // would never reach it).
   const bool emitFogAlphaTest = !context.stripFogAlphaTestForTileBase;
+  const bool emitFog = emitFogAlphaTest && !context.stripFogForDebug;
   const bool emitAlphaTest = emitFogAlphaTest && !context.stripAlphaTestForDebug;
   if (emitAlphaTest && key.alphaTestEnable) {
     out << "  bool pass = true;\n";
@@ -1225,7 +1226,7 @@ std::string makeFfpPixelSource(const FfpPixelKey& key,
     out << "  }\n";
     out << "  if (!pass) { discard_fragment(); }\n";
   }
-  if (emitFogAlphaTest && key.fogMode != FogMode::None) {
+  if (emitFog && key.fogMode != FogMode::None) {
     out << "  float fogDepth = color.a;\n";
     out << "  color = dxmt9_apply_fog(color, ffpPs, fogDepth, in.fogFactor);\n";
   }
@@ -1369,7 +1370,7 @@ std::string makeFfpTilePixelSource(const FfpPixelKey& key,
     out << "    if (!pass) { return; }\n";
     out << "  }\n";
   }
-  if (key.fogMode != FogMode::None) {
+  if (!context.stripFogForDebug && key.fogMode != FogMode::None) {
     // Fog blend: linear over [fogStart, fogEnd]. Computed in float
     // (R-BACK-13.7) regardless of attachment format.
     //

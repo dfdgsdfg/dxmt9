@@ -3534,9 +3534,11 @@ std::string translateSpirvToMsl(const SpirvModule& module,
     out << "    }\n";
     out << "  }\n";
   }
+  if (!context.stripFogForDebug) {
 		  out << "  if (ffpPs.fogMode != 0u) {\n";
 		  out << "    color = dxmt9_apply_fog(color, ffpPs, in.position.z, in.fogFactor);\n";
 		  out << "  }\n";
+  }
 		  out << "  outColor[0] = color;\n";
 		  if (usesFragmentOutStruct) {
 		    out << "  FSOut result;\n";

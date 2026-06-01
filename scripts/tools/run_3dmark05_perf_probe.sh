@@ -27,6 +27,7 @@ aggressive_depth_dontcare=0
 disable_cull=0
 disable_scissor=0
 disable_alpha_test=0
+disable_fog=0
 probe_disable_alpha_blend=0
 probe_disable_depth_write=0
 force_visible=0
@@ -130,6 +131,8 @@ Options:
   --disable-alpha-test
                       Set DXMT_DISABLE_ALPHA_TEST=1 to strip shader alpha-test
                       discard and isolate it from force-fragment-color
+  --disable-fog       Set DXMT_DISABLE_FOG=1 to strip shader fog blend and
+                      isolate fog source shape from force-fragment-color
   --probe-disable-alpha-blend
                       Set DXMT9_PROBE_DISABLE_ALPHA_BLEND=1 for blend state A/B
   --probe-disable-depth-write
@@ -309,6 +312,10 @@ while (($#)); do
       ;;
     --disable-alpha-test)
       disable_alpha_test=1
+      shift
+      ;;
+    --disable-fog)
+      disable_fog=1
       shift
       ;;
     --probe-disable-alpha-blend)
@@ -738,6 +745,10 @@ if (( disable_alpha_test )); then
   env_args+=("DXMT_DISABLE_ALPHA_TEST=1")
 fi
 
+if (( disable_fog )); then
+  env_args+=("DXMT_DISABLE_FOG=1")
+fi
+
 if (( probe_disable_alpha_blend )); then
   env_args+=("DXMT9_PROBE_DISABLE_ALPHA_BLEND=1")
 fi
@@ -972,6 +983,9 @@ if (( probe_disable_alpha_blend )); then
 fi
 if (( disable_alpha_test )); then
   echo "warning: --disable-alpha-test is diagnostic only and can corrupt alpha-tested geometry; use it only to isolate discard/raster backend effects."
+fi
+if (( disable_fog )); then
+  echo "warning: --disable-fog is diagnostic only and can corrupt fogged geometry; use it only to isolate fog/raster backend effects."
 fi
 if (( probe_disable_depth_write )); then
   echo "warning: --probe-disable-depth-write is diagnostic only and can corrupt depth-dependent frame output; do not treat it as correctness-preserving."

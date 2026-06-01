@@ -123,6 +123,11 @@ bool disableAlphaTest() {
   return v;
 }
 
+bool disableFog() {
+  static const bool v = util::getenvFlag("DXMT_DISABLE_FOG");
+  return v;
+}
+
 bool probeDisableAlphaBlend() {
   static const bool v = util::getenvFlag("DXMT9_PROBE_DISABLE_ALPHA_BLEND");
   return v;
