@@ -825,7 +825,156 @@ struct DrawRunSubmission {
   DrawUniformPayload uniforms{};
   DrawParam draw{};
   DrawParamPayloadView payload{};
+  DrawBindingOverride bindingOverride{};
 };
+
+inline std::span<const u8> drawBindingOverrideBytes(
+    const DrawBindingOverride& binding) noexcept {
+  return std::span<const u8>(reinterpret_cast<const u8*>(&binding),
+                             sizeof(binding));
+}
+
+inline bool drawBindingOverrideEmpty(
+    const DrawBindingOverride& binding) noexcept {
+  return binding.streamMask == 0 && !binding.indexBufferValid;
+}
+
+inline void clearDrawStateBindingFields(FlatDrawStateRecord& hot) noexcept {
+  hot.streamBuffers = {};
+  hot.streamOffsets = {};
+  hot.streamStrides = {};
+  hot.streamMask = 0;
+  hot.indexBuffer = {};
+  hot.vertexConstantsHash = 0;
+  hot.pixelConstantsHash = 0;
+  hot.worldViewProjHash = 0;
+  hot.ffpBlendWorldViewProjHash = 0;
+  hot.textureTransformsHash = 0;
+  hot.clipPlanesHash = 0;
+  hot.key.streamBuffers = {};
+  hot.key.streamOffsets = {};
+  hot.key.streamStrides = {};
+  hot.key.streamMask = 0;
+  hot.key.indexBuffer = {};
+  hot.key.vertexConstantsHash = 0;
+  hot.key.pixelConstantsHash = 0;
+  hot.key.worldViewProjHash = 0;
+  hot.key.ffpBlendWorldViewProjHash = 0;
+  hot.key.textureTransformsHash = 0;
+  hot.key.clipPlanesHash = 0;
+}
+
+inline void clearDrawShaderLayoutBindingFields(
+    DrawShaderLayoutContext& shaderLayout) noexcept {
+  shaderLayout.vertexDecl.streams = {};
+}
+
+inline bool drawRunSubmissionHasExternalBindingOverride(
+    const DrawRunSubmission& submission) noexcept {
+  return !submission.payload.bindingOverrideData.empty();
+}
+
+inline bool drawStateKeysCompatibleForDrawRunBatch(
+    const FlatDrawStateKey& a,
+    const FlatDrawStateKey& b) noexcept {
+  return a.vertexElementCount == b.vertexElementCount &&
+         a.fvf == b.fvf &&
+         a.vertexDeclHash == b.vertexDeclHash &&
+         a.vertexShaderKind == b.vertexShaderKind &&
+         a.pixelShaderKind == b.pixelShaderKind &&
+         a.vertexShaderHash == b.vertexShaderHash &&
+         a.pixelShaderHash == b.pixelShaderHash &&
+         a.textures == b.textures &&
+         a.textureLods == b.textureLods &&
+         a.textureMask == b.textureMask &&
+         a.textureStageStateHashes == b.textureStageStateHashes &&
+         a.samplerStateHashes == b.samplerStateHashes &&
+         a.samplerStateMask == b.samplerStateMask &&
+         a.renderStateHash == b.renderStateHash &&
+         a.colorAttachments == b.colorAttachments &&
+         a.depthStencil == b.depthStencil &&
+         a.renderTargetMask == b.renderTargetMask &&
+         a.viewportHash == b.viewportHash &&
+         a.clipPlaneMask == b.clipPlaneMask;
+}
+
+inline bool drawStatesCompatibleForDrawRunBatch(
+    const FlatDrawStateRecord& a,
+    const FlatDrawStateRecord& b) noexcept {
+  return drawStateKeysCompatibleForDrawRunBatch(a.key, b.key) &&
+         a.textures == b.textures &&
+         a.textureLods == b.textureLods &&
+         a.textureMask == b.textureMask &&
+         a.renderStates == b.renderStates &&
+         a.textureStageStates == b.textureStageStates &&
+         a.samplerStates == b.samplerStates &&
+         a.colorAttachments == b.colorAttachments &&
+         a.depthStencil == b.depthStencil &&
+         a.renderTargetMask == b.renderTargetMask &&
+         a.viewport == b.viewport &&
+         a.clipPlaneMask == b.clipPlaneMask;
+}
+
+inline bool shaderLayoutsCompatibleForDrawRunBatch(
+    const DrawShaderLayoutContext& a,
+    const DrawShaderLayoutContext& b) noexcept {
+  return a.vertexDecl.elements == b.vertexDecl.elements &&
+         a.vertexDecl.fvf == b.vertexDecl.fvf &&
+         a.vertexShader == b.vertexShader &&
+         a.pixelShader == b.pixelShader &&
+         a.vertexConstantUsage == b.vertexConstantUsage &&
+         a.pixelConstantUsage == b.pixelConstantUsage &&
+         a.clipPlaneMask == b.clipPlaneMask;
+}
+
+inline bool drawRunSubmissionStatesCompatibleForBatch(
+    const DrawRunSubmission& a,
+    const DrawRunSubmission& b) noexcept {
+  if (drawRunSubmissionHasExternalBindingOverride(a) ||
+      drawRunSubmissionHasExternalBindingOverride(b)) {
+    return a.state.hot == b.state.hot &&
+           a.state.shaderLayout == b.state.shaderLayout;
+  }
+
+  return drawStatesCompatibleForDrawRunBatch(a.state.hot, b.state.hot) &&
+         shaderLayoutsCompatibleForDrawRunBatch(a.state.shaderLayout,
+                                                b.state.shaderLayout);
+}
+
+inline void prepareDrawRunSubmissionBindingOverride(
+    const DrawRunSubmission& base,
+    DrawRunSubmission& submission) noexcept {
+  if (drawRunSubmissionHasExternalBindingOverride(submission)) {
+    return;
+  }
+
+  submission.bindingOverride = {};
+  for (u32 stream = 0; stream < kMaxStreams; ++stream) {
+    if (base.state.hot.streamBuffers[stream] == submission.state.hot.streamBuffers[stream] &&
+        base.state.hot.streamOffsets[stream] == submission.state.hot.streamOffsets[stream] &&
+        base.state.hot.streamStrides[stream] == submission.state.hot.streamStrides[stream]) {
+      continue;
+    }
+    submission.bindingOverride.streamMask |= 1u << stream;
+    submission.bindingOverride.streams[stream] = DrawStreamBindingOverride{
+        .buffer = submission.state.hot.streamBuffers[stream],
+        .offset = submission.state.hot.streamOffsets[stream],
+        .stride = submission.state.hot.streamStrides[stream],
+    };
+  }
+
+  if (base.state.hot.indexBuffer != submission.state.hot.indexBuffer ||
+      base.draw.indexType != submission.draw.indexType) {
+    submission.bindingOverride.indexBuffer = submission.state.hot.indexBuffer;
+    submission.bindingOverride.indexType = submission.draw.indexType;
+    submission.bindingOverride.indexBufferValid = true;
+  }
+
+  if (!drawBindingOverrideEmpty(submission.bindingOverride)) {
+    submission.payload.bindingOverrideData =
+        drawBindingOverrideBytes(submission.bindingOverride);
+  }
+}
 
 namespace fixture {
 

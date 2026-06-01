@@ -750,8 +750,18 @@ std::size_t drawRunSubmissionPayloadBytes(
 bool drawSubmissionStatesCompatible(
     const core::DrawRunSubmission& a,
     const core::DrawRunSubmission& b) noexcept {
-  return a.state.hot == b.state.hot &&
-         a.state.shaderLayout == b.state.shaderLayout;
+  return core::drawRunSubmissionStatesCompatibleForBatch(a, b);
+}
+
+void prepareDrawRunBatchBindingOverrides(
+    std::span<core::DrawRunSubmission> submissions) noexcept {
+  if (submissions.empty()) {
+    return;
+  }
+  const auto& base = submissions.front();
+  for (auto& submission : submissions) {
+    core::prepareDrawRunSubmissionBindingOverride(base, submission);
+  }
 }
 
 void markDrawBindingOverrideResources(
@@ -1017,6 +1027,7 @@ void CommandQueue::submitDrawRunBatch(
       ++batchEnd;
     }
     auto batch = submissions.subspan(batchStart, batchEnd - batchStart);
+    prepareDrawRunBatchBindingOverrides(batch);
     const std::size_t pendingPayloadBytes = drawRunSubmissionPayloadBytes(batch);
     ensureWritingSlotUnlocked(*this, lock);
     maybeCommitDrawPayloadArenaUnlocked(*this, pool_, lock, pendingPayloadBytes);

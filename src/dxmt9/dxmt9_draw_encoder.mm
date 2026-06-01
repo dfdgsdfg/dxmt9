@@ -2746,17 +2746,28 @@ bool drawParamBindingOverride(const core::DrawParam& param,
 }
 
 void applyDrawBindingOverride(core::FlatDrawStateRecord& hot,
+                              core::DrawShaderLayoutContext* shaderLayout,
                               const core::DrawBindingOverride& binding) {
   for (u32 stream = 0; stream < core::kMaxStreams; ++stream) {
     if ((binding.streamMask & (1u << stream)) == 0) {
       continue;
     }
+    const bool bufferHandleChanged =
+        hot.streamBuffers[stream] != binding.streams[stream].buffer;
     hot.streamBuffers[stream] = binding.streams[stream].buffer;
     hot.streamOffsets[stream] = binding.streams[stream].offset;
     hot.streamStrides[stream] = binding.streams[stream].stride;
     hot.key.streamBuffers[stream] = hot.streamBuffers[stream];
     hot.key.streamOffsets[stream] = hot.streamOffsets[stream];
     hot.key.streamStrides[stream] = hot.streamStrides[stream];
+    if (shaderLayout) {
+      auto& streamBinding = shaderLayout->vertexDecl.streams[stream];
+      if (bufferHandleChanged) {
+        streamBinding.buffer.reset();
+      }
+      streamBinding.offset = binding.streams[stream].offset;
+      streamBinding.stride = binding.streams[stream].stride;
+    }
   }
   hot.streamMask = 0;
   for (u32 stream = 0; stream < core::kMaxStreams; ++stream) {
@@ -5597,12 +5608,19 @@ std::optional<core::metalqueue::QueueSubmissionRecord> encodeChunk(
       }
       core::DrawBindingOverride bindingOverride{};
       core::FlatDrawStateRecord overrideHot{};
+      core::DrawShaderLayoutContext overrideShaderLayout{};
       auto drawStateView = stateView;
       bool hasBindingOverride =
           drawParamBindingOverride(param, recordPayloadArena, bindingOverride);
       if (hasBindingOverride) {
         overrideHot = hot;
-        applyDrawBindingOverride(overrideHot, bindingOverride);
+        if (drawStateView.shaderLayout) {
+          overrideShaderLayout = *drawStateView.shaderLayout;
+          applyDrawBindingOverride(overrideHot, &overrideShaderLayout, bindingOverride);
+          drawStateView.shaderLayout = &overrideShaderLayout;
+        } else {
+          applyDrawBindingOverride(overrideHot, nullptr, bindingOverride);
+        }
         drawStateView.hot = &overrideHot;
       }
       drawStateView.uniforms = drawUniformPayload;

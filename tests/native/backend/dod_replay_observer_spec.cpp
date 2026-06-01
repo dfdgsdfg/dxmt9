@@ -644,6 +644,109 @@ void testChunkSlotDrawRunBatchKeepsPerDrawUniformPayloads() {
         "second draw sees post-update uniform payload");
 }
 
+void testDrawRunBatchBindingOverrideNormalizesStreamAndIndexState() {
+  DrawDesc desc{};
+  desc.primitiveCount = 1u;
+  desc.rts.color[0] = RenderTargetAttachment{.handle = Handle{0x3000u}};
+
+  auto firstState = makeCanonicalDrawStateForTest(desc);
+  auto secondState = makeCanonicalDrawStateForTest(desc);
+
+  firstState.hot.streamBuffers[0] = Handle{0x4100u};
+  firstState.hot.streamOffsets[0] = 16u;
+  firstState.hot.streamStrides[0] = 32u;
+  firstState.hot.streamMask = 0x1u;
+  firstState.hot.key.streamBuffers[0] = firstState.hot.streamBuffers[0];
+  firstState.hot.key.streamOffsets[0] = firstState.hot.streamOffsets[0];
+  firstState.hot.key.streamStrides[0] = firstState.hot.streamStrides[0];
+  firstState.hot.key.streamMask = firstState.hot.streamMask;
+  firstState.hot.indexBuffer = Handle{0x5100u};
+  firstState.hot.key.indexBuffer = firstState.hot.indexBuffer;
+  firstState.shaderLayout.vertexDecl.streams[0].offset = firstState.hot.streamOffsets[0];
+  firstState.shaderLayout.vertexDecl.streams[0].stride = firstState.hot.streamStrides[0];
+
+  secondState.hot.streamBuffers[0] = Handle{0x4200u};
+  secondState.hot.streamOffsets[0] = 64u;
+  secondState.hot.streamStrides[0] = 48u;
+  secondState.hot.streamMask = 0x1u;
+  secondState.hot.key.streamBuffers[0] = secondState.hot.streamBuffers[0];
+  secondState.hot.key.streamOffsets[0] = secondState.hot.streamOffsets[0];
+  secondState.hot.key.streamStrides[0] = secondState.hot.streamStrides[0];
+  secondState.hot.key.streamMask = secondState.hot.streamMask;
+  secondState.hot.indexBuffer = Handle{0x5200u};
+  secondState.hot.key.indexBuffer = secondState.hot.indexBuffer;
+  secondState.shaderLayout.vertexDecl.streams[0].offset = secondState.hot.streamOffsets[0];
+  secondState.shaderLayout.vertexDecl.streams[0].stride = secondState.hot.streamStrides[0];
+  secondState.hot.vertexConstantsHash = 0xabcdu;
+  secondState.hot.pixelConstantsHash = 0x1234u;
+  secondState.hot.worldViewProjHash = 0x5678u;
+  secondState.hot.key.vertexConstantsHash = secondState.hot.vertexConstantsHash;
+  secondState.hot.key.pixelConstantsHash = secondState.hot.pixelConstantsHash;
+  secondState.hot.key.worldViewProjHash = secondState.hot.worldViewProjHash;
+
+  std::array<DrawRunSubmission, 2> submissions{
+      DrawRunSubmission{
+          .state = firstState,
+          .uniforms = makeDrawUniformPayload(desc),
+          .draw = makeDrawParam(1u, 0u),
+      },
+      DrawRunSubmission{
+          .state = secondState,
+          .uniforms = makeDrawUniformPayload(desc),
+          .draw = makeDrawParam(1u, 3u),
+      },
+  };
+  submissions[0].draw.indexed = true;
+  submissions[0].draw.indexType = IndexType::UInt16;
+  submissions[1].draw.indexed = true;
+  submissions[1].draw.indexType = IndexType::UInt32;
+
+  check(!(submissions[0].state.hot == submissions[1].state.hot),
+        "raw stream/IB states differ before normalization");
+  check(drawRunSubmissionStatesCompatibleForBatch(submissions[0], submissions[1]),
+        "stream/IB and uniform-only state changes are compatible for draw-run batching");
+
+  prepareDrawRunSubmissionBindingOverride(submissions[0], submissions[0]);
+  prepareDrawRunSubmissionBindingOverride(submissions[0], submissions[1]);
+  check(submissions[0].payload.bindingOverrideData.empty(),
+        "base draw does not need a binding override payload");
+  checkEq(submissions[1].payload.bindingOverrideData.size(),
+          sizeof(DrawBindingOverride),
+          "non-base draw stores binding override bytes inline");
+
+  DrawBindingOverride override{};
+  std::memcpy(&override, submissions[1].payload.bindingOverrideData.data(),
+              sizeof(override));
+  checkEq(override.streamMask, 0x1u,
+          "binding override captures stream 0");
+  checkEq(override.streams[0].buffer, Handle{0x4200u},
+          "binding override captures stream handle");
+  checkEq(override.streams[0].offset, 64u,
+          "binding override captures stream offset");
+  checkEq(override.streams[0].stride, 48u,
+          "binding override captures stream stride");
+  check(override.indexBufferValid,
+        "binding override captures index buffer when indexed binding changes");
+  checkEq(override.indexBuffer, Handle{0x5200u},
+          "binding override captures index buffer handle");
+  check(override.indexType == IndexType::UInt32,
+        "binding override captures index type");
+
+  ChunkSlot slot{};
+  slot.appendDrawRunBatch(
+      std::span<DrawRunSubmission>(submissions.data(), submissions.size()));
+  checkEq(slot.commandCount(), std::size_t{1},
+          "binding-normalized submissions append as one draw-run command");
+  const auto command = slot.drawRunCommandAt(0u);
+  checkEq(drawRunDrawCount(command), std::size_t{2},
+          "binding-normalized command keeps both draw params");
+  check(command.drawParams[0].bindingOverrideRange.empty(),
+        "base draw param has no binding override range");
+  checkEq(command.drawParams[1].bindingOverrideRange.size,
+          static_cast<u32>(sizeof(DrawBindingOverride)),
+          "second draw param points at serialized binding override");
+}
+
 } // namespace
 
 int main() {
@@ -652,6 +755,7 @@ int main() {
     testChunkSlotReplayObserverAndQueueSummarySeeSameCategories();
     testChunkSlotDrawRunSoAReuseKeepsReservedCapacitiesStable();
     testChunkSlotDrawRunBatchKeepsPerDrawUniformPayloads();
+    testDrawRunBatchBindingOverrideNormalizesStreamAndIndexState();
   } catch (const TestFailure &e) {
     std::cerr << "dod_replay_observer_spec failed: " << e.what() << '\n';
     return EXIT_FAILURE;
