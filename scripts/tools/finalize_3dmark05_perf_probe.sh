@@ -37,6 +37,7 @@ require_ib_handle_churn_decrease=0
 require_argbuf_cbuf_decrease=0
 require_transient_decrease=0
 require_top_gpu_share_increase=0
+require_top_row_key_match=0
 require_top_pso_attribution=0
 require_xcode_counter_coverage=0
 require_dxmt_join_coverage=0
@@ -46,6 +47,9 @@ min_top_dxmt_joined_fraction=${DXMT_3DMARK05_MIN_TOP_DXMT_JOINED_FRACTION:-1.0}
 max_top_gpu_regression_ms=${DXMT_3DMARK05_MAX_TOP_GPU_REGRESSION_MS:-}
 max_top_buffer_write_regression_mib=${DXMT_3DMARK05_MAX_TOP_BUFFER_WRITE_REGRESSION_MIB:-}
 max_top_unexplained_buffer_write_ratio=${DXMT_3DMARK05_MAX_TOP_UNEXPLAINED_BUFFER_WRITE_RATIO:-}
+max_top_draw_call_delta_ratio=${DXMT_3DMARK05_MAX_TOP_DRAW_CALL_DELTA_RATIO:-}
+max_top_vertex_count_delta_ratio=${DXMT_3DMARK05_MAX_TOP_VERTEX_COUNT_DELTA_RATIO:-}
+max_top_triangle_delta_ratio=${DXMT_3DMARK05_MAX_TOP_TRIANGLE_DELTA_RATIO:-}
 top_n=${DXMT_3DMARK05_TOP_N:-3}
 hot_gpu_share=${DXMT_3DMARK05_HOT_GPU_SHARE:-95.0}
 
@@ -92,6 +96,7 @@ Options:
   --require-argbuf-cbuf-decrease
   --require-transient-decrease
   --require-top-gpu-share-increase
+  --require-top-row-key-match
   --require-top-pso-attribution
   --require-xcode-counter-coverage
   --require-dxmt-join-coverage
@@ -103,6 +108,9 @@ Options:
   --max-top-gpu-regression-ms N
   --max-top-buffer-write-regression-mib N
   --max-top-unexplained-buffer-write-ratio N
+  --max-top-draw-call-delta-ratio N
+  --max-top-vertex-count-delta-ratio N
+  --max-top-triangle-delta-ratio N
   --top N             GPU-time-ranked encoder count for top-N gates and comparison
                       (default: 3)
   --hot-gpu-share PCT GPU share target for report-only Hot Set Aggregate
@@ -238,6 +246,10 @@ while (($#)); do
       require_top_gpu_share_increase=1
       shift
       ;;
+    --require-top-row-key-match)
+      require_top_row_key_match=1
+      shift
+      ;;
     --require-top-pso-attribution)
       require_top_pso_attribution=1
       shift
@@ -272,6 +284,18 @@ while (($#)); do
       ;;
     --max-top-unexplained-buffer-write-ratio)
       max_top_unexplained_buffer_write_ratio=${2:?missing value for --max-top-unexplained-buffer-write-ratio}
+      shift 2
+      ;;
+    --max-top-draw-call-delta-ratio)
+      max_top_draw_call_delta_ratio=${2:?missing value for --max-top-draw-call-delta-ratio}
+      shift 2
+      ;;
+    --max-top-vertex-count-delta-ratio)
+      max_top_vertex_count_delta_ratio=${2:?missing value for --max-top-vertex-count-delta-ratio}
+      shift 2
+      ;;
+    --max-top-triangle-delta-ratio)
+      max_top_triangle_delta_ratio=${2:?missing value for --max-top-triangle-delta-ratio}
       shift 2
       ;;
     --top)
@@ -330,6 +354,9 @@ validate_optional_number "--min-top-dxmt-joined-fraction" "$min_top_dxmt_joined_
 validate_optional_number "--max-top-gpu-regression-ms" "$max_top_gpu_regression_ms"
 validate_optional_number "--max-top-buffer-write-regression-mib" "$max_top_buffer_write_regression_mib"
 validate_optional_number "--max-top-unexplained-buffer-write-ratio" "$max_top_unexplained_buffer_write_ratio"
+validate_optional_number "--max-top-draw-call-delta-ratio" "$max_top_draw_call_delta_ratio"
+validate_optional_number "--max-top-vertex-count-delta-ratio" "$max_top_vertex_count_delta_ratio"
+validate_optional_number "--max-top-triangle-delta-ratio" "$max_top_triangle_delta_ratio"
 if [[ ! "$top_n" =~ ^[0-9]+$ ]] || (( top_n == 0 )); then
   echo "--top must be a positive integer" >&2
   exit 2
@@ -366,10 +393,14 @@ if (( require_top_gpu_decrease ||
       require_ib_handle_churn_decrease ||
       require_argbuf_cbuf_decrease ||
       require_transient_decrease ||
-      require_top_gpu_share_increase )) ||
+      require_top_gpu_share_increase ||
+      require_top_row_key_match )) ||
    [[ -n "$max_top_gpu_regression_ms" ||
       -n "$max_top_buffer_write_regression_mib" ||
-      -n "$max_top_unexplained_buffer_write_ratio" ]]; then
+      -n "$max_top_unexplained_buffer_write_ratio" ||
+      -n "$max_top_draw_call_delta_ratio" ||
+      -n "$max_top_vertex_count_delta_ratio" ||
+      -n "$max_top_triangle_delta_ratio" ]]; then
   xcode_compare_requested=1
 fi
 
@@ -575,6 +606,9 @@ if [[ -n "$baseline_joined" ]]; then
   if (( require_top_gpu_share_increase )); then
     xcode_compare_cmd+=(--require-top-gpu-share-increase)
   fi
+  if (( require_top_row_key_match )); then
+    xcode_compare_cmd+=(--require-top-row-key-match)
+  fi
   if [[ -n "$max_top_gpu_regression_ms" ]]; then
     xcode_compare_cmd+=(--max-top-gpu-regression-ms "$max_top_gpu_regression_ms")
   fi
@@ -588,6 +622,24 @@ if [[ -n "$baseline_joined" ]]; then
     xcode_compare_cmd+=(
       --max-top-unexplained-buffer-write-ratio
       "$max_top_unexplained_buffer_write_ratio"
+    )
+  fi
+  if [[ -n "$max_top_draw_call_delta_ratio" ]]; then
+    xcode_compare_cmd+=(
+      --max-top-draw-call-delta-ratio
+      "$max_top_draw_call_delta_ratio"
+    )
+  fi
+  if [[ -n "$max_top_vertex_count_delta_ratio" ]]; then
+    xcode_compare_cmd+=(
+      --max-top-vertex-count-delta-ratio
+      "$max_top_vertex_count_delta_ratio"
+    )
+  fi
+  if [[ -n "$max_top_triangle_delta_ratio" ]]; then
+    xcode_compare_cmd+=(
+      --max-top-triangle-delta-ratio
+      "$max_top_triangle_delta_ratio"
     )
   fi
 fi

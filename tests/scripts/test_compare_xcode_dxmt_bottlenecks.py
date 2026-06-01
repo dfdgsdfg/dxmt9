@@ -24,6 +24,8 @@ def write_joined(path: Path, gpu_ms: float, buffer_write_mib: float,
                  enc: int = 2,
                  vs_invocations: int = 1000,
                  vs_bytes_per_invocation: float = 819.2,
+                 vertex_count: int = 1000,
+                 triangle_estimate: int = 333,
                  tiled_vertex_mib: float = 1.0,
                  tiled_primitive_mib: float = 0.5,
                  clip_limiter_pct: float = 1.0,
@@ -43,6 +45,7 @@ def write_joined(path: Path, gpu_ms: float, buffer_write_mib: float,
         "tiled_primitive_block_mib",
         "clip_unit_limiter_pct",
         "dxmt_vertex_count",
+        "dxmt_triangle_estimate",
         "dxmt_draw_calls",
         "dxmt_pso_state_samples",
         "dxmt_stream_handle_changes",
@@ -70,7 +73,8 @@ def write_joined(path: Path, gpu_ms: float, buffer_write_mib: float,
             "tiled_vertex_buffer_mib": tiled_vertex_mib,
             "tiled_primitive_block_mib": tiled_primitive_mib,
             "clip_unit_limiter_pct": clip_limiter_pct,
-            "dxmt_vertex_count": 1000,
+            "dxmt_vertex_count": vertex_count,
+            "dxmt_triangle_estimate": triangle_estimate,
             "dxmt_draw_calls": draw_calls,
             "dxmt_pso_state_samples": pso_samples,
             "dxmt_stream_handle_changes": stream_changes,
@@ -100,6 +104,7 @@ def write_joined_rows(path: Path, rows: list[dict[str, object]]) -> None:
         "tiled_primitive_block_mib",
         "clip_unit_limiter_pct",
         "dxmt_vertex_count",
+        "dxmt_triangle_estimate",
         "dxmt_draw_calls",
         "dxmt_pso_state_samples",
         "dxmt_stream_handle_changes",
@@ -125,6 +130,7 @@ def write_joined_rows(path: Path, rows: list[dict[str, object]]) -> None:
                 "tiled_primitive_block_mib": 0.5,
                 "clip_unit_limiter_pct": 1.0,
                 "dxmt_vertex_count": 1000,
+                "dxmt_triangle_estimate": 333,
                 "dxmt_draw_calls": 10,
                 "dxmt_pso_state_samples": 10,
                 "dxmt_stream_handle_changes": 10,
@@ -231,6 +237,81 @@ class CompareXcodeDxmtBottlenecksTests(unittest.TestCase):
                           result.stderr)
             self.assertIn("top_unexplained_buffer_write_ratio exceeds limit",
                           result.stderr)
+
+    def test_frame_shape_gates_reject_hot_row_and_geometry_drift(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            before = root / "before.csv"
+            after = root / "after.csv"
+            write_joined_rows(before, [
+                {
+                    "seq": 60,
+                    "enc": 1,
+                    "gpu_ms": 10.0,
+                    "buffer_write_mib": 100.0,
+                    "dxmt_draw_calls": 100,
+                    "dxmt_vertex_count": 1000,
+                    "dxmt_triangle_estimate": 333,
+                },
+                {
+                    "seq": 60,
+                    "enc": 2,
+                    "gpu_ms": 8.0,
+                    "buffer_write_mib": 80.0,
+                    "dxmt_draw_calls": 100,
+                    "dxmt_vertex_count": 1000,
+                    "dxmt_triangle_estimate": 333,
+                },
+            ])
+            write_joined_rows(after, [
+                {
+                    "seq": 60,
+                    "enc": 1,
+                    "gpu_ms": 9.0,
+                    "buffer_write_mib": 90.0,
+                    "dxmt_draw_calls": 140,
+                    "dxmt_vertex_count": 1400,
+                    "dxmt_triangle_estimate": 466,
+                },
+                {
+                    "seq": 60,
+                    "enc": 3,
+                    "gpu_ms": 7.0,
+                    "buffer_write_mib": 70.0,
+                    "dxmt_draw_calls": 140,
+                    "dxmt_vertex_count": 1400,
+                    "dxmt_triangle_estimate": 466,
+                },
+            ])
+
+            result = subprocess.run(
+                [
+                    sys.executable,
+                    str(SCRIPT),
+                    str(before),
+                    str(after),
+                    "--output",
+                    str(root / "comparison.md"),
+                    "--top",
+                    "2",
+                    "--require-top-row-key-match",
+                    "--max-top-draw-call-delta-ratio",
+                    "0.05",
+                    "--max-top-vertex-count-delta-ratio",
+                    "0.05",
+                    "--max-top-triangle-delta-ratio",
+                    "0.05",
+                ],
+                text=True,
+                capture_output=True,
+                check=False,
+            )
+
+            self.assertNotEqual(result.returncode, 0)
+            self.assertIn("top row key set changed", result.stderr)
+            self.assertIn("top_draw_calls drift exceeds limit", result.stderr)
+            self.assertIn("top_dxmt_vertex_count drift exceeds limit", result.stderr)
+            self.assertIn("top_dxmt_triangle_estimate drift exceeds limit", result.stderr)
 
     def test_report_warns_when_unexplained_writes_lack_pso_attribution(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

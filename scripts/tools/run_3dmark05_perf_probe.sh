@@ -64,6 +64,7 @@ require_ib_handle_churn_decrease=0
 require_argbuf_cbuf_decrease=0
 require_transient_decrease=0
 require_top_gpu_share_increase=0
+require_top_row_key_match=0
 require_top_pso_attribution=0
 require_xcode_counter_coverage=0
 require_dxmt_join_coverage=0
@@ -73,6 +74,9 @@ min_top_dxmt_joined_fraction=${DXMT_3DMARK05_MIN_TOP_DXMT_JOINED_FRACTION:-1.0}
 max_top_gpu_regression_ms=${DXMT_3DMARK05_MAX_TOP_GPU_REGRESSION_MS:-}
 max_top_buffer_write_regression_mib=${DXMT_3DMARK05_MAX_TOP_BUFFER_WRITE_REGRESSION_MIB:-}
 max_top_unexplained_buffer_write_ratio=${DXMT_3DMARK05_MAX_TOP_UNEXPLAINED_BUFFER_WRITE_RATIO:-}
+max_top_draw_call_delta_ratio=${DXMT_3DMARK05_MAX_TOP_DRAW_CALL_DELTA_RATIO:-}
+max_top_vertex_count_delta_ratio=${DXMT_3DMARK05_MAX_TOP_VERTEX_COUNT_DELTA_RATIO:-}
+max_top_triangle_delta_ratio=${DXMT_3DMARK05_MAX_TOP_TRIANGLE_DELTA_RATIO:-}
 top_n=${DXMT_3DMARK05_TOP_N:-3}
 hot_gpu_share=${DXMT_3DMARK05_HOT_GPU_SHARE:-95.0}
 min_free_mb=${DXMT_3DMARK05_MIN_TRACE_FREE_MB:-}
@@ -229,6 +233,8 @@ Options:
                       Finalizer Xcode gate: top-N dxmt transient MiB must decrease
   --require-top-gpu-share-increase
                       Finalizer Xcode gate: top-N GPU share must increase
+  --require-top-row-key-match
+                      Finalizer Xcode gate: top-N seq/enc row key sets must match
   --require-top-pso-attribution
                       Finalizer gate: top Xcode encoder rows must have PSO/VSOut
                       attribution near draw frequency
@@ -253,6 +259,12 @@ Options:
   --max-top-unexplained-buffer-write-ratio N
                       Finalizer Xcode gate: max allowed unexplained top-N
                       buffer write / buffer write ratio
+  --max-top-draw-call-delta-ratio N
+                      Finalizer Xcode gate: max allowed relative top-N draw-count drift
+  --max-top-vertex-count-delta-ratio N
+                      Finalizer Xcode gate: max allowed relative top-N vertex-count drift
+  --max-top-triangle-delta-ratio N
+                      Finalizer Xcode gate: max allowed relative top-N triangle-count drift
   --top N             GPU-time-ranked encoder count for finalizer top-N gates
                       and Xcode comparison (default: 3)
   --hot-gpu-share PCT GPU share target for finalizer report-only Hot Set
@@ -505,6 +517,10 @@ while (($#)); do
       require_top_gpu_share_increase=1
       shift
       ;;
+    --require-top-row-key-match)
+      require_top_row_key_match=1
+      shift
+      ;;
     --require-top-pso-attribution)
       require_top_pso_attribution=1
       shift
@@ -539,6 +555,18 @@ while (($#)); do
       ;;
     --max-top-unexplained-buffer-write-ratio)
       max_top_unexplained_buffer_write_ratio=${2:?missing value for --max-top-unexplained-buffer-write-ratio}
+      shift 2
+      ;;
+    --max-top-draw-call-delta-ratio)
+      max_top_draw_call_delta_ratio=${2:?missing value for --max-top-draw-call-delta-ratio}
+      shift 2
+      ;;
+    --max-top-vertex-count-delta-ratio)
+      max_top_vertex_count_delta_ratio=${2:?missing value for --max-top-vertex-count-delta-ratio}
+      shift 2
+      ;;
+    --max-top-triangle-delta-ratio)
+      max_top_triangle_delta_ratio=${2:?missing value for --max-top-triangle-delta-ratio}
       shift 2
       ;;
     --top)
@@ -654,6 +682,21 @@ if [[ -n "$max_top_unexplained_buffer_write_ratio" &&
   echo "--max-top-unexplained-buffer-write-ratio must be numeric" >&2
   exit 2
 fi
+if [[ -n "$max_top_draw_call_delta_ratio" &&
+      ! "$max_top_draw_call_delta_ratio" =~ ^[0-9]+([.][0-9]+)?$ ]]; then
+  echo "--max-top-draw-call-delta-ratio must be numeric" >&2
+  exit 2
+fi
+if [[ -n "$max_top_vertex_count_delta_ratio" &&
+      ! "$max_top_vertex_count_delta_ratio" =~ ^[0-9]+([.][0-9]+)?$ ]]; then
+  echo "--max-top-vertex-count-delta-ratio must be numeric" >&2
+  exit 2
+fi
+if [[ -n "$max_top_triangle_delta_ratio" &&
+      ! "$max_top_triangle_delta_ratio" =~ ^[0-9]+([.][0-9]+)?$ ]]; then
+  echo "--max-top-triangle-delta-ratio must be numeric" >&2
+  exit 2
+fi
 
 xcode_compare_requested=0
 if (( require_top_gpu_decrease ||
@@ -664,10 +707,14 @@ if (( require_top_gpu_decrease ||
       require_ib_handle_churn_decrease ||
       require_argbuf_cbuf_decrease ||
       require_transient_decrease ||
-      require_top_gpu_share_increase )) ||
+      require_top_gpu_share_increase ||
+      require_top_row_key_match )) ||
    [[ -n "$max_top_gpu_regression_ms" ||
       -n "$max_top_buffer_write_regression_mib" ||
-      -n "$max_top_unexplained_buffer_write_ratio" ]]; then
+      -n "$max_top_unexplained_buffer_write_ratio" ||
+      -n "$max_top_draw_call_delta_ratio" ||
+      -n "$max_top_vertex_count_delta_ratio" ||
+      -n "$max_top_triangle_delta_ratio" ]]; then
   xcode_compare_requested=1
 fi
 
@@ -1017,6 +1064,9 @@ if (( capture_gputrace )); then
   if (( require_top_gpu_share_increase )); then
     finalize_cmd+=(--require-top-gpu-share-increase)
   fi
+  if (( require_top_row_key_match )); then
+    finalize_cmd+=(--require-top-row-key-match)
+  fi
   if (( require_color_dontcare_increase )); then
     finalize_cmd+=(--require-color-dontcare-increase)
   fi
@@ -1090,6 +1140,24 @@ if (( capture_gputrace )); then
     finalize_cmd+=(
       --max-top-unexplained-buffer-write-ratio
       "$max_top_unexplained_buffer_write_ratio"
+    )
+  fi
+  if [[ -n "$max_top_draw_call_delta_ratio" ]]; then
+    finalize_cmd+=(
+      --max-top-draw-call-delta-ratio
+      "$max_top_draw_call_delta_ratio"
+    )
+  fi
+  if [[ -n "$max_top_vertex_count_delta_ratio" ]]; then
+    finalize_cmd+=(
+      --max-top-vertex-count-delta-ratio
+      "$max_top_vertex_count_delta_ratio"
+    )
+  fi
+  if [[ -n "$max_top_triangle_delta_ratio" ]]; then
+    finalize_cmd+=(
+      --max-top-triangle-delta-ratio
+      "$max_top_triangle_delta_ratio"
     )
   fi
 fi

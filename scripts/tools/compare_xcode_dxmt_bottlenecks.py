@@ -755,7 +755,9 @@ def write_report(path: Path, before: dict[str, float], after: dict[str, float],
 
 def failed_requirements(args: argparse.Namespace,
                         before: dict[str, float],
-                        after: dict[str, float]) -> list[str]:
+                        after: dict[str, float],
+                        before_rows: list[dict[str, str]],
+                        after_rows: list[dict[str, str]]) -> list[str]:
     failures: list[str] = []
 
     def require_decrease(key: str, label: str) -> None:
@@ -770,6 +772,32 @@ def failed_requirements(args: argparse.Namespace,
                 f"{label} did not increase ({fmt(before[key])} -> {fmt(after[key])})"
             )
 
+    def require_delta_ratio_at_most(key: str, label: str, limit: float) -> None:
+        before_value = before[key]
+        after_value = after[key]
+        if before_value == 0.0:
+            if after_value != 0.0:
+                failures.append(
+                    f"{label} changed from zero ({fmt(before_value)} -> {fmt(after_value)})"
+                )
+            return
+        ratio = abs(after_value - before_value) / abs(before_value)
+        if ratio > limit:
+            failures.append(
+                f"{label} drift exceeds limit "
+                f"({fmt(before_value)} -> {fmt(after_value)}, "
+                f"delta {ratio * 100.0:+.2f}%, allowed <= {limit * 100.0:.2f}%)"
+            )
+
+    if args.require_top_row_key_match:
+        before_keys = top_key_set(before_rows, args.top)
+        after_keys = top_key_set(after_rows, args.top)
+        if before_keys != after_keys:
+            failures.append(
+                "top row key set changed "
+                f"(before: {format_key_set(before_keys)}; "
+                f"after: {format_key_set(after_keys)})"
+            )
     if args.require_top_gpu_decrease:
         require_decrease("top_gpu_ms", "top_gpu_ms")
     if args.require_top_buffer_write_decrease:
@@ -798,6 +826,24 @@ def failed_requirements(args: argparse.Namespace,
                 f"({fmt(after['top_unexplained_buffer_write_ratio'])}, "
                 f"allowed <= {fmt(args.max_top_unexplained_buffer_write_ratio)})"
             )
+    if args.max_top_draw_call_delta_ratio is not None:
+        require_delta_ratio_at_most(
+            "top_draw_calls",
+            "top_draw_calls",
+            args.max_top_draw_call_delta_ratio,
+        )
+    if args.max_top_vertex_count_delta_ratio is not None:
+        require_delta_ratio_at_most(
+            "top_dxmt_vertex_count",
+            "top_dxmt_vertex_count",
+            args.max_top_vertex_count_delta_ratio,
+        )
+    if args.max_top_triangle_delta_ratio is not None:
+        require_delta_ratio_at_most(
+            "top_dxmt_triangle_estimate",
+            "top_dxmt_triangle_estimate",
+            args.max_top_triangle_delta_ratio,
+        )
     if args.max_top_gpu_regression_ms is not None:
         allowed = before["top_gpu_ms"] + args.max_top_gpu_regression_ms
         if after["top_gpu_ms"] > allowed:
@@ -871,6 +917,11 @@ def main() -> int:
         help="exit nonzero unless top-N frame GPU share increases",
     )
     parser.add_argument(
+        "--require-top-row-key-match",
+        action="store_true",
+        help="exit nonzero unless top-N seq/enc row key sets are identical",
+    )
+    parser.add_argument(
         "--max-top-gpu-regression-ms",
         type=float,
         help="exit nonzero if top-N GPU time regresses beyond this tolerance",
@@ -884,6 +935,21 @@ def main() -> int:
         "--max-top-unexplained-buffer-write-ratio",
         type=float,
         help="exit nonzero if top-N unexplained buffer write / buffer write exceeds this ratio",
+    )
+    parser.add_argument(
+        "--max-top-draw-call-delta-ratio",
+        type=float,
+        help="exit nonzero if top-N dxmt draw-call count changes by more than this ratio",
+    )
+    parser.add_argument(
+        "--max-top-vertex-count-delta-ratio",
+        type=float,
+        help="exit nonzero if top-N dxmt vertex count changes by more than this ratio",
+    )
+    parser.add_argument(
+        "--max-top-triangle-delta-ratio",
+        type=float,
+        help="exit nonzero if top-N dxmt triangle estimate changes by more than this ratio",
     )
     args = parser.parse_args()
 
@@ -902,7 +968,7 @@ def main() -> int:
         args.top,
     )
     print(args.output)
-    failures = failed_requirements(args, before, after)
+    failures = failed_requirements(args, before, after, before_rows, after_rows)
     if failures:
         for failure in failures:
             print(f"requirement failed: {failure}", file=sys.stderr)

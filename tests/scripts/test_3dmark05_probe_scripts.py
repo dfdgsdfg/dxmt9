@@ -180,6 +180,38 @@ class ThreeDMark05ProbeScriptTests(unittest.TestCase):
         self.assertIn("--max-top-unexplained-buffer-write-ratio", finalize_line)
         self.assertIn("0.50", finalize_line)
 
+    def test_wrapper_forwards_frame_shape_gates_to_finalizer(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            baseline_joined = Path(tmp) / "baseline-joined.csv"
+            baseline_joined.write_text("gpu_ms\n", encoding="utf-8")
+
+            result = self.run_script(
+                RUN_WRAPPER,
+                "--suffix",
+                "forward-frame-shape",
+                "--baseline-joined",
+                str(baseline_joined),
+                "--require-top-row-key-match",
+                "--max-top-draw-call-delta-ratio",
+                "0.05",
+                "--max-top-vertex-count-delta-ratio",
+                "0.05",
+                "--max-top-triangle-delta-ratio",
+                "0.05",
+                "--dry-run",
+            )
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+        finalize_line = next(
+            line for line in result.stdout.splitlines()
+            if line.startswith("finalize_cmd_after_xcode_export:")
+        )
+        self.assertIn("--require-top-row-key-match", finalize_line)
+        self.assertIn("--max-top-draw-call-delta-ratio", finalize_line)
+        self.assertIn("--max-top-vertex-count-delta-ratio", finalize_line)
+        self.assertIn("--max-top-triangle-delta-ratio", finalize_line)
+        self.assertIn("0.05", finalize_line)
+
     def test_wrapper_forwards_top_and_hot_share_to_finalizer(self) -> None:
         result = self.run_script(
             RUN_WRAPPER,
@@ -534,6 +566,38 @@ class ThreeDMark05ProbeScriptTests(unittest.TestCase):
         self.assertIn("--require-top-unexplained-buffer-write-decrease", compare_line)
         self.assertIn("--max-top-unexplained-buffer-write-ratio", compare_line)
         self.assertIn("0.50", compare_line)
+
+    def test_finalizer_forwards_frame_shape_gates_to_compare_script(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            baseline_joined = Path(tmp) / "baseline-joined.csv"
+            baseline_joined.write_text("gpu_ms\n", encoding="utf-8")
+
+            result = self.run_script(
+                FINALIZER,
+                "--suffix",
+                "forward-frame-shape",
+                "--baseline-joined",
+                str(baseline_joined),
+                "--require-top-row-key-match",
+                "--max-top-draw-call-delta-ratio",
+                "0.05",
+                "--max-top-vertex-count-delta-ratio",
+                "0.05",
+                "--max-top-triangle-delta-ratio",
+                "0.05",
+                "--dry-run",
+            )
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+        compare_line = next(
+            line for line in result.stdout.splitlines()
+            if line.startswith("xcode_compare_cmd:")
+        )
+        self.assertIn("--require-top-row-key-match", compare_line)
+        self.assertIn("--max-top-draw-call-delta-ratio", compare_line)
+        self.assertIn("--max-top-vertex-count-delta-ratio", compare_line)
+        self.assertIn("--max-top-triangle-delta-ratio", compare_line)
+        self.assertIn("0.05", compare_line)
 
     def test_finalizer_forwards_const_upload_gates_to_compare_script(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
