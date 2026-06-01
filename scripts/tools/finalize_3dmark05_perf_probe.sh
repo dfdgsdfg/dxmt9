@@ -620,8 +620,15 @@ if (( dry_run )); then
 fi
 
 if [[ ! -f "$output_dir/result.json" ]]; then
-  echo "missing result.json: $output_dir/result.json" >&2
-  exit 2
+  if [[ -n "$baseline_output" ]]; then
+    echo "missing result.json for run-level comparison: $output_dir/result.json" >&2
+    exit 2
+  fi
+  if [[ ! -f "$output_dir/dxmt9.log" ]]; then
+    echo "missing result.json and dxmt9.log: $output_dir/result.json" >&2
+    exit 2
+  fi
+  echo "warning: missing result.json; using dxmt9.log partial-run counters" >&2
 fi
 if [[ ! -f "$xcode_csv" ]]; then
   echo "missing Xcode encoder counters CSV: $xcode_csv" >&2
