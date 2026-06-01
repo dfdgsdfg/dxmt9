@@ -180,6 +180,11 @@ bool probeReverseIndexedTriangles() {
   return v;
 }
 
+bool probeReverseOpaqueIndexedTriangles() {
+  static const bool v = util::getenvFlag("DXMT9_PROBE_REVERSE_OPAQUE_INDEXED_TRIANGLES");
+  return v;
+}
+
 bool measureIndexReuse() {
   static const bool v = util::getenvFlag("DXMT9_MEASURE_INDEX_REUSE");
   return v;

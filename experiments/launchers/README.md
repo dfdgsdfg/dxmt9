@@ -363,6 +363,11 @@ Commercial / 3rd-party titles (require external prefix):
     render state stable while submitting a transient IB with triangle-list
     primitive order reversed. Use it as an index-locality/backend classifier,
     not as an optimization or correctness target.
+    `--probe-reverse-opaque-indexed-triangles` sets
+    `DXMT9_PROBE_REVERSE_OPAQUE_INDEXED_TRIANGLES=1`; it limits the same
+    transient-IB reversal to solid, depth-writing, non-blended,
+    non-alpha-tested, non-stencil triangle-list draws so blended visibility
+    stays intact during narrower backend-locality probes.
     `--disable-alpha-test` is the narrower fragment/raster classifier for the
     alpha-test discard path and should be tried before more invasive shader
     substitutions when `--force-fragment-color` changes hidden VS-write

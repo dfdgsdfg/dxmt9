@@ -128,6 +128,11 @@ std::uint32_t splitLargeIndexedDrawPrimitiveLimit();
 // Env: DXMT9_PROBE_REVERSE_INDEXED_TRIANGLES.
 bool probeReverseIndexedTriangles();
 
+// Diagnostic-only: same as DXMT9_PROBE_REVERSE_INDEXED_TRIANGLES, but applies
+// only to opaque depth-writing triangle-list draws.
+// Env: DXMT9_PROBE_REVERSE_OPAQUE_INDEXED_TRIANGLES.
+bool probeReverseOpaqueIndexedTriangles();
+
 // Diagnostic-only: scan accessible index-buffer bytes and report the sum of
 // per-draw unique index references in encoder breakdown logs.
 // Env: DXMT9_MEASURE_INDEX_REUSE.

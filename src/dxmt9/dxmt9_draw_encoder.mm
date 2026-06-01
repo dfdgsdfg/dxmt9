@@ -2529,6 +2529,42 @@ bool buildReverseTriangleOrderIndexBytes(std::span<const u8> indexBytes,
   return true;
 }
 
+bool isOpaqueDepthWritingReorderProbeEligible(
+    const core::FlatStateSet<core::kMaxStateSlots>& renderStates,
+    WMTTriangleFillMode fillMode) {
+  if (fillMode != WMTTriangleFillModeFill) {
+    return false;
+  }
+  if (core::flatStateOr(renderStates, RS_ALPHABLEND_ENABLE, 0u) != 0u) {
+    return false;
+  }
+  if (core::flatStateOr(renderStates, RS_ALPHA_TEST_ENABLE, 0u) != 0u) {
+    return false;
+  }
+  if (core::flatStateOr(renderStates, core::RS_STENCIL_ENABLE, 0u) != 0u) {
+    return false;
+  }
+  if (core::flatStateOr(renderStates, core::RS_CLIP_PLANE_ENABLE, 0u) != 0u) {
+    return false;
+  }
+  const bool depthEnabled =
+      core::flatStateOr(renderStates, RS_Z_ENABLE, 0u) != 0u;
+  const bool depthWrite =
+      depthEnabled && !debug::probeDisableDepthWrite() &&
+      core::flatStateOr(renderStates, RS_Z_WRITE_ENABLE, 0u) != 0u;
+  if (!depthWrite) {
+    return false;
+  }
+  switch (static_cast<core::CompareFunc>(core::flatStateOr(
+      renderStates, RS_Z_FUNC, static_cast<u32>(core::CompareFunc::LessEqual)))) {
+    case core::CompareFunc::Less:
+    case core::CompareFunc::LessEqual:
+      return true;
+    default:
+      return false;
+  }
+}
+
 u32 samplerStateOr(const SamplerSnapshot& snapshot, u32 state, u32 fallback) {
   const auto it = snapshot.states.find(state);
   return it != snapshot.states.end() ? it->second : fallback;
@@ -5277,10 +5313,19 @@ bool encodeDraw(EncodeContext& ctx,
           }
         }
       }
-      if (debug::probeReverseIndexedTriangles() &&
-          pv.primitiveType == core::PrimitiveType::TriangleList) {
+      const bool reverseAllIndexedTriangles = debug::probeReverseIndexedTriangles();
+      const bool reverseOpaqueIndexedTriangles =
+          debug::probeReverseOpaqueIndexedTriangles();
+      const bool reverseTriangleProbeRequested =
+          (reverseAllIndexedTriangles || reverseOpaqueIndexedTriangles) &&
+          pv.primitiveType == core::PrimitiveType::TriangleList;
+      if (reverseTriangleProbeRequested) {
         bool probeApplied = false;
-        if (buildReverseTriangleOrderIndexBytes(indexBytesForReuse,
+        const bool probeEligible =
+            reverseAllIndexedTriangles ||
+            isOpaqueDepthWritingReorderProbeEligible(hot.renderStates, fillMode);
+        if (probeEligible &&
+            buildReverseTriangleOrderIndexBytes(indexBytesForReuse,
                                                 pv.indexType,
                                                 pv.startIndex,
                                                 vertexCount,
