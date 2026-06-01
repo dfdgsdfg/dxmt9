@@ -2351,6 +2351,51 @@ void testPreUploadedNonIndexedUserVertexFoldsStartVertex() {
       5u);
 }
 
+void testBindingOverrideBaseStateRebindPolicy() {
+  dxmt9::core::DrawShaderLayoutContext layout{};
+  layout.vertexDecl.streams[0].stride = 24u;
+  layout.vertexDecl.streams[1].stride = 32u;
+  layout.vertexDecl.streams[2].stride = 16u;
+
+  dxmt9::core::DrawBindingOverride binding{};
+  binding.streamMask = 1u << 0u;
+  binding.streams[0].buffer = dxmt9::core::Handle{0x4100u};
+  binding.streams[0].offset = 256u;
+  binding.streams[0].stride = 48u;
+  check(!dxmt9::encoders::drawBindingOverrideRequiresBaseStateBind(
+            binding, &layout),
+        "stream0 override does not require base-state rebind");
+
+  binding = {};
+  binding.indexBufferValid = true;
+  binding.indexBuffer = dxmt9::core::Handle{0x5100u};
+  binding.indexType = IndexType::UInt32;
+  check(!dxmt9::encoders::drawBindingOverrideRequiresBaseStateBind(
+            binding, &layout),
+        "IB-only override does not require base-state rebind");
+
+  binding = {};
+  binding.streamMask = 1u << 1u;
+  binding.streams[1].buffer = dxmt9::core::Handle{0x4200u};
+  binding.streams[1].offset = 512u;
+  binding.streams[1].stride = 32u;
+  check(!dxmt9::encoders::drawBindingOverrideRequiresBaseStateBind(
+            binding, &layout),
+        "extra-stream handle/offset override with same stride skips base state");
+
+  binding.streams[1].stride = 40u;
+  check(dxmt9::encoders::drawBindingOverrideRequiresBaseStateBind(
+            binding, &layout),
+        "extra-stream stride override requires base-state rebind");
+
+  binding = {};
+  binding.streamMask = 1u << 2u;
+  binding.streams[2].stride = 16u;
+  check(!dxmt9::encoders::drawBindingOverrideRequiresBaseStateBind(
+            binding, nullptr),
+        "missing shader layout does not force base-state rebind");
+}
+
 }  // namespace
 
 int main() {
@@ -2380,6 +2425,7 @@ int main() {
     testUserVertexAndUserIndexOrdering();
     testPreUploadedIndexedUserVertexIgnoresStartVertex();
     testPreUploadedNonIndexedUserVertexFoldsStartVertex();
+    testBindingOverrideBaseStateRebindPolicy();
   } catch (const TestFailure& e) {
     std::cerr << "encode_draw_recorder_spec failed: " << e.what() << '\n';
     return EXIT_FAILURE;

@@ -5592,8 +5592,6 @@ std::optional<core::metalqueue::QueueSubmissionRecord> encodeChunk(
     // Per-frequency UBOs (VsConsts/PsConsts/FfpVsConsts/FfpPsConsts)
     // bind only on dirty (R-BACK-12.5/12.8); DrawVolatile is pushed
     // via setVertexBytes per draw with no slab traffic.
-    bool baseBound =
-        activeDrawStateKey.has_value() && *activeDrawStateKey == hot.key;
     for (std::size_t i = 0; i < drawCount; ++i) {
       const auto& param = drawItems[i];
       const auto* drawUniformPayload =
@@ -5631,7 +5629,16 @@ std::optional<core::metalqueue::QueueSubmissionRecord> encodeChunk(
       const bool reopenArgbuf =
           activePassUsesArgbufResourceArray ||
           argbufPayloadChanged;
-      const bool skipBaseStateBind = hasBindingOverride ? false : baseBound;
+      const bool baseStateCompatible =
+          activeDrawStateKey.has_value() &&
+          core::drawStateKeysCompatibleForDrawRunBatch(
+              *activeDrawStateKey, drawStateView.hot->key);
+      const bool overrideNeedsBaseStateBind =
+          hasBindingOverride &&
+          drawBindingOverrideRequiresBaseStateBind(
+              bindingOverride, stateView.shaderLayout);
+      const bool skipBaseStateBind =
+          baseStateCompatible && !overrideNeedsBaseStateBind;
       if (encodeDraw(ctx, commandBuffer, activeRenderEncoder, drawStateView, slot.seqId,
                      /*skipBaseStateBind=*/skipBaseStateBind,
                      anyUpData ? &preData : nullptr,
@@ -5652,7 +5659,6 @@ std::optional<core::metalqueue::QueueSubmissionRecord> encodeChunk(
                      &activeEncoderBreakdown,
                      &argbufCbufCache)) {
         activeDrawStateKey = drawStateView.hot->key;
-        baseBound = *activeDrawStateKey == hot.key;
         lastArgbufPayloadHash = drawArgbufPayloadHash;
       }
     }

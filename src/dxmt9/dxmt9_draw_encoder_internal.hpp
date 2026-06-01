@@ -117,6 +117,28 @@ struct ParamView {
   std::span<const u8> userIndexData;
 };
 
+inline bool drawBindingOverrideRequiresBaseStateBind(
+    const core::DrawBindingOverride& binding,
+    const core::DrawShaderLayoutContext* baseShaderLayout) noexcept {
+  if (!baseShaderLayout) {
+    return false;
+  }
+
+  // Stream 0 stride is passed through DrawVolatile, but extra-stream strides
+  // are baked into the generated VS input-load source. Rebind base state only
+  // when an override can require a different PSO/source variant.
+  for (u32 stream = 1; stream < core::kMaxStreams; ++stream) {
+    if ((binding.streamMask & (1u << stream)) == 0u) {
+      continue;
+    }
+    if (binding.streams[stream].stride !=
+        baseShaderLayout->vertexDecl.streams[stream].stride) {
+      return true;
+    }
+  }
+  return false;
+}
+
 struct ProgrammableVsExtraStreamBinding {
   u32 stream = 0;
   u32 metalSlot = 0;
