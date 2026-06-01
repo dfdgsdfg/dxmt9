@@ -3091,6 +3091,9 @@ void emitEncoderBreakdown(const EncoderBreakdown& b) {
       "split_large_indexed_extra_draws=%llu "
       "split_large_indexed_primitive_limit=%llu "
       "split_large_indexed_primitive_count=%llu "
+      "indexed_order_probe_draws=%llu "
+      "indexed_order_probe_skipped=%llu "
+      "indexed_order_probe_bytes=%llu "
       "indexed_vertex_reuse_samples=%llu "
       "indexed_vertex_reuse_skipped=%llu "
       "indexed_vertex_reference_count=%llu "
@@ -3173,7 +3176,8 @@ void emitEncoderBreakdown(const EncoderBreakdown& b) {
       "transient_index_bytes=%llu "
       "transient_index_user_bytes=%llu "
       "transient_index_preupload_bytes=%llu "
-      "transient_index_shadow_fallback_bytes=%llu]\n",
+      "transient_index_shadow_fallback_bytes=%llu "
+      "transient_index_probe_reorder_bytes=%llu]\n",
       static_cast<unsigned long long>(b.seqId),
       static_cast<unsigned long long>(b.encoderIndex),
       static_cast<unsigned long long>(b.rtHandle),
@@ -3271,6 +3275,9 @@ void emitEncoderBreakdown(const EncoderBreakdown& b) {
       static_cast<unsigned long long>(b.splitLargeIndexedExtraDraws),
       static_cast<unsigned long long>(b.splitLargeIndexedPrimitiveLimit),
       static_cast<unsigned long long>(b.splitLargeIndexedPrimitiveCount),
+      static_cast<unsigned long long>(b.indexedOrderProbeDraws),
+      static_cast<unsigned long long>(b.indexedOrderProbeSkipped),
+      static_cast<unsigned long long>(b.indexedOrderProbeBytes),
       static_cast<unsigned long long>(b.indexedVertexReuseSamples),
       static_cast<unsigned long long>(b.indexedVertexReuseSkipped),
       static_cast<unsigned long long>(b.indexedVertexReferenceCount),
@@ -3380,7 +3387,8 @@ void emitEncoderBreakdown(const EncoderBreakdown& b) {
       static_cast<unsigned long long>(b.transientIndexBytes),
       static_cast<unsigned long long>(b.transientIndexUserBytes),
       static_cast<unsigned long long>(b.transientIndexPreuploadBytes),
-      static_cast<unsigned long long>(b.transientIndexShadowFallbackBytes));
+      static_cast<unsigned long long>(b.transientIndexShadowFallbackBytes),
+      static_cast<unsigned long long>(b.transientIndexProbeReorderBytes));
   for (std::size_t i = 0; i < b.streams.size(); ++i) {
     const auto& s = b.streams[i];
     if (!s.valid) {

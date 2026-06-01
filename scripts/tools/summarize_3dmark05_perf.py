@@ -213,6 +213,9 @@ ENCODER_SUM_KEYS = (
     "split_large_indexed_metal_draws",
     "split_large_indexed_extra_draws",
     "split_large_indexed_primitive_count",
+    "indexed_order_probe_draws",
+    "indexed_order_probe_skipped",
+    "indexed_order_probe_bytes",
     "indexed_vertex_reuse_samples",
     "indexed_vertex_reuse_skipped",
     "indexed_vertex_reference_count",
@@ -291,6 +294,7 @@ ENCODER_SUM_KEYS = (
     "transient_index_user_bytes",
     "transient_index_preupload_bytes",
     "transient_index_shadow_fallback_bytes",
+    "transient_index_probe_reorder_bytes",
 )
 
 TOP_ENCODER_KEYS = (
@@ -454,6 +458,9 @@ ENCODER_CSV_KEYS = (
     "split_large_indexed_extra_draws",
     "split_large_indexed_primitive_limit",
     "split_large_indexed_primitive_count",
+    "indexed_order_probe_draws",
+    "indexed_order_probe_skipped",
+    "indexed_order_probe_bytes",
     "indexed_vertex_reuse_samples",
     "indexed_vertex_reuse_skipped",
     "indexed_vertex_reference_count",
@@ -569,6 +576,7 @@ ENCODER_CSV_KEYS = (
     "transient_index_user_bytes",
     "transient_index_preupload_bytes",
     "transient_index_shadow_fallback_bytes",
+    "transient_index_probe_reorder_bytes",
 )
 
 STREAM_CSV_KEYS = (
@@ -1059,6 +1067,7 @@ def write_markdown(
             ("transient_index_user_bytes", transient_index_total),
             ("transient_index_preupload_bytes", transient_index_total),
             ("transient_index_shadow_fallback_bytes", transient_index_total),
+            ("transient_index_probe_reorder_bytes", transient_index_total),
         )
         lines.append("## Transient Upload Source Split")
         lines.append("")

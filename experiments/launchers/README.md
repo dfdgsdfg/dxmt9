@@ -358,6 +358,11 @@ Commercial / 3rd-party titles (require external prefix):
     indexed geometry intent but changes vertex submission/cache behavior, so use
     it only as a primitive/backend pressure classifier and expect possible CPU
     and GPU regressions.
+    `--probe-reverse-indexed-triangles` sets
+    `DXMT9_PROBE_REVERSE_INDEXED_TRIANGLES=1`; it keeps indexed draw count and
+    render state stable while submitting a transient IB with triangle-list
+    primitive order reversed. Use it as an index-locality/backend classifier,
+    not as an optimization or correctness target.
     `--disable-alpha-test` is the narrower fragment/raster classifier for the
     alpha-test discard path and should be tried before more invasive shader
     substitutions when `--force-fragment-color` changes hidden VS-write

@@ -175,6 +175,11 @@ std::uint32_t splitLargeIndexedDrawPrimitiveLimit() {
   return limit;
 }
 
+bool probeReverseIndexedTriangles() {
+  static const bool v = util::getenvFlag("DXMT9_PROBE_REVERSE_INDEXED_TRIANGLES");
+  return v;
+}
+
 bool measureIndexReuse() {
   static const bool v = util::getenvFlag("DXMT9_MEASURE_INDEX_REUSE");
   return v;

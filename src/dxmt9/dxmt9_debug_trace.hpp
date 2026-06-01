@@ -123,6 +123,11 @@ bool useNativeMetalBaseVertex();
 // Env: DXMT9_SPLIT_LARGE_INDEXED_DRAWS.
 std::uint32_t splitLargeIndexedDrawPrimitiveLimit();
 
+// Diagnostic-only: keep indexed draws and render state intact, but submit a
+// transient index buffer with triangle-list primitive order reversed.
+// Env: DXMT9_PROBE_REVERSE_INDEXED_TRIANGLES.
+bool probeReverseIndexedTriangles();
+
 // Diagnostic-only: scan accessible index-buffer bytes and report the sum of
 // per-draw unique index references in encoder breakdown logs.
 // Env: DXMT9_MEASURE_INDEX_REUSE.

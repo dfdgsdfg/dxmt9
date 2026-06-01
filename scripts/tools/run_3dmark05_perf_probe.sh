@@ -23,6 +23,7 @@ x8_shader_alpha_fill=0
 native_metal_base_vertex=0
 split_large_indexed_draws=
 force_expand_indexed=0
+probe_reverse_indexed_triangles=0
 force_cull_mode=
 measure_index_reuse=0
 aggressive_color_dontcare=0
@@ -133,6 +134,10 @@ Options:
                       Set DXMT_FORCE_EXPAND_INDEXED=1 to expand indexed draws
                       into flat vertex lists for primitive/backend pressure
                       classification
+  --probe-reverse-indexed-triangles
+                      Set DXMT9_PROBE_REVERSE_INDEXED_TRIANGLES=1 to keep
+                      indexed draws but reverse triangle-list primitive order
+                      through a transient IB for index locality/backend probes
   --force-cull-mode MODE
                       Set DXMT_DEBUG_FORCE_CULL_MODE=MODE where MODE is one of
                       none, front, or back for cull/backend shape A/B probes
@@ -323,6 +328,10 @@ while (($#)); do
       ;;
     --force-expand-indexed)
       force_expand_indexed=1
+      shift
+      ;;
+    --probe-reverse-indexed-triangles)
+      probe_reverse_indexed_triangles=1
       shift
       ;;
     --force-cull-mode)
@@ -806,6 +815,10 @@ if (( force_expand_indexed )); then
   env_args+=("DXMT_FORCE_EXPAND_INDEXED=1")
 fi
 
+if (( probe_reverse_indexed_triangles )); then
+  env_args+=("DXMT9_PROBE_REVERSE_INDEXED_TRIANGLES=1")
+fi
+
 if [[ -n "$force_cull_mode" ]]; then
   env_args+=("DXMT_DEBUG_FORCE_CULL_MODE=$force_cull_mode")
 fi
@@ -1093,6 +1106,9 @@ if (( probe_depth_func_always )); then
 fi
 if (( force_expand_indexed )); then
   echo "warning: --force-expand-indexed is diagnostic only; it preserves indexed geometry intent but changes vertex submission/cache behavior and can heavily regress GPU/CPU cost."
+fi
+if (( probe_reverse_indexed_triangles )); then
+  echo "warning: --probe-reverse-indexed-triangles is diagnostic only; it preserves indexed draw count/render state but changes primitive order and can alter depth/blend results."
 fi
 if [[ -n "$force_cull_mode" ]]; then
   echo "warning: --force-cull-mode is diagnostic only and can corrupt visibility; use it only to classify cull/backend state-shape effects."

@@ -189,6 +189,9 @@ JOINED_EXTRA_FIELDS = (
     "dxmt_split_large_indexed_extra_draws",
     "dxmt_split_large_indexed_primitive_limit",
     "dxmt_split_large_indexed_primitive_count",
+    "dxmt_indexed_order_probe_draws",
+    "dxmt_indexed_order_probe_skipped",
+    "dxmt_indexed_order_probe_bytes",
     "dxmt_indexed_vertex_reuse_samples",
     "dxmt_indexed_vertex_reuse_skipped",
     "dxmt_indexed_vertex_reference_count",
@@ -287,6 +290,7 @@ JOINED_EXTRA_FIELDS = (
     "dxmt_transient_index_user_bytes",
     "dxmt_transient_index_preupload_bytes",
     "dxmt_transient_index_shadow_fallback_bytes",
+    "dxmt_transient_index_probe_reorder_bytes",
     "dxmt_geometry_transient_bytes",
     "dxmt_cpu_writer_bytes",
     "dxmt_cpu_writer_mib",
@@ -679,6 +683,9 @@ def join_dxmt(row: dict[str, Any], dxmt: dict[tuple[int, int], dict[str, Any]]) 
         "dxmt_split_large_indexed_extra_draws": "split_large_indexed_extra_draws",
         "dxmt_split_large_indexed_primitive_limit": "split_large_indexed_primitive_limit",
         "dxmt_split_large_indexed_primitive_count": "split_large_indexed_primitive_count",
+        "dxmt_indexed_order_probe_draws": "indexed_order_probe_draws",
+        "dxmt_indexed_order_probe_skipped": "indexed_order_probe_skipped",
+        "dxmt_indexed_order_probe_bytes": "indexed_order_probe_bytes",
         "dxmt_indexed_vertex_reuse_samples": "indexed_vertex_reuse_samples",
         "dxmt_indexed_vertex_reuse_skipped": "indexed_vertex_reuse_skipped",
         "dxmt_indexed_vertex_reference_count": "indexed_vertex_reference_count",
@@ -776,6 +783,7 @@ def join_dxmt(row: dict[str, Any], dxmt: dict[tuple[int, int], dict[str, Any]]) 
         "dxmt_transient_index_user_bytes": "transient_index_user_bytes",
         "dxmt_transient_index_preupload_bytes": "transient_index_preupload_bytes",
         "dxmt_transient_index_shadow_fallback_bytes": "transient_index_shadow_fallback_bytes",
+        "dxmt_transient_index_probe_reorder_bytes": "transient_index_probe_reorder_bytes",
     }
     for output_key, input_key in mapping.items():
         joined[output_key] = source.get(input_key, "") if source else ""

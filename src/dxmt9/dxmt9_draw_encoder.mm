@@ -624,6 +624,7 @@ struct ActiveEncoderBreakdown {
     User,
     Preupload,
     ShadowFallback,
+    ProbeReorder,
   };
 
   bool enabled = false;
@@ -962,6 +963,18 @@ struct ActiveEncoderBreakdown {
               : std::min<std::uint64_t>(stats.splitLargeIndexedPrimitiveLimit,
                                         primitiveLimit);
     }
+  }
+
+  void recordIndexedOrderProbe(bool applied, u64 bytes) {
+    if (!enabled) {
+      return;
+    }
+    if (!applied) {
+      ++stats.indexedOrderProbeSkipped;
+      return;
+    }
+    ++stats.indexedOrderProbeDraws;
+    stats.indexedOrderProbeBytes += bytes;
   }
 
   void recordIndexedVertexReuse(IndexReuseMeasure measure) {
@@ -1726,6 +1739,9 @@ struct ActiveEncoderBreakdown {
       case TransientIndexSource::ShadowFallback:
         stats.transientIndexShadowFallbackBytes += bytes;
         break;
+      case TransientIndexSource::ProbeReorder:
+        stats.transientIndexProbeReorderBytes += bytes;
+        break;
     }
   }
 };
@@ -2479,6 +2495,38 @@ IndexReuseMeasure measureIndexReuseForDraw(std::span<const u8> indexBytes,
                                 indices.begin());
   out.available = true;
   return out;
+}
+
+bool buildReverseTriangleOrderIndexBytes(std::span<const u8> indexBytes,
+                                         IndexType indexType,
+                                         u32 startIndex,
+                                         u64 indexCount,
+                                         std::vector<u8>& out) {
+  if (indexBytes.empty() || indexCount == 0u || (indexCount % 3u) != 0u) {
+    return false;
+  }
+  const std::size_t elementSize = indexElementSize(indexType);
+  const std::size_t startByte = static_cast<std::size_t>(startIndex) * elementSize;
+  if (startByte > indexBytes.size()) {
+    return false;
+  }
+  const std::size_t maxReadable =
+      (indexBytes.size() - startByte) / elementSize;
+  if (indexCount > static_cast<u64>(maxReadable)) {
+    return false;
+  }
+
+  const std::size_t byteCount = static_cast<std::size_t>(indexCount) * elementSize;
+  out.resize(byteCount);
+  const std::size_t triangleCount = static_cast<std::size_t>(indexCount / 3u);
+  const std::size_t triangleBytes = 3u * elementSize;
+  for (std::size_t triangle = 0; triangle < triangleCount; ++triangle) {
+    const std::size_t srcTriangle = triangleCount - 1u - triangle;
+    std::memcpy(out.data() + triangle * triangleBytes,
+                indexBytes.data() + startByte + srcTriangle * triangleBytes,
+                triangleBytes);
+  }
+  return true;
 }
 
 u32 samplerStateOr(const SamplerSnapshot& snapshot, u32 state, u32 fallback) {
@@ -5186,6 +5234,8 @@ bool encodeDraw(EncodeContext& ctx,
     WMT::Buffer indexBuffer{};
     const resources::BufferRecord* indexBufferRecord = nullptr;
     std::span<const u8> indexBytesForReuse;
+    u32 indexReuseStartIndex = pv.startIndex;
+    std::vector<u8> probeReorderedIndexBytes;
     uint64_t indexBufferOffset = static_cast<uint64_t>(pv.startIndex) * indexElementSize(pv.indexType);
     {
       PerfScope streamBindIndexScope(perf::countEncodeDrawStreamBindCpuTime);
@@ -5227,6 +5277,32 @@ bool encodeDraw(EncodeContext& ctx,
           }
         }
       }
+      if (debug::probeReverseIndexedTriangles() &&
+          pv.primitiveType == core::PrimitiveType::TriangleList) {
+        bool probeApplied = false;
+        if (buildReverseTriangleOrderIndexBytes(indexBytesForReuse,
+                                                pv.indexType,
+                                                pv.startIndex,
+                                                vertexCount,
+                                                probeReorderedIndexBytes)) {
+          transientIndexBuffer = makeTransientIndexBuffer(
+              probeReorderedIndexBytes.data(), probeReorderedIndexBytes.size(),
+              ActiveEncoderBreakdown::TransientIndexSource::ProbeReorder);
+          if (transientIndexBuffer) {
+            indexBuffer = transientIndexBuffer.buffer;
+            indexBufferOffset = transientIndexBuffer.offset;
+            indexBytesForReuse = std::span<const u8>(probeReorderedIndexBytes.data(),
+                                                     probeReorderedIndexBytes.size());
+            indexReuseStartIndex = 0;
+            probeApplied = true;
+          }
+        }
+        if (encoderBreakdown) {
+          encoderBreakdown->recordIndexedOrderProbe(
+              probeApplied,
+              probeApplied ? static_cast<u64>(probeReorderedIndexBytes.size()) : 0u);
+        }
+      }
       if (indexBuffer) {
         if (encoderBreakdown) {
           if (indexBufferRecord) {
@@ -5246,7 +5322,7 @@ bool encodeDraw(EncodeContext& ctx,
         encoderBreakdown->recordIndexedVertexReuse(
             measureIndexReuseForDraw(indexBytesForReuse,
                                      pv.indexType,
-                                     pv.startIndex,
+                                     indexReuseStartIndex,
                                      vertexCount));
       }
       const bool upDraw = !pv.userVertexData.empty() || !pv.userIndexData.empty();
