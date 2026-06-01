@@ -407,6 +407,13 @@ Commercial / 3rd-party titles (require external prefix):
     Use it after single-row probes fail to move the hidden VS-write bucket, so
     the full hot-row set can be tested without broad full-frame primitive-order
     changes.
+    `--probe-reverse-indexed-triangles-class CLASS` sets
+    `DXMT9_PROBE_REVERSE_INDEXED_TRIANGLES_CLASS=CLASS` and constrains any
+    reverse-indexed-triangle probe to the same state buckets used by
+    `--split-large-indexed-draws-class`: `any`, `opaque-depth-write`,
+    `nonopaque`, `depth-read`, `alpha-blend`, `scissor`, `textured`, and
+    `large4096`. Combine it with a row selector for material-scoped
+    visibility/backend probes such as `60/4` alpha-blend or scissor subsets.
     `--disable-alpha-test` is the narrower fragment/raster classifier for the
     alpha-test discard path and should be tried before more invasive shader
     substitutions when `--force-fragment-color` changes hidden VS-write

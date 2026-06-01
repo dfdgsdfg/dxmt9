@@ -2677,7 +2677,7 @@ bool indexedTriangleOpaqueDepthWriteClass(
          !clipPlaneEnabled;
 }
 
-bool splitLargeIndexedDrawClassMatches(
+bool indexedTriangleClassMatches(
     debug::IndexedTriangleClassFilter filter,
     u32 primitiveCount,
     u32 textureMask,
@@ -5480,10 +5480,19 @@ bool encodeDraw(EncodeContext& ctx,
         bool probeApplied = false;
         const bool opaqueDepthWritingEligible =
             isOpaqueDepthWritingReorderProbeEligible(hot.renderStates, fillMode);
+        const bool classEligible =
+            indexedTriangleClassMatches(
+                debug::probeReverseIndexedTrianglesClassFilter(),
+                primitiveCount,
+                hot.textureMask,
+                hot.renderStates,
+                hot.viewport,
+                fillMode);
         const bool probeEligible =
-            reverseAllIndexedTriangles ||
-            (reverseOpaqueIndexedTriangles && opaqueDepthWritingEligible) ||
-            (reverseNonOpaqueIndexedTriangles && !opaqueDepthWritingEligible);
+            classEligible &&
+            (reverseAllIndexedTriangles ||
+             (reverseOpaqueIndexedTriangles && opaqueDepthWritingEligible) ||
+             (reverseNonOpaqueIndexedTriangles && !opaqueDepthWritingEligible));
         if (probeEligible &&
             buildReverseTriangleOrderIndexBytes(indexBytesForReuse,
                                                 pv.indexType,
@@ -5563,7 +5572,7 @@ bool encodeDraw(EncodeContext& ctx,
             pv.primitiveType == core::PrimitiveType::TriangleList &&
             primitiveCount > splitPrimitiveLimit &&
             splitLargeIndexedDrawRowMatches(encoderBreakdown) &&
-            splitLargeIndexedDrawClassMatches(
+            indexedTriangleClassMatches(
                 debug::splitLargeIndexedDrawClassFilter(),
                 primitiveCount,
                 hot.textureMask,

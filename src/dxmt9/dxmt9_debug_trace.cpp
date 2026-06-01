@@ -425,6 +425,13 @@ bool probeReverseNonOpaqueIndexedTriangles() {
   return v;
 }
 
+IndexedTriangleClassFilter probeReverseIndexedTrianglesClassFilter() {
+  static const IndexedTriangleClassFilter filter =
+      makeIndexedTriangleClassFilter(
+          util::getenvString("DXMT9_PROBE_REVERSE_INDEXED_TRIANGLES_CLASS"));
+  return filter;
+}
+
 RenderEncoderSelector probeReverseIndexedTrianglesRow() {
   static const RenderEncoderSelector selector =
       parseRenderEncoderSelector("DXMT9_PROBE_REVERSE_INDEXED_TRIANGLES_ROW");

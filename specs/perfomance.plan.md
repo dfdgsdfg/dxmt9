@@ -8078,10 +8078,25 @@ The run passed and confirms that the selector is scoped correctly. Only
 | `60/4` | `0` | `0` | `0` | `0` | unchanged split scope |
 | `60/0` | `0` | `0` | `0` | `0` | unchanged split scope |
 
-This is not yet a GPU bottleneck result. It only proves the bounded split
-mechanism is ready for Xcode-counter A/B runs. The first Xcode candidate should
-use the same strict finalizer gates as the state-class run and compare against
-`measure-index-cache-gputrace-r1`:
+The Xcode-counter A/B has now been run with the same strict finalizer gates as
+the state-class run. The selector worked, but `60/3` opaque split is rejected
+as a first-order GPU bottleneck fix.
+
+Artifacts:
+
+```text
+experiments/output/app-d3d9-3dmark05-split-row-60-3-opaque-4096-gputrace-r1/3dmark05-perf-summary.md
+experiments/output/app-d3d9-3dmark05-split-row-60-3-opaque-4096-gputrace-r1/3dmark05-perf-encoders.csv
+experiments/output/app-d3d9-3dmark05-split-row-60-3-opaque-4096-gputrace-r1/3dmark05-perf-encoder-streams.csv
+traces/app-d3d9-3dmark05-split-row-60-3-opaque-4096-gputrace-r1/frame60.gputrace
+traces/app-d3d9-3dmark05-split-row-60-3-opaque-4096-gputrace-r1/analysis/frame60-performance.gputrace
+traces/app-d3d9-3dmark05-split-row-60-3-opaque-4096-gputrace-r1/analysis/frame60-counters-xcode.csv
+traces/app-d3d9-3dmark05-split-row-60-3-opaque-4096-gputrace-r1/analysis/frame60-xcode-dxmt-joined-summary.csv
+traces/app-d3d9-3dmark05-split-row-60-3-opaque-4096-gputrace-r1/analysis/frame60-xcode-dxmt-bottleneck-report.md
+traces/app-d3d9-3dmark05-split-row-60-3-opaque-4096-gputrace-r1/analysis/frame60-xcode-dxmt-comparison.md
+```
+
+Run and finalize commands:
 
 ```bash
 scripts/tools/run_3dmark05_perf_probe.sh \
@@ -8098,22 +8113,245 @@ scripts/tools/run_3dmark05_perf_probe.sh \
   --max-top-draw-call-delta-ratio 0.05 \
   --max-top-vertex-count-delta-ratio 0.05 \
   --max-top-triangle-delta-ratio 0.05
+
+scripts/tools/finalize_3dmark05_perf_probe.sh \
+  --suffix split-row-60-3-opaque-4096-gputrace-r1 \
+  --frame 60 \
+  --top 3 \
+  --hot-gpu-share 95.0 \
+  --baseline-joined traces/app-d3d9-3dmark05-measure-index-cache-gputrace-r1/analysis/frame60-xcode-dxmt-joined-summary.csv \
+  --require-top-row-key-match \
+  --require-top-pso-attribution \
+  --min-top-pso-samples-per-draw 0.90 \
+  --require-xcode-counter-coverage \
+  --require-dxmt-join-coverage \
+  --min-top-dxmt-joined-fraction 1.0 \
+  --max-top-draw-call-delta-ratio 0.05 \
+  --max-top-vertex-count-delta-ratio 0.05 \
+  --max-top-triangle-delta-ratio 0.05
 ```
+
+Xcode Summary for the split run reported `4` command buffers, `12` render
+encoders, `742` draw calls, `3,122,697` vertices, and `34.18ms` GPU time. The
+counter export followed the required sequence: export embedded performance data,
+open Performance > Counters, wait until draw-counter profiling disappears, then
+export encoder counters.
+
+Finalizer comparison against `measure-index-cache-gputrace-r1` passed Xcode
+counter coverage, dxmt join coverage, top-PSO attribution, top-row set matching,
+and the 5% draw/vertex/triangle drift gates.
+
+Top-three comparison from `frame60-xcode-dxmt-comparison.md`:
+
+| Metric | Baseline | Split row `60/3` | Delta |
+|---|---:|---:|---:|
+| Total GPU time | `34.391ms` | `34.184ms` | `-0.60%` |
+| Top-three GPU time | `27.944ms` | `27.520ms` | `-1.52%` |
+| Top-three VS buffer write | `1245.082MiB` | `1245.373MiB` | `+0.02%` |
+| Top-three unexplained buffer write | `1245.507MiB` | `1245.795MiB` | `+0.02%` |
+| Top-three VS bytes / invocation | `878.619B` | `878.550B` | `-0.01%` |
+| Top-three draw calls | `586` | `590` | `+0.68%` |
+| Top-three stream handle changes | `686` | `694` | `+1.17%` |
+| Top-three IB handle changes | `511` | `515` | `+0.78%` |
+
+Same hot-row set comparison for `60/3,60/4,60/1,60/0`:
+
+| Metric | Baseline hot set | Split hot set | Delta |
+|---|---:|---:|---:|
+| GPU time | `33.741ms` | `33.580ms` | `-0.48%` |
+| Buffer write | `1473.614MiB` | `1473.913MiB` | `+0.02%` |
+| VS buffer write | `1472.747MiB` | `1473.046MiB` | `+0.02%` |
+| Unexplained buffer write | `1472.905MiB` | `1473.201MiB` | `+0.02%` |
+| VS bytes / invocation | `856.265B` | `856.193B` | `-0.01%` |
+| dxmt draw calls | `711` | `716` | `+0.70%` |
+| dxmt vertices | `3,121,680` | `3,122,460` | `+0.02%` |
+| dxmt triangles | `1,040,560` | `1,040,820` | `+0.02%` |
+| Split source / extra draws | `0 / 0` | `9 / 14` | active only on `60/3` |
+| Split primitives | `0` | `72,305` | active only on `60/3` |
+
+Interpretation:
+
+- The bounded split mechanism is correctly scoped: only row `60/3` reports
+  split counters, and top-row geometry drift remains inside the strict gates.
+- Splitting the 9 large opaque depth-writing draws in `60/3` into 23 Metal
+  draws does not reduce `VS Buffer Device Memory Bytes Written`,
+  unexplained/hidden backend write, or bytes per VS invocation.
+- The observed GPU-time change is smaller than the stable memory-traffic signal
+  and should be treated as noise unless a repeat run shows a matching VS-write
+  movement.
+- This rejects single-row `60/3` bounded split as a direct optimization. The
+  primitive-order signal from full reverse probes is still real, but a naive
+  draw partition that preserves order and only changes draw granularity does
+  not touch the current hidden vertex/backend write bucket.
+- Next primitive/backend probes need to change a different axis: multi-row
+  material grouping, order/locality inside a stable row set, or a backend-state
+  variant. Separate CPU work should still target stream/IB churn and const
+  upload batching, but those are not the first-order GPU write owner.
 
 ```mermaid
 flowchart TD
   Evidence["state-class attribution\n60/3 opaque depth-write hot row"] --> Probe["bounded split probe\nlimit 4096 / row 60/3 / class opaque-depth-write"]
   Probe --> Smoke["no-gputrace smoke\nactive split rows = 1"]
   Smoke --> Scoped["60/3 only\n9 source draws -> 23 Metal draws\n72305 primitives"]
-  Scoped --> XcodeNext["next: gputrace + Xcode counters\nstrict top-row/geometry gates"]
-  XcodeNext --> Verdict{"VS buffer write moves?"}
-  Verdict -- "Yes" --> Narrow["investigate production-safe primitive clustering\nwithout broad draw-count amplification"]
-  Verdict -- "No" --> Reject["reject bounded split for 60/3\ntry 60/1 or 60/4 class separately"]
+  Scoped --> Xcode["gputrace + Xcode counters\nstrict top-row/geometry gates pass"]
+  Xcode --> Stable["VS buffer write stable\n1472.747 -> 1473.046MiB hot set"]
+  Xcode --> TimeNoise["GPU time noise-scale\n33.741 -> 33.580ms hot set"]
+  Stable --> Reject["reject single-row 60/3 bounded split\nas first-order GPU fix"]
+  Reject --> Next["next: change order/locality/material grouping\nor backend-state shape\nnot just draw granularity"]
 
   classDef hot fill:#ffe8e8,stroke:#b64242,color:#2b0d0d
   classDef known fill:#e8f0ff,stroke:#476cb6,color:#0d1833
-  class Evidence,Probe,XcodeNext,Verdict hot
-  class Smoke,Scoped,Narrow,Reject known
+  class Evidence,Probe,Xcode,Stable,Reject,Next hot
+  class Smoke,Scoped,TimeNoise known
+```
+
+#### Reverse Material-Class Probe Tooling
+
+2026-06-02 added a class filter to reverse-indexed-triangle probes so the next
+primitive-order/locality experiment can keep both the render encoder row and
+the material/state bucket stable. This reuses the same
+`IndexedTriangleClassFilter` parser as split-large indexed draws, so accepted
+values are identical:
+
+```text
+DXMT9_PROBE_REVERSE_INDEXED_TRIANGLES_CLASS=any|opaque-depth-write|nonopaque|depth-read|alpha-blend|scissor|textured|large4096
+
+scripts/tools/run_3dmark05_perf_probe.sh \
+  --probe-reverse-indexed-triangles \
+  --probe-reverse-indexed-triangles-row 60/4 \
+  --probe-reverse-indexed-triangles-class alpha-blend \
+  --measure-index-reuse
+```
+
+The filter is an additional gate after the existing reverse probe selector:
+
+- `--probe-reverse-indexed-triangles` plus a class reverses only that class.
+- `--probe-reverse-opaque-indexed-triangles` plus a class must satisfy both the
+  opaque-depth-write eligibility and the class gate.
+- `--probe-reverse-nonopaque-indexed-triangles` plus a class must satisfy both
+  the nonopaque eligibility and the class gate.
+- If no class is provided, the default is `any` and existing behavior is
+  unchanged.
+
+Dry-run validation:
+
+```bash
+scripts/tools/run_3dmark05_perf_probe.sh \
+  --suffix reverse-class-dryrun \
+  --no-gputrace \
+  --probe-reverse-indexed-triangles \
+  --probe-reverse-indexed-triangles-row 60/4 \
+  --probe-reverse-indexed-triangles-class alpha-blend \
+  --measure-index-reuse \
+  --dry-run
+```
+
+The dry-run emitted the expected env bundle:
+
+```text
+DXMT9_PROBE_REVERSE_INDEXED_TRIANGLES=1
+DXMT9_PROBE_REVERSE_INDEXED_TRIANGLES_ROW=60/4
+DXMT9_PROBE_REVERSE_INDEXED_TRIANGLES_CLASS=alpha-blend
+DXMT9_MEASURE_INDEX_REUSE=1
+```
+
+No-gputrace smoke:
+
+```bash
+scripts/tools/run_3dmark05_perf_probe.sh \
+  --suffix reverse-row-60-4-alpha-nogputrace-r1 \
+  --no-gputrace \
+  --probe-reverse-indexed-triangles \
+  --probe-reverse-indexed-triangles-row 60/4 \
+  --probe-reverse-indexed-triangles-class alpha-blend \
+  --measure-index-reuse
+```
+
+Artifacts:
+
+```text
+experiments/output/app-d3d9-3dmark05-reverse-row-60-4-alpha-nogputrace-r1/3dmark05-perf-summary.md
+experiments/output/app-d3d9-3dmark05-reverse-row-60-4-alpha-nogputrace-r1/3dmark05-perf-encoders.csv
+experiments/output/app-d3d9-3dmark05-reverse-row-60-4-alpha-nogputrace-r1/3dmark05-perf-encoder-streams.csv
+```
+
+The run passed and confirms that row + class gating applies at runtime. Only
+row `60/4` reported reverse-probe activity:
+
+| Row | Draws | Probe draws | Probe skipped | Probe bytes | Alpha draws | Depth-read draws | Scissor draws | Textured draws | Large4096 draws |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|
+| `60/4` | `301` | `276` | `25` | `2,215,146B` | `276` | `301` | `65` | `301` | `21` |
+
+The probe-draw count exactly matches the `alpha-blend` bucket for the row, and
+the `25` skipped draws are the non-alpha portion of the same depth-read/textured
+row. This proves the class gate can isolate `60/4` alpha work without reversing
+the whole `60/4` material set.
+
+Validation:
+
+| Check | Result |
+|---|---|
+| `bash -n scripts/tools/run_3dmark05_perf_probe.sh` | pass |
+| `git diff --check` | pass |
+| `meson compile -C build-x86_64-builtin` | pass |
+| `meson test -C build-x86_64-builtin dxmt9-draw-seq-filter-spec --print-errorlogs` | pass |
+| `reverse-row-60-4-alpha-nogputrace-r1` | pass; `60/4` probe draws match `alpha-blend` bucket |
+
+The immediate Xcode candidate is a row/material-scoped run on `60/4`, because
+`60/4` is the depth-read/textured/mostly-alpha row where broad single-row
+reverse regressed. The class filter lets the next run ask whether the
+regression is owned by the alpha-blended subset, the scissored subset, the
+depth-read/textured bucket as a whole, or the `large4096` primitives:
+
+```bash
+scripts/tools/run_3dmark05_perf_probe.sh \
+  --suffix reverse-row-60-4-alpha-gputrace-r1 \
+  --frame 60 \
+  --encoder-breakdown-seq 60 \
+  --timeout 240 \
+  --probe-reverse-indexed-triangles \
+  --probe-reverse-indexed-triangles-row 60/4 \
+  --probe-reverse-indexed-triangles-class alpha-blend \
+  --measure-index-reuse \
+  --top 4 \
+  --hot-gpu-share 95 \
+  --baseline-joined traces/app-d3d9-3dmark05-measure-index-cache-gputrace-r1/analysis/frame60-xcode-dxmt-joined-summary.csv \
+  --require-xcode-counter-coverage \
+  --require-dxmt-join-coverage \
+  --require-top-pso-attribution \
+  --require-top-row-key-match \
+  --max-top-draw-call-delta-ratio 0.05 \
+  --max-top-vertex-count-delta-ratio 0.05 \
+  --max-top-triangle-delta-ratio 0.05
+```
+
+Do not run more `.gputrace` captures until disk headroom is restored. The
+current workspace had only about `582MiB` free during this tooling update,
+which is enough for CSV/finalizer work but too tight for another safe
+performance-embedded capture.
+
+```mermaid
+flowchart TD
+  Prior["single-row reverse results\n60/3 stable negative\n60/4 regresses"] --> Need["need narrower material gate\nwithout changing row set"]
+  Need --> Class["reverse class filter\nrow + state bucket"]
+  Class --> Alpha["60/4 alpha-blend subset"]
+  Class --> Scissor["60/4 scissor subset"]
+  Class --> DepthRead["60/4 depth-read/textured subset"]
+  Class --> Large["60/4 large4096 subset"]
+
+  Alpha --> Gate["same Xcode gates\ntop rows + geometry drift <= 5%"]
+  Scissor --> Gate
+  DepthRead --> Gate
+  Large --> Gate
+
+  Gate --> Move{"VS buffer write moves?"}
+  Move -- "yes" --> Design["investigate correctness-preserving\nmaterial/locality strategy"]
+  Move -- "no" --> Reject["reject class as first-order owner"]
+
+  classDef hot fill:#ffe8e8,stroke:#b64242,color:#2b0d0d
+  classDef known fill:#e8f0ff,stroke:#476cb6,color:#0d1833
+  class Need,Class,Gate,Move,Design hot
+  class Prior,Alpha,Scissor,DepthRead,Large,Reject known
 ```
 
 ### Offline Metal Codegen Classifier

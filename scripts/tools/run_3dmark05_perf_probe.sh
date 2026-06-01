@@ -31,6 +31,7 @@ probe_reverse_opaque_indexed_triangles=0
 probe_reverse_nonopaque_indexed_triangles=0
 probe_reverse_indexed_triangles_row=
 probe_reverse_indexed_triangles_rows=
+probe_reverse_indexed_triangles_class=
 force_cull_mode=
 measure_index_reuse=0
 aggressive_color_dontcare=0
@@ -177,6 +178,11 @@ Options:
                       Set DXMT9_PROBE_REVERSE_INDEXED_TRIANGLES_ROWS=ROWS to
                       constrain reverse probes to a comma/semicolon/space
                       separated row set, e.g. 60/0,60/1,60/3,60/4
+  --probe-reverse-indexed-triangles-class CLASS
+                      Set DXMT9_PROBE_REVERSE_INDEXED_TRIANGLES_CLASS=CLASS.
+                      Accepted values match split-large indexed filters:
+                      any, opaque-depth-write, nonopaque, depth-read,
+                      alpha-blend, scissor, textured, large4096
   --force-cull-mode MODE
                       Set DXMT_DEBUG_FORCE_CULL_MODE=MODE where MODE is one of
                       none, front, or back for cull/backend shape A/B probes
@@ -407,6 +413,10 @@ while (($#)); do
       ;;
     --probe-reverse-indexed-triangles-rows)
       probe_reverse_indexed_triangles_rows=${2:?missing value for --probe-reverse-indexed-triangles-rows}
+      shift 2
+      ;;
+    --probe-reverse-indexed-triangles-class)
+      probe_reverse_indexed_triangles_class=${2:?missing value for --probe-reverse-indexed-triangles-class}
       shift 2
       ;;
     --force-cull-mode)
@@ -955,6 +965,10 @@ fi
 
 if [[ -n "$probe_reverse_indexed_triangles_rows" ]]; then
   env_args+=("DXMT9_PROBE_REVERSE_INDEXED_TRIANGLES_ROWS=$probe_reverse_indexed_triangles_rows")
+fi
+
+if [[ -n "$probe_reverse_indexed_triangles_class" ]]; then
+  env_args+=("DXMT9_PROBE_REVERSE_INDEXED_TRIANGLES_CLASS=$probe_reverse_indexed_triangles_class")
 fi
 
 if [[ -n "$force_cull_mode" ]]; then

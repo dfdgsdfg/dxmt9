@@ -164,15 +164,24 @@ void testIndexedTriangleClassFilterParsesProbeBuckets() {
   check(makeIndexedTriangleClassFilter("alpha-blend") ==
             IndexedTriangleClassFilter::AlphaBlend,
         "indexed triangle class filter accepts alpha-blend bucket");
+  check(makeIndexedTriangleClassFilter("blend") ==
+            IndexedTriangleClassFilter::AlphaBlend,
+        "indexed triangle class filter accepts blend alias");
   check(makeIndexedTriangleClassFilter("scissor") ==
             IndexedTriangleClassFilter::Scissor,
         "indexed triangle class filter accepts scissor bucket");
   check(makeIndexedTriangleClassFilter("textured") ==
             IndexedTriangleClassFilter::Textured,
         "indexed triangle class filter accepts textured bucket");
+  check(makeIndexedTriangleClassFilter("texture") ==
+            IndexedTriangleClassFilter::Textured,
+        "indexed triangle class filter accepts texture alias");
   check(makeIndexedTriangleClassFilter("large-4096") ==
             IndexedTriangleClassFilter::Large4096,
         "indexed triangle class filter accepts large4096 bucket");
+  check(makeIndexedTriangleClassFilter("large4096") ==
+            IndexedTriangleClassFilter::Large4096,
+        "indexed triangle class filter accepts compact large4096 bucket");
   check(makeIndexedTriangleClassFilter("not-a-class") ==
             IndexedTriangleClassFilter::Any,
         "unknown indexed triangle class filter falls back to any");
