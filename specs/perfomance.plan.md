@@ -8375,6 +8375,88 @@ subset is not the owner of the hidden VS-write bucket. The small GPU-time win
 is more likely secondary ordering/cache noise or a localized backend scheduling
 effect, not a production optimization proof.
 
+The next scoped Xcode candidate was the `60/4` `large4096` subset. This asks
+whether the primitive-size/locality component inside the same depth-read,
+textured, mostly-alpha row owns the previously broad primitive-order signal.
+
+```bash
+scripts/tools/run_3dmark05_perf_probe.sh \
+  --suffix reverse-row-60-4-large4096-gputrace-r1 \
+  --frame 60 \
+  --encoder-breakdown-seq 60 \
+  --timeout 240 \
+  --probe-reverse-indexed-triangles \
+  --probe-reverse-indexed-triangles-row 60/4 \
+  --probe-reverse-indexed-triangles-class large4096 \
+  --measure-index-reuse \
+  --top 4 \
+  --hot-gpu-share 95 \
+  --baseline-joined traces/app-d3d9-3dmark05-measure-index-cache-gputrace-r1/analysis/frame60-xcode-dxmt-joined-summary.csv \
+  --require-xcode-counter-coverage \
+  --require-dxmt-join-coverage \
+  --require-top-pso-attribution \
+  --require-top-row-key-match \
+  --max-top-draw-call-delta-ratio 0.05 \
+  --max-top-vertex-count-delta-ratio 0.05 \
+  --max-top-triangle-delta-ratio 0.05
+```
+
+Artifacts:
+
+```text
+experiments/output/app-d3d9-3dmark05-reverse-row-60-4-large4096-gputrace-r1/3dmark05-perf-summary.md
+experiments/output/app-d3d9-3dmark05-reverse-row-60-4-large4096-gputrace-r1/3dmark05-perf-encoders.csv
+experiments/output/app-d3d9-3dmark05-reverse-row-60-4-large4096-gputrace-r1/3dmark05-perf-encoder-streams.csv
+traces/app-d3d9-3dmark05-reverse-row-60-4-large4096-gputrace-r1/frame60.gputrace
+traces/app-d3d9-3dmark05-reverse-row-60-4-large4096-gputrace-r1/analysis/frame60-performance.gputrace
+traces/app-d3d9-3dmark05-reverse-row-60-4-large4096-gputrace-r1/analysis/frame60-counters-xcode.csv
+traces/app-d3d9-3dmark05-reverse-row-60-4-large4096-gputrace-r1/analysis/frame60-xcode-dxmt-joined-summary.csv
+traces/app-d3d9-3dmark05-reverse-row-60-4-large4096-gputrace-r1/analysis/frame60-xcode-dxmt-bottleneck-report.md
+traces/app-d3d9-3dmark05-reverse-row-60-4-large4096-gputrace-r1/analysis/frame60-xcode-dxmt-comparison.md
+```
+
+Xcode export used the same replay/export/counters sequence as the alpha run.
+The Counters view still showed `Profiling Draw Counters...` after the first
+60-second wait, so export was delayed until the progress text disappeared. The
+finalizer then passed with Xcode counter coverage, dxmt join coverage, top row
+key matching, top PSO attribution, and 5% geometry drift gates enabled.
+
+Finalizer comparison against `measure-index-cache-gputrace-r1`:
+
+| Metric | Baseline | `60/4` large4096 reverse | Delta |
+|---|---:|---:|---:|
+| Total GPU | `34.391ms` | `32.177ms` | `-6.44%` |
+| Hot top GPU | `33.741ms` | `31.552ms` | `-6.49%` |
+| Hot top GPU share | `98.110%` | `98.056%` | `-0.06%` |
+| Hot VS buffer write | `1472.747MiB` | `1362.858MiB` | `-7.46%` |
+| Hot unexplained buffer write | `1472.905MiB` | `1362.100MiB` | `-7.52%` |
+| Hot VS buffer bytes / VS invocation | `856.265B` | `809.005B` | `-5.52%` |
+| Hot VS buffer / expected VSOut | `4.654x` | `4.397x` | `-5.52%` |
+| Hot draw calls | `711` | `705` | `-0.84%` |
+| Hot dxmt vertices | `3,121,680` | `3,064,542` | `-1.83%` |
+| Hot dxmt triangles | `1,040,560` | `1,021,514` | `-1.83%` |
+| Hot transient bytes | `0.000MiB` | `0.599MiB` | diagnostic reorder IB |
+
+Target/shared-row deltas:
+
+| Row | GPU ms | VS write MiB | VS invocations | VS B/inv | Probe coverage |
+|---|---:|---:|---:|---:|---:|
+| `60/4` | `9.031 -> 7.658` (`-15.20%`) | `370.276 -> 287.596` (`-22.33%`) | `659,516 -> 632,537` (`-4.09%`) | `588.7 -> 476.8` (`-19.02%`) | `19` large4096 draws, `~0.599MiB` transient index bytes |
+| `60/0` | `5.797 -> 4.650` (`-19.79%`) | `227.665 -> 175.341` (`-22.98%`) | `317,588 -> 301,104` (`-5.19%`) | `751.7 -> 610.6` (`-18.77%`) | no direct row probe; secondary frame-order response |
+| `60/3` | `10.662 -> 10.678` (`+0.16%`) | `437.402 -> 462.556` (`+5.75%`) | `432,881 -> 439,272` (`+1.48%`) | `1059.5 -> 1104.2` (`+4.21%`) | no direct row probe; opposite row response |
+| `60/1` | `8.252 -> 8.566` (`+3.81%`) | `437.404 -> 437.366` (`-0.01%`) | unchanged | unchanged | no direct row probe |
+
+This is the first clean narrow probe that moves the first-order counter. The
+matched hot-row total VS-write delta is `-109.888MiB`: about `-17.821MiB` comes
+from fewer VS invocations, while `-92.067MiB` comes from lower bytes per
+invocation. That means the useful signal is not simply "fewer vertices";
+primitive order changes the backend storage shape per invocation. Since only
+`19` large draws in `60/4` were reordered, but `60/0` also improves and `60/3`
+regresses, this is still a diagnostic classifier rather than a production
+optimization. The positive result points to primitive/locality-dependent
+hidden vertex/tiler/parameter storage, with row interactions across the shared
+RT/depth frame.
+
 The current primitive-order classifier state is:
 
 | Probe | Shape gate | VS-write result | Interpretation |
@@ -8385,6 +8467,7 @@ The current primitive-order classifier state is:
 | `60/1` row reverse | fails top-row shape | unchanged/regresses on shared rows | not clean enough |
 | `60/4` row reverse | passes | unchanged/regresses | reject whole `60/4` reverse |
 | `60/4` alpha reverse | passes | unchanged, GPU time `-5.73%` on target row | reject alpha subset as VS-write owner |
+| `60/4` large4096 reverse | passes | hot VS write `-7.46%`, target row `-22.33%` | positive classifier for primitive/locality-dependent hidden backend traffic |
 
 Workspace disk headroom was restored before this capture; after the export the
 filesystem has about `15GiB` free. Raw `.gputrace` and embedded-performance
@@ -8401,10 +8484,11 @@ flowchart TD
   Class --> Large["60/4 large4096 subset"]
 
   Alpha --> AlphaResult["Xcode result\nshape gates pass\nVS write unchanged\nGPU time small win"]
+  Large --> LargeResult["Xcode result\nshape gates pass\nhot VS write -7.46%\n60/4 VS write -22.33%"]
   Scissor --> Gate
   DepthRead --> Gate
-  Large --> Gate
   AlphaResult --> RejectAlpha["reject alpha subset\nas VS-write owner"]
+  LargeResult --> Positive["positive classifier\nprimitive/locality-dependent\nhidden backend traffic"]
 
   Gate --> Move{"VS buffer write moves?"}
   Move -- "yes" --> Design["investigate correctness-preserving\nmaterial/locality strategy"]
@@ -8413,7 +8497,7 @@ flowchart TD
   classDef hot fill:#ffe8e8,stroke:#b64242,color:#2b0d0d
   classDef known fill:#e8f0ff,stroke:#476cb6,color:#0d1833
   class Need,Class,Gate,Move,Design hot
-  class AlphaResult,RejectAlpha hot
+  class AlphaResult,RejectAlpha,LargeResult,Positive hot
   class Prior,Alpha,Scissor,DepthRead,Large,Reject known
 ```
 
