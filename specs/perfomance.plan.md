@@ -8297,11 +8297,10 @@ Validation:
 | `meson test -C build-x86_64-builtin dxmt9-draw-seq-filter-spec --print-errorlogs` | pass |
 | `reverse-row-60-4-alpha-nogputrace-r1` | pass; `60/4` probe draws match `alpha-blend` bucket |
 
-The immediate Xcode candidate is a row/material-scoped run on `60/4`, because
+The first Xcode candidate was a row/material-scoped run on `60/4`, because
 `60/4` is the depth-read/textured/mostly-alpha row where broad single-row
-reverse regressed. The class filter lets the next run ask whether the
-regression is owned by the alpha-blended subset, the scissored subset, the
-depth-read/textured bucket as a whole, or the `large4096` primitives:
+reverse regressed. This run asks whether the `60/4` alpha-blended subset is the
+owner of the primitive-order signal:
 
 ```bash
 scripts/tools/run_3dmark05_perf_probe.sh \
@@ -8325,10 +8324,72 @@ scripts/tools/run_3dmark05_perf_probe.sh \
   --max-top-triangle-delta-ratio 0.05
 ```
 
-Do not run more `.gputrace` captures until disk headroom is restored. The
-current workspace had only about `582MiB` free during this tooling update,
-which is enough for CSV/finalizer work but too tight for another safe
-performance-embedded capture.
+Artifacts:
+
+```text
+experiments/output/app-d3d9-3dmark05-reverse-row-60-4-alpha-gputrace-r1/3dmark05-perf-summary.md
+experiments/output/app-d3d9-3dmark05-reverse-row-60-4-alpha-gputrace-r1/3dmark05-perf-encoders.csv
+experiments/output/app-d3d9-3dmark05-reverse-row-60-4-alpha-gputrace-r1/3dmark05-perf-encoder-streams.csv
+traces/app-d3d9-3dmark05-reverse-row-60-4-alpha-gputrace-r1/frame60.gputrace
+traces/app-d3d9-3dmark05-reverse-row-60-4-alpha-gputrace-r1/analysis/frame60-performance.gputrace
+traces/app-d3d9-3dmark05-reverse-row-60-4-alpha-gputrace-r1/analysis/frame60-counters-xcode.csv
+traces/app-d3d9-3dmark05-reverse-row-60-4-alpha-gputrace-r1/analysis/frame60-xcode-dxmt-joined-summary.csv
+traces/app-d3d9-3dmark05-reverse-row-60-4-alpha-gputrace-r1/analysis/frame60-xcode-dxmt-bottleneck-report.md
+traces/app-d3d9-3dmark05-reverse-row-60-4-alpha-gputrace-r1/analysis/frame60-xcode-dxmt-comparison.md
+```
+
+Xcode export followed the required sequence: replay with profiling, export with
+embedded performance data, open Performance > Counters, wait for draw-counter
+profiling to finish, export encoder counters, then run the finalizer with
+Xcode counter coverage, dxmt join coverage, top row key matching, top PSO
+attribution, and 5% geometry drift gates enabled. The finalizer passed.
+
+Finalizer comparison against `measure-index-cache-gputrace-r1`:
+
+| Metric | Baseline | `60/4` alpha reverse | Delta |
+|---|---:|---:|---:|
+| Total GPU | `34.391ms` | `33.203ms` | `-3.45%` |
+| Hot top GPU | `33.741ms` | `32.582ms` | `-3.44%` |
+| Hot top GPU share | `98.110%` | `98.129%` | `+0.02%` |
+| Hot VS buffer write | `1472.747MiB` | `1473.132MiB` | `+0.03%` |
+| Hot unexplained buffer write | `1472.905MiB` | `1471.374MiB` | `-0.10%` |
+| Hot VS buffer bytes / VS invocation | `856.265B` | `856.199B` | `-0.01%` |
+| Hot VS buffer / expected VSOut | `4.654x` | `4.653x` | `-0.01%` |
+| Hot draw calls | `711` | `716` | `+0.70%` |
+| Hot dxmt vertices | `3,121,680` | `3,122,460` | `+0.02%` |
+| Hot dxmt triangles | `1,040,560` | `1,040,820` | `+0.02%` |
+| Hot transient bytes | `0.000MiB` | `1.948MiB` | diagnostic reorder IB |
+
+Target-row delta:
+
+| Row | GPU ms | VS write MiB | VS invocations | VS B/inv | Probe coverage |
+|---|---:|---:|---:|---:|---:|
+| `60/4` | `9.031 -> 8.513` (`-5.73%`) | `370.276 -> 370.722` (`+0.12%`) | `659,516 -> 660,128` (`+0.09%`) | `588.7 -> 588.9` (`+0.03%`) | `243` alpha draws, `~1.95MiB` transient index bytes |
+
+This run is clean enough for same-frame interpretation: row membership stayed
+`60/0,60/1,60/3,60/4`, and draw/vertex/triangle drift stayed below the 5%
+guard. It shows a small GPU-time improvement, but the first-order counter
+stays flat: hot VS buffer write, VS bytes per invocation, and the hidden
+backend estimate are effectively unchanged. Therefore the `60/4` alpha-blended
+subset is not the owner of the hidden VS-write bucket. The small GPU-time win
+is more likely secondary ordering/cache noise or a localized backend scheduling
+effect, not a production optimization proof.
+
+The current primitive-order classifier state is:
+
+| Probe | Shape gate | VS-write result | Interpretation |
+|---|---|---|---|
+| Full reverse | fails top-row/geometry gates | large win | strong classifier only; not a clean same-frame proof |
+| Hot-row-set reverse | fails draw-count/top-row shape | large win | broad frame-shape perturbation |
+| `60/3` row reverse | passes | unchanged/regresses | reject single opaque row |
+| `60/1` row reverse | fails top-row shape | unchanged/regresses on shared rows | not clean enough |
+| `60/4` row reverse | passes | unchanged/regresses | reject whole `60/4` reverse |
+| `60/4` alpha reverse | passes | unchanged, GPU time `-5.73%` on target row | reject alpha subset as VS-write owner |
+
+Workspace disk headroom was restored before this capture; after the export the
+filesystem has about `15GiB` free. Raw `.gputrace` and embedded-performance
+bundles remain under ignored `traces/` and should be pruned after their reduced
+CSV/Markdown reports are no longer needed.
 
 ```mermaid
 flowchart TD
@@ -8339,10 +8400,11 @@ flowchart TD
   Class --> DepthRead["60/4 depth-read/textured subset"]
   Class --> Large["60/4 large4096 subset"]
 
-  Alpha --> Gate["same Xcode gates\ntop rows + geometry drift <= 5%"]
+  Alpha --> AlphaResult["Xcode result\nshape gates pass\nVS write unchanged\nGPU time small win"]
   Scissor --> Gate
   DepthRead --> Gate
   Large --> Gate
+  AlphaResult --> RejectAlpha["reject alpha subset\nas VS-write owner"]
 
   Gate --> Move{"VS buffer write moves?"}
   Move -- "yes" --> Design["investigate correctness-preserving\nmaterial/locality strategy"]
@@ -8351,6 +8413,7 @@ flowchart TD
   classDef hot fill:#ffe8e8,stroke:#b64242,color:#2b0d0d
   classDef known fill:#e8f0ff,stroke:#476cb6,color:#0d1833
   class Need,Class,Gate,Move,Design hot
+  class AlphaResult,RejectAlpha hot
   class Prior,Alpha,Scissor,DepthRead,Large,Reject known
 ```
 
