@@ -175,6 +175,11 @@ std::uint32_t splitLargeIndexedDrawPrimitiveLimit() {
   return limit;
 }
 
+bool measureIndexReuse() {
+  static const bool v = util::getenvFlag("DXMT9_MEASURE_INDEX_REUSE");
+  return v;
+}
+
 int fixedFunctionTraceBudget() {
   static const int budget = [] {
     const auto env = util::getenvString("DXMT_TRACE_FVF");

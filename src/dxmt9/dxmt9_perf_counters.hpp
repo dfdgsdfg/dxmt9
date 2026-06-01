@@ -616,6 +616,10 @@ struct EncoderBreakdown {
   std::uint64_t splitLargeIndexedExtraDraws = 0;
   std::uint64_t splitLargeIndexedPrimitiveLimit = 0;
   std::uint64_t splitLargeIndexedPrimitiveCount = 0;
+  std::uint64_t indexedVertexReuseSamples = 0;
+  std::uint64_t indexedVertexReuseSkipped = 0;
+  std::uint64_t indexedVertexReferenceCount = 0;
+  std::uint64_t indexedUniqueVertexEstimate = 0;
   std::uint64_t stream0StrideMin = 0;
   std::uint64_t stream0StrideMax = 0;
   std::uint64_t streamStateSamples = 0;

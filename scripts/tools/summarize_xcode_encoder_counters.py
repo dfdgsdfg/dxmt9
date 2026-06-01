@@ -189,6 +189,10 @@ JOINED_EXTRA_FIELDS = (
     "dxmt_split_large_indexed_extra_draws",
     "dxmt_split_large_indexed_primitive_limit",
     "dxmt_split_large_indexed_primitive_count",
+    "dxmt_indexed_vertex_reuse_samples",
+    "dxmt_indexed_vertex_reuse_skipped",
+    "dxmt_indexed_vertex_reference_count",
+    "dxmt_indexed_unique_vertex_estimate",
     "dxmt_texture_mask_or",
     "dxmt_fragment_texture_binding_samples",
     "dxmt_fragment_texture_binding_mask_or",
@@ -299,6 +303,9 @@ JOINED_EXTRA_FIELDS = (
     "dxmt_large_vertex_draw_share",
     "dxmt_vs_buffer_bytes_per_dxmt_vertex",
     "dxmt_vs_invocations_per_dxmt_vertex",
+    "dxmt_indexed_vertex_reuse_ratio",
+    "dxmt_vs_invocations_per_indexed_unique_vertex",
+    "dxmt_vs_buffer_bytes_per_indexed_unique_vertex",
     "dxmt_stream0_input_min_mib",
     "dxmt_stream0_input_max_mib",
     "dxmt_vs_buffer_to_stream0_input_min_ratio",
@@ -660,6 +667,10 @@ def join_dxmt(row: dict[str, Any], dxmt: dict[tuple[int, int], dict[str, Any]]) 
         "dxmt_split_large_indexed_extra_draws": "split_large_indexed_extra_draws",
         "dxmt_split_large_indexed_primitive_limit": "split_large_indexed_primitive_limit",
         "dxmt_split_large_indexed_primitive_count": "split_large_indexed_primitive_count",
+        "dxmt_indexed_vertex_reuse_samples": "indexed_vertex_reuse_samples",
+        "dxmt_indexed_vertex_reuse_skipped": "indexed_vertex_reuse_skipped",
+        "dxmt_indexed_vertex_reference_count": "indexed_vertex_reference_count",
+        "dxmt_indexed_unique_vertex_estimate": "indexed_unique_vertex_estimate",
         "dxmt_texture_mask_or": "texture_mask_or",
         "dxmt_fragment_texture_binding_samples": "fragment_texture_binding_samples",
         "dxmt_fragment_texture_binding_mask_or": "fragment_texture_binding_mask_or",
@@ -785,6 +796,8 @@ def derive_dxmt_attribution(joined: dict[str, Any]) -> None:
     dxmt_vertices = as_int(joined.get("dxmt_vertex_count"))
     dxmt_primitives = as_int(joined.get("dxmt_primitive_count"))
     vs_invocations = as_float(joined.get("vs_invocations"))
+    indexed_vertex_refs = as_int(joined.get("dxmt_indexed_vertex_reference_count"))
+    indexed_unique_vertices = as_int(joined.get("dxmt_indexed_unique_vertex_estimate"))
     stream0_stride_min = as_int(joined.get("dxmt_stream0_stride_min"))
     stream0_stride_max = as_int(joined.get("dxmt_stream0_stride_max"))
     pso_state_samples = as_int(joined.get("dxmt_pso_state_samples"))
@@ -843,6 +856,12 @@ def derive_dxmt_attribution(joined: dict[str, Any]) -> None:
         vs_buffer_write_bytes, float(dxmt_vertices))
     joined["dxmt_vs_invocations_per_dxmt_vertex"] = ratio(
         vs_invocations, float(dxmt_vertices))
+    joined["dxmt_indexed_vertex_reuse_ratio"] = ratio(
+        float(indexed_vertex_refs), float(indexed_unique_vertices))
+    joined["dxmt_vs_invocations_per_indexed_unique_vertex"] = ratio(
+        vs_invocations, float(indexed_unique_vertices))
+    joined["dxmt_vs_buffer_bytes_per_indexed_unique_vertex"] = ratio(
+        vs_buffer_write_bytes, float(indexed_unique_vertices))
     stream0_input_min_bytes = dxmt_vertices * stream0_stride_min
     stream0_input_max_bytes = dxmt_vertices * stream0_stride_max
     joined["dxmt_stream0_input_min_mib"] = (
@@ -1195,6 +1214,14 @@ def write_report(
         as_int(row.get("dxmt_split_large_indexed_extra_draws")) for row in top)
     top_split_large_primitives = sum(
         as_int(row.get("dxmt_split_large_indexed_primitive_count")) for row in top)
+    top_indexed_vertex_reuse_samples = sum(
+        as_int(row.get("dxmt_indexed_vertex_reuse_samples")) for row in top)
+    top_indexed_vertex_reuse_skipped = sum(
+        as_int(row.get("dxmt_indexed_vertex_reuse_skipped")) for row in top)
+    top_indexed_vertex_reference_count = sum(
+        as_int(row.get("dxmt_indexed_vertex_reference_count")) for row in top)
+    top_indexed_unique_vertex_estimate = sum(
+        as_int(row.get("dxmt_indexed_unique_vertex_estimate")) for row in top)
     top_dxmt_stream0_input_min_mib = sum(
         as_float(row.get("dxmt_stream0_input_min_mib")) for row in top
     )
@@ -1283,6 +1310,18 @@ def write_report(
     vs_invocations_per_dxmt_vertex = (
         top_vs_invocations / top_dxmt_vertex_count
         if top_dxmt_vertex_count else 0.0
+    )
+    indexed_vertex_reuse_ratio = (
+        top_indexed_vertex_reference_count / top_indexed_unique_vertex_estimate
+        if top_indexed_unique_vertex_estimate else 0.0
+    )
+    vs_invocations_per_indexed_unique_vertex = (
+        top_vs_invocations / top_indexed_unique_vertex_estimate
+        if top_indexed_unique_vertex_estimate else 0.0
+    )
+    vs_buffer_bytes_per_indexed_unique_vertex = (
+        top_vs_buffer_write_mib * 1024.0 * 1024.0 / top_indexed_unique_vertex_estimate
+        if top_indexed_unique_vertex_estimate else 0.0
     )
     top_vs_buffer_to_stream0_input_min_ratio = (
         top_vs_buffer_write_mib / top_dxmt_stream0_input_min_mib
@@ -1449,6 +1488,29 @@ def write_report(
     lines.append(
         f"| VS invocations / dxmt vertex | `{fmt_float(vs_invocations_per_dxmt_vertex, 3)}x` |"
     )
+    if top_indexed_vertex_reuse_samples or top_indexed_vertex_reuse_skipped:
+        lines.append(
+            f"| dxmt indexed reuse measured/skipped draws | "
+            f"`{fmt_int(top_indexed_vertex_reuse_samples)} / "
+            f"{fmt_int(top_indexed_vertex_reuse_skipped)}` |"
+        )
+        lines.append(
+            f"| dxmt indexed references / unique estimate | "
+            f"`{fmt_int(top_indexed_vertex_reference_count)} / "
+            f"{fmt_int(top_indexed_unique_vertex_estimate)}` |"
+        )
+        lines.append(
+            f"| dxmt indexed reference reuse ratio | "
+            f"`{fmt_float(indexed_vertex_reuse_ratio, 3)}x` |"
+        )
+        lines.append(
+            f"| VS invocations / dxmt indexed unique estimate | "
+            f"`{fmt_float(vs_invocations_per_indexed_unique_vertex, 3)}x` |"
+        )
+        lines.append(
+            f"| VS buffer bytes / dxmt indexed unique estimate | "
+            f"`{fmt_float(vs_buffer_bytes_per_indexed_unique_vertex, 1)} B` |"
+        )
     lines.append(
         f"| dxmt stream0 input min/max | `{fmt_float(top_dxmt_stream0_input_min_mib)} / {fmt_float(top_dxmt_stream0_input_max_mib)} MiB` |"
     )

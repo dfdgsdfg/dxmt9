@@ -79,7 +79,11 @@ Commercial / 3rd-party titles (require external prefix):
     bytes, transient vertex/index bytes split by UP preupload, decl/shadow
     fallback, and indexed expansion, primitive/vertex/FFP/pre-transformed
     geometry shape, PSO/shader-variant/VS/PS-hash/VSOut-layout attribution, VSOut
-    layout-cache hit/miss counts, and VS float upload-plan ranges. It is
+    layout-cache hit/miss counts, and VS float upload-plan ranges. Add
+    `DXMT9_MEASURE_INDEX_REUSE=1` only for targeted diagnostics when you need
+    indexed reference count and draw-local unique-index estimates to compare
+    against Xcode `VS Invocations`; it scans accessible index buffers on the
+    draw path and is intentionally off by default. It is
     intentionally not enabled by the shared perf profile. After the run,
     `python3 scripts/tools/summarize_3dmark05_perf.py experiments/output/<run>`
     writes `3dmark05-perf-encoders.csv` and
@@ -108,6 +112,10 @@ Commercial / 3rd-party titles (require external prefix):
     first to verify paths, desktop lock state, and free-space guard. The
     wrapper requires `2048MiB` free by default when gputrace capture is enabled
     (`--min-free-mb N` / `DXMT_3DMARK05_MIN_TRACE_FREE_MB=N` overrides it).
+    Use `--measure-index-reuse` for the optional unique-index diagnostic; the
+    final joined report will include `dxmt indexed references / unique
+    estimate` and `VS invocations / dxmt indexed unique estimate` when the
+    index data was readable.
     Dry-run and guard failures print `traces/`, `experiments/output/`, and
     the largest trace/output files when free space is below the guard, so
     cleanup can happen before launching Wine. If `--baseline-joined` or

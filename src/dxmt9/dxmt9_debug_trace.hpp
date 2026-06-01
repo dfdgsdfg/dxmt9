@@ -123,6 +123,11 @@ bool useNativeMetalBaseVertex();
 // Env: DXMT9_SPLIT_LARGE_INDEXED_DRAWS.
 std::uint32_t splitLargeIndexedDrawPrimitiveLimit();
 
+// Diagnostic-only: scan accessible index-buffer bytes and report the sum of
+// per-draw unique index references in encoder breakdown logs.
+// Env: DXMT9_MEASURE_INDEX_REUSE.
+bool measureIndexReuse();
+
 // Trace budget for the FFP path (emits N trace lines then stops).
 // Env: DXMT_TRACE_FVF.
 int fixedFunctionTraceBudget();

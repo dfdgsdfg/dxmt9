@@ -22,6 +22,7 @@ suppress_x8_rt_pixel_format_view=0
 x8_shader_alpha_fill=0
 native_metal_base_vertex=0
 split_large_indexed_draws=
+measure_index_reuse=0
 aggressive_color_dontcare=0
 aggressive_depth_dontcare=0
 disable_cull=0
@@ -124,6 +125,9 @@ Options:
   --split-large-indexed-draws N
                       Set DXMT9_SPLIT_LARGE_INDEXED_DRAWS=N to split indexed
                       triangle-list draws above N primitives
+  --measure-index-reuse
+                      Set DXMT9_MEASURE_INDEX_REUSE=1 to scan accessible
+                      index buffers and report per-encoder unique index counts
   --aggressive-color-dontcare
                       Set DXMT9_AGGRESSIVE_COLOR_DONTCARE=1 for the run
   --aggressive-depth-dontcare
@@ -301,6 +305,10 @@ while (($#)); do
     --split-large-indexed-draws)
       split_large_indexed_draws=${2:?missing value for --split-large-indexed-draws}
       shift 2
+      ;;
+    --measure-index-reuse)
+      measure_index_reuse=1
+      shift
       ;;
     --aggressive-color-dontcare)
       aggressive_color_dontcare=1
@@ -743,6 +751,10 @@ fi
 
 if [[ -n "$split_large_indexed_draws" ]]; then
   env_args+=("DXMT9_SPLIT_LARGE_INDEXED_DRAWS=$split_large_indexed_draws")
+fi
+
+if (( measure_index_reuse )); then
+  env_args+=("DXMT9_MEASURE_INDEX_REUSE=1")
 fi
 
 if (( aggressive_depth_dontcare )); then

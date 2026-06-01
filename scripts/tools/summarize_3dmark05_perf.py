@@ -213,6 +213,10 @@ ENCODER_SUM_KEYS = (
     "split_large_indexed_metal_draws",
     "split_large_indexed_extra_draws",
     "split_large_indexed_primitive_count",
+    "indexed_vertex_reuse_samples",
+    "indexed_vertex_reuse_skipped",
+    "indexed_vertex_reference_count",
+    "indexed_unique_vertex_estimate",
     "stream_state_samples",
     "stream_metal_binds",
     "stream_metal_bind_firsts",
@@ -325,6 +329,9 @@ TOP_ENCODER_KEYS = (
     "native_base_vertex_used_draws",
     "split_large_indexed_source_draws",
     "split_large_indexed_extra_draws",
+    "indexed_vertex_reference_count",
+    "indexed_unique_vertex_estimate",
+    "indexed_vertex_reuse_ratio",
     "pso_handle_changes",
     "pso_state_samples_per_draw",
     "shader_variant_changes",
@@ -438,6 +445,11 @@ ENCODER_CSV_KEYS = (
     "split_large_indexed_extra_draws",
     "split_large_indexed_primitive_limit",
     "split_large_indexed_primitive_count",
+    "indexed_vertex_reuse_samples",
+    "indexed_vertex_reuse_skipped",
+    "indexed_vertex_reference_count",
+    "indexed_unique_vertex_estimate",
+    "indexed_vertex_reuse_ratio",
     "stream0_stride_min",
     "stream0_stride_max",
     "stream_state_samples",
@@ -812,6 +824,10 @@ def enrich_encoder_rows(encoders: list[dict[str, Any]]) -> None:
             signature_duplicates / signature_samples) if signature_samples else 0.0
         row["draw_geometry_signature_consecutive_duplicate_ratio"] = (
             consecutive_duplicates / signature_samples) if signature_samples else 0.0
+        indexed_unique = numeric_value(row, "indexed_unique_vertex_estimate")
+        indexed_refs = numeric_value(row, "indexed_vertex_reference_count")
+        row["indexed_vertex_reuse_ratio"] = (
+            indexed_refs / indexed_unique) if indexed_unique else 0.0
 
 
 def write_markdown(

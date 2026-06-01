@@ -3091,6 +3091,10 @@ void emitEncoderBreakdown(const EncoderBreakdown& b) {
       "split_large_indexed_extra_draws=%llu "
       "split_large_indexed_primitive_limit=%llu "
       "split_large_indexed_primitive_count=%llu "
+      "indexed_vertex_reuse_samples=%llu "
+      "indexed_vertex_reuse_skipped=%llu "
+      "indexed_vertex_reference_count=%llu "
+      "indexed_unique_vertex_estimate=%llu "
       "stream0_stride_min=%llu stream0_stride_max=%llu "
       "stream_state_samples=%llu stream_metal_binds=%llu "
       "stream_metal_bind_firsts=%llu "
@@ -3264,6 +3268,10 @@ void emitEncoderBreakdown(const EncoderBreakdown& b) {
       static_cast<unsigned long long>(b.splitLargeIndexedExtraDraws),
       static_cast<unsigned long long>(b.splitLargeIndexedPrimitiveLimit),
       static_cast<unsigned long long>(b.splitLargeIndexedPrimitiveCount),
+      static_cast<unsigned long long>(b.indexedVertexReuseSamples),
+      static_cast<unsigned long long>(b.indexedVertexReuseSkipped),
+      static_cast<unsigned long long>(b.indexedVertexReferenceCount),
+      static_cast<unsigned long long>(b.indexedUniqueVertexEstimate),
       static_cast<unsigned long long>(b.stream0StrideMin),
       static_cast<unsigned long long>(b.stream0StrideMax),
       static_cast<unsigned long long>(b.streamStateSamples),

@@ -560,6 +560,12 @@ void bufferBindShadowStore(BufferBindShadowSlot& slot,
 
 bool x8ShaderAlphaFillEnabledForDiagnostics();
 
+struct IndexReuseMeasure {
+  u64 references = 0;
+  u64 unique = 0;
+  bool available = false;
+};
+
 struct ActiveEncoderBreakdown {
   static_assert(core::kMaxStreams <= perf::kEncoderBreakdownMaxStreams);
 
@@ -953,6 +959,19 @@ struct ActiveEncoderBreakdown {
               : std::min<std::uint64_t>(stats.splitLargeIndexedPrimitiveLimit,
                                         primitiveLimit);
     }
+  }
+
+  void recordIndexedVertexReuse(IndexReuseMeasure measure) {
+    if (!enabled) {
+      return;
+    }
+    stats.indexedVertexReferenceCount += measure.references;
+    if (!measure.available) {
+      ++stats.indexedVertexReuseSkipped;
+      return;
+    }
+    ++stats.indexedVertexReuseSamples;
+    stats.indexedUniqueVertexEstimate += measure.unique;
   }
 
   void recordDrawIssue(core::PrimitiveType primitiveType,
@@ -2379,6 +2398,46 @@ void countDrawIssue(core::FlatDrawStateView drawState,
 
 std::size_t indexElementSize(IndexType type) {
   return type == IndexType::UInt16 ? 2u : 4u;
+}
+
+IndexReuseMeasure measureIndexReuseForDraw(std::span<const u8> indexBytes,
+                                           IndexType indexType,
+                                           u32 startIndex,
+                                           u64 indexCount) {
+  IndexReuseMeasure out{.references = indexCount};
+  if (indexBytes.empty() || indexCount == 0u) {
+    return out;
+  }
+  const std::size_t elementSize = indexElementSize(indexType);
+  const std::size_t startByte = static_cast<std::size_t>(startIndex) * elementSize;
+  if (startByte > indexBytes.size()) {
+    return out;
+  }
+  const std::size_t maxReadable =
+      (indexBytes.size() - startByte) / elementSize;
+  if (indexCount > static_cast<u64>(maxReadable)) {
+    return out;
+  }
+
+  std::vector<u32> indices;
+  indices.reserve(static_cast<std::size_t>(indexCount));
+  for (u64 i = 0; i < indexCount; ++i) {
+    const std::size_t offset = startByte + static_cast<std::size_t>(i) * elementSize;
+    if (indexType == IndexType::UInt16) {
+      u16 value = 0;
+      std::memcpy(&value, indexBytes.data() + offset, sizeof(value));
+      indices.push_back(value);
+    } else {
+      u32 value = 0;
+      std::memcpy(&value, indexBytes.data() + offset, sizeof(value));
+      indices.push_back(value);
+    }
+  }
+  std::sort(indices.begin(), indices.end());
+  out.unique = static_cast<u64>(std::unique(indices.begin(), indices.end()) -
+                                indices.begin());
+  out.available = true;
+  return out;
 }
 
 u32 samplerStateOr(const SamplerSnapshot& snapshot, u32 state, u32 fallback) {
@@ -5085,10 +5144,12 @@ bool encodeDraw(EncodeContext& ctx,
     CommandQueue::TransientBufferSlice transientIndexBuffer;
     WMT::Buffer indexBuffer{};
     const resources::BufferRecord* indexBufferRecord = nullptr;
+    std::span<const u8> indexBytesForReuse;
     uint64_t indexBufferOffset = static_cast<uint64_t>(pv.startIndex) * indexElementSize(pv.indexType);
     {
       PerfScope streamBindIndexScope(perf::countEncodeDrawStreamBindCpuTime);
       if (!pv.userIndexData.empty()) {
+        indexBytesForReuse = pv.userIndexData;
         // Phase 5-B: prefer pre-batched UP index slice from DrawRun
         // bulk upload; fall back to per-draw upload otherwise.
         if (preUploaded && preUploaded->index) {
@@ -5107,7 +5168,15 @@ bool encodeDraw(EncodeContext& ctx,
         indexBufferRecord = buffer;
         if (buffer && buffer->buffer) {
           indexBuffer = WMT::Buffer{buffer->buffer.handle};
+          if (!buffer->shadow.empty()) {
+            indexBytesForReuse = buffer->shadow;
+          } else if (buffer->contents) {
+            indexBytesForReuse = std::span<const u8>(
+                static_cast<const u8*>(buffer->contents),
+                static_cast<std::size_t>(buffer->desc.size));
+          }
         } else if (buffer && !buffer->shadow.empty()) {
+          indexBytesForReuse = buffer->shadow;
           transientIndexBuffer = makeTransientIndexBuffer(
               buffer->shadow.data(), buffer->shadow.size(),
               ActiveEncoderBreakdown::TransientIndexSource::ShadowFallback);
@@ -5132,6 +5201,13 @@ bool encodeDraw(EncodeContext& ctx,
       }
     }
     if (indexBuffer) {
+      if (encoderBreakdown && debug::measureIndexReuse()) {
+        encoderBreakdown->recordIndexedVertexReuse(
+            measureIndexReuseForDraw(indexBytesForReuse,
+                                     pv.indexType,
+                                     pv.startIndex,
+                                     vertexCount));
+      }
       const bool upDraw = !pv.userVertexData.empty() || !pv.userIndexData.empty();
       recordEncoderDrawIssue(true, false);
       recordDrawGeometryDiagnostics(drawState,

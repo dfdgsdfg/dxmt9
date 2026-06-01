@@ -224,6 +224,17 @@ class ThreeDMark05ProbeScriptTests(unittest.TestCase):
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertIn("DXMT_DEBUG_FORCE_FRAGMENT_COLOR=1", result.stdout)
 
+    def test_wrapper_dry_run_includes_index_reuse_measure_env(self) -> None:
+        result = self.run_script(
+            RUN_WRAPPER,
+            "--no-gputrace",
+            "--measure-index-reuse",
+            "--dry-run",
+        )
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("DXMT9_MEASURE_INDEX_REUSE=1", result.stdout)
+
     def test_wrapper_dry_run_includes_x8_shader_alpha_fill_env(self) -> None:
         result = self.run_script(
             RUN_WRAPPER,
@@ -289,6 +300,33 @@ class ThreeDMark05ProbeScriptTests(unittest.TestCase):
         self.assertEqual(joined["dxmt_x8_rt_texture_binding_samples"], 2)
         self.assertEqual(joined["dxmt_x8_shader_alpha_fill_samples"], 2)
         self.assertEqual(joined["dxmt_x8_shader_alpha_fill_mask_or"], "0x3")
+
+    def test_xcode_summarizer_derives_index_reuse_fields(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            encoder_csv = Path(tmp) / "encoders.csv"
+            encoder_csv.write_text(
+                "\n".join([
+                    "seq,encoder,indexed_vertex_reference_count,indexed_unique_vertex_estimate,indexed_vertex_reuse_samples,indexed_vertex_reuse_skipped",
+                    "60,2,300,120,1,0",
+                ]),
+                encoding="utf-8",
+            )
+
+            summarizer = load_xcode_summarizer()
+            dxmt = summarizer.load_dxmt_from_csv(encoder_csv)
+            joined = {
+                "seq": 60,
+                "enc": 2,
+                "buffer_write_mib": 1.0,
+                "vs_buffer_write_mib": 1.0,
+                "vs_invocations": 120.0,
+            }
+            joined = summarizer.join_dxmt(joined, dxmt)
+
+        self.assertEqual(joined["dxmt_indexed_vertex_reference_count"], 300)
+        self.assertEqual(joined["dxmt_indexed_unique_vertex_estimate"], 120)
+        self.assertEqual(joined["dxmt_indexed_vertex_reuse_ratio"], 2.5)
+        self.assertEqual(joined["dxmt_vs_invocations_per_indexed_unique_vertex"], 1.0)
 
     def test_xcode_summarizer_classifies_hidden_backend_storage(self) -> None:
         summarizer = load_xcode_summarizer()
