@@ -224,7 +224,8 @@ def render_source(draws: list[dict[str, Any]],
                   shader_variants: list[dict[str, Any]],
                   dummy_vertex_buffer_slots: list[int],
                   width: int,
-                  height: int) -> str:
+                  height: int,
+                  depth_clear: float) -> str:
     first_state = draws[0]["state"]
     alpha_blend = int(first_state.get("alpha_blend", 0))
     src_blend = int(first_state.get("src_blend", 2))
@@ -615,7 +616,7 @@ int main() {{
     pass.depthAttachment.texture = depth;
     pass.depthAttachment.loadAction = MTLLoadActionClear;
     pass.depthAttachment.storeAction = MTLStoreActionDontCare;
-    pass.depthAttachment.clearDepth = 1.0;
+    pass.depthAttachment.clearDepth = {depth_clear:.9g};
     if ({1 if stencil_format != "MTLPixelFormatInvalid" else 0}) {{
       pass.stencilAttachment.texture = depth;
       pass.stencilAttachment.loadAction = MTLLoadActionClear;
@@ -768,6 +769,7 @@ def prepare(args: argparse.Namespace) -> dict[str, Any]:
             dummy_vertex_buffer_slots,
             args.width,
             args.height,
+            args.depth_clear,
         ),
         encoding="utf-8",
     )
@@ -782,6 +784,7 @@ def prepare(args: argparse.Namespace) -> dict[str, Any]:
         "draw_count": len(replay_draws),
         "draw_order": args.draw_order,
         "primitive_order": args.primitive_order,
+        "depth_clear": args.depth_clear,
         "index_bytes": sum(int(draw["geometry"]["index_bytes"]) for draw in replay_draws),
         "stream0_bytes": sum(int(draw["geometry"]["stream0_bytes"]) for draw in replay_draws),
         "uniform_draw_count": sum(
@@ -888,6 +891,16 @@ def main() -> int:
     parser.add_argument("--compile", action="store_true")
     parser.add_argument("--run", action="store_true")
     parser.add_argument("--repeat", type=int, default=1)
+    parser.add_argument(
+        "--depth-clear",
+        type=float,
+        default=1.0,
+        help=(
+            "clear value for the standalone depth attachment; use this for "
+            "depth-content sensitivity probes before a real depth attachment "
+            "dump/load path exists"
+        ),
+    )
     parser.add_argument("--capture-path", type=Path)
     parser.add_argument(
         "--min-capture-free-mb",

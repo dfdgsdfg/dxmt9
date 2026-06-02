@@ -12247,6 +12247,96 @@ means the next replay experiment should not simply add more of the same 16
 draws; it should preserve more of the original `60/2` pass context or select
 draws whose Xcode counters keep the original vertex-stage dominated shape.
 
+The first concrete replay-fidelity issue was the mini replay runner's scissor
+handling. The original 16-draw `60/2` window has 10 scissored draws
+(`0,268..97,768`), but the first full16 mini replay used only the first draw's
+non-scissored state for the whole encoder. The runner was updated to emit
+per-draw scissor rectangles and call `setScissorRect` before each draw. Smoke
+summary now reports:
+
+```text
+mini replay draws=16 repeat=1
+scissor_draw_count=10
+shader_variant_count=6
+actual_extra_vertex_buffer_slots=[6]
+```
+
+The scissor-aware capture/profiling artifacts are:
+
+- Raw capture:
+  `traces/app-d3d9-3dmark05-screen-blend-run-71-188-payload16-streams-r1/analysis/mini-replay-full16-scissor.gputrace`
+  (`29MiB`)
+- Performance-embedded export:
+  `traces/app-d3d9-3dmark05-screen-blend-run-71-188-payload16-streams-r1/analysis/mini-replay-full16-scissor-performance.gputrace`
+- Xcode encoder counter CSV:
+  `traces/app-d3d9-3dmark05-screen-blend-run-71-188-payload16-streams-r1/analysis/mini-replay-full16-scissor-counters-xcode.csv`
+- Reduced summary:
+  `traces/app-d3d9-3dmark05-screen-blend-run-71-188-payload16-streams-r1/analysis/mini-replay-full16-scissor-counters-summary.csv`
+- Bottleneck report:
+  `traces/app-d3d9-3dmark05-screen-blend-run-71-188-payload16-streams-r1/analysis/mini-replay-full16-scissor-xcode-bottleneck-report.md`
+
+Counter comparison after the scissor fix:
+
+| Metric | Original `60/2` | Mini full16 | Mini scissor | Scissor / full16 | Scissor / original |
+|---|---:|---:|---:|---:|---:|
+| GPU time | `20.327ms` | `3.710ms` | `1.498ms` | `0.404x` | `0.074x` |
+| VS buffer write | `981.171MiB` | `31.974MiB` | `31.978MiB` | `1.000x` | `0.033x` |
+| VS invocations | `642,001` | `54,104` | `54,104` | `1.000x` | `0.084x` |
+| VS buffer / VS invocation | `1602.5B` | `619.7B` | `619.8B` | `1.000x` | `0.387x` |
+| Primitives | `389,376` | `28,822` | `28,822` | `1.000x` | `0.074x` |
+| VS buffer / primitive | `2642.3B` | `1163.3B` | `1163.4B` | `1.000x` | `0.440x` |
+| Tiled vertex buffer | `12.563MiB` | `1.031MiB` | `0.906MiB` | `0.879x` | `0.072x` |
+| Tiled primitive-block buffer | `11.813MiB` | `0.781MiB` | `0.781MiB` | `1.000x` | `0.066x` |
+| FS invocations | `3,296,064` | `22,057,376` | `2,963,392` | `0.134x` | `0.899x` |
+| Pixels rasterized | `14,020,864` | `21,270,944` | `2,176,960` | `0.102x` | `0.155x` |
+| Fragments / primitive | `36.0` | `738.0` | `75.5` | `0.102x` | `2.098x` |
+| Vertex stage time | `96.06%` | `26.11%` | `64.37%` | `2.465x` | `0.670x` |
+| VS buffer-write limiter | `21.41%` | `11.80%` | `11.35%` | `0.962x` | `0.530x` |
+| Cull unit limiter | `5.98%` | `34.26%` | `34.55%` | `1.008x` | `5.778x` |
+| Clip unit limiter | `2.98%` | `23.45%` | `20.94%` | `0.893x` | `7.027x` |
+| Offscreen culled primitives | `6.03%` | `51.86%` | `51.86%` | `1.000x` | `8.600x` |
+| Varyings / fragment | `9.68` | `7.00` | `6.07` | `0.867x` | `0.627x` |
+| FS occupancy | `60.43%` | `75.72%` | `44.40%` | `0.586x` | `0.735x` |
+
+Interpretation: per-draw scissor fixed a real mini replay fidelity bug and
+removed the artificial fragment-dominated shape. GPU time dropped from
+`3.710ms` to `1.498ms`; FS invocations dropped from `22.1M` to `3.0M`; pixels
+rasterized dropped by roughly `9.8x`; and vertex-stage time rose from `26.11%`
+to `64.37%`. However, `VS Buffer Device Memory Bytes Written` did not move:
+`31.974MiB` before scissor, `31.978MiB` after scissor, with the same
+`54,104` VS invocations and `619.8B/VS invocation`.
+
+This separates two issues:
+
+1. The old mini replay was polluted by missing per-draw scissor state.
+2. The original `60/2` bottleneck is still not reproduced. It has
+   `981.171MiB` VS buffer write and `1602.5B/VS invocation`, while the
+   scissor-aware mini replay has only `31.978MiB` and `619.8B/VS invocation`.
+
+The next fidelity gap is therefore not fragment overdraw. It is the original
+pass context that causes stronger vertex/tiler backend amplification. The
+most suspicious missing input is depth attachment content: the original
+encoder is depth-enabled, depth-write-off, compare-function `4`, and inherits
+depth from earlier passes, while the standalone mini replay clears a fresh
+depth texture to `1.0`. The next experiment should either preserve/load a
+representative depth attachment for `60/2` or replay a wider pass prefix so
+the same depth/cull/tiler state exists before draw `71..86`.
+
+Manifest state check for the 16-draw window supports this direction:
+
+- All 16 draws use the same color attachment
+  `0x30000090000002a`, format `2`, size `1024x768`.
+- All 16 draws use the same depth attachment
+  `0x300000100000001`, format `41`, size `1024x768`.
+- All 16 draws are `depth_enabled=1`, `depth_write=0`, `depth_func=4`,
+  `alpha_blend=1`, `cull=2`.
+- 10 draws use the same scissor rect `0,268..97,768`.
+
+That means the standalone replay currently matches the draw-local depth state
+but not the depth attachment contents. Loading or reconstructing the
+pre-existing `0x300000100000001` depth texture is the next high-signal
+fidelity probe.
+
 ```mermaid
 flowchart TD
   Scout["payload16 no-gputrace scout\n60/2 draw 71..86\n16 payload triplets"] --> Full["16-draw manifest\n6 VS/PS pairs"]
@@ -12259,14 +12349,17 @@ flowchart TD
   Smoke --> MultiPSO["multi-PSO replay\n6 shader variants"]
   MultiPSO --> FullSmoke["full 16-draw smoke pass\nreal stream1\nshader_variant_count=6"]
   FullSmoke --> XcodeMini["Xcode counter capture\nGPU 3.71ms\nVS buffer 31.97MiB"]
-  XcodeMini --> Compare["compare with original 60/2\n981.17MiB VS buffer\n1602B/VS inv"]
-  Compare --> Gap["remaining fidelity gap\noriginal is vertex-stage dominated\nmini is fragment/overdraw dominated"]
-  Gap --> Next["next experiment\npreserve more 60/2 pass context\nor select vertex-stage-shaped draws"]
+  XcodeMini --> ScissorBug["fidelity bug\n10 original draws had scissor\nmini used first draw scissor=0"]
+  ScissorBug --> ScissorFix["per-draw setScissorRect\nscissor_draw_count=10"]
+  ScissorFix --> XcodeScissor["scissor-aware Xcode capture\nGPU 1.50ms\nFS inv 2.96M\nVS buffer still 31.98MiB"]
+  XcodeScissor --> Compare["compare with original 60/2\n981.17MiB VS buffer\n1602B/VS inv"]
+  Compare --> Gap["remaining fidelity gap\nmissing pass/depth/tiler context\nnot fragment overdraw"]
+  Gap --> Next["next experiment\nload representative depth\nor replay wider 60/2 pass prefix"]
 
   classDef hot fill:#ffe8e8,stroke:#b64242,color:#2b0d0d
   classDef known fill:#e8f0ff,stroke:#476cb6,color:#0d1833
-  class Compile0,Gap,Next hot
-  class Scout,Full,SinglePSO,Slice,SlotFix,StreamDump,Smoke,MultiPSO,FullSmoke,XcodeMini,Compare known
+  class Compile0,ScissorBug,Gap,Next hot
+  class Scout,Full,SinglePSO,Slice,SlotFix,StreamDump,Smoke,MultiPSO,FullSmoke,XcodeMini,ScissorFix,XcodeScissor,Compare known
 ```
 
 Smoke validation for the current pass-shape manifest:
