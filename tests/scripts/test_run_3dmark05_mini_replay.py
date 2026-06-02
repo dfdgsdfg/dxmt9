@@ -332,6 +332,57 @@ class MiniReplayScriptTests(unittest.TestCase):
             self.assertIn(str(rewritten), objc)
             self.assertNotIn(str(index_file) + '",', objc)
 
+    def test_cache_opt_primitive_order_reduces_lru_miss_estimate(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            manifest, output_dir = self.write_manifest_fixture(root)
+            index_file = root / "geometry" / "draw.index.bin"
+            indices = [
+                0, 1, 2,
+                3, 4, 5,
+                6, 7, 8,
+                9, 10, 11,
+                12, 13, 14,
+                15, 16, 17,
+                18, 19, 20,
+                0, 1, 2,
+            ]
+            index_file.write_bytes(b"".join(value.to_bytes(2, "little") for value in indices))
+            data = json.loads(manifest.read_text(encoding="utf-8"))
+            data["draws"][0]["state"]["index_count"] = len(indices)
+            data["draws"][0]["geometry"]["index_bytes"] = len(indices) * 2
+            manifest.write_text(json.dumps(data), encoding="utf-8")
+
+            result = subprocess.run(
+                [
+                    sys.executable,
+                    str(SCRIPT),
+                    str(manifest),
+                    "--output-dir",
+                    str(output_dir),
+                    "--primitive-order",
+                    "cache-opt-lru64",
+                ],
+                text=True,
+                capture_output=True,
+                check=False,
+            )
+
+            self.assertEqual(result.returncode, 0, result.stderr)
+            summary = json.loads((output_dir / "mini-replay-summary.json").read_text(encoding="utf-8"))
+            self.assertEqual(summary["primitive_order"], "cache-opt-lru64")
+            cache = summary["index_cache_estimate"]
+            self.assertEqual(cache["original_lru16_misses"], 24)
+            self.assertEqual(cache["replay_lru16_misses"], 21)
+            self.assertEqual(cache["replay_lru16_miss_delta"], -3)
+            rewritten = output_dir / "index-order" / "draw000-cache-opt-lru64.index.bin"
+            rewritten_indices = [
+                int.from_bytes(rewritten.read_bytes()[i:i + 2], "little")
+                for i in range(0, rewritten.stat().st_size, 2)
+            ]
+            self.assertEqual(rewritten_indices[:6], [0, 1, 2, 0, 1, 2])
+            self.assertEqual(sorted(rewritten_indices), sorted(indices))
+
     def test_depth_clear_overrides_generated_pass_clear_value(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)

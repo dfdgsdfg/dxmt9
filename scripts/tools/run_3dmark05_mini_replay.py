@@ -71,6 +71,134 @@ def validate_payloads(draws: list[dict[str, Any]]) -> None:
                 raise SystemExit(f"draw {index}: missing {key} payload: {path}")
 
 
+def optimize_triangle_order_for_vertex_cache(indices: list[int], cache_size: int) -> list[int]:
+    triangle_count = len(indices) // 3
+    triangles = []
+    vertex_triangles: dict[int, list[int]] = {}
+    remaining_vertex_use: dict[int, int] = {}
+    for triangle in range(triangle_count):
+        values = tuple(indices[triangle * 3:(triangle + 1) * 3])
+        triangles.append({
+            "indices": values,
+            "min_index": min(values),
+            "original": triangle,
+        })
+        for index in values:
+            vertex_triangles.setdefault(index, []).append(triangle)
+            remaining_vertex_use[index] = remaining_vertex_use.get(index, 0) + 1
+
+    cache: list[int] = []
+    candidates: list[int] = []
+    emitted = [False] * triangle_count
+    in_candidates = [False] * triangle_count
+    order: list[int] = []
+    next_original = 0
+
+    def cache_position(index: int) -> int | None:
+        try:
+            return cache.index(index)
+        except ValueError:
+            return None
+
+    def add_candidate(triangle: int) -> None:
+        if triangle < 0 or triangle >= triangle_count:
+            return
+        if emitted[triangle] or in_candidates[triangle]:
+            return
+        candidates.append(triangle)
+        in_candidates[triangle] = True
+
+    def add_vertex_neighbors(index: int) -> None:
+        for triangle in vertex_triangles.get(index, []):
+            add_candidate(triangle)
+
+    def choose_best_candidate() -> int | None:
+        best_slot: int | None = None
+        best_score: int | None = None
+        for slot, candidate in enumerate(candidates):
+            if candidate >= triangle_count or emitted[candidate]:
+                continue
+            tri = triangles[candidate]
+            cached_vertices = 0
+            cache_distance = 0
+            remaining_use = 0
+            for index in tri["indices"]:
+                pos = cache_position(index)
+                if pos is not None:
+                    cached_vertices += 1
+                    cache_distance += pos
+                remaining_use += remaining_vertex_use.get(index, 0)
+            score = (
+                cached_vertices * 1_000_000
+                - cache_distance * 1_000
+                - remaining_use * 10
+                - tri["min_index"] // 256
+            )
+            if (
+                best_score is None
+                or score > best_score
+                or (
+                    score == best_score
+                    and (
+                        best_slot is None
+                        or tri["original"] < triangles[candidates[best_slot]]["original"]
+                    )
+                )
+            ):
+                best_score = score
+                best_slot = slot
+        if best_slot is None:
+            return None
+        chosen = candidates[best_slot]
+        in_candidates[chosen] = False
+        candidates[best_slot] = candidates[-1]
+        candidates.pop()
+        return chosen
+
+    def choose_next_original() -> int | None:
+        nonlocal next_original
+        while next_original < triangle_count and emitted[next_original]:
+            next_original += 1
+        if next_original >= triangle_count:
+            return None
+        return next_original
+
+    def touch_cache_vertex(index: int) -> None:
+        pos = cache_position(index)
+        if pos is not None:
+            cache.pop(pos)
+            cache.insert(0, index)
+            return
+        cache.insert(0, index)
+        if len(cache) > cache_size:
+            cache.pop()
+
+    while len(order) < triangle_count:
+        candidate = choose_best_candidate()
+        chosen = candidate if candidate is not None else choose_next_original()
+        if chosen is None:
+            break
+        if chosen >= triangle_count or emitted[chosen]:
+            continue
+        emitted[chosen] = True
+        in_candidates[chosen] = False
+        order.append(chosen)
+        for index in triangles[chosen]["indices"]:
+            if remaining_vertex_use.get(index, 0) > 0:
+                remaining_vertex_use[index] -= 1
+            touch_cache_vertex(index)
+        for index in triangles[chosen]["indices"]:
+            add_vertex_neighbors(index)
+
+    if len(order) != triangle_count:
+        return indices
+    if all(triangle == original for original, triangle in enumerate(order)):
+        return indices
+    ordered = [index for triangle in order for index in triangles[triangle]["indices"]]
+    ordered.extend(indices[triangle_count * 3:])
+    return ordered
+
+
 def transform_index_payload(payload: bytes, primitive_order: str) -> bytes:
     if primitive_order == "original":
         return payload
@@ -86,6 +214,12 @@ def transform_index_payload(payload: bytes, primitive_order: str) -> bytes:
         triangles.sort(key=lambda tri: (min(tri), max(tri), tri[0], tri[1], tri[2]))
     elif primitive_order == "sort-max-index":
         triangles.sort(key=lambda tri: (max(tri), min(tri), tri[0], tri[1], tri[2]))
+    elif primitive_order == "cache-opt-lru32":
+        ordered = optimize_triangle_order_for_vertex_cache(indices, 32)
+        return struct.pack(f"<{len(ordered)}H", *ordered)
+    elif primitive_order == "cache-opt-lru64":
+        ordered = optimize_triangle_order_for_vertex_cache(indices, 64)
+        return struct.pack(f"<{len(ordered)}H", *ordered)
     else:
         raise SystemExit(f"unsupported primitive order: {primitive_order}")
     ordered = [index for tri in triangles for index in tri] + tail
@@ -1063,7 +1197,14 @@ def main() -> int:
     parser.add_argument("--height", type=int, default=768)
     parser.add_argument(
         "--primitive-order",
-        choices=("original", "reverse-triangles", "sort-min-index", "sort-max-index"),
+        choices=(
+            "original",
+            "reverse-triangles",
+            "sort-min-index",
+            "sort-max-index",
+            "cache-opt-lru32",
+            "cache-opt-lru64",
+        ),
         default="original",
         help=(
             "rewrite each uint16 triangle-list index payload before replay; "
