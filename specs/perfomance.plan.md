@@ -10579,7 +10579,7 @@ The selected depth-write-off scope therefore hits only the intended
 `60/2 large4096 alpha-blend` subset and preserves the row-level geometry
 totals needed for an Xcode backend-state A/B.
 
-Next Xcode candidate:
+Xcode candidate command:
 
 ```bash
 scripts/tools/run_3dmark05_perf_probe.sh \
@@ -10590,7 +10590,7 @@ scripts/tools/run_3dmark05_perf_probe.sh \
   --probe-disable-depth-write-classes large4096,alpha-blend
 ```
 
-Expected finalizer gate:
+Finalizer gate:
 
 ```bash
 scripts/tools/finalize_3dmark05_perf_probe.sh \
@@ -10610,6 +10610,59 @@ scripts/tools/finalize_3dmark05_perf_probe.sh \
   --max-top-triangle-delta-ratio 0.05
 ```
 
+Xcode result:
+
+```text
+traces/app-d3d9-3dmark05-depth-write-row-60-2-large4096-alpha-gputrace-r1/analysis/frame60-performance.gputrace
+traces/app-d3d9-3dmark05-depth-write-row-60-2-large4096-alpha-gputrace-r1/analysis/frame60-counters-xcode.csv
+traces/app-d3d9-3dmark05-depth-write-row-60-2-large4096-alpha-gputrace-r1/analysis/frame60-xcode-dxmt-joined-summary.csv
+traces/app-d3d9-3dmark05-depth-write-row-60-2-large4096-alpha-gputrace-r1/analysis/frame60-xcode-dxmt-bottleneck-report.md
+traces/app-d3d9-3dmark05-depth-write-row-60-2-large4096-alpha-gputrace-r1/analysis/frame60-xcode-dxmt-comparison.md
+```
+
+The capture followed the required Xcode sequence: replay/profile the raw
+`frame60.gputrace`, export with embedded performance data, open Performance >
+Counters, wait until draw-counter profiling completed, export encoder counters,
+then run the finalizer with row-key, geometry, Xcode coverage, dxmt join, and
+PSO attribution gates. Xcode Summary reports `396` draw calls, `2,146,296`
+vertices, and `33.91ms` GPU time. The finalizer accepts the top-row key and
+geometry gates: shared hot rows remain `60/0`, `60/1`, and `60/2`; top draw
+calls stay `385`; top dxmt vertices stay `2,146,185`; top triangle estimate
+stays `715,395`.
+
+| Metric | Baseline | Scoped depth-write probe | Delta |
+|---|---:|---:|---:|
+| Total GPU | `35.456ms` | `33.910ms` | `-4.36%` |
+| Top 3 GPU | `34.837ms` | `33.327ms` | `-4.33%` |
+| Top 3 buffer write | `1628.040MiB` | `1628.097MiB` | `+0.00%` |
+| Top 3 VS buffer write | `1627.240MiB` | `1627.385MiB` | `+0.01%` |
+| Top 3 unexplained buffer write | `1627.596MiB` | `1627.652MiB` | `+0.00%` |
+| VS buffer / expected VSOut | `7.868x` | `7.869x` | `+0.01%` |
+| Top 3 depth write | `3.815MiB` | `3.886MiB` | `+1.86%` |
+| Top 3 dxmt draw calls | `385` | `385` | `+0.00%` |
+| Top 3 dxmt vertices | `2,146,185` | `2,146,185` | `+0.00%` |
+| Top 3 dxmt triangles | `715,395` | `715,395` | `+0.00%` |
+
+Per hot row, `60/2` GPU time improves from `20.028ms` to `19.610ms`
+(`-2.09%`), but its VS buffer write stays `981.185MiB` to `981.200MiB`.
+Rows `60/1` and `60/0` similarly improve GPU time while keeping VS writes
+stable. This rejects the selected `60/2 large4096 alpha-blend` depth-write bit
+as the owner of the hidden VS buffer-write bucket. The small GPU-time
+improvement is useful signal that backend state affects scheduling/timing, but
+it is not a bottleneck removal because the primary write bucket is unchanged.
+
+Updated interpretation:
+
+- Depth-write state is not the first-order owner of the hidden
+  vertex/tiler/parameter storage traffic.
+- The primary owner remains GPU-side VS/internal writes: top-three
+  `VS Buffer Device Memory Bytes Written` is still about `1.627GiB`, almost
+  entirely unexplained by dxmt CPU writers or named tiled-buffer counters.
+- The next high-signal probes should target primitive/backend shape without
+  expecting depth-write alone to move the bucket: depth-func, cull/scissor
+  shape, row-local replay/minimized shader+mesh harness, or a primitive
+  pressure reduction that changes `VS Buffer Device Memory Bytes Written`.
+
 ```mermaid
 flowchart TD
   RejectSplit["draw-size split rejected\nVS write unchanged"] --> StateAB["backend-state A/B"]
@@ -10618,14 +10671,75 @@ flowchart TD
   Target --> Smoke["no-gputrace smoke\n15 selected draws"]
   Smoke --> Geometry["row geometry stable\n389376 tris / 1168128 verts"]
   Smoke --> Visual["visual non-constant\nnormal GT1 frame"]
-  Geometry --> XcodeNext["next: Xcode gputrace + counters"]
-  Visual --> XcodeNext
-  XcodeNext --> Decide{"VS buffer write moves?"}
-  Decide -- "yes" --> StateOwner["depth/write state shape implicated"]
-  Decide -- "no" --> RejectState["reject this state bit\ntry depth-func/cull/scissor or mini replay"]
+  Geometry --> XcodeDone["Xcode gputrace + counters\n33.910ms GPU"]
+  Visual --> XcodeDone
+  XcodeDone --> Stable["VS write stable\n1627.240 -> 1627.385 MiB"]
+  XcodeDone --> Time["GPU time improves\n34.837 -> 33.327 ms top3"]
+  Stable --> RejectState["reject selected depth-write bit\nas VS-write owner"]
+  Time --> Secondary["state shape may affect timing\nbut not primary bucket"]
+  RejectState --> Next["next probes\ndepth-func, cull/scissor,\nprimitive/backend pressure,\nor mini replay"]
 
   classDef hot fill:#ffe8e8,stroke:#b64242,color:#2b0d0d
   classDef known fill:#e8f0ff,stroke:#476cb6,color:#0d1833
-  class StateAB,Target,XcodeNext,StateOwner,RejectState hot
-  class RejectSplit,Scoped,Smoke,Geometry,Visual,Decide known
+  class StateAB,Target,Stable,RejectState,Next hot
+  class RejectSplit,Scoped,Smoke,Geometry,Visual,XcodeDone,Time,Secondary known
+```
+
+### Row-Scoped Depth-Func-Always Smoke
+
+After rejecting the selected depth-write bit, the next low-cost state-shape
+axis is the depth compare function. The scoped smoke keeps the same target row
+and draw class as the depth-write probe, but changes matching draws to
+`depth-func always`:
+
+```bash
+scripts/tools/run_3dmark05_perf_probe.sh \
+  --suffix depth-func-always-row-60-2-large4096-alpha-smoke-r1 \
+  --frame 60 \
+  --timeout 180 \
+  --no-gputrace \
+  --probe-depth-func-always-row 60/2 \
+  --probe-depth-func-always-classes large4096,alpha-blend
+```
+
+Artifacts:
+
+```text
+experiments/output/app-d3d9-3dmark05-depth-func-always-row-60-2-large4096-alpha-smoke-r1/actual.png
+experiments/output/app-d3d9-3dmark05-depth-func-always-row-60-2-large4096-alpha-smoke-r1/3dmark05-perf-summary.md
+experiments/output/app-d3d9-3dmark05-depth-func-always-row-60-2-large4096-alpha-smoke-r1/3dmark05-perf-encoders.csv
+```
+
+The wrapper again required manual current-run process cleanup after the
+timeout, so the summary status is `partial-log`. The output image is a normal
+GT1 frame, not a yellow/constant output. Scope validation for frame `60`:
+
+| Row | Draws | Probe depth-func-always | Probe depth-write-off | Large4096 alpha | Large4096 scissor | Triangles | Vertices |
+|---|---:|---:|---:|---:|---:|---:|---:|
+| `60/0` | `42` | `0` | `0` | `0` | `0` | `97,294` | `291,882` |
+| `60/1` | `156` | `0` | `0` | `0` | `0` | `228,725` | `686,175` |
+| `60/2` | `187` | `15` | `0` | `15` | `5` | `389,376` | `1,168,128` |
+
+This is a valid next Xcode candidate because it preserves the same hot rows,
+geometry totals, and selected draw subset as the depth-write scoped probe. The
+same finalizer gates should be used against `current-normal-gputrace-r1`. If
+`VS Buffer Device Memory Bytes Written` remains stable, depth compare state can
+also be rejected as the hidden backend write owner.
+
+```mermaid
+flowchart TD
+  DepthWrite["depth-write scoped Xcode\nVS write stable"] --> DepthFunc["depth-func-always scoped smoke"]
+  DepthFunc --> Scope["60/2 only\n15 selected large4096 alpha draws"]
+  Scope --> Geometry["geometry stable\n389376 tris / 1168128 verts"]
+  Scope --> Visual["visual normal GT1 frame"]
+  Geometry --> Candidate["next Xcode candidate\nsame gates as depth-write"]
+  Visual --> Candidate
+  Candidate --> Decide{"VS buffer write moves?"}
+  Decide -- "yes" --> Shape["depth compare shape implicated"]
+  Decide -- "no" --> Reject["reject depth compare state\nmove to cull/scissor or mini replay"]
+
+  classDef hot fill:#ffe8e8,stroke:#b64242,color:#2b0d0d
+  classDef known fill:#e8f0ff,stroke:#476cb6,color:#0d1833
+  class Candidate,Shape,Reject hot
+  class DepthWrite,DepthFunc,Scope,Geometry,Visual,Decide known
 ```
