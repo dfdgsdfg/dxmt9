@@ -21,6 +21,11 @@ suppress_rt_pixel_format_view=0
 suppress_x8_rt_pixel_format_view=0
 x8_shader_alpha_fill=0
 native_metal_base_vertex=0
+optimize_screen_blend_index_order=0
+optimize_screen_blend_index_order_row=
+optimize_screen_blend_index_order_rows=
+optimize_screen_blend_index_order_class=
+optimize_screen_blend_index_order_classes=
 split_large_indexed_draws=
 split_large_indexed_draws_row=
 split_large_indexed_draws_rows=
@@ -141,6 +146,23 @@ Options:
   --native-metal-base-vertex
                       Set DXMT9_USE_NATIVE_METAL_BASE_VERTEX=1 for indexed
                       draw baseVertex / VS buffer-write experiments
+  --optimize-screen-blend-index-order
+                      Set DXMT9_OPTIMIZE_SCREEN_BLEND_INDEX_ORDER=1 to reverse
+                      order-independent screen-blend indexed triangle-list
+                      primitive order through a transient IB
+  --optimize-screen-blend-index-order-row SEQ/ENC
+                      Set DXMT9_OPTIMIZE_SCREEN_BLEND_INDEX_ORDER_ROW=SEQ/ENC
+                      to constrain screen-blend index-order optimization
+  --optimize-screen-blend-index-order-rows ROWS
+                      Set DXMT9_OPTIMIZE_SCREEN_BLEND_INDEX_ORDER_ROWS=ROWS to
+                      constrain screen-blend index-order optimization
+  --optimize-screen-blend-index-order-class CLASS
+                      Set DXMT9_OPTIMIZE_SCREEN_BLEND_INDEX_ORDER_CLASS=CLASS.
+                      Accepted values match split-large indexed filters
+  --optimize-screen-blend-index-order-classes CLASSES
+                      Set DXMT9_OPTIMIZE_SCREEN_BLEND_INDEX_ORDER_CLASSES=CLASSES.
+                      Values are ANDed and may be comma/semicolon/space/+ or &
+                      separated, e.g. large4096,alpha-blend,scissor
   --split-large-indexed-draws N
                       Set DXMT9_SPLIT_LARGE_INDEXED_DRAWS=N to split indexed
                       triangle-list draws above N primitives
@@ -384,6 +406,26 @@ while (($#)); do
     --native-metal-base-vertex)
       native_metal_base_vertex=1
       shift
+      ;;
+    --optimize-screen-blend-index-order)
+      optimize_screen_blend_index_order=1
+      shift
+      ;;
+    --optimize-screen-blend-index-order-row)
+      optimize_screen_blend_index_order_row=${2:?missing value for --optimize-screen-blend-index-order-row}
+      shift 2
+      ;;
+    --optimize-screen-blend-index-order-rows)
+      optimize_screen_blend_index_order_rows=${2:?missing value for --optimize-screen-blend-index-order-rows}
+      shift 2
+      ;;
+    --optimize-screen-blend-index-order-class)
+      optimize_screen_blend_index_order_class=${2:?missing value for --optimize-screen-blend-index-order-class}
+      shift 2
+      ;;
+    --optimize-screen-blend-index-order-classes)
+      optimize_screen_blend_index_order_classes=${2:?missing value for --optimize-screen-blend-index-order-classes}
+      shift 2
       ;;
     --split-large-indexed-draws)
       split_large_indexed_draws=${2:?missing value for --split-large-indexed-draws}
@@ -943,6 +985,26 @@ fi
 
 if (( native_metal_base_vertex )); then
   env_args+=("DXMT9_USE_NATIVE_METAL_BASE_VERTEX=1")
+fi
+
+if (( optimize_screen_blend_index_order )); then
+  env_args+=("DXMT9_OPTIMIZE_SCREEN_BLEND_INDEX_ORDER=1")
+fi
+
+if [[ -n "$optimize_screen_blend_index_order_row" ]]; then
+  env_args+=("DXMT9_OPTIMIZE_SCREEN_BLEND_INDEX_ORDER_ROW=$optimize_screen_blend_index_order_row")
+fi
+
+if [[ -n "$optimize_screen_blend_index_order_rows" ]]; then
+  env_args+=("DXMT9_OPTIMIZE_SCREEN_BLEND_INDEX_ORDER_ROWS=$optimize_screen_blend_index_order_rows")
+fi
+
+if [[ -n "$optimize_screen_blend_index_order_class" ]]; then
+  env_args+=("DXMT9_OPTIMIZE_SCREEN_BLEND_INDEX_ORDER_CLASS=$optimize_screen_blend_index_order_class")
+fi
+
+if [[ -n "$optimize_screen_blend_index_order_classes" ]]; then
+  env_args+=("DXMT9_OPTIMIZE_SCREEN_BLEND_INDEX_ORDER_CLASSES=$optimize_screen_blend_index_order_classes")
 fi
 
 if [[ -n "$split_large_indexed_draws" ]]; then

@@ -1660,6 +1660,64 @@ void testAutoExpandIndexedDrawHeuristicCoversProgrammableR32FCube() {
         "programmable R32F cube requires observed shadow sampler mask");
 }
 
+void testScreenBlendIndexOrderOptimizationPredicateIsStrict() {
+  auto state = makeProgrammableState(20u);
+  state.hot.renderStates.entries[0] = dxmt9::core::FlatStateEntry{
+      dxmt9::core::RS_Z_ENABLE,
+      1u};
+  state.hot.renderStates.entries[1] = dxmt9::core::FlatStateEntry{
+      dxmt9::core::RS_Z_WRITE_ENABLE,
+      0u};
+  state.hot.renderStates.entries[2] = dxmt9::core::FlatStateEntry{
+      dxmt9::core::RS_SRC_BLEND,
+      static_cast<u32>(dxmt9::core::BlendFactor::InvDestColor)};
+  state.hot.renderStates.entries[3] = dxmt9::core::FlatStateEntry{
+      dxmt9::core::RS_DEST_BLEND,
+      static_cast<u32>(dxmt9::core::BlendFactor::One)};
+  state.hot.renderStates.entries[4] = dxmt9::core::FlatStateEntry{
+      dxmt9::core::RS_ALPHABLEND_ENABLE,
+      1u};
+  state.hot.renderStates.count = 5u;
+
+  check(dxmt9::encoders::shouldOptimizeScreenBlendIndexOrder(
+            state.hot.renderStates),
+        "screen blend with read-only depth is order-optimization eligible");
+
+  auto depthWrite = state;
+  depthWrite.hot.renderStates.entries[1].value = 1u;
+  check(!dxmt9::encoders::shouldOptimizeScreenBlendIndexOrder(
+            depthWrite.hot.renderStates),
+        "depth writes disable screen-blend index-order optimization");
+
+  auto alphaTest = state;
+  alphaTest.hot.renderStates.entries[2] = dxmt9::core::FlatStateEntry{
+      dxmt9::core::RS_ALPHA_TEST_ENABLE,
+      1u};
+  alphaTest.hot.renderStates.entries[3] = state.hot.renderStates.entries[2];
+  alphaTest.hot.renderStates.entries[4] = state.hot.renderStates.entries[3];
+  alphaTest.hot.renderStates.entries[5] = state.hot.renderStates.entries[4];
+  alphaTest.hot.renderStates.count = 6u;
+  check(!dxmt9::encoders::shouldOptimizeScreenBlendIndexOrder(
+            alphaTest.hot.renderStates),
+        "alpha test disables screen-blend index-order optimization");
+
+  auto separateAlpha = state;
+  separateAlpha.hot.renderStates.entries[5] = dxmt9::core::FlatStateEntry{
+      dxmt9::core::RS_SEPARATE_ALPHA_BLEND_ENABLE,
+      1u};
+  separateAlpha.hot.renderStates.count = 6u;
+  check(!dxmt9::encoders::shouldOptimizeScreenBlendIndexOrder(
+            separateAlpha.hot.renderStates),
+        "separate alpha disables screen-blend index-order optimization");
+
+  auto differentBlend = state;
+  differentBlend.hot.renderStates.entries[2].value =
+      static_cast<u32>(dxmt9::core::BlendFactor::SrcAlpha);
+  check(!dxmt9::encoders::shouldOptimizeScreenBlendIndexOrder(
+            differentBlend.hot.renderStates),
+        "non-screen blend disables index-order optimization");
+}
+
 void testExpandedIndexedProgrammableDrawExpandsExtraStreamBytes() {
   constexpr std::size_t kStream0Base = 24u;
   constexpr std::size_t kStream0Stride = 12u;
@@ -2415,6 +2473,7 @@ int main() {
     testIndexedProgrammableDrawPreservesSparseStreamOffsets();
     testProgrammableIndexedBlendHeuristicStaysDirect();
     testAutoExpandIndexedDrawHeuristicCoversProgrammableR32FCube();
+    testScreenBlendIndexOrderOptimizationPredicateIsStrict();
     testExpandedIndexedProgrammableDrawExpandsExtraStreamBytes();
     testMixedShaderPathsBindProgrammableDrawInputs();
     testProgrammableDrawFvfAndDeclTransitionsDoNotReuseLayout();

@@ -250,6 +250,9 @@ ENCODER_SUM_KEYS = (
     "indexed_order_probe_draws",
     "indexed_order_probe_skipped",
     "indexed_order_probe_bytes",
+    "indexed_order_optimized_draws",
+    "indexed_order_optimized_skipped",
+    "indexed_order_optimized_bytes",
     "indexed_vertex_reuse_samples",
     "indexed_vertex_reuse_skipped",
     "indexed_vertex_reference_count",
@@ -329,6 +332,7 @@ ENCODER_SUM_KEYS = (
     "transient_index_preupload_bytes",
     "transient_index_shadow_fallback_bytes",
     "transient_index_probe_reorder_bytes",
+    "transient_index_optimized_order_bytes",
 )
 
 TOP_ENCODER_KEYS = (
@@ -528,6 +532,9 @@ ENCODER_CSV_KEYS = (
     "indexed_order_probe_draws",
     "indexed_order_probe_skipped",
     "indexed_order_probe_bytes",
+    "indexed_order_optimized_draws",
+    "indexed_order_optimized_skipped",
+    "indexed_order_optimized_bytes",
     "indexed_vertex_reuse_samples",
     "indexed_vertex_reuse_skipped",
     "indexed_vertex_reference_count",
@@ -644,6 +651,7 @@ ENCODER_CSV_KEYS = (
     "transient_index_preupload_bytes",
     "transient_index_shadow_fallback_bytes",
     "transient_index_probe_reorder_bytes",
+    "transient_index_optimized_order_bytes",
 )
 
 STREAM_CSV_KEYS = (
@@ -679,6 +687,8 @@ PROBE_DRAW_CSV_KEYS = (
     "draw_ordinal",
     "eligible",
     "applied",
+    "optimized_eligible",
+    "optimized_applied",
     "reorder_bytes",
     "primitive_type",
     "primitive_count",
@@ -1199,6 +1209,7 @@ def write_markdown(
             ("transient_index_preupload_bytes", transient_index_total),
             ("transient_index_shadow_fallback_bytes", transient_index_total),
             ("transient_index_probe_reorder_bytes", transient_index_total),
+            ("transient_index_optimized_order_bytes", transient_index_total),
         )
         lines.append("## Transient Upload Source Split")
         lines.append("")
@@ -1260,6 +1271,12 @@ def write_markdown(
     if probe_draws:
         applied = [row for row in probe_draws if numeric_value(row, "applied")]
         eligible = [row for row in probe_draws if numeric_value(row, "eligible")]
+        optimized_applied = [
+            row for row in probe_draws if numeric_value(row, "optimized_applied")
+        ]
+        optimized_eligible = [
+            row for row in probe_draws if numeric_value(row, "optimized_eligible")
+        ]
         lines.append("## Indexed Probe Draw Samples")
         lines.append("")
         lines.append("| Metric | Value |")
@@ -1267,12 +1284,14 @@ def write_markdown(
         lines.append(f"| `rows` | `{fmt(len(probe_draws))}` |")
         lines.append(f"| `eligible` | `{fmt(len(eligible))}` |")
         lines.append(f"| `applied` | `{fmt(len(applied))}` |")
+        lines.append(f"| `optimized_eligible` | `{fmt(len(optimized_eligible))}` |")
+        lines.append(f"| `optimized_applied` | `{fmt(len(optimized_applied))}` |")
         lines.append(
             f"| `reorder_bytes` | `{fmt(sum_key(probe_draws, 'reorder_bytes'))}` |"
         )
         lines.append("")
-        lines.append("| seq | enc | draw | applied | prims | scissor | scissor rect | stream0 | ib | pso |")
-        lines.append("|---:|---:|---:|---:|---:|---:|---|---|---|---|")
+        lines.append("| seq | enc | draw | applied | opt | prims | scissor | scissor rect | stream0 | ib | pso |")
+        lines.append("|---:|---:|---:|---:|---:|---:|---:|---|---|---|---|")
         for row in probe_draws[:32]:
             rect = (
                 f"{fmt(row.get('scissor_l'))},"
@@ -1293,6 +1312,7 @@ def write_markdown(
                         fmt(row.get("encoder")),
                         fmt(row.get("encoder_draw_index")),
                         fmt(row.get("applied")),
+                        fmt(row.get("optimized_applied")),
                         fmt(row.get("primitive_count")),
                         fmt(row.get("scissor")),
                         rect,

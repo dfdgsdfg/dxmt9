@@ -61,7 +61,10 @@ class Summarize3DMark05PerfTests(unittest.TestCase):
                 "transient_vertex_expanded_extra_bytes=8 "
                 "transient_index_bytes=64 transient_index_user_bytes=24 "
                 "transient_index_preupload_bytes=32 "
-                "transient_index_shadow_fallback_bytes=8]\n"
+                "transient_index_shadow_fallback_bytes=8 "
+                "indexed_order_optimized_draws=1 "
+                "indexed_order_optimized_bytes=1234 "
+                "transient_index_optimized_order_bytes=1234]\n"
                 "[dxmt9-perf-encoder-stream seq=7 encoder=3 stream=0 "
                 "samples=4 metal_binds=5 metal_bind_firsts=1 "
                 "metal_bind_handle_changes=2 metal_bind_offset_changes=1 "
@@ -70,7 +73,8 @@ class Summarize3DMark05PerfTests(unittest.TestCase):
                 "last_handle=0xabc last_offset=64 last_stride=32]\n"
                 "[dxmt9-perf-indexed-probe-draw seq=7 encoder=3 "
                 "encoder_draw_index=2 draw_ordinal=42 eligible=1 applied=1 "
-                "reorder_bytes=1234 primitive_type=4 primitive_count=4096 "
+                "optimized_eligible=1 optimized_applied=0 reorder_bytes=1234 "
+                "primitive_type=4 primitive_count=4096 "
                 "vertex_count=12288 texture_mask=0x7f color_write=0xf "
                 "alpha_blend=1 src_blend=5 dst_blend=6 blend_op=1 "
                 "separate_alpha=0 src_blend_alpha=5 dst_blend_alpha=6 "
@@ -135,6 +139,9 @@ class Summarize3DMark05PerfTests(unittest.TestCase):
             self.assertEqual(encoder["transient_index_user_bytes"], 24)
             self.assertEqual(encoder["transient_index_preupload_bytes"], 32)
             self.assertEqual(encoder["transient_index_shadow_fallback_bytes"], 8)
+            self.assertEqual(encoder["indexed_order_optimized_draws"], 1)
+            self.assertEqual(encoder["indexed_order_optimized_bytes"], 1234)
+            self.assertEqual(encoder["transient_index_optimized_order_bytes"], 1234)
             self.assertEqual(encoder["pso_state_samples_per_draw"], 2.0)
 
             stream = streams[0]
@@ -150,6 +157,8 @@ class Summarize3DMark05PerfTests(unittest.TestCase):
             probe_draw = probe_draws[0]
             self.assertEqual(probe_draw["eligible"], 1)
             self.assertEqual(probe_draw["applied"], 1)
+            self.assertEqual(probe_draw["optimized_eligible"], 1)
+            self.assertEqual(probe_draw["optimized_applied"], 0)
             self.assertEqual(probe_draw["primitive_count"], 4096)
             self.assertEqual(probe_draw["src_blend"], 5)
             self.assertEqual(probe_draw["dst_blend"], 6)
@@ -188,6 +197,8 @@ class Summarize3DMark05PerfTests(unittest.TestCase):
             self.assertEqual(row["transient_vertex_expanded_main_bytes"], "64")
             self.assertEqual(row["transient_index_bytes"], "64")
             self.assertEqual(row["transient_index_shadow_fallback_bytes"], "8")
+            self.assertEqual(row["indexed_order_optimized_draws"], "1")
+            self.assertEqual(row["transient_index_optimized_order_bytes"], "1234")
 
             with stream_csv.open(newline="", encoding="utf-8") as handle:
                 stream_row = next(csv.DictReader(handle))
@@ -201,6 +212,7 @@ class Summarize3DMark05PerfTests(unittest.TestCase):
             with probe_draw_csv.open(newline="", encoding="utf-8") as handle:
                 probe_row = next(csv.DictReader(handle))
             self.assertEqual(probe_row["applied"], "1")
+            self.assertEqual(probe_row["optimized_applied"], "0")
             self.assertEqual(probe_row["reorder_bytes"], "1234")
             self.assertEqual(probe_row["src_blend"], "5")
             self.assertEqual(probe_row["scissor_l"], "16")
@@ -251,6 +263,7 @@ class Summarize3DMark05PerfTests(unittest.TestCase):
             self.assertIn("- Indexed probe draw lines: `1`", summary)
             self.assertIn("## Indexed Probe Draw Samples", summary)
             self.assertIn("| `applied` | `1` |", summary)
+            self.assertIn("| `optimized_eligible` | `1` |", summary)
 
 
 if __name__ == "__main__":

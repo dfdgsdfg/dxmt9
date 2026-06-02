@@ -418,6 +418,39 @@ bool useNativeMetalBaseVertex() {
   return v;
 }
 
+bool optimizeScreenBlendIndexOrder() {
+  static const bool v =
+      util::getenvFlag("DXMT9_OPTIMIZE_SCREEN_BLEND_INDEX_ORDER");
+  return v;
+}
+
+IndexedTriangleClassFilter optimizeScreenBlendIndexOrderClassFilter() {
+  static const IndexedTriangleClassFilter filter =
+      makeIndexedTriangleClassFilter(
+          util::getenvString("DXMT9_OPTIMIZE_SCREEN_BLEND_INDEX_ORDER_CLASS"));
+  return filter;
+}
+
+IndexedTriangleClassFilterList optimizeScreenBlendIndexOrderClassFilters() {
+  static const IndexedTriangleClassFilterList filters =
+      makeIndexedTriangleClassFilterList(
+          util::getenvString("DXMT9_OPTIMIZE_SCREEN_BLEND_INDEX_ORDER_CLASSES"));
+  return filters;
+}
+
+RenderEncoderSelector optimizeScreenBlendIndexOrderRow() {
+  static const RenderEncoderSelector selector =
+      parseRenderEncoderSelector("DXMT9_OPTIMIZE_SCREEN_BLEND_INDEX_ORDER_ROW");
+  return selector;
+}
+
+RenderEncoderSelectorList optimizeScreenBlendIndexOrderRows() {
+  static const RenderEncoderSelectorList selectors =
+      makeRenderEncoderSelectorList(
+          util::getenvString("DXMT9_OPTIMIZE_SCREEN_BLEND_INDEX_ORDER_ROWS"));
+  return selectors;
+}
+
 std::uint32_t splitLargeIndexedDrawPrimitiveLimit() {
   static const std::uint32_t limit = [] {
     const auto value = util::getenvU64Auto("DXMT9_SPLIT_LARGE_INDEXED_DRAWS");

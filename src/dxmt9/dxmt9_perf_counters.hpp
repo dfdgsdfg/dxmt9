@@ -652,6 +652,9 @@ struct EncoderBreakdown {
   std::uint64_t indexedOrderProbeDraws = 0;
   std::uint64_t indexedOrderProbeSkipped = 0;
   std::uint64_t indexedOrderProbeBytes = 0;
+  std::uint64_t indexedOrderOptimizedDraws = 0;
+  std::uint64_t indexedOrderOptimizedSkipped = 0;
+  std::uint64_t indexedOrderOptimizedBytes = 0;
   std::uint64_t indexedVertexReuseSamples = 0;
   std::uint64_t indexedVertexReuseSkipped = 0;
   std::uint64_t indexedVertexReferenceCount = 0;
@@ -763,6 +766,7 @@ struct EncoderBreakdown {
   std::uint64_t transientIndexPreuploadBytes = 0;
   std::uint64_t transientIndexShadowFallbackBytes = 0;
   std::uint64_t transientIndexProbeReorderBytes = 0;
+  std::uint64_t transientIndexOptimizedOrderBytes = 0;
   std::array<EncoderStreamBreakdown, kEncoderBreakdownMaxStreams> streams{};
 };
 

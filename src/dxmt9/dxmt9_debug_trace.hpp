@@ -167,6 +167,33 @@ bool disableAutoExpandIndexed();
 // vertexBaseIndex at zero. Env: DXMT9_USE_NATIVE_METAL_BASE_VERTEX.
 bool useNativeMetalBaseVertex();
 
+// Experimental optimization: for order-independent screen-blend indexed
+// triangle lists, submit a transient index buffer with primitive order reversed.
+// Env: DXMT9_OPTIMIZE_SCREEN_BLEND_INDEX_ORDER.
+bool optimizeScreenBlendIndexOrder();
+
+// Optional class filter for DXMT9_OPTIMIZE_SCREEN_BLEND_INDEX_ORDER. Accepted
+// values: any, opaque-depth-write, nonopaque, depth-read, alpha-blend, scissor,
+// textured, and large4096.
+// Env: DXMT9_OPTIMIZE_SCREEN_BLEND_INDEX_ORDER_CLASS.
+IndexedTriangleClassFilter optimizeScreenBlendIndexOrderClassFilter();
+
+// Optional AND class-list filter for DXMT9_OPTIMIZE_SCREEN_BLEND_INDEX_ORDER.
+// Values match DXMT9_OPTIMIZE_SCREEN_BLEND_INDEX_ORDER_CLASS and may be
+// separated by comma, semicolon, space, '+', or '&'.
+// Env: DXMT9_OPTIMIZE_SCREEN_BLEND_INDEX_ORDER_CLASSES.
+IndexedTriangleClassFilterList optimizeScreenBlendIndexOrderClassFilters();
+
+// Optional selector for DXMT9_OPTIMIZE_SCREEN_BLEND_INDEX_ORDER. Format is
+// "<seq>/<encoder>", for example "60/4".
+// Env: DXMT9_OPTIMIZE_SCREEN_BLEND_INDEX_ORDER_ROW.
+RenderEncoderSelector optimizeScreenBlendIndexOrderRow();
+
+// Optional selector list for DXMT9_OPTIMIZE_SCREEN_BLEND_INDEX_ORDER. Format is
+// a comma/semicolon/space separated list of "<seq>/<encoder>".
+// Env: DXMT9_OPTIMIZE_SCREEN_BLEND_INDEX_ORDER_ROWS.
+RenderEncoderSelectorList optimizeScreenBlendIndexOrderRows();
+
 // Split indexed triangle-list draws larger than this primitive count into
 // multiple Metal drawIndexed calls. Zero disables it.
 // Env: DXMT9_SPLIT_LARGE_INDEXED_DRAWS.

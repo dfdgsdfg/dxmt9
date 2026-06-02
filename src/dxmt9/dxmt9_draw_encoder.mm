@@ -627,6 +627,7 @@ struct ActiveEncoderBreakdown {
     Preupload,
     ShadowFallback,
     ProbeReorder,
+    OptimizedOrder,
   };
 
   bool enabled = false;
@@ -979,8 +980,22 @@ struct ActiveEncoderBreakdown {
     stats.indexedOrderProbeBytes += bytes;
   }
 
+  void recordIndexedOrderOptimization(bool applied, u64 bytes) {
+    if (!enabled) {
+      return;
+    }
+    if (!applied) {
+      ++stats.indexedOrderOptimizedSkipped;
+      return;
+    }
+    ++stats.indexedOrderOptimizedDraws;
+    stats.indexedOrderOptimizedBytes += bytes;
+  }
+
   void emitIndexedOrderProbeDraw(bool probeEligible,
                                  bool probeApplied,
+                                 bool optimizedEligible,
+                                 bool optimizedApplied,
                                  u64 reorderBytes,
                                  u64 drawOrdinal,
                                  core::PrimitiveType primitiveType,
@@ -1032,7 +1047,8 @@ struct ActiveEncoderBreakdown {
         stderr,
         "[dxmt9-perf-indexed-probe-draw seq=%llu encoder=%llu "
         "encoder_draw_index=%llu draw_ordinal=%llu eligible=%u applied=%u "
-        "reorder_bytes=%llu primitive_type=%u primitive_count=%u vertex_count=%llu "
+        "optimized_eligible=%u optimized_applied=%u reorder_bytes=%llu "
+        "primitive_type=%u primitive_count=%u vertex_count=%llu "
         "texture_mask=0x%x color_write=0x%x alpha_blend=%u "
         "src_blend=%u dst_blend=%u blend_op=%u separate_alpha=%u "
         "src_blend_alpha=%u dst_blend_alpha=%u blend_op_alpha=%u "
@@ -1049,6 +1065,8 @@ struct ActiveEncoderBreakdown {
         static_cast<unsigned long long>(drawOrdinal),
         probeEligible ? 1u : 0u,
         probeApplied ? 1u : 0u,
+        optimizedEligible ? 1u : 0u,
+        optimizedApplied ? 1u : 0u,
         static_cast<unsigned long long>(reorderBytes),
         static_cast<unsigned>(primitiveType),
         primitiveCount,
@@ -1938,6 +1956,9 @@ struct ActiveEncoderBreakdown {
       case TransientIndexSource::ProbeReorder:
         stats.transientIndexProbeReorderBytes += bytes;
         break;
+      case TransientIndexSource::OptimizedOrder:
+        stats.transientIndexOptimizedOrderBytes += bytes;
+        break;
     }
   }
 };
@@ -2780,6 +2801,12 @@ bool reverseIndexedTriangleRowMatches(const ActiveEncoderBreakdown* encoderBreak
   return renderEncoderSelectionMatches(encoderBreakdown,
                                        debug::probeReverseIndexedTrianglesRow(),
                                        debug::probeReverseIndexedTrianglesRows());
+}
+
+bool screenBlendIndexOrderRowMatches(const ActiveEncoderBreakdown* encoderBreakdown) {
+  return renderEncoderSelectionMatches(encoderBreakdown,
+                                       debug::optimizeScreenBlendIndexOrderRow(),
+                                       debug::optimizeScreenBlendIndexOrderRows());
 }
 
 bool splitLargeIndexedDrawRowMatches(const ActiveEncoderBreakdown* encoderBreakdown) {
@@ -5634,9 +5661,18 @@ bool encodeDraw(EncodeContext& ctx,
           (reverseAllIndexedTriangles || reverseOpaqueIndexedTriangles ||
            reverseNonOpaqueIndexedTriangles) &&
           pv.primitiveType == core::PrimitiveType::TriangleList;
+      const bool optimizeScreenBlendIndexOrderRequested =
+          debug::optimizeScreenBlendIndexOrder() &&
+          pv.primitiveType == core::PrimitiveType::TriangleList;
+      bool probeConsidered = false;
+      bool probeEligible = false;
+      bool probeApplied = false;
+      bool optimizedConsidered = false;
+      bool optimizedEligible = false;
+      bool optimizedApplied = false;
       if (reverseTriangleProbeRequested &&
           reverseIndexedTriangleRowMatches(encoderBreakdown)) {
-        bool probeApplied = false;
+        probeConsidered = true;
         const bool opaqueDepthWritingEligible =
             isOpaqueDepthWritingReorderProbeEligible(hot.renderStates, fillMode);
         const bool classEligible =
@@ -5654,7 +5690,7 @@ bool encodeDraw(EncodeContext& ctx,
                 hot.renderStates,
                 hot.viewport,
                 fillMode);
-        const bool probeEligible =
+        probeEligible =
             classEligible &&
             (reverseAllIndexedTriangles ||
              (reverseOpaqueIndexedTriangles && opaqueDepthWritingEligible) ||
@@ -5677,32 +5713,82 @@ bool encodeDraw(EncodeContext& ctx,
             probeApplied = true;
           }
         }
-        if (encoderBreakdown) {
-          const auto& stream0 =
-              encoderBreakdown->stats.streams[0];
-          encoderBreakdown->emitIndexedOrderProbeDraw(
-              probeEligible,
-              probeApplied,
-              probeApplied ? static_cast<u64>(probeReorderedIndexBytes.size()) : 0u,
-              drawOrdinal,
-              pv.primitiveType,
-              primitiveCount,
-              vertexCount,
-              hot.textureMask,
-              hot.renderStates,
-              hot.viewport,
-              effectiveCullMode,
-              fillMode,
-              pv.baseVertexIndex,
-              pv.startIndex,
-              pv.indexType,
-              hot.indexBuffer.value,
-              stream0.lastHandle,
-              stream0.lastOffset,
-              stream0.lastStride);
+      }
+      if (!probeApplied && optimizeScreenBlendIndexOrderRequested &&
+          screenBlendIndexOrderRowMatches(encoderBreakdown)) {
+        optimizedConsidered = true;
+        optimizedEligible =
+            shouldOptimizeScreenBlendIndexOrder(hot.renderStates) &&
+            indexedTriangleClassMatches(
+                debug::optimizeScreenBlendIndexOrderClassFilter(),
+                primitiveCount,
+                hot.textureMask,
+                hot.renderStates,
+                hot.viewport,
+                fillMode) &&
+            indexedTriangleClassMatches(
+                debug::optimizeScreenBlendIndexOrderClassFilters(),
+                primitiveCount,
+                hot.textureMask,
+                hot.renderStates,
+                hot.viewport,
+                fillMode);
+        if (optimizedEligible &&
+            buildReverseTriangleOrderIndexBytes(indexBytesForReuse,
+                                                pv.indexType,
+                                                pv.startIndex,
+                                                vertexCount,
+                                                probeReorderedIndexBytes)) {
+          transientIndexBuffer = makeTransientIndexBuffer(
+              probeReorderedIndexBytes.data(), probeReorderedIndexBytes.size(),
+              ActiveEncoderBreakdown::TransientIndexSource::OptimizedOrder);
+          if (transientIndexBuffer) {
+            indexBuffer = transientIndexBuffer.buffer;
+            indexBufferOffset = transientIndexBuffer.offset;
+            indexBytesForReuse = std::span<const u8>(probeReorderedIndexBytes.data(),
+                                                     probeReorderedIndexBytes.size());
+            indexReuseStartIndex = 0;
+            optimizedApplied = true;
+          }
+        }
+      }
+      if (encoderBreakdown && (probeConsidered || optimizedConsidered)) {
+        const auto& stream0 = encoderBreakdown->stats.streams[0];
+        const u64 reorderBytes =
+            (probeApplied || optimizedApplied)
+                ? static_cast<u64>(probeReorderedIndexBytes.size())
+                : 0u;
+        encoderBreakdown->emitIndexedOrderProbeDraw(
+            probeEligible,
+            probeApplied,
+            optimizedEligible,
+            optimizedApplied,
+            reorderBytes,
+            drawOrdinal,
+            pv.primitiveType,
+            primitiveCount,
+            vertexCount,
+            hot.textureMask,
+            hot.renderStates,
+            hot.viewport,
+            effectiveCullMode,
+            fillMode,
+            pv.baseVertexIndex,
+            pv.startIndex,
+            pv.indexType,
+            hot.indexBuffer.value,
+            stream0.lastHandle,
+            stream0.lastOffset,
+            stream0.lastStride);
+        if (probeConsidered) {
           encoderBreakdown->recordIndexedOrderProbe(
               probeApplied,
               probeApplied ? static_cast<u64>(probeReorderedIndexBytes.size()) : 0u);
+        }
+        if (optimizedConsidered) {
+          encoderBreakdown->recordIndexedOrderOptimization(
+              optimizedApplied,
+              optimizedApplied ? static_cast<u64>(probeReorderedIndexBytes.size()) : 0u);
         }
       }
       if (indexBuffer) {

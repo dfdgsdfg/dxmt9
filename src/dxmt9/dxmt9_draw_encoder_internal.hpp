@@ -600,6 +600,41 @@ inline bool shouldAutoExpandIndexedDraw(const core::FlatStateSet<MaxEntries>& re
   return texture0R32FCube && (textureMask & 0x1fu) == 0x1fu;
 }
 
+template <std::size_t MaxEntries>
+inline bool shouldOptimizeScreenBlendIndexOrder(
+    const core::FlatStateSet<MaxEntries>& renderStates) {
+  const bool alphaBlendEnabled =
+      core::flatStateOr(renderStates, core::RS_ALPHABLEND_ENABLE, 0u) != 0u;
+  const bool screenBlend =
+      core::flatStateOr(renderStates, core::RS_SRC_BLEND, 0u) ==
+          static_cast<u32>(core::BlendFactor::InvDestColor) &&
+      core::flatStateOr(renderStates, core::RS_DEST_BLEND, 0u) ==
+          static_cast<u32>(core::BlendFactor::One) &&
+      core::flatStateOr(renderStates,
+                        core::RS_BLEND_OP,
+                        static_cast<u32>(core::BlendOp::Add)) ==
+          static_cast<u32>(core::BlendOp::Add);
+  const bool separateAlpha =
+      core::flatStateOr(renderStates,
+                        core::RS_SEPARATE_ALPHA_BLEND_ENABLE,
+                        0u) != 0u;
+  const bool depthEnabled =
+      core::flatStateOr(renderStates, core::RS_Z_ENABLE, 0u) != 0u;
+  const bool depthWrite =
+      depthEnabled &&
+      core::flatStateOr(renderStates, core::RS_Z_WRITE_ENABLE, 0u) != 0u;
+  const bool alphaTestEnabled =
+      core::flatStateOr(renderStates, core::RS_ALPHA_TEST_ENABLE, 0u) != 0u;
+  const bool stencilEnabled =
+      core::flatStateOr(renderStates, core::RS_STENCIL_ENABLE, 0u) != 0u;
+  const bool clipPlaneEnabled =
+      core::flatStateOr(renderStates, core::RS_CLIP_PLANE_ENABLE, 0u) != 0u;
+
+  return alphaBlendEnabled && screenBlend && !separateAlpha &&
+         depthEnabled && !depthWrite && !alphaTestEnabled &&
+         !stencilEnabled && !clipPlaneEnabled;
+}
+
 inline VertexTextureSamplerBindingList makeVertexTextureSamplerBindings(
     const core::FlatDrawStateRecord& hot) {
   VertexTextureSamplerBindingList bindings;
