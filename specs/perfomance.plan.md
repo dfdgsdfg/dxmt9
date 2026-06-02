@@ -11229,9 +11229,51 @@ scripts/tools/finalize_3dmark05_perf_probe.sh \
   --max-top-triangle-delta-ratio 0.05
 ```
 
-Disk note: the current workspace has only about `1.57GiB` free, so raw
-gputrace plus Xcode's embedded-performance export is likely to fail until
-space is freed.
+Disk note: the workspace initially had only about `1.57GiB` free, so raw
+gputrace plus Xcode's embedded-performance export was at risk. After truncating
+ignored raw output logs, free space rose to about `3.2GiB` and the raw
+gputrace, embedded-performance `.gputrace`, and encoder counter CSV exports
+completed.
+
+Xcode candidate result:
+
+| Metric | Baseline | Cache-aware reorder | Delta |
+|---|---:|---:|---:|
+| Xcode Summary GPU time | `35.46ms` | `46.98ms` | `+32.49%` |
+| Total buffer write | `1628.04MiB` | `2033.02MiB` | `+24.88%` |
+| Total device write | `1687.51MiB` | `2104.32MiB` | `+24.70%` |
+| Top row set | `60/0, 60/1, 60/2` | `60/0, 60/3, 60/4` | changed |
+| Top draw calls | `385` | `867` | `+125.19%` |
+| Top dxmt vertices | `2,146,185` | `4,027,095` | `+87.64%` |
+| Top triangle estimate | `715,395` | `1,342,365` | `+87.64%` |
+| Top stream handle changes | `437` | `1,017` | `+132.72%` |
+| Top IB handle changes | `326` | `690` | `+111.66%` |
+
+Strict finalizer verdict: rejected. The software cache scout predicted a
+cache64 miss reduction, but the Xcode replay showed a different top-row shape,
+more top draw/vertex/triangle work, and higher whole-frame buffer/device write
+traffic. The candidate is therefore not evidence that production primitive
+reordering will reduce the hidden VS/backend write bucket. At most, it shows
+that the current per-draw transient-IB diagnostic can perturb encoder shape and
+state churn enough to invalidate the cache-locality signal.
+
+Shared-row attribution is also a rejection signal. For the only shared hot row,
+`60/0`, Xcode VS invocations moved from `152,895` to `527,065`
+(`+244.72%`) while bytes per invocation fell from `1542.6B` to `666.5B`.
+The total VS write increase on the shared row is therefore invocation-count
+driven, not a per-invocation storage-width win. This points back to draw/run
+shape, state/binding churn, and backend primitive scheduling rather than naive
+triangle-order optimization.
+
+Artifacts:
+
+```text
+traces/app-d3d9-3dmark05-cacheopt-hotrows-span600k-gputrace-r1/frame60.gputrace
+traces/app-d3d9-3dmark05-cacheopt-hotrows-span600k-gputrace-r1/analysis/frame60-performance.gputrace
+traces/app-d3d9-3dmark05-cacheopt-hotrows-span600k-gputrace-r1/analysis/frame60-counters-xcode.csv
+traces/app-d3d9-3dmark05-cacheopt-hotrows-span600k-gputrace-r1/analysis/frame60-xcode-dxmt-comparison.md
+traces/app-d3d9-3dmark05-cacheopt-hotrows-span600k-gputrace-r1/analysis/frame60-xcode-dxmt-bottleneck-report.md
+```
 
 ```mermaid
 flowchart TD
@@ -11244,13 +11286,16 @@ flowchart TD
   CacheWin --> Promote["promote to Xcode candidate"]
   StableGeom --> Promote
   Visual --> Promote
-  Promote --> Xcode["next: gputrace + Xcode counters\nwhen disk headroom is available"]
-  Xcode --> Decide{"VS Buffer Device Memory Bytes Written moves?"}
-  Decide -- "yes" --> Owner["index/cache locality affects\nhidden VS/internal write bucket"]
-  Decide -- "no" --> Reject["reject primitive order/cache locality\nmove to mini replay/backend storage isolation"]
+  Promote --> Xcode["gputrace + Xcode counters\nexported after draw-counter profiling completed"]
+  Xcode --> Drift["strict finalizer failed\ntop rows changed: 60/0,1,2 -> 60/0,3,4"]
+  Xcode --> Regress["whole-frame GPU +32.49%\nbuffer write +24.88%"]
+  Drift --> Reject["reject cache-aware primitive reorder\nas production optimization"]
+  Regress --> Reject
+  Reject --> NextA["next: draw-run/binding coalescing\nreduce stream/IB/PSO churn"]
+  Reject --> NextB["next: row-local mini replay\nisolate backend storage without transient IB perturbation"]
 
   classDef hot fill:#ffe8e8,stroke:#b64242,color:#2b0d0d
   classDef known fill:#e8f0ff,stroke:#476cb6,color:#0d1833
-  class CacheProbe,CacheWin,Promote,Xcode,Decide hot
-  class Prior,Need,Scope,StableGeom,Visual,Owner,Reject known
+  class CacheProbe,CacheWin,Promote,Xcode,Drift,Regress,Reject hot
+  class Prior,Need,Scope,StableGeom,Visual,NextA,NextB known
 ```
