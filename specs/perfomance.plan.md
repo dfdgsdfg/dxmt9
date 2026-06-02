@@ -12603,37 +12603,55 @@ passed for every candidate:
 | `window-084-112` | `84..112` | `29` | `85,308` | `4` | `0 / 29` | `511,848 / 2,942,808` | pass |
 | `tail-056-112` | `56..112` | `57` | `172,576` | `13` | `21 / 57` | `1,035,456 / 5,961,792` | pass |
 
-Next Xcode captures should start with `prefix-000-055`, `prefix-000-083`, and
-`tail-056-112`. If `prefix-000-055` is cold but `prefix-000-083` is hot, the
-trigger is likely in `56..83`; if both prefixes are hot, split `0..55`; if the
-tail is hot without the prefix, the late alpha/scissor state can reproduce the
-backend shape independently.
+The first prefix/window counter captures are now available:
 
-The first bisection counter capture is available:
-
-- Raw capture:
+- `prefix-000-083` raw capture:
   `traces/app-d3d9-3dmark05-screen-blend-row60-2-full187-payload-r1/analysis/bisection/mini-replay-encoder2-113-prefix-000-083-depthinput.gputrace`
-- Encoder counters:
+- `prefix-000-083` encoder counters:
   `traces/app-d3d9-3dmark05-screen-blend-row60-2-full187-payload-r1/analysis/bisection/mini-replay-encoder2-113-prefix-000-083-depthinput-counters-xcode.csv`
-- Counter summary:
+- `prefix-000-083` counter summary:
   `traces/app-d3d9-3dmark05-screen-blend-row60-2-full187-payload-r1/analysis/bisection/mini-replay-encoder2-113-prefix-000-083-depthinput-counters-summary.csv`
+- `prefix-000-055` raw capture:
+  `traces/app-d3d9-3dmark05-screen-blend-row60-2-full187-payload-r1/analysis/bisection/mini-replay-encoder2-113-prefix-000-055-depthinput.gputrace`
+- `prefix-000-055` encoder counters:
+  `traces/app-d3d9-3dmark05-screen-blend-row60-2-full187-payload-r1/analysis/bisection/mini-replay-encoder2-113-prefix-000-055-depthinput-counters-xcode.csv`
+- `prefix-000-055` counter summary:
+  `traces/app-d3d9-3dmark05-screen-blend-row60-2-full187-payload-r1/analysis/bisection/mini-replay-encoder2-113-prefix-000-055-depthinput-counters-summary.csv`
+- `window-056-083` raw capture:
+  `traces/app-d3d9-3dmark05-screen-blend-row60-2-full187-payload-r1/analysis/bisection/mini-replay-encoder2-113-window-056-083-depthinput.gputrace`
+- `window-056-083` encoder counters:
+  `traces/app-d3d9-3dmark05-screen-blend-row60-2-full187-payload-r1/analysis/bisection/mini-replay-encoder2-113-window-056-083-depthinput-counters-xcode.csv`
+- `window-056-083` counter summary:
+  `traces/app-d3d9-3dmark05-screen-blend-row60-2-full187-payload-r1/analysis/bisection/mini-replay-encoder2-113-window-056-083-depthinput-counters-summary.csv`
 
 | Case | Draws | GPU ms | VS buffer write | VS invocations | VS B / VS invocation | Primitives | Vertex stage | Buffer write / MMU / LLC limiter |
 |---|---:|---:|---:|---:|---:|---:|---:|---:|
 | full 113-draw replay | `113` | `18.115` | `1090.901MiB` | `668,929` | `1710.0B` | `390,345` | `98.93%` | `23.05 / 34.71 / 34.43%` |
+| `prefix-000-055` | `56` | `11.401` | `663.657MiB` | `376,783` | `1846.9B` | `217,769` | `98.94%` | `24.13 / 39.79 / 31.81%` |
+| `window-056-083` | `28` | `4.123` | `221.271MiB` | `150,907` | `1537.5B` | `87,268` | `97.97%` | `23.96 / 37.98 / 36.69%` |
 | `prefix-000-083` | `84` | `15.147` | `884.870MiB` | `527,690` | `1758.3B` | `305,037` | `98.97%` | `24.56 / 41.94 / 33.66%` |
 | current-head `60/2` | `187` | `20.327` | `981.171MiB` | `642,001` | `1602.5B` | `389,376` | `96.06%` | `20.55 / 34.32 / 36.39%` |
 
 `prefix-000-083` is already hot. It preserves the same vertex-stage dominated
 shape and explains `~81%` of the full replay's VS buffer write with `84/113`
-draws. The trigger is therefore not restricted to the late `84..112` tail. The
-next split should capture `prefix-000-055` and `window-056-083`:
+draws. The trigger is therefore not restricted to the late `84..112` tail.
 
-- If `prefix-000-055` is already hot, split `0..55`.
-- If `prefix-000-055` is cold and `window-056-083` is hot, focus on the
-  scissor-heavy alpha segment (`21` scissor draws, `28` alpha draws).
-- If both are warm but neither is hot, the backend shape likely depends on a
-  prefix accumulation/state-transition effect rather than a single window.
+The `0..83` split is effectively additive: `prefix-000-055` plus
+`window-056-083` gives `884.928MiB` VS buffer write, while `prefix-000-083`
+reports `884.870MiB`. GPU time is also close (`11.401 + 4.123 = 15.524ms`
+versus `15.147ms`). That makes a prefix-accumulation or state-transition-only
+explanation unlikely for this split. The primary reproduced pressure is already
+in `0..55`; `56..83` is an independent smaller hot window with the same
+vertex-stage/MMU/LLC shape.
+
+Next split:
+
+- Capture `prefix-000-027` and `window-028-055`.
+- If `prefix-000-027` is hot, split `0..27`.
+- If `window-028-055` carries most of the `prefix-000-055` pressure, focus on
+  the early alpha/scissor/material transition class in that window.
+- Keep `window-084-112`/`tail-056-112` as secondary checks for the remaining
+  `~206MiB` of the full 113-draw replay.
 
 ```mermaid
 flowchart TD
@@ -12659,12 +12677,17 @@ flowchart TD
   SortFix --> Encoder2Smoke["depth-fed no-capture smoke\nmini replay draws=113"]
   Encoder2Smoke --> Encoder2Xcode["Xcode replay CSV\nGPU 18.12ms\nVS buffer 1090.9MiB\n1710B/VS inv"]
   Encoder2Xcode --> Cause["reproduced bottleneck class\nwider encoder2 sequence\nnot depth/scissor alone"]
-  Cause --> Next["next experiment\nprefix/window bisection\nfind draw/state trigger"]
+  Cause --> Prefix83["prefix 0..83\nGPU 15.15ms\nVS buffer 884.9MiB"]
+  Prefix83 --> Prefix55["prefix 0..55\nGPU 11.40ms\nVS buffer 663.7MiB\n1846.9B/VS inv"]
+  Prefix83 --> Window5683["window 56..83\nGPU 4.12ms\nVS buffer 221.3MiB\n1537.5B/VS inv"]
+  Prefix55 --> Additive["0..55 + 56..83 ~= 0..83\nnot prefix-transition-only"]
+  Window5683 --> Additive
+  Additive --> Next["next experiment\nsplit 0..55\nprefix 0..27 vs window 28..55"]
 
   classDef hot fill:#ffe8e8,stroke:#b64242,color:#2b0d0d
   classDef known fill:#e8f0ff,stroke:#476cb6,color:#0d1833
   class Compile0,ScissorBug,Gap,Next hot
-  class Scout,Full,SinglePSO,Slice,SlotFix,StreamDump,Smoke,MultiPSO,FullSmoke,XcodeMini,ScissorFix,XcodeScissor,Depth0,DepthInput,Compare,Encoder2Dump,SortFix,Encoder2Smoke,Encoder2Xcode,Cause known
+  class Scout,Full,SinglePSO,Slice,SlotFix,StreamDump,Smoke,MultiPSO,FullSmoke,XcodeMini,ScissorFix,XcodeScissor,Depth0,DepthInput,Compare,Encoder2Dump,SortFix,Encoder2Smoke,Encoder2Xcode,Cause,Prefix83,Prefix55,Window5683,Additive known
 ```
 
 Smoke validation for the current pass-shape manifest:
