@@ -14590,15 +14590,60 @@ is also stable: Xcode still reports `0MiB` for the specific
 this remains a row-local mechanism proof rather than a full GT1 acceptance
 gate.
 
+The expanded full `50/3` shader/state group replay repeats the same proof on
+the sibling hot row. It uses the same full row-local shape: `187` captured
+source draws replayed `3x` into `561` Metal draw commands with one VS/PS pair.
+Geometry is locked between variants: `2,126,331` submitted vertices, `708,777`
+primitives, and `710,109` post-clipped primitives.
+
+Artifacts:
+
+```text
+traces/app-d3d9-3dmark05-cache-opt-row50-3-full-payload-r1/analysis/frame50-row50-3-full-mini-replay-manifest.json
+traces/app-d3d9-3dmark05-cache-opt-row50-3-full-payload-r1/analysis/mini-replay-full-r3-original.gputrace
+traces/app-d3d9-3dmark05-cache-opt-row50-3-full-payload-r1/analysis/mini-replay-full-r3-cache-opt-lru32.gputrace
+traces/app-d3d9-3dmark05-cache-opt-row50-3-full-payload-r1/analysis/mini-replay-full-r3-original-counters-xcode.csv
+traces/app-d3d9-3dmark05-cache-opt-row50-3-full-payload-r1/analysis/mini-replay-full-r3-cache-opt-lru32-counters-xcode.csv
+traces/app-d3d9-3dmark05-cache-opt-row50-3-full-payload-r1/analysis/mini-replay-full-r3-cache-opt-lru32-xcode-counter-delta.md
+```
+
+| Metric | Original order | `cache-opt-lru32` | Delta | Interpretation |
+|---|---:|---:|---:|---|
+| GPU time | `5.502ms` | `5.324ms` | `-0.179ms` (`-3.25%`) | Positive, but smaller than row `50/1`. |
+| Vertices | `2,126,331` | `2,126,331` | `0` | Geometry count stable. |
+| Primitives | `708,777` | `708,777` | `0` | Primitive count stable. |
+| Post-clipped primitives | `710,109` | `710,109` | `0` | Clip/cull output stable. |
+| FS invocations | `25,127,872` | `25,380,416` | `+252,544` (`+1.01%`) | Fragment work is not the optimized axis and moved slightly upward. |
+| VS invocations | `1,197,258` | `1,075,671` | `-121,587` (`-10.16%`) | Ordering reduced post-transform work. |
+| LRU32 miss estimate | `431,774` | `359,962` | `-71,812` (`-16.63%`) | Software estimator predicts the Xcode direction. |
+| LRU64 miss estimate | `412,888` | `358,331` | `-54,557` (`-13.21%`) | Same direction with a larger cache model. |
+| Device write | `25.201MiB` | `23.600MiB` | `-1.600MiB` (`-6.35%`) | Overall device writes fell. |
+| VS device write | `23.397MiB` | `21.797MiB` | `-1.600MiB` (`-6.84%`) | The nonzero VS-stage write proxy moved with invocations. |
+| VS LLC write | `23.404MiB` | `21.808MiB` | `-1.596MiB` (`-6.82%`) | LLC write proxy confirms vertex-side movement. |
+| Tiled vertex buffer | `9.969MiB` | `8.969MiB` | `-1.000MiB` (`-10.03%`) | Named tiled storage follows invocation reduction. |
+| Tiled primitive block | `7.656MiB` | `6.719MiB` | `-0.938MiB` (`-12.24%`) | Binning/primitive storage also drops. |
+| Named tiled total | `17.625MiB` | `15.688MiB` | `-1.938MiB` (`-10.99%`) | Tiled backend pressure follows the cache estimate. |
+| Texture write | `1.801MiB` | `1.801MiB` | `0` | Attachment write path stable. |
+| `VS Buffer Device Memory Bytes Written` | `0MiB` | `0MiB` | n/a | The reduced replay still does not reproduce the full-frame primary bucket. |
+| Vertex stage time share | `55.92%` | `55.08%` | `-0.84pp` | Vertex-side share fell slightly. |
+| Shaded vertex read limiter | `43.78%` | `38.77%` | `-5.01pp` | Limiter improved with fewer VS invocations. |
+
+Conclusion: the full `50/3` replay independently confirms the `50/1`
+mechanism chain. The stable chain is `LRU32 misses -16.63% -> VS invocations
+-10.16% -> VS device/LLC writes -6.8% -> named tiled storage -10.99% -> GPU
+time -3.25%`. The same caveat remains: standalone reduced replay still reports
+`0MiB` for `VS Buffer Device Memory Bytes Written`, so the next proof must be
+production-shaped enough to test the full-frame Xcode primary bucket.
+
 The remaining proof path is:
 
-1. Use the completed full `50/1` shader/state replay as the row-local positive
-   control, then repeat the same full-payload replay for `50/3`. Because full
-   `50/1` still does not reproduce nonzero Xcode
-   `VS Buffer Device Memory Bytes Written`, the acceptance signal is now:
-   geometry-locked `VS Invocations`, `VS Bytes Written To Device Memory`,
-   `VS Last Level Cache Bytes Written`, named tiled storage, and GPU time must
-   move together before a full GT1 proof is attempted.
+1. Treat the completed full `50/1` and `50/3` shader/state replays as
+   row-local positive controls. Because both still report `0MiB` for Xcode
+   `VS Buffer Device Memory Bytes Written`, the acceptance signal for the next
+   step is a production-shaped full GT1 proof where geometry-locked
+   `VS Invocations`, `VS Bytes Written To Device Memory`,
+   `VS Last Level Cache Bytes Written`, named tiled storage, GPU time, and the
+   full-frame primary bucket move together.
 2. Build a production-shaped index-order implementation that avoids the
    diagnostic transient-IB cost: cache/reuse reordered index buffers per stable
    source IB + draw span + primitive/order key, and preserve D3D9 correctness
@@ -14659,12 +14704,15 @@ flowchart TD
   RowReplayGap --> FullGroup50["full 50/1 shader/state replay\n187 draws x3\ngeometry locked"]
   FullGroup50 --> FullGroupWin["cache-opt-lru32 scales\nLRU32 -16.87%\nVS invocations -10.32%\nVS device write -13.36%\nnamed tiled -16.13%\nGPU -8.76%"]
   FullGroup50 --> FullGroupGap["still 0MiB in\nVS Buffer Device Memory Bytes Written\nstandalone replay caveat"]
-  FullGroupGap --> ExpandReplay["next\nrepeat full 50/3 payload\nthen full GT1 production-shaped proof"]
+  FullGroupGap --> FullGroup53["full 50/3 shader/state replay\n187 draws x3\ngeometry locked"]
+  FullGroup53 --> FullGroup53Win["independent positive control\nLRU32 -16.63%\nVS invocations -10.16%\nVS device write -6.84%\nnamed tiled -10.99%\nGPU -3.25%"]
+  FullGroup53 --> FullGroup53Gap["same standalone caveat\nVS Buffer Device Memory Bytes Written = 0"]
+  FullGroup53Gap --> ExpandReplay["next\nproduction-shaped full GT1 proof\ncached/reused reordered IB"]
 
   classDef hot fill:#ffe8e8,stroke:#b64242,color:#2b0d0d
   classDef good fill:#e8f5e8,stroke:#4d8b4d,color:#102a10
   classDef known fill:#e8f0ff,stroke:#476cb6,color:#0d1833
-  class Reject,FailSignal,StateAB,RuntimeNext,SortMini,FullFrameGap,NarrowDrift,StableNext,RowReplayGap,FullGroupGap,ExpandReplay hot
-  class PassSignal,Classifier,Codegen,Invocations,CacheSignal,CacheWin,CacheRule,Owner,DiagGate,Frame50,ReorderGate,TargetWin,NarrowNoTrace,NarrowTarget,RowReplayWin,FullGroupWin good
-  class R2,Gate,Mini,Hot,Tooling,Trim,Xcode,Accept,Candidate,CacheOpt,NarrowXcode,RowReplay50,FullGroup50 known
+  class Reject,FailSignal,StateAB,RuntimeNext,SortMini,FullFrameGap,NarrowDrift,StableNext,RowReplayGap,FullGroupGap,FullGroup53Gap,ExpandReplay hot
+  class PassSignal,Classifier,Codegen,Invocations,CacheSignal,CacheWin,CacheRule,Owner,DiagGate,Frame50,ReorderGate,TargetWin,NarrowNoTrace,NarrowTarget,RowReplayWin,FullGroupWin,FullGroup53Win good
+  class R2,Gate,Mini,Hot,Tooling,Trim,Xcode,Accept,Candidate,CacheOpt,NarrowXcode,RowReplay50,FullGroup50,FullGroup53 known
 ```
