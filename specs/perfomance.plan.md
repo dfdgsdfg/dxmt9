@@ -11299,3 +11299,79 @@ flowchart TD
   class CacheProbe,CacheWin,Promote,Xcode,Drift,Regress,Reject hot
   class Prior,Need,Scope,StableGeom,Visual,NextA,NextB known
 ```
+
+### No-Mutate Indexed Draw Identity Scout
+
+The cache-aware reorder Xcode run showed that transient-IB mutation can perturb
+hot-row shape enough to invalidate the locality signal. Before building a
+row-local mini replay, the normal path needs a way to record draw identity
+without changing index order, split count, scissor, depth state, or render
+state. `DXMT9_MEASURE_INDEX_REUSE=1` now emits
+`dxmt9-perf-indexed-probe-draw` rows even when no mutating probe is active, as
+long as encoder breakdown is enabled. This keeps the existing CSV schema but
+uses all probe flags as `0`.
+
+No-mutate scout command:
+
+```bash
+scripts/tools/run_3dmark05_perf_probe.sh \
+  --suffix current-head-index-scout-r2 \
+  --frame 60 \
+  --timeout 180 \
+  --no-gputrace \
+  --encoder-breakdown-seq 60 \
+  --measure-index-reuse \
+  --top 3 \
+  --hot-gpu-share 95 \
+  --min-free-mb 512
+```
+
+Artifacts:
+
+```text
+experiments/output/app-d3d9-3dmark05-current-head-index-scout-r2/3dmark05-perf-summary.md
+experiments/output/app-d3d9-3dmark05-current-head-index-scout-r2/3dmark05-perf-encoders.csv
+experiments/output/app-d3d9-3dmark05-current-head-index-scout-r2/3dmark05-perf-indexed-probe-draws.csv
+```
+
+Result: the run passed and generated `664` indexed draw identity rows. Each
+row includes index locality, stream0 span, index/stream0 handles, stream0
+offset/stride, PSO handle, shader variant, VS/PS hashes, VSOut key, and the
+draw's depth/blend/scissor/cull state. This closes the immediate data gap for
+choosing row-local replay candidates.
+
+The scout is not yet a valid substitute for the Xcode frame because the
+no-gputrace frame60 row shape drifted from the latest Xcode current-head
+capture:
+
+| Row | No-mutate scout r2 | Latest Xcode current-head frame60 |
+|---|---:|---:|
+| `60/0` | `135 draws`, `179,613 tris` | `42 draws`, `97,294 tris` |
+| `60/1` | `212 draws`, `320,499 tris` | `156 draws`, `228,725 tris` |
+| `60/2` | `307 draws`, `406,591 tris` | `187 draws`, `389,376 tris` |
+
+The useful new evidence is therefore the instrumentation, not row ownership.
+The next authoritative mini-replay input pass should be a gputrace-backed
+no-mutate scout with `--measure-index-reuse` and `--dump-shaders`, followed by
+the normal Xcode export/finalizer sequence. That run should keep the raw
+`frame60.gputrace` and exported `frame60-counters-xcode.csv` together with
+`3dmark05-perf-indexed-probe-draws.csv`, so the top Xcode rows can be mapped to
+actual draw handles and shader hashes from the same frame instance.
+
+```mermaid
+flowchart TD
+  Reject["cache-aware reorder rejected\ntransient IB perturbed row shape"] --> Need["need no-mutate draw identity"]
+  Need --> Instrument["DXMT9_MEASURE_INDEX_REUSE emits\nindexed draw rows without mutation"]
+  Instrument --> Scout["current-head-index-scout-r2\n664 draw rows"]
+  Scout --> Fields["index locality + stream/IB handles\nPSO + shader variant + VS/PS + VSOut"]
+  Scout --> Drift["no-gputrace row shape drifted\nvs Xcode current-head"]
+  Fields --> Ready["mini replay candidate data gap closed"]
+  Drift --> Next["next: gputrace-backed no-mutate scout\nsame frame as Xcode counters"]
+  Ready --> Next
+  Next --> Replay["row-local mini replay\nshader + geometry + state isolation"]
+
+  classDef hot fill:#ffe8e8,stroke:#b64242,color:#2b0d0d
+  classDef known fill:#e8f0ff,stroke:#476cb6,color:#0d1833
+  class Reject,Need,Instrument,Drift,Next hot
+  class Scout,Fields,Ready,Replay known
+```

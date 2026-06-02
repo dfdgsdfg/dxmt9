@@ -6710,9 +6710,12 @@ bool encodeDraw(EncodeContext& ctx,
           }
         }
       }
+      const bool emitMeasureOnlyIndexedDraw =
+          debug::measureIndexReuse() &&
+          pv.primitiveType == core::PrimitiveType::TriangleList;
       if (encoderBreakdown &&
           (probeConsidered || optimizedConsidered || scissorRectProbeConsidered ||
-           splitConsidered)) {
+           splitConsidered || emitMeasureOnlyIndexedDraw)) {
         const auto& stream0 = encoderBreakdown->stats.streams[0];
         const u64 reorderBytes =
             (probeApplied || optimizedApplied)

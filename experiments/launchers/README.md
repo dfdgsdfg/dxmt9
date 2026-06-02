@@ -426,7 +426,10 @@ Commercial / 3rd-party titles (require external prefix):
     Apple vertex/tiler backend pressure: the generated
     `3dmark05-perf-indexed-probe-draws.csv` then includes per-draw original
     and effective index locality, cache-miss estimates, triangle index span,
-    and stream0 byte-span proxies.
+    and stream0 byte-span proxies. With `--encoder-breakdown-seq`, the same
+    CSV is also emitted without a mutating reverse/split/scissor probe, so a
+    no-mutate scout can capture draw identity, state, stream/IB handles, PSO,
+    shader variant, VS/PS hashes, and VSOut key for row-local replay planning.
     `--probe-reverse-indexed-triangles-stream0-span-min BYTES` and
     `--optimize-screen-blend-index-order-stream0-span-min BYTES` add a direct
     minimum original stream0 byte-span gate after the row/class filters. Use
