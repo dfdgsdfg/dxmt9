@@ -169,6 +169,8 @@ class MiniReplayScriptTests(unittest.TestCase):
             self.assertEqual(result.returncode, 0, result.stderr)
             summary = json.loads((output_dir / "mini-replay-summary.json").read_text(encoding="utf-8"))
             self.assertEqual(summary["draw_count"], 1)
+            self.assertEqual(summary["draw_order"], "original")
+            self.assertEqual(summary["primitive_order"], "original")
             self.assertEqual(summary["index_bytes"], 6)
             self.assertEqual(summary["stream0_bytes"], 24)
             self.assertEqual(summary["uniform_draw_count"], 1)
@@ -201,6 +203,49 @@ class MiniReplayScriptTests(unittest.TestCase):
             self.assertIn("static_cast<NSUInteger>(20)", objc)
             self.assertIn("static_cast<NSUInteger>(std::max(0, 110 - 10))", objc)
             self.assertIn("static_cast<NSUInteger>(std::max(0, 220 - 20))", objc)
+
+    def test_primitive_order_rewrites_index_payload_in_output_dir(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            manifest, output_dir = self.write_manifest_fixture(root)
+            index_file = root / "geometry" / "draw.index.bin"
+            index_file.write_bytes(
+                b"\x00\x00\x01\x00\x02\x00"
+                b"\x08\x00\x04\x00\x06\x00"
+                b"\x03\x00\x02\x00\x01\x00"
+            )
+
+            result = subprocess.run(
+                [
+                    sys.executable,
+                    str(SCRIPT),
+                    str(manifest),
+                    "--output-dir",
+                    str(output_dir),
+                    "--primitive-order",
+                    "sort-min-index",
+                    "--draw-order",
+                    "reverse",
+                ],
+                text=True,
+                capture_output=True,
+                check=False,
+            )
+
+            self.assertEqual(result.returncode, 0, result.stderr)
+            summary = json.loads((output_dir / "mini-replay-summary.json").read_text(encoding="utf-8"))
+            self.assertEqual(summary["draw_order"], "reverse")
+            self.assertEqual(summary["primitive_order"], "sort-min-index")
+            rewritten = output_dir / "index-order" / "draw000-sort-min-index.index.bin"
+            self.assertEqual(
+                rewritten.read_bytes(),
+                b"\x00\x00\x01\x00\x02\x00"
+                b"\x03\x00\x02\x00\x01\x00"
+                b"\x08\x00\x04\x00\x06\x00",
+            )
+            objc = (output_dir / "dxmt9_3dmark05_mini_replay.mm").read_text(encoding="utf-8")
+            self.assertIn(str(rewritten), objc)
+            self.assertNotIn(str(index_file) + '",', objc)
 
     def test_capture_path_requires_enough_free_space_before_compile(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

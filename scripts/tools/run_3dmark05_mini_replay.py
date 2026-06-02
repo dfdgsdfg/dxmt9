@@ -11,11 +11,13 @@ constant buffers without recreating dxmt9's full argument-buffer machinery.
 from __future__ import annotations
 
 import argparse
+import copy
 import json
 import os
 import re
 import shlex
 import shutil
+import struct
 import subprocess
 from pathlib import Path
 from typing import Any
@@ -64,6 +66,52 @@ def validate_payloads(draws: list[dict[str, Any]]) -> None:
             path = resolve_path(path_text)
             if byte_count > 0 and not path.exists():
                 raise SystemExit(f"draw {index}: missing {key} payload: {path}")
+
+
+def transform_index_payload(payload: bytes, primitive_order: str) -> bytes:
+    if primitive_order == "original":
+        return payload
+    if len(payload) % 2:
+        raise SystemExit("index payload byte length is not uint16-aligned")
+    indices = list(struct.unpack(f"<{len(payload) // 2}H", payload))
+    triangle_count = len(indices) // 3
+    triangles = [indices[i * 3:(i + 1) * 3] for i in range(triangle_count)]
+    tail = indices[triangle_count * 3:]
+    if primitive_order == "reverse-triangles":
+        triangles.reverse()
+    elif primitive_order == "sort-min-index":
+        triangles.sort(key=lambda tri: (min(tri), max(tri), tri[0], tri[1], tri[2]))
+    elif primitive_order == "sort-max-index":
+        triangles.sort(key=lambda tri: (max(tri), min(tri), tri[0], tri[1], tri[2]))
+    else:
+        raise SystemExit(f"unsupported primitive order: {primitive_order}")
+    ordered = [index for tri in triangles for index in tri] + tail
+    return struct.pack(f"<{len(ordered)}H", *ordered)
+
+
+def materialize_replay_draws(draws: list[dict[str, Any]],
+                             output_dir: Path,
+                             primitive_order: str,
+                             draw_order: str) -> list[dict[str, Any]]:
+    replay_draws = copy.deepcopy(draws)
+    if primitive_order != "original":
+        index_dir = output_dir / "index-order"
+        index_dir.mkdir(parents=True, exist_ok=True)
+        for ordinal, draw in enumerate(replay_draws):
+            geometry = draw["geometry"]
+            source = resolve_path(str(geometry["index_file"]))
+            transformed = transform_index_payload(source.read_bytes(), primitive_order)
+            target = index_dir / f"draw{ordinal:03d}-{primitive_order}.index.bin"
+            target.write_bytes(transformed)
+            geometry["index_file"] = str(target)
+            geometry["index_order_source_file"] = str(source)
+            geometry["index_order"] = primitive_order
+            geometry["index_bytes"] = len(transformed)
+    if draw_order == "reverse":
+        replay_draws.reverse()
+    elif draw_order != "original":
+        raise SystemExit(f"unsupported draw order: {draw_order}")
+    return replay_draws
 
 
 def optional_payload_path(uniforms: dict[str, Any], key: str) -> str:
@@ -534,13 +582,19 @@ def prepare(args: argparse.Namespace) -> dict[str, Any]:
     manifest = load_manifest(args.manifest)
     draws = manifest["draws"]
     validate_payloads(draws)
-    first = draws[0]
+    args.output_dir.mkdir(parents=True, exist_ok=True)
+    replay_draws = materialize_replay_draws(
+        draws,
+        args.output_dir,
+        args.primitive_order,
+        args.draw_order,
+    )
+    first = replay_draws[0]
     vs_file = resolve_path(first["shaders"]["vs_file"])
     fs_file = resolve_path(first["shaders"]["ps_file"])
     if not vs_file.exists() or not fs_file.exists():
         raise SystemExit("manifest shader files are missing")
 
-    args.output_dir.mkdir(parents=True, exist_ok=True)
     vs_replay = args.output_dir / "dxmt9_vs.replay.metal"
     fs_replay = args.output_dir / "dxmt9_fs.replay.metal"
     vs_source = transform_msl(vs_file.read_text(encoding="utf-8"), "vs")
@@ -550,7 +604,7 @@ def prepare(args: argparse.Namespace) -> dict[str, Any]:
 
     source_path = args.output_dir / "dxmt9_3dmark05_mini_replay.mm"
     source_path.write_text(
-        render_source(draws, vs_replay, fs_replay, args.width, args.height),
+        render_source(replay_draws, vs_replay, fs_replay, args.width, args.height),
         encoding="utf-8",
     )
     binary_path = args.output_dir / "dxmt9-3dmark05-mini-replay"
@@ -561,17 +615,19 @@ def prepare(args: argparse.Namespace) -> dict[str, Any]:
         "binary": str(binary_path),
         "vs_replay": str(vs_replay),
         "fs_replay": str(fs_replay),
-        "draw_count": len(draws),
-        "index_bytes": sum(int(draw["geometry"]["index_bytes"]) for draw in draws),
-        "stream0_bytes": sum(int(draw["geometry"]["stream0_bytes"]) for draw in draws),
+        "draw_count": len(replay_draws),
+        "draw_order": args.draw_order,
+        "primitive_order": args.primitive_order,
+        "index_bytes": sum(int(draw["geometry"]["index_bytes"]) for draw in replay_draws),
+        "stream0_bytes": sum(int(draw["geometry"]["stream0_bytes"]) for draw in replay_draws),
         "uniform_draw_count": sum(
-            1 for draw in draws
+            1 for draw in replay_draws
             if any(int(draw.get("uniforms", {}).get(f"{key}_bytes", 0)) > 0
                    for key in ("vsconsts", "psconsts", "ffpvs", "ffpps"))
         ),
         "uniform_bytes": sum(
             int(draw.get("uniforms", {}).get(f"{key}_bytes", 0))
-            for draw in draws
+            for draw in replay_draws
             for key in ("vsconsts", "psconsts", "ffpvs", "ffpps")
         ),
         "vs_bindings": stage_bindings(vs_source),
@@ -640,6 +696,21 @@ def main() -> int:
     parser.add_argument("--output-dir", type=Path, required=True)
     parser.add_argument("--width", type=int, default=1024)
     parser.add_argument("--height", type=int, default=768)
+    parser.add_argument(
+        "--primitive-order",
+        choices=("original", "reverse-triangles", "sort-min-index", "sort-max-index"),
+        default="original",
+        help=(
+            "rewrite each uint16 triangle-list index payload before replay; "
+            "used for primitive/backend locality A/B probes"
+        ),
+    )
+    parser.add_argument(
+        "--draw-order",
+        choices=("original", "reverse"),
+        default="original",
+        help="reorder manifest draws before replay",
+    )
     parser.add_argument("--compile", action="store_true")
     parser.add_argument("--run", action="store_true")
     parser.add_argument("--repeat", type=int, default=1)

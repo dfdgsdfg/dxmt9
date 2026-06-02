@@ -518,7 +518,11 @@ Commercial / 3rd-party titles (require external prefix):
     constant-buffer bindings, uses real cbuf payloads from the manifest when
     present, falls back to dummy constants otherwise, and emits
     `mini-replay-summary.json` with the exact buffer/texture/sampler slots it
-    bound.
+    bound. For primitive/backend-locality classifiers, add
+    `--primitive-order reverse-triangles|sort-min-index|sort-max-index` to
+    rewrite each dumped uint16 triangle-list index payload into
+    `$output_dir/index-order/`, and optionally add `--draw-order reverse` to
+    reverse the manifest draw sequence before Xcode counter capture.
     `--probe-reverse-indexed-triangles-stream0-span-min BYTES` and
     `--optimize-screen-blend-index-order-stream0-span-min BYTES` add a direct
     minimum original stream0 byte-span gate after the row/class filters. Use
