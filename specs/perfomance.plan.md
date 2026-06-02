@@ -14242,21 +14242,89 @@ Top predicted LRU32-gain encoders from the scout:
 Interpretation: the full-frame perf log now confirms that the cache-opt
 candidate is not a one-window artifact; large indexed encoders throughout GT1
 show a repeatable `~19-26%` predicted LRU32 miss reduction. This is still a
-CPU-side predictor. The next proof must capture the same run class with
-gputrace and Xcode counters to verify that top-row `VS Invocations` and
-`VS Buffer Device Memory Bytes Written` move with the candidate axis.
+CPU-side predictor, so the follow-up proof captured the same run class with
+gputrace and Xcode counters and joined the candidate miss deltas against
+top-row `VS Invocations` and `VS Buffer Device Memory Bytes Written`.
+
+The matching no-mutate gputrace/Xcode capture is now complete. The attempted
+`frame60` candidate capture only produced `55` GPU samples, so the validated
+capture was re-run at `frame50`:
+
+```bash
+scripts/tools/run_3dmark05_perf_probe.sh \
+  --suffix cache-opt-candidate-frame50-r1 \
+  --frame 50 \
+  --measure-index-cache-opt-candidate \
+  --timeout 240
+```
+
+Artifacts:
+
+```text
+experiments/output/app-d3d9-3dmark05-cache-opt-candidate-frame50-r1/3dmark05-perf-summary.md
+experiments/output/app-d3d9-3dmark05-cache-opt-candidate-frame50-r1/3dmark05-perf-encoders.csv
+experiments/output/app-d3d9-3dmark05-cache-opt-candidate-frame50-r1/3dmark05-perf-encoder-streams.csv
+traces/app-d3d9-3dmark05-cache-opt-candidate-frame50-r1/frame50.gputrace
+traces/app-d3d9-3dmark05-cache-opt-candidate-frame50-r1/analysis/frame50-performance.gputrace
+traces/app-d3d9-3dmark05-cache-opt-candidate-frame50-r1/analysis/frame50-counters-xcode.csv
+traces/app-d3d9-3dmark05-cache-opt-candidate-frame50-r1/analysis/frame50-counters-summary.csv
+traces/app-d3d9-3dmark05-cache-opt-candidate-frame50-r1/analysis/frame50-xcode-dxmt-joined-summary.csv
+traces/app-d3d9-3dmark05-cache-opt-candidate-frame50-r1/analysis/frame50-xcode-dxmt-bottleneck-report.md
+traces/app-d3d9-3dmark05-cache-opt-candidate-frame50-r1/analysis/frame50-shader-dump-report.md
+```
+
+Xcode replay Summary showed `46.01ms` GPU time, `4` command buffers, `19`
+render encoders, `1015` draw calls, and `4,333,581` vertices. The rendered
+frame was visually valid GT1. Xcode counters were exported through
+`Export Encoder Counters`, then finalized with
+`scripts/tools/finalize_3dmark05_perf_probe.sh --suffix
+cache-opt-candidate-frame50-r1 --frame 50 --top 3 --hot-gpu-share 95.0`.
+
+Frame50 joined counter result:
+
+| Metric | Value | Interpretation |
+|---|---:|---|
+| Total GPU | `46.006ms` | This diagnostic frame is heavier than the frame60 baseline, but has the same owner class. |
+| Hot set | `50/1, 50/11, 50/3, 50/0, 50/2, 50/4` | Top `6` encoders cover the configured `95%` hot-set gate. |
+| Hot-set GPU share | `45.249ms` / `98.35%` | Whole-frame conclusion should use the hot set, not only top three rows. |
+| Hot-set VS buffer write | `2248.342MiB` | Xcode buffer writes are again almost entirely VS-stage writes. |
+| Hot-set VS invocations | `2,348,353` | Post-transform invocation count is the concrete quantity to reduce. |
+| Hot-set VS buffer / VS invocation | `1003.9B` | Hidden write density remains far larger than visible `VSOut`. |
+| Hot-set VS buffer / expected `184B` VSOut | `5.5x` | Visible varying trimming alone is still not the direct owner. |
+| Named tiled-buffer total | `30.219MiB` | Xcode named tiled counters are too small to explain the VS write bucket. |
+| Hidden backend estimate | `2217.281MiB` / `0.986x` | Same hidden Apple vertex/tiler/parameter storage class as prior captures. |
+| dxmt CPU writer bytes | `0.842MiB` | Argbuf, cbuf, setVertexBytes, and transient writers do not explain the Xcode bucket. |
+| Hot-set candidate coverage | `815` draws covered / `108` skipped | The no-mutate candidate gate covers the actual hot encoders. |
+| Hot-set LRU32 original -> candidate | `2,419,358 -> 1,899,181` | Predicted `-520,177` misses, `-21.50%`. |
+| Whole-run LRU32 original -> candidate | `97,568,768 -> 77,281,619` | Aggregate predicted `-20,287,149` misses, `-20.79%`. |
+
+Interpretation of the frame50 proof:
+
+- This completes the previously missing full-GT1 gputrace/Xcode counter
+  capture for the no-mutate `DXMT9_MEASURE_INDEX_CACHE_OPT_CANDIDATE` path.
+- Because no reordered indices were submitted in this run, Xcode does not show
+  an optimization delta yet. It shows the current bottleneck next to the
+  predicted cache-miss delta.
+- The important alignment is that the current hot set is still dominated by
+  hidden VS buffer/device writes, while the candidate LRU32 path predicts a
+  `~21.5%` miss reduction on those same hot encoders.
+- The shader-dump join matched `0/0` hot rows because this capture was not run
+  with `--dump-shaders`. It is valid for Xcode/dxmt memory and cache-locality
+  attribution, but not for a new VS/FS liveness conclusion.
+- The next evidence step is no longer another no-mutate scout. It is a guarded
+  real reorder A/B that submits reordered indices only for safe indexed
+  triangle-list draws and proves that Xcode `VS Invocations`, `VS Buffer Device
+  Memory Bytes Written`, and GPU time move together without changing frame
+  correctness.
 
 The remaining implementation path is:
 
-1. Run a full 3DMark05 GT1 no-mutate scout with
-   `--measure-index-cache-opt-candidate` and export the matching Xcode counters
-   to verify that candidate miss deltas predict the real top-row VS invocation
-   and VS buffer-write movement. The no-gputrace scout is done; the remaining
-   part is the gputrace/Xcode counter capture.
-2. Restrict any real reorder experiment to safe indexed triangle-list draws:
+1. Restrict the first real reorder experiment to safe indexed triangle-list draws:
    no alpha blend, no order-dependent depth/equal behavior, no user pointer or
    transient path that would amplify CPU upload, and no already-good cache-miss
    estimate.
+2. Submit reordered indices only when the no-mutate LRU32 gate predicts a
+   material improvement; keep original index order otherwise.
 3. Verify on full 3DMark05 GT1, not only mini replay, with the stable-frame
    gates: draw count, vertex/primitive count, top-row identity, FS invocations,
    and Xcode `VS Buffer Device Memory Bytes Written`.
@@ -14295,13 +14363,14 @@ flowchart TD
   CacheWin --> CacheRule
   CacheRule --> Owner["owner narrowed\nfixed hidden write per post-transform cache miss"]
   Owner --> DiagGate["implemented diagnostic gate\nDXMT9_MEASURE_INDEX_CACHE_OPT_CANDIDATE\nno submitted reorder"]
-  DiagGate --> FullScout["next full GT1 scout\ncandidate miss delta + Xcode counters"]
-  FullScout --> ReorderGate["then: cache-miss-gated safe reorder\navoid alpha/order-sensitive draws"]
+  DiagGate --> FullScout["full GT1 no-mutate scout\ncandidate miss delta + Xcode counters"]
+  FullScout --> Frame50["frame50 Xcode/dxmt join\nhot set 45.249ms\nVS write 2248MiB\nLRU32 candidate -21.5%"]
+  Frame50 --> ReorderGate["next: cache-miss-gated safe reorder\navoid alpha/order-sensitive draws"]
 
   classDef hot fill:#ffe8e8,stroke:#b64242,color:#2b0d0d
   classDef good fill:#e8f5e8,stroke:#4d8b4d,color:#102a10
   classDef known fill:#e8f0ff,stroke:#476cb6,color:#0d1833
-  class Reject,FailSignal,StateAB,RuntimeNext,SortMini,ReorderGate,FullScout hot
-  class PassSignal,Classifier,Codegen,Invocations,CacheSignal,CacheWin,CacheRule,Owner,DiagGate good
+  class Reject,FailSignal,StateAB,RuntimeNext,SortMini,ReorderGate hot
+  class PassSignal,Classifier,Codegen,Invocations,CacheSignal,CacheWin,CacheRule,Owner,DiagGate,Frame50 good
   class R2,Gate,Mini,Hot,Tooling,Trim,Xcode,Accept,Candidate,CacheOpt known
 ```
