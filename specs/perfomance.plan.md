@@ -12623,6 +12623,30 @@ The first prefix/window counter captures are now available:
   `traces/app-d3d9-3dmark05-screen-blend-row60-2-full187-payload-r1/analysis/bisection/mini-replay-encoder2-113-prefix-000-027-depthinput-counters-xcode.csv`
 - `prefix-000-027` counter summary:
   `traces/app-d3d9-3dmark05-screen-blend-row60-2-full187-payload-r1/analysis/bisection/mini-replay-encoder2-113-prefix-000-027-depthinput-counters-summary.csv`
+- `prefix-000-013` raw capture:
+  `traces/app-d3d9-3dmark05-screen-blend-row60-2-full187-payload-r1/analysis/bisection/mini-replay-encoder2-113-prefix-000-013-depthinput.gputrace`
+- `prefix-000-013` encoder counters:
+  `traces/app-d3d9-3dmark05-screen-blend-row60-2-full187-payload-r1/analysis/bisection/mini-replay-encoder2-113-prefix-000-013-depthinput-counters-xcode.csv`
+- `prefix-000-013` counter summary:
+  `traces/app-d3d9-3dmark05-screen-blend-row60-2-full187-payload-r1/analysis/bisection/mini-replay-encoder2-113-prefix-000-013-depthinput-counters-summary.csv`
+- `window-014-027` raw capture:
+  `traces/app-d3d9-3dmark05-screen-blend-row60-2-full187-payload-r1/analysis/bisection/mini-replay-encoder2-113-window-014-027-depthinput.gputrace`
+- `window-014-027` encoder counters:
+  `traces/app-d3d9-3dmark05-screen-blend-row60-2-full187-payload-r1/analysis/bisection/mini-replay-encoder2-113-window-014-027-depthinput-counters-xcode.csv`
+- `window-014-027` counter summary:
+  `traces/app-d3d9-3dmark05-screen-blend-row60-2-full187-payload-r1/analysis/bisection/mini-replay-encoder2-113-window-014-027-depthinput-counters-summary.csv`
+- `window-014-020` raw capture:
+  `traces/app-d3d9-3dmark05-screen-blend-row60-2-full187-payload-r1/analysis/bisection/mini-replay-encoder2-113-window-014-020-depthinput.gputrace`
+- `window-014-020` encoder counters:
+  `traces/app-d3d9-3dmark05-screen-blend-row60-2-full187-payload-r1/analysis/bisection/mini-replay-encoder2-113-window-014-020-depthinput-counters-xcode.csv`
+- `window-014-020` counter summary:
+  `traces/app-d3d9-3dmark05-screen-blend-row60-2-full187-payload-r1/analysis/bisection/mini-replay-encoder2-113-window-014-020-depthinput-counters-summary.csv`
+- `window-021-027` raw capture:
+  `traces/app-d3d9-3dmark05-screen-blend-row60-2-full187-payload-r1/analysis/bisection/mini-replay-encoder2-113-window-021-027-depthinput.gputrace`
+- `window-021-027` encoder counters:
+  `traces/app-d3d9-3dmark05-screen-blend-row60-2-full187-payload-r1/analysis/bisection/mini-replay-encoder2-113-window-021-027-depthinput-counters-xcode.csv`
+- `window-021-027` counter summary:
+  `traces/app-d3d9-3dmark05-screen-blend-row60-2-full187-payload-r1/analysis/bisection/mini-replay-encoder2-113-window-021-027-depthinput-counters-summary.csv`
 - `window-028-055` raw capture:
   `traces/app-d3d9-3dmark05-screen-blend-row60-2-full187-payload-r1/analysis/bisection/mini-replay-encoder2-113-window-028-055-depthinput.gputrace`
 - `window-028-055` encoder counters:
@@ -12639,6 +12663,10 @@ The first prefix/window counter captures are now available:
 | Case | Draws | GPU ms | VS buffer write | VS invocations | VS B / VS invocation | Primitives | Vertex stage | Buffer write / MMU / LLC limiter |
 |---|---:|---:|---:|---:|---:|---:|---:|---:|
 | full 113-draw replay | `113` | `18.115` | `1090.901MiB` | `668,929` | `1710.0B` | `390,345` | `98.93%` | `23.05 / 34.71 / 34.43%` |
+| `prefix-000-013` | `14` | `0.245` | `0.000MiB` | `87,425` | `0.0B` | `48,466` | `67.89%` | `0.00 / 17.04 / 22.69%` |
+| `window-014-020` | `7` | `3.660` | `218.118MiB` | `55,453` | `4124.5B` | `31,982` | `97.61%` | `23.73 / 46.46 / 36.70%` |
+| `window-021-027` | `7` | `2.318` | `129.178MiB` | `35,161` | `3852.4B` | `20,766` | `96.53%` | `22.65 / 39.76 / 35.54%` |
+| `window-014-027` | `14` | `5.753` | `347.914MiB` | `90,614` | `4026.0B` | `52,748` | `98.44%` | `23.20 / 45.51 / 36.68%` |
 | `prefix-000-027` | `28` | `5.860` | `347.932MiB` | `178,039` | `2049.2B` | `101,214` | `98.35%` | `19.17 / 40.15 / 33.56%` |
 | `window-028-055` | `28` | `5.820` | `315.029MiB` | `198,744` | `1662.1B` | `116,555` | `98.31%` | `22.90 / 32.49 / 36.06%` |
 | `prefix-000-055` | `56` | `11.401` | `663.657MiB` | `376,783` | `1846.9B` | `217,769` | `98.94%` | `24.13 / 39.79 / 31.81%` |
@@ -12666,14 +12694,37 @@ already hot and have the worst density in this set at `2049.2B/VS invocation`.
 This further weakens a single transition-state explanation; the reproduced
 class is per-window vertex-stage backend write amplification.
 
+The `0..27` split localizes the first hot region to `14..27`: `prefix-000-013`
+is effectively cold (`0.245ms`, `0.000MiB` VS buffer write), while
+`window-014-027` carries `347.914MiB` VS buffer write and `5.753ms` GPU time.
+The sum of `0..13` plus `14..27` matches `prefix-000-027` for VS invocations
+and primitives exactly; VS buffer write differs by only `0.019MiB`.
+
+The `14..27` split remains additive and class-shaped rather than one-draw
+shaped: `window-014-020` plus `window-021-027` gives `347.296MiB` VS buffer
+write versus `347.914MiB` for `window-014-027`, with exact VS invocation and
+primitive counts. `14..20` owns `62.7%` of `14..27` VS write and `21..27` owns
+`37.1%`; both halves show the same `~3.9-4.1KiB/VS invocation` density.
+Manifest metadata shows all `14..27` draws use a full VSOut layout
+(`position,color,secondaryColor,texcoord0..7,fogFactor,pointSize`) while the FS
+reads only `fogFactor,position,texcoord0`. The stronger hypothesis is therefore
+PSO/pair-local varying liveness and VS stage-out/backend write amplification,
+not alpha/scissor alone. Alpha/scissor appears only in draws `24..27`, but
+`14..23` is already hot.
+
 Next split:
 
-- Capture `prefix-000-013` and `window-014-027`.
-- If both halves remain additive, switch from range bisection to shader/geometry
-  class probes: highest `VS B/VS invocation`, highest `VS B/primitive`, shader
-  variant, and primitive size buckets.
-- If one half dominates, continue range bisection inside that half until the
-  responsible draw/state/shader group is small enough for a targeted replay.
+- Build targeted probes for the full-VSOut class:
+  `0xfea7cb/0xa0910f` draws `[14,15,18,19,21]`, alpha/scissor variant
+  `0xdee2a2/0x2f2090` draws `[26,27]`, and the large indexed draws
+  `[15,19,27]`.
+- Prototype a mini-replay shader variant that trims VSOut to the FS-read fields
+  (`position,fogFactor,texcoord0`) for a single hot shader pair, then compare
+  Xcode `VS Buffer Device Memory Bytes Written`, GPU time, and image output
+  against the full-VSOut replay.
+- If the trimmed variant reduces VS buffer write materially, move the production
+  design to VS/FS pair-liveness PSO variants. If it does not, inspect Metal
+  compiler/backend spill and primitive/binning storage next.
 - Keep `window-084-112`/`tail-056-112` as secondary checks for the remaining
   `~206MiB` of the full 113-draw replay.
 
@@ -12706,17 +12757,25 @@ flowchart TD
   Prefix83 --> Window5683["window 56..83\nGPU 4.12ms\nVS buffer 221.3MiB\n1537.5B/VS inv"]
   Prefix55 --> Prefix27["prefix 0..27\nGPU 5.86ms\nVS buffer 347.9MiB\n2049.2B/VS inv"]
   Prefix55 --> Window2855["window 28..55\nGPU 5.82ms\nVS buffer 315.0MiB\n1662.1B/VS inv"]
+  Prefix27 --> Prefix13["prefix 0..13\nGPU 0.25ms\nVS buffer 0.0MiB"]
+  Prefix27 --> Window1427["window 14..27\nGPU 5.75ms\nVS buffer 347.9MiB\n4026.0B/VS inv"]
+  Window1427 --> Window1420["window 14..20\nGPU 3.66ms\nVS buffer 218.1MiB\n4124.5B/VS inv"]
+  Window1427 --> Window2127["window 21..27\nGPU 2.32ms\nVS buffer 129.2MiB\n3852.4B/VS inv"]
+  Window1420 --> FullVSOut["full VSOut class\nFS reads only position/fog/tex0\npair-liveness probe"]
+  Window2127 --> FullVSOut
   Prefix27 --> Additive55["0..27 + 28..55 ~= 0..55\nper-window write amplification"]
   Window2855 --> Additive55
   Prefix55 --> Additive83["0..55 + 56..83 ~= 0..83\nnot prefix-transition-only"]
   Window5683 --> Additive83
-  Additive83 --> Next["next experiment\nsplit 0..27\nprefix 0..13 vs window 14..27"]
-  Additive55 --> Next
+  Prefix13 --> Hot1427["0..13 cold\n14..27 owns first hot region"]
+  Window1427 --> Hot1427
+  Hot1427 --> Next["next experiment\ntrimmed VSOut mini replay\nthen pair-liveness PSO variant"]
+  FullVSOut --> Next
 
   classDef hot fill:#ffe8e8,stroke:#b64242,color:#2b0d0d
   classDef known fill:#e8f0ff,stroke:#476cb6,color:#0d1833
-  class Compile0,ScissorBug,Gap,Next hot
-  class Scout,Full,SinglePSO,Slice,SlotFix,StreamDump,Smoke,MultiPSO,FullSmoke,XcodeMini,ScissorFix,XcodeScissor,Depth0,DepthInput,Compare,Encoder2Dump,SortFix,Encoder2Smoke,Encoder2Xcode,Cause,Prefix83,Prefix55,Window5683,Prefix27,Window2855,Additive55,Additive83 known
+  class Compile0,ScissorBug,Gap,Next,FullVSOut hot
+  class Scout,Full,SinglePSO,Slice,SlotFix,StreamDump,Smoke,MultiPSO,FullSmoke,XcodeMini,ScissorFix,XcodeScissor,Depth0,DepthInput,Compare,Encoder2Dump,SortFix,Encoder2Smoke,Encoder2Xcode,Cause,Prefix83,Prefix55,Window5683,Prefix27,Prefix13,Window1427,Window1420,Window2127,Window2855,Hot1427,Additive55,Additive83 known
 ```
 
 Smoke validation for the current pass-shape manifest:
