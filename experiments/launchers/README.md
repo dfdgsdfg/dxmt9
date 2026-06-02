@@ -478,8 +478,13 @@ Commercial / 3rd-party titles (require external prefix):
     --output <trace-run>/analysis/frameN-payload-window-selection.json` to rank
     same-run shader/state groups and emit the exact
     `--probe-indexed-triangle-encoder-draw-min/max` flags for that run. The
-    selector also emits `shader_capture_flags` for cross-run payload scouts. If
-    a second run drifts by row or draw order, prefer shader/state payload filters:
+    selector also emits `shader_capture_flags` for cross-run payload scouts.
+    Pass the same selection JSON to
+    `build_3dmark05_mini_replay_manifest.py --payload-selection
+    <frameN-payload-window-selection.json>` so the replay manifest uses the
+    selected row, encoder-local draw window, and draw ordinals instead of
+    silently taking the first matching payloads. If a second run drifts by row
+    or draw order, prefer shader/state payload filters:
     `--dump-indexed-geometry-vs HASH --dump-indexed-geometry-ps HASH` plus the
     existing class filters, for example
     `--probe-reverse-indexed-triangles-classes alpha-blend,depth-read,textured`.
@@ -501,7 +506,8 @@ Commercial / 3rd-party titles (require external prefix):
     `python3 scripts/tools/build_3dmark05_mini_replay_manifest.py
     --shader-summary <frameN-shader-dump-summary.csv> --probe-draws
     <3dmark05-perf-indexed-probe-draws.csv> --geometry-dir
-    <trace-run>/analysis/geometry --vs HASH --ps HASH --output
+    <trace-run>/analysis/geometry --payload-selection
+    <trace-run>/analysis/frameN-payload-window-selection.json --vs HASH --ps HASH --output
     <frameN-mini-replay-manifest.json>`. Use `--row SEQ/ENC` as an additional
     filter only when the payload scout was intentionally row-local.
     Prepare an isolated Metal replay app with
@@ -515,8 +521,12 @@ Commercial / 3rd-party titles (require external prefix):
     `DXMT9_MINI_REPLAY_MIN_CAPTURE_FREE_MB=N` overrides it); if the guard fails,
     keep the no-capture smoke result and free disk before producing `.gputrace`.
     The helper rewrites dxmt9's `buffer(30)` argument-buffer MSL into standalone
-    constant-buffer bindings, uses real cbuf payloads from the manifest when
-    present, falls back to dummy constants otherwise, and emits
+    constant-buffer bindings, choosing free Metal buffer slots instead of
+    assuming fixed `6/7` slots because dumped shaders may already use those
+    indices for vertex streams. It uses real cbuf payloads from the manifest when
+    present, falls back to dummy constants otherwise, binds dumped extra vertex
+    stream payloads when `geometry.streams` contains stream files, falls back to
+    a zero-filled dummy stream for missing extra streams, and emits
     `mini-replay-summary.json` with the exact buffer/texture/sampler slots it
     bound. For primitive/backend-locality classifiers, add
     `--primitive-order reverse-triangles|sort-min-index|sort-max-index` to

@@ -60,6 +60,11 @@ def read_meta(path: Path) -> dict[str, str]:
     row["stream0_file_bytes"] = str(stream_path.stat().st_size if stream_path.exists() else 0)
     row["index_file_exists"] = "1" if index_path.exists() else "0"
     row["stream0_file_exists"] = "1" if stream_path.exists() else "0"
+    for stream in range(1, 16):
+        cbuf_path = Path(str(stem) + f".stream{stream}.bin")
+        row[f"stream{stream}_file"] = str(cbuf_path)
+        row[f"stream{stream}_file_bytes"] = str(cbuf_path.stat().st_size if cbuf_path.exists() else 0)
+        row[f"stream{stream}_file_exists"] = "1" if cbuf_path.exists() else "0"
     for key, suffix in [
         ("vsconsts", ".vsconsts.bin"),
         ("psconsts", ".psconsts.bin"),
@@ -86,6 +91,39 @@ def geometry_payload_valid(row: dict[str, str]) -> bool:
     )
 
 
+def stream_payload_metadata(payload: dict[str, str]) -> list[dict[str, Any]]:
+    streams: list[dict[str, Any]] = [{
+        "stream": 0,
+        "metal_slot": 1,
+        "handle": payload.get("stream0_handle", ""),
+        "file": payload.get("stream0_file", ""),
+        "bytes": as_int(payload.get("stream0_file_bytes")),
+        "offset": as_int(payload.get("stream0_offset")),
+        "stride": as_int(payload.get("stream0_stride")),
+        "start_byte": as_int(payload.get("stream0_start_byte")),
+        "byte_count": as_int(payload.get("stream0_byte_count")),
+        "range_valid": as_int(payload.get("stream0_range_valid")),
+        "wrote": as_int(payload.get("wrote_stream0")),
+    }]
+    for stream in range(1, 16):
+        if as_int(payload.get(f"wrote_stream{stream}")) == 0:
+            continue
+        streams.append({
+            "stream": stream,
+            "metal_slot": as_int(payload.get(f"stream{stream}_metal_slot")),
+            "handle": payload.get(f"stream{stream}_handle", ""),
+            "file": payload.get(f"stream{stream}_file", ""),
+            "bytes": as_int(payload.get(f"stream{stream}_file_bytes")),
+            "offset": as_int(payload.get(f"stream{stream}_offset")),
+            "stride": as_int(payload.get(f"stream{stream}_stride")),
+            "start_byte": as_int(payload.get(f"stream{stream}_start_byte")),
+            "byte_count": as_int(payload.get(f"stream{stream}_byte_count")),
+            "range_valid": as_int(payload.get(f"stream{stream}_range_valid")),
+            "wrote": as_int(payload.get(f"wrote_stream{stream}")),
+        })
+    return streams
+
+
 def geometry_draw_ordinal(row: dict[str, str]) -> int:
     if row.get("draw_ordinal"):
         return as_int(row.get("draw_ordinal"))
@@ -107,6 +145,40 @@ def load_geometry_payloads(path: Path) -> list[dict[str, str]]:
     if not rows:
         raise SystemExit(f"no geometry metadata files in: {path}")
     return rows
+
+
+def parse_draw_ordinals(value: str | None) -> set[int]:
+    if not value:
+        return set()
+    out: set[int] = set()
+    for item in re.split(r"[,;\s]+", value.strip()):
+        if item:
+            out.add(as_int(item))
+    return out
+
+
+def apply_payload_selection(args: argparse.Namespace) -> None:
+    if args.payload_selection is None:
+        return
+    if not args.payload_selection.exists():
+        raise SystemExit(f"missing payload selection JSON: {args.payload_selection}")
+    with args.payload_selection.open(encoding="utf-8") as handle:
+        selection = json.load(handle)
+    if selection.get("schema") != "dxmt9.3dmark05.payload_window.v1":
+        raise SystemExit(f"unsupported payload selection schema: {selection.get('schema')}")
+    data = selection.get("selection", {})
+    window = data.get("window", {})
+    selected_row = str(data.get("row", ""))
+    if selected_row:
+        if args.row and args.row != selected_row:
+            raise SystemExit(f"--row {args.row} conflicts with selection row {selected_row}")
+        args.row = selected_row
+    if args.encoder_draw_min is None and "encoder_draw_min" in window:
+        args.encoder_draw_min = as_int(window.get("encoder_draw_min"))
+    if args.encoder_draw_max is None and "encoder_draw_max" in window:
+        args.encoder_draw_max = as_int(window.get("encoder_draw_max"))
+    if not args.draw_ordinals and window.get("draw_ordinals"):
+        args.draw_ordinals = ",".join(str(as_int(value)) for value in window.get("draw_ordinals", []))
 
 
 def shader_index(rows: list[dict[str, str]]) -> dict[str, dict[str, str]]:
@@ -170,6 +242,9 @@ def selected_payloads(
     target_row: str | None,
     target_vs: str | None,
     target_ps: str | None,
+    encoder_draw_min: int | None,
+    encoder_draw_max: int | None,
+    target_draw_ordinals: set[int],
     max_draws: int,
 ) -> list[dict[str, str]]:
     rows = [
@@ -178,6 +253,21 @@ def selected_payloads(
         and (target_row is None or row_key(row) == target_row)
         and (target_vs is None or row.get("vs", "").lower() == target_vs.lower())
         and (target_ps is None or row.get("ps", "").lower() == target_ps.lower())
+        and (
+            encoder_draw_min is None
+            or (
+                geometry_encoder_draw_index(row) is not None
+                and geometry_encoder_draw_index(row) >= encoder_draw_min
+            )
+        )
+        and (
+            encoder_draw_max is None
+            or (
+                geometry_encoder_draw_index(row) is not None
+                and geometry_encoder_draw_index(row) <= encoder_draw_max
+            )
+        )
+        and (not target_draw_ordinals or geometry_draw_ordinal(row) in target_draw_ordinals)
     ]
     rows.sort(key=lambda row: (row_key(row), geometry_encoder_draw_index(row) or 10**18,
                                geometry_draw_ordinal(row), as_int(row.get("slot"))))
@@ -258,11 +348,22 @@ def attachment_metadata(payload: dict[str, str]) -> dict[str, Any]:
 
 
 def build_manifest(args: argparse.Namespace) -> dict[str, Any]:
+    apply_payload_selection(args)
     shaders = shader_index(load_csv(args.shader_summary))
     probes = probe_index(load_csv(args.probe_draws))
     geometries = load_geometry_payloads(args.geometry_dir)
     shader_files = scan_shader_dump_files(args.shader_msl_dir)
-    payloads = selected_payloads(geometries, args.row, args.vs, args.ps, args.max_draws)
+    target_draw_ordinals = parse_draw_ordinals(args.draw_ordinals)
+    payloads = selected_payloads(
+        geometries,
+        args.row,
+        args.vs,
+        args.ps,
+        args.encoder_draw_min,
+        args.encoder_draw_max,
+        target_draw_ordinals,
+        args.max_draws,
+    )
     if not payloads:
         raise SystemExit("no valid geometry payloads matched the requested filters")
 
@@ -361,6 +462,7 @@ def build_manifest(args: argparse.Namespace) -> dict[str, Any]:
                 "stream0_file": payload.get("stream0_file", ""),
                 "index_bytes": as_int(payload.get("index_file_bytes")),
                 "stream0_bytes": as_int(payload.get("stream0_file_bytes")),
+                "streams": stream_payload_metadata(payload),
                 "min_index": as_int(payload.get("min_index")),
                 "max_index": as_int(payload.get("max_index")),
                 "unique_indices": as_int(payload.get("unique_indices")),
@@ -387,6 +489,11 @@ def build_manifest(args: argparse.Namespace) -> dict[str, Any]:
     rows = sorted({draw["row"] for draw in manifest_draws})
     total_index_bytes = sum(draw["geometry"]["index_bytes"] for draw in manifest_draws)
     total_stream0_bytes = sum(draw["geometry"]["stream0_bytes"] for draw in manifest_draws)
+    encoder_draw_indices = [
+        draw["encoder_draw_index"]
+        for draw in manifest_draws
+        if draw["encoder_draw_index"] is not None
+    ]
     return {
         "schema": "dxmt9.3dmark05.mini_replay_manifest.v1",
         "sources": {
@@ -397,12 +504,19 @@ def build_manifest(args: argparse.Namespace) -> dict[str, Any]:
             "row_filter": args.row or "",
             "vs_filter": args.vs or "",
             "ps_filter": args.ps or "",
+            "payload_selection": str(args.payload_selection or ""),
+            "encoder_draw_min": "" if args.encoder_draw_min is None else str(args.encoder_draw_min),
+            "encoder_draw_max": "" if args.encoder_draw_max is None else str(args.encoder_draw_max),
+            "draw_ordinals_filter": ",".join(str(value) for value in sorted(target_draw_ordinals)),
         },
         "summary": {
             "rows": rows,
             "draw_count": len(manifest_draws),
             "total_index_bytes": total_index_bytes,
             "total_stream0_bytes": total_stream0_bytes,
+            "encoder_draw_min": min(encoder_draw_indices) if encoder_draw_indices else None,
+            "encoder_draw_max": max(encoder_draw_indices) if encoder_draw_indices else None,
+            "draw_ordinals": [draw["draw_ordinal"] for draw in manifest_draws],
             "missing_probe_rows": missing_probe_rows,
             "missing_shader_rows": missing_shader_rows,
             "missing_draw_shader_files": missing_draw_shader_files,
@@ -421,6 +535,14 @@ def main() -> int:
     parser.add_argument("--row", help="Optional seq/encoder filter, e.g. 60/2")
     parser.add_argument("--vs", help="Optional vertex shader hash filter, e.g. 0x7836...")
     parser.add_argument("--ps", help="Optional pixel shader hash filter, e.g. 0x11cc...")
+    parser.add_argument("--payload-selection", type=Path,
+                        help="Selection JSON from select_3dmark05_payload_window.py")
+    parser.add_argument("--encoder-draw-min", type=int,
+                        help="Optional inclusive encoder-local draw index filter")
+    parser.add_argument("--encoder-draw-max", type=int,
+                        help="Optional inclusive encoder-local draw index filter")
+    parser.add_argument("--draw-ordinals",
+                        help="Optional comma/space separated global draw ordinal filter")
     parser.add_argument("--max-draws", type=int, default=0)
     parser.add_argument("--output", type=Path, required=True)
     args = parser.parse_args()

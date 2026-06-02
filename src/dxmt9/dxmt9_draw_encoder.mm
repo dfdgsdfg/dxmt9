@@ -3065,6 +3065,15 @@ bool indexedGeometryDumpShaderMatches(core::FlatDrawStateView drawState) {
          (!pixelFilter.has_value() || shader.pixelShader.hash == *pixelFilter);
 }
 
+struct IndexedGeometryStreamPayload {
+  u32 stream = 0;
+  u32 metalSlot = 0;
+  u64 handle = 0;
+  u64 offset = 0;
+  u64 stride = 0;
+  std::span<const u8> bytes{};
+};
+
 void appendIndexedGeometryTextureMetadata(std::ostringstream& meta,
                                           core::FlatDrawStateView drawState,
                                           const resources::Pool& pool) {
@@ -3185,6 +3194,7 @@ void maybeDumpIndexedGeometryPayload(
     u64 pixelShaderHash,
     u64 drawOrdinal,
     u64 primitiveCount,
+    std::span<const IndexedGeometryStreamPayload> extraStreams = {},
     std::span<const u8> vsConstsBytes = {},
     std::span<const u8> psConstsBytes = {},
     std::span<const u8> ffpVsConstsBytes = {},
@@ -3272,6 +3282,40 @@ void maybeDumpIndexedGeometryPayload(
       writeBinaryFile(base.string() + ".stream0.bin",
                       vertexBytes.data() + streamStartByte,
                       streamByteCount);
+  struct ExtraStreamDumpResult {
+    const IndexedGeometryStreamPayload* payload = nullptr;
+    bool rangeValid = false;
+    std::size_t startByte = 0u;
+    std::size_t byteCount = 0u;
+    bool wrote = false;
+  };
+  std::array<ExtraStreamDumpResult, core::kMaxStreams - 1u> extraResults{};
+  std::size_t extraResultCount = 0u;
+  for (const auto& stream : extraStreams) {
+    if (stream.stream == 0u || stream.stream >= core::kMaxStreams ||
+        stream.stride == 0u || stream.bytes.empty() ||
+        extraResultCount >= extraResults.size()) {
+      continue;
+    }
+    auto& result = extraResults[extraResultCount++];
+    result.payload = &stream;
+    const u64 minVertex64 = static_cast<u64>(minVertex);
+    const u64 vertexSpan = static_cast<u64>(maxVertex - minVertex + 1);
+    const u64 streamStart64 = stream.offset + minVertex64 * stream.stride;
+    const u64 streamCount64 = vertexSpan * stream.stride;
+    result.rangeValid =
+        streamStart64 <= static_cast<u64>(stream.bytes.size()) &&
+        streamCount64 <= static_cast<u64>(stream.bytes.size()) - streamStart64;
+    if (result.rangeValid) {
+      result.startByte = static_cast<std::size_t>(streamStart64);
+      result.byteCount = static_cast<std::size_t>(streamCount64);
+      std::ostringstream suffix;
+      suffix << ".stream" << stream.stream << ".bin";
+      result.wrote = writeBinaryFile(base.string() + suffix.str(),
+                                     stream.bytes.data() + result.startByte,
+                                     result.byteCount);
+    }
+  }
   const bool wroteVsConsts =
       !vsConstsBytes.empty() &&
       writeBinaryFile(base.string() + ".vsconsts.bin",
@@ -3319,6 +3363,7 @@ void maybeDumpIndexedGeometryPayload(
        << "stream0_range_valid=" << (streamRangeValid ? 1 : 0) << "\n"
        << "wrote_index=" << (wroteIndex ? 1 : 0) << "\n"
        << "wrote_stream0=" << (wroteStream ? 1 : 0) << "\n"
+       << "stream_payload_count=" << (1u + extraResultCount) << "\n"
        << "vsconsts_byte_count=" << vsConstsBytes.size() << "\n"
        << "psconsts_byte_count=" << psConstsBytes.size() << "\n"
        << "ffpvs_byte_count=" << ffpVsConstsBytes.size() << "\n"
@@ -3327,6 +3372,23 @@ void maybeDumpIndexedGeometryPayload(
        << "wrote_psconsts=" << (wrotePsConsts ? 1 : 0) << "\n"
        << "wrote_ffpvs=" << (wroteFfpVsConsts ? 1 : 0) << "\n"
        << "wrote_ffpps=" << (wroteFfpPsConsts ? 1 : 0) << "\n";
+  for (std::size_t i = 0; i < extraResultCount; ++i) {
+    const auto& result = extraResults[i];
+    const auto& stream = *result.payload;
+    meta << "stream" << stream.stream << "_handle=0x" << std::hex
+         << stream.handle << std::dec << "\n"
+         << "stream" << stream.stream << "_metal_slot=" << stream.metalSlot << "\n"
+         << "stream" << stream.stream << "_offset=" << stream.offset << "\n"
+         << "stream" << stream.stream << "_stride=" << stream.stride << "\n"
+         << "stream" << stream.stream << "_start_byte="
+         << (result.rangeValid ? result.startByte : 0u) << "\n"
+         << "stream" << stream.stream << "_byte_count="
+         << (result.rangeValid ? result.byteCount : 0u) << "\n"
+         << "stream" << stream.stream << "_range_valid="
+         << (result.rangeValid ? 1 : 0) << "\n"
+         << "wrote_stream" << stream.stream << "=" << (result.wrote ? 1 : 0)
+         << "\n";
+  }
   appendIndexedGeometryTextureMetadata(meta, drawState, pool);
   appendIndexedGeometryAttachmentMetadata(meta, drawState, pool);
   writeTextFile(base.string() + ".meta", meta.str());
@@ -7342,6 +7404,45 @@ bool encodeDraw(EncodeContext& ctx,
                                                    effectiveViewport.scissor);
         }
         if (dumpIndexedGeometryEligible) {
+          std::array<IndexedGeometryStreamPayload, core::kMaxStreams - 1u>
+              dumpExtraStreams{};
+          std::size_t dumpExtraStreamCount = 0u;
+          auto resolveDumpStreamBytes = [&](u32 stream) -> std::span<const u8> {
+            if (hot.streamBuffers[stream]) {
+              if (auto* buffer = ctx.pool.findBuffer(hot.streamBuffers[stream].value);
+                  buffer) {
+                if (!buffer->shadow.empty()) {
+                  return buffer->shadow;
+                }
+                if (buffer->contents) {
+                  return std::span<const u8>(
+                      static_cast<const u8*>(buffer->contents),
+                      static_cast<std::size_t>(buffer->desc.size));
+                }
+              }
+            }
+            if (vertexDecl.streams[stream].buffer) {
+              return vertexDecl.streams[stream].buffer->bytes();
+            }
+            return {};
+          };
+          for (const auto& streamBinding : bindingPacket.extraStreams) {
+            if (dumpExtraStreamCount >= dumpExtraStreams.size()) {
+              break;
+            }
+            const auto streamBytes = resolveDumpStreamBytes(streamBinding.stream);
+            if (streamBytes.empty()) {
+              continue;
+            }
+            dumpExtraStreams[dumpExtraStreamCount++] = IndexedGeometryStreamPayload{
+                .stream = streamBinding.stream,
+                .metalSlot = streamBinding.metalSlot,
+                .handle = hot.streamBuffers[streamBinding.stream].value,
+                .offset = streamBinding.offset,
+                .stride = streamBinding.stride,
+                .bytes = streamBytes,
+            };
+          }
           std::optional<VsConsts> dumpVsConsts;
           std::optional<PsConsts> dumpPsConsts;
           std::optional<FfpPsConsts> dumpFfpPsConsts;
@@ -7390,6 +7491,8 @@ bool encodeDraw(EncodeContext& ctx,
                   : 0u,
               drawOrdinal,
               primitiveCount,
+              std::span<const IndexedGeometryStreamPayload>(
+                  dumpExtraStreams.data(), dumpExtraStreamCount),
               dumpVsConstsBytes,
               dumpPsConstsBytes,
               dumpFfpVsConstsBytes,

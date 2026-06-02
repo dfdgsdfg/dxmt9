@@ -24,13 +24,14 @@ struct ArgbufLayout {
 vertex VSOut dxmt9_vs(uint vid [[vertex_id]],
                      constant ArgbufLayout& abuf [[buffer(30)]],
                      device const uchar* stream0 [[buffer(1)]],
+                     device const uchar* stream1 [[buffer(6)]],
                      constant DrawVolatile& drawVolatile [[buffer(5)]]) {
   constant VsConsts& vsConsts = *abuf.vsConsts;
   constant FfpVsConsts& ffpVs = *abuf.ffpVs;
   VSOut out;
   out.position = vsConsts.vsFloatConst[0] + float4(float(vid), 0.0, 0.0, 1.0);
   out.position.xy += ffpVs.halfPixelFixup;
-  out.texcoord0 = float4(stream0[drawVolatile.vertexStreamOffset], 0.0, 0.0, 1.0);
+  out.texcoord0 = float4(stream0[drawVolatile.vertexStreamOffset] + stream1[0], 0.0, 0.0, 1.0);
   out.fogFactor = 1.0;
   out.pointSize = 1.0;
   return out;
@@ -73,12 +74,14 @@ class MiniReplayScriptTests(unittest.TestCase):
 
         index_file = geometry_dir / "draw.index.bin"
         stream_file = geometry_dir / "draw.stream0.bin"
+        stream1_file = geometry_dir / "draw.stream1.bin"
         vsconsts_file = geometry_dir / "draw.vsconsts.bin"
         psconsts_file = geometry_dir / "draw.psconsts.bin"
         ffpvs_file = geometry_dir / "draw.ffpvs.bin"
         ffpps_file = geometry_dir / "draw.ffpps.bin"
         index_file.write_bytes(b"\x00\x00\x01\x00\x02\x00")
         stream_file.write_bytes(bytes(range(24)))
+        stream1_file.write_bytes(bytes(range(64)))
         vsconsts_file.write_bytes(b"vs")
         psconsts_file.write_bytes(b"ps")
         ffpvs_file.write_bytes(b"ffpvs")
@@ -120,6 +123,20 @@ class MiniReplayScriptTests(unittest.TestCase):
                     "stream0_file": str(stream_file),
                     "index_bytes": 6,
                     "stream0_bytes": 24,
+                    "streams": [
+                        {
+                            "stream": 0,
+                            "metal_slot": 1,
+                            "file": str(stream_file),
+                            "bytes": 24,
+                        },
+                        {
+                            "stream": 1,
+                            "metal_slot": 6,
+                            "file": str(stream1_file),
+                            "bytes": 64,
+                        },
+                    ],
                 },
                 "uniforms": {
                     "vsconsts_file": str(vsconsts_file),
@@ -175,11 +192,16 @@ class MiniReplayScriptTests(unittest.TestCase):
             self.assertEqual(summary["stream0_bytes"], 24)
             self.assertEqual(summary["uniform_draw_count"], 1)
             self.assertEqual(summary["uniform_bytes"], 14)
-            self.assertEqual(summary["vs_bindings"]["buffer"], [1, 5, 6, 7])
-            self.assertEqual(summary["fs_bindings"]["buffer"], [6, 7])
+            self.assertEqual(summary["vs_cbuf_slots"], {"ffpvs": 28, "vsconsts": 29})
+            self.assertEqual(summary["fs_cbuf_slots"], {"ffpps": 28, "psconsts": 29})
+            self.assertEqual(summary["actual_extra_vertex_buffer_slots"], [6])
+            self.assertEqual(summary["dummy_vertex_buffer_slots"], [6])
+            self.assertEqual(summary["vs_bindings"]["buffer"], [1, 5, 6, 28, 29])
+            self.assertEqual(summary["fs_bindings"]["buffer"], [28, 29])
             self.assertIn("texture2d<float> tex0 [[texture(0)]]", (output_dir / "dxmt9_fs.replay.metal").read_text(encoding="utf-8"))
             self.assertNotIn("ArgbufLayout& abuf [[buffer(30)]]", (output_dir / "dxmt9_vs.replay.metal").read_text(encoding="utf-8"))
-            self.assertIn("constant VsConsts& vsConsts [[buffer(6)]]", (output_dir / "dxmt9_vs.replay.metal").read_text(encoding="utf-8"))
+            self.assertIn("constant VsConsts& vsConsts [[buffer(29)]]", (output_dir / "dxmt9_vs.replay.metal").read_text(encoding="utf-8"))
+            self.assertIn("device const uchar* stream1 [[buffer(6)]]", (output_dir / "dxmt9_vs.replay.metal").read_text(encoding="utf-8"))
             objc = (output_dir / "dxmt9_3dmark05_mini_replay.mm").read_text(encoding="utf-8")
             self.assertIn("psoDesc.colorAttachments[0].blendingEnabled = 1;", objc)
             self.assertIn("psoDesc.colorAttachments[0].pixelFormat = MTLPixelFormatBGRA8Unorm;", objc)
@@ -190,6 +212,15 @@ class MiniReplayScriptTests(unittest.TestCase):
             self.assertIn("pass.stencilAttachment.texture = depth;", objc)
             self.assertIn("const char* vsConstsPath;", objc)
             self.assertIn("bufferFromFileOrDefault(device, draw.vsConstsPath, vsConsts)", objc)
+            self.assertIn("const char* extraStreamPaths[16];", objc)
+            self.assertIn("draw.stream1.bin", objc)
+            self.assertIn("[encoder setVertexBuffer:dummyVertexStream offset:0 atIndex:6];", objc)
+            self.assertIn("[encoder setVertexBuffer:extraStreams[s] offset:0 atIndex:draw.extraStreamSlots[s]];", objc)
+            self.assertIn("[encoder setRenderPipelineState:psos[draw.shaderIndex]];", objc)
+            self.assertIn("[encoder setVertexBuffer:drawVsConsts offset:0 atIndex:shader.vsConstsSlot];", objc)
+            self.assertIn("[encoder setVertexBuffer:drawFfpVs offset:0 atIndex:shader.ffpVsSlot];", objc)
+            self.assertIn("[encoder setFragmentBuffer:drawPsConsts offset:0 atIndex:shader.psConstsSlot];", objc)
+            self.assertIn("[encoder setFragmentBuffer:drawFfpPs offset:0 atIndex:shader.ffpPsSlot];", objc)
             self.assertIn("draw.vsconsts.bin", objc)
             self.assertIn("sourceRGBBlendFactor = blendFactor(5, false);", objc)
             self.assertIn("destinationRGBBlendFactor = blendFactor(6, false);", objc)

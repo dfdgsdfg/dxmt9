@@ -11967,6 +11967,168 @@ axis:
 - The summary records `primitive_order` and `draw_order`, so Xcode counter
   exports can be compared without guessing which locality transform was used.
 
+The manifest builder now also accepts the payload-window selector output:
+
+- `select_3dmark05_payload_window.py` writes
+  `frame60-payload-window-selection.json` with the selected row, contiguous
+  encoder-local draw range, and draw ordinals.
+- `build_3dmark05_mini_replay_manifest.py --payload-selection
+  frame60-payload-window-selection.json` applies that exact row/window/ordinal
+  filter before `--max-draws`, `--vs`, or `--ps` trimming.
+- The generated manifest records `payload_selection`, `encoder_draw_min`,
+  `encoder_draw_max`, `draw_ordinals_filter`, plus summary
+  `encoder_draw_min/max` and `draw_ordinals`.
+
+This closes a planning gap for larger row-local replays: the selector and
+manifest builder now share the same draw-window identity instead of relying on
+"first matching payloads" after a separate capture step. Existing artifact
+validation against
+`current-head-geometry-cbuf-attachmentmeta-shaderfilter-anyrow-r1` selected
+`60/2` draw `230..232`, ordinals `42814,42815,42816`, and regenerated a
+selection-bound manifest with `draw_count=3`, `total_index_bytes=64,254`,
+`total_stream0_bytes=318,816`, `missing_probe_rows=0`,
+`missing_shader_rows=0`, `missing_draw_shader_files=0`, and
+`row_shader_fallbacks=0`.
+
+The next larger no-gputrace payload scout also completed:
+
+```bash
+scripts/tools/run_3dmark05_perf_probe.sh \
+  --suffix screen-blend-run-71-188-payload16-r1 \
+  --frame 60 \
+  --timeout 180 \
+  --no-gputrace \
+  --encoder-breakdown-seq 60 \
+  --measure-index-reuse \
+  --dump-indexed-geometry-cbufs \
+  --dump-indexed-geometry-max-draws 16 \
+  --probe-reverse-indexed-triangles-row 60/2 \
+  --probe-reverse-indexed-triangles-classes screen-blend \
+  --probe-indexed-triangle-encoder-draw-min 71 \
+  --probe-indexed-triangle-encoder-draw-max 188 \
+  --top 3 \
+  --hot-gpu-share 95 \
+  --min-free-mb 128
+```
+
+Result: `status=pass`, `returncode=0`, `timed_out=false`, `failures=[]`.
+The run wrote `16` geometry payload triplets (`112` files total including
+cbufs) under
+`traces/app-d3d9-3dmark05-screen-blend-run-71-188-payload16-r1/analysis/geometry`
+and used only `1.6MiB` in `traces/` plus `4.4MiB` in
+`experiments/output/`. The dumped window is `60/2` encoder draw `71..86`,
+ordinals `42668..42683`, with `172,932B` of index payload and `1,030,032B`
+of stream0 payload when kept as a 16-draw manifest. That full manifest spans
+`6` VS/PS shader pairs, so the current single-PSO mini replay runner cannot
+execute it as one PSO.
+
+A runnable dominant-shader manifest was built from the same payload set:
+
+- Manifest:
+  `traces/app-d3d9-3dmark05-screen-blend-run-71-188-payload16-r1/analysis/frame60-mini-replay-manifest-dominant-shader.json`
+- Draw window: `60/2` encoder draw `81..86`, ordinals `42678..42683`
+- Shader pair: VS `0xc949d543d4cd5f19`, PS `0xcc5a988ed3599a6f`
+- Payload: `6` draws, `68,508B` index, `404,832B` stream0,
+  `64,944B` uniform payload
+- Join quality: `missing_probe_rows=0`, `missing_shader_rows=0`,
+  `missing_draw_shader_files=0`, `row_shader_fallbacks=0`
+
+The first smoke failed because this VS uses `stream1 [[buffer(6)]]`, while the
+old mini replay MSL rewrite always placed `VsConsts/FfpVs` at `buffer(6/7)`.
+The runner now scans the original MSL buffer bindings, picks free high slots
+for replay cbufs, records `vs_cbuf_slots` / `fs_cbuf_slots`, and binds extra
+vertex stream buffer slots to a zero-filled dummy buffer when only stream0 was
+dumped. The rerun passed:
+
+```text
+mini replay draws=6 repeat=1
+vs_cbuf_slots={vsconsts:29, ffpvs:28}
+fs_cbuf_slots={psconsts:29, ffpps:28}
+dummy_vertex_buffer_slots=[6]
+```
+
+The stream-fidelity gap was then closed for this slice. The indexed geometry
+dumper now writes extra vertex stream payloads beside stream0 when the
+programmable VS input layout binds them:
+
+- Extra stream files use `.streamN.bin` suffixes.
+- Metadata records `streamN_handle`, `streamN_metal_slot`, `streamN_offset`,
+  `streamN_stride`, `streamN_start_byte`, `streamN_byte_count`,
+  `streamN_range_valid`, and `wrote_streamN`.
+- The manifest preserves these as `geometry.streams`.
+- The mini replay binds real `geometry.streams` payloads per draw and uses a
+  zero-filled dummy stream only for missing extra stream slots.
+
+The updated no-gputrace scout completed:
+
+```bash
+scripts/tools/run_3dmark05_perf_probe.sh \
+  --suffix screen-blend-run-71-188-payload16-streams-r1 \
+  --frame 60 \
+  --timeout 180 \
+  --no-gputrace \
+  --encoder-breakdown-seq 60 \
+  --measure-index-reuse \
+  --dump-indexed-geometry-cbufs \
+  --dump-indexed-geometry-max-draws 16 \
+  --probe-reverse-indexed-triangles-row 60/2 \
+  --probe-reverse-indexed-triangles-classes screen-blend \
+  --probe-indexed-triangle-encoder-draw-min 71 \
+  --probe-indexed-triangle-encoder-draw-max 188 \
+  --top 3 \
+  --hot-gpu-share 95 \
+  --min-free-mb 128
+```
+
+Result: `status=pass`, `returncode=0`, `timed_out=false`, `failures=[]`.
+It dumped `16` metadata rows and `16` `.stream1.bin` files. Each row reports
+`stream_payload_count=2` and `wrote_stream1=1`. Artifact size stayed small:
+`3.7MiB` under `traces/` and `4.5MiB` under `experiments/output/`.
+
+The new dominant-shader manifest:
+
+- Manifest:
+  `traces/app-d3d9-3dmark05-screen-blend-run-71-188-payload16-streams-r1/analysis/frame60-mini-replay-manifest-dominant-shader.json`
+- Draw window: `60/2` encoder draw `81..86`, ordinals `41885..41890`
+- Payload: `6` draws, `68,508B` index, `404,832B` stream0, stream1 present
+  for all draws, `64,944B` uniform payload
+- Join quality: `missing_probe_rows=0`, `missing_shader_rows=0`,
+  `missing_draw_shader_files=0`, `row_shader_fallbacks=0`
+
+The stream-aware replay smoke passed:
+
+```text
+mini replay draws=6 repeat=1
+actual_extra_vertex_buffer_slots=[6]
+vs_cbuf_slots={vsconsts:29, ffpvs:28}
+fs_cbuf_slots={psconsts:29, ffpps:28}
+```
+
+Interpretation: the row-local replay harness now reaches a larger
+screen-blend material slice than the original 3-draw triplet with real stream0,
+stream1, and per-draw cbuf payloads. The next replay-quality gap is no longer
+stream1; it is multi-PSO replay if the full 16-draw screen-blend slice should
+run as one harness, or Xcode counter capture of this 6-draw single-PSO slice
+once disk permits.
+
+```mermaid
+flowchart TD
+  Scout["payload16 no-gputrace scout\n60/2 draw 71..86\n16 payload triplets"] --> Full["16-draw manifest\n6 VS/PS pairs"]
+  Full --> SinglePSO{"current mini replay\nsingle PSO?"}
+  SinglePSO -- "no" --> Slice["dominant shader slice\n60/2 draw 81..86\n6 draws"]
+  Slice --> Compile0["first smoke compile fail\ncbuf buffer(6/7) conflicts\nwith stream1 buffer(6)"]
+  Compile0 --> SlotFix["dynamic cbuf slot allocation\nvs/ps cbufs -> 29/28"]
+  SlotFix --> StreamDump["multi-stream payload dump\n.stream1.bin for 16/16 draws"]
+  StreamDump --> Smoke["stream-aware smoke pass\nmini replay draws=6\nactual slot 6"]
+  Smoke --> Gap["remaining fidelity gap\nmulti-PSO full 16-draw replay\nor Xcode counter capture"]
+  Gap --> Next["next experiment\ncapture 6-draw replay when disk permits\nor add multi-PSO replay"]
+
+  classDef hot fill:#ffe8e8,stroke:#b64242,color:#2b0d0d
+  classDef known fill:#e8f0ff,stroke:#476cb6,color:#0d1833
+  class Compile0,Gap,Next hot
+  class Scout,Full,SinglePSO,Slice,SlotFix,StreamDump,Smoke known
+```
+
 Smoke validation for the current pass-shape manifest:
 
 ```bash

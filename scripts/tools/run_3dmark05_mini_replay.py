@@ -128,35 +128,62 @@ def stage_bindings(source: str) -> dict[str, list[int]]:
     return bindings
 
 
-def transform_msl(source: str, stage: str) -> str:
+def used_buffer_indices(source: str) -> set[int]:
+    return {int(match) for match in re.findall(r"\[\[buffer\((\d+)\)\]\]", source)}
+
+
+def allocate_cbuf_slots(source: str, count: int) -> list[int]:
+    used = used_buffer_indices(source)
+    slots: list[int] = []
+    for candidate in range(29, -1, -1):
+        if candidate == 30 or candidate in used:
+            continue
+        slots.append(candidate)
+        if len(slots) == count:
+            return slots
+    raise SystemExit("not enough free Metal buffer slots for mini replay cbuf rewrite")
+
+
+def transform_msl(source: str, stage: str) -> tuple[str, dict[str, int]]:
     if stage == "vs":
+        vs_slot, ffp_slot = allocate_cbuf_slots(source, 2)
         source = re.sub(
             r"constant\s+ArgbufLayout&\s+abuf\s+\[\[buffer\(30\)\]\],\s*",
-            "constant VsConsts& vsConsts [[buffer(6)]],\n"
-            "                     constant FfpVsConsts& ffpVs [[buffer(7)]],\n"
+            f"constant VsConsts& vsConsts [[buffer({vs_slot})]],\n"
+            f"                     constant FfpVsConsts& ffpVs [[buffer({ffp_slot})]],\n"
             "                     ",
             source,
             count=1,
         )
         source = re.sub(r"\s*constant VsConsts& vsConsts = \*abuf\.vsConsts;\n", "\n", source)
         source = re.sub(r"\s*constant FfpVsConsts& ffpVs = \*abuf\.ffpVs;\n", "", source)
+        return source, {"vsconsts": vs_slot, "ffpvs": ffp_slot}
     elif stage == "fs":
+        ps_slot, ffp_slot = allocate_cbuf_slots(source, 2)
         source = re.sub(
             r"constant\s+ArgbufLayout&\s+abuf\s+\[\[buffer\(30\)\]\],\s*",
-            "constant PsConsts& psConsts [[buffer(6)]],\n"
-            "                     constant FfpPsConsts& ffpPs [[buffer(7)]], ",
+            f"constant PsConsts& psConsts [[buffer({ps_slot})]],\n"
+            f"                     constant FfpPsConsts& ffpPs [[buffer({ffp_slot})]], ",
             source,
             count=1,
         )
         source = re.sub(r"\s*constant PsConsts& psConsts = \*abuf\.psConsts;\n", "\n", source)
         source = re.sub(r"\s*constant FfpPsConsts& ffpPs = \*abuf\.ffpPs;\n", "", source)
+        return source, {"psconsts": ps_slot, "ffpps": ffp_slot}
     else:
         raise ValueError(stage)
-    return source
 
 
 def cxx_string(value: str) -> str:
     return json.dumps(value)
+
+
+def shader_key(draw: dict[str, Any]) -> tuple[str, str]:
+    shaders = draw.get("shaders", {})
+    return (
+        str(resolve_path(str(shaders.get("vs_file", "")))),
+        str(resolve_path(str(shaders.get("ps_file", "")))),
+    )
 
 
 def first_color_attachment(draws: list[dict[str, Any]]) -> dict[str, Any]:
@@ -194,8 +221,8 @@ def depth_format_has_stencil(format_value: int) -> bool:
 
 
 def render_source(draws: list[dict[str, Any]],
-                  vs_path: Path,
-                  fs_path: Path,
+                  shader_variants: list[dict[str, Any]],
+                  dummy_vertex_buffer_slots: list[int],
                   width: int,
                   height: int) -> str:
     first_state = draws[0]["state"]
@@ -230,6 +257,17 @@ def render_source(draws: list[dict[str, Any]],
         geometry = draw["geometry"]
         uniforms = draw.get("uniforms", {})
         state = draw["state"]
+        extra_stream_paths = ['""'] * 16
+        extra_stream_slots = ["0"] * 16
+        for stream in geometry.get("streams", []):
+            stream_index = int(stream.get("stream", 0))
+            if stream_index <= 0 or stream_index >= 16:
+                continue
+            stream_file = str(stream.get("file", ""))
+            if not stream_file or int(stream.get("bytes", 0)) <= 0:
+                continue
+            extra_stream_paths[stream_index] = cxx_string(str(resolve_path(stream_file)))
+            extra_stream_slots[stream_index] = str(int(stream.get("metal_slot", 0)))
         draw_entries.append(
             "  {"
             + ", ".join([
@@ -239,6 +277,9 @@ def render_source(draws: list[dict[str, Any]],
                 cxx_string(optional_payload_path(uniforms, "psconsts")),
                 cxx_string(optional_payload_path(uniforms, "ffpvs")),
                 cxx_string(optional_payload_path(uniforms, "ffpps")),
+                "{" + ", ".join(extra_stream_paths) + "}",
+                "{" + ", ".join(extra_stream_slots) + "}",
+                str(int(draw.get("_shader_variant", 0))),
                 str(int(state.get("index_count", 0))),
                 str(int(state.get("base_vertex", 0))),
                 str(int(state.get("stream0_stride", 0))),
@@ -247,12 +288,39 @@ def render_source(draws: list[dict[str, Any]],
             + "}"
         )
     draw_array = ",\n".join(draw_entries)
+    shader_entries = ",\n".join(
+        "  {"
+        + ", ".join([
+            cxx_string(str(variant["vs_replay"])),
+            cxx_string(str(variant["fs_replay"])),
+            str(int(variant["vs_cbuf_slots"]["vsconsts"])),
+            str(int(variant["vs_cbuf_slots"]["ffpvs"])),
+            str(int(variant["fs_cbuf_slots"]["psconsts"])),
+            str(int(variant["fs_cbuf_slots"]["ffpps"])),
+        ])
+        + "}"
+        for variant in shader_variants
+    )
+    dummy_vertex_buffer_binds = "\n".join(
+        f"    [encoder setVertexBuffer:dummyVertexStream offset:0 atIndex:{slot}];"
+        for slot in dummy_vertex_buffer_slots
+    )
     return f"""#import <Foundation/Foundation.h>
 #import <Metal/Metal.h>
 #include <cstdlib>
 #include <cstring>
 #include <algorithm>
 #include <iostream>
+#include <vector>
+
+struct ShaderEntry {{
+  const char* vsPath;
+  const char* fsPath;
+  unsigned vsConstsSlot;
+  unsigned ffpVsSlot;
+  unsigned psConstsSlot;
+  unsigned ffpPsSlot;
+}};
 
 struct DrawEntry {{
   const char* indexPath;
@@ -261,6 +329,9 @@ struct DrawEntry {{
   const char* psConstsPath;
   const char* ffpVsPath;
   const char* ffpPsPath;
+  const char* extraStreamPaths[16];
+  unsigned extraStreamSlots[16];
+  unsigned shaderIndex;
   unsigned indexCount;
   int baseVertex;
   unsigned streamStride;
@@ -407,15 +478,15 @@ int main() {{
     }}
 
     id<MTLCommandQueue> queue = [device newCommandQueue];
-    id<MTLLibrary> vsLib = makeLibrary(device, {cxx_string(str(vs_path))});
-    id<MTLLibrary> fsLib = makeLibrary(device, {cxx_string(str(fs_path))});
-    if (!vsLib || !fsLib) return 2;
-    id<MTLFunction> vs = [vsLib newFunctionWithName:@"dxmt9_vs"];
-    id<MTLFunction> fs = [fsLib newFunctionWithName:@"dxmt9_fs"];
+    ShaderEntry shaders[] = {{
+{shader_entries}
+    }};
+    const unsigned shaderCount = sizeof(shaders) / sizeof(shaders[0]);
+    std::vector<id<MTLRenderPipelineState>> psos(shaderCount);
+    std::vector<id<MTLLibrary>> vsLibs(shaderCount);
+    std::vector<id<MTLLibrary>> fsLibs(shaderCount);
 
     MTLRenderPipelineDescriptor* psoDesc = [MTLRenderPipelineDescriptor new];
-    psoDesc.vertexFunction = vs;
-    psoDesc.fragmentFunction = fs;
     psoDesc.colorAttachments[0].pixelFormat = {color_format};
     psoDesc.colorAttachments[0].writeMask = colorWriteMask({color_write});
     psoDesc.colorAttachments[0].blendingEnabled = {alpha_blend};
@@ -431,11 +502,18 @@ int main() {{
     psoDesc.depthAttachmentPixelFormat = {depth_format};
     psoDesc.stencilAttachmentPixelFormat = {stencil_format};
     NSError* error = nil;
-    id<MTLRenderPipelineState> pso = [device newRenderPipelineStateWithDescriptor:psoDesc
-                                                                            error:&error];
-    if (!pso) {{
-      std::cerr << "failed to create PSO: " << [[error localizedDescription] UTF8String] << "\\n";
-      return 2;
+    for (unsigned i = 0; i < shaderCount; ++i) {{
+      vsLibs[i] = makeLibrary(device, shaders[i].vsPath);
+      fsLibs[i] = makeLibrary(device, shaders[i].fsPath);
+      if (!vsLibs[i] || !fsLibs[i]) return 2;
+      psoDesc.vertexFunction = [vsLibs[i] newFunctionWithName:@"dxmt9_vs"];
+      psoDesc.fragmentFunction = [fsLibs[i] newFunctionWithName:@"dxmt9_fs"];
+      psos[i] = [device newRenderPipelineStateWithDescriptor:psoDesc error:&error];
+      if (!psos[i]) {{
+        std::cerr << "failed to create PSO " << i << ": "
+                  << [[error localizedDescription] UTF8String] << "\\n";
+        return 2;
+      }}
     }}
     MTLDepthStencilDescriptor* depthStateDesc = [MTLDepthStencilDescriptor new];
     depthStateDesc.depthCompareFunction =
@@ -463,6 +541,7 @@ int main() {{
     id<MTLBuffer> ffpVs = zeroBuffer(device, 16384);
     id<MTLBuffer> psConsts = zeroBuffer(device, 16384);
     id<MTLBuffer> ffpPs = zeroBuffer(device, 16384);
+    id<MTLBuffer> dummyVertexStream = zeroBuffer(device, 16 * 1024 * 1024);
     MTLTextureDescriptor* whiteDesc =
         [MTLTextureDescriptor texture2DDescriptorWithPixelFormat:MTLPixelFormatRGBA8Unorm
                                                            width:1
@@ -517,7 +596,6 @@ int main() {{
       pass.stencilAttachment.clearStencil = 0;
     }}
     id<MTLRenderCommandEncoder> encoder = [commandBuffer renderCommandEncoderWithDescriptor:pass];
-    [encoder setRenderPipelineState:pso];
     [encoder setDepthStencilState:depthState];
     [encoder setCullMode:cullMode({cull})];
     if ({scissor}) {{
@@ -531,6 +609,7 @@ int main() {{
     }}
     [encoder setFragmentTexture:whiteTexture atIndex:0];
     [encoder setFragmentSamplerState:sampler atIndex:0];
+{dummy_vertex_buffer_binds}
 
     for (unsigned r = 0; r < repeat; ++r) {{
       for (const DrawEntry& draw : draws) {{
@@ -546,16 +625,36 @@ int main() {{
             [device newBufferWithBytes:[streamData bytes]
                                 length:[streamData length]
                                options:MTLResourceStorageModeShared];
+        id<MTLBuffer> extraStreams[16] = {{}};
+        for (unsigned s = 1; s < 16; ++s) {{
+          if (!draw.extraStreamPaths[s] || draw.extraStreamPaths[s][0] == '\\0' ||
+              draw.extraStreamSlots[s] == 0) {{
+            continue;
+          }}
+          NSData* extraData = readData(draw.extraStreamPaths[s]);
+          if (!extraData) return 2;
+          extraStreams[s] = [device newBufferWithBytes:[extraData bytes]
+                                                length:[extraData length]
+                                               options:MTLResourceStorageModeShared];
+        }}
         id<MTLBuffer> index =
             [device newBufferWithBytes:[indexData bytes]
                                 length:[indexData length]
                                options:MTLResourceStorageModeShared];
+        if (draw.shaderIndex >= shaderCount) return 2;
+        const ShaderEntry& shader = shaders[draw.shaderIndex];
         DrawVolatile dv = {{draw.baseVertex, draw.streamOffset, draw.streamStride, 0}};
-        [encoder setVertexBuffer:drawVsConsts offset:0 atIndex:6];
-        [encoder setVertexBuffer:drawFfpVs offset:0 atIndex:7];
-        [encoder setFragmentBuffer:drawPsConsts offset:0 atIndex:6];
-        [encoder setFragmentBuffer:drawFfpPs offset:0 atIndex:7];
+        [encoder setRenderPipelineState:psos[draw.shaderIndex]];
+        [encoder setVertexBuffer:drawVsConsts offset:0 atIndex:shader.vsConstsSlot];
+        [encoder setVertexBuffer:drawFfpVs offset:0 atIndex:shader.ffpVsSlot];
+        [encoder setFragmentBuffer:drawPsConsts offset:0 atIndex:shader.psConstsSlot];
+        [encoder setFragmentBuffer:drawFfpPs offset:0 atIndex:shader.ffpPsSlot];
         [encoder setVertexBuffer:stream offset:0 atIndex:1];
+        for (unsigned s = 1; s < 16; ++s) {{
+          if (extraStreams[s]) {{
+            [encoder setVertexBuffer:extraStreams[s] offset:0 atIndex:draw.extraStreamSlots[s]];
+          }}
+        }}
         [encoder setVertexBytes:&dv length:sizeof(dv) atIndex:5];
         [encoder drawIndexedPrimitives:MTLPrimitiveTypeTriangle
                             indexCount:draw.indexCount
@@ -589,22 +688,68 @@ def prepare(args: argparse.Namespace) -> dict[str, Any]:
         args.primitive_order,
         args.draw_order,
     )
-    first = replay_draws[0]
-    vs_file = resolve_path(first["shaders"]["vs_file"])
-    fs_file = resolve_path(first["shaders"]["ps_file"])
-    if not vs_file.exists() or not fs_file.exists():
-        raise SystemExit("manifest shader files are missing")
-
-    vs_replay = args.output_dir / "dxmt9_vs.replay.metal"
-    fs_replay = args.output_dir / "dxmt9_fs.replay.metal"
-    vs_source = transform_msl(vs_file.read_text(encoding="utf-8"), "vs")
-    fs_source = transform_msl(fs_file.read_text(encoding="utf-8"), "fs")
-    vs_replay.write_text(vs_source, encoding="utf-8")
-    fs_replay.write_text(fs_source, encoding="utf-8")
+    shader_variants: list[dict[str, Any]] = []
+    shader_variant_by_key: dict[tuple[str, str], int] = {}
+    all_vs_bindings: list[dict[str, list[int]]] = []
+    all_fs_bindings: list[dict[str, list[int]]] = []
+    dummy_vertex_buffer_slot_set: set[int] = set()
+    for draw in replay_draws:
+        key = shader_key(draw)
+        variant_index = shader_variant_by_key.get(key)
+        if variant_index is None:
+            vs_file = Path(key[0])
+            fs_file = Path(key[1])
+            if not vs_file.exists() or not fs_file.exists():
+                raise SystemExit("manifest shader files are missing")
+            variant_index = len(shader_variants)
+            shader_variant_by_key[key] = variant_index
+            if variant_index == 0:
+                vs_replay = args.output_dir / "dxmt9_vs.replay.metal"
+                fs_replay = args.output_dir / "dxmt9_fs.replay.metal"
+            else:
+                vs_replay = args.output_dir / f"dxmt9_vs_{variant_index:02d}.replay.metal"
+                fs_replay = args.output_dir / f"dxmt9_fs_{variant_index:02d}.replay.metal"
+            vs_source, vs_cbuf_slots = transform_msl(vs_file.read_text(encoding="utf-8"), "vs")
+            fs_source, fs_cbuf_slots = transform_msl(fs_file.read_text(encoding="utf-8"), "fs")
+            vs_replay.write_text(vs_source, encoding="utf-8")
+            fs_replay.write_text(fs_source, encoding="utf-8")
+            vs_bindings = stage_bindings(vs_source)
+            fs_bindings = stage_bindings(fs_source)
+            all_vs_bindings.append(vs_bindings)
+            all_fs_bindings.append(fs_bindings)
+            reserved_vs_buffers = {1, 5, *vs_cbuf_slots.values()}
+            dummy_vertex_buffer_slot_set.update(
+                slot for slot in vs_bindings["buffer"]
+                if slot not in reserved_vs_buffers
+            )
+            shader_variants.append({
+                "vs_source": str(vs_file),
+                "fs_source": str(fs_file),
+                "vs_replay": str(vs_replay),
+                "fs_replay": str(fs_replay),
+                "vs_cbuf_slots": vs_cbuf_slots,
+                "fs_cbuf_slots": fs_cbuf_slots,
+                "vs_bindings": vs_bindings,
+                "fs_bindings": fs_bindings,
+            })
+        draw["_shader_variant"] = variant_index
+    dummy_vertex_buffer_slots = sorted(dummy_vertex_buffer_slot_set)
+    actual_extra_vertex_buffer_slots = sorted({
+        int(stream.get("metal_slot", 0))
+        for draw in replay_draws
+        for stream in draw.get("geometry", {}).get("streams", [])
+        if int(stream.get("stream", 0)) > 0 and int(stream.get("bytes", 0)) > 0
+    })
 
     source_path = args.output_dir / "dxmt9_3dmark05_mini_replay.mm"
     source_path.write_text(
-        render_source(replay_draws, vs_replay, fs_replay, args.width, args.height),
+        render_source(
+            replay_draws,
+            shader_variants,
+            dummy_vertex_buffer_slots,
+            args.width,
+            args.height,
+        ),
         encoding="utf-8",
     )
     binary_path = args.output_dir / "dxmt9-3dmark05-mini-replay"
@@ -613,8 +758,8 @@ def prepare(args: argparse.Namespace) -> dict[str, Any]:
         "output_dir": str(args.output_dir),
         "source": str(source_path),
         "binary": str(binary_path),
-        "vs_replay": str(vs_replay),
-        "fs_replay": str(fs_replay),
+        "shader_variant_count": len(shader_variants),
+        "shader_variants": shader_variants,
         "draw_count": len(replay_draws),
         "draw_order": args.draw_order,
         "primitive_order": args.primitive_order,
@@ -630,8 +775,14 @@ def prepare(args: argparse.Namespace) -> dict[str, Any]:
             for draw in replay_draws
             for key in ("vsconsts", "psconsts", "ffpvs", "ffpps")
         ),
-        "vs_bindings": stage_bindings(vs_source),
-        "fs_bindings": stage_bindings(fs_source),
+        "vs_cbuf_slots": shader_variants[0]["vs_cbuf_slots"],
+        "fs_cbuf_slots": shader_variants[0]["fs_cbuf_slots"],
+        "actual_extra_vertex_buffer_slots": actual_extra_vertex_buffer_slots,
+        "dummy_vertex_buffer_slots": dummy_vertex_buffer_slots,
+        "vs_bindings": all_vs_bindings[0],
+        "fs_bindings": all_fs_bindings[0],
+        "all_vs_bindings": all_vs_bindings,
+        "all_fs_bindings": all_fs_bindings,
     }
     (args.output_dir / "mini-replay-summary.json").write_text(
         json.dumps(summary, indent=2, sort_keys=True), encoding="utf-8")

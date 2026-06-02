@@ -89,6 +89,7 @@ class BuildMiniReplayManifestTests(unittest.TestCase):
             stem = geometry / "seq60-enc2-draw42428-slot0"
             stem.with_suffix(".index.bin").write_bytes(b"index")
             stem.with_suffix(".stream0.bin").write_bytes(b"stream")
+            Path(str(stem) + ".stream1.bin").write_bytes(b"stream-one")
             Path(str(stem) + ".vsconsts.bin").write_bytes(b"vs")
             Path(str(stem) + ".psconsts.bin").write_bytes(b"ps")
             Path(str(stem) + ".ffpvs.bin").write_bytes(b"ffpvs")
@@ -107,6 +108,15 @@ class BuildMiniReplayManifestTests(unittest.TestCase):
                     "base_vertex=0",
                     "stream0_offset=1440",
                     "stream0_stride=24",
+                    "stream_payload_count=2",
+                    "stream1_handle=0x101",
+                    "stream1_metal_slot=6",
+                    "stream1_offset=0",
+                    "stream1_stride=64",
+                    "stream1_start_byte=0",
+                    "stream1_byte_count=10",
+                    "stream1_range_valid=1",
+                    "wrote_stream1=1",
                     "min_index=0",
                     "max_index=7902",
                     "unique_indices=7903",
@@ -242,6 +252,13 @@ class BuildMiniReplayManifestTests(unittest.TestCase):
             self.assertEqual(draw["shaders"]["ps_file_source"], "draw-hash")
             self.assertEqual(draw["geometry"]["index_bytes"], 5)
             self.assertEqual(draw["geometry"]["stream0_bytes"], 6)
+            self.assertEqual(len(draw["geometry"]["streams"]), 2)
+            self.assertEqual(draw["geometry"]["streams"][0]["stream"], 0)
+            self.assertEqual(draw["geometry"]["streams"][0]["metal_slot"], 1)
+            self.assertEqual(draw["geometry"]["streams"][1]["stream"], 1)
+            self.assertEqual(draw["geometry"]["streams"][1]["metal_slot"], 6)
+            self.assertEqual(draw["geometry"]["streams"][1]["bytes"], 10)
+            self.assertTrue(draw["geometry"]["streams"][1]["file"].endswith(".stream1.bin"))
             self.assertEqual(draw["uniforms"]["vsconsts_bytes"], 2)
             self.assertEqual(draw["uniforms"]["psconsts_bytes"], 2)
             self.assertEqual(draw["uniforms"]["ffpvs_bytes"], 5)
@@ -453,6 +470,100 @@ class BuildMiniReplayManifestTests(unittest.TestCase):
             self.assertEqual(manifest["draws"][0]["shaders"]["ps_hash"], "0xdef")
             self.assertEqual(manifest["draws"][0]["shaders"]["vs_file_source"], "draw-hash")
             self.assertEqual(manifest["draws"][0]["shaders"]["ps_file_source"], "draw-hash")
+
+    def test_manifest_accepts_payload_window_selection(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            shaders = root / "shaders.csv"
+            probes = root / "probe.csv"
+            geometry = root / "geometry"
+            selection = root / "selection.json"
+            output = root / "manifest.json"
+            geometry.mkdir()
+            write_csv(shaders, [{"seq": 60, "enc": 2}])
+            write_csv(probes, [
+                {
+                    "seq": 60,
+                    "encoder": 2,
+                    "encoder_draw_index": draw,
+                    "draw_ordinal": 42000 + draw,
+                    "primitive_count": 100 + draw,
+                    "vs": "0xaaa",
+                    "ps": "0xbbb",
+                }
+                for draw in [10, 11, 12, 13]
+            ])
+            for draw in [10, 11, 12, 13]:
+                stem = geometry / f"seq60-enc2-draw{42000 + draw}-slot0"
+                stem.with_suffix(".index.bin").write_bytes(bytes([draw, draw + 1]))
+                stem.with_suffix(".stream0.bin").write_bytes(bytes([draw]) * 4)
+                stem.with_suffix(".meta").write_text(
+                    "\n".join([
+                        "seq=60",
+                        "encoder=2",
+                        f"encoder_draw_index={draw}",
+                        f"draw_ordinal={42000 + draw}",
+                        "slot=0",
+                        f"primitive_count={100 + draw}",
+                        "index_count=3",
+                        "index_byte_count=2",
+                        "stream0_byte_count=4",
+                        "index_range_valid=1",
+                        "stream0_range_valid=1",
+                        "wrote_index=1",
+                        "wrote_stream0=1",
+                    ]),
+                    encoding="utf-8",
+                )
+            selection.write_text(
+                json.dumps({
+                    "schema": "dxmt9.3dmark05.payload_window.v1",
+                    "selection": {
+                        "row": "60/2",
+                        "window": {
+                            "encoder_draw_min": 11,
+                            "encoder_draw_max": 12,
+                            "draw_ordinals": [42011, 42012],
+                        },
+                    },
+                }),
+                encoding="utf-8",
+            )
+
+            result = subprocess.run(
+                [
+                    sys.executable,
+                    str(SCRIPT),
+                    "--shader-summary",
+                    str(shaders),
+                    "--probe-draws",
+                    str(probes),
+                    "--geometry-dir",
+                    str(geometry),
+                    "--payload-selection",
+                    str(selection),
+                    "--output",
+                    str(output),
+                ],
+                text=True,
+                capture_output=True,
+                check=False,
+            )
+
+            self.assertEqual(result.returncode, 0, result.stderr)
+            manifest = json.loads(output.read_text(encoding="utf-8"))
+            self.assertEqual(manifest["sources"]["payload_selection"], str(selection))
+            self.assertEqual(manifest["sources"]["encoder_draw_min"], "11")
+            self.assertEqual(manifest["sources"]["encoder_draw_max"], "12")
+            self.assertEqual(manifest["sources"]["draw_ordinals_filter"], "42011,42012")
+            self.assertEqual(manifest["summary"]["draw_count"], 2)
+            self.assertEqual(manifest["summary"]["encoder_draw_min"], 11)
+            self.assertEqual(manifest["summary"]["encoder_draw_max"], 12)
+            self.assertEqual(manifest["summary"]["draw_ordinals"], [42011, 42012])
+            self.assertEqual(
+                [draw["encoder_draw_index"] for draw in manifest["draws"]],
+                [11, 12],
+            )
 
 
 if __name__ == "__main__":
