@@ -10204,3 +10204,196 @@ flowchart TD
   class Owner,Reject,Next,Caveat hot
   class SpanProbe,Xcode,VisibleShape,PositionOnly,Bound,TrimSmoke,Pass known
 ```
+
+### Trim-Unused-Varyings Xcode Rejection
+
+The `DXMT9_TRIM_UNUSED_VARYINGS=1` candidate has now been validated with Xcode
+counter export and strict finalizer gates:
+
+```bash
+scripts/tools/run_3dmark05_perf_probe.sh \
+  --suffix trim-unused-varyings-gputrace-r1 \
+  --frame 60 \
+  --timeout 180 \
+  --dump-shaders \
+  --trim-unused-varyings
+
+scripts/tools/finalize_3dmark05_perf_probe.sh \
+  --suffix trim-unused-varyings-gputrace-r1 \
+  --frame 60 \
+  --top 3 \
+  --hot-gpu-share 95 \
+  --baseline-joined traces/app-d3d9-3dmark05-current-normal-gputrace-r1/analysis/frame60-xcode-dxmt-joined-summary.csv \
+  --require-top-row-key-match \
+  --require-top-pso-attribution \
+  --min-top-pso-samples-per-draw 0.90 \
+  --require-xcode-counter-coverage \
+  --require-dxmt-join-coverage \
+  --min-top-dxmt-joined-fraction 1.0 \
+  --max-top-draw-call-delta-ratio 0.05 \
+  --max-top-vertex-count-delta-ratio 0.05 \
+  --max-top-triangle-delta-ratio 0.05
+```
+
+Artifacts:
+
+```text
+traces/app-d3d9-3dmark05-trim-unused-varyings-gputrace-r1/analysis/frame60-performance.gputrace
+traces/app-d3d9-3dmark05-trim-unused-varyings-gputrace-r1/analysis/frame60-counters-xcode.csv
+traces/app-d3d9-3dmark05-trim-unused-varyings-gputrace-r1/analysis/frame60-xcode-dxmt-comparison.md
+traces/app-d3d9-3dmark05-trim-unused-varyings-gputrace-r1/analysis/frame60-xcode-dxmt-bottleneck-report.md
+traces/app-d3d9-3dmark05-trim-unused-varyings-gputrace-r1/analysis/frame60-shader-dump-report.md
+```
+
+Key result against `current-normal-gputrace-r1`:
+
+| Metric | Baseline | Trim-unused-varyings | Delta |
+|---|---:|---:|---:|
+| Total GPU | `35.456ms` | `35.475ms` | `+0.05%` |
+| Top GPU | `34.837ms` | `34.845ms` | `+0.02%` |
+| Top VS buffer write | `1627.240MiB` | `1627.361MiB` | `+0.01%` |
+| Top unexplained buffer write | `1627.596MiB` | `1627.610MiB` | `+0.00%` |
+| Top VS bytes / invocation | `1447.741B` | `1447.849B` | `+0.01%` |
+| Expected VSOut bytes / vertex | `184.000B` | `40.151B` | `-78.18%` |
+| Top VS buffer / expected VSOut | `7.868x` | `36.060x` | `+358.30%` |
+| Top draw calls | `385` | `385` | `0` |
+| Top dxmt vertices | `2,146,185` | `2,146,185` | `0` |
+| Top dxmt triangles | `715,395` | `715,395` | `0` |
+
+Per-row shape stayed comparable (`60/0`, `60/1`, `60/2` are shared top rows),
+but visible VSOut layout keys changed from broad `0xfff` to pair-live keys:
+
+| Row | GPU ms | VS write MiB | VS B/inv | VSOut key |
+|---|---:|---:|---:|---|
+| `60/2` | `20.028 -> 19.807 (-1.11%)` | `981.185 -> 981.192 (+0.00%)` | `1602.563 -> 1602.575 (+0.00%)` | `0xfff -> 0x401` |
+| `60/1` | `9.061 -> 9.562 (+5.53%)` | `421.124 -> 421.201 (+0.02%)` | `1150.883 -> 1151.094 (+0.02%)` | `0xfff -> 0x401` |
+| `60/0` | `5.748 -> 5.476 (-4.72%)` | `224.931 -> 224.968 (+0.02%)` | `1542.612 -> 1542.864 (+0.02%)` | `0xfff -> 0x701` |
+
+Interpretation:
+
+- Pair-local VSOut liveness is correct enough to preserve the frame and reduce
+  the source-visible stage-out payload, but it does not reduce the Apple
+  VS-buffer-write bucket.
+- The negative result is stronger than the earlier position-only bound: a real
+  correctness-preserving shrink from `184B` to `~40B` still leaves
+  `~1.63GiB` top VS writes unchanged.
+- Visible varying width is therefore not the first-order owner. The remaining
+  traffic is hidden vertex/tiler/parameter backend storage or compiler/backend
+  scratch that Xcode accounts under VS buffer writes.
+- The top shader rows still contain source-level `r[32]` and `outTexcoord[]`
+  scratch in MSL dumps, but because visible VSOut shrink did not move Xcode's
+  bucket, any scratch experiment must be measured as compiler/backend lowering,
+  not as ordinary D3D varying liveness.
+
+Next probe direction:
+
+1. Keep `DXMT9_TRIM_UNUSED_VARYINGS=1` available as a correctness-preserving
+   variant, but do not treat it as a performance fix for GT1.
+2. Probe compiler/backend scratch separately, for example an
+   `outTexcoord[]`/temp-array lowering experiment if it can preserve shader
+   semantics and be gated by the same Xcode comparison.
+3. Prioritize primitive/backend pressure or state-shape A/B probes:
+   row `60/2` is depth-read + alpha-blend/scissor/textured,
+   row `60/1` is opaque depth-write, and row `60/0` is opaque textured
+   depth-write. These rows keep the same geometry but differ materially in
+   backend state.
+
+```mermaid
+flowchart TD
+  Base["current-normal baseline\nVSOut key 0xfff\nexpected VSOut 184B"] --> Trim["DXMT9_TRIM_UNUSED_VARYINGS=1"]
+  Trim --> LiveKeys["pair-live VSOut keys\n60/2 0x401\n60/1 0x401\n60/0 0x701"]
+  LiveKeys --> VisibleShrink["visible payload shrinks\n184B -> 40.151B"]
+  VisibleShrink --> XcodeSame["Xcode top VS writes unchanged\n1627.240 -> 1627.361MiB"]
+  XcodeSame --> RejectVisible["reject visible VSOut width\nas first-order owner"]
+
+  RejectVisible --> Hidden["hidden vertex/tiler/parameter storage\n~1597MiB hidden estimate"]
+  RejectVisible --> Scratch["compiler/backend scratch candidate\nr[32] / outTexcoord[] lowering"]
+
+  Hidden --> StateAB["next: backend state-shape A/B\n60/2 alpha+scissor depth-read\n60/1 opaque depth-write\n60/0 opaque textured"]
+  Scratch --> ScratchAB["next: scratch-lowering A/B\nstrict Xcode gate required"]
+
+  classDef hot fill:#ffe8e8,stroke:#b64242,color:#2b0d0d
+  classDef known fill:#e8f0ff,stroke:#476cb6,color:#0d1833
+  class XcodeSame,RejectVisible,Hidden,StateAB,ScratchAB hot
+  class Base,Trim,LiveKeys,VisibleShrink,Scratch known
+```
+
+### Current Row 60/2 Large4096 Split Smoke
+
+After the trim-unused-varyings rejection, the next concrete primitive-pressure
+probe is the current-normal hot row `60/2`. Earlier split probes targeted the
+older `60/4` shape; current `frame60` top rows are `60/0`, `60/1`, and `60/2`,
+with `60/2` owning the largest VS buffer-write row and containing
+`20` `large4096` indexed triangle draws.
+
+Smoke command:
+
+```bash
+scripts/tools/run_3dmark05_perf_probe.sh \
+  --suffix split-row-60-2-large4096-smoke-r1 \
+  --frame 60 \
+  --timeout 180 \
+  --no-gputrace \
+  --split-large-indexed-draws 4096 \
+  --split-large-indexed-draws-row 60/2 \
+  --split-large-indexed-draws-class large4096
+```
+
+Artifacts:
+
+```text
+experiments/output/app-d3d9-3dmark05-split-row-60-2-large4096-smoke-r1/actual.png
+experiments/output/app-d3d9-3dmark05-split-row-60-2-large4096-smoke-r1/3dmark05-perf-summary.md
+experiments/output/app-d3d9-3dmark05-split-row-60-2-large4096-smoke-r1/3dmark05-perf-encoders.csv
+```
+
+Smoke result:
+
+| Metric | Value |
+|---|---:|
+| Status | `pass` |
+| Visual check | normal GT1 frame, not yellow/constant output |
+| Row `60/2` draw calls | `187` |
+| Row `60/2` primitives / vertices | `389,376 / 1,168,128` |
+| Split source draws | `20` |
+| Split Metal draws | `60` |
+| Split extra draws | `40` |
+| Split primitive count | `206,348` |
+| Row `60/2` large4096 alpha draws | `15` |
+| Row `60/2` large4096 scissor draws | `5` |
+
+The row-level geometry totals for `60/0`, `60/1`, and `60/2` match
+`current-normal-gputrace-r1`; only `60/2`'s selected large indexed draws are
+split. This makes it a higher-signal Xcode candidate than the historical
+`60/4` split probe because it targets the current top VS-write row directly.
+
+Expected Xcode gate:
+
+- Compare against
+  `traces/app-d3d9-3dmark05-current-normal-gputrace-r1/analysis/frame60-xcode-dxmt-joined-summary.csv`.
+- Require row-key match and Xcode/dxmt counter coverage.
+- Do not require identical draw calls for `60/2`; the probe intentionally
+  expands `20` source draws into `60` Metal draws while preserving primitive and
+  vertex totals.
+- Treat it as a primitive-pressure diagnostic. If VS buffer-write remains
+  unchanged, current-row draw-size split is rejected and the remaining
+  primitive/backend hypothesis must move to order/locality or Apple backend
+  behavior that cannot be reduced by source draw splitting.
+
+```mermaid
+flowchart TD
+  Current["current-normal hot rows\n60/0 60/1 60/2"] --> Owner["largest row owner\n60/2 depth-read + alpha/scissor/textured"]
+  Owner --> SplitSmoke["split row 60/2 large4096\n20 source draws"]
+  SplitSmoke --> Scope["scope exact\n20 source -> 60 metal\n40 extra draws\n206348 prims"]
+  Scope --> Stable["row geometry totals stable\n389376 prims\n1168128 vertices"]
+  Stable --> XcodeNext["next Xcode candidate\nprimitive-pressure A/B"]
+  XcodeNext --> Gate["gate by row keys + geometry totals\nallow draw-count delta"]
+  Gate --> Decide{"VS buffer write moves?"}
+  Decide -- "yes" --> PrimitiveOwner["primitive/draw-size pressure implicated"]
+  Decide -- "no" --> RejectSplit["reject current-row draw-size split\ncontinue order/locality or backend-only probes"]
+
+  classDef hot fill:#ffe8e8,stroke:#b64242,color:#2b0d0d
+  classDef known fill:#e8f0ff,stroke:#476cb6,color:#0d1833
+  class Owner,XcodeNext,PrimitiveOwner,RejectSplit hot
+  class Current,SplitSmoke,Scope,Stable,Gate,Decide known
+```
