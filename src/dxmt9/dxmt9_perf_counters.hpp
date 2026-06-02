@@ -658,6 +658,8 @@ struct EncoderBreakdown {
   std::uint64_t probeScissorRectDraws = 0;
   std::uint64_t probeScissorRectSkipped = 0;
   std::uint64_t probeScissorRectAreaDeltaPixels = 0;
+  std::uint64_t probeDisableDepthWriteDraws = 0;
+  std::uint64_t probeDepthFuncAlwaysDraws = 0;
   std::uint64_t indexedVertexReuseSamples = 0;
   std::uint64_t indexedVertexReuseSkipped = 0;
   std::uint64_t indexedVertexReferenceCount = 0;

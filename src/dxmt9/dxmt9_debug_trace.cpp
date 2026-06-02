@@ -498,9 +498,63 @@ bool probeDisableDepthWrite() {
   return v;
 }
 
+IndexedTriangleClassFilter probeDisableDepthWriteClassFilter() {
+  static const IndexedTriangleClassFilter filter =
+      makeIndexedTriangleClassFilter(
+          util::getenvString("DXMT9_PROBE_DISABLE_DEPTH_WRITE_CLASS"));
+  return filter;
+}
+
+IndexedTriangleClassFilterList probeDisableDepthWriteClassFilters() {
+  static const IndexedTriangleClassFilterList filters =
+      makeIndexedTriangleClassFilterList(
+          util::getenvString("DXMT9_PROBE_DISABLE_DEPTH_WRITE_CLASSES"));
+  return filters;
+}
+
+RenderEncoderSelector probeDisableDepthWriteRow() {
+  static const RenderEncoderSelector selector =
+      parseRenderEncoderSelector("DXMT9_PROBE_DISABLE_DEPTH_WRITE_ROW");
+  return selector;
+}
+
+RenderEncoderSelectorList probeDisableDepthWriteRows() {
+  static const RenderEncoderSelectorList selectors =
+      makeRenderEncoderSelectorList(
+          util::getenvString("DXMT9_PROBE_DISABLE_DEPTH_WRITE_ROWS"));
+  return selectors;
+}
+
 bool probeDepthFuncAlways() {
   static const bool v = util::getenvFlag("DXMT9_PROBE_DEPTH_FUNC_ALWAYS");
   return v;
+}
+
+IndexedTriangleClassFilter probeDepthFuncAlwaysClassFilter() {
+  static const IndexedTriangleClassFilter filter =
+      makeIndexedTriangleClassFilter(
+          util::getenvString("DXMT9_PROBE_DEPTH_FUNC_ALWAYS_CLASS"));
+  return filter;
+}
+
+IndexedTriangleClassFilterList probeDepthFuncAlwaysClassFilters() {
+  static const IndexedTriangleClassFilterList filters =
+      makeIndexedTriangleClassFilterList(
+          util::getenvString("DXMT9_PROBE_DEPTH_FUNC_ALWAYS_CLASSES"));
+  return filters;
+}
+
+RenderEncoderSelector probeDepthFuncAlwaysRow() {
+  static const RenderEncoderSelector selector =
+      parseRenderEncoderSelector("DXMT9_PROBE_DEPTH_FUNC_ALWAYS_ROW");
+  return selector;
+}
+
+RenderEncoderSelectorList probeDepthFuncAlwaysRows() {
+  static const RenderEncoderSelectorList selectors =
+      makeRenderEncoderSelectorList(
+          util::getenvString("DXMT9_PROBE_DEPTH_FUNC_ALWAYS_ROWS"));
+  return selectors;
 }
 
 CullModeOverride probeForceCullMode() {

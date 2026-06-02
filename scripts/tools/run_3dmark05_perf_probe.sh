@@ -62,7 +62,15 @@ disable_fog=0
 force_texture_white=0
 probe_disable_alpha_blend=0
 probe_disable_depth_write=0
+probe_disable_depth_write_row=
+probe_disable_depth_write_rows=
+probe_disable_depth_write_class=
+probe_disable_depth_write_classes=
 probe_depth_func_always=0
+probe_depth_func_always_row=
+probe_depth_func_always_rows=
+probe_depth_func_always_class=
+probe_depth_func_always_classes=
 force_visible=0
 compare_baseline_output=${DXMT_3DMARK05_COMPARE_BASELINE_OUTPUT:-}
 compare_baseline_joined=${DXMT_3DMARK05_COMPARE_BASELINE_JOINED:-}
@@ -287,9 +295,31 @@ Options:
                       Set DXMT9_PROBE_DISABLE_ALPHA_BLEND=1 for blend state A/B
   --probe-disable-depth-write
                       Set DXMT9_PROBE_DISABLE_DEPTH_WRITE=1 for depth-write A/B
+  --probe-disable-depth-write-row SEQ/ENC
+                      Set DXMT9_PROBE_DISABLE_DEPTH_WRITE_ROW=SEQ/ENC and
+                      constrain depth-write-off to selected indexed triangle draws
+  --probe-disable-depth-write-rows ROWS
+                      Set DXMT9_PROBE_DISABLE_DEPTH_WRITE_ROWS=ROWS
+  --probe-disable-depth-write-class CLASS
+                      Set DXMT9_PROBE_DISABLE_DEPTH_WRITE_CLASS=CLASS.
+                      Accepted values match split-large indexed filters
+  --probe-disable-depth-write-classes CLASSES
+                      Set DXMT9_PROBE_DISABLE_DEPTH_WRITE_CLASSES=CLASSES.
+                      Values are ANDed, e.g. large4096,alpha-blend
   --probe-depth-func-always
                       Set DXMT9_PROBE_DEPTH_FUNC_ALWAYS=1 to keep depth writes
                       but force the depth compare function to Always
+  --probe-depth-func-always-row SEQ/ENC
+                      Set DXMT9_PROBE_DEPTH_FUNC_ALWAYS_ROW=SEQ/ENC and
+                      constrain depth-func-always to selected indexed triangle draws
+  --probe-depth-func-always-rows ROWS
+                      Set DXMT9_PROBE_DEPTH_FUNC_ALWAYS_ROWS=ROWS
+  --probe-depth-func-always-class CLASS
+                      Set DXMT9_PROBE_DEPTH_FUNC_ALWAYS_CLASS=CLASS. Accepted
+                      values match split-large indexed filters
+  --probe-depth-func-always-classes CLASSES
+                      Set DXMT9_PROBE_DEPTH_FUNC_ALWAYS_CLASSES=CLASSES.
+                      Values are ANDed, e.g. opaque-depth-write,large4096
   --force-visible     Set DXMT_DEBUG_FORCE_VISIBLE=1 for visibility/state A/B
   --compare-baseline-output PATH
                       After the run, compare result.json counters against this baseline output dir/result.json
@@ -619,9 +649,49 @@ while (($#)); do
       probe_disable_depth_write=1
       shift
       ;;
+    --probe-disable-depth-write-row)
+      probe_disable_depth_write=1
+      probe_disable_depth_write_row=${2:?missing value for --probe-disable-depth-write-row}
+      shift 2
+      ;;
+    --probe-disable-depth-write-rows)
+      probe_disable_depth_write=1
+      probe_disable_depth_write_rows=${2:?missing value for --probe-disable-depth-write-rows}
+      shift 2
+      ;;
+    --probe-disable-depth-write-class)
+      probe_disable_depth_write=1
+      probe_disable_depth_write_class=${2:?missing value for --probe-disable-depth-write-class}
+      shift 2
+      ;;
+    --probe-disable-depth-write-classes)
+      probe_disable_depth_write=1
+      probe_disable_depth_write_classes=${2:?missing value for --probe-disable-depth-write-classes}
+      shift 2
+      ;;
     --probe-depth-func-always)
       probe_depth_func_always=1
       shift
+      ;;
+    --probe-depth-func-always-row)
+      probe_depth_func_always=1
+      probe_depth_func_always_row=${2:?missing value for --probe-depth-func-always-row}
+      shift 2
+      ;;
+    --probe-depth-func-always-rows)
+      probe_depth_func_always=1
+      probe_depth_func_always_rows=${2:?missing value for --probe-depth-func-always-rows}
+      shift 2
+      ;;
+    --probe-depth-func-always-class)
+      probe_depth_func_always=1
+      probe_depth_func_always_class=${2:?missing value for --probe-depth-func-always-class}
+      shift 2
+      ;;
+    --probe-depth-func-always-classes)
+      probe_depth_func_always=1
+      probe_depth_func_always_classes=${2:?missing value for --probe-depth-func-always-classes}
+      shift 2
       ;;
     --force-visible)
       force_visible=1
@@ -1251,8 +1321,40 @@ if (( probe_disable_depth_write )); then
   env_args+=("DXMT9_PROBE_DISABLE_DEPTH_WRITE=1")
 fi
 
+if [[ -n "$probe_disable_depth_write_row" ]]; then
+  env_args+=("DXMT9_PROBE_DISABLE_DEPTH_WRITE_ROW=$probe_disable_depth_write_row")
+fi
+
+if [[ -n "$probe_disable_depth_write_rows" ]]; then
+  env_args+=("DXMT9_PROBE_DISABLE_DEPTH_WRITE_ROWS=$probe_disable_depth_write_rows")
+fi
+
+if [[ -n "$probe_disable_depth_write_class" ]]; then
+  env_args+=("DXMT9_PROBE_DISABLE_DEPTH_WRITE_CLASS=$probe_disable_depth_write_class")
+fi
+
+if [[ -n "$probe_disable_depth_write_classes" ]]; then
+  env_args+=("DXMT9_PROBE_DISABLE_DEPTH_WRITE_CLASSES=$probe_disable_depth_write_classes")
+fi
+
 if (( probe_depth_func_always )); then
   env_args+=("DXMT9_PROBE_DEPTH_FUNC_ALWAYS=1")
+fi
+
+if [[ -n "$probe_depth_func_always_row" ]]; then
+  env_args+=("DXMT9_PROBE_DEPTH_FUNC_ALWAYS_ROW=$probe_depth_func_always_row")
+fi
+
+if [[ -n "$probe_depth_func_always_rows" ]]; then
+  env_args+=("DXMT9_PROBE_DEPTH_FUNC_ALWAYS_ROWS=$probe_depth_func_always_rows")
+fi
+
+if [[ -n "$probe_depth_func_always_class" ]]; then
+  env_args+=("DXMT9_PROBE_DEPTH_FUNC_ALWAYS_CLASS=$probe_depth_func_always_class")
+fi
+
+if [[ -n "$probe_depth_func_always_classes" ]]; then
+  env_args+=("DXMT9_PROBE_DEPTH_FUNC_ALWAYS_CLASSES=$probe_depth_func_always_classes")
 fi
 
 if (( force_visible )); then

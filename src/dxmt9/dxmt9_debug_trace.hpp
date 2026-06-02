@@ -165,9 +165,45 @@ bool probeDisableAlphaBlend();
 // Env: DXMT9_PROBE_DISABLE_DEPTH_WRITE.
 bool probeDisableDepthWrite();
 
+// Optional class filter for DXMT9_PROBE_DISABLE_DEPTH_WRITE. Accepted values
+// match DXMT9_SPLIT_LARGE_INDEXED_DRAWS_CLASS.
+// Env: DXMT9_PROBE_DISABLE_DEPTH_WRITE_CLASS.
+IndexedTriangleClassFilter probeDisableDepthWriteClassFilter();
+
+// Optional AND class-list filter for DXMT9_PROBE_DISABLE_DEPTH_WRITE.
+// Env: DXMT9_PROBE_DISABLE_DEPTH_WRITE_CLASSES.
+IndexedTriangleClassFilterList probeDisableDepthWriteClassFilters();
+
+// Optional selector for DXMT9_PROBE_DISABLE_DEPTH_WRITE. Format is
+// "<seq>/<encoder>".
+// Env: DXMT9_PROBE_DISABLE_DEPTH_WRITE_ROW.
+RenderEncoderSelector probeDisableDepthWriteRow();
+
+// Optional selector list for DXMT9_PROBE_DISABLE_DEPTH_WRITE.
+// Env: DXMT9_PROBE_DISABLE_DEPTH_WRITE_ROWS.
+RenderEncoderSelectorList probeDisableDepthWriteRows();
+
 // Diagnostic render-state A/B: keep depth enable/write state but force the
 // depth compare function to Always. Env: DXMT9_PROBE_DEPTH_FUNC_ALWAYS.
 bool probeDepthFuncAlways();
+
+// Optional class filter for DXMT9_PROBE_DEPTH_FUNC_ALWAYS. Accepted values
+// match DXMT9_SPLIT_LARGE_INDEXED_DRAWS_CLASS.
+// Env: DXMT9_PROBE_DEPTH_FUNC_ALWAYS_CLASS.
+IndexedTriangleClassFilter probeDepthFuncAlwaysClassFilter();
+
+// Optional AND class-list filter for DXMT9_PROBE_DEPTH_FUNC_ALWAYS.
+// Env: DXMT9_PROBE_DEPTH_FUNC_ALWAYS_CLASSES.
+IndexedTriangleClassFilterList probeDepthFuncAlwaysClassFilters();
+
+// Optional selector for DXMT9_PROBE_DEPTH_FUNC_ALWAYS. Format is
+// "<seq>/<encoder>".
+// Env: DXMT9_PROBE_DEPTH_FUNC_ALWAYS_ROW.
+RenderEncoderSelector probeDepthFuncAlwaysRow();
+
+// Optional selector list for DXMT9_PROBE_DEPTH_FUNC_ALWAYS.
+// Env: DXMT9_PROBE_DEPTH_FUNC_ALWAYS_ROWS.
+RenderEncoderSelectorList probeDepthFuncAlwaysRows();
 
 // Diagnostic-only: force the Metal cull mode for selected indexed
 // triangle-list draws while preserving the rest of the render state.

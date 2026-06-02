@@ -10519,3 +10519,113 @@ flowchart TD
   class VsSame,HiddenSame,Reject,Hidden,BackendAB,MiniReplay hot
   class Base,Split,DrawExpand,GeometryStable,Xcode,GpuBetter,Secondary known
 ```
+
+### Row-Scoped Depth-State Probe Harness
+
+The split-large rejection leaves backend-state shape as the next high-signal
+A/B axis. The existing `DXMT9_PROBE_DISABLE_DEPTH_WRITE` and
+`DXMT9_PROBE_DEPTH_FUNC_ALWAYS` knobs were global, so they could not isolate
+the current hot row `60/2` without perturbing unrelated rows. The probe harness
+now mirrors the `force-cull`/`scissor-rect` selector model for depth state:
+
+- `DXMT9_PROBE_DISABLE_DEPTH_WRITE_ROW(S)` and
+  `DXMT9_PROBE_DISABLE_DEPTH_WRITE_CLASS(ES)`
+- `DXMT9_PROBE_DEPTH_FUNC_ALWAYS_ROW(S)` and
+  `DXMT9_PROBE_DEPTH_FUNC_ALWAYS_CLASS(ES)`
+- encoder counters:
+  `probe_disable_depth_write_draws` and
+  `probe_depth_func_always_draws`
+
+When no row/class selector is provided, the legacy global behavior remains.
+When a selector is provided, `makeDepthStencilKey()` leaves the base state
+intact and `encodeDraw()` applies the depth override only to matching indexed
+triangle-list draws before binding Metal depth-stencil state.
+Depth-state probe runs also disable draw-run base-state bind skipping inside
+`encodeDraw()` so a selected draw cannot inherit stale depth state and an
+unselected draw cannot accidentally keep a selected draw's override.
+
+Smoke command:
+
+```bash
+scripts/tools/run_3dmark05_perf_probe.sh \
+  --suffix depth-write-row-60-2-large4096-alpha-smoke-r1 \
+  --frame 60 \
+  --timeout 180 \
+  --no-gputrace \
+  --probe-disable-depth-write-row 60/2 \
+  --probe-disable-depth-write-classes large4096,alpha-blend
+```
+
+Artifacts:
+
+```text
+experiments/output/app-d3d9-3dmark05-depth-write-row-60-2-large4096-alpha-smoke-r1/actual.png
+experiments/output/app-d3d9-3dmark05-depth-write-row-60-2-large4096-alpha-smoke-r1/3dmark05-perf-summary.md
+experiments/output/app-d3d9-3dmark05-depth-write-row-60-2-large4096-alpha-smoke-r1/3dmark05-perf-encoders.csv
+```
+
+The wrapper did not exit cleanly after timeout and the run was finalized from
+`dxmt9.log`, so the summary status is `partial-log`. Frame `60` still contains
+the target encoder rows and is sufficient for scope validation.
+
+| Row | Draws | Probe depth-write-off | Large4096 alpha | Large4096 scissor | Triangles | Vertices |
+|---|---:|---:|---:|---:|---:|---:|
+| `60/0` | `42` | `0` | `0` | `0` | `97,294` | `291,882` |
+| `60/1` | `156` | `0` | `0` | `0` | `228,725` | `686,175` |
+| `60/2` | `187` | `15` | `15` | `5` | `389,376` | `1,168,128` |
+
+Visual check: `actual.png` is a normal GT1 frame, not yellow/constant output.
+The selected depth-write-off scope therefore hits only the intended
+`60/2 large4096 alpha-blend` subset and preserves the row-level geometry
+totals needed for an Xcode backend-state A/B.
+
+Next Xcode candidate:
+
+```bash
+scripts/tools/run_3dmark05_perf_probe.sh \
+  --suffix depth-write-row-60-2-large4096-alpha-gputrace-r1 \
+  --frame 60 \
+  --timeout 180 \
+  --probe-disable-depth-write-row 60/2 \
+  --probe-disable-depth-write-classes large4096,alpha-blend
+```
+
+Expected finalizer gate:
+
+```bash
+scripts/tools/finalize_3dmark05_perf_probe.sh \
+  --suffix depth-write-row-60-2-large4096-alpha-gputrace-r1 \
+  --frame 60 \
+  --top 3 \
+  --hot-gpu-share 95 \
+  --baseline-joined traces/app-d3d9-3dmark05-current-normal-gputrace-r1/analysis/frame60-xcode-dxmt-joined-summary.csv \
+  --require-top-row-key-match \
+  --require-top-pso-attribution \
+  --min-top-pso-samples-per-draw 0.90 \
+  --require-xcode-counter-coverage \
+  --require-dxmt-join-coverage \
+  --min-top-dxmt-joined-fraction 1.0 \
+  --max-top-draw-call-delta-ratio 0.01 \
+  --max-top-vertex-count-delta-ratio 0.05 \
+  --max-top-triangle-delta-ratio 0.05
+```
+
+```mermaid
+flowchart TD
+  RejectSplit["draw-size split rejected\nVS write unchanged"] --> StateAB["backend-state A/B"]
+  StateAB --> Scoped["row/class scoped depth probes"]
+  Scoped --> Target["60/2 + large4096 + alpha-blend"]
+  Target --> Smoke["no-gputrace smoke\n15 selected draws"]
+  Smoke --> Geometry["row geometry stable\n389376 tris / 1168128 verts"]
+  Smoke --> Visual["visual non-constant\nnormal GT1 frame"]
+  Geometry --> XcodeNext["next: Xcode gputrace + counters"]
+  Visual --> XcodeNext
+  XcodeNext --> Decide{"VS buffer write moves?"}
+  Decide -- "yes" --> StateOwner["depth/write state shape implicated"]
+  Decide -- "no" --> RejectState["reject this state bit\ntry depth-func/cull/scissor or mini replay"]
+
+  classDef hot fill:#ffe8e8,stroke:#b64242,color:#2b0d0d
+  classDef known fill:#e8f0ff,stroke:#476cb6,color:#0d1833
+  class StateAB,Target,XcodeNext,StateOwner,RejectState hot
+  class RejectSplit,Scoped,Smoke,Geometry,Visual,Decide known
+```

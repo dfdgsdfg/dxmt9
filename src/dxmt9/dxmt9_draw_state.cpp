@@ -51,6 +51,26 @@ using core::RS_Z_WRITE_ENABLE;
 
 namespace {
 
+bool probeDisableDepthWriteIsScoped() {
+  return debug::probeDisableDepthWriteRow().enabled ||
+         debug::probeDisableDepthWriteRows().enabled ||
+         debug::probeDisableDepthWriteClassFilter() !=
+             debug::IndexedTriangleClassFilter::Any ||
+         debug::probeDisableDepthWriteClassFilters().count != 0;
+}
+
+bool probeDepthFuncAlwaysIsScoped() {
+  return debug::probeDepthFuncAlwaysRow().enabled ||
+         debug::probeDepthFuncAlwaysRows().enabled ||
+         debug::probeDepthFuncAlwaysClassFilter() !=
+             debug::IndexedTriangleClassFilter::Any ||
+         debug::probeDepthFuncAlwaysClassFilters().count != 0;
+}
+
+}  // namespace
+
+namespace {
+
 std::array<f32, 4> normalizedD3DColor(u32 raw) {
   return {
       static_cast<f32>((raw >> 16) & 0xffu) / 255.0f,
@@ -280,10 +300,14 @@ pipeline::DepthStencilKey makeDepthStencilKey(core::FlatDrawStateView state) {
     return key;
   }
   key.depthEnable = core::flatStateOr(rs, RS_Z_ENABLE, 0u) != 0;
-  key.depthWrite = key.depthEnable && !debug::probeDisableDepthWrite() &&
+  const bool globalDisableDepthWrite =
+      debug::probeDisableDepthWrite() && !probeDisableDepthWriteIsScoped();
+  const bool globalDepthFuncAlways =
+      debug::probeDepthFuncAlways() && !probeDepthFuncAlwaysIsScoped();
+  key.depthWrite = key.depthEnable && !globalDisableDepthWrite &&
                    core::flatStateOr(rs, RS_Z_WRITE_ENABLE, 0u) != 0;
   key.depthFunc =
-      key.depthEnable && !debug::probeDepthFuncAlways()
+      key.depthEnable && !globalDepthFuncAlways
           ? core::flatStateOr(rs, RS_Z_FUNC, static_cast<u32>(CompareFunc::Always))
           : static_cast<u32>(CompareFunc::Always);
   key.front.enabled = core::flatStateOr(rs, RS_STENCIL_ENABLE, 0u) != 0;

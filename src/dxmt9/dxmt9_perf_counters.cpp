@@ -3134,6 +3134,8 @@ void emitEncoderBreakdown(const EncoderBreakdown& b) {
       "probe_scissor_rect_draws=%llu "
       "probe_scissor_rect_skipped=%llu "
       "probe_scissor_rect_area_delta_pixels=%llu "
+      "probe_disable_depth_write_draws=%llu "
+      "probe_depth_func_always_draws=%llu "
       "indexed_vertex_reuse_samples=%llu "
       "indexed_vertex_reuse_skipped=%llu "
       "indexed_vertex_reference_count=%llu "
@@ -3358,6 +3360,8 @@ void emitEncoderBreakdown(const EncoderBreakdown& b) {
       static_cast<unsigned long long>(b.probeScissorRectDraws),
       static_cast<unsigned long long>(b.probeScissorRectSkipped),
       static_cast<unsigned long long>(b.probeScissorRectAreaDeltaPixels),
+      static_cast<unsigned long long>(b.probeDisableDepthWriteDraws),
+      static_cast<unsigned long long>(b.probeDepthFuncAlwaysDraws),
       static_cast<unsigned long long>(b.indexedVertexReuseSamples),
       static_cast<unsigned long long>(b.indexedVertexReuseSkipped),
       static_cast<unsigned long long>(b.indexedVertexReferenceCount),

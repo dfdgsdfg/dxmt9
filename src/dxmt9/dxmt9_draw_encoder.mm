@@ -3020,6 +3020,18 @@ bool forceCullModeProbeRowMatches(const ActiveEncoderBreakdown* encoderBreakdown
                                        debug::probeForceCullModeRows());
 }
 
+bool disableDepthWriteProbeRowMatches(const ActiveEncoderBreakdown* encoderBreakdown) {
+  return renderEncoderSelectionMatches(encoderBreakdown,
+                                       debug::probeDisableDepthWriteRow(),
+                                       debug::probeDisableDepthWriteRows());
+}
+
+bool depthFuncAlwaysProbeRowMatches(const ActiveEncoderBreakdown* encoderBreakdown) {
+  return renderEncoderSelectionMatches(encoderBreakdown,
+                                       debug::probeDepthFuncAlwaysRow(),
+                                       debug::probeDepthFuncAlwaysRows());
+}
+
 WMTCullMode toWmtCullMode(debug::CullModeOverride mode,
                           WMTCullMode fallback) noexcept {
   switch (mode) {
@@ -3155,6 +3167,46 @@ bool forceCullModeProbeClassMatches(u32 primitiveCount,
                                      viewport,
                                      fillMode) &&
          indexedTriangleClassMatches(debug::probeForceCullModeClassFilters(),
+                                     primitiveCount,
+                                     textureMask,
+                                     renderStates,
+                                     viewport,
+                                     fillMode);
+}
+
+bool disableDepthWriteProbeClassMatches(
+    u32 primitiveCount,
+    u32 textureMask,
+    const core::FlatStateSet<core::kMaxStateSlots>& renderStates,
+    const core::ViewportScissor& viewport,
+    WMTTriangleFillMode fillMode) {
+  return indexedTriangleClassMatches(debug::probeDisableDepthWriteClassFilter(),
+                                     primitiveCount,
+                                     textureMask,
+                                     renderStates,
+                                     viewport,
+                                     fillMode) &&
+         indexedTriangleClassMatches(debug::probeDisableDepthWriteClassFilters(),
+                                     primitiveCount,
+                                     textureMask,
+                                     renderStates,
+                                     viewport,
+                                     fillMode);
+}
+
+bool depthFuncAlwaysProbeClassMatches(
+    u32 primitiveCount,
+    u32 textureMask,
+    const core::FlatStateSet<core::kMaxStateSlots>& renderStates,
+    const core::ViewportScissor& viewport,
+    WMTTriangleFillMode fillMode) {
+  return indexedTriangleClassMatches(debug::probeDepthFuncAlwaysClassFilter(),
+                                     primitiveCount,
+                                     textureMask,
+                                     renderStates,
+                                     viewport,
+                                     fillMode) &&
+         indexedTriangleClassMatches(debug::probeDepthFuncAlwaysClassFilters(),
                                      primitiveCount,
                                      textureMask,
                                      renderStates,
@@ -4060,17 +4112,69 @@ bool encodeDraw(EncodeContext& ctx,
     }
     return false;
   }
-  if (skipBaseStateBind) {
+  const bool depthStateProbeRequested =
+      debug::probeDisableDepthWrite() || debug::probeDepthFuncAlways();
+  const bool effectiveSkipBaseStateBind =
+      skipBaseStateBind && !depthStateProbeRequested;
+  if (effectiveSkipBaseStateBind) {
     recordPsoAttributionForDraw(encoderBreakdown, drawState, ctx.pool, renderPsoHandle,
                                 tileFfpMode, argbufHybridMode,
                                 argbufResourceArray);
   }
+  std::optional<dxmt9::ffp::FixedFunctionVertexLayout> ffLayout;
+  bool fixedFunctionPath = false;
+  {
+    PerfScope fvfDecodeScope(perf::countEncodeDrawFvfDecodeCpuTime);
+    ffLayout = decodeFixedFunctionVertexLayout(vertexDecl);
+    fixedFunctionPath = drawUsesFixedFunctionPath(drawState, static_cast<bool>(ffLayout));
+  }
+  const u32 primitiveCount = std::max<u32>(1, pv.primitiveCount);
+  const uint64_t vertexCount =
+      static_cast<uint64_t>(std::max(1u, primitiveVertexCount(pv.primitiveType, primitiveCount)));
+  const bool indexedDraw = pv.indexed && (hot.indexBuffer || !pv.userIndexData.empty());
+  const auto primitiveType = toPrimitiveType(pv.primitiveType);
+  const bool preTransformed = ffLayout && ffLayout->preTransformed;
+  const auto fillMode = triangleFillModeFromRenderState(hot.renderStates);
+  const bool indexedTriangleDraw =
+      indexedDraw && pv.primitiveType == core::PrimitiveType::TriangleList;
+  const bool disableDepthWriteProbeApplied =
+      debug::probeDisableDepthWrite() &&
+      indexedTriangleDraw &&
+      disableDepthWriteProbeRowMatches(encoderBreakdown) &&
+      disableDepthWriteProbeClassMatches(primitiveCount,
+                                         hot.textureMask,
+                                         hot.renderStates,
+                                         hot.viewport,
+                                         fillMode);
+  const bool depthFuncAlwaysProbeApplied =
+      debug::probeDepthFuncAlways() &&
+      indexedTriangleDraw &&
+      depthFuncAlwaysProbeRowMatches(encoderBreakdown) &&
+      depthFuncAlwaysProbeClassMatches(primitiveCount,
+                                       hot.textureMask,
+                                       hot.renderStates,
+                                       hot.viewport,
+                                       fillMode);
+  if (encoderBreakdown) {
+    if (disableDepthWriteProbeApplied) {
+      ++encoderBreakdown->stats.probeDisableDepthWriteDraws;
+    }
+    if (depthFuncAlwaysProbeApplied) {
+      ++encoderBreakdown->stats.probeDepthFuncAlwaysDraws;
+    }
+  }
   // Phase 3-E: pipeline lookup + depth state + setRenderPipelineState
   // are BaseDrawState-only and survive across iterations of a
   // Kind::DrawRun on the Metal render encoder. Skip on iter 2..N.
-  if (!skipBaseStateBind) {
+  if (!effectiveSkipBaseStateBind) {
     PerfScope pipelineLookupScope(perf::countEncodeDrawPipelineLookupCpuTime);
-    const auto depthKey = makeDepthStencilKey(drawState);
+    auto depthKey = makeDepthStencilKey(drawState);
+    if (disableDepthWriteProbeApplied) {
+      depthKey.depthWrite = false;
+    }
+    if (depthFuncAlwaysProbeApplied) {
+      depthKey.depthFunc = static_cast<u32>(core::CompareFunc::Always);
+    }
     const std::uint8_t stencilRef = state::computeStencilRef(drawState);
     // R-BACK-13.3: pass `tileFfpMode` through so the cache returns the
     // tile-stage MTLRenderPipelineState (built via
@@ -4599,27 +4703,13 @@ bool encodeDraw(EncodeContext& ctx,
       ffpVsBound = true;
     }
   };
-  std::optional<dxmt9::ffp::FixedFunctionVertexLayout> ffLayout;
-  bool fixedFunctionPath = false;
-  {
-    PerfScope fvfDecodeScope(perf::countEncodeDrawFvfDecodeCpuTime);
-    ffLayout = decodeFixedFunctionVertexLayout(vertexDecl);
-    fixedFunctionPath = drawUsesFixedFunctionPath(drawState, static_cast<bool>(ffLayout));
-  }
-  const u32 primitiveCount = std::max<u32>(1, pv.primitiveCount);
-  const uint64_t vertexCount =
-      static_cast<uint64_t>(std::max(1u, primitiveVertexCount(pv.primitiveType, primitiveCount)));
-  const bool indexedDraw = pv.indexed && (hot.indexBuffer || !pv.userIndexData.empty());
-  const auto primitiveType = toPrimitiveType(pv.primitiveType);
   bool expandedIndexedDraw = false;
-  const bool preTransformed = ffLayout && ffLayout->preTransformed;
   const bool scissorDisabled = debug::disableScissor();
   const u32 cullState = core::flatStateOr(
       hot.renderStates, RS_CULL_MODE, static_cast<u32>(core::CullMode::Ccw));
   const auto requestedCullMode = (preTransformed || debug::disableCull())
                                      ? WMTCullModeNone
                                      : static_cast<WMTCullMode>(toCullMode(cullState));
-  const auto fillMode = triangleFillModeFromRenderState(hot.renderStates);
   WMTCullMode effectiveCullMode = applyDebugCullOverride(requestedCullMode);
   const auto forceCullModeProbe = debug::probeForceCullMode();
   if (forceCullModeProbe != debug::CullModeOverride::Disabled &&
@@ -4704,7 +4794,7 @@ bool encodeDraw(EncodeContext& ctx,
   }
   bindFfpVsIfDirty();
   // Phase 3-E: viewport / scissor / cull are BaseDrawState-only.
-  if (!skipBaseStateBind) {
+  if (!effectiveSkipBaseStateBind) {
     PerfScope streamBindViewportScope(perf::countEncodeDrawStreamBindCpuTime);
     if (bindingPacketHasRasterTarget) {
       recordedSetViewport(ctx, encoder, bindingPacket.raster.viewport);
@@ -5269,7 +5359,7 @@ bool encodeDraw(EncodeContext& ctx,
   // R-BACK-12.24 — texture/sampler resources travel on the direct render
   // encoder lane (the validated Stage 1 binding path) regardless of
   // whether the constant argbuf hybrid is active.
-  if (!skipBaseStateBind) {
+  if (!effectiveSkipBaseStateBind) {
     PerfScope streamBindTexScope(perf::countEncodeDrawStreamBindCpuTime);
     if (!bindingPacket.fragmentTextureSamplers.empty()) {
       struct ResolvedFragmentTextureSamplerBinding {
