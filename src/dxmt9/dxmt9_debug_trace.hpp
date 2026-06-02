@@ -55,7 +55,16 @@ enum class IndexedTriangleClassFilter : std::uint8_t {
   Large4096,
 };
 
+struct IndexedTriangleClassFilterList {
+  static constexpr std::size_t MaxFilters = 8;
+
+  std::array<IndexedTriangleClassFilter, MaxFilters> filters = {};
+  std::size_t count = 0;
+};
+
 IndexedTriangleClassFilter makeIndexedTriangleClassFilter(
+    std::string_view spec) noexcept;
+IndexedTriangleClassFilterList makeIndexedTriangleClassFilterList(
     std::string_view spec) noexcept;
 
 DrawSeqRange makeDrawSeqRange(std::optional<u64> min, std::optional<u64> max) noexcept;
@@ -169,6 +178,12 @@ std::uint32_t splitLargeIndexedDrawPrimitiveLimit();
 // Env: DXMT9_SPLIT_LARGE_INDEXED_DRAWS_CLASS.
 IndexedTriangleClassFilter splitLargeIndexedDrawClassFilter();
 
+// Optional AND class-list filter for DXMT9_SPLIT_LARGE_INDEXED_DRAWS. Accepted
+// values match DXMT9_SPLIT_LARGE_INDEXED_DRAWS_CLASS and may be separated by
+// comma, semicolon, space, '+', or '&'. Example: "large4096,alpha-blend".
+// Env: DXMT9_SPLIT_LARGE_INDEXED_DRAWS_CLASSES.
+IndexedTriangleClassFilterList splitLargeIndexedDrawClassFilters();
+
 // Optional selector for DXMT9_SPLIT_LARGE_INDEXED_DRAWS. Format is
 // "<seq>/<encoder>", for example "60/3".
 // Env: DXMT9_SPLIT_LARGE_INDEXED_DRAWS_ROW.
@@ -202,6 +217,12 @@ bool probeReverseNonOpaqueIndexedTriangles();
 // textured, and large4096.
 // Env: DXMT9_PROBE_REVERSE_INDEXED_TRIANGLES_CLASS.
 IndexedTriangleClassFilter probeReverseIndexedTrianglesClassFilter();
+
+// Optional AND class-list filter for reverse-indexed-triangle probes. Accepted
+// values match DXMT9_PROBE_REVERSE_INDEXED_TRIANGLES_CLASS and may be separated
+// by comma, semicolon, space, '+', or '&'. Example: "large4096,scissor".
+// Env: DXMT9_PROBE_REVERSE_INDEXED_TRIANGLES_CLASSES.
+IndexedTriangleClassFilterList probeReverseIndexedTrianglesClassFilters();
 
 // Optional selector for reverse-indexed-triangle probes. Format is
 // "<seq>/<encoder>", for example "60/3".

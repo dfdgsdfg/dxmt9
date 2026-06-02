@@ -18,6 +18,10 @@ bool isListSeparator(char ch) noexcept {
   return ch == ',' || ch == ';' || isSpace(ch);
 }
 
+bool isClassListSeparator(char ch) noexcept {
+  return isListSeparator(ch) || ch == '+' || ch == '&';
+}
+
 void skipSpaces(std::string_view spec, std::size_t& pos) noexcept {
   while (pos < spec.size() && isSpace(spec[pos])) {
     ++pos;
@@ -26,6 +30,12 @@ void skipSpaces(std::string_view spec, std::size_t& pos) noexcept {
 
 void skipListSeparators(std::string_view spec, std::size_t& pos) noexcept {
   while (pos < spec.size() && isListSeparator(spec[pos])) {
+    ++pos;
+  }
+}
+
+void skipClassListSeparators(std::string_view spec, std::size_t& pos) noexcept {
+  while (pos < spec.size() && isClassListSeparator(spec[pos])) {
     ++pos;
   }
 }
@@ -151,6 +161,32 @@ IndexedTriangleClassFilter parseIndexedTriangleClassFilter(
   return IndexedTriangleClassFilter::Any;
 }
 
+IndexedTriangleClassFilterList parseIndexedTriangleClassFilterList(
+    std::string_view spec) noexcept {
+  IndexedTriangleClassFilterList result = {};
+  std::size_t pos = 0;
+
+  while (pos < spec.size() &&
+         result.count < IndexedTriangleClassFilterList::MaxFilters) {
+    skipClassListSeparators(spec, pos);
+    if (pos >= spec.size()) {
+      break;
+    }
+
+    const std::size_t tokenBegin = pos;
+    while (pos < spec.size() && !isClassListSeparator(spec[pos])) {
+      ++pos;
+    }
+    const auto filter =
+        parseIndexedTriangleClassFilter(spec.substr(tokenBegin, pos - tokenBegin));
+    if (filter != IndexedTriangleClassFilter::Any) {
+      result.filters[result.count++] = filter;
+    }
+  }
+
+  return result;
+}
+
 }  // namespace
 
 RenderEncoderSelector makeRenderEncoderSelector(std::string_view spec) noexcept {
@@ -194,6 +230,11 @@ RenderEncoderSelectorList makeRenderEncoderSelectorList(std::string_view spec) n
 IndexedTriangleClassFilter makeIndexedTriangleClassFilter(
     std::string_view spec) noexcept {
   return parseIndexedTriangleClassFilter(spec);
+}
+
+IndexedTriangleClassFilterList makeIndexedTriangleClassFilterList(
+    std::string_view spec) noexcept {
+  return parseIndexedTriangleClassFilterList(spec);
 }
 
 bool renderEncoderSelectorMatches(RenderEncoderSelector selector,
@@ -396,6 +437,13 @@ IndexedTriangleClassFilter splitLargeIndexedDrawClassFilter() {
   return filter;
 }
 
+IndexedTriangleClassFilterList splitLargeIndexedDrawClassFilters() {
+  static const IndexedTriangleClassFilterList filters =
+      makeIndexedTriangleClassFilterList(
+          util::getenvString("DXMT9_SPLIT_LARGE_INDEXED_DRAWS_CLASSES"));
+  return filters;
+}
+
 RenderEncoderSelector splitLargeIndexedDrawRow() {
   static const RenderEncoderSelector selector =
       parseRenderEncoderSelector("DXMT9_SPLIT_LARGE_INDEXED_DRAWS_ROW");
@@ -430,6 +478,13 @@ IndexedTriangleClassFilter probeReverseIndexedTrianglesClassFilter() {
       makeIndexedTriangleClassFilter(
           util::getenvString("DXMT9_PROBE_REVERSE_INDEXED_TRIANGLES_CLASS"));
   return filter;
+}
+
+IndexedTriangleClassFilterList probeReverseIndexedTrianglesClassFilters() {
+  static const IndexedTriangleClassFilterList filters =
+      makeIndexedTriangleClassFilterList(
+          util::getenvString("DXMT9_PROBE_REVERSE_INDEXED_TRIANGLES_CLASSES"));
+  return filters;
 }
 
 RenderEncoderSelector probeReverseIndexedTrianglesRow() {

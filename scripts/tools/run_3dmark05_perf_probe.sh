@@ -25,6 +25,7 @@ split_large_indexed_draws=
 split_large_indexed_draws_row=
 split_large_indexed_draws_rows=
 split_large_indexed_draws_class=
+split_large_indexed_draws_classes=
 force_expand_indexed=0
 probe_reverse_indexed_triangles=0
 probe_reverse_opaque_indexed_triangles=0
@@ -32,6 +33,7 @@ probe_reverse_nonopaque_indexed_triangles=0
 probe_reverse_indexed_triangles_row=
 probe_reverse_indexed_triangles_rows=
 probe_reverse_indexed_triangles_class=
+probe_reverse_indexed_triangles_classes=
 force_cull_mode=
 measure_index_reuse=0
 aggressive_color_dontcare=0
@@ -154,6 +156,10 @@ Options:
                       Set DXMT9_SPLIT_LARGE_INDEXED_DRAWS_CLASS=CLASS.
                       Accepted values: any, opaque-depth-write, nonopaque,
                       depth-read, alpha-blend, scissor, textured, large4096
+  --split-large-indexed-draws-classes CLASSES
+                      Set DXMT9_SPLIT_LARGE_INDEXED_DRAWS_CLASSES=CLASSES.
+                      Values are ANDed and may be comma/semicolon/space/+ or
+                      & separated, e.g. large4096,alpha-blend
   --force-expand-indexed
                       Set DXMT_FORCE_EXPAND_INDEXED=1 to expand indexed draws
                       into flat vertex lists for primitive/backend pressure
@@ -183,6 +189,10 @@ Options:
                       Accepted values match split-large indexed filters:
                       any, opaque-depth-write, nonopaque, depth-read,
                       alpha-blend, scissor, textured, large4096
+  --probe-reverse-indexed-triangles-classes CLASSES
+                      Set DXMT9_PROBE_REVERSE_INDEXED_TRIANGLES_CLASSES=CLASSES.
+                      Values are ANDed and may be comma/semicolon/space/+ or
+                      & separated, e.g. large4096,scissor
   --force-cull-mode MODE
                       Set DXMT_DEBUG_FORCE_CULL_MODE=MODE where MODE is one of
                       none, front, or back for cull/backend shape A/B probes
@@ -391,6 +401,10 @@ while (($#)); do
       split_large_indexed_draws_class=${2:?missing value for --split-large-indexed-draws-class}
       shift 2
       ;;
+    --split-large-indexed-draws-classes)
+      split_large_indexed_draws_classes=${2:?missing value for --split-large-indexed-draws-classes}
+      shift 2
+      ;;
     --force-expand-indexed)
       force_expand_indexed=1
       shift
@@ -417,6 +431,10 @@ while (($#)); do
       ;;
     --probe-reverse-indexed-triangles-class)
       probe_reverse_indexed_triangles_class=${2:?missing value for --probe-reverse-indexed-triangles-class}
+      shift 2
+      ;;
+    --probe-reverse-indexed-triangles-classes)
+      probe_reverse_indexed_triangles_classes=${2:?missing value for --probe-reverse-indexed-triangles-classes}
       shift 2
       ;;
     --force-cull-mode)
@@ -943,6 +961,10 @@ if [[ -n "$split_large_indexed_draws_class" ]]; then
   env_args+=("DXMT9_SPLIT_LARGE_INDEXED_DRAWS_CLASS=$split_large_indexed_draws_class")
 fi
 
+if [[ -n "$split_large_indexed_draws_classes" ]]; then
+  env_args+=("DXMT9_SPLIT_LARGE_INDEXED_DRAWS_CLASSES=$split_large_indexed_draws_classes")
+fi
+
 if (( force_expand_indexed )); then
   env_args+=("DXMT_FORCE_EXPAND_INDEXED=1")
 fi
@@ -969,6 +991,10 @@ fi
 
 if [[ -n "$probe_reverse_indexed_triangles_class" ]]; then
   env_args+=("DXMT9_PROBE_REVERSE_INDEXED_TRIANGLES_CLASS=$probe_reverse_indexed_triangles_class")
+fi
+
+if [[ -n "$probe_reverse_indexed_triangles_classes" ]]; then
+  env_args+=("DXMT9_PROBE_REVERSE_INDEXED_TRIANGLES_CLASSES=$probe_reverse_indexed_triangles_classes")
 fi
 
 if [[ -n "$force_cull_mode" ]]; then

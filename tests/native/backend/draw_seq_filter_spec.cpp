@@ -187,6 +187,39 @@ void testIndexedTriangleClassFilterParsesProbeBuckets() {
         "unknown indexed triangle class filter falls back to any");
 }
 
+void testIndexedTriangleClassFilterListParsesAndBuckets() {
+  using dxmt9::debug::IndexedTriangleClassFilter;
+  using dxmt9::debug::makeIndexedTriangleClassFilterList;
+
+  const auto empty = makeIndexedTriangleClassFilterList("");
+  check(empty.count == 0u, "empty indexed triangle class list defaults to any");
+
+  const auto comma =
+      makeIndexedTriangleClassFilterList("large4096,alpha-blend; scissor");
+  check(comma.count == 3u, "indexed triangle class list parses three filters");
+  check(comma.filters[0] == IndexedTriangleClassFilter::Large4096,
+        "indexed triangle class list keeps large4096 first");
+  check(comma.filters[1] == IndexedTriangleClassFilter::AlphaBlend,
+        "indexed triangle class list keeps alpha-blend second");
+  check(comma.filters[2] == IndexedTriangleClassFilter::Scissor,
+        "indexed triangle class list keeps scissor third");
+
+  const auto symbolic =
+      makeIndexedTriangleClassFilterList("large-4096+depth_read&texture");
+  check(symbolic.count == 3u,
+        "indexed triangle class list accepts symbolic separators");
+  check(symbolic.filters[0] == IndexedTriangleClassFilter::Large4096,
+        "symbolic indexed triangle class list keeps large4096 first");
+  check(symbolic.filters[1] == IndexedTriangleClassFilter::DepthRead,
+        "symbolic indexed triangle class list keeps depth-read second");
+  check(symbolic.filters[2] == IndexedTriangleClassFilter::Textured,
+        "symbolic indexed triangle class list keeps textured third");
+
+  const auto unknown = makeIndexedTriangleClassFilterList("not-a-class,any");
+  check(unknown.count == 0u,
+        "unknown and any indexed triangle class list entries are ignored");
+}
+
 }  // namespace
 
 int main() {
@@ -200,6 +233,7 @@ int main() {
     testRenderEncoderSelectorParsesSingleRow();
     testRenderEncoderSelectorListParsesHotRows();
     testIndexedTriangleClassFilterParsesProbeBuckets();
+    testIndexedTriangleClassFilterListParsesAndBuckets();
   } catch (const TestFailure& failure) {
     std::cerr << "draw_seq_filter_spec failed: "
               << failure.what() << '\n';

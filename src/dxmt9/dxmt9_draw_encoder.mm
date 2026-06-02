@@ -2744,6 +2744,26 @@ bool indexedTriangleClassMatches(
   return true;
 }
 
+bool indexedTriangleClassMatches(
+    const debug::IndexedTriangleClassFilterList& filters,
+    u32 primitiveCount,
+    u32 textureMask,
+    const core::FlatStateSet<core::kMaxStateSlots>& renderStates,
+    const core::ViewportScissor& viewport,
+    WMTTriangleFillMode fillMode) {
+  for (std::size_t i = 0; i < filters.count; ++i) {
+    if (!indexedTriangleClassMatches(filters.filters[i],
+                                     primitiveCount,
+                                     textureMask,
+                                     renderStates,
+                                     viewport,
+                                     fillMode)) {
+      return false;
+    }
+  }
+  return true;
+}
+
 u32 samplerStateOr(const SamplerSnapshot& snapshot, u32 state, u32 fallback) {
   const auto it = snapshot.states.find(state);
   return it != snapshot.states.end() ? it->second : fallback;
@@ -5513,6 +5533,13 @@ bool encodeDraw(EncodeContext& ctx,
                 hot.textureMask,
                 hot.renderStates,
                 hot.viewport,
+                fillMode) &&
+            indexedTriangleClassMatches(
+                debug::probeReverseIndexedTrianglesClassFilters(),
+                primitiveCount,
+                hot.textureMask,
+                hot.renderStates,
+                hot.viewport,
                 fillMode);
         const bool probeEligible =
             classEligible &&
@@ -5600,6 +5627,13 @@ bool encodeDraw(EncodeContext& ctx,
             splitLargeIndexedDrawRowMatches(encoderBreakdown) &&
             indexedTriangleClassMatches(
                 debug::splitLargeIndexedDrawClassFilter(),
+                primitiveCount,
+                hot.textureMask,
+                hot.renderStates,
+                hot.viewport,
+                fillMode) &&
+            indexedTriangleClassMatches(
+                debug::splitLargeIndexedDrawClassFilters(),
                 primitiveCount,
                 hot.textureMask,
                 hot.renderStates,

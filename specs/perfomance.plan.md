@@ -8031,6 +8031,7 @@ New controls:
 DXMT9_SPLIT_LARGE_INDEXED_DRAWS_ROW=SEQ/ENC
 DXMT9_SPLIT_LARGE_INDEXED_DRAWS_ROWS=SEQ/ENC,...
 DXMT9_SPLIT_LARGE_INDEXED_DRAWS_CLASS=any|opaque-depth-write|nonopaque|depth-read|alpha-blend|scissor|textured|large4096
+DXMT9_SPLIT_LARGE_INDEXED_DRAWS_CLASSES=large4096,alpha-blend
 
 scripts/tools/run_3dmark05_perf_probe.sh \
   --split-large-indexed-draws N \
@@ -8047,6 +8048,9 @@ above:
 - `alpha-blend`, `scissor`, and `textured`: direct state/texture buckets.
 - `large4096`: draw primitive count `>= 4096`.
 - `nonopaque`: everything outside the opaque-depth-write bucket.
+- `DXMT9_SPLIT_LARGE_INDEXED_DRAWS_CLASSES`: optional AND-list gate. Values
+  match `DXMT9_SPLIT_LARGE_INDEXED_DRAWS_CLASS` and may be separated by comma,
+  semicolon, whitespace, `+`, or `&`. Example: `large4096,alpha-blend`.
 
 Initial no-gputrace smoke:
 
@@ -8215,6 +8219,7 @@ values are identical:
 
 ```text
 DXMT9_PROBE_REVERSE_INDEXED_TRIANGLES_CLASS=any|opaque-depth-write|nonopaque|depth-read|alpha-blend|scissor|textured|large4096
+DXMT9_PROBE_REVERSE_INDEXED_TRIANGLES_CLASSES=large4096,alpha-blend
 
 scripts/tools/run_3dmark05_perf_probe.sh \
   --probe-reverse-indexed-triangles \
@@ -8232,6 +8237,10 @@ The filter is an additional gate after the existing reverse probe selector:
   the nonopaque eligibility and the class gate.
 - If no class is provided, the default is `any` and existing behavior is
   unchanged.
+- `--probe-reverse-indexed-triangles-classes` adds an optional AND-list gate.
+  Values match `--probe-reverse-indexed-triangles-class` and may be separated by
+  comma, semicolon, whitespace, `+`, or `&`. This is the narrow probe needed for
+  intersections such as `large4096 && alpha-blend` or `large4096 && scissor`.
 
 Dry-run validation:
 
@@ -8296,6 +8305,81 @@ Validation:
 | `meson compile -C build-x86_64-builtin` | pass |
 | `meson test -C build-x86_64-builtin dxmt9-draw-seq-filter-spec --print-errorlogs` | pass |
 | `reverse-row-60-4-alpha-nogputrace-r1` | pass; `60/4` probe draws match `alpha-blend` bucket |
+
+2026-06-02 follow-up: the single class gate was not enough to isolate the
+positive `60/4 large4096` signal after the pure `alpha-blend` Xcode run
+rejected broad alpha and the order-preserving split rejected pure draw size.
+Added `DXMT9_PROBE_REVERSE_INDEXED_TRIANGLES_CLASSES` and
+`DXMT9_SPLIT_LARGE_INDEXED_DRAWS_CLASSES` as AND-list gates so experiments can
+target intersections without adding one-off enum values.
+
+No-gputrace smoke commands:
+
+```bash
+scripts/tools/run_3dmark05_perf_probe.sh \
+  --suffix reverse-row-60-4-large4096-alpha-smoke-r2 \
+  --frame 60 \
+  --encoder-breakdown-seq 60 \
+  --timeout 180 \
+  --no-gputrace \
+  --probe-reverse-indexed-triangles \
+  --probe-reverse-indexed-triangles-row 60/4 \
+  --probe-reverse-indexed-triangles-classes large4096,alpha-blend \
+  --measure-index-reuse \
+  --top 4 \
+  --hot-gpu-share 95
+
+scripts/tools/run_3dmark05_perf_probe.sh \
+  --suffix reverse-row-60-4-large4096-scissor-smoke-r1 \
+  --frame 60 \
+  --encoder-breakdown-seq 60 \
+  --timeout 180 \
+  --no-gputrace \
+  --probe-reverse-indexed-triangles \
+  --probe-reverse-indexed-triangles-row 60/4 \
+  --probe-reverse-indexed-triangles-classes large4096,scissor \
+  --measure-index-reuse \
+  --top 4 \
+  --hot-gpu-share 95
+```
+
+Artifacts:
+
+```text
+experiments/output/app-d3d9-3dmark05-reverse-row-60-4-large4096-alpha-smoke-r2/3dmark05-perf-summary.md
+experiments/output/app-d3d9-3dmark05-reverse-row-60-4-large4096-alpha-smoke-r2/3dmark05-perf-encoders.csv
+experiments/output/app-d3d9-3dmark05-reverse-row-60-4-large4096-scissor-smoke-r1/3dmark05-perf-summary.md
+experiments/output/app-d3d9-3dmark05-reverse-row-60-4-large4096-scissor-smoke-r1/3dmark05-perf-encoders.csv
+```
+
+Both smoke runs passed and prove the AND-list gate is applied by the installed
+runtime, not just parsed by the launcher. The first `r1` alpha smoke was
+discarded because it was run before relinking `build-x86_64-builtin`'s
+`winemetal.so`, so the installed runtime still behaved like the old whole-row
+probe. After `meson compile -C build-x86_64-builtin winemetal`, `r2` matched
+the intended intersection:
+
+| Probe | Row draw calls | `large4096` draws/prims | Intersection draws/prims | Probe applied/skipped | Probe bytes |
+|---|---:|---:|---:|---:|---:|
+| `large4096 && alpha-blend` | `253` | `19 / 104,721` | `16 / 89,043` | `16 / 237` | `534,258B` |
+| `large4096 && scissor` | `253` | `19 / 104,721` | `4 / 21,276` | `4 / 249` | `127,656B` |
+
+This does not prove a VS-write movement yet because no Xcode counters were
+captured for these two intersection probes. It does narrow the next expensive
+captures: run Xcode/gputrace first on `large4096 && alpha-blend`, then on
+`large4096 && scissor` only if the alpha intersection is still too broad or
+does not move bytes/invocation.
+
+Validation for the class-list extension:
+
+| Check | Result |
+|---|---|
+| `meson test -C build-x86_64-builtin dxmt9-draw-seq-filter-spec` | pass |
+| `meson compile -C build-x86_64-builtin dxmt9_runtime` | pass |
+| `meson compile -C build-x86_64-builtin winemetal` | pass |
+| `git diff --check` | pass |
+| `reverse-row-60-4-large4096-alpha-smoke-r2` | pass; probe draws match `large4096 && alpha-blend` |
+| `reverse-row-60-4-large4096-scissor-smoke-r1` | pass; probe draws match `large4096 && scissor` |
 
 The first Xcode candidate was a row/material-scoped run on `60/4`, because
 `60/4` is the depth-read/textured/mostly-alpha row where broad single-row
@@ -8756,6 +8840,8 @@ The current primitive-order classifier state is:
 | `large4096` cross-bucket baseline | no Xcode counters | `60/4` positive target has `0` opaque draws | separates diagnostic signal from production-safe candidate set |
 | Opaque `large4096` (`60/0,60/1,60/3`) | passes | top VS write `+0.01%`, hot GPU `-0.31%` | reject production-safe opaque-large reorder; does not reproduce positive `60/4` signal |
 | Split `60/4 large4096` | passes | top VS write `+0.00%`, hot GPU `-1.91%` | reject draw-size split as VS-write owner; prior positive requires order/locality/visibility interaction |
+| `60/4 large4096 && alpha` smoke | no Xcode counters yet | probe scope validated: `16 / 89,043` prims | next Xcode candidate to test whether the positive large4096 signal is mostly alpha-visible |
+| `60/4 large4096 && scissor` smoke | no Xcode counters yet | probe scope validated: `4 / 21,276` prims | second Xcode candidate if alpha intersection is too broad or negative |
 
 Workspace disk headroom was restored before this capture; after the export the
 filesystem has about `15GiB` free. Raw `.gputrace` and embedded-performance
@@ -8770,9 +8856,14 @@ flowchart TD
   Class --> Scissor["60/4 scissor subset"]
   Class --> DepthRead["60/4 depth-read/textured subset"]
   Class --> Large["60/4 large4096 subset"]
+  Class --> ClassList["AND class-list gate\nlarge4096 + material state"]
 
   Alpha --> AlphaResult["Xcode result\nshape gates pass\nVS write unchanged\nGPU time small win"]
   Large --> LargeResult["Xcode result\nshape gates pass\nhot VS write -7.46%\n60/4 VS write -22.33%"]
+  ClassList --> LargeAlphaSmoke["large4096 + alpha smoke\n16 draws / 89k prims\nprobe scope validated"]
+  ClassList --> LargeScissorSmoke["large4096 + scissor smoke\n4 draws / 21k prims\nprobe scope validated"]
+  LargeAlphaSmoke --> LargeAlphaXcode["next Xcode capture\nclassify bytes/inv owner"]
+  LargeScissorSmoke --> LargeScissorXcode["fallback Xcode capture\nif alpha is negative/too broad"]
   LargeResult --> Cross["encoder cross buckets\n60/4 large4096 = depth-read/alpha\n60/1+60/3 = opaque large4096"]
   Cross --> OpaqueLarge["opaque large4096 Xcode probe\n60/0 + 60/1 + 60/3"]
   OpaqueLarge --> OpaqueLargeResult["shape gates pass\nVS write +0.01%\nGPU -0.31%"]
@@ -8794,8 +8885,8 @@ flowchart TD
   classDef hot fill:#ffe8e8,stroke:#b64242,color:#2b0d0d
   classDef known fill:#e8f0ff,stroke:#476cb6,color:#0d1833
   class Need,Class,Gate,Move,Design,RejectOpaqueLarge,RejectSplit,BackendNext hot
-  class AlphaResult,RejectAlpha,LargeResult,Cross,Positive,OpaqueLargeResult,SplitLargeResult hot
-  class Prior,Alpha,Scissor,DepthRead,Large,Reject,OpaqueLarge,SplitLarge known
+  class AlphaResult,RejectAlpha,LargeResult,Cross,Positive,OpaqueLargeResult,SplitLargeResult,LargeAlphaXcode,LargeScissorXcode hot
+  class Prior,Alpha,Scissor,DepthRead,Large,Reject,OpaqueLarge,SplitLarge,ClassList,LargeAlphaSmoke,LargeScissorSmoke known
 ```
 
 ### Offline Metal Codegen Classifier
