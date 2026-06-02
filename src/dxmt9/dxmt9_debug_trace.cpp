@@ -658,6 +658,27 @@ std::uint32_t splitLargeIndexedDrawPrimitiveLimit() {
   return limit;
 }
 
+u64 splitLargeIndexedDrawStream0SpanMax() {
+  static const u64 limit =
+      util::getenvU64Auto(
+          "DXMT9_SPLIT_LARGE_INDEXED_DRAWS_STREAM0_SPAN_MAX")
+          .value_or(0u);
+  return limit;
+}
+
+std::uint32_t splitLargeIndexedDrawMaxChunksPerDraw() {
+  static const std::uint32_t limit = [] {
+    const auto value =
+        util::getenvU64Auto("DXMT9_SPLIT_LARGE_INDEXED_DRAWS_MAX_CHUNKS_PER_DRAW");
+    if (!value.has_value()) {
+      return 0u;
+    }
+    return static_cast<std::uint32_t>(
+        std::min<std::uint64_t>(*value, std::numeric_limits<std::uint32_t>::max()));
+  }();
+  return limit;
+}
+
 IndexedTriangleClassFilter splitLargeIndexedDrawClassFilter() {
   static const IndexedTriangleClassFilter filter =
       makeIndexedTriangleClassFilter(

@@ -3124,6 +3124,8 @@ void emitEncoderBreakdown(const EncoderBreakdown& b) {
       "split_large_indexed_metal_draws=%llu "
       "split_large_indexed_extra_draws=%llu "
       "split_large_indexed_primitive_limit=%llu "
+      "split_large_indexed_stream0_span_limit=%llu "
+      "split_large_indexed_chunk_stream0_span_max=%llu "
       "split_large_indexed_primitive_count=%llu "
       "indexed_order_probe_draws=%llu "
       "indexed_order_probe_skipped=%llu "
@@ -3350,6 +3352,8 @@ void emitEncoderBreakdown(const EncoderBreakdown& b) {
       static_cast<unsigned long long>(b.splitLargeIndexedMetalDraws),
       static_cast<unsigned long long>(b.splitLargeIndexedExtraDraws),
       static_cast<unsigned long long>(b.splitLargeIndexedPrimitiveLimit),
+      static_cast<unsigned long long>(b.splitLargeIndexedStream0SpanLimit),
+      static_cast<unsigned long long>(b.splitLargeIndexedChunkStream0SpanMax),
       static_cast<unsigned long long>(b.splitLargeIndexedPrimitiveCount),
       static_cast<unsigned long long>(b.indexedOrderProbeDraws),
       static_cast<unsigned long long>(b.indexedOrderProbeSkipped),

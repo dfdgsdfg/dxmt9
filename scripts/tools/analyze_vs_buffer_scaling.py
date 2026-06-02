@@ -182,6 +182,8 @@ def aggregate(rows: list[dict[str, str]], top_n: int) -> dict[str, Any]:
         "source": top[0].get("_source", "") if top else "",
         "encoder_rows": len(rows),
         "top_n": len(top),
+        "top_row_keys": ",".join(
+            f"{as_int(row.get('seq'))}/{as_int(row.get('enc'))}" for row in top),
         "gpu_ms": gpu_ms,
         "vs_buffer_mib": vs_mib,
         "vs_buffer_write_mib": vs_mib,
@@ -400,11 +402,101 @@ def shape_rows(rows: list[dict[str, str]],
     return sorted(out, key=lambda item: item["vs_buffer_mib"], reverse=True)[:limit]
 
 
+def pct_delta(value: float, baseline: float) -> float:
+    return ((value - baseline) / baseline * 100.0) if baseline else 0.0
+
+
+def find_baseline(aggregates: list[dict[str, Any]], name: str | None) -> dict[str, Any] | None:
+    if not name:
+        return None
+    exact = [row for row in aggregates if str(row.get("run", "")) == name]
+    if exact:
+        return exact[0]
+    matches = [row for row in aggregates if name in str(row.get("run", ""))]
+    if len(matches) == 1:
+        return matches[0]
+    return None
+
+
+def baseline_deltas(aggregates: list[dict[str, Any]],
+                    baseline: dict[str, Any] | None,
+                    limit: int) -> list[dict[str, Any]]:
+    if not baseline:
+        return []
+    rows = []
+    base_run = str(baseline.get("run", ""))
+    for row in aggregates:
+        run = str(row.get("run", ""))
+        gpu_delta = pct_delta(as_float(row.get("gpu_ms")), as_float(baseline.get("gpu_ms")))
+        vs_delta = pct_delta(
+            as_float(row.get("vs_buffer_mib")),
+            as_float(baseline.get("vs_buffer_mib")))
+        draw_delta = pct_delta(
+            as_float(row.get("draw_calls")),
+            as_float(baseline.get("draw_calls")))
+        vertex_delta = pct_delta(
+            as_float(row.get("dxmt_vertex_count")),
+            as_float(baseline.get("dxmt_vertex_count")))
+        primitive_delta = pct_delta(
+            as_float(row.get("primitives")),
+            as_float(baseline.get("primitives")))
+        row_keys_match = str(row.get("top_row_keys", "")) == str(
+            baseline.get("top_row_keys", ""))
+        vsout_delta = pct_delta(
+            as_float(row.get("expected_vsout_mib")),
+            as_float(baseline.get("expected_vsout_mib")))
+        tiled_delta = pct_delta(
+            as_float(row.get("tiled_buffer_mib")),
+            as_float(baseline.get("tiled_buffer_mib")))
+        geometry_stable = (
+            row_keys_match and
+            abs(draw_delta) <= 1.0 and
+            abs(vertex_delta) <= 5.0 and
+            abs(primitive_delta) <= 5.0)
+        vs_moved = abs(vs_delta) >= 5.0
+        gpu_moved = abs(gpu_delta) >= 2.0
+        if run == base_run:
+            verdict = "baseline"
+        elif geometry_stable and vs_moved:
+            verdict = "shape-stable VS-moved"
+        elif geometry_stable and gpu_moved:
+            verdict = "shape-stable GPU-only"
+        elif geometry_stable:
+            verdict = "shape-stable unchanged"
+        elif vs_moved:
+            verdict = "shape-drift VS-moved"
+        else:
+            verdict = "shape-drift inconclusive"
+        rows.append({
+            "run": run,
+            "gpu_delta_pct": gpu_delta,
+            "vs_delta_pct": vs_delta,
+            "draw_delta_pct": draw_delta,
+            "vertex_delta_pct": vertex_delta,
+            "primitive_delta_pct": primitive_delta,
+            "row_keys_match": row_keys_match,
+            "vsout_delta_pct": vsout_delta,
+            "tiled_delta_pct": tiled_delta,
+            "geometry_stable": geometry_stable,
+            "verdict": verdict,
+        })
+    non_base = [row for row in rows if row["verdict"] != "baseline"]
+    return sorted(
+        non_base,
+        key=lambda row: (
+            0 if "VS-moved" in str(row["verdict"]) else 1,
+            -abs(as_float(row["vs_delta_pct"])),
+            -abs(as_float(row["gpu_delta_pct"])),
+            str(row["run"])))[:limit]
+
+
 def write_summary(path: Path,
                   aggregates: list[dict[str, Any]],
                   encoder_correlations: list[dict[str, Any]],
                   aggregate_correlations: list[dict[str, Any]],
-                  state_shapes: list[dict[str, Any]]) -> None:
+                  state_shapes: list[dict[str, Any]],
+                  baseline_delta_rows: list[dict[str, Any]],
+                  baseline_run: str | None) -> None:
     lines = [
         "# VS Buffer Scaling Analysis",
         "",
@@ -466,6 +558,37 @@ def write_summary(path: Path,
         lines.append(
             f"| {row['metric']} | `{fmt_float(row['pearson_r'], 3)}` | `{fmt_int(row['nonzero_rows'])}` |"
         )
+    if baseline_delta_rows:
+        lines.extend([
+            "",
+            "## Baseline Delta Triage",
+            "",
+            f"Baseline: `{baseline_run}`. Geometry-stable means top aggregate",
+            "row keys match, draw count changed by at most 1%, and top aggregate",
+            "vertex/primitive counts changed by at most 5%. VS-moved means top",
+            "aggregate VS buffer write changed by at least 5%; GPU-moved means",
+            "GPU time changed by at least 2%.",
+            "",
+            "| Run | Verdict | Row keys | GPU delta % | VS buffer delta % | Draw delta % | Vertex delta % | Primitive delta % | VSOut delta % | Tiled delta % |",
+            "|---|---|---|---:|---:|---:|---:|---:|---:|---:|",
+        ])
+        for row in baseline_delta_rows:
+            lines.append(
+                "| "
+                + " | ".join([
+                    str(row["run"]),
+                    str(row["verdict"]),
+                    "match" if row["row_keys_match"] else "drift",
+                    fmt_float(row["gpu_delta_pct"], 2),
+                    fmt_float(row["vs_delta_pct"], 2),
+                    fmt_float(row["draw_delta_pct"], 2),
+                    fmt_float(row["vertex_delta_pct"], 2),
+                    fmt_float(row["primitive_delta_pct"], 2),
+                    fmt_float(row["vsout_delta_pct"], 2),
+                    fmt_float(row["tiled_delta_pct"], 2),
+                ])
+                + " |"
+            )
     lines.extend([
         "",
         "## Render-State Shape Split",
@@ -522,6 +645,7 @@ def write_aggregate_csv(path: Path, aggregates: list[dict[str, Any]]) -> None:
         "source",
         "encoder_rows",
         "top_n",
+        "top_row_keys",
         "gpu_ms",
         "vs_buffer_mib",
         "buffer_write_mib",
@@ -566,6 +690,15 @@ def main() -> int:
     parser.add_argument("--top-n", type=int, default=3)
     parser.add_argument("--report-output", type=Path)
     parser.add_argument("--aggregate-output", type=Path)
+    parser.add_argument(
+        "--baseline-run",
+        default="current-normal-gputrace-r1",
+        help="Run name or unique substring used for baseline delta triage.")
+    parser.add_argument(
+        "--delta-limit",
+        type=int,
+        default=24,
+        help="Maximum baseline-delta rows to include in the report.")
     args = parser.parse_args()
 
     rows_by_run: list[list[dict[str, str]]] = []
@@ -593,12 +726,15 @@ def main() -> int:
     encoder_correlations = correlation_rows(all_rows)
     aggregate_correlations = correlation_rows(aggregate_rows)
     states = shape_rows(all_rows)
+    baseline = find_baseline(aggregates, args.baseline_run)
+    deltas = baseline_deltas(aggregates, baseline, args.delta_limit)
 
     if args.aggregate_output:
         write_aggregate_csv(args.aggregate_output, aggregates)
     if args.report_output:
         write_summary(args.report_output, aggregates,
-                      encoder_correlations, aggregate_correlations, states)
+                      encoder_correlations, aggregate_correlations, states,
+                      deltas, baseline.get("run") if baseline else None)
     else:
         for row in aggregates:
             print(

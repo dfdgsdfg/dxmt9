@@ -648,6 +648,8 @@ struct EncoderBreakdown {
   std::uint64_t splitLargeIndexedMetalDraws = 0;
   std::uint64_t splitLargeIndexedExtraDraws = 0;
   std::uint64_t splitLargeIndexedPrimitiveLimit = 0;
+  std::uint64_t splitLargeIndexedStream0SpanLimit = 0;
+  std::uint64_t splitLargeIndexedChunkStream0SpanMax = 0;
   std::uint64_t splitLargeIndexedPrimitiveCount = 0;
   std::uint64_t indexedOrderProbeDraws = 0;
   std::uint64_t indexedOrderProbeSkipped = 0;

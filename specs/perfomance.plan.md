@@ -984,71 +984,76 @@ The joined Xcode/dxmt CSVs can now be compared across frame60 captures with:
 python3 scripts/tools/analyze_vs_buffer_scaling.py \
   $(find traces -path '*analysis/frame60-xcode-dxmt-joined-summary.csv' | sort) \
   --report-output traces/analysis-vs-buffer-scaling-frame60.md \
-  --aggregate-output traces/analysis-vs-buffer-scaling-frame60.csv
+  --aggregate-output traces/analysis-vs-buffer-scaling-frame60.csv \
+  --baseline-run current-normal-gputrace-r1
 ```
 
 The generated report is intentionally stored under ignored `traces/` output.
 The current local report is
-`traces/analysis-vs-buffer-scaling-frame60-current.md`, comparing the six
-retained frame60 captures that currently have joined Xcode/dxmt CSVs:
+`traces/analysis-vs-buffer-scaling-frame60-current.md`, comparing all `45`
+local frame60 captures that currently have joined Xcode/dxmt CSVs. The report
+now also emits a baseline-delta triage against `current-normal-gputrace-r1`.
+The triage requires top row-key equality, draw-count delta <= `1%`, and
+vertex/primitive delta <= `5%` before calling an A/B run geometry-stable.
 
-- `current-normal-gputrace-r1`;
-- `x8-alpha-fill-gputrace-r2`;
-- `probe-disable-alpha-blend-gputrace-r1`;
-- `probe-disable-depth-write-gputrace-r1`;
-- `probe-position-only-vsout-gputrace-r1`;
-- `force-fragment-color-gputrace-r1`.
+Top-three aggregate results split into three useful groups:
 
-Historical local runs also included draw-size/state-attribution,
-`DXMT9_TRIM_UNUSED_VARYINGS=1`, `DXMT9_TRIM_VERTEX_TEMPS=1`,
-`DXMT9_TRIM_VS_OUTPUT_SCRATCH=1`, direct-texcoord FS reads, direct-texcoord
-plus varying trim, `DXMT_DISABLE_CULL=1`, `DXMT_DISABLE_SCISSOR=1`,
-`split-large-indexed-4096-gputrace-r3`, and RT PixelFormatView suppression.
-Those raw working outputs were not required after their conclusions were
-folded into this plan.
-
-Top-three aggregate results now split into two groups: normal/state probes
-remain at about `1627MiB` VS buffer write, while the constant-fragment /
-position-only classifiers drop to about `1548MiB` without producing a valid
-optimization path.
+1. Same-row, same-geometry state/source probes remain at about `1627MiB` VS
+   buffer write.
+2. Correctness-invalid source-shape classifiers such as constant fragment /
+   position-only reduce the bucket only slightly to about `1548MiB`, while
+   proving visible VSOut width is not the first-order owner.
+3. Primitive-order, cull, and row-shape classifiers can move VS write
+   materially, but most do so with top-row or geometry drift and therefore
+   remain diagnostic rather than optimization proof.
 
 | Metric | Observed range |
 |---|---:|
-| VS buffer write | `1548.218` to `1627.331 MiB` |
-| dxmt CPU writer / Xcode buffer write | `0.0003x` |
-| VS buffer / expected VSOut | `7.7x` to `88.4x` |
-| VS buffer / stream0 input | `31.5x` to `33.1x` |
-| VS buffer / named tiled-buffer counters | `55.2x` to `182.2x` |
-| VS buffer bytes / VS invocation | `1413.7` to `1447.8 B` |
-| VS buffer bytes / primitive | `2269.3` to `2385.2 B` |
+| VS buffer write | `903.327` to `2917.457 MiB` |
+| Same-row/state-probe VS buffer write | `1627.233` to `1629.865 MiB` |
+| dxmt CPU writer / Xcode buffer write | `0.0003x` to `0.0296x` |
+| VS buffer / expected VSOut | `4.0x` to `88.4x` |
+| VS buffer / stream0 input | `17.8x` to `59.4x` |
+| VS buffer / named tiled-buffer counters | `27.3x` to `182.2x` |
+| VS buffer bytes / VS invocation | `736.1` to `1449.9 B` |
+| VS buffer bytes / primitive | `1283.0` to `4276.3 B` |
 
 Encoder-row correlation over nonzero VS-write rows points at primitive/backend
 scaling, not explicit dxmt writes:
 
 | Candidate metric | Pearson r vs VS buffer MiB |
 |---|---:|
-| post-clipped primitives | `0.977` |
-| dxmt vertices | `0.977` |
-| primitives | `0.977` |
-| stream0 input bytes | `0.977` |
-| VS invocations | `0.971` |
-| stream/IB state churn | `0.950` |
-| large primitive draws | `0.932` |
-| geometry signature duplicates | `0.923` |
-| pixels | `0.915` |
-| large vertex draws | `0.898` |
-| tiled vertex + primitive-block bytes | `0.843` |
-| expected VSOut bytes | `0.749` |
-| dxmt CPU writer bytes | `0.183` |
-| FS invocations | `0.175` |
+| tiled vertex + primitive-block bytes | `0.797` |
+| VS invocations | `0.718` |
+| post-clipped primitives | `0.702` |
+| stream0 input bytes | `0.702` |
+| dxmt vertices | `0.702` |
+| primitives | `0.702` |
+| pixels | `0.660` |
+| expected VSOut bytes | `0.637` |
+| large primitive draws | `0.625` |
+| dxmt CPU writer bytes | `0.409` |
+| stream/IB state churn | `0.379` |
+| FS invocations | `0.255` |
+
+Baseline-delta triage sharpens the interpretation:
+
+| Run class | Representative result | Interpretation |
+|---|---|---|
+| `shape-stable GPU-only` | `depth-write-row-60-2-large4096-alpha`: GPU `-4.33%`, VS write `+0.01%` | Backend state can affect timing without moving the primary bucket. |
+| `shape-stable GPU-only` | `split-row-60-2-large4096`: GPU `-2.52%`, VS write `+0.16%` | Current-row draw partition is not the VS-write owner. |
+| `shape-stable unchanged` | `force-fragment-color`: VS write `-4.85%` with unchanged geometry | Fragment work and visible VSOut source shape are secondary. |
+| `shape-stable VS-moved` | `force-expand-indexed`: VS write `+79.29%`, GPU `+83.55%` | Destructive expansion proves indexed submission/vertex reuse matters, but is the opposite of a fix. |
+| `shape-drift VS-moved` | `reverse-indexed-triangles`: VS write `-44.49%`, GPU `-37.94%`, row keys drift | Primitive/order/locality can move the hidden bucket, but current diagnostic does not prove a legal same-frame optimization. |
 
 For rows with complete dxmt state attribution, render-state shape split is:
 
 | Shape | Rows | GPU ms | VS buffer MiB | Share of known-state VS write | VS B/primitive | Notes |
 |---|---:|---:|---:|---:|---:|---|
-| `cull=back,depth=read,scissor=mixed,blend=mixed,textured=on,ffp=off,preT=off` | `6` | `121.744` | `5728.960` | `0.596` | `2571.3` | Main hot encoder shape; depth test on, no depth write. |
-| `cull=front,depth=write,scissor=off,blend=off,textured=off,ffp=off,preT=off` | `6` | `54.979` | `2526.894` | `0.263` | `1930.7` | Shadow/depth-like pass shape. |
-| `cull=back,depth=write,scissor=off,blend=off,textured=on,ffp=off,preT=off` | `6` | `34.249` | `1349.733` | `0.141` | `2424.4` | Textured depth-writing pass shape. |
+| `cull=back,depth=read,scissor=mixed,blend=mixed,textured=on,ffp=off,preT=off` | `42` | `618.020` | `28332.609` | `0.399` | `1761.3` | Main hot encoder family; includes depth-read, textured, mixed scissor/blend rows. |
+| `cull=front,depth=write,scissor=off,blend=off,textured=off,ffp=off,preT=off` | `69` | `607.995` | `27960.106` | `0.394` | `1868.9` | Shadow/depth-like pass family. |
+| `cull=back,depth=mixed,scissor=mixed,blend=off,textured=on,ffp=off,preT=off` | `26` | `160.808` | `6187.271` | `0.087` | `1293.4` | Row-shape/primitive-order diagnostic family. |
+| `cull=back,depth=write,scissor=off,blend=off,textured=on,ffp=off,preT=off` | `18` | `108.458` | `4254.249` | `0.060` | `2547.2` | Textured depth-writing pass family. |
 
 Interpretation:
 
@@ -1058,11 +1063,11 @@ Interpretation:
   VSOut bytes without moving Xcode VS buffer writes.
 - Explicit dxmt CPU writers are too small by roughly four orders of magnitude
   in the top encoders.
-- The bucket scales strongly with primitive/post-clip/tiled-counter shape, but
-  Xcode's named tiled vertex/primitive-block counters are only about `1/55` of
-  the VS buffer-write bucket. Treat the remaining traffic as hidden Apple GPU
-  vertex-stage parameter, tiler, or compiler-internal storage below the visible
-  MSL/AIR forms tested so far.
+- The bucket scales with primitive/post-clip/tiled-counter shape, but Xcode's
+  named tiled vertex/primitive-block counters remain too small to be the whole
+  bucket. Treat the remaining traffic as hidden Apple GPU vertex-stage
+  parameter, tiler, or compiler-internal storage below the visible MSL/AIR forms
+  tested so far.
 - The known-state split does not point to one simple D3D9 state bit. The
   highest row has back cull, depth read, mixed scissor/blend, and texturing,
   but the next two shapes still write hundreds of MiB with different cull,
@@ -1074,43 +1079,49 @@ Interpretation:
   `+1.72%`. Broad alpha-blend disable is therefore rejected as a first-order
   owner and as an optimization path.
 - `DXMT_DISABLE_CULL=1` did not reduce the top-three VS buffer-write bucket:
-  it changed `1627.438 MiB` to `1627.335 MiB` (`-0.01%`) while top-three GPU
-  time regressed from `34.724ms` to `36.291ms` (`+4.51%`). Draw count,
-  vertex count, stream/IB churn, PSO samples, and expected VSOut stayed
-  unchanged. The cull-state bit is therefore not the first-order owner of the
-  hidden VS buffer-write traffic.
+  it changed `1627.240MiB` to `1627.233MiB` while top-three GPU time changed
+  from `34.837ms` to `35.478ms`. Draw count, vertex count, stream/IB churn,
+  PSO samples, and expected VSOut stayed unchanged. The cull-state bit is
+  therefore not the first-order owner of the hidden VS buffer-write traffic.
 - `DXMT_DISABLE_SCISSOR=1` also did not reduce the top-three VS buffer-write
-  bucket: it changed `1627.438 MiB` to `1627.326 MiB` (`-0.01%`) while
-  top-three GPU time changed from `34.724ms` to `34.941ms` (`+0.63%`). Draw
-  count, vertex count, stream/IB churn, PSO samples, expected VSOut, and
-  explicit dxmt writer bytes stayed unchanged. The scissor state is therefore
-  also not the first-order owner of the hidden VS buffer-write traffic.
-- For `disable-cull-frame60-r1`, the original gputrace/Xcode CSV is
-  authoritative for GPU counters, but the run's `dxmt9.log` was no longer
-  available when finalizing. The dxmt attribution in the joined report was
-  recovered from a same-option `--no-gputrace` run
-  `disable-cull-frame60-r1-dxmt-only`; the seq/enc labels and top-frame draw
-  attribution match the captured frame, but this should be treated as a
-  validation caveat for that one A/B row.
+  bucket: it changed `1627.240MiB` to `1627.315MiB` while top-three GPU time
+  changed from `34.837ms` to `36.295ms`. Draw count, vertex count,
+  stream/IB churn, PSO samples, expected VSOut, and explicit dxmt writer bytes
+  stayed unchanged. The scissor state is therefore also not the first-order
+  owner of the hidden VS buffer-write traffic.
+- Row-scoped depth-write and depth-func probes now join the stable same-row
+  bucket: they improve or perturb GPU time but leave top-three VS write at
+  `~1627MiB`. Stop spending gputrace time on depth-only state as a primary
+  owner.
+- The only strong VS-write movements are destructive (`force-expand-indexed`)
+  or shape-drifting primitive/order/locality classifiers. The next useful fix
+  path must preserve row keys and geometry while reproducing that primitive or
+  backend-locality movement, or must isolate the same behavior in a row-local
+  replay harness.
 
 ```mermaid
 flowchart TD
-  Joined["10 joined frame60 captures"] --> Stable["VS buffer ~1627MiB\nacross A/B probes"]
+  Joined["45 joined frame60 captures"] --> Stable["same-row probes\nVS buffer ~1627MiB"]
   Joined --> Rows["encoder-row correlation"]
+  Joined --> Triage["baseline delta triage\nrow-key + geometry gates"]
 
   Stable --> RejectVSOut["Reject source-visible VSOut\nand local translated scratch"]
   Stable --> RejectCpu["Reject dxmt CPU writers\n~0.0003x of Xcode writes"]
 
-  Rows --> Primitive["primitive/postclip/tiled-shape\nr ~= 0.98"]
-  Rows --> CpuWeak["dxmt writer bytes\nr ~= 0.20"]
-  Rows --> FsWeak["FS invocations\nr ~= -0.10"]
+  Rows --> Primitive["primitive/postclip/tiled-shape\nr ~= 0.70-0.80"]
+  Rows --> CpuWeak["dxmt writer bytes\nsmall absolute owner"]
+  Rows --> FsWeak["FS invocations\nr ~= 0.26"]
+  Triage --> StableGpu["same-row GPU-only wins\ndepth-write/split"]
+  Triage --> DriftVs["VS-write wins require\ndestructive or shape-drift probes"]
 
   Primitive --> Hidden["Surviving owner\nhidden Apple vertex/tiler/parameter storage"]
-  Hidden --> NextClassify["Next experiment\nreduce primitive/backend pressure\nor prove fixed driver bucket"]
+  StableGpu --> Hidden
+  DriftVs --> Hidden
+  Hidden --> NextClassify["Next experiment\nsame-row primitive/backend locality\nor row-local replay harness"]
 
   classDef hot fill:#ffe8e8,stroke:#b64242,color:#2b0d0d
   classDef cold fill:#e8f0ff,stroke:#476cb6,color:#0d1833
-  class Hidden,NextClassify hot
+  class Hidden,NextClassify,DriftVs hot
   class RejectVSOut,RejectCpu,CpuWeak,FsWeak cold
 ```
 
@@ -10518,6 +10529,204 @@ flowchart TD
   classDef known fill:#e8f0ff,stroke:#476cb6,color:#0d1833
   class VsSame,HiddenSame,Reject,Hidden,BackendAB,MiniReplay hot
   class Base,Split,DrawExpand,GeometryStable,Xcode,GpuBetter,Secondary known
+```
+
+### Stream0-Span Split Probe Harness
+
+Primitive-count draw splitting was rejected, but it does not directly test the
+large stream0/index span axis. The new split harness can preserve primitive
+order and the indexed path while splitting selected triangle-list draws when a
+contiguous chunk would exceed a stream0 byte-span threshold:
+
+- `DXMT9_SPLIT_LARGE_INDEXED_DRAWS_STREAM0_SPAN_MAX`
+- `DXMT9_SPLIT_LARGE_INDEXED_DRAWS_MAX_CHUNKS_PER_DRAW`
+- existing `DXMT9_SPLIT_LARGE_INDEXED_DRAWS_ROW(S)` and
+  `DXMT9_SPLIT_LARGE_INDEXED_DRAWS_CLASS(ES)`
+- new counters:
+  `split_large_indexed_stream0_span_limit` and
+  `split_large_indexed_chunk_stream0_span_max`
+
+This is diagnostic-only. It keeps original triangle order by issuing multiple
+contiguous `drawIndexed` ranges from the original index buffer; it does not
+reorder indices and does not expand vertices. If the computed split would
+exceed the optional max-chunks cap, the source draw is left unsplit so a
+gputrace candidate cannot explode into thousands of Metal draws by accident.
+
+```mermaid
+flowchart TD
+  Draw["indexed triangle-list draw"] --> Scope{"row/class selector matches?"}
+  Scope -- "no" --> Original["submit original draw"]
+  Scope -- "yes" --> Read["read original index range\nfrom shadow/contents"]
+  Read --> Chunk["build contiguous chunks\npreserve primitive order"]
+  Chunk --> Span{"next chunk stream0 span\nexceeds limit?"}
+  Span -- "yes" --> EmitChunk["close current chunk"]
+  Span -- "no" --> Continue["append triangle"]
+  EmitChunk --> Continue
+  Continue --> Cap{"chunk count <= cap?"}
+  Cap -- "no" --> Original
+  Cap -- "yes" --> Submit["submit N drawIndexed ranges"]
+  Submit --> Counters["record source/metal/extra draws\nspan limit + max chunk span"]
+
+  classDef hot fill:#ffe8e8,stroke:#b64242,color:#2b0d0d
+  classDef known fill:#e8f0ff,stroke:#476cb6,color:#0d1833
+  class Chunk,Span,Cap,Counters hot
+  class Draw,Scope,Read,Original,Continue,Submit known
+```
+
+Smoke commands:
+
+```bash
+scripts/tools/run_3dmark05_perf_probe.sh \
+  --suffix split-row-60-2-span196608-smoke-r1 \
+  --frame 60 \
+  --timeout 180 \
+  --no-gputrace \
+  --encoder-breakdown-seq 60 \
+  --split-large-indexed-draws-stream0-span-max 196608 \
+  --split-large-indexed-draws-row 60/2 \
+  --split-large-indexed-draws-classes large4096 \
+  --measure-index-reuse \
+  --top 3 \
+  --hot-gpu-share 95 \
+  --min-free-mb 512
+
+scripts/tools/run_3dmark05_perf_probe.sh \
+  --suffix split-row-60-2-span524288-max64-smoke-r1 \
+  --frame 60 \
+  --timeout 180 \
+  --no-gputrace \
+  --encoder-breakdown-seq 60 \
+  --split-large-indexed-draws-stream0-span-max 524288 \
+  --split-large-indexed-draws-max-chunks-per-draw 64 \
+  --split-large-indexed-draws-row 60/2 \
+  --split-large-indexed-draws-classes large4096 \
+  --measure-index-reuse \
+  --top 3 \
+  --hot-gpu-share 95 \
+  --min-free-mb 512
+```
+
+Artifacts:
+
+```text
+experiments/output/app-d3d9-3dmark05-split-row-60-2-span196608-smoke-r1/3dmark05-perf-summary.md
+experiments/output/app-d3d9-3dmark05-split-row-60-2-span196608-smoke-r1/3dmark05-perf-encoders.csv
+experiments/output/app-d3d9-3dmark05-split-row-60-2-span524288-max64-smoke-r1/actual.png
+experiments/output/app-d3d9-3dmark05-split-row-60-2-span524288-max64-smoke-r1/3dmark05-perf-summary.md
+experiments/output/app-d3d9-3dmark05-split-row-60-2-span524288-max64-smoke-r1/3dmark05-perf-encoders.csv
+```
+
+Smoke result:
+
+| Probe | Status | Visual | Split scope | Interpretation |
+|---|---|---|---|---|
+| `span196608` uncapped | `pass` | normal GT1 frame | row `60/2`: `6` source draws -> `19,025` Metal draws, `19,019` extra, `59,513` split primitives, max chunk span `659,016B` | Harness works, but this threshold is far too aggressive for gputrace. Some single triangles exceed the requested span. |
+| `span1048576 max64` | `pass` | normal GT1 frame | `0` split draws | Threshold/cap pair is too loose or skips all eligible splits. |
+| `span524288 max64` | `pass` | normal GT1 frame | `0` split draws | Still no bounded split for the observed `60/2` frame instance. |
+
+The no-gputrace frame instance also shows row-shape drift relative to the
+current-normal gputrace top rows: row `60/2` contains only `15` draws and
+`75,548` triangles in these smoke runs, while the current-normal Xcode top row
+`60/2` is the larger `187` draw / `389,376` triangle row. Do not promote these
+smokes directly to Xcode. The useful result is the harness itself plus the
+threshold sweep:
+
+- `196KiB` proves the split path and counters work, but is too much draw
+  amplification.
+- `512KiB` and `1MiB` with a `64` chunk cap are too conservative for the
+  observed selected row.
+- The next gputrace candidate should first run a no-gputrace row/threshold
+  scout over the current hot row set, for example `60/0,60/1,60/2,60/3,60/4`,
+  and require bounded extra draw count before Xcode export.
+
+The harness now also emits per-draw split-scout fields into
+`3dmark05-perf-indexed-probe-draws.csv`:
+
+- `split_eligible`
+- `split_would_apply`
+- `split_chunk_count`
+- `split_max_chunks_per_draw`
+- `split_stream0_span_limit`
+- `split_chunk_stream0_span_max`
+- `split_primitive_count`
+
+Scout command:
+
+```bash
+scripts/tools/run_3dmark05_perf_probe.sh \
+  --suffix split-hotrows-span524288-scout-r1 \
+  --frame 60 \
+  --timeout 180 \
+  --no-gputrace \
+  --encoder-breakdown-seq 60 \
+  --split-large-indexed-draws-stream0-span-max 524288 \
+  --split-large-indexed-draws-max-chunks-per-draw 1 \
+  --split-large-indexed-draws-rows 60/0,60/1,60/2,60/3,60/4 \
+  --split-large-indexed-draws-classes large4096 \
+  --measure-index-reuse \
+  --top 3 \
+  --hot-gpu-share 95 \
+  --min-free-mb 512
+```
+
+Artifacts:
+
+```text
+experiments/output/app-d3d9-3dmark05-split-hotrows-span524288-scout-r1/3dmark05-perf-summary.md
+experiments/output/app-d3d9-3dmark05-split-hotrows-span524288-scout-r1/3dmark05-perf-indexed-probe-draws.csv
+```
+
+Result:
+
+| Row | Eligible large4096 draws | Would apply with max1 | Capped draws | Chunk count max | Chunk count sum | Split primitive count | Max chunk span |
+|---|---:|---:|---:|---:|---:|---:|---:|
+| `60/0` | `15` | `0` | `1` | `4101` | `4115` | `111255` | `659016B` |
+| `60/1` | `13` | `0` | `1` | `4101` | `4113` | `96305` | `659016B` |
+| `60/2` | `7` | `0` | `1` | `4101` | `4107` | `64193` | `659016B` |
+| `60/3` | `14` | `0` | `1` | `4101` | `4114` | `101345` | `659016B` |
+| `60/4` | `44` | `0` | `3` | `4101` | `12344` | `327239` | `659016B` |
+
+The scout explains why the initial threshold sweep did not produce a useful
+gputrace candidate. The problematic `22622`-primitive draws have original
+stream0 spans around `665,976B`, but some individual triangle spans already
+reach `659,016B`. A threshold below that maximum single-triangle span causes
+pathological thousands-of-chunks splitting; a threshold above the original draw
+span produces no split. Contiguous stream0-span partitioning is therefore not a
+promising same-row backend locality probe for these hot draws.
+
+Updated conclusion:
+
+- Keep the stream0-span split harness as a diagnostic guardrail and source of
+  per-draw span evidence.
+- Do not spend Xcode/gputrace time on contiguous stream0-span split until a
+  scout shows bounded `split_would_apply` rows.
+- The next primitive/backend-locality probe needs to change index locality
+  inside the draw, not only cut contiguous ranges. That means a row-local replay
+  harness, a meshlet reorder/partition experiment with correctness controls, or
+  another backend-state variant that moves Xcode `VS Buffer Device Memory Bytes
+  Written`.
+
+```mermaid
+flowchart TD
+  Need["need same-row primitive/backend locality probe"] --> Harness["stream0-span split harness"]
+  Harness --> Low["196KiB uncapped\n6 source -> 19025 Metal"]
+  Harness --> Mid["512KiB max64\n0 splits"]
+  Harness --> High["1MiB max64\n0 splits"]
+  Harness --> ScoutResult["512KiB max1 scout\n93 eligible rows\n0 bounded applies"]
+  Low --> RejectLow["reject threshold\nexcess draw amplification"]
+  Mid --> RejectMid["no active split"]
+  High --> RejectMid
+  ScoutResult --> SpanShape["single-triangle span ~= full draw span\n659016B vs 665976B"]
+  SpanShape --> RejectSpan["reject contiguous span split\nas gputrace candidate"]
+  RejectLow --> RejectSpan
+  RejectMid --> RejectSpan
+  RejectSpan --> Next["next: row-local replay\nor index-locality-changing meshlet probe"]
+  Next --> XcodeCandidate["only then run gputrace\nrow-key + geometry gates"]
+
+  classDef hot fill:#ffe8e8,stroke:#b64242,color:#2b0d0d
+  classDef known fill:#e8f0ff,stroke:#476cb6,color:#0d1833
+  class Harness,RejectSpan,Next,XcodeCandidate hot
+  class Need,Low,Mid,High,ScoutResult,SpanShape,RejectLow,RejectMid known
 ```
 
 ### Row-Scoped Depth-State Probe Harness

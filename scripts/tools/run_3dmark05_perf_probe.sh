@@ -28,6 +28,8 @@ optimize_screen_blend_index_order_class=
 optimize_screen_blend_index_order_classes=
 optimize_screen_blend_index_order_stream0_span_min=
 split_large_indexed_draws=
+split_large_indexed_draws_stream0_span_max=
+split_large_indexed_draws_max_chunks_per_draw=
 split_large_indexed_draws_row=
 split_large_indexed_draws_rows=
 split_large_indexed_draws_class=
@@ -189,6 +191,13 @@ Options:
   --split-large-indexed-draws N
                       Set DXMT9_SPLIT_LARGE_INDEXED_DRAWS=N to split indexed
                       triangle-list draws above N primitives
+  --split-large-indexed-draws-stream0-span-max BYTES
+                      Set DXMT9_SPLIT_LARGE_INDEXED_DRAWS_STREAM0_SPAN_MAX
+                      to split selected indexed triangle-list draws when the
+                      next chunk would exceed this stream0 index byte span
+  --split-large-indexed-draws-max-chunks-per-draw N
+                      Set DXMT9_SPLIT_LARGE_INDEXED_DRAWS_MAX_CHUNKS_PER_DRAW
+                      to skip source draws that would exceed this split count
   --split-large-indexed-draws-row SEQ/ENC
                       Set DXMT9_SPLIT_LARGE_INDEXED_DRAWS_ROW=SEQ/ENC to
                       constrain split-large-indexed-draws to one
@@ -511,6 +520,14 @@ while (($#)); do
       ;;
     --split-large-indexed-draws)
       split_large_indexed_draws=${2:?missing value for --split-large-indexed-draws}
+      shift 2
+      ;;
+    --split-large-indexed-draws-stream0-span-max)
+      split_large_indexed_draws_stream0_span_max=${2:?missing value for --split-large-indexed-draws-stream0-span-max}
+      shift 2
+      ;;
+    --split-large-indexed-draws-max-chunks-per-draw)
+      split_large_indexed_draws_max_chunks_per_draw=${2:?missing value for --split-large-indexed-draws-max-chunks-per-draw}
       shift 2
       ;;
     --split-large-indexed-draws-row)
@@ -1187,6 +1204,14 @@ fi
 
 if [[ -n "$split_large_indexed_draws" ]]; then
   env_args+=("DXMT9_SPLIT_LARGE_INDEXED_DRAWS=$split_large_indexed_draws")
+fi
+
+if [[ -n "$split_large_indexed_draws_stream0_span_max" ]]; then
+  env_args+=("DXMT9_SPLIT_LARGE_INDEXED_DRAWS_STREAM0_SPAN_MAX=$split_large_indexed_draws_stream0_span_max")
+fi
+
+if [[ -n "$split_large_indexed_draws_max_chunks_per_draw" ]]; then
+  env_args+=("DXMT9_SPLIT_LARGE_INDEXED_DRAWS_MAX_CHUNKS_PER_DRAW=$split_large_indexed_draws_max_chunks_per_draw")
 fi
 
 if [[ -n "$split_large_indexed_draws_row" ]]; then

@@ -276,6 +276,19 @@ RenderEncoderSelectorList optimizeScreenBlendIndexOrderRows();
 // Env: DXMT9_SPLIT_LARGE_INDEXED_DRAWS.
 std::uint32_t splitLargeIndexedDrawPrimitiveLimit();
 
+// Split indexed triangle-list draws into multiple contiguous Metal drawIndexed
+// calls when the chunk's stream0 byte span would exceed this limit. Zero
+// disables stream0-span splitting. Uses the same row/class filters as
+// DXMT9_SPLIT_LARGE_INDEXED_DRAWS.
+// Env: DXMT9_SPLIT_LARGE_INDEXED_DRAWS_STREAM0_SPAN_MAX.
+u64 splitLargeIndexedDrawStream0SpanMax();
+
+// Optional cap for split-large-indexed diagnostics. If a source draw would
+// produce more chunks than this value, it is left unsplit. Zero disables the
+// cap.
+// Env: DXMT9_SPLIT_LARGE_INDEXED_DRAWS_MAX_CHUNKS_PER_DRAW.
+std::uint32_t splitLargeIndexedDrawMaxChunksPerDraw();
+
 // Optional class filter for DXMT9_SPLIT_LARGE_INDEXED_DRAWS. Accepted values:
 // any, opaque-depth-write, nonopaque, depth-read, alpha-blend, scissor,
 // textured, and large4096.

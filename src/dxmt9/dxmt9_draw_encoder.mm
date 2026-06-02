@@ -961,6 +961,8 @@ struct ActiveEncoderBreakdown {
 
   void recordSplitLargeIndexedDraw(u32 primitiveCount,
                                    u32 primitiveLimit,
+                                   u64 stream0SpanLimit,
+                                   u64 maxChunkStream0Span,
                                    u32 metalDraws) {
     if (!enabled || metalDraws <= 1u) {
       return;
@@ -976,6 +978,16 @@ struct ActiveEncoderBreakdown {
               : std::min<std::uint64_t>(stats.splitLargeIndexedPrimitiveLimit,
                                         primitiveLimit);
     }
+    if (stream0SpanLimit != 0u) {
+      stats.splitLargeIndexedStream0SpanLimit =
+          stats.splitLargeIndexedStream0SpanLimit == 0
+              ? stream0SpanLimit
+              : std::min<std::uint64_t>(stats.splitLargeIndexedStream0SpanLimit,
+                                        stream0SpanLimit);
+    }
+    stats.splitLargeIndexedChunkStream0SpanMax =
+        std::max(stats.splitLargeIndexedChunkStream0SpanMax,
+                 maxChunkStream0Span);
   }
 
   void recordIndexedOrderProbe(bool applied, u64 bytes) {
@@ -1032,6 +1044,13 @@ struct ActiveEncoderBreakdown {
                                  bool optimizedApplied,
                                  bool scissorRectEligible,
                                  bool scissorRectApplied,
+                                 bool splitEligible,
+                                 bool splitWouldApply,
+                                 u32 splitChunkCount,
+                                 u32 splitMaxChunksPerDraw,
+                                 u64 splitStream0SpanLimit,
+                                 u64 splitChunkStream0SpanMax,
+                                 u64 splitPrimitiveCount,
                                  u64 reorderBytes,
                                  IndexReuseMeasure originalIndexReuse,
                                  IndexReuseMeasure effectiveIndexReuse,
@@ -1126,6 +1145,9 @@ struct ActiveEncoderBreakdown {
         "encoder_draw_index=%llu draw_ordinal=%llu eligible=%u applied=%u "
         "optimized_eligible=%u optimized_applied=%u "
         "scissor_rect_eligible=%u scissor_rect_applied=%u reorder_bytes=%llu "
+        "split_eligible=%u split_would_apply=%u split_chunk_count=%u "
+        "split_max_chunks_per_draw=%u split_stream0_span_limit=%llu "
+        "split_chunk_stream0_span_max=%llu split_primitive_count=%llu "
         "original_index_available=%u original_index_unique=%llu "
         "original_index_min=%u original_index_max=%u original_index_span=%llu "
         "original_index_first=%u original_index_last=%u "
@@ -1170,6 +1192,13 @@ struct ActiveEncoderBreakdown {
         scissorRectEligible ? 1u : 0u,
         scissorRectApplied ? 1u : 0u,
         static_cast<unsigned long long>(reorderBytes),
+        splitEligible ? 1u : 0u,
+        splitWouldApply ? 1u : 0u,
+        splitChunkCount,
+        splitMaxChunksPerDraw,
+        static_cast<unsigned long long>(splitStream0SpanLimit),
+        static_cast<unsigned long long>(splitChunkStream0SpanMax),
+        static_cast<unsigned long long>(splitPrimitiveCount),
         originalIndexReuse.available ? 1u : 0u,
         static_cast<unsigned long long>(originalIndexReuse.unique),
         originalIndexReuse.minIndex,
@@ -2905,6 +2934,137 @@ u64 stream0ByteSpanForIndexMeasure(const IndexReuseMeasure& measure,
     return 0u;
   }
   return static_cast<u64>(measure.maxIndex - measure.minIndex) * stream0Stride;
+}
+
+struct IndexedDrawChunk {
+  u32 startPrimitive = 0;
+  u32 primitiveCount = 0;
+  u64 stream0Span = 0;
+};
+
+std::optional<u32> readIndexValue(std::span<const u8> indexBytes,
+                                  IndexType indexType,
+                                  std::size_t elementIndex) {
+  const std::size_t elementSize = indexElementSize(indexType);
+  const std::size_t offset = elementIndex * elementSize;
+  if (offset + elementSize > indexBytes.size()) {
+    return std::nullopt;
+  }
+  if (indexType == IndexType::UInt16) {
+    u16 value = 0;
+    std::memcpy(&value, indexBytes.data() + offset, sizeof(value));
+    return value;
+  }
+  u32 value = 0;
+  std::memcpy(&value, indexBytes.data() + offset, sizeof(value));
+  return value;
+}
+
+bool buildIndexedDrawChunks(std::span<const u8> indexBytes,
+                            IndexType indexType,
+                            u32 startIndex,
+                            u32 primitiveCount,
+                            u32 primitiveLimit,
+                            u64 stream0Stride,
+                            u64 stream0SpanLimit,
+                            std::vector<IndexedDrawChunk>& chunks) {
+  chunks.clear();
+  if (primitiveCount == 0u) {
+    return false;
+  }
+  const bool primitiveLimited = primitiveLimit != 0u;
+  const bool spanLimited = stream0SpanLimit != 0u && stream0Stride != 0u;
+  if (!primitiveLimited && !spanLimited) {
+    return false;
+  }
+  if (spanLimited && indexBytes.empty()) {
+    return false;
+  }
+
+  const std::size_t elementSize = indexElementSize(indexType);
+  const std::size_t firstElement = static_cast<std::size_t>(startIndex);
+  const std::size_t endElement =
+      firstElement + static_cast<std::size_t>(primitiveCount) * 3u;
+  if (spanLimited && endElement * elementSize > indexBytes.size()) {
+    return false;
+  }
+
+  u32 chunkStartPrimitive = 0;
+  u32 chunkPrimitiveCount = 0;
+  u32 chunkMinIndex = std::numeric_limits<u32>::max();
+  u32 chunkMaxIndex = 0;
+
+  auto emitChunk = [&] {
+    if (chunkPrimitiveCount == 0u) {
+      return;
+    }
+    const u64 stream0Span =
+        chunkMinIndex <= chunkMaxIndex
+            ? static_cast<u64>(chunkMaxIndex - chunkMinIndex) * stream0Stride
+            : 0u;
+    chunks.push_back(IndexedDrawChunk{
+        .startPrimitive = chunkStartPrimitive,
+        .primitiveCount = chunkPrimitiveCount,
+        .stream0Span = stream0Span,
+    });
+  };
+
+  for (u32 primitive = 0; primitive < primitiveCount; ++primitive) {
+    u32 triMin = std::numeric_limits<u32>::max();
+    u32 triMax = 0;
+    if (spanLimited) {
+      const std::size_t triElement =
+          firstElement + static_cast<std::size_t>(primitive) * 3u;
+      for (std::size_t i = 0; i < 3u; ++i) {
+        const auto value = readIndexValue(indexBytes, indexType, triElement + i);
+        if (!value.has_value()) {
+          chunks.clear();
+          return false;
+        }
+        triMin = std::min(triMin, *value);
+        triMax = std::max(triMax, *value);
+      }
+    }
+
+    bool shouldStartNewChunk = false;
+    if (chunkPrimitiveCount != 0u) {
+      if (primitiveLimited && chunkPrimitiveCount >= primitiveLimit) {
+        shouldStartNewChunk = true;
+      }
+      if (spanLimited) {
+        const u32 nextMin = std::min(chunkMinIndex, triMin);
+        const u32 nextMax = std::max(chunkMaxIndex, triMax);
+        const u64 nextSpan =
+            static_cast<u64>(nextMax - nextMin) * stream0Stride;
+        if (nextSpan > stream0SpanLimit) {
+          shouldStartNewChunk = true;
+        }
+      }
+    }
+
+    if (shouldStartNewChunk) {
+      emitChunk();
+      chunkStartPrimitive = primitive;
+      chunkPrimitiveCount = 0;
+      chunkMinIndex = std::numeric_limits<u32>::max();
+      chunkMaxIndex = 0;
+    }
+
+    if (chunkPrimitiveCount == 0u) {
+      chunkStartPrimitive = primitive;
+      if (spanLimited) {
+        chunkMinIndex = triMin;
+        chunkMaxIndex = triMax;
+      }
+    } else if (spanLimited) {
+      chunkMinIndex = std::min(chunkMinIndex, triMin);
+      chunkMaxIndex = std::max(chunkMaxIndex, triMax);
+    }
+    ++chunkPrimitiveCount;
+  }
+
+  emitChunk();
+  return chunks.size() > 1u;
 }
 
 bool buildReverseTriangleOrderIndexBytes(std::span<const u8> indexBytes,
@@ -5998,6 +6158,13 @@ bool encodeDraw(EncodeContext& ctx,
     u32 indexReuseStartIndex = pv.startIndex;
     std::vector<u8> probeReorderedIndexBytes;
     uint64_t indexBufferOffset = static_cast<uint64_t>(pv.startIndex) * indexElementSize(pv.indexType);
+    u32 splitPrimitiveLimit = 0u;
+    u64 splitStream0SpanLimit = 0u;
+    u32 splitMaxChunksPerDraw = 0u;
+    std::vector<IndexedDrawChunk> splitChunks;
+    u64 splitChunkStream0SpanMax = 0u;
+    bool splitWouldApply = false;
+    bool indexReorderApplied = false;
     {
       PerfScope streamBindIndexScope(perf::countEncodeDrawStreamBindCpuTime);
       if (!pv.userIndexData.empty()) {
@@ -6044,9 +6211,12 @@ bool encodeDraw(EncodeContext& ctx,
           debug::probeReverseIndexedTrianglesStream0SpanMin();
       const u64 optimizeStream0SpanMin =
           debug::optimizeScreenBlendIndexOrderStream0SpanMin();
+      splitPrimitiveLimit = debug::splitLargeIndexedDrawPrimitiveLimit();
+      splitStream0SpanLimit = debug::splitLargeIndexedDrawStream0SpanMax();
+      splitMaxChunksPerDraw = debug::splitLargeIndexedDrawMaxChunksPerDraw();
       const bool measureProbeIndexLocality =
           debug::measureIndexReuse() || reverseStream0SpanMin != 0u ||
-          optimizeStream0SpanMin != 0u;
+          optimizeStream0SpanMin != 0u || splitStream0SpanLimit != 0u;
       const u64 stream0StrideForProbe =
           encoderBreakdown ? encoderBreakdown->stats.streams[0].lastStride
                            : static_cast<u64>(hot.streamStrides[0]);
@@ -6082,6 +6252,43 @@ bool encodeDraw(EncodeContext& ctx,
       bool optimizedConsidered = false;
       bool optimizedEligible = false;
       bool optimizedApplied = false;
+      const bool splitConsidered =
+          (splitPrimitiveLimit != 0u || splitStream0SpanLimit != 0u) &&
+          pv.primitiveType == core::PrimitiveType::TriangleList &&
+          splitLargeIndexedDrawRowMatches(encoderBreakdown);
+      const bool splitEligible =
+          splitConsidered &&
+          indexedTriangleClassMatches(
+              debug::splitLargeIndexedDrawClassFilter(),
+              primitiveCount,
+              hot.textureMask,
+              hot.renderStates,
+              effectiveViewport,
+              fillMode) &&
+          indexedTriangleClassMatches(
+              debug::splitLargeIndexedDrawClassFilters(),
+              primitiveCount,
+              hot.textureMask,
+              hot.renderStates,
+              effectiveViewport,
+              fillMode);
+      if (splitEligible &&
+          buildIndexedDrawChunks(originalIndexBytesForReuse,
+                                 pv.indexType,
+                                 originalIndexReuseStartIndex,
+                                 primitiveCount,
+                                 splitPrimitiveLimit,
+                                 stream0StrideForProbe,
+                                 splitStream0SpanLimit,
+                                 splitChunks)) {
+        for (const auto& chunk : splitChunks) {
+          splitChunkStream0SpanMax =
+              std::max(splitChunkStream0SpanMax, chunk.stream0Span);
+        }
+        splitWouldApply =
+            splitMaxChunksPerDraw == 0u ||
+            splitChunks.size() <= static_cast<std::size_t>(splitMaxChunksPerDraw);
+      }
       if (reverseTriangleProbeRequested &&
           reverseIndexedTriangleRowMatches(encoderBreakdown)) {
         probeConsidered = true;
@@ -6167,7 +6374,8 @@ bool encodeDraw(EncodeContext& ctx,
         }
       }
       if (encoderBreakdown &&
-          (probeConsidered || optimizedConsidered || scissorRectProbeConsidered)) {
+          (probeConsidered || optimizedConsidered || scissorRectProbeConsidered ||
+           splitConsidered)) {
         const auto& stream0 = encoderBreakdown->stats.streams[0];
         const u64 reorderBytes =
             (probeApplied || optimizedApplied)
@@ -6190,6 +6398,15 @@ bool encodeDraw(EncodeContext& ctx,
             optimizedApplied,
             scissorRectProbeEligible,
             scissorRectProbeApplied,
+            splitEligible,
+            splitWouldApply,
+            static_cast<u32>(std::min<std::size_t>(
+                splitChunks.size(),
+                std::numeric_limits<u32>::max())),
+            splitMaxChunksPerDraw,
+            splitStream0SpanLimit,
+            splitChunkStream0SpanMax,
+            splitEligible ? static_cast<u64>(primitiveCount) : 0u,
             reorderBytes,
             originalIndexReuse,
             effectiveIndexReuse,
@@ -6226,6 +6443,7 @@ bool encodeDraw(EncodeContext& ctx,
                                                    effectiveViewport.scissor);
         }
       }
+      indexReorderApplied = probeApplied || optimizedApplied;
       if (indexBuffer) {
         if (encoderBreakdown) {
           if (indexBufferRecord) {
@@ -6275,33 +6493,16 @@ bool encodeDraw(EncodeContext& ctx,
         PerfScope issueScope(perf::countEncodeDrawIssueCpuTime);
         const i32 metalBaseVertex = nativeBaseVertexUsed ? pv.baseVertexIndex : 0;
         const auto metalIndexType = toIndexType(pv.indexType);
-        const u32 splitPrimitiveLimit = debug::splitLargeIndexedDrawPrimitiveLimit();
-        const bool splitLargeIndexed =
-            splitPrimitiveLimit != 0u &&
-            pv.primitiveType == core::PrimitiveType::TriangleList &&
-            primitiveCount > splitPrimitiveLimit &&
-            splitLargeIndexedDrawRowMatches(encoderBreakdown) &&
-            indexedTriangleClassMatches(
-                debug::splitLargeIndexedDrawClassFilter(),
-                primitiveCount,
-                hot.textureMask,
-                hot.renderStates,
-                effectiveViewport,
-                fillMode) &&
-            indexedTriangleClassMatches(
-                debug::splitLargeIndexedDrawClassFilters(),
-                primitiveCount,
-                hot.textureMask,
-                hot.renderStates,
-                effectiveViewport,
-                fillMode);
-        if (splitLargeIndexed) {
+        const bool submitSplitIndexed =
+            splitWouldApply && !indexReorderApplied;
+        if (submitSplitIndexed) {
           const u64 indexSize = indexElementSize(pv.indexType);
-          u32 primitivesEmitted = 0;
-          u32 metalDraws = 0;
-          while (primitivesEmitted < primitiveCount) {
-            const u32 chunkPrimitives =
-                std::min(splitPrimitiveLimit, primitiveCount - primitivesEmitted);
+          for (const auto& chunk : splitChunks) {
+            const u32 primitivesEmitted = chunk.startPrimitive;
+            const u32 chunkPrimitives = chunk.primitiveCount;
+            if (chunkPrimitives == 0u) {
+              continue;
+            }
             const u64 chunkIndexOffset =
                 indexBufferOffset + static_cast<u64>(primitivesEmitted) * 3u * indexSize;
             recordedDrawIndexedPrimitives(ctx, encoder, primitiveType,
@@ -6309,12 +6510,14 @@ bool encodeDraw(EncodeContext& ctx,
                                           static_cast<u64>(chunkPrimitives) * 3u,
                                           indexBuffer, chunkIndexOffset, 1,
                                           metalBaseVertex, 0);
-            primitivesEmitted += chunkPrimitives;
-            ++metalDraws;
           }
           if (encoderBreakdown) {
             encoderBreakdown->recordSplitLargeIndexedDraw(
-                primitiveCount, splitPrimitiveLimit, metalDraws);
+                primitiveCount,
+                splitPrimitiveLimit,
+                splitStream0SpanLimit,
+                splitChunkStream0SpanMax,
+                static_cast<u32>(splitChunks.size()));
           }
         } else {
           recordedDrawIndexedPrimitives(ctx, encoder, primitiveType,

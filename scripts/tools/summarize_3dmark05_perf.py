@@ -246,6 +246,8 @@ ENCODER_SUM_KEYS = (
     "split_large_indexed_source_draws",
     "split_large_indexed_metal_draws",
     "split_large_indexed_extra_draws",
+    "split_large_indexed_stream0_span_limit",
+    "split_large_indexed_chunk_stream0_span_max",
     "split_large_indexed_primitive_count",
     "indexed_order_probe_draws",
     "indexed_order_probe_skipped",
@@ -381,6 +383,8 @@ TOP_ENCODER_KEYS = (
     "native_base_vertex_used_draws",
     "split_large_indexed_source_draws",
     "split_large_indexed_extra_draws",
+    "split_large_indexed_stream0_span_limit",
+    "split_large_indexed_chunk_stream0_span_max",
     "indexed_vertex_reference_count",
     "indexed_unique_vertex_estimate",
     "indexed_vertex_reuse_ratio",
@@ -535,6 +539,8 @@ ENCODER_CSV_KEYS = (
     "split_large_indexed_metal_draws",
     "split_large_indexed_extra_draws",
     "split_large_indexed_primitive_limit",
+    "split_large_indexed_stream0_span_limit",
+    "split_large_indexed_chunk_stream0_span_max",
     "split_large_indexed_primitive_count",
     "indexed_order_probe_draws",
     "indexed_order_probe_skipped",
@@ -704,6 +710,13 @@ PROBE_DRAW_CSV_KEYS = (
     "scissor_rect_eligible",
     "scissor_rect_applied",
     "reorder_bytes",
+    "split_eligible",
+    "split_would_apply",
+    "split_chunk_count",
+    "split_max_chunks_per_draw",
+    "split_stream0_span_limit",
+    "split_chunk_stream0_span_max",
+    "split_primitive_count",
     "original_index_available",
     "original_index_unique",
     "original_index_min",
@@ -1337,6 +1350,12 @@ def write_markdown(
         scissor_rect_eligible = [
             row for row in probe_draws if numeric_value(row, "scissor_rect_eligible")
         ]
+        split_eligible = [
+            row for row in probe_draws if numeric_value(row, "split_eligible")
+        ]
+        split_would_apply = [
+            row for row in probe_draws if numeric_value(row, "split_would_apply")
+        ]
         lines.append("## Indexed Probe Draw Samples")
         lines.append("")
         lines.append("| Metric | Value |")
@@ -1348,6 +1367,14 @@ def write_markdown(
         lines.append(f"| `optimized_applied` | `{fmt(len(optimized_applied))}` |")
         lines.append(f"| `scissor_rect_eligible` | `{fmt(len(scissor_rect_eligible))}` |")
         lines.append(f"| `scissor_rect_applied` | `{fmt(len(scissor_rect_applied))}` |")
+        lines.append(f"| `split_eligible` | `{fmt(len(split_eligible))}` |")
+        lines.append(f"| `split_would_apply` | `{fmt(len(split_would_apply))}` |")
+        lines.append(
+            f"| `split_chunk_count` | `{fmt(sum_key(probe_draws, 'split_chunk_count'))}` |"
+        )
+        lines.append(
+            f"| `split_primitive_count` | `{fmt(sum_key(probe_draws, 'split_primitive_count'))}` |"
+        )
         lines.append(
             f"| `reorder_bytes` | `{fmt(sum_key(probe_draws, 'reorder_bytes'))}` |"
         )
