@@ -8351,28 +8351,70 @@ Interpretation:
 
 - The new row/class-scoped cull probe is active and correctly bounded for
   `60/1` `opaque-depth-write`.
-- The next Xcode run should use the same strict gates as split/reverse probes:
-  `--top 4 --hot-gpu-share 95`, top-row key match, dxmt join coverage,
-  top-PSO attribution, and draw/vertex/triangle drift limits.
-- If `60/1` cull-none changes `VS Buffer Device Memory Bytes Written` or
-  `VS bytes / invocation`, cull/backend shape remains a viable owner. If it
-  stays flat, the next state-shape axis should move to `60/3`, depth function,
-  or material grouping rather than cull mode.
+
+Xcode validation:
+
+```text
+experiments/output/app-d3d9-3dmark05-probe-force-cull-row-60-1-none-gputrace-r1/3dmark05-perf-summary.md
+traces/app-d3d9-3dmark05-probe-force-cull-row-60-1-none-gputrace-r1/frame60.gputrace
+traces/app-d3d9-3dmark05-probe-force-cull-row-60-1-none-gputrace-r1/analysis/frame60-performance.gputrace
+traces/app-d3d9-3dmark05-probe-force-cull-row-60-1-none-gputrace-r1/analysis/frame60-counters-xcode.csv
+traces/app-d3d9-3dmark05-probe-force-cull-row-60-1-none-gputrace-r1/analysis/frame60-xcode-dxmt-comparison.md
+traces/app-d3d9-3dmark05-probe-force-cull-row-60-1-none-gputrace-r1/analysis/frame60-xcode-dxmt-bottleneck-report.md
+```
+
+The Xcode export used the strict gates from split/reverse probes:
+`--top 4 --hot-gpu-share 95`, top-row key match, dxmt join coverage,
+top-PSO attribution, Xcode counter coverage, and draw/vertex/triangle drift
+limits. It finalized successfully against
+`measure-index-cache-gputrace-r1`.
+
+| Metric | Baseline | `60/1` cull-none | Delta |
+|---|---:|---:|---:|
+| Total GPU | `34.391ms` | `34.877ms` | `+1.41%` |
+| Hot-set GPU | `33.741ms` | `34.276ms` | `+1.58%` |
+| Hot-set VS buffer write | `1472.747MiB` | `1472.784MiB` | `+0.00%` |
+| Hot-set VS B / invocation | `856.265B` | `856.287B` | `+0.00%` |
+| Hot-set VS write / expected VSOut | `4.654x` | `4.654x` | `+0.00%` |
+| `60/1` GPU | `8.252ms` | `8.599ms` | `+4.21%` |
+| `60/1` VS buffer write | `437.404MiB` | `437.306MiB` | `-0.02%` |
+| `60/1` VS B / invocation | `1165.482B` | `1165.222B` | `-0.02%` |
+| `60/1` named tiled buffer | `0.750MiB` | `1.000MiB` | `+33.33%` |
+| `60/1` cull n/f/b | `0 / 156 / 0` | `156 / 0 / 0` | target changed |
+
+Decision:
+
+- The scoped probe definitively changes the target row's effective cull mode
+  (`front -> none`) while preserving hot-row membership and geometry.
+- `60/1` cull mode is not the owner of the hidden VS-buffer-write bucket:
+  VS write, VS bytes/invocation, and hot-set hidden write all stay flat.
+- The small named tiled-buffer movement proves the backend shape changed, but
+  it is much smaller than the `~437MiB` target-row hidden estimate and it does
+  not reduce GPU time.
+- Together with broad `--disable-cull` and `--force-cull-mode back`, this
+  rejects cull state/orientation as a first-order fix. Keep cull/clip/tiled
+  counters as classifiers only.
+- The next GPU probes should change a different axis: primitive locality/order
+  with stable row/geometry gates, material grouping, or compiler/backend
+  stage-output storage inspection.
 
 ```mermaid
 flowchart TD
   Owner["hidden vertex/tiler/backend width\nnot draw-size split"] --> Probe["row/class-scoped cull probe"]
   Probe --> Scope["60/1 opaque-depth-write only\nfront -> none"]
   Scope --> Smoke["no-gputrace smoke pass\nnormal GT1 frame"]
-  Smoke --> Xcode["next: gputrace + Xcode counters"]
-  Xcode --> Gate{"VS write or B/inv moves?"}
-  Gate -- "yes" --> CullOwner["cull/backend shape is implicated"]
-  Gate -- "no" --> Next["try another backend axis\n60/3 / depth func / material grouping"]
+  Smoke --> Xcode["gputrace + Xcode counters\nstrict gates pass"]
+  Xcode --> Active["target cull bucket changed\n0/156/0 -> 156/0/0"]
+  Active --> Named["named tiled moves\n0.750 -> 1.000MiB"]
+  Active --> Stable["VS write stays flat\n437.404 -> 437.306MiB"]
+  Stable --> Reject["reject cull mode\nas hidden write owner"]
+  Named --> Classifier["keep cull/tiler counters\nas secondary classifier"]
+  Reject --> Next["next: primitive locality/order\nmaterial grouping\ncompiler/backend storage"]
 
   classDef hot fill:#ffe8e8,stroke:#b64242,color:#2b0d0d
   classDef known fill:#e8f0ff,stroke:#476cb6,color:#0d1833
-  class Owner,Gate,CullOwner,Next hot
-  class Probe,Scope,Smoke,Xcode known
+  class Owner,Stable,Reject,Next hot
+  class Probe,Scope,Smoke,Xcode,Active,Named,Classifier known
 ```
 
 #### Reverse Material-Class Probe Tooling
