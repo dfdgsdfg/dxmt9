@@ -722,6 +722,18 @@ bool probeReverseNonOpaqueIndexedTriangles() {
   return v;
 }
 
+bool probeSortIndexedTrianglesByMinIndex() {
+  static const bool v =
+      util::getenvFlag("DXMT9_PROBE_SORT_INDEXED_TRIANGLES_BY_MIN_INDEX");
+  return v;
+}
+
+bool probeOptimizeIndexedTrianglesVertexCache() {
+  static const bool v =
+      util::getenvFlag("DXMT9_PROBE_OPTIMIZE_INDEXED_TRIANGLES_VERTEX_CACHE");
+  return v;
+}
+
 IndexedTriangleClassFilter probeReverseIndexedTrianglesClassFilter() {
   static const IndexedTriangleClassFilter filter =
       makeIndexedTriangleClassFilter(

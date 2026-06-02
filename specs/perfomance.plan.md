@@ -10999,3 +10999,258 @@ flowchart TD
   class XcodeDone,Stable,Reject,Next hot
   class DepthWrite,DepthFunc,Scope,Geometry,Visual,Time,NoWin known
 ```
+
+### Min-Index Triangle Reorder Scout
+
+The contiguous stream0-span split showed that the large hot draws cannot be
+bounded by cutting original contiguous index ranges. The next diagnostic probe
+keeps the indexed path and draw count intact but changes triangle order inside
+selected draws by sorting triangle-list primitives by `(minIndex, maxIndex,
+originalOrder)`:
+
+- `DXMT9_PROBE_SORT_INDEXED_TRIANGLES_BY_MIN_INDEX`
+- reuses `DXMT9_PROBE_REVERSE_INDEXED_TRIANGLES_ROW(S)`
+- reuses `DXMT9_PROBE_REVERSE_INDEXED_TRIANGLES_CLASS(ES)`
+- reuses `DXMT9_PROBE_REVERSE_INDEXED_TRIANGLES_STREAM0_SPAN_MIN`
+
+This is intentionally diagnostic-only. It changes primitive order and can
+change visibility for non-opaque draws, but it emits the same
+`dxmt9-perf-indexed-probe-draw` before/after locality fields as the reverse
+probe. It is useful as a cheap no-gputrace scout before spending Xcode counter
+time.
+
+Scout command:
+
+```bash
+scripts/tools/run_3dmark05_perf_probe.sh \
+  --suffix sort-hotrows-minindex-span600k-scout-r1 \
+  --frame 60 \
+  --timeout 180 \
+  --no-gputrace \
+  --encoder-breakdown-seq 60 \
+  --probe-sort-indexed-triangles-by-min-index \
+  --probe-reverse-indexed-triangles-rows 60/0,60/1,60/2,60/3,60/4 \
+  --probe-reverse-indexed-triangles-classes large4096 \
+  --probe-reverse-indexed-triangles-stream0-span-min 600000 \
+  --measure-index-reuse \
+  --top 3 \
+  --hot-gpu-share 95 \
+  --min-free-mb 512
+```
+
+Artifacts:
+
+```text
+experiments/output/app-d3d9-3dmark05-sort-hotrows-minindex-span600k-scout-r1/actual.png
+experiments/output/app-d3d9-3dmark05-sort-hotrows-minindex-span600k-scout-r1/3dmark05-perf-summary.md
+experiments/output/app-d3d9-3dmark05-sort-hotrows-minindex-span600k-scout-r1/3dmark05-perf-indexed-probe-draws.csv
+```
+
+Result:
+
+| Metric | Original | Min-index sorted | Delta |
+|---|---:|---:|---:|
+| Applied draws | `7` | `7` | same |
+| Primitive count | `158,354` | `158,354` | same |
+| Reordered transient IB bytes | `0` | `950,124` | diagnostic upload |
+| Cache miss 16 | `300,027` | `315,777` | `+5.25%` |
+| Cache miss 32 | `274,722` | `308,357` | `+12.24%` |
+| Cache miss 64 | `255,598` | `300,769` | `+17.67%` |
+| Adjacent index delta sum | `2,501,380,399` | `2,231,934,299` | `-10.77%` |
+| Backward jumps | `234,094` | `224,350` | `-4.16%` |
+| Triangle index span sum | `1,172,072,664` | `1,172,072,664` | unchanged |
+| Stream0 span sum | `4,661,832B` | `4,661,832B` | unchanged |
+
+Applied scope:
+
+| Row | Draws | Primitive count | Cache64 delta |
+|---|---:|---:|---:|
+| `60/0` | `1` | `22,622` | `36,514 -> 42,967` (`+17.67%`) |
+| `60/1` | `1` | `22,622` | `36,514 -> 42,967` (`+17.67%`) |
+| `60/2` | `1` | `22,622` | `36,514 -> 42,967` (`+17.67%`) |
+| `60/3` | `1` | `22,622` | `36,514 -> 42,967` (`+17.67%`) |
+| `60/4` | `3` | `67,866` | `109,542 -> 128,901` (`+17.67%`) |
+
+The screenshot is a normal GT1 frame, so the probe does not collapse rendering
+to the previous yellow/constant failure mode. However, the locality result is
+negative: sorting by index range reduces adjacent deltas but worsens the
+estimated post-transform cache behavior. The original 3DMark05 order for these
+draws is already more vertex-cache friendly than a naive index-range sort.
+
+Updated conclusion:
+
+- Do not spend Xcode/gputrace time on the min-index sort probe. It is a useful
+  negative scout, not a VS-write reduction candidate.
+- The hidden VS/internal write bucket is not explained by simple stream0 span
+  order, primitive-count split, depth-write state, or depth-compare state.
+- The next primitive-order experiment must be cache-aware if it changes order:
+  meshlet/cluster partitioning should preserve or improve cache misses while
+  reducing backend/tile parameter pressure. If that cannot be done with the
+  captured index stream alone, move to a row-local mini replay harness using
+  dumped shaders/geometry so Xcode can isolate backend storage behavior without
+  the full GT1 frame.
+
+```mermaid
+flowchart TD
+  SpanReject["contiguous span split rejected"] --> SortProbe["min-index triangle sort"]
+  SortProbe --> Scope["7 applied 22622-primitive hot draws\n950124B transient IB"]
+  Scope --> Delta["adjacent delta improves\n-10.77%"]
+  Scope --> Cache["cache64 worsens\n+17.67%"]
+  Scope --> Span["triangle/span totals unchanged"]
+  Cache --> Reject["reject naive index-range sort\nas gputrace candidate"]
+  Delta --> Reject
+  Span --> Reject
+  Reject --> NextA["next: cache-aware meshlet/cluster reorder"]
+  Reject --> NextB["or row-local mini replay\nshader + geometry + state isolation"]
+
+  classDef hot fill:#ffe8e8,stroke:#b64242,color:#2b0d0d
+  classDef known fill:#e8f0ff,stroke:#476cb6,color:#0d1833
+  class SortProbe,Cache,Reject,NextA,NextB hot
+  class SpanReject,Scope,Delta,Span known
+```
+
+### Cache-Aware Triangle Reorder Scout
+
+The min-index scout proved that changing primitive order by index range alone
+is the wrong axis: it reduced adjacent deltas but worsened cache misses. The
+next probe keeps the same diagnostic contract but picks triangle order with a
+small greedy vertex-cache heuristic:
+
+- `DXMT9_PROBE_OPTIMIZE_INDEXED_TRIANGLES_VERTEX_CACHE`
+- reuses `DXMT9_PROBE_REVERSE_INDEXED_TRIANGLES_ROW(S)`
+- reuses `DXMT9_PROBE_REVERSE_INDEXED_TRIANGLES_CLASS(ES)`
+- reuses `DXMT9_PROBE_REVERSE_INDEXED_TRIANGLES_STREAM0_SPAN_MIN`
+
+The heuristic maintains a 64-entry MRU cache, prefers candidate triangles that
+reuse more cached vertices, and falls back to original order when no adjacent
+candidate exists. It is still diagnostic-only because primitive order changes
+can affect blended or visibility-sensitive draws. Its purpose is to create a
+same-draw-count Xcode candidate where cache locality improves rather than
+regresses.
+
+Scout command:
+
+```bash
+scripts/tools/run_3dmark05_perf_probe.sh \
+  --suffix cacheopt-hotrows-span600k-scout-r1 \
+  --frame 60 \
+  --timeout 180 \
+  --no-gputrace \
+  --encoder-breakdown-seq 60 \
+  --probe-optimize-indexed-triangles-vertex-cache \
+  --probe-reverse-indexed-triangles-rows 60/0,60/1,60/2,60/3,60/4 \
+  --probe-reverse-indexed-triangles-classes large4096 \
+  --probe-reverse-indexed-triangles-stream0-span-min 600000 \
+  --measure-index-reuse \
+  --top 3 \
+  --hot-gpu-share 95 \
+  --min-free-mb 512
+```
+
+Artifacts:
+
+```text
+experiments/output/app-d3d9-3dmark05-cacheopt-hotrows-span600k-scout-r1/actual.png
+experiments/output/app-d3d9-3dmark05-cacheopt-hotrows-span600k-scout-r1/3dmark05-perf-summary.md
+experiments/output/app-d3d9-3dmark05-cacheopt-hotrows-span600k-scout-r1/3dmark05-perf-indexed-probe-draws.csv
+```
+
+Result:
+
+| Metric | Original | Cache-aware order | Delta |
+|---|---:|---:|---:|
+| Applied draws | `7` | `7` | same |
+| Primitive count | `158,354` | `158,354` | same |
+| Reordered transient IB bytes | `0` | `950,124` | diagnostic upload |
+| Cache miss 16 | `300,027` | `204,771` | `-31.75%` |
+| Cache miss 32 | `274,722` | `198,695` | `-27.67%` |
+| Cache miss 64 | `255,598` | `195,706` | `-23.43%` |
+| Adjacent index delta sum | `2,501,380,399` | `2,286,726,981` | `-8.58%` |
+| Backward jumps | `234,094` | `227,549` | `-2.80%` |
+| Triangle index span sum | `1,172,072,664` | `1,172,072,664` | unchanged |
+| Stream0 span sum | `4,661,832B` | `4,661,832B` | unchanged |
+
+Applied scope:
+
+| Row | Draws | Primitive count | Cache64 delta | Cache32 delta |
+|---|---:|---:|---:|---:|
+| `60/0` | `1` | `22,622` | `36,514 -> 27,958` (`-23.43%`) | `39,246 -> 28,385` (`-27.67%`) |
+| `60/1` | `1` | `22,622` | `36,514 -> 27,958` (`-23.43%`) | `39,246 -> 28,385` (`-27.67%`) |
+| `60/2` | `1` | `22,622` | `36,514 -> 27,958` (`-23.43%`) | `39,246 -> 28,385` (`-27.67%`) |
+| `60/3` | `1` | `22,622` | `36,514 -> 27,958` (`-23.43%`) | `39,246 -> 28,385` (`-27.67%`) |
+| `60/4` | `3` | `67,866` | `109,542 -> 83,874` (`-23.43%`) | `117,738 -> 85,155` (`-27.67%`) |
+
+The output screenshot is a normal GT1 frame and does not reproduce the
+yellow/constant failure. The captured screenshot is not a frame-60 pixel
+equivalence proof, so this remains a diagnostic candidate rather than a
+correctness-approved optimization.
+
+Compared with the min-index scout:
+
+| Probe | Cache64 delta | Adjacent delta | Interpretation |
+|---|---:|---:|---|
+| Min-index sort | `+17.67%` | `-10.77%` | Reject: range sorting fights vertex-cache locality. |
+| Cache-aware reorder | `-23.43%` | `-8.58%` | Promote to Xcode candidate: same draw count and better cache locality. |
+
+Xcode candidate command:
+
+```bash
+scripts/tools/run_3dmark05_perf_probe.sh \
+  --suffix cacheopt-hotrows-span600k-gputrace-r1 \
+  --frame 60 \
+  --timeout 180 \
+  --encoder-breakdown-seq 60 \
+  --probe-optimize-indexed-triangles-vertex-cache \
+  --probe-reverse-indexed-triangles-rows 60/0,60/1,60/2,60/3,60/4 \
+  --probe-reverse-indexed-triangles-classes large4096 \
+  --probe-reverse-indexed-triangles-stream0-span-min 600000 \
+  --measure-index-reuse \
+  --top 3 \
+  --hot-gpu-share 95
+```
+
+Finalizer gate after Xcode counter export:
+
+```bash
+scripts/tools/finalize_3dmark05_perf_probe.sh \
+  --suffix cacheopt-hotrows-span600k-gputrace-r1 \
+  --frame 60 \
+  --top 3 \
+  --hot-gpu-share 95 \
+  --baseline-joined traces/app-d3d9-3dmark05-current-normal-gputrace-r1/analysis/frame60-xcode-dxmt-joined-summary.csv \
+  --require-top-row-key-match \
+  --require-top-pso-attribution \
+  --min-top-pso-samples-per-draw 0.90 \
+  --require-xcode-counter-coverage \
+  --require-dxmt-join-coverage \
+  --min-top-dxmt-joined-fraction 1.0 \
+  --max-top-draw-call-delta-ratio 0.01 \
+  --max-top-vertex-count-delta-ratio 0.05 \
+  --max-top-triangle-delta-ratio 0.05
+```
+
+Disk note: the current workspace has only about `1.57GiB` free, so raw
+gputrace plus Xcode's embedded-performance export is likely to fail until
+space is freed.
+
+```mermaid
+flowchart TD
+  Prior["min-index sort\ncache64 +17.67%"] --> Need["need cache-aware primitive-order probe"]
+  Need --> CacheProbe["greedy vertex-cache reorder\nsame rows/classes/span"]
+  CacheProbe --> Scope["7 hot 22622-primitive draws\n950124B transient IB"]
+  Scope --> CacheWin["cache64 -23.43%\ncache32 -27.67%"]
+  Scope --> StableGeom["primitive count, draw count,\ntriangle/span totals unchanged"]
+  Scope --> Visual["normal GT1 screenshot\nnot pixel-equivalence proof"]
+  CacheWin --> Promote["promote to Xcode candidate"]
+  StableGeom --> Promote
+  Visual --> Promote
+  Promote --> Xcode["next: gputrace + Xcode counters\nwhen disk headroom is available"]
+  Xcode --> Decide{"VS Buffer Device Memory Bytes Written moves?"}
+  Decide -- "yes" --> Owner["index/cache locality affects\nhidden VS/internal write bucket"]
+  Decide -- "no" --> Reject["reject primitive order/cache locality\nmove to mini replay/backend storage isolation"]
+
+  classDef hot fill:#ffe8e8,stroke:#b64242,color:#2b0d0d
+  classDef known fill:#e8f0ff,stroke:#476cb6,color:#0d1833
+  class CacheProbe,CacheWin,Promote,Xcode,Decide hot
+  class Prior,Need,Scope,StableGeom,Visual,Owner,Reject known
+```

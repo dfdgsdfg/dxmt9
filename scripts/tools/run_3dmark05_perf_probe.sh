@@ -38,6 +38,8 @@ force_expand_indexed=0
 probe_reverse_indexed_triangles=0
 probe_reverse_opaque_indexed_triangles=0
 probe_reverse_nonopaque_indexed_triangles=0
+probe_sort_indexed_triangles_by_min_index=0
+probe_optimize_indexed_triangles_vertex_cache=0
 probe_reverse_indexed_triangles_row=
 probe_reverse_indexed_triangles_rows=
 probe_reverse_indexed_triangles_class=
@@ -230,6 +232,16 @@ Options:
                       Set DXMT9_PROBE_REVERSE_NONOPAQUE_INDEXED_TRIANGLES=1
                       to reverse only triangle-list indexed draws outside the
                       opaque depth-writing subset for visibility/tile probes
+  --probe-sort-indexed-triangles-by-min-index
+                      Set DXMT9_PROBE_SORT_INDEXED_TRIANGLES_BY_MIN_INDEX=1
+                      to sort triangle-list primitive order by triangle
+                      min/max index through a transient IB. Uses the same
+                      row/class/span filters as reverse-indexed-triangles
+  --probe-optimize-indexed-triangles-vertex-cache
+                      Set DXMT9_PROBE_OPTIMIZE_INDEXED_TRIANGLES_VERTEX_CACHE=1
+                      to greedily reorder triangle-list primitive order around
+                      a small vertex cache through a transient IB. Uses the
+                      same row/class/span filters as reverse-indexed-triangles
   --probe-reverse-indexed-triangles-row SEQ/ENC
                       Set DXMT9_PROBE_REVERSE_INDEXED_TRIANGLES_ROW=SEQ/ENC to
                       constrain any reverse-indexed-triangles probe to one
@@ -560,6 +572,14 @@ while (($#)); do
       ;;
     --probe-reverse-nonopaque-indexed-triangles)
       probe_reverse_nonopaque_indexed_triangles=1
+      shift
+      ;;
+    --probe-sort-indexed-triangles-by-min-index)
+      probe_sort_indexed_triangles_by_min_index=1
+      shift
+      ;;
+    --probe-optimize-indexed-triangles-vertex-cache)
+      probe_optimize_indexed_triangles_vertex_cache=1
       shift
       ;;
     --probe-reverse-indexed-triangles-row)
@@ -1244,6 +1264,14 @@ fi
 
 if (( probe_reverse_nonopaque_indexed_triangles )); then
   env_args+=("DXMT9_PROBE_REVERSE_NONOPAQUE_INDEXED_TRIANGLES=1")
+fi
+
+if (( probe_sort_indexed_triangles_by_min_index )); then
+  env_args+=("DXMT9_PROBE_SORT_INDEXED_TRIANGLES_BY_MIN_INDEX=1")
+fi
+
+if (( probe_optimize_indexed_triangles_vertex_cache )); then
+  env_args+=("DXMT9_PROBE_OPTIMIZE_INDEXED_TRIANGLES_VERTEX_CACHE=1")
 fi
 
 if [[ -n "$probe_reverse_indexed_triangles_row" ]]; then

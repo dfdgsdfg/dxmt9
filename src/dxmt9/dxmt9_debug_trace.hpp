@@ -329,6 +329,19 @@ bool probeReverseOpaqueIndexedTriangles();
 // Env: DXMT9_PROBE_REVERSE_NONOPAQUE_INDEXED_TRIANGLES.
 bool probeReverseNonOpaqueIndexedTriangles();
 
+// Diagnostic-only: keep indexed draws and render state intact, but submit a
+// transient index buffer with triangle-list primitive order sorted by triangle
+// min/max index. Uses the reverse-indexed-triangles row/class/span filters.
+// Env: DXMT9_PROBE_SORT_INDEXED_TRIANGLES_BY_MIN_INDEX.
+bool probeSortIndexedTrianglesByMinIndex();
+
+// Diagnostic-only: keep indexed draws and render state intact, but submit a
+// transient index buffer with triangle-list primitive order greedily reordered
+// around a small post-transform vertex cache. Uses the reverse-indexed-
+// triangles row/class/span filters.
+// Env: DXMT9_PROBE_OPTIMIZE_INDEXED_TRIANGLES_VERTEX_CACHE.
+bool probeOptimizeIndexedTrianglesVertexCache();
+
 // Optional class filter for reverse-indexed-triangle probes. Accepted values:
 // any, opaque-depth-write, nonopaque, depth-read, alpha-blend, scissor,
 // textured, and large4096.

@@ -42,6 +42,7 @@
 #include <sstream>
 #include <span>
 #include <string>
+#include <unordered_map>
 #include <unordered_set>
 #include <vector>
 
@@ -3095,6 +3096,320 @@ bool buildReverseTriangleOrderIndexBytes(std::span<const u8> indexBytes,
     std::memcpy(out.data() + triangle * triangleBytes,
                 indexBytes.data() + startByte + srcTriangle * triangleBytes,
                 triangleBytes);
+  }
+  return true;
+}
+
+bool buildMinIndexSortedTriangleOrderIndexBytes(std::span<const u8> indexBytes,
+                                                IndexType indexType,
+                                                u32 startIndex,
+                                                u64 indexCount,
+                                                std::vector<u8>& out) {
+  if (indexBytes.empty() || indexCount == 0u || (indexCount % 3u) != 0u) {
+    return false;
+  }
+  const std::size_t elementSize = indexElementSize(indexType);
+  const std::size_t startByte = static_cast<std::size_t>(startIndex) * elementSize;
+  if (startByte > indexBytes.size()) {
+    return false;
+  }
+  const std::size_t maxReadable =
+      (indexBytes.size() - startByte) / elementSize;
+  if (indexCount > static_cast<u64>(maxReadable)) {
+    return false;
+  }
+
+  struct TriangleKey {
+    u32 minIndex = 0;
+    u32 maxIndex = 0;
+    std::size_t triangle = 0;
+  };
+
+  const std::size_t triangleCount = static_cast<std::size_t>(indexCount / 3u);
+  std::vector<TriangleKey> keys;
+  keys.reserve(triangleCount);
+  for (std::size_t triangle = 0; triangle < triangleCount; ++triangle) {
+    const std::size_t triElement =
+        static_cast<std::size_t>(startIndex) + triangle * 3u;
+    u32 triMin = std::numeric_limits<u32>::max();
+    u32 triMax = 0;
+    for (std::size_t i = 0; i < 3u; ++i) {
+      const auto value = readIndexValue(indexBytes, indexType, triElement + i);
+      if (!value.has_value()) {
+        return false;
+      }
+      triMin = std::min(triMin, *value);
+      triMax = std::max(triMax, *value);
+    }
+    keys.push_back(TriangleKey{
+        .minIndex = triMin,
+        .maxIndex = triMax,
+        .triangle = triangle,
+    });
+  }
+
+  std::stable_sort(keys.begin(), keys.end(), [](const TriangleKey& a,
+                                                const TriangleKey& b) {
+    if (a.minIndex != b.minIndex) {
+      return a.minIndex < b.minIndex;
+    }
+    if (a.maxIndex != b.maxIndex) {
+      return a.maxIndex < b.maxIndex;
+    }
+    return a.triangle < b.triangle;
+  });
+
+  bool changed = false;
+  for (std::size_t triangle = 0; triangle < keys.size(); ++triangle) {
+    if (keys[triangle].triangle != triangle) {
+      changed = true;
+      break;
+    }
+  }
+  if (!changed) {
+    return false;
+  }
+
+  const std::size_t byteCount = static_cast<std::size_t>(indexCount) * elementSize;
+  out.resize(byteCount);
+  const std::size_t triangleBytes = 3u * elementSize;
+  for (std::size_t triangle = 0; triangle < keys.size(); ++triangle) {
+    const std::size_t srcTriangle = keys[triangle].triangle;
+    std::memcpy(out.data() + triangle * triangleBytes,
+                indexBytes.data() + startByte + srcTriangle * triangleBytes,
+                triangleBytes);
+  }
+  return true;
+}
+
+void writeIndexValue(std::vector<u8>& out,
+                     IndexType indexType,
+                     std::size_t elementIndex,
+                     u32 value) {
+  const std::size_t elementSize = indexElementSize(indexType);
+  const std::size_t offset = elementIndex * elementSize;
+  if (indexType == IndexType::UInt16) {
+    const u16 v = static_cast<u16>(value);
+    std::memcpy(out.data() + offset, &v, sizeof(v));
+  } else {
+    std::memcpy(out.data() + offset, &value, sizeof(value));
+  }
+}
+
+bool buildVertexCacheOptimizedTriangleOrderIndexBytes(
+    std::span<const u8> indexBytes,
+    IndexType indexType,
+    u32 startIndex,
+    u64 indexCount,
+    std::vector<u8>& out) {
+  if (indexBytes.empty() || indexCount == 0u || (indexCount % 3u) != 0u) {
+    return false;
+  }
+  const std::size_t elementSize = indexElementSize(indexType);
+  const std::size_t startByte = static_cast<std::size_t>(startIndex) * elementSize;
+  if (startByte > indexBytes.size()) {
+    return false;
+  }
+  const std::size_t maxReadable =
+      (indexBytes.size() - startByte) / elementSize;
+  if (indexCount > static_cast<u64>(maxReadable)) {
+    return false;
+  }
+
+  struct Triangle {
+    std::array<u32, 3> indices{};
+    u32 minIndex = 0;
+    u32 maxIndex = 0;
+    std::size_t original = 0;
+  };
+
+  const std::size_t triangleCount = static_cast<std::size_t>(indexCount / 3u);
+  std::vector<Triangle> triangles;
+  triangles.reserve(triangleCount);
+  std::unordered_map<u32, std::vector<u32>> vertexTriangles;
+  std::unordered_map<u32, u32> remainingVertexUse;
+  vertexTriangles.reserve(triangleCount * 2u);
+  remainingVertexUse.reserve(triangleCount * 2u);
+
+  for (std::size_t triangle = 0; triangle < triangleCount; ++triangle) {
+    Triangle tri{.original = triangle};
+    const std::size_t triElement =
+        static_cast<std::size_t>(startIndex) + triangle * 3u;
+    tri.minIndex = std::numeric_limits<u32>::max();
+    for (std::size_t i = 0; i < 3u; ++i) {
+      const auto value = readIndexValue(indexBytes, indexType, triElement + i);
+      if (!value.has_value()) {
+        return false;
+      }
+      tri.indices[i] = *value;
+      tri.minIndex = std::min(tri.minIndex, *value);
+      tri.maxIndex = std::max(tri.maxIndex, *value);
+      vertexTriangles[*value].push_back(static_cast<u32>(triangle));
+      ++remainingVertexUse[*value];
+    }
+    triangles.push_back(tri);
+  }
+
+  constexpr std::size_t kProbeCacheSize = 64u;
+  std::vector<u32> cache;
+  cache.reserve(kProbeCacheSize);
+  std::vector<u32> candidates;
+  candidates.reserve(std::min<std::size_t>(triangleCount, 256u));
+  std::vector<u8> emitted(triangleCount, 0u);
+  std::vector<u8> inCandidates(triangleCount, 0u);
+  std::vector<u32> order;
+  order.reserve(triangleCount);
+  std::size_t nextOriginal = 0;
+
+  auto cachePosition = [&](u32 index) -> std::optional<std::size_t> {
+    for (std::size_t i = 0; i < cache.size(); ++i) {
+      if (cache[i] == index) {
+        return i;
+      }
+    }
+    return std::nullopt;
+  };
+
+  auto addCandidate = [&](u32 triangle) {
+    const std::size_t t = static_cast<std::size_t>(triangle);
+    if (t >= triangleCount || emitted[t] || inCandidates[t]) {
+      return;
+    }
+    candidates.push_back(triangle);
+    inCandidates[t] = 1u;
+  };
+
+  auto addVertexNeighbors = [&](u32 index) {
+    auto it = vertexTriangles.find(index);
+    if (it == vertexTriangles.end()) {
+      return;
+    }
+    for (const u32 triangle : it->second) {
+      addCandidate(triangle);
+    }
+  };
+
+  auto chooseBestCandidate = [&]() -> std::optional<u32> {
+    std::optional<std::size_t> bestSlot;
+    std::int64_t bestScore = std::numeric_limits<std::int64_t>::min();
+    for (std::size_t slot = 0; slot < candidates.size(); ++slot) {
+      const u32 candidate = candidates[slot];
+      const std::size_t triangleIndex = static_cast<std::size_t>(candidate);
+      if (triangleIndex >= triangleCount || emitted[triangleIndex]) {
+        continue;
+      }
+      const auto& tri = triangles[triangleIndex];
+      u32 cachedVertices = 0;
+      u32 cacheDistance = 0;
+      u32 remainingUse = 0;
+      for (const u32 index : tri.indices) {
+        if (const auto pos = cachePosition(index)) {
+          ++cachedVertices;
+          cacheDistance += static_cast<u32>(*pos);
+        }
+        remainingUse += remainingVertexUse[index];
+      }
+      const std::int64_t score =
+          static_cast<std::int64_t>(cachedVertices) * 1'000'000ll -
+          static_cast<std::int64_t>(cacheDistance) * 1'000ll -
+          static_cast<std::int64_t>(remainingUse) * 10ll -
+          static_cast<std::int64_t>(tri.minIndex) / 256ll;
+      if (score > bestScore ||
+          (score == bestScore &&
+           (!bestSlot.has_value() ||
+            tri.original < triangles[candidates[*bestSlot]].original))) {
+        bestScore = score;
+        bestSlot = slot;
+      }
+    }
+    if (!bestSlot.has_value()) {
+      return std::nullopt;
+    }
+    const u32 chosen = candidates[*bestSlot];
+    inCandidates[chosen] = 0u;
+    candidates[*bestSlot] = candidates.back();
+    candidates.pop_back();
+    return chosen;
+  };
+
+  auto chooseNextOriginal = [&]() -> std::optional<u32> {
+    while (nextOriginal < triangleCount && emitted[nextOriginal]) {
+      ++nextOriginal;
+    }
+    if (nextOriginal >= triangleCount) {
+      return std::nullopt;
+    }
+    return static_cast<u32>(nextOriginal);
+  };
+
+  auto touchCacheVertex = [&](u32 index) {
+    for (std::size_t i = 0; i < cache.size(); ++i) {
+      if (cache[i] == index) {
+        for (std::size_t j = i; j > 0u; --j) {
+          cache[j] = cache[j - 1u];
+        }
+        cache[0] = index;
+        return;
+      }
+    }
+    if (cache.size() < kProbeCacheSize) {
+      cache.push_back(index);
+    } else {
+      for (std::size_t i = cache.size() - 1u; i > 0u; --i) {
+        cache[i] = cache[i - 1u];
+      }
+    }
+    cache[0] = index;
+  };
+
+  while (order.size() < triangleCount) {
+    const std::optional<u32> candidate = chooseBestCandidate();
+    const std::optional<u32> fallback =
+        candidate.has_value() ? candidate : chooseNextOriginal();
+    if (!fallback.has_value()) {
+      break;
+    }
+    const u32 chosen = *fallback;
+    const std::size_t triangleIndex = static_cast<std::size_t>(chosen);
+    if (triangleIndex >= triangleCount || emitted[triangleIndex]) {
+      continue;
+    }
+    emitted[triangleIndex] = 1u;
+    inCandidates[triangleIndex] = 0u;
+    order.push_back(chosen);
+    const auto& tri = triangles[triangleIndex];
+    for (const u32 index : tri.indices) {
+      if (remainingVertexUse[index] != 0u) {
+        --remainingVertexUse[index];
+      }
+      touchCacheVertex(index);
+    }
+    for (const u32 index : tri.indices) {
+      addVertexNeighbors(index);
+    }
+  }
+
+  if (order.size() != triangleCount) {
+    return false;
+  }
+  bool changed = false;
+  for (std::size_t triangle = 0; triangle < order.size(); ++triangle) {
+    if (order[triangle] != triangle) {
+      changed = true;
+      break;
+    }
+  }
+  if (!changed) {
+    return false;
+  }
+
+  const std::size_t byteCount = static_cast<std::size_t>(indexCount) * elementSize;
+  out.resize(byteCount);
+  for (std::size_t triangle = 0; triangle < order.size(); ++triangle) {
+    const auto& tri = triangles[order[triangle]];
+    for (std::size_t i = 0; i < 3u; ++i) {
+      writeIndexValue(out, indexType, triangle * 3u + i, tri.indices[i]);
+    }
   }
   return true;
 }
@@ -6239,9 +6554,14 @@ bool encodeDraw(EncodeContext& ctx,
           debug::probeReverseOpaqueIndexedTriangles();
       const bool reverseNonOpaqueIndexedTriangles =
           debug::probeReverseNonOpaqueIndexedTriangles();
+      const bool sortIndexedTrianglesByMinIndex =
+          debug::probeSortIndexedTrianglesByMinIndex();
+      const bool optimizeIndexedTrianglesVertexCache =
+          debug::probeOptimizeIndexedTrianglesVertexCache();
       const bool reverseTriangleProbeRequested =
           (reverseAllIndexedTriangles || reverseOpaqueIndexedTriangles ||
-           reverseNonOpaqueIndexedTriangles) &&
+           reverseNonOpaqueIndexedTriangles || sortIndexedTrianglesByMinIndex ||
+           optimizeIndexedTrianglesVertexCache) &&
           pv.primitiveType == core::PrimitiveType::TriangleList;
       const bool optimizeScreenBlendIndexOrderRequested =
           debug::optimizeScreenBlendIndexOrder() &&
@@ -6312,15 +6632,32 @@ bool encodeDraw(EncodeContext& ctx,
             stream0SpanFilterMatches(reverseStream0SpanMin);
         probeEligible =
             classEligible &&
-            (reverseAllIndexedTriangles ||
+            (optimizeIndexedTrianglesVertexCache ||
+             sortIndexedTrianglesByMinIndex || reverseAllIndexedTriangles ||
              (reverseOpaqueIndexedTriangles && opaqueDepthWritingEligible) ||
              (reverseNonOpaqueIndexedTriangles && !opaqueDepthWritingEligible));
-        if (probeEligible &&
-            buildReverseTriangleOrderIndexBytes(indexBytesForReuse,
-                                                pv.indexType,
-                                                pv.startIndex,
-                                                vertexCount,
-                                                probeReorderedIndexBytes)) {
+        const bool probeIndexBytesBuilt =
+            probeEligible &&
+            (optimizeIndexedTrianglesVertexCache
+                 ? buildVertexCacheOptimizedTriangleOrderIndexBytes(
+                       indexBytesForReuse,
+                       pv.indexType,
+                       pv.startIndex,
+                       vertexCount,
+                       probeReorderedIndexBytes)
+                 : (sortIndexedTrianglesByMinIndex
+                        ? buildMinIndexSortedTriangleOrderIndexBytes(
+                              indexBytesForReuse,
+                              pv.indexType,
+                              pv.startIndex,
+                              vertexCount,
+                              probeReorderedIndexBytes)
+                        : buildReverseTriangleOrderIndexBytes(indexBytesForReuse,
+                                                              pv.indexType,
+                                                              pv.startIndex,
+                                                              vertexCount,
+                                                              probeReorderedIndexBytes)));
+        if (probeIndexBytesBuilt) {
           transientIndexBuffer = makeTransientIndexBuffer(
               probeReorderedIndexBytes.data(), probeReorderedIndexBytes.size(),
               ActiveEncoderBreakdown::TransientIndexSource::ProbeReorder);
