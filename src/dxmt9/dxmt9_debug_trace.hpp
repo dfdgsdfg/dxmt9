@@ -443,6 +443,10 @@ std::uint32_t indexedGeometryDumpMaxDraws();
 std::optional<u64> indexedGeometryDumpVertexShaderHash();
 std::optional<u64> indexedGeometryDumpPixelShaderHash();
 
+// Diagnostic-only: include real per-draw uniform payloads beside indexed
+// geometry dumps. Env: DXMT9_DUMP_INDEXED_GEOMETRY_CBUFS.
+bool indexedGeometryDumpCbufs();
+
 // Trace budget for the FFP path (emits N trace lines then stops).
 // Env: DXMT_TRACE_FVF.
 int fixedFunctionTraceBudget();

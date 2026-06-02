@@ -483,6 +483,10 @@ Commercial / 3rd-party titles (require external prefix):
     `--dump-indexed-geometry-vs HASH --dump-indexed-geometry-ps HASH` plus the
     existing class filters, for example
     `--probe-reverse-indexed-triangles-classes alpha-blend,depth-read,textured`.
+    Add `--dump-indexed-geometry-cbufs` when the replay must use real per-draw
+    `VsConsts`, `PsConsts`, `FfpVsConsts`, and `FfpPsConsts` bytes instead of
+    dummy constants; it writes those cbuf files beside each selected geometry
+    payload.
     The geometry dumper skips invalid index/stream0 ranges before consuming the
     max-draw cap, so early matching setup draws without replayable stream bytes
     do not hide later valid payloads.
@@ -504,8 +508,10 @@ Commercial / 3rd-party titles (require external prefix):
     `DXMT9_MINI_REPLAY_MIN_CAPTURE_FREE_MB=N` overrides it); if the guard fails,
     keep the no-capture smoke result and free disk before producing `.gputrace`.
     The helper rewrites dxmt9's `buffer(30)` argument-buffer MSL into standalone
-    constant-buffer bindings and emits `mini-replay-summary.json` with the exact
-    buffer/texture/sampler slots it bound.
+    constant-buffer bindings, uses real cbuf payloads from the manifest when
+    present, falls back to dummy constants otherwise, and emits
+    `mini-replay-summary.json` with the exact buffer/texture/sampler slots it
+    bound.
     `--probe-reverse-indexed-triangles-stream0-span-min BYTES` and
     `--optimize-screen-blend-index-order-stream0-span-min BYTES` add a direct
     minimum original stream0 byte-span gate after the row/class filters. Use

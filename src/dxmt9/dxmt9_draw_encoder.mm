@@ -3080,7 +3080,11 @@ void maybeDumpIndexedGeometryPayload(
     u64 vertexShaderHash,
     u64 pixelShaderHash,
     u64 drawOrdinal,
-    u64 primitiveCount) {
+    u64 primitiveCount,
+    std::span<const u8> vsConstsBytes = {},
+    std::span<const u8> psConstsBytes = {},
+    std::span<const u8> ffpVsConstsBytes = {},
+    std::span<const u8> ffpPsConstsBytes = {}) {
   const auto dir = debug::indexedGeometryDumpDir();
   if (dir.empty() || !encoderBreakdown || !indexReuse.available) {
     return;
@@ -3164,6 +3168,22 @@ void maybeDumpIndexedGeometryPayload(
       writeBinaryFile(base.string() + ".stream0.bin",
                       vertexBytes.data() + streamStartByte,
                       streamByteCount);
+  const bool wroteVsConsts =
+      !vsConstsBytes.empty() &&
+      writeBinaryFile(base.string() + ".vsconsts.bin",
+                      vsConstsBytes.data(), vsConstsBytes.size());
+  const bool wrotePsConsts =
+      !psConstsBytes.empty() &&
+      writeBinaryFile(base.string() + ".psconsts.bin",
+                      psConstsBytes.data(), psConstsBytes.size());
+  const bool wroteFfpVsConsts =
+      !ffpVsConstsBytes.empty() &&
+      writeBinaryFile(base.string() + ".ffpvs.bin",
+                      ffpVsConstsBytes.data(), ffpVsConstsBytes.size());
+  const bool wroteFfpPsConsts =
+      !ffpPsConstsBytes.empty() &&
+      writeBinaryFile(base.string() + ".ffpps.bin",
+                      ffpPsConstsBytes.data(), ffpPsConstsBytes.size());
 
   std::ostringstream meta;
   meta << "seq=" << seqId << "\n"
@@ -3194,7 +3214,15 @@ void maybeDumpIndexedGeometryPayload(
        << "stream0_byte_count=" << streamByteCount << "\n"
        << "stream0_range_valid=" << (streamRangeValid ? 1 : 0) << "\n"
        << "wrote_index=" << (wroteIndex ? 1 : 0) << "\n"
-       << "wrote_stream0=" << (wroteStream ? 1 : 0) << "\n";
+       << "wrote_stream0=" << (wroteStream ? 1 : 0) << "\n"
+       << "vsconsts_byte_count=" << vsConstsBytes.size() << "\n"
+       << "psconsts_byte_count=" << psConstsBytes.size() << "\n"
+       << "ffpvs_byte_count=" << ffpVsConstsBytes.size() << "\n"
+       << "ffpps_byte_count=" << ffpPsConstsBytes.size() << "\n"
+       << "wrote_vsconsts=" << (wroteVsConsts ? 1 : 0) << "\n"
+       << "wrote_psconsts=" << (wrotePsConsts ? 1 : 0) << "\n"
+       << "wrote_ffpvs=" << (wroteFfpVsConsts ? 1 : 0) << "\n"
+       << "wrote_ffpps=" << (wroteFfpPsConsts ? 1 : 0) << "\n";
   writeTextFile(base.string() + ".meta", meta.str());
 }
 
@@ -7208,6 +7236,31 @@ bool encodeDraw(EncodeContext& ctx,
                                                    effectiveViewport.scissor);
         }
         if (dumpIndexedGeometryEligible) {
+          std::optional<VsConsts> dumpVsConsts;
+          std::optional<PsConsts> dumpPsConsts;
+          std::optional<FfpPsConsts> dumpFfpPsConsts;
+          std::span<const u8> dumpVsConstsBytes;
+          std::span<const u8> dumpPsConstsBytes;
+          std::span<const u8> dumpFfpVsConstsBytes;
+          std::span<const u8> dumpFfpPsConstsBytes;
+          if (debug::indexedGeometryDumpCbufs()) {
+            dumpVsConsts = buildVsConsts(drawState);
+            dumpPsConsts = buildPsConsts(drawState);
+            dumpFfpPsConsts = buildFfpPsConsts(drawState);
+            const auto* dumpFfpVsConsts = ensureFfpVs();
+            dumpVsConstsBytes = std::span<const u8>(
+                reinterpret_cast<const u8*>(&*dumpVsConsts),
+                sizeof(VsConsts));
+            dumpPsConstsBytes = std::span<const u8>(
+                reinterpret_cast<const u8*>(&*dumpPsConsts),
+                sizeof(PsConsts));
+            dumpFfpVsConstsBytes = std::span<const u8>(
+                reinterpret_cast<const u8*>(dumpFfpVsConsts),
+                sizeof(FfpVsConsts));
+            dumpFfpPsConstsBytes = std::span<const u8>(
+                reinterpret_cast<const u8*>(&*dumpFfpPsConsts),
+                sizeof(FfpPsConsts));
+          }
           maybeDumpIndexedGeometryPayload(
               encoderBreakdown,
               originalIndexBytesForReuse,
@@ -7228,7 +7281,11 @@ bool encodeDraw(EncodeContext& ctx,
                   ? drawState.shaderContext().pixelShader.hash
                   : 0u,
               drawOrdinal,
-              primitiveCount);
+              primitiveCount,
+              dumpVsConstsBytes,
+              dumpPsConstsBytes,
+              dumpFfpVsConstsBytes,
+              dumpFfpPsConstsBytes);
         }
       }
       indexReorderApplied = probeApplied || optimizedApplied;

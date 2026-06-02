@@ -11744,24 +11744,92 @@ For this manifest the replay MSL bindings are:
 | VS | `1` stream0, `5` draw volatile, `6` VsConsts, `7` FfpVsConsts | none | none |
 | FS | `6` PsConsts, `7` FfpPsConsts | `0` dummy white texture | `0` dummy sampler |
 
-When disk space is available, the next Xcode proof command is the same helper
-with `--capture-path <trace-run>/analysis/mini-replay.gputrace` and a larger
-`--repeat` count to magnify the isolated draw cost. The helper now applies a
-free-space guard before compiling or launching a capture: by default it requires
-`2048MiB` free at the capture destination, with
+The helper applies a free-space guard before compiling or launching a capture:
+by default it requires `2048MiB` free at the capture destination, with
 `--min-capture-free-mb N` or `DXMT9_MINI_REPLAY_MIN_CAPTURE_FREE_MB=N` as the
-explicit override. On the current low-disk machine this means the no-capture
-smoke is valid, but `.gputrace` generation should wait until enough space is
-available.
+explicit override. This prevents accidentally starting a `.gputrace` capture on
+the current low-disk machine.
 
-The proof is not complete until that mini replay `.gputrace` is opened in Xcode,
-performance data is embedded, encoder counters are exported, and the resulting
-CSV shows whether `VS Buffer Device Memory Bytes Written`,
-`VS Invocations`, tiled/primitive-block counters, and bytes-per-invocation
-reproduce in the isolated shader+geometry draw set. Until then, the standalone
-replay proves payload/shader harness viability only; it does not prove that the
-hidden VS/tiler/backend write bucket has been reproduced without Wine/D3D9 frame
-noise.
+Two isolated Xcode captures now exist for this same shader+geometry draw set:
+
+| Replay | Render state | GPU time | VS invocations | VS buffer device writes | Tiled vertex bytes | VS device bytes written |
+|---|---|---:|---:|---:|---:|---:|
+| `mini-replay-r1` | default Metal state, dummy cbufs | `93.941us` | `33,697` | `0B` | `262,144B` | `84,544B` |
+| `mini-replay-state-r1` | first-draw D3D9 blend/depth/cull/scissor state, dummy cbufs | `82.819us` | `33,697` | `0B` | `262,144B` | `61,056B` |
+
+Artifacts:
+
+- `traces/app-d3d9-3dmark05-current-head-geometry-payload-shaderfilter-anyrow-r2/analysis/mini-replay/mini-replay-r1-counters-summary.md`
+- `traces/app-d3d9-3dmark05-current-head-geometry-payload-shaderfilter-anyrow-r2/analysis/mini-replay-state-r1/mini-replay-state-r1-counters-summary.md`
+- `traces/app-d3d9-3dmark05-current-head-geometry-payload-shaderfilter-anyrow-r2/analysis/mini-replay-state-r1/mini-replay-r1-vs-state-r1-comparison.csv`
+
+The state-aware replay applies the hot group state from the manifest:
+`alpha_blend=1`, `src_blend=5`, `dst_blend=6`, `blend_op=1`,
+`depth_enabled=1`, `depth_write=0`, `depth_func=4`, `cull=2`,
+`scissor=0`, `color_write=0xf`. Even with those D3D9 render-state controls
+applied, Xcode still reports `0B` for `VS Buffer Device Memory Bytes Written`.
+This is a negative proof for the reduced factor set: shader source,
+stream0/index geometry, and coarse blend/depth/cull/scissor state alone do not
+reproduce the GT1 hidden VS/tiler/backend write bucket.
+
+```mermaid
+flowchart TD
+  GT1["GT1 hot row evidence\n~1.1-1.6GiB VS buffer writes in full frame"] --> Hyp["Candidate factors"]
+  Hyp --> ShaderGeo["shader source + stream0/index payload"]
+  Hyp --> RenderState["blend/depth/cull/scissor/color-write state"]
+  Hyp --> Cbuf["real VS/PS constant-buffer payloads"]
+  Hyp --> PassShape["full pass/attachment/storage/load-store shape"]
+
+  ShaderGeo --> Replay0["mini-replay-r1\n3 draws, dummy cbufs"]
+  RenderState --> Replay1["mini-replay-state-r1\nsame 3 draws + hot state"]
+  Replay0 --> Xcode0["Xcode counters\nVS buffer writes = 0B"]
+  Replay1 --> Xcode1["Xcode counters\nVS buffer writes = 0B"]
+
+  Xcode0 --> Exclude["exclude: shader+geometry alone"]
+  Xcode1 --> Exclude2["exclude: coarse render-state shape alone"]
+  Cbuf --> Next["next experiment:\ncapture/replay real cbuf contents"]
+  PassShape --> Next2["next experiment:\nreplay full attachment/pass/storage shape"]
+
+  classDef neg fill:#e8f6ef,stroke:#2d7a46,color:#0f2b18
+  classDef next fill:#fff4d6,stroke:#a76d00,color:#2f2100
+  class Xcode0,Xcode1,Exclude,Exclude2 neg
+  class Cbuf,PassShape,Next,Next2 next
+```
+
+Therefore the next proof step should not be another small render-state toggle
+inside the dummy-cbuf mini replay. The first follow-up path is now implemented:
+use `--dump-indexed-geometry-cbufs` on the same tightly filtered payload scout
+to write real `.vsconsts.bin`, `.psconsts.bin`, `.ffpvs.bin`, and `.ffpps.bin`
+files beside each geometry payload. The manifest builder includes those files
+under `uniforms`, and the standalone mini replay binds them per draw, falling
+back to dummy constants only when a manifest has no cbuf payloads.
+
+```bash
+scripts/tools/run_3dmark05_perf_probe.sh \
+  --suffix current-head-geometry-cbuf-payload-shaderfilter-anyrow-r1 \
+  --no-gputrace \
+  --encoder-breakdown-seq 60 \
+  --dump-indexed-geometry \
+  --dump-indexed-geometry-cbufs \
+  --dump-indexed-geometry-max-draws 3 \
+  --dump-indexed-geometry-vs 0x7836c3b4c98a465b \
+  --dump-indexed-geometry-ps 0x11cc89f85cc54054 \
+  --probe-reverse-indexed-triangles-classes alpha-blend,depth-read,textured
+```
+
+After that run, rebuild `frame60-mini-replay-manifest.json`, run the mini
+replay with the same capture/export sequence, and compare the Xcode counters
+against `mini-replay-state-r1`. If cbuf replay still reports `0B` for
+`VS Buffer Device Memory Bytes Written`, move to the still-open pass-shape
+factor:
+
+1. Attachment/pass-shape replay: match the full GT1 color/depth pixel formats,
+   storage modes, load/store actions, clear values, pass split boundaries, and
+   target sizes instead of the current one-off private color/depth target.
+2. If either reproduces nonzero `VS Buffer Device Memory Bytes Written`, vary
+   only one factor at a time to isolate whether the backend write is driven by
+   transformed position/varying values, attachment/pass metadata, or a combined
+   compiler/backend path.
 
 Before the selector existed, `app-d3d9-3dmark05-current-head-geometry-payload-row60-2-topgroup-r1`
 was manually captured with encoder draw indices `234..236`:

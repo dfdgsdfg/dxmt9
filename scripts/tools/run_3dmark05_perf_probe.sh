@@ -61,6 +61,7 @@ probe_force_cull_mode_classes=
 force_cull_mode=
 measure_index_reuse=0
 dump_indexed_geometry=0
+dump_indexed_geometry_cbufs=0
 dump_indexed_geometry_max_draws=${DXMT9_DUMP_INDEXED_GEOMETRY_MAX_DRAWS:-16}
 dump_indexed_geometry_vs=
 dump_indexed_geometry_ps=
@@ -323,6 +324,9 @@ Options:
                       under traces/<run-id>/analysis/geometry. Uses the
                       reverse-indexed row/class/span filters and encoder draw
                       range; implies --measure-index-reuse
+  --dump-indexed-geometry-cbufs
+                      Also dump real VsConsts/PsConsts/FfpVsConsts/FfpPsConsts
+                      bytes beside each selected geometry payload
   --dump-indexed-geometry-max-draws N
                       Set DXMT9_DUMP_INDEXED_GEOMETRY_MAX_DRAWS=N
                       (default: 16)
@@ -713,6 +717,12 @@ while (($#)); do
       ;;
     --dump-indexed-geometry)
       dump_indexed_geometry=1
+      measure_index_reuse=1
+      shift
+      ;;
+    --dump-indexed-geometry-cbufs)
+      dump_indexed_geometry=1
+      dump_indexed_geometry_cbufs=1
       measure_index_reuse=1
       shift
       ;;
@@ -1486,6 +1496,9 @@ if (( dump_indexed_geometry )); then
     "DXMT9_DUMP_INDEXED_GEOMETRY_DIR=$geometry_dump_dir"
     "DXMT9_DUMP_INDEXED_GEOMETRY_MAX_DRAWS=$dump_indexed_geometry_max_draws"
   )
+  if (( dump_indexed_geometry_cbufs )); then
+    env_args+=("DXMT9_DUMP_INDEXED_GEOMETRY_CBUFS=1")
+  fi
   if [[ -n "$dump_indexed_geometry_vs" ]]; then
     env_args+=("DXMT9_DUMP_INDEXED_GEOMETRY_VS=$dump_indexed_geometry_vs")
   fi

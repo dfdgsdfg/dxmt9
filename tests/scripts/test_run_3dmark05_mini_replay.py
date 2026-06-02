@@ -73,8 +73,16 @@ class MiniReplayScriptTests(unittest.TestCase):
 
         index_file = geometry_dir / "draw.index.bin"
         stream_file = geometry_dir / "draw.stream0.bin"
+        vsconsts_file = geometry_dir / "draw.vsconsts.bin"
+        psconsts_file = geometry_dir / "draw.psconsts.bin"
+        ffpvs_file = geometry_dir / "draw.ffpvs.bin"
+        ffpps_file = geometry_dir / "draw.ffpps.bin"
         index_file.write_bytes(b"\x00\x00\x01\x00\x02\x00")
         stream_file.write_bytes(bytes(range(24)))
+        vsconsts_file.write_bytes(b"vs")
+        psconsts_file.write_bytes(b"ps")
+        ffpvs_file.write_bytes(b"ffpvs")
+        ffpps_file.write_bytes(b"ffpps")
         manifest = root / "manifest.json"
         manifest.write_text(json.dumps({
             "schema": "dxmt9.3dmark05.mini_replay_manifest.v1",
@@ -84,6 +92,24 @@ class MiniReplayScriptTests(unittest.TestCase):
                     "base_vertex": 0,
                     "stream0_stride": 24,
                     "stream0_offset": 0,
+                    "alpha_blend": 1,
+                    "src_blend": 5,
+                    "dst_blend": 6,
+                    "blend_op": 1,
+                    "separate_alpha": 1,
+                    "src_blend_alpha": 2,
+                    "dst_blend_alpha": 1,
+                    "blend_op_alpha": 3,
+                    "color_write": "0xf",
+                    "depth_enabled": 1,
+                    "depth_write": 0,
+                    "depth_func": 4,
+                    "cull": 2,
+                    "scissor": 1,
+                    "scissor_l": 10,
+                    "scissor_t": 20,
+                    "scissor_r": 110,
+                    "scissor_b": 220,
                 },
                 "shaders": {
                     "vs_file": str(vs),
@@ -94,6 +120,16 @@ class MiniReplayScriptTests(unittest.TestCase):
                     "stream0_file": str(stream_file),
                     "index_bytes": 6,
                     "stream0_bytes": 24,
+                },
+                "uniforms": {
+                    "vsconsts_file": str(vsconsts_file),
+                    "psconsts_file": str(psconsts_file),
+                    "ffpvs_file": str(ffpvs_file),
+                    "ffpps_file": str(ffpps_file),
+                    "vsconsts_bytes": 2,
+                    "psconsts_bytes": 2,
+                    "ffpvs_bytes": 5,
+                    "ffpps_bytes": 5,
                 },
             }],
         }), encoding="utf-8")
@@ -122,11 +158,30 @@ class MiniReplayScriptTests(unittest.TestCase):
             self.assertEqual(summary["draw_count"], 1)
             self.assertEqual(summary["index_bytes"], 6)
             self.assertEqual(summary["stream0_bytes"], 24)
+            self.assertEqual(summary["uniform_draw_count"], 1)
+            self.assertEqual(summary["uniform_bytes"], 14)
             self.assertEqual(summary["vs_bindings"]["buffer"], [1, 5, 6, 7])
             self.assertEqual(summary["fs_bindings"]["buffer"], [6, 7])
             self.assertIn("texture2d<float> tex0 [[texture(0)]]", (output_dir / "dxmt9_fs.replay.metal").read_text(encoding="utf-8"))
             self.assertNotIn("ArgbufLayout& abuf [[buffer(30)]]", (output_dir / "dxmt9_vs.replay.metal").read_text(encoding="utf-8"))
             self.assertIn("constant VsConsts& vsConsts [[buffer(6)]]", (output_dir / "dxmt9_vs.replay.metal").read_text(encoding="utf-8"))
+            objc = (output_dir / "dxmt9_3dmark05_mini_replay.mm").read_text(encoding="utf-8")
+            self.assertIn("psoDesc.colorAttachments[0].blendingEnabled = 1;", objc)
+            self.assertIn("const char* vsConstsPath;", objc)
+            self.assertIn("bufferFromFileOrDefault(device, draw.vsConstsPath, vsConsts)", objc)
+            self.assertIn("draw.vsconsts.bin", objc)
+            self.assertIn("sourceRGBBlendFactor = blendFactor(5, false);", objc)
+            self.assertIn("destinationRGBBlendFactor = blendFactor(6, false);", objc)
+            self.assertIn("sourceAlphaBlendFactor =\n        blendFactor(2, true);", objc)
+            self.assertIn("alphaBlendOperation =\n        blendOperation(3);", objc)
+            self.assertIn("depthStateDesc.depthCompareFunction =\n        1 ? compareFunction(4) : MTLCompareFunctionAlways;", objc)
+            self.assertIn("depthStateDesc.depthWriteEnabled = 0;", objc)
+            self.assertIn("[encoder setCullMode:cullMode(2)];", objc)
+            self.assertIn("if (1) {", objc)
+            self.assertIn("static_cast<NSUInteger>(10)", objc)
+            self.assertIn("static_cast<NSUInteger>(20)", objc)
+            self.assertIn("static_cast<NSUInteger>(std::max(0, 110 - 10))", objc)
+            self.assertIn("static_cast<NSUInteger>(std::max(0, 220 - 20))", objc)
 
     def test_capture_path_requires_enough_free_space_before_compile(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

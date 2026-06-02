@@ -60,6 +60,16 @@ def read_meta(path: Path) -> dict[str, str]:
     row["stream0_file_bytes"] = str(stream_path.stat().st_size if stream_path.exists() else 0)
     row["index_file_exists"] = "1" if index_path.exists() else "0"
     row["stream0_file_exists"] = "1" if stream_path.exists() else "0"
+    for key, suffix in [
+        ("vsconsts", ".vsconsts.bin"),
+        ("psconsts", ".psconsts.bin"),
+        ("ffpvs", ".ffpvs.bin"),
+        ("ffpps", ".ffpps.bin"),
+    ]:
+        cbuf_path = Path(str(stem) + suffix)
+        row[f"{key}_file"] = str(cbuf_path)
+        row[f"{key}_file_bytes"] = str(cbuf_path.stat().st_size if cbuf_path.exists() else 0)
+        row[f"{key}_file_exists"] = "1" if cbuf_path.exists() else "0"
     return row
 
 
@@ -282,6 +292,20 @@ def build_manifest(args: argparse.Namespace) -> dict[str, Any]:
                 "max_index": as_int(payload.get("max_index")),
                 "unique_indices": as_int(payload.get("unique_indices")),
                 "cache_miss_64": as_int(payload.get("cache_miss_64")),
+            },
+            "uniforms": {
+                "vsconsts_file": payload.get("vsconsts_file", ""),
+                "psconsts_file": payload.get("psconsts_file", ""),
+                "ffpvs_file": payload.get("ffpvs_file", ""),
+                "ffpps_file": payload.get("ffpps_file", ""),
+                "vsconsts_bytes": as_int(payload.get("vsconsts_file_bytes")),
+                "psconsts_bytes": as_int(payload.get("psconsts_file_bytes")),
+                "ffpvs_bytes": as_int(payload.get("ffpvs_file_bytes")),
+                "ffpps_bytes": as_int(payload.get("ffpps_file_bytes")),
+                "wrote_vsconsts": as_int(payload.get("wrote_vsconsts")),
+                "wrote_psconsts": as_int(payload.get("wrote_psconsts")),
+                "wrote_ffpvs": as_int(payload.get("wrote_ffpvs")),
+                "wrote_ffpps": as_int(payload.get("wrote_ffpps")),
             },
         })
 

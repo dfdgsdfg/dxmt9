@@ -53,6 +53,23 @@ def validate_payloads(draws: list[dict[str, Any]]) -> None:
             raise SystemExit(f"draw {index}: index payload is empty")
         if int(geometry.get("stream0_bytes", 0)) <= 0:
             raise SystemExit(f"draw {index}: stream0 payload is empty")
+        uniforms = draw.get("uniforms", {})
+        for key in ("vsconsts", "psconsts", "ffpvs", "ffpps"):
+            byte_count = int(uniforms.get(f"{key}_bytes", 0))
+            path_text = str(uniforms.get(f"{key}_file", ""))
+            if byte_count == 0 and not path_text:
+                continue
+            if byte_count > 0 and not path_text:
+                raise SystemExit(f"draw {index}: missing {key} payload path")
+            path = resolve_path(path_text)
+            if byte_count > 0 and not path.exists():
+                raise SystemExit(f"draw {index}: missing {key} payload: {path}")
+
+
+def optional_payload_path(uniforms: dict[str, Any], key: str) -> str:
+    if int(uniforms.get(f"{key}_bytes", 0)) <= 0:
+        return ""
+    return str(resolve_path(str(uniforms.get(f"{key}_file", ""))))
 
 
 def stage_bindings(source: str) -> dict[str, list[int]]:
@@ -121,12 +138,17 @@ def render_source(draws: list[dict[str, Any]],
     draw_entries = []
     for draw in draws:
         geometry = draw["geometry"]
+        uniforms = draw.get("uniforms", {})
         state = draw["state"]
         draw_entries.append(
             "  {"
             + ", ".join([
                 cxx_string(str(resolve_path(geometry["index_file"]))),
                 cxx_string(str(resolve_path(geometry["stream0_file"]))),
+                cxx_string(optional_payload_path(uniforms, "vsconsts")),
+                cxx_string(optional_payload_path(uniforms, "psconsts")),
+                cxx_string(optional_payload_path(uniforms, "ffpvs")),
+                cxx_string(optional_payload_path(uniforms, "ffpps")),
                 str(int(state.get("index_count", 0))),
                 str(int(state.get("base_vertex", 0))),
                 str(int(state.get("stream0_stride", 0))),
@@ -145,6 +167,10 @@ def render_source(draws: list[dict[str, Any]],
 struct DrawEntry {{
   const char* indexPath;
   const char* streamPath;
+  const char* vsConstsPath;
+  const char* psConstsPath;
+  const char* ffpVsPath;
+  const char* ffpPsPath;
   unsigned indexCount;
   int baseVertex;
   unsigned streamStride;
@@ -189,6 +215,22 @@ static id<MTLBuffer> zeroBuffer(id<MTLDevice> device, NSUInteger size) {{
   id<MTLBuffer> buffer = [device newBufferWithLength:size options:MTLResourceStorageModeShared];
   std::memset([buffer contents], 0, size);
   return buffer;
+}}
+
+static id<MTLBuffer> bufferFromFileOrDefault(id<MTLDevice> device,
+                                             const char* path,
+                                             id<MTLBuffer> fallback) {{
+  if (!path || path[0] == '\\0') {{
+    return fallback;
+  }}
+  NSData* data = readData(path);
+  if (!data) {{
+    std::cerr << "failed to read cbuf " << path << "\\n";
+    return nil;
+  }}
+  return [device newBufferWithBytes:[data bytes]
+                              length:[data length]
+                             options:MTLResourceStorageModeShared];
 }}
 
 static void initVsConsts(id<MTLBuffer> buffer) {{
@@ -390,10 +432,6 @@ int main() {{
       }};
       [encoder setScissorRect:rect];
     }}
-    [encoder setVertexBuffer:vsConsts offset:0 atIndex:6];
-    [encoder setVertexBuffer:ffpVs offset:0 atIndex:7];
-    [encoder setFragmentBuffer:psConsts offset:0 atIndex:6];
-    [encoder setFragmentBuffer:ffpPs offset:0 atIndex:7];
     [encoder setFragmentTexture:whiteTexture atIndex:0];
     [encoder setFragmentSamplerState:sampler atIndex:0];
 
@@ -402,6 +440,11 @@ int main() {{
         NSData* streamData = readData(draw.streamPath);
         NSData* indexData = readData(draw.indexPath);
         if (!streamData || !indexData) return 2;
+        id<MTLBuffer> drawVsConsts = bufferFromFileOrDefault(device, draw.vsConstsPath, vsConsts);
+        id<MTLBuffer> drawPsConsts = bufferFromFileOrDefault(device, draw.psConstsPath, psConsts);
+        id<MTLBuffer> drawFfpVs = bufferFromFileOrDefault(device, draw.ffpVsPath, ffpVs);
+        id<MTLBuffer> drawFfpPs = bufferFromFileOrDefault(device, draw.ffpPsPath, ffpPs);
+        if (!drawVsConsts || !drawPsConsts || !drawFfpVs || !drawFfpPs) return 2;
         id<MTLBuffer> stream =
             [device newBufferWithBytes:[streamData bytes]
                                 length:[streamData length]
@@ -411,6 +454,10 @@ int main() {{
                                 length:[indexData length]
                                options:MTLResourceStorageModeShared];
         DrawVolatile dv = {{draw.baseVertex, draw.streamOffset, draw.streamStride, 0}};
+        [encoder setVertexBuffer:drawVsConsts offset:0 atIndex:6];
+        [encoder setVertexBuffer:drawFfpVs offset:0 atIndex:7];
+        [encoder setFragmentBuffer:drawPsConsts offset:0 atIndex:6];
+        [encoder setFragmentBuffer:drawFfpPs offset:0 atIndex:7];
         [encoder setVertexBuffer:stream offset:0 atIndex:1];
         [encoder setVertexBytes:&dv length:sizeof(dv) atIndex:5];
         [encoder drawIndexedPrimitives:MTLPrimitiveTypeTriangle
@@ -468,6 +515,16 @@ def prepare(args: argparse.Namespace) -> dict[str, Any]:
         "draw_count": len(draws),
         "index_bytes": sum(int(draw["geometry"]["index_bytes"]) for draw in draws),
         "stream0_bytes": sum(int(draw["geometry"]["stream0_bytes"]) for draw in draws),
+        "uniform_draw_count": sum(
+            1 for draw in draws
+            if any(int(draw.get("uniforms", {}).get(f"{key}_bytes", 0)) > 0
+                   for key in ("vsconsts", "psconsts", "ffpvs", "ffpps"))
+        ),
+        "uniform_bytes": sum(
+            int(draw.get("uniforms", {}).get(f"{key}_bytes", 0))
+            for draw in draws
+            for key in ("vsconsts", "psconsts", "ffpvs", "ffpps")
+        ),
         "vs_bindings": stage_bindings(vs_source),
         "fs_bindings": stage_bindings(fs_source),
     }

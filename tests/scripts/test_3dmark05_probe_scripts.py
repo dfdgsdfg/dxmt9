@@ -358,6 +358,7 @@ class ThreeDMark05ProbeScriptTests(unittest.TestCase):
             "geometry-dump-dry-run",
             "--no-gputrace",
             "--dump-indexed-geometry",
+            "--dump-indexed-geometry-cbufs",
             "--dump-indexed-geometry-max-draws",
             "3",
             "--dump-indexed-geometry-vs",
@@ -381,6 +382,7 @@ class ThreeDMark05ProbeScriptTests(unittest.TestCase):
             result.stdout,
         )
         self.assertIn("DXMT9_DUMP_INDEXED_GEOMETRY_MAX_DRAWS=3", result.stdout)
+        self.assertIn("DXMT9_DUMP_INDEXED_GEOMETRY_CBUFS=1", result.stdout)
         self.assertIn(
             "DXMT9_DUMP_INDEXED_GEOMETRY_VS=0x7836c3b4c98a465b",
             result.stdout,

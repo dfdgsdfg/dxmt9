@@ -61,10 +61,22 @@ class BuildMiniReplayManifestTests(unittest.TestCase):
                 "primitive_count": 7097,
                 "index_type": 0,
                 "alpha_blend": 1,
+                "src_blend": 5,
+                "dst_blend": 6,
+                "blend_op": 1,
+                "separate_alpha": 1,
+                "src_blend_alpha": 2,
+                "dst_blend_alpha": 1,
+                "blend_op_alpha": 3,
+                "alpha_test": 1,
                 "depth_enabled": 1,
                 "depth_write": 0,
                 "depth_func": 4,
                 "scissor": 0,
+                "scissor_l": 10,
+                "scissor_t": 20,
+                "scissor_r": 640,
+                "scissor_b": 480,
                 "cull": 2,
                 "fill": 0,
                 "texture_mask": "0x7f",
@@ -77,6 +89,10 @@ class BuildMiniReplayManifestTests(unittest.TestCase):
             stem = geometry / "seq60-enc2-draw42428-slot0"
             stem.with_suffix(".index.bin").write_bytes(b"index")
             stem.with_suffix(".stream0.bin").write_bytes(b"stream")
+            Path(str(stem) + ".vsconsts.bin").write_bytes(b"vs")
+            Path(str(stem) + ".psconsts.bin").write_bytes(b"ps")
+            Path(str(stem) + ".ffpvs.bin").write_bytes(b"ffpvs")
+            Path(str(stem) + ".ffpps.bin").write_bytes(b"ffpps")
             stem.with_suffix(".meta").write_text(
                 "\n".join([
                     "seq=60",
@@ -101,6 +117,14 @@ class BuildMiniReplayManifestTests(unittest.TestCase):
                     "stream0_range_valid=1",
                     "wrote_index=1",
                     "wrote_stream0=1",
+                    "vsconsts_byte_count=2",
+                    "psconsts_byte_count=2",
+                    "ffpvs_byte_count=5",
+                    "ffpps_byte_count=5",
+                    "wrote_vsconsts=1",
+                    "wrote_psconsts=1",
+                    "wrote_ffpvs=1",
+                    "wrote_ffpps=1",
                 ]),
                 encoding="utf-8",
             )
@@ -139,6 +163,23 @@ class BuildMiniReplayManifestTests(unittest.TestCase):
             self.assertEqual(draw["draw_ordinal"], 42428)
             self.assertEqual(draw["state"]["primitive_count"], 7097)
             self.assertEqual(draw["state"]["index_type"], "uint16")
+            self.assertEqual(draw["state"]["alpha_blend"], 1)
+            self.assertEqual(draw["state"]["src_blend"], 5)
+            self.assertEqual(draw["state"]["dst_blend"], 6)
+            self.assertEqual(draw["state"]["blend_op"], 1)
+            self.assertEqual(draw["state"]["separate_alpha"], 1)
+            self.assertEqual(draw["state"]["src_blend_alpha"], 2)
+            self.assertEqual(draw["state"]["dst_blend_alpha"], 1)
+            self.assertEqual(draw["state"]["blend_op_alpha"], 3)
+            self.assertEqual(draw["state"]["alpha_test"], 1)
+            self.assertEqual(draw["state"]["depth_enabled"], 1)
+            self.assertEqual(draw["state"]["depth_write"], 0)
+            self.assertEqual(draw["state"]["depth_func"], 4)
+            self.assertEqual(draw["state"]["scissor_l"], 10)
+            self.assertEqual(draw["state"]["scissor_t"], 20)
+            self.assertEqual(draw["state"]["scissor_r"], 640)
+            self.assertEqual(draw["state"]["scissor_b"], 480)
+            self.assertEqual(draw["state"]["cull"], 2)
             self.assertEqual(draw["shaders"]["vs_hash"], "0xabc")
             self.assertTrue(draw["shaders"]["vs_file"].endswith(direct_vs.name))
             self.assertTrue(draw["shaders"]["ps_file"].endswith(direct_ps.name))
@@ -146,6 +187,15 @@ class BuildMiniReplayManifestTests(unittest.TestCase):
             self.assertEqual(draw["shaders"]["ps_file_source"], "draw-hash")
             self.assertEqual(draw["geometry"]["index_bytes"], 5)
             self.assertEqual(draw["geometry"]["stream0_bytes"], 6)
+            self.assertEqual(draw["uniforms"]["vsconsts_bytes"], 2)
+            self.assertEqual(draw["uniforms"]["psconsts_bytes"], 2)
+            self.assertEqual(draw["uniforms"]["ffpvs_bytes"], 5)
+            self.assertEqual(draw["uniforms"]["ffpps_bytes"], 5)
+            self.assertEqual(draw["uniforms"]["wrote_vsconsts"], 1)
+            self.assertTrue(draw["uniforms"]["vsconsts_file"].endswith(".vsconsts.bin"))
+            self.assertTrue(draw["uniforms"]["psconsts_file"].endswith(".psconsts.bin"))
+            self.assertTrue(draw["uniforms"]["ffpvs_file"].endswith(".ffpvs.bin"))
+            self.assertTrue(draw["uniforms"]["ffpps_file"].endswith(".ffpps.bin"))
 
     def test_manifest_accepts_legacy_encoder_draw_payload_field(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

@@ -895,6 +895,12 @@ std::optional<u64> indexedGeometryDumpPixelShaderHash() {
   return value;
 }
 
+bool indexedGeometryDumpCbufs() {
+  static const bool v =
+      util::getenvFlag("DXMT9_DUMP_INDEXED_GEOMETRY_CBUFS");
+  return v;
+}
+
 int fixedFunctionTraceBudget() {
   static const int budget = [] {
     const auto env = util::getenvString("DXMT_TRACE_FVF");
