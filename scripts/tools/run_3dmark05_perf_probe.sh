@@ -190,7 +190,7 @@ Options:
   --optimize-screen-blend-index-order-classes CLASSES
                       Set DXMT9_OPTIMIZE_SCREEN_BLEND_INDEX_ORDER_CLASSES=CLASSES.
                       Values are ANDed and may be comma/semicolon/space/+ or &
-                      separated, e.g. large4096,alpha-blend,scissor
+                      separated, e.g. large4096,screen-blend,scissor
   --optimize-screen-blend-index-order-stream0-span-min BYTES
                       Set DXMT9_OPTIMIZE_SCREEN_BLEND_INDEX_ORDER_STREAM0_SPAN_MIN
                       to require a minimum original stream0 byte span
@@ -215,11 +215,12 @@ Options:
   --split-large-indexed-draws-class CLASS
                       Set DXMT9_SPLIT_LARGE_INDEXED_DRAWS_CLASS=CLASS.
                       Accepted values: any, opaque-depth-write, nonopaque,
-                      depth-read, alpha-blend, scissor, textured, large4096
+                      depth-read, alpha-blend, screen-blend, standard-alpha,
+                      additive-alpha, scissor, no-scissor, textured, large4096
   --split-large-indexed-draws-classes CLASSES
                       Set DXMT9_SPLIT_LARGE_INDEXED_DRAWS_CLASSES=CLASSES.
                       Values are ANDed and may be comma/semicolon/space/+ or
-                      & separated, e.g. large4096,alpha-blend
+                      & separated, e.g. large4096,standard-alpha
   --force-expand-indexed
                       Set DXMT_FORCE_EXPAND_INDEXED=1 to expand indexed draws
                       into flat vertex lists for primitive/backend pressure
@@ -256,13 +257,11 @@ Options:
                       separated row set, e.g. 60/0,60/1,60/3,60/4
   --probe-reverse-indexed-triangles-class CLASS
                       Set DXMT9_PROBE_REVERSE_INDEXED_TRIANGLES_CLASS=CLASS.
-                      Accepted values match split-large indexed filters:
-                      any, opaque-depth-write, nonopaque, depth-read,
-                      alpha-blend, scissor, textured, large4096
+                      Accepted values match split-large indexed filters
   --probe-reverse-indexed-triangles-classes CLASSES
                       Set DXMT9_PROBE_REVERSE_INDEXED_TRIANGLES_CLASSES=CLASSES.
                       Values are ANDed and may be comma/semicolon/space/+ or
-                      & separated, e.g. large4096,scissor
+                      & separated, e.g. large4096,screen-blend
   --probe-reverse-indexed-triangles-stream0-span-min BYTES
                       Set DXMT9_PROBE_REVERSE_INDEXED_TRIANGLES_STREAM0_SPAN_MIN
                       to require a minimum original stream0 byte span
@@ -281,7 +280,7 @@ Options:
                       values match split-large indexed filters
   --probe-scissor-rect-classes CLASSES
                       Set DXMT9_PROBE_SCISSOR_RECT_CLASSES=CLASSES. Values are
-                      ANDed, e.g. large4096,alpha-blend,scissor
+                      ANDed, e.g. large4096,screen-blend,scissor
   --probe-force-cull-mode MODE
                       Set DXMT9_PROBE_FORCE_CULL_MODE=MODE where MODE is one
                       of none, front, or back. Unlike --force-cull-mode, this
@@ -328,7 +327,7 @@ Options:
                       Accepted values match split-large indexed filters
   --probe-disable-alpha-blend-classes CLASSES
                       Set DXMT9_PROBE_DISABLE_ALPHA_BLEND_CLASSES=CLASSES.
-                      Values are ANDed, e.g. large4096,alpha-blend
+                      Values are ANDed, e.g. large4096,screen-blend
   --probe-disable-depth-write
                       Set DXMT9_PROBE_DISABLE_DEPTH_WRITE=1 for depth-write A/B
   --probe-disable-depth-write-row SEQ/ENC
@@ -341,7 +340,7 @@ Options:
                       Accepted values match split-large indexed filters
   --probe-disable-depth-write-classes CLASSES
                       Set DXMT9_PROBE_DISABLE_DEPTH_WRITE_CLASSES=CLASSES.
-                      Values are ANDed, e.g. large4096,alpha-blend
+                      Values are ANDed, e.g. large4096,screen-blend
   --probe-depth-func-always
                       Set DXMT9_PROBE_DEPTH_FUNC_ALWAYS=1 to keep depth writes
                       but force the depth compare function to Always

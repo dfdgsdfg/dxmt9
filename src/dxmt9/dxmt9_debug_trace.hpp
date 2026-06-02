@@ -50,7 +50,11 @@ enum class IndexedTriangleClassFilter : std::uint8_t {
   NonOpaque,
   DepthRead,
   AlphaBlend,
+  ScreenBlend,
+  StandardAlphaBlend,
+  AdditiveAlphaBlend,
   Scissor,
+  NoScissor,
   Textured,
   Large4096,
 };
@@ -263,8 +267,9 @@ bool useNativeMetalBaseVertex();
 bool optimizeScreenBlendIndexOrder();
 
 // Optional class filter for DXMT9_OPTIMIZE_SCREEN_BLEND_INDEX_ORDER. Accepted
-// values: any, opaque-depth-write, nonopaque, depth-read, alpha-blend, scissor,
-// textured, and large4096.
+// values: any, opaque-depth-write, nonopaque, depth-read, alpha-blend,
+// screen-blend, standard-alpha, additive-alpha, scissor, no-scissor, textured,
+// and large4096.
 // Env: DXMT9_OPTIMIZE_SCREEN_BLEND_INDEX_ORDER_CLASS.
 IndexedTriangleClassFilter optimizeScreenBlendIndexOrderClassFilter();
 
@@ -308,8 +313,8 @@ u64 splitLargeIndexedDrawStream0SpanMax();
 std::uint32_t splitLargeIndexedDrawMaxChunksPerDraw();
 
 // Optional class filter for DXMT9_SPLIT_LARGE_INDEXED_DRAWS. Accepted values:
-// any, opaque-depth-write, nonopaque, depth-read, alpha-blend, scissor,
-// textured, and large4096.
+// any, opaque-depth-write, nonopaque, depth-read, alpha-blend, screen-blend,
+// standard-alpha, additive-alpha, scissor, no-scissor, textured, and large4096.
 // Env: DXMT9_SPLIT_LARGE_INDEXED_DRAWS_CLASS.
 IndexedTriangleClassFilter splitLargeIndexedDrawClassFilter();
 
@@ -361,8 +366,8 @@ bool probeSortIndexedTrianglesByMinIndex();
 bool probeOptimizeIndexedTrianglesVertexCache();
 
 // Optional class filter for reverse-indexed-triangle probes. Accepted values:
-// any, opaque-depth-write, nonopaque, depth-read, alpha-blend, scissor,
-// textured, and large4096.
+// any, opaque-depth-write, nonopaque, depth-read, alpha-blend, screen-blend,
+// standard-alpha, additive-alpha, scissor, no-scissor, textured, and large4096.
 // Env: DXMT9_PROBE_REVERSE_INDEXED_TRIANGLES_CLASS.
 IndexedTriangleClassFilter probeReverseIndexedTrianglesClassFilter();
 

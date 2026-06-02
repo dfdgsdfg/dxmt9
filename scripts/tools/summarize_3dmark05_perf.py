@@ -730,6 +730,9 @@ PROBE_DRAW_CSV_KEYS = (
     "optimized_applied",
     "scissor_rect_eligible",
     "scissor_rect_applied",
+    "alpha_blend_probe_applied",
+    "depth_write_probe_applied",
+    "depth_func_probe_applied",
     "reorder_bytes",
     "split_eligible",
     "split_would_apply",
@@ -923,6 +926,34 @@ RENDER_PASS_COLOR_PROOF_KEYS = (
     "render_pass_color_proof_block_dead_no_present_disabled",
 )
 
+BLEND_FACTOR_NAMES = {
+    1: "Zero",
+    2: "One",
+    3: "SrcColor",
+    4: "InvSrcColor",
+    5: "SrcAlpha",
+    6: "InvSrcAlpha",
+    7: "DestAlpha",
+    8: "InvDestAlpha",
+    9: "DestColor",
+    10: "InvDestColor",
+    11: "SrcAlphaSat",
+    12: "BothSrcAlpha",
+    13: "BothInvSrcAlpha",
+    14: "BlendFactor",
+    15: "InvBlendFactor",
+    16: "SrcColor2",
+    17: "InvSrcColor2",
+}
+
+BLEND_OP_NAMES = {
+    1: "Add",
+    2: "Subtract",
+    3: "RevSubtract",
+    4: "Min",
+    5: "Max",
+}
+
 
 def parse_number(value: Any) -> int | float | str | None:
     if value is None:
@@ -1036,6 +1067,88 @@ def numeric_value(row: dict[str, Any], key: str) -> int | float:
     if isinstance(value, (int, float)):
         return value
     return 0
+
+
+def enum_name(names: dict[int, str], value: Any) -> str:
+    if isinstance(value, int):
+        return names.get(value, str(value))
+    return str(value)
+
+
+def blend_signature_text(row: dict[str, Any]) -> str:
+    src = enum_name(BLEND_FACTOR_NAMES, row.get("src_blend"))
+    dst = enum_name(BLEND_FACTOR_NAMES, row.get("dst_blend"))
+    op = enum_name(BLEND_OP_NAMES, row.get("blend_op"))
+    separate = numeric_value(row, "separate_alpha")
+    color_write = row.get("color_write", "")
+    text = f"rgb={src},{dst},{op}; sep={fmt(separate)}; write={color_write}"
+    if separate:
+        src_a = enum_name(BLEND_FACTOR_NAMES, row.get("src_blend_alpha"))
+        dst_a = enum_name(BLEND_FACTOR_NAMES, row.get("dst_blend_alpha"))
+        op_a = enum_name(BLEND_OP_NAMES, row.get("blend_op_alpha"))
+        text += f"; alpha={src_a},{dst_a},{op_a}"
+    return text
+
+
+def alpha_blend_signature_rows(probe_draws: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    groups: dict[tuple[Any, ...], dict[str, Any]] = {}
+    for row in probe_draws:
+        if not numeric_value(row, "alpha_blend"):
+            continue
+        key = (
+            row.get("seq"),
+            row.get("encoder"),
+            row.get("src_blend"),
+            row.get("dst_blend"),
+            row.get("blend_op"),
+            row.get("separate_alpha"),
+            row.get("src_blend_alpha"),
+            row.get("dst_blend_alpha"),
+            row.get("blend_op_alpha"),
+            row.get("color_write"),
+        )
+        group = groups.setdefault(
+            key,
+            {
+                "seq": row.get("seq"),
+                "encoder": row.get("encoder"),
+                "signature": blend_signature_text(row),
+                "draws": 0,
+                "primitives": 0,
+                "vertices": 0,
+                "large_4096_draws": 0,
+                "large_4096_primitives": 0,
+                "scissor_draws": 0,
+                "depth_write_draws": 0,
+                "psos": set(),
+            },
+        )
+        primitives = numeric_value(row, "primitive_count")
+        group["draws"] += 1
+        group["primitives"] += primitives
+        group["vertices"] += numeric_value(row, "vertex_count")
+        if primitives >= 4096:
+            group["large_4096_draws"] += 1
+            group["large_4096_primitives"] += primitives
+        if numeric_value(row, "scissor"):
+            group["scissor_draws"] += 1
+        if numeric_value(row, "depth_write"):
+            group["depth_write_draws"] += 1
+        pso = row.get("pso")
+        if pso not in (None, ""):
+            group["psos"].add(pso)
+
+    rows = list(groups.values())
+    for row in rows:
+        row["pso_unique"] = len(row.pop("psos"))
+    return sorted(
+        rows,
+        key=lambda row: (
+            numeric_value(row, "primitives"),
+            numeric_value(row, "draws"),
+        ),
+        reverse=True,
+    )
 
 
 def write_csv(path: Path, rows: list[dict[str, Any]], keys: tuple[str, ...]) -> None:
@@ -1388,6 +1501,18 @@ def write_markdown(
         lines.append(f"| `optimized_applied` | `{fmt(len(optimized_applied))}` |")
         lines.append(f"| `scissor_rect_eligible` | `{fmt(len(scissor_rect_eligible))}` |")
         lines.append(f"| `scissor_rect_applied` | `{fmt(len(scissor_rect_applied))}` |")
+        lines.append(
+            f"| `alpha_blend_probe_applied` | "
+            f"`{fmt(sum_key(probe_draws, 'alpha_blend_probe_applied'))}` |"
+        )
+        lines.append(
+            f"| `depth_write_probe_applied` | "
+            f"`{fmt(sum_key(probe_draws, 'depth_write_probe_applied'))}` |"
+        )
+        lines.append(
+            f"| `depth_func_probe_applied` | "
+            f"`{fmt(sum_key(probe_draws, 'depth_func_probe_applied'))}` |"
+        )
         lines.append(f"| `split_eligible` | `{fmt(len(split_eligible))}` |")
         lines.append(f"| `split_would_apply` | `{fmt(len(split_would_apply))}` |")
         lines.append(
@@ -1400,12 +1525,47 @@ def write_markdown(
             f"| `reorder_bytes` | `{fmt(sum_key(probe_draws, 'reorder_bytes'))}` |"
         )
         lines.append("")
+
+        blend_rows = alpha_blend_signature_rows(probe_draws)
+        if blend_rows:
+            lines.append("### Alpha Blend Signature Breakdown")
+            lines.append("")
+            lines.append(
+                "| seq | enc | signature | draws | prims | verts | "
+                "large4096 draws/prims | scissor draws | depth-write draws | PSOs |"
+            )
+            lines.append("|---:|---:|---|---:|---:|---:|---:|---:|---:|---:|")
+            for row in blend_rows[:16]:
+                large = (
+                    f"{fmt(row.get('large_4096_draws'))}/"
+                    f"{fmt(row.get('large_4096_primitives'))}"
+                )
+                lines.append(
+                    "| "
+                    + " | ".join(
+                        [
+                            fmt(row.get("seq")),
+                            fmt(row.get("encoder")),
+                            fmt(row.get("signature")),
+                            fmt(row.get("draws")),
+                            fmt(row.get("primitives")),
+                            fmt(row.get("vertices")),
+                            large,
+                            fmt(row.get("scissor_draws")),
+                            fmt(row.get("depth_write_draws")),
+                            fmt(row.get("pso_unique")),
+                        ]
+                    )
+                    + " |"
+                )
+            lines.append("")
+
         lines.append(
-            "| seq | enc | draw | applied | opt | srect | prims | "
+            "| seq | enc | draw | applied | opt | srect | alpha/depth/dfunc | prims | "
             "orig uniq/span/c64 | eff uniq/span/c64 | scissor | "
             "scissor rect | original rect | stream0 | ib | pso |"
         )
-        lines.append("|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---|---|---|---|---|")
+        lines.append("|---:|---:|---:|---:|---:|---:|---|---:|---:|---:|---:|---|---|---|---|---|")
         for row in probe_draws[:32]:
             rect = (
                 f"{fmt(row.get('scissor_l'))},"
@@ -1434,6 +1594,11 @@ def write_markdown(
                 f"{fmt(row.get('effective_index_span'))}/"
                 f"{fmt(row.get('effective_cache_miss64'))}"
             )
+            state_probe = (
+                f"{fmt(row.get('alpha_blend_probe_applied'))}/"
+                f"{fmt(row.get('depth_write_probe_applied'))}/"
+                f"{fmt(row.get('depth_func_probe_applied'))}"
+            )
             lines.append(
                 "| "
                 + " | ".join(
@@ -1444,6 +1609,7 @@ def write_markdown(
                         fmt(row.get("applied")),
                         fmt(row.get("optimized_applied")),
                         fmt(row.get("scissor_rect_applied")),
+                        state_probe,
                         fmt(row.get("primitive_count")),
                         original_locality,
                         effective_locality,

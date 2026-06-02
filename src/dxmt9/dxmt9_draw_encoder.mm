@@ -1051,6 +1051,9 @@ struct ActiveEncoderBreakdown {
                                  bool optimizedApplied,
                                  bool scissorRectEligible,
                                  bool scissorRectApplied,
+                                 bool alphaBlendProbeApplied,
+                                 bool depthWriteProbeApplied,
+                                 bool depthFuncProbeApplied,
                                  bool splitEligible,
                                  bool splitWouldApply,
                                  u32 splitChunkCount,
@@ -1151,7 +1154,9 @@ struct ActiveEncoderBreakdown {
         "[dxmt9-perf-indexed-probe-draw seq=%llu encoder=%llu "
         "encoder_draw_index=%llu draw_ordinal=%llu eligible=%u applied=%u "
         "optimized_eligible=%u optimized_applied=%u "
-        "scissor_rect_eligible=%u scissor_rect_applied=%u reorder_bytes=%llu "
+        "scissor_rect_eligible=%u scissor_rect_applied=%u "
+        "alpha_blend_probe_applied=%u depth_write_probe_applied=%u "
+        "depth_func_probe_applied=%u reorder_bytes=%llu "
         "split_eligible=%u split_would_apply=%u split_chunk_count=%u "
         "split_max_chunks_per_draw=%u split_stream0_span_limit=%llu "
         "split_chunk_stream0_span_max=%llu split_primitive_count=%llu "
@@ -1198,6 +1203,9 @@ struct ActiveEncoderBreakdown {
         optimizedApplied ? 1u : 0u,
         scissorRectEligible ? 1u : 0u,
         scissorRectApplied ? 1u : 0u,
+        alphaBlendProbeApplied ? 1u : 0u,
+        depthWriteProbeApplied ? 1u : 0u,
+        depthFuncProbeApplied ? 1u : 0u,
         static_cast<unsigned long long>(reorderBytes),
         splitEligible ? 1u : 0u,
         splitWouldApply ? 1u : 0u,
@@ -3633,6 +3641,31 @@ bool indexedTriangleOpaqueDepthWriteClass(
          !clipPlaneEnabled;
 }
 
+bool indexedTriangleBlendEquationMatches(
+    const core::FlatStateSet<core::kMaxStateSlots>& renderStates,
+    core::BlendFactor src,
+    core::BlendFactor dst,
+    core::BlendOp op) {
+  if (core::flatStateOr(renderStates, RS_ALPHABLEND_ENABLE, 0u) == 0u) {
+    return false;
+  }
+  return core::flatStateOr(renderStates,
+                           RS_SRC_BLEND,
+                           static_cast<u32>(core::BlendFactor::One)) ==
+             static_cast<u32>(src) &&
+         core::flatStateOr(renderStates,
+                           RS_DEST_BLEND,
+                           static_cast<u32>(core::BlendFactor::Zero)) ==
+             static_cast<u32>(dst) &&
+         core::flatStateOr(renderStates,
+                           RS_BLEND_OP,
+                           static_cast<u32>(core::BlendOp::Add)) ==
+             static_cast<u32>(op) &&
+         core::flatStateOr(renderStates,
+                           RS_SEPARATE_ALPHA_BLEND_ENABLE,
+                           0u) == 0u;
+}
+
 bool indexedTriangleClassMatches(
     debug::IndexedTriangleClassFilter filter,
     u32 primitiveCount,
@@ -3664,8 +3697,25 @@ bool indexedTriangleClassMatches(
       return depthEnabled && !depthWrite;
     case debug::IndexedTriangleClassFilter::AlphaBlend:
       return alphaBlendEnabled;
+    case debug::IndexedTriangleClassFilter::ScreenBlend:
+      return indexedTriangleBlendEquationMatches(renderStates,
+                                                 core::BlendFactor::InvDestColor,
+                                                 core::BlendFactor::One,
+                                                 core::BlendOp::Add);
+    case debug::IndexedTriangleClassFilter::StandardAlphaBlend:
+      return indexedTriangleBlendEquationMatches(renderStates,
+                                                 core::BlendFactor::SrcAlpha,
+                                                 core::BlendFactor::InvSrcAlpha,
+                                                 core::BlendOp::Add);
+    case debug::IndexedTriangleClassFilter::AdditiveAlphaBlend:
+      return indexedTriangleBlendEquationMatches(renderStates,
+                                                 core::BlendFactor::SrcAlpha,
+                                                 core::BlendFactor::One,
+                                                 core::BlendOp::Add);
     case debug::IndexedTriangleClassFilter::Scissor:
       return viewport.scissorEnabled;
+    case debug::IndexedTriangleClassFilter::NoScissor:
+      return !viewport.scissorEnabled;
     case debug::IndexedTriangleClassFilter::Textured:
       return textureMask != 0u;
     case debug::IndexedTriangleClassFilter::Large4096:
@@ -6891,6 +6941,9 @@ bool encodeDraw(EncodeContext& ctx,
             optimizedApplied,
             scissorRectProbeEligible,
             scissorRectProbeApplied,
+            disableAlphaBlendProbeApplied,
+            disableDepthWriteProbeApplied,
+            depthFuncAlwaysProbeApplied,
             splitEligible,
             splitWouldApply,
             static_cast<u32>(std::min<std::size_t>(

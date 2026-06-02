@@ -77,6 +77,8 @@ class Summarize3DMark05PerfTests(unittest.TestCase):
                 "encoder_draw_index=2 draw_ordinal=42 eligible=1 applied=1 "
                 "optimized_eligible=1 optimized_applied=0 reorder_bytes=1234 "
                 "scissor_rect_eligible=1 scissor_rect_applied=1 "
+                "alpha_blend_probe_applied=1 depth_write_probe_applied=0 "
+                "depth_func_probe_applied=1 "
                 "primitive_type=4 primitive_count=4096 "
                 "vertex_count=12288 texture_mask=0x7f color_write=0xf "
                 "alpha_blend=1 src_blend=5 dst_blend=6 blend_op=1 "
@@ -169,6 +171,9 @@ class Summarize3DMark05PerfTests(unittest.TestCase):
             self.assertEqual(probe_draw["optimized_applied"], 0)
             self.assertEqual(probe_draw["scissor_rect_eligible"], 1)
             self.assertEqual(probe_draw["scissor_rect_applied"], 1)
+            self.assertEqual(probe_draw["alpha_blend_probe_applied"], 1)
+            self.assertEqual(probe_draw["depth_write_probe_applied"], 0)
+            self.assertEqual(probe_draw["depth_func_probe_applied"], 1)
             self.assertEqual(probe_draw["primitive_count"], 4096)
             self.assertEqual(probe_draw["src_blend"], 5)
             self.assertEqual(probe_draw["dst_blend"], 6)
@@ -225,6 +230,8 @@ class Summarize3DMark05PerfTests(unittest.TestCase):
                 probe_row = next(csv.DictReader(handle))
             self.assertEqual(probe_row["applied"], "1")
             self.assertEqual(probe_row["optimized_applied"], "0")
+            self.assertEqual(probe_row["alpha_blend_probe_applied"], "1")
+            self.assertEqual(probe_row["depth_func_probe_applied"], "1")
             self.assertEqual(probe_row["reorder_bytes"], "1234")
             self.assertEqual(probe_row["src_blend"], "5")
             self.assertEqual(probe_row["scissor_l"], "16")
@@ -275,8 +282,13 @@ class Summarize3DMark05PerfTests(unittest.TestCase):
             self.assertIn("| `commit_chunk_draw_submission_batch_size_9_16` | `1` | `25.00%` |", summary)
             self.assertIn("- Indexed probe draw lines: `1`", summary)
             self.assertIn("## Indexed Probe Draw Samples", summary)
+            self.assertIn("### Alpha Blend Signature Breakdown", summary)
+            self.assertIn("rgb=SrcAlpha,InvSrcAlpha,Add; sep=0; write=0xf", summary)
+            self.assertIn("| 7 | 3 | rgb=SrcAlpha,InvSrcAlpha,Add; sep=0; write=0xf | 1 | 4,096 | 12,288 | 1/4,096 | 1 | 0 | 1 |", summary)
             self.assertIn("| `applied` | `1` |", summary)
             self.assertIn("| `optimized_eligible` | `1` |", summary)
+            self.assertIn("| `alpha_blend_probe_applied` | `1` |", summary)
+            self.assertIn("| `depth_func_probe_applied` | `1` |", summary)
 
 
 if __name__ == "__main__":

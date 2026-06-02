@@ -200,8 +200,24 @@ IndexedTriangleClassFilter parseIndexedTriangleClassFilter(
       tokenEquals(spec, "blend")) {
     return IndexedTriangleClassFilter::AlphaBlend;
   }
+  if (tokenEquals(spec, "screen-blend") ||
+      tokenEquals(spec, "screen")) {
+    return IndexedTriangleClassFilter::ScreenBlend;
+  }
+  if (tokenEquals(spec, "standard-alpha") ||
+      tokenEquals(spec, "standard-alpha-blend")) {
+    return IndexedTriangleClassFilter::StandardAlphaBlend;
+  }
+  if (tokenEquals(spec, "additive-alpha") ||
+      tokenEquals(spec, "additive-alpha-blend")) {
+    return IndexedTriangleClassFilter::AdditiveAlphaBlend;
+  }
   if (tokenEquals(spec, "scissor")) {
     return IndexedTriangleClassFilter::Scissor;
+  }
+  if (tokenEquals(spec, "no-scissor") ||
+      tokenEquals(spec, "non-scissor")) {
+    return IndexedTriangleClassFilter::NoScissor;
   }
   if (tokenEquals(spec, "textured") ||
       tokenEquals(spec, "texture")) {

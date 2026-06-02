@@ -11669,6 +11669,166 @@ two questions without reopening Xcode UI manually: whether the hot alpha rows
 are dominated by a single blend state, and whether any blend-enabled draws are
 actually no-op candidates that can legally use a blend-off PSO.
 
+The no-mutate current-head scout completed with the new counters:
+
+```bash
+scripts/tools/run_3dmark05_perf_probe.sh \
+  --suffix blend-state-current-nogputrace-r1 \
+  --frame 60 \
+  --timeout 180 \
+  --no-gputrace \
+  --encoder-breakdown-seq 60 \
+  --measure-index-reuse \
+  --top 5 \
+  --hot-gpu-share 95 \
+  --min-free-mb 256
+```
+
+Artifacts:
+
+- `experiments/output/app-d3d9-3dmark05-blend-state-current-nogputrace-r1/3dmark05-perf-summary.md`
+- `experiments/output/app-d3d9-3dmark05-blend-state-current-nogputrace-r1/3dmark05-perf-encoders.csv`
+- `experiments/output/app-d3d9-3dmark05-blend-state-current-nogputrace-r1/3dmark05-perf-indexed-probe-draws.csv`
+
+The summary script now includes an `Alpha Blend Signature Breakdown` section
+derived from indexed probe draw samples, so future runs do not require a manual
+CSV/Python pass to see whether a hot row is screen-blend, standard alpha, or a
+mixed blend-state bucket.
+
+Frame-60 totals:
+
+| Counter | Value |
+|---|---:|
+| `blend_state_samples` | `626` |
+| `blend_state_changes` | `21` |
+| `blend_state_unique` | `14` |
+| `blend_state_unique_overflows` | `0` |
+| `blend_enabled_noop_draws` | `0` |
+| `blend_constant_factor_draws` | `0` |
+
+Hot-row breakdown:
+
+| seq/enc | Draws | Tris | Large4096 draws/tris | Alpha draws/tris | Large4096 alpha draws/tris | Blend changes | Blend unique | No-op | Constant factor |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|
+| `60/1` | `212` | `336,636` | `16 / 153,446` | `0 / 0` | `0 / 0` | `0` | `1` | `0` | `0` |
+| `60/2` | `269` | `366,197` | `10 / 58,628` | `250 / 347,216` | `9 / 53,588` | `19` | `4` | `0` | `0` |
+| `60/0` | `135` | `179,613` | `5 / 29,314` | `0 / 0` | `0 / 0` | `1` | `2` | `0` | `0` |
+
+The `60/2` alpha-blended drawsample has three active blend signatures:
+
+| Blend signature | Draws | Tris | Meaning |
+|---|---:|---:|---|
+| `src=InvDestColor, dst=One, op=Add` | `172` | `247,917` | screen/additive destination-dependent blend |
+| `src=SrcAlpha, dst=InvSrcAlpha, op=Add` | `77` | `99,297` | standard alpha blend |
+| `src=SrcAlpha, dst=One, op=Add` | `1` | `2` | tiny additive alpha row |
+
+For the selected large alpha subset (`60/2`, `primitive_count >= 4096`), the
+active work is split between `6` screen-blend draws (`36,411` tris) and `3`
+standard-alpha draws (`17,177` tris). The lone large alpha+scissor draw is also
+screen-blend (`7,097` tris).
+
+Interpretation: the correctness-preserving no-op blend-off PSO path is not
+available for this hot GT1 class (`blend_enabled_noop_draws=0`). Alpha blend
+still changes the Apple backend storage shape, but the legal production
+candidate must preserve these real blend equations. The next high-signal work
+is therefore material/state isolation, render-pass/draw-run ordering, or a
+row-local replay harness; not a broad blend-off PSO minimization.
+
+To make the next material probes row-stable without relying on raw row ids, the
+shared indexed-triangle class selector now accepts blend-equation and scissor
+subclasses:
+
+- `screen-blend`: alpha blend enabled with `InvDestColor + One + Add`.
+- `standard-alpha`: alpha blend enabled with `SrcAlpha + InvSrcAlpha + Add`.
+- `additive-alpha`: alpha blend enabled with `SrcAlpha + One + Add`.
+- `no-scissor`: inverse of the existing `scissor` class.
+
+These tokens work in the same ANDed class lists as `large4096`, `alpha-blend`,
+`depth-read`, and `textured`, so a probe can target
+`large4096,screen-blend` or `large4096,screen-blend,no-scissor` without row
+selectors. Indexed probe draw rows also now emit:
+
+- `alpha_blend_probe_applied`
+- `depth_write_probe_applied`
+- `depth_func_probe_applied`
+
+This closes the previous per-draw attribution gap where
+`probe_disable_alpha_blend_draws` existed only as an encoder aggregate.
+
+Smoke command:
+
+```bash
+scripts/tools/run_3dmark05_perf_probe.sh \
+  --suffix screen-blend-class-nogputrace-r2 \
+  --frame 60 \
+  --timeout 180 \
+  --no-gputrace \
+  --encoder-breakdown-seq 60 \
+  --measure-index-reuse \
+  --probe-disable-alpha-blend-classes large4096,screen-blend \
+  --top 5 \
+  --hot-gpu-share 95 \
+  --min-free-mb 256
+```
+
+Result:
+
+| Check | Value |
+|---|---:|
+| Encoder `probe_disable_alpha_blend_draws` | `6` |
+| Drawsample `alpha_blend_probe_applied` | `6` |
+| Applied primitive count | `36,411` |
+| Applied vertex count | `109,233` |
+
+The six selected draws are all in `60/2`, all use
+`src=InvDestColor, dst=One, op=Add`, and match the `large4096` screen-blend
+bucket from the no-mutate summary. One selected draw has scissor enabled
+(`7,097` tris), while five are non-scissored (`29,314` tris). This gives the
+next gputrace candidates precise material slices:
+
+1. `large4096,screen-blend`
+2. `large4096,screen-blend,scissor`
+3. `large4096,screen-blend,no-scissor`
+4. `large4096,standard-alpha`
+
+Follow-up no-gputrace selector smokes:
+
+| Run | Selector | Applied draws | Applied tris | Scissor draws/tris | PSOs |
+|---|---|---:|---:|---:|---:|
+| `screen-blend-class-nogputrace-r2` | `large4096,screen-blend` | `6` | `36,411` | `1 / 7,097` | `5` |
+| `standard-alpha-class-nogputrace-r1` | `large4096,standard-alpha` | `3` | `17,177` | `0 / 0` | `2` |
+| `screen-blend-scissor-class-nogputrace-r1` | `large4096,screen-blend,scissor` | `2` | `14,194` | `2 / 14,194` | `1` |
+| `screen-blend-noscissor-class-nogputrace-r1` | `large4096,screen-blend,no-scissor` | `5` | `29,314` | `0 / 0` | `4` |
+
+The scissor/no-scissor runs are useful selector proofs, but their draw counts
+do not add up exactly to the full screen-blend run (`2 + 5 != 6`) because
+direct no-gputrace frame membership still drifts between launches. For the
+next Xcode capture, prefer the full `large4096,screen-blend` class first: it is
+specific to the dominant destination-dependent blend equation while avoiding
+an extra selector dimension that can drift. Use the scissor/no-scissor slices
+only after a same-run gputrace counter result shows that the full screen-blend
+class still moves the hidden VS/backend write bucket.
+
+Prepared gputrace command:
+
+```bash
+scripts/tools/run_3dmark05_perf_probe.sh \
+  --suffix screen-blend-class-gputrace-r1 \
+  --frame 60 \
+  --timeout 180 \
+  --encoder-breakdown-seq 60 \
+  --measure-index-reuse \
+  --probe-disable-alpha-blend-classes large4096,screen-blend \
+  --top 5 \
+  --hot-gpu-share 95 \
+  --min-free-mb 512
+```
+
+Dry-run status: not launched yet. Available space was `406MiB`, below the
+`512MiB` launch guard. The next Xcode capture should run this command after
+freeing space, then export embedded performance data and encoder counters into
+`traces/app-d3d9-3dmark05-screen-blend-class-gputrace-r1/analysis/`.
+
 ```mermaid
 flowchart TD
   A["state-shape hypothesis\nalpha blend may change hidden backend storage"] --> B["row-scoped smoke"]
@@ -11691,12 +11851,15 @@ flowchart TD
   P --> S["new blend-state counters\nunique/change/no-op/constant-factor"]
   S --> T{"blend-enabled no-op draws?"}
   T -- "yes" --> U["legal blend-off PSO candidate"]
-  T -- "no" --> V["state-shape/order experiments only"]
+  T -- "no: 0 draws" --> V["preserve blend equations\nstate/order/replay experiments only"]
+  V --> W["class selectors\nscreen-blend / standard-alpha / no-scissor"]
+  W --> X["per-draw state-probe applied fields\nprove selected material slice"]
+  X --> Y["next gputrace candidate\nlarge4096 AND screen-blend"]
 
   classDef hot fill:#ffe8e8,stroke:#b64242,color:#2b0d0d
   classDef good fill:#e8f5e8,stroke:#4d8b4d,color:#102a10
   classDef known fill:#e8f0ff,stroke:#476cb6,color:#0d1833
   class D,H hot
   class I,J,K,L,N good
-  class A,B,C,E,F,G,M,O,P,S,T,U,V known
+  class A,B,C,E,F,G,M,O,P,S,T,U,V,W,X,Y known
 ```
