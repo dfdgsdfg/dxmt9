@@ -12446,12 +12446,47 @@ python3 scripts/tools/run_3dmark05_mini_replay.py \
   --run --repeat 1
 ```
 
-Gate: if the depth-fed mini replay still reports `~31.98MiB` VS buffer write
-and `~620B/VS invocation`, the missing original amplification is not explained
-by depth contents alone and the next replay must preserve a wider pass prefix
-or another encoder-level backend state. If VS buffer write moves toward the
-original `981.171MiB` / `1602.5B/VS invocation`, depth contents are part of
-the reproduction path and can become the next optimization/fidelity target.
+The raw D24X8 depth-input probe has now been captured and profiled:
+
+- Raw capture:
+  `traces/app-d3d9-3dmark05-screen-blend-run-71-188-payload16-streams-r1/analysis/mini-replay-full16-scissor-depthinput.gputrace`
+- Performance-embedded export:
+  `traces/app-d3d9-3dmark05-screen-blend-run-71-188-payload16-streams-r1/analysis/mini-replay-full16-scissor-depthinput-performance.gputrace`
+- Xcode encoder counter CSV:
+  `traces/app-d3d9-3dmark05-screen-blend-run-71-188-payload16-streams-r1/analysis/mini-replay-full16-scissor-depthinput-counters-xcode.csv`
+- Reduced summary:
+  `traces/app-d3d9-3dmark05-screen-blend-run-71-188-payload16-streams-r1/analysis/mini-replay-full16-scissor-depthinput-counters-summary.csv`
+- Bottleneck report:
+  `traces/app-d3d9-3dmark05-screen-blend-run-71-188-payload16-streams-r1/analysis/mini-replay-full16-scissor-depthinput-xcode-bottleneck-report.md`
+
+Depth-input comparison:
+
+| Metric | Original `60/2` | Mini scissor depth=1 | Mini scissor depth=0 | Mini scissor raw D24X8 input | raw / depth0 | raw / original |
+|---|---:|---:|---:|---:|---:|---:|
+| GPU time | `20.327ms` | `1.498ms` | `0.989ms` | `1.082ms` | `1.095x` | `0.053x` |
+| VS buffer write | `981.171MiB` | `31.978MiB` | `31.975MiB` | `31.987MiB` | `1.000x` | `0.033x` |
+| VS invocations | `642,001` | `54,104` | `54,104` | `54,104` | `1.000x` | `0.084x` |
+| VS buffer / VS invocation | `1602.5B` | `619.8B` | `619.7B` | `619.9B` | `1.000x` | `0.387x` |
+| Primitives | `389,376` | `28,822` | `28,822` | `28,822` | `1.000x` | `0.074x` |
+| Tiled vertex buffer | `12.563MiB` | `0.906MiB` | `0.906MiB` | `0.906MiB` | `1.000x` | `0.072x` |
+| Tiled primitive-block buffer | `11.813MiB` | `0.781MiB` | `0.781MiB` | `0.781MiB` | `1.000x` | `0.066x` |
+| FS invocations | `3,296,064` | `2,963,392` | `786,432` | `786,432` | `1.000x` | `0.239x` |
+| Pixels rasterized | `14,020,864` | `2,176,960` | `2,176,960` | `2,177,024` | `1.000x` | `0.155x` |
+| Vertex stage time | `96.06%` | `64.37%` | `94.80%` | `91.35%` | `0.964x` | `0.951x` |
+| VS buffer-write limiter | `21.41%` | `11.35%` | `11.93%` | `10.77%` | `0.903x` | `0.503x` |
+| Cull unit limiter | `5.98%` | `34.55%` | `33.11%` | `37.02%` | `1.118x` | `6.190x` |
+| Clip unit limiter | `2.98%` | `20.94%` | `23.85%` | `22.57%` | `0.946x` | `7.574x` |
+| MMU limiter | `34.32%` | `17.54%` | `27.92%` | `27.12%` | `0.971x` | `0.790x` |
+| LLC limiter | `36.39%` | `21.14%` | `21.91%` | `24.41%` | `1.114x` | `0.671x` |
+
+Gate result: depth contents alone are rejected as the missing owner of the
+original `60/2` amplification. Loading the real raw D24X8 attachment changes
+fragment/depth behavior, matching the depth=0 fragment count (`786,432` FS
+invocations), but it leaves vertex-stage backend traffic fixed at
+`~31.99MiB` and `~620B/VS invocation`. The remaining gap is therefore not a
+scalar depth clear/load issue. The next replay must preserve a wider `60/2`
+draw prefix or the whole render encoder's geometry/material sequence so the
+same primitive/binning/backend state exists before the measured draws.
 
 ```mermaid
 flowchart TD
@@ -12469,14 +12504,15 @@ flowchart TD
   ScissorBug --> ScissorFix["per-draw setScissorRect\nscissor_draw_count=10"]
   ScissorFix --> XcodeScissor["scissor-aware Xcode capture\nGPU 1.50ms\nFS inv 2.96M\nVS buffer still 31.98MiB"]
   XcodeScissor --> Depth0["depth-clear=0 probe\nGPU 0.99ms\nFS inv 0.79M\nVS buffer still 31.98MiB"]
-  Depth0 --> Compare["compare with original 60/2\n981.17MiB VS buffer\n1602B/VS inv"]
+  Depth0 --> DepthInput["raw D24X8 depth-input probe\nGPU 1.08ms\nFS inv 0.79M\nVS buffer still 31.99MiB"]
+  DepthInput --> Compare["compare with original 60/2\n981.17MiB VS buffer\n1602B/VS inv"]
   Compare --> Gap["remaining fidelity gap\nmissing pass/depth/tiler context\nnot fragment overdraw"]
-  Gap --> Next["next experiment\nraw D24X8 depth dump/load\nor replay wider 60/2 pass prefix"]
+  Gap --> Next["next experiment\nreplay wider 60/2 prefix\nor full 60/2 render encoder"]
 
   classDef hot fill:#ffe8e8,stroke:#b64242,color:#2b0d0d
   classDef known fill:#e8f0ff,stroke:#476cb6,color:#0d1833
   class Compile0,ScissorBug,Gap,Next hot
-  class Scout,Full,SinglePSO,Slice,SlotFix,StreamDump,Smoke,MultiPSO,FullSmoke,XcodeMini,ScissorFix,XcodeScissor,Depth0,Compare known
+  class Scout,Full,SinglePSO,Slice,SlotFix,StreamDump,Smoke,MultiPSO,FullSmoke,XcodeMini,ScissorFix,XcodeScissor,Depth0,DepthInput,Compare known
 ```
 
 Smoke validation for the current pass-shape manifest:
