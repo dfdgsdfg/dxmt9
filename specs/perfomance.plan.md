@@ -10397,3 +10397,125 @@ flowchart TD
   class Owner,XcodeNext,PrimitiveOwner,RejectSplit hot
   class Current,SplitSmoke,Scope,Stable,Gate,Decide known
 ```
+
+### Current Row 60/2 Large4096 Split Xcode Rejection
+
+The smoke-approved `60/2 large4096` split was captured and replayed in Xcode.
+The run was interrupted after frame capture, so the dxmt summary is marked
+`partial-log`, but the frame-level encoder breakdown and Xcode counters are
+complete enough for the row-key/geometry-gated comparison.
+
+Capture and finalizer:
+
+```bash
+scripts/tools/run_3dmark05_perf_probe.sh \
+  --suffix split-row-60-2-large4096-gputrace-r1 \
+  --frame 60 \
+  --timeout 180 \
+  --split-large-indexed-draws 4096 \
+  --split-large-indexed-draws-row 60/2 \
+  --split-large-indexed-draws-class large4096
+
+scripts/tools/finalize_3dmark05_perf_probe.sh \
+  --suffix split-row-60-2-large4096-gputrace-r1 \
+  --frame 60 \
+  --top 3 \
+  --hot-gpu-share 95 \
+  --baseline-joined traces/app-d3d9-3dmark05-current-normal-gputrace-r1/analysis/frame60-xcode-dxmt-joined-summary.csv \
+  --require-top-row-key-match \
+  --require-top-pso-attribution \
+  --min-top-pso-samples-per-draw 0.90 \
+  --require-xcode-counter-coverage \
+  --require-dxmt-join-coverage \
+  --min-top-dxmt-joined-fraction 1.0 \
+  --max-top-vertex-count-delta-ratio 0.05 \
+  --max-top-triangle-delta-ratio 0.05
+```
+
+Artifacts:
+
+```text
+traces/app-d3d9-3dmark05-split-row-60-2-large4096-gputrace-r1/frame60.gputrace
+traces/app-d3d9-3dmark05-split-row-60-2-large4096-gputrace-r1/analysis/frame60-performance.gputrace
+traces/app-d3d9-3dmark05-split-row-60-2-large4096-gputrace-r1/analysis/frame60-counters-xcode.csv
+traces/app-d3d9-3dmark05-split-row-60-2-large4096-gputrace-r1/analysis/frame60-xcode-dxmt-joined-summary.csv
+traces/app-d3d9-3dmark05-split-row-60-2-large4096-gputrace-r1/analysis/frame60-xcode-dxmt-bottleneck-report.md
+traces/app-d3d9-3dmark05-split-row-60-2-large4096-gputrace-r1/analysis/frame60-xcode-dxmt-comparison.md
+```
+
+Result: all strict coverage, row-key, PSO-attribution, vertex-count, and
+triangle-count gates passed. The intentional draw-count expansion is visible in
+dxmt counters, but Xcode still reports `385` top draw calls because it groups
+the same source encoder rows; the comparison therefore remains geometry-stable.
+
+| Metric | Baseline | `60/2 large4096` split | Delta |
+|---|---:|---:|---:|
+| Total GPU | `35.456 ms` | `34.559 ms` | `-2.53%` |
+| Top GPU | `34.837 ms` | `33.960 ms` | `-2.52%` |
+| Top VS buffer write | `1627.240 MiB` | `1629.865 MiB` | `+0.16%` |
+| Top unexplained buffer write | `1627.596 MiB` | `1630.123 MiB` | `+0.16%` |
+| Top VS bytes / invocation | `1447.741 B` | `1449.926 B` | `+0.15%` |
+| Top dxmt vertices | `2,146,185` | `2,146,185` | `0` |
+| Top dxmt triangles | `715,395` | `715,395` | `0` |
+| Split source / Metal / extra draws | `0 / 0 / 0` | `20 / 60 / 40` | `+40 extra` |
+| Split primitive count | `0` | `206,348` | `+206,348` |
+
+Per-row deltas:
+
+| Row | GPU ms | VS write MiB | VS invocations | VS B/inv | Named tiled MiB |
+|---|---:|---:|---:|---:|---:|
+| `60/2` | `20.028 -> 19.502 (-2.63%)` | `981.185 -> 983.722 (+0.26%)` | `642,001 -> 642,123 (+0.02%)` | `1602.563 -> 1606.401 (+0.24%)` | `24.500 -> 24.438 (-0.26%)` |
+| `60/1` | `9.061 -> 8.904 (-1.73%)` | `421.124 -> 421.171 (+0.01%)` | `383,688 -> 383,688 (+0.00%)` | `1150.883 -> 1151.013 (+0.01%)` | `3.500 -> 3.500 (+0.00%)` |
+| `60/0` | `5.748 -> 5.554 (-3.37%)` | `224.931 -> 224.972 (+0.02%)` | `152,895 -> 152,895 (+0.00%)` | `1542.612 -> 1542.889 (+0.02%)` | `1.500 -> 1.500 (+0.00%)` |
+
+Interpretation:
+
+- Splitting the current hottest `60/2` large indexed draws is not a VS
+  buffer-write fix. VS buffer write and unexplained buffer write both increase
+  slightly while the geometry totals are unchanged.
+- The `~2.5%` GPU-time improvement is real but not explained by reduced
+  backend write volume. It is likely a secondary scheduling/locality effect, so
+  it should not be promoted as a primary bottleneck fix without a separate
+  correctness and runtime-FPS experiment.
+- Draw-size partitioning alone is rejected as the owner of the `~1.6GiB` hidden
+  VS-write bucket. The hidden estimate remains `~1600MiB`, with backend class
+  `hidden_vertex_tiler_parameter_storage`.
+- Since visible VSOut width and current-row draw-size split both fail to move
+  the bucket, the next experiments should either change backend state shape
+  without changing geometry, or construct a smaller shader/geometry replay from
+  dumped 3DMark05 data to isolate Apple compiler/backend storage behavior.
+
+Next probe direction:
+
+1. Treat `split-large-indexed-draws` as a diagnostic only. It may be useful for
+   GPU-time scheduling experiments, but not for the current VS-write owner.
+2. Build a row-local replay/minimized harness for `60/2` using the dumped
+   shaders, index/vertex buffers, and state so that primitive count, material
+   state, and VSOut shape can be varied independently.
+3. Prioritize backend-state A/B within the current hot rows:
+   `60/2` depth-read + alpha/scissor/textured, `60/1` opaque depth-write, and
+   `60/0` opaque textured depth-write.
+
+```mermaid
+flowchart TD
+  Base["current-normal\nhot rows 60/0 60/1 60/2"] --> Split["split 60/2 large4096\n20 source draws"]
+  Split --> DrawExpand["20 source -> 60 Metal draws\n40 extra draws"]
+  DrawExpand --> GeometryStable["geometry stable\n2.146M vertices\n715k triangles"]
+  GeometryStable --> Xcode["Xcode replay + counters\ncoverage gates pass"]
+
+  Xcode --> GpuBetter["top GPU improves\n34.837 -> 33.960ms"]
+  Xcode --> VsSame["top VS write worsens slightly\n1627.240 -> 1629.865MiB"]
+  Xcode --> HiddenSame["unexplained write still dominant\n1630.123MiB"]
+
+  VsSame --> Reject["reject draw-size split\nas VS-write owner"]
+  HiddenSame --> Hidden["hidden vertex/tiler/parameter storage\n~1600MiB hidden estimate"]
+  GpuBetter --> Secondary["possible secondary scheduling/locality effect\nnot enough for owner attribution"]
+
+  Reject --> BackendAB["next: backend-state A/B\nsame geometry"]
+  Reject --> MiniReplay["next: row-local replay\nshader + geometry + state isolation"]
+
+  classDef hot fill:#ffe8e8,stroke:#b64242,color:#2b0d0d
+  classDef known fill:#e8f0ff,stroke:#476cb6,color:#0d1833
+  class VsSame,HiddenSame,Reject,Hidden,BackendAB,MiniReplay hot
+  class Base,Split,DrawExpand,GeometryStable,Xcode,GpuBetter,Secondary known
+```
