@@ -161,6 +161,24 @@ bool forceTextureWhite();
 // color-write masks. Env: DXMT9_PROBE_DISABLE_ALPHA_BLEND.
 bool probeDisableAlphaBlend();
 
+// Optional class filter for DXMT9_PROBE_DISABLE_ALPHA_BLEND. Accepted values
+// match DXMT9_SPLIT_LARGE_INDEXED_DRAWS_CLASS.
+// Env: DXMT9_PROBE_DISABLE_ALPHA_BLEND_CLASS.
+IndexedTriangleClassFilter probeDisableAlphaBlendClassFilter();
+
+// Optional AND class-list filter for DXMT9_PROBE_DISABLE_ALPHA_BLEND.
+// Env: DXMT9_PROBE_DISABLE_ALPHA_BLEND_CLASSES.
+IndexedTriangleClassFilterList probeDisableAlphaBlendClassFilters();
+
+// Optional selector for DXMT9_PROBE_DISABLE_ALPHA_BLEND. Format is
+// "<seq>/<encoder>".
+// Env: DXMT9_PROBE_DISABLE_ALPHA_BLEND_ROW.
+RenderEncoderSelector probeDisableAlphaBlendRow();
+
+// Optional selector list for DXMT9_PROBE_DISABLE_ALPHA_BLEND.
+// Env: DXMT9_PROBE_DISABLE_ALPHA_BLEND_ROWS.
+RenderEncoderSelectorList probeDisableAlphaBlendRows();
+
 // Diagnostic render-state A/B: keep depth testing but force depth writes off.
 // Env: DXMT9_PROBE_DISABLE_DEPTH_WRITE.
 bool probeDisableDepthWrite();

@@ -3495,6 +3495,12 @@ bool forceCullModeProbeRowMatches(const ActiveEncoderBreakdown* encoderBreakdown
                                        debug::probeForceCullModeRows());
 }
 
+bool disableAlphaBlendProbeRowMatches(const ActiveEncoderBreakdown* encoderBreakdown) {
+  return renderEncoderSelectionMatches(encoderBreakdown,
+                                       debug::probeDisableAlphaBlendRow(),
+                                       debug::probeDisableAlphaBlendRows());
+}
+
 bool disableDepthWriteProbeRowMatches(const ActiveEncoderBreakdown* encoderBreakdown) {
   return renderEncoderSelectionMatches(encoderBreakdown,
                                        debug::probeDisableDepthWriteRow(),
@@ -3649,6 +3655,26 @@ bool forceCullModeProbeClassMatches(u32 primitiveCount,
                                      fillMode);
 }
 
+bool disableAlphaBlendProbeClassMatches(
+    u32 primitiveCount,
+    u32 textureMask,
+    const core::FlatStateSet<core::kMaxStateSlots>& renderStates,
+    const core::ViewportScissor& viewport,
+    WMTTriangleFillMode fillMode) {
+  return indexedTriangleClassMatches(debug::probeDisableAlphaBlendClassFilter(),
+                                     primitiveCount,
+                                     textureMask,
+                                     renderStates,
+                                     viewport,
+                                     fillMode) &&
+         indexedTriangleClassMatches(debug::probeDisableAlphaBlendClassFilters(),
+                                     primitiveCount,
+                                     textureMask,
+                                     renderStates,
+                                     viewport,
+                                     fillMode);
+}
+
 bool disableDepthWriteProbeClassMatches(
     u32 primitiveCount,
     u32 textureMask,
@@ -3687,6 +3713,33 @@ bool depthFuncAlwaysProbeClassMatches(
                                      renderStates,
                                      viewport,
                                      fillMode);
+}
+
+template <std::size_t MaxEntries>
+void overrideFlatStateValue(core::FlatStateSet<MaxEntries>& set,
+                            u32 state,
+                            u32 value) noexcept {
+  auto* first = set.entries.data();
+  auto* last = first + (set.count <= MaxEntries ? set.count : MaxEntries);
+  auto* hit = std::lower_bound(
+      first, last, state,
+      [](const core::FlatStateEntry& entry, u32 needle) noexcept {
+        return entry.state < needle;
+      });
+  if (hit != last && hit->state == state) {
+    hit->value = value;
+    return;
+  }
+  if (set.count >= MaxEntries) {
+    set.overflow = true;
+    return;
+  }
+  auto* insertPos = hit;
+  for (auto* it = first + set.count; it != insertPos; --it) {
+    *it = *(it - 1);
+  }
+  *insertPos = core::FlatStateEntry{.state = state, .value = value};
+  ++set.count;
 }
 
 u32 samplerStateOr(const SamplerSnapshot& snapshot, u32 state, u32 fallback) {
@@ -4621,6 +4674,15 @@ bool encodeDraw(EncodeContext& ctx,
                                          hot.renderStates,
                                          hot.viewport,
                                          fillMode);
+  const bool disableAlphaBlendProbeApplied =
+      debug::probeDisableAlphaBlend() &&
+      indexedTriangleDraw &&
+      disableAlphaBlendProbeRowMatches(encoderBreakdown) &&
+      disableAlphaBlendProbeClassMatches(primitiveCount,
+                                         hot.textureMask,
+                                         hot.renderStates,
+                                         hot.viewport,
+                                         fillMode);
   const bool depthFuncAlwaysProbeApplied =
       debug::probeDepthFuncAlways() &&
       indexedTriangleDraw &&
@@ -4637,6 +4699,15 @@ bool encodeDraw(EncodeContext& ctx,
     if (depthFuncAlwaysProbeApplied) {
       ++encoderBreakdown->stats.probeDepthFuncAlwaysDraws;
     }
+  }
+  core::FlatDrawStateRecord alphaBlendProbeHot{};
+  core::FlatDrawStateView pipelineDrawState = drawState;
+  if (disableAlphaBlendProbeApplied) {
+    alphaBlendProbeHot = hot;
+    overrideFlatStateValue(alphaBlendProbeHot.renderStates,
+                           RS_ALPHABLEND_ENABLE,
+                           0u);
+    pipelineDrawState.hot = &alphaBlendProbeHot;
   }
   // Phase 3-E: pipeline lookup + depth state + setRenderPipelineState
   // are BaseDrawState-only and survive across iterations of a
@@ -4678,22 +4749,23 @@ bool encodeDraw(EncodeContext& ctx,
       // setRenderPipelineState is the base-colour render PSO, NOT the tile
       // PSO. The tile PSO is fetched + dispatched after drawPrimitives below.
       pipelineRef =
-          renderPsoHandle.valid()
+          renderPsoHandle.valid() && !disableAlphaBlendProbeApplied
               ? ctx.cache.drawPipelineForHandle(renderPsoHandle,
                                                 renderPsoLookup).get()
               : ctx.cache.getOrBuildTileFfpBaseColorPipelineForState(
-                    ctx.device, ctx.limits, ctx.pool, drawState,
+                    ctx.device, ctx.limits, ctx.pool, pipelineDrawState,
                     ctx.shaderArchive, ctx.shaderArchivePath).get();
       pipeline = WMT::RenderPipelineState{pipelineRef.handle};
     } else {
       pipelineRef =
-          renderPsoHandle.valid()
+          renderPsoHandle.valid() && !disableAlphaBlendProbeApplied
               ? ctx.cache.drawPipelineForHandle(renderPsoHandle,
                                                 renderPsoLookup).get()
               : ctx.cache.getOrBuildDrawPipelineForState(
-                    ctx.device, ctx.limits, ctx.pool, drawState,
+                    ctx.device, ctx.limits, ctx.pool, pipelineDrawState,
                     ctx.shaderArchive, ctx.shaderArchivePath, tileFfpMode,
-                    argbufHybridMode, argbufResourceArray).get();
+                    argbufHybridMode, argbufResourceArray,
+                    disableAlphaBlendProbeApplied).get();
       pipeline = WMT::RenderPipelineState{pipelineRef.handle};
     }
     if (!pipeline) {
@@ -4780,7 +4852,7 @@ bool encodeDraw(EncodeContext& ctx,
         countDepthStateBind();
       }
     }
-    if (!debug::probeDisableAlphaBlend() &&
+    if (!disableAlphaBlendProbeApplied &&
         blendFactorNeedsConstantColor(hot.renderStates)) {
       const auto factor = decodeD3DBlendFactor(
           core::flatStateOr(hot.renderStates, RS_BLEND_FACTOR, 0xffffffffu));
@@ -4886,21 +4958,22 @@ bool encodeDraw(EncodeContext& ctx,
         .role = "tile-base-render-pso",
     };
     tileFfpPsoRef =
-        tilePsoHandle.valid()
+        tilePsoHandle.valid() && !disableAlphaBlendProbeApplied
             ? ctx.cache.drawPipelineForHandle(tilePsoHandle,
                                               tileLookup).get()
             : ctx.cache.getOrBuildDrawPipelineForState(
-                  ctx.device, ctx.limits, ctx.pool, drawState,
+                  ctx.device, ctx.limits, ctx.pool, pipelineDrawState,
                   ctx.shaderArchive, ctx.shaderArchivePath,
                   /*tileFfpMode=*/true, /*argbufHybridMode=*/false,
-                  /*argbufResourceArray=*/false).get();
+                  /*argbufResourceArray=*/false,
+                  disableAlphaBlendProbeApplied).get();
     tileFfpPso = WMT::RenderPipelineState{tileFfpPsoRef.handle};
     tileFfpBasePsoRef =
-        renderPsoHandle.valid()
+        renderPsoHandle.valid() && !disableAlphaBlendProbeApplied
             ? ctx.cache.drawPipelineForHandle(renderPsoHandle,
                                               tileBaseLookup).get()
             : ctx.cache.getOrBuildTileFfpBaseColorPipelineForState(
-                  ctx.device, ctx.limits, ctx.pool, drawState,
+                  ctx.device, ctx.limits, ctx.pool, pipelineDrawState,
                   ctx.shaderArchive, ctx.shaderArchivePath).get();
     tileFfpBasePso = WMT::RenderPipelineState{tileFfpBasePsoRef.handle};
   }

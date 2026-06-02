@@ -215,7 +215,9 @@ makeContainedDrawShaderSources(const drawshader::ShaderSourceContext& shaderSour
 // Render-state-only blend attachment key mapping. Pixel formats are resolved
 // by Cache::getOrBuildDrawPipelineForState after surface lookup.
 std::array<BlendAttachmentKey, core::kMaxRenderTargets>
-makeBlendAttachmentKeys(core::FlatDrawStateView state, bool forceVisibleDraw = false);
+makeBlendAttachmentKeys(core::FlatDrawStateView state,
+                        bool forceVisibleDraw = false,
+                        bool disableAlphaBlend = false);
 
 // Fill PSOs embed the fill colour directly into the generated fragment source,
 // so every RGBA channel must participate in the immutable pipeline key.
@@ -392,7 +394,8 @@ class Cache {
                                   // argbufHybridMode; selects the prelude
                                   // that routes texture/sampler reads
                                   // through the slot-30 argbuf arrays.
-                                  bool argbufResourceArray = false);
+                                  bool argbufResourceArray = false,
+                                  bool disableAlphaBlend = false);
 
   DrawPipelineLookup
   getOrBuildDrawPipelineHandleForState(WMT::Reference<WMT::Device> device,
@@ -403,7 +406,8 @@ class Cache {
                                        const std::string* archivePath,
                                        bool tileFfpMode = false,
                                        bool argbufHybridMode = false,
-                                       bool argbufResourceArray = false);
+                                       bool argbufResourceArray = false,
+                                       bool disableAlphaBlend = false);
 
   // R-BACK-13.1 — companion to getOrBuildDrawPipelineForState for the
   // tile-FFP two-stage encode. Returns the BASE-COLOUR render pipeline: an

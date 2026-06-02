@@ -489,8 +489,41 @@ bool forceTextureWhite() {
 }
 
 bool probeDisableAlphaBlend() {
-  static const bool v = util::getenvFlag("DXMT9_PROBE_DISABLE_ALPHA_BLEND");
+  static const bool v =
+      util::getenvFlag("DXMT9_PROBE_DISABLE_ALPHA_BLEND") ||
+      probeDisableAlphaBlendRow().enabled ||
+      probeDisableAlphaBlendRows().enabled ||
+      probeDisableAlphaBlendClassFilter() !=
+          IndexedTriangleClassFilter::Any ||
+      probeDisableAlphaBlendClassFilters().count != 0;
   return v;
+}
+
+IndexedTriangleClassFilter probeDisableAlphaBlendClassFilter() {
+  static const IndexedTriangleClassFilter filter =
+      makeIndexedTriangleClassFilter(
+          util::getenvString("DXMT9_PROBE_DISABLE_ALPHA_BLEND_CLASS"));
+  return filter;
+}
+
+IndexedTriangleClassFilterList probeDisableAlphaBlendClassFilters() {
+  static const IndexedTriangleClassFilterList filters =
+      makeIndexedTriangleClassFilterList(
+          util::getenvString("DXMT9_PROBE_DISABLE_ALPHA_BLEND_CLASSES"));
+  return filters;
+}
+
+RenderEncoderSelector probeDisableAlphaBlendRow() {
+  static const RenderEncoderSelector selector =
+      parseRenderEncoderSelector("DXMT9_PROBE_DISABLE_ALPHA_BLEND_ROW");
+  return selector;
+}
+
+RenderEncoderSelectorList probeDisableAlphaBlendRows() {
+  static const RenderEncoderSelectorList selectors =
+      makeRenderEncoderSelectorList(
+          util::getenvString("DXMT9_PROBE_DISABLE_ALPHA_BLEND_ROWS"));
+  return selectors;
 }
 
 bool probeDisableDepthWrite() {

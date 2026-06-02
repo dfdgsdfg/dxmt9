@@ -353,7 +353,13 @@ Commercial / 3rd-party titles (require external prefix):
     diagnostic switches before broad visibility changes:
     `--probe-disable-alpha-blend` sets
     `DXMT9_PROBE_DISABLE_ALPHA_BLEND=1` and disables Metal color blending while
-    preserving color-write masks, and `--probe-disable-depth-write` sets
+    preserving color-write masks. Prefer the scoped
+    `--probe-disable-alpha-blend-row`, `--probe-disable-alpha-blend-rows`,
+    `--probe-disable-alpha-blend-class`, and
+    `--probe-disable-alpha-blend-classes` variants for hot-row A/B; unlike the
+    global switch they do not set `DXMT9_PROBE_DISABLE_ALPHA_BLEND=1` and only
+    build blend-off PSO variants for matching indexed triangle draws.
+    `--probe-disable-depth-write` sets
     `DXMT9_PROBE_DISABLE_DEPTH_WRITE=1` and keeps depth tests but forces depth
     writes off. Gate both with Xcode `VS Buffer Device Memory Bytes Written`
     deltas; they are not correctness-preserving optimizations by themselves.

@@ -553,11 +553,14 @@ detail::makeContainedDrawShaderSources(const drawshader::ShaderSourceContext& sh
 }
 
 std::array<BlendAttachmentKey, core::kMaxRenderTargets>
-detail::makeBlendAttachmentKeys(core::FlatDrawStateView state, bool forceVisibleDraw) {
+detail::makeBlendAttachmentKeys(core::FlatDrawStateView state,
+                                bool forceVisibleDraw,
+                                bool disableAlphaBlend) {
   std::array<BlendAttachmentKey, core::kMaxRenderTargets> blendAttachments{};
   const auto& rs = state.hot->renderStates;
   const bool blendEnabled =
-      !forceVisibleDraw && !probeDisableAlphaBlendEnabled() &&
+      !forceVisibleDraw &&
+      !(probeDisableAlphaBlendEnabled() || disableAlphaBlend) &&
       core::flatStateOr(rs, core::RS_ALPHABLEND_ENABLE, 0u) != 0;
   const bool separateAlphaBlend =
       core::flatStateOr(rs, core::RS_SEPARATE_ALPHA_BLEND_ENABLE, 0u) != 0;
@@ -1288,10 +1291,11 @@ Cache::getOrBuildDrawPipelineForState(WMT::Reference<WMT::Device> device,
                                       const std::string* archivePath,
                                       bool tileFfpMode,
                                       bool argbufHybridMode,
-                                      bool argbufResourceArray) {
+                                      bool argbufResourceArray,
+                                      bool disableAlphaBlend) {
   return getOrBuildDrawPipelineHandleForState(
       device, limits, pool, state, archive, archivePath, tileFfpMode,
-      argbufHybridMode, argbufResourceArray).future;
+      argbufHybridMode, argbufResourceArray, disableAlphaBlend).future;
 }
 
 DrawPipelineLookup
@@ -1303,7 +1307,8 @@ Cache::getOrBuildDrawPipelineHandleForState(WMT::Reference<WMT::Device> device,
                                             const std::string* archivePath,
                                             bool tileFfpMode,
                                             bool argbufHybridMode,
-                                            bool argbufResourceArray) {
+                                            bool argbufResourceArray,
+                                            bool disableAlphaBlend) {
   const bool srgbWrite =
       core::flatStateOr(state.hot->renderStates, core::RS_SRGB_WRITE_ENABLE, 0u) != 0;
   auto resolvePixelFormat = [&](core::Handle handle) -> u32 {
@@ -1318,7 +1323,8 @@ Cache::getOrBuildDrawPipelineHandleForState(WMT::Reference<WMT::Device> device,
   };
 
   std::array<u32, core::kMaxRenderTargets> colorFormats{};
-  auto blendAttachments = detail::makeBlendAttachmentKeys(state, debugForceVisibleDraw());
+  auto blendAttachments =
+      detail::makeBlendAttachmentKeys(state, debugForceVisibleDraw(), disableAlphaBlend);
   for (std::size_t i = 0; i < core::kMaxRenderTargets; ++i) {
     colorFormats[i] = resolvePixelFormat(state.hot->colorAttachments[i].handle);
     blendAttachments[i].pixelFormat = colorFormats[i];

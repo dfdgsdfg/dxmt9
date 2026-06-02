@@ -65,6 +65,10 @@ disable_alpha_test=0
 disable_fog=0
 force_texture_white=0
 probe_disable_alpha_blend=0
+probe_disable_alpha_blend_row=
+probe_disable_alpha_blend_rows=
+probe_disable_alpha_blend_class=
+probe_disable_alpha_blend_classes=
 probe_disable_depth_write=0
 probe_disable_depth_write_row=
 probe_disable_depth_write_rows=
@@ -314,6 +318,17 @@ Options:
                       texture samples with float4(1) while keeping shader body
   --probe-disable-alpha-blend
                       Set DXMT9_PROBE_DISABLE_ALPHA_BLEND=1 for blend state A/B
+  --probe-disable-alpha-blend-row SEQ/ENC
+                      Set DXMT9_PROBE_DISABLE_ALPHA_BLEND_ROW=SEQ/ENC and
+                      constrain blend-off to selected indexed triangle draws
+  --probe-disable-alpha-blend-rows ROWS
+                      Set DXMT9_PROBE_DISABLE_ALPHA_BLEND_ROWS=ROWS
+  --probe-disable-alpha-blend-class CLASS
+                      Set DXMT9_PROBE_DISABLE_ALPHA_BLEND_CLASS=CLASS.
+                      Accepted values match split-large indexed filters
+  --probe-disable-alpha-blend-classes CLASSES
+                      Set DXMT9_PROBE_DISABLE_ALPHA_BLEND_CLASSES=CLASSES.
+                      Values are ANDed, e.g. large4096,alpha-blend
   --probe-disable-depth-write
                       Set DXMT9_PROBE_DISABLE_DEPTH_WRITE=1 for depth-write A/B
   --probe-disable-depth-write-row SEQ/ENC
@@ -681,6 +696,22 @@ while (($#)); do
     --probe-disable-alpha-blend)
       probe_disable_alpha_blend=1
       shift
+      ;;
+    --probe-disable-alpha-blend-row)
+      probe_disable_alpha_blend_row=${2:?missing value for --probe-disable-alpha-blend-row}
+      shift 2
+      ;;
+    --probe-disable-alpha-blend-rows)
+      probe_disable_alpha_blend_rows=${2:?missing value for --probe-disable-alpha-blend-rows}
+      shift 2
+      ;;
+    --probe-disable-alpha-blend-class)
+      probe_disable_alpha_blend_class=${2:?missing value for --probe-disable-alpha-blend-class}
+      shift 2
+      ;;
+    --probe-disable-alpha-blend-classes)
+      probe_disable_alpha_blend_classes=${2:?missing value for --probe-disable-alpha-blend-classes}
+      shift 2
       ;;
     --probe-disable-depth-write)
       probe_disable_depth_write=1
@@ -1368,6 +1399,22 @@ fi
 
 if (( probe_disable_alpha_blend )); then
   env_args+=("DXMT9_PROBE_DISABLE_ALPHA_BLEND=1")
+fi
+
+if [[ -n "$probe_disable_alpha_blend_row" ]]; then
+  env_args+=("DXMT9_PROBE_DISABLE_ALPHA_BLEND_ROW=$probe_disable_alpha_blend_row")
+fi
+
+if [[ -n "$probe_disable_alpha_blend_rows" ]]; then
+  env_args+=("DXMT9_PROBE_DISABLE_ALPHA_BLEND_ROWS=$probe_disable_alpha_blend_rows")
+fi
+
+if [[ -n "$probe_disable_alpha_blend_class" ]]; then
+  env_args+=("DXMT9_PROBE_DISABLE_ALPHA_BLEND_CLASS=$probe_disable_alpha_blend_class")
+fi
+
+if [[ -n "$probe_disable_alpha_blend_classes" ]]; then
+  env_args+=("DXMT9_PROBE_DISABLE_ALPHA_BLEND_CLASSES=$probe_disable_alpha_blend_classes")
 fi
 
 if (( probe_disable_depth_write )); then

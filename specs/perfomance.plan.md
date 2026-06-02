@@ -11375,3 +11375,146 @@ flowchart TD
   class Reject,Need,Instrument,Drift,Next hot
   class Scout,Fields,Ready,Replay known
 ```
+
+#### Gputrace-Backed No-Mutate Scout Result
+
+The same instrumentation was then run with a real frame capture and dumped
+shaders:
+
+```bash
+scripts/tools/run_3dmark05_perf_probe.sh \
+  --suffix current-head-index-scout-gputrace-r1 \
+  --frame 60 \
+  --timeout 180 \
+  --encoder-breakdown-seq 60 \
+  --measure-index-reuse \
+  --dump-shaders \
+  --top 3 \
+  --hot-gpu-share 95 \
+  --min-free-mb 1900
+```
+
+Xcode replay/counter export was completed for the same run after waiting for
+`Profiling Draw Counters...` to disappear. The finalizer passed with Xcode
+counter coverage, DXMT join coverage, and top PSO attribution enabled.
+
+Artifacts:
+
+```text
+traces/app-d3d9-3dmark05-current-head-index-scout-gputrace-r1/frame60.gputrace
+traces/app-d3d9-3dmark05-current-head-index-scout-gputrace-r1/analysis/frame60-performance.gputrace
+traces/app-d3d9-3dmark05-current-head-index-scout-gputrace-r1/analysis/frame60-counters-xcode.csv
+traces/app-d3d9-3dmark05-current-head-index-scout-gputrace-r1/analysis/frame60-xcode-dxmt-joined-summary.csv
+traces/app-d3d9-3dmark05-current-head-index-scout-gputrace-r1/analysis/frame60-xcode-dxmt-bottleneck-report.md
+traces/app-d3d9-3dmark05-current-head-index-scout-gputrace-r1/analysis/frame60-shader-dump-report.md
+experiments/output/app-d3d9-3dmark05-current-head-index-scout-gputrace-r1/3dmark05-perf-indexed-probe-draws.csv
+```
+
+Same-run Xcode summary:
+
+| Metric | Value |
+|---|---:|
+| GPU time | `50.832 ms` |
+| Draw calls | `572` |
+| Vertices | `3,300,576` |
+| Render encoders + present | `12` |
+| Total buffer write | `2237.390 MiB` |
+| Total device write | `2304.930 MiB` |
+| Hot set | `60/4, 60/3, 60/1, 60/0` |
+| Hot-set GPU share | `98.79%` |
+
+This run is authoritative for same-frame draw identity, shader hashes, and
+Xcode counter joining, but it is not a clean performance baseline. Compared to
+`current-normal-gputrace-r1`, total GPU time increased from `35.456 ms` to
+`50.832 ms`, top buffer write increased by `24.77%`, top draw calls increased
+from `385` to `535`, and only `60/1` remained a shared top row. Treat the run
+as a scout for mini-replay construction, not as an optimization A/B result.
+
+The useful bottleneck evidence is stable with prior captures: the hot rows are
+dominated by Xcode VS buffer writes, while DXMT-attributed CPU writer traffic is
+effectively zero relative to Xcode's buffer-write bucket.
+
+| Hot row | GPU ms | VS buffer write | VS B/inv | DXMT draws | Tris | State shape |
+|---|---:|---:|---:|---:|---:|---|
+| `60/4` | `22.577` | `1091.008 MiB` | `1698.8 B` | `115` | `392,405` | depth read, alpha/scissor/textured |
+| `60/3` | `11.728` | `469.922 MiB` | `950.0 B` | `210` | `310,848` | opaque depth-write |
+| `60/1` | `10.797` | `469.995 MiB` | `950.2 B` | `210` | `310,848` | opaque depth-write |
+| `60/0` | `5.116` | `206.055 MiB` | `1523.8 B` | `25` | `85,528` | opaque textured depth-write |
+
+Hot-set aggregate:
+
+- VS buffer write: `2236.981 MiB`
+- VS buffer bytes / VS invocation: `1266.2 B`
+- Expected VSOut bytes / vertex: `184.0 B`
+- VS buffer / expected VSOut: `6.9x`
+- Named tiled vertex + primitive-block counters: `20.438 MiB`
+- Hidden backend write estimate: `2215.926 MiB`
+- DXMT CPU writer bytes: `0.617 MiB`
+- Stream handle changes: `536`
+- IB handle changes: `457`
+- Transient vertex/index bytes: `0`
+
+The current classifier therefore remains:
+
+```text
+gpu_vs_buffer_write -> hidden_vertex_tiler_parameter_storage
+next probe -> primitive-backend-pressure-or-state-shape-ab
+```
+
+Per-draw identity narrows the next mini-replay targets:
+
+| Row | Candidate | Draws | Tris | Cache64 misses | Notes |
+|---|---|---:|---:|---:|---|
+| `60/4` | large4096 depth-read/alpha/scissor/textured | `23` | `315,481` | `527,825` | highest GPU row; many PSO/shader pairs |
+| `60/4` | top primitive pair `vs=0xdee2a2c1e0557a9a ps=0x2f2090e9c1402459` | `9` | `65,070` | `101,694` | alpha + scissor + texture |
+| `60/3` | opaque repeated geometry pair `vs=0xcf219872fdbbb398 ps=0x6f39a816200d9efe` | `187` | `236,870` | `413,714` | same geometry/state as `60/1` with different PSO handles |
+| `60/1` | opaque repeated geometry pair `vs=0xcf219872fdbbb398 ps=0x6f39a816200d9efe` | `187` | `236,870` | `413,714` | shared top row with baseline |
+| `60/0` | opaque textured large draws | `5` | `67,554` | `113,714` | high B/inv despite smaller row |
+
+Shader dump inspection still supports liveness-based VSOut trimming as a
+separate experiment, not a global toggle. The hot row shader pairs read only a
+subset of the `184B` VSOut:
+
+- `60/4` row shader sample reads `color`, `fogFactor`, `secondaryColor`,
+  `texcoord0`; unread share is about `63%`.
+- `60/3` and `60/1` sample read `position`, `fogFactor`, `texcoord0`; unread
+  share is about `80%`.
+- `60/0` sample reads `color`, `fogFactor`, `secondaryColor`; unread share is
+  about `72%`.
+
+Because the prior global `DXMT9_TRIM_UNUSED_VARYINGS=1` experiment failed, this
+must be a VS/FS pair liveness PSO variant. The mini-replay should use the dumped
+shader sources and per-draw rows above to test three independent factors:
+
+1. VSOut liveness width: full `0xfff` versus pair-live fields only.
+2. Backend state shape: `60/4` depth-read/alpha/scissor/textured versus
+   simplified alpha/scissor/depth variants.
+3. Geometry/primitive pressure: original draw stream versus row-local sampled
+   large4096 draws with identical shader/state.
+
+```mermaid
+flowchart TD
+  Scout["gputrace-backed no-mutate scout\nsame-frame Xcode counters + draw CSV"] --> Hot["hot set 60/4,60/3,60/1,60/0\n98.79% GPU"]
+  Hot --> VSWrite["2236.981 MiB VS buffer write\n1266 B/VS invocation"]
+  VSWrite --> Hidden["named tiled buffers only 20.438 MiB\nhidden estimate 2215.926 MiB"]
+  Hidden --> Class["hidden_vertex_tiler_parameter_storage\nconfidence high"]
+
+  Hot --> Row4["60/4 depth-read + alpha/scissor/textured\n23 large4096 draws dominate geometry"]
+  Hot --> Row13["60/1 and 60/3 repeated opaque rows\nsame VS/PS pair and geometry"]
+  Hot --> Row0["60/0 opaque textured large draws\nhigh bytes/inv"]
+
+  Row4 --> Mini["row-local mini replay"]
+  Row13 --> Mini
+  Row0 --> Mini
+  Mini --> Vary["PSO liveness VSOut variants"]
+  Mini --> State["state-shape A/B\nalpha/scissor/depth"]
+  Mini --> Geometry["large4096 geometry pressure isolation"]
+
+  Scout --> Drift["not a perf baseline\nrow shape regressed vs current-normal"]
+  Drift --> Caution["use for target selection only"]
+
+  classDef hot fill:#ffe8e8,stroke:#b64242,color:#2b0d0d
+  classDef known fill:#e8f0ff,stroke:#476cb6,color:#0d1833
+  class VSWrite,Hidden,Class,Row4,Row13,Row0 hot
+  class Scout,Hot,Mini,Vary,State,Geometry,Drift,Caution known
+```
