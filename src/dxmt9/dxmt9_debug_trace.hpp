@@ -67,11 +67,19 @@ struct ScissorRectOverride {
   core::Rect rect{};
 };
 
+enum class CullModeOverride : std::uint8_t {
+  Disabled,
+  None,
+  Front,
+  Back,
+};
+
 IndexedTriangleClassFilter makeIndexedTriangleClassFilter(
     std::string_view spec) noexcept;
 IndexedTriangleClassFilterList makeIndexedTriangleClassFilterList(
     std::string_view spec) noexcept;
 ScissorRectOverride makeScissorRectOverride(std::string_view spec) noexcept;
+CullModeOverride makeCullModeOverride(std::string_view spec) noexcept;
 
 DrawSeqRange makeDrawSeqRange(std::optional<u64> min, std::optional<u64> max) noexcept;
 bool drawSeqRangeEnabled(DrawSeqRange range) noexcept;
@@ -160,6 +168,28 @@ bool probeDisableDepthWrite();
 // Diagnostic render-state A/B: keep depth enable/write state but force the
 // depth compare function to Always. Env: DXMT9_PROBE_DEPTH_FUNC_ALWAYS.
 bool probeDepthFuncAlways();
+
+// Diagnostic-only: force the Metal cull mode for selected indexed
+// triangle-list draws while preserving the rest of the render state.
+// Env: DXMT9_PROBE_FORCE_CULL_MODE=none|front|back.
+CullModeOverride probeForceCullMode();
+
+// Optional class filter for DXMT9_PROBE_FORCE_CULL_MODE. Accepted values match
+// DXMT9_SPLIT_LARGE_INDEXED_DRAWS_CLASS.
+// Env: DXMT9_PROBE_FORCE_CULL_MODE_CLASS.
+IndexedTriangleClassFilter probeForceCullModeClassFilter();
+
+// Optional AND class-list filter for DXMT9_PROBE_FORCE_CULL_MODE.
+// Env: DXMT9_PROBE_FORCE_CULL_MODE_CLASSES.
+IndexedTriangleClassFilterList probeForceCullModeClassFilters();
+
+// Optional selector for DXMT9_PROBE_FORCE_CULL_MODE. Format is "<seq>/<encoder>".
+// Env: DXMT9_PROBE_FORCE_CULL_MODE_ROW.
+RenderEncoderSelector probeForceCullModeRow();
+
+// Optional selector list for DXMT9_PROBE_FORCE_CULL_MODE.
+// Env: DXMT9_PROBE_FORCE_CULL_MODE_ROWS.
+RenderEncoderSelectorList probeForceCullModeRows();
 
 // When set, force indexed draws to be expanded into flat vertex lists.
 // Env: DXMT_FORCE_EXPAND_INDEXED.

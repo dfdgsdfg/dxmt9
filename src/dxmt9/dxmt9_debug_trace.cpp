@@ -321,6 +321,22 @@ ScissorRectOverride makeScissorRectOverride(std::string_view spec) noexcept {
   };
 }
 
+CullModeOverride makeCullModeOverride(std::string_view spec) noexcept {
+  std::size_t pos = 0;
+  skipSpaces(spec, pos);
+  spec = spec.substr(pos);
+  if (spec == "none") {
+    return CullModeOverride::None;
+  }
+  if (spec == "front") {
+    return CullModeOverride::Front;
+  }
+  if (spec == "back") {
+    return CullModeOverride::Back;
+  }
+  return CullModeOverride::Disabled;
+}
+
 bool renderEncoderSelectorMatches(RenderEncoderSelector selector,
                                   u64 seqId,
                                   u64 encoderIndex) noexcept {
@@ -485,6 +501,39 @@ bool probeDisableDepthWrite() {
 bool probeDepthFuncAlways() {
   static const bool v = util::getenvFlag("DXMT9_PROBE_DEPTH_FUNC_ALWAYS");
   return v;
+}
+
+CullModeOverride probeForceCullMode() {
+  static const CullModeOverride mode =
+      makeCullModeOverride(util::getenvString("DXMT9_PROBE_FORCE_CULL_MODE"));
+  return mode;
+}
+
+IndexedTriangleClassFilter probeForceCullModeClassFilter() {
+  static const IndexedTriangleClassFilter filter =
+      makeIndexedTriangleClassFilter(
+          util::getenvString("DXMT9_PROBE_FORCE_CULL_MODE_CLASS"));
+  return filter;
+}
+
+IndexedTriangleClassFilterList probeForceCullModeClassFilters() {
+  static const IndexedTriangleClassFilterList filters =
+      makeIndexedTriangleClassFilterList(
+          util::getenvString("DXMT9_PROBE_FORCE_CULL_MODE_CLASSES"));
+  return filters;
+}
+
+RenderEncoderSelector probeForceCullModeRow() {
+  static const RenderEncoderSelector selector =
+      parseRenderEncoderSelector("DXMT9_PROBE_FORCE_CULL_MODE_ROW");
+  return selector;
+}
+
+RenderEncoderSelectorList probeForceCullModeRows() {
+  static const RenderEncoderSelectorList selectors =
+      makeRenderEncoderSelectorList(
+          util::getenvString("DXMT9_PROBE_FORCE_CULL_MODE_ROWS"));
+  return selectors;
 }
 
 bool forceExpandIndexed() {

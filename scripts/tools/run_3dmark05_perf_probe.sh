@@ -44,6 +44,11 @@ probe_scissor_rect_row=
 probe_scissor_rect_rows=
 probe_scissor_rect_class=
 probe_scissor_rect_classes=
+probe_force_cull_mode=
+probe_force_cull_mode_row=
+probe_force_cull_mode_rows=
+probe_force_cull_mode_class=
+probe_force_cull_mode_classes=
 force_cull_mode=
 measure_index_reuse=0
 aggressive_color_dontcare=0
@@ -236,6 +241,20 @@ Options:
   --probe-scissor-rect-classes CLASSES
                       Set DXMT9_PROBE_SCISSOR_RECT_CLASSES=CLASSES. Values are
                       ANDed, e.g. large4096,alpha-blend,scissor
+  --probe-force-cull-mode MODE
+                      Set DXMT9_PROBE_FORCE_CULL_MODE=MODE where MODE is one
+                      of none, front, or back. Unlike --force-cull-mode, this
+                      applies only to selected indexed triangle-list draws
+  --probe-force-cull-mode-row SEQ/ENC
+                      Set DXMT9_PROBE_FORCE_CULL_MODE_ROW=SEQ/ENC
+  --probe-force-cull-mode-rows ROWS
+                      Set DXMT9_PROBE_FORCE_CULL_MODE_ROWS=ROWS
+  --probe-force-cull-mode-class CLASS
+                      Set DXMT9_PROBE_FORCE_CULL_MODE_CLASS=CLASS. Accepted
+                      values match split-large indexed filters
+  --probe-force-cull-mode-classes CLASSES
+                      Set DXMT9_PROBE_FORCE_CULL_MODE_CLASSES=CLASSES. Values
+                      are ANDed, e.g. opaque-depth-write,large4096
   --force-cull-mode MODE
                       Set DXMT_DEBUG_FORCE_CULL_MODE=MODE where MODE is one of
                       none, front, or back for cull/backend shape A/B probes
@@ -518,6 +537,26 @@ while (($#)); do
       ;;
     --probe-scissor-rect-classes)
       probe_scissor_rect_classes=${2:?missing value for --probe-scissor-rect-classes}
+      shift 2
+      ;;
+    --probe-force-cull-mode)
+      probe_force_cull_mode=${2:?missing value for --probe-force-cull-mode}
+      shift 2
+      ;;
+    --probe-force-cull-mode-row)
+      probe_force_cull_mode_row=${2:?missing value for --probe-force-cull-mode-row}
+      shift 2
+      ;;
+    --probe-force-cull-mode-rows)
+      probe_force_cull_mode_rows=${2:?missing value for --probe-force-cull-mode-rows}
+      shift 2
+      ;;
+    --probe-force-cull-mode-class)
+      probe_force_cull_mode_class=${2:?missing value for --probe-force-cull-mode-class}
+      shift 2
+      ;;
+    --probe-force-cull-mode-classes)
+      probe_force_cull_mode_classes=${2:?missing value for --probe-force-cull-mode-classes}
       shift 2
       ;;
     --force-cull-mode)
@@ -809,6 +848,14 @@ if [[ -n "$force_cull_mode" &&
       "$force_cull_mode" != front &&
       "$force_cull_mode" != back ]]; then
   echo "--force-cull-mode must be one of: none, front, back" >&2
+  exit 2
+fi
+
+if [[ -n "$probe_force_cull_mode" &&
+      "$probe_force_cull_mode" != none &&
+      "$probe_force_cull_mode" != front &&
+      "$probe_force_cull_mode" != back ]]; then
+  echo "--probe-force-cull-mode must be one of: none, front, back" >&2
   exit 2
 fi
 
@@ -1118,6 +1165,26 @@ fi
 
 if [[ -n "$probe_scissor_rect_classes" ]]; then
   env_args+=("DXMT9_PROBE_SCISSOR_RECT_CLASSES=$probe_scissor_rect_classes")
+fi
+
+if [[ -n "$probe_force_cull_mode" ]]; then
+  env_args+=("DXMT9_PROBE_FORCE_CULL_MODE=$probe_force_cull_mode")
+fi
+
+if [[ -n "$probe_force_cull_mode_row" ]]; then
+  env_args+=("DXMT9_PROBE_FORCE_CULL_MODE_ROW=$probe_force_cull_mode_row")
+fi
+
+if [[ -n "$probe_force_cull_mode_rows" ]]; then
+  env_args+=("DXMT9_PROBE_FORCE_CULL_MODE_ROWS=$probe_force_cull_mode_rows")
+fi
+
+if [[ -n "$probe_force_cull_mode_class" ]]; then
+  env_args+=("DXMT9_PROBE_FORCE_CULL_MODE_CLASS=$probe_force_cull_mode_class")
+fi
+
+if [[ -n "$probe_force_cull_mode_classes" ]]; then
+  env_args+=("DXMT9_PROBE_FORCE_CULL_MODE_CLASSES=$probe_force_cull_mode_classes")
 fi
 
 if [[ -n "$force_cull_mode" ]]; then

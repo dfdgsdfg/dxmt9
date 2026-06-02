@@ -2857,6 +2857,27 @@ bool scissorRectProbeRowMatches(const ActiveEncoderBreakdown* encoderBreakdown) 
                                        debug::probeScissorRectRows());
 }
 
+bool forceCullModeProbeRowMatches(const ActiveEncoderBreakdown* encoderBreakdown) {
+  return renderEncoderSelectionMatches(encoderBreakdown,
+                                       debug::probeForceCullModeRow(),
+                                       debug::probeForceCullModeRows());
+}
+
+WMTCullMode toWmtCullMode(debug::CullModeOverride mode,
+                          WMTCullMode fallback) noexcept {
+  switch (mode) {
+    case debug::CullModeOverride::None:
+      return WMTCullModeNone;
+    case debug::CullModeOverride::Front:
+      return WMTCullModeFront;
+    case debug::CullModeOverride::Back:
+      return WMTCullModeBack;
+    case debug::CullModeOverride::Disabled:
+      return fallback;
+  }
+  return fallback;
+}
+
 bool indexedTriangleOpaqueDepthWriteClass(
     const core::FlatStateSet<core::kMaxStateSlots>& renderStates,
     WMTTriangleFillMode fillMode) {
@@ -2958,6 +2979,25 @@ bool scissorRectProbeClassMatches(u32 primitiveCount,
                                      viewport,
                                      fillMode) &&
          indexedTriangleClassMatches(debug::probeScissorRectClassFilters(),
+                                     primitiveCount,
+                                     textureMask,
+                                     renderStates,
+                                     viewport,
+                                     fillMode);
+}
+
+bool forceCullModeProbeClassMatches(u32 primitiveCount,
+                                    u32 textureMask,
+                                    const core::FlatStateSet<core::kMaxStateSlots>& renderStates,
+                                    const core::ViewportScissor& viewport,
+                                    WMTTriangleFillMode fillMode) {
+  return indexedTriangleClassMatches(debug::probeForceCullModeClassFilter(),
+                                     primitiveCount,
+                                     textureMask,
+                                     renderStates,
+                                     viewport,
+                                     fillMode) &&
+         indexedTriangleClassMatches(debug::probeForceCullModeClassFilters(),
                                      primitiveCount,
                                      textureMask,
                                      renderStates,
@@ -4422,8 +4462,20 @@ bool encodeDraw(EncodeContext& ctx,
   const auto requestedCullMode = (preTransformed || debug::disableCull())
                                      ? WMTCullModeNone
                                      : static_cast<WMTCullMode>(toCullMode(cullState));
-  const auto effectiveCullMode = applyDebugCullOverride(requestedCullMode);
   const auto fillMode = triangleFillModeFromRenderState(hot.renderStates);
+  WMTCullMode effectiveCullMode = applyDebugCullOverride(requestedCullMode);
+  const auto forceCullModeProbe = debug::probeForceCullMode();
+  if (forceCullModeProbe != debug::CullModeOverride::Disabled &&
+      indexedDraw &&
+      pv.primitiveType == core::PrimitiveType::TriangleList &&
+      forceCullModeProbeRowMatches(encoderBreakdown) &&
+      forceCullModeProbeClassMatches(primitiveCount,
+                                     hot.textureMask,
+                                     hot.renderStates,
+                                     hot.viewport,
+                                     fillMode)) {
+    effectiveCullMode = toWmtCullMode(forceCullModeProbe, effectiveCullMode);
+  }
   core::ViewportScissor effectiveViewport = hot.viewport;
   const auto scissorRectOverride = debug::probeScissorRectOverride();
   bool scissorRectProbeConsidered = false;
@@ -4502,7 +4554,7 @@ bool encodeDraw(EncodeContext& ctx,
       countViewportBind();
       recordedSetScissorRect(ctx, encoder, bindingPacket.raster.scissor);
       countScissorBind();
-      setRasterizerCullMode(ctx, encoder, hot.renderStates, bindingPacket.raster.cullMode);
+      setRasterizerCullMode(ctx, encoder, hot.renderStates, effectiveCullMode);
     }
   }
   static std::atomic<int> ffTraceRemaining{debug::fixedFunctionTraceBudget()};

@@ -362,6 +362,14 @@ Commercial / 3rd-party titles (require external prefix):
     to use when broad `--disable-cull` has already been rejected. Pair it with
     Xcode counters and check whether `VS Invocations`, `VS B/invocation`, or
     named tiled counters move.
+    `--probe-force-cull-mode none|front|back` sets
+    `DXMT9_PROBE_FORCE_CULL_MODE` and should be preferred for hot-row
+    backend-shape A/B because it can be constrained by
+    `--probe-force-cull-mode-row`, `--probe-force-cull-mode-rows`,
+    `--probe-force-cull-mode-class`, and
+    `--probe-force-cull-mode-classes`. Use the same row/geometry gates as
+    split/reverse probes and confirm the target row's `cull n/f/b` bucket
+    changes in the dxmt/Xcode joined report.
     `--force-expand-indexed` sets `DXMT_FORCE_EXPAND_INDEXED=1`; it preserves
     indexed geometry intent but changes vertex submission/cache behavior, so use
     it only as a primitive/backend pressure classifier and expect possible CPU

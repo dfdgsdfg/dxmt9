@@ -8209,6 +8209,172 @@ flowchart TD
   class Smoke,Scoped,TimeNoise known
 ```
 
+#### Bounded Split Row `60/1` Opaque Xcode Result
+
+The symmetric `60/1` opaque-depth-write bounded split was run after the
+`60/3` negative result to check whether the other opaque 2048x2048 hot row
+responds differently to order-preserving draw partitioning. The no-gputrace
+smoke confirmed scope first, then the gputrace/Xcode path was finalized with
+the same strict top-row, geometry, Xcode-counter, dxmt-join, and PSO
+attribution gates.
+
+Artifacts:
+
+```text
+experiments/output/app-d3d9-3dmark05-split-row-60-1-opaque-4096-nogputrace-r1/3dmark05-perf-summary.md
+experiments/output/app-d3d9-3dmark05-split-row-60-1-opaque-4096-gputrace-r1/3dmark05-perf-summary.md
+experiments/output/app-d3d9-3dmark05-split-row-60-1-opaque-4096-gputrace-r1/3dmark05-perf-encoders.csv
+experiments/output/app-d3d9-3dmark05-split-row-60-1-opaque-4096-gputrace-r1/3dmark05-perf-encoder-streams.csv
+traces/app-d3d9-3dmark05-split-row-60-1-opaque-4096-gputrace-r1/frame60.gputrace
+traces/app-d3d9-3dmark05-split-row-60-1-opaque-4096-gputrace-r1/analysis/frame60-performance.gputrace
+traces/app-d3d9-3dmark05-split-row-60-1-opaque-4096-gputrace-r1/analysis/frame60-counters-xcode.csv
+traces/app-d3d9-3dmark05-split-row-60-1-opaque-4096-gputrace-r1/analysis/frame60-xcode-dxmt-joined-summary.csv
+traces/app-d3d9-3dmark05-split-row-60-1-opaque-4096-gputrace-r1/analysis/frame60-xcode-dxmt-bottleneck-report.md
+traces/app-d3d9-3dmark05-split-row-60-1-opaque-4096-gputrace-r1/analysis/frame60-xcode-dxmt-comparison.md
+```
+
+Xcode Summary for the split run reported `4` command buffers, `12` render
+encoders, `742` draw calls, `3,122,697` vertices, and `34.03ms` GPU time. The
+counter export used embedded performance data and a complete encoder-counter
+CSV with `12` encoder rows.
+
+The smoke and gputrace runs both show the intended selector scope:
+
+| Row | Draws | Triangles | Vertices | Split source / extra draws | Split primitives |
+|---|---:|---:|---:|---:|---:|
+| `60/0` | `126` | `180,335` | `541,005` | `0 / 0` | `0` |
+| `60/1` | `156` | `234,309` | `702,927` | `9 / 14` | `72,305` |
+| `60/3` | `169` | `255,809` | `767,427` | `0 / 0` | `0` |
+| `60/4` | `265` | `370,367` | `1,111,101` | `0 / 0` | `0` |
+
+Comparison against `measure-index-cache-gputrace-r1`:
+
+| Metric | Baseline | Split row `60/1` | Delta |
+|---|---:|---:|---:|
+| Total GPU time | `34.391ms` | `34.026ms` | `-1.06%` |
+| Hot-set GPU time | `33.741ms` | `33.408ms` | `-0.99%` |
+| Hot-set VS buffer write | `1472.747MiB` | `1473.040MiB` | `+0.02%` |
+| Hot-set unexplained buffer write | `1472.905MiB` | `1473.228MiB` | `+0.02%` |
+| Hot-set VS bytes / invocation | `856.265B` | `856.189B` | `-0.01%` |
+| Hot-set draw calls | `711` | `716` | `+0.70%` |
+| Hot-set vertices | `3,121,680` | `3,122,460` | `+0.02%` |
+| Hot-set triangles | `1,040,560` | `1,040,820` | `+0.02%` |
+| Hot-set stream handle changes | `830` | `839` | `+1.08%` |
+| Hot-set IB handle changes | `614` | `619` | `+0.81%` |
+
+Per-row deltas:
+
+| Row | GPU time | VS write | VS invocations | VS B/inv | Named tiled |
+|---|---:|---:|---:|---:|---:|
+| `60/3` | `10.662 -> 10.252ms` (`-3.85%`) | `437.402 -> 437.385MiB` (`-0.00%`) | `432,881 -> 432,825` | `1059.5 -> 1059.6B` | unchanged |
+| `60/4` | `9.031 -> 8.847ms` (`-2.03%`) | `370.276 -> 370.305MiB` (`+0.01%`) | `659,516 -> 659,796` | `588.7 -> 588.5B` | unchanged |
+| `60/1` | `8.252 -> 8.422ms` (`+2.07%`) | `437.404 -> 437.680MiB` (`+0.06%`) | `393,529 -> 393,769` | `1165.5 -> 1165.5B` | unchanged |
+| `60/0` | `5.797 -> 5.887ms` (`+1.55%`) | `227.665 -> 227.670MiB` (`+0.00%`) | `317,588 -> 317,644` | `751.7 -> 751.6B` | `3.250 -> 3.312MiB` |
+
+Interpretation:
+
+- The selector is correctly scoped: only `60/1` reports
+  `9` source draws split into `23` Metal draws over `72,305` primitives.
+- The target row regresses in GPU time (`+2.07%`) and its VS write increases
+  slightly (`+0.06%`), while the hot-set VS write remains effectively
+  unchanged.
+- Stream/IB handle churn also increases slightly because the split creates
+  extra Metal draws.
+- Together with the `60/3` split result, this rejects order-preserving bounded
+  draw partitioning for both opaque depth-writing hot rows. The next useful
+  GPU probes should change backend state shape, material grouping, or
+  primitive locality/order semantics, not just draw granularity.
+
+```mermaid
+flowchart TD
+  Opaque["opaque 2048 depth-write hot rows\n60/3 + 60/1"] --> Split63["bounded split 60/3\n9 source -> 23 Metal draws"]
+  Opaque --> Split61["bounded split 60/1\n9 source -> 23 Metal draws"]
+
+  Split63 --> Stable63["hot VS write stable\n1472.747 -> 1473.046MiB"]
+  Split61 --> Stable61["hot VS write stable\n1472.747 -> 1473.040MiB"]
+  Split61 --> Regress61["target 60/1 GPU\n8.252 -> 8.422ms"]
+
+  Stable63 --> Reject["reject pure order-preserving draw-size split"]
+  Stable61 --> Reject
+  Regress61 --> Reject
+  Reject --> Next["next probes\nbackend-state shape\nmaterial grouping\nprimitive locality/order"]
+
+  classDef hot fill:#ffe8e8,stroke:#b64242,color:#2b0d0d
+  classDef known fill:#e8f0ff,stroke:#476cb6,color:#0d1833
+  class Opaque,Stable63,Stable61,Regress61,Reject,Next hot
+  class Split63,Split61 known
+```
+
+#### Row/Class-Scoped Cull Shape Probe
+
+The bounded split results moved the next GPU question from draw granularity to
+backend state shape. Broad cull probes are too noisy for the current hot-row
+shape, so the probe wrapper and draw encoder now support a row/class-scoped
+cull override:
+
+```text
+DXMT9_PROBE_FORCE_CULL_MODE=none|front|back
+DXMT9_PROBE_FORCE_CULL_MODE_ROW=SEQ/ENC
+DXMT9_PROBE_FORCE_CULL_MODE_ROWS=SEQ/ENC,...
+DXMT9_PROBE_FORCE_CULL_MODE_CLASS=opaque-depth-write|...
+DXMT9_PROBE_FORCE_CULL_MODE_CLASSES=large4096,opaque-depth-write
+
+scripts/tools/run_3dmark05_perf_probe.sh \
+  --probe-force-cull-mode none \
+  --probe-force-cull-mode-row 60/1 \
+  --probe-force-cull-mode-class opaque-depth-write
+```
+
+This probe changes only the effective Metal cull mode for selected indexed
+triangle-list draws. The dxmt encoder breakdown records the effective cull
+bucket, so a no-gputrace smoke can verify scope before spending disk and time
+on a `.gputrace` export.
+
+Initial smoke:
+
+```text
+experiments/output/app-d3d9-3dmark05-probe-force-cull-row-60-1-none-nogputrace-r1/3dmark05-perf-summary.md
+experiments/output/app-d3d9-3dmark05-probe-force-cull-row-60-1-none-nogputrace-r1/3dmark05-perf-encoders.csv
+```
+
+The run passed and the output image was a normal GT1 frame. Scope check against
+`measure-index-cache-nogputrace-r1`:
+
+| Row | Baseline cull n/f/b | Probe cull n/f/b | Geometry note |
+|---|---:|---:|---|
+| `60/0` | `0 / 0 / 125` | `0 / 0 / 127` | unrelated small row drift |
+| `60/1` | `0 / 156 / 0` | `156 / 0 / 0` | target row changed exactly |
+| `60/3` | `0 / 170 / 0` | `0 / 170 / 0` | unchanged |
+| `60/4` | `0 / 0 / 260` | `0 / 0 / 269` | unrelated small row drift |
+
+Interpretation:
+
+- The new row/class-scoped cull probe is active and correctly bounded for
+  `60/1` `opaque-depth-write`.
+- The next Xcode run should use the same strict gates as split/reverse probes:
+  `--top 4 --hot-gpu-share 95`, top-row key match, dxmt join coverage,
+  top-PSO attribution, and draw/vertex/triangle drift limits.
+- If `60/1` cull-none changes `VS Buffer Device Memory Bytes Written` or
+  `VS bytes / invocation`, cull/backend shape remains a viable owner. If it
+  stays flat, the next state-shape axis should move to `60/3`, depth function,
+  or material grouping rather than cull mode.
+
+```mermaid
+flowchart TD
+  Owner["hidden vertex/tiler/backend width\nnot draw-size split"] --> Probe["row/class-scoped cull probe"]
+  Probe --> Scope["60/1 opaque-depth-write only\nfront -> none"]
+  Scope --> Smoke["no-gputrace smoke pass\nnormal GT1 frame"]
+  Smoke --> Xcode["next: gputrace + Xcode counters"]
+  Xcode --> Gate{"VS write or B/inv moves?"}
+  Gate -- "yes" --> CullOwner["cull/backend shape is implicated"]
+  Gate -- "no" --> Next["try another backend axis\n60/3 / depth func / material grouping"]
+
+  classDef hot fill:#ffe8e8,stroke:#b64242,color:#2b0d0d
+  classDef known fill:#e8f0ff,stroke:#476cb6,color:#0d1833
+  class Owner,Gate,CullOwner,Next hot
+  class Probe,Scope,Smoke,Xcode known
+```
+
 #### Reverse Material-Class Probe Tooling
 
 2026-06-02 added a class filter to reverse-indexed-triangle probes so the next
