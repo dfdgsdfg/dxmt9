@@ -9362,12 +9362,105 @@ flowchart TD
   StableWrite --> RejectRoot["reject as VS-write root fix"]
   Time --> Secondary["keep as optional targeted win\nnot default global policy"]
   RejectRoot --> RectShape["drawsample/current compare\nsame rows and 4 draws\nscissor rectangles drift"]
-  RectShape --> Next["next target\nscissor rectangle/tile coverage classifier\nhidden vertex/tiler backend storage"]
+  RectShape --> RectProbe["scissor-rect normalization probe\nsame 4 draws / same row gate"]
+  RectProbe --> RectReject["Xcode VS write stable\n1472.747 -> 1472.874MiB"]
+  RectReject --> Next["next target\nrow-shape/order/locality or\nprimitive backend pressure\nnot scissor rectangle alone"]
 
   classDef hot fill:#ffe8e8,stroke:#b64242,color:#2b0d0d
   classDef known fill:#e8f0ff,stroke:#476cb6,color:#0d1833
-  class DiagWin,CurrentDiag,StableWrite,RejectRoot,Next hot
-  class Diagnostic,Safety,Impl,Smoke,Xcode,Time,Secondary known
+  class DiagWin,CurrentDiag,StableWrite,RejectRoot,RectReject,Next hot
+  class Diagnostic,Safety,Impl,Smoke,Xcode,Time,Secondary,RectProbe known
+```
+
+#### Scissor Rectangle/Tiling Probe Result
+
+Date: 2026-06-02
+
+The next diagnostic kept scissor enabled and changed only the four
+`60/4 large4096 && alpha-blend && scissor` rectangles to the drawsample
+reference rectangle `0,0,190,553`. This directly tested whether the historical
+positive was caused by rectangle/tile-coverage shape rather than primitive
+membership or index order.
+
+Smoke validation first confirmed exact scope:
+
+| Metric | Value |
+|---|---:|
+| Probe row | `60/4` |
+| Probe classes | `large4096,alpha-blend,scissor` |
+| Applied draws | `4` |
+| Skipped eligible scissor draws | `38` |
+| Row `60/4` draw calls | `260` |
+| Row `60/4` large4096 alpha draws | `16` |
+| Row `60/4` large4096 scissor draws | `4` |
+| Area delta accumulator | `23128 px` |
+
+Xcode/gputrace validation used the standard replay flow: export embedded
+performance data, open Performance > Counters, wait until draw-counter
+profiling completed, export encoder counters, then run the strict finalizer
+against `measure-index-cache-gputrace-r1` with top-row key, top-PSO, Xcode
+counter coverage, dxmt join coverage, and geometry drift gates enabled.
+
+Artifacts:
+
+```text
+experiments/output/app-d3d9-3dmark05-scissor-rect-row-60-4-large4096-alpha-scissor-smoke-r1/3dmark05-perf-summary.md
+experiments/output/app-d3d9-3dmark05-scissor-rect-row-60-4-large4096-alpha-scissor-gputrace-r1/3dmark05-perf-summary.md
+experiments/output/app-d3d9-3dmark05-scissor-rect-row-60-4-large4096-alpha-scissor-gputrace-r1/3dmark05-perf-indexed-probe-draws.csv
+traces/app-d3d9-3dmark05-scissor-rect-row-60-4-large4096-alpha-scissor-gputrace-r1/frame60.gputrace
+traces/app-d3d9-3dmark05-scissor-rect-row-60-4-large4096-alpha-scissor-gputrace-r1/analysis/frame60-performance.gputrace
+traces/app-d3d9-3dmark05-scissor-rect-row-60-4-large4096-alpha-scissor-gputrace-r1/analysis/frame60-counters-xcode.csv
+traces/app-d3d9-3dmark05-scissor-rect-row-60-4-large4096-alpha-scissor-gputrace-r1/analysis/frame60-xcode-dxmt-comparison.md
+traces/app-d3d9-3dmark05-scissor-rect-row-60-4-large4096-alpha-scissor-gputrace-r1/analysis/frame60-xcode-dxmt-bottleneck-report.md
+traces/app-d3d9-3dmark05-scissor-rect-row-60-4-large4096-alpha-scissor-gputrace-r1/analysis/frame60-xcode-dxmt-joined-summary.csv
+```
+
+Result:
+
+| Metric | Baseline | Scissor-rect probe | Delta |
+|---|---:|---:|---:|
+| Total GPU | `34.391ms` | `36.362ms` | `+5.73%` |
+| Hot GPU | `33.741ms` | `35.740ms` | `+5.93%` |
+| Hot rows | `60/0,60/1,60/3,60/4` | `60/0,60/1,60/3,60/4` | shape gate passed |
+| Hot draw calls | `711` | `711` | `+0.00%` |
+| Hot dxmt vertices | `3,121,680` | `3,121,680` | `+0.00%` |
+| Hot dxmt triangles | `1,040,560` | `1,040,560` | `+0.00%` |
+| Hot VS buffer write | `1472.747MiB` | `1472.874MiB` | `+0.01%` |
+| Hot VS B/invocation | `856.265B` | `856.340B` | `+0.01%` |
+| Hot hidden backend estimate | `~1455MiB` | `1455.978MiB` | still dominant |
+
+Per-row result:
+
+| Row | GPU delta | VS write delta | Interpretation |
+|---|---:|---:|---|
+| `60/4` | `9.031 -> 8.940ms` (`-1.01%`) | `370.276 -> 370.399MiB` (`+0.03%`) | target row time moves only at noise/secondary scale; VS-write owner unchanged |
+| `60/3` | `10.662 -> 11.605ms` (`+8.85%`) | `437.402 -> 437.419MiB` (`+0.00%`) | unrelated row regresses while VS write stays flat |
+| `60/1` | `8.252 -> 8.967ms` (`+8.67%`) | `437.404 -> 437.379MiB` (`-0.01%`) | VS write stable |
+| `60/0` | `5.797 -> 6.228ms` (`+7.44%`) | `227.665 -> 227.678MiB` (`+0.01%`) | VS write stable |
+
+The scissor rectangle/tile-coverage hypothesis is therefore negative. The four
+large scissored screen-blend draws were modified exactly, but the hot hidden
+VS/tiler/backend bucket did not fall. Broad `DXMT_DISABLE_SCISSOR=1`, targeted
+screen-blend index order, current-HEAD diagnostic reorder, and now rectangle
+normalization all leave the `~1.47GiB` hot VS buffer-write bucket effectively
+unchanged. Scissor remains useful as a classifier for a row/material shape, but
+not as the isolated root cause.
+
+```mermaid
+flowchart TD
+  Historical["historical 4-draw reorder\nVS write -7.46%"] --> RectDiff["drawsample/current diff\nscissor rectangles differ"]
+  RectDiff --> Probe["scissor-rect override\n60/4 + large4096 + alpha + scissor\n4 applied draws"]
+  Probe --> Gates["strict finalizer gates\nsame hot rows\nsame draw/vertex/triangle counts"]
+  Gates --> Stable["VS write stable\n1472.747 -> 1472.874MiB"]
+  Gates --> Time["GPU time regresses\n34.391 -> 36.362ms"]
+  Stable --> Reject["reject rectangle/tile coverage\nas isolated owner"]
+  Reject --> Survives["surviving owner\nhidden Apple vertex/tiler/backend storage"]
+  Survives --> Next["next experiments\nrow-shape/order/locality\nor primitive-backend pressure"]
+
+  classDef hot fill:#ffe8e8,stroke:#b64242,color:#2b0d0d
+  classDef known fill:#e8f0ff,stroke:#476cb6,color:#0d1833
+  class Stable,Time,Reject,Survives,Next hot
+  class Historical,RectDiff,Probe,Gates known
 ```
 
 ### Offline Metal Codegen Classifier
