@@ -9364,12 +9364,14 @@ flowchart TD
   RejectRoot --> RectShape["drawsample/current compare\nsame rows and 4 draws\nscissor rectangles drift"]
   RectShape --> RectProbe["scissor-rect normalization probe\nsame 4 draws / same row gate"]
   RectProbe --> RectReject["Xcode VS write stable\n1472.747 -> 1472.874MiB"]
-  RectReject --> Next["next target\nrow-shape/order/locality or\nprimitive backend pressure\nnot scissor rectangle alone"]
+  RectReject --> Alpha16["current full alpha rerun\n16 large4096 alpha draws"]
+  Alpha16 --> Alpha16Reject["Xcode VS write stable\n1472.747 -> 1472.866MiB"]
+  Alpha16Reject --> Next["next target\nrow-shape/order/locality or\nprimitive backend pressure\nnot scissor/alpha subset alone"]
 
   classDef hot fill:#ffe8e8,stroke:#b64242,color:#2b0d0d
   classDef known fill:#e8f0ff,stroke:#476cb6,color:#0d1833
-  class DiagWin,CurrentDiag,StableWrite,RejectRoot,RectReject,Next hot
-  class Diagnostic,Safety,Impl,Smoke,Xcode,Time,Secondary,RectProbe known
+  class DiagWin,CurrentDiag,StableWrite,RejectRoot,RectReject,Alpha16Reject,Next hot
+  class Diagnostic,Safety,Impl,Smoke,Xcode,Time,Secondary,RectProbe,Alpha16 known
 ```
 
 #### Scissor Rectangle/Tiling Probe Result
@@ -9461,6 +9463,90 @@ flowchart TD
   classDef known fill:#e8f0ff,stroke:#476cb6,color:#0d1833
   class Stable,Time,Reject,Survives,Next hot
   class Historical,RectDiff,Probe,Gates known
+```
+
+#### Current Full Large4096 Alpha Reorder Rerun
+
+Date: 2026-06-02
+
+The broader current-HEAD rerun reversed every `60/4 large4096 && alpha-blend`
+indexed triangle draw, not only the four scissored draws. This retested whether
+the historical positive was a wider alpha/material ordering effect.
+
+Smoke validation confirmed the intended scope:
+
+| Metric | Value |
+|---|---:|
+| Probe row | `60/4` |
+| Probe classes | `large4096,alpha-blend` |
+| Applied draws | `16` |
+| Reordered index bytes | `534,258B` |
+| Row `60/4` draw calls | `265` smoke, `260` gputrace/finalized |
+| Row `60/4` large4096 draws | `19` |
+| Row `60/4` large4096 alpha draws | `16` |
+| Row `60/4` large4096 scissor draws | `4` |
+
+Artifacts:
+
+```text
+experiments/output/app-d3d9-3dmark05-reverse-row-60-4-large4096-alpha-current-smoke-r1/3dmark05-perf-summary.md
+experiments/output/app-d3d9-3dmark05-reverse-row-60-4-large4096-alpha-current-gputrace-r1/3dmark05-perf-summary.md
+experiments/output/app-d3d9-3dmark05-reverse-row-60-4-large4096-alpha-current-gputrace-r1/3dmark05-perf-indexed-probe-draws.csv
+traces/app-d3d9-3dmark05-reverse-row-60-4-large4096-alpha-current-gputrace-r1/frame60.gputrace
+traces/app-d3d9-3dmark05-reverse-row-60-4-large4096-alpha-current-gputrace-r1/analysis/frame60-performance.gputrace
+traces/app-d3d9-3dmark05-reverse-row-60-4-large4096-alpha-current-gputrace-r1/analysis/frame60-counters-xcode.csv
+traces/app-d3d9-3dmark05-reverse-row-60-4-large4096-alpha-current-gputrace-r1/analysis/frame60-xcode-dxmt-comparison.md
+traces/app-d3d9-3dmark05-reverse-row-60-4-large4096-alpha-current-gputrace-r1/analysis/frame60-xcode-dxmt-bottleneck-report.md
+traces/app-d3d9-3dmark05-reverse-row-60-4-large4096-alpha-current-gputrace-r1/analysis/frame60-xcode-dxmt-joined-summary.csv
+```
+
+Strict finalizer gates passed: same hot rows, top PSO attribution, Xcode
+counter coverage, dxmt join coverage, and draw/vertex/triangle drift gates.
+
+| Metric | Baseline | Current full-alpha reorder | Delta |
+|---|---:|---:|---:|
+| Total GPU | `34.391ms` | `34.575ms` | `+0.53%` |
+| Hot GPU | `33.741ms` | `33.960ms` | `+0.65%` |
+| Hot rows | `60/0,60/1,60/3,60/4` | `60/0,60/1,60/3,60/4` | shape gate passed |
+| Hot draw calls | `711` | `711` | `+0.00%` |
+| Hot dxmt vertices | `3,121,680` | `3,121,680` | `+0.00%` |
+| Hot dxmt triangles | `1,040,560` | `1,040,560` | `+0.00%` |
+| Hot VS buffer write | `1472.747MiB` | `1472.866MiB` | `+0.01%` |
+| Hot VS B/invocation | `856.265B` | `856.325B` | `+0.01%` |
+| Hot hidden backend estimate | `~1455MiB` | `1455.335MiB` | still dominant |
+
+Per-row result:
+
+| Row | GPU delta | VS write delta | Interpretation |
+|---|---:|---:|---|
+| `60/4` | `9.031 -> 9.075ms` (`+0.48%`) | `370.276 -> 370.407MiB` (`+0.04%`) | 16 alpha draws reordered, but target row VS write is unchanged |
+| `60/3` | `10.662 -> 10.969ms` (`+2.88%`) | `437.402 -> 437.379MiB` (`-0.01%`) | opaque 2048 row still dominates hidden backend traffic |
+| `60/1` | `8.252 -> 7.966ms` (`-3.46%`) | `437.404 -> 437.405MiB` (`+0.00%`) | GPU-time movement without VS-write movement |
+| `60/0` | `5.797 -> 5.950ms` (`+2.65%`) | `227.665 -> 227.675MiB` (`+0.00%`) | VS write stable |
+
+This rejects the current full `large4096 && alpha-blend` index-order predicate
+as a VS-write root fix. It also removes the last direct support for promoting
+the historical `60/4` index-order anomaly into production logic. The surviving
+owner is still hidden vertex/tiler/backend storage. The next probes should move
+away from scissor/alpha membership and toward row shape: opaque 2048x2048
+depth-write rows `60/1` and `60/3`, their primitive ordering/locality, cull
+shape, and the state-shape contrast between those rows and `60/4`.
+
+```mermaid
+flowchart TD
+  Hist16["historical large4096 alpha signal"] --> Current16["current rerun\n60/4 large4096 + alpha\n16 draws / 534KiB reorder"]
+  Current16 --> Gates16["strict gates\nsame hot rows\nsame draw/vertex/triangle counts"]
+  Gates16 --> Stable16["hot VS write stable\n1472.747 -> 1472.866MiB"]
+  Gates16 --> Time16["GPU time stable/regressed\n34.391 -> 34.575ms"]
+  Stable16 --> Reject16["reject full alpha index-order\nas VS-write root"]
+  Reject16 --> Owner["hidden vertex/tiler/backend storage remains"]
+  Owner --> OpaqueRows["next row-shape probes\n60/1 and 60/3 opaque 2048 depth-write"]
+  Owner --> StateShape["state-shape/locality probes\ncull/depth/primitive order"]
+
+  classDef hot fill:#ffe8e8,stroke:#b64242,color:#2b0d0d
+  classDef known fill:#e8f0ff,stroke:#476cb6,color:#0d1833
+  class Stable16,Time16,Reject16,Owner,OpaqueRows,StateShape hot
+  class Hist16,Current16,Gates16 known
 ```
 
 ### Offline Metal Codegen Classifier
