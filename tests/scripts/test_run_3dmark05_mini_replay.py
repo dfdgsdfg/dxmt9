@@ -189,6 +189,7 @@ class MiniReplayScriptTests(unittest.TestCase):
             self.assertEqual(summary["draw_order"], "original")
             self.assertEqual(summary["primitive_order"], "original")
             self.assertEqual(summary["depth_clear"], 1.0)
+            self.assertIsNone(summary["depth_input"])
             self.assertEqual(summary["index_bytes"], 6)
             self.assertEqual(summary["stream0_bytes"], 24)
             self.assertEqual(summary["uniform_draw_count"], 1)
@@ -208,10 +209,11 @@ class MiniReplayScriptTests(unittest.TestCase):
             self.assertIn("psoDesc.colorAttachments[0].blendingEnabled = 1;", objc)
             self.assertIn("psoDesc.colorAttachments[0].pixelFormat = MTLPixelFormatBGRA8Unorm;", objc)
             self.assertIn("psoDesc.depthAttachmentPixelFormat = MTLPixelFormatDepth32Float_Stencil8;", objc)
-            self.assertIn("psoDesc.stencilAttachmentPixelFormat = MTLPixelFormatDepth32Float_Stencil8;", objc)
+            self.assertIn("psoDesc.stencilAttachmentPixelFormat = MTLPixelFormatInvalid;", objc)
             self.assertIn("width:1024", objc)
             self.assertIn("height:768", objc)
-            self.assertIn("pass.stencilAttachment.texture = depth;", objc)
+            self.assertNotIn("pass.stencilAttachment.texture = depth;", objc)
+            self.assertIn("pass.depthAttachment.loadAction = MTLLoadActionClear;", objc)
             self.assertIn("pass.depthAttachment.clearDepth = 1;", objc)
             self.assertIn("const char* vsConstsPath;", objc)
             self.assertIn("bufferFromFileOrDefault(device, draw.vsConstsPath, vsConsts)", objc)
@@ -305,6 +307,39 @@ class MiniReplayScriptTests(unittest.TestCase):
             objc = (output_dir / "dxmt9_3dmark05_mini_replay.mm").read_text(encoding="utf-8")
             self.assertEqual(summary["depth_clear"], 0.25)
             self.assertIn("pass.depthAttachment.clearDepth = 0.25;", objc)
+
+    def test_depth_input_uploads_raw_sidecar_and_loads_depth_attachment(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            manifest, output_dir = self.write_manifest_fixture(root)
+            depth_input = root / "frame60-2-depth.bin"
+            depth_input.write_bytes(b"\x00" * (1024 * 768 * 4))
+
+            result = subprocess.run(
+                [
+                    sys.executable,
+                    str(SCRIPT),
+                    str(manifest),
+                    "--output-dir",
+                    str(output_dir),
+                    "--depth-input",
+                    str(depth_input),
+                ],
+                text=True,
+                capture_output=True,
+                check=False,
+            )
+
+            self.assertEqual(result.returncode, 0, result.stderr)
+            summary = json.loads((output_dir / "mini-replay-summary.json").read_text(encoding="utf-8"))
+            objc = (output_dir / "dxmt9_3dmark05_mini_replay.mm").read_text(encoding="utf-8")
+            self.assertEqual(summary["depth_input"], str(depth_input))
+            self.assertIn(str(depth_input), objc)
+            self.assertIn("id<MTLBuffer> depthUpload =", objc)
+            self.assertIn("copyFromBuffer:depthUpload", objc)
+            self.assertIn("sourceBytesPerRow:4096", objc)
+            self.assertIn("length:3145728", objc)
+            self.assertIn("pass.depthAttachment.loadAction = MTLLoadActionLoad;", objc)
 
     def test_capture_path_requires_enough_free_space_before_compile(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

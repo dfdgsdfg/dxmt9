@@ -34,6 +34,7 @@
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <exception>
 #include <filesystem>
 #include <fstream>
 #include <functional>
@@ -106,6 +107,7 @@ using dxmt9::ffp::kD3DDeclUsageTexcoord;
 
 using dxmt9::convert::formatHasDepthAspect;
 using dxmt9::convert::formatHasStencilAspect;
+using dxmt9::convert::toPixelFormat;
 using dxmt9::convert::toCullMode;
 using dxmt9::convert::toIndexType;
 using dxmt9::convert::toPrimitiveType;
@@ -152,6 +154,178 @@ WMT::String makeLabelStringFmt(const char* fmt, ...) {
   std::vsnprintf(buf, sizeof(buf), fmt, args);
   va_end(args);
   return WMT::String::string(buf, WMTUTF8StringEncoding);
+}
+
+std::optional<u64> parseEnvU64Auto(const char* name) {
+  const char* env = std::getenv(name);
+  if (!env || env[0] == '\0') {
+    return std::nullopt;
+  }
+  char* end = nullptr;
+  const u64 value = static_cast<u64>(std::strtoull(env, &end, 0));
+  if (end == env || (end && *end != '\0')) {
+    return std::nullopt;
+  }
+  return value;
+}
+
+std::string getenvStringLocal(const char* name) {
+  const char* env = std::getenv(name);
+  return env && env[0] != '\0' ? std::string(env) : std::string{};
+}
+
+struct DepthAttachmentDumpConfig {
+  bool enabled = false;
+  u64 handle = 0;
+  std::optional<u64> seq;
+  std::optional<u64> enc;
+  std::string path;
+};
+
+const DepthAttachmentDumpConfig& depthAttachmentDumpConfig() {
+  static const DepthAttachmentDumpConfig config = [] {
+    DepthAttachmentDumpConfig result{};
+    result.handle =
+        parseEnvU64Auto("DXMT9_DUMP_DEPTH_ATTACHMENT_HANDLE").value_or(0);
+    result.seq = parseEnvU64Auto("DXMT9_DUMP_DEPTH_ATTACHMENT_SEQ");
+    result.enc = parseEnvU64Auto("DXMT9_DUMP_DEPTH_ATTACHMENT_ENC");
+    result.path = getenvStringLocal("DXMT9_DUMP_DEPTH_ATTACHMENT_PATH");
+    result.enabled = result.handle != 0 && !result.path.empty();
+    return result;
+  }();
+  return config;
+}
+
+struct ActiveDepthAttachmentDump {
+  core::Handle handle{};
+  WMT::Reference<WMT::Texture> texture{};
+  core::Format format = core::Format::Unknown;
+  enum WMTPixelFormat metalPixelFormat = WMTPixelFormatInvalid;
+  u32 width = 0;
+  u32 height = 0;
+  u64 seq = 0;
+  u64 enc = 0;
+  bool hasDepth = false;
+  bool hasStencil = false;
+};
+
+bool depthAttachmentDumpMatches(const ActiveDepthAttachmentDump& active) {
+  const auto& config = depthAttachmentDumpConfig();
+  if (!config.enabled || !active.handle || !active.texture) {
+    return false;
+  }
+  if (config.handle != active.handle.value) {
+    return false;
+  }
+  if (config.seq.has_value() && *config.seq != active.seq) {
+    return false;
+  }
+  if (config.enc.has_value() && *config.enc != active.enc) {
+    return false;
+  }
+  static std::atomic_bool started{false};
+  bool expected = false;
+  return started.compare_exchange_strong(expected, true);
+}
+
+void writeDepthAttachmentDump(const ActiveDepthAttachmentDump& active,
+                              std::string path,
+                              u32 rowBytes,
+                              u64 byteCount,
+                              const void* bytes) {
+  if (!bytes || path.empty() || byteCount == 0) {
+    return;
+  }
+  try {
+    const std::filesystem::path binaryPath(path);
+    if (const auto parent = binaryPath.parent_path(); !parent.empty()) {
+      std::filesystem::create_directories(parent);
+    }
+    {
+      std::ofstream out(binaryPath, std::ios::binary | std::ios::trunc);
+      out.write(static_cast<const char*>(bytes), static_cast<std::streamsize>(byteCount));
+    }
+    {
+      std::ofstream meta(path + ".json", std::ios::trunc);
+      meta << "{\n"
+           << "  \"handle\": \"0x" << std::hex << active.handle.value << std::dec << "\",\n"
+           << "  \"seq\": " << active.seq << ",\n"
+           << "  \"enc\": " << active.enc << ",\n"
+           << "  \"format\": " << static_cast<u32>(active.format) << ",\n"
+           << "  \"formatName\": \"" << core::formatName(active.format) << "\",\n"
+           << "  \"metalPixelFormat\": " << static_cast<u32>(active.metalPixelFormat) << ",\n"
+           << "  \"width\": " << active.width << ",\n"
+           << "  \"height\": " << active.height << ",\n"
+           << "  \"rowBytes\": " << rowBytes << ",\n"
+           << "  \"byteCount\": " << byteCount << ",\n"
+           << "  \"hasDepth\": " << (active.hasDepth ? 1 : 0) << ",\n"
+           << "  \"hasStencil\": " << (active.hasStencil ? 1 : 0) << "\n"
+           << "}\n";
+    }
+    std::ostringstream out;
+    out << "[dxmt9-depth] dump handle=0x" << std::hex << active.handle.value << std::dec
+        << " seq=" << active.seq
+        << " enc=" << active.enc
+        << " size=" << active.width << "x" << active.height
+        << " rowBytes=" << rowBytes
+        << " bytes=" << byteCount
+        << " path=" << path;
+    emitTextureTraceLine(out.str());
+  } catch (const std::exception& e) {
+    std::ostringstream out;
+    out << "[dxmt9-depth] dump write-failed handle=0x" << std::hex
+        << active.handle.value << std::dec
+        << " seq=" << active.seq
+        << " enc=" << active.enc
+        << " path=" << path
+        << " error=" << e.what();
+    emitTextureTraceLine(out.str());
+  }
+}
+
+void maybeEncodeDepthAttachmentDump(
+    WMT::CommandBuffer& commandBuffer,
+    WMT::Reference<WMT::Device> device,
+    const ActiveDepthAttachmentDump& active,
+    std::vector<std::function<void()>>& completionCallbacks) {
+  if (!depthAttachmentDumpMatches(active)) {
+    return;
+  }
+  const u32 bpp = core::bytesPerPixel(active.format);
+  if (bpp == 0 || active.width == 0 || active.height == 0) {
+    return;
+  }
+  const u32 rowBytes = active.width * bpp;
+  const u64 byteCount = static_cast<u64>(rowBytes) * active.height;
+  WMTBufferInfo bufInfo{};
+  bufInfo.length = byteCount;
+  bufInfo.options = WMTResourceStorageModeShared;
+  auto readbackBuffer = device.newBuffer(bufInfo);
+  void* readbackMemory = bufInfo.memory.get_accessible_or_null();
+  if (!readbackBuffer || !readbackMemory) {
+    return;
+  }
+  auto blit = commandBuffer.blitCommandEncoder();
+  if (!blit) {
+    return;
+  }
+  blit.setLabel(makeLabelStringFmt(
+      "Blit[DepthAttachmentDump seq=%llu enc=%llu handle=0x%llx]",
+      static_cast<unsigned long long>(active.seq),
+      static_cast<unsigned long long>(active.enc),
+      static_cast<unsigned long long>(active.handle.value)));
+  WMTOrigin origin{0, 0, 0};
+  WMTSize size{active.width, active.height, 1};
+  blit.copyFromTextureToBuffer(WMT::Texture{active.texture.handle}, 0, 0,
+                               origin, size, WMT::Buffer{readbackBuffer.handle},
+                               0, rowBytes, 0);
+  blit.endEncoding();
+  const auto path = depthAttachmentDumpConfig().path;
+  completionCallbacks.push_back(
+      [active, path, rowBytes, byteCount, readbackBuffer, readbackMemory] {
+        (void)readbackBuffer;
+        writeDepthAttachmentDump(active, path, rowBytes, byteCount, readbackMemory);
+      });
 }
 
 bool colorAttachmentAliasesTracedTexture(resources::Pool& pool,
@@ -7795,6 +7969,7 @@ std::optional<core::metalqueue::QueueSubmissionRecord> encodeChunk(
   WMT::Reference<WMT::RenderCommandEncoder> activeRenderEncoder{};
   WMT::Reference<WMT::BlitCommandEncoder> activeBlitEncoder{};
   std::vector<std::function<void()>> postCommitCallbacks;
+  std::vector<std::function<void()>> completionCallbacks;
   std::optional<core::metalcapture::MetalCaptureRequest> metalCaptureRequest;
   AttachmentKey activeKey{};
   HazardProbe activeWriteHazard{};
@@ -7836,6 +8011,7 @@ std::optional<core::metalqueue::QueueSubmissionRecord> encodeChunk(
   // touched on the queue so the next pass on the same handle uses
   // Load (R-BACK-15.4 says "first use" only).
   std::array<core::Handle, core::kMaxRenderTargets> activeColorHandles{};
+  ActiveDepthAttachmentDump activeDepthAttachmentDump{};
   // Per-render-encoder uniform dirty state (R-BACK-12.12). Seeded from
   // ctx.dirty so bits accumulated by the chunk-record importer since
   // the last encode flow into the first draw of this chunk; the
@@ -7888,6 +8064,9 @@ std::optional<core::metalqueue::QueueSubmissionRecord> encodeChunk(
       // commands once endEncoding fires.
       activeRenderEncoder.popDebugGroup();
       activeRenderEncoder.endEncoding();
+      maybeEncodeDepthAttachmentDump(commandBuffer, ctx.device,
+                                     activeDepthAttachmentDump,
+                                     completionCallbacks);
       perf::countRenderPassEnd(reason);
       activeEncoderBreakdown.emit(reason);
       // R-BACK-15.4: color attachments stored on this pass become "touched"
@@ -7902,6 +8081,7 @@ std::optional<core::metalqueue::QueueSubmissionRecord> encodeChunk(
           handle = core::Handle{};
         }
       }
+      activeDepthAttachmentDump = {};
       activeRenderEncoder = {};
       hasActiveRender = false;
       activeDrawStateKey.reset();
@@ -7996,6 +8176,25 @@ std::optional<core::metalqueue::QueueSubmissionRecord> encodeChunk(
     // mark them touched on the queue once the encoder closes.
     for (std::size_t i = 0; i < core::kMaxRenderTargets; ++i) {
       activeColorHandles[i] = drawState.hot->colorAttachments[i].handle;
+    }
+    activeDepthAttachmentDump = {};
+    if (auto* depthSurface =
+            ctx.pool.findSurface(drawState.hot->depthStencil.handle.value);
+        activeRenderEncoder && depthSurface && depthSurface->texture &&
+        depthSurface->desc.depthStencil) {
+      activeDepthAttachmentDump.handle = drawState.hot->depthStencil.handle;
+      activeDepthAttachmentDump.texture = depthSurface->texture;
+      activeDepthAttachmentDump.format = depthSurface->desc.format;
+      activeDepthAttachmentDump.metalPixelFormat =
+          toPixelFormat(depthSurface->desc.format, ctx.limits);
+      activeDepthAttachmentDump.width = std::max(1u, depthSurface->desc.width);
+      activeDepthAttachmentDump.height = std::max(1u, depthSurface->desc.height);
+      activeDepthAttachmentDump.seq = encodeChunkSeqId;
+      activeDepthAttachmentDump.enc = openedRenderEncoderIndex;
+      activeDepthAttachmentDump.hasDepth =
+          formatHasDepthAspect(depthSurface->desc.format);
+      activeDepthAttachmentDump.hasStencil =
+          formatHasStencilAspect(depthSurface->desc.format);
     }
     // M2: push a debug group identifying the render pass attachments.
     // Paired with the popDebugGroup() at the head of flushRender.
@@ -8784,6 +8983,7 @@ std::optional<core::metalqueue::QueueSubmissionRecord> encodeChunk(
   record.renderEncoderGpuSampleBuffer = std::move(renderEncoderGpuSampleBuffer);
   record.renderEncoderGpuSamples = std::move(renderEncoderGpuSamples);
   record.postCommitCallbacks = std::move(postCommitCallbacks);
+  record.completionCallbacks = std::move(completionCallbacks);
   return record;
   }  // @autoreleasepool
 }

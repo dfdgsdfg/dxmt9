@@ -209,15 +209,23 @@ def color_pixel_format(format_value: int) -> str:
 
 
 def depth_pixel_format(format_value: int) -> str:
-    if format_value in (41, 46):  # D24S8 / D24FS8
+    if format_value in (40, 41, 49):  # D24S8 / D24X8 / D24FS8
         return "MTLPixelFormatDepth32Float_Stencil8"
-    if format_value == 43:  # D16
+    if format_value in (42, 46):  # D16 / D16_LOCKABLE
         return "MTLPixelFormatDepth16Unorm"
     return "MTLPixelFormatDepth32Float"
 
 
 def depth_format_has_stencil(format_value: int) -> bool:
-    return format_value in (41, 46)
+    return format_value in (40, 49)
+
+
+def depth_bytes_per_pixel(format_value: int) -> int:
+    if format_value in (42, 46):  # D16 / D16_LOCKABLE
+        return 2
+    if format_value == 49:  # D24FS8 -> Depth32Float_Stencil8 dump sidecar
+        return 8
+    return 4
 
 
 def render_source(draws: list[dict[str, Any]],
@@ -225,7 +233,8 @@ def render_source(draws: list[dict[str, Any]],
                   dummy_vertex_buffer_slots: list[int],
                   width: int,
                   height: int,
-                  depth_clear: float) -> str:
+                  depth_clear: float,
+                  depth_input: Path | None) -> str:
     first_state = draws[0]["state"]
     alpha_blend = int(first_state.get("alpha_blend", 0))
     src_blend = int(first_state.get("src_blend", 2))
@@ -253,6 +262,11 @@ def render_source(draws: list[dict[str, Any]],
     stencil_format = depth_format if depth_format_has_stencil(depth_format_value) else "MTLPixelFormatInvalid"
     pass_width = int(color_attachment.get("width", 0)) or int(depth_attachment.get("width", 0)) or width
     pass_height = int(color_attachment.get("height", 0)) or int(depth_attachment.get("height", 0)) or height
+    depth_bpp = depth_bytes_per_pixel(depth_format_value)
+    depth_row_bytes = pass_width * depth_bpp
+    depth_byte_count = depth_row_bytes * pass_height
+    depth_input_path = cxx_string(str(depth_input)) if depth_input else '""'
+    depth_load_action = "MTLLoadActionLoad" if depth_input else "MTLLoadActionClear"
     draw_entries = []
     for draw in draws:
         geometry = draw["geometry"]
@@ -311,6 +325,13 @@ def render_source(draws: list[dict[str, Any]],
         f"    [encoder setVertexBuffer:dummyVertexStream offset:0 atIndex:{slot}];"
         for slot in dummy_vertex_buffer_slots
     )
+    stencil_pass_attachment = ""
+    if stencil_format != "MTLPixelFormatInvalid":
+        stencil_pass_attachment = """    pass.stencilAttachment.texture = depth;
+    pass.stencilAttachment.loadAction = MTLLoadActionClear;
+    pass.stencilAttachment.storeAction = MTLStoreActionDontCare;
+    pass.stencilAttachment.clearStencil = 0;
+"""
     return f"""#import <Foundation/Foundation.h>
 #import <Metal/Metal.h>
 #include <cstdlib>
@@ -563,6 +584,32 @@ int main() {{
                                                        mipmapped:NO];
     depthDesc.usage = MTLTextureUsageRenderTarget;
     id<MTLTexture> depth = [device newTextureWithDescriptor:depthDesc];
+    if ({depth_input_path}[0] != '\\0') {{
+      NSData* depthData = readData({depth_input_path});
+      if (!depthData || [depthData length] < {depth_byte_count}) {{
+        std::cerr << "failed to read depth input or size is too small\\n";
+        return 2;
+      }}
+      id<MTLBuffer> depthUpload =
+          [device newBufferWithBytes:[depthData bytes]
+                              length:{depth_byte_count}
+                             options:MTLResourceStorageModeShared];
+      id<MTLCommandBuffer> depthUploadCommandBuffer = [queue commandBuffer];
+      id<MTLBlitCommandEncoder> depthUploadBlit =
+          [depthUploadCommandBuffer blitCommandEncoder];
+      [depthUploadBlit copyFromBuffer:depthUpload
+                         sourceOffset:0
+                    sourceBytesPerRow:{depth_row_bytes}
+                  sourceBytesPerImage:0
+                           sourceSize:MTLSizeMake({pass_width}, {pass_height}, 1)
+                            toTexture:depth
+                     destinationSlice:0
+                     destinationLevel:0
+                    destinationOrigin:MTLOriginMake(0, 0, 0)];
+      [depthUploadBlit endEncoding];
+      [depthUploadCommandBuffer commit];
+      [depthUploadCommandBuffer waitUntilCompleted];
+    }}
 
     id<MTLBuffer> vsConsts = zeroBuffer(device, 16384);
     initVsConsts(vsConsts);
@@ -614,15 +661,10 @@ int main() {{
     pass.colorAttachments[0].storeAction = MTLStoreActionStore;
     pass.colorAttachments[0].clearColor = MTLClearColorMake(0.0, 0.0, 0.0, 1.0);
     pass.depthAttachment.texture = depth;
-    pass.depthAttachment.loadAction = MTLLoadActionClear;
+    pass.depthAttachment.loadAction = {depth_load_action};
     pass.depthAttachment.storeAction = MTLStoreActionDontCare;
     pass.depthAttachment.clearDepth = {depth_clear:.9g};
-    if ({1 if stencil_format != "MTLPixelFormatInvalid" else 0}) {{
-      pass.stencilAttachment.texture = depth;
-      pass.stencilAttachment.loadAction = MTLLoadActionClear;
-      pass.stencilAttachment.storeAction = MTLStoreActionDontCare;
-      pass.stencilAttachment.clearStencil = 0;
-    }}
+{stencil_pass_attachment.rstrip()}
     id<MTLRenderCommandEncoder> encoder = [commandBuffer renderCommandEncoderWithDescriptor:pass];
     [encoder setDepthStencilState:depthState];
     [encoder setCullMode:cullMode({cull})];
@@ -702,6 +744,9 @@ def prepare(args: argparse.Namespace) -> dict[str, Any]:
     draws = manifest["draws"]
     validate_payloads(draws)
     args.output_dir.mkdir(parents=True, exist_ok=True)
+    depth_input = resolve_path(str(args.depth_input)) if args.depth_input else None
+    if depth_input and not depth_input.exists():
+        raise FileNotFoundError(depth_input)
     replay_draws = materialize_replay_draws(
         draws,
         args.output_dir,
@@ -770,6 +815,7 @@ def prepare(args: argparse.Namespace) -> dict[str, Any]:
             args.width,
             args.height,
             args.depth_clear,
+            depth_input,
         ),
         encoding="utf-8",
     )
@@ -785,6 +831,7 @@ def prepare(args: argparse.Namespace) -> dict[str, Any]:
         "draw_order": args.draw_order,
         "primitive_order": args.primitive_order,
         "depth_clear": args.depth_clear,
+        "depth_input": str(depth_input) if depth_input else None,
         "index_bytes": sum(int(draw["geometry"]["index_bytes"]) for draw in replay_draws),
         "stream0_bytes": sum(int(draw["geometry"]["stream0_bytes"]) for draw in replay_draws),
         "uniform_draw_count": sum(
@@ -899,6 +946,14 @@ def main() -> int:
             "clear value for the standalone depth attachment; use this for "
             "depth-content sensitivity probes before a real depth attachment "
             "dump/load path exists"
+        ),
+    )
+    parser.add_argument(
+        "--depth-input",
+        type=Path,
+        help=(
+            "raw depth attachment sidecar to upload before the replay render "
+            "pass; pairs with DXMT9_DUMP_DEPTH_ATTACHMENT_PATH output"
         ),
     )
     parser.add_argument("--capture-path", type=Path)

@@ -11810,7 +11810,7 @@ flowchart TD
   ShaderGeo --> Replay0["mini-replay-r1\n3 draws, dummy cbufs"]
   RenderState --> Replay1["mini-replay-state-r1\nsame 3 draws + hot state"]
   Cbuf --> Replay2["mini-replay-real-cbuf-r1\nsame shader/state class\nreal per-draw cbufs"]
-  PassShape --> Replay3["mini-replay-passshape-r1\nreal cbufs + BGRA8/D24S8-sized pass"]
+  PassShape --> Replay3["mini-replay-passshape-r1\nreal cbufs + BGRA8/D24X8-sized pass"]
   Replay0 --> Xcode0["Xcode counters\nVS buffer writes = 0B"]
   Replay1 --> Xcode1["Xcode counters\nVS buffer writes = 0B"]
   Replay2 --> Xcode2["Xcode counters\nVS buffer writes = 0B\nGPU time = 1.154ms"]
@@ -11925,7 +11925,7 @@ across all three draws:
 | Kind | Format | Size | Bpp | Samples | Usage | Alias texture |
 |---|---:|---:|---:|---:|---:|---|
 | `color0` | `2` (`X8R8G8B8`) | `1024x768` | `4` | `1` | `0x2` | `0x20000010000008c` |
-| `depth` | `41` (`D24S8`) | `1024x768` | `4` | `1` | `0x4` | `0x0` |
+| `depth` | `41` (`D24X8`) | `1024x768` | `4` | `1` | `0x4` | `0x0` |
 
 `run_3dmark05_mini_replay.py` now consumes manifest `attachments` when present.
 For this manifest it generates a standalone replay with `MTLPixelFormatBGRA8Unorm`
@@ -12337,6 +12337,122 @@ but not the depth attachment contents. Loading or reconstructing the
 pre-existing `0x300000100000001` depth texture is the next high-signal
 fidelity probe.
 
+A first depth-content sensitivity probe was run before implementing real
+depth attachment dump/load support. The mini replay runner now accepts
+`--depth-clear`, and the same scissor-aware 16-draw replay was captured with a
+fresh depth texture cleared to `0.0` instead of `1.0`:
+
+```bash
+python3 scripts/tools/run_3dmark05_mini_replay.py \
+  traces/app-d3d9-3dmark05-screen-blend-run-71-188-payload16-streams-r1/analysis/frame60-mini-replay-manifest.json \
+  --output-dir traces/app-d3d9-3dmark05-screen-blend-run-71-188-payload16-streams-r1/analysis/mini-replay-full16-scissor-depth0-smoke \
+  --primitive-order original \
+  --draw-order original \
+  --depth-clear 0.0 \
+  --run --repeat 1 \
+  --capture-path traces/app-d3d9-3dmark05-screen-blend-run-71-188-payload16-streams-r1/analysis/mini-replay-full16-scissor-depth0.gputrace
+```
+
+The depth0 capture/profiling artifacts are:
+
+- Raw capture:
+  `traces/app-d3d9-3dmark05-screen-blend-run-71-188-payload16-streams-r1/analysis/mini-replay-full16-scissor-depth0.gputrace`
+- Performance-embedded export:
+  `traces/app-d3d9-3dmark05-screen-blend-run-71-188-payload16-streams-r1/analysis/mini-replay-full16-scissor-depth0-performance.gputrace`
+- Xcode encoder counter CSV:
+  `traces/app-d3d9-3dmark05-screen-blend-run-71-188-payload16-streams-r1/analysis/mini-replay-full16-scissor-depth0-counters-xcode.csv`
+- Reduced summary:
+  `traces/app-d3d9-3dmark05-screen-blend-run-71-188-payload16-streams-r1/analysis/mini-replay-full16-scissor-depth0-counters-summary.csv`
+- Bottleneck report:
+  `traces/app-d3d9-3dmark05-screen-blend-run-71-188-payload16-streams-r1/analysis/mini-replay-full16-scissor-depth0-xcode-bottleneck-report.md`
+
+Depth-clear comparison:
+
+| Metric | Original `60/2` | Mini scissor depth=1 | Mini scissor depth=0 | depth0 / depth1 | depth0 / original |
+|---|---:|---:|---:|---:|---:|
+| GPU time | `20.327ms` | `1.498ms` | `0.989ms` | `0.660x` | `0.049x` |
+| VS buffer write | `981.171MiB` | `31.978MiB` | `31.975MiB` | `1.000x` | `0.033x` |
+| VS invocations | `642,001` | `54,104` | `54,104` | `1.000x` | `0.084x` |
+| VS buffer / VS invocation | `1602.5B` | `619.8B` | `619.7B` | `1.000x` | `0.387x` |
+| Primitives | `389,376` | `28,822` | `28,822` | `1.000x` | `0.074x` |
+| Tiled vertex buffer | `12.563MiB` | `0.906MiB` | `0.906MiB` | `1.000x` | `0.072x` |
+| Tiled primitive-block buffer | `11.813MiB` | `0.781MiB` | `0.781MiB` | `1.000x` | `0.066x` |
+| FS invocations | `3,296,064` | `2,963,392` | `786,432` | `0.265x` | `0.239x` |
+| Pixels rasterized | `14,020,864` | `2,176,960` | `2,176,960` | `1.000x` | `0.155x` |
+| Vertex stage time | `96.06%` | `64.37%` | `94.80%` | `1.473x` | `0.987x` |
+| VS buffer-write limiter | `21.41%` | `11.35%` | `11.93%` | `1.051x` | `0.557x` |
+| Cull unit limiter | `5.98%` | `34.55%` | `33.11%` | `0.958x` | `5.537x` |
+| Clip unit limiter | `2.98%` | `20.94%` | `23.85%` | `1.139x` | `8.003x` |
+| MMU limiter | `34.32%` | `17.54%` | `27.92%` | `1.592x` | `0.814x` |
+| LLC limiter | `36.39%` | `21.14%` | `21.91%` | `1.036x` | `0.602x` |
+
+Interpretation: changing the standalone depth clear value is a useful shader
+and fragment-work sensitivity check, but it does not reproduce the original
+vertex/tiler backend amplification. Depth=0 lowers GPU time (`1.498ms` to
+`0.989ms`) and FS invocations (`2.96M` to `0.79M`), while keeping
+`VS Buffer Device Memory Bytes Written`, `VS invocations`, tiled vertex buffer,
+and tiled primitive-block buffer effectively unchanged. So the missing owner
+is not merely "fresh depth is cleared to the wrong scalar value". The next
+depth experiment must preserve the original depth attachment contents or replay
+the wider pass prefix that produced them.
+
+The old dump hook also explains why this had not been done yet.
+`DXMT_DUMP_GPU_TEXTURE_HANDLE/PATH` only writes BMP snapshots for 32-bit color
+formats and skips format `41`/`D24X8` with `unsupported-format`. It is also an
+upload-path hook: `dumpTextureSnapshotUnlocked()` is only called from
+`Initializer::uploadTextureLevel()`. That is not enough for the original
+`60/2` depth attachment, because `0x300000100000001` is a GPU-side
+depth-stencil target whose relevant contents were produced by earlier render
+passes.
+
+The current raw-depth diagnostic path is now:
+
+- `src/dxmt9/dxmt9_draw_encoder.mm::beginRenderPass()` resolves the active
+  depth/stencil surface, format, size, Metal pixel format, and render
+  encoder index.
+- The local `flushRender()` lambda ends the active render encoder and then,
+  when the diagnostic selector matches, appends a blit from the selected
+  depth attachment to a shared readback buffer on the same command buffer.
+- `QueueSubmissionRecord::completionCallbacks` runs after the completion
+  watcher has waited for GPU completion, so the callback can write the raw
+  sidecar without racing the blit.
+- The output is `DXMT9_DUMP_DEPTH_ATTACHMENT_PATH` plus
+  `.json` metadata (`handle`, `format`, `formatName`, `metalPixelFormat`,
+  `width`, `height`, `rowBytes`, `byteCount`, `seq`, `enc`, depth/stencil
+  aspects).
+- `scripts/tools/run_3dmark05_mini_replay.py --depth-input <raw.bin>` uploads
+  that sidecar into the standalone depth texture before the replay render
+  pass and switches the depth load action from `Clear` to `Load`.
+
+Depth attachment dump command shape:
+
+```bash
+DXMT9_DUMP_DEPTH_ATTACHMENT_HANDLE=0x300000100000001 \
+DXMT9_DUMP_DEPTH_ATTACHMENT_SEQ=60 \
+DXMT9_DUMP_DEPTH_ATTACHMENT_ENC=2 \
+DXMT9_DUMP_DEPTH_ATTACHMENT_PATH=traces/app-d3d9-3dmark05-.../analysis/frame60-2-depth.bin \
+  experiments/launchers/...  # run 3DMark05 GT1 perf profile / capture setup
+```
+
+Depth-fed mini replay command shape:
+
+```bash
+python3 scripts/tools/run_3dmark05_mini_replay.py \
+  traces/app-d3d9-3dmark05-screen-blend-run-71-188-payload16-streams-r1/analysis/frame60-mini-replay-manifest.json \
+  --output-dir traces/app-d3d9-3dmark05-screen-blend-run-71-188-payload16-streams-r1/analysis/mini-replay-full16-scissor-depthinput-smoke \
+  --primitive-order original \
+  --draw-order original \
+  --depth-input traces/app-d3d9-3dmark05-.../analysis/frame60-2-depth.bin \
+  --run --repeat 1
+```
+
+Gate: if the depth-fed mini replay still reports `~31.98MiB` VS buffer write
+and `~620B/VS invocation`, the missing original amplification is not explained
+by depth contents alone and the next replay must preserve a wider pass prefix
+or another encoder-level backend state. If VS buffer write moves toward the
+original `981.171MiB` / `1602.5B/VS invocation`, depth contents are part of
+the reproduction path and can become the next optimization/fidelity target.
+
 ```mermaid
 flowchart TD
   Scout["payload16 no-gputrace scout\n60/2 draw 71..86\n16 payload triplets"] --> Full["16-draw manifest\n6 VS/PS pairs"]
@@ -12352,14 +12468,15 @@ flowchart TD
   XcodeMini --> ScissorBug["fidelity bug\n10 original draws had scissor\nmini used first draw scissor=0"]
   ScissorBug --> ScissorFix["per-draw setScissorRect\nscissor_draw_count=10"]
   ScissorFix --> XcodeScissor["scissor-aware Xcode capture\nGPU 1.50ms\nFS inv 2.96M\nVS buffer still 31.98MiB"]
-  XcodeScissor --> Compare["compare with original 60/2\n981.17MiB VS buffer\n1602B/VS inv"]
+  XcodeScissor --> Depth0["depth-clear=0 probe\nGPU 0.99ms\nFS inv 0.79M\nVS buffer still 31.98MiB"]
+  Depth0 --> Compare["compare with original 60/2\n981.17MiB VS buffer\n1602B/VS inv"]
   Compare --> Gap["remaining fidelity gap\nmissing pass/depth/tiler context\nnot fragment overdraw"]
-  Gap --> Next["next experiment\nload representative depth\nor replay wider 60/2 pass prefix"]
+  Gap --> Next["next experiment\nraw D24X8 depth dump/load\nor replay wider 60/2 pass prefix"]
 
   classDef hot fill:#ffe8e8,stroke:#b64242,color:#2b0d0d
   classDef known fill:#e8f0ff,stroke:#476cb6,color:#0d1833
   class Compile0,ScissorBug,Gap,Next hot
-  class Scout,Full,SinglePSO,Slice,SlotFix,StreamDump,Smoke,MultiPSO,FullSmoke,XcodeMini,ScissorFix,XcodeScissor,Compare known
+  class Scout,Full,SinglePSO,Slice,SlotFix,StreamDump,Smoke,MultiPSO,FullSmoke,XcodeMini,ScissorFix,XcodeScissor,Depth0,Compare known
 ```
 
 Smoke validation for the current pass-shape manifest:

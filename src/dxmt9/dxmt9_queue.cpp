@@ -1164,6 +1164,7 @@ void QueueLifecycleController::submit(QueueSubmissionRecord& record) {
         std::move(record.renderEncoderGpuSampleBuffer);
     pending.renderEncoderGpuSamples =
         std::move(record.renderEncoderGpuSamples);
+    pending.completionCallbacks = std::move(record.completionCallbacks);
     pendingCompletion_.push_back(std::move(pending));
 #ifndef NDEBUG
     assertPendingCompletionInvariantsLocked();
@@ -1237,6 +1238,11 @@ bool QueueLifecycleController::processOnePendingCompletion(bool& stop) {
             sample.depthHandle,
             sample.psoHandle);
       }
+    }
+  }
+  for (auto& callback : pending.completionCallbacks) {
+    if (callback) {
+      callback();
     }
   }
   if (binding.mutex && binding.completedSeqQueue) {

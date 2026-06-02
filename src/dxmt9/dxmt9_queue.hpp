@@ -206,6 +206,7 @@ struct QueueSubmissionRecord {
   WMT::Reference<WMT::CounterSampleBuffer> renderEncoderGpuSampleBuffer{};
   std::vector<RenderEncoderGpuSample> renderEncoderGpuSamples{};
   std::vector<std::function<void()>> postCommitCallbacks;
+  std::vector<std::function<void()>> completionCallbacks;
 };
 
 CommandBufferDiagnostics summarizeChunk(u64 seqId,
@@ -575,6 +576,7 @@ class QueueLifecycleController {
     u64 commandBufferChainLength = 1;
     WMT::Reference<WMT::CounterSampleBuffer> renderEncoderGpuSampleBuffer{};
     std::vector<QueueSubmissionRecord::RenderEncoderGpuSample> renderEncoderGpuSamples{};
+    std::vector<std::function<void()>> completionCallbacks;
   };
 
   // Drain one pending completion — blocks on waitUntilCompleted() and then
