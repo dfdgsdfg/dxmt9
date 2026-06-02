@@ -109,6 +109,7 @@ require_argbuf_cbuf_decrease=0
 require_transient_decrease=0
 require_top_gpu_share_increase=0
 require_top_row_key_match=0
+require_stable_frame_proof=0
 require_top_pso_attribution=0
 require_xcode_counter_coverage=0
 require_dxmt_join_coverage=0
@@ -420,6 +421,10 @@ Options:
                       Finalizer Xcode gate: top-N GPU share must increase
   --require-top-row-key-match
                       Finalizer Xcode gate: top-N seq/enc row key sets must match
+  --require-stable-frame-proof
+                      Finalizer proof preset: require result.json, counter/join
+                      coverage, PSO attribution, top row-key match, top GPU/VS/
+                      unexplained write decrease, and <=5% top geometry drift
   --require-top-pso-attribution
                       Finalizer gate: top Xcode encoder rows must have PSO/VSOut
                       attribution near draw frequency
@@ -888,6 +893,10 @@ while (($#)); do
       require_top_row_key_match=1
       shift
       ;;
+    --require-stable-frame-proof)
+      require_stable_frame_proof=1
+      shift
+      ;;
     --require-top-pso-attribution)
       require_top_pso_attribution=1
       shift
@@ -1038,6 +1047,26 @@ if [[ -n "$probe_force_cull_mode" &&
       "$probe_force_cull_mode" != back ]]; then
   echo "--probe-force-cull-mode must be one of: none, front, back" >&2
   exit 2
+fi
+
+if (( require_stable_frame_proof )); then
+  require_result_json=1
+  require_top_gpu_decrease=1
+  require_top_vs_buffer_write_decrease=1
+  require_top_unexplained_buffer_write_decrease=1
+  require_top_row_key_match=1
+  require_top_pso_attribution=1
+  require_xcode_counter_coverage=1
+  require_dxmt_join_coverage=1
+  if [[ -z "$max_top_draw_call_delta_ratio" ]]; then
+    max_top_draw_call_delta_ratio=0.05
+  fi
+  if [[ -z "$max_top_vertex_count_delta_ratio" ]]; then
+    max_top_vertex_count_delta_ratio=0.05
+  fi
+  if [[ -z "$max_top_triangle_delta_ratio" ]]; then
+    max_top_triangle_delta_ratio=0.05
+  fi
 fi
 
 if [[ -n "$max_top_gpu_regression_ms" &&
@@ -1620,6 +1649,9 @@ if (( capture_gputrace )); then
   fi
   if (( require_top_row_key_match )); then
     finalize_cmd+=(--require-top-row-key-match)
+  fi
+  if (( require_stable_frame_proof )); then
+    finalize_cmd+=(--require-stable-frame-proof)
   fi
   if (( require_color_dontcare_increase )); then
     finalize_cmd+=(--require-color-dontcare-increase)

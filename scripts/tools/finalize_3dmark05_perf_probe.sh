@@ -39,6 +39,7 @@ require_argbuf_cbuf_decrease=0
 require_transient_decrease=0
 require_top_gpu_share_increase=0
 require_top_row_key_match=0
+require_stable_frame_proof=0
 require_top_pso_attribution=0
 require_xcode_counter_coverage=0
 require_dxmt_join_coverage=0
@@ -100,6 +101,10 @@ Options:
   --require-transient-decrease
   --require-top-gpu-share-increase
   --require-top-row-key-match
+  --require-stable-frame-proof
+                      Gate preset: require result.json, counter/join coverage,
+                      PSO attribution, top row-key match, top GPU/VS/
+                      unexplained write decrease, and <=5% top geometry drift
   --require-top-pso-attribution
   --require-xcode-counter-coverage
   --require-dxmt-join-coverage
@@ -257,6 +262,10 @@ while (($#)); do
       require_top_row_key_match=1
       shift
       ;;
+    --require-stable-frame-proof)
+      require_stable_frame_proof=1
+      shift
+      ;;
     --require-top-pso-attribution)
       require_top_pso_attribution=1
       shift
@@ -369,6 +378,26 @@ if [[ ! "$top_n" =~ ^[0-9]+$ ]] || (( top_n == 0 )); then
   exit 2
 fi
 validate_optional_number "--hot-gpu-share" "$hot_gpu_share"
+
+if (( require_stable_frame_proof )); then
+  require_result_json=1
+  require_top_gpu_decrease=1
+  require_top_vs_buffer_write_decrease=1
+  require_top_unexplained_buffer_write_decrease=1
+  require_top_row_key_match=1
+  require_top_pso_attribution=1
+  require_xcode_counter_coverage=1
+  require_dxmt_join_coverage=1
+  if [[ -z "$max_top_draw_call_delta_ratio" ]]; then
+    max_top_draw_call_delta_ratio=0.05
+  fi
+  if [[ -z "$max_top_vertex_count_delta_ratio" ]]; then
+    max_top_vertex_count_delta_ratio=0.05
+  fi
+  if [[ -z "$max_top_triangle_delta_ratio" ]]; then
+    max_top_triangle_delta_ratio=0.05
+  fi
+fi
 
 run_level_compare_requested=0
 if (( require_color_dontcare_increase ||
@@ -615,6 +644,9 @@ if [[ -n "$baseline_joined" ]]; then
   fi
   if (( require_top_row_key_match )); then
     xcode_compare_cmd+=(--require-top-row-key-match)
+  fi
+  if (( require_stable_frame_proof )); then
+    xcode_compare_cmd+=(--require-stable-frame-proof)
   fi
   if [[ -n "$max_top_gpu_regression_ms" ]]; then
     xcode_compare_cmd+=(--max-top-gpu-regression-ms "$max_top_gpu_regression_ms")

@@ -312,6 +312,173 @@ class CompareXcodeDxmtBottlenecksTests(unittest.TestCase):
             self.assertIn("top_draw_calls drift exceeds limit", result.stderr)
             self.assertIn("top_dxmt_vertex_count drift exceeds limit", result.stderr)
             self.assertIn("top_dxmt_triangle_estimate drift exceeds limit", result.stderr)
+            report = (root / "comparison.md").read_text(encoding="utf-8")
+            self.assertIn("## Requirement Failures", report)
+            self.assertIn("top row key set changed", report)
+            self.assertIn("top_draw_calls drift exceeds limit", report)
+
+    def test_stable_frame_proof_preset_rejects_drift_and_missing_win(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            before = root / "before.csv"
+            after = root / "after.csv"
+            write_joined_rows(before, [
+                {
+                    "seq": 60,
+                    "enc": 1,
+                    "gpu_ms": 10.0,
+                    "buffer_write_mib": 100.0,
+                    "vs_buffer_write_mib": 99.0,
+                    "dxmt_unexplained_buffer_write_mib": 98.0,
+                    "dxmt_draw_calls": 100,
+                    "dxmt_vertex_count": 1000,
+                    "dxmt_triangle_estimate": 333,
+                },
+                {
+                    "seq": 60,
+                    "enc": 2,
+                    "gpu_ms": 8.0,
+                    "buffer_write_mib": 80.0,
+                    "vs_buffer_write_mib": 79.0,
+                    "dxmt_unexplained_buffer_write_mib": 78.0,
+                    "dxmt_draw_calls": 100,
+                    "dxmt_vertex_count": 1000,
+                    "dxmt_triangle_estimate": 333,
+                },
+            ])
+            write_joined_rows(after, [
+                {
+                    "seq": 60,
+                    "enc": 1,
+                    "gpu_ms": 11.0,
+                    "buffer_write_mib": 110.0,
+                    "vs_buffer_write_mib": 109.0,
+                    "dxmt_unexplained_buffer_write_mib": 108.0,
+                    "dxmt_draw_calls": 120,
+                    "dxmt_vertex_count": 1200,
+                    "dxmt_triangle_estimate": 400,
+                },
+                {
+                    "seq": 60,
+                    "enc": 3,
+                    "gpu_ms": 9.0,
+                    "buffer_write_mib": 90.0,
+                    "vs_buffer_write_mib": 89.0,
+                    "dxmt_unexplained_buffer_write_mib": 88.0,
+                    "dxmt_draw_calls": 120,
+                    "dxmt_vertex_count": 1200,
+                    "dxmt_triangle_estimate": 400,
+                },
+            ])
+
+            result = subprocess.run(
+                [
+                    sys.executable,
+                    str(SCRIPT),
+                    str(before),
+                    str(after),
+                    "--output",
+                    str(root / "comparison.md"),
+                    "--top",
+                    "2",
+                    "--require-stable-frame-proof",
+                ],
+                text=True,
+                capture_output=True,
+                check=False,
+            )
+
+            self.assertNotEqual(result.returncode, 0)
+            self.assertIn("top_gpu_ms did not decrease", result.stderr)
+            self.assertIn("top_vs_buffer_write_mib did not decrease", result.stderr)
+            self.assertIn("top_unexplained_buffer_write_mib did not decrease", result.stderr)
+            self.assertIn("top row key set changed", result.stderr)
+            self.assertIn("top_draw_calls drift exceeds limit", result.stderr)
+            self.assertIn("top_dxmt_vertex_count drift exceeds limit", result.stderr)
+            self.assertIn("top_dxmt_triangle_estimate drift exceeds limit", result.stderr)
+            report = (root / "comparison.md").read_text(encoding="utf-8")
+            self.assertIn("## Requirement Failures", report)
+            self.assertIn("top_gpu_ms did not decrease", report)
+            self.assertIn("top_vs_buffer_write_mib did not decrease", report)
+            self.assertIn("top row key set changed", report)
+
+    def test_stable_frame_proof_preset_records_success_in_report(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            before = root / "before.csv"
+            after = root / "after.csv"
+            output = root / "comparison.md"
+            write_joined_rows(before, [
+                {
+                    "seq": 60,
+                    "enc": 1,
+                    "gpu_ms": 10.0,
+                    "buffer_write_mib": 100.0,
+                    "vs_buffer_write_mib": 99.0,
+                    "dxmt_unexplained_buffer_write_mib": 98.0,
+                    "dxmt_draw_calls": 100,
+                    "dxmt_vertex_count": 1000,
+                    "dxmt_triangle_estimate": 333,
+                },
+                {
+                    "seq": 60,
+                    "enc": 2,
+                    "gpu_ms": 8.0,
+                    "buffer_write_mib": 80.0,
+                    "vs_buffer_write_mib": 79.0,
+                    "dxmt_unexplained_buffer_write_mib": 78.0,
+                    "dxmt_draw_calls": 100,
+                    "dxmt_vertex_count": 1000,
+                    "dxmt_triangle_estimate": 333,
+                },
+            ])
+            write_joined_rows(after, [
+                {
+                    "seq": 60,
+                    "enc": 1,
+                    "gpu_ms": 7.0,
+                    "buffer_write_mib": 70.0,
+                    "vs_buffer_write_mib": 69.0,
+                    "dxmt_unexplained_buffer_write_mib": 68.0,
+                    "dxmt_draw_calls": 102,
+                    "dxmt_vertex_count": 1020,
+                    "dxmt_triangle_estimate": 340,
+                },
+                {
+                    "seq": 60,
+                    "enc": 2,
+                    "gpu_ms": 6.0,
+                    "buffer_write_mib": 60.0,
+                    "vs_buffer_write_mib": 59.0,
+                    "dxmt_unexplained_buffer_write_mib": 58.0,
+                    "dxmt_draw_calls": 102,
+                    "dxmt_vertex_count": 1020,
+                    "dxmt_triangle_estimate": 340,
+                },
+            ])
+
+            result = subprocess.run(
+                [
+                    sys.executable,
+                    str(SCRIPT),
+                    str(before),
+                    str(after),
+                    "--output",
+                    str(output),
+                    "--top",
+                    "2",
+                    "--require-stable-frame-proof",
+                ],
+                text=True,
+                capture_output=True,
+                check=False,
+            )
+
+            self.assertEqual(result.returncode, 0, result.stderr)
+            report = output.read_text(encoding="utf-8")
+            self.assertIn("## Requirement Status", report)
+            self.assertIn("Passed: all requested requirement gates were satisfied", report)
+            self.assertNotIn("## Requirement Failures", report)
 
     def test_report_warns_when_unexplained_writes_lack_pso_attribution(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

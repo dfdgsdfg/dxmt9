@@ -564,7 +564,9 @@ def write_report(path: Path, before: dict[str, float], after: dict[str, float],
                  before_rows: list[dict[str, str]],
                  after_rows: list[dict[str, str]],
                  before_label: str, after_label: str,
-                 top_n: int) -> None:
+                 top_n: int,
+                 failures: list[str],
+                 requirement_gates_requested: bool) -> None:
     keys = (
         "encoders",
         "total_gpu_ms",
@@ -643,6 +645,20 @@ def write_report(path: Path, before: dict[str, float], after: dict[str, float],
     for note in verdict(before, after):
         lines.append(f"- {note}")
     lines.append("")
+    if requirement_gates_requested:
+        lines.append("## Requirement Status")
+        lines.append("")
+        if failures:
+            lines.append(f"- Failed: `{len(failures)}` requirement gate(s) did not pass.")
+        else:
+            lines.append("- Passed: all requested requirement gates were satisfied.")
+        lines.append("")
+    if failures:
+        lines.append("## Requirement Failures")
+        lines.append("")
+        for failure in failures:
+            lines.append(f"- {failure}")
+        lines.append("")
     lines.append("## Metrics")
     lines.append("")
     lines.append("| Metric | Before | After | Delta | Delta % |")
@@ -879,6 +895,28 @@ def failed_requirements(args: argparse.Namespace,
     return failures
 
 
+def has_requirement_gates(args: argparse.Namespace) -> bool:
+    return (
+        args.require_top_gpu_decrease or
+        args.require_top_buffer_write_decrease or
+        args.require_top_vs_buffer_write_decrease or
+        args.require_top_unexplained_buffer_write_decrease or
+        args.require_stream_handle_churn_decrease or
+        args.require_ib_handle_churn_decrease or
+        args.require_argbuf_cbuf_decrease or
+        args.require_transient_decrease or
+        args.require_top_gpu_share_increase or
+        args.require_top_row_key_match or
+        args.require_stable_frame_proof or
+        args.max_top_unexplained_buffer_write_ratio is not None or
+        args.max_top_draw_call_delta_ratio is not None or
+        args.max_top_vertex_count_delta_ratio is not None or
+        args.max_top_triangle_delta_ratio is not None or
+        args.max_top_gpu_regression_ms is not None or
+        args.max_top_buffer_write_regression_mib is not None
+    )
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("before", type=Path)
@@ -938,6 +976,15 @@ def main() -> int:
         help="exit nonzero unless top-N seq/enc row key sets are identical",
     )
     parser.add_argument(
+        "--require-stable-frame-proof",
+        action="store_true",
+        help=(
+            "enable the standard GT1 proof gate: top row keys must match, "
+            "top GPU/VS/unexplained writes must decrease, and top draw/vertex/"
+            "triangle drift defaults to <= 5%% unless overridden"
+        ),
+    )
+    parser.add_argument(
         "--max-top-gpu-regression-ms",
         type=float,
         help="exit nonzero if top-N GPU time regresses beyond this tolerance",
@@ -969,10 +1016,23 @@ def main() -> int:
     )
     args = parser.parse_args()
 
+    if args.require_stable_frame_proof:
+        args.require_top_gpu_decrease = True
+        args.require_top_vs_buffer_write_decrease = True
+        args.require_top_unexplained_buffer_write_decrease = True
+        args.require_top_row_key_match = True
+        if args.max_top_draw_call_delta_ratio is None:
+            args.max_top_draw_call_delta_ratio = 0.05
+        if args.max_top_vertex_count_delta_ratio is None:
+            args.max_top_vertex_count_delta_ratio = 0.05
+        if args.max_top_triangle_delta_ratio is None:
+            args.max_top_triangle_delta_ratio = 0.05
+
     before_rows = load_rows(args.before)
     after_rows = load_rows(args.after)
     before = summarize(before_rows, args.top)
     after = summarize(after_rows, args.top)
+    failures = failed_requirements(args, before, after, before_rows, after_rows)
     write_report(
         args.output,
         before,
@@ -982,9 +1042,10 @@ def main() -> int:
         args.before_label,
         args.after_label,
         args.top,
+        failures,
+        has_requirement_gates(args),
     )
     print(args.output)
-    failures = failed_requirements(args, before, after, before_rows, after_rows)
     if failures:
         for failure in failures:
             print(f"requirement failed: {failure}", file=sys.stderr)

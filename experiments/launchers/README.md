@@ -117,8 +117,13 @@ Commercial / 3rd-party titles (require external prefix):
     `DXMT_3DMARK05_ALLOW_LOW_TRACE_FREE_MB=1` is set deliberately; low-space
     captures can still export Xcode counters, but they risk Wine state-save
     failures and missing `result.json`, so they should not be used as strict
-    proof runs. Add `--require-result-json` to proof captures so the printed
-    finalizer command rejects partial logs instead of summarizing them.
+    proof runs. Add `--require-stable-frame-proof` to proof captures so the
+    printed finalizer command rejects partial logs, requires Xcode/dxmt counter
+    coverage and PSO attribution, requires top row-key match, requires top
+    GPU/VS/unexplained write decreases, and applies default `0.05` top
+    draw/vertex/triangle drift gates. Use the lower-level
+    `--require-result-json`, `--require-top-row-key-match`, and
+    `--max-top-*-delta-ratio` flags only when a probe needs a custom gate.
     Use `--measure-index-reuse` for the optional unique-index diagnostic; the
     final joined report will include `dxmt indexed references / unique
     estimate`, `VS invocations / dxmt indexed unique estimate`, and 16/32/64
@@ -128,10 +133,11 @@ Commercial / 3rd-party titles (require external prefix):
     cleanup can happen before launching Wine. They also print large ignored
     prefix/app/vendor payloads as manual-review candidates; do not delete
     those blindly because they may be the active Wine prefix or installed
-    benchmark payload. If `--baseline-joined` or
-    `--require-top-pso-attribution` is passed to the wrapper, dry-run also
-    prints the exact `finalize_cmd_after_xcode_export` command to run after
-    Xcode exports `frame<N>-counters-xcode.csv`.
+    benchmark payload. If `--baseline-joined`,
+    `--require-stable-frame-proof`, or `--require-top-pso-attribution` is
+    passed to the wrapper, dry-run also prints the exact
+    `finalize_cmd_after_xcode_export` command to run after Xcode exports
+    `frame<N>-counters-xcode.csv`.
     Add `--dump-shaders` only for root-cause captures that need shader source
     inspection; it writes translated MSL under
     `traces/<run-id>/analysis/shaders/msl` and D3D shader bytecode under
@@ -274,7 +280,11 @@ Commercial / 3rd-party titles (require external prefix):
     `--require-ib-handle-churn-decrease` so Xcode counter regressions fail the
     comparison automatically. The wrapper rejects these Xcode comparison gates
     unless `--baseline-joined` is present, and the finalizer does the same,
-    because otherwise there is no before/after CSV to compare.
+    because otherwise there is no before/after CSV to compare. When comparison
+    gates are requested, the Markdown comparison report includes a
+    `Requirement Status` section, plus `Requirement Failures` when a gate
+    fails, so the reduced `traces/.../analysis` artifact remains
+    self-contained even if stderr is no longer available.
     Use `--max-top-unexplained-buffer-write-ratio N` when a candidate is
     expected to make Xcode buffer writes explainable by dxmt writers; it fails
     if the residual top-encoder write ratio remains above `N`.
@@ -445,6 +455,15 @@ Commercial / 3rd-party titles (require external prefix):
     CSV is also emitted without a mutating reverse/split/scissor probe, so a
     no-mutate scout can capture draw identity, state, stream/IB handles, PSO,
     shader variant, VS/PS hashes, and VSOut key for row-local replay planning.
+    Combine that CSV with a joined Xcode/dxmt summary and shader-dump summary
+    using `python3 scripts/tools/plan_3dmark05_mini_replay.py --joined
+    <frameN-xcode-dxmt-joined-summary.csv> --shader-summary
+    <frameN-shader-dump-summary.csv> --probe-draws
+    <3dmark05-perf-indexed-probe-draws.csv> --output
+    <frameN-mini-replay-readiness.md>`. The report lists hot rows, top replay
+    target groups, shader-source availability, index-locality availability,
+    and the current blocking gap: no reduced artifact contains raw replayable
+    vertex/index payload bytes yet.
     `--probe-reverse-indexed-triangles-stream0-span-min BYTES` and
     `--optimize-screen-blend-index-order-stream0-span-min BYTES` add a direct
     minimum original stream0 byte-span gate after the row/class filters. Use

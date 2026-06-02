@@ -11506,6 +11506,43 @@ Per-draw identity narrows the next mini-replay targets:
 | `60/1` | opaque repeated geometry pair `vs=0xcf219872fdbbb398 ps=0x6f39a816200d9efe` | `187` | `236,870` | `413,714` | shared top row with baseline |
 | `60/0` | opaque textured large draws | `5` | `67,554` | `113,714` | high B/inv despite smaller row |
 
+The reduced artifacts can now be summarized with the mini-replay readiness
+tool:
+
+```bash
+python3 scripts/tools/plan_3dmark05_mini_replay.py \
+  --joined traces/app-d3d9-3dmark05-current-head-gputrace-r1/analysis/frame60-xcode-dxmt-joined-summary.csv \
+  --shader-summary traces/app-d3d9-3dmark05-current-head-gputrace-r1/analysis/frame60-shader-dump-summary.csv \
+  --probe-draws experiments/output/app-d3d9-3dmark05-current-normal-nogputrace-r2/3dmark05-perf-indexed-probe-draws.csv \
+  --output traces/app-d3d9-3dmark05-current-head-gputrace-r1/analysis/frame60-mini-replay-readiness.md \
+  --top 5 \
+  --top-groups 3
+```
+
+Result:
+
+| Item | Status | Evidence |
+|---|---|---|
+| Hot row attribution | ready | `5` Xcode/dxmt rows selected |
+| Shader sources | partial | `5/5` hot rows have shader dump rows |
+| Draw identity/index locality | partial | `5/5` hot rows have indexed probe rows |
+| Raw vertex/index payload | missing | no reduced artifact currently contains replayable geometry bytes |
+
+Top replay target groups from the readiness report:
+
+| Row | Draws | Tris | Cache64 | Shape |
+|---|---:|---:|---:|---|
+| `60/2` | `71` | `87,499` | `158,593` | alpha, depth-read, textured |
+| `60/1` | `189` | `241,773` | `421,953` | opaque depth-write |
+| `60/0` | `71` | `87,499` | `158,593` | opaque depth-write textured |
+
+Interpretation: mini replay planning no longer lacks row/state/shader/index
+identity. The remaining missing artifact is replayable geometry payload: raw
+index bytes plus referenced stream bytes for selected draws. The next
+instrumentation should reuse the existing row/class/draw-window selectors used
+by `DXMT9_MEASURE_INDEX_REUSE` and write payload files under
+`traces/<run-id>/analysis/geometry/` next to shader dumps.
+
 Shader dump inspection still supports liveness-based VSOut trimming as a
 separate experiment, not a global toggle. The hot row shader pairs read only a
 subset of the `184B` VSOut:
@@ -12063,6 +12100,33 @@ top_dxmt_vertex_count drift: 2,146,185 -> 2,644,755 (+23.23%)
 top_dxmt_triangle_estimate drift: 715,395 -> 881,585 (+23.23%)
 ```
 
+The new proof preset reaches the same conclusion automatically:
+
+```bash
+python3 scripts/tools/compare_xcode_dxmt_bottlenecks.py \
+  traces/app-d3d9-3dmark05-current-normal-gputrace-r1/analysis/frame60-xcode-dxmt-joined-summary.csv \
+  traces/app-d3d9-3dmark05-screen-blend-run-71-188-sort-gputrace-r1/analysis/frame60-xcode-dxmt-joined-summary.csv \
+  --before-label current-normal-gputrace-r1 \
+  --after-label screen-blend-run-71-188-sort-gputrace-r1 \
+  --top 3 \
+  --require-stable-frame-proof \
+  --output traces/app-d3d9-3dmark05-screen-blend-run-71-188-sort-gputrace-r1/analysis/frame60-xcode-dxmt-comparison-stable-proof.md
+```
+
+Expected result: exit code `1`, but only the shape gates fail:
+
+```text
+top_draw_calls drift +60.00%, allowed <= 5.00%
+top_dxmt_vertex_count drift +23.23%, allowed <= 5.00%
+top_dxmt_triangle_estimate drift +23.23%, allowed <= 5.00%
+```
+
+This is an important distinction from the identity-scout drift capture: the
+partial sort candidate still passes row-key and top GPU/VS/unexplained write
+decrease gates, so it remains a strong address/backend-locality classifier.
+It is rejected as a proof only because the top submitted geometry changed too
+much and the capture lacks normal `result.json` evidence.
+
 Interpretation: preserving the blend equation while sorting the dominant
 `60/2` screen-blend draw window by minimum index strongly changes Apple GPU
 hidden VS/backend write density. The apparent win is not explained by VSOut
@@ -12091,14 +12155,7 @@ scripts/tools/run_3dmark05_perf_probe.sh \
   --probe-indexed-triangle-encoder-draw-min 71 \
   --probe-indexed-triangle-encoder-draw-max 188 \
   --baseline-joined traces/app-d3d9-3dmark05-current-normal-gputrace-r1/analysis/frame60-xcode-dxmt-joined-summary.csv \
-  --require-result-json \
-  --require-top-row-key-match \
-  --require-top-gpu-decrease \
-  --require-top-vs-buffer-write-decrease \
-  --require-top-unexplained-buffer-write-decrease \
-  --max-top-draw-call-delta-ratio 0.05 \
-  --max-top-vertex-count-delta-ratio 0.05 \
-  --max-top-triangle-delta-ratio 0.05 \
+  --require-stable-frame-proof \
   --top 3 \
   --hot-gpu-share 95 \
   --min-free-mb 2048
@@ -12112,7 +12169,10 @@ Acceptance gates for that rerun:
    unexplained-write decrease gates.
 4. `frame60-xcode-dxmt-comparison-geometry-gated.md` passes draw-call,
    vertex-count, and triangle-count drift limits.
-5. The frame image remains visually valid GT1, not a diagnostic-corrupted
+5. `--require-stable-frame-proof` remains enabled; it expands to `result.json`,
+   Xcode/dxmt coverage, PSO attribution, top row-key, top GPU/VS/unexplained
+   write decrease, and default `<= 5%` draw/vertex/triangle drift gates.
+6. The frame image remains visually valid GT1, not a diagnostic-corrupted
    blend/depth output.
 
 Current disk state before the rerun:
@@ -12296,4 +12356,157 @@ flowchart TD
   class D,H,AC hot
   class I,J,K,L,N,AA good
   class A,B,C,E,F,G,M,O,P,S,T,U,V,W,X,Y,Z,AB,AD known
+```
+
+### Current-Head Xcode Recheck And Identity-Scout Drift
+
+The current HEAD was captured again with Xcode counters after the probe and
+analysis tooling changes. This is the clean current-baseline trace, not an
+optimization candidate:
+
+```text
+traces/app-d3d9-3dmark05-current-head-gputrace-r1/analysis/frame60-counters-xcode.csv
+traces/app-d3d9-3dmark05-current-head-gputrace-r1/analysis/frame60-xcode-dxmt-joined-summary.csv
+traces/app-d3d9-3dmark05-current-head-gputrace-r1/analysis/frame60-xcode-dxmt-bottleneck-report.md
+```
+
+The result repeats the previous bottleneck classification:
+
+| Metric | Current HEAD baseline |
+|---|---:|
+| Total GPU | `35.416ms` |
+| Top 3 GPU | `34.774ms` (`98.19%`) |
+| Total buffer write | `1628.046MiB` |
+| Top 3 VS buffer write | `1627.315MiB` |
+| Top 3 VS bytes / invocation | `1447.8B` |
+| Expected VSOut bytes / vertex | `184.0B` |
+| VS buffer / expected VSOut | `7.9x` |
+| Named tiled buffer total | `29.375MiB` |
+| Hidden backend write estimate | `1597.495MiB` |
+| Hidden backend / VS buffer write | `0.982x` |
+| dxmt CPU writer bytes | `0.444MiB` |
+| Top rows | `60/2, 60/1, 60/0` |
+
+This keeps the root bottleneck stable: GT1 frame 60 is dominated by
+Xcode-reported vertex-stage buffer/device write traffic. The traffic is not
+explained by dxmt CPU writers, transient vertex/index upload, argbuf tables,
+constant-buffer upload, texture writes, depth writes, or the source-visible
+`184B` VSOut layout. The best current classifier remains
+`hidden_vertex_tiler_parameter_storage`, with the caveat that this is a
+derived attribution after subtracting named Xcode tiled-buffer counters and
+dxmt writer bytes.
+
+A separate current-head capture enabled index-reuse measurement without a
+mutating order probe:
+
+```text
+traces/app-d3d9-3dmark05-current-head-index-scout-gputrace-r1/analysis/frame60-counters-xcode.csv
+traces/app-d3d9-3dmark05-current-head-index-scout-gputrace-r1/analysis/frame60-xcode-dxmt-joined-summary.csv
+traces/app-d3d9-3dmark05-current-head-index-scout-gputrace-r1/analysis/frame60-xcode-dxmt-comparison-current-head.md
+```
+
+That capture is useful as a drift warning, not as an optimization result:
+
+| Metric | Current HEAD baseline | Index scout | Delta |
+|---|---:|---:|---:|
+| Total GPU | `35.416ms` | `50.832ms` | `+43.53%` |
+| Top 3 GPU | `34.774ms` | `45.102ms` | `+29.70%` |
+| Top 3 buffer write | `1628.046MiB` | `2031.293MiB` | `+24.77%` |
+| Top 3 VS buffer write | `1627.315MiB` | `2030.926MiB` | `+24.80%` |
+| Top 3 unexplained write | `1627.602MiB` | `2030.786MiB` | `+24.77%` |
+| Top 3 VS B/inv | `1447.8B` | `1244.8B` | `-14.02%` |
+| Top rows | `60/2,60/1,60/0` | `60/4,60/3,60/1` | changed |
+| Top draw calls | `385` | `535` | `+38.96%` |
+| Top vertices | `2,146,185` | `3,042,303` | `+41.75%` |
+| Top triangles | `715,395` | `1,014,101` | `+41.75%` |
+| Stream handle changes | `437` | `536` | `+22.65%` |
+| IB handle changes | `326` | `457` | `+40.18%` |
+| PSO handle changes | `47` | `106` | `+125.53%` |
+
+Only row `60/1` stayed in the top set. Its VS write increased
+`421.176 -> 469.995MiB`, but attribution shows the primary mover was
+invocation count rather than bytes per invocation:
+
+| Shared row | VS write delta | Invocation-count effect | Bytes/inv effect | Primary mover |
+|---|---:|---:|---:|---|
+| `60/1` | `+48.819MiB` | `+135.243MiB` | `-86.424MiB` | invocations |
+
+Interpretation: even a non-mutating diagnostic capture can land on a different
+hot-row/geometry shape under Xcode replay or timing perturbation. Therefore,
+do not accept whole-frame GPU or VS-write deltas unless the comparison passes
+row-key and geometry gates. The identity scout still confirms the indexed
+reuse counters can be joined into Xcode summaries, but it also proves why the
+proof gate must reject drift instead of treating it as a performance signal.
+
+Current acceptance rule for any future 3DMark05 GT1 gputrace candidate:
+
+1. `result.json` must exist; partial disk-full captures are evidence only for
+   hypothesis generation.
+2. Xcode encoder counters must be exported after draw-counter profiling has
+   fully completed.
+3. Top row keys must match, or the report must use a shared-row/hot-set
+   analysis and explicitly avoid whole-frame optimization claims.
+4. Top draw-call, vertex-count, and triangle-count drift must stay within the
+   configured gate, normally `<= 5%`.
+5. The accepted win must reduce both VS buffer write and unexplained hidden
+   backend write, not merely lower bytes per invocation while increasing
+   invocation count or geometry volume.
+
+Operationally, use `--require-stable-frame-proof` on
+`run_3dmark05_perf_probe.sh` or `finalize_3dmark05_perf_probe.sh` for this
+default proof shape. The preset intentionally turns on `result.json` gating,
+Xcode counter coverage, dxmt join coverage, top PSO attribution, top row-key
+matching, top GPU/VS/unexplained write decreases, and `0.05` default
+draw/vertex/triangle drift limits unless a caller supplies a stricter custom
+limit.
+
+The preset was checked against the real current-head identity-scout drift
+capture:
+
+```bash
+python3 scripts/tools/compare_xcode_dxmt_bottlenecks.py \
+  traces/app-d3d9-3dmark05-current-head-gputrace-r1/analysis/frame60-xcode-dxmt-joined-summary.csv \
+  traces/app-d3d9-3dmark05-current-head-index-scout-gputrace-r1/analysis/frame60-xcode-dxmt-joined-summary.csv \
+  --before-label current-head-gputrace-r1 \
+  --after-label current-head-index-scout-gputrace-r1 \
+  --top 3 \
+  --require-stable-frame-proof \
+  --output traces/app-d3d9-3dmark05-current-head-index-scout-gputrace-r1/analysis/frame60-xcode-dxmt-comparison-stable-proof.md
+```
+
+Expected result: exit code `1`, with these failures:
+
+```text
+top row key set changed: 60/0,60/1,60/2 -> 60/1,60/3,60/4
+top_gpu_ms did not decrease: 34.774 -> 45.102
+top_vs_buffer_write_mib did not decrease: 1627.315 -> 2030.926
+top_unexplained_buffer_write_mib did not decrease: 1627.602 -> 2030.786
+top_draw_calls drift +38.96%, allowed <= 5.00%
+top_dxmt_vertex_count drift +41.75%, allowed <= 5.00%
+top_dxmt_triangle_estimate drift +41.75%, allowed <= 5.00%
+```
+
+This turns the previously manual "do not trust drift" rule into an executable
+gate. A future Xcode A/B can still be used for hypothesis generation when it
+fails the preset, but it cannot be promoted as a verified performance fix.
+
+```mermaid
+flowchart TD
+  Base["current-head gputrace\n35.416ms total GPU\n1627.315MiB top VS write"] --> Stable["bottleneck stable\nhidden vertex/tiler/backend storage"]
+  Stable --> NotCPU["dxmt writer 0.444MiB\ntransient 0MiB\nargbuf/cbuf tiny"]
+  Stable --> NotVSOut["VSOut expected 184B\nVS buffer / VSOut 7.9x"]
+
+  Scout["index-reuse scout\nno mutating order probe"] --> Drift["top rows changed\n60/2,1,0 -> 60/4,3,1"]
+  Drift --> Geo["draws +38.96%\nvertices/tris +41.75%"]
+  Geo --> Reject["reject as optimization evidence"]
+  Reject --> Gate["require row-key + geometry gates\nfor every future gputrace A/B"]
+
+  Gate --> NextA["rerun min-index address-locality proof\nonly after >=2048MiB free"]
+  Gate --> NextB["build row-local mini replay\nshader + geometry + state isolation"]
+  Gate --> NextC["investigate stream/IB/PSO churn\nonly with stable row set"]
+
+  classDef hot fill:#ffe8e8,stroke:#b64242,color:#2b0d0d
+  classDef known fill:#e8f0ff,stroke:#476cb6,color:#0d1833
+  class Stable,Drift,Reject,Gate hot
+  class Base,NotCPU,NotVSOut,Scout,Geo,NextA,NextB,NextC known
 ```

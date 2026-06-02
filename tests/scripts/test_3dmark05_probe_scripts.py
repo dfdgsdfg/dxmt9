@@ -226,6 +226,36 @@ class ThreeDMark05ProbeScriptTests(unittest.TestCase):
         self.assertIn("--max-top-triangle-delta-ratio", finalize_line)
         self.assertIn("0.05", finalize_line)
 
+    def test_wrapper_forwards_stable_frame_proof_preset_to_finalizer(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            baseline_joined = Path(tmp) / "baseline-joined.csv"
+            baseline_joined.write_text("gpu_ms\n", encoding="utf-8")
+
+            result = self.run_script(
+                RUN_WRAPPER,
+                "--suffix",
+                "forward-stable-proof",
+                "--baseline-joined",
+                str(baseline_joined),
+                "--require-stable-frame-proof",
+                "--dry-run",
+            )
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+        finalize_line = next(
+            line for line in result.stdout.splitlines()
+            if line.startswith("finalize_cmd_after_xcode_export:")
+        )
+        self.assertIn("--require-stable-frame-proof", finalize_line)
+        self.assertIn("--require-result-json", finalize_line)
+        self.assertIn("--require-top-pso-attribution", finalize_line)
+        self.assertIn("--require-xcode-counter-coverage", finalize_line)
+        self.assertIn("--require-dxmt-join-coverage", finalize_line)
+        self.assertIn("--max-top-draw-call-delta-ratio", finalize_line)
+        self.assertIn("--max-top-vertex-count-delta-ratio", finalize_line)
+        self.assertIn("--max-top-triangle-delta-ratio", finalize_line)
+        self.assertIn("0.05", finalize_line)
+
     def test_wrapper_forwards_top_and_hot_share_to_finalizer(self) -> None:
         result = self.run_script(
             RUN_WRAPPER,
@@ -688,6 +718,39 @@ class ThreeDMark05ProbeScriptTests(unittest.TestCase):
             if line.startswith("xcode_compare_cmd:")
         )
         self.assertIn("--require-top-row-key-match", compare_line)
+        self.assertIn("--max-top-draw-call-delta-ratio", compare_line)
+        self.assertIn("--max-top-vertex-count-delta-ratio", compare_line)
+        self.assertIn("--max-top-triangle-delta-ratio", compare_line)
+        self.assertIn("0.05", compare_line)
+
+    def test_finalizer_expands_stable_frame_proof_preset(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            baseline_joined = Path(tmp) / "baseline-joined.csv"
+            baseline_joined.write_text("gpu_ms\n", encoding="utf-8")
+
+            result = self.run_script(
+                FINALIZER,
+                "--suffix",
+                "stable-proof",
+                "--baseline-joined",
+                str(baseline_joined),
+                "--require-stable-frame-proof",
+                "--dry-run",
+            )
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+        compare_line = next(
+            line for line in result.stdout.splitlines()
+            if line.startswith("xcode_compare_cmd:")
+        )
+        summary_line = next(
+            line for line in result.stdout.splitlines()
+            if line.startswith("xcode_summary_cmd:")
+        )
+        self.assertIn("--require-stable-frame-proof", compare_line)
+        self.assertIn("--require-xcode-counter-coverage", summary_line)
+        self.assertIn("--require-dxmt-join-coverage", summary_line)
+        self.assertIn("--require-top-pso-attribution", summary_line)
         self.assertIn("--max-top-draw-call-delta-ratio", compare_line)
         self.assertIn("--max-top-vertex-count-delta-ratio", compare_line)
         self.assertIn("--max-top-triangle-delta-ratio", compare_line)
