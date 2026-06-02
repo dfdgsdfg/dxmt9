@@ -9080,6 +9080,160 @@ flowchart TD
   class Prior,Alpha,Scissor,DepthRead,Large,Reject,OpaqueLarge,SplitLarge,ClassList,LargeAlphaSmoke,LargeScissorSmoke known
 ```
 
+### Screen-Blend Index-Order Optimization Validation
+
+The diagnostic `large4096 && alpha-blend && scissor` primitive-order signal
+was moved into an env-gated optimization candidate:
+
+```text
+DXMT9_OPTIMIZE_SCREEN_BLEND_INDEX_ORDER=1
+DXMT9_OPTIMIZE_SCREEN_BLEND_INDEX_ORDER_ROW=60/4
+DXMT9_OPTIMIZE_SCREEN_BLEND_INDEX_ORDER_CLASSES=large4096,alpha-blend,scissor
+```
+
+The production predicate is deliberately narrower than the diagnostic probe.
+It only rewrites indexed triangle order when the draw is a screen-blend form:
+alpha blend enabled, `SRC_BLEND=InvDestColor`, `DEST_BLEND=One`,
+`BLEND_OP=Add`, separate alpha disabled, depth test enabled, depth write
+disabled, alpha test/stencil/clip-plane disabled. The optimization keeps the
+indexed path and emits a transient reordered index buffer; it does not expand
+vertices.
+
+Validation smoke:
+
+```bash
+scripts/tools/run_3dmark05_perf_probe.sh \
+  --suffix screen-blend-index-order-smoke-r1 \
+  --frame 60 \
+  --encoder-breakdown-seq 60 \
+  --timeout 240 \
+  --optimize-screen-blend-index-order \
+  --optimize-screen-blend-index-order-row 60/4 \
+  --optimize-screen-blend-index-order-classes large4096,alpha-blend,scissor \
+  --measure-index-reuse \
+  --top 4 \
+  --hot-gpu-share 95 \
+  --no-gputrace \
+  --min-free-mb 1024
+```
+
+Validation gputrace/finalizer:
+
+```bash
+scripts/tools/run_3dmark05_perf_probe.sh \
+  --suffix screen-blend-index-order-gputrace-r1 \
+  --frame 60 \
+  --encoder-breakdown-seq 60 \
+  --timeout 240 \
+  --optimize-screen-blend-index-order \
+  --optimize-screen-blend-index-order-row 60/4 \
+  --optimize-screen-blend-index-order-classes large4096,alpha-blend,scissor \
+  --measure-index-reuse \
+  --top 4 \
+  --hot-gpu-share 95 \
+  --baseline-joined traces/app-d3d9-3dmark05-measure-index-cache-gputrace-r1/analysis/frame60-xcode-dxmt-joined-summary.csv \
+  --require-xcode-counter-coverage \
+  --require-dxmt-join-coverage \
+  --require-top-pso-attribution \
+  --require-top-row-key-match \
+  --max-top-draw-call-delta-ratio 0.05 \
+  --max-top-vertex-count-delta-ratio 0.05 \
+  --max-top-triangle-delta-ratio 0.05 \
+  --min-free-mb 2048
+
+scripts/tools/finalize_3dmark05_perf_probe.sh \
+  --suffix screen-blend-index-order-gputrace-r1 \
+  --frame 60 \
+  --top 4 \
+  --hot-gpu-share 95 \
+  --baseline-joined traces/app-d3d9-3dmark05-measure-index-cache-gputrace-r1/analysis/frame60-xcode-dxmt-joined-summary.csv \
+  --require-top-row-key-match \
+  --require-top-pso-attribution \
+  --min-top-pso-samples-per-draw 0.90 \
+  --require-xcode-counter-coverage \
+  --require-dxmt-join-coverage \
+  --min-top-dxmt-joined-fraction 1.0 \
+  --max-top-draw-call-delta-ratio 0.05 \
+  --max-top-vertex-count-delta-ratio 0.05 \
+  --max-top-triangle-delta-ratio 0.05
+```
+
+Artifacts:
+
+```text
+experiments/output/app-d3d9-3dmark05-screen-blend-index-order-smoke-r1/3dmark05-perf-summary.md
+experiments/output/app-d3d9-3dmark05-screen-blend-index-order-gputrace-r1/3dmark05-perf-summary.md
+experiments/output/app-d3d9-3dmark05-screen-blend-index-order-gputrace-r1/3dmark05-perf-indexed-probe-draws.csv
+traces/app-d3d9-3dmark05-screen-blend-index-order-gputrace-r1/frame60.gputrace
+traces/app-d3d9-3dmark05-screen-blend-index-order-gputrace-r1/analysis/frame60-performance.gputrace
+traces/app-d3d9-3dmark05-screen-blend-index-order-gputrace-r1/analysis/frame60-counters-xcode.csv
+traces/app-d3d9-3dmark05-screen-blend-index-order-gputrace-r1/analysis/frame60-xcode-dxmt-joined-summary.csv
+traces/app-d3d9-3dmark05-screen-blend-index-order-gputrace-r1/analysis/frame60-xcode-dxmt-bottleneck-report.md
+traces/app-d3d9-3dmark05-screen-blend-index-order-gputrace-r1/analysis/frame60-xcode-dxmt-comparison.md
+```
+
+The no-gputrace smoke confirmed exact scope: `4` optimized draws,
+`127,656B` of reordered index data, and no diagnostic probe-order bytes. The
+Xcode run confirmed the same scope despite frame drift: `4` optimized draws,
+`265` skipped, `127,656B` optimized-order bytes, and `0` probe-order bytes.
+The applied draws are the two repeated `5708`-primitive and `4930`-primitive
+screen-blend draw pairs, with `InvDestColor + One + Add`, depth writes off,
+and scissor enabled.
+
+Finalizer result against `measure-index-cache-gputrace-r1`:
+
+| Metric | Baseline | Optimized | Delta |
+|---|---:|---:|---:|
+| Total GPU | `34.391ms` | `33.238ms` | `-3.35%` |
+| Hot GPU | `33.741ms` | `32.637ms` | `-3.27%` |
+| Hot rows | `60/0,60/1,60/3,60/4` | `60/0,60/1,60/3,60/4` | shape gate passed |
+| Hot draw calls | `711` | `722` | `+1.55%` |
+| Hot dxmt vertices | `3,121,680` | `3,130,701` | `+0.29%` |
+| Hot dxmt triangles | `1,040,560` | `1,043,567` | `+0.29%` |
+| Hot VS buffer write | `1472.747MiB` | `1472.827MiB` | `+0.01%` |
+| Hot buffer write | `1473.614MiB` | `1473.562MiB` | `-0.00%` |
+| Hot unexplained buffer write | `1472.905MiB` | `1472.722MiB` | `-0.01%` |
+| Hot VS B/invocation | `856.265B` | `853.382B` | `-0.34%` |
+| Hot hidden backend estimate | `~1455MiB` | `1455.049MiB` | still dominant |
+
+Per-row deltas show why this cannot be treated as the root fix:
+
+| Row | GPU delta | VS write delta | Interpretation |
+|---|---:|---:|---|
+| `60/4` | `9.031 -> 8.528ms` (`-5.56%`) | `370.276 -> 370.447MiB` (`+0.05%`) | target row GPU time improves, but the first-order VS-write bucket does not move |
+| `60/3` | `10.662 -> 10.243ms` (`-3.93%`) | `437.402 -> 437.381MiB` (`-0.00%`) | secondary GPU-time movement without write reduction |
+| `60/1` | `8.252 -> 8.280ms` (`+0.34%`) | `437.404 -> 437.340MiB` (`-0.01%`) | effectively stable |
+| `60/0` | `5.797 -> 5.585ms` (`-3.65%`) | `227.665 -> 227.659MiB` (`-0.00%`) | effectively stable |
+
+Conclusion: the env-gated screen-blend index-order optimization is
+correctly scoped and produces a measurable `~3.3%` GPU-time win on this
+capture, but it does not reproduce the earlier diagnostic `-7.46%` hot
+VS-write reduction. The earlier probe's VS-write win was therefore not just
+"reverse these four screen-blend draws"; it depended on the diagnostic probe
+context, likely broader order/locality/visibility interaction in the captured
+frame. The real bottleneck remains hidden Apple vertex/tiler/backend storage:
+`~1.47GiB` hot VS buffer write, almost entirely unexplained by dxmt CPU writers
+or named tiled counters.
+
+```mermaid
+flowchart TD
+  Diagnostic["diagnostic reverse\nlarge4096 + alpha + scissor\n4 draws"] --> DiagWin["hot VS write -7.46%\n60/4 VS write -22.32%"]
+  Diagnostic --> Safety["screen-blend safety predicate\nInvDestColor + One + Add\ndepth write off"]
+  Safety --> Impl["env-gated optimization\nreordered transient IB\nindexed path preserved"]
+  Impl --> Smoke["smoke\n4 optimized draws\n127,656B reorder bytes"]
+  Impl --> Xcode["Xcode gputrace\ncounters exported\nfinalizer gates pass"]
+  Xcode --> Time["GPU time improves\n34.391 -> 33.238ms"]
+  Xcode --> StableWrite["VS write stable\n1472.747 -> 1472.827MiB"]
+  StableWrite --> RejectRoot["reject as VS-write root fix"]
+  Time --> Secondary["keep as optional targeted win\nnot default global policy"]
+  RejectRoot --> Next["next target\nhidden vertex/tiler/backend storage\nor dependency-aware locality strategy"]
+
+  classDef hot fill:#ffe8e8,stroke:#b64242,color:#2b0d0d
+  classDef known fill:#e8f0ff,stroke:#476cb6,color:#0d1833
+  class DiagWin,StableWrite,RejectRoot,Next hot
+  class Diagnostic,Safety,Impl,Smoke,Xcode,Time,Secondary known
+```
+
 ### Offline Metal Codegen Classifier
 
 After the depth-compare run, the top shader dumps were compiled offline with
