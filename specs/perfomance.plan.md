@@ -12617,6 +12617,18 @@ The first prefix/window counter captures are now available:
   `traces/app-d3d9-3dmark05-screen-blend-row60-2-full187-payload-r1/analysis/bisection/mini-replay-encoder2-113-prefix-000-055-depthinput-counters-xcode.csv`
 - `prefix-000-055` counter summary:
   `traces/app-d3d9-3dmark05-screen-blend-row60-2-full187-payload-r1/analysis/bisection/mini-replay-encoder2-113-prefix-000-055-depthinput-counters-summary.csv`
+- `prefix-000-027` raw capture:
+  `traces/app-d3d9-3dmark05-screen-blend-row60-2-full187-payload-r1/analysis/bisection/mini-replay-encoder2-113-prefix-000-027-depthinput.gputrace`
+- `prefix-000-027` encoder counters:
+  `traces/app-d3d9-3dmark05-screen-blend-row60-2-full187-payload-r1/analysis/bisection/mini-replay-encoder2-113-prefix-000-027-depthinput-counters-xcode.csv`
+- `prefix-000-027` counter summary:
+  `traces/app-d3d9-3dmark05-screen-blend-row60-2-full187-payload-r1/analysis/bisection/mini-replay-encoder2-113-prefix-000-027-depthinput-counters-summary.csv`
+- `window-028-055` raw capture:
+  `traces/app-d3d9-3dmark05-screen-blend-row60-2-full187-payload-r1/analysis/bisection/mini-replay-encoder2-113-window-028-055-depthinput.gputrace`
+- `window-028-055` encoder counters:
+  `traces/app-d3d9-3dmark05-screen-blend-row60-2-full187-payload-r1/analysis/bisection/mini-replay-encoder2-113-window-028-055-depthinput-counters-xcode.csv`
+- `window-028-055` counter summary:
+  `traces/app-d3d9-3dmark05-screen-blend-row60-2-full187-payload-r1/analysis/bisection/mini-replay-encoder2-113-window-028-055-depthinput-counters-summary.csv`
 - `window-056-083` raw capture:
   `traces/app-d3d9-3dmark05-screen-blend-row60-2-full187-payload-r1/analysis/bisection/mini-replay-encoder2-113-window-056-083-depthinput.gputrace`
 - `window-056-083` encoder counters:
@@ -12627,6 +12639,8 @@ The first prefix/window counter captures are now available:
 | Case | Draws | GPU ms | VS buffer write | VS invocations | VS B / VS invocation | Primitives | Vertex stage | Buffer write / MMU / LLC limiter |
 |---|---:|---:|---:|---:|---:|---:|---:|---:|
 | full 113-draw replay | `113` | `18.115` | `1090.901MiB` | `668,929` | `1710.0B` | `390,345` | `98.93%` | `23.05 / 34.71 / 34.43%` |
+| `prefix-000-027` | `28` | `5.860` | `347.932MiB` | `178,039` | `2049.2B` | `101,214` | `98.35%` | `19.17 / 40.15 / 33.56%` |
+| `window-028-055` | `28` | `5.820` | `315.029MiB` | `198,744` | `1662.1B` | `116,555` | `98.31%` | `22.90 / 32.49 / 36.06%` |
 | `prefix-000-055` | `56` | `11.401` | `663.657MiB` | `376,783` | `1846.9B` | `217,769` | `98.94%` | `24.13 / 39.79 / 31.81%` |
 | `window-056-083` | `28` | `4.123` | `221.271MiB` | `150,907` | `1537.5B` | `87,268` | `97.97%` | `23.96 / 37.98 / 36.69%` |
 | `prefix-000-083` | `84` | `15.147` | `884.870MiB` | `527,690` | `1758.3B` | `305,037` | `98.97%` | `24.56 / 41.94 / 33.66%` |
@@ -12644,12 +12658,22 @@ explanation unlikely for this split. The primary reproduced pressure is already
 in `0..55`; `56..83` is an independent smaller hot window with the same
 vertex-stage/MMU/LLC shape.
 
+The `0..55` split is also additive: `prefix-000-027` plus `window-028-055`
+gives `662.961MiB` VS buffer write, while `prefix-000-055` reports
+`663.657MiB`. VS invocation and primitive counts match exactly, and GPU time is
+close (`5.860 + 5.820 = 11.680ms` versus `11.401ms`). The first 28 draws are
+already hot and have the worst density in this set at `2049.2B/VS invocation`.
+This further weakens a single transition-state explanation; the reproduced
+class is per-window vertex-stage backend write amplification.
+
 Next split:
 
-- Capture `prefix-000-027` and `window-028-055`.
-- If `prefix-000-027` is hot, split `0..27`.
-- If `window-028-055` carries most of the `prefix-000-055` pressure, focus on
-  the early alpha/scissor/material transition class in that window.
+- Capture `prefix-000-013` and `window-014-027`.
+- If both halves remain additive, switch from range bisection to shader/geometry
+  class probes: highest `VS B/VS invocation`, highest `VS B/primitive`, shader
+  variant, and primitive size buckets.
+- If one half dominates, continue range bisection inside that half until the
+  responsible draw/state/shader group is small enough for a targeted replay.
 - Keep `window-084-112`/`tail-056-112` as secondary checks for the remaining
   `~206MiB` of the full 113-draw replay.
 
@@ -12680,14 +12704,19 @@ flowchart TD
   Cause --> Prefix83["prefix 0..83\nGPU 15.15ms\nVS buffer 884.9MiB"]
   Prefix83 --> Prefix55["prefix 0..55\nGPU 11.40ms\nVS buffer 663.7MiB\n1846.9B/VS inv"]
   Prefix83 --> Window5683["window 56..83\nGPU 4.12ms\nVS buffer 221.3MiB\n1537.5B/VS inv"]
-  Prefix55 --> Additive["0..55 + 56..83 ~= 0..83\nnot prefix-transition-only"]
-  Window5683 --> Additive
-  Additive --> Next["next experiment\nsplit 0..55\nprefix 0..27 vs window 28..55"]
+  Prefix55 --> Prefix27["prefix 0..27\nGPU 5.86ms\nVS buffer 347.9MiB\n2049.2B/VS inv"]
+  Prefix55 --> Window2855["window 28..55\nGPU 5.82ms\nVS buffer 315.0MiB\n1662.1B/VS inv"]
+  Prefix27 --> Additive55["0..27 + 28..55 ~= 0..55\nper-window write amplification"]
+  Window2855 --> Additive55
+  Prefix55 --> Additive83["0..55 + 56..83 ~= 0..83\nnot prefix-transition-only"]
+  Window5683 --> Additive83
+  Additive83 --> Next["next experiment\nsplit 0..27\nprefix 0..13 vs window 14..27"]
+  Additive55 --> Next
 
   classDef hot fill:#ffe8e8,stroke:#b64242,color:#2b0d0d
   classDef known fill:#e8f0ff,stroke:#476cb6,color:#0d1833
   class Compile0,ScissorBug,Gap,Next hot
-  class Scout,Full,SinglePSO,Slice,SlotFix,StreamDump,Smoke,MultiPSO,FullSmoke,XcodeMini,ScissorFix,XcodeScissor,Depth0,DepthInput,Compare,Encoder2Dump,SortFix,Encoder2Smoke,Encoder2Xcode,Cause,Prefix83,Prefix55,Window5683,Additive known
+  class Scout,Full,SinglePSO,Slice,SlotFix,StreamDump,Smoke,MultiPSO,FullSmoke,XcodeMini,ScissorFix,XcodeScissor,Depth0,DepthInput,Compare,Encoder2Dump,SortFix,Encoder2Smoke,Encoder2Xcode,Cause,Prefix83,Prefix55,Window5683,Prefix27,Window2855,Additive55,Additive83 known
 ```
 
 Smoke validation for the current pass-shape manifest:
