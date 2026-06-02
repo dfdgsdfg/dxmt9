@@ -9366,12 +9366,14 @@ flowchart TD
   RectProbe --> RectReject["Xcode VS write stable\n1472.747 -> 1472.874MiB"]
   RectReject --> Alpha16["current full alpha rerun\n16 large4096 alpha draws"]
   Alpha16 --> Alpha16Reject["Xcode VS write stable\n1472.747 -> 1472.866MiB"]
-  Alpha16Reject --> Next["next target\nrow-shape/order/locality or\nprimitive backend pressure\nnot scissor/alpha subset alone"]
+  Alpha16Reject --> Row601["current 60/1 opaque reverse\n156 draws / strict same rows"]
+  Row601 --> Row601Reject["GPU time -3.24%\nVS write +0.04%"]
+  Row601Reject --> Next["next target\nstate-shape/backend storage\nnot primitive order reversal"]
 
   classDef hot fill:#ffe8e8,stroke:#b64242,color:#2b0d0d
   classDef known fill:#e8f0ff,stroke:#476cb6,color:#0d1833
-  class DiagWin,CurrentDiag,StableWrite,RejectRoot,RectReject,Alpha16Reject,Next hot
-  class Diagnostic,Safety,Impl,Smoke,Xcode,Time,Secondary,RectProbe,Alpha16 known
+  class DiagWin,CurrentDiag,StableWrite,RejectRoot,RectReject,Alpha16Reject,Row601Reject,Next hot
+  class Diagnostic,Safety,Impl,Smoke,Xcode,Time,Secondary,RectProbe,Alpha16,Row601 known
 ```
 
 #### Scissor Rectangle/Tiling Probe Result
@@ -9547,6 +9549,93 @@ flowchart TD
   classDef known fill:#e8f0ff,stroke:#476cb6,color:#0d1833
   class Stable16,Time16,Reject16,Owner,OpaqueRows,StateShape hot
   class Hist16,Current16,Gates16 known
+```
+
+#### Current Row `60/1` Opaque Reverse Rerun
+
+Date: 2026-06-02
+
+The current-HEAD rerun reversed the indexed triangle order for all `60/1`
+`opaque-depth-write` draws. This retested the older `60/1` row-scoped anomaly
+under strict same-hot-row gates so the result could be compared against the
+`measure-index-cache` baseline without hot-row substitution.
+
+Smoke validation confirmed the intended scope:
+
+| Metric | Value |
+|---|---:|
+| Probe row | `60/1` |
+| Probe classes | `opaque-depth-write` |
+| Applied draws | `156` |
+| Reordered index bytes | `1,405,854B` |
+| Row `60/1` draw calls | `156` |
+| Row `60/1` triangles | `234,309` |
+| Row `60/1` vertices | `702,927` |
+| Alpha/scissor/textured draws | `0 / 0 / 0` |
+
+Artifacts:
+
+```text
+experiments/output/app-d3d9-3dmark05-reverse-row-60-1-opaque-current-gputrace-r1/3dmark05-perf-summary.md
+experiments/output/app-d3d9-3dmark05-reverse-row-60-1-opaque-current-gputrace-r1/3dmark05-perf-indexed-probe-draws.csv
+traces/app-d3d9-3dmark05-reverse-row-60-1-opaque-current-gputrace-r1/frame60.gputrace
+traces/app-d3d9-3dmark05-reverse-row-60-1-opaque-current-gputrace-r1/analysis/frame60-performance.gputrace
+traces/app-d3d9-3dmark05-reverse-row-60-1-opaque-current-gputrace-r1/analysis/frame60-counters-xcode.csv
+traces/app-d3d9-3dmark05-reverse-row-60-1-opaque-current-gputrace-r1/analysis/frame60-xcode-dxmt-comparison.md
+traces/app-d3d9-3dmark05-reverse-row-60-1-opaque-current-gputrace-r1/analysis/frame60-xcode-dxmt-bottleneck-report.md
+traces/app-d3d9-3dmark05-reverse-row-60-1-opaque-current-gputrace-r1/analysis/frame60-xcode-dxmt-joined-summary.csv
+```
+
+Strict finalizer gates passed: same hot rows, top PSO attribution, Xcode
+counter coverage, dxmt join coverage, and draw/vertex/triangle drift gates.
+
+| Metric | Baseline | Current `60/1` opaque reverse | Delta |
+|---|---:|---:|---:|
+| Total GPU | `34.391ms` | `33.253ms` | `-3.31%` |
+| Hot GPU | `33.741ms` | `32.646ms` | `-3.24%` |
+| Hot rows | `60/0,60/1,60/3,60/4` | `60/0,60/1,60/3,60/4` | shape gate passed |
+| Hot draw calls | `711` | `711` | `+0.00%` |
+| Hot dxmt vertices | `3,121,680` | `3,121,680` | `+0.00%` |
+| Hot dxmt triangles | `1,040,560` | `1,040,560` | `+0.00%` |
+| Hot VS buffer write | `1472.747MiB` | `1473.267MiB` | `+0.04%` |
+| Hot VS B/invocation | `856.265B` | `856.677B` | `+0.05%` |
+| Hot hidden backend estimate | `~1455MiB` | `1454.905MiB` | still dominant |
+| Hot transient CPU writer | `0.000MiB` | `1.341MiB` | probe overhead |
+
+Per-row result:
+
+| Row | GPU delta | VS write delta | VS invocations | Interpretation |
+|---|---:|---:|---:|---|
+| `60/3` | `10.662 -> 10.107ms` (`-5.21%`) | `437.402 -> 437.369MiB` (`-0.01%`) | unchanged-class row | time moves without storage reduction |
+| `60/4` | `9.031 -> 8.938ms` (`-1.03%`) | `370.276 -> 370.344MiB` (`+0.02%`) | unchanged-class row | secondary time movement |
+| `60/1` | `8.252 -> 7.994ms` (`-3.12%`) | `437.404 -> 437.877MiB` (`+0.11%`) | `393,529 -> 393,300` | target row VS write increases slightly |
+| `60/0` | `5.797 -> 5.607ms` (`-3.27%`) | `227.665 -> 227.676MiB` (`+0.00%`) | unchanged-class row | stable backend storage |
+
+This clean rerun rejects `60/1` opaque primitive-order reversal as a VS-write
+root fix. The GPU-time improvement is real enough to track, but it is not
+paired with reduced VS buffer write or reduced hidden backend traffic. Treat the
+older `60/1` aggregate win as weaker evidence because it failed shape gates; the
+current strict run is the better causal comparison. The next probes should move
+from order reversal to backend state-shape experiments: opaque `60/1`/`60/3`
+2048 depth-write contrasts, cull/depth/write variants, attachment format and
+load/store shape, or minimal shader/geometry replay using the dumped
+shader/texture inputs.
+
+```mermaid
+flowchart TD
+  Old["older 60/1 reverse\nhot-row substitution caveat"] --> Current["current 60/1 opaque reverse\n156 draws / 1.405MiB reordered IB"]
+  Current --> Gates["strict gates\nsame hot rows\nsame draw/vertex/triangle counts"]
+  Gates --> Time["GPU time improves\n34.391 -> 33.253ms"]
+  Gates --> Stable["hot VS write unchanged/up\n1472.747 -> 1473.267MiB"]
+  Stable --> Reject["reject primitive-order reverse\nas VS-write root fix"]
+  Time --> Secondary["possible scheduling/locality-time effect\nnot main storage removal"]
+  Reject --> Owner["hidden vertex/tiler/backend storage remains"]
+  Owner --> Next["next probes\nstate-shape/backend storage\nrow 60/1 and 60/3 opaque"]
+
+  classDef hot fill:#ffe8e8,stroke:#b64242,color:#2b0d0d
+  classDef known fill:#e8f0ff,stroke:#476cb6,color:#0d1833
+  class Stable,Reject,Owner,Next hot
+  class Old,Current,Gates,Time,Secondary known
 ```
 
 ### Offline Metal Codegen Classifier
