@@ -4693,6 +4693,9 @@ bool encodeDraw(EncodeContext& ctx,
                                        hot.viewport,
                                        fillMode);
   if (encoderBreakdown) {
+    if (disableAlphaBlendProbeApplied) {
+      ++encoderBreakdown->stats.probeDisableAlphaBlendDraws;
+    }
     if (disableDepthWriteProbeApplied) {
       ++encoderBreakdown->stats.probeDisableDepthWriteDraws;
     }

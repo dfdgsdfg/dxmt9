@@ -11518,3 +11518,76 @@ flowchart TD
   class VSWrite,Hidden,Class,Row4,Row13,Row0 hot
   class Scout,Hot,Mini,Vary,State,Geometry,Drift,Caution known
 ```
+
+#### Scoped Alpha-Blend State-Shape Probe Readiness
+
+`DXMT9_PROBE_DISABLE_ALPHA_BLEND_ROW(S)` and
+`DXMT9_PROBE_DISABLE_ALPHA_BLEND_CLASS(ES)` now build a blend-off PSO only for
+matching indexed triangle draws. The encoder summary also records
+`probe_disable_alpha_blend_draws`, so a probe run can be rejected before Xcode
+counter analysis if the selector missed its intended draw class.
+
+No-gputrace smoke showed that frame-60 encoder indices can drift between direct
+runs. Two row-scoped attempts passed but missed the active large alpha row:
+
+- `scoped-alpha-row60-4-large4096-nogputrace-r1`: large4096+alpha work landed
+  on `60/2`, so `60/4` was not the right direct-run row.
+- `scoped-alpha-row60-2-large4096-nogputrace-r1`: large4096+alpha work landed
+  on `60/4`, and `probe_disable_alpha_blend_draws=0`.
+
+The class-only smoke is the stable preflight:
+
+```bash
+scripts/tools/run_3dmark05_perf_probe.sh \
+  --suffix scoped-alpha-large4096-class-nogputrace-r1 \
+  --frame 60 \
+  --timeout 180 \
+  --no-gputrace \
+  --encoder-breakdown-seq 60 \
+  --measure-index-reuse \
+  --probe-disable-alpha-blend-classes large4096,alpha-blend \
+  --top 5 \
+  --hot-gpu-share 95 \
+  --min-free-mb 512
+```
+
+Result:
+
+| Run | Status | `probe_disable_alpha_blend_draws` | Matching large4096+alpha draws | Matching tris |
+|---|---|---:|---:|---:|
+| `scoped-alpha-large4096-class-nogputrace-r1` | pass | `9` | `9` | `146,961` |
+
+This makes the next Xcode counter A/B precise enough to run when disk permits:
+capture a class-only alpha-blend-off gputrace, export embedded performance data
+and encoder counters, then compare only if `probe_disable_alpha_blend_draws`
+matches the large4096+alpha draw count in the summary. If the Xcode VS buffer
+write for the alpha/scissor/depth-read hot row drops materially, alpha blend is
+part of the Apple hidden backend storage shape. If it does not, the primary
+owner remains primitive/tiler parameter pressure or VSOut/backend codegen.
+
+```mermaid
+flowchart TD
+  A["state-shape hypothesis\nalpha blend may change hidden backend storage"] --> B["row-scoped smoke"]
+  B --> C{"row has large4096+alpha draws?"}
+  C -- "No: encoder drift" --> D["reject run\nprobe_disable_alpha_blend_draws = 0"]
+  C -- "Yes" --> E["valid row-local A/B"]
+
+  A --> F["class-only smoke\nlarge4096 AND alpha-blend"]
+  F --> G{"probe_disable_alpha_blend_draws\n== matching class draws?"}
+  G -- "No" --> H["selector/instrumentation bug"]
+  G -- "Yes: 9/9 draws" --> I["ready for gputrace A/B"]
+
+  I --> J["Xcode export\nEmbed Performance Data"]
+  J --> K["Show Performance > Counters\nwait for profiling completion"]
+  K --> L["Export Encoder Counters"]
+  L --> M{"VS Buffer Device Memory Bytes Written delta?"}
+  M -- "drops" --> N["alpha blend contributes to backend shape"]
+  M -- "flat" --> O["focus primitive pressure / VSOut codegen"]
+
+  classDef hot fill:#ffe8e8,stroke:#b64242,color:#2b0d0d
+  classDef good fill:#e8f5e8,stroke:#4d8b4d,color:#102a10
+  classDef known fill:#e8f0ff,stroke:#476cb6,color:#0d1833
+  class D,H hot
+  class I,J,K,L good
+  class A,B,C,E,F,G,M,N,O known
+```
