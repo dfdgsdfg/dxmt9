@@ -3044,6 +3044,10 @@ void emitEncoderBreakdown(const EncoderBreakdown& b) {
       "depth_func_less_draws=%llu depth_func_lessequal_draws=%llu "
       "depth_func_always_draws=%llu depth_func_other_draws=%llu "
       "scissor_enabled_draws=%llu alpha_blend_enabled_draws=%llu "
+      "blend_state_samples=%llu blend_state_changes=%llu "
+      "blend_state_unique=%llu blend_state_unique_overflows=%llu "
+      "blend_state_last=0x%llx blend_enabled_noop_draws=%llu "
+      "blend_constant_factor_draws=%llu "
       "alpha_test_enabled_draws=%llu alpha_test_effective_draws=%llu "
       "clip_plane_enabled_draws=%llu "
       "point_draws=%llu line_draws=%llu triangle_draws=%llu primitive_count=%llu "
@@ -3265,6 +3269,13 @@ void emitEncoderBreakdown(const EncoderBreakdown& b) {
       static_cast<unsigned long long>(b.depthFuncOtherDraws),
       static_cast<unsigned long long>(b.scissorEnabledDraws),
       static_cast<unsigned long long>(b.alphaBlendEnabledDraws),
+      static_cast<unsigned long long>(b.blendStateSamples),
+      static_cast<unsigned long long>(b.blendStateChanges),
+      static_cast<unsigned long long>(b.blendStateUnique),
+      static_cast<unsigned long long>(b.blendStateUniqueOverflows),
+      static_cast<unsigned long long>(b.blendStateLast),
+      static_cast<unsigned long long>(b.blendEnabledNoopDraws),
+      static_cast<unsigned long long>(b.blendConstantFactorDraws),
       static_cast<unsigned long long>(b.alphaTestEnabledDraws),
       static_cast<unsigned long long>(b.alphaTestEffectiveDraws),
       static_cast<unsigned long long>(b.clipPlaneEnabledDraws),

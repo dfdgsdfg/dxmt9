@@ -651,6 +651,8 @@ struct ActiveEncoderBreakdown {
   u64 shaderVariant = 0;
   bool vsOutLayoutValid = false;
   u32 vsOutLayout = 0;
+  bool blendStateValid = false;
+  u64 blendState = 0;
   std::array<StreamBindReason, perf::kEncoderBreakdownMaxStreams> streamBindReasons{};
   UniqueHandleSet<2048> streamUniqueHandles{};
   std::array<UniqueHandleSet<512>, perf::kEncoderBreakdownMaxStreams> streamUniqueHandlesByStream{};
@@ -658,6 +660,7 @@ struct ActiveEncoderBreakdown {
   UniqueHandleSet<2048> psoUniqueHandles{};
   UniqueHandleSet<2048> shaderVariantUnique{};
   UniqueHandleSet<2048> vsOutLayoutUnique{};
+  UniqueHandleSet<2048> blendStateUnique{};
   UniqueHandleSet<2048> x8RtTextureBindingUniqueHandles{};
   UniqueHandleSet<4096> drawGeometrySignatures{};
   std::array<VsOutLayoutCacheEntry, 128> vsOutLayoutCache{};
@@ -684,6 +687,8 @@ struct ActiveEncoderBreakdown {
     shaderVariant = 0;
     vsOutLayoutValid = false;
     vsOutLayout = 0;
+    blendStateValid = false;
+    blendState = 0;
     streamBindReasons = {};
     streamUniqueHandles = {};
     streamUniqueHandlesByStream = {};
@@ -691,6 +696,7 @@ struct ActiveEncoderBreakdown {
     psoUniqueHandles = {};
     shaderVariantUnique = {};
     vsOutLayoutUnique = {};
+    blendStateUnique = {};
     x8RtTextureBindingUniqueHandles = {};
     drawGeometrySignatures = {};
     vsOutLayoutCache = {};
@@ -1430,6 +1436,7 @@ struct ActiveEncoderBreakdown {
     if (alphaBlendEnabled) {
       ++stats.alphaBlendEnabledDraws;
     }
+    recordBlendState(renderStates);
     const bool alphaTestEnabled =
         core::flatStateOr(renderStates, RS_ALPHA_TEST_ENABLE, 0u) != 0u;
     if (alphaTestEnabled) {
@@ -1794,6 +1801,76 @@ struct ActiveEncoderBreakdown {
     stats.vsOutLayoutLast = layoutKey;
     recordUnique(vsOutLayoutUnique, static_cast<u64>(layoutKey),
                  stats.vsOutLayoutUnique, stats.vsOutLayoutUniqueOverflows);
+  }
+
+  void recordBlendState(const core::FlatStateSet<core::kMaxStateSlots>& renderStates) {
+    if (!enabled) {
+      return;
+    }
+    const auto blendEnable = core::flatStateOr(renderStates, RS_ALPHABLEND_ENABLE, 0u);
+    const auto srcBlend = core::flatStateOr(
+        renderStates, RS_SRC_BLEND, static_cast<u32>(core::BlendFactor::One));
+    const auto dstBlend = core::flatStateOr(
+        renderStates, RS_DEST_BLEND, static_cast<u32>(core::BlendFactor::Zero));
+    const auto blendOp = core::flatStateOr(
+        renderStates, RS_BLEND_OP, static_cast<u32>(core::BlendOp::Add));
+    const auto separateAlpha = core::flatStateOr(
+        renderStates, RS_SEPARATE_ALPHA_BLEND_ENABLE, 0u);
+    const auto srcBlendAlpha = core::flatStateOr(
+        renderStates, RS_SRC_BLEND_ALPHA, srcBlend);
+    const auto dstBlendAlpha = core::flatStateOr(
+        renderStates, RS_DEST_BLEND_ALPHA, dstBlend);
+    const auto blendOpAlpha = core::flatStateOr(
+        renderStates, RS_BLEND_OP_ALPHA, blendOp);
+    const auto blendFactor = core::flatStateOr(renderStates, RS_BLEND_FACTOR, 0xffffffffu);
+    const auto colorWrite = core::flatStateOr(renderStates, RS_COLOR_WRITE_ENABLE, 0xfu);
+
+    u64 signature = 0x61b451b9273d8fd5ull;
+    signature = drawBindingPacketHashMix(signature, blendEnable);
+    signature = drawBindingPacketHashMix(signature, srcBlend);
+    signature = drawBindingPacketHashMix(signature, dstBlend);
+    signature = drawBindingPacketHashMix(signature, blendOp);
+    signature = drawBindingPacketHashMix(signature, separateAlpha);
+    signature = drawBindingPacketHashMix(signature, srcBlendAlpha);
+    signature = drawBindingPacketHashMix(signature, dstBlendAlpha);
+    signature = drawBindingPacketHashMix(signature, blendOpAlpha);
+    signature = drawBindingPacketHashMix(signature, blendFactor);
+    signature = drawBindingPacketHashMix(signature, colorWrite);
+    signature = signature ? signature : 1ull;
+
+    ++stats.blendStateSamples;
+    if (blendStateValid && blendState != signature) {
+      ++stats.blendStateChanges;
+    }
+    blendStateValid = true;
+    blendState = signature;
+    stats.blendStateLast = signature;
+    recordUnique(blendStateUnique, signature, stats.blendStateUnique,
+                 stats.blendStateUniqueOverflows);
+
+    const bool rgbNoop =
+        srcBlend == static_cast<u32>(core::BlendFactor::One) &&
+        dstBlend == static_cast<u32>(core::BlendFactor::Zero) &&
+        blendOp == static_cast<u32>(core::BlendOp::Add);
+    const bool alphaNoop =
+        separateAlpha == 0u ||
+        (srcBlendAlpha == static_cast<u32>(core::BlendFactor::One) &&
+         dstBlendAlpha == static_cast<u32>(core::BlendFactor::Zero) &&
+         blendOpAlpha == static_cast<u32>(core::BlendOp::Add));
+    if (blendEnable != 0u && rgbNoop && alphaNoop) {
+      ++stats.blendEnabledNoopDraws;
+    }
+
+    const auto isConstantBlend = [](u32 factor) {
+      return factor == static_cast<u32>(core::BlendFactor::BlendFactor) ||
+             factor == static_cast<u32>(core::BlendFactor::InvBlendFactor);
+    };
+    if (blendEnable != 0u &&
+        (isConstantBlend(srcBlend) || isConstantBlend(dstBlend) ||
+         (separateAlpha != 0u &&
+          (isConstantBlend(srcBlendAlpha) || isConstantBlend(dstBlendAlpha))))) {
+      ++stats.blendConstantFactorDraws;
+    }
   }
 
   bool findCachedVsOutLayout(u64 sourceKey, bool tileFfpMode, u32& layoutKey) {

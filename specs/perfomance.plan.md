@@ -11565,6 +11565,110 @@ write for the alpha/scissor/depth-read hot row drops materially, alpha blend is
 part of the Apple hidden backend storage shape. If it does not, the primary
 owner remains primitive/tiler parameter pressure or VSOut/backend codegen.
 
+The gputrace A/B completed for
+`scoped-alpha-large4096-class-gputrace-r1`. This is not a correctness-preserving
+optimization because it disables alpha blending for the targeted class, but it
+is a valid state-shape probe:
+
+```bash
+scripts/tools/run_3dmark05_perf_probe.sh \
+  --suffix scoped-alpha-large4096-class-gputrace-r1 \
+  --frame 60 \
+  --timeout 180 \
+  --encoder-breakdown-seq 60 \
+  --measure-index-reuse \
+  --probe-disable-alpha-blend-classes large4096,alpha-blend \
+  --top 5 \
+  --hot-gpu-share 95 \
+  --min-free-mb 512
+
+scripts/tools/finalize_3dmark05_perf_probe.sh \
+  --suffix scoped-alpha-large4096-class-gputrace-r1 \
+  --frame 60 \
+  --top 5 \
+  --hot-gpu-share 95 \
+  --baseline-joined \
+    traces/app-d3d9-3dmark05-current-head-index-scout-gputrace-r1/analysis/frame60-xcode-dxmt-joined-summary.csv \
+  --require-xcode-counter-coverage \
+  --require-dxmt-join-coverage
+```
+
+Artifacts:
+
+- `traces/app-d3d9-3dmark05-scoped-alpha-large4096-class-gputrace-r1/analysis/frame60-counters-xcode.csv`
+- `traces/app-d3d9-3dmark05-scoped-alpha-large4096-class-gputrace-r1/analysis/frame60-xcode-dxmt-joined-summary.csv`
+- `traces/app-d3d9-3dmark05-scoped-alpha-large4096-class-gputrace-r1/analysis/frame60-xcode-dxmt-comparison.md`
+- `traces/app-d3d9-3dmark05-scoped-alpha-large4096-class-gputrace-r1/analysis/frame60-xcode-dxmt-bottleneck-report.md`
+
+Result versus `current-head-index-scout-gputrace-r1`:
+
+| Metric | Baseline | Alpha-blend-off class probe | Delta |
+|---|---:|---:|---:|
+| Total GPU time | `50.832 ms` | `25.417 ms` | `-50.00%` |
+| Top GPU time | `50.368 ms` | `25.071 ms` | `-50.23%` |
+| Top buffer write | `2237.390 MiB` | `1054.889 MiB` | `-52.85%` |
+| Top VS buffer write | `2236.981 MiB` | `1054.495 MiB` | `-52.86%` |
+| Top unexplained buffer write | `2236.772 MiB` | `1054.163 MiB` | `-52.87%` |
+| Top VS buffer bytes / VS invocation | `1266.127 B` | `714.551 B` | `-43.56%` |
+| Top VS buffer / expected 184B VSOut | `6.881x` | `3.883x` | `-43.56%` |
+| Top texture write | `41.000 MiB` | `28.000 MiB` | `-31.71%` |
+| Top depth write | `3.962 MiB` | `2.568 MiB` | `-35.20%` |
+
+Important caveat: encoder row identities drifted. Shared-row comparison only
+covers `60/0`, `60/1`, and `60/3`; the baseline's dominant `60/4`
+large4096+alpha/depth-read row moved to the candidate's `60/2`. Therefore the
+strong evidence is the hot-set/class aggregate, not a strict same-row local
+comparison. The probe still applied to exactly the intended class in the
+candidate (`probe_disable_alpha_blend_draws=9`), and candidate `60/2` still
+contains the large alpha class (`large4096 alpha = 9 draws / 53,588 tris /
+160,764 vertices`).
+
+Interpretation:
+
+- Alpha blending is now a confirmed contributor to the Apple hidden
+  vertex/tiler/backend storage shape for this workload class.
+- The primary bottleneck remains GPU-side VS buffer/device write, not DXMT CPU
+  writer traffic: candidate top dxmt CPU writer bytes are only `0.727 MiB`
+  against `1054.889 MiB` of Xcode buffer write.
+- Disabling alpha blend cuts the hidden estimate by roughly half, but does not
+  remove it. Candidate hot encoders still write `1054.495 MiB` of VS buffer
+  traffic and still sit at `3.883x` expected VSOut, so primitive/backend pressure
+  and draw/state churn remain active secondary causes.
+- Stream/IB/PSO churn regressed in the probe (`top_stream_handle_changes
+  +27.88%`, `top_ib_handle_changes +6.28%`, `top_pso_handle_changes +45.45%`),
+  so alpha-blend state-shape improvement is not caused by reduced CPU-side bind
+  churn.
+
+Next experiments:
+
+1. Row-stable material isolation: use class selectors plus the applied counter,
+   not raw row selectors, then isolate `large4096,alpha-blend,scissor` versus
+   `large4096,alpha-blend,!scissor`.
+2. Correctness-preserving split: split the large alpha/depth-read material into
+   a separate render-pass/draw-run order without disabling blending and check
+   whether the VS buffer write shape changes.
+3. PSO-state minimization: make alpha-blend state variants explicit in the
+   joined report and test whether blend-off/opaque-equivalent PSOs can be used
+   only when D3D9 blend state is semantically no-op.
+4. Geometry-pressure isolation: rerun the large indexed primitive split/reorder
+   probes against the current head with the same class-applied counter guard.
+
+Follow-up instrumentation has been added for the next run. Encoder breakdown
+now emits:
+
+- `blend_state_samples`
+- `blend_state_changes`
+- `blend_state_unique`
+- `blend_state_last`
+- `blend_enabled_noop_draws`
+- `blend_constant_factor_draws`
+
+The 3DMark05 summary, Xcode/dxmt joined CSV/report, and bottleneck comparison
+preserve these fields. This lets the next correctness-preserving pass answer
+two questions without reopening Xcode UI manually: whether the hot alpha rows
+are dominated by a single blend state, and whether any blend-enabled draws are
+actually no-op candidates that can legally use a blend-off PSO.
+
 ```mermaid
 flowchart TD
   A["state-shape hypothesis\nalpha blend may change hidden backend storage"] --> B["row-scoped smoke"]
@@ -11575,19 +11679,24 @@ flowchart TD
   A --> F["class-only smoke\nlarge4096 AND alpha-blend"]
   F --> G{"probe_disable_alpha_blend_draws\n== matching class draws?"}
   G -- "No" --> H["selector/instrumentation bug"]
-  G -- "Yes: 9/9 draws" --> I["ready for gputrace A/B"]
+  G -- "Yes: 9/9 draws" --> I["gputrace A/B"]
 
   I --> J["Xcode export\nEmbed Performance Data"]
   J --> K["Show Performance > Counters\nwait for profiling completion"]
   K --> L["Export Encoder Counters"]
   L --> M{"VS Buffer Device Memory Bytes Written delta?"}
-  M -- "drops" --> N["alpha blend contributes to backend shape"]
+  M -- "drops -52.86%" --> N["alpha blend contributes to backend shape"]
   M -- "flat" --> O["focus primitive pressure / VSOut codegen"]
+  N --> P["still 1054 MiB top VS buffer write\ncontinue primitive/state-shape isolation"]
+  P --> S["new blend-state counters\nunique/change/no-op/constant-factor"]
+  S --> T{"blend-enabled no-op draws?"}
+  T -- "yes" --> U["legal blend-off PSO candidate"]
+  T -- "no" --> V["state-shape/order experiments only"]
 
   classDef hot fill:#ffe8e8,stroke:#b64242,color:#2b0d0d
   classDef good fill:#e8f5e8,stroke:#4d8b4d,color:#102a10
   classDef known fill:#e8f0ff,stroke:#476cb6,color:#0d1833
   class D,H hot
-  class I,J,K,L good
-  class A,B,C,E,F,G,M,N,O known
+  class I,J,K,L,N good
+  class A,B,C,E,F,G,M,O,P,S,T,U,V known
 ```

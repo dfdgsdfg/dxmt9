@@ -560,6 +560,13 @@ struct EncoderBreakdown {
   std::uint64_t depthFuncOtherDraws = 0;
   std::uint64_t scissorEnabledDraws = 0;
   std::uint64_t alphaBlendEnabledDraws = 0;
+  std::uint64_t blendStateSamples = 0;
+  std::uint64_t blendStateChanges = 0;
+  std::uint64_t blendStateUnique = 0;
+  std::uint64_t blendStateUniqueOverflows = 0;
+  std::uint64_t blendStateLast = 0;
+  std::uint64_t blendEnabledNoopDraws = 0;
+  std::uint64_t blendConstantFactorDraws = 0;
   std::uint64_t alphaTestEnabledDraws = 0;
   std::uint64_t alphaTestEffectiveDraws = 0;
   std::uint64_t clipPlaneEnabledDraws = 0;

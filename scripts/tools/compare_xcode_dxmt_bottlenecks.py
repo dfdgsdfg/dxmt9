@@ -242,6 +242,22 @@ def summarize(rows: list[dict[str, str]], top_n: int) -> dict[str, float]:
         "top_pso_state_samples_per_draw": (
             top_pso_state_samples / top_draw_calls if top_draw_calls else 0.0
         ),
+        "top_blend_state_changes": float(
+            sum(as_int(first(row, "dxmt_blend_state_changes", "blend_state_changes"))
+                for row in top)
+        ),
+        "top_blend_state_unique": float(
+            sum(as_int(first(row, "dxmt_blend_state_unique", "blend_state_unique"))
+                for row in top)
+        ),
+        "top_blend_enabled_noop_draws": float(
+            sum(as_int(first(row, "dxmt_blend_enabled_noop_draws",
+                             "blend_enabled_noop_draws")) for row in top)
+        ),
+        "top_blend_constant_factor_draws": float(
+            sum(as_int(first(row, "dxmt_blend_constant_factor_draws",
+                             "blend_constant_factor_draws")) for row in top)
+        ),
         "top_shader_variant_changes": float(
             sum(as_int(first(row, "dxmt_shader_variant_changes", "shader_variant_changes")) for row in top)
         ),

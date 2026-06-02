@@ -147,6 +147,12 @@ JOINED_EXTRA_FIELDS = (
     "dxmt_depth_func_other_draws",
     "dxmt_scissor_enabled_draws",
     "dxmt_alpha_blend_enabled_draws",
+    "dxmt_blend_state_samples",
+    "dxmt_blend_state_changes",
+    "dxmt_blend_state_unique",
+    "dxmt_blend_state_last",
+    "dxmt_blend_enabled_noop_draws",
+    "dxmt_blend_constant_factor_draws",
     "dxmt_alpha_test_enabled_draws",
     "dxmt_alpha_test_effective_draws",
     "dxmt_clip_plane_enabled_draws",
@@ -676,6 +682,12 @@ def join_dxmt(row: dict[str, Any], dxmt: dict[tuple[int, int], dict[str, Any]]) 
         "dxmt_depth_func_other_draws": "depth_func_other_draws",
         "dxmt_scissor_enabled_draws": "scissor_enabled_draws",
         "dxmt_alpha_blend_enabled_draws": "alpha_blend_enabled_draws",
+        "dxmt_blend_state_samples": "blend_state_samples",
+        "dxmt_blend_state_changes": "blend_state_changes",
+        "dxmt_blend_state_unique": "blend_state_unique",
+        "dxmt_blend_state_last": "blend_state_last",
+        "dxmt_blend_enabled_noop_draws": "blend_enabled_noop_draws",
+        "dxmt_blend_constant_factor_draws": "blend_constant_factor_draws",
         "dxmt_alpha_test_enabled_draws": "alpha_test_enabled_draws",
         "dxmt_alpha_test_effective_draws": "alpha_test_effective_draws",
         "dxmt_clip_plane_enabled_draws": "clip_plane_enabled_draws",
@@ -1467,6 +1479,12 @@ def write_report(
     top_pso_handles = sum(as_int(row.get("dxmt_pso_handle_changes")) for row in top)
     top_pso_samples = sum(as_int(row.get("dxmt_pso_state_samples")) for row in top)
     top_pso_samples_per_draw = top_pso_samples / top_draws if top_draws else 0.0
+    top_blend_state_changes = sum(as_int(row.get("dxmt_blend_state_changes")) for row in top)
+    top_blend_state_unique = sum(as_int(row.get("dxmt_blend_state_unique")) for row in top)
+    top_blend_enabled_noop_draws = sum(
+        as_int(row.get("dxmt_blend_enabled_noop_draws")) for row in top)
+    top_blend_constant_factor_draws = sum(
+        as_int(row.get("dxmt_blend_constant_factor_draws")) for row in top)
     top_shader_variants = sum(as_int(row.get("dxmt_shader_variant_changes")) for row in top)
     top_vsout_layouts = sum(as_int(row.get("dxmt_vsout_layout_changes")) for row in top)
     top_vsout_cache_hits = sum(as_int(row.get("dxmt_vsout_layout_cache_hits")) for row in top)
@@ -1911,6 +1929,14 @@ def write_report(
         f"| dxmt PSO state samples / draw | `{fmt_float(top_pso_samples_per_draw, 2)}` |"
     )
     lines.append(f"| dxmt PSO handle changes | `{fmt_int(top_pso_handles)}` |")
+    lines.append(f"| dxmt blend state changes | `{fmt_int(top_blend_state_changes)}` |")
+    lines.append(f"| dxmt blend state unique | `{fmt_int(top_blend_state_unique)}` |")
+    lines.append(
+        f"| dxmt blend-enabled no-op draws | `{fmt_int(top_blend_enabled_noop_draws)}` |"
+    )
+    lines.append(
+        f"| dxmt constant-factor blend draws | `{fmt_int(top_blend_constant_factor_draws)}` |"
+    )
     lines.append(f"| dxmt shader variant changes | `{fmt_int(top_shader_variants)}` |")
     lines.append(f"| dxmt VSOut layout changes | `{fmt_int(top_vsout_layouts)}` |")
     lines.append(f"| dxmt VSOut layout cache hits | `{fmt_int(top_vsout_cache_hits)}` |")
@@ -2105,7 +2131,8 @@ def write_report(
         "vert/draw", "vert min/max", "large prim/vert", "baseV nz/neg/native", "baseV min/max",
         "split src/extra",
         "stream h/o/s", "stream h/o/s per draw",
-        "IB hdl chg", "IB hdl/draw", "argbuf table KiB", "cbuf VS KiB",
+        "IB hdl chg", "IB hdl/draw", "blend chg/uniq/noop/cf",
+        "argbuf table KiB", "cbuf VS KiB",
         "cbuf FFPVS KiB", "cbuf PS KiB", "cbuf FFPPS KiB",
         "setVertexBytes KiB", "transient V KiB", "transient I KiB",
         "dxmt writer KiB", "writer/buffer", "unexplained MiB", "unexplained/buffer",
@@ -2159,6 +2186,12 @@ def write_report(
                 fmt_float(stream_total / draws if draws else 0.0, 2),
                 fmt_int(ib_handle),
                 fmt_float(ib_handle / draws if draws else 0.0, 2),
+                (
+                    f"{fmt_int(row.get('dxmt_blend_state_changes'))}/"
+                    f"{fmt_int(row.get('dxmt_blend_state_unique'))}/"
+                    f"{fmt_int(row.get('dxmt_blend_enabled_noop_draws'))}/"
+                    f"{fmt_int(row.get('dxmt_blend_constant_factor_draws'))}"
+                ),
                 fmt_float(as_int(row.get("dxmt_argbuf_table_bytes")) / 1024.0, 1),
                 fmt_float(as_int(row.get("dxmt_argbuf_cbuf_vs_bytes")) / 1024.0, 1),
                 fmt_float(as_int(row.get("dxmt_argbuf_cbuf_ffp_vs_bytes")) / 1024.0, 1),
@@ -2306,7 +2339,8 @@ def write_report(
         "tile intersects", "tiling util %", "prim/tile",
         "FS buffer MiB", "varyings/fragment", "buffer write limiter %",
         "LLC limiter %", "MMU limiter %", "draws", "FFP", "preT",
-        "cull n/f/b", "depth e/w", "scissor", "alpha b/t/e", "clip planes",
+        "cull n/f/b", "depth e/w", "scissor", "alpha b/t/e",
+        "blend chg/uniq/noop/cf", "clip planes",
         "dxmt vertices", "dxmt tris", "prim/draw", "prim min/max",
         "vert/draw", "vert min/max", "large prim/vert",
         "geom sig uniq/dup", "geom dup",
@@ -2409,6 +2443,12 @@ def write_report(
                     f"{fmt_int(row.get('dxmt_alpha_blend_enabled_draws'))}/"
                     f"{fmt_int(row.get('dxmt_alpha_test_enabled_draws'))}/"
                     f"{fmt_int(row.get('dxmt_alpha_test_effective_draws'))}"
+                ),
+                (
+                    f"{fmt_int(row.get('dxmt_blend_state_changes'))}/"
+                    f"{fmt_int(row.get('dxmt_blend_state_unique'))}/"
+                    f"{fmt_int(row.get('dxmt_blend_enabled_noop_draws'))}/"
+                    f"{fmt_int(row.get('dxmt_blend_constant_factor_draws'))}"
                 ),
                 fmt_int(row.get("dxmt_clip_plane_enabled_draws")),
                 fmt_int(row.get("dxmt_vertex_count")),
