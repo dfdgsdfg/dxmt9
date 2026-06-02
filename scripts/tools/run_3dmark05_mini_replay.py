@@ -339,28 +339,35 @@ def allocate_cbuf_slots(source: str, count: int) -> list[int]:
     raise SystemExit("not enough free Metal buffer slots for mini replay cbuf rewrite")
 
 
+def replace_argbuf_parameter(source: str, replacement: str) -> str:
+    source, count = re.subn(
+        r"constant\s+ArgbufLayout&\s+abuf\s+\[\[buffer\(30\)\]\]",
+        replacement,
+        source,
+        count=1,
+    )
+    if count != 1:
+        raise SystemExit("mini replay cbuf rewrite could not find buffer(30) argbuf parameter")
+    return source
+
+
 def transform_msl(source: str, stage: str) -> tuple[str, dict[str, int]]:
     if stage == "vs":
         vs_slot, ffp_slot = allocate_cbuf_slots(source, 2)
-        source = re.sub(
-            r"constant\s+ArgbufLayout&\s+abuf\s+\[\[buffer\(30\)\]\],\s*",
-            f"constant VsConsts& vsConsts [[buffer({vs_slot})]],\n"
-            f"                     constant FfpVsConsts& ffpVs [[buffer({ffp_slot})]],\n"
-            "                     ",
+        source = replace_argbuf_parameter(
             source,
-            count=1,
+            f"constant VsConsts& vsConsts [[buffer({vs_slot})]],\n"
+            f"                     constant FfpVsConsts& ffpVs [[buffer({ffp_slot})]]",
         )
         source = re.sub(r"\s*constant VsConsts& vsConsts = \*abuf\.vsConsts;\n", "\n", source)
         source = re.sub(r"\s*constant FfpVsConsts& ffpVs = \*abuf\.ffpVs;\n", "", source)
         return source, {"vsconsts": vs_slot, "ffpvs": ffp_slot}
     elif stage == "fs":
         ps_slot, ffp_slot = allocate_cbuf_slots(source, 2)
-        source = re.sub(
-            r"constant\s+ArgbufLayout&\s+abuf\s+\[\[buffer\(30\)\]\],\s*",
-            f"constant PsConsts& psConsts [[buffer({ps_slot})]],\n"
-            f"                     constant FfpPsConsts& ffpPs [[buffer({ffp_slot})]], ",
+        source = replace_argbuf_parameter(
             source,
-            count=1,
+            f"constant PsConsts& psConsts [[buffer({ps_slot})]],\n"
+            f"                     constant FfpPsConsts& ffpPs [[buffer({ffp_slot})]]",
         )
         source = re.sub(r"\s*constant PsConsts& psConsts = \*abuf\.psConsts;\n", "\n", source)
         source = re.sub(r"\s*constant FfpPsConsts& ffpPs = \*abuf\.ffpPs;\n", "", source)

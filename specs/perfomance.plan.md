@@ -14407,11 +14407,97 @@ misses, VS invocations, and Xcode `VS Buffer Device Memory Bytes Written` on
 the targeted rows. It does not yet prove a production optimization because the
 full-frame workload/top-row shape drifted and non-target rows regressed.
 
+The follow-up narrowed apply probe removed `50/0` from the mutation set and
+submitted reordered indices only for `50/1` and `50/3`:
+
+```bash
+scripts/tools/run_3dmark05_perf_probe.sh \
+  --suffix cache-opt-apply-frame50-rows1-3-r1 \
+  --frame 50 \
+  --no-gputrace \
+  --probe-apply-index-cache-opt-candidate \
+  --probe-reverse-indexed-triangles-rows 50/1,50/3 \
+  --probe-reverse-indexed-triangles-class opaque-depth-write \
+  --probe-apply-index-cache-opt-candidate-min-gain-pct 10 \
+  --timeout 240
+```
+
+The no-gputrace scout was shape-stable enough to justify a paired Xcode
+capture:
+
+| Scope | Draw delta | Primitive/vertex delta | LRU32 miss delta | Reorder coverage |
+|---|---:|---:|---:|---:|
+| `50/1,50/3` | `0.00%` | `-1.69%` | `-19.22%` | `177` applied / `244` skipped / `2.65MiB` |
+| Hot rows `50/0,1,2,3,4,11` | `+2.63%` | `-1.50%` | `-9.09%` | same target coverage |
+
+That run kept the mutation local enough for the target rows, while `50/0`
+remained unchanged instead of becoming an additional source of probe drift.
+The matching gputrace/Xcode capture then used the same narrowed mutation:
+
+```bash
+scripts/tools/run_3dmark05_perf_probe.sh \
+  --suffix cache-opt-apply-frame50-rows1-3-gpu-r1 \
+  --frame 50 \
+  --probe-apply-index-cache-opt-candidate \
+  --probe-reverse-indexed-triangles-rows 50/1,50/3 \
+  --probe-reverse-indexed-triangles-class opaque-depth-write \
+  --probe-apply-index-cache-opt-candidate-min-gain-pct 10 \
+  --timeout 240
+```
+
+Xcode replay Summary reported `52.33ms` GPU time, `4` command buffers, `19`
+render encoders, `1038` draw calls, and `4,461,594` vertices. The frame was
+visually valid. Performance data and encoder counters were exported to:
+
+```text
+traces/app-d3d9-3dmark05-cache-opt-apply-frame50-rows1-3-gpu-r1/frame50.gputrace
+traces/app-d3d9-3dmark05-cache-opt-apply-frame50-rows1-3-gpu-r1/analysis/frame50-performance.gputrace
+traces/app-d3d9-3dmark05-cache-opt-apply-frame50-rows1-3-gpu-r1/analysis/frame50-counters-xcode.csv
+traces/app-d3d9-3dmark05-cache-opt-apply-frame50-rows1-3-gpu-r1/analysis/frame50-xcode-dxmt-joined-summary.csv
+traces/app-d3d9-3dmark05-cache-opt-apply-frame50-rows1-3-gpu-r1/analysis/frame50-xcode-dxmt-bottleneck-report.md
+```
+
+Narrowed Xcode A/B against the no-mutate frame50 baseline:
+
+| Metric | No-mutate baseline | Narrow apply `50/1,50/3` | Delta | Interpretation |
+|---|---:|---:|---:|---|
+| Total frame GPU | `46.006ms` | `52.332ms` | `+6.326ms` (`+13.75%`) | Full frame regressed. |
+| Hot-set GPU (`50/0,1,2,3,4,11`) | `45.249ms` | `49.988ms` | `+4.739ms` (`+10.47%`) | Whole hot set still invalidates production proof. |
+| Hot-set VS buffer write | `2248.342MiB` | `2299.988MiB` | `+51.646MiB` (`+2.30%`) | Non-target growth offsets target wins. |
+| Hot-set VS invocations | `2,348,353` | `2,308,196` | `-40,157` (`-1.71%`) | Invocation count did fall, but not enough to overcome row drift/GPU timing. |
+| Target rows GPU (`50/1,3`) | `19.144ms` | `17.943ms` | `-1.201ms` (`-6.27%`) | Local target rows improved. |
+| Target rows VS buffer write | `997.553MiB` | `841.989MiB` | `-155.564MiB` (`-15.59%`) | Same positive write-bucket signal as full apply. |
+| Target rows VS invocations | `1,061,176` | `950,292` | `-110,884` (`-10.45%`) | VS write drop tracks post-transform invocation drop. |
+| Target rows LRU32 cache misses | `1,161,742` | `964,043` | `-197,699` (`-17.02%`) | Software cache estimate still predicts the measured direction. |
+| Non-target hot GPU (`50/0,2,4,11`) | `26.105ms` | `32.045ms` | `+5.940ms` (`+22.76%`) | Probe-to-probe frame drift dominates the full-frame result. |
+| Non-target hot VS buffer write | `1250.789MiB` | `1457.999MiB` | `+207.210MiB` (`+16.57%`) | Biggest invalidating signal is not caused by reordered target rows. |
+| Submitted reorder bytes | `0B` | `2,800,056B` | `+2.67MiB` | Diagnostic transient-IB cost remains non-production. |
+
+Row-level conclusion from the narrowed Xcode run:
+
+- `50/1` stayed the cleanest real-frame win: GPU
+  `10.267ms -> 8.852ms`, VS buffer write
+  `498.768MiB -> 420.965MiB`, VS invocations
+  `530,588 -> 474,196`, and LRU32 misses
+  `580,871 -> 481,067`.
+- `50/3` also reduced VS buffer write and VS invocations:
+  `498.785MiB -> 421.024MiB` and `530,588 -> 476,096`, but GPU time was
+  only slightly worse than baseline, `8.877ms -> 9.091ms`.
+- `50/11` was not mutated, yet it regressed from
+  `9.637ms` / `537.312MiB` / `612,168` VS invocations to
+  `13.224ms` / `703.445MiB` / `677,864`. This proves the full-frame A/B is
+  still too noisy for a production accept/reject decision.
+- The mechanism is now stronger than before: when the row shape is local, LRU32
+  miss reduction, Xcode `VS Invocations`, and Xcode `VS Buffer Device Memory
+  Bytes Written` move together. The unresolved problem is producing a stable
+  full-frame proof or a row-local replay that eliminates unrelated hot-row
+  drift.
+
 The remaining proof path is:
 
-1. Rerun a more shape-stable paired A/B or row-local replay for the same
-   `50/0,1,3` target rows.
-2. Verify on full 3DMark05 GT1, not only mini replay, with the stable-frame
+1. Build a row-local replay or same-frame paired proof for `50/1` and `50/3`
+   so `50/11`, `50/0`, `50/2`, and `50/4` cannot drift between A/B captures.
+2. Verify on full 3DMark05 GT1 once the row-local proof passes, with the stable-frame
    gates: draw count, vertex/primitive count, top-row identity, FS invocations,
    and Xcode `VS Buffer Device Memory Bytes Written`.
 3. If full-frame safety prevents enough reorder coverage, use the cache-miss
@@ -14455,12 +14541,16 @@ flowchart TD
   ReorderGate --> ApplyAB["apply-probe frame50 complete\n205 draws / 3.20MiB reordered IB\nvalid GT1 frame"]
   ApplyAB --> TargetWin["target rows 50/0,1,3\nVS write -15.45%\nVS invocations -11.04%\nGPU -4.47%"]
   ApplyAB --> FullFrameGap["full hot set GPU +2.68%\nnon-target rows regressed\nnot production proof"]
-  FullFrameGap --> StableNext["next proof\nshape-stable A/B or row-local replay"]
+  FullFrameGap --> NarrowNoTrace["narrow no-gputrace\nmutate 50/1,50/3 only\nLRU32 -19.22%\ntarget draw count stable"]
+  NarrowNoTrace --> NarrowXcode["narrow Xcode A/B complete\nvalid frame\nGPU 52.33ms"]
+  NarrowXcode --> NarrowTarget["target 50/1,3\nVS write -15.59%\nVS invocations -10.45%\nLRU32 -17.02%\nGPU -6.27%"]
+  NarrowXcode --> NarrowDrift["non-target hot rows\nGPU +22.76%\nVS write +16.57%\n50/11 regressed"]
+  NarrowDrift --> StableNext["next proof\nrow-local replay or same-frame paired A/B"]
 
   classDef hot fill:#ffe8e8,stroke:#b64242,color:#2b0d0d
   classDef good fill:#e8f5e8,stroke:#4d8b4d,color:#102a10
   classDef known fill:#e8f0ff,stroke:#476cb6,color:#0d1833
-  class Reject,FailSignal,StateAB,RuntimeNext,SortMini,FullFrameGap,StableNext hot
-  class PassSignal,Classifier,Codegen,Invocations,CacheSignal,CacheWin,CacheRule,Owner,DiagGate,Frame50,ReorderGate,TargetWin good
-  class R2,Gate,Mini,Hot,Tooling,Trim,Xcode,Accept,Candidate,CacheOpt known
+  class Reject,FailSignal,StateAB,RuntimeNext,SortMini,FullFrameGap,NarrowDrift,StableNext hot
+  class PassSignal,Classifier,Codegen,Invocations,CacheSignal,CacheWin,CacheRule,Owner,DiagGate,Frame50,ReorderGate,TargetWin,NarrowNoTrace,NarrowTarget good
+  class R2,Gate,Mini,Hot,Tooling,Trim,Xcode,Accept,Candidate,CacheOpt,NarrowXcode known
 ```
