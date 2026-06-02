@@ -11986,9 +11986,277 @@ The selector applied exactly to the intended window:
 | Blend signature | `InvDestColor,One,Add` |
 | Reorder bytes | `1,036,014` |
 
-This makes the next Xcode capture concrete and bounded. The candidate gputrace
-command is the same as the smoke without `--no-gputrace`; use strict row-key
-and geometry drift gates when comparing it to the current normal baseline.
+The matching gputrace candidate was executed and Xcode encoder counters were
+exported/finalized:
+
+```bash
+scripts/tools/run_3dmark05_perf_probe.sh \
+  --suffix screen-blend-run-71-188-sort-gputrace-r1 \
+  --frame 60 \
+  --timeout 180 \
+  --encoder-breakdown-seq 60 \
+  --measure-index-reuse \
+  --probe-sort-indexed-triangles-by-min-index \
+  --probe-reverse-indexed-triangles-row 60/2 \
+  --probe-reverse-indexed-triangles-classes screen-blend \
+  --probe-indexed-triangle-encoder-draw-min 71 \
+  --probe-indexed-triangle-encoder-draw-max 188 \
+  --top 5 \
+  --hot-gpu-share 95 \
+  --min-free-mb 256
+```
+
+Reduced artifacts:
+
+```text
+experiments/output/app-d3d9-3dmark05-screen-blend-run-71-188-sort-gputrace-r1/3dmark05-perf-summary.md
+experiments/output/app-d3d9-3dmark05-screen-blend-run-71-188-sort-gputrace-r1/3dmark05-perf-indexed-probe-draws.csv
+traces/app-d3d9-3dmark05-screen-blend-run-71-188-sort-gputrace-r1/analysis/frame60-counters-xcode.csv
+traces/app-d3d9-3dmark05-screen-blend-run-71-188-sort-gputrace-r1/analysis/frame60-xcode-dxmt-joined-summary.csv
+traces/app-d3d9-3dmark05-screen-blend-run-71-188-sort-gputrace-r1/analysis/frame60-xcode-dxmt-bottleneck-report.md
+traces/app-d3d9-3dmark05-screen-blend-run-71-188-sort-gputrace-r1/analysis/frame60-xcode-dxmt-comparison.md
+traces/app-d3d9-3dmark05-screen-blend-run-71-188-sort-gputrace-r1/analysis/frame60-xcode-dxmt-comparison-geometry-gated.md
+```
+
+The raw `frame60.gputrace` bundle was removed after Xcode counter export and
+finalization to recover disk space.
+
+Important caveat: the app-side run hit a disk-full failure while saving Wine
+state, so there is no normal `result.json`. The finalizer used the captured
+`dxmt9.log` rows, and the Xcode counter export itself completed, but this run
+must be treated as a strong classifier signal rather than accepted proof. The
+historical command used `--min-free-mb 256`; current wrapper behavior rejects
+gputrace guards below `2048MiB` unless
+`DXMT_3DMARK05_ALLOW_LOW_TRACE_FREE_MB=1` is set deliberately, because low
+guards can reproduce this exact partial-run/no-`result.json` failure mode.
+
+Baseline comparison against `current-normal-gputrace-r1`:
+
+| Metric | Baseline | Draw-window sort | Delta |
+|---|---:|---:|---:|
+| Total GPU | `35.456ms` | `25.417ms` | `-28.32%` |
+| Top 3 GPU | `34.837ms` | `24.823ms` | `-28.74%` |
+| Top 3 VS buffer write | `1627.240MiB` | `1054.495MiB` | `-35.20%` |
+| Top 3 unexplained write | `1627.596MiB` | `1053.175MiB` | `-35.29%` |
+| Top 3 VS bytes / invocation | `1447.7B` | `714.6B` | `-50.64%` |
+| Top 3 VSOut expected bytes / vertex | `184.0B` | `184.0B` | `0.00%` |
+| Top rows | `60/0,60/1,60/2` | `60/0,60/1,60/2` | matched |
+| Top draw calls | `385` | `616` | `+60.00%` |
+| Top vertices | `2,146,185` | `2,644,755` | `+23.23%` |
+| Top triangles | `715,395` | `881,585` | `+23.23%` |
+
+The useful per-row signal is concentrated in bytes per VS invocation, not in a
+smaller visible VSOut layout:
+
+| Row | GPU delta | VS write delta | VS invocations | VS B/inv delta |
+|---|---:|---:|---:|---:|
+| `60/2` | `20.028 -> 7.925ms` | `981.185 -> 281.955MiB` | `+4.04%` | `-72.38%` |
+| `60/1` | `9.061 -> 11.815ms` | `421.124 -> 594.374MiB` | `+45.44%` | `-2.95%` |
+| `60/0` | `5.748 -> 5.083ms` | `224.931 -> 178.166MiB` | `+110.22%` | `-62.32%` |
+
+The strict row-key and bottleneck-decrease requirements pass, but the geometry
+gate fails:
+
+```text
+top_draw_calls drift: 385 -> 616 (+60.00%)
+top_dxmt_vertex_count drift: 2,146,185 -> 2,644,755 (+23.23%)
+top_dxmt_triangle_estimate drift: 715,395 -> 881,585 (+23.23%)
+```
+
+Interpretation: preserving the blend equation while sorting the dominant
+`60/2` screen-blend draw window by minimum index strongly changes Apple GPU
+hidden VS/backend write density. The apparent win is not explained by VSOut
+layout trimming (`0xfff`, expected `184B` stays unchanged) and not by reducing
+dxmt CPU writer bytes. However, because this capture is partial and geometry
+volume drifted, the result does not yet close the bottleneck investigation.
+The next required run is the same draw-window sort with enough free disk for a
+normal `result.json`, followed by geometry-gated comparison. If that repeats,
+the likely implementation direction is an order-preserving or pass-local
+vertex/index locality strategy that reduces hidden backend write density
+without changing D3D9 blend semantics.
+
+Required rerun command after freeing at least `2048MiB` on the repository
+volume:
+
+```bash
+scripts/tools/run_3dmark05_perf_probe.sh \
+  --suffix screen-blend-run-71-188-sort-gputrace-r2 \
+  --frame 60 \
+  --timeout 180 \
+  --encoder-breakdown-seq 60 \
+  --measure-index-reuse \
+  --probe-sort-indexed-triangles-by-min-index \
+  --probe-reverse-indexed-triangles-row 60/2 \
+  --probe-reverse-indexed-triangles-classes screen-blend \
+  --probe-indexed-triangle-encoder-draw-min 71 \
+  --probe-indexed-triangle-encoder-draw-max 188 \
+  --baseline-joined traces/app-d3d9-3dmark05-current-normal-gputrace-r1/analysis/frame60-xcode-dxmt-joined-summary.csv \
+  --require-result-json \
+  --require-top-row-key-match \
+  --require-top-gpu-decrease \
+  --require-top-vs-buffer-write-decrease \
+  --require-top-unexplained-buffer-write-decrease \
+  --max-top-draw-call-delta-ratio 0.05 \
+  --max-top-vertex-count-delta-ratio 0.05 \
+  --max-top-triangle-delta-ratio 0.05 \
+  --top 3 \
+  --hot-gpu-share 95 \
+  --min-free-mb 2048
+```
+
+Acceptance gates for that rerun:
+
+1. `experiments/output/.../result.json` exists.
+2. Xcode counters are exported after waiting for draw-counter profiling.
+3. `frame60-xcode-dxmt-comparison.md` passes row-key, GPU, VS-write, and
+   unexplained-write decrease gates.
+4. `frame60-xcode-dxmt-comparison-geometry-gated.md` passes draw-call,
+   vertex-count, and triangle-count drift limits.
+5. The frame image remains visually valid GT1, not a diagnostic-corrupted
+   blend/depth output.
+
+Current disk state before the rerun:
+
+| Path | Size | Cleanup interpretation |
+|---|---:|---|
+| `traces/` | `43MiB` | Already reduced to CSV/Markdown analysis; cleaning it will not free enough space. |
+| `experiments/output/` | `8.9MiB` | Already small. |
+| `experiments/prefixs/app-d3d9-3dmark05` | `1.3GiB` | Likely active 3DMark05 prefix; do not delete blindly. |
+| `experiments/prefixs/app-d3d9-3dmark05-verify` | `935MiB` | Manual-review candidate if no longer needed. |
+| `experiments/prefixs/app-d3dmark05-verify` | `922MiB` | Manual-review candidate; note the missing `9` in the name. |
+| `experiments/apps_3rd/` | `682MiB` | Benchmark payload/installers; manual-review only. |
+| `experiments/wine/sikarugir-cx-24.0.7/` | `516MiB` | Runtime payload; manual-review only. |
+| `experiments/wine/vendor/` | `204MiB` | Runtime/vendor payload; manual-review only. |
+
+The wrapper now prints these large ignored/manual-review candidates on
+free-space guard failures, but it intentionally does not delete them. A normal
+gputrace proof run needs at least `2048MiB` free on the repository volume.
+
+App-side preflight without gputrace:
+
+```bash
+scripts/tools/run_3dmark05_perf_probe.sh \
+  --suffix screen-blend-run-71-188-sort-nogputrace-r2 \
+  --frame 60 \
+  --timeout 180 \
+  --no-gputrace \
+  --encoder-breakdown-seq 60 \
+  --measure-index-reuse \
+  --probe-sort-indexed-triangles-by-min-index \
+  --probe-reverse-indexed-triangles-row 60/2 \
+  --probe-reverse-indexed-triangles-classes screen-blend \
+  --probe-indexed-triangle-encoder-draw-min 71 \
+  --probe-indexed-triangle-encoder-draw-max 188 \
+  --top 3 \
+  --hot-gpu-share 95 \
+  --min-free-mb 256
+```
+
+Result:
+
+| Check | Value |
+|---|---:|
+| Output | `experiments/output/app-d3d9-3dmark05-screen-blend-run-71-188-sort-nogputrace-r2/` |
+| `result.json` | present |
+| Status / returncode / timeout | `pass / 0 / false` |
+| Failures | `[]` |
+| Visual frame | valid GT1 frame |
+| Probe rows | `667` |
+| Eligible/applied | `118 / 118` |
+| Applied row | `60/2` |
+| Applied draw range | `71..188` |
+| Applied primitive/vertex count | `153,929 / 461,787` |
+| Blend signature | `InvDestColor,One,Add` |
+| Reorder bytes | `923,574` |
+
+This confirms that the draw-window locality candidate can complete normally and
+produce `result.json` when Metal capture is disabled. The primitive count
+differs from the previous smoke (`172,669` to `153,929`), so the future
+gputrace proof still needs geometry drift gates; however, the disk-full
+partial-run failure is not intrinsic to the probe selector itself.
+
+No-gputrace run-level baseline comparison:
+
+```bash
+scripts/tools/run_3dmark05_perf_probe.sh \
+  --suffix current-normal-nogputrace-r2 \
+  --frame 60 \
+  --timeout 180 \
+  --no-gputrace \
+  --encoder-breakdown-seq 60 \
+  --measure-index-reuse \
+  --top 3 \
+  --hot-gpu-share 95 \
+  --min-free-mb 256
+
+python3 scripts/tools/compare_3dmark05_perf_counters.py \
+  experiments/output/app-d3d9-3dmark05-current-normal-nogputrace-r2 \
+  experiments/output/app-d3d9-3dmark05-screen-blend-run-71-188-sort-nogputrace-r2 \
+  --before-label current-normal-nogputrace-r2 \
+  --after-label screen-blend-run-71-188-sort-nogputrace-r2 \
+  --output experiments/output/app-d3d9-3dmark05-screen-blend-run-71-188-sort-nogputrace-r2/frame60-perf-counter-comparison.md
+```
+
+Both no-gputrace runs completed with `status=pass`, `returncode=0`,
+`timed_out=false`, and `failures=[]`.
+
+| Metric | Baseline | Draw-window sort | Delta |
+|---|---:|---:|---:|
+| Presents | `125` | `123` | `-1.60%` |
+| Draw calls | `95,046` | `94,006` | `-1.09%` |
+| Draws / present | `760.368` | `764.276` | `+0.51%` |
+| Passes / present | `11.888` | `11.976` | `+0.74%` |
+| Tile preservation | `15,113.676MiB` | `15,064.125MiB` | `-0.33%` |
+| Same-key preservation | `6,188.000MiB` | `6,036.000MiB` | `-2.46%` |
+| Draw-run records / submit | `4.156` | `4.167` | `+0.28%` |
+| Draw submission batch records / submit | `9.584` | `9.561` | `-0.24%` |
+| Const-upload break bytes / draw | `281.262` | `282.732` | `+0.52%` |
+| Stream deltas / draw | `0.890` | `0.891` | `+0.11%` |
+| IB deltas / draw | `0.842` | `0.843` | `+0.12%` |
+| Encode draw CPU | `105,490.146ms` | `104,909.313ms` | `-0.55%` |
+| Submit draw CPU | `502.110ms` | `503.311ms` | `+0.24%` |
+| GPU command-buffer time | `460.901ms` | `441.141ms` | `-4.29%` |
+| Completion wait | `1,576.093ms` | `1,525.691ms` | `-3.20%` |
+| Map / queue sequence wait | `0 / 0ms` | `0 / 0ms` | unchanged |
+
+Interpretation: the draw-window sort does not materially improve CPU
+draw-run formation, submit batching, stream/IB churn, argbuf/cbuf upload, or
+render-pass preservation at run level. It also does not introduce map or queue
+sequence waits. Therefore the candidate remains a GPU-backend locality
+hypothesis, not a CPU batching optimization. The decisive proof still needs the
+gputrace/Xcode comparison with row-key and geometry gates.
+
+Index-locality detail for the applied `60/2` draw `71..188` window:
+
+| Metric | Original order | Min-index sorted order | Delta | Delta % |
+|---|---:|---:|---:|---:|
+| Draws | `118` | `118` | `0` | `0.00%` |
+| Primitives | `153,929` | `153,929` | `0` | `0.00%` |
+| Unique indices | `230,369` | `230,369` | `0` | `0.00%` |
+| Cache miss estimate 16 | `303,727` | `325,852` | `+22,125` | `+7.28%` |
+| Cache miss estimate 32 | `292,295` | `315,205` | `+22,910` | `+7.84%` |
+| Cache miss estimate 64 | `281,796` | `304,190` | `+22,394` | `+7.95%` |
+| Adjacent index delta sum | `299,431,744` | `278,025,929` | `-21,405,815` | `-7.15%` |
+| Backward jumps | `229,885` | `221,856` | `-8,029` | `-3.49%` |
+| Triangle index span sum | `142,863,936` | `142,863,936` | `0` | `0.00%` |
+| Max stream0 span | `204,600` | `204,600` | `0` | `0.00%` |
+| Reorder bytes | `0` | `923,574` | `+923,574` | `n/a` |
+
+This is a useful negative result. The current min-index sort is not a vertex
+cache reuse optimization; by the local 16/32/64 finite-cache estimator it
+increases cache misses. If the partial Xcode result repeats, the mechanism is
+more likely GPU address locality, tiler/parameter backend write density, or
+compiler/backend storage behavior from a smoother index-address walk. This
+also matches the partial gputrace comparison: `60/2` VS invocations did not
+drop (`+4.04%`), while VS bytes/invocation dropped sharply (`-72.38%`).
+
+The next proof run should therefore preserve the current min-index sort as the
+address-locality classifier, but a production optimization cannot simply
+promote it as "vertex-cache optimization". A later implementation candidate
+should compare at least three orderings under Xcode counters: original order,
+min-index/address-locality order, and a true post-transform vertex-cache order.
+Only the ordering that reduces hidden backend write without breaking geometry
+gates and visual output should be promoted.
 
 ```mermaid
 flowchart TD
@@ -12017,11 +12285,15 @@ flowchart TD
   W --> X["per-draw state-probe applied fields\nprove selected material slice"]
   X --> Y["next valid candidate\npreserve screen-blend equation\nsame-row material/pass locality"]
   Y --> Z["encoder draw range gate\n60/2 draw 71..188\nscreen-blend run"]
+  Z --> AA["gputrace sort candidate\nrow-key matched\nVS write -35.20%"]
+  AA --> AB{"geometry gate?"}
+  AB -- "fails: +23.23% tris" --> AC["rerun with full result.json\nand geometry-gated comparison"]
+  AB -- "passes on rerun" --> AD["promote locality/order experiment\nas optimization direction"]
 
   classDef hot fill:#ffe8e8,stroke:#b64242,color:#2b0d0d
   classDef good fill:#e8f5e8,stroke:#4d8b4d,color:#102a10
   classDef known fill:#e8f0ff,stroke:#476cb6,color:#0d1833
-  class D,H hot
-  class I,J,K,L,N good
-  class A,B,C,E,F,G,M,O,P,S,T,U,V,W,X,Y,Z known
+  class D,H,AC hot
+  class I,J,K,L,N,AA good
+  class A,B,C,E,F,G,M,O,P,S,T,U,V,W,X,Y,Z,AB,AD known
 ```

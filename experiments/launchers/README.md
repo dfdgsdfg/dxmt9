@@ -113,13 +113,22 @@ Commercial / 3rd-party titles (require external prefix):
     first to verify paths, desktop lock state, and free-space guard. The
     wrapper requires `2048MiB` free by default when gputrace capture is enabled
     (`--min-free-mb N` / `DXMT_3DMARK05_MIN_TRACE_FREE_MB=N` overrides it).
+    Gputrace runs refuse lower guards unless
+    `DXMT_3DMARK05_ALLOW_LOW_TRACE_FREE_MB=1` is set deliberately; low-space
+    captures can still export Xcode counters, but they risk Wine state-save
+    failures and missing `result.json`, so they should not be used as strict
+    proof runs. Add `--require-result-json` to proof captures so the printed
+    finalizer command rejects partial logs instead of summarizing them.
     Use `--measure-index-reuse` for the optional unique-index diagnostic; the
     final joined report will include `dxmt indexed references / unique
     estimate`, `VS invocations / dxmt indexed unique estimate`, and 16/32/64
     finite-cache miss estimates when the index data was readable.
     Dry-run and guard failures print `traces/`, `experiments/output/`, and
     the largest trace/output files when free space is below the guard, so
-    cleanup can happen before launching Wine. If `--baseline-joined` or
+    cleanup can happen before launching Wine. They also print large ignored
+    prefix/app/vendor payloads as manual-review candidates; do not delete
+    those blindly because they may be the active Wine prefix or installed
+    benchmark payload. If `--baseline-joined` or
     `--require-top-pso-attribution` is passed to the wrapper, dry-run also
     prints the exact `finalize_cmd_after_xcode_export` command to run after
     Xcode exports `frame<N>-counters-xcode.csv`.

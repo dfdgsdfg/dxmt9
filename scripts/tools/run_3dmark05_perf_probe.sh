@@ -10,6 +10,7 @@ result_file=${DXMT_3DMARK05_RESULT_FILE:-dxmt9_gt1.3dr}
 capture_gputrace=1
 dry_run=0
 dump_shaders=0
+recommended_gputrace_min_free_mb=2048
 trim_unused_varyings=0
 drop_vsout_point_size=0
 probe_position_only_vsout=0
@@ -97,6 +98,7 @@ require_const_upload_break_bytes_decrease=0
 require_encode_draw_cpu_decrease=0
 max_gpu_command_buffer_regression_ms=${DXMT_3DMARK05_MAX_GPU_COMMAND_BUFFER_REGRESSION_MS:-}
 max_const_upload_break_count_ratio=${DXMT_3DMARK05_MAX_CONST_UPLOAD_BREAK_COUNT_RATIO:-}
+require_result_json=0
 require_top_gpu_decrease=0
 require_top_buffer_write_decrease=0
 require_top_vs_buffer_write_decrease=0
@@ -395,6 +397,8 @@ Options:
                       Compare gate: encode_draw_cpu_ms must decrease
   --max-gpu-command-buffer-regression-ms N
                       Compare gate: max allowed gpu_command_buffer_time_ms regression
+  --require-result-json
+                      Finalizer gate: fail instead of using dxmt9.log partial-run counters
   --require-top-gpu-decrease
                       Finalizer Xcode gate: top-N GPU time must decrease
   --require-top-buffer-write-decrease
@@ -450,7 +454,9 @@ Options:
                       and Xcode comparison (default: 3)
   --hot-gpu-share PCT GPU share target for finalizer report-only Hot Set
                       Aggregate (default: 95.0)
-  --min-free-mb N     Required free space before launch (default: 2048 with gputrace, 256 without)
+  --min-free-mb N     Required free space before launch (default: 2048 with gputrace, 256 without).
+                      Gputrace runs refuse values below 2048 unless
+                      DXMT_3DMARK05_ALLOW_LOW_TRACE_FREE_MB=1 is set.
   --dry-run           Print paths, env, and command without launching
   -h, --help          Show this help
 USAGE
@@ -838,6 +844,10 @@ while (($#)); do
       max_const_upload_break_count_ratio=${2:?missing value for --max-const-upload-break-count-ratio}
       shift 2
       ;;
+    --require-result-json)
+      require_result_json=1
+      shift
+      ;;
     --require-top-gpu-decrease)
       require_top_gpu_decrease=1
       shift
@@ -970,7 +980,7 @@ fi
 
 if [[ -z "$min_free_mb" ]]; then
   if (( capture_gputrace )); then
-    min_free_mb=2048
+    min_free_mb=$recommended_gputrace_min_free_mb
   else
     min_free_mb=256
   fi
@@ -1139,6 +1149,14 @@ print_space_hints() {
       "$repo_root/experiments/output" \
       "$repo_root/build-x86_64-builtin" 2>/dev/null |
       sort -hr >&"$stream" || true
+    echo "large ignored/manual-review candidates:" >&"$stream"
+    du -sh \
+      "$repo_root/experiments/prefixs"/* \
+      "$repo_root/experiments/apps_3rd" \
+      "$repo_root/experiments/wine/vendor" \
+      "$repo_root/experiments/wine/sikarugir-cx-24.0.7" 2>/dev/null |
+      sort -hr |
+      head -20 >&"$stream" || true
   fi
   if command -v find >/dev/null 2>&1; then
     echo "large trace/output files:" >&"$stream"
@@ -1570,6 +1588,9 @@ if (( capture_gputrace )); then
   if [[ -n "$compare_baseline_joined" ]]; then
     finalize_cmd+=(--baseline-joined "$compare_baseline_joined")
   fi
+  if (( require_result_json )); then
+    finalize_cmd+=(--require-result-json)
+  fi
   if (( require_top_gpu_decrease )); then
     finalize_cmd+=(--require-top-gpu-decrease)
   fi
@@ -1702,6 +1723,9 @@ echo "summary: $summary_path"
 echo "session_locked: $session_locked"
 echo "free_space_mb: $free_mb"
 echo "min_free_space_mb: $min_free_mb"
+if (( capture_gputrace )) && (( min_free_mb < recommended_gputrace_min_free_mb )); then
+  echo "warning: gputrace min_free_space_mb is below the recommended ${recommended_gputrace_min_free_mb}MiB launch guard; set DXMT_3DMARK05_ALLOW_LOW_TRACE_FREE_MB=1 only for deliberate partial-run risk."
+fi
 if (( capture_gputrace )); then
   echo "gputrace: $capture_path"
 else
@@ -1770,6 +1794,14 @@ fi
 
 if [[ "${DXMT_3DMARK05_REQUIRE_UNLOCKED:-1}" != "0" && "$session_locked" == yes ]]; then
   echo "macOS session is locked; unlock the desktop before running 3DMark05 perf/gputrace" >&2
+  exit 2
+fi
+
+if (( capture_gputrace )) &&
+   (( min_free_mb < recommended_gputrace_min_free_mb )) &&
+   [[ "${DXMT_3DMARK05_ALLOW_LOW_TRACE_FREE_MB:-0}" != "1" ]]; then
+  echo "refusing low free-space gputrace launch guard: --min-free-mb ${min_free_mb} is below the recommended ${recommended_gputrace_min_free_mb}MiB" >&2
+  echo "raise --min-free-mb, free disk space, or set DXMT_3DMARK05_ALLOW_LOW_TRACE_FREE_MB=1 after deliberately accepting partial-run/no-result.json risk" >&2
   exit 2
 fi
 

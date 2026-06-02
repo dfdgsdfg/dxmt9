@@ -153,6 +153,20 @@ class ThreeDMark05ProbeScriptTests(unittest.TestCase):
         )
         finalize_index = lines.index(finalize_lines[0])
         self.assertGreater(dry_run_index, finalize_index)
+        self.assertIn("large ignored/manual-review candidates:", result.stdout)
+
+    def test_wrapper_rejects_low_gputrace_free_space_guard_without_override(self) -> None:
+        result = self.run_script(
+            RUN_WRAPPER,
+            "--suffix",
+            "unsafe-low-gputrace-space",
+            "--min-free-mb",
+            "256",
+        )
+
+        self.assertEqual(result.returncode, 2)
+        self.assertIn("refusing low free-space gputrace launch guard", result.stderr)
+        self.assertIn("DXMT_3DMARK05_ALLOW_LOW_TRACE_FREE_MB=1", result.stderr)
 
     def test_wrapper_forwards_unexplained_write_gates_to_finalizer(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -233,6 +247,24 @@ class ThreeDMark05ProbeScriptTests(unittest.TestCase):
         )
         self.assertIn("--top 4", finalize_line)
         self.assertIn("--hot-gpu-share 98", finalize_line)
+
+    def test_wrapper_forwards_result_json_gate_to_finalizer(self) -> None:
+        result = self.run_script(
+            RUN_WRAPPER,
+            "--suffix",
+            "forward-result-json",
+            "--require-result-json",
+            "--min-free-mb",
+            "0",
+            "--dry-run",
+        )
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+        finalize_line = next(
+            line for line in result.stdout.splitlines()
+            if line.startswith("finalize_cmd_after_xcode_export:")
+        )
+        self.assertIn("--require-result-json", finalize_line)
 
     def test_wrapper_dry_run_includes_sparse_const_split_env(self) -> None:
         result = self.run_script(
@@ -335,6 +367,27 @@ class ThreeDMark05ProbeScriptTests(unittest.TestCase):
             self.assertIn("| `present_encoded` | `5` |", text)
             self.assertTrue(output_dir.joinpath("3dmark05-perf-encoders.csv").exists())
             self.assertTrue(output_dir.joinpath("3dmark05-perf-encoder-streams.csv").exists())
+
+    def test_finalizer_result_json_gate_rejects_partial_log(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            output_dir = Path(tmp) / "run"
+            output_dir.mkdir()
+            output_dir.joinpath("dxmt9.log").write_text(
+                "[dxmt9-perf] present_encoded=5 draw_calls=7\n",
+                encoding="utf-8",
+            )
+
+            result = self.run_script(
+                FINALIZER,
+                "--suffix",
+                "partial-log",
+                "--output-dir",
+                str(output_dir),
+                "--require-result-json",
+            )
+
+        self.assertEqual(result.returncode, 2)
+        self.assertIn("missing required result.json", result.stderr)
 
     def test_xcode_summarizer_joins_x8_shader_alpha_fill_fields(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

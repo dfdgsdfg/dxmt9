@@ -14,6 +14,7 @@ baseline_joined=${DXMT_3DMARK05_COMPARE_BASELINE_JOINED:-}
 before_label=${DXMT_3DMARK05_COMPARE_BEFORE_LABEL:-baseline}
 after_label=${DXMT_3DMARK05_COMPARE_AFTER_LABEL:-}
 dry_run=0
+require_result_json=0
 
 require_color_dontcare_increase=0
 require_depth_dontcare_increase=0
@@ -75,6 +76,8 @@ Options:
                       Compare Xcode+dxmt joined summary against this baseline joined CSV
   --before-label NAME Baseline label for comparison reports (default: baseline)
   --after-label NAME  Candidate label for comparison reports (default: suffix or run id)
+  --require-result-json
+                      Gate: fail instead of using dxmt9.log partial-run counters
   --require-color-dontcare-increase
   --require-depth-dontcare-increase
   --require-tile-preservation-decrease
@@ -161,6 +164,10 @@ while (($#)); do
     --after-label)
       after_label=${2:?missing value for --after-label}
       shift 2
+      ;;
+    --require-result-json)
+      require_result_json=1
+      shift
       ;;
     --require-color-dontcare-increase)
       require_color_dontcare_increase=1
@@ -696,6 +703,10 @@ if (( dry_run )); then
 fi
 
 if [[ ! -f "$output_dir/result.json" ]]; then
+  if (( require_result_json )); then
+    echo "missing required result.json: $output_dir/result.json" >&2
+    exit 2
+  fi
   if [[ -n "$baseline_output" ]]; then
     echo "missing result.json for run-level comparison: $output_dir/result.json" >&2
     exit 2
