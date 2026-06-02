@@ -10112,3 +10112,95 @@ flowchart TD
   class Drift,NotProof,Next hot
   class SpanSignal,Filter,Env,Smoke196,Exact,Useful known
 ```
+
+### Stream-Span Xcode Rejection And Trim Smoke
+
+The first strict Xcode validation of the stream0-span filter rejected it as a
+primary fix. The candidate
+`app-d3d9-3dmark05-reverse-row-60-4-streamspan196608-gputrace-r1` was compared
+against `app-d3d9-3dmark05-row-60-4-shape-scout-nomutate-gputrace-r1` with
+row-key, Xcode counter, dxmt join, top-PSO attribution, and geometry-delta gates
+enabled.
+
+Key result:
+
+| Metric | Baseline | Stream-span reverse | Delta |
+|---|---:|---:|---:|
+| Total GPU | `52.112ms` | `52.610ms` | `+0.96%` |
+| Top GPU | `45.623ms` | `46.236ms` | `+1.34%` |
+| Top VS buffer write | `2062.860MiB` | `2062.333MiB` | `-0.03%` |
+| Top unexplained buffer write | `2062.083MiB` | `2060.788MiB` | `-0.06%` |
+| Top VS bytes / invocation | `765.064B` | `764.846B` | `-0.03%` |
+| Top draw calls | `1123` | `1123` | `0` |
+| Top dxmt vertices | `4,923,498` | `4,923,498` | `0` |
+| Top dxmt triangles | `1,641,166` | `1,641,166` | `0` |
+
+Interpretation:
+
+- The filter implementation is valid, but reversing the selected stream-span
+  draws does not reduce the hidden Apple VS buffer-write bucket.
+- The small VS-write decrease is below useful signal and comes with a GPU-time
+  regression, so this is not a candidate optimization.
+- The remaining owner is still hidden vertex/tiler/parameter backend storage,
+  not simple index order or post-transform cache locality.
+
+The next correctness-preserving candidate is pair-local VSOut liveness. A
+no-gputrace smoke was run with `DXMT9_TRIM_UNUSED_VARYINGS=1`:
+
+```bash
+scripts/tools/run_3dmark05_perf_probe.sh \
+  --suffix trim-unused-varyings-smoke-r1 \
+  --frame 60 \
+  --timeout 180 \
+  --no-gputrace \
+  --dump-shaders \
+  --trim-unused-varyings
+```
+
+Smoke artifacts:
+
+```text
+experiments/output/app-d3d9-3dmark05-trim-unused-varyings-smoke-r1/actual.png
+experiments/output/app-d3d9-3dmark05-trim-unused-varyings-smoke-r1/3dmark05-perf-summary.md
+traces/app-d3d9-3dmark05-trim-unused-varyings-smoke-r1/analysis/shaders
+```
+
+Smoke result:
+
+| Metric | Value |
+|---|---:|
+| Status | `pass` |
+| Present count | `1053` |
+| Draw calls | `746,971` |
+| Render passes | `12,181` |
+| Shader MSL dumps | `87` |
+| Visual check | normal GT1 robot frame, not yellow/constant output |
+
+This promotes `--trim-unused-varyings` to the next Xcode gputrace candidate.
+The expected upside should be bounded by the prior correctness-invalid
+`--probe-position-only-vsout` result, which reduced top VS buffer write by only
+about `4.86%` and total GPU by about `4.32%`. Therefore a liveness-trim pass is
+worth validating, but it cannot alone explain the full gap between current
+`~30 FPS` behavior and the M1 hardware ceiling.
+
+```mermaid
+flowchart TD
+  Owner["current owner\nhidden VS buffer/device write"] --> SpanProbe["stream0-span reverse\nrow 60/4 span >= 196608"]
+  SpanProbe --> Xcode["strict Xcode comparison\nrow/geometry/counter gates pass"]
+  Xcode --> Reject["rejected\nGPU +0.96%\nVS write -0.03%"]
+  Reject --> Owner
+
+  Owner --> VisibleShape["visible stage-out shape probe"]
+  VisibleShape --> PositionOnly["position-only VSOut\ncorrectness-invalid lower bound"]
+  PositionOnly --> Bound["upper-bound signal\nVS write -4.86%\nGPU -4.32%"]
+  VisibleShape --> TrimSmoke["trim-unused-varyings smoke\nDXMT9_TRIM_UNUSED_VARYINGS=1"]
+  TrimSmoke --> Pass["pass + normal GT1 image\n87 shader dumps"]
+  Pass --> Next["next Xcode candidate\ntrim-unused-varyings gputrace"]
+  Bound --> Next
+  Next --> Caveat["if Xcode bucket barely moves\nvisible VSOut is secondary\nreturn to primitive/backend storage probes"]
+
+  classDef hot fill:#ffe8e8,stroke:#b64242,color:#2b0d0d
+  classDef known fill:#e8f0ff,stroke:#476cb6,color:#0d1833
+  class Owner,Reject,Next,Caveat hot
+  class SpanProbe,Xcode,VisibleShape,PositionOnly,Bound,TrimSmoke,Pass known
+```
