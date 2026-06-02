@@ -11750,27 +11750,43 @@ by default it requires `2048MiB` free at the capture destination, with
 explicit override. This prevents accidentally starting a `.gputrace` capture on
 the current low-disk machine.
 
-Two isolated Xcode captures now exist for this same shader+geometry draw set:
+Two isolated Xcode captures now exist for this same shader+geometry draw set,
+and a third real-cbuf scout now exists for the same shader/state class:
 
 | Replay | Render state | GPU time | VS invocations | VS buffer device writes | Tiled vertex bytes | VS device bytes written |
 |---|---|---:|---:|---:|---:|---:|
 | `mini-replay-r1` | default Metal state, dummy cbufs | `93.941us` | `33,697` | `0B` | `262,144B` | `84,544B` |
 | `mini-replay-state-r1` | first-draw D3D9 blend/depth/cull/scissor state, dummy cbufs | `82.819us` | `33,697` | `0B` | `262,144B` | `61,056B` |
+| `mini-replay-real-cbuf-r1` | D3D9 state class with per-draw real VS/PS/FFP cbuf payloads | `1154.142us` | `18,362` | `0B` | `262,144B` | `859,712B` |
 
 Artifacts:
 
 - `traces/app-d3d9-3dmark05-current-head-geometry-payload-shaderfilter-anyrow-r2/analysis/mini-replay/mini-replay-r1-counters-summary.md`
 - `traces/app-d3d9-3dmark05-current-head-geometry-payload-shaderfilter-anyrow-r2/analysis/mini-replay-state-r1/mini-replay-state-r1-counters-summary.md`
 - `traces/app-d3d9-3dmark05-current-head-geometry-payload-shaderfilter-anyrow-r2/analysis/mini-replay-state-r1/mini-replay-r1-vs-state-r1-comparison.csv`
+- `traces/app-d3d9-3dmark05-current-head-geometry-cbuf-payload-shaderfilter-anyrow-r2/analysis/mini-replay-real-cbuf-r1/mini-replay-real-cbuf-r1-counters-xcode.csv`
+- `traces/app-d3d9-3dmark05-current-head-geometry-cbuf-payload-shaderfilter-anyrow-r2/analysis/mini-replay-real-cbuf-r1/mini-replay-real-cbuf-r1-counters-summary.md`
+- `traces/app-d3d9-3dmark05-current-head-geometry-cbuf-payload-shaderfilter-anyrow-r2/analysis/mini-replay-real-cbuf-r1/mini-replay-cbuf-vs-state-comparison.csv`
 
 The state-aware replay applies the hot group state from the manifest:
 `alpha_blend=1`, `src_blend=5`, `dst_blend=6`, `blend_op=1`,
 `depth_enabled=1`, `depth_write=0`, `depth_func=4`, `cull=2`,
 `scissor=0`, `color_write=0xf`. Even with those D3D9 render-state controls
 applied, Xcode still reports `0B` for `VS Buffer Device Memory Bytes Written`.
-This is a negative proof for the reduced factor set: shader source,
-stream0/index geometry, and coarse blend/depth/cull/scissor state alone do not
-reproduce the GT1 hidden VS/tiler/backend write bucket.
+The real-cbuf replay changes shader behavior materially: GPU time rises to
+`1.154ms`, ALU limiter rises to `77.84%`, cull limiter to `70.67%`, clip
+limiter to `64.56%`, and `VS Bytes Written To Device Memory` rises to
+`859,712B`. However, the decisive Xcode bucket remains `0B`. This is a
+negative proof for the reduced factor set: shader source, stream0/index
+geometry, coarse blend/depth/cull/scissor state, and real constant-buffer
+payloads still do not reproduce the GT1 hidden VS/tiler/backend write bucket.
+
+The `mini-replay-real-cbuf-r1` draw triplet is a same shader/state-class scout,
+not a strict same-geometry A/B against `mini-replay-state-r1`: it captured
+`32,127` submitted vertices / `18,362` VS invocations instead of `57,387` /
+`33,697`. That makes its time/limiter deltas useful as a factor probe, but the
+ownership conclusion depends only on the stable `0B` value for
+`VS Buffer Device Memory Bytes Written`.
 
 ```mermaid
 flowchart TD
@@ -11782,31 +11798,34 @@ flowchart TD
 
   ShaderGeo --> Replay0["mini-replay-r1\n3 draws, dummy cbufs"]
   RenderState --> Replay1["mini-replay-state-r1\nsame 3 draws + hot state"]
+  Cbuf --> Replay2["mini-replay-real-cbuf-r1\nsame shader/state class\nreal per-draw cbufs"]
   Replay0 --> Xcode0["Xcode counters\nVS buffer writes = 0B"]
   Replay1 --> Xcode1["Xcode counters\nVS buffer writes = 0B"]
+  Replay2 --> Xcode2["Xcode counters\nVS buffer writes = 0B\nGPU time = 1.154ms"]
 
   Xcode0 --> Exclude["exclude: shader+geometry alone"]
   Xcode1 --> Exclude2["exclude: coarse render-state shape alone"]
-  Cbuf --> Next["next experiment:\ncapture/replay real cbuf contents"]
+  Xcode2 --> Exclude3["exclude: real cbuf payloads alone"]
   PassShape --> Next2["next experiment:\nreplay full attachment/pass/storage shape"]
+  Next2 --> Backend["or return to primitive/backend locality\nwith full-pass row gates"]
 
   classDef neg fill:#e8f6ef,stroke:#2d7a46,color:#0f2b18
   classDef next fill:#fff4d6,stroke:#a76d00,color:#2f2100
-  class Xcode0,Xcode1,Exclude,Exclude2 neg
-  class Cbuf,PassShape,Next,Next2 next
+  class Xcode0,Xcode1,Xcode2,Exclude,Exclude2,Exclude3 neg
+  class PassShape,Next2,Backend next
 ```
 
 Therefore the next proof step should not be another small render-state toggle
-inside the dummy-cbuf mini replay. The first follow-up path is now implemented:
-use `--dump-indexed-geometry-cbufs` on the same tightly filtered payload scout
-to write real `.vsconsts.bin`, `.psconsts.bin`, `.ffpvs.bin`, and `.ffpps.bin`
-files beside each geometry payload. The manifest builder includes those files
-under `uniforms`, and the standalone mini replay binds them per draw, falling
-back to dummy constants only when a manifest has no cbuf payloads.
+inside the dummy-cbuf mini replay. The first follow-up path has already been
+implemented and validated: `--dump-indexed-geometry-cbufs` writes real
+`.vsconsts.bin`, `.psconsts.bin`, `.ffpvs.bin`, and `.ffpps.bin` files beside
+each geometry payload. The manifest builder includes those files under
+`uniforms`, and the standalone mini replay binds them per draw, falling back to
+dummy constants only when a manifest has no cbuf payloads.
 
 ```bash
 scripts/tools/run_3dmark05_perf_probe.sh \
-  --suffix current-head-geometry-cbuf-payload-shaderfilter-anyrow-r1 \
+  --suffix current-head-geometry-cbuf-payload-shaderfilter-anyrow-r2 \
   --no-gputrace \
   --encoder-breakdown-seq 60 \
   --dump-indexed-geometry \
@@ -11817,19 +11836,104 @@ scripts/tools/run_3dmark05_perf_probe.sh \
   --probe-reverse-indexed-triangles-classes alpha-blend,depth-read,textured
 ```
 
-After that run, rebuild `frame60-mini-replay-manifest.json`, run the mini
-replay with the same capture/export sequence, and compare the Xcode counters
-against `mini-replay-state-r1`. If cbuf replay still reports `0B` for
-`VS Buffer Device Memory Bytes Written`, move to the still-open pass-shape
-factor:
+That run produced three `seq=60/enc=2` payloads with real cbuf files and a
+manifest at
+`traces/app-d3d9-3dmark05-current-head-geometry-cbuf-payload-shaderfilter-anyrow-r2/analysis/frame60-mini-replay-manifest.json`.
+The generated mini replay reports `uniform_draw_count=3` and
+`uniform_bytes=32,472`. Xcode export was done via the required `.gputrace`
+sequence: open capture, profile, export with embedded performance data, show
+Performance > Counters, wait for counter profiling, then export encoder
+counters.
+
+Because real-cbuf replay still reports `0B` for
+`VS Buffer Device Memory Bytes Written`, the still-open factors are now:
 
 1. Attachment/pass-shape replay: match the full GT1 color/depth pixel formats,
    storage modes, load/store actions, clear values, pass split boundaries, and
    target sizes instead of the current one-off private color/depth target.
-2. If either reproduces nonzero `VS Buffer Device Memory Bytes Written`, vary
-   only one factor at a time to isolate whether the backend write is driven by
-   transformed position/varying values, attachment/pass metadata, or a combined
-   compiler/backend path.
+2. Primitive/backend locality replay: keep the hot row keys and geometry gates
+   stable while varying primitive order, material grouping, or meshlet-sized
+   partitioning. A useful probe must move `VS Buffer Device Memory Bytes
+   Written`, not just GPU time or fragment/ALU limiters.
+3. If either path reproduces nonzero `VS Buffer Device Memory Bytes Written`,
+   vary only one factor at a time to isolate whether the backend write is
+   driven by attachment/pass metadata, transformed position/varying values,
+   primitive locality, or a combined Apple compiler/backend path.
+
+Implementation gap closed for the next step: indexed geometry payload metadata
+now records active texture slot handles, LODs, formats, dimensions, pool/usage,
+and Metal shader-read availability. The manifest builder preserves those rows
+under each draw's `textures` array.
+
+Validation run:
+
+- Output:
+  `experiments/output/app-d3d9-3dmark05-current-head-geometry-cbuf-texturemeta-shaderfilter-anyrow-r1`
+- Trace analysis:
+  `traces/app-d3d9-3dmark05-current-head-geometry-cbuf-texturemeta-shaderfilter-anyrow-r1/analysis`
+- Manifest:
+  `traces/app-d3d9-3dmark05-current-head-geometry-cbuf-texturemeta-shaderfilter-anyrow-r1/analysis/frame60-mini-replay-manifest.json`
+- Texture summaries:
+  `frame60-mini-replay-textures-by-draw.csv`,
+  `frame60-mini-replay-textures-by-handle.csv`, and
+  `frame60-mini-replay-texture-metadata-summary.md`.
+
+The validation run produced three `60/2` payloads with `texture_mask=0x7f`.
+All three draws use the same seven texture stages, but stages `5` and `6`
+share one handle, leaving six unique handles. The reduced standalone shader
+generated from this manifest declares only `texture(0)` / `sampler(0)`, and
+stage 0 is a `1x1` texture (`format=22`, `levels=1`). Therefore real texture
+payloads are not the highest-signal next factor for this specific shader pair:
+the current 1x1 white mini-replay substitute is close to the only shader-visible
+texture input. The next high-signal probe should prioritize full pass/attachment
+shape or primitive/backend locality. Texture file replay remains useful for
+other shader pairs whose generated MSL declares more texture arguments, but it
+is not the immediate owner candidate for this reduced pair.
+
+Attachment metadata and pass-shape replay are now wired far enough for the
+next isolated Xcode counter run:
+
+- Output:
+  `experiments/output/app-d3d9-3dmark05-current-head-geometry-cbuf-attachmentmeta-shaderfilter-anyrow-r1`
+- Trace analysis:
+  `traces/app-d3d9-3dmark05-current-head-geometry-cbuf-attachmentmeta-shaderfilter-anyrow-r1/analysis`
+- Manifest:
+  `traces/app-d3d9-3dmark05-current-head-geometry-cbuf-attachmentmeta-shaderfilter-anyrow-r1/analysis/frame60-mini-replay-manifest.json`
+- Attachment summaries:
+  `frame60-mini-replay-attachments-by-draw.csv` and
+  `frame60-mini-replay-attachment-metadata-summary.md`
+- Mini replay:
+  `traces/app-d3d9-3dmark05-current-head-geometry-cbuf-attachmentmeta-shaderfilter-anyrow-r1/analysis/mini-replay-passshape-r1`
+
+The validation run's reduced pass uses one color RT and one depth surface
+across all three draws:
+
+| Kind | Format | Size | Bpp | Samples | Usage | Alias texture |
+|---|---:|---:|---:|---:|---:|---|
+| `color0` | `2` (`X8R8G8B8`) | `1024x768` | `4` | `1` | `0x2` | `0x20000010000008c` |
+| `depth` | `41` (`D24S8`) | `1024x768` | `4` | `1` | `0x4` | `0x0` |
+
+`run_3dmark05_mini_replay.py` now consumes manifest `attachments` when present.
+For this manifest it generates a standalone replay with `MTLPixelFormatBGRA8Unorm`
+for color and `MTLPixelFormatDepth32Float_Stencil8` for depth/stencil, both
+`1024x768`. The no-capture smoke passed:
+
+```bash
+python3 scripts/tools/run_3dmark05_mini_replay.py \
+  traces/app-d3d9-3dmark05-current-head-geometry-cbuf-attachmentmeta-shaderfilter-anyrow-r1/analysis/frame60-mini-replay-manifest.json \
+  --output-dir traces/app-d3d9-3dmark05-current-head-geometry-cbuf-attachmentmeta-shaderfilter-anyrow-r1/analysis/mini-replay-passshape-r1 \
+  --run --repeat 1
+```
+
+Remaining gap before treating this as a full pass-shape reproducer: the mini
+replay still uses a single isolated render pass with clear load actions and
+`DontCare` depth/stencil stores. It now matches size and pixel formats, but not
+the full GT1 pass history, load/store action provenance, previous attachment
+contents, or same-key re-entry behavior. The next Xcode-safe isolated capture
+should run `mini-replay-passshape-r1` and compare `VS Buffer Device Memory Bytes
+Written` against `mini-replay-real-cbuf-r1`; if it still reports `0B`, the
+remaining high-signal path is primitive/backend locality rather than reduced
+attachment pixel format.
 
 Before the selector existed, `app-d3d9-3dmark05-current-head-geometry-payload-row60-2-topgroup-r1`
 was manually captured with encoder draw indices `234..236`:

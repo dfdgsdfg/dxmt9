@@ -44,6 +44,7 @@
 #include <sstream>
 #include <span>
 #include <string>
+#include <string_view>
 #include <unordered_map>
 #include <unordered_set>
 #include <vector>
@@ -3064,8 +3065,111 @@ bool indexedGeometryDumpShaderMatches(core::FlatDrawStateView drawState) {
          (!pixelFilter.has_value() || shader.pixelShader.hash == *pixelFilter);
 }
 
+void appendIndexedGeometryTextureMetadata(std::ostringstream& meta,
+                                          core::FlatDrawStateView drawState,
+                                          const resources::Pool& pool) {
+  if (!drawState.hot) {
+    return;
+  }
+  const auto& hot = *drawState.hot;
+  meta << "texture_mask=0x" << std::hex << hot.textureMask << std::dec << "\n";
+  for (u32 stage = 0; stage < core::kMaxTextureStages; ++stage) {
+    const auto handle = hot.textures[stage];
+    if (!handle) {
+      continue;
+    }
+    meta << "texture" << stage << "_handle=0x" << std::hex << handle.value
+         << std::dec << "\n"
+         << "texture" << stage << "_lod=" << hot.textureLods[stage] << "\n";
+    if (const auto* texture = pool.findTexture(handle.value)) {
+      meta << "texture" << stage << "_format="
+           << static_cast<unsigned>(texture->desc.format) << "\n"
+           << "texture" << stage << "_type="
+           << static_cast<unsigned>(texture->desc.type) << "\n"
+           << "texture" << stage << "_pool="
+           << static_cast<unsigned>(texture->desc.pool) << "\n"
+           << "texture" << stage << "_usage=0x" << std::hex
+           << texture->desc.usage << std::dec << "\n"
+           << "texture" << stage << "_width=" << texture->desc.width << "\n"
+           << "texture" << stage << "_height=" << texture->desc.height << "\n"
+           << "texture" << stage << "_depth=" << texture->desc.depth << "\n"
+           << "texture" << stage << "_levels=" << texture->desc.levels << "\n"
+           << "texture" << stage << "_has_metal_texture="
+           << (texture->texture ? 1 : 0) << "\n"
+           << "texture" << stage << "_has_shader_read_texture="
+           << (texture->shaderReadTexture ? 1 : 0) << "\n"
+           << "texture" << stage << "_has_srgb_shader_read_texture="
+           << (texture->srgbShaderReadTexture ? 1 : 0) << "\n";
+    } else {
+      meta << "texture" << stage << "_missing_record=1\n";
+    }
+  }
+}
+
+void appendIndexedGeometryAttachmentMetadata(std::ostringstream& meta,
+                                             core::FlatDrawStateView drawState,
+                                             const resources::Pool& pool) {
+  if (!drawState.hot) {
+    return;
+  }
+  const auto& hot = *drawState.hot;
+  auto appendSurface = [&](std::string_view prefix,
+                           core::RenderTargetAttachment attachment) {
+    const auto handle = attachment.handle;
+    meta << prefix << "_handle=0x" << std::hex << handle.value << std::dec << "\n"
+         << prefix << "_level=" << attachment.level << "\n"
+         << prefix << "_sample_count=" << attachment.sampleCount << "\n";
+    if (!handle) {
+      return;
+    }
+    const auto* surface = pool.findSurface(handle.value);
+    if (!surface) {
+      meta << prefix << "_missing_surface=1\n";
+      return;
+    }
+    meta << prefix << "_format=" << static_cast<unsigned>(surface->desc.format) << "\n"
+         << prefix << "_pool=" << static_cast<unsigned>(surface->desc.pool) << "\n"
+         << prefix << "_usage=0x" << std::hex << surface->desc.usage << std::dec << "\n"
+         << prefix << "_width=" << surface->desc.width << "\n"
+         << prefix << "_height=" << surface->desc.height << "\n"
+         << prefix << "_bytes_per_pixel=" << core::bytesPerPixel(surface->desc.format) << "\n"
+         << prefix << "_render_target=" << (surface->desc.renderTarget ? 1 : 0) << "\n"
+         << prefix << "_depth_stencil=" << (surface->desc.depthStencil ? 1 : 0) << "\n"
+         << prefix << "_has_metal_texture=" << (surface->texture ? 1 : 0) << "\n"
+         << prefix << "_has_srgb_texture=" << (surface->srgbTexture ? 1 : 0) << "\n"
+         << prefix << "_has_resolve_texture=" << (surface->resolveTexture ? 1 : 0) << "\n"
+         << prefix << "_alias_texture=0x" << std::hex << surface->aliasTexture.value
+         << std::dec << "\n"
+         << prefix << "_alias_level=" << surface->level << "\n"
+         << prefix << "_alias_slice=" << surface->slice << "\n";
+    if (surface->aliasTexture) {
+      const auto* texture = pool.findTexture(surface->aliasTexture.value);
+      if (texture) {
+        meta << prefix << "_alias_texture_format="
+             << static_cast<unsigned>(texture->desc.format) << "\n"
+             << prefix << "_alias_texture_type="
+             << static_cast<unsigned>(texture->desc.type) << "\n"
+             << prefix << "_alias_texture_usage=0x" << std::hex
+             << texture->desc.usage << std::dec << "\n"
+             << prefix << "_alias_texture_width=" << texture->desc.width << "\n"
+             << prefix << "_alias_texture_height=" << texture->desc.height << "\n"
+             << prefix << "_alias_texture_levels=" << texture->desc.levels << "\n";
+      }
+    }
+  };
+
+  for (u32 index = 0; index < core::kMaxRenderTargets; ++index) {
+    std::ostringstream prefix;
+    prefix << "attachment_color" << index;
+    appendSurface(prefix.str(), hot.colorAttachments[index]);
+  }
+  appendSurface("attachment_depth", hot.depthStencil);
+}
+
 void maybeDumpIndexedGeometryPayload(
     const ActiveEncoderBreakdown* encoderBreakdown,
+    core::FlatDrawStateView drawState,
+    const resources::Pool& pool,
     std::span<const u8> indexBytes,
     std::span<const u8> vertexBytes,
     const IndexReuseMeasure& indexReuse,
@@ -3223,6 +3327,8 @@ void maybeDumpIndexedGeometryPayload(
        << "wrote_psconsts=" << (wrotePsConsts ? 1 : 0) << "\n"
        << "wrote_ffpvs=" << (wroteFfpVsConsts ? 1 : 0) << "\n"
        << "wrote_ffpps=" << (wroteFfpPsConsts ? 1 : 0) << "\n";
+  appendIndexedGeometryTextureMetadata(meta, drawState, pool);
+  appendIndexedGeometryAttachmentMetadata(meta, drawState, pool);
   writeTextFile(base.string() + ".meta", meta.str());
 }
 
@@ -7263,6 +7369,8 @@ bool encodeDraw(EncodeContext& ctx,
           }
           maybeDumpIndexedGeometryPayload(
               encoderBreakdown,
+              drawState,
+              ctx.pool,
               originalIndexBytesForReuse,
               vertexBytes,
               originalIndexReuse,

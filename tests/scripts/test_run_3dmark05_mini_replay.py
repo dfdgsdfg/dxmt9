@@ -131,6 +131,19 @@ class MiniReplayScriptTests(unittest.TestCase):
                     "ffpvs_bytes": 5,
                     "ffpps_bytes": 5,
                 },
+                "attachments": {
+                    "colors": [{
+                        "index": 0,
+                        "format": 2,
+                        "width": 1024,
+                        "height": 768,
+                    }],
+                    "depth": {
+                        "format": 41,
+                        "width": 1024,
+                        "height": 768,
+                    },
+                },
             }],
         }), encoding="utf-8")
         return manifest, output_dir
@@ -167,6 +180,12 @@ class MiniReplayScriptTests(unittest.TestCase):
             self.assertIn("constant VsConsts& vsConsts [[buffer(6)]]", (output_dir / "dxmt9_vs.replay.metal").read_text(encoding="utf-8"))
             objc = (output_dir / "dxmt9_3dmark05_mini_replay.mm").read_text(encoding="utf-8")
             self.assertIn("psoDesc.colorAttachments[0].blendingEnabled = 1;", objc)
+            self.assertIn("psoDesc.colorAttachments[0].pixelFormat = MTLPixelFormatBGRA8Unorm;", objc)
+            self.assertIn("psoDesc.depthAttachmentPixelFormat = MTLPixelFormatDepth32Float_Stencil8;", objc)
+            self.assertIn("psoDesc.stencilAttachmentPixelFormat = MTLPixelFormatDepth32Float_Stencil8;", objc)
+            self.assertIn("width:1024", objc)
+            self.assertIn("height:768", objc)
+            self.assertIn("pass.stencilAttachment.texture = depth;", objc)
             self.assertIn("const char* vsConstsPath;", objc)
             self.assertIn("bufferFromFileOrDefault(device, draw.vsConstsPath, vsConsts)", objc)
             self.assertIn("draw.vsconsts.bin", objc)

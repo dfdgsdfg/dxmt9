@@ -125,6 +125,61 @@ class BuildMiniReplayManifestTests(unittest.TestCase):
                     "wrote_psconsts=1",
                     "wrote_ffpvs=1",
                     "wrote_ffpps=1",
+                    "texture_mask=0x7f",
+                    "texture0_handle=0x1000",
+                    "texture0_lod=2",
+                    "texture0_format=21",
+                    "texture0_type=0",
+                    "texture0_pool=1",
+                    "texture0_usage=0x4",
+                    "texture0_width=256",
+                    "texture0_height=128",
+                    "texture0_depth=1",
+                    "texture0_levels=5",
+                    "texture0_has_metal_texture=1",
+                    "texture0_has_shader_read_texture=1",
+                    "texture0_has_srgb_shader_read_texture=0",
+                    "texture3_handle=0x3000",
+                    "texture3_lod=0",
+                    "texture3_missing_record=1",
+                    "attachment_color0_handle=0x4000",
+                    "attachment_color0_level=0",
+                    "attachment_color0_sample_count=1",
+                    "attachment_color0_format=22",
+                    "attachment_color0_pool=0",
+                    "attachment_color0_usage=0x1",
+                    "attachment_color0_width=1024",
+                    "attachment_color0_height=768",
+                    "attachment_color0_bytes_per_pixel=4",
+                    "attachment_color0_render_target=1",
+                    "attachment_color0_depth_stencil=0",
+                    "attachment_color0_has_metal_texture=1",
+                    "attachment_color0_has_srgb_texture=1",
+                    "attachment_color0_has_resolve_texture=0",
+                    "attachment_color0_alias_texture=0x5000",
+                    "attachment_color0_alias_level=2",
+                    "attachment_color0_alias_slice=0",
+                    "attachment_color0_alias_texture_format=22",
+                    "attachment_color0_alias_texture_type=0",
+                    "attachment_color0_alias_texture_usage=0x5",
+                    "attachment_color0_alias_texture_width=1024",
+                    "attachment_color0_alias_texture_height=768",
+                    "attachment_color0_alias_texture_levels=4",
+                    "attachment_depth_handle=0x6000",
+                    "attachment_depth_level=0",
+                    "attachment_depth_sample_count=1",
+                    "attachment_depth_format=75",
+                    "attachment_depth_pool=0",
+                    "attachment_depth_usage=0x2",
+                    "attachment_depth_width=1024",
+                    "attachment_depth_height=768",
+                    "attachment_depth_bytes_per_pixel=4",
+                    "attachment_depth_render_target=0",
+                    "attachment_depth_depth_stencil=1",
+                    "attachment_depth_has_metal_texture=1",
+                    "attachment_depth_has_srgb_texture=0",
+                    "attachment_depth_has_resolve_texture=0",
+                    "attachment_depth_alias_texture=0x0",
                 ]),
                 encoding="utf-8",
             )
@@ -196,6 +251,41 @@ class BuildMiniReplayManifestTests(unittest.TestCase):
             self.assertTrue(draw["uniforms"]["psconsts_file"].endswith(".psconsts.bin"))
             self.assertTrue(draw["uniforms"]["ffpvs_file"].endswith(".ffpvs.bin"))
             self.assertTrue(draw["uniforms"]["ffpps_file"].endswith(".ffpps.bin"))
+            self.assertEqual(len(draw["textures"]), 2)
+            self.assertEqual(draw["textures"][0]["stage"], 0)
+            self.assertEqual(draw["textures"][0]["handle"], "0x1000")
+            self.assertEqual(draw["textures"][0]["lod"], 2)
+            self.assertEqual(draw["textures"][0]["format"], 21)
+            self.assertEqual(draw["textures"][0]["type"], 0)
+            self.assertEqual(draw["textures"][0]["pool"], 1)
+            self.assertEqual(draw["textures"][0]["usage"], "0x4")
+            self.assertEqual(draw["textures"][0]["width"], 256)
+            self.assertEqual(draw["textures"][0]["height"], 128)
+            self.assertEqual(draw["textures"][0]["levels"], 5)
+            self.assertEqual(draw["textures"][0]["has_metal_texture"], 1)
+            self.assertEqual(draw["textures"][0]["has_shader_read_texture"], 1)
+            self.assertEqual(draw["textures"][0]["has_srgb_shader_read_texture"], 0)
+            self.assertEqual(draw["textures"][1]["stage"], 3)
+            self.assertEqual(draw["textures"][1]["handle"], "0x3000")
+            self.assertEqual(draw["textures"][1]["missing_record"], 1)
+            self.assertEqual(len(draw["attachments"]["colors"]), 1)
+            color = draw["attachments"]["colors"][0]
+            self.assertEqual(color["index"], 0)
+            self.assertEqual(color["handle"], "0x4000")
+            self.assertEqual(color["format"], 22)
+            self.assertEqual(color["width"], 1024)
+            self.assertEqual(color["height"], 768)
+            self.assertEqual(color["bytes_per_pixel"], 4)
+            self.assertEqual(color["render_target"], 1)
+            self.assertEqual(color["has_srgb_texture"], 1)
+            self.assertEqual(color["alias_texture"], "0x5000")
+            self.assertEqual(color["alias_level"], 2)
+            self.assertEqual(color["alias_texture_levels"], 4)
+            depth = draw["attachments"]["depth"]
+            self.assertEqual(depth["handle"], "0x6000")
+            self.assertEqual(depth["format"], 75)
+            self.assertEqual(depth["depth_stencil"], 1)
+            self.assertEqual(depth["alias_texture"], "0x0")
 
     def test_manifest_accepts_legacy_encoder_draw_payload_field(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

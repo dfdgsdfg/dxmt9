@@ -486,7 +486,14 @@ Commercial / 3rd-party titles (require external prefix):
     Add `--dump-indexed-geometry-cbufs` when the replay must use real per-draw
     `VsConsts`, `PsConsts`, `FfpVsConsts`, and `FfpPsConsts` bytes instead of
     dummy constants; it writes those cbuf files beside each selected geometry
-    payload.
+    payload. The geometry payload metadata also records active texture slot
+    handles, LODs, formats, sizes, and storage flags. The manifest builder
+    preserves that data under `textures`, so a later real-texture replay can
+    select the correct dump target by draw/stage instead of guessing from
+    `texture_mask`. The metadata also carries color/depth attachment handles,
+    formats, sizes, sample counts, and alias texture information under
+    `attachments`; the mini replay uses this to choose the standalone Metal
+    color/depth/stencil pixel formats when present.
     The geometry dumper skips invalid index/stream0 ranges before consuming the
     max-draw cap, so early matching setup draws without replayable stream bytes
     do not hide later valid payloads.

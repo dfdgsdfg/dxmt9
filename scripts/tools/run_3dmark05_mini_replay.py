@@ -111,6 +111,40 @@ def cxx_string(value: str) -> str:
     return json.dumps(value)
 
 
+def first_color_attachment(draws: list[dict[str, Any]]) -> dict[str, Any]:
+    attachments = draws[0].get("attachments", {}) if draws else {}
+    colors = attachments.get("colors", [])
+    return colors[0] if colors else {}
+
+
+def first_depth_attachment(draws: list[dict[str, Any]]) -> dict[str, Any]:
+    attachments = draws[0].get("attachments", {}) if draws else {}
+    depth = attachments.get("depth", {})
+    return depth if isinstance(depth, dict) else {}
+
+
+def color_pixel_format(format_value: int) -> str:
+    # dxmt9 core::Format values. Keep this narrow: unknown formats preserve the
+    # previous mini-replay fallback instead of guessing an incompatible RT.
+    if format_value in (1, 2):  # A8R8G8B8 / X8R8G8B8
+        return "MTLPixelFormatBGRA8Unorm"
+    if format_value in (3, 4):  # A8B8G8R8 / X8B8G8R8
+        return "MTLPixelFormatRGBA8Unorm"
+    return "MTLPixelFormatRGBA8Unorm"
+
+
+def depth_pixel_format(format_value: int) -> str:
+    if format_value in (41, 46):  # D24S8 / D24FS8
+        return "MTLPixelFormatDepth32Float_Stencil8"
+    if format_value == 43:  # D16
+        return "MTLPixelFormatDepth16Unorm"
+    return "MTLPixelFormatDepth32Float"
+
+
+def depth_format_has_stencil(format_value: int) -> bool:
+    return format_value in (41, 46)
+
+
 def render_source(draws: list[dict[str, Any]],
                   vs_path: Path,
                   fs_path: Path,
@@ -135,6 +169,14 @@ def render_source(draws: list[dict[str, Any]],
     scissor_t = int(first_state.get("scissor_t", 0))
     scissor_r = int(first_state.get("scissor_r", width))
     scissor_b = int(first_state.get("scissor_b", height))
+    color_attachment = first_color_attachment(draws)
+    depth_attachment = first_depth_attachment(draws)
+    color_format = color_pixel_format(int(color_attachment.get("format", 0)))
+    depth_format_value = int(depth_attachment.get("format", 0))
+    depth_format = depth_pixel_format(depth_format_value)
+    stencil_format = depth_format if depth_format_has_stencil(depth_format_value) else "MTLPixelFormatInvalid"
+    pass_width = int(color_attachment.get("width", 0)) or int(depth_attachment.get("width", 0)) or width
+    pass_height = int(color_attachment.get("height", 0)) or int(depth_attachment.get("height", 0)) or height
     draw_entries = []
     for draw in draws:
         geometry = draw["geometry"]
@@ -326,7 +368,7 @@ int main() {{
     MTLRenderPipelineDescriptor* psoDesc = [MTLRenderPipelineDescriptor new];
     psoDesc.vertexFunction = vs;
     psoDesc.fragmentFunction = fs;
-    psoDesc.colorAttachments[0].pixelFormat = MTLPixelFormatRGBA8Unorm;
+    psoDesc.colorAttachments[0].pixelFormat = {color_format};
     psoDesc.colorAttachments[0].writeMask = colorWriteMask({color_write});
     psoDesc.colorAttachments[0].blendingEnabled = {alpha_blend};
     psoDesc.colorAttachments[0].sourceRGBBlendFactor = blendFactor({src_blend}, false);
@@ -338,7 +380,8 @@ int main() {{
         blendFactor({dst_blend_alpha if separate_alpha else dst_blend}, true);
     psoDesc.colorAttachments[0].alphaBlendOperation =
         blendOperation({blend_op_alpha if separate_alpha else blend_op});
-    psoDesc.depthAttachmentPixelFormat = MTLPixelFormatDepth32Float;
+    psoDesc.depthAttachmentPixelFormat = {depth_format};
+    psoDesc.stencilAttachmentPixelFormat = {stencil_format};
     NSError* error = nil;
     id<MTLRenderPipelineState> pso = [device newRenderPipelineStateWithDescriptor:psoDesc
                                                                             error:&error];
@@ -353,16 +396,16 @@ int main() {{
     id<MTLDepthStencilState> depthState = [device newDepthStencilStateWithDescriptor:depthStateDesc];
 
     MTLTextureDescriptor* colorDesc =
-        [MTLTextureDescriptor texture2DDescriptorWithPixelFormat:MTLPixelFormatRGBA8Unorm
-                                                           width:{width}
-                                                          height:{height}
+        [MTLTextureDescriptor texture2DDescriptorWithPixelFormat:{color_format}
+                                                           width:{pass_width}
+                                                          height:{pass_height}
                                                        mipmapped:NO];
     colorDesc.usage = MTLTextureUsageRenderTarget;
     id<MTLTexture> color = [device newTextureWithDescriptor:colorDesc];
     MTLTextureDescriptor* depthDesc =
-        [MTLTextureDescriptor texture2DDescriptorWithPixelFormat:MTLPixelFormatDepth32Float
-                                                           width:{width}
-                                                          height:{height}
+        [MTLTextureDescriptor texture2DDescriptorWithPixelFormat:{depth_format}
+                                                           width:{pass_width}
+                                                          height:{pass_height}
                                                        mipmapped:NO];
     depthDesc.usage = MTLTextureUsageRenderTarget;
     id<MTLTexture> depth = [device newTextureWithDescriptor:depthDesc];
@@ -419,6 +462,12 @@ int main() {{
     pass.depthAttachment.loadAction = MTLLoadActionClear;
     pass.depthAttachment.storeAction = MTLStoreActionDontCare;
     pass.depthAttachment.clearDepth = 1.0;
+    if ({1 if stencil_format != "MTLPixelFormatInvalid" else 0}) {{
+      pass.stencilAttachment.texture = depth;
+      pass.stencilAttachment.loadAction = MTLLoadActionClear;
+      pass.stencilAttachment.storeAction = MTLStoreActionDontCare;
+      pass.stencilAttachment.clearStencil = 0;
+    }}
     id<MTLRenderCommandEncoder> encoder = [commandBuffer renderCommandEncoderWithDescriptor:pass];
     [encoder setRenderPipelineState:pso];
     [encoder setDepthStencilState:depthState];

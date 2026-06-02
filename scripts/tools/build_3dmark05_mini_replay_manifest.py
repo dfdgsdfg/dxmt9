@@ -184,6 +184,79 @@ def selected_payloads(
     return rows[:max_draws] if max_draws > 0 else rows
 
 
+def texture_metadata(payload: dict[str, str]) -> list[dict[str, Any]]:
+    textures: list[dict[str, Any]] = []
+    for stage in range(8):
+        handle = payload.get(f"texture{stage}_handle", "")
+        if as_int(handle) == 0:
+            continue
+        textures.append({
+            "stage": stage,
+            "handle": handle,
+            "lod": as_int(payload.get(f"texture{stage}_lod")),
+            "format": as_int(payload.get(f"texture{stage}_format")),
+            "type": as_int(payload.get(f"texture{stage}_type")),
+            "pool": as_int(payload.get(f"texture{stage}_pool")),
+            "usage": payload.get(f"texture{stage}_usage", ""),
+            "width": as_int(payload.get(f"texture{stage}_width")),
+            "height": as_int(payload.get(f"texture{stage}_height")),
+            "depth": as_int(payload.get(f"texture{stage}_depth")),
+            "levels": as_int(payload.get(f"texture{stage}_levels")),
+            "has_metal_texture": as_int(payload.get(f"texture{stage}_has_metal_texture")),
+            "has_shader_read_texture": as_int(payload.get(f"texture{stage}_has_shader_read_texture")),
+            "has_srgb_shader_read_texture": as_int(payload.get(f"texture{stage}_has_srgb_shader_read_texture")),
+            "missing_record": as_int(payload.get(f"texture{stage}_missing_record")),
+        })
+    return textures
+
+
+def surface_metadata(payload: dict[str, str], prefix: str) -> dict[str, Any]:
+    return {
+        "handle": payload.get(f"{prefix}_handle", ""),
+        "level": as_int(payload.get(f"{prefix}_level")),
+        "sample_count": as_int(payload.get(f"{prefix}_sample_count")),
+        "format": as_int(payload.get(f"{prefix}_format")),
+        "pool": as_int(payload.get(f"{prefix}_pool")),
+        "usage": payload.get(f"{prefix}_usage", ""),
+        "width": as_int(payload.get(f"{prefix}_width")),
+        "height": as_int(payload.get(f"{prefix}_height")),
+        "bytes_per_pixel": as_int(payload.get(f"{prefix}_bytes_per_pixel")),
+        "render_target": as_int(payload.get(f"{prefix}_render_target")),
+        "depth_stencil": as_int(payload.get(f"{prefix}_depth_stencil")),
+        "has_metal_texture": as_int(payload.get(f"{prefix}_has_metal_texture")),
+        "has_srgb_texture": as_int(payload.get(f"{prefix}_has_srgb_texture")),
+        "has_resolve_texture": as_int(payload.get(f"{prefix}_has_resolve_texture")),
+        "alias_texture": payload.get(f"{prefix}_alias_texture", ""),
+        "alias_level": as_int(payload.get(f"{prefix}_alias_level")),
+        "alias_slice": as_int(payload.get(f"{prefix}_alias_slice")),
+        "alias_texture_format": as_int(payload.get(f"{prefix}_alias_texture_format")),
+        "alias_texture_type": as_int(payload.get(f"{prefix}_alias_texture_type")),
+        "alias_texture_usage": payload.get(f"{prefix}_alias_texture_usage", ""),
+        "alias_texture_width": as_int(payload.get(f"{prefix}_alias_texture_width")),
+        "alias_texture_height": as_int(payload.get(f"{prefix}_alias_texture_height")),
+        "alias_texture_levels": as_int(payload.get(f"{prefix}_alias_texture_levels")),
+        "missing_surface": as_int(payload.get(f"{prefix}_missing_surface")),
+    }
+
+
+def attachment_metadata(payload: dict[str, str]) -> dict[str, Any]:
+    colors = []
+    for index in range(4):
+        prefix = f"attachment_color{index}"
+        if as_int(payload.get(f"{prefix}_handle")) == 0:
+            continue
+        item = surface_metadata(payload, prefix)
+        item["index"] = index
+        colors.append(item)
+    depth = {}
+    if as_int(payload.get("attachment_depth_handle")) != 0:
+        depth = surface_metadata(payload, "attachment_depth")
+    return {
+        "colors": colors,
+        "depth": depth,
+    }
+
+
 def build_manifest(args: argparse.Namespace) -> dict[str, Any]:
     shaders = shader_index(load_csv(args.shader_summary))
     probes = probe_index(load_csv(args.probe_draws))
@@ -307,6 +380,8 @@ def build_manifest(args: argparse.Namespace) -> dict[str, Any]:
                 "wrote_ffpvs": as_int(payload.get("wrote_ffpvs")),
                 "wrote_ffpps": as_int(payload.get("wrote_ffpps")),
             },
+            "textures": texture_metadata(payload),
+            "attachments": attachment_metadata(payload),
         })
 
     rows = sorted({draw["row"] for draw in manifest_draws})
