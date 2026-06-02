@@ -195,6 +195,33 @@ top-three VS buffer write stayed effectively unchanged (`1627.240MiB` to
 first-order owner of the hidden VS-write bucket. The normal-source refresh
 above remains the authoritative baseline for future A/B comparisons.
 
+The narrower `large4096,screen-blend` alpha-blend disable probe was also run
+after adding blend-signature class filters. It is still a correctness-invalid
+diagnostic: the selected screen blend equation is real D3D9 blending
+(`InvDestColor,One,Add`), not a no-op. The run captured and exported Xcode
+encoder counters through
+`traces/app-d3d9-3dmark05-screen-blend-class-gputrace-r1/analysis/frame60-counters-xcode.csv`,
+then finalized against the current index-scout baseline. The probe applied to
+only `6` draw calls (`36,411` primitives / `109,233` vertices), all in
+`seq=60,enc=2`. The comparison reports a large apparent drop
+(`50.832ms` to `25.417ms` total GPU, top VS buffer write `2236.981MiB` to
+`1054.495MiB`), but this is not accepted as an optimization result because the
+hot-row set changed materially: shared top rows are only `60/0`, `60/1`, and
+`60/3`, with `60/2` and `60/8` appearing only in the probe capture. Treat this
+as evidence that backend shape is sensitive to scoped blend/pass composition,
+not as proof that removing blend is legal or sufficient.
+
+The useful same-run ownership result is the remaining shape after the scoped
+probe: top-three GPU is still `24.823ms`, VS buffer write is still
+`1054.495MiB`, hidden backend estimate is `1037.143MiB` (`0.984x` of VS
+buffer write), and dxmt CPU writer bytes are only `0.727MiB`. Even in the
+mutated frame, the hot set is still vertex-stage dominated (`94.19%` weighted
+vertex-stage time) and the unexplained/Xcode buffer-write ratio remains
+`0.999x`. The next valid blend-related experiment must therefore preserve the
+blend equation and isolate same-row backend shape, for example by a row-local
+replay harness or by changing draw grouping/locality without changing
+rendered blend semantics.
+
 `DXMT9_PROBE_DISABLE_DEPTH_WRITE=1` is also diagnostic only. The frame remains
 visibly wrong because depth writes are suppressed, and the Xcode comparison
 rejects depth-write mode as the first-order owner of the current VS-write
@@ -219,13 +246,16 @@ flowchart TD
 
   Alpha["disable-alpha-blend probe\nyellow frame"] --> AlphaReject["GPU time regresses\nVS write stable"]
   AlphaReject --> Owner
+  ScopedAlpha["large4096 screen-blend probe\n6 draws mutated"] --> ScopedDelta["apparent GPU/VS-write drop\nbut top-row shape drifts"]
+  ScopedDelta --> BlendCaution["blend affects backend shape\nnot a legal optimization yet"]
+  BlendCaution --> Owner
   Depth["disable-depth-write probe\nincorrect depth output"] --> DepthReject["depth write drops\nbut VS write stable\nGPU time regresses"]
   DepthReject --> Owner
 
   classDef hot fill:#ffe8e8,stroke:#b64242,color:#2b0d0d
   classDef ok fill:#e8ffe8,stroke:#3c8f3c,color:#0d2b0d
-  class VSWrite,Hidden,Owner hot
-  class Normal,DxmtWriters,NamedTiled,RejectCpu,RejectNamed,AlphaReject,DepthReject ok
+  class VSWrite,Hidden,Owner,ScopedDelta,BlendCaution hot
+  class Normal,DxmtWriters,NamedTiled,RejectCpu,RejectNamed,AlphaReject,DepthReject,ScopedAlpha ok
 ```
 
 The most recent comparable artifact set is:
@@ -537,6 +567,11 @@ Next experiment criteria:
   correctness-invalid diagnostic, but do not treat broad blend disable as the
   primary VS-write owner: GPU time regressed and `VS Buffer Device Memory Bytes
   Written` stayed stable.
+- The scoped `large4096,screen-blend` state-shape probe has also been run. It
+  produced a large apparent GPU/VS-write drop, but it mutated real blend
+  semantics and changed the hot-row set. Do not promote it. Use it to justify a
+  stricter same-row experiment that preserves blending while testing
+  primitive/backend locality or pass composition.
 
 ### Hidden Apple GPU Backend Storage Model
 
@@ -11693,7 +11728,11 @@ Artifacts:
 The summary script now includes an `Alpha Blend Signature Breakdown` section
 derived from indexed probe draw samples, so future runs do not require a manual
 CSV/Python pass to see whether a hot row is screen-blend, standard alpha, or a
-mixed blend-state bucket.
+mixed blend-state bucket. It also includes `Alpha Blend Signature Run Summary`
+and `Alpha Blend Signature Runs`: the summary reports fragmentation and the
+largest contiguous span per blend signature, while the detailed run table keeps
+draw order. This is the material/pass-locality view needed before testing a
+correctness-preserving regrouping or row-local replay harness.
 
 Frame-60 totals:
 
@@ -11809,7 +11848,7 @@ an extra selector dimension that can drift. Use the scissor/no-scissor slices
 only after a same-run gputrace counter result shows that the full screen-blend
 class still moves the hidden VS/backend write bucket.
 
-Prepared gputrace command:
+Executed gputrace command:
 
 ```bash
 scripts/tools/run_3dmark05_perf_probe.sh \
@@ -11821,13 +11860,53 @@ scripts/tools/run_3dmark05_perf_probe.sh \
   --probe-disable-alpha-blend-classes large4096,screen-blend \
   --top 5 \
   --hot-gpu-share 95 \
-  --min-free-mb 512
+  --min-free-mb 256
 ```
 
-Dry-run status: not launched yet. Available space was `406MiB`, below the
-`512MiB` launch guard. The next Xcode capture should run this command after
-freeing space, then export embedded performance data and encoder counters into
-`traces/app-d3d9-3dmark05-screen-blend-class-gputrace-r1/analysis/`.
+Xcode export/finalizer status: completed. The raw `frame60.gputrace` bundle was
+removed after finalization to recover disk space; the reduced analysis files
+remain:
+
+```text
+traces/app-d3d9-3dmark05-screen-blend-class-gputrace-r1/analysis/frame60-counters-xcode.csv
+traces/app-d3d9-3dmark05-screen-blend-class-gputrace-r1/analysis/frame60-counters-summary.csv
+traces/app-d3d9-3dmark05-screen-blend-class-gputrace-r1/analysis/frame60-xcode-dxmt-joined-summary.csv
+traces/app-d3d9-3dmark05-screen-blend-class-gputrace-r1/analysis/frame60-xcode-dxmt-bottleneck-report.md
+traces/app-d3d9-3dmark05-screen-blend-class-gputrace-r1/analysis/frame60-xcode-dxmt-comparison.md
+```
+
+Strict result summary:
+
+| Metric | Baseline | Screen-blend class probe | Delta |
+|---|---:|---:|---:|
+| Total GPU | `50.832ms` | `25.417ms` | `-50.00%` |
+| Top GPU | `50.368ms` | `25.071ms` | `-50.23%` |
+| Top VS buffer write | `2236.981MiB` | `1054.495MiB` | `-52.86%` |
+| Top hidden/unexplained write | `2236.772MiB` | `1054.162MiB` | `-52.87%` |
+| Applied draws | `0` | `6` | `large4096,screen-blend` |
+
+This is not a legal optimization result. The six selected draws use the real
+D3D9 screen-blend equation `InvDestColor + One + Add`, and disabling blend
+changes rendering semantics. The hot-row set also changed: shared top rows are
+only `60/0`, `60/1`, and `60/3`, while `60/2` and `60/8` appear only in the
+probe capture. The run is useful as a state-shape sensitivity classifier, not
+as proof that a blend-off PSO can be promoted.
+
+The same-run ownership after the mutation still points at the same remaining
+owner: top-three GPU is `24.823ms`, top-three VS buffer write is
+`1054.495MiB`, hidden backend estimate is `1037.143MiB` (`0.984x` of VS write),
+and dxmt CPU writer bytes are only `0.727MiB`. A valid follow-up must preserve
+the blend equation while changing row/material grouping, pass composition, or
+backend locality under strict same-row gates.
+
+Regenerated summary with the new run view shows why material grouping is a
+reasonable next classifier: in the screen-blend-class capture, `60/2`
+destination-dependent screen-blend work is split into many small runs before a
+long `standard-alpha` run. The dominant screen-blend run is draw `71..188`
+(`118` draws / `172,669` primitives / `4` large4096 draws), followed by the
+standard-alpha run `189..265` (`77` draws / `99,297` primitives / `3`
+large4096 draws). This does not justify reordering yet, but it gives the next
+same-row replay/material-grouping experiment a concrete run boundary to target.
 
 ```mermaid
 flowchart TD
@@ -11845,16 +11924,16 @@ flowchart TD
   J --> K["Show Performance > Counters\nwait for profiling completion"]
   K --> L["Export Encoder Counters"]
   L --> M{"VS Buffer Device Memory Bytes Written delta?"}
-  M -- "drops -52.86%" --> N["alpha blend contributes to backend shape"]
+  M -- "apparent drop -52.86%" --> N["state-shape sensitivity\nbut semantics invalid"]
   M -- "flat" --> O["focus primitive pressure / VSOut codegen"]
-  N --> P["still 1054 MiB top VS buffer write\ncontinue primitive/state-shape isolation"]
+  N --> P["still 1054 MiB top VS buffer write\nhidden backend remains"]
   P --> S["new blend-state counters\nunique/change/no-op/constant-factor"]
   S --> T{"blend-enabled no-op draws?"}
   T -- "yes" --> U["legal blend-off PSO candidate"]
   T -- "no: 0 draws" --> V["preserve blend equations\nstate/order/replay experiments only"]
   V --> W["class selectors\nscreen-blend / standard-alpha / no-scissor"]
   W --> X["per-draw state-probe applied fields\nprove selected material slice"]
-  X --> Y["next gputrace candidate\nlarge4096 AND screen-blend"]
+  X --> Y["next valid candidate\npreserve screen-blend equation\nsame-row material/pass locality"]
 
   classDef hot fill:#ffe8e8,stroke:#b64242,color:#2b0d0d
   classDef good fill:#e8f5e8,stroke:#4d8b4d,color:#102a10

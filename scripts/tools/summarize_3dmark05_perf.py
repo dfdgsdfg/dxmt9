@@ -1151,6 +1151,134 @@ def alpha_blend_signature_rows(probe_draws: list[dict[str, Any]]) -> list[dict[s
     )
 
 
+def alpha_blend_signature_run_rows(probe_draws: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    rows = sorted(
+        probe_draws,
+        key=lambda row: (
+            numeric_value(row, "seq"),
+            numeric_value(row, "encoder"),
+            numeric_value(row, "encoder_draw_index"),
+            numeric_value(row, "draw_ordinal"),
+        ),
+    )
+    runs: list[dict[str, Any]] = []
+    current: dict[str, Any] | None = None
+    current_key: tuple[Any, ...] | None = None
+
+    def flush() -> None:
+        nonlocal current, current_key
+        if current is not None:
+            current["pso_unique"] = len(current.pop("psos"))
+            runs.append(current)
+        current = None
+        current_key = None
+
+    for row in rows:
+        if not numeric_value(row, "alpha_blend"):
+            flush()
+            continue
+
+        key = (
+            row.get("seq"),
+            row.get("encoder"),
+            row.get("src_blend"),
+            row.get("dst_blend"),
+            row.get("blend_op"),
+            row.get("separate_alpha"),
+            row.get("src_blend_alpha"),
+            row.get("dst_blend_alpha"),
+            row.get("blend_op_alpha"),
+            row.get("color_write"),
+        )
+        draw_index = numeric_value(row, "encoder_draw_index")
+        if current is None or key != current_key:
+            flush()
+            current_key = key
+            current = {
+                "seq": row.get("seq"),
+                "encoder": row.get("encoder"),
+                "first_draw": draw_index,
+                "last_draw": draw_index,
+                "signature": blend_signature_text(row),
+                "draws": 0,
+                "primitives": 0,
+                "vertices": 0,
+                "large_4096_draws": 0,
+                "large_4096_primitives": 0,
+                "scissor_draws": 0,
+                "depth_write_draws": 0,
+                "psos": set(),
+            }
+
+        primitives = numeric_value(row, "primitive_count")
+        current["last_draw"] = draw_index
+        current["draws"] += 1
+        current["primitives"] += primitives
+        current["vertices"] += numeric_value(row, "vertex_count")
+        if primitives >= 4096:
+            current["large_4096_draws"] += 1
+            current["large_4096_primitives"] += primitives
+        if numeric_value(row, "scissor"):
+            current["scissor_draws"] += 1
+        if numeric_value(row, "depth_write"):
+            current["depth_write_draws"] += 1
+        pso = row.get("pso")
+        if pso not in (None, ""):
+            current["psos"].add(pso)
+
+    flush()
+    return runs
+
+
+def alpha_blend_signature_run_summary_rows(
+    runs: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    groups: dict[tuple[Any, ...], dict[str, Any]] = {}
+    for run in runs:
+        key = (run.get("seq"), run.get("encoder"), run.get("signature"))
+        group = groups.setdefault(
+            key,
+            {
+                "seq": run.get("seq"),
+                "encoder": run.get("encoder"),
+                "signature": run.get("signature"),
+                "runs": 0,
+                "draws": 0,
+                "primitives": 0,
+                "large_4096_draws": 0,
+                "large_4096_primitives": 0,
+                "scissor_draws": 0,
+                "depth_write_draws": 0,
+                "max_run_draws": 0,
+                "max_run_primitives": 0,
+                "max_run_first_draw": None,
+                "max_run_last_draw": None,
+            },
+        )
+        group["runs"] += 1
+        group["draws"] += numeric_value(run, "draws")
+        group["primitives"] += numeric_value(run, "primitives")
+        group["large_4096_draws"] += numeric_value(run, "large_4096_draws")
+        group["large_4096_primitives"] += numeric_value(run, "large_4096_primitives")
+        group["scissor_draws"] += numeric_value(run, "scissor_draws")
+        group["depth_write_draws"] += numeric_value(run, "depth_write_draws")
+        run_primitives = numeric_value(run, "primitives")
+        if run_primitives > numeric_value(group, "max_run_primitives"):
+            group["max_run_draws"] = numeric_value(run, "draws")
+            group["max_run_primitives"] = run_primitives
+            group["max_run_first_draw"] = run.get("first_draw")
+            group["max_run_last_draw"] = run.get("last_draw")
+
+    return sorted(
+        groups.values(),
+        key=lambda row: (
+            numeric_value(row, "primitives"),
+            numeric_value(row, "draws"),
+        ),
+        reverse=True,
+    )
+
+
 def write_csv(path: Path, rows: list[dict[str, Any]], keys: tuple[str, ...]) -> None:
     with path.open("w", newline="", encoding="utf-8") as handle:
         writer = csv.DictWriter(handle, fieldnames=keys, extrasaction="ignore")
@@ -1550,6 +1678,84 @@ def write_markdown(
                             fmt(row.get("draws")),
                             fmt(row.get("primitives")),
                             fmt(row.get("vertices")),
+                            large,
+                            fmt(row.get("scissor_draws")),
+                            fmt(row.get("depth_write_draws")),
+                            fmt(row.get("pso_unique")),
+                        ]
+                    )
+                    + " |"
+                )
+            lines.append("")
+
+        blend_runs = alpha_blend_signature_run_rows(probe_draws)
+        if blend_runs:
+            blend_run_summary = alpha_blend_signature_run_summary_rows(blend_runs)
+            if blend_run_summary:
+                lines.append("### Alpha Blend Signature Run Summary")
+                lines.append("")
+                lines.append(
+                    "| seq | enc | signature | runs | draws | prims | max run draw range | "
+                    "max run draws/prims | large4096 draws/prims | scissor draws | depth-write draws |"
+                )
+                lines.append("|---:|---:|---|---:|---:|---:|---:|---:|---:|---:|---:|")
+                for row in blend_run_summary[:16]:
+                    max_range = (
+                        f"{fmt(row.get('max_run_first_draw'))}.."
+                        f"{fmt(row.get('max_run_last_draw'))}"
+                    )
+                    max_run = (
+                        f"{fmt(row.get('max_run_draws'))}/"
+                        f"{fmt(row.get('max_run_primitives'))}"
+                    )
+                    large = (
+                        f"{fmt(row.get('large_4096_draws'))}/"
+                        f"{fmt(row.get('large_4096_primitives'))}"
+                    )
+                    lines.append(
+                        "| "
+                        + " | ".join(
+                            [
+                                fmt(row.get("seq")),
+                                fmt(row.get("encoder")),
+                                fmt(row.get("signature")),
+                                fmt(row.get("runs")),
+                                fmt(row.get("draws")),
+                                fmt(row.get("primitives")),
+                                max_range,
+                                max_run,
+                                large,
+                                fmt(row.get("scissor_draws")),
+                                fmt(row.get("depth_write_draws")),
+                            ]
+                        )
+                        + " |"
+                    )
+                lines.append("")
+
+            lines.append("### Alpha Blend Signature Runs")
+            lines.append("")
+            lines.append(
+                "| seq | enc | first draw | last draw | signature | draws | prims | "
+                "large4096 draws/prims | scissor draws | depth-write draws | PSOs |"
+            )
+            lines.append("|---:|---:|---:|---:|---|---:|---:|---:|---:|---:|---:|")
+            for row in blend_runs[:24]:
+                large = (
+                    f"{fmt(row.get('large_4096_draws'))}/"
+                    f"{fmt(row.get('large_4096_primitives'))}"
+                )
+                lines.append(
+                    "| "
+                    + " | ".join(
+                        [
+                            fmt(row.get("seq")),
+                            fmt(row.get("encoder")),
+                            fmt(row.get("first_draw")),
+                            fmt(row.get("last_draw")),
+                            fmt(row.get("signature")),
+                            fmt(row.get("draws")),
+                            fmt(row.get("primitives")),
                             large,
                             fmt(row.get("scissor_draws")),
                             fmt(row.get("depth_write_draws")),
