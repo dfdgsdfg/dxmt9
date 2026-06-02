@@ -14493,14 +14493,71 @@ Row-level conclusion from the narrowed Xcode run:
   full-frame proof or a row-local replay that eliminates unrelated hot-row
   drift.
 
+The first `50/1` row-local mini replay now isolates that drift. The captured
+payload window contains `6` draws from row `50/1`, repeated `100` times in the
+standalone Metal replay. Both variants replay the same `600` draw calls,
+`9,762,900` vertices, and `3,254,300` primitives in one render encoder.
+
+Artifacts:
+
+```text
+traces/app-d3d9-3dmark05-cache-opt-row50-1-payload-r1/analysis/frame50-row50-1-mini-replay-manifest.json
+traces/app-d3d9-3dmark05-cache-opt-row50-1-payload-r1/analysis/mini-replay-original.gputrace
+traces/app-d3d9-3dmark05-cache-opt-row50-1-payload-r1/analysis/mini-replay-cache-opt-lru32.gputrace
+traces/app-d3d9-3dmark05-cache-opt-row50-1-payload-r1/analysis/mini-replay-original-counters-xcode.csv
+traces/app-d3d9-3dmark05-cache-opt-row50-1-payload-r1/analysis/mini-replay-cache-opt-lru32-counters-xcode.csv
+traces/app-d3d9-3dmark05-cache-opt-row50-1-payload-r1/analysis/mini-replay-cache-opt-lru32-xcode-comparison.md
+```
+
+The mini replay A/B used the same shader, geometry, constants, render target,
+depth target, and draw count. Only primitive ordering changed from original
+order to `cache-opt-lru32`. Xcode counter export was run after draw-counter
+profiling completed for both captures.
+
+| Metric | Original order | `cache-opt-lru32` | Delta | Interpretation |
+|---|---:|---:|---:|---|
+| GPU time | `12.294ms` | `12.033ms` | `-0.262ms` (`-2.13%`) | Small but same-direction GPU win in isolated replay. |
+| Vertices | `9,762,900` | `9,762,900` | `0` | Geometry count stable. |
+| Primitives | `3,254,300` | `3,254,300` | `0` | Primitive count stable. |
+| FS invocations | `60,862,688` | `60,835,232` | `-27,456` (`-0.05%`) | Fragment workload is effectively stable. |
+| VS invocations | `5,321,800` | `4,976,700` | `-345,100` (`-6.48%`) | Ordering reduced post-transform work. |
+| LRU32 miss estimate | `56,979` | `49,804` | `-7,175` (`-12.59%`) | Software estimator predicts the Xcode direction. |
+| LRU64 miss estimate | `54,036` | `49,684` | `-4,352` (`-8.05%`) | Same direction with a larger cache model. |
+| Device write | `68.488MiB` | `61.741MiB` | `-6.747MiB` (`-9.85%`) | Overall device write fell. |
+| VS write | `67.402MiB` | `60.655MiB` | `-6.747MiB` (`-10.01%`) | Replay write reduction is vertex-stage owned. |
+| Tiled vertex buffer | `30.938MiB` | `28.313MiB` | `-2.625MiB` (`-8.49%`) | Named tiled storage follows invocation reduction. |
+| Tiled primitive block | `25.375MiB` | `23.250MiB` | `-2.125MiB` (`-8.37%`) | Binning/primitive storage also drops. |
+| `VS Buffer Device Memory Bytes Written` | `0MiB` | `0MiB` | n/a | This reduced replay still does not reproduce the full-frame primary bucket. |
+| Vertex stage time share | `48.17%` | `45.59%` | `-2.58pp` | Vertex side contribution fell. |
+| Shaded vertex read limiter | `100.00%` | `100.00%` | `0` | Limiter identity did not change. |
+| Cull unit limiter | `90.54%` | `88.97%` | `-1.57pp` | Backend pressure moved in the expected direction. |
+| Clip unit limiter | `20.16%` | `19.35%` | `-0.81pp` | Same direction. |
+
+Conclusion: this row-local replay removes the full-frame drift problem and
+validates the post-transform cache mechanism in isolation. The important
+chain is `LRU32 misses -12.59% -> VS invocations -6.48% -> VS/device write
+-10.0% -> GPU time -2.13%`. The remaining caveat is equally important:
+because this reduced replay reports `0MiB` for Xcode
+`VS Buffer Device Memory Bytes Written`, it cannot replace the real GT1
+full-frame proof. It is a mechanism proof and a ranking signal, not a
+production acceptance gate.
+
 The remaining proof path is:
 
-1. Build a row-local replay or same-frame paired proof for `50/1` and `50/3`
-   so `50/11`, `50/0`, `50/2`, and `50/4` cannot drift between A/B captures.
-2. Verify on full 3DMark05 GT1 once the row-local proof passes, with the stable-frame
-   gates: draw count, vertex/primitive count, top-row identity, FS invocations,
-   and Xcode `VS Buffer Device Memory Bytes Written`.
-3. If full-frame safety prevents enough reorder coverage, use the cache-miss
+1. Expand the row-local replay beyond the current `6` draw `50/1` window:
+   first the full `50/1` shader/state group, then `50/3`. The expanded replay
+   must either reproduce nonzero Xcode `VS Buffer Device Memory Bytes Written`
+   or show named tiled storage and VS invocation deltas at a scale that matches
+   the real frame.
+2. Build a production-shaped index-order implementation that avoids the
+   diagnostic transient-IB cost: cache/reuse reordered index buffers per stable
+   source IB + draw span + primitive/order key, and preserve D3D9 correctness
+   for alpha/scissor/depth-sensitive draws.
+3. Verify on full 3DMark05 GT1 with stable-frame gates: draw count,
+   vertex/primitive count, top-row identity, FS invocations, target-row
+   Xcode `VS Buffer Device Memory Bytes Written`, and no non-target hot-row
+   regression.
+4. If full-frame safety prevents enough reorder coverage, use the cache-miss
    estimate as a prioritizer for upstream mesh/index-buffer preservation
    issues rather than as an unconditional runtime rewrite.
 
@@ -14546,11 +14603,15 @@ flowchart TD
   NarrowXcode --> NarrowTarget["target 50/1,3\nVS write -15.59%\nVS invocations -10.45%\nLRU32 -17.02%\nGPU -6.27%"]
   NarrowXcode --> NarrowDrift["non-target hot rows\nGPU +22.76%\nVS write +16.57%\n50/11 regressed"]
   NarrowDrift --> StableNext["next proof\nrow-local replay or same-frame paired A/B"]
+  StableNext --> RowReplay50["row-local 50/1 mini replay\n6 draws x100\nsame vertices/primitives"]
+  RowReplay50 --> RowReplayWin["cache-opt-lru32 isolated win\nLRU32 -12.59%\nVS invocations -6.48%\nVS/device write -10.0%\nGPU -2.13%"]
+  RowReplay50 --> RowReplayGap["remaining proof gap\nVS Buffer Device Memory Bytes Written = 0\nreduced replay only"]
+  RowReplayGap --> ExpandReplay["next\nexpand full 50/1 group and 50/3\nthen full GT1 production-shaped proof"]
 
   classDef hot fill:#ffe8e8,stroke:#b64242,color:#2b0d0d
   classDef good fill:#e8f5e8,stroke:#4d8b4d,color:#102a10
   classDef known fill:#e8f0ff,stroke:#476cb6,color:#0d1833
-  class Reject,FailSignal,StateAB,RuntimeNext,SortMini,FullFrameGap,NarrowDrift,StableNext hot
-  class PassSignal,Classifier,Codegen,Invocations,CacheSignal,CacheWin,CacheRule,Owner,DiagGate,Frame50,ReorderGate,TargetWin,NarrowNoTrace,NarrowTarget good
-  class R2,Gate,Mini,Hot,Tooling,Trim,Xcode,Accept,Candidate,CacheOpt,NarrowXcode known
+  class Reject,FailSignal,StateAB,RuntimeNext,SortMini,FullFrameGap,NarrowDrift,StableNext,RowReplayGap,ExpandReplay hot
+  class PassSignal,Classifier,Codegen,Invocations,CacheSignal,CacheWin,CacheRule,Owner,DiagGate,Frame50,ReorderGate,TargetWin,NarrowNoTrace,NarrowTarget,RowReplayWin good
+  class R2,Gate,Mini,Hot,Tooling,Trim,Xcode,Accept,Candidate,CacheOpt,NarrowXcode,RowReplay50 known
 ```
