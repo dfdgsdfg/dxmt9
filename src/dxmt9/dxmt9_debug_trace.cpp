@@ -784,6 +784,25 @@ bool probeOptimizeIndexedTrianglesVertexCache() {
   return v;
 }
 
+bool probeApplyIndexCacheOptCandidate() {
+  static const bool v =
+      util::getenvFlag("DXMT9_PROBE_APPLY_INDEX_CACHE_OPT_CANDIDATE");
+  return v;
+}
+
+std::uint32_t probeApplyIndexCacheOptCandidateMinGainPct() {
+  static const std::uint32_t pct = [] {
+    const auto value = util::getenvU64Auto(
+        "DXMT9_PROBE_APPLY_INDEX_CACHE_OPT_CANDIDATE_MIN_GAIN_PCT");
+    if (!value.has_value()) {
+      return 10u;
+    }
+    return static_cast<std::uint32_t>(
+        std::min<std::uint64_t>(*value, 100u));
+  }();
+  return pct;
+}
+
 IndexedTriangleClassFilter probeReverseIndexedTrianglesClassFilter() {
   static const IndexedTriangleClassFilter filter =
       makeIndexedTriangleClassFilter(

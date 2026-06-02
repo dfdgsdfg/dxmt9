@@ -3219,6 +3219,18 @@ u64 stream0ByteSpanForIndexMeasure(const IndexReuseMeasure& measure,
   return static_cast<u64>(measure.maxIndex - measure.minIndex) * stream0Stride;
 }
 
+bool indexCacheCandidateMeetsGainGate(const IndexReuseMeasure& original,
+                                      const IndexReuseMeasure& candidate,
+                                      std::uint32_t minGainPct) {
+  if (!original.available || !candidate.available ||
+      original.cacheMiss32 == 0u ||
+      candidate.cacheMiss32 >= original.cacheMiss32) {
+    return false;
+  }
+  const u64 delta = original.cacheMiss32 - candidate.cacheMiss32;
+  return (delta * 100u) / original.cacheMiss32 >= minGainPct;
+}
+
 bool writeBinaryFile(const std::filesystem::path& path,
                      const u8* data,
                      std::size_t size) {
@@ -7311,8 +7323,12 @@ bool encodeDraw(EncodeContext& ctx,
       splitPrimitiveLimit = debug::splitLargeIndexedDrawPrimitiveLimit();
       splitStream0SpanLimit = debug::splitLargeIndexedDrawStream0SpanMax();
       splitMaxChunksPerDraw = debug::splitLargeIndexedDrawMaxChunksPerDraw();
+      const bool applyIndexCacheOptCandidateProbe =
+          debug::probeApplyIndexCacheOptCandidate() &&
+          pv.primitiveType == core::PrimitiveType::TriangleList;
       const bool measureCacheOptCandidate =
-          debug::measureIndexCacheOptCandidate() &&
+          (debug::measureIndexCacheOptCandidate() ||
+           applyIndexCacheOptCandidateProbe) &&
           pv.primitiveType == core::PrimitiveType::TriangleList;
       const bool dumpIndexedGeometryRequested =
           !debug::indexedGeometryDumpDir().empty() &&
@@ -7332,9 +7348,11 @@ bool encodeDraw(EncodeContext& ctx,
                                          originalIndexReuseStartIndex,
                                          vertexCount)
               : IndexReuseMeasure{.references = vertexCount};
-      if (measureCacheOptCandidate && encoderBreakdown) {
-        std::vector<u8> cacheOptCandidateIndexBytes;
-        IndexReuseMeasure cacheOptCandidateReuse{.references = vertexCount};
+      std::vector<u8> cacheOptCandidateIndexBytes;
+      IndexReuseMeasure cacheOptCandidateReuse{.references = vertexCount};
+      bool cacheOptCandidateBuilt = false;
+      bool cacheOptCandidateGatePassed = false;
+      if (measureCacheOptCandidate) {
         if (originalIndexReuseForProbe.available &&
             buildVertexCacheOptimizedTriangleOrderIndexBytes(
                 originalIndexBytesForReuse,
@@ -7343,16 +7361,24 @@ bool encodeDraw(EncodeContext& ctx,
                 vertexCount,
                 cacheOptCandidateIndexBytes,
                 32u)) {
+          cacheOptCandidateBuilt = true;
           cacheOptCandidateReuse =
               measureIndexReuseForDraw(cacheOptCandidateIndexBytes,
                                        pv.indexType,
                                        0,
                                        vertexCount);
         }
-        encoderBreakdown->recordIndexedCacheOptCandidate(
-            originalIndexReuseForProbe,
-            cacheOptCandidateReuse,
-            static_cast<u64>(cacheOptCandidateIndexBytes.size()));
+        cacheOptCandidateGatePassed =
+            indexCacheCandidateMeetsGainGate(
+                originalIndexReuseForProbe,
+                cacheOptCandidateReuse,
+                debug::probeApplyIndexCacheOptCandidateMinGainPct());
+        if (encoderBreakdown) {
+          encoderBreakdown->recordIndexedCacheOptCandidate(
+              originalIndexReuseForProbe,
+              cacheOptCandidateReuse,
+              static_cast<u64>(cacheOptCandidateIndexBytes.size()));
+        }
       }
       auto stream0SpanFilterMatches = [&](u64 minSpan) {
         if (minSpan == 0u) {
@@ -7373,7 +7399,8 @@ bool encodeDraw(EncodeContext& ctx,
       const bool reverseTriangleProbeRequested =
           (reverseAllIndexedTriangles || reverseOpaqueIndexedTriangles ||
            reverseNonOpaqueIndexedTriangles || sortIndexedTrianglesByMinIndex ||
-           optimizeIndexedTrianglesVertexCache) &&
+           optimizeIndexedTrianglesVertexCache ||
+           applyIndexCacheOptCandidateProbe) &&
           pv.primitiveType == core::PrimitiveType::TriangleList;
       const bool optimizeScreenBlendIndexOrderRequested =
           debug::optimizeScreenBlendIndexOrder() &&
@@ -7428,6 +7455,9 @@ bool encodeDraw(EncodeContext& ctx,
         probeConsidered = true;
         const bool opaqueDepthWritingEligible =
             isOpaqueDepthWritingReorderProbeEligible(hot.renderStates, fillMode);
+        const bool stableOriginalIndexBufferForCandidate =
+            pv.userIndexData.empty() && indexBufferRecord &&
+            indexBufferRecord->buffer;
         const bool classEligible =
             indexedTriangleClassMatches(
                 debug::probeReverseIndexedTrianglesClassFilter(),
@@ -7444,33 +7474,49 @@ bool encodeDraw(EncodeContext& ctx,
                 effectiveViewport,
                 fillMode) &&
             stream0SpanFilterMatches(reverseStream0SpanMin);
+        const bool applyCacheOptCandidateEligible =
+            applyIndexCacheOptCandidateProbe &&
+            opaqueDepthWritingEligible &&
+            stableOriginalIndexBufferForCandidate &&
+            cacheOptCandidateBuilt &&
+            cacheOptCandidateGatePassed;
         probeEligible =
             classEligible &&
-            (optimizeIndexedTrianglesVertexCache ||
+            (applyCacheOptCandidateEligible ||
+             optimizeIndexedTrianglesVertexCache ||
              sortIndexedTrianglesByMinIndex || reverseAllIndexedTriangles ||
              (reverseOpaqueIndexedTriangles && opaqueDepthWritingEligible) ||
              (reverseNonOpaqueIndexedTriangles && !opaqueDepthWritingEligible));
-        const bool probeIndexBytesBuilt =
-            probeEligible &&
-            (optimizeIndexedTrianglesVertexCache
-                 ? buildVertexCacheOptimizedTriangleOrderIndexBytes(
-                       indexBytesForReuse,
-                       pv.indexType,
-                       pv.startIndex,
-                       vertexCount,
-                       probeReorderedIndexBytes)
-                 : (sortIndexedTrianglesByMinIndex
-                        ? buildMinIndexSortedTriangleOrderIndexBytes(
-                              indexBytesForReuse,
-                              pv.indexType,
-                              pv.startIndex,
-                              vertexCount,
-                              probeReorderedIndexBytes)
-                        : buildReverseTriangleOrderIndexBytes(indexBytesForReuse,
-                                                              pv.indexType,
-                                                              pv.startIndex,
-                                                              vertexCount,
-                                                              probeReorderedIndexBytes)));
+        bool probeIndexBytesBuilt = false;
+        if (probeEligible) {
+          if (applyCacheOptCandidateEligible) {
+            probeReorderedIndexBytes = cacheOptCandidateIndexBytes;
+            probeIndexBytesBuilt = !probeReorderedIndexBytes.empty();
+          } else if (optimizeIndexedTrianglesVertexCache) {
+            probeIndexBytesBuilt =
+                buildVertexCacheOptimizedTriangleOrderIndexBytes(
+                    indexBytesForReuse,
+                    pv.indexType,
+                    pv.startIndex,
+                    vertexCount,
+                    probeReorderedIndexBytes);
+          } else if (sortIndexedTrianglesByMinIndex) {
+            probeIndexBytesBuilt =
+                buildMinIndexSortedTriangleOrderIndexBytes(
+                    indexBytesForReuse,
+                    pv.indexType,
+                    pv.startIndex,
+                    vertexCount,
+                    probeReorderedIndexBytes);
+          } else {
+            probeIndexBytesBuilt =
+                buildReverseTriangleOrderIndexBytes(indexBytesForReuse,
+                                                    pv.indexType,
+                                                    pv.startIndex,
+                                                    vertexCount,
+                                                    probeReorderedIndexBytes);
+          }
+        }
         if (probeIndexBytesBuilt) {
           transientIndexBuffer = makeTransientIndexBuffer(
               probeReorderedIndexBytes.data(), probeReorderedIndexBytes.size(),

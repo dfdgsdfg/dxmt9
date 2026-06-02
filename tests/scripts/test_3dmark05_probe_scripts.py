@@ -363,6 +363,25 @@ class ThreeDMark05ProbeScriptTests(unittest.TestCase):
         self.assertIn("DXMT9_MEASURE_INDEX_REUSE=1", result.stdout)
         self.assertIn("DXMT9_MEASURE_INDEX_CACHE_OPT_CANDIDATE=1", result.stdout)
 
+    def test_wrapper_dry_run_includes_apply_index_cache_opt_candidate_env(self) -> None:
+        result = self.run_script(
+            RUN_WRAPPER,
+            "--no-gputrace",
+            "--probe-apply-index-cache-opt-candidate",
+            "--probe-apply-index-cache-opt-candidate-min-gain-pct",
+            "12",
+            "--dry-run",
+        )
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("DXMT9_MEASURE_INDEX_REUSE=1", result.stdout)
+        self.assertIn("DXMT9_MEASURE_INDEX_CACHE_OPT_CANDIDATE=1", result.stdout)
+        self.assertIn("DXMT9_PROBE_APPLY_INDEX_CACHE_OPT_CANDIDATE=1", result.stdout)
+        self.assertIn(
+            "DXMT9_PROBE_APPLY_INDEX_CACHE_OPT_CANDIDATE_MIN_GAIN_PCT=12",
+            result.stdout,
+        )
+
     def test_wrapper_dry_run_includes_indexed_geometry_dump_env(self) -> None:
         result = self.run_script(
             RUN_WRAPPER,

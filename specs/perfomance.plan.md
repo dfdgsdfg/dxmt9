@@ -14317,18 +14317,46 @@ Interpretation of the frame50 proof:
   Memory Bytes Written`, and GPU time move together without changing frame
   correctness.
 
-The remaining implementation path is:
+The first guarded mutating probe hook is now implemented:
 
-1. Restrict the first real reorder experiment to safe indexed triangle-list draws:
-   no alpha blend, no order-dependent depth/equal behavior, no user pointer or
-   transient path that would amplify CPU upload, and no already-good cache-miss
-   estimate.
-2. Submit reordered indices only when the no-mutate LRU32 gate predicts a
-   material improvement; keep original index order otherwise.
-3. Verify on full 3DMark05 GT1, not only mini replay, with the stable-frame
+- `DXMT9_PROBE_APPLY_INDEX_CACHE_OPT_CANDIDATE=1` builds the same LRU32
+  candidate as the no-mutate gate, then submits that candidate through the
+  existing transient-IB reorder path only when the row/draw/class/span filters
+  match, the draw is in the opaque depth-writing safety bucket, the original
+  index data came from a stable buffer path, and the candidate passes
+  `DXMT9_PROBE_APPLY_INDEX_CACHE_OPT_CANDIDATE_MIN_GAIN_PCT` (default `10`).
+- `run_3dmark05_perf_probe.sh --probe-apply-index-cache-opt-candidate` implies
+  both `--measure-index-reuse` and `--measure-index-cache-opt-candidate`, so
+  the submitted candidate still leaves original/effective/candidate cache-miss
+  evidence in `3dmark05-perf-indexed-probe-draws.csv` and the encoder summary.
+- This is still a diagnostic A/B, not a production path. The transient upload
+  cost and visual correctness must be checked in the paired gputrace run before
+  the cache-locality result can drive a persistent index-buffer strategy.
+
+Next A/B command shape:
+
+```bash
+scripts/tools/run_3dmark05_perf_probe.sh \
+  --suffix cache-opt-apply-frame50-r1 \
+  --frame 50 \
+  --probe-apply-index-cache-opt-candidate \
+  --probe-reverse-indexed-triangles-rows 50/0,50/1,50/3 \
+  --probe-reverse-indexed-triangles-class opaque-depth-write \
+  --probe-apply-index-cache-opt-candidate-min-gain-pct 10 \
+  --timeout 240
+```
+
+Then export Xcode performance data and encoder counters, finalize with
+`scripts/tools/finalize_3dmark05_perf_probe.sh`, and compare against
+`cache-opt-candidate-frame50-r1`.
+
+The remaining proof path is:
+
+1. Run the paired full GT1 apply-probe capture and export Xcode counters.
+2. Verify on full 3DMark05 GT1, not only mini replay, with the stable-frame
    gates: draw count, vertex/primitive count, top-row identity, FS invocations,
    and Xcode `VS Buffer Device Memory Bytes Written`.
-4. If full-frame safety prevents enough reorder coverage, use the cache-miss
+3. If full-frame safety prevents enough reorder coverage, use the cache-miss
    estimate as a prioritizer for upstream mesh/index-buffer preservation
    issues rather than as an unconditional runtime rewrite.
 
@@ -14365,12 +14393,13 @@ flowchart TD
   Owner --> DiagGate["implemented diagnostic gate\nDXMT9_MEASURE_INDEX_CACHE_OPT_CANDIDATE\nno submitted reorder"]
   DiagGate --> FullScout["full GT1 no-mutate scout\ncandidate miss delta + Xcode counters"]
   FullScout --> Frame50["frame50 Xcode/dxmt join\nhot set 45.249ms\nVS write 2248MiB\nLRU32 candidate -21.5%"]
-  Frame50 --> ReorderGate["next: cache-miss-gated safe reorder\navoid alpha/order-sensitive draws"]
+  Frame50 --> ReorderGate["implemented guarded mutating probe\nDXMT9_PROBE_APPLY_INDEX_CACHE_OPT_CANDIDATE"]
+  ReorderGate --> ApplyAB["next paired gputrace/Xcode A/B\nprove VS invocations + VS write move"]
 
   classDef hot fill:#ffe8e8,stroke:#b64242,color:#2b0d0d
   classDef good fill:#e8f5e8,stroke:#4d8b4d,color:#102a10
   classDef known fill:#e8f0ff,stroke:#476cb6,color:#0d1833
-  class Reject,FailSignal,StateAB,RuntimeNext,SortMini,ReorderGate hot
-  class PassSignal,Classifier,Codegen,Invocations,CacheSignal,CacheWin,CacheRule,Owner,DiagGate,Frame50 good
+  class Reject,FailSignal,StateAB,RuntimeNext,SortMini,ApplyAB hot
+  class PassSignal,Classifier,Codegen,Invocations,CacheSignal,CacheWin,CacheRule,Owner,DiagGate,Frame50,ReorderGate good
   class R2,Gate,Mini,Hot,Tooling,Trim,Xcode,Accept,Candidate,CacheOpt known
 ```

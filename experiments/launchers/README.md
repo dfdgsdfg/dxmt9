@@ -88,8 +88,12 @@ Commercial / 3rd-party titles (require external prefix):
     `DXMT9_MEASURE_INDEX_CACHE_OPT_CANDIDATE=1` only after that axis is
     implicated; it builds a cache-aware LRU32 candidate order without
     submitting it and reports original-vs-candidate LRU16/32/64 miss deltas.
-    It is
-    intentionally not enabled by the shared perf profile. After the run,
+    It is intentionally not enabled by the shared perf profile. For a mutating
+    A/B after the no-mutate scout, use
+    `DXMT9_PROBE_APPLY_INDEX_CACHE_OPT_CANDIDATE=1` or the wrapper's
+    `--probe-apply-index-cache-opt-candidate`; it submits that same candidate
+    only through row/draw/class/span, opaque-depth-write, stable-IB, and
+    minimum-LRU32-gain gates. After the run,
     `python3 scripts/tools/summarize_3dmark05_perf.py experiments/output/<run>`
     writes `3dmark05-perf-encoders.csv` and
     `3dmark05-perf-encoder-streams.csv` for UI-free per-encoder analysis, with
@@ -467,6 +471,11 @@ Commercial / 3rd-party titles (require external prefix):
     CSV is also emitted without a mutating reverse/split/scissor probe, so a
     no-mutate scout can capture draw identity, state, stream/IB handles, PSO,
     shader variant, VS/PS hashes, and VSOut key for row-local replay planning.
+    Use `--probe-apply-index-cache-opt-candidate` for the follow-up mutating
+    A/B once the no-mutate candidate and row filters are known; it keeps the
+    same candidate counters enabled so the submitted order and predicted LRU32
+    miss reduction can be joined against Xcode `VS Invocations` and
+    `VS Buffer Device Memory Bytes Written`.
     Combine that CSV with a joined Xcode/dxmt summary and shader-dump summary
     using `python3 scripts/tools/plan_3dmark05_mini_replay.py --joined
     <frameN-xcode-dxmt-joined-summary.csv> --shader-summary

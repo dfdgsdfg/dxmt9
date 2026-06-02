@@ -365,6 +365,19 @@ bool probeSortIndexedTrianglesByMinIndex();
 // Env: DXMT9_PROBE_OPTIMIZE_INDEXED_TRIANGLES_VERTEX_CACHE.
 bool probeOptimizeIndexedTrianglesVertexCache();
 
+// Diagnostic-only: submit the same LRU32 cache-aware candidate measured by
+// DXMT9_MEASURE_INDEX_CACHE_OPT_CANDIDATE, but only when the candidate reduces
+// LRU32 misses by at least
+// DXMT9_PROBE_APPLY_INDEX_CACHE_OPT_CANDIDATE_MIN_GAIN_PCT. Uses the reverse-
+// indexed-triangles row/class/span filters and opaque-depth-write safety gate.
+// Env: DXMT9_PROBE_APPLY_INDEX_CACHE_OPT_CANDIDATE.
+bool probeApplyIndexCacheOptCandidate();
+
+// Minimum whole-percent LRU32 miss reduction required by
+// DXMT9_PROBE_APPLY_INDEX_CACHE_OPT_CANDIDATE. Defaults to 10.
+// Env: DXMT9_PROBE_APPLY_INDEX_CACHE_OPT_CANDIDATE_MIN_GAIN_PCT.
+std::uint32_t probeApplyIndexCacheOptCandidateMinGainPct();
+
 // Optional class filter for reverse-indexed-triangle probes. Accepted values:
 // any, opaque-depth-write, nonopaque, depth-read, alpha-blend, screen-blend,
 // standard-alpha, additive-alpha, scissor, no-scissor, textured, and large4096.

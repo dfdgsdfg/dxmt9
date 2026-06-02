@@ -41,6 +41,8 @@ probe_reverse_opaque_indexed_triangles=0
 probe_reverse_nonopaque_indexed_triangles=0
 probe_sort_indexed_triangles_by_min_index=0
 probe_optimize_indexed_triangles_vertex_cache=0
+probe_apply_index_cache_opt_candidate=0
+probe_apply_index_cache_opt_candidate_min_gain_pct=
 probe_reverse_indexed_triangles_row=
 probe_reverse_indexed_triangles_rows=
 probe_reverse_indexed_triangles_class=
@@ -258,6 +260,16 @@ Options:
                       to greedily reorder triangle-list primitive order around
                       a small vertex cache through a transient IB. Uses the
                       same row/class/span filters as reverse-indexed-triangles
+  --probe-apply-index-cache-opt-candidate
+                      Set DXMT9_PROBE_APPLY_INDEX_CACHE_OPT_CANDIDATE=1 to
+                      submit the LRU32 cache-aware candidate only when its
+                      measured miss reduction passes the min-gain gate. Uses
+                      the same row/class/span filters plus opaque-depth-write
+                      safety; implies --measure-index-reuse and
+                      --measure-index-cache-opt-candidate
+  --probe-apply-index-cache-opt-candidate-min-gain-pct PCT
+                      Set DXMT9_PROBE_APPLY_INDEX_CACHE_OPT_CANDIDATE_MIN_GAIN_PCT
+                      (default in dxmt9: 10)
   --probe-reverse-indexed-triangles-row SEQ/ENC
                       Set DXMT9_PROBE_REVERSE_INDEXED_TRIANGLES_ROW=SEQ/ENC to
                       constrain any reverse-indexed-triangles probe to one
@@ -644,6 +656,16 @@ while (($#)); do
     --probe-optimize-indexed-triangles-vertex-cache)
       probe_optimize_indexed_triangles_vertex_cache=1
       shift
+      ;;
+    --probe-apply-index-cache-opt-candidate)
+      probe_apply_index_cache_opt_candidate=1
+      measure_index_reuse=1
+      measure_index_cache_opt_candidate=1
+      shift
+      ;;
+    --probe-apply-index-cache-opt-candidate-min-gain-pct)
+      probe_apply_index_cache_opt_candidate_min_gain_pct=${2:?missing value for --probe-apply-index-cache-opt-candidate-min-gain-pct}
+      shift 2
       ;;
     --probe-reverse-indexed-triangles-row)
       probe_reverse_indexed_triangles_row=${2:?missing value for --probe-reverse-indexed-triangles-row}
@@ -1424,6 +1446,14 @@ fi
 
 if (( probe_optimize_indexed_triangles_vertex_cache )); then
   env_args+=("DXMT9_PROBE_OPTIMIZE_INDEXED_TRIANGLES_VERTEX_CACHE=1")
+fi
+
+if (( probe_apply_index_cache_opt_candidate )); then
+  env_args+=("DXMT9_PROBE_APPLY_INDEX_CACHE_OPT_CANDIDATE=1")
+fi
+
+if [[ -n "$probe_apply_index_cache_opt_candidate_min_gain_pct" ]]; then
+  env_args+=("DXMT9_PROBE_APPLY_INDEX_CACHE_OPT_CANDIDATE_MIN_GAIN_PCT=$probe_apply_index_cache_opt_candidate_min_gain_pct")
 fi
 
 if [[ -n "$probe_reverse_indexed_triangles_row" ]]; then
