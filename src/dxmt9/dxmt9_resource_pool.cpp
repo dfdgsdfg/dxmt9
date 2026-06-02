@@ -924,6 +924,7 @@ void Pool::markDepthResolveResources(const core::DepthResolveDesc& desc, u64 seq
 
 bool Pool::uploadBufferData(u64 handleValue, const std::uint8_t* bytes, std::size_t byteCount) {
   return bufferArena_.update(handleValue, [&](BufferRecord& record) {
+    ++record.contentRevision;
     record.shadow.assign(bytes, bytes + byteCount);
     if (!record.buffer || byteCount == 0 || !record.contents) {
       return;
@@ -931,6 +932,80 @@ bool Pool::uploadBufferData(u64 handleValue, const std::uint8_t* bytes, std::siz
     const std::size_t copySize = std::min(byteCount, static_cast<std::size_t>(record.desc.size));
     std::memcpy(record.contents, bytes, copySize);
   });
+}
+
+ReorderedIndexBufferLookup Pool::getOrCreateReorderedIndexBuffer(
+    WMT::Device device,
+    u64 sourceHandle,
+    ReorderedIndexBufferCacheKey key,
+    std::span<const std::uint8_t> bytes,
+    u64 seqId,
+    u64 completedSeqId) {
+  ReorderedIndexBufferLookup result{};
+  if (!device || sourceHandle == 0 || bytes.empty()) {
+    return result;
+  }
+
+  bufferArena_.update(sourceHandle, [&](BufferRecord& record) {
+    key.sourceRevision = record.contentRevision;
+
+    auto& entries = record.reorderedIndexCache;
+    entries.erase(
+        std::remove_if(entries.begin(), entries.end(), [&](const auto& entry) {
+          return (!entry.buffer ||
+                  entry.key.sourceRevision != record.contentRevision) &&
+                 entry.lastUsedSeqId <= completedSeqId;
+        }),
+        entries.end());
+
+    for (auto& entry : entries) {
+      if (entry.key == key && entry.buffer) {
+        entry.lastUsedSeqId = std::max(entry.lastUsedSeqId, seqId);
+        result.buffer = WMT::Buffer{entry.buffer.handle};
+        result.byteCount = entry.byteCount;
+        result.hit = true;
+        return;
+      }
+    }
+
+    WMTBufferInfo info{};
+    info.length = static_cast<u64>(bytes.size());
+    info.options = WMTResourceStorageModeShared;
+    info.memory.set(const_cast<std::uint8_t*>(bytes.data()));
+    auto buffer = device.newBuffer(info);
+    if (!buffer) {
+      return;
+    }
+    perf::countMetalBuffer(bytes.size());
+    perf::countUseResource();
+    buffer.setLabel(labels::makeLabelStringFmt(
+        "pool_reordered_ib_h0x%llx_s%u_n%llu",
+        static_cast<unsigned long long>(sourceHandle),
+        key.startIndex,
+        static_cast<unsigned long long>(key.indexCount)));
+
+    ReorderedIndexBufferCacheEntry entry{};
+    entry.key = key;
+    entry.buffer = std::move(buffer);
+    entry.byteCount = static_cast<u64>(bytes.size());
+    entry.lastUsedSeqId = seqId;
+    result.buffer = WMT::Buffer{entry.buffer.handle};
+    result.byteCount = entry.byteCount;
+    result.created = true;
+    entries.push_back(std::move(entry));
+
+    constexpr std::size_t kMaxReorderedIndexEntriesPerSource = 64;
+    if (entries.size() > kMaxReorderedIndexEntriesPerSource) {
+      entries.erase(
+          std::remove_if(entries.begin(), entries.end(), [&](const auto& oldEntry) {
+            return oldEntry.lastUsedSeqId <= completedSeqId &&
+                   oldEntry.key != key;
+          }),
+          entries.end());
+    }
+  });
+
+  return result;
 }
 
 u64 Pool::mapWaitSeqId(core::BufferHandle handle, u32 flags) const noexcept {
@@ -1033,6 +1108,7 @@ void* Pool::finalizeBufferMap(WMT::Device device,
       rotateDynamicRename(device, record, completedSeqId);
     }
     if ((flags & core::UsageDiscard) != 0) {
+      ++record.contentRevision;
       std::fill(record.shadow.begin(), record.shadow.end(), 0);
       if (record.contents) {
         std::memset(record.contents, 0, record.shadow.size());

@@ -1521,6 +1521,22 @@ struct ActiveEncoderBreakdown {
     stats.indexedCacheOptCandidateMiss64 += candidate.cacheMiss64;
   }
 
+  void recordReorderedIndexCacheLookup(bool hit, bool created, u64 createdBytes) {
+    if (!enabled) {
+      return;
+    }
+    ++stats.reorderedIndexCacheLookups;
+    if (hit) {
+      ++stats.reorderedIndexCacheHits;
+    } else {
+      ++stats.reorderedIndexCacheMisses;
+    }
+    if (created) {
+      ++stats.reorderedIndexCacheCreated;
+      stats.reorderedIndexCacheCreatedBytes += createdBytes;
+    }
+  }
+
   void recordDrawIssue(core::PrimitiveType primitiveType,
                        u32 primitiveCount,
                        u64 vertexCount,
@@ -7518,16 +7534,47 @@ bool encodeDraw(EncodeContext& ctx,
           }
         }
         if (probeIndexBytesBuilt) {
-          transientIndexBuffer = makeTransientIndexBuffer(
-              probeReorderedIndexBytes.data(), probeReorderedIndexBytes.size(),
-              ActiveEncoderBreakdown::TransientIndexSource::ProbeReorder);
-          if (transientIndexBuffer) {
-            indexBuffer = transientIndexBuffer.buffer;
-            indexBufferOffset = transientIndexBuffer.offset;
-            indexBytesForReuse = std::span<const u8>(probeReorderedIndexBytes.data(),
-                                                     probeReorderedIndexBytes.size());
-            indexReuseStartIndex = 0;
-            probeApplied = true;
+          if (applyCacheOptCandidateEligible) {
+            resources::ReorderedIndexBufferCacheKey reorderKey{};
+            reorderKey.startIndex = originalIndexReuseStartIndex;
+            reorderKey.indexCount = vertexCount;
+            reorderKey.indexType = pv.indexType;
+            reorderKey.order = resources::ReorderedIndexOrder::VertexCacheLru32;
+            reorderKey.cacheSize = 32u;
+            const auto cached = ctx.queue.getOrCreateReorderedIndexBuffer(
+                hot.indexBuffer,
+                reorderKey,
+                std::span<const u8>(probeReorderedIndexBytes.data(),
+                                    probeReorderedIndexBytes.size()),
+                seqId);
+            if (encoderBreakdown) {
+              encoderBreakdown->recordReorderedIndexCacheLookup(
+                  cached.hit,
+                  cached.created,
+                  cached.created ? cached.byteCount : 0u);
+            }
+            if (cached.buffer) {
+              indexBuffer = cached.buffer;
+              indexBufferOffset = 0;
+              indexBytesForReuse =
+                  std::span<const u8>(probeReorderedIndexBytes.data(),
+                                      probeReorderedIndexBytes.size());
+              indexReuseStartIndex = 0;
+              probeApplied = true;
+            }
+          } else {
+            transientIndexBuffer = makeTransientIndexBuffer(
+                probeReorderedIndexBytes.data(), probeReorderedIndexBytes.size(),
+                ActiveEncoderBreakdown::TransientIndexSource::ProbeReorder);
+            if (transientIndexBuffer) {
+              indexBuffer = transientIndexBuffer.buffer;
+              indexBufferOffset = transientIndexBuffer.offset;
+              indexBytesForReuse =
+                  std::span<const u8>(probeReorderedIndexBytes.data(),
+                                      probeReorderedIndexBytes.size());
+              indexReuseStartIndex = 0;
+              probeApplied = true;
+            }
           }
         }
       }

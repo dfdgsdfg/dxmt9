@@ -3159,6 +3159,11 @@ void emitEncoderBreakdown(const EncoderBreakdown& b) {
       "indexed_cache_opt_candidate_miss16=%llu "
       "indexed_cache_opt_candidate_miss32=%llu "
       "indexed_cache_opt_candidate_miss64=%llu "
+      "reordered_index_cache_lookups=%llu "
+      "reordered_index_cache_hits=%llu "
+      "reordered_index_cache_misses=%llu "
+      "reordered_index_cache_created=%llu "
+      "reordered_index_cache_created_bytes=%llu "
       "stream0_stride_min=%llu stream0_stride_max=%llu "
       "stream_state_samples=%llu stream_metal_binds=%llu "
       "stream_metal_bind_firsts=%llu "
@@ -3404,6 +3409,11 @@ void emitEncoderBreakdown(const EncoderBreakdown& b) {
       static_cast<unsigned long long>(b.indexedCacheOptCandidateMiss16),
       static_cast<unsigned long long>(b.indexedCacheOptCandidateMiss32),
       static_cast<unsigned long long>(b.indexedCacheOptCandidateMiss64),
+      static_cast<unsigned long long>(b.reorderedIndexCacheLookups),
+      static_cast<unsigned long long>(b.reorderedIndexCacheHits),
+      static_cast<unsigned long long>(b.reorderedIndexCacheMisses),
+      static_cast<unsigned long long>(b.reorderedIndexCacheCreated),
+      static_cast<unsigned long long>(b.reorderedIndexCacheCreatedBytes),
       static_cast<unsigned long long>(b.stream0StrideMin),
       static_cast<unsigned long long>(b.stream0StrideMax),
       static_cast<unsigned long long>(b.streamStateSamples),

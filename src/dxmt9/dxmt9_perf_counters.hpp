@@ -686,6 +686,11 @@ struct EncoderBreakdown {
   std::uint64_t indexedCacheOptCandidateMiss16 = 0;
   std::uint64_t indexedCacheOptCandidateMiss32 = 0;
   std::uint64_t indexedCacheOptCandidateMiss64 = 0;
+  std::uint64_t reorderedIndexCacheLookups = 0;
+  std::uint64_t reorderedIndexCacheHits = 0;
+  std::uint64_t reorderedIndexCacheMisses = 0;
+  std::uint64_t reorderedIndexCacheCreated = 0;
+  std::uint64_t reorderedIndexCacheCreatedBytes = 0;
   std::uint64_t stream0StrideMin = 0;
   std::uint64_t stream0StrideMax = 0;
   std::uint64_t streamStateSamples = 0;

@@ -93,7 +93,8 @@ Commercial / 3rd-party titles (require external prefix):
     `DXMT9_PROBE_APPLY_INDEX_CACHE_OPT_CANDIDATE=1` or the wrapper's
     `--probe-apply-index-cache-opt-candidate`; it submits that same candidate
     only through row/draw/class/span, opaque-depth-write, stable-IB, and
-    minimum-LRU32-gain gates. After the run,
+    minimum-LRU32-gain gates, then reuses a source-IB keyed reordered index
+    buffer cache rather than uploading a fresh transient IB per draw. After the run,
     `python3 scripts/tools/summarize_3dmark05_perf.py experiments/output/<run>`
     writes `3dmark05-perf-encoders.csv` and
     `3dmark05-perf-encoder-streams.csv` for UI-free per-encoder analysis, with

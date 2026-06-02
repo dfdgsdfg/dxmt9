@@ -244,6 +244,12 @@ class CommandQueue {
                                                     std::size_t alignment,
                                                     std::uint64_t seqId);
 
+  resources::ReorderedIndexBufferLookup getOrCreateReorderedIndexBuffer(
+      core::Handle sourceHandle,
+      resources::ReorderedIndexBufferCacheKey key,
+      std::span<const std::uint8_t> bytes,
+      std::uint64_t seqId);
+
   // The WMT::Device this queue was built on.
   WMT::Device device() const noexcept { return device_; }
 

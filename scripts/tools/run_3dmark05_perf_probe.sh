@@ -265,7 +265,8 @@ Options:
                       submit the LRU32 cache-aware candidate only when its
                       measured miss reduction passes the min-gain gate. Uses
                       the same row/class/span filters plus opaque-depth-write
-                      safety; implies --measure-index-reuse and
+                      safety and a source-IB keyed reordered-index cache;
+                      implies --measure-index-reuse and
                       --measure-index-cache-opt-candidate
   --probe-apply-index-cache-opt-candidate-min-gain-pct PCT
                       Set DXMT9_PROBE_APPLY_INDEX_CACHE_OPT_CANDIDATE_MIN_GAIN_PCT

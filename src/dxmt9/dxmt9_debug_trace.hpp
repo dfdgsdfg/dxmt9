@@ -369,7 +369,9 @@ bool probeOptimizeIndexedTrianglesVertexCache();
 // DXMT9_MEASURE_INDEX_CACHE_OPT_CANDIDATE, but only when the candidate reduces
 // LRU32 misses by at least
 // DXMT9_PROBE_APPLY_INDEX_CACHE_OPT_CANDIDATE_MIN_GAIN_PCT. Uses the reverse-
-// indexed-triangles row/class/span filters and opaque-depth-write safety gate.
+// indexed-triangles row/class/span filters, opaque-depth-write safety gate,
+// and a source-IB keyed cached reordered index buffer instead of per-draw
+// transient reorder uploads.
 // Env: DXMT9_PROBE_APPLY_INDEX_CACHE_OPT_CANDIDATE.
 bool probeApplyIndexCacheOptCandidate();
 

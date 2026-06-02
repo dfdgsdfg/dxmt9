@@ -14320,20 +14320,66 @@ Interpretation of the frame50 proof:
 The first guarded mutating probe hook is now implemented:
 
 - `DXMT9_PROBE_APPLY_INDEX_CACHE_OPT_CANDIDATE=1` builds the same LRU32
-  candidate as the no-mutate gate, then submits that candidate through the
-  existing transient-IB reorder path only when the row/draw/class/span filters
-  match, the draw is in the opaque depth-writing safety bucket, the original
-  index data came from a stable buffer path, and the candidate passes
+  candidate as the no-mutate gate, then submits that candidate through a
+  source-IB keyed reordered-index cache only when the row/draw/class/span
+  filters match, the draw is in the opaque depth-writing safety bucket, the
+  original index data came from a stable buffer path, and the candidate passes
   `DXMT9_PROBE_APPLY_INDEX_CACHE_OPT_CANDIDATE_MIN_GAIN_PCT` (default `10`).
+  The cache key includes the source buffer content revision, draw span, index
+  type, order mode, and cache size; source-buffer writes advance the revision
+  and old entries are pruned only after their last seqId has completed.
 - `run_3dmark05_perf_probe.sh --probe-apply-index-cache-opt-candidate` implies
   both `--measure-index-reuse` and `--measure-index-cache-opt-candidate`, so
   the submitted candidate still leaves original/effective/candidate cache-miss
   evidence in `3dmark05-perf-indexed-probe-draws.csv` and the encoder summary.
-- This is still a diagnostic A/B, not a production path. The transient upload
-  cost and visual correctness must be checked in the paired gputrace run before
-  the cache-locality result can drive a persistent index-buffer strategy.
+- This is still a diagnostic A/B, not a production path. The paired gputrace
+  run must now prove that `transient_index_probe_reorder_bytes` stays near zero
+  for cache-opt apply draws, that cached/reused reordered IB creation does not
+  introduce a new stream/IB churn bottleneck, and that visual correctness
+  remains intact before the cache-locality result can drive a persistent
+  index-buffer strategy.
 
-Completed A/B command:
+Current cached apply-probe smoke:
+
+```bash
+scripts/tools/run_3dmark05_perf_probe.sh \
+  --suffix cache-opt-apply-cached-rows1-3-smoke-r2 \
+  --frame 50 \
+  --no-gputrace \
+  --probe-apply-index-cache-opt-candidate \
+  --probe-reverse-indexed-triangles-rows 50/1,50/3 \
+  --probe-reverse-indexed-triangles-class opaque-depth-write \
+  --probe-apply-index-cache-opt-candidate-min-gain-pct 10 \
+  --timeout 180
+```
+
+Artifacts:
+
+```text
+experiments/output/app-d3d9-3dmark05-cache-opt-apply-cached-rows1-3-smoke-r2/actual.png
+experiments/output/app-d3d9-3dmark05-cache-opt-apply-cached-rows1-3-smoke-r2/3dmark05-perf-summary.md
+experiments/output/app-d3d9-3dmark05-cache-opt-apply-cached-rows1-3-smoke-r2/3dmark05-perf-encoders.csv
+experiments/output/app-d3d9-3dmark05-cache-opt-apply-cached-rows1-3-smoke-r2/3dmark05-perf-indexed-probe-draws.csv
+```
+
+| Metric | `50/1` | `50/3` | Run total | Interpretation |
+|---|---:|---:|---:|---|
+| Applied draws | `87` | `87` | `174` | Safe opaque-depth-write apply gate is active. |
+| Submitted reorder bytes | `1,148,364B` | `1,148,364B` | `2,296,728B` | Reordered indices were submitted. |
+| LRU32 miss delta | `-83,377` (`-23.73%`) | `-83,377` (`-23.73%`) | n/a | Software locality signal remains positive. |
+| Reordered IB cache lookups | `87` | `87` | `174` | Every applied draw used the cache path. |
+| Reordered IB cache hits | `40` | `87` | `127` | `50/3` fully reused entries created earlier. |
+| Reordered IB cache misses / created | `47 / 47` | `0 / 0` | `47 / 47` | Only the first row had creation cost. |
+| Reordered IB created bytes | `739,410B` | `0B` | `739,410B` | Creation cost is bounded by unique source/span keys. |
+| `transient_index_probe_reorder_bytes` | `0B` | `0B` | `0B` | The per-draw transient reorder upload was removed. |
+
+The rendered GT1 frame is visually valid in `actual.png`. This smoke proves the
+CPU-side apply path now reuses source-IB keyed reordered buffers and removes
+the diagnostic transient reorder bytes. It is not yet the acceptance proof:
+the next run needs a frame `50` gputrace/Xcode counter export to verify GPU
+time, `VS Invocations`, `VS Buffer Device Memory Bytes Written`, and IB churn.
+
+Historical transient A/B command:
 
 ```bash
 scripts/tools/run_3dmark05_perf_probe.sh \
@@ -14644,10 +14690,10 @@ The remaining proof path is:
    `VS Invocations`, `VS Bytes Written To Device Memory`,
    `VS Last Level Cache Bytes Written`, named tiled storage, GPU time, and the
    full-frame primary bucket move together.
-2. Build a production-shaped index-order implementation that avoids the
-   diagnostic transient-IB cost: cache/reuse reordered index buffers per stable
-   source IB + draw span + primitive/order key, and preserve D3D9 correctness
-   for alpha/scissor/depth-sensitive draws.
+2. Verify the first production-shaped apply-probe implementation: cached/reused
+   reordered index buffers per stable source IB + draw span + primitive/order
+   key, with D3D9 correctness preserved for alpha/scissor/depth-sensitive
+   draws by the existing opaque-depth-write safety gate.
 3. Verify on full 3DMark05 GT1 with stable-frame gates: draw count,
    vertex/primitive count, top-row identity, FS invocations, target-row
    Xcode `VS Buffer Device Memory Bytes Written`, and no non-target hot-row
@@ -14707,12 +14753,13 @@ flowchart TD
   FullGroupGap --> FullGroup53["full 50/3 shader/state replay\n187 draws x3\ngeometry locked"]
   FullGroup53 --> FullGroup53Win["independent positive control\nLRU32 -16.63%\nVS invocations -10.16%\nVS device write -6.84%\nnamed tiled -10.99%\nGPU -3.25%"]
   FullGroup53 --> FullGroup53Gap["same standalone caveat\nVS Buffer Device Memory Bytes Written = 0"]
-  FullGroup53Gap --> ExpandReplay["next\nproduction-shaped full GT1 proof\ncached/reused reordered IB"]
+  FullGroup53Gap --> CachedIB["implemented cached/reused\nsource-IB keyed reordered IB\nfor cache-opt apply probe"]
+  CachedIB --> ExpandReplay["next\nfull GT1 proof\ntransient reorder bytes near zero\nVS write + GPU time move together"]
 
   classDef hot fill:#ffe8e8,stroke:#b64242,color:#2b0d0d
   classDef good fill:#e8f5e8,stroke:#4d8b4d,color:#102a10
   classDef known fill:#e8f0ff,stroke:#476cb6,color:#0d1833
   class Reject,FailSignal,StateAB,RuntimeNext,SortMini,FullFrameGap,NarrowDrift,StableNext,RowReplayGap,FullGroupGap,FullGroup53Gap,ExpandReplay hot
-  class PassSignal,Classifier,Codegen,Invocations,CacheSignal,CacheWin,CacheRule,Owner,DiagGate,Frame50,ReorderGate,TargetWin,NarrowNoTrace,NarrowTarget,RowReplayWin,FullGroupWin,FullGroup53Win good
+  class PassSignal,Classifier,Codegen,Invocations,CacheSignal,CacheWin,CacheRule,Owner,DiagGate,Frame50,ReorderGate,TargetWin,NarrowNoTrace,NarrowTarget,RowReplayWin,FullGroupWin,FullGroup53Win,CachedIB good
   class R2,Gate,Mini,Hot,Tooling,Trim,Xcode,Accept,Candidate,CacheOpt,NarrowXcode,RowReplay50,FullGroup50,FullGroup53 known
 ```

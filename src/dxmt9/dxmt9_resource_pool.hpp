@@ -41,6 +41,7 @@
 #include <mutex>
 #include <optional>
 #include <shared_mutex>
+#include <span>
 #include <type_traits>
 #include <unordered_set>
 #include <utility>
@@ -66,6 +67,36 @@ struct BufferRenameRingEntry {
   u64 lastUsedSeqId = 0;
 };
 
+enum class ReorderedIndexOrder : u32 {
+  VertexCacheLru32 = 1,
+};
+
+struct ReorderedIndexBufferCacheKey {
+  u64 sourceRevision = 0;
+  u32 startIndex = 0;
+  u64 indexCount = 0;
+  core::IndexType indexType = core::IndexType::UInt16;
+  ReorderedIndexOrder order = ReorderedIndexOrder::VertexCacheLru32;
+  u32 cacheSize = 0;
+
+  friend constexpr bool operator==(const ReorderedIndexBufferCacheKey&,
+                                   const ReorderedIndexBufferCacheKey&) = default;
+};
+
+struct ReorderedIndexBufferCacheEntry {
+  ReorderedIndexBufferCacheKey key{};
+  WMT::Reference<WMT::Buffer> buffer;
+  u64 byteCount = 0;
+  u64 lastUsedSeqId = 0;
+};
+
+struct ReorderedIndexBufferLookup {
+  WMT::Buffer buffer{};
+  u64 byteCount = 0;
+  bool hit = false;
+  bool created = false;
+};
+
 struct BufferRecord {
   core::BufferDesc desc{};
   WMT::Reference<WMT::Buffer> buffer;
@@ -73,6 +104,9 @@ struct BufferRecord {
   std::vector<u8> shadow;
   bool destroyPending = false;
   u64 lastUsedSeqId = 0;
+  // Content revision invalidates derived immutable buffers, such as
+  // cached reordered index buffers, without freeing in-flight entries.
+  u64 contentRevision = 1;
   // R-BACK-14.* — heap-backed allocation tracking. When `isHeapBacked`
   // is true, `heap` is a non-owning view of the MTLHeap that owns this
   // buffer; the WMT::Reference above still owns the suballocation. On
@@ -91,6 +125,7 @@ struct BufferRecord {
   bool isDynamicRename = false;
   u32 renameActiveIndex = 0;
   std::vector<BufferRenameRingEntry> renameRing;
+  std::vector<ReorderedIndexBufferCacheEntry> reorderedIndexCache;
 };
 
 struct TextureRecord {
@@ -433,6 +468,19 @@ struct Pool {
   // `contents` if the buffer is shared-mode). Returns true if the handle
   // resolved. Caller holds the pool's mutex.
   bool uploadBufferData(u64 handleValue, const std::uint8_t* bytes, std::size_t byteCount);
+
+  // Return an immutable Metal index buffer containing reordered index bytes
+  // derived from a stable source buffer. Entries are keyed by source buffer
+  // content revision + draw span and are retained on the source BufferRecord.
+  // Caller holds the queue mutex; stale entries are pruned only when their
+  // last use has completed.
+  ReorderedIndexBufferLookup getOrCreateReorderedIndexBuffer(
+      WMT::Device device,
+      u64 sourceHandle,
+      ReorderedIndexBufferCacheKey key,
+      std::span<const std::uint8_t> bytes,
+      u64 seqId,
+      u64 completedSeqId);
 
   // Returns the seqId the CPU should wait on before this buffer is safe
   // to CPU-map, given `flags`. Returns 0 if the caller may proceed
