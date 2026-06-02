@@ -64,6 +64,8 @@ class Summarize3DMark05PerfTests(unittest.TestCase):
                 "transient_index_shadow_fallback_bytes=8 "
                 "indexed_order_optimized_draws=1 "
                 "indexed_order_optimized_bytes=1234 "
+                "probe_scissor_rect_draws=1 "
+                "probe_scissor_rect_area_delta_pixels=256 "
                 "transient_index_optimized_order_bytes=1234]\n"
                 "[dxmt9-perf-encoder-stream seq=7 encoder=3 stream=0 "
                 "samples=4 metal_binds=5 metal_bind_firsts=1 "
@@ -74,6 +76,7 @@ class Summarize3DMark05PerfTests(unittest.TestCase):
                 "[dxmt9-perf-indexed-probe-draw seq=7 encoder=3 "
                 "encoder_draw_index=2 draw_ordinal=42 eligible=1 applied=1 "
                 "optimized_eligible=1 optimized_applied=0 reorder_bytes=1234 "
+                "scissor_rect_eligible=1 scissor_rect_applied=1 "
                 "primitive_type=4 primitive_count=4096 "
                 "vertex_count=12288 texture_mask=0x7f color_write=0xf "
                 "alpha_blend=1 src_blend=5 dst_blend=6 blend_op=1 "
@@ -81,7 +84,10 @@ class Summarize3DMark05PerfTests(unittest.TestCase):
                 "blend_op_alpha=1 "
                 "alpha_test=0 depth_enabled=1 depth_write=0 depth_func=4 "
                 "stencil=0 clip_plane=0 scissor=1 scissor_l=16 scissor_t=32 "
-                "scissor_r=512 scissor_b=384 cull=2 fill=0 base_vertex=0 "
+                "scissor_r=512 scissor_b=384 "
+                "original_scissor_l=8 original_scissor_t=16 "
+                "original_scissor_r=256 original_scissor_b=192 "
+                "cull=2 fill=0 base_vertex=0 "
                 "start_index=128 index_type=1 index_buffer=0xdef "
                 "stream0_handle=0xabc stream0_offset=64 stream0_stride=24 "
                 "pso=0x111 shader_variant=0x222 vs=0x333 ps=0x444 "
@@ -141,6 +147,8 @@ class Summarize3DMark05PerfTests(unittest.TestCase):
             self.assertEqual(encoder["transient_index_shadow_fallback_bytes"], 8)
             self.assertEqual(encoder["indexed_order_optimized_draws"], 1)
             self.assertEqual(encoder["indexed_order_optimized_bytes"], 1234)
+            self.assertEqual(encoder["probe_scissor_rect_draws"], 1)
+            self.assertEqual(encoder["probe_scissor_rect_area_delta_pixels"], 256)
             self.assertEqual(encoder["transient_index_optimized_order_bytes"], 1234)
             self.assertEqual(encoder["pso_state_samples_per_draw"], 2.0)
 
@@ -159,10 +167,13 @@ class Summarize3DMark05PerfTests(unittest.TestCase):
             self.assertEqual(probe_draw["applied"], 1)
             self.assertEqual(probe_draw["optimized_eligible"], 1)
             self.assertEqual(probe_draw["optimized_applied"], 0)
+            self.assertEqual(probe_draw["scissor_rect_eligible"], 1)
+            self.assertEqual(probe_draw["scissor_rect_applied"], 1)
             self.assertEqual(probe_draw["primitive_count"], 4096)
             self.assertEqual(probe_draw["src_blend"], 5)
             self.assertEqual(probe_draw["dst_blend"], 6)
             self.assertEqual(probe_draw["scissor_r"], 512)
+            self.assertEqual(probe_draw["original_scissor_r"], 256)
             self.assertEqual(probe_draw["index_buffer"], "0xdef")
             self.assertEqual(probe_draw["stream0_handle"], "0xabc")
 
@@ -198,6 +209,7 @@ class Summarize3DMark05PerfTests(unittest.TestCase):
             self.assertEqual(row["transient_index_bytes"], "64")
             self.assertEqual(row["transient_index_shadow_fallback_bytes"], "8")
             self.assertEqual(row["indexed_order_optimized_draws"], "1")
+            self.assertEqual(row["probe_scissor_rect_draws"], "1")
             self.assertEqual(row["transient_index_optimized_order_bytes"], "1234")
 
             with stream_csv.open(newline="", encoding="utf-8") as handle:
@@ -216,6 +228,7 @@ class Summarize3DMark05PerfTests(unittest.TestCase):
             self.assertEqual(probe_row["reorder_bytes"], "1234")
             self.assertEqual(probe_row["src_blend"], "5")
             self.assertEqual(probe_row["scissor_l"], "16")
+            self.assertEqual(probe_row["original_scissor_l"], "8")
             self.assertEqual(probe_row["pso"], "0x111")
 
             summary_md = temp_path / "summary.md"

@@ -3131,6 +3131,9 @@ void emitEncoderBreakdown(const EncoderBreakdown& b) {
       "indexed_order_optimized_draws=%llu "
       "indexed_order_optimized_skipped=%llu "
       "indexed_order_optimized_bytes=%llu "
+      "probe_scissor_rect_draws=%llu "
+      "probe_scissor_rect_skipped=%llu "
+      "probe_scissor_rect_area_delta_pixels=%llu "
       "indexed_vertex_reuse_samples=%llu "
       "indexed_vertex_reuse_skipped=%llu "
       "indexed_vertex_reference_count=%llu "
@@ -3352,6 +3355,9 @@ void emitEncoderBreakdown(const EncoderBreakdown& b) {
       static_cast<unsigned long long>(b.indexedOrderOptimizedDraws),
       static_cast<unsigned long long>(b.indexedOrderOptimizedSkipped),
       static_cast<unsigned long long>(b.indexedOrderOptimizedBytes),
+      static_cast<unsigned long long>(b.probeScissorRectDraws),
+      static_cast<unsigned long long>(b.probeScissorRectSkipped),
+      static_cast<unsigned long long>(b.probeScissorRectAreaDeltaPixels),
       static_cast<unsigned long long>(b.indexedVertexReuseSamples),
       static_cast<unsigned long long>(b.indexedVertexReuseSkipped),
       static_cast<unsigned long long>(b.indexedVertexReferenceCount),

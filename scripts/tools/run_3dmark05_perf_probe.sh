@@ -39,6 +39,11 @@ probe_reverse_indexed_triangles_row=
 probe_reverse_indexed_triangles_rows=
 probe_reverse_indexed_triangles_class=
 probe_reverse_indexed_triangles_classes=
+probe_scissor_rect=
+probe_scissor_rect_row=
+probe_scissor_rect_rows=
+probe_scissor_rect_class=
+probe_scissor_rect_classes=
 force_cull_mode=
 measure_index_reuse=0
 aggressive_color_dontcare=0
@@ -215,6 +220,22 @@ Options:
                       Set DXMT9_PROBE_REVERSE_INDEXED_TRIANGLES_CLASSES=CLASSES.
                       Values are ANDed and may be comma/semicolon/space/+ or
                       & separated, e.g. large4096,scissor
+  --probe-scissor-rect L,T,R,B
+                      Set DXMT9_PROBE_SCISSOR_RECT=L,T,R,B to preserve scissor
+                      enablement but override the scissor rectangle for
+                      selected indexed triangle-list draws
+  --probe-scissor-rect-row SEQ/ENC
+                      Set DXMT9_PROBE_SCISSOR_RECT_ROW=SEQ/ENC to constrain
+                      the scissor-rect probe to one Xcode/DXMT row
+  --probe-scissor-rect-rows ROWS
+                      Set DXMT9_PROBE_SCISSOR_RECT_ROWS=ROWS to constrain the
+                      scissor-rect probe to a comma/semicolon/space row set
+  --probe-scissor-rect-class CLASS
+                      Set DXMT9_PROBE_SCISSOR_RECT_CLASS=CLASS. Accepted
+                      values match split-large indexed filters
+  --probe-scissor-rect-classes CLASSES
+                      Set DXMT9_PROBE_SCISSOR_RECT_CLASSES=CLASSES. Values are
+                      ANDed, e.g. large4096,alpha-blend,scissor
   --force-cull-mode MODE
                       Set DXMT_DEBUG_FORCE_CULL_MODE=MODE where MODE is one of
                       none, front, or back for cull/backend shape A/B probes
@@ -477,6 +498,26 @@ while (($#)); do
       ;;
     --probe-reverse-indexed-triangles-classes)
       probe_reverse_indexed_triangles_classes=${2:?missing value for --probe-reverse-indexed-triangles-classes}
+      shift 2
+      ;;
+    --probe-scissor-rect)
+      probe_scissor_rect=${2:?missing value for --probe-scissor-rect}
+      shift 2
+      ;;
+    --probe-scissor-rect-row)
+      probe_scissor_rect_row=${2:?missing value for --probe-scissor-rect-row}
+      shift 2
+      ;;
+    --probe-scissor-rect-rows)
+      probe_scissor_rect_rows=${2:?missing value for --probe-scissor-rect-rows}
+      shift 2
+      ;;
+    --probe-scissor-rect-class)
+      probe_scissor_rect_class=${2:?missing value for --probe-scissor-rect-class}
+      shift 2
+      ;;
+    --probe-scissor-rect-classes)
+      probe_scissor_rect_classes=${2:?missing value for --probe-scissor-rect-classes}
       shift 2
       ;;
     --force-cull-mode)
@@ -1059,6 +1100,26 @@ if [[ -n "$probe_reverse_indexed_triangles_classes" ]]; then
   env_args+=("DXMT9_PROBE_REVERSE_INDEXED_TRIANGLES_CLASSES=$probe_reverse_indexed_triangles_classes")
 fi
 
+if [[ -n "$probe_scissor_rect" ]]; then
+  env_args+=("DXMT9_PROBE_SCISSOR_RECT=$probe_scissor_rect")
+fi
+
+if [[ -n "$probe_scissor_rect_row" ]]; then
+  env_args+=("DXMT9_PROBE_SCISSOR_RECT_ROW=$probe_scissor_rect_row")
+fi
+
+if [[ -n "$probe_scissor_rect_rows" ]]; then
+  env_args+=("DXMT9_PROBE_SCISSOR_RECT_ROWS=$probe_scissor_rect_rows")
+fi
+
+if [[ -n "$probe_scissor_rect_class" ]]; then
+  env_args+=("DXMT9_PROBE_SCISSOR_RECT_CLASS=$probe_scissor_rect_class")
+fi
+
+if [[ -n "$probe_scissor_rect_classes" ]]; then
+  env_args+=("DXMT9_PROBE_SCISSOR_RECT_CLASSES=$probe_scissor_rect_classes")
+fi
+
 if [[ -n "$force_cull_mode" ]]; then
   env_args+=("DXMT_DEBUG_FORCE_CULL_MODE=$force_cull_mode")
 fi
@@ -1373,6 +1434,9 @@ if (( probe_reverse_indexed_triangles )); then
 fi
 if (( probe_reverse_nonopaque_indexed_triangles )); then
   echo "warning: --probe-reverse-nonopaque-indexed-triangles is diagnostic only; it targets visibility-sensitive draws and can corrupt depth/blend results."
+fi
+if [[ -n "$probe_scissor_rect" ]]; then
+  echo "warning: --probe-scissor-rect is diagnostic only; it changes raster coverage and can corrupt frame output. Use it only to classify scissor/tile-coverage backend effects."
 fi
 if [[ -n "$force_cull_mode" ]]; then
   echo "warning: --force-cull-mode is diagnostic only and can corrupt visibility; use it only to classify cull/backend state-shape effects."

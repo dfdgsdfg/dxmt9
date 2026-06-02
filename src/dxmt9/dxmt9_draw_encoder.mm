@@ -992,10 +992,36 @@ struct ActiveEncoderBreakdown {
     stats.indexedOrderOptimizedBytes += bytes;
   }
 
+  static u64 rectAreaPixels(const core::Rect& rect) {
+    const auto width = std::max(0, rect.right - rect.left);
+    const auto height = std::max(0, rect.bottom - rect.top);
+    return static_cast<u64>(width) * static_cast<u64>(height);
+  }
+
+  void recordScissorRectProbe(bool applied,
+                              const core::Rect& originalRect,
+                              const core::Rect& overrideRect) {
+    if (!enabled) {
+      return;
+    }
+    if (!applied) {
+      ++stats.probeScissorRectSkipped;
+      return;
+    }
+    ++stats.probeScissorRectDraws;
+    const auto originalArea = rectAreaPixels(originalRect);
+    const auto overrideArea = rectAreaPixels(overrideRect);
+    stats.probeScissorRectAreaDeltaPixels +=
+        originalArea > overrideArea ? originalArea - overrideArea
+                                    : overrideArea - originalArea;
+  }
+
   void emitIndexedOrderProbeDraw(bool probeEligible,
                                  bool probeApplied,
                                  bool optimizedEligible,
                                  bool optimizedApplied,
+                                 bool scissorRectEligible,
+                                 bool scissorRectApplied,
                                  u64 reorderBytes,
                                  u64 drawOrdinal,
                                  core::PrimitiveType primitiveType,
@@ -1012,7 +1038,8 @@ struct ActiveEncoderBreakdown {
                                  u64 indexBufferHandle,
                                  u64 stream0Handle,
                                  u64 stream0Offset,
-                                 u64 stream0Stride) {
+                                 u64 stream0Stride,
+                                 const core::Rect& originalScissor) {
     if (!enabled) {
       return;
     }
@@ -1047,7 +1074,8 @@ struct ActiveEncoderBreakdown {
         stderr,
         "[dxmt9-perf-indexed-probe-draw seq=%llu encoder=%llu "
         "encoder_draw_index=%llu draw_ordinal=%llu eligible=%u applied=%u "
-        "optimized_eligible=%u optimized_applied=%u reorder_bytes=%llu "
+        "optimized_eligible=%u optimized_applied=%u "
+        "scissor_rect_eligible=%u scissor_rect_applied=%u reorder_bytes=%llu "
         "primitive_type=%u primitive_count=%u vertex_count=%llu "
         "texture_mask=0x%x color_write=0x%x alpha_blend=%u "
         "src_blend=%u dst_blend=%u blend_op=%u separate_alpha=%u "
@@ -1055,6 +1083,8 @@ struct ActiveEncoderBreakdown {
         "alpha_test=%u depth_enabled=%u "
         "depth_write=%u depth_func=%u stencil=%u clip_plane=%u scissor=%u "
         "scissor_l=%d scissor_t=%d scissor_r=%d scissor_b=%d "
+        "original_scissor_l=%d original_scissor_t=%d "
+        "original_scissor_r=%d original_scissor_b=%d "
         "cull=%u fill=%u base_vertex=%d start_index=%u index_type=%u "
         "index_buffer=0x%llx stream0_handle=0x%llx stream0_offset=%llu "
         "stream0_stride=%llu pso=0x%llx shader_variant=0x%llx "
@@ -1067,6 +1097,8 @@ struct ActiveEncoderBreakdown {
         probeApplied ? 1u : 0u,
         optimizedEligible ? 1u : 0u,
         optimizedApplied ? 1u : 0u,
+        scissorRectEligible ? 1u : 0u,
+        scissorRectApplied ? 1u : 0u,
         static_cast<unsigned long long>(reorderBytes),
         static_cast<unsigned>(primitiveType),
         primitiveCount,
@@ -1092,6 +1124,10 @@ struct ActiveEncoderBreakdown {
         static_cast<int>(viewport.scissor.top),
         static_cast<int>(viewport.scissor.right),
         static_cast<int>(viewport.scissor.bottom),
+        static_cast<int>(originalScissor.left),
+        static_cast<int>(originalScissor.top),
+        static_cast<int>(originalScissor.right),
+        static_cast<int>(originalScissor.bottom),
         static_cast<unsigned>(cullMode),
         static_cast<unsigned>(fillMode),
         baseVertexIndex,
@@ -2815,6 +2851,12 @@ bool splitLargeIndexedDrawRowMatches(const ActiveEncoderBreakdown* encoderBreakd
                                        debug::splitLargeIndexedDrawRows());
 }
 
+bool scissorRectProbeRowMatches(const ActiveEncoderBreakdown* encoderBreakdown) {
+  return renderEncoderSelectionMatches(encoderBreakdown,
+                                       debug::probeScissorRectRow(),
+                                       debug::probeScissorRectRows());
+}
+
 bool indexedTriangleOpaqueDepthWriteClass(
     const core::FlatStateSet<core::kMaxStateSlots>& renderStates,
     WMTTriangleFillMode fillMode) {
@@ -2902,6 +2944,25 @@ bool indexedTriangleClassMatches(
     }
   }
   return true;
+}
+
+bool scissorRectProbeClassMatches(u32 primitiveCount,
+                                  u32 textureMask,
+                                  const core::FlatStateSet<core::kMaxStateSlots>& renderStates,
+                                  const core::ViewportScissor& viewport,
+                                  WMTTriangleFillMode fillMode) {
+  return indexedTriangleClassMatches(debug::probeScissorRectClassFilter(),
+                                     primitiveCount,
+                                     textureMask,
+                                     renderStates,
+                                     viewport,
+                                     fillMode) &&
+         indexedTriangleClassMatches(debug::probeScissorRectClassFilters(),
+                                     primitiveCount,
+                                     textureMask,
+                                     renderStates,
+                                     viewport,
+                                     fillMode);
 }
 
 u32 samplerStateOr(const SamplerSnapshot& snapshot, u32 state, u32 fallback) {
@@ -4348,6 +4409,45 @@ bool encodeDraw(EncodeContext& ctx,
     ffLayout = decodeFixedFunctionVertexLayout(vertexDecl);
     fixedFunctionPath = drawUsesFixedFunctionPath(drawState, static_cast<bool>(ffLayout));
   }
+  const u32 primitiveCount = std::max<u32>(1, pv.primitiveCount);
+  const uint64_t vertexCount =
+      static_cast<uint64_t>(std::max(1u, primitiveVertexCount(pv.primitiveType, primitiveCount)));
+  const bool indexedDraw = pv.indexed && (hot.indexBuffer || !pv.userIndexData.empty());
+  const auto primitiveType = toPrimitiveType(pv.primitiveType);
+  bool expandedIndexedDraw = false;
+  const bool preTransformed = ffLayout && ffLayout->preTransformed;
+  const bool scissorDisabled = debug::disableScissor();
+  const u32 cullState = core::flatStateOr(
+      hot.renderStates, RS_CULL_MODE, static_cast<u32>(core::CullMode::Ccw));
+  const auto requestedCullMode = (preTransformed || debug::disableCull())
+                                     ? WMTCullModeNone
+                                     : static_cast<WMTCullMode>(toCullMode(cullState));
+  const auto effectiveCullMode = applyDebugCullOverride(requestedCullMode);
+  const auto fillMode = triangleFillModeFromRenderState(hot.renderStates);
+  core::ViewportScissor effectiveViewport = hot.viewport;
+  const auto scissorRectOverride = debug::probeScissorRectOverride();
+  bool scissorRectProbeConsidered = false;
+  bool scissorRectProbeEligible = false;
+  bool scissorRectProbeApplied = false;
+  if (scissorRectOverride.enabled &&
+      !scissorDisabled &&
+      indexedDraw &&
+      pv.primitiveType == core::PrimitiveType::TriangleList &&
+      hot.viewport.scissorEnabled &&
+      scissorRectProbeRowMatches(encoderBreakdown)) {
+    scissorRectProbeConsidered = true;
+    scissorRectProbeEligible =
+        scissorRectProbeClassMatches(primitiveCount,
+                                     hot.textureMask,
+                                     hot.renderStates,
+                                     hot.viewport,
+                                     fillMode);
+    if (scissorRectProbeEligible) {
+      effectiveViewport.scissorEnabled = true;
+      effectiveViewport.scissor = scissorRectOverride.rect;
+      scissorRectProbeApplied = true;
+    }
+  }
   const auto* bindingPacketSurface =
       ctx.pool.findSurface(hot.colorAttachments[0].handle.value);
   const bool bindingPacketHasRasterTarget =
@@ -4359,9 +4459,10 @@ bool encodeDraw(EncodeContext& ctx,
       bindingPacketHasRasterTarget ? bindingPacketSurface->desc.width : 1u,
       bindingPacketHasRasterTarget ? bindingPacketSurface->desc.height : 1u,
       ffLayout && ffLayout->preTransformed,
-      debug::disableScissor(),
+      scissorDisabled,
       debug::disableCull(),
-      &drawState.shaderContext().pixelShader);
+      &drawState.shaderContext().pixelShader,
+      &effectiveViewport);
   const auto& bindingPacket =
       cacheDrawBindingPacket(gDrawBindingPacketCache, bindingPacketPlan);
   if (encoderBreakdown) {
@@ -4405,10 +4506,6 @@ bool encodeDraw(EncodeContext& ctx,
     }
   }
   static std::atomic<int> ffTraceRemaining{debug::fixedFunctionTraceBudget()};
-  const u32 primitiveCount = std::max<u32>(1, pv.primitiveCount);
-  const uint64_t vertexCount =
-      static_cast<uint64_t>(std::max(1u, primitiveVertexCount(pv.primitiveType, primitiveCount)));
-  const bool indexedDraw = pv.indexed && (hot.indexBuffer || !pv.userIndexData.empty());
   CommandQueue::TransientBufferSlice transientVertexBuffer;
   std::span<const u8> vertexBytes;
   const resources::BufferRecord* stream0Record = nullptr;
@@ -5270,16 +5367,6 @@ bool encodeDraw(EncodeContext& ctx,
       }
     }
   }
-  const auto primitiveType = toPrimitiveType(pv.primitiveType);
-  bool expandedIndexedDraw = false;
-  const bool preTransformed = ffLayout && ffLayout->preTransformed;
-  const u32 cullState = core::flatStateOr(
-      hot.renderStates, RS_CULL_MODE, static_cast<u32>(core::CullMode::Ccw));
-  const auto requestedCullMode = (preTransformed || debug::disableCull())
-                                     ? WMTCullModeNone
-                                     : static_cast<WMTCullMode>(toCullMode(cullState));
-  const auto effectiveCullMode = applyDebugCullOverride(requestedCullMode);
-  const auto fillMode = triangleFillModeFromRenderState(hot.renderStates);
   if (traceEncode) {
     std::ostringstream out;
     out << "[dxmt9-encode] seq=" << static_cast<unsigned long long>(seqId)
@@ -5313,10 +5400,10 @@ bool encodeDraw(EncodeContext& ctx,
         << " cullState=" << cullState
         << " cullRequested=" << static_cast<unsigned>(requestedCullMode)
         << " cullEffective=" << static_cast<unsigned>(effectiveCullMode)
-        << " scissor=" << (hot.viewport.scissorEnabled ? 1 : 0)
-        << " scissorRect=" << hot.viewport.scissor.left << ","
-        << hot.viewport.scissor.top << "-" << hot.viewport.scissor.right
-        << "," << hot.viewport.scissor.bottom
+        << " scissor=" << (effectiveViewport.scissorEnabled ? 1 : 0)
+        << " scissorRect=" << effectiveViewport.scissor.left << ","
+        << effectiveViewport.scissor.top << "-" << effectiveViewport.scissor.right
+        << "," << effectiveViewport.scissor.bottom
         << " alphaBlend="
         << core::flatStateOr(hot.renderStates, RS_ALPHABLEND_ENABLE, 0u)
         << " srcBlend=" << core::flatStateOr(hot.renderStates, RS_SRC_BLEND, 0u)
@@ -5567,7 +5654,7 @@ bool encodeDraw(EncodeContext& ctx,
           pv.startIndex,
           pv.indexType,
           hot.renderStates,
-          hot.viewport,
+          effectiveViewport,
           effectiveCullMode,
           fillMode);
     };
@@ -5681,14 +5768,14 @@ bool encodeDraw(EncodeContext& ctx,
                 primitiveCount,
                 hot.textureMask,
                 hot.renderStates,
-                hot.viewport,
+                effectiveViewport,
                 fillMode) &&
             indexedTriangleClassMatches(
                 debug::probeReverseIndexedTrianglesClassFilters(),
                 primitiveCount,
                 hot.textureMask,
                 hot.renderStates,
-                hot.viewport,
+                effectiveViewport,
                 fillMode);
         probeEligible =
             classEligible &&
@@ -5724,14 +5811,14 @@ bool encodeDraw(EncodeContext& ctx,
                 primitiveCount,
                 hot.textureMask,
                 hot.renderStates,
-                hot.viewport,
+                effectiveViewport,
                 fillMode) &&
             indexedTriangleClassMatches(
                 debug::optimizeScreenBlendIndexOrderClassFilters(),
                 primitiveCount,
                 hot.textureMask,
                 hot.renderStates,
-                hot.viewport,
+                effectiveViewport,
                 fillMode);
         if (optimizedEligible &&
             buildReverseTriangleOrderIndexBytes(indexBytesForReuse,
@@ -5752,7 +5839,8 @@ bool encodeDraw(EncodeContext& ctx,
           }
         }
       }
-      if (encoderBreakdown && (probeConsidered || optimizedConsidered)) {
+      if (encoderBreakdown &&
+          (probeConsidered || optimizedConsidered || scissorRectProbeConsidered)) {
         const auto& stream0 = encoderBreakdown->stats.streams[0];
         const u64 reorderBytes =
             (probeApplied || optimizedApplied)
@@ -5763,6 +5851,8 @@ bool encodeDraw(EncodeContext& ctx,
             probeApplied,
             optimizedEligible,
             optimizedApplied,
+            scissorRectProbeEligible,
+            scissorRectProbeApplied,
             reorderBytes,
             drawOrdinal,
             pv.primitiveType,
@@ -5770,7 +5860,7 @@ bool encodeDraw(EncodeContext& ctx,
             vertexCount,
             hot.textureMask,
             hot.renderStates,
-            hot.viewport,
+            effectiveViewport,
             effectiveCullMode,
             fillMode,
             pv.baseVertexIndex,
@@ -5779,7 +5869,8 @@ bool encodeDraw(EncodeContext& ctx,
             hot.indexBuffer.value,
             stream0.lastHandle,
             stream0.lastOffset,
-            stream0.lastStride);
+            stream0.lastStride,
+            hot.viewport.scissor);
         if (probeConsidered) {
           encoderBreakdown->recordIndexedOrderProbe(
               probeApplied,
@@ -5789,6 +5880,11 @@ bool encodeDraw(EncodeContext& ctx,
           encoderBreakdown->recordIndexedOrderOptimization(
               optimizedApplied,
               optimizedApplied ? static_cast<u64>(probeReorderedIndexBytes.size()) : 0u);
+        }
+        if (scissorRectProbeConsidered) {
+          encoderBreakdown->recordScissorRectProbe(scissorRectProbeApplied,
+                                                   hot.viewport.scissor,
+                                                   effectiveViewport.scissor);
         }
       }
       if (indexBuffer) {
@@ -5851,14 +5947,14 @@ bool encodeDraw(EncodeContext& ctx,
                 primitiveCount,
                 hot.textureMask,
                 hot.renderStates,
-                hot.viewport,
+                effectiveViewport,
                 fillMode) &&
             indexedTriangleClassMatches(
                 debug::splitLargeIndexedDrawClassFilters(),
                 primitiveCount,
                 hot.textureMask,
                 hot.renderStates,
-                hot.viewport,
+                effectiveViewport,
                 fillMode);
         if (splitLargeIndexed) {
           const u64 indexSize = indexElementSize(pv.indexType);
@@ -5913,7 +6009,7 @@ bool encodeDraw(EncodeContext& ctx,
         pv.startIndex,
         pv.indexType,
         hot.renderStates,
-        hot.viewport,
+        effectiveViewport,
         effectiveCullMode,
         fillMode);
   }

@@ -477,6 +477,27 @@ class ThreeDMark05ProbeScriptTests(unittest.TestCase):
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertIn("DXMT9_PROBE_REVERSE_NONOPAQUE_INDEXED_TRIANGLES=1", result.stdout)
 
+    def test_wrapper_dry_run_includes_scissor_rect_probe_env(self) -> None:
+        result = self.run_script(
+            RUN_WRAPPER,
+            "--no-gputrace",
+            "--probe-scissor-rect",
+            "0,0,190,553",
+            "--probe-scissor-rect-row",
+            "60/4",
+            "--probe-scissor-rect-classes",
+            "large4096,alpha-blend,scissor",
+            "--dry-run",
+        )
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("DXMT9_PROBE_SCISSOR_RECT=0\\,0\\,190\\,553", result.stdout)
+        self.assertIn("DXMT9_PROBE_SCISSOR_RECT_ROW=60/4", result.stdout)
+        self.assertIn(
+            "DXMT9_PROBE_SCISSOR_RECT_CLASSES=large4096\\,alpha-blend\\,scissor",
+            result.stdout,
+        )
+
     def test_wrapper_rejects_invalid_force_cull_mode(self) -> None:
         result = self.run_script(
             RUN_WRAPPER,

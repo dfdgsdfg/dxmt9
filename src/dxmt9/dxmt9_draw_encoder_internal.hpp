@@ -16,6 +16,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <cstring>
+#include <optional>
 #include <span>
 #include <vector>
 
@@ -663,13 +664,15 @@ inline EncoderRasterStatePlan makeEncoderRasterStatePlan(
     u32 surfaceHeight,
     bool preTransformed,
     bool scissorDisabled,
-    bool cullDisabled) {
+    bool cullDisabled,
+    const core::ViewportScissor* viewportOverride = nullptr) {
+  const auto& viewport = viewportOverride ? *viewportOverride : hot.viewport;
   const auto targetWidth = std::max(1u, surfaceWidth);
   const auto targetHeight = std::max(1u, surfaceHeight);
-  double viewportWidth = static_cast<double>(std::max(1u, hot.viewport.viewport.width));
-  double viewportHeight = static_cast<double>(std::max(1u, hot.viewport.viewport.height));
-  double viewportOriginX = static_cast<double>(hot.viewport.viewport.x);
-  double viewportOriginY = static_cast<double>(hot.viewport.viewport.y);
+  double viewportWidth = static_cast<double>(std::max(1u, viewport.viewport.width));
+  double viewportHeight = static_cast<double>(std::max(1u, viewport.viewport.height));
+  double viewportOriginX = static_cast<double>(viewport.viewport.x);
+  double viewportOriginY = static_cast<double>(viewport.viewport.y);
   if (preTransformed) {
     viewportOriginX = 0.0;
     viewportOriginY = 0.0;
@@ -678,13 +681,13 @@ inline EncoderRasterStatePlan makeEncoderRasterStatePlan(
   }
 
   WMTScissorRect scissor{};
-  if (hot.viewport.scissorEnabled && !scissorDisabled) {
-    scissor.x = static_cast<std::uint64_t>(std::max(0, hot.viewport.scissor.left));
-    scissor.y = static_cast<std::uint64_t>(std::max(0, hot.viewport.scissor.top));
+  if (viewport.scissorEnabled && !scissorDisabled) {
+    scissor.x = static_cast<std::uint64_t>(std::max(0, viewport.scissor.left));
+    scissor.y = static_cast<std::uint64_t>(std::max(0, viewport.scissor.top));
     scissor.width = static_cast<std::uint64_t>(
-        std::max(0, hot.viewport.scissor.right - hot.viewport.scissor.left));
+        std::max(0, viewport.scissor.right - viewport.scissor.left));
     scissor.height = static_cast<std::uint64_t>(
-        std::max(0, hot.viewport.scissor.bottom - hot.viewport.scissor.top));
+        std::max(0, viewport.scissor.bottom - viewport.scissor.top));
   } else {
     scissor.x = 0;
     scissor.y = 0;
@@ -704,8 +707,8 @@ inline EncoderRasterStatePlan makeEncoderRasterStatePlan(
           viewportOriginY,
           viewportWidth,
           viewportHeight,
-          static_cast<double>(hot.viewport.viewport.minZ),
-          static_cast<double>(hot.viewport.viewport.maxZ),
+          static_cast<double>(viewport.viewport.minZ),
+          static_cast<double>(viewport.viewport.maxZ),
       },
       .scissor = scissor,
       .cullMode = cullMode,
@@ -721,13 +724,20 @@ inline DrawBindingPacketPlan makeDrawBindingPacketPlan(
     bool preTransformed,
     bool scissorDisabled,
     bool cullDisabled,
-    const core::ShaderRef* pixelShader = nullptr) {
+    const core::ShaderRef* pixelShader = nullptr,
+    const core::ViewportScissor* viewportOverride = nullptr) {
   return DrawBindingPacketPlan{
       .fragmentTextureSamplers = makeFragmentTextureSamplerBindings(hot, pixelShader),
       .vertexTextureSamplers = makeVertexTextureSamplerBindings(hot),
       .extraStreams = makeProgrammableVsExtraStreamBindings(vertexDecl, hot, pv),
       .raster = makeEncoderRasterStatePlan(
-          hot, surfaceWidth, surfaceHeight, preTransformed, scissorDisabled, cullDisabled),
+          hot,
+          surfaceWidth,
+          surfaceHeight,
+          preTransformed,
+          scissorDisabled,
+          cullDisabled,
+          viewportOverride),
   };
 }
 

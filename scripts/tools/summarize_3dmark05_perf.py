@@ -253,6 +253,9 @@ ENCODER_SUM_KEYS = (
     "indexed_order_optimized_draws",
     "indexed_order_optimized_skipped",
     "indexed_order_optimized_bytes",
+    "probe_scissor_rect_draws",
+    "probe_scissor_rect_skipped",
+    "probe_scissor_rect_area_delta_pixels",
     "indexed_vertex_reuse_samples",
     "indexed_vertex_reuse_skipped",
     "indexed_vertex_reference_count",
@@ -535,6 +538,9 @@ ENCODER_CSV_KEYS = (
     "indexed_order_optimized_draws",
     "indexed_order_optimized_skipped",
     "indexed_order_optimized_bytes",
+    "probe_scissor_rect_draws",
+    "probe_scissor_rect_skipped",
+    "probe_scissor_rect_area_delta_pixels",
     "indexed_vertex_reuse_samples",
     "indexed_vertex_reuse_skipped",
     "indexed_vertex_reference_count",
@@ -689,6 +695,8 @@ PROBE_DRAW_CSV_KEYS = (
     "applied",
     "optimized_eligible",
     "optimized_applied",
+    "scissor_rect_eligible",
+    "scissor_rect_applied",
     "reorder_bytes",
     "primitive_type",
     "primitive_count",
@@ -714,6 +722,10 @@ PROBE_DRAW_CSV_KEYS = (
     "scissor_t",
     "scissor_r",
     "scissor_b",
+    "original_scissor_l",
+    "original_scissor_t",
+    "original_scissor_r",
+    "original_scissor_b",
     "cull",
     "fill",
     "base_vertex",
@@ -1277,6 +1289,12 @@ def write_markdown(
         optimized_eligible = [
             row for row in probe_draws if numeric_value(row, "optimized_eligible")
         ]
+        scissor_rect_applied = [
+            row for row in probe_draws if numeric_value(row, "scissor_rect_applied")
+        ]
+        scissor_rect_eligible = [
+            row for row in probe_draws if numeric_value(row, "scissor_rect_eligible")
+        ]
         lines.append("## Indexed Probe Draw Samples")
         lines.append("")
         lines.append("| Metric | Value |")
@@ -1286,18 +1304,26 @@ def write_markdown(
         lines.append(f"| `applied` | `{fmt(len(applied))}` |")
         lines.append(f"| `optimized_eligible` | `{fmt(len(optimized_eligible))}` |")
         lines.append(f"| `optimized_applied` | `{fmt(len(optimized_applied))}` |")
+        lines.append(f"| `scissor_rect_eligible` | `{fmt(len(scissor_rect_eligible))}` |")
+        lines.append(f"| `scissor_rect_applied` | `{fmt(len(scissor_rect_applied))}` |")
         lines.append(
             f"| `reorder_bytes` | `{fmt(sum_key(probe_draws, 'reorder_bytes'))}` |"
         )
         lines.append("")
-        lines.append("| seq | enc | draw | applied | opt | prims | scissor | scissor rect | stream0 | ib | pso |")
-        lines.append("|---:|---:|---:|---:|---:|---:|---:|---|---|---|---|")
+        lines.append("| seq | enc | draw | applied | opt | srect | prims | scissor | scissor rect | original rect | stream0 | ib | pso |")
+        lines.append("|---:|---:|---:|---:|---:|---:|---:|---:|---|---|---|---|---|")
         for row in probe_draws[:32]:
             rect = (
                 f"{fmt(row.get('scissor_l'))},"
                 f"{fmt(row.get('scissor_t'))},"
                 f"{fmt(row.get('scissor_r'))},"
                 f"{fmt(row.get('scissor_b'))}"
+            )
+            original_rect = (
+                f"{fmt(row.get('original_scissor_l'))},"
+                f"{fmt(row.get('original_scissor_t'))},"
+                f"{fmt(row.get('original_scissor_r'))},"
+                f"{fmt(row.get('original_scissor_b'))}"
             )
             stream = (
                 f"{row.get('stream0_handle', '')}+"
@@ -1313,9 +1339,11 @@ def write_markdown(
                         fmt(row.get("encoder_draw_index")),
                         fmt(row.get("applied")),
                         fmt(row.get("optimized_applied")),
+                        fmt(row.get("scissor_rect_applied")),
                         fmt(row.get("primitive_count")),
                         fmt(row.get("scissor")),
                         rect,
+                        original_rect,
                         stream,
                         fmt(row.get("index_buffer")),
                         fmt(row.get("pso")),

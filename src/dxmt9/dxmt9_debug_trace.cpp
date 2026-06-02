@@ -60,6 +60,59 @@ bool parseU64(std::string_view spec, std::size_t& pos, u64& value) noexcept {
   return true;
 }
 
+bool parseI32(std::string_view spec, std::size_t& pos, std::int32_t& value) noexcept {
+  skipSpaces(spec, pos);
+  if (pos >= spec.size()) {
+    return false;
+  }
+
+  bool negative = false;
+  if (spec[pos] == '-' || spec[pos] == '+') {
+    negative = spec[pos] == '-';
+    ++pos;
+  }
+  if (pos >= spec.size() || spec[pos] < '0' || spec[pos] > '9') {
+    return false;
+  }
+
+  std::uint64_t parsed = 0;
+  const auto limit = negative
+      ? static_cast<std::uint64_t>(std::numeric_limits<std::int32_t>::max()) + 1ull
+      : static_cast<std::uint64_t>(std::numeric_limits<std::int32_t>::max());
+  while (pos < spec.size() && spec[pos] >= '0' && spec[pos] <= '9') {
+    const auto digit = static_cast<std::uint64_t>(spec[pos] - '0');
+    if (parsed > (limit - digit) / 10u) {
+      return false;
+    }
+    parsed = parsed * 10u + digit;
+    ++pos;
+  }
+
+  if (negative && parsed == limit) {
+    value = std::numeric_limits<std::int32_t>::min();
+  } else {
+    value = static_cast<std::int32_t>(parsed);
+    if (negative) {
+      value = -value;
+    }
+  }
+  return true;
+}
+
+bool parseScissorRectSeparator(std::string_view spec, std::size_t& pos) noexcept {
+  skipSpaces(spec, pos);
+  if (pos >= spec.size()) {
+    return false;
+  }
+  const char separator = spec[pos];
+  if (separator != ',' && separator != ';' && separator != ':' &&
+      separator != '/' && separator != 'x' && separator != 'X') {
+    return false;
+  }
+  ++pos;
+  return true;
+}
+
 bool parseRenderEncoderSelectorAt(std::string_view spec,
                                   std::size_t& pos,
                                   bool allowCommaPairSeparator,
@@ -235,6 +288,37 @@ IndexedTriangleClassFilter makeIndexedTriangleClassFilter(
 IndexedTriangleClassFilterList makeIndexedTriangleClassFilterList(
     std::string_view spec) noexcept {
   return parseIndexedTriangleClassFilterList(spec);
+}
+
+ScissorRectOverride makeScissorRectOverride(std::string_view spec) noexcept {
+  if (spec.empty()) {
+    return {};
+  }
+
+  std::size_t pos = 0;
+  std::int32_t left = 0;
+  std::int32_t top = 0;
+  std::int32_t right = 0;
+  std::int32_t bottom = 0;
+  if (!parseI32(spec, pos, left) ||
+      !parseScissorRectSeparator(spec, pos) ||
+      !parseI32(spec, pos, top) ||
+      !parseScissorRectSeparator(spec, pos) ||
+      !parseI32(spec, pos, right) ||
+      !parseScissorRectSeparator(spec, pos) ||
+      !parseI32(spec, pos, bottom)) {
+    return {};
+  }
+
+  skipSpaces(spec, pos);
+  if (pos != spec.size() || right < left || bottom < top) {
+    return {};
+  }
+
+  return ScissorRectOverride{
+      .enabled = true,
+      .rect = core::Rect{left, top, right, bottom},
+  };
 }
 
 bool renderEncoderSelectorMatches(RenderEncoderSelector selector,
@@ -530,6 +614,39 @@ RenderEncoderSelectorList probeReverseIndexedTrianglesRows() {
   static const RenderEncoderSelectorList selectors =
       makeRenderEncoderSelectorList(
           util::getenvString("DXMT9_PROBE_REVERSE_INDEXED_TRIANGLES_ROWS"));
+  return selectors;
+}
+
+ScissorRectOverride probeScissorRectOverride() {
+  static const ScissorRectOverride override =
+      makeScissorRectOverride(util::getenvString("DXMT9_PROBE_SCISSOR_RECT"));
+  return override;
+}
+
+IndexedTriangleClassFilter probeScissorRectClassFilter() {
+  static const IndexedTriangleClassFilter filter =
+      makeIndexedTriangleClassFilter(
+          util::getenvString("DXMT9_PROBE_SCISSOR_RECT_CLASS"));
+  return filter;
+}
+
+IndexedTriangleClassFilterList probeScissorRectClassFilters() {
+  static const IndexedTriangleClassFilterList filters =
+      makeIndexedTriangleClassFilterList(
+          util::getenvString("DXMT9_PROBE_SCISSOR_RECT_CLASSES"));
+  return filters;
+}
+
+RenderEncoderSelector probeScissorRectRow() {
+  static const RenderEncoderSelector selector =
+      parseRenderEncoderSelector("DXMT9_PROBE_SCISSOR_RECT_ROW");
+  return selector;
+}
+
+RenderEncoderSelectorList probeScissorRectRows() {
+  static const RenderEncoderSelectorList selectors =
+      makeRenderEncoderSelectorList(
+          util::getenvString("DXMT9_PROBE_SCISSOR_RECT_ROWS"));
   return selectors;
 }
 

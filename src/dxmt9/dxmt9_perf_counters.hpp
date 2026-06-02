@@ -655,6 +655,9 @@ struct EncoderBreakdown {
   std::uint64_t indexedOrderOptimizedDraws = 0;
   std::uint64_t indexedOrderOptimizedSkipped = 0;
   std::uint64_t indexedOrderOptimizedBytes = 0;
+  std::uint64_t probeScissorRectDraws = 0;
+  std::uint64_t probeScissorRectSkipped = 0;
+  std::uint64_t probeScissorRectAreaDeltaPixels = 0;
   std::uint64_t indexedVertexReuseSamples = 0;
   std::uint64_t indexedVertexReuseSkipped = 0;
   std::uint64_t indexedVertexReferenceCount = 0;

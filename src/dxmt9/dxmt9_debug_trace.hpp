@@ -62,10 +62,16 @@ struct IndexedTriangleClassFilterList {
   std::size_t count = 0;
 };
 
+struct ScissorRectOverride {
+  bool enabled = false;
+  core::Rect rect{};
+};
+
 IndexedTriangleClassFilter makeIndexedTriangleClassFilter(
     std::string_view spec) noexcept;
 IndexedTriangleClassFilterList makeIndexedTriangleClassFilterList(
     std::string_view spec) noexcept;
+ScissorRectOverride makeScissorRectOverride(std::string_view spec) noexcept;
 
 DrawSeqRange makeDrawSeqRange(std::optional<u64> min, std::optional<u64> max) noexcept;
 bool drawSeqRangeEnabled(DrawSeqRange range) noexcept;
@@ -261,6 +267,29 @@ RenderEncoderSelector probeReverseIndexedTrianglesRow();
 // "60/0,60/1,60/3,60/4".
 // Env: DXMT9_PROBE_REVERSE_INDEXED_TRIANGLES_ROWS.
 RenderEncoderSelectorList probeReverseIndexedTrianglesRows();
+
+// Diagnostic-only: preserve scissor enablement but override the scissor
+// rectangle for selected indexed triangle-list draws. This changes rendering
+// and is only intended to classify tile-coverage/backend-storage effects.
+// Env: DXMT9_PROBE_SCISSOR_RECT, format "left,top,right,bottom".
+ScissorRectOverride probeScissorRectOverride();
+
+// Optional class filter for DXMT9_PROBE_SCISSOR_RECT. Accepted values match
+// DXMT9_PROBE_REVERSE_INDEXED_TRIANGLES_CLASS.
+// Env: DXMT9_PROBE_SCISSOR_RECT_CLASS.
+IndexedTriangleClassFilter probeScissorRectClassFilter();
+
+// Optional AND class-list filter for DXMT9_PROBE_SCISSOR_RECT.
+// Env: DXMT9_PROBE_SCISSOR_RECT_CLASSES.
+IndexedTriangleClassFilterList probeScissorRectClassFilters();
+
+// Optional selector for DXMT9_PROBE_SCISSOR_RECT. Format is "<seq>/<encoder>".
+// Env: DXMT9_PROBE_SCISSOR_RECT_ROW.
+RenderEncoderSelector probeScissorRectRow();
+
+// Optional selector list for DXMT9_PROBE_SCISSOR_RECT.
+// Env: DXMT9_PROBE_SCISSOR_RECT_ROWS.
+RenderEncoderSelectorList probeScissorRectRows();
 
 // Diagnostic-only: scan accessible index-buffer bytes and report the sum of
 // per-draw unique index references in encoder breakdown logs.

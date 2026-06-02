@@ -220,6 +220,24 @@ void testIndexedTriangleClassFilterListParsesAndBuckets() {
         "unknown and any indexed triangle class list entries are ignored");
 }
 
+void testScissorRectOverrideParsesOrderedRect() {
+  const auto rect = dxmt9::debug::makeScissorRectOverride("0,16,190,553");
+  check(rect.enabled, "scissor rect override is enabled for valid rect");
+  check(rect.rect.left == 0, "scissor rect override parses left");
+  check(rect.rect.top == 16, "scissor rect override parses top");
+  check(rect.rect.right == 190, "scissor rect override parses right");
+  check(rect.rect.bottom == 553, "scissor rect override parses bottom");
+
+  const auto colon = dxmt9::debug::makeScissorRectOverride("1:2:3:4");
+  check(colon.enabled, "scissor rect override accepts colon separators");
+
+  const auto inverted = dxmt9::debug::makeScissorRectOverride("10,0,5,20");
+  check(!inverted.enabled, "scissor rect override rejects inverted x edges");
+
+  const auto trailing = dxmt9::debug::makeScissorRectOverride("0,0,10,10,1");
+  check(!trailing.enabled, "scissor rect override rejects trailing fields");
+}
+
 }  // namespace
 
 int main() {
@@ -234,6 +252,7 @@ int main() {
     testRenderEncoderSelectorListParsesHotRows();
     testIndexedTriangleClassFilterParsesProbeBuckets();
     testIndexedTriangleClassFilterListParsesAndBuckets();
+    testScissorRectOverrideParsesOrderedRect();
   } catch (const TestFailure& failure) {
     std::cerr << "draw_seq_filter_spec failed: "
               << failure.what() << '\n';
