@@ -8565,6 +8565,88 @@ scripts/tools/run_3dmark05_perf_probe.sh \
   --max-top-triangle-delta-ratio 0.05
 ```
 
+Xcode/gputrace validation completed with the same shape gates:
+
+```bash
+scripts/tools/finalize_3dmark05_perf_probe.sh \
+  --suffix reverse-opaque-large4096-gputrace-r1 \
+  --frame 60 \
+  --top 4 \
+  --hot-gpu-share 95 \
+  --baseline-joined traces/app-d3d9-3dmark05-measure-index-cache-gputrace-r1/analysis/frame60-xcode-dxmt-joined-summary.csv \
+  --require-top-row-key-match \
+  --require-top-pso-attribution \
+  --min-top-pso-samples-per-draw 0.90 \
+  --require-xcode-counter-coverage \
+  --require-dxmt-join-coverage \
+  --min-top-dxmt-joined-fraction 1.0 \
+  --max-top-draw-call-delta-ratio 0.05 \
+  --max-top-vertex-count-delta-ratio 0.05 \
+  --max-top-triangle-delta-ratio 0.05
+```
+
+Artifacts:
+
+```text
+traces/app-d3d9-3dmark05-reverse-opaque-large4096-gputrace-r1/frame60.gputrace
+traces/app-d3d9-3dmark05-reverse-opaque-large4096-gputrace-r1/analysis/frame60-performance.gputrace
+traces/app-d3d9-3dmark05-reverse-opaque-large4096-gputrace-r1/analysis/frame60-counters-xcode.csv
+traces/app-d3d9-3dmark05-reverse-opaque-large4096-gputrace-r1/analysis/frame60-xcode-dxmt-joined-summary.csv
+traces/app-d3d9-3dmark05-reverse-opaque-large4096-gputrace-r1/analysis/frame60-xcode-dxmt-bottleneck-report.md
+traces/app-d3d9-3dmark05-reverse-opaque-large4096-gputrace-r1/analysis/frame60-xcode-dxmt-comparison.md
+traces/app-d3d9-3dmark05-reverse-opaque-large4096-gputrace-r1/analysis/frame60-shader-dump-report-from-current-normal.md
+```
+
+Verdict: the correctness-preserving opaque-large subset is negative. Xcode
+Summary reported `34.26ms`; the finalizer measured total GPU
+`34.391 -> 34.257ms` (`-0.39%`) and top hot-row GPU
+`33.741 -> 33.635ms` (`-0.31%`), but top VS buffer write stayed fixed at
+`1472.747 -> 1472.821MiB` (`+0.01%`). Top buffer write also stayed fixed at
+`1473.614 -> 1473.600MiB` (`-0.00%`), and the hidden backend estimate remains
+dominant: `1454.945MiB`, `0.988x` of VS buffer write in the hot set.
+
+Target/shared-row deltas:
+
+| Row | GPU ms | VS write MiB | VS invocations | VS B/inv | Direct probe coverage |
+|---|---:|---:|---:|---:|---:|
+| `60/3` | `10.662 -> 10.019` (`-6.03%`) | `437.402 -> 437.381` (`-0.00%`) | `432,881 -> 432,931` (`+0.01%`) | `1059.5 -> 1059.4` (`-0.02%`) | `9` opaque large4096 draws |
+| `60/1` | `8.252 -> 8.545` (`+3.56%`) | `437.404 -> 437.382` (`-0.00%`) | `393,529 -> 393,579` (`+0.01%`) | `1165.5 -> 1165.3` (`-0.02%`) | `9` opaque large4096 draws |
+| `60/0` | `5.797 -> 6.083` (`+4.94%`) | `227.665 -> 227.670` (`+0.00%`) | `317,588 -> 314,299` (`-1.04%`) | `751.7 -> 759.6` (`+1.05%`) | `5` opaque large4096 draws |
+| `60/4` | `9.031 -> 8.988` (`-0.48%`) | `370.276 -> 370.388` (`+0.03%`) | `659,516 -> 653,135` (`-0.97%`) | `588.7 -> 594.6` (`+1.01%`) | untouched by opaque filter; still `19` depth-read/textured large4096 draws |
+
+The comparison report attributes the matched-row VS-write delta to almost no
+movement: total `+0.074MiB`, with invocation-count decrease `-5.865MiB`
+cancelled by bytes/invocation increase `+5.939MiB`. This rejects opaque
+large4096 reordering as the production-safe form of the earlier positive
+classifier.
+
+The shader dump join was replayed against the existing current-normal MSL dump:
+
+```bash
+python3 scripts/tools/analyze_shader_dumps.py \
+  traces/app-d3d9-3dmark05-reverse-opaque-large4096-gputrace-r1/analysis/frame60-xcode-dxmt-joined-summary.csv \
+  --shader-dir traces/app-d3d9-3dmark05-current-normal-gputrace-r1/analysis/shaders/msl \
+  --output traces/app-d3d9-3dmark05-reverse-opaque-large4096-gputrace-r1/analysis/frame60-shader-dump-report-from-current-normal.md \
+  --csv-output traces/app-d3d9-3dmark05-reverse-opaque-large4096-gputrace-r1/analysis/frame60-shader-dump-summary-from-current-normal.csv \
+  --top 10
+```
+
+It matched `9/9` nonzero top rows. The top hot rows still use `184B` source
+visible `VSOut` with all `13` fields, while Xcode reports `594B` to `1165B`
+per VS invocation. For rows `60/3`, `60/1`, and `60/4`, the paired fragment
+shader reads only `position`, `fogFactor`, and one texcoord; about `148B`
+(`80.4%`) of visible `VSOut` is unread. Row `60/0` reads seven fields but still
+has `84B` (`45.7%`) unread. This explains why a liveness-shaped source variant
+is plausible, but it is not sufficient by itself: the earlier
+`DXMT9_TRIM_UNUSED_VARYINGS=1` Xcode recheck reduced expected VSOut payload
+from `184.0B` to `40.2B` per vertex and still left top VS buffer write
+unchanged. The next production-safe path is therefore not primitive reordering
+and not simple visible-VSOut trimming. It has to reduce the hidden Apple
+vertex/tiler/backend storage pressure that remains after source-visible VSOut,
+temp, and outTexcoord scratch reductions fail to move the Xcode bucket. The
+`60/4` large4096/depth-read/textured classifier remains a diagnostic signal for
+primitive/locality-sensitive hidden backend traffic.
+
 The current primitive-order classifier state is:
 
 | Probe | Shape gate | VS-write result | Interpretation |
@@ -8577,7 +8659,7 @@ The current primitive-order classifier state is:
 | `60/4` alpha reverse | passes | unchanged, GPU time `-5.73%` on target row | reject alpha subset as VS-write owner |
 | `60/4` large4096 reverse | passes | hot VS write `-7.46%`, target row `-22.33%` | positive classifier for primitive/locality-dependent hidden backend traffic |
 | `large4096` cross-bucket baseline | no Xcode counters | `60/4` positive target has `0` opaque draws | separates diagnostic signal from production-safe candidate set |
-| Opaque `large4096` smoke (`60/0,60/1,60/3`) | no Xcode counters | applies expected `23` draws, hot geometry drift `<1%` | ready for Xcode/gputrace validation |
+| Opaque `large4096` (`60/0,60/1,60/3`) | passes | top VS write `+0.01%`, hot GPU `-0.31%` | reject production-safe opaque-large reorder; does not reproduce positive `60/4` signal |
 
 Workspace disk headroom was restored before this capture; after the export the
 filesystem has about `15GiB` free. Raw `.gputrace` and embedded-performance
@@ -8596,11 +8678,14 @@ flowchart TD
   Alpha --> AlphaResult["Xcode result\nshape gates pass\nVS write unchanged\nGPU time small win"]
   Large --> LargeResult["Xcode result\nshape gates pass\nhot VS write -7.46%\n60/4 VS write -22.33%"]
   LargeResult --> Cross["encoder cross buckets\n60/4 large4096 = depth-read/alpha\n60/1+60/3 = opaque large4096"]
+  Cross --> OpaqueLarge["opaque large4096 Xcode probe\n60/0 + 60/1 + 60/3"]
+  OpaqueLarge --> OpaqueLargeResult["shape gates pass\nVS write +0.01%\nGPU -0.31%"]
   Scissor --> Gate
   DepthRead --> Gate
   AlphaResult --> RejectAlpha["reject alpha subset\nas VS-write owner"]
   Cross --> Positive["positive classifier\nprimitive/locality-dependent\nhidden backend traffic"]
-  Cross --> SafeNext["next safe probe\nopaque large4096 set\n60/0 + 60/1 + 60/3"]
+  OpaqueLargeResult --> RejectOpaqueLarge["reject opaque-large reorder\nas production optimization"]
+  OpaqueLargeResult --> BackendNext["next production path\nhidden vertex/tiler backend storage\nbeyond visible VSOut trim"]
 
   Gate --> Move{"VS buffer write moves?"}
   Move -- "yes" --> Design["investigate correctness-preserving\nmaterial/locality strategy"]
@@ -8608,9 +8693,9 @@ flowchart TD
 
   classDef hot fill:#ffe8e8,stroke:#b64242,color:#2b0d0d
   classDef known fill:#e8f0ff,stroke:#476cb6,color:#0d1833
-  class Need,Class,Gate,Move,Design,SafeNext hot
-  class AlphaResult,RejectAlpha,LargeResult,Cross,Positive hot
-  class Prior,Alpha,Scissor,DepthRead,Large,Reject known
+  class Need,Class,Gate,Move,Design,RejectOpaqueLarge,BackendNext hot
+  class AlphaResult,RejectAlpha,LargeResult,Cross,Positive,OpaqueLargeResult hot
+  class Prior,Alpha,Scissor,DepthRead,Large,Reject,OpaqueLarge known
 ```
 
 ### Offline Metal Codegen Classifier
