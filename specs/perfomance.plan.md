@@ -8647,6 +8647,101 @@ temp, and outTexcoord scratch reductions fail to move the Xcode bucket. The
 `60/4` large4096/depth-read/textured classifier remains a diagnostic signal for
 primitive/locality-sensitive hidden backend traffic.
 
+To separate that signal from pure draw-size/partition pressure, the next probe
+kept original primitive order and split only the `60/4` `large4096` draws into
+bounded Metal draws:
+
+```bash
+scripts/tools/run_3dmark05_perf_probe.sh \
+  --suffix split-row-60-4-large4096-gputrace-r1 \
+  --frame 60 \
+  --encoder-breakdown-seq 60 \
+  --timeout 240 \
+  --split-large-indexed-draws 4096 \
+  --split-large-indexed-draws-row 60/4 \
+  --split-large-indexed-draws-class large4096 \
+  --measure-index-reuse \
+  --top 4 \
+  --hot-gpu-share 95 \
+  --baseline-joined traces/app-d3d9-3dmark05-measure-index-cache-gputrace-r1/analysis/frame60-xcode-dxmt-joined-summary.csv \
+  --require-xcode-counter-coverage \
+  --require-dxmt-join-coverage \
+  --require-top-pso-attribution \
+  --require-top-row-key-match \
+  --max-top-draw-call-delta-ratio 0.05 \
+  --max-top-vertex-count-delta-ratio 0.05 \
+  --max-top-triangle-delta-ratio 0.05
+```
+
+The smoke run first confirmed scope: only row `60/4` was split, with
+`19` source draws becoming `38` Metal draws (`+19`) over `104,721`
+primitives. Rows `60/0`, `60/1`, and `60/3` stayed unsplit. Xcode export then
+completed with embedded performance data and encoder counters:
+
+```text
+traces/app-d3d9-3dmark05-split-row-60-4-large4096-gputrace-r1/frame60.gputrace
+traces/app-d3d9-3dmark05-split-row-60-4-large4096-gputrace-r1/analysis/frame60-performance.gputrace
+traces/app-d3d9-3dmark05-split-row-60-4-large4096-gputrace-r1/analysis/frame60-counters-xcode.csv
+traces/app-d3d9-3dmark05-split-row-60-4-large4096-gputrace-r1/analysis/frame60-xcode-dxmt-joined-summary.csv
+traces/app-d3d9-3dmark05-split-row-60-4-large4096-gputrace-r1/analysis/frame60-xcode-dxmt-bottleneck-report.md
+traces/app-d3d9-3dmark05-split-row-60-4-large4096-gputrace-r1/analysis/frame60-xcode-dxmt-comparison.md
+```
+
+Finalizer:
+
+```bash
+scripts/tools/finalize_3dmark05_perf_probe.sh \
+  --suffix split-row-60-4-large4096-gputrace-r1 \
+  --frame 60 \
+  --top 4 \
+  --hot-gpu-share 95 \
+  --baseline-joined traces/app-d3d9-3dmark05-measure-index-cache-gputrace-r1/analysis/frame60-xcode-dxmt-joined-summary.csv \
+  --require-top-row-key-match \
+  --require-top-pso-attribution \
+  --min-top-pso-samples-per-draw 0.90 \
+  --require-xcode-counter-coverage \
+  --require-dxmt-join-coverage \
+  --min-top-dxmt-joined-fraction 1.0 \
+  --max-top-draw-call-delta-ratio 0.05 \
+  --max-top-vertex-count-delta-ratio 0.05 \
+  --max-top-triangle-delta-ratio 0.05
+```
+
+Verdict: order-preserving bounded split is also negative for the main VS-write
+bottleneck. Xcode Summary reported `33.68ms`; finalizer measured total GPU
+`34.391 -> 33.681ms` (`-2.07%`) and top hot-row GPU
+`33.741 -> 33.097ms` (`-1.91%`), but top VS buffer write stayed fixed at
+`1472.747 -> 1472.756MiB` (`+0.00%`). Top buffer write stayed fixed at
+`1473.614 -> 1473.604MiB` (`-0.00%`). The hot hidden backend estimate remains
+dominant at `1455.866MiB`, `0.989x` of VS buffer write.
+
+Target/shared-row deltas:
+
+| Row | GPU ms | VS write MiB | VS invocations | VS B/inv | Direct probe coverage |
+|---|---:|---:|---:|---:|---:|
+| `60/3` | `10.662 -> 10.419` (`-2.28%`) | `437.402 -> 437.352` (`-0.01%`) | `432,881 -> 432,881` (`+0.00%`) | `1059.5 -> 1059.4` (`-0.01%`) | untouched |
+| `60/4` | `9.031 -> 8.654` (`-4.17%`) | `370.276 -> 370.331` (`+0.01%`) | `659,516 -> 653,507` (`-0.91%`) | `588.7 -> 594.2` (`+0.93%`) | `19` large4096 draws split to `38` |
+| `60/1` | `8.252 -> 8.416` (`+2.00%`) | `437.404 -> 437.400` (`-0.00%`) | `393,529 -> 393,529` (`+0.00%`) | `1165.5 -> 1165.5` (`-0.00%`) | untouched |
+| `60/0` | `5.797 -> 5.608` (`-3.25%`) | `227.665 -> 227.672` (`+0.00%`) | `317,588 -> 314,346` (`-1.02%`) | `751.7 -> 759.5` (`+1.03%`) | untouched |
+
+The matched-row VS-write delta was only `+0.009MiB`; invocation-count
+reduction (`-5.726MiB`) was cancelled by bytes/invocation growth
+(`+5.735MiB`). Therefore the earlier positive `60/4 large4096 reverse`
+cannot be explained as "large draw split reduces backend write". It requires
+the order/locality/visibility perturbation introduced by reversal, while both
+production-safe variants tested so far, opaque-large reversal and
+order-preserving split, leave the VS-write bucket unchanged.
+
+The contrast with the positive reverse is also important. The positive
+`60/4 large4096 reverse` moved the shared-row total mostly through
+bytes/invocation (`-92.067MiB`) rather than invocation count (`-17.821MiB`);
+the target `60/4` row went from `588.7B/inv` to `476.8B/inv` (`-19.02%`).
+The order-preserving split went the other way: `60/4` changed from
+`588.7B/inv` to `594.2B/inv` (`+0.93%`). The working hypothesis is therefore
+not primitive count per draw alone, but order-dependent Apple vertex/tiler
+backend storage shape, possibly through visibility/locality interactions in
+the depth-read/textured/alpha-heavy path.
+
 The current primitive-order classifier state is:
 
 | Probe | Shape gate | VS-write result | Interpretation |
@@ -8660,6 +8755,7 @@ The current primitive-order classifier state is:
 | `60/4` large4096 reverse | passes | hot VS write `-7.46%`, target row `-22.33%` | positive classifier for primitive/locality-dependent hidden backend traffic |
 | `large4096` cross-bucket baseline | no Xcode counters | `60/4` positive target has `0` opaque draws | separates diagnostic signal from production-safe candidate set |
 | Opaque `large4096` (`60/0,60/1,60/3`) | passes | top VS write `+0.01%`, hot GPU `-0.31%` | reject production-safe opaque-large reorder; does not reproduce positive `60/4` signal |
+| Split `60/4 large4096` | passes | top VS write `+0.00%`, hot GPU `-1.91%` | reject draw-size split as VS-write owner; prior positive requires order/locality/visibility interaction |
 
 Workspace disk headroom was restored before this capture; after the export the
 filesystem has about `15GiB` free. Raw `.gputrace` and embedded-performance
@@ -8680,12 +8776,16 @@ flowchart TD
   LargeResult --> Cross["encoder cross buckets\n60/4 large4096 = depth-read/alpha\n60/1+60/3 = opaque large4096"]
   Cross --> OpaqueLarge["opaque large4096 Xcode probe\n60/0 + 60/1 + 60/3"]
   OpaqueLarge --> OpaqueLargeResult["shape gates pass\nVS write +0.01%\nGPU -0.31%"]
+  Cross --> SplitLarge["order-preserving split\n60/4 large4096 only"]
+  SplitLarge --> SplitLargeResult["shape gates pass\nVS write +0.00%\nGPU -1.91%"]
   Scissor --> Gate
   DepthRead --> Gate
   AlphaResult --> RejectAlpha["reject alpha subset\nas VS-write owner"]
   Cross --> Positive["positive classifier\nprimitive/locality-dependent\nhidden backend traffic"]
   OpaqueLargeResult --> RejectOpaqueLarge["reject opaque-large reorder\nas production optimization"]
+  SplitLargeResult --> RejectSplit["reject pure draw-size split\nas VS-write owner"]
   OpaqueLargeResult --> BackendNext["next production path\nhidden vertex/tiler backend storage\nbeyond visible VSOut trim"]
+  SplitLargeResult --> BackendNext
 
   Gate --> Move{"VS buffer write moves?"}
   Move -- "yes" --> Design["investigate correctness-preserving\nmaterial/locality strategy"]
@@ -8693,9 +8793,9 @@ flowchart TD
 
   classDef hot fill:#ffe8e8,stroke:#b64242,color:#2b0d0d
   classDef known fill:#e8f0ff,stroke:#476cb6,color:#0d1833
-  class Need,Class,Gate,Move,Design,RejectOpaqueLarge,BackendNext hot
-  class AlphaResult,RejectAlpha,LargeResult,Cross,Positive,OpaqueLargeResult hot
-  class Prior,Alpha,Scissor,DepthRead,Large,Reject,OpaqueLarge known
+  class Need,Class,Gate,Move,Design,RejectOpaqueLarge,RejectSplit,BackendNext hot
+  class AlphaResult,RejectAlpha,LargeResult,Cross,Positive,OpaqueLargeResult,SplitLargeResult hot
+  class Prior,Alpha,Scissor,DepthRead,Large,Reject,OpaqueLarge,SplitLarge known
 ```
 
 ### Offline Metal Codegen Classifier
