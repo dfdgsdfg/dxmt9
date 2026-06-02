@@ -45,6 +45,8 @@ probe_reverse_indexed_triangles_rows=
 probe_reverse_indexed_triangles_class=
 probe_reverse_indexed_triangles_classes=
 probe_reverse_indexed_triangles_stream0_span_min=
+probe_indexed_triangle_encoder_draw_min=
+probe_indexed_triangle_encoder_draw_max=
 probe_scissor_rect=
 probe_scissor_rect_row=
 probe_scissor_rect_rows=
@@ -265,6 +267,14 @@ Options:
   --probe-reverse-indexed-triangles-stream0-span-min BYTES
                       Set DXMT9_PROBE_REVERSE_INDEXED_TRIANGLES_STREAM0_SPAN_MIN
                       to require a minimum original stream0 byte span
+  --probe-indexed-triangle-encoder-draw-min N
+                      Set DXMT9_PROBE_INDEXED_TRIANGLE_ENCODER_DRAW_MIN=N.
+                      Applies to reverse/sort/vertex-cache, screen-blend
+                      index-order, and split-large-indexed primitive probes
+  --probe-indexed-triangle-encoder-draw-max N
+                      Set DXMT9_PROBE_INDEXED_TRIANGLE_ENCODER_DRAW_MAX=N.
+                      Use with a row selector to target a material window such
+                      as 60/2 draw 71..188 without changing other rows
   --probe-scissor-rect L,T,R,B
                       Set DXMT9_PROBE_SCISSOR_RECT=L,T,R,B to preserve scissor
                       enablement but override the scissor rectangle for
@@ -614,6 +624,14 @@ while (($#)); do
       ;;
     --probe-reverse-indexed-triangles-stream0-span-min)
       probe_reverse_indexed_triangles_stream0_span_min=${2:?missing value for --probe-reverse-indexed-triangles-stream0-span-min}
+      shift 2
+      ;;
+    --probe-indexed-triangle-encoder-draw-min)
+      probe_indexed_triangle_encoder_draw_min=${2:?missing value for --probe-indexed-triangle-encoder-draw-min}
+      shift 2
+      ;;
+    --probe-indexed-triangle-encoder-draw-max)
+      probe_indexed_triangle_encoder_draw_max=${2:?missing value for --probe-indexed-triangle-encoder-draw-max}
       shift 2
       ;;
     --probe-scissor-rect)
@@ -1322,6 +1340,14 @@ fi
 
 if [[ -n "$probe_reverse_indexed_triangles_stream0_span_min" ]]; then
   env_args+=("DXMT9_PROBE_REVERSE_INDEXED_TRIANGLES_STREAM0_SPAN_MIN=$probe_reverse_indexed_triangles_stream0_span_min")
+fi
+
+if [[ -n "$probe_indexed_triangle_encoder_draw_min" ]]; then
+  env_args+=("DXMT9_PROBE_INDEXED_TRIANGLE_ENCODER_DRAW_MIN=$probe_indexed_triangle_encoder_draw_min")
+fi
+
+if [[ -n "$probe_indexed_triangle_encoder_draw_max" ]]; then
+  env_args+=("DXMT9_PROBE_INDEXED_TRIANGLE_ENCODER_DRAW_MAX=$probe_indexed_triangle_encoder_draw_max")
 fi
 
 if [[ -n "$probe_scissor_rect" ]]; then

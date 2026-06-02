@@ -3568,6 +3568,18 @@ bool splitLargeIndexedDrawRowMatches(const ActiveEncoderBreakdown* encoderBreakd
                                        debug::splitLargeIndexedDrawRows());
 }
 
+bool indexedTriangleEncoderDrawRangeMatches(
+    const ActiveEncoderBreakdown* encoderBreakdown) {
+  const auto range = debug::probeIndexedTriangleEncoderDrawRange();
+  if (!debug::drawOrdinalRangeEnabled(range)) {
+    return true;
+  }
+  if (!encoderBreakdown) {
+    return false;
+  }
+  return !debug::shouldSkipDrawOrdinal(encoderBreakdown->stats.drawCalls, range);
+}
+
 bool scissorRectProbeRowMatches(const ActiveEncoderBreakdown* encoderBreakdown) {
   return renderEncoderSelectionMatches(encoderBreakdown,
                                        debug::probeScissorRectRow(),
@@ -6778,7 +6790,8 @@ bool encodeDraw(EncodeContext& ctx,
       const bool splitConsidered =
           (splitPrimitiveLimit != 0u || splitStream0SpanLimit != 0u) &&
           pv.primitiveType == core::PrimitiveType::TriangleList &&
-          splitLargeIndexedDrawRowMatches(encoderBreakdown);
+          splitLargeIndexedDrawRowMatches(encoderBreakdown) &&
+          indexedTriangleEncoderDrawRangeMatches(encoderBreakdown);
       const bool splitEligible =
           splitConsidered &&
           indexedTriangleClassMatches(
@@ -6813,7 +6826,8 @@ bool encodeDraw(EncodeContext& ctx,
             splitChunks.size() <= static_cast<std::size_t>(splitMaxChunksPerDraw);
       }
       if (reverseTriangleProbeRequested &&
-          reverseIndexedTriangleRowMatches(encoderBreakdown)) {
+          reverseIndexedTriangleRowMatches(encoderBreakdown) &&
+          indexedTriangleEncoderDrawRangeMatches(encoderBreakdown)) {
         probeConsidered = true;
         const bool opaqueDepthWritingEligible =
             isOpaqueDepthWritingReorderProbeEligible(hot.renderStates, fillMode);
@@ -6875,7 +6889,8 @@ bool encodeDraw(EncodeContext& ctx,
         }
       }
       if (!probeApplied && optimizeScreenBlendIndexOrderRequested &&
-          screenBlendIndexOrderRowMatches(encoderBreakdown)) {
+          screenBlendIndexOrderRowMatches(encoderBreakdown) &&
+          indexedTriangleEncoderDrawRangeMatches(encoderBreakdown)) {
         optimizedConsidered = true;
         optimizedEligible =
             shouldOptimizeScreenBlendIndexOrder(hot.renderStates) &&

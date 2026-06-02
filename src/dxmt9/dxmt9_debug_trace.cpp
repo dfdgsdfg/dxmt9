@@ -805,6 +805,13 @@ u64 probeReverseIndexedTrianglesStream0SpanMin() {
   return min;
 }
 
+DrawOrdinalRange probeIndexedTriangleEncoderDrawRange() {
+  static const DrawOrdinalRange range = makeDrawOrdinalRange(
+      util::getenvU64Auto("DXMT9_PROBE_INDEXED_TRIANGLE_ENCODER_DRAW_MIN"),
+      util::getenvU64Auto("DXMT9_PROBE_INDEXED_TRIANGLE_ENCODER_DRAW_MAX"));
+  return range;
+}
+
 RenderEncoderSelector probeReverseIndexedTrianglesRow() {
   static const RenderEncoderSelector selector =
       parseRenderEncoderSelector("DXMT9_PROBE_REVERSE_INDEXED_TRIANGLES_ROW");

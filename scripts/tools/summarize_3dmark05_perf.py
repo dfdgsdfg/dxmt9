@@ -1151,6 +1151,76 @@ def alpha_blend_signature_rows(probe_draws: list[dict[str, Any]]) -> list[dict[s
     )
 
 
+def alpha_blend_material_rows(probe_draws: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    groups: dict[tuple[Any, ...], dict[str, Any]] = {}
+    for row in probe_draws:
+        if not numeric_value(row, "alpha_blend"):
+            continue
+        key = (
+            row.get("seq"),
+            row.get("encoder"),
+            blend_signature_text(row),
+            row.get("vsout"),
+            row.get("shader_variant"),
+            row.get("pso"),
+        )
+        group = groups.setdefault(
+            key,
+            {
+                "seq": row.get("seq"),
+                "encoder": row.get("encoder"),
+                "signature": blend_signature_text(row),
+                "vsout": row.get("vsout"),
+                "shader_variant": row.get("shader_variant"),
+                "pso": row.get("pso"),
+                "draws": 0,
+                "primitives": 0,
+                "vertices": 0,
+                "large_4096_draws": 0,
+                "large_4096_primitives": 0,
+                "scissor_draws": 0,
+                "depth_write_draws": 0,
+                "max_effective_stream0_byte_span": 0,
+                "stream0_handles": set(),
+                "index_buffers": set(),
+            },
+        )
+        primitives = numeric_value(row, "primitive_count")
+        group["draws"] += 1
+        group["primitives"] += primitives
+        group["vertices"] += numeric_value(row, "vertex_count")
+        if primitives >= 4096:
+            group["large_4096_draws"] += 1
+            group["large_4096_primitives"] += primitives
+        if numeric_value(row, "scissor"):
+            group["scissor_draws"] += 1
+        if numeric_value(row, "depth_write"):
+            group["depth_write_draws"] += 1
+        group["max_effective_stream0_byte_span"] = max(
+            numeric_value(group, "max_effective_stream0_byte_span"),
+            numeric_value(row, "effective_stream0_byte_span"),
+        )
+        stream0_handle = row.get("stream0_handle")
+        if stream0_handle not in (None, ""):
+            group["stream0_handles"].add(stream0_handle)
+        index_buffer = row.get("index_buffer")
+        if index_buffer not in (None, ""):
+            group["index_buffers"].add(index_buffer)
+
+    rows = list(groups.values())
+    for row in rows:
+        row["stream0_handle_unique"] = len(row.pop("stream0_handles"))
+        row["index_buffer_unique"] = len(row.pop("index_buffers"))
+    return sorted(
+        rows,
+        key=lambda row: (
+            numeric_value(row, "primitives"),
+            numeric_value(row, "draws"),
+        ),
+        reverse=True,
+    )
+
+
 def alpha_blend_signature_run_rows(probe_draws: list[dict[str, Any]]) -> list[dict[str, Any]]:
     rows = sorted(
         probe_draws,
@@ -1168,7 +1238,21 @@ def alpha_blend_signature_run_rows(probe_draws: list[dict[str, Any]]) -> list[di
     def flush() -> None:
         nonlocal current, current_key
         if current is not None:
-            current["pso_unique"] = len(current.pop("psos"))
+            psos = current.pop("psos")
+            shader_variants = current.pop("shader_variants")
+            vsouts = current.pop("vsouts")
+            stream0_handles = current.pop("stream0_handles")
+            index_buffers = current.pop("index_buffers")
+            current["pso_unique"] = len(psos)
+            current["shader_variant_unique"] = len(shader_variants)
+            current["vsout_unique"] = len(vsouts)
+            current["stream0_handle_unique"] = len(stream0_handles)
+            current["index_buffer_unique"] = len(index_buffers)
+            current["_psos"] = psos
+            current["_shader_variants"] = shader_variants
+            current["_vsouts"] = vsouts
+            current["_stream0_handles"] = stream0_handles
+            current["_index_buffers"] = index_buffers
             runs.append(current)
         current = None
         current_key = None
@@ -1207,7 +1291,12 @@ def alpha_blend_signature_run_rows(probe_draws: list[dict[str, Any]]) -> list[di
                 "large_4096_primitives": 0,
                 "scissor_draws": 0,
                 "depth_write_draws": 0,
+                "max_effective_stream0_byte_span": 0,
                 "psos": set(),
+                "shader_variants": set(),
+                "vsouts": set(),
+                "stream0_handles": set(),
+                "index_buffers": set(),
             }
 
         primitives = numeric_value(row, "primitive_count")
@@ -1222,9 +1311,25 @@ def alpha_blend_signature_run_rows(probe_draws: list[dict[str, Any]]) -> list[di
             current["scissor_draws"] += 1
         if numeric_value(row, "depth_write"):
             current["depth_write_draws"] += 1
+        current["max_effective_stream0_byte_span"] = max(
+            numeric_value(current, "max_effective_stream0_byte_span"),
+            numeric_value(row, "effective_stream0_byte_span"),
+        )
         pso = row.get("pso")
         if pso not in (None, ""):
             current["psos"].add(pso)
+        shader_variant = row.get("shader_variant")
+        if shader_variant not in (None, ""):
+            current["shader_variants"].add(shader_variant)
+        vsout = row.get("vsout")
+        if vsout not in (None, ""):
+            current["vsouts"].add(vsout)
+        stream0_handle = row.get("stream0_handle")
+        if stream0_handle not in (None, ""):
+            current["stream0_handles"].add(stream0_handle)
+        index_buffer = row.get("index_buffer")
+        if index_buffer not in (None, ""):
+            current["index_buffers"].add(index_buffer)
 
     flush()
     return runs
@@ -1249,10 +1354,16 @@ def alpha_blend_signature_run_summary_rows(
                 "large_4096_primitives": 0,
                 "scissor_draws": 0,
                 "depth_write_draws": 0,
+                "max_effective_stream0_byte_span": 0,
                 "max_run_draws": 0,
                 "max_run_primitives": 0,
                 "max_run_first_draw": None,
                 "max_run_last_draw": None,
+                "psos": set(),
+                "shader_variants": set(),
+                "vsouts": set(),
+                "stream0_handles": set(),
+                "index_buffers": set(),
             },
         )
         group["runs"] += 1
@@ -1262,6 +1373,15 @@ def alpha_blend_signature_run_summary_rows(
         group["large_4096_primitives"] += numeric_value(run, "large_4096_primitives")
         group["scissor_draws"] += numeric_value(run, "scissor_draws")
         group["depth_write_draws"] += numeric_value(run, "depth_write_draws")
+        group["max_effective_stream0_byte_span"] = max(
+            numeric_value(group, "max_effective_stream0_byte_span"),
+            numeric_value(run, "max_effective_stream0_byte_span"),
+        )
+        group["psos"].update(run.get("_psos", set()))
+        group["shader_variants"].update(run.get("_shader_variants", set()))
+        group["vsouts"].update(run.get("_vsouts", set()))
+        group["stream0_handles"].update(run.get("_stream0_handles", set()))
+        group["index_buffers"].update(run.get("_index_buffers", set()))
         run_primitives = numeric_value(run, "primitives")
         if run_primitives > numeric_value(group, "max_run_primitives"):
             group["max_run_draws"] = numeric_value(run, "draws")
@@ -1269,8 +1389,16 @@ def alpha_blend_signature_run_summary_rows(
             group["max_run_first_draw"] = run.get("first_draw")
             group["max_run_last_draw"] = run.get("last_draw")
 
+    rows = list(groups.values())
+    for row in rows:
+        row["pso_unique"] = len(row.pop("psos"))
+        row["shader_variant_unique"] = len(row.pop("shader_variants"))
+        row["vsout_unique"] = len(row.pop("vsouts"))
+        row["stream0_handle_unique"] = len(row.pop("stream0_handles"))
+        row["index_buffer_unique"] = len(row.pop("index_buffers"))
+
     return sorted(
-        groups.values(),
+        rows,
         key=lambda row: (
             numeric_value(row, "primitives"),
             numeric_value(row, "draws"),
@@ -1688,6 +1816,48 @@ def write_markdown(
                 )
             lines.append("")
 
+        blend_material_rows = alpha_blend_material_rows(probe_draws)
+        if blend_material_rows:
+            lines.append("### Alpha Blend Material Breakdown")
+            lines.append("")
+            lines.append(
+                "| seq | enc | signature | VSOut | shader | PSO | draws | prims | verts | "
+                "large4096 draws/prims | scissor draws | depth-write draws | "
+                "stream0 handles | IBs | max stream span |"
+            )
+            lines.append(
+                "|---:|---:|---|---|---|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|"
+            )
+            for row in blend_material_rows[:24]:
+                large = (
+                    f"{fmt(row.get('large_4096_draws'))}/"
+                    f"{fmt(row.get('large_4096_primitives'))}"
+                )
+                lines.append(
+                    "| "
+                    + " | ".join(
+                        [
+                            fmt(row.get("seq")),
+                            fmt(row.get("encoder")),
+                            fmt(row.get("signature")),
+                            fmt(row.get("vsout")),
+                            fmt(row.get("shader_variant")),
+                            fmt(row.get("pso")),
+                            fmt(row.get("draws")),
+                            fmt(row.get("primitives")),
+                            fmt(row.get("vertices")),
+                            large,
+                            fmt(row.get("scissor_draws")),
+                            fmt(row.get("depth_write_draws")),
+                            fmt(row.get("stream0_handle_unique")),
+                            fmt(row.get("index_buffer_unique")),
+                            fmt(row.get("max_effective_stream0_byte_span")),
+                        ]
+                    )
+                    + " |"
+                )
+            lines.append("")
+
         blend_runs = alpha_blend_signature_run_rows(probe_draws)
         if blend_runs:
             blend_run_summary = alpha_blend_signature_run_summary_rows(blend_runs)
@@ -1696,9 +1866,14 @@ def write_markdown(
                 lines.append("")
                 lines.append(
                     "| seq | enc | signature | runs | draws | prims | max run draw range | "
-                    "max run draws/prims | large4096 draws/prims | scissor draws | depth-write draws |"
+                    "max run draws/prims | large4096 draws/prims | scissor draws | "
+                    "depth-write draws | PSOs | shaders | VSOuts | stream0 handles | IBs | "
+                    "max stream span |"
                 )
-                lines.append("|---:|---:|---|---:|---:|---:|---:|---:|---:|---:|---:|")
+                lines.append(
+                    "|---:|---:|---|---:|---:|---:|---:|---:|---:|---:|---:|"
+                    "---:|---:|---:|---:|---:|---:|"
+                )
                 for row in blend_run_summary[:16]:
                     max_range = (
                         f"{fmt(row.get('max_run_first_draw'))}.."
@@ -1727,6 +1902,12 @@ def write_markdown(
                                 large,
                                 fmt(row.get("scissor_draws")),
                                 fmt(row.get("depth_write_draws")),
+                                fmt(row.get("pso_unique")),
+                                fmt(row.get("shader_variant_unique")),
+                                fmt(row.get("vsout_unique")),
+                                fmt(row.get("stream0_handle_unique")),
+                                fmt(row.get("index_buffer_unique")),
+                                fmt(row.get("max_effective_stream0_byte_span")),
                             ]
                         )
                         + " |"
@@ -1737,9 +1918,13 @@ def write_markdown(
             lines.append("")
             lines.append(
                 "| seq | enc | first draw | last draw | signature | draws | prims | "
-                "large4096 draws/prims | scissor draws | depth-write draws | PSOs |"
+                "large4096 draws/prims | scissor draws | depth-write draws | PSOs | "
+                "shaders | VSOuts | stream0 handles | IBs | max stream span |"
             )
-            lines.append("|---:|---:|---:|---:|---|---:|---:|---:|---:|---:|---:|")
+            lines.append(
+                "|---:|---:|---:|---:|---|---:|---:|---:|---:|---:|---:|"
+                "---:|---:|---:|---:|---:|"
+            )
             for row in blend_runs[:24]:
                 large = (
                     f"{fmt(row.get('large_4096_draws'))}/"
@@ -1760,6 +1945,11 @@ def write_markdown(
                             fmt(row.get("scissor_draws")),
                             fmt(row.get("depth_write_draws")),
                             fmt(row.get("pso_unique")),
+                            fmt(row.get("shader_variant_unique")),
+                            fmt(row.get("vsout_unique")),
+                            fmt(row.get("stream0_handle_unique")),
+                            fmt(row.get("index_buffer_unique")),
+                            fmt(row.get("max_effective_stream0_byte_span")),
                         ]
                     )
                     + " |"

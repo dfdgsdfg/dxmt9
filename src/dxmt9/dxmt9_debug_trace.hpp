@@ -382,6 +382,12 @@ IndexedTriangleClassFilterList probeReverseIndexedTrianglesClassFilters();
 // Env: DXMT9_PROBE_REVERSE_INDEXED_TRIANGLES_STREAM0_SPAN_MIN.
 u64 probeReverseIndexedTrianglesStream0SpanMin();
 
+// Optional encoder-local draw-index range for indexed triangle primitive/
+// locality probes. This is evaluated after row filters against the
+// per-render-encoder draw index reported in perf probe draw samples.
+// Env: DXMT9_PROBE_INDEXED_TRIANGLE_ENCODER_DRAW_MIN/MAX.
+DrawOrdinalRange probeIndexedTriangleEncoderDrawRange();
+
 // Optional selector for reverse-indexed-triangle probes. Format is
 // "<seq>/<encoder>", for example "60/3".
 // Env: DXMT9_PROBE_REVERSE_INDEXED_TRIANGLES_ROW.

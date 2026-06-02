@@ -477,6 +477,26 @@ class ThreeDMark05ProbeScriptTests(unittest.TestCase):
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertIn("DXMT9_PROBE_REVERSE_NONOPAQUE_INDEXED_TRIANGLES=1", result.stdout)
 
+    def test_wrapper_dry_run_includes_indexed_triangle_encoder_draw_range_env(self) -> None:
+        result = self.run_script(
+            RUN_WRAPPER,
+            "--no-gputrace",
+            "--probe-sort-indexed-triangles-by-min-index",
+            "--probe-reverse-indexed-triangles-row",
+            "60/2",
+            "--probe-indexed-triangle-encoder-draw-min",
+            "71",
+            "--probe-indexed-triangle-encoder-draw-max",
+            "188",
+            "--dry-run",
+        )
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("DXMT9_PROBE_SORT_INDEXED_TRIANGLES_BY_MIN_INDEX=1", result.stdout)
+        self.assertIn("DXMT9_PROBE_REVERSE_INDEXED_TRIANGLES_ROW=60/2", result.stdout)
+        self.assertIn("DXMT9_PROBE_INDEXED_TRIANGLE_ENCODER_DRAW_MIN=71", result.stdout)
+        self.assertIn("DXMT9_PROBE_INDEXED_TRIANGLE_ENCODER_DRAW_MAX=188", result.stdout)
+
     def test_wrapper_dry_run_includes_scissor_rect_probe_env(self) -> None:
         result = self.run_script(
             RUN_WRAPPER,

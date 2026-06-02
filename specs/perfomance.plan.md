@@ -11908,6 +11908,88 @@ standard-alpha run `189..265` (`77` draws / `99,297` primitives / `3`
 large4096 draws). This does not justify reordering yet, but it gives the next
 same-row replay/material-grouping experiment a concrete run boundary to target.
 
+The extended run summary adds an important negative result: these hot alpha
+runs are not mixing VSOut layouts. The full `InvDestColor,One,Add` bucket has
+`VSOuts=1` across `173` draws, and the dominant `71..188` run also has
+`VSOuts=1`. Therefore the current screen-blend-class capture does not support
+"multiple VSOut layouts inside the material run" as the first-order hidden
+write source. The same run is still highly fragmented in other dimensions:
+draw `71..188` has `20` PSOs, `94` shader variants, `44` stream0 handles,
+`44` IB handles, and a max effective stream span of `204,600` bytes. The next
+valid experiment should preserve the blend equation and VSOut layout while
+isolating shader-variant and stream/IB locality inside this same run, rather
+than attempting another broad varying/VSOut trim.
+
+The material breakdown makes that locality hypothesis more precise. No single
+screen-blend material dominates the bucket: the largest
+`InvDestColor,One,Add` material row is only `9,267` primitives, while the full
+screen-blend bucket is `247,933` primitives. The top material rows all keep
+`VSOut=0xfff`, but they fan out over many shader variants, PSOs, stream0
+handles, and IB handles. That means a row-local replay should not target one
+PSO as the whole cause. It should either preserve the draw sequence while
+grouping/normalizing stream and IB locality, or replay a bounded material
+window to measure whether Apple GPU hidden VS/backend writes follow primitive
+volume, shader-variant churn, or vertex/index buffer locality.
+
+Current source now has an encoder-local draw-index gate for indexed triangle
+primitive/locality probes:
+
+- `DXMT9_PROBE_INDEXED_TRIANGLE_ENCODER_DRAW_MIN`
+- `DXMT9_PROBE_INDEXED_TRIANGLE_ENCODER_DRAW_MAX`
+- wrapper flags:
+  `--probe-indexed-triangle-encoder-draw-min` and
+  `--probe-indexed-triangle-encoder-draw-max`
+
+The gate applies after row filters to reverse/sort/vertex-cache reorder
+probes, screen-blend index-order probes, and split-large-indexed probes. It
+does not touch blend/depth/cull state probes. The immediate no-gputrace smoke
+candidate is:
+
+```bash
+scripts/tools/run_3dmark05_perf_probe.sh \
+  --suffix screen-blend-run-71-188-sort-smoke-r1 \
+  --frame 60 \
+  --timeout 180 \
+  --no-gputrace \
+  --encoder-breakdown-seq 60 \
+  --measure-index-reuse \
+  --probe-sort-indexed-triangles-by-min-index \
+  --probe-reverse-indexed-triangles-row 60/2 \
+  --probe-reverse-indexed-triangles-classes screen-blend \
+  --probe-indexed-triangle-encoder-draw-min 71 \
+  --probe-indexed-triangle-encoder-draw-max 188 \
+  --top 5 \
+  --hot-gpu-share 95 \
+  --min-free-mb 256
+```
+
+If the smoke confirms that only the intended `60/2` draw-window is mutated,
+the matching gputrace run can classify whether hidden VS/backend writes follow
+index order/locality inside the dominant screen-blend material run while
+preserving blend equation and VSOut layout.
+
+Smoke result:
+
+```text
+experiments/output/app-d3d9-3dmark05-screen-blend-run-71-188-sort-smoke-r1/
+```
+
+The selector applied exactly to the intended window:
+
+| Check | Value |
+|---|---:|
+| Probe draw rows | `626` |
+| Eligible/applied | `118 / 118` |
+| Applied row | `60/2` |
+| Applied draw range | `71..188` |
+| Applied primitive/vertex count | `172,669 / 518,007` |
+| Blend signature | `InvDestColor,One,Add` |
+| Reorder bytes | `1,036,014` |
+
+This makes the next Xcode capture concrete and bounded. The candidate gputrace
+command is the same as the smoke without `--no-gputrace`; use strict row-key
+and geometry drift gates when comparing it to the current normal baseline.
+
 ```mermaid
 flowchart TD
   A["state-shape hypothesis\nalpha blend may change hidden backend storage"] --> B["row-scoped smoke"]
@@ -11934,11 +12016,12 @@ flowchart TD
   V --> W["class selectors\nscreen-blend / standard-alpha / no-scissor"]
   W --> X["per-draw state-probe applied fields\nprove selected material slice"]
   X --> Y["next valid candidate\npreserve screen-blend equation\nsame-row material/pass locality"]
+  Y --> Z["encoder draw range gate\n60/2 draw 71..188\nscreen-blend run"]
 
   classDef hot fill:#ffe8e8,stroke:#b64242,color:#2b0d0d
   classDef good fill:#e8f5e8,stroke:#4d8b4d,color:#102a10
   classDef known fill:#e8f0ff,stroke:#476cb6,color:#0d1833
   class D,H hot
   class I,J,K,L,N good
-  class A,B,C,E,F,G,M,O,P,S,T,U,V,W,X,Y known
+  class A,B,C,E,F,G,M,O,P,S,T,U,V,W,X,Y,Z known
 ```

@@ -441,6 +441,13 @@ Commercial / 3rd-party titles (require external prefix):
     minimum original stream0 byte-span gate after the row/class filters. Use
     these to classify large stream-span primitive pressure after class filters
     such as `large4096,alpha-blend` prove too indirect.
+    `--probe-indexed-triangle-encoder-draw-min N` and
+    `--probe-indexed-triangle-encoder-draw-max N` add an encoder-local draw
+    index window after row filters. The window is shared by reverse/sort/
+    vertex-cache reorder probes, screen-blend index-order probes, and
+    split-large-indexed probes. Use it with a row selector to target a concrete
+    material run from `3dmark05-perf-indexed-probe-draws.csv`, for example
+    `--probe-reverse-indexed-triangles-row 60/2 --probe-indexed-triangle-encoder-draw-min 71 --probe-indexed-triangle-encoder-draw-max 188`.
     `--disable-alpha-test` is the narrower fragment/raster classifier for the
     alpha-test discard path and should be tried before more invasive shader
     substitutions when `--force-fragment-color` changes hidden VS-write
