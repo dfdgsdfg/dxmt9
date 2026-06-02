@@ -67,15 +67,31 @@ class Summarize3DMark05PerfTests(unittest.TestCase):
                 "metal_bind_handle_changes=2 metal_bind_offset_changes=1 "
                 "unique_handles=3 unique_bytes=65536 "
                 "handle_changes=2 offset_changes=3 stride_changes=1 "
-                "last_handle=0xabc last_offset=64 last_stride=32]\n",
+                "last_handle=0xabc last_offset=64 last_stride=32]\n"
+                "[dxmt9-perf-indexed-probe-draw seq=7 encoder=3 "
+                "encoder_draw_index=2 draw_ordinal=42 eligible=1 applied=1 "
+                "reorder_bytes=1234 primitive_type=4 primitive_count=4096 "
+                "vertex_count=12288 texture_mask=0x7f color_write=0xf "
+                "alpha_blend=1 src_blend=5 dst_blend=6 blend_op=1 "
+                "separate_alpha=0 src_blend_alpha=5 dst_blend_alpha=6 "
+                "blend_op_alpha=1 "
+                "alpha_test=0 depth_enabled=1 depth_write=0 depth_func=4 "
+                "stencil=0 clip_plane=0 scissor=1 scissor_l=16 scissor_t=32 "
+                "scissor_r=512 scissor_b=384 cull=2 fill=0 base_vertex=0 "
+                "start_index=128 index_type=1 index_buffer=0xdef "
+                "stream0_handle=0xabc stream0_offset=64 stream0_stride=24 "
+                "pso=0x111 shader_variant=0x222 vs=0x333 ps=0x444 "
+                "vsout=0xfff]\n",
                 encoding="utf-8",
             )
 
             encoders, streams = module.parse_encoder_lines(log_path)
+            probe_draws = module.parse_probe_draw_lines(log_path)
             module.enrich_encoder_rows(encoders)
 
             self.assertEqual(len(encoders), 1)
             self.assertEqual(len(streams), 1)
+            self.assertEqual(len(probe_draws), 1)
             encoder = encoders[0]
             self.assertEqual(encoder["stream_metal_binds"], 5)
             self.assertEqual(encoder["cull_none_draws"], 1)
@@ -131,11 +147,22 @@ class Summarize3DMark05PerfTests(unittest.TestCase):
             self.assertEqual(stream["last_handle"], "0xabc")
             self.assertEqual(stream["last_offset"], 64)
             self.assertEqual(stream["last_stride"], 32)
+            probe_draw = probe_draws[0]
+            self.assertEqual(probe_draw["eligible"], 1)
+            self.assertEqual(probe_draw["applied"], 1)
+            self.assertEqual(probe_draw["primitive_count"], 4096)
+            self.assertEqual(probe_draw["src_blend"], 5)
+            self.assertEqual(probe_draw["dst_blend"], 6)
+            self.assertEqual(probe_draw["scissor_r"], 512)
+            self.assertEqual(probe_draw["index_buffer"], "0xdef")
+            self.assertEqual(probe_draw["stream0_handle"], "0xabc")
 
             encoder_csv = temp_path / "3dmark05-perf-encoders.csv"
             stream_csv = temp_path / "3dmark05-perf-encoder-streams.csv"
+            probe_draw_csv = temp_path / "3dmark05-perf-indexed-probe-draws.csv"
             module.write_csv(encoder_csv, encoders, module.ENCODER_CSV_KEYS)
             module.write_csv(stream_csv, streams, module.STREAM_CSV_KEYS)
+            module.write_csv(probe_draw_csv, probe_draws, module.PROBE_DRAW_CSV_KEYS)
 
             with encoder_csv.open(newline="", encoding="utf-8") as handle:
                 row = next(csv.DictReader(handle))
@@ -171,6 +198,14 @@ class Summarize3DMark05PerfTests(unittest.TestCase):
             self.assertEqual(stream_row["offset_changes"], "3")
             self.assertEqual(stream_row["stride_changes"], "1")
 
+            with probe_draw_csv.open(newline="", encoding="utf-8") as handle:
+                probe_row = next(csv.DictReader(handle))
+            self.assertEqual(probe_row["applied"], "1")
+            self.assertEqual(probe_row["reorder_bytes"], "1234")
+            self.assertEqual(probe_row["src_blend"], "5")
+            self.assertEqual(probe_row["scissor_l"], "16")
+            self.assertEqual(probe_row["pso"], "0x111")
+
             summary_md = temp_path / "summary.md"
             module.write_markdown(
                 summary_md,
@@ -200,6 +235,8 @@ class Summarize3DMark05PerfTests(unittest.TestCase):
                 [],
                 encoder_csv,
                 stream_csv,
+                probe_draws,
+                probe_draw_csv,
             )
             summary = summary_md.read_text(encoding="utf-8")
             self.assertIn("## State-Delta Break Split", summary)
@@ -211,6 +248,9 @@ class Summarize3DMark05PerfTests(unittest.TestCase):
             self.assertIn("| `const_upload_passthrough_per_submission_batch` | `3.000` |", summary)
             self.assertIn("### Submission Batch Size Histogram", summary)
             self.assertIn("| `commit_chunk_draw_submission_batch_size_9_16` | `1` | `25.00%` |", summary)
+            self.assertIn("- Indexed probe draw lines: `1`", summary)
+            self.assertIn("## Indexed Probe Draw Samples", summary)
+            self.assertIn("| `applied` | `1` |", summary)
 
 
 if __name__ == "__main__":

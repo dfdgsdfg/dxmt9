@@ -8439,6 +8439,121 @@ shape; reversing every alpha draw cancels that effect. The next narrowing probe
 is `large4096 && alpha-blend && scissor` / `large4096 && scissor` to see whether
 the 4 scissored large draws own the signal.
 
+The `large4096 && alpha-blend && scissor` probe was then captured with Xcode
+counters and finalized with the same gates:
+
+```bash
+scripts/tools/run_3dmark05_perf_probe.sh \
+  --suffix reverse-row-60-4-large4096-alpha-scissor-gputrace-r1 \
+  --frame 60 \
+  --encoder-breakdown-seq 60 \
+  --timeout 240 \
+  --probe-reverse-indexed-triangles \
+  --probe-reverse-indexed-triangles-row 60/4 \
+  --probe-reverse-indexed-triangles-classes large4096,alpha-blend,scissor \
+  --measure-index-reuse \
+  --top 4 \
+  --hot-gpu-share 95 \
+  --baseline-joined traces/app-d3d9-3dmark05-measure-index-cache-gputrace-r1/analysis/frame60-xcode-dxmt-joined-summary.csv \
+  --require-xcode-counter-coverage \
+  --require-dxmt-join-coverage \
+  --require-top-pso-attribution \
+  --require-top-row-key-match \
+  --max-top-draw-call-delta-ratio 0.05 \
+  --max-top-vertex-count-delta-ratio 0.05 \
+  --max-top-triangle-delta-ratio 0.05 \
+  --min-free-mb 1024
+
+scripts/tools/finalize_3dmark05_perf_probe.sh \
+  --suffix reverse-row-60-4-large4096-alpha-scissor-gputrace-r1 \
+  --frame 60 \
+  --top 4 \
+  --hot-gpu-share 95 \
+  --baseline-joined traces/app-d3d9-3dmark05-measure-index-cache-gputrace-r1/analysis/frame60-xcode-dxmt-joined-summary.csv \
+  --require-top-row-key-match \
+  --require-top-pso-attribution \
+  --min-top-pso-samples-per-draw 0.90 \
+  --require-xcode-counter-coverage \
+  --require-dxmt-join-coverage \
+  --min-top-dxmt-joined-fraction 1.0 \
+  --max-top-draw-call-delta-ratio 0.05 \
+  --max-top-vertex-count-delta-ratio 0.05 \
+  --max-top-triangle-delta-ratio 0.05
+```
+
+Artifacts:
+
+```text
+traces/app-d3d9-3dmark05-reverse-row-60-4-large4096-alpha-scissor-gputrace-r1/analysis/frame60-counters-xcode.csv
+traces/app-d3d9-3dmark05-reverse-row-60-4-large4096-alpha-scissor-gputrace-r1/analysis/frame60-xcode-dxmt-comparison.md
+traces/app-d3d9-3dmark05-reverse-row-60-4-large4096-alpha-scissor-gputrace-r1/analysis/frame60-xcode-dxmt-bottleneck-report.md
+traces/app-d3d9-3dmark05-reverse-row-60-4-large4096-alpha-scissor-gputrace-r1/analysis/frame60-xcode-dxmt-joined-summary.csv
+```
+
+Result: all finalizer gates passed. The 4-draw
+`large4096 && alpha-blend && scissor` intersection reproduces the full
+`large4096` and 16-draw `large4096 && alpha-blend` signal:
+
+| Probe | Applied draws | Probe prims | Top VS write | Top GPU | `60/4` VS write | `60/4` VS B/inv | Interpretation |
+|---|---:|---:|---:|---:|---:|---:|---|
+| `60/4 large4096` | `19` | `104,721` | `-7.46%` | `-6.49%` | `-22.33%` | `-19.02%` | positive diagnostic signal |
+| `60/4 large4096 && alpha-blend` | `16` | `89,043` | `-7.46%` | `-6.82%` | `-22.32%` | `-19.00%` | same signal; 3 non-alpha large draws are not required |
+| `60/4 large4096 && alpha-blend && scissor` | `4` | `21,276` | `-7.46%` | `-7.46%` | `-22.32%` | `-18.97%` | same signal; the 4 scissored large-alpha draws own the bytes/invocation movement |
+
+The matched hot rows moved by `-109.838MiB` of VS buffer write; `-91.731MiB`
+comes from bytes/invocation and `-18.107MiB` from invocation count. The target
+row `60/4` again accounts for the dominant local delta (`-82.652MiB`). This
+narrowing is important because the probe mutates only `4 / 253` draws in row
+`60/4`, yet it moves the whole-frame hidden VS/tiler backend write bucket by the
+same amount as the 19-draw and 16-draw probes. The candidate owner is now the
+large scissored, alpha-blended, depth-read/textured primitive group, not
+alpha-blend in general and not primitive size alone.
+
+The follow-up draw-sample smoke extended the encoder-breakdown parser with a
+separate `3dmark05-perf-indexed-probe-draws.csv` artifact:
+
+```bash
+scripts/tools/run_3dmark05_perf_probe.sh \
+  --suffix reverse-row-60-4-large4096-alpha-scissor-drawsample-smoke-r2 \
+  --frame 60 \
+  --encoder-breakdown-seq 60 \
+  --timeout 240 \
+  --probe-reverse-indexed-triangles \
+  --probe-reverse-indexed-triangles-row 60/4 \
+  --probe-reverse-indexed-triangles-classes large4096,alpha-blend,scissor \
+  --measure-index-reuse \
+  --top 4 \
+  --hot-gpu-share 95 \
+  --no-gputrace \
+  --min-free-mb 1024
+```
+
+Artifact:
+
+```text
+experiments/output/app-d3d9-3dmark05-reverse-row-60-4-large4096-alpha-scissor-drawsample-smoke-r2/3dmark05-perf-indexed-probe-draws.csv
+```
+
+Result: `259` candidate row samples, `4` eligible/applied samples,
+`127,656B` of reordered index data. The applied draw state is stable:
+
+| Draws | Primitive counts | Scissor rects | Blend | Depth | Geometry |
+|---|---|---|---|---|---|
+| `73/74`, `173/174` in row `60/4` | `5708`, `4930` | two near-full overlapping rects, `0,0,190,553` and `0,0,200,542` | `src=InvDestColor(10)`, `dst=One(2)`, `op=Add(1)`, color write `0xf` | depth test `LessEqual(4)`, depth write off | two repeated VB/IB pairs with different PSO/shader variants |
+
+This changes the safety interpretation. The probe reverses primitive order
+inside each indexed draw, not draw order. In general that is not safe for
+alpha-blended geometry, but `InvDestColor + One + Add` is the screen blend:
+`D' = D + S * (1 - D) = 1 - (1 - D) * (1 - S)`, which is commutative per
+channel for normalized color inputs. Depth writes are off and the depth test is
+read-only, so primitive order inside these draws is not expected to affect depth
+state. This makes a production candidate plausible: restrict index-order
+optimization to order-independent screen-blend triangle lists, then further gate
+by large/scissored/textured state or by a measured backend-pressure heuristic.
+The existing `shouldAutoExpandIndexedDraw()` already treats the same
+`InvDestColor + One` blend family as special, so the safety predicate has local
+precedent.
+
 Validation for the class-list extension:
 
 | Check | Result |
@@ -8450,6 +8565,8 @@ Validation for the class-list extension:
 | `reverse-row-60-4-large4096-alpha-smoke-r2` | pass; probe draws match `large4096 && alpha-blend` |
 | `reverse-row-60-4-large4096-scissor-smoke-r1` | pass; probe draws match `large4096 && scissor` |
 | `reverse-row-60-4-large4096-alpha-gputrace-r1` | pass; Xcode counters exported after draw-counter profiling completed and finalizer gates passed |
+| `reverse-row-60-4-large4096-alpha-scissor-gputrace-r1` | pass; Xcode counters exported after draw-counter profiling completed and finalizer gates passed |
+| `reverse-row-60-4-large4096-alpha-scissor-drawsample-smoke-r2` | pass; probe draw sample CSV shows the 4 applied draws are screen-blend, depth-read, large scissored indexed triangle lists |
 
 The first Xcode candidate was a row/material-scoped run on `60/4`, because
 `60/4` is the depth-read/textured/mostly-alpha row where broad single-row
@@ -8911,7 +9028,7 @@ The current primitive-order classifier state is:
 | Opaque `large4096` (`60/0,60/1,60/3`) | passes | top VS write `+0.01%`, hot GPU `-0.31%` | reject production-safe opaque-large reorder; does not reproduce positive `60/4` signal |
 | Split `60/4 large4096` | passes | top VS write `+0.00%`, hot GPU `-1.91%` | reject draw-size split as VS-write owner; prior positive requires order/locality/visibility interaction |
 | `60/4 large4096 && alpha` | passes | top VS write `-7.46%`, target row `-22.32%`, 16 draws / 89,043 prims | reproduces full large4096 signal; 3 non-alpha large draws are not required |
-| `60/4 large4096 && scissor` smoke | no Xcode counters yet | probe scope validated: `4 / 21,276` prims | next candidate to test whether the signal is owned by the scissored large-alpha subset |
+| `60/4 large4096 && alpha && scissor` | passes | top VS write `-7.46%`, target row `-22.32%`, 4 draws / 21,276 prims | reproduces full signal; current owner is the scissored large-alpha subset |
 
 Workspace disk headroom was restored before this capture; after the export the
 filesystem has about `15GiB` free. Raw `.gputrace` and embedded-performance
@@ -8931,10 +9048,11 @@ flowchart TD
   Alpha --> AlphaResult["Xcode result\nshape gates pass\nVS write unchanged\nGPU time small win"]
   Large --> LargeResult["Xcode result\nshape gates pass\nhot VS write -7.46%\n60/4 VS write -22.33%"]
   ClassList --> LargeAlphaSmoke["large4096 + alpha smoke\n16 draws / 89k prims\nprobe scope validated"]
-  ClassList --> LargeScissorSmoke["large4096 + scissor smoke\n4 draws / 21k prims\nprobe scope validated"]
+  ClassList --> LargeScissorSmoke["large4096 + alpha + scissor smoke\n4 draws / 21k prims\nprobe scope validated"]
   LargeAlphaSmoke --> LargeAlphaXcode["large4096 + alpha Xcode\nhot VS write -7.46%\n60/4 VS write -22.32%"]
   LargeAlphaXcode --> AlphaNuance["broad alpha does not move VS write\nlarge-alpha-only does\norder/locality interaction"]
-  LargeScissorSmoke --> LargeScissorXcode["next Xcode capture\nlarge alpha + scissor\n4 draw owner check"]
+  LargeScissorSmoke --> LargeScissorXcode["large alpha + scissor Xcode\nhot VS write -7.46%\n60/4 VS write -22.32%"]
+  LargeScissorXcode --> ScissorOwner["current narrow owner\n4 scissored large-alpha draws\nbytes/inv movement"]
   LargeResult --> Cross["encoder cross buckets\n60/4 large4096 = depth-read/alpha\n60/1+60/3 = opaque large4096"]
   Cross --> OpaqueLarge["opaque large4096 Xcode probe\n60/0 + 60/1 + 60/3"]
   OpaqueLarge --> OpaqueLargeResult["shape gates pass\nVS write +0.01%\nGPU -0.31%"]
@@ -8943,8 +9061,9 @@ flowchart TD
   Scissor --> Gate
   DepthRead --> Gate
   AlphaResult --> RejectAlpha["reject alpha subset\nas VS-write owner"]
-  LargeAlphaXcode --> Positive["positive classifier\nlarge alpha/depth-read/textured subset\nhidden backend traffic"]
+  LargeScissorXcode --> Positive["positive classifier\nscissored large alpha/depth-read/textured subset\nhidden backend traffic"]
   AlphaNuance --> BackendNext
+  ScissorOwner --> BackendNext
   OpaqueLargeResult --> RejectOpaqueLarge["reject opaque-large reorder\nas production optimization"]
   SplitLargeResult --> RejectSplit["reject pure draw-size split\nas VS-write owner"]
   OpaqueLargeResult --> BackendNext["next production path\nhidden vertex/tiler backend storage\nbeyond visible VSOut trim"]
@@ -8957,7 +9076,7 @@ flowchart TD
   classDef hot fill:#ffe8e8,stroke:#b64242,color:#2b0d0d
   classDef known fill:#e8f0ff,stroke:#476cb6,color:#0d1833
   class Need,Class,Gate,Move,Design,RejectOpaqueLarge,RejectSplit,BackendNext hot
-  class AlphaResult,RejectAlpha,LargeResult,Cross,Positive,OpaqueLargeResult,SplitLargeResult,LargeAlphaXcode,LargeScissorXcode,AlphaNuance hot
+  class AlphaResult,RejectAlpha,LargeResult,Cross,Positive,OpaqueLargeResult,SplitLargeResult,LargeAlphaXcode,LargeScissorXcode,AlphaNuance,ScissorOwner hot
   class Prior,Alpha,Scissor,DepthRead,Large,Reject,OpaqueLarge,SplitLarge,ClassList,LargeAlphaSmoke,LargeScissorSmoke known
 ```
 

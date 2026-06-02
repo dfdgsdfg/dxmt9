@@ -69,6 +69,8 @@ using core::RS_ALPHABLEND_ENABLE;
 using core::RS_ALPHA_FUNC;
 using core::RS_ALPHA_REF;
 using core::RS_ALPHA_TEST_ENABLE;
+using core::RS_BLEND_OP;
+using core::RS_BLEND_OP_ALPHA;
 using core::RS_BLEND_FACTOR;
 using core::RS_COLOR_WRITE_ENABLE;
 using core::RS_CULL_MODE;
@@ -975,6 +977,117 @@ struct ActiveEncoderBreakdown {
     }
     ++stats.indexedOrderProbeDraws;
     stats.indexedOrderProbeBytes += bytes;
+  }
+
+  void emitIndexedOrderProbeDraw(bool probeEligible,
+                                 bool probeApplied,
+                                 u64 reorderBytes,
+                                 u64 drawOrdinal,
+                                 core::PrimitiveType primitiveType,
+                                 u32 primitiveCount,
+                                 u64 vertexCount,
+                                 u32 textureMask,
+                                 const core::FlatStateSet<core::kMaxStateSlots>& renderStates,
+                                 const core::ViewportScissor& viewport,
+                                 WMTCullMode cullMode,
+                                 WMTTriangleFillMode fillMode,
+                                 i32 baseVertexIndex,
+                                 u32 startIndex,
+                                 core::IndexType indexType,
+                                 u64 indexBufferHandle,
+                                 u64 stream0Handle,
+                                 u64 stream0Offset,
+                                 u64 stream0Stride) {
+    if (!enabled) {
+      return;
+    }
+    const bool depthEnabled =
+        core::flatStateOr(renderStates, RS_Z_ENABLE, 0u) != 0u;
+    const bool depthWrite =
+        depthEnabled && core::flatStateOr(renderStates, RS_Z_WRITE_ENABLE, 0u) != 0u;
+    const bool alphaBlendEnabled =
+        core::flatStateOr(renderStates, RS_ALPHABLEND_ENABLE, 0u) != 0u;
+    const bool alphaTestEnabled =
+        core::flatStateOr(renderStates, RS_ALPHA_TEST_ENABLE, 0u) != 0u;
+    const bool stencilEnabled =
+        core::flatStateOr(renderStates, core::RS_STENCIL_ENABLE, 0u) != 0u;
+    const bool clipPlaneEnabled =
+        core::flatStateOr(renderStates, core::RS_CLIP_PLANE_ENABLE, 0u) != 0u;
+    const auto colorWrite =
+        core::flatStateOr(renderStates, RS_COLOR_WRITE_ENABLE, 0xfu);
+    const auto srcBlend = core::flatStateOr(renderStates, RS_SRC_BLEND, 0u);
+    const auto dstBlend = core::flatStateOr(renderStates, RS_DEST_BLEND, 0u);
+    const auto blendOp = core::flatStateOr(renderStates, RS_BLEND_OP, 0u);
+    const auto separateAlpha =
+        core::flatStateOr(renderStates, RS_SEPARATE_ALPHA_BLEND_ENABLE, 0u);
+    const auto srcBlendAlpha =
+        core::flatStateOr(renderStates, RS_SRC_BLEND_ALPHA, srcBlend);
+    const auto dstBlendAlpha =
+        core::flatStateOr(renderStates, RS_DEST_BLEND_ALPHA, dstBlend);
+    const auto blendOpAlpha =
+        core::flatStateOr(renderStates, RS_BLEND_OP_ALPHA, blendOp);
+    const auto depthFunc = core::flatStateOr(
+        renderStates, RS_Z_FUNC, static_cast<u32>(core::CompareFunc::LessEqual));
+    std::fprintf(
+        stderr,
+        "[dxmt9-perf-indexed-probe-draw seq=%llu encoder=%llu "
+        "encoder_draw_index=%llu draw_ordinal=%llu eligible=%u applied=%u "
+        "reorder_bytes=%llu primitive_type=%u primitive_count=%u vertex_count=%llu "
+        "texture_mask=0x%x color_write=0x%x alpha_blend=%u "
+        "src_blend=%u dst_blend=%u blend_op=%u separate_alpha=%u "
+        "src_blend_alpha=%u dst_blend_alpha=%u blend_op_alpha=%u "
+        "alpha_test=%u depth_enabled=%u "
+        "depth_write=%u depth_func=%u stencil=%u clip_plane=%u scissor=%u "
+        "scissor_l=%d scissor_t=%d scissor_r=%d scissor_b=%d "
+        "cull=%u fill=%u base_vertex=%d start_index=%u index_type=%u "
+        "index_buffer=0x%llx stream0_handle=0x%llx stream0_offset=%llu "
+        "stream0_stride=%llu pso=0x%llx shader_variant=0x%llx "
+        "vs=0x%llx ps=0x%llx vsout=0x%x]\n",
+        static_cast<unsigned long long>(stats.seqId),
+        static_cast<unsigned long long>(stats.encoderIndex),
+        static_cast<unsigned long long>(stats.drawCalls),
+        static_cast<unsigned long long>(drawOrdinal),
+        probeEligible ? 1u : 0u,
+        probeApplied ? 1u : 0u,
+        static_cast<unsigned long long>(reorderBytes),
+        static_cast<unsigned>(primitiveType),
+        primitiveCount,
+        static_cast<unsigned long long>(vertexCount),
+        textureMask,
+        colorWrite,
+        alphaBlendEnabled ? 1u : 0u,
+        srcBlend,
+        dstBlend,
+        blendOp,
+        separateAlpha,
+        srcBlendAlpha,
+        dstBlendAlpha,
+        blendOpAlpha,
+        alphaTestEnabled ? 1u : 0u,
+        depthEnabled ? 1u : 0u,
+        depthWrite ? 1u : 0u,
+        depthFunc,
+        stencilEnabled ? 1u : 0u,
+        clipPlaneEnabled ? 1u : 0u,
+        viewport.scissorEnabled ? 1u : 0u,
+        static_cast<int>(viewport.scissor.left),
+        static_cast<int>(viewport.scissor.top),
+        static_cast<int>(viewport.scissor.right),
+        static_cast<int>(viewport.scissor.bottom),
+        static_cast<unsigned>(cullMode),
+        static_cast<unsigned>(fillMode),
+        baseVertexIndex,
+        startIndex,
+        static_cast<unsigned>(indexType),
+        static_cast<unsigned long long>(indexBufferHandle),
+        static_cast<unsigned long long>(stream0Handle),
+        static_cast<unsigned long long>(stream0Offset),
+        static_cast<unsigned long long>(stream0Stride),
+        static_cast<unsigned long long>(psoHandle),
+        static_cast<unsigned long long>(shaderVariant),
+        static_cast<unsigned long long>(stats.vertexShaderLast),
+        static_cast<unsigned long long>(stats.pixelShaderLast),
+        vsOutLayout);
   }
 
   void recordIndexedVertexReuse(IndexReuseMeasure measure) {
@@ -5565,6 +5678,28 @@ bool encodeDraw(EncodeContext& ctx,
           }
         }
         if (encoderBreakdown) {
+          const auto& stream0 =
+              encoderBreakdown->stats.streams[0];
+          encoderBreakdown->emitIndexedOrderProbeDraw(
+              probeEligible,
+              probeApplied,
+              probeApplied ? static_cast<u64>(probeReorderedIndexBytes.size()) : 0u,
+              drawOrdinal,
+              pv.primitiveType,
+              primitiveCount,
+              vertexCount,
+              hot.textureMask,
+              hot.renderStates,
+              hot.viewport,
+              effectiveCullMode,
+              fillMode,
+              pv.baseVertexIndex,
+              pv.startIndex,
+              pv.indexType,
+              hot.indexBuffer.value,
+              stream0.lastHandle,
+              stream0.lastOffset,
+              stream0.lastStride);
           encoderBreakdown->recordIndexedOrderProbe(
               probeApplied,
               probeApplied ? static_cast<u64>(probeReorderedIndexBytes.size()) : 0u);

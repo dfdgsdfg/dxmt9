@@ -21,6 +21,7 @@ from typing import Any
 KEY_VALUE_RE = re.compile(r"\b([A-Za-z0-9_]+)=([^\s]+)")
 ENCODER_PREFIX = "[dxmt9-perf-encoder "
 STREAM_PREFIX = "[dxmt9-perf-encoder-stream "
+PROBE_DRAW_PREFIX = "[dxmt9-perf-indexed-probe-draw "
 PERF_PREFIX = "[dxmt9-perf] "
 BRIDGE_PREFIX = "[dxmt9-bridge-perf] "
 
@@ -671,6 +672,54 @@ STREAM_CSV_KEYS = (
     "last_stride",
 )
 
+PROBE_DRAW_CSV_KEYS = (
+    "seq",
+    "encoder",
+    "encoder_draw_index",
+    "draw_ordinal",
+    "eligible",
+    "applied",
+    "reorder_bytes",
+    "primitive_type",
+    "primitive_count",
+    "vertex_count",
+    "texture_mask",
+    "color_write",
+    "alpha_blend",
+    "src_blend",
+    "dst_blend",
+    "blend_op",
+    "separate_alpha",
+    "src_blend_alpha",
+    "dst_blend_alpha",
+    "blend_op_alpha",
+    "alpha_test",
+    "depth_enabled",
+    "depth_write",
+    "depth_func",
+    "stencil",
+    "clip_plane",
+    "scissor",
+    "scissor_l",
+    "scissor_t",
+    "scissor_r",
+    "scissor_b",
+    "cull",
+    "fill",
+    "base_vertex",
+    "start_index",
+    "index_type",
+    "index_buffer",
+    "stream0_handle",
+    "stream0_offset",
+    "stream0_stride",
+    "pso",
+    "shader_variant",
+    "vs",
+    "ps",
+    "vsout",
+)
+
 RENDER_PASS_ACTION_GROUPS = (
     ("Color Load", (
         "render_pass_load_action_load",
@@ -839,6 +888,16 @@ def parse_encoder_lines(log_path: Path) -> tuple[list[dict[str, Any]], list[dict
     return encoders, streams
 
 
+def parse_probe_draw_lines(log_path: Path) -> list[dict[str, Any]]:
+    probe_draws: list[dict[str, Any]] = []
+    if not log_path.exists():
+        return probe_draws
+    for line in log_path.read_text(encoding="utf-8", errors="replace").splitlines():
+        if line.startswith(PROBE_DRAW_PREFIX):
+            probe_draws.append(parse_kv_line(line))
+    return probe_draws
+
+
 def sum_key(rows: list[dict[str, Any]], key: str) -> int | float:
     total: int | float = 0
     for row in rows:
@@ -932,9 +991,12 @@ def write_markdown(
     streams: list[dict[str, Any]],
     encoder_csv: Path,
     stream_csv: Path,
+    probe_draws: list[dict[str, Any]] | None = None,
+    probe_draw_csv: Path | None = None,
 ) -> None:
     counters = result.get("dxmt9_perf_counters", {})
     bridge = result.get("dxmt9_bridge_counters", {})
+    probe_draws = probe_draws or []
     lines: list[str] = []
 
     lines.append("# 3DMark05 Perf Summary")
@@ -946,6 +1008,9 @@ def write_markdown(
     lines.append(f"- Stream lines: `{len(streams)}`")
     lines.append(f"- Encoder CSV: `{encoder_csv}`")
     lines.append(f"- Stream CSV: `{stream_csv}`")
+    lines.append(f"- Indexed probe draw lines: `{len(probe_draws)}`")
+    if probe_draw_csv is not None:
+        lines.append(f"- Indexed probe draw CSV: `{probe_draw_csv}`")
     lines.append("")
 
     lines.append("## Run Counters")
@@ -1192,6 +1257,54 @@ def write_markdown(
         add_top_section("Top Encoders By Stream Stride Changes", "stream_stride_changes")
         add_top_section("Top Encoders By IB Handle Changes", "ib_handle_changes")
 
+    if probe_draws:
+        applied = [row for row in probe_draws if numeric_value(row, "applied")]
+        eligible = [row for row in probe_draws if numeric_value(row, "eligible")]
+        lines.append("## Indexed Probe Draw Samples")
+        lines.append("")
+        lines.append("| Metric | Value |")
+        lines.append("|---|---:|")
+        lines.append(f"| `rows` | `{fmt(len(probe_draws))}` |")
+        lines.append(f"| `eligible` | `{fmt(len(eligible))}` |")
+        lines.append(f"| `applied` | `{fmt(len(applied))}` |")
+        lines.append(
+            f"| `reorder_bytes` | `{fmt(sum_key(probe_draws, 'reorder_bytes'))}` |"
+        )
+        lines.append("")
+        lines.append("| seq | enc | draw | applied | prims | scissor | scissor rect | stream0 | ib | pso |")
+        lines.append("|---:|---:|---:|---:|---:|---:|---|---|---|---|")
+        for row in probe_draws[:32]:
+            rect = (
+                f"{fmt(row.get('scissor_l'))},"
+                f"{fmt(row.get('scissor_t'))},"
+                f"{fmt(row.get('scissor_r'))},"
+                f"{fmt(row.get('scissor_b'))}"
+            )
+            stream = (
+                f"{row.get('stream0_handle', '')}+"
+                f"{fmt(row.get('stream0_offset'))}/"
+                f"{fmt(row.get('stream0_stride'))}"
+            )
+            lines.append(
+                "| "
+                + " | ".join(
+                    [
+                        fmt(row.get("seq")),
+                        fmt(row.get("encoder")),
+                        fmt(row.get("encoder_draw_index")),
+                        fmt(row.get("applied")),
+                        fmt(row.get("primitive_count")),
+                        fmt(row.get("scissor")),
+                        rect,
+                        stream,
+                        fmt(row.get("index_buffer")),
+                        fmt(row.get("pso")),
+                    ]
+                )
+                + " |"
+            )
+        lines.append("")
+
     if bridge:
         lines.append("## Bridge Launch Check")
         lines.append("")
@@ -1219,17 +1332,32 @@ def main() -> int:
     output = args.output or (run_dir / "3dmark05-perf-summary.md")
     encoder_csv = output.parent / "3dmark05-perf-encoders.csv"
     stream_csv = output.parent / "3dmark05-perf-encoder-streams.csv"
+    probe_draw_csv = output.parent / "3dmark05-perf-indexed-probe-draws.csv"
     log_path = run_dir / "dxmt9.log"
     encoders, streams = parse_encoder_lines(log_path)
+    probe_draws = parse_probe_draw_lines(log_path)
     if not log_path.exists():
         encoders = load_existing_csv(encoder_csv)
         streams = load_existing_csv(stream_csv)
+        probe_draws = load_existing_csv(probe_draw_csv)
     enrich_encoder_rows(encoders)
     if log_path.exists() or not encoder_csv.exists():
         write_csv(encoder_csv, encoders, ENCODER_CSV_KEYS)
     if log_path.exists() or not stream_csv.exists():
         write_csv(stream_csv, streams, STREAM_CSV_KEYS)
-    write_markdown(output, run_dir, result, encoders, streams, encoder_csv, stream_csv)
+    if log_path.exists() or not probe_draw_csv.exists():
+        write_csv(probe_draw_csv, probe_draws, PROBE_DRAW_CSV_KEYS)
+    write_markdown(
+        output,
+        run_dir,
+        result,
+        encoders,
+        streams,
+        encoder_csv,
+        stream_csv,
+        probe_draws,
+        probe_draw_csv,
+    )
     print(output)
     return 0
 
