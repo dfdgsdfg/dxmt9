@@ -677,6 +677,15 @@ struct EncoderBreakdown {
   std::uint64_t indexedVertexCacheMissEstimate16 = 0;
   std::uint64_t indexedVertexCacheMissEstimate32 = 0;
   std::uint64_t indexedVertexCacheMissEstimate64 = 0;
+  std::uint64_t indexedCacheOptCandidateDraws = 0;
+  std::uint64_t indexedCacheOptCandidateSkipped = 0;
+  std::uint64_t indexedCacheOptCandidateBytes = 0;
+  std::uint64_t indexedCacheOptCandidateOriginalMiss16 = 0;
+  std::uint64_t indexedCacheOptCandidateOriginalMiss32 = 0;
+  std::uint64_t indexedCacheOptCandidateOriginalMiss64 = 0;
+  std::uint64_t indexedCacheOptCandidateMiss16 = 0;
+  std::uint64_t indexedCacheOptCandidateMiss32 = 0;
+  std::uint64_t indexedCacheOptCandidateMiss64 = 0;
   std::uint64_t stream0StrideMin = 0;
   std::uint64_t stream0StrideMax = 0;
   std::uint64_t streamStateSamples = 0;

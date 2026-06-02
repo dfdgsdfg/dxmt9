@@ -84,7 +84,11 @@ Commercial / 3rd-party titles (require external prefix):
     indexed reference count, draw-local unique-index estimates, and finite
     vertex-cache miss estimates for 16/32/64 entries to compare against Xcode
     `VS Invocations`; it scans accessible index buffers on the draw path and
-    is intentionally off by default. It is
+    is intentionally off by default. Add
+    `DXMT9_MEASURE_INDEX_CACHE_OPT_CANDIDATE=1` only after that axis is
+    implicated; it builds a cache-aware LRU32 candidate order without
+    submitting it and reports original-vs-candidate LRU16/32/64 miss deltas.
+    It is
     intentionally not enabled by the shared perf profile. After the run,
     `python3 scripts/tools/summarize_3dmark05_perf.py experiments/output/<run>`
     writes `3dmark05-perf-encoders.csv` and
@@ -455,7 +459,11 @@ Commercial / 3rd-party titles (require external prefix):
     Apple vertex/tiler backend pressure: the generated
     `3dmark05-perf-indexed-probe-draws.csv` then includes per-draw original
     and effective index locality, cache-miss estimates, triangle index span,
-    and stream0 byte-span proxies. With `--encoder-breakdown-seq`, the same
+    and stream0 byte-span proxies. Use
+    `--measure-index-cache-opt-candidate` for no-mutate full-frame scouts when
+    mini replay shows post-transform cache locality is predictive; the encoder
+    breakdown then includes original-vs-candidate cache-opt miss estimates for
+    the joined Xcode/dxmt comparison. With `--encoder-breakdown-seq`, the same
     CSV is also emitted without a mutating reverse/split/scissor probe, so a
     no-mutate scout can capture draw identity, state, stream/IB handles, PSO,
     shader variant, VS/PS hashes, and VSOut key for row-local replay planning.

@@ -60,6 +60,7 @@ probe_force_cull_mode_class=
 probe_force_cull_mode_classes=
 force_cull_mode=
 measure_index_reuse=0
+measure_index_cache_opt_candidate=0
 dump_indexed_geometry=0
 dump_indexed_geometry_cbufs=0
 dump_indexed_geometry_max_draws=${DXMT9_DUMP_INDEXED_GEOMETRY_MAX_DRAWS:-16}
@@ -319,6 +320,11 @@ Options:
   --measure-index-reuse
                       Set DXMT9_MEASURE_INDEX_REUSE=1 to scan accessible
                       index buffers and report per-encoder unique index counts
+  --measure-index-cache-opt-candidate
+                      Set DXMT9_MEASURE_INDEX_CACHE_OPT_CANDIDATE=1 to build
+                      a cache-aware candidate index order without submitting it
+                      and report original-vs-candidate cache-miss estimates;
+                      implies --measure-index-reuse
   --dump-indexed-geometry
                       Dump selected indexed triangle raw index/stream0 payloads
                       under traces/<run-id>/analysis/geometry. Uses the
@@ -713,6 +719,11 @@ while (($#)); do
       ;;
     --measure-index-reuse)
       measure_index_reuse=1
+      shift
+      ;;
+    --measure-index-cache-opt-candidate)
+      measure_index_reuse=1
+      measure_index_cache_opt_candidate=1
       shift
       ;;
     --dump-indexed-geometry)
@@ -1489,6 +1500,10 @@ fi
 
 if (( measure_index_reuse )); then
   env_args+=("DXMT9_MEASURE_INDEX_REUSE=1")
+fi
+
+if (( measure_index_cache_opt_candidate )); then
+  env_args+=("DXMT9_MEASURE_INDEX_CACHE_OPT_CANDIDATE=1")
 fi
 
 if (( dump_indexed_geometry )); then

@@ -1501,6 +1501,26 @@ struct ActiveEncoderBreakdown {
     stats.indexedVertexCacheMissEstimate64 += measure.cacheMiss64;
   }
 
+  void recordIndexedCacheOptCandidate(IndexReuseMeasure original,
+                                      IndexReuseMeasure candidate,
+                                      u64 bytes) {
+    if (!enabled) {
+      return;
+    }
+    if (!original.available || !candidate.available) {
+      ++stats.indexedCacheOptCandidateSkipped;
+      return;
+    }
+    ++stats.indexedCacheOptCandidateDraws;
+    stats.indexedCacheOptCandidateBytes += bytes;
+    stats.indexedCacheOptCandidateOriginalMiss16 += original.cacheMiss16;
+    stats.indexedCacheOptCandidateOriginalMiss32 += original.cacheMiss32;
+    stats.indexedCacheOptCandidateOriginalMiss64 += original.cacheMiss64;
+    stats.indexedCacheOptCandidateMiss16 += candidate.cacheMiss16;
+    stats.indexedCacheOptCandidateMiss32 += candidate.cacheMiss32;
+    stats.indexedCacheOptCandidateMiss64 += candidate.cacheMiss64;
+  }
+
   void recordDrawIssue(core::PrimitiveType primitiveType,
                        u32 primitiveCount,
                        u64 vertexCount,
@@ -3832,8 +3852,10 @@ bool buildVertexCacheOptimizedTriangleOrderIndexBytes(
     IndexType indexType,
     u32 startIndex,
     u64 indexCount,
-    std::vector<u8>& out) {
-  if (indexBytes.empty() || indexCount == 0u || (indexCount % 3u) != 0u) {
+    std::vector<u8>& out,
+    std::size_t probeCacheSize = 64u) {
+  if (indexBytes.empty() || indexCount == 0u || (indexCount % 3u) != 0u ||
+      probeCacheSize == 0u) {
     return false;
   }
   const std::size_t elementSize = indexElementSize(indexType);
@@ -3881,9 +3903,8 @@ bool buildVertexCacheOptimizedTriangleOrderIndexBytes(
     triangles.push_back(tri);
   }
 
-  constexpr std::size_t kProbeCacheSize = 64u;
   std::vector<u32> cache;
-  cache.reserve(kProbeCacheSize);
+  cache.reserve(probeCacheSize);
   std::vector<u32> candidates;
   candidates.reserve(std::min<std::size_t>(triangleCount, 256u));
   std::vector<u8> emitted(triangleCount, 0u);
@@ -3983,7 +4004,7 @@ bool buildVertexCacheOptimizedTriangleOrderIndexBytes(
         return;
       }
     }
-    if (cache.size() < kProbeCacheSize) {
+    if (cache.size() < probeCacheSize) {
       cache.push_back(index);
     } else {
       for (std::size_t i = cache.size() - 1u; i > 0u; --i) {
@@ -7290,6 +7311,9 @@ bool encodeDraw(EncodeContext& ctx,
       splitPrimitiveLimit = debug::splitLargeIndexedDrawPrimitiveLimit();
       splitStream0SpanLimit = debug::splitLargeIndexedDrawStream0SpanMax();
       splitMaxChunksPerDraw = debug::splitLargeIndexedDrawMaxChunksPerDraw();
+      const bool measureCacheOptCandidate =
+          debug::measureIndexCacheOptCandidate() &&
+          pv.primitiveType == core::PrimitiveType::TriangleList;
       const bool dumpIndexedGeometryRequested =
           !debug::indexedGeometryDumpDir().empty() &&
           debug::indexedGeometryDumpMaxDraws() != 0u &&
@@ -7297,7 +7321,7 @@ bool encodeDraw(EncodeContext& ctx,
       const bool measureProbeIndexLocality =
           debug::measureIndexReuse() || reverseStream0SpanMin != 0u ||
           optimizeStream0SpanMin != 0u || splitStream0SpanLimit != 0u ||
-          dumpIndexedGeometryRequested;
+          dumpIndexedGeometryRequested || measureCacheOptCandidate;
       const u64 stream0StrideForProbe =
           encoderBreakdown ? encoderBreakdown->stats.streams[0].lastStride
                            : static_cast<u64>(hot.streamStrides[0]);
@@ -7308,6 +7332,28 @@ bool encodeDraw(EncodeContext& ctx,
                                          originalIndexReuseStartIndex,
                                          vertexCount)
               : IndexReuseMeasure{.references = vertexCount};
+      if (measureCacheOptCandidate && encoderBreakdown) {
+        std::vector<u8> cacheOptCandidateIndexBytes;
+        IndexReuseMeasure cacheOptCandidateReuse{.references = vertexCount};
+        if (originalIndexReuseForProbe.available &&
+            buildVertexCacheOptimizedTriangleOrderIndexBytes(
+                originalIndexBytesForReuse,
+                pv.indexType,
+                originalIndexReuseStartIndex,
+                vertexCount,
+                cacheOptCandidateIndexBytes,
+                32u)) {
+          cacheOptCandidateReuse =
+              measureIndexReuseForDraw(cacheOptCandidateIndexBytes,
+                                       pv.indexType,
+                                       0,
+                                       vertexCount);
+        }
+        encoderBreakdown->recordIndexedCacheOptCandidate(
+            originalIndexReuseForProbe,
+            cacheOptCandidateReuse,
+            static_cast<u64>(cacheOptCandidateIndexBytes.size()));
+      }
       auto stream0SpanFilterMatches = [&](u64 minSpan) {
         if (minSpan == 0u) {
           return true;

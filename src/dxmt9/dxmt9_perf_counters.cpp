@@ -3150,6 +3150,15 @@ void emitEncoderBreakdown(const EncoderBreakdown& b) {
       "indexed_vertex_cache_miss_estimate_16=%llu "
       "indexed_vertex_cache_miss_estimate_32=%llu "
       "indexed_vertex_cache_miss_estimate_64=%llu "
+      "indexed_cache_opt_candidate_draws=%llu "
+      "indexed_cache_opt_candidate_skipped=%llu "
+      "indexed_cache_opt_candidate_bytes=%llu "
+      "indexed_cache_opt_candidate_original_miss16=%llu "
+      "indexed_cache_opt_candidate_original_miss32=%llu "
+      "indexed_cache_opt_candidate_original_miss64=%llu "
+      "indexed_cache_opt_candidate_miss16=%llu "
+      "indexed_cache_opt_candidate_miss32=%llu "
+      "indexed_cache_opt_candidate_miss64=%llu "
       "stream0_stride_min=%llu stream0_stride_max=%llu "
       "stream_state_samples=%llu stream_metal_binds=%llu "
       "stream_metal_bind_firsts=%llu "
@@ -3386,6 +3395,15 @@ void emitEncoderBreakdown(const EncoderBreakdown& b) {
       static_cast<unsigned long long>(b.indexedVertexCacheMissEstimate16),
       static_cast<unsigned long long>(b.indexedVertexCacheMissEstimate32),
       static_cast<unsigned long long>(b.indexedVertexCacheMissEstimate64),
+      static_cast<unsigned long long>(b.indexedCacheOptCandidateDraws),
+      static_cast<unsigned long long>(b.indexedCacheOptCandidateSkipped),
+      static_cast<unsigned long long>(b.indexedCacheOptCandidateBytes),
+      static_cast<unsigned long long>(b.indexedCacheOptCandidateOriginalMiss16),
+      static_cast<unsigned long long>(b.indexedCacheOptCandidateOriginalMiss32),
+      static_cast<unsigned long long>(b.indexedCacheOptCandidateOriginalMiss64),
+      static_cast<unsigned long long>(b.indexedCacheOptCandidateMiss16),
+      static_cast<unsigned long long>(b.indexedCacheOptCandidateMiss32),
+      static_cast<unsigned long long>(b.indexedCacheOptCandidateMiss64),
       static_cast<unsigned long long>(b.stream0StrideMin),
       static_cast<unsigned long long>(b.stream0StrideMax),
       static_cast<unsigned long long>(b.streamStateSamples),

@@ -864,6 +864,12 @@ bool measureIndexReuse() {
   return v;
 }
 
+bool measureIndexCacheOptCandidate() {
+  static const bool v =
+      util::getenvFlag("DXMT9_MEASURE_INDEX_CACHE_OPT_CANDIDATE");
+  return v;
+}
+
 std::string_view indexedGeometryDumpDir() {
   static const std::string dir =
       util::getenvString("DXMT9_DUMP_INDEXED_GEOMETRY_DIR");

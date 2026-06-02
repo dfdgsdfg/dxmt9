@@ -111,6 +111,38 @@ def summarize(rows: list[dict[str, str]], top_n: int) -> dict[str, float]:
     top_gpu_ms = sum(as_float(row.get("gpu_ms")) for row in top)
     top_buffer_write_mib = sum(as_float(row.get("buffer_write_mib")) for row in top)
     top_dxmt_vertices = sum(as_int(first(row, "dxmt_vertex_count", "vertex_count")) for row in top)
+    top_indexed_vertex_refs = float(
+        sum(as_int(first(row, "dxmt_indexed_vertex_reference_count",
+                         "indexed_vertex_reference_count")) for row in top)
+    )
+    top_indexed_unique = float(
+        sum(as_int(first(row, "dxmt_indexed_unique_vertex_estimate",
+                         "indexed_unique_vertex_estimate")) for row in top)
+    )
+    top_indexed_cache_misses = {
+        16: float(sum(as_int(first(row, "dxmt_indexed_vertex_cache_miss_estimate_16",
+                                  "indexed_vertex_cache_miss_estimate_16")) for row in top)),
+        32: float(sum(as_int(first(row, "dxmt_indexed_vertex_cache_miss_estimate_32",
+                                  "indexed_vertex_cache_miss_estimate_32")) for row in top)),
+        64: float(sum(as_int(first(row, "dxmt_indexed_vertex_cache_miss_estimate_64",
+                                  "indexed_vertex_cache_miss_estimate_64")) for row in top)),
+    }
+    top_cache_opt_candidate_original_misses = {
+        16: float(sum(as_int(first(row, "dxmt_indexed_cache_opt_candidate_original_miss16",
+                                  "indexed_cache_opt_candidate_original_miss16")) for row in top)),
+        32: float(sum(as_int(first(row, "dxmt_indexed_cache_opt_candidate_original_miss32",
+                                  "indexed_cache_opt_candidate_original_miss32")) for row in top)),
+        64: float(sum(as_int(first(row, "dxmt_indexed_cache_opt_candidate_original_miss64",
+                                  "indexed_cache_opt_candidate_original_miss64")) for row in top)),
+    }
+    top_cache_opt_candidate_misses = {
+        16: float(sum(as_int(first(row, "dxmt_indexed_cache_opt_candidate_miss16",
+                                  "indexed_cache_opt_candidate_miss16")) for row in top)),
+        32: float(sum(as_int(first(row, "dxmt_indexed_cache_opt_candidate_miss32",
+                                  "indexed_cache_opt_candidate_miss32")) for row in top)),
+        64: float(sum(as_int(first(row, "dxmt_indexed_cache_opt_candidate_miss64",
+                                  "indexed_cache_opt_candidate_miss64")) for row in top)),
+    }
     top_draw_calls = float(sum(as_int(first(row, "dxmt_draw_calls", "draw_calls")) for row in top))
     top_pso_state_samples = float(
         sum(as_int(first(row, "dxmt_pso_state_samples", "pso_state_samples")) for row in top)
@@ -206,6 +238,107 @@ def summarize(rows: list[dict[str, str]], top_n: int) -> dict[str, float]:
         "top_dxmt_vertex_count": float(top_dxmt_vertices),
         "top_dxmt_triangle_estimate": float(
             sum(as_int(first(row, "dxmt_triangle_estimate", "triangle_estimate")) for row in top)
+        ),
+        "top_indexed_vertex_reference_count": top_indexed_vertex_refs,
+        "top_indexed_unique_vertex_estimate": top_indexed_unique,
+        "top_indexed_vertex_reuse_ratio": (
+            top_indexed_vertex_refs / top_indexed_unique if top_indexed_unique else 0.0
+        ),
+        "top_vs_invocations_per_indexed_unique_vertex": (
+            top_vs_invocations / top_indexed_unique if top_indexed_unique else 0.0
+        ),
+        "top_vs_buffer_bytes_per_indexed_unique_vertex": (
+            top_vs_bytes / top_indexed_unique if top_indexed_unique else 0.0
+        ),
+        "top_indexed_vertex_cache_miss_estimate_16": top_indexed_cache_misses[16],
+        "top_indexed_vertex_cache_miss_estimate_32": top_indexed_cache_misses[32],
+        "top_indexed_vertex_cache_miss_estimate_64": top_indexed_cache_misses[64],
+        "top_indexed_vertex_cache_miss_over_unique_16": (
+            top_indexed_cache_misses[16] / top_indexed_unique if top_indexed_unique else 0.0
+        ),
+        "top_indexed_vertex_cache_miss_over_unique_32": (
+            top_indexed_cache_misses[32] / top_indexed_unique if top_indexed_unique else 0.0
+        ),
+        "top_indexed_vertex_cache_miss_over_unique_64": (
+            top_indexed_cache_misses[64] / top_indexed_unique if top_indexed_unique else 0.0
+        ),
+        "top_vs_invocations_per_indexed_cache_miss_16": (
+            top_vs_invocations / top_indexed_cache_misses[16]
+            if top_indexed_cache_misses[16] else 0.0
+        ),
+        "top_vs_invocations_per_indexed_cache_miss_32": (
+            top_vs_invocations / top_indexed_cache_misses[32]
+            if top_indexed_cache_misses[32] else 0.0
+        ),
+        "top_vs_invocations_per_indexed_cache_miss_64": (
+            top_vs_invocations / top_indexed_cache_misses[64]
+            if top_indexed_cache_misses[64] else 0.0
+        ),
+        "top_vs_buffer_bytes_per_indexed_cache_miss_16": (
+            top_vs_bytes / top_indexed_cache_misses[16]
+            if top_indexed_cache_misses[16] else 0.0
+        ),
+        "top_vs_buffer_bytes_per_indexed_cache_miss_32": (
+            top_vs_bytes / top_indexed_cache_misses[32]
+            if top_indexed_cache_misses[32] else 0.0
+        ),
+        "top_vs_buffer_bytes_per_indexed_cache_miss_64": (
+            top_vs_bytes / top_indexed_cache_misses[64]
+            if top_indexed_cache_misses[64] else 0.0
+        ),
+        "top_indexed_cache_opt_candidate_draws": float(
+            sum(as_int(first(row, "dxmt_indexed_cache_opt_candidate_draws",
+                             "indexed_cache_opt_candidate_draws")) for row in top)
+        ),
+        "top_indexed_cache_opt_candidate_skipped": float(
+            sum(as_int(first(row, "dxmt_indexed_cache_opt_candidate_skipped",
+                             "indexed_cache_opt_candidate_skipped")) for row in top)
+        ),
+        "top_indexed_cache_opt_candidate_mib": sum(
+            as_int(first(row, "dxmt_indexed_cache_opt_candidate_bytes",
+                         "indexed_cache_opt_candidate_bytes")) for row in top
+        ) / MIB,
+        "top_indexed_cache_opt_candidate_original_miss16":
+            top_cache_opt_candidate_original_misses[16],
+        "top_indexed_cache_opt_candidate_original_miss32":
+            top_cache_opt_candidate_original_misses[32],
+        "top_indexed_cache_opt_candidate_original_miss64":
+            top_cache_opt_candidate_original_misses[64],
+        "top_indexed_cache_opt_candidate_miss16":
+            top_cache_opt_candidate_misses[16],
+        "top_indexed_cache_opt_candidate_miss32":
+            top_cache_opt_candidate_misses[32],
+        "top_indexed_cache_opt_candidate_miss64":
+            top_cache_opt_candidate_misses[64],
+        "top_indexed_cache_opt_candidate_miss_delta_16": (
+            top_cache_opt_candidate_misses[16] -
+            top_cache_opt_candidate_original_misses[16]
+        ),
+        "top_indexed_cache_opt_candidate_miss_delta_32": (
+            top_cache_opt_candidate_misses[32] -
+            top_cache_opt_candidate_original_misses[32]
+        ),
+        "top_indexed_cache_opt_candidate_miss_delta_64": (
+            top_cache_opt_candidate_misses[64] -
+            top_cache_opt_candidate_original_misses[64]
+        ),
+        "top_indexed_cache_opt_candidate_miss_delta_pct_16": (
+            (top_cache_opt_candidate_misses[16] -
+             top_cache_opt_candidate_original_misses[16]) /
+            top_cache_opt_candidate_original_misses[16] * 100.0
+            if top_cache_opt_candidate_original_misses[16] else 0.0
+        ),
+        "top_indexed_cache_opt_candidate_miss_delta_pct_32": (
+            (top_cache_opt_candidate_misses[32] -
+             top_cache_opt_candidate_original_misses[32]) /
+            top_cache_opt_candidate_original_misses[32] * 100.0
+            if top_cache_opt_candidate_original_misses[32] else 0.0
+        ),
+        "top_indexed_cache_opt_candidate_miss_delta_pct_64": (
+            (top_cache_opt_candidate_misses[64] -
+             top_cache_opt_candidate_original_misses[64]) /
+            top_cache_opt_candidate_original_misses[64] * 100.0
+            if top_cache_opt_candidate_original_misses[64] else 0.0
         ),
         "top_stream_handle_changes": float(
             sum(as_int(first(row, "dxmt_stream_handle_changes", "stream_handle_changes")) for row in top)
@@ -607,6 +740,38 @@ def write_report(path: Path, before: dict[str, float], after: dict[str, float],
         "top_textured_draws",
         "top_dxmt_vertex_count",
         "top_dxmt_triangle_estimate",
+        "top_indexed_vertex_reference_count",
+        "top_indexed_unique_vertex_estimate",
+        "top_indexed_vertex_reuse_ratio",
+        "top_vs_invocations_per_indexed_unique_vertex",
+        "top_vs_buffer_bytes_per_indexed_unique_vertex",
+        "top_indexed_vertex_cache_miss_estimate_16",
+        "top_indexed_vertex_cache_miss_estimate_32",
+        "top_indexed_vertex_cache_miss_estimate_64",
+        "top_indexed_vertex_cache_miss_over_unique_16",
+        "top_indexed_vertex_cache_miss_over_unique_32",
+        "top_indexed_vertex_cache_miss_over_unique_64",
+        "top_vs_invocations_per_indexed_cache_miss_16",
+        "top_vs_invocations_per_indexed_cache_miss_32",
+        "top_vs_invocations_per_indexed_cache_miss_64",
+        "top_vs_buffer_bytes_per_indexed_cache_miss_16",
+        "top_vs_buffer_bytes_per_indexed_cache_miss_32",
+        "top_vs_buffer_bytes_per_indexed_cache_miss_64",
+        "top_indexed_cache_opt_candidate_draws",
+        "top_indexed_cache_opt_candidate_skipped",
+        "top_indexed_cache_opt_candidate_mib",
+        "top_indexed_cache_opt_candidate_original_miss16",
+        "top_indexed_cache_opt_candidate_original_miss32",
+        "top_indexed_cache_opt_candidate_original_miss64",
+        "top_indexed_cache_opt_candidate_miss16",
+        "top_indexed_cache_opt_candidate_miss32",
+        "top_indexed_cache_opt_candidate_miss64",
+        "top_indexed_cache_opt_candidate_miss_delta_16",
+        "top_indexed_cache_opt_candidate_miss_delta_32",
+        "top_indexed_cache_opt_candidate_miss_delta_64",
+        "top_indexed_cache_opt_candidate_miss_delta_pct_16",
+        "top_indexed_cache_opt_candidate_miss_delta_pct_32",
+        "top_indexed_cache_opt_candidate_miss_delta_pct_64",
         "top_stream_handle_changes",
         "top_stream_offset_changes",
         "top_stream_stride_changes",
@@ -697,9 +862,9 @@ def write_report(path: Path, before: dict[str, float], after: dict[str, float],
     lines.append("")
     lines.append(
         "| Row | GPU ms | VS write MiB | VS invocations | VS B/inv | "
-        "named tiled MiB | clip limiter % | VSOut key |"
+        "cache32 | cache64 | named tiled MiB | clip limiter % | VSOut key |"
     )
-    lines.append("|---|---:|---:|---:|---:|---:|---:|---|")
+    lines.append("|---|---:|---:|---:|---:|---:|---:|---:|---:|---|")
     for rank, before_row, after_row in matched_top_rows(before_rows, after_rows, top_n):
         label = seq_enc_label(before_row, rank)
         before_gpu = row_metric(before_row, "gpu_ms")
@@ -710,6 +875,14 @@ def write_report(path: Path, before: dict[str, float], after: dict[str, float],
         after_inv = row_int_metric(after_row, "vs_invocations")
         before_b_inv = row_metric(before_row, "vs_buffer_bytes_per_vs_invocation")
         after_b_inv = row_metric(after_row, "vs_buffer_bytes_per_vs_invocation")
+        before_cache32 = as_int(first(before_row, "dxmt_indexed_vertex_cache_miss_estimate_32",
+                                      "indexed_vertex_cache_miss_estimate_32"))
+        after_cache32 = as_int(first(after_row, "dxmt_indexed_vertex_cache_miss_estimate_32",
+                                     "indexed_vertex_cache_miss_estimate_32"))
+        before_cache64 = as_int(first(before_row, "dxmt_indexed_vertex_cache_miss_estimate_64",
+                                      "indexed_vertex_cache_miss_estimate_64"))
+        after_cache64 = as_int(first(after_row, "dxmt_indexed_vertex_cache_miss_estimate_64",
+                                     "indexed_vertex_cache_miss_estimate_64"))
         before_tiled = row_tiled_mib(before_row)
         after_tiled = row_tiled_mib(after_row)
         before_clip = row_metric(before_row, "clip_unit_limiter_pct")
@@ -725,6 +898,10 @@ def write_report(path: Path, before: dict[str, float], after: dict[str, float],
             f"({pct_delta(float(after_inv), float(before_inv))})` | "
             f"`{fmt(before_b_inv)} -> {fmt(after_b_inv)} "
             f"({pct_delta(after_b_inv, before_b_inv)})` | "
+            f"`{fmt_int(before_cache32)} -> {fmt_int(after_cache32)} "
+            f"({pct_delta(float(after_cache32), float(before_cache32))})` | "
+            f"`{fmt_int(before_cache64)} -> {fmt_int(after_cache64)} "
+            f"({pct_delta(float(after_cache64), float(before_cache64))})` | "
             f"`{fmt(before_tiled)} -> {fmt(after_tiled)} "
             f"({pct_delta(after_tiled, before_tiled)})` | "
             f"`{fmt(before_clip)} -> {fmt(after_clip)} "
@@ -732,7 +909,10 @@ def write_report(path: Path, before: dict[str, float], after: dict[str, float],
             f"`{before_vsout} -> {after_vsout}` |"
         )
     if not matched_top_rows(before_rows, after_rows, top_n):
-        lines.append("| `none` | `n/a` | `n/a` | `n/a` | `n/a` | `n/a` | `n/a` | `n/a` |")
+        lines.append(
+            "| `none` | `n/a` | `n/a` | `n/a` | `n/a` | `n/a` | "
+            "`n/a` | `n/a` | `n/a` | `n/a` |"
+        )
     lines.append("")
 
     lines.append("## VS Write Delta Attribution")

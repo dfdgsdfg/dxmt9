@@ -275,6 +275,15 @@ ENCODER_SUM_KEYS = (
     "indexed_vertex_cache_miss_estimate_16",
     "indexed_vertex_cache_miss_estimate_32",
     "indexed_vertex_cache_miss_estimate_64",
+    "indexed_cache_opt_candidate_draws",
+    "indexed_cache_opt_candidate_skipped",
+    "indexed_cache_opt_candidate_bytes",
+    "indexed_cache_opt_candidate_original_miss16",
+    "indexed_cache_opt_candidate_original_miss32",
+    "indexed_cache_opt_candidate_original_miss64",
+    "indexed_cache_opt_candidate_miss16",
+    "indexed_cache_opt_candidate_miss32",
+    "indexed_cache_opt_candidate_miss64",
     "stream_state_samples",
     "stream_metal_binds",
     "stream_metal_bind_firsts",
@@ -407,6 +416,15 @@ TOP_ENCODER_KEYS = (
     "indexed_vertex_cache_miss_over_unique_16",
     "indexed_vertex_cache_miss_over_unique_32",
     "indexed_vertex_cache_miss_over_unique_64",
+    "indexed_cache_opt_candidate_draws",
+    "indexed_cache_opt_candidate_skipped",
+    "indexed_cache_opt_candidate_bytes",
+    "indexed_cache_opt_candidate_miss_delta_16",
+    "indexed_cache_opt_candidate_miss_delta_32",
+    "indexed_cache_opt_candidate_miss_delta_64",
+    "indexed_cache_opt_candidate_miss_delta_pct_16",
+    "indexed_cache_opt_candidate_miss_delta_pct_32",
+    "indexed_cache_opt_candidate_miss_delta_pct_64",
     "pso_handle_changes",
     "pso_state_samples_per_draw",
     "shader_variant_changes",
@@ -585,6 +603,21 @@ ENCODER_CSV_KEYS = (
     "indexed_vertex_cache_miss_over_unique_16",
     "indexed_vertex_cache_miss_over_unique_32",
     "indexed_vertex_cache_miss_over_unique_64",
+    "indexed_cache_opt_candidate_draws",
+    "indexed_cache_opt_candidate_skipped",
+    "indexed_cache_opt_candidate_bytes",
+    "indexed_cache_opt_candidate_original_miss16",
+    "indexed_cache_opt_candidate_original_miss32",
+    "indexed_cache_opt_candidate_original_miss64",
+    "indexed_cache_opt_candidate_miss16",
+    "indexed_cache_opt_candidate_miss32",
+    "indexed_cache_opt_candidate_miss64",
+    "indexed_cache_opt_candidate_miss_delta_16",
+    "indexed_cache_opt_candidate_miss_delta_32",
+    "indexed_cache_opt_candidate_miss_delta_64",
+    "indexed_cache_opt_candidate_miss_delta_pct_16",
+    "indexed_cache_opt_candidate_miss_delta_pct_32",
+    "indexed_cache_opt_candidate_miss_delta_pct_64",
     "stream0_stride_min",
     "stream0_stride_max",
     "stream_state_samples",
@@ -1448,6 +1481,16 @@ def enrich_encoder_rows(encoders: list[dict[str, Any]]) -> None:
                 row, f"indexed_vertex_cache_miss_estimate_{cache_size}")
             row[f"indexed_vertex_cache_miss_over_unique_{cache_size}"] = (
                 cache_misses / indexed_unique) if indexed_unique else 0.0
+            original_candidate_misses = numeric_value(
+                row, f"indexed_cache_opt_candidate_original_miss{cache_size}")
+            candidate_misses = numeric_value(
+                row, f"indexed_cache_opt_candidate_miss{cache_size}")
+            candidate_delta = candidate_misses - original_candidate_misses
+            row[f"indexed_cache_opt_candidate_miss_delta_{cache_size}"] = (
+                candidate_delta)
+            row[f"indexed_cache_opt_candidate_miss_delta_pct_{cache_size}"] = (
+                candidate_delta / original_candidate_misses * 100.0
+                if original_candidate_misses else 0.0)
 
 
 def write_markdown(

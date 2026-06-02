@@ -26,11 +26,23 @@ def write_joined(path: Path, gpu_ms: float, buffer_write_mib: float,
                  vs_bytes_per_invocation: float = 819.2,
                  vertex_count: int = 1000,
                  triangle_estimate: int = 333,
+                 indexed_vertex_reference_count: int | None = None,
+                 indexed_unique_vertex_estimate: int | None = None,
+                 indexed_cache_miss_16: int | None = None,
+                 indexed_cache_miss_32: int | None = None,
+                 indexed_cache_miss_64: int | None = None,
+                 cache_opt_candidate_miss_32: int | None = None,
                  tiled_vertex_mib: float = 1.0,
                  tiled_primitive_mib: float = 0.5,
                  clip_limiter_pct: float = 1.0,
                  vsout_layout: str = "0xfff") -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
+    indexed_refs = indexed_vertex_reference_count or vertex_count * 2
+    indexed_unique = indexed_unique_vertex_estimate or vertex_count
+    cache_miss_16 = indexed_cache_miss_16 or int(indexed_unique * 1.5)
+    cache_miss_32 = indexed_cache_miss_32 or int(indexed_unique * 1.2)
+    cache_miss_64 = indexed_cache_miss_64 or int(indexed_unique * 1.1)
+    candidate_miss_32 = cache_opt_candidate_miss_32 or int(cache_miss_32 * 0.8)
     fields = [
         "seq",
         "enc",
@@ -46,6 +58,20 @@ def write_joined(path: Path, gpu_ms: float, buffer_write_mib: float,
         "clip_unit_limiter_pct",
         "dxmt_vertex_count",
         "dxmt_triangle_estimate",
+        "dxmt_indexed_vertex_reference_count",
+        "dxmt_indexed_unique_vertex_estimate",
+        "dxmt_indexed_vertex_cache_miss_estimate_16",
+        "dxmt_indexed_vertex_cache_miss_estimate_32",
+        "dxmt_indexed_vertex_cache_miss_estimate_64",
+        "dxmt_indexed_cache_opt_candidate_draws",
+        "dxmt_indexed_cache_opt_candidate_skipped",
+        "dxmt_indexed_cache_opt_candidate_bytes",
+        "dxmt_indexed_cache_opt_candidate_original_miss16",
+        "dxmt_indexed_cache_opt_candidate_original_miss32",
+        "dxmt_indexed_cache_opt_candidate_original_miss64",
+        "dxmt_indexed_cache_opt_candidate_miss16",
+        "dxmt_indexed_cache_opt_candidate_miss32",
+        "dxmt_indexed_cache_opt_candidate_miss64",
         "dxmt_draw_calls",
         "dxmt_pso_state_samples",
         "dxmt_stream_handle_changes",
@@ -75,6 +101,20 @@ def write_joined(path: Path, gpu_ms: float, buffer_write_mib: float,
             "clip_unit_limiter_pct": clip_limiter_pct,
             "dxmt_vertex_count": vertex_count,
             "dxmt_triangle_estimate": triangle_estimate,
+            "dxmt_indexed_vertex_reference_count": indexed_refs,
+            "dxmt_indexed_unique_vertex_estimate": indexed_unique,
+            "dxmt_indexed_vertex_cache_miss_estimate_16": cache_miss_16,
+            "dxmt_indexed_vertex_cache_miss_estimate_32": cache_miss_32,
+            "dxmt_indexed_vertex_cache_miss_estimate_64": cache_miss_64,
+            "dxmt_indexed_cache_opt_candidate_draws": 1,
+            "dxmt_indexed_cache_opt_candidate_skipped": 0,
+            "dxmt_indexed_cache_opt_candidate_bytes": 2048,
+            "dxmt_indexed_cache_opt_candidate_original_miss16": cache_miss_16,
+            "dxmt_indexed_cache_opt_candidate_original_miss32": cache_miss_32,
+            "dxmt_indexed_cache_opt_candidate_original_miss64": cache_miss_64,
+            "dxmt_indexed_cache_opt_candidate_miss16": int(cache_miss_16 * 0.8),
+            "dxmt_indexed_cache_opt_candidate_miss32": candidate_miss_32,
+            "dxmt_indexed_cache_opt_candidate_miss64": int(cache_miss_64 * 0.8),
             "dxmt_draw_calls": draw_calls,
             "dxmt_pso_state_samples": pso_samples,
             "dxmt_stream_handle_changes": stream_changes,
@@ -105,6 +145,20 @@ def write_joined_rows(path: Path, rows: list[dict[str, object]]) -> None:
         "clip_unit_limiter_pct",
         "dxmt_vertex_count",
         "dxmt_triangle_estimate",
+        "dxmt_indexed_vertex_reference_count",
+        "dxmt_indexed_unique_vertex_estimate",
+        "dxmt_indexed_vertex_cache_miss_estimate_16",
+        "dxmt_indexed_vertex_cache_miss_estimate_32",
+        "dxmt_indexed_vertex_cache_miss_estimate_64",
+        "dxmt_indexed_cache_opt_candidate_draws",
+        "dxmt_indexed_cache_opt_candidate_skipped",
+        "dxmt_indexed_cache_opt_candidate_bytes",
+        "dxmt_indexed_cache_opt_candidate_original_miss16",
+        "dxmt_indexed_cache_opt_candidate_original_miss32",
+        "dxmt_indexed_cache_opt_candidate_original_miss64",
+        "dxmt_indexed_cache_opt_candidate_miss16",
+        "dxmt_indexed_cache_opt_candidate_miss32",
+        "dxmt_indexed_cache_opt_candidate_miss64",
         "dxmt_draw_calls",
         "dxmt_pso_state_samples",
         "dxmt_stream_handle_changes",
@@ -131,6 +185,20 @@ def write_joined_rows(path: Path, rows: list[dict[str, object]]) -> None:
                 "clip_unit_limiter_pct": 1.0,
                 "dxmt_vertex_count": 1000,
                 "dxmt_triangle_estimate": 333,
+                "dxmt_indexed_vertex_reference_count": 2000,
+                "dxmt_indexed_unique_vertex_estimate": 1000,
+                "dxmt_indexed_vertex_cache_miss_estimate_16": 1500,
+                "dxmt_indexed_vertex_cache_miss_estimate_32": 1200,
+                "dxmt_indexed_vertex_cache_miss_estimate_64": 1100,
+                "dxmt_indexed_cache_opt_candidate_draws": 1,
+                "dxmt_indexed_cache_opt_candidate_skipped": 0,
+                "dxmt_indexed_cache_opt_candidate_bytes": 2048,
+                "dxmt_indexed_cache_opt_candidate_original_miss16": 1500,
+                "dxmt_indexed_cache_opt_candidate_original_miss32": 1200,
+                "dxmt_indexed_cache_opt_candidate_original_miss64": 1100,
+                "dxmt_indexed_cache_opt_candidate_miss16": 1200,
+                "dxmt_indexed_cache_opt_candidate_miss32": 960,
+                "dxmt_indexed_cache_opt_candidate_miss64": 880,
                 "dxmt_draw_calls": 10,
                 "dxmt_pso_state_samples": 10,
                 "dxmt_stream_handle_changes": 10,
@@ -520,11 +588,15 @@ class CompareXcodeDxmtBottlenecksTests(unittest.TestCase):
             write_joined(before, gpu_ms=20.0, buffer_write_mib=1000.0,
                          seq=60, enc=2, vs_invocations=640000,
                          vs_bytes_per_invocation=1600.0,
+                         indexed_cache_miss_32=620000,
+                         indexed_cache_miss_64=600000,
                          tiled_vertex_mib=12.0, tiled_primitive_mib=10.0,
                          clip_limiter_pct=3.25, vsout_layout="0xfff")
             write_joined(after, gpu_ms=19.0, buffer_write_mib=920.0,
                          seq=60, enc=2, vs_invocations=610000,
                          vs_bytes_per_invocation=1540.0,
+                         indexed_cache_miss_32=590000,
+                         indexed_cache_miss_64=570000,
                          tiled_vertex_mib=3.0, tiled_primitive_mib=2.0,
                          clip_limiter_pct=0.33, vsout_layout="0x0")
 
@@ -547,10 +619,16 @@ class CompareXcodeDxmtBottlenecksTests(unittest.TestCase):
             self.assertIn("## Top Encoder Deltas", report)
             self.assertIn("`60/2`", report)
             self.assertIn("640,000 -> 610,000", report)
+            self.assertIn("620,000 -> 590,000", report)
+            self.assertIn("600,000 -> 570,000", report)
             self.assertIn("`0xfff -> 0x0`", report)
             self.assertIn("## VS Write Delta Attribution", report)
             self.assertIn("Invocation-count effect MiB", report)
             self.assertIn("`invocations`", report)
+            self.assertIn("top_indexed_vertex_cache_miss_estimate_32", report)
+            self.assertIn("top_vs_invocations_per_indexed_cache_miss_32", report)
+            self.assertIn("top_indexed_cache_opt_candidate_miss_delta_32", report)
+            self.assertIn("top_indexed_cache_opt_candidate_miss_delta_pct_32", report)
             self.assertIn(
                 "`top_vsout_expected_stage_out_bytes_per_vertex` | `184.000` | `16.000`",
                 report,

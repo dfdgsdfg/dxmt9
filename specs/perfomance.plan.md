@@ -14115,6 +14115,155 @@ Interpretation:
   optimization. Future reorder/split candidates need a cache-miss gate and
   must preserve draw-order-sensitive cases such as alpha blending.
 
+The cache-aware runtime primitive-order A/B is now complete for the same
+`window-014-027` hot mini replay. This keeps the geometry gate tight: same
+full VSOut, same real depth input, same 14 draws, same indexed vertex count,
+same primitive/post-clipped primitive count, and same FS invocation count. It
+changes only triangle order inside each dumped index payload using the mini
+replay runner's new `cache-opt-lru32` path.
+
+```bash
+python3 scripts/tools/run_3dmark05_mini_replay.py \
+  traces/app-d3d9-3dmark05-screen-blend-window-014-027-vsout-trim-r1/analysis/frame60-mini-replay-manifest-window-014-027.json \
+  --output-dir traces/app-d3d9-3dmark05-screen-blend-window-014-027-vsout-trim-r1/analysis/mini-replay-window-014-027-cache-opt-lru32 \
+  --primitive-order cache-opt-lru32 \
+  --depth-input traces/app-d3d9-3dmark05-depth-attachment-dump-r1/analysis/frame60-2-depth.bin \
+  --capture-path traces/app-d3d9-3dmark05-screen-blend-window-014-027-vsout-trim-r1/analysis/mini-replay-window-014-027-cache-opt-lru32.gputrace \
+  --run --repeat 1
+```
+
+Xcode exports:
+
+```text
+traces/app-d3d9-3dmark05-screen-blend-window-014-027-vsout-trim-r1/analysis/mini-replay-window-014-027-cache-opt-lru32-performance.gputrace
+traces/app-d3d9-3dmark05-screen-blend-window-014-027-vsout-trim-r1/analysis/mini-replay-window-014-027-cache-opt-lru32-counters-xcode.csv
+traces/app-d3d9-3dmark05-screen-blend-window-014-027-vsout-trim-r1/analysis/mini-replay-window-014-027-cache-opt-lru32-counters-summary.csv
+traces/app-d3d9-3dmark05-screen-blend-window-014-027-vsout-trim-r1/analysis/mini-replay-window-014-027-cache-opt-lru32-xcode-bottleneck-report.md
+traces/app-d3d9-3dmark05-screen-blend-window-014-027-vsout-trim-r1/analysis/mini-replay-window-014-027-full-vs-cache-opt-lru32-xcode-comparison.md
+```
+
+| Metric | Full original order | `sort-min-index` | `cache-opt-lru32` | Accepted signal |
+|---|---:|---:|---:|---|
+| GPU time | `5.658ms` | `6.391ms` (`+12.96%`) | `4.613ms` (`-18.46%`) | yes |
+| Vertices | `158,244` | `158,244` | `158,244` | geometry fixed |
+| Primitives/post-clipped | `52,748 / 52,748` | `52,748 / 52,748` | `52,748 / 52,748` | geometry fixed |
+| FS invocations | `786,432` | `786,432` | `786,432` | fragment work fixed |
+| VS invocations | `90,614` | `102,747` (`+13.39%`) | `66,913` (`-26.16%`) | primary mover |
+| VS buffer write | `347.956MiB` | `393.845MiB` (`+13.19%`) | `257.105MiB` (`-26.11%`) | primary effect |
+| VS buffer bytes / VS invocation | `4026.5B` | `4019.4B` (`-0.18%`) | `4029.0B` (`+0.06%`) | fixed density |
+| LRU32 index-cache miss estimate | `91,055` | `102,960` (`+13.07%`) | `65,161` (`-28.44%`) | predicts direction |
+| LRU64 index-cache miss estimate | `84,162` | `100,161` (`+19.01%`) | `63,667` (`-24.35%`) | predicts direction |
+| Named tiled buffer total | `2.938MiB` | `3.375MiB` (`+14.89%`) | `2.250MiB` (`-23.40%`) | follows invocations |
+| VS L1 write | `87.190MiB` | `98.672MiB` (`+13.17%`) | `64.461MiB` (`-26.07%`) | follows invocations |
+| VS LLC write | `350.324MiB` | `396.600MiB` (`+13.21%`) | `259.014MiB` (`-26.06%`) | follows invocations |
+
+The Xcode comparison attributes the `cache-opt-lru32` VS-write delta almost
+entirely to invocation count:
+
+| Row | Total VS write delta | Invocation-count effect | Bytes/invocation effect | Primary mover |
+|---|---:|---:|---:|---|
+| `rank 1` | `-90.851MiB` | `-91.040MiB` | `+0.188MiB` | invocations |
+
+Interpretation:
+
+- `cache-opt-lru32` is the first geometry-locked positive runtime result in
+  this hot window. It reduces GPU time, VS invocations, VS buffer writes, VS
+  L1 writes, and VS LLC writes together.
+- The `~4KiB/VS invocation` density remains essentially unchanged across
+  original, regressed, and improved primitive orders. This keeps visible
+  VSOut width, actual-read-set trimming, and compiler-visible scratch rejected
+  as the direct owner for this window.
+- The software LRU32 estimate tracks Xcode's measured VS invocation movement:
+  `sort-min-index` predicts a `+13.07%` miss increase and Xcode reports
+  `+13.39%` VS invocations; `cache-opt-lru32` predicts a `-28.44%` miss drop
+  and Xcode reports `-26.16%` VS invocations.
+- This converts the current bottleneck model from generic hidden backend
+  storage to a narrower rule: hidden VS buffer/device write is approximately
+  fixed per post-transform cache miss / VS invocation for this hot window.
+- This is still a classifier, not yet a production-safe optimizer. Per-draw
+  triangle reordering can change results for alpha blend, depth-equal/z-fight,
+  and other order-sensitive cases. Any production path must be guarded by
+  render-state/material safety and by a cache-miss gate that rejects regressions
+  like naive min-index sorting.
+
+The first implementation step for that path is now in place:
+
+- `DXMT9_MEASURE_INDEX_CACHE_OPT_CANDIDATE=1` builds a cache-aware LRU32
+  reordered index candidate on the draw path without submitting it.
+- The encoder breakdown records candidate draw/skipped counts, candidate index
+  bytes, original LRU16/32/64 misses for the candidate-covered draws, and
+  candidate LRU16/32/64 misses.
+- `run_3dmark05_perf_probe.sh --measure-index-cache-opt-candidate` enables the
+  new gate and implies `--measure-index-reuse`.
+- `summarize_3dmark05_perf.py`,
+  `summarize_xcode_encoder_counters.py`, and
+  `compare_xcode_dxmt_bottlenecks.py` expose the new counters so future
+  full-frame Xcode/dxmt comparisons can show predicted post-transform
+  cache-miss movement next to measured VS invocations and VS buffer writes.
+
+The first no-mutate full-frame scout using that gate completed successfully:
+
+```bash
+scripts/tools/run_3dmark05_perf_probe.sh \
+  --suffix cache-opt-candidate-r1 \
+  --no-gputrace \
+  --measure-index-cache-opt-candidate \
+  --timeout 180
+```
+
+Artifacts:
+
+```text
+experiments/output/app-d3d9-3dmark05-cache-opt-candidate-r1/3dmark05-perf-summary.md
+experiments/output/app-d3d9-3dmark05-cache-opt-candidate-r1/3dmark05-perf-encoders.csv
+experiments/output/app-d3d9-3dmark05-cache-opt-candidate-r1/3dmark05-perf-encoder-streams.csv
+```
+
+Aggregate candidate signal:
+
+| Metric | Value |
+|---|---:|
+| candidate-covered draws / skipped | `36,415 / 6,037` |
+| candidate index bytes scanned | `355,101,390` |
+| original LRU16 / LRU32 / LRU64 misses | `114,251,944 / 108,760,725 / 103,173,552` |
+| candidate LRU16 / LRU32 / LRU64 misses | `87,546,024 / 86,145,304 / 85,568,945` |
+| LRU32 delta | `-22,615,421` (`-20.79%`) |
+
+Top predicted LRU32-gain encoders from the scout:
+
+| seq/enc | draws | triangles | cache-opt covered/skipped | LRU32 delta |
+|---|---:|---:|---:|---:|
+| `21/4` | `590` | `887,051` | `489 / 101` | `-308,374` (`-20.59%`) |
+| `22/4` | `556` | `867,796` | `476 / 80` | `-301,393` (`-20.46%`) |
+| `23/4` | `444` | `697,197` | `379 / 65` | `-236,928` (`-20.19%`) |
+| `27/4` | `429` | `606,844` | `373 / 56` | `-217,239` (`-20.79%`) |
+| `47/11` | `550` | `617,126` | `480 / 70` | `-208,913` (`-19.51%`) |
+
+Interpretation: the full-frame perf log now confirms that the cache-opt
+candidate is not a one-window artifact; large indexed encoders throughout GT1
+show a repeatable `~19-26%` predicted LRU32 miss reduction. This is still a
+CPU-side predictor. The next proof must capture the same run class with
+gputrace and Xcode counters to verify that top-row `VS Invocations` and
+`VS Buffer Device Memory Bytes Written` move with the candidate axis.
+
+The remaining implementation path is:
+
+1. Run a full 3DMark05 GT1 no-mutate scout with
+   `--measure-index-cache-opt-candidate` and export the matching Xcode counters
+   to verify that candidate miss deltas predict the real top-row VS invocation
+   and VS buffer-write movement. The no-gputrace scout is done; the remaining
+   part is the gputrace/Xcode counter capture.
+2. Restrict any real reorder experiment to safe indexed triangle-list draws:
+   no alpha blend, no order-dependent depth/equal behavior, no user pointer or
+   transient path that would amplify CPU upload, and no already-good cache-miss
+   estimate.
+3. Verify on full 3DMark05 GT1, not only mini replay, with the stable-frame
+   gates: draw count, vertex/primitive count, top-row identity, FS invocations,
+   and Xcode `VS Buffer Device Memory Bytes Written`.
+4. If full-frame safety prevents enough reorder coverage, use the cache-miss
+   estimate as a prioritizer for upstream mesh/index-buffer preservation
+   issues rather than as an unconditional runtime rewrite.
+
 ```mermaid
 flowchart TD
   R2["r2 full-frame min-index probe\nresult.json present\nXcode counters complete"] --> Gate["stable-frame proof gate"]
@@ -14140,12 +14289,19 @@ flowchart TD
   RuntimeNext --> SortMini["sort-min-index mini replay\nsame vertices/primitives/FS invocations"]
   SortMini --> Invocations["VS invocations +13.39%\nVS write +13.19%\nVS B/inv -0.18%"]
   Invocations --> CacheSignal["LRU32 miss estimate +13.07%\npost-transform cache locality signal"]
-  CacheSignal --> ReorderGate["next: cache-miss-gated reorder/split candidates\navoid alpha/order-sensitive draws"]
+  RuntimeNext --> CacheOpt["cache-opt-lru32 mini replay\nsame geometry and FS work"]
+  CacheOpt --> CacheWin["GPU -18.46%\nVS invocations -26.16%\nVS write -26.11%\nVS B/inv +0.06%"]
+  CacheSignal --> CacheRule["LRU miss estimate predicts VS invocations"]
+  CacheWin --> CacheRule
+  CacheRule --> Owner["owner narrowed\nfixed hidden write per post-transform cache miss"]
+  Owner --> DiagGate["implemented diagnostic gate\nDXMT9_MEASURE_INDEX_CACHE_OPT_CANDIDATE\nno submitted reorder"]
+  DiagGate --> FullScout["next full GT1 scout\ncandidate miss delta + Xcode counters"]
+  FullScout --> ReorderGate["then: cache-miss-gated safe reorder\navoid alpha/order-sensitive draws"]
 
   classDef hot fill:#ffe8e8,stroke:#b64242,color:#2b0d0d
   classDef good fill:#e8f5e8,stroke:#4d8b4d,color:#102a10
   classDef known fill:#e8f0ff,stroke:#476cb6,color:#0d1833
-  class Reject,FailSignal,StateAB,RuntimeNext,SortMini,ReorderGate hot
-  class PassSignal,Classifier,Codegen,Invocations,CacheSignal good
-  class R2,Gate,Mini,Hot,Tooling,Trim,Xcode,Accept,Candidate known
+  class Reject,FailSignal,StateAB,RuntimeNext,SortMini,ReorderGate,FullScout hot
+  class PassSignal,Classifier,Codegen,Invocations,CacheSignal,CacheWin,CacheRule,Owner,DiagGate good
+  class R2,Gate,Mini,Hot,Tooling,Trim,Xcode,Accept,Candidate,CacheOpt known
 ```

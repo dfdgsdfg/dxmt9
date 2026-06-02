@@ -427,6 +427,12 @@ RenderEncoderSelectorList probeScissorRectRows();
 // Env: DXMT9_MEASURE_INDEX_REUSE.
 bool measureIndexReuse();
 
+// Diagnostic-only: when index-reuse measurement is enabled, build a
+// cache-aware LRU32 reordered index candidate without submitting it and report
+// original-vs-candidate cache-miss estimates in encoder breakdown logs.
+// Env: DXMT9_MEASURE_INDEX_CACHE_OPT_CANDIDATE.
+bool measureIndexCacheOptCandidate();
+
 // Diagnostic-only: directory for dumping replayable indexed triangle geometry
 // payloads. Uses the reverse-indexed-triangle row/class/span filters and the
 // indexed triangle encoder draw range. Env: DXMT9_DUMP_INDEXED_GEOMETRY_DIR.
