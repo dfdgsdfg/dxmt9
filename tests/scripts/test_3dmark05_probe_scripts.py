@@ -360,6 +360,10 @@ class ThreeDMark05ProbeScriptTests(unittest.TestCase):
             "--dump-indexed-geometry",
             "--dump-indexed-geometry-max-draws",
             "3",
+            "--dump-indexed-geometry-vs",
+            "0x7836c3b4c98a465b",
+            "--dump-indexed-geometry-ps",
+            "0x11cc89f85cc54054",
             "--probe-reverse-indexed-triangles-rows",
             "60/0,60/1",
             "--dry-run",
@@ -377,6 +381,14 @@ class ThreeDMark05ProbeScriptTests(unittest.TestCase):
             result.stdout,
         )
         self.assertIn("DXMT9_DUMP_INDEXED_GEOMETRY_MAX_DRAWS=3", result.stdout)
+        self.assertIn(
+            "DXMT9_DUMP_INDEXED_GEOMETRY_VS=0x7836c3b4c98a465b",
+            result.stdout,
+        )
+        self.assertIn(
+            "DXMT9_DUMP_INDEXED_GEOMETRY_PS=0x11cc89f85cc54054",
+            result.stdout,
+        )
         self.assertIn(
             "DXMT9_PROBE_REVERSE_INDEXED_TRIANGLES_ROWS=60/0\\,60/1",
             result.stdout,

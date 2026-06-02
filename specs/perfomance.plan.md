@@ -11643,8 +11643,115 @@ The first `60/2` smoke captured row-local draw indices `0..2`, which are useful
 payload smoke tests but not the dominant shader/state group. A later no-gputrace
 scout showed that row-local ordering can shift between runs; the top group must
 therefore be selected from the same run's probe CSV before capturing payloads.
-For `app-d3d9-3dmark05-current-head-geometry-payload-row60-2-topgroup-r1`, the
-top group appeared at encoder draw indices `234..236`:
+That same-run selection is now scripted:
+
+```bash
+python3 scripts/tools/select_3dmark05_payload_window.py \
+  --probe-draws experiments/output/app-d3d9-3dmark05-current-head-geometry-payload-row60-2-topgroup-r1/3dmark05-perf-indexed-probe-draws.csv \
+  --row 60/2 \
+  --max-draws 3 \
+  --output traces/app-d3d9-3dmark05-current-head-geometry-payload-row60-2-topgroup-r1/analysis/frame60-payload-window-selection.json
+```
+
+Result against the existing topgroup scout CSV: rank `1` shader/state group is
+the expected `60/2` alpha/depth-read/textured group, `71` draws, `87,499` tris,
+cache64 `158,593`, VS `0x7836c3b4c98a465b`, PS `0x11cc89f85cc54054`. The best
+3-draw contiguous capture window in that same CSV is encoder draw index
+`189..191`, with `10,709` tris and cache64 `19,409`. This is the preferred way
+to choose the next payload scout window; older hard-coded windows are only
+valid for the run that produced them.
+
+Follow-up validation showed the stricter lesson: applying a selected
+`189..191` window to a new run produced no geometry payloads. A later run with
+row `60/2` plus VS/PS hash filters also produced no geometry because the same
+target shader/state group moved to row `60/4` in that run. Therefore row-local
+draw windows are useful for interpreting one CSV, but they are not robust
+cross-run selectors. Payload capture for mini replay should prefer shader/state
+filters over hard-coded draw windows.
+
+The geometry dumper now accepts target shader hashes:
+
+```bash
+scripts/tools/run_3dmark05_perf_probe.sh \
+  --suffix current-head-geometry-payload-shaderfilter-anyrow-r2 \
+  --no-gputrace \
+  --encoder-breakdown-seq 60 \
+  --dump-shaders \
+  --dump-indexed-geometry \
+  --dump-indexed-geometry-max-draws 3 \
+  --dump-indexed-geometry-vs 0x7836c3b4c98a465b \
+  --dump-indexed-geometry-ps 0x11cc89f85cc54054 \
+  --probe-reverse-indexed-triangles-classes alpha-blend,depth-read,textured
+```
+
+It also skips invalid index/stream0 ranges before consuming the max-draw cap,
+so early setup draws with the same shader but no replayable stream bytes do not
+hide later valid payloads. Result: the run passed and wrote three valid
+`seq60/enc4` payload triplets for the target VS/PS group:
+
+| Draw index | Draw ordinal | Tris | VS | PS | Index bytes | Stream0 bytes |
+|---:|---:|---:|---|---|---:|---:|
+| `79` | `42345` | `70` | `0x7836c3b4c98a465b` | `0x11cc89f85cc54054` | `420` | `2,928` |
+| `80` | `42346` | `18,179` | `0x7836c3b4c98a465b` | `0x11cc89f85cc54054` | `109,074` | `693,168` |
+| `81` | `42347` | `880` | `0x7836c3b4c98a465b` | `0x11cc89f85cc54054` | `5,280` | `40,416` |
+
+The manifest can now be built by shader group instead of by hard-coded row:
+
+```bash
+python3 scripts/tools/build_3dmark05_mini_replay_manifest.py \
+  --shader-summary traces/app-d3d9-3dmark05-current-head-gputrace-r1/analysis/frame60-shader-dump-summary.csv \
+  --probe-draws experiments/output/app-d3d9-3dmark05-current-head-geometry-payload-shaderfilter-anyrow-r2/3dmark05-perf-indexed-probe-draws.csv \
+  --geometry-dir traces/app-d3d9-3dmark05-current-head-geometry-payload-shaderfilter-anyrow-r2/analysis/geometry \
+  --shader-msl-dir traces/app-d3d9-3dmark05-current-head-geometry-payload-shaderfilter-anyrow-r2/analysis/shaders/msl \
+  --vs 0x7836c3b4c98a465b \
+  --ps 0x11cc89f85cc54054 \
+  --output traces/app-d3d9-3dmark05-current-head-geometry-payload-shaderfilter-anyrow-r2/analysis/frame60-mini-replay-manifest.json
+```
+
+The new manifest is stored at
+`traces/app-d3d9-3dmark05-current-head-geometry-payload-shaderfilter-anyrow-r2/analysis/frame60-mini-replay-manifest.json`.
+Final manifest summary: `3` draws, `114,774B` total index data, `736,512B`
+total stream0 data, `0` missing probe rows, `0` missing shader rows, `0`
+missing draw shader files, and `0` row shader fallbacks. The manifest resolves
+both shader files by direct draw-hash matches.
+
+The first standalone mini replay helper now exists:
+
+```bash
+python3 scripts/tools/run_3dmark05_mini_replay.py \
+  traces/app-d3d9-3dmark05-current-head-geometry-payload-shaderfilter-anyrow-r2/analysis/frame60-mini-replay-manifest.json \
+  --output-dir traces/app-d3d9-3dmark05-current-head-geometry-payload-shaderfilter-anyrow-r2/analysis/mini-replay \
+  --run \
+  --repeat 1
+```
+
+It rewrites the dumped dxmt9 MSL away from the `buffer(30)` argument-buffer
+layout into standalone constant-buffer slots, compiles a small Objective-C++
+Metal app with `xcrun clang++`, creates dummy constant buffers plus a 1x1 white
+texture/sampler, binds the captured stream0/index payloads, and submits the
+three indexed draws. The no-capture smoke passed with:
+
+```text
+mini replay draws=3 repeat=1
+```
+
+The generated summary is stored at
+`traces/app-d3d9-3dmark05-current-head-geometry-payload-shaderfilter-anyrow-r2/analysis/mini-replay/mini-replay-summary.json`.
+For this manifest the replay MSL bindings are:
+
+| Stage | Buffers | Textures | Samplers |
+|---|---|---|---|
+| VS | `1` stream0, `5` draw volatile, `6` VsConsts, `7` FfpVsConsts | none | none |
+| FS | `6` PsConsts, `7` FfpPsConsts | `0` dummy white texture | `0` dummy sampler |
+
+When disk space is available, the next Xcode proof command is the same helper
+with `--capture-path <trace-run>/analysis/mini-replay.gputrace` and a larger
+`--repeat` count to magnify the isolated draw cost. This should let Xcode
+counters answer whether the hidden VS/tiler/backend write bucket reproduces in
+the isolated shader+geometry draw set without Wine/D3D9 frame noise.
+
+Before the selector existed, `app-d3d9-3dmark05-current-head-geometry-payload-row60-2-topgroup-r1`
+was manually captured with encoder draw indices `234..236`:
 
 ```bash
 scripts/tools/run_3dmark05_perf_probe.sh \

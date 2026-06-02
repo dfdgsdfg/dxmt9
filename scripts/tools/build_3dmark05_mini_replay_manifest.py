@@ -158,11 +158,16 @@ def resolve_draw_shader_file(
 def selected_payloads(
     geometries: list[dict[str, str]],
     target_row: str | None,
+    target_vs: str | None,
+    target_ps: str | None,
     max_draws: int,
 ) -> list[dict[str, str]]:
     rows = [
         row for row in geometries
-        if geometry_payload_valid(row) and (target_row is None or row_key(row) == target_row)
+        if geometry_payload_valid(row)
+        and (target_row is None or row_key(row) == target_row)
+        and (target_vs is None or row.get("vs", "").lower() == target_vs.lower())
+        and (target_ps is None or row.get("ps", "").lower() == target_ps.lower())
     ]
     rows.sort(key=lambda row: (row_key(row), geometry_encoder_draw_index(row) or 10**18,
                                geometry_draw_ordinal(row), as_int(row.get("slot"))))
@@ -174,9 +179,9 @@ def build_manifest(args: argparse.Namespace) -> dict[str, Any]:
     probes = probe_index(load_csv(args.probe_draws))
     geometries = load_geometry_payloads(args.geometry_dir)
     shader_files = scan_shader_dump_files(args.shader_msl_dir)
-    payloads = selected_payloads(geometries, args.row, args.max_draws)
+    payloads = selected_payloads(geometries, args.row, args.vs, args.ps, args.max_draws)
     if not payloads:
-        raise SystemExit("no valid geometry payloads matched the requested row")
+        raise SystemExit("no valid geometry payloads matched the requested filters")
 
     manifest_draws: list[dict[str, Any]] = []
     missing_probe_rows = 0
@@ -192,17 +197,19 @@ def build_manifest(args: argparse.Namespace) -> dict[str, Any]:
             missing_probe_rows += 1
         if not shader:
             missing_shader_rows += 1
+        draw_vs_hash = probe.get("vs", payload.get("vs", ""))
+        draw_ps_hash = probe.get("ps", payload.get("ps", ""))
         vs_file, vs_file_source = resolve_draw_shader_file(
             shader_files,
             "vs",
-            probe.get("vs", ""),
+            draw_vs_hash,
             args.shader_msl_dir,
             shader.get("vs_file", ""),
         )
         ps_file, ps_file_source = resolve_draw_shader_file(
             shader_files,
             "fs",
-            probe.get("ps", ""),
+            draw_ps_hash,
             args.shader_msl_dir,
             shader.get("ps_file", ""),
         )
@@ -241,8 +248,8 @@ def build_manifest(args: argparse.Namespace) -> dict[str, Any]:
                 "color_write": probe.get("color_write", ""),
             },
             "shaders": {
-                "vs_hash": probe.get("vs", ""),
-                "ps_hash": probe.get("ps", ""),
+                "vs_hash": draw_vs_hash,
+                "ps_hash": draw_ps_hash,
                 "vsout": probe.get("vsout", ""),
                 "row_vs_hash": shader.get("dxmt_vertex_shader_last", ""),
                 "row_ps_hash": shader.get("dxmt_pixel_shader_last", ""),
@@ -276,6 +283,9 @@ def build_manifest(args: argparse.Namespace) -> dict[str, Any]:
             "probe_draws": str(args.probe_draws),
             "geometry_dir": str(args.geometry_dir),
             "shader_msl_dir": str(args.shader_msl_dir),
+            "row_filter": args.row or "",
+            "vs_filter": args.vs or "",
+            "ps_filter": args.ps or "",
         },
         "summary": {
             "rows": rows,
@@ -298,6 +308,8 @@ def main() -> int:
     parser.add_argument("--geometry-dir", type=Path, required=True)
     parser.add_argument("--shader-msl-dir", type=Path)
     parser.add_argument("--row", help="Optional seq/encoder filter, e.g. 60/2")
+    parser.add_argument("--vs", help="Optional vertex shader hash filter, e.g. 0x7836...")
+    parser.add_argument("--ps", help="Optional pixel shader hash filter, e.g. 0x11cc...")
     parser.add_argument("--max-draws", type=int, default=0)
     parser.add_argument("--output", type=Path, required=True)
     args = parser.parse_args()

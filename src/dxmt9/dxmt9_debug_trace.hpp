@@ -437,6 +437,12 @@ std::string_view indexedGeometryDumpDir();
 // Env: DXMT9_DUMP_INDEXED_GEOMETRY_MAX_DRAWS.
 std::uint32_t indexedGeometryDumpMaxDraws();
 
+// Optional shader-hash filters for indexed geometry payload dumping. Values
+// accept decimal or 0x-prefixed hashes from 3dmark05-perf-indexed-probe-draws.csv.
+// Env: DXMT9_DUMP_INDEXED_GEOMETRY_VS / DXMT9_DUMP_INDEXED_GEOMETRY_PS.
+std::optional<u64> indexedGeometryDumpVertexShaderHash();
+std::optional<u64> indexedGeometryDumpPixelShaderHash();
+
 // Trace budget for the FFP path (emits N trace lines then stops).
 // Env: DXMT_TRACE_FVF.
 int fixedFunctionTraceBudget();

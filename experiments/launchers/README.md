@@ -470,13 +470,38 @@ Commercial / 3rd-party titles (require external prefix):
     target groups, shader-source availability, index-locality availability,
     and whether raw replayable vertex/index payload bytes have been captured.
     Add `--dump-indexed-geometry --dump-indexed-geometry-max-draws N` to a
-    tightly filtered no-mutate scout when those bytes are needed.
+    tightly filtered no-mutate scout when those bytes are needed. Do not reuse
+    a draw-index window from an older run unless the same run's probe CSV proves
+    it still selects the target group. Use
+    `python3 scripts/tools/select_3dmark05_payload_window.py --probe-draws
+    <3dmark05-perf-indexed-probe-draws.csv> --row SEQ/ENC --max-draws N
+    --output <trace-run>/analysis/frameN-payload-window-selection.json` to rank
+    same-run shader/state groups and emit the exact
+    `--probe-indexed-triangle-encoder-draw-min/max` flags for that run. The
+    selector also emits `shader_capture_flags` for cross-run payload scouts. If
+    a second run drifts by row or draw order, prefer shader/state payload filters:
+    `--dump-indexed-geometry-vs HASH --dump-indexed-geometry-ps HASH` plus the
+    existing class filters, for example
+    `--probe-reverse-indexed-triangles-classes alpha-blend,depth-read,textured`.
+    The geometry dumper skips invalid index/stream0 ranges before consuming the
+    max-draw cap, so early matching setup draws without replayable stream bytes
+    do not hide later valid payloads.
     Once payloads exist, build the next harness input with
     `python3 scripts/tools/build_3dmark05_mini_replay_manifest.py
     --shader-summary <frameN-shader-dump-summary.csv> --probe-draws
     <3dmark05-perf-indexed-probe-draws.csv> --geometry-dir
-    <trace-run>/analysis/geometry --row SEQ/ENC --output
-    <frameN-mini-replay-manifest.json>`.
+    <trace-run>/analysis/geometry --vs HASH --ps HASH --output
+    <frameN-mini-replay-manifest.json>`. Use `--row SEQ/ENC` as an additional
+    filter only when the payload scout was intentionally row-local.
+    Prepare an isolated Metal replay app with
+    `python3 scripts/tools/run_3dmark05_mini_replay.py
+    <frameN-mini-replay-manifest.json> --output-dir <trace-run>/analysis/mini-replay`.
+    Add `--run --repeat N` for a no-capture smoke test. After enough disk is
+    available, add `--capture-path <trace-run>/analysis/mini-replay.gputrace`
+    with `--run` to create an Xcode-openable isolated replay capture. The helper
+    rewrites dxmt9's `buffer(30)` argument-buffer MSL into standalone
+    constant-buffer bindings and emits `mini-replay-summary.json` with the exact
+    buffer/texture/sampler slots it bound.
     `--probe-reverse-indexed-triangles-stream0-span-min BYTES` and
     `--optimize-screen-blend-index-order-stream0-span-min BYTES` add a direct
     minimum original stream0 byte-span gate after the row/class filters. Use

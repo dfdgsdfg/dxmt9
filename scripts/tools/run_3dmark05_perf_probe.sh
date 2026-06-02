@@ -62,6 +62,8 @@ force_cull_mode=
 measure_index_reuse=0
 dump_indexed_geometry=0
 dump_indexed_geometry_max_draws=${DXMT9_DUMP_INDEXED_GEOMETRY_MAX_DRAWS:-16}
+dump_indexed_geometry_vs=
+dump_indexed_geometry_ps=
 aggressive_color_dontcare=0
 aggressive_depth_dontcare=0
 disable_cull=0
@@ -324,6 +326,12 @@ Options:
   --dump-indexed-geometry-max-draws N
                       Set DXMT9_DUMP_INDEXED_GEOMETRY_MAX_DRAWS=N
                       (default: 16)
+  --dump-indexed-geometry-vs HASH
+                      Set DXMT9_DUMP_INDEXED_GEOMETRY_VS=HASH to dump only
+                      draws using this vertex shader hash
+  --dump-indexed-geometry-ps HASH
+                      Set DXMT9_DUMP_INDEXED_GEOMETRY_PS=HASH to dump only
+                      draws using this pixel shader hash
   --aggressive-color-dontcare
                       Set DXMT9_AGGRESSIVE_COLOR_DONTCARE=1 for the run
   --aggressive-depth-dontcare
@@ -710,6 +718,14 @@ while (($#)); do
       ;;
     --dump-indexed-geometry-max-draws)
       dump_indexed_geometry_max_draws=${2:?missing value for --dump-indexed-geometry-max-draws}
+      shift 2
+      ;;
+    --dump-indexed-geometry-vs)
+      dump_indexed_geometry_vs=${2:?missing value for --dump-indexed-geometry-vs}
+      shift 2
+      ;;
+    --dump-indexed-geometry-ps)
+      dump_indexed_geometry_ps=${2:?missing value for --dump-indexed-geometry-ps}
       shift 2
       ;;
     --aggressive-color-dontcare)
@@ -1470,6 +1486,12 @@ if (( dump_indexed_geometry )); then
     "DXMT9_DUMP_INDEXED_GEOMETRY_DIR=$geometry_dump_dir"
     "DXMT9_DUMP_INDEXED_GEOMETRY_MAX_DRAWS=$dump_indexed_geometry_max_draws"
   )
+  if [[ -n "$dump_indexed_geometry_vs" ]]; then
+    env_args+=("DXMT9_DUMP_INDEXED_GEOMETRY_VS=$dump_indexed_geometry_vs")
+  fi
+  if [[ -n "$dump_indexed_geometry_ps" ]]; then
+    env_args+=("DXMT9_DUMP_INDEXED_GEOMETRY_PS=$dump_indexed_geometry_ps")
+  fi
 fi
 
 if (( aggressive_depth_dontcare )); then

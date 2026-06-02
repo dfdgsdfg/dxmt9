@@ -3050,6 +3050,20 @@ bool writeTextFile(const std::filesystem::path& path, const std::string& text) {
   return out.good();
 }
 
+bool indexedGeometryDumpShaderMatches(core::FlatDrawStateView drawState) {
+  const auto vertexFilter = debug::indexedGeometryDumpVertexShaderHash();
+  const auto pixelFilter = debug::indexedGeometryDumpPixelShaderHash();
+  if (!vertexFilter.has_value() && !pixelFilter.has_value()) {
+    return true;
+  }
+  if (!drawState.hasShaderContext()) {
+    return false;
+  }
+  const auto& shader = drawState.shaderContext();
+  return (!vertexFilter.has_value() || shader.vertexShader.hash == *vertexFilter) &&
+         (!pixelFilter.has_value() || shader.pixelShader.hash == *pixelFilter);
+}
+
 void maybeDumpIndexedGeometryPayload(
     const ActiveEncoderBreakdown* encoderBreakdown,
     std::span<const u8> indexBytes,
@@ -3063,6 +3077,8 @@ void maybeDumpIndexedGeometryPayload(
     u64 stream0Stride,
     u64 stream0Handle,
     u64 indexBufferHandle,
+    u64 vertexShaderHash,
+    u64 pixelShaderHash,
     u64 drawOrdinal,
     u64 primitiveCount) {
   const auto dir = debug::indexedGeometryDumpDir();
@@ -3071,17 +3087,6 @@ void maybeDumpIndexedGeometryPayload(
   }
   const std::uint32_t maxDumps = debug::indexedGeometryDumpMaxDraws();
   if (maxDumps == 0u) {
-    return;
-  }
-
-  static std::atomic<std::uint32_t> dumpCount{0u};
-  std::uint32_t slot = dumpCount.load(std::memory_order_relaxed);
-  while (slot < maxDumps &&
-         !dumpCount.compare_exchange_weak(slot,
-                                          slot + 1u,
-                                          std::memory_order_relaxed)) {
-  }
-  if (slot >= maxDumps) {
     return;
   }
 
@@ -3125,6 +3130,20 @@ void maybeDumpIndexedGeometryPayload(
       streamByteCount = static_cast<std::size_t>(streamCount64);
     }
   }
+  if (!indexRangeValid || !streamRangeValid) {
+    return;
+  }
+
+  static std::atomic<std::uint32_t> dumpCount{0u};
+  std::uint32_t slot = dumpCount.load(std::memory_order_relaxed);
+  while (slot < maxDumps &&
+         !dumpCount.compare_exchange_weak(slot,
+                                          slot + 1u,
+                                          std::memory_order_relaxed)) {
+  }
+  if (slot >= maxDumps) {
+    return;
+  }
 
   const auto seqId = encoderBreakdown->stats.seqId;
   const auto encoderIndex = encoderBreakdown->stats.encoderIndex;
@@ -3160,6 +3179,8 @@ void maybeDumpIndexedGeometryPayload(
        << "base_vertex=" << baseVertexIndex << "\n"
        << "index_buffer=0x" << std::hex << indexBufferHandle << std::dec << "\n"
        << "stream0_handle=0x" << std::hex << stream0Handle << std::dec << "\n"
+       << "vs=0x" << std::hex << vertexShaderHash << std::dec << "\n"
+       << "ps=0x" << std::hex << pixelShaderHash << std::dec << "\n"
        << "stream0_offset=" << stream0Offset << "\n"
        << "stream0_stride=" << stream0Stride << "\n"
        << "min_index=" << indexReuse.minIndex << "\n"
@@ -7094,7 +7115,8 @@ bool encodeDraw(EncodeContext& ctx,
       bool dumpIndexedGeometryEligible = false;
       if (dumpIndexedGeometryRequested &&
           reverseIndexedTriangleRowMatches(encoderBreakdown) &&
-          indexedTriangleEncoderDrawRangeMatches(encoderBreakdown)) {
+          indexedTriangleEncoderDrawRangeMatches(encoderBreakdown) &&
+          indexedGeometryDumpShaderMatches(drawState)) {
         dumpIndexedGeometryEligible =
             indexedTriangleClassMatches(
                 debug::probeReverseIndexedTrianglesClassFilter(),
@@ -7199,6 +7221,12 @@ bool encodeDraw(EncodeContext& ctx,
               stream0.lastStride,
               stream0.lastHandle,
               hot.indexBuffer.value,
+              drawState.hasShaderContext()
+                  ? drawState.shaderContext().vertexShader.hash
+                  : 0u,
+              drawState.hasShaderContext()
+                  ? drawState.shaderContext().pixelShader.hash
+                  : 0u,
               drawOrdinal,
               primitiveCount);
         }

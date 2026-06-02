@@ -208,6 +208,112 @@ class BuildMiniReplayManifestTests(unittest.TestCase):
             self.assertEqual(manifest["draws"][0]["encoder_draw_index"], 189)
             self.assertEqual(manifest["draws"][0]["draw_ordinal"], 42428)
 
+    def test_manifest_filters_payloads_by_shader_hash_without_row(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            shaders = root / "shaders.csv"
+            probes = root / "probe.csv"
+            geometry = root / "geometry"
+            shader_dir = root / "shaders" / "msl"
+            output = root / "manifest.json"
+            geometry.mkdir()
+            shader_dir.mkdir(parents=True)
+            (shader_dir / "translated-vs-shader-2748-source-1.metal").write_text(
+                "// target vs\n", encoding="utf-8")
+            (shader_dir / "translated-fs-shader-3567-source-2.metal").write_text(
+                "// target ps\n", encoding="utf-8")
+            (shader_dir / "translated-vs-shader-291-source-3.metal").write_text(
+                "// other vs\n", encoding="utf-8")
+            (shader_dir / "translated-fs-shader-1110-source-4.metal").write_text(
+                "// other ps\n", encoding="utf-8")
+            write_csv(shaders, [
+                {"seq": 60, "enc": 4},
+                {"seq": 60, "enc": 1},
+            ])
+            write_csv(probes, [
+                {
+                    "seq": 60,
+                    "encoder": 4,
+                    "encoder_draw_index": 80,
+                    "draw_ordinal": 42346,
+                    "primitive_count": 18179,
+                    "vs": "0xabc",
+                    "ps": "0xdef",
+                },
+                {
+                    "seq": 60,
+                    "encoder": 1,
+                    "encoder_draw_index": 10,
+                    "draw_ordinal": 42010,
+                    "primitive_count": 1000,
+                    "vs": "0x123",
+                    "ps": "0x456",
+                },
+            ])
+
+            for seq, enc, ordinal, vs, ps in [
+                (60, 4, 42346, "0xabc", "0xdef"),
+                (60, 1, 42010, "0x123", "0x456"),
+            ]:
+                stem = geometry / f"seq{seq}-enc{enc}-draw{ordinal}-slot0"
+                stem.with_suffix(".index.bin").write_bytes(b"ii")
+                stem.with_suffix(".stream0.bin").write_bytes(b"ssss")
+                stem.with_suffix(".meta").write_text(
+                    "\n".join([
+                        f"seq={seq}",
+                        f"encoder={enc}",
+                        "encoder_draw_index=80",
+                        f"draw_ordinal={ordinal}",
+                        "primitive_count=1",
+                        "index_count=3",
+                        f"vs={vs}",
+                        f"ps={ps}",
+                        "index_byte_count=2",
+                        "stream0_byte_count=4",
+                        "index_range_valid=1",
+                        "stream0_range_valid=1",
+                        "wrote_index=1",
+                        "wrote_stream0=1",
+                    ]),
+                    encoding="utf-8",
+                )
+
+            result = subprocess.run(
+                [
+                    sys.executable,
+                    str(SCRIPT),
+                    "--shader-summary",
+                    str(shaders),
+                    "--probe-draws",
+                    str(probes),
+                    "--geometry-dir",
+                    str(geometry),
+                    "--shader-msl-dir",
+                    str(shader_dir),
+                    "--vs",
+                    "0xabc",
+                    "--ps",
+                    "0xdef",
+                    "--output",
+                    str(output),
+                ],
+                text=True,
+                capture_output=True,
+                check=False,
+            )
+
+            self.assertEqual(result.returncode, 0, result.stderr)
+            manifest = json.loads(output.read_text(encoding="utf-8"))
+            self.assertEqual(manifest["summary"]["rows"], ["60/4"])
+            self.assertEqual(manifest["summary"]["draw_count"], 1)
+            self.assertEqual(manifest["sources"]["vs_filter"], "0xabc")
+            self.assertEqual(manifest["sources"]["ps_filter"], "0xdef")
+            self.assertEqual(manifest["draws"][0]["row"], "60/4")
+            self.assertEqual(manifest["draws"][0]["shaders"]["vs_hash"], "0xabc")
+            self.assertEqual(manifest["draws"][0]["shaders"]["ps_hash"], "0xdef")
+            self.assertEqual(manifest["draws"][0]["shaders"]["vs_file_source"], "draw-hash")
+            self.assertEqual(manifest["draws"][0]["shaders"]["ps_file_source"], "draw-hash")
+
 
 if __name__ == "__main__":
     unittest.main()

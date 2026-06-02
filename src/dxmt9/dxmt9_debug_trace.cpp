@@ -883,6 +883,18 @@ std::uint32_t indexedGeometryDumpMaxDraws() {
   return limit;
 }
 
+std::optional<u64> indexedGeometryDumpVertexShaderHash() {
+  static const std::optional<u64> value =
+      util::getenvU64Auto("DXMT9_DUMP_INDEXED_GEOMETRY_VS");
+  return value;
+}
+
+std::optional<u64> indexedGeometryDumpPixelShaderHash() {
+  static const std::optional<u64> value =
+      util::getenvU64Auto("DXMT9_DUMP_INDEXED_GEOMETRY_PS");
+  return value;
+}
+
 int fixedFunctionTraceBudget() {
   static const int budget = [] {
     const auto env = util::getenvString("DXMT_TRACE_FVF");
