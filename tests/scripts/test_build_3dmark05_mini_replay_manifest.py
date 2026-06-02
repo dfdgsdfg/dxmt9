@@ -365,6 +365,75 @@ class BuildMiniReplayManifestTests(unittest.TestCase):
             self.assertEqual(manifest["draws"][0]["encoder_draw_index"], 189)
             self.assertEqual(manifest["draws"][0]["draw_ordinal"], 42428)
 
+    def test_manifest_sorts_encoder_draw_index_zero_before_one(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            shaders = root / "shaders.csv"
+            probes = root / "probe.csv"
+            geometry = root / "geometry"
+            output = root / "manifest.json"
+            geometry.mkdir()
+            write_csv(shaders, [{"seq": 60, "enc": 2}])
+            write_csv(probes, [
+                {
+                    "seq": 60,
+                    "encoder": 2,
+                    "encoder_draw_index": draw,
+                    "draw_ordinal": 42000 + draw,
+                    "primitive_count": 1,
+                }
+                for draw in [0, 1]
+            ])
+            for draw in [1, 0]:
+                stem = geometry / f"seq60-enc2-draw{42000 + draw}-slot0"
+                stem.with_suffix(".index.bin").write_bytes(b"i")
+                stem.with_suffix(".stream0.bin").write_bytes(b"s")
+                stem.with_suffix(".meta").write_text(
+                    "\n".join([
+                        "seq=60",
+                        "encoder=2",
+                        f"encoder_draw_index={draw}",
+                        f"draw_ordinal={42000 + draw}",
+                        "primitive_count=1",
+                        "index_count=3",
+                        "index_byte_count=1",
+                        "stream0_byte_count=1",
+                        "index_range_valid=1",
+                        "stream0_range_valid=1",
+                        "wrote_index=1",
+                        "wrote_stream0=1",
+                    ]),
+                    encoding="utf-8",
+                )
+
+            result = subprocess.run(
+                [
+                    sys.executable,
+                    str(SCRIPT),
+                    "--shader-summary",
+                    str(shaders),
+                    "--probe-draws",
+                    str(probes),
+                    "--geometry-dir",
+                    str(geometry),
+                    "--row",
+                    "60/2",
+                    "--output",
+                    str(output),
+                ],
+                text=True,
+                capture_output=True,
+                check=False,
+            )
+
+            self.assertEqual(result.returncode, 0, result.stderr)
+            manifest = json.loads(output.read_text(encoding="utf-8"))
+            self.assertEqual(
+                [draw["encoder_draw_index"] for draw in manifest["draws"]],
+                [0, 1],
+            )
+            self.assertEqual(manifest["summary"]["draw_ordinals"], [42000, 42001])
+
     def test_manifest_filters_payloads_by_shader_hash_without_row(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)

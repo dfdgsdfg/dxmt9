@@ -138,6 +138,11 @@ def geometry_encoder_draw_index(row: dict[str, str]) -> int | None:
     return None
 
 
+def geometry_encoder_draw_sort_index(row: dict[str, str]) -> int:
+    index = geometry_encoder_draw_index(row)
+    return index if index is not None else 10**18
+
+
 def load_geometry_payloads(path: Path) -> list[dict[str, str]]:
     if not path.exists():
         raise SystemExit(f"missing geometry dir: {path}")
@@ -269,7 +274,7 @@ def selected_payloads(
         )
         and (not target_draw_ordinals or geometry_draw_ordinal(row) in target_draw_ordinals)
     ]
-    rows.sort(key=lambda row: (row_key(row), geometry_encoder_draw_index(row) or 10**18,
+    rows.sort(key=lambda row: (row_key(row), geometry_encoder_draw_sort_index(row),
                                geometry_draw_ordinal(row), as_int(row.get("slot"))))
     return rows[:max_draws] if max_draws > 0 else rows
 

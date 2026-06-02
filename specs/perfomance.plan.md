@@ -12488,6 +12488,83 @@ scalar depth clear/load issue. The next replay must preserve a wider `60/2`
 draw prefix or the whole render encoder's geometry/material sequence so the
 same primitive/binning/backend state exists before the measured draws.
 
+The wider `60/2` payload dump is now available as the next replay candidate:
+
+- Probe output:
+  `experiments/output/app-d3d9-3dmark05-screen-blend-row60-2-full187-payload-r1/3dmark05-perf-indexed-probe-draws.csv`
+- Geometry/shader dump:
+  `traces/app-d3d9-3dmark05-screen-blend-row60-2-full187-payload-r1/analysis/`
+- Manifest:
+  `traces/app-d3d9-3dmark05-screen-blend-row60-2-full187-payload-r1/analysis/frame60-mini-replay-manifest-encoder2-113.json`
+- No-capture smoke output:
+  `traces/app-d3d9-3dmark05-screen-blend-row60-2-full187-payload-r1/analysis/mini-replay-encoder2-113-depthinput-smoke/`
+
+`full187` is a historical suffix from the requested draw cap; the actual
+target row coverage is `seq=60`, `encoder=2`, encoder-local draw indices
+`0..112`, and global draw ordinals `42590..42702`. The probe CSV also includes
+neighbor encoders from the same sequence, but the material/attachment replay
+candidate is the 113-draw encoder2 slice:
+
+| Group | Rows | Encoder draw range | Draw ordinal range | Primitives | Vertices |
+|---|---:|---:|---:|---:|---:|
+| `60/0` | `24` | `0..23` | `42356..42379` | `85,000` | `255,000` |
+| `60/1` | `210` | `0..209` | `42380..42589` | `313,853` | `941,559` |
+| `60/2` | `113` | `0..112` | `42590..42702` | `390,345` | `1,171,035` |
+| `60/3..8` | `9` | mixed | `42703..42712` | `32` | `96` |
+
+The 113-draw manifest has `0` missing probe rows, `0` missing shader rows,
+`0` missing draw shader files, and uses per-draw hash shader resolution for
+all VS/PS files (`draw-hash` for `113/113` VS and `113/113` PS). It contains
+`2,342,070B` index payload, `13,224,312B` stream0 payload, `1,223,112B`
+uniform payload, `22` shader variants, and `36` scissor draws.
+
+While building this manifest, `build_3dmark05_mini_replay_manifest.py` exposed
+a fidelity bug: `encoder_draw_index=0` was sorted after the rest because the
+sort key treated `0` as false. The tool now treats only `None` as missing, and
+`tests/scripts/test_build_3dmark05_mini_replay_manifest.py` locks the
+`0,1` ordering case. The regenerated manifest preserves ordinal order
+`42590..42702`.
+
+No-capture smoke command:
+
+```bash
+python3 scripts/tools/run_3dmark05_mini_replay.py \
+  traces/app-d3d9-3dmark05-screen-blend-row60-2-full187-payload-r1/analysis/frame60-mini-replay-manifest-encoder2-113.json \
+  --output-dir traces/app-d3d9-3dmark05-screen-blend-row60-2-full187-payload-r1/analysis/mini-replay-encoder2-113-depthinput-smoke \
+  --primitive-order original \
+  --draw-order original \
+  --depth-input traces/app-d3d9-3dmark05-depth-attachment-dump-r1/analysis/frame60-2-depth.bin \
+  --run --repeat 1
+```
+
+Result: `mini replay draws=113 repeat=1`. This proves the wider replay bundle
+compiles and runs.
+
+The first Xcode replay for the 113-draw bundle is also available:
+
+- Raw capture:
+  `traces/app-d3d9-3dmark05-screen-blend-row60-2-full187-payload-r1/analysis/mini-replay-encoder2-113-depthinput.gputrace`
+- Capture size: `35MiB`.
+- Xcode Summary after replay: `113` draw calls, `1,171,035` vertices,
+  `18.50ms` GPU time, performance state `Medium`, memory `59.13MiB`
+  (`6.84MiB` textures, `52.29MiB` buffers).
+- Xcode Counters UI, single render encoder row: execution cost `100%`,
+  ALU limiter `3.16%`, buffer read limiter `18.56%`, buffer write limiter
+  `24.05%`, MMU limiter `37.09%`, last-level-cache limiter `35.13%`,
+  shaded-vertex-read limiter `3.01%`, cull limiter `3.99%`, clip limiter
+  `1.85%`.
+
+This is much closer to the original hot row's GPU time (`20.327ms`) than the
+16-draw depth-input replay (`1.082ms`) and, at the UI-counter level, it
+reintroduces strong buffer-write/MMU/LLC pressure. However, this is still a
+provisional signal because `Export Encoder Counters` did not leave a CSV in the
+trace directories during this pass, and the performance-embedded export save
+panel kept `Save` disabled. The next gate remains a successful Xcode encoder
+counter CSV for this exact replay, followed by
+`scripts/tools/summarize_xcode_encoder_counters.py` so `VS Buffer Device Memory
+Bytes Written`, tiled vertex bytes, primitive block bytes, VS invocations, and
+bytes/VS invocation can be compared against the original `60/2` row.
+
 ```mermaid
 flowchart TD
   Scout["payload16 no-gputrace scout\n60/2 draw 71..86\n16 payload triplets"] --> Full["16-draw manifest\n6 VS/PS pairs"]
@@ -12507,12 +12584,16 @@ flowchart TD
   Depth0 --> DepthInput["raw D24X8 depth-input probe\nGPU 1.08ms\nFS inv 0.79M\nVS buffer still 31.99MiB"]
   DepthInput --> Compare["compare with original 60/2\n981.17MiB VS buffer\n1602B/VS inv"]
   Compare --> Gap["remaining fidelity gap\nmissing pass/depth/tiler context\nnot fragment overdraw"]
-  Gap --> Next["next experiment\nreplay wider 60/2 prefix\nor full 60/2 render encoder"]
+  Gap --> Encoder2Dump["60/2 encoder2 payload\n113 draws\n390k primitives\n22 shader variants"]
+  Encoder2Dump --> SortFix["manifest order fix\nencoder_draw_index=0 preserved"]
+  SortFix --> Encoder2Smoke["depth-fed no-capture smoke\nmini replay draws=113"]
+  Encoder2Smoke --> Encoder2Xcode["Xcode replay UI\nGPU 18.50ms\n1.17M vertices\nbuffer/MMU/LLC pressure"]
+  Encoder2Xcode --> Next["next experiment\nsuccessful encoder-counter CSV\nfor 113-draw replay"]
 
   classDef hot fill:#ffe8e8,stroke:#b64242,color:#2b0d0d
   classDef known fill:#e8f0ff,stroke:#476cb6,color:#0d1833
   class Compile0,ScissorBug,Gap,Next hot
-  class Scout,Full,SinglePSO,Slice,SlotFix,StreamDump,Smoke,MultiPSO,FullSmoke,XcodeMini,ScissorFix,XcodeScissor,Depth0,DepthInput,Compare known
+  class Scout,Full,SinglePSO,Slice,SlotFix,StreamDump,Smoke,MultiPSO,FullSmoke,XcodeMini,ScissorFix,XcodeScissor,Depth0,DepthInput,Compare,Encoder2Dump,SortFix,Encoder2Smoke,Encoder2Xcode known
 ```
 
 Smoke validation for the current pass-shape manifest:
