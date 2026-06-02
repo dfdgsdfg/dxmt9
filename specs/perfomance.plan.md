@@ -9913,3 +9913,202 @@ flowchart TD
   class Hidden,Next hot
   class Dump,Compile,Original,Live,Position,Gap,Shrink,Runtime,Scratch,Secondary known
 ```
+
+### Per-Draw Index Locality / Stream-Span Instrumentation
+
+The current surviving hypothesis is no longer visible VSOut width, depth
+compare/write state, cull state, scissor rectangle coverage, or simple draw-size
+partitioning. It is an Apple hidden vertex/tiler/backend storage response to
+primitive pressure, row shape, or order/locality. The existing encoder-level
+`--measure-index-reuse` counters were too coarse for the historical/current
+`60/4` anomaly because they could not answer whether the same scoped draw set
+had the same index locality and stream span.
+
+The indexed probe draw line now records both the original index stream and the
+effective submitted index stream for each considered draw:
+
+```text
+original/effective index availability
+original/effective unique index count
+original/effective min/max/span, first/last index
+original/effective cache miss estimates for 16/32/64-entry caches
+original/effective adjacent index delta sum/max and backward jumps
+original/effective per-triangle index-span sum/max
+original/effective stream0 byte min/max/span
+```
+
+These fields are written to
+`3dmark05-perf-indexed-probe-draws.csv`; the Markdown summary shows the compact
+`orig uniq/span/c64` and `eff uniq/span/c64` columns for the first draw samples.
+
+Validation smoke:
+
+```bash
+scripts/tools/run_3dmark05_perf_probe.sh \
+  --suffix index-locality-smoke-r1 \
+  --frame 60 \
+  --encoder-breakdown-seq 60 \
+  --timeout 180 \
+  --no-gputrace \
+  --probe-reverse-indexed-triangles \
+  --probe-reverse-indexed-triangles-row 60/4 \
+  --probe-reverse-indexed-triangles-classes large4096,alpha-blend \
+  --measure-index-reuse \
+  --top 4 \
+  --hot-gpu-share 95
+```
+
+Artifacts:
+
+```text
+experiments/output/app-d3d9-3dmark05-index-locality-smoke-r1/3dmark05-perf-summary.md
+experiments/output/app-d3d9-3dmark05-index-locality-smoke-r1/3dmark05-perf-indexed-probe-draws.csv
+```
+
+Smoke result:
+
+| Bucket | Draws | Prims | Original unique | Original cache64 | Effective cache64 | Original stream span |
+|---|---:|---:|---:|---:|---:|---:|
+| Applied `60/4 large4096+alpha` | `18` | `99,681` | `122,054` | `164,535` | `164,496` | `2,928,864B` |
+| Skipped `60/4` draws | `283` | `302,162` | `466,554` | `551,028` | `551,028` | `11,190,504B` |
+
+Derived ratios:
+
+| Bucket | cache64 / index ref | unique / index ref | stream span / draw |
+|---|---:|---:|---:|
+| Applied `large4096+alpha` | `0.550x` | `0.408x` | `162,715B` |
+| Skipped | `0.608x` | `0.515x` | `39,542B` |
+
+Interpretation:
+
+- The new fields are populated in a normal no-gputrace run, so the existing
+  probe/finalizer path can now pre-classify draw locality before spending a
+  gputrace capture.
+- The applied draw count is `18`, not the earlier `16`, which immediately
+  exposes row-shape drift in the current smoke. This reinforces the rule that
+  historical/current order anomalies need exact per-draw shape checks before
+  promotion.
+- Reversing the large alpha subset barely changes cache64 estimates
+  (`164,535 -> 164,496`), so a future Xcode win should not be interpreted as a
+  simple post-transform cache improvement.
+- The applied large alpha draws have a much larger stream0 span per draw than
+  the skipped rows. The next high-signal probe should classify or perturb large
+  stream-span primitive pressure directly, then require strict Xcode row and
+  geometry gates.
+
+```mermaid
+flowchart TD
+  Owner["surviving owner\nhidden Apple vertex/tiler/backend storage"] --> Gap["old evidence gap\nencoder-level reuse only"]
+  Gap --> Instrument["per-draw probe locality fields\noriginal and effective index streams"]
+  Instrument --> CSV["indexed-probe-draws.csv\nunique/span/cache/delta/stream span"]
+  CSV --> Smoke["index-locality-smoke-r1\n60/4 large4096 + alpha"]
+  Smoke --> Drift["18 applied draws\nnot historical 16\nrow-shape drift visible"]
+  Smoke --> Cache["cache64 barely changes\n164535 -> 164496"]
+  Smoke --> Span["large applied stream span\n162715B per draw"]
+  Cache --> RejectCache["do not explain wins as\nsimple vertex-cache improvement"]
+  Span --> Next["next gputrace candidate\nlarge stream-span / primitive-pressure probe"]
+  Drift --> Gate["require exact per-draw shape\nbefore Xcode proof"]
+  RejectCache --> Next
+  Gate --> Next
+
+  classDef hot fill:#ffe8e8,stroke:#b64242,color:#2b0d0d
+  classDef known fill:#e8f0ff,stroke:#476cb6,color:#0d1833
+  class Owner,RejectCache,Next hot
+  class Gap,Instrument,CSV,Smoke,Drift,Cache,Span,Gate known
+```
+
+### Stream0 Span Threshold Probe
+
+The `large4096+alpha` class gate still mixes material state with backend
+pressure. The per-draw locality smoke showed that the applied draws are
+distinguished more directly by stream0 byte span than by cache locality. Added
+minimum stream0-span gates so reverse/order probes can target that pressure
+axis directly:
+
+```text
+DXMT9_PROBE_REVERSE_INDEXED_TRIANGLES_STREAM0_SPAN_MIN=BYTES
+DXMT9_OPTIMIZE_SCREEN_BLEND_INDEX_ORDER_STREAM0_SPAN_MIN=BYTES
+
+scripts/tools/run_3dmark05_perf_probe.sh \
+  --probe-reverse-indexed-triangles-stream0-span-min BYTES
+
+scripts/tools/run_3dmark05_perf_probe.sh \
+  --optimize-screen-blend-index-order-stream0-span-min BYTES
+```
+
+The gate is an additional AND predicate after row/class selection. It uses the
+original index stream and stream0 stride, so it can distinguish large vertex
+range pressure without relying on alpha/scissor/material labels. A zero or
+unset threshold keeps existing behavior.
+
+Validation smoke:
+
+```bash
+scripts/tools/run_3dmark05_perf_probe.sh \
+  --suffix reverse-row-60-4-streamspan196608-smoke-r1 \
+  --frame 60 \
+  --encoder-breakdown-seq 60 \
+  --timeout 180 \
+  --no-gputrace \
+  --probe-reverse-indexed-triangles \
+  --probe-reverse-indexed-triangles-row 60/4 \
+  --probe-reverse-indexed-triangles-stream0-span-min 196608 \
+  --measure-index-reuse \
+  --top 4 \
+  --hot-gpu-share 95
+```
+
+Artifacts:
+
+```text
+experiments/output/app-d3d9-3dmark05-reverse-row-60-4-streamspan196608-smoke-r1/3dmark05-perf-summary.md
+experiments/output/app-d3d9-3dmark05-reverse-row-60-4-streamspan196608-smoke-r1/3dmark05-perf-indexed-probe-draws.csv
+```
+
+Scope result:
+
+| Metric | Value |
+|---|---:|
+| Probe draw rows | `523` |
+| Eligible/applied draws | `15 / 15` |
+| Reordered index bytes | `935,046B` |
+| Minimum applied stream0 span | `204,600B` |
+| Maximum skipped stream0 span | `195,456B` |
+
+Applied draw indices:
+
+```text
+33,146,150,164,165,207,214,215,236,278,402,409,410,431,473
+```
+
+Interpretation:
+
+- The threshold gate is exact: every applied draw is above `196,608B`, and the
+  largest skipped draw is below the threshold.
+- The selected draw set includes both scissored and non-scissored alpha draws,
+  so this filter is no longer just the historical `large4096+alpha+scissor`
+  predicate.
+- The no-gputrace row shape is not stable (`523` considered row draws versus
+  the earlier `301`/`260`-range `60/4` shapes), so this smoke proves the filter
+  implementation but is not yet an optimization proof.
+- The next high-signal Xcode candidate should first find a threshold/class
+  combination whose no-gputrace and gputrace summaries preserve hot-row
+  draw/vertex/triangle shape, then run the strict finalizer gates.
+
+```mermaid
+flowchart TD
+  SpanSignal["per-draw locality smoke\nlarge applied stream span"] --> Filter["stream0 span min gate"]
+  Filter --> Env["reverse/order env gates\nSTREAM0_SPAN_MIN"]
+  Env --> Smoke196["60/4 span >= 196608 smoke"]
+  Smoke196 --> Exact["scope exact\nmin applied 204600\nmax skipped 195456"]
+  Smoke196 --> Drift["row shape unstable\n523 considered draws"]
+  Exact --> Useful["filter is valid\nfor primitive-pressure classification"]
+  Drift --> NotProof["not an Xcode proof yet"]
+  Useful --> Next["next: shape-stable threshold/class combo\nthen gputrace + Xcode counters"]
+  NotProof --> Next
+
+  classDef hot fill:#ffe8e8,stroke:#b64242,color:#2b0d0d
+  classDef known fill:#e8f0ff,stroke:#476cb6,color:#0d1833
+  class Drift,NotProof,Next hot
+  class SpanSignal,Filter,Env,Smoke196,Exact,Useful known
+```

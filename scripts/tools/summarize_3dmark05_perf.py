@@ -698,6 +698,42 @@ PROBE_DRAW_CSV_KEYS = (
     "scissor_rect_eligible",
     "scissor_rect_applied",
     "reorder_bytes",
+    "original_index_available",
+    "original_index_unique",
+    "original_index_min",
+    "original_index_max",
+    "original_index_span",
+    "original_index_first",
+    "original_index_last",
+    "original_cache_miss16",
+    "original_cache_miss32",
+    "original_cache_miss64",
+    "original_adjacent_delta_sum",
+    "original_adjacent_delta_max",
+    "original_backward_jumps",
+    "original_triangle_index_span_sum",
+    "original_triangle_index_span_max",
+    "original_stream0_byte_min",
+    "original_stream0_byte_max",
+    "original_stream0_byte_span",
+    "effective_index_available",
+    "effective_index_unique",
+    "effective_index_min",
+    "effective_index_max",
+    "effective_index_span",
+    "effective_index_first",
+    "effective_index_last",
+    "effective_cache_miss16",
+    "effective_cache_miss32",
+    "effective_cache_miss64",
+    "effective_adjacent_delta_sum",
+    "effective_adjacent_delta_max",
+    "effective_backward_jumps",
+    "effective_triangle_index_span_sum",
+    "effective_triangle_index_span_max",
+    "effective_stream0_byte_min",
+    "effective_stream0_byte_max",
+    "effective_stream0_byte_span",
     "primitive_type",
     "primitive_count",
     "vertex_count",
@@ -1310,8 +1346,12 @@ def write_markdown(
             f"| `reorder_bytes` | `{fmt(sum_key(probe_draws, 'reorder_bytes'))}` |"
         )
         lines.append("")
-        lines.append("| seq | enc | draw | applied | opt | srect | prims | scissor | scissor rect | original rect | stream0 | ib | pso |")
-        lines.append("|---:|---:|---:|---:|---:|---:|---:|---:|---|---|---|---|---|")
+        lines.append(
+            "| seq | enc | draw | applied | opt | srect | prims | "
+            "orig uniq/span/c64 | eff uniq/span/c64 | scissor | "
+            "scissor rect | original rect | stream0 | ib | pso |"
+        )
+        lines.append("|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---|---|---|---|---|")
         for row in probe_draws[:32]:
             rect = (
                 f"{fmt(row.get('scissor_l'))},"
@@ -1330,6 +1370,16 @@ def write_markdown(
                 f"{fmt(row.get('stream0_offset'))}/"
                 f"{fmt(row.get('stream0_stride'))}"
             )
+            original_locality = (
+                f"{fmt(row.get('original_index_unique'))}/"
+                f"{fmt(row.get('original_index_span'))}/"
+                f"{fmt(row.get('original_cache_miss64'))}"
+            )
+            effective_locality = (
+                f"{fmt(row.get('effective_index_unique'))}/"
+                f"{fmt(row.get('effective_index_span'))}/"
+                f"{fmt(row.get('effective_cache_miss64'))}"
+            )
             lines.append(
                 "| "
                 + " | ".join(
@@ -1341,6 +1391,8 @@ def write_markdown(
                         fmt(row.get("optimized_applied")),
                         fmt(row.get("scissor_rect_applied")),
                         fmt(row.get("primitive_count")),
+                        original_locality,
+                        effective_locality,
                         fmt(row.get("scissor")),
                         rect,
                         original_rect,

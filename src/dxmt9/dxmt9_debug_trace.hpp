@@ -220,6 +220,11 @@ IndexedTriangleClassFilter optimizeScreenBlendIndexOrderClassFilter();
 // Env: DXMT9_OPTIMIZE_SCREEN_BLEND_INDEX_ORDER_CLASSES.
 IndexedTriangleClassFilterList optimizeScreenBlendIndexOrderClassFilters();
 
+// Optional minimum original stream0 byte-span filter for
+// DXMT9_OPTIMIZE_SCREEN_BLEND_INDEX_ORDER. Zero disables it.
+// Env: DXMT9_OPTIMIZE_SCREEN_BLEND_INDEX_ORDER_STREAM0_SPAN_MIN.
+u64 optimizeScreenBlendIndexOrderStream0SpanMin();
+
 // Optional selector for DXMT9_OPTIMIZE_SCREEN_BLEND_INDEX_ORDER. Format is
 // "<seq>/<encoder>", for example "60/4".
 // Env: DXMT9_OPTIMIZE_SCREEN_BLEND_INDEX_ORDER_ROW.
@@ -286,6 +291,11 @@ IndexedTriangleClassFilter probeReverseIndexedTrianglesClassFilter();
 // by comma, semicolon, space, '+', or '&'. Example: "large4096,scissor".
 // Env: DXMT9_PROBE_REVERSE_INDEXED_TRIANGLES_CLASSES.
 IndexedTriangleClassFilterList probeReverseIndexedTrianglesClassFilters();
+
+// Optional minimum original stream0 byte-span filter for reverse-indexed-
+// triangle probes. Zero disables it.
+// Env: DXMT9_PROBE_REVERSE_INDEXED_TRIANGLES_STREAM0_SPAN_MIN.
+u64 probeReverseIndexedTrianglesStream0SpanMin();
 
 // Optional selector for reverse-indexed-triangle probes. Format is
 // "<seq>/<encoder>", for example "60/3".

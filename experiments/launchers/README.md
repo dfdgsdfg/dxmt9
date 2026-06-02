@@ -422,6 +422,16 @@ Commercial / 3rd-party titles (require external prefix):
     `nonopaque`, `depth-read`, `alpha-blend`, `scissor`, `textured`, and
     `large4096`. Combine it with a row selector for material-scoped
     visibility/backend probes such as `60/4` alpha-blend or scissor subsets.
+    Pair reverse/order probes with `--measure-index-reuse` when investigating
+    Apple vertex/tiler backend pressure: the generated
+    `3dmark05-perf-indexed-probe-draws.csv` then includes per-draw original
+    and effective index locality, cache-miss estimates, triangle index span,
+    and stream0 byte-span proxies.
+    `--probe-reverse-indexed-triangles-stream0-span-min BYTES` and
+    `--optimize-screen-blend-index-order-stream0-span-min BYTES` add a direct
+    minimum original stream0 byte-span gate after the row/class filters. Use
+    these to classify large stream-span primitive pressure after class filters
+    such as `large4096,alpha-blend` prove too indirect.
     `--disable-alpha-test` is the narrower fragment/raster classifier for the
     alpha-test discard path and should be tried before more invasive shader
     substitutions when `--force-fragment-color` changes hidden VS-write

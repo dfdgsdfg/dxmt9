@@ -571,6 +571,14 @@ IndexedTriangleClassFilterList optimizeScreenBlendIndexOrderClassFilters() {
   return filters;
 }
 
+u64 optimizeScreenBlendIndexOrderStream0SpanMin() {
+  static const u64 min =
+      util::getenvU64Auto(
+          "DXMT9_OPTIMIZE_SCREEN_BLEND_INDEX_ORDER_STREAM0_SPAN_MIN")
+          .value_or(0u);
+  return min;
+}
+
 RenderEncoderSelector optimizeScreenBlendIndexOrderRow() {
   static const RenderEncoderSelector selector =
       parseRenderEncoderSelector("DXMT9_OPTIMIZE_SCREEN_BLEND_INDEX_ORDER_ROW");
@@ -651,6 +659,14 @@ IndexedTriangleClassFilterList probeReverseIndexedTrianglesClassFilters() {
       makeIndexedTriangleClassFilterList(
           util::getenvString("DXMT9_PROBE_REVERSE_INDEXED_TRIANGLES_CLASSES"));
   return filters;
+}
+
+u64 probeReverseIndexedTrianglesStream0SpanMin() {
+  static const u64 min =
+      util::getenvU64Auto(
+          "DXMT9_PROBE_REVERSE_INDEXED_TRIANGLES_STREAM0_SPAN_MIN")
+          .value_or(0u);
+  return min;
 }
 
 RenderEncoderSelector probeReverseIndexedTrianglesRow() {

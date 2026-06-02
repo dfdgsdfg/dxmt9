@@ -26,6 +26,7 @@ optimize_screen_blend_index_order_row=
 optimize_screen_blend_index_order_rows=
 optimize_screen_blend_index_order_class=
 optimize_screen_blend_index_order_classes=
+optimize_screen_blend_index_order_stream0_span_min=
 split_large_indexed_draws=
 split_large_indexed_draws_row=
 split_large_indexed_draws_rows=
@@ -39,6 +40,7 @@ probe_reverse_indexed_triangles_row=
 probe_reverse_indexed_triangles_rows=
 probe_reverse_indexed_triangles_class=
 probe_reverse_indexed_triangles_classes=
+probe_reverse_indexed_triangles_stream0_span_min=
 probe_scissor_rect=
 probe_scissor_rect_row=
 probe_scissor_rect_rows=
@@ -173,6 +175,9 @@ Options:
                       Set DXMT9_OPTIMIZE_SCREEN_BLEND_INDEX_ORDER_CLASSES=CLASSES.
                       Values are ANDed and may be comma/semicolon/space/+ or &
                       separated, e.g. large4096,alpha-blend,scissor
+  --optimize-screen-blend-index-order-stream0-span-min BYTES
+                      Set DXMT9_OPTIMIZE_SCREEN_BLEND_INDEX_ORDER_STREAM0_SPAN_MIN
+                      to require a minimum original stream0 byte span
   --split-large-indexed-draws N
                       Set DXMT9_SPLIT_LARGE_INDEXED_DRAWS=N to split indexed
                       triangle-list draws above N primitives
@@ -225,6 +230,9 @@ Options:
                       Set DXMT9_PROBE_REVERSE_INDEXED_TRIANGLES_CLASSES=CLASSES.
                       Values are ANDed and may be comma/semicolon/space/+ or
                       & separated, e.g. large4096,scissor
+  --probe-reverse-indexed-triangles-stream0-span-min BYTES
+                      Set DXMT9_PROBE_REVERSE_INDEXED_TRIANGLES_STREAM0_SPAN_MIN
+                      to require a minimum original stream0 byte span
   --probe-scissor-rect L,T,R,B
                       Set DXMT9_PROBE_SCISSOR_RECT=L,T,R,B to preserve scissor
                       enablement but override the scissor rectangle for
@@ -467,6 +475,10 @@ while (($#)); do
       optimize_screen_blend_index_order_classes=${2:?missing value for --optimize-screen-blend-index-order-classes}
       shift 2
       ;;
+    --optimize-screen-blend-index-order-stream0-span-min)
+      optimize_screen_blend_index_order_stream0_span_min=${2:?missing value for --optimize-screen-blend-index-order-stream0-span-min}
+      shift 2
+      ;;
     --split-large-indexed-draws)
       split_large_indexed_draws=${2:?missing value for --split-large-indexed-draws}
       shift 2
@@ -517,6 +529,10 @@ while (($#)); do
       ;;
     --probe-reverse-indexed-triangles-classes)
       probe_reverse_indexed_triangles_classes=${2:?missing value for --probe-reverse-indexed-triangles-classes}
+      shift 2
+      ;;
+    --probe-reverse-indexed-triangles-stream0-span-min)
+      probe_reverse_indexed_triangles_stream0_span_min=${2:?missing value for --probe-reverse-indexed-triangles-stream0-span-min}
       shift 2
       ;;
     --probe-scissor-rect)
@@ -1095,6 +1111,10 @@ if [[ -n "$optimize_screen_blend_index_order_classes" ]]; then
   env_args+=("DXMT9_OPTIMIZE_SCREEN_BLEND_INDEX_ORDER_CLASSES=$optimize_screen_blend_index_order_classes")
 fi
 
+if [[ -n "$optimize_screen_blend_index_order_stream0_span_min" ]]; then
+  env_args+=("DXMT9_OPTIMIZE_SCREEN_BLEND_INDEX_ORDER_STREAM0_SPAN_MIN=$optimize_screen_blend_index_order_stream0_span_min")
+fi
+
 if [[ -n "$split_large_indexed_draws" ]]; then
   env_args+=("DXMT9_SPLIT_LARGE_INDEXED_DRAWS=$split_large_indexed_draws")
 fi
@@ -1145,6 +1165,10 @@ fi
 
 if [[ -n "$probe_reverse_indexed_triangles_classes" ]]; then
   env_args+=("DXMT9_PROBE_REVERSE_INDEXED_TRIANGLES_CLASSES=$probe_reverse_indexed_triangles_classes")
+fi
+
+if [[ -n "$probe_reverse_indexed_triangles_stream0_span_min" ]]; then
+  env_args+=("DXMT9_PROBE_REVERSE_INDEXED_TRIANGLES_STREAM0_SPAN_MIN=$probe_reverse_indexed_triangles_stream0_span_min")
 fi
 
 if [[ -n "$probe_scissor_rect" ]]; then

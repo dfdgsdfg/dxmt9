@@ -36,6 +36,7 @@
 #include <cstring>
 #include <functional>
 #include <iomanip>
+#include <limits>
 #include <mutex>
 #include <optional>
 #include <sstream>
@@ -568,6 +569,15 @@ struct IndexReuseMeasure {
   u64 cacheMiss16 = 0;
   u64 cacheMiss32 = 0;
   u64 cacheMiss64 = 0;
+  u32 minIndex = 0;
+  u32 maxIndex = 0;
+  u32 firstIndex = 0;
+  u32 lastIndex = 0;
+  u64 adjacentDeltaAbsSum = 0;
+  u32 adjacentDeltaMax = 0;
+  u64 backwardJumps = 0;
+  u64 triangleIndexSpanSum = 0;
+  u32 triangleIndexSpanMax = 0;
   bool available = false;
 };
 
@@ -1023,6 +1033,8 @@ struct ActiveEncoderBreakdown {
                                  bool scissorRectEligible,
                                  bool scissorRectApplied,
                                  u64 reorderBytes,
+                                 IndexReuseMeasure originalIndexReuse,
+                                 IndexReuseMeasure effectiveIndexReuse,
                                  u64 drawOrdinal,
                                  core::PrimitiveType primitiveType,
                                  u32 primitiveCount,
@@ -1070,12 +1082,70 @@ struct ActiveEncoderBreakdown {
         core::flatStateOr(renderStates, RS_BLEND_OP_ALPHA, blendOp);
     const auto depthFunc = core::flatStateOr(
         renderStates, RS_Z_FUNC, static_cast<u32>(core::CompareFunc::LessEqual));
+    auto streamByteMin = [](const IndexReuseMeasure& measure,
+                            i32 baseVertex,
+                            u64 streamOffset,
+                            u64 streamStride) -> u64 {
+      if (!measure.available || streamStride == 0u) {
+        return 0u;
+      }
+      const auto minVertex =
+          static_cast<std::int64_t>(baseVertex) +
+          static_cast<std::int64_t>(measure.minIndex);
+      if (minVertex < 0) {
+        return 0u;
+      }
+      return streamOffset + static_cast<u64>(minVertex) * streamStride;
+    };
+    auto streamByteMax = [](const IndexReuseMeasure& measure,
+                            i32 baseVertex,
+                            u64 streamOffset,
+                            u64 streamStride) -> u64 {
+      if (!measure.available || streamStride == 0u) {
+        return 0u;
+      }
+      const auto maxVertex =
+          static_cast<std::int64_t>(baseVertex) +
+          static_cast<std::int64_t>(measure.maxIndex);
+      if (maxVertex < 0) {
+        return 0u;
+      }
+      return streamOffset + static_cast<u64>(maxVertex) * streamStride;
+    };
+    const auto originalStreamByteMin =
+        streamByteMin(originalIndexReuse, baseVertexIndex, stream0Offset, stream0Stride);
+    const auto originalStreamByteMax =
+        streamByteMax(originalIndexReuse, baseVertexIndex, stream0Offset, stream0Stride);
+    const auto effectiveStreamByteMin =
+        streamByteMin(effectiveIndexReuse, baseVertexIndex, stream0Offset, stream0Stride);
+    const auto effectiveStreamByteMax =
+        streamByteMax(effectiveIndexReuse, baseVertexIndex, stream0Offset, stream0Stride);
     std::fprintf(
         stderr,
         "[dxmt9-perf-indexed-probe-draw seq=%llu encoder=%llu "
         "encoder_draw_index=%llu draw_ordinal=%llu eligible=%u applied=%u "
         "optimized_eligible=%u optimized_applied=%u "
         "scissor_rect_eligible=%u scissor_rect_applied=%u reorder_bytes=%llu "
+        "original_index_available=%u original_index_unique=%llu "
+        "original_index_min=%u original_index_max=%u original_index_span=%llu "
+        "original_index_first=%u original_index_last=%u "
+        "original_cache_miss16=%llu original_cache_miss32=%llu "
+        "original_cache_miss64=%llu original_adjacent_delta_sum=%llu "
+        "original_adjacent_delta_max=%u original_backward_jumps=%llu "
+        "original_triangle_index_span_sum=%llu "
+        "original_triangle_index_span_max=%u "
+        "original_stream0_byte_min=%llu original_stream0_byte_max=%llu "
+        "original_stream0_byte_span=%llu "
+        "effective_index_available=%u effective_index_unique=%llu "
+        "effective_index_min=%u effective_index_max=%u effective_index_span=%llu "
+        "effective_index_first=%u effective_index_last=%u "
+        "effective_cache_miss16=%llu effective_cache_miss32=%llu "
+        "effective_cache_miss64=%llu effective_adjacent_delta_sum=%llu "
+        "effective_adjacent_delta_max=%u effective_backward_jumps=%llu "
+        "effective_triangle_index_span_sum=%llu "
+        "effective_triangle_index_span_max=%u "
+        "effective_stream0_byte_min=%llu effective_stream0_byte_max=%llu "
+        "effective_stream0_byte_span=%llu "
         "primitive_type=%u primitive_count=%u vertex_count=%llu "
         "texture_mask=0x%x color_write=0x%x alpha_blend=%u "
         "src_blend=%u dst_blend=%u blend_op=%u separate_alpha=%u "
@@ -1100,6 +1170,56 @@ struct ActiveEncoderBreakdown {
         scissorRectEligible ? 1u : 0u,
         scissorRectApplied ? 1u : 0u,
         static_cast<unsigned long long>(reorderBytes),
+        originalIndexReuse.available ? 1u : 0u,
+        static_cast<unsigned long long>(originalIndexReuse.unique),
+        originalIndexReuse.minIndex,
+        originalIndexReuse.maxIndex,
+        static_cast<unsigned long long>(
+            originalIndexReuse.available
+                ? static_cast<u64>(originalIndexReuse.maxIndex) -
+                      static_cast<u64>(originalIndexReuse.minIndex) + 1u
+                : 0u),
+        originalIndexReuse.firstIndex,
+        originalIndexReuse.lastIndex,
+        static_cast<unsigned long long>(originalIndexReuse.cacheMiss16),
+        static_cast<unsigned long long>(originalIndexReuse.cacheMiss32),
+        static_cast<unsigned long long>(originalIndexReuse.cacheMiss64),
+        static_cast<unsigned long long>(originalIndexReuse.adjacentDeltaAbsSum),
+        originalIndexReuse.adjacentDeltaMax,
+        static_cast<unsigned long long>(originalIndexReuse.backwardJumps),
+        static_cast<unsigned long long>(originalIndexReuse.triangleIndexSpanSum),
+        originalIndexReuse.triangleIndexSpanMax,
+        static_cast<unsigned long long>(originalStreamByteMin),
+        static_cast<unsigned long long>(originalStreamByteMax),
+        static_cast<unsigned long long>(
+            originalStreamByteMax >= originalStreamByteMin
+                ? originalStreamByteMax - originalStreamByteMin
+                : 0u),
+        effectiveIndexReuse.available ? 1u : 0u,
+        static_cast<unsigned long long>(effectiveIndexReuse.unique),
+        effectiveIndexReuse.minIndex,
+        effectiveIndexReuse.maxIndex,
+        static_cast<unsigned long long>(
+            effectiveIndexReuse.available
+                ? static_cast<u64>(effectiveIndexReuse.maxIndex) -
+                      static_cast<u64>(effectiveIndexReuse.minIndex) + 1u
+                : 0u),
+        effectiveIndexReuse.firstIndex,
+        effectiveIndexReuse.lastIndex,
+        static_cast<unsigned long long>(effectiveIndexReuse.cacheMiss16),
+        static_cast<unsigned long long>(effectiveIndexReuse.cacheMiss32),
+        static_cast<unsigned long long>(effectiveIndexReuse.cacheMiss64),
+        static_cast<unsigned long long>(effectiveIndexReuse.adjacentDeltaAbsSum),
+        effectiveIndexReuse.adjacentDeltaMax,
+        static_cast<unsigned long long>(effectiveIndexReuse.backwardJumps),
+        static_cast<unsigned long long>(effectiveIndexReuse.triangleIndexSpanSum),
+        effectiveIndexReuse.triangleIndexSpanMax,
+        static_cast<unsigned long long>(effectiveStreamByteMin),
+        static_cast<unsigned long long>(effectiveStreamByteMax),
+        static_cast<unsigned long long>(
+            effectiveStreamByteMax >= effectiveStreamByteMin
+                ? effectiveStreamByteMax - effectiveStreamByteMin
+                : 0u),
         static_cast<unsigned>(primitiveType),
         primitiveCount,
         static_cast<unsigned long long>(vertexCount),
@@ -2740,6 +2860,35 @@ IndexReuseMeasure measureIndexReuseForDraw(std::span<const u8> indexBytes,
       indices.push_back(value);
     }
   }
+  if (indices.empty()) {
+    return out;
+  }
+  out.firstIndex = indices.front();
+  out.lastIndex = indices.back();
+  out.minIndex = std::numeric_limits<u32>::max();
+  for (std::size_t i = 0; i < indices.size(); ++i) {
+    const u32 index = indices[i];
+    out.minIndex = std::min(out.minIndex, index);
+    out.maxIndex = std::max(out.maxIndex, index);
+    if (i != 0u) {
+      const u32 prev = indices[i - 1u];
+      const u32 delta = index > prev ? index - prev : prev - index;
+      out.adjacentDeltaAbsSum += delta;
+      out.adjacentDeltaMax = std::max(out.adjacentDeltaMax, delta);
+      if (index < prev) {
+        ++out.backwardJumps;
+      }
+    }
+  }
+  if ((indices.size() % 3u) == 0u) {
+    for (std::size_t i = 0; i < indices.size(); i += 3u) {
+      const u32 triMin = std::min({indices[i], indices[i + 1u], indices[i + 2u]});
+      const u32 triMax = std::max({indices[i], indices[i + 1u], indices[i + 2u]});
+      const u32 span = triMax - triMin + 1u;
+      out.triangleIndexSpanSum += span;
+      out.triangleIndexSpanMax = std::max(out.triangleIndexSpanMax, span);
+    }
+  }
   out.cacheMiss16 = estimateVertexCacheMisses<16>(indices);
   out.cacheMiss32 = estimateVertexCacheMisses<32>(indices);
   out.cacheMiss64 = estimateVertexCacheMisses<64>(indices);
@@ -2748,6 +2897,14 @@ IndexReuseMeasure measureIndexReuseForDraw(std::span<const u8> indexBytes,
                                 indices.begin());
   out.available = true;
   return out;
+}
+
+u64 stream0ByteSpanForIndexMeasure(const IndexReuseMeasure& measure,
+                                   u64 stream0Stride) {
+  if (!measure.available || stream0Stride == 0u) {
+    return 0u;
+  }
+  return static_cast<u64>(measure.maxIndex - measure.minIndex) * stream0Stride;
 }
 
 bool buildReverseTriangleOrderIndexBytes(std::span<const u8> indexBytes,
@@ -5791,6 +5948,32 @@ bool encodeDraw(EncodeContext& ctx,
           }
         }
       }
+      const std::span<const u8> originalIndexBytesForReuse = indexBytesForReuse;
+      const u32 originalIndexReuseStartIndex = indexReuseStartIndex;
+      const u64 reverseStream0SpanMin =
+          debug::probeReverseIndexedTrianglesStream0SpanMin();
+      const u64 optimizeStream0SpanMin =
+          debug::optimizeScreenBlendIndexOrderStream0SpanMin();
+      const bool measureProbeIndexLocality =
+          debug::measureIndexReuse() || reverseStream0SpanMin != 0u ||
+          optimizeStream0SpanMin != 0u;
+      const u64 stream0StrideForProbe =
+          encoderBreakdown ? encoderBreakdown->stats.streams[0].lastStride
+                           : static_cast<u64>(hot.streamStrides[0]);
+      const IndexReuseMeasure originalIndexReuseForProbe =
+          measureProbeIndexLocality
+              ? measureIndexReuseForDraw(originalIndexBytesForReuse,
+                                         pv.indexType,
+                                         originalIndexReuseStartIndex,
+                                         vertexCount)
+              : IndexReuseMeasure{.references = vertexCount};
+      auto stream0SpanFilterMatches = [&](u64 minSpan) {
+        if (minSpan == 0u) {
+          return true;
+        }
+        return stream0ByteSpanForIndexMeasure(originalIndexReuseForProbe,
+                                              stream0StrideForProbe) >= minSpan;
+      };
       const bool reverseAllIndexedTriangles = debug::probeReverseIndexedTriangles();
       const bool reverseOpaqueIndexedTriangles =
           debug::probeReverseOpaqueIndexedTriangles();
@@ -5828,7 +6011,8 @@ bool encodeDraw(EncodeContext& ctx,
                 hot.textureMask,
                 hot.renderStates,
                 effectiveViewport,
-                fillMode);
+                fillMode) &&
+            stream0SpanFilterMatches(reverseStream0SpanMin);
         probeEligible =
             classEligible &&
             (reverseAllIndexedTriangles ||
@@ -5871,7 +6055,8 @@ bool encodeDraw(EncodeContext& ctx,
                 hot.textureMask,
                 hot.renderStates,
                 effectiveViewport,
-                fillMode);
+                fillMode) &&
+            stream0SpanFilterMatches(optimizeStream0SpanMin);
         if (optimizedEligible &&
             buildReverseTriangleOrderIndexBytes(indexBytesForReuse,
                                                 pv.indexType,
@@ -5898,6 +6083,16 @@ bool encodeDraw(EncodeContext& ctx,
             (probeApplied || optimizedApplied)
                 ? static_cast<u64>(probeReorderedIndexBytes.size())
                 : 0u;
+        const auto originalIndexReuse =
+            measureProbeIndexLocality ? originalIndexReuseForProbe
+                                      : IndexReuseMeasure{.references = vertexCount};
+        const auto effectiveIndexReuse =
+            measureProbeIndexLocality
+                ? measureIndexReuseForDraw(indexBytesForReuse,
+                                           pv.indexType,
+                                           indexReuseStartIndex,
+                                           vertexCount)
+                : IndexReuseMeasure{.references = vertexCount};
         encoderBreakdown->emitIndexedOrderProbeDraw(
             probeEligible,
             probeApplied,
@@ -5906,6 +6101,8 @@ bool encodeDraw(EncodeContext& ctx,
             scissorRectProbeEligible,
             scissorRectProbeApplied,
             reorderBytes,
+            originalIndexReuse,
+            effectiveIndexReuse,
             drawOrdinal,
             pv.primitiveType,
             primitiveCount,
