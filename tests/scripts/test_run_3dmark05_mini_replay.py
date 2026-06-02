@@ -196,6 +196,7 @@ class MiniReplayScriptTests(unittest.TestCase):
             self.assertEqual(summary["fs_cbuf_slots"], {"ffpps": 28, "psconsts": 29})
             self.assertEqual(summary["actual_extra_vertex_buffer_slots"], [6])
             self.assertEqual(summary["dummy_vertex_buffer_slots"], [6])
+            self.assertEqual(summary["scissor_draw_count"], 1)
             self.assertEqual(summary["vs_bindings"]["buffer"], [1, 5, 6, 28, 29])
             self.assertEqual(summary["fs_bindings"]["buffer"], [28, 29])
             self.assertIn("texture2d<float> tex0 [[texture(0)]]", (output_dir / "dxmt9_fs.replay.metal").read_text(encoding="utf-8"))
@@ -229,11 +230,10 @@ class MiniReplayScriptTests(unittest.TestCase):
             self.assertIn("depthStateDesc.depthCompareFunction =\n        1 ? compareFunction(4) : MTLCompareFunctionAlways;", objc)
             self.assertIn("depthStateDesc.depthWriteEnabled = 0;", objc)
             self.assertIn("[encoder setCullMode:cullMode(2)];", objc)
-            self.assertIn("if (1) {", objc)
-            self.assertIn("static_cast<NSUInteger>(10)", objc)
-            self.assertIn("static_cast<NSUInteger>(20)", objc)
-            self.assertIn("static_cast<NSUInteger>(std::max(0, 110 - 10))", objc)
-            self.assertIn("static_cast<NSUInteger>(std::max(0, 220 - 20))", objc)
+            self.assertIn("unsigned scissorEnabled;", objc)
+            self.assertIn("static MTLScissorRect scissorRect(const DrawEntry& draw", objc)
+            self.assertIn("[encoder setScissorRect:scissorRect(draw, 1024, 768)];", objc)
+            self.assertIn(", 1, 10, 20, 110, 220}", objc)
 
     def test_primitive_order_rewrites_index_payload_in_output_dir(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

@@ -284,6 +284,11 @@ def render_source(draws: list[dict[str, Any]],
                 str(int(state.get("base_vertex", 0))),
                 str(int(state.get("stream0_stride", 0))),
                 str(int(state.get("stream0_offset", 0))),
+                str(int(state.get("scissor", 0))),
+                str(int(state.get("scissor_l", 0))),
+                str(int(state.get("scissor_t", 0))),
+                str(int(state.get("scissor_r", pass_width))),
+                str(int(state.get("scissor_b", pass_height))),
             ])
             + "}"
         )
@@ -336,6 +341,11 @@ struct DrawEntry {{
   int baseVertex;
   unsigned streamStride;
   unsigned streamOffset;
+  unsigned scissorEnabled;
+  unsigned scissorL;
+  unsigned scissorT;
+  unsigned scissorR;
+  unsigned scissorB;
 }};
 
 struct DrawVolatile {{
@@ -469,6 +479,23 @@ static MTLColorWriteMask colorWriteMask(unsigned value) {{
   return mask;
 }}
 
+static MTLScissorRect scissorRect(const DrawEntry& draw, unsigned fullWidth, unsigned fullHeight) {{
+  int left = draw.scissorEnabled ? static_cast<int>(draw.scissorL) : 0;
+  int top = draw.scissorEnabled ? static_cast<int>(draw.scissorT) : 0;
+  int right = draw.scissorEnabled ? static_cast<int>(draw.scissorR) : static_cast<int>(fullWidth);
+  int bottom = draw.scissorEnabled ? static_cast<int>(draw.scissorB) : static_cast<int>(fullHeight);
+  left = std::max(0, left);
+  top = std::max(0, top);
+  right = std::max(left, right);
+  bottom = std::max(top, bottom);
+  return {{
+    static_cast<NSUInteger>(left),
+    static_cast<NSUInteger>(top),
+    static_cast<NSUInteger>(right - left),
+    static_cast<NSUInteger>(bottom - top)
+  }};
+}}
+
 int main() {{
   @autoreleasepool {{
     id<MTLDevice> device = MTLCreateSystemDefaultDevice();
@@ -598,15 +625,6 @@ int main() {{
     id<MTLRenderCommandEncoder> encoder = [commandBuffer renderCommandEncoderWithDescriptor:pass];
     [encoder setDepthStencilState:depthState];
     [encoder setCullMode:cullMode({cull})];
-    if ({scissor}) {{
-      MTLScissorRect rect = {{
-        static_cast<NSUInteger>({scissor_l}),
-        static_cast<NSUInteger>({scissor_t}),
-        static_cast<NSUInteger>(std::max(0, {scissor_r} - {scissor_l})),
-        static_cast<NSUInteger>(std::max(0, {scissor_b} - {scissor_t}))
-      }};
-      [encoder setScissorRect:rect];
-    }}
     [encoder setFragmentTexture:whiteTexture atIndex:0];
     [encoder setFragmentSamplerState:sampler atIndex:0];
 {dummy_vertex_buffer_binds}
@@ -644,6 +662,7 @@ int main() {{
         if (draw.shaderIndex >= shaderCount) return 2;
         const ShaderEntry& shader = shaders[draw.shaderIndex];
         DrawVolatile dv = {{draw.baseVertex, draw.streamOffset, draw.streamStride, 0}};
+        [encoder setScissorRect:scissorRect(draw, {pass_width}, {pass_height})];
         [encoder setRenderPipelineState:psos[draw.shaderIndex]];
         [encoder setVertexBuffer:drawVsConsts offset:0 atIndex:shader.vsConstsSlot];
         [encoder setVertexBuffer:drawFfpVs offset:0 atIndex:shader.ffpVsSlot];
@@ -779,6 +798,10 @@ def prepare(args: argparse.Namespace) -> dict[str, Any]:
         "fs_cbuf_slots": shader_variants[0]["fs_cbuf_slots"],
         "actual_extra_vertex_buffer_slots": actual_extra_vertex_buffer_slots,
         "dummy_vertex_buffer_slots": dummy_vertex_buffer_slots,
+        "scissor_draw_count": sum(
+            1 for draw in replay_draws
+            if int(draw.get("state", {}).get("scissor", 0))
+        ),
         "vs_bindings": all_vs_bindings[0],
         "fs_bindings": all_fs_bindings[0],
         "all_vs_bindings": all_vs_bindings,

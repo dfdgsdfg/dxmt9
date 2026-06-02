@@ -12106,27 +12106,167 @@ fs_cbuf_slots={psconsts:29, ffpps:28}
 
 Interpretation: the row-local replay harness now reaches a larger
 screen-blend material slice than the original 3-draw triplet with real stream0,
-stream1, and per-draw cbuf payloads. The next replay-quality gap is no longer
-stream1; it is multi-PSO replay if the full 16-draw screen-blend slice should
-run as one harness, or Xcode counter capture of this 6-draw single-PSO slice
-once disk permits.
+stream1, and per-draw cbuf payloads.
+
+The full 16-draw manifest was then regenerated and executed with the mini
+replay runner's multi-PSO path:
+
+```bash
+python3 scripts/tools/build_3dmark05_mini_replay_manifest.py \
+  --shader-summary traces/app-d3d9-3dmark05-current-head-gputrace-r1/analysis/frame60-shader-dump-summary.csv \
+  --probe-draws experiments/output/app-d3d9-3dmark05-screen-blend-run-71-188-payload16-streams-r1/3dmark05-perf-indexed-probe-draws.csv \
+  --geometry-dir traces/app-d3d9-3dmark05-screen-blend-run-71-188-payload16-streams-r1/analysis/geometry \
+  --row 60/2 \
+  --encoder-draw-min 71 \
+  --encoder-draw-max 86 \
+  --output traces/app-d3d9-3dmark05-screen-blend-run-71-188-payload16-streams-r1/analysis/frame60-mini-replay-manifest.json
+
+python3 scripts/tools/run_3dmark05_mini_replay.py \
+  traces/app-d3d9-3dmark05-screen-blend-run-71-188-payload16-streams-r1/analysis/frame60-mini-replay-manifest.json \
+  --output-dir traces/app-d3d9-3dmark05-screen-blend-run-71-188-payload16-streams-r1/analysis/mini-replay-full16-smoke \
+  --primitive-order original \
+  --draw-order original \
+  --run --repeat 1
+```
+
+Manifest summary:
+
+- Draw window: `60/2` encoder draw `71..86`, ordinals `41875..41890`
+- Payload: `16` draws, `172,932B` index, `1,030,032B` stream0, stream1
+  present for all draws
+- Shader pairs: `6` unique VS/PS pairs
+- Join quality: `missing_probe_rows=0`, `missing_shader_rows=0`,
+  `missing_draw_shader_files=0`, `row_shader_fallbacks=0`
+
+No-capture smoke result:
+
+```text
+mini replay draws=16 repeat=1
+shader_variant_count=6
+actual_extra_vertex_buffer_slots=[6]
+vs_cbuf_slots={vsconsts:29, ffpvs:28}
+fs_cbuf_slots={psconsts:29, ffpps:28}
+```
+
+Interpretation: the replay-quality gap is no longer stream1 or single-PSO
+coverage. The remaining gap is performance evidence: capture this 16-draw
+mini replay with Xcode counters, then compare encoder-level
+`VS Buffer Device Memory Bytes Written`, tiler/primitive storage counters,
+and limiter percentages against the original `60/2` hot encoder.
+
+The capture command is:
+
+```bash
+python3 scripts/tools/run_3dmark05_mini_replay.py \
+  traces/app-d3d9-3dmark05-screen-blend-run-71-188-payload16-streams-r1/analysis/frame60-mini-replay-manifest.json \
+  --output-dir traces/app-d3d9-3dmark05-screen-blend-run-71-188-payload16-streams-r1/analysis/mini-replay-full16-smoke \
+  --primitive-order original \
+  --draw-order original \
+  --run --repeat 1 \
+  --capture-path traces/app-d3d9-3dmark05-screen-blend-run-71-188-payload16-streams-r1/analysis/mini-replay-full16.gputrace
+```
+
+Because the system volume was nearly full, two unused duplicate 3DMark05
+prefixes were removed first:
+
+- `experiments/prefixs/app-d3dmark05-verify`
+- `experiments/prefixs/app-d3d9-3dmark05-win32-heroic`
+
+The standalone mini replay capture was then run with the free-space guard
+lowered for this small trace:
+
+```bash
+python3 scripts/tools/run_3dmark05_mini_replay.py \
+  traces/app-d3d9-3dmark05-screen-blend-run-71-188-payload16-streams-r1/analysis/frame60-mini-replay-manifest.json \
+  --output-dir traces/app-d3d9-3dmark05-screen-blend-run-71-188-payload16-streams-r1/analysis/mini-replay-full16-smoke \
+  --primitive-order original \
+  --draw-order original \
+  --run --repeat 1 \
+  --capture-path traces/app-d3d9-3dmark05-screen-blend-run-71-188-payload16-streams-r1/analysis/mini-replay-full16.gputrace \
+  --min-capture-free-mb 128
+```
+
+Xcode was used to replay and profile the trace with `Profile after replay`
+enabled. The Counters view was opened and left populated for more than 60s
+before `Export Encoder Counters`. Summary Export was also run with
+`Embed performance data`.
+
+Artifacts:
+
+- Raw capture:
+  `traces/app-d3d9-3dmark05-screen-blend-run-71-188-payload16-streams-r1/analysis/mini-replay-full16.gputrace`
+  (`29MiB`)
+- Performance-embedded export:
+  `traces/app-d3d9-3dmark05-screen-blend-run-71-188-payload16-streams-r1/analysis/mini-replay-full16-performance.gputrace`
+  (`21MiB`)
+- Xcode encoder counter CSV:
+  `traces/app-d3d9-3dmark05-screen-blend-run-71-188-payload16-streams-r1/analysis/mini-replay-full16-counters-xcode.csv`
+- Reduced summary:
+  `traces/app-d3d9-3dmark05-screen-blend-run-71-188-payload16-streams-r1/analysis/mini-replay-full16-counters-summary.csv`
+- Bottleneck report:
+  `traces/app-d3d9-3dmark05-screen-blend-run-71-188-payload16-streams-r1/analysis/mini-replay-full16-xcode-bottleneck-report.md`
+
+Xcode summary:
+
+- `1` command buffer, `1` render encoder, `16` draw calls
+- `86,466` vertices
+- GPU time `3.710ms`, performance state `Medium`
+- Performance overview top shaders: fragment `72.21%`, vertex `20.73%`
+- Counters row: execution cost `100%`, ALU limiter `67.84%`
+
+Counter comparison against the original current-head `60/2` hot encoder:
+
+| Metric | Original `60/2` | Mini replay full16 | Mini / original |
+|---|---:|---:|---:|
+| GPU time | `20.327ms` | `3.710ms` | `0.183x` |
+| VS buffer write | `981.171MiB` | `31.974MiB` | `0.033x` |
+| VS invocations | `642,001` | `54,104` | `0.084x` |
+| VS buffer / VS invocation | `1602.5B` | `619.7B` | `0.387x` |
+| Primitives | `389,376` | `28,822` | `0.074x` |
+| VS buffer / primitive | `2642.3B` | `1163.3B` | `0.440x` |
+| Tiled vertex buffer | `12.563MiB` | `1.031MiB` | `0.082x` |
+| Tiled primitive-block buffer | `11.813MiB` | `0.781MiB` | `0.066x` |
+| VS buffer / tiled-buffer ratio | `40.3x` | `17.6x` | `0.438x` |
+| FS invocations | `3,296,064` | `22,057,376` | `6.692x` |
+| Fragments / primitive | `36.0` | `738.0` | `20.5x` |
+| Vertex stage time | `96.06%` | `26.11%` | `0.272x` |
+| VS buffer-write limiter | `21.41%` | `11.80%` | `0.551x` |
+| Cull unit limiter | `5.98%` | `34.26%` | `5.729x` |
+| Clip unit limiter | `2.98%` | `23.45%` | `7.869x` |
+| Offscreen culled primitives | `6.03%` | `51.86%` | `8.600x` |
+
+Interpretation: the mini replay now proves that the captured shader +
+stream/index/cbuf payloads can independently generate the same class of Xcode
+VS buffer-write traffic (`31.974MiB`, almost entirely
+`VS Buffer Device Memory Bytes Written`). However, it does not yet reproduce
+the original hot encoder's amplification shape. The original is vertex-stage
+dominated (`96.06%` vertex-stage time, `1602.5B/VS invocation`), while the
+standalone 16-draw slice is fragment/overdraw dominated (`22.1M` FS
+invocations, `738` fragments/primitive, vertex-stage time `26.11%`). This
+means the next replay experiment should not simply add more of the same 16
+draws; it should preserve more of the original `60/2` pass context or select
+draws whose Xcode counters keep the original vertex-stage dominated shape.
 
 ```mermaid
 flowchart TD
   Scout["payload16 no-gputrace scout\n60/2 draw 71..86\n16 payload triplets"] --> Full["16-draw manifest\n6 VS/PS pairs"]
-  Full --> SinglePSO{"current mini replay\nsingle PSO?"}
-  SinglePSO -- "no" --> Slice["dominant shader slice\n60/2 draw 81..86\n6 draws"]
+  Full --> SinglePSO{"old mini replay\nsingle PSO?"}
+  SinglePSO -- "yes, failed full slice" --> Slice["dominant shader slice\n60/2 draw 81..86\n6 draws"]
   Slice --> Compile0["first smoke compile fail\ncbuf buffer(6/7) conflicts\nwith stream1 buffer(6)"]
   Compile0 --> SlotFix["dynamic cbuf slot allocation\nvs/ps cbufs -> 29/28"]
   SlotFix --> StreamDump["multi-stream payload dump\n.stream1.bin for 16/16 draws"]
   StreamDump --> Smoke["stream-aware smoke pass\nmini replay draws=6\nactual slot 6"]
-  Smoke --> Gap["remaining fidelity gap\nmulti-PSO full 16-draw replay\nor Xcode counter capture"]
-  Gap --> Next["next experiment\ncapture 6-draw replay when disk permits\nor add multi-PSO replay"]
+  Smoke --> MultiPSO["multi-PSO replay\n6 shader variants"]
+  MultiPSO --> FullSmoke["full 16-draw smoke pass\nreal stream1\nshader_variant_count=6"]
+  FullSmoke --> XcodeMini["Xcode counter capture\nGPU 3.71ms\nVS buffer 31.97MiB"]
+  XcodeMini --> Compare["compare with original 60/2\n981.17MiB VS buffer\n1602B/VS inv"]
+  Compare --> Gap["remaining fidelity gap\noriginal is vertex-stage dominated\nmini is fragment/overdraw dominated"]
+  Gap --> Next["next experiment\npreserve more 60/2 pass context\nor select vertex-stage-shaped draws"]
 
   classDef hot fill:#ffe8e8,stroke:#b64242,color:#2b0d0d
   classDef known fill:#e8f0ff,stroke:#476cb6,color:#0d1833
   class Compile0,Gap,Next hot
-  class Scout,Full,SinglePSO,Slice,SlotFix,StreamDump,Smoke known
+  class Scout,Full,SinglePSO,Slice,SlotFix,StreamDump,Smoke,MultiPSO,FullSmoke,XcodeMini,Compare known
 ```
 
 Smoke validation for the current pass-shape manifest:
