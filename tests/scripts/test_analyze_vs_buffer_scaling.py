@@ -114,7 +114,7 @@ class AnalyzeVsBufferScalingTests(unittest.TestCase):
             root = Path(temp)
             report = root / "report.md"
             aggregate_csv = root / "aggregate.csv"
-            module.write_summary(report, [aggregate], correlations, correlations, shapes)
+            module.write_summary(report, [aggregate], correlations, correlations, shapes, [], None)
             module.write_aggregate_csv(aggregate_csv, [aggregate])
             text = report.read_text(encoding="utf-8")
             self.assertIn("hidden Apple GPU vertex-stage", text)

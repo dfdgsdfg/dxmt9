@@ -317,6 +317,10 @@ class MiniReplayScriptTests(unittest.TestCase):
             summary = json.loads((output_dir / "mini-replay-summary.json").read_text(encoding="utf-8"))
             self.assertEqual(summary["draw_order"], "reverse")
             self.assertEqual(summary["primitive_order"], "sort-min-index")
+            self.assertEqual(summary["index_cache_estimate"]["original_index_count"], 9)
+            self.assertEqual(summary["index_cache_estimate"]["replay_index_count"], 9)
+            self.assertEqual(summary["index_cache_estimate"]["original_lru16_misses"], 7)
+            self.assertEqual(summary["index_cache_estimate"]["replay_lru16_misses"], 7)
             rewritten = output_dir / "index-order" / "draw000-sort-min-index.index.bin"
             self.assertEqual(
                 rewritten.read_bytes(),

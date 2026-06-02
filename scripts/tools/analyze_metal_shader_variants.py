@@ -41,10 +41,15 @@ OUTPUT_FIELDS = (
     "ir_return_bytes",
     "ir_alloca_count",
     "ir_alloca_bytes",
+    "ir_scratch_bytes_estimate",
     "ir_lifetime_start_bytes",
+    "ir_lifetime_end_bytes",
+    "ir_memcpy_count",
+    "ir_memset_count",
     "ir_instruction_lines",
     "vs_buffer_to_ir_return_ratio",
     "vs_buffer_to_ir_alloca_ratio",
+    "vs_buffer_to_ir_scratch_ratio",
     "missing_reason",
 )
 
@@ -231,6 +236,19 @@ def make_output_row(
 
     if missing_reason and not out.get("missing_reason"):
         out["missing_reason"] = missing_reason
+    bytes_per_vs = parse_number(out.get("vs_buffer_bytes_per_vs_invocation"))
+    ir_return_bytes = parse_number(out.get("ir_return_bytes"))
+    ir_alloca_bytes = parse_number(out.get("ir_alloca_bytes"))
+    ir_scratch_bytes = parse_number(out.get("ir_scratch_bytes_estimate"))
+    out["vs_buffer_to_ir_return_ratio"] = (
+        bytes_per_vs / ir_return_bytes if bytes_per_vs and ir_return_bytes else 0.0
+    )
+    out["vs_buffer_to_ir_alloca_ratio"] = (
+        bytes_per_vs / ir_alloca_bytes if bytes_per_vs and ir_alloca_bytes else 0.0
+    )
+    out["vs_buffer_to_ir_scratch_ratio"] = (
+        bytes_per_vs / ir_scratch_bytes if bytes_per_vs and ir_scratch_bytes else 0.0
+    )
     return out
 
 
@@ -261,20 +279,26 @@ def write_report(path: Path, rows: list[dict[str, Any]]) -> None:
         "This is an offline classifier. A runtime Xcode gputrace is still required",
         "before treating a variant as a performance fix.",
         "",
-        "| rank | seq/enc | variant | VSOut B | IR return B | IR alloca B | warnings | kept fields | removed fields | missing |",
-        "|---:|---|---|---:|---:|---:|---:|---|---|---|",
+        "| rank | seq/enc | variant | VSOut B | IR return B | IR scratch B | IR alloca B | Xcode/scratch | memcpy/memset | warnings | kept fields | removed fields | missing |",
+        "|---:|---|---|---:|---:|---:|---:|---:|---:|---:|---|---|---|",
     ]
     for row in rows:
         lines.append(
-            "| {rank} | {seq}/{enc} | `{variant}` | `{vsout}` | `{ret}` | `{alloca}` | "
-            "`{warn}` | `{kept}` | `{removed}` | `{missing}` |".format(
+            "| {rank} | {seq}/{enc} | `{variant}` | `{vsout}` | `{ret}` | `{scratch}` | `{alloca}` | "
+            "`{scratch_ratio}` | `{mem_ops}` | `{warn}` | `{kept}` | `{removed}` | `{missing}` |".format(
                 rank=row.get("rank", ""),
                 seq=row.get("seq", ""),
                 enc=row.get("enc", ""),
                 variant=row.get("variant", ""),
                 vsout=row.get("variant_vsout_bytes", ""),
                 ret=row.get("ir_return_bytes", ""),
+                scratch=row.get("ir_scratch_bytes_estimate", ""),
                 alloca=row.get("ir_alloca_bytes", ""),
+                scratch_ratio=fmt(row.get("vs_buffer_to_ir_scratch_ratio", "")),
+                mem_ops=(
+                    f"{parse_int(row.get('ir_memcpy_count'))}/"
+                    f"{parse_int(row.get('ir_memset_count'))}"
+                ),
                 warn=row.get("warning_count", ""),
                 kept=row.get("kept_fields", ""),
                 removed=row.get("removed_fields", ""),
@@ -288,6 +312,7 @@ def write_report(path: Path, rows: list[dict[str, Any]]) -> None:
         "",
         "- `live-vsout` keeps only `position` plus the fields read by the paired fragment shader.",
         "- `position-only` is a lower-bound compiler/backend structural probe, not a correct runtime variant.",
+        "- `IR scratch B` is the max of compiler-visible `alloca` and lifetime byte ranges after Metal compilation.",
         "- If IR return bytes shrink but Xcode VS buffer writes remain stable in runtime A/B, the owner is below source-visible VSOut shape.",
     ])
     path.write_text("\n".join(lines) + "\n", encoding="utf-8")

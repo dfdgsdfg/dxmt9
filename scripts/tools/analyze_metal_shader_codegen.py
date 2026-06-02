@@ -43,14 +43,22 @@ OUTPUT_FIELDS = (
     "metallib_dec_bytes",
     "ir_lines",
     "ir_instruction_lines",
+    "ir_type_def_count",
+    "ir_max_type_def_bytes",
     "ir_return_field_count",
     "ir_return_bytes",
     "ir_alloca_count",
+    "ir_alloca_array_count",
+    "ir_alloca_struct_count",
     "ir_alloca_bytes",
+    "ir_scratch_bytes_estimate",
     "ir_lifetime_start_bytes",
+    "ir_lifetime_end_bytes",
     "ir_insertvalue_count",
     "ir_load_count",
     "ir_store_count",
+    "ir_memcpy_count",
+    "ir_memset_count",
     "ir_call_count",
     "ir_branch_count",
     "ir_select_count",
@@ -58,8 +66,13 @@ OUTPUT_FIELDS = (
     "ir_phi_count",
     "ir_air_dot_calls",
     "ir_texture_sample_calls",
+    "ir_addrspace1_refs",
+    "ir_addrspace2_refs",
+    "ir_addrspace3_refs",
+    "ir_addrspace4_refs",
     "vs_buffer_to_ir_return_ratio",
     "vs_buffer_to_ir_alloca_ratio",
+    "vs_buffer_to_ir_scratch_ratio",
     "missing_reason",
 )
 
@@ -68,12 +81,12 @@ SIZE_RE = re.compile(
     r"(?P<dec>\d+)\s+(?P<hex>[0-9a-fA-F]+)\s+(?P<file>.+)$"
 )
 DEFINE_RE = re.compile(r"^define\s+(?P<ret>.+?)\s+@(?P<name>[A-Za-z0-9_]+)\(")
-ALLOCA_ARRAY_RE = re.compile(
-    r"\balloca\s+\[(?P<count>\d+)\s+x\s+(?P<type><\d+\s+x\s+[A-Za-z0-9_]+>|[A-Za-z0-9_]+)\]"
-)
-ALLOCA_SCALAR_RE = re.compile(r"\balloca\s+(?P<type><\d+\s+x\s+[A-Za-z0-9_]+>|[A-Za-z0-9_]+)\b")
+TYPE_DEF_RE = re.compile(r"^(?P<name>%[A-Za-z0-9_.$-]+)\s*=\s*type\s+(?P<body>.+)$")
+ALLOCA_RE = re.compile(r"\balloca\s+(?P<type>.+?)(?:,\s+align\b|$)")
 LIFETIME_RE = re.compile(r"llvm\.lifetime\.start[^)]*\(\s*i64\s+(?P<bytes>\d+)\s*,")
+LIFETIME_END_RE = re.compile(r"llvm\.lifetime\.end[^)]*\(\s*i64\s+(?P<bytes>\d+)\s*,")
 VECTOR_TYPE_RE = re.compile(r"^<(?P<count>\d+)\s+x\s+(?P<base>[A-Za-z0-9_]+)>$")
+ARRAY_TYPE_RE = re.compile(r"^\[(?P<count>\d+)\s+x\s+(?P<element>.+)\]$")
 
 
 @dataclass(frozen=True)
@@ -115,11 +128,32 @@ def read_rows(path: Path) -> list[dict[str, str]]:
         return list(csv.DictReader(handle))
 
 
-def type_size(type_name: str) -> int:
+def type_size(
+    type_name: str,
+    type_table: dict[str, str] | None = None,
+    seen: set[str] | None = None,
+) -> int:
     clean = type_name.strip()
+    type_table = type_table or {}
+    seen = seen or set()
+    if clean.endswith("*"):
+        return 8
+    if clean == "ptr" or clean.startswith("ptr addrspace("):
+        return 8
+    if clean in type_table:
+        if clean in seen:
+            return 0
+        return type_size(type_table[clean], type_table, seen | {clean})
     vector = VECTOR_TYPE_RE.match(clean)
     if vector:
-        return int(vector.group("count")) * type_size(vector.group("base"))
+        return int(vector.group("count")) * type_size(vector.group("base"), type_table, seen)
+    array = ARRAY_TYPE_RE.match(clean)
+    if array:
+        return int(array.group("count")) * type_size(array.group("element"), type_table, seen)
+    if clean.startswith("<{") and clean.endswith("}>"):
+        return sum(type_size(part, type_table, seen) for part in split_top_level_csv(clean[2:-2].strip()))
+    if clean.startswith("{") and clean.endswith("}"):
+        return sum(type_size(part, type_table, seen) for part in split_top_level_csv(clean[1:-1].strip()))
     return {
         "half": 2,
         "float": 4,
@@ -161,25 +195,43 @@ def split_top_level_csv(text: str) -> list[str]:
     return parts
 
 
-def return_type_metrics(return_type: str) -> tuple[int, int]:
+def type_field_count(type_name: str, type_table: dict[str, str] | None = None) -> int:
+    clean = type_name.strip()
+    type_table = type_table or {}
+    if clean in type_table:
+        clean = type_table[clean].strip()
+    if clean.startswith("<{") and clean.endswith("}>"):
+        return len(split_top_level_csv(clean[2:-2].strip()))
+    if clean.startswith("{") and clean.endswith("}"):
+        return len(split_top_level_csv(clean[1:-1].strip()))
+    return 0 if clean == "void" else 1
+
+
+def return_type_metrics(return_type: str, type_table: dict[str, str] | None = None) -> tuple[int, int]:
     text = return_type.strip()
     if text == "void":
         return 0, 0
-    if text.startswith("<{") and text.endswith("}>"):
-        body = text[2:-2].strip()
-        fields = split_top_level_csv(body)
-        return len(fields), sum(type_size(field) for field in fields)
-    return 1, type_size(text)
+    fields = type_field_count(text, type_table)
+    return fields, type_size(text, type_table)
 
 
-def alloca_bytes(line: str) -> int:
-    match = ALLOCA_ARRAY_RE.search(line)
-    if match:
-        return int(match.group("count")) * type_size(match.group("type"))
-    match = ALLOCA_SCALAR_RE.search(line)
-    if match:
-        return type_size(match.group("type"))
-    return 0
+def parse_alloca_type(line: str) -> str:
+    match = ALLOCA_RE.search(line)
+    return match.group("type").strip() if match else ""
+
+
+def alloca_bytes(line: str, type_table: dict[str, str] | None = None) -> int:
+    alloca_type = parse_alloca_type(line)
+    return type_size(alloca_type, type_table) if alloca_type else 0
+
+
+def parse_type_table(ir: str) -> dict[str, str]:
+    type_table: dict[str, str] = {}
+    for raw in ir.splitlines():
+        match = TYPE_DEF_RE.match(raw.strip())
+        if match:
+            type_table[match.group("name")] = match.group("body").strip()
+    return type_table
 
 
 def parse_metal_size(output: str) -> dict[str, int]:
@@ -202,17 +254,26 @@ def parse_metal_size(output: str) -> dict[str, int]:
 
 
 def parse_ir_metrics(ir: str) -> dict[str, int]:
+    type_table = parse_type_table(ir)
     metrics = {
         "ir_lines": 0,
         "ir_instruction_lines": 0,
+        "ir_type_def_count": len(type_table),
+        "ir_max_type_def_bytes": max((type_size(value, type_table) for value in type_table.values()), default=0),
         "ir_return_field_count": 0,
         "ir_return_bytes": 0,
         "ir_alloca_count": 0,
+        "ir_alloca_array_count": 0,
+        "ir_alloca_struct_count": 0,
         "ir_alloca_bytes": 0,
+        "ir_scratch_bytes_estimate": 0,
         "ir_lifetime_start_bytes": 0,
+        "ir_lifetime_end_bytes": 0,
         "ir_insertvalue_count": 0,
         "ir_load_count": 0,
         "ir_store_count": 0,
+        "ir_memcpy_count": 0,
+        "ir_memset_count": 0,
         "ir_call_count": 0,
         "ir_branch_count": 0,
         "ir_select_count": 0,
@@ -220,6 +281,10 @@ def parse_ir_metrics(ir: str) -> dict[str, int]:
         "ir_phi_count": 0,
         "ir_air_dot_calls": 0,
         "ir_texture_sample_calls": 0,
+        "ir_addrspace1_refs": 0,
+        "ir_addrspace2_refs": 0,
+        "ir_addrspace3_refs": 0,
+        "ir_addrspace4_refs": 0,
     }
     for raw in ir.splitlines():
         line = raw.strip()
@@ -228,7 +293,7 @@ def parse_ir_metrics(ir: str) -> dict[str, int]:
         metrics["ir_lines"] += 1
         define = DEFINE_RE.match(line)
         if define and metrics["ir_return_field_count"] == 0:
-            fields, bytes_ = return_type_metrics(define.group("ret"))
+            fields, bytes_ = return_type_metrics(define.group("ret"), type_table)
             metrics["ir_return_field_count"] = fields
             metrics["ir_return_bytes"] = bytes_
         if line.startswith(";"):
@@ -236,16 +301,26 @@ def parse_ir_metrics(ir: str) -> dict[str, int]:
         if " = " in line or line.startswith(("br ", "ret ", "store ", "call ")):
             metrics["ir_instruction_lines"] += 1
         if " alloca " in line:
+            alloca_type = parse_alloca_type(line)
             metrics["ir_alloca_count"] += 1
-            metrics["ir_alloca_bytes"] += alloca_bytes(line)
+            metrics["ir_alloca_bytes"] += alloca_bytes(line, type_table)
+            if alloca_type.startswith("["):
+                metrics["ir_alloca_array_count"] += 1
+            if "%" in alloca_type:
+                metrics["ir_alloca_struct_count"] += 1
         lifetime = LIFETIME_RE.search(line)
         if lifetime:
             metrics["ir_lifetime_start_bytes"] += int(lifetime.group("bytes"))
+        lifetime_end = LIFETIME_END_RE.search(line)
+        if lifetime_end:
+            metrics["ir_lifetime_end_bytes"] += int(lifetime_end.group("bytes"))
         metrics["ir_insertvalue_count"] += line.count("insertvalue")
         if re.search(r"\bload\b", line):
             metrics["ir_load_count"] += 1
         if re.search(r"\bstore\b", line):
             metrics["ir_store_count"] += 1
+        metrics["ir_memcpy_count"] += line.count("llvm.memcpy")
+        metrics["ir_memset_count"] += line.count("llvm.memset")
         if re.search(r"\bcall\b", line):
             metrics["ir_call_count"] += 1
         if re.search(r"\bbr\b", line):
@@ -258,6 +333,15 @@ def parse_ir_metrics(ir: str) -> dict[str, int]:
             metrics["ir_phi_count"] += 1
         metrics["ir_air_dot_calls"] += line.count("@air.dot")
         metrics["ir_texture_sample_calls"] += line.count(".sample")
+        metrics["ir_addrspace1_refs"] += line.count("addrspace(1)")
+        metrics["ir_addrspace2_refs"] += line.count("addrspace(2)")
+        metrics["ir_addrspace3_refs"] += line.count("addrspace(3)")
+        metrics["ir_addrspace4_refs"] += line.count("addrspace(4)")
+    metrics["ir_scratch_bytes_estimate"] = max(
+        metrics["ir_alloca_bytes"],
+        metrics["ir_lifetime_start_bytes"],
+        metrics["ir_lifetime_end_bytes"],
+    )
     return metrics
 
 
@@ -413,6 +497,10 @@ def analyze(args: argparse.Namespace) -> list[dict[str, Any]]:
             out["vs_buffer_to_ir_alloca_ratio"] = (
                 bytes_per_vs / ir_alloca_bytes if stage == "vs" and ir_alloca_bytes else 0.0
             )
+            ir_scratch_bytes = parse_number(out.get("ir_scratch_bytes_estimate"))
+            out["vs_buffer_to_ir_scratch_ratio"] = (
+                bytes_per_vs / ir_scratch_bytes if stage == "vs" and ir_scratch_bytes else 0.0
+            )
             output_rows.append(out)
         return output_rows
     finally:
@@ -448,10 +536,10 @@ def write_markdown(path: Path, rows: list[dict[str, Any]]) -> None:
             "",
             "## Top Rows",
             "",
-            "| Rank | Stage | Seq/enc | GPU ms | VS buffer MiB | text B | IR return B | IR alloca B | lifetime B | insertvalues | warnings | Notes |",
-            "|---:|---|---|---:|---:|---:|---:|---:|---:|---:|---:|---|",
+            "| Rank | Stage | Seq/enc | GPU ms | VS buffer MiB | text B | IR return B | IR scratch B | alloca B | lifetime B | memcpy/memset | warnings | Notes |",
+            "|---:|---|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---|",
             *[
-                "| {rank} | {stage} | {seq}/{enc} | {gpu_ms} | {vs_mib} | {text_b} | {ret_b} | {alloca_b} | {life_b} | {insert} | {warn} | {note} |".format(
+                "| {rank} | {stage} | {seq}/{enc} | {gpu_ms} | {vs_mib} | {text_b} | {ret_b} | {scratch_b} | {alloca_b} | {life_b} | {mem_ops} | {warn} | {note} |".format(
                     rank=row.get("rank", ""),
                     stage=row.get("stage", ""),
                     seq=row.get("seq", ""),
@@ -460,9 +548,13 @@ def write_markdown(path: Path, rows: list[dict[str, Any]]) -> None:
                     vs_mib=f"{parse_number(row.get('vs_buffer_write_mib')):.3f}",
                     text_b=row.get("metallib_text_bytes", ""),
                     ret_b=row.get("ir_return_bytes", ""),
+                    scratch_b=row.get("ir_scratch_bytes_estimate", ""),
                     alloca_b=row.get("ir_alloca_bytes", ""),
                     life_b=row.get("ir_lifetime_start_bytes", ""),
-                    insert=row.get("ir_insertvalue_count", ""),
+                    mem_ops=(
+                        f"{parse_int(row.get('ir_memcpy_count'))}/"
+                        f"{parse_int(row.get('ir_memset_count'))}"
+                    ),
                     warn=row.get("warning_count", ""),
                     note=row.get("missing_reason", ""),
                 )
@@ -471,16 +563,18 @@ def write_markdown(path: Path, rows: list[dict[str, Any]]) -> None:
             "",
             "## Vertex Ratios",
             "",
-            "| Rank | Seq/enc | Xcode VS B/invocation | IR return B | Xcode/IR return | IR alloca B | Xcode/IR alloca |",
-            "|---:|---|---:|---:|---:|---:|---:|",
+            "| Rank | Seq/enc | Xcode VS B/invocation | IR return B | Xcode/IR return | IR scratch B | Xcode/IR scratch | IR alloca B | Xcode/IR alloca |",
+            "|---:|---|---:|---:|---:|---:|---:|---:|---:|",
             *[
-                "| {rank} | {seq}/{enc} | {vs_b} | {ret_b} | {ret_ratio} | {alloca_b} | {alloca_ratio} |".format(
+                "| {rank} | {seq}/{enc} | {vs_b} | {ret_b} | {ret_ratio} | {scratch_b} | {scratch_ratio} | {alloca_b} | {alloca_ratio} |".format(
                     rank=row.get("rank", ""),
                     seq=row.get("seq", ""),
                     enc=row.get("enc", ""),
                     vs_b=f"{parse_number(row.get('vs_buffer_bytes_per_vs_invocation')):.1f}",
                     ret_b=row.get("ir_return_bytes", ""),
                     ret_ratio=f"{parse_number(row.get('vs_buffer_to_ir_return_ratio')):.2f}x",
+                    scratch_b=row.get("ir_scratch_bytes_estimate", ""),
+                    scratch_ratio=f"{parse_number(row.get('vs_buffer_to_ir_scratch_ratio')):.2f}x",
                     alloca_b=row.get("ir_alloca_bytes", ""),
                     alloca_ratio=f"{parse_number(row.get('vs_buffer_to_ir_alloca_ratio')):.2f}x",
                 )
@@ -490,7 +584,8 @@ def write_markdown(path: Path, rows: list[dict[str, Any]]) -> None:
             "## Interpretation",
             "",
             "- `IR return B` is the compiler-visible stage return aggregate size after MSL compilation.",
-            "- `IR alloca B` and `lifetime B` show compiler-visible local scratch that survived into metallib IR.",
+            "- `IR scratch B` is the max of compiler-visible `alloca` bytes and lifetime byte ranges that survived into metallib IR.",
+            "- `memcpy/memset` and address-space reference columns are coarse signs of backend-lowered private or memory traffic, not a replacement for Xcode counters.",
             "- If MSL-local temp arrays are optimized away here while Xcode VS buffer writes stay high, the owner is below source-visible scratch.",
         ]),
         encoding="utf-8",

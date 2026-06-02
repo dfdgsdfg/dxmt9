@@ -14025,6 +14025,96 @@ Interpretation:
   for correctness or minor shader specialization, but they are not the current
   bottleneck-removal path.
 
+Compiler-visible scratch instrumentation has now been tightened for that next
+axis. `scripts/tools/analyze_metal_shader_codegen.py` now sizes `%type = type`
+aliases used by `alloca`, reports `IR scratch B` as the max of alloca and
+lifetime byte ranges, counts lifetime end bytes, `llvm.memcpy`/`llvm.memset`,
+and records coarse `addrspace(1..4)` references. The same fields are exposed by
+`scripts/tools/analyze_metal_shader_variants.py`, including Xcode-to-IR scratch
+ratios for structural VSOut variants.
+
+The enhanced current-head top3 report was generated at:
+
+```text
+traces/app-d3d9-3dmark05-current-head-gputrace-r1/analysis/frame60-metal-codegen-enhanced.md
+traces/app-d3d9-3dmark05-current-head-gputrace-r1/analysis/frame60-metal-codegen-enhanced.csv
+traces/app-d3d9-3dmark05-current-head-gputrace-r1/analysis/frame60-metal-variant-codegen-enhanced.md
+traces/app-d3d9-3dmark05-current-head-gputrace-r1/analysis/frame60-metal-variant-codegen-enhanced.csv
+```
+
+| Rank | Seq/enc | Xcode VS B/invocation | IR return B | IR scratch B | Xcode/IR return | Xcode/IR scratch | memcpy/memset |
+|---:|---|---:|---:|---:|---:|---:|---:|
+| 1 | `60/2` | `1602.5` | `184` | `128` | `8.71x` | `12.52x` | `0/0` |
+| 2 | `60/1` | `1151.0` | `184` | `128` | `6.26x` | `8.99x` | `0/0` |
+| 3 | `60/0` | `1542.9` | `184` | `128` | `8.39x` | `12.05x` | `0/0` |
+
+Interpretation:
+
+- The visible AIR/metallib IR shape is small and stable: return is `184B`,
+  compiler-visible scratch is `128B`, and there are no IR-level memcpy/memset
+  calls in the hot vertex shaders.
+- This does not prove that Apple backend spill is impossible, but it rejects
+  source-visible or compiler-visible private scratch as the direct owner of
+  `~1.1-1.6KiB` Xcode VS buffer bytes per invocation.
+- The remaining high-signal proof is therefore runtime Xcode A/B, not more
+  offline VSOut/source shrinking: use the existing primitive/backend locality
+  knobs (`--primitive-order`, `--draw-order`) against the same geometry-gated
+  hot window and require `VS Buffer Device Memory Bytes Written` to move.
+
+The first runtime primitive-order A/B is now complete for the same
+`window-014-027` hot mini replay. This used full VSOut, the same real depth
+input, the same 14 draws, and changed only triangle order inside each dumped
+index payload:
+
+```bash
+python3 scripts/tools/run_3dmark05_mini_replay.py \
+  traces/app-d3d9-3dmark05-screen-blend-window-014-027-vsout-trim-r1/analysis/frame60-mini-replay-manifest-window-014-027.json \
+  --output-dir traces/app-d3d9-3dmark05-screen-blend-window-014-027-vsout-trim-r1/analysis/mini-replay-window-014-027-sort-min-index \
+  --primitive-order sort-min-index \
+  --depth-input traces/app-d3d9-3dmark05-depth-attachment-dump-r1/analysis/frame60-2-depth.bin \
+  --capture-path traces/app-d3d9-3dmark05-screen-blend-window-014-027-vsout-trim-r1/analysis/mini-replay-window-014-027-sort-min-index.gputrace \
+  --run --repeat 1
+```
+
+Xcode exports:
+
+```text
+traces/app-d3d9-3dmark05-screen-blend-window-014-027-vsout-trim-r1/analysis/mini-replay-window-014-027-sort-min-index-performance.gputrace
+traces/app-d3d9-3dmark05-screen-blend-window-014-027-vsout-trim-r1/analysis/mini-replay-window-014-027-sort-min-index-counters-xcode.csv
+traces/app-d3d9-3dmark05-screen-blend-window-014-027-vsout-trim-r1/analysis/mini-replay-window-014-027-sort-min-index-counters-summary.csv
+traces/app-d3d9-3dmark05-screen-blend-window-014-027-vsout-trim-r1/analysis/mini-replay-window-014-027-full-vs-sort-min-index-xcode-comparison.md
+```
+
+| Metric | Full original order | `sort-min-index` | Delta |
+|---|---:|---:|---:|
+| GPU time | `5.658ms` | `6.391ms` | `+12.96%` |
+| Vertices | `158,244` | `158,244` | `0.00%` |
+| Primitives/post-clipped | `52,748 / 52,748` | `52,748 / 52,748` | `0.00%` |
+| FS invocations | `786,432` | `786,432` | `0.00%` |
+| VS invocations | `90,614` | `102,747` | `+13.39%` |
+| VS buffer write | `347.956MiB` | `393.845MiB` | `+13.19%` |
+| VS buffer bytes / VS invocation | `4026.5B` | `4019.4B` | `-0.18%` |
+| LRU32 index-cache miss estimate | `91,055` | `102,960` | `+13.07%` |
+| LRU64 index-cache miss estimate | `84,162` | `100,161` | `+19.01%` |
+| Tiled vertex buffer | `1.531MiB` | `1.750MiB` | `+14.29%` |
+| Tiled primitive-block buffer | `1.406MiB` | `1.625MiB` | `+15.56%` |
+
+Interpretation:
+
+- `sort-min-index` is not a fix for this window. It regresses GPU time and VS
+  buffer writes.
+- It is still a strong positive attribution signal: geometry, primitives, and
+  FS work are stable, while VS invocations and VS buffer writes move together.
+- The `VS buffer bytes / VS invocation` density stays effectively fixed. The
+  primary mover is invocation count/post-transform cache behavior, not visible
+  VSOut width or compiler-visible scratch.
+- The new mini replay summary `index_cache_estimate` predicts the regression:
+  LRU32 miss estimate changes by `+13.07%`, very close to Xcode's
+  `+13.39%` VS invocation delta.
+- Do not use naive per-draw min-index triangle sorting as a production
+  optimization. Future reorder/split candidates need a cache-miss gate and
+  must preserve draw-order-sensitive cases such as alpha blending.
+
 ```mermaid
 flowchart TD
   R2["r2 full-frame min-index probe\nresult.json present\nXcode counters complete"] --> Gate["stable-frame proof gate"]
@@ -14045,11 +14135,17 @@ flowchart TD
   Xcode --> Accept{"VS buffer write and GPU time drop?"}
   Accept -- "yes" --> Candidate["production pair-liveness PSO variants"]
   Accept -- "no: VS buffer -0.01%" --> StateAB["inspect compiler/backend spill\nhidden scratch\nprimitive/binning storage"]
+  StateAB --> Codegen["enhanced metallib IR probe\nreturn 184B, scratch 128B\nmemcpy/memset 0"]
+  Codegen --> RuntimeNext["next runtime proof\nprimitive-order/draw-order A/B\nsame hot window"]
+  RuntimeNext --> SortMini["sort-min-index mini replay\nsame vertices/primitives/FS invocations"]
+  SortMini --> Invocations["VS invocations +13.39%\nVS write +13.19%\nVS B/inv -0.18%"]
+  Invocations --> CacheSignal["LRU32 miss estimate +13.07%\npost-transform cache locality signal"]
+  CacheSignal --> ReorderGate["next: cache-miss-gated reorder/split candidates\navoid alpha/order-sensitive draws"]
 
   classDef hot fill:#ffe8e8,stroke:#b64242,color:#2b0d0d
   classDef good fill:#e8f5e8,stroke:#4d8b4d,color:#102a10
   classDef known fill:#e8f0ff,stroke:#476cb6,color:#0d1833
-  class Reject,FailSignal,StateAB hot
-  class PassSignal,Classifier good
+  class Reject,FailSignal,StateAB,RuntimeNext,SortMini,ReorderGate hot
+  class PassSignal,Classifier,Codegen,Invocations,CacheSignal good
   class R2,Gate,Mini,Hot,Tooling,Trim,Xcode,Accept,Candidate known
 ```

@@ -55,9 +55,42 @@ define <{ <4 x float>, <4 x float>, float }> @dxmt9_vs(i32 %0) {
         self.assertEqual(parsed["ir_return_bytes"], 36)
         self.assertEqual(parsed["ir_alloca_count"], 1)
         self.assertEqual(parsed["ir_alloca_bytes"], 128)
+        self.assertEqual(parsed["ir_scratch_bytes_estimate"], 128)
         self.assertEqual(parsed["ir_lifetime_start_bytes"], 128)
         self.assertEqual(parsed["ir_insertvalue_count"], 1)
         self.assertEqual(parsed["ir_air_dot_calls"], 1)
+
+    def test_parse_ir_type_alias_alloca_and_memory_intrinsics(self) -> None:
+        ir = """
+%struct.StageScratch = type { <4 x float>, [3 x <4 x float>], i32 }
+
+define %struct.StageScratch @dxmt9_vs(i32 %0) {
+  %1 = alloca %struct.StageScratch, align 16
+  %2 = alloca [2 x %struct.StageScratch], align 16
+  call void @llvm.lifetime.start.p0i8(i64 204, i8* %3)
+  call void @llvm.memcpy.p0i8.p0i8.i64(i8* %4, i8* %5, i64 68, i1 false)
+  call void @llvm.memset.p0i8.i64(i8* %4, i8 0, i64 68, i1 false)
+  %6 = load float, float addrspace(1)* %7
+  call void @llvm.lifetime.end.p0i8(i64 204, i8* %3)
+}
+"""
+
+        parsed = CODEGEN.parse_ir_metrics(ir)
+
+        self.assertEqual(parsed["ir_type_def_count"], 1)
+        self.assertEqual(parsed["ir_max_type_def_bytes"], 68)
+        self.assertEqual(parsed["ir_return_field_count"], 3)
+        self.assertEqual(parsed["ir_return_bytes"], 68)
+        self.assertEqual(parsed["ir_alloca_count"], 2)
+        self.assertEqual(parsed["ir_alloca_array_count"], 1)
+        self.assertEqual(parsed["ir_alloca_struct_count"], 2)
+        self.assertEqual(parsed["ir_alloca_bytes"], 204)
+        self.assertEqual(parsed["ir_lifetime_start_bytes"], 204)
+        self.assertEqual(parsed["ir_lifetime_end_bytes"], 204)
+        self.assertEqual(parsed["ir_scratch_bytes_estimate"], 204)
+        self.assertEqual(parsed["ir_memcpy_count"], 1)
+        self.assertEqual(parsed["ir_memset_count"], 1)
+        self.assertEqual(parsed["ir_addrspace1_refs"], 1)
 
 
 if __name__ == "__main__":

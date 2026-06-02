@@ -92,6 +92,64 @@ def transform_index_payload(payload: bytes, primitive_order: str) -> bytes:
     return struct.pack(f"<{len(ordered)}H", *ordered)
 
 
+def uint16_indices(payload: bytes) -> list[int]:
+    if len(payload) % 2:
+        raise SystemExit("index payload byte length is not uint16-aligned")
+    return list(struct.unpack(f"<{len(payload) // 2}H", payload))
+
+
+def lru_cache_misses(indices: list[int], cache_size: int) -> int:
+    cache: list[int] = []
+    misses = 0
+    for index in indices:
+        if index in cache:
+            cache.remove(index)
+            cache.insert(0, index)
+            continue
+        misses += 1
+        cache.insert(0, index)
+        if len(cache) > cache_size:
+            cache.pop()
+    return misses
+
+
+def index_cache_estimate(draws: list[dict[str, Any]],
+                         cache_sizes: tuple[int, ...] = (16, 32, 64)) -> dict[str, Any]:
+    result: dict[str, Any] = {
+        "draws": len(draws),
+        "cache_sizes": list(cache_sizes),
+        "original_index_count": 0,
+        "replay_index_count": 0,
+        "original_unique_indices_per_draw": 0,
+        "replay_unique_indices_per_draw": 0,
+    }
+    for cache_size in cache_sizes:
+        result[f"original_lru{cache_size}_misses"] = 0
+        result[f"replay_lru{cache_size}_misses"] = 0
+
+    for draw in draws:
+        geometry = draw["geometry"]
+        replay_indices = uint16_indices(resolve_path(str(geometry["index_file"])).read_bytes())
+        original_path = resolve_path(str(geometry.get("index_order_source_file", geometry["index_file"])))
+        original_indices = uint16_indices(original_path.read_bytes())
+        result["original_index_count"] += len(original_indices)
+        result["replay_index_count"] += len(replay_indices)
+        result["original_unique_indices_per_draw"] += len(set(original_indices))
+        result["replay_unique_indices_per_draw"] += len(set(replay_indices))
+        for cache_size in cache_sizes:
+            result[f"original_lru{cache_size}_misses"] += lru_cache_misses(original_indices, cache_size)
+            result[f"replay_lru{cache_size}_misses"] += lru_cache_misses(replay_indices, cache_size)
+
+    for cache_size in cache_sizes:
+        original = int(result[f"original_lru{cache_size}_misses"])
+        replay = int(result[f"replay_lru{cache_size}_misses"])
+        result[f"replay_lru{cache_size}_miss_delta"] = replay - original
+        result[f"replay_lru{cache_size}_miss_delta_pct"] = (
+            ((replay - original) / original) * 100.0 if original else 0.0
+        )
+    return result
+
+
 def materialize_replay_draws(draws: list[dict[str, Any]],
                              output_dir: Path,
                              primitive_order: str,
@@ -912,6 +970,7 @@ def prepare(args: argparse.Namespace) -> dict[str, Any]:
         "draw_count": len(replay_draws),
         "draw_order": args.draw_order,
         "primitive_order": args.primitive_order,
+        "index_cache_estimate": index_cache_estimate(replay_draws),
         "depth_clear": args.depth_clear,
         "depth_input": str(depth_input) if depth_input else None,
         "index_bytes": sum(int(draw["geometry"]["index_bytes"]) for draw in replay_draws),
