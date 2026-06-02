@@ -14333,7 +14333,7 @@ The first guarded mutating probe hook is now implemented:
   cost and visual correctness must be checked in the paired gputrace run before
   the cache-locality result can drive a persistent index-buffer strategy.
 
-Next A/B command shape:
+Completed A/B command:
 
 ```bash
 scripts/tools/run_3dmark05_perf_probe.sh \
@@ -14346,13 +14346,71 @@ scripts/tools/run_3dmark05_perf_probe.sh \
   --timeout 240
 ```
 
-Then export Xcode performance data and encoder counters, finalize with
-`scripts/tools/finalize_3dmark05_perf_probe.sh`, and compare against
-`cache-opt-candidate-frame50-r1`.
+Xcode performance data and encoder counters were exported, then finalized with
+`scripts/tools/finalize_3dmark05_perf_probe.sh --suffix
+cache-opt-apply-frame50-r1 --frame 50 --top 3 --hot-gpu-share 95.0` and
+compared against `cache-opt-candidate-frame50-r1`.
+
+Artifacts:
+
+```text
+experiments/output/app-d3d9-3dmark05-cache-opt-apply-frame50-r1/3dmark05-perf-summary.md
+experiments/output/app-d3d9-3dmark05-cache-opt-apply-frame50-r1/3dmark05-perf-encoders.csv
+experiments/output/app-d3d9-3dmark05-cache-opt-apply-frame50-r1/3dmark05-perf-encoder-streams.csv
+experiments/output/app-d3d9-3dmark05-cache-opt-apply-frame50-r1/3dmark05-perf-indexed-probe-draws.csv
+traces/app-d3d9-3dmark05-cache-opt-apply-frame50-r1/frame50.gputrace
+traces/app-d3d9-3dmark05-cache-opt-apply-frame50-r1/analysis/frame50-performance.gputrace
+traces/app-d3d9-3dmark05-cache-opt-apply-frame50-r1/analysis/frame50-counters-xcode.csv
+traces/app-d3d9-3dmark05-cache-opt-apply-frame50-r1/analysis/frame50-counters-summary.csv
+traces/app-d3d9-3dmark05-cache-opt-apply-frame50-r1/analysis/frame50-xcode-dxmt-joined-summary.csv
+traces/app-d3d9-3dmark05-cache-opt-apply-frame50-r1/analysis/frame50-xcode-dxmt-bottleneck-report.md
+traces/app-d3d9-3dmark05-cache-opt-apply-frame50-r1/analysis/frame50-shader-dump-report.md
+```
+
+Xcode replay Summary for the apply-probe capture reported `48.73ms` GPU time,
+`4` command buffers, `19` render encoders, `1025` draw calls, and `4,317,510`
+vertices. The rendered GT1 frame was visually valid.
+
+Apply-probe result:
+
+| Metric | No-mutate baseline | Apply-probe | Delta | Interpretation |
+|---|---:|---:|---:|---|
+| Total frame GPU | `46.006ms` | `48.732ms` | `+2.726ms` (`+5.93%`) | Overall frame did not improve. |
+| Hot-set GPU (`50/0,1,2,3,4,11`) | `45.249ms` | `46.459ms` | `+1.210ms` (`+2.68%`) | Hot set still worse as a whole. |
+| Hot-set VS buffer write | `2248.342MiB` | `2058.191MiB` | `-190.151MiB` (`-8.46%`) | Vertex-cache locality moved the write bucket. |
+| Hot-set VS invocations | `2,348,353` | `2,205,949` | `-142,404` (`-6.06%`) | VS write drop tracks invocation drop. |
+| Target rows GPU (`50/0,1,3`) | `27.297ms` | `26.076ms` | `-1.221ms` (`-4.47%`) | Scoped rows improved. |
+| Target rows VS buffer write | `1339.347MiB` | `1132.418MiB` | `-206.929MiB` (`-15.45%`) | Main positive signal. |
+| Target rows VS invocations | `1,410,130` | `1,254,407` | `-155,723` (`-11.04%`) | Positive signal is invocation-count driven. |
+| Target rows LRU32 cache misses | `1,536,457` | `1,272,632` | `-263,825` (`-17.17%`) | Software cache estimate predicts the measured direction. |
+| Submitted reorder bytes | `0B` | `3,359,046B` | `+3.20MiB` | Diagnostic transient-IB cost, not a production strategy. |
+| Applied/skipped reorder draws | `0 / 0` | `205 / 341` | n/a | Coverage is limited to safe opaque depth-writing draws in `50/0,1,3`. |
+
+Row-level interpretation:
+
+- `50/0`, `50/1`, and `50/3` are the only rows mutated by this apply-probe.
+  Their combined VS buffer write fell by `15.45%`, and their combined GPU time
+  fell by `4.47%`.
+- `50/1` is the cleanest per-row win: GPU `10.267ms -> 8.776ms`, VS buffer
+  write `498.768MiB -> 420.971MiB`, and VS invocations
+  `530,588 -> 473,300`.
+- `50/3` reduced VS buffer write by the same `15.60%`, but GPU time regressed
+  `8.877ms -> 9.517ms`; this keeps the result below production-proof quality.
+- Non-target rows changed enough to invalidate a broad full-frame claim:
+  `50/11` regressed `9.637ms -> 11.840ms` and
+  `537.312MiB -> 607.589MiB`, while `50/4` regressed
+  `3.673ms -> 4.916ms`.
+
+Conclusion: the guarded apply-probe confirms the mechanism in the real GT1
+draw path. Reordering safe indexed triangles can reduce post-transform cache
+misses, VS invocations, and Xcode `VS Buffer Device Memory Bytes Written` on
+the targeted rows. It does not yet prove a production optimization because the
+full-frame workload/top-row shape drifted and non-target rows regressed.
 
 The remaining proof path is:
 
-1. Run the paired full GT1 apply-probe capture and export Xcode counters.
+1. Rerun a more shape-stable paired A/B or row-local replay for the same
+   `50/0,1,3` target rows.
 2. Verify on full 3DMark05 GT1, not only mini replay, with the stable-frame
    gates: draw count, vertex/primitive count, top-row identity, FS invocations,
    and Xcode `VS Buffer Device Memory Bytes Written`.
@@ -14394,12 +14452,15 @@ flowchart TD
   DiagGate --> FullScout["full GT1 no-mutate scout\ncandidate miss delta + Xcode counters"]
   FullScout --> Frame50["frame50 Xcode/dxmt join\nhot set 45.249ms\nVS write 2248MiB\nLRU32 candidate -21.5%"]
   Frame50 --> ReorderGate["implemented guarded mutating probe\nDXMT9_PROBE_APPLY_INDEX_CACHE_OPT_CANDIDATE"]
-  ReorderGate --> ApplyAB["next paired gputrace/Xcode A/B\nprove VS invocations + VS write move"]
+  ReorderGate --> ApplyAB["apply-probe frame50 complete\n205 draws / 3.20MiB reordered IB\nvalid GT1 frame"]
+  ApplyAB --> TargetWin["target rows 50/0,1,3\nVS write -15.45%\nVS invocations -11.04%\nGPU -4.47%"]
+  ApplyAB --> FullFrameGap["full hot set GPU +2.68%\nnon-target rows regressed\nnot production proof"]
+  FullFrameGap --> StableNext["next proof\nshape-stable A/B or row-local replay"]
 
   classDef hot fill:#ffe8e8,stroke:#b64242,color:#2b0d0d
   classDef good fill:#e8f5e8,stroke:#4d8b4d,color:#102a10
   classDef known fill:#e8f0ff,stroke:#476cb6,color:#0d1833
-  class Reject,FailSignal,StateAB,RuntimeNext,SortMini,ApplyAB hot
-  class PassSignal,Classifier,Codegen,Invocations,CacheSignal,CacheWin,CacheRule,Owner,DiagGate,Frame50,ReorderGate good
+  class Reject,FailSignal,StateAB,RuntimeNext,SortMini,FullFrameGap,StableNext hot
+  class PassSignal,Classifier,Codegen,Invocations,CacheSignal,CacheWin,CacheRule,Owner,DiagGate,Frame50,ReorderGate,TargetWin good
   class R2,Gate,Mini,Hot,Tooling,Trim,Xcode,Accept,Candidate,CacheOpt known
 ```
