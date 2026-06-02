@@ -499,7 +499,11 @@ Commercial / 3rd-party titles (require external prefix):
     Add `--run --repeat N` for a no-capture smoke test. After enough disk is
     available, add `--capture-path <trace-run>/analysis/mini-replay.gputrace`
     with `--run` to create an Xcode-openable isolated replay capture. The helper
-    rewrites dxmt9's `buffer(30)` argument-buffer MSL into standalone
+    requires `2048MiB` free by default before starting capture
+    (`--min-capture-free-mb N` or
+    `DXMT9_MINI_REPLAY_MIN_CAPTURE_FREE_MB=N` overrides it); if the guard fails,
+    keep the no-capture smoke result and free disk before producing `.gputrace`.
+    The helper rewrites dxmt9's `buffer(30)` argument-buffer MSL into standalone
     constant-buffer bindings and emits `mini-replay-summary.json` with the exact
     buffer/texture/sampler slots it bound.
     `--probe-reverse-indexed-triangles-stream0-span-min BYTES` and

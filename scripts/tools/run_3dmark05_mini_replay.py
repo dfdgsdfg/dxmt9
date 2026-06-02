@@ -15,12 +15,14 @@ import json
 import os
 import re
 import shlex
+import shutil
 import subprocess
 from pathlib import Path
 from typing import Any
 
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
+DEFAULT_MIN_CAPTURE_FREE_MB = 2048
 
 
 def load_manifest(path: Path) -> dict[str, Any]:
@@ -97,6 +99,25 @@ def render_source(draws: list[dict[str, Any]],
                   fs_path: Path,
                   width: int,
                   height: int) -> str:
+    first_state = draws[0]["state"]
+    alpha_blend = int(first_state.get("alpha_blend", 0))
+    src_blend = int(first_state.get("src_blend", 2))
+    dst_blend = int(first_state.get("dst_blend", 1))
+    blend_op = int(first_state.get("blend_op", 1))
+    separate_alpha = int(first_state.get("separate_alpha", 0))
+    src_blend_alpha = int(first_state.get("src_blend_alpha", src_blend))
+    dst_blend_alpha = int(first_state.get("dst_blend_alpha", dst_blend))
+    blend_op_alpha = int(first_state.get("blend_op_alpha", blend_op))
+    color_write = int(str(first_state.get("color_write", "0xf")), 0)
+    depth_enabled = int(first_state.get("depth_enabled", 0))
+    depth_write = int(first_state.get("depth_write", 0))
+    depth_func = int(first_state.get("depth_func", 8 if not depth_enabled else 4))
+    cull = int(first_state.get("cull", 1))
+    scissor = int(first_state.get("scissor", 0))
+    scissor_l = int(first_state.get("scissor_l", 0))
+    scissor_t = int(first_state.get("scissor_t", 0))
+    scissor_r = int(first_state.get("scissor_r", width))
+    scissor_b = int(first_state.get("scissor_b", height))
     draw_entries = []
     for draw in draws:
         geometry = draw["geometry"]
@@ -181,6 +202,70 @@ static void initVsConsts(id<MTLBuffer> buffer) {{
   f[48 + 3] = 1.0f;
 }}
 
+static MTLCompareFunction compareFunction(unsigned value) {{
+  switch (value) {{
+    case 1: return MTLCompareFunctionNever;
+    case 2: return MTLCompareFunctionLess;
+    case 3: return MTLCompareFunctionEqual;
+    case 4: return MTLCompareFunctionLessEqual;
+    case 5: return MTLCompareFunctionGreater;
+    case 6: return MTLCompareFunctionNotEqual;
+    case 7: return MTLCompareFunctionGreaterEqual;
+    case 8: return MTLCompareFunctionAlways;
+    default: return MTLCompareFunctionAlways;
+  }}
+}}
+
+static MTLBlendFactor blendFactor(unsigned value, bool alphaLane) {{
+  switch (value) {{
+    case 1: return MTLBlendFactorZero;
+    case 2: return MTLBlendFactorOne;
+    case 3: return MTLBlendFactorSourceColor;
+    case 4: return MTLBlendFactorOneMinusSourceColor;
+    case 5: return MTLBlendFactorSourceAlpha;
+    case 6: return MTLBlendFactorOneMinusSourceAlpha;
+    case 7: return MTLBlendFactorDestinationAlpha;
+    case 8: return MTLBlendFactorOneMinusDestinationAlpha;
+    case 9: return MTLBlendFactorDestinationColor;
+    case 10: return MTLBlendFactorOneMinusDestinationColor;
+    case 11: return alphaLane ? MTLBlendFactorOne : MTLBlendFactorSourceAlphaSaturated;
+    case 12: return MTLBlendFactorSourceAlpha;
+    case 13: return MTLBlendFactorOneMinusSourceAlpha;
+    case 14: return alphaLane ? MTLBlendFactorBlendAlpha : MTLBlendFactorBlendColor;
+    case 15: return alphaLane ? MTLBlendFactorOneMinusBlendAlpha : MTLBlendFactorOneMinusBlendColor;
+    default: return MTLBlendFactorOne;
+  }}
+}}
+
+static MTLBlendOperation blendOperation(unsigned value) {{
+  switch (value) {{
+    case 1: return MTLBlendOperationAdd;
+    case 2: return MTLBlendOperationSubtract;
+    case 3: return MTLBlendOperationReverseSubtract;
+    case 4: return MTLBlendOperationMin;
+    case 5: return MTLBlendOperationMax;
+    default: return MTLBlendOperationAdd;
+  }}
+}}
+
+static MTLCullMode cullMode(unsigned value) {{
+  switch (value) {{
+    case 1: return MTLCullModeNone;
+    case 2: return MTLCullModeFront;
+    case 3: return MTLCullModeBack;
+    default: return MTLCullModeNone;
+  }}
+}}
+
+static MTLColorWriteMask colorWriteMask(unsigned value) {{
+  MTLColorWriteMask mask = 0;
+  if (value & 0x1) mask |= MTLColorWriteMaskRed;
+  if (value & 0x2) mask |= MTLColorWriteMaskGreen;
+  if (value & 0x4) mask |= MTLColorWriteMaskBlue;
+  if (value & 0x8) mask |= MTLColorWriteMaskAlpha;
+  return mask;
+}}
+
 int main() {{
   @autoreleasepool {{
     id<MTLDevice> device = MTLCreateSystemDefaultDevice();
@@ -200,6 +285,17 @@ int main() {{
     psoDesc.vertexFunction = vs;
     psoDesc.fragmentFunction = fs;
     psoDesc.colorAttachments[0].pixelFormat = MTLPixelFormatRGBA8Unorm;
+    psoDesc.colorAttachments[0].writeMask = colorWriteMask({color_write});
+    psoDesc.colorAttachments[0].blendingEnabled = {alpha_blend};
+    psoDesc.colorAttachments[0].sourceRGBBlendFactor = blendFactor({src_blend}, false);
+    psoDesc.colorAttachments[0].destinationRGBBlendFactor = blendFactor({dst_blend}, false);
+    psoDesc.colorAttachments[0].rgbBlendOperation = blendOperation({blend_op});
+    psoDesc.colorAttachments[0].sourceAlphaBlendFactor =
+        blendFactor({src_blend_alpha if separate_alpha else src_blend}, true);
+    psoDesc.colorAttachments[0].destinationAlphaBlendFactor =
+        blendFactor({dst_blend_alpha if separate_alpha else dst_blend}, true);
+    psoDesc.colorAttachments[0].alphaBlendOperation =
+        blendOperation({blend_op_alpha if separate_alpha else blend_op});
     psoDesc.depthAttachmentPixelFormat = MTLPixelFormatDepth32Float;
     NSError* error = nil;
     id<MTLRenderPipelineState> pso = [device newRenderPipelineStateWithDescriptor:psoDesc
@@ -208,6 +304,11 @@ int main() {{
       std::cerr << "failed to create PSO: " << [[error localizedDescription] UTF8String] << "\\n";
       return 2;
     }}
+    MTLDepthStencilDescriptor* depthStateDesc = [MTLDepthStencilDescriptor new];
+    depthStateDesc.depthCompareFunction =
+        {depth_enabled} ? compareFunction({depth_func}) : MTLCompareFunctionAlways;
+    depthStateDesc.depthWriteEnabled = {1 if depth_enabled and depth_write else 0};
+    id<MTLDepthStencilState> depthState = [device newDepthStencilStateWithDescriptor:depthStateDesc];
 
     MTLTextureDescriptor* colorDesc =
         [MTLTextureDescriptor texture2DDescriptorWithPixelFormat:MTLPixelFormatRGBA8Unorm
@@ -278,6 +379,17 @@ int main() {{
     pass.depthAttachment.clearDepth = 1.0;
     id<MTLRenderCommandEncoder> encoder = [commandBuffer renderCommandEncoderWithDescriptor:pass];
     [encoder setRenderPipelineState:pso];
+    [encoder setDepthStencilState:depthState];
+    [encoder setCullMode:cullMode({cull})];
+    if ({scissor}) {{
+      MTLScissorRect rect = {{
+        static_cast<NSUInteger>({scissor_l}),
+        static_cast<NSUInteger>({scissor_t}),
+        static_cast<NSUInteger>(std::max(0, {scissor_r} - {scissor_l})),
+        static_cast<NSUInteger>(std::max(0, {scissor_b} - {scissor_t}))
+      }};
+      [encoder setScissorRect:rect];
+    }}
     [encoder setVertexBuffer:vsConsts offset:0 atIndex:6];
     [encoder setVertexBuffer:ffpVs offset:0 atIndex:7];
     [encoder setFragmentBuffer:psConsts offset:0 atIndex:6];
@@ -381,6 +493,32 @@ def compile_source(summary: dict[str, Any]) -> None:
     subprocess.run(cmd, check=True)
 
 
+def parse_min_capture_free_mb(value: str | None) -> int:
+    if value is None or value == "":
+        return DEFAULT_MIN_CAPTURE_FREE_MB
+    try:
+        parsed = int(value)
+    except ValueError as exc:
+        raise SystemExit(f"invalid min capture free MB: {value}") from exc
+    if parsed < 0:
+        raise SystemExit(f"invalid min capture free MB: {value}")
+    return parsed
+
+
+def check_capture_free_space(capture_path: Path, min_free_mb: int) -> None:
+    if min_free_mb <= 0:
+        return
+    target_dir = capture_path.parent
+    target_dir.mkdir(parents=True, exist_ok=True)
+    free_mb = shutil.disk_usage(target_dir).free // (1024 * 1024)
+    if free_mb < min_free_mb:
+        raise SystemExit(
+            f"insufficient free space for mini replay gputrace: "
+            f"{free_mb}MiB available at {target_dir}, require {min_free_mb}MiB "
+            f"(override with --min-capture-free-mb or DXMT9_MINI_REPLAY_MIN_CAPTURE_FREE_MB)"
+        )
+
+
 def run_binary(summary: dict[str, Any], repeat: int, capture_path: Path | None) -> None:
     env = os.environ.copy()
     env["DXMT9_MINI_REPLAY_REPEAT"] = str(repeat)
@@ -400,10 +538,21 @@ def main() -> int:
     parser.add_argument("--run", action="store_true")
     parser.add_argument("--repeat", type=int, default=1)
     parser.add_argument("--capture-path", type=Path)
+    parser.add_argument(
+        "--min-capture-free-mb",
+        type=parse_min_capture_free_mb,
+        default=parse_min_capture_free_mb(os.environ.get("DXMT9_MINI_REPLAY_MIN_CAPTURE_FREE_MB")),
+        help=(
+            "minimum free space required before --capture-path is used "
+            f"(default: {DEFAULT_MIN_CAPTURE_FREE_MB}MiB, env DXMT9_MINI_REPLAY_MIN_CAPTURE_FREE_MB)"
+        ),
+    )
     args = parser.parse_args()
 
     summary = prepare(args)
     print(json.dumps(summary, indent=2, sort_keys=True))
+    if args.run and args.capture_path is not None:
+        check_capture_free_space(args.capture_path, args.min_capture_free_mb)
     if args.compile or args.run:
         compile_source(summary)
     if args.run:

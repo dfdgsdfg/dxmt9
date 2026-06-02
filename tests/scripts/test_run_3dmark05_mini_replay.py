@@ -60,45 +60,49 @@ fragment float4 dxmt9_fs(VSOut in [[stage_in]],
 
 
 class MiniReplayScriptTests(unittest.TestCase):
+    def write_manifest_fixture(self, root: Path) -> tuple[Path, Path]:
+        shader_dir = root / "shaders"
+        geometry_dir = root / "geometry"
+        output_dir = root / "out"
+        shader_dir.mkdir()
+        geometry_dir.mkdir()
+        vs = shader_dir / "translated-vs-shader-2748-source-1.metal"
+        fs = shader_dir / "translated-fs-shader-3567-source-2.metal"
+        vs.write_text(VS_MSL, encoding="utf-8")
+        fs.write_text(FS_MSL, encoding="utf-8")
+
+        index_file = geometry_dir / "draw.index.bin"
+        stream_file = geometry_dir / "draw.stream0.bin"
+        index_file.write_bytes(b"\x00\x00\x01\x00\x02\x00")
+        stream_file.write_bytes(bytes(range(24)))
+        manifest = root / "manifest.json"
+        manifest.write_text(json.dumps({
+            "schema": "dxmt9.3dmark05.mini_replay_manifest.v1",
+            "draws": [{
+                "state": {
+                    "index_count": 3,
+                    "base_vertex": 0,
+                    "stream0_stride": 24,
+                    "stream0_offset": 0,
+                },
+                "shaders": {
+                    "vs_file": str(vs),
+                    "ps_file": str(fs),
+                },
+                "geometry": {
+                    "index_file": str(index_file),
+                    "stream0_file": str(stream_file),
+                    "index_bytes": 6,
+                    "stream0_bytes": 24,
+                },
+            }],
+        }), encoding="utf-8")
+        return manifest, output_dir
+
     def test_prepare_rewrites_argbuf_slots_and_summarizes_payloads(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
-            shader_dir = root / "shaders"
-            geometry_dir = root / "geometry"
-            output_dir = root / "out"
-            shader_dir.mkdir()
-            geometry_dir.mkdir()
-            vs = shader_dir / "translated-vs-shader-2748-source-1.metal"
-            fs = shader_dir / "translated-fs-shader-3567-source-2.metal"
-            vs.write_text(VS_MSL, encoding="utf-8")
-            fs.write_text(FS_MSL, encoding="utf-8")
-
-            index_file = geometry_dir / "draw.index.bin"
-            stream_file = geometry_dir / "draw.stream0.bin"
-            index_file.write_bytes(b"\x00\x00\x01\x00\x02\x00")
-            stream_file.write_bytes(bytes(range(24)))
-            manifest = root / "manifest.json"
-            manifest.write_text(json.dumps({
-                "schema": "dxmt9.3dmark05.mini_replay_manifest.v1",
-                "draws": [{
-                    "state": {
-                        "index_count": 3,
-                        "base_vertex": 0,
-                        "stream0_stride": 24,
-                        "stream0_offset": 0,
-                    },
-                    "shaders": {
-                        "vs_file": str(vs),
-                        "ps_file": str(fs),
-                    },
-                    "geometry": {
-                        "index_file": str(index_file),
-                        "stream0_file": str(stream_file),
-                        "index_bytes": 6,
-                        "stream0_bytes": 24,
-                    },
-                }],
-            }), encoding="utf-8")
+            manifest, output_dir = self.write_manifest_fixture(root)
 
             result = subprocess.run(
                 [
@@ -123,6 +127,33 @@ class MiniReplayScriptTests(unittest.TestCase):
             self.assertIn("texture2d<float> tex0 [[texture(0)]]", (output_dir / "dxmt9_fs.replay.metal").read_text(encoding="utf-8"))
             self.assertNotIn("ArgbufLayout& abuf [[buffer(30)]]", (output_dir / "dxmt9_vs.replay.metal").read_text(encoding="utf-8"))
             self.assertIn("constant VsConsts& vsConsts [[buffer(6)]]", (output_dir / "dxmt9_vs.replay.metal").read_text(encoding="utf-8"))
+
+    def test_capture_path_requires_enough_free_space_before_compile(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            manifest, output_dir = self.write_manifest_fixture(root)
+
+            result = subprocess.run(
+                [
+                    sys.executable,
+                    str(SCRIPT),
+                    str(manifest),
+                    "--output-dir",
+                    str(output_dir),
+                    "--run",
+                    "--capture-path",
+                    str(output_dir / "mini-replay.gputrace"),
+                    "--min-capture-free-mb",
+                    "999999999",
+                ],
+                text=True,
+                capture_output=True,
+                check=False,
+            )
+
+            self.assertNotEqual(result.returncode, 0)
+            self.assertIn("insufficient free space for mini replay gputrace", result.stderr)
+            self.assertNotIn("compile_cmd:", result.stdout)
 
 
 if __name__ == "__main__":

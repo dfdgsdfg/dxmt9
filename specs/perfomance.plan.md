@@ -11746,9 +11746,22 @@ For this manifest the replay MSL bindings are:
 
 When disk space is available, the next Xcode proof command is the same helper
 with `--capture-path <trace-run>/analysis/mini-replay.gputrace` and a larger
-`--repeat` count to magnify the isolated draw cost. This should let Xcode
-counters answer whether the hidden VS/tiler/backend write bucket reproduces in
-the isolated shader+geometry draw set without Wine/D3D9 frame noise.
+`--repeat` count to magnify the isolated draw cost. The helper now applies a
+free-space guard before compiling or launching a capture: by default it requires
+`2048MiB` free at the capture destination, with
+`--min-capture-free-mb N` or `DXMT9_MINI_REPLAY_MIN_CAPTURE_FREE_MB=N` as the
+explicit override. On the current low-disk machine this means the no-capture
+smoke is valid, but `.gputrace` generation should wait until enough space is
+available.
+
+The proof is not complete until that mini replay `.gputrace` is opened in Xcode,
+performance data is embedded, encoder counters are exported, and the resulting
+CSV shows whether `VS Buffer Device Memory Bytes Written`,
+`VS Invocations`, tiled/primitive-block counters, and bytes-per-invocation
+reproduce in the isolated shader+geometry draw set. Until then, the standalone
+replay proves payload/shader harness viability only; it does not prove that the
+hidden VS/tiler/backend write bucket has been reproduced without Wine/D3D9 frame
+noise.
 
 Before the selector existed, `app-d3d9-3dmark05-current-head-geometry-payload-row60-2-topgroup-r1`
 was manually captured with encoder draw indices `234..236`:
