@@ -16,7 +16,12 @@ using namespace metal;
 struct VsConsts { float4 vsFloatConst[256]; int4 vsIntConst[16]; uint vsBoolConst[16]; };
 struct FfpVsConsts { float2 halfPixelFixup; };
 struct DrawVolatile { int vertexBaseIndex; uint vertexStreamOffset; uint vertexStreamStride; uint _pad; };
-struct VSOut { float4 position [[position]]; float4 texcoord0; float fogFactor; float pointSize [[point_size]]; };
+struct VSOut {
+  float4 position [[position]];
+  float4 texcoord0;
+  float fogFactor;
+  float pointSize [[point_size]];
+};
 struct ArgbufLayout {
   constant VsConsts* vsConsts [[id(0)]];
   constant FfpVsConsts* ffpVs [[id(1)]];
@@ -44,7 +49,12 @@ FS_MSL = """
 using namespace metal;
 struct PsConsts { float4 psFloatConst[224]; int4 psIntConst[16]; uint psBoolConst[16]; };
 struct FfpPsConsts { uint fogMode; };
-struct VSOut { float4 position [[position]]; float4 texcoord0; float fogFactor; float pointSize [[point_size]]; };
+struct VSOut {
+  float4 position [[position]];
+  float4 texcoord0;
+  float fogFactor;
+  float pointSize [[point_size]];
+};
 struct ArgbufLayout {
   constant PsConsts* psConsts [[id(2)]];
   constant FfpPsConsts* ffpPs [[id(3)]];
@@ -238,6 +248,42 @@ class MiniReplayScriptTests(unittest.TestCase):
             self.assertIn("static MTLScissorRect scissorRect(const DrawEntry& draw", objc)
             self.assertIn("[encoder setScissorRect:scissorRect(draw, 1024, 768)];", objc)
             self.assertIn(", 1, 10, 20, 110, 220}", objc)
+
+    def test_trim_vsout_to_fs_reads_removes_unread_replay_fields(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            manifest, output_dir = self.write_manifest_fixture(root)
+
+            result = subprocess.run(
+                [
+                    sys.executable,
+                    str(SCRIPT),
+                    str(manifest),
+                    "--output-dir",
+                    str(output_dir),
+                    "--trim-vsout-to-fs-reads",
+                ],
+                text=True,
+                capture_output=True,
+                check=False,
+            )
+
+            self.assertEqual(result.returncode, 0, result.stderr)
+            summary = json.loads((output_dir / "mini-replay-summary.json").read_text(encoding="utf-8"))
+            trim = summary["shader_variants"][0]["vsout_trim"]
+            self.assertTrue(trim["enabled"])
+            self.assertEqual(trim["keep_fields"], ["position", "texcoord0"])
+            self.assertEqual(trim["removed_fields"], ["fogFactor", "pointSize"])
+            vs_text = (output_dir / "dxmt9_vs.replay.metal").read_text(encoding="utf-8")
+            fs_text = (output_dir / "dxmt9_fs.replay.metal").read_text(encoding="utf-8")
+            self.assertIn("float4 position [[position]];", vs_text)
+            self.assertIn("float4 texcoord0;", vs_text)
+            self.assertNotIn("float fogFactor;", vs_text)
+            self.assertNotIn("float pointSize [[point_size]];", vs_text)
+            self.assertNotIn("out.fogFactor =", vs_text)
+            self.assertNotIn("out.pointSize =", vs_text)
+            self.assertNotIn("float fogFactor;", fs_text)
+            self.assertNotIn("float pointSize [[point_size]];", fs_text)
 
     def test_primitive_order_rewrites_index_payload_in_output_dir(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

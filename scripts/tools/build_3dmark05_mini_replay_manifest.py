@@ -18,6 +18,8 @@ import re
 from pathlib import Path
 from typing import Any
 
+from analyze_shader_dumps import parse_vsout_fields, stage_in_read_fields
+
 
 def as_int(value: Any) -> int:
     try:
@@ -242,6 +244,29 @@ def resolve_draw_shader_file(
     return fallback, "row-fallback" if fallback else "missing"
 
 
+def shader_layout_metadata(
+    vs_file: str,
+    ps_file: str,
+    fallback_vsout_fields: str,
+    fallback_ps_read_fields: str,
+) -> tuple[str, str]:
+    vs_path = Path(vs_file)
+    ps_path = Path(ps_file)
+    if not vs_path.is_file():
+        return fallback_vsout_fields, fallback_ps_read_fields
+
+    vs_fields = parse_vsout_fields(vs_path.read_text(encoding="utf-8"))
+    if not vs_fields:
+        return fallback_vsout_fields, fallback_ps_read_fields
+
+    vsout_fields = ",".join(name for _, name in vs_fields)
+    if not ps_path.is_file():
+        return vsout_fields, fallback_ps_read_fields
+
+    ps_reads, _ = stage_in_read_fields(ps_path.read_text(encoding="utf-8"), vs_fields)
+    return vsout_fields, ",".join(ps_reads) if ps_reads else fallback_ps_read_fields
+
+
 def selected_payloads(
     geometries: list[dict[str, str]],
     target_row: str | None,
@@ -406,6 +431,12 @@ def build_manifest(args: argparse.Namespace) -> dict[str, Any]:
             missing_draw_shader_files += 1
         if vs_file_source == "row-fallback" or ps_file_source == "row-fallback":
             row_shader_fallbacks += 1
+        vsout_fields, ps_vsout_read_fields = shader_layout_metadata(
+            vs_file,
+            ps_file,
+            shader.get("vsout_fields", ""),
+            shader.get("ps_vsout_read_fields", ""),
+        )
 
         manifest_draws.append({
             "row": key,
@@ -458,8 +489,8 @@ def build_manifest(args: argparse.Namespace) -> dict[str, Any]:
                 "ps_file": ps_file,
                 "vs_file_source": vs_file_source,
                 "ps_file_source": ps_file_source,
-                "vsout_fields": shader.get("vsout_fields", ""),
-                "ps_vsout_read_fields": shader.get("ps_vsout_read_fields", ""),
+                "vsout_fields": vsout_fields,
+                "ps_vsout_read_fields": ps_vsout_read_fields,
             },
             "geometry": {
                 "meta_file": payload.get("meta_file", ""),

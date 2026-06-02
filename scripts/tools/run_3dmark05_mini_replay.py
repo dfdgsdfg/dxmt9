@@ -22,9 +22,12 @@ import subprocess
 from pathlib import Path
 from typing import Any
 
+from analyze_shader_dumps import parse_vsout_fields, stage_in_read_fields
+
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 DEFAULT_MIN_CAPTURE_FREE_MB = 2048
+VSOUT_RE = re.compile(r"struct\s+VSOut\s*\{(?P<body>.*?)\};", re.S)
 
 
 def load_manifest(path: Path) -> dict[str, Any]:
@@ -172,6 +175,74 @@ def transform_msl(source: str, stage: str) -> tuple[str, dict[str, int]]:
         return source, {"psconsts": ps_slot, "ffpps": ffp_slot}
     else:
         raise ValueError(stage)
+
+
+def vsout_field_name_from_line(line: str) -> str:
+    text = line.strip()
+    if not text or text.startswith("//"):
+        return ""
+    text = text.split("//", 1)[0].strip().rstrip(";")
+    if not text:
+        return ""
+    if "[[" in text:
+        text = text.split("[[", 1)[0].strip()
+    parts = text.split()
+    return parts[-1].strip("*&") if len(parts) >= 2 else ""
+
+
+def trim_vsout_source(source: str, keep_fields: set[str]) -> tuple[str, list[str]]:
+    match = VSOUT_RE.search(source)
+    if not match:
+        return source, []
+    removed: list[str] = []
+    kept_lines: list[str] = []
+    for raw in match.group("body").splitlines():
+        name = vsout_field_name_from_line(raw)
+        if name and name not in keep_fields:
+            removed.append(name)
+            continue
+        kept_lines.append(raw)
+    if not removed:
+        return source, []
+
+    replacement = "struct VSOut {\n" + "\n".join(kept_lines).strip("\n") + "\n};"
+    out = source[:match.start()] + replacement + source[match.end():]
+    for field in removed:
+        out = re.sub(rf"(?m)^\s*out\.{re.escape(field)}\s*=.*;\s*\n", "", out)
+    for field in removed:
+        if not field.startswith("texcoord"):
+            continue
+        suffix = field[len("texcoord"):]
+        if not suffix.isdigit():
+            continue
+        out = re.sub(
+            rf"(?m)^(\s*case\s+{int(suffix)}u:\s*)return\s+in\.{re.escape(field)}\s*;",
+            r"\1return in.texcoord0;",
+            out,
+        )
+    return out, removed
+
+
+def apply_vsout_read_trim(vs_source: str, fs_source: str) -> tuple[str, str, dict[str, Any]]:
+    vs_fields = parse_vsout_fields(vs_source)
+    if not vs_fields:
+        return vs_source, fs_source, {
+            "enabled": False,
+            "reason": "missing-vsout",
+            "keep_fields": [],
+            "removed_fields": [],
+        }
+
+    fs_reads, _ = stage_in_read_fields(fs_source, vs_fields)
+    keep_fields = {"position", "texcoord0", *fs_reads}
+    vs_source, removed = trim_vsout_source(vs_source, keep_fields)
+    fs_source, _ = trim_vsout_source(fs_source, keep_fields)
+    return vs_source, fs_source, {
+        "enabled": True,
+        "reason": "",
+        "keep_fields": sorted(keep_fields),
+        "removed_fields": removed,
+    }
 
 
 def cxx_string(value: str) -> str:
@@ -774,8 +845,18 @@ def prepare(args: argparse.Namespace) -> dict[str, Any]:
             else:
                 vs_replay = args.output_dir / f"dxmt9_vs_{variant_index:02d}.replay.metal"
                 fs_replay = args.output_dir / f"dxmt9_fs_{variant_index:02d}.replay.metal"
-            vs_source, vs_cbuf_slots = transform_msl(vs_file.read_text(encoding="utf-8"), "vs")
-            fs_source, fs_cbuf_slots = transform_msl(fs_file.read_text(encoding="utf-8"), "fs")
+            vs_source = vs_file.read_text(encoding="utf-8")
+            fs_source = fs_file.read_text(encoding="utf-8")
+            vsout_trim = {
+                "enabled": False,
+                "reason": "disabled",
+                "keep_fields": [],
+                "removed_fields": [],
+            }
+            if args.trim_vsout_to_fs_reads:
+                vs_source, fs_source, vsout_trim = apply_vsout_read_trim(vs_source, fs_source)
+            vs_source, vs_cbuf_slots = transform_msl(vs_source, "vs")
+            fs_source, fs_cbuf_slots = transform_msl(fs_source, "fs")
             vs_replay.write_text(vs_source, encoding="utf-8")
             fs_replay.write_text(fs_source, encoding="utf-8")
             vs_bindings = stage_bindings(vs_source)
@@ -796,6 +877,7 @@ def prepare(args: argparse.Namespace) -> dict[str, Any]:
                 "fs_cbuf_slots": fs_cbuf_slots,
                 "vs_bindings": vs_bindings,
                 "fs_bindings": fs_bindings,
+                "vsout_trim": vsout_trim,
             })
         draw["_shader_variant"] = variant_index
     dummy_vertex_buffer_slots = sorted(dummy_vertex_buffer_slot_set)
@@ -934,6 +1016,14 @@ def main() -> int:
         choices=("original", "reverse"),
         default="original",
         help="reorder manifest draws before replay",
+    )
+    parser.add_argument(
+        "--trim-vsout-to-fs-reads",
+        action="store_true",
+        help=(
+            "diagnostic: trim replay VSOut fields to the actual selected FS "
+            "stage_in reads, preserving position and texcoord0 as fallbacks"
+        ),
     )
     parser.add_argument("--compile", action="store_true")
     parser.add_argument("--run", action="store_true")

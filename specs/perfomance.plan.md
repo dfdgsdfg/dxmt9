@@ -12705,12 +12705,20 @@ shaped: `window-014-020` plus `window-021-027` gives `347.296MiB` VS buffer
 write versus `347.914MiB` for `window-014-027`, with exact VS invocation and
 primitive counts. `14..20` owns `62.7%` of `14..27` VS write and `21..27` owns
 `37.1%`; both halves show the same `~3.9-4.1KiB/VS invocation` density.
-Manifest metadata shows all `14..27` draws use a full VSOut layout
-(`position,color,secondaryColor,texcoord0..7,fogFactor,pointSize`) while the FS
-reads only `fogFactor,position,texcoord0`. The stronger hypothesis is therefore
-PSO/pair-local varying liveness and VS stage-out/backend write amplification,
-not alpha/scissor alone. Alpha/scissor appears only in draws `24..27`, but
-`14..23` is already hot.
+The older manifest metadata claimed all `14..27` draws used a full VSOut layout
+while the FS read only `fogFactor,position,texcoord0`. Rechecking the selected
+draw-hash MSL files shows that claim was wrong: the hot pairs read high
+texcoords too, with pair-specific combinations that include `texcoord1..7`.
+The manifest builder now recomputes `vsout_fields` and `ps_vsout_read_fields`
+from the selected VS/PS files instead of copying row-level shader-summary
+metadata. This explains why a `position,fogFactor,texcoord0` trim would corrupt
+the replay and why full-app `DXMT9_TRIM_UNUSED_VARYINGS=1` must be validated
+from actual emitted FS reads rather than row-level summary fields.
+
+The stronger hypothesis remains VS stage-out/backend write amplification, but
+the pair-liveness opportunity is narrower than the stale metadata implied:
+for the first hot window, most high texcoords are genuinely live. Alpha/scissor
+appears only in draws `24..27`, while `14..23` is already hot.
 
 Next split:
 
@@ -12718,13 +12726,14 @@ Next split:
   `0xfea7cb/0xa0910f` draws `[14,15,18,19,21]`, alpha/scissor variant
   `0xdee2a2/0x2f2090` draws `[26,27]`, and the large indexed draws
   `[15,19,27]`.
-- Prototype a mini-replay shader variant that trims VSOut to the FS-read fields
-  (`position,fogFactor,texcoord0`) for a single hot shader pair, then compare
-  Xcode `VS Buffer Device Memory Bytes Written`, GPU time, and image output
-  against the full-VSOut replay.
-- If the trimmed variant reduces VS buffer write materially, move the production
-  design to VS/FS pair-liveness PSO variants. If it does not, inspect Metal
-  compiler/backend spill and primitive/binning storage next.
+- Prototype a mini-replay shader variant that trims only fields not read by the
+  actual selected FS MSL, likely `color`, `secondaryColor`, and `pointSize` for
+  these hot pairs while preserving the live high texcoords. Compare Xcode
+  `VS Buffer Device Memory Bytes Written`, GPU time, and image output against
+  the full-VSOut replay.
+- If actual-read-set trimming reduces VS buffer write materially, move the
+  production design to VS/FS pair-liveness PSO variants. If it does not,
+  inspect Metal compiler/backend spill and primitive/binning storage next.
 - Keep `window-084-112`/`tail-056-112` as secondary checks for the remaining
   `~206MiB` of the full 113-draw replay.
 
@@ -12761,7 +12770,7 @@ flowchart TD
   Prefix27 --> Window1427["window 14..27\nGPU 5.75ms\nVS buffer 347.9MiB\n4026.0B/VS inv"]
   Window1427 --> Window1420["window 14..20\nGPU 3.66ms\nVS buffer 218.1MiB\n4124.5B/VS inv"]
   Window1427 --> Window2127["window 21..27\nGPU 2.32ms\nVS buffer 129.2MiB\n3852.4B/VS inv"]
-  Window1420 --> FullVSOut["full VSOut class\nFS reads only position/fog/tex0\npair-liveness probe"]
+  Window1420 --> FullVSOut["full VSOut class\nactual FS reads high texcoords\nnarrow pair-liveness probe"]
   Window2127 --> FullVSOut
   Prefix27 --> Additive55["0..27 + 28..55 ~= 0..55\nper-window write amplification"]
   Window2855 --> Additive55
@@ -13845,4 +13854,162 @@ flowchart TD
   classDef known fill:#e8f0ff,stroke:#476cb6,color:#0d1833
   class Stable,Drift,Reject,Gate hot
   class Base,NotCPU,NotVSOut,Scout,Geo,NextA,NextB,NextC known
+```
+
+### Screen-Blend Run 71..188 Min-Index Rerun R2
+
+The full-frame min-index/address-locality probe was rerun after freeing disk
+space and exporting Xcode counters through the required performance-data path:
+
+```text
+experiments/output/app-d3d9-3dmark05-screen-blend-run-71-188-sort-gputrace-r2/result.json
+traces/app-d3d9-3dmark05-screen-blend-run-71-188-sort-gputrace-r2/frame60.gputrace
+traces/app-d3d9-3dmark05-screen-blend-run-71-188-sort-gputrace-r2/analysis/frame60-performance.gputrace
+traces/app-d3d9-3dmark05-screen-blend-run-71-188-sort-gputrace-r2/analysis/frame60-counters-xcode.csv
+traces/app-d3d9-3dmark05-screen-blend-run-71-188-sort-gputrace-r2/analysis/frame60-xcode-dxmt-joined-summary.csv
+traces/app-d3d9-3dmark05-screen-blend-run-71-188-sort-gputrace-r2/analysis/frame60-xcode-dxmt-comparison.md
+traces/app-d3d9-3dmark05-screen-blend-run-71-188-sort-gputrace-r2/analysis/frame60-xcode-dxmt-comparison-current-head-stable-proof.md
+```
+
+This is stronger evidence than the previous partial r1 because `result.json`
+exists, the replayed `.gputrace` embeds performance data, and encoder counters
+were exported after Xcode's draw-counter profiling completed. It still fails
+as a verified optimization because the stable-frame geometry gates reject it.
+
+| Metric | Baseline | R2 | Delta |
+|---|---:|---:|---:|
+| Total GPU | `35.456ms` | `28.394ms` | `-19.92%` |
+| Top GPU | `34.837ms` | `27.682ms` | `-20.54%` |
+| Top VS buffer write | `1627.240MiB` | `1120.059MiB` | `-31.17%` |
+| Top unexplained buffer write | `1627.596MiB` | `1118.845MiB` | `-31.26%` |
+| Top VS B / invocation | `1447.741B` | `740.925B` | `-48.82%` |
+| Expected VSOut bytes / vertex | `184B` | `184B` | `0.00%` |
+| VS buffer / expected VSOut | `7.868x` | `4.027x` | `-48.82%` |
+| Top rows | `60/0,60/1,60/2` | `60/0,60/1,60/2` | matched |
+| Top draw calls | `385` | `616` | `+60.00%` |
+| Top dxmt vertices | `2,146,185` | `2,676,570` | `+24.71%` |
+| Top triangle estimate | `715,395` | `892,190` | `+24.71%` |
+| Stream handle changes | `437` | `711` | `+62.70%` |
+| IB handle changes | `326` | `507` | `+55.52%` |
+| PSO handle changes | `49` | `158` | `+222.45%` |
+| Shader variant changes | `131` | `288` | `+119.85%` |
+
+The accepted positive signal is narrow: row identity stayed stable and hidden
+backend write density dropped. The rejected signal is broad: the top submitted
+draw, vertex, and triangle volumes changed too much, and state churn regressed
+strongly. Therefore r2 is an address-locality/backend-density classifier, not
+a production optimization proof.
+
+| Row | GPU ms | VS write MiB | VS invocations | VS B/inv | Primary mover |
+|---|---:|---:|---:|---:|---|
+| `60/2` | `20.028 -> 8.820 (-55.96%)` | `981.185 -> 293.604 (-70.08%)` | `642,001 -> 692,047 (+7.80%)` | `1602.563 -> 444.863 (-72.24%)` | bytes/invocation |
+| `60/1` | `9.061 -> 13.753 (+51.79%)` | `421.124 -> 648.290 (+53.94%)` | `383,688 -> 571,673 (+48.99%)` | `1150.883 -> 1189.108 (+3.32%)` | invocations |
+| `60/0` | `5.748 -> 5.110 (-11.10%)` | `224.931 -> 178.165 (-20.79%)` | `152,895 -> 321,416 (+110.22%)` | `1542.612 -> 581.241 (-62.32%)` | bytes/invocation |
+| matched rows total | n/a | `-507.181MiB` | n/a | n/a | bytes/invocation |
+
+The row-level attribution keeps the original hardware hypothesis alive:
+`60/2` and `60/0` improve mostly by reducing Xcode VS buffer bytes per
+invocation while the source-visible VSOut layout remains `0xfff` / `184B`.
+That points to hidden Apple GPU vertex/tiler/backend storage behavior rather
+than ordinary VSOut width. However, row `60/1` regresses through invocation
+growth and becomes the new largest writer, so a whole-frame fix must preserve
+geometry volume and row-local state shape while improving locality.
+
+The same r2 result was compared against the clean current-head baseline and
+failed the same stable-frame gates:
+
+```text
+top_draw_calls drift exceeds limit (385.000 -> 616.000, delta +60.00%, allowed <= 5.00%)
+top_dxmt_vertex_count drift exceeds limit (2,146,185.000 -> 2,676,570.000, delta +24.71%, allowed <= 5.00%)
+top_dxmt_triangle_estimate drift exceeds limit (715,395.000 -> 892,190.000, delta +24.71%, allowed <= 5.00%)
+```
+
+Do not rerun this exact full-frame min-index sort as a proof candidate. The
+geometry-locked direction already has stronger evidence from the 113-draw
+`60/2` depth-fed mini replay and its prefix/window bisection:
+
+- Full 113-draw replay reproduces the bottleneck class: `18.115ms`,
+  `1090.901MiB` VS buffer write, `1710.0B/VS invocation`.
+- `prefix-000-083` explains `884.870MiB`, or about `81%` of the full replay's
+  VS write, with the same vertex-stage dominated shape.
+- `window-014-027` is the first localized hot region: `347.914MiB`,
+  `4026.0B/VS invocation`; `prefix-000-013` is effectively cold.
+- The hot `14..27` window is additive across smaller windows, so the evidence
+  no longer points to a single transition-state draw.
+- The older manifest metadata under-reported FS reads by copying row-level
+  shader-summary fields. Rebuilding from the selected draw-hash VS/PS files
+  shows the hot pairs read high texcoords too, including `texcoord1..7`
+  combinations.
+
+The next useful experiment is therefore not another generic mini replay. It is
+a conservative actual-read-set VSOut mini replay for the known hot shader
+pairs, followed by the production design if the Xcode counters move:
+
+1. Prototype a mini-replay shader variant that emits only
+   fields read by each selected FS MSL. For `window-014-027`, this preserves
+   live high texcoords and mainly tests dropping `color`, `secondaryColor`, and
+   `pointSize`.
+2. Compare full-VSOut vs trimmed-VSOut with Xcode counters. The gate is lower
+   `VS Buffer Device Memory Bytes Written`, lower GPU time, and no unexpected
+   primitive/VS invocation drift inside the replay.
+3. If the trimmed variant wins materially, implement production
+   VS/FS-pair-liveness PSO variants. At minimum, retain
+   `fogFactor`, `pointSize`, and `texcoord5..7` only when the paired FS reads
+   them.
+4. If the trimmed variant does not move the Xcode VS buffer bucket, shift the
+   next proof to Metal compiler/backend spill and primitive/binning storage
+   rather than draw-order locality.
+
+Implementation progress for that next axis:
+
+- `build_3dmark05_mini_replay_manifest.py` now recomputes `vsout_fields` and
+  `ps_vsout_read_fields` from the selected draw-hash VS/PS MSL files. It keeps
+  row-summary values only as a fallback when the selected files are missing or
+  do not contain a parseable `VSOut`.
+- `run_3dmark05_mini_replay.py --trim-vsout-to-fs-reads` now builds a replay
+  variant that trims `VSOut` to actual selected FS `stage_in` reads, always
+  preserving `position` and `texcoord0` as fallbacks.
+- The rechecked `window-014-027` manifest no longer reports a bogus
+  `position,fogFactor,texcoord0` read set. Its six shader variants preserve
+  live high texcoords and remove only unread fields such as `color`,
+  `secondaryColor`, some pair-local texcoords, and `pointSize`.
+- No-capture smoke for the trimmed 14-draw replay passed with the real
+  `frame60-2-depth.bin` input: `mini replay draws=14 repeat=1`.
+- Unit coverage:
+  `python3 tests/scripts/test_build_3dmark05_mini_replay_manifest.py` and
+  `python3 tests/scripts/test_run_3dmark05_mini_replay.py`.
+
+The next Xcode step is now well-scoped: capture the full-VSOut and
+`--trim-vsout-to-fs-reads` versions of `window-014-027`, export encoder
+counters after profiling completes, and compare `VS Buffer Device Memory Bytes
+Written`, GPU time, VS invocations, tiled vertex/primitive-block bytes, and
+MMU/LLC limiters.
+
+```mermaid
+flowchart TD
+  R2["r2 full-frame min-index probe\nresult.json present\nXcode counters complete"] --> Gate["stable-frame proof gate"]
+
+  Gate --> PassSignal["passes narrow signals\nrow keys matched\nGPU/VS/unexplained write decreased\nVSOut stayed 184B"]
+  Gate --> FailSignal["fails proof signals\ndraws +60.00%\nvertices/tris +24.71%\nstate churn regressed"]
+
+  PassSignal --> Classifier["backend address-locality classifier\nhidden write density drops"]
+  FailSignal --> Reject["reject as production optimization proof"]
+
+  Classifier --> Mini["existing geometry-locked replay\n113-draw 60/2 reproduces hot class"]
+  Reject --> Mini
+
+  Mini --> Hot["localized hot window\n14..27 full VSOut\nactual FS reads high texcoords"]
+  Hot --> Tooling["manifest + runner fixed\nactual selected MSL read set"]
+  Tooling --> Trim["trimmed replay smoke passed\nsame geometry/state/depth"]
+  Trim --> Xcode["next: Xcode counter A/B\nfull VSOut vs actual-read trim"]
+  Xcode --> Accept{"VS buffer write and GPU time drop?"}
+  Accept -- "yes" --> Candidate["production pair-liveness PSO variants"]
+  Accept -- "no" --> StateAB["inspect compiler/backend spill\nor primitive/binning storage"]
+
+  classDef hot fill:#ffe8e8,stroke:#b64242,color:#2b0d0d
+  classDef good fill:#e8f5e8,stroke:#4d8b4d,color:#102a10
+  classDef known fill:#e8f0ff,stroke:#476cb6,color:#0d1833
+  class Reject,FailSignal hot
+  class PassSignal,Classifier good
+  class R2,Gate,Mini,Hot,Tooling,Trim,Xcode,Accept,Candidate,StateAB known
 ```

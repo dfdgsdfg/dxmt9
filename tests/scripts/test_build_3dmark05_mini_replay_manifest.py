@@ -304,6 +304,105 @@ class BuildMiniReplayManifestTests(unittest.TestCase):
             self.assertEqual(depth["depth_stencil"], 1)
             self.assertEqual(depth["alias_texture"], "0x0")
 
+    def test_manifest_uses_draw_shader_files_for_vsout_read_fields(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            shaders = root / "shaders.csv"
+            probes = root / "probe.csv"
+            geometry = root / "geometry"
+            shader_dir = root / "shaders" / "msl"
+            output = root / "manifest.json"
+            geometry.mkdir()
+            shader_dir.mkdir(parents=True)
+            direct_vs = shader_dir / "translated-vs-shader-2748-source-1.metal"
+            direct_ps = shader_dir / "translated-fs-shader-3567-source-2.metal"
+            direct_vs.write_text(
+                "struct VSOut {\n"
+                "  float4 position [[position]];\n"
+                "  float4 texcoord0;\n"
+                "  float4 texcoord7;\n"
+                "  float fogFactor;\n"
+                "};\n",
+                encoding="utf-8",
+            )
+            direct_ps.write_text(
+                "fragment float4 dxmt9_fs(VSOut in [[stage_in]]) {\n"
+                "  return in.position + in.texcoord7 + float4(in.fogFactor);\n"
+                "}\n",
+                encoding="utf-8",
+            )
+            write_csv(shaders, [{
+                "seq": 60,
+                "enc": 2,
+                "vsout_fields": "position,color",
+                "ps_vsout_read_fields": "position",
+            }])
+            write_csv(probes, [{
+                "seq": 60,
+                "encoder": 2,
+                "encoder_draw_index": 14,
+                "draw_ordinal": 42604,
+                "primitive_type": 3,
+                "primitive_count": 1,
+                "vs": "0xabc",
+                "ps": "0xdef",
+                "vsout": "0xfff",
+            }])
+
+            stem = geometry / "seq60-enc2-draw42604-slot0"
+            stem.with_suffix(".index.bin").write_bytes(b"iii")
+            stem.with_suffix(".stream0.bin").write_bytes(b"ssss")
+            stem.with_suffix(".meta").write_text(
+                "\n".join([
+                    "seq=60",
+                    "encoder=2",
+                    "encoder_draw_index=14",
+                    "draw_ordinal=42604",
+                    "primitive_count=1",
+                    "index_count=3",
+                    "index_byte_count=3",
+                    "stream0_byte_count=4",
+                    "index_range_valid=1",
+                    "stream0_range_valid=1",
+                    "wrote_index=1",
+                    "wrote_stream0=1",
+                ]),
+                encoding="utf-8",
+            )
+
+            result = subprocess.run(
+                [
+                    sys.executable,
+                    str(SCRIPT),
+                    "--shader-summary",
+                    str(shaders),
+                    "--probe-draws",
+                    str(probes),
+                    "--geometry-dir",
+                    str(geometry),
+                    "--shader-msl-dir",
+                    str(shader_dir),
+                    "--row",
+                    "60/2",
+                    "--output",
+                    str(output),
+                ],
+                text=True,
+                capture_output=True,
+                check=False,
+            )
+
+            self.assertEqual(result.returncode, 0, result.stderr)
+            draw = json.loads(output.read_text(encoding="utf-8"))["draws"][0]
+            self.assertEqual(
+                draw["shaders"]["vsout_fields"],
+                "position,texcoord0,texcoord7,fogFactor",
+            )
+            self.assertEqual(
+                draw["shaders"]["ps_vsout_read_fields"],
+                "fogFactor,position,texcoord7",
+            )
+
     def test_manifest_accepts_legacy_encoder_draw_payload_field(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
