@@ -12720,20 +12720,24 @@ the pair-liveness opportunity is narrower than the stale metadata implied:
 for the first hot window, most high texcoords are genuinely live. Alpha/scissor
 appears only in draws `24..27`, while `14..23` is already hot.
 
-Next split:
+Completed split and next split:
 
 - Build targeted probes for the full-VSOut class:
   `0xfea7cb/0xa0910f` draws `[14,15,18,19,21]`, alpha/scissor variant
   `0xdee2a2/0x2f2090` draws `[26,27]`, and the large indexed draws
   `[15,19,27]`.
-- Prototype a mini-replay shader variant that trims only fields not read by the
-  actual selected FS MSL, likely `color`, `secondaryColor`, and `pointSize` for
-  these hot pairs while preserving the live high texcoords. Compare Xcode
-  `VS Buffer Device Memory Bytes Written`, GPU time, and image output against
-  the full-VSOut replay.
-- If actual-read-set trimming reduces VS buffer write materially, move the
-  production design to VS/FS pair-liveness PSO variants. If it does not,
-  inspect Metal compiler/backend spill and primitive/binning storage next.
+- The actual-read-set VSOut mini replay has now been captured with Xcode
+  counters. It preserves live high texcoords and removes only unread fields
+  such as `color`, `secondaryColor`, some pair-local texcoords, and
+  `pointSize`.
+- The result is negative for a production pair-liveness PSO variant:
+  `VS Buffer Device Memory Bytes Written` changes only
+  `347.956 -> 347.924MiB` (`-0.01%`) with identical vertices and VS
+  invocations. Treat the small GPU-time delta (`5.658 -> 5.521ms`) as not
+  enough to prove a root cause.
+- Shift the next proof to Metal compiler/backend spill, hidden VS private
+  scratch, and primitive/binning parameter storage rather than VSOut field
+  liveness alone.
 - Keep `window-084-112`/`tail-056-112` as secondary checks for the remaining
   `~206MiB` of the full 113-draw replay.
 
@@ -12778,13 +12782,15 @@ flowchart TD
   Window5683 --> Additive83
   Prefix13 --> Hot1427["0..13 cold\n14..27 owns first hot region"]
   Window1427 --> Hot1427
-  Hot1427 --> Next["next experiment\ntrimmed VSOut mini replay\nthen pair-liveness PSO variant"]
-  FullVSOut --> Next
+  Hot1427 --> TrimAB["actual-read VSOut trim A/B\nsame geometry, same invocations"]
+  FullVSOut --> TrimAB
+  TrimAB --> TrimReject["reject pair-liveness-only root cause\nVS buffer -0.01%"]
+  TrimReject --> BackendNext["next: compiler/backend spill\nprimitive/binning storage"]
 
   classDef hot fill:#ffe8e8,stroke:#b64242,color:#2b0d0d
   classDef known fill:#e8f0ff,stroke:#476cb6,color:#0d1833
-  class Compile0,ScissorBug,Gap,Next,FullVSOut hot
-  class Scout,Full,SinglePSO,Slice,SlotFix,StreamDump,Smoke,MultiPSO,FullSmoke,XcodeMini,ScissorFix,XcodeScissor,Depth0,DepthInput,Compare,Encoder2Dump,SortFix,Encoder2Smoke,Encoder2Xcode,Cause,Prefix83,Prefix55,Window5683,Prefix27,Prefix13,Window1427,Window1420,Window2127,Window2855,Hot1427,Additive55,Additive83 known
+  class Compile0,ScissorBug,Gap,TrimReject,BackendNext,FullVSOut hot
+  class Scout,Full,SinglePSO,Slice,SlotFix,StreamDump,Smoke,MultiPSO,FullSmoke,XcodeMini,ScissorFix,XcodeScissor,Depth0,DepthInput,Compare,Encoder2Dump,SortFix,Encoder2Smoke,Encoder2Xcode,Cause,Prefix83,Prefix55,Window5683,Prefix27,Prefix13,Window1427,Window1420,Window2127,Window2855,Hot1427,Additive55,Additive83,TrimAB known
 ```
 
 Smoke validation for the current pass-shape manifest:
@@ -13941,24 +13947,14 @@ geometry-locked direction already has stronger evidence from the 113-draw
   shows the hot pairs read high texcoords too, including `texcoord1..7`
   combinations.
 
-The next useful experiment is therefore not another generic mini replay. It is
-a conservative actual-read-set VSOut mini replay for the known hot shader
-pairs, followed by the production design if the Xcode counters move:
-
-1. Prototype a mini-replay shader variant that emits only
-   fields read by each selected FS MSL. For `window-014-027`, this preserves
-   live high texcoords and mainly tests dropping `color`, `secondaryColor`, and
-   `pointSize`.
-2. Compare full-VSOut vs trimmed-VSOut with Xcode counters. The gate is lower
-   `VS Buffer Device Memory Bytes Written`, lower GPU time, and no unexpected
-   primitive/VS invocation drift inside the replay.
-3. If the trimmed variant wins materially, implement production
-   VS/FS-pair-liveness PSO variants. At minimum, retain
-   `fogFactor`, `pointSize`, and `texcoord5..7` only when the paired FS reads
-   them.
-4. If the trimmed variant does not move the Xcode VS buffer bucket, shift the
-   next proof to Metal compiler/backend spill and primitive/binning storage
-   rather than draw-order locality.
+The conservative actual-read-set VSOut mini replay has now been run for the
+known `window-014-027` hot shader pairs. It is a negative result for a
+production pair-liveness-only PSO variant: trimming unread VSOut fields does
+not materially move Xcode's VS buffer-write bucket when geometry and invocation
+counts are fixed. The next proof should therefore shift to Metal
+compiler/backend spill, hidden VS private scratch, and primitive/binning
+parameter storage rather than draw-order locality or VSOut field liveness
+alone.
 
 Implementation progress for that next axis:
 
@@ -13975,15 +13971,59 @@ Implementation progress for that next axis:
   `secondaryColor`, some pair-local texcoords, and `pointSize`.
 - No-capture smoke for the trimmed 14-draw replay passed with the real
   `frame60-2-depth.bin` input: `mini replay draws=14 repeat=1`.
+- Xcode A/B capture and counter export completed for full VSOut and
+  `--trim-vsout-to-fs-reads` under:
+  `traces/app-d3d9-3dmark05-screen-blend-window-014-027-vsout-trim-r1/analysis/`.
 - Unit coverage:
   `python3 tests/scripts/test_build_3dmark05_mini_replay_manifest.py` and
   `python3 tests/scripts/test_run_3dmark05_mini_replay.py`.
 
-The next Xcode step is now well-scoped: capture the full-VSOut and
-`--trim-vsout-to-fs-reads` versions of `window-014-027`, export encoder
-counters after profiling completes, and compare `VS Buffer Device Memory Bytes
-Written`, GPU time, VS invocations, tiled vertex/primitive-block bytes, and
-MMU/LLC limiters.
+Actual-read-set VSOut A/B artifacts:
+
+```text
+traces/app-d3d9-3dmark05-screen-blend-window-014-027-vsout-trim-r1/analysis/mini-replay-window-014-027-full.gputrace
+traces/app-d3d9-3dmark05-screen-blend-window-014-027-vsout-trim-r1/analysis/mini-replay-window-014-027-full-performance.gputrace
+traces/app-d3d9-3dmark05-screen-blend-window-014-027-vsout-trim-r1/analysis/mini-replay-window-014-027-full-counters-xcode.csv
+traces/app-d3d9-3dmark05-screen-blend-window-014-027-vsout-trim-r1/analysis/mini-replay-window-014-027-trim.gputrace
+traces/app-d3d9-3dmark05-screen-blend-window-014-027-vsout-trim-r1/analysis/mini-replay-window-014-027-trim-performance.gputrace
+traces/app-d3d9-3dmark05-screen-blend-window-014-027-vsout-trim-r1/analysis/mini-replay-window-014-027-trim-counters-xcode.csv
+traces/app-d3d9-3dmark05-screen-blend-window-014-027-vsout-trim-r1/analysis/mini-replay-window-014-027-full-vs-trim-xcode-comparison.md
+```
+
+| Metric | Full VSOut | Actual-read trim | Delta |
+|---|---:|---:|---:|
+| GPU time | `5.658ms` | `5.521ms` | `-2.41%` |
+| Vertices | `158,244` | `158,244` | `0.00%` |
+| VS invocations | `90,614` | `90,614` | `0.00%` |
+| VS buffer write | `347.956MiB` | `347.924MiB` | `-0.01%` |
+| VS buffer bytes / VS invocation | `4026.509B` | `4026.145B` | `-0.01%` |
+| Buffer write | `348.232MiB` | `348.202MiB` | `-0.01%` |
+| Device write | `349.981MiB` | `349.976MiB` | `-0.00%` |
+| Tiled vertex buffer | `1.531MiB` | `1.531MiB` | `0.00%` |
+| Tiled primitive-block buffer | `1.406MiB` | `1.406MiB` | `0.00%` |
+| VS L1 write | `87.190MiB` | `87.190MiB` | `0.00%` |
+| VS LLC write | `350.324MiB` | `350.332MiB` | `+0.00%` |
+| VS buffer-write limiter | `23.02%` | `22.67%` | `-1.52%` |
+| LLC limiter | `36.27%` | `36.26%` | `-0.03%` |
+| MMU limiter | `45.34%` | `45.19%` | `-0.33%` |
+| Primitives/post-clipped primitives | `52,748 / 52,748` | `52,748 / 52,748` | `0.00%` |
+| FS invocations | `786,432` | `786,432` | `0.00%` |
+
+Interpretation:
+
+- The A/B preserves geometry and vertex invocation counts exactly, so the
+  result directly tests VSOut liveness rather than draw-count drift.
+- The trim removes `color`, `secondaryColor`, `pointSize`, and pair-local
+  unused texcoords while preserving live high texcoords.
+- Xcode's VS buffer write remains effectively identical. Therefore the
+  `~4KiB/VS invocation` hot-window density is not explained by source-visible
+  VSOut field width.
+- The small GPU-time improvement is not accepted as proof because the
+  dominant memory counters are unchanged.
+- Continue with compiler/backend spill, hidden private scratch, and
+  primitive/binning storage probes. Pair-liveness variants may still be useful
+  for correctness or minor shader specialization, but they are not the current
+  bottleneck-removal path.
 
 ```mermaid
 flowchart TD
@@ -14000,16 +14040,16 @@ flowchart TD
 
   Mini --> Hot["localized hot window\n14..27 full VSOut\nactual FS reads high texcoords"]
   Hot --> Tooling["manifest + runner fixed\nactual selected MSL read set"]
-  Tooling --> Trim["trimmed replay smoke passed\nsame geometry/state/depth"]
-  Trim --> Xcode["next: Xcode counter A/B\nfull VSOut vs actual-read trim"]
+  Tooling --> Trim["actual-read trim replay\nsame geometry/state/depth"]
+  Trim --> Xcode["Xcode counter A/B complete\nfull VSOut vs actual-read trim"]
   Xcode --> Accept{"VS buffer write and GPU time drop?"}
   Accept -- "yes" --> Candidate["production pair-liveness PSO variants"]
-  Accept -- "no" --> StateAB["inspect compiler/backend spill\nor primitive/binning storage"]
+  Accept -- "no: VS buffer -0.01%" --> StateAB["inspect compiler/backend spill\nhidden scratch\nprimitive/binning storage"]
 
   classDef hot fill:#ffe8e8,stroke:#b64242,color:#2b0d0d
   classDef good fill:#e8f5e8,stroke:#4d8b4d,color:#102a10
   classDef known fill:#e8f0ff,stroke:#476cb6,color:#0d1833
-  class Reject,FailSignal hot
+  class Reject,FailSignal,StateAB hot
   class PassSignal,Classifier good
-  class R2,Gate,Mini,Hot,Tooling,Trim,Xcode,Accept,Candidate,StateAB known
+  class R2,Gate,Mini,Hot,Tooling,Trim,Xcode,Accept,Candidate known
 ```
