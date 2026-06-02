@@ -351,6 +351,37 @@ class ThreeDMark05ProbeScriptTests(unittest.TestCase):
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertIn("DXMT9_MEASURE_INDEX_REUSE=1", result.stdout)
 
+    def test_wrapper_dry_run_includes_indexed_geometry_dump_env(self) -> None:
+        result = self.run_script(
+            RUN_WRAPPER,
+            "--suffix",
+            "geometry-dump-dry-run",
+            "--no-gputrace",
+            "--dump-indexed-geometry",
+            "--dump-indexed-geometry-max-draws",
+            "3",
+            "--probe-reverse-indexed-triangles-rows",
+            "60/0,60/1",
+            "--dry-run",
+        )
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("geometry_dump_dir:", result.stdout)
+        self.assertIn("DXMT9_MEASURE_INDEX_REUSE=1", result.stdout)
+        self.assertIn(
+            "DXMT9_DUMP_INDEXED_GEOMETRY_DIR=",
+            result.stdout,
+        )
+        self.assertIn(
+            "traces/app-d3d9-3dmark05-geometry-dump-dry-run/analysis/geometry",
+            result.stdout,
+        )
+        self.assertIn("DXMT9_DUMP_INDEXED_GEOMETRY_MAX_DRAWS=3", result.stdout)
+        self.assertIn(
+            "DXMT9_PROBE_REVERSE_INDEXED_TRIANGLES_ROWS=60/0\\,60/1",
+            result.stdout,
+        )
+
     def test_wrapper_dry_run_includes_x8_shader_alpha_fill_env(self) -> None:
         result = self.run_script(
             RUN_WRAPPER,

@@ -127,7 +127,11 @@ Commercial / 3rd-party titles (require external prefix):
     Use `--measure-index-reuse` for the optional unique-index diagnostic; the
     final joined report will include `dxmt indexed references / unique
     estimate`, `VS invocations / dxmt indexed unique estimate`, and 16/32/64
-    finite-cache miss estimates when the index data was readable.
+    finite-cache miss estimates when the index data was readable. Add
+    `--dump-indexed-geometry` only for row-local mini replay prep; it implies
+    `--measure-index-reuse` and writes capped raw index/stream0 payload files
+    under `traces/<run-id>/analysis/geometry` using the same reverse-indexed
+    row/class/span filters and indexed encoder draw range.
     Dry-run and guard failures print `traces/`, `experiments/output/`, and
     the largest trace/output files when free space is below the guard, so
     cleanup can happen before launching Wine. They also print large ignored
@@ -460,10 +464,19 @@ Commercial / 3rd-party titles (require external prefix):
     <frameN-xcode-dxmt-joined-summary.csv> --shader-summary
     <frameN-shader-dump-summary.csv> --probe-draws
     <3dmark05-perf-indexed-probe-draws.csv> --output
-    <frameN-mini-replay-readiness.md>`. The report lists hot rows, top replay
+    <frameN-mini-replay-readiness.md>`. Add `--geometry-dir
+    <trace-run>/analysis/geometry` after a `--dump-indexed-geometry` scout.
+    The report lists hot rows, top replay
     target groups, shader-source availability, index-locality availability,
-    and the current blocking gap: no reduced artifact contains raw replayable
-    vertex/index payload bytes yet.
+    and whether raw replayable vertex/index payload bytes have been captured.
+    Add `--dump-indexed-geometry --dump-indexed-geometry-max-draws N` to a
+    tightly filtered no-mutate scout when those bytes are needed.
+    Once payloads exist, build the next harness input with
+    `python3 scripts/tools/build_3dmark05_mini_replay_manifest.py
+    --shader-summary <frameN-shader-dump-summary.csv> --probe-draws
+    <3dmark05-perf-indexed-probe-draws.csv> --geometry-dir
+    <trace-run>/analysis/geometry --row SEQ/ENC --output
+    <frameN-mini-replay-manifest.json>`.
     `--probe-reverse-indexed-triangles-stream0-span-min BYTES` and
     `--optimize-screen-blend-index-order-stream0-span-min BYTES` add a direct
     minimum original stream0 byte-span gate after the row/class filters. Use

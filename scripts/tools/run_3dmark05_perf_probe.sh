@@ -60,6 +60,8 @@ probe_force_cull_mode_class=
 probe_force_cull_mode_classes=
 force_cull_mode=
 measure_index_reuse=0
+dump_indexed_geometry=0
+dump_indexed_geometry_max_draws=${DXMT9_DUMP_INDEXED_GEOMETRY_MAX_DRAWS:-16}
 aggressive_color_dontcare=0
 aggressive_depth_dontcare=0
 disable_cull=0
@@ -314,6 +316,14 @@ Options:
   --measure-index-reuse
                       Set DXMT9_MEASURE_INDEX_REUSE=1 to scan accessible
                       index buffers and report per-encoder unique index counts
+  --dump-indexed-geometry
+                      Dump selected indexed triangle raw index/stream0 payloads
+                      under traces/<run-id>/analysis/geometry. Uses the
+                      reverse-indexed row/class/span filters and encoder draw
+                      range; implies --measure-index-reuse
+  --dump-indexed-geometry-max-draws N
+                      Set DXMT9_DUMP_INDEXED_GEOMETRY_MAX_DRAWS=N
+                      (default: 16)
   --aggressive-color-dontcare
                       Set DXMT9_AGGRESSIVE_COLOR_DONTCARE=1 for the run
   --aggressive-depth-dontcare
@@ -692,6 +702,15 @@ while (($#)); do
     --measure-index-reuse)
       measure_index_reuse=1
       shift
+      ;;
+    --dump-indexed-geometry)
+      dump_indexed_geometry=1
+      measure_index_reuse=1
+      shift
+      ;;
+    --dump-indexed-geometry-max-draws)
+      dump_indexed_geometry_max_draws=${2:?missing value for --dump-indexed-geometry-max-draws}
+      shift 2
       ;;
     --aggressive-color-dontcare)
       aggressive_color_dontcare=1
@@ -1203,6 +1222,7 @@ analysis_dir="$trace_dir/analysis"
 shader_dump_dir="$analysis_dir/shaders"
 shader_msl_dump_dir="$shader_dump_dir/msl"
 shader_bytecode_dump_dir="$shader_dump_dir/bytecode"
+geometry_dump_dir="$analysis_dir/geometry"
 summary_path="$output_dir/3dmark05-perf-summary.md"
 capture_path="$trace_dir/frame${frame}.gputrace"
 counter_comparison_path="$analysis_dir/frame${frame}-perf-counter-comparison.md"
@@ -1443,6 +1463,13 @@ fi
 
 if (( measure_index_reuse )); then
   env_args+=("DXMT9_MEASURE_INDEX_REUSE=1")
+fi
+
+if (( dump_indexed_geometry )); then
+  env_args+=(
+    "DXMT9_DUMP_INDEXED_GEOMETRY_DIR=$geometry_dump_dir"
+    "DXMT9_DUMP_INDEXED_GEOMETRY_MAX_DRAWS=$dump_indexed_geometry_max_draws"
+  )
 fi
 
 if (( aggressive_depth_dontcare )); then
@@ -1766,6 +1793,9 @@ fi
 if (( dump_shaders )); then
   echo "shader_dump_dir: $shader_dump_dir"
 fi
+if (( dump_indexed_geometry )); then
+  echo "geometry_dump_dir: $geometry_dump_dir"
+fi
 printf 'env:'
 printf ' %q' "${env_args[@]}"
 printf '\n'
@@ -1847,6 +1877,9 @@ fi
 mkdir -p "$output_dir" "$trace_dir"
 if (( dump_shaders )); then
   mkdir -p "$shader_msl_dump_dir" "$shader_bytecode_dump_dir"
+fi
+if (( dump_indexed_geometry )); then
+  mkdir -p "$geometry_dump_dir"
 fi
 
 run_status=0

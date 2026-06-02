@@ -114,6 +114,114 @@ class MiniReplayPlanTests(unittest.TestCase):
             self.assertIn("geometry payload", report)
             self.assertIn("traces/<run-id>/analysis/geometry/", report)
 
+    def test_report_marks_geometry_payload_partial_when_triplets_exist(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            joined = root / "joined.csv"
+            shaders = root / "shaders.csv"
+            probes = root / "probe.csv"
+            geometry = root / "geometry"
+            output = root / "mini-replay.md"
+            geometry.mkdir()
+
+            write_csv(joined, [
+                {
+                    "seq": 60,
+                    "enc": 0,
+                    "gpu_ms": 20.0,
+                    "vs_buffer_write_mib": 981.0,
+                    "vs_buffer_bytes_per_vs_invocation": 856.0,
+                },
+            ])
+            write_csv(shaders, [
+                {"seq": 60, "enc": 0, "vs_file": "vs.metal", "ps_file": "ps.metal"},
+            ])
+            write_csv(probes, [
+                {
+                    "seq": 60,
+                    "encoder": 0,
+                    "encoder_draw_index": 0,
+                    "draw_ordinal": 100,
+                    "primitive_count": 2020,
+                    "original_cache_miss64": 3185,
+                    "vs": "0xaaaabbbbccccdddd",
+                    "ps": "0x1111222233334444",
+                    "alpha_blend": 0,
+                    "depth_enabled": 1,
+                    "depth_write": 1,
+                    "scissor": 0,
+                    "texture_mask": "0x7f",
+                    "cull": 2,
+                },
+                {
+                    "seq": 60,
+                    "encoder": 0,
+                    "encoder_draw_index": 1,
+                    "draw_ordinal": 101,
+                    "primitive_count": 3216,
+                    "original_cache_miss64": 6011,
+                    "vs": "0xaaaabbbbccccdddd",
+                    "ps": "0x1111222233334444",
+                    "alpha_blend": 0,
+                    "depth_enabled": 1,
+                    "depth_write": 1,
+                    "scissor": 0,
+                    "texture_mask": "0x7f",
+                    "cull": 2,
+                },
+            ])
+            stem = geometry / "seq60-enc0-draw100-slot0"
+            stem.with_suffix(".index.bin").write_bytes(b"index-bytes")
+            stem.with_suffix(".stream0.bin").write_bytes(b"stream0-bytes")
+            stem.with_suffix(".meta").write_text(
+                "\n".join([
+                    "seq=60",
+                    "encoder=0",
+                    "encoder_draw_index=0",
+                    "draw_ordinal=100",
+                    "slot=0",
+                    "index_byte_count=11",
+                    "stream0_byte_count=13",
+                    "index_range_valid=1",
+                    "stream0_range_valid=1",
+                    "wrote_index=1",
+                    "wrote_stream0=1",
+                ]),
+                encoding="utf-8",
+            )
+
+            result = subprocess.run(
+                [
+                    sys.executable,
+                    str(SCRIPT),
+                    "--joined",
+                    str(joined),
+                    "--shader-summary",
+                    str(shaders),
+                    "--probe-draws",
+                    str(probes),
+                    "--geometry-dir",
+                    str(geometry),
+                    "--output",
+                    str(output),
+                    "--top",
+                    "1",
+                    "--top-groups",
+                    "1",
+                ],
+                text=True,
+                capture_output=True,
+                check=False,
+            )
+
+            self.assertEqual(result.returncode, 0, result.stderr)
+            report = output.read_text(encoding="utf-8")
+            self.assertIn("| Raw vertex/index payload | partial |", report)
+            self.assertIn("`1` valid payload triplets across `1/1` hot rows", report)
+            self.assertIn("| `60/0` | `1` | `11` | `13` | `1` |", report)
+            self.assertIn("remaining geometry payloads", report)
+            self.assertIn("mini replay harness", report)
+
 
 if __name__ == "__main__":
     unittest.main()

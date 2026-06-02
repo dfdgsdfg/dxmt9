@@ -34,6 +34,8 @@
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <filesystem>
+#include <fstream>
 #include <functional>
 #include <iomanip>
 #include <limits>
@@ -3020,6 +3022,159 @@ u64 stream0ByteSpanForIndexMeasure(const IndexReuseMeasure& measure,
     return 0u;
   }
   return static_cast<u64>(measure.maxIndex - measure.minIndex) * stream0Stride;
+}
+
+bool writeBinaryFile(const std::filesystem::path& path,
+                     const u8* data,
+                     std::size_t size) {
+  if (!data && size != 0u) {
+    return false;
+  }
+  std::ofstream out(path, std::ios::binary);
+  if (!out) {
+    return false;
+  }
+  if (size != 0u) {
+    out.write(reinterpret_cast<const char*>(data),
+              static_cast<std::streamsize>(size));
+  }
+  return out.good();
+}
+
+bool writeTextFile(const std::filesystem::path& path, const std::string& text) {
+  std::ofstream out(path, std::ios::binary);
+  if (!out) {
+    return false;
+  }
+  out << text;
+  return out.good();
+}
+
+void maybeDumpIndexedGeometryPayload(
+    const ActiveEncoderBreakdown* encoderBreakdown,
+    std::span<const u8> indexBytes,
+    std::span<const u8> vertexBytes,
+    const IndexReuseMeasure& indexReuse,
+    IndexType indexType,
+    u32 startIndex,
+    u64 indexCount,
+    i32 baseVertexIndex,
+    u64 stream0Offset,
+    u64 stream0Stride,
+    u64 stream0Handle,
+    u64 indexBufferHandle,
+    u64 drawOrdinal,
+    u64 primitiveCount) {
+  const auto dir = debug::indexedGeometryDumpDir();
+  if (dir.empty() || !encoderBreakdown || !indexReuse.available) {
+    return;
+  }
+  const std::uint32_t maxDumps = debug::indexedGeometryDumpMaxDraws();
+  if (maxDumps == 0u) {
+    return;
+  }
+
+  static std::atomic<std::uint32_t> dumpCount{0u};
+  std::uint32_t slot = dumpCount.load(std::memory_order_relaxed);
+  while (slot < maxDumps &&
+         !dumpCount.compare_exchange_weak(slot,
+                                          slot + 1u,
+                                          std::memory_order_relaxed)) {
+  }
+  if (slot >= maxDumps) {
+    return;
+  }
+
+  std::error_code ec;
+  const std::filesystem::path outDir{std::string(dir)};
+  std::filesystem::create_directories(outDir, ec);
+  if (ec) {
+    return;
+  }
+
+  const std::size_t indexSize = indexElementSize(indexType);
+  const u64 indexStartByte64 = static_cast<u64>(startIndex) * indexSize;
+  const u64 indexByteCount64 = indexCount * indexSize;
+  bool indexRangeValid =
+      indexStartByte64 <= static_cast<u64>(indexBytes.size()) &&
+      indexByteCount64 <= static_cast<u64>(indexBytes.size()) - indexStartByte64;
+  const std::size_t indexStartByte =
+      indexRangeValid ? static_cast<std::size_t>(indexStartByte64) : 0u;
+  const std::size_t indexByteCount =
+      indexRangeValid ? static_cast<std::size_t>(indexByteCount64) : 0u;
+
+  bool streamRangeValid = false;
+  std::size_t streamStartByte = 0u;
+  std::size_t streamByteCount = 0u;
+  const auto minVertex =
+      static_cast<std::int64_t>(baseVertexIndex) +
+      static_cast<std::int64_t>(indexReuse.minIndex);
+  const auto maxVertex =
+      static_cast<std::int64_t>(baseVertexIndex) +
+      static_cast<std::int64_t>(indexReuse.maxIndex);
+  if (stream0Stride != 0u && minVertex >= 0 && maxVertex >= minVertex) {
+    const u64 minVertex64 = static_cast<u64>(minVertex);
+    const u64 vertexSpan = static_cast<u64>(maxVertex - minVertex + 1);
+    const u64 streamStart64 = stream0Offset + minVertex64 * stream0Stride;
+    const u64 streamCount64 = vertexSpan * stream0Stride;
+    streamRangeValid =
+        streamStart64 <= static_cast<u64>(vertexBytes.size()) &&
+        streamCount64 <= static_cast<u64>(vertexBytes.size()) - streamStart64;
+    if (streamRangeValid) {
+      streamStartByte = static_cast<std::size_t>(streamStart64);
+      streamByteCount = static_cast<std::size_t>(streamCount64);
+    }
+  }
+
+  const auto seqId = encoderBreakdown->stats.seqId;
+  const auto encoderIndex = encoderBreakdown->stats.encoderIndex;
+  std::ostringstream stem;
+  stem << "seq" << seqId
+       << "-enc" << encoderIndex
+       << "-draw" << drawOrdinal
+       << "-slot" << slot;
+  const auto base = outDir / stem.str();
+
+  const bool wroteIndex =
+      indexRangeValid &&
+      writeBinaryFile(base.string() + ".index.bin",
+                      indexBytes.data() + indexStartByte,
+                      indexByteCount);
+  const bool wroteStream =
+      streamRangeValid &&
+      writeBinaryFile(base.string() + ".stream0.bin",
+                      vertexBytes.data() + streamStartByte,
+                      streamByteCount);
+
+  std::ostringstream meta;
+  meta << "seq=" << seqId << "\n"
+       << "encoder=" << encoderIndex << "\n"
+       << "encoder_draw_index=" << encoderBreakdown->stats.drawCalls << "\n"
+       << "draw_ordinal=" << drawOrdinal << "\n"
+       << "slot=" << slot << "\n"
+       << "primitive_count=" << primitiveCount << "\n"
+       << "index_count=" << indexCount << "\n"
+       << "index_type=" << (indexType == IndexType::UInt16 ? "uint16" : "uint32")
+       << "\n"
+       << "start_index=" << startIndex << "\n"
+       << "base_vertex=" << baseVertexIndex << "\n"
+       << "index_buffer=0x" << std::hex << indexBufferHandle << std::dec << "\n"
+       << "stream0_handle=0x" << std::hex << stream0Handle << std::dec << "\n"
+       << "stream0_offset=" << stream0Offset << "\n"
+       << "stream0_stride=" << stream0Stride << "\n"
+       << "min_index=" << indexReuse.minIndex << "\n"
+       << "max_index=" << indexReuse.maxIndex << "\n"
+       << "unique_indices=" << indexReuse.unique << "\n"
+       << "cache_miss_64=" << indexReuse.cacheMiss64 << "\n"
+       << "index_start_byte=" << indexStartByte64 << "\n"
+       << "index_byte_count=" << indexByteCount64 << "\n"
+       << "index_range_valid=" << (indexRangeValid ? 1 : 0) << "\n"
+       << "stream0_start_byte=" << streamStartByte << "\n"
+       << "stream0_byte_count=" << streamByteCount << "\n"
+       << "stream0_range_valid=" << (streamRangeValid ? 1 : 0) << "\n"
+       << "wrote_index=" << (wroteIndex ? 1 : 0) << "\n"
+       << "wrote_stream0=" << (wroteStream ? 1 : 0) << "\n";
+  writeTextFile(base.string() + ".meta", meta.str());
 }
 
 struct IndexedDrawChunk {
@@ -6744,9 +6899,14 @@ bool encodeDraw(EncodeContext& ctx,
       splitPrimitiveLimit = debug::splitLargeIndexedDrawPrimitiveLimit();
       splitStream0SpanLimit = debug::splitLargeIndexedDrawStream0SpanMax();
       splitMaxChunksPerDraw = debug::splitLargeIndexedDrawMaxChunksPerDraw();
+      const bool dumpIndexedGeometryRequested =
+          !debug::indexedGeometryDumpDir().empty() &&
+          debug::indexedGeometryDumpMaxDraws() != 0u &&
+          pv.primitiveType == core::PrimitiveType::TriangleList;
       const bool measureProbeIndexLocality =
           debug::measureIndexReuse() || reverseStream0SpanMin != 0u ||
-          optimizeStream0SpanMin != 0u || splitStream0SpanLimit != 0u;
+          optimizeStream0SpanMin != 0u || splitStream0SpanLimit != 0u ||
+          dumpIndexedGeometryRequested;
       const u64 stream0StrideForProbe =
           encoderBreakdown ? encoderBreakdown->stats.streams[0].lastStride
                            : static_cast<u64>(hot.streamStrides[0]);
@@ -6931,9 +7091,31 @@ bool encodeDraw(EncodeContext& ctx,
       const bool emitMeasureOnlyIndexedDraw =
           debug::measureIndexReuse() &&
           pv.primitiveType == core::PrimitiveType::TriangleList;
+      bool dumpIndexedGeometryEligible = false;
+      if (dumpIndexedGeometryRequested &&
+          reverseIndexedTriangleRowMatches(encoderBreakdown) &&
+          indexedTriangleEncoderDrawRangeMatches(encoderBreakdown)) {
+        dumpIndexedGeometryEligible =
+            indexedTriangleClassMatches(
+                debug::probeReverseIndexedTrianglesClassFilter(),
+                primitiveCount,
+                hot.textureMask,
+                hot.renderStates,
+                effectiveViewport,
+                fillMode) &&
+            indexedTriangleClassMatches(
+                debug::probeReverseIndexedTrianglesClassFilters(),
+                primitiveCount,
+                hot.textureMask,
+                hot.renderStates,
+                effectiveViewport,
+                fillMode) &&
+            stream0SpanFilterMatches(reverseStream0SpanMin);
+      }
       if (encoderBreakdown &&
           (probeConsidered || optimizedConsidered || scissorRectProbeConsidered ||
-           splitConsidered || emitMeasureOnlyIndexedDraw)) {
+           splitConsidered || emitMeasureOnlyIndexedDraw ||
+           dumpIndexedGeometryEligible)) {
         const auto& stream0 = encoderBreakdown->stats.streams[0];
         const u64 reorderBytes =
             (probeApplied || optimizedApplied)
@@ -7002,6 +7184,23 @@ bool encodeDraw(EncodeContext& ctx,
           encoderBreakdown->recordScissorRectProbe(scissorRectProbeApplied,
                                                    hot.viewport.scissor,
                                                    effectiveViewport.scissor);
+        }
+        if (dumpIndexedGeometryEligible) {
+          maybeDumpIndexedGeometryPayload(
+              encoderBreakdown,
+              originalIndexBytesForReuse,
+              vertexBytes,
+              originalIndexReuse,
+              pv.indexType,
+              originalIndexReuseStartIndex,
+              vertexCount,
+              pv.baseVertexIndex,
+              stream0.lastOffset,
+              stream0.lastStride,
+              stream0.lastHandle,
+              hot.indexBuffer.value,
+              drawOrdinal,
+              primitiveCount);
         }
       }
       indexReorderApplied = probeApplied || optimizedApplied;

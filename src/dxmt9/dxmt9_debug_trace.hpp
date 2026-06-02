@@ -427,6 +427,16 @@ RenderEncoderSelectorList probeScissorRectRows();
 // Env: DXMT9_MEASURE_INDEX_REUSE.
 bool measureIndexReuse();
 
+// Diagnostic-only: directory for dumping replayable indexed triangle geometry
+// payloads. Uses the reverse-indexed-triangle row/class/span filters and the
+// indexed triangle encoder draw range. Env: DXMT9_DUMP_INDEXED_GEOMETRY_DIR.
+std::string_view indexedGeometryDumpDir();
+
+// Maximum number of indexed draw geometry payloads to dump. Defaults to a
+// small cap when DXMT9_DUMP_INDEXED_GEOMETRY_DIR is set.
+// Env: DXMT9_DUMP_INDEXED_GEOMETRY_MAX_DRAWS.
+std::uint32_t indexedGeometryDumpMaxDraws();
+
 // Trace budget for the FFP path (emits N trace lines then stops).
 // Env: DXMT_TRACE_FVF.
 int fixedFunctionTraceBudget();

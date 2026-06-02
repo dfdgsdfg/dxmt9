@@ -5,6 +5,7 @@
 #include <atomic>
 #include <cstdlib>
 #include <limits>
+#include <string>
 
 namespace dxmt9::debug {
 
@@ -861,6 +862,25 @@ RenderEncoderSelectorList probeScissorRectRows() {
 bool measureIndexReuse() {
   static const bool v = util::getenvFlag("DXMT9_MEASURE_INDEX_REUSE");
   return v;
+}
+
+std::string_view indexedGeometryDumpDir() {
+  static const std::string dir =
+      util::getenvString("DXMT9_DUMP_INDEXED_GEOMETRY_DIR");
+  return dir;
+}
+
+std::uint32_t indexedGeometryDumpMaxDraws() {
+  static const std::uint32_t limit = [] {
+    const auto value =
+        util::getenvU64Auto("DXMT9_DUMP_INDEXED_GEOMETRY_MAX_DRAWS");
+    if (!value.has_value()) {
+      return 16u;
+    }
+    return static_cast<std::uint32_t>(
+        std::min<std::uint64_t>(*value, std::numeric_limits<std::uint32_t>::max()));
+  }();
+  return limit;
 }
 
 int fixedFunctionTraceBudget() {

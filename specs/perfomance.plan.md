@@ -11543,6 +11543,160 @@ instrumentation should reuse the existing row/class/draw-window selectors used
 by `DXMT9_MEASURE_INDEX_REUSE` and write payload files under
 `traces/<run-id>/analysis/geometry/` next to shader dumps.
 
+That instrumentation now exists behind an explicit opt-in:
+
+```bash
+scripts/tools/run_3dmark05_perf_probe.sh \
+  --suffix current-head-geometry-payload-scout-r1 \
+  --no-gputrace \
+  --encoder-breakdown-seq 60 \
+  --dump-shaders \
+  --dump-indexed-geometry \
+  --dump-indexed-geometry-max-draws 8 \
+  --probe-reverse-indexed-triangles-rows 60/0,60/1,60/2 \
+  --probe-indexed-triangle-encoder-draw-min 0 \
+  --probe-indexed-triangle-encoder-draw-max 200
+```
+
+`--dump-indexed-geometry` does not mutate primitive order or render state. It
+implies `DXMT9_MEASURE_INDEX_REUSE=1`, uses the existing reverse-indexed
+row/class/span filters and indexed encoder draw-window filter, and writes
+capped payloads under `traces/<run-id>/analysis/geometry/`:
+
+- `seq<seq>-enc<enc>-draw<draw>-slot<n>.index.bin`
+- `seq<seq>-enc<enc>-draw<draw>-slot<n>.stream0.bin`
+- `seq<seq>-enc<enc>-draw<draw>-slot<n>.meta`
+
+The metadata records seq/encoder/draw, primitive/index counts, base vertex,
+stream0 handle/offset/stride, original min/max/unique indices, cache64, byte
+ranges, and whether each binary range was valid and written. The next proof
+step is a small no-gputrace payload scout for one hot material window, followed
+by a mini replay harness that consumes these payloads plus dumped shaders and
+row state.
+
+Smoke verification:
+
+```bash
+scripts/tools/run_3dmark05_perf_probe.sh \
+  --suffix current-head-geometry-payload-smoke-r2 \
+  --no-gputrace \
+  --encoder-breakdown-seq 60 \
+  --dump-indexed-geometry \
+  --dump-indexed-geometry-max-draws 3 \
+  --probe-reverse-indexed-triangles-row 60/0 \
+  --probe-indexed-triangle-encoder-draw-min 0 \
+  --probe-indexed-triangle-encoder-draw-max 3
+```
+
+Result: the run passed and wrote three geometry payload triplets under
+`traces/app-d3d9-3dmark05-current-head-geometry-payload-smoke-r2/analysis/geometry/`.
+All three `.meta` files reported `index_range_valid=1`,
+`stream0_range_valid=1`, `wrote_index=1`, and `wrote_stream0=1`. The captured
+draws were `seq60-enc0-draw42081..42083`, with stream0 payloads between
+`74,208B` and `142,320B`. This closes the immediate raw geometry-byte capture
+gap for mini replay construction; the remaining work is to consume these
+payloads in a replay harness and then isolate the Apple backend VS-write shape
+without Wine/D3D9 frame noise.
+
+The mini replay readiness planner now accepts `--geometry-dir` and validates
+payload triplets by checking `.meta`, `.index.bin`, `.stream0.bin`, and byte
+sizes:
+
+```bash
+python3 scripts/tools/plan_3dmark05_mini_replay.py \
+  --joined traces/app-d3d9-3dmark05-current-head-gputrace-r1/analysis/frame60-xcode-dxmt-joined-summary.csv \
+  --shader-summary traces/app-d3d9-3dmark05-current-head-gputrace-r1/analysis/frame60-shader-dump-summary.csv \
+  --probe-draws experiments/output/app-d3d9-3dmark05-current-head-geometry-payload-smoke-r2/3dmark05-perf-indexed-probe-draws.csv \
+  --geometry-dir traces/app-d3d9-3dmark05-current-head-geometry-payload-smoke-r2/analysis/geometry \
+  --output traces/app-d3d9-3dmark05-current-head-geometry-payload-smoke-r2/analysis/frame60-mini-replay-readiness-with-geometry.md \
+  --top 5 \
+  --top-groups 3
+```
+
+Result: raw vertex/index payload readiness is now `partial`: `3` valid payload
+triplets across `1/5` hot rows. That smoke targeted `60/0`, so the planner still
+correctly reported `60/2` as missing payload.
+
+The top hot row has now been sampled directly as well:
+
+```bash
+scripts/tools/run_3dmark05_perf_probe.sh \
+  --suffix current-head-geometry-payload-row60-2-smoke-r1 \
+  --no-gputrace \
+  --encoder-breakdown-seq 60 \
+  --dump-indexed-geometry \
+  --dump-indexed-geometry-max-draws 3 \
+  --probe-reverse-indexed-triangles-row 60/2 \
+  --probe-indexed-triangle-encoder-draw-min 0 \
+  --probe-indexed-triangle-encoder-draw-max 3
+```
+
+Result: the run passed and wrote three valid `60/2` payload triplets under
+`traces/app-d3d9-3dmark05-current-head-geometry-payload-row60-2-smoke-r1/analysis/geometry/`.
+The planner report `frame60-mini-replay-readiness-with-geometry.md` now marks
+`60/2` with `3` payloads, `86,070B` of index data, and `368,496B` of stream0
+data. The dominant replay target group remains the `60/2`
+alpha/depth-read/textured group: `71` draws, `87,499` tris, cache64 `158,593`,
+VS `0x7836c3b4c98a465b`, PS `0x11cc89f85cc54054`.
+
+The first `60/2` smoke captured row-local draw indices `0..2`, which are useful
+payload smoke tests but not the dominant shader/state group. A later no-gputrace
+scout showed that row-local ordering can shift between runs; the top group must
+therefore be selected from the same run's probe CSV before capturing payloads.
+For `app-d3d9-3dmark05-current-head-geometry-payload-row60-2-topgroup-r1`, the
+top group appeared at encoder draw indices `234..236`:
+
+```bash
+scripts/tools/run_3dmark05_perf_probe.sh \
+  --suffix current-head-geometry-payload-row60-2-topgroup-r1 \
+  --no-gputrace \
+  --encoder-breakdown-seq 60 \
+  --dump-indexed-geometry \
+  --dump-indexed-geometry-max-draws 3 \
+  --probe-reverse-indexed-triangles-row 60/2 \
+  --probe-indexed-triangle-encoder-draw-min 234 \
+  --probe-indexed-triangle-encoder-draw-max 236
+```
+
+Result: the run passed and produced three valid payload triplets for the actual
+top shader/state group:
+
+| Draw index | Draw ordinal | Tris | VS | PS | Index bytes | Stream0 bytes |
+|---:|---:|---:|---|---|---:|---:|
+| `234` | `42611` | `88` | `0x7836c3b4c98a465b` | `0x11cc89f85cc54054` | `528` | `4,608` |
+| `235` | `42612` | `102` | `0x7836c3b4c98a465b` | `0x11cc89f85cc54054` | `612` | `4,152` |
+| `236` | `42613` | `102` | `0x7836c3b4c98a465b` | `0x11cc89f85cc54054` | `612` | `3,912` |
+
+The manifest builder now joins those payloads with the probe rows and shader
+dump summary:
+
+```bash
+python3 scripts/tools/build_3dmark05_mini_replay_manifest.py \
+  --shader-summary traces/app-d3d9-3dmark05-current-head-gputrace-r1/analysis/frame60-shader-dump-summary.csv \
+  --probe-draws experiments/output/app-d3d9-3dmark05-current-head-geometry-payload-row60-2-topgroup-r1/3dmark05-perf-indexed-probe-draws.csv \
+  --geometry-dir traces/app-d3d9-3dmark05-current-head-geometry-payload-row60-2-topgroup-r1/analysis/geometry \
+  --row 60/2 \
+  --output traces/app-d3d9-3dmark05-current-head-geometry-payload-row60-2-topgroup-r1/analysis/frame60-mini-replay-manifest.json
+```
+
+The manifest builder must not use the row's representative shader file when a
+draw inside that row uses a different shader hash. It now scans the shader dump
+directory and resolves MSL files by each draw's `vs`/`ps` hash first, falling
+back to row-summary files only when a direct dump is missing.
+
+Final manifest summary: `3` draws, `1,752B` total index data, `12,672B` total
+stream0 data, `0` missing probe rows, `0` missing shader rows,
+`0` missing draw shader files, and `0` row shader fallbacks. The selected shader
+files are the draw-hash matches:
+
+- VS `0x7836c3b4c98a465b` ->
+  `translated-vs-shader-8662326114536539739-source-18235456856711765660.metal`
+- PS `0x11cc89f85cc54054` ->
+  `translated-fs-shader-1282551693695074388-source-13492098365913528909.metal`
+
+This is the first complete reduced input bundle for a row-local Metal mini
+replay harness.
+
 Shader dump inspection still supports liveness-based VSOut trimming as a
 separate experiment, not a global toggle. The hot row shader pairs read only a
 subset of the `184B` VSOut:
