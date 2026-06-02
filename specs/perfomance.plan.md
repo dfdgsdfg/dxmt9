@@ -8490,24 +8490,27 @@ traces/app-d3d9-3dmark05-reverse-row-60-4-large4096-alpha-scissor-gputrace-r1/an
 traces/app-d3d9-3dmark05-reverse-row-60-4-large4096-alpha-scissor-gputrace-r1/analysis/frame60-xcode-dxmt-joined-summary.csv
 ```
 
-Result: all finalizer gates passed. The 4-draw
-`large4096 && alpha-blend && scissor` intersection reproduces the full
+Historical result: all finalizer gates passed. In that capture, the 4-draw
+`large4096 && alpha-blend && scissor` intersection reproduced the full
 `large4096` and 16-draw `large4096 && alpha-blend` signal:
 
 | Probe | Applied draws | Probe prims | Top VS write | Top GPU | `60/4` VS write | `60/4` VS B/inv | Interpretation |
 |---|---:|---:|---:|---:|---:|---:|---|
 | `60/4 large4096` | `19` | `104,721` | `-7.46%` | `-6.49%` | `-22.33%` | `-19.02%` | positive diagnostic signal |
 | `60/4 large4096 && alpha-blend` | `16` | `89,043` | `-7.46%` | `-6.82%` | `-22.32%` | `-19.00%` | same signal; 3 non-alpha large draws are not required |
-| `60/4 large4096 && alpha-blend && scissor` | `4` | `21,276` | `-7.46%` | `-7.46%` | `-22.32%` | `-18.97%` | same signal; the 4 scissored large-alpha draws own the bytes/invocation movement |
+| `60/4 large4096 && alpha-blend && scissor` | `4` | `21,276` | `-7.46%` | `-7.46%` | `-22.32%` | `-18.97%` | historical positive signal; current-HEAD rerun later failed to reproduce it |
 
 The matched hot rows moved by `-109.838MiB` of VS buffer write; `-91.731MiB`
 comes from bytes/invocation and `-18.107MiB` from invocation count. The target
 row `60/4` again accounts for the dominant local delta (`-82.652MiB`). This
 narrowing is important because the probe mutates only `4 / 253` draws in row
 `60/4`, yet it moves the whole-frame hidden VS/tiler backend write bucket by the
-same amount as the 19-draw and 16-draw probes. The candidate owner is now the
-large scissored, alpha-blended, depth-read/textured primitive group, not
-alpha-blend in general and not primitive size alone.
+same amount as the 19-draw and 16-draw probes. This made the large scissored,
+alpha-blended, depth-read/textured primitive group the best historical
+candidate, not alpha-blend in general and not primitive size alone. A later
+current-HEAD rerun is documented below and shows the same 4-draw mutation no
+longer moves the VS-write bucket, so this is now a shape-sensitive classifier
+result rather than a stable owner proof.
 
 The follow-up draw-sample smoke extended the encoder-breakdown parser with a
 separate `3dmark05-perf-indexed-probe-draws.csv` artifact:
@@ -9023,12 +9026,12 @@ The current primitive-order classifier state is:
 | `60/1` row reverse | fails top-row shape | unchanged/regresses on shared rows | not clean enough |
 | `60/4` row reverse | passes | unchanged/regresses | reject whole `60/4` reverse |
 | `60/4` alpha reverse | passes | unchanged, GPU time `-5.73%` on target row | reject alpha subset as VS-write owner |
-| `60/4` large4096 reverse | passes | hot VS write `-7.46%`, target row `-22.33%` | positive classifier for primitive/locality-dependent hidden backend traffic |
+| `60/4` large4096 reverse | passes | hot VS write `-7.46%`, target row `-22.33%` | historical positive classifier; later narrower/current reruns show this is not stable enough for a fix |
 | `large4096` cross-bucket baseline | no Xcode counters | `60/4` positive target has `0` opaque draws | separates diagnostic signal from production-safe candidate set |
 | Opaque `large4096` (`60/0,60/1,60/3`) | passes | top VS write `+0.01%`, hot GPU `-0.31%` | reject production-safe opaque-large reorder; does not reproduce positive `60/4` signal |
 | Split `60/4 large4096` | passes | top VS write `+0.00%`, hot GPU `-1.91%` | reject draw-size split as VS-write owner; prior positive requires order/locality/visibility interaction |
-| `60/4 large4096 && alpha` | passes | top VS write `-7.46%`, target row `-22.32%`, 16 draws / 89,043 prims | reproduces full large4096 signal; 3 non-alpha large draws are not required |
-| `60/4 large4096 && alpha && scissor` | passes | top VS write `-7.46%`, target row `-22.32%`, 4 draws / 21,276 prims | reproduces full signal; current owner is the scissored large-alpha subset |
+| `60/4 large4096 && alpha` | passes | top VS write `-7.46%`, target row `-22.32%`, 16 draws / 89,043 prims | historical positive; 3 non-alpha large draws were not required in that capture |
+| `60/4 large4096 && alpha && scissor` | passes, but later current-HEAD rerun also passes | historical `-7.46%`; current-HEAD diagnostic rerun `+0.00%` VS write, `+0.54%` hot GPU | not a stable owner; treat as shape-sensitive anomaly/classifier only |
 
 Workspace disk headroom was restored before this capture; after the export the
 filesystem has about `15GiB` free. Raw `.gputrace` and embedded-performance
@@ -9052,7 +9055,7 @@ flowchart TD
   LargeAlphaSmoke --> LargeAlphaXcode["large4096 + alpha Xcode\nhot VS write -7.46%\n60/4 VS write -22.32%"]
   LargeAlphaXcode --> AlphaNuance["broad alpha does not move VS write\nlarge-alpha-only does\norder/locality interaction"]
   LargeScissorSmoke --> LargeScissorXcode["large alpha + scissor Xcode\nhot VS write -7.46%\n60/4 VS write -22.32%"]
-  LargeScissorXcode --> ScissorOwner["current narrow owner\n4 scissored large-alpha draws\nbytes/inv movement"]
+  LargeScissorXcode --> ScissorOwner["historical narrow signal\n4 scissored large-alpha draws\nbytes/inv movement"]
   LargeResult --> Cross["encoder cross buckets\n60/4 large4096 = depth-read/alpha\n60/1+60/3 = opaque large4096"]
   Cross --> OpaqueLarge["opaque large4096 Xcode probe\n60/0 + 60/1 + 60/3"]
   OpaqueLarge --> OpaqueLargeResult["shape gates pass\nVS write +0.01%\nGPU -0.31%"]
@@ -9061,7 +9064,7 @@ flowchart TD
   Scissor --> Gate
   DepthRead --> Gate
   AlphaResult --> RejectAlpha["reject alpha subset\nas VS-write owner"]
-  LargeScissorXcode --> Positive["positive classifier\nscissored large alpha/depth-read/textured subset\nhidden backend traffic"]
+  LargeScissorXcode --> Positive["historical positive classifier\nscissored large alpha/depth-read/textured subset\nhidden backend traffic"]
   AlphaNuance --> BackendNext
   ScissorOwner --> BackendNext
   OpaqueLargeResult --> RejectOpaqueLarge["reject opaque-large reorder\nas production optimization"]
@@ -9215,22 +9218,155 @@ frame. The real bottleneck remains hidden Apple vertex/tiler/backend storage:
 `~1.47GiB` hot VS buffer write, almost entirely unexplained by dxmt CPU writers
 or named tiled counters.
 
+Current-HEAD diagnostic rerun:
+
+```bash
+scripts/tools/run_3dmark05_perf_probe.sh \
+  --suffix reverse-row-60-4-large4096-alpha-scissor-current-gputrace-r1 \
+  --frame 60 \
+  --encoder-breakdown-seq 60 \
+  --timeout 240 \
+  --probe-reverse-indexed-triangles \
+  --probe-reverse-indexed-triangles-row 60/4 \
+  --probe-reverse-indexed-triangles-classes large4096,alpha-blend,scissor \
+  --measure-index-reuse \
+  --top 4 \
+  --hot-gpu-share 95 \
+  --baseline-joined traces/app-d3d9-3dmark05-measure-index-cache-gputrace-r1/analysis/frame60-xcode-dxmt-joined-summary.csv \
+  --require-xcode-counter-coverage \
+  --require-dxmt-join-coverage \
+  --require-top-pso-attribution \
+  --require-top-row-key-match \
+  --max-top-draw-call-delta-ratio 0.05 \
+  --max-top-vertex-count-delta-ratio 0.05 \
+  --max-top-triangle-delta-ratio 0.05 \
+  --min-free-mb 4096
+
+scripts/tools/finalize_3dmark05_perf_probe.sh \
+  --suffix reverse-row-60-4-large4096-alpha-scissor-current-gputrace-r1 \
+  --frame 60 \
+  --top 4 \
+  --hot-gpu-share 95 \
+  --baseline-joined traces/app-d3d9-3dmark05-measure-index-cache-gputrace-r1/analysis/frame60-xcode-dxmt-joined-summary.csv \
+  --require-top-row-key-match \
+  --require-top-pso-attribution \
+  --min-top-pso-samples-per-draw 0.90 \
+  --require-xcode-counter-coverage \
+  --require-dxmt-join-coverage \
+  --min-top-dxmt-joined-fraction 1.0 \
+  --max-top-draw-call-delta-ratio 0.05 \
+  --max-top-vertex-count-delta-ratio 0.05 \
+  --max-top-triangle-delta-ratio 0.05
+```
+
+Artifacts:
+
+```text
+experiments/output/app-d3d9-3dmark05-reverse-row-60-4-large4096-alpha-scissor-current-gputrace-r1/3dmark05-perf-summary.md
+experiments/output/app-d3d9-3dmark05-reverse-row-60-4-large4096-alpha-scissor-current-gputrace-r1/3dmark05-perf-indexed-probe-draws.csv
+traces/app-d3d9-3dmark05-reverse-row-60-4-large4096-alpha-scissor-current-gputrace-r1/frame60.gputrace
+traces/app-d3d9-3dmark05-reverse-row-60-4-large4096-alpha-scissor-current-gputrace-r1/analysis/frame60-performance.gputrace
+traces/app-d3d9-3dmark05-reverse-row-60-4-large4096-alpha-scissor-current-gputrace-r1/analysis/frame60-counters-xcode.csv
+traces/app-d3d9-3dmark05-reverse-row-60-4-large4096-alpha-scissor-current-gputrace-r1/analysis/frame60-xcode-dxmt-comparison.md
+```
+
+This rerun used the diagnostic path, not the env-gated optimization path, and
+still failed to reproduce the old VS-write win. Scope was exact:
+`4` probe-reordered draws, `255` skipped, `127,656B` transient reordered index
+data, and `0` optimized-order bytes.
+
+| Metric | Baseline | Current diagnostic | Delta |
+|---|---:|---:|---:|
+| Total GPU | `34.391ms` | `34.533ms` | `+0.41%` |
+| Hot GPU | `33.741ms` | `33.924ms` | `+0.54%` |
+| Hot rows | `60/0,60/1,60/3,60/4` | `60/0,60/1,60/3,60/4` | shape gate passed |
+| Hot draw calls | `711` | `709` | `-0.28%` |
+| Hot dxmt vertices | `3,121,680` | `3,107,130` | `-0.47%` |
+| Hot dxmt triangles | `1,040,560` | `1,035,710` | `-0.47%` |
+| Hot VS buffer write | `1472.747MiB` | `1472.767MiB` | `+0.00%` |
+| Hot unexplained buffer write | `1472.905MiB` | `1472.745MiB` | `-0.01%` |
+| Hot VS B/invocation | `856.265B` | `860.865B` | `+0.54%` |
+| Hot hidden backend estimate | `~1455MiB` | `1455.755MiB` | still dominant |
+
+The current diagnostic rerun changes `60/4` VS invocations by `-0.97%`, but
+bytes per invocation rises by `+1.00%`; the matched-row total is therefore
+effectively unchanged (`+0.020MiB`). This confirms the old diagnostic win is
+not a stable property of reversing those four `large4096 + alpha + scissor`
+draws. Treat the old result as a shape-sensitive anomaly until a wider
+dependency/locality predicate can be proven by repeated gputrace runs.
+
+Row-shape comparison explains why the historical positive is unsafe to promote
+to an implementation target. The reordered draw scope is identical, but the
+whole `60/4` row shape around it is not:
+
+| `60/4` metric | Baseline | Historical positive | Screen-blend opt | Current diagnostic |
+|---|---:|---:|---:|---:|
+| GPU | `9.031ms` | `7.354ms` | `8.528ms` | `9.001ms` |
+| DXMT draw calls | `260` | `253` | `269` | `259` |
+| DXMT vertices | `1,110,321` | `1,068,372` | `1,117,437` | `1,100,709` |
+| VS invocations | `659,516` | `632,233` | `664,416` | `653,147` |
+| VS write | `376.907MiB` | `293.946MiB` | `377.284MiB` | `376.821MiB` |
+| VS B/invocation | `588.709B` | `477.033B` | `584.636B` | `594.610B` |
+| Probe/optimized draws | `0` | `4 probe` | `4 optimized` | `4 probe` |
+| Reordered index bytes | `0` | `127,656B` | `127,656B` | `127,656B` |
+| Stream handle changes | `418` | `413` | `430` | `416` |
+| IB handle changes | `243` | `240` | `250` | `242` |
+| PSO handle changes | `108` | `103` | `111` | `106` |
+| Shader variant changes | `180` | `174` | `189` | `178` |
+| Argbuf cbuf bytes | `212,872` | `194,472` | `218,024` | `211,016` |
+| Hidden backend estimate | `360.187MiB` | `277.869MiB` | `359.856MiB` | `360.292MiB` |
+
+The meaningful signal is now the row-shape dependency itself: a lower-churn,
+lower-vertex `60/4` frame instance had much lower VS bytes/invocation, while
+current same-scope reorders did not. The next experiment should therefore
+classify or reproduce the lower-churn row shape directly, not keep tightening
+the four-draw index-order predicate.
+
+Draw-sample comparison between
+`reverse-row-60-4-large4096-alpha-scissor-drawsample-smoke-r2` and
+`reverse-row-60-4-large4096-alpha-scissor-current-gputrace-r1` narrows the
+remaining row-shape delta:
+
+| Metric | drawsample-r2 | current diagnostic |
+|---|---:|---:|
+| Indexed probe rows | `259` | `259` |
+| Applied rows | `4` | `4` |
+| Draw buckets `(cull, depth_write, alpha, scissor)` | `196 + 41 + 22` | `196 + 41 + 22` |
+| Unique state/geometry signatures | `244` | `244` |
+| Applied draw indices | `73,74,173,174` | `73,74,173,174` |
+| Applied primitive counts | `5708,4930,5708,4930` | `5708,4930,5708,4930` |
+| Applied first scissor | `0,0,190,553` | `0,0,196,551` |
+| Applied second scissor | `0,0,200,542` | `0,0,204,539` |
+
+The scissored rows differ as a rectangle/tile-coverage shape, not as draw
+membership, primitive size, blend/depth state, or stream/index offsets. This
+does not revive the already rejected broad `--disable-scissor` probe; it points
+to a narrower diagnostic: preserve scissor enablement but normalize or quantize
+the rectangle for the `large4096 + alpha + scissor` screen-blend subset, then
+measure whether Xcode's hidden VS-write bucket follows rectangle/tile coverage
+or remains stable. A safe production optimization would still need a
+correctness-preserving predicate, because changing scissor rectangles is not
+legal in general.
+
 ```mermaid
 flowchart TD
   Diagnostic["diagnostic reverse\nlarge4096 + alpha + scissor\n4 draws"] --> DiagWin["hot VS write -7.46%\n60/4 VS write -22.32%"]
+  Diagnostic --> CurrentDiag["current HEAD rerun\n4 probe draws\nVS write stable"]
   Diagnostic --> Safety["screen-blend safety predicate\nInvDestColor + One + Add\ndepth write off"]
   Safety --> Impl["env-gated optimization\nreordered transient IB\nindexed path preserved"]
   Impl --> Smoke["smoke\n4 optimized draws\n127,656B reorder bytes"]
   Impl --> Xcode["Xcode gputrace\ncounters exported\nfinalizer gates pass"]
   Xcode --> Time["GPU time improves\n34.391 -> 33.238ms"]
   Xcode --> StableWrite["VS write stable\n1472.747 -> 1472.827MiB"]
+  CurrentDiag --> StableWrite
   StableWrite --> RejectRoot["reject as VS-write root fix"]
   Time --> Secondary["keep as optional targeted win\nnot default global policy"]
-  RejectRoot --> Next["next target\nhidden vertex/tiler/backend storage\nor dependency-aware locality strategy"]
+  RejectRoot --> RectShape["drawsample/current compare\nsame rows and 4 draws\nscissor rectangles drift"]
+  RectShape --> Next["next target\nscissor rectangle/tile coverage classifier\nhidden vertex/tiler backend storage"]
 
   classDef hot fill:#ffe8e8,stroke:#b64242,color:#2b0d0d
   classDef known fill:#e8f0ff,stroke:#476cb6,color:#0d1833
-  class DiagWin,StableWrite,RejectRoot,Next hot
+  class DiagWin,CurrentDiag,StableWrite,RejectRoot,Next hot
   class Diagnostic,Safety,Impl,Smoke,Xcode,Time,Secondary known
 ```
 
