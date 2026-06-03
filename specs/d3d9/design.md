@@ -6,6 +6,9 @@ Detailed subtopic designs live in:
 - `formats/design.md` for D3D9-to-Metal format mapping tables.
 - `queries/design.md` for deferred query sequencing and backend query records.
 - `wsi/design.md` for HWND-to-CAMetalLayer resolution and presentation lifecycle.
+- `ir/design.md` for shader IR, analysis passes, MSL emission, FFP key,
+  half-pixel offset injection, alpha-test rewrite, precision policy, and the
+  performance-driven decisions log that shapes the translator.
 
 ---
 
@@ -559,26 +562,14 @@ The PE resource layer owns these rules:
 
 ## 5. Fixed-Function Pipeline Key
 
-When no vertex or pixel shader is bound, the core derives a compact key from
-`DeviceState` and passes it to the backend as a `ShaderRef`. The backend generates or
-caches the Metal shader for that key.
+When no vertex or pixel shader is bound the core derives `FFPKeyVS` /
+`FFPKeyPS` from `DeviceState` and hands them to the backend as a `ShaderRef`.
+The keys are value types with no pointers or handles; two equal keys must
+produce byte-identical shader behaviour.
 
-The key is a value type. Two keys that compare equal must produce identical shader
-behavior. The key must not contain any pointers or handles — only scalar state.
-
-**FFPKeyVS** encodes (all fields bit-packed):
-- `lightingEnabled`, `specularEnabled`, `normalizeNormals`
-- Per-light: `enabled`, `type` (directional / point / spot) for lights 0–7
-- `colorMaterialMode` per channel (emissive, ambient, diffuse, specular)
-- `fogMode`, `fogFromVertex`, `rangeFog`
-- Per stage: `texCoordGen` (TCI mode), `texTransformFlags`
-- `vertexBlend`, `indexedVertexBlend`
-
-**FFPKeyPS** encodes (all fields bit-packed):
-- Per stage: `colorOp`, `colorArg1`, `colorArg2`, `alphaOp`, `alphaArg1`,
-  `alphaArg2`, `resultArg`, `texType`, `texCoordIndex`
-- `fogMode` (for pixel fog when `!fogFromVertex`)
-- `alphaTestEnable`, `alphaTestFunc`
+The full bit-packed field list and the FFP MSL emit path live in
+`ir/design.md` §3.1 alongside the rest of the translator's semantic
+contract. Requirement IDs: `R-CORE-IR-2.1`, `R-CORE-IR-2.2`.
 
 ---
 
@@ -602,56 +593,29 @@ consume it before returning.
 
 ## 7. Half-Pixel Offset Correction
 
-D3D9 pixel centers are at integer screen coordinates; Metal pixel centers are at
-half-integers. Without correction, all 3D geometry renders shifted by 0.5 pixels.
+D3D9 pixel centres are at integer screen coordinates; Metal centres are at
+half-integers. The translator owns the fixup for programmable VS, FFP VS,
+and `D3DFVF_XYZRHW` pre-transformed inputs. It also owns the
+texture-V-axis policy (the translator must not introduce a global
+`v = 1.0 - v` rewrite) and the `DXMT_DEBUG_FLIP_VERTEX_Y` /
+`DXMT_DEBUG_FORCE_PIXEL_V_FLIP` debug-only bisect flags.
 
-**For programmable vertex shaders:** inject a fixup into the shader before translation.
-In bytecode terms, after the instruction that writes `oPos` (or `o0` in vs_3_0),
-add: `oPos.xy += c_fixup.xy * oPos.w`, where `c_fixup` is injected as a constant
-containing `(1/viewportWidth, 1/viewportHeight)`.
-
-**For fixed-function shaders:** the backend includes the fixup in the generated MSL.
-
-**For `D3DFVF_XYZRHW` (pre-transformed) inputs:** screen-space `(x, y, z, 1/w)` must
-be converted to Metal NDC in the vertex shader:
-```
-metal_ndc.x =  (x / vp.Width)  * 2.0 − 1.0
-metal_ndc.y = 1.0 − (y / vp.Height) * 2.0
-metal_ndc.z = z
-metal_ndc.w = 1.0 / rhw
-```
-
-**Texture coordinate orientation:** programmable pixel shaders preserve D3D UVs.
-The translator must not add a default `v = 1.0 - v` transform around `texld`,
-`TEX`, `TEXLDB`, `TEXLDP`, `TEXLDD`, or `TEXLDL` sampling. If a texture appears
-vertically inverted, the bug belongs to resource upload/readback orientation,
-surface addressing, viewport/vertex mapping, or a caller's own shader math, not
-to a global pixel-shader fixup.
-
-Two debug-only bisect flags intentionally keep these contracts separate:
-
-| Flag | Scope | Default contract |
-|---|---|---|
-| `DXMT_DEBUG_FLIP_VERTEX_Y` | Translated vertex shader clip-space output | Off by default; may emit `out.position.y = -out.position.y` only for vertex/raster debugging. |
-| `DXMT_DEBUG_FORCE_PIXEL_V_FLIP` | Translated pixel shader texture sampling | Off by default; may emit `1.0f - v` only to prove a regression is caused by an accidental pixel-sampler V inversion. |
+Full contract and the constant-slot used to deliver `(1 / vp.Width,
+1 / vp.Height)` live in `ir/design.md` §3.2 (half-pixel offset, NDC
+conversion) and §3.3 (V-axis policy). Requirement IDs:
+`R-CORE-IR-2.3`..`R-CORE-IR-2.7`, `R-CORE-IR-2.10`.
 
 ---
 
 ## 8. Alpha Test
 
+`D3DRS_ALPHATESTENABLE` / `D3DRS_ALPHAFUNC` / `D3DRS_ALPHAREF` has no Metal
+hardware equivalent. The translator emits a `discard_fragment()` conditional
+at the end of the pixel shader, and each `(alphaTestEnable, alphaTestFunc)`
+pair produces a separately cached variant.
 
-
-`D3DRS_ALPHATESTENABLE` with `D3DRS_ALPHAFUNC` / `D3DRS_ALPHAREF` has no Metal
-hardware equivalent. It is encoded into `FFPKeyPS` (or a programmable shader variant
-key) and emitted as a `discard_fragment()` conditional at the end of the pixel shader.
-
-The test condition in MSL for function `D3DCMP_LESS`, reference `r`:
-```metal
-if (!(outColor.a < r)) discard_fragment();
-```
-
-Each distinct (`alphaTestEnable`, `alphaTestFunc`) combination must produce a
-separately cached shader variant.
+Implementation detail and cache-key contribution live in
+`ir/design.md` §3.4. Requirement IDs: `R-CORE-IR-2.8`, `R-CORE-IR-2.9`.
 
 ---
 

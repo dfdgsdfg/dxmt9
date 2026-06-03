@@ -16,6 +16,9 @@ Detailed subtopic contracts live in:
 - `formats/requirements.md` for `D3DFORMAT` classification and validation.
 - `queries/requirements.md` for `IDirect3DQuery9` behaviour and ordering.
 - `wsi/requirements.md` for HWND, swap-chain, presentation, and no-window WSI.
+- `ir/requirements.md` for shader IR, analysis passes, MSL emission, FFP key
+  semantics, half-pixel and alpha-test rewrite contracts, and precision /
+  VSOut policy (`R-CORE-IR-*`).
 
 ---
 
