@@ -74,6 +74,45 @@ def read_xcode_counters(path: Path) -> list[dict[str, Any]]:
     return out
 
 
+def collect_samples(
+    paths: list[Path],
+    metric_names: tuple[str, ...] | list[str],
+) -> tuple[dict[str, dict[str, list[float]]], dict[str, set[str]]]:
+    """Read multiple Xcode counter CSVs and union rows by Encoder Label.
+
+    Returns:
+      samples: { encoder_label: { metric_name: [v1, v2, ...] } }
+                where each per-metric list has length <= len(paths)
+                depending on which CSVs reported that metric for that row.
+      missing: { encoder_label: { csv_filename, ... } }
+                CSVs in which an encoder_label that was seen elsewhere did
+                not appear. Empty dict when all rows are present in all CSVs.
+    """
+    samples: dict[str, dict[str, list[float]]] = {}
+    rows_per_csv: dict[str, set[str]] = {}
+    for path in paths:
+        rows = read_xcode_counters(path)
+        labels_in_csv: set[str] = set()
+        for row in rows:
+            label = row["encoder_label"]
+            labels_in_csv.add(label)
+            bucket = samples.setdefault(label, {name: [] for name in metric_names})
+            for name in metric_names:
+                value = row["metrics"].get(name)
+                if value is None:
+                    continue
+                bucket[name].append(value)
+        rows_per_csv[path.name] = labels_in_csv
+    missing: dict[str, set[str]] = {}
+    for label in samples:
+        absent_from = {
+            name for name, labels in rows_per_csv.items() if label not in labels
+        }
+        if absent_from:
+            missing[label] = absent_from
+    return samples, missing
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("csvs", nargs="+", type=Path,

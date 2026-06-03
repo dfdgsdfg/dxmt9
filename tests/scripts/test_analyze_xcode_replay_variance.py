@@ -76,6 +76,71 @@ class AnalyzeXcodeReplayVarianceTests(unittest.TestCase):
         self.assertAlmostEqual(row["metrics"]["tiled_vertex_buffer_mib"], 20.0)
         self.assertAlmostEqual(row["metrics"]["tiled_primitive_block_mib"], 10.0)
 
+    def test_collect_samples_unions_rows_across_csvs(self) -> None:
+        module = load_module()
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            paths = []
+            for i, gpu_ns in enumerate([10_000_000, 11_000_000, 10_500_000]):
+                p = root / f"run{i + 1}.csv"
+                write_xcode_csv(p, [
+                    {
+                        "Encoder Label": "RenderPass[seq=50,enc=1]",
+                        "GPU Time": gpu_ns,
+                        "Buffer Device Memory Bytes Written": 100 * 1048576,
+                        "VS Buffer Device Memory Bytes Written": 80 * 1048576,
+                        "VS Invocations": 1_000_000,
+                        "Tiled Vertex Buffer Bytes": 20 * 1048576,
+                        "Tiled Vertex Buffer Primitive Blocks Bytes": 10 * 1048576,
+                    },
+                ])
+                paths.append(p)
+            samples, missing = module.collect_samples(paths,
+                                                       module.DEFAULT_METRICS)
+        self.assertEqual(set(samples.keys()), {"RenderPass[seq=50,enc=1]"})
+        gpu_samples = samples["RenderPass[seq=50,enc=1]"]["gpu_ms"]
+        self.assertEqual(len(gpu_samples), 3)
+        self.assertAlmostEqual(gpu_samples[0], 10.0)
+        self.assertAlmostEqual(gpu_samples[1], 11.0)
+        self.assertAlmostEqual(gpu_samples[2], 10.5)
+        self.assertEqual(missing, {})
+
+    def test_collect_samples_tracks_rows_missing_from_some_csvs(self) -> None:
+        module = load_module()
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            full_row = {
+                "Encoder Label": "A",
+                "GPU Time": 10_000_000,
+                "Buffer Device Memory Bytes Written": 100 * 1048576,
+                "VS Buffer Device Memory Bytes Written": 80 * 1048576,
+                "VS Invocations": 1_000_000,
+                "Tiled Vertex Buffer Bytes": 20 * 1048576,
+                "Tiled Vertex Buffer Primitive Blocks Bytes": 10 * 1048576,
+            }
+            extra_row = {
+                "Encoder Label": "B",
+                "GPU Time": 5_000_000,
+                "Buffer Device Memory Bytes Written": 50 * 1048576,
+                "VS Buffer Device Memory Bytes Written": 40 * 1048576,
+                "VS Invocations": 500_000,
+                "Tiled Vertex Buffer Bytes": 10 * 1048576,
+                "Tiled Vertex Buffer Primitive Blocks Bytes": 5 * 1048576,
+            }
+            paths = []
+            for i in range(3):
+                p = root / f"run{i + 1}.csv"
+                rows = [full_row] if i == 0 else [full_row, extra_row]
+                write_xcode_csv(p, rows)
+                paths.append(p)
+            samples, missing = module.collect_samples(paths,
+                                                       module.DEFAULT_METRICS)
+        self.assertIn("A", samples)
+        self.assertIn("B", samples)
+        self.assertEqual(len(samples["A"]["gpu_ms"]), 3)
+        self.assertEqual(len(samples["B"]["gpu_ms"]), 2)
+        self.assertEqual(missing.get("B"), {paths[0].name})
+
 
 if __name__ == "__main__":
     unittest.main()
