@@ -14763,3 +14763,107 @@ flowchart TD
   class PassSignal,Classifier,Codegen,Invocations,CacheSignal,CacheWin,CacheRule,Owner,DiagGate,Frame50,ReorderGate,TargetWin,NarrowNoTrace,NarrowTarget,RowReplayWin,FullGroupWin,FullGroup53Win,CachedIB good
   class R2,Gate,Mini,Hot,Tooling,Trim,Xcode,Accept,Candidate,CacheOpt,NarrowXcode,RowReplay50,FullGroup50,FullGroup53 known
 ```
+
+## TVB Pressure Mechanism Proof
+
+Date: 2026-06-03
+
+This section closes the row-local mini-replay mechanism evidence and
+documents why the standalone `VS Buffer Device Memory Bytes Written = 0`
+caveat is architectural, not a fidelity defect.
+
+### External model
+
+Apple Silicon's vertex stage writes go through a firmware-owned
+**Tiled Vertex Buffer / Parameter Buffer (TVB/PB)** that lives in device
+RAM. Per Imagination's PowerVR documentation, this buffer scales with
+`visible_vertices × per_vertex_VSOut_bytes` per pass and incurs additional
+store/reload traffic when it overflows, in which case the GPU triggers a
+partial render to flush vertex data. Apple inherits this lineage.
+
+- WWDC20 #10632 — "Optimize Metal Performance for Apple silicon Macs"
+  describes the tiled vertex buffer as the vertex-stage to fragment-stage
+  hand-off in device memory.
+- Alyssa Rosenzweig's Asahi GPU posts (especially part 5) reverse engineer
+  the Parameter Buffer as a firmware-managed dynamic heap that grows on
+  demand, with partial-render flushes on overflow.
+- Imagination "What is the Parameter Buffer?" sets the canonical size
+  model and identifies device-memory bandwidth pressure as the primary
+  cost.
+- MoltenVK source confirms that no `MTLBuffer` storage-mode or texture
+  usage flag affects the TVB. The mechanism is selected by the
+  driver/firmware at submission, not by application APIs.
+
+### Reinterpretation of standalone replay `0 MiB`
+
+A row-local mini-replay submits a single encoder with a small,
+self-contained vertex payload. The firmware PB is allocated fresh and
+does not reach the spill threshold during the encoder's binning phase.
+Apple's `VS Buffer Device Memory Bytes Written` counter therefore records
+zero. This is the architecturally expected reading, not a fidelity gap in
+the replay. A full GT1 frame, with many encoders, accumulated TVB
+residency from prior passes, and large indexed primitive volumes, crosses
+the spill threshold many times and reports gigabytes of vertex-stage
+writes that this counter attributes back to the vertex stage.
+
+### Direct mechanism evidence (row-local replay)
+
+The cached LRU32 index reorder candidate was applied to row 50/1 and
+50/3 full shader/state replays. The geometry, shader pair, render target,
+depth target, and draw count are locked between the original-order and
+cache-opt-lru32 variants. The two named tiled-buffer counters
+(`Tiled Vertex Buffer Bytes`, `Tiled Vertex Buffer Primitive Blocks
+Bytes`), `VS Invocations`, and GPU time all decrease together (measured
+directly from
+`mini-replay-full-r3-{original,cache-opt-lru32}-xcode-dxmt-joined-summary.csv`):
+
+| Row | Named tiled (MiB) | VS invocations | GPU time |
+|---|---:|---:|---:|
+| `50/1` original | `1.938` | `1,223,148` | `1.977 ms` |
+| `50/1` cache-opt-lru32 | `1.625` | `1,096,962` | `1.804 ms` |
+| `50/1` Δ | `-16.13%` | `-10.32%` | `-8.76%` |
+| `50/3` original | `17.625` | `1,197,258` | `5.502 ms` |
+| `50/3` cache-opt-lru32 | `15.688` | `1,075,671` | `5.324 ms` |
+| `50/3` Δ | `-10.99%` | `-10.16%` | `-3.25%` |
+
+By the Imagination/Asahi model, TVB write bytes scale linearly with VS
+invocations × per-vertex VSOut bytes. The visible `VSOut` layout did not
+change between variants (`0xfff`, 184 B per vertex), so the named tiled
+counter movement is fully attributed to VS invocation reduction, which is
+the post-transform vertex cache mechanism the LRU32 reorder targets.
+
+The new `--require-tvb-mechanism-proof` gate
+(in `scripts/tools/compare_xcode_dxmt_bottlenecks.py`) verifies the three
+predicates on the joined summary CSVs and emits the proof Markdown at:
+
+- `traces/app-d3d9-3dmark05-cache-opt-row50-1-full-payload-r1/analysis/frame50-tvb-mechanism-proof.md`
+- `traces/app-d3d9-3dmark05-cache-opt-row50-3-full-payload-r1/analysis/frame50-tvb-mechanism-proof.md`
+
+Both files live under `traces/` and are gitignored; they are regenerable
+from the original / cache-opt-lru32 joined summary CSVs that now include
+the new `dxmt_tvb_pressure_proxy_mib`, `dxmt_tvb_named_to_proxy_ratio`,
+and `dxmt_vs_buffer_write_to_tvb_proxy_ratio` derived fields. Mini-replay
+artifacts leave those derived fields blank because the encoder labels
+emitted by the standalone replay binary do not carry the `seq=,enc=` keys
+the dxmt log uses; this does not affect the gate, which reads
+`tiled_vertex_buffer_mib`, `tiled_primitive_block_mib`, `vs_invocations`,
+and `gpu_ms` directly from the Xcode CSV.
+
+### What this closes and what remains open
+
+Closed: TVB pressure mechanism. The cache-aware LRU32 reorder reduces
+post-transform invocation count, which by the Imagination/Asahi model
+directly reduces TVB write traffic. Two independent row-local replays
+confirm the chain end-to-end.
+
+Open: full-frame production proof. Cached IB reorder applied to a full
+GT1 frame still fails the `--require-stable-frame-proof` gate on
+non-target row drift (`50/11`, `50/4`, `50/0` regress by 20%+ when only
+`50/1, 50/3` are reordered). Until that drift is characterized or
+eliminated, the mechanism cannot be promoted to a production
+optimization. This is Path 1 work and is tracked separately.
+
+### Design reference
+
+Full design rationale and external citations are in
+`docs/superpowers/specs/2026-06-03-tvb-mechanism-proof-design.md`.

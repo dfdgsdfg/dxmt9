@@ -289,6 +289,46 @@ gpu_command_buffer_errors
 
 Single counter; pair with `expected_counters{ max = 0 }` on probes.
 
+### TVB and `VS Buffer Device Memory Bytes Written` semantics
+
+Xcode counter `VS Buffer Device Memory Bytes Written` measures
+firmware-owned **Tiled Vertex Buffer / Parameter Buffer (TVB/PB)** traffic
+on Apple Silicon, not application `MTLBuffer` writes. The TVB/PB lives in
+device RAM, is sized by the firmware at submission, and grows dynamically
+during the vertex-binning phase. When it overflows, the firmware emits a
+partial render that contributes additional store/reload bytes to the
+same counter.
+
+Practical consequences:
+
+- A row-local mini-replay that submits a single encoder with a small
+  vertex payload may report `0 MiB` for this counter because the PB
+  never reached its spill threshold. This is expected, not a fidelity
+  bug. The `summarize_xcode_encoder_counters.py` joined CSV now exposes
+  derived `dxmt_tvb_pressure_proxy_mib`, `dxmt_tvb_named_to_proxy_ratio`,
+  and `dxmt_vs_buffer_write_to_tvb_proxy_ratio` fields per row so this
+  case is distinguishable from a missing capture.
+- Mini-replay mechanism proofs that need to certify a TVB pressure
+  reduction should use the new
+  `compare_xcode_dxmt_bottlenecks.py --require-tvb-mechanism-proof` gate.
+  It checks that top-N `tiled_vertex_buffer_mib + tiled_primitive_block_mib`
+  (the named tiled counters), `vs_invocations`, and `gpu_ms` all strictly
+  decrease. These three together are direct TVB pressure proxies under
+  the Imagination/Asahi model.
+- Full-frame production proofs continue to use
+  `--require-stable-frame-proof`, which gates on
+  `VS Buffer Device Memory Bytes Written` because at full-frame scale the
+  PB spills and the counter is nonzero.
+
+References:
+
+- WWDC20 #10632 — `https://developer.apple.com/videos/play/wwdc2020/10632/`
+- Imagination Parameter Buffer doc —
+  `https://docs.imgtec.com/Profiling_and_Optimisations/PerfRec/topics/c_PerfRec_parameter_buffer.html`
+- Alyssa Rosenzweig — Asahi GPU part 5 —
+  `https://alyssarosenzweig.ca/blog/asahi-gpu-part-5.html`
+- Design doc — `docs/superpowers/specs/2026-06-03-tvb-mechanism-proof-design.md`
+
 ### Stage-boundary GPU counter sample buffers (path B — not yet implemented)
 
 `MTLCounterSampleBuffer` is bridged in winemetal but not yet wired at
