@@ -144,6 +144,106 @@ def summarize_variance(
     return out
 
 
+def _fmt(value: Any) -> str:
+    if value is None:
+        return ""
+    if isinstance(value, float):
+        return repr(value)
+    return str(value)
+
+
+def write_summary_csv(
+    path: Path,
+    summary: dict[str, dict[str, dict[str, Any]]],
+    metric_order: list[str],
+) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    fields = ["encoder", "metric", "n", "mean", "stddev", "cv_pct"]
+    with path.open("w", newline="", encoding="utf-8") as handle:
+        writer = csv.DictWriter(handle, fieldnames=fields)
+        writer.writeheader()
+        for label in sorted(summary.keys()):
+            per_metric = summary[label]
+            for metric in metric_order:
+                if metric not in per_metric:
+                    continue
+                stats = per_metric[metric]
+                writer.writerow({
+                    "encoder": label,
+                    "metric": metric,
+                    "n": stats["n"],
+                    "mean": _fmt(stats["mean"]),
+                    "stddev": _fmt(stats["stddev"]),
+                    "cv_pct": _fmt(stats["cv_pct"]),
+                })
+
+
+def _max_cv(per_metric: dict[str, dict[str, Any]]) -> float:
+    best = 0.0
+    for stats in per_metric.values():
+        cv = stats.get("cv_pct")
+        if isinstance(cv, (int, float)) and cv > best:
+            best = float(cv)
+    return best
+
+
+def write_report(
+    path: Path,
+    summary: dict[str, dict[str, dict[str, Any]]],
+    missing: dict[str, set[str]],
+    metric_order: list[str],
+    n_inputs: int,
+) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    lines: list[str] = []
+    lines.append("# Xcode Replay Variance Report")
+    lines.append("")
+    lines.append(f"inputs: {n_inputs}")
+    lines.append("")
+    lines.append("## Per-Encoder Variance")
+    lines.append("")
+    for label in sorted(summary.keys()):
+        per_metric = summary[label]
+        lines.append(f"## Encoder `{label}`")
+        lines.append("")
+        lines.append("| Metric | n | Mean | Stddev | CV% |")
+        lines.append("|---|---:|---:|---:|---:|")
+        for metric in metric_order:
+            if metric not in per_metric:
+                continue
+            stats = per_metric[metric]
+            mean = stats["mean"]
+            stddev = stats["stddev"]
+            cv_pct = stats["cv_pct"]
+            mean_text = f"{mean:.6g}" if isinstance(mean, (int, float)) else ""
+            stddev_text = f"{stddev:.6g}" if isinstance(stddev, (int, float)) else ""
+            cv_text = f"{cv_pct:.2f}" if isinstance(cv_pct, (int, float)) else ""
+            lines.append(
+                f"| `{metric}` | {stats['n']} | {mean_text} | {stddev_text} | {cv_text} |"
+            )
+        lines.append("")
+
+    if missing:
+        lines.append("## Rows Missing From Some Inputs")
+        lines.append("")
+        for label in sorted(missing.keys()):
+            absent = ", ".join(f"`{name}`" for name in sorted(missing[label]))
+            lines.append(f"- `{label}` — missing from: {absent}")
+        lines.append("")
+
+    lines.append("## Summary (top variance)")
+    lines.append("")
+    lines.append("| Encoder | Max CV% across reported metrics |")
+    lines.append("|---|---:|")
+    ranked = sorted(summary.keys(), key=lambda l: -_max_cv(summary[l]))
+    for label in ranked:
+        max_cv = _max_cv(summary[label])
+        lines.append(f"| `{label}` | {max_cv:.2f} |")
+    lines.append("")
+
+    path.write_text("\n".join(lines), encoding="utf-8")
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("csvs", nargs="+", type=Path,

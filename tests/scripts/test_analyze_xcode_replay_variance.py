@@ -185,5 +185,69 @@ class AnalyzeXcodeReplayVarianceTests(unittest.TestCase):
         self.assertIsNone(summary["Y"]["gpu_ms"]["cv_pct"])
 
 
+    def test_write_summary_csv_emits_one_row_per_encoder_metric(self) -> None:
+        module = load_module()
+        summary = {
+            "A": {
+                "gpu_ms": {"n": 3, "mean": 11.0, "stddev": 1.0, "cv_pct": 9.0909},
+                "vs_invocations": {"n": 3, "mean": 1_000_000.0,
+                                     "stddev": 0.0, "cv_pct": 0.0},
+            },
+        }
+        with tempfile.TemporaryDirectory() as tmp:
+            out = Path(tmp) / "summary.csv"
+            module.write_summary_csv(out, summary, ["gpu_ms", "vs_invocations"])
+            with out.open(newline="", encoding="utf-8") as handle:
+                rows = list(csv.DictReader(handle))
+        self.assertEqual(rows[0]["encoder"], "A")
+        self.assertEqual(rows[0]["metric"], "gpu_ms")
+        self.assertEqual(rows[0]["n"], "3")
+        self.assertAlmostEqual(float(rows[0]["mean"]), 11.0)
+        self.assertAlmostEqual(float(rows[0]["stddev"]), 1.0)
+        self.assertAlmostEqual(float(rows[0]["cv_pct"]), 9.0909, places=3)
+        self.assertEqual(rows[1]["metric"], "vs_invocations")
+        self.assertEqual(rows[1]["cv_pct"], "0.0")
+
+    def test_write_summary_csv_blanks_none_cells(self) -> None:
+        module = load_module()
+        summary = {
+            "X": {
+                "gpu_ms": {"n": 1, "mean": 10.0, "stddev": None, "cv_pct": None},
+            },
+        }
+        with tempfile.TemporaryDirectory() as tmp:
+            out = Path(tmp) / "summary.csv"
+            module.write_summary_csv(out, summary, ["gpu_ms"])
+            with out.open(newline="", encoding="utf-8") as handle:
+                row = next(csv.DictReader(handle))
+        self.assertEqual(row["n"], "1")
+        self.assertEqual(row["mean"], "10.0")
+        self.assertEqual(row["stddev"], "")
+        self.assertEqual(row["cv_pct"], "")
+
+    def test_write_report_lists_each_encoder_and_summary_table(self) -> None:
+        module = load_module()
+        summary = {
+            "A": {"gpu_ms": {"n": 3, "mean": 11.0, "stddev": 1.0,
+                                "cv_pct": 9.0909}},
+            "B": {"gpu_ms": {"n": 3, "mean": 5.0, "stddev": 0.0,
+                                "cv_pct": 0.0}},
+        }
+        missing = {"B": {"run1.csv"}}
+        with tempfile.TemporaryDirectory() as tmp:
+            out = Path(tmp) / "report.md"
+            module.write_report(out, summary, missing,
+                                  ["gpu_ms"], n_inputs=3)
+            text = out.read_text(encoding="utf-8")
+        self.assertIn("# Xcode Replay Variance Report", text)
+        self.assertIn("inputs: 3", text)
+        self.assertIn("## Encoder `A`", text)
+        self.assertIn("## Encoder `B`", text)
+        self.assertIn("9.09", text)
+        self.assertIn("## Rows Missing From Some Inputs", text)
+        self.assertIn("`B` — missing from: `run1.csv`", text)
+        self.assertIn("## Summary (top variance)", text)
+
+
 if __name__ == "__main__":
     unittest.main()
