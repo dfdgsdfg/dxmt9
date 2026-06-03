@@ -142,5 +142,48 @@ class AnalyzeXcodeReplayVarianceTests(unittest.TestCase):
         self.assertEqual(missing.get("B"), {paths[0].name})
 
 
+    def test_summarize_variance_computes_mean_stddev_cv(self) -> None:
+        module = load_module()
+        samples = {
+            "A": {"gpu_ms": [10.0, 11.0, 12.0]},  # mean=11.0, stdev=1.0, cv=9.09%
+            "B": {"gpu_ms": [5.0, 5.0, 5.0]},     # mean=5.0,  stdev=0.0, cv=0%
+        }
+        summary = module.summarize_variance(samples)
+        self.assertEqual(summary["A"]["gpu_ms"]["n"], 3)
+        self.assertAlmostEqual(summary["A"]["gpu_ms"]["mean"], 11.0)
+        self.assertAlmostEqual(summary["A"]["gpu_ms"]["stddev"], 1.0)
+        self.assertAlmostEqual(summary["A"]["gpu_ms"]["cv_pct"],
+                                100.0 * 1.0 / 11.0, places=4)
+        self.assertEqual(summary["B"]["gpu_ms"]["n"], 3)
+        self.assertEqual(summary["B"]["gpu_ms"]["mean"], 5.0)
+        self.assertEqual(summary["B"]["gpu_ms"]["stddev"], 0.0)
+        self.assertEqual(summary["B"]["gpu_ms"]["cv_pct"], 0.0)
+
+    def test_summarize_variance_blank_cv_when_mean_is_zero(self) -> None:
+        module = load_module()
+        samples = {"X": {"gpu_ms": [0.0, 0.0, 0.0]}}
+        summary = module.summarize_variance(samples)
+        self.assertEqual(summary["X"]["gpu_ms"]["n"], 3)
+        self.assertEqual(summary["X"]["gpu_ms"]["mean"], 0.0)
+        self.assertEqual(summary["X"]["gpu_ms"]["stddev"], 0.0)
+        self.assertIsNone(summary["X"]["gpu_ms"]["cv_pct"])
+
+    def test_summarize_variance_blank_when_fewer_than_two_samples(self) -> None:
+        module = load_module()
+        samples = {
+            "X": {"gpu_ms": [10.0]},
+            "Y": {"gpu_ms": []},
+        }
+        summary = module.summarize_variance(samples)
+        self.assertEqual(summary["X"]["gpu_ms"]["n"], 1)
+        self.assertEqual(summary["X"]["gpu_ms"]["mean"], 10.0)
+        self.assertIsNone(summary["X"]["gpu_ms"]["stddev"])
+        self.assertIsNone(summary["X"]["gpu_ms"]["cv_pct"])
+        self.assertEqual(summary["Y"]["gpu_ms"]["n"], 0)
+        self.assertIsNone(summary["Y"]["gpu_ms"]["mean"])
+        self.assertIsNone(summary["Y"]["gpu_ms"]["stddev"])
+        self.assertIsNone(summary["Y"]["gpu_ms"]["cv_pct"])
+
+
 if __name__ == "__main__":
     unittest.main()

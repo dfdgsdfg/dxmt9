@@ -113,6 +113,37 @@ def collect_samples(
     return samples, missing
 
 
+def summarize_variance(
+    samples: dict[str, dict[str, list[float]]],
+) -> dict[str, dict[str, dict[str, Any]]]:
+    """Compute per-(encoder, metric) mean / sample stddev / CV%.
+
+    For each (encoder, metric):
+      n      = len(values)
+      mean   = arithmetic mean if n >= 1 else None
+      stddev = sample stddev (n-1 denominator) if n >= 2 else None
+      cv_pct = 100 * stddev / mean if n >= 2 and mean > 0 else None
+    """
+    out: dict[str, dict[str, dict[str, Any]]] = {}
+    for label, by_metric in samples.items():
+        out[label] = {}
+        for metric_name, values in by_metric.items():
+            n = len(values)
+            mean = statistics.mean(values) if n >= 1 else None
+            stddev = statistics.stdev(values) if n >= 2 else None
+            if stddev is not None and mean is not None and mean > 0.0:
+                cv_pct = 100.0 * stddev / mean
+            else:
+                cv_pct = None
+            out[label][metric_name] = {
+                "n": n,
+                "mean": mean,
+                "stddev": stddev,
+                "cv_pct": cv_pct,
+            }
+    return out
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("csvs", nargs="+", type=Path,
