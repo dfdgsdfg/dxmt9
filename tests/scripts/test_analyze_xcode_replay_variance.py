@@ -249,5 +249,105 @@ class AnalyzeXcodeReplayVarianceTests(unittest.TestCase):
         self.assertIn("## Summary (top variance)", text)
 
 
+    def _write_three_replay_csvs(self,
+                                  root: Path,
+                                  gpu_ns_per_run: list[int]) -> list[Path]:
+        paths = []
+        for i, gpu_ns in enumerate(gpu_ns_per_run):
+            p = root / f"run{i + 1}.csv"
+            write_xcode_csv(p, [
+                {
+                    "Encoder Label": "A",
+                    "GPU Time": gpu_ns,
+                    "Buffer Device Memory Bytes Written": 100 * 1048576,
+                    "VS Buffer Device Memory Bytes Written": 80 * 1048576,
+                    "VS Invocations": 1_000_000,
+                    "Tiled Vertex Buffer Bytes": 20 * 1048576,
+                    "Tiled Vertex Buffer Primitive Blocks Bytes": 10 * 1048576,
+                },
+            ])
+            paths.append(p)
+        return paths
+
+    def test_cli_emits_report_and_summary(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            csvs = self._write_three_replay_csvs(root,
+                                                   [10_000_000, 10_000_000,
+                                                    10_000_000])
+            report = root / "report.md"
+            summary = root / "summary.csv"
+            result = subprocess.run(
+                [
+                    sys.executable, str(SCRIPT),
+                    *[str(c) for c in csvs],
+                    "--output", str(report),
+                    "--summary-output", str(summary),
+                ],
+                text=True, capture_output=True, check=False,
+            )
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertTrue(report.exists())
+            self.assertTrue(summary.exists())
+            self.assertIn("inputs: 3", report.read_text(encoding="utf-8"))
+
+    def test_cli_requires_at_least_three_csvs(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            csvs = self._write_three_replay_csvs(root,
+                                                   [10_000_000, 10_000_000])
+            report = root / "report.md"
+            result = subprocess.run(
+                [
+                    sys.executable, str(SCRIPT),
+                    *[str(c) for c in csvs],
+                    "--output", str(report),
+                ],
+                text=True, capture_output=True, check=False,
+            )
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("at least 3 CSV paths", result.stderr)
+
+    def test_cli_max_cv_gate_passes_when_below_limit(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            csvs = self._write_three_replay_csvs(root,
+                                                   [10_000_000, 10_000_000,
+                                                    10_000_000])
+            report = root / "report.md"
+            result = subprocess.run(
+                [
+                    sys.executable, str(SCRIPT),
+                    *[str(c) for c in csvs],
+                    "--output", str(report),
+                    "--max-cv-pct", "5.0",
+                ],
+                text=True, capture_output=True, check=False,
+            )
+        self.assertEqual(result.returncode, 0, result.stderr)
+
+    def test_cli_max_cv_gate_fails_and_names_violator(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            # 10ms, 11ms, 12ms -> stdev=1ms, mean=11ms, CV ~= 9.09%
+            csvs = self._write_three_replay_csvs(root,
+                                                   [10_000_000, 11_000_000,
+                                                    12_000_000])
+            report = root / "report.md"
+            result = subprocess.run(
+                [
+                    sys.executable, str(SCRIPT),
+                    *[str(c) for c in csvs],
+                    "--output", str(report),
+                    "--max-cv-pct", "5.0",
+                ],
+                text=True, capture_output=True, check=False,
+            )
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("gpu_ms", result.stderr)
+        self.assertIn("A", result.stderr)
+        self.assertIn("9.0", result.stderr)
+
+
 if __name__ == "__main__":
     unittest.main()

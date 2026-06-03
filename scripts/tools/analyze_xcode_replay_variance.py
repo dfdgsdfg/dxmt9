@@ -248,9 +248,46 @@ def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("csvs", nargs="+", type=Path,
                         help="N >= 3 Xcode counter CSV paths")
+    parser.add_argument("--output", type=Path, required=True,
+                        help="Markdown report path")
+    parser.add_argument("--summary-output", type=Path,
+                        help="optional reduced per-(encoder, metric) CSV path")
+    parser.add_argument("--metric", action="append", default=None,
+                        help="repeatable; defaults to a built-in set "
+                              "(see METRIC_MAPPING)")
+    parser.add_argument("--max-cv-pct", type=float, default=None,
+                        help="exit nonzero if any (encoder, metric) has CV%% "
+                              "above this limit")
     args = parser.parse_args()
     if len(args.csvs) < 3:
         parser.error("at least 3 CSV paths are required")
+    metrics = list(args.metric) if args.metric else list(DEFAULT_METRICS)
+    for metric in metrics:
+        if metric not in METRIC_MAPPING:
+            parser.error(
+                f"unknown metric {metric!r}; "
+                f"known: {sorted(METRIC_MAPPING.keys())}"
+            )
+    samples, missing = collect_samples(args.csvs, tuple(metrics))
+    summary = summarize_variance(samples)
+    write_report(args.output, summary, missing, metrics, len(args.csvs))
+    if args.summary_output:
+        write_summary_csv(args.summary_output, summary, metrics)
+    if args.max_cv_pct is not None:
+        violations: list[tuple[str, str, float]] = []
+        for label, per_metric in summary.items():
+            for metric, stats in per_metric.items():
+                cv = stats.get("cv_pct")
+                if isinstance(cv, (int, float)) and cv > args.max_cv_pct:
+                    violations.append((label, metric, float(cv)))
+        if violations:
+            for label, metric, cv in violations:
+                print(
+                    f"requirement failed: encoder {label!r} metric {metric!r} "
+                    f"cv_pct={cv:.4f} exceeds --max-cv-pct {args.max_cv_pct:.4f}",
+                    file=sys.stderr,
+                )
+            return 1
     return 0
 
 
