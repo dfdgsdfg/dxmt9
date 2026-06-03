@@ -348,6 +348,59 @@ class AnalyzeXcodeReplayVarianceTests(unittest.TestCase):
         self.assertIn("A", result.stderr)
         self.assertIn("9.0", result.stderr)
 
+    def test_collect_samples_folds_duplicate_label_rows_within_one_csv(self) -> None:
+        """Two rows in the same CSV with the same label do not inflate n."""
+        module = load_module()
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            full_row = {
+                "Encoder Label": "A",
+                "GPU Time": 10_000_000,
+                "Buffer Device Memory Bytes Written": 100 * 1048576,
+                "VS Buffer Device Memory Bytes Written": 80 * 1048576,
+                "VS Invocations": 1_000_000,
+                "Tiled Vertex Buffer Bytes": 20 * 1048576,
+                "Tiled Vertex Buffer Primitive Blocks Bytes": 10 * 1048576,
+            }
+            dup_row = dict(full_row)
+            dup_row["GPU Time"] = 999_000_000  # would inflate stats if appended
+            paths = []
+            for i in range(3):
+                p = root / f"run{i + 1}.csv"
+                # First CSV has the duplicate; others have one row each.
+                write_xcode_csv(p, [full_row, dup_row] if i == 0 else [full_row])
+                paths.append(p)
+            samples, missing = module.collect_samples(paths, module.DEFAULT_METRICS)
+        self.assertEqual(len(samples["A"]["gpu_ms"]), 3)
+        # gpu_ms values are 10.0 each (the second 999ms row was skipped).
+        for value in samples["A"]["gpu_ms"]:
+            self.assertAlmostEqual(value, 10.0)
+
+    def test_collect_samples_handles_missing_metric_value_in_one_csv(self) -> None:
+        """A missing metric cell in one CSV produces n=2 for that metric, not n=3."""
+        module = load_module()
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            base_row = {
+                "Encoder Label": "A",
+                "GPU Time": 10_000_000,
+                "Buffer Device Memory Bytes Written": 100 * 1048576,
+                "VS Buffer Device Memory Bytes Written": 80 * 1048576,
+                "VS Invocations": 1_000_000,
+                "Tiled Vertex Buffer Bytes": 20 * 1048576,
+                "Tiled Vertex Buffer Primitive Blocks Bytes": 10 * 1048576,
+            }
+            sparse_row = dict(base_row)
+            sparse_row["VS Buffer Device Memory Bytes Written"] = ""  # missing
+            paths = []
+            for i in range(3):
+                p = root / f"run{i + 1}.csv"
+                write_xcode_csv(p, [sparse_row if i == 1 else base_row])
+                paths.append(p)
+            samples, _ = module.collect_samples(paths, module.DEFAULT_METRICS)
+        self.assertEqual(len(samples["A"]["gpu_ms"]), 3)
+        self.assertEqual(len(samples["A"]["vs_buffer_write_mib"]), 2)
+
 
 if __name__ == "__main__":
     unittest.main()

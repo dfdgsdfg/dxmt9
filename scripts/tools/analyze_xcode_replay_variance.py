@@ -48,7 +48,10 @@ def _parse_float(value: Any) -> float | None:
         return None
 
 
-def read_xcode_counters(path: Path) -> list[dict[str, Any]]:
+def read_xcode_counters(
+    path: Path,
+    label_column: str = "Encoder Label",
+) -> list[dict[str, Any]]:
     """Read one raw Xcode counter CSV.
 
     Returns a list of dicts with:
@@ -61,7 +64,7 @@ def read_xcode_counters(path: Path) -> list[dict[str, Any]]:
     with path.open(newline="", encoding="utf-8") as handle:
         reader = csv.DictReader(handle)
         for raw_row in reader:
-            label = (raw_row.get("Encoder Label") or "").strip()
+            label = (raw_row.get(label_column) or "").strip()
             if not label:
                 continue
             metrics: dict[str, float] = {}
@@ -77,6 +80,7 @@ def read_xcode_counters(path: Path) -> list[dict[str, Any]]:
 def collect_samples(
     paths: list[Path],
     metric_names: tuple[str, ...] | list[str],
+    label_column: str = "Encoder Label",
 ) -> tuple[dict[str, dict[str, list[float]]], dict[str, set[str]]]:
     """Read multiple Xcode counter CSVs and union rows by Encoder Label.
 
@@ -84,6 +88,9 @@ def collect_samples(
       samples: { encoder_label: { metric_name: [v1, v2, ...] } }
                 where each per-metric list has length <= len(paths)
                 depending on which CSVs reported that metric for that row.
+                Duplicate Encoder Label rows within one CSV are folded to
+                the first occurrence; subsequent rows with the same label
+                in the same CSV are silently skipped.
       missing: { encoder_label: { csv_filename, ... } }
                 CSVs in which an encoder_label that was seen elsewhere did
                 not appear. Empty dict when all rows are present in all CSVs.
@@ -91,11 +98,15 @@ def collect_samples(
     samples: dict[str, dict[str, list[float]]] = {}
     rows_per_csv: dict[str, set[str]] = {}
     for path in paths:
-        rows = read_xcode_counters(path)
+        rows = read_xcode_counters(path, label_column=label_column)
         labels_in_csv: set[str] = set()
+        seen_in_this_csv: set[str] = set()
         for row in rows:
             label = row["encoder_label"]
             labels_in_csv.add(label)
+            if label in seen_in_this_csv:
+                continue
+            seen_in_this_csv.add(label)
             bucket = samples.setdefault(label, {name: [] for name in metric_names})
             for name in metric_names:
                 value = row["metrics"].get(name)
@@ -258,6 +269,8 @@ def main() -> int:
     parser.add_argument("--max-cv-pct", type=float, default=None,
                         help="exit nonzero if any (encoder, metric) has CV%% "
                               "above this limit")
+    parser.add_argument("--row-label-column", default="Encoder Label",
+                        help="row label CSV column; default Encoder Label")
     args = parser.parse_args()
     if len(args.csvs) < 3:
         parser.error("at least 3 CSV paths are required")
@@ -268,7 +281,9 @@ def main() -> int:
                 f"unknown metric {metric!r}; "
                 f"known: {sorted(METRIC_MAPPING.keys())}"
             )
-    samples, missing = collect_samples(args.csvs, tuple(metrics))
+    samples, missing = collect_samples(
+        args.csvs, tuple(metrics), label_column=args.row_label_column
+    )
     summary = summarize_variance(samples)
     write_report(args.output, summary, missing, metrics, len(args.csvs))
     if args.summary_output:
