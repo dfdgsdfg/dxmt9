@@ -329,6 +329,48 @@ References:
   `https://alyssarosenzweig.ca/blog/asahi-gpu-part-5.html`
 - Design doc — `docs/superpowers/specs/2026-06-03-tvb-mechanism-proof-design.md`
 
+### Xcode replay variance — when a delta is below the noise floor
+
+`scripts/tools/analyze_xcode_replay_variance.py` quantifies how much
+Xcode's GPU replay perturbs per-encoder counter values between
+exports of the same `.gputrace` bundle. Run it before treating a small
+or borderline delta as a real signal.
+
+Workflow:
+
+1. Open one `.gputrace` bundle in Xcode.
+2. Show Performance > Counters, wait for draw-counter profiling to
+   complete, then **Export Encoder Counters** to
+   `traces/<run>/analysis/replay-variance/run1-counters-xcode.csv`.
+3. **Close the bundle** in Xcode and reopen it; this forces the next
+   counter export to re-run the GPU. Without closing the bundle,
+   subsequent exports may reuse the cached counter values from the
+   first replay.
+4. Repeat steps 2-3 until you have `run1..runN` CSVs. Recommend
+   `N >= 5`; `N = 3` is the minimum statistically meaningful sample.
+5. Run:
+
+   ```sh
+   python3 scripts/tools/analyze_xcode_replay_variance.py \
+     traces/<run>/analysis/replay-variance/run*-counters-xcode.csv \
+     --output traces/<run>/analysis/replay-variance-report.md \
+     --summary-output traces/<run>/analysis/replay-variance-summary.csv \
+     --max-cv-pct 5
+   ```
+
+   The gate exits nonzero when any (encoder, metric) coefficient of
+   variation exceeds the limit. Default metrics are `gpu_ms`,
+   `vs_buffer_write_mib`, `vs_invocations`, `tiled_vertex_buffer_mib`,
+   `tiled_primitive_block_mib`, `buffer_write_mib`. Override with
+   repeated `--metric NAME`.
+
+Use this tool whenever an A/B comparison reports a sub-10% delta or
+when only some encoders move and others appear noisy. The report's
+"Summary (top variance)" table sorts encoders by max CV across the
+reported metrics so the noisiest rows are immediate.
+
+Design: `docs/superpowers/specs/2026-06-03-xcode-replay-variance-design.md`.
+
 ### Stage-boundary GPU counter sample buffers (path B — not yet implemented)
 
 `MTLCounterSampleBuffer` is bridged in winemetal but not yet wired at
