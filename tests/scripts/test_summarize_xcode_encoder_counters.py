@@ -416,6 +416,104 @@ class SummarizeXcodeEncoderCountersTests(unittest.TestCase):
         self.assertIn("top encoder PSO/VSOut attribution coverage is too low",
                       result.stderr)
 
+    def _write_tvb_proxy_xcode_csv(self, xcode_csv: Path) -> None:
+        """Shared Xcode CSV: vs_invocations=1_000_000, vs_buffer_write=100MiB."""
+        with xcode_csv.open("w", newline="", encoding="utf-8") as handle:
+            writer = csv.DictWriter(handle, fieldnames=[
+                "Index",
+                "Encoder Label",
+                "GPU Time",
+                "Buffer Device Memory Bytes Written",
+                "VS Buffer Device Memory Bytes Written",
+                "VS Invocations",
+                "Tiled Vertex Buffer Bytes",
+                "Tiled Vertex Buffer Primitive Blocks Bytes",
+            ])
+            writer.writeheader()
+            writer.writerow({
+                "Index": 0,
+                "Encoder Label": "RenderPass[seq=1,enc=2,rt=0x10,depth=0x20]",
+                "GPU Time": 10_000_000,
+                "Buffer Device Memory Bytes Written": 100 * MIB,
+                "VS Buffer Device Memory Bytes Written": 100 * MIB,
+                "VS Invocations": 1_000_000,
+                "Tiled Vertex Buffer Bytes": 20 * MIB,
+                "Tiled Vertex Buffer Primitive Blocks Bytes": 10 * MIB,
+            })
+
+    def test_tvb_pressure_proxy_fields_present_in_joined_output(self) -> None:
+        """Verify summarize emits TVB pressure proxy derived fields per row."""
+        # vsout_layout 0xfff = texcoord 8 + color + secondary + fog + point_size
+        # = 16 + 16 + 16 + 128 + 4 + 4 = 184 bytes
+        root = Path(self.tmpdir.name)
+        xcode_csv = root / "x.csv"
+        dxmt_csv = root / "d.csv"
+        joined_csv = root / "j.csv"
+        self._write_tvb_proxy_xcode_csv(xcode_csv)
+        with dxmt_csv.open("w", newline="", encoding="utf-8") as handle:
+            writer = csv.DictWriter(handle, fieldnames=[
+                "seq", "encoder", "draw_calls", "pso_state_samples",
+                "vsout_layout_last",
+            ])
+            writer.writeheader()
+            writer.writerow({
+                "seq": 1, "encoder": 2, "draw_calls": 1,
+                "pso_state_samples": 1, "vsout_layout_last": "0xfff",
+            })
+        result = subprocess.run(
+            [
+                sys.executable, str(SCRIPT), str(xcode_csv),
+                "--dxmt-encoders-csv", str(dxmt_csv),
+                "--joined-output", str(joined_csv),
+            ],
+            text=True, capture_output=True, check=False,
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+        with joined_csv.open(newline="", encoding="utf-8") as handle:
+            row = next(csv.DictReader(handle))
+
+        for field in (
+            "dxmt_tvb_pressure_proxy_mib",
+            "dxmt_tvb_named_to_proxy_ratio",
+            "dxmt_vs_buffer_write_to_tvb_proxy_ratio",
+        ):
+            self.assertIn(field, row)
+            self.assertNotEqual(row[field], "")
+        expected_proxy_mib = 1_000_000 * 184 / float(MIB)
+        self.assertAlmostEqual(float(row["dxmt_tvb_pressure_proxy_mib"]),
+                                expected_proxy_mib, places=3)
+        self.assertAlmostEqual(float(row["dxmt_tvb_named_to_proxy_ratio"]),
+                                30.0 / expected_proxy_mib, places=5)
+        self.assertAlmostEqual(
+            float(row["dxmt_vs_buffer_write_to_tvb_proxy_ratio"]),
+            100.0 / expected_proxy_mib, places=5)
+
+    def test_tvb_pressure_proxy_zero_when_no_dxmt_log(self) -> None:
+        """No dxmt input -> expected_vsout bytes is blank -> proxy is 0.
+
+        This is the "counter not fabricated" guarantee: when the dxmt-side
+        VSOut layout signal is absent, the proxy collapses to zero rather
+        than defaulting to position-only 16 B per vertex.
+        """
+        root = Path(self.tmpdir.name)
+        xcode_csv = root / "x.csv"
+        joined_csv = root / "j.csv"
+        self._write_tvb_proxy_xcode_csv(xcode_csv)
+        result = subprocess.run(
+            [
+                sys.executable, str(SCRIPT), str(xcode_csv),
+                "--joined-output", str(joined_csv),
+            ],
+            text=True, capture_output=True, check=False,
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+        with joined_csv.open(newline="", encoding="utf-8") as handle:
+            row = next(csv.DictReader(handle))
+        self.assertEqual(row["dxmt_vsout_expected_stage_out_bytes_per_vertex"], "")
+        self.assertEqual(row["dxmt_tvb_pressure_proxy_mib"], "")
+        self.assertEqual(row["dxmt_tvb_named_to_proxy_ratio"], "")
+        self.assertEqual(row["dxmt_vs_buffer_write_to_tvb_proxy_ratio"], "")
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -390,6 +390,9 @@ JOINED_EXTRA_FIELDS = (
     "dxmt_named_tiled_buffer_mib",
     "dxmt_hidden_backend_write_mib",
     "dxmt_hidden_backend_write_ratio",
+    "dxmt_tvb_pressure_proxy_mib",
+    "dxmt_tvb_named_to_proxy_ratio",
+    "dxmt_vs_buffer_write_to_tvb_proxy_ratio",
     "dxmt_backend_storage_class",
     "dxmt_backend_storage_confidence",
     "dxmt_backend_probe_hint",
@@ -1123,6 +1126,21 @@ def derive_dxmt_attribution(joined: dict[str, Any]) -> None:
     joined["dxmt_hidden_backend_write_mib"] = (
         hidden_backend_write_bytes / (1024.0 * 1024.0))
     joined["dxmt_hidden_backend_write_ratio"] = hidden_backend_ratio
+    expected_vsout_bytes = as_float(
+        joined.get("dxmt_vsout_expected_stage_out_bytes_per_vertex"))
+    if vs_invocations > 0.0 and expected_vsout_bytes > 0.0:
+        tvb_proxy_mib = vs_invocations * expected_vsout_bytes / (1024.0 * 1024.0)
+        joined["dxmt_tvb_pressure_proxy_mib"] = tvb_proxy_mib
+        joined["dxmt_tvb_named_to_proxy_ratio"] = (
+            named_tiled_buffer_mib / tvb_proxy_mib
+        )
+        joined["dxmt_vs_buffer_write_to_tvb_proxy_ratio"] = (
+            (vs_buffer_write_bytes / (1024.0 * 1024.0)) / tvb_proxy_mib
+        )
+    else:
+        joined["dxmt_tvb_pressure_proxy_mib"] = ""
+        joined["dxmt_tvb_named_to_proxy_ratio"] = ""
+        joined["dxmt_vs_buffer_write_to_tvb_proxy_ratio"] = ""
     joined["dxmt_backend_storage_class"] = backend_class
     joined["dxmt_backend_storage_confidence"] = backend_confidence
     joined["dxmt_backend_probe_hint"] = backend_probe_hint
