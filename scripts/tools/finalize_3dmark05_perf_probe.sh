@@ -40,6 +40,7 @@ require_transient_decrease=0
 require_top_gpu_share_increase=0
 require_top_row_key_match=0
 require_stable_frame_proof=0
+require_tvb_mechanism_proof=0
 require_top_pso_attribution=0
 require_xcode_counter_coverage=0
 require_dxmt_join_coverage=0
@@ -105,6 +106,11 @@ Options:
                       Gate preset: require result.json, counter/join coverage,
                       PSO attribution, top row-key match, top GPU/VS/
                       unexplained write decrease, and <=5% top geometry drift
+  --require-tvb-mechanism-proof
+                      Gate: top named tiled buffer MiB, VS invocations, and
+                      GPU time must all strictly decrease (row-local
+                      TVB pressure mechanism proof; firmware Parameter Buffer
+                      can read 0 MiB below spill threshold)
   --require-top-pso-attribution
   --require-xcode-counter-coverage
   --require-dxmt-join-coverage
@@ -264,6 +270,10 @@ while (($#)); do
       ;;
     --require-stable-frame-proof)
       require_stable_frame_proof=1
+      shift
+      ;;
+    --require-tvb-mechanism-proof)
+      require_tvb_mechanism_proof=1
       shift
       ;;
     --require-top-pso-attribution)
@@ -647,6 +657,9 @@ if [[ -n "$baseline_joined" ]]; then
   fi
   if (( require_stable_frame_proof )); then
     xcode_compare_cmd+=(--require-stable-frame-proof)
+  fi
+  if (( require_tvb_mechanism_proof )); then
+    xcode_compare_cmd+=(--require-tvb-mechanism-proof)
   fi
   if [[ -n "$max_top_gpu_regression_ms" ]]; then
     xcode_compare_cmd+=(--max-top-gpu-regression-ms "$max_top_gpu_regression_ms")
