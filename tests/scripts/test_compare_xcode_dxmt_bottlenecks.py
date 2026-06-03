@@ -675,6 +675,29 @@ class CompareXcodeDxmtBottlenecksTests(unittest.TestCase):
             self.assertIn("| `matched rows total` | `0.000`", report)
             self.assertNotIn("`60/2` | `20.000 -> 11.000", report)
 
+    def test_summary_dict_exposes_tvb_mechanism_keys(self) -> None:
+        """summarize() must surface top_vs_invocations and top_named_tiled_buffer_mib.
+
+        These two keys power the upcoming --require-tvb-mechanism-proof gate.
+        """
+        import importlib.util
+        spec = importlib.util.spec_from_file_location(
+            "compare_xcode_dxmt_bottlenecks", str(SCRIPT))
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            joined = root / "joined.csv"
+            write_joined(joined, gpu_ms=10.0, buffer_write_mib=100.0,
+                         vs_invocations=1_000_000,
+                         tiled_vertex_mib=20.0, tiled_primitive_mib=10.0)
+            rows = module.load_rows(joined)
+            summary = module.summarize(rows, top_n=3)
+            self.assertIn("top_vs_invocations", summary)
+            self.assertIn("top_named_tiled_buffer_mib", summary)
+            self.assertEqual(summary["top_vs_invocations"], 1_000_000.0)
+            self.assertEqual(summary["top_named_tiled_buffer_mib"], 30.0)
+
 
 if __name__ == "__main__":
     unittest.main()

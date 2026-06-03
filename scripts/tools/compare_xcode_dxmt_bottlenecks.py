@@ -164,6 +164,8 @@ def summarize(rows: list[dict[str, str]], top_n: int) -> dict[str, float]:
         "total_buffer_write_mib": sum(as_float(row.get("buffer_write_mib")) for row in rows),
         "total_device_write_mib": sum(as_float(row.get("device_write_mib")) for row in rows),
         "top_gpu_ms": top_gpu_ms,
+        "top_vs_invocations": top_vs_invocations,
+        "top_named_tiled_buffer_mib": top_tiled_mib,
         "top_gpu_share_pct": sum(as_float(first(row, "gpu_share_pct", "cost_pct")) for row in top),
         "top_buffer_write_mib": top_buffer_write_mib,
         "top_vs_buffer_write_mib": top_vs_mib,
