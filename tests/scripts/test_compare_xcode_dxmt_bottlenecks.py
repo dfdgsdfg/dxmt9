@@ -675,6 +675,73 @@ class CompareXcodeDxmtBottlenecksTests(unittest.TestCase):
             self.assertIn("| `matched rows total` | `0.000`", report)
             self.assertNotIn("`60/2` | `20.000 -> 11.000", report)
 
+    def _run_tvb_mechanism_gate(self,
+                                  before_kwargs: dict,
+                                  after_kwargs: dict) -> subprocess.CompletedProcess[str]:
+        """Run compare with --require-tvb-mechanism-proof. Returns CompletedProcess."""
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            before = root / "before.csv"
+            after = root / "after.csv"
+            output = root / "report.md"
+            write_joined(before, **before_kwargs)
+            write_joined(after, **after_kwargs)
+            return subprocess.run(
+                [
+                    sys.executable, str(SCRIPT), str(before), str(after),
+                    "--output", str(output),
+                    "--require-tvb-mechanism-proof",
+                ],
+                text=True, capture_output=True, check=False,
+            )
+
+    def test_require_tvb_mechanism_proof_passes_when_all_three_decrease(self) -> None:
+        result = self._run_tvb_mechanism_gate(
+            before_kwargs=dict(gpu_ms=10.0, buffer_write_mib=100.0,
+                                vs_invocations=1_000_000,
+                                tiled_vertex_mib=20.0, tiled_primitive_mib=10.0),
+            after_kwargs=dict(gpu_ms=9.0, buffer_write_mib=90.0,
+                               vs_invocations=900_000,
+                               tiled_vertex_mib=18.0, tiled_primitive_mib=9.0),
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+
+    def test_require_tvb_mechanism_proof_fails_when_tiled_buffer_does_not_decrease(self) -> None:
+        result = self._run_tvb_mechanism_gate(
+            before_kwargs=dict(gpu_ms=10.0, buffer_write_mib=100.0,
+                                vs_invocations=1_000_000,
+                                tiled_vertex_mib=20.0, tiled_primitive_mib=10.0),
+            after_kwargs=dict(gpu_ms=9.0, buffer_write_mib=90.0,
+                               vs_invocations=900_000,
+                               tiled_vertex_mib=20.0, tiled_primitive_mib=10.0),
+        )
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("top_named_tiled_buffer_mib", result.stderr)
+
+    def test_require_tvb_mechanism_proof_fails_when_vs_invocations_does_not_decrease(self) -> None:
+        result = self._run_tvb_mechanism_gate(
+            before_kwargs=dict(gpu_ms=10.0, buffer_write_mib=100.0,
+                                vs_invocations=1_000_000,
+                                tiled_vertex_mib=20.0, tiled_primitive_mib=10.0),
+            after_kwargs=dict(gpu_ms=9.0, buffer_write_mib=90.0,
+                               vs_invocations=1_000_000,
+                               tiled_vertex_mib=18.0, tiled_primitive_mib=9.0),
+        )
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("top_vs_invocations", result.stderr)
+
+    def test_require_tvb_mechanism_proof_fails_when_gpu_does_not_decrease(self) -> None:
+        result = self._run_tvb_mechanism_gate(
+            before_kwargs=dict(gpu_ms=10.0, buffer_write_mib=100.0,
+                                vs_invocations=1_000_000,
+                                tiled_vertex_mib=20.0, tiled_primitive_mib=10.0),
+            after_kwargs=dict(gpu_ms=10.0, buffer_write_mib=90.0,
+                               vs_invocations=900_000,
+                               tiled_vertex_mib=18.0, tiled_primitive_mib=9.0),
+        )
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("top_gpu_ms", result.stderr)
+
     def test_summary_dict_exposes_tvb_mechanism_keys(self) -> None:
         """summarize() must surface top_vs_invocations and top_named_tiled_buffer_mib.
 

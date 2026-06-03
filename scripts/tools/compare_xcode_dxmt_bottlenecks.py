@@ -1033,6 +1033,10 @@ def failed_requirements(args: argparse.Namespace,
         require_decrease("top_transient_mib", "top_transient_mib")
     if args.require_top_gpu_share_increase:
         require_increase("top_gpu_share_pct", "top_gpu_share_pct")
+    if getattr(args, "require_tvb_mechanism_proof", False):
+        require_decrease("top_named_tiled_buffer_mib", "top_named_tiled_buffer_mib")
+        require_decrease("top_vs_invocations", "top_vs_invocations")
+        require_decrease("top_gpu_ms", "top_gpu_ms")
     if args.max_top_unexplained_buffer_write_ratio is not None:
         if after["top_unexplained_buffer_write_ratio"] > args.max_top_unexplained_buffer_write_ratio:
             failures.append(
@@ -1090,6 +1094,7 @@ def has_requirement_gates(args: argparse.Namespace) -> bool:
         args.require_top_gpu_share_increase or
         args.require_top_row_key_match or
         args.require_stable_frame_proof or
+        getattr(args, "require_tvb_mechanism_proof", False) or
         args.max_top_unexplained_buffer_write_ratio is not None or
         args.max_top_draw_call_delta_ratio is not None or
         args.max_top_vertex_count_delta_ratio is not None or
@@ -1164,6 +1169,15 @@ def main() -> int:
             "enable the standard GT1 proof gate: top row keys must match, "
             "top GPU/VS/unexplained writes must decrease, and top draw/vertex/"
             "triangle drift defaults to <= 5%% unless overridden"
+        ),
+    )
+    parser.add_argument(
+        "--require-tvb-mechanism-proof",
+        action="store_true",
+        help=(
+            "exit nonzero unless top-N named tiled buffer MiB, "
+            "top-N VS invocations, and top-N GPU time all strictly "
+            "decrease; intended for row-local mini-replay mechanism proof"
         ),
     )
     parser.add_argument(
