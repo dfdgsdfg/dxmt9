@@ -237,6 +237,189 @@ flowchart TD
   class CpuOpen,RejectVisible,NextA,NextB,NextC warn
 ```
 
+### 2026-06-04 Layout-Stride Indexed Candidate Preflight
+
+The same layout-stride baseline was followed by a no-mutate indexed-cache
+candidate scout. This keeps the submitted primitive order unchanged and only
+measures the LRU32 upper bound and class attribution for the stable frame50 row
+shape:
+
+```bash
+scripts/tools/run_3dmark05_perf_probe.sh \
+  --suffix layoutstride-index-candidate-frame50-nogputrace-r1 \
+  --frame 50 \
+  --encoder-breakdown-seq 50 \
+  --no-gputrace \
+  --measure-index-cache-opt-candidate \
+  --timeout 240 \
+  --top 5 \
+  --hot-gpu-share 95 \
+  --min-free-mb 256
+
+python3 scripts/tools/analyze_indexed_probe_classes.py \
+  experiments/output/app-d3d9-3dmark05-layoutstride-index-candidate-frame50-nogputrace-r1/3dmark05-perf-indexed-probe-draws.csv \
+  --group row-state-class \
+  --joined-summary traces/app-d3d9-3dmark05-layoutstride-frame50-gputrace-r1/analysis/frame50-xcode-dxmt-joined-summary.csv \
+  --xcode-proxy-weight effective-miss32 \
+  --top 30 \
+  --output traces/app-d3d9-3dmark05-layoutstride-index-candidate-frame50-nogputrace-r1/analysis/frame50-layoutstride-index-candidate-class-proxy.md \
+  --csv-output traces/app-d3d9-3dmark05-layoutstride-index-candidate-frame50-nogputrace-r1/analysis/frame50-layoutstride-index-candidate-class-proxy.csv
+```
+
+Artifacts:
+
+```text
+experiments/output/app-d3d9-3dmark05-layoutstride-index-candidate-frame50-nogputrace-r1/3dmark05-perf-summary.md
+experiments/output/app-d3d9-3dmark05-layoutstride-index-candidate-frame50-nogputrace-r1/3dmark05-perf-encoders.csv
+experiments/output/app-d3d9-3dmark05-layoutstride-index-candidate-frame50-nogputrace-r1/3dmark05-perf-indexed-probe-draws.csv
+traces/app-d3d9-3dmark05-layoutstride-index-candidate-frame50-nogputrace-r1/analysis/frame50-layoutstride-index-candidate-class-proxy.md
+traces/app-d3d9-3dmark05-layoutstride-index-candidate-frame50-nogputrace-r1/analysis/frame50-row50-2-layoutstride-index-candidate-class-proxy.md
+```
+
+The run completed as a catalogue timeout-finalized pass
+(`present_encoded=1440`). The selected frame50 rows match the Xcode replay
+shape: `50/0=42` draws, `50/1=156`, `50/2=187`, with the same
+`2,146,185` submitted vertices and `715,395` triangles across the hot three
+rows.
+
+Candidate locality remains large before applying any optimization:
+
+| Row | Draws | Vertices | Candidate draws | Original LRU32 | Candidate LRU32 | Delta |
+|---|---:|---:|---:|---:|---:|---:|
+| `50/0` | `42` | `291,882` | `38` | `168,951` | `125,159` | `-43,792` / `-25.92%` |
+| `50/1` | `156` | `686,175` | `137` | `413,707` | `325,648` | `-88,059` / `-21.29%` |
+| `50/2` | `187` | `1,168,128` | `162` | `675,973` | `500,805` | `-175,168` / `-25.91%` |
+| Top 3 total | `385` | `2,146,185` | `337` | `1,258,631` | `951,612` | `-307,019` / `-24.39%` |
+
+This is an upper-bound/planning signal only. The class reports correctly show
+`applied=0` and `reorder bytes=0`, because the run used
+`--measure-index-cache-opt-candidate` without a mutating apply path. It should
+not be compared to Xcode GPU time as a performance result.
+
+The joined Xcode proxy ranking keeps the previous residual shape intact:
+
+| Class | Semantic risk | Proxy hidden backend |
+|---|---|---:|
+| `50/1 depth-write blend-off no-texture small front-cull` | `low-opaque-depth-write` | `290.696MiB` |
+| `50/2 depth-read blend-off textured large4096` | `medium-depth-read-order-sensitive` | `128.373MiB` |
+| `50/2 depth-read screen-blend scissor-on large4096` | `screen-blend-tolerance` | `128.373MiB` |
+| `50/2 depth-read screen-blend scissor-off large4096` | `screen-blend-tolerance` | `128.373MiB` |
+| `50/2 depth-read standard-alpha textured large4096` | `high-alpha-order-dependent` | `128.373MiB` |
+| `50/1 depth-write blend-off no-texture large4096 front-cull` | `low-opaque-depth-write` | `126.804MiB` |
+| `50/0 depth-write blend-off textured color-write=0x0 large4096` | `low-opaque-depth-write` | `119.905MiB` |
+
+Interpretation:
+
+- The hardware-visible owner is still reducible by lowering post-transform
+  misses; the top-three candidate upper bound is not exhausted.
+- The production-safe subset is still narrower than the performance ceiling:
+  `50/0` and `50/1` opaque depth-write classes can use the accepted opt-in
+  cache path, while `50/2` remains split across screen-blend tolerance,
+  depth-read/no-alpha structural hazards, and standard-alpha order dependence.
+- The layout-stride fix does not create a new backend-state result; it merely
+  restores a correct/current baseline in which indexed locality is again the
+  strongest measured GPU-write axis.
+- The next Xcode spend should be either a current-layout replay of the accepted
+  opaque opt-in/combined ceiling, or a new non-reorder backend-shape smoke that
+  changes `VS Invocations` or hidden bytes per invocation before capture.
+
+```mermaid
+flowchart TD
+  Scout["layout-stride no-mutate scout\nstable frame50 hot rows"] --> Upper["top3 candidate LRU32\n1258631 -> 951612\n-24.39%"]
+  Upper --> Opaque["50/0,50/1 opaque depth-write\nproduction opt-in path"]
+  Upper --> Row2["50/2 depth-read material families\nlargest remaining semantic risk"]
+  Row2 --> Screen["screen blend\nlsb1/tolerance ceiling only"]
+  Row2 --> NoAlpha["blend off depth-read\nreal-depth primitive conflict seen"]
+  Row2 --> Alpha["standard alpha\norder dependent"]
+  Opaque --> NextA["current-layout opt-in replay\nverify accepted production subset"]
+  Screen --> NextB["combined ceiling replay\nonly with explicit semantic policy"]
+  NoAlpha --> NextC["non-reorder backend-shape\nor larger exact semantic classifier"]
+  Alpha --> NextC
+
+  classDef good fill:#e8f5e8,stroke:#4d8b4d,color:#102a10
+  classDef warn fill:#fff3d6,stroke:#b98222,color:#2a1b00
+  classDef bad fill:#ffe8e8,stroke:#b64242,color:#2b0d0d
+  class Scout,Upper good
+  class Opaque,Row2,Screen,NextA,NextB,NextC warn
+  class NoAlpha,Alpha bad
+```
+
+#### Layout-Stride Opaque Opt-In No-Gputrace Check
+
+The production-shaped opaque-depth cache path was then rerun against the same
+layout-stride code without a `.gputrace`, to verify that the opt-in still
+applies only to the accepted safe rows before spending Xcode replay time:
+
+```bash
+scripts/tools/run_3dmark05_perf_probe.sh \
+  --suffix layoutstride-opaque-index-cache-nogputrace-r1 \
+  --frame 50 \
+  --encoder-breakdown-seq 50 \
+  --no-gputrace \
+  --optimize-opaque-depth-index-cache \
+  --optimize-opaque-depth-index-cache-min-gain-pct 10 \
+  --timeout 240 \
+  --top 5 \
+  --hot-gpu-share 95 \
+  --min-free-mb 256
+```
+
+Artifacts:
+
+```text
+experiments/output/app-d3d9-3dmark05-layoutstride-opaque-index-cache-nogputrace-r1/3dmark05-perf-summary.md
+experiments/output/app-d3d9-3dmark05-layoutstride-opaque-index-cache-nogputrace-r1/3dmark05-perf-encoders.csv
+experiments/output/app-d3d9-3dmark05-layoutstride-opaque-index-cache-nogputrace-r1/3dmark05-perf-indexed-probe-draws.csv
+experiments/output/app-d3d9-3dmark05-layoutstride-opaque-index-cache-nogputrace-r1/result.json
+```
+
+The run completed as a timeout-finalized pass with `present_encoded=1440`.
+Frame50 row shape is unchanged. The important result is the safety boundary:
+only opaque depth-writing rows receive reordered cached index buffers, and
+`50/2` remains untouched.
+
+| Row | Draws | Vertices | Applied draws | Original LRU32 | Effective LRU32 | Delta |
+|---|---:|---:|---:|---:|---:|---:|
+| `50/0` | `42` | `291,882` | `33` | `164,428` | `120,890` | `-43,538` / `-26.48%` |
+| `50/1` | `156` | `686,175` | `69` | `295,591` | `213,046` | `-82,545` / `-27.93%` |
+| `50/2` | `187` | `1,168,128` | `0` | `0` | `0` | untouched |
+| Opaque target total | `198` | `978,057` | `102` | `460,019` | `333,936` | `-126,083` / `-27.41%` |
+
+The no-mutate scout estimated more candidate draws on row `50/1`
+(`137`), but the production min-gain path applies only `69`. This matches the
+earlier min0 rejection: lowering the threshold creates more software cache
+events, but the extra candidates were already too small to move Xcode VS write
+materially. The current safe opt-in still targets the high-gain opaque subset.
+
+Run-level runtime counters are useful only as pacing context here, not as a GPU
+proof. Compared with the no-mutate scout, the opt-in run reports
+`encode_draw_cpu_ms=16865.541ms` vs `17275.748ms` and
+`encode_draw_stream_bind_cpu_ms=2649.821ms` vs `2948.894ms`, but
+`gpu_command_buffer_time_ms=4575.179ms` vs `4308.665ms`. Because both are
+timeout-finalized whole-run samples with completion waits in the tens of
+seconds, the GPU conclusion still requires Xcode counters. The preflight value
+is that the current code is ready for a layout-stride opaque opt-in `.gputrace`
+if we want to refresh the accepted production proof against the latest
+baseline.
+
+```mermaid
+flowchart TD
+  OptIn["DXMT9_OPTIMIZE_OPAQUE_DEPTH_INDEX_CACHE=1\nmin_gain=10"] --> Frame["stable frame50 shape"]
+  Frame --> Row0["50/0 opaque depth-write\n33 applied\nLRU32 -43538"]
+  Frame --> Row1["50/1 opaque depth-write\n69 applied\nLRU32 -82545"]
+  Frame --> Row2["50/2 depth-read/blended\n0 applied"]
+  Row0 --> Safe["production-shaped safe subset holds"]
+  Row1 --> Safe
+  Row2 --> Boundary["semantic-risk rows remain untouched"]
+  Safe --> XcodeNext["optional next Xcode replay\ncurrent-layout production proof"]
+  Boundary --> NonOpaqueNext["separate non-reorder or semantic-proof track"]
+
+  classDef good fill:#e8f5e8,stroke:#4d8b4d,color:#102a10
+  classDef warn fill:#fff3d6,stroke:#b98222,color:#2a1b00
+  class OptIn,Frame,Row0,Row1,Safe good
+  class Row2,Boundary,XcodeNext,NonOpaqueNext warn
+```
+
 ### 2026-06-04 Frame50 No-Gputrace Sanity
 
 After unlocking the desktop, a low-cost perf-profile sanity run was executed
