@@ -6,6 +6,11 @@ Scope:
 
 - Target: `app-d3d9-3dmark05`, GT1 path under `DXMT_EXPERIMENT_PROFILE=perf`.
 - Current trace artifacts:
+  - `traces/app-d3d9-3dmark05-layoutstride-frame50-gputrace-r1/frame50.gputrace`
+  - `traces/app-d3d9-3dmark05-layoutstride-frame50-gputrace-r1/analysis/frame50-performance.gputrace`
+  - `traces/app-d3d9-3dmark05-layoutstride-frame50-gputrace-r1/analysis/frame50-counters-xcode.csv`
+  - `traces/app-d3d9-3dmark05-layoutstride-frame50-gputrace-r1/analysis/frame50-xcode-dxmt-joined-summary.csv`
+  - `traces/app-d3d9-3dmark05-layoutstride-frame50-gputrace-r1/analysis/frame50-xcode-dxmt-bottleneck-report.md`
   - `traces/app-d3d9-3dmark05-current-normal-frame50-gputrace-r1/frame50.gputrace`
   - `traces/app-d3d9-3dmark05-current-normal-frame50-gputrace-r1/analysis/frame50-performance.gputrace`
   - `traces/app-d3d9-3dmark05-current-normal-frame50-gputrace-r1/analysis/frame50-counters-xcode.csv`
@@ -106,6 +111,131 @@ as the expected M1 ceiling. The useful target is to keep separating:
    hidden vertex/tiler/parameter storage, and render-pass store/load traffic.
 3. Runtime pacing variables: command-buffer completion/present waits and
    timeout-vs-completed-run differences.
+
+### 2026-06-04 Layout-Stride Frame50 Gputrace/Xcode Replay
+
+After the extra-stream stride layout fix, the same frame50 Xcode path was
+captured again with a full `.gputrace`, embedded performance export, and
+encoder counter CSV export:
+
+```bash
+scripts/tools/run_3dmark05_perf_probe.sh \
+  --suffix layoutstride-frame50-gputrace-r1 \
+  --frame 50 \
+  --encoder-breakdown-seq 50 \
+  --timeout 420
+
+scripts/tools/finalize_3dmark05_perf_probe.sh \
+  --suffix layoutstride-frame50-gputrace-r1 \
+  --frame 50 \
+  --top 3 \
+  --hot-gpu-share 95.0
+```
+
+Artifacts:
+
+```text
+experiments/output/app-d3d9-3dmark05-layoutstride-frame50-gputrace-r1/3dmark05-perf-summary.md
+experiments/output/app-d3d9-3dmark05-layoutstride-frame50-gputrace-r1/3dmark05-perf-encoders.csv
+experiments/output/app-d3d9-3dmark05-layoutstride-frame50-gputrace-r1/3dmark05-perf-encoder-streams.csv
+traces/app-d3d9-3dmark05-layoutstride-frame50-gputrace-r1/frame50.gputrace
+traces/app-d3d9-3dmark05-layoutstride-frame50-gputrace-r1/analysis/frame50-performance.gputrace
+traces/app-d3d9-3dmark05-layoutstride-frame50-gputrace-r1/analysis/frame50-counters-xcode.csv
+traces/app-d3d9-3dmark05-layoutstride-frame50-gputrace-r1/analysis/frame50-counters-summary.csv
+traces/app-d3d9-3dmark05-layoutstride-frame50-gputrace-r1/analysis/frame50-xcode-dxmt-joined-summary.csv
+traces/app-d3d9-3dmark05-layoutstride-frame50-gputrace-r1/analysis/frame50-xcode-dxmt-bottleneck-report.md
+traces/app-d3d9-3dmark05-layoutstride-frame50-gputrace-r1/analysis/frame50-current-normal-vs-layoutstride-xcode-comparison.md
+traces/app-d3d9-3dmark05-layoutstride-frame50-gputrace-r1/analysis/frame50-shader-dump-report.md
+```
+
+Xcode Summary reports the stable GT1 frame shape: `4` command buffers, `10`
+render encoders, `396` draw calls, `2,146,296` vertices, and `34.38ms` total
+GPU time. The visual frame was normal.
+
+Runtime-side counters confirm that the binding-override PSO prefetch fix holds
+under `.gputrace`: `encode_draw_pso_prefetch_handle_available=340,157`,
+`encode_draw_pso_prefetch_handle_used=340,157`,
+`encode_draw_pso_prefetch_bypass_binding_override=0`,
+`encode_draw_pso_prefetch_binding_override_compatible=313,033`, and
+`encode_draw_pso_prefetch_binding_override_incompatible=0`.
+
+The CPU path is still nontrivial: `d3d9_snapshot_draw_submission_cpu_ms`
+is `19251.620ms`, `encode_draw_cpu_ms` is `20799.848ms`,
+`submit_draw_cpu_ms` is `3373.259ms`, and
+`encode_draw_stream_bind_cpu_ms` is `2894.697ms`. Buffer-map and queue waits
+are not the owner in this run: `map_buffer_wait_ms=0`,
+`queue_sequence_wait_ms=0`. The pacing wait remains high:
+`completion_wait_ms=28413.664ms`, with `gpu_command_buffer_time_ms=4134.078ms`
+across the run.
+
+Xcode encoder counters keep the GPU owner unchanged:
+
+| Metric | Value | Interpretation |
+|---|---:|---|
+| Total GPU | `34.379ms` | Same normal frame shape as the current frame50 family. |
+| Top 3 GPU share | `98.17%` | Rows `50/2`, `50/1`, `50/0` are enough for the hot-set conclusion. |
+| Top 3 VS buffer write | `1627.287MiB` | Xcode buffer writes are still almost entirely vertex-stage writes. |
+| VS buffer / VS invocation | `1447.8B` | Far above the visible `184B` expected VSOut. |
+| VS buffer / expected VSOut | `7.9x` | Visible varying width alone is rejected again. |
+| Named tiled buffer total | `29.312MiB` | Xcode named tiled counters are too small to explain the bucket. |
+| Hidden backend estimate | `1597.531MiB` / `0.982x` | Hidden vertex/tiler/parameter storage remains the classifier. |
+| dxmt CPU writer bytes | `0.444MiB` | Argbuf/cbuf/setVertexBytes/transient writers do not explain Xcode writes. |
+| Weighted vertex stage time | `96.11%` | The top rows are vertex-stage dominated. |
+| Weighted VS buffer-write limiter | `21.74%` | Memory/backend pressure is the visible limiter axis. |
+| Weighted VS ALU limiter | `2.59%` | ALU optimization is not the first-order target. |
+| Stream/IB handle changes | `437` / `326` | State churn remains a CPU/batching target, not the GPU write owner. |
+
+Top row split:
+
+| Row | GPU ms | VS buffer write | VS B/inv | Draws | Vertices | Triangles | State class |
+|---|---:|---:|---:|---:|---:|---:|---|
+| `50/2` | `19.669ms` | `981.177MiB` | `1602.5B` | `187` | `1,168,128` | `389,376` | depth-read, alpha-blend/scissor subset |
+| `50/1` | `8.381ms` | `421.112MiB` | `1150.9B` | `156` | `686,175` | `228,725` | opaque depth-write |
+| `50/0` | `5.700ms` | `224.998MiB` | `1543.1B` | `42` | `291,882` | `97,294` | opaque depth-write/textured |
+
+Direct comparison with `current-normal-frame50` confirms that this replay is a
+CPU-path verification, not a new GPU bottleneck reduction:
+
+| Metric | Current-normal | Layout-stride | Delta |
+|---|---:|---:|---:|
+| Total GPU | `35.024ms` | `34.379ms` | `-1.84%` |
+| Top 3 GPU | `34.390ms` | `33.750ms` | `-1.86%` |
+| Top 3 VS buffer write | `1627.372MiB` | `1627.287MiB` | `-0.01%` |
+| Top 3 VS invocations | `1,178,584` | `1,178,584` | `0.00%` |
+| Top 3 draw calls | `385` | `385` | `0.00%` |
+| Top 3 dxmt vertices | `2,146,185` | `2,146,185` | `0.00%` |
+| Top 3 triangle estimate | `715,395` | `715,395` | `0.00%` |
+| Top 3 stream handle changes | `437` | `437` | `0.00%` |
+| Top 3 IB handle changes | `326` | `326` | `0.00%` |
+| Top 3 CPU writer bytes | `0.444MiB` | `0.444MiB` | `0.00%` |
+
+This replay lowers confidence in any explanation that only targets the already
+fixed PSO lookup path. The CPU hidden variable was real and is now gated by the
+prefetch counters, but the frame's GPU owner remains hidden vertex/backend
+traffic. The next useful experiments must either reduce hardware-visible VS
+invocations or change the hidden bytes per invocation without changing the
+draw/vertex/triangle gate.
+
+```mermaid
+flowchart TD
+  Fix["extra-stream stride preserved\nbinding override PSO layout compatible"] --> Pso["prefetch available == used\nbinding override bypass == 0"]
+  Pso --> CpuOpen["CPU still open\nsnapshot + encode + stream/IB churn"]
+  Pso --> Xcode["Xcode frame50 replay\n34.379ms GPU"]
+  Xcode --> Hot["top3 rows 98.17% GPU"]
+  Hot --> VSWrite["1627MiB VS buffer write\n1448B/VS invocation"]
+  VSWrite --> RejectVisible["reject visible VSOut-only owner\n184B expected / 7.9x gap"]
+  VSWrite --> Hidden["hidden vertex/tiler/backend storage\n1598MiB estimate"]
+  Hidden --> NextA["next proof axis\nVS invocations via locality/order"]
+  Hidden --> NextB["or backend-state shape A/B\nbytes per invocation moves"]
+  CpuOpen --> NextC["parallel CPU axis\nsnapshot/run batching and stream/IB bind churn"]
+
+  classDef good fill:#e8f5e8,stroke:#4d8b4d,color:#102a10
+  classDef hot fill:#ffe8e8,stroke:#b64242,color:#2b0d0d
+  classDef warn fill:#fff3d6,stroke:#b98222,color:#2a1b00
+  class Fix,Pso good
+  class Xcode,Hot,VSWrite,Hidden hot
+  class CpuOpen,RejectVisible,NextA,NextB,NextC warn
+```
 
 ### 2026-06-04 Frame50 No-Gputrace Sanity
 
