@@ -50,4 +50,4 @@ render-state changes.
 
 **Related.** [[snapshot-cache]] · prev [[snapshot-cache-snapshot.02]] · next
 [[snapshot-cache-binding.01]] · churn axis [[state-churn-encode]] · indexed path
-[[index-cache-locality]] · [[overview]]
+[[index-cache-locality]] · [[overview-3dmark05-gt1]]

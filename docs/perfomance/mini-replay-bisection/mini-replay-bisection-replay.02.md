@@ -44,4 +44,4 @@ real gap: the missing owner is wider-pass vertex/tiler amplification, not fragme
 overdraw. Suspicion shifts to depth attachment content.
 
 **Related.** [[mini-replay-bisection]] · [[mini-replay-bisection-replay.01]] ·
-[[mini-replay-bisection-depth.01]] · [[hidden-backend-storage]] · [[overview]]
+[[mini-replay-bisection-depth.01]] · [[hidden-backend-storage]] · [[overview-3dmark05-gt1]]

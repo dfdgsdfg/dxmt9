@@ -1,6 +1,6 @@
 # Const-Upload — CPU-side constant-buffer (cbuf/argbuf) upload traffic
 
-> Part of the 3DMark05 GT1 GPU-bottleneck investigation. Root map: [[overview]].
+> Part of the 3DMark05 GT1 GPU-bottleneck investigation. Root map: [[overview-3dmark05-gt1]].
 
 ## Scope & question
 
@@ -115,4 +115,4 @@ a cbuf-byte concern.
 - [[state-churn-encode]] — stream/IB handle churn and draw-run barriers measured alongside cbuf; const-upload records are the draw-run scanner barrier the sparse split did not cross.
 - [[snapshot-cache]] — the D3D9 draw-state snapshot cache / argbuf table side of the same upload path.
 - [[render-pass-store]] — the RT/depth re-entry and store traffic the dirty-range Xcode capture handed the bottleneck to.
-- [[overview]] — root map, priority DAG, ceiling, synthesis.
+- [[overview-3dmark05-gt1]] — root map, priority DAG, ceiling, synthesis.

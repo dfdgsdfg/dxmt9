@@ -44,4 +44,4 @@ Xcode counters and compare against the original hot encoder — done in
 [[mini-replay-bisection-replay.01]].
 
 **Related.** [[mini-replay-bisection]] · [[mini-replay-bisection-payload.01]] ·
-[[mini-replay-bisection-replay.01]] · [[overview]]
+[[mini-replay-bisection-replay.01]] · [[overview-3dmark05-gt1]]

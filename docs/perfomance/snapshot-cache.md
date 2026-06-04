@@ -1,6 +1,6 @@
 # Snapshot Cache — D3D9 frontend draw-state snapshot/rebuild CPU bottleneck
 
-> Part of the 3DMark05 GT1 GPU-bottleneck investigation. Root map: [[overview]].
+> Part of the 3DMark05 GT1 GPU-bottleneck investigation. Root map: [[overview-3dmark05-gt1]].
 
 ## Scope & question
 
@@ -97,5 +97,5 @@ Snapshot CPU (`19251.620ms`) and the pacing `completion_wait_ms`
   branch and the const passthrough/break counters.
 - [[hidden-backend-storage]] — the GPU bottleneck owner that this CPU work does
   *not* move.
-- [[overview]] — root priority DAG / synthesis.
-- [[perfomance-bottleneck]] — CPU-side counter design doc backing these counters.
+- [[overview-3dmark05-gt1]] — root priority DAG / synthesis.
+- [[overview]] — CPU-side counter design doc backing these counters.

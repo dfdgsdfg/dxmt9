@@ -1,6 +1,6 @@
 # Hidden Backend Storage — the central GPU explanation
 
-> Part of the 3DMark05 GT1 GPU-bottleneck investigation. Root map: [[overview]].
+> Part of the 3DMark05 GT1 GPU-bottleneck investigation. Root map: [[overview-3dmark05-gt1]].
 
 ## Scope & question
 
@@ -107,4 +107,4 @@ and broad-state attempt was rejected as "not the first-order owner."
   first-order owner (trim / point-size / position-only / half-VSOut).
 - [[index-cache-locality]] — the one accepted production win: reduces VS
   invocations (and thus this bucket) via post-transform cache locality.
-- [[overview]] — root map, priority DAG, and ceiling synthesis.
+- [[overview-3dmark05-gt1]] — root map, priority DAG, and ceiling synthesis.

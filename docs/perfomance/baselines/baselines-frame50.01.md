@@ -60,7 +60,7 @@ dxmt CPU writers explain essentially none of it, hidden backend estimate is
 `98.2%` of the VS write. No matching shaders dumped (`0` matched VS/PS) so it is
 a GPU/counter baseline, not a shader-liveness proof.
 
-**Related.** [[baselines]] · [[overview]] · [[baselines-frame120.01]] ·
+**Related.** [[baselines]] · [[overview-3dmark05-gt1]] · [[baselines-frame120.01]] ·
 [[baselines-runlevel.01]] · [[baselines-frame50.02]] (sanity refresh) ·
 [[hidden-backend-storage]] (hidden estimate `1597.6MiB`) ·
 [[index-cache-locality]] (opaque/screen-blend frame50 proofs use this baseline) ·

@@ -1,6 +1,6 @@
 # Primitive-Reorder Diagnostics — does index/primitive ORDER own the hidden VS-write bucket?
 
-> Part of the 3DMark05 GT1 GPU-bottleneck investigation. Root map: [[overview]].
+> Part of the 3DMark05 GT1 GPU-bottleneck investigation. Root map: [[overview-3dmark05-gt1]].
 
 ## Scope & question
 
@@ -153,4 +153,4 @@ order predicates.
   draw-sample and same-frame comparisons.
 - [[backend-shape-classifiers]] — sibling state-ownership tests (scissor/alpha/depth)
   the reruns hand off to.
-- [[overview]] — root priority DAG and ceiling.
+- [[overview-3dmark05-gt1]] — root priority DAG and ceiling.

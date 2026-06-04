@@ -1,6 +1,6 @@
 # TVB Mechanism Proof — why the index-cache win is real
 
-> Part of the 3DMark05 GT1 GPU-bottleneck investigation. Root map: [[overview]].
+> Part of the 3DMark05 GT1 GPU-bottleneck investigation. Root map: [[overview-3dmark05-gt1]].
 
 ## Scope & question
 
@@ -99,4 +99,4 @@ that belongs to [[index-cache-locality]] and [[primitive-reorder-diagnostics]].
 - [[index-cache-locality]] — the production path (`DXMT9_OPTIMIZE_OPAQUE_DEPTH_INDEX_CACHE`) that this mechanism makes legitimate; the only accepted win.
 - [[mini-replay-bisection]] — the row-local replay harness that produced the geometry-locked 50/1 / 50/3 evidence.
 - [[vsout-layout]] — visible varying width was held constant across variants, so this proof rules it out as the first-order owner.
-- [[overview]] — root priority DAG and synthesis.
+- [[overview-3dmark05-gt1]] — root priority DAG and synthesis.

@@ -50,5 +50,5 @@ breaks submit" (already safe) to "split stable PSO/binding state from volatile
 uniform state."
 
 **Related.** [[snapshot-cache]] · next [[snapshot-cache-snapshot.02]] · the CPU
-counter design [[perfomance-bottleneck]] · churn axis [[state-churn-encode]] ·
-indexed path [[index-cache-locality]] · const path [[const-upload]] · [[overview]]
+counter design [[overview]] · churn axis [[state-churn-encode]] ·
+indexed path [[index-cache-locality]] · const path [[const-upload]] · [[overview-3dmark05-gt1]]

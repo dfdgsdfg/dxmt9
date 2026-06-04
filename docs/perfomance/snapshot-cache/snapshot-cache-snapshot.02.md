@@ -47,4 +47,4 @@ snapshot CPU dropped only ~3%. The remaining bottleneck is NOT const-only churn 
 motivates per-miss-reason instrumentation to find what still rebuilds.
 
 **Related.** [[snapshot-cache]] · prev [[snapshot-cache-snapshot.01]] · next
-[[snapshot-cache-snapshot.03]] · [[const-upload]] · [[overview]]
+[[snapshot-cache-snapshot.03]] · [[const-upload]] · [[overview-3dmark05-gt1]]

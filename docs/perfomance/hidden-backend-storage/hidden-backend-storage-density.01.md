@@ -47,4 +47,4 @@ target unless it also shrinks the vertex-stage memory footprint.
 
 **Related.** [[hidden-backend-storage-attribution.01]] · [[hidden-backend-storage]] ·
 [[hidden-backend-storage-model.01]] · [[vsout-layout]] · [[shader-codegen]] ·
-[[tvb-mechanism-proof]] · [[overview]]
+[[tvb-mechanism-proof]] · [[overview-3dmark05-gt1]]

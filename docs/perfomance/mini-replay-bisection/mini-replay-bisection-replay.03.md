@@ -43,4 +43,4 @@ but only 442.6B/VS inv) proves raw vertex count is insufficient. Next: bisect th
 
 **Related.** [[mini-replay-bisection]] · [[mini-replay-bisection-depth.01]] ·
 [[mini-replay-bisection-bisect.01]] · [[hidden-backend-storage]] ·
-[[tvb-mechanism-proof]] · [[overview]]
+[[tvb-mechanism-proof]] · [[overview-3dmark05-gt1]]

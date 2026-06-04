@@ -52,6 +52,6 @@ diagnosis (GPU = hidden vertex/tiler/parameter storage + render-pass
 preservation; CPU = const-upload + stream/IB/texture churn). Superseded for GPU
 proof by [[baselines-frame50.01]].
 
-**Related.** [[baselines]] · [[overview]] · [[baselines-frame50.01]]
+**Related.** [[baselines]] · [[overview-3dmark05-gt1]] · [[baselines-frame50.01]]
 (canonical gputrace baseline) · [[baselines-frame50.03]] (later no-gputrace scout) ·
 [[hidden-backend-storage]] · [[render-pass-store]] (tile preservation).

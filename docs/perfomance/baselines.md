@@ -1,6 +1,6 @@
 # Baselines — the reference captures every other experiment compares against
 
-> Part of the 3DMark05 GT1 GPU-bottleneck investigation. Root map: [[overview]].
+> Part of the 3DMark05 GT1 GPU-bottleneck investigation. Root map: [[overview-3dmark05-gt1]].
 
 ## Scope & question
 
@@ -111,7 +111,7 @@ probes).
 
 ## Cross-references
 
-- [[overview]] — root map, priority DAG, and where these baselines sit in it.
+- [[overview-3dmark05-gt1]] — root map, priority DAG, and where these baselines sit in it.
 - [[hidden-backend-storage]] — the recurring hidden-VS-write fingerprint every
   baseline exhibits.
 - [[render-pass-store]] — fed by frame120's same-RT/depth re-entry and the

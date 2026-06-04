@@ -46,4 +46,4 @@ would corrupt the replay — see [[vsout-layout]].) Drill into `14..27` next.
 
 **Related.** [[mini-replay-bisection]] · [[mini-replay-bisection-replay.03]] ·
 [[mini-replay-bisection-pair.01]] · [[hidden-backend-storage]] ·
-[[index-cache-locality]] · [[vsout-layout]] · [[overview]]
+[[index-cache-locality]] · [[vsout-layout]] · [[overview-3dmark05-gt1]]

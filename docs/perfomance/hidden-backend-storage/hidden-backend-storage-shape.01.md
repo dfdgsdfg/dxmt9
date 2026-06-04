@@ -51,4 +51,4 @@ replay, and the accepted opaque-depth index-cache-locality work.
 **Related.** [[hidden-backend-storage-scaling.02]] · [[hidden-backend-storage]] ·
 [[backend-shape-classifiers]] · [[primitive-reorder-diagnostics]] ·
 [[index-cache-locality]] · [[mini-replay-bisection]] · [[tvb-mechanism-proof]] ·
-[[vsout-layout]] · [[overview]]
+[[vsout-layout]] · [[overview-3dmark05-gt1]]

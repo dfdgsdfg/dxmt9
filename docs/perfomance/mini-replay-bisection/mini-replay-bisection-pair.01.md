@@ -49,4 +49,4 @@ rejecting pair-liveness as root cause. This per-draw class is what
 
 **Related.** [[mini-replay-bisection]] · [[mini-replay-bisection-bisect.01]] ·
 [[hidden-backend-storage]] · [[tvb-mechanism-proof]] · [[vsout-layout]] ·
-[[index-cache-locality]] · [[primitive-reorder-diagnostics]] · [[overview]]
+[[index-cache-locality]] · [[primitive-reorder-diagnostics]] · [[overview-3dmark05-gt1]]

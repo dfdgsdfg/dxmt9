@@ -1,6 +1,6 @@
 # Attachment / Pixel-Format — RT PixelFormatView suppression and lossless-compression hints
 
-> Part of the 3DMark05 GT1 GPU-bottleneck investigation. Root map: [[overview]].
+> Part of the 3DMark05 GT1 GPU-bottleneck investigation. Root map: [[overview-3dmark05-gt1]].
 
 ## Scope & question
 
@@ -105,4 +105,4 @@ need a per-alias lifetime or sampled-channel proof, not a blanket view removal.
 - [[hidden-backend-storage]] — the surviving first-order owner every probe in this domain points back to; the VS-write density / TVB model these texture-write deltas fail to touch.
 - [[render-pass-store]] — sibling secondary class: RT/depth re-entry and store traffic, the other pass/attachment lever that does not move the VS-write bucket.
 - [[backend-shape-classifiers]] — companion correctness-invalid/opt-in state classifiers (alpha/depth/cull/etc.) that, like these flags, reject their own state as the VS-write owner.
-- [[overview]] — root map and priority DAG; this domain sits in the secondary (texture-write / lossless-compression) tier, below the hidden vertex backend.
+- [[overview-3dmark05-gt1]] — root map and priority DAG; this domain sits in the secondary (texture-write / lossless-compression) tier, below the hidden vertex backend.

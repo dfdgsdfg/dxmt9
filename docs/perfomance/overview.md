@@ -1,204 +1,618 @@
-# 3DMark05 GT1 Performance — Investigation Map
+# DXMT9 Performance Bottleneck Model
 
-> Root node of the `docs/perfomance/` knowledge graph. This is the
-> decomposition of `specs/perfomance.plan.md` (a 23k-line append-only
-> research journal) into a cross-referenced set of domain overviews and
-> one-experiment-per-file leaf nodes.
+Date: 2026-05-31
 
-## The root question
+Scope:
 
-**Why is 3DMark05 GT1 GPU-bound under dxmt9 (a D3D9→Metal translation
-layer on Apple Silicon), and what owns the cost?**
+- macOS Wine D3D9 path using dxmt9 PE `d3d9.dll`, PE `winemetal.dll`,
+  and unix `winemetal.so`.
+- General dxmt9 performance model, not a title-specific investigation.
+- Current backend structure: chunked D3D9 command recording, encode-thread
+  replay, Metal render/pass encoding, sub-command-buffer chaining, and
+  present-frame pacing.
+- This document keeps the existing file spelling, `perfomance-bottleneck.md`,
+  to match the current path.
 
-Target: `app-d3d9-3dmark05`, GT1 path under `DXMT_EXPERIMENT_PROFILE=perf`.
+## Bound Legend
 
-## Central finding (read this first)
+- CPU-bound: app thread, Wine PE thunking, D3D9 state validation, command
+  recording, bridge/import validation, resource marking, encode-thread command
+  generation, pipeline lookup, FVF/declaration lowering, and CPU-side upload
+  bookkeeping.
+- GPU/driver-bound: Metal command-buffer execution, render-pass tile
+  load/store, pipeline compilation, CAMetalLayer drawable acquisition, present
+  scheduling, compositor pacing, and driver-side residency/allocation work.
+- Sync-bound: CPU waits caused by ring pressure, frame-latency tokens,
+  drawable availability, query/readback fences, or GPU completion. These are
+  CPU stalls whose root cause may be CPU backlog, GPU work, driver pacing, or
+  present pacing.
 
-The top-3 render encoders dominate every captured frame (~98% of GPU
-time) and write a large **"VS Buffer Device Memory Bytes Written"**
-bucket (~1.6 GiB at frame60, ~1.0–2.2 GiB depending on capture). That
-bucket is **not** explained by:
-
-- dxmt CPU-side writers (argbuf/transient/cbuf ≈ 0.4 MiB), nor
-- visible MSL `VSOut` width (184 B), nor
-- AIR-visible shader scratch (128 B).
-
-It is **hidden Apple GPU vertex-stage / tiler / parameter-buffer (TVB)
-backend storage** that scales with **VS invocation count × per-vertex
-VSOut bytes**. See [[hidden-backend-storage]] for the model and
-[[tvb-mechanism-proof]] for the accepted proof.
-
-**The one accepted production win** is opaque-depth **index-cache
-locality** ([[index-cache-locality]]): reordering indices for opaque
-depth-writing triangles improves the post-transform vertex cache, which
-lowers VS invocations, which linearly lowers TVB write — verified
-target-row GPU −18.4%, VS invocations −14.1%, VS write −16.8%.
-
-Almost every other hypothesis (visible varying width, shader temps,
-render/raster state toggles, primitive reorder, const-upload size,
-pixel-format views) was **rejected as "not the first-order owner."**
-Several CPU-side reductions are real but orthogonal to the GPU limiter.
-
-## Domain map
+## Current dxmt9 Shape
 
 ```mermaid
 flowchart TD
-  Root["GT1 perf run\n~1260 presents / 913714 draws\nframe120 33.611ms GPU, top-3 = 98.4%"]
+  subgraph PECPU["PE-side CPU: D3D9 calls record into the current chunk"]
+    App[D3D9 app]
+    D3D9PE[PE d3d9.dll]
+    Recorder[Command recorder]
+    ChunkBuffer[current chunk buffer]
+    ChunkBoundary[chunk boundary: flush/present/ring pressure]
+  end
 
-  Root --> Base[["baselines\nframe120 / frame50 / frame60 reference captures"]]
+  subgraph ImportBoundary["PE/unix boundary: crossed at chunk import, not per D3D9 call"]
+    UnixCall[Wine unix-call bridge]
+  end
 
-  %% GPU side
-  Base --> GPU{{"GPU limiter:\ntop-3 encoders, memory/write bound\n(not ALU / texture-read)"}}
-  GPU --> HBS[["hidden-backend-storage\nTVB / parameter storage model (ACCEPTED)"]]
-  HBS --> TVB[["tvb-mechanism-proof\nVS-inv reduction → TVB write reduction (ACCEPTED)"]]
+  subgraph UnixCPU["Unix-side CPU: import, queue lifecycle, encode replay"]
+    WinemetalSO[winemetal.so Metal transport]
+    Core[dxmt9 core import]
+    CQ[CommandQueue]
+    ChunkRing[32-slot chunk ring]
+    Pending[ready chunk queue]
+    EncodeThread[encode thread]
+    Replay[chunk replay planner]
+    DrawEnc[draw/blit/present encoders]
+  end
 
-  %% rejected GPU ownership hunts
-  HBS -.rejected owner.-> VSO[["vsout-layout\nvisible varying width"]]
-  HBS -.rejected owner.-> SCG[["shader-codegen\ntemp/scratch/offline IR"]]
-  HBS -.rejected/secondary.-> BSC[["backend-shape-classifiers\nalpha/depth/cull/scissor/fog/texture/expand"]]
-  HBS -.secondary.-> APF[["attachment-pixelformat\nR32F / X8 PixelFormatView"]]
+  subgraph GPUDriver["GPU/driver-bound: Metal + CAMetalLayer + compositor"]
+    SubCB[1..N Metal command buffers per chunk]
+    RenderPass[Metal render command encoders]
+    Presenter[Presenter drawable acquisition]
+    Layer[CAMetalLayer nextDrawable]
+    Present[commandBuffer presentDrawable]
+  end
 
-  %% measurement → reorder → the win
-  HBS --> IRM[["index-reuse-measurement\nVS-inv tracks post-transform cache miss"]]
-  IRM --> PRD[["primitive-reorder-diagnostics\nreorder owns order? (frame-shape artifacts)"]]
-  IRM --> MRB[["mini-replay-bisection\nrow-local reproduction + bisection"]]
-  MRB --> TVB
-  PRD --> ICL[["index-cache-locality\nopaque-depth cache (THE WIN)"]]
-  TVB --> ICL
-  IRM --> ICL
+  subgraph Sync["Sync-bound progress signals"]
+    Completed[completedSeqId]
+    PresentCompleted[presentCompletedSeqId]
+    PresentToken[present frame token]
+    BoundaryWait[present/query/readback boundary waits]
+    Reclaim[resource/transient reclaim]
+  end
 
-  %% P1 GPU memory
-  GPU --> RPS[["render-pass-store\nsame RT/depth re-entry, store DontCare (P1)"]]
+  App --> D3D9PE --> Recorder --> ChunkBuffer --> ChunkBoundary --> UnixCall
+  UnixCall --> Core --> CQ --> ChunkRing --> Pending --> EncodeThread --> Replay --> DrawEnc
+  Core -. Metal resource/device transport .-> WinemetalSO
+  DrawEnc -. Metal object access .-> WinemetalSO
+  DrawEnc --> RenderPass --> SubCB
+  DrawEnc --> Presenter --> Layer --> Present --> SubCB
+  SubCB --> Completed
+  SubCB --> PresentCompleted
+  Completed --> Reclaim
+  PresentCompleted --> PresentToken
+  PresentToken --> BoundaryWait
+  Completed -. query/readback fence .-> BoundaryWait
 
-  %% CPU side
-  Base --> CPU{{"CPU encode cost\nencode_chunk ~21s, snapshot ~21s\n(orthogonal to GPU limiter)"}}
-  CPU --> SNAP[["snapshot-cache\nD3D9 draw-state rebuild (dominant CPU)"]]
-  CPU --> SCE[["state-churn-encode\nstream/IB handle churn breaks draw-runs"]]
-  CPU --> CU[["const-upload\ncbuf/argbuf traffic (CPU amplifier)"]]
-  SCE --> SNAP
-
-  classDef win fill:#d6f5d6,stroke:#2b7a2b,color:#063
-  classDef open fill:#fff3cd,stroke:#a80,color:#640
-  classDef rej fill:#f8d7da,stroke:#a33,color:#600
-  classDef base fill:#e8eefc,stroke:#3559a8,color:#0b2239
-  class TVB,ICL win
-  class HBS,IRM,MRB,RPS open
-  class VSO,SCG,BSC,APF rej
-  class Base,SNAP,SCE,CU base
+  classDef cpu fill:#eaf4ff,stroke:#2f6fad,color:#0b2239
+  classDef gpu fill:#fff0d6,stroke:#b26b00,color:#2b1900
+  classDef sync fill:#ffe8e8,stroke:#b64242,color:#2b0d0d
+  class App,D3D9PE,Recorder,ChunkBuffer,ChunkBoundary,UnixCall,WinemetalSO,Core,CQ,ChunkRing,Pending,EncodeThread,Replay,DrawEnc cpu
+  class SubCB,RenderPass,Presenter,Layer,Present gpu
+  class Completed,PresentCompleted,PresentToken,BoundaryWait,Reclaim sync
 ```
 
-## Priority DAG (from the journal)
+### Current Sequence
 
-The journal organized remaining work into priority levels. P0/P1 are the
-active GPU targets; P2–P4 are CPU/sync tracks deferred until counters move.
+```mermaid
+sequenceDiagram
+  participant App as D3D9 app
+  participant PE as PE d3d9 recorder
+  participant Bridge as PE/unix chunk import
+  participant CQ as CommandQueue
+  participant QLC as QueueLifecycleController
+  participant Encode as encode thread
+  participant Presenter as Presenter
+  participant Metal as Metal command buffers
+  participant Complete as completion path
+
+  Note over App,PE: CPU-bound hot path: D3D9 state validation and chunk packet recording
+  Note over Bridge,CQ: CPU-bound chunk boundary: unix-call import, validation, resource marking, queue publish
+  Note over Encode,Metal: CPU/GPU boundary: replay, render-pass decisions, PSO lookup, binds, draws, commits
+  Note over Presenter,Complete: Driver/sync-bound: drawable acquire, present pacing, completion fences
+
+  loop many D3D9 calls inside one chunk
+    App->>PE: Draw / Clear / Copy / Lock
+    PE->>PE: append records, payloads, and resource references
+  end
+
+  App->>PE: Present / Flush / chunk rollover
+  PE->>Bridge: publish chunk buffer
+  Bridge->>CQ: import chunk records and submit resource work
+  CQ->>QLC: reserve writer slot
+  CQ->>QLC: publish pending chunk
+  QLC-->>Encode: dequeue ready chunk
+  Encode->>Encode: validate/import view
+  Encode->>Encode: build draw runs where possible
+  Encode->>Encode: encode render passes and binds
+
+  loop per render-pass boundary until cap
+    Encode->>Metal: optional mid-chunk commit
+  end
+
+  Encode->>Presenter: acquire drawable for present-bearing tail
+  Encode->>Metal: final commit for chunk seqId
+  Complete->>Metal: observe completion
+  Complete->>QLC: advance completedSeqId
+  Complete->>CQ: advance presentCompletedSeqId when present-bearing
+  CQ-->>Bridge: release present/query/readback boundary waiters
+  Bridge-->>PE: return from boundary wait when required
+```
+
+### Current Chunk State
+
+```mermaid
+stateDiagram-v2
+  [*] --> Free
+  Free --> Writing: writer slot reserved / CPU
+  Writing --> Pending: chunk published / CPU
+  Pending --> Encoding: encode thread dequeues / CPU
+  Encoding --> GPU: tail command buffer submitted
+  GPU --> Free: tail completion advances seqId and reclaims slot
+
+  Writing --> Free: empty commit
+  Encoding --> Free: no-work chunk completes inline
+
+  note right of Writing
+    PE-side app/API work.
+    Hot spots: packet construction,
+    state normalization, validation,
+    resource handle retention.
+  end note
+
+  note right of Encoding
+    CPU encode work.
+    Hot spots: draw-run formation,
+    PSO lookup, FVF/declaration decode,
+    stream/IB/texture/sampler binds,
+    transient uploads.
+    per-render-pass mid-chunk split
+    can create a 1..N sub-CB chain.
+  end note
+
+  note right of GPU
+    Slot state stays GPU while the
+    committed tail command buffer is
+    pending. Earlier sub-CBs are ordered
+    on the same Metal queue; tail
+    completion is the public seqId
+    completion point. Present attaches
+    to the final command buffer only.
+    Sync waits must key off the
+    chunk final completion, not an
+    intermediate sub-command buffer.
+  end note
+```
+
+### Current Buffering Strategy
+
+```mermaid
+flowchart TD
+  subgraph CPURecord["CPU-bound: app thread + command recording"]
+    App[D3D9 app thread]
+    State[D3D9 state snapshots]
+    Payloads[constant/upload payload arenas]
+    Handles[resource handle retention]
+    ChunkRing[CommandQueue chunk ring]
+  end
+
+  subgraph EncodeSide["CPU-bound encode side"]
+    Import[imported chunk view]
+    Planner[replay planner]
+    DrawRun[draw-run builder]
+    Encoders[draw/blit/present encoders]
+    Transient[transient upload slabs]
+  end
+
+  subgraph GPUDriver["GPU/driver-bound Metal side"]
+    Pass[render pass encoders]
+    CBChain[sub-command-buffer chain]
+    Drawable[CAMetalLayer drawable]
+    Present[presentDrawable]
+  end
+
+  subgraph SyncWait["Sync-bound progress and lifetime"]
+    Completion[completion callbacks]
+    CompletedSeq[completedSeqId]
+    PresentSeq[presentCompletedSeqId]
+    Token[frame-latency token]
+    Reclaim[resource/transient reclaim]
+  end
+
+  App --> State --> Payloads --> ChunkRing
+  Handles --> ChunkRing
+  ChunkRing --> Import --> Planner --> DrawRun --> Encoders
+  Encoders --> Transient
+  Encoders --> Pass --> CBChain
+  Encoders --> Drawable --> Present --> CBChain
+  CBChain --> Completion --> CompletedSeq --> Reclaim
+  Completion --> PresentSeq --> Token
+
+  classDef cpu fill:#eaf4ff,stroke:#2f6fad,color:#0b2239
+  classDef gpu fill:#fff0d6,stroke:#b26b00,color:#2b1900
+  classDef sync fill:#ffe8e8,stroke:#b64242,color:#2b0d0d
+  class App,State,Payloads,Handles,ChunkRing,Import,Planner,DrawRun,Encoders,Transient cpu
+  class Pass,CBChain,Drawable,Present gpu
+  class Completion,CompletedSeq,PresentSeq,Token,Reclaim sync
+```
+
+## General Bottleneck Map
+
+```mermaid
+flowchart TD
+  Start[dxmt9 frame or chunk] --> CPUFront[CPU front-end]
+  Start --> Encode[encode thread]
+  Start --> GPU[Metal/GPU]
+  Start --> Sync[sync and pacing]
+
+  CPUFront --> BridgeCost[PE/unix bridge and import validation]
+  CPUFront --> RecordCost[packet construction and resource retention]
+  CPUFront --> LockCost[buffer lock/map/shadow copy]
+
+  Encode --> RunCost[draw-run formation failures]
+  Encode --> StateCost[per-draw state rebuild]
+  Encode --> UploadCost[transient upload pressure]
+  Encode --> BindCost[stream/IB/texture/sampler bind churn]
+  Encode --> PSOCost[PSO lookup and cold compile]
+
+  GPU --> PassCost[render-pass split and tile preservation]
+  GPU --> ShaderCost[shader/register/texture cost]
+  GPU --> ResidencyCost[heap/resource residency]
+
+  Sync --> PresentCost[drawable and present pacing]
+  Sync --> CompletionCost[command-buffer completion wait]
+  Sync --> QueryCost[query/readback/hazard flush waits]
+  Sync --> RingCost[chunk ring pressure]
+
+  RunCost --> RootA[Candidate A: record shape prevents batching]
+  UploadCost --> RootB[Candidate B: payload frequency too high]
+  PassCost --> RootC[Candidate C: pass split policy too eager]
+  PresentCost --> RootD[Candidate D: present boundary hides real bottleneck]
+  LockCost --> RootE[Candidate E: 32-bit pointer compatibility copy path]
+
+  classDef hot fill:#ffe8e8,stroke:#b64242,color:#2b0d0d
+  classDef cpu fill:#eaf4ff,stroke:#2f6fad,color:#0b2239
+  classDef gpu fill:#fff0d6,stroke:#b26b00,color:#2b1900
+  classDef sync fill:#f3e8ff,stroke:#6b42b6,color:#1d0d2b
+  class RootA,RootB,RootC,RootD,RootE hot
+  class CPUFront,BridgeCost,RecordCost,LockCost,Encode,RunCost,StateCost,UploadCost,BindCost,PSOCost cpu
+  class GPU,PassCost,ShaderCost,ResidencyCost gpu
+  class Sync,PresentCost,CompletionCost,QueryCost,RingCost sync
+```
+
+## Primary Bottleneck Classes
+
+| Class | Symptom counters | Typical root cause | Preferred fix direction |
+|---|---|---|---|
+| Per-draw CPU encode | `encode_draw_cpu_ms`, `bind_*`, `pipeline_lookup`, `fvf_decode` | Draws are replayed one by one even when state is stable. | Improve draw-run formation, cache decoded state, skip redundant binds. |
+| Payload/upload pressure | `transient_upload_calls`, `transient_upload_bytes`, `uniform_*`, payload arena counters | Stable constants or state are uploaded at draw frequency. | Split stable/volatile payloads, coalesce slab reservations, skip duplicate payload copies. |
+| Render-pass churn | `render_pass_begin`, split reason counters, tile preservation bytes, store/load action counters | RT/depth/clear/hazard decisions force too many pass boundaries. | Exact hazard tracking, better clear/load/store proof, coalesce same RT/depth passes when legal. |
+| Present pacing | `present_acquire_wait_ms`, `present_boundary_wait_ms`, `completion_present_wait_ms` | Drawable availability or frame-latency token dominates wall time. | Keep pacing counters separate; tune latency only after encode/GPU attribution is clear. |
+| Command-buffer grain | `command_buffers`, `sub_command_buffers`, `chunk_subcb_count_max`, `gpu_command_buffer_time_ms` | 1 CB can serialize GPU behind encode; too many CBs add tile/commit cost. | Current default: per-render-pass split with cap=4; validate by workload. |
+| Lock/map compatibility | `map_buffer_total_ms`, `map_buffer_wait_ms`, `d3d9_buffer_lock_*` | 32-bit app needs low4GB CPU-visible pointer; native storage may not be 32-bit safe. | Reuse low4GB CPU shadows; free on resource destroy, not every lock. |
+| Cold PSO/archive miss | `pipeline_build_*`, `cold_compile_count_after_warm`, archive counters | Shader/state variants are not prewarmed or are over-specialized. | Better archive prewarm, reduce PSO key churn, specialize only when win is proven. |
+
+## Ideal Design
+
+The ideal dxmt9 design is not "minimum command buffers" or "maximum batching"
+in isolation. It is a bounded pipeline where each boundary carries enough work
+to amortize overhead but still exposes enough progress for the GPU and
+presenter to run ahead.
 
 ```mermaid
 flowchart LR
-  Start["Current evidence\nframe Counters + perf log"] --> P0["P0: GPU memory / write pressure"]
-  Start --> P1["P1: pass split / store traffic"]
-  Start --> P2["P2: recover draw-run / reduce per-draw encode"]
-  Start --> P3["P3: reduce transient / const payload"]
-  Start --> P4["P4: sync/present (low priority — no waits seen)"]
+  App[D3D9 app] --> Recorder[record compact packets]
+  Recorder --> Import[validate/import once]
+  Import --> Planner[build replay plan]
+  Planner --> Runs[coalesce draw runs]
+  Runs --> Stable[bind stable state once]
+  Stable --> Volatile[push small volatile payloads]
+  Volatile --> Passes[coalesce legal render passes]
+  Passes --> CBs[commit bounded sub-CB chain]
+  CBs --> Present[present on final CB]
+  CBs --> Reclaim[reclaim on final chunk completion]
 
-  P0 --> P0r["→ [[hidden-backend-storage]] → [[tvb-mechanism-proof]]\n→ [[index-cache-locality]] (accepted lever)"]
-  P1 --> P1r["→ [[render-pass-store]] (re-entry real; coalescing open)"]
-  P2 --> P2r["→ [[state-churn-encode]] + [[snapshot-cache]] (CPU wins, GPU flat)"]
-  P3 --> P3r["→ [[const-upload]] (CPU bytes ↓ 4.6GB→1GB, GPU flat)"]
-  P4 --> P4r["queue/map/present-boundary waits = 0 in this run"]
+  Recorder -. avoid .-> Bad1[large mutable state blobs per draw]
+  Runs -. avoid .-> Bad2[const uploads breaking every run]
+  Passes -. avoid .-> Bad3[false hazard pass splits]
+  CBs -. avoid .-> Bad4[unbounded sub-CB chains]
+  Present -. avoid .-> Bad5[present waits hiding encode/GPU attribution]
 
-  classDef p0 fill:#ffe8e8,stroke:#b64242,color:#2b0d0d
-  classDef p1 fill:#fff0d6,stroke:#b26b00,color:#2b1900
-  classDef act fill:#e8ffe8,stroke:#3c8f3c,color:#0d2b0d
-  class P0,P1 p0
-  class P2,P3,P4 p1
-  class P0r,P1r,P2r,P3r,P4r act
+  classDef good fill:#e8ffe8,stroke:#3c8f3c,color:#0d2b0d
+  classDef bad fill:#ffe8e8,stroke:#b64242,color:#2b0d0d
+  class Recorder,Import,Planner,Runs,Stable,Volatile,Passes,CBs,Present,Reclaim good
+  class Bad1,Bad2,Bad3,Bad4,Bad5 bad
 ```
 
-## Frame shape
+### Design Principles
 
-Frame120 (historical bottleneck-shape capture, [[baselines-frame120.01]]):
-total **33.611 ms** GPU, top-3 encoders **33.075 ms / 98.4%**; the same
-RT/depth pair returns after another pass and accounts for **24.643 ms /
-73.3%**. Passes are LLC/MMU/buffer-write limited, **not** ALU- or
-texture-read-bound. Run-level: ~14673 passes preserve **167.73 GB** of
-tile contents; draw-run submits = **580** against 913714 draws (≈99.94%
-fail to batch), broken by const-upload (659938) and stream/IB state
-deltas (793059 / 750041).
+- Keep chunk `seqId` as the lifetime and synchronization unit.
+- Allow a chunk to emit 1..N Metal command buffers, but complete/reclaim only
+  on the final command buffer.
+- Attach present metadata to the final command buffer only.
+- Keep mid-chunk split decisions deterministic and record-driven.
+- Prefer exact hazard and dependency proofs over probabilistic or broad flushes.
+- Move stable data out of the per-draw hot path; keep per-draw payloads small.
+- Treat present pacing as a separate axis from encode cost and GPU execution.
+- Use env knobs for A/B experiments, but keep production defaults conservative
+  and backed by counters.
 
-The current canonical A/B baseline is frame50 normal-source
-([[baselines-frame50.01]]): **35.024 ms**, top-3 98.19%, rows 50/2
-(56.9%) / 50/1 (24.5%) / 50/0 (16.8%), hidden backend estimate
-≈1597.6 MiB. Mid-investigation probes A/B against frame60
-([[baselines-frame60.01]]).
+## Solution Trade-Offs
 
-## What is settled vs open
+| Direction | Pros | Cons / risks | Validation needed |
+|---|---|---|---|
+| Draw-run coalescing across benign records | Reduces per-draw encode, bind, and lookup overhead. | Incorrect if constants/state/resources change visibility between draws. | Record-sequence audit, state/payload hash stability, image tests. |
+| Stable/volatile payload split | Shrinks upload bytes and CPU writes. | Requires shader layout support and PSO compatibility discipline. | Shader source tests, layout ABI tests, perf counters for byte reduction. |
+| Redundant bind suppression | Low-risk CPU win when encoder state is stable. | Encoder-side cache can become stale after pass/PSO/resource transitions. | Recorder tests for command order, Metal validation, per-bind counters. |
+| Per-render-pass sub-CB chain cap | Lets GPU start before chunk tail is fully encoded. | Extra command buffers can increase tile store/load and commit overhead. | `sub_command_buffers`, `chunk_subcb_count_max`, GPU time, tile counters. |
+| Render-pass coalescing | Reduces tile preservation and pass setup. | Hard correctness boundary around clears, resolves, hazards, and depth reuse. | Split-reason counters, exact hazard tests, pixel/golden validation. |
+| Aggressive store-action proof | Saves tile stores when attachments are dead. | Wrong proof causes missing depth/color data in later passes. | Store/load counters, targeted depth/RT reuse tests, frame capture. |
+| Low4GB shadow reuse | Avoids repeated VM allocation for 32-bit locks. | Shadow capacity and dirty/readback rules must stay correct. | Lock/unlock tests, map wait counters, app compatibility runs. |
+| Archive/prewarm expansion | Reduces runtime PSO compile stalls. | Archive growth and stale variants can mask key explosion. | Cold/warm run comparison, archive hit rate, compile count after warm. |
 
-**Accepted**
-- The GPU limiter is hidden vertex/tiler/parameter (TVB) backend storage,
-  scaling with VS invocations × per-vertex VSOut bytes. [[hidden-backend-storage]], [[tvb-mechanism-proof]]
-- Opaque-depth index-cache locality is a real, semantic-safe GPU win. [[index-cache-locality]]
-- Several CPU reductions are real (dirty-range reset + FFP-VS slice reuse
-  cut cbuf traffic 4.6 GB→~1 GB; binding-override cut encode CPU 10–30%) —
-  but every one left GPU frame time flat. [[const-upload]], [[state-churn-encode]], [[snapshot-cache]]
+## Current Default Policy
 
-**Rejected as first-order GPU owner**
-- Visible `VSOut`/varying width, point-size, half-precision varyings. [[vsout-layout]]
-- Translated-shader temp/scratch sizing; owner is below AIR. [[shader-codegen]]
-- Render/raster state toggles (depth-write, depth-func, cull, scissor) and
-  alpha-test; cull moves only the small named-tiled counters (~30 MiB). [[backend-shape-classifiers]]
-- Primitive/triangle reorder as a *stable* lever — apparent wins were
-  frame-shape/tile-coverage artifacts that did not reproduce on HEAD. [[primitive-reorder-diagnostics]]
-- Const-upload payload size, R32F/X8 PixelFormatView suppression. [[const-upload]], [[attachment-pixelformat]]
+```mermaid
+stateDiagram-v2
+  [*] --> PerRenderPass
+  PerRenderPass --> SplitAllowed: render-pass boundary
+  SplitAllowed --> Split: subCB count < cap
+  SplitAllowed --> Continue: subCB count >= cap
+  Split --> PerRenderPass: continue encoding chunk
+  Continue --> FinalCommit: chunk tail
+  PerRenderPass --> FinalCommit: no more split points
+  FinalCommit --> Completed: final CB completion
 
-**Open**
-- Which sub-component of the hidden backend dominates (stage-out vs binning
-  parameter storage vs compiler spill). [[hidden-backend-storage]]
-- Row 50/2 (screen-blend) owner: blocked on a final-color/semantic oracle;
-  the screen-blend cache is profiling-only. [[index-cache-locality]]
-- Dependency-aware pass coalescing for same RT/depth re-entry (P1). [[render-pass-store]]
-- Remaining CPU tracks: snapshot rebuild + pacing/completion waits. [[snapshot-cache]]
+  note right of PerRenderPass
+    Production default:
+    DXMT9_MID_CHUNK_COMMIT_POLICY=per-render-pass
+    DXMT9_MID_CHUNK_COMMIT_CAP_PER_RENDER_PASS=4
+  end note
 
-## Domain index
-
-| Domain | Role | Headline verdict |
-|--------|------|------------------|
-| [[baselines]] | frame120 / frame50 / frame60 reference captures | shape stable across regimes |
-| [[hidden-backend-storage]] | TVB/parameter storage model, VS-write density, scaling | model ACCEPTED; dominant sub-component OPEN |
-| [[tvb-mechanism-proof]] | VS-inv ↓ → TVB write ↓, row-local + full-frame | ACCEPTED (load-bearing) |
-| [[index-cache-locality]] | opaque-depth cache, screen-blend, min-gain, CPU cost | opaque-depth WIN; screen-blend profiling-only |
-| [[index-reuse-measurement]] | index reuse, geometry signature/size, state-class | VS-inv tracks cache-miss estimate |
-| [[primitive-reorder-diagnostics]] | reverse/min-index/split reorder probes | order = frame-shape artifact, not stable owner |
-| [[mini-replay-bisection]] | row-local replay + encoder bisection | reproduced amplification; enabled the proof |
-| [[vsout-layout]] | visible varying width attempts | all REJECTED as owner |
-| [[shader-codegen]] | temp/scratch trim, offline Metal IR | REJECTED; owner below AIR |
-| [[backend-shape-classifiers]] | alpha/depth/cull/scissor/fog/texture/expand | REJECTED/secondary; indexed path mandatory |
-| [[attachment-pixelformat]] | R32F / X8 PixelFormatView suppression | secondary (texture-write), not VS owner |
-| [[const-upload]] | cbuf/argbuf class/volatility/dirty-range/sparse | CPU amplifier, GPU unmoved |
-| [[state-churn-encode]] | stream/IB churn, draw-run, binding override | CPU wins, GPU flat |
-| [[snapshot-cache]] | D3D9 draw-state snapshot rebuild | dominant CPU cost; partly recovered |
-| [[render-pass-store]] | RT/depth re-entry, store DontCare, pass-chain | re-entry real; coalescing OPEN |
-
-Related CPU-side counter design doc: [[perfomance-bottleneck]].
-
-## How to read this graph
-
-- **Domain overview** = `<domain>.md` (e.g. `index-cache-locality.md`). Each
-  has a scope, a hypotheses/verdicts table, a mermaid dependency graph, and a
-  synthesis.
-Layout: the top level of `docs/perfomance/` holds only the root and the
-domain overviews; every experiment lives under its domain's subdirectory.
-
-```
-docs/perfomance/
-  overview.md                          # this file
-  <domain>.md                          # 15 domain overviews
-  <domain>/<domain>-<subcat>.<NN>.md   # leaf nodes (one experiment each)
+  note right of FinalCommit
+    Present, completion signaling,
+    and resource reclaim attach to
+    the chunk tail only.
+  end note
 ```
 
-- **Leaf node** = `<domain>/<domain>-<subcategory>.<NN>.md`, one experiment per
-  file, numbered by execution order within its subcategory. Frontmatter carries
-  `workload: 3DMark05 GT1`, `status`
-  (accepted/rejected/inconclusive/model/tooling), and the `source:` line range
-  back into `specs/perfomance.plan.md`. Every experiment is a 3DMark05 GT1 run.
-- Links use `[[slug]]` (basename without `.md`, resolved across subdirectories).
-  Follow them like a wiki.
+This default is a compromise:
+
+- Better than `off` when long encode tails would otherwise delay GPU start.
+- Safer than unbounded per-pass splitting because the cap bounds tile
+  preservation and command-buffer commit overhead.
+- Still workload-dependent. Heavy render targets, MSAA, many attachments, or
+  high store/load pressure can erase the pipelining win.
+
+## Experiment And Validation Areas
+
+```mermaid
+flowchart TD
+  Baseline[Baseline perf run] --> Attribute[Attribute wall time]
+  Attribute --> CPU[CPU encode/front-end]
+  Attribute --> GPU[GPU/render-pass/shader]
+  Attribute --> Sync[present/completion/sync]
+
+  CPU --> C1[draw-run break taxonomy]
+  CPU --> C2[payload bytes and hash stability]
+  CPU --> C3[bind/lookup/decode sub-counters]
+
+  GPU --> G1[render-pass split reason matrix]
+  GPU --> G2[tile preservation and store/load actions]
+  GPU --> G3[shader/pass ranking by Metal capture]
+
+  Sync --> S1[present acquire vs boundary vs completion]
+  Sync --> S2[query/readback wait isolation]
+  Sync --> S3[sub-CB cap A/B matrix]
+
+  C1 --> Change[Candidate change]
+  C2 --> Change
+  C3 --> Change
+  G1 --> Change
+  G2 --> Change
+  G3 --> Change
+  S1 --> Change
+  S2 --> Change
+  S3 --> Change
+
+  Change --> Verify[Correctness + perf validation]
+  Verify --> Counters[Counter deltas]
+  Verify --> Images[image/golden checks]
+  Verify --> Trace[Metal trace when GPU-bound]
+
+  classDef measure fill:#eaf4ff,stroke:#2f6fad,color:#0b2239
+  classDef action fill:#e8ffe8,stroke:#3c8f3c,color:#0d2b0d
+  classDef verify fill:#fff0d6,stroke:#b26b00,color:#2b1900
+  class Baseline,Attribute,CPU,GPU,Sync,C1,C2,C3,G1,G2,G3,S1,S2,S3 measure
+  class Change action
+  class Verify,Counters,Images,Trace verify
+```
+
+### Measurement Coverage Checklist
+
+Before changing a performance policy, the relevant path should be measurable
+with counters that distinguish work from waits:
+
+- Render-pass begin/end and split reason counters distinguish normal pass reuse
+  from forced splits.
+- Pipeline cache hit/miss/build counters expose state churn and shader variant
+  pressure.
+- Draw call, indexed draw, primitive, and vertex counters quantify replay
+  volume.
+- Bind churn counters track vertex buffers, index buffers, textures, samplers,
+  depth state, viewport, scissor, rasterizer, and pipeline binds.
+- Upload counters track transient call count, bytes, CPU time, and uniform
+  frequency classes.
+- Hazard counters distinguish exact overlap from legacy broad/probabilistic
+  overlap decisions.
+- Present source counters identify selected source validity, source size,
+  destination size, handle, texture, format, and sample count.
+- Completion buckets separate draw, present, compatibility, shader bucket, and
+  command-buffer execution time where available.
+- Frame/present pacing counters separate drawable acquire, present boundary,
+  frame-token wait, query/readback wait, and chunk ring pressure.
+
+```mermaid
+flowchart LR
+  DrawRun[draw/run records] --> Encoder[draw encoder]
+  Encoder --> Pass[render pass begin/end]
+  Encoder --> Pipeline[pipeline cache lookup]
+  Encoder --> Bind[Metal bind calls]
+  Encoder --> Issue[Metal draw issue]
+  Encoder --> Upload[transient/uniform upload]
+
+  Pass --> Split[split reason counters]
+  Pipeline --> HitMiss[pipeline hit/miss/build]
+  Bind --> BindCounters[bind churn counters]
+  Issue --> Volume[draw/primitive/vertex counters]
+  Issue --> ShaderBucket[VS/PS/variant bucket]
+  Upload --> UploadCounters[call/byte/time counters]
+
+  ShaderBucket --> QueueDiag[chunk diagnostics]
+  QueueDiag --> Completion[completion wait buckets]
+  Completion --> Pacing[present/query/ring pacing buckets]
+```
+
+### Present Path Ownership
+
+The target present path is not "remove frame latency". It is to avoid using
+encode-thread progress as the pacing primitive and to keep ownership clear.
+
+```mermaid
+flowchart TD
+  App[D3D9 Present] --> Device[DeviceImpl public D3D9 policy]
+  Device --> Queue[CommandQueue present packet]
+  Queue --> Flush[commit draw/present chunk]
+  Queue -. optional token .-> Acquire[Presenter drawable acquisition]
+  Acquire -. drawable token .-> PresentPacket[present encode packet]
+  Flush --> PresentPacket
+  PresentPacket --> MTLPresent[commandBuffer presentDrawable]
+  MTLPresent --> Completion[completion path]
+  Completion --> FrameFence[present-completed frame token]
+  Device --> LatencyWait[wait frameId - effectiveLatency]
+  FrameFence --> LatencyWait
+
+  subgraph Ownership["ownership"]
+    PresenterOwn[Presenter: CAMetalLayer and drawable tokens]
+    QueueOwn[CommandQueue: ordering, packet execution, completion, frame token]
+    DeviceOwn[DeviceImpl: D3D9 latency value and callbacks]
+    SwapOwn[SwapChain: presenter and backbuffer metadata]
+  end
+```
+
+Ownership rules:
+
+- `Presenter` owns CAMetalLayer properties, drawable acquisition state, and
+  any future drawable-token mechanism.
+- `CommandQueue` owns chunk ordering, present packet execution, completion
+  signaling, frame-latency token advancement, and present-boundary waits.
+- `DeviceImpl` supplies public D3D9 latency values and presentation callbacks;
+  it should not own acquire or boundary mechanics.
+- `SwapChain` owns the `Presenter` and passes per-present source/backbuffer
+  metadata.
+
+### Reference Backend Shapes
+
+DXVK and Wine are useful references for ownership boundaries, not direct
+templates to copy.
+
+```mermaid
+flowchart TD
+  subgraph DXVK["DXVK D3D9 reference shape"]
+    DXVKPresent[D3D9 Present] --> DXVKFlush[flush command list]
+    DXVKFlush --> DXVKAcquire[acquire WSI image]
+    DXVKAcquire --> DXVKSubmit[submit present work]
+    DXVKSubmit --> DXVKFence[frame-latency fence]
+    DXVKFence --> DXVKWait[wait frameId - actualLatency]
+  end
+
+  subgraph Wine["Wine D3D9 reference shape"]
+    WinePresent[d3d9 swapchain Present] --> Wined3D[wined3d swapchain present]
+    Wined3D --> CS[command stream packet]
+    CS --> Backend[backend present]
+    Backend --> Platform[platform swap/flush]
+  end
+
+  subgraph DXMT9["dxmt9 target interpretation"]
+    Q[CommandQueue owns ordering] --> P[Presenter owns drawable]
+    P --> T[present token]
+    T --> F[present-completed frame fence]
+  end
+
+  DXVKFence -. design reference .-> F
+  CS -. command-stream reference .-> Q
+```
+
+Lessons to preserve:
+
+- Frame-latency waits should be explicit fence/token rules, not accidental
+  waits on encode-thread progress.
+- Present acquisition, present packet execution, and latency waiting are
+  separate concerns.
+- The app-facing D3D9 layer should not synchronously wait for all GPU work on
+  every immediate present unless the API contract requires it.
+
+### Negative Findings To Preserve
+
+These prior findings should stay visible because they prevent repeating
+attractive but weak fixes:
+
+- Direct indexed draws are the production path. Expanding indexed draws into a
+  transient non-indexed stream is a diagnostic/compatibility lane, not a default
+  performance fix.
+- Broad hazard filters are useful as diagnostics, but render-pass split
+  decisions should be exact-handle driven where possible; false positives create
+  avoidable encoder churn.
+- Chunk splitting is a tail-latency and GPU-overlap tool, not a universal
+  throughput fix. Smaller chunks can reduce sequence tails while increasing
+  completion, ring, and command-buffer overhead.
+- Present async/preacquire paths should remain opt-in until draw, pass, hazard,
+  and present-source counters show that present pacing is the actual limiter.
+- Hoisting or caching uniform construction is not automatically a win if the
+  remaining hot cost is writing large shared-memory payloads or adding
+  indirection to a hot loop.
+- Process-level FPS is useful for end-to-end comparison, but it includes startup,
+  window creation, device/resource creation, teardown, and final flush. It must
+  not be used alone for renderer attribution.
+
+### Required Measurement Discipline
+
+- Report throughput and wall time, but do not use process-level FPS alone for
+  attribution.
+- Separate CPU encode time, GPU command-buffer time, present/drawable wait,
+  completion wait, and query/readback waits.
+- Compare medians and p95/p99 where possible; single runs are useful for
+  direction but not for default-policy decisions.
+- Keep A/B knobs scoped and explicit:
+  - `DXMT9_MID_CHUNK_COMMIT_POLICY`
+  - `DXMT9_MID_CHUNK_COMMIT_CAP_PER_RENDER_PASS`
+  - draw-run or payload experimental toggles
+  - present/frame-latency toggles
+- Treat Metal frame captures as the decisive tool when counters show GPU time
+  but cannot attribute it to pass, shader, texture, or tile behavior.
+
+## Recommended Investigation Order
+
+1. Attribute wall time into CPU encode, GPU execution, and sync/present waits.
+2. If CPU encode dominates, inspect draw-run breaks, payload upload frequency,
+   bind churn, FVF/declaration decode, and PSO lookup.
+3. If GPU execution dominates, rank render passes, tile preservation, store/load
+   actions, shader families, texture sampling, and overdraw.
+4. If sync dominates, split present acquire, present boundary, completion,
+   query/readback, and ring pressure before changing latency policy.
+5. Only after attribution is stable, choose a design change and validate with
+   counters plus image/golden correctness checks.
+
+## Open Areas
+
+- Draw-run planner support for benign interleaved records such as stable
+  constant uploads.
+- Payload-liveness model that proves when a constant/upload record can be
+  hoisted, merged, or skipped.
+- Render-pass coalescing proof for same RT/depth sequences with clears and
+  depth reuse.
+- Better pass/shader GPU attribution from Xcode `.gputrace` captures and GPU
+  counters.
+- Workload-specific sub-CB cap validation across render-target sizes, MSAA,
+  attachment counts, and present rates.
+- Cold/warm PSO archive quality, including variant explosion from shader
+  liveness and compatibility flags.

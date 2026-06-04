@@ -52,6 +52,6 @@ backend write pressure rather than shader ALU or sampling — the seed of the
 > frame120 snapshot values are `33.611ms` / top-3 `98.40%`, matching the
 > `24.643ms (73.3%)` re-entry detail at source L2068.
 
-**Related.** [[baselines]] · [[overview]] · [[hidden-backend-storage]] ·
+**Related.** [[baselines]] · [[overview-3dmark05-gt1]] · [[hidden-backend-storage]] ·
 [[render-pass-store]] (same RT/depth pair re-entry, `73.32%`) ·
 [[baselines-runlevel.01]] (run-level context).

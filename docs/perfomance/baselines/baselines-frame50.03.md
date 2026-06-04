@@ -54,6 +54,6 @@ this alone does not justify a new Xcode capture. The next `.gputrace` budget
 stays gated by the proof queue (accepted opaque-depth locality + explicit `lsb1`
 screen-blend; broad depth-read reorder still needs a final-color oracle).
 
-**Related.** [[baselines]] · [[overview]] · [[baselines-frame50.02]] (prior scout) ·
+**Related.** [[baselines]] · [[overview-3dmark05-gt1]] · [[baselines-frame50.02]] (prior scout) ·
 [[baselines-frame50.01]] (canonical gputrace baseline) ·
 [[index-cache-locality]] (no-cache-runtime-activity reference) · [[hidden-backend-storage]].

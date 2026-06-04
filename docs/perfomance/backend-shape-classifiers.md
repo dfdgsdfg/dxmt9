@@ -1,6 +1,6 @@
 # Backend Shape Classifiers — correctness-invalid state toggles that test ownership of the hidden VS-write bucket
 
-> Part of the 3DMark05 GT1 GPU-bottleneck investigation. Root map: [[overview]].
+> Part of the 3DMark05 GT1 GPU-bottleneck investigation. Root map: [[overview-3dmark05-gt1]].
 
 ## Scope & question
 
@@ -158,4 +158,4 @@ locality / primitive axes, not state toggles.
 - [[vsout-layout]] — sibling axis: fog/texture/visibility classifiers also refute visible per-vertex width as the owner.
 - [[index-cache-locality]] — the accepted production win; the expand and scoped-alpha findings here motivate reducing VS invocations within a mandatory indexed path.
 - [[index-reuse-measurement]] — quantifies the indexed reuse / cache-miss shape that the force-expand classifier confirms is load-bearing.
-- [[overview]] — root map, priority DAG, and synthesis.
+- [[overview-3dmark05-gt1]] — root map, priority DAG, and synthesis.

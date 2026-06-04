@@ -1,6 +1,6 @@
 # Render-Pass Store — the P1 GPU-memory (tile preservation) track
 
-> Part of the 3DMark05 GT1 GPU-bottleneck investigation. Root map: [[overview]].
+> Part of the 3DMark05 GT1 GPU-bottleneck investigation. Root map: [[overview-3dmark05-gt1]].
 
 ## Scope & question
 
@@ -87,13 +87,13 @@ single-attachment store policy can cover GT1.
 **Open.** The real lever is a **dependency-aware pass reordering/coalescing**
 design: decide whether intervening passes are independent enough to batch same-key
 work together, or prove a broader live-out discard with concrete read/use
-evidence. That work is unstarted. Per the [[overview]] priority DAG, this entire
+evidence. That work is unstarted. Per the [[overview-3dmark05-gt1]] priority DAG, this entire
 P1 GPU-memory track remains secondary to the P0 hidden-backend write bucket
 ([[hidden-backend-storage]]); the cheap, safe render-pass wins were already shown
 not to move the GT1 bottleneck.
 
 ## Cross-references
-- [[overview]] — root priority DAG; this is the P1 GPU-memory track, secondary to the P0 hidden-backend bucket.
+- [[overview-3dmark05-gt1]] — root priority DAG; this is the P1 GPU-memory track, secondary to the P0 hidden-backend bucket.
 - [[hidden-backend-storage]] — the P0 owner (hidden vertex-stage/TVB write) that dominates GT1 ahead of this track.
 - [[const-upload]] — the CPU-side upload-traffic sibling that, like the DontCare proofs here, moves bytes but not the GT1 GPU bottleneck.
 - [[baselines]] — frame120 reference where `rt=0x30000460000000c,depth=0x300000100000001` re-entry costs 24.643 ms / 73.32% of the frame.

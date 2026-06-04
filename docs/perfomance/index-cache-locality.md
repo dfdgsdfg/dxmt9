@@ -1,6 +1,6 @@
 # Index-Cache Locality — the only accepted production GPU win
 
-> Part of the 3DMark05 GT1 GPU-bottleneck investigation. Root map: [[overview]].
+> Part of the 3DMark05 GT1 GPU-bottleneck investigation. Root map: [[overview-3dmark05-gt1]].
 
 ## Scope & question
 
@@ -137,4 +137,4 @@ frontier.
 - [[primitive-reorder-diagnostics]] — the reverse-triangle / min-index / cache-aware reorder scouts that motivated a *cached, gated* reorder instead of naive order changes; `sort-min-index` was rejected here.
 - [[index-reuse-measurement]] — the `DXMT9_MEASURE_INDEX_REUSE` / LRU32 cache-miss telemetry the candidate gate is built on.
 - [[mini-replay-bisection]] — consumes the no-mutate identity rows; the real-input replay path needed to settle the open `50/2` semantic-tolerance question.
-- [[overview]] — root priority DAG and synthesis (this is the accepted win it points to).
+- [[overview-3dmark05-gt1]] — root priority DAG and synthesis (this is the accepted win it points to).

@@ -1,6 +1,6 @@
 # Shader Codegen — translated-VS temp/scratch trim and offline Metal compiler inspection
 
-> Part of the 3DMark05 GT1 GPU-bottleneck investigation. Root map: [[overview]].
+> Part of the 3DMark05 GT1 GPU-bottleneck investigation. Root map: [[overview-3dmark05-gt1]].
 
 ## Scope & question
 
@@ -106,4 +106,4 @@ storage, or a reduction in submitted indexed primitive work (VS invocations).
 - [[vsout-layout]] — the runtime VSOut-width trim probes (`DXMT9_TRIM_UNUSED_VARYINGS`,
   point-size, position-only, half-VSOut) that this domain's offline variants
   correspond to; both reject visible varying width as the owner.
-- [[overview]] — root priority DAG and central finding.
+- [[overview-3dmark05-gt1]] — root priority DAG and central finding.

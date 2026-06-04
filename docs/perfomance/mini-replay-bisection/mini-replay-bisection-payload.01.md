@@ -40,4 +40,4 @@ VS bind `stream1 [[buffer(6)]]` colliding with the replay cbuf slots; (2) the
 fed [[mini-replay-bisection-harness.02]].
 
 **Related.** [[mini-replay-bisection]] · [[mini-replay-bisection-harness.01]] ·
-[[mini-replay-bisection-harness.02]] · [[index-reuse-measurement]] · [[overview]]
+[[mini-replay-bisection-harness.02]] · [[index-reuse-measurement]] · [[overview-3dmark05-gt1]]

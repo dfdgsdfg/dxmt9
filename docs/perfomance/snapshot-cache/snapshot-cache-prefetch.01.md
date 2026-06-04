@@ -53,5 +53,5 @@ the GPU owner remains hidden vertex/backend traffic. Snapshot CPU and pacing
 (`completion_wait`) waits remain open CPU tracks distinct from the GPU bottleneck.
 
 **Related.** [[snapshot-cache]] · prev [[snapshot-cache-binding.01]] · GPU owner
-[[hidden-backend-storage]] · churn axis [[state-churn-encode]] · [[overview]] ·
-CPU counters [[perfomance-bottleneck]]
+[[hidden-backend-storage]] · churn axis [[state-churn-encode]] · [[overview-3dmark05-gt1]] ·
+CPU counters [[overview]]

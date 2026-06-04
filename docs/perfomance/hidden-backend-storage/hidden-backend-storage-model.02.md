@@ -47,4 +47,4 @@ render-pass store/load as a documented secondary target. Layering caution from
 MoltenVK: prefer the smallest dump-first probe before broad runtime changes.
 
 **Related.** [[hidden-backend-storage-model.01]] · [[hidden-backend-storage]] ·
-[[render-pass-store]] · [[tvb-mechanism-proof]] · [[overview]]
+[[render-pass-store]] · [[tvb-mechanism-proof]] · [[overview-3dmark05-gt1]]

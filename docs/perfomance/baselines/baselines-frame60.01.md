@@ -53,7 +53,7 @@ attribution gap but did not move the bottleneck — primary owner is GPU-side
 vertex-stage buffer write pressure; secondary is residual stream/IB churn +
 const-upload run breaks.
 
-**Related.** [[baselines]] · [[overview]] · [[baselines-frame50.01]]
+**Related.** [[baselines]] · [[overview-3dmark05-gt1]] · [[baselines-frame50.01]]
 (parallel frame50 baseline) · [[baselines-frame120.01]] ·
 [[hidden-backend-storage]] (unexplained `1627.6MiB`) ·
 [[vsout-layout]] (rejects `184B`/`7.9x`) · [[backend-shape-classifiers]] ·

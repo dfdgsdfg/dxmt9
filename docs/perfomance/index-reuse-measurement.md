@@ -1,6 +1,6 @@
 # Index-Reuse Measurement — instrumentation that established VS-inv = post-transform cache-miss
 
-> Part of the 3DMark05 GT1 GPU-bottleneck investigation. Root map: [[overview]].
+> Part of the 3DMark05 GT1 GPU-bottleneck investigation. Root map: [[overview-3dmark05-gt1]].
 
 ## Scope & question
 
@@ -117,4 +117,4 @@ for Xcode proof.
   that this domain measured but did not explain.
 - [[vsout-layout]] — refuted as the width owner here: the bucket is far wider
   than the visible `184B` `VSOut`.
-- [[overview]] — root priority DAG and synthesis.
+- [[overview-3dmark05-gt1]] — root priority DAG and synthesis.

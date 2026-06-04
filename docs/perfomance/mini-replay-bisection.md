@@ -1,6 +1,6 @@
 # Mini-Replay Bisection — the apparatus that isolated per-draw vertex-stage write amplification
 
-> Part of the 3DMark05 GT1 GPU-bottleneck investigation. Root map: [[overview]].
+> Part of the 3DMark05 GT1 GPU-bottleneck investigation. Root map: [[overview-3dmark05-gt1]].
 
 ## Scope & question
 
@@ -114,4 +114,4 @@ reproduced before the mechanism could be proven; see [[tvb-mechanism-proof]].
 - [[primitive-reorder-diagnostics]] — sort-min-index / cache-opt order knobs tested under geometry-locked replay.
 - [[vsout-layout]] — pair-liveness VSOut trim rejected (-0.01%) inside the hot window.
 - [[render-pass-store]] — depth re-entry / attachment content rejected as owner.
-- [[overview]] — root map and priority DAG.
+- [[overview-3dmark05-gt1]] — root map and priority DAG.

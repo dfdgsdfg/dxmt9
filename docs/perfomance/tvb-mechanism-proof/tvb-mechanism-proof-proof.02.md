@@ -59,4 +59,4 @@ underpins the central finding that the GT1 cost is hidden GPU-side
 vertex/tiler/parameter storage.
 
 **Related.** [[tvb-mechanism-proof]] · [[tvb-mechanism-proof-proof.01]] ·
-[[hidden-backend-storage]] · [[index-cache-locality]] · [[vsout-layout]] · [[overview]]
+[[hidden-backend-storage]] · [[index-cache-locality]] · [[vsout-layout]] · [[overview-3dmark05-gt1]]

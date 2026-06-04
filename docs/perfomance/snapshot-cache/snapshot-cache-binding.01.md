@@ -42,4 +42,4 @@ override-applied stream layout.
 
 **Related.** [[snapshot-cache]] · prev [[snapshot-cache-snapshot.03]] · next
 [[snapshot-cache-prefetch.01]] · binding-override mechanism [[state-churn-encode]] ·
-[[overview]]
+[[overview-3dmark05-gt1]]

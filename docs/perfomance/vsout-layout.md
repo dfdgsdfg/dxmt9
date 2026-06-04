@@ -1,6 +1,6 @@
 # VSOut Layout — visible varying-width attempts to explain the VS-write bucket
 
-> Part of the 3DMark05 GT1 GPU-bottleneck investigation. Root map: [[overview]].
+> Part of the 3DMark05 GT1 GPU-bottleneck investigation. Root map: [[overview-3dmark05-gt1]].
 
 ## Scope & question
 
@@ -107,4 +107,4 @@ backend storage that scales with VS-invocation count × per-vertex VSOut bytes �
 - [[tvb-mechanism-proof]] — the `--require-tvb-mechanism-proof` gate that half-VSOut failed; the accepted row-local mechanism proof.
 - [[shader-codegen]] — sibling axis testing vertex temp/scratch trim and offline Metal codegen (also below visible stage-out).
 - [[backend-shape-classifiers]] — where the correctness-invalid position-only / fragment-only diagnostics live as state-shape classifiers.
-- [[overview]] — root map and priority DAG.
+- [[overview-3dmark05-gt1]] — root map and priority DAG.

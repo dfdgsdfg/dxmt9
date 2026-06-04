@@ -58,4 +58,4 @@ classifiers — motivating row-key-preserving locality / backend-shape probes.
 **Related.** [[hidden-backend-storage]] · [[hidden-backend-storage-attribution.01]] ·
 [[hidden-backend-storage-scaling.02]] · [[hidden-backend-storage-shape.01]] ·
 [[primitive-reorder-diagnostics]] · [[index-cache-locality]] ·
-[[backend-shape-classifiers]] · [[overview]]
+[[backend-shape-classifiers]] · [[overview-3dmark05-gt1]]

@@ -1,6 +1,6 @@
 # State-Churn Encode — the CPU encode path and draw-run batching
 
-> Part of the 3DMark05 GT1 GPU-bottleneck investigation. Root map: [[overview]].
+> Part of the 3DMark05 GT1 GPU-bottleneck investigation. Root map: [[overview-3dmark05-gt1]].
 
 ## Scope & question
 
@@ -139,4 +139,4 @@ auto-expand-indexed, which still needs visual proof.
 - [[index-cache-locality]] — the one accepted *GPU-side* win, which reduces VS
   invocations rather than CPU encode cost; auto-expand is a different indexed-path
   axis.
-- [[overview]] — root map, priority DAG, and ceiling synthesis.
+- [[overview-3dmark05-gt1]] — root map, priority DAG, and ceiling synthesis.
