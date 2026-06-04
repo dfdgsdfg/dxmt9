@@ -75,7 +75,9 @@ flowchart TD
   CPU --> SNAP[["snapshot-cache\nD3D9 draw-state rebuild (dominant CPU)"]]
   CPU --> SCE[["state-churn-encode\nstream/IB handle churn breaks draw-runs"]]
   CPU --> CU[["const-upload\ncbuf/argbuf traffic (CPU amplifier)"]]
+  CPU --> PP[["present-pacing\ncompletion_wait dominated by display-sync (NEW)"]]
   SCE --> SNAP
+  PP --> SCE
 
   classDef win fill:#d6f5d6,stroke:#2b7a2b,color:#063
   classDef open fill:#fff3cd,stroke:#a80,color:#640
