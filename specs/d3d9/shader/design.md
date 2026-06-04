@@ -457,31 +457,41 @@ MSL but does not contribute a new term to the key. Audit coverage
 
 ## 8. Performance-Driven Decisions Log
 
-This section folds the load-bearing findings from
-`specs/perfomance.plan.md` into the IR design so future readers do not have
-to mine a 19k-line file. Findings here are the basis for the precision and
-VSOut architecture above.
+This section records the perf findings that shape the precision pass, the
+VSOut layout policy, and the rejected hypotheses the shader spec must not
+re-litigate. It is intentionally folded into the spec so readers do not
+need an external trace log to understand why each contract is written the
+way it is.
 
-### 8.1 Headline Finding (2026-06-04)
+### 8.1 Headline Finding (3DMark05 GT1, 2026-06-04 baseline)
 
-For 3DMark05 GT1 frame 50, the Xcode encoder counter
-`VS Buffer Device Memory Bytes Written` reports **1627 MiB** of vertex-stage
-buffer-write traffic. Of that, the dxmt CPU-side writers account for
-**0.444 MiB**: the dominant traffic is firmware-owned Tiled Vertex Buffer
-(TVB) and Parameter Buffer (PB) storage that Apple Silicon's vertex /
-binning stage uses to materialise stage-out data, not an application
-`MTLBuffer`.
+At frame 50, the Xcode encoder counter `VS Buffer Device Memory Bytes
+Written` reports **1627 MiB** of vertex-stage buffer-write traffic. Of
+that, the dxmt9 CPU-side writers (argbuf, transient upload, FFP/VS
+constant push) account for **0.444 MiB**. The remaining ~1626 MiB is
+firmware-owned Tiled Vertex Buffer (TVB) and Parameter Buffer (PB)
+storage that Apple Silicon's vertex / binning stage uses to materialise
+stage-out data; it is not an application `MTLBuffer` that dxmt9 can
+shrink directly.
 
-This is the bottleneck the IR architecture targets. dxmt9 cannot reach
-into the TVB / PB directly; it can only reduce the *work that the firmware
-must store there*. Two levers remain:
+**The proven control variable for this counter is post-transform VS
+invocation count.** Reordering the index buffer for better post-transform
+cache locality cuts invocations, and the counter moves in lockstep:
 
-1. **Reduce VSOut width** (already implemented as opt-in trim passes).
-2. **Reduce VSOut precision** (the IR-level FP16 path, §4).
+- combined min-gain-10 index reorder (opaque depth-write rows 50/0 and
+  50/1 plus screen-blend row 50/2): **GPU −13.86%, VS buffer-write
+  −13.19%, VS invocations −12.29%, LRU32 miss −39.50%**;
+- a stand-alone repeat100 replay of the same content with
+  `cache-opt-lru32`: GPU −15.48%, VS invocations −25.93%, VS buffer-write
+  −23.80% on an unchanged 9.24 M submitted-vertex set.
 
-Lever 2 is the unresolved candidate. Lever 1 by itself was tested and
-**did not move the VS buffer write counter** in the GT1 baseline (see
-§8.2).
+This control path lives in the runtime / index-buffer code, not in the
+shader spec; it is owned by `specs/backend/`. The shader spec's residual
+unproven candidate is **per-output VSOut precision** (the IR-level FP16
+path, §4). Stage-out width reduction was tested via the existing trim
+passes (`DXMT9_TRIM_UNUSED_VARYINGS`, `minimalVSOutLayout`,
+`positionOnlyVSOutLayout`, `DXMT9_PROBE_DROP_VSOUT_POINT_SIZE`) and did
+not move the counter at the GT1 baseline scale.
 
 ### 8.2 Rejected Hypotheses
 
@@ -492,7 +502,7 @@ these in as the intended fix; the gap row for FP16 is the supersession.
 | Hypothesis | Probe | Verdict |
 |---|---|---|
 | VSOut field omission moves VS buffer-write | `DXMT9_TRIM_UNUSED_VARYINGS`, `minimalVSOutLayout`, `positionOnlyVSOutLayout` | rejected — counter unchanged |
-| Render-pass merge / split | (perfomance.plan probes) | rejected |
+| Render-pass merge / split | encoder-boundary probes | rejected |
 | State-bit ablation (alpha-test, cull, scissor, blend, fog) | `DXMT_DISABLE_*`, `DXMT9_PROBE_DISABLE_ALPHA_BLEND`, `DXMT9_PROBE_DEPTH_FUNC_ALWAYS` | rejected |
 | RT metadata removal | `DXMT9_SUPPRESS_RT_PIXEL_FORMAT_VIEW`, `DXMT9_SUPPRESS_X8_RT_PIXEL_FORMAT_VIEW` | rejected (texture writes dropped, VS buffer-write unchanged) |
 | Draw-call splits / merges | various probes | rejected (cost amplification) |
@@ -500,8 +510,13 @@ these in as the intended fix; the gap row for FP16 is the supersession.
 | Const-upload coalescing variants | `DXMT9_SPLIT_SPARSE_CONST_RECORDS` and inverse | rejected as VS-write owner |
 
 Pattern: state-bit and RT-metadata changes do not move the firmware-side
-VS write bucket because that storage is sized by *vertex count × stage-out
-width × precision*, not by per-draw state shape.
+VS write bucket. The empirically-proven control variable is post-transform
+VS invocation count (§8.1 — reorder cuts invocations, counter moves in
+lockstep). Stage-out width was tested at GT1 scale (varying trim,
+position-only, point-size drop) and did not move the counter. Stage-out
+precision is an untested hypothesis. State / semantic class matters for
+whether a given reorder is *legal* (correctness — see §8.3), not for how
+the counter is sized.
 
 ### 8.3 Orthogonal Wins (Not IR-Layer)
 
@@ -519,17 +534,24 @@ should be motivated by index-locality findings.
 
 ### 8.4 Architectural Conclusion
 
-The IR layer must:
+The shader layer must:
 
-1. Stop chasing VSOut width as the primary lever. Liveness passes remain
-   useful for non-perf cleanliness (fewer dead fields aid readability and
-   archive size) but they are not the perf fix.
-2. Make **per-output VSOut precision** the load-bearing perf lever. This
-   is the §4 precision pass with the §4.4 VS-first strategy.
-3. Preserve the index-locality path's correctness invariants by not
-   changing VSOut field *order* or *semantic mapping* in ways that would
-   interact with the runtime reorder. (The reorder operates on indices,
-   not on stage-out fields; the IR change is orthogonal.)
+1. **Not regress the proven control path.** The index-locality reorder
+   operates on indices, not on stage-out fields, so the IR change is
+   orthogonal — but only as long as the shader layer does not change
+   VSOut field *order* or *semantic mapping* in a way that interferes
+   with reorder safety analysis. Keep VSOut ordering stable.
+2. **Stop chasing VSOut width as the primary lever.** Liveness passes
+   remain useful for non-perf cleanliness (smaller archive entries,
+   fewer dead fields) and may stay opt-in, but they are not the perf
+   fix.
+3. **Treat per-output VSOut precision (FP16) as the next unproven
+   candidate.** The §4 precision pass with the §4.4 VS-first strategy is
+   the path to test it; promotion requires the §8.3 correctness oracle
+   to pass across every state class *and* a measured Xcode VS-buffer-
+   write decrease at baseline scale (R-CORE-SHADER-3.10). No measured
+   counter movement → no default-on promotion, regardless of correctness
+   evidence.
 
 ### 8.5 Out of Scope for the IR Layer
 
@@ -567,15 +589,46 @@ iteration sources (hash-map order, unstable sort).
 ### 9.3 Correctness Oracle (Half-Precision Gate)
 
 The precision pass's promotion gate (R-CORE-SHADER-3.10) requires a
-deterministic correctness oracle:
+**multi-axis** correctness oracle (R-CORE-SHADER-8.3). A shader-local
+fixed-grid comparison is necessary but not sufficient — earlier
+validation work showed that reorder candidates passed shader-local
+tolerance checks while still producing visible deltas under specific
+state shapes. The oracle therefore expands along four axes:
 
-- Reference: float-emitted shader, executed on `shader_runner_dxmt9`
-  against a fixed input grid.
-- Candidate: half-emitted shader, same inputs.
-- Compare per-pixel output within a documented tolerance (typically
-  `lsb1` for colour, exact for depth).
+**Replay axis.** Paired VS + FS run under `shader_runner_dxmt9`. The
+precision boundary that FP16 exposes lives between stages (cast sites at
+the VSOut consumer); a standalone single-stage replay never reaches it.
 
-The oracle is a gating CI test for any change that proposes to flip the
+**State-class axis** (minimum five classes, each its own oracle run):
+
+| Class | Why it isolates a different hazard surface |
+|---|---|
+| depth-write opaque | baseline: front-most owner enforced by depth, smallest hazard |
+| depth-read no-blend | front-most owner not enforced; primitive reorder can flip the visible triangle |
+| depth-read blend-off | colour-write mask cases without blend cumulation |
+| depth-read alpha-blend | cumulative blend over alpha-tested coverage; rounding compounds |
+| depth-read screen-blend | multiplicative compositing — most precision-sensitive class observed in prior reorder validation |
+
+**Active-pixel gate.** Each replay reports an *active pixel ratio*
+(pixels touched by ≥ 1 draw / total pixels). Replays whose ratio is
+below a documented threshold MUST NOT count as oracle evidence — prior
+validation work showed a candidate appearing to pass simply because too
+few pixels were active to expose its regression.
+
+**Tolerance policy** (per output channel):
+
+- colour: `≤ 1 LSB` per channel;
+- depth: **exact** — any depth rounding changes z-fight ordering and
+  cascades to colour through compare;
+- alpha: **exact** — alpha rounding cascades through blend equations.
+
+**Counter gate.** Default-on promotion (R-CORE-SHADER-3.10) ALSO requires
+at least one Xcode encoder export proving that
+`VS Buffer Device Memory Bytes Written` actually moves off → on at the
+§8.1 baseline scale. A correctness-equivalent pass that does not move the
+counter is correctness debt without payoff.
+
+The oracle is a CI-gating test set for any change proposing to flip a
 half-precision opt-in default to on.
 
 ### 9.4 Bytecode → MSL Snapshot

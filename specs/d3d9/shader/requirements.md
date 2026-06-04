@@ -161,10 +161,9 @@ These flags must not bleed into other semantic decisions; in particular,
 
 ## 3. Precision and VSOut Layout
 
-This section is the IR-side contract that backs the FP16 and VSOut-trim
-investigations recorded in `specs/perfomance.plan.md`. Findings that drive
-these requirements are documented in `design.md` §8 (Performance-Driven
-Decisions Log).
+This section is the shader-layer contract that backs the FP16 and VSOut-trim
+candidates. The rationale and rejected-hypothesis history are documented in
+`design.md` §8 (Performance-Driven Decisions Log).
 
 ### 3.1 Per-Register Precision
 
@@ -200,14 +199,19 @@ overriding any `_pp` hint or opt-in policy:
 
 ### 3.3 VSOut Layout
 
-**R-CORE-SHADER-3.5** The set of VS outputs emitted in the `VSOut` struct must
-be **pair-local**: it depends on both the VS and the paired FS stage-in
-reads. The translator must compute the union of fields that are written by
-the VS and read by the FS, and emit only that union.
+**R-CORE-SHADER-3.5** The emitted VSOut layout MUST be parameterised by a
+`VSOutLayout` value type produced either by the VSOut liveness pass (§4.5)
+when it is enabled, or by a conservative default when it is disabled. The
+conservative default MUST emit every field the VS writes, plus the
+mandatory-Float fields in §3.2. Changing the default to a trimmed layout is
+a behaviour change and MUST go through §3.10's promotion gate, not silent
+adoption.
 
-**R-CORE-SHADER-3.6** A VSOut field that is *written* by the VS but *not read*
-by the paired FS may be omitted from the emitted layout. This is the basis
-for the VSOut liveness pass (§4.5).
+**R-CORE-SHADER-3.6** When the VSOut liveness pass is enabled, the emitted
+layout MUST equal the pair-local union: fields written by the VS and read by
+the paired FS, plus the mandatory-Float fields in §3.2. A field that is
+written by the VS but not read by the paired FS MAY then be omitted; a field
+that the FS reads MUST NOT be omitted regardless of VS reachability.
 
 **R-CORE-SHADER-3.7** The VSOut precision policy is per-field. A field may be
 classified `Half` only when:
@@ -230,16 +234,21 @@ present implementation is a text-rewrite pass marked **EXPERIMENTAL** in
 under it. The IR-level precision pass described in §4.4 is the supersession
 path.
 
-**R-CORE-SHADER-3.10** Promotion of half precision to default-on must require
-all of the following:
+**R-CORE-SHADER-3.10** Promotion of half precision (or of any layout-changing
+opt-in pass) to default-on MUST require all of the following:
 
 - the IR-level precision pass (§4.4) replaces the text-rewrite pass;
-- a per-shader correctness oracle (§8.3) passes for the targeted corpus;
-- VS buffer-write counter improvement is measured in
-  `specs/perfomance.plan.md` against the 2026-06-04 baseline (1627 MiB).
+- the multi-axis correctness oracle (§8.3) passes across every state class
+  it enumerates, on a paired VS+FS replay, above the active-pixel coverage
+  gate;
+- at least one Xcode encoder export shows
+  `VS Buffer Device Memory Bytes Written` decreasing from off → on at the
+  3DMark05 GT1 baseline scale documented in `design.md` §8.1.
 
-Until those conditions are met, half precision must not be enabled by
-default in production builds.
+Until every condition above is met, the opt-in MUST remain off in production
+builds. Promotion without measurable counter movement is forbidden — a
+correctness-equivalent rewrite that does not move the counter is correctness
+debt without payoff.
 
 ---
 
@@ -387,10 +396,12 @@ to write each emitted MSL translation unit to the named directory keyed by
 (IR hash, source hash). The source hash must be sufficient to disambiguate
 multiple plan combinations that share an IR hash.
 
-**R-CORE-SHADER-7.3** `DXMT9_PERF_ENCODER_BREAKDOWN` must surface, for every
-draw it attributes, the bound VS and PS IR hashes and (when shader dump is
-enabled) the corresponding source hash. This is the lever the Xcode-↔-dxmt
-join report uses to attribute GPU encoder cost to a specific shader.
+**R-CORE-SHADER-7.3** The shader layer's contract here is to expose stable
+IR hashes (R-CORE-SHADER-1.4) and stable source hashes (R-CORE-SHADER-7.2)
+in a form that backend perf-attribution tooling can consume as opaque keys.
+The consumer contract for any specific perf env var (for example
+`DXMT9_PERF_ENCODER_BREAKDOWN`) belongs to the backend / perf-attribution
+spec and MUST NOT be redefined here.
 
 **R-CORE-SHADER-7.4** All translator-owned environment variables must appear in
 `agents/rules/environment_variables.rules.md` with documented default,
@@ -410,11 +421,29 @@ bytes against a snapshot.
 same IR / plan combination twice and asserts byte-equal MSL output.
 
 **R-CORE-SHADER-8.3** Half-precision and other optional passes whose output
-changes observable pixel behaviour must have a correctness oracle: a
-deterministic shader-runner test that compares half-emitted output against
-float-emitted output across a reference input set, with a documented
-tolerance. The oracle is a precondition for default-on promotion
-(§3.10).
+changes observable pixel behaviour MUST have a **multi-axis** correctness
+oracle as a precondition for default-on promotion (§3.10). A shader-local
+fixed-grid comparison is insufficient. The oracle MUST cover:
+
+- a **paired VS + FS replay** (not a standalone shader); the relevant
+  precision boundary is between stages, so single-stage tests miss the
+  hazard surface;
+- a **state-class taxonomy** that enumerates at minimum
+  `{depth-write opaque, depth-read no-blend, depth-read blend-off,
+  depth-read alpha-blend, depth-read screen-blend}`; previous validation
+  work showed that depth-read / color-write reorders fail in classes
+  hidden by depth-write-opaque coverage;
+- an **active-pixel coverage gate**: per-replay active-pixel ratio MUST
+  exceed a documented threshold, because sparse-coverage replays produced
+  false-negative passes in prior validation work and MUST NOT count as
+  evidence;
+- **per-output tolerance**: colour ≤ 1 LSB per channel; depth exact (any
+  rounding changes z-fight ordering); alpha exact (alpha rounding cascades
+  through blend equations);
+- **counter gate**: at least one Xcode encoder export proving that
+  `VS Buffer Device Memory Bytes Written` (or the analogous counter for
+  the pass under test) actually moves in the intended direction at
+  baseline scale.
 
 **R-CORE-SHADER-8.4** Existing audits must continue to enforce:
 
