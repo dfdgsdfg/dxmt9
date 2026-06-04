@@ -354,11 +354,82 @@ class AnalyzeIndexedProbeClassesTests(unittest.TestCase):
         self.assertAlmostEqual(float(rows[large_key]["xcode_proxy_hidden_backend_mib"]), 120.0)
         self.assertAlmostEqual(float(rows[small_key]["xcode_proxy_hidden_backend_mib"]), 96.0)
         self.assertEqual(rows[large_key]["semantic_risk"], "screen-blend-tolerance")
+        self.assertEqual(rows[large_key]["proof_family"], "explicit-tolerance-reorder")
         self.assertIn("explicit lsb1", rows[large_key]["candidate_action"])
+        self.assertIn("same-input mini replay", rows[large_key]["preflight_gate"])
+        self.assertIn("semantic image policy", rows[large_key]["xcode_replay_gate"])
         self.assertIn("## Xcode Proxy", report)
         self.assertIn("proxy hidden backend MiB", report)
         self.assertIn("## Candidate Advice", report)
+        self.assertIn("## Next Experiment Queue", report)
         self.assertIn("screen-blend-tolerance", report)
+        self.assertIn("explicit-tolerance-reorder", report)
+
+    def test_xcode_gate_names_tvb_mechanism_for_backend_shape_candidates(self) -> None:
+        module = load_module()
+
+        depth_read = module.Aggregate(
+            key=(
+                "50/2|depth=read|blend=off|scissor=off|textured=yes|"
+                "large4096=yes|color_write=0xf"
+            )
+        )
+        alpha = module.Aggregate(
+            key=(
+                "50/2|depth=read|blend=standard-alpha|scissor=off|"
+                "textured=yes|large4096=yes|color_write=0xf"
+            )
+        )
+
+        self.assertEqual(
+            module.proof_family(depth_read),
+            "semantic-proof-or-non-reorder",
+        )
+        self.assertEqual(
+            module.proof_family(alpha),
+            "non-reorder-backend-shape-or-semantic-proof",
+        )
+        self.assertIn(
+            "--require-tvb-mechanism-proof",
+            module.xcode_replay_gate(depth_read),
+        )
+        self.assertIn(
+            "--require-tvb-mechanism-proof",
+            module.xcode_replay_gate(alpha),
+        )
+
+    def test_markdown_includes_backend_shape_command_template(self) -> None:
+        module = load_module()
+        agg = module.Aggregate(
+            key=(
+                "50/2|depth=read|blend=off|scissor=off|textured=yes|"
+                "large4096=yes|color_write=0xf"
+            ),
+            rows=5,
+            primitives=51587,
+            vertices=154761,
+            xcode_proxy_hidden_backend_mib=131.142,
+            xcode_proxy_vs_write_mib=134.507,
+        )
+
+        report = module.markdown_report(
+            Path("probe.csv"),
+            [agg],
+            group_mode="row-state-class",
+            rows=["50/2"],
+            top=10,
+            joined_summary=Path("traces/run/analysis/frame50-xcode-dxmt-joined-summary.csv"),
+            xcode_proxy_weight="effective-miss32",
+        )
+
+        self.assertIn("## Backend-Shape A/B Command Template", report)
+        self.assertIn("--no-gputrace", report)
+        self.assertIn("--require-tvb-mechanism-proof", report)
+        self.assertIn("--target-row-key 50/2", report)
+        self.assertIn("<primitive-order-preserving-backend-shape-option>", report)
+        self.assertIn("Known rejected backend-shape axes", report)
+        self.assertIn("force-expand indexed", report)
+        self.assertIn("visible VSOut trimming", report)
 
 
 if __name__ == "__main__":

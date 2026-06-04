@@ -149,6 +149,7 @@ def summarize(rows: list[dict[str, str]], top_n: int) -> dict[str, float]:
     )
     top_cpu_writer_mib = sum(dxmt_cpu_writer_bytes(row) for row in top) / 1024.0 / 1024.0
     top_unexplained_mib = sum(row_unexplained_buffer_write_mib(row) for row in top)
+    top_hidden_backend_mib = max(top_vs_mib - top_tiled_mib - top_cpu_writer_mib, 0.0)
     top_vsout_expected_weight = sum(
         dxmt_vsout_expected_bytes(row) * as_float(row.get("vs_invocations")) for row in top
     )
@@ -171,6 +172,10 @@ def summarize(rows: list[dict[str, str]], top_n: int) -> dict[str, float]:
         "top_vs_buffer_write_mib": top_vs_mib,
         "top_vs_buffer_write_share": (
             top_vs_mib / top_buffer_write_mib if top_buffer_write_mib else 0.0
+        ),
+        "top_hidden_backend_write_mib": top_hidden_backend_mib,
+        "top_hidden_backend_write_ratio": (
+            top_hidden_backend_mib / top_vs_mib if top_vs_mib else 0.0
         ),
         "top_fs_buffer_write_mib": sum(as_float(row.get("fs_buffer_write_mib")) for row in top),
         "top_texture_write_mib": sum(as_float(row.get("texture_write_mib")) for row in top),
@@ -901,6 +906,8 @@ def write_report(path: Path, before: dict[str, float], after: dict[str, float],
         "top_buffer_write_mib",
         "top_vs_buffer_write_mib",
         "top_vs_buffer_write_share",
+        "top_hidden_backend_write_mib",
+        "top_hidden_backend_write_ratio",
         "top_unexplained_buffer_write_mib",
         "top_unexplained_buffer_write_ratio",
         "top_vs_buffer_bytes_per_vs_invocation",
@@ -1407,7 +1414,8 @@ def failed_requirements(args: argparse.Namespace,
     if args.require_top_gpu_share_increase:
         require_increase("top_gpu_share_pct", "top_gpu_share_pct")
     if getattr(args, "require_tvb_mechanism_proof", False):
-        require_decrease("top_named_tiled_buffer_mib", "top_named_tiled_buffer_mib")
+        require_decrease("top_hidden_backend_write_mib", "top_hidden_backend_write_mib")
+        require_decrease("top_vs_buffer_write_mib", "top_vs_buffer_write_mib")
         require_decrease("top_vs_invocations", "top_vs_invocations")
         require_decrease("top_gpu_ms", "top_gpu_ms")
     if args.max_top_unexplained_buffer_write_ratio is not None:
@@ -1738,9 +1746,9 @@ def main() -> int:
         "--require-tvb-mechanism-proof",
         action="store_true",
         help=(
-            "exit nonzero unless top-N named tiled buffer MiB, "
-            "top-N VS invocations, and top-N GPU time all strictly "
-            "decrease; intended for row-local mini-replay mechanism proof"
+            "exit nonzero unless top-N hidden backend write MiB, VS buffer "
+            "write MiB, VS invocations, and GPU time all strictly decrease; "
+            "intended for row-local mini-replay mechanism proof"
         ),
     )
     parser.add_argument(

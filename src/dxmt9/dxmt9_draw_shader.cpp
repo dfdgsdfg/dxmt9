@@ -178,6 +178,7 @@ ShaderSourceContext makeShaderSourceContext(const DrawShaderLayoutContext& layou
   context.sampleCount = std::max(1u, hot.colorAttachments[0].sampleCount);
   context.clipPlaneMask = layout.clipPlaneMask;
   context.unboundTextureFallback = true;
+  context.enableHalfVSOut = shaders::vsoutProbeHalfEnabled();
   return context;
 }
 
@@ -194,6 +195,7 @@ ShaderSourceContext makeShaderSourceContext(const fixture::DrawDesc& desc) {
   }
   context.sampleCount = std::max(1u, desc.rts.color[0].sampleCount);
   context.clipPlaneMask = layout.clipPlaneMask;
+  context.enableHalfVSOut = shaders::vsoutProbeHalfEnabled();
   return context;
 }
 

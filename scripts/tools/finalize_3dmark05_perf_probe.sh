@@ -165,10 +165,10 @@ Options:
                       for unsafe nonopaque cache-order proofs where Xcode
                       counter movement alone is only a mechanism proof.
   --require-tvb-mechanism-proof
-                      Gate: top named tiled buffer MiB, VS invocations, and
-                      GPU time must all strictly decrease (row-local
-                      TVB pressure mechanism proof; firmware Parameter Buffer
-                      can read 0 MiB below spill threshold)
+                      Gate: top hidden backend write MiB, VS buffer write MiB,
+                      VS invocations, and GPU time must all strictly decrease
+                      (row-local TVB pressure mechanism proof; named tiled
+                      counters can under-report hidden-expanded storage)
   --require-target-index-cache-miss32-decrease
                       Xcode compare gate: target rows' actual dxmt LRU32 miss
                       estimate must decrease, catching cache-opt apply no-ops
@@ -676,6 +676,7 @@ if (( require_top_gpu_decrease ||
       require_transient_decrease ||
       require_top_gpu_share_increase ||
       require_top_row_key_match ||
+      require_tvb_mechanism_proof ||
       require_target_index_cache_miss32_decrease ||
       require_target_index_cache_opt_miss32_decrease ||
       require_target_reordered_index_cache_hits ||

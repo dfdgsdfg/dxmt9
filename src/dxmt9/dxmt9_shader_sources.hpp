@@ -70,6 +70,9 @@ struct ShaderPreludeOptions {
   bool centroidSecondaryColor = false;
   std::uint32_t centroidTexcoordMask = 0;
   bool centroidFogFactor = false;
+  // Diagnostic only: request half-precision user varyings in VSOut. Position,
+  // point_size, and clip_distance stay float.
+  bool halfVSOut = false;
   struct VSOutLayout {
     std::uint32_t texcoordMask = 0xffu;
     bool color = true;
@@ -91,6 +94,7 @@ using VSOutLayout = ShaderPreludeOptions::VSOutLayout;
 bool vsoutTrimEnabled();
 bool vsoutProbeDropPointSizeEnabled();
 bool vsoutProbePositionOnlyEnabled();
+bool vsoutProbeHalfEnabled();
 constexpr VSOutLayout fullVSOutLayout() { return VSOutLayout{}; }
 VSOutLayout minimalVSOutLayout();
 VSOutLayout positionOnlyVSOutLayout();

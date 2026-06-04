@@ -45,6 +45,42 @@ class ThreeDMark05ProbeScriptTests(unittest.TestCase):
             check=False,
         )
 
+    def test_wrapper_defaults_timeout_for_gputrace(self) -> None:
+        result = self.run_script(
+            RUN_WRAPPER,
+            "--suffix",
+            "timeout-default-gputrace",
+            "--dry-run",
+        )
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+        cmd_line = next(line for line in result.stdout.splitlines() if line.startswith("cmd:"))
+        self.assertIn("--timeout 420", cmd_line)
+
+    def test_wrapper_defaults_timeout_for_no_gputrace(self) -> None:
+        result = self.run_script(
+            RUN_WRAPPER,
+            "--suffix",
+            "timeout-default-no-gputrace",
+            "--no-gputrace",
+            "--dry-run",
+        )
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+        cmd_line = next(line for line in result.stdout.splitlines() if line.startswith("cmd:"))
+        self.assertIn("--timeout 240", cmd_line)
+
+    def test_wrapper_rejects_disabled_timeout(self) -> None:
+        result = self.run_script(
+            RUN_WRAPPER,
+            "--timeout",
+            "0",
+            "--dry-run",
+        )
+
+        self.assertEqual(result.returncode, 2)
+        self.assertIn("--timeout must be positive numeric seconds", result.stderr)
+
     def test_wrapper_rejects_run_level_gate_without_baseline_output(self) -> None:
         result = self.run_script(
             RUN_WRAPPER,
@@ -78,6 +114,16 @@ class ThreeDMark05ProbeScriptTests(unittest.TestCase):
         self.assertEqual(result.returncode, 2)
         self.assertIn("Xcode comparison gates require", result.stderr)
 
+    def test_wrapper_rejects_tvb_mechanism_gate_without_baseline_joined(self) -> None:
+        result = self.run_script(
+            RUN_WRAPPER,
+            "--require-tvb-mechanism-proof",
+            "--dry-run",
+        )
+
+        self.assertEqual(result.returncode, 2)
+        self.assertIn("Xcode comparison gates require", result.stderr)
+
     def test_finalizer_rejects_xcode_compare_gate_without_baseline_joined(self) -> None:
         result = self.run_script(
             FINALIZER,
@@ -85,6 +131,18 @@ class ThreeDMark05ProbeScriptTests(unittest.TestCase):
             "missing-baseline",
             "--max-top-unexplained-buffer-write-ratio",
             "0.25",
+            "--dry-run",
+        )
+
+        self.assertEqual(result.returncode, 2)
+        self.assertIn("Xcode comparison gates require", result.stderr)
+
+    def test_finalizer_rejects_tvb_mechanism_gate_without_baseline_joined(self) -> None:
+        result = self.run_script(
+            FINALIZER,
+            "--suffix",
+            "missing-tvb-baseline",
+            "--require-tvb-mechanism-proof",
             "--dry-run",
         )
 
@@ -593,6 +651,28 @@ class ThreeDMark05ProbeScriptTests(unittest.TestCase):
         self.assertIn("--max-top-triangle-delta-ratio", finalize_line)
         self.assertIn("0.05", finalize_line)
 
+    def test_wrapper_forwards_tvb_mechanism_proof_to_finalizer(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            baseline_joined = Path(tmp) / "baseline-joined.csv"
+            baseline_joined.write_text("gpu_ms\n", encoding="utf-8")
+
+            result = self.run_script(
+                RUN_WRAPPER,
+                "--suffix",
+                "forward-tvb-mechanism",
+                "--baseline-joined",
+                str(baseline_joined),
+                "--require-tvb-mechanism-proof",
+                "--dry-run",
+            )
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+        finalize_line = next(
+            line for line in result.stdout.splitlines()
+            if line.startswith("finalize_cmd_after_xcode_export:")
+        )
+        self.assertIn("--require-tvb-mechanism-proof", finalize_line)
+
     def test_wrapper_forwards_top_and_hot_share_to_finalizer(self) -> None:
         result = self.run_script(
             RUN_WRAPPER,
@@ -711,6 +791,17 @@ class ThreeDMark05ProbeScriptTests(unittest.TestCase):
 
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertIn("DXMT9_PROBE_DROP_VSOUT_POINT_SIZE=1", result.stdout)
+
+    def test_wrapper_dry_run_includes_half_vsout_probe_env(self) -> None:
+        result = self.run_script(
+            RUN_WRAPPER,
+            "--no-gputrace",
+            "--probe-half-vsout",
+            "--dry-run",
+        )
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("DXMT9_PROBE_HALF_VSOUT=1", result.stdout)
 
     def test_wrapper_dry_run_includes_force_fragment_color_env(self) -> None:
         result = self.run_script(
@@ -1532,6 +1623,28 @@ class ThreeDMark05ProbeScriptTests(unittest.TestCase):
         self.assertIn("--max-top-vertex-count-delta-ratio", compare_line)
         self.assertIn("--max-top-triangle-delta-ratio", compare_line)
         self.assertIn("0.05", compare_line)
+
+    def test_finalizer_forwards_tvb_mechanism_proof_to_compare_script(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            baseline_joined = Path(tmp) / "baseline-joined.csv"
+            baseline_joined.write_text("gpu_ms\n", encoding="utf-8")
+
+            result = self.run_script(
+                FINALIZER,
+                "--suffix",
+                "forward-tvb-mechanism",
+                "--baseline-joined",
+                str(baseline_joined),
+                "--require-tvb-mechanism-proof",
+                "--dry-run",
+            )
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+        compare_line = next(
+            line for line in result.stdout.splitlines()
+            if line.startswith("xcode_compare_cmd:")
+        )
+        self.assertIn("--require-tvb-mechanism-proof", compare_line)
 
     def test_finalizer_forwards_non_target_hot_row_gates_to_compare_script(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

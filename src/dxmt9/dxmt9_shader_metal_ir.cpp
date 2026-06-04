@@ -60,9 +60,26 @@ std::string pixelPositionExpression(const std::string& pixelInputs) {
   return pixelInputs + ".position";
 }
 
-std::string texcoordInputExpression(const std::string& pixelInputs, u32 index) {
-  return pixelInputs + ".texcoord" +
-         std::to_string(std::min<u32>(index, kMaxTextureStages - 1u));
+std::string texcoordInputExpression(const std::string& pixelInputs, u32 index,
+                                    bool castStageInTexcoord) {
+  std::string expr = pixelInputs + ".texcoord" +
+                     std::to_string(std::min<u32>(index, kMaxTextureStages - 1u));
+  return castStageInTexcoord ? "float4(" + expr + ")" : expr;
+}
+
+std::string vsoutFloat4Write(const ShaderSourceContext& context,
+                             const std::string& expr) {
+  return context.enableHalfVSOut ? "half4(" + expr + ")" : expr;
+}
+
+std::string vsoutFloatWrite(const ShaderSourceContext& context,
+                            const std::string& expr) {
+  return context.enableHalfVSOut ? "half(" + expr + ")" : expr;
+}
+
+std::string stageInFloatRead(const ShaderSourceContext& context,
+                             const std::string& expr) {
+  return context.enableHalfVSOut ? "float(" + expr + ")" : expr;
 }
 
 std::string formatFloatLiteral(f32 value) {
@@ -778,7 +795,8 @@ void emitPredicateBindings(std::ostringstream& out, bool usesPredicateRegisters)
 
 std::string readPixelInputSemanticExpression(const PixelInputSemantic& semantic,
                                              const std::string& pixelInputs,
-                                             u32 fallbackTexcoordIndex) {
+                                             u32 fallbackTexcoordIndex,
+                                             bool castStageInTexcoord) {
   switch (semantic.usage) {
     case kD3DDeclUsagePosition:
     case kD3DDeclUsagePositionT:
@@ -786,7 +804,8 @@ std::string readPixelInputSemanticExpression(const PixelInputSemantic& semantic,
     case kD3DDeclUsagePSize:
       return "float4(" + pixelInputs + ".pointSize)";
     case kD3DDeclUsageTexcoord:
-      return texcoordInputExpression(pixelInputs, semantic.usageIndex);
+      return texcoordInputExpression(pixelInputs, semantic.usageIndex,
+                                     castStageInTexcoord);
     case kD3DDeclUsageColor:
       if (semantic.usageIndex == 0) {
         return "float4(" + pixelInputs + ".color)";
@@ -800,7 +819,8 @@ std::string readPixelInputSemanticExpression(const PixelInputSemantic& semantic,
     default:
       break;
   }
-  return texcoordInputExpression(pixelInputs, fallbackTexcoordIndex);
+  return texcoordInputExpression(pixelInputs, fallbackTexcoordIndex,
+                                 castStageInTexcoord);
 }
 
 std::string readPixelInputFallbackExpression(u32 index, const std::string& pixelInputs) {
@@ -859,6 +879,7 @@ ShaderPreludeOptions makePreludeOptions(const SpirvModule& module,
   ShaderPreludeOptions options;
   options.withClipDistances = context.clipPlaneMask != 0;
   options.vsOutLayout = context.vsOutLayout;
+  options.halfVSOut = context.enableHalfVSOut;
   if (vertex) {
     return options;
   }
@@ -1018,17 +1039,19 @@ shaders::VSOutLayout collectFragmentVaryingLiveness(const SpirvModule& module) {
 
 std::string readPixelInputExpression(u32 token,
                                      const std::string& pixelInputs,
-                                     const PixelInputSemantics& semantics) {
+                                     const PixelInputSemantics& semantics,
+                                     bool castStageInTexcoord) {
   const u32 type = decodeRegisterType(token);
   const u32 index = decodeRegisterIndex(token);
   switch (type) {
     case kD3DSPR_INPUT:
       if (index < semantics.size() && semantics[index].valid) {
-        return readPixelInputSemanticExpression(semantics[index], pixelInputs, index);
+        return readPixelInputSemanticExpression(semantics[index], pixelInputs, index,
+                                                castStageInTexcoord);
       }
       break;
     case kD3DSPR_ADDR:
-      return texcoordInputExpression(pixelInputs, index);
+      return texcoordInputExpression(pixelInputs, index, castStageInTexcoord);
     case kD3DSPR_RASTOUT:
       if (index == 0) {
         return pixelPositionExpression(pixelInputs);
@@ -1341,17 +1364,21 @@ std::string translateSpirvToMsl(const SpirvModule& module,
     if (::dxmt9::debug::forceFullscreenVertexShader()) {
       out << "  out.position = outPosition;\n";
       if (shaders::vsoutEmitColor(context.vsOutLayout)) {
-        out << "  out.color = outColor;\n";
+        out << "  out.color = " << vsoutFloat4Write(context, "outColor") << ";\n";
       }
       if (shaders::vsoutEmitSecondaryColor(context.vsOutLayout)) {
-        out << "  out.secondaryColor = outSecondaryColor;\n";
+        out << "  out.secondaryColor = "
+            << vsoutFloat4Write(context, "outSecondaryColor") << ";\n";
       }
       for (size_t i = 0; i < kMaxTextureStages; ++i) {
         if (!shaders::vsoutEmitTexcoord(context.vsOutLayout, i)) continue;
-        out << "  out.texcoord" << i << " = outTexcoord[" << i << "];\n";
+        out << "  out.texcoord" << i << " = "
+            << vsoutFloat4Write(context, "outTexcoord[" + std::to_string(i) + "]")
+            << ";\n";
       }
       if (shaders::vsoutEmitFogFactor(context.vsOutLayout)) {
-        out << "  out.fogFactor = outFogFactor;\n";
+        out << "  out.fogFactor = " << vsoutFloatWrite(context, "outFogFactor")
+            << ";\n";
       }
       if (shaders::vsoutEmitPointSize(context.vsOutLayout)) {
         out << "  out.pointSize = outPointSize;\n";
@@ -2297,19 +2324,23 @@ std::string translateSpirvToMsl(const SpirvModule& module,
       out << "  out.position.y = -out.position.y;\n";
     }
     if (shaders::vsoutEmitColor(context.vsOutLayout)) {
-      out << "  out.color = outColor;\n";
+      out << "  out.color = " << vsoutFloat4Write(context, "outColor") << ";\n";
     }
     if (shaders::vsoutEmitSecondaryColor(context.vsOutLayout)) {
-      out << "  out.secondaryColor = outSecondaryColor;\n";
+      out << "  out.secondaryColor = "
+          << vsoutFloat4Write(context, "outSecondaryColor") << ";\n";
     }
     {
       for (size_t i = 0; i < kMaxTextureStages; ++i) {
         if (!shaders::vsoutEmitTexcoord(context.vsOutLayout, i)) continue;
-        out << "  out.texcoord" << i << " = outTexcoord[" << i << "];\n";
+        out << "  out.texcoord" << i << " = "
+            << vsoutFloat4Write(context, "outTexcoord[" + std::to_string(i) + "]")
+            << ";\n";
       }
     }
     if (shaders::vsoutEmitFogFactor(context.vsOutLayout)) {
-      out << "  out.fogFactor = outFogFactor;\n";
+      out << "  out.fogFactor = " << vsoutFloatWrite(context, "outFogFactor")
+          << ";\n";
     }
     if (shaders::vsoutEmitPointSize(context.vsOutLayout)) {
       out << "  out.pointSize = outPointSize;\n";
@@ -2499,17 +2530,17 @@ std::string translateSpirvToMsl(const SpirvModule& module,
   }
   if (const char* mode = std::getenv("DXMT_DEBUG_FRAGMENT_MODE"); mode && mode[0] != '\0') {
     if (std::strcmp(mode, "uv") == 0) {
-      emitFragmentDebugReturn("float4(fract(in.texcoord0.xy), 0.0f, 1.0f)");
+      emitFragmentDebugReturn("float4(fract(dxmt9_select_texcoord(in, 0u).xy), 0.0f, 1.0f)");
     } else if (std::strcmp(mode, "uv_saturate") == 0) {
-      emitFragmentDebugReturn("float4(saturate(in.texcoord0.xy), 0.0f, 1.0f)");
+      emitFragmentDebugReturn("float4(saturate(dxmt9_select_texcoord(in, 0u).xy), 0.0f, 1.0f)");
     } else if (textured && std::strcmp(mode, "tex0_center") == 0) {
       emitFragmentDebugReturn("tex0.sample(samp0, float2(0.5f, 0.5f))");
     } else if (textured && std::strcmp(mode, "tex0_uv") == 0) {
-      emitFragmentDebugReturn("tex0.sample(samp0, in.texcoord0.xy)");
+      emitFragmentDebugReturn("tex0.sample(samp0, dxmt9_select_texcoord(in, 0u).xy)");
     } else if (textured && std::strcmp(mode, "tex0_uv_clamp") == 0) {
-      emitFragmentDebugReturn("tex0.sample(samp0, clamp(in.texcoord0.xy, float2(0.0f), float2(1.0f)))");
+      emitFragmentDebugReturn("tex0.sample(samp0, clamp(dxmt9_select_texcoord(in, 0u).xy, float2(0.0f), float2(1.0f)))");
     } else if (textured && std::strcmp(mode, "tex0_uv_flip") == 0) {
-      emitFragmentDebugReturn("tex0.sample(samp0, float2(in.texcoord0.x, 1.0f - in.texcoord0.y))");
+      emitFragmentDebugReturn("tex0.sample(samp0, float2(dxmt9_select_texcoord(in, 0u).x, 1.0f - dxmt9_select_texcoord(in, 0u).y))");
     } else {
       emitFragmentDebugReturn("float4(0.0f, 1.0f, 0.0f, 1.0f)");
     }
@@ -2615,7 +2646,8 @@ std::string translateSpirvToMsl(const SpirvModule& module,
       if (module.major == 1u && module.minor < 4u && decodeRegisterType(token) == kD3DSPR_ADDR) {
         expr = "outTexcoord[" + std::to_string(std::min<u32>(decodeRegisterIndex(token), kMaxTextureStages - 1u)) + "]";
       } else if (reg.kind == D3DRegisterKind::Input) {
-        expr = readPixelInputExpression(token, "in", pixelInputSemantics);
+        expr = readPixelInputExpression(token, "in", pixelInputSemantics,
+                                        context.enableHalfVSOut);
       } else {
         expr = readOperandExpression(instruction, reg, "float4(0.0f)", "in", false, false, "outPosition",
                                      "outColor", "outSecondaryColor", "outTexcoord", "outFogFactor",
@@ -2705,8 +2737,8 @@ std::string translateSpirvToMsl(const SpirvModule& module,
       }
       return std::min<u32>(decodeRegisterIndex(instruction.operands[0]), kMaxTextureStages - 1u);
     };
-    auto legacyTexcoordInput = [](u32 stage) {
-      return texcoordInputExpression("in", stage);
+    auto legacyTexcoordInput = [&](u32 stage) {
+      return texcoordInputExpression("in", stage, context.enableHalfVSOut);
     };
     auto legacySample = [&](u32 stage, const std::string& coord) {
       return sampleTexture(stage, coord);
@@ -3082,7 +3114,9 @@ std::string translateSpirvToMsl(const SpirvModule& module,
         }
         std::string value;
         if (reg.kind == D3DRegisterKind::Input) {
-          value = readPixelInputExpression(instruction.operands[0], "in", pixelInputSemantics);
+          value = readPixelInputExpression(instruction.operands[0], "in",
+                                           pixelInputSemantics,
+                                           context.enableHalfVSOut);
         } else {
           value = readOperandExpression(instruction, reg, "float4(0.0f)", "in", false, false, "outPosition",
                                         "outColor", "outSecondaryColor", "outTexcoord", "outFogFactor",
@@ -3543,7 +3577,8 @@ std::string translateSpirvToMsl(const SpirvModule& module,
   }
   if (!context.stripFogForDebug) {
 		  out << "  if (ffpPs.fogMode != 0u) {\n";
-		  out << "    color = dxmt9_apply_fog(color, ffpPs, in.position.z, in.fogFactor);\n";
+		  out << "    color = dxmt9_apply_fog(color, ffpPs, in.position.z, "
+          << stageInFloatRead(context, "in.fogFactor") << ");\n";
 		  out << "  }\n";
   }
 		  out << "  outColor[0] = color;\n";

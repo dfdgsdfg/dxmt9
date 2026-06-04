@@ -2041,6 +2041,49 @@ void testVsOutPointSizeProbeDropsOnlyPointSize() {
   }
 }
 
+void testVsOutHalfProbeNarrowsOnlyUserVaryings() {
+  {
+    const ScopedUnsetEnv noProbe("DXMT9_PROBE_HALF_VSOUT");
+    check(!dxmt9::shaders::vsoutProbeHalfEnabled(),
+          "VSOut half probe is off by default");
+
+    dxmt9::shaders::ShaderPreludeOptions options{};
+    const auto prelude = dxmt9::shaders::makeShaderPrelude(options);
+    checkContains(prelude, "return in.texcoord0;",
+                  "default VSOut helper keeps the existing float texcoord source shape");
+    checkNotContains(prelude, "return float4(in.texcoord0);",
+                     "default VSOut helper does not add half-probe casts");
+  }
+
+  {
+    const ScopedSetEnv probe("DXMT9_PROBE_HALF_VSOUT", "1");
+    check(dxmt9::shaders::vsoutProbeHalfEnabled(),
+          "VSOut half probe reads the opt-in env flag");
+
+    dxmt9::shaders::ShaderPreludeOptions options{};
+    options.halfVSOut = true;
+    const auto prelude = dxmt9::shaders::makeShaderPrelude(options);
+    checkContains(prelude, "float4 position [[position]]",
+                  "VSOut half probe keeps position float4");
+    checkContains(prelude, "half4 color",
+                  "VSOut half probe narrows color");
+    checkContains(prelude, "half4 secondaryColor",
+                  "VSOut half probe narrows secondaryColor");
+    checkContains(prelude, "half4 texcoord0",
+                  "VSOut half probe narrows texcoords");
+    checkContains(prelude, "half fogFactor",
+                  "VSOut half probe narrows fogFactor");
+    checkContains(prelude, "float pointSize [[point_size]]",
+                  "VSOut half probe keeps Metal point_size float");
+    checkContains(prelude, "return float4(in.texcoord0)",
+                  "VSOut half probe casts stage-in texcoords back to float for FS code");
+
+    const auto pixelSource = translatePixel(makePs14TexcrdTexldDepthBytecode());
+    checkContains(pixelSource, "r[0] = float4(in.texcoord0);",
+                  "VSOut half probe casts direct pixel texcoord inputs back to float");
+  }
+}
+
 void testVertexDepthOutThrowsDeterministically() {
   checkThrowsContains([] { translateVertex(makeVs20DepthOutBytecode()); },
                       "vertex depth output register is invalid",
@@ -2890,6 +2933,7 @@ int main() {
     const ScopedUnsetEnv noVertexTempTrim("DXMT9_TRIM_VERTEX_TEMPS");
     const ScopedUnsetEnv noVsOutputScratchTrim("DXMT9_TRIM_VS_OUTPUT_SCRATCH");
     const ScopedUnsetEnv noVsOutPointSizeProbe("DXMT9_PROBE_DROP_VSOUT_POINT_SIZE");
+    const ScopedUnsetEnv noVsOutHalfProbe("DXMT9_PROBE_HALF_VSOUT");
 
     testD3DBCDecodeAndClassificationFixtures();
     testPs30VFaceDecodeAndSourceContract();
@@ -2912,6 +2956,7 @@ int main() {
     testVsTempTrimIsOptInAndUsesObservedTempRange();
     testVsOutputScratchTrimIsOptInAndUsesObservedOutputRange();
     testVsOutPointSizeProbeDropsOnlyPointSize();
+    testVsOutHalfProbeNarrowsOnlyUserVaryings();
     testVertexDepthOutThrowsDeterministically();
     testVs30HighOutputRegisterSemanticMapping();
     testVs30VertexDeclarationTypeLoads();

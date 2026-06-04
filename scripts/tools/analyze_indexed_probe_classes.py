@@ -372,7 +372,10 @@ def write_csv(path: Path, aggregates: list[Aggregate], *, include_xcode_proxy: b
         "unique_shader_pairs",
         "applied_effective_index_sources",
         "semantic_risk",
+        "proof_family",
         "candidate_action",
+        "preflight_gate",
+        "xcode_replay_gate",
     ]
     if include_xcode_proxy:
         fieldnames.extend([
@@ -416,7 +419,10 @@ def write_csv(path: Path, aggregates: list[Aggregate], *, include_xcode_proxy: b
                 "applied_effective_index_sources": format_source_counter(
                     agg.effective_index_sources),
                 "semantic_risk": semantic_risk(agg),
+                "proof_family": proof_family(agg),
                 "candidate_action": candidate_action(agg),
+                "preflight_gate": preflight_gate(agg),
+                "xcode_replay_gate": xcode_replay_gate(agg),
             }
             if include_xcode_proxy:
                 record.update({
@@ -474,6 +480,150 @@ def candidate_action(agg: Aggregate) -> str:
     if risk == "low-no-alpha-blend":
         return "check depth/write state before treating as reorder-safe"
     return "inspect state and add a narrower proof gate"
+
+
+def proof_family(agg: Aggregate) -> str:
+    risk = semantic_risk(agg)
+    if risk == "low-opaque-depth-write":
+        return "production-opaque-reorder"
+    if risk == "screen-blend-tolerance":
+        return "explicit-tolerance-reorder"
+    if risk in ("medium-depth-read-order-sensitive", "medium-depth-read-visibility"):
+        return "semantic-proof-or-non-reorder"
+    if risk == "high-alpha-order-dependent":
+        return "non-reorder-backend-shape-or-semantic-proof"
+    if risk == "low-no-alpha-blend":
+        return "state-audit-before-reorder"
+    return "manual-inspection"
+
+
+def preflight_gate(agg: Aggregate) -> str:
+    risk = semantic_risk(agg)
+    if risk == "low-opaque-depth-write":
+        return (
+            "stable row shape; cached-reordered hits; cache-opt LRU32 decrease; "
+            "no color/blend visibility mutation"
+        )
+    if risk == "screen-blend-tolerance":
+        return (
+            "same-input mini replay; exact pass or explicit lsb1 policy; "
+            "stable row shape; cached-reordered hits"
+        )
+    if risk == "medium-depth-read-order-sensitive":
+        return (
+            "real-depth same-input mini replay exact pass; reject primitive-owner "
+            "color conflicts; otherwise use non-reorder smoke"
+        )
+    if risk == "medium-depth-read-visibility":
+        return (
+            "same-input semantic replay with real depth and textures; stable row "
+            "shape before any Xcode replay"
+        )
+    if risk == "high-alpha-order-dependent":
+        return (
+            "do not reorder by default; require exact/tolerance replay or choose "
+            "primitive-order-preserving backend-shape smoke"
+        )
+    if risk == "low-no-alpha-blend":
+        return (
+            "confirm depth/write/color-write state; stable row shape; image gate "
+            "before treating as reorder-safe"
+        )
+    return "manual state audit and a narrow proof gate"
+
+
+def xcode_replay_gate(agg: Aggregate) -> str:
+    risk = semantic_risk(agg)
+    common = "stable top-row geometry; target VS invocations/write decrease"
+    if risk == "low-opaque-depth-write":
+        return (
+            f"{common}; target reordered-cache hits; no non-target hot-row "
+            "regression"
+        )
+    if risk == "screen-blend-tolerance":
+        return (
+            f"{common}; target cache-opt decrease; semantic image policy recorded "
+            "as explicit proof"
+        )
+    if risk in ("medium-depth-read-order-sensitive", "medium-depth-read-visibility"):
+        return (
+            "spend Xcode only after semantic preflight passes or after a "
+            "primitive-order-preserving smoke shows backend movement; add "
+            f"--require-tvb-mechanism-proof for backend-shape A/B; {common}"
+        )
+    if risk == "high-alpha-order-dependent":
+        return (
+            "spend Xcode only for non-reorder backend-shape A/B or an explicit "
+            "semantic proof artifact; backend-shape runs require "
+            f"--require-tvb-mechanism-proof; {common}"
+        )
+    if risk == "low-no-alpha-blend":
+        return f"{common}; include output/image gate and depth-state proof"
+    return f"{common}; document custom proof gate"
+
+
+def row_key_from_group(group: str) -> str | None:
+    first = group.split("|", 1)[0]
+    if "/" not in first:
+        return None
+    seq, enc = first.split("/", 1)
+    if seq.isdigit() and enc.isdigit():
+        return first
+    return None
+
+
+def is_backend_shape_candidate(agg: Aggregate) -> bool:
+    return proof_family(agg) in (
+        "semantic-proof-or-non-reorder",
+        "non-reorder-backend-shape-or-semantic-proof",
+    )
+
+
+def backend_shape_candidates(aggregates: list[Aggregate], top: int) -> list[Aggregate]:
+    return sorted(
+        [agg for agg in aggregates if is_backend_shape_candidate(agg)],
+        key=lambda item: (
+            item.xcode_proxy_hidden_backend_mib,
+            item.xcode_proxy_vs_write_mib,
+            item.primitives,
+        ),
+        reverse=True,
+    )[:top]
+
+
+def rejected_backend_shape_axes() -> list[tuple[str, str, str]]:
+    return [
+        (
+            "depth-write/depth-func/scissor/cull broad probes",
+            "Prior scoped probes did not materially move Xcode VS write.",
+            "Do not spend another gputrace unless the candidate also changes a new backend/compiler mechanism.",
+        ),
+        (
+            "split-large-indexed-draws",
+            "Draw partitioning changed shape or left VS write unchanged in the relevant hot rows.",
+            "Use only as a diagnostic, not as the next backend-shape proof candidate.",
+        ),
+        (
+            "force-expand indexed",
+            "Flattening destroys indexed reuse and raises VS invocations/backend write.",
+            "Reject as an optimization path; preserve indexed submission.",
+        ),
+        (
+            "texture-white / material-source mutation",
+            "It moves secondary counters but does not reduce target GPU enough.",
+            "Keep as a classifier, not a TVB mechanism proof candidate.",
+        ),
+        (
+            "visible VSOut trimming / position-only / compiler-visible scratch",
+            "Prior Xcode and mini-replay A/B left hidden VS write mostly unchanged.",
+            "Do not rerun without a new backend payload or invocation-count hypothesis.",
+        ),
+        (
+            "X8/RT PixelFormatView suppression",
+            "Attachment/view probes did not affect the dominant hot encoder VS write.",
+            "Reject as the primary GT1 bottleneck fix.",
+        ),
+    ]
 
 
 def markdown_report(input_path: Path,
@@ -577,6 +727,99 @@ def markdown_report(input_path: Path,
                 f"`{agg.xcode_proxy_hidden_backend_mib:.3f}` | "
                 f"{candidate_action(agg)} |"
             )
+        lines.extend([
+            "",
+            "## Next Experiment Queue",
+            "",
+            "Rows are sorted by proxy hidden-backend size. `Proof family` decides "
+            "whether this is a production-shaped reorder, an explicit tolerance "
+            "artifact, or a non-reorder backend-shape candidate before spending "
+            "Xcode capture/export time.",
+            "",
+            "| Group | Proof family | Preflight gate | Xcode replay gate |",
+            "|---|---|---|---|",
+        ])
+        for agg in sorted(
+            aggregates,
+            key=lambda item: (
+                item.xcode_proxy_hidden_backend_mib,
+                abs(item.miss32_delta),
+                item.primitives,
+            ),
+            reverse=True,
+        )[:top]:
+            lines.append(
+                "| "
+                f"`{agg.key}` | "
+                f"`{proof_family(agg)}` | "
+                f"{preflight_gate(agg)} | "
+                f"{xcode_replay_gate(agg)} |"
+            )
+        backend_candidates = backend_shape_candidates(aggregates, min(top, 5))
+        if backend_candidates:
+            first_candidate = backend_candidates[0]
+            target_row = row_key_from_group(first_candidate.key) or "<seq/enc>"
+            frame = target_row.split("/", 1)[0] if "/" in target_row else "<frame>"
+            lines.extend([
+                "",
+                "## Backend-Shape A/B Command Template",
+                "",
+                "Use this only for primitive-order-preserving candidates. The smoke "
+                "run should keep row/draw/vertex/triangle shape stable before a "
+                "`.gputrace` replay is worth Xcode export time.",
+                "",
+                "Top backend-shape candidates by proxy hidden-backend size:",
+                "",
+                "| Group | Row | Proxy hidden backend MiB | Proof family |",
+                "|---|---|---:|---|",
+            ])
+            for agg in backend_candidates:
+                lines.append(
+                    "| "
+                    f"`{agg.key}` | "
+                    f"`{row_key_from_group(agg.key) or 'n/a'}` | "
+                    f"`{agg.xcode_proxy_hidden_backend_mib:.3f}` | "
+                    f"`{proof_family(agg)}` |"
+                )
+            lines.extend([
+                "",
+                "No-gputrace shape smoke:",
+                "",
+                "```bash",
+                "scripts/tools/run_3dmark05_perf_probe.sh \\",
+                "  --suffix <backend-shape-smoke> \\",
+                f"  --frame {frame} \\",
+                f"  --encoder-breakdown-seq {frame} \\",
+                "  --no-gputrace \\",
+                "  --timeout 240 \\",
+                "  <primitive-order-preserving-backend-shape-option>",
+                "```",
+                "",
+                "Gputrace/Xcode proof candidate:",
+                "",
+                "```bash",
+                "scripts/tools/run_3dmark05_perf_probe.sh \\",
+                "  --suffix <backend-shape-gputrace> \\",
+                f"  --frame {frame} \\",
+                f"  --encoder-breakdown-seq {frame} \\",
+                f"  --baseline-joined {joined_summary} \\",
+                f"  --target-row-key {target_row} \\",
+                "  --require-tvb-mechanism-proof \\",
+                "  --require-top-row-key-match \\",
+                "  --max-top-draw-call-delta-ratio 0.05 \\",
+                "  --max-top-vertex-count-delta-ratio 0.05 \\",
+                "  --max-top-triangle-delta-ratio 0.05 \\",
+                "  --timeout 420 \\",
+                "  <primitive-order-preserving-backend-shape-option>",
+                "```",
+                "",
+                "Known rejected backend-shape axes:",
+                "",
+                "| Axis | Evidence | Decision |",
+                "|---|---|---|",
+            ])
+            for axis, evidence, decision in rejected_backend_shape_axes():
+                lines.append(f"| `{axis}` | {evidence} | {decision} |")
     lines.append("")
     return "\n".join(lines)
 

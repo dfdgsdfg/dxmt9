@@ -420,6 +420,301 @@ flowchart TD
   class Row2,Boundary,XcodeNext,NonOpaqueNext warn
 ```
 
+#### Layout-Stride Opaque Opt-In Xcode Replay
+
+The current-layout production opt-in was captured and replayed in Xcode after
+the no-gputrace preflight:
+
+```bash
+scripts/tools/run_3dmark05_perf_probe.sh \
+  --suffix layoutstride-opaque-index-cache-gputrace-r1 \
+  --frame 50 \
+  --encoder-breakdown-seq 50 \
+  --optimize-opaque-depth-index-cache \
+  --optimize-opaque-depth-index-cache-min-gain-pct 10 \
+  --baseline-joined traces/app-d3d9-3dmark05-layoutstride-frame50-gputrace-r1/analysis/frame50-xcode-dxmt-joined-summary.csv \
+  --target-row-key 50/0 \
+  --target-row-key 50/1 \
+  --require-stable-frame-proof \
+  --require-target-index-cache-opt-miss32-decrease \
+  --require-target-reordered-index-cache-hits \
+  --require-target-vs-buffer-write-decrease \
+  --require-target-vs-invocations-decrease \
+  --timeout 420 \
+  --top 5 \
+  --hot-gpu-share 95 \
+  --min-free-mb 2048
+```
+
+Xcode replay/export artifacts:
+
+```text
+traces/app-d3d9-3dmark05-layoutstride-opaque-index-cache-gputrace-r1/frame50.gputrace
+traces/app-d3d9-3dmark05-layoutstride-opaque-index-cache-gputrace-r1/analysis/frame50-performance.gputrace
+traces/app-d3d9-3dmark05-layoutstride-opaque-index-cache-gputrace-r1/analysis/frame50-counters-xcode.csv
+traces/app-d3d9-3dmark05-layoutstride-opaque-index-cache-gputrace-r1/analysis/frame50-counters-summary.csv
+traces/app-d3d9-3dmark05-layoutstride-opaque-index-cache-gputrace-r1/analysis/frame50-xcode-dxmt-joined-summary.csv
+traces/app-d3d9-3dmark05-layoutstride-opaque-index-cache-gputrace-r1/analysis/frame50-xcode-dxmt-bottleneck-report.md
+traces/app-d3d9-3dmark05-layoutstride-opaque-index-cache-gputrace-r1/analysis/frame50-xcode-dxmt-comparison.md
+```
+
+The strict finalizer intentionally failed the global top-GPU gate:
+
+```text
+requirement failed: top_gpu_ms did not decrease (34.018 -> 34.304)
+```
+
+This is a useful negative result, not a failed target-row proof. The top-row
+comparison shows that the accepted opaque opt-in does reduce the target rows,
+but it does not yet move the whole frame because `50/2` remains the largest
+depth-read/blended hot row:
+
+| Row | GPU ms | VS write MiB | VS invocations | Reordered cache hits | Effective LRU32 |
+|---|---:|---:|---:|---:|---:|
+| `50/0` | `5.700 -> 4.813` (`-15.56%`) | `224.998 -> 184.190` (`-18.14%`) | `152,895 -> 125,808` (`-17.72%`) | `0 -> 33` | `164,428 -> 120,890` |
+| `50/1` | `8.381 -> 8.095` (`-3.41%`) | `421.112 -> 353.589` (`-16.03%`) | `383,688 -> 335,031` (`-12.68%`) | `0 -> 69` | `295,591 -> 213,046` |
+| `50/2` | `19.669 -> 21.111` (`+7.33%`) | `981.177 -> 981.178` (`+0.00%`) | `642,001 -> 642,001` (`+0.00%`) | `0 -> 0` | unchanged |
+
+Aggregate target-row proof:
+
+- `50/0 + 50/1` GPU time: `14.081 -> 12.908ms` (`-8.33%`).
+- `50/0 + 50/1` VS buffer write: `646.110 -> 537.779MiB`
+  (`-16.77%`).
+- `50/0 + 50/1` VS invocations: `536,583 -> 460,839`
+  (`-14.12%`).
+- Top write traffic still improves: top VS buffer write
+  `1,627.287 -> 1,518.957MiB` (`-6.66%`), and top unexplained
+  backend write improves by the same amount.
+- Whole-frame/top GPU time does not improve in this replay:
+  total GPU `34.379 -> 34.662ms` (`+0.82%`), top GPU
+  `34.018 -> 34.304ms` (`+0.84%`).
+
+Current interpretation:
+
+- The production opaque-depth indexed-cache path is validated as a real
+  hardware-visible reduction for its intended rows: lower post-transform
+  misses reduce Xcode `VS Invocations`, `VS Buffer Device Memory Bytes
+  Written`, and per-row GPU time.
+- It is not a frame-level fix. The untouched `50/2` row now dominates the
+  frame at `21.111ms` / `60.90%` and still writes `981.178MiB` of VS buffer
+  traffic with `956.701MiB` classified as hidden backend storage.
+- Because `50/2` has unchanged draw count, vertex count, VS invocations, and
+  VS write bytes, its `+1.441ms` replay delta should be treated as replay
+  variance or backend-state sensitivity until reproduced. It should not be
+  blamed on the opaque opt-in path without a repeated A/B capture.
+- The next performance owner is still hidden vertex/tiler/parameter storage,
+  but the remaining actionable row is `50/2`: depth-read, alpha-blended,
+  scissored/textured, large indexed geometry. That row cannot use the current
+  opaque-depth reorder policy without a stronger semantic proof.
+
+```mermaid
+flowchart TD
+  Capture["Xcode replay\nlayoutstride opaque opt-in"] --> StrictGate{"top GPU decrease?"}
+  StrictGate -- "No\n34.018 -> 34.304ms" --> GlobalFail["global proof not accepted"]
+  Capture --> TargetGate{"target rows 50/0,50/1?"}
+  TargetGate -- "Yes" --> TargetWin["GPU -8.33%\nVS write -16.77%\nVS invocations -14.12%"]
+  TargetWin --> Proven["opaque depth reorder is hardware-visible"]
+  GlobalFail --> Row2["50/2 untouched\n21.111ms, 981MiB VS write"]
+  Row2 --> Next["next probe: depth-read/blend row2\nsemantic proof or non-reorder backend-shape"]
+  Proven --> Next
+
+  classDef good fill:#e8f5e8,stroke:#4d8b4d,color:#102a10
+  classDef warn fill:#fff3d6,stroke:#b98222,color:#2a1b00
+  classDef bad fill:#ffe8e8,stroke:#b64242,color:#2b0d0d
+  class Capture,TargetGate,TargetWin,Proven good
+  class StrictGate,Row2,Next warn
+  class GlobalFail bad
+```
+
+#### Layout-Stride Screen-Blend Cache No-Gputrace Scout
+
+The remaining hot row is `50/2`, which is entirely depth-read and contains the
+screen-blend/scissor/textured subset. A profiling-only screen-blend
+index-cache scout was run without `.gputrace` to check whether the current
+strict screen-blend predicate can move the row before spending more Xcode time:
+
+```bash
+scripts/tools/run_3dmark05_perf_probe.sh \
+  --suffix layoutstride-screenblend-index-cache-frame50-nogputrace-r1 \
+  --frame 50 \
+  --encoder-breakdown-seq 50 \
+  --no-gputrace \
+  --optimize-screen-blend-index-cache \
+  --optimize-screen-blend-index-cache-min-gain-pct 10 \
+  --measure-index-cache-opt-candidate \
+  --timeout 240 \
+  --top 5 \
+  --hot-gpu-share 95 \
+  --min-free-mb 256
+```
+
+Artifacts:
+
+```text
+experiments/output/app-d3d9-3dmark05-layoutstride-screenblend-index-cache-frame50-nogputrace-r1/3dmark05-perf-summary.md
+experiments/output/app-d3d9-3dmark05-layoutstride-screenblend-index-cache-frame50-nogputrace-r1/3dmark05-perf-encoders.csv
+experiments/output/app-d3d9-3dmark05-layoutstride-screenblend-index-cache-frame50-nogputrace-r1/3dmark05-perf-indexed-probe-draws.csv
+experiments/output/app-d3d9-3dmark05-layoutstride-screenblend-index-cache-frame50-nogputrace-r1/result.json
+```
+
+The run completed as a timeout-finalized pass with `present_encoded=1440`.
+The important result is that actual reordered-cache hits are now isolated to
+row `50/2`; `50/0` and `50/1` still only show candidate telemetry because the
+screen-blend cache path does not target opaque rows.
+
+| Row | Draws | Candidate draws | Candidate LRU32 | Reordered lookups | Hits | Rejected | Actual hit LRU32 |
+|---|---:|---:|---:|---:|---:|---:|---:|
+| `50/0` | `42` | `38` | `168,951 -> 125,159` (`-43,792`) | `0` | `0` | `0` | unchanged |
+| `50/1` | `156` | `137` | `413,707 -> 325,648` (`-88,059`) | `0` | `0` | `0` | unchanged |
+| `50/2` | `187` | `162` | `675,973 -> 500,805` (`-175,168`) | `103` | `66` | `37` | `328,856 -> 241,780` (`-87,076`) |
+
+The `50/2` hits are all alpha-blended `InvDestColor + One + Add` draws with
+depth test on, depth write off, and no alpha-test/clip-plane/stencil. They
+cover both scissored and non-scissored screen-blend material pairs. The largest
+hit groups are:
+
+| VS/PS pair | Draws | Hits | Primitives | LRU32 delta |
+|---|---:|---:|---:|---:|
+| `0xc1ac287f73199f65 / 0xe2e1407f3be7deb` | `33` | `25` | `55,509` | `-25,041` |
+| `0x4ff3f874932c63dd / 0x503d342c94267c4e` | `33` | `25` | `55,509` | `-25,041` |
+| `0xdee2a2c1e0557a9a / 0x2f2090e9c1402459` | `2` | `2` | `30,808` | `-14,597` |
+| `0xeeda5eb21a3557fe / 0x58217dfc4408d6ac` | `2` | `2` | `30,808` | `-14,597` |
+
+Interpretation:
+
+- This is a promising Xcode diagnostic candidate because the accepted
+  screen-blend subset can reduce effective LRU32 misses inside the currently
+  dominant `50/2` row.
+- It is not production proof. The path is explicitly profiling-only because
+  screen-blend output is destination-dependent and prior same-input translated
+  FS probes showed small image differences.
+- If captured in Xcode, the result must be interpreted as a row-`50/2`
+  performance diagnostic unless paired with a semantic image proof. Useful
+  gates are `50/2` reordered-cache hits, target VS invocation/write decrease,
+  stable frame shape, and unchanged non-target rows.
+
+```mermaid
+flowchart TD
+  Row2["50/2 depth-read blended hot row"] --> Screen["strict screen-blend predicate"]
+  Screen --> Hits["66 reordered-cache hits\nLRU32 328856 -> 241780"]
+  Row2 --> FullCandidate["full row candidate ceiling\n162 draws\nLRU32 -175168"]
+  Hits --> XcodeDiag["next diagnostic gputrace\ncheck VS inv/write and row GPU"]
+  FullCandidate --> Boundary["remaining 37 rejected + non-screen rows\nneed semantic proof or different backend-shape"]
+  XcodeDiag --> Warn["profiling-only\nnot production-safe without image proof"]
+
+  classDef good fill:#e8f5e8,stroke:#4d8b4d,color:#102a10
+  classDef warn fill:#fff3d6,stroke:#b98222,color:#2a1b00
+  classDef bad fill:#ffe8e8,stroke:#b64242,color:#2b0d0d
+  class Row2,Screen,Hits,XcodeDiag good
+  class FullCandidate,Boundary warn
+  class Warn bad
+```
+
+#### Layout-Stride Screen-Blend Cache Xcode Replay
+
+The screen-blend cache scout was then captured and replayed in Xcode with the
+same frame50 baseline comparison gates:
+
+```bash
+scripts/tools/run_3dmark05_perf_probe.sh \
+  --suffix layoutstride-screenblend-index-cache-frame50-gputrace-r1 \
+  --frame 50 \
+  --encoder-breakdown-seq 50 \
+  --optimize-screen-blend-index-cache \
+  --optimize-screen-blend-index-cache-min-gain-pct 10 \
+  --measure-index-cache-opt-candidate \
+  --baseline-joined traces/app-d3d9-3dmark05-layoutstride-frame50-gputrace-r1/analysis/frame50-xcode-dxmt-joined-summary.csv \
+  --target-row-key 50/2 \
+  --require-stable-frame-proof \
+  --require-target-index-cache-opt-miss32-decrease \
+  --require-target-reordered-index-cache-hits \
+  --require-target-vs-buffer-write-decrease \
+  --require-target-vs-invocations-decrease \
+  --timeout 420 \
+  --top 5 \
+  --hot-gpu-share 95 \
+  --min-free-mb 2048
+```
+
+Xcode replay/export artifacts:
+
+```text
+traces/app-d3d9-3dmark05-layoutstride-screenblend-index-cache-frame50-gputrace-r1/frame50.gputrace
+traces/app-d3d9-3dmark05-layoutstride-screenblend-index-cache-frame50-gputrace-r1/analysis/frame50-performance.gputrace
+traces/app-d3d9-3dmark05-layoutstride-screenblend-index-cache-frame50-gputrace-r1/analysis/frame50-counters-xcode.csv
+traces/app-d3d9-3dmark05-layoutstride-screenblend-index-cache-frame50-gputrace-r1/analysis/frame50-counters-summary.csv
+traces/app-d3d9-3dmark05-layoutstride-screenblend-index-cache-frame50-gputrace-r1/analysis/frame50-xcode-dxmt-joined-summary.csv
+traces/app-d3d9-3dmark05-layoutstride-screenblend-index-cache-frame50-gputrace-r1/analysis/frame50-xcode-dxmt-bottleneck-report.md
+traces/app-d3d9-3dmark05-layoutstride-screenblend-index-cache-frame50-gputrace-r1/analysis/frame50-xcode-dxmt-comparison.md
+```
+
+The strict finalizer passed all requested gates. The result is a strong
+mechanism proof for row `50/2`: reordered index-cache hits reduce Xcode
+`VS Invocations`, and the VS-buffer-write reduction is almost entirely
+explained by lower invocation count, not by a smaller VSOut layout.
+
+| Metric | Baseline | Screen-blend cache | Delta |
+|---|---:|---:|---:|
+| Total GPU | `34.379ms` | `34.118ms` | `-0.76%` |
+| Top GPU | `34.018ms` | `33.767ms` | `-0.74%` |
+| Top VS buffer write | `1,627.287MiB` | `1,520.885MiB` | `-6.54%` |
+| Top unexplained buffer write | `1,627.612MiB` | `1,521.172MiB` | `-6.54%` |
+| Target `50/2` GPU | `19.669ms` | `18.757ms` | `-4.64%` |
+| Target `50/2` VS write | `981.177MiB` | `874.782MiB` | `-10.84%` |
+| Target `50/2` VS invocations | `642,001` | `572,933` | `-10.76%` |
+| Target `50/2` draw/vertex/triangle shape | `187 / 1,168,128 / 389,376` | same | stable |
+| Reordered cache lookups / hits / rejected | `0 / 0 / 0` | `103 / 66 / 37` | applied |
+| Candidate LRU32 miss estimate | `n/a` | `675,973 -> 500,805` | `-175,168` |
+| Non-target GPU | `14.349ms` | `15.010ms` | `+4.61%` |
+| Non-target VS invocations | `536,639` | `536,639` | unchanged |
+| Non-target VS write | `646.110MiB` | `646.103MiB` | unchanged |
+
+The VS-write attribution is the most important part of the proof:
+
+| Row | Total VS-write delta | Invocation-count effect | Bytes/inv effect | Primary mover |
+|---|---:|---:|---:|---|
+| `50/2` | `-106.395MiB` | `-105.507MiB` | `-0.888MiB` | `invocations` |
+| matched rows total | `-106.402MiB` | `-105.507MiB` | `-0.895MiB` | `invocations` |
+
+Current interpretation:
+
+- The hidden vertex/tiler/parameter-storage bucket is sensitive to
+  post-transform cache locality. The cache-aware order reduces Xcode VS
+  invocations, which directly reduces hidden VS-buffer-write traffic.
+- The large VS write bucket is still hidden backend traffic: after the replay,
+  the hot top3 still writes `1,520.885MiB` of VS buffer traffic, with
+  `1,493.878MiB` estimated as hidden backend storage and only about
+  `26.562MiB` in named tiled vertex/primitive-block counters.
+- This is not production proof by itself. It is a performance mechanism proof
+  for a destination-dependent screen-blend subset. Promotion requires an
+  explicit semantic image proof or an accepted tolerance policy for the exact
+  affected screen-blend rows.
+- Non-target GPU time moved upward (`+0.661ms`) while non-target VS work stayed
+  unchanged. Treat that as replay/backend variance or pass-shape sensitivity
+  until repeated; do not hide it behind the target-row win.
+
+```mermaid
+flowchart TD
+  Baseline["layoutstride frame50 baseline\nrow 50/2: 642001 VS inv\n981MiB VS write"] --> Probe["screen-blend index-cache probe\n103 lookups, 66 hits"]
+  Probe --> Cache["effective LRU32 locality improves\n675973 -> 500805 candidate"]
+  Cache --> Inv["Xcode VS invocations drop\n642001 -> 572933"]
+  Inv --> Hidden["hidden VS/backend write drops\n981MiB -> 875MiB"]
+  Hidden --> GPU["row 50/2 GPU drops\n19.669ms -> 18.757ms"]
+  GPU --> Frame["top frame write drops 6.5%\ntop GPU only -0.74%"]
+  Probe --> Semantics{"screen-blend semantic proof?"}
+  Semantics -- "not yet" --> Diagnostic["keep as profiling/mechanism proof"]
+  Semantics -- "exact or accepted tolerance" --> Candidate["can become production candidate"]
+  Frame --> Residual["residual top3 hidden backend\n~1.49GiB still unexplained"]
+  Residual --> Next["next: residual row/class audit\nor semantic-proofed cache policy"]
+
+  classDef good fill:#e8f5e8,stroke:#4d8b4d,color:#102a10
+  classDef warn fill:#fff3d6,stroke:#b98222,color:#2a1b00
+  classDef bad fill:#ffe8e8,stroke:#b64242,color:#2b0d0d
+  class Probe,Cache,Inv,Hidden,GPU good
+  class Baseline,Frame,Semantics,Residual,Next warn
+  class Diagnostic bad
+```
+
 ### 2026-06-04 Frame50 No-Gputrace Sanity
 
 After unlocking the desktop, a low-cost perf-profile sanity run was executed
@@ -17823,9 +18118,10 @@ change between variants (`0xfff`, 184 B per vertex), so the named tiled
 counter movement is fully attributed to VS invocation reduction, which is
 the post-transform vertex cache mechanism the LRU32 reorder targets.
 
-The new `--require-tvb-mechanism-proof` gate
-(in `scripts/tools/compare_xcode_dxmt_bottlenecks.py`) verifies the three
-predicates on the joined summary CSVs and emits the proof Markdown at:
+The first version of the `--require-tvb-mechanism-proof` gate
+(in `scripts/tools/compare_xcode_dxmt_bottlenecks.py`) verified those
+mini-replay predicates on the joined summary CSVs and emitted the proof
+Markdown at:
 
 - `traces/app-d3d9-3dmark05-cache-opt-row50-1-full-payload-r1/analysis/frame50-tvb-mechanism-proof.md`
 - `traces/app-d3d9-3dmark05-cache-opt-row50-3-full-payload-r1/analysis/frame50-tvb-mechanism-proof.md`
@@ -17836,9 +18132,14 @@ the new `dxmt_tvb_pressure_proxy_mib`, `dxmt_tvb_named_to_proxy_ratio`,
 and `dxmt_vs_buffer_write_to_tvb_proxy_ratio` derived fields. Mini-replay
 artifacts leave those derived fields blank because the encoder labels
 emitted by the standalone replay binary do not carry the `seq=,enc=` keys
-the dxmt log uses; this does not affect the gate, which reads
-`tiled_vertex_buffer_mib`, `tiled_primitive_block_mib`, `vs_invocations`,
-and `gpu_ms` directly from the Xcode CSV.
+the dxmt log uses.
+
+Full-frame attribution later showed that named tiled counters account for only
+about `15%` of the expected TVB proxy while Xcode VS buffer write remains
+`6-9x` larger than that proxy. The production gate therefore now treats named
+tiled bytes as subtype evidence and requires the larger hidden estimate to
+move: top hidden backend write, top Xcode VS buffer write, top VS invocations,
+and top GPU time must all strictly decrease under row-key and geometry gates.
 
 ### What this closes and what remains open
 
@@ -19910,11 +20211,146 @@ Post-audit candidate ranking:
 | `50/2 standard-alpha` cache-aware order | Residual proxy is as large as blend-off after screen-blend is reduced | Alpha blending is directly order-dependent | Only a same-input exact/tolerance proof can promote it; default path should reject. |
 | `50/2 screen-blend` cache-aware order | Best observed `50/2` locality ceiling and bounded `lsb1` image delta | Exact image gate fails; tolerance must be an explicit policy | Keep as profiling ceiling or explicit `lsb1` proof artifact. |
 | `50/1 opaque front-cull` cache-aware order | Only large remaining production-shaped reorder class | Already covered by opaque-depth cache opt; min0 adds little hidden-write movement | Look for non-reorder backend/compiler shape, not lower threshold. |
-| Non-reorder backend-shape variant | Avoids primitive-order correctness risk | No concrete state/compiler transform has moved Xcode VS write yet | Start with no-gputrace shape-stable smoke; launch Xcode only after backend-relevant movement. |
+| Non-reorder backend-shape variant | Avoids primitive-order correctness risk | No concrete state/compiler transform has moved Xcode VS write yet | Start with no-gputrace shape-stable smoke; launch Xcode only after backend-relevant movement, then require `--require-tvb-mechanism-proof`. |
 
 Tooling update: `scripts/tools/analyze_indexed_probe_classes.py` now emits
-`semantic_risk` and `candidate_action` fields in its CSV, and a `Candidate
-Advice` section when an Xcode joined summary is supplied. Regenerated reports:
+`semantic_risk`, `proof_family`, `candidate_action`, `preflight_gate`, and
+`xcode_replay_gate` fields in its CSV. When an Xcode joined summary is
+supplied, the markdown includes both `Candidate Advice` and `Next Experiment
+Queue` sections. This turns the class proxy report into an Xcode-spending
+gate: high hidden-backend proxy alone is not enough; primitive-order candidates
+must first pass their semantic/shape preflight, and alpha/depth-read residuals
+default to semantic proof or non-reorder backend-shape A/B. The standard
+3DMark05 wrapper now also exposes `--require-tvb-mechanism-proof`, forwarding
+the existing finalizer/compare gate so backend-shape candidates can be launched
+and finalized through the same wrapper path as cache-locality proofs. In the
+current full-frame form this gate requires top hidden backend write, Xcode VS
+buffer write, VS invocations, and GPU time to decrease. Named tiled bytes remain
+diagnostic subtype counters, not the primary pass/fail signal for
+hidden-expanded TVB/parameter storage. The markdown report also emits a
+`Backend-Shape A/B Command Template` section for
+primitive-order-preserving candidates: first a no-gputrace shape smoke, then a
+gputrace/Xcode command with `--require-tvb-mechanism-proof`, row-key match, and
+top geometry drift gates.
+
+Refresh note: the latest `analyze_indexed_probe_classes.py` reports now also
+emit a `Known rejected backend-shape axes` table whenever a non-reorder
+backend-shape template is present. This is a trace-budget guard, not a new
+performance claim. The current rejected list is:
+
+| Axis | Reason not to spend another broad Xcode replay |
+|---|---|
+| depth-write/depth-func/scissor/cull broad probes | Prior scoped probes did not materially move Xcode VS write. |
+| split-large-indexed-draws | Draw partitioning changed row shape or left VS write unchanged in the hot rows. |
+| force-expand indexed | Flattening destroys indexed reuse and raises VS invocations/backend write. |
+| texture-white/material-source mutation | Useful as a classifier, but did not move the target GPU bottleneck enough. |
+| visible VSOut trimming/position-only/compiler-visible scratch | Prior Xcode and mini-replay A/B left hidden VS write mostly unchanged. |
+| X8/RT PixelFormatView suppression | Attachment/view probes did not affect the dominant hot encoder VS write. |
+
+The regenerated baseline-r4 and screenblend-r2 proxy reports therefore expose
+backend-shape command templates only as placeholders for a new
+primitive-order-preserving mechanism. The combined-min10 refresh does not
+create a useful new backend-shape candidate; its queue is dominated by already
+covered opaque reorder rows and explicit-tolerance screen-blend rows. Do not
+open Xcode for another broad replay on the rejected axes unless the candidate
+also changes a new backend/compiler mechanism or a no-gputrace smoke proves
+backend-relevant movement with stable row geometry.
+
+Single-capture attribution tooling: `analyze_xcode_dxmt_encoder_attribution.py`
+now consumes a `frame<N>-xcode-dxmt-joined-summary.csv` and emits a hot-encoder
+view that puts Xcode buffer/VS writes, dxmt explicit writer bytes, stream/IB
+state churn, unique stream/IB bytes, TVB/tiler proxy fields, backend class, and
+the recommended next track on one row. This is the single-run counterpart to
+`compare_xcode_dxmt_bottlenecks.py`; use it after Xcode counter export to
+confirm whether a capture is GPU backend dominated, dxmt writer dominated, or a
+CPU state-churn cleanup target. The refreshed report also classifies the
+backend subtype as `hidden-expanded-tvb-parameter-storage` when named tiled
+bytes are small versus the expected VSOut proxy but Xcode VS write is many
+times larger than that proxy.
+
+Artifacts:
+
+```text
+traces/app-d3d9-3dmark05-post-r2-bottleneck-audit/analysis/frame50-baseline-r4-xcode-dxmt-attribution.md
+traces/app-d3d9-3dmark05-post-r2-bottleneck-audit/analysis/frame50-baseline-r4-xcode-dxmt-attribution.csv
+traces/app-d3d9-3dmark05-post-r2-bottleneck-audit/analysis/frame50-combined-min10-xcode-dxmt-attribution.md
+traces/app-d3d9-3dmark05-post-r2-bottleneck-audit/analysis/frame50-combined-min10-xcode-dxmt-attribution.csv
+traces/app-d3d9-3dmark05-post-r2-bottleneck-audit/analysis/frame50-baseline-r4-vs-combined-min10-hidden-tvb-gate.md
+```
+
+Attribution result:
+
+| Run | Top buffer write | Hidden backend write | Hidden ratio | dxmt CPU writer | Writer ratio | State churn/draw | Classification |
+|---|---:|---:|---:|---:|---:|---:|---|
+| baseline r4 frame50 | `1628.050MiB` | `1597.456MiB` | `0.981` | `0.486MiB` | `0.000298` | `2.003` | hidden backend primary, state churn secondary |
+| combined min10 frame50 | `1413.328MiB` | `1386.261MiB` | `0.981` | `0.486MiB` | `0.000344` | `2.003` | hidden backend primary, state churn secondary |
+
+The hidden-TVB mechanism gate passes for baseline r4 vs combined min10:
+top GPU time decreases `35.277 -> 30.302ms` (`-14.10%`), top VS buffer write
+decreases `1627.338 -> 1412.612MiB` (`-13.19%`), top hidden backend write
+decreases `1597.456 -> 1386.261MiB` (`-13.22%`), top VS invocations decrease,
+and the shared top rows remain `50/0,50/1,50/2` with `0%` draw/vertex/triangle
+shape drift. This proves the accepted reorder path moves the hidden backend
+bucket through invocation reduction; it does not prove that the residual
+`~1.386GiB` hidden bucket has been structurally eliminated.
+
+TVB/tiler subtype result:
+
+| Run | Named tiled buffer | TVB proxy | Named/proxy | Mechanism subtype |
+|---|---:|---:|---:|---|
+| baseline r4 frame50 | `30.938MiB` | `206.826MiB` | `0.150` | hidden-expanded TVB/parameter storage |
+| combined min10 frame50 | `27.406MiB` | `181.415MiB` | `0.151` | hidden-expanded TVB/parameter storage |
+
+The top rows are stable across both captures:
+
+| Row | Combined min10 GPU | Buffer write | Hidden backend | CPU writer | Writer ratio | State churn/draw |
+|---|---:|---:|---:|---:|---:|---:|
+| `50/2` | `18.175ms` | `874.841MiB` | `852.970MiB` | `0.164MiB` | `0.000188` | `2.358` |
+| `50/1` | `7.446ms` | `353.884MiB` | `350.478MiB` | `0.112MiB` | `0.000315` | `1.744` |
+| `50/0` | `4.681ms` | `184.603MiB` | `182.813MiB` | `0.169MiB` | `0.000914` | `1.714` |
+
+The top-row mechanism signals are also stable across captures:
+
+| Row | Combined named/proxy | Combined VS write/proxy | Primitive tile intersections | Mechanism hint |
+|---|---:|---:|---:|---|
+| `50/2` | `0.215` | `8.701` | `0.320%` | `hidden-expanded-tvb-parameter-storage` |
+| `50/1` | `0.051` | `6.014` | `0.210%` | `hidden-expanded-tvb-parameter-storage` |
+| `50/0` | `0.057` | `8.345` | `0.290%` | `hidden-expanded-tvb-parameter-storage` |
+
+This keeps the root-cause split clean: `stream_handle/offset/stride` and
+`ib_handle` churn are real CPU encode/batching cleanup signals, but they do
+not explain the Xcode VS/buffer write bucket. The GPU-side work should stay on
+TVB/tiler/backend mechanism probes; stream/IB coalescing should be evaluated by
+CPU encode and draw-run counters, not by expecting the hidden write bucket to
+disappear.
+
+```mermaid
+flowchart TD
+  Joined["Xcode + dxmt joined summary"] --> Attr["encoder attribution report"]
+  Attr --> XcodeWrite["Xcode buffer/VS write\n50/2,50/1,50/0 dominate"]
+  Attr --> DxmtWriters["dxmt explicit writers\nargbuf/cbuf/setVertexBytes/transient"]
+  Attr --> StateChurn["stream/IB state churn\nhandle/offset/stride changes"]
+  Attr --> TVB["TVB proxy + named tiled bytes"]
+
+  XcodeWrite --> Hidden["hidden backend write ratio ~0.981"]
+  DxmtWriters --> Tiny["writer ratio <0.001"]
+  StateChurn --> Secondary["~2 churn events/draw\nCPU batching target"]
+  TVB --> Expanded["named/proxy ~0.15\nVS write/proxy 6-9x"]
+
+  Hidden --> GpuTrack["next GPU track\nTVB/tiler/backend mechanism"]
+  Expanded --> GpuTrack
+  Tiny --> RejectWriter["reject explicit writer owner"]
+  Secondary --> CpuTrack["separate CPU track\nstream/IB coalescing"]
+
+  classDef gpu fill:#e8f0ff,stroke:#4972b8,color:#0b1d3a
+  classDef cpu fill:#fff3d6,stroke:#b98222,color:#2a1b00
+  classDef reject fill:#ffe8e8,stroke:#b64242,color:#2b0d0d
+  class XcodeWrite,Hidden,TVB,Expanded,GpuTrack gpu
+  class StateChurn,Secondary,CpuTrack cpu
+  class DxmtWriters,Tiny,RejectWriter reject
+```
+Regenerated
+reports:
 
 ```text
 traces/app-d3d9-3dmark05-post-r2-bottleneck-audit/analysis/frame50-screenblend-r2-indexed-state-class-xcode-proxy.md
@@ -19923,15 +20359,16 @@ traces/app-d3d9-3dmark05-post-r2-bottleneck-audit/analysis/frame50-combined-min1
 traces/app-d3d9-3dmark05-post-r2-bottleneck-audit/analysis/frame50-combined-min10-row-state-class-refresh.csv
 ```
 
-The regenerated `screenblend-r2` advice ranks the largest post-screen residual
-classes as `medium-depth-read-order-sensitive` (`blend=off`, `131.142MiB` and
-`113.117MiB` hidden-backend proxy) and `high-alpha-order-dependent`
-(`standard-alpha`, same proxy sizes). Both reject production primitive reorder
-and point to non-reorder backend-shape A/B unless a same-input semantic proof
-is added. The regenerated combined-min10 advice isolates the remaining
-production-shaped rows as `low-opaque-depth-write`, but these are already
-covered by the opaque cache path and the min0 audit showed little extra
-hidden-write movement.
+The regenerated `screenblend-r2` queue ranks the largest post-screen residual
+classes as `semantic-proof-or-non-reorder` (`blend=off`, `131.142MiB` and
+`113.117MiB` hidden-backend proxy) and
+`non-reorder-backend-shape-or-semantic-proof` (`standard-alpha`, same proxy
+sizes). Both reject production primitive reorder by default: Xcode replay is
+only worth spending after a real-depth same-input replay passes, or after a
+primitive-order-preserving smoke shows backend-relevant movement. The
+regenerated combined-min10 queue isolates the remaining production-shaped rows
+as `production-opaque-reorder`, but these are already covered by the opaque
+cache path and the min0 audit showed little extra hidden-write movement.
 
 ```mermaid
 stateDiagram-v2
@@ -20375,6 +20812,17 @@ classifies candidate predicates by promotion risk:
 | Pre-mutation active pixels | debug-only | fail isolated by `active_pixels >= 465`, margin `36px` | Useful for replay diagnosis, not a cheap D3D9 runtime predicate. |
 | VS constant hash | trace-local | fail hash disjoint from pass hashes | Good for bisection, not a stable semantic predicate. |
 | Encoder draw index / ordinal | debug-only | separates this artifact only after the fail draw is known | Acceptable for mechanism proof, not production. |
+
+The same report now emits a `Proof Verdict` section so the semantic replay can
+act as an Xcode-spending gate:
+
+| Gate | Verdict | Evidence |
+|---|---|---|
+| Semantic proof | `fail-visible-primitive-owner-conflict` | the full mutated draw set still fails the exact image gate |
+| Production status | `reject primitive reorder for this broad class` | depth-read/color-write primitive order can change final writers |
+| Xcode budget | `do-not-spend-production-gputrace` | use Xcode only for mechanism runs or a newly proven selector |
+| Mechanism value | `mechanism-only safe sub-window keeps 88.49% of LRU32 gain` | total LRU32 `-12,220`, exact-pass delta `-10,813` |
+| Next proof | `stronger semantic selector or non-reorder backend-shape A/B` | state/payload selectors are mixed |
 
 This closes the current exact-safe selector attempt: the 18-draw safe window is
 real and keeps most of the locality win, but no production-shaped runtime
@@ -20906,3 +21354,133 @@ control suggests there is still useful locality to harvest if a sparse/no-final-
 color payload classifier exists, but absent that proof the next profiling budget
 should go to either a larger semantic payload classifier or a non-reorder
 backend-shape experiment that keeps primitive order unchanged.
+
+## 2026-06-05 — Non-Reorder Backend-Shape Candidate: Half VSOut Probe
+
+`DXMT9_PROBE_HALF_VSOUT` is now available as the narrow non-reorder
+compiler/backend-shape experiment for the remaining hidden
+vertex/tiler/parameter-storage hypothesis. The wrapper exposes it as
+`--probe-half-vsout`.
+
+The probe requests:
+
+- `half4` for user varyings in the shared Metal `VSOut`: primary color,
+  secondary color, and texcoord0..7;
+- `half` for `fogFactor`;
+- unchanged `float4 position [[position]]`, `float pointSize [[point_size]]`,
+  and `float clipDistance0 [[clip_distance]]`.
+
+Translated and FFP fragment emitters cast half stage-in fields back to `float`
+at the consumer boundary. The default-off source shape is intentionally kept
+stable: no `float4(in.texcoordN)` / `float(in.fogFactor)` casts are emitted
+unless the probe is enabled, so this experiment does not churn normal shader
+source hashes.
+
+Purpose:
+
+- test whether Apple/Metal/AGX hidden-expanded TVB or parameter-backend storage
+  reacts to requested stage-out precision;
+- preserve primitive order, draw count, submitted geometry, stream/IB shape, and
+  render-state semantics so any Xcode counter movement is attributable to the
+  shader/backend shape rather than cache-locality reorder;
+- avoid spending another gputrace on a visible-VSOut-width hypothesis that has
+  already failed at GT1 scale.
+
+Recommended smoke:
+
+```bash
+scripts/tools/run_3dmark05_perf_probe.sh \
+  --suffix half-vsout-smoke-r1 \
+  --frame 50 \
+  --no-gputrace \
+  --probe-half-vsout \
+  --dump-shaders \
+  --timeout 240
+```
+
+Only proceed to gputrace if the smoke run starts, compiles PSOs, writes a
+complete `result.json`, and does not show an obvious visual/counter regression
+in the no-gputrace summary. 3DMark05 may hang on the final frame; keep using the
+wrapper timeout (`240s` no-gputrace, `420s` gputrace by default) and treat a
+timeout-finalized run with complete artifacts as valid input.
+
+Recommended Xcode proof run:
+
+```bash
+scripts/tools/run_3dmark05_perf_probe.sh \
+  --suffix half-vsout-xcode-r1 \
+  --frame 50 \
+  --probe-half-vsout \
+  --dump-shaders \
+  --baseline-joined traces/app-d3d9-3dmark05-<baseline>/analysis/frame50-joined-xcode-dxmt-summary.csv \
+  --require-tvb-mechanism-proof \
+  --require-top-row-key-match \
+  --require-shader-dump-matches \
+  --max-top-triangle-delta-ratio 0.05 \
+  --timeout 420
+```
+
+Gate:
+
+- top row keys match the baseline;
+- top triangle/geometry drift stays within the configured tolerance;
+- top hidden backend write, Xcode `VS Buffer Device Memory Bytes Written`,
+  `VS Invocations`, and GPU time all strictly decrease;
+- shader dumps prove the top rows actually used half VSOut sources;
+- if visual output differs, semantic image proof is required before considering
+  the result more than a mechanism classifier.
+
+Current implementation evidence:
+
+- native shader tests cover the env flag, prelude field narrowing, default-off
+  source-shape stability, and half probe pixel-stage boundary casts;
+- backend pipeline-key tests cover the debug env key axis;
+- a minimal standalone MSL smoke with half VSOut/stage-in compiles with
+  `xcrun -sdk macosx metal`.
+
+No-gputrace smoke result:
+
+```text
+run_id: app-d3d9-3dmark05-half-vsout-smoke-r1
+command: scripts/tools/run_3dmark05_perf_probe.sh --frame 50 --no-gputrace --probe-half-vsout --dump-shaders --timeout 240
+status: pass
+timed_out: false
+process_elapsed_sec: 120.922
+pipeline_build_fail_pso: 0
+gpu_command_buffer_errors: 0
+present_encoded: 1428
+gpu_command_buffer_time_ms: 4324.971
+encode_draw_cpu_ms: 58204.233
+shader_dump_msl_files: 88
+shader_dump_half_vsout_files: 88
+visual_smoke: normal GT1 scene, not the prior yellow-frame failure
+hud_sample: FPS 9 at frame 850
+```
+
+Interpretation: the probe is compile- and runtime-viable on the current GT1
+path, and all dumped MSL sources use the requested half VSOut shape. This is
+not yet a performance proof: no-gputrace counters do not expose Xcode
+`VS Buffer Device Memory Bytes Written`, `VS Invocations`, or hidden backend
+write. The next valid proof remains a gputrace/Xcode counter export with
+`--require-tvb-mechanism-proof`.
+
+```mermaid
+flowchart TD
+  Residual["residual GT1 bottleneck\nhidden backend write >> visible VSOut"] --> Candidate["DXMT9_PROBE_HALF_VSOUT\nprimitive order unchanged"]
+  Candidate --> Smoke["no-gputrace smoke\ncompile + result + shader dump"]
+  Smoke --> Stable{"stable enough?"}
+  Stable -- "No" --> Reject["reject as correctness/compile risk"]
+  Stable -- "Yes" --> Xcode["gputrace + Xcode counters\nExport + Embed Performance Data\nExport Encoder Counters"]
+  Xcode --> Gate{"TVB mechanism gate"}
+  Gate -- "pass" --> Mechanism["candidate backend-shape mechanism\nhidden write + VS write + invocations + GPU move"]
+  Gate -- "fail" --> RejectHalf["reject FP16 VSOut as current owner"]
+  Mechanism --> Oracle["needs semantic image oracle\nbefore production precision work"]
+  RejectHalf --> Next["next candidate\nsemantic selector or other backend-state shape"]
+
+  classDef good fill:#e8f5e8,stroke:#4d8b4d,color:#102a10
+  classDef warn fill:#fff3d6,stroke:#b98222,color:#2a1b00
+  classDef bad fill:#ffe8e8,stroke:#b64242,color:#2b0d0d
+  class Candidate,Smoke,Xcode,Mechanism good
+  class Residual,Stable,Gate,Oracle,Next warn
+  class Reject,RejectHalf bad
+```

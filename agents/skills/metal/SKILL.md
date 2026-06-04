@@ -216,6 +216,18 @@ Required Xcode sequence:
    `$ANALYSIS_DIR/frame<N>-counters-xcode.csv`.
 7. Parse the CSV from the terminal and create a reduced summary CSV when useful.
 
+For dxmt9 3DMark05 perf probes, always launch through
+`scripts/tools/run_3dmark05_perf_probe.sh`. 3DMark05 can hang on the final frame
+after the useful capture/perf artifacts have already been written, so the
+wrapper always passes a positive `run_experiment.py --timeout`: `240s` for
+no-gputrace scouts and `420s` for `.gputrace`/Xcode replay candidates unless
+`--timeout` or `DXMT_3DMARK05_PROBE_TIMEOUT` overrides it. Treat a
+timeout-finalized run with complete artifacts as valid input for the finalizer.
+For the current GT1 hidden vertex/backend-storage hypothesis, use
+`--probe-half-vsout` as the primitive-order-preserving compiler/backend-shape
+candidate: run a no-gputrace shader-dump smoke first, then run the gputrace
+candidate only with `--baseline-joined` and `--require-tvb-mechanism-proof`.
+
 Example summary extraction:
 
 ```bash

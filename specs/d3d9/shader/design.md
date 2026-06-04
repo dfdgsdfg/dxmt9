@@ -317,13 +317,24 @@ Half` (subject to §3.2 / R-CORE-SHADER-3.4 and paired-FS consumer safety)
 exercises the half-precision path without changing arithmetic inside either
 shader body.
 
-This makes the first useful implementation step relatively small:
+The diagnostic implementation now wires the coarse
+`DXMT9_PROBE_HALF_VSOUT` / `ShaderSourceContext::enableHalfVSOut` path:
+translated and FFP VS emitters request `half4` user varyings
+(color/secondary/texcoord) and `half` fog, while FS emitters cast those
+stage-in fields back to `float` at the boundary. This is a mechanism probe,
+not the precision pass described here: it is all-or-nothing for user
+varyings, env-gated, and must not become default-on from correctness evidence
+alone.
+
+The remaining production implementation steps are:
 
 1. Implement the pass with `outRegPrecision` populated and
    `tempRegPrecision` left at `Float`.
-2. Extend `ShaderSourceContext` to carry an `enableHalfVSOut` flag.
-3. Have the VS emitter respect `outRegPrecision` for the VSOut struct.
-4. Have the FS emitter accept `half` stage-in fields for matching slots.
+2. Replace the coarse probe bit with per-output precision plan emission.
+3. Keep VSOut field order and semantic mapping stable while narrowing only
+   selected output fields.
+4. Have the FS emitter accept `half` stage-in fields for matching slots and
+   insert boundary casts only where the consumer requires `float`.
 
 ### 4.5 Cache Key Contribution
 
@@ -628,12 +639,13 @@ The shader layer must:
    fewer dead fields) and may stay opt-in, but they are not the perf
    fix.
 3. **Treat per-output VSOut precision (FP16) as the next unproven
-   candidate.** The §4 precision pass with the §4.4 VS-first strategy is
-   the path to test it; promotion requires the §8.3 correctness oracle
-   to pass across every state class *and* a measured Xcode VS-buffer-
-   write decrease at baseline scale (R-CORE-SHADER-3.10). No measured
-   counter movement → no default-on promotion, regardless of correctness
-   evidence.
+   candidate.** The coarse `DXMT9_PROBE_HALF_VSOUT` path is the current
+   non-reorder mechanism probe for this candidate; the §4 precision pass
+   with the §4.4 VS-first strategy is the production path. Promotion
+   requires the §8.3 correctness oracle to pass across every state class
+   *and* a measured Xcode VS-buffer-write decrease at baseline scale
+   (R-CORE-SHADER-3.10). No measured counter movement → no default-on
+   promotion, regardless of correctness evidence.
 
    **Why the counter gate is mandatory, not optional.** Apple's Metal
    compiler is permitted to widen emitted `half` values back to `float`
@@ -819,8 +831,10 @@ Open gaps (live in `specs/gap.md`):
 
 - **Precision inference pass** — not implemented; `DXMT9_FS_HALF_PRECISION`
   text-rewrite covers ~33% of SFIV's FS. Successor design above (§4).
-- **VS-first half-precision opt-in flag** — design specifies; not yet
-  wired (`enableHalfVSOut`).
+- **VS-first half-precision diagnostic flag** — coarse
+  `DXMT9_PROBE_HALF_VSOUT` / `enableHalfVSOut` is wired for mechanism
+  probes; the production precision-inference pass and per-output plan are
+  not yet implemented.
 - **Half-precision correctness oracle** — required by R-CORE-SHADER-3.10,
   R-CORE-SHADER-8.3; not yet built.
 - **Formal/property validation suite** — required by R-CORE-SHADER-8.5

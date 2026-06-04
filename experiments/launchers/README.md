@@ -145,9 +145,13 @@ Commercial / 3rd-party titles (require external prefix):
     under `traces/app-d3d9-3dmark05-<suffix>/`, `MTL_CAPTURE_ENABLED=1` when
     gputrace capture is enabled, and automatic
     `3dmark05-perf-summary.md` / CSV generation after the run. Use `--dry-run`
-    first to verify paths, desktop lock state, and free-space guard. The
-    wrapper scopes encoder breakdown to the requested frame by default for
-    gputrace runs and for no-gputrace indexed diagnostics
+    first to verify paths, desktop lock state, free-space guard, and the
+    downstream `run_experiment.py --timeout`. Because 3DMark05 can hang on the
+    final frame, the wrapper always uses a positive runner timeout: `420s` by
+    default with gputrace and `240s` with `--no-gputrace`, unless `--timeout`
+    or `DXMT_3DMARK05_PROBE_TIMEOUT` overrides it. The wrapper scopes encoder
+    breakdown to the requested frame by default for gputrace runs and for
+    no-gputrace indexed diagnostics
     (`DXMT9_PERF_ENCODER_BREAKDOWN_SEQ=<frame>`). This keeps expensive
     index-reuse/cache-opt diagnostics from slowing earlier GT1 frames enough
     to change the semantic workload selected by `seq/enc` row keys. Use
@@ -228,6 +232,12 @@ Commercial / 3rd-party titles (require external prefix):
     `VSOut.pointSize [[point_size]]` while preserving texcoords/color/fog, so
     any counter movement is attributable to the Metal point-size path rather
     than ordinary FS liveness.
+    `--probe-half-vsout` sets `DXMT9_PROBE_HALF_VSOUT=1` and requests `half4`
+    for color/secondary/texcoord VSOut fields plus `half` for fogFactor, while
+    keeping `position`, `[[point_size]]`, and `[[clip_distance]]` as float.
+    This is a mechanism probe for the shader spec's per-output VSOut precision
+    hypothesis; gate it with Xcode counters and semantic images before treating
+    it as more than a backend-shape classifier.
     If live VSOut and point-size probes still leave Xcode's bucket unchanged,
     use `--probe-position-only-vsout` as a correctness-invalid lower-bound
     diagnostic. This sets `DXMT9_PROBE_POSITION_ONLY_VSOUT=1`, forces a
@@ -444,7 +454,8 @@ Commercial / 3rd-party titles (require external prefix):
     `DXMT_DEBUG_FORCE_CULL_MODE` and is the narrow cull/backend shape classifier
     to use when broad `--disable-cull` has already been rejected. Pair it with
     Xcode counters and check whether `VS Invocations`, `VS B/invocation`, or
-    named tiled counters move.
+    hidden backend write move. Named tiled counters are subtype evidence, not
+    the primary gate for hidden-expanded TVB/parameter storage.
     `--probe-force-cull-mode none|front|back` sets
     `DXMT9_PROBE_FORCE_CULL_MODE` and should be preferred for hot-row
     backend-shape A/B because it can be constrained by
@@ -517,7 +528,9 @@ Commercial / 3rd-party titles (require external prefix):
     `scripts/tools/analyze_indexed_probe_classes.py --row SEQ/ENC --group
     row-state-class` on that CSV before selecting a narrow AND class filter.
     The report exposes blend/scissor/depth/cull/fill buckets such as
-    `depth-read,no-alpha-blend,no-scissor,textured`. Use
+    `depth-read,no-alpha-blend,no-scissor,textured`, plus semantic risk,
+    proof family, preflight gate, and Xcode replay gate fields when an Xcode
+    joined summary is supplied. Use
     `--measure-index-cache-opt-candidate` for no-mutate full-frame scouts when
     mini replay shows post-transform cache locality is predictive; the encoder
     breakdown then includes original-vs-candidate cache-opt miss estimates for
@@ -579,6 +592,14 @@ Commercial / 3rd-party titles (require external prefix):
     cache-opt candidate/effective LRU32 telemetry and Xcode VS counters; the
     generic actual-indexed LRU estimate can remain an original-index locality
     measure for this opt-in path.
+    For primitive-order-preserving backend-shape experiments, add
+    `--require-tvb-mechanism-proof` to the wrapper once a joined Xcode
+    baseline is available. The wrapper forwards it to the finalizer so the
+    candidate must reduce top hidden backend write, Xcode VS buffer write, VS
+    invocations, and GPU time before it can be treated as a
+    TVB/parameter-backend mechanism proof. Named tiled-buffer bytes should still
+    be inspected as subtype evidence, but they are not sufficient as the main
+    gate for hidden-expanded storage.
     Combine that CSV with a joined Xcode/dxmt summary and shader-dump summary
     using `python3 scripts/tools/plan_3dmark05_mini_replay.py --joined
     <frameN-xcode-dxmt-joined-summary.csv> --shader-summary
@@ -636,6 +657,10 @@ Commercial / 3rd-party titles (require external prefix):
     The geometry dumper skips invalid index/stream0 ranges before consuming the
     max-draw cap, so early matching setup draws without replayable stream bytes
     do not hide later valid payloads.
+    After single-draw semantic bisection, run
+    `scripts/tools/analyze_mini_replay_semantics.py`; its `Proof Verdict`
+    section classifies whether the payload is production proof, mechanism-only,
+    or should block further production gputrace spending.
     Once payloads exist, build the next harness input with
     `python3 scripts/tools/build_3dmark05_mini_replay_manifest.py
     --shader-summary <frameN-shader-dump-summary.csv> --probe-draws

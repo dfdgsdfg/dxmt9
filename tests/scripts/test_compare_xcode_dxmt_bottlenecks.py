@@ -1313,17 +1313,17 @@ class CompareXcodeDxmtBottlenecksTests(unittest.TestCase):
         )
         self.assertEqual(result.returncode, 0, result.stderr)
 
-    def test_require_tvb_mechanism_proof_fails_when_tiled_buffer_does_not_decrease(self) -> None:
+    def test_require_tvb_mechanism_proof_fails_when_hidden_backend_does_not_decrease(self) -> None:
         result = self._run_tvb_mechanism_gate(
             before_kwargs=dict(gpu_ms=10.0, buffer_write_mib=100.0,
                                 vs_invocations=1_000_000,
                                 tiled_vertex_mib=20.0, tiled_primitive_mib=10.0),
-            after_kwargs=dict(gpu_ms=9.0, buffer_write_mib=90.0,
+            after_kwargs=dict(gpu_ms=9.0, buffer_write_mib=100.0,
                                vs_invocations=900_000,
-                               tiled_vertex_mib=20.0, tiled_primitive_mib=10.0),
+                               tiled_vertex_mib=18.0, tiled_primitive_mib=9.0),
         )
         self.assertNotEqual(result.returncode, 0)
-        self.assertIn("top_named_tiled_buffer_mib", result.stderr)
+        self.assertIn("top_hidden_backend_write_mib", result.stderr)
 
     def test_require_tvb_mechanism_proof_fails_when_vs_invocations_does_not_decrease(self) -> None:
         result = self._run_tvb_mechanism_gate(
@@ -1350,9 +1350,9 @@ class CompareXcodeDxmtBottlenecksTests(unittest.TestCase):
         self.assertIn("top_gpu_ms", result.stderr)
 
     def test_summary_dict_exposes_tvb_mechanism_keys(self) -> None:
-        """summarize() must surface top_vs_invocations and top_named_tiled_buffer_mib.
+        """summarize() must surface TVB/hidden mechanism keys.
 
-        These two keys power the upcoming --require-tvb-mechanism-proof gate.
+        These keys power --require-tvb-mechanism-proof.
         """
         import importlib.util
         spec = importlib.util.spec_from_file_location(
@@ -1369,8 +1369,11 @@ class CompareXcodeDxmtBottlenecksTests(unittest.TestCase):
             summary = module.summarize(rows, top_n=3)
             self.assertIn("top_vs_invocations", summary)
             self.assertIn("top_named_tiled_buffer_mib", summary)
+            self.assertIn("top_hidden_backend_write_mib", summary)
+            self.assertIn("top_hidden_backend_write_ratio", summary)
             self.assertEqual(summary["top_vs_invocations"], 1_000_000.0)
             self.assertEqual(summary["top_named_tiled_buffer_mib"], 30.0)
+            self.assertGreater(summary["top_hidden_backend_write_mib"], 0.0)
 
 
 if __name__ == "__main__":

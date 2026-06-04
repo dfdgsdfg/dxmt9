@@ -27,6 +27,11 @@ bool vsoutProbePositionOnlyEnabled() {
   return env && env[0] != '\0' && std::strcmp(env, "0") != 0;
 }
 
+bool vsoutProbeHalfEnabled() {
+  const char* env = std::getenv("DXMT9_PROBE_HALF_VSOUT");
+  return env && env[0] != '\0' && std::strcmp(env, "0") != 0;
+}
+
 VSOutLayout minimalVSOutLayout() {
   VSOutLayout layout{};
   layout.texcoordMask = 0x1u;
@@ -91,6 +96,14 @@ bool fsHalfPrecisionEnabled() {
 
 std::string centroidAttribute(bool enabled) {
   return enabled ? " [[centroid_perspective]]" : "";
+}
+
+const char* vsoutVectorType(const ShaderPreludeOptions& options) {
+  return options.halfVSOut ? "half4" : "float4";
+}
+
+const char* vsoutScalarType(const ShaderPreludeOptions& options) {
+  return options.halfVSOut ? "half" : "float";
 }
 
 u64 makeHash(const std::string& source) {
@@ -326,20 +339,24 @@ std::string makeShaderPrelude(const ShaderPreludeOptions& options) {
   out << "struct VSOut {\n";
   out << "  float4 position [[position]];\n";
   if (vsoutEmitColor(options.vsOutLayout)) {
-    out << "  float4 color" << centroidAttribute(options.centroidColor) << ";\n";
+    out << "  " << vsoutVectorType(options) << " color"
+        << centroidAttribute(options.centroidColor) << ";\n";
   }
   if (vsoutEmitSecondaryColor(options.vsOutLayout)) {
-    out << "  float4 secondaryColor" << centroidAttribute(options.centroidSecondaryColor) << ";\n";
+    out << "  " << vsoutVectorType(options) << " secondaryColor"
+        << centroidAttribute(options.centroidSecondaryColor) << ";\n";
   }
   for (size_t i = 0; i < core::kMaxTextureStages; ++i) {
     if (!vsoutEmitTexcoord(options.vsOutLayout, i)) {
       continue;
     }
     const bool centroid = (options.centroidTexcoordMask & (1u << i)) != 0u;
-    out << "  float4 texcoord" << i << centroidAttribute(centroid) << ";\n";
+    out << "  " << vsoutVectorType(options) << " texcoord" << i
+        << centroidAttribute(centroid) << ";\n";
   }
   if (vsoutEmitFogFactor(options.vsOutLayout)) {
-    out << "  float fogFactor" << centroidAttribute(options.centroidFogFactor) << ";\n";
+    out << "  " << vsoutScalarType(options) << " fogFactor"
+        << centroidAttribute(options.centroidFogFactor) << ";\n";
   }
   if (vsoutEmitPointSize(options.vsOutLayout)) {
     out << "  float pointSize [[point_size]];\n";
@@ -483,10 +500,13 @@ std::string makeShaderPrelude(const ShaderPreludeOptions& options) {
       continue;
     }
     hasTexcoord0 = hasTexcoord0 || i == 0u;
-    out << "    case " << i << "u: return in.texcoord" << i << ";\n";
+    out << "    case " << i << "u: return "
+        << (options.halfVSOut ? "float4(" : "") << "in.texcoord" << i
+        << (options.halfVSOut ? ")" : "") << ";\n";
   }
   if (hasTexcoord0) {
-    out << "    default: return in.texcoord0;\n";
+    out << "    default: return " << (options.halfVSOut ? "float4(" : "")
+        << "in.texcoord0" << (options.halfVSOut ? ")" : "") << ";\n";
   } else {
     out << "    default: return float4(0.0f, 0.0f, 0.0f, 1.0f);\n";
   }

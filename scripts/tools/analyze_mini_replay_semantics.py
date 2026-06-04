@@ -702,6 +702,79 @@ def selector_scout_rows(
     return rows
 
 
+def proof_verdict_rows(
+    analyses: list[DrawAnalysis],
+    passes: list[DrawAnalysis],
+    failures: list[DrawAnalysis],
+    mixed_groups: dict[str, list[DrawAnalysis]],
+    primitive_items: list[DrawAnalysis],
+) -> list[tuple[str, str, str]]:
+    total_lru = sum(item.lru32_delta for item in analyses)
+    safe_lru = sum(item.lru32_delta for item in passes)
+    safe_share = (safe_lru / total_lru * 100.0) if total_lru else None
+    max_active = max((item.max_active_pixels for item in analyses), default=0)
+    sparse_exact = [
+        item for item in passes
+        if item.visibility_class in ("no-final-color-exact-pass", "sparse-exact-pass")
+    ]
+    visible_exact = [
+        item for item in passes
+        if item.visibility_class == "visible-exact-pass"
+    ]
+    owner_failures = [
+        item for item in primitive_items
+        if item.primitive_owner_risk == "color-change-follows-primitive-owner"
+    ]
+
+    if failures:
+        if owner_failures:
+            semantic = "fail-visible-primitive-owner-conflict"
+            production = "reject primitive reorder for this broad class"
+        else:
+            semantic = "fail-semantic-image-gate"
+            production = "reject until failures have a stable safe selector"
+        if safe_share is not None and safe_share >= 80.0:
+            mechanism = (
+                f"mechanism-only safe sub-window keeps {safe_share:.2f}% of "
+                "LRU32 gain, but selector is not production-shaped"
+            )
+        else:
+            mechanism = (
+                "mechanism-only; exact-pass share is too small or unproven for "
+                "a promotion path"
+            )
+        return [
+            ("Semantic proof", semantic, "exact image gate does not pass for the full mutated draw set"),
+            ("Production status", production, "depth-read/color-write primitive order can change final writers"),
+            ("Xcode budget", "do-not-spend-production-gputrace", "spend Xcode only for mechanism runs or a newly proven selector"),
+            ("Mechanism value", mechanism, f"total LRU32 delta {fmt_int(total_lru)}; exact-pass delta {fmt_int(safe_lru)}"),
+            (
+                "Next proof",
+                "stronger semantic selector or non-reorder backend-shape A/B",
+                "state/payload selectors are mixed" if mixed_groups else "current selectors still need runtime proof",
+            ),
+        ]
+
+    if sparse_exact and not visible_exact:
+        semantic = "exact-sparse-or-no-final-color"
+        production = "positive-control-only"
+        xcode = "repeat-xcode-mechanism-ok"
+        next_proof = "needs cheap runtime no-final-color/occlusion predicate"
+    else:
+        semantic = "exact-visible-pass" if visible_exact else "exact-no-final-color"
+        production = "candidate-semantic-payload"
+        xcode = "xcode-candidate-after-shape-gate"
+        next_proof = "require stable row/full-frame shape and target VS-inv/write gates"
+
+    return [
+        ("Semantic proof", semantic, "all single-draw same-input comparisons pass"),
+        ("Production status", production, f"max active pixels {fmt_int(max_active)}"),
+        ("Xcode budget", xcode, "semantic image gate is clean for this replay payload"),
+        ("Mechanism value", "exact-pass payload", f"LRU32 delta {fmt_int(safe_lru)}"),
+        ("Next proof", next_proof, "do not generalize beyond the replayed selector without wider evidence"),
+    ]
+
+
 def write_markdown(path: Path,
                    manifest_path: Path,
                    summary_path: Path,
@@ -781,6 +854,24 @@ def write_markdown(path: Path,
             ),
         ),
     ]
+
+    lines.extend([
+        "",
+        "## Proof Verdict",
+        "",
+        "This verdict decides whether the semantic replay is ready to justify",
+        "Xcode replay budget, and whether that replay would be production proof",
+        "or only a mechanism/positive-control artifact.",
+        "",
+        markdown_table(
+            (
+                "Gate",
+                "Verdict",
+                "Evidence",
+            ),
+            proof_verdict_rows(analyses, passes, failures, mixed_groups, primitive_items),
+        ),
+    ])
 
     lines.extend([
         "",

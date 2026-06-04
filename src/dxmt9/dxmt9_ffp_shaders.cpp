@@ -16,6 +16,34 @@ using namespace dxmt9::core;
 // header). The `using namespace dxmt9::core;` above brings in TextureOp,
 // FogMode, Handle, and the kMax* constants.
 
+std::string vsoutFloat4Write(const drawshader::ShaderSourceContext& context,
+                             const std::string& expr) {
+  return context.enableHalfVSOut ? "half4(" + expr + ")" : expr;
+}
+
+std::string vsoutFloatWrite(const drawshader::ShaderSourceContext& context,
+                            const std::string& expr) {
+  return context.enableHalfVSOut ? "half(" + expr + ")" : expr;
+}
+
+std::string stageInFloat4Read(const drawshader::ShaderSourceContext& context,
+                              const char* field) {
+  const std::string expr = std::string("in.") + field;
+  return context.enableHalfVSOut ? "float4(" + expr + ")" : expr;
+}
+
+std::string stageInFloatRead(const drawshader::ShaderSourceContext& context,
+                             const char* field) {
+  const std::string expr = std::string("in.") + field;
+  return context.enableHalfVSOut ? "float(" + expr + ")" : expr;
+}
+
+std::string vsoutFloat4Read(const drawshader::ShaderSourceContext& context,
+                            const char* field) {
+  const std::string expr = std::string("out.") + field;
+  return context.enableHalfVSOut ? "float4(" + expr + ")" : expr;
+}
+
 u32 declTypeSize(u32 type) {
   switch (type) {
     case kD3DDeclTypeFloat1:
@@ -155,7 +183,8 @@ std::string materialSourceExpr(u32 mode, const char* materialField) {
   }
 }
 
-void emitLightingBlock(std::ostringstream& shader, const FfpVertexKey& key) {
+void emitLightingBlock(std::ostringstream& shader, const FfpVertexKey& key,
+                       const drawshader::ShaderSourceContext& context) {
   if (!key.lightingEnabled) {
     return;
   }
@@ -176,8 +205,10 @@ void emitLightingBlock(std::ostringstream& shader, const FfpVertexKey& key) {
     return;
   }
 
-  shader << "  float4 dxmt9_vertexDiffuse = out.color;\n";
-  shader << "  float4 dxmt9_vertexSpecular = out.secondaryColor;\n";
+  shader << "  float4 dxmt9_vertexDiffuse = "
+         << vsoutFloat4Read(context, "color") << ";\n";
+  shader << "  float4 dxmt9_vertexSpecular = "
+         << vsoutFloat4Read(context, "secondaryColor") << ";\n";
   shader << "  float4 dxmt9_materialEmissive = "
          << materialSourceExpr(key.colorMaterialMode[0], "materialEmissive") << ";\n";
   shader << "  float4 dxmt9_materialAmbient = "
@@ -305,9 +336,13 @@ void emitLightingBlock(std::ostringstream& shader, const FfpVertexKey& key) {
       }
     }
   }
-  shader << "  out.color = saturate(float4(dxmt9_diffuseAccum, dxmt9_materialDiffuse.a));\n";
+  shader << "  out.color = "
+         << vsoutFloat4Write(context, "saturate(float4(dxmt9_diffuseAccum, dxmt9_materialDiffuse.a))")
+         << ";\n";
   if (key.specularEnabled) {
-    shader << "  out.secondaryColor = float4(dxmt9_specularAccum, 0.0f);\n";
+    shader << "  out.secondaryColor = "
+           << vsoutFloat4Write(context, "float4(dxmt9_specularAccum, 0.0f)")
+           << ";\n";
   }
 }
 
@@ -538,14 +573,21 @@ std::string makeFfpVertexSource(const FfpVertexKey& key,
         shader << "  dxmt9_texcoord" << stage << " = float4(dxmt9_sphereUv" << stage
                << ", dxmt9_reflect" << stage << ".z, 1.0f);\n";
       }
-      shader << "  out.texcoord" << stage << " = float4(dxmt9_apply_texture_transform(dxmt9_texcoord" << stage
-             << ", ffpVs, " << stage << "u, " << key.texTransformFlags[stage]
-             << "u), dxmt9_texcoord" << stage << ".zw);\n";
+      shader << "  out.texcoord" << stage << " = "
+             << vsoutFloat4Write(
+                    context,
+                    "float4(dxmt9_apply_texture_transform(dxmt9_texcoord" +
+                        std::to_string(stage) + ", ffpVs, " +
+                        std::to_string(stage) + "u, " +
+                        std::to_string(key.texTransformFlags[stage]) +
+                        "u), dxmt9_texcoord" + std::to_string(stage) + ".zw)")
+             << ";\n";
     }
   };
   shaders::ShaderPreludeOptions preludeOptions{};
   preludeOptions.withClipDistances = key.clipPlaneMask != 0;
   preludeOptions.vsOutLayout = context.vsOutLayout;
+  preludeOptions.halfVSOut = context.enableHalfVSOut;
   if (argbufHybrid) {
     out << shaders::makeShaderPreludeArgbufHybrid(preludeOptions);
   } else {
@@ -594,15 +636,22 @@ std::string makeFfpVertexSource(const FfpVertexKey& key,
     out << "                     1.0f - ((inPosition.y - ffpVs.viewportOrigin.y) / viewportSize.y) * 2.0f);\n";
     out << "  out.position = float4(ndc * clipW, inPosition.z * clipW, clipW);\n";
     if (shaders::vsoutEmitColor(context.vsOutLayout) && layout->hasDiffuse) {
-      out << "  out.color = dxmt9_load_d3dcolor(stream0, base + " << layout->diffuseOffset << "u);\n";
+      out << "  out.color = "
+          << vsoutFloat4Write(context, "dxmt9_load_d3dcolor(stream0, base + " +
+                                           std::to_string(layout->diffuseOffset) + "u)")
+          << ";\n";
     } else if (shaders::vsoutEmitColor(context.vsOutLayout)) {
-      out << "  out.color = float4(1.0);\n";
+      out << "  out.color = " << vsoutFloat4Write(context, "float4(1.0)")
+          << ";\n";
     }
     if (shaders::vsoutEmitSecondaryColor(context.vsOutLayout) && layout->hasSpecular) {
-      out << "  out.secondaryColor = dxmt9_load_d3dcolor(stream0, base + "
-          << layout->specularOffset << "u);\n";
+      out << "  out.secondaryColor = "
+          << vsoutFloat4Write(context, "dxmt9_load_d3dcolor(stream0, base + " +
+                                           std::to_string(layout->specularOffset) + "u)")
+          << ";\n";
     } else if (shaders::vsoutEmitSecondaryColor(context.vsOutLayout)) {
-      out << "  out.secondaryColor = float4(0.0);\n";
+      out << "  out.secondaryColor = "
+          << vsoutFloat4Write(context, "float4(0.0)") << ";\n";
     }
     out << "  float3 dxmt9_lightingNormal = float3(0.0f, 0.0f, 1.0f);\n";
     // Point/Spot lighting (D3D9 §B.5) references dxmt9_cameraPosition;
@@ -612,7 +661,9 @@ std::string makeFfpVertexSource(const FfpVertexKey& key,
     // compile when key.lightingEnabled is set.
     out << "  float4 dxmt9_cameraPosition = float4(0.0f, 0.0f, 0.0f, 1.0f);\n";
     emitStageTexcoords(out);
-    if (shaders::vsoutEmitFogFactor(context.vsOutLayout)) out << "  out.fogFactor = 1.0;\n";
+    if (shaders::vsoutEmitFogFactor(context.vsOutLayout)) {
+      out << "  out.fogFactor = " << vsoutFloatWrite(context, "1.0") << ";\n";
+    }
     if (shaders::vsoutEmitPointSize(context.vsOutLayout)) {
       if (layout->hasPointSize) {
         out << "  float dxmt9_pointSize = dxmt9_load_f32(stream0, base + "
@@ -753,23 +804,33 @@ std::string makeFfpVertexSource(const FfpVertexKey& key,
     out << "  out.position = clip;\n";
     out << "  out.position.xy += ffpVs.halfPixelFixup * out.position.w;\n";
     if (shaders::vsoutEmitColor(context.vsOutLayout) && layout->hasDiffuse) {
-      out << "  out.color = dxmt9_load_d3dcolor(stream0, base + " << layout->diffuseOffset << "u);\n";
+      out << "  out.color = "
+          << vsoutFloat4Write(context, "dxmt9_load_d3dcolor(stream0, base + " +
+                                           std::to_string(layout->diffuseOffset) + "u)")
+          << ";\n";
     } else if (shaders::vsoutEmitColor(context.vsOutLayout)) {
-      out << "  out.color = float4(1.0);\n";
+      out << "  out.color = " << vsoutFloat4Write(context, "float4(1.0)")
+          << ";\n";
     }
     if (shaders::vsoutEmitSecondaryColor(context.vsOutLayout) && layout->hasSpecular) {
-      out << "  out.secondaryColor = dxmt9_load_d3dcolor(stream0, base + "
-          << layout->specularOffset << "u);\n";
+      out << "  out.secondaryColor = "
+          << vsoutFloat4Write(context, "dxmt9_load_d3dcolor(stream0, base + " +
+                                           std::to_string(layout->specularOffset) + "u)")
+          << ";\n";
     } else if (shaders::vsoutEmitSecondaryColor(context.vsOutLayout)) {
-      out << "  out.secondaryColor = float4(0.0);\n";
+      out << "  out.secondaryColor = "
+          << vsoutFloat4Write(context, "float4(0.0)") << ";\n";
     }
     out << "  float3 dxmt9_lightingNormal = dxmt9_cameraUnitNormal;\n";
     emitStageTexcoords(out);
     if (shaders::vsoutEmitFogFactor(context.vsOutLayout)) {
       out << "  float dxmt9_fogDepth = ffpVs.rangeFog != 0u ? length(dxmt9_cameraPosition.xyz) : fabs(dxmt9_cameraPosition.z);\n";
-      out << "  out.fogFactor = dxmt9_compute_fog_factor(ffpVs.fogMode, dxmt9_fogDepth,\n";
+      out << "  out.fogFactor = "
+          << (context.enableHalfVSOut ? "half(" : "")
+          << "dxmt9_compute_fog_factor(ffpVs.fogMode, dxmt9_fogDepth,\n";
       out << "                                           ffpVs.fogStart, ffpVs.fogEnd,\n";
-      out << "                                           ffpVs.fogDensity);\n";
+      out << "                                           ffpVs.fogDensity)"
+          << (context.enableHalfVSOut ? ")" : "") << ";\n";
     }
     if (shaders::vsoutEmitPointSize(context.vsOutLayout)) {
       if (layout->hasPointSize) {
@@ -794,10 +855,12 @@ std::string makeFfpVertexSource(const FfpVertexKey& key,
     out << "  out.position = float4(p[vid % 3], 0.0, 1.0);\n";
     out << "  out.position.xy += ffpVs.halfPixelFixup * out.position.w;\n";
     if (shaders::vsoutEmitColor(context.vsOutLayout)) {
-      out << "  out.color = float4(1.0);\n";
+      out << "  out.color = " << vsoutFloat4Write(context, "float4(1.0)")
+          << ";\n";
     }
     if (shaders::vsoutEmitSecondaryColor(context.vsOutLayout)) {
-      out << "  out.secondaryColor = float4(0.0);\n";
+      out << "  out.secondaryColor = "
+          << vsoutFloat4Write(context, "float4(0.0)") << ";\n";
     }
     out << "  float3 dxmt9_lightingNormal = float3(0.0f, 0.0f, 1.0f);\n";
     // Fallback (no vertex layout) path: emit a zero camera position so
@@ -805,22 +868,31 @@ std::string makeFfpVertexSource(const FfpVertexKey& key,
     // geometry stream is bound.
     out << "  float4 dxmt9_cameraPosition = float4(0.0f, 0.0f, 0.0f, 1.0f);\n";
     if (shaders::vsoutEmitTexcoord(context.vsOutLayout, 0u)) {
-      out << "  out.texcoord0 = float4(float2(vid & 1u, (vid >> 1u) & 1u), 0.0f, 1.0f);\n";
+      out << "  out.texcoord0 = "
+          << vsoutFloat4Write(context, "float4(float2(vid & 1u, (vid >> 1u) & 1u), 0.0f, 1.0f)")
+          << ";\n";
     }
     for (size_t i = 1; i < kMaxTextureStages; ++i) {
       if (!shaders::vsoutEmitTexcoord(context.vsOutLayout, i)) continue;
       if (shaders::vsoutEmitTexcoord(context.vsOutLayout, 0u)) {
-        out << "  out.texcoord" << i << " = out.texcoord0;\n";
+        out << "  out.texcoord" << i << " = "
+            << (context.enableHalfVSOut ? vsoutFloat4Write(context, "float4(out.texcoord0)")
+                                        : "out.texcoord0")
+            << ";\n";
       } else {
-        out << "  out.texcoord" << i << " = float4(0.0f, 0.0f, 0.0f, 1.0f);\n";
+        out << "  out.texcoord" << i << " = "
+            << vsoutFloat4Write(context, "float4(0.0f, 0.0f, 0.0f, 1.0f)")
+            << ";\n";
       }
     }
-    if (shaders::vsoutEmitFogFactor(context.vsOutLayout)) out << "  out.fogFactor = 1.0;\n";
+    if (shaders::vsoutEmitFogFactor(context.vsOutLayout)) {
+      out << "  out.fogFactor = " << vsoutFloatWrite(context, "1.0") << ";\n";
+    }
     if (shaders::vsoutEmitPointSize(context.vsOutLayout)) {
       out << "  out.pointSize = clamp(ffpVs.pointSize, ffpVs.pointSizeMin, ffpVs.pointSizeMax);\n";
     }
   }
-  emitLightingBlock(out, key);
+  emitLightingBlock(out, key, context);
   if (key.clipPlaneMask != 0 || context.clipPlaneMask != 0) {
     // Apple Metal limits us to a single `[[clip_distance]]` per VS
     // output (see comment in `dxmt9_shader_sources.cpp`). Collapse the
@@ -901,6 +973,7 @@ std::string makeFfpPixelSource(const FfpPixelKey& key,
   shaders::ShaderPreludeOptions preludeOptions{};
   preludeOptions.withClipDistances = context.clipPlaneMask != 0;
   preludeOptions.vsOutLayout = context.vsOutLayout;
+  preludeOptions.halfVSOut = context.enableHalfVSOut;
   if (argbufResourceArray) {
     out << shaders::makeShaderPreludeArgbufResourceArray(preludeOptions);
   } else if (argbufHybrid) {
@@ -1038,10 +1111,11 @@ std::string makeFfpPixelSource(const FfpPixelKey& key,
     out << "// ffp pixel hash " << key.hash << "\n";
     return out.str();
   }
-  out << "  float4 color = in.color;\n";
+  out << "  float4 color = " << stageInFloat4Read(context, "color") << ";\n";
   out << "  float4 current = color;\n";
-  out << "  float4 diffuse = in.color;\n";
-  out << "  float4 specular = in.secondaryColor;\n";
+  out << "  float4 diffuse = " << stageInFloat4Read(context, "color") << ";\n";
+  out << "  float4 specular = " << stageInFloat4Read(context, "secondaryColor")
+      << ";\n";
   out << "  float4 tfactor = ffpPs.textureFactor;\n";
   out << "  float4 temp = float4(0.0);\n";
   // POINTSPRITEENABLE: every active stage's UV source becomes the
@@ -1073,7 +1147,8 @@ std::string makeFfpPixelSource(const FfpPixelKey& key,
       if (key.pointSpriteEnable) {
         out << "  return float4(dxmt9_pointCoord.x, dxmt9_pointCoord.y, 0.0, 1.0);\n";
       } else {
-        out << "  return float4(fract(in.texcoord0.x), fract(in.texcoord0.y), 0.0, 1.0);\n";
+        out << "  return float4(fract(dxmt9_select_texcoord(in, 0u).x), "
+               "fract(dxmt9_select_texcoord(in, 0u).y), 0.0, 1.0);\n";
       }
       out << "}\n";
       out << "// ffp pixel hash " << key.hash << "\n";
@@ -1231,7 +1306,8 @@ std::string makeFfpPixelSource(const FfpPixelKey& key,
   }
   if (emitFog && key.fogMode != FogMode::None) {
     out << "  float fogDepth = color.a;\n";
-    out << "  color = dxmt9_apply_fog(color, ffpPs, fogDepth, in.fogFactor);\n";
+    out << "  color = dxmt9_apply_fog(color, ffpPs, fogDepth, "
+        << stageInFloatRead(context, "fogFactor") << ");\n";
   }
   out << "  return color;\n";
   out << "}\n";

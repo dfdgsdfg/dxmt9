@@ -165,7 +165,11 @@ VS-buffer-write bucket mostly hidden. Use
 `--baseline-joined <csv> --require-top-vs-buffer-write-decrease` only when
 revalidating that path on a new baseline; otherwise prioritize hidden
 vertex/backend storage probes that can move VS invocations or bytes per
-invocation.
+invocation. The current primitive-order-preserving compiler/backend-shape
+candidate is wrapper `--probe-half-vsout`
+(`DXMT9_PROBE_HALF_VSOUT=1`): smoke it first with `--no-gputrace
+--dump-shaders`, then spend Xcode/gputrace only with a joined baseline and
+`--require-tvb-mechanism-proof`.
 
 Before starting a new 3DMark05 `.gputrace`, keep at least 2GiB free on the
 repository volume. The standard wrapper enforces this with
@@ -174,6 +178,17 @@ the run deliberately disables gputrace or the output volume has already been
 cleared. Use `--dry-run` first; if free space is below the guard, dry-run and
 guard failures print `space usage hints` plus `large trace/output files` to
 choose cleanup targets. Do not delete raw trace artifacts automatically.
+
+3DMark05 may hang on the final frame after the useful perf/capture data has
+already been emitted. Do not wait for natural process exit during perf work.
+Every 3DMark05 perf or `.gputrace` run must go through a positive runner
+timeout so the run can timeout-finalize `result.json`, perf logs, and trace
+paths consistently. The standard wrapper defaults to `240s` for no-gputrace
+scouts and `420s` for `.gputrace`/Xcode replay candidates, and passes that as
+an explicit `run_experiment.py --timeout`; override wrapper `--timeout` only
+when the experiment needs a documented budget. A timeout-finalized run with the
+expected artifacts is acceptable input for finalizer comparison; do not use the
+Wine process lifetime or a manual kill as a performance metric.
 
 ## 1. Programmatic frame capture (.gputrace)
 
@@ -311,10 +326,11 @@ Practical consequences:
 - Mini-replay mechanism proofs that need to certify a TVB pressure
   reduction should use the new
   `compare_xcode_dxmt_bottlenecks.py --require-tvb-mechanism-proof` gate.
-  It checks that top-N `tiled_vertex_buffer_mib + tiled_primitive_block_mib`
-  (the named tiled counters), `vs_invocations`, and `gpu_ms` all strictly
-  decrease. These three together are direct TVB pressure proxies under
-  the Imagination/Asahi model.
+  It checks that top-N hidden backend write, `VS Buffer Device Memory Bytes
+  Written`, `vs_invocations`, and `gpu_ms` all strictly decrease. The named
+  tiled counters remain diagnostic subtype evidence, but they are too narrow
+  to be the primary pass/fail gate when Xcode's VS write is dominated by
+  hidden-expanded TVB/parameter storage.
 - Full-frame production proofs continue to use
   `--require-stable-frame-proof`, which gates on
   `VS Buffer Device Memory Bytes Written` because at full-frame scale the

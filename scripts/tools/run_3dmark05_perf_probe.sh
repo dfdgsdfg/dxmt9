@@ -4,7 +4,7 @@ set -euo pipefail
 repo_root=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/../.." && pwd)
 
 frame=${DXMT_3DMARK05_PROBE_FRAME:-60}
-timeout=${DXMT_3DMARK05_PROBE_TIMEOUT:-180}
+timeout=${DXMT_3DMARK05_PROBE_TIMEOUT:-}
 suffix=${DXMT_3DMARK05_PROBE_SUFFIX:-}
 result_file=${DXMT_3DMARK05_RESULT_FILE:-dxmt9_gt1.3dr}
 capture_gputrace=1
@@ -14,6 +14,7 @@ recommended_gputrace_min_free_mb=2048
 trim_unused_varyings=0
 drop_vsout_point_size=0
 probe_position_only_vsout=0
+probe_half_vsout=0
 force_fragment_color=0
 trim_vertex_temps=0
 trim_vs_output_scratch=0
@@ -146,6 +147,7 @@ require_transient_decrease=0
 require_top_gpu_share_increase=0
 require_top_row_key_match=0
 require_stable_frame_proof=0
+require_tvb_mechanism_proof=0
 require_cache_opt_apply_proof=0
 require_screen_blend_cache_proof=0
 require_semantic_image_proof=0
@@ -187,7 +189,8 @@ optional Metal frame capture, and post-run summary CSV generation.
 Options:
   --suffix NAME       Output suffix (default: probe-<timestamp>-frame<N>)
   --frame N           1-based Metal capture frame (default: 60)
-  --timeout SEC       run_experiment timeout seconds (default: 180)
+  --timeout SEC       run_experiment timeout seconds (default: 420 with gputrace,
+                      240 with --no-gputrace; DXMT_3DMARK05_PROBE_TIMEOUT overrides)
   --result-file NAME  3DMark05 result filename argument (default: dxmt9_gt1.3dr)
   --no-gputrace       Do not set DXMT_METAL_CAPTURE_FRAME/PATH
   --encoder-breakdown-seq N
@@ -208,6 +211,10 @@ Options:
                       Set DXMT9_PROBE_POSITION_ONLY_VSOUT=1 to force
                       position-only VSOut and constant fragment output for a
                       correctness-invalid hidden VS-write lower-bound probe
+  --probe-half-vsout
+                      Set DXMT9_PROBE_HALF_VSOUT=1 to request half-precision
+                      user varyings in VSOut while keeping position,
+                      point_size, and clip_distance float
   --force-fragment-color
                       Set DXMT_DEBUG_FORCE_FRAGMENT_COLOR=1 to keep the
                       current VSOut layout while forcing translated/FFP
@@ -601,6 +608,10 @@ Options:
                       Finalizer proof preset: require result.json, counter/join
                       coverage, PSO attribution, top row-key match, top GPU/VS/
                       unexplained write decrease, and <=5% top geometry drift
+  --require-tvb-mechanism-proof
+                      Finalizer gate: top hidden backend write, VS buffer
+                      write, VS invocations, and GPU time must all strictly
+                      decrease; use for row-local backend-shape mechanism proofs
   --require-cache-opt-apply-proof
                       Finalizer proof preset for cache-opt apply runs: stable
                       frame proof plus target rows' actual LRU32 miss, VS
@@ -740,6 +751,10 @@ while (($#)); do
       ;;
     --probe-position-only-vsout)
       probe_position_only_vsout=1
+      shift
+      ;;
+    --probe-half-vsout)
+      probe_half_vsout=1
       shift
       ;;
     --force-fragment-color)
@@ -1276,6 +1291,10 @@ while (($#)); do
       require_stable_frame_proof=1
       shift
       ;;
+    --require-tvb-mechanism-proof)
+      require_tvb_mechanism_proof=1
+      shift
+      ;;
     --require-cache-opt-apply-proof)
       require_cache_opt_apply_proof=1
       shift
@@ -1417,8 +1436,17 @@ if [[ ! "$frame" =~ ^[0-9]+$ ]] || (( frame == 0 )); then
   exit 2
 fi
 
-if [[ ! "$timeout" =~ ^[0-9]+([.][0-9]+)?$ ]]; then
-  echo "--timeout must be numeric seconds" >&2
+if [[ -z "$timeout" ]]; then
+  if (( capture_gputrace )); then
+    timeout=420
+  else
+    timeout=240
+  fi
+fi
+
+if [[ ! "$timeout" =~ ^[0-9]+([.][0-9]+)?$ ||
+      "$timeout" =~ ^0+([.]0+)?$ ]]; then
+  echo "--timeout must be positive numeric seconds" >&2
   exit 2
 fi
 
@@ -1684,6 +1712,7 @@ if (( require_top_gpu_decrease ||
       require_transient_decrease ||
       require_top_gpu_share_increase ||
       require_top_row_key_match ||
+      require_tvb_mechanism_proof ||
       require_target_index_cache_miss32_decrease ||
       require_target_index_cache_opt_miss32_decrease ||
       require_target_reordered_index_cache_hits ||
@@ -1876,6 +1905,10 @@ fi
 
 if (( probe_position_only_vsout )); then
   env_args+=("DXMT9_PROBE_POSITION_ONLY_VSOUT=1")
+fi
+
+if (( probe_half_vsout )); then
+  env_args+=("DXMT9_PROBE_HALF_VSOUT=1")
 fi
 
 if (( force_fragment_color )); then
@@ -2391,6 +2424,9 @@ if (( capture_gputrace )); then
   fi
   if (( require_stable_frame_proof )); then
     finalize_cmd+=(--require-stable-frame-proof)
+  fi
+  if (( require_tvb_mechanism_proof )); then
+    finalize_cmd+=(--require-tvb-mechanism-proof)
   fi
   if (( require_screen_blend_cache_proof )); then
     finalize_cmd+=(--require-screen-blend-cache-proof)

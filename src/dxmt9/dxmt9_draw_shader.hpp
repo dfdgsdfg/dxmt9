@@ -82,6 +82,9 @@ struct ShaderSourceContext {
   // Pair-local VSOut layout selected from fragment-input liveness when
   // DXMT9_TRIM_UNUSED_VARYINGS is enabled. Full layout by default.
   shaders::VSOutLayout vsOutLayout{};
+  // DXMT9_PROBE_HALF_VSOUT diagnostic. Requests half user varyings in the
+  // shared VSOut struct while keeping position/point-size/clip-distance float.
+  bool enableHalfVSOut = false;
   // Opt-in X8 render-target compression probe. Bits mark fragment samplers
   // whose D3D format has no alpha channel and therefore need `sample.a = 1`
   // when the backend binds the raw Metal texture instead of a swizzled
