@@ -190,7 +190,12 @@ classification of every register is `Float`. `Half` is opt-in.
 **R-CORE-SHADER-3.3** The translator must preserve the D3D9 `_pp` (partial
 precision) instruction modifier through decoding. The precision pass (§4.4)
 may treat `_pp` as a hint that the result register is safe to classify as
-`Half`, subject to mandatory-Float rules below.
+`Half`, subject to mandatory-Float rules below. `_pp` is necessary but not
+sufficient for `Half`: a register or output field may be classified `Half`
+only when every reaching write into that value is half-safe and every
+consumer either accepts `Half` or has an explicit boundary cast. If a register
+has mixed `_pp` and non-`_pp` writes and the pass cannot prove component-local
+safety, the whole register must remain `Float`.
 
 ### 3.2 Mandatory Float Regions
 
@@ -326,6 +331,12 @@ plan with three fields:
 - per-output-register `Precision`;
 - a list of `(instruction index, operand index)` cast-insertion sites where
   the emitter must inject a `float ↔ half` conversion.
+
+The plan must be conservative for mixed writes. A temp or output register may
+be classified `Half` only if all reaching writes are either `_pp` writes or
+come from a pass-owned opt-in source such as VSOut-only half precision, and no
+mandatory-Float ancestry reaches that register. Otherwise the register must be
+classified `Float`.
 
 **R-CORE-SHADER-4.9** The precision plan must satisfy §3.4 (mandatory Float
 regions) as a precondition of MSL emission. A plan that violates §3.4 must
@@ -500,7 +511,10 @@ fixed-grid comparison is insufficient. The oracle MUST cover:
   TEXKILL, vPos / vFace). Imported fixtures MUST record upstream source,
   URL, commit, model, opcode coverage, and license scope per
   `agents/rules/codebase_conventions.rules.md` License And Reference
-  Policy. The corpus is a behaviour reference, not an ABI dependency.
+  Policy. Refreshes MUST include a drift check against a local vkd3d checkout
+  or explicitly document why the fixture is frozen. The corpus is a behaviour
+  reference, not an ABI dependency, and importing vkd3d source code is out of
+  scope.
 
 **R-CORE-SHADER-8.5** A requirement in this document that is not yet fully
 implemented or not yet fully evidenced must have a row in `specs/gap.md`.

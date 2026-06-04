@@ -282,14 +282,18 @@ struct ShaderPrecisionPlan {
 
 The pass is a forward dataflow on a small register file:
 
-1. Seed every register's precision from the §3.4 mandatory-Float regions:
+1. Seed every register's precision from the §3.2 mandatory-Float regions
+   (R-CORE-SHADER-3.4):
    - position output, depth output: `Float`.
    - texture-coordinate operand at every sample site: `Float`.
    - every register sourced by a Float-only opcode: `Float`.
-2. Seed remaining temps with `_pp` hint: `Half` if `_pp` set on at least one
-   write; otherwise `Float` (conservative).
-3. Propagate `Float` forward: any temp written from a `Float` source becomes
-   `Float`.
+2. Seed remaining temps and outputs from their reaching writes. A register is
+   eligible for `Half` only when every reaching write is either `_pp` or comes
+   from an explicit pass-owned opt-in source, and no mandatory-Float ancestry
+   reaches it. Mixed `_pp` / non-`_pp` writes collapse to `Float` unless a
+   future component-local analysis proves the written components independent.
+3. Propagate `Float` forward to a fixed point: any value written from a
+   `Float` source, or consumed at a Float-only site, becomes `Float`.
 4. Insert boundary cast sites where a `Half`-classified value flows into a
    `Float`-classified consumer or vice versa.
 
@@ -308,9 +312,10 @@ Cast direction is `half ↔ float` only. Vector width is preserved.
 
 The performance evidence in §8 motivates emitting `Half` for VS outputs
 *before* converting fragment shader bodies. A VS-only precision plan with
-`tempRegPrecision = Float` and `outRegPrecision = Half` (subject to §3.4)
-exercises the half-precision path without crossing FS-side boundary
-hazards.
+`tempRegPrecision = Float` and selected user varyings in `outRegPrecision =
+Half` (subject to §3.2 / R-CORE-SHADER-3.4 and paired-FS consumer safety)
+exercises the half-precision path without changing arithmetic inside either
+shader body.
 
 This makes the first useful implementation step relatively small:
 
@@ -544,11 +549,12 @@ way it is.
 At frame 50, the Xcode encoder counter `VS Buffer Device Memory Bytes
 Written` reports **1627 MiB** of vertex-stage buffer-write traffic. Of
 that, the dxmt9 CPU-side writers (argbuf, transient upload, FFP/VS
-constant push) account for **0.444 MiB**. The remaining ~1626 MiB is
-firmware-owned Tiled Vertex Buffer (TVB) and Parameter Buffer (PB)
-storage that Apple Silicon's vertex / binning stage uses to materialise
-stage-out data; it is not an application `MTLBuffer` that dxmt9 can
-shrink directly.
+constant push) account for **0.444 MiB**. The remaining ~1626 MiB is a
+native Apple vertex / tiler / parameter-storage attribution bucket,
+likely TVB/PB-like in the Asahi AGX model but not a public Metal ABI
+object. It is not an application `MTLBuffer` and the shader IR cannot
+shrink it directly; dxmt9 can only influence it indirectly through
+submitted geometry, shader source, and pipeline state.
 
 **The proven control variable for this counter is post-transform VS
 invocation count.** Reordering the index buffer for better post-transform
@@ -585,7 +591,7 @@ these in as the intended fix; the gap row for FP16 is the supersession.
 | Drop VSOut point-size only | `DXMT9_PROBE_DROP_VSOUT_POINT_SIZE` | rejected |
 | Const-upload coalescing variants | `DXMT9_SPLIT_SPARSE_CONST_RECORDS` and inverse | rejected as VS-write owner |
 
-Pattern: state-bit and RT-metadata changes do not move the firmware-side
+Pattern: state-bit and RT-metadata changes do not move the native backend
 VS write bucket. The empirically-proven control variable is post-transform
 VS invocation count (§8.1 — reorder cuts invocations, counter moves in
 lockstep). Stage-out width was tested at GT1 scale (varying trim,
@@ -648,7 +654,7 @@ The shader layer must:
 | Concern | Owner spec |
 |---|---|
 | `encode_draw_cpu_ms` CPU encode bottleneck | `specs/backend/` (separate track) |
-| TVB / PB sizing on Apple Silicon | firmware (no dxmt9 lever; documented in `agents/rules/metal_debugging.rules.md` §5) |
+| Native vertex / tiler / parameter-storage sizing on Apple Silicon | Apple Metal compiler / driver; no shader-IR direct lever. Runtime locality levers belong to `specs/backend/`. |
 | Pipeline state object selection | `specs/backend/` PSO design |
 | Index reorder, draw-call batching, const-upload coalescing | `specs/backend/` |
 
@@ -824,4 +830,7 @@ coverage but no recorded matrix comparison against vkd3d.
 
 Open: which D3DBC opcodes, operand modifiers, or semantic edge cases
 does vkd3d decode that dxmt9 does not? The actionable form is a
-per-opcode coverage diff in `tests/conformance/d3d9/MANIFEST.toml`.
+per-opcode coverage diff plus focused `.shader_test` fixtures under
+`tests/shader_runner/corpus/`, with upstream URL, commit, model, opcode
+coverage, license scope, and drift-check status recorded. This keeps
+vkd3d a behaviour oracle instead of an implementation dependency.
