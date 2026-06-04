@@ -287,7 +287,9 @@ fully understood. Key patterns to carry forward:
 
 The main difference for dxmt9: d3d9-webgl only handles fixed-function state, while
 dxmt9 must also translate D3D9 bytecode shaders (SM 1.x through 3.0) — a
-significantly larger scope. See `shader-translation.md` for that pipeline.
+significantly larger scope. See `specs/d3d9/shader` for the current dxmt9
+translator contract and `shader-translation-vkd3d-moltenvk.md` for the external
+vkd3d-shader / MoltenVK reference stack.
 
 ---
 

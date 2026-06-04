@@ -379,8 +379,10 @@ flowchart LR
     CONV -.-> TS
 ```
 
-**Note for dxmt9:** airconv targets SM4/SM5 only. For D3D9 (SM 1–3), use the
-vkd3d-shader → SPIRV-Cross pipeline described in `shader-translation.md`.
+**Note for dxmt9:** airconv targets SM4/SM5 only. For D3D9 (SM 1-3), the
+current dxmt9-owned path is `specs/d3d9/shader`'s direct ShaderIR-to-MSL
+translator. The vkd3d-shader / MoltenVK stack remains an external reference,
+summarized in `shader-translation-vkd3d-moltenvk.md`.
 
 ### Shader Variant System
 
