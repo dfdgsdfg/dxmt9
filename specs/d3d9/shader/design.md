@@ -218,6 +218,35 @@ shader variant (R-CORE-SHADER-2.9).
 The alpha-test variant key is part of `ShaderSourceContext` and participates
 in the IR cache key (§7).
 
+### 3.5 SM 1.x Pixel Shader Output Clamp
+
+D3D9 specifies SM 1.x pixel shader colour output as saturated to `[0, 1]`.
+Neither GLSL nor MSL clamps by default, so any reimplementation that targets
+either language must add the clamp explicitly. wined3d's GLSL emitter does
+this in `glsl_shader.c` for the same reason; dxmt9's MSL emitter must do
+the same (R-CORE-SHADER-2.11).
+
+The translator inspects the IR's shader-model major version. When it is `1`
+(any of `ps_1_0` through `ps_1_4`), the emitter wraps the final pixel
+output in `clamp(...)`:
+
+```metal
+// Float emit path, ps_1_x:
+out.color = clamp(out.color, 0.0, 1.0);
+
+// Half emit path (R-CORE-SHADER-3.7 selected Half for the output reg):
+out.color = clamp(out.color, 0.0h, 1.0h);
+```
+
+SM 2.0 and 3.0 pixel shaders MUST NOT receive this clamp; they were
+designed with extended dynamic range in mind, and clamping them silently
+breaks HDR content. The version check is on the IR, not on a render-state
+flag.
+
+This is a translator obligation (a pure value transform per
+R-CORE-SHADER-4.1), not a render-state setting. There is no D3D9 render
+state to disable the clamp.
+
 ---
 
 ## 4. Precision Inference Pass
@@ -410,6 +439,53 @@ operand precision is consumer-driven, and the cast string depends on the
 producer's actual emitted type (`half3` vs `float3` vs scalar), which the
 emitter knows only at emit time.
 
+### 6.6 Variant Specialization Policy
+
+Every variant axis the spec defines lands in one of two implementation
+buckets (R-CORE-SHADER-5.6). Misclassification has real cost: a
+library-variant axis treated as a function constant produces wrong
+output, while a function-constant axis treated as a library variant
+inflates the archive and the cold-compile budget (`pipeline_build_*`
+counters in `docs/perfomance-bottleneck.md` §"Primary Bottleneck
+Classes" / Cold PSO/archive miss).
+
+**Function-constant axes** (same MSL, runtime value supplied via
+`[[function_constant]]` or pushed via a constant slot):
+
+| Axis | Why function constant |
+|---|---|
+| Alpha-test reference value | scalar value only; the discard predicate code shape is fixed once enable/func is fixed |
+| Fog start / end / colour | scalar; fog math shape is fixed by FFP key |
+| Half-pixel `c_fixup` `(1/vpW, 1/vpH)` | scalar; the `oPos.xy += c_fixup * oPos.w` instruction is always the same |
+| `D3DFVF_XYZRHW` viewport dimensions | scalar; NDC conversion code shape is fixed |
+| Translator-injected SM 1.x clamp range | constant; the clamp call site is fixed |
+
+These contribute zero new cache entries. Bind them through the same
+per-frequency constant slot dxmt9 already uses for translator-injected
+values.
+
+**Library-variant axes** (different emitted MSL, new cache key entry,
+separate `MTLBinaryArchive` slot):
+
+| Axis | Why library variant |
+|---|---|
+| FFP key (every bit) | Each bit drives a different emit branch in the FFP generator |
+| Alpha-test enable / func | enable toggles the presence of the discard block; func picks a different compare opcode |
+| Shader model major (SM 1.x clamp present / absent) | clamp call site exists or not |
+| Half-precision opt-in | every cast site and every typed identifier may change |
+| Half-pixel emit mode (programmable VS / FFP VS) | injection site differs by stage |
+| Debug toggles that change emitted code (`DXMT_DEBUG_FLIP_VERTEX_Y`, `DXMT_DEBUG_FORCE_PIXEL_V_FLIP`, `DXMT_DEBUG_FORCE_FRAGMENT_COLOR`, `DXMT_DEBUG_FORCE_FULLSCREEN_VERTEX`) | each adds or replaces an emit block |
+| Per-pass plan output that changes MSL bytes (precision plan, VSOut layout when liveness is enabled, trim plans) | the whole point of the pass is to change emit |
+
+The decision rule is mechanical: *does this axis change emitted MSL
+bytes for the same input IR?* If yes, library variant. If no, function
+constant.
+
+The same rule decides what enters the cache key composition in §7.1:
+every library-variant axis contributes a term; no function-constant
+axis does. This keeps the archive bounded by the count of distinct
+emitted MSL strings, not by the cross product of every runtime knob.
+
 ---
 
 ## 7. Cache and Hash
@@ -553,6 +629,20 @@ The shader layer must:
    counter movement → no default-on promotion, regardless of correctness
    evidence.
 
+   **Why the counter gate is mandatory, not optional.** Apple's Metal
+   compiler is permitted to widen emitted `half` values back to `float`
+   inside the AGX backend whenever it judges the precision change
+   harmful — for register pressure, varying packing, or numeric
+   stability. The Asahi research notes
+   (`docs/research/shader-translation-asahi-agx.md` §"ISA-Level
+   Observations" and §"Open Questions") raise this risk explicitly:
+   `half` is a *request*, not a *guarantee*, and the AGX hardware that
+   would consume the request is downstream of the Metal compiler that
+   dxmt9 cannot inspect from the outside. Without measured counter
+   movement, an FP16 default-on promotion is therefore the worst of
+   both worlds: correctness debt at every cast site, zero performance
+   payoff, and a permanent maintenance burden on the precision pass.
+
 ### 8.5 Out of Scope for the IR Layer
 
 | Concern | Owner spec |
@@ -646,13 +736,14 @@ blast radius.
 | Requirement | Evidence |
 |---|---|
 | R-CORE-SHADER-1.1..1.6 | `dxmt9-shader-bytecode-validation-spec` (decode), `dxmt9-shader-transform-spec` (IR shape), hash determinism asserted in those targets |
-| R-CORE-SHADER-2.1..2.10 | `dxmt9-shader-transform-spec` semantic snapshots; runtime alpha-test, half-pixel, NDC probes in the `shader_runner_dxmt9` corpus under `tests/shader_runner/corpus/` |
+| R-CORE-SHADER-2.1..2.11 | `dxmt9-shader-transform-spec` semantic snapshots (including SM 1.x clamp 2.11); runtime alpha-test, half-pixel, NDC, and SM 1.x output-range probes in the `shader_runner_dxmt9` corpus under `tests/shader_runner/corpus/` |
 | R-CORE-SHADER-3.1..3.10 | precision-pass golden test (per §9.1), half-precision correctness oracle (§9.3); both gated on the gap.md row until the IR-level pass exists |
 | R-CORE-SHADER-4.1..4.11 | per-pass purity + determinism tests under `dxmt9-shader-transform-spec`; emitter precondition assert covered by emit-side cases in the same target |
-| R-CORE-SHADER-5.1..5.5 | `dxmt9-shader-source-determinism-spec` (emitter determinism); MSL snapshot tests (§9.4); archive build at conformance run |
+| R-CORE-SHADER-5.1..5.6 | `dxmt9-shader-source-determinism-spec` (emitter determinism); MSL snapshot tests (§9.4); archive build at conformance run; variant-classification audit (R-CORE-SHADER-5.6) proving every spec axis is in exactly one of the function-constant / library-variant buckets defined in §6.6 |
 | R-CORE-SHADER-6.1..6.4 | shader-archive load/save test; env-var-flip cache-miss test |
 | R-CORE-SHADER-7.1..7.4 | env-var documentation audit; dump-shader path exercised by `scripts/tools/finalize_3dmark05_perf_probe.sh` shader-dump matching |
 | R-CORE-SHADER-8.1..8.5 | meson `dxmt9-shader-*` targets above; `specs/gap.md` rows for any unimplemented item |
+| Cache observability cross-link | The backend / perf-attribution layer must surface `pipeline_build_*`, `pipeline_hit`, `pipeline_miss`, and `cold_compile_count_after_warm` counters keyed by the cache hash composed in §7.1. The shader spec defines the key composition; the backend spec defines counter publication. A backend change that breaks attribution from a hash bucket back to the spec axis that produced it is a regression. |
 
 Open gaps (live in `specs/gap.md`):
 
@@ -663,3 +754,74 @@ Open gaps (live in `specs/gap.md`):
 - **Half-precision correctness oracle** — required by R-CORE-SHADER-3.10,
   R-CORE-SHADER-8.3; not yet built.
 - **`SpirvModule` → `ShaderIR` rename** — naming cleanup, non-blocking.
+
+---
+
+## 11. Open Architectural Questions
+
+These are questions raised by the sibling research notes that the spec
+does not yet resolve. They are not gaps in implementation; they are
+unresolved design choices that future spec revisions may close.
+
+### 11.1 Function-Constant Prolog/Epilog Analog
+
+Apple AGX (per `docs/research/shader-translation-asahi-agx.md`
+§"Asahi Shader Pipeline" / Honeykrisp) keeps a single stable *main*
+shader and pushes dynamic state — vertex attributes, fragment outputs,
+blending — into compiler-generated prologs and epilogs. The native
+mechanism is unavailable to dxmt9 through Metal, but
+`[[function_constant]]` is the public Metal analog.
+
+The §6.6 variant policy already routes scalar values through function
+constants. The open question is whether *structural* state — alpha-test
+function selection, depth-write enable, sample-mask masking, fog mode
+— can also be expressed as function-constant branches around a stable
+main shader, rather than as separate library variants. If yes, the
+PSO key cardinality drops, archive size shrinks, and cold-compile cost
+goes down without losing semantic correctness.
+
+The cost is a more complex emitter and runtime cost from function-
+constant dispatch. A controlled experiment on FFP+alpha-test variants
+is the natural starting point.
+
+### 11.2 MSL Varying Layouts and AGX 16-Bit Slots
+
+The Asahi research note's open questions include: which MSL output
+layouts cause Apple's Metal compiler to choose 16-bit varying slots,
+and which keep everything at 32-bit. The IR-level precision pass (§4)
+expresses *intent* for VSOut precision, but it cannot prove that the
+Metal compiler honours that intent.
+
+Open: what is the smallest MSL difference observable in the Xcode
+counters that flips an output between a 32-bit and a 16-bit varying
+slot? An answer would let the §4.4 VS-first strategy gate promotion
+on a directly observable Metal-side signal instead of inferring it
+from `VS Buffer Device Memory Bytes Written` movement.
+
+### 11.3 Wined3d State-Key Bit Audit
+
+The `docs/research/shader-translation-wined3d-opengl.md` reference
+checklist names the wined3d state-key bits that drive variant
+emission. dxmt9's cache key composition (§7.1) and FFP key (§3.1)
+were derived independently. A one-pass audit comparing the two key
+sets has not been done.
+
+Open: do the dxmt9 keys miss any state bit that wined3d found
+load-bearing for D3D9 conformance? Examples to check: sRGB write,
+point-sprite enable / size, fog source selector (vertex vs. pixel)
+when combined with FFP, vFace presence in PS, NaN/Inf input tolerance
+modes for SM 1.x.
+
+A passing Wine d3d9 conformance manifest is partial evidence that the
+keys are sufficient; a complete audit would be definitive.
+
+### 11.4 vkd3d-shader Decoder Edge Cases
+
+The `docs/research/shader-translation-vkd3d-moltenvk.md` reference
+checklist treats vkd3d's `d3dbc.c` as the public decoder oracle for
+SM 1.x / 2.x / 3.x edge cases. dxmt9's decoder has independent
+coverage but no recorded matrix comparison against vkd3d.
+
+Open: which D3DBC opcodes, operand modifiers, or semantic edge cases
+does vkd3d decode that dxmt9 does not? The actionable form is a
+per-opcode coverage diff in `tests/conformance/d3d9/MANIFEST.toml`.

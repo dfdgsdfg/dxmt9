@@ -157,6 +157,18 @@ toggles, off by default, with scope strictly limited as listed:
 These flags must not bleed into other semantic decisions; in particular,
 `DXMT_DEBUG_FLIP_VERTEX_Y` must not disable the half-pixel fixup.
 
+### 2.6 SM 1.x Output Clamp
+
+**R-CORE-SHADER-2.11** Pixel shaders with shader-model major version `1`
+(`ps_1_0` through `ps_1_4`) MUST clamp their colour output to `[0, 1]`
+before emitting it as the final fragment colour. SM 2.0 and SM 3.0
+pixel shaders MUST NOT be clamped. The clamp is a translator
+obligation, not a render-state setting: D3D9 specifies SM 1.x output
+as `[0, 1]`-saturated, MSL does not clamp by default, and wined3d's
+GLSL emitter applies the same clamp for the same reason. The clamp
+must respect the per-output precision plan: a `Float` output is
+clamped against `0.0` / `1.0`, a `Half` output against `0.0h` / `1.0h`.
+
 ---
 
 ## 3. Precision and VSOut Layout
@@ -355,6 +367,28 @@ register number, sorted vectors).
 shipping Apple `metal` toolchain for every shader in the dxmt9 conformance
 corpus. Failure to compile is a translator bug, not an application bug.
 
+**R-CORE-SHADER-5.6** Every spec-defined variant axis MUST be classified as
+exactly one of:
+
+- **Function constant**: same emitted MSL, value supplied at PSO build
+  time via `[[function_constant(id)]]` or pushed via a uniform / constant
+  slot, no new `MTLLibrary` compile, no new cache key entry. Use this for
+  axes whose only effect is a scalar value (alpha-test reference, fog
+  parameters, viewport fixup constants, `c_fixup` for half-pixel offset).
+- **Library variant**: different emitted MSL, new cache key entry,
+  separate `MTLBinaryArchive` slot, separate compile. Use this only for
+  axes whose effect changes code shape (FFP key, alpha-test
+  enable / func, SM-version clamp, half-precision opt-in, half-pixel
+  emit mode, V-flip / fragment-colour debug toggles).
+
+A pass plan whose output changes emitted MSL bytes MUST be classified
+library-variant and MUST contribute to the cache key (§6). A pass plan
+whose output only changes scalar values pushed at runtime MUST be
+classified function-constant and MUST NOT contribute to the cache key.
+Misclassification is a contract violation: a library variant treated as
+a function constant produces wrong output; a function constant treated
+as a library variant explodes the archive.
+
 ---
 
 ## 6. Cache, Hash, and Archive
@@ -451,7 +485,22 @@ fixed-grid comparison is insufficient. The oracle MUST cover:
   (`scripts/check/audit_perf_counter_table.py`);
 - counter-callsite presence
   (`scripts/check/audit_perf_counter_callsites.py`);
-- environment-variable documentation as in §7.4.
+- environment-variable documentation as in §7.4;
+- **Wine D3D9 PE conformance** as the public-ABI oracle. The PE binaries
+  `tests/conformance/d3d9/dxmt9-d3d9-conformance.exe` (mapped in
+  `tests/conformance/d3d9/MANIFEST.toml` to Wine `dlls/d3d9/tests/`
+  sources) gate translator correctness against the same shader inputs
+  third-party D3D9 implementations are validated against. A translator
+  change that fails a previously-passing manifest entry is a regression;
+  a change that asks for a passing entry to be downgraded requires an
+  explicit gap.md row.
+- **vkd3d-shader `.shader_test` corpus** as the SM 1.x / 2.x / 3.x
+  decoder oracle for D3DBC edge cases (relative addressing, predicate
+  registers, ps_1_x texture instructions, partial precision hints,
+  TEXKILL, vPos / vFace). Imported fixtures MUST record upstream source,
+  URL, commit, model, opcode coverage, and license scope per
+  `agents/rules/codebase_conventions.rules.md` License And Reference
+  Policy. The corpus is a behaviour reference, not an ABI dependency.
 
 **R-CORE-SHADER-8.5** A requirement in this document that is not yet fully
 implemented or not yet fully evidenced must have a row in `specs/gap.md`.
