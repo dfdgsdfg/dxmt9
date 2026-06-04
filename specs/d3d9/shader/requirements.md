@@ -555,6 +555,21 @@ triple MUST produce byte-identical MSL; pass and emitter code MUST NOT depend
 on process time, pointer identity, unordered container iteration, Wine, Metal,
 or environment variables except for documented `ShaderSourceContext` inputs.
 
-**R-CORE-SHADER-8.10** A requirement in this document that is not yet fully
+**R-CORE-SHADER-8.10** **SM 1.x output clamp version gating.** A property-based
+test MUST assert, for every pixel shader IR in a generated population:
+
+```
+emit(IR) contains SM1xClampForm  ⟺  IR.major == 1
+```
+
+SM 2.0 and SM 3.0 pixel shaders MUST NOT be clamped; SM 1.x pixel shaders
+MUST always be clamped (R-CORE-SHADER-2.11). The clamp form is precision-
+aware (`clamp(out, 0.0, 1.0)` for Float-emitted output, `clamp(out, 0.0h,
+1.0h)` for Half-emitted output per R-CORE-SHADER-3.7); the property checks
+for the presence of either form. The generator MUST include adversarial
+cases at the SM boundary: a `ps_1_4` IR mutated to `ps_2_0` must lose the
+clamp, and the reverse must add it.
+
+**R-CORE-SHADER-8.11** A requirement in this document that is not yet fully
 implemented or not yet fully evidenced must have a row in `specs/gap.md`.
 TODOs must not be hidden inside `requirements.md` or `design.md`.

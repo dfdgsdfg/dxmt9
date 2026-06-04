@@ -788,6 +788,17 @@ addresses, unordered iteration, direct Wine / Metal calls, and raw environment
 reads. Any environment-derived value that changes source must first be resolved
 into `ShaderSourceContext` and then into the cache key.
 
+**SM 1.x output clamp version gating** (R-CORE-SHADER-8.10). The property is a
+biconditional over the shader-model major version: SM 1.x always clamps, SM
+2.0 / 3.0 never clamp. The generator emits pixel shader IRs across all three
+versions plus boundary mutations (e.g. a `ps_1_4` IR retargeted to `ps_2_0`
+inside the harness). The property checks emit output for the precision-aware
+clamp form — `clamp(out, 0.0, 1.0)` when R-CORE-SHADER-3.7 selected `Float`
+for the colour output, `clamp(out, 0.0h, 1.0h)` when `Half` was selected.
+Smaller in scope than the other properties but cheap to add and the
+biconditional is the kind of trivial-looking gate that silently breaks under
+refactoring; pinning it as a property forecloses that drift.
+
 ---
 
 ## 10. Verification Mapping
@@ -801,7 +812,7 @@ into `ShaderSourceContext` and then into the cache key.
 | R-CORE-SHADER-5.1..5.6 | `dxmt9-shader-source-determinism-spec` (emitter determinism); MSL snapshot tests (§9.4); archive build at conformance run; variant-classification audit (R-CORE-SHADER-5.6) proving every spec axis is in exactly one of the function-constant / library-variant buckets defined in §6.6 |
 | R-CORE-SHADER-6.1..6.4 | shader-archive load/save test; env-var-flip cache-miss test |
 | R-CORE-SHADER-7.1..7.4 | env-var documentation audit; dump-shader path exercised by `scripts/tools/finalize_3dmark05_perf_probe.sh` shader-dump matching |
-| R-CORE-SHADER-8.1..8.10 | meson `dxmt9-shader-*` targets above; formal/property suites in §9.5; `specs/gap.md` rows for any unimplemented item |
+| R-CORE-SHADER-8.1..8.11 | meson `dxmt9-shader-*` targets above; formal/property suites in §9.5 (including SM 1.x clamp gating 8.10); `specs/gap.md` rows for any unimplemented item |
 | Cache observability cross-link | The backend / perf-attribution layer must surface `pipeline_build_*`, `pipeline_hit`, `pipeline_miss`, and `cold_compile_count_after_warm` counters keyed by the cache hash composed in §7.1. The shader spec defines the key composition; the backend spec defines counter publication. A backend change that breaks attribution from a hash bucket back to the spec axis that produced it is a regression. |
 
 Open gaps (live in `specs/gap.md`):
