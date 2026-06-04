@@ -149,6 +149,7 @@ require_top_row_key_match=0
 require_stable_frame_proof=0
 require_tvb_mechanism_proof=0
 require_cache_opt_apply_proof=0
+require_opaque_depth_index_cache_proof=0
 require_screen_blend_cache_proof=0
 require_semantic_image_proof=0
 require_target_index_cache_miss32_decrease=0
@@ -190,7 +191,7 @@ Options:
   --suffix NAME       Output suffix (default: probe-<timestamp>-frame<N>)
   --frame N           1-based Metal capture frame (default: 60)
   --timeout SEC       run_experiment timeout seconds (default: 420 with gputrace,
-                      240 with --no-gputrace; DXMT_3DMARK05_PROBE_TIMEOUT overrides)
+                      180 with --no-gputrace; DXMT_3DMARK05_PROBE_TIMEOUT overrides)
   --result-file NAME  3DMark05 result filename argument (default: dxmt9_gt1.3dr)
   --no-gputrace       Do not set DXMT_METAL_CAPTURE_FRAME/PATH
   --encoder-breakdown-seq N
@@ -617,6 +618,13 @@ Options:
                       frame proof plus target rows' actual LRU32 miss, VS
                       buffer write, and VS invocation decreases; requires
                       --target-row-key
+  --require-opaque-depth-index-cache-proof
+                      Finalizer proof preset for production-shaped opaque
+                      depth cached-index opt-in: stable-frame proof plus target
+                      cache-opt telemetry, reordered-cache hits, target VS
+                      write/invocation decreases, and --target-row-key.
+                      Also requires --optimize-opaque-depth-index-cache and
+                      enables index-reuse/cache-opt-candidate telemetry.
   --require-screen-blend-cache-proof
                       Finalizer proof preset for screen-blend cached-index
                       opt-in: stable-frame proof plus target cache-opt
@@ -1299,6 +1307,10 @@ while (($#)); do
       require_cache_opt_apply_proof=1
       shift
       ;;
+    --require-opaque-depth-index-cache-proof)
+      require_opaque_depth_index_cache_proof=1
+      shift
+      ;;
     --require-screen-blend-cache-proof)
       require_screen_blend_cache_proof=1
       shift
@@ -1440,7 +1452,7 @@ if [[ -z "$timeout" ]]; then
   if (( capture_gputrace )); then
     timeout=420
   else
-    timeout=240
+    timeout=180
   fi
 fi
 
@@ -1593,6 +1605,24 @@ if (( require_screen_blend_cache_proof )); then
   fi
   if (( ${#target_row_keys[@]} == 0 )); then
     echo "--require-screen-blend-cache-proof requires at least one --target-row-key" >&2
+    exit 2
+  fi
+  measure_index_reuse=1
+  measure_index_cache_opt_candidate=1
+fi
+
+if (( require_opaque_depth_index_cache_proof )); then
+  require_stable_frame_proof=1
+  require_target_index_cache_opt_miss32_decrease=1
+  require_target_reordered_index_cache_hits=1
+  require_target_vs_buffer_write_decrease=1
+  require_target_vs_invocations_decrease=1
+  if (( ! optimize_opaque_depth_index_cache )); then
+    echo "--require-opaque-depth-index-cache-proof requires --optimize-opaque-depth-index-cache" >&2
+    exit 2
+  fi
+  if (( ${#target_row_keys[@]} == 0 )); then
+    echo "--require-opaque-depth-index-cache-proof requires at least one --target-row-key" >&2
     exit 2
   fi
   measure_index_reuse=1
@@ -1816,6 +1846,14 @@ print_space_hints() {
       "$repo_root/experiments/output" \
       "$repo_root/build-x86_64-builtin" 2>/dev/null |
       sort -hr >&"$stream" || true
+    echo "large trace run directories:" >&"$stream"
+    du -sh "$repo_root/traces"/app-d3d9-3dmark05-* 2>/dev/null |
+      sort -hr |
+      head -12 >&"$stream" || true
+    echo "large output run directories:" >&"$stream"
+    du -sh "$repo_root/experiments/output"/app-d3d9-3dmark05-* 2>/dev/null |
+      sort -hr |
+      head -12 >&"$stream" || true
     echo "large ignored/manual-review candidates:" >&"$stream"
     du -sh \
       "$repo_root/experiments/prefixs"/* \
@@ -1832,6 +1870,7 @@ print_space_hints() {
       sort -k5 -hr |
       head -20 >&"$stream" || true
   fi
+  echo "cleanup note: remove only obsolete run ids after preserving needed analysis artifacts; do not delete active prefixes blindly." >&"$stream"
 }
 
 run_id="app-d3d9-3dmark05-${suffix}"
@@ -1850,6 +1889,11 @@ if [[ -n "$dump_depth_attachment_handle" ]]; then
   fi
 fi
 summary_path="$output_dir/3dmark05-perf-summary.md"
+encoders_csv="$output_dir/3dmark05-perf-encoders.csv"
+stream_csv="$output_dir/3dmark05-perf-encoder-streams.csv"
+probe_draws_csv="$output_dir/3dmark05-perf-indexed-probe-draws.csv"
+index_cache_runtime_report="$output_dir/3dmark05-index-cache-runtime-summary.md"
+index_cache_runtime_csv="$output_dir/3dmark05-index-cache-runtime-summary.csv"
 capture_path="$trace_dir/frame${frame}.gputrace"
 counter_comparison_path="$analysis_dir/frame${frame}-perf-counter-comparison.md"
 free_mb=unknown
@@ -2428,6 +2472,9 @@ if (( capture_gputrace )); then
   if (( require_tvb_mechanism_proof )); then
     finalize_cmd+=(--require-tvb-mechanism-proof)
   fi
+  if (( require_opaque_depth_index_cache_proof )); then
+    finalize_cmd+=(--require-opaque-depth-index-cache-proof)
+  fi
   if (( require_screen_blend_cache_proof )); then
     finalize_cmd+=(--require-screen-blend-cache-proof)
   fi
@@ -2587,6 +2634,7 @@ echo "run_id: $run_id"
 echo "output_dir: $output_dir"
 echo "trace_dir: $trace_dir"
 echo "summary: $summary_path"
+echo "index_cache_runtime_report: $index_cache_runtime_report"
 echo "session_locked: $session_locked"
 echo "free_space_mb: $free_mb"
 echo "min_free_space_mb: $min_free_mb"
@@ -2721,6 +2769,10 @@ run_status=0
 ) || run_status=$?
 
 python3 "$repo_root/scripts/tools/summarize_3dmark05_perf.py" "$output_dir" --output "$summary_path"
+python3 "$repo_root/scripts/tools/summarize_index_cache_runtime.py" \
+  --run "$suffix=$encoders_csv,$probe_draws_csv" \
+  --output "$index_cache_runtime_report" \
+  --csv-output "$index_cache_runtime_csv"
 
 if (( capture_gputrace )) && [[ ! -e "$capture_path" ]]; then
   echo "Metal gputrace capture was requested but no capture was written: $capture_path" >&2
@@ -2739,8 +2791,11 @@ if ((${#counter_compare_cmd[@]})); then
 fi
 
 echo "wrote summary: $summary_path"
-echo "wrote encoder csv: $output_dir/3dmark05-perf-encoders.csv"
-echo "wrote stream csv: $output_dir/3dmark05-perf-encoder-streams.csv"
+echo "wrote encoder csv: $encoders_csv"
+echo "wrote stream csv: $stream_csv"
+echo "wrote probe draw csv: $probe_draws_csv"
+echo "wrote index cache runtime report: $index_cache_runtime_report"
+echo "wrote index cache runtime csv: $index_cache_runtime_csv"
 if ((${#counter_compare_cmd[@]})); then
   echo "wrote perf counter comparison: $counter_comparison_path"
 fi

@@ -132,7 +132,14 @@ producing joined rows with missing counter columns, empty dxmt attribution, or
 The standard `run_3dmark05_perf_probe.sh` wrapper can carry
 `--baseline-joined` plus Xcode comparison gates through to the printed
 `finalize_cmd_after_xcode_export`; prefer that over reconstructing the
-finalizer command by hand. Xcode comparison gates such as
+finalizer command by hand. For production-shaped
+`--optimize-opaque-depth-index-cache` captures, use
+`--require-opaque-depth-index-cache-proof`; it expands to stable-frame,
+target cache-opt/effective LRU32, reordered-cache-hit, and target
+VS-write/invocation gates without requiring generic actual LRU32 telemetry.
+Reserve `--require-cache-opt-apply-proof` for diagnostic apply probes where
+generic actual indexed telemetry is the intended target-row proof. Xcode
+comparison gates such as
 `--require-top-gpu-decrease`, `--require-top-buffer-write-decrease`,
 `--require-top-vs-buffer-write-decrease`, and
 `--require-top-unexplained-buffer-write-decrease` require `--baseline-joined`;
@@ -160,16 +167,14 @@ hashes, cannot match dumped MSL files, or only match ambiguously.
 For the VS-buffer-write hypothesis, pair-local VSOut liveness is exposed through
 wrapper `--trim-unused-varyings`, but 3DMark05 GT1 evidence currently rejects
 visible VSOut width as the first-order owner: trim-varyings, direct-texcoord,
-point-size-only, and position-only probes leave the dominant Xcode
-VS-buffer-write bucket mostly hidden. Use
+point-size-only, position-only, and half-VSOut probes leave the dominant Xcode
+VS-buffer-write bucket mostly hidden or fail the GPU-time gate. In the frame50
+half-VSOut proof, top VS writes dropped only `-2.44%` while top GPU time
+regressed `+3.40%`. Use
 `--baseline-joined <csv> --require-top-vs-buffer-write-decrease` only when
 revalidating that path on a new baseline; otherwise prioritize hidden
-vertex/backend storage probes that can move VS invocations or bytes per
-invocation. The current primitive-order-preserving compiler/backend-shape
-candidate is wrapper `--probe-half-vsout`
-(`DXMT9_PROBE_HALF_VSOUT=1`): smoke it first with `--no-gputrace
---dump-shaders`, then spend Xcode/gputrace only with a joined baseline and
-`--require-tvb-mechanism-proof`.
+vertex/backend storage probes that move VS invocations or primitive/locality
+shape, plus semantic-safe cache-locality selectors.
 
 Before starting a new 3DMark05 `.gputrace`, keep at least 2GiB free on the
 repository volume. The standard wrapper enforces this with
@@ -183,12 +188,45 @@ choose cleanup targets. Do not delete raw trace artifacts automatically.
 already been emitted. Do not wait for natural process exit during perf work.
 Every 3DMark05 perf or `.gputrace` run must go through a positive runner
 timeout so the run can timeout-finalize `result.json`, perf logs, and trace
-paths consistently. The standard wrapper defaults to `240s` for no-gputrace
+paths consistently. The standard wrapper defaults to `180s` for no-gputrace
 scouts and `420s` for `.gputrace`/Xcode replay candidates, and passes that as
 an explicit `run_experiment.py --timeout`; override wrapper `--timeout` only
 when the experiment needs a documented budget. A timeout-finalized run with the
 expected artifacts is acceptable input for finalizer comparison; do not use the
-Wine process lifetime or a manual kill as a performance metric.
+Wine process lifetime or a manual kill as a performance metric. If a run had
+to be killed manually because it was stuck at the final frame, treat that as a
+timeout-policy failure and use a shorter positive timeout on the next run
+instead of repeating an unsupervised launch. For routine
+3DMark05 smoke/image runs, use the catalogue runner's default
+`run_timeout_sec=180` / `allow_timeout=true` / `require_positive_timeout=true`
+or pass an explicit positive `run_experiment.py --timeout N`; `--timeout 0` is
+rejected for this app. Do not run
+`experiments/launchers/app-d3d9-3dmark05.sh` or the
+`DXMT_3DMARK05_DIRECT=1` launcher path unsupervised from a shell. If the
+launcher is started directly and no `run_experiment.py` supervision is present,
+it applies a fallback positive timeout (`DXMT_3DMARK05_LAUNCHER_TIMEOUT`,
+default `180s`) and kills the child process group; set
+`DXMT_3DMARK05_ALLOW_UNSUPERVISED=1` only when another documented supervisor is
+active. For direct verify-prefix runs, prefer
+`scripts/run_apps/run_app-d3d9-3dmark05-verify_direct.sh`; it supervises the
+launcher with `DXMT_3DMARK05_DIRECT_TIMEOUT=180` by default and kills the
+process group on timeout. Use `DXMT_3DMARK05_DIRECT_DRY_RUN=1` first when
+checking the resolved timeout/command, and record any non-default timeout
+budget in the run notes. The 3DMark05 direct launcher also traps `TERM`/`INT`
+and runs `wineserver -k` for the app prefix on exit by default
+(`DXMT_3DMARK05_KILL_SERVER_ON_EXIT=1`), so a timeout must not leave a
+detached final-frame 3DMark05 process running.
+
+After Xcode encoder counters are exported, run
+`scripts/tools/finalize_3dmark05_perf_probe.sh`. Besides the Xcode/dxmt joined
+summary, the finalizer now emits
+`analysis/frame<N>-indexed-state-class-xcode-proxy.{md,csv}` whenever indexed
+probe draw telemetry exists. Read this proxy queue before opening another
+`.gputrace`: `gate_status=covered-production-path` means the residual class is
+already covered by the accepted opaque proof family, `explicit-tolerance-only`
+means screen-blend needs an exact/`lsb1` semantic policy, and
+`blocked-final-color-oracle` means the next useful work is a final-color/
+final-writer predicate or a non-reorder backend mechanism.
 
 ## 1. Programmatic frame capture (.gputrace)
 

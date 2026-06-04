@@ -96,6 +96,8 @@ class Summarize3DMark05PerfTests(unittest.TestCase):
                 "effective_index_offset=0 effective_index_bytes=1234 "
                 "stream0_handle=0xabc stream0_offset=64 stream0_stride=24 "
                 "pso=0x111 shader_variant=0x222 vs=0x333 ps=0x444 "
+                "vs_constants_hash=0x555 ps_constants_hash=0x666 "
+                "uniform_payload_hash=0x777 "
                 "vsout=0xfff]\n",
                 encoding="utf-8",
             )
@@ -188,6 +190,9 @@ class Summarize3DMark05PerfTests(unittest.TestCase):
             self.assertEqual(probe_draw["effective_index_offset"], 0)
             self.assertEqual(probe_draw["effective_index_bytes"], 1234)
             self.assertEqual(probe_draw["stream0_handle"], "0xabc")
+            self.assertEqual(probe_draw["vs_constants_hash"], "0x555")
+            self.assertEqual(probe_draw["ps_constants_hash"], "0x666")
+            self.assertEqual(probe_draw["uniform_payload_hash"], "0x777")
 
             encoder_csv = temp_path / "3dmark05-perf-encoders.csv"
             stream_csv = temp_path / "3dmark05-perf-encoder-streams.csv"
@@ -248,6 +253,9 @@ class Summarize3DMark05PerfTests(unittest.TestCase):
             self.assertEqual(probe_row["effective_index_offset"], "0")
             self.assertEqual(probe_row["effective_index_bytes"], "1234")
             self.assertEqual(probe_row["pso"], "0x111")
+            self.assertEqual(probe_row["vs_constants_hash"], "0x555")
+            self.assertEqual(probe_row["ps_constants_hash"], "0x666")
+            self.assertEqual(probe_row["uniform_payload_hash"], "0x777")
 
             summary_md = temp_path / "summary.md"
             module.write_markdown(
@@ -306,6 +314,9 @@ class Summarize3DMark05PerfTests(unittest.TestCase):
             self.assertIn("| `optimized_eligible` | `1` |", summary)
             self.assertIn("| `alpha_blend_probe_applied` | `1` |", summary)
             self.assertIn("| `depth_func_probe_applied` | `1` |", summary)
+            self.assertIn("| `vs_constants_hash_unique` | `1` |", summary)
+            self.assertIn("| `ps_constants_hash_unique` | `1` |", summary)
+            self.assertIn("| `uniform_payload_hash_unique` | `1` |", summary)
 
 
 if __name__ == "__main__":

@@ -416,7 +416,7 @@ void testArgbufHybridPreludeIncludesStage1Structs() {
 void testArgbufHybridPreludeWithClipDistances() {
   const auto prelude = dxmt9::shaders::makeShaderPreludeArgbufHybrid(/*withClipDistances=*/true);
   check(prelude.find("clipDistance") != std::string::npos,
-        "argbuf-hybrid prelude with clip distances declares clipDistance[6]");
+        "argbuf-hybrid prelude with clip distances declares clipDistance0 scalar");
 }
 
 // ---------------------------------------------------------------------

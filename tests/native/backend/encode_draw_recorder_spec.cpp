@@ -12,11 +12,13 @@
 #include "../../../src/dxmt9/dxmt9_resource_pool.hpp"
 #include "../../../src/dxmt9/dxmt9_ring_arena.hpp"
 
+#include <algorithm>
 #include <array>
 #include <cstdint>
 #include <cstdlib>
 #include <cstring>
 #include <exception>
+#include <initializer_list>
 #include <iostream>
 #include <span>
 #include <sstream>
@@ -515,6 +517,42 @@ void setInvDestColorAddBlend(dxmt9::core::CanonicalDrawState& state) {
       dxmt9::core::RS_ALPHABLEND_ENABLE,
       1u};
   state.hot.renderStates.count = 3u;
+}
+
+void setSortedRenderStates(
+    dxmt9::core::CanonicalDrawState& state,
+    std::initializer_list<dxmt9::core::FlatStateEntry> entries) {
+  state.hot.renderStates = {};
+  for (const auto& entry : entries) {
+    if (state.hot.renderStates.count >=
+        state.hot.renderStates.entries.size()) {
+      break;
+    }
+    state.hot.renderStates.entries[state.hot.renderStates.count++] = entry;
+  }
+  std::sort(
+      state.hot.renderStates.entries.begin(),
+      state.hot.renderStates.entries.begin() + state.hot.renderStates.count,
+      [](const dxmt9::core::FlatStateEntry& a,
+         const dxmt9::core::FlatStateEntry& b) {
+        return a.state < b.state;
+      });
+}
+
+void setOpaqueDepthRenderStates(dxmt9::core::CanonicalDrawState& state) {
+  setSortedRenderStates(
+      state,
+      {
+          dxmt9::core::FlatStateEntry{
+              dxmt9::core::RS_Z_ENABLE,
+              1u},
+          dxmt9::core::FlatStateEntry{
+              dxmt9::core::RS_Z_WRITE_ENABLE,
+              1u},
+          dxmt9::core::FlatStateEntry{
+              dxmt9::core::RS_Z_FUNC,
+              static_cast<u32>(dxmt9::core::CompareFunc::LessEqual)},
+      });
 }
 
 dxmt9::encoders::EncodeContext makeContext(Harness& harness,
@@ -1751,6 +1789,135 @@ void testScreenBlendIndexOrderOptimizationPredicateIsStrict() {
         "non-screen blend disables index-order optimization");
 }
 
+void testOpaqueDepthIndexOrderOptimizationPredicateIsStrict() {
+  auto state = makeProgrammableState(20u);
+  setOpaqueDepthRenderStates(state);
+
+  check(dxmt9::encoders::shouldOptimizeOpaqueDepthIndexOrder(
+            state.hot.renderStates,
+            WMTTriangleFillModeFill),
+        "opaque depth-writing triangle fill is order-optimization eligible");
+  check(!dxmt9::encoders::shouldOptimizeOpaqueDepthIndexOrder(
+            state.hot.renderStates,
+            WMTTriangleFillModeFill,
+            /*depthWriteGloballyDisabled=*/true),
+        "globally disabled depth write rejects opaque-depth index-order optimization");
+  check(!dxmt9::encoders::shouldOptimizeOpaqueDepthIndexOrder(
+            state.hot.renderStates,
+            WMTTriangleFillModeLines),
+        "wireframe fill rejects opaque-depth index-order optimization");
+
+  auto depthDisabled = state;
+  depthDisabled.hot.renderStates.entries[0].value = 0u;
+  check(!dxmt9::encoders::shouldOptimizeOpaqueDepthIndexOrder(
+            depthDisabled.hot.renderStates,
+            WMTTriangleFillModeFill),
+        "disabled depth rejects opaque-depth index-order optimization");
+
+  auto depthRead = state;
+  depthRead.hot.renderStates.entries[1].value = 0u;
+  check(!dxmt9::encoders::shouldOptimizeOpaqueDepthIndexOrder(
+            depthRead.hot.renderStates,
+            WMTTriangleFillModeFill),
+        "depth-read state rejects opaque-depth index-order optimization");
+
+  auto greaterDepth = state;
+  greaterDepth.hot.renderStates.entries[2].value =
+      static_cast<u32>(dxmt9::core::CompareFunc::Greater);
+  check(!dxmt9::encoders::shouldOptimizeOpaqueDepthIndexOrder(
+            greaterDepth.hot.renderStates,
+            WMTTriangleFillModeFill),
+        "non-order-preserving depth func rejects opaque-depth index-order optimization");
+
+  auto alphaBlend = state;
+  setSortedRenderStates(
+      alphaBlend,
+      {
+          dxmt9::core::FlatStateEntry{
+              dxmt9::core::RS_ALPHABLEND_ENABLE,
+              1u},
+          dxmt9::core::FlatStateEntry{
+              dxmt9::core::RS_Z_ENABLE,
+              1u},
+          dxmt9::core::FlatStateEntry{
+              dxmt9::core::RS_Z_WRITE_ENABLE,
+              1u},
+          dxmt9::core::FlatStateEntry{
+              dxmt9::core::RS_Z_FUNC,
+              static_cast<u32>(dxmt9::core::CompareFunc::LessEqual)},
+      });
+  check(!dxmt9::encoders::shouldOptimizeOpaqueDepthIndexOrder(
+            alphaBlend.hot.renderStates,
+            WMTTriangleFillModeFill),
+        "alpha blend rejects opaque-depth index-order optimization");
+
+  auto alphaTest = state;
+  setSortedRenderStates(
+      alphaTest,
+      {
+          dxmt9::core::FlatStateEntry{
+              dxmt9::core::RS_ALPHA_TEST_ENABLE,
+              1u},
+          dxmt9::core::FlatStateEntry{
+              dxmt9::core::RS_Z_ENABLE,
+              1u},
+          dxmt9::core::FlatStateEntry{
+              dxmt9::core::RS_Z_WRITE_ENABLE,
+              1u},
+          dxmt9::core::FlatStateEntry{
+              dxmt9::core::RS_Z_FUNC,
+              static_cast<u32>(dxmt9::core::CompareFunc::LessEqual)},
+      });
+  check(!dxmt9::encoders::shouldOptimizeOpaqueDepthIndexOrder(
+            alphaTest.hot.renderStates,
+            WMTTriangleFillModeFill),
+        "alpha test rejects opaque-depth index-order optimization");
+
+  auto stencil = state;
+  setSortedRenderStates(
+      stencil,
+      {
+          dxmt9::core::FlatStateEntry{
+              dxmt9::core::RS_STENCIL_ENABLE,
+              1u},
+          dxmt9::core::FlatStateEntry{
+              dxmt9::core::RS_Z_ENABLE,
+              1u},
+          dxmt9::core::FlatStateEntry{
+              dxmt9::core::RS_Z_WRITE_ENABLE,
+              1u},
+          dxmt9::core::FlatStateEntry{
+              dxmt9::core::RS_Z_FUNC,
+              static_cast<u32>(dxmt9::core::CompareFunc::LessEqual)},
+      });
+  check(!dxmt9::encoders::shouldOptimizeOpaqueDepthIndexOrder(
+            stencil.hot.renderStates,
+            WMTTriangleFillModeFill),
+        "stencil rejects opaque-depth index-order optimization");
+
+  auto clipPlane = state;
+  setSortedRenderStates(
+      clipPlane,
+      {
+          dxmt9::core::FlatStateEntry{
+              dxmt9::core::RS_CLIP_PLANE_ENABLE,
+              1u},
+          dxmt9::core::FlatStateEntry{
+              dxmt9::core::RS_Z_ENABLE,
+              1u},
+          dxmt9::core::FlatStateEntry{
+              dxmt9::core::RS_Z_WRITE_ENABLE,
+              1u},
+          dxmt9::core::FlatStateEntry{
+              dxmt9::core::RS_Z_FUNC,
+              static_cast<u32>(dxmt9::core::CompareFunc::LessEqual)},
+      });
+  check(!dxmt9::encoders::shouldOptimizeOpaqueDepthIndexOrder(
+            clipPlane.hot.renderStates,
+            WMTTriangleFillModeFill),
+        "clip planes reject opaque-depth index-order optimization");
+}
+
 void testExpandedIndexedProgrammableDrawExpandsExtraStreamBytes() {
   constexpr std::size_t kStream0Base = 24u;
   constexpr std::size_t kStream0Stride = 12u;
@@ -2526,6 +2693,7 @@ int main() {
     testProgrammableIndexedBlendHeuristicStaysDirect();
     testAutoExpandIndexedDrawHeuristicCoversProgrammableR32FCube();
     testScreenBlendIndexOrderOptimizationPredicateIsStrict();
+    testOpaqueDepthIndexOrderOptimizationPredicateIsStrict();
     testExpandedIndexedProgrammableDrawExpandsExtraStreamBytes();
     testMixedShaderPathsBindProgrammableDrawInputs();
     testProgrammableDrawFvfAndDeclTransitionsDoNotReuseLayout();

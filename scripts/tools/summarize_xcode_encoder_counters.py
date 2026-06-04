@@ -386,6 +386,7 @@ JOINED_EXTRA_FIELDS = (
     "dxmt_vsout_has_secondary_color",
     "dxmt_vsout_has_fog_factor",
     "dxmt_vsout_has_point_size",
+    "dxmt_vsout_has_clip_distance",
     "dxmt_vsout_expected_stage_out_bytes_per_vertex",
     "dxmt_vs_buffer_to_expected_stage_out_ratio",
     "dxmt_named_tiled_buffer_mib",
@@ -1028,13 +1029,15 @@ def derive_dxmt_attribution(joined: dict[str, Any]) -> None:
         has_secondary = 1 if (layout_key & (1 << 9)) else 0
         has_fog = 1 if (layout_key & (1 << 10)) else 0
         has_point_size = 1 if (layout_key & (1 << 11)) else 0
+        has_clip_distance = 1 if as_int(joined.get("dxmt_clip_plane_enabled_draws")) > 0 else 0
         expected_stage_out_bytes = (
             16 +
             16 * has_color +
             16 * has_secondary +
             16 * texcoord_count +
             4 * has_fog +
-            4 * has_point_size
+            4 * has_point_size +
+            4 * has_clip_distance
         )
         joined["dxmt_vsout_texcoord_mask"] = f"0x{texcoord_mask:02x}"
         joined["dxmt_vsout_texcoord_count"] = texcoord_count
@@ -1042,6 +1045,7 @@ def derive_dxmt_attribution(joined: dict[str, Any]) -> None:
         joined["dxmt_vsout_has_secondary_color"] = has_secondary
         joined["dxmt_vsout_has_fog_factor"] = has_fog
         joined["dxmt_vsout_has_point_size"] = has_point_size
+        joined["dxmt_vsout_has_clip_distance"] = has_clip_distance
         joined["dxmt_vsout_expected_stage_out_bytes_per_vertex"] = expected_stage_out_bytes
         joined["dxmt_vs_buffer_to_expected_stage_out_ratio"] = ratio(
             as_float(joined.get("vs_buffer_bytes_per_vs_invocation")),
@@ -1053,6 +1057,7 @@ def derive_dxmt_attribution(joined: dict[str, Any]) -> None:
         joined["dxmt_vsout_has_secondary_color"] = ""
         joined["dxmt_vsout_has_fog_factor"] = ""
         joined["dxmt_vsout_has_point_size"] = ""
+        joined["dxmt_vsout_has_clip_distance"] = ""
         joined["dxmt_vsout_expected_stage_out_bytes_per_vertex"] = ""
         joined["dxmt_vs_buffer_to_expected_stage_out_ratio"] = ""
 

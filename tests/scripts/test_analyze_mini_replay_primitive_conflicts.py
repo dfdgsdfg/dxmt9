@@ -112,6 +112,10 @@ def write_fixture(root: Path) -> tuple[Path, Path]:
             "after_original_triangle",
             "primitive_identity_changed",
             "color_changed",
+            "before_color_rgb",
+            "after_color_rgb",
+            "color_delta_max",
+            "color_delta_l1",
         ])
         writer.writeheader()
         writer.writerow({
@@ -121,6 +125,10 @@ def write_fixture(root: Path) -> tuple[Path, Path]:
             "after_original_triangle": "1",
             "primitive_identity_changed": "1",
             "color_changed": "1",
+            "before_color_rgb": "0,0,0",
+            "after_color_rgb": "5,1,0",
+            "color_delta_max": "5",
+            "color_delta_l1": "6",
         })
     return manifest_path, pixels_path
 
@@ -132,6 +140,7 @@ class PrimitiveConflictAnalysisTest(unittest.TestCase):
             manifest, pixels = write_fixture(root)
             output = root / "analysis.md"
             csv_output = root / "analysis.csv"
+            summary_output = root / "summary.csv"
             subprocess.run(
                 [
                     sys.executable,
@@ -146,6 +155,8 @@ class PrimitiveConflictAnalysisTest(unittest.TestCase):
                     str(output),
                     "--csv-output",
                     str(csv_output),
+                    "--summary-csv-output",
+                    str(summary_output),
                 ],
                 check=True,
             )
@@ -155,7 +166,17 @@ class PrimitiveConflictAnalysisTest(unittest.TestCase):
             self.assertEqual(rows[0]["both_triangles_cover_pixel"], "1")
             self.assertAlmostEqual(float(rows[0]["depth_delta"]), 0.1, places=5)
             self.assertAlmostEqual(float(rows[0]["uv0_delta"]), 0.3, places=5)
-            self.assertIn("Max abs depth delta", output.read_text(encoding="utf-8"))
+            with summary_output.open(newline="", encoding="utf-8") as handle:
+                summary_rows = list(csv.DictReader(handle))
+            self.assertEqual(len(summary_rows), 1)
+            self.assertEqual(summary_rows[0]["pixels"], "1")
+            self.assertEqual(summary_rows[0]["color_changed_pixels"], "1")
+            self.assertEqual(summary_rows[0]["max_color_delta"], "5")
+            self.assertEqual(summary_rows[0]["max_color_delta_l1"], "6")
+            self.assertEqual(summary_rows[0]["both_cover_pixels"], "1")
+            text = output.read_text(encoding="utf-8")
+            self.assertIn("Max abs depth delta", text)
+            self.assertIn("Color changed pixels", text)
 
 
 if __name__ == "__main__":

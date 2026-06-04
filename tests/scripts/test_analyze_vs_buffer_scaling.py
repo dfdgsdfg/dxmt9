@@ -110,19 +110,60 @@ class AnalyzeVsBufferScalingTests(unittest.TestCase):
         self.assertIn("depth=read", shapes[0]["shape"])
         self.assertAlmostEqual(shapes[0]["vs_buffer_mib"], 150.0)
 
+        backend_candidate = dict(aggregate)
+        backend_candidate["run"] = "half-vsout-fixture"
+        backend_candidate["gpu_ms"] = aggregate["gpu_ms"] * 1.03
+        backend_candidate["vs_buffer_mib"] = aggregate["vs_buffer_mib"] * 0.98
+        backend_candidate["vs_buffer_write_mib"] = backend_candidate["vs_buffer_mib"]
+        backend_candidate["vs_b_per_vs_invocation"] = aggregate["vs_b_per_vs_invocation"] * 0.98
+        backend_candidate["top_row_keys"] = aggregate["top_row_keys"]
+        backend_deltas = module.baseline_deltas([aggregate, backend_candidate], aggregate, 8)
+        self.assertEqual(len(backend_deltas), 1)
+        self.assertEqual(backend_deltas[0]["candidate_kind"], "non-reorder-backend-shape")
+        self.assertEqual(backend_deltas[0]["backend_shape_gate"], "reject")
+        self.assertIn("bytes/inv reduction < 5%", backend_deltas[0]["backend_shape_reason"])
+        self.assertIn("GPU did not improve by >= 2%", backend_deltas[0]["backend_shape_reason"])
+        self.assertAlmostEqual(backend_deltas[0]["vs_write_delta_mib"], -3.0, places=6)
+        self.assertAlmostEqual(backend_deltas[0]["invocation_effect_mib"], 0.0, places=6)
+        self.assertAlmostEqual(backend_deltas[0]["bytes_per_invocation_effect_mib"], -3.0, places=6)
+        self.assertAlmostEqual(backend_deltas[0]["residual_mib"], 0.0, places=6)
+        self.assertEqual(backend_deltas[0]["primary_mover"], "bytes_per_invocation")
+
         with tempfile.TemporaryDirectory() as temp:
             root = Path(temp)
             report = root / "report.md"
             aggregate_csv = root / "aggregate.csv"
-            module.write_summary(report, [aggregate], correlations, correlations, shapes, [], None)
-            module.write_aggregate_csv(aggregate_csv, [aggregate])
+            delta_csv = root / "deltas.csv"
+            module.write_summary(
+                report,
+                [aggregate, backend_candidate],
+                correlations,
+                correlations,
+                shapes,
+                backend_deltas,
+                aggregate["run"],
+            )
+            module.write_aggregate_csv(aggregate_csv, [aggregate, backend_candidate])
+            module.write_delta_csv(delta_csv, backend_deltas)
             text = report.read_text(encoding="utf-8")
             self.assertIn("hidden Apple GPU vertex-stage", text)
+            self.assertIn("## Non-Reorder Backend-Shape Gate", text)
+            self.assertIn("bytes/inv reduction < 5%", text)
+            self.assertIn("## VS Write Delta Attribution", text)
+            self.assertIn("bytes_per_invocation", text)
             self.assertIn("## Render-State Shape Split", text)
             with aggregate_csv.open(newline="", encoding="utf-8") as handle:
                 row = next(csv.DictReader(handle))
             self.assertEqual(row["run"], "fixture")
             self.assertEqual(row["vs_buffer_mib"], "150.0")
+            self.assertEqual(row["vs_invocations"], "1500.0")
+            self.assertEqual(row["dxmt_vertex_count"], "1500.0")
+            self.assertEqual(row["draw_calls"], "15.0")
+            with delta_csv.open(newline="", encoding="utf-8") as handle:
+                delta_row = next(csv.DictReader(handle))
+            self.assertEqual(delta_row["run"], "half-vsout-fixture")
+            self.assertEqual(delta_row["primary_mover"], "bytes_per_invocation")
+            self.assertEqual(delta_row["backend_shape_gate"], "reject")
 
 
 if __name__ == "__main__":

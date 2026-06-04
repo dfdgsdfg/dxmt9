@@ -139,6 +139,25 @@ Commercial / 3rd-party titles (require external prefix):
     Use it for unattended perf runs together with an unlocked desktop; keep
     `DXMT_3DMARK05_AUTO_ENTER=1` available as a fallback for editions that do
     not honor command-line result runs.
+  - `app-d3d9-3dmark05` is timeout-tolerant in the catalogue
+    (`run_timeout_sec=180`, `allow_timeout=true`, `require_positive_timeout=true`)
+    because the app can hang on the final frame after useful output is already
+    present. Routine runs should use
+    `python3 scripts/run_apps/run_experiment.py run app-d3d9-3dmark05` with the
+    catalogue timeout, or pass an explicit positive `--timeout N`; `--timeout 0`
+    is rejected for this app. If
+    `experiments/launchers/app-d3d9-3dmark05.sh` is started directly from a
+    shell without `run_experiment.py`, it now self-supervises with a positive
+    launcher timeout (`DXMT_3DMARK05_LAUNCHER_TIMEOUT`, default `180s`; set
+    `DXMT_3DMARK05_ALLOW_UNSUPERVISED=1` only for a deliberately external
+    supervisor). For verify-prefix direct runs, use
+    `scripts/run_apps/run_app-d3d9-3dmark05-verify_direct.sh`; it defaults to
+    `DXMT_3DMARK05_DIRECT_TIMEOUT=180` and supports
+    `DXMT_3DMARK05_DIRECT_DRY_RUN=1` to verify the resolved command without
+    starting Wine. The direct launcher traps `TERM`/`INT` and kills the app
+    prefix wineserver on exit by default
+    (`DXMT_3DMARK05_KILL_SERVER_ON_EXIT=1`), preventing detached final-frame
+    Wine processes after timeout.
   - `scripts/tools/run_3dmark05_perf_probe.sh` wraps the current GT1 perf probe
     recipe: perf profile, direct 3DMark05 launcher, no auto indexed expansion,
     encoder breakdown, optional `DXMT_METAL_CAPTURE_FRAME/PATH`, trace output
@@ -148,7 +167,7 @@ Commercial / 3rd-party titles (require external prefix):
     first to verify paths, desktop lock state, free-space guard, and the
     downstream `run_experiment.py --timeout`. Because 3DMark05 can hang on the
     final frame, the wrapper always uses a positive runner timeout: `420s` by
-    default with gputrace and `240s` with `--no-gputrace`, unless `--timeout`
+    default with gputrace and `180s` with `--no-gputrace`, unless `--timeout`
     or `DXMT_3DMARK05_PROBE_TIMEOUT` overrides it. The wrapper scopes encoder
     breakdown to the requested frame by default for gputrace runs and for
     no-gputrace indexed diagnostics
@@ -170,6 +189,12 @@ Commercial / 3rd-party titles (require external prefix):
     draw/vertex/triangle drift gates. Use the lower-level
     `--require-result-json`, `--require-top-row-key-match`, and
     `--max-top-*-delta-ratio` flags only when a probe needs a custom gate.
+    Finalization also emits
+    `analysis/frame<N>-indexed-state-class-xcode-proxy.{md,csv}` when indexed
+    probe draw telemetry is present, using the joined Xcode counters to rank
+    row/state/class candidates by proxy hidden-backend bytes. The default
+    queue length is `12`; override it with `--class-proxy-top N` or
+    `DXMT_3DMARK05_CLASS_PROXY_TOP=N`.
     Use `--measure-index-reuse` for the optional unique-index diagnostic; the
     final joined report will include `dxmt indexed references / unique
     estimate`, `VS invocations / dxmt indexed unique estimate`, and 16/32/64
@@ -179,11 +204,15 @@ Commercial / 3rd-party titles (require external prefix):
     under `traces/<run-id>/analysis/geometry` using the same reverse-indexed
     row/class/span filters and indexed encoder draw range.
     Dry-run and guard failures print `traces/`, `experiments/output/`, and
-    the largest trace/output files when free space is below the guard, so
-    cleanup can happen before launching Wine. They also print large ignored
-    prefix/app/vendor payloads as manual-review candidates; do not delete
-    those blindly because they may be the active Wine prefix or installed
-    benchmark payload. If `--baseline-joined`,
+    the largest trace/output files when free space is below the guard, plus
+    the largest `traces/app-d3d9-3dmark05-*` and
+    `experiments/output/app-d3d9-3dmark05-*` run directories. Use those run-id
+    groups as the first manual cleanup candidates before launching Wine, after
+    preserving any analysis artifacts still needed by
+    `specs/perfomance.plan.md`. They also print large ignored prefix/app/vendor
+    payloads as manual-review candidates; do not delete those blindly because
+    they may be the active Wine prefix or installed benchmark payload. If
+    `--baseline-joined`,
     `--require-stable-frame-proof`, or `--require-top-pso-attribution` is
     passed to the wrapper, dry-run also prints the exact
     `finalize_cmd_after_xcode_export` command to run after Xcode exports
@@ -547,25 +576,37 @@ Commercial / 3rd-party titles (require external prefix):
     `--optimize-opaque-depth-index-cache` for the production-shaped opt-in path
     (`DXMT9_OPTIMIZE_OPAQUE_DEPTH_INDEX_CACHE=1`). This submits the same
     cached LRU32 reordered IBs only for opaque depth-writing triangle lists and
-    never bypasses the safety gate. It is still explicitly opt-in: the shared
-    `perf` profile does not enable mutating index-cache optimizations, and a
-    general runtime default would require wider app correctness evidence beyond
-    the accepted 3DMark05 GT1 gates. The runtime cache records both positive
+    never bypasses the safety gate. This production opt-in is deliberately
+    independent of diagnostic reverse-triangle row/class/span filters, so stale
+    probe environment variables cannot silently narrow the accepted path. It is
+    still explicitly opt-in: the shared `perf` profile does not enable mutating
+    index-cache optimizations, and a general runtime default would require
+    wider app correctness evidence beyond the accepted 3DMark05 GT1 gates. The
+    runtime cache records both positive
     reordered-IB entries and rejected keys; the rejected entries are important
     because failed gain-gate candidates must not be remeasured every draw in a
     full GT1 run. Read `reordered_index_cache_hits` as positive cached-IB hits
     and `reordered_index_cache_rejected_hits` as rejected-key hits; the latter
     should not be counted as submitted reordered geometry. Unscoped production
     opt-in full runs keep aggregate encoder counters but suppress per-draw
-    `dxmt9-perf-indexed-probe-draw` lines; when indexed locality/reorder or
-    geometry-dump diagnostics are enabled, the wrapper now auto-scopes encoder
-    breakdown to `--frame` even for `--no-gputrace` smoke runs. Use
+    `dxmt9-perf-indexed-probe-draw` lines. The production path uses LRU32-only
+    candidate measurement because the gain gate needs only LRU32; full
+    16/32/64 + unique/span locality telemetry remains diagnostic-only. Read
+    `indexed_cache_opt_candidate_*_miss32` for production accounting; miss16
+    and miss64 are intentionally zero on fast production runs. When indexed
+    locality/reorder or geometry-dump diagnostics are enabled, the wrapper now
+    auto-scopes encoder breakdown to `--frame` even for `--no-gputrace` smoke
+    runs. Use
     `--encoder-breakdown-all-frames` only for deliberate whole-run sampling.
-    In the finalizer, use `--target-row-key` plus
-    `--require-cache-opt-apply-proof`; the preset includes stable-frame gates
-    and the target-row LRU32 miss, VS buffer write, and VS invocation decrease
-    gates so no-op runs are rejected by actual target-row counters, not
-    candidate-only estimates. Use
+    In the finalizer for production-shaped
+    `--optimize-opaque-depth-index-cache` runs, use `--target-row-key` plus
+    `--require-opaque-depth-index-cache-proof`. That preset includes
+    stable-frame gates, target cache-opt candidate/effective LRU32 decrease,
+    positive reordered-cache hits, and target VS buffer write/invocation
+    decreases, and it enables index-reuse/cache-opt-candidate telemetry in the
+    wrapper. Keep `--require-cache-opt-apply-proof` for diagnostic
+    `--probe-apply-index-cache-opt-candidate` runs where the generic actual
+    LRU32 telemetry is the intended target-row gate. Use
     `--probe-apply-index-cache-opt-candidate-unsafe-nonopaque` only for
     diagnostic depth-read/blended/scissored rows after the opaque path is
     understood, because the primitive order can affect final color writers.
@@ -585,7 +626,10 @@ Commercial / 3rd-party titles (require external prefix):
     `--require-cache-opt-apply-proof`; it adds stable-frame gates, target
     cache-opt candidate/effective telemetry, reordered-cache-hit, target VS
     write/invocation, and same-input semantic image gates, and refuses to run
-    without `--semantic-image-policy` plus before/after mini-replay images.
+    without at least one `--target-row-key` and `--semantic-image-policy` plus
+    before/after mini-replay images. The target row is required so a
+    screen-blend proof cannot pass on semantic tolerance alone without proving
+    the specific Xcode row's VS invocation/write movement.
     The wrapper also requires `--optimize-screen-blend-index-cache` for this
     preset and enables `DXMT9_MEASURE_INDEX_REUSE=1` plus
     `DXMT9_MEASURE_INDEX_CACHE_OPT_CANDIDATE=1`, because the proof compares

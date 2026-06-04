@@ -219,14 +219,38 @@ Required Xcode sequence:
 For dxmt9 3DMark05 perf probes, always launch through
 `scripts/tools/run_3dmark05_perf_probe.sh`. 3DMark05 can hang on the final frame
 after the useful capture/perf artifacts have already been written, so the
-wrapper always passes a positive `run_experiment.py --timeout`: `240s` for
+wrapper always passes a positive `run_experiment.py --timeout`: `180s` for
 no-gputrace scouts and `420s` for `.gputrace`/Xcode replay candidates unless
 `--timeout` or `DXMT_3DMARK05_PROBE_TIMEOUT` overrides it. Treat a
 timeout-finalized run with complete artifacts as valid input for the finalizer.
-For the current GT1 hidden vertex/backend-storage hypothesis, use
-`--probe-half-vsout` as the primitive-order-preserving compiler/backend-shape
-candidate: run a no-gputrace shader-dump smoke first, then run the gputrace
-candidate only with `--baseline-joined` and `--require-tvb-mechanism-proof`.
+If a 3DMark05 run had to be killed manually because it was stuck at the final
+frame, treat that as a timeout-policy failure and use a shorter positive
+timeout for the next run; do not use the manual-kill lifetime as a perf sample.
+For non-probe smoke/image checks, use the catalogue runner default
+`run_timeout_sec=180` / `allow_timeout=true` / `require_positive_timeout=true`,
+or pass an explicit positive
+`python3 scripts/run_apps/run_experiment.py run app-d3d9-3dmark05 --timeout N`;
+`--timeout 0` is rejected for this app.
+Do not start the 3DMark05 launcher script directly without an external timeout
+or process supervisor. If the launcher is started directly without
+`run_experiment.py`, it now falls back to
+`DXMT_3DMARK05_LAUNCHER_TIMEOUT=180` and terminates the child process group on
+timeout; use `DXMT_3DMARK05_ALLOW_UNSUPERVISED=1` only when another supervisor
+is documented. For direct verify-prefix runs, use
+`scripts/run_apps/run_app-d3d9-3dmark05-verify_direct.sh`; it supervises the
+launcher with `DXMT_3DMARK05_DIRECT_TIMEOUT=180` by default and supports
+`DXMT_3DMARK05_DIRECT_DRY_RUN=1` for command/timeout checks without starting
+Wine. The direct launcher traps `TERM`/`INT` and kills the app-prefix
+wineserver on exit by default (`DXMT_3DMARK05_KILL_SERVER_ON_EXIT=1`) so a
+timeout-finalized 3DMark05 run should not leave a detached final-frame process.
+For the current GT1 hidden vertex/backend-storage hypothesis,
+`--probe-half-vsout` has already been tested on frame50 and rejected as the
+current owner: it compiled and reduced top VS writes slightly, but failed the
+Xcode GPU-time gate (`+3.40%` top GPU time). Do not spend another `.gputrace`
+on half-VSOut unless the baseline, shader corpus, or Metal backend changes.
+Prefer primitive/locality probes with semantic proof, or a new non-reorder
+backend-shape candidate that can move VS invocations or hidden bytes per
+invocation.
 
 Example summary extraction:
 

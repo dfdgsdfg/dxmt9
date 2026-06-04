@@ -602,6 +602,48 @@ inline bool shouldAutoExpandIndexedDraw(const core::FlatStateSet<MaxEntries>& re
 }
 
 template <std::size_t MaxEntries>
+inline bool shouldOptimizeOpaqueDepthIndexOrder(
+    const core::FlatStateSet<MaxEntries>& renderStates,
+    WMTTriangleFillMode fillMode,
+    bool depthWriteGloballyDisabled = false) {
+  if (fillMode != WMTTriangleFillModeFill) {
+    return false;
+  }
+  if (core::flatStateOr(renderStates, core::RS_ALPHABLEND_ENABLE, 0u) != 0u) {
+    return false;
+  }
+  if (core::flatStateOr(renderStates, core::RS_ALPHA_TEST_ENABLE, 0u) != 0u) {
+    return false;
+  }
+  if (core::flatStateOr(renderStates, core::RS_STENCIL_ENABLE, 0u) != 0u) {
+    return false;
+  }
+  if (core::flatStateOr(renderStates, core::RS_CLIP_PLANE_ENABLE, 0u) != 0u) {
+    return false;
+  }
+
+  const bool depthEnabled =
+      core::flatStateOr(renderStates, core::RS_Z_ENABLE, 0u) != 0u;
+  const bool depthWrite =
+      depthEnabled && !depthWriteGloballyDisabled &&
+      core::flatStateOr(renderStates, core::RS_Z_WRITE_ENABLE, 0u) != 0u;
+  if (!depthWrite) {
+    return false;
+  }
+
+  switch (static_cast<core::CompareFunc>(core::flatStateOr(
+      renderStates,
+      core::RS_Z_FUNC,
+      static_cast<u32>(core::CompareFunc::LessEqual)))) {
+    case core::CompareFunc::Less:
+    case core::CompareFunc::LessEqual:
+      return true;
+    default:
+      return false;
+  }
+}
+
+template <std::size_t MaxEntries>
 inline bool shouldOptimizeScreenBlendIndexOrder(
     const core::FlatStateSet<MaxEntries>& renderStates) {
   const bool alphaBlendEnabled =

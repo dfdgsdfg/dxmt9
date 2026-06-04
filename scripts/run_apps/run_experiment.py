@@ -103,6 +103,7 @@ class ExperimentApp:
     capture_frame: int = 0
     reference_optional: bool = False
     allow_timeout: bool = False
+    require_positive_timeout: bool = False
     skip_stage: bool = False
     wine_dll_overrides: str | None = None
     cx_bottle: str | None = None
@@ -137,7 +138,7 @@ class ExperimentApp:
             raise ValueError(f"{data.get('name', '<unknown>')}: invalid license_scope {license_scope!r}")
         if license_scope == "project-mit" and data["license"] != "mit":
             raise ValueError(f"{data.get('name', '<unknown>')}: project-mit entries must use license = 'mit'")
-        return cls(
+        app = cls(
             name=data["name"],
             source=data["source"],
             license=data["license"],
@@ -155,6 +156,7 @@ class ExperimentApp:
             capture_frame=int(data.get("capture_frame", 0)),
             reference_optional=bool(data.get("reference_optional", False)),
             allow_timeout=bool(data.get("allow_timeout", False)),
+            require_positive_timeout=bool(data.get("require_positive_timeout", False)),
             skip_stage=bool(data.get("skip_stage", False)),
             wine_dll_overrides=data.get("wine_dll_overrides"),
             cx_bottle=data.get("cx_bottle"),
@@ -163,6 +165,11 @@ class ExperimentApp:
             wine_alternatives=list(data.get("wine_alternatives") or []),
             install_drive_letter=data.get("install_drive_letter", "d"),
         )
+        if app.require_positive_timeout and app.run_timeout_sec <= 0.0:
+            raise ValueError(
+                f"{app.name}: require_positive_timeout needs run_timeout_sec > 0"
+            )
+        return app
 
     def attach_expected_counters(self, raw: dict[str, Any] | None) -> None:
         if not raw:
@@ -1177,7 +1184,11 @@ def main() -> int:
     )
     run_parser.add_argument("--prefix", help="Wine prefix path")
     run_parser.add_argument("--binary", help="Override the binary path for this run")
-    run_parser.add_argument("--timeout", type=float, help="Override timeout seconds; <= 0 disables the run timeout")
+    run_parser.add_argument(
+        "--timeout",
+        type=float,
+        help="Override timeout seconds; <= 0 disables unless the catalogue entry requires a positive timeout",
+    )
     run_parser.add_argument("--pe-build-dir", help="PE build dir containing d3d9.dll")
     run_parser.add_argument("--runtime-pe-build-dir", help="builtin PE build dir containing runtime winemetal.dll")
     run_parser.add_argument("--wow64-pe-build-dir", help="32-bit PE build dir containing d3d9.dll")
@@ -1210,6 +1221,14 @@ def main() -> int:
     app = next((item for item in apps if item.name == args.name), None)
     if app is None:
         print(f"unknown experiment: {args.name}", file=sys.stderr)
+        return 2
+    if app.require_positive_timeout and args.timeout is not None and args.timeout <= 0.0:
+        print(
+            f"{app.name}: --timeout must be positive; this app can hang during shutdown. "
+            f"Omit --timeout to use the catalogue default ({app.run_timeout_sec:g}s) "
+            "or pass a positive value.",
+            file=sys.stderr,
+        )
         return 2
     if getattr(args, "build", False):
         build_script_path = app.build_script_path

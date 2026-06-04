@@ -91,14 +91,24 @@ def canonicalize_ids(ids: np.ndarray, mapping: list[int]) -> np.ndarray:
     return canonical
 
 
-def color_changed_mask(before: Path | None, after: Path | None) -> np.ndarray | None:
+def load_color_pair(before: Path | None, after: Path | None) -> tuple[np.ndarray, np.ndarray] | None:
     if before is None or after is None:
         return None
     before_rgb = load_rgb(before)
     after_rgb = load_rgb(after)
     if before_rgb.shape != after_rgb.shape:
         raise SystemExit(f"color image size mismatch: {before} vs {after}")
+    return before_rgb, after_rgb
+
+
+def color_changed_mask(before_rgb: np.ndarray, after_rgb: np.ndarray) -> np.ndarray:
     return np.max(np.abs(before_rgb.astype(np.int16) - after_rgb.astype(np.int16)), axis=2) > 0
+
+
+def rgb_text(rgb: np.ndarray | None) -> str:
+    if rgb is None:
+        return ""
+    return ",".join(str(int(v)) for v in rgb)
 
 
 def bbox_text(mask: np.ndarray) -> str:
@@ -122,6 +132,24 @@ def markdown_table(headers: tuple[str, ...], rows: Iterable[tuple[str, ...]]) ->
     return "\n".join(out)
 
 
+def selected_pixel_mask(
+    primitive_changed: np.ndarray,
+    color_mask: np.ndarray | None,
+    scope: str,
+) -> np.ndarray:
+    if scope == "primitive-changed":
+        return primitive_changed
+    if scope == "color-or-primitive-changed":
+        return primitive_changed if color_mask is None else (primitive_changed | color_mask)
+    if scope == "color-changed":
+        if color_mask is None:
+            raise SystemExit("--pixel-scope color-changed requires --before-color and --after-color")
+        return color_mask
+    if color_mask is not None:
+        return color_mask
+    return primitive_changed
+
+
 def analyze(args: argparse.Namespace) -> tuple[dict[str, str], list[dict[str, str]]]:
     indices = uint16_indices(args.index_file)
     before_mapping = order_to_original_triangle_map(indices, args.before_primitive_order)
@@ -132,16 +160,27 @@ def analyze(args: argparse.Namespace) -> tuple[dict[str, str], list[dict[str, st
         raise SystemExit("primitive-id image size mismatch")
 
     primitive_changed = before_ids != after_ids
-    color_mask = color_changed_mask(args.before_color, args.after_color)
+    color_pair = load_color_pair(args.before_color, args.after_color)
+    color_mask = color_changed_mask(*color_pair) if color_pair is not None else None
     if color_mask is not None and color_mask.shape != primitive_changed.shape:
         raise SystemExit("color image size does not match primitive-id images")
 
     pixel_rows: list[dict[str, str]] = []
-    if color_mask is not None:
-        ys, xs = np.nonzero(color_mask)
-    else:
-        ys, xs = np.nonzero(primitive_changed)
+    color_delta_max_values: list[int] = []
+    color_delta_l1_values: list[int] = []
+    ys, xs = np.nonzero(selected_pixel_mask(primitive_changed, color_mask, args.pixel_scope))
     for y, x in zip(ys, xs):
+        before_rgb = color_pair[0][y, x] if color_pair is not None else None
+        after_rgb = color_pair[1][y, x] if color_pair is not None else None
+        color_delta = (
+            np.abs(before_rgb.astype(np.int16) - after_rgb.astype(np.int16))
+            if before_rgb is not None and after_rgb is not None else None
+        )
+        color_delta_max = int(np.max(color_delta)) if color_delta is not None else 0
+        color_delta_l1 = int(np.sum(color_delta)) if color_delta is not None else 0
+        if color_delta is not None:
+            color_delta_max_values.append(color_delta_max)
+            color_delta_l1_values.append(color_delta_l1)
         pixel_rows.append({
             "x": str(int(x)),
             "y": str(int(y)),
@@ -149,6 +188,10 @@ def analyze(args: argparse.Namespace) -> tuple[dict[str, str], list[dict[str, st
             "after_original_triangle": str(int(after_ids[y, x])),
             "primitive_identity_changed": "1" if bool(primitive_changed[y, x]) else "0",
             "color_changed": "1" if color_mask is not None and bool(color_mask[y, x]) else "0",
+            "before_color_rgb": rgb_text(before_rgb),
+            "after_color_rgb": rgb_text(after_rgb),
+            "color_delta_max": str(color_delta_max),
+            "color_delta_l1": str(color_delta_l1),
         })
 
     primitive_changed_pixels = int(np.count_nonzero(primitive_changed))
@@ -166,6 +209,8 @@ def analyze(args: argparse.Namespace) -> tuple[dict[str, str], list[dict[str, st
         "primitive_identity_changed_bbox": bbox_text(primitive_changed),
         "color_changed_pixels": str(color_changed_pixels),
         "color_and_primitive_changed_pixels": str(color_and_primitive_changed),
+        "max_color_delta": str(max(color_delta_max_values, default=0)),
+        "max_color_delta_l1": str(max(color_delta_l1_values, default=0)),
     }
     return summary, pixel_rows
 
@@ -179,6 +224,10 @@ def write_csv(path: Path, rows: list[dict[str, str]]) -> None:
         "after_original_triangle",
         "primitive_identity_changed",
         "color_changed",
+        "before_color_rgb",
+        "after_color_rgb",
+        "color_delta_max",
+        "color_delta_l1",
     )
     with path.open("w", newline="", encoding="utf-8") as handle:
         writer = csv.DictWriter(handle, fieldnames=fields)
@@ -197,6 +246,8 @@ def write_summary_csv(path: Path, summary: dict[str, str]) -> None:
         "primitive_identity_changed_bbox",
         "color_changed_pixels",
         "color_and_primitive_changed_pixels",
+        "max_color_delta",
+        "max_color_delta_l1",
     )
     with path.open("w", newline="", encoding="utf-8") as handle:
         writer = csv.DictWriter(handle, fieldnames=fields)
@@ -228,6 +279,8 @@ def write_markdown(path: Path, summary: dict[str, str], pixel_rows: list[dict[st
                     "Color + primitive changed pixels",
                     f"`{fmt_int(int(summary['color_and_primitive_changed_pixels']))}`",
                 ),
+                ("Max color delta", f"`{fmt_int(int(summary['max_color_delta']))}`"),
+                ("Max color delta L1", f"`{fmt_int(int(summary['max_color_delta_l1']))}`"),
             ),
         ),
         "",
@@ -245,6 +298,7 @@ def write_markdown(path: Path, summary: dict[str, str], pixel_rows: list[dict[st
                 "After original tri",
                 "Primitive changed",
                 "Color changed",
+                "Color delta",
             ),
             (
                 (
@@ -254,6 +308,7 @@ def write_markdown(path: Path, summary: dict[str, str], pixel_rows: list[dict[st
                     f"`{row['after_original_triangle']}`",
                     f"`{row['primitive_identity_changed']}`",
                     f"`{row['color_changed']}`",
+                    f"`{row.get('color_delta_max', '')}`",
                 )
                 for row in pixel_rows[:64]
             ),
@@ -270,6 +325,21 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--after-primitive-order", default="cache-opt-lru32")
     parser.add_argument("--before-color", type=Path)
     parser.add_argument("--after-color", type=Path)
+    parser.add_argument(
+        "--pixel-scope",
+        choices=(
+            "color-if-available",
+            "color-changed",
+            "primitive-changed",
+            "color-or-primitive-changed",
+        ),
+        default="color-if-available",
+        help=(
+            "Which pixels to emit in --pixel-csv-output. The default preserves "
+            "existing behavior: color-changed pixels when color images are "
+            "provided, otherwise primitive-changed pixels."
+        ),
+    )
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--pixel-csv-output", type=Path)
     parser.add_argument("--summary-csv-output", type=Path)

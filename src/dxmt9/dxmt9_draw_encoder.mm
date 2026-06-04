@@ -1260,6 +1260,9 @@ struct ActiveEncoderBreakdown {
                                  u64 stream0Handle,
                                  u64 stream0Offset,
                                  u64 stream0Stride,
+                                 u64 vertexConstantsHash,
+                                 u64 pixelConstantsHash,
+                                 u64 uniformPayloadHash,
                                  const core::Rect& originalScissor) {
     if (!enabled) {
       return;
@@ -1374,7 +1377,9 @@ struct ActiveEncoderBreakdown {
         "effective_index_offset=%llu effective_index_bytes=%llu "
         "stream0_handle=0x%llx stream0_offset=%llu "
         "stream0_stride=%llu pso=0x%llx shader_variant=0x%llx "
-        "vs=0x%llx ps=0x%llx vsout=0x%x]\n",
+        "vs=0x%llx ps=0x%llx vs_constants_hash=0x%llx "
+        "ps_constants_hash=0x%llx uniform_payload_hash=0x%llx "
+        "vsout=0x%x]\n",
         static_cast<unsigned long long>(stats.seqId),
         static_cast<unsigned long long>(stats.encoderIndex),
         static_cast<unsigned long long>(stats.drawCalls),
@@ -1490,6 +1495,9 @@ struct ActiveEncoderBreakdown {
         static_cast<unsigned long long>(shaderVariant),
         static_cast<unsigned long long>(stats.vertexShaderLast),
         static_cast<unsigned long long>(stats.pixelShaderLast),
+        static_cast<unsigned long long>(vertexConstantsHash),
+        static_cast<unsigned long long>(pixelConstantsHash),
+        static_cast<unsigned long long>(uniformPayloadHash),
         vsOutLayout);
   }
 
@@ -3253,6 +3261,64 @@ IndexReuseMeasure measureIndexReuseForDraw(std::span<const u8> indexBytes,
   return out;
 }
 
+IndexReuseMeasure measureIndexCacheMiss32ForDraw(std::span<const u8> indexBytes,
+                                                 IndexType indexType,
+                                                 u32 startIndex,
+                                                 u64 indexCount) {
+  IndexReuseMeasure out{.references = indexCount};
+  if (indexBytes.empty() || indexCount == 0u) {
+    return out;
+  }
+  const std::size_t elementSize = indexElementSize(indexType);
+  const std::size_t startByte = static_cast<std::size_t>(startIndex) * elementSize;
+  if (startByte > indexBytes.size()) {
+    return out;
+  }
+  const std::size_t maxReadable =
+      (indexBytes.size() - startByte) / elementSize;
+  if (indexCount > static_cast<u64>(maxReadable)) {
+    return out;
+  }
+
+  std::array<u32, 32> cache{};
+  std::size_t cacheSize = 0;
+  u64 misses = 0;
+  for (u64 i = 0; i < indexCount; ++i) {
+    const std::size_t offset = startByte + static_cast<std::size_t>(i) * elementSize;
+    u32 index = 0;
+    if (indexType == IndexType::UInt16) {
+      u16 value = 0;
+      std::memcpy(&value, indexBytes.data() + offset, sizeof(value));
+      index = value;
+    } else {
+      std::memcpy(&index, indexBytes.data() + offset, sizeof(index));
+    }
+
+    std::size_t hit = cacheSize;
+    for (std::size_t j = 0; j < cacheSize; ++j) {
+      if (cache[j] == index) {
+        hit = j;
+        break;
+      }
+    }
+    if (hit == cacheSize) {
+      ++misses;
+      if (cacheSize < cache.size()) {
+        ++cacheSize;
+      }
+      hit = cacheSize - 1u;
+    }
+    for (std::size_t j = hit; j > 0u; --j) {
+      cache[j] = cache[j - 1u];
+    }
+    cache[0] = index;
+  }
+
+  out.cacheMiss32 = misses;
+  out.available = true;
+  return out;
+}
+
 u64 stream0ByteSpanForIndexMeasure(const IndexReuseMeasure& measure,
                                    u64 stream0Stride) {
   if (!measure.available || stream0Stride == 0u) {
@@ -3933,10 +3999,8 @@ bool buildVertexCacheOptimizedTriangleOrderIndexBytes(
   const std::size_t triangleCount = static_cast<std::size_t>(indexCount / 3u);
   std::vector<Triangle> triangles;
   triangles.reserve(triangleCount);
-  std::unordered_map<u32, std::vector<u32>> vertexTriangles;
-  std::unordered_map<u32, u32> remainingVertexUse;
-  vertexTriangles.reserve(triangleCount * 2u);
-  remainingVertexUse.reserve(triangleCount * 2u);
+  u32 minReferencedIndex = std::numeric_limits<u32>::max();
+  u32 maxReferencedIndex = 0u;
 
   for (std::size_t triangle = 0; triangle < triangleCount; ++triangle) {
     Triangle tri{.original = triangle};
@@ -3951,10 +4015,52 @@ bool buildVertexCacheOptimizedTriangleOrderIndexBytes(
       tri.indices[i] = *value;
       tri.minIndex = std::min(tri.minIndex, *value);
       tri.maxIndex = std::max(tri.maxIndex, *value);
-      vertexTriangles[*value].push_back(static_cast<u32>(triangle));
-      ++remainingVertexUse[*value];
+      minReferencedIndex = std::min(minReferencedIndex, *value);
+      maxReferencedIndex = std::max(maxReferencedIndex, *value);
     }
     triangles.push_back(tri);
+  }
+  if (triangles.empty()) {
+    return false;
+  }
+
+  const u64 referencedRange =
+      static_cast<u64>(maxReferencedIndex) - minReferencedIndex + 1u;
+  const bool useDenseAdjacency = referencedRange <= 131072u;
+  std::vector<std::vector<u32>> denseVertexTriangles;
+  std::vector<u32> denseRemainingVertexUse;
+  std::unordered_map<u32, std::vector<u32>> sparseVertexTriangles;
+  std::unordered_map<u32, u32> sparseRemainingVertexUse;
+
+  if (useDenseAdjacency) {
+    const auto range = static_cast<std::size_t>(referencedRange);
+    denseVertexTriangles.resize(range);
+    denseRemainingVertexUse.assign(range, 0u);
+    for (const auto& tri : triangles) {
+      for (const u32 index : tri.indices) {
+        ++denseRemainingVertexUse[static_cast<std::size_t>(index - minReferencedIndex)];
+      }
+    }
+    for (std::size_t i = 0; i < range; ++i) {
+      if (denseRemainingVertexUse[i] != 0u) {
+        denseVertexTriangles[i].reserve(denseRemainingVertexUse[i]);
+      }
+    }
+    for (std::size_t triangle = 0; triangle < triangles.size(); ++triangle) {
+      for (const u32 index : triangles[triangle].indices) {
+        denseVertexTriangles[static_cast<std::size_t>(index - minReferencedIndex)]
+            .push_back(static_cast<u32>(triangle));
+      }
+    }
+  } else {
+    sparseVertexTriangles.reserve(triangleCount * 3u);
+    sparseRemainingVertexUse.reserve(triangleCount * 3u);
+    for (std::size_t triangle = 0; triangle < triangles.size(); ++triangle) {
+      for (const u32 index : triangles[triangle].indices) {
+        sparseVertexTriangles[index].push_back(static_cast<u32>(triangle));
+        ++sparseRemainingVertexUse[index];
+      }
+    }
   }
 
   std::vector<u32> cache;
@@ -3986,12 +4092,48 @@ bool buildVertexCacheOptimizedTriangleOrderIndexBytes(
   };
 
   auto addVertexNeighbors = [&](u32 index) {
-    auto it = vertexTriangles.find(index);
-    if (it == vertexTriangles.end()) {
+    if (useDenseAdjacency) {
+      const auto local = static_cast<std::size_t>(index - minReferencedIndex);
+      if (local >= denseVertexTriangles.size()) {
+        return;
+      }
+      for (const u32 triangle : denseVertexTriangles[local]) {
+        addCandidate(triangle);
+      }
+      return;
+    }
+    auto it = sparseVertexTriangles.find(index);
+    if (it == sparseVertexTriangles.end()) {
       return;
     }
     for (const u32 triangle : it->second) {
       addCandidate(triangle);
+    }
+  };
+
+  auto remainingUseFor = [&](u32 index) -> u32 {
+    if (useDenseAdjacency) {
+      const auto local = static_cast<std::size_t>(index - minReferencedIndex);
+      return local < denseRemainingVertexUse.size()
+                 ? denseRemainingVertexUse[local]
+                 : 0u;
+    }
+    auto it = sparseRemainingVertexUse.find(index);
+    return it != sparseRemainingVertexUse.end() ? it->second : 0u;
+  };
+
+  auto decrementRemainingUse = [&](u32 index) {
+    if (useDenseAdjacency) {
+      const auto local = static_cast<std::size_t>(index - minReferencedIndex);
+      if (local < denseRemainingVertexUse.size() &&
+          denseRemainingVertexUse[local] != 0u) {
+        --denseRemainingVertexUse[local];
+      }
+      return;
+    }
+    auto it = sparseRemainingVertexUse.find(index);
+    if (it != sparseRemainingVertexUse.end() && it->second != 0u) {
+      --it->second;
     }
   };
 
@@ -4013,7 +4155,7 @@ bool buildVertexCacheOptimizedTriangleOrderIndexBytes(
           ++cachedVertices;
           cacheDistance += static_cast<u32>(*pos);
         }
-        remainingUse += remainingVertexUse[index];
+        remainingUse += remainingUseFor(index);
       }
       const std::int64_t score =
           static_cast<std::int64_t>(cachedVertices) * 1'000'000ll -
@@ -4085,9 +4227,7 @@ bool buildVertexCacheOptimizedTriangleOrderIndexBytes(
     order.push_back(chosen);
     const auto& tri = triangles[triangleIndex];
     for (const u32 index : tri.indices) {
-      if (remainingVertexUse[index] != 0u) {
-        --remainingVertexUse[index];
-      }
+      decrementRemainingUse(index);
       touchCacheVertex(index);
     }
     for (const u32 index : tri.indices) {
@@ -4118,42 +4258,6 @@ bool buildVertexCacheOptimizedTriangleOrderIndexBytes(
     }
   }
   return true;
-}
-
-bool isOpaqueDepthWritingReorderProbeEligible(
-    const core::FlatStateSet<core::kMaxStateSlots>& renderStates,
-    WMTTriangleFillMode fillMode) {
-  if (fillMode != WMTTriangleFillModeFill) {
-    return false;
-  }
-  if (core::flatStateOr(renderStates, RS_ALPHABLEND_ENABLE, 0u) != 0u) {
-    return false;
-  }
-  if (core::flatStateOr(renderStates, RS_ALPHA_TEST_ENABLE, 0u) != 0u) {
-    return false;
-  }
-  if (core::flatStateOr(renderStates, core::RS_STENCIL_ENABLE, 0u) != 0u) {
-    return false;
-  }
-  if (core::flatStateOr(renderStates, core::RS_CLIP_PLANE_ENABLE, 0u) != 0u) {
-    return false;
-  }
-  const bool depthEnabled =
-      core::flatStateOr(renderStates, RS_Z_ENABLE, 0u) != 0u;
-  const bool depthWrite =
-      depthEnabled && !debug::probeDisableDepthWrite() &&
-      core::flatStateOr(renderStates, RS_Z_WRITE_ENABLE, 0u) != 0u;
-  if (!depthWrite) {
-    return false;
-  }
-  switch (static_cast<core::CompareFunc>(core::flatStateOr(
-      renderStates, RS_Z_FUNC, static_cast<u32>(core::CompareFunc::LessEqual)))) {
-    case core::CompareFunc::Less:
-    case core::CompareFunc::LessEqual:
-      return true;
-    default:
-      return false;
-  }
 }
 
 bool renderEncoderSelectionMatches(const ActiveEncoderBreakdown* encoderBreakdown,
@@ -6203,6 +6307,7 @@ bool encodeDraw(EncodeContext& ctx,
   // Phase 3-E: viewport / scissor / cull are BaseDrawState-only.
   if (!effectiveSkipBaseStateBind) {
     PerfScope streamBindViewportScope(perf::countEncodeDrawStreamBindCpuTime);
+    PerfScope rasterStateScope(perf::countEncodeDrawRasterStateCpuTime);
     if (bindingPacketHasRasterTarget) {
       recordedSetViewport(ctx, encoder, bindingPacket.raster.viewport);
       countViewportBind();
@@ -6394,6 +6499,7 @@ bool encodeDraw(EncodeContext& ctx,
     }
     {
       PerfScope streamBindFfScope(perf::countEncodeDrawStreamBindCpuTime);
+      PerfScope vertexStreamBindFfScope(perf::countEncodeDrawVertexStreamBindCpuTime);
       if (encoderBreakdown) {
         if (stream0Record) {
           encoderBreakdown->recordStreamResource(0, hot.streamBuffers[0].value,
@@ -6675,6 +6781,7 @@ bool encodeDraw(EncodeContext& ctx,
     }
     {
       PerfScope streamBindVsScope(perf::countEncodeDrawStreamBindCpuTime);
+      PerfScope vertexStreamBindVsScope(perf::countEncodeDrawVertexStreamBindCpuTime);
       if (encoderBreakdown) {
         if (stream0Record) {
           encoderBreakdown->recordStreamResource(0, hot.streamBuffers[0].value,
@@ -6768,6 +6875,7 @@ bool encodeDraw(EncodeContext& ctx,
   // whether the constant argbuf hybrid is active.
   if (!effectiveSkipBaseStateBind) {
     PerfScope streamBindTexScope(perf::countEncodeDrawStreamBindCpuTime);
+    PerfScope textureSamplerBindScope(perf::countEncodeDrawTextureSamplerBindCpuTime);
     if (!bindingPacket.fragmentTextureSamplers.empty()) {
       struct ResolvedFragmentTextureSamplerBinding {
         u32 stage = 0;
@@ -7426,41 +7534,46 @@ bool encodeDraw(EncodeContext& ctx,
     bool indexReorderApplied = false;
     {
       PerfScope streamBindIndexScope(perf::countEncodeDrawStreamBindCpuTime);
-      if (!pv.userIndexData.empty()) {
-        indexBytesForReuse = pv.userIndexData;
-        // Phase 5-B: prefer pre-batched UP index slice from DrawRun
-        // bulk upload; fall back to per-draw upload otherwise.
-        if (preUploaded && preUploaded->index) {
-          transientIndexBuffer = preUploaded->index;
-        } else {
-          transientIndexBuffer = makeTransientIndexBuffer(
-              pv.userIndexData.data(), pv.userIndexData.size(),
-              ActiveEncoderBreakdown::TransientIndexSource::User);
-        }
-        if (transientIndexBuffer) {
-          indexBuffer = transientIndexBuffer.buffer;
-          indexBufferOffset += transientIndexBuffer.offset;
-        }
-      } else {
-        auto* buffer = ctx.pool.findBuffer(hot.indexBuffer.value);
-        indexBufferRecord = buffer;
-        if (buffer && buffer->buffer) {
-          indexBuffer = WMT::Buffer{buffer->buffer.handle};
-          if (!buffer->shadow.empty()) {
-            indexBytesForReuse = buffer->shadow;
-          } else if (buffer->contents) {
-            indexBytesForReuse = std::span<const u8>(
-                static_cast<const u8*>(buffer->contents),
-                static_cast<std::size_t>(buffer->desc.size));
+      PerfScope indexSetupScope(perf::countEncodeDrawIndexSetupCpuTime);
+      {
+        PerfScope indexSourceResolveScope(
+            perf::countEncodeDrawIndexSourceResolveCpuTime);
+        if (!pv.userIndexData.empty()) {
+          indexBytesForReuse = pv.userIndexData;
+          // Phase 5-B: prefer pre-batched UP index slice from DrawRun
+          // bulk upload; fall back to per-draw upload otherwise.
+          if (preUploaded && preUploaded->index) {
+            transientIndexBuffer = preUploaded->index;
+          } else {
+            transientIndexBuffer = makeTransientIndexBuffer(
+                pv.userIndexData.data(), pv.userIndexData.size(),
+                ActiveEncoderBreakdown::TransientIndexSource::User);
           }
-        } else if (buffer && !buffer->shadow.empty()) {
-          indexBytesForReuse = buffer->shadow;
-          transientIndexBuffer = makeTransientIndexBuffer(
-              buffer->shadow.data(), buffer->shadow.size(),
-              ActiveEncoderBreakdown::TransientIndexSource::ShadowFallback);
           if (transientIndexBuffer) {
             indexBuffer = transientIndexBuffer.buffer;
             indexBufferOffset += transientIndexBuffer.offset;
+          }
+        } else {
+          auto* buffer = ctx.pool.findBuffer(hot.indexBuffer.value);
+          indexBufferRecord = buffer;
+          if (buffer && buffer->buffer) {
+            indexBuffer = WMT::Buffer{buffer->buffer.handle};
+            if (!buffer->shadow.empty()) {
+              indexBytesForReuse = buffer->shadow;
+            } else if (buffer->contents) {
+              indexBytesForReuse = std::span<const u8>(
+                  static_cast<const u8*>(buffer->contents),
+                  static_cast<std::size_t>(buffer->desc.size));
+            }
+          } else if (buffer && !buffer->shadow.empty()) {
+            indexBytesForReuse = buffer->shadow;
+            transientIndexBuffer = makeTransientIndexBuffer(
+                buffer->shadow.data(), buffer->shadow.size(),
+                ActiveEncoderBreakdown::TransientIndexSource::ShadowFallback);
+            if (transientIndexBuffer) {
+              indexBuffer = transientIndexBuffer.buffer;
+              indexBufferOffset += transientIndexBuffer.offset;
+            }
           }
         }
       }
@@ -7539,7 +7652,10 @@ bool encodeDraw(EncodeContext& ctx,
           indexedTriangleEncoderDrawRangeMatches(encoderBreakdown) &&
           indexedGeometryDumpShaderMatches(drawState);
       const bool opaqueDepthWritingEligible =
-          isOpaqueDepthWritingReorderProbeEligible(hot.renderStates, fillMode);
+          shouldOptimizeOpaqueDepthIndexOrder(
+              hot.renderStates,
+              fillMode,
+              debug::probeDisableDepthWrite());
       const bool applyProbeCacheOptCandidateSafetyEligible =
           opaqueDepthWritingEligible ||
           debug::probeApplyIndexCacheOptCandidateUnsafeNonOpaque();
@@ -7571,12 +7687,17 @@ bool encodeDraw(EncodeContext& ctx,
               hot.renderStates,
               effectiveViewport,
               fillMode);
-      const bool applyCacheOptCandidatePreEligible =
-          (applyProbeCacheOptCandidateScopeMatches ||
-           optimizeOpaqueDepthIndexCacheScopeMatches ||
-           optimizeScreenBlendIndexCacheScopeMatches) &&
+      const bool diagnosticCacheOptCandidatePreEligible =
+          applyProbeCacheOptCandidateScopeMatches &&
           stableOriginalIndexBufferForCandidate &&
           reverseTriangleClassEligibleNoSpan;
+      const bool productionCacheOptCandidatePreEligible =
+          (optimizeOpaqueDepthIndexCacheScopeMatches ||
+           optimizeScreenBlendIndexCacheScopeMatches) &&
+          stableOriginalIndexBufferForCandidate;
+      const bool applyCacheOptCandidatePreEligible =
+          diagnosticCacheOptCandidatePreEligible ||
+          productionCacheOptCandidatePreEligible;
       resources::ReorderedIndexBufferCacheKey cacheOptReorderKey{};
       if (stableOriginalIndexBufferForCandidate) {
         cacheOptReorderKey.startIndex = originalIndexReuseStartIndex;
@@ -7589,9 +7710,10 @@ bool encodeDraw(EncodeContext& ctx,
       const bool cacheOptPrelookupEligible =
           (optimizeOpaqueDepthIndexCacheScopeMatches ||
            optimizeScreenBlendIndexCacheScopeMatches) &&
-          stableOriginalIndexBufferForCandidate &&
-          reverseTriangleClassEligibleNoSpan;
+          stableOriginalIndexBufferForCandidate;
       if (cacheOptPrelookupEligible) {
+        PerfScope indexCacheLookupScope(
+            perf::countEncodeDrawIndexCacheLookupCpuTime);
         cacheOptPrelookup = ctx.queue.findReorderedIndexBuffer(
             hot.indexBuffer,
             cacheOptReorderKey,
@@ -7601,6 +7723,13 @@ bool encodeDraw(EncodeContext& ctx,
           cacheOptPrelookup.hit && cacheOptPrelookup.buffer;
       const bool cacheOptPrelookupRejected =
           cacheOptPrelookup.hit && cacheOptPrelookup.rejected;
+      if (cacheOptPrelookupEligible && cacheOptPrelookup.hit) {
+        perf::countReorderedIndexCacheLookup(
+            cacheOptPrelookupPositive,
+            cacheOptPrelookupRejected,
+            false,
+            0u);
+      }
       if (cacheOptPrelookupEligible && encoderBreakdown && cacheOptPrelookup.hit) {
         encoderBreakdown->recordReorderedIndexCacheLookup(
             cacheOptPrelookupPositive,
@@ -7621,6 +7750,17 @@ bool encodeDraw(EncodeContext& ctx,
            (applyCacheOptCandidatePreEligible &&
             !cacheOptPrelookupPositive &&
             !cacheOptPrelookupRejected));
+      const bool cacheOptFullReuseMeasureRequired =
+          explicitMeasureCacheOptCandidate ||
+          measureProductionCacheOptPrelookup ||
+          encoderBreakdownActive ||
+          debug::measureIndexReuse() ||
+          reverseTriangleProbeScopeMatches ||
+          optimizeScreenBlendIndexOrderScopeMatches ||
+          splitConsidered ||
+          dumpIndexedGeometryScopeMatches;
+      const bool cacheOptFastLru32Measure =
+          measureCacheOptCandidate && !cacheOptFullReuseMeasureRequired;
       const bool measureProbeIndexLocality =
           (debug::measureIndexReuse() && encoderBreakdownActive) ||
           (reverseTriangleProbeScopeMatches && reverseStream0SpanMin != 0u) ||
@@ -7631,32 +7771,63 @@ bool encodeDraw(EncodeContext& ctx,
       const u64 stream0StrideForProbe =
           encoderBreakdownActive ? encoderBreakdown->stats.streams[0].lastStride
                                  : static_cast<u64>(hot.streamStrides[0]);
-      const IndexReuseMeasure originalIndexReuseForProbe =
-          measureProbeIndexLocality
-              ? measureIndexReuseForDraw(originalIndexBytesForReuse,
+      IndexReuseMeasure originalIndexReuseForProbe{.references = vertexCount};
+      if (measureProbeIndexLocality) {
+        if (measureCacheOptCandidate) {
+          PerfScope indexCacheCandidateScope(
+              perf::countEncodeDrawIndexCacheCandidateCpuTime);
+          PerfScope indexCacheOriginalMeasureScope(
+              perf::countEncodeDrawIndexCacheOriginalMeasureCpuTime);
+          originalIndexReuseForProbe = cacheOptFastLru32Measure
+              ? measureIndexCacheMiss32ForDraw(originalIndexBytesForReuse,
+                                               pv.indexType,
+                                               originalIndexReuseStartIndex,
+                                               vertexCount)
+              : measureIndexReuseForDraw(originalIndexBytesForReuse,
                                          pv.indexType,
                                          originalIndexReuseStartIndex,
-                                         vertexCount)
-              : IndexReuseMeasure{.references = vertexCount};
+                                         vertexCount);
+        } else {
+          originalIndexReuseForProbe =
+              measureIndexReuseForDraw(originalIndexBytesForReuse,
+                                       pv.indexType,
+                                       originalIndexReuseStartIndex,
+                                       vertexCount);
+        }
+      }
       std::vector<u8> cacheOptCandidateIndexBytes;
       IndexReuseMeasure cacheOptCandidateReuse{.references = vertexCount};
       bool cacheOptCandidateBuilt = false;
       bool cacheOptCandidateGatePassed = false;
       if (measureCacheOptCandidate) {
-        if (originalIndexReuseForProbe.available &&
-            buildVertexCacheOptimizedTriangleOrderIndexBytes(
-                originalIndexBytesForReuse,
-                pv.indexType,
-                originalIndexReuseStartIndex,
-                vertexCount,
-                cacheOptCandidateIndexBytes,
-                32u)) {
-          cacheOptCandidateBuilt = true;
-          cacheOptCandidateReuse =
-              measureIndexReuseForDraw(cacheOptCandidateIndexBytes,
-                                       pv.indexType,
-                                       0,
-                                       vertexCount);
+        PerfScope indexCacheCandidateScope(
+            perf::countEncodeDrawIndexCacheCandidateCpuTime);
+        if (originalIndexReuseForProbe.available) {
+          {
+            PerfScope indexCacheCandidateBuildScope(
+                perf::countEncodeDrawIndexCacheCandidateBuildCpuTime);
+            cacheOptCandidateBuilt =
+                buildVertexCacheOptimizedTriangleOrderIndexBytes(
+                    originalIndexBytesForReuse,
+                    pv.indexType,
+                    originalIndexReuseStartIndex,
+                    vertexCount,
+                    cacheOptCandidateIndexBytes,
+                    32u);
+          }
+        }
+        if (cacheOptCandidateBuilt) {
+          PerfScope indexCacheCandidateMeasureScope(
+              perf::countEncodeDrawIndexCacheCandidateMeasureCpuTime);
+          cacheOptCandidateReuse = cacheOptFastLru32Measure
+              ? measureIndexCacheMiss32ForDraw(cacheOptCandidateIndexBytes,
+                                               pv.indexType,
+                                               0,
+                                               vertexCount)
+              : measureIndexReuseForDraw(cacheOptCandidateIndexBytes,
+                                         pv.indexType,
+                                         0,
+                                         vertexCount);
         }
         u32 cacheOptMinGainPct =
             debug::probeApplyIndexCacheOptCandidateMinGainPct();
@@ -7667,11 +7838,24 @@ bool encodeDraw(EncodeContext& ctx,
           cacheOptMinGainPct =
               debug::optimizeScreenBlendIndexCacheMinGainPct();
         }
-        cacheOptCandidateGatePassed =
-            indexCacheCandidateMeetsGainGate(
-                originalIndexReuseForProbe,
-                cacheOptCandidateReuse,
-                cacheOptMinGainPct);
+        {
+          PerfScope indexCacheGateScope(
+              perf::countEncodeDrawIndexCacheGateCpuTime);
+          cacheOptCandidateGatePassed =
+              indexCacheCandidateMeetsGainGate(
+                  originalIndexReuseForProbe,
+                  cacheOptCandidateReuse,
+                  cacheOptMinGainPct);
+        }
+        perf::countIndexedCacheOptCandidate(
+            originalIndexReuseForProbe.available && cacheOptCandidateReuse.available,
+            static_cast<u64>(cacheOptCandidateIndexBytes.size()),
+            originalIndexReuseForProbe.cacheMiss16,
+            originalIndexReuseForProbe.cacheMiss32,
+            originalIndexReuseForProbe.cacheMiss64,
+            cacheOptCandidateReuse.cacheMiss16,
+            cacheOptCandidateReuse.cacheMiss32,
+            cacheOptCandidateReuse.cacheMiss64);
         if (encoderBreakdownActive) {
           encoderBreakdown->recordIndexedCacheOptCandidate(
               originalIndexReuseForProbe,
@@ -7687,6 +7871,7 @@ bool encodeDraw(EncodeContext& ctx,
               hot.indexBuffer,
               cacheOptReorderKey,
               seqId);
+          perf::countReorderedIndexCacheLookup(false, false, false, 0u);
           if (encoderBreakdown) {
             encoderBreakdown->recordReorderedIndexCacheLookup(false, false, false, 0u);
           }
@@ -7747,9 +7932,11 @@ bool encodeDraw(EncodeContext& ctx,
         const bool classEligible =
             reverseTriangleClassEligibleNoSpan &&
             stream0SpanFilterMatches(reverseStream0SpanMin);
+        const bool cacheOptCandidateClassEligible =
+            productionCacheOptCandidatePreEligible ||
+            (diagnosticCacheOptCandidatePreEligible && classEligible);
         const bool applyCacheOptCandidateEligible =
-            applyCacheOptCandidatePreEligible &&
-            classEligible &&
+            cacheOptCandidateClassEligible &&
             (cacheOptPrelookupPositive ||
              (cacheOptCandidateBuilt &&
               cacheOptCandidateGatePassed));
@@ -7802,12 +7989,19 @@ bool encodeDraw(EncodeContext& ctx,
         }
         if (probeIndexBytesBuilt) {
           if (applyCacheOptCandidateEligible) {
+            PerfScope indexCacheApplyScope(
+                perf::countEncodeDrawIndexCacheApplyCpuTime);
             const auto cached = ctx.queue.getOrCreateReorderedIndexBuffer(
                 hot.indexBuffer,
                 cacheOptReorderKey,
                 std::span<const u8>(probeReorderedIndexBytes.data(),
                                     probeReorderedIndexBytes.size()),
                 seqId);
+            perf::countReorderedIndexCacheLookup(
+                cached.hit,
+                false,
+                cached.created,
+                cached.created ? cached.byteCount : 0u);
             if (encoderBreakdown) {
               encoderBreakdown->recordReorderedIndexCacheLookup(
                   cached.hit,
@@ -7991,6 +8185,9 @@ bool encodeDraw(EncodeContext& ctx,
               stream0.lastHandle,
               stream0.lastOffset,
               stream0.lastStride,
+              hot.vertexConstantsHash,
+              hot.pixelConstantsHash,
+              drawState.hasUniformPayload() ? drawState.uniformPayload().hash : 0ull,
               hot.viewport.scissor);
         }
         if (probeConsidered) {

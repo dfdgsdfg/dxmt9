@@ -382,6 +382,33 @@ struct Counters {
   std::atomic<std::uint64_t> encodeDrawFvfDecodeCpuMaxNs{0};
   std::atomic<std::uint64_t> encodeDrawStreamBindCpuNs{0};
   std::atomic<std::uint64_t> encodeDrawStreamBindCpuMaxNs{0};
+  std::atomic<std::uint64_t> encodeDrawRasterStateCpuNs{0};
+  std::atomic<std::uint64_t> encodeDrawVertexStreamBindCpuNs{0};
+  std::atomic<std::uint64_t> encodeDrawTextureSamplerBindCpuNs{0};
+  std::atomic<std::uint64_t> encodeDrawIndexSetupCpuNs{0};
+  std::atomic<std::uint64_t> encodeDrawIndexSourceResolveCpuNs{0};
+  std::atomic<std::uint64_t> encodeDrawIndexCacheLookupCpuNs{0};
+  std::atomic<std::uint64_t> encodeDrawIndexCacheCandidateCpuNs{0};
+  std::atomic<std::uint64_t> encodeDrawIndexCacheOriginalMeasureCpuNs{0};
+  std::atomic<std::uint64_t> encodeDrawIndexCacheCandidateBuildCpuNs{0};
+  std::atomic<std::uint64_t> encodeDrawIndexCacheCandidateMeasureCpuNs{0};
+  std::atomic<std::uint64_t> encodeDrawIndexCacheGateCpuNs{0};
+  std::atomic<std::uint64_t> encodeDrawIndexCacheApplyCpuNs{0};
+  std::atomic<std::uint64_t> indexedCacheOptCandidateDraws{0};
+  std::atomic<std::uint64_t> indexedCacheOptCandidateSkipped{0};
+  std::atomic<std::uint64_t> indexedCacheOptCandidateBytes{0};
+  std::atomic<std::uint64_t> indexedCacheOptCandidateOriginalMiss16{0};
+  std::atomic<std::uint64_t> indexedCacheOptCandidateOriginalMiss32{0};
+  std::atomic<std::uint64_t> indexedCacheOptCandidateOriginalMiss64{0};
+  std::atomic<std::uint64_t> indexedCacheOptCandidateMiss16{0};
+  std::atomic<std::uint64_t> indexedCacheOptCandidateMiss32{0};
+  std::atomic<std::uint64_t> indexedCacheOptCandidateMiss64{0};
+  std::atomic<std::uint64_t> reorderedIndexCacheLookups{0};
+  std::atomic<std::uint64_t> reorderedIndexCacheHits{0};
+  std::atomic<std::uint64_t> reorderedIndexCacheRejectedHits{0};
+  std::atomic<std::uint64_t> reorderedIndexCacheMisses{0};
+  std::atomic<std::uint64_t> reorderedIndexCacheCreated{0};
+  std::atomic<std::uint64_t> reorderedIndexCacheCreatedBytes{0};
   std::atomic<std::uint64_t> encodeDrawIssueCpuNs{0};
   std::atomic<std::uint64_t> encodeDrawIssueCpuMaxNs{0};
   std::atomic<std::uint64_t> encodeDrawPsoPrefetchHandleAvailable{0};
@@ -1196,6 +1223,33 @@ constexpr CounterEntry kCounterTable[] = {
     {"encode_draw_stream_bind_cpu_p50_ms", CounterEntry::Kind::PercentileMs, nullptr, nullptr, &Counters::encodeDrawStreamBindCpuRing, 0.5},
     {"encode_draw_stream_bind_cpu_p95_ms", CounterEntry::Kind::PercentileMs, nullptr, nullptr, &Counters::encodeDrawStreamBindCpuRing, 0.95},
     {"encode_draw_stream_bind_cpu_p99_ms", CounterEntry::Kind::PercentileMs, nullptr, nullptr, &Counters::encodeDrawStreamBindCpuRing, 0.99},
+    {"encode_draw_raster_state_cpu_ms", CounterEntry::Kind::Milliseconds, &Counters::encodeDrawRasterStateCpuNs, nullptr, nullptr, 0.0},
+    {"encode_draw_vertex_stream_bind_cpu_ms", CounterEntry::Kind::Milliseconds, &Counters::encodeDrawVertexStreamBindCpuNs, nullptr, nullptr, 0.0},
+    {"encode_draw_texture_sampler_bind_cpu_ms", CounterEntry::Kind::Milliseconds, &Counters::encodeDrawTextureSamplerBindCpuNs, nullptr, nullptr, 0.0},
+    {"encode_draw_index_setup_cpu_ms", CounterEntry::Kind::Milliseconds, &Counters::encodeDrawIndexSetupCpuNs, nullptr, nullptr, 0.0},
+    {"encode_draw_index_source_resolve_cpu_ms", CounterEntry::Kind::Milliseconds, &Counters::encodeDrawIndexSourceResolveCpuNs, nullptr, nullptr, 0.0},
+    {"encode_draw_index_cache_lookup_cpu_ms", CounterEntry::Kind::Milliseconds, &Counters::encodeDrawIndexCacheLookupCpuNs, nullptr, nullptr, 0.0},
+    {"encode_draw_index_cache_candidate_cpu_ms", CounterEntry::Kind::Milliseconds, &Counters::encodeDrawIndexCacheCandidateCpuNs, nullptr, nullptr, 0.0},
+    {"encode_draw_index_cache_original_measure_cpu_ms", CounterEntry::Kind::Milliseconds, &Counters::encodeDrawIndexCacheOriginalMeasureCpuNs, nullptr, nullptr, 0.0},
+    {"encode_draw_index_cache_candidate_build_cpu_ms", CounterEntry::Kind::Milliseconds, &Counters::encodeDrawIndexCacheCandidateBuildCpuNs, nullptr, nullptr, 0.0},
+    {"encode_draw_index_cache_candidate_measure_cpu_ms", CounterEntry::Kind::Milliseconds, &Counters::encodeDrawIndexCacheCandidateMeasureCpuNs, nullptr, nullptr, 0.0},
+    {"encode_draw_index_cache_gate_cpu_ms", CounterEntry::Kind::Milliseconds, &Counters::encodeDrawIndexCacheGateCpuNs, nullptr, nullptr, 0.0},
+    {"encode_draw_index_cache_apply_cpu_ms", CounterEntry::Kind::Milliseconds, &Counters::encodeDrawIndexCacheApplyCpuNs, nullptr, nullptr, 0.0},
+    {"indexed_cache_opt_candidate_draws", CounterEntry::Kind::UnsignedCount, &Counters::indexedCacheOptCandidateDraws, nullptr, nullptr, 0.0},
+    {"indexed_cache_opt_candidate_skipped", CounterEntry::Kind::UnsignedCount, &Counters::indexedCacheOptCandidateSkipped, nullptr, nullptr, 0.0},
+    {"indexed_cache_opt_candidate_bytes", CounterEntry::Kind::UnsignedCount, &Counters::indexedCacheOptCandidateBytes, nullptr, nullptr, 0.0},
+    {"indexed_cache_opt_candidate_original_miss16", CounterEntry::Kind::UnsignedCount, &Counters::indexedCacheOptCandidateOriginalMiss16, nullptr, nullptr, 0.0},
+    {"indexed_cache_opt_candidate_original_miss32", CounterEntry::Kind::UnsignedCount, &Counters::indexedCacheOptCandidateOriginalMiss32, nullptr, nullptr, 0.0},
+    {"indexed_cache_opt_candidate_original_miss64", CounterEntry::Kind::UnsignedCount, &Counters::indexedCacheOptCandidateOriginalMiss64, nullptr, nullptr, 0.0},
+    {"indexed_cache_opt_candidate_miss16", CounterEntry::Kind::UnsignedCount, &Counters::indexedCacheOptCandidateMiss16, nullptr, nullptr, 0.0},
+    {"indexed_cache_opt_candidate_miss32", CounterEntry::Kind::UnsignedCount, &Counters::indexedCacheOptCandidateMiss32, nullptr, nullptr, 0.0},
+    {"indexed_cache_opt_candidate_miss64", CounterEntry::Kind::UnsignedCount, &Counters::indexedCacheOptCandidateMiss64, nullptr, nullptr, 0.0},
+    {"reordered_index_cache_lookups", CounterEntry::Kind::UnsignedCount, &Counters::reorderedIndexCacheLookups, nullptr, nullptr, 0.0},
+    {"reordered_index_cache_hits", CounterEntry::Kind::UnsignedCount, &Counters::reorderedIndexCacheHits, nullptr, nullptr, 0.0},
+    {"reordered_index_cache_rejected_hits", CounterEntry::Kind::UnsignedCount, &Counters::reorderedIndexCacheRejectedHits, nullptr, nullptr, 0.0},
+    {"reordered_index_cache_misses", CounterEntry::Kind::UnsignedCount, &Counters::reorderedIndexCacheMisses, nullptr, nullptr, 0.0},
+    {"reordered_index_cache_created", CounterEntry::Kind::UnsignedCount, &Counters::reorderedIndexCacheCreated, nullptr, nullptr, 0.0},
+    {"reordered_index_cache_created_bytes", CounterEntry::Kind::UnsignedCount, &Counters::reorderedIndexCacheCreatedBytes, nullptr, nullptr, 0.0},
     {"encode_draw_issue_cpu_ms", CounterEntry::Kind::Milliseconds, &Counters::encodeDrawIssueCpuNs, nullptr, nullptr, 0.0},
     {"encode_draw_issue_cpu_max_ms", CounterEntry::Kind::Milliseconds, &Counters::encodeDrawIssueCpuMaxNs, nullptr, nullptr, 0.0},
     {"encode_draw_issue_cpu_p50_ms", CounterEntry::Kind::PercentileMs, nullptr, nullptr, &Counters::encodeDrawIssueCpuRing, 0.5},
@@ -2357,6 +2411,94 @@ void countEncodeDrawStreamBindCpuTime(std::uint64_t nanoseconds) {
   add(counters().encodeDrawStreamBindCpuNs, nanoseconds);
   updateMax(counters().encodeDrawStreamBindCpuMaxNs, nanoseconds);
   recordRing(counters().encodeDrawStreamBindCpuRing, nanoseconds);
+}
+
+void countEncodeDrawRasterStateCpuTime(std::uint64_t nanoseconds) {
+  add(counters().encodeDrawRasterStateCpuNs, nanoseconds);
+}
+
+void countEncodeDrawVertexStreamBindCpuTime(std::uint64_t nanoseconds) {
+  add(counters().encodeDrawVertexStreamBindCpuNs, nanoseconds);
+}
+
+void countEncodeDrawTextureSamplerBindCpuTime(std::uint64_t nanoseconds) {
+  add(counters().encodeDrawTextureSamplerBindCpuNs, nanoseconds);
+}
+
+void countEncodeDrawIndexSetupCpuTime(std::uint64_t nanoseconds) {
+  add(counters().encodeDrawIndexSetupCpuNs, nanoseconds);
+}
+
+void countEncodeDrawIndexSourceResolveCpuTime(std::uint64_t nanoseconds) {
+  add(counters().encodeDrawIndexSourceResolveCpuNs, nanoseconds);
+}
+
+void countEncodeDrawIndexCacheLookupCpuTime(std::uint64_t nanoseconds) {
+  add(counters().encodeDrawIndexCacheLookupCpuNs, nanoseconds);
+}
+
+void countEncodeDrawIndexCacheCandidateCpuTime(std::uint64_t nanoseconds) {
+  add(counters().encodeDrawIndexCacheCandidateCpuNs, nanoseconds);
+}
+
+void countEncodeDrawIndexCacheOriginalMeasureCpuTime(std::uint64_t nanoseconds) {
+  add(counters().encodeDrawIndexCacheOriginalMeasureCpuNs, nanoseconds);
+}
+
+void countEncodeDrawIndexCacheCandidateBuildCpuTime(std::uint64_t nanoseconds) {
+  add(counters().encodeDrawIndexCacheCandidateBuildCpuNs, nanoseconds);
+}
+
+void countEncodeDrawIndexCacheCandidateMeasureCpuTime(std::uint64_t nanoseconds) {
+  add(counters().encodeDrawIndexCacheCandidateMeasureCpuNs, nanoseconds);
+}
+
+void countEncodeDrawIndexCacheGateCpuTime(std::uint64_t nanoseconds) {
+  add(counters().encodeDrawIndexCacheGateCpuNs, nanoseconds);
+}
+
+void countEncodeDrawIndexCacheApplyCpuTime(std::uint64_t nanoseconds) {
+  add(counters().encodeDrawIndexCacheApplyCpuNs, nanoseconds);
+}
+
+void countIndexedCacheOptCandidate(bool available,
+                                   std::uint64_t bytes,
+                                   std::uint64_t originalMiss16,
+                                   std::uint64_t originalMiss32,
+                                   std::uint64_t originalMiss64,
+                                   std::uint64_t candidateMiss16,
+                                   std::uint64_t candidateMiss32,
+                                   std::uint64_t candidateMiss64) {
+  if (!available) {
+    add(counters().indexedCacheOptCandidateSkipped);
+    return;
+  }
+  add(counters().indexedCacheOptCandidateDraws);
+  add(counters().indexedCacheOptCandidateBytes, bytes);
+  add(counters().indexedCacheOptCandidateOriginalMiss16, originalMiss16);
+  add(counters().indexedCacheOptCandidateOriginalMiss32, originalMiss32);
+  add(counters().indexedCacheOptCandidateOriginalMiss64, originalMiss64);
+  add(counters().indexedCacheOptCandidateMiss16, candidateMiss16);
+  add(counters().indexedCacheOptCandidateMiss32, candidateMiss32);
+  add(counters().indexedCacheOptCandidateMiss64, candidateMiss64);
+}
+
+void countReorderedIndexCacheLookup(bool hit,
+                                    bool rejected,
+                                    bool created,
+                                    std::uint64_t createdBytes) {
+  add(counters().reorderedIndexCacheLookups);
+  if (hit) {
+    add(counters().reorderedIndexCacheHits);
+  } else if (rejected) {
+    add(counters().reorderedIndexCacheRejectedHits);
+  } else {
+    add(counters().reorderedIndexCacheMisses);
+  }
+  if (created) {
+    add(counters().reorderedIndexCacheCreated);
+    add(counters().reorderedIndexCacheCreatedBytes, createdBytes);
+  }
 }
 
 void countEncodeDrawIssueCpuTime(std::uint64_t nanoseconds) {

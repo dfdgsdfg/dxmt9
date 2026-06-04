@@ -63,7 +63,9 @@ void persistShaderArchive(WMT::BinaryArchive& archive, const std::string& path);
 // the per-category uniform structs (VsConsts, PsConsts, FfpVsConsts,
 // FfpPsConsts, DrawVolatile), VSOut, and a library of helper inline
 // functions (dxmt9_load_*, dxmt9_apply_texture_*, dxmt9_select_*, etc).
-// When withClipDistances is true, VSOut gets a clipDistance[6] array.
+// When withClipDistances is true, VSOut gets one clipDistance0
+// [[clip_distance]] scalar. Enabled D3D9 clip planes are min-folded into that
+// single Apple-supported slot.
 struct ShaderPreludeOptions {
   bool withClipDistances = false;
   bool centroidColor = false;

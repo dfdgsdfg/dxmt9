@@ -203,6 +203,29 @@ RUN_COUNTERS = (
     "encode_draw_pso_prefetch_binding_override_incompatible",
     "submit_draw_cpu_ms",
     "encode_draw_stream_bind_cpu_ms",
+    "encode_draw_raster_state_cpu_ms",
+    "encode_draw_vertex_stream_bind_cpu_ms",
+    "encode_draw_texture_sampler_bind_cpu_ms",
+    "encode_draw_index_setup_cpu_ms",
+    "encode_draw_index_source_resolve_cpu_ms",
+    "encode_draw_index_cache_lookup_cpu_ms",
+    "encode_draw_index_cache_candidate_cpu_ms",
+    "encode_draw_index_cache_original_measure_cpu_ms",
+    "encode_draw_index_cache_candidate_build_cpu_ms",
+    "encode_draw_index_cache_candidate_measure_cpu_ms",
+    "encode_draw_index_cache_gate_cpu_ms",
+    "encode_draw_index_cache_apply_cpu_ms",
+    "indexed_cache_opt_candidate_draws",
+    "indexed_cache_opt_candidate_skipped",
+    "indexed_cache_opt_candidate_bytes",
+    "indexed_cache_opt_candidate_original_miss32",
+    "indexed_cache_opt_candidate_miss32",
+    "reordered_index_cache_lookups",
+    "reordered_index_cache_hits",
+    "reordered_index_cache_rejected_hits",
+    "reordered_index_cache_misses",
+    "reordered_index_cache_created",
+    "reordered_index_cache_created_bytes",
     "gpu_command_buffer_time_ms",
     "completion_wait_ms",
     "map_buffer_wait_ms",
@@ -907,6 +930,9 @@ PROBE_DRAW_CSV_KEYS = (
     "shader_variant",
     "vs",
     "ps",
+    "vs_constants_hash",
+    "ps_constants_hash",
+    "uniform_payload_hash",
     "vsout",
 )
 
@@ -1845,6 +1871,9 @@ def write_markdown(
         split_would_apply = [
             row for row in probe_draws if numeric_value(row, "split_would_apply")
         ]
+        unique_nonempty = lambda key: len({
+            row.get(key) for row in probe_draws if row.get(key) not in (None, "")
+        })
         lines.append("## Indexed Probe Draw Samples")
         lines.append("")
         lines.append("| Metric | Value |")
@@ -1878,6 +1907,18 @@ def write_markdown(
         )
         lines.append(
             f"| `reorder_bytes` | `{fmt(sum_key(probe_draws, 'reorder_bytes'))}` |"
+        )
+        lines.append(
+            f"| `vs_constants_hash_unique` | "
+            f"`{fmt(unique_nonempty('vs_constants_hash'))}` |"
+        )
+        lines.append(
+            f"| `ps_constants_hash_unique` | "
+            f"`{fmt(unique_nonempty('ps_constants_hash'))}` |"
+        )
+        lines.append(
+            f"| `uniform_payload_hash_unique` | "
+            f"`{fmt(unique_nonempty('uniform_payload_hash'))}` |"
         )
         lines.append("")
 

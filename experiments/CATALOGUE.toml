@@ -585,6 +585,7 @@ run_timeout_sec = 180
 capture_frame = 0
 reference_optional = true
 allow_timeout = true
+require_positive_timeout = true
 wine_id = "sikarugir-cx-24.0.7"
 wine_alternatives = []
 install_drive_letter = "d"

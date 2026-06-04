@@ -180,6 +180,48 @@ class SelectPayloadWindowTests(unittest.TestCase):
             self.assertEqual(selection["selection"]["window"]["encoder_draw_min"], 20)
             self.assertEqual(selection["selection"]["window"]["encoder_draw_max"], 21)
 
+    def test_list_ranks_emits_multiple_payload_windows(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            probe_csv = root / "probe.csv"
+            output = root / "selection-list.json"
+            write_csv(probe_csv, [
+                probe_row(1, 1000, 1000, "0xtop", "0xps"),
+                probe_row(2, 1000, 1000, "0xtop", "0xps"),
+                probe_row(20, 600, 800, "0xsecond", "0xps"),
+                probe_row(21, 700, 900, "0xsecond", "0xps"),
+            ])
+
+            result = subprocess.run(
+                [
+                    sys.executable,
+                    str(SCRIPT),
+                    "--probe-draws",
+                    str(probe_csv),
+                    "--row",
+                    "60/2",
+                    "--list-ranks",
+                    "5",
+                    "--output",
+                    str(output),
+                ],
+                text=True,
+                capture_output=True,
+                check=False,
+            )
+
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertIn("rank 1", result.stdout)
+            self.assertIn("rank 2", result.stdout)
+            selection = json.loads(output.read_text(encoding="utf-8"))
+            self.assertEqual(selection["schema"], "dxmt9.3dmark05.payload_window_list.v1")
+            self.assertEqual(selection["selection_count"], 2)
+            self.assertEqual(selection["available_group_count"], 2)
+            self.assertEqual(selection["selections"][0]["rank"], 1)
+            self.assertEqual(selection["selections"][0]["group"]["vs"], "0xtop")
+            self.assertEqual(selection["selections"][1]["rank"], 2)
+            self.assertEqual(selection["selections"][1]["group"]["vs"], "0xsecond")
+
     def test_class_filter_selects_no_alpha_no_scissor_payload_window(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)

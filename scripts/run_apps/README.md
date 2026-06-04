@@ -28,6 +28,19 @@ wired to Meson tests; they are evidence-gathering tools.
   for the full suite. By default it stages the current dxmt9 x64/x86 PE DLLs
   plus the unix provider into the verify prefix before launch; set
   `DXMT_3DMARK05_STAGE=0` only when intentionally testing the already-installed
-  prefix binaries. Auto-Enter is controlled with
+  prefix binaries. The direct wrapper supervises the launcher with
+  `DXMT_3DMARK05_DIRECT_TIMEOUT=180` by default because 3DMark05 can hang on
+  the final frame after useful output is written; set a different positive
+  timeout for longer manual suites. The catalogue entry also requires a
+  positive timeout and rejects `run_experiment.py --timeout 0`. Use
+  `DXMT_3DMARK05_DIRECT_DRY_RUN=1` to
+  verify the resolved timeout and launcher command without starting Wine.
+  The launcher also has a direct-shell fallback timeout
+  (`DXMT_3DMARK05_LAUNCHER_TIMEOUT=180` by default) when it is not already
+  supervised by `run_experiment.py` or this wrapper. It traps `TERM`/`INT` and
+  kills the verify-prefix wineserver on exit by default
+  (`DXMT_3DMARK05_KILL_SERVER_ON_EXIT=1`), which prevents a final-frame hang
+  from leaving detached Wine processes after a timeout.
+  Auto-Enter is controlled with
   `DXMT_3DMARK05_AUTO_ENTER`, `DXMT_3DMARK05_ENTER_DELAY_SEC`,
   `DXMT_3DMARK05_ENTER_COUNT`, and `DXMT_3DMARK05_ENTER_INTERVAL_SEC`.

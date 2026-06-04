@@ -9,6 +9,105 @@ source "$script_dir/common.sh"
 default_3dmark05_selection_args="-gt1"
 default_3dmark05_runner_args="-nosplash -nosysteminfo -noscreens"
 default_3dmark05_args="$default_3dmark05_selection_args $default_3dmark05_runner_args"
+dxmt_3dmark05_auto_enter_pid=""
+
+validate_timeout_app-d3d9-3dmark05() {
+  local name=$1
+  local value=$2
+  if [[ ! "$value" =~ ^[0-9]+([.][0-9]+)?$ ||
+        "$value" =~ ^0+([.]0+)?$ ]]; then
+    echo "$name must be positive numeric seconds" >&2
+    exit 2
+  fi
+}
+
+resolve_launcher_timeout_app-d3d9-3dmark05() {
+  if [[ -n "${DXMT_3DMARK05_LAUNCHER_TIMEOUT:-}" ]]; then
+    validate_timeout_app-d3d9-3dmark05 DXMT_3DMARK05_LAUNCHER_TIMEOUT "$DXMT_3DMARK05_LAUNCHER_TIMEOUT"
+    printf '%s\n' "$DXMT_3DMARK05_LAUNCHER_TIMEOUT"
+  elif [[ -n "${DXMT_3DMARK05_DIRECT_TIMEOUT:-}" ]]; then
+    validate_timeout_app-d3d9-3dmark05 DXMT_3DMARK05_DIRECT_TIMEOUT "$DXMT_3DMARK05_DIRECT_TIMEOUT"
+    printf '%s\n' "$DXMT_3DMARK05_DIRECT_TIMEOUT"
+  else
+    printf '180\n'
+  fi
+}
+
+self_supervise_app-d3d9-3dmark05_if_needed() {
+  if [[ "${DXMT_3DMARK05_SELF_SUPERVISED:-0}" != "0" ||
+        -n "${DXMT_EXPERIMENT_NAME:-}" ||
+        "${DXMT_3DMARK05_ALLOW_UNSUPERVISED:-0}" != "0" ]]; then
+    return 0
+  fi
+
+  local timeout_sec
+  timeout_sec=$(resolve_launcher_timeout_app-d3d9-3dmark05)
+
+  if [[ "${DXMT_3DMARK05_DIRECT_DRY_RUN:-0}" != "0" ]]; then
+    echo "launcher_timeout: ${timeout_sec}s"
+    printf 'launcher_cmd: DXMT_3DMARK05_SELF_SUPERVISED=1'
+    printf ' %q' "$0" "$@"
+    printf '\n'
+    exit 0
+  fi
+
+  python3 - "$0" "$timeout_sec" "$@" <<'PY'
+import os
+import signal
+import subprocess
+import sys
+
+launcher = sys.argv[1]
+timeout_sec = float(sys.argv[2])
+launcher_args = sys.argv[3:]
+cmd = [launcher, *launcher_args]
+
+
+def terminate_process_group(process, timeout):
+    try:
+        os.killpg(process.pid, signal.SIGTERM)
+    except ProcessLookupError:
+        return
+    try:
+        process.wait(timeout=timeout)
+    except subprocess.TimeoutExpired:
+        try:
+            os.killpg(process.pid, signal.SIGKILL)
+        except ProcessLookupError:
+            pass
+        process.wait(timeout=timeout)
+
+
+env = os.environ.copy()
+env["DXMT_3DMARK05_SELF_SUPERVISED"] = "1"
+
+print(f"[3dmark05-launcher-timeout] timeout={timeout_sec:g}s", flush=True)
+process = subprocess.Popen(cmd, cwd=os.getcwd(), env=env, start_new_session=True)
+try:
+    returncode = process.wait(timeout=timeout_sec)
+except subprocess.TimeoutExpired:
+    print(
+        f"[3dmark05-launcher-timeout] timeout after {timeout_sec:g}s; terminating process group",
+        file=sys.stderr,
+        flush=True,
+    )
+    terminate_process_group(process, 5)
+    sys.exit(124)
+except KeyboardInterrupt:
+    print(
+        "[3dmark05-launcher-timeout] interrupted; terminating process group",
+        file=sys.stderr,
+        flush=True,
+    )
+    terminate_process_group(process, 5)
+    sys.exit(130)
+
+sys.exit(returncode)
+PY
+  exit "$?"
+}
+
+self_supervise_app-d3d9-3dmark05_if_needed "$@"
 
 append_result_file_app-d3d9-3dmark05() {
   if [[ -n "${DXMT_3DMARK05_RESULT_FILE:-}" ]]; then
@@ -75,6 +174,7 @@ schedule_app-d3d9-3dmark05_enter() {
       remaining=$((remaining - 1))
     done
   ) &
+  dxmt_3dmark05_auto_enter_pid=$!
 }
 
 if [[ "${DXMT_3DMARK05_DIRECT:-0}" != "0" ]]; then
@@ -86,6 +186,22 @@ if [[ "${DXMT_3DMARK05_DIRECT:-0}" != "0" ]]; then
   exe="$exe_dir/3DMark05.exe"
   log_path=${DXMT_3DMARK05_LOG:-/tmp/3dmark05-direct.log}
   winemetal_so=${DXMT9_WINEMETAL_SO:-"$exp_repo_root/build-x86_64-builtin/src/winemetal/unix/winemetal.so"}
+
+  cleanup_app_d3d9_3dmark05_direct() {
+    local status=${1:-$?}
+    trap - EXIT INT TERM
+    if [[ -n "${dxmt_3dmark05_auto_enter_pid:-}" ]]; then
+      kill "$dxmt_3dmark05_auto_enter_pid" >/dev/null 2>&1 || true
+    fi
+    if [[ "${DXMT_3DMARK05_KILL_SERVER_ON_EXIT:-1}" != "0" ]]; then
+      WINEPREFIX="$prefix" "$wine_server" -k >/dev/null 2>&1 || true
+    fi
+    exit "$status"
+  }
+
+  trap 'cleanup_app_d3d9_3dmark05_direct $?' EXIT
+  trap 'cleanup_app_d3d9_3dmark05_direct 130' INT
+  trap 'cleanup_app_d3d9_3dmark05_direct 143' TERM
 
   if [[ ! -x "$wine_bin" ]]; then
     echo "missing wine binary: $wine_bin" >&2

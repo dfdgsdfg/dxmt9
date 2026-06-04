@@ -125,12 +125,74 @@ class AnalyzePrimitiveIdReplayTests(unittest.TestCase):
             self.assertEqual(rows[0]["after_original_triangle"], "1")
             self.assertEqual(rows[0]["primitive_identity_changed"], "1")
             self.assertEqual(rows[0]["color_changed"], "1")
+            self.assertEqual(rows[0]["before_color_rgb"], "0,0,0")
+            self.assertEqual(rows[0]["after_color_rgb"], "8,0,0")
+            self.assertEqual(rows[0]["color_delta_max"], "8")
+            self.assertEqual(rows[0]["color_delta_l1"], "8")
             with summary.open(newline="", encoding="utf-8") as handle:
                 summary_rows = list(csv.DictReader(handle))
             self.assertEqual(len(summary_rows), 1)
             self.assertEqual(summary_rows[0]["primitive_identity_changed_pixels"], "2")
             self.assertEqual(summary_rows[0]["color_changed_pixels"], "1")
             self.assertEqual(summary_rows[0]["color_and_primitive_changed_pixels"], "1")
+            self.assertEqual(summary_rows[0]["max_color_delta"], "8")
+            self.assertEqual(summary_rows[0]["max_color_delta_l1"], "8")
+
+    def test_cli_can_emit_all_primitive_changed_pixels_even_with_color_images(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            index_file = root / "draw.index.bin"
+            index_file.write_bytes(struct.pack("<6H", 0, 1, 2, 3, 4, 5))
+            before_ids = np.array([[0, 1], [-1, -1]], dtype=np.int64)
+            after_ids = np.array([[0, 1], [-1, -1]], dtype=np.int64)
+            before_primitive = root / "before.ppm"
+            after_primitive = root / "after.ppm"
+            save_ids(before_primitive, before_ids)
+            save_ids(after_primitive, after_ids)
+            before_color = root / "before-color.ppm"
+            after_color = root / "after-color.ppm"
+            save_color(before_color, False)
+            save_color(after_color, False)
+            report = root / "report.md"
+            pixels = root / "pixels.csv"
+
+            result = subprocess.run(
+                [
+                    sys.executable,
+                    str(SCRIPT),
+                    "--index-file",
+                    str(index_file),
+                    "--before-primitive-id",
+                    str(before_primitive),
+                    "--after-primitive-id",
+                    str(after_primitive),
+                    "--before-primitive-order",
+                    "original",
+                    "--after-primitive-order",
+                    "reverse-triangles",
+                    "--before-color",
+                    str(before_color),
+                    "--after-color",
+                    str(after_color),
+                    "--pixel-scope",
+                    "primitive-changed",
+                    "--output",
+                    str(report),
+                    "--pixel-csv-output",
+                    str(pixels),
+                ],
+                text=True,
+                capture_output=True,
+                check=False,
+            )
+
+            self.assertEqual(result.returncode, 0, result.stderr)
+            with pixels.open(newline="", encoding="utf-8") as handle:
+                rows = list(csv.DictReader(handle))
+            self.assertEqual(len(rows), 2)
+            self.assertTrue(all(row["primitive_identity_changed"] == "1" for row in rows))
+            self.assertTrue(all(row["color_changed"] == "0" for row in rows))
+            self.assertTrue(all(row["color_delta_max"] == "0" for row in rows))
 
 
 if __name__ == "__main__":

@@ -342,6 +342,11 @@ def analyze(args: argparse.Namespace) -> tuple[dict[str, Any], list[dict[str, st
     depth_deltas: list[float] = []
     uv0_deltas: list[float] = []
     tex7_deltas: list[float] = []
+    tex1_deltas: list[float] = []
+    tex6_deltas: list[float] = []
+    color_delta_max_values: list[int] = []
+    color_delta_l1_values: list[int] = []
+    color_changed_count = 0
     inside_count = 0
     for row in rows:
         x = as_int(row.get("x"))
@@ -359,9 +364,18 @@ def analyze(args: argparse.Namespace) -> tuple[dict[str, Any], list[dict[str, st
         tex7_delta = vec_delta(before["tex7"], after["tex7"])
         tex1_delta = vec_delta(before["tex1"], after["tex1"])
         tex6_delta = vec_delta(before["tex6"], after["tex6"])
+        color_changed = as_int(row.get("color_changed"))
+        color_delta_max = as_int(row.get("color_delta_max"))
+        color_delta_l1 = as_int(row.get("color_delta_l1"))
         depth_deltas.append(abs(depth_delta))
         uv0_deltas.append(uv0_delta)
         tex7_deltas.append(tex7_delta)
+        tex1_deltas.append(tex1_delta)
+        tex6_deltas.append(tex6_delta)
+        color_delta_max_values.append(color_delta_max)
+        color_delta_l1_values.append(color_delta_l1)
+        if color_changed:
+            color_changed_count += 1
         both_inside = bool(before["inside"] and after["inside"])
         if both_inside:
             inside_count += 1
@@ -370,7 +384,11 @@ def analyze(args: argparse.Namespace) -> tuple[dict[str, Any], list[dict[str, st
             "y": str(y),
             "before_original_triangle": str(before_tri_id),
             "after_original_triangle": str(after_tri_id),
-            "color_changed": str(as_int(row.get("color_changed"))),
+            "color_changed": str(color_changed),
+            "before_color_rgb": row.get("before_color_rgb", ""),
+            "after_color_rgb": row.get("after_color_rgb", ""),
+            "color_delta_max": str(color_delta_max),
+            "color_delta_l1": str(color_delta_l1),
             "both_triangles_cover_pixel": "1" if both_inside else "0",
             "before_depth": fmt_float(before["depth"], 9),
             "after_depth": fmt_float(after["depth"], 9),
@@ -393,13 +411,38 @@ def analyze(args: argparse.Namespace) -> tuple[dict[str, Any], list[dict[str, st
         "encoder_draw_index": as_int(draw.get("encoder_draw_index")),
         "draw_ordinal": as_int(draw.get("draw_ordinal")),
         "pixels": len(out_rows),
+        "color_changed_pixels": color_changed_count,
+        "max_color_delta": max(color_delta_max_values) if color_delta_max_values else 0,
+        "avg_color_delta": (
+            sum(color_delta_max_values) / len(color_delta_max_values)
+            if color_delta_max_values else 0.0
+        ),
+        "max_color_delta_l1": max(color_delta_l1_values) if color_delta_l1_values else 0,
+        "avg_color_delta_l1": (
+            sum(color_delta_l1_values) / len(color_delta_l1_values)
+            if color_delta_l1_values else 0.0
+        ),
         "both_cover_pixels": inside_count,
         "max_abs_depth_delta": max(depth_deltas) if depth_deltas else math.nan,
         "avg_abs_depth_delta": (
             sum(depth_deltas) / len(depth_deltas) if depth_deltas else math.nan
         ),
         "max_uv0_delta": max(uv0_deltas) if uv0_deltas else math.nan,
+        "avg_uv0_delta": (
+            sum(uv0_deltas) / len(uv0_deltas) if uv0_deltas else math.nan
+        ),
         "max_projected_tex7_delta": max(tex7_deltas) if tex7_deltas else math.nan,
+        "avg_projected_tex7_delta": (
+            sum(tex7_deltas) / len(tex7_deltas) if tex7_deltas else math.nan
+        ),
+        "max_tex1_delta": max(tex1_deltas) if tex1_deltas else math.nan,
+        "avg_tex1_delta": (
+            sum(tex1_deltas) / len(tex1_deltas) if tex1_deltas else math.nan
+        ),
+        "max_tex6_delta": max(tex6_deltas) if tex6_deltas else math.nan,
+        "avg_tex6_delta": (
+            sum(tex6_deltas) / len(tex6_deltas) if tex6_deltas else math.nan
+        ),
         "index_file": str(resolve_path(geometry["index_file"])),
     }
     return summary, out_rows
@@ -412,6 +455,10 @@ def write_csv(path: Path, rows: list[dict[str, str]]) -> None:
         "before_original_triangle",
         "after_original_triangle",
         "color_changed",
+        "before_color_rgb",
+        "after_color_rgb",
+        "color_delta_max",
+        "color_delta_l1",
         "both_triangles_cover_pixel",
         "before_depth",
         "after_depth",
@@ -433,6 +480,42 @@ def write_csv(path: Path, rows: list[dict[str, str]]) -> None:
         writer = csv.DictWriter(handle, fieldnames=fields)
         writer.writeheader()
         writer.writerows(rows)
+
+
+def write_summary_csv(path: Path, summary: dict[str, Any]) -> None:
+    fields = (
+        "draw_index",
+        "encoder_draw_index",
+        "draw_ordinal",
+        "pixels",
+        "color_changed_pixels",
+        "max_color_delta",
+        "avg_color_delta",
+        "max_color_delta_l1",
+        "avg_color_delta_l1",
+        "both_cover_pixels",
+        "max_abs_depth_delta",
+        "avg_abs_depth_delta",
+        "max_uv0_delta",
+        "avg_uv0_delta",
+        "max_projected_tex7_delta",
+        "avg_projected_tex7_delta",
+        "max_tex1_delta",
+        "avg_tex1_delta",
+        "max_tex6_delta",
+        "avg_tex6_delta",
+        "index_file",
+    )
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.open("w", newline="", encoding="utf-8") as handle:
+        writer = csv.DictWriter(handle, fieldnames=fields)
+        writer.writeheader()
+        writer.writerow({
+            field: fmt_float(summary[field], 9)
+            if isinstance(summary.get(field), float)
+            else summary.get(field, "")
+            for field in fields
+        })
 
 
 def markdown_table(headers: tuple[str, ...], rows: Iterable[tuple[str, ...]]) -> str:
@@ -459,14 +542,28 @@ def write_markdown(path: Path, summary: dict[str, Any], rows: list[dict[str, str
                 ("Encoder draw index", f"`{summary['encoder_draw_index']}`"),
                 ("Draw ordinal", f"`{summary['draw_ordinal']}`"),
                 ("Selected pixels", f"`{fmt_int(summary['pixels'])}`"),
+                ("Color changed pixels", f"`{fmt_int(summary['color_changed_pixels'])}`"),
+                ("Max color delta", f"`{fmt_int(summary['max_color_delta'])}`"),
+                ("Avg color delta", f"`{fmt_float(summary['avg_color_delta'], 3)}`"),
+                ("Max color delta L1", f"`{fmt_int(summary['max_color_delta_l1'])}`"),
+                ("Avg color delta L1", f"`{fmt_float(summary['avg_color_delta_l1'], 3)}`"),
                 ("Both triangles cover pixel", f"`{fmt_int(summary['both_cover_pixels'])}`"),
                 ("Max abs depth delta", f"`{fmt_float(summary['max_abs_depth_delta'], 9)}`"),
                 ("Avg abs depth delta", f"`{fmt_float(summary['avg_abs_depth_delta'], 9)}`"),
                 ("Max uv0 delta", f"`{fmt_float(summary['max_uv0_delta'], 9)}`"),
+                ("Avg uv0 delta", f"`{fmt_float(summary['avg_uv0_delta'], 9)}`"),
                 (
                     "Max projected texcoord7 delta",
                     f"`{fmt_float(summary['max_projected_tex7_delta'], 9)}`",
                 ),
+                (
+                    "Avg projected texcoord7 delta",
+                    f"`{fmt_float(summary['avg_projected_tex7_delta'], 9)}`",
+                ),
+                ("Max tex1 delta", f"`{fmt_float(summary['max_tex1_delta'], 9)}`"),
+                ("Avg tex1 delta", f"`{fmt_float(summary['avg_tex1_delta'], 9)}`"),
+                ("Max tex6 delta", f"`{fmt_float(summary['max_tex6_delta'], 9)}`"),
+                ("Avg tex6 delta", f"`{fmt_float(summary['avg_tex6_delta'], 9)}`"),
                 ("Index file", f"`{summary['index_file']}`"),
             ),
         ),
@@ -481,6 +578,7 @@ def write_markdown(path: Path, summary: dict[str, Any], rows: list[dict[str, str
                 "Before tri",
                 "After tri",
                 "Depth delta",
+                "Color delta",
                 "UV0 delta",
                 "Proj tex7 delta",
                 "Both cover",
@@ -491,6 +589,7 @@ def write_markdown(path: Path, summary: dict[str, Any], rows: list[dict[str, str
                     f"`{row['before_original_triangle']}`",
                     f"`{row['after_original_triangle']}`",
                     f"`{row['depth_delta']}`",
+                    f"`{row['color_delta_max']}`",
                     f"`{row['uv0_delta']}`",
                     f"`{row['projected_tex7_delta']}`",
                     f"`{row['both_triangles_cover_pixel']}`",
@@ -510,6 +609,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--primitive-pixel-csv", required=True, type=resolve_path)
     parser.add_argument("--output", required=True, type=resolve_path)
     parser.add_argument("--csv-output", required=True, type=resolve_path)
+    parser.add_argument("--summary-csv-output", type=resolve_path)
     parser.add_argument(
         "--all-owner-changes",
         action="store_true",
@@ -524,6 +624,8 @@ def main() -> None:
     args = parse_args()
     summary, rows = analyze(args)
     write_csv(args.csv_output, rows)
+    if args.summary_csv_output is not None:
+        write_summary_csv(args.summary_csv_output, summary)
     write_markdown(args.output, summary, rows)
 
 

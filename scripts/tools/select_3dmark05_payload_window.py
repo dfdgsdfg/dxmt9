@@ -261,8 +261,7 @@ def grouped_rows(rows: list[dict[str, str]], mode: str) -> dict[tuple[str, ...],
     return groups
 
 
-def build_selection(args: argparse.Namespace) -> dict[str, Any]:
-    class_filters = parse_class_filters(args.class_filter)
+def matching_rows(args: argparse.Namespace, class_filters: list[str]) -> list[dict[str, str]]:
     rows = [
         row for row in load_csv(args.probe_draws)
         if row_key(row) == args.row and as_int(row.get("primitive_count")) > 0
@@ -276,17 +275,19 @@ def build_selection(args: argparse.Namespace) -> dict[str, Any]:
         )
         applied_suffix = " and applied=1" if args.applied_only else ""
         raise SystemExit(f"no probe rows matched row {args.row}{class_suffix}{applied_suffix}")
+    return rows
 
-    groups = grouped_rows(rows, args.group_by)
-    ranked_groups = sorted(
-        groups.items(),
-        key=lambda item: score_rows(item[1], args.rank_by),
-        reverse=True,
-    )
-    if args.rank < 1 or args.rank > len(ranked_groups):
-        raise SystemExit(f"group rank {args.rank} is out of range; found {len(ranked_groups)} groups")
 
-    key, selected_rows = ranked_groups[args.rank - 1]
+def build_selection_from_rank(
+    args: argparse.Namespace,
+    class_filters: list[str],
+    ranked_groups: list[tuple[tuple[str, ...], list[dict[str, str]]]],
+    rank: int,
+) -> dict[str, Any]:
+    if rank < 1 or rank > len(ranked_groups):
+        raise SystemExit(f"group rank {rank} is out of range; found {len(ranked_groups)} groups")
+
+    key, selected_rows = ranked_groups[rank - 1]
     window_rows = best_window(selected_rows, args.max_draws, args.rank_by)
     if not window_rows:
         raise SystemExit("selected group has no contiguous encoder-draw window")
@@ -304,7 +305,8 @@ def build_selection(args: argparse.Namespace) -> dict[str, Any]:
             "row": args.row,
             "group_by": args.group_by,
             "rank_by": args.rank_by,
-            "rank": args.rank,
+            "rank": rank,
+            "available_group_count": len(ranked_groups),
             "class_filters": class_filters,
             "applied_only": bool(args.applied_only),
             "group": {
@@ -362,7 +364,45 @@ def build_selection(args: argparse.Namespace) -> dict[str, Any]:
     }
 
 
+def build_selection(args: argparse.Namespace) -> dict[str, Any]:
+    class_filters = parse_class_filters(args.class_filter)
+    rows = matching_rows(args, class_filters)
+    groups = grouped_rows(rows, args.group_by)
+    ranked_groups = sorted(
+        groups.items(),
+        key=lambda item: score_rows(item[1], args.rank_by),
+        reverse=True,
+    )
+    return build_selection_from_rank(args, class_filters, ranked_groups, args.rank)
+
+
+def build_selection_list(args: argparse.Namespace) -> dict[str, Any]:
+    class_filters = parse_class_filters(args.class_filter)
+    rows = matching_rows(args, class_filters)
+    groups = grouped_rows(rows, args.group_by)
+    ranked_groups = sorted(
+        groups.items(),
+        key=lambda item: score_rows(item[1], args.rank_by),
+        reverse=True,
+    )
+    limit = min(args.list_ranks, len(ranked_groups))
+    return {
+        "schema": "dxmt9.3dmark05.payload_window_list.v1",
+        "sources": {"probe_draws": str(args.probe_draws)},
+        "selection_count": limit,
+        "available_group_count": len(ranked_groups),
+        "selections": [
+            build_selection_from_rank(args, class_filters, ranked_groups, rank)["selection"]
+            for rank in range(1, limit + 1)
+        ],
+    }
+
+
 def print_human(selection: dict[str, Any]) -> None:
+    if "selections" in selection:
+        for item in selection["selections"]:
+            print_human({"selection": item})
+        return
     data = selection["selection"]
     group = data["group"]
     window = data["window"]
@@ -406,6 +446,12 @@ def main() -> int:
         help="Only select rows where the mutating probe actually applied",
     )
     parser.add_argument("--rank", type=int, default=1, help="Ranked group to select, 1-based")
+    parser.add_argument(
+        "--list-ranks",
+        type=int,
+        default=0,
+        help="Emit the top N ranked payload windows in one JSON object",
+    )
     parser.add_argument("--max-draws", type=int, default=3, help="Max contiguous draws in capture window")
     parser.add_argument(
         "--group-by",
@@ -422,7 +468,7 @@ def main() -> int:
     parser.add_argument("--output", type=Path, help="Optional JSON output path")
     args = parser.parse_args()
 
-    selection = build_selection(args)
+    selection = build_selection_list(args) if args.list_ranks > 0 else build_selection(args)
     if args.output:
         args.output.parent.mkdir(parents=True, exist_ok=True)
         args.output.write_text(json.dumps(selection, indent=2, sort_keys=True), encoding="utf-8")

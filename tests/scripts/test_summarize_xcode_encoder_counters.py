@@ -279,6 +279,7 @@ class SummarizeXcodeEncoderCountersTests(unittest.TestCase):
                 float(row["vs_buffer_bytes_per_primitive_tile_estimate"]),
                 250 * MIB / 200,
             )
+            self.assertEqual(row["dxmt_vsout_has_clip_distance"], "0")
             self.assertEqual(row["dxmt_vsout_expected_stage_out_bytes_per_vertex"], "32")
             report_text = report.read_text(encoding="utf-8")
             self.assertIn("unexplained Xcode buffer write", report_text)
@@ -398,10 +399,79 @@ class SummarizeXcodeEncoderCountersTests(unittest.TestCase):
             self.assertEqual(result.returncode, 0, result.stderr)
             with joined_csv.open(newline="", encoding="utf-8") as handle:
                 row = next(csv.DictReader(handle))
+            self.assertEqual(row["dxmt_vsout_has_clip_distance"], "0")
             self.assertEqual(row["dxmt_vsout_expected_stage_out_bytes_per_vertex"], "16")
             self.assertAlmostEqual(
                 float(row["dxmt_vs_buffer_to_expected_stage_out_ratio"]),
                 (16 * MIB / 1024) / 16,
+            )
+
+    def test_clip_plane_draws_add_clip_distance_stage_out_slot(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            xcode_csv = root / "frame60-counters-xcode.csv"
+            dxmt_csv = root / "3dmark05-perf-encoders.csv"
+            joined_csv = root / "joined.csv"
+
+            with xcode_csv.open("w", newline="", encoding="utf-8") as handle:
+                writer = csv.DictWriter(handle, fieldnames=[
+                    "Index",
+                    "Encoder Label",
+                    "GPU Time",
+                    "VS Buffer Device Memory Bytes Written",
+                    "VS Invocations",
+                ])
+                writer.writeheader()
+                writer.writerow({
+                    "Index": 0,
+                    "Encoder Label": "RenderPass[seq=1,enc=2,rt=0x10,depth=0x20]",
+                    "GPU Time": 10_000_000,
+                    "VS Buffer Device Memory Bytes Written": 20 * MIB,
+                    "VS Invocations": 1024,
+                })
+
+            with dxmt_csv.open("w", newline="", encoding="utf-8") as handle:
+                writer = csv.DictWriter(handle, fieldnames=[
+                    "seq",
+                    "encoder",
+                    "draw_calls",
+                    "pso_state_samples",
+                    "clip_plane_enabled_draws",
+                    "vsout_layout_last",
+                ])
+                writer.writeheader()
+                writer.writerow({
+                    "seq": 1,
+                    "encoder": 2,
+                    "draw_calls": 1,
+                    "pso_state_samples": 1,
+                    "clip_plane_enabled_draws": 1,
+                    "vsout_layout_last": "0x0",
+                })
+
+            result = subprocess.run(
+                [
+                    sys.executable,
+                    str(SCRIPT),
+                    str(xcode_csv),
+                    "--dxmt-encoders-csv",
+                    str(dxmt_csv),
+                    "--joined-output",
+                    str(joined_csv),
+                ],
+                text=True,
+                capture_output=True,
+                check=False,
+            )
+
+            self.assertEqual(result.returncode, 0, result.stderr)
+            with joined_csv.open(newline="", encoding="utf-8") as handle:
+                row = next(csv.DictReader(handle))
+            self.assertEqual(row["dxmt_vsout_has_clip_distance"], "1")
+            self.assertEqual(row["dxmt_vsout_expected_stage_out_bytes_per_vertex"], "20")
+            self.assertAlmostEqual(
+                float(row["dxmt_vs_buffer_to_expected_stage_out_ratio"]),
+                (20 * MIB / 1024) / 20,
             )
 
     def test_top_pso_attribution_gate_accepts_current_source_coverage(self) -> None:
@@ -509,6 +579,7 @@ class SummarizeXcodeEncoderCountersTests(unittest.TestCase):
         self.assertEqual(result.returncode, 0, result.stderr)
         with joined_csv.open(newline="", encoding="utf-8") as handle:
             row = next(csv.DictReader(handle))
+        self.assertEqual(row["dxmt_vsout_has_clip_distance"], "")
         self.assertEqual(row["dxmt_vsout_expected_stage_out_bytes_per_vertex"], "")
         self.assertEqual(row["dxmt_tvb_pressure_proxy_mib"], "")
         self.assertEqual(row["dxmt_tvb_named_to_proxy_ratio"], "")

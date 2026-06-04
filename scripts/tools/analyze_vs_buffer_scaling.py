@@ -42,6 +42,12 @@ def fmt_float(value: Any, digits: int = 3) -> str:
     return f"{as_float(value):.{digits}f}"
 
 
+def fmt_signed_float(value: Any, digits: int = 3) -> str:
+    numeric = as_float(value)
+    prefix = "+" if numeric > 0.0 else ""
+    return f"{prefix}{numeric:.{digits}f}"
+
+
 def fmt_int(value: Any) -> str:
     return f"{as_int(value):,}"
 
@@ -208,6 +214,7 @@ def aggregate(rows: list[dict[str, str]], top_n: int) -> dict[str, Any]:
         "post_clipped_primitives": post_clipped,
         "pixels_rasterized": pixels,
         "fs_invocations": sum(as_float(row.get("fs_invocations")) for row in top),
+        "draw_calls": draws,
         "state_churn": churn,
         "geometry_signature_duplicates": sum(
             geometry_signature_duplicates(row) for row in top),
@@ -418,6 +425,89 @@ def find_baseline(aggregates: list[dict[str, Any]], name: str | None) -> dict[st
     return None
 
 
+def candidate_kind(run: str) -> str:
+    text = run.lower()
+    if "forceexpand" in text or "force-expand" in text:
+        return "negative-geometry"
+    if "cacheopt" in text or "index-cache" in text or "index_cache" in text:
+        return "locality-reorder"
+    if any(token in text for token in (
+        "half-vsout",
+        "texturewhite",
+        "texture-white",
+        "disable-scissor",
+        "disable-cull",
+        "depth-func",
+        "alpha-blend",
+        "backend-shape",
+    )):
+        return "non-reorder-backend-shape"
+    return "unknown"
+
+
+def backend_shape_gate(row: dict[str, Any]) -> tuple[str, str]:
+    kind = str(row.get("candidate_kind", ""))
+    if kind != "non-reorder-backend-shape":
+        return "not-applicable", f"{kind or 'unknown'} candidate"
+    if not row.get("geometry_stable"):
+        return "reject", "geometry/top-row shape drifted"
+    gpu_delta = as_float(row.get("gpu_delta_pct"))
+    vs_b_delta = as_float(row.get("vs_b_per_inv_delta_pct"))
+    vs_inv_delta = as_float(row.get("vs_invocations_delta_pct"))
+    if vs_b_delta <= -5.0 and gpu_delta <= -2.0 and abs(vs_inv_delta) <= 2.0:
+        return (
+            "pass",
+            "bytes/inv moved materially, GPU improved, and VS invocation count stayed stable",
+        )
+    reasons = []
+    if vs_b_delta > -5.0:
+        reasons.append("bytes/inv reduction < 5%")
+    if gpu_delta > -2.0:
+        reasons.append("GPU did not improve by >= 2%")
+    if abs(vs_inv_delta) > 2.0:
+        reasons.append("VS invocation count moved too much for backend-shape attribution")
+    return "reject", "; ".join(reasons)
+
+
+def vs_write_delta_components(row: dict[str, Any], baseline: dict[str, Any]) -> dict[str, Any]:
+    baseline_mib = as_float(baseline.get("vs_buffer_mib"))
+    row_mib = as_float(row.get("vs_buffer_mib"))
+    baseline_invocations = as_float(baseline.get("vs_invocations"))
+    row_invocations = as_float(row.get("vs_invocations"))
+    baseline_bpi = as_float(baseline.get("vs_b_per_vs_invocation"))
+    row_bpi = as_float(row.get("vs_b_per_vs_invocation"))
+    invocation_effect_mib = (
+        (row_invocations - baseline_invocations) *
+        ((baseline_bpi + row_bpi) / 2.0) /
+        MIB
+    )
+    bytes_per_invocation_effect_mib = (
+        (row_bpi - baseline_bpi) *
+        ((baseline_invocations + row_invocations) / 2.0) /
+        MIB
+    )
+    total_delta_mib = row_mib - baseline_mib
+    residual_mib = (
+        total_delta_mib -
+        invocation_effect_mib -
+        bytes_per_invocation_effect_mib
+    )
+    effects = {
+        "invocations": abs(invocation_effect_mib),
+        "bytes_per_invocation": abs(bytes_per_invocation_effect_mib),
+    }
+    primary = max(effects, key=effects.get)
+    if effects[primary] < 0.001:
+        primary = "none"
+    return {
+        "vs_write_delta_mib": total_delta_mib,
+        "invocation_effect_mib": invocation_effect_mib,
+        "bytes_per_invocation_effect_mib": bytes_per_invocation_effect_mib,
+        "residual_mib": residual_mib,
+        "primary_mover": primary,
+    }
+
+
 def baseline_deltas(aggregates: list[dict[str, Any]],
                     baseline: dict[str, Any] | None,
                     limit: int) -> list[dict[str, Any]]:
@@ -440,6 +530,12 @@ def baseline_deltas(aggregates: list[dict[str, Any]],
         primitive_delta = pct_delta(
             as_float(row.get("primitives")),
             as_float(baseline.get("primitives")))
+        vs_invocations_delta = pct_delta(
+            as_float(row.get("vs_invocations")),
+            as_float(baseline.get("vs_invocations")))
+        vs_b_per_inv_delta = pct_delta(
+            as_float(row.get("vs_b_per_vs_invocation")),
+            as_float(baseline.get("vs_b_per_vs_invocation")))
         row_keys_match = str(row.get("top_row_keys", "")) == str(
             baseline.get("top_row_keys", ""))
         vsout_delta = pct_delta(
@@ -467,19 +563,28 @@ def baseline_deltas(aggregates: list[dict[str, Any]],
             verdict = "shape-drift VS-moved"
         else:
             verdict = "shape-drift inconclusive"
-        rows.append({
+        candidate = candidate_kind(run)
+        item = {
             "run": run,
+            "candidate_kind": candidate,
             "gpu_delta_pct": gpu_delta,
             "vs_delta_pct": vs_delta,
             "draw_delta_pct": draw_delta,
             "vertex_delta_pct": vertex_delta,
             "primitive_delta_pct": primitive_delta,
+            "vs_invocations_delta_pct": vs_invocations_delta,
+            "vs_b_per_inv_delta_pct": vs_b_per_inv_delta,
             "row_keys_match": row_keys_match,
             "vsout_delta_pct": vsout_delta,
             "tiled_delta_pct": tiled_delta,
             "geometry_stable": geometry_stable,
             "verdict": verdict,
-        })
+        }
+        gate, reason = backend_shape_gate(item)
+        item["backend_shape_gate"] = gate
+        item["backend_shape_reason"] = reason
+        item.update(vs_write_delta_components(row, baseline))
+        rows.append(item)
     non_base = [row for row in rows if row["verdict"] != "baseline"]
     return sorted(
         non_base,
@@ -569,8 +674,8 @@ def write_summary(path: Path,
             "aggregate VS buffer write changed by at least 5%; GPU-moved means",
             "GPU time changed by at least 2%.",
             "",
-            "| Run | Verdict | Row keys | GPU delta % | VS buffer delta % | Draw delta % | Vertex delta % | Primitive delta % | VSOut delta % | Tiled delta % |",
-            "|---|---|---|---:|---:|---:|---:|---:|---:|---:|",
+            "| Run | Verdict | Row keys | GPU delta % | VS buffer delta % | VS invocations delta % | VS B/inv delta % | Draw delta % | Vertex delta % | Primitive delta % | VSOut delta % | Tiled delta % |",
+            "|---|---|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|",
         ])
         for row in baseline_delta_rows:
             lines.append(
@@ -581,11 +686,70 @@ def write_summary(path: Path,
                     "match" if row["row_keys_match"] else "drift",
                     fmt_float(row["gpu_delta_pct"], 2),
                     fmt_float(row["vs_delta_pct"], 2),
+                    fmt_float(row["vs_invocations_delta_pct"], 2),
+                    fmt_float(row["vs_b_per_inv_delta_pct"], 2),
                     fmt_float(row["draw_delta_pct"], 2),
                     fmt_float(row["vertex_delta_pct"], 2),
                     fmt_float(row["primitive_delta_pct"], 2),
                     fmt_float(row["vsout_delta_pct"], 2),
                     fmt_float(row["tiled_delta_pct"], 2),
+                ])
+                + " |"
+            )
+        backend_rows = [
+            row for row in baseline_delta_rows
+            if row.get("candidate_kind") == "non-reorder-backend-shape"
+        ]
+        if backend_rows:
+            lines.extend([
+                "",
+                "## Non-Reorder Backend-Shape Gate",
+                "",
+                "This gate is intentionally stricter than the generic VS-buffer",
+                "delta triage. A non-reorder backend-shape candidate must keep",
+                "geometry stable, reduce `VS B/VS invocation` by at least 5%,",
+                "improve top GPU time by at least 2%, and avoid explaining the",
+                "movement primarily through VS invocation count changes.",
+                "",
+                "| Run | Gate | Reason | GPU delta % | VS B/inv delta % | VS invocation delta % |",
+                "|---|---|---|---:|---:|---:|",
+            ])
+            for row in backend_rows:
+                lines.append(
+                    "| "
+                    + " | ".join([
+                        str(row["run"]),
+                        str(row["backend_shape_gate"]),
+                        str(row["backend_shape_reason"]),
+                        fmt_float(row["gpu_delta_pct"], 2),
+                        fmt_float(row["vs_b_per_inv_delta_pct"], 2),
+                        fmt_float(row["vs_invocations_delta_pct"], 2),
+                    ])
+                    + " |"
+                )
+        lines.extend([
+            "",
+            "## VS Write Delta Attribution",
+            "",
+            "This decomposition uses the same midpoint formula as",
+            "`compare_xcode_dxmt_bottlenecks.py`: `VS write delta =",
+            "invocation-count effect + bytes/inv effect + residual`. It is the",
+            "main preflight signal for separating locality wins from non-reorder",
+            "backend-shape candidates.",
+            "",
+            "| Run | Total VS write delta MiB | Invocation-count effect MiB | Bytes/inv effect MiB | Residual MiB | Primary mover |",
+            "|---|---:|---:|---:|---:|---|",
+        ])
+        for row in baseline_delta_rows:
+            lines.append(
+                "| "
+                + " | ".join([
+                    str(row["run"]),
+                    fmt_signed_float(row["vs_write_delta_mib"]),
+                    fmt_signed_float(row["invocation_effect_mib"]),
+                    fmt_signed_float(row["bytes_per_invocation_effect_mib"]),
+                    fmt_signed_float(row["residual_mib"]),
+                    str(row["primary_mover"]),
                 ])
                 + " |"
             )
@@ -659,10 +823,15 @@ def write_aggregate_csv(path: Path, aggregates: list[dict[str, Any]]) -> None:
         "tiled_buffer_mib",
         "tiled_ratio",
         "vs_b_per_vs_invocation",
+        "vs_invocations",
         "vs_b_per_primitive",
         "vs_b_per_post_clipped_primitive",
         "vs_b_per_pixel",
         "vs_b_per_dxmt_vertex",
+        "dxmt_vertex_count",
+        "primitives",
+        "post_clipped_primitives",
+        "draw_calls",
         "state_churn",
         "geometry_signature_duplicates",
         "large_primitive_draws",
@@ -684,12 +853,48 @@ def write_aggregate_csv(path: Path, aggregates: list[dict[str, Any]]) -> None:
             writer.writerow({field: row.get(field, "") for field in fields})
 
 
+def write_delta_csv(path: Path, rows: list[dict[str, Any]]) -> None:
+    fields = [
+        "run",
+        "candidate_kind",
+        "verdict",
+        "backend_shape_gate",
+        "backend_shape_reason",
+        "geometry_stable",
+        "row_keys_match",
+        "gpu_delta_pct",
+        "vs_delta_pct",
+        "vs_invocations_delta_pct",
+        "vs_b_per_inv_delta_pct",
+        "vs_write_delta_mib",
+        "invocation_effect_mib",
+        "bytes_per_invocation_effect_mib",
+        "residual_mib",
+        "primary_mover",
+        "draw_delta_pct",
+        "vertex_delta_pct",
+        "primitive_delta_pct",
+        "vsout_delta_pct",
+        "tiled_delta_pct",
+    ]
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.open("w", newline="", encoding="utf-8") as handle:
+        writer = csv.DictWriter(handle, fieldnames=fields)
+        writer.writeheader()
+        for row in rows:
+            writer.writerow({field: row.get(field, "") for field in fields})
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("joined_csv", type=Path, nargs="+")
     parser.add_argument("--top-n", type=int, default=3)
     parser.add_argument("--report-output", type=Path)
     parser.add_argument("--aggregate-output", type=Path)
+    parser.add_argument(
+        "--delta-output",
+        type=Path,
+        help="Optional CSV for baseline-delta triage and VS write attribution.")
     parser.add_argument(
         "--baseline-run",
         default="current-normal-gputrace-r1",
@@ -731,6 +936,8 @@ def main() -> int:
 
     if args.aggregate_output:
         write_aggregate_csv(args.aggregate_output, aggregates)
+    if args.delta_output:
+        write_delta_csv(args.delta_output, deltas)
     if args.report_output:
         write_summary(args.report_output, aggregates,
                       encoder_correlations, aggregate_correlations, states,

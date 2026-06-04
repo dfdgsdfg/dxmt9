@@ -12,6 +12,7 @@ from __future__ import annotations
 import argparse
 import csv
 import hashlib
+import itertools
 import json
 import re
 from dataclasses import dataclass
@@ -57,6 +58,35 @@ BROAD_STATE_FIELDS = (
 )
 
 
+STATE_SELECTOR_FIELDS = tuple(dict.fromkeys(BROAD_STATE_FIELDS + ("start_index",)))
+GEOMETRY_SELECTOR_FIELDS = (
+    "unique_indices",
+    "cache_miss_64",
+    "index_bytes",
+    "stream0_bytes",
+    "min_index",
+    "max_index",
+)
+SHADER_SELECTOR_FIELDS = (
+    "vs_hash",
+    "ps_hash",
+    "vsout",
+    "ps_vsout_read_fields",
+    "row_vs_hash",
+    "row_ps_hash",
+)
+
+STATE_CSV_FIELDS = tuple(f"state_{field}" for field in BROAD_STATE_FIELDS + ("start_index",))
+GEOMETRY_CSV_FIELDS = tuple(f"geometry_{field}" for field in GEOMETRY_SELECTOR_FIELDS)
+SHADER_CSV_FIELDS = tuple(f"shader_{field}" for field in SHADER_SELECTOR_FIELDS)
+RUNTIME_PROBE_HASH_FIELDS = (
+    "vs_constants_hash",
+    "ps_constants_hash",
+    "uniform_payload_hash",
+)
+RUNTIME_PROBE_CSV_FIELDS = tuple(f"runtime_{field}" for field in RUNTIME_PROBE_HASH_FIELDS)
+
+
 CSV_FIELDS = (
     "draw_index",
     "encoder_draw_index",
@@ -98,6 +128,12 @@ CSV_FIELDS = (
     "color_and_primitive_changed_pixels",
     "color_change_primitive_overlap_pct",
     "primitive_owner_risk",
+    "final_writer_oracle_status",
+    "final_writer_oracle_action",
+    *RUNTIME_PROBE_CSV_FIELDS,
+    *STATE_CSV_FIELDS,
+    *GEOMETRY_CSV_FIELDS,
+    *SHADER_CSV_FIELDS,
     "shader_key",
     "state_key",
 )
@@ -320,6 +356,7 @@ class DrawAnalysis:
     psconsts_hash: str
     ffpvs_hash: str
     ffpps_hash: str
+    runtime_probe: dict[str, str]
     primitive_summary: dict[str, str]
     broad_key: tuple[tuple[str, str], ...]
     sparse_active_pixels: int = 32
@@ -404,8 +441,48 @@ class DrawAnalysis:
             return "primitive-owner-changed-color-stable"
         return "primitive-owner-stable"
 
+    @property
+    def final_writer_oracle_status(self) -> str:
+        if self.semantic_status != "pass":
+            if self.primitive_owner_risk == "color-change-follows-primitive-owner":
+                return "final-writer-color-hazard"
+            if self.color_changed_pixels:
+                return "final-color-hazard"
+            return "semantic-fail-no-final-writer-proof"
+        if self.primitive_owner_risk == "primitive-owner-changed-color-stable":
+            return "owner-change-color-stable"
+        if self.visibility_class == "no-final-color-exact-pass":
+            return "no-final-color-positive-control"
+        if self.visibility_class == "sparse-exact-pass":
+            return "sparse-positive-control"
+        if self.visibility_class == "visible-exact-pass":
+            return "visible-final-color-stable"
+        return "exact-pass"
+
+    @property
+    def final_writer_oracle_action(self) -> str:
+        status = self.final_writer_oracle_status
+        if status == "final-writer-color-hazard":
+            return "reject reorder unless a final-writer selector excludes this draw"
+        if status == "final-color-hazard":
+            return "reject reorder unless a final-color selector excludes this draw"
+        if status == "semantic-fail-no-final-writer-proof":
+            return "requires stronger primitive-id/final-color analysis before promotion"
+        if status == "owner-change-color-stable":
+            return "owner-change reject would overreject; needs final-color oracle"
+        if status == "no-final-color-positive-control":
+            return "safe replay evidence only; needs runtime occlusion/no-final-color predicate"
+        if status == "sparse-positive-control":
+            return "safe replay evidence only; too little final-color coverage alone"
+        if status == "visible-final-color-stable":
+            return "candidate useful movement only if runtime selector excludes hazards"
+        return "exact-pass evidence"
+
     def csv_row(self) -> dict[str, str]:
-        return {
+        state = self.manifest_draw.get("state", {})
+        geometry = self.manifest_draw.get("geometry", {})
+        shaders = self.manifest_draw.get("shaders", {})
+        row = {
             "draw_index": str(self.draw_index),
             "encoder_draw_index": str(self.encoder_draw_index),
             "draw_ordinal": str(self.draw_ordinal),
@@ -449,9 +526,20 @@ class DrawAnalysis:
                 if self.color_change_primitive_overlap_pct is not None else ""
             ),
             "primitive_owner_risk": self.primitive_owner_risk,
+            "final_writer_oracle_status": self.final_writer_oracle_status,
+            "final_writer_oracle_action": self.final_writer_oracle_action,
             "shader_key": shader_key(self.manifest_draw),
             "state_key": state_key(self.manifest_draw),
         }
+        for field in RUNTIME_PROBE_HASH_FIELDS:
+            row[f"runtime_{field}"] = self.runtime_probe.get(field, "")
+        for field in BROAD_STATE_FIELDS + ("start_index",):
+            row[f"state_{field}"] = str(state.get(field, ""))
+        for field in GEOMETRY_SELECTOR_FIELDS:
+            row[f"geometry_{field}"] = str(geometry.get(field, ""))
+        for field in SHADER_SELECTOR_FIELDS:
+            row[f"shader_{field}"] = str(shaders.get(field, ""))
+        return row
 
 
 def broad_key_for(draw: dict[str, Any],
@@ -473,13 +561,49 @@ def broad_key_for(draw: dict[str, Any],
     return tuple(parts)
 
 
+def runtime_probe_key_for_draw(draw: dict[str, Any]) -> tuple[str, str, str]:
+    return (
+        str(draw.get("seq", "")),
+        str(draw.get("encoder", "")),
+        str(draw.get("encoder_draw_index", "")),
+    )
+
+
+def runtime_probe_key_for_row(row: dict[str, str]) -> tuple[str, str, str]:
+    return (
+        str(row.get("seq", "")),
+        str(row.get("encoder", "")),
+        str(row.get("encoder_draw_index", "")),
+    )
+
+
+def load_runtime_probe_csv(path: Path | None) -> dict[tuple[str, str, str], dict[str, str]]:
+    if path is None:
+        return {}
+    with path.open(newline="", encoding="utf-8") as handle:
+        rows = list(csv.DictReader(handle))
+    out: dict[tuple[str, str, str], dict[str, str]] = {}
+    for row in rows:
+        key = runtime_probe_key_for_row(row)
+        if not all(key):
+            continue
+        out[key] = {
+            field: row.get(field, "")
+            for field in RUNTIME_PROBE_HASH_FIELDS
+            if row.get(field, "")
+        }
+    return out
+
+
 def analyze(manifest_path: Path,
             summary_path: Path,
             single_draw_dir: Path,
+            runtime_probe_csv: Path | None = None,
             active_threshold: int = 0,
             sparse_active_pixels: int = 32) -> list[DrawAnalysis]:
     manifest = load_manifest(manifest_path)
     summary = load_summary(summary_path)
+    runtime_probe_rows = load_runtime_probe_csv(runtime_probe_csv)
     analyses: list[DrawAnalysis] = []
     for draw_index, draw in enumerate(manifest["draws"]):
         if draw_index not in summary:
@@ -505,6 +629,7 @@ def analyze(manifest_path: Path,
             psconsts_hash=short_hash(uniforms.get("psconsts_file")),
             ffpvs_hash=short_hash(uniforms.get("ffpvs_file")),
             ffpps_hash=short_hash(uniforms.get("ffpps_file")),
+            runtime_probe=runtime_probe_rows.get(runtime_probe_key_for_draw(draw), {}),
             primitive_summary=load_primitive_summary(single_draw_dir, draw_index),
             broad_key=(),
             sparse_active_pixels=sparse_active_pixels,
@@ -534,6 +659,111 @@ def write_csv(path: Path, analyses: list[DrawAnalysis]) -> None:
         writer.writeheader()
         for item in analyses:
             writer.writerow(item.csv_row())
+
+
+def selector_csv_cell(value: str) -> str:
+    return value.replace("`", "")
+
+
+def write_selector_csv(
+    path: Path,
+    analyses: list[DrawAnalysis],
+    *,
+    selector_max_fields: int = 2,
+    selector_limit: int = 10,
+) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    failures = [item for item in analyses if item.semantic_status == "fail"]
+    passes = [item for item in analyses if item.semantic_status == "pass"]
+    fields = (
+        "queue",
+        "selector",
+        "verdict",
+        "kept_draws",
+        "kept_fail",
+        "lru32_delta",
+        "gain_share",
+        "mixed_all_fail_groups",
+        "meaning",
+    )
+    with path.open("w", newline="", encoding="utf-8") as handle:
+        writer = csv.DictWriter(handle, fieldnames=fields)
+        writer.writeheader()
+        for row in selector_candidate_rows(analyses, passes, failures):
+            writer.writerow({
+                "queue": "selector-candidate",
+                "selector": selector_csv_cell(row[0]),
+                "verdict": selector_csv_cell(row[1]),
+                "kept_draws": selector_csv_cell(row[2]),
+                "kept_fail": selector_csv_cell(row[3]),
+                "lru32_delta": selector_csv_cell(row[4]).replace(",", ""),
+                "gain_share": selector_csv_cell(row[5]),
+                "mixed_all_fail_groups": "",
+                "meaning": selector_csv_cell(row[6]),
+            })
+        for row in runtime_field_combination_rows(
+            analyses,
+            max_fields=selector_max_fields,
+            limit=selector_limit,
+        ):
+            writer.writerow({
+                "queue": "runtime-field-combination",
+                "selector": selector_csv_cell(row[0]),
+                "verdict": selector_csv_cell(row[1]),
+                "kept_draws": selector_csv_cell(row[2]),
+                "kept_fail": "0",
+                "lru32_delta": selector_csv_cell(row[3]).replace(",", ""),
+                "gain_share": selector_csv_cell(row[4]),
+                "mixed_all_fail_groups": selector_csv_cell(row[5]),
+                "meaning": selector_csv_cell(row[6]),
+            })
+        for row in final_color_runtime_selector_rows(
+            analyses,
+            max_fields=selector_max_fields,
+            limit=selector_limit,
+        ):
+            writer.writerow({
+                "queue": "final-color-runtime-selector",
+                "selector": selector_csv_cell(row[0]),
+                "verdict": selector_csv_cell(row[1]),
+                "kept_draws": selector_csv_cell(row[2]),
+                "kept_fail": "0",
+                "lru32_delta": selector_csv_cell(row[3]).replace(",", ""),
+                "gain_share": selector_csv_cell(row[4]),
+                "mixed_all_fail_groups": selector_csv_cell(row[5]),
+                "meaning": selector_csv_cell(row[6]),
+            })
+        for row in final_color_runtime_blocker_rows(analyses):
+            writer.writerow({
+                "queue": "final-color-runtime-blocker",
+                "selector": selector_csv_cell(row[0]),
+                "verdict": selector_csv_cell(row[1]),
+                "kept_draws": selector_csv_cell(row[2]),
+                "kept_fail": str(len([item for item in selector_csv_cell(row[3]).split(",") if item])),
+                "lru32_delta": selector_csv_cell(row[4]).replace(",", ""),
+                "gain_share": "",
+                "mixed_all_fail_groups": f"fail_lru32={selector_csv_cell(row[5]).replace(',', '')}",
+                "meaning": (
+                    f"trace-local-diff={selector_csv_cell(row[6])}; "
+                    f"{selector_csv_cell(row[7])}"
+                ),
+            })
+        for row in final_writer_runtime_selector_rows(
+            analyses,
+            max_fields=selector_max_fields,
+            limit=selector_limit,
+        ):
+            writer.writerow({
+                "queue": "final-writer-runtime-selector",
+                "selector": selector_csv_cell(row[0]),
+                "verdict": selector_csv_cell(row[1]),
+                "kept_draws": selector_csv_cell(row[2]),
+                "kept_fail": "0",
+                "lru32_delta": selector_csv_cell(row[3]).replace(",", ""),
+                "gain_share": selector_csv_cell(row[4]),
+                "mixed_all_fail_groups": selector_csv_cell(row[5]),
+                "meaning": selector_csv_cell(row[6]),
+            })
 
 
 def markdown_table(headers: tuple[str, ...], rows: Iterable[tuple[str, ...]]) -> str:
@@ -702,6 +932,810 @@ def selector_scout_rows(
     return rows
 
 
+def gain_share_text(candidate_lru: int, total_lru: int) -> str:
+    if total_lru == 0:
+        return "n/a"
+    return f"{abs(candidate_lru) / abs(total_lru) * 100.0:.2f}%"
+
+
+def selector_candidate_rows(
+    analyses: list[DrawAnalysis],
+    passes: list[DrawAnalysis],
+    failures: list[DrawAnalysis],
+) -> list[tuple[str, str, str, str, str, str, str]]:
+    total_lru = sum(item.lru32_delta for item in analyses)
+    rows: list[tuple[str, str, str, str, str, str, str]] = []
+    seen: set[str] = set()
+
+    def add(name: str, verdict: str, scope: str, items: list[DrawAnalysis], meaning: str) -> None:
+        if not items or name in seen:
+            return
+        seen.add(name)
+        kept_failures = [item for item in items if item.semantic_status == "fail"]
+        kept_lru = sum(item.lru32_delta for item in items)
+        rows.append((
+            name,
+            verdict if not kept_failures else "reject-keeps-fail",
+            f"`{','.join(str(item.draw_index) for item in items)}`",
+            f"`{len(kept_failures)}`",
+            f"`{fmt_int(kept_lru)}`",
+            f"`{gain_share_text(kept_lru, total_lru)}`",
+            f"{scope}: {meaning}",
+        ))
+
+    add(
+        "all exact-pass draws",
+        "trace-local-upper-bound",
+        "debug-only",
+        passes,
+        "maximum known safe movement for this replay; not a runtime predicate",
+    )
+
+    broad_all_pass = [
+        item for item in analyses
+        if item.broad_group_status == "all-pass"
+    ]
+    add(
+        "broad all-pass groups",
+        "trace-local",
+        "payload-hash",
+        broad_all_pass,
+        "state/shader/payload groups that contain no replay failures",
+    )
+
+    sparse_exact = [
+        item for item in passes
+        if item.visibility_class in ("no-final-color-exact-pass", "sparse-exact-pass")
+    ]
+    add(
+        "no-final-color or sparse exact-pass",
+        "debug-only",
+        "replay-visibility",
+        sparse_exact,
+        "requires framebuffer/depth visibility knowledge that dxmt does not cheaply know at draw submit",
+    )
+
+    visible_exact = [
+        item for item in passes
+        if item.visibility_class == "visible-exact-pass"
+    ]
+    add(
+        "visible exact-pass draws",
+        "debug-only",
+        "replay-visibility",
+        visible_exact,
+        "large mechanism signal, but no current runtime separator from visible failures",
+    )
+
+    primitive_owner_safe = [
+        item for item in analyses
+        if item.primitive_owner_risk != "color-change-follows-primitive-owner"
+    ]
+    if any(item.primitive_id_available for item in analyses):
+        add(
+            "primitive-owner not color-changing",
+            "debug-only",
+            "primitive-id-replay",
+            primitive_owner_safe,
+            "explains this failure but requires primitive-id/color replay, not a production predicate",
+        )
+
+    active_sep = exact_numeric_separator(
+        passes,
+        failures,
+        lambda item: item.before_stats.active_pixels,
+    )
+    if active_sep is not None:
+        _expr, threshold, _margin = active_sep
+        if failures and all(item.before_stats.active_pixels >= threshold for item in failures):
+            active_items = [item for item in analyses if item.before_stats.active_pixels < threshold]
+            add(
+                f"active pixels < {threshold}",
+                "debug-only",
+                "replay-visibility",
+                active_items,
+                "separates this replay failure by framebuffer activity only",
+            )
+        elif failures and all(item.before_stats.active_pixels <= threshold for item in failures):
+            active_items = [item for item in analyses if item.before_stats.active_pixels > threshold]
+            add(
+                f"active pixels > {threshold}",
+                "debug-only",
+                "replay-visibility",
+                active_items,
+                "separates this replay failure by framebuffer activity only",
+            )
+
+    fail_vs = {item.vsconsts_hash for item in failures if item.vsconsts_hash}
+    if fail_vs:
+        add(
+            "VS const hash excluding failures",
+            "trace-local",
+            "payload-hash",
+            [item for item in analyses if item.vsconsts_hash not in fail_vs],
+            "useful for bisection, but constant-payload identity is not a semantic runtime rule",
+        )
+
+    fail_draws = {item.draw_index for item in failures}
+    if fail_draws:
+        add(
+            "encoder draw index excluding failures",
+            "trace-local",
+            "draw-identity",
+            [item for item in analyses if item.draw_index not in fail_draws],
+            "acceptable for a mechanism proof or replay bisect only",
+        )
+    return rows
+
+
+def runtime_selector_values(item: DrawAnalysis) -> dict[str, tuple[str, str]]:
+    draw = item.manifest_draw
+    state = draw.get("state", {})
+    geometry = draw.get("geometry", {})
+    shaders = draw.get("shaders", {})
+    values: dict[str, tuple[str, str]] = {}
+
+    for field in STATE_SELECTOR_FIELDS:
+        if field in state:
+            values[f"state.{field}"] = ("runtime-state", str(state.get(field, "")))
+    for field in GEOMETRY_SELECTOR_FIELDS:
+        if field in geometry:
+            values[f"geometry.{field}"] = ("geometry-scout", str(geometry.get(field, "")))
+    for field in SHADER_SELECTOR_FIELDS:
+        if field in shaders:
+            values[f"shader.{field}"] = ("runtime-shader", str(shaders.get(field, "")))
+
+    if item.index_hash:
+        values["payload.index_hash"] = ("payload-hash", item.index_hash)
+    if item.stream0_hash:
+        values["payload.stream0_hash"] = ("payload-hash", item.stream0_hash)
+    if item.extra_stream_hashes:
+        values["payload.extra_stream_hashes"] = ("payload-hash", item.extra_stream_hashes)
+    if item.vsconsts_hash:
+        values["constant.vsconsts_hash"] = ("constant-hash", item.vsconsts_hash)
+    if item.psconsts_hash:
+        values["constant.psconsts_hash"] = ("constant-hash", item.psconsts_hash)
+    if item.ffpvs_hash:
+        values["constant.ffpvs_hash"] = ("constant-hash", item.ffpvs_hash)
+    if item.ffpps_hash:
+        values["constant.ffpps_hash"] = ("constant-hash", item.ffpps_hash)
+    if item.runtime_probe.get("vs_constants_hash"):
+        values["runtime.vs_constants_hash"] = (
+            "runtime-constant-hash",
+            item.runtime_probe["vs_constants_hash"],
+        )
+    if item.runtime_probe.get("ps_constants_hash"):
+        values["runtime.ps_constants_hash"] = (
+            "runtime-constant-hash",
+            item.runtime_probe["ps_constants_hash"],
+        )
+    if item.runtime_probe.get("uniform_payload_hash"):
+        values["runtime.uniform_payload_hash"] = (
+            "runtime-draw-payload-hash",
+            item.runtime_probe["uniform_payload_hash"],
+        )
+    return values
+
+
+def selector_field_scopes(analyses: list[DrawAnalysis]) -> dict[str, set[str]]:
+    scopes: dict[str, set[str]] = {}
+    for item in analyses:
+        for field, (scope, _value) in runtime_selector_values(item).items():
+            scopes.setdefault(field, set()).add(scope)
+    return scopes
+
+
+def combo_has_trace_local_field(
+    combo: tuple[str, ...],
+    field_scopes: dict[str, set[str]],
+) -> bool:
+    trace_scopes = {"constant-hash", "payload-hash", "runtime-draw-payload-hash"}
+    return any(field_scopes.get(field, set()) & trace_scopes for field in combo)
+
+
+def runtime_visible_field_values(item: DrawAnalysis) -> dict[str, str]:
+    trace_scopes = {"constant-hash", "payload-hash", "runtime-draw-payload-hash"}
+    return {
+        field: value
+        for field, (scope, value) in runtime_selector_values(item).items()
+        if scope not in trace_scopes
+    }
+
+
+def runtime_visible_group_key(item: DrawAnalysis) -> tuple[tuple[str, str], ...]:
+    return tuple(sorted(runtime_visible_field_values(item).items()))
+
+
+def selector_combo_verdict(scopes: set[str], group_count: int, draw_count: int) -> str:
+    if "runtime-draw-payload-hash" in scopes:
+        return "runtime-payload-overfit"
+    if "constant-hash" in scopes:
+        return "trace-local-constant"
+    if "payload-hash" in scopes:
+        return "trace-local-payload"
+    if draw_count and group_count >= draw_count:
+        return "overfit-singleton"
+    if "runtime-constant-hash" in scopes:
+        return "runtime-constant-scout"
+    if "geometry-scout" in scopes:
+        return "geometry-scout"
+    return "runtime-scout"
+
+
+def selector_combo_meaning(verdict: str, mixed_count: int, all_fail_count: int) -> str:
+    if verdict == "trace-local-constant":
+        base = "constant payload identity separates this replay, but is not a stable semantic predicate"
+    elif verdict == "trace-local-payload":
+        base = "payload hashes help bisect captured draws, but are not a production semantic rule"
+    elif verdict == "runtime-payload-overfit":
+        base = "full runtime uniform-payload hash is draw-local and overfits replay identity"
+    elif verdict == "runtime-constant-scout":
+        base = "runtime constant hash is observable, but still needs semantic proof before becoming a predicate"
+    elif verdict == "overfit-singleton":
+        base = "field tuple is as specific as draw identity and should not drive production"
+    elif verdict == "geometry-scout":
+        base = "geometry-derived grouping is a scout; it still needs wider semantic proof"
+    else:
+        base = "state/shader grouping is runtime-shaped, but current replay evidence is narrow"
+    if mixed_count:
+        base += f"; {mixed_count} mixed group(s) remain excluded"
+    if all_fail_count:
+        base += f"; {all_fail_count} all-fail group(s) remain excluded"
+    return base
+
+
+def final_color_selector_meaning(
+    verdict: str,
+    blocked_target_groups: int,
+    all_fail_count: int,
+    non_visible_pass_count: int,
+) -> str:
+    if verdict == "trace-local-constant":
+        base = "constant payload identity can isolate visible exact-pass draws in this replay only"
+    elif verdict == "trace-local-payload":
+        base = "payload hashes can isolate visible exact-pass draws for bisection, not production"
+    elif verdict == "runtime-payload-overfit":
+        base = "full runtime uniform-payload hash can isolate draws but overfits identity"
+    elif verdict == "runtime-constant-scout":
+        base = "runtime constant hash is observable, but does not prove final-color safety"
+    elif verdict == "overfit-singleton":
+        base = "field tuple is as specific as draw identity and cannot be a production selector"
+    elif verdict == "geometry-scout":
+        base = "geometry-derived grouping may isolate visible exact-pass draws, but needs wider replay proof"
+    else:
+        base = "runtime-shaped grouping may isolate visible exact-pass draws, but current replay evidence is narrow"
+    if blocked_target_groups:
+        base += f"; {blocked_target_groups} target group(s) also contain semantic failures"
+    if all_fail_count:
+        base += f"; {all_fail_count} all-fail group(s) remain excluded"
+    if non_visible_pass_count:
+        base += f"; {non_visible_pass_count} non-visible exact-pass draw(s) would also be selected"
+    return base
+
+
+def runtime_field_combination_rows(
+    analyses: list[DrawAnalysis],
+    max_fields: int = 2,
+    limit: int = 10,
+) -> list[tuple[str, str, str, str, str, str, str]]:
+    if not analyses:
+        return []
+    total_lru = sum(item.lru32_delta for item in analyses)
+    field_scopes = selector_field_scopes(analyses)
+    field_names = sorted(field_scopes)
+    candidates: list[tuple[float, int, int, int, int, str, tuple[str, ...], list[DrawAnalysis], str]] = []
+
+    for size in range(1, max_fields + 1):
+        for combo in itertools.combinations(field_names, size):
+            if size > 2 and combo_has_trace_local_field(combo, field_scopes):
+                continue
+            grouped: dict[tuple[str, ...], list[DrawAnalysis]] = {}
+            scopes: set[str] = set()
+            missing = False
+            for item in analyses:
+                values = runtime_selector_values(item)
+                combo_values: list[str] = []
+                for field in combo:
+                    if field not in values:
+                        missing = True
+                        break
+                    scope, value = values[field]
+                    scopes.add(scope)
+                    combo_values.append(value)
+                if missing:
+                    break
+                grouped.setdefault(tuple(combo_values), []).append(item)
+            if missing:
+                continue
+
+            safe_items: list[DrawAnalysis] = []
+            mixed_count = 0
+            all_fail_count = 0
+            for group in grouped.values():
+                pass_count = sum(1 for item in group if item.semantic_status == "pass")
+                fail_count = len(group) - pass_count
+                if pass_count and fail_count:
+                    mixed_count += 1
+                    continue
+                if fail_count:
+                    all_fail_count += 1
+                    continue
+                safe_items.extend(group)
+            if not safe_items:
+                continue
+
+            lru = sum(item.lru32_delta for item in safe_items)
+            gain = abs(lru) / abs(total_lru) if total_lru else 0.0
+            verdict = selector_combo_verdict(scopes, len(grouped), len(analyses))
+            candidates.append((
+                gain,
+                lru,
+                len(safe_items),
+                mixed_count,
+                all_fail_count,
+                verdict,
+                combo,
+                sorted(safe_items, key=lambda item: item.draw_index),
+                selector_combo_meaning(verdict, mixed_count, all_fail_count),
+            ))
+
+    verdict_rank = {
+        "runtime-scout": 0,
+        "runtime-constant-scout": 1,
+        "geometry-scout": 2,
+        "trace-local-payload": 3,
+        "trace-local-constant": 4,
+        "runtime-payload-overfit": 5,
+        "overfit-singleton": 6,
+    }
+    candidates.sort(
+        key=lambda row: (
+            -row[0],
+            verdict_rank.get(row[5], 99),
+            len(row[6]),
+            row[6],
+        )
+    )
+
+    rows: list[tuple[str, str, str, str, str, str, str]] = []
+    seen_draw_sets: set[tuple[int, ...]] = set()
+    for gain, lru, _count, mixed_count, all_fail_count, verdict, combo, safe_items, meaning in candidates:
+        draw_ids = tuple(item.draw_index for item in safe_items)
+        if draw_ids in seen_draw_sets:
+            continue
+        seen_draw_sets.add(draw_ids)
+        rows.append((
+            "`" + " + ".join(combo) + "`",
+            f"`{verdict}`",
+            f"`{','.join(str(draw_id) for draw_id in draw_ids)}`",
+            f"`{fmt_int(lru)}`",
+            f"`{gain * 100.0:.2f}%`",
+            f"`{mixed_count}` / `{all_fail_count}`",
+            meaning,
+        ))
+        if len(rows) >= limit:
+            break
+    return rows
+
+
+def final_color_runtime_selector_rows(
+    analyses: list[DrawAnalysis],
+    max_fields: int = 2,
+    limit: int = 10,
+) -> list[tuple[str, str, str, str, str, str, str]]:
+    """Rank runtime-shaped selectors by visible exact-pass gain.
+
+    The broad reorder blocker is specifically a visible final-writer hazard:
+    visible exact-pass draws have useful locality movement, but visible-fail
+    draws cannot be admitted. This sweep asks whether any runtime/geometry/
+    shader field tuple keeps visible exact-pass groups while excluding all
+    semantic failures. It deliberately computes gain only from visible
+    exact-pass draws; sparse/no-final-color exact passes are positive controls,
+    not the selector value we need for row 50/2 promotion.
+    """
+
+    target_items = [
+        item for item in analyses
+        if item.visibility_class == "visible-exact-pass"
+    ]
+    target_lru = sum(item.lru32_delta for item in target_items)
+    if not target_items or target_lru == 0:
+        return []
+
+    field_scopes = selector_field_scopes(analyses)
+    field_names = sorted(field_scopes)
+    candidates: list[
+        tuple[float, int, int, int, int, str, tuple[str, ...], list[DrawAnalysis], str]
+    ] = []
+
+    for size in range(1, max_fields + 1):
+        for combo in itertools.combinations(field_names, size):
+            if size > 2 and combo_has_trace_local_field(combo, field_scopes):
+                continue
+            grouped: dict[tuple[str, ...], list[DrawAnalysis]] = {}
+            scopes: set[str] = set()
+            missing = False
+            for item in analyses:
+                values = runtime_selector_values(item)
+                combo_values: list[str] = []
+                for field in combo:
+                    if field not in values:
+                        missing = True
+                        break
+                    scope, value = values[field]
+                    scopes.add(scope)
+                    combo_values.append(value)
+                if missing:
+                    break
+                grouped.setdefault(tuple(combo_values), []).append(item)
+            if missing:
+                continue
+
+            selected_targets: list[DrawAnalysis] = []
+            selected_non_visible = 0
+            blocked_target_groups = 0
+            all_fail_count = 0
+            for group in grouped.values():
+                group_targets = [
+                    item for item in group
+                    if item.visibility_class == "visible-exact-pass"
+                ]
+                if not group_targets:
+                    if all(item.semantic_status != "pass" for item in group):
+                        all_fail_count += 1
+                    continue
+                fail_count = sum(1 for item in group if item.semantic_status != "pass")
+                if fail_count:
+                    blocked_target_groups += 1
+                    continue
+                selected_targets.extend(group_targets)
+                selected_non_visible += sum(
+                    1 for item in group
+                    if item.semantic_status == "pass"
+                    and item.visibility_class != "visible-exact-pass"
+                )
+            if not selected_targets:
+                continue
+
+            lru = sum(item.lru32_delta for item in selected_targets)
+            gain = abs(lru) / abs(target_lru) if target_lru else 0.0
+            verdict = selector_combo_verdict(scopes, len(grouped), len(analyses))
+            candidates.append((
+                gain,
+                lru,
+                len(selected_targets),
+                blocked_target_groups,
+                all_fail_count,
+                verdict,
+                combo,
+                sorted(selected_targets, key=lambda item: item.draw_index),
+                final_color_selector_meaning(
+                    verdict,
+                    blocked_target_groups,
+                    all_fail_count,
+                    selected_non_visible,
+                ),
+            ))
+
+    verdict_rank = {
+        "runtime-scout": 0,
+        "runtime-constant-scout": 1,
+        "geometry-scout": 2,
+        "trace-local-payload": 3,
+        "trace-local-constant": 4,
+        "runtime-payload-overfit": 5,
+        "overfit-singleton": 6,
+    }
+    candidates.sort(
+        key=lambda row: (
+            -row[0],
+            verdict_rank.get(row[5], 99),
+            len(row[6]),
+            row[6],
+        )
+    )
+
+    rows: list[tuple[str, str, str, str, str, str, str]] = []
+    seen_draw_sets: set[tuple[int, ...]] = set()
+    for gain, lru, _count, blocked_target_groups, all_fail_count, verdict, combo, selected_targets, meaning in candidates:
+        draw_ids = tuple(item.draw_index for item in selected_targets)
+        if draw_ids in seen_draw_sets:
+            continue
+        seen_draw_sets.add(draw_ids)
+        rows.append((
+            "`" + " + ".join(combo) + "`",
+            f"`{verdict}`",
+            f"`{','.join(str(draw_id) for draw_id in draw_ids)}`",
+            f"`{fmt_int(lru)}`",
+            f"`{gain * 100.0:.2f}%`",
+            f"`{blocked_target_groups}` / `{all_fail_count}`",
+            meaning,
+        ))
+        if len(rows) >= limit:
+            break
+    return rows
+
+
+def final_writer_selector_meaning(
+    verdict: str,
+    blocked_target_groups: int,
+    all_hazard_count: int,
+) -> str:
+    if verdict == "runtime-payload-overfit":
+        base = "full runtime uniform-payload hash can isolate owner-stable draws but overfits identity"
+    elif verdict == "trace-local-constant":
+        base = "trace-local constant payload can isolate owner-stable draws in this replay only"
+    elif verdict == "trace-local-payload":
+        base = "payload hashes can isolate owner-stable draws for bisection, not production"
+    elif verdict == "runtime-constant-scout":
+        base = "runtime constant hash is observable, but does not prove final-writer safety"
+    elif verdict == "overfit-singleton":
+        base = "field tuple is as specific as draw identity and cannot be a production selector"
+    elif verdict == "geometry-scout":
+        base = "geometry-derived grouping may isolate owner-stable draws, but needs wider replay proof"
+    else:
+        base = "runtime-shaped grouping may isolate owner-stable draws, but current replay evidence is narrow"
+    if blocked_target_groups:
+        base += f"; {blocked_target_groups} owner-stable target group(s) also contain final-writer hazards"
+    if all_hazard_count:
+        base += f"; {all_hazard_count} all-hazard group(s) remain excluded"
+    return base
+
+
+def final_writer_runtime_selector_rows(
+    analyses: list[DrawAnalysis],
+    max_fields: int = 2,
+    limit: int = 10,
+) -> list[tuple[str, str, str, str, str, str, str]]:
+    """Rank selectors that keep owner-change/color-stable movement.
+
+    This targets the exact-pass owner-changing bucket, because those draws
+    prove that primitive-owner change alone is an over-reject. A useful
+    production selector must keep that movement while excluding real
+    final-writer color hazards.
+    """
+
+    target_items = [
+        item for item in analyses
+        if item.final_writer_oracle_status == "owner-change-color-stable"
+    ]
+    target_lru = sum(item.lru32_delta for item in target_items)
+    if not target_items or target_lru == 0:
+        return []
+
+    field_scopes = selector_field_scopes(analyses)
+    field_names = sorted(field_scopes)
+    candidates: list[
+        tuple[float, int, int, int, int, str, tuple[str, ...], list[DrawAnalysis], str]
+    ] = []
+
+    for size in range(1, max_fields + 1):
+        for combo in itertools.combinations(field_names, size):
+            if size > 2 and combo_has_trace_local_field(combo, field_scopes):
+                continue
+            grouped: dict[tuple[str, ...], list[DrawAnalysis]] = {}
+            scopes: set[str] = set()
+            missing = False
+            for item in analyses:
+                values = runtime_selector_values(item)
+                combo_values: list[str] = []
+                for field in combo:
+                    if field not in values:
+                        missing = True
+                        break
+                    scope, value = values[field]
+                    scopes.add(scope)
+                    combo_values.append(value)
+                if missing:
+                    break
+                grouped.setdefault(tuple(combo_values), []).append(item)
+            if missing:
+                continue
+
+            selected_targets: list[DrawAnalysis] = []
+            blocked_target_groups = 0
+            all_hazard_count = 0
+            for group in grouped.values():
+                group_targets = [
+                    item for item in group
+                    if item.final_writer_oracle_status == "owner-change-color-stable"
+                ]
+                group_hazards = [
+                    item for item in group
+                    if item.final_writer_oracle_status in {
+                        "final-writer-color-hazard",
+                        "final-color-hazard",
+                        "semantic-fail-no-final-writer-proof",
+                    }
+                ]
+                if not group_targets:
+                    if group_hazards and len(group_hazards) == len(group):
+                        all_hazard_count += 1
+                    continue
+                if group_hazards:
+                    blocked_target_groups += 1
+                    continue
+                selected_targets.extend(group_targets)
+            if not selected_targets:
+                continue
+
+            lru = sum(item.lru32_delta for item in selected_targets)
+            gain = abs(lru) / abs(target_lru) if target_lru else 0.0
+            verdict = selector_combo_verdict(scopes, len(grouped), len(analyses))
+            candidates.append((
+                gain,
+                lru,
+                len(selected_targets),
+                blocked_target_groups,
+                all_hazard_count,
+                verdict,
+                combo,
+                sorted(selected_targets, key=lambda item: item.draw_index),
+                final_writer_selector_meaning(
+                    verdict,
+                    blocked_target_groups,
+                    all_hazard_count,
+                ),
+            ))
+
+    verdict_rank = {
+        "runtime-scout": 0,
+        "runtime-constant-scout": 1,
+        "geometry-scout": 2,
+        "trace-local-payload": 3,
+        "trace-local-constant": 4,
+        "runtime-payload-overfit": 5,
+        "overfit-singleton": 6,
+    }
+    candidates.sort(
+        key=lambda row: (
+            -row[0],
+            verdict_rank.get(row[5], 99),
+            len(row[6]),
+            row[6],
+        )
+    )
+
+    rows: list[tuple[str, str, str, str, str, str, str]] = []
+    seen_draw_sets: set[tuple[str, tuple[int, ...]]] = set()
+    for gain, lru, _count, blocked_target_groups, all_hazard_count, verdict, combo, selected_targets, meaning in candidates:
+        draw_ids = tuple(item.draw_index for item in selected_targets)
+        # Keep one row per verdict for the same draw set so the report does
+        # not hide that runtime uniform-payload separation is only overfit
+        # identity, distinct from trace-local replay constants.
+        duplicate_key = (verdict, draw_ids)
+        if duplicate_key in seen_draw_sets:
+            continue
+        seen_draw_sets.add(duplicate_key)
+        rows.append((
+            "`" + " + ".join(combo) + "`",
+            f"`{verdict}`",
+            f"`{','.join(str(draw_id) for draw_id in draw_ids)}`",
+            f"`{fmt_int(lru)}`",
+            f"`{gain * 100.0:.2f}%`",
+            f"`{blocked_target_groups}` / `{all_hazard_count}`",
+            meaning,
+        ))
+        if len(rows) >= limit:
+            break
+    return rows
+
+
+def final_color_runtime_blocker_rows(
+    analyses: list[DrawAnalysis],
+) -> list[tuple[str, str, str, str, str, str, str, str]]:
+    grouped: dict[tuple[tuple[str, str], ...], list[DrawAnalysis]] = {}
+    for item in analyses:
+        grouped.setdefault(runtime_visible_group_key(item), []).append(item)
+
+    rows: list[tuple[str, str, str, str, str, str, str, str]] = []
+    for key, group in grouped.items():
+        visible_pass = [
+            item for item in group
+            if item.visibility_class == "visible-exact-pass"
+        ]
+        failures = [
+            item for item in group
+            if item.semantic_status != "pass"
+        ]
+        if not visible_pass or not failures:
+            continue
+
+        trace_diff_fields: list[str] = []
+        trace_values = {
+            "vsconsts_hash": {item.vsconsts_hash for item in group if item.vsconsts_hash},
+            "psconsts_hash": {item.psconsts_hash for item in group if item.psconsts_hash},
+            "index_hash": {item.index_hash for item in group if item.index_hash},
+            "stream0_hash": {item.stream0_hash for item in group if item.stream0_hash},
+            "extra_stream_hashes": {item.extra_stream_hashes for item in group if item.extra_stream_hashes},
+            "runtime.uniform_payload_hash": {
+                item.runtime_probe.get("uniform_payload_hash", "")
+                for item in group
+                if item.runtime_probe.get("uniform_payload_hash", "")
+            },
+        }
+        for field, values in trace_values.items():
+            if len(values) > 1:
+                trace_diff_fields.append(field)
+
+        sample_fields = []
+        for field, value in key:
+            if field in {
+                "state.index_count",
+                "state.primitive_count",
+                "state.scissor",
+                "state.depth_write",
+                "state.alpha_blend",
+                "geometry.unique_indices",
+                "geometry.cache_miss_64",
+                "shader.vs_hash",
+                "shader.ps_hash",
+            }:
+                sample_fields.append(f"{field}={value}")
+        if not sample_fields:
+            sample_fields = [f"{field}={value}" for field, value in key[:6]]
+
+        rows.append((
+            f"`all-runtime-visible-fields`",
+            f"`runtime-indistinguishable-target-fail`",
+            f"`{','.join(str(item.draw_index) for item in visible_pass)}`",
+            f"`{','.join(str(item.draw_index) for item in failures)}`",
+            f"`{fmt_int(sum(item.lru32_delta for item in visible_pass))}`",
+            f"`{fmt_int(sum(item.lru32_delta for item in failures))}`",
+            f"`{', '.join(trace_diff_fields) or 'none'}`",
+            (
+                f"{len(key)} runtime/geometry/shader fields are identical "
+                f"({'; '.join(sample_fields)}); only trace-local or draw-local payload fields can split this blocker"
+            ),
+        ))
+
+    rows.sort(key=lambda row: abs(as_int(row[4].replace("`", "").replace(",", ""))), reverse=True)
+    return rows
+
+
+def final_writer_oracle_rows(
+    analyses: list[DrawAnalysis],
+) -> list[tuple[str, str, str, str, str, str, str, str]]:
+    grouped: dict[str, list[DrawAnalysis]] = {}
+    for item in analyses:
+        grouped.setdefault(item.final_writer_oracle_status, []).append(item)
+
+    priority = {
+        "final-writer-color-hazard": 0,
+        "final-color-hazard": 1,
+        "semantic-fail-no-final-writer-proof": 2,
+        "owner-change-color-stable": 3,
+        "visible-final-color-stable": 4,
+        "sparse-positive-control": 5,
+        "no-final-color-positive-control": 6,
+        "exact-pass": 7,
+    }
+    rows: list[tuple[str, str, str, str, str, str, str, str]] = []
+    for status, group in grouped.items():
+        pass_count = sum(1 for item in group if item.semantic_status == "pass")
+        fail_count = len(group) - pass_count
+        primitive_pixels = sum(item.primitive_identity_changed_pixels for item in group)
+        color_pixels = sum(item.color_changed_pixels for item in group)
+        actions = sorted({item.final_writer_oracle_action for item in group})
+        rows.append((
+            f"`{status}`",
+            f"`{len(group)}`",
+            f"`{pass_count}` / `{fail_count}`",
+            f"`{fmt_int(sum(item.lru32_delta for item in group))}`",
+            f"`{fmt_int(primitive_pixels)}`",
+            f"`{fmt_int(color_pixels)}`",
+            f"`{','.join(str(item.draw_index) for item in sorted(group, key=lambda row: row.draw_index))}`",
+            "; ".join(actions),
+        ))
+    rows.sort(
+        key=lambda row: (
+            priority.get(row[0].strip("`"), 99),
+            -abs(as_int(row[3].replace("`", "").replace(",", ""))),
+        )
+    )
+    return rows
+
+
 def proof_verdict_rows(
     analyses: list[DrawAnalysis],
     passes: list[DrawAnalysis],
@@ -778,7 +1812,10 @@ def proof_verdict_rows(
 def write_markdown(path: Path,
                    manifest_path: Path,
                    summary_path: Path,
-                   analyses: list[DrawAnalysis]) -> None:
+                   analyses: list[DrawAnalysis],
+                   *,
+                   selector_max_fields: int = 2,
+                   selector_limit: int = 10) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     failures = [item for item in analyses if item.semantic_status == "fail"]
     passes = [item for item in analyses if item.semantic_status == "pass"]
@@ -995,6 +2032,32 @@ def write_markdown(path: Path,
             ),
         ])
 
+    oracle_rows = final_writer_oracle_rows(analyses)
+    if oracle_rows:
+        lines.extend([
+            "",
+            "## Final-Writer Oracle",
+            "",
+            "This bucketizes each draw by final-color and primitive-owner replay",
+            "evidence. It separates true final-writer hazards from exact-pass",
+            "owner changes that keep the final color stable; the latter prove",
+            "that a simple owner-change reject gate overrejects useful movement.",
+            "",
+            markdown_table(
+                (
+                    "Oracle status",
+                    "Draws",
+                    "Pass / fail",
+                    "LRU32 delta",
+                    "Primitive-owner px",
+                    "Color px",
+                    "Draw indexes",
+                    "Next action",
+                ),
+                oracle_rows,
+            ),
+        ])
+
     lines.extend([
         "",
         "## Selector Scout",
@@ -1012,6 +2075,148 @@ def write_markdown(path: Path,
             selector_scout_rows(analyses, passes, failures, mixed_groups, primitive_items),
         ),
     ])
+
+    candidate_rows = selector_candidate_rows(analyses, passes, failures)
+    if candidate_rows:
+        lines.extend([
+            "",
+            "## Selector Candidate Sweep",
+            "",
+            "This sweep ranks selectors by retained LRU32 gain before spending",
+            "another Xcode replay. Rows marked debug-only or trace-local are",
+            "evidence for mechanism work, not production runtime predicates.",
+            "",
+            markdown_table(
+                (
+                    "Selector",
+                    "Verdict",
+                    "Kept draws",
+                    "Kept fail",
+                    "LRU32 delta",
+                    "Gain share",
+                    "Scope / meaning",
+                ),
+                candidate_rows,
+            ),
+        ])
+
+    runtime_rows = runtime_field_combination_rows(
+        analyses,
+        max_fields=selector_max_fields,
+        limit=selector_limit,
+    )
+    if runtime_rows:
+        lines.extend([
+            "",
+            "## Runtime Field Combination Sweep",
+            "",
+            "This sweep groups draws by runtime-shaped state/shader fields and",
+            "diagnostic geometry/payload hashes, then keeps only value groups",
+            "that contain no semantic failures. `runtime-scout` and",
+            "`geometry-scout` rows are possible production-design leads;",
+            "`trace-local-*` rows are bisection evidence only.",
+            "",
+            markdown_table(
+                (
+                    "Fields",
+                    "Verdict",
+                    "Kept draws",
+                    "LRU32 delta",
+                    "Gain share",
+                    "Mixed / all-fail groups",
+                    "Meaning",
+                ),
+                runtime_rows,
+            ),
+        ])
+
+    final_color_rows = final_color_runtime_selector_rows(
+        analyses,
+        max_fields=selector_max_fields,
+        limit=selector_limit,
+    )
+    if final_color_rows:
+        lines.extend([
+            "",
+            "## Final-Color Runtime Selector Sweep",
+            "",
+            "This sweep targets only `visible-exact-pass` locality gain. It keeps",
+            "runtime/geometry/shader field groups that contain visible exact-pass",
+            "draws and no semantic failures. The gain share is relative to visible",
+            "exact-pass LRU32 movement, not the broader sparse/no-final-color",
+            "positive-control movement.",
+            "",
+            markdown_table(
+                (
+                    "Fields",
+                    "Verdict",
+                    "Visible exact draws",
+                    "Visible LRU32 delta",
+                    "Visible gain share",
+                    "Blocked target / all-fail groups",
+                    "Meaning",
+                ),
+                final_color_rows,
+            ),
+        ])
+
+    final_writer_rows = final_writer_runtime_selector_rows(
+        analyses,
+        max_fields=selector_max_fields,
+        limit=selector_limit,
+    )
+    if final_writer_rows:
+        lines.extend([
+            "",
+            "## Final-Writer Runtime Selector Sweep",
+            "",
+            "This sweep targets `owner-change-color-stable` locality movement.",
+            "It keeps runtime/geometry/shader field groups that contain those",
+            "owner-changing exact-pass draws and no final-writer/color hazards.",
+            "Rows marked `runtime-payload-overfit` can isolate replay identity",
+            "but are not production predicates.",
+            "",
+            markdown_table(
+                (
+                    "Fields",
+                    "Verdict",
+                    "Owner-stable draws",
+                    "Owner-stable LRU32 delta",
+                    "Owner-stable gain share",
+                    "Blocked target / all-hazard groups",
+                    "Meaning",
+                ),
+                final_writer_rows,
+            ),
+        ])
+
+    blocker_rows = final_color_runtime_blocker_rows(analyses)
+    if blocker_rows:
+        lines.extend([
+            "",
+            "## Final-Color Runtime Blockers",
+            "",
+            "These rows group draws by every runtime-visible state, geometry, and",
+            "shader field currently available to the mini-replay manifest. If a",
+            "group contains both visible exact-pass draws and semantic failures,",
+            "then no combination of those runtime-visible fields can isolate the",
+            "visible safe gain. Remaining separators are trace-local/debug data",
+            "such as constant payload hashes or framebuffer replay output.",
+            "",
+            markdown_table(
+                (
+                    "Selector",
+                    "Verdict",
+                    "Visible exact draws",
+                    "Fail draws",
+                    "Visible LRU32 delta",
+                    "Fail LRU32 delta",
+                    "Trace-local differing fields",
+                    "Meaning",
+                ),
+                blocker_rows,
+            ),
+        ])
 
     lines.extend(["", "## Broad Predicate Groups", ""])
     if not mixed_groups:
@@ -1098,10 +2303,18 @@ def parse_args() -> argparse.Namespace:
                         help="CSV emitted by the single-draw semantic scan")
     parser.add_argument("--single-draw-dir", type=Path,
                         help="Directory containing drawNNN-original/cacheopt outputs")
+    parser.add_argument("--runtime-probe-csv", type=Path,
+                        help="Optional 3dmark05-perf-indexed-probe-draws.csv to attach runtime constant/payload hashes by seq/encoder/draw")
     parser.add_argument("--output", type=Path, required=True,
                         help="Markdown report path")
     parser.add_argument("--csv-output", type=Path,
                         help="Optional joined per-draw CSV path")
+    parser.add_argument("--selector-csv-output", type=Path,
+                        help="Optional selector candidate/runtime field sweep CSV path")
+    parser.add_argument("--selector-max-fields", type=int, default=2,
+                        help="Max runtime/geometry/shader fields per selector sweep combination (default: 2)")
+    parser.add_argument("--selector-limit", type=int, default=10,
+                        help="Max rows per runtime selector sweep section (default: 10)")
     parser.add_argument("--active-threshold", type=int, default=0,
                         help="RGB max threshold for active-pixel bounds")
     parser.add_argument("--sparse-active-pixels", type=int, default=32,
@@ -1111,17 +2324,36 @@ def parse_args() -> argparse.Namespace:
 
 def main() -> int:
     args = parse_args()
+    if args.selector_max_fields <= 0:
+        raise SystemExit("--selector-max-fields must be positive")
+    if args.selector_limit <= 0:
+        raise SystemExit("--selector-limit must be positive")
     single_draw_dir = args.single_draw_dir or args.single_draw_summary.parent
     analyses = analyze(
         args.manifest,
         args.single_draw_summary,
         single_draw_dir,
+        runtime_probe_csv=args.runtime_probe_csv,
         active_threshold=args.active_threshold,
         sparse_active_pixels=args.sparse_active_pixels,
     )
-    write_markdown(args.output, args.manifest, args.single_draw_summary, analyses)
+    write_markdown(
+        args.output,
+        args.manifest,
+        args.single_draw_summary,
+        analyses,
+        selector_max_fields=args.selector_max_fields,
+        selector_limit=args.selector_limit,
+    )
     if args.csv_output:
         write_csv(args.csv_output, analyses)
+    if args.selector_csv_output:
+        write_selector_csv(
+            args.selector_csv_output,
+            analyses,
+            selector_max_fields=args.selector_max_fields,
+            selector_limit=args.selector_limit,
+        )
     return 0
 
 

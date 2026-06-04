@@ -48,6 +48,7 @@ require_top_gpu_share_increase=0
 require_top_row_key_match=0
 require_stable_frame_proof=0
 require_cache_opt_apply_proof=0
+require_opaque_depth_index_cache_proof=0
 require_screen_blend_cache_proof=0
 require_semantic_image_proof=0
 require_tvb_mechanism_proof=0
@@ -76,6 +77,7 @@ max_top_vertex_count_delta_ratio=${DXMT_3DMARK05_MAX_TOP_VERTEX_COUNT_DELTA_RATI
 max_top_triangle_delta_ratio=${DXMT_3DMARK05_MAX_TOP_TRIANGLE_DELTA_RATIO:-}
 top_n=${DXMT_3DMARK05_TOP_N:-3}
 hot_gpu_share=${DXMT_3DMARK05_HOT_GPU_SHARE:-95.0}
+class_proxy_top=${DXMT_3DMARK05_CLASS_PROXY_TOP:-12}
 target_row_keys=()
 
 usage() {
@@ -151,6 +153,12 @@ Options:
                       Gate preset for cache-opt apply runs: stable frame proof
                       plus target rows' actual LRU32 miss, VS buffer write, and
                       VS invocation decreases; requires --target-row-key
+  --require-opaque-depth-index-cache-proof
+                      Gate preset for production-shaped opaque depth cached-index
+                      opt-in: stable-frame proof plus target cache-opt telemetry,
+                      reordered-cache hits, and target VS write/invocation
+                      decreases; requires --target-row-key. The run must have
+                      captured index-reuse and cache-opt-candidate telemetry.
   --require-screen-blend-cache-proof
                       Gate preset for screen-blend cached-index opt-in:
                       stable-frame proof plus target cache-opt telemetry,
@@ -221,6 +229,8 @@ Options:
                       (default: 3)
   --hot-gpu-share PCT GPU share target for report-only Hot Set Aggregate
                       (default: 95.0)
+  --class-proxy-top N Top indexed state/class proxy rows to emit after joining
+                      Xcode counters (default: 12)
   --dry-run           Print derived paths and commands without running them
   -h, --help          Show this help
 USAGE
@@ -396,6 +406,10 @@ while (($#)); do
       require_cache_opt_apply_proof=1
       shift
       ;;
+    --require-opaque-depth-index-cache-proof)
+      require_opaque_depth_index_cache_proof=1
+      shift
+      ;;
     --require-screen-blend-cache-proof)
       require_screen_blend_cache_proof=1
       shift
@@ -512,6 +526,10 @@ while (($#)); do
       hot_gpu_share=${2:?missing value for --hot-gpu-share}
       shift 2
       ;;
+    --class-proxy-top)
+      class_proxy_top=${2:?missing value for --class-proxy-top}
+      shift 2
+      ;;
     --dry-run)
       dry_run=1
       shift
@@ -575,6 +593,10 @@ if [[ ! "$top_n" =~ ^[0-9]+$ ]] || (( top_n == 0 )); then
   exit 2
 fi
 validate_optional_number "--hot-gpu-share" "$hot_gpu_share"
+if [[ ! "$class_proxy_top" =~ ^[0-9]+$ ]] || (( class_proxy_top == 0 )); then
+  echo "--class-proxy-top must be a positive integer" >&2
+  exit 2
+fi
 
 semantic_image_compare_requested=0
 if [[ -n "$semantic_image_policy$semantic_image_before$semantic_image_after$semantic_image_output$semantic_image_summary_output$semantic_image_diff_output" ]]; then
@@ -604,6 +626,18 @@ if (( require_screen_blend_cache_proof )); then
   fi
   if (( ${#target_row_keys[@]} == 0 )); then
     echo "--require-screen-blend-cache-proof requires at least one --target-row-key" >&2
+    exit 2
+  fi
+fi
+
+if (( require_opaque_depth_index_cache_proof )); then
+  require_stable_frame_proof=1
+  require_target_index_cache_opt_miss32_decrease=1
+  require_target_reordered_index_cache_hits=1
+  require_target_vs_buffer_write_decrease=1
+  require_target_vs_invocations_decrease=1
+  if (( ${#target_row_keys[@]} == 0 )); then
+    echo "--require-opaque-depth-index-cache-proof requires at least one --target-row-key" >&2
     exit 2
   fi
 fi
@@ -760,9 +794,14 @@ fi
 summary_path="$output_dir/3dmark05-perf-summary.md"
 encoders_csv="$output_dir/3dmark05-perf-encoders.csv"
 stream_csv="$output_dir/3dmark05-perf-encoder-streams.csv"
+probe_draws_csv="$output_dir/3dmark05-perf-indexed-probe-draws.csv"
 xcode_summary_csv="$analysis_dir/frame${frame}-counters-summary.csv"
 joined_csv="$analysis_dir/frame${frame}-xcode-dxmt-joined-summary.csv"
 xcode_report="$analysis_dir/frame${frame}-xcode-dxmt-bottleneck-report.md"
+index_cache_runtime_report="$analysis_dir/frame${frame}-index-cache-runtime-summary.md"
+index_cache_runtime_csv="$analysis_dir/frame${frame}-index-cache-runtime-summary.csv"
+class_proxy_report="$analysis_dir/frame${frame}-indexed-state-class-xcode-proxy.md"
+class_proxy_csv="$analysis_dir/frame${frame}-indexed-state-class-xcode-proxy.csv"
 shader_msl_dir="$analysis_dir/shaders/msl"
 shader_dump_report="$analysis_dir/frame${frame}-shader-dump-report.md"
 shader_dump_csv="$analysis_dir/frame${frame}-shader-dump-summary.csv"
@@ -784,6 +823,13 @@ summary_cmd=(
   python3 scripts/tools/summarize_3dmark05_perf.py
   "$output_dir"
   --output "$summary_path"
+)
+
+index_cache_runtime_cmd=(
+  python3 scripts/tools/summarize_index_cache_runtime.py
+  --run "$after_label=$encoders_csv,$probe_draws_csv"
+  --output "$index_cache_runtime_report"
+  --csv-output "$index_cache_runtime_csv"
 )
 
 xcode_summary_cmd=(
@@ -813,6 +859,16 @@ if (( require_dxmt_join_coverage )); then
     --min-top-dxmt-joined-fraction "$min_top_dxmt_joined_fraction"
   )
 fi
+
+class_proxy_cmd=(
+  python3 scripts/tools/analyze_indexed_probe_classes.py
+  "$probe_draws_csv"
+  --group row-state-class
+  --joined-summary "$joined_csv"
+  --top "$class_proxy_top"
+  --output "$class_proxy_report"
+  --csv-output "$class_proxy_csv"
+)
 
 shader_dump_cmd=(
   python3 scripts/tools/analyze_shader_dumps.py
@@ -1050,10 +1106,16 @@ echo "xcode_csv: $xcode_csv"
 echo "summary: $summary_path"
 echo "encoder_csv: $encoders_csv"
 echo "stream_csv: $stream_csv"
+echo "probe_draws_csv: $probe_draws_csv"
+echo "index_cache_runtime_report: $index_cache_runtime_report"
+echo "index_cache_runtime_csv: $index_cache_runtime_csv"
+echo "class_proxy_report: $class_proxy_report"
+echo "class_proxy_csv: $class_proxy_csv"
 echo "joined_csv: $joined_csv"
 echo "xcode_report: $xcode_report"
 echo "top_n: $top_n"
 echo "hot_gpu_share: $hot_gpu_share"
+echo "class_proxy_top: $class_proxy_top"
 echo "shader_msl_dir: $shader_msl_dir"
 echo "shader_dump_report: $shader_dump_report"
 echo "shader_dump_csv: $shader_dump_csv"
@@ -1069,7 +1131,9 @@ if ((${#semantic_image_compare_cmd[@]})); then
   echo "semantic_image_diff: $semantic_image_diff_output"
 fi
 print_cmd "summary_cmd" "${summary_cmd[@]}"
+print_cmd "index_cache_runtime_cmd" "${index_cache_runtime_cmd[@]}"
 print_cmd "xcode_summary_cmd" "${xcode_summary_cmd[@]}"
+print_cmd "class_proxy_cmd" "${class_proxy_cmd[@]}"
 print_cmd "shader_dump_cmd" "${shader_dump_cmd[@]}"
 if ((${#perf_compare_cmd[@]})); then
   print_cmd "perf_compare_cmd" "${perf_compare_cmd[@]}"
@@ -1108,7 +1172,13 @@ fi
 
 mkdir -p "$analysis_dir"
 run_cmd "${summary_cmd[@]}"
+run_cmd "${index_cache_runtime_cmd[@]}"
 run_cmd "${xcode_summary_cmd[@]}"
+if [[ -f "$probe_draws_csv" ]]; then
+  run_cmd "${class_proxy_cmd[@]}"
+else
+  echo "warning: missing probe draw CSV; skipping class proxy report: $probe_draws_csv" >&2
+fi
 run_cmd "${shader_dump_cmd[@]}"
 if ((${#perf_compare_cmd[@]})); then
   run_cmd "${perf_compare_cmd[@]}"
@@ -1123,6 +1193,13 @@ fi
 echo "wrote summary: $summary_path"
 echo "wrote encoder csv: $encoders_csv"
 echo "wrote stream csv: $stream_csv"
+echo "wrote probe draw csv: $probe_draws_csv"
+echo "wrote index cache runtime report: $index_cache_runtime_report"
+echo "wrote index cache runtime csv: $index_cache_runtime_csv"
+if [[ -f "$class_proxy_csv" ]]; then
+  echo "wrote class proxy report: $class_proxy_report"
+  echo "wrote class proxy csv: $class_proxy_csv"
+fi
 echo "wrote xcode summary csv: $xcode_summary_csv"
 echo "wrote joined csv: $joined_csv"
 echo "wrote xcode report: $xcode_report"
