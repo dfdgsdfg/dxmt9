@@ -733,6 +733,83 @@ class BuildMiniReplayManifestTests(unittest.TestCase):
                 [11, 12],
             )
 
+    def test_manifest_filters_noncontiguous_encoder_draw_indices(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            shaders = root / "shaders.csv"
+            probes = root / "probe.csv"
+            geometry = root / "geometry"
+            output = root / "manifest.json"
+            geometry.mkdir()
+            write_csv(shaders, [{"seq": 60, "enc": 2}])
+            write_csv(probes, [
+                {
+                    "seq": 60,
+                    "encoder": 2,
+                    "encoder_draw_index": draw,
+                    "draw_ordinal": 42000 + draw,
+                    "primitive_count": 100 + draw,
+                    "vs": "0xaaa",
+                    "ps": "0xbbb",
+                }
+                for draw in [10, 11, 12, 13]
+            ])
+            for draw in [10, 11, 12, 13]:
+                stem = geometry / f"seq60-enc2-draw{42000 + draw}-slot0"
+                stem.with_suffix(".index.bin").write_bytes(bytes([draw, draw + 1]))
+                stem.with_suffix(".stream0.bin").write_bytes(bytes([draw]) * 4)
+                stem.with_suffix(".meta").write_text(
+                    "\n".join([
+                        "seq=60",
+                        "encoder=2",
+                        f"encoder_draw_index={draw}",
+                        f"draw_ordinal={42000 + draw}",
+                        "slot=0",
+                        f"primitive_count={100 + draw}",
+                        "index_count=3",
+                        "index_byte_count=2",
+                        "stream0_byte_count=4",
+                        "index_range_valid=1",
+                        "stream0_range_valid=1",
+                        "wrote_index=1",
+                        "wrote_stream0=1",
+                    ]),
+                    encoding="utf-8",
+                )
+
+            result = subprocess.run(
+                [
+                    sys.executable,
+                    str(SCRIPT),
+                    "--shader-summary",
+                    str(shaders),
+                    "--probe-draws",
+                    str(probes),
+                    "--geometry-dir",
+                    str(geometry),
+                    "--row",
+                    "60/2",
+                    "--encoder-draw-indices",
+                    "10,12",
+                    "--output",
+                    str(output),
+                ],
+                text=True,
+                capture_output=True,
+                check=False,
+            )
+
+            self.assertEqual(result.returncode, 0, result.stderr)
+            manifest = json.loads(output.read_text(encoding="utf-8"))
+            self.assertEqual(manifest["sources"]["encoder_draw_indices_filter"], "10,12")
+            self.assertEqual(manifest["summary"]["draw_count"], 2)
+            self.assertEqual(manifest["summary"]["encoder_draw_min"], 10)
+            self.assertEqual(manifest["summary"]["encoder_draw_max"], 12)
+            self.assertEqual(
+                [draw["encoder_draw_index"] for draw in manifest["draws"]],
+                [10, 12],
+            )
+
 
 if __name__ == "__main__":
     unittest.main()

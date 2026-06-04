@@ -713,6 +713,8 @@ void testDrawRunBatchBindingOverrideNormalizesStreamAndIndexState() {
   checkEq(submissions[1].payload.bindingOverrideData.size(),
           sizeof(DrawBindingOverride),
           "non-base draw stores binding override bytes inline");
+  check(drawRunSubmissionStatesCompatibleForBatch(submissions[0], submissions[1]),
+        "external binding override keeps binding/uniform-only changes batch-compatible");
 
   DrawBindingOverride override{};
   std::memcpy(&override, submissions[1].payload.bindingOverrideData.data(),
@@ -731,6 +733,16 @@ void testDrawRunBatchBindingOverrideNormalizesStreamAndIndexState() {
           "binding override captures index buffer handle");
   check(override.indexType == IndexType::UInt32,
         "binding override captures index type");
+
+  auto textureChanged = submissions[1];
+  textureChanged.state.hot.textures[0] = Handle{0x6100u};
+  textureChanged.state.hot.textureMask = 0x1u;
+  textureChanged.state.hot.key.textures[0] =
+      textureChanged.state.hot.textures[0];
+  textureChanged.state.hot.key.textureMask =
+      textureChanged.state.hot.textureMask;
+  check(!drawRunSubmissionStatesCompatibleForBatch(submissions[0], textureChanged),
+        "external binding override does not hide texture binding changes");
 
   ChunkSlot slot{};
   slot.appendDrawRunBatch(

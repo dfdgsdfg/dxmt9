@@ -1254,6 +1254,9 @@ struct ActiveEncoderBreakdown {
                                  u32 startIndex,
                                  core::IndexType indexType,
                                  u64 indexBufferHandle,
+                                 const char* effectiveIndexSource,
+                                 u64 effectiveIndexOffset,
+                                 u64 effectiveIndexBytes,
                                  u64 stream0Handle,
                                  u64 stream0Offset,
                                  u64 stream0Stride,
@@ -1367,7 +1370,9 @@ struct ActiveEncoderBreakdown {
         "original_scissor_l=%d original_scissor_t=%d "
         "original_scissor_r=%d original_scissor_b=%d "
         "cull=%u fill=%u base_vertex=%d start_index=%u index_type=%u "
-        "index_buffer=0x%llx stream0_handle=0x%llx stream0_offset=%llu "
+        "index_buffer=0x%llx effective_index_source=%s "
+        "effective_index_offset=%llu effective_index_bytes=%llu "
+        "stream0_handle=0x%llx stream0_offset=%llu "
         "stream0_stride=%llu pso=0x%llx shader_variant=0x%llx "
         "vs=0x%llx ps=0x%llx vsout=0x%x]\n",
         static_cast<unsigned long long>(stats.seqId),
@@ -1475,6 +1480,9 @@ struct ActiveEncoderBreakdown {
         startIndex,
         static_cast<unsigned>(indexType),
         static_cast<unsigned long long>(indexBufferHandle),
+        effectiveIndexSource ? effectiveIndexSource : "",
+        static_cast<unsigned long long>(effectiveIndexOffset),
+        static_cast<unsigned long long>(effectiveIndexBytes),
         static_cast<unsigned long long>(stream0Handle),
         static_cast<unsigned long long>(stream0Offset),
         static_cast<unsigned long long>(stream0Stride),
@@ -1521,13 +1529,18 @@ struct ActiveEncoderBreakdown {
     stats.indexedCacheOptCandidateMiss64 += candidate.cacheMiss64;
   }
 
-  void recordReorderedIndexCacheLookup(bool hit, bool created, u64 createdBytes) {
+  void recordReorderedIndexCacheLookup(bool hit,
+                                       bool rejected,
+                                       bool created,
+                                       u64 createdBytes) {
     if (!enabled) {
       return;
     }
     ++stats.reorderedIndexCacheLookups;
     if (hit) {
       ++stats.reorderedIndexCacheHits;
+    } else if (rejected) {
+      ++stats.reorderedIndexCacheRejectedHits;
     } else {
       ++stats.reorderedIndexCacheMisses;
     }
@@ -2944,7 +2957,9 @@ u64 shaderVariantHashForDraw(core::FlatDrawStateView drawState,
   return hash;
 }
 
-u64 shaderSourceAttributionKeyForDraw(core::FlatDrawStateView drawState) {
+u64 shaderSourceAttributionKeyForDraw(
+    core::FlatDrawStateView drawState,
+    std::optional<bool> forceTextureWhiteOverride = std::nullopt) {
   if (!drawState.hot || !drawState.hasShaderContext()) {
     return 0;
   }
@@ -2969,11 +2984,16 @@ u64 shaderSourceAttributionKeyForDraw(core::FlatDrawStateView drawState) {
   for (const auto samplerHash : hot.key.samplerStateHashes) {
     hash = mix(hash, samplerHash);
   }
+  if (forceTextureWhiteOverride.has_value()) {
+    hash = mix(hash, 0x58f71e9d1a3b4c25ull);
+    hash = mix(hash, static_cast<u64>(*forceTextureWhiteOverride));
+  }
   return hash;
 }
 
 u32 vsOutLayoutKeyForDraw(core::FlatDrawStateView drawState,
-                          bool tileFfpBaseColor) {
+                          bool tileFfpBaseColor,
+                          std::optional<bool> forceTextureWhiteOverride = std::nullopt) {
   if (!drawState.hot || !drawState.hasShaderContext()) {
     return 0;
   }
@@ -2982,7 +3002,8 @@ u32 vsOutLayoutKeyForDraw(core::FlatDrawStateView drawState,
   context.stripFogAlphaTestForTileBase = tileFfpBaseColor;
   context.stripAlphaTestForDebug = debug::disableAlphaTest();
   context.stripFogForDebug = debug::disableFog();
-  context.forceTextureWhiteForDebug = debug::forceTextureWhite();
+  context.forceTextureWhiteForDebug =
+      forceTextureWhiteOverride.value_or(debug::forceTextureWhite());
   try {
     context.vsOutLayout = drawshader::resolveVSOutLayoutForShaderPair(context);
     return shaders::vsoutLayoutKey(context.vsOutLayout);
@@ -3009,7 +3030,8 @@ ShaderSourceHashes shaderSourceHashesForDraw(core::FlatDrawStateView drawState,
                                              bool argbufHybridMode,
                                              bool argbufResourceArray,
                                              bool samplerLodBias,
-                                             u32 x8AlphaOneTextureMask) {
+                                             u32 x8AlphaOneTextureMask,
+                                             std::optional<bool> forceTextureWhiteOverride = std::nullopt) {
   ShaderSourceHashes hashes{};
   if (!shaderSourceHashAttributionEnabled() || !drawState.hot ||
       !drawState.hasShaderContext()) {
@@ -3020,7 +3042,8 @@ ShaderSourceHashes shaderSourceHashesForDraw(core::FlatDrawStateView drawState,
   context.stripFogAlphaTestForTileBase = tileFfpBaseColor;
   context.stripAlphaTestForDebug = debug::disableAlphaTest();
   context.stripFogForDebug = debug::disableFog();
-  context.forceTextureWhiteForDebug = debug::forceTextureWhite();
+  context.forceTextureWhiteForDebug =
+      forceTextureWhiteOverride.value_or(debug::forceTextureWhite());
   context.argbufHybridMode = argbufHybridMode;
   context.argbufResourceArray = argbufHybridMode && argbufResourceArray;
   context.samplerLodBias = samplerLodBias;
@@ -3050,12 +3073,14 @@ void recordPsoAttributionForDraw(ActiveEncoderBreakdown* encoderBreakdown,
                                  core::PsoHandle renderPsoHandle,
                                  bool tileFfpMode,
                                  bool argbufHybridMode,
-                                 bool argbufResourceArray) {
+                                 bool argbufResourceArray,
+                                 std::optional<bool> forceTextureWhiteOverride = std::nullopt) {
   if (!encoderBreakdown || !encoderBreakdown->enabled) {
     return;
   }
   const auto variantHash = shaderVariantHashForDraw(drawState, &pool);
-  const auto sourceKey = shaderSourceAttributionKeyForDraw(drawState);
+  const auto sourceKey =
+      shaderSourceAttributionKeyForDraw(drawState, forceTextureWhiteOverride);
   u64 vertexShaderHash = 0;
   u64 pixelShaderHash = 0;
   if (drawState.hasShaderContext()) {
@@ -3066,7 +3091,8 @@ void recordPsoAttributionForDraw(ActiveEncoderBreakdown* encoderBreakdown,
   u32 vsOutLayoutKey = 0;
   if (!encoderBreakdown->findCachedVsOutLayout(sourceKey, tileFfpMode,
                                                vsOutLayoutKey)) {
-    vsOutLayoutKey = vsOutLayoutKeyForDraw(drawState, tileFfpMode);
+    vsOutLayoutKey =
+        vsOutLayoutKeyForDraw(drawState, tileFfpMode, forceTextureWhiteOverride);
     encoderBreakdown->storeCachedVsOutLayout(sourceKey, tileFfpMode,
                                              vsOutLayoutKey);
   }
@@ -3081,7 +3107,7 @@ void recordPsoAttributionForDraw(ActiveEncoderBreakdown* encoderBreakdown,
           vertexShaderSourceHash, pixelShaderSourceHash)) {
     const auto sourceHashes = shaderSourceHashesForDraw(
         drawState, tileFfpMode, argbufHybridMode, argbufResourceArray,
-        samplerLodBias, x8AlphaOneTextureMask);
+        samplerLodBias, x8AlphaOneTextureMask, forceTextureWhiteOverride);
     vertexShaderSourceHash = sourceHashes.vertex;
     pixelShaderSourceHash = sourceHashes.pixel;
     encoderBreakdown->storeCachedShaderSourceHashes(
@@ -4163,16 +4189,28 @@ bool splitLargeIndexedDrawRowMatches(const ActiveEncoderBreakdown* encoderBreakd
                                        debug::splitLargeIndexedDrawRows());
 }
 
+bool forceExpandIndexedProbeRowMatches(const ActiveEncoderBreakdown* encoderBreakdown) {
+  return renderEncoderSelectionMatches(encoderBreakdown,
+                                       debug::probeForceExpandIndexedRow(),
+                                       debug::probeForceExpandIndexedRows());
+}
+
 bool indexedTriangleEncoderDrawRangeMatches(
     const ActiveEncoderBreakdown* encoderBreakdown) {
   const auto range = debug::probeIndexedTriangleEncoderDrawRange();
-  if (!debug::drawOrdinalRangeEnabled(range)) {
+  const auto excludeList = debug::probeIndexedTriangleEncoderDrawExcludeList();
+  if (!debug::drawOrdinalRangeEnabled(range) && !excludeList.enabled) {
     return true;
   }
   if (!encoderBreakdown) {
     return false;
   }
-  return !debug::shouldSkipDrawOrdinal(encoderBreakdown->stats.drawCalls, range);
+  const auto encoderDrawIndex = encoderBreakdown->stats.drawCalls;
+  if (debug::drawOrdinalRangeEnabled(range) &&
+      debug::shouldSkipDrawOrdinal(encoderDrawIndex, range)) {
+    return false;
+  }
+  return !debug::drawOrdinalListContains(excludeList, encoderDrawIndex);
 }
 
 bool scissorRectProbeRowMatches(const ActiveEncoderBreakdown* encoderBreakdown) {
@@ -4185,6 +4223,12 @@ bool forceCullModeProbeRowMatches(const ActiveEncoderBreakdown* encoderBreakdown
   return renderEncoderSelectionMatches(encoderBreakdown,
                                        debug::probeForceCullModeRow(),
                                        debug::probeForceCullModeRows());
+}
+
+bool forceTextureWhiteProbeRowMatches(const ActiveEncoderBreakdown* encoderBreakdown) {
+  return renderEncoderSelectionMatches(encoderBreakdown,
+                                       debug::probeForceTextureWhiteRow(),
+                                       debug::probeForceTextureWhiteRows());
 }
 
 bool disableAlphaBlendProbeRowMatches(const ActiveEncoderBreakdown* encoderBreakdown) {
@@ -4304,6 +4348,8 @@ bool indexedTriangleClassMatches(
       return depthEnabled && !depthWrite;
     case debug::IndexedTriangleClassFilter::AlphaBlend:
       return alphaBlendEnabled;
+    case debug::IndexedTriangleClassFilter::NoAlphaBlend:
+      return !alphaBlendEnabled;
     case debug::IndexedTriangleClassFilter::ScreenBlend:
       return indexedTriangleBlendEquationMatches(renderStates,
                                                  core::BlendFactor::InvDestColor,
@@ -4382,6 +4428,46 @@ bool forceCullModeProbeClassMatches(u32 primitiveCount,
                                      viewport,
                                      fillMode) &&
          indexedTriangleClassMatches(debug::probeForceCullModeClassFilters(),
+                                     primitiveCount,
+                                     textureMask,
+                                     renderStates,
+                                     viewport,
+                                     fillMode);
+}
+
+bool forceTextureWhiteProbeClassMatches(
+    u32 primitiveCount,
+    u32 textureMask,
+    const core::FlatStateSet<core::kMaxStateSlots>& renderStates,
+    const core::ViewportScissor& viewport,
+    WMTTriangleFillMode fillMode) {
+  return indexedTriangleClassMatches(debug::probeForceTextureWhiteClassFilter(),
+                                     primitiveCount,
+                                     textureMask,
+                                     renderStates,
+                                     viewport,
+                                     fillMode) &&
+         indexedTriangleClassMatches(debug::probeForceTextureWhiteClassFilters(),
+                                     primitiveCount,
+                                     textureMask,
+                                     renderStates,
+                                     viewport,
+                                     fillMode);
+}
+
+bool forceExpandIndexedProbeClassMatches(
+    u32 primitiveCount,
+    u32 textureMask,
+    const core::FlatStateSet<core::kMaxStateSlots>& renderStates,
+    const core::ViewportScissor& viewport,
+    WMTTriangleFillMode fillMode) {
+  return indexedTriangleClassMatches(debug::probeForceExpandIndexedClassFilter(),
+                                     primitiveCount,
+                                     textureMask,
+                                     renderStates,
+                                     viewport,
+                                     fillMode) &&
+         indexedTriangleClassMatches(debug::probeForceExpandIndexedClassFilters(),
                                      primitiveCount,
                                      textureMask,
                                      renderStates,
@@ -5269,6 +5355,7 @@ bool encodeDraw(EncodeContext& ctx,
                  bool argbufHybridMode,
                  bool argbufResourceArray,
                  bool reopenArgbufHybrid,
+                 bool bindingOverridePrefetchedPsoCompatible,
                  core::PsoHandle renderPsoHandle,
                  core::PsoHandle tilePsoHandle,
                  core::DepthStencilHandle depthStencilHandle,
@@ -5376,13 +5463,6 @@ bool encodeDraw(EncodeContext& ctx,
   }
   const bool depthStateProbeRequested =
       debug::probeDisableDepthWrite() || debug::probeDepthFuncAlways();
-  const bool effectiveSkipBaseStateBind =
-      skipBaseStateBind && !depthStateProbeRequested;
-  if (effectiveSkipBaseStateBind) {
-    recordPsoAttributionForDraw(encoderBreakdown, drawState, ctx.pool, renderPsoHandle,
-                                tileFfpMode, argbufHybridMode,
-                                argbufResourceArray);
-  }
   std::optional<dxmt9::ffp::FixedFunctionVertexLayout> ffLayout;
   bool fixedFunctionPath = false;
   {
@@ -5426,6 +5506,40 @@ bool encodeDraw(EncodeContext& ctx,
                                        hot.renderStates,
                                        hot.viewport,
                                        fillMode);
+  const bool forceTextureWhiteProbeApplied =
+      debug::probeForceTextureWhite() &&
+      indexedTriangleDraw &&
+      forceTextureWhiteProbeRowMatches(encoderBreakdown) &&
+      forceTextureWhiteProbeClassMatches(primitiveCount,
+                                         hot.textureMask,
+                                         hot.renderStates,
+                                         hot.viewport,
+                                         fillMode);
+  const std::optional<bool> forceTextureWhiteOverride =
+      forceTextureWhiteProbeApplied ? std::optional<bool>{true} : std::nullopt;
+  const bool hasPerDrawBindingOverride =
+      paramOverride && !paramOverride->bindingOverrideRange.empty();
+  const bool psoPrefetchBypassProbe =
+      disableAlphaBlendProbeApplied || forceTextureWhiteProbeApplied;
+  const bool bypassPrefetchedPsoHandle =
+      psoPrefetchBypassProbe ||
+      (hasPerDrawBindingOverride && !bindingOverridePrefetchedPsoCompatible);
+  const bool effectiveSkipBaseStateBind =
+      skipBaseStateBind && !depthStateProbeRequested && !forceTextureWhiteProbeApplied;
+  if (!effectiveSkipBaseStateBind && !suppressBaseStateLookup(ctx)) {
+    const bool psoPrefetchHandleAvailable = renderPsoHandle.valid();
+    perf::countEncodeDrawPsoPrefetch(
+        psoPrefetchHandleAvailable,
+        psoPrefetchHandleAvailable && !bypassPrefetchedPsoHandle,
+        hasPerDrawBindingOverride,
+        bindingOverridePrefetchedPsoCompatible,
+        psoPrefetchBypassProbe);
+  }
+  if (effectiveSkipBaseStateBind) {
+    recordPsoAttributionForDraw(encoderBreakdown, drawState, ctx.pool, renderPsoHandle,
+                                tileFfpMode, argbufHybridMode,
+                                argbufResourceArray);
+  }
   if (encoderBreakdown) {
     if (disableAlphaBlendProbeApplied) {
       ++encoderBreakdown->stats.probeDisableAlphaBlendDraws;
@@ -5435,6 +5549,9 @@ bool encodeDraw(EncodeContext& ctx,
     }
     if (depthFuncAlwaysProbeApplied) {
       ++encoderBreakdown->stats.probeDepthFuncAlwaysDraws;
+    }
+    if (forceTextureWhiteProbeApplied) {
+      ++encoderBreakdown->stats.probeForceTextureWhiteDraws;
     }
   }
   core::FlatDrawStateRecord alphaBlendProbeHot{};
@@ -5486,23 +5603,25 @@ bool encodeDraw(EncodeContext& ctx,
       // setRenderPipelineState is the base-colour render PSO, NOT the tile
       // PSO. The tile PSO is fetched + dispatched after drawPrimitives below.
       pipelineRef =
-          renderPsoHandle.valid() && !disableAlphaBlendProbeApplied
+          renderPsoHandle.valid() && !bypassPrefetchedPsoHandle
               ? ctx.cache.drawPipelineForHandle(renderPsoHandle,
                                                 renderPsoLookup).get()
               : ctx.cache.getOrBuildTileFfpBaseColorPipelineForState(
                     ctx.device, ctx.limits, ctx.pool, pipelineDrawState,
-                    ctx.shaderArchive, ctx.shaderArchivePath).get();
+                    ctx.shaderArchive, ctx.shaderArchivePath,
+                    forceTextureWhiteOverride).get();
       pipeline = WMT::RenderPipelineState{pipelineRef.handle};
     } else {
       pipelineRef =
-          renderPsoHandle.valid() && !disableAlphaBlendProbeApplied
+          renderPsoHandle.valid() && !bypassPrefetchedPsoHandle
               ? ctx.cache.drawPipelineForHandle(renderPsoHandle,
                                                 renderPsoLookup).get()
               : ctx.cache.getOrBuildDrawPipelineForState(
                     ctx.device, ctx.limits, ctx.pool, pipelineDrawState,
                     ctx.shaderArchive, ctx.shaderArchivePath, tileFfpMode,
                     argbufHybridMode, argbufResourceArray,
-                    disableAlphaBlendProbeApplied).get();
+                    disableAlphaBlendProbeApplied,
+                    forceTextureWhiteOverride).get();
       pipeline = WMT::RenderPipelineState{pipelineRef.handle};
     }
     if (!pipeline) {
@@ -5608,7 +5727,8 @@ bool encodeDraw(EncodeContext& ctx,
       if (recordPsoBreakdown) {
         recordPsoAttributionForDraw(encoderBreakdown, drawState, ctx.pool, renderPsoHandle,
                                     tileFfpMode, argbufHybridMode,
-                                    argbufResourceArray);
+                                    argbufResourceArray,
+                                    forceTextureWhiteOverride);
         vsOutLayoutKey = encoderBreakdown->stats.vsOutLayoutLast;
       }
       if (variantHash != 0 && !suppressRecordedMetalCalls(ctx)) {
@@ -5695,7 +5815,7 @@ bool encodeDraw(EncodeContext& ctx,
         .role = "tile-base-render-pso",
     };
     tileFfpPsoRef =
-        tilePsoHandle.valid() && !disableAlphaBlendProbeApplied
+        tilePsoHandle.valid() && !bypassPrefetchedPsoHandle
             ? ctx.cache.drawPipelineForHandle(tilePsoHandle,
                                               tileLookup).get()
             : ctx.cache.getOrBuildDrawPipelineForState(
@@ -5703,15 +5823,17 @@ bool encodeDraw(EncodeContext& ctx,
                   ctx.shaderArchive, ctx.shaderArchivePath,
                   /*tileFfpMode=*/true, /*argbufHybridMode=*/false,
                   /*argbufResourceArray=*/false,
-                  disableAlphaBlendProbeApplied).get();
+                  disableAlphaBlendProbeApplied,
+                  forceTextureWhiteOverride).get();
     tileFfpPso = WMT::RenderPipelineState{tileFfpPsoRef.handle};
     tileFfpBasePsoRef =
-        renderPsoHandle.valid() && !disableAlphaBlendProbeApplied
+        renderPsoHandle.valid() && !bypassPrefetchedPsoHandle
             ? ctx.cache.drawPipelineForHandle(renderPsoHandle,
                                               tileBaseLookup).get()
             : ctx.cache.getOrBuildTileFfpBaseColorPipelineForState(
                   ctx.device, ctx.limits, ctx.pool, pipelineDrawState,
-                  ctx.shaderArchive, ctx.shaderArchivePath).get();
+                  ctx.shaderArchive, ctx.shaderArchivePath,
+                  forceTextureWhiteOverride).get();
     tileFfpBasePso = WMT::RenderPipelineState{tileFfpBasePsoRef.handle};
   }
   // Called immediately after a successful geometry draw (every `return true`
@@ -7010,8 +7132,19 @@ bool encodeDraw(EncodeContext& ctx,
                                     fixedFunctionPath,
                                     ffLayout.has_value(),
                                     texture0R32FCube);
+    const bool probeForceExpandIndexedApplied =
+        debug::probeForceExpandIndexed() &&
+        indexedTriangleDraw &&
+        forceExpandIndexedProbeRowMatches(encoderBreakdown) &&
+        indexedTriangleEncoderDrawRangeMatches(encoderBreakdown) &&
+        forceExpandIndexedProbeClassMatches(primitiveCount,
+                                            hot.textureMask,
+                                            hot.renderStates,
+                                            effectiveViewport,
+                                            fillMode);
     const bool forceExpandIndexed =
         debug::forceExpandIndexed() ||
+        probeForceExpandIndexedApplied ||
         (autoExpandIndexed && !debug::disableAutoExpandIndexed());
     if (traceEncode) {
       std::ostringstream out;
@@ -7019,6 +7152,7 @@ bool encodeDraw(EncodeContext& ctx,
           << " ordinal=" << static_cast<unsigned long long>(drawOrdinal)
           << " auto=" << (autoExpandIndexed ? 1 : 0)
           << " env=" << (debug::forceExpandIndexed() ? 1 : 0)
+          << " probe=" << (probeForceExpandIndexedApplied ? 1 : 0)
           << " disabled=" << (debug::disableAutoExpandIndexed() ? 1 : 0)
           << " active=" << (forceExpandIndexed ? 1 : 0)
           << " ff=" << (fixedFunctionPath ? 1 : 0)
@@ -7332,6 +7466,9 @@ bool encodeDraw(EncodeContext& ctx,
       }
       const std::span<const u8> originalIndexBytesForReuse = indexBytesForReuse;
       const u32 originalIndexReuseStartIndex = indexReuseStartIndex;
+      const char* effectiveIndexSource = "original";
+      u64 effectiveIndexOffset = indexBufferOffset;
+      u64 effectiveIndexBytes = indexBytesForReuse.size();
       const u64 reverseStream0SpanMin =
           debug::probeReverseIndexedTrianglesStream0SpanMin();
       const u64 optimizeStream0SpanMin =
@@ -7339,24 +7476,161 @@ bool encodeDraw(EncodeContext& ctx,
       splitPrimitiveLimit = debug::splitLargeIndexedDrawPrimitiveLimit();
       splitStream0SpanLimit = debug::splitLargeIndexedDrawStream0SpanMax();
       splitMaxChunksPerDraw = debug::splitLargeIndexedDrawMaxChunksPerDraw();
+      const bool triangleList =
+          pv.primitiveType == core::PrimitiveType::TriangleList;
+      const bool encoderBreakdownActive =
+          encoderBreakdown && encoderBreakdown->enabled;
+      // When a seq filter is active, keep expensive indexed diagnostics inside
+      // the selected frame. Otherwise measurement can slow 3DMark05 enough to
+      // change which semantic workload a frame/encoder row represents.
+      const bool indexedDiagnosticSeqScopeActive =
+          perf::encoderBreakdownSeqFilter() == 0u || encoderBreakdownActive;
+      const bool reverseAllIndexedTriangles = debug::probeReverseIndexedTriangles();
+      const bool reverseOpaqueIndexedTriangles =
+          debug::probeReverseOpaqueIndexedTriangles();
+      const bool reverseNonOpaqueIndexedTriangles =
+          debug::probeReverseNonOpaqueIndexedTriangles();
+      const bool sortIndexedTrianglesByMinIndex =
+          debug::probeSortIndexedTrianglesByMinIndex();
+      const bool optimizeIndexedTrianglesVertexCache =
+          debug::probeOptimizeIndexedTrianglesVertexCache();
       const bool applyIndexCacheOptCandidateProbe =
           debug::probeApplyIndexCacheOptCandidate() &&
-          pv.primitiveType == core::PrimitiveType::TriangleList;
-      const bool measureCacheOptCandidate =
-          (debug::measureIndexCacheOptCandidate() ||
+          triangleList;
+      const bool optimizeOpaqueDepthIndexCache =
+          debug::optimizeOpaqueDepthIndexCache() &&
+          triangleList;
+      const bool optimizeScreenBlendIndexCache =
+          debug::optimizeScreenBlendIndexCache() &&
+          triangleList;
+      const bool reverseTriangleProbeRequested =
+          (reverseAllIndexedTriangles || reverseOpaqueIndexedTriangles ||
+           reverseNonOpaqueIndexedTriangles || sortIndexedTrianglesByMinIndex ||
+           optimizeIndexedTrianglesVertexCache ||
            applyIndexCacheOptCandidateProbe) &&
-          pv.primitiveType == core::PrimitiveType::TriangleList;
+          triangleList;
+      const bool reverseTriangleProbeScopeMatches =
+          reverseTriangleProbeRequested &&
+          indexedDiagnosticSeqScopeActive &&
+          reverseIndexedTriangleRowMatches(encoderBreakdown) &&
+          indexedTriangleEncoderDrawRangeMatches(encoderBreakdown);
+      const bool optimizeScreenBlendIndexOrderRequested =
+          debug::optimizeScreenBlendIndexOrder() &&
+          triangleList;
+      const bool optimizeScreenBlendIndexOrderScopeMatches =
+          optimizeScreenBlendIndexOrderRequested &&
+          indexedDiagnosticSeqScopeActive &&
+          screenBlendIndexOrderRowMatches(encoderBreakdown) &&
+          indexedTriangleEncoderDrawRangeMatches(encoderBreakdown);
+      const bool splitConsidered =
+          (splitPrimitiveLimit != 0u || splitStream0SpanLimit != 0u) &&
+          triangleList &&
+          indexedDiagnosticSeqScopeActive &&
+          splitLargeIndexedDrawRowMatches(encoderBreakdown) &&
+          indexedTriangleEncoderDrawRangeMatches(encoderBreakdown);
       const bool dumpIndexedGeometryRequested =
           !debug::indexedGeometryDumpDir().empty() &&
           debug::indexedGeometryDumpMaxDraws() != 0u &&
-          pv.primitiveType == core::PrimitiveType::TriangleList;
+          triangleList;
+      const bool dumpIndexedGeometryScopeMatches =
+          dumpIndexedGeometryRequested &&
+          indexedDiagnosticSeqScopeActive &&
+          reverseIndexedTriangleRowMatches(encoderBreakdown) &&
+          indexedTriangleEncoderDrawRangeMatches(encoderBreakdown) &&
+          indexedGeometryDumpShaderMatches(drawState);
+      const bool opaqueDepthWritingEligible =
+          isOpaqueDepthWritingReorderProbeEligible(hot.renderStates, fillMode);
+      const bool applyProbeCacheOptCandidateSafetyEligible =
+          opaqueDepthWritingEligible ||
+          debug::probeApplyIndexCacheOptCandidateUnsafeNonOpaque();
+      const bool optimizeOpaqueDepthIndexCacheScopeMatches =
+          optimizeOpaqueDepthIndexCache &&
+          opaqueDepthWritingEligible;
+      const bool optimizeScreenBlendIndexCacheScopeMatches =
+          optimizeScreenBlendIndexCache &&
+          shouldOptimizeScreenBlendIndexOrder(hot.renderStates);
+      const bool applyProbeCacheOptCandidateScopeMatches =
+          applyIndexCacheOptCandidateProbe &&
+          reverseTriangleProbeScopeMatches &&
+          applyProbeCacheOptCandidateSafetyEligible;
+      const bool stableOriginalIndexBufferForCandidate =
+          pv.userIndexData.empty() && indexBufferRecord &&
+          indexBufferRecord->buffer;
+      const bool reverseTriangleClassEligibleNoSpan =
+          indexedTriangleClassMatches(
+              debug::probeReverseIndexedTrianglesClassFilter(),
+              primitiveCount,
+              hot.textureMask,
+              hot.renderStates,
+              effectiveViewport,
+              fillMode) &&
+          indexedTriangleClassMatches(
+              debug::probeReverseIndexedTrianglesClassFilters(),
+              primitiveCount,
+              hot.textureMask,
+              hot.renderStates,
+              effectiveViewport,
+              fillMode);
+      const bool applyCacheOptCandidatePreEligible =
+          (applyProbeCacheOptCandidateScopeMatches ||
+           optimizeOpaqueDepthIndexCacheScopeMatches ||
+           optimizeScreenBlendIndexCacheScopeMatches) &&
+          stableOriginalIndexBufferForCandidate &&
+          reverseTriangleClassEligibleNoSpan;
+      resources::ReorderedIndexBufferCacheKey cacheOptReorderKey{};
+      if (stableOriginalIndexBufferForCandidate) {
+        cacheOptReorderKey.startIndex = originalIndexReuseStartIndex;
+        cacheOptReorderKey.indexCount = vertexCount;
+        cacheOptReorderKey.indexType = pv.indexType;
+        cacheOptReorderKey.order = resources::ReorderedIndexOrder::VertexCacheLru32;
+        cacheOptReorderKey.cacheSize = 32u;
+      }
+      resources::ReorderedIndexBufferLookup cacheOptPrelookup{};
+      const bool cacheOptPrelookupEligible =
+          (optimizeOpaqueDepthIndexCacheScopeMatches ||
+           optimizeScreenBlendIndexCacheScopeMatches) &&
+          stableOriginalIndexBufferForCandidate &&
+          reverseTriangleClassEligibleNoSpan;
+      if (cacheOptPrelookupEligible) {
+        cacheOptPrelookup = ctx.queue.findReorderedIndexBuffer(
+            hot.indexBuffer,
+            cacheOptReorderKey,
+            seqId);
+      }
+      const bool cacheOptPrelookupPositive =
+          cacheOptPrelookup.hit && cacheOptPrelookup.buffer;
+      const bool cacheOptPrelookupRejected =
+          cacheOptPrelookup.hit && cacheOptPrelookup.rejected;
+      if (cacheOptPrelookupEligible && encoderBreakdown && cacheOptPrelookup.hit) {
+        encoderBreakdown->recordReorderedIndexCacheLookup(
+            cacheOptPrelookupPositive,
+            cacheOptPrelookupRejected,
+            false,
+            0u);
+      }
+      const bool explicitMeasureCacheOptCandidate =
+          debug::measureIndexCacheOptCandidate() && encoderBreakdownActive;
+      const bool measureProductionCacheOptPrelookup =
+          cacheOptPrelookupPositive &&
+          encoderBreakdownActive &&
+          perf::encoderBreakdownSeqFilter() != 0u;
+      const bool measureCacheOptCandidate =
+          triangleList &&
+          (explicitMeasureCacheOptCandidate ||
+           measureProductionCacheOptPrelookup ||
+           (applyCacheOptCandidatePreEligible &&
+            !cacheOptPrelookupPositive &&
+            !cacheOptPrelookupRejected));
       const bool measureProbeIndexLocality =
-          debug::measureIndexReuse() || reverseStream0SpanMin != 0u ||
-          optimizeStream0SpanMin != 0u || splitStream0SpanLimit != 0u ||
-          dumpIndexedGeometryRequested || measureCacheOptCandidate;
+          (debug::measureIndexReuse() && encoderBreakdownActive) ||
+          (reverseTriangleProbeScopeMatches && reverseStream0SpanMin != 0u) ||
+          (optimizeScreenBlendIndexOrderScopeMatches && optimizeStream0SpanMin != 0u) ||
+          (splitConsidered && splitStream0SpanLimit != 0u) ||
+          dumpIndexedGeometryScopeMatches ||
+          measureCacheOptCandidate;
       const u64 stream0StrideForProbe =
-          encoderBreakdown ? encoderBreakdown->stats.streams[0].lastStride
-                           : static_cast<u64>(hot.streamStrides[0]);
+          encoderBreakdownActive ? encoderBreakdown->stats.streams[0].lastStride
+                                 : static_cast<u64>(hot.streamStrides[0]);
       const IndexReuseMeasure originalIndexReuseForProbe =
           measureProbeIndexLocality
               ? measureIndexReuseForDraw(originalIndexBytesForReuse,
@@ -7384,16 +7658,38 @@ bool encodeDraw(EncodeContext& ctx,
                                        0,
                                        vertexCount);
         }
+        u32 cacheOptMinGainPct =
+            debug::probeApplyIndexCacheOptCandidateMinGainPct();
+        if (optimizeOpaqueDepthIndexCacheScopeMatches) {
+          cacheOptMinGainPct =
+              debug::optimizeOpaqueDepthIndexCacheMinGainPct();
+        } else if (optimizeScreenBlendIndexCacheScopeMatches) {
+          cacheOptMinGainPct =
+              debug::optimizeScreenBlendIndexCacheMinGainPct();
+        }
         cacheOptCandidateGatePassed =
             indexCacheCandidateMeetsGainGate(
                 originalIndexReuseForProbe,
                 cacheOptCandidateReuse,
-                debug::probeApplyIndexCacheOptCandidateMinGainPct());
-        if (encoderBreakdown) {
+                cacheOptMinGainPct);
+        if (encoderBreakdownActive) {
           encoderBreakdown->recordIndexedCacheOptCandidate(
               originalIndexReuseForProbe,
               cacheOptCandidateReuse,
               static_cast<u64>(cacheOptCandidateIndexBytes.size()));
+        }
+        if ((optimizeOpaqueDepthIndexCacheScopeMatches ||
+             optimizeScreenBlendIndexCacheScopeMatches) &&
+            applyCacheOptCandidatePreEligible &&
+            !explicitMeasureCacheOptCandidate &&
+            !cacheOptCandidateGatePassed) {
+          ctx.queue.rememberRejectedReorderedIndexBuffer(
+              hot.indexBuffer,
+              cacheOptReorderKey,
+              seqId);
+          if (encoderBreakdown) {
+            encoderBreakdown->recordReorderedIndexCacheLookup(false, false, false, 0u);
+          }
         }
       }
       auto stream0SpanFilterMatches = [&](u64 minSpan) {
@@ -7403,35 +7699,12 @@ bool encodeDraw(EncodeContext& ctx,
         return stream0ByteSpanForIndexMeasure(originalIndexReuseForProbe,
                                               stream0StrideForProbe) >= minSpan;
       };
-      const bool reverseAllIndexedTriangles = debug::probeReverseIndexedTriangles();
-      const bool reverseOpaqueIndexedTriangles =
-          debug::probeReverseOpaqueIndexedTriangles();
-      const bool reverseNonOpaqueIndexedTriangles =
-          debug::probeReverseNonOpaqueIndexedTriangles();
-      const bool sortIndexedTrianglesByMinIndex =
-          debug::probeSortIndexedTrianglesByMinIndex();
-      const bool optimizeIndexedTrianglesVertexCache =
-          debug::probeOptimizeIndexedTrianglesVertexCache();
-      const bool reverseTriangleProbeRequested =
-          (reverseAllIndexedTriangles || reverseOpaqueIndexedTriangles ||
-           reverseNonOpaqueIndexedTriangles || sortIndexedTrianglesByMinIndex ||
-           optimizeIndexedTrianglesVertexCache ||
-           applyIndexCacheOptCandidateProbe) &&
-          pv.primitiveType == core::PrimitiveType::TriangleList;
-      const bool optimizeScreenBlendIndexOrderRequested =
-          debug::optimizeScreenBlendIndexOrder() &&
-          pv.primitiveType == core::PrimitiveType::TriangleList;
       bool probeConsidered = false;
       bool probeEligible = false;
       bool probeApplied = false;
       bool optimizedConsidered = false;
       bool optimizedEligible = false;
       bool optimizedApplied = false;
-      const bool splitConsidered =
-          (splitPrimitiveLimit != 0u || splitStream0SpanLimit != 0u) &&
-          pv.primitiveType == core::PrimitiveType::TriangleList &&
-          splitLargeIndexedDrawRowMatches(encoderBreakdown) &&
-          indexedTriangleEncoderDrawRangeMatches(encoderBreakdown);
       const bool splitEligible =
           splitConsidered &&
           indexedTriangleClassMatches(
@@ -7465,49 +7738,43 @@ bool encodeDraw(EncodeContext& ctx,
             splitMaxChunksPerDraw == 0u ||
             splitChunks.size() <= static_cast<std::size_t>(splitMaxChunksPerDraw);
       }
-      if (reverseTriangleProbeRequested &&
-          reverseIndexedTriangleRowMatches(encoderBreakdown) &&
-          indexedTriangleEncoderDrawRangeMatches(encoderBreakdown)) {
+      const bool triangleOrderMutationScopeMatches =
+          reverseTriangleProbeScopeMatches ||
+          optimizeOpaqueDepthIndexCacheScopeMatches ||
+          optimizeScreenBlendIndexCacheScopeMatches;
+      if (triangleOrderMutationScopeMatches) {
         probeConsidered = true;
-        const bool opaqueDepthWritingEligible =
-            isOpaqueDepthWritingReorderProbeEligible(hot.renderStates, fillMode);
-        const bool stableOriginalIndexBufferForCandidate =
-            pv.userIndexData.empty() && indexBufferRecord &&
-            indexBufferRecord->buffer;
         const bool classEligible =
-            indexedTriangleClassMatches(
-                debug::probeReverseIndexedTrianglesClassFilter(),
-                primitiveCount,
-                hot.textureMask,
-                hot.renderStates,
-                effectiveViewport,
-                fillMode) &&
-            indexedTriangleClassMatches(
-                debug::probeReverseIndexedTrianglesClassFilters(),
-                primitiveCount,
-                hot.textureMask,
-                hot.renderStates,
-                effectiveViewport,
-                fillMode) &&
+            reverseTriangleClassEligibleNoSpan &&
             stream0SpanFilterMatches(reverseStream0SpanMin);
         const bool applyCacheOptCandidateEligible =
-            applyIndexCacheOptCandidateProbe &&
-            opaqueDepthWritingEligible &&
-            stableOriginalIndexBufferForCandidate &&
-            cacheOptCandidateBuilt &&
-            cacheOptCandidateGatePassed;
+            applyCacheOptCandidatePreEligible &&
+            classEligible &&
+            (cacheOptPrelookupPositive ||
+             (cacheOptCandidateBuilt &&
+              cacheOptCandidateGatePassed));
         probeEligible =
             classEligible &&
             (applyCacheOptCandidateEligible ||
-             optimizeIndexedTrianglesVertexCache ||
-             sortIndexedTrianglesByMinIndex || reverseAllIndexedTriangles ||
-             (reverseOpaqueIndexedTriangles && opaqueDepthWritingEligible) ||
-             (reverseNonOpaqueIndexedTriangles && !opaqueDepthWritingEligible));
+             (reverseTriangleProbeScopeMatches &&
+              (optimizeIndexedTrianglesVertexCache ||
+               sortIndexedTrianglesByMinIndex || reverseAllIndexedTriangles ||
+               (reverseOpaqueIndexedTriangles && opaqueDepthWritingEligible) ||
+               (reverseNonOpaqueIndexedTriangles && !opaqueDepthWritingEligible))));
         bool probeIndexBytesBuilt = false;
         if (probeEligible) {
           if (applyCacheOptCandidateEligible) {
-            probeReorderedIndexBytes = cacheOptCandidateIndexBytes;
-            probeIndexBytesBuilt = !probeReorderedIndexBytes.empty();
+            if (cacheOptPrelookupPositive) {
+              indexBuffer = cacheOptPrelookup.buffer;
+              indexBufferOffset = 0;
+              effectiveIndexSource = "cached-reordered-prelookup";
+              effectiveIndexOffset = 0;
+              effectiveIndexBytes = cacheOptPrelookup.byteCount;
+              probeApplied = true;
+            } else {
+              probeReorderedIndexBytes = cacheOptCandidateIndexBytes;
+              probeIndexBytesBuilt = !probeReorderedIndexBytes.empty();
+            }
           } else if (optimizeIndexedTrianglesVertexCache) {
             probeIndexBytesBuilt =
                 buildVertexCacheOptimizedTriangleOrderIndexBytes(
@@ -7535,21 +7802,16 @@ bool encodeDraw(EncodeContext& ctx,
         }
         if (probeIndexBytesBuilt) {
           if (applyCacheOptCandidateEligible) {
-            resources::ReorderedIndexBufferCacheKey reorderKey{};
-            reorderKey.startIndex = originalIndexReuseStartIndex;
-            reorderKey.indexCount = vertexCount;
-            reorderKey.indexType = pv.indexType;
-            reorderKey.order = resources::ReorderedIndexOrder::VertexCacheLru32;
-            reorderKey.cacheSize = 32u;
             const auto cached = ctx.queue.getOrCreateReorderedIndexBuffer(
                 hot.indexBuffer,
-                reorderKey,
+                cacheOptReorderKey,
                 std::span<const u8>(probeReorderedIndexBytes.data(),
                                     probeReorderedIndexBytes.size()),
                 seqId);
             if (encoderBreakdown) {
               encoderBreakdown->recordReorderedIndexCacheLookup(
                   cached.hit,
+                  false,
                   cached.created,
                   cached.created ? cached.byteCount : 0u);
             }
@@ -7560,6 +7822,11 @@ bool encodeDraw(EncodeContext& ctx,
                   std::span<const u8>(probeReorderedIndexBytes.data(),
                                       probeReorderedIndexBytes.size());
               indexReuseStartIndex = 0;
+              effectiveIndexSource =
+                  cached.created ? "cached-reordered-created"
+                                 : "cached-reordered-hit";
+              effectiveIndexOffset = 0;
+              effectiveIndexBytes = cached.byteCount;
               probeApplied = true;
             }
           } else {
@@ -7573,14 +7840,15 @@ bool encodeDraw(EncodeContext& ctx,
                   std::span<const u8>(probeReorderedIndexBytes.data(),
                                       probeReorderedIndexBytes.size());
               indexReuseStartIndex = 0;
+              effectiveIndexSource = "transient-reordered";
+              effectiveIndexOffset = transientIndexBuffer.offset;
+              effectiveIndexBytes = probeReorderedIndexBytes.size();
               probeApplied = true;
             }
           }
         }
       }
-      if (!probeApplied && optimizeScreenBlendIndexOrderRequested &&
-          screenBlendIndexOrderRowMatches(encoderBreakdown) &&
-          indexedTriangleEncoderDrawRangeMatches(encoderBreakdown)) {
+      if (!probeApplied && optimizeScreenBlendIndexOrderScopeMatches) {
         optimizedConsidered = true;
         optimizedEligible =
             shouldOptimizeScreenBlendIndexOrder(hot.renderStates) &&
@@ -7614,18 +7882,19 @@ bool encodeDraw(EncodeContext& ctx,
             indexBytesForReuse = std::span<const u8>(probeReorderedIndexBytes.data(),
                                                      probeReorderedIndexBytes.size());
             indexReuseStartIndex = 0;
+            effectiveIndexSource = "transient-optimized-order";
+            effectiveIndexOffset = transientIndexBuffer.offset;
+            effectiveIndexBytes = probeReorderedIndexBytes.size();
             optimizedApplied = true;
           }
         }
       }
       const bool emitMeasureOnlyIndexedDraw =
           debug::measureIndexReuse() &&
-          pv.primitiveType == core::PrimitiveType::TriangleList;
+          encoderBreakdownActive &&
+          triangleList;
       bool dumpIndexedGeometryEligible = false;
-      if (dumpIndexedGeometryRequested &&
-          reverseIndexedTriangleRowMatches(encoderBreakdown) &&
-          indexedTriangleEncoderDrawRangeMatches(encoderBreakdown) &&
-          indexedGeometryDumpShaderMatches(drawState)) {
+      if (dumpIndexedGeometryScopeMatches) {
         dumpIndexedGeometryEligible =
             indexedTriangleClassMatches(
                 debug::probeReverseIndexedTrianglesClassFilter(),
@@ -7643,68 +7912,91 @@ bool encodeDraw(EncodeContext& ctx,
                 fillMode) &&
             stream0SpanFilterMatches(reverseStream0SpanMin);
       }
-      if (encoderBreakdown &&
+      if (encoderBreakdownActive &&
           (probeConsidered || optimizedConsidered || scissorRectProbeConsidered ||
            splitConsidered || emitMeasureOnlyIndexedDraw ||
            dumpIndexedGeometryEligible)) {
         const auto& stream0 = encoderBreakdown->stats.streams[0];
-        const u64 reorderBytes =
-            (probeApplied || optimizedApplied)
+        const u64 reorderedIndexByteCount =
+            !probeReorderedIndexBytes.empty()
                 ? static_cast<u64>(probeReorderedIndexBytes.size())
-                : 0u;
+                : cacheOptPrelookupPositive ? cacheOptPrelookup.byteCount : 0u;
+        const u64 reorderBytes =
+            (probeApplied || optimizedApplied) ? reorderedIndexByteCount : 0u;
+        const bool productionCacheOptOnly =
+            (optimizeOpaqueDepthIndexCacheScopeMatches ||
+             optimizeScreenBlendIndexCacheScopeMatches) &&
+            !reverseTriangleProbeScopeMatches &&
+            !explicitMeasureCacheOptCandidate &&
+            !splitConsidered &&
+            !emitMeasureOnlyIndexedDraw &&
+            !dumpIndexedGeometryEligible &&
+            !scissorRectProbeConsidered &&
+            !optimizedConsidered;
+        const bool emitIndexedProbeDrawLine =
+            !productionCacheOptOnly || perf::encoderBreakdownSeqFilter() != 0u;
         const auto originalIndexReuse =
             measureProbeIndexLocality ? originalIndexReuseForProbe
                                       : IndexReuseMeasure{.references = vertexCount};
-        const auto effectiveIndexReuse =
-            measureProbeIndexLocality
-                ? measureIndexReuseForDraw(indexBytesForReuse,
-                                           pv.indexType,
-                                           indexReuseStartIndex,
-                                           vertexCount)
-                : IndexReuseMeasure{.references = vertexCount};
-        encoderBreakdown->emitIndexedOrderProbeDraw(
-            probeEligible,
-            probeApplied,
-            optimizedEligible,
-            optimizedApplied,
-            scissorRectProbeEligible,
-            scissorRectProbeApplied,
-            disableAlphaBlendProbeApplied,
-            disableDepthWriteProbeApplied,
-            depthFuncAlwaysProbeApplied,
-            splitEligible,
-            splitWouldApply,
-            static_cast<u32>(std::min<std::size_t>(
-                splitChunks.size(),
-                std::numeric_limits<u32>::max())),
-            splitMaxChunksPerDraw,
-            splitStream0SpanLimit,
-            splitChunkStream0SpanMax,
-            splitEligible ? static_cast<u64>(primitiveCount) : 0u,
-            reorderBytes,
-            originalIndexReuse,
-            effectiveIndexReuse,
-            drawOrdinal,
-            pv.primitiveType,
-            primitiveCount,
-            vertexCount,
-            hot.textureMask,
-            hot.renderStates,
-            effectiveViewport,
-            effectiveCullMode,
-            fillMode,
-            pv.baseVertexIndex,
-            pv.startIndex,
-            pv.indexType,
-            hot.indexBuffer.value,
-            stream0.lastHandle,
-            stream0.lastOffset,
-            stream0.lastStride,
-            hot.viewport.scissor);
+        if (emitIndexedProbeDrawLine) {
+          const bool useCacheOptCandidateReuseForEffective =
+              probeApplied && cacheOptPrelookupPositive && cacheOptCandidateBuilt;
+          const auto effectiveIndexReuse =
+              useCacheOptCandidateReuseForEffective
+                  ? cacheOptCandidateReuse
+                  : measureProbeIndexLocality
+                  ? measureIndexReuseForDraw(indexBytesForReuse,
+                                             pv.indexType,
+                                             indexReuseStartIndex,
+                                             vertexCount)
+                  : IndexReuseMeasure{.references = vertexCount};
+          encoderBreakdown->emitIndexedOrderProbeDraw(
+              probeEligible,
+              probeApplied,
+              optimizedEligible,
+              optimizedApplied,
+              scissorRectProbeEligible,
+              scissorRectProbeApplied,
+              disableAlphaBlendProbeApplied,
+              disableDepthWriteProbeApplied,
+              depthFuncAlwaysProbeApplied,
+              splitEligible,
+              splitWouldApply,
+              static_cast<u32>(std::min<std::size_t>(
+                  splitChunks.size(),
+                  std::numeric_limits<u32>::max())),
+              splitMaxChunksPerDraw,
+              splitStream0SpanLimit,
+              splitChunkStream0SpanMax,
+              splitEligible ? static_cast<u64>(primitiveCount) : 0u,
+              reorderBytes,
+              originalIndexReuse,
+              effectiveIndexReuse,
+              drawOrdinal,
+              pv.primitiveType,
+              primitiveCount,
+              vertexCount,
+              hot.textureMask,
+              hot.renderStates,
+              effectiveViewport,
+              effectiveCullMode,
+              fillMode,
+              pv.baseVertexIndex,
+              pv.startIndex,
+              pv.indexType,
+              hot.indexBuffer.value,
+              effectiveIndexSource,
+              effectiveIndexOffset,
+              effectiveIndexBytes,
+              stream0.lastHandle,
+              stream0.lastOffset,
+              stream0.lastStride,
+              hot.viewport.scissor);
+        }
         if (probeConsidered) {
           encoderBreakdown->recordIndexedOrderProbe(
               probeApplied,
-              probeApplied ? static_cast<u64>(probeReorderedIndexBytes.size()) : 0u);
+              probeApplied ? reorderedIndexByteCount : 0u);
         }
         if (optimizedConsidered) {
           encoderBreakdown->recordIndexedOrderOptimization(
@@ -7828,7 +8120,8 @@ bool encodeDraw(EncodeContext& ctx,
       }
     }
     if (indexBuffer) {
-      if (encoderBreakdown && debug::measureIndexReuse()) {
+      if (encoderBreakdown && encoderBreakdown->enabled &&
+          debug::measureIndexReuse()) {
         encoderBreakdown->recordIndexedVertexReuse(
             measureIndexReuseForDraw(indexBytesForReuse,
                                      pv.indexType,
@@ -7979,8 +8272,9 @@ bool encodeDraw(EncodeContext& ctx,
   return encodeDraw(ctx, commandBuffer, encoder, drawState, seqId,
                     skipBaseStateBind, preUploaded, paramOverride,
                     paramPayloadArena, dirty, tileFfpMode, argbufHybridMode,
-                    argbufResourceArray, reopenArgbufHybrid, core::PsoHandle{},
-                    core::PsoHandle{}, core::DepthStencilHandle{},
+                    argbufResourceArray, reopenArgbufHybrid,
+                    /*bindingOverridePrefetchedPsoCompatible=*/false,
+                    core::PsoHandle{}, core::PsoHandle{}, core::DepthStencilHandle{},
                     textureSamplerShadow, commandIndex, nullptr, nullptr);
 }
 
@@ -8143,6 +8437,7 @@ std::optional<core::metalqueue::QueueSubmissionRecord> encodeChunk(
   [[maybe_unused]] WMT::Buffer activeArgbufStorage{};
   [[maybe_unused]] std::uint64_t activeArgbufOffset = 0;
   std::optional<core::FlatDrawStateKey> activeDrawStateKey;
+  bool activeDrawStateUsesPrefetchedPsoLayout = false;
   std::optional<core::ClearDesc> pendingClear;
   std::size_t pendingClearCommandIndex = std::numeric_limits<std::size_t>::max();
   // R-BACK-15.4: color attachment handles bound on the active render
@@ -8224,6 +8519,7 @@ std::optional<core::metalqueue::QueueSubmissionRecord> encodeChunk(
       activeRenderEncoder = {};
       hasActiveRender = false;
       activeDrawStateKey.reset();
+      activeDrawStateUsesPrefetchedPsoLayout = false;
       textureSamplerShadow.reset();
       assertEncoderLifecycleInvariant();
     }
@@ -8276,6 +8572,7 @@ std::optional<core::metalqueue::QueueSubmissionRecord> encodeChunk(
     activeKey = makeAttachmentKey(*drawState.hot);
     activeWriteHazard = makeAttachmentHazard(*drawState.hot);
     activeDrawStateKey.reset();
+    activeDrawStateUsesPrefetchedPsoLayout = false;
     textureSamplerShadow.reset();
     // R-BACK-13.1 — per-pass tile-shader FFP selector. Eligibility is
     // computed once at encoder open; the choice is sticky for the pass.
@@ -8791,12 +9088,15 @@ std::optional<core::metalqueue::QueueSubmissionRecord> encodeChunk(
           argbufPayloadChanged;
       const bool baseStateCompatible =
           activeDrawStateKey.has_value() &&
+          activeDrawStateUsesPrefetchedPsoLayout &&
           core::drawStateKeysCompatibleForDrawRunBatch(
               *activeDrawStateKey, drawStateView.hot->key);
       const bool overrideNeedsBaseStateBind =
           hasBindingOverride &&
           drawBindingOverrideRequiresBaseStateBind(
               bindingOverride, stateView.shaderLayout);
+      const bool bindingOverridePrefetchedPsoCompatible =
+          hasBindingOverride && !overrideNeedsBaseStateBind;
       const bool skipBaseStateBind =
           baseStateCompatible && !overrideNeedsBaseStateBind;
       if (encodeDraw(ctx, commandBuffer, activeRenderEncoder, drawStateView, slot.seqId,
@@ -8809,6 +9109,7 @@ std::optional<core::metalqueue::QueueSubmissionRecord> encodeChunk(
                      /*argbufHybridMode=*/activePassUsesArgbufHybrid,
                      /*argbufResourceArray=*/activePassUsesArgbufResourceArray,
                      /*reopenArgbufHybrid=*/reopenArgbuf,
+                     /*bindingOverridePrefetchedPsoCompatible=*/bindingOverridePrefetchedPsoCompatible,
                      renderPsoHandle,
                      tilePsoHandle,
                      depthStencilHandle,
@@ -8819,6 +9120,7 @@ std::optional<core::metalqueue::QueueSubmissionRecord> encodeChunk(
                      &activeEncoderBreakdown,
                      &argbufCbufCache)) {
         activeDrawStateKey = drawStateView.hot->key;
+        activeDrawStateUsesPrefetchedPsoLayout = !overrideNeedsBaseStateBind;
         lastArgbufPayloadHash = drawArgbufPayloadHash;
       }
     }

@@ -2321,7 +2321,11 @@ void testFlatDrawStateKey() {
                                             packedRunVertexData.size()),
       .userIndexData = std::span<const u8>(packedRunIndexData.data(),
                                            packedRunIndexData.size()),
+      .bindingOverrideData = drawParamBBindingBytes,
   };
+  const auto packedPayloadSize =
+      packedRunVertexData.size() + packedRunIndexData.size() +
+      drawParamBBindingBytes.size();
   slot.appendDrawRun(std::move(directPackedState), sharedUniformPayload,
                      std::span<const DrawParam>(&drawParamB, 1),
                      std::span<const DrawParamPayloadView>(&packedPayload, 1));
@@ -2339,16 +2343,23 @@ void testFlatDrawStateKey() {
           "slot draw-run vertex payload range stays local to the record payload");
   checkEq(runView.drawParams[0].userIndexRange.offset, 4u,
           "slot draw-run index payload range stays local to the record payload");
+  checkEq(runView.drawParams[0].bindingOverrideRange.offset, 6u,
+          "slot draw-run binding override range follows UP payload bytes");
+  checkEq(runView.drawParams[0].bindingOverrideRange.size,
+          static_cast<u32>(sizeof(DrawBindingOverride)),
+          "slot draw-run binding override range stores the override payload");
   checkEq(runView.drawRunRecord->payloadOffset, 6u,
           "slot draw-run record points at its payload arena slice");
-  checkEq(runView.drawRunRecord->payloadSize, 6u,
+  checkEq(runView.drawRunRecord->payloadSize,
+          static_cast<u32>(packedPayloadSize),
           "slot draw-run record stores its payload byte count");
-  checkEq(runView.drawPayloadBytes.size(), std::size_t{6},
+  checkEq(runView.drawPayloadBytes.size(), packedPayloadSize,
           "slot draw-run view exposes only its record payload span");
   check(runView.drawPayloadBytes.data() ==
             slot.drawPayloadArena.data() + runView.drawRunRecord->payloadOffset,
         "slot draw-run payload span starts at the record offset");
-  checkEq(slot.drawPayloadArena.size(), std::size_t{12},
+  const auto payloadArenaSizeAfterRun = std::size_t{6} + packedPayloadSize;
+  checkEq(slot.drawPayloadArena.size(), payloadArenaSizeAfterRun,
           "slot payload arena owns draw and draw-run bytes together");
   checkEq(slot.drawUniformPayloads.size(), std::size_t{1},
           "slot draw-run interns an unchanged uniform payload");
@@ -2368,7 +2379,8 @@ void testFlatDrawStateKey() {
         "slot no-payload draw-run command exposes compact run record");
   checkEq(noPayloadView.drawParams.size(), std::size_t{1},
           "slot no-payload draw-run indexes its draw param");
-  checkEq(noPayloadView.drawRunRecord->payloadOffset, 12u,
+  checkEq(noPayloadView.drawRunRecord->payloadOffset,
+          static_cast<u32>(payloadArenaSizeAfterRun),
           "slot no-payload record keeps the current payload arena offset");
   checkEq(noPayloadView.drawRunRecord->payloadSize, 0u,
           "slot no-payload record stores an empty payload size");
@@ -2378,7 +2390,7 @@ void testFlatDrawStateKey() {
         "slot no-payload draw-run leaves vertex payload range empty");
   check(noPayloadView.drawParams[0].userIndexRange.empty(),
         "slot no-payload draw-run leaves index payload range empty");
-  checkEq(slot.drawPayloadArena.size(), std::size_t{12},
+  checkEq(slot.drawPayloadArena.size(), payloadArenaSizeAfterRun,
           "slot no-payload draw-run does not grow the payload arena");
   checkEq(slot.drawUniformPayloads.size(), std::size_t{2},
           "slot stores a new uniform payload when the payload changes");

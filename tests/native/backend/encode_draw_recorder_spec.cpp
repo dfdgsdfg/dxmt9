@@ -1683,6 +1683,12 @@ void testScreenBlendIndexOrderOptimizationPredicateIsStrict() {
             state.hot.renderStates),
         "screen blend with read-only depth is order-optimization eligible");
 
+  auto depthDisabled = state;
+  depthDisabled.hot.renderStates.entries[0].value = 0u;
+  check(!dxmt9::encoders::shouldOptimizeScreenBlendIndexOrder(
+            depthDisabled.hot.renderStates),
+        "disabled depth rejects screen-blend index-order optimization");
+
   auto depthWrite = state;
   depthWrite.hot.renderStates.entries[1].value = 1u;
   check(!dxmt9::encoders::shouldOptimizeScreenBlendIndexOrder(
@@ -1709,6 +1715,33 @@ void testScreenBlendIndexOrderOptimizationPredicateIsStrict() {
   check(!dxmt9::encoders::shouldOptimizeScreenBlendIndexOrder(
             separateAlpha.hot.renderStates),
         "separate alpha disables screen-blend index-order optimization");
+
+  auto stencil = state;
+  stencil.hot.renderStates.entries[5] = dxmt9::core::FlatStateEntry{
+      dxmt9::core::RS_STENCIL_ENABLE,
+      1u};
+  stencil.hot.renderStates.count = 6u;
+  check(!dxmt9::encoders::shouldOptimizeScreenBlendIndexOrder(
+            stencil.hot.renderStates),
+        "stencil disables screen-blend index-order optimization");
+
+  auto clipPlane = state;
+  clipPlane.hot.renderStates.entries[5] = dxmt9::core::FlatStateEntry{
+      dxmt9::core::RS_CLIP_PLANE_ENABLE,
+      1u};
+  clipPlane.hot.renderStates.count = 6u;
+  check(!dxmt9::encoders::shouldOptimizeScreenBlendIndexOrder(
+            clipPlane.hot.renderStates),
+        "clip planes disable screen-blend index-order optimization");
+
+  auto differentBlendOp = state;
+  differentBlendOp.hot.renderStates.entries[5] = dxmt9::core::FlatStateEntry{
+      dxmt9::core::RS_BLEND_OP,
+      static_cast<u32>(dxmt9::core::BlendOp::Subtract)};
+  differentBlendOp.hot.renderStates.count = 6u;
+  check(!dxmt9::encoders::shouldOptimizeScreenBlendIndexOrder(
+            differentBlendOp.hot.renderStates),
+        "non-add blend op disables screen-blend index-order optimization");
 
   auto differentBlend = state;
   differentBlend.hot.renderStates.entries[2].value =
@@ -2452,6 +2485,25 @@ void testBindingOverrideBaseStateRebindPolicy() {
   check(!dxmt9::encoders::drawBindingOverrideRequiresBaseStateBind(
             binding, nullptr),
         "missing shader layout does not force base-state rebind");
+
+  dxmt9::core::DrawShaderLayoutContext bindingAgnosticLayout{};
+  binding = {};
+  binding.streamMask = 1u << 0u;
+  binding.streams[0].buffer = dxmt9::core::Handle{0x4300u};
+  binding.streams[0].offset = 128u;
+  binding.streams[0].stride = 64u;
+  check(!dxmt9::encoders::drawBindingOverrideRequiresBaseStateBind(
+            binding, &bindingAgnosticLayout),
+        "binding-agnostic stream0 override can reuse prefetched PSO");
+
+  binding = {};
+  binding.streamMask = 1u << 1u;
+  binding.streams[1].buffer = dxmt9::core::Handle{0x4400u};
+  binding.streams[1].offset = 256u;
+  binding.streams[1].stride = 32u;
+  check(dxmt9::encoders::drawBindingOverrideRequiresBaseStateBind(
+            binding, &bindingAgnosticLayout),
+        "binding-agnostic extra-stream stride override still needs live PSO lookup");
 }
 
 }  // namespace

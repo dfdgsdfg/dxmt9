@@ -194,6 +194,8 @@ u64 makeShaderSourceDebugEnvKey(bool trimUnusedVaryings,
 
 // Reads the current process env knobs that can change emitted draw MSL.
 u64 currentShaderSourceDebugEnvKey() noexcept;
+u64 currentShaderSourceDebugEnvKey(
+    std::optional<bool> forceTextureWhiteOverride) noexcept;
 
 namespace detail {
 
@@ -395,7 +397,8 @@ class Cache {
                                   // that routes texture/sampler reads
                                   // through the slot-30 argbuf arrays.
                                   bool argbufResourceArray = false,
-                                  bool disableAlphaBlend = false);
+                                  bool disableAlphaBlend = false,
+                                  std::optional<bool> forceTextureWhiteOverride = std::nullopt);
 
   DrawPipelineLookup
   getOrBuildDrawPipelineHandleForState(WMT::Reference<WMT::Device> device,
@@ -407,7 +410,8 @@ class Cache {
                                        bool tileFfpMode = false,
                                        bool argbufHybridMode = false,
                                        bool argbufResourceArray = false,
-                                       bool disableAlphaBlend = false);
+                                       bool disableAlphaBlend = false,
+                                       std::optional<bool> forceTextureWhiteOverride = std::nullopt);
 
   // R-BACK-13.1 — companion to getOrBuildDrawPipelineForState for the
   // tile-FFP two-stage encode. Returns the BASE-COLOUR render pipeline: an
@@ -424,7 +428,8 @@ class Cache {
                                              resources::Pool& pool,
                                              core::FlatDrawStateView state,
                                              WMT::Reference<WMT::BinaryArchive>* archive,
-                                             const std::string* archivePath);
+                                             const std::string* archivePath,
+                                             std::optional<bool> forceTextureWhiteOverride = std::nullopt);
 
   DrawPipelineLookup
   getOrBuildTileFfpBaseColorPipelineHandleForState(WMT::Reference<WMT::Device> device,
@@ -432,7 +437,8 @@ class Cache {
                                                    resources::Pool& pool,
                                                    core::FlatDrawStateView state,
                                                    WMT::Reference<WMT::BinaryArchive>* archive,
-                                                   const std::string* archivePath);
+                                                   const std::string* archivePath,
+                                                   std::optional<bool> forceTextureWhiteOverride = std::nullopt);
 
   std::shared_future<WMT::Reference<WMT::RenderPipelineState>>
   drawPipelineForHandle(core::PsoHandle handle,
@@ -483,7 +489,8 @@ ShaderVariantKey makeShaderVariantKey(core::FlatDrawStateView state,
                                        std::span<const u32> colorFormats,
                                        std::span<const BlendAttachmentKey> blendAttachments,
                                        u32 depthFormat,
-                                       u32 stencilFormat);
+                                       u32 stencilFormat,
+                                       std::optional<bool> forceTextureWhiteOverride = std::nullopt);
 
 // R-BACK-13.* — per-pass tile-shader FFP selector. Encapsulates the
 // selection flow described in design.md §13.1. Pure value transform; no

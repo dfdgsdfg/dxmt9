@@ -398,7 +398,7 @@ void Device::initializeDefaultSwapChain() {
                             ? RenderTargetAttachment{depth->handle(), 0,
                                                      depth->multiSampleCount()}
                             : RenderTargetAttachment{};
-  invalidateDrawStateCache();
+  invalidateDrawStateCache(DrawStateInvalidationSwapChain);
 }
 
 std::shared_ptr<SwapChain> Device::swapChain(size_t index) const {

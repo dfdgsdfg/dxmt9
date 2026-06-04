@@ -487,7 +487,8 @@ u64 makeShaderSourceDebugEnvKey(bool trimUnusedVaryings,
   return hash;
 }
 
-u64 currentShaderSourceDebugEnvKey() noexcept {
+u64 currentShaderSourceDebugEnvKey(
+    std::optional<bool> forceTextureWhiteOverride) noexcept {
   const char* fragmentMode = std::getenv("DXMT_DEBUG_FRAGMENT_MODE");
   return makeShaderSourceDebugEnvKey(
       envFlag("DXMT9_TRIM_UNUSED_VARYINGS"),
@@ -499,7 +500,7 @@ u64 currentShaderSourceDebugEnvKey() noexcept {
       envFlag("DXMT_DEBUG_FORCE_FRAGMENT_COLOR"),
       envFlag("DXMT_DISABLE_ALPHA_TEST"),
       envFlag("DXMT_DISABLE_FOG"),
-      envFlag("DXMT_FORCE_TEXTURE_WHITE"),
+      forceTextureWhiteOverride.value_or(envFlag("DXMT_FORCE_TEXTURE_WHITE")),
       fragmentMode ? std::string_view(fragmentMode) : std::string_view{},
       envFlag("DXMT_DEBUG_FORCE_PIXEL_V_FLIP"),
       envFlag("DXMT_DEBUG_FFP_UV"),
@@ -507,6 +508,10 @@ u64 currentShaderSourceDebugEnvKey() noexcept {
       envFlag("DXMT_DEBUG_FFP_ALPHA"),
       envFlag("DXMT9_PROBE_DROP_VSOUT_POINT_SIZE"),
       envFlag("DXMT9_PROBE_POSITION_ONLY_VSOUT"));
+}
+
+u64 currentShaderSourceDebugEnvKey() noexcept {
+  return currentShaderSourceDebugEnvKey(std::nullopt);
 }
 
 ShaderVariantKey makeShaderVariantProbeKey(ShaderVariantKey key) noexcept {
@@ -1292,10 +1297,12 @@ Cache::getOrBuildDrawPipelineForState(WMT::Reference<WMT::Device> device,
                                       bool tileFfpMode,
                                       bool argbufHybridMode,
                                       bool argbufResourceArray,
-                                      bool disableAlphaBlend) {
+                                      bool disableAlphaBlend,
+                                      std::optional<bool> forceTextureWhiteOverride) {
   return getOrBuildDrawPipelineHandleForState(
       device, limits, pool, state, archive, archivePath, tileFfpMode,
-      argbufHybridMode, argbufResourceArray, disableAlphaBlend).future;
+      argbufHybridMode, argbufResourceArray, disableAlphaBlend,
+      forceTextureWhiteOverride).future;
 }
 
 DrawPipelineLookup
@@ -1308,7 +1315,8 @@ Cache::getOrBuildDrawPipelineHandleForState(WMT::Reference<WMT::Device> device,
                                             bool tileFfpMode,
                                             bool argbufHybridMode,
                                             bool argbufResourceArray,
-                                            bool disableAlphaBlend) {
+                                            bool disableAlphaBlend,
+                                            std::optional<bool> forceTextureWhiteOverride) {
   const bool srgbWrite =
       core::flatStateOr(state.hot->renderStates, core::RS_SRGB_WRITE_ENABLE, 0u) != 0;
   auto resolvePixelFormat = [&](core::Handle handle) -> u32 {
@@ -1341,7 +1349,11 @@ Cache::getOrBuildDrawPipelineHandleForState(WMT::Reference<WMT::Device> device,
           dxmt9::convert::formatHasStencilAspect(surface->desc.format) ? pixelFormat : 0u;
     }
   }
-  auto key = makeShaderVariantKey(state, colorFormats, blendAttachments, depthFormat, stencilFormat);
+  const bool forceTextureWhiteForDebug =
+      forceTextureWhiteOverride.value_or(envFlag("DXMT_FORCE_TEXTURE_WHITE"));
+  auto key = makeShaderVariantKey(
+      state, colorFormats, blendAttachments, depthFormat, stencilFormat,
+      forceTextureWhiteOverride);
   // R-BACK-13.3: stamp the tile-FFP-mode bit onto the variant key so the
   // tile-stage and fragment-stage variants share an FFPKeyPS but land in
   // distinct cache entries.
@@ -1370,7 +1382,7 @@ Cache::getOrBuildDrawPipelineHandleForState(WMT::Reference<WMT::Device> device,
   shaderSource.samplerLodBias = key.samplerLodBias;
   shaderSource.stripAlphaTestForDebug = envFlag("DXMT_DISABLE_ALPHA_TEST");
   shaderSource.stripFogForDebug = envFlag("DXMT_DISABLE_FOG");
-  shaderSource.forceTextureWhiteForDebug = envFlag("DXMT_FORCE_TEXTURE_WHITE");
+  shaderSource.forceTextureWhiteForDebug = forceTextureWhiteForDebug;
   stampX8AlphaOneTextureMask(
       key, shaderSource,
       x8AlphaOneTextureMask(pool, *state.hot, key.textureMask));
@@ -1386,9 +1398,11 @@ Cache::getOrBuildTileFfpBaseColorPipelineForState(WMT::Reference<WMT::Device> de
                                                   resources::Pool& pool,
                                                   core::FlatDrawStateView state,
                                                   WMT::Reference<WMT::BinaryArchive>* archive,
-                                                  const std::string* archivePath) {
+                                                  const std::string* archivePath,
+                                                  std::optional<bool> forceTextureWhiteOverride) {
   return getOrBuildTileFfpBaseColorPipelineHandleForState(
-      device, limits, pool, state, archive, archivePath).future;
+      device, limits, pool, state, archive, archivePath,
+      forceTextureWhiteOverride).future;
 }
 
 DrawPipelineLookup
@@ -1398,7 +1412,8 @@ Cache::getOrBuildTileFfpBaseColorPipelineHandleForState(
     resources::Pool& pool,
     core::FlatDrawStateView state,
     WMT::Reference<WMT::BinaryArchive>* archive,
-    const std::string* archivePath) {
+    const std::string* archivePath,
+    std::optional<bool> forceTextureWhiteOverride) {
   // R-BACK-13.1 — assemble the same render-pipeline key as the portable
   // fragment path, then re-stamp it for the base-colour tile-FFP sub-variant:
   //   * tileFfpBaseColor = true   -> distinct cache slot + source-strip gate
@@ -1440,7 +1455,11 @@ Cache::getOrBuildTileFfpBaseColorPipelineHandleForState(
           dxmt9::convert::formatHasStencilAspect(surface->desc.format) ? pixelFormat : 0u;
     }
   }
-  auto key = makeShaderVariantKey(state, colorFormats, blendAttachments, depthFormat, stencilFormat);
+  const bool forceTextureWhiteForDebug =
+      forceTextureWhiteOverride.value_or(envFlag("DXMT_FORCE_TEXTURE_WHITE"));
+  auto key = makeShaderVariantKey(
+      state, colorFormats, blendAttachments, depthFormat, stencilFormat,
+      forceTextureWhiteOverride);
   key.tileFfpMode = false;
   key.tileFfpBaseColor = true;
   // A2C is applied by the tile pass (or, where the tile kernel cannot, the
@@ -1452,7 +1471,7 @@ Cache::getOrBuildTileFfpBaseColorPipelineHandleForState(
   shaderSource.samplerLodBias = key.samplerLodBias;
   shaderSource.stripAlphaTestForDebug = envFlag("DXMT_DISABLE_ALPHA_TEST");
   shaderSource.stripFogForDebug = envFlag("DXMT_DISABLE_FOG");
-  shaderSource.forceTextureWhiteForDebug = envFlag("DXMT_FORCE_TEXTURE_WHITE");
+  shaderSource.forceTextureWhiteForDebug = forceTextureWhiteForDebug;
   stampX8AlphaOneTextureMask(
       key, shaderSource,
       x8AlphaOneTextureMask(pool, *state.hot, key.textureMask));
@@ -1571,7 +1590,8 @@ ShaderVariantKey makeShaderVariantKey(core::FlatDrawStateView state,
                                        std::span<const u32> colorFormats,
                                        std::span<const BlendAttachmentKey> blendAttachments,
                                        u32 depthFormat,
-                                       u32 stencilFormat) {
+                                       u32 stencilFormat,
+                                       std::optional<bool> forceTextureWhiteOverride) {
   const auto& hot = *state.hot;
   const auto& shader = state.shaderContext();
   const auto& vertexDecl = shader.vertexDecl;
@@ -1581,7 +1601,7 @@ ShaderVariantKey makeShaderVariantKey(core::FlatDrawStateView state,
   key.emitterVersion = kShaderEmitterVersion;
   key.sourceLayoutVersion = kShaderSourceLayoutVersion;
   key.debugEnvSchemaVersion = kShaderDebugEnvSchemaVersion;
-  key.debugEnvKey = currentShaderSourceDebugEnvKey();
+  key.debugEnvKey = currentShaderSourceDebugEnvKey(forceTextureWhiteOverride);
   const auto layout =
       vertexShader.kind == core::ShaderRef::Kind::FixedFunctionVertex
           ? ffp::decodeFixedFunctionVertexLayout(vertexDecl)

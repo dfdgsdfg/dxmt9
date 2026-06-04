@@ -151,7 +151,8 @@ void releaseHeapIfBacked(HeapManager* heapManager, const TextureRecord& record) 
 
 template <typename Arena>
 void gcArena(Arena& arena, u64 completedSeqId, HeapManager* heapManager) {
-  arena.reclaimCompleted(completedSeqId, [heapManager](const auto& record) {
+  arena.reclaimCompleted(completedSeqId, [heapManager, completedSeqId](const auto& record) {
+    (void)completedSeqId;
     // TLA+ NoUseAfterFree (R-VERIF-3.1) — the watermark gate that also
     // implements R-VERIF-3.4 EncoderPointerStable in C++: by the time
     // record.lastUsedSeqId <= completedSeqId, no in-flight encoder can
@@ -934,6 +935,118 @@ bool Pool::uploadBufferData(u64 handleValue, const std::uint8_t* bytes, std::siz
   });
 }
 
+ReorderedIndexBufferLookup Pool::findReorderedIndexBuffer(
+    u64 sourceHandle,
+    ReorderedIndexBufferCacheKey key,
+    u64 seqId,
+    u64 completedSeqId) {
+  ReorderedIndexBufferLookup result{};
+  if (sourceHandle == 0) {
+    return result;
+  }
+
+  bufferArena_.update(sourceHandle, [&](BufferRecord& record) {
+    key.sourceRevision = record.contentRevision;
+
+    auto& entries = record.reorderedIndexCache;
+    entries.erase(
+        std::remove_if(entries.begin(), entries.end(), [&](const auto& entry) {
+          return ((!entry.buffer && !entry.rejected) ||
+                  entry.key.sourceRevision != record.contentRevision) &&
+                 entry.lastUsedSeqId <= completedSeqId;
+        }),
+        entries.end());
+
+    for (auto& entry : entries) {
+      if (entry.key == key && (entry.buffer || entry.rejected)) {
+        entry.lastUsedSeqId = std::max(entry.lastUsedSeqId, seqId);
+        result.buffer = WMT::Buffer{entry.buffer.handle};
+        result.byteCount = entry.byteCount;
+        result.hit = true;
+        result.rejected = entry.rejected;
+        return;
+      }
+    }
+  });
+
+  return result;
+}
+
+bool Pool::rememberRejectedReorderedIndexBuffer(
+    u64 sourceHandle,
+    ReorderedIndexBufferCacheKey key,
+    u64 seqId,
+    u64 completedSeqId) {
+  bool remembered = false;
+  if (sourceHandle == 0) {
+    return remembered;
+  }
+
+  bufferArena_.update(sourceHandle, [&](BufferRecord& record) {
+    key.sourceRevision = record.contentRevision;
+
+    auto& entries = record.reorderedIndexCache;
+    entries.erase(
+        std::remove_if(entries.begin(), entries.end(), [&](const auto& entry) {
+          return ((!entry.buffer && !entry.rejected) ||
+                  entry.key.sourceRevision != record.contentRevision) &&
+                 entry.lastUsedSeqId <= completedSeqId;
+        }),
+        entries.end());
+
+    for (auto& entry : entries) {
+      if (entry.key == key) {
+        entry.lastUsedSeqId = std::max(entry.lastUsedSeqId, seqId);
+        if (!entry.buffer) {
+          entry.byteCount = 0;
+          entry.rejected = true;
+        }
+        remembered = true;
+        return;
+      }
+    }
+
+    ReorderedIndexBufferCacheEntry entry{};
+    entry.key = key;
+    entry.lastUsedSeqId = seqId;
+    entry.rejected = true;
+    entries.push_back(std::move(entry));
+    remembered = true;
+
+    constexpr std::size_t kMaxReorderedIndexEntriesPerSource = 64;
+    if (entries.size() > kMaxReorderedIndexEntriesPerSource) {
+      entries.erase(
+          std::remove_if(entries.begin(), entries.end(), [&](const auto& oldEntry) {
+            return oldEntry.lastUsedSeqId <= completedSeqId &&
+                   oldEntry.key != key;
+          }),
+          entries.end());
+    }
+    if (entries.size() > kMaxReorderedIndexEntriesPerSource) {
+      const auto oldestRejected = std::min_element(
+          entries.begin(), entries.end(), [&](const auto& lhs, const auto& rhs) {
+            if (lhs.key == key) {
+              return false;
+            }
+            if (rhs.key == key) {
+              return true;
+            }
+            if (lhs.rejected != rhs.rejected) {
+              return lhs.rejected;
+            }
+            return lhs.lastUsedSeqId < rhs.lastUsedSeqId;
+          });
+      if (oldestRejected != entries.end() &&
+          oldestRejected->rejected &&
+          oldestRejected->key != key) {
+        entries.erase(oldestRejected);
+      }
+    }
+  });
+
+  return remembered;
+}
+
 ReorderedIndexBufferLookup Pool::getOrCreateReorderedIndexBuffer(
     WMT::Device device,
     u64 sourceHandle,
@@ -952,19 +1065,27 @@ ReorderedIndexBufferLookup Pool::getOrCreateReorderedIndexBuffer(
     auto& entries = record.reorderedIndexCache;
     entries.erase(
         std::remove_if(entries.begin(), entries.end(), [&](const auto& entry) {
-          return (!entry.buffer ||
+          return ((!entry.buffer && !entry.rejected) ||
                   entry.key.sourceRevision != record.contentRevision) &&
                  entry.lastUsedSeqId <= completedSeqId;
         }),
         entries.end());
 
+    ReorderedIndexBufferCacheEntry* rejectedEntry = nullptr;
     for (auto& entry : entries) {
-      if (entry.key == key && entry.buffer) {
+      if (entry.key != key) {
+        continue;
+      }
+      if (entry.buffer) {
         entry.lastUsedSeqId = std::max(entry.lastUsedSeqId, seqId);
         result.buffer = WMT::Buffer{entry.buffer.handle};
         result.byteCount = entry.byteCount;
         result.hit = true;
         return;
+      }
+      if (entry.rejected) {
+        rejectedEntry = &entry;
+        break;
       }
     }
 
@@ -985,14 +1106,18 @@ ReorderedIndexBufferLookup Pool::getOrCreateReorderedIndexBuffer(
         static_cast<unsigned long long>(key.indexCount)));
 
     ReorderedIndexBufferCacheEntry entry{};
-    entry.key = key;
-    entry.buffer = std::move(buffer);
-    entry.byteCount = static_cast<u64>(bytes.size());
-    entry.lastUsedSeqId = seqId;
-    result.buffer = WMT::Buffer{entry.buffer.handle};
-    result.byteCount = entry.byteCount;
+    auto& targetEntry = rejectedEntry ? *rejectedEntry : entry;
+    targetEntry.key = key;
+    targetEntry.buffer = std::move(buffer);
+    targetEntry.byteCount = static_cast<u64>(bytes.size());
+    targetEntry.lastUsedSeqId = seqId;
+    targetEntry.rejected = false;
+    result.buffer = WMT::Buffer{targetEntry.buffer.handle};
+    result.byteCount = targetEntry.byteCount;
     result.created = true;
-    entries.push_back(std::move(entry));
+    if (!rejectedEntry) {
+      entries.push_back(std::move(entry));
+    }
 
     constexpr std::size_t kMaxReorderedIndexEntriesPerSource = 64;
     if (entries.size() > kMaxReorderedIndexEntriesPerSource) {

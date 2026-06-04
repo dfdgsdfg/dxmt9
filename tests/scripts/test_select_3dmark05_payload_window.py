@@ -32,6 +32,9 @@ def probe_row(
     ps: str,
     alpha_blend: int = 1,
     depth_write: int = 0,
+    scissor: int = 0,
+    texture_mask: str = "0x7f",
+    applied: int = 0,
 ) -> dict[str, object]:
     return {
         "seq": 60,
@@ -39,6 +42,7 @@ def probe_row(
         "encoder_draw_index": draw,
         "draw_ordinal": 42000 + draw,
         "primitive_count": tris,
+        "applied": applied,
         "original_cache_miss64": cache64,
         "vs": vs,
         "ps": ps,
@@ -56,10 +60,10 @@ def probe_row(
         "depth_func": 4,
         "stencil": 0,
         "clip_plane": 0,
-        "scissor": 0,
+        "scissor": scissor,
         "cull": 2,
         "fill": 0,
-        "texture_mask": "0x7f",
+        "texture_mask": texture_mask,
         "color_write": "0xf",
         "index_type": 0,
         "stream0_stride": 24,
@@ -175,6 +179,105 @@ class SelectPayloadWindowTests(unittest.TestCase):
             self.assertEqual(selection["selection"]["group"]["vs"], "0xsecond")
             self.assertEqual(selection["selection"]["window"]["encoder_draw_min"], 20)
             self.assertEqual(selection["selection"]["window"]["encoder_draw_max"], 21)
+
+    def test_class_filter_selects_no_alpha_no_scissor_payload_window(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            probe_csv = root / "probe.csv"
+            output = root / "selection.json"
+            write_csv(probe_csv, [
+                probe_row(1, 5000, 6000, "0xblend", "0xps", alpha_blend=1),
+                probe_row(2, 5000, 6000, "0xblend", "0xps", alpha_blend=1),
+                probe_row(10, 1000, 1500, "0xoff", "0xps", alpha_blend=0, applied=1),
+                probe_row(11, 1200, 1800, "0xoff", "0xps", alpha_blend=0, applied=1),
+                probe_row(12, 1400, 2100, "0xoff", "0xps", alpha_blend=0, applied=1),
+                probe_row(20, 3000, 4500, "0xscissor", "0xps", alpha_blend=0, scissor=1),
+                probe_row(30, 3000, 4500, "0xnotex", "0xps", alpha_blend=0, texture_mask="0x0"),
+            ])
+
+            result = subprocess.run(
+                [
+                    sys.executable,
+                    str(SCRIPT),
+                    "--probe-draws",
+                    str(probe_csv),
+                    "--row",
+                    "60/2",
+                    "--class-filter",
+                    "depth-read,no-alpha-blend,no-scissor,textured",
+                    "--max-draws",
+                    "2",
+                    "--output",
+                    str(output),
+                ],
+                text=True,
+                capture_output=True,
+                check=False,
+            )
+
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertIn("class_filters: depth-read,no-alpha-blend,no-scissor,textured", result.stdout)
+            selection = json.loads(output.read_text(encoding="utf-8"))
+            selected = selection["selection"]
+            self.assertEqual(selected["class_filters"], [
+                "depth-read",
+                "no-alpha-blend",
+                "no-scissor",
+                "textured",
+            ])
+            self.assertEqual(selected["group"]["vs"], "0xoff")
+            self.assertEqual(selected["window"]["encoder_draw_min"], 11)
+            self.assertEqual(selected["window"]["encoder_draw_max"], 12)
+            self.assertIn(
+                "--probe-reverse-indexed-triangles-classes",
+                selected["capture_flags"],
+            )
+            self.assertIn(
+                "depth-read,no-alpha-blend,no-scissor,textured",
+                selected["capture_flags"],
+            )
+
+    def test_applied_only_excludes_non_mutated_rows_before_window_selection(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            probe_csv = root / "probe.csv"
+            output = root / "selection.json"
+            write_csv(probe_csv, [
+                probe_row(1, 5000, 6000, "0xoff", "0xps", alpha_blend=0, applied=0),
+                probe_row(2, 5000, 6000, "0xoff", "0xps", alpha_blend=0, applied=0),
+                probe_row(10, 1000, 1500, "0xoff", "0xps", alpha_blend=0, applied=1),
+                probe_row(11, 1200, 1800, "0xoff", "0xps", alpha_blend=0, applied=1),
+                probe_row(12, 1400, 2100, "0xoff", "0xps", alpha_blend=0, applied=1),
+            ])
+
+            result = subprocess.run(
+                [
+                    sys.executable,
+                    str(SCRIPT),
+                    "--probe-draws",
+                    str(probe_csv),
+                    "--row",
+                    "60/2",
+                    "--class-filter",
+                    "no-alpha-blend",
+                    "--applied-only",
+                    "--max-draws",
+                    "2",
+                    "--output",
+                    str(output),
+                ],
+                text=True,
+                capture_output=True,
+                check=False,
+            )
+
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertIn("applied_only: true", result.stdout)
+            selection = json.loads(output.read_text(encoding="utf-8"))
+            selected = selection["selection"]
+            self.assertTrue(selected["applied_only"])
+            self.assertEqual(selected["window"]["encoder_draw_min"], 11)
+            self.assertEqual(selected["window"]["encoder_draw_max"], 12)
 
 
 if __name__ == "__main__":

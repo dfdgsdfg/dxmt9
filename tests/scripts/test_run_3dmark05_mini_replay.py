@@ -62,7 +62,9 @@ struct ArgbufLayout {
 fragment float4 dxmt9_fs(VSOut in [[stage_in]],
                      constant ArgbufLayout& abuf [[buffer(30)]],
                      texture2d<float> tex0 [[texture(0)]],
-                     sampler samp0 [[sampler(0)]]) {
+                     sampler samp0 [[sampler(0)]],
+                     texture2d<float> tex3 [[texture(3)]],
+                     sampler samp3 [[sampler(3)]]) {
   constant PsConsts& psConsts = *abuf.psConsts;
   constant FfpPsConsts& ffpPs = *abuf.ffpPs;
   return psConsts.psFloatConst[0] + float4(float(ffpPs.fogMode), 0.0, 0.0, 1.0);
@@ -198,8 +200,10 @@ class MiniReplayScriptTests(unittest.TestCase):
             self.assertEqual(summary["draw_count"], 1)
             self.assertEqual(summary["draw_order"], "original")
             self.assertEqual(summary["primitive_order"], "original")
+            self.assertFalse(summary["force_fragment_primitive_id"])
             self.assertEqual(summary["depth_clear"], 1.0)
             self.assertIsNone(summary["depth_input"])
+            self.assertIsNone(summary["color_output"])
             self.assertEqual(summary["index_bytes"], 6)
             self.assertEqual(summary["stream0_bytes"], 24)
             self.assertEqual(summary["uniform_draw_count"], 1)
@@ -211,6 +215,8 @@ class MiniReplayScriptTests(unittest.TestCase):
             self.assertEqual(summary["scissor_draw_count"], 1)
             self.assertEqual(summary["vs_bindings"]["buffer"], [1, 5, 6, 28, 29])
             self.assertEqual(summary["fs_bindings"]["buffer"], [28, 29])
+            self.assertEqual(summary["fs_bindings"]["texture"], [0, 3])
+            self.assertEqual(summary["fs_bindings"]["sampler"], [0, 3])
             self.assertIn("texture2d<float> tex0 [[texture(0)]]", (output_dir / "dxmt9_fs.replay.metal").read_text(encoding="utf-8"))
             self.assertNotIn("ArgbufLayout& abuf [[buffer(30)]]", (output_dir / "dxmt9_vs.replay.metal").read_text(encoding="utf-8"))
             self.assertIn("constant VsConsts& vsConsts [[buffer(29)]]", (output_dir / "dxmt9_vs.replay.metal").read_text(encoding="utf-8"))
@@ -225,11 +231,19 @@ class MiniReplayScriptTests(unittest.TestCase):
             self.assertNotIn("pass.stencilAttachment.texture = depth;", objc)
             self.assertIn("pass.depthAttachment.loadAction = MTLLoadActionClear;", objc)
             self.assertIn("pass.depthAttachment.clearDepth = 1;", objc)
+            self.assertIn("static bool writePpm(const char* path,", objc)
+            self.assertIn("DXMT9_MINI_REPLAY_COLOR_OUTPUT_PATH", objc)
+            self.assertIn("copyFromTexture:color", objc)
+            self.assertIn("destinationBytesPerRow:4096", objc)
             self.assertIn("const char* vsConstsPath;", objc)
             self.assertIn("bufferFromFileOrDefault(device, draw.vsConstsPath, vsConsts)", objc)
             self.assertIn("const char* extraStreamPaths[16];", objc)
             self.assertIn("draw.stream1.bin", objc)
             self.assertIn("[encoder setVertexBuffer:dummyVertexStream offset:0 atIndex:6];", objc)
+            self.assertIn("[encoder setFragmentTexture:whiteTexture atIndex:0];", objc)
+            self.assertIn("[encoder setFragmentTexture:whiteTexture atIndex:3];", objc)
+            self.assertIn("[encoder setFragmentSamplerState:sampler atIndex:0];", objc)
+            self.assertIn("[encoder setFragmentSamplerState:sampler atIndex:3];", objc)
             self.assertIn("[encoder setVertexBuffer:extraStreams[s] offset:0 atIndex:draw.extraStreamSlots[s]];", objc)
             self.assertIn("[encoder setRenderPipelineState:psos[draw.shaderIndex]];", objc)
             self.assertIn("[encoder setVertexBuffer:drawVsConsts offset:0 atIndex:shader.vsConstsSlot];", objc)
@@ -245,9 +259,67 @@ class MiniReplayScriptTests(unittest.TestCase):
             self.assertIn("depthStateDesc.depthWriteEnabled = 0;", objc)
             self.assertIn("[encoder setCullMode:cullMode(2)];", objc)
             self.assertIn("unsigned scissorEnabled;", objc)
+
+    def test_force_fragment_primitive_id_rewrites_fragment_output(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            manifest, output_dir = self.write_manifest_fixture(root)
+
+            result = subprocess.run(
+                [
+                    sys.executable,
+                    str(SCRIPT),
+                    str(manifest),
+                    "--output-dir",
+                    str(output_dir),
+                    "--force-fragment-primitive-id",
+                ],
+                text=True,
+                capture_output=True,
+                check=False,
+            )
+
+            self.assertEqual(result.returncode, 0, result.stderr)
+            summary = json.loads((output_dir / "mini-replay-summary.json").read_text(encoding="utf-8"))
+            self.assertTrue(summary["force_fragment_primitive_id"])
+            fs = (output_dir / "dxmt9_fs.replay.metal").read_text(encoding="utf-8")
+            self.assertIn("uint primitiveId [[primitive_id]]", fs)
+            self.assertIn("uint value = primitiveId + 1u;", fs)
+            self.assertIn("float((value >> 16u) & 255u) / 255.0f", fs)
+            self.assertNotIn("return psConsts.psFloatConst[0]", fs)
+            objc = (output_dir / "dxmt9_3dmark05_mini_replay.mm").read_text(encoding="utf-8")
             self.assertIn("static MTLScissorRect scissorRect(const DrawEntry& draw", objc)
             self.assertIn("[encoder setScissorRect:scissorRect(draw, 1024, 768)];", objc)
             self.assertIn(", 1, 10, 20, 110, 220}", objc)
+
+    def test_color_output_records_ppm_readback_target(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            manifest, output_dir = self.write_manifest_fixture(root)
+            color_output = output_dir / "original.ppm"
+
+            result = subprocess.run(
+                [
+                    sys.executable,
+                    str(SCRIPT),
+                    str(manifest),
+                    "--output-dir",
+                    str(output_dir),
+                    "--color-output",
+                    str(color_output),
+                ],
+                text=True,
+                capture_output=True,
+                check=False,
+            )
+
+            self.assertEqual(result.returncode, 0, result.stderr)
+            summary = json.loads((output_dir / "mini-replay-summary.json").read_text(encoding="utf-8"))
+            objc = (output_dir / "dxmt9_3dmark05_mini_replay.mm").read_text(encoding="utf-8")
+            self.assertEqual(summary["color_output"], str(color_output))
+            self.assertIn("failed to open color output", objc)
+            self.assertIn("writePpm(colorOutputPath, pixels, 1024, 768,", objc)
+            self.assertIn("4096, true", objc)
 
     def test_trim_vsout_to_fs_reads_removes_unread_replay_fields(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -284,6 +356,32 @@ class MiniReplayScriptTests(unittest.TestCase):
             self.assertNotIn("out.pointSize =", vs_text)
             self.assertNotIn("float fogFactor;", fs_text)
             self.assertNotIn("float pointSize [[point_size]];", fs_text)
+
+    def test_force_fragment_color_replaces_replay_fs_body(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            manifest, output_dir = self.write_manifest_fixture(root)
+
+            result = subprocess.run(
+                [
+                    sys.executable,
+                    str(SCRIPT),
+                    str(manifest),
+                    "--output-dir",
+                    str(output_dir),
+                    "--force-fragment-color",
+                ],
+                text=True,
+                capture_output=True,
+                check=False,
+            )
+
+            self.assertEqual(result.returncode, 0, result.stderr)
+            summary = json.loads((output_dir / "mini-replay-summary.json").read_text(encoding="utf-8"))
+            fs_text = (output_dir / "dxmt9_fs.replay.metal").read_text(encoding="utf-8")
+            self.assertTrue(summary["force_fragment_color"])
+            self.assertIn("return float4(1.0f, 0.0f, 1.0f, 1.0f);", fs_text)
+            self.assertNotIn("return psConsts.psFloatConst[0]", fs_text)
 
     def test_primitive_order_rewrites_index_payload_in_output_dir(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

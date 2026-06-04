@@ -119,6 +119,25 @@ void testDrawOrdinalRangeMatchesSeqRangeBoundaries() {
         "inverted draw ordinal range skips between inverted bounds");
 }
 
+void testDrawOrdinalListParsesExcludedDraws() {
+  const auto disabled = dxmt9::debug::makeDrawOrdinalList("");
+  check(!disabled.enabled, "empty draw ordinal list is disabled");
+  check(!dxmt9::debug::drawOrdinalListContains(disabled, 18u),
+        "empty draw ordinal list contains no draw");
+
+  const auto list = dxmt9::debug::makeDrawOrdinalList("18, 21;34");
+  check(list.enabled, "draw ordinal list is enabled");
+  check(list.count == 3u, "draw ordinal list parses three entries");
+  check(dxmt9::debug::drawOrdinalListContains(list, 18u),
+        "draw ordinal list contains first entry");
+  check(dxmt9::debug::drawOrdinalListContains(list, 21u),
+        "draw ordinal list contains second entry");
+  check(dxmt9::debug::drawOrdinalListContains(list, 34u),
+        "draw ordinal list contains third entry");
+  check(!dxmt9::debug::drawOrdinalListContains(list, 19u),
+        "draw ordinal list rejects missing entry");
+}
+
 void testRenderEncoderSelectorParsesSingleRow() {
   const auto slash = dxmt9::debug::makeRenderEncoderSelector("60/3");
   check(slash.enabled, "slash render encoder selector is enabled");
@@ -167,9 +186,39 @@ void testIndexedTriangleClassFilterParsesProbeBuckets() {
   check(makeIndexedTriangleClassFilter("blend") ==
             IndexedTriangleClassFilter::AlphaBlend,
         "indexed triangle class filter accepts blend alias");
+  check(makeIndexedTriangleClassFilter("no-alpha-blend") ==
+            IndexedTriangleClassFilter::NoAlphaBlend,
+        "indexed triangle class filter accepts no-alpha-blend bucket");
+  check(makeIndexedTriangleClassFilter("blend_off") ==
+            IndexedTriangleClassFilter::NoAlphaBlend,
+        "indexed triangle class filter accepts blend-off alias");
+  check(makeIndexedTriangleClassFilter("screen-blend") ==
+            IndexedTriangleClassFilter::ScreenBlend,
+        "indexed triangle class filter accepts screen-blend bucket");
+  check(makeIndexedTriangleClassFilter("screen") ==
+            IndexedTriangleClassFilter::ScreenBlend,
+        "indexed triangle class filter accepts screen-blend alias");
+  check(makeIndexedTriangleClassFilter("standard-alpha") ==
+            IndexedTriangleClassFilter::StandardAlphaBlend,
+        "indexed triangle class filter accepts standard-alpha bucket");
+  check(makeIndexedTriangleClassFilter("standard-alpha-blend") ==
+            IndexedTriangleClassFilter::StandardAlphaBlend,
+        "indexed triangle class filter accepts standard-alpha-blend alias");
+  check(makeIndexedTriangleClassFilter("additive-alpha") ==
+            IndexedTriangleClassFilter::AdditiveAlphaBlend,
+        "indexed triangle class filter accepts additive-alpha bucket");
+  check(makeIndexedTriangleClassFilter("additive-alpha-blend") ==
+            IndexedTriangleClassFilter::AdditiveAlphaBlend,
+        "indexed triangle class filter accepts additive-alpha-blend alias");
   check(makeIndexedTriangleClassFilter("scissor") ==
             IndexedTriangleClassFilter::Scissor,
         "indexed triangle class filter accepts scissor bucket");
+  check(makeIndexedTriangleClassFilter("no-scissor") ==
+            IndexedTriangleClassFilter::NoScissor,
+        "indexed triangle class filter accepts no-scissor bucket");
+  check(makeIndexedTriangleClassFilter("non-scissor") ==
+            IndexedTriangleClassFilter::NoScissor,
+        "indexed triangle class filter accepts no-scissor alias");
   check(makeIndexedTriangleClassFilter("textured") ==
             IndexedTriangleClassFilter::Textured,
         "indexed triangle class filter accepts textured bucket");
@@ -205,8 +254,8 @@ void testIndexedTriangleClassFilterListParsesAndBuckets() {
         "indexed triangle class list keeps scissor third");
 
   const auto symbolic =
-      makeIndexedTriangleClassFilterList("large-4096+depth_read&texture");
-  check(symbolic.count == 3u,
+      makeIndexedTriangleClassFilterList("large-4096+depth_read&texture+no-blend");
+  check(symbolic.count == 4u,
         "indexed triangle class list accepts symbolic separators");
   check(symbolic.filters[0] == IndexedTriangleClassFilter::Large4096,
         "symbolic indexed triangle class list keeps large4096 first");
@@ -214,6 +263,24 @@ void testIndexedTriangleClassFilterListParsesAndBuckets() {
         "symbolic indexed triangle class list keeps depth-read second");
   check(symbolic.filters[2] == IndexedTriangleClassFilter::Textured,
         "symbolic indexed triangle class list keeps textured third");
+  check(symbolic.filters[3] == IndexedTriangleClassFilter::NoAlphaBlend,
+        "symbolic indexed triangle class list keeps no-alpha-blend fourth");
+
+  const auto residual =
+      makeIndexedTriangleClassFilterList(
+          "depth-read+screen-blend+standard-alpha+no-scissor+large4096");
+  check(residual.count == 5u,
+        "indexed triangle class list accepts residual analysis buckets");
+  check(residual.filters[0] == IndexedTriangleClassFilter::DepthRead,
+        "residual indexed triangle class list keeps depth-read first");
+  check(residual.filters[1] == IndexedTriangleClassFilter::ScreenBlend,
+        "residual indexed triangle class list keeps screen-blend second");
+  check(residual.filters[2] == IndexedTriangleClassFilter::StandardAlphaBlend,
+        "residual indexed triangle class list keeps standard-alpha third");
+  check(residual.filters[3] == IndexedTriangleClassFilter::NoScissor,
+        "residual indexed triangle class list keeps no-scissor fourth");
+  check(residual.filters[4] == IndexedTriangleClassFilter::Large4096,
+        "residual indexed triangle class list keeps large4096 fifth");
 
   const auto unknown = makeIndexedTriangleClassFilterList("not-a-class,any");
   check(unknown.count == 0u,
@@ -248,6 +315,7 @@ int main() {
     testClosedRangeIsInclusive();
     testInvertedRangeSkipsEverySeq();
     testDrawOrdinalRangeMatchesSeqRangeBoundaries();
+    testDrawOrdinalListParsesExcludedDraws();
     testRenderEncoderSelectorParsesSingleRow();
     testRenderEncoderSelectorListParsesHotRows();
     testIndexedTriangleClassFilterParsesProbeBuckets();

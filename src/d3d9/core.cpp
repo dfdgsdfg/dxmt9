@@ -298,7 +298,7 @@ HResult Device::resetValidated(const PresentParameters& params) {
                                                        primary->depthStencilSurface()->multiSampleCount()}
                               : RenderTargetAttachment{};
   }
-  invalidateDrawStateCache();
+  invalidateDrawStateCache(DrawStateInvalidationReset);
   submittedSequenceId_ = 0;
   completedSequenceId_ = 0;
   presentCount_ = 0;

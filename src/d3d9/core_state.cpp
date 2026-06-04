@@ -700,7 +700,7 @@ void StateBlock::captureDelta(
 }
 
 void StateBlock::apply(Device &device) const {
-  auto &state = device.mutableState();
+  auto &state = device.mutableState(DrawStateInvalidationStateBlock);
   if (mode_ == CaptureMode::FullSnapshot) {
     applyFullSnapshotState(state, snapshot_, type_);
     return;
@@ -793,7 +793,7 @@ std::shared_ptr<StateBlock> Device::captureStateBlock() const {
 
 HResult Device::applyStateBlock(const StateBlock &block) {
   block.apply(*this);
-  invalidateDrawStateCache();
+  invalidateDrawStateCache(DrawStateInvalidationStateBlock);
   return D3D_OK;
 }
 
@@ -802,13 +802,13 @@ HResult Device::setRenderState(u32 key, u32 value) {
   if (key == RS_SCISSOR_TEST_ENABLE) {
     state_.scissorEnabled = value != 0;
   }
-  invalidateDrawStateCache();
+  invalidateDrawStateCache(DrawStateInvalidationRenderState);
   return D3D_OK;
 }
 
 HResult Device::setRenderStateFloat(u32 key, f32 value) {
   state_.renderStates.set(key, std::bit_cast<u32>(value));
-  invalidateDrawStateCache();
+  invalidateDrawStateCache(DrawStateInvalidationRenderState);
   return D3D_OK;
 }
 
@@ -832,7 +832,7 @@ HResult Device::setTextureStageState(u32 stage, u32 key, u32 value) {
   stage = std::min<u32>(stage, kMaxTextureStages - 1);
   key = std::min<u32>(key, kMaxTextureStageStates - 1);
   state_.textureStageStates[stage].set(key, value);
-  invalidateDrawStateCache();
+  invalidateDrawStateCache(DrawStateInvalidationTextureStageSampler);
   return D3D_OK;
 }
 
@@ -852,7 +852,7 @@ HResult Device::setSamplerState(u32 sampler, u32 key, u32 value) {
     return D3DERR_INVALIDCALL;
   }
   state_.samplerStates[sampler].set(key, value);
-  invalidateDrawStateCache();
+  invalidateDrawStateCache(DrawStateInvalidationTextureStageSampler);
   return D3D_OK;
 }
 
@@ -871,7 +871,7 @@ void Device::notifyTextureLodChanged(const Texture &texture) {
   const auto handle = texture.handle();
   for (const auto &bound : state_.textures) {
     if (bound && bound->handle() == handle) {
-      invalidateDrawStateCache();
+      invalidateDrawStateCache(DrawStateInvalidationTextureLod);
       return;
     }
   }
@@ -879,7 +879,7 @@ void Device::notifyTextureLodChanged(const Texture &texture) {
 
 HResult Device::setTransform(u32 key, const Matrix4x4 &matrix) {
   state_.transforms.set(key, matrix);
-  invalidateDrawStateCache();
+  invalidateDrawStateCache(DrawStateInvalidationFfpState);
   return D3D_OK;
 }
 
@@ -888,7 +888,7 @@ HResult Device::setLight(u32 index, const Light &light) {
     return D3DERR_INVALIDCALL;
   }
   state_.lights[index] = light;
-  invalidateDrawStateCache();
+  invalidateDrawStateCache(DrawStateInvalidationFfpState);
   return D3D_OK;
 }
 
@@ -898,13 +898,13 @@ HResult Device::lightEnable(u32 index, bool enable) {
   }
   state_.lightEnabled[index] = enable;
   state_.lights[index].enabled = enable;
-  invalidateDrawStateCache();
+  invalidateDrawStateCache(DrawStateInvalidationFfpState);
   return D3D_OK;
 }
 
 HResult Device::setMaterial(const Material &material) {
   state_.material = material;
-  invalidateDrawStateCache();
+  invalidateDrawStateCache(DrawStateInvalidationFfpState);
   return D3D_OK;
 }
 
@@ -917,7 +917,8 @@ HResult Device::setTexture(u32 stage, std::shared_ptr<Texture> texture) {
     state_.textureStageStates[stage].set(TSS_TEXTURE_TYPE, type);
   }
   state_.textures[stage] = std::move(texture);
-  invalidateDrawStateCache();
+  invalidateDrawStateCache(DrawStateInvalidationTexture |
+                           DrawStateInvalidationTextureStageSampler);
   return D3D_OK;
 }
 
@@ -926,18 +927,26 @@ HResult Device::setStreamSource(u32 stream, std::shared_ptr<Buffer> buffer,
   if (stream >= kMaxStreams) {
     return D3DERR_INVALIDCALL;
   }
+  if (state_.streamBuffers[stream] == buffer &&
+      state_.streamOffsets[stream] == offset &&
+      state_.streamStrides[stream] == stride) {
+    return D3D_OK;
+  }
   state_.streamBuffers[stream] = std::move(buffer);
   state_.streamOffsets[stream] = offset;
   state_.streamStrides[stream] = stride;
-  invalidateDrawStateCache();
+  invalidateDrawStateCache(DrawStateInvalidationStream);
   return D3D_OK;
 }
 
 HResult Device::setIndices(std::shared_ptr<Buffer> buffer,
                            IndexType indexType) {
+  if (state_.indexBuffer == buffer && state_.indexType == indexType) {
+    return D3D_OK;
+  }
   state_.indexBuffer = std::move(buffer);
   state_.indexType = indexType;
-  invalidateDrawStateCache();
+  invalidateDrawStateCache(DrawStateInvalidationIndexBuffer);
   return D3D_OK;
 }
 
@@ -945,14 +954,14 @@ HResult Device::setFVF(u32 fvf) {
   state_.fvf = fvf;
   state_.vertexDecl.fvf = fvf;
   state_.vertexDecl.elements.clear();
-  invalidateDrawStateCache();
+  invalidateDrawStateCache(DrawStateInvalidationFvfVdecl);
   return D3D_OK;
 }
 
 HResult Device::setVertexDeclaration(std::vector<VertexElement> elements) {
   state_.vertexDecl.elements = std::move(elements);
   state_.vertexDecl.fvf = state_.fvf;
-  invalidateDrawStateCache();
+  invalidateDrawStateCache(DrawStateInvalidationFvfVdecl);
   return D3D_OK;
 }
 
@@ -961,7 +970,7 @@ HResult Device::setVertexShader(const ShaderRef &shader) {
   if (state_.vertexShader.hash == 0) {
     state_.vertexShader.hash = hashShaderRefForState(state_.vertexShader);
   }
-  invalidateDrawStateCache();
+  invalidateDrawStateCache(DrawStateInvalidationShader);
   return D3D_OK;
 }
 
@@ -970,7 +979,7 @@ HResult Device::setPixelShader(const ShaderRef &shader) {
   if (state_.pixelShader.hash == 0) {
     state_.pixelShader.hash = hashShaderRefForState(state_.pixelShader);
   }
-  invalidateDrawStateCache();
+  invalidateDrawStateCache(DrawStateInvalidationShader);
   return D3D_OK;
 }
 
@@ -979,7 +988,7 @@ HResult Device::setClipPlane(u32 index, const ClipPlane &plane) {
     return D3DERR_INVALIDCALL;
   }
   state_.clipPlanes[index] = plane;
-  invalidateDrawStateCache();
+  invalidateDrawStateCache(DrawStateInvalidationClipPlane);
   return D3D_OK;
 }
 
@@ -991,13 +1000,13 @@ HResult Device::setViewport(const Viewport &viewport) {
     return D3DERR_INVALIDCALL;
   }
   state_.viewport = viewport;
-  invalidateDrawStateCache();
+  invalidateDrawStateCache(DrawStateInvalidationViewportScissor);
   return D3D_OK;
 }
 
 HResult Device::setScissorRect(const Rect &rect) {
   state_.scissorRect = rect;
-  invalidateDrawStateCache();
+  invalidateDrawStateCache(DrawStateInvalidationViewportScissor);
   return D3D_OK;
 }
 
@@ -1016,7 +1025,8 @@ HResult Device::setRenderTarget(u32 index, std::shared_ptr<Surface> surface) {
     state_.viewport = {0, 0, width, height, 0.0f, 1.0f};
     state_.scissorRect = {0, 0, static_cast<i32>(width), static_cast<i32>(height)};
   }
-  invalidateDrawStateCache();
+  invalidateDrawStateCache(DrawStateInvalidationRenderTargetDepth |
+                           DrawStateInvalidationViewportScissor);
   return D3D_OK;
 }
 
@@ -1025,7 +1035,7 @@ HResult Device::setDepthStencilSurface(std::shared_ptr<Surface> surface) {
       surface ? RenderTargetAttachment{surface->handle(), surface->level(),
                                        surface->multiSampleCount()}
               : RenderTargetAttachment{};
-  invalidateDrawStateCache();
+  invalidateDrawStateCache(DrawStateInvalidationRenderTargetDepth);
   return D3D_OK;
 }
 
@@ -1049,7 +1059,7 @@ HResult Device::endScene() {
 
 void Device::resetState() {
   state_.reset();
-  invalidateDrawStateCache();
+  invalidateDrawStateCache(DrawStateInvalidationReset);
 }
 
 } // namespace dxmt9::core

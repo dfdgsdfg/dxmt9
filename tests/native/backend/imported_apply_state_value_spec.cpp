@@ -185,6 +185,7 @@ struct RecordingDxmt9Device final : dxmt9::Device {
           i < payloads.size() ? payloads[i] : DrawParamPayloadView{};
       param.userVertexRange = appendPayload(payload.userVertexData);
       param.userIndexRange = appendPayload(payload.userIndexData);
+      param.bindingOverrideRange = appendPayload(payload.bindingOverrideData);
       event.drawRun.draws.push_back(param);
     }
     events.push_back(std::move(event));
@@ -209,6 +210,21 @@ struct RecordingDxmt9Device final : dxmt9::Device {
   BackendDevice::DeviceLostObserver deviceLostObserver;
   BackendDevice::PresentationStatusObserver presentationStatusObserver;
 };
+
+std::span<const u8> recordedPayloadBytes(const RecordedDrawRun& run,
+                                         DrawPayloadRange range) {
+  return drawRunPayloadBytes(range, std::span<const u8>(run.payloadArena));
+}
+
+DrawBindingOverride recordedBindingOverride(const RecordedDrawRun& run,
+                                            DrawPayloadRange range,
+                                            std::string_view message) {
+  const auto bytes = recordedPayloadBytes(run, range);
+  checkEq(bytes.size(), sizeof(DrawBindingOverride), message);
+  DrawBindingOverride binding{};
+  std::memcpy(&binding, bytes.data(), sizeof(binding));
+  return binding;
+}
 
 D9CWireHandle wireHandleFromValue(std::uint64_t value) {
   return D9CWireHandle{
@@ -659,13 +675,32 @@ void assertRichDrawRunValues(const RecordedDrawRun& run,
   checkEq(run.hot.textures[2].value, texture->handle().value,
           "rich draw texture handle");
   checkEq(run.hot.textureMask, 1u << 2u, "rich draw texture mask");
-  checkEq(run.hot.streamBuffers[1].value, vertexBuffer->handle().value,
-          "rich draw stream buffer");
-  checkEq(run.hot.streamOffsets[1], 17u, "rich draw stream offset");
-  checkEq(run.hot.streamStrides[1], 36u, "rich draw stream stride");
-  checkEq(run.hot.streamMask, 1u << 1u, "rich draw stream mask");
-  checkEq(run.hot.indexBuffer.value, indexBuffer->handle().value,
-          "rich draw index buffer");
+  checkEq(run.hot.streamBuffers[1].value, std::uint64_t{0},
+          "rich draw base stream buffer is binding-agnostic");
+  checkEq(run.hot.streamOffsets[1], 0u,
+          "rich draw base stream offset is binding-agnostic");
+  checkEq(run.hot.streamStrides[1], 0u,
+          "rich draw base stream stride is binding-agnostic");
+  checkEq(run.hot.streamMask, 0u,
+          "rich draw base stream mask is binding-agnostic");
+  checkEq(run.hot.indexBuffer.value, std::uint64_t{0},
+          "rich draw base index buffer is binding-agnostic");
+
+  const auto binding = recordedBindingOverride(
+      run, run.draws[0].bindingOverrideRange,
+      "rich draw binding override payload size");
+  checkEq(binding.streamMask, 1u << 1u, "rich draw binding stream mask");
+  checkEq(binding.streams[1].buffer.value, vertexBuffer->handle().value,
+          "rich draw binding stream buffer");
+  checkEq(binding.streams[1].offset, 17u,
+          "rich draw binding stream offset");
+  checkEq(binding.streams[1].stride, 36u,
+          "rich draw binding stream stride");
+  check(binding.indexBufferValid, "rich draw binding index valid");
+  checkEq(binding.indexBuffer.value, indexBuffer->handle().value,
+          "rich draw binding index buffer");
+  checkEq(binding.indexType, IndexType::UInt32,
+          "rich draw binding index type");
 
   checkEq(run.hot.colorAttachments[0].handle.value,
           renderTarget->handle().value, "rich draw RT handle");
@@ -692,12 +727,12 @@ void assertRichDrawRunValues(const RecordedDrawRun& run,
         "rich draw vertex declaration elements");
   checkEq(run.state.shaderLayout.vertexDecl.fvf, 0x142u,
           "rich draw vertex declaration inherited FVF");
-  checkEq(run.state.shaderLayout.vertexDecl.streams[1].offset, 17u,
-          "rich draw vertex declaration stream offset");
+  checkEq(run.state.shaderLayout.vertexDecl.streams[1].offset, 0u,
+          "rich draw base vertex declaration stream offset is binding-agnostic");
   checkEq(run.state.shaderLayout.vertexDecl.streams[1].stride, 36u,
-          "rich draw vertex declaration stream stride");
-  check(run.state.shaderLayout.vertexDecl.streams[1].buffer == vertexBuffer,
-        "rich draw vertex declaration stream buffer");
+          "rich draw base vertex declaration stream stride preserves PSO layout");
+  check(run.state.shaderLayout.vertexDecl.streams[1].buffer == nullptr,
+        "rich draw base vertex declaration stream buffer is binding-agnostic");
   checkEq(run.state.shaderLayout.vertexShader, vertexShader.ref,
           "rich draw vertex shader ref");
   checkEq(run.state.shaderLayout.pixelShader, pixelShader.ref,

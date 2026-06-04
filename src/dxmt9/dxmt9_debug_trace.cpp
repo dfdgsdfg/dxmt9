@@ -201,6 +201,12 @@ IndexedTriangleClassFilter parseIndexedTriangleClassFilter(
       tokenEquals(spec, "blend")) {
     return IndexedTriangleClassFilter::AlphaBlend;
   }
+  if (tokenEquals(spec, "no-alpha-blend") ||
+      tokenEquals(spec, "non-alpha-blend") ||
+      tokenEquals(spec, "blend-off") ||
+      tokenEquals(spec, "no-blend")) {
+    return IndexedTriangleClassFilter::NoAlphaBlend;
+  }
   if (tokenEquals(spec, "screen-blend") ||
       tokenEquals(spec, "screen")) {
     return IndexedTriangleClassFilter::ScreenBlend;
@@ -426,6 +432,38 @@ bool shouldSkipDrawOrdinal(u64 ordinal, DrawOrdinalRange range) noexcept {
   return false;
 }
 
+DrawOrdinalList makeDrawOrdinalList(std::string_view spec) noexcept {
+  DrawOrdinalList result = {};
+  std::size_t pos = 0;
+
+  while (pos < spec.size() &&
+         result.count < DrawOrdinalList::MaxOrdinals) {
+    skipListSeparators(spec, pos);
+    if (pos >= spec.size()) {
+      break;
+    }
+    u64 ordinal = 0;
+    if (!parseU64(spec, pos, ordinal)) {
+      break;
+    }
+    result.ordinals[result.count++] = ordinal;
+  }
+  result.enabled = result.count != 0u;
+  return result;
+}
+
+bool drawOrdinalListContains(const DrawOrdinalList& list, u64 ordinal) noexcept {
+  if (!list.enabled) {
+    return false;
+  }
+  for (std::size_t i = 0; i < list.count; ++i) {
+    if (list.ordinals[i] == ordinal) {
+      return true;
+    }
+  }
+  return false;
+}
+
 bool forceVisibleDraw() {
   static const bool v = util::getenvFlag("DXMT_DEBUG_FORCE_VISIBLE");
   return v;
@@ -503,6 +541,44 @@ bool disableFog() {
 bool forceTextureWhite() {
   static const bool v = util::getenvFlag("DXMT_FORCE_TEXTURE_WHITE");
   return v;
+}
+
+bool probeForceTextureWhite() {
+  static const bool v =
+      util::getenvFlag("DXMT9_PROBE_FORCE_TEXTURE_WHITE") ||
+      probeForceTextureWhiteRow().enabled ||
+      probeForceTextureWhiteRows().enabled ||
+      probeForceTextureWhiteClassFilter() !=
+          IndexedTriangleClassFilter::Any ||
+      probeForceTextureWhiteClassFilters().count != 0;
+  return v;
+}
+
+IndexedTriangleClassFilter probeForceTextureWhiteClassFilter() {
+  static const IndexedTriangleClassFilter filter =
+      makeIndexedTriangleClassFilter(
+          util::getenvString("DXMT9_PROBE_FORCE_TEXTURE_WHITE_CLASS"));
+  return filter;
+}
+
+IndexedTriangleClassFilterList probeForceTextureWhiteClassFilters() {
+  static const IndexedTriangleClassFilterList filters =
+      makeIndexedTriangleClassFilterList(
+          util::getenvString("DXMT9_PROBE_FORCE_TEXTURE_WHITE_CLASSES"));
+  return filters;
+}
+
+RenderEncoderSelector probeForceTextureWhiteRow() {
+  static const RenderEncoderSelector selector =
+      parseRenderEncoderSelector("DXMT9_PROBE_FORCE_TEXTURE_WHITE_ROW");
+  return selector;
+}
+
+RenderEncoderSelectorList probeForceTextureWhiteRows() {
+  static const RenderEncoderSelectorList selectors =
+      makeRenderEncoderSelectorList(
+          util::getenvString("DXMT9_PROBE_FORCE_TEXTURE_WHITE_ROWS"));
+  return selectors;
 }
 
 bool probeDisableAlphaBlend() {
@@ -645,6 +721,44 @@ bool forceExpandIndexed() {
   return v;
 }
 
+bool probeForceExpandIndexed() {
+  static const bool v =
+      util::getenvFlag("DXMT9_PROBE_FORCE_EXPAND_INDEXED") ||
+      probeForceExpandIndexedRow().enabled ||
+      probeForceExpandIndexedRows().enabled ||
+      probeForceExpandIndexedClassFilter() !=
+          IndexedTriangleClassFilter::Any ||
+      probeForceExpandIndexedClassFilters().count != 0;
+  return v;
+}
+
+IndexedTriangleClassFilter probeForceExpandIndexedClassFilter() {
+  static const IndexedTriangleClassFilter filter =
+      makeIndexedTriangleClassFilter(
+          util::getenvString("DXMT9_PROBE_FORCE_EXPAND_INDEXED_CLASS"));
+  return filter;
+}
+
+IndexedTriangleClassFilterList probeForceExpandIndexedClassFilters() {
+  static const IndexedTriangleClassFilterList filters =
+      makeIndexedTriangleClassFilterList(
+          util::getenvString("DXMT9_PROBE_FORCE_EXPAND_INDEXED_CLASSES"));
+  return filters;
+}
+
+RenderEncoderSelector probeForceExpandIndexedRow() {
+  static const RenderEncoderSelector selector =
+      parseRenderEncoderSelector("DXMT9_PROBE_FORCE_EXPAND_INDEXED_ROW");
+  return selector;
+}
+
+RenderEncoderSelectorList probeForceExpandIndexedRows() {
+  static const RenderEncoderSelectorList selectors =
+      makeRenderEncoderSelectorList(
+          util::getenvString("DXMT9_PROBE_FORCE_EXPAND_INDEXED_ROWS"));
+  return selectors;
+}
+
 bool disableAutoExpandIndexed() {
   static const bool v = util::getenvFlag("DXMT_DISABLE_AUTO_EXPAND_INDEXED");
   return v;
@@ -784,9 +898,54 @@ bool probeOptimizeIndexedTrianglesVertexCache() {
   return v;
 }
 
+bool optimizeOpaqueDepthIndexCache() {
+  static const bool v =
+      util::getenvFlag("DXMT9_OPTIMIZE_OPAQUE_DEPTH_INDEX_CACHE");
+  return v;
+}
+
+std::uint32_t optimizeOpaqueDepthIndexCacheMinGainPct() {
+  static const std::uint32_t pct = [] {
+    const auto value = util::getenvU64Auto(
+        "DXMT9_OPTIMIZE_OPAQUE_DEPTH_INDEX_CACHE_MIN_GAIN_PCT");
+    if (!value.has_value()) {
+      return 10u;
+    }
+    return static_cast<std::uint32_t>(
+        std::min<std::uint64_t>(*value, 100u));
+  }();
+  return pct;
+}
+
+bool optimizeScreenBlendIndexCache() {
+  static const bool v =
+      util::getenvFlag("DXMT9_OPTIMIZE_SCREEN_BLEND_INDEX_CACHE");
+  return v;
+}
+
+std::uint32_t optimizeScreenBlendIndexCacheMinGainPct() {
+  static const std::uint32_t pct = [] {
+    const auto value = util::getenvU64Auto(
+        "DXMT9_OPTIMIZE_SCREEN_BLEND_INDEX_CACHE_MIN_GAIN_PCT");
+    if (!value.has_value()) {
+      return 10u;
+    }
+    return static_cast<std::uint32_t>(
+        std::min<std::uint64_t>(*value, 100u));
+  }();
+  return pct;
+}
+
 bool probeApplyIndexCacheOptCandidate() {
   static const bool v =
       util::getenvFlag("DXMT9_PROBE_APPLY_INDEX_CACHE_OPT_CANDIDATE");
+  return v;
+}
+
+bool probeApplyIndexCacheOptCandidateUnsafeNonOpaque() {
+  static const bool v =
+      util::getenvFlag(
+          "DXMT9_PROBE_APPLY_INDEX_CACHE_OPT_CANDIDATE_UNSAFE_NONOPAQUE");
   return v;
 }
 
@@ -830,6 +989,12 @@ DrawOrdinalRange probeIndexedTriangleEncoderDrawRange() {
       util::getenvU64Auto("DXMT9_PROBE_INDEXED_TRIANGLE_ENCODER_DRAW_MIN"),
       util::getenvU64Auto("DXMT9_PROBE_INDEXED_TRIANGLE_ENCODER_DRAW_MAX"));
   return range;
+}
+
+DrawOrdinalList probeIndexedTriangleEncoderDrawExcludeList() {
+  static const DrawOrdinalList list = makeDrawOrdinalList(
+      util::getenvString("DXMT9_PROBE_INDEXED_TRIANGLE_ENCODER_DRAW_EXCLUDE"));
+  return list;
 }
 
 RenderEncoderSelector probeReverseIndexedTrianglesRow() {

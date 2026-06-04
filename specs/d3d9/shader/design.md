@@ -735,6 +735,59 @@ captures the MSL strings keyed by IR hash; intentional MSL changes update
 the snapshot and force the reviewer to acknowledge the cache-invalidation
 blast radius.
 
+### 9.5 Formal And Property Validation
+
+The shader layer's strongest validation target is not full D3D9 semantic
+equivalence after the Metal compiler. It is the set of pure value-transform
+invariants that `requirements.md` makes translator-owned.
+
+**Precision inference model** (R-CORE-SHADER-8.5). Build a bounded IR model
+with:
+
+- finite register count (`r0..rN`, outputs, stage-in fields);
+- instruction edges for reaching writes, Float-only operations, sample-site
+  texture coordinates, and stage-boundary consumers;
+- `_pp` and non-`_pp` write flags;
+- expected cast edges between producer and consumer precision.
+
+The model checker or property-based suite asserts monotonic convergence,
+mandatory-Float preservation, mixed-write conservatism, and complete boundary
+cast coverage. This suite is required before the IR-level precision pass can
+replace the current text rewrite.
+
+**VSOut liveness equation** (R-CORE-SHADER-8.6). The semantic-field universe is
+small enough to test exhaustively:
+
+```
+expected = (VS_written & FS_read) | mandatory
+```
+
+The exhaustive generator covers texcoords, color, secondary color, fog, point
+size, and position. Position is always mandatory. The emitter-side assertion is
+that the `VSOutLayout` plan is the sole struct-shape authority.
+
+**Cache-key completeness** (R-CORE-SHADER-8.7). Generate a matrix over every
+axis listed in §6.6 and §7.1. For each toggle:
+
+- if the axis changes emitted MSL bytes, the cache key must change;
+- if the axis is a function/runtime constant, the source hash must stay stable;
+- two equal keys must emit byte-identical source.
+
+This catches the highest-risk archive failure: stale MSL reused because a new
+source-changing axis was not mixed into the key.
+
+**D3DBC decoder safety** (R-CORE-SHADER-8.8). A grammar-based generator emits
+valid and malformed token streams for SM 1.x / 2.x / 3.x. Sanitizer-backed fuzz
+or an equivalent bounded generator proves decode failure is total: malformed
+input returns a translator error and never a partial IR. Imported vkd3d oracle
+fixtures stay focused and provenance-tracked rather than vendoring source.
+
+**Emitter determinism and purity** (R-CORE-SHADER-8.9). Repeat-run tests cover
+byte equality. Static audits cover forbidden dependencies: time, pointer
+addresses, unordered iteration, direct Wine / Metal calls, and raw environment
+reads. Any environment-derived value that changes source must first be resolved
+into `ShaderSourceContext` and then into the cache key.
+
 ---
 
 ## 10. Verification Mapping
@@ -748,7 +801,7 @@ blast radius.
 | R-CORE-SHADER-5.1..5.6 | `dxmt9-shader-source-determinism-spec` (emitter determinism); MSL snapshot tests (§9.4); archive build at conformance run; variant-classification audit (R-CORE-SHADER-5.6) proving every spec axis is in exactly one of the function-constant / library-variant buckets defined in §6.6 |
 | R-CORE-SHADER-6.1..6.4 | shader-archive load/save test; env-var-flip cache-miss test |
 | R-CORE-SHADER-7.1..7.4 | env-var documentation audit; dump-shader path exercised by `scripts/tools/finalize_3dmark05_perf_probe.sh` shader-dump matching |
-| R-CORE-SHADER-8.1..8.5 | meson `dxmt9-shader-*` targets above; `specs/gap.md` rows for any unimplemented item |
+| R-CORE-SHADER-8.1..8.10 | meson `dxmt9-shader-*` targets above; formal/property suites in §9.5; `specs/gap.md` rows for any unimplemented item |
 | Cache observability cross-link | The backend / perf-attribution layer must surface `pipeline_build_*`, `pipeline_hit`, `pipeline_miss`, and `cold_compile_count_after_warm` counters keyed by the cache hash composed in §7.1. The shader spec defines the key composition; the backend spec defines counter publication. A backend change that breaks attribution from a hash bucket back to the spec axis that produced it is a regression. |
 
 Open gaps (live in `specs/gap.md`):
@@ -759,6 +812,8 @@ Open gaps (live in `specs/gap.md`):
   wired (`enableHalfVSOut`).
 - **Half-precision correctness oracle** — required by R-CORE-SHADER-3.10,
   R-CORE-SHADER-8.3; not yet built.
+- **Formal/property validation suite** — required by R-CORE-SHADER-8.5
+  through R-CORE-SHADER-8.9; not yet built.
 - **`SpirvModule` → `ShaderIR` rename** — naming cleanup, non-blocking.
 
 ---

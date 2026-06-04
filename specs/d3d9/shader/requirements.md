@@ -516,6 +516,45 @@ fixed-grid comparison is insufficient. The oracle MUST cover:
   reference, not an ABI dependency, and importing vkd3d source code is out of
   scope.
 
-**R-CORE-SHADER-8.5** A requirement in this document that is not yet fully
+**R-CORE-SHADER-8.5** The precision inference pass (§4.4), once implemented,
+MUST have a property or model-checking validation suite. The suite MUST prove
+or exhaustively test, over a bounded IR model, that:
+
+- the `{Half, Float}` lattice converges monotonically toward `Float`;
+- mandatory-Float regions (§3.2) are never classified `Half`;
+- mixed `_pp` / non-`_pp` reaching writes remain `Float` unless a documented
+  component-local proof exists;
+- every precision boundary crossing has a corresponding cast-insertion site.
+
+**R-CORE-SHADER-8.6** The VSOut liveness pass (§4.5) MUST have an exhaustive
+set-equation validation over the finite semantic-field domain. For every
+generated `(VS_written, FS_read, mandatory)` tuple, the emitted layout MUST
+equal `(VS_written ∩ FS_read) ∪ mandatory`, position MUST be emitted, and no
+FS-read field may be omitted.
+
+**R-CORE-SHADER-8.7** Cache-key and variant-axis completeness MUST be validated
+by an exhaustive axis-toggle suite. For every spec-defined axis, the suite MUST
+show that:
+
+- axes classified as library variants change the cache key whenever they change
+  emitted MSL bytes;
+- axes classified as function constants or runtime constants do not create a
+  new MSL cache key;
+- equal cache keys correspond to byte-identical MSL output;
+- every spec axis is classified into exactly one variant bucket.
+
+**R-CORE-SHADER-8.8** D3DBC decoder safety MUST be validated with grammar-based
+fixtures or fuzzing plus sanitizer coverage. The suite MUST assert that
+malformed bytecode never produces a partial IR, token advancement cannot read
+past the supplied bytecode, opcode operand counts are respected, and vkd3d
+drift-check fixtures cover imported decoder-oracle cases.
+
+**R-CORE-SHADER-8.9** Emitter determinism and pass purity MUST be validated by
+repeat-run and static-audit coverage. The same `(IR, plan, ShaderSourceContext)`
+triple MUST produce byte-identical MSL; pass and emitter code MUST NOT depend
+on process time, pointer identity, unordered container iteration, Wine, Metal,
+or environment variables except for documented `ShaderSourceContext` inputs.
+
+**R-CORE-SHADER-8.10** A requirement in this document that is not yet fully
 implemented or not yet fully evidenced must have a row in `specs/gap.md`.
 TODOs must not be hidden inside `requirements.md` or `design.md`.

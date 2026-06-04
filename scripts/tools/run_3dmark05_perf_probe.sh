@@ -28,6 +28,8 @@ optimize_screen_blend_index_order_rows=
 optimize_screen_blend_index_order_class=
 optimize_screen_blend_index_order_classes=
 optimize_screen_blend_index_order_stream0_span_min=
+optimize_screen_blend_index_cache=0
+optimize_screen_blend_index_cache_min_gain_pct=
 split_large_indexed_draws=
 split_large_indexed_draws_stream0_span_max=
 split_large_indexed_draws_max_chunks_per_draw=
@@ -36,12 +38,20 @@ split_large_indexed_draws_rows=
 split_large_indexed_draws_class=
 split_large_indexed_draws_classes=
 force_expand_indexed=0
+probe_force_expand_indexed=0
+probe_force_expand_indexed_row=
+probe_force_expand_indexed_rows=
+probe_force_expand_indexed_class=
+probe_force_expand_indexed_classes=
 probe_reverse_indexed_triangles=0
 probe_reverse_opaque_indexed_triangles=0
 probe_reverse_nonopaque_indexed_triangles=0
 probe_sort_indexed_triangles_by_min_index=0
 probe_optimize_indexed_triangles_vertex_cache=0
+optimize_opaque_depth_index_cache=0
+optimize_opaque_depth_index_cache_min_gain_pct=
 probe_apply_index_cache_opt_candidate=0
+probe_apply_index_cache_opt_candidate_unsafe_nonopaque=0
 probe_apply_index_cache_opt_candidate_min_gain_pct=
 probe_reverse_indexed_triangles_row=
 probe_reverse_indexed_triangles_rows=
@@ -50,6 +60,7 @@ probe_reverse_indexed_triangles_classes=
 probe_reverse_indexed_triangles_stream0_span_min=
 probe_indexed_triangle_encoder_draw_min=
 probe_indexed_triangle_encoder_draw_max=
+probe_indexed_triangle_encoder_draw_exclude=
 probe_scissor_rect=
 probe_scissor_rect_row=
 probe_scissor_rect_rows=
@@ -68,6 +79,10 @@ dump_indexed_geometry_cbufs=0
 dump_indexed_geometry_max_draws=${DXMT9_DUMP_INDEXED_GEOMETRY_MAX_DRAWS:-16}
 dump_indexed_geometry_vs=
 dump_indexed_geometry_ps=
+dump_depth_attachment_handle=${DXMT9_DUMP_DEPTH_ATTACHMENT_HANDLE:-}
+dump_depth_attachment_seq=${DXMT9_DUMP_DEPTH_ATTACHMENT_SEQ:-}
+dump_depth_attachment_enc=${DXMT9_DUMP_DEPTH_ATTACHMENT_ENC:-}
+dump_depth_attachment_path=${DXMT9_DUMP_DEPTH_ATTACHMENT_PATH:-}
 aggressive_color_dontcare=0
 aggressive_depth_dontcare=0
 disable_cull=0
@@ -75,6 +90,11 @@ disable_scissor=0
 disable_alpha_test=0
 disable_fog=0
 force_texture_white=0
+probe_force_texture_white=0
+probe_force_texture_white_row=
+probe_force_texture_white_rows=
+probe_force_texture_white_class=
+probe_force_texture_white_classes=
 probe_disable_alpha_blend=0
 probe_disable_alpha_blend_row=
 probe_disable_alpha_blend_rows=
@@ -93,7 +113,15 @@ probe_depth_func_always_classes=
 force_visible=0
 compare_baseline_output=${DXMT_3DMARK05_COMPARE_BASELINE_OUTPUT:-}
 compare_baseline_joined=${DXMT_3DMARK05_COMPARE_BASELINE_JOINED:-}
+semantic_image_policy=${DXMT_3DMARK05_SEMANTIC_IMAGE_POLICY:-}
+semantic_image_before=${DXMT_3DMARK05_SEMANTIC_IMAGE_BEFORE:-}
+semantic_image_after=${DXMT_3DMARK05_SEMANTIC_IMAGE_AFTER:-}
+semantic_image_output=${DXMT_3DMARK05_SEMANTIC_IMAGE_OUTPUT:-}
+semantic_image_summary_output=${DXMT_3DMARK05_SEMANTIC_IMAGE_SUMMARY_OUTPUT:-}
+semantic_image_diff_output=${DXMT_3DMARK05_SEMANTIC_IMAGE_DIFF_OUTPUT:-}
+semantic_image_min_active_pct=${DXMT_3DMARK05_SEMANTIC_IMAGE_MIN_ACTIVE_PCT:-1}
 encoder_breakdown_seq=${DXMT_3DMARK05_ENCODER_BREAKDOWN_SEQ:-}
+encoder_breakdown_all_frames=0
 require_color_dontcare_increase=0
 require_depth_dontcare_increase=0
 require_tile_preservation_decrease=0
@@ -118,6 +146,14 @@ require_transient_decrease=0
 require_top_gpu_share_increase=0
 require_top_row_key_match=0
 require_stable_frame_proof=0
+require_cache_opt_apply_proof=0
+require_screen_blend_cache_proof=0
+require_semantic_image_proof=0
+require_target_index_cache_miss32_decrease=0
+require_target_index_cache_opt_miss32_decrease=0
+require_target_reordered_index_cache_hits=0
+require_target_vs_buffer_write_decrease=0
+require_target_vs_invocations_decrease=0
 require_top_pso_attribution=0
 require_xcode_counter_coverage=0
 require_dxmt_join_coverage=0
@@ -126,6 +162,12 @@ min_top_pso_samples_per_draw=${DXMT_3DMARK05_MIN_TOP_PSO_SAMPLES_PER_DRAW:-0.90}
 min_top_dxmt_joined_fraction=${DXMT_3DMARK05_MIN_TOP_DXMT_JOINED_FRACTION:-1.0}
 max_top_gpu_regression_ms=${DXMT_3DMARK05_MAX_TOP_GPU_REGRESSION_MS:-}
 max_top_buffer_write_regression_mib=${DXMT_3DMARK05_MAX_TOP_BUFFER_WRITE_REGRESSION_MIB:-}
+max_non_target_gpu_regression_ms=${DXMT_3DMARK05_MAX_NON_TARGET_GPU_REGRESSION_MS:-}
+max_non_target_vs_buffer_write_regression_mib=${DXMT_3DMARK05_MAX_NON_TARGET_VS_BUFFER_WRITE_REGRESSION_MIB:-}
+max_non_target_vs_invocations_regression_ratio=${DXMT_3DMARK05_MAX_NON_TARGET_VS_INVOCATIONS_REGRESSION_RATIO:-}
+max_non_target_draw_call_delta_ratio=${DXMT_3DMARK05_MAX_NON_TARGET_DRAW_CALL_DELTA_RATIO:-}
+max_non_target_vertex_count_delta_ratio=${DXMT_3DMARK05_MAX_NON_TARGET_VERTEX_COUNT_DELTA_RATIO:-}
+max_non_target_triangle_delta_ratio=${DXMT_3DMARK05_MAX_NON_TARGET_TRIANGLE_DELTA_RATIO:-}
 max_top_unexplained_buffer_write_ratio=${DXMT_3DMARK05_MAX_TOP_UNEXPLAINED_BUFFER_WRITE_RATIO:-}
 max_top_draw_call_delta_ratio=${DXMT_3DMARK05_MAX_TOP_DRAW_CALL_DELTA_RATIO:-}
 max_top_vertex_count_delta_ratio=${DXMT_3DMARK05_MAX_TOP_VERTEX_COUNT_DELTA_RATIO:-}
@@ -133,6 +175,7 @@ max_top_triangle_delta_ratio=${DXMT_3DMARK05_MAX_TOP_TRIANGLE_DELTA_RATIO:-}
 top_n=${DXMT_3DMARK05_TOP_N:-3}
 hot_gpu_share=${DXMT_3DMARK05_HOT_GPU_SHARE:-95.0}
 min_free_mb=${DXMT_3DMARK05_MIN_TRACE_FREE_MB:-}
+target_row_keys=()
 
 usage() {
   cat <<'USAGE'
@@ -150,6 +193,9 @@ Options:
   --encoder-breakdown-seq N
                       Set DXMT9_PERF_ENCODER_BREAKDOWN_SEQ=N to emit only one
                       RenderPass[seq=N,...] frame's encoder breakdown
+  --encoder-breakdown-all-frames
+                      Do not auto-scope encoder/index diagnostics to --frame
+                      when gputrace capture is enabled
   --dump-shaders      Dump translated MSL and D3D shader bytecode under
                       traces/<run-id>/analysis/shaders
   --trim-unused-varyings
@@ -189,8 +235,9 @@ Options:
                       draw baseVertex / VS buffer-write experiments
   --optimize-screen-blend-index-order
                       Set DXMT9_OPTIMIZE_SCREEN_BLEND_INDEX_ORDER=1 to reverse
-                      order-independent screen-blend indexed triangle-list
-                      primitive order through a transient IB
+                      strict screen-blend indexed triangle-list primitive order
+                      through a transient IB. Diagnostic/profiling only:
+                      screen-blend output is destination-dependent.
   --optimize-screen-blend-index-order-row SEQ/ENC
                       Set DXMT9_OPTIMIZE_SCREEN_BLEND_INDEX_ORDER_ROW=SEQ/ENC
                       to constrain screen-blend index-order optimization
@@ -207,6 +254,16 @@ Options:
   --optimize-screen-blend-index-order-stream0-span-min BYTES
                       Set DXMT9_OPTIMIZE_SCREEN_BLEND_INDEX_ORDER_STREAM0_SPAN_MIN
                       to require a minimum original stream0 byte span
+  --optimize-screen-blend-index-cache
+                      Set DXMT9_OPTIMIZE_SCREEN_BLEND_INDEX_CACHE=1 to submit
+                      cached LRU32 reordered IBs for strict screen-blend
+                      triangle-list draws. Profiling-only opt-in: it never
+                      bypasses the screen-blend/depth-read safety predicate,
+                      but same-input translated-FS probes have shown small
+                      output differences.
+  --optimize-screen-blend-index-cache-min-gain-pct PCT
+                      Set DXMT9_OPTIMIZE_SCREEN_BLEND_INDEX_CACHE_MIN_GAIN_PCT
+                      (default in dxmt9: 10)
   --split-large-indexed-draws N
                       Set DXMT9_SPLIT_LARGE_INDEXED_DRAWS=N to split indexed
                       triangle-list draws above N primitives
@@ -228,8 +285,9 @@ Options:
   --split-large-indexed-draws-class CLASS
                       Set DXMT9_SPLIT_LARGE_INDEXED_DRAWS_CLASS=CLASS.
                       Accepted values: any, opaque-depth-write, nonopaque,
-                      depth-read, alpha-blend, screen-blend, standard-alpha,
-                      additive-alpha, scissor, no-scissor, textured, large4096
+                      depth-read, alpha-blend, no-alpha-blend, screen-blend,
+                      standard-alpha, additive-alpha, scissor, no-scissor,
+                      textured, large4096
   --split-large-indexed-draws-classes CLASSES
                       Set DXMT9_SPLIT_LARGE_INDEXED_DRAWS_CLASSES=CLASSES.
                       Values are ANDed and may be comma/semicolon/space/+ or
@@ -238,6 +296,20 @@ Options:
                       Set DXMT_FORCE_EXPAND_INDEXED=1 to expand indexed draws
                       into flat vertex lists for primitive/backend pressure
                       classification
+  --probe-force-expand-indexed
+                      Set DXMT9_PROBE_FORCE_EXPAND_INDEXED=1 to expand only
+                      selected indexed triangle-list draws into flat vertex
+                      lists for row/class-scoped backend-pressure diagnosis
+  --probe-force-expand-indexed-row SEQ/ENC
+                      Set DXMT9_PROBE_FORCE_EXPAND_INDEXED_ROW=SEQ/ENC
+  --probe-force-expand-indexed-rows ROWS
+                      Set DXMT9_PROBE_FORCE_EXPAND_INDEXED_ROWS=ROWS
+  --probe-force-expand-indexed-class CLASS
+                      Set DXMT9_PROBE_FORCE_EXPAND_INDEXED_CLASS=CLASS.
+                      Accepted values match split-large indexed filters
+  --probe-force-expand-indexed-classes CLASSES
+                      Set DXMT9_PROBE_FORCE_EXPAND_INDEXED_CLASSES=CLASSES.
+                      Values are ANDed, e.g. depth-read,screen-blend,textured
   --probe-reverse-indexed-triangles
                       Set DXMT9_PROBE_REVERSE_INDEXED_TRIANGLES=1 to keep
                       indexed draws but reverse triangle-list primitive order
@@ -260,6 +332,14 @@ Options:
                       to greedily reorder triangle-list primitive order around
                       a small vertex cache through a transient IB. Uses the
                       same row/class/span filters as reverse-indexed-triangles
+  --optimize-opaque-depth-index-cache
+                      Set DXMT9_OPTIMIZE_OPAQUE_DEPTH_INDEX_CACHE=1 to submit
+                      cached LRU32 reordered IBs for opaque depth-writing
+                      triangle-list draws. This is opt-in, never bypasses the
+                      opaque-depth-write safety gate, and is not row-scoped.
+  --optimize-opaque-depth-index-cache-min-gain-pct PCT
+                      Set DXMT9_OPTIMIZE_OPAQUE_DEPTH_INDEX_CACHE_MIN_GAIN_PCT
+                      (default in dxmt9: 10)
   --probe-apply-index-cache-opt-candidate
                       Set DXMT9_PROBE_APPLY_INDEX_CACHE_OPT_CANDIDATE=1 to
                       submit the LRU32 cache-aware candidate only when its
@@ -268,6 +348,12 @@ Options:
                       safety and a source-IB keyed reordered-index cache;
                       implies --measure-index-reuse and
                       --measure-index-cache-opt-candidate
+  --probe-apply-index-cache-opt-candidate-unsafe-nonopaque
+                      Set DXMT9_PROBE_APPLY_INDEX_CACHE_OPT_CANDIDATE_UNSAFE_NONOPAQUE=1
+                      to bypass the opaque-depth-write safety gate for
+                      targeted depth-read/blended diagnostic A/B probes.
+                      Requires --probe-apply-index-cache-opt-candidate to
+                      mutate draw order
   --probe-apply-index-cache-opt-candidate-min-gain-pct PCT
                       Set DXMT9_PROBE_APPLY_INDEX_CACHE_OPT_CANDIDATE_MIN_GAIN_PCT
                       (default in dxmt9: 10)
@@ -285,7 +371,8 @@ Options:
   --probe-reverse-indexed-triangles-classes CLASSES
                       Set DXMT9_PROBE_REVERSE_INDEXED_TRIANGLES_CLASSES=CLASSES.
                       Values are ANDed and may be comma/semicolon/space/+ or
-                      & separated, e.g. large4096,screen-blend
+                      & separated, e.g. large4096,screen-blend or
+                      depth-read,no-alpha-blend,no-scissor
   --probe-reverse-indexed-triangles-stream0-span-min BYTES
                       Set DXMT9_PROBE_REVERSE_INDEXED_TRIANGLES_STREAM0_SPAN_MIN
                       to require a minimum original stream0 byte span
@@ -297,6 +384,11 @@ Options:
                       Set DXMT9_PROBE_INDEXED_TRIANGLE_ENCODER_DRAW_MAX=N.
                       Use with a row selector to target a material window such
                       as 60/2 draw 71..188 without changing other rows
+  --probe-indexed-triangle-encoder-draw-exclude LIST
+                      Set DXMT9_PROBE_INDEXED_TRIANGLE_ENCODER_DRAW_EXCLUDE.
+                      Comma/semicolon/space separated encoder draw indexes to
+                      leave unmodified inside the selected row/range; debug
+                      proof aid for exact-safe sub-window experiments only
   --probe-scissor-rect L,T,R,B
                       Set DXMT9_PROBE_SCISSOR_RECT=L,T,R,B to preserve scissor
                       enablement but override the scissor rectangle for
@@ -355,6 +447,17 @@ Options:
   --dump-indexed-geometry-ps HASH
                       Set DXMT9_DUMP_INDEXED_GEOMETRY_PS=HASH to dump only
                       draws using this pixel shader hash
+  --dump-depth-attachment-handle HANDLE
+                      Dump one active depth attachment by handle for mini
+                      replay --depth-input. Pairs with optional seq/enc gates.
+  --dump-depth-attachment-seq N
+                      Set DXMT9_DUMP_DEPTH_ATTACHMENT_SEQ=N
+  --dump-depth-attachment-enc N
+                      Set DXMT9_DUMP_DEPTH_ATTACHMENT_ENC=N
+  --dump-depth-attachment-path PATH
+                      Output path for the raw depth sidecar. Relative paths
+                      are resolved under the repository root; default is
+                      traces/<run-id>/analysis/frame<N>-depth.bin
   --aggressive-color-dontcare
                       Set DXMT9_AGGRESSIVE_COLOR_DONTCARE=1 for the run
   --aggressive-depth-dontcare
@@ -369,6 +472,20 @@ Options:
   --force-texture-white
                       Set DXMT_FORCE_TEXTURE_WHITE=1 to replace fragment
                       texture samples with float4(1) while keeping shader body
+  --probe-force-texture-white
+                      Set DXMT9_PROBE_FORCE_TEXTURE_WHITE=1 to replace
+                      fragment texture samples with float4(1) only for
+                      selected indexed triangle-list draws
+  --probe-force-texture-white-row SEQ/ENC
+                      Set DXMT9_PROBE_FORCE_TEXTURE_WHITE_ROW=SEQ/ENC
+  --probe-force-texture-white-rows ROWS
+                      Set DXMT9_PROBE_FORCE_TEXTURE_WHITE_ROWS=ROWS
+  --probe-force-texture-white-class CLASS
+                      Set DXMT9_PROBE_FORCE_TEXTURE_WHITE_CLASS=CLASS.
+                      Accepted values match split-large indexed filters
+  --probe-force-texture-white-classes CLASSES
+                      Set DXMT9_PROBE_FORCE_TEXTURE_WHITE_CLASSES=CLASSES.
+                      Values are ANDed, e.g. depth-read,screen-blend,textured
   --probe-disable-alpha-blend
                       Set DXMT9_PROBE_DISABLE_ALPHA_BLEND=1 for blend state A/B
   --probe-disable-alpha-blend-row SEQ/ENC
@@ -415,6 +532,24 @@ Options:
   --baseline-joined PATH
                       Include this Xcode+dxmt joined CSV in the printed finalizer command
                       for after-Xcode counter comparison
+  --semantic-image-policy exact|lsb1
+                      Include a same-input mini-replay image gate in the
+                      printed finalizer command. exact is the default
+                      correctness policy; lsb1 is only for explicit
+                      blend-rounding tolerance decisions.
+  --semantic-image-before PATH
+                      Baseline image for --semantic-image-policy
+  --semantic-image-after PATH
+                      Candidate image for --semantic-image-policy
+  --semantic-image-output PATH
+                      Finalizer image comparison report path
+  --semantic-image-summary-output PATH
+                      Finalizer image comparison CSV path
+  --semantic-image-diff-output PATH
+                      Finalizer image comparison diff path
+  --semantic-image-min-active-pct N
+                      Min before/after active pixel percentage for semantic
+                      image gates (default: 1)
   --require-color-dontcare-increase
                       Compare gate: candidate color StoreActionDontCare count must increase
   --require-depth-dontcare-increase
@@ -466,6 +601,25 @@ Options:
                       Finalizer proof preset: require result.json, counter/join
                       coverage, PSO attribution, top row-key match, top GPU/VS/
                       unexplained write decrease, and <=5% top geometry drift
+  --require-cache-opt-apply-proof
+                      Finalizer proof preset for cache-opt apply runs: stable
+                      frame proof plus target rows' actual LRU32 miss, VS
+                      buffer write, and VS invocation decreases; requires
+                      --target-row-key
+  --require-screen-blend-cache-proof
+                      Finalizer proof preset for screen-blend cached-index
+                      opt-in: stable-frame proof plus target cache-opt
+                      telemetry, reordered-cache hits, target VS write/
+                      invocation decreases, and a same-input semantic image
+                      gate; requires --target-row-key and --semantic-image-
+                      policy with before/after images.
+                      Also requires --optimize-screen-blend-index-cache and
+                      enables index-reuse/cache-opt-candidate telemetry.
+  --require-semantic-image-proof
+                      Finalizer gate: require --semantic-image-policy with
+                      before/after images and fail if that image comparison
+                      fails. Automatically required when unsafe nonopaque
+                      cache-opt apply uses --require-cache-opt-apply-proof.
   --require-top-pso-attribution
                       Finalizer gate: top Xcode encoder rows must have PSO/VSOut
                       attribution near draw frequency
@@ -487,6 +641,40 @@ Options:
                       Finalizer Xcode gate: max allowed top-N GPU time regression
   --max-top-buffer-write-regression-mib N
                       Finalizer Xcode gate: max allowed top-N buffer write regression
+  --target-row-key ROW
+                      Finalizer Xcode gate: target seq/enc row key, e.g. 50/1;
+                      repeat to exclude all mutated rows from non-target guards
+  --require-target-index-cache-miss32-decrease
+                      Finalizer Xcode gate: target rows' actual dxmt LRU32 miss
+                      estimate must decrease, catching cache-opt apply no-ops
+  --require-target-index-cache-opt-miss32-decrease
+                      Finalizer Xcode gate: after target rows' cache-opt
+                      candidate/effective LRU32 estimate must decrease
+  --require-target-reordered-index-cache-hits
+                      Finalizer Xcode gate: every after target row must have
+                      positive reordered index cache hits
+  --require-target-vs-buffer-write-decrease
+                      Finalizer Xcode gate: target rows' VS buffer write must decrease
+  --require-target-vs-invocations-decrease
+                      Finalizer Xcode gate: target rows' VS invocation count must decrease
+  --max-non-target-gpu-regression-ms N
+                      Finalizer Xcode gate: max matched GPU ms regression for
+                      before top-N rows excluding --target-row-key rows
+  --max-non-target-vs-buffer-write-regression-mib N
+                      Finalizer Xcode gate: max matched VS buffer write MiB
+                      regression for before top-N non-target rows
+  --max-non-target-vs-invocations-regression-ratio N
+                      Finalizer Xcode gate: max matched relative VS invocation
+                      regression for before top-N non-target rows
+  --max-non-target-draw-call-delta-ratio N
+                      Finalizer Xcode gate: max relative draw-count drift for
+                      before top-N non-target rows
+  --max-non-target-vertex-count-delta-ratio N
+                      Finalizer Xcode gate: max relative vertex-count drift for
+                      before top-N non-target rows
+  --max-non-target-triangle-delta-ratio N
+                      Finalizer Xcode gate: max relative triangle-count drift for
+                      before top-N non-target rows
   --max-top-unexplained-buffer-write-ratio N
                       Finalizer Xcode gate: max allowed unexplained top-N
                       buffer write / buffer write ratio
@@ -529,6 +717,10 @@ while (($#)); do
     --encoder-breakdown-seq)
       encoder_breakdown_seq=${2:?missing value for --encoder-breakdown-seq}
       shift 2
+      ;;
+    --encoder-breakdown-all-frames)
+      encoder_breakdown_all_frames=1
+      shift
       ;;
     --no-gputrace)
       capture_gputrace=0
@@ -606,6 +798,14 @@ while (($#)); do
       optimize_screen_blend_index_order_stream0_span_min=${2:?missing value for --optimize-screen-blend-index-order-stream0-span-min}
       shift 2
       ;;
+    --optimize-screen-blend-index-cache)
+      optimize_screen_blend_index_cache=1
+      shift
+      ;;
+    --optimize-screen-blend-index-cache-min-gain-pct)
+      optimize_screen_blend_index_cache_min_gain_pct=${2:?missing value for --optimize-screen-blend-index-cache-min-gain-pct}
+      shift 2
+      ;;
     --split-large-indexed-draws)
       split_large_indexed_draws=${2:?missing value for --split-large-indexed-draws}
       shift 2
@@ -638,6 +838,26 @@ while (($#)); do
       force_expand_indexed=1
       shift
       ;;
+    --probe-force-expand-indexed)
+      probe_force_expand_indexed=1
+      shift
+      ;;
+    --probe-force-expand-indexed-row)
+      probe_force_expand_indexed_row=${2:?missing value for --probe-force-expand-indexed-row}
+      shift 2
+      ;;
+    --probe-force-expand-indexed-rows)
+      probe_force_expand_indexed_rows=${2:?missing value for --probe-force-expand-indexed-rows}
+      shift 2
+      ;;
+    --probe-force-expand-indexed-class)
+      probe_force_expand_indexed_class=${2:?missing value for --probe-force-expand-indexed-class}
+      shift 2
+      ;;
+    --probe-force-expand-indexed-classes)
+      probe_force_expand_indexed_classes=${2:?missing value for --probe-force-expand-indexed-classes}
+      shift 2
+      ;;
     --probe-reverse-indexed-triangles)
       probe_reverse_indexed_triangles=1
       shift
@@ -658,10 +878,22 @@ while (($#)); do
       probe_optimize_indexed_triangles_vertex_cache=1
       shift
       ;;
+    --optimize-opaque-depth-index-cache)
+      optimize_opaque_depth_index_cache=1
+      shift
+      ;;
+    --optimize-opaque-depth-index-cache-min-gain-pct)
+      optimize_opaque_depth_index_cache_min_gain_pct=${2:?missing value for --optimize-opaque-depth-index-cache-min-gain-pct}
+      shift 2
+      ;;
     --probe-apply-index-cache-opt-candidate)
       probe_apply_index_cache_opt_candidate=1
       measure_index_reuse=1
       measure_index_cache_opt_candidate=1
+      shift
+      ;;
+    --probe-apply-index-cache-opt-candidate-unsafe-nonopaque)
+      probe_apply_index_cache_opt_candidate_unsafe_nonopaque=1
       shift
       ;;
     --probe-apply-index-cache-opt-candidate-min-gain-pct)
@@ -694,6 +926,10 @@ while (($#)); do
       ;;
     --probe-indexed-triangle-encoder-draw-max)
       probe_indexed_triangle_encoder_draw_max=${2:?missing value for --probe-indexed-triangle-encoder-draw-max}
+      shift 2
+      ;;
+    --probe-indexed-triangle-encoder-draw-exclude)
+      probe_indexed_triangle_encoder_draw_exclude=${2:?missing value for --probe-indexed-triangle-encoder-draw-exclude}
       shift 2
       ;;
     --probe-scissor-rect)
@@ -772,6 +1008,22 @@ while (($#)); do
       dump_indexed_geometry_ps=${2:?missing value for --dump-indexed-geometry-ps}
       shift 2
       ;;
+    --dump-depth-attachment-handle)
+      dump_depth_attachment_handle=${2:?missing value for --dump-depth-attachment-handle}
+      shift 2
+      ;;
+    --dump-depth-attachment-seq)
+      dump_depth_attachment_seq=${2:?missing value for --dump-depth-attachment-seq}
+      shift 2
+      ;;
+    --dump-depth-attachment-enc)
+      dump_depth_attachment_enc=${2:?missing value for --dump-depth-attachment-enc}
+      shift 2
+      ;;
+    --dump-depth-attachment-path)
+      dump_depth_attachment_path=${2:?missing value for --dump-depth-attachment-path}
+      shift 2
+      ;;
     --aggressive-color-dontcare)
       aggressive_color_dontcare=1
       shift
@@ -799,6 +1051,26 @@ while (($#)); do
     --force-texture-white)
       force_texture_white=1
       shift
+      ;;
+    --probe-force-texture-white)
+      probe_force_texture_white=1
+      shift
+      ;;
+    --probe-force-texture-white-row)
+      probe_force_texture_white_row=${2:?missing value for --probe-force-texture-white-row}
+      shift 2
+      ;;
+    --probe-force-texture-white-rows)
+      probe_force_texture_white_rows=${2:?missing value for --probe-force-texture-white-rows}
+      shift 2
+      ;;
+    --probe-force-texture-white-class)
+      probe_force_texture_white_class=${2:?missing value for --probe-force-texture-white-class}
+      shift 2
+      ;;
+    --probe-force-texture-white-classes)
+      probe_force_texture_white_classes=${2:?missing value for --probe-force-texture-white-classes}
+      shift 2
       ;;
     --probe-disable-alpha-blend)
       probe_disable_alpha_blend=1
@@ -878,6 +1150,34 @@ while (($#)); do
       ;;
     --baseline-joined)
       compare_baseline_joined=${2:?missing value for --baseline-joined}
+      shift 2
+      ;;
+    --semantic-image-policy)
+      semantic_image_policy=${2:?missing value for --semantic-image-policy}
+      shift 2
+      ;;
+    --semantic-image-before)
+      semantic_image_before=${2:?missing value for --semantic-image-before}
+      shift 2
+      ;;
+    --semantic-image-after)
+      semantic_image_after=${2:?missing value for --semantic-image-after}
+      shift 2
+      ;;
+    --semantic-image-output)
+      semantic_image_output=${2:?missing value for --semantic-image-output}
+      shift 2
+      ;;
+    --semantic-image-summary-output)
+      semantic_image_summary_output=${2:?missing value for --semantic-image-summary-output}
+      shift 2
+      ;;
+    --semantic-image-diff-output)
+      semantic_image_diff_output=${2:?missing value for --semantic-image-diff-output}
+      shift 2
+      ;;
+    --semantic-image-min-active-pct)
+      semantic_image_min_active_pct=${2:?missing value for --semantic-image-min-active-pct}
       shift 2
       ;;
     --require-color-dontcare-increase)
@@ -976,6 +1276,18 @@ while (($#)); do
       require_stable_frame_proof=1
       shift
       ;;
+    --require-cache-opt-apply-proof)
+      require_cache_opt_apply_proof=1
+      shift
+      ;;
+    --require-screen-blend-cache-proof)
+      require_screen_blend_cache_proof=1
+      shift
+      ;;
+    --require-semantic-image-proof)
+      require_semantic_image_proof=1
+      shift
+      ;;
     --require-top-pso-attribution)
       require_top_pso_attribution=1
       shift
@@ -1006,6 +1318,54 @@ while (($#)); do
       ;;
     --max-top-buffer-write-regression-mib)
       max_top_buffer_write_regression_mib=${2:?missing value for --max-top-buffer-write-regression-mib}
+      shift 2
+      ;;
+    --target-row-key)
+      target_row_keys+=("${2:?missing value for --target-row-key}")
+      shift 2
+      ;;
+    --require-target-index-cache-miss32-decrease)
+      require_target_index_cache_miss32_decrease=1
+      shift
+      ;;
+    --require-target-index-cache-opt-miss32-decrease)
+      require_target_index_cache_opt_miss32_decrease=1
+      shift
+      ;;
+    --require-target-reordered-index-cache-hits)
+      require_target_reordered_index_cache_hits=1
+      shift
+      ;;
+    --require-target-vs-buffer-write-decrease)
+      require_target_vs_buffer_write_decrease=1
+      shift
+      ;;
+    --require-target-vs-invocations-decrease)
+      require_target_vs_invocations_decrease=1
+      shift
+      ;;
+    --max-non-target-gpu-regression-ms)
+      max_non_target_gpu_regression_ms=${2:?missing value for --max-non-target-gpu-regression-ms}
+      shift 2
+      ;;
+    --max-non-target-vs-buffer-write-regression-mib)
+      max_non_target_vs_buffer_write_regression_mib=${2:?missing value for --max-non-target-vs-buffer-write-regression-mib}
+      shift 2
+      ;;
+    --max-non-target-vs-invocations-regression-ratio)
+      max_non_target_vs_invocations_regression_ratio=${2:?missing value for --max-non-target-vs-invocations-regression-ratio}
+      shift 2
+      ;;
+    --max-non-target-draw-call-delta-ratio)
+      max_non_target_draw_call_delta_ratio=${2:?missing value for --max-non-target-draw-call-delta-ratio}
+      shift 2
+      ;;
+    --max-non-target-vertex-count-delta-ratio)
+      max_non_target_vertex_count_delta_ratio=${2:?missing value for --max-non-target-vertex-count-delta-ratio}
+      shift 2
+      ;;
+    --max-non-target-triangle-delta-ratio)
+      max_non_target_triangle_delta_ratio=${2:?missing value for --max-non-target-triangle-delta-ratio}
       shift 2
       ;;
     --max-top-unexplained-buffer-write-ratio)
@@ -1112,6 +1472,26 @@ if [[ ! "$hot_gpu_share" =~ ^[0-9]+([.][0-9]+)?$ ]]; then
   exit 2
 fi
 
+if [[ ! "$semantic_image_min_active_pct" =~ ^[0-9]+([.][0-9]+)?$ ]]; then
+  echo "--semantic-image-min-active-pct must be numeric" >&2
+  exit 2
+fi
+
+semantic_image_compare_requested=0
+if [[ -n "$semantic_image_policy$semantic_image_before$semantic_image_after$semantic_image_output$semantic_image_summary_output$semantic_image_diff_output" ]]; then
+  semantic_image_compare_requested=1
+fi
+if (( semantic_image_compare_requested )); then
+  if [[ "$semantic_image_policy" != exact && "$semantic_image_policy" != lsb1 ]]; then
+    echo "--semantic-image-policy must be one of: exact, lsb1" >&2
+    exit 2
+  fi
+  if [[ -z "$semantic_image_before" || -z "$semantic_image_after" ]]; then
+    echo "--semantic-image-policy requires --semantic-image-before and --semantic-image-after" >&2
+    exit 2
+  fi
+fi
+
 if [[ -n "$force_cull_mode" &&
       "$force_cull_mode" != none &&
       "$force_cull_mode" != front &&
@@ -1125,6 +1505,88 @@ if [[ -n "$probe_force_cull_mode" &&
       "$probe_force_cull_mode" != front &&
       "$probe_force_cull_mode" != back ]]; then
   echo "--probe-force-cull-mode must be one of: none, front, back" >&2
+  exit 2
+fi
+
+if [[ -n "$optimize_opaque_depth_index_cache_min_gain_pct" &&
+      ! "$optimize_opaque_depth_index_cache_min_gain_pct" =~ ^[0-9]+$ ]]; then
+  echo "--optimize-opaque-depth-index-cache-min-gain-pct must be a non-negative integer" >&2
+  exit 2
+fi
+
+if [[ -n "$optimize_screen_blend_index_cache_min_gain_pct" &&
+      ! "$optimize_screen_blend_index_cache_min_gain_pct" =~ ^[0-9]+$ ]]; then
+  echo "--optimize-screen-blend-index-cache-min-gain-pct must be a non-negative integer" >&2
+  exit 2
+fi
+
+if [[ -n "$probe_apply_index_cache_opt_candidate_min_gain_pct" &&
+      ! "$probe_apply_index_cache_opt_candidate_min_gain_pct" =~ ^[0-9]+$ ]]; then
+  echo "--probe-apply-index-cache-opt-candidate-min-gain-pct must be a non-negative integer" >&2
+  exit 2
+fi
+if [[ -n "$dump_depth_attachment_handle" &&
+      ! "$dump_depth_attachment_handle" =~ ^(0[xX][0-9a-fA-F]+|[0-9]+)$ ]]; then
+  echo "--dump-depth-attachment-handle must be an integer handle, e.g. 0x300000100000001" >&2
+  exit 2
+fi
+if [[ -n "$dump_depth_attachment_seq" &&
+      ! "$dump_depth_attachment_seq" =~ ^[0-9]+$ ]]; then
+  echo "--dump-depth-attachment-seq must be a non-negative integer" >&2
+  exit 2
+fi
+if [[ -n "$dump_depth_attachment_enc" &&
+      ! "$dump_depth_attachment_enc" =~ ^[0-9]+$ ]]; then
+  echo "--dump-depth-attachment-enc must be a non-negative integer" >&2
+  exit 2
+fi
+if [[ -z "$dump_depth_attachment_handle" &&
+      ( -n "$dump_depth_attachment_seq" ||
+        -n "$dump_depth_attachment_enc" ||
+        -n "$dump_depth_attachment_path" ) ]]; then
+  echo "--dump-depth-attachment-seq/enc/path require --dump-depth-attachment-handle" >&2
+  exit 2
+fi
+
+if (( require_screen_blend_cache_proof )); then
+  require_semantic_image_proof=1
+  require_stable_frame_proof=1
+  require_target_index_cache_opt_miss32_decrease=1
+  require_target_reordered_index_cache_hits=1
+  require_target_vs_buffer_write_decrease=1
+  require_target_vs_invocations_decrease=1
+  if (( ! semantic_image_compare_requested )); then
+    echo "--require-screen-blend-cache-proof requires --semantic-image-policy with --semantic-image-before and --semantic-image-after" >&2
+    exit 2
+  fi
+  if (( ! optimize_screen_blend_index_cache )); then
+    echo "--require-screen-blend-cache-proof requires --optimize-screen-blend-index-cache" >&2
+    exit 2
+  fi
+  if (( ${#target_row_keys[@]} == 0 )); then
+    echo "--require-screen-blend-cache-proof requires at least one --target-row-key" >&2
+    exit 2
+  fi
+  measure_index_reuse=1
+  measure_index_cache_opt_candidate=1
+fi
+
+if (( require_cache_opt_apply_proof )); then
+  require_stable_frame_proof=1
+  require_target_index_cache_miss32_decrease=1
+  require_target_vs_buffer_write_decrease=1
+  require_target_vs_invocations_decrease=1
+  if (( probe_apply_index_cache_opt_candidate_unsafe_nonopaque )); then
+    require_semantic_image_proof=1
+  fi
+  if (( ${#target_row_keys[@]} == 0 )); then
+    echo "--require-cache-opt-apply-proof requires at least one --target-row-key" >&2
+    exit 2
+  fi
+fi
+
+if (( require_semantic_image_proof && ! semantic_image_compare_requested )); then
+  echo "--require-semantic-image-proof requires --semantic-image-policy with --semantic-image-before and --semantic-image-after" >&2
   exit 2
 fi
 
@@ -1180,6 +1642,36 @@ if [[ -n "$max_top_triangle_delta_ratio" &&
   echo "--max-top-triangle-delta-ratio must be numeric" >&2
   exit 2
 fi
+if [[ -n "$max_non_target_gpu_regression_ms" &&
+      ! "$max_non_target_gpu_regression_ms" =~ ^[0-9]+([.][0-9]+)?$ ]]; then
+  echo "--max-non-target-gpu-regression-ms must be numeric" >&2
+  exit 2
+fi
+if [[ -n "$max_non_target_vs_buffer_write_regression_mib" &&
+      ! "$max_non_target_vs_buffer_write_regression_mib" =~ ^[0-9]+([.][0-9]+)?$ ]]; then
+  echo "--max-non-target-vs-buffer-write-regression-mib must be numeric" >&2
+  exit 2
+fi
+if [[ -n "$max_non_target_vs_invocations_regression_ratio" &&
+      ! "$max_non_target_vs_invocations_regression_ratio" =~ ^[0-9]+([.][0-9]+)?$ ]]; then
+  echo "--max-non-target-vs-invocations-regression-ratio must be numeric" >&2
+  exit 2
+fi
+if [[ -n "$max_non_target_draw_call_delta_ratio" &&
+      ! "$max_non_target_draw_call_delta_ratio" =~ ^[0-9]+([.][0-9]+)?$ ]]; then
+  echo "--max-non-target-draw-call-delta-ratio must be numeric" >&2
+  exit 2
+fi
+if [[ -n "$max_non_target_vertex_count_delta_ratio" &&
+      ! "$max_non_target_vertex_count_delta_ratio" =~ ^[0-9]+([.][0-9]+)?$ ]]; then
+  echo "--max-non-target-vertex-count-delta-ratio must be numeric" >&2
+  exit 2
+fi
+if [[ -n "$max_non_target_triangle_delta_ratio" &&
+      ! "$max_non_target_triangle_delta_ratio" =~ ^[0-9]+([.][0-9]+)?$ ]]; then
+  echo "--max-non-target-triangle-delta-ratio must be numeric" >&2
+  exit 2
+fi
 
 xcode_compare_requested=0
 if (( require_top_gpu_decrease ||
@@ -1191,9 +1683,21 @@ if (( require_top_gpu_decrease ||
       require_argbuf_cbuf_decrease ||
       require_transient_decrease ||
       require_top_gpu_share_increase ||
-      require_top_row_key_match )) ||
+      require_top_row_key_match ||
+      require_target_index_cache_miss32_decrease ||
+      require_target_index_cache_opt_miss32_decrease ||
+      require_target_reordered_index_cache_hits ||
+      require_target_vs_buffer_write_decrease ||
+      require_target_vs_invocations_decrease )) ||
    [[ -n "$max_top_gpu_regression_ms" ||
       -n "$max_top_buffer_write_regression_mib" ||
+      ${#target_row_keys[@]} -gt 0 ||
+      -n "$max_non_target_gpu_regression_ms" ||
+      -n "$max_non_target_vs_buffer_write_regression_mib" ||
+      -n "$max_non_target_vs_invocations_regression_ratio" ||
+      -n "$max_non_target_draw_call_delta_ratio" ||
+      -n "$max_non_target_vertex_count_delta_ratio" ||
+      -n "$max_non_target_triangle_delta_ratio" ||
       -n "$max_top_unexplained_buffer_write_ratio" ||
       -n "$max_top_draw_call_delta_ratio" ||
       -n "$max_top_vertex_count_delta_ratio" ||
@@ -1248,6 +1752,32 @@ if (( require_shader_dump_matches && ! dump_shaders )); then
   exit 2
 fi
 
+frame_local_index_diagnostics_requested=0
+if (( measure_index_reuse ||
+      measure_index_cache_opt_candidate ||
+      dump_indexed_geometry ||
+      force_expand_indexed ||
+      probe_force_expand_indexed ||
+      probe_reverse_indexed_triangles ||
+      probe_reverse_opaque_indexed_triangles ||
+      probe_reverse_nonopaque_indexed_triangles ||
+      probe_sort_indexed_triangles_by_min_index ||
+      probe_optimize_indexed_triangles_vertex_cache ||
+      probe_apply_index_cache_opt_candidate ||
+      probe_apply_index_cache_opt_candidate_unsafe_nonopaque ||
+      optimize_opaque_depth_index_cache ||
+      optimize_screen_blend_index_order ||
+      optimize_screen_blend_index_cache )) ||
+   [[ -n "$split_large_indexed_draws$split_large_indexed_draws_stream0_span_max$split_large_indexed_draws_max_chunks_per_draw$split_large_indexed_draws_row$split_large_indexed_draws_rows$split_large_indexed_draws_class$split_large_indexed_draws_classes$probe_force_expand_indexed_row$probe_force_expand_indexed_rows$probe_force_expand_indexed_class$probe_force_expand_indexed_classes$probe_reverse_indexed_triangles_row$probe_reverse_indexed_triangles_rows$probe_reverse_indexed_triangles_class$probe_reverse_indexed_triangles_classes$probe_reverse_indexed_triangles_stream0_span_min$probe_indexed_triangle_encoder_draw_min$probe_indexed_triangle_encoder_draw_max$probe_indexed_triangle_encoder_draw_exclude" ]]; then
+  frame_local_index_diagnostics_requested=1
+fi
+
+if (( capture_gputrace || frame_local_index_diagnostics_requested )) &&
+   (( ! encoder_breakdown_all_frames )) &&
+   [[ -z "$encoder_breakdown_seq" ]]; then
+  encoder_breakdown_seq=$frame
+fi
+
 print_space_hints() {
   local stream=${1:-2}
   echo "space usage hints:" >&"$stream"
@@ -1283,6 +1813,13 @@ shader_dump_dir="$analysis_dir/shaders"
 shader_msl_dump_dir="$shader_dump_dir/msl"
 shader_bytecode_dump_dir="$shader_dump_dir/bytecode"
 geometry_dump_dir="$analysis_dir/geometry"
+if [[ -n "$dump_depth_attachment_handle" ]]; then
+  if [[ -z "$dump_depth_attachment_path" ]]; then
+    dump_depth_attachment_path="$analysis_dir/frame${frame}-depth.bin"
+  elif [[ "$dump_depth_attachment_path" != /* ]]; then
+    dump_depth_attachment_path="$repo_root/$dump_depth_attachment_path"
+  fi
+fi
 summary_path="$output_dir/3dmark05-perf-summary.md"
 capture_path="$trace_dir/frame${frame}.gputrace"
 counter_comparison_path="$analysis_dir/frame${frame}-perf-counter-comparison.md"
@@ -1429,6 +1966,26 @@ if (( force_expand_indexed )); then
   env_args+=("DXMT_FORCE_EXPAND_INDEXED=1")
 fi
 
+if (( probe_force_expand_indexed )); then
+  env_args+=("DXMT9_PROBE_FORCE_EXPAND_INDEXED=1")
+fi
+
+if [[ -n "$probe_force_expand_indexed_row" ]]; then
+  env_args+=("DXMT9_PROBE_FORCE_EXPAND_INDEXED_ROW=$probe_force_expand_indexed_row")
+fi
+
+if [[ -n "$probe_force_expand_indexed_rows" ]]; then
+  env_args+=("DXMT9_PROBE_FORCE_EXPAND_INDEXED_ROWS=$probe_force_expand_indexed_rows")
+fi
+
+if [[ -n "$probe_force_expand_indexed_class" ]]; then
+  env_args+=("DXMT9_PROBE_FORCE_EXPAND_INDEXED_CLASS=$probe_force_expand_indexed_class")
+fi
+
+if [[ -n "$probe_force_expand_indexed_classes" ]]; then
+  env_args+=("DXMT9_PROBE_FORCE_EXPAND_INDEXED_CLASSES=$probe_force_expand_indexed_classes")
+fi
+
 if (( probe_reverse_indexed_triangles )); then
   env_args+=("DXMT9_PROBE_REVERSE_INDEXED_TRIANGLES=1")
 fi
@@ -1449,8 +2006,28 @@ if (( probe_optimize_indexed_triangles_vertex_cache )); then
   env_args+=("DXMT9_PROBE_OPTIMIZE_INDEXED_TRIANGLES_VERTEX_CACHE=1")
 fi
 
+if (( optimize_opaque_depth_index_cache )); then
+  env_args+=("DXMT9_OPTIMIZE_OPAQUE_DEPTH_INDEX_CACHE=1")
+fi
+
+if [[ -n "$optimize_opaque_depth_index_cache_min_gain_pct" ]]; then
+  env_args+=("DXMT9_OPTIMIZE_OPAQUE_DEPTH_INDEX_CACHE_MIN_GAIN_PCT=$optimize_opaque_depth_index_cache_min_gain_pct")
+fi
+
+if (( optimize_screen_blend_index_cache )); then
+  env_args+=("DXMT9_OPTIMIZE_SCREEN_BLEND_INDEX_CACHE=1")
+fi
+
+if [[ -n "$optimize_screen_blend_index_cache_min_gain_pct" ]]; then
+  env_args+=("DXMT9_OPTIMIZE_SCREEN_BLEND_INDEX_CACHE_MIN_GAIN_PCT=$optimize_screen_blend_index_cache_min_gain_pct")
+fi
+
 if (( probe_apply_index_cache_opt_candidate )); then
   env_args+=("DXMT9_PROBE_APPLY_INDEX_CACHE_OPT_CANDIDATE=1")
+fi
+
+if (( probe_apply_index_cache_opt_candidate_unsafe_nonopaque )); then
+  env_args+=("DXMT9_PROBE_APPLY_INDEX_CACHE_OPT_CANDIDATE_UNSAFE_NONOPAQUE=1")
 fi
 
 if [[ -n "$probe_apply_index_cache_opt_candidate_min_gain_pct" ]]; then
@@ -1483,6 +2060,10 @@ fi
 
 if [[ -n "$probe_indexed_triangle_encoder_draw_max" ]]; then
   env_args+=("DXMT9_PROBE_INDEXED_TRIANGLE_ENCODER_DRAW_MAX=$probe_indexed_triangle_encoder_draw_max")
+fi
+
+if [[ -n "$probe_indexed_triangle_encoder_draw_exclude" ]]; then
+  env_args+=("DXMT9_PROBE_INDEXED_TRIANGLE_ENCODER_DRAW_EXCLUDE=$probe_indexed_triangle_encoder_draw_exclude")
 fi
 
 if [[ -n "$probe_scissor_rect" ]]; then
@@ -1553,6 +2134,19 @@ if (( dump_indexed_geometry )); then
   fi
 fi
 
+if [[ -n "$dump_depth_attachment_handle" ]]; then
+  env_args+=(
+    "DXMT9_DUMP_DEPTH_ATTACHMENT_HANDLE=$dump_depth_attachment_handle"
+    "DXMT9_DUMP_DEPTH_ATTACHMENT_PATH=$dump_depth_attachment_path"
+  )
+  if [[ -n "$dump_depth_attachment_seq" ]]; then
+    env_args+=("DXMT9_DUMP_DEPTH_ATTACHMENT_SEQ=$dump_depth_attachment_seq")
+  fi
+  if [[ -n "$dump_depth_attachment_enc" ]]; then
+    env_args+=("DXMT9_DUMP_DEPTH_ATTACHMENT_ENC=$dump_depth_attachment_enc")
+  fi
+fi
+
 if (( aggressive_depth_dontcare )); then
   env_args+=("DXMT9_AGGRESSIVE_DEPTH_DONTCARE=1")
 fi
@@ -1575,6 +2169,26 @@ fi
 
 if (( force_texture_white )); then
   env_args+=("DXMT_FORCE_TEXTURE_WHITE=1")
+fi
+
+if (( probe_force_texture_white )); then
+  env_args+=("DXMT9_PROBE_FORCE_TEXTURE_WHITE=1")
+fi
+
+if [[ -n "$probe_force_texture_white_row" ]]; then
+  env_args+=("DXMT9_PROBE_FORCE_TEXTURE_WHITE_ROW=$probe_force_texture_white_row")
+fi
+
+if [[ -n "$probe_force_texture_white_rows" ]]; then
+  env_args+=("DXMT9_PROBE_FORCE_TEXTURE_WHITE_ROWS=$probe_force_texture_white_rows")
+fi
+
+if [[ -n "$probe_force_texture_white_class" ]]; then
+  env_args+=("DXMT9_PROBE_FORCE_TEXTURE_WHITE_CLASS=$probe_force_texture_white_class")
+fi
+
+if [[ -n "$probe_force_texture_white_classes" ]]; then
+  env_args+=("DXMT9_PROBE_FORCE_TEXTURE_WHITE_CLASSES=$probe_force_texture_white_classes")
 fi
 
 if (( probe_disable_alpha_blend )); then
@@ -1725,6 +2339,23 @@ if (( capture_gputrace )); then
   if [[ -n "$compare_baseline_joined" ]]; then
     finalize_cmd+=(--baseline-joined "$compare_baseline_joined")
   fi
+  if (( semantic_image_compare_requested )); then
+    finalize_cmd+=(
+      --semantic-image-policy "$semantic_image_policy"
+      --semantic-image-before "$semantic_image_before"
+      --semantic-image-after "$semantic_image_after"
+      --semantic-image-min-active-pct "$semantic_image_min_active_pct"
+    )
+    if [[ -n "$semantic_image_output" ]]; then
+      finalize_cmd+=(--semantic-image-output "$semantic_image_output")
+    fi
+    if [[ -n "$semantic_image_summary_output" ]]; then
+      finalize_cmd+=(--semantic-image-summary-output "$semantic_image_summary_output")
+    fi
+    if [[ -n "$semantic_image_diff_output" ]]; then
+      finalize_cmd+=(--semantic-image-diff-output "$semantic_image_diff_output")
+    fi
+  fi
   if (( require_result_json )); then
     finalize_cmd+=(--require-result-json)
   fi
@@ -1760,6 +2391,12 @@ if (( capture_gputrace )); then
   fi
   if (( require_stable_frame_proof )); then
     finalize_cmd+=(--require-stable-frame-proof)
+  fi
+  if (( require_screen_blend_cache_proof )); then
+    finalize_cmd+=(--require-screen-blend-cache-proof)
+  fi
+  if (( require_semantic_image_proof )); then
+    finalize_cmd+=(--require-semantic-image-proof)
   fi
   if (( require_color_dontcare_increase )); then
     finalize_cmd+=(--require-color-dontcare-increase)
@@ -1830,6 +2467,60 @@ if (( capture_gputrace )); then
       "$max_top_buffer_write_regression_mib"
     )
   fi
+  for row_key in "${target_row_keys[@]}"; do
+    finalize_cmd+=(--target-row-key "$row_key")
+  done
+  if (( require_target_index_cache_miss32_decrease )); then
+    finalize_cmd+=(--require-target-index-cache-miss32-decrease)
+  fi
+  if (( require_target_index_cache_opt_miss32_decrease )); then
+    finalize_cmd+=(--require-target-index-cache-opt-miss32-decrease)
+  fi
+  if (( require_target_reordered_index_cache_hits )); then
+    finalize_cmd+=(--require-target-reordered-index-cache-hits)
+  fi
+  if (( require_target_vs_buffer_write_decrease )); then
+    finalize_cmd+=(--require-target-vs-buffer-write-decrease)
+  fi
+  if (( require_target_vs_invocations_decrease )); then
+    finalize_cmd+=(--require-target-vs-invocations-decrease)
+  fi
+  if [[ -n "$max_non_target_gpu_regression_ms" ]]; then
+    finalize_cmd+=(
+      --max-non-target-gpu-regression-ms
+      "$max_non_target_gpu_regression_ms"
+    )
+  fi
+  if [[ -n "$max_non_target_vs_buffer_write_regression_mib" ]]; then
+    finalize_cmd+=(
+      --max-non-target-vs-buffer-write-regression-mib
+      "$max_non_target_vs_buffer_write_regression_mib"
+    )
+  fi
+  if [[ -n "$max_non_target_vs_invocations_regression_ratio" ]]; then
+    finalize_cmd+=(
+      --max-non-target-vs-invocations-regression-ratio
+      "$max_non_target_vs_invocations_regression_ratio"
+    )
+  fi
+  if [[ -n "$max_non_target_draw_call_delta_ratio" ]]; then
+    finalize_cmd+=(
+      --max-non-target-draw-call-delta-ratio
+      "$max_non_target_draw_call_delta_ratio"
+    )
+  fi
+  if [[ -n "$max_non_target_vertex_count_delta_ratio" ]]; then
+    finalize_cmd+=(
+      --max-non-target-vertex-count-delta-ratio
+      "$max_non_target_vertex_count_delta_ratio"
+    )
+  fi
+  if [[ -n "$max_non_target_triangle_delta_ratio" ]]; then
+    finalize_cmd+=(
+      --max-non-target-triangle-delta-ratio
+      "$max_non_target_triangle_delta_ratio"
+    )
+  fi
   if [[ -n "$max_top_unexplained_buffer_write_ratio" ]]; then
     finalize_cmd+=(
       --max-top-unexplained-buffer-write-ratio
@@ -1877,6 +2568,9 @@ fi
 if (( dump_indexed_geometry )); then
   echo "geometry_dump_dir: $geometry_dump_dir"
 fi
+if [[ -n "$dump_depth_attachment_handle" ]]; then
+  echo "depth_attachment_dump: $dump_depth_attachment_path"
+fi
 printf 'env:'
 printf ' %q' "${env_args[@]}"
 printf '\n'
@@ -1905,6 +2599,9 @@ fi
 if (( force_texture_white )); then
   echo "warning: --force-texture-white is diagnostic only and corrupts textured output; use it only to isolate texture-source backend effects."
 fi
+if (( probe_force_texture_white )) || [[ -n "$probe_force_texture_white_row$probe_force_texture_white_rows$probe_force_texture_white_class$probe_force_texture_white_classes" ]]; then
+  echo "warning: --probe-force-texture-white is diagnostic only and corrupts selected textured output; use it only to isolate scoped texture-source backend effects."
+fi
 if (( probe_disable_depth_write )); then
   echo "warning: --probe-disable-depth-write is diagnostic only and can corrupt depth-dependent frame output; do not treat it as correctness-preserving."
 fi
@@ -1914,11 +2611,26 @@ fi
 if (( force_expand_indexed )); then
   echo "warning: --force-expand-indexed is diagnostic only; it preserves indexed geometry intent but changes vertex submission/cache behavior and can heavily regress GPU/CPU cost."
 fi
+if (( probe_force_expand_indexed )) || [[ -n "$probe_force_expand_indexed_row$probe_force_expand_indexed_rows$probe_force_expand_indexed_class$probe_force_expand_indexed_classes" ]]; then
+  echo "warning: --probe-force-expand-indexed is diagnostic only; it preserves indexed geometry intent but changes selected draw vertex submission/cache behavior and can heavily regress GPU/CPU cost."
+fi
 if (( probe_reverse_indexed_triangles )); then
   echo "warning: --probe-reverse-indexed-triangles is diagnostic only; it preserves indexed draw count/render state but changes primitive order and can alter depth/blend results."
 fi
 if (( probe_reverse_nonopaque_indexed_triangles )); then
   echo "warning: --probe-reverse-nonopaque-indexed-triangles is diagnostic only; it targets visibility-sensitive draws and can corrupt depth/blend results."
+fi
+if (( optimize_screen_blend_index_order )); then
+  echo "warning: --optimize-screen-blend-index-order is diagnostic/profiling only; screen-blend output is destination-dependent and primitive order can change blended pixels."
+fi
+if (( optimize_screen_blend_index_cache )); then
+  echo "warning: --optimize-screen-blend-index-cache is profiling-only, not production-safe; same-input translated-FS screen-blend probes showed small output differences."
+  if [[ -z "$semantic_image_policy" ]]; then
+    echo "warning: add --semantic-image-policy exact|lsb1 with same-input mini-replay images before treating screen-blend cache results as a semantic proof."
+  fi
+fi
+if (( probe_apply_index_cache_opt_candidate_unsafe_nonopaque )); then
+  echo "warning: --probe-apply-index-cache-opt-candidate-unsafe-nonopaque is diagnostic only; it bypasses the opaque-depth-write safety gate and can change depth/blend/scissor final writers. Use tight row/class filters plus same-input semantic images before treating the result as proof."
 fi
 if [[ -n "$probe_scissor_rect" ]]; then
   echo "warning: --probe-scissor-rect is diagnostic only; it changes raster coverage and can corrupt frame output. Use it only to classify scissor/tile-coverage backend effects."
@@ -1962,6 +2674,9 @@ fi
 if (( dump_indexed_geometry )); then
   mkdir -p "$geometry_dump_dir"
 fi
+if [[ -n "$dump_depth_attachment_handle" ]]; then
+  mkdir -p "$(dirname -- "$dump_depth_attachment_path")"
+fi
 
 run_status=0
 (
@@ -2001,6 +2716,13 @@ if (( capture_gputrace )); then
 fi
 if (( dump_shaders )); then
   echo "wrote shader dump dir: $shader_dump_dir"
+fi
+if [[ -n "$dump_depth_attachment_handle" ]]; then
+  if [[ -e "$dump_depth_attachment_path" ]]; then
+    echo "wrote depth attachment dump: $dump_depth_attachment_path"
+  else
+    echo "warning: requested depth attachment dump was not written: $dump_depth_attachment_path" >&2
+  fi
 fi
 
 if (( run_status != 0 )); then

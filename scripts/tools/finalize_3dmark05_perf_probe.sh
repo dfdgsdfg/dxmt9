@@ -13,6 +13,13 @@ baseline_output=${DXMT_3DMARK05_COMPARE_BASELINE_OUTPUT:-}
 baseline_joined=${DXMT_3DMARK05_COMPARE_BASELINE_JOINED:-}
 before_label=${DXMT_3DMARK05_COMPARE_BEFORE_LABEL:-baseline}
 after_label=${DXMT_3DMARK05_COMPARE_AFTER_LABEL:-}
+semantic_image_policy=${DXMT_3DMARK05_SEMANTIC_IMAGE_POLICY:-}
+semantic_image_before=${DXMT_3DMARK05_SEMANTIC_IMAGE_BEFORE:-}
+semantic_image_after=${DXMT_3DMARK05_SEMANTIC_IMAGE_AFTER:-}
+semantic_image_output=${DXMT_3DMARK05_SEMANTIC_IMAGE_OUTPUT:-}
+semantic_image_summary_output=${DXMT_3DMARK05_SEMANTIC_IMAGE_SUMMARY_OUTPUT:-}
+semantic_image_diff_output=${DXMT_3DMARK05_SEMANTIC_IMAGE_DIFF_OUTPUT:-}
+semantic_image_min_active_pct=${DXMT_3DMARK05_SEMANTIC_IMAGE_MIN_ACTIVE_PCT:-1}
 dry_run=0
 require_result_json=0
 
@@ -40,7 +47,15 @@ require_transient_decrease=0
 require_top_gpu_share_increase=0
 require_top_row_key_match=0
 require_stable_frame_proof=0
+require_cache_opt_apply_proof=0
+require_screen_blend_cache_proof=0
+require_semantic_image_proof=0
 require_tvb_mechanism_proof=0
+require_target_index_cache_miss32_decrease=0
+require_target_index_cache_opt_miss32_decrease=0
+require_target_reordered_index_cache_hits=0
+require_target_vs_buffer_write_decrease=0
+require_target_vs_invocations_decrease=0
 require_top_pso_attribution=0
 require_xcode_counter_coverage=0
 require_dxmt_join_coverage=0
@@ -49,12 +64,19 @@ min_top_pso_samples_per_draw=${DXMT_3DMARK05_MIN_TOP_PSO_SAMPLES_PER_DRAW:-0.90}
 min_top_dxmt_joined_fraction=${DXMT_3DMARK05_MIN_TOP_DXMT_JOINED_FRACTION:-1.0}
 max_top_gpu_regression_ms=${DXMT_3DMARK05_MAX_TOP_GPU_REGRESSION_MS:-}
 max_top_buffer_write_regression_mib=${DXMT_3DMARK05_MAX_TOP_BUFFER_WRITE_REGRESSION_MIB:-}
+max_non_target_gpu_regression_ms=${DXMT_3DMARK05_MAX_NON_TARGET_GPU_REGRESSION_MS:-}
+max_non_target_vs_buffer_write_regression_mib=${DXMT_3DMARK05_MAX_NON_TARGET_VS_BUFFER_WRITE_REGRESSION_MIB:-}
+max_non_target_vs_invocations_regression_ratio=${DXMT_3DMARK05_MAX_NON_TARGET_VS_INVOCATIONS_REGRESSION_RATIO:-}
+max_non_target_draw_call_delta_ratio=${DXMT_3DMARK05_MAX_NON_TARGET_DRAW_CALL_DELTA_RATIO:-}
+max_non_target_vertex_count_delta_ratio=${DXMT_3DMARK05_MAX_NON_TARGET_VERTEX_COUNT_DELTA_RATIO:-}
+max_non_target_triangle_delta_ratio=${DXMT_3DMARK05_MAX_NON_TARGET_TRIANGLE_DELTA_RATIO:-}
 max_top_unexplained_buffer_write_ratio=${DXMT_3DMARK05_MAX_TOP_UNEXPLAINED_BUFFER_WRITE_RATIO:-}
 max_top_draw_call_delta_ratio=${DXMT_3DMARK05_MAX_TOP_DRAW_CALL_DELTA_RATIO:-}
 max_top_vertex_count_delta_ratio=${DXMT_3DMARK05_MAX_TOP_VERTEX_COUNT_DELTA_RATIO:-}
 max_top_triangle_delta_ratio=${DXMT_3DMARK05_MAX_TOP_TRIANGLE_DELTA_RATIO:-}
 top_n=${DXMT_3DMARK05_TOP_N:-3}
 hot_gpu_share=${DXMT_3DMARK05_HOT_GPU_SHARE:-95.0}
+target_row_keys=()
 
 usage() {
   cat <<'USAGE'
@@ -78,6 +100,25 @@ Options:
                       Compare Xcode+dxmt joined summary against this baseline joined CSV
   --before-label NAME Baseline label for comparison reports (default: baseline)
   --after-label NAME  Candidate label for comparison reports (default: suffix or run id)
+  --semantic-image-policy exact|lsb1
+                      Also gate a same-input mini-replay image pair with the
+                      named compare_experiment_images.py policy. Use exact for
+                      correctness; use lsb1 only for explicit blend-rounding
+                      tolerance decisions.
+  --semantic-image-before PATH
+                      Baseline image for --semantic-image-policy
+  --semantic-image-after PATH
+                      Candidate image for --semantic-image-policy
+  --semantic-image-output PATH
+                      Report output path (default:
+                      <analysis-dir>/frame<N>-semantic-image-policy-<policy>-compare.md)
+  --semantic-image-summary-output PATH
+                      CSV summary output path (default: report path with .csv)
+  --semantic-image-diff-output PATH
+                      Diff image output path (default: report path with .png)
+  --semantic-image-min-active-pct N
+                      Min before/after active pixel percentage for semantic
+                      image gates (default: 1)
   --require-result-json
                       Gate: fail instead of using dxmt9.log partial-run counters
   --require-color-dontcare-increase
@@ -106,11 +147,41 @@ Options:
                       Gate preset: require result.json, counter/join coverage,
                       PSO attribution, top row-key match, top GPU/VS/
                       unexplained write decrease, and <=5% top geometry drift
+  --require-cache-opt-apply-proof
+                      Gate preset for cache-opt apply runs: stable frame proof
+                      plus target rows' actual LRU32 miss, VS buffer write, and
+                      VS invocation decreases; requires --target-row-key
+  --require-screen-blend-cache-proof
+                      Gate preset for screen-blend cached-index opt-in:
+                      stable-frame proof plus target cache-opt telemetry,
+                      reordered-cache hits, target VS write/invocation
+                      decreases, and a same-input semantic image gate; requires
+                      --target-row-key and --semantic-image-policy with
+                      before/after images. The run must have captured
+                      index-reuse and cache-opt-candidate telemetry.
+  --require-semantic-image-proof
+                      Gate: require --semantic-image-policy with before/after
+                      images and fail if that image comparison fails. Use this
+                      for unsafe nonopaque cache-order proofs where Xcode
+                      counter movement alone is only a mechanism proof.
   --require-tvb-mechanism-proof
                       Gate: top named tiled buffer MiB, VS invocations, and
                       GPU time must all strictly decrease (row-local
                       TVB pressure mechanism proof; firmware Parameter Buffer
                       can read 0 MiB below spill threshold)
+  --require-target-index-cache-miss32-decrease
+                      Xcode compare gate: target rows' actual dxmt LRU32 miss
+                      estimate must decrease, catching cache-opt apply no-ops
+  --require-target-index-cache-opt-miss32-decrease
+                      Xcode compare gate: after target rows' cache-opt
+                      candidate/effective LRU32 estimate must decrease
+  --require-target-reordered-index-cache-hits
+                      Xcode compare gate: every after target row must have
+                      positive reordered index cache hits
+  --require-target-vs-buffer-write-decrease
+                      Xcode compare gate: target rows' VS buffer write must decrease
+  --require-target-vs-invocations-decrease
+                      Xcode compare gate: target rows' VS invocation count must decrease
   --require-top-pso-attribution
   --require-xcode-counter-coverage
   --require-dxmt-join-coverage
@@ -121,6 +192,27 @@ Options:
   --min-top-dxmt-joined-fraction N
   --max-top-gpu-regression-ms N
   --max-top-buffer-write-regression-mib N
+  --target-row-key ROW
+                      Xcode compare gate: target seq/enc row key, e.g. 50/1;
+                      repeat to exclude all mutated rows from non-target guards
+  --max-non-target-gpu-regression-ms N
+                      Xcode compare gate: max matched GPU ms regression for
+                      before top-N rows excluding --target-row-key rows
+  --max-non-target-vs-buffer-write-regression-mib N
+                      Xcode compare gate: max matched VS buffer write MiB
+                      regression for before top-N non-target rows
+  --max-non-target-vs-invocations-regression-ratio N
+                      Xcode compare gate: max matched relative VS invocation
+                      regression for before top-N non-target rows
+  --max-non-target-draw-call-delta-ratio N
+                      Xcode compare gate: max relative draw-count drift for
+                      before top-N non-target rows
+  --max-non-target-vertex-count-delta-ratio N
+                      Xcode compare gate: max relative vertex-count drift for
+                      before top-N non-target rows
+  --max-non-target-triangle-delta-ratio N
+                      Xcode compare gate: max relative triangle-count drift for
+                      before top-N non-target rows
   --max-top-unexplained-buffer-write-ratio N
   --max-top-draw-call-delta-ratio N
   --max-top-vertex-count-delta-ratio N
@@ -174,6 +266,34 @@ while (($#)); do
       ;;
     --after-label)
       after_label=${2:?missing value for --after-label}
+      shift 2
+      ;;
+    --semantic-image-policy)
+      semantic_image_policy=${2:?missing value for --semantic-image-policy}
+      shift 2
+      ;;
+    --semantic-image-before)
+      semantic_image_before=${2:?missing value for --semantic-image-before}
+      shift 2
+      ;;
+    --semantic-image-after)
+      semantic_image_after=${2:?missing value for --semantic-image-after}
+      shift 2
+      ;;
+    --semantic-image-output)
+      semantic_image_output=${2:?missing value for --semantic-image-output}
+      shift 2
+      ;;
+    --semantic-image-summary-output)
+      semantic_image_summary_output=${2:?missing value for --semantic-image-summary-output}
+      shift 2
+      ;;
+    --semantic-image-diff-output)
+      semantic_image_diff_output=${2:?missing value for --semantic-image-diff-output}
+      shift 2
+      ;;
+    --semantic-image-min-active-pct)
+      semantic_image_min_active_pct=${2:?missing value for --semantic-image-min-active-pct}
       shift 2
       ;;
     --require-result-json)
@@ -272,8 +392,40 @@ while (($#)); do
       require_stable_frame_proof=1
       shift
       ;;
+    --require-cache-opt-apply-proof)
+      require_cache_opt_apply_proof=1
+      shift
+      ;;
+    --require-screen-blend-cache-proof)
+      require_screen_blend_cache_proof=1
+      shift
+      ;;
+    --require-semantic-image-proof)
+      require_semantic_image_proof=1
+      shift
+      ;;
     --require-tvb-mechanism-proof)
       require_tvb_mechanism_proof=1
+      shift
+      ;;
+    --require-target-index-cache-miss32-decrease)
+      require_target_index_cache_miss32_decrease=1
+      shift
+      ;;
+    --require-target-index-cache-opt-miss32-decrease)
+      require_target_index_cache_opt_miss32_decrease=1
+      shift
+      ;;
+    --require-target-reordered-index-cache-hits)
+      require_target_reordered_index_cache_hits=1
+      shift
+      ;;
+    --require-target-vs-buffer-write-decrease)
+      require_target_vs_buffer_write_decrease=1
+      shift
+      ;;
+    --require-target-vs-invocations-decrease)
+      require_target_vs_invocations_decrease=1
       shift
       ;;
     --require-top-pso-attribution)
@@ -306,6 +458,34 @@ while (($#)); do
       ;;
     --max-top-buffer-write-regression-mib)
       max_top_buffer_write_regression_mib=${2:?missing value for --max-top-buffer-write-regression-mib}
+      shift 2
+      ;;
+    --target-row-key)
+      target_row_keys+=("${2:?missing value for --target-row-key}")
+      shift 2
+      ;;
+    --max-non-target-gpu-regression-ms)
+      max_non_target_gpu_regression_ms=${2:?missing value for --max-non-target-gpu-regression-ms}
+      shift 2
+      ;;
+    --max-non-target-vs-buffer-write-regression-mib)
+      max_non_target_vs_buffer_write_regression_mib=${2:?missing value for --max-non-target-vs-buffer-write-regression-mib}
+      shift 2
+      ;;
+    --max-non-target-vs-invocations-regression-ratio)
+      max_non_target_vs_invocations_regression_ratio=${2:?missing value for --max-non-target-vs-invocations-regression-ratio}
+      shift 2
+      ;;
+    --max-non-target-draw-call-delta-ratio)
+      max_non_target_draw_call_delta_ratio=${2:?missing value for --max-non-target-draw-call-delta-ratio}
+      shift 2
+      ;;
+    --max-non-target-vertex-count-delta-ratio)
+      max_non_target_vertex_count_delta_ratio=${2:?missing value for --max-non-target-vertex-count-delta-ratio}
+      shift 2
+      ;;
+    --max-non-target-triangle-delta-ratio)
+      max_non_target_triangle_delta_ratio=${2:?missing value for --max-non-target-triangle-delta-ratio}
       shift 2
       ;;
     --max-top-unexplained-buffer-write-ratio)
@@ -379,15 +559,70 @@ validate_optional_number "--min-top-pso-samples-per-draw" "$min_top_pso_samples_
 validate_optional_number "--min-top-dxmt-joined-fraction" "$min_top_dxmt_joined_fraction"
 validate_optional_number "--max-top-gpu-regression-ms" "$max_top_gpu_regression_ms"
 validate_optional_number "--max-top-buffer-write-regression-mib" "$max_top_buffer_write_regression_mib"
+validate_optional_number "--max-non-target-gpu-regression-ms" "$max_non_target_gpu_regression_ms"
+validate_optional_number "--max-non-target-vs-buffer-write-regression-mib" "$max_non_target_vs_buffer_write_regression_mib"
+validate_optional_number "--max-non-target-vs-invocations-regression-ratio" "$max_non_target_vs_invocations_regression_ratio"
+validate_optional_number "--max-non-target-draw-call-delta-ratio" "$max_non_target_draw_call_delta_ratio"
+validate_optional_number "--max-non-target-vertex-count-delta-ratio" "$max_non_target_vertex_count_delta_ratio"
+validate_optional_number "--max-non-target-triangle-delta-ratio" "$max_non_target_triangle_delta_ratio"
 validate_optional_number "--max-top-unexplained-buffer-write-ratio" "$max_top_unexplained_buffer_write_ratio"
 validate_optional_number "--max-top-draw-call-delta-ratio" "$max_top_draw_call_delta_ratio"
 validate_optional_number "--max-top-vertex-count-delta-ratio" "$max_top_vertex_count_delta_ratio"
 validate_optional_number "--max-top-triangle-delta-ratio" "$max_top_triangle_delta_ratio"
+validate_optional_number "--semantic-image-min-active-pct" "$semantic_image_min_active_pct"
 if [[ ! "$top_n" =~ ^[0-9]+$ ]] || (( top_n == 0 )); then
   echo "--top must be a positive integer" >&2
   exit 2
 fi
 validate_optional_number "--hot-gpu-share" "$hot_gpu_share"
+
+semantic_image_compare_requested=0
+if [[ -n "$semantic_image_policy$semantic_image_before$semantic_image_after$semantic_image_output$semantic_image_summary_output$semantic_image_diff_output" ]]; then
+  semantic_image_compare_requested=1
+fi
+if (( semantic_image_compare_requested )); then
+  if [[ "$semantic_image_policy" != exact && "$semantic_image_policy" != lsb1 ]]; then
+    echo "--semantic-image-policy must be one of: exact, lsb1" >&2
+    exit 2
+  fi
+  if [[ -z "$semantic_image_before" || -z "$semantic_image_after" ]]; then
+    echo "--semantic-image-policy requires --semantic-image-before and --semantic-image-after" >&2
+    exit 2
+  fi
+fi
+
+if (( require_screen_blend_cache_proof )); then
+  require_semantic_image_proof=1
+  require_stable_frame_proof=1
+  require_target_index_cache_opt_miss32_decrease=1
+  require_target_reordered_index_cache_hits=1
+  require_target_vs_buffer_write_decrease=1
+  require_target_vs_invocations_decrease=1
+  if (( ! semantic_image_compare_requested )); then
+    echo "--require-screen-blend-cache-proof requires --semantic-image-policy with --semantic-image-before and --semantic-image-after" >&2
+    exit 2
+  fi
+  if (( ${#target_row_keys[@]} == 0 )); then
+    echo "--require-screen-blend-cache-proof requires at least one --target-row-key" >&2
+    exit 2
+  fi
+fi
+
+if (( require_semantic_image_proof && ! semantic_image_compare_requested )); then
+  echo "--require-semantic-image-proof requires --semantic-image-policy with --semantic-image-before and --semantic-image-after" >&2
+  exit 2
+fi
+
+if (( require_cache_opt_apply_proof )); then
+  require_stable_frame_proof=1
+  require_target_index_cache_miss32_decrease=1
+  require_target_vs_buffer_write_decrease=1
+  require_target_vs_invocations_decrease=1
+  if (( ${#target_row_keys[@]} == 0 )); then
+    echo "--require-cache-opt-apply-proof requires at least one --target-row-key" >&2
+    exit 2
+  fi
+fi
 
 if (( require_stable_frame_proof )); then
   require_result_json=1
@@ -440,9 +675,21 @@ if (( require_top_gpu_decrease ||
       require_argbuf_cbuf_decrease ||
       require_transient_decrease ||
       require_top_gpu_share_increase ||
-      require_top_row_key_match )) ||
+      require_top_row_key_match ||
+      require_target_index_cache_miss32_decrease ||
+      require_target_index_cache_opt_miss32_decrease ||
+      require_target_reordered_index_cache_hits ||
+      require_target_vs_buffer_write_decrease ||
+      require_target_vs_invocations_decrease )) ||
    [[ -n "$max_top_gpu_regression_ms" ||
       -n "$max_top_buffer_write_regression_mib" ||
+      ${#target_row_keys[@]} -gt 0 ||
+      -n "$max_non_target_gpu_regression_ms" ||
+      -n "$max_non_target_vs_buffer_write_regression_mib" ||
+      -n "$max_non_target_vs_invocations_regression_ratio" ||
+      -n "$max_non_target_draw_call_delta_ratio" ||
+      -n "$max_non_target_vertex_count_delta_ratio" ||
+      -n "$max_non_target_triangle_delta_ratio" ||
       -n "$max_top_unexplained_buffer_write_ratio" ||
       -n "$max_top_draw_call_delta_ratio" ||
       -n "$max_top_vertex_count_delta_ratio" ||
@@ -520,6 +767,17 @@ shader_dump_report="$analysis_dir/frame${frame}-shader-dump-report.md"
 shader_dump_csv="$analysis_dir/frame${frame}-shader-dump-summary.csv"
 perf_compare_report="$analysis_dir/frame${frame}-perf-counter-comparison.md"
 xcode_compare_report="$analysis_dir/frame${frame}-xcode-dxmt-comparison.md"
+if (( semantic_image_compare_requested )); then
+  if [[ -z "$semantic_image_output" ]]; then
+    semantic_image_output="$analysis_dir/frame${frame}-semantic-image-policy-${semantic_image_policy}-compare.md"
+  fi
+  if [[ -z "$semantic_image_summary_output" ]]; then
+    semantic_image_summary_output="${semantic_image_output%.*}.csv"
+  fi
+  if [[ -z "$semantic_image_diff_output" ]]; then
+    semantic_image_diff_output="${semantic_image_output%.*}.png"
+  fi
+fi
 
 summary_cmd=(
   python3 scripts/tools/summarize_3dmark05_perf.py
@@ -661,6 +919,21 @@ if [[ -n "$baseline_joined" ]]; then
   if (( require_tvb_mechanism_proof )); then
     xcode_compare_cmd+=(--require-tvb-mechanism-proof)
   fi
+  if (( require_target_index_cache_miss32_decrease )); then
+    xcode_compare_cmd+=(--require-target-index-cache-miss32-decrease)
+  fi
+  if (( require_target_index_cache_opt_miss32_decrease )); then
+    xcode_compare_cmd+=(--require-target-index-cache-opt-miss32-decrease)
+  fi
+  if (( require_target_reordered_index_cache_hits )); then
+    xcode_compare_cmd+=(--require-target-reordered-index-cache-hits)
+  fi
+  if (( require_target_vs_buffer_write_decrease )); then
+    xcode_compare_cmd+=(--require-target-vs-buffer-write-decrease)
+  fi
+  if (( require_target_vs_invocations_decrease )); then
+    xcode_compare_cmd+=(--require-target-vs-invocations-decrease)
+  fi
   if [[ -n "$max_top_gpu_regression_ms" ]]; then
     xcode_compare_cmd+=(--max-top-gpu-regression-ms "$max_top_gpu_regression_ms")
   fi
@@ -668,6 +941,45 @@ if [[ -n "$baseline_joined" ]]; then
     xcode_compare_cmd+=(
       --max-top-buffer-write-regression-mib
       "$max_top_buffer_write_regression_mib"
+    )
+  fi
+  for row_key in "${target_row_keys[@]}"; do
+    xcode_compare_cmd+=(--target-row-key "$row_key")
+  done
+  if [[ -n "$max_non_target_gpu_regression_ms" ]]; then
+    xcode_compare_cmd+=(
+      --max-non-target-gpu-regression-ms
+      "$max_non_target_gpu_regression_ms"
+    )
+  fi
+  if [[ -n "$max_non_target_vs_buffer_write_regression_mib" ]]; then
+    xcode_compare_cmd+=(
+      --max-non-target-vs-buffer-write-regression-mib
+      "$max_non_target_vs_buffer_write_regression_mib"
+    )
+  fi
+  if [[ -n "$max_non_target_vs_invocations_regression_ratio" ]]; then
+    xcode_compare_cmd+=(
+      --max-non-target-vs-invocations-regression-ratio
+      "$max_non_target_vs_invocations_regression_ratio"
+    )
+  fi
+  if [[ -n "$max_non_target_draw_call_delta_ratio" ]]; then
+    xcode_compare_cmd+=(
+      --max-non-target-draw-call-delta-ratio
+      "$max_non_target_draw_call_delta_ratio"
+    )
+  fi
+  if [[ -n "$max_non_target_vertex_count_delta_ratio" ]]; then
+    xcode_compare_cmd+=(
+      --max-non-target-vertex-count-delta-ratio
+      "$max_non_target_vertex_count_delta_ratio"
+    )
+  fi
+  if [[ -n "$max_non_target_triangle_delta_ratio" ]]; then
+    xcode_compare_cmd+=(
+      --max-non-target-triangle-delta-ratio
+      "$max_non_target_triangle_delta_ratio"
     )
   fi
   if [[ -n "$max_top_unexplained_buffer_write_ratio" ]]; then
@@ -694,6 +1006,23 @@ if [[ -n "$baseline_joined" ]]; then
       "$max_top_triangle_delta_ratio"
     )
   fi
+fi
+
+semantic_image_compare_cmd=()
+if (( semantic_image_compare_requested )); then
+  semantic_image_compare_cmd=(
+    python3 scripts/tools/compare_experiment_images.py
+    --before "$semantic_image_before"
+    --after "$semantic_image_after"
+    --label-before "$before_label"
+    --label-after "$after_label"
+    --policy "$semantic_image_policy"
+    --min-before-active-pct "$semantic_image_min_active_pct"
+    --min-after-active-pct "$semantic_image_min_active_pct"
+    --output "$semantic_image_output"
+    --summary-output "$semantic_image_summary_output"
+    --diff-output "$semantic_image_diff_output"
+  )
 fi
 
 print_cmd() {
@@ -733,6 +1062,11 @@ fi
 if ((${#xcode_compare_cmd[@]})); then
   echo "xcode_compare_report: $xcode_compare_report"
 fi
+if ((${#semantic_image_compare_cmd[@]})); then
+  echo "semantic_image_report: $semantic_image_output"
+  echo "semantic_image_csv: $semantic_image_summary_output"
+  echo "semantic_image_diff: $semantic_image_diff_output"
+fi
 print_cmd "summary_cmd" "${summary_cmd[@]}"
 print_cmd "xcode_summary_cmd" "${xcode_summary_cmd[@]}"
 print_cmd "shader_dump_cmd" "${shader_dump_cmd[@]}"
@@ -741,6 +1075,9 @@ if ((${#perf_compare_cmd[@]})); then
 fi
 if ((${#xcode_compare_cmd[@]})); then
   print_cmd "xcode_compare_cmd" "${xcode_compare_cmd[@]}"
+fi
+if ((${#semantic_image_compare_cmd[@]})); then
+  print_cmd "semantic_image_compare_cmd" "${semantic_image_compare_cmd[@]}"
 fi
 
 if (( dry_run )); then
@@ -778,6 +1115,9 @@ fi
 if ((${#xcode_compare_cmd[@]})); then
   run_cmd "${xcode_compare_cmd[@]}"
 fi
+if ((${#semantic_image_compare_cmd[@]})); then
+  run_cmd "${semantic_image_compare_cmd[@]}"
+fi
 
 echo "wrote summary: $summary_path"
 echo "wrote encoder csv: $encoders_csv"
@@ -792,4 +1132,9 @@ if ((${#perf_compare_cmd[@]})); then
 fi
 if ((${#xcode_compare_cmd[@]})); then
   echo "wrote xcode comparison: $xcode_compare_report"
+fi
+if ((${#semantic_image_compare_cmd[@]})); then
+  echo "wrote semantic image comparison: $semantic_image_output"
+  echo "wrote semantic image summary csv: $semantic_image_summary_output"
+  echo "wrote semantic image diff: $semantic_image_diff_output"
 fi

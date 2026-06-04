@@ -94,7 +94,33 @@ Commercial / 3rd-party titles (require external prefix):
     `--probe-apply-index-cache-opt-candidate`; it submits that same candidate
     only through row/draw/class/span, opaque-depth-write, stable-IB, and
     minimum-LRU32-gain gates, then reuses a source-IB keyed reordered index
-    buffer cache rather than uploading a fresh transient IB per draw. After the run,
+    buffer cache rather than uploading a fresh transient IB per draw. When
+    finalizing a mutating Xcode A/B, pass each mutated row with
+    `--target-row-key`. Use `--require-cache-opt-apply-proof` only for
+    diagnostic apply paths that emit finite generic actual indexed telemetry;
+    that preset expands to the stable frame proof plus
+    `--require-target-index-cache-miss32-decrease
+    --require-target-vs-buffer-write-decrease
+    --require-target-vs-invocations-decrease`, and now rejects target rows
+    whose actual indexed reference/unique/LRU telemetry is missing or
+    nonpositive. For production cached-IB opt-ins, where the submitted
+    reordered-buffer proof is represented by cache-hit counters and the
+    generic indexed telemetry can be `0`, use
+    `--require-target-reordered-index-cache-hits` with the VS write/invocation
+    gates. If the run also emits after-side candidate/effective LRU telemetry
+    for the applied cached prelookup rows, add
+    `--require-target-index-cache-opt-miss32-decrease` as well. For
+    diagnostic-only depth-read/blended A/B probes, add
+    `--probe-apply-index-cache-opt-candidate-unsafe-nonopaque` only with tight
+    row/class filters and same-input semantic replay validation; it bypasses
+    the opaque-depth-write safety gate and can change final color writers. Use
+    `python3 scripts/tools/compare_experiment_images.py --before
+    <baseline>/actual.png --after <candidate>/actual.png --crop-bottom 96
+    --output <trace-run>/analysis/<name>-image-compare.md` as a screenshot
+    sanity check when a visual regression is suspected. Treat cross-run image
+    comparison as a frame/time-drift detector unless the two captures are known
+    to represent the same presented frame; exact correctness proof still needs
+    a same-run replay or draw-local comparison. After the run,
     `python3 scripts/tools/summarize_3dmark05_perf.py experiments/output/<run>`
     writes `3dmark05-perf-encoders.csv` and
     `3dmark05-perf-encoder-streams.csv` for UI-free per-encoder analysis, with
@@ -120,7 +146,14 @@ Commercial / 3rd-party titles (require external prefix):
     gputrace capture is enabled, and automatic
     `3dmark05-perf-summary.md` / CSV generation after the run. Use `--dry-run`
     first to verify paths, desktop lock state, and free-space guard. The
-    wrapper requires `2048MiB` free by default when gputrace capture is enabled
+    wrapper scopes encoder breakdown to the requested frame by default for
+    gputrace runs and for no-gputrace indexed diagnostics
+    (`DXMT9_PERF_ENCODER_BREAKDOWN_SEQ=<frame>`). This keeps expensive
+    index-reuse/cache-opt diagnostics from slowing earlier GT1 frames enough
+    to change the semantic workload selected by `seq/enc` row keys. Use
+    `--encoder-breakdown-all-frames` only when intentionally collecting
+    whole-run encoder diagnostics. The wrapper requires `2048MiB`
+    free by default when gputrace capture is enabled
     (`--min-free-mb N` / `DXMT_3DMARK05_MIN_TRACE_FREE_MB=N` overrides it).
     Gputrace runs refuse lower guards unless
     `DXMT_3DMARK05_ALLOW_LOW_TRACE_FREE_MB=1` is set deliberately; low-space
@@ -150,7 +183,13 @@ Commercial / 3rd-party titles (require external prefix):
     `--require-stable-frame-proof`, or `--require-top-pso-attribution` is
     passed to the wrapper, dry-run also prints the exact
     `finalize_cmd_after_xcode_export` command to run after Xcode exports
-    `frame<N>-counters-xcode.csv`.
+    `frame<N>-counters-xcode.csv`. When a mutating primitive-order probe also
+    has same-input mini-replay PPMs, add `--semantic-image-policy exact|lsb1
+    --semantic-image-before <original.ppm> --semantic-image-after
+    <candidate.ppm>` to the wrapper or finalizer. The finalizer then runs
+    `compare_experiment_images.py`, writes a policy report/CSV/diff under
+    `analysis/`, and enforces a `1%` before/after active-pixel floor by
+    default so all-clear replays cannot satisfy the image gate.
     Add `--dump-shaders` only for root-cause captures that need shader source
     inspection; it writes translated MSL under
     `traces/<run-id>/analysis/shaders/msl` and D3D shader bytecode under
@@ -218,6 +257,12 @@ Commercial / 3rd-party titles (require external prefix):
     body and VSOut shape, but replaces generated fragment texture sample
     results with `float4(1.0f)`. Treat it as a correctness-invalid
     texture/raster backend probe.
+    For a row/class-scoped version, use `--probe-force-texture-white-row`
+    with `--probe-force-texture-white-classes`, for example
+    `--probe-force-texture-white-row 50/2 --probe-force-texture-white-classes depth-read,screen-blend,textured`.
+    This builds a separate shader-source variant only for selected indexed
+    triangle-list draws and records `probe_force_texture_white_draws` in the
+    encoder breakdown.
     If VSOut trimming leaves Xcode's VS buffer-write bucket unchanged, run the
     next paired candidate with `--trim-vertex-temps`; this sets
     `DXMT9_TRIM_VERTEX_TEMPS=1` so translated VS `float4 r[]` is sized from
@@ -422,9 +467,11 @@ Commercial / 3rd-party titles (require external prefix):
     Xcode/DXMT render encoder row or a comma/semicolon/space separated row set.
     `--split-large-indexed-draws-class CLASS` further limits it to one indexed
     triangle state bucket. Accepted classes are `any`, `opaque-depth-write`,
-    `nonopaque`, `depth-read`, `alpha-blend`, `scissor`, `textured`, and
-    `large4096`. Use these filters for bounded primitive-partition probes after
-    broad full-frame split/reverse runs have been rejected by shape gates.
+    `nonopaque`, `depth-read`, `alpha-blend`, `no-alpha-blend`,
+    `screen-blend`, `standard-alpha`, `additive-alpha`, `scissor`,
+    `no-scissor`, `textured`, and `large4096`. Use these filters for bounded
+    primitive-partition probes after broad full-frame split/reverse runs have
+    been rejected by shape gates.
     `--probe-reverse-indexed-triangles` sets
     `DXMT9_PROBE_REVERSE_INDEXED_TRIANGLES=1`; it keeps indexed draw count and
     render state stable while submitting a transient IB with triangle-list
@@ -457,14 +504,20 @@ Commercial / 3rd-party titles (require external prefix):
     `DXMT9_PROBE_REVERSE_INDEXED_TRIANGLES_CLASS=CLASS` and constrains any
     reverse-indexed-triangle probe to the same state buckets used by
     `--split-large-indexed-draws-class`: `any`, `opaque-depth-write`,
-    `nonopaque`, `depth-read`, `alpha-blend`, `scissor`, `textured`, and
-    `large4096`. Combine it with a row selector for material-scoped
-    visibility/backend probes such as `60/4` alpha-blend or scissor subsets.
+    `nonopaque`, `depth-read`, `alpha-blend`, `no-alpha-blend`,
+    `screen-blend`, `standard-alpha`, `additive-alpha`, `scissor`,
+    `no-scissor`, `textured`, and `large4096`. Combine it with a row selector
+    for material-scoped visibility/backend probes such as `60/4` alpha-blend or
+    scissor subsets.
     Pair reverse/order probes with `--measure-index-reuse` when investigating
     Apple vertex/tiler backend pressure: the generated
     `3dmark05-perf-indexed-probe-draws.csv` then includes per-draw original
     and effective index locality, cache-miss estimates, triangle index span,
     and stream0 byte-span proxies. Use
+    `scripts/tools/analyze_indexed_probe_classes.py --row SEQ/ENC --group
+    row-state-class` on that CSV before selecting a narrow AND class filter.
+    The report exposes blend/scissor/depth/cull/fill buckets such as
+    `depth-read,no-alpha-blend,no-scissor,textured`. Use
     `--measure-index-cache-opt-candidate` for no-mutate full-frame scouts when
     mini replay shows post-transform cache locality is predictive; the encoder
     breakdown then includes original-vs-candidate cache-opt miss estimates for
@@ -476,7 +529,56 @@ Commercial / 3rd-party titles (require external prefix):
     A/B once the no-mutate candidate and row filters are known; it keeps the
     same candidate counters enabled so the submitted order and predicted LRU32
     miss reduction can be joined against Xcode `VS Invocations` and
-    `VS Buffer Device Memory Bytes Written`.
+    `VS Buffer Device Memory Bytes Written`. Keep this safe path scoped to
+    opaque depth-writing rows. After the row-local proof is established, use
+    `--optimize-opaque-depth-index-cache` for the production-shaped opt-in path
+    (`DXMT9_OPTIMIZE_OPAQUE_DEPTH_INDEX_CACHE=1`). This submits the same
+    cached LRU32 reordered IBs only for opaque depth-writing triangle lists and
+    never bypasses the safety gate. It is still explicitly opt-in: the shared
+    `perf` profile does not enable mutating index-cache optimizations, and a
+    general runtime default would require wider app correctness evidence beyond
+    the accepted 3DMark05 GT1 gates. The runtime cache records both positive
+    reordered-IB entries and rejected keys; the rejected entries are important
+    because failed gain-gate candidates must not be remeasured every draw in a
+    full GT1 run. Read `reordered_index_cache_hits` as positive cached-IB hits
+    and `reordered_index_cache_rejected_hits` as rejected-key hits; the latter
+    should not be counted as submitted reordered geometry. Unscoped production
+    opt-in full runs keep aggregate encoder counters but suppress per-draw
+    `dxmt9-perf-indexed-probe-draw` lines; when indexed locality/reorder or
+    geometry-dump diagnostics are enabled, the wrapper now auto-scopes encoder
+    breakdown to `--frame` even for `--no-gputrace` smoke runs. Use
+    `--encoder-breakdown-all-frames` only for deliberate whole-run sampling.
+    In the finalizer, use `--target-row-key` plus
+    `--require-cache-opt-apply-proof`; the preset includes stable-frame gates
+    and the target-row LRU32 miss, VS buffer write, and VS invocation decrease
+    gates so no-op runs are rejected by actual target-row counters, not
+    candidate-only estimates. Use
+    `--probe-apply-index-cache-opt-candidate-unsafe-nonopaque` only for
+    diagnostic depth-read/blended/scissored rows after the opaque path is
+    understood, because the primitive order can affect final color writers.
+    When this unsafe path is paired with `--require-cache-opt-apply-proof`,
+    the wrapper also requires `--semantic-image-policy` with before/after
+    images and passes `--require-semantic-image-proof` to the finalizer. Use
+    explicit target-row Xcode gates instead when the goal is only a
+    performance-mechanism measurement.
+    `--optimize-screen-blend-index-cache` is separate from that accepted opaque
+    opt-in path. It is a profiling-only opt-in for strict screen-blend rows:
+    force-color same-input replay can prove raster/depth-open coverage, but
+    translated-FS replay has shown small bit-exact output differences from
+    destination-dependent blend ordering. Treat combined opaque+screen-blend
+    runs as performance ceilings or mechanism checks, not production-safety
+    proof runs. When a screen-blend cache run is meant to be interpreted as a
+    proof, use `--require-screen-blend-cache-proof` instead of only
+    `--require-cache-opt-apply-proof`; it adds stable-frame gates, target
+    cache-opt candidate/effective telemetry, reordered-cache-hit, target VS
+    write/invocation, and same-input semantic image gates, and refuses to run
+    without `--semantic-image-policy` plus before/after mini-replay images.
+    The wrapper also requires `--optimize-screen-blend-index-cache` for this
+    preset and enables `DXMT9_MEASURE_INDEX_REUSE=1` plus
+    `DXMT9_MEASURE_INDEX_CACHE_OPT_CANDIDATE=1`, because the proof compares
+    cache-opt candidate/effective LRU32 telemetry and Xcode VS counters; the
+    generic actual-indexed LRU estimate can remain an original-index locality
+    measure for this opt-in path.
     Combine that CSV with a joined Xcode/dxmt summary and shader-dump summary
     using `python3 scripts/tools/plan_3dmark05_mini_replay.py --joined
     <frameN-xcode-dxmt-joined-summary.csv> --shader-summary
@@ -497,6 +599,10 @@ Commercial / 3rd-party titles (require external prefix):
     same-run shader/state groups and emit the exact
     `--probe-indexed-triangle-encoder-draw-min/max` flags for that run. The
     selector also emits `shader_capture_flags` for cross-run payload scouts.
+    Add `--class-filter depth-read,no-alpha-blend,no-scissor,textured` and
+    `--applied-only` when preparing payloads for a mutating class-gated probe;
+    this keeps the selected window aligned with the rows the runtime actually
+    changed after row/class/min-gain gates.
     Pass the same selection JSON to
     `build_3dmark05_mini_replay_manifest.py --payload-selection
     <frameN-payload-window-selection.json>` so the replay manifest uses the
@@ -517,6 +623,16 @@ Commercial / 3rd-party titles (require external prefix):
     formats, sizes, sample counts, and alias texture information under
     `attachments`; the mini replay uses this to choose the standalone Metal
     color/depth/stencil pixel formats when present.
+    For depth-sensitive semantic replays, prefer the perf wrapper's
+    `--dump-depth-attachment-handle HANDLE` with optional
+    `--dump-depth-attachment-seq N`, `--dump-depth-attachment-enc N`, and
+    `--dump-depth-attachment-path PATH`. The wrapper defaults the raw sidecar
+    to `traces/<run-id>/analysis/frameN-depth.bin` and resolves relative paths
+    under the repository root before passing
+    `DXMT9_DUMP_DEPTH_ATTACHMENT_PATH`, so the dump does not land under the
+    3DMark05 working directory. Feed the resulting raw D24X8 sidecar to
+    `run_3dmark05_mini_replay.py --depth-input <raw.bin>` for same-input
+    primitive-order image gates.
     The geometry dumper skips invalid index/stream0 ranges before consuming the
     max-draw cap, so early matching setup draws without replayable stream bytes
     do not hide later valid payloads.
@@ -538,6 +654,10 @@ Commercial / 3rd-party titles (require external prefix):
     (`--min-capture-free-mb N` or
     `DXMT9_MINI_REPLAY_MIN_CAPTURE_FREE_MB=N` overrides it); if the guard fails,
     keep the no-capture smoke result and free disk before producing `.gputrace`.
+    Add `--color-output <name>.ppm` with `--run` to read back the isolated
+    replay color attachment. This produces a same-input image artifact that can
+    be compared with `compare_experiment_images.py`, unlike cross-run
+    `actual.png` screenshots that may be different animation frames.
     The helper rewrites dxmt9's `buffer(30)` argument-buffer MSL into standalone
     constant-buffer bindings, choosing free Metal buffer slots instead of
     assuming fixed `6/7` slots because dumped shaders may already use those
@@ -546,11 +666,44 @@ Commercial / 3rd-party titles (require external prefix):
     stream payloads when `geometry.streams` contains stream files, falls back to
     a zero-filled dummy stream for missing extra streams, and emits
     `mini-replay-summary.json` with the exact buffer/texture/sampler slots it
-    bound. For primitive/backend-locality classifiers, add
-    `--primitive-order reverse-triangles|sort-min-index|sort-max-index` to
-    rewrite each dumped uint16 triangle-list index payload into
+    found. Until real sampled texture payloads are dumped, the generated replay
+    binds a deterministic white texture and default sampler to every declared
+    vertex/fragment texture/sampler slot; binding only slot 0 can produce an
+    all-black false result when the shader declares `texture(1..N)` or
+    `sampler(1..N)`. For primitive/backend-locality classifiers, add
+    `--primitive-order reverse-triangles|sort-min-index|sort-max-index|cache-opt-lru32|cache-opt-lru64`
+    to rewrite each dumped uint16 triangle-list index payload into
     `$output_dir/index-order/`, and optionally add `--draw-order reverse` to
-    reverse the manifest draw sequence before Xcode counter capture.
+    reverse the manifest draw sequence before Xcode counter capture. For a
+    correctness gate, run the same manifest once with `--primitive-order
+    original --color-output original.ppm` and once with the candidate order,
+    then compare the two PPMs with `compare_experiment_images.py
+    --policy exact --min-before-active-pct 1 --min-after-active-pct 1`; the
+    active-pixel gates prevent an all-black/all-clear replay from passing as
+    correctness. Use `--policy lsb1` only as an explicit visual-tolerance
+    decision for known destination-dependent blend-order rounding differences;
+    it is not the default correctness policy. For gputrace proof runs, prefer
+    passing the same pair to `finalize_3dmark05_perf_probe.sh` with
+    `--semantic-image-policy exact|lsb1 --semantic-image-before
+    <original.ppm> --semantic-image-after <candidate.ppm>` so the Xcode counter
+    proof and the semantic image gate are recorded in the same trace run's
+    `analysis/` directory. For the screen-blend cached-index opt-in, pair this
+    with `--require-screen-blend-cache-proof` so an Xcode performance win cannot
+    pass without an explicit semantic policy.
+    If the real fragment replay is empty, rerun both orders with
+    `run_3dmark05_mini_replay.py --force-fragment-color` to separate
+    geometry/depth/raster coverage from texture or fragment-shader replay
+    fidelity. Treat that as a weaker coverage/order diagnostic, not a
+    real-fragment correctness proof.
+    When the real fragment replay fails but force-fragment-color passes, add
+    `--force-fragment-primitive-id` to both orders and compare them with
+    `analyze_primitive_id_replay.py`. A color-diff pixel whose primitive-id
+    owner changed is evidence of a final-writer/order problem, not missing
+    geometry. Primitive-owner changes without color differences are not enough
+    to reject an exact-safe draw by themselves; conversely, no owner change is
+    a strong but conservative safety signal. Keep nonopaque/cache-order probes
+    diagnostic unless the same-input semantic image policy passes for the exact
+    mutated draw set.
     `--probe-reverse-indexed-triangles-stream0-span-min BYTES` and
     `--optimize-screen-blend-index-order-stream0-span-min BYTES` add a direct
     minimum original stream0 byte-span gate after the row/class filters. Use
@@ -563,12 +716,17 @@ Commercial / 3rd-party titles (require external prefix):
     split-large-indexed probes. Use it with a row selector to target a concrete
     material run from `3dmark05-perf-indexed-probe-draws.csv`, for example
     `--probe-reverse-indexed-triangles-row 60/2 --probe-indexed-triangle-encoder-draw-min 71 --probe-indexed-triangle-encoder-draw-max 188`.
+    `--probe-indexed-triangle-encoder-draw-exclude LIST` subtracts specific
+    encoder-local draw indexes from that window. This is trace-local and
+    diagnostic only; use it to validate exact-safe mini-replay subsets such as
+    "apply draw 14..32 except draw 18" before spending a gputrace.
     `--disable-alpha-test` is the narrower fragment/raster classifier for the
     alpha-test discard path and should be tried before more invasive shader
     substitutions when `--force-fragment-color` changes hidden VS-write
     counters. `--disable-fog` is the matching classifier for the fog blend /
-    fog-factor read path, and `--force-texture-white` isolates texture sample
-    results without removing the rest of the fragment body.
+    fog-factor read path, and `--force-texture-white` or scoped
+    `--probe-force-texture-white-*` isolates texture sample results without
+    removing the rest of the fragment body.
     A solid yellow/clear-like GT1 frame from the alpha-blend probe is expected
     evidence that the probe invalidated final pixels, not a valid target state.
   Explicit environment variables still override profile defaults.

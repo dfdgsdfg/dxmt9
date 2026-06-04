@@ -292,6 +292,53 @@ std::uint32_t commitChunkDrawDeltaMask(const D9CDrawIndexedPrimitivePacket& pack
   return mask;
 }
 
+std::uint32_t drawStateInvalidationReasonFromCommitDeltaMask(std::uint32_t deltaMask) {
+  using namespace dxmt9::core;
+  using namespace dxmt9::perf;
+  std::uint32_t reason = DrawStateInvalidationDrawPacket;
+  if ((deltaMask & CommitChunkDrawDeltaRenderState) != 0) {
+    reason |= DrawStateInvalidationRenderState;
+  }
+  if ((deltaMask & CommitChunkDrawDeltaTexture) != 0) {
+    reason |= DrawStateInvalidationTexture;
+  }
+  if ((deltaMask & CommitChunkDrawDeltaStream) != 0) {
+    reason |= DrawStateInvalidationStream;
+  }
+  if ((deltaMask & (CommitChunkDrawDeltaFvf |
+                    CommitChunkDrawDeltaVertexDecl)) != 0) {
+    reason |= DrawStateInvalidationFvfVdecl;
+  }
+  if ((deltaMask & CommitChunkDrawDeltaShader) != 0) {
+    reason |= DrawStateInvalidationShader;
+  }
+  if ((deltaMask & (CommitChunkDrawDeltaRenderTarget |
+                    CommitChunkDrawDeltaDepthStencil)) != 0) {
+    reason |= DrawStateInvalidationRenderTargetDepth;
+  }
+  if ((deltaMask & (CommitChunkDrawDeltaViewport |
+                    CommitChunkDrawDeltaScissor)) != 0) {
+    reason |= DrawStateInvalidationViewportScissor;
+  }
+  if ((deltaMask & (CommitChunkDrawDeltaTextureStageState |
+                    CommitChunkDrawDeltaSamplerState)) != 0) {
+    reason |= DrawStateInvalidationTextureStageSampler;
+  }
+  if ((deltaMask & (CommitChunkDrawDeltaMaterial |
+                    CommitChunkDrawDeltaTransform |
+                    CommitChunkDrawDeltaLight |
+                    CommitChunkDrawDeltaLightEnable)) != 0) {
+    reason |= DrawStateInvalidationFfpState;
+  }
+  if ((deltaMask & CommitChunkDrawDeltaClipPlane) != 0) {
+    reason |= DrawStateInvalidationClipPlane;
+  }
+  if ((deltaMask & CommitChunkDrawDeltaIndexBuffer) != 0) {
+    reason |= DrawStateInvalidationIndexBuffer;
+  }
+  return reason;
+}
+
 void countCommitChunkDrawStreamDeltaDetails(
     D9CDevice* d, const D9CDrawPrimitivePacket& packet) {
   if (!d || packet.streamSourceMask == 0) {
@@ -756,7 +803,13 @@ int32_t applyDrawPacketStateDirect(D9CDevice* d, const D9CDrawPrimitivePacket& p
     return validationHr;
   }
 
-  auto& state = d->dev().mutableState();
+  if (packetHasNoStateDelta(packet)) {
+    return dxmt9::core::D3D_OK;
+  }
+
+  auto& state = d->dev().mutableState(
+      drawStateInvalidationReasonFromCommitDeltaMask(
+          commitChunkDrawDeltaMask(packet)));
 
   for (uint32_t i = 0; i < packet.renderStateCount; ++i) {
     const auto& entry = packet.renderStates[i];

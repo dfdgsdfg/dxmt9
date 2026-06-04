@@ -516,6 +516,25 @@ def key_sort_value(key: tuple[str, str]) -> tuple[int, int, str, str]:
     return as_int(key[0]), as_int(key[1]), key[0], key[1]
 
 
+def parse_row_key_arg(value: str) -> tuple[str, str]:
+    text = value.strip()
+    if "/" in text:
+        seq, enc = (part.strip() for part in text.split("/", 1))
+        if seq and enc:
+            return seq, enc
+    parts: dict[str, str] = {}
+    for item in text.split(","):
+        if "=" not in item:
+            continue
+        key, raw_value = item.split("=", 1)
+        parts[key.strip()] = raw_value.strip()
+    if parts.get("seq") and parts.get("enc"):
+        return parts["seq"], parts["enc"]
+    raise argparse.ArgumentTypeError(
+        f"invalid row key '{value}', expected SEQ/ENC or seq=N,enc=M"
+    )
+
+
 def top_key_set(rows: list[dict[str, str]], top_n: int) -> set[tuple[str, str]]:
     return {
         key
@@ -551,6 +570,173 @@ def row_vs_write_mib(row: dict[str, str]) -> float:
 
 def row_vs_invocations(row: dict[str, str]) -> float:
     return row_metric(row, "vs_invocations")
+
+
+def row_indexed_cache_miss32(row: dict[str, str]) -> float:
+    return float(as_int(first(
+        row,
+        "dxmt_indexed_vertex_cache_miss_estimate_32",
+        "indexed_vertex_cache_miss_estimate_32",
+    )))
+
+
+def row_has_indexed_cache_miss32_telemetry(row: dict[str, str]) -> bool:
+    """Return whether actual submitted/effective indexed LRU32 data exists."""
+    reference_count = as_int(first(
+        row,
+        "dxmt_indexed_vertex_reference_count",
+        "indexed_vertex_reference_count",
+    ))
+    unique_count = as_int(first(
+        row,
+        "dxmt_indexed_unique_vertex_estimate",
+        "indexed_unique_vertex_estimate",
+    ))
+    cache_miss32 = as_int(first(
+        row,
+        "dxmt_indexed_vertex_cache_miss_estimate_32",
+        "indexed_vertex_cache_miss_estimate_32",
+    ))
+    return reference_count > 0 and unique_count > 0 and cache_miss32 > 0
+
+
+def row_indexed_cache_miss64(row: dict[str, str]) -> float:
+    return float(as_int(first(
+        row,
+        "dxmt_indexed_vertex_cache_miss_estimate_64",
+        "indexed_vertex_cache_miss_estimate_64",
+    )))
+
+
+def row_cache_opt_candidate_draws(row: dict[str, str]) -> float:
+    return float(as_int(first(
+        row,
+        "dxmt_indexed_cache_opt_candidate_draws",
+        "indexed_cache_opt_candidate_draws",
+    )))
+
+
+def row_cache_opt_candidate_original_miss32(row: dict[str, str]) -> float:
+    return float(as_int(first(
+        row,
+        "dxmt_indexed_cache_opt_candidate_original_miss32",
+        "indexed_cache_opt_candidate_original_miss32",
+    )))
+
+
+def row_cache_opt_candidate_miss32(row: dict[str, str]) -> float:
+    return float(as_int(first(
+        row,
+        "dxmt_indexed_cache_opt_candidate_miss32",
+        "indexed_cache_opt_candidate_miss32",
+    )))
+
+
+def row_reordered_index_cache_lookups(row: dict[str, str]) -> float:
+    return float(as_int(first(
+        row,
+        "dxmt_reordered_index_cache_lookups",
+        "reordered_index_cache_lookups",
+    )))
+
+
+def row_reordered_index_cache_hits(row: dict[str, str]) -> float:
+    return float(as_int(first(
+        row,
+        "dxmt_reordered_index_cache_hits",
+        "reordered_index_cache_hits",
+    )))
+
+
+def row_reordered_index_cache_rejected_hits(row: dict[str, str]) -> float:
+    return float(as_int(first(
+        row,
+        "dxmt_reordered_index_cache_rejected_hits",
+        "reordered_index_cache_rejected_hits",
+    )))
+
+
+def row_by_key(rows: list[dict[str, str]]) -> dict[tuple[str, str], dict[str, str]]:
+    return {
+        key: row
+        for row in rows
+        if (key := row_match_key(row)) is not None
+    }
+
+
+def target_rows_missing_indexed_cache_miss32_telemetry(
+    rows: list[dict[str, str]],
+    keys: set[tuple[str, str]],
+) -> set[tuple[str, str]]:
+    keyed = row_by_key(rows)
+    return {
+        key
+        for key in keys
+        if key in keyed and not row_has_indexed_cache_miss32_telemetry(keyed[key])
+    }
+
+
+def target_rows_missing_reordered_index_cache_hits(
+    rows: list[dict[str, str]],
+    keys: set[tuple[str, str]],
+) -> set[tuple[str, str]]:
+    keyed = row_by_key(rows)
+    return {
+        key
+        for key in keys
+        if key in keyed and row_reordered_index_cache_hits(keyed[key]) <= 0.0
+    }
+
+
+def non_target_hot_keys(
+    rows: list[dict[str, str]],
+    top_n: int,
+    target_keys: set[tuple[str, str]],
+) -> set[tuple[str, str]]:
+    return {
+        key
+        for row in rows[:top_n]
+        if (key := row_match_key(row)) is not None and key not in target_keys
+    }
+
+
+def aggregate_keyed_rows(
+    rows: list[dict[str, str]],
+    keys: set[tuple[str, str]],
+) -> tuple[dict[str, float], set[tuple[str, str]]]:
+    keyed = row_by_key(rows)
+    missing = {key for key in keys if key not in keyed}
+    present = [keyed[key] for key in keys if key in keyed]
+    return {
+        "gpu_ms": sum(row_metric(row, "gpu_ms") for row in present),
+        "vs_buffer_write_mib": sum(row_vs_write_mib(row) for row in present),
+        "vs_invocations": sum(row_vs_invocations(row) for row in present),
+        "draw_calls": sum(row_metric(row, "dxmt_draw_calls") for row in present),
+        "vertex_count": sum(row_metric(row, "dxmt_vertex_count") for row in present),
+        "triangle_estimate": sum(
+            row_metric(row, "dxmt_triangle_estimate") for row in present
+        ),
+        "indexed_cache_miss32": sum(row_indexed_cache_miss32(row) for row in present),
+        "indexed_cache_miss64": sum(row_indexed_cache_miss64(row) for row in present),
+        "cache_opt_candidate_draws": sum(
+            row_cache_opt_candidate_draws(row) for row in present
+        ),
+        "cache_opt_candidate_original_miss32": sum(
+            row_cache_opt_candidate_original_miss32(row) for row in present
+        ),
+        "cache_opt_candidate_miss32": sum(
+            row_cache_opt_candidate_miss32(row) for row in present
+        ),
+        "reordered_index_cache_lookups": sum(
+            row_reordered_index_cache_lookups(row) for row in present
+        ),
+        "reordered_index_cache_hits": sum(
+            row_reordered_index_cache_hits(row) for row in present
+        ),
+        "reordered_index_cache_rejected_hits": sum(
+            row_reordered_index_cache_rejected_hits(row) for row in present
+        ),
+    }, missing
 
 
 def row_vs_bytes_per_invocation(row: dict[str, str]) -> float:
@@ -701,7 +887,10 @@ def write_report(path: Path, before: dict[str, float], after: dict[str, float],
                  before_label: str, after_label: str,
                  top_n: int,
                  failures: list[str],
-                 requirement_gates_requested: bool) -> None:
+                 requirement_gates_requested: bool,
+                 target_keys: set[tuple[str, str]],
+                 target_gates_requested: bool,
+                 non_target_gates_requested: bool) -> None:
     keys = (
         "encoders",
         "total_gpu_ms",
@@ -860,6 +1049,116 @@ def write_report(path: Path, before: dict[str, float], after: dict[str, float],
         lines.append(f"| After only | `{format_key_set(after_only)}` |")
         lines.append("")
 
+    if target_keys or target_gates_requested:
+        before_target, before_missing = aggregate_keyed_rows(before_rows, target_keys)
+        after_target, after_missing = aggregate_keyed_rows(after_rows, target_keys)
+        before_missing_index_telemetry = target_rows_missing_indexed_cache_miss32_telemetry(
+            before_rows, target_keys
+        )
+        after_missing_index_telemetry = target_rows_missing_indexed_cache_miss32_telemetry(
+            after_rows, target_keys
+        )
+        after_missing_reordered_cache_hits = target_rows_missing_reordered_index_cache_hits(
+            after_rows, target_keys
+        )
+        lines.append("## Target Row Guard")
+        lines.append("")
+        lines.append(
+            "This guard compares rows explicitly listed with `--target-row-key`. "
+            "For cache-opt apply proofs, it uses the actual indexed cache-miss "
+            "estimate fields rather than candidate-only estimates; candidate "
+            "fields can improve even when the runtime apply gate no-ops. "
+            "When `--require-target-index-cache-miss32-decrease` is enabled, "
+            "target rows must also contain positive actual indexed reference, "
+            "unique, and LRU32 miss telemetry on both sides. Production "
+            "cache-opt prelookup proofs can instead use "
+            "`--require-target-index-cache-opt-miss32-decrease`, which checks "
+            "the after-side candidate/effective LRU32 delta. Production cached "
+            "IB proofs can use `--require-target-reordered-index-cache-hits`, "
+            "which requires every target row to have positive reordered-cache "
+            "hits after the candidate."
+        )
+        lines.append("")
+        lines.append("| Set | Rows |")
+        lines.append("|---|---|")
+        lines.append(f"| Target rows | `{format_key_set(target_keys)}` |")
+        lines.append(f"| Missing before | `{format_key_set(before_missing)}` |")
+        lines.append(f"| Missing after | `{format_key_set(after_missing)}` |")
+        lines.append(
+            "| Actual indexed telemetry missing/nonpositive before | "
+            f"`{format_key_set(before_missing_index_telemetry)}` |"
+        )
+        lines.append(
+            "| Actual indexed telemetry missing/nonpositive after | "
+            f"`{format_key_set(after_missing_index_telemetry)}` |"
+        )
+        lines.append(
+            "| Reordered index cache hits missing/nonpositive after | "
+            f"`{format_key_set(after_missing_reordered_cache_hits)}` |"
+        )
+        lines.append("")
+        lines.append("| Metric | Before | After | Delta | Delta % |")
+        lines.append("|---|---:|---:|---:|---:|")
+        for metric in (
+            "gpu_ms",
+            "vs_buffer_write_mib",
+            "vs_invocations",
+            "indexed_cache_miss32",
+            "indexed_cache_miss64",
+            "cache_opt_candidate_draws",
+            "cache_opt_candidate_original_miss32",
+            "cache_opt_candidate_miss32",
+            "reordered_index_cache_lookups",
+            "reordered_index_cache_hits",
+            "reordered_index_cache_rejected_hits",
+            "draw_calls",
+            "vertex_count",
+            "triangle_estimate",
+        ):
+            diff, pct = delta(after_target[metric], before_target[metric])
+            lines.append(
+                f"| `target_{metric}` | `{fmt(before_target[metric])}` | "
+                f"`{fmt(after_target[metric])}` | `{fmt(diff)}` | `{pct}` |"
+            )
+        lines.append("")
+
+    if target_keys or non_target_gates_requested:
+        guard_keys = non_target_hot_keys(before_rows, top_n, target_keys)
+        before_guard, before_missing = aggregate_keyed_rows(before_rows, guard_keys)
+        after_guard, after_missing = aggregate_keyed_rows(after_rows, guard_keys)
+        lines.append("## Non-Target Hot Row Guard")
+        lines.append("")
+        lines.append(
+            "This guard compares before top-N keyed rows after excluding "
+            "`--target-row-key` rows. The after side is matched by `seq/enc` "
+            "across the whole joined summary, so a target-row win cannot hide "
+            "a non-target hot-row regression."
+        )
+        lines.append("")
+        lines.append("| Set | Rows |")
+        lines.append("|---|---|")
+        lines.append(f"| Target rows | `{format_key_set(target_keys)}` |")
+        lines.append(f"| Compared non-target rows | `{format_key_set(guard_keys)}` |")
+        lines.append(f"| Missing before | `{format_key_set(before_missing)}` |")
+        lines.append(f"| Missing after | `{format_key_set(after_missing)}` |")
+        lines.append("")
+        lines.append("| Metric | Before | After | Delta | Delta % |")
+        lines.append("|---|---:|---:|---:|---:|")
+        for metric in (
+            "gpu_ms",
+            "vs_buffer_write_mib",
+            "vs_invocations",
+            "draw_calls",
+            "vertex_count",
+            "triangle_estimate",
+        ):
+            diff, pct = delta(after_guard[metric], before_guard[metric])
+            lines.append(
+                f"| `non_target_{metric}` | `{fmt(before_guard[metric])}` | "
+                f"`{fmt(after_guard[metric])}` | `{fmt(diff)}` | `{pct}` |"
+            )
+        lines.append("")
+
     lines.append("## Top Encoder Deltas")
     lines.append("")
     lines.append(
@@ -1003,6 +1302,80 @@ def failed_requirements(args: argparse.Namespace,
                 f"delta {ratio * 100.0:+.2f}%, allowed <= {limit * 100.0:.2f}%)"
             )
 
+    def require_regression_delta_at_most(
+        before_value: float,
+        after_value: float,
+        label: str,
+        limit: float,
+        unit: str,
+    ) -> None:
+        regression = after_value - before_value
+        if regression > limit:
+            failures.append(
+                f"{label} regressed beyond tolerance "
+                f"({fmt(before_value)} -> {fmt(after_value)}, "
+                f"delta {fmt(regression)}{unit}, allowed <= {fmt(limit)}{unit})"
+            )
+
+    def require_regression_ratio_at_most(
+        before_value: float,
+        after_value: float,
+        label: str,
+        limit: float,
+    ) -> None:
+        if before_value == 0.0:
+            if after_value > 0.0:
+                failures.append(
+                    f"{label} regressed from zero "
+                    f"({fmt(before_value)} -> {fmt(after_value)}, "
+                    f"allowed ratio <= {limit * 100.0:.2f}%)"
+                )
+            return
+        ratio = (after_value - before_value) / before_value
+        if ratio > limit:
+            failures.append(
+                f"{label} regression exceeds limit "
+                f"({fmt(before_value)} -> {fmt(after_value)}, "
+                f"delta {ratio * 100.0:+.2f}%, allowed <= {limit * 100.0:.2f}%)"
+            )
+
+    def require_abs_delta_ratio_at_most(
+        before_value: float,
+        after_value: float,
+        label: str,
+        limit: float,
+    ) -> None:
+        if before_value == 0.0:
+            if after_value != 0.0:
+                failures.append(
+                    f"{label} changed from zero "
+                    f"({fmt(before_value)} -> {fmt(after_value)})"
+                )
+            return
+        ratio = abs(after_value - before_value) / abs(before_value)
+        if ratio > limit:
+            failures.append(
+                f"{label} drift exceeds limit "
+                f"({fmt(before_value)} -> {fmt(after_value)}, "
+                f"delta {ratio * 100.0:+.2f}%, allowed <= {limit * 100.0:.2f}%)"
+            )
+
+    def require_value_decrease(
+        before_value: float,
+        after_value: float,
+        label: str,
+    ) -> None:
+        if before_value <= 0.0:
+            failures.append(
+                f"{label} cannot prove decrease because before value is not positive "
+                f"({fmt(before_value)} -> {fmt(after_value)})"
+            )
+            return
+        if after_value >= before_value:
+            failures.append(
+                f"{label} did not decrease ({fmt(before_value)} -> {fmt(after_value)})"
+            )
+
     if args.require_top_row_key_match:
         before_keys = top_key_set(before_rows, args.top)
         after_keys = top_key_set(after_rows, args.top)
@@ -1078,6 +1451,163 @@ def failed_requirements(args: argparse.Namespace,
                 f"({fmt(before['top_buffer_write_mib'])} -> "
                 f"{fmt(after['top_buffer_write_mib'])}, allowed <= {fmt(allowed)})"
             )
+    non_target_gates = (
+        args.max_non_target_gpu_regression_ms is not None or
+        args.max_non_target_vs_buffer_write_regression_mib is not None or
+        args.max_non_target_vs_invocations_regression_ratio is not None or
+        args.max_non_target_draw_call_delta_ratio is not None or
+        args.max_non_target_vertex_count_delta_ratio is not None or
+        args.max_non_target_triangle_delta_ratio is not None
+    )
+    if non_target_gates:
+        target_keys = set(args.target_row_key or [])
+        guard_keys = non_target_hot_keys(before_rows, args.top, target_keys)
+        if not guard_keys:
+            failures.append(
+                "non-target hot row guard has no keyed rows to compare "
+                f"(target rows: {format_key_set(target_keys)})"
+            )
+        before_guard, before_missing = aggregate_keyed_rows(before_rows, guard_keys)
+        after_guard, after_missing = aggregate_keyed_rows(after_rows, guard_keys)
+        if before_missing:
+            failures.append(
+                "non-target hot row key(s) missing from before summary: "
+                f"{format_key_set(before_missing)}"
+            )
+        if after_missing:
+            failures.append(
+                "non-target hot row key(s) missing from after summary: "
+                f"{format_key_set(after_missing)}"
+            )
+        if args.max_non_target_gpu_regression_ms is not None:
+            require_regression_delta_at_most(
+                before_guard["gpu_ms"],
+                after_guard["gpu_ms"],
+                "non_target_gpu_ms",
+                args.max_non_target_gpu_regression_ms,
+                "ms",
+            )
+        if args.max_non_target_vs_buffer_write_regression_mib is not None:
+            require_regression_delta_at_most(
+                before_guard["vs_buffer_write_mib"],
+                after_guard["vs_buffer_write_mib"],
+                "non_target_vs_buffer_write_mib",
+                args.max_non_target_vs_buffer_write_regression_mib,
+                "MiB",
+            )
+        if args.max_non_target_vs_invocations_regression_ratio is not None:
+            require_regression_ratio_at_most(
+                before_guard["vs_invocations"],
+                after_guard["vs_invocations"],
+                "non_target_vs_invocations",
+                args.max_non_target_vs_invocations_regression_ratio,
+            )
+        if args.max_non_target_draw_call_delta_ratio is not None:
+            require_abs_delta_ratio_at_most(
+                before_guard["draw_calls"],
+                after_guard["draw_calls"],
+                "non_target_draw_calls",
+                args.max_non_target_draw_call_delta_ratio,
+            )
+        if args.max_non_target_vertex_count_delta_ratio is not None:
+            require_abs_delta_ratio_at_most(
+                before_guard["vertex_count"],
+                after_guard["vertex_count"],
+                "non_target_vertex_count",
+                args.max_non_target_vertex_count_delta_ratio,
+            )
+        if args.max_non_target_triangle_delta_ratio is not None:
+            require_abs_delta_ratio_at_most(
+                before_guard["triangle_estimate"],
+                after_guard["triangle_estimate"],
+                "non_target_triangle_estimate",
+                args.max_non_target_triangle_delta_ratio,
+            )
+    target_gates = (
+        args.require_target_index_cache_miss32_decrease or
+        args.require_target_index_cache_opt_miss32_decrease or
+        args.require_target_reordered_index_cache_hits or
+        args.require_target_vs_buffer_write_decrease or
+        args.require_target_vs_invocations_decrease
+    )
+    if target_gates:
+        target_keys = set(args.target_row_key or [])
+        if not target_keys:
+            failures.append("target row guard requires at least one --target-row-key")
+        before_target, before_missing = aggregate_keyed_rows(before_rows, target_keys)
+        after_target, after_missing = aggregate_keyed_rows(after_rows, target_keys)
+        if before_missing:
+            failures.append(
+                "target row key(s) missing from before summary: "
+                f"{format_key_set(before_missing)}"
+            )
+        if after_missing:
+            failures.append(
+                "target row key(s) missing from after summary: "
+                f"{format_key_set(after_missing)}"
+            )
+        if args.require_target_index_cache_miss32_decrease:
+            before_missing_index_telemetry = target_rows_missing_indexed_cache_miss32_telemetry(
+                before_rows, target_keys
+            )
+            after_missing_index_telemetry = target_rows_missing_indexed_cache_miss32_telemetry(
+                after_rows, target_keys
+            )
+            if before_missing_index_telemetry:
+                failures.append(
+                    "target indexed cache-miss telemetry missing or nonpositive "
+                    "in before summary: "
+                    f"{format_key_set(before_missing_index_telemetry)}"
+                )
+            if after_missing_index_telemetry:
+                failures.append(
+                    "target indexed cache-miss telemetry missing or nonpositive "
+                    "in after summary: "
+                    f"{format_key_set(after_missing_index_telemetry)}"
+                )
+            if not before_missing_index_telemetry and not after_missing_index_telemetry:
+                require_value_decrease(
+                    before_target["indexed_cache_miss32"],
+                    after_target["indexed_cache_miss32"],
+                    "target_indexed_cache_miss32",
+                )
+        if args.require_target_index_cache_opt_miss32_decrease:
+            after_original = after_target["cache_opt_candidate_original_miss32"]
+            after_effective = after_target["cache_opt_candidate_miss32"]
+            after_draws = after_target["cache_opt_candidate_draws"]
+            if after_draws <= 0.0 or after_original <= 0.0 or after_effective <= 0.0:
+                failures.append(
+                    "target cache-opt candidate/effective LRU32 telemetry "
+                    "missing or nonpositive in after summary"
+                )
+            else:
+                require_value_decrease(
+                    after_original,
+                    after_effective,
+                    "target_index_cache_opt_candidate_miss32",
+                )
+        if args.require_target_reordered_index_cache_hits:
+            after_missing_reordered_cache_hits = target_rows_missing_reordered_index_cache_hits(
+                after_rows, target_keys
+            )
+            if after_missing_reordered_cache_hits:
+                failures.append(
+                    "target reordered index cache hits missing or nonpositive "
+                    "in after summary: "
+                    f"{format_key_set(after_missing_reordered_cache_hits)}"
+                )
+        if args.require_target_vs_buffer_write_decrease:
+            require_value_decrease(
+                before_target["vs_buffer_write_mib"],
+                after_target["vs_buffer_write_mib"],
+                "target_vs_buffer_write_mib",
+            )
+        if args.require_target_vs_invocations_decrease:
+            require_value_decrease(
+                before_target["vs_invocations"],
+                after_target["vs_invocations"],
+                "target_vs_invocations",
+            )
     return failures
 
 
@@ -1094,7 +1624,20 @@ def has_requirement_gates(args: argparse.Namespace) -> bool:
         args.require_top_gpu_share_increase or
         args.require_top_row_key_match or
         args.require_stable_frame_proof or
+        getattr(args, "require_cache_opt_apply_proof", False) or
         getattr(args, "require_tvb_mechanism_proof", False) or
+        args.require_target_index_cache_miss32_decrease or
+        args.require_target_index_cache_opt_miss32_decrease or
+        args.require_target_reordered_index_cache_hits or
+        args.require_target_vs_buffer_write_decrease or
+        args.require_target_vs_invocations_decrease or
+        bool(args.target_row_key) or
+        args.max_non_target_gpu_regression_ms is not None or
+        args.max_non_target_vs_buffer_write_regression_mib is not None or
+        args.max_non_target_vs_invocations_regression_ratio is not None or
+        args.max_non_target_draw_call_delta_ratio is not None or
+        args.max_non_target_vertex_count_delta_ratio is not None or
+        args.max_non_target_triangle_delta_ratio is not None or
         args.max_top_unexplained_buffer_write_ratio is not None or
         args.max_top_draw_call_delta_ratio is not None or
         args.max_top_vertex_count_delta_ratio is not None or
@@ -1112,6 +1655,17 @@ def main() -> int:
     parser.add_argument("--after-label", default="after")
     parser.add_argument("--top", type=int, default=3)
     parser.add_argument("--output", type=Path, default=Path("xcode-dxmt-bottleneck-comparison.md"))
+    parser.add_argument(
+        "--target-row-key",
+        action="append",
+        type=parse_row_key_arg,
+        default=[],
+        help=(
+            "seq/enc row key mutated by the candidate, for example 50/1 "
+            "or seq=50,enc=1. Repeat to define the target set excluded "
+            "from non-target hot-row regression gates."
+        ),
+    )
     parser.add_argument(
         "--require-top-gpu-decrease",
         action="store_true",
@@ -1172,6 +1726,15 @@ def main() -> int:
         ),
     )
     parser.add_argument(
+        "--require-cache-opt-apply-proof",
+        action="store_true",
+        help=(
+            "enable the cache-opt apply proof gate: stable frame proof plus "
+            "target-row actual LRU32 miss, VS buffer write, and VS invocation "
+            "decreases. Requires at least one --target-row-key."
+        ),
+    )
+    parser.add_argument(
         "--require-tvb-mechanism-proof",
         action="store_true",
         help=(
@@ -1179,6 +1742,51 @@ def main() -> int:
             "top-N VS invocations, and top-N GPU time all strictly "
             "decrease; intended for row-local mini-replay mechanism proof"
         ),
+    )
+    parser.add_argument(
+        "--require-target-index-cache-miss32-decrease",
+        action="store_true",
+        help=(
+            "exit nonzero unless rows listed with --target-row-key have lower "
+            "actual dxmt indexed LRU32 miss estimates after the candidate. "
+            "Both before and after target rows must contain positive actual "
+            "indexed reference/unique/cache-miss telemetry; candidate-only "
+            "or missing generic telemetry is rejected. "
+            "This catches cache-opt apply no-ops where candidate-only estimates "
+            "improve but submitted/effective order does not change."
+        ),
+    )
+    parser.add_argument(
+        "--require-target-index-cache-opt-miss32-decrease",
+        action="store_true",
+        help=(
+            "exit nonzero unless after-side --target-row-key rows contain "
+            "cache-opt candidate/effective LRU32 telemetry and effective "
+            "misses are lower than original misses. Use this for production "
+            "cache-opt paths that bind cached reordered prelookup buffers and "
+            "therefore do not emit the generic indexed-cache fields."
+        ),
+    )
+    parser.add_argument(
+        "--require-target-reordered-index-cache-hits",
+        action="store_true",
+        help=(
+            "exit nonzero unless every after-side --target-row-key row has "
+            "positive reordered index cache hits. Use this for production "
+            "cached-IB proofs where the submitted reordered-buffer path is "
+            "accounted by cache-hit counters rather than generic index-reuse "
+            "or candidate/effective LRU fields."
+        ),
+    )
+    parser.add_argument(
+        "--require-target-vs-buffer-write-decrease",
+        action="store_true",
+        help="exit nonzero unless --target-row-key rows have lower VS buffer write MiB",
+    )
+    parser.add_argument(
+        "--require-target-vs-invocations-decrease",
+        action="store_true",
+        help="exit nonzero unless --target-row-key rows have fewer VS invocations",
     )
     parser.add_argument(
         "--max-top-gpu-regression-ms",
@@ -1189,6 +1797,60 @@ def main() -> int:
         "--max-top-buffer-write-regression-mib",
         type=float,
         help="exit nonzero if top-N buffer write MiB regresses beyond this tolerance",
+    )
+    parser.add_argument(
+        "--max-non-target-gpu-regression-ms",
+        type=float,
+        help=(
+            "exit nonzero if before top-N non-target keyed rows, after "
+            "excluding --target-row-key rows, regress in matched GPU ms "
+            "beyond this tolerance"
+        ),
+    )
+    parser.add_argument(
+        "--max-non-target-vs-buffer-write-regression-mib",
+        type=float,
+        help=(
+            "exit nonzero if before top-N non-target keyed rows, after "
+            "excluding --target-row-key rows, regress in matched VS buffer "
+            "write MiB beyond this tolerance"
+        ),
+    )
+    parser.add_argument(
+        "--max-non-target-vs-invocations-regression-ratio",
+        type=float,
+        help=(
+            "exit nonzero if before top-N non-target keyed rows, after "
+            "excluding --target-row-key rows, regress in matched VS "
+            "invocations by more than this relative ratio"
+        ),
+    )
+    parser.add_argument(
+        "--max-non-target-draw-call-delta-ratio",
+        type=float,
+        help=(
+            "exit nonzero if before top-N non-target keyed rows, after "
+            "excluding --target-row-key rows, change dxmt draw-call count "
+            "by more than this relative ratio"
+        ),
+    )
+    parser.add_argument(
+        "--max-non-target-vertex-count-delta-ratio",
+        type=float,
+        help=(
+            "exit nonzero if before top-N non-target keyed rows, after "
+            "excluding --target-row-key rows, change dxmt vertex count by "
+            "more than this relative ratio"
+        ),
+    )
+    parser.add_argument(
+        "--max-non-target-triangle-delta-ratio",
+        type=float,
+        help=(
+            "exit nonzero if before top-N non-target keyed rows, after "
+            "excluding --target-row-key rows, change dxmt triangle estimate "
+            "by more than this relative ratio"
+        ),
     )
     parser.add_argument(
         "--max-top-unexplained-buffer-write-ratio",
@@ -1212,6 +1874,12 @@ def main() -> int:
     )
     args = parser.parse_args()
 
+    if args.require_cache_opt_apply_proof:
+        args.require_stable_frame_proof = True
+        args.require_target_index_cache_miss32_decrease = True
+        args.require_target_vs_buffer_write_decrease = True
+        args.require_target_vs_invocations_decrease = True
+
     if args.require_stable_frame_proof:
         args.require_top_gpu_decrease = True
         args.require_top_vs_buffer_write_decrease = True
@@ -1229,6 +1897,22 @@ def main() -> int:
     before = summarize(before_rows, args.top)
     after = summarize(after_rows, args.top)
     failures = failed_requirements(args, before, after, before_rows, after_rows)
+    target_keys = set(args.target_row_key or [])
+    target_gates_requested = (
+        args.require_target_index_cache_miss32_decrease or
+        args.require_target_index_cache_opt_miss32_decrease or
+        args.require_target_reordered_index_cache_hits or
+        args.require_target_vs_buffer_write_decrease or
+        args.require_target_vs_invocations_decrease
+    )
+    non_target_gates_requested = (
+        args.max_non_target_gpu_regression_ms is not None or
+        args.max_non_target_vs_buffer_write_regression_mib is not None or
+        args.max_non_target_vs_invocations_regression_ratio is not None or
+        args.max_non_target_draw_call_delta_ratio is not None or
+        args.max_non_target_vertex_count_delta_ratio is not None or
+        args.max_non_target_triangle_delta_ratio is not None
+    )
     write_report(
         args.output,
         before,
@@ -1240,6 +1924,9 @@ def main() -> int:
         args.top,
         failures,
         has_requirement_gates(args),
+        target_keys,
+        target_gates_requested,
+        non_target_gates_requested,
     )
     print(args.output)
     if failures:

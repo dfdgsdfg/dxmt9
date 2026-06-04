@@ -16,6 +16,7 @@ from __future__ import annotations
 import argparse
 import csv
 import json
+import re
 from collections import defaultdict
 from pathlib import Path
 from typing import Any
@@ -48,12 +49,19 @@ STATE_FIELDS = [
 
 def as_int(value: Any) -> int:
     try:
-        text = str(value)
-        if text.startswith(("0x", "0X")):
-            return int(text, 16)
-        return int(float(text))
+        text = str(value).strip()
+        if not text:
+            return 0
+        try:
+            return int(text, 0)
+        except ValueError:
+            return int(float(text))
     except (TypeError, ValueError):
         return 0
+
+
+def as_bool(value: Any) -> bool:
+    return as_int(value) != 0
 
 
 def load_csv(path: Path) -> list[dict[str, str]]:
@@ -69,6 +77,101 @@ def row_key(row: dict[str, str]) -> str:
     if seq == "" or enc == "":
         return ""
     return f"{seq}/{enc}"
+
+
+def parse_class_filters(values: list[str]) -> list[str]:
+    filters: list[str] = []
+    aliases = {
+        "opaque": "opaque-depth-write",
+        "opaque-depth": "opaque-depth-write",
+        "non-opaque": "nonopaque",
+        "blend": "alpha-blend",
+        "blend-off": "no-alpha-blend",
+        "no-blend": "no-alpha-blend",
+        "texture": "textured",
+        "large-4096": "large4096",
+    }
+    known = {
+        "opaque-depth-write",
+        "nonopaque",
+        "depth-read",
+        "alpha-blend",
+        "no-alpha-blend",
+        "screen-blend",
+        "standard-alpha",
+        "additive-alpha",
+        "scissor",
+        "no-scissor",
+        "textured",
+        "large4096",
+    }
+    for value in values:
+        for item in re.split(r"[,;\s+&]+", value):
+            item = item.strip().lower().replace("_", "-")
+            if not item or item == "any":
+                continue
+            item = aliases.get(item, item)
+            if item not in known:
+                raise SystemExit(f"unsupported class filter: {item}")
+            filters.append(item)
+    return filters
+
+
+def blend_equation_matches(row: dict[str, str], src: int, dst: int, op: int) -> bool:
+    return (
+        as_bool(row.get("alpha_blend"))
+        and as_int(row.get("src_blend")) == src
+        and as_int(row.get("dst_blend")) == dst
+        and as_int(row.get("blend_op")) == op
+        and not as_bool(row.get("separate_alpha"))
+    )
+
+
+def opaque_depth_write(row: dict[str, str]) -> bool:
+    return (
+        as_bool(row.get("depth_enabled"))
+        and as_bool(row.get("depth_write"))
+        and as_int(row.get("depth_func")) in (2, 4)
+        and not as_bool(row.get("alpha_blend"))
+        and not as_bool(row.get("alpha_test"))
+        and not as_bool(row.get("stencil"))
+        and not as_bool(row.get("clip_plane"))
+    )
+
+
+def row_matches_class_filter(row: dict[str, str], class_filter: str) -> bool:
+    depth_enabled = as_bool(row.get("depth_enabled"))
+    depth_write = depth_enabled and as_bool(row.get("depth_write"))
+    alpha_blend = as_bool(row.get("alpha_blend"))
+    if class_filter == "opaque-depth-write":
+        return opaque_depth_write(row)
+    if class_filter == "nonopaque":
+        return not opaque_depth_write(row)
+    if class_filter == "depth-read":
+        return depth_enabled and not depth_write
+    if class_filter == "alpha-blend":
+        return alpha_blend
+    if class_filter == "no-alpha-blend":
+        return not alpha_blend
+    if class_filter == "screen-blend":
+        return blend_equation_matches(row, 10, 2, 1)
+    if class_filter == "standard-alpha":
+        return blend_equation_matches(row, 5, 6, 1)
+    if class_filter == "additive-alpha":
+        return blend_equation_matches(row, 5, 2, 1)
+    if class_filter == "scissor":
+        return as_bool(row.get("scissor"))
+    if class_filter == "no-scissor":
+        return not as_bool(row.get("scissor"))
+    if class_filter == "textured":
+        return as_int(row.get("texture_mask")) != 0
+    if class_filter == "large4096":
+        return as_int(row.get("primitive_count")) >= 4096
+    return True
+
+
+def row_matches_class_filters(row: dict[str, str], class_filters: list[str]) -> bool:
+    return all(row_matches_class_filter(row, item) for item in class_filters)
 
 
 def short_hash(value: str) -> str:
@@ -159,12 +262,20 @@ def grouped_rows(rows: list[dict[str, str]], mode: str) -> dict[tuple[str, ...],
 
 
 def build_selection(args: argparse.Namespace) -> dict[str, Any]:
+    class_filters = parse_class_filters(args.class_filter)
     rows = [
         row for row in load_csv(args.probe_draws)
         if row_key(row) == args.row and as_int(row.get("primitive_count")) > 0
+        and row_matches_class_filters(row, class_filters)
+        and (not args.applied_only or as_bool(row.get("applied")))
     ]
     if not rows:
-        raise SystemExit(f"no probe rows matched row {args.row}")
+        class_suffix = (
+            f" and class filters {','.join(class_filters)}"
+            if class_filters else ""
+        )
+        applied_suffix = " and applied=1" if args.applied_only else ""
+        raise SystemExit(f"no probe rows matched row {args.row}{class_suffix}{applied_suffix}")
 
     groups = grouped_rows(rows, args.group_by)
     ranked_groups = sorted(
@@ -194,6 +305,8 @@ def build_selection(args: argparse.Namespace) -> dict[str, Any]:
             "group_by": args.group_by,
             "rank_by": args.rank_by,
             "rank": args.rank,
+            "class_filters": class_filters,
+            "applied_only": bool(args.applied_only),
             "group": {
                 **summary,
                 "draws": len(selected_rows),
@@ -217,6 +330,13 @@ def build_selection(args: argparse.Namespace) -> dict[str, Any]:
                 str(len(window_rows)),
                 "--probe-reverse-indexed-triangles-row",
                 args.row,
+                *(
+                    [
+                        "--probe-reverse-indexed-triangles-classes",
+                        ",".join(class_filters),
+                    ]
+                    if class_filters else []
+                ),
                 "--probe-indexed-triangle-encoder-draw-min",
                 str(min_draw),
                 "--probe-indexed-triangle-encoder-draw-max",
@@ -258,6 +378,10 @@ def print_human(selection: dict[str, Any]) -> None:
         f"{window['primitive_count']} tris, cache64 {window['cache_miss64']})"
     )
     print("flags: " + " ".join(data["capture_flags"]))
+    if data.get("class_filters"):
+        print("class_filters: " + ",".join(data["class_filters"]))
+    if data.get("applied_only"):
+        print("applied_only: true")
     if data.get("shader_capture_flags"):
         print("shader_flags: " + " ".join(data["shader_capture_flags"]))
 
@@ -266,6 +390,21 @@ def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--probe-draws", type=Path, required=True)
     parser.add_argument("--row", required=True, help="Target seq/encoder row, e.g. 60/2")
+    parser.add_argument(
+        "--class-filter",
+        "--class",
+        action="append",
+        default=[],
+        help=(
+            "AND-list indexed triangle class filter. Accepts comma/space/+/& "
+            "separated values such as depth-read,no-alpha-blend,no-scissor,textured"
+        ),
+    )
+    parser.add_argument(
+        "--applied-only",
+        action="store_true",
+        help="Only select rows where the mutating probe actually applied",
+    )
     parser.add_argument("--rank", type=int, default=1, help="Ranked group to select, 1-based")
     parser.add_argument("--max-draws", type=int, default=3, help="Max contiguous draws in capture window")
     parser.add_argument(

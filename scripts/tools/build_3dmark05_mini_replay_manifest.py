@@ -154,7 +154,7 @@ def load_geometry_payloads(path: Path) -> list[dict[str, str]]:
     return rows
 
 
-def parse_draw_ordinals(value: str | None) -> set[int]:
+def parse_int_filter(value: str | None) -> set[int]:
     if not value:
         return set()
     out: set[int] = set()
@@ -162,6 +162,10 @@ def parse_draw_ordinals(value: str | None) -> set[int]:
         if item:
             out.add(as_int(item))
     return out
+
+
+def parse_draw_ordinals(value: str | None) -> set[int]:
+    return parse_int_filter(value)
 
 
 def apply_payload_selection(args: argparse.Namespace) -> None:
@@ -274,6 +278,7 @@ def selected_payloads(
     target_ps: str | None,
     encoder_draw_min: int | None,
     encoder_draw_max: int | None,
+    target_encoder_draw_indices: set[int],
     target_draw_ordinals: set[int],
     max_draws: int,
 ) -> list[dict[str, str]]:
@@ -296,6 +301,10 @@ def selected_payloads(
                 geometry_encoder_draw_index(row) is not None
                 and geometry_encoder_draw_index(row) <= encoder_draw_max
             )
+        )
+        and (
+            not target_encoder_draw_indices
+            or geometry_encoder_draw_index(row) in target_encoder_draw_indices
         )
         and (not target_draw_ordinals or geometry_draw_ordinal(row) in target_draw_ordinals)
     ]
@@ -383,6 +392,7 @@ def build_manifest(args: argparse.Namespace) -> dict[str, Any]:
     probes = probe_index(load_csv(args.probe_draws))
     geometries = load_geometry_payloads(args.geometry_dir)
     shader_files = scan_shader_dump_files(args.shader_msl_dir)
+    target_encoder_draw_indices = parse_int_filter(args.encoder_draw_indices)
     target_draw_ordinals = parse_draw_ordinals(args.draw_ordinals)
     payloads = selected_payloads(
         geometries,
@@ -391,6 +401,7 @@ def build_manifest(args: argparse.Namespace) -> dict[str, Any]:
         args.ps,
         args.encoder_draw_min,
         args.encoder_draw_max,
+        target_encoder_draw_indices,
         target_draw_ordinals,
         args.max_draws,
     )
@@ -543,6 +554,9 @@ def build_manifest(args: argparse.Namespace) -> dict[str, Any]:
             "payload_selection": str(args.payload_selection or ""),
             "encoder_draw_min": "" if args.encoder_draw_min is None else str(args.encoder_draw_min),
             "encoder_draw_max": "" if args.encoder_draw_max is None else str(args.encoder_draw_max),
+            "encoder_draw_indices_filter": ",".join(
+                str(value) for value in sorted(target_encoder_draw_indices)
+            ),
             "draw_ordinals_filter": ",".join(str(value) for value in sorted(target_draw_ordinals)),
         },
         "summary": {
@@ -577,6 +591,8 @@ def main() -> int:
                         help="Optional inclusive encoder-local draw index filter")
     parser.add_argument("--encoder-draw-max", type=int,
                         help="Optional inclusive encoder-local draw index filter")
+    parser.add_argument("--encoder-draw-indices",
+                        help="Optional comma/space separated encoder-local draw index filter")
     parser.add_argument("--draw-ordinals",
                         help="Optional comma/space separated global draw ordinal filter")
     parser.add_argument("--max-draws", type=int, default=0)

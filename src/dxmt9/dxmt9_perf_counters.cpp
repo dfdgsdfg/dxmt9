@@ -179,6 +179,31 @@ struct Counters {
   std::atomic<std::uint64_t> commitChunkDrawSubmissionBatchSize9To16{0};
   std::atomic<std::uint64_t> commitChunkDrawSubmissionBatchSize17To32{0};
   std::atomic<std::uint64_t> commitChunkDrawSubmissionBatchSize33Plus{0};
+  std::atomic<std::uint64_t> d3d9DrawStateCacheHits{0};
+  std::atomic<std::uint64_t> d3d9DrawStateCacheMisses{0};
+  std::atomic<std::uint64_t> d3d9DrawStateCacheHitWithIndex{0};
+  std::atomic<std::uint64_t> d3d9DrawStateCacheMissWithIndex{0};
+  std::atomic<std::uint64_t> d3d9DrawStateCacheHitNoIndex{0};
+  std::atomic<std::uint64_t> d3d9DrawStateCacheMissNoIndex{0};
+  std::atomic<std::uint64_t> d3d9DrawStateCacheUniformRefreshes{0};
+  std::atomic<std::uint64_t> d3d9DrawStateCacheMissAfterUnknown{0};
+  std::atomic<std::uint64_t> d3d9DrawStateCacheMissAfterMutableState{0};
+  std::atomic<std::uint64_t> d3d9DrawStateCacheMissAfterDrawPacket{0};
+  std::atomic<std::uint64_t> d3d9DrawStateCacheMissAfterRenderState{0};
+  std::atomic<std::uint64_t> d3d9DrawStateCacheMissAfterTexture{0};
+  std::atomic<std::uint64_t> d3d9DrawStateCacheMissAfterStream{0};
+  std::atomic<std::uint64_t> d3d9DrawStateCacheMissAfterIndexBuffer{0};
+  std::atomic<std::uint64_t> d3d9DrawStateCacheMissAfterFvfVdecl{0};
+  std::atomic<std::uint64_t> d3d9DrawStateCacheMissAfterShader{0};
+  std::atomic<std::uint64_t> d3d9DrawStateCacheMissAfterRenderTargetDepth{0};
+  std::atomic<std::uint64_t> d3d9DrawStateCacheMissAfterViewportScissor{0};
+  std::atomic<std::uint64_t> d3d9DrawStateCacheMissAfterTextureStageSampler{0};
+  std::atomic<std::uint64_t> d3d9DrawStateCacheMissAfterFfpState{0};
+  std::atomic<std::uint64_t> d3d9DrawStateCacheMissAfterClipPlane{0};
+  std::atomic<std::uint64_t> d3d9DrawStateCacheMissAfterStateBlock{0};
+  std::atomic<std::uint64_t> d3d9DrawStateCacheMissAfterReset{0};
+  std::atomic<std::uint64_t> d3d9DrawStateCacheMissAfterSwapChain{0};
+  std::atomic<std::uint64_t> d3d9DrawStateCacheMissAfterTextureLod{0};
   std::atomic<std::uint64_t> commitChunkDrawRunBreakFirstDelta{0};
   std::atomic<std::uint64_t> commitChunkDrawRunBreakStateDelta{0};
   std::atomic<std::uint64_t> commitChunkDrawRunBreakType{0};
@@ -359,6 +384,16 @@ struct Counters {
   std::atomic<std::uint64_t> encodeDrawStreamBindCpuMaxNs{0};
   std::atomic<std::uint64_t> encodeDrawIssueCpuNs{0};
   std::atomic<std::uint64_t> encodeDrawIssueCpuMaxNs{0};
+  std::atomic<std::uint64_t> encodeDrawPsoPrefetchHandleAvailable{0};
+  std::atomic<std::uint64_t> encodeDrawPsoPrefetchHandleUsed{0};
+  std::atomic<std::uint64_t> encodeDrawPsoPrefetchHandleMissing{0};
+  std::atomic<std::uint64_t> encodeDrawPsoPrefetchBypassProbe{0};
+  std::atomic<std::uint64_t> encodeDrawPsoPrefetchBypassBindingOverride{0};
+  std::atomic<std::uint64_t> encodeDrawPsoPrefetchBindingOverride{0};
+  std::atomic<std::uint64_t> encodeDrawPsoPrefetchBindingOverrideCompatible{0};
+  std::atomic<std::uint64_t> encodeDrawPsoPrefetchBindingOverrideIncompatible{0};
+  std::atomic<std::uint64_t> d3d9SnapshotDrawSubmissionCpuNs{0};
+  std::atomic<std::uint64_t> d3d9SnapshotDrawSubmissionCpuMaxNs{0};
   std::atomic<std::uint64_t> transientUploadCalls{0};
   std::atomic<std::uint64_t> transientUploadBytes{0};
   std::atomic<std::uint64_t> transientUploadCpuNs{0};
@@ -643,6 +678,7 @@ struct Counters {
   PercentileRing encodeDrawFvfDecodeCpuRing;
   PercentileRing encodeDrawStreamBindCpuRing;
   PercentileRing encodeDrawIssueCpuRing;
+  PercentileRing d3d9SnapshotDrawSubmissionCpuRing;
   PercentileRing transientUploadCpuRing;
   PercentileRing d3d9BufferLockRing;
   PercentileRing d3d9BufferLockShadowAllocRing;
@@ -931,6 +967,31 @@ constexpr CounterEntry kCounterTable[] = {
     {"commit_chunk_draw_submission_batch_size_9_16", CounterEntry::Kind::UnsignedCount, &Counters::commitChunkDrawSubmissionBatchSize9To16, nullptr, nullptr, 0.0},
     {"commit_chunk_draw_submission_batch_size_17_32", CounterEntry::Kind::UnsignedCount, &Counters::commitChunkDrawSubmissionBatchSize17To32, nullptr, nullptr, 0.0},
     {"commit_chunk_draw_submission_batch_size_33_plus", CounterEntry::Kind::UnsignedCount, &Counters::commitChunkDrawSubmissionBatchSize33Plus, nullptr, nullptr, 0.0},
+    {"d3d9_draw_state_cache_hits", CounterEntry::Kind::UnsignedCount, &Counters::d3d9DrawStateCacheHits, nullptr, nullptr, 0.0},
+    {"d3d9_draw_state_cache_misses", CounterEntry::Kind::UnsignedCount, &Counters::d3d9DrawStateCacheMisses, nullptr, nullptr, 0.0},
+    {"d3d9_draw_state_cache_hit_with_index", CounterEntry::Kind::UnsignedCount, &Counters::d3d9DrawStateCacheHitWithIndex, nullptr, nullptr, 0.0},
+    {"d3d9_draw_state_cache_miss_with_index", CounterEntry::Kind::UnsignedCount, &Counters::d3d9DrawStateCacheMissWithIndex, nullptr, nullptr, 0.0},
+    {"d3d9_draw_state_cache_hit_no_index", CounterEntry::Kind::UnsignedCount, &Counters::d3d9DrawStateCacheHitNoIndex, nullptr, nullptr, 0.0},
+    {"d3d9_draw_state_cache_miss_no_index", CounterEntry::Kind::UnsignedCount, &Counters::d3d9DrawStateCacheMissNoIndex, nullptr, nullptr, 0.0},
+    {"d3d9_draw_state_cache_uniform_refreshes", CounterEntry::Kind::UnsignedCount, &Counters::d3d9DrawStateCacheUniformRefreshes, nullptr, nullptr, 0.0},
+    {"d3d9_draw_state_cache_miss_after_unknown", CounterEntry::Kind::UnsignedCount, &Counters::d3d9DrawStateCacheMissAfterUnknown, nullptr, nullptr, 0.0},
+    {"d3d9_draw_state_cache_miss_after_mutable_state", CounterEntry::Kind::UnsignedCount, &Counters::d3d9DrawStateCacheMissAfterMutableState, nullptr, nullptr, 0.0},
+    {"d3d9_draw_state_cache_miss_after_draw_packet", CounterEntry::Kind::UnsignedCount, &Counters::d3d9DrawStateCacheMissAfterDrawPacket, nullptr, nullptr, 0.0},
+    {"d3d9_draw_state_cache_miss_after_render_state", CounterEntry::Kind::UnsignedCount, &Counters::d3d9DrawStateCacheMissAfterRenderState, nullptr, nullptr, 0.0},
+    {"d3d9_draw_state_cache_miss_after_texture", CounterEntry::Kind::UnsignedCount, &Counters::d3d9DrawStateCacheMissAfterTexture, nullptr, nullptr, 0.0},
+    {"d3d9_draw_state_cache_miss_after_stream", CounterEntry::Kind::UnsignedCount, &Counters::d3d9DrawStateCacheMissAfterStream, nullptr, nullptr, 0.0},
+    {"d3d9_draw_state_cache_miss_after_index_buffer", CounterEntry::Kind::UnsignedCount, &Counters::d3d9DrawStateCacheMissAfterIndexBuffer, nullptr, nullptr, 0.0},
+    {"d3d9_draw_state_cache_miss_after_fvf_vdecl", CounterEntry::Kind::UnsignedCount, &Counters::d3d9DrawStateCacheMissAfterFvfVdecl, nullptr, nullptr, 0.0},
+    {"d3d9_draw_state_cache_miss_after_shader", CounterEntry::Kind::UnsignedCount, &Counters::d3d9DrawStateCacheMissAfterShader, nullptr, nullptr, 0.0},
+    {"d3d9_draw_state_cache_miss_after_render_target_depth", CounterEntry::Kind::UnsignedCount, &Counters::d3d9DrawStateCacheMissAfterRenderTargetDepth, nullptr, nullptr, 0.0},
+    {"d3d9_draw_state_cache_miss_after_viewport_scissor", CounterEntry::Kind::UnsignedCount, &Counters::d3d9DrawStateCacheMissAfterViewportScissor, nullptr, nullptr, 0.0},
+    {"d3d9_draw_state_cache_miss_after_texture_stage_sampler", CounterEntry::Kind::UnsignedCount, &Counters::d3d9DrawStateCacheMissAfterTextureStageSampler, nullptr, nullptr, 0.0},
+    {"d3d9_draw_state_cache_miss_after_ffp_state", CounterEntry::Kind::UnsignedCount, &Counters::d3d9DrawStateCacheMissAfterFfpState, nullptr, nullptr, 0.0},
+    {"d3d9_draw_state_cache_miss_after_clip_plane", CounterEntry::Kind::UnsignedCount, &Counters::d3d9DrawStateCacheMissAfterClipPlane, nullptr, nullptr, 0.0},
+    {"d3d9_draw_state_cache_miss_after_state_block", CounterEntry::Kind::UnsignedCount, &Counters::d3d9DrawStateCacheMissAfterStateBlock, nullptr, nullptr, 0.0},
+    {"d3d9_draw_state_cache_miss_after_reset", CounterEntry::Kind::UnsignedCount, &Counters::d3d9DrawStateCacheMissAfterReset, nullptr, nullptr, 0.0},
+    {"d3d9_draw_state_cache_miss_after_swap_chain", CounterEntry::Kind::UnsignedCount, &Counters::d3d9DrawStateCacheMissAfterSwapChain, nullptr, nullptr, 0.0},
+    {"d3d9_draw_state_cache_miss_after_texture_lod", CounterEntry::Kind::UnsignedCount, &Counters::d3d9DrawStateCacheMissAfterTextureLod, nullptr, nullptr, 0.0},
     {"commit_chunk_draw_run_break_first_delta", CounterEntry::Kind::UnsignedCount, &Counters::commitChunkDrawRunBreakFirstDelta, nullptr, nullptr, 0.0},
     {"commit_chunk_draw_run_break_state_delta", CounterEntry::Kind::UnsignedCount, &Counters::commitChunkDrawRunBreakStateDelta, nullptr, nullptr, 0.0},
     {"commit_chunk_draw_run_break_type", CounterEntry::Kind::UnsignedCount, &Counters::commitChunkDrawRunBreakType, nullptr, nullptr, 0.0},
@@ -1140,6 +1201,19 @@ constexpr CounterEntry kCounterTable[] = {
     {"encode_draw_issue_cpu_p50_ms", CounterEntry::Kind::PercentileMs, nullptr, nullptr, &Counters::encodeDrawIssueCpuRing, 0.5},
     {"encode_draw_issue_cpu_p95_ms", CounterEntry::Kind::PercentileMs, nullptr, nullptr, &Counters::encodeDrawIssueCpuRing, 0.95},
     {"encode_draw_issue_cpu_p99_ms", CounterEntry::Kind::PercentileMs, nullptr, nullptr, &Counters::encodeDrawIssueCpuRing, 0.99},
+    {"encode_draw_pso_prefetch_handle_available", CounterEntry::Kind::UnsignedCount, &Counters::encodeDrawPsoPrefetchHandleAvailable, nullptr, nullptr, 0.0},
+    {"encode_draw_pso_prefetch_handle_used", CounterEntry::Kind::UnsignedCount, &Counters::encodeDrawPsoPrefetchHandleUsed, nullptr, nullptr, 0.0},
+    {"encode_draw_pso_prefetch_handle_missing", CounterEntry::Kind::UnsignedCount, &Counters::encodeDrawPsoPrefetchHandleMissing, nullptr, nullptr, 0.0},
+    {"encode_draw_pso_prefetch_bypass_probe", CounterEntry::Kind::UnsignedCount, &Counters::encodeDrawPsoPrefetchBypassProbe, nullptr, nullptr, 0.0},
+    {"encode_draw_pso_prefetch_bypass_binding_override", CounterEntry::Kind::UnsignedCount, &Counters::encodeDrawPsoPrefetchBypassBindingOverride, nullptr, nullptr, 0.0},
+    {"encode_draw_pso_prefetch_binding_override", CounterEntry::Kind::UnsignedCount, &Counters::encodeDrawPsoPrefetchBindingOverride, nullptr, nullptr, 0.0},
+    {"encode_draw_pso_prefetch_binding_override_compatible", CounterEntry::Kind::UnsignedCount, &Counters::encodeDrawPsoPrefetchBindingOverrideCompatible, nullptr, nullptr, 0.0},
+    {"encode_draw_pso_prefetch_binding_override_incompatible", CounterEntry::Kind::UnsignedCount, &Counters::encodeDrawPsoPrefetchBindingOverrideIncompatible, nullptr, nullptr, 0.0},
+    {"d3d9_snapshot_draw_submission_cpu_ms", CounterEntry::Kind::Milliseconds, &Counters::d3d9SnapshotDrawSubmissionCpuNs, nullptr, nullptr, 0.0},
+    {"d3d9_snapshot_draw_submission_cpu_max_ms", CounterEntry::Kind::Milliseconds, &Counters::d3d9SnapshotDrawSubmissionCpuMaxNs, nullptr, nullptr, 0.0},
+    {"d3d9_snapshot_draw_submission_cpu_p50_ms", CounterEntry::Kind::PercentileMs, nullptr, nullptr, &Counters::d3d9SnapshotDrawSubmissionCpuRing, 0.5},
+    {"d3d9_snapshot_draw_submission_cpu_p95_ms", CounterEntry::Kind::PercentileMs, nullptr, nullptr, &Counters::d3d9SnapshotDrawSubmissionCpuRing, 0.95},
+    {"d3d9_snapshot_draw_submission_cpu_p99_ms", CounterEntry::Kind::PercentileMs, nullptr, nullptr, &Counters::d3d9SnapshotDrawSubmissionCpuRing, 0.99},
     {"transient_upload_calls", CounterEntry::Kind::UnsignedCount, &Counters::transientUploadCalls, nullptr, nullptr, 0.0},
     {"transient_upload_bytes", CounterEntry::Kind::UnsignedCount, &Counters::transientUploadBytes, nullptr, nullptr, 0.0},
     {"transient_upload_cpu_ms", CounterEntry::Kind::Milliseconds, &Counters::transientUploadCpuNs, nullptr, nullptr, 0.0},
@@ -2012,6 +2086,70 @@ void countSubmitDrawRunBatchGroup(std::uint32_t recordCount) {
   updateMax(c.submitDrawRunBatchMaxRecords, recordCount);
 }
 
+void countD3D9DrawStateCacheLookup(bool hit, bool includeIndexBuffer) {
+  auto& c = counters();
+  if (hit) {
+    add(c.d3d9DrawStateCacheHits);
+    add(includeIndexBuffer ? c.d3d9DrawStateCacheHitWithIndex
+                           : c.d3d9DrawStateCacheHitNoIndex);
+  } else {
+    add(c.d3d9DrawStateCacheMisses);
+    add(includeIndexBuffer ? c.d3d9DrawStateCacheMissWithIndex
+                           : c.d3d9DrawStateCacheMissNoIndex);
+  }
+}
+
+void countD3D9DrawStateCacheUniformRefresh() {
+  add(counters().d3d9DrawStateCacheUniformRefreshes);
+}
+
+void countD3D9DrawStateCacheMissReason(std::uint32_t reasonMask) {
+  auto& c = counters();
+  if (reasonMask == dxmt9::core::DrawStateInvalidationUnknown) {
+    add(c.d3d9DrawStateCacheMissAfterUnknown);
+    return;
+  }
+  const auto countIf = [&](std::uint32_t bit, auto& counter) {
+    if ((reasonMask & bit) != 0) {
+      add(counter);
+    }
+  };
+  countIf(dxmt9::core::DrawStateInvalidationMutableState,
+          c.d3d9DrawStateCacheMissAfterMutableState);
+  countIf(dxmt9::core::DrawStateInvalidationDrawPacket,
+          c.d3d9DrawStateCacheMissAfterDrawPacket);
+  countIf(dxmt9::core::DrawStateInvalidationRenderState,
+          c.d3d9DrawStateCacheMissAfterRenderState);
+  countIf(dxmt9::core::DrawStateInvalidationTexture,
+          c.d3d9DrawStateCacheMissAfterTexture);
+  countIf(dxmt9::core::DrawStateInvalidationStream,
+          c.d3d9DrawStateCacheMissAfterStream);
+  countIf(dxmt9::core::DrawStateInvalidationIndexBuffer,
+          c.d3d9DrawStateCacheMissAfterIndexBuffer);
+  countIf(dxmt9::core::DrawStateInvalidationFvfVdecl,
+          c.d3d9DrawStateCacheMissAfterFvfVdecl);
+  countIf(dxmt9::core::DrawStateInvalidationShader,
+          c.d3d9DrawStateCacheMissAfterShader);
+  countIf(dxmt9::core::DrawStateInvalidationRenderTargetDepth,
+          c.d3d9DrawStateCacheMissAfterRenderTargetDepth);
+  countIf(dxmt9::core::DrawStateInvalidationViewportScissor,
+          c.d3d9DrawStateCacheMissAfterViewportScissor);
+  countIf(dxmt9::core::DrawStateInvalidationTextureStageSampler,
+          c.d3d9DrawStateCacheMissAfterTextureStageSampler);
+  countIf(dxmt9::core::DrawStateInvalidationFfpState,
+          c.d3d9DrawStateCacheMissAfterFfpState);
+  countIf(dxmt9::core::DrawStateInvalidationClipPlane,
+          c.d3d9DrawStateCacheMissAfterClipPlane);
+  countIf(dxmt9::core::DrawStateInvalidationStateBlock,
+          c.d3d9DrawStateCacheMissAfterStateBlock);
+  countIf(dxmt9::core::DrawStateInvalidationReset,
+          c.d3d9DrawStateCacheMissAfterReset);
+  countIf(dxmt9::core::DrawStateInvalidationSwapChain,
+          c.d3d9DrawStateCacheMissAfterSwapChain);
+  countIf(dxmt9::core::DrawStateInvalidationTextureLod,
+          c.d3d9DrawStateCacheMissAfterTextureLod);
+}
+
 void countDrawCall(std::uint32_t primitiveType,
                    std::uint32_t primitiveCount,
                    std::uint64_t vertexCount,
@@ -2225,6 +2363,37 @@ void countEncodeDrawIssueCpuTime(std::uint64_t nanoseconds) {
   add(counters().encodeDrawIssueCpuNs, nanoseconds);
   updateMax(counters().encodeDrawIssueCpuMaxNs, nanoseconds);
   recordRing(counters().encodeDrawIssueCpuRing, nanoseconds);
+}
+
+void countEncodeDrawPsoPrefetch(bool handleAvailable,
+                                bool usedHandle,
+                                bool hasBindingOverride,
+                                bool bindingOverrideCompatible,
+                                bool bypassProbe) {
+  auto& c = counters();
+  add(handleAvailable ? c.encodeDrawPsoPrefetchHandleAvailable
+                      : c.encodeDrawPsoPrefetchHandleMissing);
+  if (usedHandle) {
+    add(c.encodeDrawPsoPrefetchHandleUsed);
+  }
+  if (bypassProbe) {
+    add(c.encodeDrawPsoPrefetchBypassProbe);
+  }
+  if (hasBindingOverride) {
+    add(c.encodeDrawPsoPrefetchBindingOverride);
+    if (bindingOverrideCompatible) {
+      add(c.encodeDrawPsoPrefetchBindingOverrideCompatible);
+    } else {
+      add(c.encodeDrawPsoPrefetchBindingOverrideIncompatible);
+      add(c.encodeDrawPsoPrefetchBypassBindingOverride);
+    }
+  }
+}
+
+void countD3D9SnapshotDrawSubmissionCpuTime(std::uint64_t nanoseconds) {
+  add(counters().d3d9SnapshotDrawSubmissionCpuNs, nanoseconds);
+  updateMax(counters().d3d9SnapshotDrawSubmissionCpuMaxNs, nanoseconds);
+  recordRing(counters().d3d9SnapshotDrawSubmissionCpuRing, nanoseconds);
 }
 
 void countTransientUploadCpuTime(std::uint64_t nanoseconds, std::size_t bytes) {
@@ -3143,6 +3312,7 @@ void emitEncoderBreakdown(const EncoderBreakdown& b) {
       "probe_disable_alpha_blend_draws=%llu "
       "probe_disable_depth_write_draws=%llu "
       "probe_depth_func_always_draws=%llu "
+      "probe_force_texture_white_draws=%llu "
       "indexed_vertex_reuse_samples=%llu "
       "indexed_vertex_reuse_skipped=%llu "
       "indexed_vertex_reference_count=%llu "
@@ -3161,6 +3331,7 @@ void emitEncoderBreakdown(const EncoderBreakdown& b) {
       "indexed_cache_opt_candidate_miss64=%llu "
       "reordered_index_cache_lookups=%llu "
       "reordered_index_cache_hits=%llu "
+      "reordered_index_cache_rejected_hits=%llu "
       "reordered_index_cache_misses=%llu "
       "reordered_index_cache_created=%llu "
       "reordered_index_cache_created_bytes=%llu "
@@ -3393,6 +3564,7 @@ void emitEncoderBreakdown(const EncoderBreakdown& b) {
       static_cast<unsigned long long>(b.probeDisableAlphaBlendDraws),
       static_cast<unsigned long long>(b.probeDisableDepthWriteDraws),
       static_cast<unsigned long long>(b.probeDepthFuncAlwaysDraws),
+      static_cast<unsigned long long>(b.probeForceTextureWhiteDraws),
       static_cast<unsigned long long>(b.indexedVertexReuseSamples),
       static_cast<unsigned long long>(b.indexedVertexReuseSkipped),
       static_cast<unsigned long long>(b.indexedVertexReferenceCount),
@@ -3411,6 +3583,7 @@ void emitEncoderBreakdown(const EncoderBreakdown& b) {
       static_cast<unsigned long long>(b.indexedCacheOptCandidateMiss64),
       static_cast<unsigned long long>(b.reorderedIndexCacheLookups),
       static_cast<unsigned long long>(b.reorderedIndexCacheHits),
+      static_cast<unsigned long long>(b.reorderedIndexCacheRejectedHits),
       static_cast<unsigned long long>(b.reorderedIndexCacheMisses),
       static_cast<unsigned long long>(b.reorderedIndexCacheCreated),
       static_cast<unsigned long long>(b.reorderedIndexCacheCreatedBytes),

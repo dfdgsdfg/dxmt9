@@ -221,6 +221,27 @@ using RenderStateTable = StateValueTable<kMaxStateSlots>;
 using TextureStageStateTable = StateValueTable<kMaxTextureStageStates>;
 using SamplerStateTable = StateValueTable<kMaxSamplerStates>;
 
+enum DrawStateInvalidationBits : u32 {
+  DrawStateInvalidationUnknown = 0,
+  DrawStateInvalidationMutableState = 1u << 0,
+  DrawStateInvalidationDrawPacket = 1u << 1,
+  DrawStateInvalidationRenderState = 1u << 2,
+  DrawStateInvalidationTexture = 1u << 3,
+  DrawStateInvalidationStream = 1u << 4,
+  DrawStateInvalidationIndexBuffer = 1u << 5,
+  DrawStateInvalidationFvfVdecl = 1u << 6,
+  DrawStateInvalidationShader = 1u << 7,
+  DrawStateInvalidationRenderTargetDepth = 1u << 8,
+  DrawStateInvalidationViewportScissor = 1u << 9,
+  DrawStateInvalidationTextureStageSampler = 1u << 10,
+  DrawStateInvalidationFfpState = 1u << 11,
+  DrawStateInvalidationClipPlane = 1u << 12,
+  DrawStateInvalidationStateBlock = 1u << 13,
+  DrawStateInvalidationReset = 1u << 14,
+  DrawStateInvalidationSwapChain = 1u << 15,
+  DrawStateInvalidationTextureLod = 1u << 16,
+};
+
 struct TextureBinding {
   Handle handle{};
   u32 lod = 0;
@@ -845,23 +866,11 @@ inline void clearDrawStateBindingFields(FlatDrawStateRecord& hot) noexcept {
   hot.streamStrides = {};
   hot.streamMask = 0;
   hot.indexBuffer = {};
-  hot.vertexConstantsHash = 0;
-  hot.pixelConstantsHash = 0;
-  hot.worldViewProjHash = 0;
-  hot.ffpBlendWorldViewProjHash = 0;
-  hot.textureTransformsHash = 0;
-  hot.clipPlanesHash = 0;
   hot.key.streamBuffers = {};
   hot.key.streamOffsets = {};
   hot.key.streamStrides = {};
   hot.key.streamMask = 0;
   hot.key.indexBuffer = {};
-  hot.key.vertexConstantsHash = 0;
-  hot.key.pixelConstantsHash = 0;
-  hot.key.worldViewProjHash = 0;
-  hot.key.ffpBlendWorldViewProjHash = 0;
-  hot.key.textureTransformsHash = 0;
-  hot.key.clipPlanesHash = 0;
 }
 
 inline void clearDrawShaderLayoutBindingFields(
@@ -871,7 +880,17 @@ inline void clearDrawShaderLayoutBindingFields(
 
 inline bool drawRunSubmissionHasExternalBindingOverride(
     const DrawRunSubmission& submission) noexcept {
-  return !submission.payload.bindingOverrideData.empty();
+  return !submission.payload.bindingOverrideData.empty() ||
+         !drawBindingOverrideEmpty(submission.bindingOverride);
+}
+
+inline void ensureDrawRunSubmissionBindingOverridePayload(
+    DrawRunSubmission& submission) noexcept {
+  if (submission.payload.bindingOverrideData.empty() &&
+      !drawBindingOverrideEmpty(submission.bindingOverride)) {
+    submission.payload.bindingOverrideData =
+        drawBindingOverrideBytes(submission.bindingOverride);
+  }
 }
 
 inline bool drawStateKeysCompatibleForDrawRunBatch(
@@ -930,12 +949,6 @@ inline bool shaderLayoutsCompatibleForDrawRunBatch(
 inline bool drawRunSubmissionStatesCompatibleForBatch(
     const DrawRunSubmission& a,
     const DrawRunSubmission& b) noexcept {
-  if (drawRunSubmissionHasExternalBindingOverride(a) ||
-      drawRunSubmissionHasExternalBindingOverride(b)) {
-    return a.state.hot == b.state.hot &&
-           a.state.shaderLayout == b.state.shaderLayout;
-  }
-
   return drawStatesCompatibleForDrawRunBatch(a.state.hot, b.state.hot) &&
          shaderLayoutsCompatibleForDrawRunBatch(a.state.shaderLayout,
                                                 b.state.shaderLayout);
@@ -945,6 +958,7 @@ inline void prepareDrawRunSubmissionBindingOverride(
     const DrawRunSubmission& base,
     DrawRunSubmission& submission) noexcept {
   if (drawRunSubmissionHasExternalBindingOverride(submission)) {
+    ensureDrawRunSubmissionBindingOverridePayload(submission);
     return;
   }
 
@@ -971,8 +985,7 @@ inline void prepareDrawRunSubmissionBindingOverride(
   }
 
   if (!drawBindingOverrideEmpty(submission.bindingOverride)) {
-    submission.payload.bindingOverrideData =
-        drawBindingOverrideBytes(submission.bindingOverride);
+    ensureDrawRunSubmissionBindingOverridePayload(submission);
   }
 }
 
@@ -1515,7 +1528,14 @@ class Device : public std::enable_shared_from_this<Device> {
   const DeviceCaps& caps() const noexcept { return caps_; }
   const DeviceState& state() const noexcept { return state_; }
   DeviceState& mutableState() noexcept {
-    invalidateDrawStateCache();
+    return mutableState(DrawStateInvalidationMutableState);
+  }
+  DeviceState& mutableState(u32 invalidationReasonMask) noexcept {
+    invalidateDrawStateCache(invalidationReasonMask);
+    return state_;
+  }
+  DeviceState& mutableShaderConstantsState() noexcept {
+    invalidateDrawUniformCache();
     return state_;
   }
   const PresentParameters& presentParameters() const noexcept { return presentParameters_; }
@@ -1686,14 +1706,17 @@ class Device : public std::enable_shared_from_this<Device> {
 
   struct CachedBaseDrawState {
     u64 generation = 0;
+    u64 uniformGeneration = 0;
     bool valid = false;
     FlatDrawStateRecord hot{};
     DrawShaderLayoutContext shaderLayout{};
     DrawUniformPayload uniforms{};
   };
 
-  void invalidateDrawStateCache() noexcept;
+  void invalidateDrawStateCache(u32 reasonMask = DrawStateInvalidationUnknown) noexcept;
+  void invalidateDrawUniformCache() noexcept;
   const CachedBaseDrawState& cachedBaseDrawState(bool includeIndexBuffer);
+  const CachedBaseDrawState& cachedBaseDrawStateForSubmissionBatch();
 
   AdapterInfo adapter_{};
   BackendLimits limits_{};
@@ -1710,8 +1733,12 @@ class Device : public std::enable_shared_from_this<Device> {
   bool extendedDevice_ = false;
   DeviceState state_{};
   u64 drawStateGeneration_ = 1;
+  u64 drawStableStateGeneration_ = 1;
+  u64 drawUniformGeneration_ = 1;
+  u32 drawStateInvalidationReasonMask_ = DrawStateInvalidationUnknown;
   CachedBaseDrawState drawStateCacheWithIndex_{};
   CachedBaseDrawState drawStateCacheNoIndex_{};
+  CachedBaseDrawState drawStateCacheBindingAgnostic_{};
   std::vector<std::weak_ptr<Buffer>> buffers_;
   std::vector<std::weak_ptr<Texture>> textures_;
   std::vector<std::weak_ptr<Surface>> surfaces_;

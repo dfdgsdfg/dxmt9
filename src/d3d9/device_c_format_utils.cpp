@@ -425,7 +425,7 @@ uint32_t transformStateFromD3D(uint32_t state) {
 
 int32_t setShaderFloatConst(D9CDevice* d, uint32_t start, const float* data, uint32_t cnt,
                             bool pixelShader) {
-  auto& state = d->dev().mutableState();
+  auto& state = d->dev().mutableShaderConstantsState();
   if (pixelShader) {
     auto& consts = state.psConst;
     for (uint32_t i = 0; i < cnt && (start + i) < consts.float4.size(); ++i) {

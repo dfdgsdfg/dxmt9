@@ -66,6 +66,7 @@ class Summarize3DMark05PerfTests(unittest.TestCase):
                 "indexed_order_optimized_bytes=1234 "
                 "probe_scissor_rect_draws=1 "
                 "probe_scissor_rect_area_delta_pixels=256 "
+                "probe_force_texture_white_draws=2 "
                 "transient_index_optimized_order_bytes=1234]\n"
                 "[dxmt9-perf-encoder-stream seq=7 encoder=3 stream=0 "
                 "samples=4 metal_binds=5 metal_bind_firsts=1 "
@@ -91,6 +92,8 @@ class Summarize3DMark05PerfTests(unittest.TestCase):
                 "original_scissor_r=256 original_scissor_b=192 "
                 "cull=2 fill=0 base_vertex=0 "
                 "start_index=128 index_type=1 index_buffer=0xdef "
+                "effective_index_source=cached-reordered-hit "
+                "effective_index_offset=0 effective_index_bytes=1234 "
                 "stream0_handle=0xabc stream0_offset=64 stream0_stride=24 "
                 "pso=0x111 shader_variant=0x222 vs=0x333 ps=0x444 "
                 "vsout=0xfff]\n",
@@ -151,6 +154,7 @@ class Summarize3DMark05PerfTests(unittest.TestCase):
             self.assertEqual(encoder["indexed_order_optimized_bytes"], 1234)
             self.assertEqual(encoder["probe_scissor_rect_draws"], 1)
             self.assertEqual(encoder["probe_scissor_rect_area_delta_pixels"], 256)
+            self.assertEqual(encoder["probe_force_texture_white_draws"], 2)
             self.assertEqual(encoder["transient_index_optimized_order_bytes"], 1234)
             self.assertEqual(encoder["pso_state_samples_per_draw"], 2.0)
 
@@ -180,6 +184,9 @@ class Summarize3DMark05PerfTests(unittest.TestCase):
             self.assertEqual(probe_draw["scissor_r"], 512)
             self.assertEqual(probe_draw["original_scissor_r"], 256)
             self.assertEqual(probe_draw["index_buffer"], "0xdef")
+            self.assertEqual(probe_draw["effective_index_source"], "cached-reordered-hit")
+            self.assertEqual(probe_draw["effective_index_offset"], 0)
+            self.assertEqual(probe_draw["effective_index_bytes"], 1234)
             self.assertEqual(probe_draw["stream0_handle"], "0xabc")
 
             encoder_csv = temp_path / "3dmark05-perf-encoders.csv"
@@ -215,6 +222,7 @@ class Summarize3DMark05PerfTests(unittest.TestCase):
             self.assertEqual(row["transient_index_shadow_fallback_bytes"], "8")
             self.assertEqual(row["indexed_order_optimized_draws"], "1")
             self.assertEqual(row["probe_scissor_rect_draws"], "1")
+            self.assertEqual(row["probe_force_texture_white_draws"], "2")
             self.assertEqual(row["transient_index_optimized_order_bytes"], "1234")
 
             with stream_csv.open(newline="", encoding="utf-8") as handle:
@@ -236,6 +244,9 @@ class Summarize3DMark05PerfTests(unittest.TestCase):
             self.assertEqual(probe_row["src_blend"], "5")
             self.assertEqual(probe_row["scissor_l"], "16")
             self.assertEqual(probe_row["original_scissor_l"], "8")
+            self.assertEqual(probe_row["effective_index_source"], "cached-reordered-hit")
+            self.assertEqual(probe_row["effective_index_offset"], "0")
+            self.assertEqual(probe_row["effective_index_bytes"], "1234")
             self.assertEqual(probe_row["pso"], "0x111")
 
             summary_md = temp_path / "summary.md"

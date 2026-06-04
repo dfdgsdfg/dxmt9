@@ -244,6 +244,16 @@ class CommandQueue {
                                                     std::size_t alignment,
                                                     std::uint64_t seqId);
 
+  resources::ReorderedIndexBufferLookup findReorderedIndexBuffer(
+      core::Handle sourceHandle,
+      resources::ReorderedIndexBufferCacheKey key,
+      std::uint64_t seqId);
+
+  bool rememberRejectedReorderedIndexBuffer(
+      core::Handle sourceHandle,
+      resources::ReorderedIndexBufferCacheKey key,
+      std::uint64_t seqId);
+
   resources::ReorderedIndexBufferLookup getOrCreateReorderedIndexBuffer(
       core::Handle sourceHandle,
       resources::ReorderedIndexBufferCacheKey key,

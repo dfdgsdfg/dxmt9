@@ -30,6 +30,14 @@ struct DrawOrdinalRange {
   u64 max = 0;
 };
 
+struct DrawOrdinalList {
+  static constexpr std::size_t MaxOrdinals = 64;
+
+  bool enabled = false;
+  std::array<u64, MaxOrdinals> ordinals = {};
+  std::size_t count = 0;
+};
+
 struct RenderEncoderSelector {
   bool enabled = false;
   u64 seqId = 0;
@@ -50,6 +58,7 @@ enum class IndexedTriangleClassFilter : std::uint8_t {
   NonOpaque,
   DepthRead,
   AlphaBlend,
+  NoAlphaBlend,
   ScreenBlend,
   StandardAlphaBlend,
   AdditiveAlphaBlend,
@@ -92,6 +101,8 @@ bool shouldSkipDrawSeq(u64 seqId, DrawSeqRange range) noexcept;
 DrawOrdinalRange makeDrawOrdinalRange(std::optional<u64> min, std::optional<u64> max) noexcept;
 bool drawOrdinalRangeEnabled(DrawOrdinalRange range) noexcept;
 bool shouldSkipDrawOrdinal(u64 ordinal, DrawOrdinalRange range) noexcept;
+DrawOrdinalList makeDrawOrdinalList(std::string_view spec) noexcept;
+bool drawOrdinalListContains(const DrawOrdinalList& list, u64 ordinal) noexcept;
 
 RenderEncoderSelector makeRenderEncoderSelector(std::string_view spec) noexcept;
 RenderEncoderSelectorList makeRenderEncoderSelectorList(std::string_view spec) noexcept;
@@ -160,6 +171,29 @@ bool disableFog();
 
 // Force fragment texture samples to white. Env: DXMT_FORCE_TEXTURE_WHITE.
 bool forceTextureWhite();
+
+// Diagnostic shader-source A/B: force fragment texture samples to white only
+// for selected indexed triangle-list draws. Env:
+// DXMT9_PROBE_FORCE_TEXTURE_WHITE.
+bool probeForceTextureWhite();
+
+// Optional class filter for DXMT9_PROBE_FORCE_TEXTURE_WHITE. Accepted values
+// match DXMT9_SPLIT_LARGE_INDEXED_DRAWS_CLASS.
+// Env: DXMT9_PROBE_FORCE_TEXTURE_WHITE_CLASS.
+IndexedTriangleClassFilter probeForceTextureWhiteClassFilter();
+
+// Optional AND class-list filter for DXMT9_PROBE_FORCE_TEXTURE_WHITE.
+// Env: DXMT9_PROBE_FORCE_TEXTURE_WHITE_CLASSES.
+IndexedTriangleClassFilterList probeForceTextureWhiteClassFilters();
+
+// Optional selector for DXMT9_PROBE_FORCE_TEXTURE_WHITE. Format is
+// "<seq>/<encoder>".
+// Env: DXMT9_PROBE_FORCE_TEXTURE_WHITE_ROW.
+RenderEncoderSelector probeForceTextureWhiteRow();
+
+// Optional selector list for DXMT9_PROBE_FORCE_TEXTURE_WHITE.
+// Env: DXMT9_PROBE_FORCE_TEXTURE_WHITE_ROWS.
+RenderEncoderSelectorList probeForceTextureWhiteRows();
 
 // Diagnostic render-state A/B: force color blending off while preserving
 // color-write masks. Env: DXMT9_PROBE_DISABLE_ALPHA_BLEND.
@@ -253,6 +287,29 @@ RenderEncoderSelectorList probeForceCullModeRows();
 // Env: DXMT_FORCE_EXPAND_INDEXED.
 bool forceExpandIndexed();
 
+// Diagnostic-only: force selected indexed triangle-list draws to be expanded
+// into flat vertex lists. Uses row/class filters plus the shared indexed
+// triangle encoder draw range. Env: DXMT9_PROBE_FORCE_EXPAND_INDEXED.
+bool probeForceExpandIndexed();
+
+// Optional class filter for DXMT9_PROBE_FORCE_EXPAND_INDEXED. Accepted values
+// match DXMT9_SPLIT_LARGE_INDEXED_DRAWS_CLASS.
+// Env: DXMT9_PROBE_FORCE_EXPAND_INDEXED_CLASS.
+IndexedTriangleClassFilter probeForceExpandIndexedClassFilter();
+
+// Optional AND class-list filter for DXMT9_PROBE_FORCE_EXPAND_INDEXED.
+// Env: DXMT9_PROBE_FORCE_EXPAND_INDEXED_CLASSES.
+IndexedTriangleClassFilterList probeForceExpandIndexedClassFilters();
+
+// Optional selector for DXMT9_PROBE_FORCE_EXPAND_INDEXED. Format is
+// "<seq>/<encoder>".
+// Env: DXMT9_PROBE_FORCE_EXPAND_INDEXED_ROW.
+RenderEncoderSelector probeForceExpandIndexedRow();
+
+// Optional selector list for DXMT9_PROBE_FORCE_EXPAND_INDEXED.
+// Env: DXMT9_PROBE_FORCE_EXPAND_INDEXED_ROWS.
+RenderEncoderSelectorList probeForceExpandIndexedRows();
+
 // Disable the compatibility heuristic that auto-expands selected indexed
 // draws. Env: DXMT_DISABLE_AUTO_EXPAND_INDEXED.
 bool disableAutoExpandIndexed();
@@ -261,15 +318,17 @@ bool disableAutoExpandIndexed();
 // vertexBaseIndex at zero. Env: DXMT9_USE_NATIVE_METAL_BASE_VERTEX.
 bool useNativeMetalBaseVertex();
 
-// Experimental optimization: for order-independent screen-blend indexed
-// triangle lists, submit a transient index buffer with primitive order reversed.
+// Diagnostic-only: for strict screen-blend indexed triangle lists, submit a
+// transient index buffer with primitive order reversed. Screen-blend output is
+// destination-dependent; same-input translated-FS probes have shown bit-exact
+// differences, so this is not production-safe.
 // Env: DXMT9_OPTIMIZE_SCREEN_BLEND_INDEX_ORDER.
 bool optimizeScreenBlendIndexOrder();
 
 // Optional class filter for DXMT9_OPTIMIZE_SCREEN_BLEND_INDEX_ORDER. Accepted
 // values: any, opaque-depth-write, nonopaque, depth-read, alpha-blend,
-// screen-blend, standard-alpha, additive-alpha, scissor, no-scissor, textured,
-// and large4096.
+// no-alpha-blend, screen-blend, standard-alpha, additive-alpha, scissor,
+// no-scissor, textured, and large4096.
 // Env: DXMT9_OPTIMIZE_SCREEN_BLEND_INDEX_ORDER_CLASS.
 IndexedTriangleClassFilter optimizeScreenBlendIndexOrderClassFilter();
 
@@ -313,8 +372,9 @@ u64 splitLargeIndexedDrawStream0SpanMax();
 std::uint32_t splitLargeIndexedDrawMaxChunksPerDraw();
 
 // Optional class filter for DXMT9_SPLIT_LARGE_INDEXED_DRAWS. Accepted values:
-// any, opaque-depth-write, nonopaque, depth-read, alpha-blend, screen-blend,
-// standard-alpha, additive-alpha, scissor, no-scissor, textured, and large4096.
+// any, opaque-depth-write, nonopaque, depth-read, alpha-blend, no-alpha-blend,
+// screen-blend, standard-alpha, additive-alpha, scissor, no-scissor, textured,
+// and large4096.
 // Env: DXMT9_SPLIT_LARGE_INDEXED_DRAWS_CLASS.
 IndexedTriangleClassFilter splitLargeIndexedDrawClassFilter();
 
@@ -365,6 +425,33 @@ bool probeSortIndexedTrianglesByMinIndex();
 // Env: DXMT9_PROBE_OPTIMIZE_INDEXED_TRIANGLES_VERTEX_CACHE.
 bool probeOptimizeIndexedTrianglesVertexCache();
 
+// Opt-in optimization: submit an LRU32 cache-aware reordered index buffer for
+// opaque depth-writing triangle-list draws when the stable source index buffer
+// candidate clears DXMT9_OPTIMIZE_OPAQUE_DEPTH_INDEX_CACHE_MIN_GAIN_PCT.
+// Unlike the probe flag below, this is not scoped by seq/enc row filters and
+// never bypasses the opaque-depth-write safety gate.
+// Env: DXMT9_OPTIMIZE_OPAQUE_DEPTH_INDEX_CACHE.
+bool optimizeOpaqueDepthIndexCache();
+
+// Minimum whole-percent LRU32 miss reduction required by
+// DXMT9_OPTIMIZE_OPAQUE_DEPTH_INDEX_CACHE. Defaults to 10.
+// Env: DXMT9_OPTIMIZE_OPAQUE_DEPTH_INDEX_CACHE_MIN_GAIN_PCT.
+std::uint32_t optimizeOpaqueDepthIndexCacheMinGainPct();
+
+// Profiling-only opt-in: submit an LRU32 cache-aware reordered index buffer
+// for strict screen-blend triangle-list draws. This uses the strict
+// screen-blend predicate, is not row-scoped, and does not bypass alpha-test,
+// separate-alpha, stencil, clip-plane, or depth-write safety gates. It is not
+// production-safe yet: same-input translated-FS probes have shown small
+// destination-dependent output differences.
+// Env: DXMT9_OPTIMIZE_SCREEN_BLEND_INDEX_CACHE.
+bool optimizeScreenBlendIndexCache();
+
+// Minimum whole-percent LRU32 miss reduction required by
+// DXMT9_OPTIMIZE_SCREEN_BLEND_INDEX_CACHE. Defaults to 10.
+// Env: DXMT9_OPTIMIZE_SCREEN_BLEND_INDEX_CACHE_MIN_GAIN_PCT.
+std::uint32_t optimizeScreenBlendIndexCacheMinGainPct();
+
 // Diagnostic-only: submit the same LRU32 cache-aware candidate measured by
 // DXMT9_MEASURE_INDEX_CACHE_OPT_CANDIDATE, but only when the candidate reduces
 // LRU32 misses by at least
@@ -375,14 +462,22 @@ bool probeOptimizeIndexedTrianglesVertexCache();
 // Env: DXMT9_PROBE_APPLY_INDEX_CACHE_OPT_CANDIDATE.
 bool probeApplyIndexCacheOptCandidate();
 
+// Diagnostic-only: allow DXMT9_PROBE_APPLY_INDEX_CACHE_OPT_CANDIDATE to bypass
+// the opaque-depth-write safety gate. This can mutate depth-read/blended rows
+// where primitive order may affect final color writers; use only for targeted
+// probes with same-input semantic image validation.
+// Env: DXMT9_PROBE_APPLY_INDEX_CACHE_OPT_CANDIDATE_UNSAFE_NONOPAQUE.
+bool probeApplyIndexCacheOptCandidateUnsafeNonOpaque();
+
 // Minimum whole-percent LRU32 miss reduction required by
 // DXMT9_PROBE_APPLY_INDEX_CACHE_OPT_CANDIDATE. Defaults to 10.
 // Env: DXMT9_PROBE_APPLY_INDEX_CACHE_OPT_CANDIDATE_MIN_GAIN_PCT.
 std::uint32_t probeApplyIndexCacheOptCandidateMinGainPct();
 
 // Optional class filter for reverse-indexed-triangle probes. Accepted values:
-// any, opaque-depth-write, nonopaque, depth-read, alpha-blend, screen-blend,
-// standard-alpha, additive-alpha, scissor, no-scissor, textured, and large4096.
+// any, opaque-depth-write, nonopaque, depth-read, alpha-blend, no-alpha-blend,
+// screen-blend, standard-alpha, additive-alpha, scissor, no-scissor, textured,
+// and large4096.
 // Env: DXMT9_PROBE_REVERSE_INDEXED_TRIANGLES_CLASS.
 IndexedTriangleClassFilter probeReverseIndexedTrianglesClassFilter();
 
@@ -402,6 +497,9 @@ u64 probeReverseIndexedTrianglesStream0SpanMin();
 // per-render-encoder draw index reported in perf probe draw samples.
 // Env: DXMT9_PROBE_INDEXED_TRIANGLE_ENCODER_DRAW_MIN/MAX.
 DrawOrdinalRange probeIndexedTriangleEncoderDrawRange();
+
+// Env: DXMT9_PROBE_INDEXED_TRIANGLE_ENCODER_DRAW_EXCLUDE.
+DrawOrdinalList probeIndexedTriangleEncoderDrawExcludeList();
 
 // Optional selector for reverse-indexed-triangle probes. Format is
 // "<seq>/<encoder>", for example "60/3".

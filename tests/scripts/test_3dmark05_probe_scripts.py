@@ -91,6 +91,34 @@ class ThreeDMark05ProbeScriptTests(unittest.TestCase):
         self.assertEqual(result.returncode, 2)
         self.assertIn("Xcode comparison gates require", result.stderr)
 
+    def test_wrapper_rejects_non_target_gate_without_baseline_joined(self) -> None:
+        result = self.run_script(
+            RUN_WRAPPER,
+            "--target-row-key",
+            "50/1",
+            "--max-non-target-gpu-regression-ms",
+            "1.0",
+            "--dry-run",
+        )
+
+        self.assertEqual(result.returncode, 2)
+        self.assertIn("Xcode comparison gates require", result.stderr)
+
+    def test_finalizer_rejects_non_target_gate_without_baseline_joined(self) -> None:
+        result = self.run_script(
+            FINALIZER,
+            "--suffix",
+            "missing-baseline",
+            "--target-row-key",
+            "50/1",
+            "--max-non-target-vs-buffer-write-regression-mib",
+            "16",
+            "--dry-run",
+        )
+
+        self.assertEqual(result.returncode, 2)
+        self.assertIn("Xcode comparison gates require", result.stderr)
+
     def test_wrapper_rejects_missing_baseline_output_path(self) -> None:
         result = self.run_script(
             RUN_WRAPPER,
@@ -226,6 +254,315 @@ class ThreeDMark05ProbeScriptTests(unittest.TestCase):
         self.assertIn("--max-top-triangle-delta-ratio", finalize_line)
         self.assertIn("0.05", finalize_line)
 
+    def test_wrapper_forwards_non_target_hot_row_gates_to_finalizer(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            baseline_joined = Path(tmp) / "baseline-joined.csv"
+            baseline_joined.write_text("gpu_ms\n", encoding="utf-8")
+
+            result = self.run_script(
+                RUN_WRAPPER,
+                "--suffix",
+                "forward-non-target",
+                "--baseline-joined",
+                str(baseline_joined),
+                "--target-row-key",
+                "50/1",
+                "--target-row-key",
+                "50/3",
+                "--max-non-target-gpu-regression-ms",
+                "1.0",
+                "--max-non-target-vs-buffer-write-regression-mib",
+                "16",
+                "--max-non-target-vs-invocations-regression-ratio",
+                "0.05",
+                "--max-non-target-draw-call-delta-ratio",
+                "0.05",
+                "--max-non-target-vertex-count-delta-ratio",
+                "0.05",
+                "--max-non-target-triangle-delta-ratio",
+                "0.05",
+                "--dry-run",
+            )
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+        finalize_line = next(
+            line for line in result.stdout.splitlines()
+            if line.startswith("finalize_cmd_after_xcode_export:")
+        )
+        self.assertIn("--target-row-key", finalize_line)
+        self.assertIn("50/1", finalize_line)
+        self.assertIn("50/3", finalize_line)
+        self.assertIn("--max-non-target-gpu-regression-ms", finalize_line)
+        self.assertIn("1.0", finalize_line)
+        self.assertIn("--max-non-target-vs-buffer-write-regression-mib", finalize_line)
+        self.assertIn("16", finalize_line)
+        self.assertIn(
+            "--max-non-target-vs-invocations-regression-ratio",
+            finalize_line,
+        )
+        self.assertIn("0.05", finalize_line)
+        self.assertIn("--max-non-target-draw-call-delta-ratio", finalize_line)
+        self.assertIn("--max-non-target-vertex-count-delta-ratio", finalize_line)
+        self.assertIn("--max-non-target-triangle-delta-ratio", finalize_line)
+
+    def test_wrapper_forwards_target_row_apply_gates_to_finalizer(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            baseline_joined = Path(tmp) / "baseline-joined.csv"
+            baseline_joined.write_text("gpu_ms\n", encoding="utf-8")
+
+            result = self.run_script(
+                RUN_WRAPPER,
+                "--suffix",
+                "forward-target",
+                "--baseline-joined",
+                str(baseline_joined),
+                "--target-row-key",
+                "50/0",
+                "--target-row-key",
+                "50/1",
+                "--require-target-index-cache-miss32-decrease",
+                "--require-target-index-cache-opt-miss32-decrease",
+                "--require-target-reordered-index-cache-hits",
+                "--require-target-vs-buffer-write-decrease",
+                "--require-target-vs-invocations-decrease",
+                "--dry-run",
+            )
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+        finalize_line = next(
+            line for line in result.stdout.splitlines()
+            if line.startswith("finalize_cmd_after_xcode_export:")
+        )
+        self.assertIn("--target-row-key", finalize_line)
+        self.assertIn("50/0", finalize_line)
+        self.assertIn("50/1", finalize_line)
+        self.assertIn("--require-target-index-cache-miss32-decrease", finalize_line)
+        self.assertIn("--require-target-index-cache-opt-miss32-decrease", finalize_line)
+        self.assertIn("--require-target-reordered-index-cache-hits", finalize_line)
+        self.assertIn("--require-target-vs-buffer-write-decrease", finalize_line)
+        self.assertIn("--require-target-vs-invocations-decrease", finalize_line)
+
+    def test_wrapper_expands_cache_opt_apply_proof_preset_to_finalizer(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            baseline_joined = Path(tmp) / "baseline-joined.csv"
+            baseline_joined.write_text("gpu_ms\n", encoding="utf-8")
+
+            result = self.run_script(
+                RUN_WRAPPER,
+                "--suffix",
+                "cache-opt-apply-proof",
+                "--baseline-joined",
+                str(baseline_joined),
+                "--target-row-key",
+                "50/0",
+                "--require-cache-opt-apply-proof",
+                "--dry-run",
+            )
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+        finalize_line = next(
+            line for line in result.stdout.splitlines()
+            if line.startswith("finalize_cmd_after_xcode_export:")
+        )
+        self.assertIn("--require-stable-frame-proof", finalize_line)
+        self.assertIn("--target-row-key", finalize_line)
+        self.assertIn("50/0", finalize_line)
+        self.assertIn("--require-target-index-cache-miss32-decrease", finalize_line)
+        self.assertIn("--require-target-vs-buffer-write-decrease", finalize_line)
+        self.assertIn("--require-target-vs-invocations-decrease", finalize_line)
+
+    def test_wrapper_rejects_cache_opt_apply_proof_without_target_row(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            baseline_joined = Path(tmp) / "baseline-joined.csv"
+            baseline_joined.write_text("gpu_ms\n", encoding="utf-8")
+
+            result = self.run_script(
+                RUN_WRAPPER,
+                "--suffix",
+                "cache-opt-apply-proof-missing-row",
+                "--baseline-joined",
+                str(baseline_joined),
+                "--require-cache-opt-apply-proof",
+                "--dry-run",
+            )
+
+        self.assertEqual(result.returncode, 2)
+        self.assertIn(
+            "--require-cache-opt-apply-proof requires at least one --target-row-key",
+            result.stderr,
+        )
+
+    def test_wrapper_rejects_unsafe_nonopaque_cache_apply_proof_without_semantic_gate(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            baseline_joined = Path(tmp) / "baseline-joined.csv"
+            baseline_joined.write_text("gpu_ms\n", encoding="utf-8")
+
+            result = self.run_script(
+                RUN_WRAPPER,
+                "--suffix",
+                "unsafe-cache-opt-apply-proof-missing-semantic",
+                "--baseline-joined",
+                str(baseline_joined),
+                "--target-row-key",
+                "50/2",
+                "--probe-apply-index-cache-opt-candidate",
+                "--probe-apply-index-cache-opt-candidate-unsafe-nonopaque",
+                "--require-cache-opt-apply-proof",
+                "--dry-run",
+            )
+
+        self.assertEqual(result.returncode, 2)
+        self.assertIn(
+            "--require-semantic-image-proof requires --semantic-image-policy",
+            result.stderr,
+        )
+
+    def test_wrapper_forwards_unsafe_nonopaque_cache_apply_semantic_proof(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            baseline_joined = root / "baseline-joined.csv"
+            baseline_joined.write_text("gpu_ms\n", encoding="utf-8")
+            before = root / "before.ppm"
+            after = root / "after.ppm"
+            before.write_text("P3\n1 1\n255\n0 0 0\n", encoding="ascii")
+            after.write_text("P3\n1 1\n255\n0 0 0\n", encoding="ascii")
+
+            result = self.run_script(
+                RUN_WRAPPER,
+                "--suffix",
+                "unsafe-cache-opt-apply-proof",
+                "--baseline-joined",
+                str(baseline_joined),
+                "--target-row-key",
+                "50/2",
+                "--semantic-image-policy",
+                "exact",
+                "--semantic-image-before",
+                str(before),
+                "--semantic-image-after",
+                str(after),
+                "--probe-apply-index-cache-opt-candidate",
+                "--probe-apply-index-cache-opt-candidate-unsafe-nonopaque",
+                "--require-cache-opt-apply-proof",
+                "--dry-run",
+            )
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+        finalize_line = next(
+            line for line in result.stdout.splitlines()
+            if line.startswith("finalize_cmd_after_xcode_export:")
+        )
+        self.assertIn("--require-semantic-image-proof", finalize_line)
+        self.assertIn("--require-target-index-cache-miss32-decrease", finalize_line)
+        self.assertIn("--require-target-vs-buffer-write-decrease", finalize_line)
+        self.assertIn("--require-target-vs-invocations-decrease", finalize_line)
+        self.assertIn("--semantic-image-policy", finalize_line)
+        self.assertIn("exact", finalize_line)
+
+    def test_wrapper_rejects_screen_blend_cache_proof_without_semantic_gate(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            baseline_joined = Path(tmp) / "baseline-joined.csv"
+            baseline_joined.write_text("gpu_ms\n", encoding="utf-8")
+
+            result = self.run_script(
+                RUN_WRAPPER,
+                "--suffix",
+                "screen-blend-cache-proof-missing-semantic",
+                "--baseline-joined",
+                str(baseline_joined),
+                "--target-row-key",
+                "50/2",
+                "--require-screen-blend-cache-proof",
+                "--dry-run",
+            )
+
+        self.assertEqual(result.returncode, 2)
+        self.assertIn(
+            "--require-screen-blend-cache-proof requires --semantic-image-policy",
+            result.stderr,
+        )
+
+    def test_wrapper_rejects_screen_blend_cache_proof_without_cache_opt(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            baseline_joined = root / "baseline-joined.csv"
+            baseline_joined.write_text("gpu_ms\n", encoding="utf-8")
+            before = root / "before.ppm"
+            after = root / "after.ppm"
+            before.write_text("P3\n1 1\n255\n0 0 0\n", encoding="ascii")
+            after.write_text("P3\n1 1\n255\n0 0 0\n", encoding="ascii")
+
+            result = self.run_script(
+                RUN_WRAPPER,
+                "--suffix",
+                "screen-blend-cache-proof-missing-cache-opt",
+                "--baseline-joined",
+                str(baseline_joined),
+                "--target-row-key",
+                "50/2",
+                "--semantic-image-policy",
+                "lsb1",
+                "--semantic-image-before",
+                str(before),
+                "--semantic-image-after",
+                str(after),
+                "--require-screen-blend-cache-proof",
+                "--dry-run",
+            )
+
+        self.assertEqual(result.returncode, 2)
+        self.assertIn(
+            "--require-screen-blend-cache-proof requires --optimize-screen-blend-index-cache",
+            result.stderr,
+        )
+
+    def test_wrapper_forwards_screen_blend_cache_proof_with_semantic_gate(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            baseline_joined = root / "baseline-joined.csv"
+            baseline_joined.write_text("gpu_ms\n", encoding="utf-8")
+            before = root / "before.ppm"
+            after = root / "after.ppm"
+            before.write_text("P3\n1 1\n255\n0 0 0\n", encoding="ascii")
+            after.write_text("P3\n1 1\n255\n0 0 0\n", encoding="ascii")
+
+            result = self.run_script(
+                RUN_WRAPPER,
+                "--suffix",
+                "screen-blend-cache-proof",
+                "--baseline-joined",
+                str(baseline_joined),
+                "--target-row-key",
+                "50/2",
+                "--semantic-image-policy",
+                "lsb1",
+                "--semantic-image-before",
+                str(before),
+                "--semantic-image-after",
+                str(after),
+                "--optimize-screen-blend-index-cache",
+                "--require-screen-blend-cache-proof",
+                "--dry-run",
+            )
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("DXMT9_OPTIMIZE_SCREEN_BLEND_INDEX_CACHE=1", result.stdout)
+        self.assertIn("DXMT9_MEASURE_INDEX_REUSE=1", result.stdout)
+        self.assertIn("DXMT9_MEASURE_INDEX_CACHE_OPT_CANDIDATE=1", result.stdout)
+        finalize_line = next(
+            line for line in result.stdout.splitlines()
+            if line.startswith("finalize_cmd_after_xcode_export:")
+        )
+        self.assertIn("--require-screen-blend-cache-proof", finalize_line)
+        self.assertIn("--require-stable-frame-proof", finalize_line)
+        self.assertNotIn("--require-target-index-cache-miss32-decrease", finalize_line)
+        self.assertIn("--require-target-index-cache-opt-miss32-decrease", finalize_line)
+        self.assertIn("--require-target-reordered-index-cache-hits", finalize_line)
+        self.assertIn("--require-target-vs-buffer-write-decrease", finalize_line)
+        self.assertIn("--require-target-vs-invocations-decrease", finalize_line)
+        self.assertIn("--semantic-image-policy", finalize_line)
+        self.assertIn("lsb1", finalize_line)
+
     def test_wrapper_forwards_stable_frame_proof_preset_to_finalizer(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             baseline_joined = Path(tmp) / "baseline-joined.csv"
@@ -296,6 +633,52 @@ class ThreeDMark05ProbeScriptTests(unittest.TestCase):
         )
         self.assertIn("--require-result-json", finalize_line)
 
+    def test_wrapper_forwards_semantic_image_gate_to_finalizer(self) -> None:
+        result = self.run_script(
+            RUN_WRAPPER,
+            "--suffix",
+            "forward-semantic-image",
+            "--semantic-image-policy",
+            "lsb1",
+            "--semantic-image-before",
+            "before.ppm",
+            "--semantic-image-after",
+            "after.ppm",
+            "--semantic-image-min-active-pct",
+            "2",
+            "--min-free-mb",
+            "0",
+            "--dry-run",
+        )
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+        finalize_line = next(
+            line for line in result.stdout.splitlines()
+            if line.startswith("finalize_cmd_after_xcode_export:")
+        )
+        self.assertIn("--semantic-image-policy lsb1", finalize_line)
+        self.assertIn("--semantic-image-before before.ppm", finalize_line)
+        self.assertIn("--semantic-image-after after.ppm", finalize_line)
+        self.assertIn("--semantic-image-min-active-pct 2", finalize_line)
+
+    def test_wrapper_rejects_incomplete_semantic_image_gate(self) -> None:
+        result = self.run_script(
+            RUN_WRAPPER,
+            "--suffix",
+            "bad-semantic-image",
+            "--semantic-image-policy",
+            "exact",
+            "--semantic-image-before",
+            "before.ppm",
+            "--dry-run",
+        )
+
+        self.assertEqual(result.returncode, 2)
+        self.assertIn(
+            "--semantic-image-policy requires --semantic-image-before and --semantic-image-after",
+            result.stderr,
+        )
+
     def test_wrapper_dry_run_includes_sparse_const_split_env(self) -> None:
         result = self.run_script(
             RUN_WRAPPER,
@@ -340,6 +723,60 @@ class ThreeDMark05ProbeScriptTests(unittest.TestCase):
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertIn("DXMT_DEBUG_FORCE_FRAGMENT_COLOR=1", result.stdout)
 
+    def test_wrapper_gputrace_dry_run_auto_scopes_encoder_breakdown_to_frame(self) -> None:
+        result = self.run_script(
+            RUN_WRAPPER,
+            "--frame",
+            "50",
+            "--dry-run",
+        )
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("DXMT9_PERF_ENCODER_BREAKDOWN=1", result.stdout)
+        self.assertIn("DXMT9_PERF_ENCODER_BREAKDOWN_SEQ=50", result.stdout)
+
+    def test_wrapper_gputrace_dry_run_can_keep_all_frame_encoder_breakdown(self) -> None:
+        result = self.run_script(
+            RUN_WRAPPER,
+            "--frame",
+            "50",
+            "--encoder-breakdown-all-frames",
+            "--dry-run",
+        )
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("DXMT9_PERF_ENCODER_BREAKDOWN=1", result.stdout)
+        self.assertNotIn("DXMT9_PERF_ENCODER_BREAKDOWN_SEQ=", result.stdout)
+
+    def test_wrapper_no_gputrace_index_diagnostics_auto_scope_to_frame(self) -> None:
+        result = self.run_script(
+            RUN_WRAPPER,
+            "--frame",
+            "50",
+            "--no-gputrace",
+            "--probe-apply-index-cache-opt-candidate",
+            "--dry-run",
+        )
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("DXMT9_PERF_ENCODER_BREAKDOWN=1", result.stdout)
+        self.assertIn("DXMT9_PERF_ENCODER_BREAKDOWN_SEQ=50", result.stdout)
+
+    def test_wrapper_no_gputrace_index_diagnostics_can_keep_all_frames(self) -> None:
+        result = self.run_script(
+            RUN_WRAPPER,
+            "--frame",
+            "50",
+            "--no-gputrace",
+            "--measure-index-reuse",
+            "--encoder-breakdown-all-frames",
+            "--dry-run",
+        )
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("DXMT9_PERF_ENCODER_BREAKDOWN=1", result.stdout)
+        self.assertNotIn("DXMT9_PERF_ENCODER_BREAKDOWN_SEQ=", result.stdout)
+
     def test_wrapper_dry_run_includes_index_reuse_measure_env(self) -> None:
         result = self.run_script(
             RUN_WRAPPER,
@@ -363,6 +800,21 @@ class ThreeDMark05ProbeScriptTests(unittest.TestCase):
         self.assertIn("DXMT9_MEASURE_INDEX_REUSE=1", result.stdout)
         self.assertIn("DXMT9_MEASURE_INDEX_CACHE_OPT_CANDIDATE=1", result.stdout)
 
+    def test_wrapper_default_perf_profile_does_not_enable_mutating_index_opts(self) -> None:
+        result = self.run_script(
+            RUN_WRAPPER,
+            "--no-gputrace",
+            "--dry-run",
+        )
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("DXMT_EXPERIMENT_PROFILE=perf", result.stdout)
+        self.assertIn("DXMT_DISABLE_AUTO_EXPAND_INDEXED=1", result.stdout)
+        self.assertNotIn("DXMT9_OPTIMIZE_OPAQUE_DEPTH_INDEX_CACHE=1", result.stdout)
+        self.assertNotIn("DXMT9_OPTIMIZE_SCREEN_BLEND_INDEX_CACHE=1", result.stdout)
+        self.assertNotIn("DXMT9_PROBE_APPLY_INDEX_CACHE_OPT_CANDIDATE=1", result.stdout)
+        self.assertNotIn("DXMT9_MEASURE_INDEX_CACHE_OPT_CANDIDATE=1", result.stdout)
+
     def test_wrapper_dry_run_includes_apply_index_cache_opt_candidate_env(self) -> None:
         result = self.run_script(
             RUN_WRAPPER,
@@ -379,6 +831,98 @@ class ThreeDMark05ProbeScriptTests(unittest.TestCase):
         self.assertIn("DXMT9_PROBE_APPLY_INDEX_CACHE_OPT_CANDIDATE=1", result.stdout)
         self.assertIn(
             "DXMT9_PROBE_APPLY_INDEX_CACHE_OPT_CANDIDATE_MIN_GAIN_PCT=12",
+            result.stdout,
+        )
+
+    def test_wrapper_dry_run_includes_opaque_depth_index_cache_opt_env(self) -> None:
+        result = self.run_script(
+            RUN_WRAPPER,
+            "--no-gputrace",
+            "--optimize-opaque-depth-index-cache",
+            "--optimize-opaque-depth-index-cache-min-gain-pct",
+            "12",
+            "--dry-run",
+        )
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("DXMT9_OPTIMIZE_OPAQUE_DEPTH_INDEX_CACHE=1", result.stdout)
+        self.assertIn(
+            "DXMT9_OPTIMIZE_OPAQUE_DEPTH_INDEX_CACHE_MIN_GAIN_PCT=12",
+            result.stdout,
+        )
+        self.assertNotIn("DXMT9_PROBE_APPLY_INDEX_CACHE_OPT_CANDIDATE=1", result.stdout)
+        self.assertNotIn("DXMT9_MEASURE_INDEX_CACHE_OPT_CANDIDATE=1", result.stdout)
+
+    def test_wrapper_rejects_invalid_opaque_depth_index_cache_min_gain(self) -> None:
+        result = self.run_script(
+            RUN_WRAPPER,
+            "--no-gputrace",
+            "--optimize-opaque-depth-index-cache-min-gain-pct",
+            "bad",
+            "--dry-run",
+        )
+
+        self.assertEqual(result.returncode, 2)
+        self.assertIn(
+            "--optimize-opaque-depth-index-cache-min-gain-pct must be",
+            result.stderr,
+        )
+
+    def test_wrapper_dry_run_includes_screen_blend_index_cache_opt_env(self) -> None:
+        result = self.run_script(
+            RUN_WRAPPER,
+            "--no-gputrace",
+            "--optimize-screen-blend-index-cache",
+            "--optimize-screen-blend-index-cache-min-gain-pct",
+            "11",
+            "--dry-run",
+        )
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("DXMT9_OPTIMIZE_SCREEN_BLEND_INDEX_CACHE=1", result.stdout)
+        self.assertIn(
+            "DXMT9_OPTIMIZE_SCREEN_BLEND_INDEX_CACHE_MIN_GAIN_PCT=11",
+            result.stdout,
+        )
+        self.assertIn(
+            "warning: --optimize-screen-blend-index-cache is profiling-only",
+            result.stdout,
+        )
+        self.assertNotIn("DXMT9_PROBE_APPLY_INDEX_CACHE_OPT_CANDIDATE=1", result.stdout)
+        self.assertNotIn("DXMT9_MEASURE_INDEX_CACHE_OPT_CANDIDATE=1", result.stdout)
+
+    def test_wrapper_rejects_invalid_screen_blend_index_cache_min_gain(self) -> None:
+        result = self.run_script(
+            RUN_WRAPPER,
+            "--no-gputrace",
+            "--optimize-screen-blend-index-cache-min-gain-pct",
+            "bad",
+            "--dry-run",
+        )
+
+        self.assertEqual(result.returncode, 2)
+        self.assertIn(
+            "--optimize-screen-blend-index-cache-min-gain-pct must be",
+            result.stderr,
+        )
+
+    def test_wrapper_dry_run_includes_unsafe_nonopaque_apply_index_cache_opt_env(self) -> None:
+        result = self.run_script(
+            RUN_WRAPPER,
+            "--no-gputrace",
+            "--probe-apply-index-cache-opt-candidate",
+            "--probe-apply-index-cache-opt-candidate-unsafe-nonopaque",
+            "--dry-run",
+        )
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("DXMT9_PROBE_APPLY_INDEX_CACHE_OPT_CANDIDATE=1", result.stdout)
+        self.assertIn(
+            "DXMT9_PROBE_APPLY_INDEX_CACHE_OPT_CANDIDATE_UNSAFE_NONOPAQUE=1",
+            result.stdout,
+        )
+        self.assertIn(
+            "warning: --probe-apply-index-cache-opt-candidate-unsafe-nonopaque",
             result.stdout,
         )
 
@@ -425,6 +969,74 @@ class ThreeDMark05ProbeScriptTests(unittest.TestCase):
         self.assertIn(
             "DXMT9_PROBE_REVERSE_INDEXED_TRIANGLES_ROWS=60/0\\,60/1",
             result.stdout,
+        )
+
+    def test_wrapper_dry_run_includes_depth_attachment_dump_env(self) -> None:
+        depth_path = REPO_ROOT / "traces/depth-sidecar/analysis/depth.bin"
+
+        result = self.run_script(
+            RUN_WRAPPER,
+            "--suffix",
+            "depth-sidecar",
+            "--frame",
+            "50",
+            "--no-gputrace",
+            "--dump-depth-attachment-handle",
+            "0x300000100000001",
+            "--dump-depth-attachment-seq",
+            "50",
+            "--dump-depth-attachment-enc",
+            "2",
+            "--dump-depth-attachment-path",
+            "traces/depth-sidecar/analysis/depth.bin",
+            "--dry-run",
+        )
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn(f"depth_attachment_dump: {depth_path}", result.stdout)
+        self.assertIn(
+            "DXMT9_DUMP_DEPTH_ATTACHMENT_HANDLE=0x300000100000001",
+            result.stdout,
+        )
+        self.assertIn(f"DXMT9_DUMP_DEPTH_ATTACHMENT_PATH={depth_path}", result.stdout)
+        self.assertIn("DXMT9_DUMP_DEPTH_ATTACHMENT_SEQ=50", result.stdout)
+        self.assertIn("DXMT9_DUMP_DEPTH_ATTACHMENT_ENC=2", result.stdout)
+
+    def test_wrapper_dry_run_defaults_depth_attachment_dump_path(self) -> None:
+        depth_path = (
+            REPO_ROOT
+            / "traces/app-d3d9-3dmark05-depth-default/analysis/frame50-depth.bin"
+        )
+
+        result = self.run_script(
+            RUN_WRAPPER,
+            "--suffix",
+            "depth-default",
+            "--frame",
+            "50",
+            "--no-gputrace",
+            "--dump-depth-attachment-handle",
+            "0x300000100000001",
+            "--dry-run",
+        )
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn(f"depth_attachment_dump: {depth_path}", result.stdout)
+        self.assertIn(f"DXMT9_DUMP_DEPTH_ATTACHMENT_PATH={depth_path}", result.stdout)
+
+    def test_wrapper_rejects_depth_attachment_path_without_handle(self) -> None:
+        result = self.run_script(
+            RUN_WRAPPER,
+            "--no-gputrace",
+            "--dump-depth-attachment-path",
+            "traces/depth-sidecar/analysis/depth.bin",
+            "--dry-run",
+        )
+
+        self.assertEqual(result.returncode, 2)
+        self.assertIn(
+            "--dump-depth-attachment-seq/enc/path require --dump-depth-attachment-handle",
+            result.stderr,
         )
 
     def test_wrapper_dry_run_includes_x8_shader_alpha_fill_env(self) -> None:
@@ -614,6 +1226,28 @@ class ThreeDMark05ProbeScriptTests(unittest.TestCase):
         self.assertIn("DXMT_DEBUG_FORCE_CULL_MODE=back", result.stdout)
         self.assertIn("DXMT_DEBUG_FORCE_VISIBLE=1", result.stdout)
 
+    def test_wrapper_dry_run_includes_scoped_force_texture_white_env(self) -> None:
+        result = self.run_script(
+            RUN_WRAPPER,
+            "--no-gputrace",
+            "--probe-force-texture-white-row",
+            "50/2",
+            "--probe-force-texture-white-classes",
+            "depth-read,screen-blend,textured",
+            "--dry-run",
+        )
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("DXMT9_PROBE_FORCE_TEXTURE_WHITE_ROW=50/2", result.stdout)
+        self.assertIn(
+            r"DXMT9_PROBE_FORCE_TEXTURE_WHITE_CLASSES=depth-read\,screen-blend\,textured",
+            result.stdout,
+        )
+        self.assertIn(
+            "warning: --probe-force-texture-white is diagnostic only",
+            result.stdout,
+        )
+
     def test_wrapper_dry_run_includes_force_expand_indexed_env(self) -> None:
         result = self.run_script(
             RUN_WRAPPER,
@@ -624,6 +1258,34 @@ class ThreeDMark05ProbeScriptTests(unittest.TestCase):
 
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertIn("DXMT_FORCE_EXPAND_INDEXED=1", result.stdout)
+
+    def test_wrapper_dry_run_includes_scoped_force_expand_indexed_env(self) -> None:
+        result = self.run_script(
+            RUN_WRAPPER,
+            "--no-gputrace",
+            "--probe-force-expand-indexed-row",
+            "50/2",
+            "--probe-force-expand-indexed-classes",
+            "depth-read,screen-blend,textured",
+            "--probe-indexed-triangle-encoder-draw-min",
+            "71",
+            "--probe-indexed-triangle-encoder-draw-max",
+            "188",
+            "--dry-run",
+        )
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("DXMT9_PROBE_FORCE_EXPAND_INDEXED_ROW=50/2", result.stdout)
+        self.assertIn(
+            r"DXMT9_PROBE_FORCE_EXPAND_INDEXED_CLASSES=depth-read\,screen-blend\,textured",
+            result.stdout,
+        )
+        self.assertIn("DXMT9_PROBE_INDEXED_TRIANGLE_ENCODER_DRAW_MIN=71", result.stdout)
+        self.assertIn("DXMT9_PROBE_INDEXED_TRIANGLE_ENCODER_DRAW_MAX=188", result.stdout)
+        self.assertIn(
+            "warning: --probe-force-expand-indexed is diagnostic only",
+            result.stdout,
+        )
 
     def test_wrapper_dry_run_includes_reverse_nonopaque_env(self) -> None:
         result = self.run_script(
@@ -655,6 +1317,51 @@ class ThreeDMark05ProbeScriptTests(unittest.TestCase):
         self.assertIn("DXMT9_PROBE_REVERSE_INDEXED_TRIANGLES_ROW=60/2", result.stdout)
         self.assertIn("DXMT9_PROBE_INDEXED_TRIANGLE_ENCODER_DRAW_MIN=71", result.stdout)
         self.assertIn("DXMT9_PROBE_INDEXED_TRIANGLE_ENCODER_DRAW_MAX=188", result.stdout)
+
+    def test_wrapper_dry_run_includes_indexed_triangle_encoder_draw_exclude_env(self) -> None:
+        result = self.run_script(
+            RUN_WRAPPER,
+            "--no-gputrace",
+            "--probe-apply-index-cache-opt-candidate",
+            "--probe-reverse-indexed-triangles-row",
+            "50/2",
+            "--probe-indexed-triangle-encoder-draw-min",
+            "14",
+            "--probe-indexed-triangle-encoder-draw-max",
+            "32",
+            "--probe-indexed-triangle-encoder-draw-exclude",
+            "18,21",
+            "--dry-run",
+        )
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("DXMT9_PROBE_APPLY_INDEX_CACHE_OPT_CANDIDATE=1", result.stdout)
+        self.assertIn("DXMT9_PROBE_INDEXED_TRIANGLE_ENCODER_DRAW_MIN=14", result.stdout)
+        self.assertIn("DXMT9_PROBE_INDEXED_TRIANGLE_ENCODER_DRAW_MAX=32", result.stdout)
+        self.assertIn(
+            r"DXMT9_PROBE_INDEXED_TRIANGLE_ENCODER_DRAW_EXCLUDE=18\,21",
+            result.stdout,
+        )
+
+    def test_wrapper_dry_run_includes_no_alpha_blend_class_filter(self) -> None:
+        result = self.run_script(
+            RUN_WRAPPER,
+            "--no-gputrace",
+            "--probe-optimize-indexed-triangles-vertex-cache",
+            "--probe-reverse-indexed-triangles-row",
+            "50/2",
+            "--probe-reverse-indexed-triangles-classes",
+            "depth-read,no-alpha-blend,no-scissor,textured",
+            "--dry-run",
+        )
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("DXMT9_PROBE_OPTIMIZE_INDEXED_TRIANGLES_VERTEX_CACHE=1", result.stdout)
+        self.assertIn("DXMT9_PROBE_REVERSE_INDEXED_TRIANGLES_ROW=50/2", result.stdout)
+        self.assertIn(
+            "DXMT9_PROBE_REVERSE_INDEXED_TRIANGLES_CLASSES=depth-read\\,no-alpha-blend\\,no-scissor\\,textured",
+            result.stdout,
+        )
 
     def test_wrapper_dry_run_includes_scissor_rect_probe_env(self) -> None:
         result = self.run_script(
@@ -767,6 +1474,33 @@ class ThreeDMark05ProbeScriptTests(unittest.TestCase):
         self.assertIn("--max-top-unexplained-buffer-write-ratio", compare_line)
         self.assertIn("0.50", compare_line)
 
+    def test_finalizer_builds_semantic_image_compare_command(self) -> None:
+        result = self.run_script(
+            FINALIZER,
+            "--suffix",
+            "semantic-image",
+            "--semantic-image-policy",
+            "exact",
+            "--semantic-image-before",
+            "before.ppm",
+            "--semantic-image-after",
+            "after.ppm",
+            "--dry-run",
+        )
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+        compare_line = next(
+            line for line in result.stdout.splitlines()
+            if line.startswith("semantic_image_compare_cmd:")
+        )
+        self.assertIn("scripts/tools/compare_experiment_images.py", compare_line)
+        self.assertIn("--policy exact", compare_line)
+        self.assertIn("--min-before-active-pct 1", compare_line)
+        self.assertIn("--min-after-active-pct 1", compare_line)
+        self.assertIn("frame60-semantic-image-policy-exact-compare.md", compare_line)
+        self.assertIn("frame60-semantic-image-policy-exact-compare.csv", compare_line)
+        self.assertIn("frame60-semantic-image-policy-exact-compare.png", compare_line)
+
     def test_finalizer_forwards_frame_shape_gates_to_compare_script(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             baseline_joined = Path(tmp) / "baseline-joined.csv"
@@ -798,6 +1532,258 @@ class ThreeDMark05ProbeScriptTests(unittest.TestCase):
         self.assertIn("--max-top-vertex-count-delta-ratio", compare_line)
         self.assertIn("--max-top-triangle-delta-ratio", compare_line)
         self.assertIn("0.05", compare_line)
+
+    def test_finalizer_forwards_non_target_hot_row_gates_to_compare_script(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            baseline_joined = Path(tmp) / "baseline-joined.csv"
+            baseline_joined.write_text("gpu_ms\n", encoding="utf-8")
+
+            result = self.run_script(
+                FINALIZER,
+                "--suffix",
+                "forward-non-target",
+                "--baseline-joined",
+                str(baseline_joined),
+                "--target-row-key",
+                "50/1",
+                "--target-row-key",
+                "50/3",
+                "--max-non-target-gpu-regression-ms",
+                "1.0",
+                "--max-non-target-vs-buffer-write-regression-mib",
+                "16",
+                "--max-non-target-vs-invocations-regression-ratio",
+                "0.05",
+                "--max-non-target-draw-call-delta-ratio",
+                "0.05",
+                "--max-non-target-vertex-count-delta-ratio",
+                "0.05",
+                "--max-non-target-triangle-delta-ratio",
+                "0.05",
+                "--dry-run",
+            )
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+        compare_line = next(
+            line for line in result.stdout.splitlines()
+            if line.startswith("xcode_compare_cmd:")
+        )
+        self.assertIn("--target-row-key", compare_line)
+        self.assertIn("50/1", compare_line)
+        self.assertIn("50/3", compare_line)
+        self.assertIn("--max-non-target-gpu-regression-ms", compare_line)
+        self.assertIn("1.0", compare_line)
+        self.assertIn("--max-non-target-vs-buffer-write-regression-mib", compare_line)
+        self.assertIn("16", compare_line)
+        self.assertIn(
+            "--max-non-target-vs-invocations-regression-ratio",
+            compare_line,
+        )
+        self.assertIn("0.05", compare_line)
+        self.assertIn("--max-non-target-draw-call-delta-ratio", compare_line)
+        self.assertIn("--max-non-target-vertex-count-delta-ratio", compare_line)
+        self.assertIn("--max-non-target-triangle-delta-ratio", compare_line)
+
+    def test_finalizer_forwards_target_row_apply_gates_to_compare_script(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            baseline_joined = Path(tmp) / "baseline-joined.csv"
+            baseline_joined.write_text("gpu_ms\n", encoding="utf-8")
+
+            result = self.run_script(
+                FINALIZER,
+                "--suffix",
+                "forward-target",
+                "--baseline-joined",
+                str(baseline_joined),
+                "--target-row-key",
+                "50/0",
+                "--target-row-key",
+                "50/1",
+                "--require-target-index-cache-miss32-decrease",
+                "--require-target-index-cache-opt-miss32-decrease",
+                "--require-target-reordered-index-cache-hits",
+                "--require-target-vs-buffer-write-decrease",
+                "--require-target-vs-invocations-decrease",
+                "--dry-run",
+            )
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+        compare_line = next(
+            line for line in result.stdout.splitlines()
+            if line.startswith("xcode_compare_cmd:")
+        )
+        self.assertIn("--target-row-key", compare_line)
+        self.assertIn("50/0", compare_line)
+        self.assertIn("50/1", compare_line)
+        self.assertIn("--require-target-index-cache-miss32-decrease", compare_line)
+        self.assertIn("--require-target-index-cache-opt-miss32-decrease", compare_line)
+        self.assertIn("--require-target-reordered-index-cache-hits", compare_line)
+        self.assertIn("--require-target-vs-buffer-write-decrease", compare_line)
+        self.assertIn("--require-target-vs-invocations-decrease", compare_line)
+
+    def test_finalizer_expands_cache_opt_apply_proof_preset_to_compare_script(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            baseline_joined = Path(tmp) / "baseline-joined.csv"
+            baseline_joined.write_text("gpu_ms\n", encoding="utf-8")
+
+            result = self.run_script(
+                FINALIZER,
+                "--suffix",
+                "cache-opt-apply-proof",
+                "--baseline-joined",
+                str(baseline_joined),
+                "--target-row-key",
+                "50/1",
+                "--require-cache-opt-apply-proof",
+                "--dry-run",
+            )
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+        compare_line = next(
+            line for line in result.stdout.splitlines()
+            if line.startswith("xcode_compare_cmd:")
+        )
+        self.assertIn("--require-stable-frame-proof", compare_line)
+        self.assertIn("--target-row-key", compare_line)
+        self.assertIn("50/1", compare_line)
+        self.assertIn("--require-target-index-cache-miss32-decrease", compare_line)
+        self.assertIn("--require-target-vs-buffer-write-decrease", compare_line)
+        self.assertIn("--require-target-vs-invocations-decrease", compare_line)
+
+    def test_finalizer_rejects_cache_opt_apply_proof_without_target_row(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            baseline_joined = Path(tmp) / "baseline-joined.csv"
+            baseline_joined.write_text("gpu_ms\n", encoding="utf-8")
+
+            result = self.run_script(
+                FINALIZER,
+                "--suffix",
+                "cache-opt-apply-proof-missing-row",
+                "--baseline-joined",
+                str(baseline_joined),
+                "--require-cache-opt-apply-proof",
+                "--dry-run",
+            )
+
+        self.assertEqual(result.returncode, 2)
+        self.assertIn(
+            "--require-cache-opt-apply-proof requires at least one --target-row-key",
+            result.stderr,
+        )
+
+    def test_finalizer_rejects_semantic_image_proof_without_semantic_gate(self) -> None:
+        result = self.run_script(
+            FINALIZER,
+            "--suffix",
+            "semantic-proof-missing-image",
+            "--require-semantic-image-proof",
+            "--dry-run",
+        )
+
+        self.assertEqual(result.returncode, 2)
+        self.assertIn(
+            "--require-semantic-image-proof requires --semantic-image-policy",
+            result.stderr,
+        )
+
+    def test_finalizer_accepts_semantic_image_proof_with_semantic_gate(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            before = root / "before.ppm"
+            after = root / "after.ppm"
+            before.write_text("P3\n1 1\n255\n0 0 0\n", encoding="ascii")
+            after.write_text("P3\n1 1\n255\n0 0 0\n", encoding="ascii")
+
+            result = self.run_script(
+                FINALIZER,
+                "--suffix",
+                "semantic-proof",
+                "--semantic-image-policy",
+                "exact",
+                "--semantic-image-before",
+                str(before),
+                "--semantic-image-after",
+                str(after),
+                "--require-semantic-image-proof",
+                "--dry-run",
+            )
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+        semantic_line = next(
+            line for line in result.stdout.splitlines()
+            if line.startswith("semantic_image_compare_cmd:")
+        )
+        self.assertIn("--policy exact", semantic_line)
+
+    def test_finalizer_rejects_screen_blend_cache_proof_without_semantic_gate(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            baseline_joined = Path(tmp) / "baseline-joined.csv"
+            baseline_joined.write_text("gpu_ms\n", encoding="utf-8")
+
+            result = self.run_script(
+                FINALIZER,
+                "--suffix",
+                "screen-blend-cache-proof-missing-semantic",
+                "--baseline-joined",
+                str(baseline_joined),
+                "--target-row-key",
+                "50/2",
+                "--require-screen-blend-cache-proof",
+                "--dry-run",
+            )
+
+        self.assertEqual(result.returncode, 2)
+        self.assertIn(
+            "--require-screen-blend-cache-proof requires --semantic-image-policy",
+            result.stderr,
+        )
+
+    def test_finalizer_expands_screen_blend_cache_proof_and_semantic_gate(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            baseline_joined = root / "baseline-joined.csv"
+            baseline_joined.write_text("gpu_ms\n", encoding="utf-8")
+            before = root / "before.ppm"
+            after = root / "after.ppm"
+            before.write_text("P3\n1 1\n255\n0 0 0\n", encoding="ascii")
+            after.write_text("P3\n1 1\n255\n0 0 0\n", encoding="ascii")
+
+            result = self.run_script(
+                FINALIZER,
+                "--suffix",
+                "screen-blend-cache-proof",
+                "--baseline-joined",
+                str(baseline_joined),
+                "--target-row-key",
+                "50/2",
+                "--semantic-image-policy",
+                "lsb1",
+                "--semantic-image-before",
+                str(before),
+                "--semantic-image-after",
+                str(after),
+                "--require-screen-blend-cache-proof",
+                "--dry-run",
+            )
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+        compare_line = next(
+            line for line in result.stdout.splitlines()
+            if line.startswith("xcode_compare_cmd:")
+        )
+        semantic_line = next(
+            line for line in result.stdout.splitlines()
+            if line.startswith("semantic_image_compare_cmd:")
+        )
+        self.assertIn("--require-stable-frame-proof", compare_line)
+        self.assertNotIn("--require-target-index-cache-miss32-decrease", compare_line)
+        self.assertIn("--require-target-index-cache-opt-miss32-decrease", compare_line)
+        self.assertIn("--require-target-reordered-index-cache-hits", compare_line)
+        self.assertIn("--require-target-vs-buffer-write-decrease", compare_line)
+        self.assertIn("--require-target-vs-invocations-decrease", compare_line)
+        self.assertIn("--target-row-key", compare_line)
+        self.assertIn("50/2", compare_line)
+        self.assertIn("--policy lsb1", semantic_line)
 
     def test_finalizer_expands_stable_frame_proof_preset(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

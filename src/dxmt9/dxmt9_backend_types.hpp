@@ -627,6 +627,7 @@ struct ChunkSlot {
       const auto payload = detail::chunkSlotPayloadAt(payloads, i);
       payloadBytes64 += payload.userVertexData.size();
       payloadBytes64 += payload.userIndexData.size();
+      payloadBytes64 += payload.bindingOverrideData.size();
       if (payloadBytes64 > detail::kChunkSlotU32Max) {
         break;
       }

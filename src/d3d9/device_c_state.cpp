@@ -293,7 +293,7 @@ extern "C" int32_t dxmt9c_device_get_ps_const_f(D9CDevice* d, uint32_t s, float*
 
 extern "C" int32_t dxmt9c_device_set_vs_const_i(D9CDevice* d, uint32_t s, const int32_t* data,
                                                 uint32_t cnt) {
-  auto& consts = d->dev().mutableState().vsConst;
+  auto& consts = d->dev().mutableShaderConstantsState().vsConst;
   for (uint32_t i = 0; i < cnt && (s + i) < consts.int4.size(); ++i) {
     consts.int4[s + i][0] = data[i * 4 + 0];
     consts.int4[s + i][1] = data[i * 4 + 1];
@@ -305,7 +305,7 @@ extern "C" int32_t dxmt9c_device_set_vs_const_i(D9CDevice* d, uint32_t s, const 
 
 extern "C" int32_t dxmt9c_device_set_ps_const_i(D9CDevice* d, uint32_t s, const int32_t* data,
                                                 uint32_t cnt) {
-  auto& consts = d->dev().mutableState().psConst;
+  auto& consts = d->dev().mutableShaderConstantsState().psConst;
   for (uint32_t i = 0; i < cnt && (s + i) < consts.int4.size(); ++i) {
     consts.int4[s + i][0] = data[i * 4 + 0];
     consts.int4[s + i][1] = data[i * 4 + 1];
@@ -317,7 +317,7 @@ extern "C" int32_t dxmt9c_device_set_ps_const_i(D9CDevice* d, uint32_t s, const 
 
 extern "C" int32_t dxmt9c_device_set_vs_const_b(D9CDevice* d, uint32_t s,
                                                 const uint32_t* data, uint32_t cnt) {
-  auto& consts = d->dev().mutableState().vsConst;
+  auto& consts = d->dev().mutableShaderConstantsState().vsConst;
   for (uint32_t i = 0; i < cnt && (s + i) < consts.bools.size(); ++i) {
     consts.bools[s + i] = data[i] != 0;
   }
@@ -326,7 +326,7 @@ extern "C" int32_t dxmt9c_device_set_vs_const_b(D9CDevice* d, uint32_t s,
 
 extern "C" int32_t dxmt9c_device_set_ps_const_b(D9CDevice* d, uint32_t s,
                                                 const uint32_t* data, uint32_t cnt) {
-  auto& consts = d->dev().mutableState().psConst;
+  auto& consts = d->dev().mutableShaderConstantsState().psConst;
   for (uint32_t i = 0; i < cnt && (s + i) < consts.bools.size(); ++i) {
     consts.bools[s + i] = data[i] != 0;
   }

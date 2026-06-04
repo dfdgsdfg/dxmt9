@@ -1588,6 +1588,61 @@ void testResourcePoolTextureAndSurfaceDestroyWaitForUseSeq() {
         "resource pool reclaims surface once completed seq reaches last use");
 }
 
+void testReorderedIndexRejectedCacheTracksSourceRevision() {
+  dxmt9::resources::Pool resourcePool;
+  const auto source = resourcePool.createBuffer(
+      WMT::Device{NULL_OBJECT_HANDLE},
+      BufferDesc{
+          .size = 64u,
+          .pool = Pool::SystemMem,
+          .usage = UsageIndexBuffer,
+      });
+  check(static_cast<bool>(source),
+        "resource pool allocates source index buffer handle");
+
+  dxmt9::resources::ReorderedIndexBufferCacheKey key{};
+  key.startIndex = 3u;
+  key.indexCount = 12u;
+  key.indexType = IndexType::UInt16;
+  key.order = dxmt9::resources::ReorderedIndexOrder::VertexCacheLru32;
+  key.cacheSize = 32u;
+
+  auto miss = resourcePool.findReorderedIndexBuffer(
+      source.value, key, /*seqId=*/4u, /*completedSeqId=*/0u);
+  check(!miss.hit, "reordered-index cache initially misses");
+
+  check(resourcePool.rememberRejectedReorderedIndexBuffer(
+            source.value, key, /*seqId=*/5u, /*completedSeqId=*/0u),
+        "reordered-index cache records rejected gain-gate result");
+
+  auto rejected = resourcePool.findReorderedIndexBuffer(
+      source.value, key, /*seqId=*/6u, /*completedSeqId=*/0u);
+  check(rejected.hit, "reordered-index cache hits rejected key");
+  check(rejected.rejected, "reordered-index cache hit is marked rejected");
+  check(!rejected.buffer, "rejected reordered-index entry has no Metal buffer");
+  checkEq(rejected.byteCount, std::uint64_t{0},
+          "rejected reordered-index entry has no byte payload");
+
+  const std::uint8_t bytes[] = {0, 1, 2, 3};
+  check(resourcePool.uploadBufferData(source.value, bytes, sizeof(bytes)),
+        "source index buffer upload advances content revision");
+
+  auto invalidated = resourcePool.findReorderedIndexBuffer(
+      source.value, key, /*seqId=*/7u, /*completedSeqId=*/0u);
+  check(!invalidated.hit,
+        "source content revision invalidates rejected reordered-index key");
+
+  check(resourcePool.rememberRejectedReorderedIndexBuffer(
+            source.value, key, /*seqId=*/8u, /*completedSeqId=*/0u),
+        "reordered-index cache can record rejection for new source revision");
+  auto rejectedAfterUpload = resourcePool.findReorderedIndexBuffer(
+      source.value, key, /*seqId=*/9u, /*completedSeqId=*/0u);
+  check(rejectedAfterUpload.hit,
+        "reordered-index cache hits rejected key after source revision refresh");
+  check(rejectedAfterUpload.rejected,
+        "refreshed reordered-index cache hit remains rejected-only");
+}
+
 void testPresentSourceSelectionPrefersExplicitSourceOverCurrentBackBuffer() {
   SwapDesc present{};
   present.sourceSurface = Handle{0x7000u};
@@ -1709,6 +1764,7 @@ int main() {
     testHandleArenaSlotPointerStableAcrossInserts();
     testResourcePoolUsesArenaStorageOnly();
     testResourcePoolTextureAndSurfaceDestroyWaitForUseSeq();
+    testReorderedIndexRejectedCacheTracksSourceRevision();
     testPresentSourceSelectionPrefersExplicitSourceOverCurrentBackBuffer();
     testEncodePresentRejectsMissingSourceWithoutStatusCallback();
     testEncodePresentRejectsSourceWithoutTexture();

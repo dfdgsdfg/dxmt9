@@ -32,6 +32,9 @@ def write_joined(path: Path, gpu_ms: float, buffer_write_mib: float,
                  indexed_cache_miss_32: int | None = None,
                  indexed_cache_miss_64: int | None = None,
                  cache_opt_candidate_miss_32: int | None = None,
+                 reordered_index_cache_lookups: int = 0,
+                 reordered_index_cache_hits: int = 0,
+                 reordered_index_cache_rejected_hits: int = 0,
                  tiled_vertex_mib: float = 1.0,
                  tiled_primitive_mib: float = 0.5,
                  clip_limiter_pct: float = 1.0,
@@ -72,6 +75,9 @@ def write_joined(path: Path, gpu_ms: float, buffer_write_mib: float,
         "dxmt_indexed_cache_opt_candidate_miss16",
         "dxmt_indexed_cache_opt_candidate_miss32",
         "dxmt_indexed_cache_opt_candidate_miss64",
+        "dxmt_reordered_index_cache_lookups",
+        "dxmt_reordered_index_cache_hits",
+        "dxmt_reordered_index_cache_rejected_hits",
         "dxmt_draw_calls",
         "dxmt_pso_state_samples",
         "dxmt_stream_handle_changes",
@@ -115,6 +121,9 @@ def write_joined(path: Path, gpu_ms: float, buffer_write_mib: float,
             "dxmt_indexed_cache_opt_candidate_miss16": int(cache_miss_16 * 0.8),
             "dxmt_indexed_cache_opt_candidate_miss32": candidate_miss_32,
             "dxmt_indexed_cache_opt_candidate_miss64": int(cache_miss_64 * 0.8),
+            "dxmt_reordered_index_cache_lookups": reordered_index_cache_lookups,
+            "dxmt_reordered_index_cache_hits": reordered_index_cache_hits,
+            "dxmt_reordered_index_cache_rejected_hits": reordered_index_cache_rejected_hits,
             "dxmt_draw_calls": draw_calls,
             "dxmt_pso_state_samples": pso_samples,
             "dxmt_stream_handle_changes": stream_changes,
@@ -159,6 +168,9 @@ def write_joined_rows(path: Path, rows: list[dict[str, object]]) -> None:
         "dxmt_indexed_cache_opt_candidate_miss16",
         "dxmt_indexed_cache_opt_candidate_miss32",
         "dxmt_indexed_cache_opt_candidate_miss64",
+        "dxmt_reordered_index_cache_lookups",
+        "dxmt_reordered_index_cache_hits",
+        "dxmt_reordered_index_cache_rejected_hits",
         "dxmt_draw_calls",
         "dxmt_pso_state_samples",
         "dxmt_stream_handle_changes",
@@ -199,6 +211,9 @@ def write_joined_rows(path: Path, rows: list[dict[str, object]]) -> None:
                 "dxmt_indexed_cache_opt_candidate_miss16": 1200,
                 "dxmt_indexed_cache_opt_candidate_miss32": 960,
                 "dxmt_indexed_cache_opt_candidate_miss64": 880,
+                "dxmt_reordered_index_cache_lookups": 0,
+                "dxmt_reordered_index_cache_hits": 0,
+                "dxmt_reordered_index_cache_rejected_hits": 0,
                 "dxmt_draw_calls": 10,
                 "dxmt_pso_state_samples": 10,
                 "dxmt_stream_handle_changes": 10,
@@ -693,6 +708,598 @@ class CompareXcodeDxmtBottlenecksTests(unittest.TestCase):
                     "--require-tvb-mechanism-proof",
                 ],
                 text=True, capture_output=True, check=False,
+            )
+
+    def test_non_target_guard_fails_when_target_win_hides_hot_row_regression(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            before = root / "before.csv"
+            after = root / "after.csv"
+            output = root / "comparison.md"
+            write_joined_rows(before, [
+                {"seq": 50, "enc": 1, "gpu_ms": 10.0, "buffer_write_mib": 100.0,
+                 "vs_invocations": 1000, "dxmt_draw_calls": 10,
+                 "dxmt_vertex_count": 1000, "dxmt_triangle_estimate": 333},
+                {"seq": 50, "enc": 11, "gpu_ms": 9.0, "buffer_write_mib": 500.0,
+                 "vs_invocations": 2000, "dxmt_draw_calls": 10,
+                 "dxmt_vertex_count": 1000, "dxmt_triangle_estimate": 333},
+            ])
+            write_joined_rows(after, [
+                {"seq": 50, "enc": 1, "gpu_ms": 7.0, "buffer_write_mib": 80.0,
+                 "vs_invocations": 900, "dxmt_draw_calls": 10,
+                 "dxmt_vertex_count": 1000, "dxmt_triangle_estimate": 333},
+                {"seq": 50, "enc": 11, "gpu_ms": 11.0, "buffer_write_mib": 620.0,
+                 "vs_invocations": 2300, "dxmt_draw_calls": 12,
+                 "dxmt_vertex_count": 1200, "dxmt_triangle_estimate": 400},
+            ])
+
+            result = subprocess.run(
+                [
+                    sys.executable,
+                    str(SCRIPT),
+                    str(before),
+                    str(after),
+                    "--output",
+                    str(output),
+                    "--top",
+                    "2",
+                    "--target-row-key",
+                    "50/1",
+                    "--max-non-target-gpu-regression-ms",
+                    "0.5",
+                    "--max-non-target-vs-buffer-write-regression-mib",
+                    "10",
+                    "--max-non-target-vs-invocations-regression-ratio",
+                    "0.05",
+                    "--max-non-target-draw-call-delta-ratio",
+                    "0.05",
+                    "--max-non-target-vertex-count-delta-ratio",
+                    "0.05",
+                    "--max-non-target-triangle-delta-ratio",
+                    "0.05",
+                ],
+                text=True,
+                capture_output=True,
+                check=False,
+            )
+
+            self.assertNotEqual(result.returncode, 0)
+            self.assertIn("non_target_gpu_ms", result.stderr)
+            self.assertIn("non_target_vs_buffer_write_mib", result.stderr)
+            self.assertIn("non_target_vs_invocations", result.stderr)
+            self.assertIn("non_target_draw_calls", result.stderr)
+            self.assertIn("non_target_vertex_count", result.stderr)
+            self.assertIn("non_target_triangle_estimate", result.stderr)
+            report = output.read_text(encoding="utf-8")
+            self.assertIn("## Non-Target Hot Row Guard", report)
+            self.assertIn("| Target rows | `50/1` |", report)
+            self.assertIn("| Compared non-target rows | `50/11` |", report)
+            self.assertIn("| `non_target_draw_calls` |", report)
+            self.assertIn("| `non_target_vertex_count` |", report)
+            self.assertIn("| `non_target_triangle_estimate` |", report)
+
+    def test_non_target_guard_passes_when_hot_rows_stay_bounded(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            before = root / "before.csv"
+            after = root / "after.csv"
+            output = root / "comparison.md"
+            write_joined_rows(before, [
+                {"seq": 50, "enc": 1, "gpu_ms": 10.0, "buffer_write_mib": 100.0,
+                 "vs_invocations": 1000, "dxmt_draw_calls": 10,
+                 "dxmt_vertex_count": 1000, "dxmt_triangle_estimate": 333},
+                {"seq": 50, "enc": 11, "gpu_ms": 9.0, "buffer_write_mib": 500.0,
+                 "vs_invocations": 2000, "dxmt_draw_calls": 10,
+                 "dxmt_vertex_count": 1000, "dxmt_triangle_estimate": 333},
+            ])
+            write_joined_rows(after, [
+                {"seq": 50, "enc": 1, "gpu_ms": 7.0, "buffer_write_mib": 80.0,
+                 "vs_invocations": 900, "dxmt_draw_calls": 10,
+                 "dxmt_vertex_count": 1000, "dxmt_triangle_estimate": 333},
+                {"seq": 50, "enc": 11, "gpu_ms": 9.2, "buffer_write_mib": 504.0,
+                 "vs_invocations": 2040, "dxmt_draw_calls": 10,
+                 "dxmt_vertex_count": 1020, "dxmt_triangle_estimate": 340},
+            ])
+
+            result = subprocess.run(
+                [
+                    sys.executable,
+                    str(SCRIPT),
+                    str(before),
+                    str(after),
+                    "--output",
+                    str(output),
+                    "--top",
+                    "2",
+                    "--target-row-key",
+                    "seq=50,enc=1",
+                    "--max-non-target-gpu-regression-ms",
+                    "0.5",
+                    "--max-non-target-vs-buffer-write-regression-mib",
+                    "10",
+                    "--max-non-target-vs-invocations-regression-ratio",
+                    "0.05",
+                    "--max-non-target-draw-call-delta-ratio",
+                    "0.05",
+                    "--max-non-target-vertex-count-delta-ratio",
+                    "0.05",
+                    "--max-non-target-triangle-delta-ratio",
+                    "0.05",
+                ],
+                text=True,
+                capture_output=True,
+                check=False,
+            )
+
+            self.assertEqual(result.returncode, 0, result.stderr)
+            report = output.read_text(encoding="utf-8")
+            self.assertIn("## Non-Target Hot Row Guard", report)
+            self.assertIn("Passed: all requested requirement gates were satisfied", report)
+
+    def test_target_guard_rejects_cache_opt_apply_noop(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            before = root / "before.csv"
+            after = root / "after.csv"
+            output = root / "comparison.md"
+            write_joined_rows(before, [
+                {"seq": 50, "enc": 2, "gpu_ms": 20.0, "buffer_write_mib": 900.0,
+                 "vs_buffer_write_mib": 900.0, "vs_invocations": 640000,
+                 "dxmt_indexed_vertex_cache_miss_estimate_32": 680000},
+            ])
+            write_joined_rows(after, [
+                {"seq": 50, "enc": 2, "gpu_ms": 20.5, "buffer_write_mib": 900.0,
+                 "vs_buffer_write_mib": 900.0, "vs_invocations": 640000,
+                 "dxmt_indexed_vertex_cache_miss_estimate_32": 680000,
+                 "dxmt_indexed_cache_opt_candidate_miss32": 500000},
+            ])
+
+            result = subprocess.run(
+                [
+                    sys.executable,
+                    str(SCRIPT),
+                    str(before),
+                    str(after),
+                    "--output",
+                    str(output),
+                    "--target-row-key",
+                    "50/2",
+                    "--require-target-index-cache-miss32-decrease",
+                    "--require-target-vs-buffer-write-decrease",
+                    "--require-target-vs-invocations-decrease",
+                ],
+                text=True,
+                capture_output=True,
+                check=False,
+            )
+
+            self.assertNotEqual(result.returncode, 0)
+            self.assertIn("target_indexed_cache_miss32 did not decrease", result.stderr)
+            self.assertIn("target_vs_buffer_write_mib did not decrease", result.stderr)
+            self.assertIn("target_vs_invocations did not decrease", result.stderr)
+            report = output.read_text(encoding="utf-8")
+            self.assertIn("## Target Row Guard", report)
+            self.assertIn("| Target rows | `50/2` |", report)
+            self.assertIn("| `target_indexed_cache_miss32` | `680,000.000` | `680,000.000`", report)
+
+    def test_target_guard_rejects_missing_after_actual_index_telemetry(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            before = root / "before.csv"
+            after = root / "after.csv"
+            output = root / "comparison.md"
+            write_joined_rows(before, [
+                {"seq": 50, "enc": 2, "gpu_ms": 20.0, "buffer_write_mib": 900.0,
+                 "vs_buffer_write_mib": 900.0, "vs_invocations": 640000,
+                 "dxmt_vertex_count": 1168128,
+                 "dxmt_triangle_estimate": 389376,
+                 "dxmt_indexed_vertex_reference_count": 1168128,
+                 "dxmt_indexed_unique_vertex_estimate": 496737,
+                 "dxmt_indexed_vertex_cache_miss_estimate_32": 683661,
+                 "dxmt_indexed_cache_opt_candidate_original_miss32": 675973,
+                 "dxmt_indexed_cache_opt_candidate_miss32": 500805},
+            ])
+            write_joined_rows(after, [
+                {"seq": 50, "enc": 2, "gpu_ms": 18.8, "buffer_write_mib": 820.0,
+                 "vs_buffer_write_mib": 820.0, "vs_invocations": 572933,
+                 "dxmt_vertex_count": 1168128,
+                 "dxmt_triangle_estimate": 389376,
+                 "dxmt_indexed_vertex_reference_count": 0,
+                 "dxmt_indexed_unique_vertex_estimate": 0,
+                 "dxmt_indexed_vertex_cache_miss_estimate_32": 0,
+                 "dxmt_indexed_cache_opt_candidate_original_miss32": 328856,
+                 "dxmt_indexed_cache_opt_candidate_miss32": 241780},
+            ])
+
+            result = subprocess.run(
+                [
+                    sys.executable,
+                    str(SCRIPT),
+                    str(before),
+                    str(after),
+                    "--output",
+                    str(output),
+                    "--target-row-key",
+                    "50/2",
+                    "--require-target-index-cache-miss32-decrease",
+                    "--require-target-vs-buffer-write-decrease",
+                    "--require-target-vs-invocations-decrease",
+                ],
+                text=True,
+                capture_output=True,
+                check=False,
+            )
+
+            self.assertNotEqual(result.returncode, 0)
+            self.assertIn(
+                "target indexed cache-miss telemetry missing or nonpositive "
+                "in after summary: 50/2",
+                result.stderr,
+            )
+            self.assertNotIn("target_vs_buffer_write_mib did not decrease", result.stderr)
+            self.assertNotIn("target_vs_invocations did not decrease", result.stderr)
+            report = output.read_text(encoding="utf-8")
+            self.assertIn("| `target_indexed_cache_miss32` | `683,661.000` | `0.000`", report)
+            self.assertIn(
+                "| Actual indexed telemetry missing/nonpositive after | `50/2` |",
+                report,
+            )
+
+    def test_target_cache_opt_guard_accepts_effective_candidate_drop(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            before = root / "before.csv"
+            after = root / "after.csv"
+            output = root / "comparison.md"
+            write_joined_rows(before, [
+                {"seq": 50, "enc": 2, "gpu_ms": 20.0, "buffer_write_mib": 900.0,
+                 "vs_buffer_write_mib": 900.0, "vs_invocations": 640000,
+                 "dxmt_vertex_count": 1168128,
+                 "dxmt_triangle_estimate": 389376,
+                 "dxmt_indexed_vertex_reference_count": 1168128,
+                 "dxmt_indexed_unique_vertex_estimate": 496737,
+                 "dxmt_indexed_vertex_cache_miss_estimate_32": 683661,
+                 "dxmt_indexed_cache_opt_candidate_original_miss32": 675973,
+                 "dxmt_indexed_cache_opt_candidate_miss32": 500805},
+            ])
+            write_joined_rows(after, [
+                {"seq": 50, "enc": 2, "gpu_ms": 18.8, "buffer_write_mib": 820.0,
+                 "vs_buffer_write_mib": 820.0, "vs_invocations": 572933,
+                 "dxmt_vertex_count": 1168128,
+                 "dxmt_triangle_estimate": 389376,
+                 "dxmt_indexed_vertex_reference_count": 0,
+                 "dxmt_indexed_unique_vertex_estimate": 0,
+                 "dxmt_indexed_vertex_cache_miss_estimate_32": 0,
+                 "dxmt_indexed_cache_opt_candidate_draws": 66,
+                 "dxmt_indexed_cache_opt_candidate_original_miss32": 328856,
+                 "dxmt_indexed_cache_opt_candidate_miss32": 241780},
+            ])
+
+            result = subprocess.run(
+                [
+                    sys.executable,
+                    str(SCRIPT),
+                    str(before),
+                    str(after),
+                    "--output",
+                    str(output),
+                    "--target-row-key",
+                    "50/2",
+                    "--require-target-index-cache-opt-miss32-decrease",
+                    "--require-target-vs-buffer-write-decrease",
+                    "--require-target-vs-invocations-decrease",
+                ],
+                text=True,
+                capture_output=True,
+                check=False,
+            )
+
+            self.assertEqual(result.returncode, 0, result.stderr)
+            report = output.read_text(encoding="utf-8")
+            self.assertIn(
+                "| Actual indexed telemetry missing/nonpositive after | `50/2` |",
+                report,
+            )
+            self.assertIn(
+                "| `target_cache_opt_candidate_original_miss32` | "
+                "`675,973.000` | `328,856.000`",
+                report,
+            )
+            self.assertIn(
+                "| `target_cache_opt_candidate_miss32` | "
+                "`500,805.000` | `241,780.000`",
+                report,
+            )
+            self.assertNotIn("## Requirement Failures", report)
+
+    def test_target_cache_opt_guard_rejects_candidate_noop(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            before = root / "before.csv"
+            after = root / "after.csv"
+            output = root / "comparison.md"
+            write_joined_rows(before, [
+                {"seq": 50, "enc": 2, "gpu_ms": 20.0, "buffer_write_mib": 900.0,
+                 "vs_buffer_write_mib": 900.0, "vs_invocations": 640000,
+                 "dxmt_indexed_vertex_cache_miss_estimate_32": 683661},
+            ])
+            write_joined_rows(after, [
+                {"seq": 50, "enc": 2, "gpu_ms": 18.8, "buffer_write_mib": 820.0,
+                 "vs_buffer_write_mib": 820.0, "vs_invocations": 572933,
+                 "dxmt_indexed_vertex_cache_miss_estimate_32": 0,
+                 "dxmt_indexed_cache_opt_candidate_draws": 66,
+                 "dxmt_indexed_cache_opt_candidate_original_miss32": 328856,
+                 "dxmt_indexed_cache_opt_candidate_miss32": 328856},
+            ])
+
+            result = subprocess.run(
+                [
+                    sys.executable,
+                    str(SCRIPT),
+                    str(before),
+                    str(after),
+                    "--output",
+                    str(output),
+                    "--target-row-key",
+                    "50/2",
+                    "--require-target-index-cache-opt-miss32-decrease",
+                    "--require-target-vs-buffer-write-decrease",
+                    "--require-target-vs-invocations-decrease",
+                ],
+                text=True,
+                capture_output=True,
+                check=False,
+            )
+
+            self.assertNotEqual(result.returncode, 0)
+            self.assertIn(
+                "target_index_cache_opt_candidate_miss32 did not decrease",
+                result.stderr,
+            )
+
+    def test_target_reordered_cache_hit_guard_requires_each_target_row(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            before = root / "before.csv"
+            after = root / "after.csv"
+            output = root / "comparison.md"
+            write_joined_rows(before, [
+                {"seq": 50, "enc": 0, "gpu_ms": 6.0, "buffer_write_mib": 225.0,
+                 "vs_buffer_write_mib": 225.0, "vs_invocations": 153000},
+                {"seq": 50, "enc": 1, "gpu_ms": 9.0, "buffer_write_mib": 421.0,
+                 "vs_buffer_write_mib": 421.0, "vs_invocations": 384000},
+            ])
+            write_joined_rows(after, [
+                {"seq": 50, "enc": 0, "gpu_ms": 5.0, "buffer_write_mib": 184.0,
+                 "vs_buffer_write_mib": 184.0, "vs_invocations": 126000,
+                 "dxmt_reordered_index_cache_lookups": 42,
+                 "dxmt_reordered_index_cache_hits": 33,
+                 "dxmt_reordered_index_cache_rejected_hits": 9},
+                {"seq": 50, "enc": 1, "gpu_ms": 8.2, "buffer_write_mib": 354.0,
+                 "vs_buffer_write_mib": 354.0, "vs_invocations": 335000,
+                 "dxmt_reordered_index_cache_lookups": 156,
+                 "dxmt_reordered_index_cache_hits": 69,
+                 "dxmt_reordered_index_cache_rejected_hits": 87},
+            ])
+
+            result = subprocess.run(
+                [
+                    sys.executable,
+                    str(SCRIPT),
+                    str(before),
+                    str(after),
+                    "--output",
+                    str(output),
+                    "--target-row-key",
+                    "50/0",
+                    "--target-row-key",
+                    "50/1",
+                    "--require-target-reordered-index-cache-hits",
+                    "--require-target-vs-buffer-write-decrease",
+                    "--require-target-vs-invocations-decrease",
+                ],
+                text=True,
+                capture_output=True,
+                check=False,
+            )
+
+            self.assertEqual(result.returncode, 0, result.stderr)
+            report = output.read_text(encoding="utf-8")
+            self.assertIn(
+                "| Reordered index cache hits missing/nonpositive after | `none` |",
+                report,
+            )
+            self.assertIn(
+                "| `target_reordered_index_cache_hits` | `0.000` | `102.000`",
+                report,
+            )
+            self.assertNotIn("## Requirement Failures", report)
+
+    def test_target_reordered_cache_hit_guard_rejects_partial_target_hit(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            before = root / "before.csv"
+            after = root / "after.csv"
+            output = root / "comparison.md"
+            write_joined_rows(before, [
+                {"seq": 50, "enc": 0, "gpu_ms": 6.0, "buffer_write_mib": 225.0,
+                 "vs_buffer_write_mib": 225.0, "vs_invocations": 153000},
+                {"seq": 50, "enc": 1, "gpu_ms": 9.0, "buffer_write_mib": 421.0,
+                 "vs_buffer_write_mib": 421.0, "vs_invocations": 384000},
+            ])
+            write_joined_rows(after, [
+                {"seq": 50, "enc": 0, "gpu_ms": 5.0, "buffer_write_mib": 184.0,
+                 "vs_buffer_write_mib": 184.0, "vs_invocations": 126000,
+                 "dxmt_reordered_index_cache_lookups": 42,
+                 "dxmt_reordered_index_cache_hits": 33,
+                 "dxmt_reordered_index_cache_rejected_hits": 9},
+                {"seq": 50, "enc": 1, "gpu_ms": 8.2, "buffer_write_mib": 354.0,
+                 "vs_buffer_write_mib": 354.0, "vs_invocations": 335000,
+                 "dxmt_reordered_index_cache_lookups": 156,
+                 "dxmt_reordered_index_cache_hits": 0,
+                 "dxmt_reordered_index_cache_rejected_hits": 156},
+            ])
+
+            result = subprocess.run(
+                [
+                    sys.executable,
+                    str(SCRIPT),
+                    str(before),
+                    str(after),
+                    "--output",
+                    str(output),
+                    "--target-row-key",
+                    "50/0",
+                    "--target-row-key",
+                    "50/1",
+                    "--require-target-reordered-index-cache-hits",
+                    "--require-target-vs-buffer-write-decrease",
+                    "--require-target-vs-invocations-decrease",
+                ],
+                text=True,
+                capture_output=True,
+                check=False,
+            )
+
+            self.assertNotEqual(result.returncode, 0)
+            self.assertIn(
+                "target reordered index cache hits missing or nonpositive "
+                "in after summary: 50/1",
+                result.stderr,
+            )
+            report = output.read_text(encoding="utf-8")
+            self.assertIn(
+                "| Reordered index cache hits missing/nonpositive after | `50/1` |",
+                report,
+            )
+
+    def test_target_guard_passes_when_actual_target_counters_drop(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            before = root / "before.csv"
+            after = root / "after.csv"
+            output = root / "comparison.md"
+            write_joined_rows(before, [
+                {"seq": 50, "enc": 0, "gpu_ms": 6.0, "buffer_write_mib": 225.0,
+                 "vs_buffer_write_mib": 225.0, "vs_invocations": 153000,
+                 "dxmt_indexed_vertex_cache_miss_estimate_32": 171000},
+                {"seq": 50, "enc": 1, "gpu_ms": 9.0, "buffer_write_mib": 421.0,
+                 "vs_buffer_write_mib": 421.0, "vs_invocations": 384000,
+                 "dxmt_indexed_vertex_cache_miss_estimate_32": 423000},
+            ])
+            write_joined_rows(after, [
+                {"seq": 50, "enc": 0, "gpu_ms": 5.0, "buffer_write_mib": 184.0,
+                 "vs_buffer_write_mib": 184.0, "vs_invocations": 126000,
+                 "dxmt_indexed_vertex_cache_miss_estimate_32": 127000},
+                {"seq": 50, "enc": 1, "gpu_ms": 8.2, "buffer_write_mib": 354.0,
+                 "vs_buffer_write_mib": 354.0, "vs_invocations": 335000,
+                 "dxmt_indexed_vertex_cache_miss_estimate_32": 341000},
+            ])
+
+            result = subprocess.run(
+                [
+                    sys.executable,
+                    str(SCRIPT),
+                    str(before),
+                    str(after),
+                    "--output",
+                    str(output),
+                    "--target-row-key",
+                    "50/0",
+                    "--target-row-key",
+                    "50/1",
+                    "--require-target-index-cache-miss32-decrease",
+                    "--require-target-vs-buffer-write-decrease",
+                    "--require-target-vs-invocations-decrease",
+                ],
+                text=True,
+                capture_output=True,
+                check=False,
+            )
+
+            self.assertEqual(result.returncode, 0, result.stderr)
+            report = output.read_text(encoding="utf-8")
+            self.assertIn("## Target Row Guard", report)
+            self.assertIn("| Target rows | `50/0, 50/1` |", report)
+            self.assertIn("| `target_indexed_cache_miss32` | `594,000.000` | `468,000.000`", report)
+            self.assertNotIn("## Requirement Failures", report)
+
+    def test_cache_opt_apply_proof_preset_enables_stable_and_target_gates(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            before = root / "before.csv"
+            after = root / "after.csv"
+            output = root / "comparison.md"
+            write_joined_rows(before, [
+                {"seq": 50, "enc": 0, "gpu_ms": 10.0, "buffer_write_mib": 200.0,
+                 "vs_buffer_write_mib": 180.0, "vs_invocations": 200000,
+                 "dxmt_indexed_vertex_cache_miss_estimate_32": 180000,
+                 "dxmt_draw_calls": 10, "dxmt_vertex_count": 200000,
+                 "dxmt_triangle_estimate": 66666},
+            ])
+            write_joined_rows(after, [
+                {"seq": 50, "enc": 0, "gpu_ms": 8.5, "buffer_write_mib": 170.0,
+                 "vs_buffer_write_mib": 150.0, "vs_invocations": 170000,
+                 "dxmt_indexed_vertex_cache_miss_estimate_32": 140000,
+                 "dxmt_draw_calls": 10, "dxmt_vertex_count": 200000,
+                 "dxmt_triangle_estimate": 66666},
+            ])
+
+            result = subprocess.run(
+                [
+                    sys.executable,
+                    str(SCRIPT),
+                    str(before),
+                    str(after),
+                    "--output",
+                    str(output),
+                    "--target-row-key",
+                    "50/0",
+                    "--require-cache-opt-apply-proof",
+                ],
+                text=True,
+                capture_output=True,
+                check=False,
+            )
+
+            self.assertEqual(result.returncode, 0, result.stderr)
+            report = output.read_text(encoding="utf-8")
+            self.assertIn("## Target Row Guard", report)
+            self.assertIn("| `target_indexed_cache_miss32` | `180,000.000` | `140,000.000`", report)
+            self.assertNotIn("## Requirement Failures", report)
+
+    def test_cache_opt_apply_proof_preset_rejects_missing_target_row(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            before = root / "before.csv"
+            after = root / "after.csv"
+            output = root / "comparison.md"
+            write_joined_rows(before, [
+                {"seq": 50, "enc": 0, "gpu_ms": 10.0, "buffer_write_mib": 200.0},
+            ])
+            write_joined_rows(after, [
+                {"seq": 50, "enc": 0, "gpu_ms": 8.0, "buffer_write_mib": 150.0},
+            ])
+
+            result = subprocess.run(
+                [
+                    sys.executable,
+                    str(SCRIPT),
+                    str(before),
+                    str(after),
+                    "--output",
+                    str(output),
+                    "--require-cache-opt-apply-proof",
+                ],
+                text=True,
+                capture_output=True,
+                check=False,
+            )
+
+            self.assertNotEqual(result.returncode, 0)
+            self.assertIn(
+                "target row guard requires at least one --target-row-key",
+                result.stderr,
             )
 
     def test_require_tvb_mechanism_proof_passes_when_all_three_decrease(self) -> None:

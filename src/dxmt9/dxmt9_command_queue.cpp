@@ -607,6 +607,30 @@ CommandQueue::TransientBufferReservation CommandQueue::reserveTransientBuffer(
   return transientArena_.reserveBuffer(size, alignment, seqId, completedSeqId);
 }
 
+resources::ReorderedIndexBufferLookup CommandQueue::findReorderedIndexBuffer(
+    core::Handle sourceHandle,
+    resources::ReorderedIndexBufferCacheKey key,
+    std::uint64_t seqId) {
+  std::lock_guard lock(mutex_);
+  return pool_.findReorderedIndexBuffer(
+      sourceHandle.value,
+      key,
+      seqId,
+      completedSeqId_);
+}
+
+bool CommandQueue::rememberRejectedReorderedIndexBuffer(
+    core::Handle sourceHandle,
+    resources::ReorderedIndexBufferCacheKey key,
+    std::uint64_t seqId) {
+  std::lock_guard lock(mutex_);
+  return pool_.rememberRejectedReorderedIndexBuffer(
+      sourceHandle.value,
+      key,
+      seqId,
+      completedSeqId_);
+}
+
 resources::ReorderedIndexBufferLookup CommandQueue::getOrCreateReorderedIndexBuffer(
     core::Handle sourceHandle,
     resources::ReorderedIndexBufferCacheKey key,

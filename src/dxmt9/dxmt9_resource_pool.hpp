@@ -88,6 +88,7 @@ struct ReorderedIndexBufferCacheEntry {
   WMT::Reference<WMT::Buffer> buffer;
   u64 byteCount = 0;
   u64 lastUsedSeqId = 0;
+  bool rejected = false;
 };
 
 struct ReorderedIndexBufferLookup {
@@ -95,6 +96,7 @@ struct ReorderedIndexBufferLookup {
   u64 byteCount = 0;
   bool hit = false;
   bool created = false;
+  bool rejected = false;
 };
 
 struct BufferRecord {
@@ -469,11 +471,26 @@ struct Pool {
   // resolved. Caller holds the pool's mutex.
   bool uploadBufferData(u64 handleValue, const std::uint8_t* bytes, std::size_t byteCount);
 
-  // Return an immutable Metal index buffer containing reordered index bytes
-  // derived from a stable source buffer. Entries are keyed by source buffer
-  // content revision + draw span and are retained on the source BufferRecord.
-  // Caller holds the queue mutex; stale entries are pruned only when their
-  // last use has completed.
+  // Look up or create immutable Metal index buffers containing reordered index
+  // bytes derived from a stable source buffer. Entries are keyed by source
+  // buffer content revision + draw span and are retained on the source
+  // BufferRecord. Caller holds the queue mutex; stale entries are pruned only
+  // when their last use has completed.
+  //
+  // findReorderedIndexBuffer is hit-only; it never builds candidate bytes or
+  // allocates a Metal buffer.
+  ReorderedIndexBufferLookup findReorderedIndexBuffer(
+      u64 sourceHandle,
+      ReorderedIndexBufferCacheKey key,
+      u64 seqId,
+      u64 completedSeqId);
+
+  bool rememberRejectedReorderedIndexBuffer(
+      u64 sourceHandle,
+      ReorderedIndexBufferCacheKey key,
+      u64 seqId,
+      u64 completedSeqId);
+
   ReorderedIndexBufferLookup getOrCreateReorderedIndexBuffer(
       WMT::Device device,
       u64 sourceHandle,

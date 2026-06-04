@@ -158,6 +158,10 @@ void countCommitChunkDrawRunBindingOverride(bool streamOverride,
 void countCommitChunkDrawBatchConstUploadPassthrough();
 void countCommitChunkDrawSubmissionBatch(std::uint32_t recordCount);
 void countSubmitDrawRunBatchGroup(std::uint32_t recordCount);
+void countD3D9DrawStateCacheLookup(bool hit, bool includeIndexBuffer);
+void countD3D9DrawStateCacheUniformRefresh();
+void countD3D9DrawStateCacheMissReason(std::uint32_t reasonMask);
+void countD3D9SnapshotDrawSubmissionCpuTime(std::uint64_t nanoseconds);
 void countDrawCall(std::uint32_t primitiveType,
                    std::uint32_t primitiveCount,
                    std::uint64_t vertexCount,
@@ -213,6 +217,11 @@ void countEncodeDrawUniformBuildCpuTime(std::uint64_t nanoseconds);
 void countEncodeDrawFvfDecodeCpuTime(std::uint64_t nanoseconds);
 void countEncodeDrawStreamBindCpuTime(std::uint64_t nanoseconds);
 void countEncodeDrawIssueCpuTime(std::uint64_t nanoseconds);
+void countEncodeDrawPsoPrefetch(bool handleAvailable,
+                                bool usedHandle,
+                                bool hasBindingOverride,
+                                bool bindingOverrideCompatible,
+                                bool bypassProbe);
 void countTransientUploadCpuTime(std::uint64_t nanoseconds, std::size_t bytes);
 void countD3D9BufferLock(std::uint64_t nanoseconds,
                          std::uint64_t bytes,
@@ -670,6 +679,7 @@ struct EncoderBreakdown {
   std::uint64_t probeDisableAlphaBlendDraws = 0;
   std::uint64_t probeDisableDepthWriteDraws = 0;
   std::uint64_t probeDepthFuncAlwaysDraws = 0;
+  std::uint64_t probeForceTextureWhiteDraws = 0;
   std::uint64_t indexedVertexReuseSamples = 0;
   std::uint64_t indexedVertexReuseSkipped = 0;
   std::uint64_t indexedVertexReferenceCount = 0;
@@ -688,6 +698,7 @@ struct EncoderBreakdown {
   std::uint64_t indexedCacheOptCandidateMiss64 = 0;
   std::uint64_t reorderedIndexCacheLookups = 0;
   std::uint64_t reorderedIndexCacheHits = 0;
+  std::uint64_t reorderedIndexCacheRejectedHits = 0;
   std::uint64_t reorderedIndexCacheMisses = 0;
   std::uint64_t reorderedIndexCacheCreated = 0;
   std::uint64_t reorderedIndexCacheCreatedBytes = 0;

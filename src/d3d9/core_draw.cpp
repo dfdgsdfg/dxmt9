@@ -2,12 +2,14 @@
 #include "dxmt9/core.hpp"
 #include "dxmt9/dxmt9_device.hpp"
 #include "dxmt9/dxmt9_d3d9_bytecode.hpp"
+#include "../dxmt9/dxmt9_perf_counters.hpp"
 #include "util/config/config.hpp"
 #include "util/log/log.hpp"
 
 #include <algorithm>
 #include <array>
 #include <bit>
+#include <chrono>
 #include <cmath>
 #include <cstdarg>
 #include <cstdio>
@@ -31,6 +33,24 @@ namespace {
 
 constexpr u64 kFnvOffset = 1469598103934665603ull;
 constexpr u64 kFnvPrime = 1099511628211ull;
+
+class PerfScope {
+ public:
+  explicit PerfScope(void (*record)(std::uint64_t))
+      : record_(record), start_(std::chrono::steady_clock::now()) {}
+  ~PerfScope() {
+    if (!record_) return;
+    const auto end = std::chrono::steady_clock::now();
+    record_(static_cast<std::uint64_t>(
+        std::chrono::duration_cast<std::chrono::nanoseconds>(end - start_).count()));
+  }
+  PerfScope(const PerfScope&) = delete;
+  PerfScope& operator=(const PerfScope&) = delete;
+
+ private:
+  void (*record_)(std::uint64_t) = nullptr;
+  std::chrono::steady_clock::time_point start_;
+};
 
 u64 hashCombine(u64 seed, u64 value) {
   seed ^= value;
@@ -1088,6 +1108,18 @@ ViewportScissor makeViewportScissorFromState(const DeviceState &state) {
   return viewport;
 }
 
+void refreshShaderLayoutExtraStreamStrides(DrawShaderLayoutContext &shaderLayout,
+                                           const DeviceState &state) {
+  for (auto &stream : shaderLayout.vertexDecl.streams) {
+    stream.buffer = nullptr;
+    stream.offset = 0;
+    stream.stride = 0;
+  }
+  for (size_t i = 1; i < kMaxStreams; ++i) {
+    shaderLayout.vertexDecl.streams[i].stride = state.streamStrides[i];
+  }
+}
+
 u32 clipPlaneMaskFromState(const DeviceState &state) {
   return state.renderStates.contains(RS_CLIP_PLANE_ENABLE)
              ? state.renderStates.at(RS_CLIP_PLANE_ENABLE)
@@ -1798,6 +1830,15 @@ bool drawRunUsesBoundIndexBuffer(
   return false;
 }
 
+bool drawStateInvalidationIsBindingOnly(u32 reasonMask) noexcept {
+  constexpr u32 kBindingOnlyMask =
+      DrawStateInvalidationDrawPacket |
+      DrawStateInvalidationStream |
+      DrawStateInvalidationIndexBuffer;
+  return reasonMask != DrawStateInvalidationUnknown &&
+         (reasonMask & ~kBindingOnlyMask) == 0;
+}
+
 void Device::submitDrawRunInternalFromState(
     DeviceState baseState, std::span<const DrawParam> draws,
     std::span<const DrawParamPayloadView> payloads) {
@@ -1826,10 +1867,29 @@ void Device::submitDrawRunInternalFromState(
   submitDrawRunInternal(std::move(state), uniforms, draws, payloads);
 }
 
-void Device::invalidateDrawStateCache() noexcept {
+void Device::invalidateDrawStateCache(u32 reasonMask) noexcept {
+  if (reasonMask == DrawStateInvalidationUnknown) {
+    drawStateInvalidationReasonMask_ = DrawStateInvalidationUnknown;
+  } else {
+    drawStateInvalidationReasonMask_ |= reasonMask;
+  }
   ++drawStateGeneration_;
   if (drawStateGeneration_ == 0) {
     drawStateGeneration_ = 1;
+  }
+  if (!drawStateInvalidationIsBindingOnly(reasonMask)) {
+    ++drawStableStateGeneration_;
+    if (drawStableStateGeneration_ == 0) {
+      drawStableStateGeneration_ = 1;
+    }
+    invalidateDrawUniformCache();
+  }
+}
+
+void Device::invalidateDrawUniformCache() noexcept {
+  ++drawUniformGeneration_;
+  if (drawUniformGeneration_ == 0) {
+    drawUniformGeneration_ = 1;
   }
 }
 
@@ -1837,9 +1897,36 @@ const Device::CachedBaseDrawState &
 Device::cachedBaseDrawState(bool includeIndexBuffer) {
   auto &cache =
       includeIndexBuffer ? drawStateCacheWithIndex_ : drawStateCacheNoIndex_;
+  const auto refreshUniforms = [&]() {
+    cache.uniforms = makeDrawUniformPayloadFromState(
+        state_, cache.shaderLayout.clipPlaneMask);
+    cache.hot.vertexConstantsHash = hashTrivial(cache.uniforms.vsConst);
+    cache.hot.pixelConstantsHash = hashTrivial(cache.uniforms.psConst);
+    cache.hot.worldViewProjHash = hashTrivial(cache.uniforms.worldViewProj);
+    cache.hot.ffpBlendWorldViewProjHash =
+        hashBlendWorldViewProj(cache.uniforms.ffpBlendWorldViewProj);
+    cache.hot.textureTransformsHash =
+        hashTextureTransforms(cache.uniforms.textureTransforms);
+    cache.hot.clipPlanesHash = hashClipPlanes(cache.uniforms.clipPlanes);
+    cache.hot.key.vertexConstantsHash = cache.hot.vertexConstantsHash;
+    cache.hot.key.pixelConstantsHash = cache.hot.pixelConstantsHash;
+    cache.hot.key.worldViewProjHash = cache.hot.worldViewProjHash;
+    cache.hot.key.ffpBlendWorldViewProjHash = cache.hot.ffpBlendWorldViewProjHash;
+    cache.hot.key.textureTransformsHash = cache.hot.textureTransformsHash;
+    cache.hot.key.clipPlanesHash = cache.hot.clipPlanesHash;
+    cache.uniformGeneration = drawUniformGeneration_;
+  };
   if (cache.valid && cache.generation == drawStateGeneration_) {
+    dxmt9::perf::countD3D9DrawStateCacheLookup(/*hit=*/true, includeIndexBuffer);
+    if (cache.uniformGeneration != drawUniformGeneration_) {
+      dxmt9::perf::countD3D9DrawStateCacheUniformRefresh();
+      refreshUniforms();
+    }
     return cache;
   }
+  dxmt9::perf::countD3D9DrawStateCacheLookup(/*hit=*/false, includeIndexBuffer);
+  dxmt9::perf::countD3D9DrawStateCacheMissReason(
+      drawStateInvalidationReasonMask_);
 
   DeviceState baseState = state_;
   if (!includeIndexBuffer) {
@@ -1852,7 +1939,69 @@ Device::cachedBaseDrawState(bool includeIndexBuffer) {
   cache.hot = makeFlatDrawStateRecordFromState(baseState, cache.shaderLayout,
                                                cache.uniforms, viewport);
   cache.generation = drawStateGeneration_;
+  cache.uniformGeneration = drawUniformGeneration_;
   cache.valid = true;
+  drawStateInvalidationReasonMask_ = DrawStateInvalidationUnknown;
+  return cache;
+}
+
+const Device::CachedBaseDrawState &
+Device::cachedBaseDrawStateForSubmissionBatch() {
+  auto &cache = drawStateCacheBindingAgnostic_;
+  const auto refreshBindingLayout = [&]() {
+    refreshShaderLayoutExtraStreamStrides(cache.shaderLayout, state_);
+  };
+  const auto refreshUniforms = [&]() {
+    cache.uniforms = makeDrawUniformPayloadFromState(
+        state_, cache.shaderLayout.clipPlaneMask);
+    cache.hot.vertexConstantsHash = hashTrivial(cache.uniforms.vsConst);
+    cache.hot.pixelConstantsHash = hashTrivial(cache.uniforms.psConst);
+    cache.hot.worldViewProjHash = hashTrivial(cache.uniforms.worldViewProj);
+    cache.hot.ffpBlendWorldViewProjHash =
+        hashBlendWorldViewProj(cache.uniforms.ffpBlendWorldViewProj);
+    cache.hot.textureTransformsHash =
+        hashTextureTransforms(cache.uniforms.textureTransforms);
+    cache.hot.clipPlanesHash = hashClipPlanes(cache.uniforms.clipPlanes);
+    cache.hot.key.vertexConstantsHash = cache.hot.vertexConstantsHash;
+    cache.hot.key.pixelConstantsHash = cache.hot.pixelConstantsHash;
+    cache.hot.key.worldViewProjHash = cache.hot.worldViewProjHash;
+    cache.hot.key.ffpBlendWorldViewProjHash =
+        cache.hot.ffpBlendWorldViewProjHash;
+    cache.hot.key.textureTransformsHash = cache.hot.textureTransformsHash;
+    cache.hot.key.clipPlanesHash = cache.hot.clipPlanesHash;
+    clearDrawStateBindingFields(cache.hot);
+    cache.uniformGeneration = drawUniformGeneration_;
+  };
+  if (cache.valid && cache.generation == drawStableStateGeneration_) {
+    dxmt9::perf::countD3D9DrawStateCacheLookup(/*hit=*/true,
+                                                /*includeIndexBuffer=*/false);
+    if (drawStateInvalidationIsBindingOnly(drawStateInvalidationReasonMask_)) {
+      drawStateInvalidationReasonMask_ = DrawStateInvalidationUnknown;
+    }
+    refreshBindingLayout();
+    if (cache.uniformGeneration != drawUniformGeneration_) {
+      dxmt9::perf::countD3D9DrawStateCacheUniformRefresh();
+      refreshUniforms();
+    }
+    return cache;
+  }
+  dxmt9::perf::countD3D9DrawStateCacheLookup(/*hit=*/false,
+                                              /*includeIndexBuffer=*/false);
+  dxmt9::perf::countD3D9DrawStateCacheMissReason(
+      drawStateInvalidationReasonMask_);
+
+  cache.shaderLayout = makeDrawShaderLayoutContextFromState(state_);
+  refreshBindingLayout();
+  cache.uniforms = makeDrawUniformPayloadFromState(
+      state_, cache.shaderLayout.clipPlaneMask);
+  const auto viewport = makeViewportScissorFromState(state_);
+  cache.hot = makeFlatDrawStateRecordFromState(state_, cache.shaderLayout,
+                                               cache.uniforms, viewport);
+  clearDrawStateBindingFields(cache.hot);
+  cache.generation = drawStableStateGeneration_;
+  cache.uniformGeneration = drawUniformGeneration_;
+  cache.valid = true;
+  drawStateInvalidationReasonMask_ = DrawStateInvalidationUnknown;
   return cache;
 }
 
@@ -1879,17 +2028,20 @@ void Device::submitDrawRunInternalFromCurrentState(
 
 HResult Device::snapshotDrawSubmissionFromCurrentState(
     DrawParam draw, DrawRunSubmission &submission) {
+  PerfScope scope(dxmt9::perf::countD3D9SnapshotDrawSubmissionCpuTime);
   if (draw.primitiveType == PrimitiveType::TriangleFan) {
     return D3DERR_INVALIDCALL;
   }
 
   draw.primitiveType = canonicalPrimitiveType(draw.primitiveType);
-  const auto &cached =
-      cachedBaseDrawState(drawRunUsesBoundIndexBuffer(
-          std::span<const DrawParam>(&draw, 1), {}));
+  const auto &cached = renderTraceEnabled()
+      ? cachedBaseDrawState(drawRunUsesBoundIndexBuffer(
+            std::span<const DrawParam>(&draw, 1), {}))
+      : cachedBaseDrawStateForSubmissionBatch();
   submission.uniforms = cached.uniforms;
   submission.draw = draw;
   submission.payload = {};
+  submission.bindingOverride = {};
   submission.state = CanonicalDrawState{
       cached.hot,
       cached.shaderLayout,
@@ -1899,6 +2051,26 @@ HResult Device::snapshotDrawSubmissionFromCurrentState(
                        draw.startIndex, draw.indexType},
           cached.hot),
   };
+  if (!renderTraceEnabled()) {
+    for (u32 stream = 0; stream < kMaxStreams; ++stream) {
+      if (!state_.streamBuffers[stream]) {
+        continue;
+      }
+      submission.bindingOverride.streamMask |= 1u << stream;
+      submission.bindingOverride.streams[stream] = DrawStreamBindingOverride{
+          .buffer = state_.streamBuffers[stream]->handle(),
+          .offset = state_.streamOffsets[stream],
+          .stride = state_.streamStrides[stream],
+      };
+    }
+    if (draw.indexed) {
+      submission.bindingOverride.indexBuffer =
+          state_.indexBuffer ? state_.indexBuffer->handle() : Handle{};
+      submission.bindingOverride.indexType = draw.indexType;
+      submission.bindingOverride.indexBufferValid = true;
+    }
+    submission.state.debug.streamMask = submission.bindingOverride.streamMask;
+  }
   return D3D_OK;
 }
 
@@ -1986,6 +2158,10 @@ void Device::submitDrawSubmissionBatch(
     std::span<DrawRunSubmission> submissions) {
   if (submissions.empty()) {
     return;
+  }
+
+  for (auto &submission : submissions) {
+    ensureDrawRunSubmissionBindingOverridePayload(submission);
   }
 
   if (renderTraceEnabled()) {

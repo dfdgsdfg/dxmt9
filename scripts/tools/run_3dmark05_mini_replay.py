@@ -444,6 +444,71 @@ def apply_vsout_read_trim(vs_source: str, fs_source: str) -> tuple[str, str, dic
     }
 
 
+def replace_function_body(source: str, function_name: str, replacement_body: str) -> str:
+    name_index = source.find(function_name)
+    if name_index < 0:
+        raise SystemExit(f"mini replay rewrite could not find {function_name}")
+    open_index = source.find("{", name_index)
+    if open_index < 0:
+        raise SystemExit(f"mini replay rewrite could not find {function_name} body")
+    depth = 0
+    close_index: int | None = None
+    for index in range(open_index, len(source)):
+        char = source[index]
+        if char == "{":
+            depth += 1
+        elif char == "}":
+            depth -= 1
+            if depth == 0:
+                close_index = index
+                break
+    if close_index is None:
+        raise SystemExit(f"mini replay rewrite could not close {function_name} body")
+    return source[:open_index] + replacement_body + source[close_index + 1:]
+
+
+def force_fragment_color_source(source: str) -> str:
+    return replace_function_body(
+        source,
+        "dxmt9_fs",
+        "{\n  return float4(1.0f, 0.0f, 1.0f, 1.0f);\n}",
+    )
+
+
+def add_fragment_primitive_id_parameter(source: str) -> str:
+    name_index = source.find("dxmt9_fs")
+    if name_index < 0:
+        raise SystemExit("mini replay rewrite could not find dxmt9_fs")
+    open_index = source.find("{", name_index)
+    if open_index < 0:
+        raise SystemExit("mini replay rewrite could not find dxmt9_fs body")
+    close_paren = source.rfind(")", 0, open_index)
+    if close_paren < name_index:
+        raise SystemExit("mini replay rewrite could not find dxmt9_fs parameter list")
+    if "[[primitive_id]]" in source[name_index:open_index]:
+        return source
+    return (
+        source[:close_paren]
+        + ",\n                     uint primitiveId [[primitive_id]]"
+        + source[close_paren:]
+    )
+
+
+def force_fragment_primitive_id_source(source: str) -> str:
+    source = add_fragment_primitive_id_parameter(source)
+    return replace_function_body(
+        source,
+        "dxmt9_fs",
+        "{\n"
+        "  uint value = primitiveId + 1u;\n"
+        "  return float4(float(value & 255u) / 255.0f,\n"
+        "                float((value >> 8u) & 255u) / 255.0f,\n"
+        "                float((value >> 16u) & 255u) / 255.0f,\n"
+        "                1.0f);\n"
+        "}",
+    )
+
+
 def cxx_string(value: str) -> str:
     return json.dumps(value)
 
@@ -532,6 +597,9 @@ def render_source(draws: list[dict[str, Any]],
     stencil_format = depth_format if depth_format_has_stencil(depth_format_value) else "MTLPixelFormatInvalid"
     pass_width = int(color_attachment.get("width", 0)) or int(depth_attachment.get("width", 0)) or width
     pass_height = int(color_attachment.get("height", 0)) or int(depth_attachment.get("height", 0)) or height
+    color_row_bytes = ((pass_width * 4 + 255) // 256) * 256
+    color_byte_count = color_row_bytes * pass_height
+    color_is_bgra = "true" if color_format == "MTLPixelFormatBGRA8Unorm" else "false"
     depth_bpp = depth_bytes_per_pixel(depth_format_value)
     depth_row_bytes = pass_width * depth_bpp
     depth_byte_count = depth_row_bytes * pass_height
@@ -595,6 +663,38 @@ def render_source(draws: list[dict[str, Any]],
         f"    [encoder setVertexBuffer:dummyVertexStream offset:0 atIndex:{slot}];"
         for slot in dummy_vertex_buffer_slots
     )
+    fragment_texture_binds = "\n".join(
+        f"    [encoder setFragmentTexture:whiteTexture atIndex:{slot}];"
+        for slot in sorted({
+            slot
+            for variant in shader_variants
+            for slot in variant.get("fs_bindings", {}).get("texture", [])
+        })
+    )
+    fragment_sampler_binds = "\n".join(
+        f"    [encoder setFragmentSamplerState:sampler atIndex:{slot}];"
+        for slot in sorted({
+            slot
+            for variant in shader_variants
+            for slot in variant.get("fs_bindings", {}).get("sampler", [])
+        })
+    )
+    vertex_texture_binds = "\n".join(
+        f"    [encoder setVertexTexture:whiteTexture atIndex:{slot}];"
+        for slot in sorted({
+            slot
+            for variant in shader_variants
+            for slot in variant.get("vs_bindings", {}).get("texture", [])
+        })
+    )
+    vertex_sampler_binds = "\n".join(
+        f"    [encoder setVertexSamplerState:sampler atIndex:{slot}];"
+        for slot in sorted({
+            slot
+            for variant in shader_variants
+            for slot in variant.get("vs_bindings", {}).get("sampler", [])
+        })
+    )
     stencil_pass_attachment = ""
     if stencil_format != "MTLPixelFormatInvalid":
         stencil_pass_attachment = """    pass.stencilAttachment.texture = depth;
@@ -607,6 +707,7 @@ def render_source(draws: list[dict[str, Any]],
 #include <cstdlib>
 #include <cstring>
 #include <algorithm>
+#include <fstream>
 #include <iostream>
 #include <vector>
 
@@ -660,6 +761,33 @@ static NSString* readString(const char* path) {{
     std::cerr << "failed to read " << path << "\\n";
   }}
   return value;
+}}
+
+static bool writePpm(const char* path,
+                     const unsigned char* pixels,
+                     unsigned width,
+                     unsigned height,
+                     unsigned rowBytes,
+                     bool bgra) {{
+  std::ofstream out(path, std::ios::binary);
+  if (!out) {{
+    std::cerr << "failed to open color output " << path << "\\n";
+    return false;
+  }}
+  out << "P6\\n" << width << " " << height << "\\n255\\n";
+  for (unsigned y = 0; y < height; ++y) {{
+    const unsigned char* row = pixels + static_cast<size_t>(y) * rowBytes;
+    for (unsigned x = 0; x < width; ++x) {{
+      const unsigned char* p = row + static_cast<size_t>(x) * 4;
+      unsigned char rgb[3] = {{
+        bgra ? p[2] : p[0],
+        p[1],
+        bgra ? p[0] : p[2],
+      }};
+      out.write(reinterpret_cast<const char*>(rgb), sizeof(rgb));
+    }}
+  }}
+  return true;
 }}
 
 static id<MTLLibrary> makeLibrary(id<MTLDevice> device, const char* path) {{
@@ -938,8 +1066,10 @@ int main() {{
     id<MTLRenderCommandEncoder> encoder = [commandBuffer renderCommandEncoderWithDescriptor:pass];
     [encoder setDepthStencilState:depthState];
     [encoder setCullMode:cullMode({cull})];
-    [encoder setFragmentTexture:whiteTexture atIndex:0];
-    [encoder setFragmentSamplerState:sampler atIndex:0];
+{fragment_texture_binds}
+{fragment_sampler_binds}
+{vertex_texture_binds}
+{vertex_sampler_binds}
 {dummy_vertex_buffer_binds}
 
     for (unsigned r = 0; r < repeat; ++r) {{
@@ -996,8 +1126,34 @@ int main() {{
       }}
     }}
     [encoder endEncoding];
+    const char* colorOutputPath = std::getenv("DXMT9_MINI_REPLAY_COLOR_OUTPUT_PATH");
+    id<MTLBuffer> colorReadback = nil;
+    if (colorOutputPath && colorOutputPath[0] != '\\0') {{
+      colorReadback =
+          [device newBufferWithLength:{color_byte_count}
+                              options:MTLResourceStorageModeShared];
+      id<MTLBlitCommandEncoder> colorBlit = [commandBuffer blitCommandEncoder];
+      [colorBlit copyFromTexture:color
+                     sourceSlice:0
+                     sourceLevel:0
+                    sourceOrigin:MTLOriginMake(0, 0, 0)
+                      sourceSize:MTLSizeMake({pass_width}, {pass_height}, 1)
+                        toBuffer:colorReadback
+               destinationOffset:0
+          destinationBytesPerRow:{color_row_bytes}
+        destinationBytesPerImage:0];
+      [colorBlit endEncoding];
+    }}
     [commandBuffer commit];
     [commandBuffer waitUntilCompleted];
+    if (colorOutputPath && colorOutputPath[0] != '\\0' && colorReadback) {{
+      const unsigned char* pixels =
+          static_cast<const unsigned char*>([colorReadback contents]);
+      if (!writePpm(colorOutputPath, pixels, {pass_width}, {pass_height},
+                    {color_row_bytes}, {color_is_bgra})) {{
+        return 2;
+      }}
+    }}
     if ([[MTLCaptureManager sharedCaptureManager] isCapturing]) {{
       [[MTLCaptureManager sharedCaptureManager] stopCapture];
     }}
@@ -1056,6 +1212,10 @@ def prepare(args: argparse.Namespace) -> dict[str, Any]:
                 vs_source, fs_source, vsout_trim = apply_vsout_read_trim(vs_source, fs_source)
             vs_source, vs_cbuf_slots = transform_msl(vs_source, "vs")
             fs_source, fs_cbuf_slots = transform_msl(fs_source, "fs")
+            if args.force_fragment_color:
+                fs_source = force_fragment_color_source(fs_source)
+            if args.force_fragment_primitive_id:
+                fs_source = force_fragment_primitive_id_source(fs_source)
             vs_replay.write_text(vs_source, encoding="utf-8")
             fs_replay.write_text(fs_source, encoding="utf-8")
             vs_bindings = stage_bindings(vs_source)
@@ -1111,9 +1271,12 @@ def prepare(args: argparse.Namespace) -> dict[str, Any]:
         "draw_count": len(replay_draws),
         "draw_order": args.draw_order,
         "primitive_order": args.primitive_order,
+        "force_fragment_color": bool(args.force_fragment_color),
+        "force_fragment_primitive_id": bool(args.force_fragment_primitive_id),
         "index_cache_estimate": index_cache_estimate(replay_draws),
         "depth_clear": args.depth_clear,
         "depth_input": str(depth_input) if depth_input else None,
+        "color_output": str(args.color_output) if args.color_output else None,
         "index_bytes": sum(int(draw["geometry"]["index_bytes"]) for draw in replay_draws),
         "stream0_bytes": sum(int(draw["geometry"]["stream0_bytes"]) for draw in replay_draws),
         "uniform_draw_count": sum(
@@ -1187,12 +1350,18 @@ def check_capture_free_space(capture_path: Path, min_free_mb: int) -> None:
         )
 
 
-def run_binary(summary: dict[str, Any], repeat: int, capture_path: Path | None) -> None:
+def run_binary(summary: dict[str, Any],
+               repeat: int,
+               capture_path: Path | None,
+               color_output: Path | None) -> None:
     env = os.environ.copy()
     env["DXMT9_MINI_REPLAY_REPEAT"] = str(repeat)
     if capture_path is not None:
         env["MTL_CAPTURE_ENABLED"] = "1"
         env["DXMT9_MINI_REPLAY_CAPTURE_PATH"] = str(capture_path)
+    if color_output is not None:
+        color_output.parent.mkdir(parents=True, exist_ok=True)
+        env["DXMT9_MINI_REPLAY_COLOR_OUTPUT_PATH"] = str(color_output)
     subprocess.run([summary["binary"]], check=True, env=env)
 
 
@@ -1232,6 +1401,22 @@ def main() -> int:
             "stage_in reads, preserving position and texcoord0 as fallbacks"
         ),
     )
+    parser.add_argument(
+        "--force-fragment-color",
+        action="store_true",
+        help=(
+            "diagnostic: replace replay fragment shader body with a magenta "
+            "constant to separate raster/depth coverage from real FS/texture output"
+        ),
+    )
+    parser.add_argument(
+        "--force-fragment-primitive-id",
+        action="store_true",
+        help=(
+            "diagnostic: replace replay fragment output with an encoded Metal "
+            "primitive_id color to identify which triangle owns changed pixels"
+        ),
+    )
     parser.add_argument("--compile", action="store_true")
     parser.add_argument("--run", action="store_true")
     parser.add_argument("--repeat", type=int, default=1)
@@ -1255,6 +1440,14 @@ def main() -> int:
     )
     parser.add_argument("--capture-path", type=Path)
     parser.add_argument(
+        "--color-output",
+        type=Path,
+        help=(
+            "when --run is used, read back the replay color attachment and "
+            "write a PPM image for same-input image comparison"
+        ),
+    )
+    parser.add_argument(
         "--min-capture-free-mb",
         type=parse_min_capture_free_mb,
         default=parse_min_capture_free_mb(os.environ.get("DXMT9_MINI_REPLAY_MIN_CAPTURE_FREE_MB")),
@@ -1272,7 +1465,7 @@ def main() -> int:
     if args.compile or args.run:
         compile_source(summary)
     if args.run:
-        run_binary(summary, args.repeat, args.capture_path)
+        run_binary(summary, args.repeat, args.capture_path, args.color_output)
     return 0
 
 
