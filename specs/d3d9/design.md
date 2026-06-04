@@ -6,7 +6,7 @@ Detailed subtopic designs live in:
 - `formats/design.md` for D3D9-to-Metal format mapping tables.
 - `queries/design.md` for deferred query sequencing and backend query records.
 - `wsi/design.md` for HWND-to-CAMetalLayer resolution and presentation lifecycle.
-- `ir/design.md` for shader IR, analysis passes, MSL emission, FFP key,
+- `shader/design.md` for shader IR, analysis passes, MSL emission, FFP key,
   half-pixel offset injection, alpha-test rewrite, precision policy, and the
   performance-driven decisions log that shapes the translator.
 
@@ -568,8 +568,8 @@ The keys are value types with no pointers or handles; two equal keys must
 produce byte-identical shader behaviour.
 
 The full bit-packed field list and the FFP MSL emit path live in
-`ir/design.md` §3.1 alongside the rest of the translator's semantic
-contract. Requirement IDs: `R-CORE-IR-2.1`, `R-CORE-IR-2.2`.
+`shader/design.md` §3.1 alongside the rest of the translator's semantic
+contract. Requirement IDs: `R-CORE-SHADER-2.1`, `R-CORE-SHADER-2.2`.
 
 ---
 
@@ -601,9 +601,9 @@ texture-V-axis policy (the translator must not introduce a global
 `DXMT_DEBUG_FORCE_PIXEL_V_FLIP` debug-only bisect flags.
 
 Full contract and the constant-slot used to deliver `(1 / vp.Width,
-1 / vp.Height)` live in `ir/design.md` §3.2 (half-pixel offset, NDC
+1 / vp.Height)` live in `shader/design.md` §3.2 (half-pixel offset, NDC
 conversion) and §3.3 (V-axis policy). Requirement IDs:
-`R-CORE-IR-2.3`..`R-CORE-IR-2.7`, `R-CORE-IR-2.10`.
+`R-CORE-SHADER-2.3`..`R-CORE-SHADER-2.7`, `R-CORE-SHADER-2.10`.
 
 ---
 
@@ -615,7 +615,7 @@ at the end of the pixel shader, and each `(alphaTestEnable, alphaTestFunc)`
 pair produces a separately cached variant.
 
 Implementation detail and cache-key contribution live in
-`ir/design.md` §3.4. Requirement IDs: `R-CORE-IR-2.8`, `R-CORE-IR-2.9`.
+`shader/design.md` §3.4. Requirement IDs: `R-CORE-SHADER-2.8`, `R-CORE-SHADER-2.9`.
 
 ---
 

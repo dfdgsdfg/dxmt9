@@ -89,13 +89,13 @@ struct SpirvModule {              // spec name: ShaderIR
 Properties:
 
 - `words` is the canonical hash input. Two shaders with byte-identical
-  `words` are byte-identical inputs (R-CORE-IR-1.4).
+  `words` are byte-identical inputs (R-CORE-SHADER-1.4).
 - `instructions` is the decoded form consumed by every analysis pass and by
   the emitter. It owns its operand storage; passes treat instructions as
   read-only value views.
 - `samplerTextureTypes` is filled by the decoder from `dcl_*` sampler
   declarations and feeds the precision pass's "texture-coordinate at sample
-  site" rule (R-CORE-IR-3.4).
+  site" rule (R-CORE-SHADER-3.4).
 
 ### 2.2 Decoded Instruction
 
@@ -133,7 +133,7 @@ will carry a short summary and a cross-reference to this section.
 When `IDirect3DDevice9::SetVertexShader(NULL)` or
 `SetPixelShader(NULL)` is in effect, the D3D9 core derives `FFPKeyVS` /
 `FFPKeyPS` from `DeviceState`. Both keys are value types and carry no
-pointers (R-CORE-IR-2.1).
+pointers (R-CORE-SHADER-2.1).
 
 **FFPKeyVS** encodes (bit-packed):
 
@@ -183,7 +183,7 @@ metal_ndc.w = 1.0 / rhw
 
 Programmable pixel shaders preserve D3D9 UVs verbatim. The translator must
 not add a default `v = 1.0 - v` rewrite around any sample opcode
-(R-CORE-IR-2.6).
+(R-CORE-SHADER-2.6).
 
 If a texture appears vertically inverted, the bug lives in:
 
@@ -213,7 +213,7 @@ if (!(outColor.a < r)) discard_fragment();
 
 The reference value rides the translator-injected constant block. Each
 distinct `(alphaTestEnable, alphaTestFunc)` pair maps to its own cached
-shader variant (R-CORE-IR-2.9).
+shader variant (R-CORE-SHADER-2.9).
 
 The alpha-test variant key is part of `ShaderSourceContext` and participates
 in the IR cache key (§7).
@@ -321,7 +321,7 @@ Each is a pure function over `const SpirvModule&`:
 | `maxTempIndex` (inside `ConstantUsage`) | `u32` | sizes the emitted `r[]` array |
 
 These passes are the minimum set required for a correct default emit
-(R-CORE-IR-4.5).
+(R-CORE-SHADER-4.5).
 
 ### 5.2 Optional Passes
 
@@ -333,7 +333,7 @@ These passes are the minimum set required for a correct default emit
 | Precision inference (§4) | (target: extend `DXMT9_FS_HALF_PRECISION`) | not implemented | new row |
 
 Each optional pass produces a value-type plan and participates in the cache
-key only when enabled (R-CORE-IR-4.7). When disabled, the emit must match
+key only when enabled (R-CORE-SHADER-4.7). When disabled, the emit must match
 the historical default; this is the property that prevents archive
 invalidation when a pass is added.
 
@@ -382,13 +382,13 @@ storage in the shader archive (§7).
 
 ### 6.4 No Validation
 
-The emitter assumes its IR is well-formed (R-CORE-IR-1.5 enforced by the
-decoder) and its plans are consistent (R-CORE-IR-4.9 enforced by the pass
+The emitter assumes its IR is well-formed (R-CORE-SHADER-1.5 enforced by the
+decoder) and its plans are consistent (R-CORE-SHADER-4.9 enforced by the pass
 layer). Validation in the emitter is a contract violation: every check
 must live earlier.
 
 The single exception is the precision-plan precondition assert
-(R-CORE-IR-4.9): the emitter asserts that mandatory-Float regions are
+(R-CORE-SHADER-4.9): the emitter asserts that mandatory-Float regions are
 classified `Float` before walking instructions, so the resulting MSL is
 well-typed.
 
@@ -432,7 +432,7 @@ Every term that changes emitted MSL bytes must contribute. New optional
 toggles must extend the key; new env vars that change emit must register a
 bit. The audit gate `scripts/check/audit_perf_counter_callsites.py`'s sibling
 for env vars is `agents/rules/environment_variables.rules.md` documentation
-(R-CORE-IR-7.4).
+(R-CORE-SHADER-7.4).
 
 ### 7.2 Archive Lifecycle
 
@@ -451,7 +451,7 @@ referenced and are evicted by the archive's LRU policy.
 
 The risk surface is the opposite: a translator change that *should* alter
 MSL but does not contribute a new term to the key. Audit coverage
-(R-CORE-IR-8.1) is the primary defence.
+(R-CORE-SHADER-8.1) is the primary defence.
 
 ---
 
@@ -566,7 +566,7 @@ iteration sources (hash-map order, unstable sort).
 
 ### 9.3 Correctness Oracle (Half-Precision Gate)
 
-The precision pass's promotion gate (R-CORE-IR-3.10) requires a
+The precision pass's promotion gate (R-CORE-SHADER-3.10) requires a
 deterministic correctness oracle:
 
 - Reference: float-emitted shader, executed on `shader_runner_dxmt9`
@@ -592,14 +592,14 @@ blast radius.
 
 | Requirement | Evidence |
 |---|---|
-| R-CORE-IR-1.1..1.6 | `dxmt9-shader-bytecode-validation-spec` (decode), `dxmt9-shader-transform-spec` (IR shape), hash determinism asserted in those targets |
-| R-CORE-IR-2.1..2.10 | `dxmt9-shader-transform-spec` semantic snapshots; runtime alpha-test, half-pixel, NDC probes in the `shader_runner_dxmt9` corpus under `tests/shader_runner/corpus/` |
-| R-CORE-IR-3.1..3.10 | precision-pass golden test (per §9.1), half-precision correctness oracle (§9.3); both gated on the gap.md row until the IR-level pass exists |
-| R-CORE-IR-4.1..4.11 | per-pass purity + determinism tests under `dxmt9-shader-transform-spec`; emitter precondition assert covered by emit-side cases in the same target |
-| R-CORE-IR-5.1..5.5 | `dxmt9-shader-source-determinism-spec` (emitter determinism); MSL snapshot tests (§9.4); archive build at conformance run |
-| R-CORE-IR-6.1..6.4 | shader-archive load/save test; env-var-flip cache-miss test |
-| R-CORE-IR-7.1..7.4 | env-var documentation audit; dump-shader path exercised by `scripts/tools/finalize_3dmark05_perf_probe.sh` shader-dump matching |
-| R-CORE-IR-8.1..8.5 | meson `dxmt9-shader-*` targets above; `specs/gap.md` rows for any unimplemented item |
+| R-CORE-SHADER-1.1..1.6 | `dxmt9-shader-bytecode-validation-spec` (decode), `dxmt9-shader-transform-spec` (IR shape), hash determinism asserted in those targets |
+| R-CORE-SHADER-2.1..2.10 | `dxmt9-shader-transform-spec` semantic snapshots; runtime alpha-test, half-pixel, NDC probes in the `shader_runner_dxmt9` corpus under `tests/shader_runner/corpus/` |
+| R-CORE-SHADER-3.1..3.10 | precision-pass golden test (per §9.1), half-precision correctness oracle (§9.3); both gated on the gap.md row until the IR-level pass exists |
+| R-CORE-SHADER-4.1..4.11 | per-pass purity + determinism tests under `dxmt9-shader-transform-spec`; emitter precondition assert covered by emit-side cases in the same target |
+| R-CORE-SHADER-5.1..5.5 | `dxmt9-shader-source-determinism-spec` (emitter determinism); MSL snapshot tests (§9.4); archive build at conformance run |
+| R-CORE-SHADER-6.1..6.4 | shader-archive load/save test; env-var-flip cache-miss test |
+| R-CORE-SHADER-7.1..7.4 | env-var documentation audit; dump-shader path exercised by `scripts/tools/finalize_3dmark05_perf_probe.sh` shader-dump matching |
+| R-CORE-SHADER-8.1..8.5 | meson `dxmt9-shader-*` targets above; `specs/gap.md` rows for any unimplemented item |
 
 Open gaps (live in `specs/gap.md`):
 
@@ -607,6 +607,6 @@ Open gaps (live in `specs/gap.md`):
   text-rewrite covers ~33% of SFIV's FS. Successor design above (§4).
 - **VS-first half-precision opt-in flag** — design specifies; not yet
   wired (`enableHalfVSOut`).
-- **Half-precision correctness oracle** — required by R-CORE-IR-3.10,
-  R-CORE-IR-8.3; not yet built.
+- **Half-precision correctness oracle** — required by R-CORE-SHADER-3.10,
+  R-CORE-SHADER-8.3; not yet built.
 - **`SpirvModule` → `ShaderIR` rename** — naming cleanup, non-blocking.
