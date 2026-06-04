@@ -185,8 +185,20 @@ Related CPU-side counter design doc: [[perfomance-bottleneck]].
 - **Domain overview** = `<domain>.md` (e.g. `index-cache-locality.md`). Each
   has a scope, a hypotheses/verdicts table, a mermaid dependency graph, and a
   synthesis.
-- **Leaf node** = `<domain>-<subcategory>.<NN>.md`, one experiment per file,
-  numbered by execution order within its subcategory. Frontmatter carries
-  `status` (accepted/rejected/inconclusive/model/tooling) and the
-  `source:` line range back into `specs/perfomance.plan.md`.
-- Links use `[[slug]]` (filename without `.md`). Follow them like a wiki.
+Layout: the top level of `docs/perfomance/` holds only the root and the
+domain overviews; every experiment lives under its domain's subdirectory.
+
+```
+docs/perfomance/
+  overview.md                          # this file
+  <domain>.md                          # 15 domain overviews
+  <domain>/<domain>-<subcat>.<NN>.md   # leaf nodes (one experiment each)
+```
+
+- **Leaf node** = `<domain>/<domain>-<subcategory>.<NN>.md`, one experiment per
+  file, numbered by execution order within its subcategory. Frontmatter carries
+  `workload: 3DMark05 GT1`, `status`
+  (accepted/rejected/inconclusive/model/tooling), and the `source:` line range
+  back into `specs/perfomance.plan.md`. Every experiment is a 3DMark05 GT1 run.
+- Links use `[[slug]]` (basename without `.md`, resolved across subdirectories).
+  Follow them like a wiki.
