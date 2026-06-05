@@ -181,6 +181,17 @@ void countBaseStateBind(std::uint32_t textureBinds,
                         std::uint32_t rasterizerBinds);
 void countBaseStateBindSkip(std::uint32_t textureBinds,
                             std::uint32_t samplerBinds);
+// Extended skip-tracking for the seven bind classes that previously had
+// no _skipped counter. Added 2026-06-05 per the present-pacing
+// encode-budget attribution; the encoder calls these from each
+// `set*Cached` lambda when the shadow check returns a hit.
+void countBaseStateBindSkipExtended(std::uint32_t vertexBufferBinds,
+                                    std::uint32_t indexBufferBinds,
+                                    std::uint32_t pipelineBinds,
+                                    std::uint32_t depthStateBinds,
+                                    std::uint32_t viewportBinds,
+                                    std::uint32_t scissorBinds,
+                                    std::uint32_t rasterizerBinds);
 void countDrawShaderBucket(std::uint64_t vertexShaderHash,
                            std::uint64_t pixelShaderHash,
                            std::uint64_t variantHash);

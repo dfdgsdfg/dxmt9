@@ -692,6 +692,34 @@ void countRasterizerBind() {
   perf::countBaseStateBind(0, 0, 0, 0, 0, 0, 0, 0, 0, 1);
 }
 
+void countVertexBufferBindSkipped() {
+  perf::countBaseStateBindSkipExtended(1, 0, 0, 0, 0, 0, 0);
+}
+
+void countIndexBufferBindSkipped() {
+  perf::countBaseStateBindSkipExtended(0, 1, 0, 0, 0, 0, 0);
+}
+
+void countPipelineBindSkipped() {
+  perf::countBaseStateBindSkipExtended(0, 0, 1, 0, 0, 0, 0);
+}
+
+void countDepthStateBindSkipped() {
+  perf::countBaseStateBindSkipExtended(0, 0, 0, 1, 0, 0, 0);
+}
+
+void countViewportBindSkipped() {
+  perf::countBaseStateBindSkipExtended(0, 0, 0, 0, 1, 0, 0);
+}
+
+void countScissorBindSkipped() {
+  perf::countBaseStateBindSkipExtended(0, 0, 0, 0, 0, 1, 0);
+}
+
+void countRasterizerBindSkipped() {
+  perf::countBaseStateBindSkipExtended(0, 0, 0, 0, 0, 0, 1);
+}
+
 u64 textureSamplerShadowHash(u64 tag,
                              std::uint8_t stage,
                              obj_handle_t handle) noexcept {
@@ -5872,6 +5900,10 @@ bool encodeDraw(EncodeContext& ctx,
     if (textureSamplerShadow && index < textureSamplerShadow->vertexBuffers.size() &&
         bufferBindShadowMatches(textureSamplerShadow->vertexBuffers[index],
                                 buffer.handle, offset)) {
+      // Cache hit: the shadow already records this (buffer, offset) at
+      // this binding slot — skip the Metal call and count the saved
+      // bind. Mirrors the texture/sampler skip pattern.
+      countVertexBufferBindSkipped();
       return false;
     }
     recordedSetVertexBuffer(ctx, encoder, buffer, offset, index);

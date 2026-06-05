@@ -300,13 +300,20 @@ struct Counters {
   std::atomic<std::uint64_t> bindTextureSkipped{0};
   std::atomic<std::uint64_t> bindSamplerSkipped{0};
   std::atomic<std::uint64_t> bindVertexBuffer{0};
+  std::atomic<std::uint64_t> bindVertexBufferSkipped{0};
   std::atomic<std::uint64_t> bindIndexBuffer{0};
+  std::atomic<std::uint64_t> bindIndexBufferSkipped{0};
   std::atomic<std::uint64_t> bindUniformBuffer{0};
   std::atomic<std::uint64_t> bindPipeline{0};
+  std::atomic<std::uint64_t> bindPipelineSkipped{0};
   std::atomic<std::uint64_t> bindDepthState{0};
+  std::atomic<std::uint64_t> bindDepthStateSkipped{0};
   std::atomic<std::uint64_t> bindViewport{0};
+  std::atomic<std::uint64_t> bindViewportSkipped{0};
   std::atomic<std::uint64_t> bindScissor{0};
+  std::atomic<std::uint64_t> bindScissorSkipped{0};
   std::atomic<std::uint64_t> bindRasterizer{0};
+  std::atomic<std::uint64_t> bindRasterizerSkipped{0};
   std::atomic<std::uint64_t> drawShaderBucketSamples{0};
   std::atomic<std::uint64_t> drawShaderBucketChanges{0};
   std::atomic<std::uint64_t> lastVertexShaderHash{0};
@@ -1115,13 +1122,20 @@ constexpr CounterEntry kCounterTable[] = {
     {"bind_texture_skipped", CounterEntry::Kind::UnsignedCount, &Counters::bindTextureSkipped, nullptr, nullptr, 0.0},
     {"bind_sampler_skipped", CounterEntry::Kind::UnsignedCount, &Counters::bindSamplerSkipped, nullptr, nullptr, 0.0},
     {"bind_vertex_buffer", CounterEntry::Kind::UnsignedCount, &Counters::bindVertexBuffer, nullptr, nullptr, 0.0},
+    {"bind_vertex_buffer_skipped", CounterEntry::Kind::UnsignedCount, &Counters::bindVertexBufferSkipped, nullptr, nullptr, 0.0},
     {"bind_index_buffer", CounterEntry::Kind::UnsignedCount, &Counters::bindIndexBuffer, nullptr, nullptr, 0.0},
+    {"bind_index_buffer_skipped", CounterEntry::Kind::UnsignedCount, &Counters::bindIndexBufferSkipped, nullptr, nullptr, 0.0},
     {"bind_uniform_buffer", CounterEntry::Kind::UnsignedCount, &Counters::bindUniformBuffer, nullptr, nullptr, 0.0},
     {"bind_pipeline", CounterEntry::Kind::UnsignedCount, &Counters::bindPipeline, nullptr, nullptr, 0.0},
+    {"bind_pipeline_skipped", CounterEntry::Kind::UnsignedCount, &Counters::bindPipelineSkipped, nullptr, nullptr, 0.0},
     {"bind_depth_state", CounterEntry::Kind::UnsignedCount, &Counters::bindDepthState, nullptr, nullptr, 0.0},
+    {"bind_depth_state_skipped", CounterEntry::Kind::UnsignedCount, &Counters::bindDepthStateSkipped, nullptr, nullptr, 0.0},
     {"bind_viewport", CounterEntry::Kind::UnsignedCount, &Counters::bindViewport, nullptr, nullptr, 0.0},
+    {"bind_viewport_skipped", CounterEntry::Kind::UnsignedCount, &Counters::bindViewportSkipped, nullptr, nullptr, 0.0},
     {"bind_scissor", CounterEntry::Kind::UnsignedCount, &Counters::bindScissor, nullptr, nullptr, 0.0},
+    {"bind_scissor_skipped", CounterEntry::Kind::UnsignedCount, &Counters::bindScissorSkipped, nullptr, nullptr, 0.0},
     {"bind_rasterizer", CounterEntry::Kind::UnsignedCount, &Counters::bindRasterizer, nullptr, nullptr, 0.0},
+    {"bind_rasterizer_skipped", CounterEntry::Kind::UnsignedCount, &Counters::bindRasterizerSkipped, nullptr, nullptr, 0.0},
     {"draw_shader_bucket_samples", CounterEntry::Kind::UnsignedCount, &Counters::drawShaderBucketSamples, nullptr, nullptr, 0.0},
     {"draw_shader_bucket_changes", CounterEntry::Kind::UnsignedCount, &Counters::drawShaderBucketChanges, nullptr, nullptr, 0.0},
     {"last_vs", CounterEntry::Kind::Hex64, &Counters::lastVertexShaderHash, nullptr, nullptr, 0.0},
@@ -2251,6 +2265,22 @@ void countBaseStateBindSkip(std::uint32_t textureBinds,
                             std::uint32_t samplerBinds) {
   add(counters().bindTextureSkipped, textureBinds);
   add(counters().bindSamplerSkipped, samplerBinds);
+}
+
+void countBaseStateBindSkipExtended(std::uint32_t vertexBufferBinds,
+                                    std::uint32_t indexBufferBinds,
+                                    std::uint32_t pipelineBinds,
+                                    std::uint32_t depthStateBinds,
+                                    std::uint32_t viewportBinds,
+                                    std::uint32_t scissorBinds,
+                                    std::uint32_t rasterizerBinds) {
+  add(counters().bindVertexBufferSkipped, vertexBufferBinds);
+  add(counters().bindIndexBufferSkipped, indexBufferBinds);
+  add(counters().bindPipelineSkipped, pipelineBinds);
+  add(counters().bindDepthStateSkipped, depthStateBinds);
+  add(counters().bindViewportSkipped, viewportBinds);
+  add(counters().bindScissorSkipped, scissorBinds);
+  add(counters().bindRasterizerSkipped, rasterizerBinds);
 }
 
 void countDrawShaderBucket(std::uint64_t vertexShaderHash,
