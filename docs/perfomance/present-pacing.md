@@ -108,6 +108,15 @@ flowchart TD
   matching DSync=0. Acceptance criterion:
   `encode_chunk_cpu_p50_ms ≤ 16.67 ms`. Implementation lives in
   [[state-churn-encode]].
+- [[present-pacing-bind-cache-work-a.01]] — REJECTED (mechanism not
+  the right lever). Work A landed for 5 classes (vertex_buffer,
+  pipeline, depth_state, viewport, scissor) — commits e07cbfe +
+  5eef5d4. On 3DMark05 GT1: wallclock 251.07 → 251.07 s (no change),
+  `bind_*` counts essentially unchanged across all five classes,
+  `encode_chunk_cpu_ms` +12.7% (added comparison overhead). Bind
+  diversity is genuinely high per-draw, so the shadow cache rarely
+  hits. The infrastructure stays in place for future use but the
+  proposal's expected gain doesn't materialise on this workload.
 
 ## Cross-links
 
