@@ -8,7 +8,13 @@
 #include "dxmt9_pipeline_cache.hpp"
 
 #include <array>
+#include <cstddef>
 #include <cstdint>
+#include <span>
+
+namespace dxmt9::uniform {
+struct ShaderConstantUploadPlan;
+}  // namespace dxmt9::uniform
 
 namespace dxmt9::state {
 
@@ -129,6 +135,12 @@ static_assert(sizeof(SamplerLodBias) == core::kMaxTextureStages * sizeof(f32),
 // transforms over flat draw state.
 VsConsts buildVsConsts(core::FlatDrawStateView state);
 PsConsts buildPsConsts(core::FlatDrawStateView state);
+void buildVsConstsUploadBytes(core::FlatDrawStateView state,
+                              uniform::ShaderConstantUploadPlan plan,
+                              std::span<std::byte> dst);
+void buildPsConstsUploadBytes(core::FlatDrawStateView state,
+                              uniform::ShaderConstantUploadPlan plan,
+                              std::span<std::byte> dst);
 FfpVsConsts buildFfpVsConsts(core::FlatDrawStateView state);
 FfpPsConsts buildFfpPsConsts(core::FlatDrawStateView state);
 SamplerLodBias buildSamplerLodBias(core::FlatDrawStateView state);

@@ -1,10 +1,13 @@
 #include "dxmt9_draw_state.hpp"
 #include "dxmt9_debug_trace.hpp"
+#include "dxmt9_uniform_dirty.hpp"
 #include "dxmt9/assert.hpp"
 
 #include <algorithm>
 #include <bit>
+#include <cstring>
 #include <cmath>
+#include <type_traits>
 
 namespace dxmt9::state {
 
@@ -84,6 +87,45 @@ std::array<f32, 4> colorToArray(const core::ColorRGBA& color) {
   return {color.r, color.g, color.b, color.a};
 }
 
+template <typename T, std::size_t Count>
+void copyArrayPrefixToUpload(std::span<std::byte> dst,
+                             std::size_t offset,
+                             const std::array<T, Count>& src,
+                             std::size_t count) {
+  static_assert(std::is_trivially_copyable_v<T>);
+  const auto clamped = std::min<std::size_t>(count, src.size());
+  const auto bytes = clamped * sizeof(T);
+  if (bytes == 0) {
+    return;
+  }
+  DXMT_ASSERT(offset + bytes <= dst.size());
+  std::memcpy(dst.data() + offset, src.data(), bytes);
+}
+
+template <std::size_t Count>
+void copyBoolPrefixToUpload(std::span<std::byte> dst,
+                            std::size_t offset,
+                            const std::array<bool, Count>& src,
+                            std::size_t count) {
+  const auto clamped = std::min<std::size_t>(count, src.size());
+  DXMT_ASSERT(offset + clamped * sizeof(u32) <= dst.size());
+  for (std::size_t i = 0; i < clamped; ++i) {
+    const u32 value = src[i] ? 1u : 0u;
+    std::memcpy(dst.data() + offset + i * sizeof(u32), &value, sizeof(value));
+  }
+}
+
+std::size_t uploadPrefixElementCount(std::size_t byteCount,
+                                     std::size_t offset,
+                                     std::size_t elementBytes,
+                                     std::size_t maxCount) {
+  if (byteCount <= offset) {
+    return 0;
+  }
+  const auto bytes = std::min(byteCount - offset, elementBytes * maxCount);
+  return bytes / elementBytes;
+}
+
 }  // namespace
 
 VsConsts buildVsConsts(core::FlatDrawStateView state) {
@@ -98,6 +140,37 @@ VsConsts buildVsConsts(core::FlatDrawStateView state) {
   return out;
 }
 
+void buildVsConstsUploadBytes(core::FlatDrawStateView state,
+                              uniform::ShaderConstantUploadPlan plan,
+                              std::span<std::byte> dst) {
+  DXMT_ASSERT(state.hasUniformPayload());
+  const auto byteCount =
+      static_cast<std::size_t>(uniform::vsConstantUploadBytes(plan));
+  DXMT_ASSERT(dst.size() >= byteCount);
+  dst = dst.subspan(0, byteCount);
+  std::memset(dst.data(), 0, dst.size());
+
+  const auto& vsConst = state.uniformPayload().vsConst;
+  // Preserve the exact byte prefix the old full-struct builder uploaded.
+  // If int/bool ranges extend the prefix past unused floats/ints, those
+  // earlier bytes must still carry the source constants.
+  const auto floatCount = uploadPrefixElementCount(
+      byteCount, offsetof(VsConsts, vsFloatConst),
+      sizeof(VsConsts::vsFloatConst[0]), vsConst.float4.size());
+  const auto intCount = uploadPrefixElementCount(
+      byteCount, offsetof(VsConsts, vsIntConst),
+      sizeof(VsConsts::vsIntConst[0]), vsConst.int4.size());
+  const auto boolCount = uploadPrefixElementCount(
+      byteCount, offsetof(VsConsts, vsBoolConst), sizeof(u32),
+      vsConst.bools.size());
+  copyArrayPrefixToUpload(
+      dst, offsetof(VsConsts, vsFloatConst), vsConst.float4, floatCount);
+  copyArrayPrefixToUpload(
+      dst, offsetof(VsConsts, vsIntConst), vsConst.int4, intCount);
+  copyBoolPrefixToUpload(
+      dst, offsetof(VsConsts, vsBoolConst), vsConst.bools, boolCount);
+}
+
 PsConsts buildPsConsts(core::FlatDrawStateView state) {
   DXMT_ASSERT(state.hasUniformPayload());
   const auto& psConst = state.uniformPayload().psConst;
@@ -108,6 +181,37 @@ PsConsts buildPsConsts(core::FlatDrawStateView state) {
     out.psBoolConst[i] = psConst.bools[i] ? 1u : 0u;
   }
   return out;
+}
+
+void buildPsConstsUploadBytes(core::FlatDrawStateView state,
+                              uniform::ShaderConstantUploadPlan plan,
+                              std::span<std::byte> dst) {
+  DXMT_ASSERT(state.hasUniformPayload());
+  const auto byteCount =
+      static_cast<std::size_t>(uniform::psConstantUploadBytes(plan));
+  DXMT_ASSERT(dst.size() >= byteCount);
+  dst = dst.subspan(0, byteCount);
+  std::memset(dst.data(), 0, dst.size());
+
+  const auto& psConst = state.uniformPayload().psConst;
+  // Preserve the exact byte prefix the old full-struct builder uploaded.
+  // If int/bool ranges extend the prefix past unused floats/ints, those
+  // earlier bytes must still carry the source constants.
+  const auto floatCount = uploadPrefixElementCount(
+      byteCount, offsetof(PsConsts, psFloatConst),
+      sizeof(PsConsts::psFloatConst[0]), psConst.float4.size());
+  const auto intCount = uploadPrefixElementCount(
+      byteCount, offsetof(PsConsts, psIntConst),
+      sizeof(PsConsts::psIntConst[0]), psConst.int4.size());
+  const auto boolCount = uploadPrefixElementCount(
+      byteCount, offsetof(PsConsts, psBoolConst), sizeof(u32),
+      psConst.bools.size());
+  copyArrayPrefixToUpload(
+      dst, offsetof(PsConsts, psFloatConst), psConst.float4, floatCount);
+  copyArrayPrefixToUpload(
+      dst, offsetof(PsConsts, psIntConst), psConst.int4, intCount);
+  copyBoolPrefixToUpload(
+      dst, offsetof(PsConsts, psBoolConst), psConst.bools, boolCount);
 }
 
 FfpVsConsts buildFfpVsConsts(core::FlatDrawStateView state) {

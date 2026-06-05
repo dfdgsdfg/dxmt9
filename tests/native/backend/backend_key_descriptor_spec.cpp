@@ -1,5 +1,6 @@
 #include <array>
 #include <bit>
+#include <cstring>
 #include <cmath>
 #include <exception>
 #include <iostream>
@@ -13,6 +14,7 @@
 #include "../../../src/dxmt9/dxmt9_draw_encoder.hpp"
 #include "../../../src/dxmt9/dxmt9_draw_encoder_internal.hpp"
 #include "../../../src/dxmt9/dxmt9_draw_state.hpp"
+#include "../../../src/dxmt9/dxmt9_uniform_dirty.hpp"
 
 using namespace dxmt9::core;
 using namespace dxmt9::core::fixture;
@@ -83,6 +85,67 @@ void testBuildPerStageConstsCopiesShaderConstants() {
   checkEq(psConsts.psBoolConst[0], 0u, "PS false bool constant converted to u32 zero");
   checkEq(psConsts.psBoolConst[4], 1u, "PS true bool constant converted to u32 one");
   checkEq(psConsts.psBoolConst[15], 0u, "PS high bool constant converted to u32 zero");
+}
+
+void testBuildPerStageUploadBytesCopiesOnlyPlannedPrefix() {
+  DrawDesc desc{};
+  desc.vsConst.float4[3] = {1.0f, 2.0f, 3.0f, 4.0f};
+  desc.vsConst.float4[12] = {9.0f, 9.0f, 9.0f, 9.0f};
+  desc.vsConst.int4[2] = {-1, 0, 1, 2};
+  desc.vsConst.bools[1] = true;
+  desc.psConst.float4[2] = {5.0f, 6.0f, 7.0f, 8.0f};
+  desc.psConst.int4[1] = {9, 10, 11, 12};
+  desc.psConst.bools[0] = true;
+
+  const auto hot = makeFlatDrawStateRecord(desc);
+  const auto shaderLayout = makeDrawShaderLayoutContext(desc);
+  const auto uniformPayload = makeDrawUniformPayload(desc);
+  const FlatDrawStateView view{
+      .hot = &hot, .shaderLayout = &shaderLayout, .uniforms = &uniformPayload};
+
+  dxmt9::uniform::DirtyState vsDirty{};
+  dxmt9::uniform::applyConstantSetVsI(vsDirty, 2, 1);
+  dxmt9::uniform::ShaderConstantUsageBounds vsUsage{};
+  vsUsage.unknown = false;
+  vsUsage.intCount = 3;
+  const auto vsPlan = dxmt9::uniform::makeVsConstantUploadPlan(vsDirty, vsUsage);
+  const auto vsBytes =
+      static_cast<std::size_t>(dxmt9::uniform::vsConstantUploadBytes(vsPlan));
+  std::array<std::byte, sizeof(dxmt9::state::VsConsts)> vsUpload;
+  dxmt9::state::buildVsConstsUploadBytes(
+      view, vsPlan, std::span<std::byte>(vsUpload.data(), vsBytes));
+  dxmt9::state::VsConsts partialVs{};
+  std::memcpy(&partialVs, vsUpload.data(), vsBytes);
+  checkEq(partialVs.vsFloatConst[3], desc.vsConst.float4[3],
+          "VS upload bytes preserve float prefix before live ints");
+  checkEq(partialVs.vsFloatConst[12], desc.vsConst.float4[12],
+          "VS upload bytes preserve high float prefix before live ints");
+  checkEq(partialVs.vsIntConst[2], desc.vsConst.int4[2],
+          "VS upload bytes copy planned int prefix");
+  checkEq(partialVs.vsBoolConst[1], 0u,
+          "VS upload bytes leave bools zero when boolCount is zero");
+
+  dxmt9::uniform::DirtyState psDirty{};
+  dxmt9::uniform::applyConstantSetPsF(psDirty, 0, 3);
+  dxmt9::uniform::applyConstantSetPsB(psDirty, 0, 1);
+  dxmt9::uniform::ShaderConstantUsageBounds psUsage{};
+  psUsage.unknown = false;
+  psUsage.floatCount = 3;
+  psUsage.boolCount = 1;
+  const auto psPlan = dxmt9::uniform::makePsConstantUploadPlan(psDirty, psUsage);
+  const auto psBytes =
+      static_cast<std::size_t>(dxmt9::uniform::psConstantUploadBytes(psPlan));
+  std::array<std::byte, sizeof(dxmt9::state::PsConsts)> psUpload;
+  dxmt9::state::buildPsConstsUploadBytes(
+      view, psPlan, std::span<std::byte>(psUpload.data(), psBytes));
+  dxmt9::state::PsConsts partialPs{};
+  std::memcpy(&partialPs, psUpload.data(), psBytes);
+  checkEq(partialPs.psFloatConst[2], desc.psConst.float4[2],
+          "PS upload bytes copy planned float prefix");
+  checkEq(partialPs.psIntConst[1], desc.psConst.int4[1],
+          "PS upload bytes preserve int prefix before live bools");
+  checkEq(partialPs.psBoolConst[0], 1u,
+          "PS upload bytes convert planned bool prefix to u32");
 }
 
 void testBuildFfpAndVolatileViewportAndRenderStateValues() {
@@ -397,6 +460,7 @@ void testSamplerInfoBorderColorFallbacks() {
 int main() {
   try {
     testBuildPerStageConstsCopiesShaderConstants();
+    testBuildPerStageUploadBytesCopiesOnlyPlannedPrefix();
     testBuildFfpAndVolatileViewportAndRenderStateValues();
     testProgrammableVsExtraStreamBindingPlan();
     testDepthStencilKeyReflectsDepthAndStencilState();

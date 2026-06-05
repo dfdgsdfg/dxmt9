@@ -5,6 +5,7 @@
 #include "dxmt9_perf_counters.hpp"
 #include "dxmt9/core.hpp"
 
+#include <array>
 #include <chrono>
 #include <cstdlib>
 #include <cstring>
@@ -376,24 +377,25 @@ namespace {
 // argbuf itself; the argbuf entry then points at the fresh transient
 // slab via `setBuffer`. Returns the bytes written into the transient
 // ring, or 0 on reservation failure (caller treats as "skipped").
-template <typename HostStruct>
-u64 uploadAndPointEntry(CommandQueue& queue,
-                         ArgbufEncoderResource& encoderResource,
-                         const HostStruct& host,
-                         std::size_t byteCount,
-                         u32 argbufIdx,
-                         u64 seqId,
-                         const ArgbufRecorder* recorder,
-                         WMT::RenderCommandEncoder residencyEncoder,
-                         ConstantBufferBindings* writtenBindings = nullptr,
-                         const ConstantBufferUploadObserver* uploadObserver = nullptr,
-                         bool countDirtyPhase = false) {
+u64 uploadAndPointEntryBytes(CommandQueue& queue,
+                              ArgbufEncoderResource& encoderResource,
+                              const void* host,
+                              std::size_t byteCount,
+                              std::size_t alignment,
+                              std::size_t hostStructBytes,
+                              u32 argbufIdx,
+                              u64 seqId,
+                              const ArgbufRecorder* recorder,
+                              WMT::RenderCommandEncoder residencyEncoder,
+                              ConstantBufferBindings* writtenBindings = nullptr,
+                              const ConstantBufferUploadObserver* uploadObserver = nullptr,
+                              bool countDirtyPhase = false) {
   if (byteCount == 0) return 0;
   auto doUpload = [&]() {
     return queue.uploadTransientBuffer(
         std::span<const std::byte>(
-            reinterpret_cast<const std::byte*>(&host), byteCount),
-        alignof(HostStruct), seqId);
+            static_cast<const std::byte*>(host), byteCount),
+        alignment, seqId);
   };
   auto slice = [&]() {
     if (!countDirtyPhase) return doUpload();
@@ -418,7 +420,7 @@ u64 uploadAndPointEntry(CommandQueue& queue,
     u64 contentHash = 0;
     if (argbufCbufContentHashEnabled()) {
       auto doHash = [&]() {
-        contentHash = hashConstantBufferBytes(&host, static_cast<u64>(byteCount));
+        contentHash = hashConstantBufferBytes(host, static_cast<u64>(byteCount));
       };
       if (countDirtyPhase) {
         PerfScope scope(perf::countEncodeDrawArgbufCbufBindingHashCpuTime,
@@ -447,8 +449,8 @@ u64 uploadAndPointEntry(CommandQueue& queue,
   if (uploadObserver && uploadObserver->upload) {
     auto doObserve = [&]() {
       uploadObserver->upload(
-          uploadObserver->userdata, argbufIdx, &host,
-          static_cast<u64>(byteCount), sizeof(HostStruct));
+          uploadObserver->userdata, argbufIdx, host,
+          static_cast<u64>(byteCount), static_cast<u64>(hostStructBytes));
     };
     if (countDirtyPhase) {
       PerfScope scope(perf::countEncodeDrawArgbufCbufObserverCpuTime,
@@ -459,6 +461,24 @@ u64 uploadAndPointEntry(CommandQueue& queue,
     }
   }
   return byteCount;
+}
+
+template <typename HostStruct>
+u64 uploadAndPointEntry(CommandQueue& queue,
+                         ArgbufEncoderResource& encoderResource,
+                         const HostStruct& host,
+                         std::size_t byteCount,
+                         u32 argbufIdx,
+                         u64 seqId,
+                         const ArgbufRecorder* recorder,
+                         WMT::RenderCommandEncoder residencyEncoder,
+                         ConstantBufferBindings* writtenBindings = nullptr,
+                         const ConstantBufferUploadObserver* uploadObserver = nullptr,
+                         bool countDirtyPhase = false) {
+  return uploadAndPointEntryBytes(
+      queue, encoderResource, &host, byteCount, alignof(HostStruct),
+      sizeof(HostStruct), argbufIdx, seqId, recorder, residencyEncoder,
+      writtenBindings, uploadObserver, countDirtyPhase);
 }
 
 template <typename HostStruct>
@@ -544,23 +564,26 @@ u64 updateDirtyArgbufRegions(CommandQueue& queue,
   if (uniform::anyDirty(dirty, uniform::kVsAny)) {
     perf::countEncodeDrawArgbufCbufUpdateVsCalls(1u);
     PerfScope blockScope(perf::countEncodeDrawArgbufCbufUpdateVsCpuTime);
-    state::VsConsts vs{};
+    std::array<std::byte, sizeof(state::VsConsts)> vs;
     std::size_t byteCount = 0;
     {
       PerfScope buildScope(perf::countEncodeDrawArgbufCbufBuildCpuTime,
                            cbufBuildRecorderForArgbufIndex(kVsConstsArgbufIdx));
-      vs = state::buildVsConsts(state);
+      uniform::ShaderConstantUploadPlan plan{};
       {
         PerfScope planScope(perf::countEncodeDrawArgbufCbufUploadPlanCpuTime,
                             perf::countEncodeDrawArgbufCbufUploadPlanVsCpuTime);
-        const auto plan = uniform::makeVsConstantUploadPlan(dirty, vsUsage);
+        plan = uniform::makeVsConstantUploadPlan(dirty, vsUsage);
         byteCount = static_cast<std::size_t>(
             uniform::vsConstantUploadBytes(plan));
       }
+      state::buildVsConstsUploadBytes(
+          state, plan, std::span<std::byte>(vs.data(), byteCount));
     }
-    const auto written = uploadAndPointEntry(
-        queue, encoderResource, vs, byteCount, kVsConstsArgbufIdx, seqId,
-        recorder, residencyEncoder, writtenBindings, uploadObserver,
+    const auto written = uploadAndPointEntryBytes(
+        queue, encoderResource, vs.data(), byteCount, alignof(state::VsConsts),
+        sizeof(state::VsConsts), kVsConstsArgbufIdx, seqId, recorder,
+        residencyEncoder, writtenBindings, uploadObserver,
         /*countDirtyPhase=*/true);
     bytes += written;
     if (written != 0) {
@@ -588,23 +611,26 @@ u64 updateDirtyArgbufRegions(CommandQueue& queue,
   if (uniform::anyDirty(dirty, uniform::kPsAny)) {
     perf::countEncodeDrawArgbufCbufUpdatePsCalls(1u);
     PerfScope blockScope(perf::countEncodeDrawArgbufCbufUpdatePsCpuTime);
-    state::PsConsts ps{};
+    std::array<std::byte, sizeof(state::PsConsts)> ps;
     std::size_t byteCount = 0;
     {
       PerfScope buildScope(perf::countEncodeDrawArgbufCbufBuildCpuTime,
                            cbufBuildRecorderForArgbufIndex(kPsConstsArgbufIdx));
-      ps = state::buildPsConsts(state);
+      uniform::ShaderConstantUploadPlan plan{};
       {
         PerfScope planScope(perf::countEncodeDrawArgbufCbufUploadPlanCpuTime,
                             perf::countEncodeDrawArgbufCbufUploadPlanPsCpuTime);
-        const auto plan = uniform::makePsConstantUploadPlan(dirty, psUsage);
+        plan = uniform::makePsConstantUploadPlan(dirty, psUsage);
         byteCount = static_cast<std::size_t>(
             uniform::psConstantUploadBytes(plan));
       }
+      state::buildPsConstsUploadBytes(
+          state, plan, std::span<std::byte>(ps.data(), byteCount));
     }
-    const auto written = uploadAndPointEntry(
-        queue, encoderResource, ps, byteCount, kPsConstsArgbufIdx, seqId,
-        recorder, residencyEncoder, writtenBindings, uploadObserver,
+    const auto written = uploadAndPointEntryBytes(
+        queue, encoderResource, ps.data(), byteCount, alignof(state::PsConsts),
+        sizeof(state::PsConsts), kPsConstsArgbufIdx, seqId, recorder,
+        residencyEncoder, writtenBindings, uploadObserver,
         /*countDirtyPhase=*/true);
     bytes += written;
     if (written != 0) {

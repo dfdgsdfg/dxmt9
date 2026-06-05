@@ -46,6 +46,7 @@ bottleneck — that is owned by [[hidden-backend-storage]].
 | H26 | Remaining cbuf update time is mainly Metal `setBuffer` or transient upload | rejected; attribution accepted | [[state-churn-encode-encode-phase.17]] (`setBuffer=114.568ms`, upload `276.019ms`, build `477.921ms`, inferred residual `954.163ms`; VS residual `618.150ms`) |
 | H27 | The phase.17 cbuf residual is mostly upload-plan or observer cost | rejected; binding-hash attribution accepted | [[state-churn-encode-encode-phase.18]] (`binding_hash=570.070ms`, VS `489.627ms`; `upload_plan=43.287ms` nested in build; observer `0`) |
 | H28 | `hashConstantBufferBytes()` is still required in the default cbuf cache path | rejected; CPU win accepted | [[state-churn-encode-encode-phase.19]] (`binding_hash=570.070 -> 0ms`; cbuf update `1.216 -> 0.875ms/present`; encode_draw `10.359 -> 10.006ms/present`) |
+| H29 | Dirty cbuf upload must first materialize full `VsConsts` / `PsConsts` structs | rejected; prefix-preserving CPU win accepted | [[state-churn-encode-encode-phase.20]] (build `0.333815 -> 0.175342ms/present`; cbuf update `0.875284 -> 0.679652ms/present`; live-range-only prefix zeroing failed visual smoke) |
 
 ## Verification methods
 
@@ -114,6 +115,7 @@ flowchart TD
   EncodePhase17["encode-phase.17\ncbuf category operation split\nresidual 954ms / VS residual 618ms"]:::accepted
   EncodePhase18["encode-phase.18\ncbuf residual split\nbinding hash 570ms\nVS hash 490ms"]:::accepted
   EncodePhase19["encode-phase.19\ncbuf content hash off\nbinding hash 0ms\ncbuf -0.341ms/present"]:::accepted
+  EncodePhase20["encode-phase.20\nprefix-preserving cbuf builder\nbuild -47%/present\nzero-unused prefix rejected"]:::accepted
 
   Drawrun1 -->|"split-into"| Drawrun2
   Drawrun1 -->|"measured-by"| Enc1
@@ -151,6 +153,7 @@ flowchart TD
   EncodePhase16 -->|"return to cbuf bucket"| EncodePhase17
   EncodePhase17 -->|"split residual"| EncodePhase18
   EncodePhase18 -->|"remove unused hash"| EncodePhase19
+  EncodePhase19 -->|"avoid full cbuf build"| EncodePhase20
 ```
 
 ## Results synthesis
@@ -347,6 +350,19 @@ cbuf update drops `1.216 -> 0.875ms/present`, and backend encode drops
 `10.359 -> 10.006ms/present`; GPU time remains flat/noisy. The next cbuf work
 should therefore move to build/upload, content-probe/cached-repoint, binding
 writeback, or residual dispatch/timer cost.
+[[state-churn-encode-encode-phase.20]] closes the build sub-bet, with an
+important correctness boundary. Dirty VS/PS cbuf updates now build raw upload
+bytes instead of first materializing full `VsConsts` / `PsConsts`, but the raw
+builder preserves the exact MSL-visible byte prefix that the old full builder
+would have uploaded. The first live-range-only version zeroed bytes inside that
+prefix and produced visibly dark/black GT1 geometry, so usage bounds are only
+safe for choosing the prefix size, not for rewriting bytes inside the prefix.
+The accepted prefix-preserving version restores the normal smoke frame and cuts
+cbuf build `0.333815 -> 0.175342ms/present`, cbuf update
+`0.875284 -> 0.679652ms/present`, and backend encode
+`10.005939 -> 9.853414ms/present`. The next cbuf targets are cached repoint,
+upload/setBuffer, content probe, and residual timer/dispatch cost, not another
+full-builder reduction.
 
 ## How to run
 Every experiment here is a 3DMark05 GT1 run via the standard wrapper. This is a
