@@ -59,18 +59,25 @@ flowchart TD
   classDef accepted fill:#d6f5d6,stroke:#2b7a2b,color:#063
   classDef open fill:#fff3cd,stroke:#a80,color:#640
   classDef rejected fill:#f8d7da,stroke:#a33,color:#600
+  classDef proposed fill:#e0e7ff,stroke:#445588,color:#102
 
-  DSync["present-pacing-display-sync.01\n100% present wait; DSync=0 → 2.99× scene throughput"]
-  FrameLatency["present-pacing-frame-latency.01\nMAX_FRAME_LATENCY=3 + CAP=0 (vsync-safe)"]
-  AsyncAcq["present-pacing-async-acquire.01\nPRESENT_ASYNC_ACQUIRE=1"]
-  EncodeCPU["state-churn-encode (existing)\nper-CB encode ~11 ms vs 16.67 ms budget"]
+  DSync["display-sync.01\n100% present wait;\nDSync=0 → 2.99× scene throughput\n(diagnostic only)"]
+  FrameLatency["frame-latency.01\nMAX_FRAME_LATENCY=3 + CAP=0\n(rejected: Δ +0.07%)"]
+  AsyncAcq["async-acquire.01\nPRESENT_ASYNC_ACQUIRE=1\n(rejected: axis < 0.5% of wait)"]
+  EncodeBudget["encode-budget.01\nencode_chunk p50 20.45 ms\nvs 16.67 ms vsync slot\n(attribution accepted)"]
+  FixProposal["encode-budget-fix-proposal.02\nA: bind cache for 7 classes\nB: draw-run break reduction\nExpected +44% wallclock"]
+  SCE["state-churn-encode\n(implementation owner)"]
 
   DSync --> FrameLatency
   DSync --> AsyncAcq
-  DSync --> EncodeCPU
+  FrameLatency --> EncodeBudget
+  AsyncAcq --> EncodeBudget
+  EncodeBudget --> FixProposal
+  FixProposal --> SCE
 
-  class DSync accepted
-  class FrameLatency,AsyncAcq,EncodeCPU open
+  class DSync,EncodeBudget accepted
+  class FrameLatency,AsyncAcq rejected
+  class FixProposal,SCE proposed
 ```
 
 ## Detail map
@@ -93,6 +100,14 @@ flowchart TD
   arithmetic matches. Average draw-run = 1.88 records vs cap of 32.
   Production fix lives in [[state-churn-encode]] (bind suppression +
   longer draw-runs).
+- [[present-pacing-encode-budget-fix-proposal.01]] — PROPOSED.
+  Synthesis of Steps 1-4. Two concrete work items:
+  (A) extend `_skipped` cache to 7 currently-uncached bind classes;
+  (B) reduce `mixed_pair_stream_*` draw-run breaks. Conservative
+  expected wallclock impact +44% on 3DMark05 GT1; ceiling +199% if
+  matching DSync=0. Acceptance criterion:
+  `encode_chunk_cpu_p50_ms ≤ 16.67 ms`. Implementation lives in
+  [[state-churn-encode]].
 
 ## Cross-links
 
@@ -125,10 +140,18 @@ flowchart TD
   longer draw-runs (current avg 1.88 records vs cap 32). Owned by
   [[state-churn-encode]]; sized by [[present-pacing-encode-budget.01]].
 
-**Open**
+**Proposed (not yet built)**
 
-- Concrete production work item proposal lives in the synthesis note,
-  [[present-pacing-encode-budget-fix-proposal.01]] (next).
+- Work A: extend the `_skipped` bind-cache pattern (currently only
+  texture/sampler) to vertex_buffer, index_buffer, pipeline,
+  rasterizer, viewport, scissor, depth_state. Estimated saving
+  ≈ 3.6 ms / CB at conservative 30-50% skip rates, enough to fit the
+  16.67 ms vsync slot. New counters: `bind_*_skipped`.
+  Sized in [[present-pacing-encode-budget-fix-proposal.01]];
+  implementation owned by [[state-churn-encode]].
+- Work B: reduce draw-run breaks in the `mixed_pair_stream_*` family
+  to raise mean run length from 1.88 toward the 32-record cap.
+  Composes additively with Work A.
 
 **Rejected**
 
