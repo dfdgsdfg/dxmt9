@@ -6345,45 +6345,16 @@ bool encodeDraw(EncodeContext& ctx,
     PerfScope streamBindViewportScope(perf::countEncodeDrawStreamBindCpuTime);
     PerfScope rasterStateScope(perf::countEncodeDrawRasterStateCpuTime);
     if (bindingPacketHasRasterTarget) {
-      auto viewportMatches = [&](const WMTViewport& a, const WMTViewport& b) {
-        return a.originX == b.originX && a.originY == b.originY &&
-               a.width == b.width && a.height == b.height &&
-               a.znear == b.znear && a.zfar == b.zfar;
-      };
-      auto scissorMatches = [&](const WMTScissorRect& a, const WMTScissorRect& b) {
-        return a.x == b.x && a.y == b.y &&
-               a.width == b.width && a.height == b.height;
-      };
-      const bool viewportUnchanged =
-          textureSamplerShadow &&
-          textureSamplerShadow->viewport.valid &&
-          viewportMatches(textureSamplerShadow->viewport.viewport,
-                          bindingPacket.raster.viewport);
-      if (!viewportUnchanged) {
-        recordedSetViewport(ctx, encoder, bindingPacket.raster.viewport);
-        if (textureSamplerShadow) {
-          textureSamplerShadow->viewport.valid = true;
-          textureSamplerShadow->viewport.viewport = bindingPacket.raster.viewport;
-        }
-        countViewportBind();
-      } else {
-        countViewportBindSkipped();
-      }
-      const bool scissorUnchanged =
-          textureSamplerShadow &&
-          textureSamplerShadow->scissor.valid &&
-          scissorMatches(textureSamplerShadow->scissor.scissor,
-                         bindingPacket.raster.scissor);
-      if (!scissorUnchanged) {
-        recordedSetScissorRect(ctx, encoder, bindingPacket.raster.scissor);
-        if (textureSamplerShadow) {
-          textureSamplerShadow->scissor.valid = true;
-          textureSamplerShadow->scissor.scissor = bindingPacket.raster.scissor;
-        }
-        countScissorBind();
-      } else {
-        countScissorBindSkipped();
-      }
+      // 2026-06-05 — viewport / scissor per-draw shadow cache was tested
+      // (commit 5eef5d4) and reverted: bind diversity on GT1 is high
+      // enough that the cache hit rate is essentially zero, while the
+      // per-draw equality comparisons added +12.7% encode_chunk_cpu_ms.
+      // See docs/perfomance/present-pacing/
+      // present-pacing-bind-cache-work-a.01.md.
+      recordedSetViewport(ctx, encoder, bindingPacket.raster.viewport);
+      countViewportBind();
+      recordedSetScissorRect(ctx, encoder, bindingPacket.raster.scissor);
+      countScissorBind();
       setRasterizerCullMode(ctx, encoder, hot.renderStates, effectiveCullMode);
     }
   }

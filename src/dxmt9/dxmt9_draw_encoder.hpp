@@ -266,25 +266,6 @@ struct BufferBindShadowSlot {
   std::uint64_t offset = 0;
 };
 
-// Cached viewport / scissor for the per-draw rebind path
-// (dxmt9_draw_encoder.mm). Each holds the last-applied WMT struct so
-// the per-draw bind can be skipped when nothing changed. Added
-// 2026-06-05 as part of the present-pacing encode-budget Work A.
-//
-// WMTViewport (6 doubles) and WMTScissorRect (4 uint64) are POD; the
-// equality check is a field-wise comparison and is correctness-safe
-// because the same source path produces the bits each draw — no
-// NaN-from-different-encoding risk.
-struct ViewportBindShadowSlot {
-  bool valid = false;
-  WMTViewport viewport{};
-};
-
-struct ScissorBindShadowSlot {
-  bool valid = false;
-  WMTScissorRect scissor{};
-};
-
 struct TextureSamplerBindShadow {
   TextureSamplerBindShadowSlot renderPipeline{};
   TextureSamplerBindShadowSlot depthStencil{};
@@ -295,8 +276,6 @@ struct TextureSamplerBindShadow {
   std::array<TextureSamplerBindShadowSlot, core::kMaxSamplers> fragmentSamplers{};
   std::array<TextureSamplerBindShadowSlot, core::kMaxVertexTextureSamplers> vertexTextures{};
   std::array<TextureSamplerBindShadowSlot, core::kMaxVertexTextureSamplers> vertexSamplers{};
-  ViewportBindShadowSlot viewport{};
-  ScissorBindShadowSlot scissor{};
 
   void reset() noexcept {
     *this = TextureSamplerBindShadow{};
