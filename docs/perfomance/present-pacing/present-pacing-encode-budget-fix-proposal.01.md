@@ -3,14 +3,93 @@ domain: present-pacing
 workload: 3DMark05 GT1
 subcategory: encode-budget
 order: 02
-title: Production Fix Proposal — Encode-Side Reduction To Recover DSync=0 Fps Under Vsync
+title: Production Fix Synthesis — Original Proposal (Partially Rejected) + Honest 2026-06-05 Correction
 date: 2026-06-05
 type: synthesis
-status: proposed
-source: present-pacing-display-sync.01, present-pacing-frame-latency.01, present-pacing-async-acquire.01, present-pacing-encode-budget.01, state-churn-encode
+status: partially-rejected
+source: present-pacing-display-sync.01, present-pacing-frame-latency.01, present-pacing-async-acquire.01, present-pacing-encode-budget.01, present-pacing-bind-cache-work-a.01, present-pacing-vsync-off.01, state-churn-encode
 ---
 
-# Production Fix Proposal — Encode-Side Reduction To Recover DSync=0 Fps Under Vsync
+# Production Fix Synthesis — Original Proposal (Partially Rejected) + Honest 2026-06-05 Correction
+
+> **Status correction (2026-06-05, post-implementation).** The original
+> synthesis below proposed two specific work items (A: bind-cache
+> extension; B: draw-run break reduction) as the only production path
+> to recover fps without disabling vsync, on the model that per-CB
+> encode CPU must fit inside the 16.67 ms vsync slot. After landing
+> Work A and measuring it end-to-end, that thesis is **partially
+> wrong**:
+>
+> 1. **Work A (bind cache extension) was rejected by measurement.** On
+>    GT1, per-draw bind diversity is high enough that the shadow cache
+>    rarely hits; the equality comparisons added +12.7%
+>    `encode_chunk_cpu_ms` while leaving wallclock at baseline. See
+>    [[present-pacing-bind-cache-work-a.01]]. The bind-call attribution
+>    model in the synthesis below was wrong about which sub-component
+>    of `encode_draw_cpu_ms` is bound by cache hits.
+> 2. **"Only production path" was false.** A second production option
+>    landed in the same round — `DXMT9_DISABLE_VSYNC=1` (commit
+>    `901c145`) — and measured **+88% fps** on the full GT1 workload
+>    with `status: pass`. See [[present-pacing-vsync-off.01]]. The
+>    original synthesis assumed vsync stays on; that's not the only
+>    deployable shape.
+> 3. **Work B (draw-run break reduction) remains untested.** The
+>    synthesis grouped A and B together. A is dead; B is still open.
+> 4. **The earlier "+199% fps" diagnostic figure was inflated** by a
+>    workload-shortening side effect of `DXMT9_LAYER_DISPLAY_SYNC=0`
+>    (only 839 of 1,439 CBs ran). The honest production fps headroom
+>    measured on the full workload is **+88%**, not +199%.
+>
+> The original proposal text is preserved below for the audit trail.
+> The "Work item A" recommendation is downgraded to "infrastructure
+> landed, mechanism does not move fps". The "Work item B" stays open
+> as untested.
+
+## 2026-06-05 actual production state
+
+The two production-shippable mechanisms after this round:
+
+| Mechanism | fps Δ on GT1 | Trade-off | Status |
+|---|---:|---|---|
+| `DXMT9_DISABLE_VSYNC=1` | **+88%** (full workload) | tearing, no display sync, opt-in | **ACCEPTED**, shipping ([[present-pacing-vsync-off.01]]) |
+| Work A: bind-skip cache extension | 0% | +12.7% encode CPU (reverted, viewport/scissor) | REJECTED ([[present-pacing-bind-cache-work-a.01]]) |
+| Work B: draw-run break reduction | unknown | unknown | OPEN (never tested) |
+
+The honest answer to the original question — "what is the production
+path to recover fps under vsync?" — is: **after testing, we do not
+have one demonstrated**. `DXMT9_DISABLE_VSYNC=1` recovers fps but
+turns vsync off. Under vsync ON, the bind-cache lever was wrong; the
+draw-run lever is untested; the 73% unattributed remainder of
+`encode_draw_cpu_ms` does not appear to live where the original
+synthesis claimed.
+
+### What this rules out
+
+- **Bind-call frequency is not the dominant CPU encode cost on GT1.**
+  The shadow cache rarely hits because each draw uses a different
+  (buffer, offset) / (PSO variant) combination.
+- **The +199% "diagnostic" headroom is not real on the full workload.**
+  Real headroom under the new `DISABLE_VSYNC=1` is +88%.
+- **"Fit per-CB encode in vsync slot" is one path, not the only path.**
+  Disabling vsync is another path.
+
+### What remains open
+
+- The 73% unattributed remainder of `encode_draw_cpu_ms` — needs a
+  sampling profile or different attribution model. Candidates: draw-
+  record decode, payload arena copy, D3D9 state shadow synthesis,
+  draw-run break processing. The bind-call hypothesis is closed.
+- Work B (draw-run break reduction, `mixed_pair_stream_*` family).
+  Never tested in this round.
+- A fps-under-vsync production option. None demonstrated.
+
+---
+
+## Original synthesis (preserved for the audit trail)
+
+> The text below is the original Step 5 synthesis as committed
+> 2026-06-05 morning. Items marked WRONG / REVERTED here in the
+> correction did not survive measurement. Kept for traceability.
 
 **Question.** Steps 1-4 narrowed the GT1 wallclock bottleneck. What is
 the production-safe path to recover the +199% fps observed under

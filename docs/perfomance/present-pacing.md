@@ -25,7 +25,8 @@ GPU frame-time story is owned by [[hidden-backend-storage]] /
 | H3 | Per-CB encode (`encode_draw_cpu_ms / CB`) sits at ~11 ms, near the 16.67 ms vsync budget | accepted | [[present-pacing-display-sync.01]] (per-CB encode 11.45 ms baseline, 11.23 ms DSync-off) |
 | H4 | `DXMT9_MAX_FRAME_LATENCY=3` + `DXMT9_CAP_FRAME_LATENCY_TO_BACKBUFFERS=0` recovers slack with vsync on | rejected | [[present-pacing-frame-latency.01]] (wallclock Δ +0.07%, p95 +31%) |
 | H5 | `DXMT9_PRESENT_ASYNC_ACQUIRE=1` reduces the completion-path acquire cost | rejected (axis not load-bearing) | [[present-pacing-async-acquire.01]] (acquire wait −37.5% but axis < 0.5% of total; wallclock Δ +0.22%) |
-| H6 | Reducing per-CB encode below the vsync budget (≤ 16.67 ms / CB) restores 60 fps without changing pacing policy | confirmed-as-target | [[present-pacing-encode-budget.01]] (p50 encode 20.45 ms vs 16.67 ms budget; 73% unattributed = per-draw bind calls; avg draw-run only 1.88 records) |
+| H6 | Reducing per-CB encode below the vsync budget (≤ 16.67 ms / CB) restores fps without changing pacing policy | partially-rejected | [[present-pacing-encode-budget.01]] sized the gap (p50 20.45 vs 16.67 ms); [[present-pacing-bind-cache-work-a.01]] tested the bind-call sub-hypothesis end-to-end and it gave 0% fps gain. The "73% = per-draw bind calls" attribution was wrong. The "per-CB encode must fit vsync slot" thesis is also no longer the *only* path: [[present-pacing-vsync-off.01]] shows +88% fps by disabling vsync entirely. Draw-run break reduction remains untested. |
+| H7 | A user-opt-in vsync-off env recovers fps without a code-side encode optimisation | accepted | [[present-pacing-vsync-off.01]] (DXMT9_DISABLE_VSYNC=1 on full GT1 workload: −46.9% wallclock, ~+88% fps, status pass, same CB count + same GPU work as baseline) |
 
 ## Verification methods
 
