@@ -5838,6 +5838,8 @@ bool encodeDraw(EncodeContext& ctx,
                                     stencilRef, depthState.handle);
         }
         countDepthStateBind();
+      } else {
+        countDepthStateBindSkipped();
       }
     }
     if (!disableAlphaBlendProbeApplied &&
@@ -5889,6 +5891,8 @@ bool encodeDraw(EncodeContext& ctx,
         bindShadowStore(textureSamplerShadow->renderPipeline, pipeline.handle);
       }
       countPipelineBind();
+    } else {
+      countPipelineBindSkipped();
     }
   }
   auto uploadTransientBuffer = [&](const void* data, std::size_t len, std::size_t alignment) {
@@ -6341,10 +6345,45 @@ bool encodeDraw(EncodeContext& ctx,
     PerfScope streamBindViewportScope(perf::countEncodeDrawStreamBindCpuTime);
     PerfScope rasterStateScope(perf::countEncodeDrawRasterStateCpuTime);
     if (bindingPacketHasRasterTarget) {
-      recordedSetViewport(ctx, encoder, bindingPacket.raster.viewport);
-      countViewportBind();
-      recordedSetScissorRect(ctx, encoder, bindingPacket.raster.scissor);
-      countScissorBind();
+      auto viewportMatches = [&](const WMTViewport& a, const WMTViewport& b) {
+        return a.originX == b.originX && a.originY == b.originY &&
+               a.width == b.width && a.height == b.height &&
+               a.znear == b.znear && a.zfar == b.zfar;
+      };
+      auto scissorMatches = [&](const WMTScissorRect& a, const WMTScissorRect& b) {
+        return a.x == b.x && a.y == b.y &&
+               a.width == b.width && a.height == b.height;
+      };
+      const bool viewportUnchanged =
+          textureSamplerShadow &&
+          textureSamplerShadow->viewport.valid &&
+          viewportMatches(textureSamplerShadow->viewport.viewport,
+                          bindingPacket.raster.viewport);
+      if (!viewportUnchanged) {
+        recordedSetViewport(ctx, encoder, bindingPacket.raster.viewport);
+        if (textureSamplerShadow) {
+          textureSamplerShadow->viewport.valid = true;
+          textureSamplerShadow->viewport.viewport = bindingPacket.raster.viewport;
+        }
+        countViewportBind();
+      } else {
+        countViewportBindSkipped();
+      }
+      const bool scissorUnchanged =
+          textureSamplerShadow &&
+          textureSamplerShadow->scissor.valid &&
+          scissorMatches(textureSamplerShadow->scissor.scissor,
+                         bindingPacket.raster.scissor);
+      if (!scissorUnchanged) {
+        recordedSetScissorRect(ctx, encoder, bindingPacket.raster.scissor);
+        if (textureSamplerShadow) {
+          textureSamplerShadow->scissor.valid = true;
+          textureSamplerShadow->scissor.scissor = bindingPacket.raster.scissor;
+        }
+        countScissorBind();
+      } else {
+        countScissorBindSkipped();
+      }
       setRasterizerCullMode(ctx, encoder, hot.renderStates, effectiveCullMode);
     }
   }
