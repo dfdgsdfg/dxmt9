@@ -26,6 +26,8 @@ bottleneck — that is owned by [[hidden-backend-storage]].
 | H6 | A per-draw stream/IB binding override cuts encode CPU without moving GPU or churn | accepted (CPU win) | [[state-churn-encode-binding.01]] (-30.13% stream-bind CPU, GPU +0.03%) |
 | H7 | More draw/submission batching moves the GPU limiter | rejected | [[state-churn-encode-batch.01]] (VS write flat at ~1627 MiB) |
 | H8 | Disabling auto-expand-indexed reduces top-pass GPU buffer writes | rejected (GPU); inconclusive (correctness) | [[state-churn-encode-expand.01]], [[state-churn-encode-expand.02]] |
+| H9 | Extending `_skipped` bind-cache pattern to vertex_buffer / index_buffer / pipeline / rasterizer / viewport / scissor / depth_state cuts per-CB encode below the 16.67 ms vsync slot | proposed | [[present-pacing-encode-budget-fix-proposal.01]] (2026-06-05 — sized by present-pacing topic; expected +44% wallclock on GT1 conservatively, ceiling +199% if matching DSync=0) |
+| H10 | Reducing `mixed_pair_stream_*` draw-run break frequency raises mean run length from 1.88 toward the 32-record cap and composes additively with H9 | proposed | [[present-pacing-encode-budget-fix-proposal.01]] |
 
 ## Verification methods
 
