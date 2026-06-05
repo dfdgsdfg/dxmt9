@@ -24,7 +24,7 @@ GPU frame-time story is owned by [[hidden-backend-storage]] /
 | H2 | The wait is display-sync pacing (`waitUntilCompleted()` returning at compositor refresh) rather than GPU compute | accepted | [[present-pacing-display-sync.01]] (`DXMT9_LAYER_DISPLAY_SYNC=0` cuts elapsed 251 s → 83 s, per-CB p50 unchanged) |
 | H3 | Per-CB encode (`encode_draw_cpu_ms / CB`) sits at ~11 ms, near the 16.67 ms vsync budget | accepted | [[present-pacing-display-sync.01]] (per-CB encode 11.45 ms baseline, 11.23 ms DSync-off) |
 | H4 | `DXMT9_MAX_FRAME_LATENCY=3` + `DXMT9_CAP_FRAME_LATENCY_TO_BACKBUFFERS=0` recovers slack with vsync on | rejected | [[present-pacing-frame-latency.01]] (wallclock Δ +0.07%, p95 +31%) |
-| H5 | `DXMT9_PRESENT_ASYNC_ACQUIRE=1` reduces the completion-path acquire cost | open | [[present-pacing-async-acquire.01]] |
+| H5 | `DXMT9_PRESENT_ASYNC_ACQUIRE=1` reduces the completion-path acquire cost | rejected (axis not load-bearing) | [[present-pacing-async-acquire.01]] (acquire wait −37.5% but axis < 0.5% of total; wallclock Δ +0.22%) |
 | H6 | Reducing per-CB encode below the vsync budget (≤ 8 ms / CB) restores 60 fps without changing pacing policy | open | depends on [[state-churn-encode]] |
 
 ## Verification methods
@@ -83,7 +83,10 @@ flowchart TD
   `MAX_FRAME_LATENCY=3 + CAP=0` does not move wallclock under vsync
   (Δ +0.07%); the compositor paces presents at refresh rate regardless
   of queue depth.
-- [[present-pacing-async-acquire.01]] — open
+- [[present-pacing-async-acquire.01]] — REJECTED.
+  `PRESENT_ASYNC_ACQUIRE=1` reduces `present_acquire_wait_ms` by 37.5%
+  but that axis is < 0.5% of the total wait budget; wallclock unchanged
+  (Δ +0.22%); encode CPU rose +8.3% (added to encode thread).
 
 ## Cross-links
 
@@ -110,12 +113,11 @@ flowchart TD
 
 **Open**
 
-- Does `DXMT9_PRESENT_ASYNC_ACQUIRE=1` (drawable acquired on encode thread
-  asynchronously) reduce per-CB wait by removing acquire latency from the
-  completion path?
 - Is there a code-level draw-run batching win that drops per-CB encode
   below ~8 ms so the frame consistently fits a single vsync slot? Owned
   by [[state-churn-encode]] but constrained by the budget shown here.
+  After Steps 2 + 3 ruled out present-side knobs, this is the only
+  remaining path to recover the DSync=0 win without disabling vsync.
 
 **Rejected**
 
@@ -124,6 +126,11 @@ flowchart TD
   The compositor's vsync pacing dominates the per-CB wait regardless of
   how many frames are queued ahead.
   [[present-pacing-frame-latency.01]]
+- `DXMT9_PRESENT_ASYNC_ACQUIRE=1`: did exactly what its name says
+  (`present_acquire_wait_ms` −37.5%) but the axis is < 0.5% of total
+  wait budget; wallclock Δ +0.22% (noise); encode CPU +8.3% from
+  added acquire work on the encode thread.
+  [[present-pacing-async-acquire.01]]
 
 **Rejected / out-of-scope**
 
