@@ -226,7 +226,8 @@ struct ConstantBufferBinding {
   }
 
   bool contentMatches(u64 hash, u64 byteCount) const noexcept {
-    return *this && bytes == byteCount && contentHash == hash;
+    return *this && hash != 0 && contentHash != 0 &&
+           bytes == byteCount && contentHash == hash;
   }
 
   bool identityMatches(u64 hash, u64 byteCount) const noexcept {

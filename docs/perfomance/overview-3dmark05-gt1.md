@@ -143,7 +143,7 @@ backend mechanism before replay.
 | Non-reorder backend mechanism | needs-new-mechanism | Half-VSOut bytes/inv `-1.94%`, but GPU `+3.40%` | New candidate must preflight meaningful bytes/inv or hidden-backend proxy movement. [[hidden-backend-storage-shape.02]] |
 | Index-cache CPU reduction | reject current attempts | Fixed cap cuts slots but not CPU; heap lazy frontier cuts scored work `-80.97%` but select CPU regresses `+21.40%`; bucketed select cuts scored work `-72.61%` but select CPU regresses `+32.46%`; unique upper-bound gate rejects `76` candidates but candidate CPU regresses `+8.50%` | Do not spend more Xcode budget on these CPU-only variants. Next CPU work needs a cheaper persistent verdict or draw-shape prefilter before no-gputrace promotion. [[index-cache-locality-cpucost.11]], [[index-cache-locality-cpucost.12]], [[index-cache-locality-cpucost.13]], [[index-cache-locality-cpucost.14]] |
 | Current no-gputrace baseline | accepted as counter sample | Watchdog-cleanup scout: 1440 presents; GPU CB `+0.15%`, completion wait `+0.14%`, draws `-0.01%` vs baseline | Use as the current supervised timeout shape; it does not justify new Xcode budget by itself. [[baselines-frame50.04]] |
-| Encode CPU attribution | CPU wins accepted, fps proof still open | No-gputrace attribution has narrowed broad encode guesses into named CPU-only children: cbuf identity, packet-cache, snapshot, argbuf-open, sampler, and transient fast-append work all moved CPU but not GPU. The latest cbuf residual split rejects raw `setBuffer`/upload/upload-plan/observer as main owners and names binding content hash as the dominant cbuf child (`570.070ms`, VS `489.627ms`), with a smaller remaining residual (`523.767ms`). | No Xcode spend from these CPU results alone. Continue no-gputrace work on safe cbuf content-hash reduction, binding-packet plan/cache, index setup/source resolve, shader-stream diversity, issue cost, and residual snapshot. Do not chase broad D3D9 setter no-op guards, slot-30 bind shadowing, dirty-category identity repoint, FFP stream binding, resource-array binding, vertex texture binding, LOD-bias upload, sampler lookup/rehash skip, texture pre-resolve source matching, raw cbuf `setBuffer`, cbuf upload-plan, or observer callbacks unless cheap instrumentation first proves a new non-zero opportunity. Require same-input image proof for future cbuf/binding semantic changes. [[state-churn-encode-encode-phase.02]], [[state-churn-encode-encode-phase.03]], [[state-churn-encode-encode-phase.04]], [[state-churn-encode-encode-phase.05]], [[state-churn-encode-encode-phase.06]], [[state-churn-encode-encode-phase.07]], [[state-churn-encode-encode-phase.08]], [[state-churn-encode-encode-phase.09]], [[state-churn-encode-encode-phase.10]], [[state-churn-encode-encode-phase.11]], [[state-churn-encode-encode-phase.12]], [[state-churn-encode-encode-phase.13]], [[state-churn-encode-encode-phase.14]], [[state-churn-encode-encode-phase.15]], [[state-churn-encode-encode-phase.16]], [[state-churn-encode-encode-phase.17]], [[state-churn-encode-encode-phase.18]], [[snapshot-cache-snapshot.04]], [[snapshot-cache-snapshot.05]], [[snapshot-cache-snapshot.06]], [[snapshot-cache-snapshot.07]], [[snapshot-cache-snapshot.08]], [[snapshot-cache-snapshot.09]] |
+| Encode CPU attribution | CPU wins accepted, fps proof still open | No-gputrace attribution has narrowed broad encode guesses into named CPU-only children: cbuf identity, packet-cache, snapshot, argbuf-open, sampler, and transient fast-append work all moved CPU but not GPU. Cbuf residual split named binding content hash as a dominant child (`570.070ms`, VS `489.627ms`), then the default path removed that byte scan (`binding_hash=0`) and cut cbuf update `1.216 -> 0.875ms/present`. | No Xcode spend from these CPU results alone. Continue no-gputrace work on cbuf build/upload/probe/repoint residual, binding-packet plan/cache, index setup/source resolve, shader-stream diversity, issue cost, and residual snapshot. Do not chase broad D3D9 setter no-op guards, slot-30 bind shadowing, dirty-category identity repoint, FFP stream binding, resource-array binding, vertex texture binding, LOD-bias upload, sampler lookup/rehash skip, texture pre-resolve source matching, raw cbuf `setBuffer`, cbuf upload-plan, observer callbacks, or default cbuf content hashing unless cheap instrumentation first proves a new non-zero opportunity. Require same-input image proof for future cbuf/binding semantic changes. [[state-churn-encode-encode-phase.02]], [[state-churn-encode-encode-phase.03]], [[state-churn-encode-encode-phase.04]], [[state-churn-encode-encode-phase.05]], [[state-churn-encode-encode-phase.06]], [[state-churn-encode-encode-phase.07]], [[state-churn-encode-encode-phase.08]], [[state-churn-encode-encode-phase.09]], [[state-churn-encode-encode-phase.10]], [[state-churn-encode-encode-phase.11]], [[state-churn-encode-encode-phase.12]], [[state-churn-encode-encode-phase.13]], [[state-churn-encode-encode-phase.14]], [[state-churn-encode-encode-phase.15]], [[state-churn-encode-encode-phase.16]], [[state-churn-encode-encode-phase.17]], [[state-churn-encode-encode-phase.18]], [[state-churn-encode-encode-phase.19]], [[snapshot-cache-snapshot.04]], [[snapshot-cache-snapshot.05]], [[snapshot-cache-snapshot.06]], [[snapshot-cache-snapshot.07]], [[snapshot-cache-snapshot.08]], [[snapshot-cache-snapshot.09]] |
 
 ```mermaid
 flowchart TD
@@ -161,7 +161,7 @@ flowchart TD
   Start --> Cpu{"generic CPU frontier\nonly?"}
   Cpu -- "Yes" --> CpuProbe{"has no-gputrace\nphase attribution?"}
   CpuProbe -- "No" --> CpuReject["no Xcode spend\nadd counters first"]
-  CpuProbe -- "Yes" --> CpuNarrow["cbuf + packet + snapshot CPU wins\nargbuf fast append accepted CPU win\nstream split names texture/index/shader/raster\ntexture split names fragment resolve/direct\nsampler pre-handle + hash reuse accepted\ntexture pre-resolve + dirty identity rejected\ncbuf residual names binding hash\nnext: cbuf hash / packet / index+stream / issue\nplus residual snapshot"]
+  CpuProbe -- "Yes" --> CpuNarrow["cbuf + packet + snapshot CPU wins\nargbuf fast append accepted CPU win\nstream split names texture/index/shader/raster\ntexture split names fragment resolve/direct\nsampler pre-handle + hash reuse accepted\ntexture pre-resolve + dirty identity rejected\ncbuf content hash removed\nnext: cbuf residual / packet / index+stream / issue\nplus residual snapshot"]
 
   classDef good fill:#e8f5e8,stroke:#4d8b4d,color:#102a10
   classDef warn fill:#fff3d6,stroke:#b98222,color:#2a1b00
@@ -227,7 +227,7 @@ The current canonical A/B baseline is frame50 normal-source
   `d3d9_snapshot_draw_submission_cpu_ms=7196.881` over `1740` presents. The
   broad bind-cache and broad setter-skip guesses are rejected. The remaining
   no-gputrace work should split or reduce named encode buckets first:
-  cbuf content-hash cost, binding-packet plan/cache, index setup/source resolve,
+  cbuf build/upload/probe/repoint residual, binding-packet plan/cache, index setup/source resolve,
   shader-stream binding diversity, and `encode_draw_issue_cpu_ms`-class issue
   cost. The first
   argbuf-open split shows
@@ -249,8 +249,10 @@ The current canonical A/B baseline is frame50 normal-source
   remaining cbuf owners; the residual split then rejects upload-plan
   (`43.287ms`, nested in build) and observer callbacks (`0`) as owners and
   names binding content hash as the dominant cbuf child (`570.070ms`, VS
-  `489.627ms`). Follow-up cbuf work should now target safe content-hash
-  avoidance/deferral before a structural constants change.
+  `489.627ms`). The content-hash removal then drops the default binding hash
+  counter to `0` and cuts cbuf update `1.216 -> 0.875ms/present`, leaving
+  build/upload, content-probe/cached-repoint, binding writeback, and residual
+  dispatch/timer cost as the next cbuf targets.
   Snapshot work is still open, especially residual non-constant payload hashing
   and VS indexed constant fallback, but it is no longer the sole first-order CPU
   owner.
@@ -270,6 +272,7 @@ The current canonical A/B baseline is frame50 normal-source
   [[state-churn-encode-encode-phase.16]],
   [[state-churn-encode-encode-phase.17]],
   [[state-churn-encode-encode-phase.18]],
+  [[state-churn-encode-encode-phase.19]],
   [[snapshot-cache-snapshot.04]],
   [[snapshot-cache-snapshot.05]],
   [[snapshot-cache-snapshot.06]],

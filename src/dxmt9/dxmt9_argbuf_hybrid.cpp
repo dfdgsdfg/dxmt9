@@ -6,6 +6,7 @@
 #include "dxmt9/core.hpp"
 
 #include <chrono>
+#include <cstdlib>
 #include <cstring>
 
 namespace dxmt9::argbuf_hybrid {
@@ -268,6 +269,14 @@ PerfRecorder cbufObserverRecorderForArgbufIndex(u32 argbufIdx) {
   }
 }
 
+bool argbufCbufContentHashEnabled() {
+  static const bool enabled = [] {
+    const char* env = std::getenv("DXMT9_ARGBUF_CBUF_CONTENT_HASH");
+    return env && env[0] != '\0' && env[0] != '0';
+  }();
+  return enabled;
+}
+
 void recordedSetArgumentBuffer(ArgbufEncoderResource& encoderResource,
                                WMT::Buffer buffer,
                                u64 offset,
@@ -407,15 +416,17 @@ u64 uploadAndPointEntry(CommandQueue& queue,
   if (writtenBindings &&
       argbufIdx < writtenBindings->entries.size()) {
     u64 contentHash = 0;
-    auto doHash = [&]() {
-      contentHash = hashConstantBufferBytes(&host, static_cast<u64>(byteCount));
-    };
-    if (countDirtyPhase) {
-      PerfScope scope(perf::countEncodeDrawArgbufCbufBindingHashCpuTime,
-                      cbufBindingHashRecorderForArgbufIndex(argbufIdx));
-      doHash();
-    } else {
-      doHash();
+    if (argbufCbufContentHashEnabled()) {
+      auto doHash = [&]() {
+        contentHash = hashConstantBufferBytes(&host, static_cast<u64>(byteCount));
+      };
+      if (countDirtyPhase) {
+        PerfScope scope(perf::countEncodeDrawArgbufCbufBindingHashCpuTime,
+                        cbufBindingHashRecorderForArgbufIndex(argbufIdx));
+        doHash();
+      } else {
+        doHash();
+      }
     }
     auto doWriteBinding = [&]() {
       writtenBindings->entries[argbufIdx] = ConstantBufferBinding{

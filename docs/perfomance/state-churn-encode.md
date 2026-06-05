@@ -45,6 +45,7 @@ bottleneck — that is owned by [[hidden-backend-storage]].
 | H25 | Fragment texture resolve can skip `findTexture()` / `textureForShaderRead()` by matching D3D texture handle + sRGB before materializing the Metal handle | rejected as default CPU win; removed from hot path | [[state-churn-encode-encode-phase.16]] (`1,206,015` pre-resolve skips and local resolve -28.902ms, but texture/sampler parent +48.224ms; temporary default-off smoke proved skip counter `0`; after branch removal, texture/sampler parent returned to baseline `822.864 -> 821.007`) |
 | H26 | Remaining cbuf update time is mainly Metal `setBuffer` or transient upload | rejected; attribution accepted | [[state-churn-encode-encode-phase.17]] (`setBuffer=114.568ms`, upload `276.019ms`, build `477.921ms`, inferred residual `954.163ms`; VS residual `618.150ms`) |
 | H27 | The phase.17 cbuf residual is mostly upload-plan or observer cost | rejected; binding-hash attribution accepted | [[state-churn-encode-encode-phase.18]] (`binding_hash=570.070ms`, VS `489.627ms`; `upload_plan=43.287ms` nested in build; observer `0`) |
+| H28 | `hashConstantBufferBytes()` is still required in the default cbuf cache path | rejected; CPU win accepted | [[state-churn-encode-encode-phase.19]] (`binding_hash=570.070 -> 0ms`; cbuf update `1.216 -> 0.875ms/present`; encode_draw `10.359 -> 10.006ms/present`) |
 
 ## Verification methods
 
@@ -112,6 +113,7 @@ flowchart TD
   EncodePhase16["encode-phase.16\ntexture pre-resolve skip\n1.206M skips but parent +48ms"]:::rejected
   EncodePhase17["encode-phase.17\ncbuf category operation split\nresidual 954ms / VS residual 618ms"]:::accepted
   EncodePhase18["encode-phase.18\ncbuf residual split\nbinding hash 570ms\nVS hash 490ms"]:::accepted
+  EncodePhase19["encode-phase.19\ncbuf content hash off\nbinding hash 0ms\ncbuf -0.341ms/present"]:::accepted
 
   Drawrun1 -->|"split-into"| Drawrun2
   Drawrun1 -->|"measured-by"| Enc1
@@ -148,6 +150,7 @@ flowchart TD
   EncodePhase15 -->|"try texture source pre-resolve"| EncodePhase16
   EncodePhase16 -->|"return to cbuf bucket"| EncodePhase17
   EncodePhase17 -->|"split residual"| EncodePhase18
+  EncodePhase18 -->|"remove unused hash"| EncodePhase19
 ```
 
 ## Results synthesis
@@ -334,6 +337,16 @@ implementation bet should therefore target safe `hashConstantBufferBytes()`
 avoidance or deferral before changing constants layout, and any cache-key
 semantic change needs same-input image proof because time-based GT1
 `actual.png` is not a correctness oracle ([[baselines-visual-capture.01]]).
+[[state-churn-encode-encode-phase.19]] closes that bet as a default CPU win:
+uploaded argbuf cbuf bindings now leave `contentHash=0` unless
+`DXMT9_ARGBUF_CBUF_CONTENT_HASH=1` explicitly requests the legacy byte hash, and
+`contentMatches()` treats zero as a non-match sentinel. The live cache decisions
+remain full `payloadHash`, per-category `identityHash`, and FFPVS byte compare.
+In a watchdog-finalized no-gputrace run, `binding_hash` drops `570.070 -> 0ms`,
+cbuf update drops `1.216 -> 0.875ms/present`, and backend encode drops
+`10.359 -> 10.006ms/present`; GPU time remains flat/noisy. The next cbuf work
+should therefore move to build/upload, content-probe/cached-repoint, binding
+writeback, or residual dispatch/timer cost.
 
 ## How to run
 Every experiment here is a 3DMark05 GT1 run via the standard wrapper. This is a
