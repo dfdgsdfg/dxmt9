@@ -117,6 +117,14 @@ flowchart TD
   diversity is genuinely high per-draw, so the shadow cache rarely
   hits. The infrastructure stays in place for future use but the
   proposal's expected gain doesn't materialise on this workload.
+- [[present-pacing-vsync-off.01]] — ACCEPTED (production-shippable).
+  `DXMT9_DISABLE_VSYNC=1` end-to-end A/B on the full GT1 workload:
+  `process_elapsed_sec` 251.07 → 133.44 s (**−46.9%**, ~×1.88 fps),
+  `status: pass`, same 1,439 CB count and same 4.3 s of GPU work as
+  baseline. The earlier "+199%" diagnostic figure was inflated by a
+  partial-workload side effect of the diagnostic env; the +88%
+  full-workload figure is what to ship against. Trade-off: tearing,
+  no display sync. Opt-in only.
 
 ## Cross-links
 
