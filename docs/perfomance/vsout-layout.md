@@ -102,6 +102,27 @@ The surviving owner is hidden Apple GPU vertex-stage / tiler / parameter (TVB)
 backend storage that scales with VS-invocation count × per-vertex VSOut bytes — see
 [[hidden-backend-storage]].
 
+## How to run
+Every experiment here is a 3DMark05 GT1 run via the standard wrapper. Capture a
+`.gputrace` with the VSOut-layout variant under test plus `--dump-shaders`, then
+finalize and require the shader rows actually used the modified VSOut sources:
+
+```sh
+bash scripts/tools/run_3dmark05_perf_probe.sh --suffix half-vsout --frame 60 \
+  --probe-half-vsout --dump-shaders --timeout 420
+# other axes: --trim-unused-varyings, --drop-vsout-point-size,
+#   --probe-position-only-vsout (correctness-invalid), --force-fragment-color (control)
+
+bash scripts/tools/finalize_3dmark05_perf_probe.sh --suffix half-vsout --frame 60 \
+  --baseline-joined traces/<baseline>/analysis/frame60-xcode-dxmt-joined-summary.csv \
+  --require-shader-dump-matches --require-top-vs-buffer-write-decrease
+```
+
+The mini-replay FS-read liveness axis (`--trim-vsout-to-fs-reads`) is run through
+the [[mini-replay-bisection]] harness. The exact per-experiment flags live in each
+leaf's `**Method.**` field. See `agents/rules/environment_variables.rules.md` for
+env-var meanings and `agents/rules/metal_debugging.rules.md` for the full workflow.
+
 ## Cross-references
 - [[hidden-backend-storage]] — the surviving owner this whole domain points to (hidden TVB/parameter storage, VS-write density model).
 - [[tvb-mechanism-proof]] — the `--require-tvb-mechanism-proof` gate that half-VSOut failed; the accepted row-local mechanism proof.

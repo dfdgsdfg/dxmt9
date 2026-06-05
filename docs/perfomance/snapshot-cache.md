@@ -87,6 +87,28 @@ buffer write `1627.287MiB`) — that bucket belongs to [[hidden-backend-storage]
 Snapshot CPU (`19251.620ms`) and the pacing `completion_wait_ms`
 (`28413.664ms`) remain open CPU tracks for future work.
 
+## How to run
+Every experiment here is a 3DMark05 GT1 run via the standard wrapper. This is a
+CPU draw-state-cache domain, so the canonical run is a cheap `--no-gputrace` A/B
+with perf counters on, judged by run-level CPU/cache gates against a baseline:
+
+```sh
+DXMT_PERF_COUNTERS=1 \
+bash scripts/tools/run_3dmark05_perf_probe.sh --suffix snapshot --frame 60 \
+  --no-gputrace --timeout 180
+
+bash scripts/tools/finalize_3dmark05_perf_probe.sh --suffix snapshot --frame 60 \
+  --baseline-output experiments/output/<baseline>/result.json \
+  --require-binding-overrides-present --require-draw-run-records-increase \
+  --require-encode-draw-cpu-decrease
+```
+
+The relevant counters (`d3d9_draw_state_cache_*`,
+`d3d9_snapshot_draw_submission_cpu_ms`, `encode_draw_*_cpu_ms`) live in
+`result.json`. The exact per-experiment flags live in each leaf's `**Method.**`
+field. See `agents/rules/environment_variables.rules.md` for env-var meanings and
+`agents/rules/metal_debugging.rules.md` for the full workflow.
+
 ## Cross-references
 
 - [[state-churn-encode]] — stream/IB handle churn, draw-run batching, and the

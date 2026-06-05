@@ -5,7 +5,7 @@ frame capture, validation layer, GPU performance counters, signposts in
 Instruments, and resource label / debug-group inspection in Xcode.
 
 The CPU-side measurement story is documented separately in
-`docs/perfomance-bottleneck.md`. This file is the **GPU-side** companion.
+`docs/perfomance/overview.md`. This file is the **GPU-side** companion.
 
 ## TL;DR — what you can do today
 
@@ -533,10 +533,64 @@ diagnostic as well.
 
 All four run as Meson tests where applicable.
 
-## 9. See also
+## 9. 3DMark05 GT1 perf-probe experiment toolkit
+
+The 3DMark05 GT1 GPU-bottleneck investigation is driven by one wrapper,
+`scripts/tools/run_3dmark05_perf_probe.sh`, plus
+`scripts/tools/finalize_3dmark05_perf_probe.sh` (Xcode/dxmt join + proof
+gates), `scripts/tools/run_3dmark05_mini_replay.py`, and
+`scripts/tools/plan_3dmark05_mini_replay.py`. The experiment history is
+decomposed into a knowledge graph under `docs/perfomance/` (root
+`docs/perfomance/overview-3dmark05-gt1.md`, with per-domain overviews and
+per-experiment leaf files). When you run a probe class, record it in the
+matching domain so the graph stays the source of truth.
+
+### Standard recipe
+
+```sh
+# 1. Capture (no-gputrace scout = 180s, .gputrace/Xcode candidate = 420s)
+bash scripts/tools/run_3dmark05_perf_probe.sh \
+  --suffix <tag> --frame <50|60> [--no-gputrace] <probe flags> --timeout <180|420>
+
+# 2. Open frame<N>.gputrace in Xcode, Show Performance > Counters,
+#    wait for draw-counter profiling, Export Encoder Counters to
+#    traces/<run>/analysis/frame<N>-counters-xcode.csv  (see §2b)
+
+# 3. Join + gate
+bash scripts/tools/finalize_3dmark05_perf_probe.sh \
+  --suffix <tag> --frame <N> [--baseline-joined <baseline.csv> <proof gates>]
+```
+
+### Experiment classes → flags → docs/perfomance domain
+
+| Experiment class | Key wrapper/env flags | docs/perfomance domain |
+|---|---|---|
+| Baseline capture | `--frame 50` / `--frame 60`, `--no-gputrace`, `--encoder-breakdown-seq N` (`DXMT9_PERF_ENCODER_BREAKDOWN`) | `baselines.md` |
+| State / backend-shape classifiers | `--disable-cull`, `--disable-scissor`, `--disable-fog`, `--disable-alpha-test`, `--force-cull-mode`, `--force-texture-white`, `--probe-disable-alpha-blend[-row/-rows/-class/-classes]`, `--probe-depth-func-always[-row/-rows/-class/-classes]`, `--probe-disable-depth-write[-row/-rows/-class/-classes]`, `--force-visible`, `--force-expand-indexed` | `backend-shape-classifiers.md` |
+| VSOut layout / shader codegen | `--probe-half-vsout`, `--drop-vsout-point-size`, `--probe-position-only-vsout`, `--trim-unused-varyings`, `--trim-vertex-temps`, `--trim-vs-output-scratch`, `--dump-shaders` | `vsout-layout.md` + `shader-codegen.md` |
+| Index reorder / split diagnostics | `--probe-reverse-indexed-triangles[-row/-rows/-class/-classes]`, `--probe-reverse-opaque-indexed-triangles`, `--probe-reverse-nonopaque-indexed-triangles`, `--probe-sort-indexed-triangles-by-min-index`, `--split-large-indexed-draws[-row/-rows/-class/-classes/-max-chunks-per-draw/-stream0-span-max]`, `--measure-index-reuse`, `--measure-index-cache-opt-candidate` | `primitive-reorder-diagnostics.md` + `index-reuse-measurement.md` |
+| Accepted production index-cache opt | `--optimize-opaque-depth-index-cache[-min-gain-pct]` + `--require-opaque-depth-index-cache-proof`; profiling-only screen-blend `--optimize-screen-blend-index-cache[-min-gain-pct]` + `--require-screen-blend-cache-proof` | `index-cache-locality.md` |
+| Const / cbuf upload | `--split-sparse-const-records` (`DXMT9_SPLIT_SPARSE_CONST_RECORDS`), encoder-breakdown cbuf class/field rows | `const-upload.md` |
+| Render-pass store policy | `--aggressive-color-dontcare` (`DXMT9_AGGRESSIVE_COLOR_DONTCARE`), `--aggressive-depth-dontcare` (`DXMT9_AGGRESSIVE_DEPTH_DONTCARE`) | `render-pass-store.md` |
+| Attachment pixel-format view | `--suppress-rt-pixel-format-view`, `--suppress-x8-rt-pixel-format-view`, `--x8-shader-alpha-fill` | `attachment-pixelformat.md` |
+| Mini-replay + bisection | `--dump-indexed-geometry[-cbufs]` (`-vs`/`-ps`/`-max-draws`), `--dump-depth-attachment-{handle,seq,enc,path}` (`DXMT9_DUMP_DEPTH_ATTACHMENT_*`), then `run_3dmark05_mini_replay.py --primitive-order {reverse-triangles,sort-min-index,sort-max-index,cache-opt-lru32,cache-opt-lru64} --draw-order {original,reverse} --depth-input <sidecar>` | `mini-replay-bisection.md` |
+
+Flag names above are taken from `run_3dmark05_perf_probe.sh --help` and
+`run_3dmark05_mini_replay.py --help`; the wrapper exposes many more
+scoped `-row/-rows/-class/-classes` variants and `--require-*` proof
+gates (see §2b and the full `--help`). Mini-replay selects encoder
+draws via the dumped manifest, not a draw-index flag — use
+`--primitive-order` / `--draw-order` / `--depth-input` for A/B probes.
+
+See also: `docs/perfomance/overview-3dmark05-gt1.md` (experiment
+knowledge graph) and `agents/rules/environment_variables.rules.md`
+(every `DXMT*`/`DXMT9*` knob these flags set).
+
+## 10. See also
 
 - `agents/rules/environment_variables.rules.md` — master environment-variable reference
-- `docs/perfomance-bottleneck.md` — CPU-side counter design
+- `docs/perfomance/overview.md` — CPU-side counter design
+- `docs/perfomance/overview-3dmark05-gt1.md` — 3DMark05 GT1 perf-experiment knowledge graph
 - `src/dxmt9/dxmt9_capture.{hpp,cpp}` — capture controller
 - `src/dxmt9/dxmt9_signposts.{hpp,cpp}` — Instruments signposts
 - `src/dxmt9/dxmt9_perf_counters.{hpp,cpp}` — counter table + ring

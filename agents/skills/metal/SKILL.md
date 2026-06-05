@@ -1241,6 +1241,27 @@ Metal System Traces can be very large. Follow these rules:
 
 **Key difference**: Metal debugging is split between CLI (profiling/validation/buffer inspection) and GUI (Xcode for draw calls, pixel history, shader debugging). The label injection technique with `parse_gputrace.py` partially bridges this gap by enabling CLI buffer/texture data inspection from `.gputrace` captures. RenderDoc still provides more complete CLI access.
 
+## dxmt9 3DMark05 GT1 perf-probe workflow
+
+For dxmt9's 3DMark05 GT1 GPU-bottleneck investigation, do not hand-build
+`xctrace` / `.gputrace` runs. Use the repository toolchain, which handles
+the Wine launch, the final-frame hang timeout, capture/finalize, and the
+Xcode-counter ↔ dxmt-attribution join:
+
+```sh
+# capture (no-gputrace scout = 180s, .gputrace/Xcode candidate = 420s)
+bash scripts/tools/run_3dmark05_perf_probe.sh \
+  --suffix <tag> --frame <50|60> [--no-gputrace] <probe flags> --timeout <180|420>
+# then export Encoder Counters from Xcode (see §2b), then:
+bash scripts/tools/finalize_3dmark05_perf_probe.sh \
+  --suffix <tag> --frame <N> [--baseline-joined <csv> <proof gates>]
+```
+
+References:
+- `agents/rules/metal_debugging.rules.md` §9 — probe-class → flag → domain map and standard recipe.
+- `agents/rules/environment_variables.rules.md` — every `DXMT*`/`DXMT9*` knob the probe flags set.
+- `docs/perfomance/overview-3dmark05-gt1.md` — the experiment knowledge graph (per-domain overviews + per-experiment leaves).
+
 ## Command Reference
 
 For the complete xctrace command reference, see [references/xctrace-quick-ref.md](references/xctrace-quick-ref.md).

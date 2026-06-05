@@ -92,6 +92,26 @@ P1 GPU-memory track remains secondary to the P0 hidden-backend write bucket
 ([[hidden-backend-storage]]); the cheap, safe render-pass wins were already shown
 not to move the GT1 bottleneck.
 
+## How to run
+Every experiment here is a 3DMark05 GT1 run via the standard wrapper. Enable the
+aggressive DontCare-store proof env var, capture a `.gputrace`, then confirm the
+DontCare counters fired and the tile-preservation budget dropped:
+
+```sh
+DXMT9_AGGRESSIVE_COLOR_DONTCARE=1 \
+bash scripts/tools/run_3dmark05_perf_probe.sh --suffix color-dontcare --frame 60 \
+  --aggressive-color-dontcare --timeout 420
+# depth-side companion: DXMT9_AGGRESSIVE_DEPTH_DONTCARE=1 / --aggressive-depth-dontcare
+
+bash scripts/tools/finalize_3dmark05_perf_probe.sh --suffix color-dontcare --frame 60 \
+  --baseline-output experiments/output/<baseline>/result.json \
+  --require-color-dontcare-increase --require-tile-preservation-decrease
+```
+
+The exact per-experiment flags live in each leaf's `**Method.**` field. See
+`agents/rules/environment_variables.rules.md` for env-var meanings and
+`agents/rules/metal_debugging.rules.md` for the full workflow.
+
 ## Cross-references
 - [[overview-3dmark05-gt1]] — root priority DAG; this is the P1 GPU-memory track, secondary to the P0 hidden-backend bucket.
 - [[hidden-backend-storage]] — the P0 owner (hidden vertex-stage/TVB write) that dominates GT1 ahead of this track.

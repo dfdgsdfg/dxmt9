@@ -106,6 +106,35 @@ because the firmware Parameter Buffer never spills at that scale (the `0..13`
 prefix is the local example) — this is why scale, not just class, had to be
 reproduced before the mechanism could be proven; see [[tvb-mechanism-proof]].
 
+## How to run
+Every experiment here is a 3DMark05 GT1 run. The pipeline is three stages: dump
+the raw indexed geometry from a frame, build a row-local manifest, then replay it
+standalone with the order/depth variant under test:
+
+```sh
+# 1. Dump raw index + stream0 (+ cbufs) payloads from the hot encoder:
+bash scripts/tools/run_3dmark05_perf_probe.sh --suffix dump --frame 60 --no-gputrace \
+  --encoder-breakdown-seq 60 --dump-indexed-geometry --dump-indexed-geometry-cbufs \
+  --dump-indexed-geometry-max-draws 16 --timeout 180
+
+# 2. Build the mini-replay manifest from the reduced artifacts:
+python3 scripts/tools/build_3dmark05_mini_replay_manifest.py \
+  --geometry-dir traces/<run>/analysis/geometry --probe-draws <probe-draws.csv> \
+  --shader-summary <shader-dump-summary.csv> --encoder-draw-indices 71,72,73 \
+  --output traces/<run>/analysis/mini-replay-manifest.json
+
+# 3. Replay standalone with the order/depth variant + capture for Xcode counters:
+python3 scripts/tools/run_3dmark05_mini_replay.py traces/<run>/analysis/mini-replay-manifest.json \
+  --output-dir traces/<run>/mini --compile --run --primitive-order original \
+  --depth-input traces/<run>/analysis/frame60-2-depth.bin \
+  --capture-path traces/<run>/mini/mini.gputrace
+```
+
+The exact per-experiment flags (draw windows, `--primitive-order` choices,
+`--depth-clear`) live in each leaf's `**Method.**` field. See
+`agents/rules/environment_variables.rules.md` for env-var meanings and
+`agents/rules/metal_debugging.rules.md` for the full workflow.
+
 ## Cross-references
 
 - [[tvb-mechanism-proof]] — the accepted mechanism this apparatus enabled; PB-spill / 0 MiB caveat.

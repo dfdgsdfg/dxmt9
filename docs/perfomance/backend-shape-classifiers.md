@@ -153,6 +153,28 @@ correctness-preserving lever found is reducing VS invocations via index-cache
 locality. Nothing here is open as a primary fix; the residual work is on the
 locality / primitive axes, not state toggles.
 
+## How to run
+Every experiment here is a 3DMark05 GT1 run via the standard wrapper. These are
+correctness-invalid state classifiers, so always capture a paired `.gputrace` and
+judge by Xcode VS-write / VS-invocation deltas, not image fidelity:
+
+```sh
+# Pick the state bit to neutralize, e.g. cull / alpha-blend / depth-compare /
+# indexed expansion (scoped class forms keep the rest of the frame intact):
+bash scripts/tools/run_3dmark05_perf_probe.sh --suffix cull-off --frame 60 \
+  --disable-cull --timeout 420
+# other classifiers: --force-cull-mode none|front|back, --disable-alpha-test,
+#   --probe-disable-alpha-blend-classes large4096,alpha-blend,
+#   --probe-depth-func-always, --force-expand-indexed, --disable-scissor
+
+bash scripts/tools/finalize_3dmark05_perf_probe.sh --suffix cull-off --frame 60 \
+  --require-xcode-counter-coverage --require-dxmt-join-coverage --require-top-pso-attribution
+```
+
+The exact per-experiment flags live in each leaf's `**Method.**` field. See
+`agents/rules/environment_variables.rules.md` for env-var meanings and
+`agents/rules/metal_debugging.rules.md` for the full workflow.
+
 ## Cross-references
 - [[hidden-backend-storage]] — the surviving owner every rejection in this domain points to (hidden TVB/parameter storage, VS-write density, scaling).
 - [[vsout-layout]] — sibling axis: fog/texture/visibility classifiers also refute visible per-vertex width as the owner.

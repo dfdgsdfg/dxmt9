@@ -126,6 +126,28 @@ dxmt CPU/upload payload is ~`450 KiB`. These are CPU-throughput wins, orthogonal
 to the GPU bottleneck. The only open item is the correctness of disabling
 auto-expand-indexed, which still needs visual proof.
 
+## How to run
+Every experiment here is a 3DMark05 GT1 run via the standard wrapper. This is a
+CPU draw-run / handle-churn domain: enable the per-encoder breakdown, run a cheap
+`--no-gputrace` A/B, and prove the batching mechanism with run-level CPU gates:
+
+```sh
+DXMT9_PERF_ENCODER_BREAKDOWN=1 \
+bash scripts/tools/run_3dmark05_perf_probe.sh --suffix state-churn --frame 60 \
+  --no-gputrace --timeout 180
+
+bash scripts/tools/finalize_3dmark05_perf_probe.sh --suffix state-churn --frame 60 \
+  --baseline-output experiments/output/<baseline>/result.json \
+  --require-binding-overrides-present --require-draw-submission-batch-present \
+  --require-draw-run-records-increase --require-encode-draw-cpu-decrease
+```
+
+The `[dxmt9-perf-encoder]` / `[dxmt9-perf-encoder-stream]` lines and
+`commit_chunk_draw_run_*` counters carry the churn attribution. The exact
+per-experiment flags live in each leaf's `**Method.**` field. See
+`agents/rules/environment_variables.rules.md` for env-var meanings and
+`agents/rules/metal_debugging.rules.md` for the full workflow.
+
 ## Cross-references
 
 - [[const-upload]] — constant-upload boundaries are the larger, separate

@@ -101,6 +101,27 @@ codegen showing only `184B` VS IR return / `128B` scratch against `1150–1603 B
 of Xcode VS write per invocation. A future X8 optimization, if pursued, would
 need a per-alias lifetime or sampled-channel proof, not a blanket view removal.
 
+## How to run
+Every experiment here is a 3DMark05 GT1 run via the standard wrapper. Capture a
+paired `.gputrace` with the RT/attachment suppression flags, then finalize against
+a baseline to read the texture-write vs VS-write split:
+
+```sh
+# R32F / X8 pixel-format-view suppression (correctness-risky; paired gputrace only)
+bash scripts/tools/run_3dmark05_perf_probe.sh --suffix x8-suppress --frame 60 \
+  --suppress-x8-rt-pixel-format-view --x8-shader-alpha-fill --timeout 420
+# R32F variant: --suppress-rt-pixel-format-view
+
+# After Xcode exports encoder counters:
+bash scripts/tools/finalize_3dmark05_perf_probe.sh --suffix x8-suppress --frame 60 \
+  --baseline-joined traces/<baseline>/analysis/frame60-xcode-dxmt-joined-summary.csv \
+  --require-xcode-counter-coverage --require-dxmt-join-coverage --require-top-pso-attribution
+```
+
+The exact per-experiment flags live in each leaf's `**Method.**` field. See
+`agents/rules/environment_variables.rules.md` for env-var meanings and
+`agents/rules/metal_debugging.rules.md` for the full capture/finalize workflow.
+
 ## Cross-references
 - [[hidden-backend-storage]] — the surviving first-order owner every probe in this domain points back to; the VS-write density / TVB model these texture-write deltas fail to touch.
 - [[render-pass-store]] — sibling secondary class: RT/depth re-entry and store traffic, the other pass/attachment lever that does not move the VS-write bucket.

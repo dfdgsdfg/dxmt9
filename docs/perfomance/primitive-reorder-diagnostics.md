@@ -138,6 +138,29 @@ rather than perturbing primitive order destructively. The remaining direction
 the reruns point to is backend state-shape / row-shape reproduction, not tighter
 order predicates.
 
+## How to run
+Every experiment here is a 3DMark05 GT1 run via the standard wrapper. These reorder
+probes keep the indexed path active; capture a `.gputrace` with the reverse/sort
+flag and mandatory same-frame shape gates, then read VS-write ownership from the
+joined Xcode/dxmt summary:
+
+```sh
+bash scripts/tools/run_3dmark05_perf_probe.sh --suffix reverse-opaque --frame 60 \
+  --probe-reverse-opaque-indexed-triangles --timeout 420
+# scoped forms: --probe-reverse-indexed-triangles-rows / -classes,
+#   --probe-sort-indexed-triangles-by-min-index, --measure-index-reuse for context
+
+bash scripts/tools/finalize_3dmark05_perf_probe.sh --suffix reverse-opaque --frame 60 \
+  --baseline-joined traces/<baseline>/analysis/frame60-xcode-dxmt-joined-summary.csv \
+  --require-top-row-key-match --max-top-draw-call-delta-ratio 0.05 \
+  --max-top-vertex-count-delta-ratio 0.05 --max-top-triangle-delta-ratio 0.05 \
+  --require-xcode-counter-coverage --require-dxmt-join-coverage --require-top-pso-attribution
+```
+
+The exact per-experiment flags (row/class selectors) live in each leaf's
+`**Method.**` field. See `agents/rules/environment_variables.rules.md` for env-var
+meanings and `agents/rules/metal_debugging.rules.md` for the full workflow.
+
 ## Cross-references
 
 - [[index-cache-locality]] — the semantic-safe lever this domain motivated; the

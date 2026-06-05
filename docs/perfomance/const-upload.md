@@ -110,6 +110,30 @@ vertex/backend storage.** What remains open is purely upstream record coalescing
 / letting the draw-run scanner cross safe const records — a batching concern, not
 a cbuf-byte concern.
 
+## How to run
+Every experiment here is a 3DMark05 GT1 run via the standard wrapper. The cbuf
+attribution chain runs on `DXMT9_PERF_ENCODER_BREAKDOWN=1`; a sparse-const A/B
+adds `--split-sparse-const-records`. Prove the CPU mechanism with run-level gates,
+then confirm the GPU is inert against a baseline:
+
+```sh
+# CPU mechanism A/B (scout, no Xcode needed for the run-level proof):
+DXMT9_PERF_ENCODER_BREAKDOWN=1 \
+bash scripts/tools/run_3dmark05_perf_probe.sh --suffix sparse-const --frame 60 \
+  --split-sparse-const-records --no-gputrace --timeout 180
+
+# GPU impact: capture .gputrace, then after Xcode export finalize vs baseline.
+# Run-level gates need --baseline-output; the GPU gate needs --baseline-joined.
+bash scripts/tools/finalize_3dmark05_perf_probe.sh --suffix sparse-const --frame 60 \
+  --baseline-output experiments/output/<baseline>/result.json \
+  --baseline-joined traces/<baseline>/analysis/frame60-xcode-dxmt-joined-summary.csv \
+  --require-const-upload-break-bytes-decrease --require-top-vs-buffer-write-decrease
+```
+
+The exact per-experiment flags live in each leaf's `**Method.**` field. See
+`agents/rules/environment_variables.rules.md` for env-var meanings and
+`agents/rules/metal_debugging.rules.md` for the full workflow.
+
 ## Cross-references
 - [[hidden-backend-storage]] — the surviving GPU owner every cbuf reduction points at (hidden TVB/parameter storage scaling with VS invocations × VSOut bytes).
 - [[state-churn-encode]] — stream/IB handle churn and draw-run barriers measured alongside cbuf; const-upload records are the draw-run scanner barrier the sparse split did not cross.

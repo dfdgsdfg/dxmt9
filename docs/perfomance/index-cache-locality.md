@@ -131,6 +131,29 @@ reduce it ([[index-cache-locality-screenblend.03]], `50/2` GPU `-4.64%`) but is
 final-color / semantic-tolerance oracle. Until that oracle exists, `50/2` is the open
 frontier.
 
+## How to run
+Every experiment here is a 3DMark05 GT1 run via the standard wrapper. The
+production opt-in is the opaque-depth index-cache path; capture a `.gputrace` with
+it enabled, then finalize with the production proof preset:
+
+```sh
+bash scripts/tools/run_3dmark05_perf_probe.sh --suffix idx-cache --frame 60 \
+  --optimize-opaque-depth-index-cache --optimize-opaque-depth-index-cache-min-gain-pct 10 \
+  --timeout 420
+# screen-blend (profiling-only) variant: --optimize-screen-blend-index-cache \
+#   --optimize-screen-blend-index-cache-min-gain-pct 10
+# no-mutate identity scout: --measure-index-reuse --measure-index-cache-opt-candidate --no-gputrace
+
+# After Xcode exports encoder counters:
+bash scripts/tools/finalize_3dmark05_perf_probe.sh --suffix idx-cache --frame 60 \
+  --baseline-joined traces/<baseline>/analysis/frame60-xcode-dxmt-joined-summary.csv \
+  --require-opaque-depth-index-cache-proof
+```
+
+The exact per-experiment flags live in each leaf's `**Method.**` field. See
+`agents/rules/environment_variables.rules.md` for env-var meanings and
+`agents/rules/metal_debugging.rules.md` for the full workflow.
+
 ## Cross-references
 - [[tvb-mechanism-proof]] — proves *why* fewer VS invocations reduce GPU time; this domain is the production application of that mechanism.
 - [[hidden-backend-storage]] — supplies the TVB/parameter-storage cost model and the residual `50/2` hidden-write bucket this domain cannot yet reach.

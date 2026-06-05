@@ -98,6 +98,33 @@ investigation hands off to hidden-backend storage. The next useful lever is a
 legal Metal pipeline/backend shape that changes hidden vertex/tiler/parameter
 storage, or a reduction in submitted indexed primitive work (VS invocations).
 
+## How to run
+Every experiment here is a 3DMark05 GT1 run via the standard wrapper for the
+runtime A/B, plus offline `xcrun metal` analysis of the dumped MSL. Capture with a
+VS temp/scratch trim flag and `--dump-shaders`, then finalize and inspect the IR:
+
+```sh
+bash scripts/tools/run_3dmark05_perf_probe.sh --suffix vs-trim --frame 60 \
+  --trim-vertex-temps --dump-shaders --timeout 420
+# also: --trim-vs-output-scratch
+
+bash scripts/tools/finalize_3dmark05_perf_probe.sh --suffix vs-trim --frame 60 \
+  --baseline-joined traces/<baseline>/analysis/frame60-xcode-dxmt-joined-summary.csv \
+  --require-shader-dump-matches --require-top-vs-buffer-write-decrease \
+  --max-top-unexplained-buffer-write-ratio 0.50
+
+# Offline IR/scratch analysis of the matched top MSL (no runtime needed):
+python3 scripts/tools/analyze_metal_shader_codegen.py \
+  traces/<run>/analysis/frame60-shader-dump-summary.csv \
+  --shader-dir traces/<run>/analysis/shaders/msl \
+  --output traces/<run>/analysis/frame60-codegen.md \
+  --csv-output traces/<run>/analysis/frame60-codegen.csv
+```
+
+The exact per-experiment flags live in each leaf's `**Method.**` field. See
+`agents/rules/environment_variables.rules.md` for env-var meanings and
+`agents/rules/metal_debugging.rules.md` for the full workflow.
+
 ## Cross-references
 
 - [[hidden-backend-storage]] — the surviving owner: hidden Apple GPU

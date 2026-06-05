@@ -107,6 +107,26 @@ opaque-large set actually moves the hidden write under a correctness-preserving
 reorder is handed to [[index-cache-locality]] / [[primitive-reorder-diagnostics]]
 for Xcode proof.
 
+## How to run
+Every experiment here is a 3DMark05 GT1 run via the standard wrapper. These are
+behavior-neutral diagnostic scans, so a cheap `--no-gputrace` scout with the
+measurement flags is the canonical run:
+
+```sh
+DXMT9_PERF_ENCODER_BREAKDOWN=1 \
+bash scripts/tools/run_3dmark05_perf_probe.sh --suffix idx-reuse --frame 60 \
+  --measure-index-reuse --no-gputrace --timeout 180
+# candidate (no-submit) reordered-ceiling scan: add --measure-index-cache-opt-candidate
+
+# To cross-check VS-invocation tracking against Xcode, capture + finalize:
+bash scripts/tools/finalize_3dmark05_perf_probe.sh --suffix idx-reuse --frame 60 \
+  --require-xcode-counter-coverage --require-dxmt-join-coverage --require-top-pso-attribution
+```
+
+The exact per-experiment flags live in each leaf's `**Method.**` field. See
+`agents/rules/environment_variables.rules.md` for env-var meanings and
+`agents/rules/metal_debugging.rules.md` for the full workflow.
+
 ## Cross-references
 
 - [[primitive-reorder-diagnostics]] — consumes the state classes and large4096

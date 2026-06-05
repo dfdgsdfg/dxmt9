@@ -94,6 +94,33 @@ the guarded min-gain-10 path stays. Further wins must reduce VS invocations or
 primitive/backend storage on rows the opaque-depth cache does not cover — work
 that belongs to [[index-cache-locality]] and [[primitive-reorder-diagnostics]].
 
+## How to run
+Every experiment here is a 3DMark05 GT1 run. There are two proof scales. Row-local
+mechanism proofs use the [[mini-replay-bisection]] harness with locked geometry and
+a `cache-opt-lru32` variant, gated by the TVB mechanism predicate. Full-frame
+production proofs capture the opaque-depth index-cache path and use the stable-frame
+gate:
+
+```sh
+# Row-local mechanism gate (compare two locked-geometry mini-replay joined CSVs):
+python3 scripts/tools/compare_xcode_dxmt_bottlenecks.py \
+  traces/<run>/analysis/mini-replay-full-r3-original-xcode-dxmt-joined-summary.csv \
+  traces/<run>/analysis/mini-replay-full-r3-cache-opt-lru32-xcode-dxmt-joined-summary.csv \
+  --require-tvb-mechanism-proof
+
+# Full-frame production proof (capture the opaque-depth index-cache path, then finalize):
+bash scripts/tools/run_3dmark05_perf_probe.sh --suffix tvb-opaque --frame 60 \
+  --optimize-opaque-depth-index-cache --optimize-opaque-depth-index-cache-min-gain-pct 10 \
+  --timeout 420
+bash scripts/tools/finalize_3dmark05_perf_probe.sh --suffix tvb-opaque --frame 60 \
+  --baseline-joined traces/<baseline>/analysis/frame60-xcode-dxmt-joined-summary.csv \
+  --require-stable-frame-proof
+```
+
+The exact per-experiment flags live in each leaf's `**Method.**` field. See
+`agents/rules/environment_variables.rules.md` for env-var meanings and
+`agents/rules/metal_debugging.rules.md` for the full workflow.
+
 ## Cross-references
 - [[hidden-backend-storage]] — supplies the TVB cost model this domain proves; the hidden VS-write bucket is the thing being reduced.
 - [[index-cache-locality]] — the production path (`DXMT9_OPTIMIZE_OPAQUE_DEPTH_INDEX_CACHE`) that this mechanism makes legitimate; the only accepted win.

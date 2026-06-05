@@ -109,6 +109,28 @@ delta elsewhere is measured against [[baselines-frame50.01]] (frame50 locality
 proofs) or [[baselines-frame60.01]] (VSOut / backend-shape / state-churn
 probes).
 
+## How to run
+Every experiment here is a 3DMark05 GT1 run via the standard wrapper. A baseline
+is a plain frame capture with no behavior-changing flags. Use `--no-gputrace` for
+a cheap runtime-shape scout, or capture a `.gputrace` and finalize for the
+authoritative Xcode/dxmt joined baseline:
+
+```sh
+# Cheap scout: result.json + perf counters, no Xcode export
+bash scripts/tools/run_3dmark05_perf_probe.sh --suffix baseline --frame 50 \
+  --no-gputrace --timeout 180
+
+# Authoritative baseline: capture .gputrace, then after Xcode export
+bash scripts/tools/run_3dmark05_perf_probe.sh --suffix baseline --frame 50 --timeout 420
+bash scripts/tools/finalize_3dmark05_perf_probe.sh --suffix baseline --frame 50 \
+  --require-xcode-counter-coverage --require-dxmt-join-coverage --require-top-pso-attribution
+```
+
+The exact per-experiment flags (frame ids, `--encoder-breakdown-seq`, `--top`)
+live in each leaf's `**Method.**` field. See
+`agents/rules/environment_variables.rules.md` for env-var meanings and
+`agents/rules/metal_debugging.rules.md` for the full workflow.
+
 ## Cross-references
 
 - [[overview-3dmark05-gt1]] — root map, priority DAG, and where these baselines sit in it.

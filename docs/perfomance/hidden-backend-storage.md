@@ -99,6 +99,28 @@ bucket legally is reducing VS invocations through opaque-depth
 [[index-cache-locality]] (post-transform cache locality); every visible-shape
 and broad-state attempt was rejected as "not the first-order owner."
 
+## How to run
+Every experiment here is a 3DMark05 GT1 run via the standard wrapper. This domain
+is characterization, not a single lever: capture a `.gputrace` with per-encoder
+attribution enabled, then read the hidden-backend classifier out of the joined
+Xcode/dxmt report:
+
+```sh
+DXMT9_PERF_ENCODER_BREAKDOWN=1 \
+bash scripts/tools/run_3dmark05_perf_probe.sh --suffix hidden-backend --frame 60 \
+  --timeout 420
+
+# After Xcode exports encoder counters, the finalizer writes the joined summary
+# and frame60-xcode-dxmt-bottleneck-report.md (VS-write / VS-invocation / TVB):
+bash scripts/tools/finalize_3dmark05_perf_probe.sh --suffix hidden-backend --frame 60 \
+  --require-xcode-counter-coverage --require-dxmt-join-coverage --require-top-pso-attribution
+```
+
+Cross-capture scaling correlation uses `analyze_vs_buffer_scaling.py`. The exact
+per-experiment flags live in each leaf's `**Method.**` field; see
+`agents/rules/environment_variables.rules.md` for env-var meanings and
+`agents/rules/metal_debugging.rules.md` for the full workflow.
+
 ## Cross-references
 
 - [[tvb-mechanism-proof]] — the accepted row-local TVB mechanism proof that
