@@ -2,8 +2,10 @@
 
 #include "dxmt9_command_queue.hpp"
 #include "dxmt9_draw_state.hpp"
+#include "dxmt9_perf_counters.hpp"
 #include "dxmt9/core.hpp"
 
+#include <chrono>
 #include <cstring>
 
 namespace dxmt9::argbuf_hybrid {
@@ -16,6 +18,34 @@ constexpr u32 kArgumentAccessReadOnly = 0u;
 // GPU-pointer slot and float4-leading host structs (VsConsts /
 // PsConsts) without over-aligning the smaller FFP scalars.
 constexpr u32 kConstantBlockAlignment = 16u;
+
+class PerfScope {
+ public:
+  explicit PerfScope(void (*record)(std::uint64_t),
+                     void (*recordSecondary)(std::uint64_t) = nullptr) noexcept
+      : record_(record),
+        recordSecondary_(recordSecondary),
+        start_(std::chrono::steady_clock::now()) {}
+
+  ~PerfScope() {
+    if (!record_ && !recordSecondary_) return;
+    const auto end = std::chrono::steady_clock::now();
+    const auto elapsed = static_cast<std::uint64_t>(
+        std::chrono::duration_cast<std::chrono::nanoseconds>(end - start_).count());
+    if (record_) record_(elapsed);
+    if (recordSecondary_) recordSecondary_(elapsed);
+  }
+
+  PerfScope(const PerfScope&) = delete;
+  PerfScope& operator=(const PerfScope&) = delete;
+
+ private:
+  void (*record_)(std::uint64_t) = nullptr;
+  void (*recordSecondary_)(std::uint64_t) = nullptr;
+  std::chrono::steady_clock::time_point start_;
+};
+
+using PerfRecorder = void (*)(std::uint64_t);
 
 }  // namespace
 
@@ -148,6 +178,96 @@ constexpr u32 kFfpVsArgbufIdx    = 1u;
 constexpr u32 kPsConstsArgbufIdx = 2u;
 constexpr u32 kFfpPsArgbufIdx    = 3u;
 
+PerfRecorder cbufBuildRecorderForArgbufIndex(u32 argbufIdx) {
+  switch (argbufIdx) {
+    case kVsConstsArgbufIdx:
+      return perf::countEncodeDrawArgbufCbufBuildVsCpuTime;
+    case kPsConstsArgbufIdx:
+      return perf::countEncodeDrawArgbufCbufBuildPsCpuTime;
+    case kFfpVsArgbufIdx:
+      return perf::countEncodeDrawArgbufCbufBuildFfpVsCpuTime;
+    case kFfpPsArgbufIdx:
+      return perf::countEncodeDrawArgbufCbufBuildFfpPsCpuTime;
+    default:
+      return nullptr;
+  }
+}
+
+PerfRecorder cbufUploadRecorderForArgbufIndex(u32 argbufIdx) {
+  switch (argbufIdx) {
+    case kVsConstsArgbufIdx:
+      return perf::countEncodeDrawArgbufCbufUploadVsCpuTime;
+    case kPsConstsArgbufIdx:
+      return perf::countEncodeDrawArgbufCbufUploadPsCpuTime;
+    case kFfpVsArgbufIdx:
+      return perf::countEncodeDrawArgbufCbufUploadFfpVsCpuTime;
+    case kFfpPsArgbufIdx:
+      return perf::countEncodeDrawArgbufCbufUploadFfpPsCpuTime;
+    default:
+      return nullptr;
+  }
+}
+
+PerfRecorder cbufSetBufferRecorderForArgbufIndex(u32 argbufIdx) {
+  switch (argbufIdx) {
+    case kVsConstsArgbufIdx:
+      return perf::countEncodeDrawArgbufCbufSetBufferVsCpuTime;
+    case kPsConstsArgbufIdx:
+      return perf::countEncodeDrawArgbufCbufSetBufferPsCpuTime;
+    case kFfpVsArgbufIdx:
+      return perf::countEncodeDrawArgbufCbufSetBufferFfpVsCpuTime;
+    case kFfpPsArgbufIdx:
+      return perf::countEncodeDrawArgbufCbufSetBufferFfpPsCpuTime;
+    default:
+      return nullptr;
+  }
+}
+
+PerfRecorder cbufBindingHashRecorderForArgbufIndex(u32 argbufIdx) {
+  switch (argbufIdx) {
+    case kVsConstsArgbufIdx:
+      return perf::countEncodeDrawArgbufCbufBindingHashVsCpuTime;
+    case kPsConstsArgbufIdx:
+      return perf::countEncodeDrawArgbufCbufBindingHashPsCpuTime;
+    case kFfpVsArgbufIdx:
+      return perf::countEncodeDrawArgbufCbufBindingHashFfpVsCpuTime;
+    case kFfpPsArgbufIdx:
+      return perf::countEncodeDrawArgbufCbufBindingHashFfpPsCpuTime;
+    default:
+      return nullptr;
+  }
+}
+
+PerfRecorder cbufBindingWriteRecorderForArgbufIndex(u32 argbufIdx) {
+  switch (argbufIdx) {
+    case kVsConstsArgbufIdx:
+      return perf::countEncodeDrawArgbufCbufBindingWriteVsCpuTime;
+    case kPsConstsArgbufIdx:
+      return perf::countEncodeDrawArgbufCbufBindingWritePsCpuTime;
+    case kFfpVsArgbufIdx:
+      return perf::countEncodeDrawArgbufCbufBindingWriteFfpVsCpuTime;
+    case kFfpPsArgbufIdx:
+      return perf::countEncodeDrawArgbufCbufBindingWriteFfpPsCpuTime;
+    default:
+      return nullptr;
+  }
+}
+
+PerfRecorder cbufObserverRecorderForArgbufIndex(u32 argbufIdx) {
+  switch (argbufIdx) {
+    case kVsConstsArgbufIdx:
+      return perf::countEncodeDrawArgbufCbufObserverVsCpuTime;
+    case kPsConstsArgbufIdx:
+      return perf::countEncodeDrawArgbufCbufObserverPsCpuTime;
+    case kFfpVsArgbufIdx:
+      return perf::countEncodeDrawArgbufCbufObserverFfpVsCpuTime;
+    case kFfpPsArgbufIdx:
+      return perf::countEncodeDrawArgbufCbufObserverFfpPsCpuTime;
+    default:
+      return nullptr;
+  }
+}
+
 void recordedSetArgumentBuffer(ArgbufEncoderResource& encoderResource,
                                WMT::Buffer buffer,
                                u64 offset,
@@ -215,18 +335,24 @@ PopulatedArgbuf openArgbuf(CommandQueue& queue,
   }
   const auto length = encoderResource.encodedLength();
   const auto alignment = encoderResource.alignment();
-  auto reservation = queue.reserveTransientBuffer(
-      static_cast<std::size_t>(length),
-      static_cast<std::size_t>(alignment),
-      seqId);
+  auto reservation = [&]() {
+    PerfScope scope(perf::countEncodeDrawArgbufOpenReserveCpuTime);
+    return queue.reserveTransientBuffer(
+        static_cast<std::size_t>(length),
+        static_cast<std::size_t>(alignment),
+        seqId);
+  }();
   if (!reservation) {
     return {};
   }
   // Anchor the encoder onto the reservation. `setArgumentBuffer` is the
   // prerequisite for any subsequent setBuffer/setTexture/setSamplerState
   // call — none of the populate* helpers below should run before this.
-  recordedSetArgumentBuffer(encoderResource, reservation.slice.buffer,
-                             reservation.slice.offset, recorder);
+  {
+    PerfScope scope(perf::countEncodeDrawArgbufOpenSetArgumentBufferCpuTime);
+    recordedSetArgumentBuffer(encoderResource, reservation.slice.buffer,
+                               reservation.slice.offset, recorder);
+  }
   PopulatedArgbuf populated{};
   populated.storage = reservation.slice.buffer;
   populated.offset = reservation.slice.offset;
@@ -251,27 +377,75 @@ u64 uploadAndPointEntry(CommandQueue& queue,
                          const ArgbufRecorder* recorder,
                          WMT::RenderCommandEncoder residencyEncoder,
                          ConstantBufferBindings* writtenBindings = nullptr,
-                         const ConstantBufferUploadObserver* uploadObserver = nullptr) {
+                         const ConstantBufferUploadObserver* uploadObserver = nullptr,
+                         bool countDirtyPhase = false) {
   if (byteCount == 0) return 0;
-  auto slice = queue.uploadTransientBuffer(
-      std::span<const std::byte>(
-          reinterpret_cast<const std::byte*>(&host), byteCount),
-      alignof(HostStruct), seqId);
+  auto doUpload = [&]() {
+    return queue.uploadTransientBuffer(
+        std::span<const std::byte>(
+            reinterpret_cast<const std::byte*>(&host), byteCount),
+        alignof(HostStruct), seqId);
+  };
+  auto slice = [&]() {
+    if (!countDirtyPhase) return doUpload();
+    PerfScope scope(perf::countEncodeDrawArgbufCbufUploadCpuTime,
+                    cbufUploadRecorderForArgbufIndex(argbufIdx));
+    return doUpload();
+  }();
   if (!slice) return 0;
-  recordedSetBuffer(encoderResource, slice.buffer, slice.offset, argbufIdx,
-                    recorder, residencyEncoder);
+  auto doSetBuffer = [&]() {
+    recordedSetBuffer(encoderResource, slice.buffer, slice.offset, argbufIdx,
+                      recorder, residencyEncoder);
+  };
+  if (countDirtyPhase) {
+    PerfScope scope(perf::countEncodeDrawArgbufCbufSetBufferCpuTime,
+                    cbufSetBufferRecorderForArgbufIndex(argbufIdx));
+    doSetBuffer();
+  } else {
+    doSetBuffer();
+  }
   if (writtenBindings &&
       argbufIdx < writtenBindings->entries.size()) {
-    writtenBindings->entries[argbufIdx] = ConstantBufferBinding{
-        .buffer = slice.buffer,
-        .offset = slice.offset,
-        .bytes = static_cast<u64>(byteCount),
+    u64 contentHash = 0;
+    auto doHash = [&]() {
+      contentHash = hashConstantBufferBytes(&host, static_cast<u64>(byteCount));
     };
+    if (countDirtyPhase) {
+      PerfScope scope(perf::countEncodeDrawArgbufCbufBindingHashCpuTime,
+                      cbufBindingHashRecorderForArgbufIndex(argbufIdx));
+      doHash();
+    } else {
+      doHash();
+    }
+    auto doWriteBinding = [&]() {
+      writtenBindings->entries[argbufIdx] = ConstantBufferBinding{
+          .buffer = slice.buffer,
+          .offset = slice.offset,
+          .bytes = static_cast<u64>(byteCount),
+          .contentHash = contentHash,
+      };
+    };
+    if (countDirtyPhase) {
+      PerfScope scope(perf::countEncodeDrawArgbufCbufBindingWriteCpuTime,
+                      cbufBindingWriteRecorderForArgbufIndex(argbufIdx));
+      doWriteBinding();
+    } else {
+      doWriteBinding();
+    }
   }
   if (uploadObserver && uploadObserver->upload) {
-    uploadObserver->upload(
-        uploadObserver->userdata, argbufIdx, &host,
-        static_cast<u64>(byteCount), sizeof(HostStruct));
+    auto doObserve = [&]() {
+      uploadObserver->upload(
+          uploadObserver->userdata, argbufIdx, &host,
+          static_cast<u64>(byteCount), sizeof(HostStruct));
+    };
+    if (countDirtyPhase) {
+      PerfScope scope(perf::countEncodeDrawArgbufCbufObserverCpuTime,
+                      cbufObserverRecorderForArgbufIndex(argbufIdx));
+      doObserve();
+    } else {
+      doObserve();
+    }
   }
   return byteCount;
 }
@@ -285,10 +459,12 @@ u64 uploadAndPointEntry(CommandQueue& queue,
                          const ArgbufRecorder* recorder,
                          WMT::RenderCommandEncoder residencyEncoder,
                          ConstantBufferBindings* writtenBindings = nullptr,
-                         const ConstantBufferUploadObserver* uploadObserver = nullptr) {
+                         const ConstantBufferUploadObserver* uploadObserver = nullptr,
+                         bool countDirtyPhase = false) {
   return uploadAndPointEntry(
       queue, encoderResource, host, sizeof(HostStruct), argbufIdx, seqId,
-      recorder, residencyEncoder, writtenBindings, uploadObserver);
+      recorder, residencyEncoder, writtenBindings, uploadObserver,
+      countDirtyPhase);
 }
 
 }  // namespace
@@ -355,34 +531,92 @@ u64 updateDirtyArgbufRegions(CommandQueue& queue,
   if (!encoderResource.initialized()) return 0;
   u64 bytes = 0;
   if (uniform::anyDirty(dirty, uniform::kVsAny)) {
-    const auto vs = state::buildVsConsts(state);
-    const auto plan = uniform::makeVsConstantUploadPlan(dirty, vsUsage);
-    bytes += uploadAndPointEntry(queue, encoderResource, vs,
-                                  static_cast<std::size_t>(
-                                      uniform::vsConstantUploadBytes(plan)),
-                                  kVsConstsArgbufIdx, seqId, recorder, residencyEncoder,
-                                  writtenBindings, uploadObserver);
+    perf::countEncodeDrawArgbufCbufUpdateVsCalls(1u);
+    PerfScope blockScope(perf::countEncodeDrawArgbufCbufUpdateVsCpuTime);
+    state::VsConsts vs{};
+    std::size_t byteCount = 0;
+    {
+      PerfScope buildScope(perf::countEncodeDrawArgbufCbufBuildCpuTime,
+                           cbufBuildRecorderForArgbufIndex(kVsConstsArgbufIdx));
+      vs = state::buildVsConsts(state);
+      {
+        PerfScope planScope(perf::countEncodeDrawArgbufCbufUploadPlanCpuTime,
+                            perf::countEncodeDrawArgbufCbufUploadPlanVsCpuTime);
+        const auto plan = uniform::makeVsConstantUploadPlan(dirty, vsUsage);
+        byteCount = static_cast<std::size_t>(
+            uniform::vsConstantUploadBytes(plan));
+      }
+    }
+    const auto written = uploadAndPointEntry(
+        queue, encoderResource, vs, byteCount, kVsConstsArgbufIdx, seqId,
+        recorder, residencyEncoder, writtenBindings, uploadObserver,
+        /*countDirtyPhase=*/true);
+    bytes += written;
+    if (written != 0) {
+      perf::countEncodeDrawArgbufCbufUpdateVsBytes(written);
+    }
   }
   if (uniform::anyDirty(dirty, uniform::kFfpVsAny)) {
-    const auto ffpVs = state::buildFfpVsConsts(state);
-    bytes += uploadAndPointEntry(queue, encoderResource, ffpVs,
-                                  kFfpVsArgbufIdx, seqId, recorder, residencyEncoder,
-                                  writtenBindings, uploadObserver);
+    perf::countEncodeDrawArgbufCbufUpdateFfpVsCalls(1u);
+    PerfScope blockScope(perf::countEncodeDrawArgbufCbufUpdateFfpVsCpuTime);
+    state::FfpVsConsts ffpVs{};
+    {
+      PerfScope buildScope(perf::countEncodeDrawArgbufCbufBuildCpuTime,
+                           cbufBuildRecorderForArgbufIndex(kFfpVsArgbufIdx));
+      ffpVs = state::buildFfpVsConsts(state);
+    }
+    const auto written = uploadAndPointEntry(
+        queue, encoderResource, ffpVs, kFfpVsArgbufIdx, seqId, recorder,
+        residencyEncoder, writtenBindings, uploadObserver,
+        /*countDirtyPhase=*/true);
+    bytes += written;
+    if (written != 0) {
+      perf::countEncodeDrawArgbufCbufUpdateFfpVsBytes(written);
+    }
   }
   if (uniform::anyDirty(dirty, uniform::kPsAny)) {
-    const auto ps = state::buildPsConsts(state);
-    const auto plan = uniform::makePsConstantUploadPlan(dirty, psUsage);
-    bytes += uploadAndPointEntry(queue, encoderResource, ps,
-                                  static_cast<std::size_t>(
-                                      uniform::psConstantUploadBytes(plan)),
-                                  kPsConstsArgbufIdx, seqId, recorder, residencyEncoder,
-                                  writtenBindings, uploadObserver);
+    perf::countEncodeDrawArgbufCbufUpdatePsCalls(1u);
+    PerfScope blockScope(perf::countEncodeDrawArgbufCbufUpdatePsCpuTime);
+    state::PsConsts ps{};
+    std::size_t byteCount = 0;
+    {
+      PerfScope buildScope(perf::countEncodeDrawArgbufCbufBuildCpuTime,
+                           cbufBuildRecorderForArgbufIndex(kPsConstsArgbufIdx));
+      ps = state::buildPsConsts(state);
+      {
+        PerfScope planScope(perf::countEncodeDrawArgbufCbufUploadPlanCpuTime,
+                            perf::countEncodeDrawArgbufCbufUploadPlanPsCpuTime);
+        const auto plan = uniform::makePsConstantUploadPlan(dirty, psUsage);
+        byteCount = static_cast<std::size_t>(
+            uniform::psConstantUploadBytes(plan));
+      }
+    }
+    const auto written = uploadAndPointEntry(
+        queue, encoderResource, ps, byteCount, kPsConstsArgbufIdx, seqId,
+        recorder, residencyEncoder, writtenBindings, uploadObserver,
+        /*countDirtyPhase=*/true);
+    bytes += written;
+    if (written != 0) {
+      perf::countEncodeDrawArgbufCbufUpdatePsBytes(written);
+    }
   }
   if (uniform::anyDirty(dirty, uniform::kFfpPsAny)) {
-    const auto ffpPs = state::buildFfpPsConsts(state);
-    bytes += uploadAndPointEntry(queue, encoderResource, ffpPs,
-                                  kFfpPsArgbufIdx, seqId, recorder, residencyEncoder,
-                                  writtenBindings, uploadObserver);
+    perf::countEncodeDrawArgbufCbufUpdateFfpPsCalls(1u);
+    PerfScope blockScope(perf::countEncodeDrawArgbufCbufUpdateFfpPsCpuTime);
+    state::FfpPsConsts ffpPs{};
+    {
+      PerfScope buildScope(perf::countEncodeDrawArgbufCbufBuildCpuTime,
+                           cbufBuildRecorderForArgbufIndex(kFfpPsArgbufIdx));
+      ffpPs = state::buildFfpPsConsts(state);
+    }
+    const auto written = uploadAndPointEntry(
+        queue, encoderResource, ffpPs, kFfpPsArgbufIdx, seqId, recorder,
+        residencyEncoder, writtenBindings, uploadObserver,
+        /*countDirtyPhase=*/true);
+    bytes += written;
+    if (written != 0) {
+      perf::countEncodeDrawArgbufCbufUpdateFfpPsBytes(written);
+    }
   }
   return bytes;
 }

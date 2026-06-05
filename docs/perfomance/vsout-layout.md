@@ -33,7 +33,7 @@ the bucket.
 - **`--trim-vsout-to-fs-reads`** (mini-replay) — exact FS-read liveness manifest;
   proves liveness trim is pixel-safe but perf-inert.
 - **`DXMT9_PROBE_DROP_VSOUT_POINT_SIZE=1`** (`--drop-vsout-point-size`) — single-field
-  drop (key `0xfff→0x7ff`); isolates the point-size/`[[point_size]]` path.
+  drop (key `0xfff→0x7ff`); isolates the point-size / `point_size` path.
 - **`DXMT9_PROBE_POSITION_ONLY_VSOUT=1`** — extreme `16B` lower bound; **correctness-invalid
   diagnostic** (forces constant fragment), used only as a bandwidth classifier.
 - **`DXMT_DEBUG_FORCE_FRAGMENT_COLOR=1`** (`--force-fragment-color`) — the control that
@@ -93,7 +93,7 @@ correctness, not performance: the dump-first liveness trim is semantically safe
 Two of these probes are **correctness-invalid diagnostics**, usable only as
 classifiers: `DXMT9_PROBE_POSITION_ONLY_VSOUT` (forces position-only + constant
 fragment) and `DXMT_DEBUG_FORCE_FRAGMENT_COLOR` (strips fragment work). They must
-never be treated as optimization candidates. The remaining `[[clip_distance]]` axis
+never be treated as optimization candidates. The remaining `clip_distance` axis
 was audited and is already absent from the hot frame50 rows, so it offers no further
 width to remove.
 

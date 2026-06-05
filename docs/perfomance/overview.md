@@ -1,6 +1,6 @@
 # DXMT9 Performance Bottleneck Model
 
-Date: 2026-05-31
+Date: 2026-06-05
 
 Scope:
 
@@ -10,8 +10,8 @@ Scope:
 - Current backend structure: chunked D3D9 command recording, encode-thread
   replay, Metal render/pass encoding, sub-command-buffer chaining, and
   present-frame pacing.
-- This document keeps the existing file spelling, `perfomance-bottleneck.md`,
-  to match the current path.
+- This document keeps the existing directory spelling, `docs/perfomance/`,
+  to match the current repository path.
 
 ## Bound Legend
 
@@ -290,6 +290,46 @@ flowchart TD
 | Command-buffer grain | `command_buffers`, `sub_command_buffers`, `chunk_subcb_count_max`, `gpu_command_buffer_time_ms` | 1 CB can serialize GPU behind encode; too many CBs add tile/commit cost. | Current default: per-render-pass split with cap=4; validate by workload. |
 | Lock/map compatibility | `map_buffer_total_ms`, `map_buffer_wait_ms`, `d3d9_buffer_lock_*` | 32-bit app needs low4GB CPU-visible pointer; native storage may not be 32-bit safe. | Reuse low4GB CPU shadows; free on resource destroy, not every lock. |
 | Cold PSO/archive miss | `pipeline_build_*`, `cold_compile_count_after_warm`, archive counters | Shader/state variants are not prewarmed or are over-specialized. | Better archive prewarm, reduce PSO key churn, specialize only when win is proven. |
+
+## Current 3DMark05 GT1 Calibration
+
+The 3DMark05 GT1 investigation is the current high-signal calibration case for
+this general model. The root map is [[overview-3dmark05-gt1]]. Its latest gate
+state separates GPU frame-time, CPU encode cost, and wallclock present pacing:
+
+| General class | 3DMark05 GT1 status | Decision |
+|---|---|---|
+| GPU hidden backend storage | Dominant GPU frame limiter. Xcode VS-buffer write tracks VS invocations, not dxmt CPU writers, visible `VSOut`, or fragment volume. | Reduce VS invocations when semantics allow; do not chase visible varying width as the first-order owner. [[hidden-backend-storage]] |
+| Opaque-depth index locality | Accepted production-shaped GPU win: target `50/0+50/1` GPU `-18.39%`, VS invocations `-14.12%`, VS write `-16.79%`. Remaining CPU side-effect is index cache/candidate/draw-path work, not base index-source resolve. | Keep as opt-in locality path; do not make it the shared `perf` default until index-setup CPU cost is lower or a broader runtime gate proves net positive. [[index-cache-locality]] |
+| Screen-blend index locality | Strong measured movement, but destination-dependent. | Allow only as explicit exact/`lsb1` semantic-policy artifact; do not generalize to broad depth-read reorder. [[index-cache-locality-screenblend.04]] |
+| Broad depth-read reorder | Blocked by final-color correctness. | Needs a real final-color/final-writer or occlusion oracle before another Xcode budget. [[mini-replay-bisection-semantic.01]] |
+| Non-reorder backend-shape | Current candidates weak. | Half-VSOut moves bytes/inv only `-1.94%` and regresses GPU; future candidates need a bytes/inv preflight. [[hidden-backend-storage-shape.02]] |
+| Present pacing | Wallclock limiter, separate from GPU frame limiter. | `DXMT9_DISABLE_VSYNC=1` is accepted as user opt-in; encode-budget reduction remains open for vsync-on. [[present-pacing]] |
+| Per-draw CPU encode | Orthogonal to GPU limiter, still important for wallclock. | Focus on draw-run break reduction, snapshot rebuild, and measured bind/state churn rather than assuming bind-cache hit rates. [[state-churn-encode]] |
+
+```mermaid
+flowchart TD
+  Workload["3DMark05 GT1"] --> GPU["GPU frame time"]
+  Workload --> Wall["process wallclock / fps"]
+  Workload --> CPU["CPU encode"]
+
+  GPU --> Hidden["hidden vertex/tiler/backend storage\nACCEPTED owner"]
+  Hidden --> Locality["post-transform locality\naccepted lever"]
+  Locality --> Opaque["opaque-depth opt-in\nnot default yet"]
+  Locality --> Screen["screen-blend explicit exact/lsb1 only"]
+  Locality --> Broad["broad depth-read rejected\nfinal-color blocker"]
+  Hidden --> Backend["non-reorder backend-shape\nneeds new mechanism"]
+
+  Wall --> Present["present/display-sync pacing\nvsync-off opt-in accepted"]
+  CPU --> Encode["draw-run/snapshot/state churn\northogonal but open"]
+
+  classDef good fill:#e8f5e8,stroke:#4d8b4d,color:#102a10
+  classDef warn fill:#fff3d6,stroke:#b98222,color:#2a1b00
+  classDef bad fill:#ffe8e8,stroke:#b64242,color:#2b0d0d
+  class Hidden,Locality,Opaque,Present good
+  class Workload,GPU,Wall,CPU,Screen,Backend,Encode warn
+  class Broad bad
+```
 
 ## Ideal Design
 

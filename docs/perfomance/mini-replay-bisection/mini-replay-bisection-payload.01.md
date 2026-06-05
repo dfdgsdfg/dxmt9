@@ -35,7 +35,7 @@ were added because row-local draw windows are **not** robust cross-run selectors
 (the target group migrated `60/2`→`60/4` between runs).
 
 **Verdict.** TOOLING. Payload capture works. Two fidelity gaps surfaced: (1) some
-VS bind `stream1 [[buffer(6)]]` colliding with the replay cbuf slots; (2) the
+VS bind stream1 at Metal `buffer(6)` colliding with the replay cbuf slots; (2) the
 16-draw window spans 6 VS/PS pairs, so a single-PSO runner cannot replay it. Both
 fed [[mini-replay-bisection-harness.02]].
 

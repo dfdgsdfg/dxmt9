@@ -644,6 +644,50 @@ void testChunkSlotDrawRunBatchKeepsPerDrawUniformPayloads() {
         "second draw sees post-update uniform payload");
 }
 
+void testChunkSlotUniformPayloadLookupHashCollisionKeepsDistinctPayloads() {
+  DrawDesc desc{};
+  desc.primitiveCount = 1u;
+  desc.rts.color[0] = RenderTargetAttachment{.handle = Handle{0x3000u}};
+
+  DrawDesc firstDesc = desc;
+  DrawDesc secondDesc = desc;
+  firstDesc.vsConst.float4[0][0] = 11.0f;
+  secondDesc.vsConst.float4[0][0] = 22.0f;
+
+  auto firstUniform = makeDrawUniformPayload(firstDesc);
+  auto secondUniform = makeDrawUniformPayload(secondDesc);
+  firstUniform.hash = 0x12345678ull;
+  secondUniform.hash = firstUniform.hash;
+
+  const DrawParam draw = makeDrawParam(1u, 0u);
+  ChunkSlot slot{};
+  slot.appendDrawRun(makeCanonicalDrawStateForTest(desc), firstUniform,
+                     std::span<const DrawParam>(&draw, 1u),
+                     std::span<const DrawParamPayloadView>{});
+  const auto firstHandle = slot.drawRunRecords.back().uniformHandle;
+
+  slot.appendDrawRun(makeCanonicalDrawStateForTest(desc), secondUniform,
+                     std::span<const DrawParam>(&draw, 1u),
+                     std::span<const DrawParamPayloadView>{});
+  const auto secondHandle = slot.drawRunRecords.back().uniformHandle;
+
+  checkEq(slot.drawUniformPayloads.size(), std::size_t{2},
+          "same lookup hash does not merge different uniform payloads");
+  check(firstHandle.hash == secondHandle.hash,
+        "test payloads intentionally share the lookup hash");
+  check(!(firstHandle == secondHandle),
+        "distinct payloads keep distinct uniform handles under hash collision");
+
+  slot.appendDrawRun(makeCanonicalDrawStateForTest(desc), firstUniform,
+                     std::span<const DrawParam>(&draw, 1u),
+                     std::span<const DrawParamPayloadView>{});
+  const auto reusedHandle = slot.drawRunRecords.back().uniformHandle;
+  checkEq(slot.drawUniformPayloads.size(), std::size_t{2},
+          "bucket lookup reuses the matching colliding payload");
+  checkEq(reusedHandle, firstHandle,
+          "hash collision lookup returns the payload whose full contents match");
+}
+
 void testDrawRunBatchBindingOverrideNormalizesStreamAndIndexState() {
   DrawDesc desc{};
   desc.primitiveCount = 1u;
@@ -767,6 +811,7 @@ int main() {
     testChunkSlotReplayObserverAndQueueSummarySeeSameCategories();
     testChunkSlotDrawRunSoAReuseKeepsReservedCapacitiesStable();
     testChunkSlotDrawRunBatchKeepsPerDrawUniformPayloads();
+    testChunkSlotUniformPayloadLookupHashCollisionKeepsDistinctPayloads();
     testDrawRunBatchBindingOverrideNormalizesStreamAndIndexState();
   } catch (const TestFailure &e) {
     std::cerr << "dod_replay_observer_spec failed: " << e.what() << '\n';

@@ -13,7 +13,7 @@ from pathlib import Path
 REPO_ROOT = Path(__file__).resolve().parents[2]
 DEFAULT_TRACE_ROOT = REPO_ROOT / "traces"
 DEFAULT_OUTPUT_ROOT = REPO_ROOT / "experiments" / "output"
-DEFAULT_REFERENCE_FILES = (REPO_ROOT / "specs" / "perfomance.plan.md",)
+DEFAULT_REFERENCE_ROOT = REPO_ROOT / "docs" / "perfomance"
 RUN_PREFIX = "app-d3d9-3dmark05-"
 
 
@@ -60,6 +60,15 @@ def directory_size(path: Path) -> int:
             except OSError:
                 pass
     return total
+
+
+def default_reference_files() -> list[Path]:
+    if not DEFAULT_REFERENCE_ROOT.is_dir():
+        raise SystemExit(f"missing reference directory: {DEFAULT_REFERENCE_ROOT}")
+    paths = sorted(DEFAULT_REFERENCE_ROOT.rglob("*.md"))
+    if not paths:
+        raise SystemExit(f"no reference markdown files under: {DEFAULT_REFERENCE_ROOT}")
+    return paths
 
 
 def read_references(paths: list[Path]) -> str:
@@ -139,6 +148,15 @@ def write_csv(path: Path, rows: list[RunEntry]) -> None:
             })
 
 
+def describe_reference_files(reference_files: list[Path]) -> list[str]:
+    if (
+        len(reference_files) > 1
+        and all(DEFAULT_REFERENCE_ROOT in ref.parents for ref in reference_files)
+    ):
+        return [f"- References: `{DEFAULT_REFERENCE_ROOT.relative_to(REPO_ROOT)}/**/*.md` (`{len(reference_files)}` files)"]
+    return [f"- Reference: `{ref}`" for ref in reference_files]
+
+
 def write_markdown(path: Path, rows: list[RunEntry], reference_files: list[Path]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     unreferenced_total = sum(row.total_size_bytes for row in rows if row.status == "unreferenced")
@@ -153,8 +171,7 @@ def write_markdown(path: Path, rows: list[RunEntry], reference_files: list[Path]
         "## Inputs",
         "",
     ]
-    for ref in reference_files:
-        lines.append(f"- Reference: `{ref}`")
+    lines.extend(describe_reference_files(reference_files))
     lines.extend([
         "",
         "## Summary",
@@ -189,7 +206,7 @@ def build_parser() -> argparse.ArgumentParser:
         action="append",
         type=Path,
         default=[],
-        help="Reference text to scan for run ids. Defaults to specs/perfomance.plan.md.",
+        help="Reference text to scan for run ids. Defaults to docs/perfomance/**/*.md.",
     )
     parser.add_argument("--top", type=int, default=40, help="Rows to emit; 0 means all.")
     parser.add_argument("--output", required=True, type=Path)
@@ -199,7 +216,7 @@ def build_parser() -> argparse.ArgumentParser:
 
 def main() -> int:
     args = build_parser().parse_args()
-    reference_files = args.reference_file or list(DEFAULT_REFERENCE_FILES)
+    reference_files = args.reference_file or default_reference_files()
     references = read_references(reference_files)
     rows = limited(scan_run_dirs(args.trace_root, args.output_root, references), args.top)
     write_markdown(args.output, rows, reference_files)

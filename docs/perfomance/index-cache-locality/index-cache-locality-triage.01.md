@@ -40,6 +40,7 @@ storage. Next high-signal work = same-row primitive/backend-shape A/B, or a smal
 real-input semantic-tolerance replay gate for `50/2`.
 
 **Related.** [[index-cache-locality]] · [[index-cache-locality-screenblend.03]]
-(50/2 mechanism, profiling-only) · [[backend-shape-classifiers]] (texture/state axes) ·
+(50/2 mechanism) · [[index-cache-locality-screenblend.04]] (explicit exact/`lsb1`
+policy) · [[backend-shape-classifiers]] (texture/state axes) ·
 [[primitive-reorder-diagnostics]] (sort-min-index reject) · [[hidden-backend-storage]]
 (the OPEN owner) · [[mini-replay-bisection]] (real-input replay path).

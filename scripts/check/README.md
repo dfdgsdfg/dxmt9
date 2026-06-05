@@ -22,3 +22,6 @@ under `tests/meson.build`.
   the `Counters` struct that are never referenced from `kCounterTable`,
   preventing silent-miss regressions in `[dxmt9-perf]` output (test
   `dxmt9-perf-counter-table-audit`).
+- `audit_perf_docs_sources.py` — checks newly added `docs/perfomance` leaf files
+  so deleted/retired `specs/perfomance.plan.md` line ranges are not used as new
+  provenance or maintenance state.

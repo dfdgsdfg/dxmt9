@@ -168,14 +168,21 @@ Commercial / 3rd-party titles (require external prefix):
     downstream `run_experiment.py --timeout`. Because 3DMark05 can hang on the
     final frame, the wrapper always uses a positive runner timeout: `420s` by
     default with gputrace and `180s` with `--no-gputrace`, unless `--timeout`
-    or `DXMT_3DMARK05_PROBE_TIMEOUT` overrides it. The wrapper scopes encoder
-    breakdown to the requested frame by default for gputrace runs and for
+    or `DXMT_3DMARK05_PROBE_TIMEOUT` overrides it. It also wraps the full
+    `caffeinate run_experiment.py ...` command in a top-level watchdog at
+    timeout plus `DXMT_3DMARK05_PROBE_TIMEOUT_SLACK` (default `45s`), so a
+    detached final-frame Wine process is still terminated and available logs are
+    postprocessed. The wrapper scopes encoder breakdown to the requested frame
+    by default for gputrace runs and for
     no-gputrace indexed diagnostics
     (`DXMT9_PERF_ENCODER_BREAKDOWN_SEQ=<frame>`). This keeps expensive
     index-reuse/cache-opt diagnostics from slowing earlier GT1 frames enough
     to change the semantic workload selected by `seq/enc` row keys. Use
     `--encoder-breakdown-all-frames` only when intentionally collecting
-    whole-run encoder diagnostics. The wrapper requires `2048MiB`
+    whole-run encoder diagnostics. For no-gputrace run-level/default-policy
+    smokes that should avoid per-encoder diagnostic overhead entirely, use
+    `--no-encoder-breakdown`; do not use it for gputrace/Xcode proof runs,
+    where joined encoder rows are required. The wrapper requires `2048MiB`
     free by default when gputrace capture is enabled
     (`--min-free-mb N` / `DXMT_3DMARK05_MIN_TRACE_FREE_MB=N` overrides it).
     Gputrace runs refuse lower guards unless
@@ -209,7 +216,7 @@ Commercial / 3rd-party titles (require external prefix):
     `experiments/output/app-d3d9-3dmark05-*` run directories. Use those run-id
     groups as the first manual cleanup candidates before launching Wine, after
     preserving any analysis artifacts still needed by
-    `specs/perfomance.plan.md`. They also print large ignored prefix/app/vendor
+    `docs/perfomance/`. They also print large ignored prefix/app/vendor
     payloads as manual-review candidates; do not delete those blindly because
     they may be the active Wine prefix or installed benchmark payload. If
     `--baseline-joined`,
@@ -597,7 +604,9 @@ Commercial / 3rd-party titles (require external prefix):
     locality/reorder or geometry-dump diagnostics are enabled, the wrapper now
     auto-scopes encoder breakdown to `--frame` even for `--no-gputrace` smoke
     runs. Use
-    `--encoder-breakdown-all-frames` only for deliberate whole-run sampling.
+    `--encoder-breakdown-all-frames` only for deliberate whole-run sampling,
+    or `--no-encoder-breakdown` only for no-gputrace run-level/default-policy
+    smokes that intentionally skip per-encoder diagnostics.
     In the finalizer for production-shaped
     `--optimize-opaque-depth-index-cache` runs, use `--target-row-key` plus
     `--require-opaque-depth-index-cache-proof`. That preset includes

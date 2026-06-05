@@ -620,7 +620,7 @@ def screen_blend_gate(
             "gate": "screen-blend-explicit-tolerance",
             "verdict": "missing-semantic-image",
             "evidence": f"{len(candidates)} geometry-stable screen-blend candidate(s) clear GPU/invocation gates, but no semantic image CSV was provided",
-            "next_action": "keep screen-blend cache as profiling-only until exact/lsb1 proof is attached",
+            "next_action": "keep screen-blend cache as mechanism-only until explicit exact/lsb1 proof is attached",
         }
     semantic_ok, semantic_reason = screen_blend_semantic_pass(
         read_full_image_row(semantic_csv),

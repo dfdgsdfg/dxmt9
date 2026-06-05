@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import csv
+import importlib.util
 import subprocess
 import sys
 import tempfile
@@ -21,6 +22,25 @@ def write_bytes(path: Path, size: int) -> None:
 
 
 class Summarize3DMark05CleanupCandidatesTests(unittest.TestCase):
+    def test_default_references_use_docs_perfomance(self) -> None:
+        spec = importlib.util.spec_from_file_location("cleanup_candidates", SCRIPT)
+        self.assertIsNotNone(spec)
+        self.assertIsNotNone(spec.loader)
+        module = importlib.util.module_from_spec(spec)
+        sys.modules[spec.name] = module
+        spec.loader.exec_module(module)
+
+        paths = module.default_reference_files()
+
+        self.assertGreater(len(paths), 0)
+        self.assertTrue(all(path.suffix == ".md" for path in paths))
+        self.assertTrue(all(REPO_ROOT / "docs" / "perfomance" in path.parents for path in paths))
+        self.assertFalse(any(path.name == "perfomance.plan.md" for path in paths))
+        self.assertEqual(
+            module.describe_reference_files(paths),
+            [f"- References: `docs/perfomance/**/*.md` (`{len(paths)}` files)"],
+        )
+
     def test_groups_trace_and_output_by_run_id_and_marks_references(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)

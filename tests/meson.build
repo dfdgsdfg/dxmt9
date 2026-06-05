@@ -145,6 +145,9 @@ test('dxmt9-perf-counter-table-audit', python3,
 test('dxmt9-perf-counter-callsite-audit', python3,
      args: [join_paths(meson.project_source_root(), 'scripts/check/audit_perf_counter_callsites.py')],
      is_parallel: false)
+test('dxmt9-perf-docs-source-audit', python3,
+     args: [join_paths(meson.project_source_root(), 'scripts/check/audit_perf_docs_sources.py')],
+     is_parallel: false)
 # winemetal.so install_name fixup audit — see
 # scripts/check/audit_winemetal_install_names.py for the rationale. Catches
 # a partial-build regression where the post-link `winemetal_unix_install_name_fixup`

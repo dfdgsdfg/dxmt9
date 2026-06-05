@@ -11,6 +11,7 @@
 #include <bit>
 #include <chrono>
 #include <cmath>
+#include <cstddef>
 #include <cstdarg>
 #include <cstdio>
 #include <cstring>
@@ -36,8 +37,11 @@ constexpr u64 kFnvPrime = 1099511628211ull;
 
 class PerfScope {
  public:
-  explicit PerfScope(void (*record)(std::uint64_t))
-      : record_(record), start_(std::chrono::steady_clock::now()) {}
+  explicit PerfScope(void (*record)(std::uint64_t)) : record_(record) {
+    if (record_) {
+      start_ = std::chrono::steady_clock::now();
+    }
+  }
   ~PerfScope() {
     if (!record_) return;
     const auto end = std::chrono::steady_clock::now();
@@ -65,6 +69,15 @@ template <typename T> u64 hashTrivial(const T &value) {
   u64 hash = kFnvOffset;
   for (size_t i = 0; i < sizeof(T); ++i) {
     hash ^= static_cast<u64>(bytes[i]);
+    hash *= kFnvPrime;
+  }
+  return hash;
+}
+
+u64 hashBytes(std::span<const std::byte> bytes) {
+  u64 hash = kFnvOffset;
+  for (const auto byte : bytes) {
+    hash ^= static_cast<u64>(byte);
     hash *= kFnvPrime;
   }
   return hash;
@@ -345,7 +358,11 @@ void noteShaderConstantUsage(ShaderConstantUsageBounds& usage,
 
 ShaderConstantUsageBounds scanShaderConstantUsage(const ShaderRef& shader) {
   ShaderConstantUsageBounds usage{};
-  if (shader.kind != ShaderRef::Kind::Bytecode || shader.bytecode.bytes.size() < sizeof(u32)) {
+  if (shader.kind != ShaderRef::Kind::Bytecode) {
+    usage.unknown = false;
+    return usage;
+  }
+  if (shader.bytecode.bytes.size() < sizeof(u32)) {
     return usage;
   }
 
@@ -473,21 +490,222 @@ u64 hashClipPlanes(const std::array<ClipPlane, kMaxClipPlanes> &planes) {
 u64 hashLight(const Light &light);
 u64 hashMaterial(const Material &material);
 
-u64 hashDrawUniformPayload(const DrawUniformPayload &payload) {
-  u64 hash = hashCombine(kFnvOffset, hashTrivial(payload.vsConst));
-  hash = hashCombine(hash, hashTrivial(payload.psConst));
-  hash = hashCombine(hash, hashTrivial(payload.worldViewProj));
-  hash = hashCombine(hash, hashTrivial(payload.ffpWorldView));
-  hash = hashCombine(hash, hashTrivial(payload.ffpNormalMatrix));
-  hash = hashCombine(hash, hashMaterial(payload.material));
-  for (const auto &light : payload.lights) {
-    hash = hashCombine(hash, hashLight(light));
+struct DrawUniformPayloadHashes {
+  u64 vertexConstantsHash = 0;
+  u64 pixelConstantsHash = 0;
+  u64 worldViewProjHash = 0;
+  u64 ffpBlendWorldViewProjHash = 0;
+  u64 textureTransformsHash = 0;
+  u64 clipPlanesHash = 0;
+};
+
+struct ShaderConstantHashResult {
+  u64 hash = 0;
+  std::uint64_t bytes = 0;
+  bool full = false;
+  bool noUsage = false;
+  bool unknown = false;
+  bool indexedFloat = false;
+  bool indexedInt = false;
+  bool indexedBool = false;
+};
+
+struct DrawUniformPayloadHashOptions {
+  const ShaderConstantUsageBounds *vertexUsage = nullptr;
+  const ShaderConstantUsageBounds *pixelUsage = nullptr;
+  bool vertexUsageFromBytecode = false;
+  bool pixelUsageFromBytecode = false;
+  bool recordSnapshotPerf = false;
+};
+
+template <typename T, std::size_t Count>
+u64 hashArrayPrefix(const std::array<T, Count> &values, std::size_t count) {
+  static_assert(std::is_trivially_copyable_v<T>);
+  const auto clamped = std::min<std::size_t>(count, values.size());
+  return hashBytes(std::as_bytes(std::span<const T>(values.data(), clamped)));
+}
+
+template <std::size_t FloatCount>
+ShaderConstantHashResult hashShaderConstantsForUsage(
+    const ShaderConstantSnapshot<FloatCount> &constants,
+    const ShaderConstantUsageBounds *usage) {
+  const bool full =
+      !usage || usage->unknown || usage->indexedFloat || usage->indexedInt ||
+      usage->indexedBool;
+  if (full) {
+    return ShaderConstantHashResult{
+        .hash = hashTrivial(constants),
+        .bytes = sizeof(constants),
+        .full = true,
+        .noUsage = !usage,
+        .unknown = usage ? usage->unknown : false,
+        .indexedFloat = usage ? usage->indexedFloat : false,
+        .indexedInt = usage ? usage->indexedInt : false,
+        .indexedBool = usage ? usage->indexedBool : false,
+    };
   }
-  hash = hashCombine(hash, hashBlendWorldViewProj(payload.ffpBlendWorldViewProj));
-  hash = hashCombine(hash, hashTextureTransforms(payload.textureTransforms));
+
+  const auto floatCount =
+      std::min<std::size_t>(usage->floatCount, constants.float4.size());
+  const auto intCount =
+      std::min<std::size_t>(usage->intCount, constants.int4.size());
+  const auto boolCount =
+      std::min<std::size_t>(usage->boolCount, constants.bools.size());
+
+  u64 hash = hashCombine(kFnvOffset, static_cast<u64>(floatCount));
+  hash = hashCombine(hash, hashArrayPrefix(constants.float4, floatCount));
+  hash = hashCombine(hash, static_cast<u64>(intCount));
+  hash = hashCombine(hash, hashArrayPrefix(constants.int4, intCount));
+  hash = hashCombine(hash, static_cast<u64>(boolCount));
+  hash = hashCombine(hash, hashArrayPrefix(constants.bools, boolCount));
+
+  const auto bytes =
+      static_cast<std::uint64_t>(floatCount) * sizeof(constants.float4[0]) +
+      static_cast<std::uint64_t>(intCount) * sizeof(constants.int4[0]) +
+      static_cast<std::uint64_t>(boolCount) * sizeof(constants.bools[0]);
+  return ShaderConstantHashResult{
+      .hash = hash,
+      .bytes = bytes,
+      .full = false,
+      .noUsage = false,
+      .unknown = false,
+      .indexedFloat = false,
+      .indexedInt = false,
+      .indexedBool = false,
+  };
+}
+
+u64 hashDrawUniformPayload(const DrawUniformPayload &payload,
+                           DrawUniformPayloadHashes *componentHashes = nullptr,
+                           DrawUniformPayloadHashOptions options = {}) {
+  const bool recordPerf = options.recordSnapshotPerf && dxmt9::perf::enabled();
+  auto recorder = [&](void (*fn)(std::uint64_t)) {
+    return recordPerf ? fn : nullptr;
+  };
+
+  DrawUniformPayloadHashes hashes{};
+  u64 ffpWorldViewHash = 0;
+  u64 ffpNormalMatrixHash = 0;
+  u64 materialHash = 0;
+  std::array<u64, kMaxLights> lightHashes{};
+  {
+    PerfScope scope(recorder(
+        dxmt9::perf::countD3D9SnapshotUniformBuildVsConstHashCpuTime));
+    const auto result =
+        hashShaderConstantsForUsage(payload.vsConst, options.vertexUsage);
+    hashes.vertexConstantsHash = result.hash;
+    if (recordPerf) {
+      dxmt9::perf::countD3D9SnapshotUniformBuildVsConstHashBytes(result.bytes);
+      if (result.full) {
+        dxmt9::perf::countD3D9SnapshotUniformBuildVsConstHashFull();
+        if (result.noUsage) {
+          dxmt9::perf::countD3D9SnapshotUniformBuildVsConstHashFullNoUsage();
+        }
+        if (result.unknown) {
+          dxmt9::perf::countD3D9SnapshotUniformBuildVsConstHashFullUnknown();
+          if (options.vertexUsageFromBytecode) {
+            dxmt9::perf::countD3D9SnapshotUniformBuildVsConstHashFullUnknownBytecode();
+          } else {
+            dxmt9::perf::countD3D9SnapshotUniformBuildVsConstHashFullUnknownNonBytecode();
+          }
+        }
+        if (result.indexedFloat) {
+          dxmt9::perf::countD3D9SnapshotUniformBuildVsConstHashFullIndexedFloat();
+        }
+        if (result.indexedInt) {
+          dxmt9::perf::countD3D9SnapshotUniformBuildVsConstHashFullIndexedInt();
+        }
+        if (result.indexedBool) {
+          dxmt9::perf::countD3D9SnapshotUniformBuildVsConstHashFullIndexedBool();
+        }
+      }
+    }
+  }
+  {
+    PerfScope scope(recorder(
+        dxmt9::perf::countD3D9SnapshotUniformBuildPsConstHashCpuTime));
+    const auto result =
+        hashShaderConstantsForUsage(payload.psConst, options.pixelUsage);
+    hashes.pixelConstantsHash = result.hash;
+    if (recordPerf) {
+      dxmt9::perf::countD3D9SnapshotUniformBuildPsConstHashBytes(result.bytes);
+      if (result.full) {
+        dxmt9::perf::countD3D9SnapshotUniformBuildPsConstHashFull();
+        if (result.noUsage) {
+          dxmt9::perf::countD3D9SnapshotUniformBuildPsConstHashFullNoUsage();
+        }
+        if (result.unknown) {
+          dxmt9::perf::countD3D9SnapshotUniformBuildPsConstHashFullUnknown();
+          if (options.pixelUsageFromBytecode) {
+            dxmt9::perf::countD3D9SnapshotUniformBuildPsConstHashFullUnknownBytecode();
+          } else {
+            dxmt9::perf::countD3D9SnapshotUniformBuildPsConstHashFullUnknownNonBytecode();
+          }
+        }
+        if (result.indexedFloat) {
+          dxmt9::perf::countD3D9SnapshotUniformBuildPsConstHashFullIndexedFloat();
+        }
+        if (result.indexedInt) {
+          dxmt9::perf::countD3D9SnapshotUniformBuildPsConstHashFullIndexedInt();
+        }
+        if (result.indexedBool) {
+          dxmt9::perf::countD3D9SnapshotUniformBuildPsConstHashFullIndexedBool();
+        }
+      }
+    }
+  }
+  {
+    PerfScope scope(recorder(
+        dxmt9::perf::countD3D9SnapshotUniformBuildNonConstHashCpuTime));
+    hashes.worldViewProjHash = hashTrivial(payload.worldViewProj);
+    ffpWorldViewHash = hashTrivial(payload.ffpWorldView);
+    ffpNormalMatrixHash = hashTrivial(payload.ffpNormalMatrix);
+    materialHash = hashMaterial(payload.material);
+    for (std::size_t i = 0; i < payload.lights.size(); ++i) {
+      lightHashes[i] = hashLight(payload.lights[i]);
+    }
+    hashes.ffpBlendWorldViewProjHash =
+        hashBlendWorldViewProj(payload.ffpBlendWorldViewProj);
+    hashes.textureTransformsHash =
+        hashTextureTransforms(payload.textureTransforms);
+    hashes.clipPlanesHash = hashClipPlanes(payload.clipPlanes);
+  }
+  if (componentHashes) {
+    *componentHashes = hashes;
+  }
+
+  PerfScope scope(recorder(
+      dxmt9::perf::countD3D9SnapshotUniformBuildPayloadCombineHashCpuTime));
+  u64 hash = hashCombine(kFnvOffset, hashes.vertexConstantsHash);
+  hash = hashCombine(hash, hashes.pixelConstantsHash);
+  hash = hashCombine(hash, hashes.worldViewProjHash);
+  hash = hashCombine(hash, ffpWorldViewHash);
+  hash = hashCombine(hash, ffpNormalMatrixHash);
+  hash = hashCombine(hash, materialHash);
+  for (const auto lightHash : lightHashes) {
+    hash = hashCombine(hash, lightHash);
+  }
+  hash = hashCombine(hash, hashes.ffpBlendWorldViewProjHash);
+  hash = hashCombine(hash, hashes.textureTransformsHash);
   hash = hashCombine(hash, payload.clipPlaneMask);
-  hash = hashCombine(hash, hashClipPlanes(payload.clipPlanes));
+  hash = hashCombine(hash, hashes.clipPlanesHash);
   return hash;
+}
+
+void applyDrawUniformPayloadHashes(FlatDrawStateRecord &hot,
+                                   const DrawUniformPayloadHashes &hashes) {
+  hot.vertexConstantsHash = hashes.vertexConstantsHash;
+  hot.pixelConstantsHash = hashes.pixelConstantsHash;
+  hot.worldViewProjHash = hashes.worldViewProjHash;
+  hot.ffpBlendWorldViewProjHash = hashes.ffpBlendWorldViewProjHash;
+  hot.textureTransformsHash = hashes.textureTransformsHash;
+  hot.clipPlanesHash = hashes.clipPlanesHash;
+  hot.key.vertexConstantsHash = hashes.vertexConstantsHash;
+  hot.key.pixelConstantsHash = hashes.pixelConstantsHash;
+  hot.key.worldViewProjHash = hashes.worldViewProjHash;
+  hot.key.ffpBlendWorldViewProjHash = hashes.ffpBlendWorldViewProjHash;
+  hot.key.textureTransformsHash = hashes.textureTransformsHash;
+  hot.key.clipPlanesHash = hashes.clipPlanesHash;
 }
 
 u64 hashViewportScissor(const ViewportScissor &viewport) {
@@ -1215,22 +1433,69 @@ makeDrawShaderLayoutContextFromState(const DeviceState &state) {
   return context;
 }
 
-DrawUniformPayload makeDrawUniformPayloadFromState(const DeviceState &state,
-                                                   u32 clipPlaneMask) {
+DrawUniformPayload makeDrawUniformPayloadFromState(
+    const DeviceState &state, u32 clipPlaneMask,
+    DrawUniformPayloadHashes *componentHashes = nullptr,
+    bool recordSnapshotPerf = false,
+    const DrawShaderLayoutContext *shaderLayout = nullptr) {
+  const bool recordPerf = recordSnapshotPerf && dxmt9::perf::enabled();
+  auto recorder = [&](void (*fn)(std::uint64_t)) {
+    return recordPerf ? fn : nullptr;
+  };
+  if (recordPerf) {
+    dxmt9::perf::countD3D9SnapshotUniformBuildCall();
+  }
   DrawUniformPayload payload{};
-  payload.vsConst = state.vsConst;
-  payload.psConst = state.psConst;
-  payload.ffpWorldView = makeWorldViewFromState(state);
-  payload.ffpNormalMatrix = makeNormalMatrixFromWorldView(payload.ffpWorldView);
-  payload.worldViewProj = makeWorldViewProjFromState(state);
-  payload.material = state.material;
-  payload.lights = state.lights;
-  payload.ffpBlendWorldViewProj = makeBlendWorldViewProjFromState(state);
-  payload.textureTransforms = makeTextureTransformsFromState(state);
+  {
+    PerfScope scope(recorder(
+        dxmt9::perf::countD3D9SnapshotUniformBuildVsConstCopyCpuTime));
+    payload.vsConst = state.vsConst;
+  }
+  {
+    PerfScope scope(recorder(
+        dxmt9::perf::countD3D9SnapshotUniformBuildPsConstCopyCpuTime));
+    payload.psConst = state.psConst;
+  }
+  {
+    PerfScope scope(recorder(
+        dxmt9::perf::countD3D9SnapshotUniformBuildFfpMatrixCpuTime));
+    payload.ffpWorldView = makeWorldViewFromState(state);
+    payload.ffpNormalMatrix = makeNormalMatrixFromWorldView(payload.ffpWorldView);
+    payload.worldViewProj = makeWorldViewProjFromState(state);
+    payload.ffpBlendWorldViewProj = makeBlendWorldViewProjFromState(state);
+  }
+  {
+    PerfScope scope(recorder(
+        dxmt9::perf::countD3D9SnapshotUniformBuildFfpMaterialLightCpuTime));
+    payload.material = state.material;
+    payload.lights = state.lights;
+  }
+  {
+    PerfScope scope(recorder(
+        dxmt9::perf::countD3D9SnapshotUniformBuildTextureTransformCpuTime));
+    payload.textureTransforms = makeTextureTransformsFromState(state);
+  }
   payload.clipPlaneMask = clipPlaneMask;
-  payload.clipPlanes =
-      makeClipPlanesFromState(state, clipPlaneMask, payload.worldViewProj);
-  payload.hash = hashDrawUniformPayload(payload);
+  {
+    PerfScope scope(recorder(
+        dxmt9::perf::countD3D9SnapshotUniformBuildClipPlaneCpuTime));
+    payload.clipPlanes =
+        makeClipPlanesFromState(state, clipPlaneMask, payload.worldViewProj);
+  }
+  {
+    PerfScope scope(recorder(
+        dxmt9::perf::countD3D9SnapshotUniformBuildHashCpuTime));
+    const DrawUniformPayloadHashOptions options{
+        .vertexUsage = shaderLayout ? &shaderLayout->vertexConstantUsage : nullptr,
+        .pixelUsage = shaderLayout ? &shaderLayout->pixelConstantUsage : nullptr,
+        .vertexUsageFromBytecode =
+            shaderLayout && shaderLayout->vertexShader.kind == ShaderRef::Kind::Bytecode,
+        .pixelUsageFromBytecode =
+            shaderLayout && shaderLayout->pixelShader.kind == ShaderRef::Kind::Bytecode,
+        .recordSnapshotPerf = recordSnapshotPerf,
+    };
+    payload.hash = hashDrawUniformPayload(payload, componentHashes, options);
+  }
   return payload;
 }
 
@@ -1300,8 +1565,12 @@ FlatDrawStateKey makeFlatDrawStateKey(const DrawDesc &desc) {
   key.pixelShaderKind = desc.pixelShader.kind;
   key.vertexShaderHash = hashShaderRefSummary(desc.vertexShader);
   key.pixelShaderHash = hashShaderRefSummary(desc.pixelShader);
-  key.vertexConstantsHash = hashTrivial(desc.vsConst);
-  key.pixelConstantsHash = hashTrivial(desc.psConst);
+  const auto vertexUsage = scanShaderConstantUsage(desc.vertexShader);
+  const auto pixelUsage = scanShaderConstantUsage(desc.pixelShader);
+  key.vertexConstantsHash =
+      hashShaderConstantsForUsage(desc.vsConst, &vertexUsage).hash;
+  key.pixelConstantsHash =
+      hashShaderConstantsForUsage(desc.psConst, &pixelUsage).hash;
 
   for (size_t i = 0; i < kMaxTextures; ++i) {
     key.textures[i] = desc.textures[i].handle;
@@ -1381,7 +1650,8 @@ namespace {
 
 FlatDrawStateKey makeFlatDrawStateKeyFromState(
     const DeviceState &state, const DrawShaderLayoutContext &shaderLayout,
-    const DrawUniformPayload &uniforms, const ViewportScissor &viewport) {
+    const DrawUniformPayload &uniforms, const ViewportScissor &viewport,
+    const DrawUniformPayloadHashes *uniformHashes = nullptr) {
   FlatDrawStateKey key{};
 
   for (size_t i = 0; i < kMaxStreams; ++i) {
@@ -1403,8 +1673,10 @@ FlatDrawStateKey makeFlatDrawStateKeyFromState(
   key.pixelShaderKind = shaderLayout.pixelShader.kind;
   key.vertexShaderHash = hashShaderRefSummary(shaderLayout.vertexShader);
   key.pixelShaderHash = hashShaderRefSummary(shaderLayout.pixelShader);
-  key.vertexConstantsHash = hashTrivial(state.vsConst);
-  key.pixelConstantsHash = hashTrivial(state.psConst);
+  key.vertexConstantsHash = uniformHashes ? uniformHashes->vertexConstantsHash
+                                          : hashTrivial(state.vsConst);
+  key.pixelConstantsHash = uniformHashes ? uniformHashes->pixelConstantsHash
+                                         : hashTrivial(state.psConst);
 
   for (size_t i = 0; i < kMaxTextures; ++i) {
     key.textures[i] =
@@ -1436,20 +1708,28 @@ FlatDrawStateKey makeFlatDrawStateKeyFromState(
   }
 
   key.viewportHash = hashViewportScissor(viewport);
-  key.worldViewProjHash = hashTrivial(uniforms.worldViewProj);
-  key.ffpBlendWorldViewProjHash = hashBlendWorldViewProj(uniforms.ffpBlendWorldViewProj);
-  key.textureTransformsHash = hashTextureTransforms(uniforms.textureTransforms);
+  key.worldViewProjHash = uniformHashes ? uniformHashes->worldViewProjHash
+                                        : hashTrivial(uniforms.worldViewProj);
+  key.ffpBlendWorldViewProjHash =
+      uniformHashes ? uniformHashes->ffpBlendWorldViewProjHash
+                    : hashBlendWorldViewProj(uniforms.ffpBlendWorldViewProj);
+  key.textureTransformsHash =
+      uniformHashes ? uniformHashes->textureTransformsHash
+                    : hashTextureTransforms(uniforms.textureTransforms);
   key.clipPlaneMask = shaderLayout.clipPlaneMask;
-  key.clipPlanesHash = hashClipPlanes(uniforms.clipPlanes);
+  key.clipPlanesHash = uniformHashes ? uniformHashes->clipPlanesHash
+                                     : hashClipPlanes(uniforms.clipPlanes);
   return key;
 }
 
 FlatDrawStateRecord makeFlatDrawStateRecordFromState(
     const DeviceState &state, const DrawShaderLayoutContext &shaderLayout,
-    const DrawUniformPayload &uniforms, const ViewportScissor &viewport) {
+    const DrawUniformPayload &uniforms, const ViewportScissor &viewport,
+    const DrawUniformPayloadHashes *uniformHashes = nullptr) {
   FlatDrawStateRecord record{};
   record.key =
-      makeFlatDrawStateKeyFromState(state, shaderLayout, uniforms, viewport);
+      makeFlatDrawStateKeyFromState(state, shaderLayout, uniforms, viewport,
+                                    uniformHashes);
   record.streamBuffers = record.key.streamBuffers;
   record.streamOffsets = record.key.streamOffsets;
   record.streamStrides = record.key.streamStrides;
@@ -1562,11 +1842,16 @@ DrawDebugSnapshot makeDrawDebugSnapshot(const DrawCallArgs &args,
 CanonicalDrawState makeCanonicalDrawStateFromState(const DeviceState &state,
                                                    const DrawCallArgs &args) {
   auto shaderLayout = makeDrawShaderLayoutContextFromState(state);
+  DrawUniformPayloadHashes uniformHashes{};
   auto uniforms =
-      makeDrawUniformPayloadFromState(state, shaderLayout.clipPlaneMask);
+      makeDrawUniformPayloadFromState(state, shaderLayout.clipPlaneMask,
+                                      &uniformHashes,
+                                      /*recordSnapshotPerf=*/false,
+                                      &shaderLayout);
   const auto viewport = makeViewportScissorFromState(state);
   auto hot =
-      makeFlatDrawStateRecordFromState(state, shaderLayout, uniforms, viewport);
+      makeFlatDrawStateRecordFromState(state, shaderLayout, uniforms, viewport,
+                                       &uniformHashes);
   auto debug = makeDrawDebugSnapshot(args, hot);
   return CanonicalDrawState{std::move(hot), std::move(shaderLayout),
                             std::move(debug)};
@@ -1849,11 +2134,15 @@ void Device::submitDrawRunInternalFromState(
     baseState.indexBuffer.reset();
   }
   auto shaderLayout = makeDrawShaderLayoutContextFromState(baseState);
+  DrawUniformPayloadHashes uniformHashes{};
   auto uniforms =
-      makeDrawUniformPayloadFromState(baseState, shaderLayout.clipPlaneMask);
+      makeDrawUniformPayloadFromState(baseState, shaderLayout.clipPlaneMask,
+                                      &uniformHashes,
+                                      /*recordSnapshotPerf=*/false,
+                                      &shaderLayout);
   const auto viewport = makeViewportScissorFromState(baseState);
   auto hot = makeFlatDrawStateRecordFromState(baseState, shaderLayout, uniforms,
-                                              viewport);
+                                              viewport, &uniformHashes);
   auto debug = makeDrawDebugSnapshot(
       DrawCallArgs{draws.front().primitiveType, draws.front().primitiveCount,
                    draws.front().startVertex, draws.front().baseVertexIndex,
@@ -1898,50 +2187,69 @@ Device::cachedBaseDrawState(bool includeIndexBuffer) {
   auto &cache =
       includeIndexBuffer ? drawStateCacheWithIndex_ : drawStateCacheNoIndex_;
   const auto refreshUniforms = [&]() {
-    cache.uniforms = makeDrawUniformPayloadFromState(
-        state_, cache.shaderLayout.clipPlaneMask);
-    cache.hot.vertexConstantsHash = hashTrivial(cache.uniforms.vsConst);
-    cache.hot.pixelConstantsHash = hashTrivial(cache.uniforms.psConst);
-    cache.hot.worldViewProjHash = hashTrivial(cache.uniforms.worldViewProj);
-    cache.hot.ffpBlendWorldViewProjHash =
-        hashBlendWorldViewProj(cache.uniforms.ffpBlendWorldViewProj);
-    cache.hot.textureTransformsHash =
-        hashTextureTransforms(cache.uniforms.textureTransforms);
-    cache.hot.clipPlanesHash = hashClipPlanes(cache.uniforms.clipPlanes);
-    cache.hot.key.vertexConstantsHash = cache.hot.vertexConstantsHash;
-    cache.hot.key.pixelConstantsHash = cache.hot.pixelConstantsHash;
-    cache.hot.key.worldViewProjHash = cache.hot.worldViewProjHash;
-    cache.hot.key.ffpBlendWorldViewProjHash = cache.hot.ffpBlendWorldViewProjHash;
-    cache.hot.key.textureTransformsHash = cache.hot.textureTransformsHash;
-    cache.hot.key.clipPlanesHash = cache.hot.clipPlanesHash;
+    DrawUniformPayloadHashes uniformHashes{};
+    {
+      PerfScope uniformBuildScope(
+          dxmt9::perf::countD3D9SnapshotCacheUniformBuildCpuTime);
+      cache.uniforms = makeDrawUniformPayloadFromState(
+          state_, cache.shaderLayout.clipPlaneMask, &uniformHashes,
+          /*recordSnapshotPerf=*/true, &cache.shaderLayout);
+    }
+    {
+      PerfScope uniformHashScope(
+          dxmt9::perf::countD3D9SnapshotCacheUniformHashCpuTime);
+      applyDrawUniformPayloadHashes(cache.hot, uniformHashes);
+    }
     cache.uniformGeneration = drawUniformGeneration_;
   };
   if (cache.valid && cache.generation == drawStateGeneration_) {
+    PerfScope hitScope(dxmt9::perf::countD3D9SnapshotCacheHitCpuTime);
     dxmt9::perf::countD3D9DrawStateCacheLookup(/*hit=*/true, includeIndexBuffer);
     if (cache.uniformGeneration != drawUniformGeneration_) {
       dxmt9::perf::countD3D9DrawStateCacheUniformRefresh();
+      PerfScope uniformRefreshScope(
+          dxmt9::perf::countD3D9SnapshotCacheUniformRefreshCpuTime);
       refreshUniforms();
     }
     return cache;
   }
-  dxmt9::perf::countD3D9DrawStateCacheLookup(/*hit=*/false, includeIndexBuffer);
-  dxmt9::perf::countD3D9DrawStateCacheMissReason(
-      drawStateInvalidationReasonMask_);
+  {
+    PerfScope missScope(dxmt9::perf::countD3D9SnapshotCacheMissCpuTime);
+    dxmt9::perf::countD3D9DrawStateCacheLookup(/*hit=*/false, includeIndexBuffer);
+    dxmt9::perf::countD3D9DrawStateCacheMissReason(
+        drawStateInvalidationReasonMask_);
 
-  DeviceState baseState = state_;
-  if (!includeIndexBuffer) {
-    baseState.indexBuffer.reset();
+    DeviceState baseState = state_;
+    if (!includeIndexBuffer) {
+      baseState.indexBuffer.reset();
+    }
+    {
+      PerfScope shaderLayoutScope(
+          dxmt9::perf::countD3D9SnapshotCacheMissShaderLayoutCpuTime);
+      cache.shaderLayout = makeDrawShaderLayoutContextFromState(baseState);
+    }
+    DrawUniformPayloadHashes uniformHashes{};
+    {
+      PerfScope uniformBuildScope(
+          dxmt9::perf::countD3D9SnapshotCacheMissUniformBuildCpuTime);
+      cache.uniforms = makeDrawUniformPayloadFromState(
+          baseState, cache.shaderLayout.clipPlaneMask, &uniformHashes,
+          /*recordSnapshotPerf=*/true, &cache.shaderLayout);
+    }
+    {
+      PerfScope hotBuildScope(
+          dxmt9::perf::countD3D9SnapshotCacheMissHotBuildCpuTime);
+      const auto viewport = makeViewportScissorFromState(baseState);
+      cache.hot = makeFlatDrawStateRecordFromState(baseState,
+                                                   cache.shaderLayout,
+                                                   cache.uniforms, viewport,
+                                                   &uniformHashes);
+    }
+    cache.generation = drawStateGeneration_;
+    cache.uniformGeneration = drawUniformGeneration_;
+    cache.valid = true;
+    drawStateInvalidationReasonMask_ = DrawStateInvalidationUnknown;
   }
-  cache.shaderLayout = makeDrawShaderLayoutContextFromState(baseState);
-  cache.uniforms = makeDrawUniformPayloadFromState(
-      baseState, cache.shaderLayout.clipPlaneMask);
-  const auto viewport = makeViewportScissorFromState(baseState);
-  cache.hot = makeFlatDrawStateRecordFromState(baseState, cache.shaderLayout,
-                                               cache.uniforms, viewport);
-  cache.generation = drawStateGeneration_;
-  cache.uniformGeneration = drawUniformGeneration_;
-  cache.valid = true;
-  drawStateInvalidationReasonMask_ = DrawStateInvalidationUnknown;
   return cache;
 }
 
@@ -1952,56 +2260,81 @@ Device::cachedBaseDrawStateForSubmissionBatch() {
     refreshShaderLayoutExtraStreamStrides(cache.shaderLayout, state_);
   };
   const auto refreshUniforms = [&]() {
-    cache.uniforms = makeDrawUniformPayloadFromState(
-        state_, cache.shaderLayout.clipPlaneMask);
-    cache.hot.vertexConstantsHash = hashTrivial(cache.uniforms.vsConst);
-    cache.hot.pixelConstantsHash = hashTrivial(cache.uniforms.psConst);
-    cache.hot.worldViewProjHash = hashTrivial(cache.uniforms.worldViewProj);
-    cache.hot.ffpBlendWorldViewProjHash =
-        hashBlendWorldViewProj(cache.uniforms.ffpBlendWorldViewProj);
-    cache.hot.textureTransformsHash =
-        hashTextureTransforms(cache.uniforms.textureTransforms);
-    cache.hot.clipPlanesHash = hashClipPlanes(cache.uniforms.clipPlanes);
-    cache.hot.key.vertexConstantsHash = cache.hot.vertexConstantsHash;
-    cache.hot.key.pixelConstantsHash = cache.hot.pixelConstantsHash;
-    cache.hot.key.worldViewProjHash = cache.hot.worldViewProjHash;
-    cache.hot.key.ffpBlendWorldViewProjHash =
-        cache.hot.ffpBlendWorldViewProjHash;
-    cache.hot.key.textureTransformsHash = cache.hot.textureTransformsHash;
-    cache.hot.key.clipPlanesHash = cache.hot.clipPlanesHash;
-    clearDrawStateBindingFields(cache.hot);
+    DrawUniformPayloadHashes uniformHashes{};
+    {
+      PerfScope uniformBuildScope(
+          dxmt9::perf::countD3D9SnapshotCacheUniformBuildCpuTime);
+      cache.uniforms = makeDrawUniformPayloadFromState(
+          state_, cache.shaderLayout.clipPlaneMask, &uniformHashes,
+          /*recordSnapshotPerf=*/true, &cache.shaderLayout);
+    }
+    {
+      PerfScope uniformHashScope(
+          dxmt9::perf::countD3D9SnapshotCacheUniformHashCpuTime);
+      applyDrawUniformPayloadHashes(cache.hot, uniformHashes);
+      clearDrawStateBindingFields(cache.hot);
+    }
     cache.uniformGeneration = drawUniformGeneration_;
   };
   if (cache.valid && cache.generation == drawStableStateGeneration_) {
+    PerfScope hitScope(dxmt9::perf::countD3D9SnapshotCacheHitCpuTime);
     dxmt9::perf::countD3D9DrawStateCacheLookup(/*hit=*/true,
                                                 /*includeIndexBuffer=*/false);
     if (drawStateInvalidationIsBindingOnly(drawStateInvalidationReasonMask_)) {
       drawStateInvalidationReasonMask_ = DrawStateInvalidationUnknown;
     }
-    refreshBindingLayout();
+    {
+      PerfScope bindingLayoutScope(
+          dxmt9::perf::countD3D9SnapshotCacheBindingLayoutCpuTime);
+      refreshBindingLayout();
+    }
     if (cache.uniformGeneration != drawUniformGeneration_) {
       dxmt9::perf::countD3D9DrawStateCacheUniformRefresh();
+      PerfScope uniformRefreshScope(
+          dxmt9::perf::countD3D9SnapshotCacheUniformRefreshCpuTime);
       refreshUniforms();
     }
     return cache;
   }
-  dxmt9::perf::countD3D9DrawStateCacheLookup(/*hit=*/false,
-                                              /*includeIndexBuffer=*/false);
-  dxmt9::perf::countD3D9DrawStateCacheMissReason(
-      drawStateInvalidationReasonMask_);
+  {
+    PerfScope missScope(dxmt9::perf::countD3D9SnapshotCacheMissCpuTime);
+    dxmt9::perf::countD3D9DrawStateCacheLookup(/*hit=*/false,
+                                                /*includeIndexBuffer=*/false);
+    dxmt9::perf::countD3D9DrawStateCacheMissReason(
+        drawStateInvalidationReasonMask_);
 
-  cache.shaderLayout = makeDrawShaderLayoutContextFromState(state_);
-  refreshBindingLayout();
-  cache.uniforms = makeDrawUniformPayloadFromState(
-      state_, cache.shaderLayout.clipPlaneMask);
-  const auto viewport = makeViewportScissorFromState(state_);
-  cache.hot = makeFlatDrawStateRecordFromState(state_, cache.shaderLayout,
-                                               cache.uniforms, viewport);
-  clearDrawStateBindingFields(cache.hot);
-  cache.generation = drawStableStateGeneration_;
-  cache.uniformGeneration = drawUniformGeneration_;
-  cache.valid = true;
-  drawStateInvalidationReasonMask_ = DrawStateInvalidationUnknown;
+    {
+      PerfScope shaderLayoutScope(
+          dxmt9::perf::countD3D9SnapshotCacheMissShaderLayoutCpuTime);
+      cache.shaderLayout = makeDrawShaderLayoutContextFromState(state_);
+    }
+    {
+      PerfScope bindingLayoutScope(
+          dxmt9::perf::countD3D9SnapshotCacheBindingLayoutCpuTime);
+      refreshBindingLayout();
+    }
+    DrawUniformPayloadHashes uniformHashes{};
+    {
+      PerfScope uniformBuildScope(
+          dxmt9::perf::countD3D9SnapshotCacheMissUniformBuildCpuTime);
+      cache.uniforms = makeDrawUniformPayloadFromState(
+          state_, cache.shaderLayout.clipPlaneMask, &uniformHashes,
+          /*recordSnapshotPerf=*/true, &cache.shaderLayout);
+    }
+    {
+      PerfScope hotBuildScope(
+          dxmt9::perf::countD3D9SnapshotCacheMissHotBuildCpuTime);
+      const auto viewport = makeViewportScissorFromState(state_);
+      cache.hot = makeFlatDrawStateRecordFromState(state_, cache.shaderLayout,
+                                                   cache.uniforms, viewport,
+                                                   &uniformHashes);
+      clearDrawStateBindingFields(cache.hot);
+    }
+    cache.generation = drawStableStateGeneration_;
+    cache.uniformGeneration = drawUniformGeneration_;
+    cache.valid = true;
+    drawStateInvalidationReasonMask_ = DrawStateInvalidationUnknown;
+  }
   return cache;
 }
 
@@ -2034,41 +2367,66 @@ HResult Device::snapshotDrawSubmissionFromCurrentState(
   }
 
   draw.primitiveType = canonicalPrimitiveType(draw.primitiveType);
-  const auto &cached = renderTraceEnabled()
-      ? cachedBaseDrawState(drawRunUsesBoundIndexBuffer(
-            std::span<const DrawParam>(&draw, 1), {}))
-      : cachedBaseDrawStateForSubmissionBatch();
-  submission.uniforms = cached.uniforms;
+  const CachedBaseDrawState* cachedPtr = nullptr;
+  const bool useBindingAgnosticSnapshot = !renderTraceEnabled();
+  {
+    PerfScope cacheLookupScope(
+        dxmt9::perf::countD3D9SnapshotCacheLookupCpuTime);
+    cachedPtr = &(useBindingAgnosticSnapshot
+        ? cachedBaseDrawStateForSubmissionBatch()
+        : cachedBaseDrawState(drawRunUsesBoundIndexBuffer(
+              std::span<const DrawParam>(&draw, 1), {})));
+  }
+  const auto& cached = *cachedPtr;
+  {
+    PerfScope uniformCopyScope(
+        dxmt9::perf::countD3D9SnapshotUniformCopyCpuTime);
+    submission.uniforms = cached.uniforms;
+  }
   submission.draw = draw;
   submission.payload = {};
   submission.bindingOverride = {};
-  submission.state = CanonicalDrawState{
-      cached.hot,
-      cached.shaderLayout,
-      makeDrawDebugSnapshot(
-          DrawCallArgs{draw.primitiveType, draw.primitiveCount,
-                       draw.startVertex, draw.baseVertexIndex,
-                       draw.startIndex, draw.indexType},
-          cached.hot),
-  };
-  if (!renderTraceEnabled()) {
-    for (u32 stream = 0; stream < kMaxStreams; ++stream) {
-      if (!state_.streamBuffers[stream]) {
-        continue;
+  {
+    PerfScope stateCopyScope(
+        dxmt9::perf::countD3D9SnapshotStateCopyCpuTime);
+    submission.state.hot = cached.hot;
+    submission.state.shaderLayout = cached.shaderLayout;
+  }
+  {
+    PerfScope debugSnapshotScope(
+        dxmt9::perf::countD3D9SnapshotDebugSnapshotCpuTime);
+    submission.state.debug = makeDrawDebugSnapshot(
+        DrawCallArgs{draw.primitiveType, draw.primitiveCount,
+                     draw.startVertex, draw.baseVertexIndex,
+                     draw.startIndex, draw.indexType},
+        cached.hot);
+  }
+  if (useBindingAgnosticSnapshot) {
+    u32 streamRecords = 0;
+    {
+      PerfScope bindingOverrideScope(
+          dxmt9::perf::countD3D9SnapshotBindingOverrideCpuTime);
+      for (u32 stream = 0; stream < kMaxStreams; ++stream) {
+        if (!state_.streamBuffers[stream]) {
+          continue;
+        }
+        submission.bindingOverride.streamMask |= 1u << stream;
+        submission.bindingOverride.streams[stream] = DrawStreamBindingOverride{
+            .buffer = state_.streamBuffers[stream]->handle(),
+            .offset = state_.streamOffsets[stream],
+            .stride = state_.streamStrides[stream],
+        };
+        ++streamRecords;
       }
-      submission.bindingOverride.streamMask |= 1u << stream;
-      submission.bindingOverride.streams[stream] = DrawStreamBindingOverride{
-          .buffer = state_.streamBuffers[stream]->handle(),
-          .offset = state_.streamOffsets[stream],
-          .stride = state_.streamStrides[stream],
-      };
+      if (draw.indexed) {
+        submission.bindingOverride.indexBuffer =
+            state_.indexBuffer ? state_.indexBuffer->handle() : Handle{};
+        submission.bindingOverride.indexType = draw.indexType;
+        submission.bindingOverride.indexBufferValid = true;
+      }
     }
-    if (draw.indexed) {
-      submission.bindingOverride.indexBuffer =
-          state_.indexBuffer ? state_.indexBuffer->handle() : Handle{};
-      submission.bindingOverride.indexType = draw.indexType;
-      submission.bindingOverride.indexBufferValid = true;
-    }
+    dxmt9::perf::countD3D9SnapshotBindingOverride(
+        kMaxStreams, streamRecords, draw.indexed);
     submission.state.debug.streamMask = submission.bindingOverride.streamMask;
   }
   return D3D_OK;

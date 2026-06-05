@@ -26,6 +26,7 @@ the apparatus that made [[tvb-mechanism-proof]] possible and that backs the
 | H7 | The wider encoder2 (113-draw) sequence reproduces vertex-stage dominance | accepted | [[mini-replay-bisection-replay.03]] |
 | H8 | The pressure is a single late draw/state transition | rejected (additive, independent windows) | [[mini-replay-bisection-bisect.01]] |
 | H9 | The cost is per-draw geometry/shader-pair amplification, not alpha/scissor | accepted | [[mini-replay-bisection-pair.01]] |
+| H10 | Broad depth-read reorder can be made production-shaped with current runtime selectors | rejected | [[mini-replay-bisection-semantic.01]] |
 
 ## Verification methods
 
@@ -68,6 +69,8 @@ flowchart TD
   R113 --> Bisect["bisection\n0..13 cold, 14..27 hot 4026B/inv\nadditive independent sources"]
   Bisect --> Pair["pair-local\nfea7/a091 + dee2/2f20\n99.8% with 7/14 draws"]
   Pair --> TVB["feeds [[tvb-mechanism-proof]]"]
+  Pair --> Semantic["semantic.01\nfinal-color runtime blocker\nbroad depth-read rejected"]
+  Semantic --> ICL["feeds [[index-cache-locality]]\nexplicit screen-blend only"]
 
   classDef accepted fill:#d6f5d6,stroke:#2b7a2b,color:#063
   classDef rejected fill:#f8d7da,stroke:#a33,color:#600
@@ -78,6 +81,8 @@ flowchart TD
   class R16 open
   class Scissor,Depth rejected
   class R113,Bisect,Pair,TVB accepted
+  class Semantic rejected
+  class ICL open
 ```
 
 ## Results synthesis
@@ -105,6 +110,13 @@ replays can legitimately report `0 MiB` for `VS Buffer Device Memory Bytes Writt
 because the firmware Parameter Buffer never spills at that scale (the `0..13`
 prefix is the local example) — this is why scale, not just class, had to be
 reproduced before the mechanism could be proven; see [[tvb-mechanism-proof]].
+
+The same apparatus now also supplies the negative semantic proof for broad
+depth-read reorder. [[mini-replay-bisection-semantic.01]] shows that useful
+visible exact movement and a real final-color hazard share the same current
+runtime-visible state/geometry/shader fields. That keeps `50/2` screen-blend in
+the explicit exact/`lsb1` bucket and blocks broad depth-read promotion until a
+real final-color/final-writer or occlusion oracle exists.
 
 ## How to run
 Every experiment here is a 3DMark05 GT1 run. The pipeline is three stages: dump
@@ -143,4 +155,5 @@ The exact per-experiment flags (draw windows, `--primitive-order` choices,
 - [[primitive-reorder-diagnostics]] — sort-min-index / cache-opt order knobs tested under geometry-locked replay.
 - [[vsout-layout]] — pair-liveness VSOut trim rejected (-0.01%) inside the hot window.
 - [[render-pass-store]] — depth re-entry / attachment content rejected as owner.
+- [[mini-replay-bisection-semantic.01]] — final-color/runtime blocker for broad depth-read reorder.
 - [[overview-3dmark05-gt1]] — root map and priority DAG.

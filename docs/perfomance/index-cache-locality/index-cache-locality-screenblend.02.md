@@ -31,11 +31,13 @@ LRU32 `328,856→241,780` (`-87,076`); full candidate ceiling LRU32 `675,973→5
 depth write off, no alpha-test/clip/stencil; largest groups `33` draws / `25` hits each.
 
 **Verdict.** Inconclusive / promising diagnostic candidate. The accepted screen-blend
-subset can reduce effective LRU32 inside the dominant `50/2` row, but the path is
-explicitly profiling-only — screen-blend output is destination-dependent and prior
-same-input FS probes showed small image differences. Any Xcode capture must be read
-as a row-`50/2` diagnostic unless paired with a semantic image proof.
+subset can reduce effective LRU32 inside the dominant `50/2` row, but at this stage
+the path was profiling-only: screen-blend output is destination-dependent and prior
+same-input FS probes showed small image differences. Later
+[[index-cache-locality-screenblend.04]] formalizes the only allowed promotion path:
+explicit exact/`lsb1` semantic policy.
 
 **Related.** [[index-cache-locality]] · prev: [[index-cache-locality-screenblend.01]]
-· next: [[index-cache-locality-screenblend.03]] · [[index-cache-locality-opaque.03]]
+· next: [[index-cache-locality-screenblend.03]] · [[index-cache-locality-screenblend.04]]
+· [[index-cache-locality-opaque.03]]
 (50/2 left untouched there) · [[hidden-backend-storage]].

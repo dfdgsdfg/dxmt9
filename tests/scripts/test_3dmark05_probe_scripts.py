@@ -20,6 +20,7 @@ XCODE_SUMMARIZER = REPO_ROOT / "scripts" / "tools" / "summarize_xcode_encoder_co
 RUN_EXPERIMENT = REPO_ROOT / "scripts" / "run_apps" / "run_experiment.py"
 DIRECT_WRAPPER = REPO_ROOT / "scripts" / "run_apps" / "run_app-d3d9-3dmark05-verify_direct.sh"
 LAUNCHER = REPO_ROOT / "experiments" / "launchers" / "app-d3d9-3dmark05.sh"
+RUN_WITH_TIMEOUT = REPO_ROOT / "scripts" / "tools" / "run_with_timeout.py"
 
 
 def load_xcode_summarizer():
@@ -83,6 +84,53 @@ class ThreeDMark05ProbeScriptTests(unittest.TestCase):
         cmd_line = next(line for line in result.stdout.splitlines() if line.startswith("cmd:"))
         self.assertIn("--timeout 180", cmd_line)
 
+    def test_wrapper_dry_run_prints_top_level_watchdog_timeout(self) -> None:
+        result = self.run_script(
+            RUN_WRAPPER,
+            "--suffix",
+            "watchdog-timeout",
+            "--no-gputrace",
+            "--timeout",
+            "10",
+            "--dry-run",
+            env={"DXMT_3DMARK05_PROBE_TIMEOUT_SLACK": "7"},
+        )
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("runner_timeout_sec: 10", result.stdout)
+        self.assertIn("watchdog_timeout_sec: 10+7", result.stdout)
+        cmd_line = next(line for line in result.stdout.splitlines() if line.startswith("cmd:"))
+        self.assertIn("--timeout 10", cmd_line)
+
+    def test_wrapper_rejects_invalid_top_level_watchdog_slack(self) -> None:
+        result = self.run_script(
+            RUN_WRAPPER,
+            "--no-gputrace",
+            "--dry-run",
+            env={"DXMT_3DMARK05_PROBE_TIMEOUT_SLACK": "bad"},
+        )
+
+        self.assertEqual(result.returncode, 2)
+        self.assertIn("DXMT_3DMARK05_PROBE_TIMEOUT_SLACK must be", result.stderr)
+
+    def test_run_with_timeout_kills_long_child(self) -> None:
+        result = self.run_script(
+            RUN_WITH_TIMEOUT,
+            "--timeout",
+            "0.2",
+            "--grace",
+            "0.2",
+            "--label",
+            "test-watchdog",
+            "--",
+            "python3",
+            "-c",
+            "import time; time.sleep(5)",
+        )
+
+        self.assertEqual(result.returncode, 124)
+        self.assertIn("[test-watchdog] timeout after", result.stderr)
+
     def test_wrapper_dry_run_prints_index_cache_runtime_report_path(self) -> None:
         result = self.run_script(
             RUN_WRAPPER,
@@ -101,6 +149,36 @@ class ThreeDMark05ProbeScriptTests(unittest.TestCase):
             "3dmark05-index-cache-runtime-summary.md",
             result.stdout,
         )
+
+    def test_wrapper_direct_run_uses_catalogue_prefix(self) -> None:
+        result = self.run_script(
+            RUN_WRAPPER,
+            "--suffix",
+            "direct-prefix",
+            "--no-gputrace",
+            "--dry-run",
+        )
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+        env_line = next(line for line in result.stdout.splitlines() if line.startswith("env:"))
+        self.assertIn("DXMT_3DMARK05_DIRECT=1", env_line)
+        self.assertIn(
+            "DXMT_3DMARK05_PREFIX="
+            f"{REPO_ROOT}/experiments/prefixs/app-d3d9-3dmark05",
+            env_line,
+        )
+        self.assertIn(
+            "DXMT_3DMARK05_WINESERVER="
+            f"{REPO_ROOT}/experiments/wine/sikarugir-cx-24.0.7/bin/wineserver",
+            env_line,
+        )
+
+    def test_wrapper_runs_wineserver_cleanup_after_watchdog(self) -> None:
+        text = RUN_WRAPPER.read_text(encoding="utf-8")
+
+        self.assertIn("cleanup_3dmark05_probe_wineserver", text)
+        self.assertIn('WINEPREFIX="$probe_prefix" "$probe_wineserver" -k', text)
+        self.assertIn("cleanup_3dmark05_probe_wineserver\n\npython3", text)
 
     def test_wrapper_rejects_disabled_timeout(self) -> None:
         result = self.run_script(
@@ -1059,6 +1137,32 @@ class ThreeDMark05ProbeScriptTests(unittest.TestCase):
         self.assertIn("DXMT9_PERF_ENCODER_BREAKDOWN=1", result.stdout)
         self.assertNotIn("DXMT9_PERF_ENCODER_BREAKDOWN_SEQ=", result.stdout)
 
+    def test_wrapper_no_encoder_breakdown_for_no_gputrace_smoke(self) -> None:
+        result = self.run_script(
+            RUN_WRAPPER,
+            "--frame",
+            "50",
+            "--no-gputrace",
+            "--no-encoder-breakdown",
+            "--dry-run",
+        )
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertNotIn("DXMT9_PERF_ENCODER_BREAKDOWN=1", result.stdout)
+        self.assertNotIn("DXMT9_PERF_ENCODER_BREAKDOWN_SEQ=", result.stdout)
+
+    def test_wrapper_rejects_no_encoder_breakdown_with_gputrace(self) -> None:
+        result = self.run_script(
+            RUN_WRAPPER,
+            "--frame",
+            "50",
+            "--no-encoder-breakdown",
+            "--dry-run",
+        )
+
+        self.assertEqual(result.returncode, 2)
+        self.assertIn("--no-encoder-breakdown requires --no-gputrace", result.stderr)
+
     def test_wrapper_no_gputrace_index_diagnostics_auto_scope_to_frame(self) -> None:
         result = self.run_script(
             RUN_WRAPPER,
@@ -1179,6 +1283,83 @@ class ThreeDMark05ProbeScriptTests(unittest.TestCase):
             result.stderr,
         )
 
+    def test_wrapper_dry_run_includes_index_cache_candidate_frontier_cap_env(self) -> None:
+        result = self.run_script(
+            RUN_WRAPPER,
+            "--no-gputrace",
+            "--optimize-opaque-depth-index-cache",
+            "--index-cache-candidate-frontier-cap",
+            "64",
+            "--dry-run",
+        )
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("DXMT9_OPTIMIZE_OPAQUE_DEPTH_INDEX_CACHE=1", result.stdout)
+        self.assertIn("DXMT9_INDEX_CACHE_CANDIDATE_FRONTIER_CAP=64", result.stdout)
+
+    def test_wrapper_rejects_invalid_index_cache_candidate_frontier_cap(self) -> None:
+        result = self.run_script(
+            RUN_WRAPPER,
+            "--no-gputrace",
+            "--index-cache-candidate-frontier-cap",
+            "bad",
+            "--dry-run",
+        )
+
+        self.assertEqual(result.returncode, 2)
+        self.assertIn("--index-cache-candidate-frontier-cap must be", result.stderr)
+
+    def test_wrapper_dry_run_includes_index_cache_candidate_lazy_frontier_env(self) -> None:
+        result = self.run_script(
+            RUN_WRAPPER,
+            "--no-gputrace",
+            "--optimize-opaque-depth-index-cache",
+            "--index-cache-candidate-lazy-frontier",
+            "--dry-run",
+        )
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("DXMT9_OPTIMIZE_OPAQUE_DEPTH_INDEX_CACHE=1", result.stdout)
+        self.assertIn("DXMT9_INDEX_CACHE_CANDIDATE_LAZY_FRONTIER=1", result.stdout)
+
+    def test_wrapper_dry_run_includes_index_cache_candidate_bucketed_select_env(self) -> None:
+        result = self.run_script(
+            RUN_WRAPPER,
+            "--no-gputrace",
+            "--optimize-opaque-depth-index-cache",
+            "--index-cache-candidate-bucketed-select",
+            "--dry-run",
+        )
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("DXMT9_OPTIMIZE_OPAQUE_DEPTH_INDEX_CACHE=1", result.stdout)
+        self.assertIn("DXMT9_INDEX_CACHE_CANDIDATE_BUCKETED_SELECT=1", result.stdout)
+
+    def test_wrapper_dry_run_includes_index_cache_candidate_upper_bound_gate_env(self) -> None:
+        result = self.run_script(
+            RUN_WRAPPER,
+            "--no-gputrace",
+            "--optimize-opaque-depth-index-cache",
+            "--index-cache-candidate-upper-bound-gate",
+            "--dry-run",
+        )
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("DXMT9_OPTIMIZE_OPAQUE_DEPTH_INDEX_CACHE=1", result.stdout)
+        self.assertIn("DXMT9_INDEX_CACHE_CANDIDATE_UPPER_BOUND_GATE=1", result.stdout)
+
+    def test_wrapper_rejects_combined_index_cache_candidate_lazy_and_bucketed(self) -> None:
+        result = self.run_script(
+            RUN_WRAPPER,
+            "--no-gputrace",
+            "--index-cache-candidate-lazy-frontier",
+            "--index-cache-candidate-bucketed-select",
+            "--dry-run",
+        )
+
+        self.assertEqual(result.returncode, 2)
+        self.assertIn("mutually exclusive", result.stderr)
+
     def test_wrapper_dry_run_includes_screen_blend_index_cache_opt_env(self) -> None:
         result = self.run_script(
             RUN_WRAPPER,
@@ -1196,7 +1377,11 @@ class ThreeDMark05ProbeScriptTests(unittest.TestCase):
             result.stdout,
         )
         self.assertIn(
-            "warning: --optimize-screen-blend-index-cache is profiling-only",
+            "warning: --optimize-screen-blend-index-cache is mechanism/profiling-only until a same-input semantic proof is attached.",
+            result.stdout,
+        )
+        self.assertIn(
+            "warning: add --semantic-image-policy exact|lsb1",
             result.stdout,
         )
         self.assertNotIn("DXMT9_PROBE_APPLY_INDEX_CACHE_OPT_CANDIDATE=1", result.stdout)

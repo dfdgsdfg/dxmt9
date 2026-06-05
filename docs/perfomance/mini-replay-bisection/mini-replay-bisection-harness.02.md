@@ -13,7 +13,7 @@ source: specs/perfomance.plan.md#L14235-L14360
 # Multi-PSO Mini-Replay Harness
 
 **Question / hypothesis.** Extend `run_3dmark05_mini_replay.py` so it can replay a
-multi-shader screen-blend slice whose VS binds `stream1 [[buffer(6)]]` — the two
+multi-shader screen-blend slice whose VS binds stream1 at Metal `buffer(6)` — the two
 fidelity blockers found by [[mini-replay-bisection-payload.01]].
 
 **Method.** The runner (`scripts/tools/run_3dmark05_mini_replay.py`) was changed to:

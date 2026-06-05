@@ -12,8 +12,8 @@ source: specs/perfomance.plan.md#L7462-L7509
 
 # Point-Size-Only Pipeline Probe
 
-**Question / hypothesis.** Does removing only the Metal `VSOut.pointSize
-[[point_size]]` field (the narrowest possible visible-width change) move the Xcode
+**Question / hypothesis.** Does removing only the Metal `VSOut.pointSize`
+`point_size` field (the narrowest possible visible-width change) move the Xcode
 VS-write bucket, isolating the point-size path from ordinary FS liveness?
 
 **Method.** `DXMT9_PROBE_DROP_VSOUT_POINT_SIZE=1` via

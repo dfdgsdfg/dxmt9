@@ -27,6 +27,8 @@ every other domain at the lever that actually moves the bucket.
 | H5 | It is hidden Apple vertex/tiler/parameter backend storage scaling with geometry/VS invocations | accepted | [[hidden-backend-storage-model.01]], [[hidden-backend-storage-scaling.01]] (r `0.70-0.80`), [[hidden-backend-storage-scaling.02]] (r `0.971-0.977`) |
 | H6 | External GPU architecture literature supports the model | accepted | [[hidden-backend-storage-model.02]] (Asahi TVB, Mesa UVS/PPP/ISP, Apple TBDR) |
 | H7 | Which sub-component (stage-out vs primitive/binning vs spill) dominates | open | [[hidden-backend-storage-shape.01]] (probe agenda → reorder / cache-locality) |
+| H8 | Current non-reorder backend-shape probes materially reduce bytes/invocation | rejected | [[hidden-backend-storage-shape.02]] (best bytes/inv `-1.94%`, GPU regresses) |
+| H9 | Which candidates still deserve Xcode/gputrace spend for residual `50/2` | accepted (gate) | [[hidden-backend-storage-shape.03]] (CPU-only index-cache probes rejected; semantic or bytes/inv preflight required) |
 
 ## Verification methods
 
@@ -61,6 +63,8 @@ flowchart TD
   Scale1["scaling.01\n45 captures\ngeom/VS-inv r 0.70-0.80"]:::accepted
   Scale2["scaling.02\n12 captures\nprim r=0.977 / FS r=0.034"]:::accepted
   Shape["shape.01\nhidden backend-shape\nprobe agenda"]:::open
+  ShapeGate["shape.02\nnon-reorder backend gate\nbytes/inv weak + GPU regresses"]:::rejected
+  SpendGate["shape.03\n50/2 Xcode spend gate\nsemantic or bytes/inv preflight"]:::accepted
 
   Attr -->|"baseline-for"| Model
   Model -->|"corroborated-by"| Ext
@@ -68,6 +72,8 @@ flowchart TD
   Density -->|"motivated"| Scale1
   Scale1 -->|"refreshed-by"| Scale2
   Scale2 -->|"visible-shape rejected -> next"| Shape
+  Shape -->|"current candidates"| ShapeGate
+  ShapeGate -->|"budget policy"| SpendGate
   Model -->|"frames"| Shape
 ```
 
@@ -94,10 +100,17 @@ What is still open: *which* sub-component of the model dominates — VS stage-ou
 primitive/binning/tiler parameter storage, or compiler/backend spill. Visible
 shape is rejected, so [[hidden-backend-storage-shape.01]] hands off to backend-
 shape classifiers, primitive-reorder diagnostics, and the row-local
-[[tvb-mechanism-proof]]. The only production lever that has so far moved the
-bucket legally is reducing VS invocations through opaque-depth
+[[tvb-mechanism-proof]]. The current non-reorder backend-shape gate
+([[hidden-backend-storage-shape.02]]) is negative: half-VSOut is the best
+bytes/invocation mover so far (`-1.94%`) but regresses GPU time, so it does not
+justify another Xcode capture by itself. The only production lever that has so
+far moved the bucket legally is reducing VS invocations through opaque-depth
 [[index-cache-locality]] (post-transform cache locality); every visible-shape
 and broad-state attempt was rejected as "not the first-order owner."
+[[hidden-backend-storage-shape.03]] is the current budget gate: CPU-only
+index-cache changes no longer justify Xcode replay by themselves, and residual
+`50/2` GPU work must either carry a semantic locality proof or a non-reorder
+bytes-per-invocation mechanism before another expensive capture.
 
 ## How to run
 Every experiment here is a 3DMark05 GT1 run via the standard wrapper. This domain
@@ -125,6 +138,8 @@ per-experiment flags live in each leaf's `**Method.**` field; see
 
 - [[tvb-mechanism-proof]] — the accepted row-local TVB mechanism proof that
   certifies a reduction of this exact bucket.
+- [[hidden-backend-storage-shape.02]] — current non-reorder backend-shape gate;
+  bytes/inv movement is too small and GPU regresses.
 - [[vsout-layout]] — visible varying-width attempts this domain rejected as the
   first-order owner (trim / point-size / position-only / half-VSOut).
 - [[index-cache-locality]] — the one accepted production win: reduces VS

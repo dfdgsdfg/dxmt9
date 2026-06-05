@@ -2,6 +2,7 @@
 
 #include "dxmt9/core.hpp"
 #include "dxmt9/assert.hpp"
+#include "dxmt9_perf_counters.hpp"
 
 #include <array>
 #include <bit>
@@ -483,8 +484,12 @@ struct ChunkSlot {
 
   DrawUniformHandle findDrawUniformPayload(const DrawUniformPayload& payload,
                                            DrawUniformHandle candidate = {}) noexcept {
+    const bool recordPerf = dxmt9::perf::enabled();
     if (const auto* record = drawUniformPayloadRecord(candidate)) {
       if (record->handle.hash == payload.hash && record->payload == payload) {
+        if (recordPerf) {
+          dxmt9::perf::countDrawUniformPayloadLookupCandidateHit();
+        }
         lastUniformHandle = record->handle;
         return record->handle;
       }
@@ -492,6 +497,9 @@ struct ChunkSlot {
 
     if (const auto* record = drawUniformPayloadRecord(lastUniformHandle)) {
       if (record->handle.hash == payload.hash && record->payload == payload) {
+        if (recordPerf) {
+          dxmt9::perf::countDrawUniformPayloadLookupLastHit();
+        }
         return record->handle;
       }
     }
@@ -501,6 +509,9 @@ struct ChunkSlot {
           payload.hash, drawUniformPayloadLookupHeads.size());
       auto uniformIndex = drawUniformPayloadLookupHeads[bucketIndex];
       bool lookupIntact = true;
+      std::uint64_t bucketProbes = 0;
+      std::uint64_t bucketCollisions = 0;
+      std::uint64_t hashCollisions = 0;
       for (std::size_t visited = 0;
            uniformIndex != detail::kChunkSlotInvalidUniformIndex &&
            visited < drawUniformPayloads.size();
@@ -511,13 +522,38 @@ struct ChunkSlot {
         }
 
         const auto& record = drawUniformPayloads[uniformIndex];
-        if (record.handle.hash == payload.hash && record.payload == payload) {
+        ++bucketProbes;
+        const bool hashMatches = record.handle.hash == payload.hash;
+        if (hashMatches && record.payload == payload) {
+          if (recordPerf) {
+            dxmt9::perf::countDrawUniformPayloadLookupBucketProbe(bucketProbes);
+            dxmt9::perf::countDrawUniformPayloadLookupBucketCollision(
+                bucketCollisions);
+            dxmt9::perf::countDrawUniformPayloadLookupHashCollision(
+                hashCollisions);
+            dxmt9::perf::countDrawUniformPayloadLookupBucketHit();
+          }
           lastUniformHandle = record.handle;
           return record.handle;
         }
+        if (hashMatches) {
+          ++hashCollisions;
+        } else {
+          ++bucketCollisions;
+        }
         uniformIndex = drawUniformPayloadLookupNext[uniformIndex];
       }
+      if (recordPerf) {
+        dxmt9::perf::countDrawUniformPayloadLookupBucketProbe(bucketProbes);
+        dxmt9::perf::countDrawUniformPayloadLookupBucketCollision(
+            bucketCollisions);
+        dxmt9::perf::countDrawUniformPayloadLookupHashCollision(
+            hashCollisions);
+      }
       if (lookupIntact && uniformIndex == detail::kChunkSlotInvalidUniformIndex) {
+        if (recordPerf) {
+          dxmt9::perf::countDrawUniformPayloadLookupBucketMiss();
+        }
         return {};
       }
     }
@@ -525,6 +561,9 @@ struct ChunkSlot {
     for (std::size_t i = 0; i < drawUniformPayloads.size(); ++i) {
       const auto& record = drawUniformPayloads[i];
       if (record.handle.hash == payload.hash && record.payload == payload) {
+        if (recordPerf) {
+          dxmt9::perf::countDrawUniformPayloadLookupLinearHit();
+        }
         lastUniformHandle = record.handle;
         return record.handle;
       }
@@ -542,6 +581,9 @@ struct ChunkSlot {
 
     const auto uniformIndex = static_cast<std::uint32_t>(drawUniformPayloads.size());
     const auto uniformHandle = detail::chunkSlotUniformHandle(uniformIndex, payload.hash);
+    if (dxmt9::perf::enabled()) {
+      dxmt9::perf::countDrawUniformPayloadAppend();
+    }
     reserveDrawUniformPayloadLookup(drawUniformPayloads.size() + 1u);
     drawUniformPayloads.push_back(DrawUniformPayloadRecord{
         .handle = uniformHandle,

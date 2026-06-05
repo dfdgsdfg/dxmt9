@@ -387,8 +387,130 @@ struct Counters {
   std::atomic<std::uint64_t> encodeDrawUniformBuildCpuMaxNs{0};
   std::atomic<std::uint64_t> encodeDrawFvfDecodeCpuNs{0};
   std::atomic<std::uint64_t> encodeDrawFvfDecodeCpuMaxNs{0};
+  std::atomic<std::uint64_t> encodeDrawBindingPacketCpuNs{0};
+  std::atomic<std::uint64_t> encodeDrawBindingPacketPlanCpuNs{0};
+  std::atomic<std::uint64_t> encodeDrawBindingPacketCacheCpuNs{0};
+  std::atomic<std::uint64_t> encodeDrawBindingPacketCacheKeyCpuNs{0};
+  std::atomic<std::uint64_t> encodeDrawBindingPacketCacheHashCpuNs{0};
+  std::atomic<std::uint64_t> encodeDrawBindingPacketCacheProbeCpuNs{0};
+  std::atomic<std::uint64_t> encodeDrawBindingPacketCacheStoreCpuNs{0};
+  std::atomic<std::uint64_t> encodeDrawBindingPacketCacheHits{0};
+  std::atomic<std::uint64_t> encodeDrawBindingPacketCacheMisses{0};
+  std::atomic<std::uint64_t> encodeDrawBindingPacketCacheCollisions{0};
+  std::atomic<std::uint64_t> encodeDrawBindingPacketTextureRecordCpuNs{0};
+  std::atomic<std::uint64_t> encodeDrawArgbufSetupCpuNs{0};
+  std::atomic<std::uint64_t> encodeDrawArgbufOpenCpuNs{0};
+  std::atomic<std::uint64_t> encodeDrawArgbufOpenReserveCpuNs{0};
+  std::atomic<std::uint64_t> encodeDrawArgbufOpenSetArgumentBufferCpuNs{0};
+  std::atomic<std::uint64_t> encodeDrawArgbufTableBindCpuNs{0};
+  std::atomic<std::uint64_t> encodeDrawArgbufTableBindCalls{0};
+  std::atomic<std::uint64_t> encodeDrawArgbufTableBindSkipped{0};
+  std::atomic<std::uint64_t> encodeDrawArgbufCbufUpdateCpuNs{0};
+  std::atomic<std::uint64_t> encodeDrawArgbufCbufUpdateCalls{0};
+  std::atomic<std::uint64_t> encodeDrawArgbufCbufUpdateDirtyCalls{0};
+  std::atomic<std::uint64_t> encodeDrawArgbufCbufUpdateSkippedClean{0};
+  std::atomic<std::uint64_t> encodeDrawArgbufCbufUpdateWriteCalls{0};
+  std::atomic<std::uint64_t> encodeDrawArgbufCbufBuildCpuNs{0};
+  std::atomic<std::uint64_t> encodeDrawArgbufCbufUploadCpuNs{0};
+  std::atomic<std::uint64_t> encodeDrawArgbufCbufSetBufferCpuNs{0};
+  std::atomic<std::uint64_t> encodeDrawArgbufCbufBuildVsCpuNs{0};
+  std::atomic<std::uint64_t> encodeDrawArgbufCbufBuildPsCpuNs{0};
+  std::atomic<std::uint64_t> encodeDrawArgbufCbufBuildFfpVsCpuNs{0};
+  std::atomic<std::uint64_t> encodeDrawArgbufCbufBuildFfpPsCpuNs{0};
+  std::atomic<std::uint64_t> encodeDrawArgbufCbufUploadVsCpuNs{0};
+  std::atomic<std::uint64_t> encodeDrawArgbufCbufUploadPsCpuNs{0};
+  std::atomic<std::uint64_t> encodeDrawArgbufCbufUploadFfpVsCpuNs{0};
+  std::atomic<std::uint64_t> encodeDrawArgbufCbufUploadFfpPsCpuNs{0};
+  std::atomic<std::uint64_t> encodeDrawArgbufCbufSetBufferVsCpuNs{0};
+  std::atomic<std::uint64_t> encodeDrawArgbufCbufSetBufferPsCpuNs{0};
+  std::atomic<std::uint64_t> encodeDrawArgbufCbufSetBufferFfpVsCpuNs{0};
+  std::atomic<std::uint64_t> encodeDrawArgbufCbufSetBufferFfpPsCpuNs{0};
+  std::atomic<std::uint64_t> encodeDrawArgbufCbufUploadPlanCpuNs{0};
+  std::atomic<std::uint64_t> encodeDrawArgbufCbufUploadPlanVsCpuNs{0};
+  std::atomic<std::uint64_t> encodeDrawArgbufCbufUploadPlanPsCpuNs{0};
+  std::atomic<std::uint64_t> encodeDrawArgbufCbufBindingHashCpuNs{0};
+  std::atomic<std::uint64_t> encodeDrawArgbufCbufBindingHashVsCpuNs{0};
+  std::atomic<std::uint64_t> encodeDrawArgbufCbufBindingHashPsCpuNs{0};
+  std::atomic<std::uint64_t> encodeDrawArgbufCbufBindingHashFfpVsCpuNs{0};
+  std::atomic<std::uint64_t> encodeDrawArgbufCbufBindingHashFfpPsCpuNs{0};
+  std::atomic<std::uint64_t> encodeDrawArgbufCbufBindingWriteCpuNs{0};
+  std::atomic<std::uint64_t> encodeDrawArgbufCbufBindingWriteVsCpuNs{0};
+  std::atomic<std::uint64_t> encodeDrawArgbufCbufBindingWritePsCpuNs{0};
+  std::atomic<std::uint64_t> encodeDrawArgbufCbufBindingWriteFfpVsCpuNs{0};
+  std::atomic<std::uint64_t> encodeDrawArgbufCbufBindingWriteFfpPsCpuNs{0};
+  std::atomic<std::uint64_t> encodeDrawArgbufCbufObserverCpuNs{0};
+  std::atomic<std::uint64_t> encodeDrawArgbufCbufObserverVsCpuNs{0};
+  std::atomic<std::uint64_t> encodeDrawArgbufCbufObserverPsCpuNs{0};
+  std::atomic<std::uint64_t> encodeDrawArgbufCbufObserverFfpVsCpuNs{0};
+  std::atomic<std::uint64_t> encodeDrawArgbufCbufObserverFfpPsCpuNs{0};
+  std::atomic<std::uint64_t> encodeDrawArgbufCbufCacheMergeCpuNs{0};
+  std::atomic<std::uint64_t> encodeDrawArgbufCbufCachedRepointCpuNs{0};
+  std::atomic<std::uint64_t> encodeDrawArgbufCbufCachedRepointCalls{0};
+  std::atomic<std::uint64_t> encodeDrawArgbufCbufCachedRepointBytes{0};
+  std::atomic<std::uint64_t> encodeDrawArgbufCbufContentProbeCpuNs{0};
+  std::atomic<std::uint64_t> encodeDrawArgbufCbufContentProbeCalls{0};
+  std::atomic<std::uint64_t> encodeDrawArgbufCbufContentProbeVsHits{0};
+  std::atomic<std::uint64_t> encodeDrawArgbufCbufContentProbeVsMisses{0};
+  std::atomic<std::uint64_t> encodeDrawArgbufCbufContentProbePsHits{0};
+  std::atomic<std::uint64_t> encodeDrawArgbufCbufContentProbePsMisses{0};
+  std::atomic<std::uint64_t> encodeDrawArgbufCbufContentProbeFfpPsHits{0};
+  std::atomic<std::uint64_t> encodeDrawArgbufCbufContentProbeFfpPsMisses{0};
+  std::atomic<std::uint64_t> encodeDrawArgbufCbufReopenFullRepointCalls{0};
+  std::atomic<std::uint64_t> encodeDrawArgbufCbufReopenNoDirtyHashMismatch{0};
+  std::atomic<std::uint64_t> encodeDrawArgbufCbufReopenPartialCandidates{0};
+  std::atomic<std::uint64_t> encodeDrawArgbufCbufReopenDirtyVs{0};
+  std::atomic<std::uint64_t> encodeDrawArgbufCbufReopenDirtyPs{0};
+  std::atomic<std::uint64_t> encodeDrawArgbufCbufReopenDirtyFfpVs{0};
+  std::atomic<std::uint64_t> encodeDrawArgbufCbufReopenDirtyFfpPs{0};
+  std::atomic<std::uint64_t> encodeDrawArgbufCbufUpdateVsCpuNs{0};
+  std::atomic<std::uint64_t> encodeDrawArgbufCbufUpdatePsCpuNs{0};
+  std::atomic<std::uint64_t> encodeDrawArgbufCbufUpdateFfpVsCpuNs{0};
+  std::atomic<std::uint64_t> encodeDrawArgbufCbufUpdateFfpPsCpuNs{0};
+  std::atomic<std::uint64_t> encodeDrawArgbufCbufUpdateVsCalls{0};
+  std::atomic<std::uint64_t> encodeDrawArgbufCbufUpdatePsCalls{0};
+  std::atomic<std::uint64_t> encodeDrawArgbufCbufUpdateFfpVsCalls{0};
+  std::atomic<std::uint64_t> encodeDrawArgbufCbufUpdateFfpPsCalls{0};
+  std::atomic<std::uint64_t> encodeDrawArgbufCbufUpdateVsBytes{0};
+  std::atomic<std::uint64_t> encodeDrawArgbufCbufUpdatePsBytes{0};
+  std::atomic<std::uint64_t> encodeDrawArgbufCbufUpdateFfpVsBytes{0};
+  std::atomic<std::uint64_t> encodeDrawArgbufCbufUpdateFfpPsBytes{0};
   std::atomic<std::uint64_t> encodeDrawStreamBindCpuNs{0};
   std::atomic<std::uint64_t> encodeDrawStreamBindCpuMaxNs{0};
+  std::atomic<std::uint64_t> encodeDrawStreamBindRasterPhaseCpuNs{0};
+  std::atomic<std::uint64_t> encodeDrawStreamBindRasterPhaseCalls{0};
+  std::atomic<std::uint64_t> encodeDrawStreamBindFfpStreamCpuNs{0};
+  std::atomic<std::uint64_t> encodeDrawStreamBindFfpStreamCalls{0};
+  std::atomic<std::uint64_t> encodeDrawStreamBindShaderStreamCpuNs{0};
+  std::atomic<std::uint64_t> encodeDrawStreamBindShaderStreamCalls{0};
+  std::atomic<std::uint64_t> encodeDrawStreamBindTexturePhaseCpuNs{0};
+  std::atomic<std::uint64_t> encodeDrawStreamBindTexturePhaseCalls{0};
+  std::atomic<std::uint64_t> encodeDrawStreamBindIndexPhaseCpuNs{0};
+  std::atomic<std::uint64_t> encodeDrawStreamBindIndexPhaseCalls{0};
+  std::atomic<std::uint64_t> encodeDrawTextureSamplerFragmentResolveCpuNs{0};
+  std::atomic<std::uint64_t> encodeDrawTextureSamplerFragmentResolveCalls{0};
+  std::atomic<std::uint64_t> encodeDrawTextureSamplerFragmentResolveTextureCpuNs{0};
+  std::atomic<std::uint64_t> encodeDrawTextureSamplerFragmentResolveTextureCalls{0};
+  std::atomic<std::uint64_t> encodeDrawTextureSamplerFragmentResourceArrayCpuNs{0};
+  std::atomic<std::uint64_t> encodeDrawTextureSamplerFragmentResourceArrayCalls{0};
+  std::atomic<std::uint64_t> encodeDrawTextureSamplerFragmentDirectCpuNs{0};
+  std::atomic<std::uint64_t> encodeDrawTextureSamplerFragmentDirectCalls{0};
+  std::atomic<std::uint64_t> encodeDrawTextureSamplerFragmentDirectTextureCpuNs{0};
+  std::atomic<std::uint64_t> encodeDrawTextureSamplerFragmentDirectTextureCalls{0};
+  std::atomic<std::uint64_t> encodeDrawTextureSamplerFragmentDirectTextureSetCpuNs{0};
+  std::atomic<std::uint64_t> encodeDrawTextureSamplerFragmentDirectTextureSetCalls{0};
+  std::atomic<std::uint64_t> encodeDrawTextureSamplerFragmentDirectSamplerCpuNs{0};
+  std::atomic<std::uint64_t> encodeDrawTextureSamplerFragmentDirectSamplerCalls{0};
+  std::atomic<std::uint64_t> encodeDrawTextureSamplerFragmentDirectSamplerSetCpuNs{0};
+  std::atomic<std::uint64_t> encodeDrawTextureSamplerFragmentDirectSamplerSetCalls{0};
+  std::atomic<std::uint64_t> encodeDrawTextureSamplerSamplerLookupCpuNs{0};
+  std::atomic<std::uint64_t> encodeDrawTextureSamplerSamplerLookupCalls{0};
+  std::atomic<std::uint64_t> encodeDrawTextureSamplerSamplerLookupSkippedPrehandle{0};
+  std::atomic<std::uint64_t> encodeDrawTextureSamplerLodBiasCpuNs{0};
+  std::atomic<std::uint64_t> encodeDrawTextureSamplerLodBiasCalls{0};
+  std::atomic<std::uint64_t> encodeDrawTextureSamplerVertexResolveCpuNs{0};
+  std::atomic<std::uint64_t> encodeDrawTextureSamplerVertexResolveCalls{0};
+  std::atomic<std::uint64_t> encodeDrawTextureSamplerVertexDirectCpuNs{0};
+  std::atomic<std::uint64_t> encodeDrawTextureSamplerVertexDirectCalls{0};
   std::atomic<std::uint64_t> encodeDrawRasterStateCpuNs{0};
   std::atomic<std::uint64_t> encodeDrawVertexStreamBindCpuNs{0};
   std::atomic<std::uint64_t> encodeDrawTextureSamplerBindCpuNs{0};
@@ -398,6 +520,24 @@ struct Counters {
   std::atomic<std::uint64_t> encodeDrawIndexCacheCandidateCpuNs{0};
   std::atomic<std::uint64_t> encodeDrawIndexCacheOriginalMeasureCpuNs{0};
   std::atomic<std::uint64_t> encodeDrawIndexCacheCandidateBuildCpuNs{0};
+  std::atomic<std::uint64_t> encodeDrawIndexCacheCandidateReadCpuNs{0};
+  std::atomic<std::uint64_t> encodeDrawIndexCacheCandidateAdjacencyCpuNs{0};
+  std::atomic<std::uint64_t> encodeDrawIndexCacheCandidateSelectCpuNs{0};
+  std::atomic<std::uint64_t> encodeDrawIndexCacheCandidateWriteCpuNs{0};
+  std::atomic<std::uint64_t> encodeDrawIndexCacheCandidateSelectCalls{0};
+  std::atomic<std::uint64_t> encodeDrawIndexCacheCandidateSelectSlots{0};
+  std::atomic<std::uint64_t> encodeDrawIndexCacheCandidateSelectScored{0};
+  std::atomic<std::uint64_t> encodeDrawIndexCacheCandidateSelectSkipped{0};
+  std::atomic<std::uint64_t> encodeDrawIndexCacheCandidateSelectCandidatesMax{0};
+  std::atomic<std::uint64_t> encodeDrawIndexCacheCandidateFrontierDropped{0};
+  std::atomic<std::uint64_t> encodeDrawIndexCacheCandidateLazyHeapPops{0};
+  std::atomic<std::uint64_t> encodeDrawIndexCacheCandidateLazyRefreshes{0};
+  std::atomic<std::uint64_t> encodeDrawIndexCacheCandidateLazyStaleDrops{0};
+  std::atomic<std::uint64_t> encodeDrawIndexCacheCandidateLazyAccepted{0};
+  std::atomic<std::uint64_t> encodeDrawIndexCacheCandidateBucketVertexVisits{0};
+  std::atomic<std::uint64_t> encodeDrawIndexCacheCandidateBucketMoves{0};
+  std::atomic<std::uint64_t> encodeDrawIndexCacheCandidateBucketSelected{0};
+  std::atomic<std::uint64_t> encodeDrawIndexCacheCandidateUpperBoundRejected{0};
   std::atomic<std::uint64_t> encodeDrawIndexCacheCandidateMeasureCpuNs{0};
   std::atomic<std::uint64_t> encodeDrawIndexCacheGateCpuNs{0};
   std::atomic<std::uint64_t> encodeDrawIndexCacheApplyCpuNs{0};
@@ -428,6 +568,62 @@ struct Counters {
   std::atomic<std::uint64_t> encodeDrawPsoPrefetchBindingOverrideIncompatible{0};
   std::atomic<std::uint64_t> d3d9SnapshotDrawSubmissionCpuNs{0};
   std::atomic<std::uint64_t> d3d9SnapshotDrawSubmissionCpuMaxNs{0};
+  std::atomic<std::uint64_t> d3d9SnapshotCacheLookupCpuNs{0};
+  std::atomic<std::uint64_t> d3d9SnapshotCacheHitCpuNs{0};
+  std::atomic<std::uint64_t> d3d9SnapshotCacheMissCpuNs{0};
+  std::atomic<std::uint64_t> d3d9SnapshotCacheBindingLayoutCpuNs{0};
+  std::atomic<std::uint64_t> d3d9SnapshotCacheUniformRefreshCpuNs{0};
+  std::atomic<std::uint64_t> d3d9SnapshotCacheUniformBuildCpuNs{0};
+  std::atomic<std::uint64_t> d3d9SnapshotCacheUniformHashCpuNs{0};
+  std::atomic<std::uint64_t> d3d9SnapshotCacheMissShaderLayoutCpuNs{0};
+  std::atomic<std::uint64_t> d3d9SnapshotCacheMissUniformBuildCpuNs{0};
+  std::atomic<std::uint64_t> d3d9SnapshotCacheMissHotBuildCpuNs{0};
+  std::atomic<std::uint64_t> d3d9SnapshotUniformBuildCalls{0};
+  std::atomic<std::uint64_t> d3d9SnapshotUniformBuildVsConstCopyCpuNs{0};
+  std::atomic<std::uint64_t> d3d9SnapshotUniformBuildPsConstCopyCpuNs{0};
+  std::atomic<std::uint64_t> d3d9SnapshotUniformBuildFfpMatrixCpuNs{0};
+  std::atomic<std::uint64_t> d3d9SnapshotUniformBuildFfpMaterialLightCpuNs{0};
+  std::atomic<std::uint64_t> d3d9SnapshotUniformBuildTextureTransformCpuNs{0};
+  std::atomic<std::uint64_t> d3d9SnapshotUniformBuildClipPlaneCpuNs{0};
+  std::atomic<std::uint64_t> d3d9SnapshotUniformBuildHashCpuNs{0};
+  std::atomic<std::uint64_t> d3d9SnapshotUniformBuildVsConstHashCpuNs{0};
+  std::atomic<std::uint64_t> d3d9SnapshotUniformBuildPsConstHashCpuNs{0};
+  std::atomic<std::uint64_t> d3d9SnapshotUniformBuildNonConstHashCpuNs{0};
+  std::atomic<std::uint64_t> d3d9SnapshotUniformBuildPayloadCombineHashCpuNs{0};
+  std::atomic<std::uint64_t> d3d9SnapshotUniformBuildVsConstHashFull{0};
+  std::atomic<std::uint64_t> d3d9SnapshotUniformBuildPsConstHashFull{0};
+  std::atomic<std::uint64_t> d3d9SnapshotUniformBuildVsConstHashFullNoUsage{0};
+  std::atomic<std::uint64_t> d3d9SnapshotUniformBuildPsConstHashFullNoUsage{0};
+  std::atomic<std::uint64_t> d3d9SnapshotUniformBuildVsConstHashFullUnknown{0};
+  std::atomic<std::uint64_t> d3d9SnapshotUniformBuildPsConstHashFullUnknown{0};
+  std::atomic<std::uint64_t> d3d9SnapshotUniformBuildVsConstHashFullUnknownBytecode{0};
+  std::atomic<std::uint64_t> d3d9SnapshotUniformBuildPsConstHashFullUnknownBytecode{0};
+  std::atomic<std::uint64_t> d3d9SnapshotUniformBuildVsConstHashFullUnknownNonBytecode{0};
+  std::atomic<std::uint64_t> d3d9SnapshotUniformBuildPsConstHashFullUnknownNonBytecode{0};
+  std::atomic<std::uint64_t> d3d9SnapshotUniformBuildVsConstHashFullIndexedFloat{0};
+  std::atomic<std::uint64_t> d3d9SnapshotUniformBuildPsConstHashFullIndexedFloat{0};
+  std::atomic<std::uint64_t> d3d9SnapshotUniformBuildVsConstHashFullIndexedInt{0};
+  std::atomic<std::uint64_t> d3d9SnapshotUniformBuildPsConstHashFullIndexedInt{0};
+  std::atomic<std::uint64_t> d3d9SnapshotUniformBuildVsConstHashFullIndexedBool{0};
+  std::atomic<std::uint64_t> d3d9SnapshotUniformBuildPsConstHashFullIndexedBool{0};
+  std::atomic<std::uint64_t> d3d9SnapshotUniformBuildVsConstHashBytes{0};
+  std::atomic<std::uint64_t> d3d9SnapshotUniformBuildPsConstHashBytes{0};
+  std::atomic<std::uint64_t> d3d9SnapshotUniformCopyCpuNs{0};
+  std::atomic<std::uint64_t> d3d9SnapshotStateCopyCpuNs{0};
+  std::atomic<std::uint64_t> d3d9SnapshotDebugSnapshotCpuNs{0};
+  std::atomic<std::uint64_t> d3d9SnapshotBindingOverrideCpuNs{0};
+  std::atomic<std::uint64_t> d3d9SnapshotBindingOverrideStreamScans{0};
+  std::atomic<std::uint64_t> d3d9SnapshotBindingOverrideStreamRecords{0};
+  std::atomic<std::uint64_t> d3d9SnapshotBindingOverrideIndexRecords{0};
+  std::atomic<std::uint64_t> drawUniformPayloadLookupCandidateHits{0};
+  std::atomic<std::uint64_t> drawUniformPayloadLookupLastHits{0};
+  std::atomic<std::uint64_t> drawUniformPayloadLookupBucketHits{0};
+  std::atomic<std::uint64_t> drawUniformPayloadLookupBucketMisses{0};
+  std::atomic<std::uint64_t> drawUniformPayloadLookupLinearHits{0};
+  std::atomic<std::uint64_t> drawUniformPayloadLookupBucketProbes{0};
+  std::atomic<std::uint64_t> drawUniformPayloadLookupBucketCollisions{0};
+  std::atomic<std::uint64_t> drawUniformPayloadLookupHashCollisions{0};
+  std::atomic<std::uint64_t> drawUniformPayloadAppends{0};
   std::atomic<std::uint64_t> transientUploadCalls{0};
   std::atomic<std::uint64_t> transientUploadBytes{0};
   std::atomic<std::uint64_t> transientUploadCpuNs{0};
@@ -1232,11 +1428,133 @@ constexpr CounterEntry kCounterTable[] = {
     {"encode_draw_fvf_decode_cpu_p50_ms", CounterEntry::Kind::PercentileMs, nullptr, nullptr, &Counters::encodeDrawFvfDecodeCpuRing, 0.5},
     {"encode_draw_fvf_decode_cpu_p95_ms", CounterEntry::Kind::PercentileMs, nullptr, nullptr, &Counters::encodeDrawFvfDecodeCpuRing, 0.95},
     {"encode_draw_fvf_decode_cpu_p99_ms", CounterEntry::Kind::PercentileMs, nullptr, nullptr, &Counters::encodeDrawFvfDecodeCpuRing, 0.99},
+    {"encode_draw_binding_packet_cpu_ms", CounterEntry::Kind::Milliseconds, &Counters::encodeDrawBindingPacketCpuNs, nullptr, nullptr, 0.0},
+    {"encode_draw_binding_packet_plan_cpu_ms", CounterEntry::Kind::Milliseconds, &Counters::encodeDrawBindingPacketPlanCpuNs, nullptr, nullptr, 0.0},
+    {"encode_draw_binding_packet_cache_cpu_ms", CounterEntry::Kind::Milliseconds, &Counters::encodeDrawBindingPacketCacheCpuNs, nullptr, nullptr, 0.0},
+    {"encode_draw_binding_packet_cache_key_cpu_ms", CounterEntry::Kind::Milliseconds, &Counters::encodeDrawBindingPacketCacheKeyCpuNs, nullptr, nullptr, 0.0},
+    {"encode_draw_binding_packet_cache_hash_cpu_ms", CounterEntry::Kind::Milliseconds, &Counters::encodeDrawBindingPacketCacheHashCpuNs, nullptr, nullptr, 0.0},
+    {"encode_draw_binding_packet_cache_probe_cpu_ms", CounterEntry::Kind::Milliseconds, &Counters::encodeDrawBindingPacketCacheProbeCpuNs, nullptr, nullptr, 0.0},
+    {"encode_draw_binding_packet_cache_store_cpu_ms", CounterEntry::Kind::Milliseconds, &Counters::encodeDrawBindingPacketCacheStoreCpuNs, nullptr, nullptr, 0.0},
+    {"encode_draw_binding_packet_cache_hits", CounterEntry::Kind::UnsignedCount, &Counters::encodeDrawBindingPacketCacheHits, nullptr, nullptr, 0.0},
+    {"encode_draw_binding_packet_cache_misses", CounterEntry::Kind::UnsignedCount, &Counters::encodeDrawBindingPacketCacheMisses, nullptr, nullptr, 0.0},
+    {"encode_draw_binding_packet_cache_collisions", CounterEntry::Kind::UnsignedCount, &Counters::encodeDrawBindingPacketCacheCollisions, nullptr, nullptr, 0.0},
+    {"encode_draw_binding_packet_texture_record_cpu_ms", CounterEntry::Kind::Milliseconds, &Counters::encodeDrawBindingPacketTextureRecordCpuNs, nullptr, nullptr, 0.0},
+    {"encode_draw_argbuf_setup_cpu_ms", CounterEntry::Kind::Milliseconds, &Counters::encodeDrawArgbufSetupCpuNs, nullptr, nullptr, 0.0},
+    {"encode_draw_argbuf_open_cpu_ms", CounterEntry::Kind::Milliseconds, &Counters::encodeDrawArgbufOpenCpuNs, nullptr, nullptr, 0.0},
+    {"encode_draw_argbuf_open_reserve_cpu_ms", CounterEntry::Kind::Milliseconds, &Counters::encodeDrawArgbufOpenReserveCpuNs, nullptr, nullptr, 0.0},
+    {"encode_draw_argbuf_open_set_argument_buffer_cpu_ms", CounterEntry::Kind::Milliseconds, &Counters::encodeDrawArgbufOpenSetArgumentBufferCpuNs, nullptr, nullptr, 0.0},
+    {"encode_draw_argbuf_table_bind_cpu_ms", CounterEntry::Kind::Milliseconds, &Counters::encodeDrawArgbufTableBindCpuNs, nullptr, nullptr, 0.0},
+    {"encode_draw_argbuf_table_bind_calls", CounterEntry::Kind::UnsignedCount, &Counters::encodeDrawArgbufTableBindCalls, nullptr, nullptr, 0.0},
+    {"encode_draw_argbuf_table_bind_skipped", CounterEntry::Kind::UnsignedCount, &Counters::encodeDrawArgbufTableBindSkipped, nullptr, nullptr, 0.0},
+    {"encode_draw_argbuf_cbuf_update_cpu_ms", CounterEntry::Kind::Milliseconds, &Counters::encodeDrawArgbufCbufUpdateCpuNs, nullptr, nullptr, 0.0},
+    {"encode_draw_argbuf_cbuf_update_calls", CounterEntry::Kind::UnsignedCount, &Counters::encodeDrawArgbufCbufUpdateCalls, nullptr, nullptr, 0.0},
+    {"encode_draw_argbuf_cbuf_update_dirty_calls", CounterEntry::Kind::UnsignedCount, &Counters::encodeDrawArgbufCbufUpdateDirtyCalls, nullptr, nullptr, 0.0},
+    {"encode_draw_argbuf_cbuf_update_skipped_clean", CounterEntry::Kind::UnsignedCount, &Counters::encodeDrawArgbufCbufUpdateSkippedClean, nullptr, nullptr, 0.0},
+    {"encode_draw_argbuf_cbuf_update_write_calls", CounterEntry::Kind::UnsignedCount, &Counters::encodeDrawArgbufCbufUpdateWriteCalls, nullptr, nullptr, 0.0},
+    {"encode_draw_argbuf_cbuf_build_cpu_ms", CounterEntry::Kind::Milliseconds, &Counters::encodeDrawArgbufCbufBuildCpuNs, nullptr, nullptr, 0.0},
+    {"encode_draw_argbuf_cbuf_upload_cpu_ms", CounterEntry::Kind::Milliseconds, &Counters::encodeDrawArgbufCbufUploadCpuNs, nullptr, nullptr, 0.0},
+    {"encode_draw_argbuf_cbuf_setbuffer_cpu_ms", CounterEntry::Kind::Milliseconds, &Counters::encodeDrawArgbufCbufSetBufferCpuNs, nullptr, nullptr, 0.0},
+    {"encode_draw_argbuf_cbuf_build_vs_cpu_ms", CounterEntry::Kind::Milliseconds, &Counters::encodeDrawArgbufCbufBuildVsCpuNs, nullptr, nullptr, 0.0},
+    {"encode_draw_argbuf_cbuf_build_ps_cpu_ms", CounterEntry::Kind::Milliseconds, &Counters::encodeDrawArgbufCbufBuildPsCpuNs, nullptr, nullptr, 0.0},
+    {"encode_draw_argbuf_cbuf_build_ffp_vs_cpu_ms", CounterEntry::Kind::Milliseconds, &Counters::encodeDrawArgbufCbufBuildFfpVsCpuNs, nullptr, nullptr, 0.0},
+    {"encode_draw_argbuf_cbuf_build_ffp_ps_cpu_ms", CounterEntry::Kind::Milliseconds, &Counters::encodeDrawArgbufCbufBuildFfpPsCpuNs, nullptr, nullptr, 0.0},
+    {"encode_draw_argbuf_cbuf_upload_vs_cpu_ms", CounterEntry::Kind::Milliseconds, &Counters::encodeDrawArgbufCbufUploadVsCpuNs, nullptr, nullptr, 0.0},
+    {"encode_draw_argbuf_cbuf_upload_ps_cpu_ms", CounterEntry::Kind::Milliseconds, &Counters::encodeDrawArgbufCbufUploadPsCpuNs, nullptr, nullptr, 0.0},
+    {"encode_draw_argbuf_cbuf_upload_ffp_vs_cpu_ms", CounterEntry::Kind::Milliseconds, &Counters::encodeDrawArgbufCbufUploadFfpVsCpuNs, nullptr, nullptr, 0.0},
+    {"encode_draw_argbuf_cbuf_upload_ffp_ps_cpu_ms", CounterEntry::Kind::Milliseconds, &Counters::encodeDrawArgbufCbufUploadFfpPsCpuNs, nullptr, nullptr, 0.0},
+    {"encode_draw_argbuf_cbuf_setbuffer_vs_cpu_ms", CounterEntry::Kind::Milliseconds, &Counters::encodeDrawArgbufCbufSetBufferVsCpuNs, nullptr, nullptr, 0.0},
+    {"encode_draw_argbuf_cbuf_setbuffer_ps_cpu_ms", CounterEntry::Kind::Milliseconds, &Counters::encodeDrawArgbufCbufSetBufferPsCpuNs, nullptr, nullptr, 0.0},
+    {"encode_draw_argbuf_cbuf_setbuffer_ffp_vs_cpu_ms", CounterEntry::Kind::Milliseconds, &Counters::encodeDrawArgbufCbufSetBufferFfpVsCpuNs, nullptr, nullptr, 0.0},
+    {"encode_draw_argbuf_cbuf_setbuffer_ffp_ps_cpu_ms", CounterEntry::Kind::Milliseconds, &Counters::encodeDrawArgbufCbufSetBufferFfpPsCpuNs, nullptr, nullptr, 0.0},
+    {"encode_draw_argbuf_cbuf_upload_plan_cpu_ms", CounterEntry::Kind::Milliseconds, &Counters::encodeDrawArgbufCbufUploadPlanCpuNs, nullptr, nullptr, 0.0},
+    {"encode_draw_argbuf_cbuf_upload_plan_vs_cpu_ms", CounterEntry::Kind::Milliseconds, &Counters::encodeDrawArgbufCbufUploadPlanVsCpuNs, nullptr, nullptr, 0.0},
+    {"encode_draw_argbuf_cbuf_upload_plan_ps_cpu_ms", CounterEntry::Kind::Milliseconds, &Counters::encodeDrawArgbufCbufUploadPlanPsCpuNs, nullptr, nullptr, 0.0},
+    {"encode_draw_argbuf_cbuf_binding_hash_cpu_ms", CounterEntry::Kind::Milliseconds, &Counters::encodeDrawArgbufCbufBindingHashCpuNs, nullptr, nullptr, 0.0},
+    {"encode_draw_argbuf_cbuf_binding_hash_vs_cpu_ms", CounterEntry::Kind::Milliseconds, &Counters::encodeDrawArgbufCbufBindingHashVsCpuNs, nullptr, nullptr, 0.0},
+    {"encode_draw_argbuf_cbuf_binding_hash_ps_cpu_ms", CounterEntry::Kind::Milliseconds, &Counters::encodeDrawArgbufCbufBindingHashPsCpuNs, nullptr, nullptr, 0.0},
+    {"encode_draw_argbuf_cbuf_binding_hash_ffp_vs_cpu_ms", CounterEntry::Kind::Milliseconds, &Counters::encodeDrawArgbufCbufBindingHashFfpVsCpuNs, nullptr, nullptr, 0.0},
+    {"encode_draw_argbuf_cbuf_binding_hash_ffp_ps_cpu_ms", CounterEntry::Kind::Milliseconds, &Counters::encodeDrawArgbufCbufBindingHashFfpPsCpuNs, nullptr, nullptr, 0.0},
+    {"encode_draw_argbuf_cbuf_binding_write_cpu_ms", CounterEntry::Kind::Milliseconds, &Counters::encodeDrawArgbufCbufBindingWriteCpuNs, nullptr, nullptr, 0.0},
+    {"encode_draw_argbuf_cbuf_binding_write_vs_cpu_ms", CounterEntry::Kind::Milliseconds, &Counters::encodeDrawArgbufCbufBindingWriteVsCpuNs, nullptr, nullptr, 0.0},
+    {"encode_draw_argbuf_cbuf_binding_write_ps_cpu_ms", CounterEntry::Kind::Milliseconds, &Counters::encodeDrawArgbufCbufBindingWritePsCpuNs, nullptr, nullptr, 0.0},
+    {"encode_draw_argbuf_cbuf_binding_write_ffp_vs_cpu_ms", CounterEntry::Kind::Milliseconds, &Counters::encodeDrawArgbufCbufBindingWriteFfpVsCpuNs, nullptr, nullptr, 0.0},
+    {"encode_draw_argbuf_cbuf_binding_write_ffp_ps_cpu_ms", CounterEntry::Kind::Milliseconds, &Counters::encodeDrawArgbufCbufBindingWriteFfpPsCpuNs, nullptr, nullptr, 0.0},
+    {"encode_draw_argbuf_cbuf_observer_cpu_ms", CounterEntry::Kind::Milliseconds, &Counters::encodeDrawArgbufCbufObserverCpuNs, nullptr, nullptr, 0.0},
+    {"encode_draw_argbuf_cbuf_observer_vs_cpu_ms", CounterEntry::Kind::Milliseconds, &Counters::encodeDrawArgbufCbufObserverVsCpuNs, nullptr, nullptr, 0.0},
+    {"encode_draw_argbuf_cbuf_observer_ps_cpu_ms", CounterEntry::Kind::Milliseconds, &Counters::encodeDrawArgbufCbufObserverPsCpuNs, nullptr, nullptr, 0.0},
+    {"encode_draw_argbuf_cbuf_observer_ffp_vs_cpu_ms", CounterEntry::Kind::Milliseconds, &Counters::encodeDrawArgbufCbufObserverFfpVsCpuNs, nullptr, nullptr, 0.0},
+    {"encode_draw_argbuf_cbuf_observer_ffp_ps_cpu_ms", CounterEntry::Kind::Milliseconds, &Counters::encodeDrawArgbufCbufObserverFfpPsCpuNs, nullptr, nullptr, 0.0},
+    {"encode_draw_argbuf_cbuf_cache_merge_cpu_ms", CounterEntry::Kind::Milliseconds, &Counters::encodeDrawArgbufCbufCacheMergeCpuNs, nullptr, nullptr, 0.0},
+    {"encode_draw_argbuf_cbuf_cached_repoint_cpu_ms", CounterEntry::Kind::Milliseconds, &Counters::encodeDrawArgbufCbufCachedRepointCpuNs, nullptr, nullptr, 0.0},
+    {"encode_draw_argbuf_cbuf_cached_repoint_calls", CounterEntry::Kind::UnsignedCount, &Counters::encodeDrawArgbufCbufCachedRepointCalls, nullptr, nullptr, 0.0},
+    {"encode_draw_argbuf_cbuf_cached_repoint_bytes", CounterEntry::Kind::UnsignedCount, &Counters::encodeDrawArgbufCbufCachedRepointBytes, nullptr, nullptr, 0.0},
+    {"encode_draw_argbuf_cbuf_content_probe_cpu_ms", CounterEntry::Kind::Milliseconds, &Counters::encodeDrawArgbufCbufContentProbeCpuNs, nullptr, nullptr, 0.0},
+    {"encode_draw_argbuf_cbuf_content_probe_calls", CounterEntry::Kind::UnsignedCount, &Counters::encodeDrawArgbufCbufContentProbeCalls, nullptr, nullptr, 0.0},
+    {"encode_draw_argbuf_cbuf_content_probe_vs_hits", CounterEntry::Kind::UnsignedCount, &Counters::encodeDrawArgbufCbufContentProbeVsHits, nullptr, nullptr, 0.0},
+    {"encode_draw_argbuf_cbuf_content_probe_vs_misses", CounterEntry::Kind::UnsignedCount, &Counters::encodeDrawArgbufCbufContentProbeVsMisses, nullptr, nullptr, 0.0},
+    {"encode_draw_argbuf_cbuf_content_probe_ps_hits", CounterEntry::Kind::UnsignedCount, &Counters::encodeDrawArgbufCbufContentProbePsHits, nullptr, nullptr, 0.0},
+    {"encode_draw_argbuf_cbuf_content_probe_ps_misses", CounterEntry::Kind::UnsignedCount, &Counters::encodeDrawArgbufCbufContentProbePsMisses, nullptr, nullptr, 0.0},
+    {"encode_draw_argbuf_cbuf_content_probe_ffp_ps_hits", CounterEntry::Kind::UnsignedCount, &Counters::encodeDrawArgbufCbufContentProbeFfpPsHits, nullptr, nullptr, 0.0},
+    {"encode_draw_argbuf_cbuf_content_probe_ffp_ps_misses", CounterEntry::Kind::UnsignedCount, &Counters::encodeDrawArgbufCbufContentProbeFfpPsMisses, nullptr, nullptr, 0.0},
+    {"encode_draw_argbuf_cbuf_reopen_full_repoint_calls", CounterEntry::Kind::UnsignedCount, &Counters::encodeDrawArgbufCbufReopenFullRepointCalls, nullptr, nullptr, 0.0},
+    {"encode_draw_argbuf_cbuf_reopen_no_dirty_hash_mismatch", CounterEntry::Kind::UnsignedCount, &Counters::encodeDrawArgbufCbufReopenNoDirtyHashMismatch, nullptr, nullptr, 0.0},
+    {"encode_draw_argbuf_cbuf_reopen_partial_candidates", CounterEntry::Kind::UnsignedCount, &Counters::encodeDrawArgbufCbufReopenPartialCandidates, nullptr, nullptr, 0.0},
+    {"encode_draw_argbuf_cbuf_reopen_dirty_vs", CounterEntry::Kind::UnsignedCount, &Counters::encodeDrawArgbufCbufReopenDirtyVs, nullptr, nullptr, 0.0},
+    {"encode_draw_argbuf_cbuf_reopen_dirty_ps", CounterEntry::Kind::UnsignedCount, &Counters::encodeDrawArgbufCbufReopenDirtyPs, nullptr, nullptr, 0.0},
+    {"encode_draw_argbuf_cbuf_reopen_dirty_ffp_vs", CounterEntry::Kind::UnsignedCount, &Counters::encodeDrawArgbufCbufReopenDirtyFfpVs, nullptr, nullptr, 0.0},
+    {"encode_draw_argbuf_cbuf_reopen_dirty_ffp_ps", CounterEntry::Kind::UnsignedCount, &Counters::encodeDrawArgbufCbufReopenDirtyFfpPs, nullptr, nullptr, 0.0},
+    {"encode_draw_argbuf_cbuf_update_vs_cpu_ms", CounterEntry::Kind::Milliseconds, &Counters::encodeDrawArgbufCbufUpdateVsCpuNs, nullptr, nullptr, 0.0},
+    {"encode_draw_argbuf_cbuf_update_ps_cpu_ms", CounterEntry::Kind::Milliseconds, &Counters::encodeDrawArgbufCbufUpdatePsCpuNs, nullptr, nullptr, 0.0},
+    {"encode_draw_argbuf_cbuf_update_ffp_vs_cpu_ms", CounterEntry::Kind::Milliseconds, &Counters::encodeDrawArgbufCbufUpdateFfpVsCpuNs, nullptr, nullptr, 0.0},
+    {"encode_draw_argbuf_cbuf_update_ffp_ps_cpu_ms", CounterEntry::Kind::Milliseconds, &Counters::encodeDrawArgbufCbufUpdateFfpPsCpuNs, nullptr, nullptr, 0.0},
+    {"encode_draw_argbuf_cbuf_update_vs_calls", CounterEntry::Kind::UnsignedCount, &Counters::encodeDrawArgbufCbufUpdateVsCalls, nullptr, nullptr, 0.0},
+    {"encode_draw_argbuf_cbuf_update_ps_calls", CounterEntry::Kind::UnsignedCount, &Counters::encodeDrawArgbufCbufUpdatePsCalls, nullptr, nullptr, 0.0},
+    {"encode_draw_argbuf_cbuf_update_ffp_vs_calls", CounterEntry::Kind::UnsignedCount, &Counters::encodeDrawArgbufCbufUpdateFfpVsCalls, nullptr, nullptr, 0.0},
+    {"encode_draw_argbuf_cbuf_update_ffp_ps_calls", CounterEntry::Kind::UnsignedCount, &Counters::encodeDrawArgbufCbufUpdateFfpPsCalls, nullptr, nullptr, 0.0},
+    {"encode_draw_argbuf_cbuf_update_vs_bytes", CounterEntry::Kind::UnsignedCount, &Counters::encodeDrawArgbufCbufUpdateVsBytes, nullptr, nullptr, 0.0},
+    {"encode_draw_argbuf_cbuf_update_ps_bytes", CounterEntry::Kind::UnsignedCount, &Counters::encodeDrawArgbufCbufUpdatePsBytes, nullptr, nullptr, 0.0},
+    {"encode_draw_argbuf_cbuf_update_ffp_vs_bytes", CounterEntry::Kind::UnsignedCount, &Counters::encodeDrawArgbufCbufUpdateFfpVsBytes, nullptr, nullptr, 0.0},
+    {"encode_draw_argbuf_cbuf_update_ffp_ps_bytes", CounterEntry::Kind::UnsignedCount, &Counters::encodeDrawArgbufCbufUpdateFfpPsBytes, nullptr, nullptr, 0.0},
     {"encode_draw_stream_bind_cpu_ms", CounterEntry::Kind::Milliseconds, &Counters::encodeDrawStreamBindCpuNs, nullptr, nullptr, 0.0},
     {"encode_draw_stream_bind_cpu_max_ms", CounterEntry::Kind::Milliseconds, &Counters::encodeDrawStreamBindCpuMaxNs, nullptr, nullptr, 0.0},
     {"encode_draw_stream_bind_cpu_p50_ms", CounterEntry::Kind::PercentileMs, nullptr, nullptr, &Counters::encodeDrawStreamBindCpuRing, 0.5},
     {"encode_draw_stream_bind_cpu_p95_ms", CounterEntry::Kind::PercentileMs, nullptr, nullptr, &Counters::encodeDrawStreamBindCpuRing, 0.95},
     {"encode_draw_stream_bind_cpu_p99_ms", CounterEntry::Kind::PercentileMs, nullptr, nullptr, &Counters::encodeDrawStreamBindCpuRing, 0.99},
+    {"encode_draw_stream_bind_raster_phase_cpu_ms", CounterEntry::Kind::Milliseconds, &Counters::encodeDrawStreamBindRasterPhaseCpuNs, nullptr, nullptr, 0.0},
+    {"encode_draw_stream_bind_raster_phase_calls", CounterEntry::Kind::UnsignedCount, &Counters::encodeDrawStreamBindRasterPhaseCalls, nullptr, nullptr, 0.0},
+    {"encode_draw_stream_bind_ffp_stream_cpu_ms", CounterEntry::Kind::Milliseconds, &Counters::encodeDrawStreamBindFfpStreamCpuNs, nullptr, nullptr, 0.0},
+    {"encode_draw_stream_bind_ffp_stream_calls", CounterEntry::Kind::UnsignedCount, &Counters::encodeDrawStreamBindFfpStreamCalls, nullptr, nullptr, 0.0},
+    {"encode_draw_stream_bind_shader_stream_cpu_ms", CounterEntry::Kind::Milliseconds, &Counters::encodeDrawStreamBindShaderStreamCpuNs, nullptr, nullptr, 0.0},
+    {"encode_draw_stream_bind_shader_stream_calls", CounterEntry::Kind::UnsignedCount, &Counters::encodeDrawStreamBindShaderStreamCalls, nullptr, nullptr, 0.0},
+    {"encode_draw_stream_bind_texture_phase_cpu_ms", CounterEntry::Kind::Milliseconds, &Counters::encodeDrawStreamBindTexturePhaseCpuNs, nullptr, nullptr, 0.0},
+    {"encode_draw_stream_bind_texture_phase_calls", CounterEntry::Kind::UnsignedCount, &Counters::encodeDrawStreamBindTexturePhaseCalls, nullptr, nullptr, 0.0},
+    {"encode_draw_stream_bind_index_phase_cpu_ms", CounterEntry::Kind::Milliseconds, &Counters::encodeDrawStreamBindIndexPhaseCpuNs, nullptr, nullptr, 0.0},
+    {"encode_draw_stream_bind_index_phase_calls", CounterEntry::Kind::UnsignedCount, &Counters::encodeDrawStreamBindIndexPhaseCalls, nullptr, nullptr, 0.0},
+    {"encode_draw_texture_sampler_fragment_resolve_cpu_ms", CounterEntry::Kind::Milliseconds, &Counters::encodeDrawTextureSamplerFragmentResolveCpuNs, nullptr, nullptr, 0.0},
+    {"encode_draw_texture_sampler_fragment_resolve_calls", CounterEntry::Kind::UnsignedCount, &Counters::encodeDrawTextureSamplerFragmentResolveCalls, nullptr, nullptr, 0.0},
+    {"encode_draw_texture_sampler_fragment_resolve_texture_cpu_ms", CounterEntry::Kind::Milliseconds, &Counters::encodeDrawTextureSamplerFragmentResolveTextureCpuNs, nullptr, nullptr, 0.0},
+    {"encode_draw_texture_sampler_fragment_resolve_texture_calls", CounterEntry::Kind::UnsignedCount, &Counters::encodeDrawTextureSamplerFragmentResolveTextureCalls, nullptr, nullptr, 0.0},
+    {"encode_draw_texture_sampler_fragment_resource_array_cpu_ms", CounterEntry::Kind::Milliseconds, &Counters::encodeDrawTextureSamplerFragmentResourceArrayCpuNs, nullptr, nullptr, 0.0},
+    {"encode_draw_texture_sampler_fragment_resource_array_calls", CounterEntry::Kind::UnsignedCount, &Counters::encodeDrawTextureSamplerFragmentResourceArrayCalls, nullptr, nullptr, 0.0},
+    {"encode_draw_texture_sampler_fragment_direct_cpu_ms", CounterEntry::Kind::Milliseconds, &Counters::encodeDrawTextureSamplerFragmentDirectCpuNs, nullptr, nullptr, 0.0},
+    {"encode_draw_texture_sampler_fragment_direct_calls", CounterEntry::Kind::UnsignedCount, &Counters::encodeDrawTextureSamplerFragmentDirectCalls, nullptr, nullptr, 0.0},
+    {"encode_draw_texture_sampler_fragment_direct_texture_cpu_ms", CounterEntry::Kind::Milliseconds, &Counters::encodeDrawTextureSamplerFragmentDirectTextureCpuNs, nullptr, nullptr, 0.0},
+    {"encode_draw_texture_sampler_fragment_direct_texture_calls", CounterEntry::Kind::UnsignedCount, &Counters::encodeDrawTextureSamplerFragmentDirectTextureCalls, nullptr, nullptr, 0.0},
+    {"encode_draw_texture_sampler_fragment_direct_texture_set_cpu_ms", CounterEntry::Kind::Milliseconds, &Counters::encodeDrawTextureSamplerFragmentDirectTextureSetCpuNs, nullptr, nullptr, 0.0},
+    {"encode_draw_texture_sampler_fragment_direct_texture_set_calls", CounterEntry::Kind::UnsignedCount, &Counters::encodeDrawTextureSamplerFragmentDirectTextureSetCalls, nullptr, nullptr, 0.0},
+    {"encode_draw_texture_sampler_fragment_direct_sampler_cpu_ms", CounterEntry::Kind::Milliseconds, &Counters::encodeDrawTextureSamplerFragmentDirectSamplerCpuNs, nullptr, nullptr, 0.0},
+    {"encode_draw_texture_sampler_fragment_direct_sampler_calls", CounterEntry::Kind::UnsignedCount, &Counters::encodeDrawTextureSamplerFragmentDirectSamplerCalls, nullptr, nullptr, 0.0},
+    {"encode_draw_texture_sampler_fragment_direct_sampler_set_cpu_ms", CounterEntry::Kind::Milliseconds, &Counters::encodeDrawTextureSamplerFragmentDirectSamplerSetCpuNs, nullptr, nullptr, 0.0},
+    {"encode_draw_texture_sampler_fragment_direct_sampler_set_calls", CounterEntry::Kind::UnsignedCount, &Counters::encodeDrawTextureSamplerFragmentDirectSamplerSetCalls, nullptr, nullptr, 0.0},
+    {"encode_draw_texture_sampler_sampler_lookup_cpu_ms", CounterEntry::Kind::Milliseconds, &Counters::encodeDrawTextureSamplerSamplerLookupCpuNs, nullptr, nullptr, 0.0},
+    {"encode_draw_texture_sampler_sampler_lookup_calls", CounterEntry::Kind::UnsignedCount, &Counters::encodeDrawTextureSamplerSamplerLookupCalls, nullptr, nullptr, 0.0},
+    {"encode_draw_texture_sampler_sampler_lookup_skipped_prehandle", CounterEntry::Kind::UnsignedCount, &Counters::encodeDrawTextureSamplerSamplerLookupSkippedPrehandle, nullptr, nullptr, 0.0},
+    {"encode_draw_texture_sampler_lod_bias_cpu_ms", CounterEntry::Kind::Milliseconds, &Counters::encodeDrawTextureSamplerLodBiasCpuNs, nullptr, nullptr, 0.0},
+    {"encode_draw_texture_sampler_lod_bias_calls", CounterEntry::Kind::UnsignedCount, &Counters::encodeDrawTextureSamplerLodBiasCalls, nullptr, nullptr, 0.0},
+    {"encode_draw_texture_sampler_vertex_resolve_cpu_ms", CounterEntry::Kind::Milliseconds, &Counters::encodeDrawTextureSamplerVertexResolveCpuNs, nullptr, nullptr, 0.0},
+    {"encode_draw_texture_sampler_vertex_resolve_calls", CounterEntry::Kind::UnsignedCount, &Counters::encodeDrawTextureSamplerVertexResolveCalls, nullptr, nullptr, 0.0},
+    {"encode_draw_texture_sampler_vertex_direct_cpu_ms", CounterEntry::Kind::Milliseconds, &Counters::encodeDrawTextureSamplerVertexDirectCpuNs, nullptr, nullptr, 0.0},
+    {"encode_draw_texture_sampler_vertex_direct_calls", CounterEntry::Kind::UnsignedCount, &Counters::encodeDrawTextureSamplerVertexDirectCalls, nullptr, nullptr, 0.0},
     {"encode_draw_raster_state_cpu_ms", CounterEntry::Kind::Milliseconds, &Counters::encodeDrawRasterStateCpuNs, nullptr, nullptr, 0.0},
     {"encode_draw_vertex_stream_bind_cpu_ms", CounterEntry::Kind::Milliseconds, &Counters::encodeDrawVertexStreamBindCpuNs, nullptr, nullptr, 0.0},
     {"encode_draw_texture_sampler_bind_cpu_ms", CounterEntry::Kind::Milliseconds, &Counters::encodeDrawTextureSamplerBindCpuNs, nullptr, nullptr, 0.0},
@@ -1246,6 +1564,24 @@ constexpr CounterEntry kCounterTable[] = {
     {"encode_draw_index_cache_candidate_cpu_ms", CounterEntry::Kind::Milliseconds, &Counters::encodeDrawIndexCacheCandidateCpuNs, nullptr, nullptr, 0.0},
     {"encode_draw_index_cache_original_measure_cpu_ms", CounterEntry::Kind::Milliseconds, &Counters::encodeDrawIndexCacheOriginalMeasureCpuNs, nullptr, nullptr, 0.0},
     {"encode_draw_index_cache_candidate_build_cpu_ms", CounterEntry::Kind::Milliseconds, &Counters::encodeDrawIndexCacheCandidateBuildCpuNs, nullptr, nullptr, 0.0},
+    {"encode_draw_index_cache_candidate_read_cpu_ms", CounterEntry::Kind::Milliseconds, &Counters::encodeDrawIndexCacheCandidateReadCpuNs, nullptr, nullptr, 0.0},
+    {"encode_draw_index_cache_candidate_adjacency_cpu_ms", CounterEntry::Kind::Milliseconds, &Counters::encodeDrawIndexCacheCandidateAdjacencyCpuNs, nullptr, nullptr, 0.0},
+    {"encode_draw_index_cache_candidate_select_cpu_ms", CounterEntry::Kind::Milliseconds, &Counters::encodeDrawIndexCacheCandidateSelectCpuNs, nullptr, nullptr, 0.0},
+    {"encode_draw_index_cache_candidate_write_cpu_ms", CounterEntry::Kind::Milliseconds, &Counters::encodeDrawIndexCacheCandidateWriteCpuNs, nullptr, nullptr, 0.0},
+    {"encode_draw_index_cache_candidate_select_calls", CounterEntry::Kind::UnsignedCount, &Counters::encodeDrawIndexCacheCandidateSelectCalls, nullptr, nullptr, 0.0},
+    {"encode_draw_index_cache_candidate_select_slots", CounterEntry::Kind::UnsignedCount, &Counters::encodeDrawIndexCacheCandidateSelectSlots, nullptr, nullptr, 0.0},
+    {"encode_draw_index_cache_candidate_select_scored", CounterEntry::Kind::UnsignedCount, &Counters::encodeDrawIndexCacheCandidateSelectScored, nullptr, nullptr, 0.0},
+    {"encode_draw_index_cache_candidate_select_skipped", CounterEntry::Kind::UnsignedCount, &Counters::encodeDrawIndexCacheCandidateSelectSkipped, nullptr, nullptr, 0.0},
+    {"encode_draw_index_cache_candidate_select_candidates_max", CounterEntry::Kind::UnsignedCount, &Counters::encodeDrawIndexCacheCandidateSelectCandidatesMax, nullptr, nullptr, 0.0},
+    {"encode_draw_index_cache_candidate_frontier_dropped", CounterEntry::Kind::UnsignedCount, &Counters::encodeDrawIndexCacheCandidateFrontierDropped, nullptr, nullptr, 0.0},
+    {"encode_draw_index_cache_candidate_lazy_heap_pops", CounterEntry::Kind::UnsignedCount, &Counters::encodeDrawIndexCacheCandidateLazyHeapPops, nullptr, nullptr, 0.0},
+    {"encode_draw_index_cache_candidate_lazy_refreshes", CounterEntry::Kind::UnsignedCount, &Counters::encodeDrawIndexCacheCandidateLazyRefreshes, nullptr, nullptr, 0.0},
+    {"encode_draw_index_cache_candidate_lazy_stale_drops", CounterEntry::Kind::UnsignedCount, &Counters::encodeDrawIndexCacheCandidateLazyStaleDrops, nullptr, nullptr, 0.0},
+    {"encode_draw_index_cache_candidate_lazy_accepted", CounterEntry::Kind::UnsignedCount, &Counters::encodeDrawIndexCacheCandidateLazyAccepted, nullptr, nullptr, 0.0},
+    {"encode_draw_index_cache_candidate_bucket_vertex_visits", CounterEntry::Kind::UnsignedCount, &Counters::encodeDrawIndexCacheCandidateBucketVertexVisits, nullptr, nullptr, 0.0},
+    {"encode_draw_index_cache_candidate_bucket_moves", CounterEntry::Kind::UnsignedCount, &Counters::encodeDrawIndexCacheCandidateBucketMoves, nullptr, nullptr, 0.0},
+    {"encode_draw_index_cache_candidate_bucket_selected", CounterEntry::Kind::UnsignedCount, &Counters::encodeDrawIndexCacheCandidateBucketSelected, nullptr, nullptr, 0.0},
+    {"encode_draw_index_cache_candidate_upper_bound_rejected", CounterEntry::Kind::UnsignedCount, &Counters::encodeDrawIndexCacheCandidateUpperBoundRejected, nullptr, nullptr, 0.0},
     {"encode_draw_index_cache_candidate_measure_cpu_ms", CounterEntry::Kind::Milliseconds, &Counters::encodeDrawIndexCacheCandidateMeasureCpuNs, nullptr, nullptr, 0.0},
     {"encode_draw_index_cache_gate_cpu_ms", CounterEntry::Kind::Milliseconds, &Counters::encodeDrawIndexCacheGateCpuNs, nullptr, nullptr, 0.0},
     {"encode_draw_index_cache_apply_cpu_ms", CounterEntry::Kind::Milliseconds, &Counters::encodeDrawIndexCacheApplyCpuNs, nullptr, nullptr, 0.0},
@@ -1282,6 +1618,62 @@ constexpr CounterEntry kCounterTable[] = {
     {"d3d9_snapshot_draw_submission_cpu_p50_ms", CounterEntry::Kind::PercentileMs, nullptr, nullptr, &Counters::d3d9SnapshotDrawSubmissionCpuRing, 0.5},
     {"d3d9_snapshot_draw_submission_cpu_p95_ms", CounterEntry::Kind::PercentileMs, nullptr, nullptr, &Counters::d3d9SnapshotDrawSubmissionCpuRing, 0.95},
     {"d3d9_snapshot_draw_submission_cpu_p99_ms", CounterEntry::Kind::PercentileMs, nullptr, nullptr, &Counters::d3d9SnapshotDrawSubmissionCpuRing, 0.99},
+    {"d3d9_snapshot_cache_lookup_cpu_ms", CounterEntry::Kind::Milliseconds, &Counters::d3d9SnapshotCacheLookupCpuNs, nullptr, nullptr, 0.0},
+    {"d3d9_snapshot_cache_hit_cpu_ms", CounterEntry::Kind::Milliseconds, &Counters::d3d9SnapshotCacheHitCpuNs, nullptr, nullptr, 0.0},
+    {"d3d9_snapshot_cache_miss_cpu_ms", CounterEntry::Kind::Milliseconds, &Counters::d3d9SnapshotCacheMissCpuNs, nullptr, nullptr, 0.0},
+    {"d3d9_snapshot_cache_binding_layout_cpu_ms", CounterEntry::Kind::Milliseconds, &Counters::d3d9SnapshotCacheBindingLayoutCpuNs, nullptr, nullptr, 0.0},
+    {"d3d9_snapshot_cache_uniform_refresh_cpu_ms", CounterEntry::Kind::Milliseconds, &Counters::d3d9SnapshotCacheUniformRefreshCpuNs, nullptr, nullptr, 0.0},
+    {"d3d9_snapshot_cache_uniform_build_cpu_ms", CounterEntry::Kind::Milliseconds, &Counters::d3d9SnapshotCacheUniformBuildCpuNs, nullptr, nullptr, 0.0},
+    {"d3d9_snapshot_cache_uniform_hash_cpu_ms", CounterEntry::Kind::Milliseconds, &Counters::d3d9SnapshotCacheUniformHashCpuNs, nullptr, nullptr, 0.0},
+    {"d3d9_snapshot_cache_miss_shader_layout_cpu_ms", CounterEntry::Kind::Milliseconds, &Counters::d3d9SnapshotCacheMissShaderLayoutCpuNs, nullptr, nullptr, 0.0},
+    {"d3d9_snapshot_cache_miss_uniform_build_cpu_ms", CounterEntry::Kind::Milliseconds, &Counters::d3d9SnapshotCacheMissUniformBuildCpuNs, nullptr, nullptr, 0.0},
+    {"d3d9_snapshot_cache_miss_hot_build_cpu_ms", CounterEntry::Kind::Milliseconds, &Counters::d3d9SnapshotCacheMissHotBuildCpuNs, nullptr, nullptr, 0.0},
+    {"d3d9_snapshot_uniform_build_calls", CounterEntry::Kind::UnsignedCount, &Counters::d3d9SnapshotUniformBuildCalls, nullptr, nullptr, 0.0},
+    {"d3d9_snapshot_uniform_build_vs_const_copy_cpu_ms", CounterEntry::Kind::Milliseconds, &Counters::d3d9SnapshotUniformBuildVsConstCopyCpuNs, nullptr, nullptr, 0.0},
+    {"d3d9_snapshot_uniform_build_ps_const_copy_cpu_ms", CounterEntry::Kind::Milliseconds, &Counters::d3d9SnapshotUniformBuildPsConstCopyCpuNs, nullptr, nullptr, 0.0},
+    {"d3d9_snapshot_uniform_build_ffp_matrix_cpu_ms", CounterEntry::Kind::Milliseconds, &Counters::d3d9SnapshotUniformBuildFfpMatrixCpuNs, nullptr, nullptr, 0.0},
+    {"d3d9_snapshot_uniform_build_ffp_material_light_cpu_ms", CounterEntry::Kind::Milliseconds, &Counters::d3d9SnapshotUniformBuildFfpMaterialLightCpuNs, nullptr, nullptr, 0.0},
+    {"d3d9_snapshot_uniform_build_texture_transform_cpu_ms", CounterEntry::Kind::Milliseconds, &Counters::d3d9SnapshotUniformBuildTextureTransformCpuNs, nullptr, nullptr, 0.0},
+    {"d3d9_snapshot_uniform_build_clip_plane_cpu_ms", CounterEntry::Kind::Milliseconds, &Counters::d3d9SnapshotUniformBuildClipPlaneCpuNs, nullptr, nullptr, 0.0},
+    {"d3d9_snapshot_uniform_build_hash_cpu_ms", CounterEntry::Kind::Milliseconds, &Counters::d3d9SnapshotUniformBuildHashCpuNs, nullptr, nullptr, 0.0},
+    {"d3d9_snapshot_uniform_build_vs_const_hash_cpu_ms", CounterEntry::Kind::Milliseconds, &Counters::d3d9SnapshotUniformBuildVsConstHashCpuNs, nullptr, nullptr, 0.0},
+    {"d3d9_snapshot_uniform_build_ps_const_hash_cpu_ms", CounterEntry::Kind::Milliseconds, &Counters::d3d9SnapshotUniformBuildPsConstHashCpuNs, nullptr, nullptr, 0.0},
+    {"d3d9_snapshot_uniform_build_nonconst_hash_cpu_ms", CounterEntry::Kind::Milliseconds, &Counters::d3d9SnapshotUniformBuildNonConstHashCpuNs, nullptr, nullptr, 0.0},
+    {"d3d9_snapshot_uniform_build_payload_combine_hash_cpu_ms", CounterEntry::Kind::Milliseconds, &Counters::d3d9SnapshotUniformBuildPayloadCombineHashCpuNs, nullptr, nullptr, 0.0},
+    {"d3d9_snapshot_uniform_build_vs_const_hash_full", CounterEntry::Kind::UnsignedCount, &Counters::d3d9SnapshotUniformBuildVsConstHashFull, nullptr, nullptr, 0.0},
+    {"d3d9_snapshot_uniform_build_ps_const_hash_full", CounterEntry::Kind::UnsignedCount, &Counters::d3d9SnapshotUniformBuildPsConstHashFull, nullptr, nullptr, 0.0},
+    {"d3d9_snapshot_uniform_build_vs_const_hash_full_no_usage", CounterEntry::Kind::UnsignedCount, &Counters::d3d9SnapshotUniformBuildVsConstHashFullNoUsage, nullptr, nullptr, 0.0},
+    {"d3d9_snapshot_uniform_build_ps_const_hash_full_no_usage", CounterEntry::Kind::UnsignedCount, &Counters::d3d9SnapshotUniformBuildPsConstHashFullNoUsage, nullptr, nullptr, 0.0},
+    {"d3d9_snapshot_uniform_build_vs_const_hash_full_unknown", CounterEntry::Kind::UnsignedCount, &Counters::d3d9SnapshotUniformBuildVsConstHashFullUnknown, nullptr, nullptr, 0.0},
+    {"d3d9_snapshot_uniform_build_ps_const_hash_full_unknown", CounterEntry::Kind::UnsignedCount, &Counters::d3d9SnapshotUniformBuildPsConstHashFullUnknown, nullptr, nullptr, 0.0},
+    {"d3d9_snapshot_uniform_build_vs_const_hash_full_unknown_bytecode", CounterEntry::Kind::UnsignedCount, &Counters::d3d9SnapshotUniformBuildVsConstHashFullUnknownBytecode, nullptr, nullptr, 0.0},
+    {"d3d9_snapshot_uniform_build_ps_const_hash_full_unknown_bytecode", CounterEntry::Kind::UnsignedCount, &Counters::d3d9SnapshotUniformBuildPsConstHashFullUnknownBytecode, nullptr, nullptr, 0.0},
+    {"d3d9_snapshot_uniform_build_vs_const_hash_full_unknown_non_bytecode", CounterEntry::Kind::UnsignedCount, &Counters::d3d9SnapshotUniformBuildVsConstHashFullUnknownNonBytecode, nullptr, nullptr, 0.0},
+    {"d3d9_snapshot_uniform_build_ps_const_hash_full_unknown_non_bytecode", CounterEntry::Kind::UnsignedCount, &Counters::d3d9SnapshotUniformBuildPsConstHashFullUnknownNonBytecode, nullptr, nullptr, 0.0},
+    {"d3d9_snapshot_uniform_build_vs_const_hash_full_indexed_float", CounterEntry::Kind::UnsignedCount, &Counters::d3d9SnapshotUniformBuildVsConstHashFullIndexedFloat, nullptr, nullptr, 0.0},
+    {"d3d9_snapshot_uniform_build_ps_const_hash_full_indexed_float", CounterEntry::Kind::UnsignedCount, &Counters::d3d9SnapshotUniformBuildPsConstHashFullIndexedFloat, nullptr, nullptr, 0.0},
+    {"d3d9_snapshot_uniform_build_vs_const_hash_full_indexed_int", CounterEntry::Kind::UnsignedCount, &Counters::d3d9SnapshotUniformBuildVsConstHashFullIndexedInt, nullptr, nullptr, 0.0},
+    {"d3d9_snapshot_uniform_build_ps_const_hash_full_indexed_int", CounterEntry::Kind::UnsignedCount, &Counters::d3d9SnapshotUniformBuildPsConstHashFullIndexedInt, nullptr, nullptr, 0.0},
+    {"d3d9_snapshot_uniform_build_vs_const_hash_full_indexed_bool", CounterEntry::Kind::UnsignedCount, &Counters::d3d9SnapshotUniformBuildVsConstHashFullIndexedBool, nullptr, nullptr, 0.0},
+    {"d3d9_snapshot_uniform_build_ps_const_hash_full_indexed_bool", CounterEntry::Kind::UnsignedCount, &Counters::d3d9SnapshotUniformBuildPsConstHashFullIndexedBool, nullptr, nullptr, 0.0},
+    {"d3d9_snapshot_uniform_build_vs_const_hash_bytes", CounterEntry::Kind::UnsignedCount, &Counters::d3d9SnapshotUniformBuildVsConstHashBytes, nullptr, nullptr, 0.0},
+    {"d3d9_snapshot_uniform_build_ps_const_hash_bytes", CounterEntry::Kind::UnsignedCount, &Counters::d3d9SnapshotUniformBuildPsConstHashBytes, nullptr, nullptr, 0.0},
+    {"d3d9_snapshot_uniform_copy_cpu_ms", CounterEntry::Kind::Milliseconds, &Counters::d3d9SnapshotUniformCopyCpuNs, nullptr, nullptr, 0.0},
+    {"d3d9_snapshot_state_copy_cpu_ms", CounterEntry::Kind::Milliseconds, &Counters::d3d9SnapshotStateCopyCpuNs, nullptr, nullptr, 0.0},
+    {"d3d9_snapshot_debug_snapshot_cpu_ms", CounterEntry::Kind::Milliseconds, &Counters::d3d9SnapshotDebugSnapshotCpuNs, nullptr, nullptr, 0.0},
+    {"d3d9_snapshot_binding_override_cpu_ms", CounterEntry::Kind::Milliseconds, &Counters::d3d9SnapshotBindingOverrideCpuNs, nullptr, nullptr, 0.0},
+    {"d3d9_snapshot_binding_override_stream_scans", CounterEntry::Kind::UnsignedCount, &Counters::d3d9SnapshotBindingOverrideStreamScans, nullptr, nullptr, 0.0},
+    {"d3d9_snapshot_binding_override_stream_records", CounterEntry::Kind::UnsignedCount, &Counters::d3d9SnapshotBindingOverrideStreamRecords, nullptr, nullptr, 0.0},
+    {"d3d9_snapshot_binding_override_index_records", CounterEntry::Kind::UnsignedCount, &Counters::d3d9SnapshotBindingOverrideIndexRecords, nullptr, nullptr, 0.0},
+    {"draw_uniform_payload_lookup_candidate_hits", CounterEntry::Kind::UnsignedCount, &Counters::drawUniformPayloadLookupCandidateHits, nullptr, nullptr, 0.0},
+    {"draw_uniform_payload_lookup_last_hits", CounterEntry::Kind::UnsignedCount, &Counters::drawUniformPayloadLookupLastHits, nullptr, nullptr, 0.0},
+    {"draw_uniform_payload_lookup_bucket_hits", CounterEntry::Kind::UnsignedCount, &Counters::drawUniformPayloadLookupBucketHits, nullptr, nullptr, 0.0},
+    {"draw_uniform_payload_lookup_bucket_misses", CounterEntry::Kind::UnsignedCount, &Counters::drawUniformPayloadLookupBucketMisses, nullptr, nullptr, 0.0},
+    {"draw_uniform_payload_lookup_linear_hits", CounterEntry::Kind::UnsignedCount, &Counters::drawUniformPayloadLookupLinearHits, nullptr, nullptr, 0.0},
+    {"draw_uniform_payload_lookup_bucket_probes", CounterEntry::Kind::UnsignedCount, &Counters::drawUniformPayloadLookupBucketProbes, nullptr, nullptr, 0.0},
+    {"draw_uniform_payload_lookup_bucket_collisions", CounterEntry::Kind::UnsignedCount, &Counters::drawUniformPayloadLookupBucketCollisions, nullptr, nullptr, 0.0},
+    {"draw_uniform_payload_lookup_hash_collisions", CounterEntry::Kind::UnsignedCount, &Counters::drawUniformPayloadLookupHashCollisions, nullptr, nullptr, 0.0},
+    {"draw_uniform_payload_appends", CounterEntry::Kind::UnsignedCount, &Counters::drawUniformPayloadAppends, nullptr, nullptr, 0.0},
     {"transient_upload_calls", CounterEntry::Kind::UnsignedCount, &Counters::transientUploadCalls, nullptr, nullptr, 0.0},
     {"transient_upload_bytes", CounterEntry::Kind::UnsignedCount, &Counters::transientUploadBytes, nullptr, nullptr, 0.0},
     {"transient_upload_cpu_ms", CounterEntry::Kind::Milliseconds, &Counters::transientUploadCpuNs, nullptr, nullptr, 0.0},
@@ -2437,10 +2829,498 @@ void countEncodeDrawFvfDecodeCpuTime(std::uint64_t nanoseconds) {
   recordRing(counters().encodeDrawFvfDecodeCpuRing, nanoseconds);
 }
 
+void countEncodeDrawBindingPacketCpuTime(std::uint64_t nanoseconds) {
+  add(counters().encodeDrawBindingPacketCpuNs, nanoseconds);
+}
+
+void countEncodeDrawBindingPacketPlanCpuTime(std::uint64_t nanoseconds) {
+  add(counters().encodeDrawBindingPacketPlanCpuNs, nanoseconds);
+}
+
+void countEncodeDrawBindingPacketCacheCpuTime(std::uint64_t nanoseconds) {
+  add(counters().encodeDrawBindingPacketCacheCpuNs, nanoseconds);
+}
+
+void countEncodeDrawBindingPacketCacheKeyCpuTime(std::uint64_t nanoseconds) {
+  add(counters().encodeDrawBindingPacketCacheKeyCpuNs, nanoseconds);
+}
+
+void countEncodeDrawBindingPacketCacheHashCpuTime(std::uint64_t nanoseconds) {
+  add(counters().encodeDrawBindingPacketCacheHashCpuNs, nanoseconds);
+}
+
+void countEncodeDrawBindingPacketCacheProbeCpuTime(std::uint64_t nanoseconds) {
+  add(counters().encodeDrawBindingPacketCacheProbeCpuNs, nanoseconds);
+}
+
+void countEncodeDrawBindingPacketCacheStoreCpuTime(std::uint64_t nanoseconds) {
+  add(counters().encodeDrawBindingPacketCacheStoreCpuNs, nanoseconds);
+}
+
+void countEncodeDrawBindingPacketCacheHits(std::uint64_t hits) {
+  add(counters().encodeDrawBindingPacketCacheHits, hits);
+}
+
+void countEncodeDrawBindingPacketCacheMisses(std::uint64_t misses) {
+  add(counters().encodeDrawBindingPacketCacheMisses, misses);
+}
+
+void countEncodeDrawBindingPacketCacheCollisions(std::uint64_t collisions) {
+  add(counters().encodeDrawBindingPacketCacheCollisions, collisions);
+}
+
+void countEncodeDrawBindingPacketTextureRecordCpuTime(std::uint64_t nanoseconds) {
+  add(counters().encodeDrawBindingPacketTextureRecordCpuNs, nanoseconds);
+}
+
+void countEncodeDrawArgbufSetupCpuTime(std::uint64_t nanoseconds) {
+  add(counters().encodeDrawArgbufSetupCpuNs, nanoseconds);
+}
+
+void countEncodeDrawArgbufOpenCpuTime(std::uint64_t nanoseconds) {
+  add(counters().encodeDrawArgbufOpenCpuNs, nanoseconds);
+}
+
+void countEncodeDrawArgbufOpenReserveCpuTime(std::uint64_t nanoseconds) {
+  add(counters().encodeDrawArgbufOpenReserveCpuNs, nanoseconds);
+}
+
+void countEncodeDrawArgbufOpenSetArgumentBufferCpuTime(std::uint64_t nanoseconds) {
+  add(counters().encodeDrawArgbufOpenSetArgumentBufferCpuNs, nanoseconds);
+}
+
+void countEncodeDrawArgbufTableBindCpuTime(std::uint64_t nanoseconds) {
+  add(counters().encodeDrawArgbufTableBindCpuNs, nanoseconds);
+}
+
+void countEncodeDrawArgbufTableBindCalls(std::uint64_t calls) {
+  add(counters().encodeDrawArgbufTableBindCalls, calls);
+}
+
+void countEncodeDrawArgbufTableBindSkipped(std::uint64_t skips) {
+  add(counters().encodeDrawArgbufTableBindSkipped, skips);
+}
+
+void countEncodeDrawArgbufCbufUpdateCpuTime(std::uint64_t nanoseconds) {
+  add(counters().encodeDrawArgbufCbufUpdateCpuNs, nanoseconds);
+}
+
+void countEncodeDrawArgbufCbufUpdateCalls(std::uint64_t calls) {
+  add(counters().encodeDrawArgbufCbufUpdateCalls, calls);
+}
+
+void countEncodeDrawArgbufCbufUpdateDirtyCalls(std::uint64_t calls) {
+  add(counters().encodeDrawArgbufCbufUpdateDirtyCalls, calls);
+}
+
+void countEncodeDrawArgbufCbufUpdateSkippedClean(std::uint64_t skips) {
+  add(counters().encodeDrawArgbufCbufUpdateSkippedClean, skips);
+}
+
+void countEncodeDrawArgbufCbufUpdateWriteCalls(std::uint64_t calls) {
+  add(counters().encodeDrawArgbufCbufUpdateWriteCalls, calls);
+}
+
+void countEncodeDrawArgbufCbufBuildCpuTime(std::uint64_t nanoseconds) {
+  add(counters().encodeDrawArgbufCbufBuildCpuNs, nanoseconds);
+}
+
+void countEncodeDrawArgbufCbufUploadCpuTime(std::uint64_t nanoseconds) {
+  add(counters().encodeDrawArgbufCbufUploadCpuNs, nanoseconds);
+}
+
+void countEncodeDrawArgbufCbufSetBufferCpuTime(std::uint64_t nanoseconds) {
+  add(counters().encodeDrawArgbufCbufSetBufferCpuNs, nanoseconds);
+}
+
+void countEncodeDrawArgbufCbufBuildVsCpuTime(std::uint64_t nanoseconds) {
+  add(counters().encodeDrawArgbufCbufBuildVsCpuNs, nanoseconds);
+}
+
+void countEncodeDrawArgbufCbufBuildPsCpuTime(std::uint64_t nanoseconds) {
+  add(counters().encodeDrawArgbufCbufBuildPsCpuNs, nanoseconds);
+}
+
+void countEncodeDrawArgbufCbufBuildFfpVsCpuTime(std::uint64_t nanoseconds) {
+  add(counters().encodeDrawArgbufCbufBuildFfpVsCpuNs, nanoseconds);
+}
+
+void countEncodeDrawArgbufCbufBuildFfpPsCpuTime(std::uint64_t nanoseconds) {
+  add(counters().encodeDrawArgbufCbufBuildFfpPsCpuNs, nanoseconds);
+}
+
+void countEncodeDrawArgbufCbufUploadVsCpuTime(std::uint64_t nanoseconds) {
+  add(counters().encodeDrawArgbufCbufUploadVsCpuNs, nanoseconds);
+}
+
+void countEncodeDrawArgbufCbufUploadPsCpuTime(std::uint64_t nanoseconds) {
+  add(counters().encodeDrawArgbufCbufUploadPsCpuNs, nanoseconds);
+}
+
+void countEncodeDrawArgbufCbufUploadFfpVsCpuTime(std::uint64_t nanoseconds) {
+  add(counters().encodeDrawArgbufCbufUploadFfpVsCpuNs, nanoseconds);
+}
+
+void countEncodeDrawArgbufCbufUploadFfpPsCpuTime(std::uint64_t nanoseconds) {
+  add(counters().encodeDrawArgbufCbufUploadFfpPsCpuNs, nanoseconds);
+}
+
+void countEncodeDrawArgbufCbufSetBufferVsCpuTime(std::uint64_t nanoseconds) {
+  add(counters().encodeDrawArgbufCbufSetBufferVsCpuNs, nanoseconds);
+}
+
+void countEncodeDrawArgbufCbufSetBufferPsCpuTime(std::uint64_t nanoseconds) {
+  add(counters().encodeDrawArgbufCbufSetBufferPsCpuNs, nanoseconds);
+}
+
+void countEncodeDrawArgbufCbufSetBufferFfpVsCpuTime(std::uint64_t nanoseconds) {
+  add(counters().encodeDrawArgbufCbufSetBufferFfpVsCpuNs, nanoseconds);
+}
+
+void countEncodeDrawArgbufCbufSetBufferFfpPsCpuTime(std::uint64_t nanoseconds) {
+  add(counters().encodeDrawArgbufCbufSetBufferFfpPsCpuNs, nanoseconds);
+}
+
+void countEncodeDrawArgbufCbufUploadPlanCpuTime(std::uint64_t nanoseconds) {
+  add(counters().encodeDrawArgbufCbufUploadPlanCpuNs, nanoseconds);
+}
+
+void countEncodeDrawArgbufCbufUploadPlanVsCpuTime(std::uint64_t nanoseconds) {
+  add(counters().encodeDrawArgbufCbufUploadPlanVsCpuNs, nanoseconds);
+}
+
+void countEncodeDrawArgbufCbufUploadPlanPsCpuTime(std::uint64_t nanoseconds) {
+  add(counters().encodeDrawArgbufCbufUploadPlanPsCpuNs, nanoseconds);
+}
+
+void countEncodeDrawArgbufCbufBindingHashCpuTime(std::uint64_t nanoseconds) {
+  add(counters().encodeDrawArgbufCbufBindingHashCpuNs, nanoseconds);
+}
+
+void countEncodeDrawArgbufCbufBindingHashVsCpuTime(std::uint64_t nanoseconds) {
+  add(counters().encodeDrawArgbufCbufBindingHashVsCpuNs, nanoseconds);
+}
+
+void countEncodeDrawArgbufCbufBindingHashPsCpuTime(std::uint64_t nanoseconds) {
+  add(counters().encodeDrawArgbufCbufBindingHashPsCpuNs, nanoseconds);
+}
+
+void countEncodeDrawArgbufCbufBindingHashFfpVsCpuTime(std::uint64_t nanoseconds) {
+  add(counters().encodeDrawArgbufCbufBindingHashFfpVsCpuNs, nanoseconds);
+}
+
+void countEncodeDrawArgbufCbufBindingHashFfpPsCpuTime(std::uint64_t nanoseconds) {
+  add(counters().encodeDrawArgbufCbufBindingHashFfpPsCpuNs, nanoseconds);
+}
+
+void countEncodeDrawArgbufCbufBindingWriteCpuTime(std::uint64_t nanoseconds) {
+  add(counters().encodeDrawArgbufCbufBindingWriteCpuNs, nanoseconds);
+}
+
+void countEncodeDrawArgbufCbufBindingWriteVsCpuTime(std::uint64_t nanoseconds) {
+  add(counters().encodeDrawArgbufCbufBindingWriteVsCpuNs, nanoseconds);
+}
+
+void countEncodeDrawArgbufCbufBindingWritePsCpuTime(std::uint64_t nanoseconds) {
+  add(counters().encodeDrawArgbufCbufBindingWritePsCpuNs, nanoseconds);
+}
+
+void countEncodeDrawArgbufCbufBindingWriteFfpVsCpuTime(std::uint64_t nanoseconds) {
+  add(counters().encodeDrawArgbufCbufBindingWriteFfpVsCpuNs, nanoseconds);
+}
+
+void countEncodeDrawArgbufCbufBindingWriteFfpPsCpuTime(std::uint64_t nanoseconds) {
+  add(counters().encodeDrawArgbufCbufBindingWriteFfpPsCpuNs, nanoseconds);
+}
+
+void countEncodeDrawArgbufCbufObserverCpuTime(std::uint64_t nanoseconds) {
+  add(counters().encodeDrawArgbufCbufObserverCpuNs, nanoseconds);
+}
+
+void countEncodeDrawArgbufCbufObserverVsCpuTime(std::uint64_t nanoseconds) {
+  add(counters().encodeDrawArgbufCbufObserverVsCpuNs, nanoseconds);
+}
+
+void countEncodeDrawArgbufCbufObserverPsCpuTime(std::uint64_t nanoseconds) {
+  add(counters().encodeDrawArgbufCbufObserverPsCpuNs, nanoseconds);
+}
+
+void countEncodeDrawArgbufCbufObserverFfpVsCpuTime(std::uint64_t nanoseconds) {
+  add(counters().encodeDrawArgbufCbufObserverFfpVsCpuNs, nanoseconds);
+}
+
+void countEncodeDrawArgbufCbufObserverFfpPsCpuTime(std::uint64_t nanoseconds) {
+  add(counters().encodeDrawArgbufCbufObserverFfpPsCpuNs, nanoseconds);
+}
+
+void countEncodeDrawArgbufCbufCacheMergeCpuTime(std::uint64_t nanoseconds) {
+  add(counters().encodeDrawArgbufCbufCacheMergeCpuNs, nanoseconds);
+}
+
+void countEncodeDrawArgbufCbufCachedRepointCpuTime(std::uint64_t nanoseconds) {
+  add(counters().encodeDrawArgbufCbufCachedRepointCpuNs, nanoseconds);
+}
+
+void countEncodeDrawArgbufCbufCachedRepointCalls(std::uint64_t calls) {
+  add(counters().encodeDrawArgbufCbufCachedRepointCalls, calls);
+}
+
+void countEncodeDrawArgbufCbufCachedRepointBytes(std::uint64_t bytes) {
+  add(counters().encodeDrawArgbufCbufCachedRepointBytes, bytes);
+}
+
+void countEncodeDrawArgbufCbufContentProbeCpuTime(std::uint64_t nanoseconds) {
+  add(counters().encodeDrawArgbufCbufContentProbeCpuNs, nanoseconds);
+}
+
+void countEncodeDrawArgbufCbufContentProbeCalls(std::uint64_t calls) {
+  add(counters().encodeDrawArgbufCbufContentProbeCalls, calls);
+}
+
+void countEncodeDrawArgbufCbufContentProbeVsHits(std::uint64_t hits) {
+  add(counters().encodeDrawArgbufCbufContentProbeVsHits, hits);
+}
+
+void countEncodeDrawArgbufCbufContentProbeVsMisses(std::uint64_t misses) {
+  add(counters().encodeDrawArgbufCbufContentProbeVsMisses, misses);
+}
+
+void countEncodeDrawArgbufCbufContentProbePsHits(std::uint64_t hits) {
+  add(counters().encodeDrawArgbufCbufContentProbePsHits, hits);
+}
+
+void countEncodeDrawArgbufCbufContentProbePsMisses(std::uint64_t misses) {
+  add(counters().encodeDrawArgbufCbufContentProbePsMisses, misses);
+}
+
+void countEncodeDrawArgbufCbufContentProbeFfpPsHits(std::uint64_t hits) {
+  add(counters().encodeDrawArgbufCbufContentProbeFfpPsHits, hits);
+}
+
+void countEncodeDrawArgbufCbufContentProbeFfpPsMisses(std::uint64_t misses) {
+  add(counters().encodeDrawArgbufCbufContentProbeFfpPsMisses, misses);
+}
+
+void countEncodeDrawArgbufCbufReopenFullRepointCalls(std::uint64_t calls) {
+  add(counters().encodeDrawArgbufCbufReopenFullRepointCalls, calls);
+}
+
+void countEncodeDrawArgbufCbufReopenNoDirtyHashMismatch(std::uint64_t calls) {
+  add(counters().encodeDrawArgbufCbufReopenNoDirtyHashMismatch, calls);
+}
+
+void countEncodeDrawArgbufCbufReopenPartialCandidates(std::uint64_t calls) {
+  add(counters().encodeDrawArgbufCbufReopenPartialCandidates, calls);
+}
+
+void countEncodeDrawArgbufCbufReopenDirtyVs(std::uint64_t calls) {
+  add(counters().encodeDrawArgbufCbufReopenDirtyVs, calls);
+}
+
+void countEncodeDrawArgbufCbufReopenDirtyPs(std::uint64_t calls) {
+  add(counters().encodeDrawArgbufCbufReopenDirtyPs, calls);
+}
+
+void countEncodeDrawArgbufCbufReopenDirtyFfpVs(std::uint64_t calls) {
+  add(counters().encodeDrawArgbufCbufReopenDirtyFfpVs, calls);
+}
+
+void countEncodeDrawArgbufCbufReopenDirtyFfpPs(std::uint64_t calls) {
+  add(counters().encodeDrawArgbufCbufReopenDirtyFfpPs, calls);
+}
+
+void countEncodeDrawArgbufCbufUpdateVsCpuTime(std::uint64_t nanoseconds) {
+  add(counters().encodeDrawArgbufCbufUpdateVsCpuNs, nanoseconds);
+}
+
+void countEncodeDrawArgbufCbufUpdatePsCpuTime(std::uint64_t nanoseconds) {
+  add(counters().encodeDrawArgbufCbufUpdatePsCpuNs, nanoseconds);
+}
+
+void countEncodeDrawArgbufCbufUpdateFfpVsCpuTime(std::uint64_t nanoseconds) {
+  add(counters().encodeDrawArgbufCbufUpdateFfpVsCpuNs, nanoseconds);
+}
+
+void countEncodeDrawArgbufCbufUpdateFfpPsCpuTime(std::uint64_t nanoseconds) {
+  add(counters().encodeDrawArgbufCbufUpdateFfpPsCpuNs, nanoseconds);
+}
+
+void countEncodeDrawArgbufCbufUpdateVsCalls(std::uint64_t calls) {
+  add(counters().encodeDrawArgbufCbufUpdateVsCalls, calls);
+}
+
+void countEncodeDrawArgbufCbufUpdatePsCalls(std::uint64_t calls) {
+  add(counters().encodeDrawArgbufCbufUpdatePsCalls, calls);
+}
+
+void countEncodeDrawArgbufCbufUpdateFfpVsCalls(std::uint64_t calls) {
+  add(counters().encodeDrawArgbufCbufUpdateFfpVsCalls, calls);
+}
+
+void countEncodeDrawArgbufCbufUpdateFfpPsCalls(std::uint64_t calls) {
+  add(counters().encodeDrawArgbufCbufUpdateFfpPsCalls, calls);
+}
+
+void countEncodeDrawArgbufCbufUpdateVsBytes(std::uint64_t bytes) {
+  add(counters().encodeDrawArgbufCbufUpdateVsBytes, bytes);
+}
+
+void countEncodeDrawArgbufCbufUpdatePsBytes(std::uint64_t bytes) {
+  add(counters().encodeDrawArgbufCbufUpdatePsBytes, bytes);
+}
+
+void countEncodeDrawArgbufCbufUpdateFfpVsBytes(std::uint64_t bytes) {
+  add(counters().encodeDrawArgbufCbufUpdateFfpVsBytes, bytes);
+}
+
+void countEncodeDrawArgbufCbufUpdateFfpPsBytes(std::uint64_t bytes) {
+  add(counters().encodeDrawArgbufCbufUpdateFfpPsBytes, bytes);
+}
+
 void countEncodeDrawStreamBindCpuTime(std::uint64_t nanoseconds) {
   add(counters().encodeDrawStreamBindCpuNs, nanoseconds);
   updateMax(counters().encodeDrawStreamBindCpuMaxNs, nanoseconds);
   recordRing(counters().encodeDrawStreamBindCpuRing, nanoseconds);
+}
+
+void countEncodeDrawStreamBindRasterPhaseCpuTime(std::uint64_t nanoseconds) {
+  add(counters().encodeDrawStreamBindRasterPhaseCpuNs, nanoseconds);
+}
+
+void countEncodeDrawStreamBindRasterPhaseCalls(std::uint64_t calls) {
+  add(counters().encodeDrawStreamBindRasterPhaseCalls, calls);
+}
+
+void countEncodeDrawStreamBindFfpStreamCpuTime(std::uint64_t nanoseconds) {
+  add(counters().encodeDrawStreamBindFfpStreamCpuNs, nanoseconds);
+}
+
+void countEncodeDrawStreamBindFfpStreamCalls(std::uint64_t calls) {
+  add(counters().encodeDrawStreamBindFfpStreamCalls, calls);
+}
+
+void countEncodeDrawStreamBindShaderStreamCpuTime(std::uint64_t nanoseconds) {
+  add(counters().encodeDrawStreamBindShaderStreamCpuNs, nanoseconds);
+}
+
+void countEncodeDrawStreamBindShaderStreamCalls(std::uint64_t calls) {
+  add(counters().encodeDrawStreamBindShaderStreamCalls, calls);
+}
+
+void countEncodeDrawStreamBindTexturePhaseCpuTime(std::uint64_t nanoseconds) {
+  add(counters().encodeDrawStreamBindTexturePhaseCpuNs, nanoseconds);
+}
+
+void countEncodeDrawStreamBindTexturePhaseCalls(std::uint64_t calls) {
+  add(counters().encodeDrawStreamBindTexturePhaseCalls, calls);
+}
+
+void countEncodeDrawStreamBindIndexPhaseCpuTime(std::uint64_t nanoseconds) {
+  add(counters().encodeDrawStreamBindIndexPhaseCpuNs, nanoseconds);
+}
+
+void countEncodeDrawStreamBindIndexPhaseCalls(std::uint64_t calls) {
+  add(counters().encodeDrawStreamBindIndexPhaseCalls, calls);
+}
+
+void countEncodeDrawTextureSamplerFragmentResolveCpuTime(std::uint64_t nanoseconds) {
+  add(counters().encodeDrawTextureSamplerFragmentResolveCpuNs, nanoseconds);
+}
+
+void countEncodeDrawTextureSamplerFragmentResolveCalls(std::uint64_t calls) {
+  add(counters().encodeDrawTextureSamplerFragmentResolveCalls, calls);
+}
+
+void countEncodeDrawTextureSamplerFragmentResolveTextureCpuTime(std::uint64_t nanoseconds) {
+  add(counters().encodeDrawTextureSamplerFragmentResolveTextureCpuNs, nanoseconds);
+}
+
+void countEncodeDrawTextureSamplerFragmentResolveTextureCalls(std::uint64_t calls) {
+  add(counters().encodeDrawTextureSamplerFragmentResolveTextureCalls, calls);
+}
+
+void countEncodeDrawTextureSamplerFragmentResourceArrayCpuTime(std::uint64_t nanoseconds) {
+  add(counters().encodeDrawTextureSamplerFragmentResourceArrayCpuNs, nanoseconds);
+}
+
+void countEncodeDrawTextureSamplerFragmentResourceArrayCalls(std::uint64_t calls) {
+  add(counters().encodeDrawTextureSamplerFragmentResourceArrayCalls, calls);
+}
+
+void countEncodeDrawTextureSamplerFragmentDirectCpuTime(std::uint64_t nanoseconds) {
+  add(counters().encodeDrawTextureSamplerFragmentDirectCpuNs, nanoseconds);
+}
+
+void countEncodeDrawTextureSamplerFragmentDirectCalls(std::uint64_t calls) {
+  add(counters().encodeDrawTextureSamplerFragmentDirectCalls, calls);
+}
+
+void countEncodeDrawTextureSamplerFragmentDirectTextureCpuTime(std::uint64_t nanoseconds) {
+  add(counters().encodeDrawTextureSamplerFragmentDirectTextureCpuNs, nanoseconds);
+}
+
+void countEncodeDrawTextureSamplerFragmentDirectTextureCalls(std::uint64_t calls) {
+  add(counters().encodeDrawTextureSamplerFragmentDirectTextureCalls, calls);
+}
+
+void countEncodeDrawTextureSamplerFragmentDirectTextureSetCpuTime(std::uint64_t nanoseconds) {
+  add(counters().encodeDrawTextureSamplerFragmentDirectTextureSetCpuNs, nanoseconds);
+}
+
+void countEncodeDrawTextureSamplerFragmentDirectTextureSetCalls(std::uint64_t calls) {
+  add(counters().encodeDrawTextureSamplerFragmentDirectTextureSetCalls, calls);
+}
+
+void countEncodeDrawTextureSamplerFragmentDirectSamplerCpuTime(std::uint64_t nanoseconds) {
+  add(counters().encodeDrawTextureSamplerFragmentDirectSamplerCpuNs, nanoseconds);
+}
+
+void countEncodeDrawTextureSamplerFragmentDirectSamplerCalls(std::uint64_t calls) {
+  add(counters().encodeDrawTextureSamplerFragmentDirectSamplerCalls, calls);
+}
+
+void countEncodeDrawTextureSamplerFragmentDirectSamplerSetCpuTime(std::uint64_t nanoseconds) {
+  add(counters().encodeDrawTextureSamplerFragmentDirectSamplerSetCpuNs, nanoseconds);
+}
+
+void countEncodeDrawTextureSamplerFragmentDirectSamplerSetCalls(std::uint64_t calls) {
+  add(counters().encodeDrawTextureSamplerFragmentDirectSamplerSetCalls, calls);
+}
+
+void countEncodeDrawTextureSamplerSamplerLookupCpuTime(std::uint64_t nanoseconds) {
+  add(counters().encodeDrawTextureSamplerSamplerLookupCpuNs, nanoseconds);
+}
+
+void countEncodeDrawTextureSamplerSamplerLookupCalls(std::uint64_t calls) {
+  add(counters().encodeDrawTextureSamplerSamplerLookupCalls, calls);
+}
+
+void countEncodeDrawTextureSamplerSamplerLookupSkippedPrehandle(std::uint64_t skips) {
+  add(counters().encodeDrawTextureSamplerSamplerLookupSkippedPrehandle, skips);
+}
+
+void countEncodeDrawTextureSamplerLodBiasCpuTime(std::uint64_t nanoseconds) {
+  add(counters().encodeDrawTextureSamplerLodBiasCpuNs, nanoseconds);
+}
+
+void countEncodeDrawTextureSamplerLodBiasCalls(std::uint64_t calls) {
+  add(counters().encodeDrawTextureSamplerLodBiasCalls, calls);
+}
+
+void countEncodeDrawTextureSamplerVertexResolveCpuTime(std::uint64_t nanoseconds) {
+  add(counters().encodeDrawTextureSamplerVertexResolveCpuNs, nanoseconds);
+}
+
+void countEncodeDrawTextureSamplerVertexResolveCalls(std::uint64_t calls) {
+  add(counters().encodeDrawTextureSamplerVertexResolveCalls, calls);
+}
+
+void countEncodeDrawTextureSamplerVertexDirectCpuTime(std::uint64_t nanoseconds) {
+  add(counters().encodeDrawTextureSamplerVertexDirectCpuNs, nanoseconds);
+}
+
+void countEncodeDrawTextureSamplerVertexDirectCalls(std::uint64_t calls) {
+  add(counters().encodeDrawTextureSamplerVertexDirectCalls, calls);
 }
 
 void countEncodeDrawRasterStateCpuTime(std::uint64_t nanoseconds) {
@@ -2477,6 +3357,64 @@ void countEncodeDrawIndexCacheOriginalMeasureCpuTime(std::uint64_t nanoseconds) 
 
 void countEncodeDrawIndexCacheCandidateBuildCpuTime(std::uint64_t nanoseconds) {
   add(counters().encodeDrawIndexCacheCandidateBuildCpuNs, nanoseconds);
+}
+
+void countEncodeDrawIndexCacheCandidateReadCpuTime(std::uint64_t nanoseconds) {
+  add(counters().encodeDrawIndexCacheCandidateReadCpuNs, nanoseconds);
+}
+
+void countEncodeDrawIndexCacheCandidateAdjacencyCpuTime(std::uint64_t nanoseconds) {
+  add(counters().encodeDrawIndexCacheCandidateAdjacencyCpuNs, nanoseconds);
+}
+
+void countEncodeDrawIndexCacheCandidateSelectCpuTime(std::uint64_t nanoseconds) {
+  add(counters().encodeDrawIndexCacheCandidateSelectCpuNs, nanoseconds);
+}
+
+void countEncodeDrawIndexCacheCandidateWriteCpuTime(std::uint64_t nanoseconds) {
+  add(counters().encodeDrawIndexCacheCandidateWriteCpuNs, nanoseconds);
+}
+
+void countEncodeDrawIndexCacheCandidateSelectVolume(std::uint64_t calls,
+                                                    std::uint64_t slots,
+                                                    std::uint64_t scored,
+                                                    std::uint64_t skipped,
+                                                    std::uint64_t maxCandidates) {
+  auto& c = counters();
+  add(c.encodeDrawIndexCacheCandidateSelectCalls, calls);
+  add(c.encodeDrawIndexCacheCandidateSelectSlots, slots);
+  add(c.encodeDrawIndexCacheCandidateSelectScored, scored);
+  add(c.encodeDrawIndexCacheCandidateSelectSkipped, skipped);
+  updateMax(c.encodeDrawIndexCacheCandidateSelectCandidatesMax, maxCandidates);
+}
+
+void countEncodeDrawIndexCacheCandidateFrontierDropped(std::uint64_t dropped) {
+  add(counters().encodeDrawIndexCacheCandidateFrontierDropped, dropped);
+}
+
+void countEncodeDrawIndexCacheCandidateLazyFrontier(std::uint64_t heapPops,
+                                                    std::uint64_t refreshes,
+                                                    std::uint64_t staleDrops,
+                                                    std::uint64_t accepted) {
+  auto& c = counters();
+  add(c.encodeDrawIndexCacheCandidateLazyHeapPops, heapPops);
+  add(c.encodeDrawIndexCacheCandidateLazyRefreshes, refreshes);
+  add(c.encodeDrawIndexCacheCandidateLazyStaleDrops, staleDrops);
+  add(c.encodeDrawIndexCacheCandidateLazyAccepted, accepted);
+}
+
+void countEncodeDrawIndexCacheCandidateBucketedSelect(
+    std::uint64_t vertexVisits,
+    std::uint64_t bucketMoves,
+    std::uint64_t selected) {
+  auto& c = counters();
+  add(c.encodeDrawIndexCacheCandidateBucketVertexVisits, vertexVisits);
+  add(c.encodeDrawIndexCacheCandidateBucketMoves, bucketMoves);
+  add(c.encodeDrawIndexCacheCandidateBucketSelected, selected);
+}
+
+void countEncodeDrawIndexCacheCandidateUpperBoundRejected(std::uint64_t rejected) {
+  add(counters().encodeDrawIndexCacheCandidateUpperBoundRejected, rejected);
 }
 
 void countEncodeDrawIndexCacheCandidateMeasureCpuTime(std::uint64_t nanoseconds) {
@@ -2566,6 +3504,228 @@ void countD3D9SnapshotDrawSubmissionCpuTime(std::uint64_t nanoseconds) {
   add(counters().d3d9SnapshotDrawSubmissionCpuNs, nanoseconds);
   updateMax(counters().d3d9SnapshotDrawSubmissionCpuMaxNs, nanoseconds);
   recordRing(counters().d3d9SnapshotDrawSubmissionCpuRing, nanoseconds);
+}
+
+void countD3D9SnapshotCacheLookupCpuTime(std::uint64_t nanoseconds) {
+  add(counters().d3d9SnapshotCacheLookupCpuNs, nanoseconds);
+}
+
+void countD3D9SnapshotCacheHitCpuTime(std::uint64_t nanoseconds) {
+  add(counters().d3d9SnapshotCacheHitCpuNs, nanoseconds);
+}
+
+void countD3D9SnapshotCacheMissCpuTime(std::uint64_t nanoseconds) {
+  add(counters().d3d9SnapshotCacheMissCpuNs, nanoseconds);
+}
+
+void countD3D9SnapshotCacheBindingLayoutCpuTime(std::uint64_t nanoseconds) {
+  add(counters().d3d9SnapshotCacheBindingLayoutCpuNs, nanoseconds);
+}
+
+void countD3D9SnapshotCacheUniformRefreshCpuTime(std::uint64_t nanoseconds) {
+  add(counters().d3d9SnapshotCacheUniformRefreshCpuNs, nanoseconds);
+}
+
+void countD3D9SnapshotCacheUniformBuildCpuTime(std::uint64_t nanoseconds) {
+  add(counters().d3d9SnapshotCacheUniformBuildCpuNs, nanoseconds);
+}
+
+void countD3D9SnapshotCacheUniformHashCpuTime(std::uint64_t nanoseconds) {
+  add(counters().d3d9SnapshotCacheUniformHashCpuNs, nanoseconds);
+}
+
+void countD3D9SnapshotCacheMissShaderLayoutCpuTime(std::uint64_t nanoseconds) {
+  add(counters().d3d9SnapshotCacheMissShaderLayoutCpuNs, nanoseconds);
+}
+
+void countD3D9SnapshotCacheMissUniformBuildCpuTime(std::uint64_t nanoseconds) {
+  add(counters().d3d9SnapshotCacheMissUniformBuildCpuNs, nanoseconds);
+}
+
+void countD3D9SnapshotCacheMissHotBuildCpuTime(std::uint64_t nanoseconds) {
+  add(counters().d3d9SnapshotCacheMissHotBuildCpuNs, nanoseconds);
+}
+
+void countD3D9SnapshotUniformBuildCall() {
+  add(counters().d3d9SnapshotUniformBuildCalls);
+}
+
+void countD3D9SnapshotUniformBuildVsConstCopyCpuTime(std::uint64_t nanoseconds) {
+  add(counters().d3d9SnapshotUniformBuildVsConstCopyCpuNs, nanoseconds);
+}
+
+void countD3D9SnapshotUniformBuildPsConstCopyCpuTime(std::uint64_t nanoseconds) {
+  add(counters().d3d9SnapshotUniformBuildPsConstCopyCpuNs, nanoseconds);
+}
+
+void countD3D9SnapshotUniformBuildFfpMatrixCpuTime(std::uint64_t nanoseconds) {
+  add(counters().d3d9SnapshotUniformBuildFfpMatrixCpuNs, nanoseconds);
+}
+
+void countD3D9SnapshotUniformBuildFfpMaterialLightCpuTime(std::uint64_t nanoseconds) {
+  add(counters().d3d9SnapshotUniformBuildFfpMaterialLightCpuNs, nanoseconds);
+}
+
+void countD3D9SnapshotUniformBuildTextureTransformCpuTime(std::uint64_t nanoseconds) {
+  add(counters().d3d9SnapshotUniformBuildTextureTransformCpuNs, nanoseconds);
+}
+
+void countD3D9SnapshotUniformBuildClipPlaneCpuTime(std::uint64_t nanoseconds) {
+  add(counters().d3d9SnapshotUniformBuildClipPlaneCpuNs, nanoseconds);
+}
+
+void countD3D9SnapshotUniformBuildHashCpuTime(std::uint64_t nanoseconds) {
+  add(counters().d3d9SnapshotUniformBuildHashCpuNs, nanoseconds);
+}
+
+void countD3D9SnapshotUniformBuildVsConstHashCpuTime(std::uint64_t nanoseconds) {
+  add(counters().d3d9SnapshotUniformBuildVsConstHashCpuNs, nanoseconds);
+}
+
+void countD3D9SnapshotUniformBuildPsConstHashCpuTime(std::uint64_t nanoseconds) {
+  add(counters().d3d9SnapshotUniformBuildPsConstHashCpuNs, nanoseconds);
+}
+
+void countD3D9SnapshotUniformBuildNonConstHashCpuTime(std::uint64_t nanoseconds) {
+  add(counters().d3d9SnapshotUniformBuildNonConstHashCpuNs, nanoseconds);
+}
+
+void countD3D9SnapshotUniformBuildPayloadCombineHashCpuTime(std::uint64_t nanoseconds) {
+  add(counters().d3d9SnapshotUniformBuildPayloadCombineHashCpuNs, nanoseconds);
+}
+
+void countD3D9SnapshotUniformBuildVsConstHashFull() {
+  add(counters().d3d9SnapshotUniformBuildVsConstHashFull);
+}
+
+void countD3D9SnapshotUniformBuildPsConstHashFull() {
+  add(counters().d3d9SnapshotUniformBuildPsConstHashFull);
+}
+
+void countD3D9SnapshotUniformBuildVsConstHashFullNoUsage() {
+  add(counters().d3d9SnapshotUniformBuildVsConstHashFullNoUsage);
+}
+
+void countD3D9SnapshotUniformBuildPsConstHashFullNoUsage() {
+  add(counters().d3d9SnapshotUniformBuildPsConstHashFullNoUsage);
+}
+
+void countD3D9SnapshotUniformBuildVsConstHashFullUnknown() {
+  add(counters().d3d9SnapshotUniformBuildVsConstHashFullUnknown);
+}
+
+void countD3D9SnapshotUniformBuildPsConstHashFullUnknown() {
+  add(counters().d3d9SnapshotUniformBuildPsConstHashFullUnknown);
+}
+
+void countD3D9SnapshotUniformBuildVsConstHashFullUnknownBytecode() {
+  add(counters().d3d9SnapshotUniformBuildVsConstHashFullUnknownBytecode);
+}
+
+void countD3D9SnapshotUniformBuildPsConstHashFullUnknownBytecode() {
+  add(counters().d3d9SnapshotUniformBuildPsConstHashFullUnknownBytecode);
+}
+
+void countD3D9SnapshotUniformBuildVsConstHashFullUnknownNonBytecode() {
+  add(counters().d3d9SnapshotUniformBuildVsConstHashFullUnknownNonBytecode);
+}
+
+void countD3D9SnapshotUniformBuildPsConstHashFullUnknownNonBytecode() {
+  add(counters().d3d9SnapshotUniformBuildPsConstHashFullUnknownNonBytecode);
+}
+
+void countD3D9SnapshotUniformBuildVsConstHashFullIndexedFloat() {
+  add(counters().d3d9SnapshotUniformBuildVsConstHashFullIndexedFloat);
+}
+
+void countD3D9SnapshotUniformBuildPsConstHashFullIndexedFloat() {
+  add(counters().d3d9SnapshotUniformBuildPsConstHashFullIndexedFloat);
+}
+
+void countD3D9SnapshotUniformBuildVsConstHashFullIndexedInt() {
+  add(counters().d3d9SnapshotUniformBuildVsConstHashFullIndexedInt);
+}
+
+void countD3D9SnapshotUniformBuildPsConstHashFullIndexedInt() {
+  add(counters().d3d9SnapshotUniformBuildPsConstHashFullIndexedInt);
+}
+
+void countD3D9SnapshotUniformBuildVsConstHashFullIndexedBool() {
+  add(counters().d3d9SnapshotUniformBuildVsConstHashFullIndexedBool);
+}
+
+void countD3D9SnapshotUniformBuildPsConstHashFullIndexedBool() {
+  add(counters().d3d9SnapshotUniformBuildPsConstHashFullIndexedBool);
+}
+
+void countD3D9SnapshotUniformBuildVsConstHashBytes(std::uint64_t bytes) {
+  add(counters().d3d9SnapshotUniformBuildVsConstHashBytes, bytes);
+}
+
+void countD3D9SnapshotUniformBuildPsConstHashBytes(std::uint64_t bytes) {
+  add(counters().d3d9SnapshotUniformBuildPsConstHashBytes, bytes);
+}
+
+void countD3D9SnapshotUniformCopyCpuTime(std::uint64_t nanoseconds) {
+  add(counters().d3d9SnapshotUniformCopyCpuNs, nanoseconds);
+}
+
+void countD3D9SnapshotStateCopyCpuTime(std::uint64_t nanoseconds) {
+  add(counters().d3d9SnapshotStateCopyCpuNs, nanoseconds);
+}
+
+void countD3D9SnapshotDebugSnapshotCpuTime(std::uint64_t nanoseconds) {
+  add(counters().d3d9SnapshotDebugSnapshotCpuNs, nanoseconds);
+}
+
+void countD3D9SnapshotBindingOverrideCpuTime(std::uint64_t nanoseconds) {
+  add(counters().d3d9SnapshotBindingOverrideCpuNs, nanoseconds);
+}
+
+void countD3D9SnapshotBindingOverride(std::uint32_t streamScans,
+                                      std::uint32_t streamRecords,
+                                      bool indexRecord) {
+  add(counters().d3d9SnapshotBindingOverrideStreamScans, streamScans);
+  add(counters().d3d9SnapshotBindingOverrideStreamRecords, streamRecords);
+  if (indexRecord) {
+    add(counters().d3d9SnapshotBindingOverrideIndexRecords);
+  }
+}
+
+void countDrawUniformPayloadLookupCandidateHit() {
+  add(counters().drawUniformPayloadLookupCandidateHits);
+}
+
+void countDrawUniformPayloadLookupLastHit() {
+  add(counters().drawUniformPayloadLookupLastHits);
+}
+
+void countDrawUniformPayloadLookupBucketHit() {
+  add(counters().drawUniformPayloadLookupBucketHits);
+}
+
+void countDrawUniformPayloadLookupBucketMiss() {
+  add(counters().drawUniformPayloadLookupBucketMisses);
+}
+
+void countDrawUniformPayloadLookupLinearHit() {
+  add(counters().drawUniformPayloadLookupLinearHits);
+}
+
+void countDrawUniformPayloadLookupBucketProbe(std::uint64_t probes) {
+  add(counters().drawUniformPayloadLookupBucketProbes, probes);
+}
+
+void countDrawUniformPayloadLookupBucketCollision(std::uint64_t collisions) {
+  add(counters().drawUniformPayloadLookupBucketCollisions, collisions);
+}
+
+void countDrawUniformPayloadLookupHashCollision(std::uint64_t collisions) {
+  add(counters().drawUniformPayloadLookupHashCollisions, collisions);
+}
+
+void countDrawUniformPayloadAppend() {
+  add(counters().drawUniformPayloadAppends);
 }
 
 void countTransientUploadCpuTime(std::uint64_t nanoseconds, std::size_t bytes) {
@@ -3932,6 +5092,14 @@ CounterSnapshot snapshot() {
   s.encodeDrawPipelineLookupCpuNs = load(c.encodeDrawPipelineLookupCpuNs);
   s.encodeDrawUniformBuildCpuNs = load(c.encodeDrawUniformBuildCpuNs);
   s.encodeDrawFvfDecodeCpuNs = load(c.encodeDrawFvfDecodeCpuNs);
+  s.encodeDrawBindingPacketCpuNs = load(c.encodeDrawBindingPacketCpuNs);
+  s.encodeDrawBindingPacketPlanCpuNs = load(c.encodeDrawBindingPacketPlanCpuNs);
+  s.encodeDrawBindingPacketCacheCpuNs = load(c.encodeDrawBindingPacketCacheCpuNs);
+  s.encodeDrawBindingPacketTextureRecordCpuNs =
+      load(c.encodeDrawBindingPacketTextureRecordCpuNs);
+  s.encodeDrawArgbufSetupCpuNs = load(c.encodeDrawArgbufSetupCpuNs);
+  s.encodeDrawArgbufOpenCpuNs = load(c.encodeDrawArgbufOpenCpuNs);
+  s.encodeDrawArgbufCbufUpdateCpuNs = load(c.encodeDrawArgbufCbufUpdateCpuNs);
   s.encodeDrawStreamBindCpuNs = load(c.encodeDrawStreamBindCpuNs);
   s.encodeDrawIssueCpuNs = load(c.encodeDrawIssueCpuNs);
   s.transientUploadCpuNs = load(c.transientUploadCpuNs);
@@ -3977,6 +5145,13 @@ void emitFrameDelta(std::uint64_t frameId,
       "encode_draw_pipeline_lookup_cpu_ms=%.3f "
       "encode_draw_uniform_build_cpu_ms=%.3f "
       "encode_draw_fvf_decode_cpu_ms=%.3f "
+      "encode_draw_binding_packet_cpu_ms=%.3f "
+      "encode_draw_binding_packet_plan_cpu_ms=%.3f "
+      "encode_draw_binding_packet_cache_cpu_ms=%.3f "
+      "encode_draw_binding_packet_texture_record_cpu_ms=%.3f "
+      "encode_draw_argbuf_setup_cpu_ms=%.3f "
+      "encode_draw_argbuf_open_cpu_ms=%.3f "
+      "encode_draw_argbuf_cbuf_update_cpu_ms=%.3f "
       "encode_draw_stream_bind_cpu_ms=%.3f "
       "encode_draw_issue_cpu_ms=%.3f transient_upload_cpu_ms=%.3f "
       "command_buffer_create_cpu_ms=%.3f command_buffer_commit_cpu_ms=%.3f "
@@ -4013,6 +5188,28 @@ void emitFrameDelta(std::uint64_t frameId,
           1000000.0,
       static_cast<double>(delta(prev.encodeDrawFvfDecodeCpuNs,
                                  curr.encodeDrawFvfDecodeCpuNs)) /
+          1000000.0,
+      static_cast<double>(delta(prev.encodeDrawBindingPacketCpuNs,
+                                 curr.encodeDrawBindingPacketCpuNs)) /
+          1000000.0,
+      static_cast<double>(delta(prev.encodeDrawBindingPacketPlanCpuNs,
+                                 curr.encodeDrawBindingPacketPlanCpuNs)) /
+          1000000.0,
+      static_cast<double>(delta(prev.encodeDrawBindingPacketCacheCpuNs,
+                                 curr.encodeDrawBindingPacketCacheCpuNs)) /
+          1000000.0,
+      static_cast<double>(
+          delta(prev.encodeDrawBindingPacketTextureRecordCpuNs,
+                curr.encodeDrawBindingPacketTextureRecordCpuNs)) /
+          1000000.0,
+      static_cast<double>(delta(prev.encodeDrawArgbufSetupCpuNs,
+                                 curr.encodeDrawArgbufSetupCpuNs)) /
+          1000000.0,
+      static_cast<double>(delta(prev.encodeDrawArgbufOpenCpuNs,
+                                 curr.encodeDrawArgbufOpenCpuNs)) /
+          1000000.0,
+      static_cast<double>(delta(prev.encodeDrawArgbufCbufUpdateCpuNs,
+                                 curr.encodeDrawArgbufCbufUpdateCpuNs)) /
           1000000.0,
       static_cast<double>(delta(prev.encodeDrawStreamBindCpuNs,
                                  curr.encodeDrawStreamBindCpuNs)) /

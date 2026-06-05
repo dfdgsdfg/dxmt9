@@ -452,6 +452,30 @@ bool optimizeScreenBlendIndexCache();
 // Env: DXMT9_OPTIMIZE_SCREEN_BLEND_INDEX_CACHE_MIN_GAIN_PCT.
 std::uint32_t optimizeScreenBlendIndexCacheMinGainPct();
 
+// Diagnostic-only cap for the LRU32 index-cache candidate frontier. Zero keeps
+// the uncapped builder.
+// Env: DXMT9_INDEX_CACHE_CANDIDATE_FRONTIER_CAP.
+std::uint32_t indexCacheCandidateFrontierCap();
+
+// Diagnostic-only alternate candidate selector that uses a lazily refreshed
+// priority frontier instead of a full vector rescan. It can change primitive
+// order and candidate quality.
+// Env: DXMT9_INDEX_CACHE_CANDIDATE_LAZY_FRONTIER.
+bool indexCacheCandidateLazyFrontier();
+
+// Diagnostic-only alternate candidate selector that keeps active candidates in
+// small cached-vertex-count buckets and updates only touched-vertex neighbors.
+// It can change primitive order and candidate quality.
+// Env: DXMT9_INDEX_CACHE_CANDIDATE_BUCKETED_SELECT.
+bool indexCacheCandidateBucketedSelect();
+
+// Diagnostic-only upper-bound pre-gate for the LRU32 index-cache candidate.
+// It measures the original unique index count and skips candidate construction
+// when even the theoretical best LRU32 miss count cannot clear the configured
+// min-gain gate.
+// Env: DXMT9_INDEX_CACHE_CANDIDATE_UPPER_BOUND_GATE.
+bool indexCacheCandidateUpperBoundGate();
+
 // Diagnostic-only: submit the same LRU32 cache-aware candidate measured by
 // DXMT9_MEASURE_INDEX_CACHE_OPT_CANDIDATE, but only when the candidate reduces
 // LRU32 misses by at least

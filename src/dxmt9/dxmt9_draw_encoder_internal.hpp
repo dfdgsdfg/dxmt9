@@ -13,6 +13,7 @@
 #include <algorithm>
 #include <array>
 #include <bit>
+#include <chrono>
 #include <cstddef>
 #include <cstdint>
 #include <cstring>
@@ -177,6 +178,7 @@ struct FragmentTextureSamplerBinding {
   u32 stage = 0;
   core::Handle texture{};
   u32 textureLod = 0;
+  u64 samplerStateHash = 0;
   core::FlatStateSet<core::kMaxSamplerStates> samplerStates{};
 };
 
@@ -210,6 +212,7 @@ struct VertexTextureSamplerBinding {
   u32 stage = 0;
   core::Handle texture{};
   u32 textureLod = 0;
+  u64 samplerStateHash = 0;
   core::FlatStateSet<core::kMaxSamplerStates> samplerStates{};
 };
 
@@ -256,10 +259,11 @@ struct DrawBindingPacketTextureSamplerKey {
   u32 stage = 0;
   u64 texture = 0;
   u32 textureLod = 0;
+  u64 samplerStateHash = 0;
   core::FlatStateSet<core::kMaxSamplerStates> samplerStates{};
 
-  friend constexpr bool operator==(const DrawBindingPacketTextureSamplerKey&,
-                                   const DrawBindingPacketTextureSamplerKey&) = default;
+  friend constexpr bool operator==(const DrawBindingPacketTextureSamplerKey& lhs,
+                                   const DrawBindingPacketTextureSamplerKey& rhs);
 };
 
 struct DrawBindingPacketExtraStreamKey {
@@ -293,8 +297,8 @@ struct DrawBindingPacketKey {
   u32 extraStreamCount = 0;
   DrawBindingPacketRasterKey raster{};
 
-  friend constexpr bool operator==(const DrawBindingPacketKey&,
-                                   const DrawBindingPacketKey&) = default;
+  friend constexpr bool operator==(const DrawBindingPacketKey& lhs,
+                                   const DrawBindingPacketKey& rhs);
 };
 
 inline u64 drawBindingPacketHashMix(u64 seed, u64 value) noexcept {
@@ -320,6 +324,59 @@ inline u64 hashDrawBindingPacketSamplerStates(
     seed = drawBindingPacketHashMix(seed, states.entries[i].value);
   }
   return seed;
+}
+
+template <std::size_t MaxEntries>
+constexpr bool drawBindingPacketFlatStateSetsEqual(
+    const core::FlatStateSet<MaxEntries>& lhs,
+    const core::FlatStateSet<MaxEntries>& rhs) noexcept {
+  if (lhs.count != rhs.count ||
+      lhs.hash != rhs.hash ||
+      lhs.overflow != rhs.overflow) {
+    return false;
+  }
+  const u32 count = std::min<u32>(lhs.count, static_cast<u32>(MaxEntries));
+  for (u32 i = 0; i < count; ++i) {
+    if (lhs.entries[i] != rhs.entries[i]) {
+      return false;
+    }
+  }
+  return true;
+}
+
+constexpr bool operator==(const DrawBindingPacketTextureSamplerKey& lhs,
+                          const DrawBindingPacketTextureSamplerKey& rhs) {
+  return lhs.stage == rhs.stage &&
+         lhs.texture == rhs.texture &&
+         lhs.textureLod == rhs.textureLod &&
+         lhs.samplerStateHash == rhs.samplerStateHash &&
+         drawBindingPacketFlatStateSetsEqual(lhs.samplerStates, rhs.samplerStates);
+}
+
+constexpr bool operator==(const DrawBindingPacketKey& lhs,
+                          const DrawBindingPacketKey& rhs) {
+  if (lhs.fragmentTextureSamplerCount != rhs.fragmentTextureSamplerCount ||
+      lhs.vertexTextureSamplerCount != rhs.vertexTextureSamplerCount ||
+      lhs.extraStreamCount != rhs.extraStreamCount ||
+      lhs.raster != rhs.raster) {
+    return false;
+  }
+  for (u32 i = 0; i < lhs.fragmentTextureSamplerCount; ++i) {
+    if (lhs.fragmentTextureSamplers[i] != rhs.fragmentTextureSamplers[i]) {
+      return false;
+    }
+  }
+  for (u32 i = 0; i < lhs.vertexTextureSamplerCount; ++i) {
+    if (lhs.vertexTextureSamplers[i] != rhs.vertexTextureSamplers[i]) {
+      return false;
+    }
+  }
+  for (u32 i = 0; i < lhs.extraStreamCount; ++i) {
+    if (lhs.extraStreams[i] != rhs.extraStreams[i]) {
+      return false;
+    }
+  }
+  return true;
 }
 
 inline DrawBindingPacketRasterKey makeDrawBindingPacketRasterKey(
@@ -351,6 +408,7 @@ inline DrawBindingPacketKey makeDrawBindingPacketKey(
         .stage = binding.stage,
         .texture = binding.texture.value,
         .textureLod = binding.textureLod,
+        .samplerStateHash = binding.samplerStateHash,
         .samplerStates = binding.samplerStates,
     };
   }
@@ -362,6 +420,7 @@ inline DrawBindingPacketKey makeDrawBindingPacketKey(
         .stage = binding.stage,
         .texture = binding.texture.value,
         .textureLod = binding.textureLod,
+        .samplerStateHash = binding.samplerStateHash,
         .samplerStates = binding.samplerStates,
     };
   }
@@ -389,8 +448,7 @@ inline u64 hashDrawBindingPacketKey(const DrawBindingPacketKey& key) noexcept {
     seed = drawBindingPacketHashMix(seed, binding.stage);
     seed = drawBindingPacketHashMix(seed, binding.texture);
     seed = drawBindingPacketHashMix(seed, binding.textureLod);
-    seed = drawBindingPacketHashMix(
-        seed, hashDrawBindingPacketSamplerStates(binding.samplerStates));
+    seed = drawBindingPacketHashMix(seed, binding.samplerStateHash);
   }
 
   seed = drawBindingPacketHashMix(seed, key.vertexTextureSamplerCount);
@@ -399,8 +457,7 @@ inline u64 hashDrawBindingPacketKey(const DrawBindingPacketKey& key) noexcept {
     seed = drawBindingPacketHashMix(seed, binding.stage);
     seed = drawBindingPacketHashMix(seed, binding.texture);
     seed = drawBindingPacketHashMix(seed, binding.textureLod);
-    seed = drawBindingPacketHashMix(
-        seed, hashDrawBindingPacketSamplerStates(binding.samplerStates));
+    seed = drawBindingPacketHashMix(seed, binding.samplerStateHash);
   }
 
   seed = drawBindingPacketHashMix(seed, key.extraStreamCount);
@@ -423,6 +480,104 @@ inline u64 hashDrawBindingPacketKey(const DrawBindingPacketKey& key) noexcept {
   return seed;
 }
 
+inline u64 hashDrawBindingPacketPlan(const DrawBindingPacketPlan& packet) noexcept {
+  u64 seed = drawBindingPacketHashMix(
+      0x5ad07b1f4c2e9638ull,
+      static_cast<u64>(packet.fragmentTextureSamplers.size()));
+  for (const auto& binding : packet.fragmentTextureSamplers) {
+    seed = drawBindingPacketHashMix(seed, binding.stage);
+    seed = drawBindingPacketHashMix(seed, binding.texture.value);
+    seed = drawBindingPacketHashMix(seed, binding.textureLod);
+    seed = drawBindingPacketHashMix(seed, binding.samplerStateHash);
+  }
+
+  seed = drawBindingPacketHashMix(
+      seed, static_cast<u64>(packet.vertexTextureSamplers.size()));
+  for (const auto& binding : packet.vertexTextureSamplers) {
+    seed = drawBindingPacketHashMix(seed, binding.stage);
+    seed = drawBindingPacketHashMix(seed, binding.texture.value);
+    seed = drawBindingPacketHashMix(seed, binding.textureLod);
+    seed = drawBindingPacketHashMix(seed, binding.samplerStateHash);
+  }
+
+  seed = drawBindingPacketHashMix(seed, static_cast<u64>(packet.extraStreams.size()));
+  for (const auto& binding : packet.extraStreams) {
+    seed = drawBindingPacketHashMix(seed, binding.stream);
+    seed = drawBindingPacketHashMix(seed, binding.metalSlot);
+    seed = drawBindingPacketHashMix(seed, binding.offset);
+    seed = drawBindingPacketHashMix(seed, binding.stride);
+  }
+
+  const auto raster = makeDrawBindingPacketRasterKey(packet.raster);
+  for (const auto bits : raster.viewportBits) {
+    seed = drawBindingPacketHashMix(seed, bits);
+  }
+  seed = drawBindingPacketHashMix(seed, raster.scissorX);
+  seed = drawBindingPacketHashMix(seed, raster.scissorY);
+  seed = drawBindingPacketHashMix(seed, raster.scissorWidth);
+  seed = drawBindingPacketHashMix(seed, raster.scissorHeight);
+  seed = drawBindingPacketHashMix(seed, raster.cullMode);
+  return seed;
+}
+
+inline bool drawBindingPacketTextureSamplerBindingsEqual(
+    const FragmentTextureSamplerBinding& lhs,
+    const FragmentTextureSamplerBinding& rhs) noexcept {
+  return lhs.stage == rhs.stage &&
+         lhs.texture == rhs.texture &&
+         lhs.textureLod == rhs.textureLod &&
+         lhs.samplerStateHash == rhs.samplerStateHash &&
+         drawBindingPacketFlatStateSetsEqual(lhs.samplerStates, rhs.samplerStates);
+}
+
+inline bool drawBindingPacketTextureSamplerBindingsEqual(
+    const VertexTextureSamplerBinding& lhs,
+    const VertexTextureSamplerBinding& rhs) noexcept {
+  return lhs.stage == rhs.stage &&
+         lhs.texture == rhs.texture &&
+         lhs.textureLod == rhs.textureLod &&
+         lhs.samplerStateHash == rhs.samplerStateHash &&
+         drawBindingPacketFlatStateSetsEqual(lhs.samplerStates, rhs.samplerStates);
+}
+
+inline bool drawBindingPacketExtraStreamBindingsEqual(
+    const ProgrammableVsExtraStreamBinding& lhs,
+    const ProgrammableVsExtraStreamBinding& rhs) noexcept {
+  return lhs.stream == rhs.stream &&
+         lhs.metalSlot == rhs.metalSlot &&
+         lhs.offset == rhs.offset &&
+         lhs.stride == rhs.stride;
+}
+
+inline bool drawBindingPacketPlansEqual(
+    const DrawBindingPacketPlan& lhs,
+    const DrawBindingPacketPlan& rhs) noexcept {
+  if (lhs.fragmentTextureSamplers.size() != rhs.fragmentTextureSamplers.size() ||
+      lhs.vertexTextureSamplers.size() != rhs.vertexTextureSamplers.size() ||
+      lhs.extraStreams.size() != rhs.extraStreams.size() ||
+      makeDrawBindingPacketRasterKey(lhs.raster) != makeDrawBindingPacketRasterKey(rhs.raster)) {
+    return false;
+  }
+  for (std::size_t i = 0; i < lhs.fragmentTextureSamplers.size(); ++i) {
+    if (!drawBindingPacketTextureSamplerBindingsEqual(
+            lhs.fragmentTextureSamplers[i], rhs.fragmentTextureSamplers[i])) {
+      return false;
+    }
+  }
+  for (std::size_t i = 0; i < lhs.vertexTextureSamplers.size(); ++i) {
+    if (!drawBindingPacketTextureSamplerBindingsEqual(
+            lhs.vertexTextureSamplers[i], rhs.vertexTextureSamplers[i])) {
+      return false;
+    }
+  }
+  for (std::size_t i = 0; i < lhs.extraStreams.size(); ++i) {
+    if (!drawBindingPacketExtraStreamBindingsEqual(lhs.extraStreams[i], rhs.extraStreams[i])) {
+      return false;
+    }
+  }
+  return true;
+}
+
 struct DrawBindingPacketKeyHash {
   std::size_t operator()(const DrawBindingPacketKey& key) const noexcept {
     return static_cast<std::size_t>(hashDrawBindingPacketKey(key));
@@ -432,7 +587,6 @@ struct DrawBindingPacketKeyHash {
 struct DrawBindingPacketCacheEntry {
   bool valid = false;
   u64 hash = 0;
-  DrawBindingPacketKey key{};
   DrawBindingPacketPlan packet{};
 };
 
@@ -443,22 +597,67 @@ struct DrawBindingPacketCache {
   u64 misses = 0;
 };
 
+struct DrawBindingPacketCacheStats {
+  u64 keyCpuNs = 0;
+  u64 hashCpuNs = 0;
+  u64 probeCpuNs = 0;
+  u64 storeCpuNs = 0;
+  u64 hits = 0;
+  u64 misses = 0;
+  u64 collisions = 0;
+};
+
+inline u64 drawBindingPacketNowNs() noexcept {
+  return static_cast<u64>(
+      std::chrono::duration_cast<std::chrono::nanoseconds>(
+          std::chrono::steady_clock::now().time_since_epoch()).count());
+}
+
 inline const DrawBindingPacketPlan& cacheDrawBindingPacket(
     DrawBindingPacketCache& cache,
-    const DrawBindingPacketPlan& packet) noexcept {
-  const auto key = makeDrawBindingPacketKey(packet);
-  const auto hash = hashDrawBindingPacketKey(key);
+    const DrawBindingPacketPlan& packet,
+    DrawBindingPacketCacheStats* stats = nullptr) noexcept {
+  const u64 hashStart = stats ? drawBindingPacketNowNs() : 0;
+  const auto hash = hashDrawBindingPacketPlan(packet);
+  const u64 hashEnd = stats ? drawBindingPacketNowNs() : 0;
+  if (stats) {
+    stats->hashCpuNs += hashEnd - hashStart;
+  }
+
+  const u64 probeStart = stats ? drawBindingPacketNowNs() : 0;
   auto& entry = cache.entries[hash % DrawBindingPacketCache::kCapacity];
-  if (entry.valid && entry.hash == hash && entry.key == key) {
+  const bool entryValid = entry.valid;
+  const bool hit = entryValid && entry.hash == hash &&
+                   drawBindingPacketPlansEqual(entry.packet, packet);
+  const u64 probeEnd = stats ? drawBindingPacketNowNs() : 0;
+  if (stats) {
+    stats->probeCpuNs += probeEnd - probeStart;
+  }
+
+  if (hit) {
     ++cache.hits;
+    if (stats) {
+      ++stats->hits;
+    }
     return entry.packet;
   }
 
   ++cache.misses;
+  if (stats) {
+    ++stats->misses;
+    if (entryValid) {
+      ++stats->collisions;
+    }
+  }
+
+  const u64 storeStart = stats ? drawBindingPacketNowNs() : 0;
   entry.valid = true;
   entry.hash = hash;
-  entry.key = key;
   entry.packet = packet;
+  const u64 storeEnd = stats ? drawBindingPacketNowNs() : 0;
+  if (stats) {
+    stats->storeCpuNs += storeEnd - storeStart;
+  }
   return entry.packet;
 }
 
@@ -571,6 +770,7 @@ inline FragmentTextureSamplerBindingList makeFragmentTextureSamplerBindings(
         .stage = stage,
         .texture = textureHandle,
         .textureLod = hot.textureLods[stage],
+        .samplerStateHash = hashDrawBindingPacketSamplerStates(hot.samplerStates[stage]),
         .samplerStates = hot.samplerStates[stage],
     });
   }
@@ -694,6 +894,7 @@ inline VertexTextureSamplerBindingList makeVertexTextureSamplerBindings(
         .stage = stage,
         .texture = textureHandle,
         .textureLod = hot.textureLods[textureSlot],
+        .samplerStateHash = hashDrawBindingPacketSamplerStates(hot.samplerStates[textureSlot]),
         .samplerStates = hot.samplerStates[textureSlot],
     });
   }

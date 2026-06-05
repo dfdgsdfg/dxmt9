@@ -46,7 +46,7 @@ Movement is mostly bytes/invocation in row `50/2` (VS write `-4.05%`, named tile
 **Verdict.** Rejected as the current GT1 frame50 owner. Half VSOut compiles and
 runs, and shifts a small slice of the backend bucket (`-2.44%` VS write,
 `-1.96%` hidden), but fails the mechanism gate because GPU time regresses
-(`+3.40%`). It is not the dominant owner. (Follow-up audit noted `[[clip_distance]]`
+(`+3.40%`). It is not the dominant owner. (Follow-up audit noted `clip_distance`
 is already absent from the hot rows, so it is not a remaining width axis.)
 
 **Related.** [[vsout-layout]] · last in the visible-width sequence after [[vsout-layout-position.02]] · refutes precision-width as owner, confirms [[hidden-backend-storage]] · gated by [[tvb-mechanism-proof]] · [[shader-codegen]].

@@ -40,6 +40,18 @@ inline constexpr u32 kConstantBufferFfpVsIndex = 1u;
 inline constexpr u32 kConstantBufferPsIndex = 2u;
 inline constexpr u32 kConstantBufferFfpPsIndex = 3u;
 
+inline u64 hashConstantBufferBytes(const void* data, u64 bytes) noexcept {
+  constexpr u64 kFnvOffset = 1469598103934665603ull;
+  constexpr u64 kFnvPrime = 1099511628211ull;
+  const auto* ptr = static_cast<const unsigned char*>(data);
+  u64 hash = kFnvOffset ^ bytes;
+  for (u64 i = 0; i < bytes; ++i) {
+    hash ^= static_cast<u64>(ptr[i]);
+    hash *= kFnvPrime;
+  }
+  return hash;
+}
+
 // R-BACK-12.23 — argbuf descriptor layout. Mirrors the MSL ArgbufLayout
 // struct emitted by `shaders::makeShaderPreludeArgbufHybrid`. The
 // encoder calls `buildArgumentDescriptors` once at queue init and feeds
@@ -206,9 +218,19 @@ struct ConstantBufferBinding {
   WMT::Buffer buffer{};
   u64 offset = 0;
   u64 bytes = 0;
+  u64 contentHash = 0;
+  u64 identityHash = 0;
 
   explicit operator bool() const noexcept {
     return static_cast<bool>(buffer) && bytes != 0;
+  }
+
+  bool contentMatches(u64 hash, u64 byteCount) const noexcept {
+    return *this && bytes == byteCount && contentHash == hash;
+  }
+
+  bool identityMatches(u64 hash, u64 byteCount) const noexcept {
+    return *this && bytes == byteCount && identityHash == hash;
   }
 };
 

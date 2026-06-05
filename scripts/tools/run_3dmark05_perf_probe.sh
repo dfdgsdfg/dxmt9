@@ -5,6 +5,7 @@ repo_root=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/../.." && pwd)
 
 frame=${DXMT_3DMARK05_PROBE_FRAME:-60}
 timeout=${DXMT_3DMARK05_PROBE_TIMEOUT:-}
+timeout_slack=${DXMT_3DMARK05_PROBE_TIMEOUT_SLACK:-45}
 suffix=${DXMT_3DMARK05_PROBE_SUFFIX:-}
 result_file=${DXMT_3DMARK05_RESULT_FILE:-dxmt9_gt1.3dr}
 capture_gputrace=1
@@ -51,6 +52,10 @@ probe_sort_indexed_triangles_by_min_index=0
 probe_optimize_indexed_triangles_vertex_cache=0
 optimize_opaque_depth_index_cache=0
 optimize_opaque_depth_index_cache_min_gain_pct=
+index_cache_candidate_frontier_cap=
+index_cache_candidate_lazy_frontier=0
+index_cache_candidate_bucketed_select=0
+index_cache_candidate_upper_bound_gate=0
 probe_apply_index_cache_opt_candidate=0
 probe_apply_index_cache_opt_candidate_unsafe_nonopaque=0
 probe_apply_index_cache_opt_candidate_min_gain_pct=
@@ -123,6 +128,7 @@ semantic_image_diff_output=${DXMT_3DMARK05_SEMANTIC_IMAGE_DIFF_OUTPUT:-}
 semantic_image_min_active_pct=${DXMT_3DMARK05_SEMANTIC_IMAGE_MIN_ACTIVE_PCT:-1}
 encoder_breakdown_seq=${DXMT_3DMARK05_ENCODER_BREAKDOWN_SEQ:-}
 encoder_breakdown_all_frames=0
+encoder_breakdown_enabled=1
 require_color_dontcare_increase=0
 require_depth_dontcare_increase=0
 require_tile_preservation_decrease=0
@@ -184,14 +190,17 @@ usage() {
   cat <<'USAGE'
 Usage: scripts/tools/run_3dmark05_perf_probe.sh [options]
 
-Run the standard 3DMark05 GT1 perf probe with dxmt9 encoder breakdown,
-optional Metal frame capture, and post-run summary CSV generation.
+Run the standard 3DMark05 GT1 perf probe with dxmt9 perf counters, optional
+encoder breakdown, optional Metal frame capture, and post-run summary CSV
+generation.
 
 Options:
   --suffix NAME       Output suffix (default: probe-<timestamp>-frame<N>)
   --frame N           1-based Metal capture frame (default: 60)
   --timeout SEC       run_experiment timeout seconds (default: 420 with gputrace,
                       180 with --no-gputrace; DXMT_3DMARK05_PROBE_TIMEOUT overrides)
+                      The wrapper watchdog uses SEC + DXMT_3DMARK05_PROBE_TIMEOUT_SLACK
+                      (default: 45) to clean up detached final-frame hangs.
   --result-file NAME  3DMark05 result filename argument (default: dxmt9_gt1.3dr)
   --no-gputrace       Do not set DXMT_METAL_CAPTURE_FRAME/PATH
   --encoder-breakdown-seq N
@@ -200,6 +209,10 @@ Options:
   --encoder-breakdown-all-frames
                       Do not auto-scope encoder/index diagnostics to --frame
                       when gputrace capture is enabled
+  --no-encoder-breakdown
+                      Do not set DXMT9_PERF_ENCODER_BREAKDOWN. Use only for
+                      no-gputrace run-level/default-policy smokes; Xcode proof
+                      and per-row diagnostics need encoder breakdown.
   --dump-shaders      Dump translated MSL and D3D shader bytecode under
                       traces/<run-id>/analysis/shaders
   --trim-unused-varyings
@@ -265,13 +278,35 @@ Options:
   --optimize-screen-blend-index-cache
                       Set DXMT9_OPTIMIZE_SCREEN_BLEND_INDEX_CACHE=1 to submit
                       cached LRU32 reordered IBs for strict screen-blend
-                      triangle-list draws. Profiling-only opt-in: it never
-                      bypasses the screen-blend/depth-read safety predicate,
-                      but same-input translated-FS probes have shown small
-                      output differences.
+                      triangle-list draws. Explicit-tolerance-only opt-in: it
+                      never bypasses the screen-blend/depth-read safety
+                      predicate, and proof runs must carry
+                      --require-screen-blend-cache-proof plus
+                      --semantic-image-policy exact|lsb1.
   --optimize-screen-blend-index-cache-min-gain-pct PCT
                       Set DXMT9_OPTIMIZE_SCREEN_BLEND_INDEX_CACHE_MIN_GAIN_PCT
                       (default in dxmt9: 10)
+  --index-cache-candidate-frontier-cap N
+                      Diagnostic-only: set
+                      DXMT9_INDEX_CACHE_CANDIDATE_FRONTIER_CAP to limit the
+                      LRU32 candidate frontier width during index-cache
+                      reorder construction. 0 disables the cap.
+  --index-cache-candidate-lazy-frontier
+                      Diagnostic-only: set
+                      DXMT9_INDEX_CACHE_CANDIDATE_LAZY_FRONTIER=1 to use a
+                      lazily refreshed priority frontier instead of full
+                      candidate-vector rescans. Can change primitive order.
+  --index-cache-candidate-bucketed-select
+                      Diagnostic-only: set
+                      DXMT9_INDEX_CACHE_CANDIDATE_BUCKETED_SELECT=1 to keep
+                      active candidates in cached-vertex-count buckets and
+                      update only touched-vertex neighbors. Can change
+                      primitive order.
+  --index-cache-candidate-upper-bound-gate
+                      Diagnostic-only: set
+                      DXMT9_INDEX_CACHE_CANDIDATE_UPPER_BOUND_GATE=1 to skip
+                      candidate construction when original unique index count
+                      proves the configured min-gain gate cannot be reached.
   --split-large-indexed-draws N
                       Set DXMT9_SPLIT_LARGE_INDEXED_DRAWS=N to split indexed
                       triangle-list draws above N primitives
@@ -741,6 +776,10 @@ while (($#)); do
       encoder_breakdown_all_frames=1
       shift
       ;;
+    --no-encoder-breakdown)
+      encoder_breakdown_enabled=0
+      shift
+      ;;
     --no-gputrace)
       capture_gputrace=0
       shift
@@ -908,6 +947,22 @@ while (($#)); do
     --optimize-opaque-depth-index-cache-min-gain-pct)
       optimize_opaque_depth_index_cache_min_gain_pct=${2:?missing value for --optimize-opaque-depth-index-cache-min-gain-pct}
       shift 2
+      ;;
+    --index-cache-candidate-frontier-cap)
+      index_cache_candidate_frontier_cap=${2:?missing value for --index-cache-candidate-frontier-cap}
+      shift 2
+      ;;
+    --index-cache-candidate-lazy-frontier)
+      index_cache_candidate_lazy_frontier=1
+      shift
+      ;;
+    --index-cache-candidate-bucketed-select)
+      index_cache_candidate_bucketed_select=1
+      shift
+      ;;
+    --index-cache-candidate-upper-bound-gate)
+      index_cache_candidate_upper_bound_gate=1
+      shift
       ;;
     --probe-apply-index-cache-opt-candidate)
       probe_apply_index_cache_opt_candidate=1
@@ -1462,6 +1517,11 @@ if [[ ! "$timeout" =~ ^[0-9]+([.][0-9]+)?$ ||
   exit 2
 fi
 
+if [[ ! "$timeout_slack" =~ ^[0-9]+([.][0-9]+)?$ ]]; then
+  echo "DXMT_3DMARK05_PROBE_TIMEOUT_SLACK must be non-negative numeric seconds" >&2
+  exit 2
+fi
+
 if [[ -z "$suffix" ]]; then
   suffix="probe-$(date +%Y%m%d-%H%M%S)-frame${frame}"
 fi
@@ -1563,6 +1623,16 @@ fi
 if [[ -n "$probe_apply_index_cache_opt_candidate_min_gain_pct" &&
       ! "$probe_apply_index_cache_opt_candidate_min_gain_pct" =~ ^[0-9]+$ ]]; then
   echo "--probe-apply-index-cache-opt-candidate-min-gain-pct must be a non-negative integer" >&2
+  exit 2
+fi
+
+if [[ -n "$index_cache_candidate_frontier_cap" &&
+      ! "$index_cache_candidate_frontier_cap" =~ ^[0-9]+$ ]]; then
+  echo "--index-cache-candidate-frontier-cap must be a non-negative integer" >&2
+  exit 2
+fi
+if (( index_cache_candidate_lazy_frontier && index_cache_candidate_bucketed_select )); then
+  echo "--index-cache-candidate-lazy-frontier and --index-cache-candidate-bucketed-select are mutually exclusive" >&2
   exit 2
 fi
 if [[ -n "$dump_depth_attachment_handle" &&
@@ -1831,7 +1901,13 @@ if (( measure_index_reuse ||
   frame_local_index_diagnostics_requested=1
 fi
 
-if (( capture_gputrace || frame_local_index_diagnostics_requested )) &&
+if (( ! encoder_breakdown_enabled )) && (( capture_gputrace )); then
+  echo "--no-encoder-breakdown requires --no-gputrace; Xcode/gputrace proof needs encoder rows" >&2
+  exit 2
+fi
+
+if (( encoder_breakdown_enabled )) &&
+   (( capture_gputrace || frame_local_index_diagnostics_requested )) &&
    (( ! encoder_breakdown_all_frames )) &&
    [[ -z "$encoder_breakdown_seq" ]]; then
   encoder_breakdown_seq=$frame
@@ -1873,10 +1949,24 @@ print_space_hints() {
   echo "cleanup note: remove only obsolete run ids after preserving needed analysis artifacts; do not delete active prefixes blindly." >&"$stream"
 }
 
+cleanup_3dmark05_probe_wineserver() {
+  if [[ "${DXMT_3DMARK05_KILL_SERVER_ON_EXIT:-1}" == "0" ]]; then
+    return 0
+  fi
+  if [[ ! -x "$probe_wineserver" ]]; then
+    echo "warning: cannot run 3DMark05 wineserver cleanup; missing $probe_wineserver" >&2
+    return 0
+  fi
+  WINEPREFIX="$probe_prefix" "$probe_wineserver" -k >/dev/null 2>&1 || true
+}
+
 run_id="app-d3d9-3dmark05-${suffix}"
 output_dir="$repo_root/experiments/output/$run_id"
 trace_dir="$repo_root/traces/$run_id"
 analysis_dir="$trace_dir/analysis"
+probe_prefix="$repo_root/experiments/prefixs/app-d3d9-3dmark05"
+probe_wine_root="${DXMT_3DMARK05_WINE_ROOT:-$repo_root/experiments/wine/sikarugir-cx-24.0.7}"
+probe_wineserver="${DXMT_3DMARK05_WINESERVER:-$probe_wine_root/bin/wineserver}"
 shader_dump_dir="$analysis_dir/shaders"
 shader_msl_dump_dir="$shader_dump_dir/msl"
 shader_bytecode_dump_dir="$shader_dump_dir/bytecode"
@@ -1917,13 +2007,19 @@ fi
 env_args=(
   "DXMT_EXPERIMENT_PROFILE=perf"
   "DXMT_3DMARK05_DIRECT=1"
+  "DXMT_3DMARK05_PREFIX=$probe_prefix"
+  "DXMT_3DMARK05_WINE_ROOT=$probe_wine_root"
+  "DXMT_3DMARK05_WINESERVER=$probe_wineserver"
   "DXMT_DISABLE_AUTO_EXPAND_INDEXED=1"
-  "DXMT9_PERF_ENCODER_BREAKDOWN=1"
   "DXMT_3DMARK05_RESULT_FILE=$result_file"
   "DXMT_3DMARK05_LOG=$output_dir/3dmark05-direct.log"
 )
 
-if [[ -n "$encoder_breakdown_seq" ]]; then
+if (( encoder_breakdown_enabled )); then
+  env_args+=("DXMT9_PERF_ENCODER_BREAKDOWN=1")
+fi
+
+if (( encoder_breakdown_enabled )) && [[ -n "$encoder_breakdown_seq" ]]; then
   env_args+=("DXMT9_PERF_ENCODER_BREAKDOWN_SEQ=$encoder_breakdown_seq")
 fi
 
@@ -2089,6 +2185,22 @@ fi
 
 if [[ -n "$optimize_opaque_depth_index_cache_min_gain_pct" ]]; then
   env_args+=("DXMT9_OPTIMIZE_OPAQUE_DEPTH_INDEX_CACHE_MIN_GAIN_PCT=$optimize_opaque_depth_index_cache_min_gain_pct")
+fi
+
+if [[ -n "$index_cache_candidate_frontier_cap" ]]; then
+  env_args+=("DXMT9_INDEX_CACHE_CANDIDATE_FRONTIER_CAP=$index_cache_candidate_frontier_cap")
+fi
+
+if (( index_cache_candidate_lazy_frontier )); then
+  env_args+=("DXMT9_INDEX_CACHE_CANDIDATE_LAZY_FRONTIER=1")
+fi
+
+if (( index_cache_candidate_bucketed_select )); then
+  env_args+=("DXMT9_INDEX_CACHE_CANDIDATE_BUCKETED_SELECT=1")
+fi
+
+if (( index_cache_candidate_upper_bound_gate )); then
+  env_args+=("DXMT9_INDEX_CACHE_CANDIDATE_UPPER_BOUND_GATE=1")
 fi
 
 if (( optimize_screen_blend_index_cache )); then
@@ -2638,6 +2750,8 @@ echo "index_cache_runtime_report: $index_cache_runtime_report"
 echo "session_locked: $session_locked"
 echo "free_space_mb: $free_mb"
 echo "min_free_space_mb: $min_free_mb"
+echo "runner_timeout_sec: $timeout"
+echo "watchdog_timeout_sec: ${timeout}+${timeout_slack}"
 if (( capture_gputrace )) && (( min_free_mb < recommended_gputrace_min_free_mb )); then
   echo "warning: gputrace min_free_space_mb is below the recommended ${recommended_gputrace_min_free_mb}MiB launch guard; set DXMT_3DMARK05_ALLOW_LOW_TRACE_FREE_MB=1 only for deliberate partial-run risk."
 fi
@@ -2708,9 +2822,11 @@ if (( optimize_screen_blend_index_order )); then
   echo "warning: --optimize-screen-blend-index-order is diagnostic/profiling only; screen-blend output is destination-dependent and primitive order can change blended pixels."
 fi
 if (( optimize_screen_blend_index_cache )); then
-  echo "warning: --optimize-screen-blend-index-cache is profiling-only, not production-safe; same-input translated-FS screen-blend probes showed small output differences."
   if [[ -z "$semantic_image_policy" ]]; then
-    echo "warning: add --semantic-image-policy exact|lsb1 with same-input mini-replay images before treating screen-blend cache results as a semantic proof."
+    echo "warning: --optimize-screen-blend-index-cache is mechanism/profiling-only until a same-input semantic proof is attached."
+    echo "warning: add --semantic-image-policy exact|lsb1 with same-input mini-replay images before treating screen-blend cache results as explicit proof."
+  else
+    echo "warning: --optimize-screen-blend-index-cache uses explicit ${semantic_image_policy} semantic policy; do not generalize this proof to broad depth-read reorder."
   fi
 fi
 if (( probe_apply_index_cache_opt_candidate_unsafe_nonopaque )); then
@@ -2765,8 +2881,14 @@ fi
 run_status=0
 (
   cd "$repo_root"
-  env "${env_args[@]}" "${cmd[@]}"
+  python3 scripts/tools/run_with_timeout.py \
+    --timeout "$timeout" \
+    --slack "$timeout_slack" \
+    --label 3dmark05-perf-wrapper \
+    -- \
+    env "${env_args[@]}" "${cmd[@]}"
 ) || run_status=$?
+cleanup_3dmark05_probe_wineserver
 
 python3 "$repo_root/scripts/tools/summarize_3dmark05_perf.py" "$output_dir" --output "$summary_path"
 python3 "$repo_root/scripts/tools/summarize_index_cache_runtime.py" \

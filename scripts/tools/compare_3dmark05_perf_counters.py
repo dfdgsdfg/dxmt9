@@ -1,11 +1,13 @@
 #!/usr/bin/env python3
-"""Compare two 3DMark05 dxmt9 perf result.json counter snapshots.
+"""Compare two 3DMark05 dxmt9 perf counter snapshots.
 
-Inputs can be experiment output directories or direct result.json paths. This
-complements `compare_xcode_dxmt_bottlenecks.py`: Xcode encoder counters prove
-GPU-frame effects, while this report verifies the run-level mechanisms that a
-candidate change intended to move, such as render-pass store actions, same-key
-preservation bytes, draw-run formation, and queue waits.
+Inputs can be experiment output directories or direct result.json paths. Output
+directories may also be interrupted partial-log runs if `dxmt9.log` contains a
+final `[dxmt9-perf]` line. This complements `compare_xcode_dxmt_bottlenecks.py`:
+Xcode encoder counters prove GPU-frame effects, while this report verifies the
+run-level mechanisms that a candidate change intended to move, such as
+render-pass store actions, same-key preservation bytes, draw-run formation, and
+queue waits.
 """
 
 from __future__ import annotations
@@ -16,7 +18,7 @@ import sys
 from pathlib import Path
 from typing import Any
 
-from summarize_3dmark05_perf import RUN_COUNTERS
+from summarize_3dmark05_perf import RUN_COUNTERS, load_result
 
 
 EXTRA_COUNTERS = (
@@ -145,7 +147,25 @@ def result_path(path: Path) -> Path:
     return path
 
 
+def counter_source_path(path: Path) -> Path:
+    if not path.is_dir():
+        return result_path(path)
+    result = path / "result.json"
+    if result.exists():
+        return result
+    log = path / "dxmt9.log"
+    if log.exists():
+        return log
+    return result
+
+
 def load_counters(path: Path) -> dict[str, Any]:
+    if path.is_dir():
+        data = load_result(path)
+        counters = data.get("dxmt9_perf_counters")
+        if not isinstance(counters, dict):
+            raise SystemExit(f"missing dxmt9_perf_counters in {path}")
+        return counters
     resolved = result_path(path)
     if not resolved.exists():
         raise SystemExit(f"missing result.json: {resolved}")
@@ -705,8 +725,8 @@ def main() -> int:
     ):
         parser.error("--max-const-upload-break-count-ratio must be positive")
 
-    before_path = result_path(args.before)
-    after_path = result_path(args.after)
+    before_path = counter_source_path(args.before)
+    after_path = counter_source_path(args.after)
     output = args.output or after_path.with_name(
         f"{after_path.stem}-perf-counter-comparison.md"
     )

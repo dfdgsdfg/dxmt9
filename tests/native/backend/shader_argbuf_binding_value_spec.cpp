@@ -529,6 +529,21 @@ dxmt9::encoders::DrawBindingPacketKey makeBindingPacketKey(
   return dxmt9::encoders::makeDrawBindingPacketKey(packet);
 }
 
+dxmt9::encoders::DrawBindingPacketPlan makeBindingPacketPlan(
+    DrawDesc desc,
+    dxmt9::encoders::ParamView pv = makeBindingPacketKeyParamView()) {
+  const auto hot = makeFlatDrawStateRecord(desc);
+  return dxmt9::encoders::makeDrawBindingPacketPlan(
+      desc.vertexDecl,
+      hot,
+      pv,
+      128u,
+      96u,
+      false,
+      false,
+      false);
+}
+
 void checkBindingPacketKeyDiffers(
     const dxmt9::encoders::DrawBindingPacketKey& base,
     const dxmt9::encoders::DrawBindingPacketKey& changed,
@@ -550,6 +565,17 @@ void testDrawBindingPacketKeyIsStableForSameCanonicalValues() {
   checkEq(dxmt9::encoders::hashDrawBindingPacketKey(first),
           dxmt9::encoders::hashDrawBindingPacketKey(second),
           "same canonical binding packet values produce the same hash");
+}
+
+void testDrawBindingPacketPlanHashMatchesCanonicalKeyHash() {
+  const auto packet = makeBindingPacketPlan(makeBindingPacketKeyDesc());
+  const auto key = dxmt9::encoders::makeDrawBindingPacketKey(packet);
+
+  checkEq(dxmt9::encoders::hashDrawBindingPacketPlan(packet),
+          dxmt9::encoders::hashDrawBindingPacketKey(key),
+          "plan-direct binding packet hash matches the canonical key hash");
+  check(dxmt9::encoders::drawBindingPacketPlansEqual(packet, packet),
+        "plan-direct equality accepts the same packet");
 }
 
 void testDrawBindingPacketKeyDiffersForTextureHandleChange() {
@@ -714,14 +740,19 @@ void testDrawBindingPacketCacheReusesStableValuePacket() {
       false);
 
   dxmt9::encoders::DrawBindingPacketCache cache{};
-  const auto& first = dxmt9::encoders::cacheDrawBindingPacket(cache, packet);
-  const auto& second = dxmt9::encoders::cacheDrawBindingPacket(cache, packet);
+  dxmt9::encoders::DrawBindingPacketCacheStats stats{};
+  const auto& first = dxmt9::encoders::cacheDrawBindingPacket(cache, packet, &stats);
+  const auto& second = dxmt9::encoders::cacheDrawBindingPacket(cache, packet, &stats);
   check(&first == &second,
         "binding packet cache returns the persistent value packet on hit");
   checkEq(cache.misses, std::uint64_t{1},
           "first binding packet cache lookup misses");
   checkEq(cache.hits, std::uint64_t{1},
           "second binding packet cache lookup hits");
+  checkEq(stats.misses, std::uint64_t{1},
+          "binding packet cache stats record the first miss");
+  checkEq(stats.hits, std::uint64_t{1},
+          "binding packet cache stats record the second hit");
 
   auto changedDesc = makeBindingPacketKeyDesc();
   changedDesc.textures[2].handle = Handle{0x3333u};
@@ -929,6 +960,7 @@ int main() {
     testEncoderFragmentBindingPlanMatchesShaderSlots();
     testEncoderRasterStatePlanMatchesMetalViewportScissorCull();
     testDrawBindingPacketKeyIsStableForSameCanonicalValues();
+    testDrawBindingPacketPlanHashMatchesCanonicalKeyHash();
     testDrawBindingPacketKeyDiffersForTextureHandleChange();
     testDrawBindingPacketKeyDiffersForSamplerStateChange();
     testDrawBindingPacketKeyDiffersForRasterChange();

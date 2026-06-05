@@ -82,6 +82,7 @@ bash scripts/check/verify_tla.sh
 | `agents/rules/*.rules.md` | What recurring project rule prevents future mistakes? | Long | Project-wide |
 | `specs/{area}/*.md` | What must dxmt9 do, and what design owns it? | Long | One subsystem or concern |
 | `specs/gap.md` | What is not implemented, partial, or newly accepted? | Active | Whole project |
+| `docs/perfomance/*.md` | What performance bottleneck, experiment, evidence, and next gate is known? | Active | Performance model and experiment graph |
 
 Decision flow:
 
@@ -90,12 +91,20 @@ Decision flow:
 - Requirements, architecture, verification, or compatibility contract: update
   `specs/`.
 - Implementation status or missing evidence: update `specs/gap.md`.
+- Performance bottleneck model, 3DMark05 GT1 experiment result, Xcode/gputrace
+  proof, no-gputrace smoke, cleanup provenance, or next performance gate:
+  update `docs/perfomance/`.
 
 Cross-reference rules:
 
 - `agents/rules/` should not duplicate full spec content. Link to the spec.
 - Specs may link to rules for authoring conventions, but the spec remains the
   source of truth for dxmt9 behavior.
+- `docs/perfomance/` is the source of truth for performance investigation
+  history. New leaves should cite concrete artifacts in `experiments/output/...`,
+  `traces/.../analysis`, exported Xcode counter CSVs, or generated reports in
+  `source:`; do not use the deleted/retired `specs/perfomance.plan.md` journal
+  as a new provenance target or maintenance surface.
 - If a rule mentions a helper file, skill, or script, that file must exist in this
   repository or the rule must say it is external.
 

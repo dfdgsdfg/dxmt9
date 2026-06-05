@@ -1119,6 +1119,58 @@ void testConstantsAndShaderRefs() {
             "changed vertex constant value reaches uniform payload");
 }
 
+void testShaderConstantUsageAwareHashesIgnoreUnusedConstants() {
+  DeviceState state;
+  state.reset();
+
+  state.vertexShader = makeBytecodeShader(
+      0x7001002003004005ull,
+      wordsToBytes({
+          0xfffe0200u,
+          makeInstructionToken(1u, 2u),
+          makeRegisterToken(4u, 0u),
+          makeRegisterToken(2u, 0u),
+          0xffffu,
+      }));
+  state.pixelShader = makeBytecodeShader(
+      0x5004003002001007ull,
+      wordsToBytes({
+          0xffff0200u,
+          makeInstructionToken(1u, 2u),
+          makeRegisterToken(8u, 0u),
+          makeRegisterToken(2u, 0u),
+          0xffffu,
+      }));
+
+  state.vsConst.float4[0] = {1.0f, 2.0f, 3.0f, 4.0f};
+  state.vsConst.float4[7] = {7.0f, 8.0f, 9.0f, 10.0f};
+  state.psConst.float4[0] = {11.0f, 12.0f, 13.0f, 14.0f};
+  state.psConst.float4[9] = {15.0f, 16.0f, 17.0f, 18.0f};
+
+  const auto canonical = makeCanonicalDrawStateFromState(state, {});
+
+  DeviceState unusedChanged = state;
+  unusedChanged.vsConst.float4[7][2] = 99.0f;
+  unusedChanged.psConst.float4[9][1] = -44.0f;
+  const auto unusedCanonical =
+      makeCanonicalDrawStateFromState(unusedChanged, {});
+  checkEq(unusedCanonical.hot.vertexConstantsHash,
+          canonical.hot.vertexConstantsHash,
+          "unused VS constants do not affect usage-aware hot hash");
+  checkEq(unusedCanonical.hot.pixelConstantsHash,
+          canonical.hot.pixelConstantsHash,
+          "unused PS constants do not affect usage-aware hot hash");
+
+  DeviceState usedChanged = state;
+  usedChanged.vsConst.float4[0][2] = 123.0f;
+  usedChanged.psConst.float4[0][1] = -77.0f;
+  const auto usedCanonical = makeCanonicalDrawStateFromState(usedChanged, {});
+  check(usedCanonical.hot.vertexConstantsHash != canonical.hot.vertexConstantsHash,
+        "used VS constants affect usage-aware hot hash");
+  check(usedCanonical.hot.pixelConstantsHash != canonical.hot.pixelConstantsHash,
+        "used PS constants affect usage-aware hot hash");
+}
+
 void testShaderConstantPayloadSurvivesDrawRunCommandView() {
   DeviceState state;
   state.reset();
@@ -1260,10 +1312,18 @@ void testShaderLayoutCarriesConstantUsageMetadata() {
 
   DrawDesc fixedFunction{};
   const auto fixedLayout = makeDrawShaderLayoutContext(fixedFunction);
-  check(fixedLayout.vertexConstantUsage.unknown,
-        "fixed-function VS keeps conservative unknown constant usage");
-  check(fixedLayout.pixelConstantUsage.unknown,
-        "fixed-function PS keeps conservative unknown constant usage");
+  check(!fixedLayout.vertexConstantUsage.unknown,
+        "fixed-function VS has known-zero programmable constant usage");
+  checkEq(fixedLayout.vertexConstantUsage.floatCount, std::uint16_t{0},
+          "fixed-function VS reads no programmable float constants");
+  check(!fixedLayout.vertexConstantUsage.indexedFloat,
+        "fixed-function VS has no indexed programmable float access");
+  check(!fixedLayout.pixelConstantUsage.unknown,
+        "fixed-function PS has known-zero programmable constant usage");
+  checkEq(fixedLayout.pixelConstantUsage.floatCount, std::uint16_t{0},
+          "fixed-function PS reads no programmable float constants");
+  check(!fixedLayout.pixelConstantUsage.indexedFloat,
+        "fixed-function PS has no indexed programmable float access");
 }
 
 void testResourceBindingsAndAttachments() {
@@ -2466,9 +2526,27 @@ void testFlatDrawStateKey() {
 
   DeviceState changedConstants = state;
   changedConstants.vsConst.float4[0][2] = 99.0f;
-  check(!(makeFlatDrawStateKey(first) ==
-          makeFlatDrawStateKey(makeDrawDescFromState(changedConstants, {}))),
-        "shader constant changes flat base draw state");
+  checkEq(makeFlatDrawStateKey(first),
+          makeFlatDrawStateKey(makeDrawDescFromState(changedConstants, {})),
+          "fixed-function programmable constants do not change flat base draw state");
+
+  DeviceState programmableConstants = state;
+  programmableConstants.vertexShader = makeBytecodeShader(
+      0x1010101010101010ull,
+      wordsToBytes({
+          0xfffe0200u,
+          makeInstructionToken(1u, 2u),
+          makeRegisterToken(4u, 0u),
+          makeRegisterToken(2u, 0u),
+          0xffffu,
+      }));
+  const auto programmableKey =
+      makeFlatDrawStateKey(makeDrawDescFromState(programmableConstants, {}));
+  DeviceState changedProgrammableConstants = programmableConstants;
+  changedProgrammableConstants.vsConst.float4[0][2] = 99.0f;
+  check(!(programmableKey ==
+          makeFlatDrawStateKey(makeDrawDescFromState(changedProgrammableConstants, {}))),
+        "bytecode shader constant changes flat base draw state");
 }
 
 // R-FORMAT-11 — RESZ MSAA depth-resolve trigger. The sentinel write
@@ -2525,6 +2603,7 @@ int main() {
   testAcceptedRenderStateRoundTripPolicies();
   testClipPlaneTransformPayloadAndMaskBounds();
   testConstantsAndShaderRefs();
+  testShaderConstantUsageAwareHashesIgnoreUnusedConstants();
   testShaderConstantPayloadSurvivesDrawRunCommandView();
   testShaderLayoutCarriesConstantUsageMetadata();
   testResourceBindingsAndAttachments();

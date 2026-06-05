@@ -260,6 +260,15 @@ struct TextureSamplerBindShadowSlot {
   obj_handle_t handle = 0;
 };
 
+struct SamplerBindShadowSlot {
+  bool valid = false;
+  std::uint64_t hash = 0;
+  obj_handle_t handle = 0;
+  std::uint32_t textureLod = 0;
+  bool supportArgumentBuffers = false;
+  core::FlatStateSet<core::kMaxSamplerStates> samplerStates{};
+};
+
 struct BufferBindShadowSlot {
   bool valid = false;
   obj_handle_t handle = 0;
@@ -273,9 +282,9 @@ struct TextureSamplerBindShadow {
   std::uint64_t argbufTableHash = 0;
   std::array<BufferBindShadowSlot, 32> vertexBuffers{};
   std::array<TextureSamplerBindShadowSlot, core::kMaxSamplers> fragmentTextures{};
-  std::array<TextureSamplerBindShadowSlot, core::kMaxSamplers> fragmentSamplers{};
+  std::array<SamplerBindShadowSlot, core::kMaxSamplers> fragmentSamplers{};
   std::array<TextureSamplerBindShadowSlot, core::kMaxVertexTextureSamplers> vertexTextures{};
-  std::array<TextureSamplerBindShadowSlot, core::kMaxVertexTextureSamplers> vertexSamplers{};
+  std::array<SamplerBindShadowSlot, core::kMaxVertexTextureSamplers> vertexSamplers{};
 
   void reset() noexcept {
     *this = TextureSamplerBindShadow{};

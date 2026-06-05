@@ -936,6 +936,37 @@ std::uint32_t optimizeScreenBlendIndexCacheMinGainPct() {
   return pct;
 }
 
+std::uint32_t indexCacheCandidateFrontierCap() {
+  static const std::uint32_t cap = [] {
+    const auto value =
+        util::getenvU64Auto("DXMT9_INDEX_CACHE_CANDIDATE_FRONTIER_CAP");
+    if (!value.has_value()) {
+      return 0u;
+    }
+    return static_cast<std::uint32_t>(
+        std::min<std::uint64_t>(*value, std::numeric_limits<std::uint32_t>::max()));
+  }();
+  return cap;
+}
+
+bool indexCacheCandidateLazyFrontier() {
+  static const bool v =
+      util::getenvFlag("DXMT9_INDEX_CACHE_CANDIDATE_LAZY_FRONTIER");
+  return v;
+}
+
+bool indexCacheCandidateBucketedSelect() {
+  static const bool v =
+      util::getenvFlag("DXMT9_INDEX_CACHE_CANDIDATE_BUCKETED_SELECT");
+  return v;
+}
+
+bool indexCacheCandidateUpperBoundGate() {
+  static const bool v =
+      util::getenvFlag("DXMT9_INDEX_CACHE_CANDIDATE_UPPER_BOUND_GATE");
+  return v;
+}
+
 bool probeApplyIndexCacheOptCandidate() {
   static const bool v =
       util::getenvFlag("DXMT9_PROBE_APPLY_INDEX_CACHE_OPT_CANDIDATE");

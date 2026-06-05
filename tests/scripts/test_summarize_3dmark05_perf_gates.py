@@ -503,9 +503,14 @@ class Summarize3DMark05PerfGatesTests(unittest.TestCase):
             self.assertEqual(result.returncode, 0, result.stderr)
             text = report.read_text(encoding="utf-8")
             self.assertIn("`screen-blend-explicit-tolerance` | `missing-semantic-image`", text)
+            self.assertIn("mechanism-only until explicit exact/lsb1 proof is attached", text)
             with summary.open(newline="", encoding="utf-8") as handle:
                 rows = {row["gate"]: row for row in csv.DictReader(handle)}
             self.assertEqual(rows["screen-blend-explicit-tolerance"]["verdict"], "missing-semantic-image")
+            self.assertIn(
+                "mechanism-only until explicit exact/lsb1 proof is attached",
+                rows["screen-blend-explicit-tolerance"]["next_action"],
+            )
             self.assertEqual(rows["overall"]["verdict"], "semantic-safe-locality-only")
 
     def test_screen_blend_candidate_without_xcode_movement_does_not_request_semantic_image_first(self) -> None:

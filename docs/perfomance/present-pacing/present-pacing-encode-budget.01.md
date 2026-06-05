@@ -3,14 +3,20 @@ domain: present-pacing
 workload: 3DMark05 GT1
 subcategory: encode-budget
 order: 01
-title: Per-CB Encode Budget Attribution Against the 16.67 ms vsync Slot
+title: Per-CB Encode Budget Sizing and Superseded Bind Attribution
 date: 2026-06-05
 type: attribution
-status: accepted
+status: inconclusive
 source: experiments/output/app-d3d9-3dmark05-current-nondiag-baseline-r1, experiments/output/app-d3d9-3dmark05-display-sync-off-r1
 ---
 
-# Per-CB Encode Budget Attribution Against the 16.67 ms vsync Slot
+# Per-CB Encode Budget Sizing and Superseded Bind Attribution
+
+> Current status: the **budget sizing** in this note remains useful
+> (`encode_chunk_cpu_p50_ms` exceeded the 16.67 ms slot), but the specific
+> **"73% remainder = per-draw Metal bind calls"** attribution was rejected by
+> [[present-pacing-bind-cache-work-a.01]]. Treat this file as a historical
+> sizing note, not as an active bind-cache implementation plan.
 
 **Question / hypothesis.** Steps 1-3 foreclosed the present-side knob
 space. The only production path left is **reducing per-CB encode cost
@@ -58,8 +64,10 @@ is exactly why the frame misses a vsync slot most of the time —
 | **Sum of named sub-counters** | **4,478.1** | **27.18%** |
 | **Unattributed remainder** | **11,998.6** | **72.82%** |
 
-The unattributed 73% lives in **per-draw Metal bind calls** that don't
-have their own per-call time counters but do have count counters.
+Earlier interpretation: the unattributed 73% might live in **per-draw
+Metal bind calls** that don't have their own per-call time counters but do
+have count counters. This was a hypothesis, not a direct measurement; Work A
+later rejected it as the main GT1 wallclock lever.
 
 ### Bind-call inventory (count-only, no per-call time)
 
@@ -78,10 +86,10 @@ have their own per-call time counters but do have count counters.
 | Total skipped (cached) | — | 2,724,817 |
 
 Per CB: **4,655,454 / 1,439 = 3,235 bind calls per CB on average.**
-At an estimated 3 μs per Metal bind call (typical M1 driver cost),
-that's **9.7 ms / CB of bind overhead** — matching the 12 ms / CB
-unattributed remainder. Hypothesis: per-CB bind-call total is the
-dominant encode cost.
+At an estimated 3 μs per Metal bind call, that would be **9.7 ms / CB**,
+which appeared to match the 12 ms / CB unattributed remainder. That estimate
+was too weak to stand as attribution: [[present-pacing-bind-cache-work-a.01]]
+extended bind-skip coverage and got no wallclock gain.
 
 ### Draw-run batching state (already partially optimised)
 
@@ -112,34 +120,33 @@ Per-CB encode cost is independent of the present sync policy — as
 expected, since the encode thread runs independently of the completion
 thread. The cost-per-CB lives entirely in the encode path.
 
-**Mechanism.** Three observations together pinpoint the production
+**Mechanism.** Three observations originally appeared to pinpoint a production
 target:
 
 1. **Per-chunk encode CPU p50 = 20.45 ms** is 22.7% over the 16.67 ms
    vsync budget. Cutting 4-5 ms per CB drops p50 inside the budget and
    stops frames from slipping vsync slots.
-2. **73% of `encode_draw_cpu_ms` is unattributed**, and the bind-call
-   count × estimated cost matches that bucket within rounding.
-   Bind-call reduction is the leverage axis.
+2. **73% of `encode_draw_cpu_ms` is unattributed**, but the bind-call
+   count × estimated cost was only a plausibility argument. It is now
+   rejected as the main leverage axis by [[present-pacing-bind-cache-work-a.01]].
 3. **Average draw-run size is 1.88 records** while the runtime allows
    runs up to 32. Even a 2× increase in run size would amortise bind
    overhead proportionally.
 
-**Verdict.** Accepted. The per-CB encode cost (20.45 ms p50, 14.37 ms
-mean) is 22-25% over the 16.67 ms vsync budget; the dominant component
-(~73% of draw-encode CPU) is per-draw Metal bind calls; the existing
-draw-run batching averages 1.88 records per group while the cap is 32.
-The production path to recover the DSync=0 win without disabling vsync
-is **encode-side**, owned by [[state-churn-encode]].
+**Verdict.** Partially superseded. The per-CB encode cost sizing
+(20.45 ms p50, 14.37 ms mean) remains useful evidence that the encode path
+can make present-bearing chunks miss 60 Hz slots. The bind-call attribution
+does **not** remain accepted: Work A covered five new bind classes and did not
+move wallclock, while encode CPU rose. The production path to recover more
+vsync-on fps is still encode-side, but it needs finer attribution before
+another broad implementation bet.
 
 Concrete target levers:
 
-- **Bind suppression**: extend the existing `bind_texture_skipped` /
-  `bind_sampler_skipped` cache pattern to vertex buffer, index buffer,
-  pipeline, rasterizer, viewport, scissor, depth state binds. The cache
-  hits we already see (53% texture, 92% sampler) suggest the redundancy
-  exists elsewhere too. Counter targets: increase `bind_*_skipped`,
-  decrease `bind_*` per CB.
+- **Finer attribution first**: split the current `encode_draw_cpu_ms`
+  remainder into draw-record decode, payload/view construction,
+  state-snapshot import, PSO/layout lookup, and actual Metal bind/draw calls.
+  Do not extend broad bind suppression without a new hit-rate or sampling proof.
 - **Larger draw-runs**: current `submit_draw_run_batch_records /
   submit_draw_run_batch_groups = 1.88`. Look at what's breaking runs at
   1-2 draws when the cap is 32 — the existing
@@ -155,6 +162,6 @@ Out of scope for this topic (lives in [[state-churn-encode]] /
   Runs in parallel with the encode thread, not on the wallclock-critical
   path. Owned by [[snapshot-cache]].
 
-**Next.** [[present-pacing-encode-budget-fix-proposal.01]] — synthesis
-note proposing the specific draw-run / bind suppression work items and
-their expected fps delta at this baseline.
+**Next.** [[present-pacing-bind-cache-work-a.01]] supersedes the bind-cache
+portion of this note. Future work should add narrower encode attribution or
+semantic draw-run experiments before spending implementation time.

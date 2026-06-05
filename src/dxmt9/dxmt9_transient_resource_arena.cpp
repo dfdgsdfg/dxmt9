@@ -207,9 +207,20 @@ BufferSlice ResourceArena::uploadBuffer(std::span<const std::byte> bytes,
     }
     return true;
   };
+  auto canAppendWithoutScan = [&](std::size_t offset) {
+    if (offset + alignedSize > slabCapacity_) {
+      return false;
+    }
+    // In the common non-wrapped state, slabCursor_ is past every live
+    // allocation, so appending cannot overlap. Only fall back to the O(n)
+    // overlap scan after the ring has wrapped and live high-offset
+    // allocations may still exist.
+    return slabAllocations_.empty() ||
+           slabAllocations_.front().offset <= slabAllocations_.back().offset;
+  };
 
   std::size_t offset = alignUp(slabCursor_, alignment);
-  if (!canPlace(offset)) {
+  if (!canAppendWithoutScan(offset) && !canPlace(offset)) {
     offset = 0;
     if (!canPlace(offset)) {
       if (!rotateSlabUnlocked(alignedSize, seqId)) {
@@ -277,6 +288,11 @@ std::vector<BufferSlice> ResourceArena::uploadBufferBatch(
       }
       return true;
     };
+    auto canAppendWithoutScan = [&](std::size_t offset) {
+      if (offset + alignedSize > slabCapacity_) return false;
+      return slabAllocations_.empty() ||
+             slabAllocations_.front().offset <= slabAllocations_.back().offset;
+    };
 
     auto uploadDedicated = [&]() -> BufferSlice {
       WMTBufferInfo info{};
@@ -311,7 +327,7 @@ std::vector<BufferSlice> ResourceArena::uploadBufferBatch(
       continue;
     }
     std::size_t offset = alignUp(slabCursor_, alignment);
-    if (!canPlace(offset)) {
+    if (!canAppendWithoutScan(offset) && !canPlace(offset)) {
       offset = 0;
       if (!canPlace(offset)) {
         if (!rotateSlabUnlocked(alignedSize, seqId)) {
@@ -420,9 +436,16 @@ BufferReservation ResourceArena::reserveBuffer(std::size_t size,
     }
     return true;
   };
+  auto canAppendWithoutScan = [&](std::size_t offset) {
+    if (offset + alignedSize > slabCapacity_) {
+      return false;
+    }
+    return slabAllocations_.empty() ||
+           slabAllocations_.front().offset <= slabAllocations_.back().offset;
+  };
 
   std::size_t offset = alignUp(slabCursor_, alignment);
-  if (!canPlace(offset)) {
+  if (!canAppendWithoutScan(offset) && !canPlace(offset)) {
     offset = 0;
     if (!canPlace(offset)) {
       if (!rotateSlabUnlocked(alignedSize, seqId)) {

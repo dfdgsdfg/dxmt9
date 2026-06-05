@@ -190,13 +190,17 @@ Every 3DMark05 perf or `.gputrace` run must go through a positive runner
 timeout so the run can timeout-finalize `result.json`, perf logs, and trace
 paths consistently. The standard wrapper defaults to `180s` for no-gputrace
 scouts and `420s` for `.gputrace`/Xcode replay candidates, and passes that as
-an explicit `run_experiment.py --timeout`; override wrapper `--timeout` only
-when the experiment needs a documented budget. A timeout-finalized run with the
+an explicit `run_experiment.py --timeout`. It also wraps the entire
+`caffeinate run_experiment.py ...` command in a top-level watchdog at
+`timeout + DXMT_3DMARK05_PROBE_TIMEOUT_SLACK` (default slack `45s`) so a
+detached Wine/final-frame hang still gets terminated and postprocessed. Override
+wrapper `--timeout` only when the experiment needs a documented budget. A
+timeout-finalized run with the
 expected artifacts is acceptable input for finalizer comparison; do not use the
 Wine process lifetime or a manual kill as a performance metric. If a run had
 to be killed manually because it was stuck at the final frame, treat that as a
-timeout-policy failure and use a shorter positive timeout on the next run
-instead of repeating an unsupervised launch. For routine
+timeout-policy failure and verify the wrapper watchdog rather than repeating an
+unsupervised launch. For routine
 3DMark05 smoke/image runs, use the catalogue runner's default
 `run_timeout_sec=180` / `allow_timeout=true` / `require_positive_timeout=true`
 or pass an explicit positive `run_experiment.py --timeout N`; `--timeout 0` is
@@ -543,7 +547,9 @@ gates), `scripts/tools/run_3dmark05_mini_replay.py`, and
 decomposed into a knowledge graph under `docs/perfomance/` (root
 `docs/perfomance/overview-3dmark05-gt1.md`, with per-domain overviews and
 per-experiment leaf files). When you run a probe class, record it in the
-matching domain so the graph stays the source of truth.
+matching domain so the graph stays the source of truth. New leaf `source:`
+metadata should point at the actual `experiments/output/...`, `traces/.../analysis`,
+exported Xcode counter CSV, or generated report used as evidence.
 
 ### Standard recipe
 
@@ -551,6 +557,10 @@ matching domain so the graph stays the source of truth.
 # 1. Capture (no-gputrace scout = 180s, .gputrace/Xcode candidate = 420s)
 bash scripts/tools/run_3dmark05_perf_probe.sh \
   --suffix <tag> --frame <50|60> [--no-gputrace] <probe flags> --timeout <180|420>
+
+# For no-gputrace run-level/default-policy smokes only, add
+# --no-encoder-breakdown to avoid per-encoder diagnostic overhead. Do not use it
+# for gputrace/Xcode proof runs; joined encoder rows are required there.
 
 # 2. Open frame<N>.gputrace in Xcode, Show Performance > Counters,
 #    wait for draw-counter profiling, Export Encoder Counters to
@@ -569,7 +579,7 @@ bash scripts/tools/finalize_3dmark05_perf_probe.sh \
 | State / backend-shape classifiers | `--disable-cull`, `--disable-scissor`, `--disable-fog`, `--disable-alpha-test`, `--force-cull-mode`, `--force-texture-white`, `--probe-disable-alpha-blend[-row/-rows/-class/-classes]`, `--probe-depth-func-always[-row/-rows/-class/-classes]`, `--probe-disable-depth-write[-row/-rows/-class/-classes]`, `--force-visible`, `--force-expand-indexed` | `backend-shape-classifiers.md` |
 | VSOut layout / shader codegen | `--probe-half-vsout`, `--drop-vsout-point-size`, `--probe-position-only-vsout`, `--trim-unused-varyings`, `--trim-vertex-temps`, `--trim-vs-output-scratch`, `--dump-shaders` | `vsout-layout.md` + `shader-codegen.md` |
 | Index reorder / split diagnostics | `--probe-reverse-indexed-triangles[-row/-rows/-class/-classes]`, `--probe-reverse-opaque-indexed-triangles`, `--probe-reverse-nonopaque-indexed-triangles`, `--probe-sort-indexed-triangles-by-min-index`, `--split-large-indexed-draws[-row/-rows/-class/-classes/-max-chunks-per-draw/-stream0-span-max]`, `--measure-index-reuse`, `--measure-index-cache-opt-candidate` | `primitive-reorder-diagnostics.md` + `index-reuse-measurement.md` |
-| Accepted production index-cache opt | `--optimize-opaque-depth-index-cache[-min-gain-pct]` + `--require-opaque-depth-index-cache-proof`; profiling-only screen-blend `--optimize-screen-blend-index-cache[-min-gain-pct]` + `--require-screen-blend-cache-proof` | `index-cache-locality.md` |
+| Accepted / explicit index-cache opt | `--optimize-opaque-depth-index-cache[-min-gain-pct]` + `--require-opaque-depth-index-cache-proof`; explicit-tolerance screen-blend `--optimize-screen-blend-index-cache[-min-gain-pct]` + `--require-screen-blend-cache-proof` + `--semantic-image-policy exact|lsb1` | `index-cache-locality.md` |
 | Const / cbuf upload | `--split-sparse-const-records` (`DXMT9_SPLIT_SPARSE_CONST_RECORDS`), encoder-breakdown cbuf class/field rows | `const-upload.md` |
 | Render-pass store policy | `--aggressive-color-dontcare` (`DXMT9_AGGRESSIVE_COLOR_DONTCARE`), `--aggressive-depth-dontcare` (`DXMT9_AGGRESSIVE_DEPTH_DONTCARE`) | `render-pass-store.md` |
 | Attachment pixel-format view | `--suppress-rt-pixel-format-view`, `--suppress-x8-rt-pixel-format-view`, `--x8-shader-alpha-fill` | `attachment-pixelformat.md` |
