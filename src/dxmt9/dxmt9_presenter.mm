@@ -44,6 +44,19 @@ bool layerDisplaySyncEnabled() {
   return value;
 }
 
+// DXMT9_DISABLE_VSYNC=1 forces every present to use
+// minimumPresentDuration=0 and CAMetalLayer.displaySyncEnabled=false,
+// regardless of the D3D9 PresentationInterval the app requested. This is
+// the production-side counterpart to setting D3D9 PresentationInterval=
+// IMMEDIATE per-swapchain — a runtime override for benchmarking, perf
+// triage, or user-controlled "vsync off" without modifying the D3D9 app.
+// Default off. Set to "1" / "yes" / non-empty non-"0" to enable.
+bool disableVsyncEnv() {
+  static const bool value =
+      ::dxmt9::resolveDisableVsync(std::getenv("DXMT9_DISABLE_VSYNC"));
+  return value;
+}
+
 double presentRefreshHz() {
   static const double value = [] {
     const char* env = std::getenv("DXMT9_PRESENT_REFRESH_HZ");
@@ -158,6 +171,10 @@ BoundaryPolicy resolveBoundaryPolicyFromEnv() {
   return value;
 }
 
+bool resolveDisableVsync(const char* env) {
+  return env != nullptr && env[0] != '\0' && env[0] != '0';
+}
+
 void PresentDrawableToken::complete(WMT::Reference<WMT::MetalDrawable> drawable) {
   {
     std::lock_guard lock(mutex_);
@@ -264,7 +281,11 @@ void Presenter::configureLayer(const AcquireParams& params) {
   props.drawable_height = std::max(1u, params.height);
   // Match upstream dxmt: keep CAMetalLayer out of present pacing by
   // default, and let the D3D9/queue layer own latency boundaries.
-  props.display_sync_enabled = layerDisplaySyncEnabled() && params.displaySyncEnabled;
+  // DXMT9_DISABLE_VSYNC=1 forces the layer path off independently of the
+  // env-var that controls the layer-side opt-in.
+  props.display_sync_enabled = !disableVsyncEnv()
+                               && layerDisplaySyncEnabled()
+                               && params.displaySyncEnabled;
   props.contents_scale = params.contentsScale;
   const auto maxDrawableCount = std::clamp<uint32_t>(params.maxDrawableCount, 1u, 3u);
   if (!cachedLayerPropsValid_ ||
@@ -789,8 +810,13 @@ bool encodePresent(WMT::CommandBuffer& commandBuffer,
   params.height = present.height;
   params.displaySyncEnabled = present.displaySyncEnabled;
   params.contentsScale = 1.0;
+  // DXMT9_DISABLE_VSYNC=1 forces minimumPresentDuration to 0 regardless
+  // of the D3D9 PresentationInterval — the runtime-side counterpart to
+  // an app requesting D3DPRESENT_INTERVAL_IMMEDIATE per swap chain.
   params.minimumPresentDuration =
-      !layerDisplaySyncEnabled() && present.displaySyncEnabled
+      !disableVsyncEnv()
+              && !layerDisplaySyncEnabled()
+              && present.displaySyncEnabled
           ? minimumPresentDuration(present.interval)
           : 0.0;
   params.maxDrawableCount = kDefaultMetalDrawableCount;

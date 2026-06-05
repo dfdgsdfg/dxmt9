@@ -120,6 +120,19 @@ BoundaryPolicy resolveBoundaryPolicy(const char* disableEnv,
 // and caches the result.
 BoundaryPolicy resolveBoundaryPolicyFromEnv();
 
+// DXMT9_DISABLE_VSYNC — runtime "vsync off" override. When set to a
+// non-empty non-"0" value, the presenter forces both
+// CAMetalLayer.displaySyncEnabled and the software
+// minimumPresentDuration pacing to off, regardless of the D3D9
+// PresentationInterval the app requested. This is the production-side
+// counterpart to per-swapchain D3DPRESENT_INTERVAL_IMMEDIATE — useful
+// for benchmarking, perf triage, and user-controlled "vsync off"
+// without modifying the D3D9 app.
+//
+// `env` is the env-string to evaluate (caller-supplied for testability).
+// Returns true iff the string activates the disable.
+bool resolveDisableVsync(const char* env);
+
 class PresentDrawableToken {
  public:
   PresentDrawableToken() = default;

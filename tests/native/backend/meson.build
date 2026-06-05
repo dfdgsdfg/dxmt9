@@ -74,6 +74,21 @@ present_boundary_policy_spec = executable(
 test('dxmt9-present-boundary-policy-spec', present_boundary_policy_spec,
      env: dxmt9_native_test_env)
 
+# Vsync-disable resolver — DXMT9_DISABLE_VSYNC env-string handling.
+# Locks the "0" / empty / null = off and non-zero-non-empty = on
+# semantics. See the header comment in
+# `tests/native/backend/present_disable_vsync_spec.cpp`.
+present_disable_vsync_spec = executable(
+  'dxmt9-present-disable-vsync-spec',
+  'present_disable_vsync_spec.cpp',
+  include_directories: dxmt9_inc,
+  dependencies: [dxmt9_dep, dxmt9_frontend_dep],
+  link_args: dxmt9_test_link_args,
+)
+
+test('dxmt9-present-disable-vsync-spec', present_disable_vsync_spec,
+     env: dxmt9_native_test_env)
+
 backend_pipeline_key_spec = executable(
   'dxmt9-backend-pipeline-key-spec',
   'backend_pipeline_key_spec.cpp',
