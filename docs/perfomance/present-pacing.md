@@ -25,7 +25,7 @@ GPU frame-time story is owned by [[hidden-backend-storage]] /
 | H3 | Per-CB encode (`encode_draw_cpu_ms / CB`) sits at ~11 ms, near the 16.67 ms vsync budget | accepted | [[present-pacing-display-sync.01]] (per-CB encode 11.45 ms baseline, 11.23 ms DSync-off) |
 | H4 | `DXMT9_MAX_FRAME_LATENCY=3` + `DXMT9_CAP_FRAME_LATENCY_TO_BACKBUFFERS=0` recovers slack with vsync on | rejected | [[present-pacing-frame-latency.01]] (wallclock Δ +0.07%, p95 +31%) |
 | H5 | `DXMT9_PRESENT_ASYNC_ACQUIRE=1` reduces the completion-path acquire cost | rejected (axis not load-bearing) | [[present-pacing-async-acquire.01]] (acquire wait −37.5% but axis < 0.5% of total; wallclock Δ +0.22%) |
-| H6 | Reducing per-CB encode below the vsync budget (≤ 8 ms / CB) restores 60 fps without changing pacing policy | open | depends on [[state-churn-encode]] |
+| H6 | Reducing per-CB encode below the vsync budget (≤ 16.67 ms / CB) restores 60 fps without changing pacing policy | confirmed-as-target | [[present-pacing-encode-budget.01]] (p50 encode 20.45 ms vs 16.67 ms budget; 73% unattributed = per-draw bind calls; avg draw-run only 1.88 records) |
 
 ## Verification methods
 
@@ -87,6 +87,12 @@ flowchart TD
   `PRESENT_ASYNC_ACQUIRE=1` reduces `present_acquire_wait_ms` by 37.5%
   but that axis is < 0.5% of the total wait budget; wallclock unchanged
   (Δ +0.22%); encode CPU rose +8.3% (added to encode thread).
+- [[present-pacing-encode-budget.01]] — ACCEPTED ATTRIBUTION.
+  Per-chunk encode CPU p50 = 20.45 ms vs 16.67 ms vsync budget;
+  `encode_draw_cpu_ms` is 73% unattributed and the bind-call count
+  arithmetic matches. Average draw-run = 1.88 records vs cap of 32.
+  Production fix lives in [[state-churn-encode]] (bind suppression +
+  longer draw-runs).
 
 ## Cross-links
 
@@ -111,13 +117,18 @@ flowchart TD
 - Per-CB encode CPU (~11 ms) sits at ~69% of the 16.67 ms 60 Hz budget,
   which is why the average frame slips a vsync slot.
 
+**Confirmed target (not yet built)**
+
+- Per-CB encode reduction is the only path to recover the DSync=0 fps
+  without disabling vsync. Target: per-chunk encode CPU p50 from 20.45
+  ms to ≤ 16.67 ms (Δ ≥ 23%). Mechanism: bind-call suppression and
+  longer draw-runs (current avg 1.88 records vs cap 32). Owned by
+  [[state-churn-encode]]; sized by [[present-pacing-encode-budget.01]].
+
 **Open**
 
-- Is there a code-level draw-run batching win that drops per-CB encode
-  below ~8 ms so the frame consistently fits a single vsync slot? Owned
-  by [[state-churn-encode]] but constrained by the budget shown here.
-  After Steps 2 + 3 ruled out present-side knobs, this is the only
-  remaining path to recover the DSync=0 win without disabling vsync.
+- Concrete production work item proposal lives in the synthesis note,
+  [[present-pacing-encode-budget-fix-proposal.01]] (next).
 
 **Rejected**
 
