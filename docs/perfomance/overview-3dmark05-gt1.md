@@ -24,10 +24,22 @@ bucket is **not** explained by:
 - visible MSL `VSOut` width (184 B), nor
 - AIR-visible shader scratch (128 B).
 
-It is **hidden Apple GPU vertex-stage / tiler / parameter-buffer (TVB)
-backend storage** that scales with **VS invocation count × per-vertex
-VSOut bytes**. See [[hidden-backend-storage]] for the model and
-[[tvb-mechanism-proof]] for the accepted proof.
+The settled part is the **scaling law**: this is hidden Apple GPU
+vertex-stage / tiler / parameter-buffer (TVB/PB) backend storage that scales
+with **VS invocation count × hidden per-invocation backend storage**. The
+numerator is now actionable; the denominator is still open. Visible `VSOut`
+width is only a source-visible lower bound, not the measured storage width. See
+[[hidden-backend-storage]] for the model and [[tvb-mechanism-proof]] for the
+accepted invocation-reduction proof.
+
+That distinction matters for the hardware ceiling. At the current shape,
+`~1.6 GiB/frame` of VS writes at `~22 fps` is already about `37 GB/s` before
+texture reads, depth/color traffic, tile stores/loads, and CPU/GPU coherence.
+On a base M1-class `~68 GB/s` memory system, VS write alone can consume roughly
+55% of peak bandwidth, so this can be a true bandwidth limiter. On M1
+Pro/Max/Ultra-class memory systems (`~200-400 GB/s`), the same measured byte
+rate is less likely to be the whole limiter; the bottleneck class is SKU-
+dependent.
 
 **The one accepted production win** is opaque-depth **index-cache
 locality** ([[index-cache-locality]]): reordering indices for opaque
@@ -59,7 +71,8 @@ flowchart TD
 
   %% GPU side
   Base --> GPU{{"GPU limiter:\ntop-3 encoders, memory/write bound\n(not ALU / texture-read)"}}
-  GPU --> HBS["[[hidden-backend-storage]]<br/>TVB / parameter storage model (ACCEPTED)"]
+  GPU --> HBS["[[hidden-backend-storage]]<br/>TVB / parameter scaling model (ACCEPTED)"]
+  HBS --> HBD["hidden denominator<br/>stage-out vs binning/PB vs spill (OPEN)"]
   HBS --> TVB["[[tvb-mechanism-proof]]<br/>VS-inv reduction -> TVB write reduction (ACCEPTED)"]
 
   %% rejected GPU ownership hunts
@@ -77,8 +90,14 @@ flowchart TD
   TVB --> ICL
   IRM --> ICL
 
+  %% Open backend mechanisms not yet proved by current probes
+  HBD --> PBIN["Apple position/binning pass<br/>not tested by visible position-only VSOut"]
+  HBD --> MESH["Metal 3 mesh/object path<br/>untried GT1 backend escape hatch"]
+  HBD --> PSPILL["PSO/state churn backend spill<br/>unmeasured GPU-side effect"]
+
   %% P1 GPU memory
   GPU --> RPS["[[render-pass-store]]<br/>same RT/depth re-entry, store DontCare (P1)"]
+  GPU --> TFFP["DXMT9_TILE_FFP<br/>known black-render blocked FFP tile path"]
 
   %% CPU side
   Base --> CPU{{"CPU / pacing cost\ncompletion_wait ~40s,\nencode_draw ~17.7s,\nsnapshot ~7.2s\n(orthogonal to GPU limiter)"}}
@@ -94,7 +113,7 @@ flowchart TD
   classDef rej fill:#f8d7da,stroke:#a33,color:#600
   classDef base fill:#e8eefc,stroke:#3559a8,color:#0b2239
   class TVB,ICL win
-  class HBS,IRM,MRB,RPS open
+  class HBS,HBD,IRM,MRB,RPS,PBIN,MESH,PSPILL,TFFP open
   class VSO,SCG,BSC,APF rej
   class Base,SNAP,SCE,CU base
 ```
@@ -113,7 +132,7 @@ flowchart LR
   Start --> P3["P3: reduce transient / const payload"]
   Start --> P4["P4: present pacing / wallclock sync"]
 
-  P0 --> P0r["→ [[hidden-backend-storage]] → [[tvb-mechanism-proof]]\n→ [[index-cache-locality]] (accepted lever)"]
+  P0 --> P0r["→ [[hidden-backend-storage]] → [[tvb-mechanism-proof]]\n→ [[index-cache-locality]] (accepted numerator lever)\n→ hidden denominator mechanisms still open"]
   P1 --> P1r["→ [[render-pass-store]] (re-entry real; coalescing open)"]
   P2 --> P2r["→ [[state-churn-encode]] + [[snapshot-cache]] (CPU wins, GPU flat)"]
   P3 --> P3r["→ [[const-upload]] (CPU bytes ↓ 4.6GB→1GB, GPU flat)"]
@@ -142,6 +161,10 @@ backend mechanism before replay.
 | Scoped depth-read/no-blend locality | scoped proof | Selected `60/2` two-draw window: replay LRU32 `52,865 -> 38,272` (`-27.6%`), same-input image `0` changed pixels / SSIM `1.0` with both clear-depth and captured D24X8 depth input; replay still uses white dummy textures | Continue scoped selector / real-texture proof work; do not promote to broad depth-read rule yet. [[mini-replay-bisection-semantic.02]] |
 | Runtime final-color selector | blocked | Pass draws `3,5,6,7` and fail draw `4` share all `43` runtime-visible fields | Do not use full uniform payload identity as a production selector. [[mini-replay-bisection-semantic.01]] |
 | Non-reorder backend mechanism | needs-new-mechanism | Half-VSOut bytes/inv `-1.94%`, but GPU `+3.40%` | New candidate must preflight meaningful bytes/inv or hidden-backend proxy movement. [[hidden-backend-storage-shape.02]] |
+| Apple position/binning path | untested backend mechanism | Existing `DXMT9_PROBE_POSITION_ONLY_VSOUT` only changes the source-visible `VSOut`/fragment diagnostic shape; it does not prove that Apple's hidden `[[position]]` binning output or a tile vertex/fragment split was avoided | Do not cite visible position-only VSOut as closure. A future probe must implement/force a real position-only binning/depth path and measure bytes/invocation. [[vsout-layout]], [[hidden-backend-storage]] |
+| Metal 3 mesh/object path | untried high-risk mechanism | Mesh draw plumbing exists below winemetal, but GT1's D3D9/FFP-heavy path has not been moved to a mesh/object-shader backend | Track as an exploratory backend escape hatch, not as rejected work or current production evidence. |
+| Tile-FFP path | implementation-blocked | `DXMT9_TILE_FFP=off` is the default; the current tile-routed wire replaces the base-colour draw with `setTileRenderPipelineState` + `dispatchThreadsPerTile`, producing black output until the two-stage encode is implemented and GPU-validated | Keep as a known unfinished lever for eligible FFP draws; current black render is not a hardware limit. |
+| PSO/state churn backend spill | unmeasured GPU-side coupling | Draw-run batching failure and PSO/binding churn are measured CPU problems; current CPU fixes left GPU flat, but no counter yet proves whether PSO churn forces hidden backend layout/spill reallocation independent of invocation count | Keep CPU and GPU claims separate. Add a PSO-stable/PSO-churn A/B only if it can isolate row geometry and visible state. [[state-churn-encode]] |
 | Index-cache CPU reduction | reject current attempts | Fixed cap cuts slots but not CPU; heap lazy frontier cuts scored work `-80.97%` but select CPU regresses `+21.40%`; bucketed select cuts scored work `-72.61%` but select CPU regresses `+32.46%`; unique upper-bound gate rejects `76` candidates but candidate CPU regresses `+8.50%`; persistent rejected verdicts are already implemented (`401,681` rejected hits / `143` cold misses); non-scope draw-shape prefiltering already happens before lookup; strict LRU builder normalization worsens candidate miss32 by `+46` and total encode CPU by `+36.930ms` | Do not spend more Xcode budget on these CPU-only variants. Next CPU work needs cheaper cold-miss candidate construction, a telemetry-proven eligible-subclass exclusion, or broader semantic-safe GPU payoff before no-gputrace promotion. [[index-cache-locality-cpucost.11]], [[index-cache-locality-cpucost.12]], [[index-cache-locality-cpucost.13]], [[index-cache-locality-cpucost.14]], [[index-cache-locality-cpucost.15]], [[index-cache-locality-cpucost.16]], [[index-cache-locality-cpucost.17]] |
 | Current no-gputrace baseline | accepted as counter sample | Watchdog-cleanup scout: 1440 presents; GPU CB `+0.15%`, completion wait `+0.14%`, draws `-0.01%` vs baseline | Use as the current supervised timeout shape; it does not justify new Xcode budget by itself. [[baselines-frame50.04]] |
 | Encode CPU attribution | CPU wins accepted, fps proof still open | No-gputrace attribution has narrowed broad encode guesses into named CPU-only children: cbuf identity, packet-cache, snapshot, argbuf-open, sampler, and transient fast-append work all moved CPU but not GPU. Cbuf residual split named binding content hash as a dominant child (`570.070ms`, VS `489.627ms`), then the default path removed that byte scan (`binding_hash=0`) and cut cbuf update `1.216 -> 0.875ms/present`; prefix-preserving cbuf builders then cut cbuf build `0.333815 -> 0.175342ms/present`; binding-packet sampler key-hash reuse cut packet plan `0.666122 -> 0.599724ms/present`. A full-cbuf visual bisection knob rejects full upload as a default workaround (`argbuf_hybrid_bytes_per_encoder` +519.59%, no obvious visual normalization); the later visual fix is per-draw payload component hashes for argbuf cbuf identity, not full cbuf upload. | No Xcode spend from these CPU results alone. Continue no-gputrace work on cbuf upload/probe/repoint residual, binding-packet stronger identity/plan reuse, index setup/source resolve, shader-stream diversity, issue cost, and residual snapshot. Do not chase broad D3D9 setter no-op guards, slot-30 bind shadowing, dirty-category identity repoint, FFP stream binding, resource-array binding, vertex texture binding, LOD-bias upload, sampler lookup/rehash skip, texture pre-resolve source matching, raw cbuf `setBuffer`, cbuf upload-plan, observer callbacks, default cbuf content hashing, live-range-only cbuf prefix zeroing, full VS/PS cbuf fallback, or another sampler `FlatStateSet` rehash removal unless cheap instrumentation first proves a new non-zero opportunity. Require visual smoke/same-input image proof for future cbuf/binding semantic changes. [[state-churn-encode-encode-phase.02]], [[state-churn-encode-encode-phase.03]], [[state-churn-encode-encode-phase.04]], [[state-churn-encode-encode-phase.05]], [[state-churn-encode-encode-phase.06]], [[state-churn-encode-encode-phase.07]], [[state-churn-encode-encode-phase.08]], [[state-churn-encode-encode-phase.09]], [[state-churn-encode-encode-phase.10]], [[state-churn-encode-encode-phase.11]], [[state-churn-encode-encode-phase.12]], [[state-churn-encode-encode-phase.13]], [[state-churn-encode-encode-phase.14]], [[state-churn-encode-encode-phase.15]], [[state-churn-encode-encode-phase.16]], [[state-churn-encode-encode-phase.17]], [[state-churn-encode-encode-phase.18]], [[state-churn-encode-encode-phase.19]], [[state-churn-encode-encode-phase.20]], [[state-churn-encode-encode-phase.21]], [[state-churn-encode-encode-phase.22]], [[state-churn-encode-encode-phase.23]], [[snapshot-cache-snapshot.04]], [[snapshot-cache-snapshot.05]], [[snapshot-cache-snapshot.06]], [[snapshot-cache-snapshot.07]], [[snapshot-cache-snapshot.08]], [[snapshot-cache-snapshot.09]] |
@@ -160,6 +183,7 @@ flowchart TD
   Broad -- "No" --> Backend{"non-reorder backend-shape\nbytes/inv preflight clears?"}
   Backend -- "No" --> RejectBackend["reject current backend-shape family"]
   Backend -- "Yes" --> Spend["worth a new capture"]
+  Backend -- "position/binning or mesh/object or PSO-spill" --> NewBackend["new denominator candidate\nmust isolate backend storage\nnot visible VSOut width"]
   Start --> Cpu{"generic CPU frontier\nonly?"}
   Cpu -- "Yes" --> CpuProbe{"has no-gputrace\nphase attribution?"}
   CpuProbe -- "No" --> CpuReject["no Xcode spend\nadd counters first"]
@@ -172,6 +196,7 @@ flowchart TD
   classDef bad fill:#ffe8e8,stroke:#b64242,color:#2b0d0d
   class Keep,Explicit,FutureOracle,Spend,ScopedDepth good
   class Start,Opaque,Screen,Broad,Oracle,Backend,Cpu,CpuProbe warn
+  class NewBackend warn
   class CpuNarrow good
   class RejectBroad,RejectBackend,CpuReject bad
 ```
@@ -204,11 +229,20 @@ no-alpha-blend` two-draw candidate exact under standalone same-input replay
 candidate because the replay uses white dummy textures. Captured D24X8 depth
 input for the same selected window also stays exact.
 
+Bandwidth framing: frame60's `1627.332 MiB` VS write is already the dominant
+single visible counter in the GPU ledger. At `~22 fps`, that is roughly
+`37 GB/s` of VS write traffic alone. The base-M1 implication is different from
+M1 Pro/Max/Ultra: the former can saturate once read/sampling/depth/color/store
+traffic is included, while the latter needs a narrower backend or CPU/pacing
+explanation for the same scene shape.
+
 ## What is settled vs open
 
 **Accepted**
 - The GPU limiter is hidden vertex/tiler/parameter (TVB) backend storage,
-  scaling with VS invocations × per-vertex VSOut bytes. [[hidden-backend-storage]], [[tvb-mechanism-proof]]
+  scaling with VS invocations × hidden per-invocation backend storage. The
+  invocation numerator is proved actionable; the actual per-invocation storage
+  denominator remains open. [[hidden-backend-storage]], [[tvb-mechanism-proof]]
 - Opaque-depth index-cache locality is a real, semantic-safe GPU win, but
   stays opt-in until the remaining index-setup CPU side-effect is reduced or
   amortized by a broader runtime gate. [[index-cache-locality]]
@@ -231,6 +265,18 @@ input for the same selected window also stays exact.
 **Open**
 - Which sub-component of the hidden backend dominates (stage-out vs binning
   parameter storage vs compiler spill). [[hidden-backend-storage]]
+- Whether an actual Apple position-only/binning path can avoid hidden
+  `[[position]]`/parameter storage. The existing position-only VSOut probe is a
+  correctness-invalid visible-output diagnostic, not proof that this backend
+  path was enabled or impossible. [[vsout-layout]], [[shader-codegen]]
+- Whether Metal 3 mesh/object shaders can move GT1-style FFP/fixed-function
+  geometry off the current vertex/tiler storage path. This has not been tried.
+- Tile-FFP remains a known unfinished lever, not a rejected limit:
+  `DXMT9_TILE_FFP` is default-off because the current tile wire black-renders
+  eligible draws until two-stage base-colour draw + tile dispatch is validated.
+- Whether PSO/state churn changes hidden backend layout/spill storage. Current
+  draw-run/PSO work is measured as CPU-throughput and GPU-flat, but that does
+  not by itself prove there is no GPU-side backend-storage coupling.
 - Residual row `50/2` / refreshed `60/2` locality: useful under explicit
   exact/`lsb1` semantic policy for screen-blend, and class proxy now shows
   depth-read/screen/alpha `60/2` classes all have real `~25-28%` LRU32 ceilings;
