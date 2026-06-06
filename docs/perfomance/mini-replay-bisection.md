@@ -27,6 +27,7 @@ the apparatus that made [[tvb-mechanism-proof]] possible and that backs the
 | H8 | The pressure is a single late draw/state transition | rejected (additive, independent windows) | [[mini-replay-bisection-bisect.01]] |
 | H9 | The cost is per-draw geometry/shader-pair amplification, not alpha/scissor | accepted | [[mini-replay-bisection-pair.01]] |
 | H10 | Broad depth-read reorder can be made production-shaped with current runtime selectors | rejected | [[mini-replay-bisection-semantic.01]] |
+| H11 | A selected `60/2 depth-read + no-alpha-blend` cache-opt window can preserve same-input final color | accepted (scoped) | [[mini-replay-bisection-semantic.02]] |
 
 ## Verification methods
 
@@ -70,7 +71,8 @@ flowchart TD
   Bisect --> Pair["pair-local\nfea7/a091 + dee2/2f20\n99.8% with 7/14 draws"]
   Pair --> TVB["feeds [[tvb-mechanism-proof]]"]
   Pair --> Semantic["semantic.01\nfinal-color runtime blocker\nbroad depth-read rejected"]
-  Semantic --> ICL["feeds [[index-cache-locality]]\nexplicit screen-blend only"]
+  Semantic --> ScopedSemantic["semantic.02\n60/2 depth-read/no-blend\n2-draw exact replay\nscoped proof only"]
+  ScopedSemantic --> ICL["feeds [[index-cache-locality]]\nexplicit screen-blend + scoped depth-read candidates"]
 
   classDef accepted fill:#d6f5d6,stroke:#2b7a2b,color:#063
   classDef rejected fill:#f8d7da,stroke:#a33,color:#600
@@ -80,7 +82,7 @@ flowchart TD
   class Plan,Pay,Multi tooling
   class R16 open
   class Scissor,Depth rejected
-  class R113,Bisect,Pair,TVB accepted
+  class R113,Bisect,Pair,TVB,ScopedSemantic accepted
   class Semantic rejected
   class ICL open
 ```
@@ -116,7 +118,14 @@ depth-read reorder. [[mini-replay-bisection-semantic.01]] shows that useful
 visible exact movement and a real final-color hazard share the same current
 runtime-visible state/geometry/shader fields. That keeps `50/2` screen-blend in
 the explicit exact/`lsb1` bucket and blocks broad depth-read promotion until a
-real final-color/final-writer or occlusion oracle exists.
+real final-color/final-writer or occlusion oracle exists. The post-visualfix
+follow-up [[mini-replay-bisection-semantic.02]] adds a narrower positive result:
+a selected `60/2 depth-read + no-alpha-blend` two-draw window is exact under the
+standalone same-input replay while cutting LRU32 misses by `-14,593` (`-27.6%`).
+That is a scoped candidate, not a broad rule, because the replay still uses
+white dummy textures. A second pass supplied the captured D24X8 depth input and
+remained exact, so depth content is no longer the caveat for this selected
+window.
 
 ## How to run
 Every experiment here is a 3DMark05 GT1 run. The pipeline is three stages: dump
@@ -156,4 +165,5 @@ The exact per-experiment flags (draw windows, `--primitive-order` choices,
 - [[vsout-layout]] — pair-liveness VSOut trim rejected (-0.01%) inside the hot window.
 - [[render-pass-store]] — depth re-entry / attachment content rejected as owner.
 - [[mini-replay-bisection-semantic.01]] — final-color/runtime blocker for broad depth-read reorder.
+- [[mini-replay-bisection-semantic.02]] — scoped `60/2` depth-read/no-blend exact replay candidate.
 - [[overview-3dmark05-gt1]] — root map and priority DAG.

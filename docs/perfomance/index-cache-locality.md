@@ -34,7 +34,8 @@ bottleneck triage. The mechanism behind why this works is proven separately by
 | H13 | A missing persistent rejected verdict is the remaining opaque-depth CPU blocker | rejected; already implemented and amortizing | [[index-cache-locality-cpucost.15]] |
 | H14 | A missing draw-shape prefilter before reordered-index-cache lookup is the remaining CPU blocker | rejected; non-scope draws are already gated before lookup | [[index-cache-locality-cpucost.16]] |
 | H15 | Strict no-duplicate LRU simulation inside the candidate builder improves candidate quality or CPU enough to change the default | rejected; candidate miss32 worsens by `+46`, CPU gain is too small/noisy | [[index-cache-locality-cpucost.17]] |
-| H16 | Who owns the residual `50/2` (`~1.49–1.58 GiB` hidden) GPU cost | **OPEN** | [[index-cache-locality-triage.01]] |
+| H16 | A selected `60/2 depth-read + no-alpha-blend` window can use `cache-opt-lru32` without same-input color movement | accepted (scoped, not production) | [[mini-replay-bisection-semantic.02]] (`0` changed pixels with clear and D24X8 depth input, LRU32 `-14,593`; white-texture/selector caveat) |
+| H17 | Who owns the residual `50/2` / refreshed `60/2` (`~1.49–1.60 GiB` hidden) GPU cost | **OPEN** | [[index-cache-locality-triage.01]], [[hidden-backend-storage-shape.04]], [[mini-replay-bisection-semantic.02]] |
 
 ## Verification methods
 
@@ -96,6 +97,7 @@ flowchart TD
   Cpu15["index-cache-locality-cpucost.15\npersistent rejected verdict refresh\n401k rejected hits / 143 misses"]
   Cpu16["index-cache-locality-cpucost.16\ndraw-shape prefilter audit\nnon-scope already skipped"]
   Cpu17["index-cache-locality-cpucost.17\nstrict LRU diagnostic REJECTED\nmiss32 +46, total CPU +36.9ms"]
+  ScopedDepth["mini-replay-bisection-semantic.02\n60/2 depth-read/no-blend\nexact 2-draw replay\nLRU32 -27.6%"]
   FastGate["index-cache-locality-opaque.06\nfast-measure smoke\nGPU -0.58%, setup +309ms"]
   Proof["index-cache-locality-opaque.07\nFAST-MEASURE PROOF\nGPU -9.50%, target VS inv -14.12%\nmechanism via [[tvb-mechanism-proof]]"]
   SbScout["index-cache-locality-screenblend.02\n50/2 scout: 66 hits"]
@@ -133,15 +135,17 @@ flowchart TD
   SbScout --> SbXcode
   SbXcode --> SbGate
   SbGate --> Triage
+  Triage --> ScopedDepth
   SbOrder -.->|"earlier order-only attempt"| SbScout
   Proof -->|"threshold tuning"| MinGain
-  Triage -->|"owner still open"| OpenOwner["residual 50/2\nhidden vertex/tiler storage"]
+  ScopedDepth -->|"scoped only"| OpenOwner["residual 50/2 / 60/2\nhidden vertex/tiler storage"]
 
   classDef accepted fill:#d6f5d6,stroke:#2b7a2b,color:#063
   classDef rejected fill:#f8d7da,stroke:#a33,color:#600
   classDef open fill:#fff3cd,stroke:#a80,color:#640
   class Preflight,OptNo,OptXcode,Smoke,Cpu1,Cpu3,Cpu4,Cpu5,Cpu6,Cpu8,Cpu9,Cpu10,FastGate,Proof,Identity1,Identity2 accepted
   class Cpu2,Cpu7,Cpu11,Cpu12,Cpu13,Cpu14,Cpu15,Cpu16,Cpu17,MinGain rejected
+  class ScopedDepth accepted
   class SbScout,SbXcode,SbGate,SbOrder,Triage,OpenOwner open
 ```
 
@@ -229,9 +233,18 @@ texture/fragment ([[index-cache-locality-triage.01]]). The screen-blend cache *c
 reduce it ([[index-cache-locality-screenblend.03]], `50/2` GPU `-4.64%`) but is
 allowed only as an **explicit exact/`lsb1`** artifact
 ([[index-cache-locality-screenblend.04]]): the combined opaque+screen-blend run
-improves top GPU `-11.89%`, but broad depth-read promotion is blocked by a
-runtime-indistinguishable final-color hazard. Until a real final-color/final-writer
-oracle or a non-reorder backend mechanism exists, `50/2` is the open frontier.
+improves top GPU `-11.89%`. The post-visualfix `60/2` class proxy then found
+depth-read/no-blend windows with similar locality ceilings. The first selected
+two-draw window ([[mini-replay-bisection-semantic.02]]) is exact under
+standalone same-input replay and cuts replay LRU32 misses
+`52,865 -> 38,272` (`-27.6%`), so this is now a scoped candidate family rather
+than a dead end. It is not a production rule yet: broad depth-read promotion is
+still blocked by a runtime-indistinguishable final-color hazard, and the scoped
+proof uses white dummy textures and still lacks a runtime-visible selector,
+although captured D24X8 depth input already stays exact for this selected
+window. Until a real final-color/final-writer oracle, a real-texture replay, a
+runtime-visible selector, or a non-reorder backend mechanism exists, residual
+`50/2` / `60/2` is the open frontier.
 
 ## How to run
 Every experiment here is a 3DMark05 GT1 run via the standard wrapper. The
@@ -262,4 +275,5 @@ The exact per-experiment flags live in each leaf's `**Method.**` field. See
 - [[primitive-reorder-diagnostics]] — the reverse-triangle / min-index / cache-aware reorder scouts that motivated a *cached, gated* reorder instead of naive order changes; `sort-min-index` was rejected here.
 - [[index-reuse-measurement]] — the `DXMT9_MEASURE_INDEX_REUSE` / LRU32 cache-miss telemetry the candidate gate is built on.
 - [[mini-replay-bisection]] — consumes the no-mutate identity rows; the real-input replay path needed to settle the open `50/2` semantic-tolerance question.
+- [[mini-replay-bisection-semantic.02]] — selected `60/2` depth-read/no-blend window with exact same-input replay output.
 - [[overview-3dmark05-gt1]] — root priority DAG and synthesis (this is the accepted win it points to).

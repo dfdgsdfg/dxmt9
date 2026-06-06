@@ -139,6 +139,7 @@ backend mechanism before replay.
 | Opaque-depth index locality | keep as opt-in | Fast-measure proof: top GPU `-9.50%`; target `50/0+50/1` GPU `-18.39%`, VS invocations `-14.12%`, VS write `-16.79%`; CPU smoke still has index setup `+309ms` and source-resolve is flat | Production-shaped path remains the safe GPU win, but not a shared `perf` default until CPU side-effect is lower or a broader runtime gate proves net positive. [[index-cache-locality]] |
 | Screen-blend index locality | explicit-tolerance-only | Combined run GPU `-11.89%`; `lsb1` image gate `739/786,432`, max delta `1`, SSIM `1.000000` | Allow only under explicit exact/`lsb1` policy; do not generalize to broad depth-read. [[index-cache-locality-screenblend.04]] |
 | Broad depth-read reorder | reject | Visible exact gain exists (`-8446` LRU32), but visible-fail hazard remains (`-1407` LRU32) | Requires final-color/final-writer or occlusion proof before another Xcode spend. [[mini-replay-bisection-semantic.01]] |
+| Scoped depth-read/no-blend locality | scoped proof | Selected `60/2` two-draw window: replay LRU32 `52,865 -> 38,272` (`-27.6%`), same-input image `0` changed pixels / SSIM `1.0` with both clear-depth and captured D24X8 depth input; replay still uses white dummy textures | Continue scoped selector / real-texture proof work; do not promote to broad depth-read rule yet. [[mini-replay-bisection-semantic.02]] |
 | Runtime final-color selector | blocked | Pass draws `3,5,6,7` and fail draw `4` share all `43` runtime-visible fields | Do not use full uniform payload identity as a production selector. [[mini-replay-bisection-semantic.01]] |
 | Non-reorder backend mechanism | needs-new-mechanism | Half-VSOut bytes/inv `-1.94%`, but GPU `+3.40%` | New candidate must preflight meaningful bytes/inv or hidden-backend proxy movement. [[hidden-backend-storage-shape.02]] |
 | Index-cache CPU reduction | reject current attempts | Fixed cap cuts slots but not CPU; heap lazy frontier cuts scored work `-80.97%` but select CPU regresses `+21.40%`; bucketed select cuts scored work `-72.61%` but select CPU regresses `+32.46%`; unique upper-bound gate rejects `76` candidates but candidate CPU regresses `+8.50%`; persistent rejected verdicts are already implemented (`401,681` rejected hits / `143` cold misses); non-scope draw-shape prefiltering already happens before lookup; strict LRU builder normalization worsens candidate miss32 by `+46` and total encode CPU by `+36.930ms` | Do not spend more Xcode budget on these CPU-only variants. Next CPU work needs cheaper cold-miss candidate construction, a telemetry-proven eligible-subclass exclusion, or broader semantic-safe GPU payoff before no-gputrace promotion. [[index-cache-locality-cpucost.11]], [[index-cache-locality-cpucost.12]], [[index-cache-locality-cpucost.13]], [[index-cache-locality-cpucost.14]], [[index-cache-locality-cpucost.15]], [[index-cache-locality-cpucost.16]], [[index-cache-locality-cpucost.17]] |
@@ -155,6 +156,7 @@ flowchart TD
   Broad -- "Yes" --> Oracle{"final-color / final-writer\nruntime oracle?"}
   Oracle -- "No" --> RejectBroad["reject broad depth-read\nno Xcode spend"]
   Oracle -- "Yes" --> FutureOracle["future semantic proof family"]
+  Broad -- "selected no-blend window" --> ScopedDepth["scoped 60/2 depth-read/no-blend\nexact mini-replay\nclear + D24X8 depth\nwhite texture caveat"]
   Broad -- "No" --> Backend{"non-reorder backend-shape\nbytes/inv preflight clears?"}
   Backend -- "No" --> RejectBackend["reject current backend-shape family"]
   Backend -- "Yes" --> Spend["worth a new capture"]
@@ -168,7 +170,7 @@ flowchart TD
   classDef good fill:#e8f5e8,stroke:#4d8b4d,color:#102a10
   classDef warn fill:#fff3d6,stroke:#b98222,color:#2a1b00
   classDef bad fill:#ffe8e8,stroke:#b64242,color:#2b0d0d
-  class Keep,Explicit,FutureOracle,Spend good
+  class Keep,Explicit,FutureOracle,Spend,ScopedDepth good
   class Start,Opaque,Screen,Broad,Oracle,Backend,Cpu,CpuProbe warn
   class CpuNarrow good
   class RejectBroad,RejectBackend,CpuReject bad
@@ -195,7 +197,12 @@ identity path: **33.614 ms**, top-3 **32.984 ms / 98.12%**, VS write
 **1627.332 MiB**, hidden backend **1597.755 MiB**. Its no-mutate class proxy
 ([[hidden-backend-storage-shape.04]]) splits residual `60/2` into depth-read,
 screen-blend, and standard-alpha classes with `~111-128 MiB` proxy hidden
-backend each and `~25-28%` candidate LRU32 reduction.
+backend each and `~25-28%` candidate LRU32 reduction. A scoped follow-up
+([[mini-replay-bisection-semantic.02]]) proves one `60/2 depth-read +
+no-alpha-blend` two-draw candidate exact under standalone same-input replay
+(`0` changed pixels, replay LRU32 `-27.6%`), but it remains a selector/proof
+candidate because the replay uses white dummy textures. Captured D24X8 depth
+input for the same selected window also stays exact.
 
 ## What is settled vs open
 
@@ -227,8 +234,12 @@ backend each and `~25-28%` candidate LRU32 reduction.
 - Residual row `50/2` / refreshed `60/2` locality: useful under explicit
   exact/`lsb1` semantic policy for screen-blend, and class proxy now shows
   depth-read/screen/alpha `60/2` classes all have real `~25-28%` LRU32 ceilings;
-  broad depth-read reorder is still blocked by a runtime-indistinguishable
-  final-color hazard. [[index-cache-locality]], [[hidden-backend-storage-shape.04]]
+  a selected depth-read/no-blend two-draw window now has exact same-input replay
+  output, but broad depth-read reorder is still blocked by a
+  runtime-indistinguishable final-color hazard and by the need for real texture
+  or runtime-visible selector proof. Captured D24X8 depth already passes for the
+  selected window. [[index-cache-locality]],
+  [[hidden-backend-storage-shape.04]], [[mini-replay-bisection-semantic.02]]
 - Dependency-aware pass coalescing for same RT/depth re-entry (P1). [[render-pass-store]]
 - Remaining CPU tracks: pacing/completion wait, backend encode, and residual
   snapshot rebuild. After the accepted cbuf identity, packet-cache, and snapshot

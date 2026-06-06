@@ -30,6 +30,7 @@ every other domain at the lever that actually moves the bucket.
 | H8 | Current non-reorder backend-shape probes materially reduce bytes/invocation | rejected | [[hidden-backend-storage-shape.02]] (best bytes/inv `-1.94%`, GPU regresses) |
 | H9 | Which candidates still deserve Xcode/gputrace spend for residual `50/2` | accepted (gate) | [[hidden-backend-storage-shape.03]] (CPU-only index-cache probes rejected; semantic or bytes/inv preflight required) |
 | H10 | Post-visualfix frame60 candidate class proxy can rank residual `60/2` state classes before another Xcode capture | accepted (attribution) | [[hidden-backend-storage-shape.04]] (`60/2` split into depth-read/screen/alpha classes, each ~`111-128 MiB` proxy hidden and `~25-28%` candidate LRU32 reduction) |
+| H11 | A selected `60/2 depth-read + no-alpha-blend` locality window has same-input exact replay output | accepted (scoped) | [[mini-replay-bisection-semantic.02]] (`0` changed pixels with clear and D24X8 depth input, LRU32 `-14,593`; white-texture/selector scope) |
 
 ## Verification methods
 
@@ -67,6 +68,7 @@ flowchart TD
   ShapeGate["shape.02\nnon-reorder backend gate\nbytes/inv weak + GPU regresses"]:::rejected
   SpendGate["shape.03\n50/2 Xcode spend gate\nsemantic or bytes/inv preflight"]:::accepted
   ClassProxy["shape.04\npost-visualfix candidate class proxy\n60/2 split by semantic risk"]:::accepted
+  ScopedSemantic["semantic.02\nselected 60/2 depth-read/no-blend\nexact mini replay\nscoped only"]:::accepted
 
   Attr -->|"baseline-for"| Model
   Model -->|"corroborated-by"| Ext
@@ -77,6 +79,7 @@ flowchart TD
   Shape -->|"current candidates"| ShapeGate
   ShapeGate -->|"budget policy"| SpendGate
   SpendGate -->|"ranked-by"| ClassProxy
+  ClassProxy -->|"selected window proof"| ScopedSemantic
   Model -->|"frames"| Shape
 ```
 
@@ -119,7 +122,13 @@ frame60 ranking without another gputrace export: `60/2` is split across
 depth-read / screen-blend / standard-alpha classes with roughly `111-128 MiB`
 proxy hidden backend each and `~25-28%` candidate LRU32 reduction, while the
 remaining low-risk opaque-depth work is already covered by the accepted opt-in
-index-cache mechanism.
+index-cache mechanism. [[mini-replay-bisection-semantic.02]] then proves one
+selected `60/2 depth-read + no-alpha-blend` two-draw candidate is same-input
+exact while reducing replay LRU32 misses by `-14,593` (`-27.6%`). This is enough
+to justify continued scoped selector work, but not enough to generalize broad
+depth-read reorder: the replay still uses white dummy textures and lacks a
+runtime-visible production selector, even though a real D24X8 depth-input replay
+for this selected window also stayed exact.
 
 ## How to run
 Every experiment here is a 3DMark05 GT1 run via the standard wrapper. This domain
@@ -151,6 +160,8 @@ per-experiment flags live in each leaf's `**Method.**` field; see
   bytes/inv movement is too small and GPU regresses.
 - [[hidden-backend-storage-shape.04]] — post-visualfix candidate class proxy
   that ranks residual `60/2` semantic-risk classes before another Xcode replay.
+- [[mini-replay-bisection-semantic.02]] — scoped `60/2` depth-read/no-blend
+  exact replay candidate selected from the class proxy.
 - [[vsout-layout]] — visible varying-width attempts this domain rejected as the
   first-order owner (trim / point-size / position-only / half-VSOut).
 - [[index-cache-locality]] — the one accepted production win: reduces VS

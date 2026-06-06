@@ -115,10 +115,18 @@ flowchart TD
 
 **Verdict.** Accepted as attribution. The proxy strengthens
 [[hidden-backend-storage-shape.03]]: another broad `60/2` reorder is not a
-production path. The next high-value GPU work is either:
+production path. The first follow-up, [[mini-replay-bisection-semantic.02]],
+selected the `60/2 depth-read + no-alpha-blend` rank-1 two-draw window and
+proved `cache-opt-lru32` exact under the standalone same-input replay
+(`0` changed pixels, replay LRU32 `-14,593`). That is useful, but scoped: it
+uses white dummy textures. A real D24X8 depth-input replay for the same selected
+window also stayed exact, so it does not replace a full-scene texture proof or a
+runtime-visible production selector. The
+next high-value GPU work is either:
 
-- a same-input semantic proof that makes selected `60/2` depth-read /
-  screen-blend ordering legal; or
+- more same-input semantic proof that makes selected `60/2` depth-read /
+  screen-blend ordering legal under real depth/texture or a runtime-visible
+  selector; or
 - a primitive-order-preserving backend-shape A/B that moves VS
   invocations/write without changing draw/triangle/vertex shape.
 
@@ -129,4 +137,5 @@ buffer total `29.375 MiB`, weighted primitive-block tile intersections
 
 **Related.** [[hidden-backend-storage]] · prev:
 [[hidden-backend-storage-shape.03]] · [[index-cache-locality]] ·
-[[index-cache-locality-cpucost.15]] · [[baselines-frame60.02]].
+[[index-cache-locality-cpucost.15]] · [[baselines-frame60.02]] ·
+[[mini-replay-bisection-semantic.02]].
