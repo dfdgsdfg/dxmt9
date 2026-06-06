@@ -24,6 +24,7 @@ real lever — dependency-aware pass reordering/coalescing — is still **open**
 | H4 | The conservative color next-clear DontCare proof fires on GT1 | **rejected** (`render_pass_store_action_dontcare=0`; re-entry is preserve-before-load) | [[render-pass-store-dontcare.02]] |
 | H5 | The re-entry budget is dominated by one attachment (single-attachment DontCare would suffice) | rejected (split ~50/50 color/depth) | [[render-pass-store-passchain.01]] |
 | H6 | Dependency-aware pass reordering/coalescing is the real lever (most switches change BOTH RT and depth) | **OPEN** | [[render-pass-store-passchain.01]] |
+| H7 | Transient D3D9 intermediate RTs can be allocated as `MTLStorageModeMemoryless` to skip device RAM entirely | **OPEN (proposal)** — landing surface narrow without H6 coalesce; same-pass scope only | [[render-pass-store-memoryless.01]] |
 
 ## Verification methods
 
@@ -53,18 +54,20 @@ flowchart TD
   ColorNC["render-pass-store-dontcare.02\ncolor next-clear DontCare run\nstore_action_dontcare=0\nZERO GT1 hits"]
   PassChain["render-pass-store-passchain.01\npass-chain split\ncolor 31.11 GB / depth 31.11 GB\nrt+depth-both change 10873 (8.63/present)"]
   Coalesce["dependency-aware pass\nreordering / coalescing\n(real lever, OPEN)"]
+  Memoryless["render-pass-store-memoryless.01\ntransient D3D9 RT MTLStorageModeMemoryless\n(proposal; same-pass scope only)"]
 
   Reentry -->|"motivates proof"| DesignDC
   DesignDC -->|"first implementation"| ColorNC
   ColorNC -->|"zero hits -> deeper measurement"| PassChain
   PassChain -->|"both attachments change ->\nsingle-attachment policy insufficient"| Coalesce
+  Coalesce -.unlocks producer+consumer\nsame-pass cases.-> Memoryless
 
   classDef accepted fill:#d6f5d6,stroke:#2b7a2b,color:#063
   classDef rejected fill:#f8d7da,stroke:#a33,color:#600
   classDef open fill:#fff3cd,stroke:#a80,color:#640
   class Reentry accepted
   class ColorNC rejected
-  class DesignDC,PassChain,Coalesce open
+  class DesignDC,PassChain,Coalesce,Memoryless open
 ```
 
 ## Results synthesis
@@ -87,10 +90,15 @@ single-attachment store policy can cover GT1.
 **Open.** The real lever is a **dependency-aware pass reordering/coalescing**
 design: decide whether intervening passes are independent enough to batch same-key
 work together, or prove a broader live-out discard with concrete read/use
-evidence. That work is unstarted. Per the [[overview-3dmark05-gt1]] priority DAG, this entire
-P1 GPU-memory track remains secondary to the P0 hidden-backend write bucket
-([[hidden-backend-storage]]); the cheap, safe render-pass wins were already shown
-not to move the GT1 bottleneck.
+evidence. That work is unstarted. A companion proposal,
+[[render-pass-store-memoryless.01]], records the
+`MTLStorageModeMemoryless` opportunity for transient D3D9 intermediate RTs;
+its landing surface is narrow until coalesce makes producer+consumer share a
+Metal render pass, so it is recorded as an OPEN proposal that multiplies any
+coalesce win rather than a standalone lever. Per the [[overview-3dmark05-gt1]]
+priority DAG, this entire P1 GPU-memory track remains secondary to the P0
+hidden-backend write bucket ([[hidden-backend-storage]]); the cheap, safe
+render-pass wins were already shown not to move the GT1 bottleneck.
 
 ## How to run
 Every experiment here is a 3DMark05 GT1 run via the standard wrapper. Enable the

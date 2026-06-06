@@ -62,6 +62,17 @@ but it still does not promote: `60/2` improves while the aggregate top-GPU gate
 fails. Follow-up row telemetry shows the path only applies to `60/2`; the
 `60/0+60/1` regression is GPU-time-only replay variance rather than
 reordered-cache mutation on non-target rows.
+Rifle muzzle fire is still visually absent. It remains a correctness gate, not a
+current explanation for low FPS. The added alpha/effect counters and visibility
+scout identify only candidate rows: the `60/8`-style candidates are
+submitted/sample-visible but tiny, while the dominant `60/2` row is mostly
+sample-visible alpha/textured material work. None of those candidates is proven
+to be the missing rifle effect. If a future rifle fix adds a truly missing draw,
+current FPS is slightly optimistic; if it fixes submitted-but-wrong state, the
+cost is likely already paid. Because previous large white bloom mistakes moved
+performance materially, the next proof gate is visual parity / final-color
+writer isolation before more paired Xcode performance budget. See
+[[backend-shape-classifiers-alpha.04]].
 
 Almost every other hypothesis (visible varying width, shader temps,
 render/raster state toggles, primitive reorder, const-upload size,
@@ -441,7 +452,13 @@ explanation for the same scene shape.
   parameter storage vs compiler spill). [[hidden-backend-storage]]
 - Whether a correctness-preserving alpha/backend-state A/B exists after the
   static blend-off gate. The known `large4096+alpha` clue is strong but still
-  diagnostic-only. [[hidden-backend-storage-shape.10]]
+  diagnostic-only. Rifle muzzle fire is still visually absent; its performance
+  impact is narrowed because the observed tiny effect candidates are not a
+  dominant limiter, while the hot alpha row still needs final-color/final-writer
+  proof. Current FPS should remain diagnostic, not final, until visual parity is
+  restored or the rifle effect is proven tiny/already-submitted.
+  [[hidden-backend-storage-shape.10]],
+  [[backend-shape-classifiers-alpha.04]]
 - Whether an actual Apple position-only/binning path can avoid hidden
   `[[position]]`/parameter storage. The existing position-only VSOut probe is a
   correctness-invalid visible-output diagnostic, not proof that this backend

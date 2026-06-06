@@ -36,6 +36,7 @@ bucket substantially, and forced **indexed expansion** nearly doubled it
 | H13 | Hidden writes are coupled to fragment visibility | rejected (VS write +0.042 MiB, GPU +5.13%) | [[backend-shape-classifiers-visible.01]] |
 | H14 | Indexed-submission pressure drives the bucket | confirmed (expand: GPU +87.74%, VS write +98.10%) — keep indexed path | [[backend-shape-classifiers-expand.01]] |
 | H15 | Alpha-test discard owns the bucket / force-frag delta | rejected (GPU +1.72%, VS write +0.00%) | [[backend-shape-classifiers-alphatest.01]] |
+| H16 | Rifle muzzle fire correctness changes perf interpretation | visual bug open; perf impact narrowed because observed tiny effect candidates are not proven rifle fire and are not dominant | [[backend-shape-classifiers-alpha.04]] |
 
 ## Verification methods
 
@@ -77,6 +78,7 @@ flowchart TD
     A1["alpha.01<br/>broad disable<br/>(yellow frame)"]:::rejected
     A2["alpha.02<br/>scoped screen-blend<br/>(row drift)"]:::rejected
     A3["alpha.03<br/>large4096+alpha class<br/>VS write −52.86%"]:::factor
+    A4["alpha.04<br/>rifle bloom correctness gate<br/>screen/additive telemetry"]:::open
   end
   subgraph depth["depth"]
     DW["depthwrite.01<br/>disable depth write"]:::rejected
@@ -99,7 +101,7 @@ flowchart TD
   EXP["expand.01<br/>force-expand-indexed<br/>VS write +98.10%"]:::informative
   OWNER["hidden Apple vertex/tiler/parameter (TVB) storage<br/>scales with VS invocations × per-vertex VSOut bytes"]:::concl
 
-  A1 -->|"narrowed-from"| A2 -->|"precise class"| A3
+  A1 -->|"narrowed-from"| A2 -->|"precise class"| A3 -->|"semantic gate"| A4
   C1 -->|"full capture"| C2 -->|"orientation"| C3 -->|"scoped"| C4
   S1 -->|"full capture"| S2
   AT -->|"broader FS"| FOG
@@ -107,6 +109,7 @@ flowchart TD
   C3 -->|"rejected→primitive axis"| EXP
 
   A3 -->|"moves bucket (factor)"| OWNER
+  A4 -->|"separates missing workload<br/>from submitted-but-wrong state"| OWNER
   EXP -->|"confirms scaling"| OWNER
   A1 --> OWNER
   DW --> OWNER
@@ -122,6 +125,7 @@ flowchart TD
   classDef rejected fill:#f8d7da,stroke:#a33,color:#600
   classDef secondary fill:#fff3cd,stroke:#a80,color:#640
   classDef factor fill:#fff3cd,stroke:#a80,color:#640
+  classDef open fill:#fff3cd,stroke:#a80,color:#640
   classDef informative fill:#f8d7da,stroke:#a33,color:#600
   classDef concl fill:#d6f5d6,stroke:#2b7a2b,color:#063
 ```
@@ -152,6 +156,17 @@ storage that scales with VS invocations × per-vertex VSOut bytes, and the only
 correctness-preserving lever found is reducing VS invocations via index-cache
 locality. Nothing here is open as a primary fix; the residual work is on the
 locality / primitive axes, not state toggles.
+
+The rifle muzzle fire observation adds a separate semantic gate. The effect is
+still visually absent. It does not currently explain low FPS: the observed tiny
+effect candidates are submitted/sample-visible, not proven to be the missing
+rifle fire, and not a dominant limiter. Current FPS may still be slightly
+optimistic if a future correctness fix adds a truly missing draw. The
+alpha/effect counters, visibility scout, and final-color proof in
+[[backend-shape-classifiers-alpha.04]] must be used before treating GT1 FPS as a
+final visual-correct workload. This gate has priority over more Xcode
+performance proof on this branch because previous large white bloom mistakes
+were performance-significant.
 
 ## How to run
 Every experiment here is a 3DMark05 GT1 run via the standard wrapper. These are

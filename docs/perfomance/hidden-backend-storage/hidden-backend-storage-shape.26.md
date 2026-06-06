@@ -7,7 +7,7 @@ title: Fragmentless Depth-Only Route Smoke Reaches the Full 60/0 Pass
 date: 2026-06-06
 type: validation
 status: accepted-runtime-smoke
-source: src/dxmt9/dxmt9_pipeline_cache.cpp; src/dxmt9/dxmt9_draw_encoder.mm; scripts/tools/run_3dmark05_perf_probe.sh; scripts/tools/summarize_3dmark05_perf.py; experiments/output/app-d3d9-3dmark05-fragmentless-depth-only-60-0-r5/3dmark05-perf-summary.md; experiments/output/app-d3d9-3dmark05-fragmentless-depth-only-60-0-r5/3dmark05-perf-encoders.csv; traces/app-d3d9-3dmark05-fragmentless-depth-only-60-0-r5/analysis/fragmentless-route-log-evidence.txt; docs/perfomance/hidden-backend-storage/hidden-backend-storage-shape.25.md
+source: src/dxmt9/dxmt9_pipeline_cache.cpp; src/dxmt9/dxmt9_draw_encoder.mm; scripts/tools/run_3dmark05_perf_probe.sh; scripts/tools/summarize_3dmark05_perf.py; experiments/output/app-d3d9-3dmark05-fragmentless-depth-only-60-0-r5/3dmark05-perf-summary.md; experiments/output/app-d3d9-3dmark05-fragmentless-depth-only-60-0-r5/3dmark05-perf-encoders.csv; traces/app-d3d9-3dmark05-fragmentless-depth-only-60-0-r5/analysis/fragmentless-route-log-evidence.txt; experiments/output/app-d3d9-3dmark05-fragmentless-depth-only-60-0-current-smoke-r1/3dmark05-perf-summary.md; experiments/output/app-d3d9-3dmark05-fragmentless-depth-only-60-0-current-smoke-r1/3dmark05-perf-encoders.csv; docs/perfomance/hidden-backend-storage/hidden-backend-storage-shape.25.md
 ---
 
 # Fragmentless Depth-Only Route Smoke Reaches the Full 60/0 Pass
@@ -92,6 +92,33 @@ The r5 row also reports `texture_mask_or=0x7f` but
 `fragment_texture_binding_samples=0`, `depth_func_lessequal_draws=42`,
 `alpha_test_enabled_draws=0`, `alpha_blend_enabled_draws=0`,
 `scissor_enabled_draws=0`, and `clip_plane_enabled_draws=0`.
+
+## Current-head repeat
+
+`app-d3d9-3dmark05-fragmentless-depth-only-60-0-current-smoke-r1` repeated the
+same row-scoped route after the alpha/effect telemetry work, with
+`--encoder-breakdown-seq 60 --measure-index-reuse` added:
+
+```sh
+scripts/tools/run_3dmark05_perf_probe.sh \
+  --suffix fragmentless-depth-only-60-0-current-smoke-r1 \
+  --frame 60 --timeout 180 --no-gputrace \
+  --encoder-breakdown-seq 60 --measure-index-reuse \
+  --probe-fragmentless-depth-only-row 60/0
+```
+
+The repeat passed and preserved the important shape:
+
+| Row | Draws | Primitives | Vertices | Probe draws | Probe primitives | Probe vertices | Alpha/effect overlap |
+|---|---:|---:|---:|---:|---:|---:|---|
+| `60/0` | `42` | `97,294` | `291,882` | `42` | `97,294` | `291,882` | `0` alpha-blend, `0` screen, `0` alpha-composite |
+| `60/2` | `187` | `389,376` | `1,168,128` | `0` | `0` | `0` | `145` alpha-blend, `103` screen, `42` alpha-composite |
+| `60/8` | `5` | `26` | `78` | `0` | `0` | `0` | `4` alpha-composite, `4` textured/small |
+
+The pipeline cache logged `2` fragmentless-depth-only accepts and no
+no-pipeline skips. This repeat confirms the `60/0` reduced route remains
+isolated from the alpha/effect rows: it is still a depth-only backend-shape
+candidate, not a rifle-bloom or alpha-material fix.
 
 ```mermaid
 stateDiagram-v2
