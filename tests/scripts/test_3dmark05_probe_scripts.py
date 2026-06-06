@@ -949,6 +949,31 @@ class ThreeDMark05ProbeScriptTests(unittest.TestCase):
         self.assertIn("--max-top-triangle-delta-ratio", finalize_line)
         self.assertIn("0.05", finalize_line)
 
+    def test_wrapper_allows_partial_stable_frame_proof_without_result_json_gate(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            baseline_joined = Path(tmp) / "baseline-joined.csv"
+            baseline_joined.write_text("gpu_ms\n", encoding="utf-8")
+
+            result = self.run_script(
+                RUN_WRAPPER,
+                "--suffix",
+                "forward-partial-stable-proof",
+                "--baseline-joined",
+                str(baseline_joined),
+                "--require-stable-frame-proof",
+                "--allow-partial-stable-frame-proof",
+                "--dry-run",
+            )
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+        finalize_line = next(
+            line for line in result.stdout.splitlines()
+            if line.startswith("finalize_cmd_after_xcode_export:")
+        )
+        self.assertIn("--require-stable-frame-proof", finalize_line)
+        self.assertIn("--allow-partial-stable-frame-proof", finalize_line)
+        self.assertNotIn("--require-result-json", finalize_line)
+
     def test_wrapper_forwards_tvb_mechanism_proof_to_finalizer(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             baseline_joined = Path(tmp) / "baseline-joined.csv"
@@ -1078,6 +1103,35 @@ class ThreeDMark05ProbeScriptTests(unittest.TestCase):
 
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertIn("DXMT9_TRIM_VERTEX_TEMPS=1", result.stdout)
+
+    def test_wrapper_dry_run_includes_scoped_varying_trim_env(self) -> None:
+        result = self.run_script(
+            RUN_WRAPPER,
+            "--no-gputrace",
+            "--trim-unused-varyings",
+            "--trim-unused-varyings-vs-hashes",
+            "0x61be862718e1d00c",
+            "--trim-unused-varyings-ps-hashes",
+            "0xfbeb0f02c65a9526",
+            "--dry-run",
+        )
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("DXMT9_TRIM_UNUSED_VARYINGS=1", result.stdout)
+        self.assertIn("DXMT9_TRIM_UNUSED_VARYINGS_VS_HASHES=0x61be862718e1d00c", result.stdout)
+        self.assertIn("DXMT9_TRIM_UNUSED_VARYINGS_PS_HASHES=0xfbeb0f02c65a9526", result.stdout)
+
+    def test_wrapper_rejects_scoped_varying_trim_without_trim_flag(self) -> None:
+        result = self.run_script(
+            RUN_WRAPPER,
+            "--no-gputrace",
+            "--trim-unused-varyings-vs-hashes",
+            "0x61be862718e1d00c",
+            "--dry-run",
+        )
+
+        self.assertEqual(result.returncode, 2)
+        self.assertIn("require --trim-unused-varyings", result.stderr)
 
     def test_wrapper_dry_run_includes_vsout_point_size_probe_env(self) -> None:
         result = self.run_script(
@@ -1520,6 +1574,75 @@ class ThreeDMark05ProbeScriptTests(unittest.TestCase):
         self.assertIn(f"depth_attachment_dump: {depth_path}", result.stdout)
         self.assertIn(f"DXMT9_DUMP_DEPTH_ATTACHMENT_PATH={depth_path}", result.stdout)
 
+    def test_wrapper_dry_run_includes_draw_texture_dump_env(self) -> None:
+        texture_dir = REPO_ROOT / "traces/texture-sidecar/analysis/textures"
+
+        result = self.run_script(
+            RUN_WRAPPER,
+            "--suffix",
+            "texture-sidecar",
+            "--frame",
+            "60",
+            "--no-gputrace",
+            "--dump-draw-texture-handles",
+            "0x20000010000008d,0x200000100000072",
+            "--dump-draw-texture-seq",
+            "60",
+            "--dump-draw-texture-enc",
+            "2",
+            "--dump-draw-texture-dir",
+            "traces/texture-sidecar/analysis/textures",
+            "--dry-run",
+        )
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn(f"draw_texture_dump_dir: {texture_dir}", result.stdout)
+        self.assertIn(
+            "DXMT9_DUMP_DRAW_TEXTURE_HANDLES=0x20000010000008d\\,0x200000100000072",
+            result.stdout,
+        )
+        self.assertIn(f"DXMT9_DUMP_DRAW_TEXTURE_DIR={texture_dir}", result.stdout)
+        self.assertIn("DXMT9_DUMP_DRAW_TEXTURE_SEQ=60", result.stdout)
+        self.assertIn("DXMT9_DUMP_DRAW_TEXTURE_ENC=2", result.stdout)
+
+    def test_wrapper_dry_run_defaults_draw_texture_dump_dir(self) -> None:
+        texture_dir = (
+            REPO_ROOT
+            / "traces/app-d3d9-3dmark05-texture-default/analysis/textures"
+        )
+
+        result = self.run_script(
+            RUN_WRAPPER,
+            "--suffix",
+            "texture-default",
+            "--frame",
+            "60",
+            "--no-gputrace",
+            "--dump-draw-texture-handles",
+            "0x20000010000008d",
+            "--dry-run",
+        )
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn(f"draw_texture_dump_dir: {texture_dir}", result.stdout)
+        self.assertIn(f"DXMT9_DUMP_DRAW_TEXTURE_DIR={texture_dir}", result.stdout)
+
+    def test_wrapper_rejects_draw_texture_dir_without_handles(self) -> None:
+        result = self.run_script(
+            RUN_WRAPPER,
+            "--no-gputrace",
+            "--dump-draw-texture-dir",
+            "traces/texture-sidecar/analysis/textures",
+            "--dry-run",
+        )
+
+        self.assertEqual(result.returncode, 2)
+        self.assertIn(
+            "--dump-draw-texture-seq/enc/dir require --dump-draw-texture-handles",
+            result.stderr,
+            result.stderr,
+        )
+
     def test_wrapper_rejects_depth_attachment_path_without_handle(self) -> None:
         result = self.run_script(
             RUN_WRAPPER,
@@ -1597,6 +1720,61 @@ class ThreeDMark05ProbeScriptTests(unittest.TestCase):
                 "partial-log",
                 "--output-dir",
                 str(output_dir),
+                "--require-result-json",
+            )
+
+        self.assertEqual(result.returncode, 2)
+        self.assertIn("missing required result.json", result.stderr)
+
+    def test_finalizer_partial_stable_frame_proof_accepts_partial_log(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            output_dir = Path(tmp) / "run"
+            output_dir.mkdir()
+            output_dir.joinpath("dxmt9.log").write_text(
+                "[dxmt9-perf] present_encoded=5 draw_calls=7\n",
+                encoding="utf-8",
+            )
+            baseline_joined = Path(tmp) / "baseline-joined.csv"
+            baseline_joined.write_text("gpu_ms\n", encoding="utf-8")
+
+            result = self.run_script(
+                FINALIZER,
+                "--suffix",
+                "partial-stable-proof",
+                "--output-dir",
+                str(output_dir),
+                "--baseline-joined",
+                str(baseline_joined),
+                "--require-stable-frame-proof",
+                "--allow-partial-stable-frame-proof",
+            )
+
+        self.assertEqual(result.returncode, 2)
+        self.assertIn("warning: missing result.json; using dxmt9.log partial-run counters", result.stderr)
+        self.assertIn("missing Xcode encoder counters CSV", result.stderr)
+        self.assertNotIn("missing required result.json", result.stderr)
+
+    def test_finalizer_result_json_gate_wins_over_partial_stable_frame_proof(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            output_dir = Path(tmp) / "run"
+            output_dir.mkdir()
+            output_dir.joinpath("dxmt9.log").write_text(
+                "[dxmt9-perf] present_encoded=5 draw_calls=7\n",
+                encoding="utf-8",
+            )
+            baseline_joined = Path(tmp) / "baseline-joined.csv"
+            baseline_joined.write_text("gpu_ms\n", encoding="utf-8")
+
+            result = self.run_script(
+                FINALIZER,
+                "--suffix",
+                "partial-stable-proof",
+                "--output-dir",
+                str(output_dir),
+                "--baseline-joined",
+                str(baseline_joined),
+                "--require-stable-frame-proof",
+                "--allow-partial-stable-frame-proof",
                 "--require-result-json",
             )
 
@@ -1721,6 +1899,39 @@ class ThreeDMark05ProbeScriptTests(unittest.TestCase):
         self.assertIn("DXMT9_PROBE_DEPTH_FUNC_ALWAYS=1", result.stdout)
         self.assertIn("DXMT_DEBUG_FORCE_CULL_MODE=back", result.stdout)
         self.assertIn("DXMT_DEBUG_FORCE_VISIBLE=1", result.stdout)
+
+    def test_wrapper_dry_run_includes_visibility_scout_env(self) -> None:
+        result = self.run_script(
+            RUN_WRAPPER,
+            "--suffix",
+            "visibility-scout-dry-run",
+            "--no-gputrace",
+            "--visibility-scout-row",
+            "60/2",
+            "--visibility-scout-draw-indices",
+            "36..37",
+            "--dry-run",
+        )
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("DXMT9_VISIBILITY_SCOUT=1", result.stdout)
+        self.assertIn("DXMT9_VISIBILITY_SCOUT_ROW=60/2", result.stdout)
+        self.assertIn(
+            "traces/app-d3d9-3dmark05-visibility-scout-dry-run/analysis/"
+            "frame60-visibility-scout.csv",
+            result.stdout,
+        )
+        self.assertIn("visibility_scout_draw_indices: 36..37", result.stdout)
+        self.assertIn(
+            "traces/app-d3d9-3dmark05-visibility-scout-dry-run/analysis/"
+            "frame60-visibility-scout-summary.md",
+            result.stdout,
+        )
+        self.assertIn(
+            "traces/app-d3d9-3dmark05-visibility-scout-dry-run/analysis/"
+            "frame60-visibility-scout-summary.csv",
+            result.stdout,
+        )
 
     def test_wrapper_dry_run_includes_scoped_force_texture_white_env(self) -> None:
         result = self.run_script(
@@ -1892,14 +2103,36 @@ class ThreeDMark05ProbeScriptTests(unittest.TestCase):
         self.assertEqual(result.returncode, 2)
         self.assertIn("--force-cull-mode must be one of", result.stderr)
 
-    def test_wrapper_dry_run_includes_metal_capture_layer_env_for_gputrace(self) -> None:
+    def test_wrapper_dry_run_omits_metal_capture_layer_env_for_gputrace_by_default(self) -> None:
         result = self.run_script(
             RUN_WRAPPER,
             "--dry-run",
         )
 
         self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("DXMT_METAL_CAPTURE_FRAME=60", result.stdout)
+        self.assertIn("DXMT_METAL_CAPTURE_PATH=", result.stdout)
+        self.assertNotIn("MTL_CAPTURE_ENABLED=1", result.stdout)
+
+    def test_wrapper_dry_run_includes_metal_capture_layer_env_when_opted_in(self) -> None:
+        result = self.run_script(
+            RUN_WRAPPER,
+            "--dry-run",
+            env={"DXMT_3DMARK05_SET_MTL_CAPTURE_ENABLED": "1"},
+        )
+
+        self.assertEqual(result.returncode, 0, result.stderr)
         self.assertIn("MTL_CAPTURE_ENABLED=1", result.stdout)
+
+    def test_wrapper_dry_run_forwards_metal_capture_destination(self) -> None:
+        result = self.run_script(
+            RUN_WRAPPER,
+            "--dry-run",
+            env={"DXMT_3DMARK05_METAL_CAPTURE_DESTINATION": "developerTools"},
+        )
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("DXMT_METAL_CAPTURE_DESTINATION=developerTools", result.stdout)
 
     def test_wrapper_dry_run_omits_metal_capture_layer_env_without_gputrace(self) -> None:
         result = self.run_script(

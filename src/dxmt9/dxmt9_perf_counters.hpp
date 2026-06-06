@@ -832,6 +832,23 @@ struct EncoderBreakdown {
   std::uint64_t primitiveCount = 0;
   std::uint64_t triangleEstimate = 0;
   std::uint64_t vertexCount = 0;
+  std::uint64_t tileFfpRoutedTileDraws = 0;
+  std::uint64_t tileFfpRoutedTilePrimitives = 0;
+  std::uint64_t tileFfpRoutedTileVertices = 0;
+  std::uint64_t tileFfpRoutedPortableDraws = 0;
+  std::uint64_t tileFfpRoutedPortablePrimitives = 0;
+  std::uint64_t tileFfpRoutedPortableVertices = 0;
+  std::uint64_t tileFfpEligibleDraws = 0;
+  std::uint64_t tileFfpEligiblePrimitives = 0;
+  std::uint64_t tileFfpEligibleVertices = 0;
+  std::uint64_t tileFfpFallbackGpuFamilyDraws = 0;
+  std::uint64_t tileFfpFallbackGpuFamilyPrimitives = 0;
+  std::uint64_t tileFfpFallbackNotFfpDraws = 0;
+  std::uint64_t tileFfpFallbackNotFfpPrimitives = 0;
+  std::uint64_t tileFfpFallbackPrecisionDraws = 0;
+  std::uint64_t tileFfpFallbackPrecisionPrimitives = 0;
+  std::uint64_t tileFfpFallbackUnsupportedStateDraws = 0;
+  std::uint64_t tileFfpFallbackUnsupportedStatePrimitives = 0;
   std::uint64_t indexedTriangleOpaqueDepthWriteDraws = 0;
   std::uint64_t indexedTriangleOpaqueDepthWritePrimitives = 0;
   std::uint64_t indexedTriangleOpaqueDepthWriteVertices = 0;
@@ -927,6 +944,9 @@ struct EncoderBreakdown {
   std::uint64_t probeDisableDepthWriteDraws = 0;
   std::uint64_t probeDepthFuncAlwaysDraws = 0;
   std::uint64_t probeForceTextureWhiteDraws = 0;
+  std::uint64_t probeFragmentlessDepthOnlyDraws = 0;
+  std::uint64_t probeFragmentlessDepthOnlyPrimitives = 0;
+  std::uint64_t probeFragmentlessDepthOnlyVertices = 0;
   std::uint64_t indexedVertexReuseSamples = 0;
   std::uint64_t indexedVertexReuseSkipped = 0;
   std::uint64_t indexedVertexReferenceCount = 0;
@@ -1048,12 +1068,14 @@ struct EncoderBreakdown {
   std::uint64_t transientVertexDeclFallbackBytes = 0;
   std::uint64_t transientVertexExpandedMainBytes = 0;
   std::uint64_t transientVertexExpandedExtraBytes = 0;
+  std::uint64_t transientVertexStagedStreamBytes = 0;
   std::uint64_t transientIndexBytes = 0;
   std::uint64_t transientIndexUserBytes = 0;
   std::uint64_t transientIndexPreuploadBytes = 0;
   std::uint64_t transientIndexShadowFallbackBytes = 0;
   std::uint64_t transientIndexProbeReorderBytes = 0;
   std::uint64_t transientIndexOptimizedOrderBytes = 0;
+  std::uint64_t transientIndexStagedIbBytes = 0;
   std::array<EncoderStreamBreakdown, kEncoderBreakdownMaxStreams> streams{};
 };
 

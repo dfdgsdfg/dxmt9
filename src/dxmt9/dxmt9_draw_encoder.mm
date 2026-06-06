@@ -28,6 +28,7 @@
 #include <atomic>
 #include <bit>
 #include <chrono>
+#include <cctype>
 #include <cstdarg>
 #include <cstddef>
 #include <cstdint>
@@ -40,6 +41,7 @@
 #include <functional>
 #include <iomanip>
 #include <limits>
+#include <memory>
 #include <mutex>
 #include <optional>
 #include <queue>
@@ -175,6 +177,322 @@ std::string getenvStringLocal(const char* name) {
   return env && env[0] != '\0' ? std::string(env) : std::string{};
 }
 
+bool getenvFlagLocal(const char* name) {
+  const char* env = std::getenv(name);
+  if (!env || env[0] == '\0') {
+    return false;
+  }
+  return std::strcmp(env, "0") != 0 &&
+         std::strcmp(env, "false") != 0 &&
+         std::strcmp(env, "FALSE") != 0 &&
+         std::strcmp(env, "off") != 0 &&
+         std::strcmp(env, "OFF") != 0;
+}
+
+std::vector<u64> parseEnvU64ListAuto(const char* name) {
+  std::vector<u64> values;
+  const char* env = std::getenv(name);
+  if (!env || env[0] == '\0') {
+    return values;
+  }
+  const char* cursor = env;
+  while (*cursor != '\0') {
+    while (*cursor == ',' || *cursor == ';' || *cursor == ':' ||
+           std::isspace(static_cast<unsigned char>(*cursor))) {
+      ++cursor;
+    }
+    if (*cursor == '\0') {
+      break;
+    }
+    char* end = nullptr;
+    const u64 value = static_cast<u64>(std::strtoull(cursor, &end, 0));
+    if (end == cursor) {
+      break;
+    }
+    values.push_back(value);
+    cursor = end;
+  }
+  return values;
+}
+
+struct VisibilityScoutConfig {
+  bool enabled = false;
+  std::string path;
+  u64 maxResultsPerEncoder = 65536;
+  debug::RenderEncoderSelector row{};
+  debug::RenderEncoderSelectorList rows{};
+};
+
+const VisibilityScoutConfig& visibilityScoutConfig() {
+  static const VisibilityScoutConfig config = [] {
+    VisibilityScoutConfig result{};
+    result.path = getenvStringLocal("DXMT9_VISIBILITY_SCOUT_PATH");
+    result.maxResultsPerEncoder =
+        parseEnvU64Auto("DXMT9_VISIBILITY_SCOUT_MAX_RESULTS_PER_ENCODER")
+            .value_or(result.maxResultsPerEncoder);
+    result.maxResultsPerEncoder = std::max<u64>(1, result.maxResultsPerEncoder);
+    result.row =
+        debug::makeRenderEncoderSelector(
+            getenvStringLocal("DXMT9_VISIBILITY_SCOUT_ROW"));
+    result.rows =
+        debug::makeRenderEncoderSelectorList(
+            getenvStringLocal("DXMT9_VISIBILITY_SCOUT_ROWS"));
+    result.enabled =
+        !result.path.empty() &&
+        (getenvFlagLocal("DXMT9_VISIBILITY_SCOUT") ||
+         result.row.enabled ||
+         result.rows.enabled);
+    return result;
+  }();
+  return config;
+}
+
+bool visibilityScoutWantsPass(u64 seqId, u64 encoderIndex) {
+  const auto& config = visibilityScoutConfig();
+  if (!config.enabled) {
+    return false;
+  }
+  if (config.row.enabled &&
+      !debug::renderEncoderSelectorMatches(config.row, seqId, encoderIndex)) {
+    return false;
+  }
+  if (config.rows.enabled &&
+      !debug::renderEncoderSelectorListMatches(config.rows, seqId, encoderIndex)) {
+    return false;
+  }
+  return true;
+}
+
+struct VisibilityScoutDrawRecord {
+  u64 seqId = 0;
+  u64 encoderIndex = 0;
+  std::uint32_t commandIndex = 0;
+  u64 drawOrdinal = 0;
+  std::uint32_t resultIndex = 0;
+  std::uint32_t metalDrawIndex = 0;
+  std::uint32_t primitiveType = 0;
+  std::uint32_t sourcePrimitiveCount = 0;
+  u64 submittedPrimitiveCount = 0;
+  u64 submittedElementCount = 0;
+  std::uint32_t indexed = 0;
+  std::uint32_t expandedIndexed = 0;
+  std::uint32_t splitChunk = 0;
+  u64 rt0 = 0;
+  u64 depth = 0;
+  std::uint32_t textureMask = 0;
+  std::uint32_t colorWrite = 0;
+  std::uint32_t zEnable = 0;
+  std::uint32_t zWrite = 0;
+  std::uint32_t zFunc = 0;
+  std::uint32_t alphaBlend = 0;
+  std::uint32_t alphaTest = 0;
+  std::uint32_t scissor = 0;
+  std::uint32_t cull = 0;
+  std::uint32_t fill = 0;
+};
+
+struct VisibilityScoutPass {
+  WMT::Reference<WMT::Buffer> buffer{};
+  std::uint64_t* results = nullptr;
+  std::vector<VisibilityScoutDrawRecord> records;
+  std::string path;
+  u64 seqId = 0;
+  u64 encoderIndex = 0;
+  std::uint32_t capacity = 0;
+  std::uint32_t metalDrawIndex = 0;
+  bool overflow = false;
+};
+
+std::optional<VisibilityScoutPass> makeVisibilityScoutPass(
+    WMT::Device device,
+    u64 seqId,
+    u64 encoderIndex) {
+  if (!device || !visibilityScoutWantsPass(seqId, encoderIndex)) {
+    return std::nullopt;
+  }
+  const auto& config = visibilityScoutConfig();
+  const auto capacity = static_cast<std::uint32_t>(
+      std::min<u64>(config.maxResultsPerEncoder,
+                    std::numeric_limits<std::uint32_t>::max()));
+  WMTBufferInfo info{};
+  info.length = static_cast<u64>(capacity) * sizeof(std::uint64_t);
+  info.options = WMTResourceStorageModeShared;
+  auto buffer = device.newBuffer(info);
+  if (!buffer || !info.memory.ptr) {
+    return std::nullopt;
+  }
+  std::memset(info.memory.ptr, 0, static_cast<std::size_t>(info.length));
+
+  VisibilityScoutPass pass{};
+  pass.buffer = std::move(buffer);
+  pass.results = static_cast<std::uint64_t*>(info.memory.ptr);
+  pass.path = config.path;
+  pass.seqId = seqId;
+  pass.encoderIndex = encoderIndex;
+  pass.capacity = capacity;
+  pass.records.reserve(capacity);
+  return pass;
+}
+
+VisibilityScoutDrawRecord makeVisibilityScoutDrawRecord(
+    const VisibilityScoutPass& pass,
+    core::FlatDrawStateView drawState,
+    const core::ViewportScissor& viewport,
+    WMTPrimitiveType primitiveType,
+    const ParamView& pv,
+    u64 drawOrdinal,
+    std::uint32_t commandIndex,
+    u64 submittedPrimitiveCount,
+    u64 submittedElementCount,
+    bool indexed,
+    bool expandedIndexed,
+    std::uint32_t splitChunk,
+    WMTCullMode cullMode,
+    WMTTriangleFillMode fillMode) {
+  const auto& hot = *drawState.hot;
+  VisibilityScoutDrawRecord record{};
+  record.seqId = pass.seqId;
+  record.encoderIndex = pass.encoderIndex;
+  record.commandIndex = commandIndex;
+  record.drawOrdinal = drawOrdinal;
+  record.metalDrawIndex = pass.metalDrawIndex;
+  record.primitiveType = static_cast<std::uint32_t>(primitiveType);
+  record.sourcePrimitiveCount = pv.primitiveCount;
+  record.submittedPrimitiveCount = submittedPrimitiveCount;
+  record.submittedElementCount = submittedElementCount;
+  record.indexed = indexed ? 1u : 0u;
+  record.expandedIndexed = expandedIndexed ? 1u : 0u;
+  record.splitChunk = splitChunk;
+  record.rt0 = hot.colorAttachments[0].handle.value;
+  record.depth = hot.depthStencil.handle.value;
+  record.textureMask = hot.textureMask;
+  record.colorWrite =
+      core::flatStateOr(hot.renderStates, RS_COLOR_WRITE_ENABLE, 0xfu);
+  record.zEnable = core::flatStateOr(hot.renderStates, RS_Z_ENABLE, 0u);
+  record.zWrite = core::flatStateOr(hot.renderStates, RS_Z_WRITE_ENABLE, 0u);
+  record.zFunc =
+      core::flatStateOr(hot.renderStates, RS_Z_FUNC,
+                        static_cast<u32>(core::CompareFunc::LessEqual));
+  record.alphaBlend =
+      core::flatStateOr(hot.renderStates, RS_ALPHABLEND_ENABLE, 0u);
+  record.alphaTest =
+      core::flatStateOr(hot.renderStates, RS_ALPHA_TEST_ENABLE, 0u);
+  record.scissor = viewport.scissorEnabled ? 1u : 0u;
+  record.cull = static_cast<std::uint32_t>(cullMode);
+  record.fill = static_cast<std::uint32_t>(fillMode);
+  return record;
+}
+
+std::optional<std::uint32_t> beginVisibilityScoutDraw(
+    VisibilityScoutPass* pass,
+    WMT::RenderCommandEncoder& encoder,
+    VisibilityScoutDrawRecord record) {
+  if (!pass) {
+    return std::nullopt;
+  }
+  if (pass->records.size() >= pass->capacity) {
+    pass->overflow = true;
+    return std::nullopt;
+  }
+  record.resultIndex = static_cast<std::uint32_t>(pass->records.size());
+  pass->records.push_back(record);
+  ++pass->metalDrawIndex;
+  encoder.setVisibilityResultMode(WMTVisibilityResultModeCounting,
+                                  static_cast<u64>(record.resultIndex) *
+                                      sizeof(std::uint64_t));
+  return record.resultIndex;
+}
+
+void endVisibilityScoutDraw(VisibilityScoutPass* pass,
+                            WMT::RenderCommandEncoder& encoder,
+                            std::optional<std::uint32_t> resultIndex) {
+  if (!pass || !resultIndex.has_value()) {
+    return;
+  }
+  encoder.setVisibilityResultMode(WMTVisibilityResultModeDisabled, 0);
+}
+
+void appendVisibilityScoutCsv(const std::string& path,
+                              WMT::Reference<WMT::Buffer> buffer,
+                              const std::uint64_t* results,
+                              std::vector<VisibilityScoutDrawRecord> records,
+                              bool overflow) {
+  (void)buffer;
+  if (path.empty() || results == nullptr || records.empty()) {
+    return;
+  }
+  std::filesystem::path outputPath(path);
+  if (const auto parent = outputPath.parent_path(); !parent.empty()) {
+    std::error_code createError;
+    std::filesystem::create_directories(parent, createError);
+  }
+  static std::mutex outputMutex;
+  std::lock_guard lock(outputMutex);
+  std::error_code sizeError;
+  const bool needsHeader =
+      !std::filesystem::exists(outputPath, sizeError) ||
+      std::filesystem::file_size(outputPath, sizeError) == 0;
+  std::ofstream out(path, std::ios::app);
+  if (!out) {
+    return;
+  }
+  if (needsHeader) {
+    out << "seq,encoder,command,draw_ordinal,result_index,metal_draw_index,"
+           "primitive_type,source_primitive_count,submitted_primitive_count,"
+           "submitted_element_count,indexed,expanded_indexed,split_chunk,"
+           "visible_samples,rt0,depth,texture_mask,color_write,z_enable,"
+           "z_write,z_func,alpha_blend,alpha_test,scissor,cull,fill,overflow\n";
+  }
+  for (const auto& record : records) {
+    const auto visibleSamples = results[record.resultIndex];
+    out << record.seqId << ','
+        << record.encoderIndex << ','
+        << record.commandIndex << ','
+        << record.drawOrdinal << ','
+        << record.resultIndex << ','
+        << record.metalDrawIndex << ','
+        << record.primitiveType << ','
+        << record.sourcePrimitiveCount << ','
+        << record.submittedPrimitiveCount << ','
+        << record.submittedElementCount << ','
+        << record.indexed << ','
+        << record.expandedIndexed << ','
+        << record.splitChunk << ','
+        << visibleSamples << ','
+        << record.rt0 << ','
+        << record.depth << ','
+        << record.textureMask << ','
+        << record.colorWrite << ','
+        << record.zEnable << ','
+        << record.zWrite << ','
+        << record.zFunc << ','
+        << record.alphaBlend << ','
+        << record.alphaTest << ','
+        << record.scissor << ','
+        << record.cull << ','
+        << record.fill << ','
+        << (overflow ? 1u : 0u) << '\n';
+  }
+}
+
+void enqueueVisibilityScoutCompletion(
+    VisibilityScoutPass& pass,
+    std::vector<std::function<void()>>& completionCallbacks) {
+  if (!pass.results || pass.records.empty()) {
+    return;
+  }
+  completionCallbacks.push_back(
+      [path = std::move(pass.path),
+       buffer = std::move(pass.buffer),
+       results = pass.results,
+       records = std::move(pass.records),
+       overflow = pass.overflow]() mutable {
+        appendVisibilityScoutCsv(path, std::move(buffer), results,
+                                 std::move(records), overflow);
+      });
+  pass.results = nullptr;
+}
+
 struct DepthAttachmentDumpConfig {
   bool enabled = false;
   u64 handle = 0;
@@ -197,6 +515,39 @@ const DepthAttachmentDumpConfig& depthAttachmentDumpConfig() {
   return config;
 }
 
+struct DrawTextureDumpConfig {
+  bool enabled = false;
+  std::vector<u64> handles;
+  std::optional<u64> seq;
+  std::optional<u64> enc;
+  std::string dir;
+};
+
+const DrawTextureDumpConfig& drawTextureDumpConfig() {
+  static const DrawTextureDumpConfig config = [] {
+    DrawTextureDumpConfig result{};
+    result.handles = parseEnvU64ListAuto("DXMT9_DUMP_DRAW_TEXTURE_HANDLES");
+    if (const auto handle = parseEnvU64Auto("DXMT9_DUMP_DRAW_TEXTURE_HANDLE")) {
+      result.handles.push_back(*handle);
+    }
+    result.seq = parseEnvU64Auto("DXMT9_DUMP_DRAW_TEXTURE_SEQ");
+    result.enc = parseEnvU64Auto("DXMT9_DUMP_DRAW_TEXTURE_ENC");
+    result.dir = getenvStringLocal("DXMT9_DUMP_DRAW_TEXTURE_DIR");
+    result.enabled = !result.handles.empty() && !result.dir.empty();
+    return result;
+  }();
+  return config;
+}
+
+bool drawTextureDumpWantsHandle(core::Handle handle) {
+  const auto& config = drawTextureDumpConfig();
+  if (!config.enabled || !handle) {
+    return false;
+  }
+  return std::find(config.handles.begin(), config.handles.end(),
+                   handle.value) != config.handles.end();
+}
+
 struct ActiveDepthAttachmentDump {
   core::Handle handle{};
   WMT::Reference<WMT::Texture> texture{};
@@ -208,6 +559,26 @@ struct ActiveDepthAttachmentDump {
   u64 enc = 0;
   bool hasDepth = false;
   bool hasStencil = false;
+};
+
+struct ActiveDrawTextureDump {
+  core::Handle handle{};
+  WMT::Texture texture{};
+  core::Format format = core::Format::Unknown;
+  core::TextureType type = core::TextureType::TwoD;
+  enum WMTPixelFormat storageMetalPixelFormat = WMTPixelFormatInvalid;
+  enum WMTPixelFormat shaderMetalPixelFormat = WMTPixelFormatInvalid;
+  u32 width = 0;
+  u32 height = 0;
+  u32 depth = 1;
+  u32 levels = 1;
+  u32 textureIndex = 0;
+  u32 stage = 0;
+  bool vertexStage = false;
+  bool srgb = false;
+  bool shaderReadView = false;
+  u64 seq = 0;
+  u64 enc = 0;
 };
 
 bool depthAttachmentDumpMatches(const ActiveDepthAttachmentDump& active) {
@@ -228,6 +599,94 @@ bool depthAttachmentDumpMatches(const ActiveDepthAttachmentDump& active) {
   bool expected = false;
   return started.compare_exchange_strong(expected, true);
 }
+
+bool drawTextureDumpPassMatches(u64 seq, u64 enc) {
+  const auto& config = drawTextureDumpConfig();
+  if (!config.enabled) {
+    return false;
+  }
+  if (config.seq.has_value() && *config.seq != seq) {
+    return false;
+  }
+  if (config.enc.has_value() && *config.enc != enc) {
+    return false;
+  }
+  return true;
+}
+
+u64 drawTextureDumpKey(const ActiveDrawTextureDump& active) {
+  u64 key = active.handle.value;
+  key ^= static_cast<u64>(active.srgb ? 0x9e37u : 0u) << 48u;
+  key ^= static_cast<u64>(active.vertexStage ? 0x51u : 0x23u) << 40u;
+  return key;
+}
+
+bool drawTextureDumpAlreadyQueued(std::span<const ActiveDrawTextureDump> active,
+                                  const ActiveDrawTextureDump& candidate) {
+  const u64 key = drawTextureDumpKey(candidate);
+  return std::any_of(active.begin(), active.end(), [&](const auto& entry) {
+    return drawTextureDumpKey(entry) == key;
+  });
+}
+
+bool drawTextureDumpMarkStarted(const ActiveDrawTextureDump& active) {
+  static std::mutex mutex;
+  static std::unordered_set<u64> started;
+  const u64 key = drawTextureDumpKey(active);
+  std::lock_guard lock(mutex);
+  return started.insert(key).second;
+}
+
+std::string drawTextureDumpShaderStageName(const ActiveDrawTextureDump& active) {
+  return active.vertexStage ? "vertex" : "fragment";
+}
+
+std::string drawTextureDumpJsonPath(const ActiveDrawTextureDump& active) {
+  std::ostringstream filename;
+  filename << "texture-h0x" << std::hex << active.handle.value << std::dec
+           << "-seq" << active.seq
+           << "-enc" << active.enc
+           << "-" << drawTextureDumpShaderStageName(active) << active.stage
+           << "-" << (active.srgb ? "srgb" : "linear")
+           << ".json";
+  return (std::filesystem::path(drawTextureDumpConfig().dir) /
+          filename.str()).string();
+}
+
+std::string drawTextureDumpSubresourceBasename(
+    const ActiveDrawTextureDump& active,
+    u32 level,
+    u32 slice) {
+  std::ostringstream filename;
+  filename << "texture-h0x" << std::hex << active.handle.value << std::dec
+           << "-seq" << active.seq
+           << "-enc" << active.enc
+           << "-" << drawTextureDumpShaderStageName(active) << active.stage
+           << "-" << (active.srgb ? "srgb" : "linear")
+           << "-slice" << slice
+           << "-level" << level
+           << ".bin";
+  return filename.str();
+}
+
+struct TextureSubresourceReadback {
+  u32 level = 0;
+  u32 slice = 0;
+  u32 width = 0;
+  u32 height = 0;
+  u32 depth = 1;
+  u32 rowBytes = 0;
+  u64 bytesPerImage = 0;
+  u64 byteCount = 0;
+  std::string basename;
+  WMT::Reference<WMT::Buffer> buffer{};
+  const void* bytes = nullptr;
+};
+
+struct TextureSidecarReadbackBatch {
+  ActiveDrawTextureDump active{};
+  std::vector<TextureSubresourceReadback> subresources;
+};
 
 void writeDepthAttachmentDump(const ActiveDepthAttachmentDump& active,
                               std::string path,
@@ -284,6 +743,93 @@ void writeDepthAttachmentDump(const ActiveDepthAttachmentDump& active,
   }
 }
 
+void writeDrawTextureDump(const TextureSidecarReadbackBatch& batch) {
+  const auto& active = batch.active;
+  const std::string jsonPath = drawTextureDumpJsonPath(active);
+  try {
+    const std::filesystem::path metadataPath(jsonPath);
+    const auto parent = metadataPath.parent_path();
+    if (!parent.empty()) {
+      std::filesystem::create_directories(parent);
+    }
+
+    for (const auto& subresource : batch.subresources) {
+      if (!subresource.bytes || subresource.byteCount == 0 ||
+          subresource.basename.empty()) {
+        continue;
+      }
+      const auto binPath = parent / subresource.basename;
+      std::ofstream out(binPath, std::ios::binary | std::ios::trunc);
+      out.write(static_cast<const char*>(subresource.bytes),
+                static_cast<std::streamsize>(subresource.byteCount));
+    }
+
+    {
+      std::ofstream meta(jsonPath, std::ios::trunc);
+      meta << "{\n"
+           << "  \"handle\": \"0x" << std::hex << active.handle.value << std::dec << "\",\n"
+           << "  \"seq\": " << active.seq << ",\n"
+           << "  \"enc\": " << active.enc << ",\n"
+           << "  \"textureIndex\": " << active.textureIndex << ",\n"
+           << "  \"stage\": " << active.stage << ",\n"
+           << "  \"shaderStage\": \"" << drawTextureDumpShaderStageName(active) << "\",\n"
+           << "  \"srgb\": " << (active.srgb ? 1 : 0) << ",\n"
+           << "  \"shaderReadView\": " << (active.shaderReadView ? 1 : 0) << ",\n"
+           << "  \"format\": " << static_cast<u32>(active.format) << ",\n"
+           << "  \"formatName\": \"" << core::formatName(active.format) << "\",\n"
+           << "  \"type\": " << static_cast<u32>(active.type) << ",\n"
+           << "  \"storageMetalPixelFormat\": "
+           << static_cast<u32>(active.storageMetalPixelFormat) << ",\n"
+           << "  \"shaderMetalPixelFormat\": "
+           << static_cast<u32>(active.shaderMetalPixelFormat) << ",\n"
+           << "  \"width\": " << active.width << ",\n"
+           << "  \"height\": " << active.height << ",\n"
+           << "  \"depth\": " << active.depth << ",\n"
+           << "  \"levels\": " << active.levels << ",\n"
+           << "  \"subresources\": [\n";
+      for (std::size_t i = 0; i < batch.subresources.size(); ++i) {
+        const auto& subresource = batch.subresources[i];
+        meta << "    {\n"
+             << "      \"level\": " << subresource.level << ",\n"
+             << "      \"slice\": " << subresource.slice << ",\n"
+             << "      \"width\": " << subresource.width << ",\n"
+             << "      \"height\": " << subresource.height << ",\n"
+             << "      \"depth\": " << subresource.depth << ",\n"
+             << "      \"rowBytes\": " << subresource.rowBytes << ",\n"
+             << "      \"bytesPerImage\": " << subresource.bytesPerImage << ",\n"
+             << "      \"byteCount\": " << subresource.byteCount << ",\n"
+             << "      \"path\": \"" << subresource.basename << "\"\n"
+             << "    }" << (i + 1u == batch.subresources.size() ? "\n" : ",\n");
+      }
+      meta << "  ]\n"
+           << "}\n";
+    }
+
+    std::ostringstream out;
+    out << "[dxmt9-texture] draw-sidecar-dump handle=0x" << std::hex
+        << active.handle.value << std::dec
+        << " seq=" << active.seq
+        << " enc=" << active.enc
+        << " stage=" << drawTextureDumpShaderStageName(active) << active.stage
+        << " srgb=" << (active.srgb ? 1 : 0)
+        << " format=" << static_cast<unsigned>(active.format)
+        << " size=" << active.width << "x" << active.height
+        << " levels=" << active.levels
+        << " subresources=" << batch.subresources.size()
+        << " path=" << jsonPath;
+    emitTextureTraceLine(out.str());
+  } catch (const std::exception& e) {
+    std::ostringstream out;
+    out << "[dxmt9-texture] draw-sidecar-dump write-failed handle=0x"
+        << std::hex << active.handle.value << std::dec
+        << " seq=" << active.seq
+        << " enc=" << active.enc
+        << " path=" << jsonPath
+        << " error=" << e.what();
+    emitTextureTraceLine(out.str());
+  }
+}
+
 void maybeEncodeDepthAttachmentDump(
     WMT::CommandBuffer& commandBuffer,
     WMT::Reference<WMT::Device> device,
@@ -327,6 +873,138 @@ void maybeEncodeDepthAttachmentDump(
         (void)readbackBuffer;
         writeDepthAttachmentDump(active, path, rowBytes, byteCount, readbackMemory);
       });
+}
+
+void maybeCollectDrawTextureDump(
+    std::vector<ActiveDrawTextureDump>& activeDumps,
+    const resources::Pool& pool,
+    core::FlatDrawStateView drawState,
+    u64 seq,
+    u64 enc) {
+  if (!drawState.hot || !drawTextureDumpPassMatches(seq, enc)) {
+    return;
+  }
+  const auto& hot = *drawState.hot;
+  for (u32 textureIndex = 0; textureIndex < core::kMaxTextures; ++textureIndex) {
+    const auto handle = hot.textures[textureIndex];
+    if (!drawTextureDumpWantsHandle(handle)) {
+      continue;
+    }
+    const auto* record = pool.findTexture(handle.value);
+    if (!record || !record->texture) {
+      continue;
+    }
+    const bool vertexStage = textureIndex >= core::kVertexTextureSampler0;
+    const u32 stage = vertexStage ? textureIndex - core::kVertexTextureSampler0
+                                  : textureIndex;
+    const bool srgbTexture =
+        core::flatStateOr(hot.samplerStates[textureIndex],
+                          core::SAMP_SRGB_TEXTURE, 0u) != 0;
+    ActiveDrawTextureDump candidate{};
+    candidate.handle = handle;
+    candidate.texture = resources::textureForShaderRead(*record, srgbTexture);
+    candidate.format = record->desc.format;
+    candidate.type = record->desc.type;
+    candidate.storageMetalPixelFormat =
+        WMT::Texture{record->texture.handle}.pixelFormat();
+    candidate.shaderMetalPixelFormat =
+        candidate.texture ? candidate.texture.pixelFormat()
+                          : WMTPixelFormatInvalid;
+    candidate.width = std::max(1u, record->desc.width);
+    candidate.height = std::max(1u, record->desc.height);
+    candidate.depth = std::max(1u, record->desc.depth);
+    candidate.levels = std::max(1u, record->desc.levels);
+    candidate.textureIndex = textureIndex;
+    candidate.stage = stage;
+    candidate.vertexStage = vertexStage;
+    candidate.srgb = srgbTexture;
+    candidate.shaderReadView =
+        (srgbTexture && record->srgbShaderReadTexture) ||
+        (!srgbTexture && record->shaderReadTexture);
+    candidate.seq = seq;
+    candidate.enc = enc;
+    if (!candidate.texture ||
+        drawTextureDumpAlreadyQueued(activeDumps, candidate) ||
+        !drawTextureDumpMarkStarted(candidate)) {
+      continue;
+    }
+    activeDumps.push_back(candidate);
+  }
+}
+
+void maybeEncodeDrawTextureDumps(
+    WMT::CommandBuffer& commandBuffer,
+    WMT::Reference<WMT::Device> device,
+    std::span<const ActiveDrawTextureDump> activeDumps,
+    std::vector<std::function<void()>>& completionCallbacks) {
+  if (!drawTextureDumpConfig().enabled || activeDumps.empty()) {
+    return;
+  }
+  auto blit = commandBuffer.blitCommandEncoder();
+  if (!blit) {
+    return;
+  }
+  blit.setLabel(makeLabelStringFmt(
+      "Blit[DrawTextureDump count=%llu]",
+      static_cast<unsigned long long>(activeDumps.size())));
+  for (const auto& active : activeDumps) {
+    auto batch = std::make_shared<TextureSidecarReadbackBatch>();
+    batch->active = active;
+    const u32 sliceCount =
+        active.type == core::TextureType::Cube ? 6u : 1u;
+    for (u32 slice = 0; slice < sliceCount; ++slice) {
+      for (u32 level = 0; level < active.levels; ++level) {
+        const u32 width = std::max(1u, active.width >> level);
+        const u32 height = std::max(1u, active.height >> level);
+        const u32 depth =
+            active.type == core::TextureType::Volume
+                ? std::max(1u, active.depth >> level)
+                : 1u;
+        const u32 rowBytes = core::formatRowPitch(active.format, width);
+        const u64 bytesPerImage =
+            static_cast<u64>(core::formatByteSize(active.format, width, height));
+        const u64 byteCount = bytesPerImage * depth;
+        if (rowBytes == 0 || bytesPerImage == 0 || byteCount == 0) {
+          continue;
+        }
+        WMTBufferInfo bufInfo{};
+        bufInfo.length = byteCount;
+        bufInfo.options = WMTResourceStorageModeShared;
+        auto readbackBuffer = device.newBuffer(bufInfo);
+        const void* readbackMemory = bufInfo.memory.get_accessible_or_null();
+        if (!readbackBuffer || !readbackMemory) {
+          continue;
+        }
+        TextureSubresourceReadback subresource{};
+        subresource.level = level;
+        subresource.slice = slice;
+        subresource.width = width;
+        subresource.height = height;
+        subresource.depth = depth;
+        subresource.rowBytes = rowBytes;
+        subresource.bytesPerImage = bytesPerImage;
+        subresource.byteCount = byteCount;
+        subresource.basename =
+            drawTextureDumpSubresourceBasename(active, level, slice);
+        subresource.buffer = readbackBuffer;
+        subresource.bytes = readbackMemory;
+        WMTOrigin origin{0, 0, 0};
+        WMTSize size{width, height, depth};
+        blit.copyFromTextureToBuffer(
+            active.texture,
+            active.type == core::TextureType::Volume ? 0u : slice,
+            level, origin, size, WMT::Buffer{readbackBuffer.handle}, 0,
+            rowBytes, active.type == core::TextureType::Volume ? bytesPerImage : 0);
+        batch->subresources.push_back(std::move(subresource));
+      }
+    }
+    if (!batch->subresources.empty()) {
+      completionCallbacks.push_back([batch] {
+        writeDrawTextureDump(*batch);
+      });
+    }
+  }
+  blit.endEncoding();
 }
 
 bool colorAttachmentAliasesTracedTexture(resources::Pool& pool,
@@ -878,6 +1556,7 @@ struct ActiveEncoderBreakdown {
     DeclFallback,
     ExpandedMain,
     ExpandedExtra,
+    StagedStream,
   };
 
   enum class TransientIndexSource {
@@ -886,6 +1565,7 @@ struct ActiveEncoderBreakdown {
     ShadowFallback,
     ProbeReorder,
     OptimizedOrder,
+    StagedIb,
   };
 
   bool enabled = false;
@@ -918,6 +1598,24 @@ struct ActiveEncoderBreakdown {
   CbufHistory<sizeof(FfpVsConsts)> ffpVsHistory{};
   bool drawGeometrySignatureValid = false;
   u64 drawGeometrySignatureLast = 0;
+
+  std::string streamExtraBindingsSummary() const {
+    std::ostringstream out;
+    bool first = true;
+    for (std::size_t stream = 1; stream < stats.streams.size(); ++stream) {
+      const auto& slot = stats.streams[stream];
+      if (!slot.valid || slot.samples == 0) {
+        continue;
+      }
+      if (!first) {
+        out << ';';
+      }
+      first = false;
+      out << 's' << stream << ":0x" << std::hex << slot.lastHandle << std::dec
+          << '@' << slot.lastOffset << '/' << slot.lastStride;
+    }
+    return out.str();
+  }
 
   void begin(u64 seqId, u64 encoderIndex, u64 rtHandle, u64 depthHandle) {
     enabled = perf::encoderBreakdownEnabled();
@@ -1301,6 +1999,7 @@ struct ActiveEncoderBreakdown {
                                  bool alphaBlendProbeApplied,
                                  bool depthWriteProbeApplied,
                                  bool depthFuncProbeApplied,
+                                 bool fragmentlessDepthOnlyProbeApplied,
                                  bool splitEligible,
                                  bool splitWouldApply,
                                  u32 splitChunkCount,
@@ -1333,6 +2032,7 @@ struct ActiveEncoderBreakdown {
                                  u64 stream0Handle,
                                  u64 stream0Offset,
                                  u64 stream0Stride,
+                                 const char* streamExtraBindings,
                                  u64 vertexConstantsHash,
                                  u64 pixelConstantsHash,
                                  u64 uniformPayloadHash,
@@ -1416,7 +2116,8 @@ struct ActiveEncoderBreakdown {
         "optimized_eligible=%u optimized_applied=%u "
         "scissor_rect_eligible=%u scissor_rect_applied=%u "
         "alpha_blend_probe_applied=%u depth_write_probe_applied=%u "
-        "depth_func_probe_applied=%u reorder_bytes=%llu "
+        "depth_func_probe_applied=%u "
+        "fragmentless_depth_only_probe_applied=%u reorder_bytes=%llu "
         "split_eligible=%u split_would_apply=%u split_chunk_count=%u "
         "split_max_chunks_per_draw=%u split_stream0_span_limit=%llu "
         "split_chunk_stream0_span_max=%llu split_primitive_count=%llu "
@@ -1464,7 +2165,8 @@ struct ActiveEncoderBreakdown {
         "index_buffer=0x%llx effective_index_source=%s "
         "effective_index_offset=%llu effective_index_bytes=%llu "
         "stream0_handle=0x%llx stream0_offset=%llu "
-        "stream0_stride=%llu pso=0x%llx shader_variant=0x%llx "
+        "stream0_stride=%llu stream_extra_bindings=%s "
+        "pso=0x%llx shader_variant=0x%llx "
         "vs=0x%llx ps=0x%llx vs_constants_hash=0x%llx "
         "ps_constants_hash=0x%llx uniform_payload_hash=0x%llx "
         "vsout=0x%x]\n",
@@ -1481,6 +2183,7 @@ struct ActiveEncoderBreakdown {
         alphaBlendProbeApplied ? 1u : 0u,
         depthWriteProbeApplied ? 1u : 0u,
         depthFuncProbeApplied ? 1u : 0u,
+        fragmentlessDepthOnlyProbeApplied ? 1u : 0u,
         static_cast<unsigned long long>(reorderBytes),
         splitEligible ? 1u : 0u,
         splitWouldApply ? 1u : 0u,
@@ -1606,6 +2309,7 @@ struct ActiveEncoderBreakdown {
         static_cast<unsigned long long>(stream0Handle),
         static_cast<unsigned long long>(stream0Offset),
         static_cast<unsigned long long>(stream0Stride),
+        streamExtraBindings ? streamExtraBindings : "",
         static_cast<unsigned long long>(psoHandle),
         static_cast<unsigned long long>(shaderVariant),
         static_cast<unsigned long long>(stats.vertexShaderLast),
@@ -1670,6 +2374,65 @@ struct ActiveEncoderBreakdown {
     if (created) {
       ++stats.reorderedIndexCacheCreated;
       stats.reorderedIndexCacheCreatedBytes += createdBytes;
+    }
+  }
+
+  void recordTileFfpCoverage(const pipeline::TileFfpSelection& eligibility,
+                             bool routedTile,
+                             u32 primitiveCount,
+                             u64 vertexCount) {
+    if (!enabled) {
+      return;
+    }
+    auto addDraw = [&](std::uint64_t& draws,
+                       std::uint64_t& primitives,
+                       std::uint64_t& vertices) {
+      ++draws;
+      primitives += primitiveCount;
+      vertices += vertexCount;
+    };
+    auto addDrawNoVertices = [&](std::uint64_t& draws,
+                                 std::uint64_t& primitives) {
+      ++draws;
+      primitives += primitiveCount;
+    };
+
+    if (routedTile) {
+      addDraw(stats.tileFfpRoutedTileDraws,
+              stats.tileFfpRoutedTilePrimitives,
+              stats.tileFfpRoutedTileVertices);
+    } else {
+      addDraw(stats.tileFfpRoutedPortableDraws,
+              stats.tileFfpRoutedPortablePrimitives,
+              stats.tileFfpRoutedPortableVertices);
+    }
+
+    if (eligibility.decision == pipeline::TileFfpDecision::Tile) {
+      addDraw(stats.tileFfpEligibleDraws,
+              stats.tileFfpEligiblePrimitives,
+              stats.tileFfpEligibleVertices);
+      return;
+    }
+
+    switch (eligibility.reason) {
+      case pipeline::TileFfpFallbackReason::GpuFamily:
+        addDrawNoVertices(stats.tileFfpFallbackGpuFamilyDraws,
+                          stats.tileFfpFallbackGpuFamilyPrimitives);
+        break;
+      case pipeline::TileFfpFallbackReason::NotFfp:
+        addDrawNoVertices(stats.tileFfpFallbackNotFfpDraws,
+                          stats.tileFfpFallbackNotFfpPrimitives);
+        break;
+      case pipeline::TileFfpFallbackReason::Precision:
+        addDrawNoVertices(stats.tileFfpFallbackPrecisionDraws,
+                          stats.tileFfpFallbackPrecisionPrimitives);
+        break;
+      case pipeline::TileFfpFallbackReason::UnsupportedState:
+        addDrawNoVertices(stats.tileFfpFallbackUnsupportedStateDraws,
+                          stats.tileFfpFallbackUnsupportedStatePrimitives);
+        break;
+      case pipeline::TileFfpFallbackReason::None:
+        break;
     }
   }
 
@@ -2555,6 +3318,9 @@ struct ActiveEncoderBreakdown {
       case TransientVertexSource::ExpandedExtra:
         stats.transientVertexExpandedExtraBytes += bytes;
         break;
+      case TransientVertexSource::StagedStream:
+        stats.transientVertexStagedStreamBytes += bytes;
+        break;
     }
   }
 
@@ -2579,9 +3345,102 @@ struct ActiveEncoderBreakdown {
       case TransientIndexSource::OptimizedOrder:
         stats.transientIndexOptimizedOrderBytes += bytes;
         break;
+      case TransientIndexSource::StagedIb:
+        stats.transientIndexStagedIbBytes += bytes;
+        break;
     }
   }
 };
+
+struct StreamIbStagingCache {
+  struct Entry {
+    u64 sourceHandle = 0;
+    WMT::Buffer buffer{};
+    u64 offset = 0;
+    std::size_t size = 0;
+  };
+
+  static constexpr std::size_t kMaxEntries = 512;
+
+  bool enabled = false;
+  std::array<Entry, kMaxEntries> entries{};
+  std::size_t count = 0;
+
+  void begin(bool active) noexcept {
+    enabled = active;
+    entries = {};
+    count = 0;
+  }
+
+  CommandQueue::TransientBufferSlice findOrStage(
+      EncodeContext& ctx,
+      u64 seqId,
+      u64 sourceHandle,
+      const resources::BufferRecord* record,
+      ActiveEncoderBreakdown* encoderBreakdown,
+      bool indexBuffer) {
+    if (!enabled || sourceHandle == 0 || !record) {
+      return {};
+    }
+    for (std::size_t i = 0; i < count; ++i) {
+      const auto& entry = entries[i];
+      if (entry.sourceHandle == sourceHandle && entry.buffer) {
+        return CommandQueue::TransientBufferSlice{
+            .buffer = entry.buffer,
+            .offset = entry.offset,
+            .size = entry.size,
+        };
+      }
+    }
+    if (count >= entries.size()) {
+      return {};
+    }
+
+    std::span<const u8> sourceBytes;
+    if (!record->shadow.empty()) {
+      sourceBytes = record->shadow;
+    } else if (record->contents && record->desc.size > 0) {
+      sourceBytes = std::span<const u8>(
+          static_cast<const u8*>(record->contents),
+          static_cast<std::size_t>(record->desc.size));
+    }
+    if (sourceBytes.empty()) {
+      return {};
+    }
+
+    auto slice = ctx.queue.uploadTransientBuffer(
+        std::span<const std::byte>(
+            reinterpret_cast<const std::byte*>(sourceBytes.data()),
+            sourceBytes.size()),
+        16,
+        seqId);
+    if (!slice) {
+      return {};
+    }
+    entries[count++] = Entry{
+        .sourceHandle = sourceHandle,
+        .buffer = slice.buffer,
+        .offset = slice.offset,
+        .size = slice.size,
+    };
+    if (encoderBreakdown) {
+      if (indexBuffer) {
+        encoderBreakdown->addTransientIndexBytes(
+            static_cast<u64>(slice.size),
+            ActiveEncoderBreakdown::TransientIndexSource::StagedIb);
+      } else {
+        encoderBreakdown->addTransientVertexBytes(
+            static_cast<u64>(slice.size),
+            ActiveEncoderBreakdown::TransientVertexSource::StagedStream);
+      }
+    }
+    return slice;
+  }
+};
+
+bool streamIbStagingActive(const StreamIbStagingCache* cache) noexcept {
+  return cache && cache->enabled;
+}
 
 struct ArgbufCbufCache {
   bool valid = false;
@@ -3175,7 +4034,8 @@ u32 primitiveVertexCount(core::PrimitiveType type, u32 primitiveCount) {
 }
 
 u64 shaderVariantHashForDraw(core::FlatDrawStateView drawState,
-                             const resources::Pool* pool = nullptr) {
+                             const resources::Pool* pool = nullptr,
+                             bool fragmentlessDepthOnly = false) {
   if (!drawState.hot || !drawState.hasShaderContext()) {
     return 0;
   }
@@ -3189,12 +4049,16 @@ u64 shaderVariantHashForDraw(core::FlatDrawStateView drawState,
   if (pool) {
     hash ^= static_cast<u64>(x8AlphaOneTextureMaskForDraw(drawState, *pool)) << 5;
   }
+  if (fragmentlessDepthOnly) {
+    hash ^= 0xf1a974f2b7a25c31ull;
+  }
   return hash;
 }
 
 u64 shaderSourceAttributionKeyForDraw(
     core::FlatDrawStateView drawState,
-    std::optional<bool> forceTextureWhiteOverride = std::nullopt) {
+    std::optional<bool> forceTextureWhiteOverride = std::nullopt,
+    bool fragmentlessDepthOnly = false) {
   if (!drawState.hot || !drawState.hasShaderContext()) {
     return 0;
   }
@@ -3223,14 +4087,21 @@ u64 shaderSourceAttributionKeyForDraw(
     hash = mix(hash, 0x58f71e9d1a3b4c25ull);
     hash = mix(hash, static_cast<u64>(*forceTextureWhiteOverride));
   }
+  if (fragmentlessDepthOnly) {
+    hash = mix(hash, 0xf1a974f2b7a25c31ull);
+  }
   return hash;
 }
 
 u32 vsOutLayoutKeyForDraw(core::FlatDrawStateView drawState,
                           bool tileFfpBaseColor,
-                          std::optional<bool> forceTextureWhiteOverride = std::nullopt) {
+                          std::optional<bool> forceTextureWhiteOverride = std::nullopt,
+                          bool fragmentlessDepthOnly = false) {
   if (!drawState.hot || !drawState.hasShaderContext()) {
     return 0;
+  }
+  if (fragmentlessDepthOnly) {
+    return shaders::vsoutLayoutKey(shaders::positionOnlyVSOutLayout());
   }
   auto context =
       drawshader::makeShaderSourceContext(drawState.shaderContext(), *drawState.hot);
@@ -3266,7 +4137,8 @@ ShaderSourceHashes shaderSourceHashesForDraw(core::FlatDrawStateView drawState,
                                              bool argbufResourceArray,
                                              bool samplerLodBias,
                                              u32 x8AlphaOneTextureMask,
-                                             std::optional<bool> forceTextureWhiteOverride = std::nullopt) {
+                                             std::optional<bool> forceTextureWhiteOverride = std::nullopt,
+                                             bool fragmentlessDepthOnly = false) {
   ShaderSourceHashes hashes{};
   if (!shaderSourceHashAttributionEnabled() || !drawState.hot ||
       !drawState.hasShaderContext()) {
@@ -3284,11 +4156,18 @@ ShaderSourceHashes shaderSourceHashesForDraw(core::FlatDrawStateView drawState,
   context.samplerLodBias = samplerLodBias;
   context.x8AlphaOneTextureMask = x8AlphaOneTextureMask;
   try {
-    context.vsOutLayout = drawshader::resolveVSOutLayoutForShaderPair(context);
+    if (fragmentlessDepthOnly) {
+      context.vsOutLayout = shaders::positionOnlyVSOutLayout();
+      context.fragmentlessDepthOnly = true;
+    } else {
+      context.vsOutLayout = drawshader::resolveVSOutLayoutForShaderPair(context);
+    }
     const auto vertex = drawshader::makeDrawShaderSource(context, true);
-    const auto pixel = drawshader::makeDrawShaderSource(context, false);
     hashes.vertex = core::hashString(vertex);
-    hashes.pixel = core::hashString(pixel);
+    if (!fragmentlessDepthOnly) {
+      const auto pixel = drawshader::makeDrawShaderSource(context, false);
+      hashes.pixel = core::hashString(pixel);
+    }
   } catch (...) {
     hashes = {};
   }
@@ -3309,13 +4188,16 @@ void recordPsoAttributionForDraw(ActiveEncoderBreakdown* encoderBreakdown,
                                  bool tileFfpMode,
                                  bool argbufHybridMode,
                                  bool argbufResourceArray,
-                                 std::optional<bool> forceTextureWhiteOverride = std::nullopt) {
+                                 std::optional<bool> forceTextureWhiteOverride = std::nullopt,
+                                 bool fragmentlessDepthOnly = false) {
   if (!encoderBreakdown || !encoderBreakdown->enabled) {
     return;
   }
-  const auto variantHash = shaderVariantHashForDraw(drawState, &pool);
+  const auto variantHash =
+      shaderVariantHashForDraw(drawState, &pool, fragmentlessDepthOnly);
   const auto sourceKey =
-      shaderSourceAttributionKeyForDraw(drawState, forceTextureWhiteOverride);
+      shaderSourceAttributionKeyForDraw(drawState, forceTextureWhiteOverride,
+                                        fragmentlessDepthOnly);
   u64 vertexShaderHash = 0;
   u64 pixelShaderHash = 0;
   if (drawState.hasShaderContext()) {
@@ -3327,7 +4209,8 @@ void recordPsoAttributionForDraw(ActiveEncoderBreakdown* encoderBreakdown,
   if (!encoderBreakdown->findCachedVsOutLayout(sourceKey, tileFfpMode,
                                                vsOutLayoutKey)) {
     vsOutLayoutKey =
-        vsOutLayoutKeyForDraw(drawState, tileFfpMode, forceTextureWhiteOverride);
+        vsOutLayoutKeyForDraw(drawState, tileFfpMode, forceTextureWhiteOverride,
+                              fragmentlessDepthOnly);
     encoderBreakdown->storeCachedVsOutLayout(sourceKey, tileFfpMode,
                                              vsOutLayoutKey);
   }
@@ -3342,7 +4225,8 @@ void recordPsoAttributionForDraw(ActiveEncoderBreakdown* encoderBreakdown,
           vertexShaderSourceHash, pixelShaderSourceHash)) {
     const auto sourceHashes = shaderSourceHashesForDraw(
         drawState, tileFfpMode, argbufHybridMode, argbufResourceArray,
-        samplerLodBias, x8AlphaOneTextureMask, forceTextureWhiteOverride);
+        samplerLodBias, x8AlphaOneTextureMask, forceTextureWhiteOverride,
+        fragmentlessDepthOnly);
     vertexShaderSourceHash = sourceHashes.vertex;
     pixelShaderSourceHash = sourceHashes.pixel;
     encoderBreakdown->storeCachedShaderSourceHashes(
@@ -5063,6 +5947,15 @@ bool forceExpandIndexedProbeRowMatches(const ActiveEncoderBreakdown* encoderBrea
                                        debug::probeForceExpandIndexedRows());
 }
 
+bool stageStreamIbProbeRowMatches(const ActiveEncoderBreakdown* encoderBreakdown) {
+  if (!debug::probeStageStreamIb()) {
+    return false;
+  }
+  return renderEncoderSelectionMatches(encoderBreakdown,
+                                       debug::probeStageStreamIbRow(),
+                                       debug::probeStageStreamIbRows());
+}
+
 bool indexedTriangleEncoderDrawRangeMatches(
     const ActiveEncoderBreakdown* encoderBreakdown) {
   const auto range = debug::probeIndexedTriangleEncoderDrawRange();
@@ -5115,6 +6008,12 @@ bool depthFuncAlwaysProbeRowMatches(const ActiveEncoderBreakdown* encoderBreakdo
   return renderEncoderSelectionMatches(encoderBreakdown,
                                        debug::probeDepthFuncAlwaysRow(),
                                        debug::probeDepthFuncAlwaysRows());
+}
+
+bool fragmentlessDepthOnlyProbeRowMatches(const ActiveEncoderBreakdown* encoderBreakdown) {
+  return renderEncoderSelectionMatches(encoderBreakdown,
+                                       debug::probeFragmentlessDepthOnlyRow(),
+                                       debug::probeFragmentlessDepthOnlyRows());
 }
 
 WMTCullMode toWmtCullMode(debug::CullModeOverride mode,
@@ -5401,6 +6300,66 @@ bool depthFuncAlwaysProbeClassMatches(
                                      renderStates,
                                      viewport,
                                      fillMode);
+}
+
+bool fragmentlessDepthOnlyProbeClassMatches(
+    u32 primitiveCount,
+    u32 textureMask,
+    const core::FlatStateSet<core::kMaxStateSlots>& renderStates,
+    const core::ViewportScissor& viewport,
+    WMTTriangleFillMode fillMode) {
+  return indexedTriangleClassMatches(debug::probeFragmentlessDepthOnlyClassFilter(),
+                                     primitiveCount,
+                                     textureMask,
+                                     renderStates,
+                                     viewport,
+                                     fillMode) &&
+         indexedTriangleClassMatches(debug::probeFragmentlessDepthOnlyClassFilters(),
+                                     primitiveCount,
+                                     textureMask,
+                                     renderStates,
+                                     viewport,
+                                     fillMode);
+}
+
+bool fragmentlessDepthOnlyStateSafe(const core::FlatDrawStateRecord& hot,
+                                    WMTTriangleFillMode fillMode) {
+  if (fillMode != WMTTriangleFillModeFill || !hot.depthStencil.handle) {
+    return false;
+  }
+  const auto& rs = hot.renderStates;
+  const bool depthEnabled = core::flatStateOr(rs, RS_Z_ENABLE, 0u) != 0u;
+  const bool depthWrite =
+      depthEnabled && core::flatStateOr(rs, RS_Z_WRITE_ENABLE, 0u) != 0u;
+  if (!depthWrite) {
+    return false;
+  }
+  if (core::flatStateOr(rs, RS_ALPHABLEND_ENABLE, 0u) != 0u ||
+      core::flatStateOr(rs, RS_ALPHA_TEST_ENABLE, 0u) != 0u ||
+      core::flatStateOr(rs, core::RS_STENCIL_ENABLE, 0u) != 0u ||
+      core::flatStateOr(rs, core::RS_CLIP_PLANE_ENABLE, 0u) != 0u) {
+    return false;
+  }
+  const u32 adaptiveTessY = core::flatStateOr(rs, core::RS_ADAPTIVETESS_Y, 0u);
+  if (adaptiveTessY == core::kFourCcAtoc || adaptiveTessY == core::kFourCcA2M1) {
+    return false;
+  }
+
+  constexpr std::array<u32, core::kMaxRenderTargets> kColorWriteSlots = {
+      core::RS_COLOR_WRITE_ENABLE,
+      core::RS_COLOR_WRITE_ENABLE1,
+      core::RS_COLOR_WRITE_ENABLE2,
+      core::RS_COLOR_WRITE_ENABLE3,
+  };
+  for (std::size_t i = 0; i < hot.colorAttachments.size(); ++i) {
+    if (!hot.colorAttachments[i].handle) {
+      continue;
+    }
+    if (core::flatStateOr(rs, kColorWriteSlots[i], 0xfu) != 0u) {
+      return false;
+    }
+  }
+  return true;
 }
 
 template <std::size_t MaxEntries>
@@ -5861,7 +6820,8 @@ WMT::Reference<WMT::RenderCommandEncoder> beginRenderPass(
     const std::optional<ClearDesc>& clear,
     const core::ChunkSlot* lookaheadSlot,
     std::size_t lookaheadStartIndex,
-    std::span<const WMTSampleBufferAttachmentInfo> sampleBufferAttachments = {}) {
+    std::span<const WMTSampleBufferAttachmentInfo> sampleBufferAttachments,
+    WMT::Buffer visibilityBuffer) {
   const auto& hot = *drawState.hot;
   auto* primarySurface = ctx.pool.findSurface(hot.colorAttachments[0].handle.value);
   // R-FORMAT-12: a D3DFMT_NULL render target is colorless and has no Metal
@@ -5991,6 +6951,7 @@ WMT::Reference<WMT::RenderCommandEncoder> beginRenderPass(
   }
   passInfo.num_sample_buffer_attachments =
       static_cast<std::uint8_t>(attachmentCount);
+  passInfo.visibility_buffer = visibilityBuffer.handle;
 
   // R-BACK-15.10/15.11/15.12: emit per-attachment load/store action
   // histograms + tile-preservation byte estimates so scripts/
@@ -6230,7 +7191,9 @@ bool encodeDraw(EncodeContext& ctx,
                  TextureSamplerBindShadow* textureSamplerShadow,
                  std::uint32_t commandIndex,
                  ActiveEncoderBreakdown* encoderBreakdown,
-                 ArgbufCbufCache* argbufCbufCache) {
+                 ArgbufCbufCache* argbufCbufCache,
+                 StreamIbStagingCache* streamIbStagingCache,
+                 VisibilityScoutPass* visibilityScout) {
   // Hot per-draw entry. Per codebase_conventions.rules.md, no heap allocation
   // is permitted on this path; the guard is debug-only and asserts this when
   // DXMT_DEBUG_NO_PER_DRAW_ALLOC=1 is set in env. See dxmt9_debug_alloc_guard.
@@ -6383,12 +7346,23 @@ bool encodeDraw(EncodeContext& ctx,
                                          hot.renderStates,
                                          hot.viewport,
                                          fillMode);
+  const bool fragmentlessDepthOnlyProbeApplied =
+      debug::probeFragmentlessDepthOnly() &&
+      indexedTriangleDraw &&
+      fragmentlessDepthOnlyProbeRowMatches(encoderBreakdown) &&
+      fragmentlessDepthOnlyProbeClassMatches(primitiveCount,
+                                             hot.textureMask,
+                                             hot.renderStates,
+                                             hot.viewport,
+                                             fillMode) &&
+      fragmentlessDepthOnlyStateSafe(hot, fillMode);
   const std::optional<bool> forceTextureWhiteOverride =
       forceTextureWhiteProbeApplied ? std::optional<bool>{true} : std::nullopt;
   const bool hasPerDrawBindingOverride =
       paramOverride && !paramOverride->bindingOverrideRange.empty();
   const bool psoPrefetchBypassProbe =
-      disableAlphaBlendProbeApplied || forceTextureWhiteProbeApplied;
+      disableAlphaBlendProbeApplied || forceTextureWhiteProbeApplied ||
+      fragmentlessDepthOnlyProbeApplied;
   const bool bypassPrefetchedPsoHandle =
       psoPrefetchBypassProbe ||
       (hasPerDrawBindingOverride && !bindingOverridePrefetchedPsoCompatible);
@@ -6406,7 +7380,8 @@ bool encodeDraw(EncodeContext& ctx,
   if (effectiveSkipBaseStateBind) {
     recordPsoAttributionForDraw(encoderBreakdown, drawState, ctx.pool, renderPsoHandle,
                                 tileFfpMode, argbufHybridMode,
-                                argbufResourceArray);
+                                argbufResourceArray, std::nullopt,
+                                fragmentlessDepthOnlyProbeApplied);
   }
   if (encoderBreakdown) {
     if (disableAlphaBlendProbeApplied) {
@@ -6420,6 +7395,11 @@ bool encodeDraw(EncodeContext& ctx,
     }
     if (forceTextureWhiteProbeApplied) {
       ++encoderBreakdown->stats.probeForceTextureWhiteDraws;
+    }
+    if (fragmentlessDepthOnlyProbeApplied) {
+      ++encoderBreakdown->stats.probeFragmentlessDepthOnlyDraws;
+      encoderBreakdown->stats.probeFragmentlessDepthOnlyPrimitives += primitiveCount;
+      encoderBreakdown->stats.probeFragmentlessDepthOnlyVertices += vertexCount;
     }
   }
   core::FlatDrawStateRecord alphaBlendProbeHot{};
@@ -6489,7 +7469,8 @@ bool encodeDraw(EncodeContext& ctx,
                     ctx.shaderArchive, ctx.shaderArchivePath, tileFfpMode,
                     argbufHybridMode, argbufResourceArray,
                     disableAlphaBlendProbeApplied,
-                    forceTextureWhiteOverride).get();
+                    forceTextureWhiteOverride,
+                    fragmentlessDepthOnlyProbeApplied).get();
       pipeline = WMT::RenderPipelineState{pipelineRef.handle};
     }
     if (!pipeline) {
@@ -6591,14 +7572,17 @@ bool encodeDraw(EncodeContext& ctx,
     // key in both the log and label so Xcode's VS buffer-write counters can
     // be tied back to a concrete stage-in shape.
     {
-      const auto variantHash = shaderVariantHashForDraw(drawState, &ctx.pool);
+      const auto variantHash =
+          shaderVariantHashForDraw(drawState, &ctx.pool,
+                                   fragmentlessDepthOnlyProbeApplied);
       const bool recordPsoBreakdown = encoderBreakdown && encoderBreakdown->enabled;
       u32 vsOutLayoutKey = 0;
       if (recordPsoBreakdown) {
         recordPsoAttributionForDraw(encoderBreakdown, drawState, ctx.pool, renderPsoHandle,
                                     tileFfpMode, argbufHybridMode,
                                     argbufResourceArray,
-                                    forceTextureWhiteOverride);
+                                    forceTextureWhiteOverride,
+                                    fragmentlessDepthOnlyProbeApplied);
         vsOutLayoutKey = encoderBreakdown->stats.vsOutLayoutLast;
       }
       if (variantHash != 0 && !suppressRecordedMetalCalls(ctx)) {
@@ -7294,6 +8278,7 @@ bool encodeDraw(EncodeContext& ctx,
   const resources::BufferRecord* stream0Record = nullptr;
   WMT::Buffer vertexBuffer{};
   uint64_t vertexBufferOffset = 0;
+  bool stream0Staged = false;
   auto makeTransientBuffer = [&](const void* data, std::size_t len) {
     return uploadTransientBuffer(data, len, 16);
   };
@@ -7374,6 +8359,20 @@ bool encodeDraw(EncodeContext& ctx,
           }
         }
       }
+    }
+  }
+  if (streamIbStagingActive(streamIbStagingCache) &&
+      indexedDraw &&
+      pv.userVertexData.empty() &&
+      stream0Record &&
+      stream0Record->buffer &&
+      vertexBuffer) {
+    if (auto staged = streamIbStagingCache->findOrStage(
+            ctx, seqId, hot.streamBuffers[0].value, stream0Record,
+            encoderBreakdown, /*indexBuffer=*/false)) {
+      vertexBuffer = staged.buffer;
+      vertexBufferOffset = staged.offset + hot.streamOffsets[0];
+      stream0Staged = true;
     }
   }
   if (traceEncode && !ffLayout && !vertexBytes.empty() && !vertexDecl.elements.empty()) {
@@ -7480,9 +8479,12 @@ bool encodeDraw(EncodeContext& ctx,
           encoderBreakdown->recordStreamResource(0, hot.streamBuffers[0].value,
                                                  stream0Record->desc);
         }
+        const u64 stream0StateHandle =
+            stream0Staged ? vertexBuffer.handle : hot.streamBuffers[0].value;
+        const u64 stream0StateOffset =
+            stream0Staged ? vertexBufferOffset : hot.streamOffsets[0];
         encoderBreakdown->recordStreamState(
-            0, hot.streamBuffers[0].value, hot.streamOffsets[0],
-            drawVertexStreamStride);
+            0, stream0StateHandle, stream0StateOffset, drawVertexStreamStride);
       }
       if (setVertexBufferCached(vertexBuffer, vertexBufferOffset, 1)) {
         countVertexBufferBind();
@@ -7765,9 +8767,12 @@ bool encodeDraw(EncodeContext& ctx,
           encoderBreakdown->recordStreamResource(0, hot.streamBuffers[0].value,
                                                  stream0Record->desc);
         }
+        const u64 stream0StateHandle =
+            stream0Staged ? vertexBuffer.handle : hot.streamBuffers[0].value;
+        const u64 stream0StateOffset =
+            stream0Staged ? vertexBufferOffset : hot.streamOffsets[0];
         encoderBreakdown->recordStreamState(
-            0, hot.streamBuffers[0].value, hot.streamOffsets[0],
-            drawVertexStreamStride);
+            0, stream0StateHandle, stream0StateOffset, drawVertexStreamStride);
       }
       if (setVertexBufferCached(vertexBuffer, vertexBufferOffset, 1)) {
         countVertexBufferBind();
@@ -7783,6 +8788,7 @@ bool encodeDraw(EncodeContext& ctx,
         std::size_t shadowBytes = 0;
         bool hasContents = false;
         bool usedDeclBytes = false;
+        bool extraStaged = false;
         const resources::BufferRecord* extraRecord = nullptr;
         if (hot.streamBuffers[stream]) {
           if (auto* buffer = ctx.pool.findBuffer(hot.streamBuffers[stream].value);
@@ -7804,6 +8810,19 @@ bool encodeDraw(EncodeContext& ctx,
               extraVertexBufferOffset += slice.offset;
               usedDeclBytes = true;
             }
+          }
+        }
+        if (streamIbStagingActive(streamIbStagingCache) &&
+            indexedDraw &&
+            extraRecord &&
+            extraRecord->buffer &&
+            extraVertexBuffer) {
+          if (auto staged = streamIbStagingCache->findOrStage(
+                  ctx, seqId, hot.streamBuffers[stream].value, extraRecord,
+                  encoderBreakdown, /*indexBuffer=*/false)) {
+            extraVertexBuffer = staged.buffer;
+            extraVertexBufferOffset = staged.offset + streamBinding.offset;
+            extraStaged = true;
           }
         }
         if (traceEncode) {
@@ -7832,9 +8851,13 @@ bool encodeDraw(EncodeContext& ctx,
               encoderBreakdown->recordStreamResource(
                   stream, hot.streamBuffers[stream].value, extraRecord->desc);
             }
+            const u64 extraStateHandle =
+                extraStaged ? extraVertexBuffer.handle : hot.streamBuffers[stream].value;
+            const u64 extraStateOffset =
+                extraStaged ? extraVertexBufferOffset : hot.streamOffsets[stream];
             encoderBreakdown->recordStreamState(
-                stream, hot.streamBuffers[stream].value,
-                hot.streamOffsets[stream], streamBinding.stride);
+                stream, extraStateHandle, extraStateOffset,
+                streamBinding.stride);
           }
           if (setVertexBufferCached(extraVertexBuffer, extraVertexBufferOffset,
                                     streamBinding.metalSlot)) {
@@ -8541,6 +9564,12 @@ bool encodeDraw(EncodeContext& ctx,
       if (!encoderBreakdown) {
         return;
       }
+      encoderBreakdown->recordTileFfpCoverage(
+          dxmt9::pipeline::classifyTileFfpForPass(
+              drawState, ctx.pool.supportsApple3()),
+          tileFfpMode,
+          primitiveCount,
+          vertexCount);
       encoderBreakdown->recordDrawIssue(
           pv.primitiveType,
           primitiveCount,
@@ -8591,7 +9620,21 @@ bool encodeDraw(EncodeContext& ctx,
       pushDrawVolatile();
       {
         PerfScope issueScope(perf::countEncodeDrawIssueCpuTime);
+        std::optional<std::uint32_t> visibilityResult;
+        if (visibilityScout) {
+          visibilityResult = beginVisibilityScoutDraw(
+              visibilityScout, encoder,
+              makeVisibilityScoutDrawRecord(*visibilityScout, drawState,
+                                            effectiveViewport, primitiveType,
+                                            pv, drawOrdinal, commandIndex,
+                                            primitiveCount, vertexCount,
+                                            /*indexed=*/true,
+                                            /*expandedIndexed=*/true,
+                                            /*splitChunk=*/0,
+                                            effectiveCullMode, fillMode));
+        }
         recordedDrawPrimitives(ctx, encoder, primitiveType, 0, (uint64_t)vertexCount);
+        endVisibilityScoutDraw(visibilityScout, encoder, visibilityResult);
       }
       // R-BACK-13.1: run the tile-FFP imageblock post-pass after this draw.
       emitTileFfpPostPass();
@@ -8664,6 +9707,7 @@ bool encodeDraw(EncodeContext& ctx,
       const char* effectiveIndexSource = "original";
       u64 effectiveIndexOffset = indexBufferOffset;
       u64 effectiveIndexBytes = indexBytesForReuse.size();
+      u64 effectiveIndexBufferHandle = hot.indexBuffer.value;
       const u64 reverseStream0SpanMin =
           debug::probeReverseIndexedTrianglesStream0SpanMin();
       const u64 optimizeStream0SpanMin =
@@ -9059,6 +10103,7 @@ bool encodeDraw(EncodeContext& ctx,
               indexBufferOffset = 0;
               effectiveIndexSource = "cached-reordered-prelookup";
               effectiveIndexOffset = 0;
+              effectiveIndexBufferHandle = indexBuffer.handle;
               effectiveIndexBytes = cacheOptPrelookup.byteCount;
               probeApplied = true;
             } else {
@@ -9123,6 +10168,7 @@ bool encodeDraw(EncodeContext& ctx,
                   cached.created ? "cached-reordered-created"
                                  : "cached-reordered-hit";
               effectiveIndexOffset = 0;
+              effectiveIndexBufferHandle = indexBuffer.handle;
               effectiveIndexBytes = cached.byteCount;
               probeApplied = true;
             }
@@ -9139,6 +10185,7 @@ bool encodeDraw(EncodeContext& ctx,
               indexReuseStartIndex = 0;
               effectiveIndexSource = "transient-reordered";
               effectiveIndexOffset = transientIndexBuffer.offset;
+              effectiveIndexBufferHandle = indexBuffer.handle;
               effectiveIndexBytes = probeReorderedIndexBytes.size();
               probeApplied = true;
             }
@@ -9181,9 +10228,30 @@ bool encodeDraw(EncodeContext& ctx,
             indexReuseStartIndex = 0;
             effectiveIndexSource = "transient-optimized-order";
             effectiveIndexOffset = transientIndexBuffer.offset;
+            effectiveIndexBufferHandle = indexBuffer.handle;
             effectiveIndexBytes = probeReorderedIndexBytes.size();
             optimizedApplied = true;
           }
+        }
+      }
+      if (streamIbStagingActive(streamIbStagingCache) &&
+          !probeApplied &&
+          !optimizedApplied &&
+          pv.userIndexData.empty() &&
+          indexBufferRecord &&
+          indexBufferRecord->buffer &&
+          indexBuffer) {
+        if (auto staged = streamIbStagingCache->findOrStage(
+                ctx, seqId, hot.indexBuffer.value, indexBufferRecord,
+                encoderBreakdown, /*indexBuffer=*/true)) {
+          indexBuffer = staged.buffer;
+          indexBufferOffset = staged.offset +
+                              static_cast<uint64_t>(pv.startIndex) *
+                                  indexElementSize(pv.indexType);
+          effectiveIndexSource = "staged-original";
+          effectiveIndexOffset = indexBufferOffset;
+          effectiveIndexBufferHandle = indexBuffer.handle;
+          effectiveIndexBytes = indexBytesForReuse.size();
         }
       }
       const bool emitMeasureOnlyIndexedDraw =
@@ -9247,6 +10315,8 @@ bool encodeDraw(EncodeContext& ctx,
                                              indexReuseStartIndex,
                                              vertexCount)
                   : IndexReuseMeasure{.references = vertexCount};
+          const auto streamExtraBindings =
+              encoderBreakdown->streamExtraBindingsSummary();
           encoderBreakdown->emitIndexedOrderProbeDraw(
               probeEligible,
               probeApplied,
@@ -9257,6 +10327,7 @@ bool encodeDraw(EncodeContext& ctx,
               disableAlphaBlendProbeApplied,
               disableDepthWriteProbeApplied,
               depthFuncAlwaysProbeApplied,
+              fragmentlessDepthOnlyProbeApplied,
               splitEligible,
               splitWouldApply,
               static_cast<u32>(std::min<std::size_t>(
@@ -9284,13 +10355,14 @@ bool encodeDraw(EncodeContext& ctx,
               pv.baseVertexIndex,
               pv.startIndex,
               pv.indexType,
-              hot.indexBuffer.value,
+              effectiveIndexBufferHandle,
               effectiveIndexSource,
               effectiveIndexOffset,
               effectiveIndexBytes,
               stream0.lastHandle,
               stream0.lastOffset,
               stream0.lastStride,
+              streamExtraBindings.c_str(),
               hot.vertexConstantsHash,
               hot.pixelConstantsHash,
               drawState.hasUniformPayload() ? drawState.uniformPayload().hash : 0ull,
@@ -9414,7 +10486,7 @@ bool encodeDraw(EncodeContext& ctx,
             encoderBreakdown->recordIndexBufferResource(
                 hot.indexBuffer.value, indexBufferRecord->desc);
           }
-          encoderBreakdown->recordIndexBufferState(hot.indexBuffer.value);
+          encoderBreakdown->recordIndexBufferState(effectiveIndexBufferHandle);
         }
         countIndexBufferBind();
         if (encoderBreakdown) {
@@ -9470,11 +10542,26 @@ bool encodeDraw(EncodeContext& ctx,
             }
             const u64 chunkIndexOffset =
                 indexBufferOffset + static_cast<u64>(primitivesEmitted) * 3u * indexSize;
+            std::optional<std::uint32_t> visibilityResult;
+            if (visibilityScout) {
+              visibilityResult = beginVisibilityScoutDraw(
+                  visibilityScout, encoder,
+                  makeVisibilityScoutDrawRecord(*visibilityScout, drawState,
+                                                effectiveViewport, primitiveType,
+                                                pv, drawOrdinal, commandIndex,
+                                                chunkPrimitives,
+                                                static_cast<u64>(chunkPrimitives) * 3u,
+                                                /*indexed=*/true,
+                                                /*expandedIndexed=*/false,
+                                                chunk.startPrimitive,
+                                                effectiveCullMode, fillMode));
+            }
             recordedDrawIndexedPrimitives(ctx, encoder, primitiveType,
                                           metalIndexType,
                                           static_cast<u64>(chunkPrimitives) * 3u,
                                           indexBuffer, chunkIndexOffset, 1,
                                           metalBaseVertex, 0);
+            endVisibilityScoutDraw(visibilityScout, encoder, visibilityResult);
           }
           if (encoderBreakdown) {
             encoderBreakdown->recordSplitLargeIndexedDraw(
@@ -9485,10 +10572,24 @@ bool encodeDraw(EncodeContext& ctx,
                 static_cast<u32>(splitChunks.size()));
           }
         } else {
+          std::optional<std::uint32_t> visibilityResult;
+          if (visibilityScout) {
+            visibilityResult = beginVisibilityScoutDraw(
+                visibilityScout, encoder,
+                makeVisibilityScoutDrawRecord(*visibilityScout, drawState,
+                                              effectiveViewport, primitiveType,
+                                              pv, drawOrdinal, commandIndex,
+                                              primitiveCount, vertexCount,
+                                              /*indexed=*/true,
+                                              /*expandedIndexed=*/false,
+                                              /*splitChunk=*/0,
+                                              effectiveCullMode, fillMode));
+          }
           recordedDrawIndexedPrimitives(ctx, encoder, primitiveType,
                                         metalIndexType,
                                         (uint64_t)vertexCount, indexBuffer,
                                         indexBufferOffset, 1, metalBaseVertex, 0);
+          endVisibilityScoutDraw(visibilityScout, encoder, visibilityResult);
         }
       }
       // R-BACK-13.1: run the tile-FFP imageblock post-pass after this draw.
@@ -9498,6 +10599,12 @@ bool encodeDraw(EncodeContext& ctx,
   }
   const bool upDraw = !pv.userVertexData.empty();
   if (encoderBreakdown) {
+    encoderBreakdown->recordTileFfpCoverage(
+        dxmt9::pipeline::classifyTileFfpForPass(
+            drawState, ctx.pool.supportsApple3()),
+        tileFfpMode,
+        primitiveCount,
+        vertexCount);
     encoderBreakdown->recordDrawIssue(
         pv.primitiveType,
         primitiveCount,
@@ -9549,7 +10656,21 @@ bool encodeDraw(EncodeContext& ctx,
       encoderBreakdown->addSetVertexBytes(sizeof(DrawVolatile), 5);
     }
     PerfScope issueScope(perf::countEncodeDrawIssueCpuTime);
+    std::optional<std::uint32_t> visibilityResult;
+    if (visibilityScout) {
+      visibilityResult = beginVisibilityScoutDraw(
+          visibilityScout, encoder,
+          makeVisibilityScoutDrawRecord(*visibilityScout, drawState,
+                                        effectiveViewport, primitiveType, pv,
+                                        drawOrdinal, commandIndex,
+                                        primitiveCount, vertexCount,
+                                        /*indexed=*/false,
+                                        /*expandedIndexed=*/false,
+                                        /*splitChunk=*/0,
+                                        effectiveCullMode, fillMode));
+    }
     recordedDrawPrimitives(ctx, encoder, primitiveType, 0, (uint64_t)vertexCount);
+    endVisibilityScoutDraw(visibilityScout, encoder, visibilityResult);
   }
   // R-BACK-13.1: run the tile-FFP imageblock post-pass after this draw.
   emitTileFfpPostPass();
@@ -9578,7 +10699,8 @@ bool encodeDraw(EncodeContext& ctx,
                     argbufResourceArray, reopenArgbufHybrid,
                     /*bindingOverridePrefetchedPsoCompatible=*/false,
                     core::PsoHandle{}, core::PsoHandle{}, core::DepthStencilHandle{},
-                    textureSamplerShadow, commandIndex, nullptr, nullptr);
+                    textureSamplerShadow, commandIndex, nullptr, nullptr, nullptr,
+                    nullptr);
 }
 
 std::optional<core::metalqueue::QueueSubmissionRecord> encodeChunk(
@@ -9749,6 +10871,9 @@ std::optional<core::metalqueue::QueueSubmissionRecord> encodeChunk(
   // Load (R-BACK-15.4 says "first use" only).
   std::array<core::Handle, core::kMaxRenderTargets> activeColorHandles{};
   ActiveDepthAttachmentDump activeDepthAttachmentDump{};
+  std::vector<ActiveDrawTextureDump> activeDrawTextureDumps;
+  u64 activeRenderEncoderSeq = 0;
+  u64 activeRenderEncoderIndex = 0;
   // Per-render-encoder uniform dirty state (R-BACK-12.12). Seeded from
   // ctx.dirty so bits accumulated by the chunk-record importer since
   // the last encode flow into the first draw of this chunk; the
@@ -9766,8 +10891,10 @@ std::optional<core::metalqueue::QueueSubmissionRecord> encodeChunk(
   // whenever a new encoder opens (its argbuf table starts empty).
   std::optional<u64> lastArgbufPayloadHash;
   ArgbufCbufCache argbufCbufCache;
+  StreamIbStagingCache activeStreamIbStaging;
   TextureSamplerBindShadow textureSamplerShadow{};
   ActiveEncoderBreakdown activeEncoderBreakdown;
+  std::optional<VisibilityScoutPass> activeVisibilityScout;
   static thread_local RenderPassFrameTracker renderPassFrameTracker;
   u64 renderEncoderIndex = 0;
 
@@ -9804,8 +10931,17 @@ std::optional<core::metalqueue::QueueSubmissionRecord> encodeChunk(
       maybeEncodeDepthAttachmentDump(commandBuffer, ctx.device,
                                      activeDepthAttachmentDump,
                                      completionCallbacks);
+      maybeEncodeDrawTextureDumps(commandBuffer, ctx.device,
+                                  activeDrawTextureDumps,
+                                  completionCallbacks);
+      if (activeVisibilityScout) {
+        enqueueVisibilityScoutCompletion(*activeVisibilityScout,
+                                         completionCallbacks);
+        activeVisibilityScout.reset();
+      }
       perf::countRenderPassEnd(reason);
       activeEncoderBreakdown.emit(reason);
+      activeStreamIbStaging.begin(false);
       // R-BACK-15.4: color attachments stored on this pass become "touched"
       // on the queue so the next pass on the same handle Loads instead of
       // DontCare-loads. The current color DontCare-store proof only fires
@@ -9819,6 +10955,9 @@ std::optional<core::metalqueue::QueueSubmissionRecord> encodeChunk(
         }
       }
       activeDepthAttachmentDump = {};
+      activeDrawTextureDumps.clear();
+      activeRenderEncoderSeq = 0;
+      activeRenderEncoderIndex = 0;
       activeRenderEncoder = {};
       hasActiveRender = false;
       activeDrawStateKey.reset();
@@ -9856,10 +10995,20 @@ std::optional<core::metalqueue::QueueSubmissionRecord> encodeChunk(
         drawState.hot->depthStencil.handle.value,
         psoHandleBucket(renderPsoHandle));
     const u64 openedRenderEncoderIndex = renderEncoderIndex;
+    activeVisibilityScout =
+        makeVisibilityScoutPass(ctx.device, encodeChunkSeqId,
+                                openedRenderEncoderIndex);
+    const WMT::Buffer visibilityBuffer{
+        activeVisibilityScout ? activeVisibilityScout->buffer.handle
+                              : NULL_OBJECT_HANDLE};
     activeRenderEncoder = beginRenderPass(ctx, commandBuffer, drawState, clear,
                                           &slot, lookaheadStartIndex,
-                                          sampleAttachment.span());
+                                          sampleAttachment.span(),
+                                          visibilityBuffer);
     hasActiveRender = static_cast<bool>(activeRenderEncoder);
+    if (!hasActiveRender) {
+      activeVisibilityScout.reset();
+    }
     if (hasActiveRender) {
       renderPassFrameTracker.noteStart(
           makeRenderPassFrameKey(*drawState.hot),
@@ -9868,9 +11017,13 @@ std::optional<core::metalqueue::QueueSubmissionRecord> encodeChunk(
           encodeChunkSeqId, openedRenderEncoderIndex,
           drawState.hot->colorAttachments[0].handle.value,
           drawState.hot->depthStencil.handle.value);
+      activeStreamIbStaging.begin(
+          stageStreamIbProbeRowMatches(&activeEncoderBreakdown));
       activeEncoderBreakdown.recordAttachmentMetadata(ctx.pool, *drawState.hot);
       ++renderEncoderIndex;
       recordRenderEncoderGpuAttachment(sampleAttachment);
+    } else {
+      activeStreamIbStaging.begin(false);
     }
     activeKey = makeAttachmentKey(*drawState.hot);
     activeWriteHazard = makeAttachmentHazard(*drawState.hot);
@@ -9917,6 +11070,14 @@ std::optional<core::metalqueue::QueueSubmissionRecord> encodeChunk(
       activeColorHandles[i] = drawState.hot->colorAttachments[i].handle;
     }
     activeDepthAttachmentDump = {};
+    activeDrawTextureDumps.clear();
+    activeRenderEncoderSeq = encodeChunkSeqId;
+    activeRenderEncoderIndex = openedRenderEncoderIndex;
+    if (drawTextureDumpPassMatches(activeRenderEncoderSeq,
+                                   activeRenderEncoderIndex)) {
+      activeDrawTextureDumps.reserve(
+          drawTextureDumpConfig().handles.size());
+    }
     if (auto* depthSurface =
             ctx.pool.findSurface(drawState.hot->depthStencil.handle.value);
         activeRenderEncoder && depthSurface && depthSurface->texture &&
@@ -10402,6 +11563,11 @@ std::optional<core::metalqueue::QueueSubmissionRecord> encodeChunk(
           hasBindingOverride && !overrideNeedsBaseStateBind;
       const bool skipBaseStateBind =
           baseStateCompatible && !overrideNeedsBaseStateBind;
+      maybeCollectDrawTextureDump(activeDrawTextureDumps,
+                                  ctx.pool,
+                                  drawStateView,
+                                  activeRenderEncoderSeq,
+                                  activeRenderEncoderIndex);
       if (encodeDraw(ctx, commandBuffer, activeRenderEncoder, drawStateView, slot.seqId,
                      /*skipBaseStateBind=*/skipBaseStateBind,
                      anyUpData ? &preData : nullptr,
@@ -10421,7 +11587,9 @@ std::optional<core::metalqueue::QueueSubmissionRecord> encodeChunk(
                          ? static_cast<std::uint32_t>(commandIndex)
                          : std::numeric_limits<std::uint32_t>::max(),
                      &activeEncoderBreakdown,
-                     &argbufCbufCache)) {
+                     &argbufCbufCache,
+                     &activeStreamIbStaging,
+                     activeVisibilityScout ? &*activeVisibilityScout : nullptr)) {
         activeDrawStateKey = drawStateView.hot->key;
         activeDrawStateUsesPrefetchedPsoLayout = !overrideNeedsBaseStateBind;
         lastArgbufPayloadHash = drawArgbufPayloadHash;

@@ -177,6 +177,92 @@ def window_text(candidate: dict[str, Any]) -> str:
     return f"{low}..{high}"
 
 
+def parse_row_key(value: str) -> tuple[str, str]:
+    seq, sep, enc = value.partition("/")
+    if not sep:
+        return "", ""
+    return seq.strip(), enc.strip()
+
+
+def parse_encoder_draws(value: str) -> set[int]:
+    indices: set[int] = set()
+    for part in value.replace(";", ",").split(","):
+        part = part.strip()
+        if not part:
+            continue
+        if ".." in part:
+            start_text, end_text = part.split("..", 1)
+            start = as_int(start_text)
+            end = as_int(end_text)
+            if end >= start:
+                indices.update(range(start, end + 1))
+            continue
+        indices.add(as_int(part))
+    return indices
+
+
+def attach_visibility_rows(
+    outcomes: list[dict[str, Any]],
+    visibility_rows: list[dict[str, str]],
+) -> None:
+    by_row_draw: dict[tuple[str, str, int], list[dict[str, str]]] = {}
+    for row in visibility_rows:
+        key = (
+            str(row.get("seq", "")).strip(),
+            str(row.get("encoder", "")).strip(),
+            as_int(row.get("metal_draw_index")),
+        )
+        by_row_draw.setdefault(key, []).append(row)
+
+    for outcome in outcomes:
+        seq, enc = parse_row_key(str(outcome.get("row", "")))
+        draw_indices = parse_encoder_draws(str(outcome.get("encoder_draws", "")))
+        joined: list[dict[str, str]] = []
+        for draw_index in sorted(draw_indices):
+            joined.extend(by_row_draw.get((seq, enc, draw_index), []))
+
+        positive = [
+            row for row in joined if as_int(row.get("visible_samples")) > 0
+        ]
+        zero = [
+            row for row in joined if as_int(row.get("visible_samples")) == 0
+        ]
+        visible_samples = sum(as_int(row.get("visible_samples")) for row in joined)
+        primitives = sum(as_int(row.get("source_primitive_count")) for row in joined)
+        outcome["visibility_draws"] = len(joined)
+        outcome["visibility_positive_draws"] = len(positive)
+        outcome["visibility_zero_draws"] = len(zero)
+        outcome["visibility_visible_samples_sum"] = visible_samples
+        outcome["visibility_visible_samples_max"] = max(
+            [as_int(row.get("visible_samples")) for row in joined] or [0]
+        )
+        outcome["visibility_source_primitives"] = primitives
+        outcome["visibility_join_status"] = visibility_join_status(outcome)
+
+
+def visibility_join_status(row: dict[str, Any]) -> str:
+    draws = as_int(row.get("visibility_draws"))
+    positives = as_int(row.get("visibility_positive_draws"))
+    verdict = str(row.get("verdict", ""))
+    if draws == 0:
+        return "missing-visibility"
+    if positives == 0:
+        if verdict in {"no-final-color-exact-pass", "sparse-exact-pass", "visible-exact-pass"}:
+            return "no-sample-positive-control"
+        return "no-sample-with-fail"
+    if verdict == "no-final-color-exact-pass":
+        return "sample-visible-final-color-empty"
+    if verdict == "visible-exact-pass":
+        return "sample-visible-visible-exact"
+    if verdict == "sparse-exact-pass":
+        return "sample-visible-sparse-exact"
+    if verdict == "visible-fail":
+        return "sample-visible-visible-fail"
+    if verdict == "sparse-fail":
+        return "sample-visible-sparse-fail"
+    return "sample-visible-unknown"
+
+
 def outcome_from_replay(
     candidates: dict[int, dict[str, Any]],
     rank: int,
@@ -384,6 +470,13 @@ def write_csv_output(path: Path, outcomes: list[dict[str, Any]]) -> None:
         "sparse_fail_lru32_delta",
         "exact_pass_draws",
         "exact_fail_draws",
+        "visibility_draws",
+        "visibility_positive_draws",
+        "visibility_zero_draws",
+        "visibility_visible_samples_sum",
+        "visibility_visible_samples_max",
+        "visibility_source_primitives",
+        "visibility_join_status",
         "oracle_status",
         "oracle_next_action",
         "source",
@@ -429,7 +522,12 @@ def md_table(outcomes: list[dict[str, Any]]) -> list[str]:
     return lines
 
 
-def write_markdown(path: Path, outcomes: list[dict[str, Any]], candidates_path: Path) -> None:
+def write_markdown(
+    path: Path,
+    outcomes: list[dict[str, Any]],
+    candidates_path: Path,
+    visibility_path: Path | None,
+) -> None:
     verdict, reason = aggregate_verdict(outcomes)
     exact_pass = sum(as_int(row.get("exact_pass_draws")) for row in outcomes)
     exact_fail = sum(as_int(row.get("exact_fail_draws")) for row in outcomes)
@@ -557,6 +655,45 @@ def write_markdown(path: Path, outcomes: list[dict[str, Any]], candidates_path: 
             f"`{row['lru32_delta']}` | "
             f"{row['next_action']} |"
         )
+    if visibility_path is not None:
+        lines.extend([
+            "",
+            "## Metal Visibility Join",
+            "",
+            f"- Visibility source: `{visibility_path}`",
+            "",
+            "This joins replay ranks to the Metal visibility scout by row and",
+            "encoder-local draw index. Positive visibility is still not",
+            "final-color proof; it only says the draw produced samples at that",
+            "point in the render pass.",
+            "",
+            "| Rank | Verdict | Visibility status | Draws | Positive | Zero | Samples | LRU32 delta | Meaning |",
+            "|---:|---|---|---:|---:|---:|---:|---:|---|",
+        ])
+        meanings = {
+            "missing-visibility": "No matching visibility rows; this rank needs a matching scout run.",
+            "sample-visible-final-color-empty": "Visibility positive but replay has no final color; Metal visibility is not enough as a positive oracle.",
+            "sample-visible-visible-exact": "Potential selector candidate; still needs a runtime final-writer predicate.",
+            "sample-visible-sparse-exact": "Positive samples but sparse final-color footprint.",
+            "sample-visible-visible-fail": "Sample-visible correctness blocker.",
+            "sample-visible-sparse-fail": "Sample-visible exact-policy blocker.",
+            "no-sample-positive-control": "Candidate for no-sample proof only.",
+            "no-sample-with-fail": "Inconsistent no-sample/fail signal; inspect manually.",
+        }
+        for row in outcomes:
+            status = str(row.get("visibility_join_status", ""))
+            lines.append(
+                "| "
+                f"`{row.get('rank')}` | "
+                f"`{row.get('verdict')}` | "
+                f"`{status}` | "
+                f"`{row.get('visibility_draws', '')}` | "
+                f"`{row.get('visibility_positive_draws', '')}` | "
+                f"`{row.get('visibility_zero_draws', '')}` | "
+                f"`{row.get('visibility_visible_samples_sum', '')}` | "
+                f"`{row.get('lru32_delta', 0)}` | "
+                f"{meanings.get(status, '')} |"
+            )
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text("\n".join(lines) + "\n", encoding="utf-8")
 
@@ -573,6 +710,7 @@ def main() -> int:
         help="RANK=COMPARE_CSV,SUMMARY_JSON; repeat for rank2+ mini replay outcomes",
     )
     parser.add_argument("--sparse-active-pixels", type=int, default=64)
+    parser.add_argument("--visibility-csv", type=Path)
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--csv-output", type=Path)
     args = parser.parse_args()
@@ -586,8 +724,10 @@ def main() -> int:
     if not outcomes:
         raise SystemExit("no outcomes were provided")
     outcomes.sort(key=lambda row: as_int(row.get("rank")))
+    if args.visibility_csv is not None:
+        attach_visibility_rows(outcomes, load_csv(args.visibility_csv))
 
-    write_markdown(args.output, outcomes, args.candidates)
+    write_markdown(args.output, outcomes, args.candidates, args.visibility_csv)
     if args.csv_output is not None:
         write_csv_output(args.csv_output, outcomes)
     print(args.output)

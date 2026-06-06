@@ -108,12 +108,50 @@ class SummarizeSemanticPayloadCandidatesTests(unittest.TestCase):
             summary3 = root / "rank3-summary.json"
             compare4 = root / "rank4-compare.csv"
             summary4 = root / "rank4-summary.json"
+            visibility = root / "visibility.csv"
             write_compare(compare2, changed=0, active=9)
             write_summary(summary2, lru32_delta=-100, lru32_pct=-25.0)
             write_compare(compare3, changed=0, active=0)
             write_summary(summary3, lru32_delta=-50, lru32_pct=-10.0)
             write_compare(compare4, changed=0, active=128)
             write_summary(summary4, lru32_delta=-200, lru32_pct=-40.0)
+            write_csv(visibility, [
+                {
+                    "seq": "50",
+                    "encoder": "2",
+                    "metal_draw_index": "1",
+                    "visible_samples": "0",
+                    "source_primitive_count": "100",
+                },
+                {
+                    "seq": "50",
+                    "encoder": "2",
+                    "metal_draw_index": "2",
+                    "visible_samples": "12",
+                    "source_primitive_count": "200",
+                },
+                {
+                    "seq": "50",
+                    "encoder": "2",
+                    "metal_draw_index": "3",
+                    "visible_samples": "5",
+                    "source_primitive_count": "300",
+                },
+                {
+                    "seq": "50",
+                    "encoder": "2",
+                    "metal_draw_index": "4",
+                    "visible_samples": "0",
+                    "source_primitive_count": "400",
+                },
+                {
+                    "seq": "50",
+                    "encoder": "2",
+                    "metal_draw_index": "5",
+                    "visible_samples": "9",
+                    "source_primitive_count": "500",
+                },
+            ])
 
             output = root / "summary.md"
             csv_output = root / "summary.csv"
@@ -131,6 +169,8 @@ class SummarizeSemanticPayloadCandidatesTests(unittest.TestCase):
                     f"3={compare3},{summary3}",
                     "--rank-outcome",
                     f"4={compare4},{summary4}",
+                    "--visibility-csv",
+                    str(visibility),
                     "--output",
                     str(output),
                     "--csv-output",
@@ -160,6 +200,10 @@ class SummarizeSemanticPayloadCandidatesTests(unittest.TestCase):
             self.assertIn("## Final-Color Oracle Bucket Queue", text)
             self.assertIn("| `visible-exact-pass` | `candidate-final-color-selector` | `-200` |", text)
             self.assertIn("| `visible-fail` | `blocks-broad-reorder` | `-20` |", text)
+            self.assertIn("## Metal Visibility Join", text)
+            self.assertIn("`sample-visible-visible-fail`", text)
+            self.assertIn("`sample-visible-final-color-empty`", text)
+            self.assertIn("`sample-visible-visible-exact`", text)
             with csv_output.open(newline="", encoding="utf-8") as handle:
                 csv_rows = list(csv.DictReader(handle))
             self.assertEqual([row["verdict"] for row in csv_rows], [
@@ -173,12 +217,16 @@ class SummarizeSemanticPayloadCandidatesTests(unittest.TestCase):
             self.assertEqual(csv_rows[0]["visible_fail_lru32_delta"], "-20")
             self.assertEqual(csv_rows[0]["oracle_status"], "blocks-broad-reorder")
             self.assertIn("reject broad reorder", csv_rows[0]["oracle_next_action"])
+            self.assertEqual(csv_rows[0]["visibility_join_status"], "sample-visible-visible-fail")
+            self.assertEqual(csv_rows[0]["visibility_positive_draws"], "1")
             self.assertEqual(csv_rows[1]["sparse_exact_lru32_delta"], "-100")
             self.assertEqual(csv_rows[1]["oracle_status"], "sparse-positive-control")
             self.assertEqual(csv_rows[2]["no_final_color_lru32_delta"], "-50")
             self.assertEqual(csv_rows[2]["oracle_status"], "no-final-color-positive-control")
+            self.assertEqual(csv_rows[2]["visibility_join_status"], "sample-visible-final-color-empty")
             self.assertEqual(csv_rows[3]["visible_exact_lru32_delta"], "-200")
             self.assertEqual(csv_rows[3]["oracle_status"], "candidate-final-color-selector")
+            self.assertEqual(csv_rows[3]["visibility_join_status"], "sample-visible-visible-exact")
 
 
 if __name__ == "__main__":

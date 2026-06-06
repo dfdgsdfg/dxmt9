@@ -13,6 +13,8 @@ dry_run=0
 dump_shaders=0
 recommended_gputrace_min_free_mb=2048
 trim_unused_varyings=0
+trim_unused_varyings_vs_hashes=
+trim_unused_varyings_ps_hashes=
 drop_vsout_point_size=0
 probe_position_only_vsout=0
 probe_half_vsout=0
@@ -90,6 +92,10 @@ dump_depth_attachment_handle=${DXMT9_DUMP_DEPTH_ATTACHMENT_HANDLE:-}
 dump_depth_attachment_seq=${DXMT9_DUMP_DEPTH_ATTACHMENT_SEQ:-}
 dump_depth_attachment_enc=${DXMT9_DUMP_DEPTH_ATTACHMENT_ENC:-}
 dump_depth_attachment_path=${DXMT9_DUMP_DEPTH_ATTACHMENT_PATH:-}
+dump_draw_texture_handles=${DXMT9_DUMP_DRAW_TEXTURE_HANDLES:-}
+dump_draw_texture_seq=${DXMT9_DUMP_DRAW_TEXTURE_SEQ:-}
+dump_draw_texture_enc=${DXMT9_DUMP_DRAW_TEXTURE_ENC:-}
+dump_draw_texture_dir=${DXMT9_DUMP_DRAW_TEXTURE_DIR:-}
 aggressive_color_dontcare=0
 aggressive_depth_dontcare=0
 disable_cull=0
@@ -117,7 +123,20 @@ probe_depth_func_always_row=
 probe_depth_func_always_rows=
 probe_depth_func_always_class=
 probe_depth_func_always_classes=
+probe_fragmentless_depth_only=0
+probe_fragmentless_depth_only_row=
+probe_fragmentless_depth_only_rows=
+probe_fragmentless_depth_only_class=
+probe_fragmentless_depth_only_classes=
 force_visible=0
+visibility_scout=0
+visibility_scout_row=
+visibility_scout_rows=
+visibility_scout_path=
+visibility_scout_draw_indices=
+visibility_scout_summary_output=
+visibility_scout_summary_csv_output=
+visibility_scout_summary_limit=${DXMT_3DMARK05_VISIBILITY_SCOUT_SUMMARY_LIMIT:-12}
 compare_baseline_output=${DXMT_3DMARK05_COMPARE_BASELINE_OUTPUT:-}
 compare_baseline_joined=${DXMT_3DMARK05_COMPARE_BASELINE_JOINED:-}
 semantic_image_policy=${DXMT_3DMARK05_SEMANTIC_IMAGE_POLICY:-}
@@ -143,6 +162,7 @@ require_encode_draw_cpu_decrease=0
 max_gpu_command_buffer_regression_ms=${DXMT_3DMARK05_MAX_GPU_COMMAND_BUFFER_REGRESSION_MS:-}
 max_const_upload_break_count_ratio=${DXMT_3DMARK05_MAX_CONST_UPLOAD_BREAK_COUNT_RATIO:-}
 require_result_json=0
+allow_partial_stable_frame_proof=0
 require_top_gpu_decrease=0
 require_top_buffer_write_decrease=0
 require_top_vs_buffer_write_decrease=0
@@ -204,6 +224,14 @@ Options:
                       (default: 45) to clean up detached final-frame hangs.
   --result-file NAME  3DMark05 result filename argument (default: dxmt9_gt1.3dr)
   --no-gputrace       Do not set DXMT_METAL_CAPTURE_FRAME/PATH
+                      The wrapper does not set MTL_CAPTURE_ENABLED by default:
+                      current 3DMark05/Wine startup can black-screen with that
+                      Apple capture-layer env present. Set
+                      DXMT_3DMARK05_SET_MTL_CAPTURE_ENABLED=1 only for
+                      deliberate capture-layer experiments.
+                      Set DXMT_3DMARK05_METAL_CAPTURE_DESTINATION=developerTools
+                      to route MTLCaptureManager output to attached Xcode
+                      instead of a .gputrace file.
   --encoder-breakdown-seq N
                       Set DXMT9_PERF_ENCODER_BREAKDOWN_SEQ=N to emit only one
                       RenderPass[seq=N,...] frame's encoder breakdown
@@ -219,6 +247,14 @@ Options:
   --trim-unused-varyings
                       Set DXMT9_TRIM_UNUSED_VARYINGS=1 for pair-local VSOut
                       liveness/VS buffer-write experiments
+  --trim-unused-varyings-vs-hashes HASHES
+                      Set DXMT9_TRIM_UNUSED_VARYINGS_VS_HASHES to a
+                      comma/semicolon/space-separated allowlist of D3D vertex
+                      shader hashes. Requires --trim-unused-varyings.
+  --trim-unused-varyings-ps-hashes HASHES
+                      Set DXMT9_TRIM_UNUSED_VARYINGS_PS_HASHES to a
+                      comma/semicolon/space-separated allowlist of D3D pixel
+                      shader hashes. Requires --trim-unused-varyings.
   --drop-vsout-point-size
                       Set DXMT9_PROBE_DROP_VSOUT_POINT_SIZE=1 to remove only
                       VSOut [[point_size]] for pipeline-shape A/B probes
@@ -508,6 +544,17 @@ Options:
                       Output path for the raw depth sidecar. Relative paths
                       are resolved under the repository root; default is
                       traces/<run-id>/analysis/frame<N>-depth.bin
+  --dump-draw-texture-handles LIST
+                      Dump live shader-read texture sidecars for a comma/space
+                      separated handle list. Pairs with optional seq/enc gates.
+  --dump-draw-texture-seq N
+                      Set DXMT9_DUMP_DRAW_TEXTURE_SEQ=N
+  --dump-draw-texture-enc N
+                      Set DXMT9_DUMP_DRAW_TEXTURE_ENC=N
+  --dump-draw-texture-dir DIR
+                      Output directory for raw texture sidecars. Relative paths
+                      are resolved under the repository root; default is
+                      traces/<run-id>/analysis/textures
   --aggressive-color-dontcare
                       Set DXMT9_AGGRESSIVE_COLOR_DONTCARE=1 for the run
   --aggressive-depth-dontcare
@@ -576,7 +623,39 @@ Options:
   --probe-depth-func-always-classes CLASSES
                       Set DXMT9_PROBE_DEPTH_FUNC_ALWAYS_CLASSES=CLASSES.
                       Values are ANDed, e.g. opaque-depth-write,large4096
+  --probe-fragmentless-depth-only
+                      Set DXMT9_PROBE_FRAGMENTLESS_DEPTH_ONLY=1 for scoped
+                      depth-only backend-shape A/B. The encoder still gates
+                      color-write=0, depth-write, no alpha/stencil/clip/A2C,
+                      and the pipeline cache rejects discard/depth-output FS.
+  --probe-fragmentless-depth-only-row SEQ/ENC
+                      Set DXMT9_PROBE_FRAGMENTLESS_DEPTH_ONLY_ROW=SEQ/ENC
+  --probe-fragmentless-depth-only-rows ROWS
+                      Set DXMT9_PROBE_FRAGMENTLESS_DEPTH_ONLY_ROWS=ROWS
+  --probe-fragmentless-depth-only-class CLASS
+                      Set DXMT9_PROBE_FRAGMENTLESS_DEPTH_ONLY_CLASS=CLASS.
+                      Accepted values match split-large indexed filters
+  --probe-fragmentless-depth-only-classes CLASSES
+                      Set DXMT9_PROBE_FRAGMENTLESS_DEPTH_ONLY_CLASSES=CLASSES.
+                      Values are ANDed, e.g. large4096,no-alpha-blend
   --force-visible     Set DXMT_DEBUG_FORCE_VISIBLE=1 for visibility/state A/B
+  --visibility-scout  Set DXMT9_VISIBILITY_SCOUT=1 and write Metal
+                      visibility counts under traces/<run-id>/analysis
+  --visibility-scout-row SEQ/ENC
+                      Restrict visibility scout to one render encoder
+  --visibility-scout-rows ROWS
+                      Restrict visibility scout to comma-separated SEQ/ENC rows
+  --visibility-scout-path PATH
+                      Override DXMT9_VISIBILITY_SCOUT_PATH
+  --visibility-scout-draw-indices LIST
+                      Include an optional metal_draw_index window/range such as
+                      36..37 in the post-run visibility summary
+  --visibility-scout-summary-output PATH
+                      Override the post-run visibility Markdown summary path
+  --visibility-scout-summary-csv-output PATH
+                      Override the post-run visibility CSV summary path
+  --visibility-scout-summary-limit N
+                      Number of visibility class rows to print in Markdown
   --compare-baseline-output PATH
                       After the run, compare result.json counters against this baseline output dir/result.json
   --baseline-joined PATH
@@ -626,6 +705,11 @@ Options:
                       Compare gate: max allowed gpu_command_buffer_time_ms regression
   --require-result-json
                       Finalizer gate: fail instead of using dxmt9.log partial-run counters
+  --allow-partial-stable-frame-proof
+                      Finalizer gate: keep stable-frame Xcode/geometry gates
+                      but allow timeout-finalized runs without result.json.
+                      Explicit --require-result-json or --baseline-output still
+                      requires result.json.
   --require-top-gpu-decrease
                       Finalizer Xcode gate: top-N GPU time must decrease
   --require-top-buffer-write-decrease
@@ -798,6 +882,14 @@ while (($#)); do
     --trim-unused-varyings)
       trim_unused_varyings=1
       shift
+      ;;
+    --trim-unused-varyings-vs-hashes)
+      trim_unused_varyings_vs_hashes=${2:?--trim-unused-varyings-vs-hashes requires a value}
+      shift 2
+      ;;
+    --trim-unused-varyings-ps-hashes)
+      trim_unused_varyings_ps_hashes=${2:?--trim-unused-varyings-ps-hashes requires a value}
+      shift 2
       ;;
     --drop-vsout-point-size)
       drop_vsout_point_size=1
@@ -1113,6 +1205,22 @@ while (($#)); do
       dump_depth_attachment_path=${2:?missing value for --dump-depth-attachment-path}
       shift 2
       ;;
+    --dump-draw-texture-handles)
+      dump_draw_texture_handles=${2:?missing value for --dump-draw-texture-handles}
+      shift 2
+      ;;
+    --dump-draw-texture-seq)
+      dump_draw_texture_seq=${2:?missing value for --dump-draw-texture-seq}
+      shift 2
+      ;;
+    --dump-draw-texture-enc)
+      dump_draw_texture_enc=${2:?missing value for --dump-draw-texture-enc}
+      shift 2
+      ;;
+    --dump-draw-texture-dir)
+      dump_draw_texture_dir=${2:?missing value for --dump-draw-texture-dir}
+      shift 2
+      ;;
     --aggressive-color-dontcare)
       aggressive_color_dontcare=1
       shift
@@ -1229,9 +1337,72 @@ while (($#)); do
       probe_depth_func_always_classes=${2:?missing value for --probe-depth-func-always-classes}
       shift 2
       ;;
+    --probe-fragmentless-depth-only)
+      probe_fragmentless_depth_only=1
+      shift
+      ;;
+    --probe-fragmentless-depth-only-row)
+      probe_fragmentless_depth_only=1
+      probe_fragmentless_depth_only_row=${2:?missing value for --probe-fragmentless-depth-only-row}
+      shift 2
+      ;;
+    --probe-fragmentless-depth-only-rows)
+      probe_fragmentless_depth_only=1
+      probe_fragmentless_depth_only_rows=${2:?missing value for --probe-fragmentless-depth-only-rows}
+      shift 2
+      ;;
+    --probe-fragmentless-depth-only-class)
+      probe_fragmentless_depth_only=1
+      probe_fragmentless_depth_only_class=${2:?missing value for --probe-fragmentless-depth-only-class}
+      shift 2
+      ;;
+    --probe-fragmentless-depth-only-classes)
+      probe_fragmentless_depth_only=1
+      probe_fragmentless_depth_only_classes=${2:?missing value for --probe-fragmentless-depth-only-classes}
+      shift 2
+      ;;
     --force-visible)
       force_visible=1
       shift
+      ;;
+    --visibility-scout)
+      visibility_scout=1
+      shift
+      ;;
+    --visibility-scout-row)
+      visibility_scout=1
+      visibility_scout_row=${2:?missing value for --visibility-scout-row}
+      shift 2
+      ;;
+    --visibility-scout-rows)
+      visibility_scout=1
+      visibility_scout_rows=${2:?missing value for --visibility-scout-rows}
+      shift 2
+      ;;
+    --visibility-scout-path)
+      visibility_scout=1
+      visibility_scout_path=${2:?missing value for --visibility-scout-path}
+      shift 2
+      ;;
+    --visibility-scout-draw-indices)
+      visibility_scout=1
+      visibility_scout_draw_indices=${2:?missing value for --visibility-scout-draw-indices}
+      shift 2
+      ;;
+    --visibility-scout-summary-output)
+      visibility_scout=1
+      visibility_scout_summary_output=${2:?missing value for --visibility-scout-summary-output}
+      shift 2
+      ;;
+    --visibility-scout-summary-csv-output)
+      visibility_scout=1
+      visibility_scout_summary_csv_output=${2:?missing value for --visibility-scout-summary-csv-output}
+      shift 2
+      ;;
+    --visibility-scout-summary-limit)
+      visibility_scout=1
+      visibility_scout_summary_limit=${2:?missing value for --visibility-scout-summary-limit}
+      shift 2
       ;;
     --compare-baseline-output)
       compare_baseline_output=${2:?missing value for --compare-baseline-output}
@@ -1319,6 +1490,10 @@ while (($#)); do
       ;;
     --require-result-json)
       require_result_json=1
+      shift
+      ;;
+    --allow-partial-stable-frame-proof)
+      allow_partial_stable_frame_proof=1
       shift
       ;;
     --require-top-gpu-decrease)
@@ -1668,6 +1843,28 @@ if [[ -z "$dump_depth_attachment_handle" &&
   echo "--dump-depth-attachment-seq/enc/path require --dump-depth-attachment-handle" >&2
   exit 2
 fi
+if [[ -n "$dump_draw_texture_handles" &&
+      ! "$dump_draw_texture_handles" =~ ^[0-9a-fA-FxX,:\;\ ]+$ ]]; then
+  echo "--dump-draw-texture-handles must be a comma/space separated integer handle list" >&2
+  exit 2
+fi
+if [[ -n "$dump_draw_texture_seq" &&
+      ! "$dump_draw_texture_seq" =~ ^[0-9]+$ ]]; then
+  echo "--dump-draw-texture-seq must be a non-negative integer" >&2
+  exit 2
+fi
+if [[ -n "$dump_draw_texture_enc" &&
+      ! "$dump_draw_texture_enc" =~ ^[0-9]+$ ]]; then
+  echo "--dump-draw-texture-enc must be a non-negative integer" >&2
+  exit 2
+fi
+if [[ -z "$dump_draw_texture_handles" &&
+      ( -n "$dump_draw_texture_seq" ||
+        -n "$dump_draw_texture_enc" ||
+        -n "$dump_draw_texture_dir" ) ]]; then
+  echo "--dump-draw-texture-seq/enc/dir require --dump-draw-texture-handles" >&2
+  exit 2
+fi
 
 if (( require_screen_blend_cache_proof )); then
   require_semantic_image_proof=1
@@ -1730,7 +1927,9 @@ if (( require_semantic_image_proof && ! semantic_image_compare_requested )); the
 fi
 
 if (( require_stable_frame_proof )); then
-  require_result_json=1
+  if (( ! allow_partial_stable_frame_proof )); then
+    require_result_json=1
+  fi
   require_top_gpu_decrease=1
   require_top_vs_buffer_write_decrease=1
   require_top_unexplained_buffer_write_decrease=1
@@ -1982,11 +2181,21 @@ shader_dump_dir="$analysis_dir/shaders"
 shader_msl_dump_dir="$shader_dump_dir/msl"
 shader_bytecode_dump_dir="$shader_dump_dir/bytecode"
 geometry_dump_dir="$analysis_dir/geometry"
+visibility_scout_default_path="$analysis_dir/frame${frame}-visibility-scout.csv"
+visibility_scout_summary_default_path="$analysis_dir/frame${frame}-visibility-scout-summary.md"
+visibility_scout_summary_csv_default_path="$analysis_dir/frame${frame}-visibility-scout-summary.csv"
 if [[ -n "$dump_depth_attachment_handle" ]]; then
   if [[ -z "$dump_depth_attachment_path" ]]; then
     dump_depth_attachment_path="$analysis_dir/frame${frame}-depth.bin"
   elif [[ "$dump_depth_attachment_path" != /* ]]; then
     dump_depth_attachment_path="$repo_root/$dump_depth_attachment_path"
+  fi
+fi
+if [[ -n "$dump_draw_texture_handles" ]]; then
+  if [[ -z "$dump_draw_texture_dir" ]]; then
+    dump_draw_texture_dir="$analysis_dir/textures"
+  elif [[ "$dump_draw_texture_dir" != /* ]]; then
+    dump_draw_texture_dir="$repo_root/$dump_draw_texture_dir"
   fi
 fi
 summary_path="$output_dir/3dmark05-perf-summary.md"
@@ -2035,11 +2244,17 @@ if (( encoder_breakdown_enabled )) && [[ -n "$encoder_breakdown_seq" ]]; then
 fi
 
 if (( capture_gputrace )); then
+  if [[ "${DXMT_3DMARK05_SET_MTL_CAPTURE_ENABLED:-0}" != "0" ]]; then
+    env_args+=("MTL_CAPTURE_ENABLED=1")
+  fi
+  metal_capture_destination="${DXMT_3DMARK05_METAL_CAPTURE_DESTINATION:-${DXMT_METAL_CAPTURE_DESTINATION:-}}"
   env_args+=(
-    "MTL_CAPTURE_ENABLED=1"
     "DXMT_METAL_CAPTURE_FRAME=$frame"
     "DXMT_METAL_CAPTURE_PATH=$capture_path"
   )
+  if [[ -n "$metal_capture_destination" ]]; then
+    env_args+=("DXMT_METAL_CAPTURE_DESTINATION=$metal_capture_destination")
+  fi
 fi
 
 if (( aggressive_color_dontcare )); then
@@ -2048,6 +2263,15 @@ fi
 
 if (( trim_unused_varyings )); then
   env_args+=("DXMT9_TRIM_UNUSED_VARYINGS=1")
+  if [[ -n "$trim_unused_varyings_vs_hashes" ]]; then
+    env_args+=("DXMT9_TRIM_UNUSED_VARYINGS_VS_HASHES=$trim_unused_varyings_vs_hashes")
+  fi
+  if [[ -n "$trim_unused_varyings_ps_hashes" ]]; then
+    env_args+=("DXMT9_TRIM_UNUSED_VARYINGS_PS_HASHES=$trim_unused_varyings_ps_hashes")
+  fi
+elif [[ -n "$trim_unused_varyings_vs_hashes$trim_unused_varyings_ps_hashes" ]]; then
+  echo "--trim-unused-varyings-vs-hashes/--trim-unused-varyings-ps-hashes require --trim-unused-varyings" >&2
+  exit 2
 fi
 
 if (( drop_vsout_point_size )); then
@@ -2351,6 +2575,19 @@ if [[ -n "$dump_depth_attachment_handle" ]]; then
   fi
 fi
 
+if [[ -n "$dump_draw_texture_handles" ]]; then
+  env_args+=(
+    "DXMT9_DUMP_DRAW_TEXTURE_HANDLES=$dump_draw_texture_handles"
+    "DXMT9_DUMP_DRAW_TEXTURE_DIR=$dump_draw_texture_dir"
+  )
+  if [[ -n "$dump_draw_texture_seq" ]]; then
+    env_args+=("DXMT9_DUMP_DRAW_TEXTURE_SEQ=$dump_draw_texture_seq")
+  fi
+  if [[ -n "$dump_draw_texture_enc" ]]; then
+    env_args+=("DXMT9_DUMP_DRAW_TEXTURE_ENC=$dump_draw_texture_enc")
+  fi
+fi
+
 if (( aggressive_depth_dontcare )); then
   env_args+=("DXMT9_AGGRESSIVE_DEPTH_DONTCARE=1")
 fi
@@ -2455,8 +2692,58 @@ if [[ -n "$probe_depth_func_always_classes" ]]; then
   env_args+=("DXMT9_PROBE_DEPTH_FUNC_ALWAYS_CLASSES=$probe_depth_func_always_classes")
 fi
 
+if (( probe_fragmentless_depth_only )); then
+  env_args+=("DXMT9_PROBE_FRAGMENTLESS_DEPTH_ONLY=1")
+fi
+
+if [[ -n "$probe_fragmentless_depth_only_row" ]]; then
+  env_args+=("DXMT9_PROBE_FRAGMENTLESS_DEPTH_ONLY_ROW=$probe_fragmentless_depth_only_row")
+fi
+
+if [[ -n "$probe_fragmentless_depth_only_rows" ]]; then
+  env_args+=("DXMT9_PROBE_FRAGMENTLESS_DEPTH_ONLY_ROWS=$probe_fragmentless_depth_only_rows")
+fi
+
+if [[ -n "$probe_fragmentless_depth_only_class" ]]; then
+  env_args+=("DXMT9_PROBE_FRAGMENTLESS_DEPTH_ONLY_CLASS=$probe_fragmentless_depth_only_class")
+fi
+
+if [[ -n "$probe_fragmentless_depth_only_classes" ]]; then
+  env_args+=("DXMT9_PROBE_FRAGMENTLESS_DEPTH_ONLY_CLASSES=$probe_fragmentless_depth_only_classes")
+fi
+
 if (( force_visible )); then
   env_args+=("DXMT_DEBUG_FORCE_VISIBLE=1")
+fi
+
+if (( visibility_scout )); then
+  if [[ -z "$visibility_scout_path" ]]; then
+    visibility_scout_path="$visibility_scout_default_path"
+  elif [[ "$visibility_scout_path" != /* ]]; then
+    visibility_scout_path="$repo_root/$visibility_scout_path"
+  fi
+  if [[ -z "$visibility_scout_summary_output" ]]; then
+    visibility_scout_summary_output="$visibility_scout_summary_default_path"
+  elif [[ "$visibility_scout_summary_output" != /* ]]; then
+    visibility_scout_summary_output="$repo_root/$visibility_scout_summary_output"
+  fi
+  if [[ -z "$visibility_scout_summary_csv_output" ]]; then
+    visibility_scout_summary_csv_output="$visibility_scout_summary_csv_default_path"
+  elif [[ "$visibility_scout_summary_csv_output" != /* ]]; then
+    visibility_scout_summary_csv_output="$repo_root/$visibility_scout_summary_csv_output"
+  fi
+  env_args+=(
+    "DXMT9_VISIBILITY_SCOUT=1"
+    "DXMT9_VISIBILITY_SCOUT_PATH=$visibility_scout_path"
+  )
+fi
+
+if [[ -n "$visibility_scout_row" ]]; then
+  env_args+=("DXMT9_VISIBILITY_SCOUT_ROW=$visibility_scout_row")
+fi
+
+if [[ -n "$visibility_scout_rows" ]]; then
+  env_args+=("DXMT9_VISIBILITY_SCOUT_ROWS=$visibility_scout_rows")
 fi
 
 if (( dump_shaders )); then
@@ -2562,6 +2849,9 @@ if (( capture_gputrace )); then
   fi
   if (( require_result_json )); then
     finalize_cmd+=(--require-result-json)
+  fi
+  if (( allow_partial_stable_frame_proof )); then
+    finalize_cmd+=(--allow-partial-stable-frame-proof)
   fi
   if (( require_top_gpu_decrease )); then
     finalize_cmd+=(--require-top-gpu-decrease)
@@ -2781,8 +3071,19 @@ fi
 if (( dump_indexed_geometry )); then
   echo "geometry_dump_dir: $geometry_dump_dir"
 fi
+if (( visibility_scout )); then
+  echo "visibility_scout_csv: $visibility_scout_path"
+  echo "visibility_scout_summary: $visibility_scout_summary_output"
+  echo "visibility_scout_summary_csv: $visibility_scout_summary_csv_output"
+  if [[ -n "$visibility_scout_draw_indices" ]]; then
+    echo "visibility_scout_draw_indices: $visibility_scout_draw_indices"
+  fi
+fi
 if [[ -n "$dump_depth_attachment_handle" ]]; then
   echo "depth_attachment_dump: $dump_depth_attachment_path"
+fi
+if [[ -n "$dump_draw_texture_handles" ]]; then
+  echo "draw_texture_dump_dir: $dump_draw_texture_dir"
 fi
 printf 'env:'
 printf ' %q' "${env_args[@]}"
@@ -2820,6 +3121,9 @@ if (( probe_disable_depth_write )); then
 fi
 if (( probe_depth_func_always )); then
   echo "warning: --probe-depth-func-always is diagnostic only and can corrupt depth-dependent frame output; use it only to isolate depth-compare backend effects."
+fi
+if (( probe_fragmentless_depth_only )); then
+  echo "warning: --probe-fragmentless-depth-only is diagnostic only; it is scoped to depth-only draws and still needs image/counter equality before any production route."
 fi
 if (( force_expand_indexed )); then
   echo "warning: --force-expand-indexed is diagnostic only; it preserves indexed geometry intent but changes vertex submission/cache behavior and can heavily regress GPU/CPU cost."
@@ -2892,6 +3196,9 @@ fi
 if [[ -n "$dump_depth_attachment_handle" ]]; then
   mkdir -p "$(dirname -- "$dump_depth_attachment_path")"
 fi
+if [[ -n "$dump_draw_texture_handles" ]]; then
+  mkdir -p "$dump_draw_texture_dir"
+fi
 
 run_status=0
 (
@@ -2910,6 +3217,29 @@ python3 "$repo_root/scripts/tools/summarize_index_cache_runtime.py" \
   --run "$suffix=$encoders_csv,$probe_draws_csv" \
   --output "$index_cache_runtime_report" \
   --csv-output "$index_cache_runtime_csv"
+
+if (( visibility_scout )); then
+  if [[ -f "$visibility_scout_path" ]]; then
+    visibility_summary_cmd=(
+      python3 "$repo_root/scripts/tools/summarize_visibility_scout.py"
+      "$visibility_scout_path"
+      --probe-draws "$probe_draws_csv"
+      --output "$visibility_scout_summary_output"
+      --csv-output "$visibility_scout_summary_csv_output"
+      --limit "$visibility_scout_summary_limit"
+      --no-sample-limit "$visibility_scout_summary_limit"
+    )
+    if [[ -n "$visibility_scout_row" ]]; then
+      visibility_summary_cmd+=(--row "$visibility_scout_row")
+    fi
+    if [[ -n "$visibility_scout_draw_indices" ]]; then
+      visibility_summary_cmd+=(--draw-indices "$visibility_scout_draw_indices")
+    fi
+    "${visibility_summary_cmd[@]}"
+  else
+    echo "warning: visibility scout was enabled but no CSV was written: $visibility_scout_path" >&2
+  fi
+fi
 
 if (( capture_gputrace )) && [[ ! -e "$capture_path" ]]; then
   echo "Metal gputrace capture was requested but no capture was written: $capture_path" >&2
@@ -2933,6 +3263,11 @@ echo "wrote stream csv: $stream_csv"
 echo "wrote probe draw csv: $probe_draws_csv"
 echo "wrote index cache runtime report: $index_cache_runtime_report"
 echo "wrote index cache runtime csv: $index_cache_runtime_csv"
+if (( visibility_scout )); then
+  echo "wrote visibility scout csv: $visibility_scout_path"
+  echo "wrote visibility scout summary: $visibility_scout_summary_output"
+  echo "wrote visibility scout summary csv: $visibility_scout_summary_csv_output"
+fi
 if ((${#counter_compare_cmd[@]})); then
   echo "wrote perf counter comparison: $counter_comparison_path"
 fi
@@ -2950,6 +3285,13 @@ if [[ -n "$dump_depth_attachment_handle" ]]; then
     echo "wrote depth attachment dump: $dump_depth_attachment_path"
   else
     echo "warning: requested depth attachment dump was not written: $dump_depth_attachment_path" >&2
+  fi
+fi
+if [[ -n "$dump_draw_texture_handles" ]]; then
+  if find "$dump_draw_texture_dir" -maxdepth 1 -name 'texture-*.json' -print -quit | grep -q .; then
+    echo "wrote draw texture dump dir: $dump_draw_texture_dir"
+  else
+    echo "warning: requested draw texture dumps were not written: $dump_draw_texture_dir" >&2
   fi
 fi
 

@@ -261,6 +261,30 @@ RenderEncoderSelector probeDepthFuncAlwaysRow();
 // Env: DXMT9_PROBE_DEPTH_FUNC_ALWAYS_ROWS.
 RenderEncoderSelectorList probeDepthFuncAlwaysRows();
 
+// Diagnostic backend-shape A/B: for selected depth-only indexed triangle-list
+// draws, request a render PSO with no fragment function. The encoder still
+// applies strict depth/color/alpha/stencil/clip gates before routing.
+// Env: DXMT9_PROBE_FRAGMENTLESS_DEPTH_ONLY.
+bool probeFragmentlessDepthOnly();
+
+// Optional class filter for DXMT9_PROBE_FRAGMENTLESS_DEPTH_ONLY. Accepted
+// values match DXMT9_SPLIT_LARGE_INDEXED_DRAWS_CLASS.
+// Env: DXMT9_PROBE_FRAGMENTLESS_DEPTH_ONLY_CLASS.
+IndexedTriangleClassFilter probeFragmentlessDepthOnlyClassFilter();
+
+// Optional AND class-list filter for DXMT9_PROBE_FRAGMENTLESS_DEPTH_ONLY.
+// Env: DXMT9_PROBE_FRAGMENTLESS_DEPTH_ONLY_CLASSES.
+IndexedTriangleClassFilterList probeFragmentlessDepthOnlyClassFilters();
+
+// Optional selector for DXMT9_PROBE_FRAGMENTLESS_DEPTH_ONLY. Format is
+// "<seq>/<encoder>".
+// Env: DXMT9_PROBE_FRAGMENTLESS_DEPTH_ONLY_ROW.
+RenderEncoderSelector probeFragmentlessDepthOnlyRow();
+
+// Optional selector list for DXMT9_PROBE_FRAGMENTLESS_DEPTH_ONLY.
+// Env: DXMT9_PROBE_FRAGMENTLESS_DEPTH_ONLY_ROWS.
+RenderEncoderSelectorList probeFragmentlessDepthOnlyRows();
+
 // Diagnostic-only: force the Metal cull mode for selected indexed
 // triangle-list draws while preserving the rest of the render state.
 // Env: DXMT9_PROBE_FORCE_CULL_MODE=none|front|back.
@@ -309,6 +333,19 @@ RenderEncoderSelector probeForceExpandIndexedRow();
 // Optional selector list for DXMT9_PROBE_FORCE_EXPAND_INDEXED.
 // Env: DXMT9_PROBE_FORCE_EXPAND_INDEXED_ROWS.
 RenderEncoderSelectorList probeForceExpandIndexedRows();
+
+// Diagnostic-only: stage selected indexed draw stream/IB source buffers through
+// encoder-local transient slabs to reduce Metal buffer-handle churn while
+// preserving draw order and index bytes. Env: DXMT9_PROBE_STAGE_STREAM_IB.
+bool probeStageStreamIb();
+
+// Optional selector for DXMT9_PROBE_STAGE_STREAM_IB. Format is "<seq>/<encoder>".
+// Env: DXMT9_PROBE_STAGE_STREAM_IB_ROW.
+RenderEncoderSelector probeStageStreamIbRow();
+
+// Optional selector list for DXMT9_PROBE_STAGE_STREAM_IB.
+// Env: DXMT9_PROBE_STAGE_STREAM_IB_ROWS.
+RenderEncoderSelectorList probeStageStreamIbRows();
 
 // Disable the compatibility heuristic that auto-expands selected indexed
 // draws. Env: DXMT_DISABLE_AUTO_EXPAND_INDEXED.

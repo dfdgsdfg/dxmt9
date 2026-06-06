@@ -161,8 +161,7 @@ Commercial / 3rd-party titles (require external prefix):
   - `scripts/tools/run_3dmark05_perf_probe.sh` wraps the current GT1 perf probe
     recipe: perf profile, direct 3DMark05 launcher, no auto indexed expansion,
     encoder breakdown, optional `DXMT_METAL_CAPTURE_FRAME/PATH`, trace output
-    under `traces/app-d3d9-3dmark05-<suffix>/`, `MTL_CAPTURE_ENABLED=1` when
-    gputrace capture is enabled, and automatic
+    under `traces/app-d3d9-3dmark05-<suffix>/`, and automatic
     `3dmark05-perf-summary.md` / CSV generation after the run. Use `--dry-run`
     first to verify paths, desktop lock state, free-space guard, and the
     downstream `run_experiment.py --timeout`. Because 3DMark05 can hang on the
@@ -185,6 +184,12 @@ Commercial / 3rd-party titles (require external prefix):
     where joined encoder rows are required. The wrapper requires `2048MiB`
     free by default when gputrace capture is enabled
     (`--min-free-mb N` / `DXMT_3DMARK05_MIN_TRACE_FREE_MB=N` overrides it).
+    It does not set `MTL_CAPTURE_ENABLED=1` by default because that env can
+    black-screen 3DMark05 before draw/present; use
+    `DXMT_3DMARK05_SET_MTL_CAPTURE_ENABLED=1` only for capture-layer
+    experiments, and
+    `DXMT_3DMARK05_METAL_CAPTURE_DESTINATION=developerTools` for attached-Xcode
+    capture-route experiments.
     Gputrace runs refuse lower guards unless
     `DXMT_3DMARK05_ALLOW_LOW_TRACE_FREE_MB=1` is set deliberately; low-space
     captures can still export Xcode counters, but they risk Wine state-save

@@ -99,6 +99,18 @@ void testEligibleFfpPicksTile() {
           "tile decision carries reason=None");
 }
 
+void testClassifierIgnoresRoutingOverride() {
+  auto fixture = makeFfpFixture(FogMode::None, /*alphaTest=*/false);
+  const auto sel =
+      dxmt9::pipeline::classifyTileFfpForPass(fixture.view(), /*supportsApple3=*/true);
+  checkEq(static_cast<int>(sel.decision),
+          static_cast<int>(dxmt9::pipeline::TileFfpDecision::Tile),
+          "classifier reports hypothetical tile eligibility");
+  checkEq(static_cast<int>(sel.reason),
+          static_cast<int>(dxmt9::pipeline::TileFfpFallbackReason::None),
+          "classifier does not apply the default-off routing override");
+}
+
 void testProgrammablePixelShaderIsNotFfp() {
   DrawDesc desc{};
   desc.pixelShader.kind = ShaderRef::Kind::Bytecode;
@@ -279,6 +291,7 @@ int main() {
   try {
     testGpuFamilyFallback();
     testEligibleFfpPicksTile();
+    testClassifierIgnoresRoutingOverride();
     testProgrammablePixelShaderIsNotFfp();
     testTexturedFfpFallsBackToPortableFragmentPath();
     testVertexBlendFfpFallsBackToPortableFragmentPath();

@@ -39,6 +39,23 @@ class Summarize3DMark05PerfTests(unittest.TestCase):
                 "depth_func_always_draws=1 depth_func_other_draws=0 "
                 "scissor_enabled_draws=2 alpha_blend_enabled_draws=1 "
                 "alpha_test_enabled_draws=1 clip_plane_enabled_draws=0 "
+                "tile_ffp_routed_tile_draws=0 "
+                "tile_ffp_routed_tile_primitives=0 "
+                "tile_ffp_routed_tile_vertices=0 "
+                "tile_ffp_routed_portable_draws=4 "
+                "tile_ffp_routed_portable_primitives=4096 "
+                "tile_ffp_routed_portable_vertices=12288 "
+                "tile_ffp_eligible_draws=1 "
+                "tile_ffp_eligible_primitives=1024 "
+                "tile_ffp_eligible_vertices=3072 "
+                "tile_ffp_fallback_gpu_family_draws=0 "
+                "tile_ffp_fallback_gpu_family_primitives=0 "
+                "tile_ffp_fallback_not_ffp_draws=2 "
+                "tile_ffp_fallback_not_ffp_primitives=2048 "
+                "tile_ffp_fallback_precision_draws=0 "
+                "tile_ffp_fallback_precision_primitives=0 "
+                "tile_ffp_fallback_unsupported_state_draws=1 "
+                "tile_ffp_fallback_unsupported_state_primitives=1024 "
                 "stream_metal_binds=5 stream_metal_bind_firsts=1 "
                 "stream_metal_bind_handle_changes=2 "
                 "stream_metal_bind_offset_changes=1 "
@@ -67,6 +84,9 @@ class Summarize3DMark05PerfTests(unittest.TestCase):
                 "probe_scissor_rect_draws=1 "
                 "probe_scissor_rect_area_delta_pixels=256 "
                 "probe_force_texture_white_draws=2 "
+                "probe_fragmentless_depth_only_draws=3 "
+                "probe_fragmentless_depth_only_primitives=4096 "
+                "probe_fragmentless_depth_only_vertices=12288 "
                 "transient_index_optimized_order_bytes=1234]\n"
                 "[dxmt9-perf-encoder-stream seq=7 encoder=3 stream=0 "
                 "samples=4 metal_binds=5 metal_bind_firsts=1 "
@@ -95,6 +115,7 @@ class Summarize3DMark05PerfTests(unittest.TestCase):
                 "effective_index_source=cached-reordered-hit "
                 "effective_index_offset=0 effective_index_bytes=1234 "
                 "stream0_handle=0xabc stream0_offset=64 stream0_stride=24 "
+                "stream_extra_bindings=s1:0xbeef@128/32;s2:0xcafe@0/16 "
                 "pso=0x111 shader_variant=0x222 vs=0x333 ps=0x444 "
                 "vs_constants_hash=0x555 ps_constants_hash=0x666 "
                 "uniform_payload_hash=0x777 "
@@ -118,6 +139,15 @@ class Summarize3DMark05PerfTests(unittest.TestCase):
             self.assertEqual(encoder["depth_func_lessequal_draws"], 2)
             self.assertEqual(encoder["scissor_enabled_draws"], 2)
             self.assertEqual(encoder["alpha_blend_enabled_draws"], 1)
+            self.assertEqual(encoder["tile_ffp_routed_tile_draws"], 0)
+            self.assertEqual(encoder["tile_ffp_routed_portable_draws"], 4)
+            self.assertEqual(encoder["tile_ffp_routed_portable_primitives"], 4096)
+            self.assertEqual(encoder["tile_ffp_eligible_draws"], 1)
+            self.assertEqual(encoder["tile_ffp_eligible_primitives"], 1024)
+            self.assertEqual(encoder["tile_ffp_fallback_not_ffp_draws"], 2)
+            self.assertEqual(encoder["tile_ffp_fallback_not_ffp_primitives"], 2048)
+            self.assertEqual(encoder["tile_ffp_fallback_unsupported_state_draws"], 1)
+            self.assertEqual(encoder["tile_ffp_fallback_unsupported_state_primitives"], 1024)
             self.assertEqual(encoder["stream_metal_bind_firsts"], 1)
             self.assertEqual(encoder["stream_metal_bind_handle_changes"], 2)
             self.assertEqual(encoder["stream_metal_bind_offset_changes"], 1)
@@ -157,6 +187,9 @@ class Summarize3DMark05PerfTests(unittest.TestCase):
             self.assertEqual(encoder["probe_scissor_rect_draws"], 1)
             self.assertEqual(encoder["probe_scissor_rect_area_delta_pixels"], 256)
             self.assertEqual(encoder["probe_force_texture_white_draws"], 2)
+            self.assertEqual(encoder["probe_fragmentless_depth_only_draws"], 3)
+            self.assertEqual(encoder["probe_fragmentless_depth_only_primitives"], 4096)
+            self.assertEqual(encoder["probe_fragmentless_depth_only_vertices"], 12288)
             self.assertEqual(encoder["transient_index_optimized_order_bytes"], 1234)
             self.assertEqual(encoder["pso_state_samples_per_draw"], 2.0)
 
@@ -190,6 +223,8 @@ class Summarize3DMark05PerfTests(unittest.TestCase):
             self.assertEqual(probe_draw["effective_index_offset"], 0)
             self.assertEqual(probe_draw["effective_index_bytes"], 1234)
             self.assertEqual(probe_draw["stream0_handle"], "0xabc")
+            self.assertEqual(probe_draw["stream_extra_bindings"],
+                             "s1:0xbeef@128/32;s2:0xcafe@0/16")
             self.assertEqual(probe_draw["vs_constants_hash"], "0x555")
             self.assertEqual(probe_draw["ps_constants_hash"], "0x666")
             self.assertEqual(probe_draw["uniform_payload_hash"], "0x777")
@@ -209,6 +244,10 @@ class Summarize3DMark05PerfTests(unittest.TestCase):
             self.assertEqual(row["depth_enabled_draws"], "4")
             self.assertEqual(row["depth_write_draws"], "3")
             self.assertEqual(row["scissor_enabled_draws"], "2")
+            self.assertEqual(row["tile_ffp_routed_portable_draws"], "4")
+            self.assertEqual(row["tile_ffp_eligible_draws"], "1")
+            self.assertEqual(row["tile_ffp_fallback_not_ffp_draws"], "2")
+            self.assertEqual(row["tile_ffp_fallback_unsupported_state_draws"], "1")
             self.assertEqual(row["stream_metal_bind_handle_changes"], "2")
             self.assertEqual(row["stream_unique_bytes"], "65536")
             self.assertEqual(row["stream_handle_changes"], "2")
@@ -228,6 +267,9 @@ class Summarize3DMark05PerfTests(unittest.TestCase):
             self.assertEqual(row["indexed_order_optimized_draws"], "1")
             self.assertEqual(row["probe_scissor_rect_draws"], "1")
             self.assertEqual(row["probe_force_texture_white_draws"], "2")
+            self.assertEqual(row["probe_fragmentless_depth_only_draws"], "3")
+            self.assertEqual(row["probe_fragmentless_depth_only_primitives"], "4096")
+            self.assertEqual(row["probe_fragmentless_depth_only_vertices"], "12288")
             self.assertEqual(row["transient_index_optimized_order_bytes"], "1234")
 
             with stream_csv.open(newline="", encoding="utf-8") as handle:
@@ -252,6 +294,8 @@ class Summarize3DMark05PerfTests(unittest.TestCase):
             self.assertEqual(probe_row["effective_index_source"], "cached-reordered-hit")
             self.assertEqual(probe_row["effective_index_offset"], "0")
             self.assertEqual(probe_row["effective_index_bytes"], "1234")
+            self.assertEqual(probe_row["stream_extra_bindings"],
+                             "s1:0xbeef@128/32;s2:0xcafe@0/16")
             self.assertEqual(probe_row["pso"], "0x111")
             self.assertEqual(probe_row["vs_constants_hash"], "0x555")
             self.assertEqual(probe_row["ps_constants_hash"], "0x666")

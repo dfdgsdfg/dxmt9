@@ -250,15 +250,24 @@ Metal frame capture on a target frame number, writing the result to a
 `.gputrace` file you can open in Xcode.
 
 ```sh
-export MTL_CAPTURE_ENABLED=1                 # required for MTLCaptureManager file capture
 export DXMT_METAL_CAPTURE_FRAME=120          # capture the 120th present
 export DXMT_METAL_CAPTURE_PATH=traces/app-d3d9-3dmark05-20260531-gt1/frame120.gputrace
 ./your-app
 # → traces/app-d3d9-3dmark05-20260531-gt1/frame120.gputrace, openable from Xcode
 ```
 
-If the log says `Capture layer is not inserted`, the process was launched
-without `MTL_CAPTURE_ENABLED=1`; rerun the capture with that variable set.
+For 3DMark05 perf probes, do **not** set `MTL_CAPTURE_ENABLED=1` by default.
+It has reproduced black-screen startup with draw/present counters at zero.
+The standard wrapper therefore relies on dxmt9's own
+`DXMT_METAL_CAPTURE_FRAME/PATH` trigger and only adds Apple's capture-layer
+env when `DXMT_3DMARK05_SET_MTL_CAPTURE_ENABLED=1` is deliberately set.
+Apple's file `.gputrace` destination still requires the process capture layer
+(`MetalCaptureEnabled` Info.plist key or macOS 14+ `MTL_CAPTURE_ENABLED=1`), so
+without that layer the expected failure is `Capture layer is not inserted`.
+If that path reaches normal rendering but fails with `Capture layer is not
+inserted`, attach Xcode and rerun with
+`DXMT_3DMARK05_METAL_CAPTURE_DESTINATION=developerTools` to route the capture
+to Xcode instead of the file `.gputrace` destination.
 
 Trigger sites: `dxmt9_command_queue.cpp:1083` (request) and
 `dxmt9_queue.cpp:1083-1095` (start/stop around `commit()`).

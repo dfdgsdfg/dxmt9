@@ -819,6 +819,34 @@ void testSamplerLodBiasVariantBit() {
   checkEq(SAMP_MIPMAP_LOD_BIAS, 8u, "D3DSAMP_MIPMAPLODBIAS sampler-state code");
 }
 
+void testFragmentlessDepthOnlyVariantBit() {
+  DrawDesc desc{};
+  desc.vertexShader.hash = 0x5100u;
+  desc.pixelShader.hash = 0x5200u;
+
+  const auto normal = makeVariantKey(makeFlatDrawFixture(desc));
+  auto fragmentless = normal;
+  fragmentless.fragmentlessDepthOnly = true;
+
+  check(!(fragmentless == normal), "fragmentless depth-only bit changes the PSO key");
+  check(dxmt9::pipeline::ShaderVariantKeyHash{}(fragmentless) !=
+            dxmt9::pipeline::ShaderVariantKeyHash{}(normal),
+        "fragmentless depth-only bit changes the PSO key hash");
+  check(dxmt9::pipeline::makeShaderVariantProbeKey(fragmentless) !=
+            dxmt9::pipeline::makeShaderVariantProbeKey(normal),
+        "probe key preserves fragmentless depth-only routing");
+
+  auto context = dxmt9::drawshader::makeShaderSourceContext(desc);
+  context.fragmentlessDepthOnly = true;
+  const auto contained =
+      dxmt9::pipeline::detail::makeContainedDrawShaderSources(context, fragmentless.hash);
+  check(contained.has_value(), "fragmentless depth-only source generation succeeds");
+  check(!contained->vertex.empty(), "fragmentless depth-only still emits a vertex source");
+  check(contained->fragment.empty(), "fragmentless depth-only omits fragment source");
+  check(contained->vertexHash != 0u, "fragmentless depth-only keeps vertex source identity");
+  checkEq(contained->fragmentHash, 0u, "fragmentless depth-only uses zero fragment hash");
+}
+
 void testSrgbCompatiblePixelFormatConversion() {
   BackendLimits limits{};
 
@@ -895,6 +923,7 @@ int main() {
     testPipelineHelpersUseExplicitFlatInputs();
     testAlphaToCoverageRenderStateHack();
     testSamplerLodBiasVariantBit();
+    testFragmentlessDepthOnlyVariantBit();
     testSrgbCompatiblePixelFormatConversion();
     testUnsupportedDrawTranslatorFailureReturnsEmptyPipelineFuture();
   } catch (const TestFailure& failure) {

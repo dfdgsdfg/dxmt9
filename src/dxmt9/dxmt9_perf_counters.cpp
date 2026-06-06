@@ -4601,6 +4601,23 @@ void emitEncoderBreakdown(const EncoderBreakdown& b) {
       "clip_plane_enabled_draws=%llu "
       "point_draws=%llu line_draws=%llu triangle_draws=%llu primitive_count=%llu "
       "triangle_estimate=%llu vertex_count=%llu "
+      "tile_ffp_routed_tile_draws=%llu "
+      "tile_ffp_routed_tile_primitives=%llu "
+      "tile_ffp_routed_tile_vertices=%llu "
+      "tile_ffp_routed_portable_draws=%llu "
+      "tile_ffp_routed_portable_primitives=%llu "
+      "tile_ffp_routed_portable_vertices=%llu "
+      "tile_ffp_eligible_draws=%llu "
+      "tile_ffp_eligible_primitives=%llu "
+      "tile_ffp_eligible_vertices=%llu "
+      "tile_ffp_fallback_gpu_family_draws=%llu "
+      "tile_ffp_fallback_gpu_family_primitives=%llu "
+      "tile_ffp_fallback_not_ffp_draws=%llu "
+      "tile_ffp_fallback_not_ffp_primitives=%llu "
+      "tile_ffp_fallback_precision_draws=%llu "
+      "tile_ffp_fallback_precision_primitives=%llu "
+      "tile_ffp_fallback_unsupported_state_draws=%llu "
+      "tile_ffp_fallback_unsupported_state_primitives=%llu "
       "indexed_triangle_opaque_depth_write_draws=%llu "
       "indexed_triangle_opaque_depth_write_primitives=%llu "
       "indexed_triangle_opaque_depth_write_vertices=%llu "
@@ -4693,6 +4710,9 @@ void emitEncoderBreakdown(const EncoderBreakdown& b) {
       "probe_disable_depth_write_draws=%llu "
       "probe_depth_func_always_draws=%llu "
       "probe_force_texture_white_draws=%llu "
+      "probe_fragmentless_depth_only_draws=%llu "
+      "probe_fragmentless_depth_only_primitives=%llu "
+      "probe_fragmentless_depth_only_vertices=%llu "
       "indexed_vertex_reuse_samples=%llu "
       "indexed_vertex_reuse_skipped=%llu "
       "indexed_vertex_reference_count=%llu "
@@ -4787,12 +4807,14 @@ void emitEncoderBreakdown(const EncoderBreakdown& b) {
       "transient_vertex_decl_fallback_bytes=%llu "
       "transient_vertex_expanded_main_bytes=%llu "
       "transient_vertex_expanded_extra_bytes=%llu "
+      "transient_vertex_staged_stream_bytes=%llu "
       "transient_index_bytes=%llu "
       "transient_index_user_bytes=%llu "
       "transient_index_preupload_bytes=%llu "
       "transient_index_shadow_fallback_bytes=%llu "
       "transient_index_probe_reorder_bytes=%llu "
-      "transient_index_optimized_order_bytes=%llu]\n",
+      "transient_index_optimized_order_bytes=%llu "
+      "transient_index_staged_ib_bytes=%llu]\n",
       static_cast<unsigned long long>(b.seqId),
       static_cast<unsigned long long>(b.encoderIndex),
       static_cast<unsigned long long>(b.rtHandle),
@@ -4850,6 +4872,23 @@ void emitEncoderBreakdown(const EncoderBreakdown& b) {
       static_cast<unsigned long long>(b.primitiveCount),
       static_cast<unsigned long long>(b.triangleEstimate),
       static_cast<unsigned long long>(b.vertexCount),
+      static_cast<unsigned long long>(b.tileFfpRoutedTileDraws),
+      static_cast<unsigned long long>(b.tileFfpRoutedTilePrimitives),
+      static_cast<unsigned long long>(b.tileFfpRoutedTileVertices),
+      static_cast<unsigned long long>(b.tileFfpRoutedPortableDraws),
+      static_cast<unsigned long long>(b.tileFfpRoutedPortablePrimitives),
+      static_cast<unsigned long long>(b.tileFfpRoutedPortableVertices),
+      static_cast<unsigned long long>(b.tileFfpEligibleDraws),
+      static_cast<unsigned long long>(b.tileFfpEligiblePrimitives),
+      static_cast<unsigned long long>(b.tileFfpEligibleVertices),
+      static_cast<unsigned long long>(b.tileFfpFallbackGpuFamilyDraws),
+      static_cast<unsigned long long>(b.tileFfpFallbackGpuFamilyPrimitives),
+      static_cast<unsigned long long>(b.tileFfpFallbackNotFfpDraws),
+      static_cast<unsigned long long>(b.tileFfpFallbackNotFfpPrimitives),
+      static_cast<unsigned long long>(b.tileFfpFallbackPrecisionDraws),
+      static_cast<unsigned long long>(b.tileFfpFallbackPrecisionPrimitives),
+      static_cast<unsigned long long>(b.tileFfpFallbackUnsupportedStateDraws),
+      static_cast<unsigned long long>(b.tileFfpFallbackUnsupportedStatePrimitives),
       static_cast<unsigned long long>(b.indexedTriangleOpaqueDepthWriteDraws),
       static_cast<unsigned long long>(b.indexedTriangleOpaqueDepthWritePrimitives),
       static_cast<unsigned long long>(b.indexedTriangleOpaqueDepthWriteVertices),
@@ -4945,6 +4984,9 @@ void emitEncoderBreakdown(const EncoderBreakdown& b) {
       static_cast<unsigned long long>(b.probeDisableDepthWriteDraws),
       static_cast<unsigned long long>(b.probeDepthFuncAlwaysDraws),
       static_cast<unsigned long long>(b.probeForceTextureWhiteDraws),
+      static_cast<unsigned long long>(b.probeFragmentlessDepthOnlyDraws),
+      static_cast<unsigned long long>(b.probeFragmentlessDepthOnlyPrimitives),
+      static_cast<unsigned long long>(b.probeFragmentlessDepthOnlyVertices),
       static_cast<unsigned long long>(b.indexedVertexReuseSamples),
       static_cast<unsigned long long>(b.indexedVertexReuseSkipped),
       static_cast<unsigned long long>(b.indexedVertexReferenceCount),
@@ -5066,12 +5108,14 @@ void emitEncoderBreakdown(const EncoderBreakdown& b) {
       static_cast<unsigned long long>(b.transientVertexDeclFallbackBytes),
       static_cast<unsigned long long>(b.transientVertexExpandedMainBytes),
       static_cast<unsigned long long>(b.transientVertexExpandedExtraBytes),
+      static_cast<unsigned long long>(b.transientVertexStagedStreamBytes),
       static_cast<unsigned long long>(b.transientIndexBytes),
       static_cast<unsigned long long>(b.transientIndexUserBytes),
       static_cast<unsigned long long>(b.transientIndexPreuploadBytes),
       static_cast<unsigned long long>(b.transientIndexShadowFallbackBytes),
       static_cast<unsigned long long>(b.transientIndexProbeReorderBytes),
-      static_cast<unsigned long long>(b.transientIndexOptimizedOrderBytes));
+      static_cast<unsigned long long>(b.transientIndexOptimizedOrderBytes),
+      static_cast<unsigned long long>(b.transientIndexStagedIbBytes));
   for (std::size_t i = 0; i < b.streams.size(); ++i) {
     const auto& s = b.streams[i];
     if (!s.valid) {

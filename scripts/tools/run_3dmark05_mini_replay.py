@@ -563,13 +563,122 @@ def depth_bytes_per_pixel(format_value: int) -> int:
     return 4
 
 
+def metal_pixel_format_name(value: int) -> str:
+    names = {
+        10: "MTLPixelFormatR8Unorm",
+        11: "MTLPixelFormatR8Unorm_sRGB",
+        20: "MTLPixelFormatR16Unorm",
+        55: "MTLPixelFormatR32Float",
+        80: "MTLPixelFormatBGRA8Unorm",
+        81: "MTLPixelFormatBGRA8Unorm_sRGB",
+        130: "MTLPixelFormatBC1_RGBA",
+        131: "MTLPixelFormatBC1_RGBA_sRGB",
+        134: "MTLPixelFormatBC3_RGBA",
+        135: "MTLPixelFormatBC3_RGBA_sRGB",
+    }
+    return names.get(value, "MTLPixelFormatInvalid")
+
+
+def metal_texture_type_name(value: int) -> str:
+    if value == 1:
+        return "MTLTextureTypeCube"
+    if value == 2:
+        return "MTLTextureType3D"
+    return "MTLTextureType2D"
+
+
+def normalize_texture_handle(value: Any) -> str:
+    text = str(value)
+    try:
+        return f"0x{int(text, 0):x}"
+    except ValueError:
+        return text.lower()
+
+
+def load_texture_sidecars(texture_input_dir: Path | None) -> tuple[list[dict[str, Any]], dict[tuple[str, bool], int]]:
+    if texture_input_dir is None:
+        return [], {}
+    directory = resolve_path(str(texture_input_dir))
+    if not directory.exists():
+        raise SystemExit(f"missing texture input dir: {directory}")
+    entries: list[dict[str, Any]] = []
+    by_key: dict[tuple[str, bool], int] = {}
+    for path in sorted(directory.glob("texture-*.json")):
+        data = json.loads(path.read_text(encoding="utf-8"))
+        pixel_format = metal_pixel_format_name(int(data.get("shaderMetalPixelFormat", 0)))
+        texture_type = metal_texture_type_name(int(data.get("type", 0)))
+        if pixel_format == "MTLPixelFormatInvalid":
+            continue
+        subresources = []
+        for subresource in data.get("subresources", []):
+            sub_path = path.parent / str(subresource.get("path", ""))
+            if not sub_path.exists():
+                raise SystemExit(f"missing texture subresource: {sub_path}")
+            byte_count = int(subresource.get("byteCount", 0))
+            if sub_path.stat().st_size != byte_count:
+                raise SystemExit(
+                    f"texture subresource size mismatch: {sub_path} "
+                    f"has {sub_path.stat().st_size}, expected {byte_count}"
+                )
+            subresources.append({
+                "level": int(subresource.get("level", 0)),
+                "slice": int(subresource.get("slice", 0)),
+                "width": int(subresource.get("width", 1)),
+                "height": int(subresource.get("height", 1)),
+                "depth": int(subresource.get("depth", 1)),
+                "rowBytes": int(subresource.get("rowBytes", 0)),
+                "bytesPerImage": int(subresource.get("bytesPerImage", 0)),
+                "byteCount": byte_count,
+                "path": str(sub_path),
+            })
+        if not subresources:
+            continue
+        entry = {
+            "handle": normalize_texture_handle(data.get("handle", "")),
+            "srgb": bool(int(data.get("srgb", 0))),
+            "format": int(data.get("format", 0)),
+            "formatName": str(data.get("formatName", "")),
+            "pixelFormat": pixel_format,
+            "textureType": texture_type,
+            "width": int(data.get("width", 1)),
+            "height": int(data.get("height", 1)),
+            "depth": int(data.get("depth", 1)),
+            "levels": int(data.get("levels", 1)),
+            "source": str(path),
+            "subresources": subresources,
+        }
+        index = len(entries)
+        entries.append(entry)
+        by_key[(entry["handle"], entry["srgb"])] = index
+    return entries, by_key
+
+
+def draw_fragment_texture_indices(draw: dict[str, Any],
+                                  texture_sidecar_by_key: dict[tuple[str, bool], int]) -> list[int]:
+    indices = [-1] * 16
+    if not texture_sidecar_by_key:
+        return indices
+    for texture in draw.get("textures", []):
+        stage = int(texture.get("stage", -1))
+        if stage < 0 or stage >= len(indices):
+            continue
+        handle = normalize_texture_handle(texture.get("handle", "0"))
+        want_srgb = bool(int(texture.get("srgb", texture.get("sampler_srgb", 0))))
+        exact = texture_sidecar_by_key.get((handle, want_srgb))
+        alternate = texture_sidecar_by_key.get((handle, not want_srgb))
+        indices[stage] = exact if exact is not None else (alternate if alternate is not None else -1)
+    return indices
+
+
 def render_source(draws: list[dict[str, Any]],
                   shader_variants: list[dict[str, Any]],
                   dummy_vertex_buffer_slots: list[int],
                   width: int,
                   height: int,
                   depth_clear: float,
-                  depth_input: Path | None) -> str:
+                  depth_input: Path | None,
+                  texture_sidecars: list[dict[str, Any]],
+                  texture_sidecar_by_key: dict[tuple[str, bool], int]) -> str:
     first_state = draws[0]["state"]
     alpha_blend = int(first_state.get("alpha_blend", 0))
     src_blend = int(first_state.get("src_blend", 2))
@@ -612,6 +721,10 @@ def render_source(draws: list[dict[str, Any]],
         state = draw["state"]
         extra_stream_paths = ['""'] * 16
         extra_stream_slots = ["0"] * 16
+        fragment_texture_indices = [
+            str(index)
+            for index in draw_fragment_texture_indices(draw, texture_sidecar_by_key)
+        ]
         for stream in geometry.get("streams", []):
             stream_index = int(stream.get("stream", 0))
             if stream_index <= 0 or stream_index >= 16:
@@ -632,6 +745,7 @@ def render_source(draws: list[dict[str, Any]],
                 cxx_string(optional_payload_path(uniforms, "ffpps")),
                 "{" + ", ".join(extra_stream_paths) + "}",
                 "{" + ", ".join(extra_stream_slots) + "}",
+                "{" + ", ".join(fragment_texture_indices) + "}",
                 str(int(draw.get("_shader_variant", 0))),
                 str(int(state.get("index_count", 0))),
                 str(int(state.get("base_vertex", 0))),
@@ -659,18 +773,79 @@ def render_source(draws: list[dict[str, Any]],
         + "}"
         for variant in shader_variants
     )
+    texture_subresource_entries: list[str] = []
+    texture_entries: list[str] = []
+    texture_subresource_offset = 0
+    for texture in texture_sidecars:
+        subresources = texture["subresources"]
+        texture_entries.append(
+            "  {"
+            + ", ".join([
+                cxx_string(str(texture["handle"])),
+                str(int(texture["format"])),
+                cxx_string(str(texture["formatName"])),
+                str(texture["pixelFormat"]),
+                str(texture["textureType"]),
+                str(int(texture["width"])),
+                str(int(texture["height"])),
+                str(int(texture["depth"])),
+                str(int(texture["levels"])),
+                str(texture_subresource_offset),
+                str(len(subresources)),
+            ])
+            + "}"
+        )
+        for subresource in subresources:
+            texture_subresource_entries.append(
+                "  {"
+                + ", ".join([
+                    cxx_string(str(subresource["path"])),
+                    str(int(subresource["level"])),
+                    str(int(subresource["slice"])),
+                    str(int(subresource["width"])),
+                    str(int(subresource["height"])),
+                    str(int(subresource["depth"])),
+                    str(int(subresource["rowBytes"])),
+                    str(int(subresource["bytesPerImage"])),
+                    str(int(subresource["byteCount"])),
+                ])
+                + "}"
+            )
+        texture_subresource_offset += len(subresources)
+    texture_entry_array = ",\n".join(texture_entries)
+    texture_subresource_array = ",\n".join(texture_subresource_entries)
+    texture_input_count = len(texture_sidecars)
+    texture_entry_array_for_source = texture_entry_array or (
+        '  {"", 0, "", MTLPixelFormatInvalid, MTLTextureType2D, 1, 1, 1, 1, 0, 0}'
+    )
+    texture_subresource_array_for_source = texture_subresource_array or (
+        '  {"", 0, 0, 0, 0, 0, 0, 0, 0}'
+    )
     dummy_vertex_buffer_binds = "\n".join(
         f"    [encoder setVertexBuffer:dummyVertexStream offset:0 atIndex:{slot}];"
         for slot in dummy_vertex_buffer_slots
     )
-    fragment_texture_binds = "\n".join(
-        f"    [encoder setFragmentTexture:whiteTexture atIndex:{slot}];"
-        for slot in sorted({
-            slot
-            for variant in shader_variants
-            for slot in variant.get("fs_bindings", {}).get("texture", [])
-        })
-    )
+    fragment_texture_slots = sorted({
+        slot
+        for variant in shader_variants
+        for slot in variant.get("fs_bindings", {}).get("texture", [])
+    })
+    if texture_sidecars:
+        fragment_texture_binds = ""
+        per_draw_fragment_texture_binds = "\n".join(
+            f"""        {{
+          int textureIndex = draw.fragmentTextures[{slot}];
+          [encoder setFragmentTexture:(textureIndex >= 0 ? textureInputs[textureIndex] : whiteTexture)
+                              atIndex:{slot}];
+        }}"""
+            for slot in fragment_texture_slots
+        )
+    else:
+        fragment_texture_binds = "\n".join(
+            f"    [encoder setFragmentTexture:whiteTexture atIndex:{slot}];"
+            for slot in fragment_texture_slots
+        )
+        per_draw_fragment_texture_binds = ""
     fragment_sampler_binds = "\n".join(
         f"    [encoder setFragmentSamplerState:sampler atIndex:{slot}];"
         for slot in sorted({
@@ -720,6 +895,32 @@ struct ShaderEntry {{
   unsigned ffpPsSlot;
 }};
 
+struct TextureSubresourceEntry {{
+  const char* path;
+  unsigned level;
+  unsigned slice;
+  unsigned width;
+  unsigned height;
+  unsigned depth;
+  unsigned rowBytes;
+  unsigned long long bytesPerImage;
+  unsigned long long byteCount;
+}};
+
+struct TextureEntry {{
+  const char* handle;
+  unsigned format;
+  const char* formatName;
+  MTLPixelFormat pixelFormat;
+  MTLTextureType textureType;
+  unsigned width;
+  unsigned height;
+  unsigned depth;
+  unsigned levels;
+  unsigned subresourceStart;
+  unsigned subresourceCount;
+}};
+
 struct DrawEntry {{
   const char* indexPath;
   const char* streamPath;
@@ -729,6 +930,7 @@ struct DrawEntry {{
   const char* ffpPsPath;
   const char* extraStreamPaths[16];
   unsigned extraStreamSlots[16];
+  int fragmentTextures[16];
   unsigned shaderIndex;
   unsigned indexCount;
   int baseVertex;
@@ -822,6 +1024,102 @@ static id<MTLBuffer> bufferFromFileOrDefault(id<MTLDevice> device,
   return [device newBufferWithBytes:[data bytes]
                               length:[data length]
                              options:MTLResourceStorageModeShared];
+}}
+
+static MTLTextureSwizzleChannels shaderReadSwizzle(unsigned format) {{
+  switch (format) {{
+    case 2:   // X8R8G8B8
+    case 4:   // X8B8G8R8
+      return MTLTextureSwizzleChannelsMake(
+          MTLTextureSwizzleRed, MTLTextureSwizzleGreen,
+          MTLTextureSwizzleBlue, MTLTextureSwizzleOne);
+    case 16:  // R32F
+      return MTLTextureSwizzleChannelsMake(
+          MTLTextureSwizzleRed, MTLTextureSwizzleOne,
+          MTLTextureSwizzleOne, MTLTextureSwizzleOne);
+    case 22:  // L8
+    case 23:  // L16
+      return MTLTextureSwizzleChannelsMake(
+          MTLTextureSwizzleRed, MTLTextureSwizzleRed,
+          MTLTextureSwizzleRed, MTLTextureSwizzleOne);
+    default:
+      return MTLTextureSwizzleChannelsDefault;
+  }}
+}}
+
+static id<MTLTexture> makeTextureInput(id<MTLDevice> device,
+                                       const TextureEntry& entry) {{
+  MTLTextureDescriptor* desc = [MTLTextureDescriptor new];
+  desc.textureType = entry.textureType;
+  desc.pixelFormat = entry.pixelFormat;
+  desc.width = entry.width;
+  desc.height = entry.height;
+  desc.depth = entry.textureType == MTLTextureType3D ? entry.depth : 1;
+  desc.mipmapLevelCount = std::max(1u, entry.levels);
+  desc.arrayLength = 1;
+  desc.sampleCount = 1;
+  desc.storageMode = MTLStorageModePrivate;
+  desc.usage = MTLTextureUsageShaderRead;
+  desc.swizzle = shaderReadSwizzle(entry.format);
+  id<MTLTexture> texture = [device newTextureWithDescriptor:desc];
+  if (!texture) {{
+    std::cerr << "failed to create texture input " << entry.handle
+              << " format=" << entry.formatName << "\\n";
+  }}
+  return texture;
+}}
+
+static bool uploadTextureInputs(id<MTLDevice> device,
+                                id<MTLCommandQueue> queue,
+                                std::vector<id<MTLTexture>>& textureInputs,
+                                const TextureEntry* textureEntries,
+                                unsigned textureCount,
+                                const TextureSubresourceEntry* subresources) {{
+  if (textureCount == 0) {{
+    return true;
+  }}
+  id<MTLCommandBuffer> uploadCommandBuffer = [queue commandBuffer];
+  id<MTLBlitCommandEncoder> blit = [uploadCommandBuffer blitCommandEncoder];
+  if (!blit) {{
+    std::cerr << "failed to create texture upload blit encoder\\n";
+    return false;
+  }}
+  for (unsigned i = 0; i < textureCount; ++i) {{
+    const TextureEntry& entry = textureEntries[i];
+    textureInputs[i] = makeTextureInput(device, entry);
+    if (!textureInputs[i]) {{
+      return false;
+    }}
+    for (unsigned s = 0; s < entry.subresourceCount; ++s) {{
+      const TextureSubresourceEntry& sub = subresources[entry.subresourceStart + s];
+      NSData* data = readData(sub.path);
+      if (!data || [data length] < sub.byteCount) {{
+        std::cerr << "failed to read texture input " << sub.path << "\\n";
+        return false;
+      }}
+      id<MTLBuffer> upload =
+          [device newBufferWithBytes:[data bytes]
+                              length:sub.byteCount
+                             options:MTLResourceStorageModeShared];
+      [blit copyFromBuffer:upload
+              sourceOffset:0
+         sourceBytesPerRow:sub.rowBytes
+       sourceBytesPerImage:sub.bytesPerImage
+                sourceSize:MTLSizeMake(sub.width, sub.height, sub.depth)
+                 toTexture:textureInputs[i]
+          destinationSlice:entry.textureType == MTLTextureType3D ? 0 : sub.slice
+          destinationLevel:sub.level
+         destinationOrigin:MTLOriginMake(0, 0, 0)];
+    }}
+  }}
+  [blit endEncoding];
+  [uploadCommandBuffer commit];
+  [uploadCommandBuffer waitUntilCompleted];
+  if ([uploadCommandBuffer status] == MTLCommandBufferStatusError) {{
+    std::cerr << "texture upload command buffer failed\\n";
+    return false;
+  }}
+  return true;
 }}
 
 static void initVsConsts(id<MTLBuffer> buffer) {{
@@ -929,6 +1227,19 @@ int main() {{
 {shader_entries}
     }};
     const unsigned shaderCount = sizeof(shaders) / sizeof(shaders[0]);
+    TextureSubresourceEntry textureSubresources[] = {{
+{texture_subresource_array_for_source}
+    }};
+    TextureEntry textureEntries[] = {{
+{texture_entry_array_for_source}
+    }};
+    const unsigned textureInputCount = {texture_input_count};
+    std::vector<id<MTLTexture>> textureInputs(textureInputCount);
+    if (!uploadTextureInputs(device, queue, textureInputs,
+                             textureEntries, textureInputCount,
+                             textureSubresources)) {{
+      return 2;
+    }}
     std::vector<id<MTLRenderPipelineState>> psos(shaderCount);
     std::vector<id<MTLLibrary>> vsLibs(shaderCount);
     std::vector<id<MTLLibrary>> fsLibs(shaderCount);
@@ -1107,6 +1418,7 @@ int main() {{
         DrawVolatile dv = {{draw.baseVertex, draw.streamOffset, draw.streamStride, 0}};
         [encoder setScissorRect:scissorRect(draw, {pass_width}, {pass_height})];
         [encoder setRenderPipelineState:psos[draw.shaderIndex]];
+{per_draw_fragment_texture_binds}
         [encoder setVertexBuffer:drawVsConsts offset:0 atIndex:shader.vsConstsSlot];
         [encoder setVertexBuffer:drawFfpVs offset:0 atIndex:shader.ffpVsSlot];
         [encoder setFragmentBuffer:drawPsConsts offset:0 atIndex:shader.psConstsSlot];
@@ -1173,6 +1485,7 @@ def prepare(args: argparse.Namespace) -> dict[str, Any]:
     depth_input = resolve_path(str(args.depth_input)) if args.depth_input else None
     if depth_input and not depth_input.exists():
         raise FileNotFoundError(depth_input)
+    texture_sidecars, texture_sidecar_by_key = load_texture_sidecars(args.texture_input_dir)
     replay_draws = materialize_replay_draws(
         draws,
         args.output_dir,
@@ -1257,6 +1570,8 @@ def prepare(args: argparse.Namespace) -> dict[str, Any]:
             args.height,
             args.depth_clear,
             depth_input,
+            texture_sidecars,
+            texture_sidecar_by_key,
         ),
         encoding="utf-8",
     )
@@ -1276,6 +1591,20 @@ def prepare(args: argparse.Namespace) -> dict[str, Any]:
         "index_cache_estimate": index_cache_estimate(replay_draws),
         "depth_clear": args.depth_clear,
         "depth_input": str(depth_input) if depth_input else None,
+        "texture_input_dir": str(resolve_path(str(args.texture_input_dir))) if args.texture_input_dir else None,
+        "texture_input_count": len(texture_sidecars),
+        "texture_inputs": [
+            {
+                "handle": texture["handle"],
+                "format": texture["formatName"],
+                "pixel_format": texture["pixelFormat"],
+                "texture_type": texture["textureType"],
+                "levels": texture["levels"],
+                "subresources": len(texture["subresources"]),
+                "source": texture["source"],
+            }
+            for texture in texture_sidecars
+        ],
         "color_output": str(args.color_output) if args.color_output else None,
         "index_bytes": sum(int(draw["geometry"]["index_bytes"]) for draw in replay_draws),
         "stream0_bytes": sum(int(draw["geometry"]["stream0_bytes"]) for draw in replay_draws),
@@ -1436,6 +1765,14 @@ def main() -> int:
         help=(
             "raw depth attachment sidecar to upload before the replay render "
             "pass; pairs with DXMT9_DUMP_DEPTH_ATTACHMENT_PATH output"
+        ),
+    )
+    parser.add_argument(
+        "--texture-input-dir",
+        type=Path,
+        help=(
+            "directory of draw-time raw texture sidecars emitted by "
+            "DXMT9_DUMP_DRAW_TEXTURE_HANDLES / --dump-draw-texture-handles"
         ),
     )
     parser.add_argument("--capture-path", type=Path)

@@ -144,6 +144,10 @@ struct ShaderVariantKey {
   // the common no-bias draw skips the per-draw slot-4 upload + bind. bias-on
   // and bias-off draws therefore hash to distinct PSOs (mirrors tileFfpMode).
   bool samplerLodBias = false;
+  // Diagnostic depth-only backend-shape probe. When set, the render PSO uses
+  // the ordinary vertex stage but omits the fragment function. This bit is
+  // separate from source hashes so fragmentless and normal PSOs cannot alias.
+  bool fragmentlessDepthOnly = false;
   // Pair-local VSOut layout selected from fragment liveness when
   // DXMT9_TRIM_UNUSED_VARYINGS is enabled. Participates in the probe key so
   // two shader pairs with different stage-in structs never share a stale PSO.
@@ -399,7 +403,8 @@ class Cache {
                                   // through the slot-30 argbuf arrays.
                                   bool argbufResourceArray = false,
                                   bool disableAlphaBlend = false,
-                                  std::optional<bool> forceTextureWhiteOverride = std::nullopt);
+                                  std::optional<bool> forceTextureWhiteOverride = std::nullopt,
+                                  bool fragmentlessDepthOnly = false);
 
   DrawPipelineLookup
   getOrBuildDrawPipelineHandleForState(WMT::Reference<WMT::Device> device,
@@ -412,7 +417,8 @@ class Cache {
                                        bool argbufHybridMode = false,
                                        bool argbufResourceArray = false,
                                        bool disableAlphaBlend = false,
-                                       std::optional<bool> forceTextureWhiteOverride = std::nullopt);
+                                       std::optional<bool> forceTextureWhiteOverride = std::nullopt,
+                                       bool fragmentlessDepthOnly = false);
 
   // R-BACK-13.1 — companion to getOrBuildDrawPipelineForState for the
   // tile-FFP two-stage encode. Returns the BASE-COLOUR render pipeline: an
@@ -493,10 +499,10 @@ ShaderVariantKey makeShaderVariantKey(core::FlatDrawStateView state,
                                        u32 stencilFormat,
                                        std::optional<bool> forceTextureWhiteOverride = std::nullopt);
 
-// R-BACK-13.* — per-pass tile-shader FFP selector. Encapsulates the
-// selection flow described in design.md §13.1. Pure value transform; no
-// Metal calls. Reads the pixel-key + alpha-test reference + A2C state
-// from `state` and combines with `supportsApple3`.
+// R-BACK-13.* — per-pass tile-shader FFP classifier/selector. Encapsulates
+// the selection flow described in design.md §13.1. Pure value transform; no
+// Metal calls. Reads the pixel-key + alpha-test reference + A2C state from
+// `state` and combines with `supportsApple3`.
 //
 // Decision tree (in order):
 //   1. !supportsApple3                                 -> Portable, GpuFamily
@@ -504,7 +510,7 @@ ShaderVariantKey makeShaderVariantKey(core::FlatDrawStateView state,
 //   3. classifyTileFfpEligibility() -> Eligible        -> Tile, None
 //   4. classifyTileFfpEligibility() -> reason          -> Portable, reason
 //
-// `reason == None` implies the tile path was chosen.
+// `reason == None` implies the tile path is eligible/chosen.
 // `reason == GpuFamily` is recorded but design.md §13.3 does NOT bump
 // tileFfpFallbackByReason for it (it's not an "almost made it" case);
 // the encoder bumps the dedicated GpuFamily fallback counter.
@@ -521,6 +527,13 @@ struct TileFfpSelection {
   TileFfpFallbackReason reason = TileFfpFallbackReason::GpuFamily;
 };
 
+// Ignores the DXMT9_TILE_FFP off/auto/force override. Use this for diagnostics
+// that need to know whether the draw/pass would be tile-eligible while the
+// production route remains default-off.
+TileFfpSelection classifyTileFfpForPass(core::FlatDrawStateView state, bool supportsApple3);
+
+// Applies the DXMT9_TILE_FFP override first, then falls through to the genuine
+// classifier. Use this for routing.
 TileFfpSelection selectTileFfpForPass(core::FlatDrawStateView state, bool supportsApple3);
 
 // R-BACK-12.22 / 12.23 — Stage 2 argbuf-hybrid per-pass selector.

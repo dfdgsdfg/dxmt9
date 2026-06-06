@@ -92,6 +92,45 @@ bool envFlag(const char* name) {
   return env && env[0] != '\0' && std::strcmp(env, "0") != 0;
 }
 
+bool hashListContains(const char* text, std::uint64_t hash) {
+  if (!text || text[0] == '\0') {
+    return true;
+  }
+
+  const char* cursor = text;
+  while (*cursor) {
+    while (*cursor == ',' || *cursor == ';' || *cursor == ':' ||
+           *cursor == ' ' || *cursor == '\t' || *cursor == '\n') {
+      ++cursor;
+    }
+    if (!*cursor) {
+      break;
+    }
+
+    char* end = nullptr;
+    const auto value = std::strtoull(cursor, &end, 0);
+    if (end == cursor) {
+      while (*cursor && *cursor != ',' && *cursor != ';' && *cursor != ':' &&
+             *cursor != ' ' && *cursor != '\t' && *cursor != '\n') {
+        ++cursor;
+      }
+      continue;
+    }
+    if (static_cast<std::uint64_t>(value) == hash) {
+      return true;
+    }
+    cursor = end;
+  }
+  return false;
+}
+
+bool trimAllowlistMatches(const ShaderSourceContext& context) {
+  const char* vsHashes = std::getenv("DXMT9_TRIM_UNUSED_VARYINGS_VS_HASHES");
+  const char* psHashes = std::getenv("DXMT9_TRIM_UNUSED_VARYINGS_PS_HASHES");
+  return hashListContains(vsHashes, context.vertexShader.hash) &&
+         hashListContains(psHashes, context.pixelShader.hash);
+}
+
 void keepTexcoord(shaders::VSOutLayout& layout, std::uint32_t index) {
   if (index < core::kMaxTextureStages) {
     layout.texcoordMask |= 1u << index;
@@ -142,7 +181,7 @@ shaders::VSOutLayout ffpPixelVaryingLiveness(const ShaderSourceContext& context)
 }  // namespace
 
 shaders::VSOutLayout resolveVSOutLayoutForShaderPair(const ShaderSourceContext& context) {
-  if (!shaders::vsoutTrimEnabled()) {
+  if (!shaders::vsoutTrimEnabled() || !trimAllowlistMatches(context)) {
     return shaders::applyVSOutProbeOverrides(shaders::fullVSOutLayout());
   }
 

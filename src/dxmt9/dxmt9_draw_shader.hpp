@@ -82,6 +82,11 @@ struct ShaderSourceContext {
   // Pair-local VSOut layout selected from fragment-input liveness when
   // DXMT9_TRIM_UNUSED_VARYINGS is enabled. Full layout by default.
   shaders::VSOutLayout vsOutLayout{};
+  // Diagnostic depth-only backend-shape probe. When true, the draw PSO is
+  // built with the vertex function only and no fragment function. The pipeline
+  // cache sets this only after encoder state gates and a fragment-source safety
+  // scan have proven the fragment has no discard/depth-output side effects.
+  bool fragmentlessDepthOnly = false;
   // DXMT9_PROBE_HALF_VSOUT diagnostic. Requests half user varyings in the
   // shared VSOut struct while keeping position/point-size/clip-distance float.
   bool enableHalfVSOut = false;

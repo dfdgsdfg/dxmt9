@@ -50,6 +50,9 @@ bottleneck — that is owned by [[hidden-backend-storage]].
 | H30 | Binding-packet sampler plans must rehash `FlatStateSet` payloads after snapshot key build | rejected; CPU win accepted | [[state-churn-encode-encode-phase.21]] (`binding_packet_plan` `0.666122 -> 0.599724ms/present`; packet parent `-4.42%`; full sampler equality retained) |
 | H31 | Forcing full VS/PS cbuf uploads clearly fixes the suspected black/translucent GT1 geometry | inconclusive visual check; full-upload fallback rejected | [[state-churn-encode-encode-phase.22]] (`argbuf_hybrid_bytes_per_encoder` +519.59%; no obvious visual normalization; `actual.png` frame drift prevents exact verdict) |
 | H32 | Draw submission batches can reuse stale argbuf cbuf slices when per-draw uniform payloads change but base hot constant hashes do not | accepted correctness fix; visual smoke restored | [[state-churn-encode-encode-phase.23]] (disable-batch A/B localizes artifact; payload component hash identity keeps batching and cuts dirty-fix traffic `-34.24%`) |
+| H33 | Current stream/IB churn is a direct backend-storage Xcode candidate | rejected-current; handle-stable A/B required | [[state-churn-encode-stream.04]] (`60/2` binding tuple changes `160/187`, unique tuples `58`, stream1 extra changes `111`, explicit writers `0.089 B/vertex`) |
+| H34 | Row-scoped staging can isolate stream/IB handle churn without changing draw/PSO/argbuf shape | accepted diagnostic; GPU win unproven | [[state-churn-encode-stream.08]] (`60/2` stream handle changes `271 -> 0`, IB `160 -> 0`, PSO `48 -> 48`, argbuf table `5056 -> 5056`, but staged copy `7.38 MiB` and offset churn remains) |
+| H35 | Stream/IB handle identity owns the Xcode hidden backend write bucket | rejected as first-order GPU owner | [[state-churn-encode-stream.09]] (`60/2` stream/IB handle changes `271/160 -> 0/0`, but GPU `19.184 -> 19.278 ms`, VS write `981.159 -> 981.166 MiB`, VS invocations unchanged) |
 
 ## Verification methods
 
@@ -58,6 +61,12 @@ bottleneck — that is owned by [[hidden-backend-storage]].
   lines: stream/IB samples, Metal binds, handle/offset/stride changes, argbuf
   table/cbuf bytes, `setVertexBytes`, geometry transient vertex/index bytes,
   unique-handle counts/bytes/pool buckets. Proves churn is handle-dominated.
+- **`analyze_stream_ib_backend_churn.py`** — hot-row preflight for stream/IB as
+  a possible hidden-backend denominator experiment. It proved the frame60 rows
+  were handle-churn-dominant and named the row-scoped staging A/B target. The
+  later Xcode gate rejects handle identity as the first-order GPU owner, so use
+  this analyzer for CPU/draw-run attribution or for new stream/IB mechanisms
+  only after they change more than handle identity.
 - **`commit_chunk_draw_run_*` counters** — `_submits`, `_records`, break-type
   (`_const_upload`), and the state-delta sub-buckets (`_stream_only`, `_ib_only`,
   `_texture_only`, `_mixed`, `_mixed_group2/3/4plus`, `_mixed_pair_stream_ib`,
@@ -94,6 +103,9 @@ flowchart TD
   Stream1["stream.01\nstream split\nhandle 81.9% / IB 81.5%"]:::rejected
   Stream2["stream.02\ndelta breakdown\nIB delta all handle"]:::rejected
   Stream3["stream.03\nunique handles\nbounded alternation"]:::rejected
+  Stream4["stream.04\ncurrent backend gate\nhandle-stable A/B required"]:::accepted
+  Stream8["stream.08\nrow-scoped staging A/B\n60/2 handles -> 0\noffset churn remains"]:::accepted
+  Stream9["stream.09\nXcode handle-stable gate\nGPU/VS write unchanged"]:::rejected
   Churn["churn.01\nDrawBindingOverride design"]:::accepted
   SD1["statedelta.01\nbucket split\n85.66% mixed"]:::accepted
   SD2["statedelta.02\nmixed pairs\n96.61% 2-group"]:::accepted
@@ -132,6 +144,9 @@ flowchart TD
   Enc1 -->|"stream-split"| Stream1
   Stream1 -->|"delta-confirm"| Stream2
   Stream2 -->|"unique-handle"| Stream3
+  Stream3 -->|"current frame60 gate"| Stream4
+  Stream4 -->|"row-scoped diagnostic"| Stream8
+  Stream8 -->|"Xcode sensitivity gate"| Stream9
   Stream1 -->|"handle-churn->design"| Churn
   Drawrun1 -->|"state-delta-split"| SD1
   SD1 -->|"mixed-pairs"| SD2
@@ -199,6 +214,48 @@ own ~`98.4%` of frame GPU and ~`1.63 GiB` of buffer writes, while their entire
 dxmt CPU/upload payload is ~`450 KiB`. These are CPU-throughput wins, orthogonal
 to the GPU bottleneck. The only open item is the correctness of disabling
 auto-expand-indexed, which still needs visual proof.
+
+The current stream/IB backend preflight
+([[state-churn-encode-stream.04]]) keeps the GPU-side question alive but narrows
+the spend gate. Frame60 hot rows are handle-churn-dominant, not offset/stride
+noise: `60/2` has combined stream+IB handle changes/draw `2.305` versus
+offset+stride/draw `0.053`, with explicit dxmt writers only `0.089 B/vertex`.
+`60/1` and `60/0` show the same pattern. The probe-draw join confirms draw-level
+stream0/IB alternation (`60/2`: `160` stream0 changes and `160` IB changes),
+and the new `stream_extra_bindings` field confirms stream1 as another active
+row-local source (`111` extra-stream changes, `25` unique extra-stream
+bindings). The complete binding tuple changes `160` times across `187` draws
+with only `58` unique tuples, max tuple run `6`, and average run length `1.161`.
+The follow-up tuple-structure pass ([[state-churn-encode-stream.05]]) makes the
+shape more concrete: `60/2` has `168/187` stream0/IB pairs with `IB =
+stream0 + 2`, and `132/187` full stream0/stream1/IB triplets with `stream1 =
+stream0 + 1` and `IB = stream0 + 2`; `60/1` and `60/0` are `100%` stream0/IB
+`+2` pairs. This makes stream/IB a plausible handle-stabilizing A/B target, but
+also rejects a simple bind-cache fix. The feasibility pass
+([[state-churn-encode-stream.06]]) closes two invalid shortcuts:
+force-expanding indexed rows changes the index/VS-invocation denominator, and a
+per-draw transient copy adds explicit writer traffic. A future run must present
+the same geometry bytes through fewer/stable Metal buffer identities while
+holding geometry, index order, VS invocations, render state, and visible shader
+layout stable before it can claim hidden-backend bytes/invocation movement. The
+staging-cost preflight ([[state-churn-encode-stream.07]]) says row-stable
+staging is feasible as a diagnostic but carries confounders: `60/2` would copy
+about `8.2 MiB` (`7.035 B/vertex`), roughly `78.7x` the row's current explicit
+dxmt writers, and handle changes would become `2.305` expected offset
+changes/draw. That is acceptable for a no-gputrace A/B, not for a direct Xcode
+claim. The implemented row-scoped A/B ([[state-churn-encode-stream.08]]) proves
+that isolation is real: `60/2` keeps `187` draws, PSO changes `48 -> 48`,
+argbuf table bytes `5056 -> 5056`, argbuf cbuf bytes `96424 -> 96424`, and
+`setVertexBytes` bytes `2992 -> 2992`, while stream handle changes drop
+`271 -> 0` and IB handle changes drop `160 -> 0`. The cost is explicit
+staging traffic (`6.94 MiB` stream + `0.44 MiB` IB) and remaining offset churn
+(`stream_offset_changes=271`). The Xcode follow-up
+([[state-churn-encode-stream.09]]) rejects the GPU-side owner hypothesis:
+target row `60/2` is shape-stable with stream/IB handle changes `271/160 ->
+0/0`, but GPU time is effectively unchanged (`19.184 -> 19.278 ms`), VS buffer
+write is unchanged (`981.159 -> 981.166 MiB`), and VS invocations stay fixed
+at `642,001`. Stream/IB handle churn remains a CPU/draw-run batching problem,
+not the first-order GT1 hidden-backend GPU limiter.
 
 The current CPU-side open path has also narrowed. The broad bind-cache proposal
 from [[present-pacing-encode-budget-fix-proposal.01]] is rejected by

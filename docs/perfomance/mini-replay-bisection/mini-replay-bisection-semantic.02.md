@@ -7,7 +7,7 @@ title: Scoped 60/2 Depth-Read No-Blend Cache-Opt Replay
 date: 2026-06-06
 type: experiment-run
 status: accepted-scoped-proof
-source: experiments/output/app-d3d9-3dmark05-post-visualfix-frame60-60-2-depthread-payload-r1/3dmark05-perf-indexed-probe-draws.csv; traces/app-d3d9-3dmark05-post-visualfix-frame60-60-2-depthread-payload-r1/analysis/frame60-payload-window-60-2-depth-read-no-blend-candidate32.json; traces/app-d3d9-3dmark05-post-visualfix-frame60-60-2-depthread-payload-r1/analysis/frame60-mini-replay-60-2-depth-read-no-blend-manifest.json; traces/app-d3d9-3dmark05-post-visualfix-frame60-60-2-depthread-payload-r1/analysis/mini-replay-depth-read-no-blend/original/mini-replay-summary.json; traces/app-d3d9-3dmark05-post-visualfix-frame60-60-2-depthread-payload-r1/analysis/mini-replay-depth-read-no-blend/cache-opt-lru32/mini-replay-summary.json; traces/app-d3d9-3dmark05-post-visualfix-frame60-60-2-depthread-payload-r1/analysis/mini-replay-depth-read-no-blend/image-comparison-original-vs-cache-opt-lru32.md; experiments/output/app-d3d9-3dmark05-post-visualfix-frame60-60-2-depthinput-r1/3dmark05-perf-summary.md; traces/app-d3d9-3dmark05-post-visualfix-frame60-60-2-depthinput-r1/analysis/frame60-depth.bin.json; traces/app-d3d9-3dmark05-post-visualfix-frame60-60-2-depthinput-r1/analysis/mini-replay-depth-read-no-blend/original-depth/mini-replay-summary.json; traces/app-d3d9-3dmark05-post-visualfix-frame60-60-2-depthinput-r1/analysis/mini-replay-depth-read-no-blend/cache-opt-lru32-depth/mini-replay-summary.json; traces/app-d3d9-3dmark05-post-visualfix-frame60-60-2-depthinput-r1/analysis/mini-replay-depth-read-no-blend/image-comparison-original-depth-vs-cache-opt-lru32-depth.md
+source: experiments/output/app-d3d9-3dmark05-post-visualfix-frame60-60-2-depthread-payload-r1/3dmark05-perf-indexed-probe-draws.csv; traces/app-d3d9-3dmark05-post-visualfix-frame60-60-2-depthread-payload-r1/analysis/frame60-payload-window-60-2-depth-read-no-blend-candidate32.json; traces/app-d3d9-3dmark05-post-visualfix-frame60-60-2-depthread-payload-r1/analysis/frame60-mini-replay-60-2-depth-read-no-blend-manifest.json; traces/app-d3d9-3dmark05-post-visualfix-frame60-60-2-depthread-payload-r1/analysis/mini-replay-depth-read-no-blend/original/mini-replay-summary.json; traces/app-d3d9-3dmark05-post-visualfix-frame60-60-2-depthread-payload-r1/analysis/mini-replay-depth-read-no-blend/cache-opt-lru32/mini-replay-summary.json; traces/app-d3d9-3dmark05-post-visualfix-frame60-60-2-depthread-payload-r1/analysis/mini-replay-depth-read-no-blend/image-comparison-original-vs-cache-opt-lru32.md; experiments/output/app-d3d9-3dmark05-post-visualfix-frame60-60-2-depthinput-r1/3dmark05-perf-summary.md; traces/app-d3d9-3dmark05-post-visualfix-frame60-60-2-depthinput-r1/analysis/frame60-depth.bin.json; traces/app-d3d9-3dmark05-post-visualfix-frame60-60-2-depthinput-r1/analysis/mini-replay-depth-read-no-blend/original-depth/mini-replay-summary.json; traces/app-d3d9-3dmark05-post-visualfix-frame60-60-2-depthinput-r1/analysis/mini-replay-depth-read-no-blend/cache-opt-lru32-depth/mini-replay-summary.json; traces/app-d3d9-3dmark05-post-visualfix-frame60-60-2-depthinput-r1/analysis/mini-replay-depth-read-no-blend/image-comparison-original-depth-vs-cache-opt-lru32-depth.md; docs/perfomance/mini-replay-bisection/mini-replay-bisection-texture.02.md
 ---
 
 # Scoped 60/2 Depth-Read No-Blend Cache-Opt Replay
@@ -121,13 +121,16 @@ The real-depth replay is also exact:
 | Max delta | `0` |
 | SSIM | `1.000000` |
 
-Important scope limit: this mini-replay still binds a 1x1 white texture for all
-sampled texture slots. The depth-clear caveat is now resolved for this window by
-the D24X8 input replay, but the proof is still not a full-scene GT1 texture
-correctness proof and not a broad depth-read selector. The useful interpretation
-is narrower: at least one `60/2 depth-read + no-alpha-blend` window has a real
-post-transform locality ceiling and no observed final-color movement under
-standalone replay with both clear-depth and captured-depth inputs.
+Important scope limit: this proof binds a 1x1 white texture for all sampled
+texture slots. The depth-clear caveat is resolved for this window by the D24X8
+input replay, but the follow-up real-texture replay
+([[mini-replay-bisection-texture.02]]) changes `2` pixels with max delta `5`,
+and its canonical primitive-id diagnostic shows `7` final-writer pixels
+changed.
+The useful interpretation is therefore narrower: this selected window has a
+real post-transform locality ceiling and no observed final-color movement under
+white-texture replay with both clear-depth and captured-depth inputs, but it is
+not a production-safe exact texture correctness proof.
 
 ```mermaid
 flowchart TD
@@ -148,7 +151,7 @@ flowchart TD
 
   Exact --> Scoped["scoped proof accepted\nselected window only"]
   DepthExact --> Scoped
-  Scoped --> Blockers["not production yet:\nwhite texture fallback\nno broad runtime selector\nno Xcode row-level proof"]
+  Scoped --> Blockers["not production:\nreal-texture replay fails exact/lsb1\nno broad runtime selector\nno Xcode row-level proof"]
 
   classDef good fill:#d6f5d6,stroke:#2b7a2b,color:#063
   classDef warn fill:#fff3cd,stroke:#a80,color:#640
@@ -160,14 +163,16 @@ flowchart TD
 
 **Verdict.** Accepted as a scoped semantic proof. This reopens a narrow
 depth-read/no-blend path that [[mini-replay-bisection-semantic.01]] did not
-allow as a broad runtime rule. Promotion still requires at least one of:
+allow as a broad runtime rule. [[mini-replay-bisection-texture.02]] rejects
+promotion for this selected window once real textures are supplied. Future
+promotion still requires at least one of:
 
-- a real-texture replay for the same window;
-- a runtime-visible selector that does not collapse into draw-local payload
-  identity;
-- or a class-scoped Xcode capture showing that this exact safe subset moves
-  `VS Invocations` / `VS Buffer Device Memory Bytes Written` enough to matter.
+- a final-color/final-writer or occlusion oracle for the changed pixels;
+- a stricter runtime-visible selector that excludes the real-texture hazard;
+- or a non-reorder backend mechanism that lowers hidden vertex-stage writes
+  without primitive reorder.
 
 **Related.** [[mini-replay-bisection]] ·
-[[mini-replay-bisection-semantic.01]] · [[hidden-backend-storage-shape.04]] ·
-[[index-cache-locality]].
+[[mini-replay-bisection-semantic.01]] ·
+[[mini-replay-bisection-texture.02]] ·
+[[hidden-backend-storage-shape.04]] · [[index-cache-locality]].

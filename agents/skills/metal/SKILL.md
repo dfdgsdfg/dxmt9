@@ -1248,6 +1248,19 @@ For dxmt9's 3DMark05 GT1 GPU-bottleneck investigation, do not hand-build
 the Wine launch, the final-frame hang timeout, capture/finalize, and the
 Xcode-counter ↔ dxmt-attribution join:
 
+For this specific 3DMark05 workflow, do not add `MTL_CAPTURE_ENABLED=1` unless
+`DXMT_3DMARK05_SET_MTL_CAPTURE_ENABLED=1` is deliberately requested. That env
+has reproduced black-screen startup with draw/present counters at zero; the
+standard wrapper uses dxmt9's `DXMT_METAL_CAPTURE_FRAME/PATH` trigger without
+it by default.
+Apple's file `.gputrace` destination still needs the process capture layer
+(`MetalCaptureEnabled` Info.plist key or macOS 14+ `MTL_CAPTURE_ENABLED=1`), so
+the expected no-layer failure is `Capture layer is not inserted`.
+If normal rendering works but file capture fails with `Capture layer is not
+inserted`, attach Xcode and rerun with
+`DXMT_3DMARK05_METAL_CAPTURE_DESTINATION=developerTools` so
+MTLCaptureManager targets Xcode rather than `.gputrace` file output.
+
 ```sh
 # capture (no-gputrace scout = 180s, .gputrace/Xcode candidate = 420s)
 bash scripts/tools/run_3dmark05_perf_probe.sh \

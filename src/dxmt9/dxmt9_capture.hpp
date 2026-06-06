@@ -1,6 +1,7 @@
 #pragma once
 
 #include "dxmt9/core.hpp"
+#include "../winemetal/winemetal.h"
 
 #include <optional>
 #include <span>
@@ -20,6 +21,7 @@ bool writeTextureBmp(const std::string& path, Format format, u32 width, u32 heig
 struct MetalCaptureConfig {
   u64 targetFrame = 0;
   std::string path;
+  WMTCaptureDestination destination = WMTCaptureDestinationGPUTraceDocument;
 
   bool enabled() const noexcept { return targetFrame != 0; }
 };
@@ -28,6 +30,7 @@ struct MetalCaptureRequest {
   u64 frame = 0;
   u64 seqId = 0;
   std::string path;
+  WMTCaptureDestination destination = WMTCaptureDestinationGPUTraceDocument;
 };
 
 MetalCaptureConfig metalCaptureConfigFromEnv();

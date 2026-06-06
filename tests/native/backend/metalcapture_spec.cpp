@@ -1,5 +1,6 @@
 #include "../../../src/dxmt9/dxmt9_capture.hpp"
 
+#include <cstdlib>
 #include <iostream>
 #include <stdexcept>
 #include <string>
@@ -122,6 +123,33 @@ void testDefaultPathContainsFrameAndSeq() {
         "default capture path should include frame and seq");
 }
 
+void testCaptureDestinationFromEnv() {
+  setenv("DXMT_METAL_CAPTURE_FRAME", "1", 1);
+  setenv("DXMT_METAL_CAPTURE_PATH", "/tmp/dxmt9-destination.gputrace", 1);
+  setenv("DXMT_METAL_CAPTURE_DESTINATION", "developerTools", 1);
+
+  auto config = dxmt9::core::metalcapture::metalCaptureConfigFromEnv();
+  check(config.targetFrame == 1, "capture env should parse target frame");
+  check(config.path == "/tmp/dxmt9-destination.gputrace", "capture env should parse path");
+  check(config.destination == WMTCaptureDestinationDeveloperTools,
+        "developerTools env should select Xcode destination");
+
+  dxmt9::core::metalcapture::MetalCaptureController capture(config);
+  auto request = capture.maybeCapturePresentChunk(101);
+  check(request.has_value(), "env-backed capture should request target frame");
+  check(request->destination == WMTCaptureDestinationDeveloperTools,
+        "capture request should preserve destination");
+
+  setenv("DXMT_METAL_CAPTURE_DESTINATION", "gputrace", 1);
+  config = dxmt9::core::metalcapture::metalCaptureConfigFromEnv();
+  check(config.destination == WMTCaptureDestinationGPUTraceDocument,
+        "gputrace env should select file destination");
+
+  unsetenv("DXMT_METAL_CAPTURE_FRAME");
+  unsetenv("DXMT_METAL_CAPTURE_PATH");
+  unsetenv("DXMT_METAL_CAPTURE_DESTINATION");
+}
+
 }  // namespace
 
 int main() {
@@ -131,6 +159,7 @@ int main() {
     testChunkBeginSessionStartsOnTargetFrameBoundary();
     testChunkBeginSessionClosesOnTargetPresent();
     testDefaultPathContainsFrameAndSeq();
+    testCaptureDestinationFromEnv();
   } catch (const TestFailure& failure) {
     std::cerr << "metalcapture_spec: " << failure.what() << "\n";
     return 1;

@@ -165,6 +165,17 @@ class AnalyzeVsBufferScalingTests(unittest.TestCase):
             self.assertEqual(delta_row["primary_mover"], "bytes_per_invocation")
             self.assertEqual(delta_row["backend_shape_gate"], "reject")
 
+    def test_trim_varyings_runs_are_backend_shape_candidates(self) -> None:
+        module = load_module()
+        self.assertEqual(
+            module.candidate_kind("frame60-trim-varyings-60-0-scoped-xcode-r1"),
+            "non-reorder-backend-shape",
+        )
+        self.assertEqual(
+            module.candidate_kind("frame60-live-vsout-60-0-scoped-xcode-r1"),
+            "non-reorder-backend-shape",
+        )
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -429,10 +429,18 @@ def candidate_kind(run: str) -> str:
     text = run.lower()
     if "forceexpand" in text or "force-expand" in text:
         return "negative-geometry"
+    if "opaque-proof" in text or "opaque_depth" in text or "opaque-depth" in text:
+        return "locality-reorder"
+    if "screenblend-proof" in text or "screen-blend-proof" in text:
+        return "locality-reorder"
     if "cacheopt" in text or "index-cache" in text or "index_cache" in text:
         return "locality-reorder"
     if any(token in text for token in (
         "half-vsout",
+        "live-vsout",
+        "trim-varyings",
+        "trim_unused_varyings",
+        "trim-unused-varyings",
         "texturewhite",
         "texture-white",
         "disable-scissor",

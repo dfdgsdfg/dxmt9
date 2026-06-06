@@ -160,6 +160,28 @@ class MiniReplayScriptTests(unittest.TestCase):
                     "ffpvs_bytes": 5,
                     "ffpps_bytes": 5,
                 },
+                "textures": [
+                    {
+                        "handle": "0x200000100000001",
+                        "stage": 0,
+                        "format": 22,
+                        "type": 0,
+                        "width": 1,
+                        "height": 1,
+                        "depth": 1,
+                        "levels": 1,
+                    },
+                    {
+                        "handle": "0x200000100000003",
+                        "stage": 3,
+                        "format": 22,
+                        "type": 0,
+                        "width": 1,
+                        "height": 1,
+                        "depth": 1,
+                        "levels": 1,
+                    },
+                ],
                 "attachments": {
                     "colors": [{
                         "index": 0,
@@ -176,6 +198,48 @@ class MiniReplayScriptTests(unittest.TestCase):
             }],
         }), encoding="utf-8")
         return manifest, output_dir
+
+    def write_texture_sidecar_fixture(self, root: Path) -> Path:
+        texture_dir = root / "textures"
+        texture_dir.mkdir()
+        for handle, stage, value in (
+            ("0x200000100000001", 0, b"\x7f"),
+            ("0x200000100000003", 3, b"\x40"),
+        ):
+            bin_name = f"texture-h{handle}-seq60-enc2-fragment{stage}-linear-slice0-level0.bin"
+            json_name = f"texture-h{handle}-seq60-enc2-fragment{stage}-linear.json"
+            texture_dir.joinpath(bin_name).write_bytes(value)
+            texture_dir.joinpath(json_name).write_text(json.dumps({
+                "handle": handle,
+                "seq": 60,
+                "enc": 2,
+                "textureIndex": stage,
+                "stage": stage,
+                "shaderStage": "fragment",
+                "srgb": 0,
+                "shaderReadView": 1,
+                "format": 22,
+                "formatName": "L8",
+                "type": 0,
+                "storageMetalPixelFormat": 10,
+                "shaderMetalPixelFormat": 10,
+                "width": 1,
+                "height": 1,
+                "depth": 1,
+                "levels": 1,
+                "subresources": [{
+                    "level": 0,
+                    "slice": 0,
+                    "width": 1,
+                    "height": 1,
+                    "depth": 1,
+                    "rowBytes": 1,
+                    "bytesPerImage": 1,
+                    "byteCount": 1,
+                    "path": bin_name,
+                }],
+            }), encoding="utf-8")
+        return texture_dir
 
     def test_prepare_rewrites_argbuf_slots_and_summarizes_payloads(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -259,6 +323,46 @@ class MiniReplayScriptTests(unittest.TestCase):
             self.assertIn("depthStateDesc.depthWriteEnabled = 0;", objc)
             self.assertIn("[encoder setCullMode:cullMode(2)];", objc)
             self.assertIn("unsigned scissorEnabled;", objc)
+
+    def test_texture_input_dir_generates_real_texture_binds(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            manifest, output_dir = self.write_manifest_fixture(root)
+            texture_dir = self.write_texture_sidecar_fixture(root)
+
+            result = subprocess.run(
+                [
+                    sys.executable,
+                    str(SCRIPT),
+                    str(manifest),
+                    "--output-dir",
+                    str(output_dir),
+                    "--texture-input-dir",
+                    str(texture_dir),
+                ],
+                text=True,
+                capture_output=True,
+                check=False,
+            )
+
+            self.assertEqual(result.returncode, 0, result.stderr)
+            summary = json.loads((output_dir / "mini-replay-summary.json").read_text(encoding="utf-8"))
+            self.assertEqual(summary["texture_input_dir"], str(texture_dir))
+            self.assertEqual(summary["texture_input_count"], 2)
+            self.assertEqual(
+                [texture["handle"] for texture in summary["texture_inputs"]],
+                ["0x200000100000001", "0x200000100000003"],
+            )
+            objc = (output_dir / "dxmt9_3dmark05_mini_replay.mm").read_text(encoding="utf-8")
+            self.assertIn("struct TextureEntry", objc)
+            self.assertIn("MTLPixelFormatR8Unorm", objc)
+            self.assertIn("const unsigned textureInputCount = 2;", objc)
+            self.assertIn("uploadTextureInputs(device, queue, textureInputs,", objc)
+            self.assertIn("{0, -1, -1, 1, -1", objc)
+            self.assertIn("draw.fragmentTextures[0]", objc)
+            self.assertIn("draw.fragmentTextures[3]", objc)
+            self.assertIn("textureInputs[textureIndex] : whiteTexture", objc)
+            self.assertNotIn("[encoder setFragmentTexture:whiteTexture atIndex:0];", objc)
 
     def test_force_fragment_primitive_id_rewrites_fragment_output(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

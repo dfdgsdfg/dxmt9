@@ -113,15 +113,13 @@ void stampX8AlphaOneTextureMask(ShaderVariantKey& key,
 // effect, like the other DXMT9 knobs).
 //   off   — never take the tile path; always route the genuine portable lane.
 //           THIS IS THE DEFAULT (value unset / empty / unrecognized) as an
-//           interim safety measure: the tile encode wire (523b66e) issues
-//           setTileRenderPipelineState+dispatchThreadsPerTile INSTEAD OF the
-//           base-colour draw, so any tile-routed draw renders the cleared
-//           imageblock = BLACK. Until the two-stage encode (base-colour draw
-//           THEN tile dispatch) lands and is GPU-readback-validated, tile-FFP
-//           stays off by default. See specs/gap.md R-BACK-13 row.
+//           interim safety measure: the two-stage encode now issues the
+//           base-colour draw followed by the tile post-pass, but tile-FFP
+//           still needs eligible-draw equality and perf validation before it
+//           can become a production default.
 //   auto  — explicit opt-in to the selectTileFfpForPass heuristic (the path
-//           the two-stage-encode fix will validate behind this flag, then the
-//           default can flip back to auto once equality holds).
+//           validated behind this flag; the default can flip back to auto once
+//           equality and useful coverage hold).
 //   force — take the tile path whenever the genuine eligibility gates still
 //           pass (FFP shape, precision, A2C). NEVER forces an ineligible
 //           draw (non-FFP, textured, vertex-blended, precision-unsafe, A2C),
@@ -526,6 +524,22 @@ ShaderVariantKey makeShaderVariantProbeKey(ShaderVariantKey key) noexcept {
   return key;
 }
 
+bool fragmentlessDepthOnlyShaderSafe(const drawshader::ShaderSourceContext& shaderSource) {
+  try {
+    auto fragment = drawshader::makeDrawShaderSource(shaderSource, false);
+    return fragment.find("discard_fragment()") == std::string::npos &&
+           fragment.find("[[depth") == std::string::npos;
+  } catch (const std::exception& ex) {
+    util::logf(util::LogLevel::Warn, "dxmt9-pipeline-cache",
+               "fragmentless depth-only probe rejected: fragment safety scan failed: %s",
+               ex.what());
+  } catch (...) {
+    util::logf(util::LogLevel::Warn, "dxmt9-pipeline-cache",
+               "fragmentless depth-only probe rejected: fragment safety scan failed");
+  }
+  return false;
+}
+
 std::optional<detail::DrawShaderSources>
 detail::makeContainedDrawShaderSources(const drawshader::ShaderSourceContext& shaderSource,
                                        u64 variantHash) {
@@ -535,8 +549,16 @@ detail::makeContainedDrawShaderSources(const drawshader::ShaderSourceContext& sh
 
   try {
     auto vertex = drawshader::makeDrawShaderSource(shaderSource, true);
-    auto fragment = drawshader::makeDrawShaderSource(shaderSource, false);
     const u64 vertexHash = shaders::makeHash(vertex);
+    if (shaderSource.fragmentlessDepthOnly) {
+      return detail::DrawShaderSources{
+          .vertex = std::move(vertex),
+          .fragment = {},
+          .vertexHash = vertexHash,
+          .fragmentHash = 0,
+      };
+    }
+    auto fragment = drawshader::makeDrawShaderSource(shaderSource, false);
     const u64 fragmentHash = shaders::makeHash(fragment);
     return detail::DrawShaderSources{
         .vertex = std::move(vertex),
@@ -710,6 +732,9 @@ std::size_t ShaderVariantKeyHash::operator()(const ShaderVariantKey& key) const 
   // bias-on (slot-4 + bias()) and bias-off (plain sample) variants of the same
   // shader hit distinct cache slots.
   hash = mix(hash, static_cast<u64>(key.samplerLodBias));
+  // Diagnostic depth-only backend-shape probe: fragmentless and ordinary
+  // draw PSOs must never alias even when their shader/input state matches.
+  hash = mix(hash, static_cast<u64>(key.fragmentlessDepthOnly));
   hash = mix(hash, key.vsOutLayoutKey);
   hash = mix(hash, key.x8AlphaOneTextureMask);
   hash = mix(hash, key.sampleCount);
@@ -738,6 +763,31 @@ std::size_t ShaderVariantKeyHash::operator()(const ShaderVariantKey& key) const 
             std::chrono::steady_clock::now() - started).count()));
   }
   return static_cast<std::size_t>(hash);
+}
+
+void logFragmentlessDepthOnlyProbeDecision(const ShaderVariantKey& key,
+                                           bool accepted,
+                                           const char* reason) {
+  static std::mutex mutex;
+  static std::unordered_set<u64> logged;
+  const auto keyHash = static_cast<u64>(ShaderVariantKeyHash{}(key));
+  const u64 logKey = (keyHash << 1u) ^ (accepted ? 1u : 0u);
+  {
+    std::lock_guard lock(mutex);
+    if (!logged.insert(logKey).second) {
+      return;
+    }
+  }
+  util::logf(util::LogLevel::Warn,
+             "dxmt9-pipeline-cache",
+             "fragmentless depth-only probe %s: key=0x%llx reason=%s vsout=0x%x alpha_test=%u alpha_to_coverage=%u tile_ffp=%u",
+             accepted ? "accepted" : "rejected",
+             static_cast<unsigned long long>(keyHash),
+             reason ? reason : "unknown",
+             key.vsOutLayoutKey,
+             key.alphaTest ? 1u : 0u,
+             key.alphaToCoverage ? 1u : 0u,
+             key.tileFfpMode ? 1u : 0u);
 }
 
 std::size_t DepthStencilKeyHash::operator()(const DepthStencilKey& key) const noexcept {
@@ -1109,14 +1159,20 @@ Cache::getOrBuildDrawPipelineHandle(WMT::Reference<WMT::Device> device,
     }
     auto vertexLibrary =
         getOrSubmitSourceLibraryLocked(*this, device, sources->vertexHash, sources->vertex);
-    auto fragmentLibrary =
-        getOrSubmitSourceLibraryLocked(*this, device, sources->fragmentHash, sources->fragment);
+    std::shared_future<WMT::Reference<WMT::Library>> fragmentLibrary;
+    if (!sourceKey.fragmentlessDepthOnly) {
+      fragmentLibrary =
+          getOrSubmitSourceLibraryLocked(*this, device, sources->fragmentHash, sources->fragment);
+    }
     perf::countPipelineCacheMiss(perf::PipelineKind::Draw);
     auto shared = submitPipelineBuild(
         [device, sourceKey, vertexLibrary, fragmentLibrary, archive]() mutable {
           auto vsLib = vertexLibrary.get();
-          auto fsLib = fragmentLibrary.get();
-          if (!vsLib || !fsLib) {
+          WMT::Reference<WMT::Library> fsLib{};
+          if (!sourceKey.fragmentlessDepthOnly) {
+            fsLib = fragmentLibrary.get();
+          }
+          if (!vsLib || (!sourceKey.fragmentlessDepthOnly && !fsLib)) {
             countPipelineBuildFailure(PipelineBuildFailureStage::Library);
             logPipelineBuildFailureOnce(!vsLib ? "vertex-library" : "fragment-library",
                                         sourceKey,
@@ -1125,8 +1181,11 @@ Cache::getOrBuildDrawPipelineHandle(WMT::Reference<WMT::Device> device,
             return WMT::Reference<WMT::RenderPipelineState>{};
           }
           auto vs = vsLib.newFunction("dxmt9_vs");
-          auto fs = fsLib.newFunction("dxmt9_fs");
-          if (!vs || !fs) {
+          WMT::Function fs{};
+          if (!sourceKey.fragmentlessDepthOnly) {
+            fs = fsLib.newFunction("dxmt9_fs");
+          }
+          if (!vs || (!sourceKey.fragmentlessDepthOnly && !fs)) {
             countPipelineBuildFailure(PipelineBuildFailureStage::Function);
             logPipelineBuildFailureOnce(!vs ? "vertex-function" : "fragment-function",
                                         sourceKey,
@@ -1137,7 +1196,8 @@ Cache::getOrBuildDrawPipelineHandle(WMT::Reference<WMT::Device> device,
           WMTRenderPipelineInfo info{};
           info.max_tessellation_factor = 1;
           info.vertex_function = vs.handle;
-          info.fragment_function = fs.handle;
+          info.fragment_function =
+              sourceKey.fragmentlessDepthOnly ? NULL_OBJECT_HANDLE : fs.handle;
           info.raster_sample_count = std::max(1u, sourceKey.sampleCount);
           info.alpha_to_coverage_enabled = sourceKey.alphaToCoverage;
           info.depth_pixel_format = static_cast<WMTPixelFormat>(sourceKey.depthFormat);
@@ -1303,11 +1363,12 @@ Cache::getOrBuildDrawPipelineForState(WMT::Reference<WMT::Device> device,
                                       bool argbufHybridMode,
                                       bool argbufResourceArray,
                                       bool disableAlphaBlend,
-                                      std::optional<bool> forceTextureWhiteOverride) {
+                                      std::optional<bool> forceTextureWhiteOverride,
+                                      bool fragmentlessDepthOnly) {
   return getOrBuildDrawPipelineHandleForState(
       device, limits, pool, state, archive, archivePath, tileFfpMode,
       argbufHybridMode, argbufResourceArray, disableAlphaBlend,
-      forceTextureWhiteOverride).future;
+      forceTextureWhiteOverride, fragmentlessDepthOnly).future;
 }
 
 DrawPipelineLookup
@@ -1321,7 +1382,8 @@ Cache::getOrBuildDrawPipelineHandleForState(WMT::Reference<WMT::Device> device,
                                             bool argbufHybridMode,
                                             bool argbufResourceArray,
                                             bool disableAlphaBlend,
-                                            std::optional<bool> forceTextureWhiteOverride) {
+                                            std::optional<bool> forceTextureWhiteOverride,
+                                            bool fragmentlessDepthOnly) {
   const bool srgbWrite =
       core::flatStateOr(state.hot->renderStates, core::RS_SRGB_WRITE_ENABLE, 0u) != 0;
   auto resolvePixelFormat = [&](core::Handle handle) -> u32 {
@@ -1393,6 +1455,29 @@ Cache::getOrBuildDrawPipelineHandleForState(WMT::Reference<WMT::Device> device,
       x8AlphaOneTextureMask(pool, *state.hot, key.textureMask));
   shaderSource.vsOutLayout = drawshader::resolveVSOutLayoutForShaderPair(shaderSource);
   key.vsOutLayoutKey = shaders::vsoutLayoutKey(shaderSource.vsOutLayout);
+  if (fragmentlessDepthOnly) {
+    const char* rejectReason = nullptr;
+    if (tileFfpMode) {
+      rejectReason = "tile-ffp-mode";
+    } else if (key.alphaTest) {
+      rejectReason = "alpha-test";
+    } else if (key.alphaToCoverage) {
+      rejectReason = "alpha-to-coverage";
+    } else if (!fragmentlessDepthOnlyShaderSafe(shaderSource)) {
+      rejectReason = "fragment-side-effect";
+    }
+    fragmentlessDepthOnly = rejectReason == nullptr;
+    if (fragmentlessDepthOnly) {
+      shaderSource.vsOutLayout = shaders::positionOnlyVSOutLayout();
+      key.vsOutLayoutKey = shaders::vsoutLayoutKey(shaderSource.vsOutLayout);
+    }
+    key.fragmentlessDepthOnly = fragmentlessDepthOnly;
+    logFragmentlessDepthOnlyProbeDecision(
+        key, fragmentlessDepthOnly,
+        fragmentlessDepthOnly ? "accepted" : rejectReason);
+  }
+  key.fragmentlessDepthOnly = fragmentlessDepthOnly;
+  shaderSource.fragmentlessDepthOnly = fragmentlessDepthOnly;
   return getOrBuildDrawPipelineHandle(device, key, std::move(shaderSource),
                                       archive, archivePath);
 }
@@ -1489,21 +1574,7 @@ Cache::getOrBuildTileFfpBaseColorPipelineHandleForState(
                                       archive, archivePath);
 }
 
-TileFfpSelection selectTileFfpForPass(core::FlatDrawStateView state, bool supportsApple3) {
-  // R-BACK-13.* DXMT9_TILE_FFP escape hatch (off|force|auto). `off` is a
-  // clean opt-out that routes every draw down the portable lane regardless
-  // of eligibility — keep it ahead of the genuine gates so an A/B probe can
-  // diff the two lanes for the SAME eligible draw. `force` deliberately does
-  // NOT bypass the genuine ineligibility gates below (GpuFamily / NotFfp /
-  // textured / vertex-blend / precision / A2C): forcing the tile kernel onto
-  // any of those would mis-emit. `force` therefore only guarantees the tile
-  // lane for a draw that genuinely passes every gate (the Eligible arm of
-  // the final switch) — which is what makes it the Tile half of the A/B
-  // against `off`'s Portable half for an eligible non-textured FFP draw.
-  const TileFfpModeOverride mode = tileFfpModeOverride();
-  if (mode == TileFfpModeOverride::Off) {
-    return TileFfpSelection{TileFfpDecision::Portable, TileFfpFallbackReason::None};
-  }
+TileFfpSelection classifyTileFfpForPass(core::FlatDrawStateView state, bool supportsApple3) {
   // R-BACK-13.5: tile-FFP is unconditionally off on non-Apple3.
   if (!supportsApple3) {
     return TileFfpSelection{TileFfpDecision::Portable, TileFfpFallbackReason::GpuFamily};
@@ -1576,6 +1647,24 @@ TileFfpSelection selectTileFfpForPass(core::FlatDrawStateView state, bool suppor
   }
   // Unreachable: classifyTileFfpEligibility is total over the enum.
   return TileFfpSelection{TileFfpDecision::Portable, TileFfpFallbackReason::Precision};
+}
+
+TileFfpSelection selectTileFfpForPass(core::FlatDrawStateView state, bool supportsApple3) {
+  // R-BACK-13.* DXMT9_TILE_FFP escape hatch (off|force|auto). `off` is a
+  // clean opt-out that routes every draw down the portable lane regardless
+  // of eligibility — keep it ahead of the genuine gates so an A/B probe can
+  // diff the two lanes for the SAME eligible draw. `force` deliberately does
+  // NOT bypass the genuine ineligibility gates (GpuFamily / NotFfp /
+  // textured / vertex-blend / precision / A2C): forcing the tile kernel onto
+  // any of those would mis-emit. `force` therefore only guarantees the tile
+  // lane for a draw that genuinely passes every gate — which is what makes it
+  // the Tile half of the A/B against `off`'s Portable half for an eligible
+  // non-textured FFP draw.
+  const TileFfpModeOverride mode = tileFfpModeOverride();
+  if (mode == TileFfpModeOverride::Off) {
+    return TileFfpSelection{TileFfpDecision::Portable, TileFfpFallbackReason::None};
+  }
+  return classifyTileFfpForPass(state, supportsApple3);
 }
 
 ArgbufHybridDecision selectArgbufHybridForPass(core::FlatDrawStateView,

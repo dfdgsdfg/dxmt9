@@ -2008,6 +2008,51 @@ void testVsOutputScratchTrimIsOptInAndUsesObservedOutputRange() {
   }
 }
 
+void testVsOutTrimHashAllowlistScopesPairLiveness() {
+  const ScopedSetEnv trim("DXMT9_TRIM_UNUSED_VARYINGS", "1");
+  const auto vertex = makeShader(makeVs30OutputSemanticBytecode());
+  const auto pixel = makeShader(makePs20ColorInputBytecode());
+
+  DrawDesc desc{};
+  desc.vertexShader = vertex;
+  desc.pixelShader = pixel;
+  auto context = dxmt9::drawshader::makeShaderSourceContext(desc);
+
+  {
+    const ScopedSetEnv nonMatchingVs("DXMT9_TRIM_UNUSED_VARYINGS_VS_HASHES",
+                                     "0x1234");
+    const auto layout = dxmt9::drawshader::resolveVSOutLayoutForShaderPair(context);
+    checkEqual(dxmt9::shaders::vsoutLayoutKey(layout), 0xfffu,
+               "non-matching VS trim allowlist keeps full VSOut");
+  }
+
+  {
+    const auto matching = std::to_string(vertex.hash);
+    const ScopedSetEnv matchingVs("DXMT9_TRIM_UNUSED_VARYINGS_VS_HASHES",
+                                  matching.c_str());
+    const ScopedSetEnv nonMatchingPs("DXMT9_TRIM_UNUSED_VARYINGS_PS_HASHES",
+                                     "0x5678");
+    const auto layout = dxmt9::drawshader::resolveVSOutLayoutForShaderPair(context);
+    checkEqual(dxmt9::shaders::vsoutLayoutKey(layout), 0xfffu,
+               "non-matching PS trim allowlist keeps full VSOut");
+  }
+
+  {
+    const auto matchingVsHash = std::to_string(vertex.hash);
+    const auto matchingPsHash = std::to_string(pixel.hash);
+    const ScopedSetEnv matchingVs("DXMT9_TRIM_UNUSED_VARYINGS_VS_HASHES",
+                                  matchingVsHash.c_str());
+    const ScopedSetEnv matchingPs("DXMT9_TRIM_UNUSED_VARYINGS_PS_HASHES",
+                                  matchingPsHash.c_str());
+    const auto layout = dxmt9::drawshader::resolveVSOutLayoutForShaderPair(context);
+    check(dxmt9::shaders::vsoutLayoutKey(layout) != 0xfffu,
+          "matching VS/PS trim allowlist enables pair-local VSOut trim");
+    check(layout.color, "color-input PS keeps color varying");
+    check(!layout.secondaryColor, "color-input PS drops unread secondary color");
+    check(layout.fogFactor, "translated PS tail keeps fogFactor type-checked");
+  }
+}
+
 void testVsOutPointSizeProbeDropsOnlyPointSize() {
   {
     const ScopedUnsetEnv noProbe("DXMT9_PROBE_DROP_VSOUT_POINT_SIZE");
@@ -2932,6 +2977,9 @@ int main() {
     const ScopedUnsetEnv noVertexYFlip("DXMT_DEBUG_FLIP_VERTEX_Y");
     const ScopedUnsetEnv noVertexTempTrim("DXMT9_TRIM_VERTEX_TEMPS");
     const ScopedUnsetEnv noVsOutputScratchTrim("DXMT9_TRIM_VS_OUTPUT_SCRATCH");
+    const ScopedUnsetEnv noVsOutTrim("DXMT9_TRIM_UNUSED_VARYINGS");
+    const ScopedUnsetEnv noVsOutTrimVsHashes("DXMT9_TRIM_UNUSED_VARYINGS_VS_HASHES");
+    const ScopedUnsetEnv noVsOutTrimPsHashes("DXMT9_TRIM_UNUSED_VARYINGS_PS_HASHES");
     const ScopedUnsetEnv noVsOutPointSizeProbe("DXMT9_PROBE_DROP_VSOUT_POINT_SIZE");
     const ScopedUnsetEnv noVsOutHalfProbe("DXMT9_PROBE_HALF_VSOUT");
 
@@ -2955,6 +3003,7 @@ int main() {
     testVs30OutputSemanticMappingBySemanticIndex();
     testVsTempTrimIsOptInAndUsesObservedTempRange();
     testVsOutputScratchTrimIsOptInAndUsesObservedOutputRange();
+    testVsOutTrimHashAllowlistScopesPairLiveness();
     testVsOutPointSizeProbeDropsOnlyPointSize();
     testVsOutHalfProbeNarrowsOnlyUserVaryings();
     testVertexDepthOutThrowsDeterministically();

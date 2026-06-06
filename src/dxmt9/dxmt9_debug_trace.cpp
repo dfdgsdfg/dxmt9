@@ -683,6 +683,44 @@ RenderEncoderSelectorList probeDepthFuncAlwaysRows() {
   return selectors;
 }
 
+bool probeFragmentlessDepthOnly() {
+  static const bool v =
+      util::getenvFlag("DXMT9_PROBE_FRAGMENTLESS_DEPTH_ONLY") ||
+      probeFragmentlessDepthOnlyRow().enabled ||
+      probeFragmentlessDepthOnlyRows().enabled ||
+      probeFragmentlessDepthOnlyClassFilter() !=
+          IndexedTriangleClassFilter::Any ||
+      probeFragmentlessDepthOnlyClassFilters().count != 0;
+  return v;
+}
+
+IndexedTriangleClassFilter probeFragmentlessDepthOnlyClassFilter() {
+  static const IndexedTriangleClassFilter filter =
+      makeIndexedTriangleClassFilter(
+          util::getenvString("DXMT9_PROBE_FRAGMENTLESS_DEPTH_ONLY_CLASS"));
+  return filter;
+}
+
+IndexedTriangleClassFilterList probeFragmentlessDepthOnlyClassFilters() {
+  static const IndexedTriangleClassFilterList filters =
+      makeIndexedTriangleClassFilterList(
+          util::getenvString("DXMT9_PROBE_FRAGMENTLESS_DEPTH_ONLY_CLASSES"));
+  return filters;
+}
+
+RenderEncoderSelector probeFragmentlessDepthOnlyRow() {
+  static const RenderEncoderSelector selector =
+      parseRenderEncoderSelector("DXMT9_PROBE_FRAGMENTLESS_DEPTH_ONLY_ROW");
+  return selector;
+}
+
+RenderEncoderSelectorList probeFragmentlessDepthOnlyRows() {
+  static const RenderEncoderSelectorList selectors =
+      makeRenderEncoderSelectorList(
+          util::getenvString("DXMT9_PROBE_FRAGMENTLESS_DEPTH_ONLY_ROWS"));
+  return selectors;
+}
+
 CullModeOverride probeForceCullMode() {
   static const CullModeOverride mode =
       makeCullModeOverride(util::getenvString("DXMT9_PROBE_FORCE_CULL_MODE"));
@@ -756,6 +794,27 @@ RenderEncoderSelectorList probeForceExpandIndexedRows() {
   static const RenderEncoderSelectorList selectors =
       makeRenderEncoderSelectorList(
           util::getenvString("DXMT9_PROBE_FORCE_EXPAND_INDEXED_ROWS"));
+  return selectors;
+}
+
+bool probeStageStreamIb() {
+  static const bool v =
+      util::getenvFlag("DXMT9_PROBE_STAGE_STREAM_IB") ||
+      probeStageStreamIbRow().enabled ||
+      probeStageStreamIbRows().enabled;
+  return v;
+}
+
+RenderEncoderSelector probeStageStreamIbRow() {
+  static const RenderEncoderSelector selector =
+      parseRenderEncoderSelector("DXMT9_PROBE_STAGE_STREAM_IB_ROW");
+  return selector;
+}
+
+RenderEncoderSelectorList probeStageStreamIbRows() {
+  static const RenderEncoderSelectorList selectors =
+      makeRenderEncoderSelectorList(
+          util::getenvString("DXMT9_PROBE_STAGE_STREAM_IB_ROWS"));
   return selectors;
 }
 

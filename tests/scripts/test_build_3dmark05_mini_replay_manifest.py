@@ -223,6 +223,22 @@ class BuildMiniReplayManifestTests(unittest.TestCase):
             self.assertEqual(manifest["summary"]["draw_count"], 1)
             self.assertEqual(manifest["summary"]["missing_probe_rows"], 0)
             self.assertEqual(manifest["summary"]["missing_shader_rows"], 0)
+            self.assertEqual(manifest["summary"]["texture_handles"], ["0x1000", "0x3000"])
+            self.assertEqual(manifest["summary"]["texture_handle_count"], 2)
+            self.assertEqual(manifest["summary"]["texture_capture_handles"], ["0x1000"])
+            self.assertEqual(manifest["summary"]["texture_capture_handle_count"], 1)
+            self.assertEqual(manifest["summary"]["texture_capture_handles_arg"], "0x1000")
+            self.assertEqual(
+                manifest["summary"]["texture_capture_flags"],
+                [
+                    "--dump-draw-texture-handles",
+                    "0x1000",
+                    "--dump-draw-texture-seq",
+                    "60",
+                    "--dump-draw-texture-enc",
+                    "2",
+                ],
+            )
             draw = manifest["draws"][0]
             self.assertEqual(draw["encoder_draw_index"], 189)
             self.assertEqual(draw["draw_ordinal"], 42428)

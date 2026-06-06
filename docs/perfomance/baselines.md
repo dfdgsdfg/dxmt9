@@ -29,6 +29,7 @@ captures. Almost every A/B delta elsewhere is measured against
 | H6 | The new top-level watchdog + Wine cleanup path preserves baseline counter shape | accepted | [[baselines-frame50.04]] |
 | H7 | A time-based GT1 `actual.png` alone can prove visual correctness after optimization changes | rejected | [[baselines-visual-capture.01]] |
 | H8 | The `v0.0.1` tag is the known-good visual correctness / alignment anchor for GT1 regression triage, and screenshot diffs against it are useful corruption finders | accepted | [[baselines-visual-capture.02]] |
+| H9 | `MTL_CAPTURE_ENABLED=1` is required for standard 3DMark05 gputrace probes | rejected | [[baselines-gputrace-capture.01]] (`MTL_CAPTURE_ENABLED=1` alone reproduced black-screen startup with draw/present counters at zero; omitting it restores normal GT1, but file capture then needs a capture-layer/Xcode route) |
 
 ## Verification methods
 
@@ -66,6 +67,7 @@ flowchart TD
   F50wd["baselines-frame50.04\nwatchdog-cleanup scout\n2026-06-06, gpu cb 4208ms\nsame shape, no manual kill"]
   Visual["baselines-visual-capture.01\ntime-based screenshot caveat\nnot a visual oracle"]
   VisualAnchor["baselines-visual-capture.02\nv0.0.1 visual correctness anchor\ndiff-assisted triage"]
+  CaptureEnv["baselines-gputrace-capture.01\nMTL_CAPTURE_ENABLED black-screen\nwrapper omits it by default"]
   F60["baselines-frame60.01\nframe60 validation\n34.02ms / top3 98.41%\nVS write 1627.4MiB"]
   F60post["baselines-frame60.02\npost-visualfix frame60\n33.614ms / top3 98.12%\nhidden 1597.8MiB"]
 
@@ -79,6 +81,7 @@ flowchart TD
   F50wd -->|visual-smoke-caveat| Visual
   Visual -->|anchor-refined-by| VisualAnchor
   VisualAnchor -->|visual-alignment anchor for| F60post
+  CaptureEnv -->|standard gputrace launch hygiene for| F60post
 
   F120 -->|feeds| Store["[[render-pass-store]]\n+ bottleneck shape"]
   F50 -->|baseline-for| IdxCache["[[index-cache-locality]]\nopaque / screen-blend proofs"]
@@ -87,7 +90,7 @@ flowchart TD
   F60post -->|baseline-for| Churn["[[state-churn-encode]]"]
 
   class F120,F50,F50san,F50to,F50wd,F60,F60post,RunLevel,VisualAnchor accepted
-  class Visual rejected
+  class Visual,CaptureEnv rejected
   class Store,IdxCache,VSOut,Backend,Churn open
 ```
 
@@ -104,6 +107,7 @@ flowchart TD
 | [[baselines-frame60.01]] | 2026-06-01 | `34.02ms` | `33.481ms` / `98.41%` | VS write `1627.414MiB`; dxmt CPU `0.444MiB`; unexplained `1627.642MiB`; `7.9x` |
 | [[baselines-frame60.02]] | 2026-06-06 | `33.614ms` | `32.984ms` / `98.12%` | post-visualfix refresh; VS write `1627.332MiB`; hidden backend `1597.755MiB`; dxmt CPU `0.202MiB`; `7.9x` |
 | [[baselines-visual-capture.02]] | 2026-06-06 | — | — | `v0.0.1` is the known-good visual correctness / alignment anchor; same 40s screenshot can still drift (`Frame 351` vs `483`), but PNG diff is useful for broad texture/color/geometry, black/translucent vertex, UV, and cbuf-identity triage |
+| [[baselines-gputrace-capture.01]] | 2026-06-06 | — | — | capture workflow fix: `MTL_CAPTURE_ENABLED=1` alone can black-screen 3DMark05 startup with draw/present `0`; no-layer r3 restores normal GT1 (`present_encoded=1680`) but file `.gputrace` fails with `Capture layer is not inserted`, so the next route is attached-Xcode `developerTools` |
 
 ## Results synthesis
 
@@ -128,6 +132,9 @@ treat frame50/frame60 as fixed A/B denominators.
 
 What is settled: the baseline numbers and the capture/finalize methodology
 (wrapper, `--frame`, `--no-gputrace`, timeout policy, finalizer join + gates).
+The capture workflow now also rejects `MTL_CAPTURE_ENABLED=1` as a default
+3DMark05 env because it can black-screen startup before any draw/present calls
+([[baselines-gputrace-capture.01]]).
 What stays open lives in the consuming domains, not here — almost every A/B
 delta elsewhere is measured against [[baselines-frame50.01]] (frame50 locality
 proofs), [[baselines-frame60.01]] (historical VSOut / backend-shape /

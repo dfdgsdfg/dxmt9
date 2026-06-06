@@ -28,6 +28,17 @@ the apparatus that made [[tvb-mechanism-proof]] possible and that backs the
 | H9 | The cost is per-draw geometry/shader-pair amplification, not alpha/scissor | accepted | [[mini-replay-bisection-pair.01]] |
 | H10 | Broad depth-read reorder can be made production-shaped with current runtime selectors | rejected | [[mini-replay-bisection-semantic.01]] |
 | H11 | A selected `60/2 depth-read + no-alpha-blend` cache-opt window can preserve same-input final color | accepted (scoped) | [[mini-replay-bisection-semantic.02]] |
+| H12 | Draw-time texture sidecars can remove the current white-texture replay caveat | tooling | [[mini-replay-bisection-texture.01]] |
+| H13 | The same selected window remains exact after real texture inputs are supplied | rejected (tiny delta, final-writer hazard) | [[mini-replay-bisection-texture.02]] |
+| H14 | Lower-ranked same-shape windows can decide whether rank 1 was an isolated hazard or the whole reorder class is unsafe | accepted: rank 1 is visible-fail; ranks 2-4 are color-exact owner-masked | [[mini-replay-bisection-texture.03]], [[mini-replay-bisection-texture.04]], [[mini-replay-bisection-texture.05]], [[mini-replay-bisection-texture.06]] |
+| H15 | The rank-2 same-shape window remains exact with real depth and textures | accepted for color only; owner-masked | [[mini-replay-bisection-texture.04]] |
+| H16 | The rank-3 same-shape window remains exact with real depth and textures | accepted for color only; owner-masked | [[mini-replay-bisection-texture.05]] |
+| H17 | The rank-4 same-shape window remains exact with real depth and textures | accepted for color only; owner-masked | [[mini-replay-bisection-texture.06]] |
+| H18 | Primitive-conflict metrics can split rank-1 visible failure from rank2-4 exact owner-masked passes | rejected; only final-color metrics separate | [[mini-replay-bisection-texture.07]] |
+| H19 | Existing D3D9 occlusion query or winemetal visibility plumbing can supply the missing runtime oracle as-is | rejected as production oracle; diagnostic scout added separately | [[mini-replay-bisection-texture.08]] |
+| H20 | A diagnostic Metal visibility scout can supply per-Metal-draw sample-visible counts after GPU completion | implemented diagnostic; not final-color proof; old rank-1 `36..37` is sample-visible | [[mini-replay-bisection-texture.09]] |
+| H21 | No-sample visibility rows are the hidden-backend hot locality owner | rejected; zero rows are small and only `-2,016` of `-182,856` LRU32 delta | [[mini-replay-bisection-texture.10]] |
+| H22 | Positive Metal visibility samples can be used as the scoped depth-read final-color oracle | rejected; rank2 has `39,835` samples but `0` final-color pixels, and rank1/rank3 are both sample-positive but fail/pass diverge | [[mini-replay-bisection-texture.11]] |
 
 ## Verification methods
 
@@ -44,11 +55,28 @@ the apparatus that made [[tvb-mechanism-proof]] possible and that backs the
   `--dump-depth-attachment-handle/-seq/-enc/-path`) — blits a live GPU-side
   depth/stencil target to a readback buffer with `.json` metadata, capturing
   D24X8 that the old BMP `DXMT_DUMP_GPU_TEXTURE_*` upload hook cannot.
+- **`DXMT9_DUMP_DRAW_TEXTURE_HANDLES` / `_DIR`** (wrapper
+  `--dump-draw-texture-handles/-seq/-enc/-dir`) — blits live shader-read
+  texture views to raw sidecars under `analysis/textures/`, preserving
+  per-level/per-slice `formatRowPitch` / `formatByteSize` metadata for
+  compressed, luminance, float, sRGB, and cube inputs. This is the input path
+  for removing the current mini-replay `whiteTexture` fallback.
 - **`run_3dmark05_mini_replay.py`** — rewrites dumped MSL off `buffer(30)` argbuf
   into standalone cbuf slots, scans bindings to pick free slots, compiles an
   Obj-C++ Metal app, binds real payloads, multi-PSO, per-draw scissor,
-  `--depth-clear`, `--depth-input`, `--primitive-order`, `--draw-order`,
-  `--color-output` PPM readback, `--capture-path`.
+  `--depth-clear`, `--depth-input`, `--texture-input-dir`,
+  `--primitive-order`, `--draw-order`, `--color-output` PPM readback,
+  `--capture-path`.
+- **`run_3dmark05_semantic_replay_gate.py`** — standardized candidate gate that
+  runs original/candidate color replays, primitive-id replays, exact/`lsb1`
+  image comparison, canonical original-triangle owner comparison, and optional
+  GT1 primitive-conflict analysis. This is the repeatable path for future
+  payload windows before spending production Xcode budget.
+- **`build_3dmark05_mini_replay_manifest.py` texture summary** — after a fresh
+  geometry capture, `summary.texture_capture_handles_arg` and
+  `summary.texture_capture_flags` provide the exact
+  `--dump-draw-texture-handles/-seq/-enc` flags for the matching texture
+  sidecar run. This keeps rank2+ gates out of manual `.meta` scraping.
 - **`--encoder-draw-indices`** (manifest builder) — captures non-contiguous
   encoder-local draws (e.g. a shader pair `[14,15,18,19,21]`) without widening the
   geometry gate.
@@ -72,7 +100,25 @@ flowchart TD
   Pair --> TVB["feeds [[tvb-mechanism-proof]]"]
   Pair --> Semantic["semantic.01\nfinal-color runtime blocker\nbroad depth-read rejected"]
   Semantic --> ScopedSemantic["semantic.02\n60/2 depth-read/no-blend\n2-draw exact replay\nscoped proof only"]
+  ScopedSemantic --> TextureSidecar["texture.01\ndraw-time raw texture sidecars"]
+  TextureSidecar --> TextureReplay["texture.02\nreal textures + real depth\n2 px color delta\n7 final-writer pixels changed"]
+  TextureReplay --> RankQueue["texture.03\nrank2+ real-texture gate queue"]
+  RankQueue --> Rank2["texture.04\nrank2 real texture\n0 color delta\n809 owner pixels changed"]
+  RankQueue --> Rank3["texture.05\nrank3 real texture\n0 color delta\n52 owner pixels changed"]
+  RankQueue --> Rank4["texture.06\nrank4 real texture\n0 color delta\n17 owner pixels changed"]
+  TextureReplay --> SelectorScout["texture.07\nselector scout\nnon-color metrics overlap\nfinal-color oracle required"]
+  Rank2 --> SelectorScout
+  Rank3 --> SelectorScout
+  Rank4 --> SelectorScout
+  SelectorScout --> OcclusionGate["texture.08\nocclusion oracle feasibility\nD3D9 query primitive-count only"]
+  OcclusionGate --> VisibilityScout["texture.09\nMetal visibility scout wired\nper-draw visible sample counts"]
+  VisibilityScout --> VisibilityCache["texture.10\nvisibility + cache join\nno-sample rows are not hot"]
+  VisibilityCache --> VisibilitySemantic["texture.11\nvisibility + semantic join\npositive samples are not final color"]
   ScopedSemantic --> ICL["feeds [[index-cache-locality]]\nexplicit screen-blend + scoped depth-read candidates"]
+  TextureReplay --> ICL
+  Rank2 --> ICL
+  Rank3 --> ICL
+  Rank4 --> ICL
 
   classDef accepted fill:#d6f5d6,stroke:#2b7a2b,color:#063
   classDef rejected fill:#f8d7da,stroke:#a33,color:#600
@@ -83,8 +129,9 @@ flowchart TD
   class R16 open
   class Scissor,Depth rejected
   class R113,Bisect,Pair,TVB,ScopedSemantic accepted
-  class Semantic rejected
-  class ICL open
+  class Semantic,TextureReplay,OcclusionGate rejected
+  class TextureSidecar,VisibilityScout tooling
+  class RankQueue,Rank2,Rank3,Rank4,ICL,SelectorScout open
 ```
 
 ## Results synthesis
@@ -118,14 +165,55 @@ depth-read reorder. [[mini-replay-bisection-semantic.01]] shows that useful
 visible exact movement and a real final-color hazard share the same current
 runtime-visible state/geometry/shader fields. That keeps `50/2` screen-blend in
 the explicit exact/`lsb1` bucket and blocks broad depth-read promotion until a
-real final-color/final-writer or occlusion oracle exists. The post-visualfix
-follow-up [[mini-replay-bisection-semantic.02]] adds a narrower positive result:
+real final-color/final-writer policy exists; Metal visibility can only triage
+no-sample cases unless paired with that policy. The
+post-visualfix follow-up [[mini-replay-bisection-semantic.02]] adds a narrower
+positive result:
 a selected `60/2 depth-read + no-alpha-blend` two-draw window is exact under the
 standalone same-input replay while cutting LRU32 misses by `-14,593` (`-27.6%`).
-That is a scoped candidate, not a broad rule, because the replay still uses
-white dummy textures. A second pass supplied the captured D24X8 depth input and
-remained exact, so depth content is no longer the caveat for this selected
-window.
+The captured D24X8 depth input stayed exact, so depth content is not the caveat
+for this selected window. The real-texture follow-up then supplied the selected
+window's actual `R32F` / `L8` / `L16` / `DXT1` / `DXT5` / cube inputs and
+rejected exact promotion: only `2 / 786,432` pixels changed, but max delta `5`
+fails both exact and `lsb1`. A canonical primitive-id replay showed `7` pixels
+with a changed original-triangle final writer, so this is a
+depth-read/depth-write-off order hazard rather than same-primitive texture
+noise. Ranks 2-4 then kept final color exact with real textures while still
+changing canonical primitive ownership (`809`, `52`, and `17` pixels). The
+locality ceiling remains real, but the current runtime selector is not
+production-safe; color-only exactness and owner-stable exactness are separate
+proof levels. The primitive-conflict selector scout
+([[mini-replay-bisection-texture.07]]) then checked whether owner-count,
+both-cover, depth, UV, or projected-texcoord metrics can split rank 1 from
+ranks 2-4; all non-color ranges overlap. The only separating signal is final
+color itself, so this reorder line now requires final-color/final-writer proof
+before production promotion; the later visibility/cache join rejects current
+no-sample rows as the hot owner.
+[[mini-replay-bisection-texture.08]] then audits the obvious runtime reuse path
+and rejects it for the current
+implementation: dxmt9's D3D9 occlusion query resolves submitted primitive count,
+not framebuffer visibility, while the winemetal visibility buffer/mode ABI is
+present but not wired into dxmt9 draw encoding or any delayed feedback loop.
+[[mini-replay-bisection-texture.09]] follows by wiring that missing diagnostic
+path: selected render encoders can now allocate a shared Metal visibility buffer,
+toggle `Counting` around each actual Metal draw, and append per-draw
+`visible_samples` after GPU completion. This is still not a final-color gate:
+zero counts are useful no-sample evidence, but positive counts need
+final-color/final-writer or semantic replay proof before any production reorder.
+The first `60/2` scout lowers the old rank-1 hypothesis because draw window
+`36..37` is positive-positive and all `large4096` buckets are sample-visible.
+[[mini-replay-bisection-texture.10]] joins the scout with cache-candidate
+measurement and closes the no-sample hotpath variant: zero rows account for only
+`7,344` primitives and `-2,016` LRU32 delta, while sample-visible rows carry
+`382,032` primitives and `-180,840` LRU32 delta.
+[[mini-replay-bisection-texture.11]] then joins those sample counts back to the
+ranked final-color semantic payloads. It rejects positive visibility as the
+missing oracle: rank2 is sample-positive (`39,835` samples) but has no final
+color, while rank1 and rank3 are both sample-positive but split into visible
+fail versus visible exact-pass. This turns the current experiment into a proof
+gate rather than an optimization: it stops further locality Xcode spend unless a
+real final-color/final-writer predicate or a non-reorder backend mechanism
+appears.
 
 ## How to run
 Every experiment here is a 3DMark05 GT1 run. The pipeline is three stages: dump
@@ -144,11 +232,31 @@ python3 scripts/tools/build_3dmark05_mini_replay_manifest.py \
   --shader-summary <shader-dump-summary.csv> --encoder-draw-indices 71,72,73 \
   --output traces/<run>/analysis/mini-replay-manifest.json
 
+# 2b. If the replay needs real textures, use the manifest-generated flags:
+jq -r '.summary.texture_capture_flags | @sh' \
+  traces/<run>/analysis/mini-replay-manifest.json
+
 # 3. Replay standalone with the order/depth variant + capture for Xcode counters:
 python3 scripts/tools/run_3dmark05_mini_replay.py traces/<run>/analysis/mini-replay-manifest.json \
   --output-dir traces/<run>/mini --compile --run --primitive-order original \
   --depth-input traces/<run>/analysis/frame60-2-depth.bin \
   --capture-path traces/<run>/mini/mini.gputrace
+
+# Optional: capture draw-time texture sidecars for the selected 60/2 window:
+bash scripts/tools/run_3dmark05_perf_probe.sh \
+  --suffix post-visualfix-frame60-60-2-textureinput-r1 \
+  --frame 60 --encoder-breakdown-seq 60 --no-gputrace --timeout 120 --top 5 \
+  --dump-draw-texture-handles \
+    0x20000010000008d,0x200000100000072,0x200000100000001,0x200000100000074,0x200000100000007,0x200000100000003,0x200000100000070,0x20000010000007e,0x200000100000071 \
+  --dump-draw-texture-seq 60 --dump-draw-texture-enc 2
+
+# Optional: replay the same window with captured depth + real texture sidecars:
+python3 scripts/tools/run_3dmark05_mini_replay.py traces/<run>/analysis/mini-replay-manifest.json \
+  --output-dir traces/<run>/mini-real-texture --compile --run \
+  --primitive-order cache-opt-lru32 \
+  --depth-input traces/<depth-run>/analysis/frame60-depth.bin \
+  --texture-input-dir traces/<texture-run>/analysis/textures \
+  --color-output traces/<run>/mini-real-texture/cache-opt.ppm
 ```
 
 The exact per-experiment flags (draw windows, `--primitive-order` choices,
@@ -166,4 +274,15 @@ The exact per-experiment flags (draw windows, `--primitive-order` choices,
 - [[render-pass-store]] — depth re-entry / attachment content rejected as owner.
 - [[mini-replay-bisection-semantic.01]] — final-color/runtime blocker for broad depth-read reorder.
 - [[mini-replay-bisection-semantic.02]] — scoped `60/2` depth-read/no-blend exact replay candidate.
+- [[mini-replay-bisection-texture.08]] — current occlusion/visibility path is not the missing runtime oracle.
+- [[mini-replay-bisection-texture.09]] — diagnostic Metal visibility scout wiring.
+- [[mini-replay-bisection-texture.10]] — visibility scout + cache join rejects no-sample rows as the hot locality owner.
+- [[mini-replay-bisection-texture.11]] — visibility-positive semantic join rejects positive samples as the final-color oracle.
+- [[mini-replay-bisection-texture.01]] — draw-time raw texture sidecar input for real-texture replay.
+- [[mini-replay-bisection-texture.02]] — real-texture replay rejects exact/`lsb1` promotion for the selected `60/2` window.
+- [[mini-replay-bisection-texture.03]] — ranked real-texture semantic gate queue after rank 1 rejects.
+- [[mini-replay-bisection-texture.04]] — rank-2 real-texture gate is color-exact but owner-masked.
+- [[mini-replay-bisection-texture.05]] — rank-3 real-texture gate is also color-exact but owner-masked.
+- [[mini-replay-bisection-texture.06]] — rank-4 real-texture gate completes the queued set as color-exact owner-masked.
+- [[mini-replay-bisection-texture.07]] — primitive-conflict selector scout rejects simple non-color thresholds.
 - [[overview-3dmark05-gt1]] — root map and priority DAG.

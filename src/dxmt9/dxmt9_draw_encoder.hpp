@@ -168,7 +168,9 @@ WMT::Reference<WMT::RenderCommandEncoder> beginRenderPass(
     core::FlatDrawStateView drawState,
     const std::optional<core::ClearDesc>& clear,
     const core::ChunkSlot* lookaheadSlot = nullptr,
-    std::size_t lookaheadStartIndex = 0);
+    std::size_t lookaheadStartIndex = 0,
+    std::span<const WMTSampleBufferAttachmentInfo> sampleBufferAttachments = {},
+    WMT::Buffer visibilityBuffer = {});
 
 // Depth/stencil DontCare-store look-ahead (R-BACK-15.7,
 // specs/backend/render-pass-actions/design.md section 4.2). Returns the

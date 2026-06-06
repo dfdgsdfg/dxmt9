@@ -22,6 +22,7 @@ semantic_image_diff_output=${DXMT_3DMARK05_SEMANTIC_IMAGE_DIFF_OUTPUT:-}
 semantic_image_min_active_pct=${DXMT_3DMARK05_SEMANTIC_IMAGE_MIN_ACTIVE_PCT:-1}
 dry_run=0
 require_result_json=0
+allow_partial_stable_frame_proof=0
 
 require_color_dontcare_increase=0
 require_depth_dontcare_increase=0
@@ -123,6 +124,13 @@ Options:
                       image gates (default: 1)
   --require-result-json
                       Gate: fail instead of using dxmt9.log partial-run counters
+  --allow-partial-stable-frame-proof
+                      Do not let --require-stable-frame-proof imply
+                      --require-result-json. Use only for timeout-finalized
+                      captures where Xcode encoder counters and dxmt9.log are
+                      complete enough for row-local GPU proof. An explicit
+                      --require-result-json or --baseline-output still requires
+                      result.json.
   --require-color-dontcare-increase
   --require-depth-dontcare-increase
   --require-tile-preservation-decrease
@@ -308,6 +316,10 @@ while (($#)); do
       ;;
     --require-result-json)
       require_result_json=1
+      shift
+      ;;
+    --allow-partial-stable-frame-proof)
+      allow_partial_stable_frame_proof=1
       shift
       ;;
     --require-color-dontcare-increase)
@@ -659,7 +671,9 @@ if (( require_cache_opt_apply_proof )); then
 fi
 
 if (( require_stable_frame_proof )); then
-  require_result_json=1
+  if (( ! allow_partial_stable_frame_proof )); then
+    require_result_json=1
+  fi
   require_top_gpu_decrease=1
   require_top_vs_buffer_write_decrease=1
   require_top_unexplained_buffer_write_decrease=1

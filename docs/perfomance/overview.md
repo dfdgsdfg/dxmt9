@@ -300,10 +300,10 @@ state separates GPU frame-time, CPU encode cost, and wallclock present pacing:
 | General class | 3DMark05 GT1 status | Decision |
 |---|---|---|
 | GPU hidden backend storage | Dominant GPU frame limiter. Xcode VS-buffer write tracks VS invocations, not dxmt CPU writers, visible `VSOut`, or fragment volume. | Reduce VS invocations when semantics allow; do not chase visible varying width as the first-order owner. [[hidden-backend-storage]] |
-| Opaque-depth index locality | Accepted production-shaped GPU win: target `50/0+50/1` GPU `-18.39%`, VS invocations `-14.12%`, VS write `-16.79%`. Remaining CPU side-effect is index cache/candidate/draw-path work, not base index-source resolve. | Keep as opt-in locality path; do not make it the shared `perf` default until index-setup CPU cost is lower or a broader runtime gate proves net positive. [[index-cache-locality]] |
-| Screen-blend index locality | Strong measured movement, but destination-dependent. | Allow only as explicit exact/`lsb1` semantic-policy artifact; do not generalize to broad depth-read reorder. [[index-cache-locality-screenblend.04]] |
-| Broad depth-read reorder | Blocked by final-color correctness. | Needs a real final-color/final-writer or occlusion oracle before another Xcode budget. [[mini-replay-bisection-semantic.01]] |
-| Non-reorder backend-shape | Current candidates weak. | Half-VSOut moves bytes/inv only `-1.94%` and regresses GPU; future candidates need a bytes/inv preflight. [[hidden-backend-storage-shape.02]] |
+| Opaque-depth index locality | Accepted production-shaped GPU win: historical target `50/0+50/1` GPU `-18.39%`, VS invocations `-14.12%`, VS write `-16.79%`; refreshed frame60 target `60/0+60/1` GPU `-10.64%`, VS invocations `-14.12%`, VS write `-16.77%`. | Keep as opt-in locality path. The current opaque proof reattaches the movement to refreshed rows, but this is still not a shared `perf` default until index-setup CPU cost is lower or a broader runtime gate proves net positive. [[index-cache-locality-opaque.08]], [[index-cache-locality-proofinput.01]], [[index-cache-locality]] |
+| Screen-blend index locality | Strong measured movement, but destination-dependent; current gate is missing movement/semantic image inputs. | Keep as historical exact/`lsb1` proof artifact until the proof is reattached or regenerated; do not generalize to broad depth-read reorder. [[index-cache-locality-screenblend.05]], [[index-cache-locality-proofinput.01]], [[index-cache-locality-screenblend.04]] |
+| Broad depth-read reorder | Blocked by final-color correctness. | Needs a real final-color/final-writer oracle before another Xcode budget; the current D3D9 occlusion path is primitive-count only. [[mini-replay-bisection-semantic.01]], [[mini-replay-bisection-texture.08]] |
+| Non-reorder backend-shape | Current candidates rejected or unproven. | Half-VSOut and scoped `live-vsout` stayed flat in Xcode; the refreshed gate closes stale shader-output smokes. Future candidates need a new below-visible backend mechanism or bytes/inv preflight. [[hidden-backend-storage-shape.13]] |
 | Present pacing | Wallclock limiter, separate from GPU frame limiter. | `DXMT9_DISABLE_VSYNC=1` is accepted as user opt-in; encode-budget reduction remains open for vsync-on. [[present-pacing]] |
 | Per-draw CPU encode | Orthogonal to GPU limiter, still important for wallclock. | Focus on draw-run break reduction, snapshot rebuild, and measured bind/state churn rather than assuming bind-cache hit rates. [[state-churn-encode]] |
 
@@ -316,7 +316,7 @@ flowchart TD
   GPU --> Hidden["hidden vertex/tiler/backend storage\nACCEPTED owner"]
   Hidden --> Locality["post-transform locality\naccepted lever"]
   Locality --> Opaque["opaque-depth opt-in\nnot default yet"]
-  Locality --> Screen["screen-blend explicit exact/lsb1 only"]
+  Locality --> Screen["screen-blend historical exact/lsb1\ncurrent proof reattach needed"]
   Locality --> Broad["broad depth-read rejected\nfinal-color blocker"]
   Hidden --> Backend["non-reorder backend-shape\nneeds new mechanism"]
 

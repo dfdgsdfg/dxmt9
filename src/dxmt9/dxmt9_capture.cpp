@@ -37,6 +37,20 @@ std::string optionalEnvString(const char* name) {
   return env && env[0] != '\0' ? std::string(env) : std::string{};
 }
 
+WMTCaptureDestination parseCaptureDestination() {
+  const char* env = std::getenv("DXMT_METAL_CAPTURE_DESTINATION");
+  if (!env || env[0] == '\0' || std::strcmp(env, "gpuTraceDocument") == 0 ||
+      std::strcmp(env, "gputrace") == 0 || std::strcmp(env, "file") == 0) {
+    return WMTCaptureDestinationGPUTraceDocument;
+  }
+  if (std::strcmp(env, "developerTools") == 0 || std::strcmp(env, "xcode") == 0) {
+    return WMTCaptureDestinationDeveloperTools;
+  }
+  dxmt9::util::logf(dxmt9::util::LogLevel::Warn, "dxmt9-capture",
+                    "unknown DXMT_METAL_CAPTURE_DESTINATION=%s; using gpuTraceDocument", env);
+  return WMTCaptureDestinationGPUTraceDocument;
+}
+
 }  // namespace
 
 u64 gpuDumpTextureHandle() {
@@ -64,6 +78,7 @@ MetalCaptureConfig metalCaptureConfigFromEnv() {
   MetalCaptureConfig config;
   config.targetFrame = parseEnvU64("DXMT_METAL_CAPTURE_FRAME").value_or(0);
   config.path = optionalEnvString("DXMT_METAL_CAPTURE_PATH");
+  config.destination = parseCaptureDestination();
   return config;
 }
 
@@ -97,6 +112,7 @@ std::optional<MetalCaptureRequest> MetalCaptureController::maybeCaptureAtChunkBe
       .seqId = seqId,
       .path = config_.path.empty() ? defaultMetalCapturePath(config_.targetFrame, seqId)
                                    : config_.path,
+      .destination = config_.destination,
   };
   return activeSession_;
 }
@@ -143,11 +159,15 @@ std::optional<MetalCaptureRequest> MetalCaptureController::maybeCapturePresentCh
       .seqId = seqId,
       .path = config_.path.empty() ? defaultMetalCapturePath(observedPresentFrames_, seqId)
                                    : config_.path,
+      .destination = config_.destination,
   };
 }
 
 bool startMetalCapture(const WMT::Device& device, const MetalCaptureRequest& request) {
-  if (!device || request.path.empty()) {
+  if (!device) {
+    return false;
+  }
+  if (request.destination == WMTCaptureDestinationGPUTraceDocument && request.path.empty()) {
     return false;
   }
 
@@ -162,14 +182,17 @@ bool startMetalCapture(const WMT::Device& device, const MetalCaptureRequest& req
 
   WMTCaptureInfo info{};
   info.capture_object = device.handle;
-  info.destination = WMTCaptureDestinationGPUTraceDocument;
-  info.output_url.set(request.path.c_str());
+  info.destination = request.destination;
+  if (request.destination == WMTCaptureDestinationGPUTraceDocument) {
+    info.output_url.set(request.path.c_str());
+  }
   const bool started = captureManager.startCapture(info);
   dxmt9::util::logf(started ? dxmt9::util::LogLevel::Info : dxmt9::util::LogLevel::Warn,
                     "dxmt9-capture",
-                    "Metal capture frame=%llu seq=%llu %s path=%s",
+                    "Metal capture frame=%llu seq=%llu destination=%u %s path=%s",
                     static_cast<unsigned long long>(request.frame),
                     static_cast<unsigned long long>(request.seqId),
+                    static_cast<unsigned>(request.destination),
                     started ? "started" : "failed",
                     request.path.c_str());
   return started;
@@ -182,9 +205,10 @@ void stopMetalCapture(const MetalCaptureRequest& request) {
   }
   captureManager.stopCapture();
   dxmt9::util::logf(dxmt9::util::LogLevel::Info, "dxmt9-capture",
-                    "Metal capture frame=%llu seq=%llu stopped path=%s",
+                    "Metal capture frame=%llu seq=%llu destination=%u stopped path=%s",
                     static_cast<unsigned long long>(request.frame),
                     static_cast<unsigned long long>(request.seqId),
+                    static_cast<unsigned>(request.destination),
                     request.path.c_str());
 }
 

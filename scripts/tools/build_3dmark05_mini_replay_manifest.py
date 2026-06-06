@@ -386,6 +386,58 @@ def attachment_metadata(payload: dict[str, str]) -> dict[str, Any]:
     }
 
 
+def normalized_texture_handle(value: str) -> str:
+    handle = as_int(value)
+    return f"0x{handle:x}" if handle else ""
+
+
+def texture_sidecar_ready(texture: dict[str, Any]) -> bool:
+    return (
+        as_int(texture.get("missing_record")) == 0
+        and as_int(texture.get("handle")) != 0
+        and (
+            as_int(texture.get("has_metal_texture")) != 0
+            or as_int(texture.get("has_shader_read_texture")) != 0
+            or as_int(texture.get("has_srgb_shader_read_texture")) != 0
+        )
+    )
+
+
+def texture_handles_summary(manifest_draws: list[dict[str, Any]]) -> dict[str, Any]:
+    all_handles: set[str] = set()
+    capture_handles: set[str] = set()
+    for draw in manifest_draws:
+        for texture in draw.get("textures", []):
+            handle = normalized_texture_handle(str(texture.get("handle", "")))
+            if not handle:
+                continue
+            all_handles.add(handle)
+            if texture_sidecar_ready(texture):
+                capture_handles.add(handle)
+
+    ordered_all = sorted(all_handles, key=as_int)
+    ordered_capture = sorted(capture_handles, key=as_int)
+    capture_arg = ",".join(ordered_capture)
+    flags: list[str] = []
+    if capture_arg:
+        flags = ["--dump-draw-texture-handles", capture_arg]
+        seqs = sorted({as_int(draw.get("seq")) for draw in manifest_draws if as_int(draw.get("seq"))})
+        encoders = sorted({as_int(draw.get("encoder")) for draw in manifest_draws if as_int(draw.get("encoder"))})
+        if len(seqs) == 1:
+            flags.extend(["--dump-draw-texture-seq", str(seqs[0])])
+        if len(encoders) == 1:
+            flags.extend(["--dump-draw-texture-enc", str(encoders[0])])
+
+    return {
+        "texture_handles": ordered_all,
+        "texture_handle_count": len(ordered_all),
+        "texture_capture_handles": ordered_capture,
+        "texture_capture_handle_count": len(ordered_capture),
+        "texture_capture_handles_arg": capture_arg,
+        "texture_capture_flags": flags,
+    }
+
+
 def build_manifest(args: argparse.Namespace) -> dict[str, Any]:
     apply_payload_selection(args)
     shaders = shader_index(load_csv(args.shader_summary))
@@ -541,6 +593,7 @@ def build_manifest(args: argparse.Namespace) -> dict[str, Any]:
         for draw in manifest_draws
         if draw["encoder_draw_index"] is not None
     ]
+    texture_summary = texture_handles_summary(manifest_draws)
     return {
         "schema": "dxmt9.3dmark05.mini_replay_manifest.v1",
         "sources": {
@@ -571,6 +624,7 @@ def build_manifest(args: argparse.Namespace) -> dict[str, Any]:
             "missing_shader_rows": missing_shader_rows,
             "missing_draw_shader_files": missing_draw_shader_files,
             "row_shader_fallbacks": row_shader_fallbacks,
+            **texture_summary,
         },
         "draws": manifest_draws,
     }
