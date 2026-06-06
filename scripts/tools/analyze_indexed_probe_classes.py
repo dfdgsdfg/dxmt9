@@ -197,6 +197,11 @@ class Aggregate:
     effective_miss16: int = 0
     effective_miss32: int = 0
     effective_miss64: int = 0
+    candidate_rows: int = 0
+    candidate_gate_passed: int = 0
+    candidate_miss16: int = 0
+    candidate_miss32: int = 0
+    candidate_miss64: int = 0
     index_buffers: set[str] = field(default_factory=set)
     stream0_handles: set[str] = field(default_factory=set)
     pso_handles: set[str] = field(default_factory=set)
@@ -204,6 +209,7 @@ class Aggregate:
     effective_index_sources: Counter[str] = field(default_factory=Counter)
     row_original_miss32: Counter[str] = field(default_factory=Counter)
     row_effective_miss32: Counter[str] = field(default_factory=Counter)
+    row_candidate_miss32: Counter[str] = field(default_factory=Counter)
     row_vertices: Counter[str] = field(default_factory=Counter)
     row_primitives: Counter[str] = field(default_factory=Counter)
     xcode_proxy_gpu_ms: float = 0.0
@@ -228,9 +234,17 @@ class Aggregate:
         self.effective_miss16 += as_int(row.get("effective_cache_miss16"))
         self.effective_miss32 += as_int(row.get("effective_cache_miss32"))
         self.effective_miss64 += as_int(row.get("effective_cache_miss64"))
+        if as_bool(row.get("candidate_index_available")):
+            self.candidate_rows += 1
+            self.candidate_gate_passed += 1 if as_bool(row.get("candidate_gate_passed")) else 0
+            self.candidate_miss16 += as_int(row.get("candidate_cache_miss16"))
+            self.candidate_miss32 += as_int(row.get("candidate_cache_miss32"))
+            self.candidate_miss64 += as_int(row.get("candidate_cache_miss64"))
         key = row_key(row)
         self.row_original_miss32[key] += as_int(row.get("original_cache_miss32"))
         self.row_effective_miss32[key] += as_int(row.get("effective_cache_miss32"))
+        if as_bool(row.get("candidate_index_available")):
+            self.row_candidate_miss32[key] += as_int(row.get("candidate_cache_miss32"))
         self.row_vertices[key] += as_int(row.get("vertex_count"))
         self.row_primitives[key] += as_int(row.get("primitive_count"))
         if row.get("index_buffer"):
@@ -260,6 +274,30 @@ class Aggregate:
     @property
     def miss64_delta_pct(self) -> float | None:
         return pct_delta(self.effective_miss64, self.original_miss64)
+
+    @property
+    def candidate_miss32_delta(self) -> int:
+        return self.candidate_miss32 - self.original_miss32
+
+    @property
+    def candidate_miss64_delta(self) -> int:
+        return self.candidate_miss64 - self.original_miss64
+
+    @property
+    def candidate_miss32_delta_pct(self) -> float | None:
+        if self.candidate_rows == 0:
+            return None
+        return pct_delta(self.candidate_miss32, self.original_miss32)
+
+    @property
+    def candidate_miss64_delta_pct(self) -> float | None:
+        if self.candidate_rows == 0:
+            return None
+        return pct_delta(self.candidate_miss64, self.original_miss64)
+
+    @property
+    def ranking_delta32(self) -> int:
+        return self.candidate_miss32_delta if self.candidate_rows else self.miss32_delta
 
 
 def load_rows(path: Path) -> list[dict[str, str]]:
@@ -291,7 +329,7 @@ def aggregate_rows(rows: Iterable[dict[str, str]], mode: str) -> list[Aggregate]
         by_key.setdefault(key, Aggregate(key)).add(row)
     return sorted(
         by_key.values(),
-        key=lambda agg: (abs(agg.miss32_delta), agg.original_miss32, agg.primitives, agg.rows),
+        key=lambda agg: (abs(agg.ranking_delta32), agg.original_miss32, agg.primitives, agg.rows),
         reverse=True,
     )
 
@@ -309,6 +347,8 @@ def xcode_hidden_backend_mib(row: dict[str, str]) -> float:
 def row_weight_counter(agg: Aggregate, mode: str) -> Counter[str]:
     if mode == "effective-miss32":
         return agg.row_effective_miss32
+    if mode == "candidate-miss32":
+        return agg.row_candidate_miss32 if agg.candidate_rows else agg.row_effective_miss32
     if mode == "original-miss32":
         return agg.row_original_miss32
     if mode == "vertices":
@@ -366,6 +406,14 @@ def write_csv(path: Path, aggregates: list[Aggregate], *, include_xcode_proxy: b
         "effective_miss64",
         "miss64_delta",
         "miss64_delta_pct",
+        "candidate_rows",
+        "candidate_gate_passed",
+        "candidate_miss32",
+        "candidate_miss32_delta",
+        "candidate_miss32_delta_pct",
+        "candidate_miss64",
+        "candidate_miss64_delta",
+        "candidate_miss64_delta_pct",
         "unique_index_buffers",
         "unique_stream0_handles",
         "unique_pso_handles",
@@ -412,6 +460,14 @@ def write_csv(path: Path, aggregates: list[Aggregate], *, include_xcode_proxy: b
                 "effective_miss64": agg.effective_miss64,
                 "miss64_delta": agg.miss64_delta,
                 "miss64_delta_pct": "" if agg.miss64_delta_pct is None else f"{agg.miss64_delta_pct:.6f}",
+                "candidate_rows": agg.candidate_rows,
+                "candidate_gate_passed": agg.candidate_gate_passed,
+                "candidate_miss32": agg.candidate_miss32,
+                "candidate_miss32_delta": agg.candidate_miss32_delta if agg.candidate_rows else "",
+                "candidate_miss32_delta_pct": "" if agg.candidate_miss32_delta_pct is None else f"{agg.candidate_miss32_delta_pct:.6f}",
+                "candidate_miss64": agg.candidate_miss64,
+                "candidate_miss64_delta": agg.candidate_miss64_delta if agg.candidate_rows else "",
+                "candidate_miss64_delta_pct": "" if agg.candidate_miss64_delta_pct is None else f"{agg.candidate_miss64_delta_pct:.6f}",
                 "unique_index_buffers": len(agg.index_buffers),
                 "unique_stream0_handles": len(agg.stream0_handles),
                 "unique_pso_handles": len(agg.pso_handles),
@@ -647,8 +703,8 @@ def markdown_report(input_path: Path,
         lines.append(f"- Xcode proxy weight: `{xcode_proxy_weight}`")
     lines.extend([
         "",
-        "| Group | draws | applied | primitives | original LRU32 | effective LRU32 | LRU32 delta | LRU64 delta | reorder bytes | applied sources | unique IB/stream/PSO/shader |",
-        "|---|---:|---:|---:|---:|---:|---:|---:|---:|---|---:|",
+        "| Group | draws | applied | primitives | original LRU32 | effective LRU32 | effective Δ | candidate rows | candidate LRU32 | candidate Δ | reorder bytes | applied sources | unique IB/stream/PSO/shader |",
+        "|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---|---:|",
     ])
     for agg in aggregates[:top]:
         unique_summary = (
@@ -666,7 +722,10 @@ def markdown_report(input_path: Path,
             f"`{fmt_int(agg.original_miss32)}` | "
             f"`{fmt_int(agg.effective_miss32)}` | "
             f"`{fmt_int(agg.miss32_delta)}` ({fmt_pct(agg.miss32_delta_pct)}) | "
-            f"`{fmt_int(agg.miss64_delta)}` ({fmt_pct(agg.miss64_delta_pct)}) | "
+            f"`{fmt_int(agg.candidate_rows)}` | "
+            f"`{fmt_int(agg.candidate_miss32) if agg.candidate_rows else 'n/a'}` | "
+            f"`{fmt_int(agg.candidate_miss32_delta) if agg.candidate_rows else 'n/a'}` "
+            f"({fmt_pct(agg.candidate_miss32_delta_pct)}) | "
             f"`{fmt_int(agg.reorder_bytes)}` | "
             f"`{format_source_counter(agg.effective_index_sources) or 'n/a'}` | "
             f"`{unique_summary}` |"
@@ -743,7 +802,7 @@ def markdown_report(input_path: Path,
             aggregates,
             key=lambda item: (
                 item.xcode_proxy_hidden_backend_mib,
-                abs(item.miss32_delta),
+                abs(item.ranking_delta32),
                 item.primitives,
             ),
             reverse=True,
@@ -851,7 +910,7 @@ def build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument(
         "--xcode-proxy-weight",
-        choices=("effective-miss32", "original-miss32", "vertices", "primitives"),
+        choices=("effective-miss32", "candidate-miss32", "original-miss32", "vertices", "primitives"),
         default="effective-miss32",
         help="Per-row weight used to allocate Xcode row counters across groups",
     )

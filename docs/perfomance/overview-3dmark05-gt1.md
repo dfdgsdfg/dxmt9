@@ -141,7 +141,7 @@ backend mechanism before replay.
 | Broad depth-read reorder | reject | Visible exact gain exists (`-8446` LRU32), but visible-fail hazard remains (`-1407` LRU32) | Requires final-color/final-writer or occlusion proof before another Xcode spend. [[mini-replay-bisection-semantic.01]] |
 | Runtime final-color selector | blocked | Pass draws `3,5,6,7` and fail draw `4` share all `43` runtime-visible fields | Do not use full uniform payload identity as a production selector. [[mini-replay-bisection-semantic.01]] |
 | Non-reorder backend mechanism | needs-new-mechanism | Half-VSOut bytes/inv `-1.94%`, but GPU `+3.40%` | New candidate must preflight meaningful bytes/inv or hidden-backend proxy movement. [[hidden-backend-storage-shape.02]] |
-| Index-cache CPU reduction | reject current attempts | Fixed cap cuts slots but not CPU; heap lazy frontier cuts scored work `-80.97%` but select CPU regresses `+21.40%`; bucketed select cuts scored work `-72.61%` but select CPU regresses `+32.46%`; unique upper-bound gate rejects `76` candidates but candidate CPU regresses `+8.50%` | Do not spend more Xcode budget on these CPU-only variants. Next CPU work needs a cheaper persistent verdict or draw-shape prefilter before no-gputrace promotion. [[index-cache-locality-cpucost.11]], [[index-cache-locality-cpucost.12]], [[index-cache-locality-cpucost.13]], [[index-cache-locality-cpucost.14]] |
+| Index-cache CPU reduction | reject current attempts | Fixed cap cuts slots but not CPU; heap lazy frontier cuts scored work `-80.97%` but select CPU regresses `+21.40%`; bucketed select cuts scored work `-72.61%` but select CPU regresses `+32.46%`; unique upper-bound gate rejects `76` candidates but candidate CPU regresses `+8.50%`; persistent rejected verdicts are already implemented (`401,681` rejected hits / `143` cold misses); non-scope draw-shape prefiltering already happens before lookup; strict LRU builder normalization worsens candidate miss32 by `+46` and total encode CPU by `+36.930ms` | Do not spend more Xcode budget on these CPU-only variants. Next CPU work needs cheaper cold-miss candidate construction, a telemetry-proven eligible-subclass exclusion, or broader semantic-safe GPU payoff before no-gputrace promotion. [[index-cache-locality-cpucost.11]], [[index-cache-locality-cpucost.12]], [[index-cache-locality-cpucost.13]], [[index-cache-locality-cpucost.14]], [[index-cache-locality-cpucost.15]], [[index-cache-locality-cpucost.16]], [[index-cache-locality-cpucost.17]] |
 | Current no-gputrace baseline | accepted as counter sample | Watchdog-cleanup scout: 1440 presents; GPU CB `+0.15%`, completion wait `+0.14%`, draws `-0.01%` vs baseline | Use as the current supervised timeout shape; it does not justify new Xcode budget by itself. [[baselines-frame50.04]] |
 | Encode CPU attribution | CPU wins accepted, fps proof still open | No-gputrace attribution has narrowed broad encode guesses into named CPU-only children: cbuf identity, packet-cache, snapshot, argbuf-open, sampler, and transient fast-append work all moved CPU but not GPU. Cbuf residual split named binding content hash as a dominant child (`570.070ms`, VS `489.627ms`), then the default path removed that byte scan (`binding_hash=0`) and cut cbuf update `1.216 -> 0.875ms/present`; prefix-preserving cbuf builders then cut cbuf build `0.333815 -> 0.175342ms/present`; binding-packet sampler key-hash reuse cut packet plan `0.666122 -> 0.599724ms/present`. A full-cbuf visual bisection knob rejects full upload as a default workaround (`argbuf_hybrid_bytes_per_encoder` +519.59%, no obvious visual normalization); the later visual fix is per-draw payload component hashes for argbuf cbuf identity, not full cbuf upload. | No Xcode spend from these CPU results alone. Continue no-gputrace work on cbuf upload/probe/repoint residual, binding-packet stronger identity/plan reuse, index setup/source resolve, shader-stream diversity, issue cost, and residual snapshot. Do not chase broad D3D9 setter no-op guards, slot-30 bind shadowing, dirty-category identity repoint, FFP stream binding, resource-array binding, vertex texture binding, LOD-bias upload, sampler lookup/rehash skip, texture pre-resolve source matching, raw cbuf `setBuffer`, cbuf upload-plan, observer callbacks, default cbuf content hashing, live-range-only cbuf prefix zeroing, full VS/PS cbuf fallback, or another sampler `FlatStateSet` rehash removal unless cheap instrumentation first proves a new non-zero opportunity. Require visual smoke/same-input image proof for future cbuf/binding semantic changes. [[state-churn-encode-encode-phase.02]], [[state-churn-encode-encode-phase.03]], [[state-churn-encode-encode-phase.04]], [[state-churn-encode-encode-phase.05]], [[state-churn-encode-encode-phase.06]], [[state-churn-encode-encode-phase.07]], [[state-churn-encode-encode-phase.08]], [[state-churn-encode-encode-phase.09]], [[state-churn-encode-encode-phase.10]], [[state-churn-encode-encode-phase.11]], [[state-churn-encode-encode-phase.12]], [[state-churn-encode-encode-phase.13]], [[state-churn-encode-encode-phase.14]], [[state-churn-encode-encode-phase.15]], [[state-churn-encode-encode-phase.16]], [[state-churn-encode-encode-phase.17]], [[state-churn-encode-encode-phase.18]], [[state-churn-encode-encode-phase.19]], [[state-churn-encode-encode-phase.20]], [[state-churn-encode-encode-phase.21]], [[state-churn-encode-encode-phase.22]], [[state-churn-encode-encode-phase.23]], [[snapshot-cache-snapshot.04]], [[snapshot-cache-snapshot.05]], [[snapshot-cache-snapshot.06]], [[snapshot-cache-snapshot.07]], [[snapshot-cache-snapshot.08]], [[snapshot-cache-snapshot.09]] |
 
@@ -189,7 +189,13 @@ The current canonical A/B baseline is frame50 normal-source
 ([[baselines-frame50.01]]): **35.024 ms**, top-3 98.19%, rows 50/2
 (56.9%) / 50/1 (24.5%) / 50/0 (16.8%), hidden backend estimate
 ≈1597.6 MiB. Mid-investigation probes A/B against frame60
-([[baselines-frame60.01]]).
+([[baselines-frame60.01]]). The current post-visualfix frame60 refresh
+([[baselines-frame60.02]]) keeps the same owner after the latest visual/cbuf
+identity path: **33.614 ms**, top-3 **32.984 ms / 98.12%**, VS write
+**1627.332 MiB**, hidden backend **1597.755 MiB**. Its no-mutate class proxy
+([[hidden-backend-storage-shape.04]]) splits residual `60/2` into depth-read,
+screen-blend, and standard-alpha classes with `~111-128 MiB` proxy hidden
+backend each and `~25-28%` candidate LRU32 reduction.
 
 ## What is settled vs open
 
@@ -218,9 +224,11 @@ The current canonical A/B baseline is frame50 normal-source
 **Open**
 - Which sub-component of the hidden backend dominates (stage-out vs binning
   parameter storage vs compiler spill). [[hidden-backend-storage]]
-- Row 50/2 screen-blend locality: useful under explicit exact/`lsb1` semantic
-  policy, but broad depth-read reorder is blocked by a runtime-indistinguishable
-  final-color hazard. [[index-cache-locality]]
+- Residual row `50/2` / refreshed `60/2` locality: useful under explicit
+  exact/`lsb1` semantic policy for screen-blend, and class proxy now shows
+  depth-read/screen/alpha `60/2` classes all have real `~25-28%` LRU32 ceilings;
+  broad depth-read reorder is still blocked by a runtime-indistinguishable
+  final-color hazard. [[index-cache-locality]], [[hidden-backend-storage-shape.04]]
 - Dependency-aware pass coalescing for same RT/depth re-entry (P1). [[render-pass-store]]
 - Remaining CPU tracks: pacing/completion wait, backend encode, and residual
   snapshot rebuild. After the accepted cbuf identity, packet-cache, and snapshot

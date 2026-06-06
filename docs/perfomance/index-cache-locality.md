@@ -31,7 +31,10 @@ bottleneck triage. The mechanism behind why this works is proven separately by
 | H10 | A heap-backed lazy priority frontier cuts candidate-select CPU while preserving quality | rejected; scored work falls but CPU and miss32 regress | [[index-cache-locality-cpucost.12]] |
 | H11 | A cached-vertex-count bucketed selector cuts candidate-select CPU | rejected; scored work falls but bucket maintenance regresses CPU | [[index-cache-locality-cpucost.13]] |
 | H12 | A unique-count upper-bound pre-gate avoids building impossible candidates | rejected; rejects 76 candidates but candidate CPU regresses | [[index-cache-locality-cpucost.14]] |
-| H13 | Who owns the residual `50/2` (`~1.49–1.58 GiB` hidden) GPU cost | **OPEN** | [[index-cache-locality-triage.01]] |
+| H13 | A missing persistent rejected verdict is the remaining opaque-depth CPU blocker | rejected; already implemented and amortizing | [[index-cache-locality-cpucost.15]] |
+| H14 | A missing draw-shape prefilter before reordered-index-cache lookup is the remaining CPU blocker | rejected; non-scope draws are already gated before lookup | [[index-cache-locality-cpucost.16]] |
+| H15 | Strict no-duplicate LRU simulation inside the candidate builder improves candidate quality or CPU enough to change the default | rejected; candidate miss32 worsens by `+46`, CPU gain is too small/noisy | [[index-cache-locality-cpucost.17]] |
+| H16 | Who owns the residual `50/2` (`~1.49–1.58 GiB` hidden) GPU cost | **OPEN** | [[index-cache-locality-triage.01]] |
 
 ## Verification methods
 
@@ -56,6 +59,15 @@ bottleneck triage. The mechanism behind why this works is proven separately by
 - **No-mutate identity scout** — `DXMT9_MEASURE_INDEX_REUSE=1` +
   `--measure-index-cache-opt-candidate` emit per-draw identity / candidate ceiling
   without mutating order, feeding candidate selection.
+- **Diagnostic candidate-builder variants** —
+  `--index-cache-candidate-frontier-cap`,
+  `--index-cache-candidate-lazy-frontier`,
+  `--index-cache-candidate-bucketed-select`,
+  `--index-cache-candidate-strict-lru`, and
+  `--index-cache-candidate-upper-bound-gate` are hypotheses, not default
+  changes. Judge them first with no-gputrace CPU/miss32 counters, then require
+  same-input image proof or a stable visual gate; `v0.0.1` PNG diffs are useful
+  for broad corruption triage but not raw pixel-percent correctness gates.
 
 ## Experiment dependency graph
 
@@ -81,6 +93,9 @@ flowchart TD
   Cpu12["index-cache-locality-cpucost.12\nlazy heap REJECTED\nscored -81%, select +21%"]
   Cpu13["index-cache-locality-cpucost.13\nbucketed select REJECTED\nscored -72.6%, select +32.5%"]
   Cpu14["index-cache-locality-cpucost.14\nupper-bound gate REJECTED\n76 skipped, candidate CPU +8.5%"]
+  Cpu15["index-cache-locality-cpucost.15\npersistent rejected verdict refresh\n401k rejected hits / 143 misses"]
+  Cpu16["index-cache-locality-cpucost.16\ndraw-shape prefilter audit\nnon-scope already skipped"]
+  Cpu17["index-cache-locality-cpucost.17\nstrict LRU diagnostic REJECTED\nmiss32 +46, total CPU +36.9ms"]
   FastGate["index-cache-locality-opaque.06\nfast-measure smoke\nGPU -0.58%, setup +309ms"]
   Proof["index-cache-locality-opaque.07\nFAST-MEASURE PROOF\nGPU -9.50%, target VS inv -14.12%\nmechanism via [[tvb-mechanism-proof]]"]
   SbScout["index-cache-locality-screenblend.02\n50/2 scout: 66 hits"]
@@ -109,6 +124,9 @@ flowchart TD
   Cpu11 --> Cpu12
   Cpu12 --> Cpu13
   Cpu13 --> Cpu14
+  Cpu14 --> Cpu15
+  Cpu15 --> Cpu16
+  Cpu16 --> Cpu17
   Cpu3 --> FastGate
   FastGate --> Proof
   OptXcode -->|"50/2 left"| SbScout
@@ -123,7 +141,7 @@ flowchart TD
   classDef rejected fill:#f8d7da,stroke:#a33,color:#600
   classDef open fill:#fff3cd,stroke:#a80,color:#640
   class Preflight,OptNo,OptXcode,Smoke,Cpu1,Cpu3,Cpu4,Cpu5,Cpu6,Cpu8,Cpu9,Cpu10,FastGate,Proof,Identity1,Identity2 accepted
-  class Cpu2,Cpu7,Cpu11,Cpu12,Cpu13,Cpu14,MinGain rejected
+  class Cpu2,Cpu7,Cpu11,Cpu12,Cpu13,Cpu14,Cpu15,Cpu16,Cpu17,MinGain rejected
   class SbScout,SbXcode,SbGate,SbOrder,Triage,OpenOwner open
 ```
 
@@ -186,9 +204,24 @@ theoretical bound `candidate_miss32 >= unique` to skip impossible candidates.
 It did reject `76` candidates and preserved the accepted cache set
 (`reordered_index_cache_created=67`), but unique-count work moved
 `encode_draw_index_cache_original_measure_cpu_ms` `15.146ms→24.301ms` and total
-candidate CPU `152.117ms→165.050ms`, so this form is also rejected. Future CPU
-work needs a cheaper persistent verdict or draw-shape prefilter, not another
-per-candidate measurement pass.
+candidate CPU `152.117ms→165.050ms`, so this form is also rejected. A
+post-visualfix refresh then checked the persistent verdict idea directly:
+[[index-cache-locality-cpucost.15]] shows rejected verdict caching is already
+implemented and active (`401,681` rejected hits against `143` cold misses).
+The follow-up code audit ([[index-cache-locality-cpucost.16]]) then rejects a
+missing broad draw-shape prefilter as the next blocker: non-scope draws are
+already gated before `findReorderedIndexBuffer()`, so the `687,387` lookups are
+eligible-key decisions, not unrelated draw traffic. The next local builder
+diagnostic ([[index-cache-locality-cpucost.17]]) normalized the simulated LRU
+miss path to the same no-duplicate update used by the LRU32 measurement helper,
+but that also failed as a default-change reason: candidate miss32 worsened
+`418,033→418,079`, the candidate CPU delta was only `-5.082ms`, and total
+`encode_draw_cpu_ms` regressed `+36.930ms` in the no-gputrace run. Future CPU
+work therefore needs either a cheaper cold-miss candidate construction path, a
+narrower eligible-subclass exclusion proven by telemetry, or more semantic-safe
+GPU payoff, not another per-candidate measurement pass, not basic rejected-key
+caching, not a broad "avoid non-eligible draws" gate, and not local LRU
+miss-path normalization.
 (2) The dominant remaining frame owner is row
 `50/2` — depth-read, screen-blend/standard-alpha/blend-off, textured, large indexed
 geometry — whose `~1.49–1.58 GiB` cost is hidden vertex/tiler/parameter storage, not

@@ -38,6 +38,17 @@ and Xcode screenshots if captured. Use subdirectories such as `analysis/`,
 bundles in `experiments/output/` unless an experiment harness explicitly emits
 them as part of its own contract.
 
+## 3DMark05 GT1 visual anchor
+
+For GT1 visual regressions, treat the `v0.0.1` tag as the known-good visual
+correctness / alignment anchor. A screenshot diff against that tag is useful for
+finding broad texture, color, geometry, transparency, black-vertex, UV, or
+cbuf-identity drift. The tag itself defines the expected visual alignment; the
+diff image is the triage aid. Do not confuse that with a raw pixel-percentage
+gate from time-based `actual.png` captures: the same capture delay can land on a
+different animation frame. Use same-frame capture, same-input mini replay, or a
+draw/window proof before claiming exact pixel failure.
+
 ## Xcode `.gputrace` performance export discipline
 
 When a `.gputrace` is opened in Xcode for real performance debugging, do not

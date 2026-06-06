@@ -29,6 +29,7 @@ every other domain at the lever that actually moves the bucket.
 | H7 | Which sub-component (stage-out vs primitive/binning vs spill) dominates | open | [[hidden-backend-storage-shape.01]] (probe agenda → reorder / cache-locality) |
 | H8 | Current non-reorder backend-shape probes materially reduce bytes/invocation | rejected | [[hidden-backend-storage-shape.02]] (best bytes/inv `-1.94%`, GPU regresses) |
 | H9 | Which candidates still deserve Xcode/gputrace spend for residual `50/2` | accepted (gate) | [[hidden-backend-storage-shape.03]] (CPU-only index-cache probes rejected; semantic or bytes/inv preflight required) |
+| H10 | Post-visualfix frame60 candidate class proxy can rank residual `60/2` state classes before another Xcode capture | accepted (attribution) | [[hidden-backend-storage-shape.04]] (`60/2` split into depth-read/screen/alpha classes, each ~`111-128 MiB` proxy hidden and `~25-28%` candidate LRU32 reduction) |
 
 ## Verification methods
 
@@ -65,6 +66,7 @@ flowchart TD
   Shape["shape.01\nhidden backend-shape\nprobe agenda"]:::open
   ShapeGate["shape.02\nnon-reorder backend gate\nbytes/inv weak + GPU regresses"]:::rejected
   SpendGate["shape.03\n50/2 Xcode spend gate\nsemantic or bytes/inv preflight"]:::accepted
+  ClassProxy["shape.04\npost-visualfix candidate class proxy\n60/2 split by semantic risk"]:::accepted
 
   Attr -->|"baseline-for"| Model
   Model -->|"corroborated-by"| Ext
@@ -74,6 +76,7 @@ flowchart TD
   Scale2 -->|"visible-shape rejected -> next"| Shape
   Shape -->|"current candidates"| ShapeGate
   ShapeGate -->|"budget policy"| SpendGate
+  SpendGate -->|"ranked-by"| ClassProxy
   Model -->|"frames"| Shape
 ```
 
@@ -110,7 +113,13 @@ and broad-state attempt was rejected as "not the first-order owner."
 [[hidden-backend-storage-shape.03]] is the current budget gate: CPU-only
 index-cache changes no longer justify Xcode replay by themselves, and residual
 `50/2` GPU work must either carry a semantic locality proof or a non-reorder
-bytes-per-invocation mechanism before another expensive capture.
+bytes-per-invocation mechanism before another expensive capture. The
+post-visualfix candidate class proxy ([[hidden-backend-storage-shape.04]]) adds a current
+frame60 ranking without another gputrace export: `60/2` is split across
+depth-read / screen-blend / standard-alpha classes with roughly `111-128 MiB`
+proxy hidden backend each and `~25-28%` candidate LRU32 reduction, while the
+remaining low-risk opaque-depth work is already covered by the accepted opt-in
+index-cache mechanism.
 
 ## How to run
 Every experiment here is a 3DMark05 GT1 run via the standard wrapper. This domain
@@ -140,6 +149,8 @@ per-experiment flags live in each leaf's `**Method.**` field; see
   certifies a reduction of this exact bucket.
 - [[hidden-backend-storage-shape.02]] — current non-reorder backend-shape gate;
   bytes/inv movement is too small and GPU regresses.
+- [[hidden-backend-storage-shape.04]] — post-visualfix candidate class proxy
+  that ranks residual `60/2` semantic-risk classes before another Xcode replay.
 - [[vsout-layout]] — visible varying-width attempts this domain rejected as the
   first-order owner (trim / point-size / position-only / half-VSOut).
 - [[index-cache-locality]] — the one accepted production win: reduces VS

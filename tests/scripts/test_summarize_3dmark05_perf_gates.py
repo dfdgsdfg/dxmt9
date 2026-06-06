@@ -58,6 +58,7 @@ PROXY_FIELDS = [
     "xcode_proxy_vs_write_mib",
     "xcode_proxy_gpu_ms",
     "miss32_delta",
+    "candidate_miss32_delta",
 ]
 DELTA_FIELDS = [
     "run",
@@ -641,6 +642,64 @@ class Summarize3DMark05PerfGatesTests(unittest.TestCase):
             ])
             self.assertEqual(rows[0]["source"], str(proxy))
             self.assertEqual(rows[0]["rank"], "1")
+
+    def test_class_proxy_queue_uses_candidate_delta_for_no_mutate_proxy(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            vs_scaling, vs_delta, semantic, primitive, selector, screen_blend = self.write_gate_inputs(root)
+            proxy = root / "class-proxy.csv"
+            write_csv(proxy, PROXY_FIELDS, [
+                {
+                    "group": "60/2|depth=read|blend=screen|large4096=yes",
+                    "proof_family": "explicit-tolerance-reorder",
+                    "semantic_risk": "screen-blend-tolerance",
+                    "xcode_proxy_hidden_backend_mib": 128.0,
+                    "xcode_proxy_vs_write_mib": 130.0,
+                    "xcode_proxy_gpu_ms": 2.5,
+                    "miss32_delta": 0,
+                    "candidate_miss32_delta": -23502,
+                },
+            ])
+            report = root / "gates.md"
+            queue = root / "gates-queue.csv"
+
+            result = subprocess.run(
+                [
+                    sys.executable,
+                    str(SCRIPT),
+                    "--vs-scaling-csv",
+                    str(vs_scaling),
+                    "--vs-delta-csv",
+                    str(vs_delta),
+                    "--semantic-candidates-csv",
+                    str(semantic),
+                    "--primitive-selector-csv",
+                    str(primitive),
+                    "--semantic-selector-csv",
+                    str(selector),
+                    "--screen-blend-semantic-csv",
+                    str(screen_blend),
+                    "--screen-blend-semantic-policy",
+                    "lsb1",
+                    "--class-proxy-csv",
+                    str(proxy),
+                    "--output",
+                    str(report),
+                    "--queue-csv-output",
+                    str(queue),
+                ],
+                cwd=REPO_ROOT,
+                text=True,
+                capture_output=True,
+                check=False,
+            )
+
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertIn("| `60/2|depth=read|blend=screen|large4096=yes` |", report.read_text(encoding="utf-8"))
+            self.assertIn("| `-23502` |", report.read_text(encoding="utf-8"))
+            with queue.open(newline="", encoding="utf-8") as handle:
+                rows = list(csv.DictReader(handle))
+            self.assertEqual(rows[0]["miss32_delta"], "-23502")
 
 
 if __name__ == "__main__":

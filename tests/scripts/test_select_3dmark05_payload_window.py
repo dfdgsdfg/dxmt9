@@ -35,7 +35,14 @@ def probe_row(
     scissor: int = 0,
     texture_mask: str = "0x7f",
     applied: int = 0,
+    original_miss32: int | None = None,
+    candidate_miss32: int | None = None,
+    candidate_available: int = 1,
 ) -> dict[str, object]:
+    if original_miss32 is None:
+        original_miss32 = cache64
+    if candidate_miss32 is None:
+        candidate_miss32 = original_miss32
     return {
         "seq": 60,
         "encoder": 2,
@@ -43,7 +50,10 @@ def probe_row(
         "draw_ordinal": 42000 + draw,
         "primitive_count": tris,
         "applied": applied,
+        "original_cache_miss32": original_miss32,
         "original_cache_miss64": cache64,
+        "candidate_index_available": candidate_available,
+        "candidate_cache_miss32": candidate_miss32,
         "vs": vs,
         "ps": ps,
         "alpha_blend": alpha_blend,
@@ -179,6 +189,166 @@ class SelectPayloadWindowTests(unittest.TestCase):
             self.assertEqual(selection["selection"]["group"]["vs"], "0xsecond")
             self.assertEqual(selection["selection"]["window"]["encoder_draw_min"], 20)
             self.assertEqual(selection["selection"]["window"]["encoder_draw_max"], 21)
+
+    def test_rank_by_candidate_miss32_delta_selects_largest_reduction(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            probe_csv = root / "probe.csv"
+            output = root / "selection.json"
+            write_csv(probe_csv, [
+                probe_row(
+                    1,
+                    5000,
+                    5000,
+                    "0xlarge",
+                    "0xps",
+                    original_miss32=5000,
+                    candidate_miss32=4900,
+                ),
+                probe_row(
+                    2,
+                    5000,
+                    5000,
+                    "0xlarge",
+                    "0xps",
+                    original_miss32=5000,
+                    candidate_miss32=4900,
+                ),
+                probe_row(
+                    20,
+                    1000,
+                    1000,
+                    "0xpayoff",
+                    "0xps",
+                    original_miss32=1000,
+                    candidate_miss32=100,
+                ),
+                probe_row(
+                    21,
+                    1000,
+                    1000,
+                    "0xpayoff",
+                    "0xps",
+                    original_miss32=1000,
+                    candidate_miss32=100,
+                ),
+            ])
+
+            result = subprocess.run(
+                [
+                    sys.executable,
+                    str(SCRIPT),
+                    "--probe-draws",
+                    str(probe_csv),
+                    "--row",
+                    "60/2",
+                    "--rank-by",
+                    "candidate-miss32-delta",
+                    "--output",
+                    str(output),
+                ],
+                text=True,
+                capture_output=True,
+                check=False,
+            )
+
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertIn("candidate32_delta 1800", result.stdout)
+            selection = json.loads(output.read_text(encoding="utf-8"))
+            selected = selection["selection"]
+            self.assertEqual(selected["group"]["vs"], "0xpayoff")
+            self.assertEqual(selected["group"]["original_miss32"], 2000)
+            self.assertEqual(selected["group"]["candidate_miss32"], 200)
+            self.assertEqual(selected["group"]["candidate_miss32_delta"], 1800)
+            self.assertEqual(selected["window"]["encoder_draw_min"], 20)
+            self.assertEqual(selected["window"]["encoder_draw_max"], 21)
+
+    def test_rank_scope_window_orders_by_best_window_score(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            probe_csv = root / "probe.csv"
+            output = root / "selection-list.json"
+            write_csv(probe_csv, [
+                probe_row(
+                    1,
+                    1000,
+                    1000,
+                    "0xwide",
+                    "0xps",
+                    original_miss32=1000,
+                    candidate_miss32=900,
+                ),
+                probe_row(
+                    2,
+                    1000,
+                    1000,
+                    "0xwide",
+                    "0xps",
+                    original_miss32=1000,
+                    candidate_miss32=900,
+                ),
+                probe_row(
+                    3,
+                    1000,
+                    1000,
+                    "0xwide",
+                    "0xps",
+                    original_miss32=1000,
+                    candidate_miss32=900,
+                ),
+                probe_row(
+                    20,
+                    700,
+                    700,
+                    "0xwindow",
+                    "0xps",
+                    original_miss32=700,
+                    candidate_miss32=100,
+                ),
+                probe_row(
+                    21,
+                    700,
+                    700,
+                    "0xwindow",
+                    "0xps",
+                    original_miss32=700,
+                    candidate_miss32=100,
+                ),
+            ])
+
+            result = subprocess.run(
+                [
+                    sys.executable,
+                    str(SCRIPT),
+                    "--probe-draws",
+                    str(probe_csv),
+                    "--row",
+                    "60/2",
+                    "--rank-by",
+                    "candidate-miss32-delta",
+                    "--rank-scope",
+                    "window",
+                    "--max-draws",
+                    "2",
+                    "--list-ranks",
+                    "2",
+                    "--output",
+                    str(output),
+                ],
+                text=True,
+                capture_output=True,
+                check=False,
+            )
+
+            self.assertEqual(result.returncode, 0, result.stderr)
+            selection = json.loads(output.read_text(encoding="utf-8"))
+            first = selection["selections"][0]
+            second = selection["selections"][1]
+            self.assertEqual(first["rank_scope"], "window")
+            self.assertEqual(first["group"]["vs"], "0xwindow")
+            self.assertEqual(first["window"]["candidate_miss32_delta"], 1200)
+            self.assertEqual(second["group"]["vs"], "0xwide")
+            self.assertEqual(second["window"]["candidate_miss32_delta"], 200)
 
     def test_list_ranks_emits_multiple_payload_windows(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

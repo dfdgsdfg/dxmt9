@@ -469,6 +469,11 @@ bool indexCacheCandidateLazyFrontier();
 // Env: DXMT9_INDEX_CACHE_CANDIDATE_BUCKETED_SELECT.
 bool indexCacheCandidateBucketedSelect();
 
+// Diagnostic-only candidate-builder variant that updates the simulated LRU
+// cache with the same no-duplicate miss path as the LRU32 measurement helper.
+// Env: DXMT9_INDEX_CACHE_CANDIDATE_STRICT_LRU.
+bool indexCacheCandidateStrictLru();
+
 // Diagnostic-only upper-bound pre-gate for the LRU32 index-cache candidate.
 // It measures the original unique index count and skips candidate construction
 // when even the theoretical best LRU32 miss count cannot clear the configured

@@ -202,6 +202,36 @@ def key_to_summary(key: tuple[str, ...], mode: str) -> dict[str, Any]:
     }
 
 
+def candidate_miss32_available(row: dict[str, str]) -> bool:
+    if "candidate_index_available" in row:
+        return as_bool(row.get("candidate_index_available"))
+    return bool(str(row.get("candidate_cache_miss32", "")).strip())
+
+
+def candidate_miss32(row: dict[str, str]) -> int:
+    if candidate_miss32_available(row):
+        return as_int(row.get("candidate_cache_miss32"))
+    return as_int(row.get("original_cache_miss32"))
+
+
+def candidate_miss32_delta(rows: list[dict[str, str]]) -> int:
+    return sum(
+        as_int(row.get("original_cache_miss32")) - candidate_miss32(row)
+        for row in rows
+    )
+
+
+def miss32_summary(rows: list[dict[str, str]]) -> dict[str, int]:
+    original = sum(as_int(row.get("original_cache_miss32")) for row in rows)
+    candidate = sum(candidate_miss32(row) for row in rows)
+    return {
+        "candidate_available_rows": sum(1 for row in rows if candidate_miss32_available(row)),
+        "original_miss32": original,
+        "candidate_miss32": candidate,
+        "candidate_miss32_delta": original - candidate,
+    }
+
+
 def score_rows(rows: list[dict[str, str]], rank_by: str) -> tuple[int, int, int]:
     draws = len(rows)
     primitives = sum(as_int(row.get("primitive_count")) for row in rows)
@@ -210,6 +240,8 @@ def score_rows(rows: list[dict[str, str]], rank_by: str) -> tuple[int, int, int]
         return draws, primitives, cache64
     if rank_by == "cache64":
         return cache64, primitives, draws
+    if rank_by == "candidate-miss32-delta":
+        return candidate_miss32_delta(rows), primitives, draws
     return primitives, cache64, draws
 
 
@@ -261,6 +293,22 @@ def grouped_rows(rows: list[dict[str, str]], mode: str) -> dict[tuple[str, ...],
     return groups
 
 
+def rank_group_items(
+    args: argparse.Namespace,
+    groups: dict[tuple[str, ...], list[dict[str, str]]],
+) -> list[tuple[tuple[str, ...], list[dict[str, str]]]]:
+    def ranking_score(item: tuple[tuple[str, ...], list[dict[str, str]]]) -> tuple[int, int, int]:
+        _, rows = item
+        if args.rank_scope == "window":
+            window_rows = best_window(rows, args.max_draws, args.rank_by)
+            if not window_rows:
+                return (-1, -1, -1)
+            return score_rows(window_rows, args.rank_by)
+        return score_rows(rows, args.rank_by)
+
+    return sorted(groups.items(), key=ranking_score, reverse=True)
+
+
 def matching_rows(args: argparse.Namespace, class_filters: list[str]) -> list[dict[str, str]]:
     rows = [
         row for row in load_csv(args.probe_draws)
@@ -297,6 +345,8 @@ def build_selection_from_rank(
     group_score = score_rows(selected_rows, args.rank_by)
     window_score = score_rows(window_rows, args.rank_by)
     summary = key_to_summary(key, args.group_by)
+    group_miss32 = miss32_summary(selected_rows)
+    window_miss32 = miss32_summary(window_rows)
 
     return {
         "schema": "dxmt9.3dmark05.payload_window.v1",
@@ -305,6 +355,7 @@ def build_selection_from_rank(
             "row": args.row,
             "group_by": args.group_by,
             "rank_by": args.rank_by,
+            "rank_scope": args.rank_scope,
             "rank": rank,
             "available_group_count": len(ranked_groups),
             "class_filters": class_filters,
@@ -314,6 +365,7 @@ def build_selection_from_rank(
                 "draws": len(selected_rows),
                 "primitive_count": sum(as_int(row.get("primitive_count")) for row in selected_rows),
                 "cache_miss64": sum(as_int(row.get("original_cache_miss64")) for row in selected_rows),
+                **group_miss32,
                 "contiguous_runs": len(contiguous_runs(selected_rows)),
                 "longest_contiguous_run": max(len(run) for run in contiguous_runs(selected_rows)),
             },
@@ -324,6 +376,7 @@ def build_selection_from_rank(
                 "primitive_count": window_score[0] if args.rank_by == "primitives" else sum(
                     as_int(row.get("primitive_count")) for row in window_rows),
                 "cache_miss64": sum(as_int(row.get("original_cache_miss64")) for row in window_rows),
+                **window_miss32,
                 "draw_ordinals": [as_int(row.get("draw_ordinal")) for row in window_rows],
             },
             "capture_flags": [
@@ -368,11 +421,7 @@ def build_selection(args: argparse.Namespace) -> dict[str, Any]:
     class_filters = parse_class_filters(args.class_filter)
     rows = matching_rows(args, class_filters)
     groups = grouped_rows(rows, args.group_by)
-    ranked_groups = sorted(
-        groups.items(),
-        key=lambda item: score_rows(item[1], args.rank_by),
-        reverse=True,
-    )
+    ranked_groups = rank_group_items(args, groups)
     return build_selection_from_rank(args, class_filters, ranked_groups, args.rank)
 
 
@@ -380,11 +429,7 @@ def build_selection_list(args: argparse.Namespace) -> dict[str, Any]:
     class_filters = parse_class_filters(args.class_filter)
     rows = matching_rows(args, class_filters)
     groups = grouped_rows(rows, args.group_by)
-    ranked_groups = sorted(
-        groups.items(),
-        key=lambda item: score_rows(item[1], args.rank_by),
-        reverse=True,
-    )
+    ranked_groups = rank_group_items(args, groups)
     limit = min(args.list_ranks, len(ranked_groups))
     return {
         "schema": "dxmt9.3dmark05.payload_window_list.v1",
@@ -410,12 +455,14 @@ def print_human(selection: dict[str, Any]) -> None:
         f"{data['row']} rank {data['rank']} {data['group_by']} group: "
         f"{group['draws']} draws, {group['primitive_count']} tris, "
         f"cache64 {group['cache_miss64']}, "
+        f"candidate32_delta {group.get('candidate_miss32_delta', 0)}, "
         f"vs {short_hash(group.get('vs', ''))}, ps {short_hash(group.get('ps', ''))}"
     )
     print(
         f"window: encoder_draw_index {window['encoder_draw_min']}.."
         f"{window['encoder_draw_max']} ({window['draws']} draws, "
-        f"{window['primitive_count']} tris, cache64 {window['cache_miss64']})"
+        f"{window['primitive_count']} tris, cache64 {window['cache_miss64']}, "
+        f"candidate32_delta {window.get('candidate_miss32_delta', 0)})"
     )
     print("flags: " + " ".join(data["capture_flags"]))
     if data.get("class_filters"):
@@ -461,9 +508,15 @@ def main() -> int:
     )
     parser.add_argument(
         "--rank-by",
-        choices=["primitives", "cache64", "draws"],
+        choices=["primitives", "cache64", "draws", "candidate-miss32-delta"],
         default="primitives",
         help="Primary ranking metric for groups and candidate windows",
+    )
+    parser.add_argument(
+        "--rank-scope",
+        choices=["group", "window"],
+        default="group",
+        help="Rank groups by whole-group score or by their best capture window score",
     )
     parser.add_argument("--output", type=Path, help="Optional JSON output path")
     args = parser.parse_args()

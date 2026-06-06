@@ -904,26 +904,34 @@ def proxy_queue_verdict(row: dict[str, str], gates: list[dict[str, str]]) -> tup
     )
 
 
+def proxy_lru32_delta(row: dict[str, str]) -> int:
+    candidate_delta_text = str(row.get("candidate_miss32_delta", "")).strip()
+    if candidate_delta_text:
+        return as_int(candidate_delta_text)
+    return as_int(row.get("miss32_delta"))
+
+
 def load_proxy_queue(path: Path, gates: list[dict[str, str]], top: int) -> list[dict[str, str]]:
     rows = load_csv(path)
     rows.sort(
         key=lambda row: (
             as_float(row.get("xcode_proxy_hidden_backend_mib")),
             as_float(row.get("xcode_proxy_vs_write_mib")),
-            abs(as_float(row.get("miss32_delta"))),
+            abs(proxy_lru32_delta(row)),
         ),
         reverse=True,
     )
     queue: list[dict[str, str]] = []
     for row in rows[:top]:
         verdict, action = proxy_queue_verdict(row, gates)
+        lru32_delta = proxy_lru32_delta(row)
         queue.append({
             "group": row.get("group", ""),
             "proof_family": row.get("proof_family", ""),
             "semantic_risk": row.get("semantic_risk", ""),
             "hidden_mib": f"{as_float(row.get('xcode_proxy_hidden_backend_mib')):.3f}",
             "gpu_ms": f"{as_float(row.get('xcode_proxy_gpu_ms')):.3f}",
-            "miss32_delta": str(as_int(row.get("miss32_delta"))),
+            "miss32_delta": str(lru32_delta),
             "gate_status": verdict,
             "next_action": action,
         })

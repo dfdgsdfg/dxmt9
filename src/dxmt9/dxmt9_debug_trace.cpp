@@ -961,6 +961,12 @@ bool indexCacheCandidateBucketedSelect() {
   return v;
 }
 
+bool indexCacheCandidateStrictLru() {
+  static const bool v =
+      util::getenvFlag("DXMT9_INDEX_CACHE_CANDIDATE_STRICT_LRU");
+  return v;
+}
+
 bool indexCacheCandidateUpperBoundGate() {
   static const bool v =
       util::getenvFlag("DXMT9_INDEX_CACHE_CANDIDATE_UPPER_BOUND_GATE");

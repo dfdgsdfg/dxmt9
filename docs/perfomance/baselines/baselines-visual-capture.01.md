@@ -55,9 +55,12 @@ into an obvious clean baseline.
 **Verdict.** Rejected as proof of a single latest-regression owner. The current
 time-based `actual.png` is useful as a smoke image, but not as a correctness
 oracle for GT1 because the captured animation frame can land inside heavy
-post-process / motion-blur / alpha-composition sections. A future visual
-regression claim needs either a same-frame Metal capture, a same-input mini
-replay, or a native/WineD3D reference for the same animation point.
+post-process / motion-blur / alpha-composition sections. `v0.0.1` is now the
+known-good visual correctness / alignment anchor for GT1 regression triage
+([[baselines-visual-capture.02]]),
+but a future pixel-level visual regression claim still needs either a
+same-frame Metal capture, a same-input mini replay, or a native/WineD3D
+reference for the same animation point.
 
 ```mermaid
 flowchart TD

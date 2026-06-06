@@ -31,7 +31,21 @@ build. `shader_corpus_tool.py` is also imported by the Meson tests under
   current optimization gate decision plus semantic final-color,
   final-color/final-writer runtime-selector, final-color runtime-blocker,
   implementation-track, and gate-aware next experiment queues in Markdown and
-  optional CSV form.
+  optional CSV form. For no-mutate class proxies, the next-experiment queue
+  reports `candidate_miss32_delta` ahead of `miss32_delta`, so unapplied
+  locality ceilings do not appear as zero-LRU rows.
+- `run_3dmark05_perf_probe.sh` — standard 3DMark05 GT1 perf launcher. Always
+  use a positive `--timeout` because 3DMark05 can hang at the final frame.
+  Diagnostic index-cache candidate variants include
+  `--index-cache-candidate-frontier-cap`,
+  `--index-cache-candidate-lazy-frontier`,
+  `--index-cache-candidate-bucketed-select`,
+  `--index-cache-candidate-strict-lru`, and
+  `--index-cache-candidate-upper-bound-gate`; treat all candidate-order
+  changes as hypotheses until no-gputrace counters and a `v0.0.1` visual anchor
+  check agree. Use the diff image against `v0.0.1` to catch black/translucent
+  vertices, broken UVs, texture/color drift, and cbuf-identity artifacts, while
+  reserving raw pixel percentages from time-based screenshots for triage only.
 - `summarize_primitive_conflict_selectors.py` — summarize primitive-owner
   conflict metrics and report whether runtime-shaped selectors separate exact
   pass/fail mini-replay rows.

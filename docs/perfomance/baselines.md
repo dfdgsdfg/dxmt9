@@ -5,26 +5,30 @@
 ## Scope & question
 
 This domain owns the reference 3DMark05 GT1 captures that define the bottleneck
-shape and serve as the A/B denominators for every other domain. It holds three
+shape and serve as the A/B denominators for every other domain. It holds four
 capture regimes: the historical **frame120** Xcode snapshot that first showed
 the shape, the current canonical **frame50** normal-source gputrace/Xcode
-replay plus its no-gputrace sanity/timeout/watchdog-cleanup scouts, and the mid-investigation
-**frame60** validation capture with full finalizer attribution gates. It also
+replay plus its no-gputrace sanity/timeout/watchdog-cleanup scouts, the
+mid-investigation **frame60** validation capture with full finalizer
+attribution gates, and the post-visualfix **frame60** refresh that confirms the
+same owner after the latest correctness path. It also
 keeps the whole-run counter shape that contextualizes the single-frame
 captures. Almost every A/B delta elsewhere is measured against
-[[baselines-frame50.01]] or [[baselines-frame60.01]].
+[[baselines-frame50.01]], [[baselines-frame60.01]], or the refreshed
+[[baselines-frame60.02]].
 
 ## Hypotheses & verdicts
 
 | # | Hypothesis | Verdict | Evidence |
 |---|-----------|---------|----------|
 | H1 | The captured GT1 frame is GPU-bound and the cost is concentrated in a few render encoders | accepted | [[baselines-frame120.01]] |
-| H2 | The dominant counters are LLC/MMU/buffer-write, not ALU or texture | accepted | [[baselines-frame120.01]], [[baselines-frame60.01]] |
-| H3 | The big VS-buffer-write bucket is not explained by dxmt CPU writers (~0.4 MiB) or visible VSOut width (184 B) | accepted | [[baselines-frame50.01]], [[baselines-frame60.01]] |
+| H2 | The dominant counters are LLC/MMU/buffer-write, not ALU or texture | accepted | [[baselines-frame120.01]], [[baselines-frame60.01]], [[baselines-frame60.02]] |
+| H3 | The big VS-buffer-write bucket is not explained by dxmt CPU writers (~0.2-0.4 MiB) or visible VSOut width (184 B) | accepted | [[baselines-frame50.01]], [[baselines-frame60.01]], [[baselines-frame60.02]] |
 | H4 | The frame50 runtime shape is stable across code changes (usable as a fixed A/B denominator) | accepted | [[baselines-frame50.02]], [[baselines-frame50.03]] |
 | H5 | A no-gputrace timeout-finalized run is a valid counter sample (not a wall-clock FPS sample) | accepted | [[baselines-frame50.03]] |
 | H6 | The new top-level watchdog + Wine cleanup path preserves baseline counter shape | accepted | [[baselines-frame50.04]] |
 | H7 | A time-based GT1 `actual.png` alone can prove visual correctness after optimization changes | rejected | [[baselines-visual-capture.01]] |
+| H8 | The `v0.0.1` tag is the known-good visual correctness / alignment anchor for GT1 regression triage, and screenshot diffs against it are useful corruption finders | accepted | [[baselines-visual-capture.02]] |
 
 ## Verification methods
 
@@ -44,7 +48,7 @@ captures. Almost every A/B delta elsewhere is measured against
   `frame<N>-xcode-dxmt-joined-summary.csv` + bottleneck report; gates
   `--require-xcode-counter-coverage`, `--require-dxmt-join-coverage`,
   `--require-top-pso-attribution`, `--require-shader-dump-matches` certify the
-  baseline ([[baselines-frame60.01]]).
+  baseline ([[baselines-frame60.01]], [[baselines-frame60.02]]).
 
 ## Experiment dependency graph
 
@@ -61,23 +65,28 @@ flowchart TD
   F50to["baselines-frame50.03\ntimeout no-gputrace scout\n2026-06-05, gpu cb 4193ms"]
   F50wd["baselines-frame50.04\nwatchdog-cleanup scout\n2026-06-06, gpu cb 4208ms\nsame shape, no manual kill"]
   Visual["baselines-visual-capture.01\ntime-based screenshot caveat\nnot a visual oracle"]
+  VisualAnchor["baselines-visual-capture.02\nv0.0.1 visual correctness anchor\ndiff-assisted triage"]
   F60["baselines-frame60.01\nframe60 validation\n34.02ms / top3 98.41%\nVS write 1627.4MiB"]
+  F60post["baselines-frame60.02\npost-visualfix frame60\n33.614ms / top3 98.12%\nhidden 1597.8MiB"]
 
   RunLevel -->|context-for| F120
   F120 -->|same-shape, narrowed-to| F50
   F120 -->|same-shape, narrowed-to| F60
+  F60 -->|refreshed-after-visual-fix| F60post
   F50san -->|shape-stable, superseded-by| F50
   F50 -->|refreshed-by| F50to
   F50to -->|supervised-timeout-refresh| F50wd
   F50wd -->|visual-smoke-caveat| Visual
+  Visual -->|anchor-refined-by| VisualAnchor
+  VisualAnchor -->|visual-alignment anchor for| F60post
 
   F120 -->|feeds| Store["[[render-pass-store]]\n+ bottleneck shape"]
   F50 -->|baseline-for| IdxCache["[[index-cache-locality]]\nopaque / screen-blend proofs"]
-  F60 -->|baseline-for| VSOut["[[vsout-layout]]"]
-  F60 -->|baseline-for| Backend["[[backend-shape-classifiers]]"]
-  F60 -->|baseline-for| Churn["[[state-churn-encode]]"]
+  F60post -->|baseline-for| VSOut["[[vsout-layout]]"]
+  F60post -->|baseline-for| Backend["[[backend-shape-classifiers]]"]
+  F60post -->|baseline-for| Churn["[[state-churn-encode]]"]
 
-  class F120,F50,F50san,F50to,F50wd,F60,RunLevel accepted
+  class F120,F50,F50san,F50to,F50wd,F60,F60post,RunLevel,VisualAnchor accepted
   class Visual rejected
   class Store,IdxCache,VSOut,Backend,Churn open
 ```
@@ -93,20 +102,27 @@ flowchart TD
 | [[baselines-frame50.03]] | 2026-06-05 | — | — | no-gputrace timeout scout; `present_encoded=1440`, `gpu_command_buffer_time_ms=4193.474` |
 | [[baselines-frame50.04]] | 2026-06-06 | — | — | watchdog-cleanup no-gputrace scout; `present_encoded=1440`, `gpu_command_buffer_time_ms=4207.759`, `completion_wait_ms=31071.820`; shape flat vs baseline |
 | [[baselines-frame60.01]] | 2026-06-01 | `34.02ms` | `33.481ms` / `98.41%` | VS write `1627.414MiB`; dxmt CPU `0.444MiB`; unexplained `1627.642MiB`; `7.9x` |
+| [[baselines-frame60.02]] | 2026-06-06 | `33.614ms` | `32.984ms` / `98.12%` | post-visualfix refresh; VS write `1627.332MiB`; hidden backend `1597.755MiB`; dxmt CPU `0.202MiB`; `7.9x` |
+| [[baselines-visual-capture.02]] | 2026-06-06 | — | — | `v0.0.1` is the known-good visual correctness / alignment anchor; same 40s screenshot can still drift (`Frame 351` vs `483`), but PNG diff is useful for broad texture/color/geometry, black/translucent vertex, UV, and cbuf-identity triage |
 
 ## Results synthesis
 
-The investigation has **three capture regimes**: the **frame120 historical
+The investigation has **four capture regimes**: the **frame120 historical
 shape** that first revealed a GPU-bound frame whose cost concentrates in three
 render encoders dominated by LLC/MMU/buffer-write counters (with two passes
 re-entering the same RT/depth pair for `73.32%`); the **frame50 current
 canonical** replay (`35.024ms`, hidden backend estimate `1597.6MiB` = `98.2%`
 of VS write); and the **frame60 mid-investigation validation** (`34.02ms`, VS
-write `1627.4MiB`, fully gated dxmt + shader attribution). All three show the
+write `1627.4MiB`, fully gated dxmt + shader attribution); plus the
+**post-visualfix frame60 refresh** (`33.614ms`, hidden backend `1597.8MiB`).
+All four show the
 **same top-3-encoder / hidden-VS-write shape**: top-3 ≈ total buffer write, dxmt
 CPU writers explain ≈ `0.4 MiB`, and the visible `184B` MSL VSOut width is
 `7.9x` too small to account for the bucket — the recurring fingerprint of
-[[hidden-backend-storage]]. The no-gputrace [[baselines-frame50.02]] /
+[[hidden-backend-storage]]. The post-visualfix [[baselines-frame60.02]]
+refresh confirms this shape after the latest visual/cbuf identity path:
+`33.614ms` total GPU, top-3 `98.12%`, VS write `1627.3MiB`, and hidden
+backend `1597.8MiB`. The no-gputrace [[baselines-frame50.02]] /
 [[baselines-frame50.03]] / [[baselines-frame50.04]] scouts prove the runtime shape is stable enough to
 treat frame50/frame60 as fixed A/B denominators.
 
@@ -114,8 +130,8 @@ What is settled: the baseline numbers and the capture/finalize methodology
 (wrapper, `--frame`, `--no-gputrace`, timeout policy, finalizer join + gates).
 What stays open lives in the consuming domains, not here — almost every A/B
 delta elsewhere is measured against [[baselines-frame50.01]] (frame50 locality
-proofs) or [[baselines-frame60.01]] (VSOut / backend-shape / state-churn
-probes).
+proofs), [[baselines-frame60.01]] (historical VSOut / backend-shape /
+state-churn probes), or [[baselines-frame60.02]] (post-visualfix refresh).
 
 ## How to run
 Every experiment here is a 3DMark05 GT1 run via the standard wrapper. A baseline

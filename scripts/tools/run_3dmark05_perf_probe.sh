@@ -55,6 +55,7 @@ optimize_opaque_depth_index_cache_min_gain_pct=
 index_cache_candidate_frontier_cap=
 index_cache_candidate_lazy_frontier=0
 index_cache_candidate_bucketed_select=0
+index_cache_candidate_strict_lru=0
 index_cache_candidate_upper_bound_gate=0
 probe_apply_index_cache_opt_candidate=0
 probe_apply_index_cache_opt_candidate_unsafe_nonopaque=0
@@ -302,6 +303,12 @@ Options:
                       active candidates in cached-vertex-count buckets and
                       update only touched-vertex neighbors. Can change
                       primitive order.
+  --index-cache-candidate-strict-lru
+                      Diagnostic-only: set
+                      DXMT9_INDEX_CACHE_CANDIDATE_STRICT_LRU=1 to update the
+                      candidate builder's simulated LRU cache with the same
+                      no-duplicate miss path as the LRU32 measurement helper.
+                      Can change primitive order/candidate quality.
   --index-cache-candidate-upper-bound-gate
                       Diagnostic-only: set
                       DXMT9_INDEX_CACHE_CANDIDATE_UPPER_BOUND_GATE=1 to skip
@@ -958,6 +965,10 @@ while (($#)); do
       ;;
     --index-cache-candidate-bucketed-select)
       index_cache_candidate_bucketed_select=1
+      shift
+      ;;
+    --index-cache-candidate-strict-lru)
+      index_cache_candidate_strict_lru=1
       shift
       ;;
     --index-cache-candidate-upper-bound-gate)
@@ -2197,6 +2208,10 @@ fi
 
 if (( index_cache_candidate_bucketed_select )); then
   env_args+=("DXMT9_INDEX_CACHE_CANDIDATE_BUCKETED_SELECT=1")
+fi
+
+if (( index_cache_candidate_strict_lru )); then
+  env_args+=("DXMT9_INDEX_CACHE_CANDIDATE_STRICT_LRU=1")
 fi
 
 if (( index_cache_candidate_upper_bound_gate )); then

@@ -1311,6 +1311,9 @@ struct ActiveEncoderBreakdown {
                                  u64 reorderBytes,
                                  IndexReuseMeasure originalIndexReuse,
                                  IndexReuseMeasure effectiveIndexReuse,
+                                 IndexReuseMeasure candidateIndexReuse,
+                                 bool candidateBuilt,
+                                 bool candidateGatePassed,
                                  u64 drawOrdinal,
                                  core::PrimitiveType primitiveType,
                                  u32 primitiveCount,
@@ -1402,6 +1405,10 @@ struct ActiveEncoderBreakdown {
         streamByteMin(effectiveIndexReuse, baseVertexIndex, stream0Offset, stream0Stride);
     const auto effectiveStreamByteMax =
         streamByteMax(effectiveIndexReuse, baseVertexIndex, stream0Offset, stream0Stride);
+    const auto candidateStreamByteMin =
+        streamByteMin(candidateIndexReuse, baseVertexIndex, stream0Offset, stream0Stride);
+    const auto candidateStreamByteMax =
+        streamByteMax(candidateIndexReuse, baseVertexIndex, stream0Offset, stream0Stride);
     std::fprintf(
         stderr,
         "[dxmt9-perf-indexed-probe-draw seq=%llu encoder=%llu "
@@ -1433,6 +1440,17 @@ struct ActiveEncoderBreakdown {
         "effective_triangle_index_span_max=%u "
         "effective_stream0_byte_min=%llu effective_stream0_byte_max=%llu "
         "effective_stream0_byte_span=%llu "
+        "candidate_built=%u candidate_gate_passed=%u "
+        "candidate_index_available=%u candidate_index_unique=%llu "
+        "candidate_index_min=%u candidate_index_max=%u candidate_index_span=%llu "
+        "candidate_index_first=%u candidate_index_last=%u "
+        "candidate_cache_miss16=%llu candidate_cache_miss32=%llu "
+        "candidate_cache_miss64=%llu candidate_adjacent_delta_sum=%llu "
+        "candidate_adjacent_delta_max=%u candidate_backward_jumps=%llu "
+        "candidate_triangle_index_span_sum=%llu "
+        "candidate_triangle_index_span_max=%u "
+        "candidate_stream0_byte_min=%llu candidate_stream0_byte_max=%llu "
+        "candidate_stream0_byte_span=%llu "
         "primitive_type=%u primitive_count=%u vertex_count=%llu "
         "texture_mask=0x%x color_write=0x%x alpha_blend=%u "
         "src_blend=%u dst_blend=%u blend_op=%u separate_alpha=%u "
@@ -1520,6 +1538,33 @@ struct ActiveEncoderBreakdown {
         static_cast<unsigned long long>(
             effectiveStreamByteMax >= effectiveStreamByteMin
                 ? effectiveStreamByteMax - effectiveStreamByteMin
+                : 0u),
+        candidateBuilt ? 1u : 0u,
+        candidateGatePassed ? 1u : 0u,
+        candidateIndexReuse.available ? 1u : 0u,
+        static_cast<unsigned long long>(candidateIndexReuse.unique),
+        candidateIndexReuse.minIndex,
+        candidateIndexReuse.maxIndex,
+        static_cast<unsigned long long>(
+            candidateIndexReuse.available
+                ? static_cast<u64>(candidateIndexReuse.maxIndex) -
+                      static_cast<u64>(candidateIndexReuse.minIndex) + 1u
+                : 0u),
+        candidateIndexReuse.firstIndex,
+        candidateIndexReuse.lastIndex,
+        static_cast<unsigned long long>(candidateIndexReuse.cacheMiss16),
+        static_cast<unsigned long long>(candidateIndexReuse.cacheMiss32),
+        static_cast<unsigned long long>(candidateIndexReuse.cacheMiss64),
+        static_cast<unsigned long long>(candidateIndexReuse.adjacentDeltaAbsSum),
+        candidateIndexReuse.adjacentDeltaMax,
+        static_cast<unsigned long long>(candidateIndexReuse.backwardJumps),
+        static_cast<unsigned long long>(candidateIndexReuse.triangleIndexSpanSum),
+        candidateIndexReuse.triangleIndexSpanMax,
+        static_cast<unsigned long long>(candidateStreamByteMin),
+        static_cast<unsigned long long>(candidateStreamByteMax),
+        static_cast<unsigned long long>(
+            candidateStreamByteMax >= candidateStreamByteMin
+                ? candidateStreamByteMax - candidateStreamByteMin
                 : 0u),
         static_cast<unsigned>(primitiveType),
         primitiveCount,
@@ -4263,7 +4308,8 @@ bool buildVertexCacheOptimizedTriangleOrderIndexBytes(
     std::size_t probeCacheSize = 64u,
     std::size_t candidateFrontierCap = 0u,
     bool candidateLazyFrontier = false,
-    bool candidateBucketedSelect = false) {
+    bool candidateBucketedSelect = false,
+    bool candidateStrictLru = false) {
   if (indexBytes.empty() || indexCount == 0u || (indexCount % 3u) != 0u ||
       probeCacheSize == 0u) {
     return false;
@@ -4874,14 +4920,25 @@ bool buildVertexCacheOptimizedTriangleOrderIndexBytes(
       }
       std::optional<u32> evicted;
       clearCachePositions();
-      if (cache.size() < probeCacheSize) {
-        cache.push_back(index);
-      } else {
-        if (!cache.empty()) {
+      if (candidateStrictLru) {
+        if (cache.size() < probeCacheSize) {
+          cache.push_back(0u);
+        } else if (!cache.empty()) {
           evicted = cache.back();
         }
-        for (std::size_t i = cache.size() - 1u; i > 0u; --i) {
-          cache[i] = cache[i - 1u];
+        for (std::size_t i = cache.size(); i > 1u; --i) {
+          cache[i - 1u] = cache[i - 2u];
+        }
+      } else {
+        if (cache.size() < probeCacheSize) {
+          cache.push_back(index);
+        } else {
+          if (!cache.empty()) {
+            evicted = cache.back();
+          }
+          for (std::size_t i = cache.size() - 1u; i > 0u; --i) {
+            cache[i] = cache[i - 1u];
+          }
         }
       }
       cache[0] = index;
@@ -8867,7 +8924,8 @@ bool encodeDraw(EncodeContext& ctx,
                     32u,
                     debug::indexCacheCandidateFrontierCap(),
                     debug::indexCacheCandidateLazyFrontier(),
-                    debug::indexCacheCandidateBucketedSelect());
+                    debug::indexCacheCandidateBucketedSelect(),
+                    debug::indexCacheCandidateStrictLru());
           }
         }
         if (cacheOptCandidateBuilt) {
@@ -9211,6 +9269,9 @@ bool encodeDraw(EncodeContext& ctx,
               reorderBytes,
               originalIndexReuse,
               effectiveIndexReuse,
+              cacheOptCandidateReuse,
+              cacheOptCandidateBuilt,
+              cacheOptCandidateGatePassed,
               drawOrdinal,
               pv.primitiveType,
               primitiveCount,
