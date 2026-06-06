@@ -48,6 +48,8 @@ bottleneck — that is owned by [[hidden-backend-storage]].
 | H28 | `hashConstantBufferBytes()` is still required in the default cbuf cache path | rejected; CPU win accepted | [[state-churn-encode-encode-phase.19]] (`binding_hash=570.070 -> 0ms`; cbuf update `1.216 -> 0.875ms/present`; encode_draw `10.359 -> 10.006ms/present`) |
 | H29 | Dirty cbuf upload must first materialize full `VsConsts` / `PsConsts` structs | rejected; prefix-preserving CPU win accepted | [[state-churn-encode-encode-phase.20]] (build `0.333815 -> 0.175342ms/present`; cbuf update `0.875284 -> 0.679652ms/present`; live-range-only prefix zeroing failed visual smoke) |
 | H30 | Binding-packet sampler plans must rehash `FlatStateSet` payloads after snapshot key build | rejected; CPU win accepted | [[state-churn-encode-encode-phase.21]] (`binding_packet_plan` `0.666122 -> 0.599724ms/present`; packet parent `-4.42%`; full sampler equality retained) |
+| H31 | Forcing full VS/PS cbuf uploads clearly fixes the suspected black/translucent GT1 geometry | inconclusive visual check; full-upload fallback rejected | [[state-churn-encode-encode-phase.22]] (`argbuf_hybrid_bytes_per_encoder` +519.59%; no obvious visual normalization; `actual.png` frame drift prevents exact verdict) |
+| H32 | Draw submission batches can reuse stale argbuf cbuf slices when per-draw uniform payloads change but base hot constant hashes do not | accepted correctness fix; visual smoke restored | [[state-churn-encode-encode-phase.23]] (disable-batch A/B localizes artifact; payload component hash identity keeps batching and cuts dirty-fix traffic `-34.24%`) |
 
 ## Verification methods
 
@@ -72,6 +74,10 @@ bottleneck — that is owned by [[hidden-backend-storage]].
   counters.
 - **`DXMT_DISABLE_AUTO_EXPAND_INDEXED=1`** — removes the indexed-expansion
   transient vertex amplifier (correctness-risky; needs image proof).
+- **`DXMT9_FORCE_FULL_CBUF_UPLOADS=1`** — diagnostic-only cbuf visual bisection
+  knob. Forces full VS/PS cbuf uploads to test whether prefix sizing owns a
+  suspected artifact; do not use as a default perf workaround without
+  same-input image proof.
 
 ## Experiment dependency graph
 
@@ -118,6 +124,8 @@ flowchart TD
   EncodePhase19["encode-phase.19\ncbuf content hash off\nbinding hash 0ms\ncbuf -0.341ms/present"]:::accepted
   EncodePhase20["encode-phase.20\nprefix-preserving cbuf builder\nbuild -47%/present\nzero-unused prefix rejected"]:::accepted
   EncodePhase21["encode-phase.21\nbinding-packet sampler key hash reuse\nplan -9.97%/present"]:::accepted
+  EncodePhase22["encode-phase.22\nforce full cbuf diagnostic\nbytes +519%\nvisual inconclusive"]:::open
+  EncodePhase23["encode-phase.23\nper-draw payload cbuf identity\nvisual smoke restored\nbytes -34% vs dirty fix"]:::accepted
 
   Drawrun1 -->|"split-into"| Drawrun2
   Drawrun1 -->|"measured-by"| Enc1
@@ -157,6 +165,8 @@ flowchart TD
   EncodePhase18 -->|"remove unused hash"| EncodePhase19
   EncodePhase19 -->|"avoid full cbuf build"| EncodePhase20
   EncodePhase20 -->|"next residual packet plan"| EncodePhase21
+  EncodePhase20 -->|"visual bisection"| EncodePhase22
+  EncodePhase22 -->|"diff + disable-batch A/B"| EncodePhase23
 ```
 
 ## Results synthesis
@@ -376,6 +386,25 @@ packet parent `1.646770 -> 1.573957ms/present`, and backend encode
 `9.853414 -> 9.662653ms/present`. This is a CPU-only cleanup; the visible smoke
 frame is normal but not an exact image proof because the two `actual.png`
 captures drifted by frame/time.
+[[state-churn-encode-encode-phase.22]] adds a diagnostic fallback for the
+reported black/semi-transparent-looking geometry. `DXMT9_FORCE_FULL_CBUF_UPLOADS=1`
+forces VS/PS cbuf plans back to full `VsConsts` / `PsConsts` uploads, but the
+same-present smoke rejects it as a default workaround: argbuf cbuf/transient
+traffic jumps by about `+519%`, backend encode rises `+2.61%`, and the visual
+smoke does not obviously normalize the artifact. Because the images drifted
+from frame 1003 to frame 994, this is not exact correctness proof; future visual
+debugging should use mini-replay or same-input semantic image gates rather than
+time-based `actual.png`.
+[[state-churn-encode-encode-phase.23]] closes that visual bisection with the
+actual root cause. Disabling draw submission batching normalizes the GT1 smoke,
+and the code diff from the `v0.0.1` visual-good tag points at the batched
+per-draw uniform path. The bug is not full cbuf size; it is stale cbuf cache
+identity. Batched draws can carry a current `DrawUniformPayload` while the base
+`FlatDrawStateRecord` still has the first draw's VS/PS constant hashes, so the
+argbuf cbuf probe could false-hit a stale slice. The accepted fix stores VS/PS
+component hashes in `DrawUniformPayload` and uses those for argbuf cbuf identity.
+It keeps normal visual smoke, retains batching, and cuts the temporary
+all-dirty correctness fix's argbuf traffic by `34.24%`.
 
 ## How to run
 Every experiment here is a 3DMark05 GT1 run via the standard wrapper. This is a

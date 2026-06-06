@@ -720,6 +720,8 @@ struct DrawUniformPayload {
   std::array<Matrix4x4, kMaxTextureStages> textureTransforms{};
   u32 clipPlaneMask = 0;
   std::array<ClipPlane, kMaxClipPlanes> clipPlanes{};
+  u64 vertexConstantsHash = 0;
+  u64 pixelConstantsHash = 0;
   u64 hash = 0;
 
   friend bool operator==(const DrawUniformPayload&, const DrawUniformPayload&) = default;

@@ -1,4 +1,5 @@
 #include "dxmt9_uniform_dirty.hpp"
+#include "util/config/config.hpp"
 
 #include <algorithm>
 #include <limits>
@@ -83,7 +84,17 @@ ShaderConstantUploadPlan makeConstantUploadPlan(
     std::uint16_t maxFloatCount,
     std::uint16_t maxIntCount,
     std::uint16_t maxBoolCount) {
+  static const bool forceFullCbufUploads =
+      dxmt9::util::getenvFlag("DXMT9_FORCE_FULL_CBUF_UPLOADS");
   if (usage.unknown || usage.indexedFloat || usage.indexedInt || usage.indexedBool) {
+    return ShaderConstantUploadPlan{
+        .floatCount = maxFloatCount,
+        .intCount = maxIntCount,
+        .boolCount = maxBoolCount,
+        .fullStructRequired = true,
+    };
+  }
+  if (forceFullCbufUploads) {
     return ShaderConstantUploadPlan{
         .floatCount = maxFloatCount,
         .intCount = maxIntCount,

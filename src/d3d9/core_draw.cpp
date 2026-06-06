@@ -1526,7 +1526,13 @@ DrawUniformPayload makeDrawUniformPayloadFromState(
             shaderLayout && shaderLayout->pixelShader.kind == ShaderRef::Kind::Bytecode,
         .recordSnapshotPerf = recordSnapshotPerf,
     };
-    payload.hash = hashDrawUniformPayload(payload, componentHashes, options);
+    DrawUniformPayloadHashes hashes{};
+    payload.hash = hashDrawUniformPayload(payload, &hashes, options);
+    payload.vertexConstantsHash = hashes.vertexConstantsHash;
+    payload.pixelConstantsHash = hashes.pixelConstantsHash;
+    if (componentHashes) {
+      *componentHashes = hashes;
+    }
   }
   return payload;
 }
@@ -1821,7 +1827,10 @@ DrawUniformPayload makeDrawUniformPayload(const DrawDesc &desc) {
   payload.textureTransforms = desc.textureTransforms;
   payload.clipPlaneMask = desc.clipPlaneMask;
   payload.clipPlanes = desc.clipPlanes;
-  payload.hash = hashDrawUniformPayload(payload);
+  DrawUniformPayloadHashes hashes{};
+  payload.hash = hashDrawUniformPayload(payload, &hashes);
+  payload.vertexConstantsHash = hashes.vertexConstantsHash;
+  payload.pixelConstantsHash = hashes.pixelConstantsHash;
   return payload;
 }
 

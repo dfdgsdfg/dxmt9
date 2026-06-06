@@ -2647,6 +2647,22 @@ u64 makeArgbufCbufIdentityHash(u64 tag, u64 sourceHash, u64 bytes) noexcept {
   return hash;
 }
 
+u64 drawStateVertexCbufSourceHash(core::FlatDrawStateView drawState) noexcept {
+  if (drawState.hasUniformPayload() &&
+      drawState.uniformPayload().vertexConstantsHash != 0) {
+    return drawState.uniformPayload().vertexConstantsHash;
+  }
+  return drawState.hot ? drawState.hot->vertexConstantsHash : 0;
+}
+
+u64 drawStatePixelCbufSourceHash(core::FlatDrawStateView drawState) noexcept {
+  if (drawState.hasUniformPayload() &&
+      drawState.uniformPayload().pixelConstantsHash != 0) {
+    return drawState.uniformPayload().pixelConstantsHash;
+  }
+  return drawState.hot ? drawState.hot->pixelConstantsHash : 0;
+}
+
 u64 makeArgbufFfpPsIdentityHash(core::FlatDrawStateView drawState,
                                 u64 bytes) noexcept {
   if (!drawState.hot) return 0;
@@ -2668,21 +2684,22 @@ void stampArgbufCbufBindingIdentities(
       bindings.entries[argbufIndex].identityHash = identityHash;
     }
   };
-  const auto& hot = *drawState.hot;
   const auto& entries = bindings.entries;
   if (dxmt9::argbuf_hybrid::kConstantBufferVsIndex < entries.size()) {
     const auto& binding =
         entries[dxmt9::argbuf_hybrid::kConstantBufferVsIndex];
     stamp(dxmt9::argbuf_hybrid::kConstantBufferVsIndex,
           makeArgbufCbufIdentityHash(
-              0x76735f636275665full, hot.vertexConstantsHash, binding.bytes));
+              0x76735f636275665full,
+              drawStateVertexCbufSourceHash(drawState), binding.bytes));
   }
   if (dxmt9::argbuf_hybrid::kConstantBufferPsIndex < entries.size()) {
     const auto& binding =
         entries[dxmt9::argbuf_hybrid::kConstantBufferPsIndex];
     stamp(dxmt9::argbuf_hybrid::kConstantBufferPsIndex,
           makeArgbufCbufIdentityHash(
-              0x70735f636275665full, hot.pixelConstantsHash, binding.bytes));
+              0x70735f636275665full,
+              drawStatePixelCbufSourceHash(drawState), binding.bytes));
   }
   if (dxmt9::argbuf_hybrid::kConstantBufferFfpPsIndex < entries.size()) {
     const auto& binding =
@@ -6813,7 +6830,7 @@ bool encodeDraw(EncodeContext& ctx,
                 .bytes = vsBytes,
                 .hash = makeArgbufCbufIdentityHash(
                     0x76735f636275665full,
-                    drawState.hot ? drawState.hot->vertexConstantsHash : 0,
+                    drawStateVertexCbufSourceHash(drawState),
                     vsBytes),
             };
 
@@ -6825,7 +6842,7 @@ bool encodeDraw(EncodeContext& ctx,
                 .bytes = psBytes,
                 .hash = makeArgbufCbufIdentityHash(
                     0x70735f636275665full,
-                    drawState.hot ? drawState.hot->pixelConstantsHash : 0,
+                    drawStatePixelCbufSourceHash(drawState),
                     psBytes),
             };
 

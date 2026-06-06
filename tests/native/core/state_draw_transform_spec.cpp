@@ -1105,6 +1105,10 @@ void testConstantsAndShaderRefs() {
           "hot vertex constant hash matches canonical key");
   checkEq(canonical.hot.pixelConstantsHash, canonical.hot.key.pixelConstantsHash,
           "hot pixel constant hash matches canonical key");
+  checkEq(uniforms.vertexConstantsHash, canonical.hot.vertexConstantsHash,
+          "draw uniform payload stores vertex constant component hash");
+  checkEq(uniforms.pixelConstantsHash, canonical.hot.pixelConstantsHash,
+          "draw uniform payload stores pixel constant component hash");
   check(uniforms.hash != 0,
         "draw uniform payload hash records shader constant payload");
 
@@ -1115,6 +1119,8 @@ void testConstantsAndShaderRefs() {
   const auto changedUniforms = makeDrawUniformPayload(changedDesc);
   check(changedCanonical.hot.vertexConstantsHash != canonical.hot.vertexConstantsHash,
         "vertex constant value change affects canonical hot hash");
+  check(changedUniforms.vertexConstantsHash != uniforms.vertexConstantsHash,
+        "vertex constant value change affects payload component hash");
   checkNear(changedUniforms.vsConst.float4[7][0], -99.0f,
             "changed vertex constant value reaches uniform payload");
 }
@@ -1236,6 +1242,12 @@ void testShaderConstantPayloadSurvivesDrawRunCommandView() {
   checkEq(command.drawRunRecord->uniformHandle.hash,
           command.drawUniformPayload->hash,
           "draw-run command uniform handle hashes the copied payload");
+  checkEq(command.drawUniformPayload->vertexConstantsHash,
+          command.drawState.hot->vertexConstantsHash,
+          "draw-run command uniform payload keeps vertex component hash");
+  checkEq(command.drawUniformPayload->pixelConstantsHash,
+          command.drawState.hot->pixelConstantsHash,
+          "draw-run command uniform payload keeps pixel component hash");
 
   const auto vsConsts = dxmt9::state::buildVsConsts(command.drawState);
   const auto psConsts = dxmt9::state::buildPsConsts(command.drawState);
