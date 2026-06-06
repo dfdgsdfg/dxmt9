@@ -395,6 +395,8 @@ void testEncoderFragmentBindingPlanMatchesShaderSlots() {
           "first encoder fragment binding keeps shader sampler slot 5");
   checkEq(bindings[0].texture, Handle{0x5005u},
           "first encoder fragment binding carries texture handle for slot 5");
+  checkEq(bindings[0].samplerStateHash, hot.key.samplerStateHashes[5],
+          "first encoder fragment binding reuses the canonical sampler hash");
   checkEq(flatStateOr(bindings[0].samplerStates, SAMP_ADDRESS_U, 0u), 3u,
           "slot 5 encoder sampler plan carries address U");
   checkEq(flatStateOr(bindings[0].samplerStates, SAMP_MIN_FILTER, 0u), 2u,
@@ -409,11 +411,38 @@ void testEncoderFragmentBindingPlanMatchesShaderSlots() {
           "second encoder fragment binding keeps shader sampler slot 7");
   checkEq(bindings[1].texture, Handle{0x5007u},
           "second encoder fragment binding carries texture handle for slot 7");
+  checkEq(bindings[1].samplerStateHash, hot.key.samplerStateHashes[7],
+          "second encoder fragment binding reuses the canonical sampler hash");
   checkEq(flatStateOr(bindings[1].samplerStates, SAMP_MIP_FILTER, 0u), 2u,
           "slot 7 encoder sampler plan carries mip filter");
   const auto slot7Info = dxmt9::encoders::makeSamplerInfo(bindings[1].samplerStates);
   checkEq(slot7Info.mip_filter, WMTSamplerMipFilterLinear,
           "slot 7 encoder sampler plan maps linear mip filter");
+}
+
+void testEncoderVertexBindingPlanReusesCanonicalSamplerHash() {
+  DrawDesc desc{};
+  desc.textures[kVertexTextureSampler0].handle = Handle{0x6000u};
+  desc.textures[kVertexTextureSampler0].lod = 4u;
+  desc.samplers[kVertexTextureSampler0].states[SAMP_MIN_FILTER] = 2u;
+  desc.samplers[kVertexTextureSampler0].states[SAMP_ADDRESS_U] = 3u;
+
+  const auto hot = makeFlatDrawStateRecord(desc);
+  const auto bindings = dxmt9::encoders::makeVertexTextureSamplerBindings(hot);
+
+  checkEq(bindings.size(), std::size_t{1},
+          "encoder vertex binding plan contains the bound vertex texture sampler");
+  checkEq(bindings[0].stage, 0u,
+          "first vertex texture sampler maps to vertex sampler stage 0");
+  checkEq(bindings[0].texture, Handle{0x6000u},
+          "vertex encoder binding carries texture handle");
+  checkEq(bindings[0].textureLod, 4u,
+          "vertex encoder binding carries texture lod");
+  checkEq(bindings[0].samplerStateHash,
+          hot.key.samplerStateHashes[kVertexTextureSampler0],
+          "vertex encoder binding reuses the canonical sampler hash");
+  checkEq(flatStateOr(bindings[0].samplerStates, SAMP_ADDRESS_U, 0u), 3u,
+          "vertex encoder sampler plan carries address U");
 }
 
 void testEncoderRasterStatePlanMatchesMetalViewportScissorCull() {
@@ -958,6 +987,7 @@ int main() {
     testFlatSamplerInfoMatchesSnapshotAndPinsLodDefaults();
     testDefaultSamplerInfoForNullTextureSlotIsDeterministic();
     testEncoderFragmentBindingPlanMatchesShaderSlots();
+    testEncoderVertexBindingPlanReusesCanonicalSamplerHash();
     testEncoderRasterStatePlanMatchesMetalViewportScissorCull();
     testDrawBindingPacketKeyIsStableForSameCanonicalValues();
     testDrawBindingPacketPlanHashMatchesCanonicalKeyHash();

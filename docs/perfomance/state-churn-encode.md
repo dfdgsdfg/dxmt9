@@ -47,6 +47,7 @@ bottleneck — that is owned by [[hidden-backend-storage]].
 | H27 | The phase.17 cbuf residual is mostly upload-plan or observer cost | rejected; binding-hash attribution accepted | [[state-churn-encode-encode-phase.18]] (`binding_hash=570.070ms`, VS `489.627ms`; `upload_plan=43.287ms` nested in build; observer `0`) |
 | H28 | `hashConstantBufferBytes()` is still required in the default cbuf cache path | rejected; CPU win accepted | [[state-churn-encode-encode-phase.19]] (`binding_hash=570.070 -> 0ms`; cbuf update `1.216 -> 0.875ms/present`; encode_draw `10.359 -> 10.006ms/present`) |
 | H29 | Dirty cbuf upload must first materialize full `VsConsts` / `PsConsts` structs | rejected; prefix-preserving CPU win accepted | [[state-churn-encode-encode-phase.20]] (build `0.333815 -> 0.175342ms/present`; cbuf update `0.875284 -> 0.679652ms/present`; live-range-only prefix zeroing failed visual smoke) |
+| H30 | Binding-packet sampler plans must rehash `FlatStateSet` payloads after snapshot key build | rejected; CPU win accepted | [[state-churn-encode-encode-phase.21]] (`binding_packet_plan` `0.666122 -> 0.599724ms/present`; packet parent `-4.42%`; full sampler equality retained) |
 
 ## Verification methods
 
@@ -116,6 +117,7 @@ flowchart TD
   EncodePhase18["encode-phase.18\ncbuf residual split\nbinding hash 570ms\nVS hash 490ms"]:::accepted
   EncodePhase19["encode-phase.19\ncbuf content hash off\nbinding hash 0ms\ncbuf -0.341ms/present"]:::accepted
   EncodePhase20["encode-phase.20\nprefix-preserving cbuf builder\nbuild -47%/present\nzero-unused prefix rejected"]:::accepted
+  EncodePhase21["encode-phase.21\nbinding-packet sampler key hash reuse\nplan -9.97%/present"]:::accepted
 
   Drawrun1 -->|"split-into"| Drawrun2
   Drawrun1 -->|"measured-by"| Enc1
@@ -154,6 +156,7 @@ flowchart TD
   EncodePhase17 -->|"split residual"| EncodePhase18
   EncodePhase18 -->|"remove unused hash"| EncodePhase19
   EncodePhase19 -->|"avoid full cbuf build"| EncodePhase20
+  EncodePhase20 -->|"next residual packet plan"| EncodePhase21
 ```
 
 ## Results synthesis
@@ -363,6 +366,16 @@ cbuf build `0.333815 -> 0.175342ms/present`, cbuf update
 `10.005939 -> 9.853414ms/present`. The next cbuf targets are cached repoint,
 upload/setBuffer, content probe, and residual timer/dispatch cost, not another
 full-builder reduction.
+[[state-churn-encode-encode-phase.21]] then returns to the broader encode
+frontier and closes a small binding-packet plan tax. The packet plan previously
+rehashed active sampler `FlatStateSet` payloads even though the D3D9 snapshot
+had already computed `hot.key.samplerStateHashes[]`. Reusing the canonical key
+hash, while still storing and comparing the full sampler state set for packet
+equality, cuts `binding_packet_plan` `0.666122 -> 0.599724ms/present`, the
+packet parent `1.646770 -> 1.573957ms/present`, and backend encode
+`9.853414 -> 9.662653ms/present`. This is a CPU-only cleanup; the visible smoke
+frame is normal but not an exact image proof because the two `actual.png`
+captures drifted by frame/time.
 
 ## How to run
 Every experiment here is a 3DMark05 GT1 run via the standard wrapper. This is a

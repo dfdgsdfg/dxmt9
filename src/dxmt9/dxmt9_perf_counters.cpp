@@ -589,6 +589,14 @@ struct Counters {
   std::atomic<std::uint64_t> d3d9SnapshotUniformBuildVsConstHashCpuNs{0};
   std::atomic<std::uint64_t> d3d9SnapshotUniformBuildPsConstHashCpuNs{0};
   std::atomic<std::uint64_t> d3d9SnapshotUniformBuildNonConstHashCpuNs{0};
+  std::atomic<std::uint64_t> d3d9SnapshotUniformBuildNonConstHashWorldViewProjCpuNs{0};
+  std::atomic<std::uint64_t> d3d9SnapshotUniformBuildNonConstHashFfpWorldViewCpuNs{0};
+  std::atomic<std::uint64_t> d3d9SnapshotUniformBuildNonConstHashFfpNormalMatrixCpuNs{0};
+  std::atomic<std::uint64_t> d3d9SnapshotUniformBuildNonConstHashMaterialCpuNs{0};
+  std::atomic<std::uint64_t> d3d9SnapshotUniformBuildNonConstHashLightsCpuNs{0};
+  std::atomic<std::uint64_t> d3d9SnapshotUniformBuildNonConstHashFfpBlendWvpCpuNs{0};
+  std::atomic<std::uint64_t> d3d9SnapshotUniformBuildNonConstHashTextureTransformsCpuNs{0};
+  std::atomic<std::uint64_t> d3d9SnapshotUniformBuildNonConstHashClipPlanesCpuNs{0};
   std::atomic<std::uint64_t> d3d9SnapshotUniformBuildPayloadCombineHashCpuNs{0};
   std::atomic<std::uint64_t> d3d9SnapshotUniformBuildVsConstHashFull{0};
   std::atomic<std::uint64_t> d3d9SnapshotUniformBuildPsConstHashFull{0};
@@ -1639,6 +1647,14 @@ constexpr CounterEntry kCounterTable[] = {
     {"d3d9_snapshot_uniform_build_vs_const_hash_cpu_ms", CounterEntry::Kind::Milliseconds, &Counters::d3d9SnapshotUniformBuildVsConstHashCpuNs, nullptr, nullptr, 0.0},
     {"d3d9_snapshot_uniform_build_ps_const_hash_cpu_ms", CounterEntry::Kind::Milliseconds, &Counters::d3d9SnapshotUniformBuildPsConstHashCpuNs, nullptr, nullptr, 0.0},
     {"d3d9_snapshot_uniform_build_nonconst_hash_cpu_ms", CounterEntry::Kind::Milliseconds, &Counters::d3d9SnapshotUniformBuildNonConstHashCpuNs, nullptr, nullptr, 0.0},
+    {"d3d9_snapshot_uniform_build_nonconst_hash_world_view_proj_cpu_ms", CounterEntry::Kind::Milliseconds, &Counters::d3d9SnapshotUniformBuildNonConstHashWorldViewProjCpuNs, nullptr, nullptr, 0.0},
+    {"d3d9_snapshot_uniform_build_nonconst_hash_ffp_world_view_cpu_ms", CounterEntry::Kind::Milliseconds, &Counters::d3d9SnapshotUniformBuildNonConstHashFfpWorldViewCpuNs, nullptr, nullptr, 0.0},
+    {"d3d9_snapshot_uniform_build_nonconst_hash_ffp_normal_matrix_cpu_ms", CounterEntry::Kind::Milliseconds, &Counters::d3d9SnapshotUniformBuildNonConstHashFfpNormalMatrixCpuNs, nullptr, nullptr, 0.0},
+    {"d3d9_snapshot_uniform_build_nonconst_hash_material_cpu_ms", CounterEntry::Kind::Milliseconds, &Counters::d3d9SnapshotUniformBuildNonConstHashMaterialCpuNs, nullptr, nullptr, 0.0},
+    {"d3d9_snapshot_uniform_build_nonconst_hash_lights_cpu_ms", CounterEntry::Kind::Milliseconds, &Counters::d3d9SnapshotUniformBuildNonConstHashLightsCpuNs, nullptr, nullptr, 0.0},
+    {"d3d9_snapshot_uniform_build_nonconst_hash_ffp_blend_wvp_cpu_ms", CounterEntry::Kind::Milliseconds, &Counters::d3d9SnapshotUniformBuildNonConstHashFfpBlendWvpCpuNs, nullptr, nullptr, 0.0},
+    {"d3d9_snapshot_uniform_build_nonconst_hash_texture_transforms_cpu_ms", CounterEntry::Kind::Milliseconds, &Counters::d3d9SnapshotUniformBuildNonConstHashTextureTransformsCpuNs, nullptr, nullptr, 0.0},
+    {"d3d9_snapshot_uniform_build_nonconst_hash_clip_planes_cpu_ms", CounterEntry::Kind::Milliseconds, &Counters::d3d9SnapshotUniformBuildNonConstHashClipPlanesCpuNs, nullptr, nullptr, 0.0},
     {"d3d9_snapshot_uniform_build_payload_combine_hash_cpu_ms", CounterEntry::Kind::Milliseconds, &Counters::d3d9SnapshotUniformBuildPayloadCombineHashCpuNs, nullptr, nullptr, 0.0},
     {"d3d9_snapshot_uniform_build_vs_const_hash_full", CounterEntry::Kind::UnsignedCount, &Counters::d3d9SnapshotUniformBuildVsConstHashFull, nullptr, nullptr, 0.0},
     {"d3d9_snapshot_uniform_build_ps_const_hash_full", CounterEntry::Kind::UnsignedCount, &Counters::d3d9SnapshotUniformBuildPsConstHashFull, nullptr, nullptr, 0.0},
@@ -3588,6 +3604,38 @@ void countD3D9SnapshotUniformBuildPsConstHashCpuTime(std::uint64_t nanoseconds) 
 
 void countD3D9SnapshotUniformBuildNonConstHashCpuTime(std::uint64_t nanoseconds) {
   add(counters().d3d9SnapshotUniformBuildNonConstHashCpuNs, nanoseconds);
+}
+
+void countD3D9SnapshotUniformBuildNonConstHashWorldViewProjCpuTime(std::uint64_t nanoseconds) {
+  add(counters().d3d9SnapshotUniformBuildNonConstHashWorldViewProjCpuNs, nanoseconds);
+}
+
+void countD3D9SnapshotUniformBuildNonConstHashFfpWorldViewCpuTime(std::uint64_t nanoseconds) {
+  add(counters().d3d9SnapshotUniformBuildNonConstHashFfpWorldViewCpuNs, nanoseconds);
+}
+
+void countD3D9SnapshotUniformBuildNonConstHashFfpNormalMatrixCpuTime(std::uint64_t nanoseconds) {
+  add(counters().d3d9SnapshotUniformBuildNonConstHashFfpNormalMatrixCpuNs, nanoseconds);
+}
+
+void countD3D9SnapshotUniformBuildNonConstHashMaterialCpuTime(std::uint64_t nanoseconds) {
+  add(counters().d3d9SnapshotUniformBuildNonConstHashMaterialCpuNs, nanoseconds);
+}
+
+void countD3D9SnapshotUniformBuildNonConstHashLightsCpuTime(std::uint64_t nanoseconds) {
+  add(counters().d3d9SnapshotUniformBuildNonConstHashLightsCpuNs, nanoseconds);
+}
+
+void countD3D9SnapshotUniformBuildNonConstHashFfpBlendWvpCpuTime(std::uint64_t nanoseconds) {
+  add(counters().d3d9SnapshotUniformBuildNonConstHashFfpBlendWvpCpuNs, nanoseconds);
+}
+
+void countD3D9SnapshotUniformBuildNonConstHashTextureTransformsCpuTime(std::uint64_t nanoseconds) {
+  add(counters().d3d9SnapshotUniformBuildNonConstHashTextureTransformsCpuNs, nanoseconds);
+}
+
+void countD3D9SnapshotUniformBuildNonConstHashClipPlanesCpuTime(std::uint64_t nanoseconds) {
+  add(counters().d3d9SnapshotUniformBuildNonConstHashClipPlanesCpuNs, nanoseconds);
 }
 
 void countD3D9SnapshotUniformBuildPayloadCombineHashCpuTime(std::uint64_t nanoseconds) {

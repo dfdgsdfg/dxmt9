@@ -657,18 +657,50 @@ u64 hashDrawUniformPayload(const DrawUniformPayload &payload,
   {
     PerfScope scope(recorder(
         dxmt9::perf::countD3D9SnapshotUniformBuildNonConstHashCpuTime));
-    hashes.worldViewProjHash = hashTrivial(payload.worldViewProj);
-    ffpWorldViewHash = hashTrivial(payload.ffpWorldView);
-    ffpNormalMatrixHash = hashTrivial(payload.ffpNormalMatrix);
-    materialHash = hashMaterial(payload.material);
-    for (std::size_t i = 0; i < payload.lights.size(); ++i) {
-      lightHashes[i] = hashLight(payload.lights[i]);
+    {
+      PerfScope fieldScope(recorder(
+          dxmt9::perf::countD3D9SnapshotUniformBuildNonConstHashWorldViewProjCpuTime));
+      hashes.worldViewProjHash = hashTrivial(payload.worldViewProj);
     }
-    hashes.ffpBlendWorldViewProjHash =
-        hashBlendWorldViewProj(payload.ffpBlendWorldViewProj);
-    hashes.textureTransformsHash =
-        hashTextureTransforms(payload.textureTransforms);
-    hashes.clipPlanesHash = hashClipPlanes(payload.clipPlanes);
+    {
+      PerfScope fieldScope(recorder(
+          dxmt9::perf::countD3D9SnapshotUniformBuildNonConstHashFfpWorldViewCpuTime));
+      ffpWorldViewHash = hashTrivial(payload.ffpWorldView);
+    }
+    {
+      PerfScope fieldScope(recorder(
+          dxmt9::perf::countD3D9SnapshotUniformBuildNonConstHashFfpNormalMatrixCpuTime));
+      ffpNormalMatrixHash = hashTrivial(payload.ffpNormalMatrix);
+    }
+    {
+      PerfScope fieldScope(recorder(
+          dxmt9::perf::countD3D9SnapshotUniformBuildNonConstHashMaterialCpuTime));
+      materialHash = hashMaterial(payload.material);
+    }
+    {
+      PerfScope fieldScope(recorder(
+          dxmt9::perf::countD3D9SnapshotUniformBuildNonConstHashLightsCpuTime));
+      for (std::size_t i = 0; i < payload.lights.size(); ++i) {
+        lightHashes[i] = hashLight(payload.lights[i]);
+      }
+    }
+    {
+      PerfScope fieldScope(recorder(
+          dxmt9::perf::countD3D9SnapshotUniformBuildNonConstHashFfpBlendWvpCpuTime));
+      hashes.ffpBlendWorldViewProjHash =
+          hashBlendWorldViewProj(payload.ffpBlendWorldViewProj);
+    }
+    {
+      PerfScope fieldScope(recorder(
+          dxmt9::perf::countD3D9SnapshotUniformBuildNonConstHashTextureTransformsCpuTime));
+      hashes.textureTransformsHash =
+          hashTextureTransforms(payload.textureTransforms);
+    }
+    {
+      PerfScope fieldScope(recorder(
+          dxmt9::perf::countD3D9SnapshotUniformBuildNonConstHashClipPlanesCpuTime));
+      hashes.clipPlanesHash = hashClipPlanes(payload.clipPlanes);
+    }
   }
   if (componentHashes) {
     *componentHashes = hashes;

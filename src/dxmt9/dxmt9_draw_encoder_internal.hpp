@@ -314,18 +314,6 @@ inline u64 drawBindingPacketDoubleBits(double value) noexcept {
   return std::bit_cast<u64>(value);
 }
 
-inline u64 hashDrawBindingPacketSamplerStates(
-    const core::FlatStateSet<core::kMaxSamplerStates>& states) noexcept {
-  u64 seed = drawBindingPacketHashMix(0x9f6c2a3b5d7e1c8full, states.count);
-  seed = drawBindingPacketHashMix(seed, states.hash);
-  seed = drawBindingPacketHashMix(seed, states.overflow ? 1ull : 0ull);
-  for (u32 i = 0; i < states.count && i < core::kMaxSamplerStates; ++i) {
-    seed = drawBindingPacketHashMix(seed, states.entries[i].state);
-    seed = drawBindingPacketHashMix(seed, states.entries[i].value);
-  }
-  return seed;
-}
-
 template <std::size_t MaxEntries>
 constexpr bool drawBindingPacketFlatStateSetsEqual(
     const core::FlatStateSet<MaxEntries>& lhs,
@@ -770,7 +758,7 @@ inline FragmentTextureSamplerBindingList makeFragmentTextureSamplerBindings(
         .stage = stage,
         .texture = textureHandle,
         .textureLod = hot.textureLods[stage],
-        .samplerStateHash = hashDrawBindingPacketSamplerStates(hot.samplerStates[stage]),
+        .samplerStateHash = hot.key.samplerStateHashes[stage],
         .samplerStates = hot.samplerStates[stage],
     });
   }
@@ -894,7 +882,7 @@ inline VertexTextureSamplerBindingList makeVertexTextureSamplerBindings(
         .stage = stage,
         .texture = textureHandle,
         .textureLod = hot.textureLods[textureSlot],
-        .samplerStateHash = hashDrawBindingPacketSamplerStates(hot.samplerStates[textureSlot]),
+        .samplerStateHash = hot.key.samplerStateHashes[textureSlot],
         .samplerStates = hot.samplerStates[textureSlot],
     });
   }
