@@ -54,13 +54,10 @@ using u32 = std::uint32_t;
 using u64 = std::uint64_t;
 
 // R-BACK-5.8 — per-buffer-handle rename ring entry. DYNAMIC + DEFAULT
-// buffers carry a small inline ring of `MTLStorageModeShared`
-// allocations and rotate among them on `D3DLOCK_DISCARD` rather than
-// blocking on prior GPU completion. Each entry owns a Metal buffer
-// reference and remembers its last-used seqId; rename selects the
-// first entry whose `lastUsedSeqId` is at or below `completedSeqId`,
-// or appends a fresh allocation when none qualify (capacity grows on
-// demand and never shrinks per session).
+// buffers can carry a small inline ring of `MTLStorageModeShared`
+// allocations for `D3DLOCK_DISCARD` renaming. Draw submissions snapshot the
+// concrete Metal buffer backing so already-recorded work does not observe a
+// later DISCARD rotation of the same logical BufferHandle.
 struct BufferRenameRingEntry {
   WMT::Reference<WMT::Buffer> buffer;
   void* contents = nullptr;  // shared-mode CPU pointer
@@ -118,12 +115,11 @@ struct BufferRecord {
   bool isHeapBacked = false;
   WMT::Heap heap{};
   // R-BACK-5.8 — DYNAMIC + DEFAULT rename-ring state. `isDynamicRename`
-  // is set at create time when the storage policy selects the rename
+  // is set at create time when the storage policy can use the rename
   // ring (`Pool::Default` + `UsageDynamic`). `renameRing` always carries
   // at least the create-time allocation; `renameActiveIndex` points at
-  // the entry currently mirrored into `buffer`/`contents`. The ring
-  // never shrinks during a session — capacity grows by one allocation
-  // each time a DISCARD rename finds no idle entry.
+  // the entry currently mirrored into `buffer`/`contents`. Runtime
+  // rotation is safe only when draw bindings snapshot concrete ring entries.
   bool isDynamicRename = false;
   u32 renameActiveIndex = 0;
   std::vector<BufferRenameRingEntry> renameRing;
@@ -501,9 +497,11 @@ struct Pool {
 
   // Returns the seqId the CPU should wait on before this buffer is safe
   // to CPU-map, given `flags`. Returns 0 if the caller may proceed
-  // immediately (UsageDiscard/UsageNoOverwrite, missing handle, or the
-  // buffer is idle). Pure storage-side query; does not consult queue
-  // state — the caller compares against completedSeqId_ to decide.
+  // immediately (UsageNoOverwrite, missing handle, or the buffer is idle).
+  // UsageDiscard skips the wait for DYNAMIC + DEFAULT buffers when dynamic
+  // renaming is enabled because draw payloads snapshot the concrete backing.
+  // Pure storage-side query; does not consult queue state — the caller
+  // compares against completedSeqId_.
   u64 mapWaitSeqId(core::BufferHandle handle, u32 flags) const noexcept;
 
   // Apply the map flags' side effects (UsageDiscard zero-fill) and
@@ -511,13 +509,9 @@ struct Pool {
   // required wait has completed. Returns nullptr for missing handle
   // or empty storage. Caller holds the pool's mutex.
   //
-  // R-BACK-5.8 — when the record is `isDynamicRename` and `flags`
-  // carries `UsageDiscard`, this rotates the per-handle rename ring
-  // before returning the CPU pointer. The rotation prefers an entry
-  // whose `lastUsedSeqId <= completedSeqId`; if none exist a fresh
-  // `MTLStorageModeShared` buffer is allocated via `device.newBuffer`
-  // and appended to the ring rather than blocking on GPU completion.
-  // Non-DYNAMIC paths ignore `device` and `completedSeqId`.
+  // R-BACK-5.8 — when the record is `isDynamicRename` and `flags` carries
+  // `UsageDiscard`, this rotates the per-handle rename ring before returning
+  // the CPU pointer. Non-DYNAMIC paths ignore `device` and `completedSeqId`.
   void* finalizeBufferMap(WMT::Device device,
                           core::BufferHandle handle,
                           u32 flags,
@@ -602,8 +596,13 @@ struct Pool {
   // Stamp lastUsedSeqId on a record so the finish-thread GC respects the
   // in-flight watermark. No-ops on zero handle.
   void markBufferUse(core::Handle handle, u64 seqId);
+  void markBufferSnapshotUse(core::Handle handle,
+                             const core::DrawBufferBindingSnapshot& snapshot,
+                             u64 seqId);
   void markTextureUse(core::Handle handle, u64 seqId);
   void markSurfaceUse(core::Handle handle, u64 seqId);
+
+  core::DrawBufferBindingSnapshot snapshotBufferBinding(core::Handle handle) const noexcept;
 
   // Per-command-kind bulk marks. Walk the descriptor's resources and stamp
   // their last-used watermark.

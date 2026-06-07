@@ -72,6 +72,30 @@ class CompareExperimentImagesTests(unittest.TestCase):
             self.assertEqual(comparisons[1].area, "crop-bottom-1")
             self.assertEqual(comparisons[1].changed_pixels, 0)
 
+    def test_named_roi_reports_region_delta(self) -> None:
+        module = load_module()
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            before = root / "before.png"
+            after = root / "after.png"
+            base = np.zeros((6, 6, 3), dtype=np.uint8)
+            changed = base.copy()
+            changed[1:3, 2:5, 0] = 255
+            save_rgb(before, base)
+            save_rgb(after, changed)
+
+            comparisons = module.compare_images(
+                before,
+                after,
+                rois=[module.parse_roi("2,1,5,3:muzzle")],
+            )
+
+            self.assertEqual(comparisons[1].area, "muzzle")
+            self.assertEqual(comparisons[1].width, 3)
+            self.assertEqual(comparisons[1].height, 2)
+            self.assertEqual(comparisons[1].changed_pixels, 6)
+            self.assertAlmostEqual(comparisons[1].changed_pct, 100.0)
+
     def test_cli_writes_report_summary_diff_and_fails_requested_gate(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
@@ -211,6 +235,46 @@ class CompareExperimentImagesTests(unittest.TestCase):
             self.assertIn("Max delta", text)
             self.assertIn("`1`", text)
             self.assertIn("Passed", text)
+
+    def test_cli_writes_roi_summary_row(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            before = root / "before.png"
+            after = root / "after.png"
+            report = root / "report.md"
+            summary = root / "summary.csv"
+            base = np.zeros((5, 5, 3), dtype=np.uint8)
+            changed = base.copy()
+            changed[0:2, 0:2, 1] = 64
+            save_rgb(before, base)
+            save_rgb(after, changed)
+
+            result = subprocess.run(
+                [
+                    sys.executable,
+                    str(SCRIPT),
+                    "--before",
+                    str(before),
+                    "--after",
+                    str(after),
+                    "--output",
+                    str(report),
+                    "--summary-output",
+                    str(summary),
+                    "--roi",
+                    "0,0,2,2:top-left",
+                ],
+                text=True,
+                capture_output=True,
+                check=False,
+            )
+
+            self.assertEqual(result.returncode, 0, result.stderr)
+            with summary.open(newline="", encoding="utf-8") as handle:
+                rows = list(csv.DictReader(handle))
+            self.assertEqual(rows[1]["area"], "top-left")
+            self.assertEqual(rows[1]["changed_pixels"], "4")
+            self.assertEqual(rows[1]["changed_pct"], "100.000000")
 
     def test_cli_lsb1_policy_allows_one_lsb_blend_tolerance(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

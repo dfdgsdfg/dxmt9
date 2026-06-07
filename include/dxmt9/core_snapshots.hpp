@@ -779,6 +779,15 @@ struct DrawPayloadRange {
   constexpr bool empty() const noexcept { return size == 0; }
 };
 
+struct DrawBufferBindingSnapshot {
+  u64 metalHandle = 0;
+  u64 contentsAddress = 0;
+  u64 byteSize = 0;
+  u64 contentRevision = 0;
+
+  constexpr bool valid() const noexcept { return metalHandle != 0; }
+};
+
 struct DrawStreamBindingOverride {
   Handle buffer{};
   u32 offset = 0;
@@ -794,6 +803,24 @@ struct DrawBindingOverride {
 };
 static_assert(std::is_trivially_copyable_v<DrawBindingOverride>,
               "DrawBindingOverride is serialized into draw-run payload bytes.");
+
+struct DrawStreamBindingSnapshot {
+  Handle buffer{};
+  u32 offset = 0;
+  u32 stride = 0;
+  DrawBufferBindingSnapshot snapshot{};
+};
+
+struct DrawBindingSnapshot {
+  std::array<DrawStreamBindingSnapshot, kMaxStreams> streams{};
+  u32 streamMask = 0;
+  Handle indexBuffer{};
+  IndexType indexType = IndexType::UInt16;
+  DrawBufferBindingSnapshot indexSnapshot{};
+  bool indexSnapshotValid = false;
+};
+static_assert(std::is_trivially_copyable_v<DrawBindingSnapshot>,
+              "DrawBindingSnapshot is serialized into draw-run payload bytes.");
 
 struct CanonicalDrawState {
   FlatDrawStateRecord hot{};
@@ -832,6 +859,7 @@ struct DrawParam {
   DrawPayloadRange userVertexRange{};      // draw-run payload slice, if present
   DrawPayloadRange userIndexRange{};       // draw-run payload slice, if present
   DrawPayloadRange bindingOverrideRange{}; // DrawBindingOverride payload slice
+  DrawPayloadRange bindingSnapshotRange{}; // DrawBindingSnapshot payload slice
   DrawUniformHandle uniformHandle{};       // optional per-draw uniform snapshot
 };
 static_assert(std::is_trivially_copyable_v<DrawParam>,
@@ -841,6 +869,7 @@ struct DrawParamPayloadView {
   std::span<const u8> userVertexData{};
   std::span<const u8> userIndexData{};
   std::span<const u8> bindingOverrideData{};
+  std::span<const u8> bindingSnapshotData{};
 };
 
 struct DrawRunSubmission {
@@ -857,9 +886,20 @@ inline std::span<const u8> drawBindingOverrideBytes(
                              sizeof(binding));
 }
 
+inline std::span<const u8> drawBindingSnapshotBytes(
+    const DrawBindingSnapshot& binding) noexcept {
+  return std::span<const u8>(reinterpret_cast<const u8*>(&binding),
+                             sizeof(binding));
+}
+
 inline bool drawBindingOverrideEmpty(
     const DrawBindingOverride& binding) noexcept {
   return binding.streamMask == 0 && !binding.indexBufferValid;
+}
+
+inline bool drawBindingSnapshotEmpty(
+    const DrawBindingSnapshot& binding) noexcept {
+  return binding.streamMask == 0 && !binding.indexSnapshotValid;
 }
 
 inline void clearDrawStateBindingFields(FlatDrawStateRecord& hot) noexcept {

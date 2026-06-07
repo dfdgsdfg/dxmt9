@@ -153,6 +153,8 @@ struct RecordingDxmt9Device final : dxmt9::Device {
       const DrawParamPayloadView payload = i < payloads.size() ? payloads[i] : DrawParamPayloadView{};
       param.userVertexRange = appendPayload(payload.userVertexData);
       param.userIndexRange = appendPayload(payload.userIndexData);
+      param.bindingOverrideRange = appendPayload(payload.bindingOverrideData);
+      param.bindingSnapshotRange = appendPayload(payload.bindingSnapshotData);
       event.drawRun.draws.push_back(param);
     }
     events.push_back(std::move(event));

@@ -2012,12 +2012,14 @@ bool packDrawParamPayload(DrawParam &param,
   const auto vertexBytes = payload.userVertexData;
   const auto indexBytes = payload.userIndexData;
   const auto bindingOverrideBytes = payload.bindingOverrideData;
+  const auto bindingSnapshotBytes = payload.bindingSnapshotData;
   constexpr auto kMaxRange = std::numeric_limits<u32>::max();
   const std::uint64_t requiredSize =
       static_cast<std::uint64_t>(drawPayloadStorageSize(payloadArena)) +
       static_cast<std::uint64_t>(vertexBytes.size()) +
       static_cast<std::uint64_t>(indexBytes.size()) +
-      static_cast<std::uint64_t>(bindingOverrideBytes.size());
+      static_cast<std::uint64_t>(bindingOverrideBytes.size()) +
+      static_cast<std::uint64_t>(bindingSnapshotBytes.size());
   if (requiredSize > kMaxRange) {
     return false;
   }
@@ -2025,7 +2027,9 @@ bool packDrawParamPayload(DrawParam &param,
   return appendDrawPayload(payloadArena, vertexBytes, param.userVertexRange) &&
          appendDrawPayload(payloadArena, indexBytes, param.userIndexRange) &&
          appendDrawPayload(payloadArena, bindingOverrideBytes,
-                           param.bindingOverrideRange);
+                           param.bindingOverrideRange) &&
+         appendDrawPayload(payloadArena, bindingSnapshotBytes,
+                           param.bindingSnapshotRange);
 }
 
 bool drawPayloadRangeValid(std::size_t payloadSize,
@@ -2063,6 +2067,7 @@ bool drawRunAppend(DrawRunDesc &run, DrawParam param,
   param.userVertexRange = {};
   param.userIndexRange = {};
   param.bindingOverrideRange = {};
+  param.bindingSnapshotRange = {};
   if (!packDrawParamPayload(param, run.scratch_.payload, payload)) {
     return false;
   }
@@ -2126,7 +2131,8 @@ bool drawRunValidate(const DrawRunDesc &run) noexcept {
   for (const auto &param : drawRunDraws(run)) {
     if (!drawPayloadRangeValid(payloadSize, param.userVertexRange) ||
         !drawPayloadRangeValid(payloadSize, param.userIndexRange) ||
-        !drawPayloadRangeValid(payloadSize, param.bindingOverrideRange)) {
+        !drawPayloadRangeValid(payloadSize, param.bindingOverrideRange) ||
+        !drawPayloadRangeValid(payloadSize, param.bindingSnapshotRange)) {
       return false;
     }
   }
@@ -2569,7 +2575,8 @@ void Device::submitDrawSubmissionBatch(
       std::span<const DrawParamPayloadView> payloads{};
       if (!submission.payload.userVertexData.empty() ||
           !submission.payload.userIndexData.empty() ||
-          !submission.payload.bindingOverrideData.empty()) {
+          !submission.payload.bindingOverrideData.empty() ||
+          !submission.payload.bindingSnapshotData.empty()) {
         payloads = std::span<const DrawParamPayloadView>(&submission.payload, 1);
       }
       submitDrawRunInternal(std::move(submission.state), submission.uniforms,

@@ -2,7 +2,9 @@
 //
 // This is a CPU-only spec for the per-buffer-handle rename ring carried
 // on `BufferRecord` when a buffer is created as `D3DPOOL_DEFAULT` +
-// `D3DUSAGE_DYNAMIC`. The spec exercises:
+// `D3DUSAGE_DYNAMIC`. Draw submissions now snapshot the concrete Metal backing
+// for dynamic buffers, so default DISCARD can rotate the ring instead of
+// waiting for the logical BufferHandle to drain. This spec exercises:
 //
 //   * Create-time tagging (`isDynamicRename`) and ring seeding with the
 //     create-time allocation entry.

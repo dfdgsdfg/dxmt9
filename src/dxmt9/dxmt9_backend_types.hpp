@@ -670,6 +670,7 @@ struct ChunkSlot {
       payloadBytes64 += payload.userVertexData.size();
       payloadBytes64 += payload.userIndexData.size();
       payloadBytes64 += payload.bindingOverrideData.size();
+      payloadBytes64 += payload.bindingSnapshotData.size();
       if (payloadBytes64 > detail::kChunkSlotU32Max) {
         break;
       }
@@ -736,6 +737,7 @@ struct ChunkSlot {
       param.userVertexRange = appendPayloadBytes(payload.userVertexData);
       param.userIndexRange = appendPayloadBytes(payload.userIndexData);
       param.bindingOverrideRange = appendPayloadBytes(payload.bindingOverrideData);
+      param.bindingSnapshotRange = appendPayloadBytes(payload.bindingSnapshotData);
       drawParams.push_back(std::move(param));
     }
 
@@ -772,6 +774,7 @@ struct ChunkSlot {
       payloadBytes64 += submission.payload.userVertexData.size();
       payloadBytes64 += submission.payload.userIndexData.size();
       payloadBytes64 += submission.payload.bindingOverrideData.size();
+      payloadBytes64 += submission.payload.bindingSnapshotData.size();
       if (payloadBytes64 > detail::kChunkSlotU32Max) {
         break;
       }
@@ -844,6 +847,8 @@ struct ChunkSlot {
       param.userIndexRange = appendPayloadBytes(submissions[i].payload.userIndexData);
       param.bindingOverrideRange =
           appendPayloadBytes(submissions[i].payload.bindingOverrideData);
+      param.bindingSnapshotRange =
+          appendPayloadBytes(submissions[i].payload.bindingSnapshotData);
       param.uniformHandle = uniformHandle;
       drawParams.push_back(std::move(param));
     }

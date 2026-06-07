@@ -154,6 +154,11 @@ class SummarizeXcodeEncoderCountersTests(unittest.TestCase):
                 "depth_write_draws",
                 "scissor_enabled_draws",
                 "alpha_blend_enabled_draws",
+                "blend_screen_draws",
+                "blend_additive_draws",
+                "blend_alpha_composite_draws",
+                "alpha_blend_textured_draws",
+                "alpha_blend_small_draws",
                 "alpha_test_enabled_draws",
                 "clip_plane_enabled_draws",
                 "vertex_count",
@@ -183,6 +188,11 @@ class SummarizeXcodeEncoderCountersTests(unittest.TestCase):
                     "depth_write_draws": 8,
                     "scissor_enabled_draws": 4,
                     "alpha_blend_enabled_draws": 3,
+                    "blend_screen_draws": 2,
+                    "blend_additive_draws": 1,
+                    "blend_alpha_composite_draws": 0,
+                    "alpha_blend_textured_draws": 3,
+                    "alpha_blend_small_draws": 1,
                     "alpha_test_enabled_draws": 1,
                     "clip_plane_enabled_draws": 0,
                     "vertex_count": 1000,
@@ -269,6 +279,11 @@ class SummarizeXcodeEncoderCountersTests(unittest.TestCase):
             self.assertEqual(row["dxmt_depth_enabled_draws"], "10")
             self.assertEqual(row["dxmt_depth_write_draws"], "8")
             self.assertEqual(row["dxmt_scissor_enabled_draws"], "4")
+            self.assertEqual(row["dxmt_blend_screen_draws"], "2")
+            self.assertEqual(row["dxmt_blend_additive_draws"], "1")
+            self.assertEqual(row["dxmt_blend_alpha_composite_draws"], "0")
+            self.assertEqual(row["dxmt_alpha_blend_textured_draws"], "3")
+            self.assertEqual(row["dxmt_alpha_blend_small_draws"], "1")
             self.assertAlmostEqual(float(row["dxmt_vs_buffer_write_share"]), 250 / 256)
             self.assertGreater(float(row["dxmt_unexplained_buffer_write_ratio"]), 0.99)
             self.assertAlmostEqual(
@@ -285,6 +300,11 @@ class SummarizeXcodeEncoderCountersTests(unittest.TestCase):
             self.assertIn("unexplained Xcode buffer write", report_text)
             self.assertIn("VS buffer bytes / post-clipped primitive", report_text)
             self.assertIn("dxmt cull none/front/back draws", report_text)
+            self.assertIn("dxmt screen blend draws", report_text)
+            self.assertIn("blend chg/uniq/noop/cf/scr/add/ac", report_text)
+            self.assertIn("alpha tx/sm", report_text)
+            self.assertIn("0/0/0/0/2/1/0", report_text)
+            self.assertIn("3/1", report_text)
             self.assertIn("## DXMT Per-Stream Breakdown", report_text)
             self.assertIn("0xabc/32/48", report_text)
 

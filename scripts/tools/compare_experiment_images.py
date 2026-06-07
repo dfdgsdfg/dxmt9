@@ -33,6 +33,15 @@ class ImageComparison:
     ssim: float
 
 
+@dataclass(frozen=True)
+class Roi:
+    left: int
+    top: int
+    right: int
+    bottom: int
+    name: str
+
+
 POLICY_PRESETS: dict[str, dict[str, float | int]] = {
     "exact": {
         "max_changed_pct": 0.0,
@@ -60,6 +69,40 @@ def crop_bottom(image: Image.Image, pixels: int) -> Image.Image:
             f"cannot crop {pixels} bottom pixels from {image.width}x{image.height} image"
         )
     return image.crop((0, 0, image.width, image.height - pixels))
+
+
+def parse_roi(spec: str) -> Roi:
+    coords, sep, name = spec.partition(":")
+    parts = coords.split(",")
+    if len(parts) != 4:
+        raise argparse.ArgumentTypeError(
+            "ROI must be L,T,R,B or L,T,R,B:name"
+        )
+    try:
+        left, top, right, bottom = (int(part, 10) for part in parts)
+    except ValueError as exc:
+        raise argparse.ArgumentTypeError(
+            "ROI coordinates must be base-10 integers"
+        ) from exc
+    if left < 0 or top < 0 or right <= left or bottom <= top:
+        raise argparse.ArgumentTypeError(
+            "ROI must have non-negative L/T and R>L, B>T"
+        )
+    area_name = (
+        name.strip()
+        if sep and name.strip()
+        else f"roi-{left}-{top}-{right}-{bottom}"
+    )
+    return Roi(left=left, top=top, right=right, bottom=bottom, name=area_name)
+
+
+def crop_roi(image: Image.Image, roi: Roi) -> Image.Image:
+    if roi.right > image.width or roi.bottom > image.height:
+        raise ValueError(
+            f"ROI {roi.name} ({roi.left},{roi.top},{roi.right},{roi.bottom}) "
+            f"is outside {image.width}x{image.height} image"
+        )
+    return image.crop((roi.left, roi.top, roi.right, roi.bottom))
 
 
 def compute_ssim_rgb(before: np.ndarray, after: np.ndarray) -> float:
@@ -133,6 +176,7 @@ def compare_images(
     after_path: Path,
     crop_bottom_pixels: int = 0,
     active_threshold: int = 0,
+    rois: list[Roi] | None = None,
 ) -> list[ImageComparison]:
     before_image = load_rgb(before_path)
     after_image = load_rgb(after_path)
@@ -156,6 +200,15 @@ def compare_images(
                 f"crop-bottom-{crop_bottom_pixels}",
                 np.asarray(crop_bottom(before_image, crop_bottom_pixels), dtype=np.uint8),
                 np.asarray(crop_bottom(after_image, crop_bottom_pixels), dtype=np.uint8),
+                active_threshold,
+            )
+        )
+    for roi in rois or []:
+        comparisons.append(
+            compare_arrays(
+                roi.name,
+                np.asarray(crop_roi(before_image, roi), dtype=np.uint8),
+                np.asarray(crop_roi(after_image, roi), dtype=np.uint8),
                 active_threshold,
             )
         )
@@ -373,6 +426,16 @@ def main() -> int:
     parser.add_argument("--label-after", default="after")
     parser.add_argument("--crop-bottom", type=int, default=0)
     parser.add_argument(
+        "--roi",
+        action="append",
+        type=parse_roi,
+        default=[],
+        help=(
+            "compare an additional region of interest as L,T,R,B or "
+            "L,T,R,B:name. May be repeated"
+        ),
+    )
+    parser.add_argument(
         "--active-threshold",
         type=int,
         default=0,
@@ -422,6 +485,7 @@ def main() -> int:
             args.after,
             args.crop_bottom,
             args.active_threshold,
+            args.roi,
         )
     except ValueError as exc:
         parser.error(str(exc))

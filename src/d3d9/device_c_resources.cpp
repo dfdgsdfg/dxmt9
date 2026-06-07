@@ -1,9 +1,12 @@
 #include "device_c_provider.hpp"
 #include "dxmt9/dxmt9_perf_counters.hpp"
+#include "util/log/log.hpp"
 
 #include <algorithm>
+#include <cstdarg>
 #include <chrono>
 #include <cmath>
+#include <cstdlib>
 
 using namespace dxmt9::d3d9::devicec;
 
@@ -21,6 +24,33 @@ constexpr uint32_t kD3DUsageAutoGenMipmap = 0x00000400u;
 constexpr uint32_t kD3DFmtA8R8G8B8 = 21u;
 constexpr uint32_t kD3DFmtA8P8 = 40u;
 constexpr uint32_t kD3DFmtP8 = 41u;
+
+uint64_t traceBufferHandleFilter() {
+  static const uint64_t filter = [] {
+    const char* env = std::getenv("DXMT9_TRACE_BUFFER_HANDLE");
+    if (!env || env[0] == '\0') {
+      return 0ull;
+    }
+    return std::strtoull(env, nullptr, 0);
+  }();
+  return filter;
+}
+
+uint64_t bufferHandleValue(const D9CBuffer* buffer) {
+  return buffer && buffer->obj ? buffer->obj->handle().value : 0ull;
+}
+
+bool shouldTraceBufferHandle(const D9CBuffer* buffer) {
+  const uint64_t filter = traceBufferHandleFilter();
+  return filter != 0ull && bufferHandleValue(buffer) == filter;
+}
+
+void bufferTraceLog(const char* fmt, ...) {
+  va_list args;
+  va_start(args, fmt);
+  dxmt9::util::vlogf(dxmt9::util::LogLevel::Warn, "dxmt9-buffer-trace", fmt, args);
+  va_end(args);
+}
 
 uint32_t lockFlagsToCore(uint32_t flags) {
   uint32_t out = 0;
@@ -700,13 +730,29 @@ extern "C" uint32_t dxmt9c_buffer_release(D9CBuffer* b) {
 
 extern "C" int32_t dxmt9c_buffer_lock(D9CBuffer* b, uint32_t offset, uint32_t size, void** data,
                                       uint32_t flags) {
-  if (!data) {
+  if (!data || !b || !b->obj) {
     return dxmt9::core::D3DERR_INVALIDCALL;
   }
-  dxmt9DebugLog("buffer_lock begin buffer=%p offset=%u size=%u flags=0x%x",
-                static_cast<void*>(b), offset, size, flags);
+  const auto& desc = b->obj->desc();
+  if (offset > desc.size || (size != 0u && size > desc.size - offset)) {
+    return dxmt9::core::D3DERR_INVALIDCALL;
+  }
+  const uint32_t actualSize = size != 0u ? size : desc.size - offset;
+  const uint64_t handle = bufferHandleValue(b);
+  const bool traceBuffer = shouldTraceBufferHandle(b);
+  dxmt9DebugLog("buffer_lock begin buffer=%p handle=0x%llx offset=%u size=%u actual_size=%u flags=0x%x desc_size=%u",
+                static_cast<void*>(b), static_cast<unsigned long long>(handle), offset, size,
+                actualSize, flags, desc.size);
+  if (traceBuffer) {
+    bufferTraceLog("buffer_trace lock_begin buffer=%p handle=0x%llx offset=%u size=%u actual_size=%u flags=0x%x desc_size=%u usage=0x%x pool=%u fvf=0x%x",
+                   static_cast<void*>(b), static_cast<unsigned long long>(handle), offset, size,
+                   actualSize, flags, b->desc.size, b->desc.usage,
+                   static_cast<uint32_t>(b->desc.pool), b->desc.fvf);
+  }
   b->lastLockReadOnly = (flags & kD3DLockReadOnly) != 0;
-  const uint32_t actualSize = size ? size : b->obj->desc().size;
+  b->lastLockOffset = offset;
+  b->lastLockSize = actualSize;
+  b->lastLockFlags = flags;
   const auto start = std::chrono::steady_clock::now();
   auto lock = b->obj->lock(offset, actualSize, lockFlagsToCore(flags));
   *data = lock.data;
@@ -752,13 +798,24 @@ extern "C" int32_t dxmt9c_buffer_lock(D9CBuffer* b, uint32_t offset, uint32_t si
       flags,
       b->desc.usage,
       static_cast<std::uint32_t>(b->desc.pool),
-      size == 0 || actualSize == b->obj->desc().size,
+      offset == 0u && actualSize == desc.size,
       shadowCopy);
-  dxmt9DebugLog("buffer_lock ok buffer=%p data=%p", static_cast<void*>(b), *data);
+  dxmt9DebugLog("buffer_lock ok buffer=%p handle=0x%llx data=%p",
+                static_cast<void*>(b), static_cast<unsigned long long>(handle), *data);
+  if (traceBuffer) {
+    bufferTraceLog("buffer_trace lock_ok buffer=%p handle=0x%llx data=%p pitch=%u shadow=%u",
+                   static_cast<void*>(b), static_cast<unsigned long long>(handle), *data,
+                   lock.pitch, shadowCopy ? 1u : 0u);
+  }
   return dxmt9::core::D3D_OK;
 }
 
 extern "C" int32_t dxmt9c_buffer_unlock(D9CBuffer* b) {
+  if (!b || !b->obj) {
+    return dxmt9::core::D3DERR_INVALIDCALL;
+  }
+  const uint64_t handle = bufferHandleValue(b);
+  const bool traceBuffer = shouldTraceBufferHandle(b);
   if (b->wow64Lock.active) {
     if (!b->lastLockReadOnly) {
       std::memcpy(b->wow64Lock.nativePtr, b->wow64Lock.shadow.ptr, b->wow64Lock.rowBytes);
@@ -777,7 +834,16 @@ extern "C" int32_t dxmt9c_buffer_unlock(D9CBuffer* b) {
     b->wow64Lock.active = false;
   }
   b->obj->unlock(!b->lastLockReadOnly);
+  if (traceBuffer) {
+    bufferTraceLog("buffer_trace unlock buffer=%p handle=0x%llx offset=%u actual_size=%u flags=0x%x readonly=%u upload=%u",
+                   static_cast<void*>(b), static_cast<unsigned long long>(handle),
+                   b->lastLockOffset, b->lastLockSize, b->lastLockFlags,
+                   b->lastLockReadOnly ? 1u : 0u, b->lastLockReadOnly ? 0u : 1u);
+  }
   b->lastLockReadOnly = false;
+  b->lastLockOffset = 0;
+  b->lastLockSize = 0;
+  b->lastLockFlags = 0;
   return dxmt9::core::D3D_OK;
 }
 

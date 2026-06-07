@@ -153,6 +153,15 @@ JOINED_EXTRA_FIELDS = (
     "dxmt_blend_state_last",
     "dxmt_blend_enabled_noop_draws",
     "dxmt_blend_constant_factor_draws",
+    "dxmt_blend_screen_draws",
+    "dxmt_blend_additive_draws",
+    "dxmt_blend_alpha_composite_draws",
+    "dxmt_alpha_blend_textured_draws",
+    "dxmt_alpha_blend_textured_primitives",
+    "dxmt_alpha_blend_textured_vertices",
+    "dxmt_alpha_blend_small_draws",
+    "dxmt_alpha_blend_small_primitives",
+    "dxmt_alpha_blend_small_vertices",
     "dxmt_alpha_test_enabled_draws",
     "dxmt_alpha_test_effective_draws",
     "dxmt_clip_plane_enabled_draws",
@@ -724,6 +733,15 @@ def join_dxmt(row: dict[str, Any], dxmt: dict[tuple[int, int], dict[str, Any]]) 
         "dxmt_blend_state_last": "blend_state_last",
         "dxmt_blend_enabled_noop_draws": "blend_enabled_noop_draws",
         "dxmt_blend_constant_factor_draws": "blend_constant_factor_draws",
+        "dxmt_blend_screen_draws": "blend_screen_draws",
+        "dxmt_blend_additive_draws": "blend_additive_draws",
+        "dxmt_blend_alpha_composite_draws": "blend_alpha_composite_draws",
+        "dxmt_alpha_blend_textured_draws": "alpha_blend_textured_draws",
+        "dxmt_alpha_blend_textured_primitives": "alpha_blend_textured_primitives",
+        "dxmt_alpha_blend_textured_vertices": "alpha_blend_textured_vertices",
+        "dxmt_alpha_blend_small_draws": "alpha_blend_small_draws",
+        "dxmt_alpha_blend_small_primitives": "alpha_blend_small_primitives",
+        "dxmt_alpha_blend_small_vertices": "alpha_blend_small_vertices",
         "dxmt_alpha_test_enabled_draws": "alpha_test_enabled_draws",
         "dxmt_alpha_test_effective_draws": "alpha_test_effective_draws",
         "dxmt_clip_plane_enabled_draws": "clip_plane_enabled_draws",
@@ -1572,6 +1590,15 @@ def write_report(
         as_int(row.get("dxmt_blend_enabled_noop_draws")) for row in top)
     top_blend_constant_factor_draws = sum(
         as_int(row.get("dxmt_blend_constant_factor_draws")) for row in top)
+    top_blend_screen_draws = sum(as_int(row.get("dxmt_blend_screen_draws")) for row in top)
+    top_blend_additive_draws = sum(
+        as_int(row.get("dxmt_blend_additive_draws")) for row in top)
+    top_blend_alpha_composite_draws = sum(
+        as_int(row.get("dxmt_blend_alpha_composite_draws")) for row in top)
+    top_alpha_blend_textured_draws = sum(
+        as_int(row.get("dxmt_alpha_blend_textured_draws")) for row in top)
+    top_alpha_blend_small_draws = sum(
+        as_int(row.get("dxmt_alpha_blend_small_draws")) for row in top)
     top_shader_variants = sum(as_int(row.get("dxmt_shader_variant_changes")) for row in top)
     top_vsout_layouts = sum(as_int(row.get("dxmt_vsout_layout_changes")) for row in top)
     top_vsout_cache_hits = sum(as_int(row.get("dxmt_vsout_layout_cache_hits")) for row in top)
@@ -2024,6 +2051,16 @@ def write_report(
     lines.append(
         f"| dxmt constant-factor blend draws | `{fmt_int(top_blend_constant_factor_draws)}` |"
     )
+    lines.append(f"| dxmt screen blend draws | `{fmt_int(top_blend_screen_draws)}` |")
+    lines.append(f"| dxmt additive blend draws | `{fmt_int(top_blend_additive_draws)}` |")
+    lines.append(
+        f"| dxmt alpha-composite blend draws | `{fmt_int(top_blend_alpha_composite_draws)}` |"
+    )
+    lines.append(
+        f"| dxmt alpha-blend textured/small draws | "
+        f"`{fmt_int(top_alpha_blend_textured_draws)}/"
+        f"{fmt_int(top_alpha_blend_small_draws)}` |"
+    )
     lines.append(f"| dxmt shader variant changes | `{fmt_int(top_shader_variants)}` |")
     lines.append(f"| dxmt VSOut layout changes | `{fmt_int(top_vsout_layouts)}` |")
     lines.append(f"| dxmt VSOut layout cache hits | `{fmt_int(top_vsout_cache_hits)}` |")
@@ -2218,7 +2255,8 @@ def write_report(
         "vert/draw", "vert min/max", "large prim/vert", "baseV nz/neg/native", "baseV min/max",
         "split src/extra",
         "stream h/o/s", "stream h/o/s per draw",
-        "IB hdl chg", "IB hdl/draw", "blend chg/uniq/noop/cf",
+        "IB hdl chg", "IB hdl/draw", "blend chg/uniq/noop/cf/scr/add/ac",
+        "alpha tx/sm",
         "argbuf table KiB", "cbuf VS KiB",
         "cbuf FFPVS KiB", "cbuf PS KiB", "cbuf FFPPS KiB",
         "setVertexBytes KiB", "transient V KiB", "transient I KiB",
@@ -2277,7 +2315,14 @@ def write_report(
                     f"{fmt_int(row.get('dxmt_blend_state_changes'))}/"
                     f"{fmt_int(row.get('dxmt_blend_state_unique'))}/"
                     f"{fmt_int(row.get('dxmt_blend_enabled_noop_draws'))}/"
-                    f"{fmt_int(row.get('dxmt_blend_constant_factor_draws'))}"
+                    f"{fmt_int(row.get('dxmt_blend_constant_factor_draws'))}/"
+                    f"{fmt_int(row.get('dxmt_blend_screen_draws'))}/"
+                    f"{fmt_int(row.get('dxmt_blend_additive_draws'))}/"
+                    f"{fmt_int(row.get('dxmt_blend_alpha_composite_draws'))}"
+                ),
+                (
+                    f"{fmt_int(row.get('dxmt_alpha_blend_textured_draws'))}/"
+                    f"{fmt_int(row.get('dxmt_alpha_blend_small_draws'))}"
                 ),
                 fmt_float(as_int(row.get("dxmt_argbuf_table_bytes")) / 1024.0, 1),
                 fmt_float(as_int(row.get("dxmt_argbuf_cbuf_vs_bytes")) / 1024.0, 1),
@@ -2427,7 +2472,7 @@ def write_report(
         "FS buffer MiB", "varyings/fragment", "buffer write limiter %",
         "LLC limiter %", "MMU limiter %", "draws", "FFP", "preT",
         "cull n/f/b", "depth e/w", "scissor", "alpha b/t/e",
-        "blend chg/uniq/noop/cf", "clip planes",
+        "blend chg/uniq/noop/cf/scr/add/ac", "alpha tx/sm", "clip planes",
         "dxmt vertices", "dxmt tris", "prim/draw", "prim min/max",
         "vert/draw", "vert min/max", "large prim/vert",
         "geom sig uniq/dup", "geom dup",
@@ -2535,7 +2580,14 @@ def write_report(
                     f"{fmt_int(row.get('dxmt_blend_state_changes'))}/"
                     f"{fmt_int(row.get('dxmt_blend_state_unique'))}/"
                     f"{fmt_int(row.get('dxmt_blend_enabled_noop_draws'))}/"
-                    f"{fmt_int(row.get('dxmt_blend_constant_factor_draws'))}"
+                    f"{fmt_int(row.get('dxmt_blend_constant_factor_draws'))}/"
+                    f"{fmt_int(row.get('dxmt_blend_screen_draws'))}/"
+                    f"{fmt_int(row.get('dxmt_blend_additive_draws'))}/"
+                    f"{fmt_int(row.get('dxmt_blend_alpha_composite_draws'))}"
+                ),
+                (
+                    f"{fmt_int(row.get('dxmt_alpha_blend_textured_draws'))}/"
+                    f"{fmt_int(row.get('dxmt_alpha_blend_small_draws'))}"
                 ),
                 fmt_int(row.get("dxmt_clip_plane_enabled_draws")),
                 fmt_int(row.get("dxmt_vertex_count")),

@@ -243,6 +243,16 @@ launcher with `DXMT_3DMARK05_DIRECT_TIMEOUT=180` by default and supports
 Wine. The direct launcher traps `TERM`/`INT` and kills the app-prefix
 wineserver on exit by default (`DXMT_3DMARK05_KILL_SERVER_ON_EXIT=1`) so a
 timeout-finalized 3DMark05 run should not leave a detached final-frame process.
+Do not treat an open Xcode welcome window as proof that the Metal capture layer
+is inserted. If a 3DMark05 probe log reports `startCapture failed` with
+`Capture layer is not inserted`, file and `developerTools` capture destinations
+are both invalid for that run. Also avoid making `MTL_CAPTURE_ENABLED=1` the
+default workaround for 3DMark05: it can force a black-screen startup with no
+`result.json`, no draw/present counters, and no `.gputrace`, so it is not a
+valid performance sample. Use it only as a one-off capture-layer diagnostic and
+classify black/zero-counter output as capture-mode failure, not a renderer
+regression.
+
 For the current GT1 hidden vertex/backend-storage hypothesis,
 `--probe-half-vsout` has already been tested on frame50 and rejected as the
 current owner: it compiled and reduced top VS writes slightly, but failed the
@@ -1253,13 +1263,35 @@ For this specific 3DMark05 workflow, do not add `MTL_CAPTURE_ENABLED=1` unless
 has reproduced black-screen startup with draw/present counters at zero; the
 standard wrapper uses dxmt9's `DXMT_METAL_CAPTURE_FRAME/PATH` trigger without
 it by default.
+For draw-local force-white queues generated from effect-geometry CSVs, treat
+`command_index`/`command_draw_index` as a narrow replay target, not proof. The
+follow-up run is valid only when the perf summary reports nonzero
+`probe_force_texture_white_draws`/PSO-bypass counts and the captured frame
+matches the baseline target scene. If either count stays zero, or the HUD/scene
+has drifted, classify the output as selector/frame drift and use same-run
+instrumentation or direct Xcode draw inspection instead of reading the image
+delta as an A/B result.
+For color-attachment after-draw histories, remember that every matched dump
+forces a render-encoder split. If the target draw is adjacent to an earlier
+matching draw, an `enc` gate can accidentally exclude it after the first split.
+Prefer `seq + texture/command` gates first, then read the resulting sidecar
+metadata for the actual `enc`, `draw`, `commandIndex`, and
+`commandDrawIndex`.
 Apple's file `.gputrace` destination still needs the process capture layer
 (`MetalCaptureEnabled` Info.plist key or macOS 14+ `MTL_CAPTURE_ENABLED=1`), so
 the expected no-layer failure is `Capture layer is not inserted`.
 If normal rendering works but file capture fails with `Capture layer is not
-inserted`, attach Xcode and rerun with
+inserted`, use a real Xcode capture-layer attach/launch and rerun with
 `DXMT_3DMARK05_METAL_CAPTURE_DESTINATION=developerTools` so
-MTLCaptureManager targets Xcode rather than `.gputrace` file output.
+MTLCaptureManager targets Xcode rather than `.gputrace` file output. Merely
+opening Xcode at the welcome window is not enough; if `developerTools` still
+logs `Capture layer is not inserted`, classify the run as capture-layer failure
+and do not use its output as an Xcode/perf sample.
+The in-place copied `wine.capture.real` / `wine.capture.real-preloader`
+experiment with embedded `MetalCaptureEnabled=true` also rendered GT1 normally
+but still failed file capture with `Capture layer is not inserted`. Treat that
+as a negative capture-layer result unless a future run proves that Xcode itself
+launched or attached the real Wine temp child.
 
 ```sh
 # capture (no-gputrace scout = 180s, .gputrace/Xcode candidate = 420s)

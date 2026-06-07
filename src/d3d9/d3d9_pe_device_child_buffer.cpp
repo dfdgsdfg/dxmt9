@@ -62,7 +62,13 @@ static void dxmt9DeviceDebugLog(const char *fmt, ...) {
 static bool bufferLockRequiresHazardFlush(DWORD flags) {
   if ((flags & D3DLOCK_READONLY) != 0)
     return false;
-  if ((flags & (D3DLOCK_DISCARD | D3DLOCK_NOOVERWRITE)) != 0)
+  // DISCARD may skip a GPU wait only when the implementation gives the app a
+  // fresh backing allocation and already-recorded draws keep a concrete backing
+  // snapshot. The flush keeps PE recorder ordering explicit; the backend rename
+  // snapshot preserves the actual Metal buffer seen by each queued draw.
+  if ((flags & D3DLOCK_DISCARD) != 0)
+    return true;
+  if ((flags & D3DLOCK_NOOVERWRITE) != 0)
     return false;
   return true;
 }

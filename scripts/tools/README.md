@@ -16,7 +16,11 @@ build. `shader_corpus_tool.py` is also imported by the Meson tests under
 - `summarize_index_cache_runtime.py` — summarize 3DMark05 encoder-only
   reordered-index-cache lookup/apply/reject telemetry for opt-in proof runs.
 - `summarize_3dmark05_perf.py` — parse dxmt9 per-run perf logs into encoder,
-  stream, and indexed-probe CSVs. Indexed probe rows include runtime
+  stream, indexed-probe, and per-frame sampling CSVs. Enable
+  `DXMT9_PERF_FRAME_SAMPLING=1` or `run_3dmark05_perf_probe.sh --frame-sampling`
+  for `3dmark05-perf-frames.csv`; the Markdown slow-frame table is the
+  preferred first gate for visual/perf-coupling hypotheses such as bloom,
+  glow, and rifle muzzle effects. Indexed probe rows include runtime
   VS/PS-constant and uniform-payload hashes so mini-replay
   `vsconsts_hash`/`psconsts_hash` blocker evidence can be compared against
   runtime-visible draw telemetry before spending another `.gputrace`. Future
@@ -80,6 +84,15 @@ build. `shader_corpus_tool.py` is also imported by the Meson tests under
   and programmable textured buckets. Use it after Tile-FFP expansion points at a
   programmable route; for frame60 it identifies `60/0` as the smaller
   depth-only reduced A/B candidate and `60/2` as the larger textured route.
+- `summarize_fragmentless_depth_route_gate.py` — combine the row-scoped
+  fragmentless-depth-only encoder CSV, perf summary counters, optional route
+  logs, optional same-input equality CSV, and optional baseline/treatment Xcode
+  counter summaries. Use it after
+  `--probe-fragmentless-depth-only-row 60/0`: route coverage alone should emit
+  `route-reachable-needs-equality`, not an Xcode promotion. Only a passed
+  equality CSV should move the gate to `ready-for-xcode-counters`; flat Xcode
+  `VS Buffer Device Memory Bytes Written / VS Invocations` then rejects the
+  denominator route.
 - `audit_backend_escape_surface.py` — static/no-gputrace preflight for the
   remaining backend-denominator escape hatches. It separates winemetal bridge
   support from actual dxmt9 draw-route/shader-emitter support for mesh/object,
@@ -140,6 +153,9 @@ build. `shader_corpus_tool.py` is also imported by the Meson tests under
   `miss32_delta`, so unapplied locality ceilings do not appear as zero-LRU rows.
 - `run_3dmark05_perf_probe.sh` — standard 3DMark05 GT1 perf launcher. Always
   use a positive `--timeout` because 3DMark05 can hang at the final frame.
+  Add `--frame-sampling` for no-gputrace visual/perf-coupling runs; it emits
+  per-Present wall-clock `wall_ms/fps` plus draw/pass/wait deltas and writes
+  `3dmark05-perf-frames.csv` through the summary step.
   When a timeout-finalized capture has complete Xcode encoder counters and
   `dxmt9.log` but no `result.json`, pass `--allow-partial-stable-frame-proof`
   with stable-frame proof presets; keep `--require-result-json` for clean
@@ -156,7 +172,18 @@ build. `shader_corpus_tool.py` is also imported by the Meson tests under
   reserving raw pixel percentages from time-based screenshots for triage only.
   `--probe-fragmentless-depth-only-row SEQ/ENC` is a diagnostic-only
   backend-shape route smoke for depth-only rows; it still requires equality and
-  Xcode counter proof before any promotion.
+  Xcode counter proof before any promotion. Run
+  `summarize_fragmentless_depth_route_gate.py` on the smoke output before
+  scheduling Xcode/gputrace.
+  Color attachment after-draw dumps are also diagnostic-only because they force
+  render-encoder splits and can materialize tile/pass intermediates that the
+  normal pass-end store does not preserve. Directory-mode color histories record
+  `commandIndex`, `commandDrawIndex`, and `commandDrawCount`; use those fields
+  together before interpreting multiple sidecars from one draw-run command.
+  If the target is an adjacent effect draw sequence, avoid over-constraining
+  with `--dump-color-attachment-enc`: the first matching after-draw dump ends
+  the current render encoder, so the next draw can move to `enc+1` while the
+  command index remains the more useful local identifier.
   For gputrace runs, the wrapper now sets `DXMT_METAL_CAPTURE_FRAME/PATH`
   without `MTL_CAPTURE_ENABLED=1` by default because that Apple capture-layer
   env has reproduced 3DMark05 black-screen startup with draw/present counters
@@ -165,6 +192,104 @@ build. `shader_corpus_tool.py` is also imported by the Meson tests under
   `Capture layer is not inserted`, attach Xcode and set
   `DXMT_3DMARK05_METAL_CAPTURE_DESTINATION=developerTools` for an Xcode-targeted
   capture route.
+- `compare_experiment_images.py` — compare before/after screenshots or
+  deterministic capture PNGs for semantic gates. Use repeatable
+  `--roi L,T,R,B[:name]` regions when full-frame changes are too broad, for
+  example force-white bloom/effect probes where a local muzzle or glow region
+  needs to be scored separately from global overlay/tint movement.
+- `summarize_effect_geometry_roi.py` — join `dxmt9-effect-geometry` logs to
+  one or more screen-space ROIs. It uses projected `screen_min/screen_max` when
+  available and falls back to pretransformed/screen-space `pos_min/pos_max` for
+  fullscreen glow quads, then emits Markdown and CSV overlap summaries. Treat
+  the result as geometry/bbox candidate evidence only; it does not prove the
+  final-color writer for a pixel. The default effect trace is alpha-blended and
+  textured only; add `run_3dmark05_perf_probe.sh
+  --effect-draw-trace-include-non-alpha` and/or
+  `--effect-draw-trace-include-untextured` when debugging a missing visual
+  effect that may have fallen onto the wrong render-state path. It can also
+  consume `summarize_capture_rois.py` connected-component CSVs with
+  `--component-roi-csv`; add `--component-roi-match-seq` when the capture frame
+  number is expected to match the effect-geometry `seq`, so false-positive
+  bright components can be classified by draw/texture family without mixing
+  other frames into the ROI join. Use `--min-bbox-coverage-pct` to reject huge
+  projected/fullscreen quads that merely contain a small bright component; for a
+  local muzzle sprite, high ROI coverage with near-zero bbox coverage is broad
+  overlap evidence, not final-writer proof.
+- `summarize_color_attachment_dumps.py` — summarize raw color attachment
+  sidecars and their `.bin.json` metadata into ROI max/average/bright/white/warm
+  pixel tables. Use it for pass-end versus after-draw color histories instead
+  of hand-written one-off scripts; the CSV preserves `commandIndex`,
+  `commandDrawIndex`, and `commandDrawCount` when newer sidecars include them.
+  For muzzle-flash work, treat `bright_pixels` as a broad signal only because it
+  also catches cyan beam/post false positives. Prefer `warm_pixels` and
+  `warm_hot_*` for the white/yellow muzzle-bloom oracle; the default warm test is
+  `red >= 180`, `green >= 110`, and `blue <= red + 32`. Anchor the ROI with a
+  visible positive sample first: YouTube/demo infantry muzzle flashes and the
+  local working machine-gun path show a short-lived circular white/yellow bloom
+  attached to the muzzle before the post chain, whereas cyan tracer/post rows
+  can be bright but should remain `warm=0`. Public-video frames are a
+  shape/event oracle only: accept a muzzle candidate only when it is
+  barrel-attached, roughly circular, and short-lived; reject long tracers,
+  impact sparks, broad haze, engine lights, and warm background panels even when
+  scalar ROI thresholds look promising.
+- `summarize_capture_rois.py` — summarize ordinary screenshot/capture images
+  into the same ROI warm/white/bright style table. Use it on deterministic
+  `DXMT_CAPTURE_FRAMES` / `DXMT_CAPTURE_RANGE` PNGs before launching a
+  draw-owner or Xcode/gputrace probe, so the target internal frame is first
+  proven to contain the expected visual shape. For muzzle work, sort by
+  `--sort signal` and compare weapon-attached ROIs against glare/control ROIs;
+  high warm pixels in a broad control ROI is beam/glare evidence, not a
+  final-writer oracle. Use `--candidate-roi`, `--control-roi`,
+  `--frame-score-output`, and `--frame-score-csv-output` to rank frames whose
+  local candidate ROI dominates the control/glare ROI before spending Xcode
+  time. Add `--frame-score-montage-output` to write a visual audit image with
+  full-frame thumbnails plus candidate/control ROI crops for the top-ranked
+  frames. Use `--component-output`, `--component-csv-output`, and
+  `--component-montage-output` to search ordinary captures for warm/white
+  connected components before hand-picking a new ROI. For the current rifle
+  oracle, do not use the old tiny-sprite gate as the final decision; the
+  `JbKmFz6v9uk` `01:05` reference shows a simple circular bloom disc. The
+  current broad defaults (`--component-max-area 2000`,
+  `--component-max-width 220`, `--component-max-height 180`) are a better
+  prefilter. Add `--component-max-aspect-ratio` and
+  `--component-min-fill-pct` when the oracle is a compact round bloom rather
+  than a long tracer; then barrel attachment and candidate/control ROI
+  dominance must decide whether a component deserves a draw-owner or
+  Xcode/gputrace probe.
+- `plan_effect_roi_forcewhite_probes.py` — consume
+  `summarize_effect_geometry_roi.py` CSV output and build draw-local
+  `run_3dmark05_perf_probe.sh` force-white queues. It converts the 1-based
+  `dxmt9-effect-geometry` `encoder_draw_index` to the probe range's 0-based
+  `DXMT9_PROBE_INDEXED_TRIANGLE_ENCODER_DRAW_MIN/MAX` value and includes
+  `--encoder-breakdown-seq <candidate-seq>` because the draw-index selector
+  depends on encoder-breakdown draw counters even for no-gputrace probes. Use
+  this rather than hand-transcribing ROI geometry rows into wrapper commands.
+  When the CSV has `command_index`, the queue uses
+  `--probe-force-texture-white-command-index` and collapses duplicate ordinals
+  that map to the same command-local draw selector; this is more useful than
+  ordinal-only targeting for replayed chunks. Pair component-derived ROI queues
+  with `--min-bbox-coverage-pct` so huge projected/fullscreen bboxes are not
+  promoted into draw-local force-white probes merely because they contain a
+  small bright component. A local rifle muzzle/fire-atlas candidate should
+  survive both high ROI coverage and non-negligible bbox coverage; if
+  `0x7f`/`0x75` queues are empty under that gate, hold Xcode/gputrace spend
+  until a better same-frame visual target exists.
+  This is still a replay selector, not a final-writer oracle. If a generated
+  command reports
+  `encode_draw_pso_prefetch_bypass_probe=0` or the perf summary keeps
+  `probe_force_texture_white_draws=0`, treat the row/command slot as unstable
+  across independent runs. A valid replay also needs the captured scene/HUD
+  frame to match the baseline target; otherwise image differences are frame
+  drift, not A/B evidence. Switch to same-run instrumentation or direct
+  gputrace draw inspection when either gate fails.
+- `summarize_3dmark05_visual_target_gate.py` — combine component-scan,
+  local effect-geometry overlap, and force-white queue CSVs into a conservative
+  Xcode/gputrace readiness verdict. For rifle muzzle work, pass the expected
+  source textures (`0x7f` fire atlas and `0x75` beam/tracer family); a
+  `blocked-local-non-source` verdict means bright components exist, but the
+  surviving local writers are material/shadow/post classes rather than the
+  expected source draw, so gputrace should wait for a better frame or same-run
+  final-writer proof.
 - `summarize_3dmark05_cleanup_candidates.py` — non-destructive disk-space audit
   for 3DMark05 run ids under `traces/` and `experiments/output/`. It scans
   `docs/perfomance/**/*.md` for run-id references, reports referenced versus

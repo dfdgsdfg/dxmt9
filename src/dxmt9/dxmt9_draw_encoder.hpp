@@ -162,6 +162,28 @@ WMT::Reference<WMT::SamplerState> makeSampler(
 // color next-clear DontCare-store proof. Depth records the reason in
 // render_pass_depth_proof_* counters. Pass nullptr to keep the legacy
 // unconditional-Store behavior for callers without chunk records.
+struct RenderPassActionSummary {
+  std::uint64_t colorAttachmentCount = 0;
+  std::uint64_t color0Included = 0;
+  std::uint64_t color0LoadAction = 0;
+  std::uint64_t color0StoreAction = 0;
+  std::uint64_t color0Clear = 0;
+  std::uint64_t colorLoadBytes = 0;
+  std::uint64_t colorStoreBytes = 0;
+  std::uint64_t depthIncluded = 0;
+  std::uint64_t depthLoadAction = 0;
+  std::uint64_t depthStoreAction = 0;
+  std::uint64_t depthClear = 0;
+  std::uint64_t depthLoadBytes = 0;
+  std::uint64_t depthStoreBytes = 0;
+  std::uint64_t stencilIncluded = 0;
+  std::uint64_t stencilLoadAction = 0;
+  std::uint64_t stencilStoreAction = 0;
+  std::uint64_t stencilClear = 0;
+  std::uint64_t stencilLoadBytes = 0;
+  std::uint64_t stencilStoreBytes = 0;
+};
+
 WMT::Reference<WMT::RenderCommandEncoder> beginRenderPass(
     EncodeContext& ctx,
     WMT::CommandBuffer& commandBuffer,
@@ -170,7 +192,8 @@ WMT::Reference<WMT::RenderCommandEncoder> beginRenderPass(
     const core::ChunkSlot* lookaheadSlot = nullptr,
     std::size_t lookaheadStartIndex = 0,
     std::span<const WMTSampleBufferAttachmentInfo> sampleBufferAttachments = {},
-    WMT::Buffer visibilityBuffer = {});
+    WMT::Buffer visibilityBuffer = {},
+    RenderPassActionSummary* actionSummary = nullptr);
 
 // Depth/stencil DontCare-store look-ahead (R-BACK-15.7,
 // specs/backend/render-pass-actions/design.md section 4.2). Returns the
@@ -185,7 +208,8 @@ WMT::Reference<WMT::RenderCommandEncoder> beginRenderPass(
 dxmt9::perf::RenderPassDepthStoreProof depthStoreProofForLookahead(
     const core::ChunkSlot& slot,
     std::size_t startCommandIndex,
-    core::Handle depthHandle);
+    core::Handle depthHandle,
+    std::uint32_t* firstTouchCommandDistance = nullptr);
 
 // Compatibility bool used by existing callers/tests.
 bool nextDepthOperationIsClear(const core::ChunkSlot& slot,
@@ -204,7 +228,8 @@ bool nextColorOperationIsClear(const core::ChunkSlot& slot,
 dxmt9::perf::RenderPassColorStoreProof colorStoreProofForLookahead(
     const core::ChunkSlot& slot,
     std::size_t startCommandIndex,
-    core::Handle colorHandle);
+    core::Handle colorHandle,
+    std::uint32_t* firstTouchCommandDistance = nullptr);
 
 // R-FORMAT-12 — colorless (D3DFMT_NULL) render-pass attachment decisions,
 // extracted as pure value transforms so the depth-only-pass policy is
@@ -382,7 +407,8 @@ bool encodeDraw(EncodeContext& ctx,
                  // Chunk-local command index used only for stale handle
                  // provenance logs. Direct encodeDraw callers can leave it
                  // invalid.
-                 std::uint32_t commandIndex = std::numeric_limits<std::uint32_t>::max());
+                 std::uint32_t commandIndex = std::numeric_limits<std::uint32_t>::max(),
+                 const core::DrawBindingSnapshot* bindingSnapshot = nullptr);
 
 // Encode a single chunk's commands into a fresh WMT::CommandBuffer.
 // Returns a QueueSubmissionRecord that the finish loop commits; nullopt

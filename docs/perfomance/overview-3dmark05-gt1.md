@@ -62,17 +62,366 @@ but it still does not promote: `60/2` improves while the aggregate top-GPU gate
 fails. Follow-up row telemetry shows the path only applies to `60/2`; the
 `60/0+60/1` regression is GPU-time-only replay variance rather than
 reordered-cache mutation on non-target rows.
-Rifle muzzle fire is still visually absent. It remains a correctness gate, not a
-current explanation for low FPS. The added alpha/effect counters and visibility
-scout identify only candidate rows: the `60/8`-style candidates are
-submitted/sample-visible but tiny, while the dominant `60/2` row is mostly
-sample-visible alpha/textured material work. None of those candidates is proven
-to be the missing rifle effect. If a future rifle fix adds a truly missing draw,
-current FPS is slightly optimistic; if it fixes submitted-but-wrong state, the
-cost is likely already paid. Because previous large white bloom mistakes moved
-performance materially, the next proof gate is visual parity / final-color
-writer isolation before more paired Xcode performance budget. See
-[[backend-shape-classifiers-alpha.04]].
+Rifle muzzle fire is no longer best described as "not submitted" or "globally
+absent." The public `01:05` oracle shows the expected effect as simple
+weapon-attached circular white/yellow bloom discs; the user-captured reference
+frame has several infantry rifle shots rendered as compact round bloom discs
+rather than long tracer strips, impact sparks, or broad haze. Current local
+artifacts now have matching positive samples in the wide infantry window, so the
+remaining bug should be scoped as frame/timing/ROI-specific final-writer loss
+rather than global rifle-fire absence. The latest local reruns reclassify the
+old absence as a dynamic-buffer
+backing correctness issue: when a
+queued draw kept only the logical `BufferHandle`, a later dynamic
+`D3DLOCK_DISCARD` rename could make encode bind a newer active backing. The
+current implementation records the concrete Metal backing in a separate
+per-draw `DrawBindingSnapshot` payload and lets DEFAULT+DYNAMIC DISCARD rotate
+again, while snapshot-bearing draws bind the recorded Metal buffer instead of
+resolving the mutable active handle at encode time. `DrawBindingOverride`
+remains a compact logical stream/IB delta; snapshot storage is separate so the
+old draw-run coalescing path does not pay snapshot bytes on every override-only
+draw. This remains a correctness/performance gate, not a cosmetic side issue:
+visual parity now needs to be rechecked under the optimized snapshot path, and
+FPS should be interpreted only with the visual-coupling counters for skipped
+draws, Metal errors, fallback/overflow, render-pass churn, and completion
+waits.
+Because previous large white bloom mistakes moved performance materially, and
+recent glow/bloom correctness fixes appear to bring small timing gains, the next
+proof gate is visual parity / final-color writer isolation before more paired
+Xcode performance budget. Treat a visual-fix timing gain as actionable only
+after the perf summary's `Correctness / Visual-Coupling Counters` shows whether
+the change also reduced skipped draws, Metal errors, hazard/probe churn,
+fallback/overflow counters, render-pass churn, or completion waits. See
+[[backend-shape-classifiers-alpha.04]]. The current visual-coupling frame60
+smoke narrows the obvious wrong-path branch: skipped draws, Metal command-buffer
+errors, tracked frame60 overflows, map-buffer GPU waits, and queue-sequence waits
+are zero. All bloom hazards are false positives and `render_split_hazard=0`, so
+the bloom prefilter is noisy but not a false render-split owner. Render-pass
+preservation remains high, and the actual split reasons are RT/depth changes,
+clears, and presents, so the correctness/perf coupling is not closed. A follow-up
+ROI final-color comparison on the close-up captures shows `0x80`/`0x82`
+force-white candidates affect broad overlay/tint/beam color, but still do not
+create a local rifle muzzle sprite in that older close-up branch. The follow-up
+ROI geometry join makes the shape clearer:
+`0x80`/`0x82` are screen-space/fullscreen glow quads that cover the muzzle ROI by
+construction, while `0x7f` fire-atlas projected bboxes overlap comparable ROIs
+only in the later rifle-window probe and remain bbox-level evidence, not
+final-color proof for the close-up missing muzzle flash. A regenerated close-up
+`0x77` geometry run (`seq 477..560`) with command-index logging found only `9`
+muzzle ROI overlaps with max coverage `5.586%`, plus a draw-local force-white
+queue. The rank-1 command-index force-white replay still reported
+`encode_draw_pso_prefetch_bypass_probe=0`, so independent-run ordinal/command
+slot selectors are not yet a final-writer oracle. A follow-up replay without
+the command-index gate but with an ROI scissor did apply
+`encode_draw_pso_prefetch_bypass_probe=11`, proving the row/texture/draw
+selector can hit; its image deltas were still dominated by independent-run
+frame drift, not a clean local muzzle delta. This further classifies `0x77` as
+thin tracer/impact geometry rather than the missing radial rifle muzzle bloom,
+and moves the next proof toward same-run final-writer instrumentation or direct
+gputrace draw inspection. A later `0x80` component-local force-white attempt
+(`app-d3d9-3dmark05-rifle-frame1033-tex80-local-r03-frame1036-component1-tex80-s1036-e2-d1-ci337`)
+must be treated as invalid evidence: the component/geometry gate promoted
+`frame1036-component1` (`0x80`, bbox coverage `96.133%`) as a plausible
+round-bloom candidate, but the replay summary reports
+`probe_force_texture_white_draws=0` and only `21` draws in `seq=1036/enc=2`,
+so the scoped selector did not actually hit the intended command. The resulting
+image sequence drifted into a different close-up/bloom moment and cannot be
+used as an A/B proof. The follow-up same-run payload/mini-replay gate
+refines that again: six `517/2` `0x77` payload draws render `577` nonzero
+orange/white pixels in standalone Metal with the real texture sidecar, the
+force-fragment-color replay has the same footprint, and `depth_clear=0.0`
+rejects all pixels. Therefore `0x77` is not a blank or globally skipped draw
+class. A same-run depth sidecar for `517/2` then narrows the depth branch:
+captured depth preserves `542 / 577` pixels and the force-color replay has the
+same captured-depth footprint, so depth is relevant but not the full reason this
+candidate disappears from the final close-up frame. A same-run pass-end color
+sidecar for a regenerated `517/2` payload run then captured the same `0x77`
+draw window (`11` `0x77` probe rows, payload draws `267..272`) and found no
+bright final-color trace: the mini-replay bbox max was `[206,199,174]`, the
+muzzle ROI max was `[170,164,140]`, and the full `X8R8G8B8` color attachment
+had `0` pixels with any channel above `220`. So `0x77` is submitted and
+renderable in isolation, but it is not currently proven to be the pass-end
+final writer for the missing rifle muzzle bloom. The first draw-boundary color
+history probe strengthens that: when gated by `seq=517/enc=2` and
+`texture0=0x200000100000077`, the selected draw writes bright pixels immediately
+after draw (`bbox` max `[255,255,252]`, `27` bright pixels, `7` white pixels),
+but the prior pass-end sidecar has no channel above `220`. A current-build
+follow-up made the split effect explicit: a texture-list after-draw history
+requested `0x77` and `0x80`, matched only `0x77`, and wrote `10` bright
+after-draw sidecars at command index `306`; the last sidecar still had
+`[255,255,250]` in the mini bbox and `273` pixels with any channel above `220`.
+A split-free current-build pass-end dump for `seq=517/enc=2` stayed dark
+(`mini bbox max [207,199,175]`, full attachment bright pixels `0`). So the
+stronger statement is not just "a later draw overwrites it": the after-draw
+diagnostic split can materialize bright intermediate pixels, while the normal
+render pass final store does not preserve the expected local muzzle contribution.
+A command-attributed rerun then found `0x77` split sidecars at commands
+`319/320` with only non-local full-frame bright pixels, and `0x80` at command
+`322` with cyan/white full-frame glow pixels but still zero bright pixels in the
+mini/muzzle ROIs. A non-mutating `0x80` geometry census confirms why ROI overlap
+alone was misleading: the `0x80` class is a fullscreen screen-space post/glow
+quad in the close-up window, not a local muzzle sprite. Draw/blend/depth order,
+tile load/store/preservation behavior, the diagnostic split changing pass shape,
+animation-time mismatch, run-local selector drift, or a separate unidentified
+muzzle draw are now stronger suspects than "not submitted" or "depth alone
+rejects it."
+
+A later correction lowers the earlier `seq=517` evidence: visual inspection now
+shows that frame is not the foreground close-up rifle muzzle frame, so the
+`517/2` artifacts are selector/pass-shape evidence rather than close-up final
+writer proof. The close-up s820 rerun is the current anchor, but the oracle is
+`analysis/captures_png/frame000820.png`, not the run-level `actual.png`:
+`actual.png` is a later HUD frame (`984`) and contains a separate working
+machine-gun muzzle flash. With the corrected rifle muzzle ROI
+`620,200..770,330`, the s820 backbuffer pass-end has no local muzzle result
+(`max [94,102,99]`, bright `0`, white `0`, warm `0`). The wider forward ROI
+`600,180..800,360` is also warm/white zero. The effect census has `602` indexed
+triangle rows with no point-sprite candidates, and the previously suspected
+fire-atlas family `0x75/0x76/0x77/0x7f` is absent in that sample. The visible
+s820 candidates are material/post/shadow classes: `0x5a` DXT1 material,
+`0x8b` blue glyph/mask, `0x8d` R32F shadow/depth, and `0x8c/0x8e` scene/post
+textures. The earlier s820 after-draw history was scoped to right-shifted ROIs
+and produced only tiny weapon/post highlights, not a radial orange/white rifle
+muzzle flash. A corrected after-draw ROI rerun (`ci0..260`, `579` rows per ROI,
+commands `1..225`) has `warm_rows=0`, `white_rows=0`, and `max_warm=0` for both
+the corrected muzzle and wider forward ROIs; its `bright_rows=243` are cyan/post
+false positives (`max=(128,255,255)`, `warm=0`). Use the normal
+YouTube/demo/working-machinegun flash as a visual shape oracle, then validate
+with corrected final-color/warm ROIs. Public YouTube GT1/demo footage is only a
+shape/event oracle; local promotion still requires a same-frame final-color
+writer for the weapon-attached muzzle pixels. The YouTube demo shows infantry
+rifle flashes around `00:01:00.6..00:01:05` as simple circular white/yellow
+bloom discs attached to the muzzle, smaller than the machine-gun plume but with
+the same saturated-core/post-bloom behavior. The user-captured `01:05` frame
+from `JbKmFz6v9uk` is the clearest public reference: several rifle shots render
+as round bright discs, not as long tracer strips and not as tiny isolated
+pixels. The similar crouched close-up around `00:01:18` has no muzzle bloom, so
+that frame remains a negative timing sample. A clipped YouTube analysis window
+(`00:01:00..00:01:05`) recorded positive oracle frames at about `60.6s`,
+`61.5s`, `61.9s`, and `63.3s`; with the `01:05` screenshot added, the expected
+shape should be treated as a weapon-attached circular white/yellow bloom disc,
+not merely any warm final pixel.
+The DISCARD-wait scout aligned with that oracle in the firing window:
+`app-d3d9-3dmark05-rifle-muzzle-oracle-0105-r1` at HUD `Time 0:59.56` shows
+live rifle/impact flashes, while `app-d3d9-3dmark05-rifle-muzzle-oracle-0105-r2`
+at HUD `Time 1:05.70` is already after the local flash event. The targeted
+`app-d3d9-3dmark05-rifle-muzzle-oracle-0105-r3` capture at HUD `Time 1:04.10`
+shows strong weapon/effect bloom in the same public-oracle scene. Its
+`texture0=0x200000100000080` draw at `seq=964/enc=2/cmd=387/draw=399` is a
+valid two-triangle sprite (`primitive_count=2`, `vertex_count=6`,
+`screen_min=(879.263,332.626)`, `screen_max=(893.206,346.57)`) using the
+working flash shader pair `VS 0xcc8eea2d38e22c96` /
+`PS 0x6eac62f18235c99a`. This lowers the old "final writer unidentified"
+hypothesis for the current build: the more likely owner is the dynamic
+DEFAULT-vertex-buffer DISCARD/rename path, where queued draws previously kept
+only the logical `BufferHandle` and could resolve a newer active backing at
+encode time. The follow-up implementation now stores per-draw concrete stream/IB
+backing snapshots in a separate `DrawBindingSnapshot` payload, marks the
+selected rename ring entry's `lastUsedSeqId`, and makes encoder stream/index
+binding prefer the snapshot Metal handle and contents bytes. The logical
+`DrawBindingOverride` payload stays compact and only carries stream/IB deltas.
+The first no-gputrace optimized-path scout below confirms the public round-bloom
+visual shape; the remaining proof is whether it reduces the old DISCARD
+serialization cost rather than merely moving work into pacing/completion waits.
+The local positive machine-gun run (`seq=984`) confirms the same warm oracle:
+warm starts at `cmd=182/enc=504` on the `0x7f` fire-atlas source and is then
+carried through the post chain (`0x8c/0x8e/0x8a/0x8b`), reaching `36,548` warm
+pixels / `25,201` white pixels in the wide ROI. The corrected s820 history
+passes through post textures but never sees the `0x7f` warm source in the rifle
+ROI, so the current issue is better framed as missing/wrong source-sprite
+selection, animation timing, coordinates/state, or a separate unidentified
+draw, not a globally broken bloom post chain. A follow-up normal-capture scout
+over `900..1180`, then a dense `1080..1120` wide-scene window, found active
+tracers/glare but no clean YouTube-style local infantry muzzle bloom. The
+`seq=1092` after-draw ROI summary reached commands `1..260` across four
+small-muzzle/glare ROIs and contained zero `0x7f` rows in that sampled
+diagnostic; warm hits were dominated by `0x8d`/material/tracer/glare classes.
+A denser local capture (`1086..1098` step 1) still classifies top warm/white
+final pixels as tracer/impact/glare contamination rather than the external
+public-oracle rifle muzzle bloom.
+
+After the concrete rename-snapshot implementation, a no-gputrace visual scout
+`app-d3d9-3dmark05-rename-snapshot-rifle-oracle-range1086-1098-r1` captured
+`frame001086..001098` under the optimized path. The run still timed out at the
+wrapper watchdog and has no Xcode proof, but the image series is visually
+useful: large machine-gun bloom is present at `frame001086..001096`, and
+`frame001098` (`Time 1:03.09`, HUD frame `1090`) shows multiple small circular
+white/yellow rifle muzzle bloom discs on the right-side soldiers, matching the
+public `01:05` oracle shape. A shaped warm/white component pass over the same
+frame records the clearest right-side rifle disc as `component 11`, bbox
+`776,343..796,364`, aspect `1.05`, fill `82.14%`, with a saturated white core.
+That makes the local positive visual reproducible by artifact rather than only
+manual inspection. Counters stayed quiet for the correctness/error branch
+(`draw_skipped_no_pipeline=0`, `gpu_command_buffer_errors=0`,
+`render_split_hazard=0`, `map_buffer_wait_ms=0.000`); `queue_sequence_wait_ms`
+was `333.901ms` in this capture-range run, so completion/pacing remains a
+separate perf axis, not a buffer-map serialization regression.
+A current same-run rerun with effect geometry,
+`app-d3d9-3dmark05-rifle-oracle-positive-effect-geometry-r1`, keeps that visual
+shape reproducible under the split-payload model and ties the cleanest local
+component to a concrete source row. The shaped scanner finds
+`frame001094/component1` in the right-rifle oracle window, bbox
+`767,344..790,368`, aspect `1.04`, fill `79.71%`, `warm=440`,
+`white=254`, max `[255,255,255]`. The seq-matched geometry join promotes
+`texture0=0x200000100000080` at `seq=1094/enc=2/cmd=319`, primitive count `2`,
+with `roi_coverage=100%` and `bbox_coverage=19.241%`; `0x7f/0x75` remain
+`blocked-local-non-source` for the same components. This makes `0x80` the
+current local rifle-bloom source family, later confirmed by after-draw color
+history, while the old fire-atlas interpretation should stay scoped to broad
+frame-wide overlap unless it survives the same local bbox gate. The run still
+has no gputrace/Xcode proof, but its
+visual-coupling counters are clean enough for a no-gputrace gate:
+`present_encoded=1680`, `draw_skipped_no_pipeline=0`,
+`gpu_command_buffer_errors=0`, `render_split_hazard=0`,
+`map_buffer_wait_ms=0.000`, `queue_sequence_wait_ms=334.736`, and split-payload
+binding override traffic `84,983,920` bytes. The remaining perf question is not
+"is rifle bloom globally absent"; it is whether this correctness path changes
+the hot GPU rows or only fixes a small alpha/effect sprite while the main
+bandwidth/TVB and render-pass-store owners remain elsewhere.
+
+A direct force-white replay of the top row
+(`app-d3d9-3dmark05-rifle-oracle-positive-tex80-local-r01-frame1094-component1-tex80-s1094-e2-d1-ci319`)
+did not promote that candidate into proof. The run timeout-finalized and
+captured frames, but its perf summary shows `probe_force_texture_white_draws=0`
+and `encode_draw_pso_prefetch_bypass_probe=0`; the indexed-probe CSV has only
+the header, and `seq=1094/enc=2` reports only `20` draw calls with
+`alpha_blend_textured_draws=0`. Its `frame001094` capture also drifted from the
+wide infantry scene into the close-up machine-gun scene. So the
+`1094/2/cmd319` command queue remains a same-run geometry target, not an
+independent A/B image proof.
+
+A follow-up same-run after-draw color-history probe confirms the local writer:
+
+- `app-d3d9-3dmark05-rifle-oracle-tex80-afterdraw-color-noenc-r1`
+- artifacts:
+  `traces/app-d3d9-3dmark05-rifle-oracle-tex80-afterdraw-color-noenc-r1/analysis/color-history-summary.md`,
+  `traces/app-d3d9-3dmark05-rifle-oracle-tex80-afterdraw-color-noenc-r1/analysis/tex80-afterdraw-crops.png`
+- first `0x80` draw: `seq=1094/enc=2/draw=297/cmd=319`, but
+  `round_bloom_candidate` has `bright=0`, `white=0`, `warm=0`
+- second `0x80` draw: forced split moves it to
+  `seq=1094/enc=3/draw=0/cmd=320`; `round_bloom_candidate` records
+  max `[255,254,252]`, `bright=706`, `white=196`, `warm=909`
+
+This makes the two-triangle `0x80` sprite the after-draw writer for the
+public-oracle-shaped rifle bloom. The after-draw crop visually matches the
+user-provided `01:05` oracle: a compact circular white/yellow bloom disc at the
+barrel tip, not a flame mesh, tracer strip, or broad haze. The earlier
+`enc=2/cmd319` color-dump miss was an instrumentation trap: the first matching
+after-draw dump split the pass, so the adjacent small bloom draw moved to the
+next encoder. This confirms the visual-correctness source, but it is still a
+diagnostic split, not an Xcode GPU-counter proof for the GT1 hot rows. The
+performance interpretation after this proof is narrower: the confirmed muzzle
+source is a tiny local sprite, so it does not by itself explain the current
+8-22fps envelope. It remains a required visual parity gate because wrong
+pass/order/blend/store behavior can hide submitted pixels while still paying
+draw and preservation cost; the primary residual perf owners still point at
+hidden TVB/PB writes, render-pass store/re-entry traffic, and completion/present
+pacing.
+
+A follow-up split-payload scout
+`app-d3d9-3dmark05-rename-snapshot-splitpayload-scout-r1` kept the optimized
+path but separated concrete backing snapshots into `DrawBindingSnapshot` instead
+of bloating every `DrawBindingOverride`. This run also timeout-finalized with
+partial logs, and the single captured `frame001098` drifted to the machine-gun
+close-up rather than the public rifle-oracle infantry scene, so it is not new
+rifle-proof. It is useful for structure/perf sanity: binding-override payload
+traffic dropped from the previous snapshot scout's `252,327,296` bytes to
+`84,775,040` bytes for roughly the same 302k override records, while
+`draw_skipped_no_pipeline=0`, `gpu_command_buffer_errors=0`,
+`render_split_hazard=0`, `map_buffer_wait_ms=0.000`, and
+`queue_sequence_wait_ms=48.773ms`. The dominant wait remains
+`completion_wait_ms=37,520.868`, so the next performance owner is still
+completion/present pacing and GPU-side execution, not the old map-buffer wait.
+
+A `frame60` `.gputrace` attempt remains blocked by capture-layer mechanics, not
+by a dxmt9 draw/pipeline failure. File and `developerTools` destinations both
+reported `startCapture failed` / `Capture layer is not inserted`; simply leaving
+Xcode at the welcome screen did not insert the capture layer. A deliberate
+`MTL_CAPTURE_ENABLED=1` smoke
+(`app-d3d9-3dmark05-splitpayload-frame60-mtlcapture-r1`) produced a black
+`actual.png`, no `result.json`, zero encoder rows, and no draw/present counters,
+so that mode is not a valid performance sample for this app. Do not use it to
+compare FPS or GPU time; either attach/launch through a real Xcode capture-layer
+path, or keep using no-gputrace visual/perf scouts until a `.gputrace` can be
+generated without changing the visual path.
+An in-place embedded-plist retry
+(`app-d3d9-3dmark05-captureplist-frame60-gputrace-r1`) patched
+`MetalCaptureEnabled=true` into copied `wine.capture.real` and
+`wine.capture.real-preloader` binaries, then launched the normal Wine tree
+without `MTL_CAPTURE_ENABLED=1`. This avoided the black-screen startup path and
+rendered normally: `actual.png` at HUD `Time 0:58.77` / `Frame 1025` contains
+visible circular white/yellow rifle/effect bloom in the wide infantry scene, and
+the partial summary reports `present_encoded=1680`, `draw_calls=1234243`,
+`draw_skipped_no_pipeline=0`, `gpu_command_buffer_errors=0`,
+`map_buffer_wait_ms=0.000`, and `queue_sequence_wait_ms=0.000`. However,
+`MTLCaptureManager` still logged `Capture layer is not inserted` at frame60 and
+no `frame60.gputrace` was produced. Treat this as a cleaner negative capture
+sample: embedded plist copies can be visually/runtime-safe, but they still do
+not prove that the Wine temp child process has an inserted Metal capture layer.
+The same artifact was run through the capture ROI/component gate. A tight
+right-effect window found compact warm/white candidates, led by bbox
+`1300,556..1370,602` with `warm=528`, `white=136`, and max `[255,255,255]`.
+Relaxing the search shows that the surrounding effect can merge into a much
+larger spark/glow component, so this frame is a visual-positive sample but not a
+draw-owner-ready target. The visual-target gate currently reports
+`blocked-components-no-local-writer` until same-run effect geometry ties the
+component to a local `0x7f`/`0x75` source row.
+
+That positive visual proof still does not identify the final writer for the
+oracle's circular weapon-attached bloom. The first dense-candidate owner probe
+(`seq=1097`, `ci0..260`) also contained zero `0x7f` rows in the sampled ROI
+history; the suspicious right-soldier ROI topped out at `max_warm=53` on
+`0x8d`, not the working fire-atlas source. A later non-mutating effect census
+lowers the earlier source-absence interpretation: `0x7f` is present
+frame-wide at `1086..1093` (`seq=1092 cmd=202`, four small screen-blend draws
+with the working flash shader pair), while `0x75`/post-effect candidates appear
+in `1094..1098`. The wide-scene bug is therefore not simply "fire atlas is
+globally absent"; the missing proof is whether any submitted fire/effect draw is
+the final-color writer for the YouTube-style local rifle muzzle bloom. Same-run
+final-writer capture or direct Xcode draw inspection is the next gate. A first
+same-run `seq=1092` capture/effect-trace probe confirmed four live `0x7f` draws
+again, but its captured HUD was `Frame 1084` / `Time 1:02.89` in the large-gun
+close-up rather than the intended wide infantry ROI scout. That makes frame/HUD
+visual verification a required precondition before promoting any future ROI or
+draw-owner result. A follow-up same-frame after-draw final-writer probe for
+`texture0=0x7f,0x75` matched only `0x75`; it produced warm/white pixels in the
+center and glare-control ROIs (`max_warm=1562` / `1714`), while the
+right-soldier muzzle ROI stayed weak (`max_warm=47`, `max_white=0`). The
+captured frame (`Time 1:03.21`, HUD frame `1084`) shows horizontal tracers/glare
+rather than a local weapon-attached muzzle bloom, so this keeps `0x75` in the
+beam/glare class for that earlier scout; the later same-run `0x80` after-draw
+probe below resolves the current wide-scene local writer.
+The external shape oracle is now anchored to James Mackenzie's `3DMark05 Demo
+(4K 2160p)` page / YouTube video `JbKmFz6v9uk`: the useful evidence is the
+GT1/demo `00:01:00..00:01:05` infantry window, especially the user-captured
+`01:05` frame, where the expected rifle effect is a weapon-attached circular
+white/yellow bloom disc with a saturated core and warm halo.
+Treat the `01:05` frame as a compact round bloom oracle, not a flame-mesh
+oracle: a correct rifle shot can be just a bright circular post-bloom disc at
+the muzzle, similar in class to the machine-gun muzzle flash but smaller and
+less plume-shaped.
+This external oracle is a shape filter, not a pixel oracle: reject long tracer
+lines, impact sparks, cyan beam/engine lights, broad haze, and warm background
+panels unless the component is local to the barrel tip and short-lived across the
+firing event. The local dense
+component-to-geometry join reinforces the negative gate. Unfiltered
+`1086..1098` component ROIs overlap many `0x7f` fire-atlas rows, but those are
+huge projected bboxes with near-zero bbox coverage. After applying
+`--min-bbox-coverage-pct 1`, only `0x5a` material and `0x8d` shadow/depth rows
+survive; no `0x7f` or `0x75` local bloom writer remains in the current capture
+set. The same local gate now feeds force-white queue planning: filtering for
+the expected `0x20000010000007f`/`0x200000100000075` source textures with
+`roi_coverage>=75%` and `bbox_coverage>=1%` yields an empty queue, while the
+non-texture-filtered audit yields only four `0x5a` material candidates. This
+current capture set should not be escalated to another Xcode/gputrace replay as
+the rifle muzzle target. The combined visual-target gate now emits
+`visual-target-gputrace=blocked-local-non-source`: `156` component rows are
+present, but local overlap collapses to `0x5a:4` and `0x8d:1`, with `0` source
+queue rows for `0x7f`/`0x75`. The corrected round-bloom component pass
+(`aspect<=2.5`, `fill>=15%`) broadens the scanner to the public `01:05` oracle
+and finds `221` compact components, but the seq-matched local effect join still
+leaves only `9` non-source overlaps (`0x7b`, `0x01`, `0x17`, `0x5a`, `0x08`)
+and `0` local `0x7f`/`0x75` source overlaps.
 
 Almost every other hypothesis (visible varying width, shader temps,
 render/raster state toggles, primitive reorder, const-upload size,
@@ -165,7 +514,7 @@ flowchart LR
   Start --> P4["P4: present pacing / wallclock sync"]
 
   P0 --> P0r["→ [[hidden-backend-storage]] → [[tvb-mechanism-proof]]\n→ [[index-cache-locality]] (accepted numerator lever)\n→ hidden denominator mechanisms still open"]
-  P1 --> P1r["→ [[render-pass-store]] (re-entry real; coalescing open)"]
+  P1 --> P1r["→ [[render-pass-store]] (re-entry real; A/B/A immediate target reuse; coalescing open)"]
   P2 --> P2r["→ [[state-churn-encode]] + [[snapshot-cache]] (CPU wins, GPU flat)"]
   P3 --> P3r["→ [[const-upload]] (CPU bytes ↓ 4.6GB→1GB, GPU flat)"]
   P4 --> P4r["completion_wait is present/display-sync paced\nvsync-off opt-in accepted; encode-budget path open"]
@@ -254,12 +603,13 @@ equivalence open rather than promoting the route
 | Apple position/binning path | visible-probe-only; real route missing | Existing `DXMT9_PROBE_POSITION_ONLY_VSOUT` only changes the source-visible `VSOut`/fragment diagnostic shape; the backend escape audit finds no separate position/binning route token in dxmt9, and the reduced A/B plan reports `blocked-real-route-missing`. It does not prove that Apple's hidden `[[position]]` binning output or a tile vertex/fragment split was avoided | Do not cite visible position-only VSOut as closure. A future probe must implement/force a real position-only binning/depth/mesh route and measure bytes/invocation in reduced A/B before GT1. [[vsout-layout]], [[hidden-backend-storage]], [[hidden-backend-storage-shape.21]], [[hidden-backend-storage-shape.23]] |
 | Metal 3 mesh/object path | bridge-only; blocked before reduced A/B | Mesh/object command replay and PSO descriptors exist below winemetal, but the audit reports dxmt9 route `missing` and shader emitter `missing`; GT1's D3D9 path is not currently routed through a mesh/object backend, and the reduced A/B plan reports `blocked-missing-dxmt9-route` | Track as an exploratory backend escape hatch. The next evidence is not direct GT1 Xcode; it is a dxmt9 route/emitter or out-of-GT1 synthetic/replay A/B that passes equality and counter gates. [[hidden-backend-storage-shape.14]], [[hidden-backend-storage-shape.21]], [[hidden-backend-storage-shape.23]] |
 | Tile-FFP path | rejected-current GT1 hot-row lever; programmable route required | `DXMT9_TILE_FFP=off` is still the default, but the current code has the selector, base-colour render PSO, tile PSO, tile constants, and per-draw tile post-pass. The coverage gate reports frame60 `60/0..2` eligible primitives `0`, and the partial run has only `98,469 / 1,900,371,413` eligible primitives (`0.005%`); the reduced A/B plan reports `blocked-hot-row-coverage`. The expansion split shows `60/2` and `60/1` are `100%` not-FFP fallback and `60/0` is `100%` unsupported-state fallback; full gate evidence is now `tile-ffp=blocked-hot-row-coverage/needs-programmable-tile-route`. | Keep current Tile-FFP as a narrow correctness/architecture lever. Do not spend GT1 Xcode budget on it and do not chase selector widening as the fix. A future Tile-FFP-class experiment must first define a programmable/textured tile or mesh-style route, then pass portable-vs-route equality and reduced counter gates. [[hidden-backend-storage-shape.14]], [[hidden-backend-storage-shape.15]], [[hidden-backend-storage-shape.23]], [[hidden-backend-storage-shape.24]] |
-| Depth-only programmable route | runtime smoke passed; equality/counter proof open | `60/0` has `97,294` primitives, `100%` depth-only candidate coverage, `color_write=0`, depth write on, no alpha blend/test, and one PS shape. Texture mask is nonzero, but with color writes off and no alpha test the fragment output is not the expected correctness owner. The fragmentless-depth-only smoke covers all `42` row draws / `97,294` primitives / `291,882` vertices, reports position-only VSOut key `0x0`, and logs `2` accepted / `0` rejected fragmentless PSO variants. A user-observed sharper r5 frame, with subtle texture-over haze/blur and bloom-like coverage disappearing, suggests equality still needs a real same-input/depth/color gate | This is the smallest credible backend-route A/B, and route reachability is now proven. Finish depth/color equality and Xcode VS-write bytes/invocation proof before promotion; do not generalize to `60/2`. [[hidden-backend-storage-shape.25]], [[hidden-backend-storage-shape.26]] |
+| Depth-only programmable route | runtime smoke passed; equality failed, Xcode blocked | `60/0` has `97,294` primitives, `100%` depth-only candidate coverage, `color_write=0`, depth write on, no alpha blend/test, and one PS shape. Texture mask is nonzero, but with color writes off and no alpha test the fragment output was initially expected not to own color correctness. The fragmentless-depth-only smoke covers all `42` row draws / `97,294` primitives / `291,882` vertices, reports position-only VSOut key `0x0`, and logs `2` accepted / `0` rejected fragmentless PSO variants. The same-input equality gate now blocks promotion: final frame color changes `170,328 / 786,432` pixels (`21.658325%`, max delta `252`), `60/0` pass-end color is exact (`0` changed bytes), but the `D24X8` depth sidecar changes `1,252,096 / 3,145,728` bytes (`39.803060%`, max delta `255`). The gate reports `blocked-equality-fail` / `blocked-equality` | Route reachability is proven, but this is no longer an Xcode/gputrace counter candidate. Debug the depth semantic difference first, or move to another route. Do not generalize this fragmentless shortcut to `60/2`, and do not treat sharper/haze-free visuals as a performance win until equality is restored. [[hidden-backend-storage-shape.25]], [[hidden-backend-storage-shape.26]] |
 | Programmable textured route | required for largest residual row; hard | `60/2` has `389,376` primitives, `100%` programmable textured coverage, `14` unique PS, texture masks `0x7f`, `0x3f`, `0x1f`; this is the largest row but requires texture sampling or preserving the existing fragment path | Keep as the long path after depth-only/color reduced A/B. It is not a near-term selector tweak. [[hidden-backend-storage-shape.25]] |
 | PSO/state churn backend spill | rejected-current Xcode candidate; isolated A/B still open | Current frame60 preflight shows hot rows are stream/IB-dominant: `60/2` has `47` PSO changes, but `271` stream-handle and `160` IB-handle changes; the per-draw join then shows `60/2` has `160` handle-tuple changes, max stable tuple run `6`, and `0` PSO-isolated stable-tuple runs; the automated full gate emits `pso-backend-isolation=reject-current`; `60/1` and `60/0` show the same no-isolated-run pattern | Keep CPU and GPU claims separate. Do not spend Xcode on PSO churn from the current rows; add a PSO-stable/PSO-churn A/B only if geometry, stream/IB bindings, visible state, and invocation count can be isolated. [[state-churn-encode]], [[hidden-backend-storage-shape.11]], [[hidden-backend-storage-shape.18]], [[hidden-backend-storage-shape.19]] |
 | Stream/IB backend handle-stable A/B | rejected as first-order GPU owner | Baseline `60/2` is handle-churn-dominant (`stream_handle_changes=271`, `ib_handle_changes=160`, tuple changes `160/187`). Staged `60/2` keeps `187` draws, PSO `48 -> 48`, argbuf table `5056 -> 5056`, cbuf `96424 -> 96424`, and drops stream/IB handle changes to `0`, but adds `7.38 MiB` staged copy and turns the diversity into offset churn. Xcode then shows target GPU `19.184 -> 19.278 ms`, VS write `981.159 -> 981.166 MiB`, and unchanged VS invocations. | Do not spend more Xcode budget on stream/IB handle identity as a GPU-denominator hypothesis. Keep stream/IB work in the CPU/draw-run lane unless a new mechanism also changes VS invocations, primitive/binning shape, or a below-visible-VSOut backend path. [[state-churn-encode-stream.08]], [[state-churn-encode-stream.09]], [[hidden-backend-storage-shape.12]] |
 | Index-cache CPU reduction | reject current attempts | Fixed cap cuts slots but not CPU; heap lazy frontier cuts scored work `-80.97%` but select CPU regresses `+21.40%`; bucketed select cuts scored work `-72.61%` but select CPU regresses `+32.46%`; unique upper-bound gate rejects `76` candidates but candidate CPU regresses `+8.50%`; persistent rejected verdicts are already implemented (`401,681` rejected hits / `143` cold misses); non-scope draw-shape prefiltering already happens before lookup; strict LRU builder normalization worsens candidate miss32 by `+46` and total encode CPU by `+36.930ms` | Do not spend more Xcode budget on these CPU-only variants. Next CPU work needs cheaper cold-miss candidate construction, a telemetry-proven eligible-subclass exclusion, or broader semantic-safe GPU payoff before no-gputrace promotion. [[index-cache-locality-cpucost.11]], [[index-cache-locality-cpucost.12]], [[index-cache-locality-cpucost.13]], [[index-cache-locality-cpucost.14]], [[index-cache-locality-cpucost.15]], [[index-cache-locality-cpucost.16]], [[index-cache-locality-cpucost.17]] |
 | Current no-gputrace baseline | accepted as counter sample | Watchdog-cleanup scout: 1440 presents; GPU CB `+0.15%`, completion wait `+0.14%`, draws `-0.01%` vs baseline | Use as the current supervised timeout shape; it does not justify new Xcode budget by itself. [[baselines-frame50.04]] |
+| Current visual-coupling frame60 scout | accepted as counter sample; not Xcode proof | Frame60 seq breakdown no-gputrace: `present_encoded=1680`, `draw_skipped_no_pipeline=0`, `gpu_command_buffer_errors=0`, tracked frame60 overflows `0`, `map_buffer_wait_ms=0`, `queue_sequence_wait_ms=0`; hazard bloom is entirely false-positive (`104,004 / 104,004`) but `render_split_hazard=0`; split reasons are RT/depth `13,169`, clear `4,906`, present `1,673`; render-pass preservation remains `120.10MiB/present`. A post-`01:05` oracle refresh (`current-residual-perf-after-oracle-r1`) stayed flat: `draw_calls -0.02%`, `render_pass_begin -0.09%`, `render_split_rt_change=13,163`, clear `4,895`, present `1,673`, `tile_preservation +0.03%`, `gpu_command_buffer_time_ms -0.26%`, `completion_wait_ms -2.44%`, sampled average `15.753fps`, late steady frames `~23fps`. Same-run wide-scene after-draw color history confirms two `0x80` sidecars; the second (`seq=1094/enc=3/draw=0/cmd=320`) writes the round candidate ROI (`bright=706`, `white=196`, `warm=909`) | Use for visual-fix before/after wrong-path gates. It narrows skipped/error/overflow/hazard-split, depth-alone rejection, and blank/unsent effect draws as the obvious explanations. The `0x80` sidecar proves the wide-scene rifle bloom writer, but remains diagnostic split evidence rather than a production perf sample. The current refresh confirms the residual performance owner did not move toward skipped/error handling after the muzzle writer was identified; continue with TVB/PB, RT/depth re-entry, and completion/present pacing. [[baselines-frame60.03]], [[backend-shape-classifiers-alpha.04]] |
 | Encode CPU attribution | CPU wins accepted, fps proof still open | No-gputrace attribution has narrowed broad encode guesses into named CPU-only children: cbuf identity, packet-cache, snapshot, argbuf-open, sampler, and transient fast-append work all moved CPU but not GPU. Cbuf residual split named binding content hash as a dominant child (`570.070ms`, VS `489.627ms`), then the default path removed that byte scan (`binding_hash=0`) and cut cbuf update `1.216 -> 0.875ms/present`; prefix-preserving cbuf builders then cut cbuf build `0.333815 -> 0.175342ms/present`; binding-packet sampler key-hash reuse cut packet plan `0.666122 -> 0.599724ms/present`. A full-cbuf visual bisection knob rejects full upload as a default workaround (`argbuf_hybrid_bytes_per_encoder` +519.59%, no obvious visual normalization); the later visual fix is per-draw payload component hashes for argbuf cbuf identity, not full cbuf upload. | No Xcode spend from these CPU results alone. Continue no-gputrace work on cbuf upload/probe/repoint residual, binding-packet stronger identity/plan reuse, index setup/source resolve, shader-stream diversity, issue cost, and residual snapshot. Do not chase broad D3D9 setter no-op guards, slot-30 bind shadowing, dirty-category identity repoint, FFP stream binding, resource-array binding, vertex texture binding, LOD-bias upload, sampler lookup/rehash skip, texture pre-resolve source matching, raw cbuf `setBuffer`, cbuf upload-plan, observer callbacks, default cbuf content hashing, live-range-only cbuf prefix zeroing, full VS/PS cbuf fallback, or another sampler `FlatStateSet` rehash removal unless cheap instrumentation first proves a new non-zero opportunity. Require visual smoke/same-input image proof for future cbuf/binding semantic changes. [[state-churn-encode-encode-phase.02]], [[state-churn-encode-encode-phase.03]], [[state-churn-encode-encode-phase.04]], [[state-churn-encode-encode-phase.05]], [[state-churn-encode-encode-phase.06]], [[state-churn-encode-encode-phase.07]], [[state-churn-encode-encode-phase.08]], [[state-churn-encode-encode-phase.09]], [[state-churn-encode-encode-phase.10]], [[state-churn-encode-encode-phase.11]], [[state-churn-encode-encode-phase.12]], [[state-churn-encode-encode-phase.13]], [[state-churn-encode-encode-phase.14]], [[state-churn-encode-encode-phase.15]], [[state-churn-encode-encode-phase.16]], [[state-churn-encode-encode-phase.17]], [[state-churn-encode-encode-phase.18]], [[state-churn-encode-encode-phase.19]], [[state-churn-encode-encode-phase.20]], [[state-churn-encode-encode-phase.21]], [[state-churn-encode-encode-phase.22]], [[state-churn-encode-encode-phase.23]], [[snapshot-cache-snapshot.04]], [[snapshot-cache-snapshot.05]], [[snapshot-cache-snapshot.06]], [[snapshot-cache-snapshot.07]], [[snapshot-cache-snapshot.08]], [[snapshot-cache-snapshot.09]] |
 
 ```mermaid
@@ -452,11 +802,17 @@ explanation for the same scene shape.
   parameter storage vs compiler spill). [[hidden-backend-storage]]
 - Whether a correctness-preserving alpha/backend-state A/B exists after the
   static blend-off gate. The known `large4096+alpha` clue is strong but still
-  diagnostic-only. Rifle muzzle fire is still visually absent; its performance
-  impact is narrowed because the observed tiny effect candidates are not a
-  dominant limiter, while the hot alpha row still needs final-color/final-writer
-  proof. Current FPS should remain diagnostic, not final, until visual parity is
-  restored or the rifle effect is proven tiny/already-submitted.
+  diagnostic-only. Rifle muzzle fire now has a concrete rename-snapshot
+  implementation, so the open performance question is no longer "is the source
+  draw globally missing?" but "does the optimized snapshot path preserve the
+  round-bloom oracle while removing DISCARD completion waits?" Current FPS should
+  remain diagnostic until the snapshot implementation is compared against the
+  wait-based correctness baseline and the `Correctness / Visual-Coupling
+  Counters` block stays quiet for skipped draws, Metal errors,
+  fallback/overflow, render-pass churn, and completion waits. The latest frame60
+  smoke has no skipped/error/overflow/hazard-split evidence, so the next cheap
+  branch is final-color isolation plus RT/depth/clear/present pass-churn
+  comparison, not broad error handling.
   [[hidden-backend-storage-shape.10]],
   [[backend-shape-classifiers-alpha.04]]
 - Whether an actual Apple position-only/binning path can avoid hidden
@@ -507,7 +863,19 @@ explanation for the same scene shape.
   [[mini-replay-bisection-texture.04]], [[mini-replay-bisection-texture.05]],
   [[mini-replay-bisection-texture.08]], [[mini-replay-bisection-texture.09]],
   [[mini-replay-bisection-texture.10]]
-- Dependency-aware pass coalescing for same RT/depth re-entry (P1). [[render-pass-store]]
+- Dependency-aware pass coalescing for same RT/depth re-entry (P1). The current
+  render-pass-store proof rejects direct texture reads, present/clear/helper
+  ownership, and distant live-out for the top rows: dominant `A -> B -> A`
+  patterns immediately touch color/depth targets again at distance `1`. The
+  encoder-role join narrows the selector to textured/screen-blend depth-read
+  passes alternating with opaque untextured depth-write passes; exact handle
+  identity rotates and is not the useful selector. The pass-action follow-up
+  confirms the stable shape: the depth-read side is color/depth `Load+Store`,
+  while the opaque depth-write side is color/depth `Clear+Store`. This rejects a
+  simple redundant-store-before-clear interpretation for the dominant pairs; the
+  next proof has to preserve D3D9 ordering while moving or coalescing
+  `Load+Store` depth-read work around `Clear+Store` opaque work.
+  [[render-pass-store]]
 - Remaining CPU tracks: pacing/completion wait, backend encode, and residual
   snapshot rebuild. After the accepted cbuf identity, packet-cache, and snapshot
   hash work, the latest `snapshot.09` no-gputrace sample is
@@ -605,7 +973,7 @@ explanation for the same scene shape.
 | [[const-upload]] | cbuf/argbuf class/volatility/dirty-range/sparse | CPU amplifier, GPU unmoved |
 | [[state-churn-encode]] | stream/IB churn, draw-run, binding override | CPU wins, GPU flat; stream/IB handle-stable A/B accepted as diagnostic in [[state-churn-encode-stream.08]], Xcode rejected handle identity in [[state-churn-encode-stream.09]] |
 | [[snapshot-cache]] | D3D9 draw-state snapshot rebuild | historical CPU owner; recovered to residual |
-| [[render-pass-store]] | RT/depth re-entry, store DontCare, pass-chain | re-entry real; coalescing OPEN |
+| [[render-pass-store]] | RT/depth re-entry, store DontCare, pass-chain | re-entry real; dominant top rows are immediate role-pair A/B/A target reuse; coalescing OPEN |
 
 Related CPU-side counter design doc: [[overview]].
 

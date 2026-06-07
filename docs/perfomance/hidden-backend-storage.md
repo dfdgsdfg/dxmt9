@@ -55,7 +55,7 @@ every other domain at the lever that actually moves the bucket.
 | H33 | The reduced A/B requirement can be turned into concrete route/equality/counter gates | accepted (gate) | [[hidden-backend-storage-shape.23]] (`blocked-before-reduced-ab`; mesh/object blocked by missing dxmt9 route/emitter, position/binning by visible-probe-only route, Tile-FFP by rejected hot-row coverage) |
 | H34 | Tile-FFP hot-row coverage can be recovered by widening the current FFP selector | rejected; programmable/textured route required | [[hidden-backend-storage-shape.24]] (`60/2` and `60/1` are `100%` not-FFP fallback; `60/0` is `100%` unsupported-state; full gate carries `tile-ffp=blocked-hot-row-coverage/needs-programmable-tile-route`) |
 | H35 | Programmable route work is one uniform textured backend problem | rejected; split into depth-only, color, and textured routes | [[hidden-backend-storage-shape.25]] (`60/0` is `candidate-depth-only-route`; `60/1` needs programmable color; `60/2` needs programmable textured route) |
-| H36 | The `60/0` depth-only route can be reached by a fragmentless Metal PSO | accepted (runtime smoke) | [[hidden-backend-storage-shape.26]] (`60/0` probe covers all `42` draws / `97,294` primitives / `291,882` vertices, reports position-only VSOut key `0x0`, and logs `2` accepted / `0` rejected fragmentless PSO variants; user-observed texture-over haze/blur and bloom-like coverage loss keeps depth/color equality open; Xcode counter proof still required) |
+| H36 | The `60/0` depth-only route can be reached by a fragmentless Metal PSO | accepted (runtime smoke), rejected for Xcode promotion | [[hidden-backend-storage-shape.26]] (`60/0` probe covers all `42` draws / `97,294` primitives / `291,882` vertices, reports position-only VSOut key `0x0`, and logs `2` accepted / `0` rejected fragmentless PSO variants; same-input gate then fails depth equality: `D24X8` depth changes `1,252,096 / 3,145,728` bytes, while `60/0` color is exact and the final frame still changes `21.658325%`; Xcode counter spend is blocked until depth semantics are fixed) |
 
 ## Verification methods
 
@@ -117,7 +117,7 @@ flowchart TD
   BackendEscapePlan["shape.23\nbackend escape reduced A/B plan\nroute/equality/counter gates"]:::accepted
   TileFfpExpansion["shape.24\nTile-FFP expansion analysis\nprogrammable route required"]:::rejected
   ProgrammableRoute["shape.25\nprogrammable route feasibility\n60/0 depth-only candidate"]:::accepted
-  FragmentlessRoute["shape.26\nfragmentless depth-only route smoke\n60/0 full-pass reachability"]:::accepted
+  FragmentlessRoute["shape.26\nfragmentless depth-only route\nreachability pass, equality fail"]:::rejected
   OcclusionGate["texture.08\nocclusion oracle feasibility\nexisting query not enough"]:::rejected
   ScopedSemantic["semantic.02\nselected 60/2 depth-read/no-blend\nexact mini replay\nscoped only"]:::accepted
 
@@ -162,7 +162,7 @@ flowchart TD
   TileFfpExpansion -->|"feeds expansion status"| BackendEscapePlan
   TileFfpExpansion -->|"route class split"| ProgrammableRoute
   ProgrammableRoute -->|"reduced runtime smoke"| FragmentlessRoute
-  FragmentlessRoute -->|"needs Xcode counters + equality"| NextTriage
+  FragmentlessRoute -->|"blocked by depth equality fail"| NextTriage
   ProgrammableRoute -->|"next reduced route candidate"| NextTriage
   NextTriage -->|"oracle feasibility"| OcclusionGate
   Model -->|"frames"| Shape
@@ -413,12 +413,11 @@ precondition for that reduced A/B: the scoped fragmentless-depth-only runtime
 smoke reaches all `42` `60/0` draws (`97,294` primitives, `291,882` vertices),
 uses the route-aware position-only VSOut key `0x0`, and logs `2` accepted /
 `0` rejected fragmentless PSO variants with no no-pipeline errors. This is only
-route reachability. The r5 visual observation that texture-over haze/blur and
-bloom-like coverage may disappear keeps correctness open and points at a
-possible depth-prepass or downstream coverage difference. The next proof must still attach same-input
-depth/color equality and Xcode counter movement;
-if `VS Buffer Device Memory Bytes Written` per invocation stays flat, this
-route is rejected as a denominator mechanism rather than promoted.
+route reachability. The same-input gate then rejects the route for promotion:
+`60/0` pass-end color is exact, but the `D24X8` depth sidecar changes
+`1,252,096 / 3,145,728` bytes (`39.803060%`, max delta `255`) and the final
+frame changes `21.658325%`. The route is now a depth-semantic debug target, not
+an Xcode counter target.
 
 ## How to run
 Every experiment here is a 3DMark05 GT1 run via the standard wrapper. This domain
@@ -504,8 +503,9 @@ per-experiment flags live in each leaf's `**Method.**` field; see
   identifies `60/0` as a depth-only reduced A/B candidate and separates it from
   the harder `60/2` textured route.
 - [[hidden-backend-storage-shape.26]] — fragmentless depth-only runtime smoke;
-  proves the `60/0` route is reachable and fully covers the row, but still
-  requires equality and Xcode counter proof.
+  proves the `60/0` route is reachable and fully covers the row, but same-input
+  depth equality fails, so Xcode counter promotion is blocked until depth
+  semantics are fixed.
 - [[state-churn-encode-stream.04]] — stream/IB backend preflight; confirms
   handle-dominant hot rows but requires a handle-stable A/B before Xcode.
 - [[state-churn-encode-stream.09]] — Xcode handle-stable gate; shows `60/2`

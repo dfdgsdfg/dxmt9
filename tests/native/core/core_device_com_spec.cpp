@@ -1226,6 +1226,58 @@ void testReadOnlyBufferUnlockSkipsUpload() {
   checkEq(d3d->Release(), 0u, "readonly unlock factory release");
 }
 
+void testZeroSizeBufferLockUsesTailRange() {
+  using namespace dxmt9::com;
+
+  auto backend = std::make_shared<RecordingBackend>();
+  auto* d3d = Direct3DCreate9Ex(D3D_SDK_VERSION, backend);
+  check(d3d != nullptr, "factory for zero-size buffer lock");
+
+  PresentParameters params{};
+  params.backBufferWidth = 320;
+  params.backBufferHeight = 240;
+  params.windowed = true;
+
+  auto* device = d3d->CreateDeviceEx(0, params, nullptr);
+  check(device != nullptr, "device for zero-size buffer lock");
+
+  {
+    device->AddRef();
+    D9CDevice cDevice(device);
+    auto* buffer = dxmt9c_device_create_vertex_buffer(&cDevice, 16, 0, 0, 2u);
+    check(buffer != nullptr, "create zero-size lock buffer");
+
+    void* data = nullptr;
+    checkEq(dxmt9c_buffer_lock(buffer, 0, 16, &data, 0), D3D_OK,
+            "initial full lock");
+    const std::array<uint8_t, 16> initial{0, 1, 2, 3, 4, 5, 6, 7,
+                                          8, 9, 10, 11, 12, 13, 14, 15};
+    std::memcpy(data, initial.data(), initial.size());
+    checkEq(dxmt9c_buffer_unlock(buffer), D3D_OK, "initial full unlock");
+
+    data = nullptr;
+    checkEq(dxmt9c_buffer_lock(buffer, 4, 0, &data, 0), D3D_OK,
+            "zero-size lock from offset");
+    auto* bytes = static_cast<uint8_t*>(data);
+    bytes[0] = 0xaa;
+    bytes[11] = 0xbb;
+    checkEq(dxmt9c_buffer_unlock(buffer), D3D_OK, "zero-size lock unlock");
+
+    checkEq(backend->bufferUploads.size(), size_t{2},
+            "zero-size offset lock uploads once");
+    const auto& upload = backend->bufferUploads.back().second;
+    checkEq(upload.size(), size_t{16}, "zero-size offset lock keeps buffer extent");
+    checkEq(upload[0], initial[0], "zero-size offset lock preserves prefix byte 0");
+    checkEq(upload[3], initial[3], "zero-size offset lock preserves prefix byte 3");
+    checkEq(upload[4], uint8_t{0xaa}, "zero-size offset lock writes first tail byte");
+    checkEq(upload[15], uint8_t{0xbb}, "zero-size offset lock writes last tail byte");
+
+    checkEq(dxmt9c_buffer_release(buffer), 0u, "zero-size lock buffer release");
+  }
+  checkEq(device->Release(), 0u, "zero-size lock device release");
+  checkEq(d3d->Release(), 0u, "zero-size lock factory release");
+}
+
 }  // namespace
 
 int main() {
@@ -1234,6 +1286,7 @@ int main() {
     testComWrappersEx();
     testPalettizedTextureExpansion();
     testReadOnlyBufferUnlockSkipsUpload();
+    testZeroSizeBufferLockUsesTailRange();
   } catch (const TestFailure& error) {
     std::cerr << error.what() << '\n';
     return EXIT_FAILURE;

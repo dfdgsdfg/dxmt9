@@ -7,7 +7,7 @@ title: 3DMark05 gputrace Capture Must Avoid MTL_CAPTURE_ENABLED Startup Black Sc
 date: 2026-06-06
 type: workflow-validation
 status: accepted-capture-workflow-fix
-source: experiments/output/app-d3d9-3dmark05-fragmentless-depth-only-60-0-xcode-r2/3dmark05-direct.log; experiments/output/app-d3d9-3dmark05-fragmentless-depth-only-60-0-xcode-r2/dxmt9.log; experiments/output/app-d3d9-3dmark05-capture-env-only-sanity-r1/3dmark05-direct.log; experiments/output/app-d3d9-3dmark05-capture-env-only-sanity-r1/dxmt9.log; experiments/output/app-d3d9-3dmark05-fragmentless-depth-only-60-0-xcode-r3/3dmark05-direct.log; experiments/output/app-d3d9-3dmark05-fragmentless-depth-only-60-0-xcode-r3/3dmark05-perf-summary.md; scripts/tools/run_3dmark05_perf_probe.sh
+source: experiments/output/app-d3d9-3dmark05-fragmentless-depth-only-60-0-xcode-r2/3dmark05-direct.log; experiments/output/app-d3d9-3dmark05-fragmentless-depth-only-60-0-xcode-r2/dxmt9.log; experiments/output/app-d3d9-3dmark05-capture-env-only-sanity-r1/3dmark05-direct.log; experiments/output/app-d3d9-3dmark05-capture-env-only-sanity-r1/dxmt9.log; experiments/output/app-d3d9-3dmark05-fragmentless-depth-only-60-0-xcode-r3/3dmark05-direct.log; experiments/output/app-d3d9-3dmark05-fragmentless-depth-only-60-0-xcode-r3/3dmark05-perf-summary.md; experiments/output/app-d3d9-3dmark05-current-frame60-gputrace-capturelayer-r1/dxmt9.log; experiments/output/app-d3d9-3dmark05-current-frame60-gputrace-capturelayer-r1/actual.png; experiments/output/app-d3d9-3dmark05-current-frame60-gputrace-devtools-r1/dxmt9.log; experiments/output/app-d3d9-3dmark05-current-frame60-gputrace-devtools-r1/3dmark05-perf-summary.md; traces/app-d3d9-3dmark05-current-frame60-gputrace-devtools-r1/analysis/frame60-summary-counter-comparison-vs-post-visualfix.md; scripts/tools/run_3dmark05_perf_probe.sh
 ---
 
 # 3DMark05 gputrace Capture Must Avoid `MTL_CAPTURE_ENABLED`
@@ -66,15 +66,85 @@ scripts/tools/run_3dmark05_perf_probe.sh \
   --probe-fragmentless-depth-only-row 60/0
 ```
 
+4. Recheck current head with the explicit capture-layer opt-in:
+
+```sh
+DXMT_3DMARK05_SET_MTL_CAPTURE_ENABLED=1 \
+scripts/tools/run_3dmark05_perf_probe.sh \
+  --suffix current-frame60-gputrace-capturelayer-r1 \
+  --frame 60 --timeout 420 --min-free-mb 2048
+```
+
+This run was stopped early after the invalid condition was already proven:
+`actual.png` was fully black, no `.gputrace` was written, and bridge counters
+again showed draw/present `0`. It is not a perf sample.
+
+5. Recheck the suggested `developerTools` route with Xcode open and an existing
+   `.gputrace` document visible:
+
+```sh
+DXMT_3DMARK05_METAL_CAPTURE_DESTINATION=developerTools \
+scripts/tools/run_3dmark05_perf_probe.sh \
+  --suffix current-frame60-gputrace-devtools-r1 \
+  --frame 60 --timeout 300 --min-free-mb 2048
+```
+
+This was also not a successful capture. The app rendered normally and reached
+`present_encoded=1680`, then the wrapper's `300s + 45s` watchdog cleaned up the
+final-frame hang and generated partial-log summaries. However, the capture
+request still failed:
+
+```text
+startCapture failed destination=1 destination_supported=0 ... error=Capture layer is not inserted.
+```
+
+Xcode did not receive a new capture document; the previously opened
+`frame60.gputrace` remained the active Xcode window.
+
+6. Test whether a `MetalCaptureEnabled=true` app-bundle wrapper can avoid the
+   env black screen. A native Metal probe proved that both direct and symlinked
+   `.app/Contents/MacOS/*` executables get file capture support without
+   `MTL_CAPTURE_ENABLED=1`. The same trick does **not** currently solve Wine:
+
+| Attempt | Result |
+|---|---|
+| `WineMetalCapture.app/Contents/MacOS/wine` symlink to `wine.real` | loader fails with `.../bin/wine: could not load binary` |
+| `WineRealMetalCapture.app/Contents/MacOS/wine.real` symlink to `wine.real` | GT1 renders, but the real Metal child runs from `/var/folders/.../winetemp.../wine.real`; `startCapture` still reports `Capture layer is not inserted` |
+
+7. Test a tmp Wine root with `MetalCaptureEnabled=true` patched into the
+   embedded Mach-O `__TEXT,__info_plist` section and ad-hoc re-signed. This is
+   not a valid capture path yet: after making `ntdll.so` resolve under the tmp
+   root, both the patched-capture root and a plain no-capture tmp root fail to
+   create the 3DMark05 main module with `status c0000018`. That means the tmp
+   Wine-root experiment is not runtime-equivalent to the normal launcher and
+   cannot be used as evidence that embedded `MetalCaptureEnabled` itself is safe
+   or unsafe for 3DMark05.
+
+8. Test normal Wine root execution with in-place copied Mach-O launcher names:
+   `wine.capture.real` and `wine.capture.real-preloader` both had
+   `MetalCaptureEnabled=true` patched into their existing
+   `__TEXT,__info_plist` sections, were ad-hoc re-signed, and were launched via
+   `DXMT_3DMARK05_WINE_BIN` without `MTL_CAPTURE_ENABLED=1`. This is a cleaner
+   result than the tmp-root attempt: GT1 rendered normally and produced counters,
+   but frame60 file capture still failed with `Capture layer is not inserted`.
+   The run was terminated after the capture failure had been observed, so its
+   status is `fail` by SIGTERM even though the rendering/counter path was live.
+
 **Result.**
 
-Both runs failed before GT1 rendering:
+The capture attempts split as:
 
 | Run | Capture env | Result |
 |---|---|---|
 | `fragmentless-depth-only-60-0-xcode-r2` | wrapper gputrace env with `MTL_CAPTURE_ENABLED=1` | `missing_capture`; no `.gputrace`; no draw/present rows |
 | `capture-env-only-sanity-r1` | only `MTL_CAPTURE_ENABLED=1` added externally | black screen; manually terminated; bridge counters show draw/present `0` |
 | `fragmentless-depth-only-60-0-xcode-r3` | `DXMT_METAL_CAPTURE_FRAME/PATH`, no `MTL_CAPTURE_ENABLED=1` | normal GT1 execution; file capture failed with `Capture layer is not inserted` |
+| `current-frame60-gputrace-capturelayer-r1` | explicit `DXMT_3DMARK05_SET_MTL_CAPTURE_ENABLED=1` current-head retry | black screen; no `.gputrace`; bridge counters show draw/present `0` |
+| `current-frame60-gputrace-devtools-r1` | `DXMT_METAL_CAPTURE_DESTINATION=developerTools`, Xcode open | normal GT1 execution; `developerTools` capture also failed with `Capture layer is not inserted`; no Xcode document appeared |
+| `current-frame60-gputrace-appbundle-real-r1` | `MetalCaptureEnabled` external `.app` wrapper around `wine.real` | normal GT1 execution, but Wine's `/var/folders/.../winetemp.../wine.real` child did not inherit the external app-bundle plist; file capture failed with `Capture layer is not inserted` |
+| `current-frame60-gputrace-embeddedplist-r2` | tmp Wine root with embedded `MetalCaptureEnabled` patched into `wine.real` | invalid runtime smoke; 3DMark05 failed before rendering with `status c0000018` |
+| `current-tmpwine-plain-smoke-r1` | same tmp Wine-root structure without `MetalCaptureEnabled`, no gputrace | same `status c0000018`, proving the tmp root is not runtime-equivalent yet |
+| `captureplist-frame60-gputrace-r1` | normal Wine root, copied `wine.capture.real` + `wine.capture.real-preloader` with embedded `MetalCaptureEnabled`, no `MTL_CAPTURE_ENABLED=1` | normal GT1 rendering and counters (`present_encoded=1680`, `draw_skipped_no_pipeline=0`, `gpu_command_buffer_errors=0`), but file capture still failed with `Capture layer is not inserted`; no `.gputrace` |
 
 The `capture-env-only-sanity-r1` log is the isolating evidence: it did not set
 `DXMT_METAL_CAPTURE_FRAME/PATH`, yet it still reached only factory bridge calls
@@ -111,25 +181,39 @@ flowchart TD
   Normal --> GpuTrace["dxmt9 MTLCaptureManager request<br/>at target frame"]
   GpuTrace --> Layer{"capture layer inserted?"}
   Layer -- "Yes" --> Xcode["open .gputrace in Xcode<br/>export counters"]
-  Layer -- "No" --> DevTools["attached-Xcode route<br/>DXMT_3DMARK05_METAL_CAPTURE_DESTINATION=developerTools"]
+  Layer -- "No" --> DevTools["developerTools destination"]
+  DevTools --> DevLayer{"Xcode-attached launch<br/>or capture layer inserted?"}
+  DevLayer -- "No" --> DevFail["same capture-layer failure<br/>destination=1 unsupported"]
+  DevLayer -- "Yes" --> XcodeCapture["Xcode receives capture document"]
+  Layer -- "try app bundle" --> AppBundle["external .app plist around wine.real"]
+  AppBundle --> WineTemp["Wine re-execs temp child<br/>/var/folders/.../winetemp.../wine.real"]
+  WineTemp --> DevFail
+  Layer -- "try embedded plist" --> TmpRoot["patch wine.real __info_plist<br/>tmp Wine root"]
+  TmpRoot --> TmpInvalid["not runtime-equivalent yet<br/>3DMark05 c0000018 even without capture key"]
 
   classDef accepted fill:#d6f5d6,stroke:#2b7a2b,color:#063
   classDef pending fill:#fff3cd,stroke:#b8860b,color:#5a3b00
   classDef rejected fill:#f8d7da,stroke:#a33,color:#600
   class DxmtCapture,Normal,GpuTrace,Xcode accepted
-  class Layer,DevTools pending
-  class Black rejected
+  class Layer,DevTools,DevLayer,XcodeCapture,TmpRoot pending
+  class Black,DevFail,AppBundle,WineTemp,TmpInvalid rejected
 ```
 
 **Verdict.** Accepted as a capture workflow fix. For 3DMark05 perf probes, do
 not set `MTL_CAPTURE_ENABLED=1` by default. The standard wrapper now relies on
 dxmt9's own `DXMT_METAL_CAPTURE_FRAME/PATH` trigger and only adds the Apple
 capture-layer env when `DXMT_3DMARK05_SET_MTL_CAPTURE_ENABLED=1` is explicitly
-set. Without the capture layer, normal rendering works but the file
-`gpuTraceDocument` destination cannot produce a `.gputrace`; the next capture
-workflow experiment is the attached-Xcode `developerTools` destination via
-`DXMT_3DMARK05_METAL_CAPTURE_DESTINATION=developerTools`. The failed
-black-screen runs are not valid performance or correctness samples.
+set. Without the capture layer, normal rendering works but neither the file
+`gpuTraceDocument` destination nor a simple Xcode-open `developerTools`
+destination can produce a capture. The failed black-screen runs are not valid
+performance or correctness samples. The 2026-06-07 current-head retries confirm
+this is still true after the later instrumentation and visual-fix work, and
+show that the remaining capture route must be stronger than merely opening
+Xcode: launch/attach under Xcode with the capture layer inserted, or a Wine
+loader/Info.plist route that remains runtime-equivalent. A simple external
+`.app` wrapper is insufficient because Wine re-execs a temp child, and the tmp
+embedded-plist Wine root is not valid until the `c0000018` main-module failure
+is solved even without capture enabled.
 
 Reference: Apple's
 [Capturing a Metal workload programmatically](https://developer.apple.com/documentation/xcode/capturing-a-metal-workload-programmatically)

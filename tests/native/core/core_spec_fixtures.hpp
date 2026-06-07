@@ -538,6 +538,8 @@ struct RecordingBackend final : BackendDevice {
       const DrawParamPayloadView payload = i < payloads.size() ? payloads[i] : DrawParamPayloadView{};
       param.userVertexRange = appendPayload(payload.userVertexData);
       param.userIndexRange = appendPayload(payload.userIndexData);
+      param.bindingOverrideRange = appendPayload(payload.bindingOverrideData);
+      param.bindingSnapshotRange = appendPayload(payload.bindingSnapshotData);
       run.draws.push_back(param);
     }
 

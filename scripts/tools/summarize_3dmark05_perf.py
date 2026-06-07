@@ -19,9 +19,12 @@ from pathlib import Path
 from typing import Any
 
 KEY_VALUE_RE = re.compile(r"\b([A-Za-z0-9_]+)=([^\s]+)")
+SUMMARY_COUNTER_ROW_RE = re.compile(r"^\| `([^`]+)` \| `([^`]+)` \|")
 ENCODER_PREFIX = "[dxmt9-perf-encoder "
 STREAM_PREFIX = "[dxmt9-perf-encoder-stream "
 PROBE_DRAW_PREFIX = "[dxmt9-perf-indexed-probe-draw "
+RENDER_PASS_REENTRY_PREFIX = "[dxmt9-perf-render-pass-reentry "
+FRAME_PREFIX = "[dxmt9-perf-frame "
 PERF_PREFIX = "[dxmt9-perf] "
 BRIDGE_PREFIX = "[dxmt9-bridge-perf] "
 
@@ -30,6 +33,7 @@ RUN_COUNTERS = (
     "draw_calls",
     "draw_indexed",
     "draw_expanded_indexed",
+    "draw_skipped_no_pipeline",
     "render_pass_begin",
     "render_pass_end",
     "render_pass_load_action_load",
@@ -41,6 +45,16 @@ RUN_COUNTERS = (
     "render_pass_load_action_stencil_load",
     "render_pass_load_action_stencil_clear",
     "render_pass_load_action_stencil_dontcare",
+    "render_split_final",
+    "render_split_rt_change",
+    "render_split_hazard",
+    "render_split_clear",
+    "render_split_surface_copy",
+    "render_split_stretch",
+    "render_split_readback",
+    "render_split_color_fill",
+    "render_split_present",
+    "render_split_present_acquire",
     "render_pass_store_action_store",
     "render_pass_store_action_dontcare",
     "render_pass_store_action_resolve",
@@ -51,6 +65,20 @@ RUN_COUNTERS = (
     "render_pass_tile_preservation_bytes",
     "render_pass_same_key_adjacent",
     "render_pass_same_key_reentry",
+    "render_pass_same_key_reentry_distance_1",
+    "render_pass_same_key_reentry_distance_2",
+    "render_pass_same_key_reentry_distance_3_4",
+    "render_pass_same_key_reentry_distance_5_8",
+    "render_pass_same_key_reentry_distance_9_16",
+    "render_pass_same_key_reentry_distance_17_plus",
+    "render_pass_same_key_reentry_distance_1_same_color",
+    "render_pass_same_key_reentry_distance_1_same_color_preservation_bytes",
+    "render_pass_same_key_reentry_distance_1_same_depth",
+    "render_pass_same_key_reentry_distance_1_same_depth_preservation_bytes",
+    "render_pass_same_key_reentry_distance_1_rt_depth_change",
+    "render_pass_same_key_reentry_distance_1_rt_depth_change_preservation_bytes",
+    "render_pass_same_key_reentry_distance_1_sample_change",
+    "render_pass_same_key_reentry_distance_1_sample_change_preservation_bytes",
     "render_pass_same_key_reentry_preservation_bytes",
     "render_pass_same_key_reentry_color_preservation_bytes",
     "render_pass_same_key_reentry_depth_preservation_bytes",
@@ -463,10 +491,75 @@ RUN_COUNTERS = (
     "reordered_index_cache_misses",
     "reordered_index_cache_created",
     "reordered_index_cache_created_bytes",
+    "gpu_command_buffer_errors",
     "gpu_command_buffer_time_ms",
     "completion_wait_ms",
+    "map_buffer_total_ms",
+    "map_buffer_mutex_wait_ms",
     "map_buffer_wait_ms",
     "queue_sequence_wait_ms",
+)
+
+CORRECTNESS_VISUAL_RUN_KEYS = (
+    "draw_skipped_no_pipeline",
+    "gpu_command_buffer_errors",
+    "hazard_probe",
+    "hazard_bloom",
+    "hazard_exact",
+    "hazard_bloom_false_positive",
+    "render_pass_begin",
+    "render_pass_tile_preservation_bytes",
+    "render_pass_same_key_reentry",
+    "render_pass_same_key_reentry_distance_1",
+    "render_pass_same_key_reentry_distance_2",
+    "render_pass_same_key_reentry_distance_3_4",
+    "render_pass_same_key_reentry_distance_5_8",
+    "render_pass_same_key_reentry_distance_9_16",
+    "render_pass_same_key_reentry_distance_17_plus",
+    "render_pass_same_key_reentry_distance_1_same_color",
+    "render_pass_same_key_reentry_distance_1_same_depth",
+    "render_pass_same_key_reentry_distance_1_rt_depth_change",
+    "render_pass_same_key_reentry_distance_1_sample_change",
+    "render_pass_same_key_reentry_preservation_bytes",
+    "render_pass_transition_rt_depth_change",
+    "render_split_rt_change",
+    "render_split_hazard",
+    "render_split_clear",
+    "render_split_present",
+    "completion_wait_ms",
+    "map_buffer_total_ms",
+    "map_buffer_mutex_wait_ms",
+    "map_buffer_wait_ms",
+    "queue_sequence_wait_ms",
+)
+
+CORRECTNESS_VISUAL_ENCODER_KEYS = (
+    "blend_screen_draws",
+    "blend_additive_draws",
+    "blend_alpha_composite_draws",
+    "alpha_blend_textured_draws",
+    "alpha_blend_small_draws",
+    "blend_state_unique_overflows",
+    "x8_rt_texture_binding_samples",
+    "x8_rt_texture_binding_unique_handle_overflows",
+    "x8_shader_alpha_fill_samples",
+    "draw_geometry_signature_unique_overflows",
+    "stream_unique_handle_overflows",
+    "ib_unique_handle_overflows",
+    "pso_unique_handle_overflows",
+    "shader_variant_unique_overflows",
+    "vsout_layout_unique_overflows",
+    "tile_ffp_fallback_gpu_family_draws",
+    "tile_ffp_fallback_not_ffp_draws",
+    "tile_ffp_fallback_precision_draws",
+    "tile_ffp_fallback_unsupported_state_draws",
+    "transient_vertex_decl_fallback_bytes",
+    "transient_index_shadow_fallback_bytes",
+    "probe_disable_alpha_blend_draws",
+    "probe_disable_depth_write_draws",
+    "probe_depth_func_always_draws",
+    "probe_force_texture_white_draws",
+    "probe_fragmentless_depth_only_draws",
 )
 
 ENCODER_SUM_KEYS = (
@@ -497,12 +590,27 @@ ENCODER_SUM_KEYS = (
     "blend_state_last",
     "blend_enabled_noop_draws",
     "blend_constant_factor_draws",
+    "blend_screen_draws",
+    "blend_additive_draws",
+    "blend_alpha_composite_draws",
+    "alpha_blend_textured_draws",
+    "alpha_blend_textured_primitives",
+    "alpha_blend_textured_vertices",
+    "alpha_blend_small_draws",
+    "alpha_blend_small_primitives",
+    "alpha_blend_small_vertices",
     "alpha_test_enabled_draws",
     "alpha_test_effective_draws",
     "clip_plane_enabled_draws",
     "primitive_count",
     "triangle_estimate",
     "vertex_count",
+    "color_load_bytes",
+    "color_store_bytes",
+    "depth_load_bytes",
+    "depth_store_bytes",
+    "stencil_load_bytes",
+    "stencil_store_bytes",
     "indexed_triangle_opaque_depth_write_draws",
     "indexed_triangle_opaque_depth_write_primitives",
     "indexed_triangle_opaque_depth_write_vertices",
@@ -681,10 +789,17 @@ TOP_ENCODER_KEYS = (
     "cull_back_draws",
     "depth_enabled_draws",
     "depth_write_draws",
+    "color_store_bytes",
+    "depth_store_bytes",
     "blend_state_changes",
     "blend_state_unique",
     "blend_enabled_noop_draws",
     "blend_constant_factor_draws",
+    "blend_screen_draws",
+    "blend_additive_draws",
+    "blend_alpha_composite_draws",
+    "alpha_blend_textured_draws",
+    "alpha_blend_small_draws",
     "probe_disable_alpha_blend_draws",
     "probe_disable_depth_write_draws",
     "probe_depth_func_always_draws",
@@ -773,6 +888,25 @@ ENCODER_CSV_KEYS = (
     "depth_texture_usage",
     "depth_format_swizzle",
     "depth_texture_needs_shader_read_view",
+    "color_attachment_count",
+    "color0_included",
+    "color0_load_action",
+    "color0_store_action",
+    "color0_clear",
+    "color_load_bytes",
+    "color_store_bytes",
+    "depth_included",
+    "depth_load_action",
+    "depth_store_action",
+    "depth_clear",
+    "depth_load_bytes",
+    "depth_store_bytes",
+    "stencil_included",
+    "stencil_load_action",
+    "stencil_store_action",
+    "stencil_clear",
+    "stencil_load_bytes",
+    "stencil_store_bytes",
     "end_reason",
     "draw_calls",
     "indexed_draws",
@@ -801,6 +935,15 @@ ENCODER_CSV_KEYS = (
     "blend_state_last",
     "blend_enabled_noop_draws",
     "blend_constant_factor_draws",
+    "blend_screen_draws",
+    "blend_additive_draws",
+    "blend_alpha_composite_draws",
+    "alpha_blend_textured_draws",
+    "alpha_blend_textured_primitives",
+    "alpha_blend_textured_vertices",
+    "alpha_blend_small_draws",
+    "alpha_blend_small_primitives",
+    "alpha_blend_small_vertices",
     "alpha_test_enabled_draws",
     "alpha_test_effective_draws",
     "clip_plane_enabled_draws",
@@ -1100,6 +1243,7 @@ PROBE_DRAW_CSV_KEYS = (
     "encoder",
     "encoder_draw_index",
     "draw_ordinal",
+    "command_index",
     "eligible",
     "applied",
     "optimized_eligible",
@@ -1177,6 +1321,14 @@ PROBE_DRAW_CSV_KEYS = (
     "primitive_count",
     "vertex_count",
     "texture_mask",
+    "texture0",
+    "texture1",
+    "texture2",
+    "texture3",
+    "texture4",
+    "texture5",
+    "texture6",
+    "texture7",
     "color_write",
     "alpha_blend",
     "src_blend",
@@ -1224,6 +1376,84 @@ PROBE_DRAW_CSV_KEYS = (
     "vsout",
 )
 
+RENDER_PASS_REENTRY_CSV_KEYS = (
+    "frame",
+    "rank",
+    "a_rt",
+    "a_depth",
+    "a_samples",
+    "b_rt",
+    "b_depth",
+    "b_samples",
+    "count",
+    "preservation_bytes",
+    "prior_a_seq",
+    "prior_a_encoder",
+    "prior_a_pass",
+    "first_seq",
+    "first_encoder",
+    "first_pass",
+    "first_b_seq",
+    "first_b_encoder",
+    "first_b_pass",
+    "last_seq",
+    "last_encoder",
+    "last_pass",
+    "last_b_seq",
+    "last_b_encoder",
+    "last_b_pass",
+    "b_reads_a_color",
+    "b_reads_a_depth",
+    "a_reads_b_color",
+    "a_reads_b_depth",
+    "a_color_proof",
+    "a_depth_proof",
+    "b_color_proof",
+    "b_depth_proof",
+    "a_color_touch_distance",
+    "a_depth_touch_distance",
+    "b_color_touch_distance",
+    "b_depth_touch_distance",
+)
+
+FRAME_CSV_KEYS = (
+    "frame",
+    "wall_ms",
+    "fps",
+    "present_encoded",
+    "submit_draw",
+    "submit_present",
+    "command_buffers",
+    "render_pass_begin",
+    "render_pass_end",
+    "draw_calls",
+    "draw_indexed",
+    "draw_triangles",
+    "draw_vertices",
+    "bind_pipeline",
+    "submit_draw_cpu_ms",
+    "encode_chunk_calls",
+    "encode_chunk_cpu_ms",
+    "encode_draw_cpu_ms",
+    "encode_draw_pipeline_lookup_cpu_ms",
+    "encode_draw_uniform_build_cpu_ms",
+    "encode_draw_binding_packet_cpu_ms",
+    "encode_draw_argbuf_cbuf_update_cpu_ms",
+    "encode_draw_stream_bind_cpu_ms",
+    "encode_draw_issue_cpu_ms",
+    "command_buffer_commit_cpu_ms",
+    "completion_wait_ms",
+    "present_acquire_wait_ms",
+    "present_boundary_wait_ms",
+    "present_token_wait_ms",
+    "gpu_command_buffer_time_ms",
+    "gpu_command_buffer_time_samples",
+    "render_encoder_gpu_time_ms",
+    "render_encoder_gpu_time_samples",
+    "gpu_command_buffer_errors",
+    "sub_command_buffers",
+)
+
 RENDER_PASS_ACTION_GROUPS = (
     ("Color Load", (
         "render_pass_load_action_load",
@@ -1259,12 +1489,58 @@ RENDER_PASS_REENTRY_KEYS = (
     "render_pass_tile_preservation_bytes",
     "render_pass_same_key_adjacent",
     "render_pass_same_key_reentry",
+    "render_pass_same_key_reentry_distance_1",
+    "render_pass_same_key_reentry_distance_2",
+    "render_pass_same_key_reentry_distance_3_4",
+    "render_pass_same_key_reentry_distance_5_8",
+    "render_pass_same_key_reentry_distance_9_16",
+    "render_pass_same_key_reentry_distance_17_plus",
+    "render_pass_same_key_reentry_distance_1_same_color",
+    "render_pass_same_key_reentry_distance_1_same_color_preservation_bytes",
+    "render_pass_same_key_reentry_distance_1_same_depth",
+    "render_pass_same_key_reentry_distance_1_same_depth_preservation_bytes",
+    "render_pass_same_key_reentry_distance_1_rt_depth_change",
+    "render_pass_same_key_reentry_distance_1_rt_depth_change_preservation_bytes",
+    "render_pass_same_key_reentry_distance_1_sample_change",
+    "render_pass_same_key_reentry_distance_1_sample_change_preservation_bytes",
     "render_pass_same_key_reentry_preservation_bytes",
     "render_pass_same_key_reentry_color_preservation_bytes",
     "render_pass_same_key_reentry_depth_preservation_bytes",
     "render_pass_transition_rt_change_same_depth",
     "render_pass_transition_same_rt_depth_change",
     "render_pass_transition_rt_depth_change",
+)
+
+RENDER_PASS_REENTRY_DISTANCE_KEYS = (
+    "render_pass_same_key_reentry_distance_1",
+    "render_pass_same_key_reentry_distance_2",
+    "render_pass_same_key_reentry_distance_3_4",
+    "render_pass_same_key_reentry_distance_5_8",
+    "render_pass_same_key_reentry_distance_9_16",
+    "render_pass_same_key_reentry_distance_17_plus",
+)
+
+RENDER_PASS_REENTRY_DISTANCE1_SHAPE_KEYS = (
+    (
+        "render_pass_same_key_reentry_distance_1_same_color",
+        "render_pass_same_key_reentry_distance_1_same_color_preservation_bytes",
+        "same color / different depth",
+    ),
+    (
+        "render_pass_same_key_reentry_distance_1_same_depth",
+        "render_pass_same_key_reentry_distance_1_same_depth_preservation_bytes",
+        "different color / same depth",
+    ),
+    (
+        "render_pass_same_key_reentry_distance_1_rt_depth_change",
+        "render_pass_same_key_reentry_distance_1_rt_depth_change_preservation_bytes",
+        "different color / different depth",
+    ),
+    (
+        "render_pass_same_key_reentry_distance_1_sample_change",
+        "render_pass_same_key_reentry_distance_1_sample_change_preservation_bytes",
+        "same attachments / sample-count change",
+    ),
 )
 
 STATE_DELTA_BREAK_KEYS = (
@@ -1357,6 +1633,18 @@ BLEND_OP_NAMES = {
     5: "Max",
 }
 
+LOAD_ACTION_NAMES = {
+    0: "dontcare",
+    1: "load",
+    2: "clear",
+}
+
+STORE_ACTION_NAMES = {
+    0: "dontcare",
+    1: "store",
+    2: "resolve",
+}
+
 
 def parse_number(value: Any) -> int | float | str | None:
     if value is None:
@@ -1374,12 +1662,62 @@ def parse_number(value: Any) -> int | float | str | None:
         return text
 
 
+def parse_summary_number(value: str) -> int | float | str | None:
+    text = value.replace(",", "")
+    return parse_number(text)
+
+
+def load_existing_summary_result(summary_path: Path) -> dict[str, Any] | None:
+    if not summary_path.exists():
+        return None
+
+    counters: dict[str, Any] = {}
+    bridge: dict[str, Any] = {}
+    section: str | None = None
+    for line in summary_path.read_text(encoding="utf-8", errors="replace").splitlines():
+        if line.startswith("## "):
+            if line == "## Run Counters":
+                section = "run"
+            elif line == "## Bridge Launch Check":
+                section = "bridge"
+            else:
+                section = None
+            continue
+
+        if section is None:
+            continue
+
+        match = SUMMARY_COUNTER_ROW_RE.match(line)
+        if not match:
+            continue
+        key, raw_value = match.groups()
+        value = parse_summary_number(raw_value)
+        if value is None:
+            continue
+        if section == "run":
+            counters[key] = value
+        elif section == "bridge":
+            bridge[key] = value
+
+    if not counters and not bridge:
+        return None
+    return {
+        "status": "partial-summary",
+        "capture_error": "missing result.json/dxmt9.log; synthesized from existing summary",
+        "dxmt9_perf_counters": counters,
+        "dxmt9_bridge_counters": bridge,
+    }
+
+
 def load_result(path: Path) -> dict[str, Any]:
     result_path = path / "result.json"
     if result_path.exists():
         return json.loads(result_path.read_text(encoding="utf-8"))
     log_path = path / "dxmt9.log"
     if not log_path.exists():
+        summary_result = load_existing_summary_result(path / "3dmark05-perf-summary.md")
+        if summary_result is not None:
+            return summary_result
         raise SystemExit(f"missing result.json and dxmt9.log: {result_path}")
     counters: dict[str, Any] = {}
     bridge: dict[str, Any] = {}
@@ -1430,6 +1768,26 @@ def parse_probe_draw_lines(log_path: Path) -> list[dict[str, Any]]:
     return probe_draws
 
 
+def parse_render_pass_reentry_lines(log_path: Path) -> list[dict[str, Any]]:
+    rows: list[dict[str, Any]] = []
+    if not log_path.exists():
+        return rows
+    for line in log_path.read_text(encoding="utf-8", errors="replace").splitlines():
+        if line.startswith(RENDER_PASS_REENTRY_PREFIX):
+            rows.append(parse_kv_line(line))
+    return rows
+
+
+def parse_frame_lines(log_path: Path) -> list[dict[str, Any]]:
+    rows: list[dict[str, Any]] = []
+    if not log_path.exists():
+        return rows
+    for line in log_path.read_text(encoding="utf-8", errors="replace").splitlines():
+        if line.startswith(FRAME_PREFIX):
+            rows.append(parse_kv_line(line))
+    return rows
+
+
 def sum_key(rows: list[dict[str, Any]], key: str) -> int | float:
     total: int | float = 0
     for row in rows:
@@ -1470,6 +1828,560 @@ def numeric_value(row: dict[str, Any], key: str) -> int | float:
     if isinstance(value, (int, float)):
         return value
     return 0
+
+
+def per_event_preservation_bytes(row: dict[str, Any]) -> int | float:
+    count = numeric_value(row, "count")
+    total = numeric_value(row, "preservation_bytes")
+    if count == 0:
+        return total
+    if isinstance(total, int) and isinstance(count, int) and total % count == 0:
+        return total // count
+    return total / count
+
+
+def bool_value(row: dict[str, Any], key: str) -> bool | None:
+    value = row.get(key)
+    if value is None or value == "":
+        return None
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, (int, float)):
+        return value != 0
+    text = str(value).strip().lower()
+    if text in {"1", "true", "yes", "y"}:
+        return True
+    if text in {"0", "false", "no", "n"}:
+        return False
+    return None
+
+
+def read_relation_text(row: dict[str, Any], color_key: str, depth_key: str) -> str:
+    color = bool_value(row, color_key)
+    depth = bool_value(row, depth_key)
+    if color is None and depth is None:
+        return "unknown"
+    parts: list[str] = []
+    if color:
+        parts.append("color")
+    if depth:
+        parts.append("depth")
+    return "+".join(parts) if parts else "none"
+
+
+COLOR_STORE_PROOF_NAMES = {
+    0: "AllowNextClear",
+    1: "AllowDeadNoPresent",
+    2: "BlockNullColor",
+    3: "BlockNoLookahead",
+    4: "BlockDrawTarget",
+    5: "BlockTextureSample",
+    6: "BlockSurfaceCopy",
+    7: "BlockStretchRect",
+    8: "BlockReadback",
+    9: "BlockColorFill",
+    10: "BlockMsaaResolve",
+    11: "BlockPresent",
+    12: "BlockDeadNoPresentDisabled",
+}
+
+DEPTH_STORE_PROOF_NAMES = {
+    0: "AllowNextClear",
+    1: "AllowDeadNoPresent",
+    2: "BlockNullDepth",
+    3: "BlockNoLookahead",
+    4: "BlockMsaaResolve",
+    5: "BlockDrawDepth",
+    6: "BlockShadowSample",
+    7: "BlockSurfaceCopy",
+    8: "BlockStretchRect",
+    9: "BlockReadback",
+    10: "BlockColorFill",
+    11: "BlockDepthResolve",
+    12: "BlockPresent",
+}
+
+
+def proof_text(row: dict[str, Any], color_key: str, depth_key: str) -> str:
+    color_value = row.get(color_key)
+    depth_value = row.get(depth_key)
+    color = (
+        COLOR_STORE_PROOF_NAMES.get(color_value, str(color_value))
+        if isinstance(color_value, int) else
+        (str(color_value) if color_value not in (None, "") else "unknown")
+    )
+    depth = (
+        DEPTH_STORE_PROOF_NAMES.get(depth_value, str(depth_value))
+        if isinstance(depth_value, int) else
+        (str(depth_value) if depth_value not in (None, "") else "unknown")
+    )
+    return f"color={color}; depth={depth}"
+
+
+def touch_distance_text(row: dict[str, Any], color_key: str, depth_key: str) -> str:
+    no_touch = 4294967295
+    parts: list[str] = []
+    for label, key in (("color", color_key), ("depth", depth_key)):
+        value = row.get(key)
+        if isinstance(value, int):
+            parts.append(f"{label}={'none' if value >= no_touch else value}")
+        elif value not in (None, ""):
+            parts.append(f"{label}={value}")
+        else:
+            parts.append(f"{label}=unknown")
+    return "; ".join(parts)
+
+
+def aggregate_render_pass_reentry_rows(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    groups: dict[tuple[Any, ...], dict[str, Any]] = {}
+    for row in rows:
+        key = (
+            row.get("a_rt", ""),
+            row.get("a_depth", ""),
+            row.get("a_samples", ""),
+            row.get("b_rt", ""),
+            row.get("b_depth", ""),
+            row.get("b_samples", ""),
+            row.get("b_reads_a_color", ""),
+            row.get("b_reads_a_depth", ""),
+            row.get("a_reads_b_color", ""),
+            row.get("a_reads_b_depth", ""),
+            row.get("a_color_proof", ""),
+            row.get("a_depth_proof", ""),
+            row.get("b_color_proof", ""),
+            row.get("b_depth_proof", ""),
+            row.get("a_color_touch_distance", ""),
+            row.get("a_depth_touch_distance", ""),
+            row.get("b_color_touch_distance", ""),
+            row.get("b_depth_touch_distance", ""),
+        )
+        group = groups.setdefault(
+            key,
+            {
+                "a_rt": row.get("a_rt", ""),
+                "a_depth": row.get("a_depth", ""),
+                "a_samples": row.get("a_samples", ""),
+                "b_rt": row.get("b_rt", ""),
+                "b_depth": row.get("b_depth", ""),
+                "b_samples": row.get("b_samples", ""),
+                "count": 0,
+                "preservation_bytes": 0,
+                "frames": 0,
+                "first_seq": row.get("first_seq", ""),
+                "first_encoder": row.get("first_encoder", ""),
+                "first_b_seq": row.get("first_b_seq", ""),
+                "first_b_encoder": row.get("first_b_encoder", ""),
+                "last_seq": row.get("last_seq", ""),
+                "last_encoder": row.get("last_encoder", ""),
+                "last_b_seq": row.get("last_b_seq", ""),
+                "last_b_encoder": row.get("last_b_encoder", ""),
+                "b_reads_a_color": row.get("b_reads_a_color", ""),
+                "b_reads_a_depth": row.get("b_reads_a_depth", ""),
+                "a_reads_b_color": row.get("a_reads_b_color", ""),
+                "a_reads_b_depth": row.get("a_reads_b_depth", ""),
+                "a_color_proof": row.get("a_color_proof", ""),
+                "a_depth_proof": row.get("a_depth_proof", ""),
+                "b_color_proof": row.get("b_color_proof", ""),
+                "b_depth_proof": row.get("b_depth_proof", ""),
+                "a_color_touch_distance": row.get("a_color_touch_distance", ""),
+                "a_depth_touch_distance": row.get("a_depth_touch_distance", ""),
+                "b_color_touch_distance": row.get("b_color_touch_distance", ""),
+                "b_depth_touch_distance": row.get("b_depth_touch_distance", ""),
+            },
+        )
+        group["count"] += numeric_value(row, "count")
+        group["preservation_bytes"] += numeric_value(row, "preservation_bytes")
+        group["frames"] += 1
+        group["last_seq"] = row.get("last_seq", group.get("last_seq", ""))
+        group["last_encoder"] = row.get("last_encoder", group.get("last_encoder", ""))
+        group["last_b_seq"] = row.get("last_b_seq", group.get("last_b_seq", ""))
+        group["last_b_encoder"] = row.get(
+            "last_b_encoder", group.get("last_b_encoder", "")
+        )
+    return sorted(
+        groups.values(),
+        key=lambda item: (
+            numeric_value(item, "preservation_bytes"),
+            numeric_value(item, "count"),
+        ),
+        reverse=True,
+    )
+
+
+def aggregate_render_pass_reentry_patterns(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    groups: dict[tuple[Any, ...], dict[str, Any]] = {}
+    for row in rows:
+        bytes_per_event = per_event_preservation_bytes(row)
+        key = (
+            row.get("b_depth", ""),
+            row.get("b_samples", ""),
+            row.get("a_depth", ""),
+            row.get("a_samples", ""),
+            row.get("first_encoder", ""),
+            row.get("first_b_encoder", ""),
+            bytes_per_event,
+            row.get("b_reads_a_color", ""),
+            row.get("b_reads_a_depth", ""),
+            row.get("a_reads_b_color", ""),
+            row.get("a_reads_b_depth", ""),
+            row.get("a_color_proof", ""),
+            row.get("a_depth_proof", ""),
+            row.get("b_color_proof", ""),
+            row.get("b_depth_proof", ""),
+            row.get("a_color_touch_distance", ""),
+            row.get("a_depth_touch_distance", ""),
+            row.get("b_color_touch_distance", ""),
+            row.get("b_depth_touch_distance", ""),
+        )
+        group = groups.setdefault(
+            key,
+            {
+                "b_depth": row.get("b_depth", ""),
+                "b_samples": row.get("b_samples", ""),
+                "a_depth": row.get("a_depth", ""),
+                "a_samples": row.get("a_samples", ""),
+                "b_encoder": row.get("first_b_encoder", ""),
+                "a_encoder": row.get("first_encoder", ""),
+                "bytes_per_event": bytes_per_event,
+                "b_reads_a_color": row.get("b_reads_a_color", ""),
+                "b_reads_a_depth": row.get("b_reads_a_depth", ""),
+                "a_reads_b_color": row.get("a_reads_b_color", ""),
+                "a_reads_b_depth": row.get("a_reads_b_depth", ""),
+                "a_color_proof": row.get("a_color_proof", ""),
+                "a_depth_proof": row.get("a_depth_proof", ""),
+                "b_color_proof": row.get("b_color_proof", ""),
+                "b_depth_proof": row.get("b_depth_proof", ""),
+                "a_color_touch_distance": row.get("a_color_touch_distance", ""),
+                "a_depth_touch_distance": row.get("a_depth_touch_distance", ""),
+                "b_color_touch_distance": row.get("b_color_touch_distance", ""),
+                "b_depth_touch_distance": row.get("b_depth_touch_distance", ""),
+                "count": 0,
+                "preservation_bytes": 0,
+                "frames": 0,
+                "last_seq": row.get("last_seq", ""),
+                "last_b_seq": row.get("last_b_seq", ""),
+            },
+        )
+        group["count"] += numeric_value(row, "count")
+        group["preservation_bytes"] += numeric_value(row, "preservation_bytes")
+        group["frames"] += 1
+        group["last_seq"] = row.get("last_seq", group.get("last_seq", ""))
+        group["last_b_seq"] = row.get("last_b_seq", group.get("last_b_seq", ""))
+    return sorted(
+        groups.values(),
+        key=lambda item: (
+            numeric_value(item, "preservation_bytes"),
+            numeric_value(item, "count"),
+        ),
+        reverse=True,
+    )
+
+
+def aggregate_render_pass_reentry_touch_distances(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    groups: dict[tuple[Any, ...], dict[str, Any]] = {}
+    for row in rows:
+        key = (
+            row.get("b_color_touch_distance", ""),
+            row.get("b_depth_touch_distance", ""),
+            row.get("a_color_touch_distance", ""),
+            row.get("a_depth_touch_distance", ""),
+        )
+        group = groups.setdefault(
+            key,
+            {
+                "b_color_touch_distance": row.get("b_color_touch_distance", ""),
+                "b_depth_touch_distance": row.get("b_depth_touch_distance", ""),
+                "a_color_touch_distance": row.get("a_color_touch_distance", ""),
+                "a_depth_touch_distance": row.get("a_depth_touch_distance", ""),
+                "count": 0,
+                "preservation_bytes": 0,
+                "patterns": 0,
+            },
+        )
+        group["count"] += numeric_value(row, "count")
+        group["preservation_bytes"] += numeric_value(row, "preservation_bytes")
+        group["patterns"] += 1
+    return sorted(
+        groups.values(),
+        key=lambda item: (
+            numeric_value(item, "count"),
+            numeric_value(item, "preservation_bytes"),
+        ),
+        reverse=True,
+    )
+
+
+def encoder_lookup_key(row: dict[str, Any], seq_key: str, encoder_key: str) -> tuple[Any, Any]:
+    return (
+        parse_number(row.get(seq_key)),
+        parse_number(row.get(encoder_key)),
+    )
+
+
+def build_encoder_lookup(encoders: list[dict[str, Any]]) -> dict[tuple[Any, Any], dict[str, Any]]:
+    lookup: dict[tuple[Any, Any], dict[str, Any]] = {}
+    for row in encoders:
+        lookup[encoder_lookup_key(row, "seq", "encoder")] = row
+    return lookup
+
+
+def encoder_for_reentry_side(
+    encoder_lookup: dict[tuple[Any, Any], dict[str, Any]],
+    row: dict[str, Any],
+    seq_key: str,
+    encoder_key: str,
+    fallback_seq_key: str,
+    fallback_encoder_key: str,
+) -> dict[str, Any] | None:
+    encoder = encoder_lookup.get(encoder_lookup_key(row, seq_key, encoder_key))
+    if encoder is not None:
+        return encoder
+    return encoder_lookup.get(encoder_lookup_key(row, fallback_seq_key, fallback_encoder_key))
+
+
+def encoder_role(row: dict[str, Any] | None) -> str:
+    if row is None:
+        return "missing"
+    draws = numeric_value(row, "draw_calls")
+    if draws == 0:
+        return "empty"
+    depth_enabled = numeric_value(row, "depth_enabled_draws")
+    depth_write = numeric_value(row, "depth_write_draws")
+    textured = numeric_value(row, "textured_draws")
+    alpha = numeric_value(row, "alpha_blend_enabled_draws")
+    screen = numeric_value(row, "blend_screen_draws")
+    additive = numeric_value(row, "blend_additive_draws")
+    composite = numeric_value(row, "blend_alpha_composite_draws")
+
+    if depth_write == draws and textured == 0 and alpha == 0:
+        return "opaque-depth-write-untextured"
+    if depth_write == 0 and depth_enabled > 0 and alpha > 0 and screen > 0:
+        return "screen-blend-depth-read"
+    if depth_write == 0 and depth_enabled > 0 and alpha > 0 and additive > 0:
+        return "additive-depth-read"
+    if depth_write == 0 and depth_enabled > 0 and alpha > 0 and composite > 0:
+        return "alpha-depth-read"
+    if depth_write == 0 and depth_enabled > 0 and textured == draws and alpha == 0:
+        return "textured-depth-read-opaque"
+    if depth_write > 0 and depth_write < draws:
+        return "mixed-depth-write"
+    if depth_enabled == 0 and alpha > 0:
+        return "alpha-no-depth"
+    if depth_enabled == 0 and textured > 0:
+        return "textured-no-depth"
+    if textured > 0:
+        return "textured-mixed"
+    return "mixed"
+
+
+def has_present_value(row: dict[str, Any] | None, key: str) -> bool:
+    return row is not None and key in row and row.get(key) not in ("", None)
+
+
+def render_pass_action_name(names: dict[int, str], value: Any) -> str:
+    parsed = parse_number(value)
+    if isinstance(parsed, int):
+        return names.get(parsed, str(parsed))
+    if parsed in ("", None):
+        return "unknown"
+    return str(parsed)
+
+
+def attachment_pass_action_text(
+    row: dict[str, Any],
+    label: str,
+    included_key: str,
+    load_key: str,
+    store_key: str,
+    clear_key: str,
+    load_bytes_key: str,
+    store_bytes_key: str,
+) -> str | None:
+    if not has_present_value(row, included_key) and not has_present_value(row, load_key):
+        return None
+    if numeric_value(row, included_key) <= 0:
+        return None
+    load = render_pass_action_name(LOAD_ACTION_NAMES, row.get(load_key))
+    store = render_pass_action_name(STORE_ACTION_NAMES, row.get(store_key))
+    clear = "clear" if numeric_value(row, clear_key) else "no-clear"
+    bytes_total = numeric_value(row, load_bytes_key) + numeric_value(row, store_bytes_key)
+    return f"{label}={load}/{store}/{clear}/{fmt(bytes_total)}B"
+
+
+def encoder_pass_action_text(row: dict[str, Any] | None) -> str:
+    if row is None:
+        return "missing"
+    parts: list[str] = []
+    color_text = attachment_pass_action_text(
+        row,
+        "c0",
+        "color0_included",
+        "color0_load_action",
+        "color0_store_action",
+        "color0_clear",
+        "color_load_bytes",
+        "color_store_bytes",
+    )
+    if color_text is not None:
+        color_count = numeric_value(row, "color_attachment_count")
+        if color_count > 1:
+            color_text += f";colors={fmt(color_count)}"
+        parts.append(color_text)
+    elif has_present_value(row, "color_attachment_count"):
+        color_count = numeric_value(row, "color_attachment_count")
+        if color_count > 0:
+            parts.append(f"color-count={fmt(color_count)}")
+    depth_text = attachment_pass_action_text(
+        row,
+        "d",
+        "depth_included",
+        "depth_load_action",
+        "depth_store_action",
+        "depth_clear",
+        "depth_load_bytes",
+        "depth_store_bytes",
+    )
+    if depth_text is not None:
+        parts.append(depth_text)
+    stencil_text = attachment_pass_action_text(
+        row,
+        "s",
+        "stencil_included",
+        "stencil_load_action",
+        "stencil_store_action",
+        "stencil_clear",
+        "stencil_load_bytes",
+        "stencil_store_bytes",
+    )
+    if stencil_text is not None:
+        parts.append(stencil_text)
+    return "; ".join(parts) if parts else "unknown"
+
+
+def aggregate_render_pass_reentry_encoder_roles(
+    rows: list[dict[str, Any]],
+    encoders: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    encoder_lookup = build_encoder_lookup(encoders)
+    groups: dict[tuple[Any, ...], dict[str, Any]] = {}
+    for row in rows:
+        prior_a_encoder = encoder_lookup.get(
+            encoder_lookup_key(row, "prior_a_seq", "prior_a_encoder")
+        )
+        a_encoder = encoder_for_reentry_side(
+            encoder_lookup,
+            row,
+            "last_seq",
+            "last_encoder",
+            "first_seq",
+            "first_encoder",
+        )
+        b_encoder = encoder_for_reentry_side(
+            encoder_lookup,
+            row,
+            "last_b_seq",
+            "last_b_encoder",
+            "first_b_seq",
+            "first_b_encoder",
+        )
+        prior_a_role = encoder_role(prior_a_encoder)
+        b_role = encoder_role(b_encoder)
+        a_role = encoder_role(a_encoder)
+        prior_a_pass_action = encoder_pass_action_text(prior_a_encoder)
+        b_pass_action = encoder_pass_action_text(b_encoder)
+        a_pass_action = encoder_pass_action_text(a_encoder)
+        key = (
+            prior_a_role,
+            b_role,
+            a_role,
+            prior_a_pass_action,
+            b_pass_action,
+            a_pass_action,
+            row.get("b_color_touch_distance", ""),
+            row.get("b_depth_touch_distance", ""),
+            row.get("a_color_touch_distance", ""),
+            row.get("a_depth_touch_distance", ""),
+        )
+        group = groups.setdefault(
+            key,
+            {
+                "prior_a_role": prior_a_role,
+                "b_role": b_role,
+                "a_role": a_role,
+                "prior_a_pass_action": prior_a_pass_action,
+                "b_pass_action": b_pass_action,
+                "a_pass_action": a_pass_action,
+                "b_color_touch_distance": row.get("b_color_touch_distance", ""),
+                "b_depth_touch_distance": row.get("b_depth_touch_distance", ""),
+                "a_color_touch_distance": row.get("a_color_touch_distance", ""),
+                "a_depth_touch_distance": row.get("a_depth_touch_distance", ""),
+                "count": 0,
+                "preservation_bytes": 0,
+                "rows": 0,
+                "missing_prior_a_encoder_rows": 0,
+                "missing_a_encoder_rows": 0,
+                "missing_b_encoder_rows": 0,
+                "prior_a_draws_weighted": 0,
+                "b_draws_weighted": 0,
+                "a_draws_weighted": 0,
+                "prior_a_primitives_weighted": 0,
+                "b_primitives_weighted": 0,
+                "a_primitives_weighted": 0,
+            },
+        )
+        count = numeric_value(row, "count")
+        group["count"] += count
+        group["preservation_bytes"] += numeric_value(row, "preservation_bytes")
+        group["rows"] += 1
+        if prior_a_encoder is None:
+            group["missing_prior_a_encoder_rows"] += 1
+        else:
+            group["prior_a_draws_weighted"] += (
+                numeric_value(prior_a_encoder, "draw_calls") * count
+            )
+            group["prior_a_primitives_weighted"] += (
+                numeric_value(prior_a_encoder, "primitive_count") * count
+            )
+        if b_encoder is None:
+            group["missing_b_encoder_rows"] += 1
+        else:
+            group["b_draws_weighted"] += numeric_value(b_encoder, "draw_calls") * count
+            group["b_primitives_weighted"] += numeric_value(b_encoder, "primitive_count") * count
+        if a_encoder is None:
+            group["missing_a_encoder_rows"] += 1
+        else:
+            group["a_draws_weighted"] += numeric_value(a_encoder, "draw_calls") * count
+            group["a_primitives_weighted"] += numeric_value(a_encoder, "primitive_count") * count
+
+    for group in groups.values():
+        count = numeric_value(group, "count")
+        group["prior_a_draws_avg"] = (
+            numeric_value(group, "prior_a_draws_weighted") / count if count else 0.0
+        )
+        group["b_draws_avg"] = (
+            numeric_value(group, "b_draws_weighted") / count if count else 0.0
+        )
+        group["a_draws_avg"] = (
+            numeric_value(group, "a_draws_weighted") / count if count else 0.0
+        )
+        group["b_primitives_avg"] = (
+            numeric_value(group, "b_primitives_weighted") / count if count else 0.0
+        )
+        group["prior_a_primitives_avg"] = (
+            numeric_value(group, "prior_a_primitives_weighted") / count if count else 0.0
+        )
+        group["a_primitives_avg"] = (
+            numeric_value(group, "a_primitives_weighted") / count if count else 0.0
+        )
+
+    return sorted(
+        groups.values(),
+        key=lambda item: (
+            numeric_value(item, "preservation_bytes"),
+            numeric_value(item, "count"),
+        ),
+        reverse=True,
+    )
 
 
 def enum_name(names: dict[int, str], value: Any) -> str:
@@ -1873,10 +2785,23 @@ def write_markdown(
     stream_csv: Path,
     probe_draws: list[dict[str, Any]] | None = None,
     probe_draw_csv: Path | None = None,
+    render_pass_reentry_rows: list[dict[str, Any]] | None = None,
+    render_pass_reentry_csv: Path | None = None,
+    frame_rows: list[dict[str, Any]] | None = None,
+    frame_csv: Path | None = None,
 ) -> None:
     counters = result.get("dxmt9_perf_counters", {})
     bridge = result.get("dxmt9_bridge_counters", {})
     probe_draws = probe_draws or []
+    render_pass_reentry_rows = render_pass_reentry_rows or []
+    frame_rows = frame_rows or []
+    present_encoded = counters.get("present_encoded")
+    render_pass_reentry_summary_rows = render_pass_reentry_rows
+    if isinstance(present_encoded, (int, float)) and present_encoded > 0:
+        render_pass_reentry_summary_rows = [
+            row for row in render_pass_reentry_rows
+            if numeric_value(row, "last_seq") <= present_encoded
+        ]
     lines: list[str] = []
 
     lines.append("# 3DMark05 Perf Summary")
@@ -1891,6 +2816,17 @@ def write_markdown(
     lines.append(f"- Indexed probe draw lines: `{len(probe_draws)}`")
     if probe_draw_csv is not None:
         lines.append(f"- Indexed probe draw CSV: `{probe_draw_csv}`")
+    lines.append(f"- Render-pass re-entry lines: `{len(render_pass_reentry_rows)}`")
+    if render_pass_reentry_rows:
+        lines.append(
+            "- Render-pass re-entry counter-window lines: "
+            f"`{len(render_pass_reentry_summary_rows)}`"
+        )
+    if render_pass_reentry_csv is not None:
+        lines.append(f"- Render-pass re-entry CSV: `{render_pass_reentry_csv}`")
+    lines.append(f"- Frame sampling lines: `{len(frame_rows)}`")
+    if frame_csv is not None:
+        lines.append(f"- Frame sampling CSV: `{frame_csv}`")
     lines.append("")
 
     lines.append("## Run Counters")
@@ -1900,6 +2836,87 @@ def write_markdown(
     for key in RUN_COUNTERS:
         lines.append(f"| `{key}` | `{fmt(counters.get(key))}` |")
     lines.append("")
+
+    lines.append("## Correctness / Visual-Coupling Counters")
+    lines.append("")
+    lines.append(
+        "Use this block when bloom, muzzle, glow, or alpha-material visuals change. "
+        "A timing gain can be a correctness win if skipped draws, error paths, "
+        "fallbacks, overflows, pass churn, or waits also move."
+    )
+    lines.append("")
+    lines.append("| Scope | Counter | Value |")
+    lines.append("|---|---|---:|")
+    for key in CORRECTNESS_VISUAL_RUN_KEYS:
+        lines.append(f"| run | `{key}` | `{fmt(counters.get(key))}` |")
+    if encoders:
+        for key in CORRECTNESS_VISUAL_ENCODER_KEYS:
+            lines.append(f"| encoder_sum | `{key}` | `{fmt(sum_key(encoders, key))}` |")
+    lines.append("")
+
+    sampled_frames = [row for row in frame_rows if numeric_value(row, "wall_ms") > 0]
+    if sampled_frames:
+        total_wall_ms = sum(numeric_value(row, "wall_ms") for row in sampled_frames)
+        average_fps = (
+            len(sampled_frames) * 1000.0 / total_wall_ms
+            if total_wall_ms > 0 else 0.0
+        )
+        slow_frames = sorted(
+            sampled_frames,
+            key=lambda row: numeric_value(row, "wall_ms"),
+            reverse=True,
+        )[:16]
+        lines.append("## Frame Sampling / Low-FPS Windows")
+        lines.append("")
+        lines.append(
+            "`DXMT9_PERF_FRAME_SAMPLING=1` emits wall-clock Present deltas. "
+            "Use this with effect/bloom/muzzle trace rows from the same run; "
+            "a visual fix is performance-relevant only when slow-frame wall time "
+            "or its wait/pass/draw counters move."
+        )
+        lines.append("")
+        lines.append("| Metric | Value |")
+        lines.append("|---|---:|")
+        lines.append(f"| `sampled_frames` | `{fmt(len(sampled_frames))}` |")
+        lines.append(f"| `sampled_wall_ms` | `{fmt(total_wall_ms)}` |")
+        lines.append(f"| `sampled_avg_fps` | `{fmt(average_fps)}` |")
+        lines.append("")
+        lines.append(
+            "| frame | wall ms | fps | draws | passes | command buffers | "
+            "completion wait | present wait | GPU CB ms | encoder GPU ms | sub CBs | errors |"
+        )
+        lines.append("|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|")
+        for row in slow_frames:
+            present_wait = (
+                numeric_value(row, "present_acquire_wait_ms") +
+                numeric_value(row, "present_boundary_wait_ms") +
+                numeric_value(row, "present_token_wait_ms")
+            )
+            passes = (
+                f"{fmt(row.get('render_pass_begin'))}/"
+                f"{fmt(row.get('render_pass_end'))}"
+            )
+            lines.append(
+                "| "
+                + " | ".join(
+                    [
+                        fmt(row.get("frame")),
+                        fmt(row.get("wall_ms")),
+                        fmt(row.get("fps")),
+                        fmt(row.get("draw_calls")),
+                        passes,
+                        fmt(row.get("command_buffers")),
+                        fmt(row.get("completion_wait_ms")),
+                        fmt(present_wait),
+                        fmt(row.get("gpu_command_buffer_time_ms")),
+                        fmt(row.get("render_encoder_gpu_time_ms")),
+                        fmt(row.get("sub_command_buffers")),
+                        fmt(row.get("gpu_command_buffer_errors")),
+                    ]
+                )
+                + " |"
+            )
+        lines.append("")
 
     draw_run_submits = counters.get("commit_chunk_draw_run_submits")
     draw_run_records = counters.get("commit_chunk_draw_run_records")
@@ -1980,6 +2997,148 @@ def write_markdown(
         lines.append(f"| `{key}` | `{fmt(counters.get(key))}` |")
     lines.append("")
 
+    reentry_total = counters.get("render_pass_same_key_reentry")
+    lines.append("### Same-Key Re-entry Distance")
+    lines.append("")
+    lines.append("| Counter | Value | Share of re-entry |")
+    lines.append("|---|---:|---:|")
+    for key in RENDER_PASS_REENTRY_DISTANCE_KEYS:
+        value = counters.get(key)
+        lines.append(f"| `{key}` | `{fmt(value)}` | `{pct(value, reentry_total)}` |")
+    lines.append("")
+
+    distance1_total = counters.get("render_pass_same_key_reentry_distance_1")
+    lines.append("### Same-Key Re-entry Distance-1 Shape")
+    lines.append("")
+    lines.append("| Shape | Count | Share of distance-1 | Preservation bytes |")
+    lines.append("|---|---:|---:|---:|")
+    for count_key, bytes_key, label in RENDER_PASS_REENTRY_DISTANCE1_SHAPE_KEYS:
+        count_value = counters.get(count_key)
+        bytes_value = counters.get(bytes_key)
+        lines.append(
+            f"| {label} | `{fmt(count_value)}` | `{pct(count_value, distance1_total)}` | "
+            f"`{fmt(bytes_value)}` |"
+        )
+    lines.append("")
+
+    if render_pass_reentry_summary_rows:
+        pattern_rows = aggregate_render_pass_reentry_patterns(render_pass_reentry_summary_rows)
+        aggregate_rows = aggregate_render_pass_reentry_rows(render_pass_reentry_summary_rows)
+        touch_rows = aggregate_render_pass_reentry_touch_distances(
+            render_pass_reentry_summary_rows)
+        touch_total_count = sum(numeric_value(row, "count") for row in touch_rows)
+        touch_total_bytes = sum(numeric_value(row, "preservation_bytes") for row in touch_rows)
+        lines.append("### Same-Key Re-entry Touch Distance Distribution")
+        lines.append("")
+        lines.append(
+            "| B next touch | A next touch | Count | Share | Preservation bytes | "
+            "Byte share | Patterns |"
+        )
+        lines.append("|---|---|---:|---:|---:|---:|---:|")
+        for row in touch_rows[:10]:
+            lines.append(
+                f"| `{touch_distance_text(row, 'b_color_touch_distance', 'b_depth_touch_distance')}` | "
+                f"`{touch_distance_text(row, 'a_color_touch_distance', 'a_depth_touch_distance')}` | "
+                f"`{fmt(row.get('count'))}` | `{pct(row.get('count'), touch_total_count)}` | "
+                f"`{fmt(row.get('preservation_bytes'))}` | "
+                f"`{pct(row.get('preservation_bytes'), touch_total_bytes)}` | "
+                f"`{fmt(row.get('patterns'))}` |"
+            )
+        lines.append("")
+
+        if encoders:
+            role_rows = aggregate_render_pass_reentry_encoder_roles(
+                render_pass_reentry_summary_rows, encoders)
+            role_total_count = sum(numeric_value(row, "count") for row in role_rows)
+            role_total_bytes = sum(numeric_value(row, "preservation_bytes") for row in role_rows)
+            lines.append("### Same-Key Re-entry Encoder Role Pairs")
+            lines.append("")
+            lines.append(
+                "| A1 role | B role | A2 role | A1 pass action | B pass action | "
+                "A2 pass action | B next touch | A2 next touch | Count | Share | "
+                "Preservation bytes | Byte share | Avg A1 draws | Avg B draws | "
+                "Avg A2 draws | Avg A1 primitives | Avg B primitives | Avg A2 primitives | "
+                "Rows | Missing encoders |"
+            )
+            lines.append(
+                "|---|---|---|---|---|---|---|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|"
+            )
+            for row in role_rows[:12]:
+                missing = (
+                    numeric_value(row, "missing_prior_a_encoder_rows") +
+                    numeric_value(row, "missing_b_encoder_rows") +
+                    numeric_value(row, "missing_a_encoder_rows")
+                )
+                lines.append(
+                    f"| `{row.get('prior_a_role')}` | "
+                    f"`{row.get('b_role')}` | `{row.get('a_role')}` | "
+                    f"`{row.get('prior_a_pass_action')}` | "
+                    f"`{row.get('b_pass_action')}` | `{row.get('a_pass_action')}` | "
+                    f"`{touch_distance_text(row, 'b_color_touch_distance', 'b_depth_touch_distance')}` | "
+                    f"`{touch_distance_text(row, 'a_color_touch_distance', 'a_depth_touch_distance')}` | "
+                    f"`{fmt(row.get('count'))}` | `{pct(row.get('count'), role_total_count)}` | "
+                    f"`{fmt(row.get('preservation_bytes'))}` | "
+                    f"`{pct(row.get('preservation_bytes'), role_total_bytes)}` | "
+                    f"`{fmt(row.get('prior_a_draws_avg'))}` | "
+                    f"`{fmt(row.get('b_draws_avg'))}` | `{fmt(row.get('a_draws_avg'))}` | "
+                    f"`{fmt(row.get('prior_a_primitives_avg'))}` | "
+                    f"`{fmt(row.get('b_primitives_avg'))}` | `{fmt(row.get('a_primitives_avg'))}` | "
+                    f"`{fmt(row.get('rows'))}` | `{fmt(missing)}` |"
+                )
+            lines.append("")
+
+        lines.append("### Same-Key Re-entry Top Patterns")
+        lines.append("")
+        lines.append(
+            "| B depth | A depth | B->A encoder path | Count | Preservation bytes | "
+            "Bytes/event | B reads A | A reads B | B store proof | A store proof | "
+            "B next touch | A next touch | Frames | Last seq |"
+        )
+        lines.append("|---|---|---|---:|---:|---:|---|---|---|---|---|---|---:|---:|")
+        for row in pattern_rows[:10]:
+            lines.append(
+                f"| `{row.get('b_depth', '')}` | `{row.get('a_depth', '')}` | "
+                f"`{row.get('b_encoder', '')}->{row.get('a_encoder', '')}` | "
+                f"`{fmt(row.get('count'))}` | `{fmt(row.get('preservation_bytes'))}` | "
+                f"`{fmt(row.get('bytes_per_event'))}` | "
+                f"`{read_relation_text(row, 'b_reads_a_color', 'b_reads_a_depth')}` | "
+                f"`{read_relation_text(row, 'a_reads_b_color', 'a_reads_b_depth')}` | "
+                f"`{proof_text(row, 'b_color_proof', 'b_depth_proof')}` | "
+                f"`{proof_text(row, 'a_color_proof', 'a_depth_proof')}` | "
+                f"`{touch_distance_text(row, 'b_color_touch_distance', 'b_depth_touch_distance')}` | "
+                f"`{touch_distance_text(row, 'a_color_touch_distance', 'a_depth_touch_distance')}` | "
+                f"`{fmt(row.get('frames'))}` | "
+                f"`{fmt(row.get('last_seq'))}` |"
+            )
+        lines.append("")
+
+        lines.append("### Same-Key Re-entry Top A/B Pairs")
+        lines.append("")
+        lines.append(
+            "| A RT | A depth | B RT | B depth | Count | Preservation bytes | "
+            "B reads A | A reads B | B store proof | A store proof | "
+            "B next touch | A next touch | Frames | Last B->A seq/encoder |"
+        )
+        lines.append("|---|---|---|---|---:|---:|---|---|---|---|---|---|---:|---|")
+        for row in aggregate_rows[:10]:
+            last_b = f"{row.get('last_b_seq', '')}/{row.get('last_b_encoder', '')}"
+            last_a = f"{row.get('last_seq', '')}/{row.get('last_encoder', '')}"
+            last_path = f"{last_b}->{last_a}" if row.get("last_b_seq", "") else last_a
+            lines.append(
+                f"| `{row.get('a_rt', '')}` | `{row.get('a_depth', '')}` | "
+                f"`{row.get('b_rt', '')}` | `{row.get('b_depth', '')}` | "
+                f"`{fmt(row.get('count'))}` | `{fmt(row.get('preservation_bytes'))}` | "
+                f"`{read_relation_text(row, 'b_reads_a_color', 'b_reads_a_depth')}` | "
+                f"`{read_relation_text(row, 'a_reads_b_color', 'a_reads_b_depth')}` | "
+                f"`{proof_text(row, 'b_color_proof', 'b_depth_proof')}` | "
+                f"`{proof_text(row, 'a_color_proof', 'a_depth_proof')}` | "
+                f"`{touch_distance_text(row, 'b_color_touch_distance', 'b_depth_touch_distance')}` | "
+                f"`{touch_distance_text(row, 'a_color_touch_distance', 'a_depth_touch_distance')}` | "
+                f"`{fmt(row.get('frames'))}` | "
+                f"`{last_path}` |"
+            )
+        lines.append("")
+
     color_proof_total = sum(
         counters.get(key, 0)
         for key in RENDER_PASS_COLOR_PROOF_KEYS
@@ -2043,6 +3202,24 @@ def write_markdown(
         lines.append("|---|---:|")
         for key in ENCODER_SUM_KEYS:
             lines.append(f"| `{key}` | `{fmt(sum_key(encoders, key))}` |")
+        lines.append("")
+
+        pass_preservation_keys = (
+            "color_load_bytes",
+            "color_store_bytes",
+            "depth_load_bytes",
+            "depth_store_bytes",
+            "stencil_load_bytes",
+            "stencil_store_bytes",
+        )
+        pass_preservation_total = sum(sum_key(encoders, key) for key in pass_preservation_keys)
+        lines.append("## Encoder Pass Preservation Split")
+        lines.append("")
+        lines.append("| Metric | Sum | Share |")
+        lines.append("|---|---:|---:|")
+        for key in pass_preservation_keys:
+            value = sum_key(encoders, key)
+            lines.append(f"| `{key}` | `{fmt(value)}` | `{pct(value, pass_preservation_total)}` |")
         lines.append("")
 
         cbuf_total = sum_key(encoders, "argbuf_cbuf_bytes")
@@ -2479,13 +3656,19 @@ def main() -> int:
     encoder_csv = output.parent / "3dmark05-perf-encoders.csv"
     stream_csv = output.parent / "3dmark05-perf-encoder-streams.csv"
     probe_draw_csv = output.parent / "3dmark05-perf-indexed-probe-draws.csv"
+    render_pass_reentry_csv = output.parent / "3dmark05-perf-render-pass-reentry.csv"
+    frame_csv = output.parent / "3dmark05-perf-frames.csv"
     log_path = run_dir / "dxmt9.log"
     encoders, streams = parse_encoder_lines(log_path)
     probe_draws = parse_probe_draw_lines(log_path)
+    render_pass_reentry_rows = parse_render_pass_reentry_lines(log_path)
+    frame_rows = parse_frame_lines(log_path)
     if not log_path.exists():
         encoders = load_existing_csv(encoder_csv)
         streams = load_existing_csv(stream_csv)
         probe_draws = load_existing_csv(probe_draw_csv)
+        render_pass_reentry_rows = load_existing_csv(render_pass_reentry_csv)
+        frame_rows = load_existing_csv(frame_csv)
     enrich_encoder_rows(encoders)
     if log_path.exists() or not encoder_csv.exists():
         write_csv(encoder_csv, encoders, ENCODER_CSV_KEYS)
@@ -2493,6 +3676,10 @@ def main() -> int:
         write_csv(stream_csv, streams, STREAM_CSV_KEYS)
     if log_path.exists() or not probe_draw_csv.exists():
         write_csv(probe_draw_csv, probe_draws, PROBE_DRAW_CSV_KEYS)
+    if log_path.exists() or not render_pass_reentry_csv.exists():
+        write_csv(render_pass_reentry_csv, render_pass_reentry_rows, RENDER_PASS_REENTRY_CSV_KEYS)
+    if log_path.exists() or not frame_csv.exists():
+        write_csv(frame_csv, frame_rows, FRAME_CSV_KEYS)
     write_markdown(
         output,
         run_dir,
@@ -2503,6 +3690,10 @@ def main() -> int:
         stream_csv,
         probe_draws,
         probe_draw_csv,
+        render_pass_reentry_rows,
+        render_pass_reentry_csv,
+        frame_rows,
+        frame_csv,
     )
     print(output)
     return 0

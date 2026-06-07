@@ -550,7 +550,17 @@ bool probeForceTextureWhite() {
       probeForceTextureWhiteRows().enabled ||
       probeForceTextureWhiteClassFilter() !=
           IndexedTriangleClassFilter::Any ||
-      probeForceTextureWhiteClassFilters().count != 0;
+      probeForceTextureWhiteClassFilters().count != 0 ||
+      probeForceTextureWhiteTexture0Handle().has_value() ||
+      probeForceTextureWhiteTexture0Width().has_value() ||
+      probeForceTextureWhiteTexture0Height().has_value() ||
+      probeForceTextureWhiteTexture0Format().has_value() ||
+      drawOrdinalRangeEnabled(probeForceTextureWhiteDrawOrdinalRange()) ||
+      probeForceTextureWhiteDrawOrdinalList().enabled ||
+      drawOrdinalRangeEnabled(probeForceTextureWhiteCommandIndexRange()) ||
+      probeForceTextureWhiteCommandIndexList().enabled ||
+      drawOrdinalRangeEnabled(probeForceTextureWhiteCommandDrawIndexRange()) ||
+      probeForceTextureWhiteCommandDrawIndexList().enabled;
   return v;
 }
 
@@ -581,6 +591,69 @@ RenderEncoderSelectorList probeForceTextureWhiteRows() {
   return selectors;
 }
 
+std::optional<u64> probeForceTextureWhiteTexture0Handle() {
+  static const std::optional<u64> value =
+      util::getenvU64Auto("DXMT9_PROBE_FORCE_TEXTURE_WHITE_TEXTURE0");
+  return value;
+}
+
+std::optional<u64> probeForceTextureWhiteTexture0Width() {
+  static const std::optional<u64> value =
+      util::getenvU64Auto("DXMT9_PROBE_FORCE_TEXTURE_WHITE_TEXTURE0_WIDTH");
+  return value;
+}
+
+std::optional<u64> probeForceTextureWhiteTexture0Height() {
+  static const std::optional<u64> value =
+      util::getenvU64Auto("DXMT9_PROBE_FORCE_TEXTURE_WHITE_TEXTURE0_HEIGHT");
+  return value;
+}
+
+std::optional<u64> probeForceTextureWhiteTexture0Format() {
+  static const std::optional<u64> value =
+      util::getenvU64Auto("DXMT9_PROBE_FORCE_TEXTURE_WHITE_TEXTURE0_FORMAT");
+  return value;
+}
+
+DrawOrdinalRange probeForceTextureWhiteDrawOrdinalRange() {
+  static const DrawOrdinalRange range = makeDrawOrdinalRange(
+      util::getenvU64Auto("DXMT9_PROBE_FORCE_TEXTURE_WHITE_DRAW_ORDINAL_MIN"),
+      util::getenvU64Auto("DXMT9_PROBE_FORCE_TEXTURE_WHITE_DRAW_ORDINAL_MAX"));
+  return range;
+}
+
+DrawOrdinalList probeForceTextureWhiteDrawOrdinalList() {
+  static const DrawOrdinalList list = makeDrawOrdinalList(
+      util::getenvString("DXMT9_PROBE_FORCE_TEXTURE_WHITE_DRAW_ORDINALS"));
+  return list;
+}
+
+DrawOrdinalRange probeForceTextureWhiteCommandIndexRange() {
+  static const DrawOrdinalRange range = makeDrawOrdinalRange(
+      util::getenvU64Auto("DXMT9_PROBE_FORCE_TEXTURE_WHITE_COMMAND_INDEX_MIN"),
+      util::getenvU64Auto("DXMT9_PROBE_FORCE_TEXTURE_WHITE_COMMAND_INDEX_MAX"));
+  return range;
+}
+
+DrawOrdinalList probeForceTextureWhiteCommandIndexList() {
+  static const DrawOrdinalList list = makeDrawOrdinalList(
+      util::getenvString("DXMT9_PROBE_FORCE_TEXTURE_WHITE_COMMAND_INDEXES"));
+  return list;
+}
+
+DrawOrdinalRange probeForceTextureWhiteCommandDrawIndexRange() {
+  static const DrawOrdinalRange range = makeDrawOrdinalRange(
+      util::getenvU64Auto("DXMT9_PROBE_FORCE_TEXTURE_WHITE_COMMAND_DRAW_INDEX_MIN"),
+      util::getenvU64Auto("DXMT9_PROBE_FORCE_TEXTURE_WHITE_COMMAND_DRAW_INDEX_MAX"));
+  return range;
+}
+
+DrawOrdinalList probeForceTextureWhiteCommandDrawIndexList() {
+  static const DrawOrdinalList list = makeDrawOrdinalList(
+      util::getenvString("DXMT9_PROBE_FORCE_TEXTURE_WHITE_COMMAND_DRAW_INDEXES"));
+  return list;
+}
+
 bool probeDisableAlphaBlend() {
   static const bool v =
       util::getenvFlag("DXMT9_PROBE_DISABLE_ALPHA_BLEND") ||
@@ -588,7 +661,11 @@ bool probeDisableAlphaBlend() {
       probeDisableAlphaBlendRows().enabled ||
       probeDisableAlphaBlendClassFilter() !=
           IndexedTriangleClassFilter::Any ||
-      probeDisableAlphaBlendClassFilters().count != 0;
+      probeDisableAlphaBlendClassFilters().count != 0 ||
+      probeDisableAlphaBlendTexture0Handle().has_value() ||
+      probeDisableAlphaBlendTexture0Width().has_value() ||
+      probeDisableAlphaBlendTexture0Height().has_value() ||
+      probeDisableAlphaBlendTexture0Format().has_value();
   return v;
 }
 
@@ -617,6 +694,30 @@ RenderEncoderSelectorList probeDisableAlphaBlendRows() {
       makeRenderEncoderSelectorList(
           util::getenvString("DXMT9_PROBE_DISABLE_ALPHA_BLEND_ROWS"));
   return selectors;
+}
+
+std::optional<u64> probeDisableAlphaBlendTexture0Handle() {
+  static const std::optional<u64> value =
+      util::getenvU64Auto("DXMT9_PROBE_DISABLE_ALPHA_BLEND_TEXTURE0");
+  return value;
+}
+
+std::optional<u64> probeDisableAlphaBlendTexture0Width() {
+  static const std::optional<u64> value =
+      util::getenvU64Auto("DXMT9_PROBE_DISABLE_ALPHA_BLEND_TEXTURE0_WIDTH");
+  return value;
+}
+
+std::optional<u64> probeDisableAlphaBlendTexture0Height() {
+  static const std::optional<u64> value =
+      util::getenvU64Auto("DXMT9_PROBE_DISABLE_ALPHA_BLEND_TEXTURE0_HEIGHT");
+  return value;
+}
+
+std::optional<u64> probeDisableAlphaBlendTexture0Format() {
+  static const std::optional<u64> value =
+      util::getenvU64Auto("DXMT9_PROBE_DISABLE_ALPHA_BLEND_TEXTURE0_FORMAT");
+  return value;
 }
 
 bool probeDisableDepthWrite() {
@@ -652,7 +753,12 @@ RenderEncoderSelectorList probeDisableDepthWriteRows() {
 }
 
 bool probeDepthFuncAlways() {
-  static const bool v = util::getenvFlag("DXMT9_PROBE_DEPTH_FUNC_ALWAYS");
+  static const bool v =
+      util::getenvFlag("DXMT9_PROBE_DEPTH_FUNC_ALWAYS") ||
+      probeDepthFuncAlwaysTexture0Handle().has_value() ||
+      probeDepthFuncAlwaysTexture0Width().has_value() ||
+      probeDepthFuncAlwaysTexture0Height().has_value() ||
+      probeDepthFuncAlwaysTexture0Format().has_value();
   return v;
 }
 
@@ -681,6 +787,30 @@ RenderEncoderSelectorList probeDepthFuncAlwaysRows() {
       makeRenderEncoderSelectorList(
           util::getenvString("DXMT9_PROBE_DEPTH_FUNC_ALWAYS_ROWS"));
   return selectors;
+}
+
+std::optional<u64> probeDepthFuncAlwaysTexture0Handle() {
+  static const std::optional<u64> value =
+      util::getenvU64Auto("DXMT9_PROBE_DEPTH_FUNC_ALWAYS_TEXTURE0");
+  return value;
+}
+
+std::optional<u64> probeDepthFuncAlwaysTexture0Width() {
+  static const std::optional<u64> value =
+      util::getenvU64Auto("DXMT9_PROBE_DEPTH_FUNC_ALWAYS_TEXTURE0_WIDTH");
+  return value;
+}
+
+std::optional<u64> probeDepthFuncAlwaysTexture0Height() {
+  static const std::optional<u64> value =
+      util::getenvU64Auto("DXMT9_PROBE_DEPTH_FUNC_ALWAYS_TEXTURE0_HEIGHT");
+  return value;
+}
+
+std::optional<u64> probeDepthFuncAlwaysTexture0Format() {
+  static const std::optional<u64> value =
+      util::getenvU64Auto("DXMT9_PROBE_DEPTH_FUNC_ALWAYS_TEXTURE0_FORMAT");
+  return value;
 }
 
 bool probeFragmentlessDepthOnly() {
@@ -1178,6 +1308,30 @@ std::optional<u64> indexedGeometryDumpVertexShaderHash() {
 std::optional<u64> indexedGeometryDumpPixelShaderHash() {
   static const std::optional<u64> value =
       util::getenvU64Auto("DXMT9_DUMP_INDEXED_GEOMETRY_PS");
+  return value;
+}
+
+std::optional<u64> indexedGeometryDumpTexture0Handle() {
+  static const std::optional<u64> value =
+      util::getenvU64Auto("DXMT9_DUMP_INDEXED_GEOMETRY_TEXTURE0");
+  return value;
+}
+
+std::optional<u64> indexedGeometryDumpTexture0Width() {
+  static const std::optional<u64> value =
+      util::getenvU64Auto("DXMT9_DUMP_INDEXED_GEOMETRY_TEXTURE0_WIDTH");
+  return value;
+}
+
+std::optional<u64> indexedGeometryDumpTexture0Height() {
+  static const std::optional<u64> value =
+      util::getenvU64Auto("DXMT9_DUMP_INDEXED_GEOMETRY_TEXTURE0_HEIGHT");
+  return value;
+}
+
+std::optional<u64> indexedGeometryDumpTexture0Format() {
+  static const std::optional<u64> value =
+      util::getenvU64Auto("DXMT9_DUMP_INDEXED_GEOMETRY_TEXTURE0_FORMAT");
   return value;
 }
 

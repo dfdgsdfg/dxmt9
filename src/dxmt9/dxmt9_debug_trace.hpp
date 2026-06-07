@@ -195,6 +195,39 @@ RenderEncoderSelector probeForceTextureWhiteRow();
 // Env: DXMT9_PROBE_FORCE_TEXTURE_WHITE_ROWS.
 RenderEncoderSelectorList probeForceTextureWhiteRows();
 
+// Optional texture0 descriptor filter for DXMT9_PROBE_FORCE_TEXTURE_WHITE.
+// Values are ANDed in handle/width/height/format order.
+// Env: DXMT9_PROBE_FORCE_TEXTURE_WHITE_TEXTURE0(_WIDTH/_HEIGHT/_FORMAT).
+std::optional<u64> probeForceTextureWhiteTexture0Handle();
+std::optional<u64> probeForceTextureWhiteTexture0Width();
+std::optional<u64> probeForceTextureWhiteTexture0Height();
+std::optional<u64> probeForceTextureWhiteTexture0Format();
+
+// Optional per-process draw ordinal filters for DXMT9_PROBE_FORCE_TEXTURE_WHITE.
+// Unlike encoder_draw_index, draw ordinals are assigned before probe matching
+// and can isolate individual effect draws inside a render encoder.
+// Env: DXMT9_PROBE_FORCE_TEXTURE_WHITE_DRAW_ORDINAL_MIN/MAX and
+// DXMT9_PROBE_FORCE_TEXTURE_WHITE_DRAW_ORDINALS.
+DrawOrdinalRange probeForceTextureWhiteDrawOrdinalRange();
+DrawOrdinalList probeForceTextureWhiteDrawOrdinalList();
+
+// Optional command index filters for DXMT9_PROBE_FORCE_TEXTURE_WHITE.
+// command_index is the draw command slot inside the currently replayed chunk
+// and is more stable than global draw ordinal for frame-capture probes.
+// Env: DXMT9_PROBE_FORCE_TEXTURE_WHITE_COMMAND_INDEX_MIN/MAX and
+// DXMT9_PROBE_FORCE_TEXTURE_WHITE_COMMAND_INDEXES.
+DrawOrdinalRange probeForceTextureWhiteCommandIndexRange();
+DrawOrdinalList probeForceTextureWhiteCommandIndexList();
+
+// Optional command-local subdraw filters for DXMT9_PROBE_FORCE_TEXTURE_WHITE.
+// command_draw_index is the draw-run subdraw index reported by
+// dxmt9-effect-draw/geometry. It is stable when a replayed command expands
+// into multiple indexed draws with the same command_index.
+// Env: DXMT9_PROBE_FORCE_TEXTURE_WHITE_COMMAND_DRAW_INDEX_MIN/MAX and
+// DXMT9_PROBE_FORCE_TEXTURE_WHITE_COMMAND_DRAW_INDEXES.
+DrawOrdinalRange probeForceTextureWhiteCommandDrawIndexRange();
+DrawOrdinalList probeForceTextureWhiteCommandDrawIndexList();
+
 // Diagnostic render-state A/B: force color blending off while preserving
 // color-write masks. Env: DXMT9_PROBE_DISABLE_ALPHA_BLEND.
 bool probeDisableAlphaBlend();
@@ -216,6 +249,14 @@ RenderEncoderSelector probeDisableAlphaBlendRow();
 // Optional selector list for DXMT9_PROBE_DISABLE_ALPHA_BLEND.
 // Env: DXMT9_PROBE_DISABLE_ALPHA_BLEND_ROWS.
 RenderEncoderSelectorList probeDisableAlphaBlendRows();
+
+// Optional texture0 descriptor filter for DXMT9_PROBE_DISABLE_ALPHA_BLEND.
+// Values are ANDed in handle/width/height/format order.
+// Env: DXMT9_PROBE_DISABLE_ALPHA_BLEND_TEXTURE0(_WIDTH/_HEIGHT/_FORMAT).
+std::optional<u64> probeDisableAlphaBlendTexture0Handle();
+std::optional<u64> probeDisableAlphaBlendTexture0Width();
+std::optional<u64> probeDisableAlphaBlendTexture0Height();
+std::optional<u64> probeDisableAlphaBlendTexture0Format();
 
 // Diagnostic render-state A/B: keep depth testing but force depth writes off.
 // Env: DXMT9_PROBE_DISABLE_DEPTH_WRITE.
@@ -260,6 +301,14 @@ RenderEncoderSelector probeDepthFuncAlwaysRow();
 // Optional selector list for DXMT9_PROBE_DEPTH_FUNC_ALWAYS.
 // Env: DXMT9_PROBE_DEPTH_FUNC_ALWAYS_ROWS.
 RenderEncoderSelectorList probeDepthFuncAlwaysRows();
+
+// Optional texture0 descriptor filter for DXMT9_PROBE_DEPTH_FUNC_ALWAYS.
+// Values are ANDed in handle/width/height/format order.
+// Env: DXMT9_PROBE_DEPTH_FUNC_ALWAYS_TEXTURE0(_WIDTH/_HEIGHT/_FORMAT).
+std::optional<u64> probeDepthFuncAlwaysTexture0Handle();
+std::optional<u64> probeDepthFuncAlwaysTexture0Width();
+std::optional<u64> probeDepthFuncAlwaysTexture0Height();
+std::optional<u64> probeDepthFuncAlwaysTexture0Format();
 
 // Diagnostic backend-shape A/B: for selected depth-only indexed triangle-list
 // draws, request a render PSO with no fragment function. The encoder still
@@ -627,6 +676,18 @@ std::uint32_t indexedGeometryDumpMaxDraws();
 // Env: DXMT9_DUMP_INDEXED_GEOMETRY_VS / DXMT9_DUMP_INDEXED_GEOMETRY_PS.
 std::optional<u64> indexedGeometryDumpVertexShaderHash();
 std::optional<u64> indexedGeometryDumpPixelShaderHash();
+
+// Optional texture0 handle filter for indexed geometry payload dumping. Values
+// accept decimal or 0x-prefixed handles from probe draw CSV/log output.
+// Env: DXMT9_DUMP_INDEXED_GEOMETRY_TEXTURE0.
+std::optional<u64> indexedGeometryDumpTexture0Handle();
+
+// Optional texture0 descriptor filters for indexed geometry payload dumping.
+// These are stable when run-local object handles shift with resource creation
+// order. Env: DXMT9_DUMP_INDEXED_GEOMETRY_TEXTURE0_WIDTH/HEIGHT/FORMAT.
+std::optional<u64> indexedGeometryDumpTexture0Width();
+std::optional<u64> indexedGeometryDumpTexture0Height();
+std::optional<u64> indexedGeometryDumpTexture0Format();
 
 // Diagnostic-only: include real per-draw uniform payloads beside indexed
 // geometry dumps. Env: DXMT9_DUMP_INDEXED_GEOMETRY_CBUFS.

@@ -25,6 +25,7 @@
 #include <cstring>
 #include <limits>
 #include <utility>
+#include <vector>
 
 #if defined(__APPLE__)
 #include <pthread.h>
@@ -753,10 +754,16 @@ std::size_t drawRunPayloadBytes(
     }
     const std::size_t payloadAndBindingBytes =
         payloadBytes + payload.bindingOverrideData.size();
-    if (payloadAndBindingBytes > std::numeric_limits<std::size_t>::max() - bytes) {
+    if (payload.bindingSnapshotData.size() >
+        std::numeric_limits<std::size_t>::max() - payloadAndBindingBytes) {
       return std::numeric_limits<std::size_t>::max();
     }
-    bytes += payloadAndBindingBytes;
+    const std::size_t totalPayloadBytes =
+        payloadAndBindingBytes + payload.bindingSnapshotData.size();
+    if (totalPayloadBytes > std::numeric_limits<std::size_t>::max() - bytes) {
+      return std::numeric_limits<std::size_t>::max();
+    }
+    bytes += totalPayloadBytes;
   }
   return bytes;
 }
@@ -778,10 +785,16 @@ std::size_t drawRunSubmissionPayloadBytes(
     }
     const std::size_t payloadAndBindingBytes =
         payloadBytes + payload.bindingOverrideData.size();
-    if (payloadAndBindingBytes > std::numeric_limits<std::size_t>::max() - bytes) {
+    if (payload.bindingSnapshotData.size() >
+        std::numeric_limits<std::size_t>::max() - payloadAndBindingBytes) {
       return std::numeric_limits<std::size_t>::max();
     }
-    bytes += payloadAndBindingBytes;
+    const std::size_t totalPayloadBytes =
+        payloadAndBindingBytes + payload.bindingSnapshotData.size();
+    if (totalPayloadBytes > std::numeric_limits<std::size_t>::max() - bytes) {
+      return std::numeric_limits<std::size_t>::max();
+    }
+    bytes += totalPayloadBytes;
   }
   return bytes;
 }
@@ -803,24 +816,226 @@ void prepareDrawRunBatchBindingOverrides(
   }
 }
 
+core::DrawParamPayloadView drawPayloadAt(
+    std::span<const core::DrawParamPayloadView> payloads,
+    std::size_t index) noexcept {
+  return index < payloads.size() ? payloads[index] : core::DrawParamPayloadView{};
+}
+
+bool copyDrawBindingOverride(std::span<const core::u8> bytes,
+                             core::DrawBindingOverride& out) noexcept {
+  if (bytes.size() != sizeof(core::DrawBindingOverride)) {
+    out = {};
+    return false;
+  }
+  std::memcpy(&out, bytes.data(), sizeof(out));
+  return !core::drawBindingOverrideEmpty(out);
+}
+
+bool copyDrawBindingSnapshot(std::span<const core::u8> bytes,
+                             core::DrawBindingSnapshot& out) noexcept {
+  if (bytes.size() != sizeof(core::DrawBindingSnapshot)) {
+    out = {};
+    return false;
+  }
+  std::memcpy(&out, bytes.data(), sizeof(out));
+  return !core::drawBindingSnapshotEmpty(out);
+}
+
+void addDynamicBufferSnapshots(
+    resources::Pool& pool,
+    const core::FlatDrawStateRecord& hot,
+    const core::DrawParam& draw,
+    const core::DrawParamPayloadView& payload,
+    core::DrawBindingSnapshot& out,
+    bool& addedSnapshots) {
+  std::array<core::Handle, core::kMaxStreams> streamBuffers = hot.streamBuffers;
+  std::array<core::u32, core::kMaxStreams> streamOffsets = hot.streamOffsets;
+  std::array<core::u32, core::kMaxStreams> streamStrides = hot.streamStrides;
+  core::Handle indexBuffer = hot.indexBuffer;
+  core::IndexType indexType = draw.indexType;
+
+  core::DrawBindingOverride existing{};
+  copyDrawBindingOverride(payload.bindingOverrideData, existing);
+  out = {};
+
+  for (core::u32 stream = 0; stream < core::kMaxStreams; ++stream) {
+    if ((existing.streamMask & (1u << stream)) == 0u) {
+      continue;
+    }
+    streamBuffers[stream] = existing.streams[stream].buffer;
+    streamOffsets[stream] = existing.streams[stream].offset;
+    streamStrides[stream] = existing.streams[stream].stride;
+  }
+  if (existing.indexBufferValid) {
+    indexBuffer = existing.indexBuffer;
+    indexType = existing.indexType;
+  }
+
+  for (core::u32 stream = 0; stream < core::kMaxStreams; ++stream) {
+    if (!streamBuffers[stream]) {
+      continue;
+    }
+    const auto snapshot = pool.snapshotBufferBinding(streamBuffers[stream]);
+    if (!snapshot.valid()) {
+      continue;
+    }
+    out.streamMask |= 1u << stream;
+    out.streams[stream].buffer = streamBuffers[stream];
+    out.streams[stream].offset = streamOffsets[stream];
+    out.streams[stream].stride = streamStrides[stream];
+    out.streams[stream].snapshot = snapshot;
+    addedSnapshots = true;
+  }
+
+  if (draw.indexed && indexBuffer) {
+    const auto snapshot = pool.snapshotBufferBinding(indexBuffer);
+    if (snapshot.valid()) {
+      out.indexBuffer = indexBuffer;
+      out.indexType = indexType;
+      out.indexSnapshot = snapshot;
+      out.indexSnapshotValid = true;
+      addedSnapshots = true;
+    }
+  }
+}
+
+std::span<const core::DrawParamPayloadView> snapshotDrawRunBindingPayloads(
+    resources::Pool& pool,
+    const core::FlatDrawStateRecord& hot,
+    std::span<const core::DrawParam> draws,
+    std::span<const core::DrawParamPayloadView> payloads,
+    std::vector<core::DrawBindingSnapshot>& bindingSnapshots,
+    std::vector<core::DrawParamPayloadView>& snapshotPayloads) {
+  bindingSnapshots.clear();
+  snapshotPayloads.clear();
+  bindingSnapshots.reserve(draws.size());
+  snapshotPayloads.reserve(draws.size());
+
+  bool anyPayloadChanged = false;
+  for (std::size_t i = 0; i < draws.size(); ++i) {
+    const auto payload = drawPayloadAt(payloads, i);
+    core::DrawBindingSnapshot snapshot{};
+    bool addedSnapshots = false;
+    addDynamicBufferSnapshots(pool, hot, draws[i], payload, snapshot, addedSnapshots);
+    if (addedSnapshots) {
+      bindingSnapshots.push_back(snapshot);
+      snapshotPayloads.push_back(core::DrawParamPayloadView{
+          .userVertexData = payload.userVertexData,
+          .userIndexData = payload.userIndexData,
+          .bindingOverrideData = payload.bindingOverrideData,
+          .bindingSnapshotData = core::drawBindingSnapshotBytes(bindingSnapshots.back()),
+      });
+      anyPayloadChanged = true;
+    } else {
+      snapshotPayloads.push_back(payload);
+    }
+  }
+
+  if (!anyPayloadChanged) {
+    bindingSnapshots.clear();
+    snapshotPayloads.clear();
+    return payloads;
+  }
+  return snapshotPayloads;
+}
+
+void snapshotDrawSubmissionBindingPayloads(
+    resources::Pool& pool,
+    std::span<core::DrawRunSubmission> submissions,
+    std::vector<core::DrawBindingSnapshot>& bindingSnapshots) {
+  bindingSnapshots.clear();
+  bindingSnapshots.reserve(submissions.size());
+
+  for (auto& submission : submissions) {
+    core::DrawParamPayloadView payload = submission.payload;
+    core::DrawBindingSnapshot snapshot{};
+    bool addedSnapshots = false;
+    addDynamicBufferSnapshots(pool,
+                              submission.state.hot,
+                              submission.draw,
+                              payload,
+                              snapshot,
+                              addedSnapshots);
+    if (!addedSnapshots) {
+      continue;
+    }
+    bindingSnapshots.push_back(snapshot);
+    submission.payload.bindingSnapshotData =
+        core::drawBindingSnapshotBytes(bindingSnapshots.back());
+  }
+}
+
+void markDrawBindingOverrideResource(resources::Pool& pool,
+                                     const core::DrawBindingOverride& binding,
+                                     std::uint64_t seqId) {
+  for (std::uint32_t stream = 0; stream < core::kMaxStreams; ++stream) {
+    if ((binding.streamMask & (1u << stream)) == 0) {
+      continue;
+    }
+    pool.markBufferUse(binding.streams[stream].buffer, seqId);
+  }
+  if (binding.indexBufferValid) {
+    pool.markBufferUse(binding.indexBuffer, seqId);
+  }
+}
+
+void markDrawBindingSnapshotResource(resources::Pool& pool,
+                                     const core::DrawBindingSnapshot& binding,
+                                     std::uint64_t seqId) {
+  for (std::uint32_t stream = 0; stream < core::kMaxStreams; ++stream) {
+    if ((binding.streamMask & (1u << stream)) == 0) {
+      continue;
+    }
+    pool.markBufferSnapshotUse(binding.streams[stream].buffer,
+                               binding.streams[stream].snapshot,
+                               seqId);
+  }
+  if (binding.indexSnapshotValid) {
+    pool.markBufferSnapshotUse(binding.indexBuffer,
+                               binding.indexSnapshot,
+                               seqId);
+  }
+}
+
 void markDrawBindingOverrideResources(
     resources::Pool& pool,
     std::span<const core::DrawParamPayloadView> payloads,
     std::uint64_t seqId) {
   for (const auto& payload : payloads) {
-    if (payload.bindingOverrideData.size() != sizeof(core::DrawBindingOverride)) {
+    if (payload.bindingOverrideData.size() == sizeof(core::DrawBindingOverride)) {
+      core::DrawBindingOverride binding{};
+      std::memcpy(&binding, payload.bindingOverrideData.data(), sizeof(binding));
+      markDrawBindingOverrideResource(pool, binding, seqId);
+    }
+    if (payload.bindingSnapshotData.size() == sizeof(core::DrawBindingSnapshot)) {
+      core::DrawBindingSnapshot snapshot{};
+      if (copyDrawBindingSnapshot(payload.bindingSnapshotData, snapshot)) {
+        markDrawBindingSnapshotResource(pool, snapshot, seqId);
+      }
+    }
+  }
+}
+
+void markDrawRunPayloadResources(resources::Pool& pool,
+                                 const core::MetalCommandView& command,
+                                 std::uint64_t seqId) {
+  const auto arena = core::drawRunPayloadBytes(command);
+  for (const auto& param : command.drawParams) {
+    const auto bytes = core::drawRunPayloadBytes(param.bindingOverrideRange, arena);
+    if (bytes.size() == sizeof(core::DrawBindingOverride)) {
+      core::DrawBindingOverride binding{};
+      std::memcpy(&binding, bytes.data(), sizeof(binding));
+      markDrawBindingOverrideResource(pool, binding, seqId);
+    }
+    const auto snapshotBytes =
+        core::drawRunPayloadBytes(param.bindingSnapshotRange, arena);
+    if (snapshotBytes.size() != sizeof(core::DrawBindingSnapshot)) {
       continue;
     }
-    core::DrawBindingOverride binding{};
-    std::memcpy(&binding, payload.bindingOverrideData.data(), sizeof(binding));
-    for (std::uint32_t stream = 0; stream < core::kMaxStreams; ++stream) {
-      if ((binding.streamMask & (1u << stream)) == 0) {
-        continue;
-      }
-      pool.markBufferUse(binding.streams[stream].buffer, seqId);
-    }
-    if (binding.indexBufferValid) {
-      pool.markBufferUse(binding.indexBuffer, seqId);
+    core::DrawBindingSnapshot snapshot{};
+    if (copyDrawBindingSnapshot(snapshotBytes, snapshot)) {
+      markDrawBindingSnapshotResource(pool, snapshot, seqId);
     }
   }
 }
@@ -894,6 +1109,7 @@ void markSlotResourcesUnlocked(resources::Pool& pool, const core::ChunkSlot& slo
     switch (command.kind) {
       case core::MetalCommandKind::DrawRun:
         if (command.drawState.hot) pool.markDrawResources(*command.drawState.hot, slot.seqId);
+        markDrawRunPayloadResources(pool, command, slot.seqId);
         break;
       case core::MetalCommandKind::Clear:
         if (command.clear) pool.markClearResources(*command.clear, slot.seqId);
@@ -1033,17 +1249,28 @@ void CommandQueue::submitDrawRun(core::CanonicalDrawState state,
     perf::countSubmitDraw();
   }
   PerfScope scope(perf::countSubmitDrawCpuTime);
-  const std::size_t pendingPayloadBytes = drawRunPayloadBytes(draws, payloads);
   std::unique_lock lock(mutex_);
+  std::vector<core::DrawBindingSnapshot> bindingSnapshots;
+  std::vector<core::DrawParamPayloadView> snapshotPayloads;
+  const auto effectivePayloads =
+      snapshotDrawRunBindingPayloads(pool_,
+                                     state.hot,
+                                     draws,
+                                     payloads,
+                                     bindingSnapshots,
+                                     snapshotPayloads);
+  const std::size_t pendingPayloadBytes =
+      drawRunPayloadBytes(draws, effectivePayloads);
   ensureWritingSlotUnlocked(*this, lock);
   maybeCommitDrawPayloadArenaUnlocked(*this, pool_, lock, pendingPayloadBytes);
   if (!skipDrawResourceMarking_ || forceDrawResourceMarkingAfterSplit_) {
     const std::uint64_t seqId = seqIdForMark(*this, 0);
     pool_.markDrawResources(state.hot, seqId);
-    markDrawBindingOverrideResources(pool_, payloads, seqId);
+    markDrawBindingOverrideResources(pool_, effectivePayloads, seqId);
   }
   currentBackBuffer_ = state.hot.colorAttachments[0].handle;
-  currentSlotUnlocked(*this).appendDrawRun(std::move(state), uniforms, draws, payloads);
+  currentSlotUnlocked(*this).appendDrawRun(
+      std::move(state), uniforms, draws, effectivePayloads);
   (void)maybeCommitDrawChunkUnlocked(*this, pool_, lock);
 }
 
@@ -1067,6 +1294,8 @@ void CommandQueue::submitDrawRunBatch(
     }
     auto batch = submissions.subspan(batchStart, batchEnd - batchStart);
     prepareDrawRunBatchBindingOverrides(batch);
+    std::vector<core::DrawBindingSnapshot> bindingSnapshots;
+    snapshotDrawSubmissionBindingPayloads(pool_, batch, bindingSnapshots);
     const std::size_t pendingPayloadBytes = drawRunSubmissionPayloadBytes(batch);
     ensureWritingSlotUnlocked(*this, lock);
     maybeCommitDrawPayloadArenaUnlocked(*this, pool_, lock, pendingPayloadBytes);
@@ -1074,7 +1303,8 @@ void CommandQueue::submitDrawRunBatch(
       std::span<const core::DrawParamPayloadView> payloads{};
       if (!submission.payload.userVertexData.empty() ||
           !submission.payload.userIndexData.empty() ||
-          !submission.payload.bindingOverrideData.empty()) {
+          !submission.payload.bindingOverrideData.empty() ||
+          !submission.payload.bindingSnapshotData.empty()) {
         payloads = std::span<const core::DrawParamPayloadView>(&submission.payload, 1);
       }
       if (!skipDrawResourceMarking_ || forceDrawResourceMarkingAfterSplit_) {

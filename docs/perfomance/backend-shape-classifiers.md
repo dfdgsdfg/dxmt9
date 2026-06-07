@@ -36,7 +36,7 @@ bucket substantially, and forced **indexed expansion** nearly doubled it
 | H13 | Hidden writes are coupled to fragment visibility | rejected (VS write +0.042 MiB, GPU +5.13%) | [[backend-shape-classifiers-visible.01]] |
 | H14 | Indexed-submission pressure drives the bucket | confirmed (expand: GPU +87.74%, VS write +98.10%) — keep indexed path | [[backend-shape-classifiers-expand.01]] |
 | H15 | Alpha-test discard owns the bucket / force-frag delta | rejected (GPU +1.72%, VS write +0.00%) | [[backend-shape-classifiers-alphatest.01]] |
-| H16 | Rifle muzzle fire correctness changes perf interpretation | visual bug open; perf impact narrowed because observed tiny effect candidates are not proven rifle fire and are not dominant | [[backend-shape-classifiers-alpha.04]] |
+| H16 | Rifle muzzle fire correctness changes perf interpretation | visual-positive/perf-coupled. The public `01:05` oracle shows several rifle shots as compact barrel-attached round white/yellow bloom discs. Current split-payload artifacts reproduce that shape; same-run geometry promotes `0x80`, and after-draw color history confirms the two-triangle `0x80` sprite as the local writer (`seq=1094`, post-split `enc=3/draw=0/cmd=320`, `bright=706`, `white=196`, `warm=909` in the candidate ROI). `0x7f/0x75` remain broad/non-local for that target. This resolves the visual writer for the wide infantry scene, but not the main FPS owner: skipped/error/hazard/map-wait counters stay zero, while RT/depth/clear/present pass churn and Xcode GPU-counter proof remain open | [[backend-shape-classifiers-alpha.04]], [[baselines-frame60.03]] |
 
 ## Verification methods
 
@@ -157,14 +157,29 @@ correctness-preserving lever found is reducing VS invocations via index-cache
 locality. Nothing here is open as a primary fix; the residual work is on the
 locality / primitive axes, not state toggles.
 
-The rifle muzzle fire observation adds a separate semantic gate. The effect is
-still visually absent. It does not currently explain low FPS: the observed tiny
-effect candidates are submitted/sample-visible, not proven to be the missing
-rifle fire, and not a dominant limiter. Current FPS may still be slightly
-optimistic if a future correctness fix adds a truly missing draw. The
-alpha/effect counters, visibility scout, and final-color proof in
-[[backend-shape-classifiers-alpha.04]] must be used before treating GT1 FPS as a
-final visual-correct workload. This gate has priority over more Xcode
+The rifle muzzle fire observation adds a separate semantic gate. It is no
+longer best described as globally absent: the `01:05` external oracle shows
+compact barrel-attached discs, the split-payload path reproduces that public
+round rifle-bloom shape in the wide infantry window, and a current same-run
+capture/effect-geometry pass ties the cleanest local component to `0x80`;
+same-run after-draw color history then confirms the adjacent two-triangle
+`0x80` sprite as the local writer after the diagnostic split moves it to
+`seq=1094/enc=3/draw=0/cmd=320`. The older `0x7f/0x75` fire-atlas/tracer
+hypothesis remains useful only when it survives a local bbox gate; for the
+current positive component it does not. The direct
+`1094/2/cmd319` force-white replay missed the selector and drifted to the
+machine-gun close-up, while the color-history run shows why `enc` gates are
+fragile: after-draw dump itself splits the encoder before the adjacent bloom
+draw. This still does not explain low FPS by itself. The confirmed writer is a
+small two-triangle local sprite; skipped draw, Metal command-buffer error,
+hazard-split, and map-buffer wait counters are quiet, while RT/depth/clear/
+present pass churn and completion/present pacing remain open.
+Current FPS may still be slightly optimistic if a future correctness fix adds
+missing work; it may also be pessimistic if wrong pass/blend/order/load-store
+paths are doing extra overwrite or preservation work. The alpha/effect counters,
+visibility scout, same-run geometry gate, and eventual Xcode final-color/counter
+proof in [[backend-shape-classifiers-alpha.04]] must be used before treating GT1
+FPS as a final visual-correct workload. This gate has priority over more Xcode
 performance proof on this branch because previous large white bloom mistakes
 were performance-significant.
 

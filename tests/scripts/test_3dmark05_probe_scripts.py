@@ -102,6 +102,106 @@ class ThreeDMark05ProbeScriptTests(unittest.TestCase):
         cmd_line = next(line for line in result.stdout.splitlines() if line.startswith("cmd:"))
         self.assertIn("--timeout 10", cmd_line)
 
+    def test_wrapper_dry_run_includes_capture_delay_override(self) -> None:
+        result = self.run_script(
+            RUN_WRAPPER,
+            "--suffix",
+            "capture-delay",
+            "--no-gputrace",
+            "--capture-delay-sec",
+            "50",
+            "--dry-run",
+        )
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("capture_delay_sec: 50", result.stdout)
+        cmd_line = next(line for line in result.stdout.splitlines() if line.startswith("cmd:"))
+        self.assertIn("--capture-delay-sec 50", cmd_line)
+
+    def test_wrapper_rejects_invalid_capture_delay_override(self) -> None:
+        result = self.run_script(
+            RUN_WRAPPER,
+            "--no-gputrace",
+            "--capture-delay-sec",
+            "bad",
+            "--dry-run",
+        )
+
+        self.assertEqual(result.returncode, 2)
+        self.assertIn("--capture-delay-sec must be non-negative numeric seconds", result.stderr)
+
+    def test_wrapper_dry_run_includes_internal_capture_range(self) -> None:
+        result = self.run_script(
+            RUN_WRAPPER,
+            "--suffix",
+            "capture-range",
+            "--no-gputrace",
+            "--capture-range",
+            "820:900:20",
+            "--dry-run",
+        )
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("capture_range: 820:900:20", result.stdout)
+        self.assertIn(
+            "traces/app-d3d9-3dmark05-capture-range/analysis/captures",
+            result.stdout,
+        )
+        self.assertIn("DXMT_CAPTURE_RANGE=820:900:20", result.stdout)
+        self.assertIn(
+            "DXMT_EXPERIMENT_CAPTURE_DIR=/Users/dididi/workspaces/dxmt9/"
+            "traces/app-d3d9-3dmark05-capture-range/analysis/captures",
+            result.stdout,
+        )
+
+    def test_wrapper_dry_run_includes_internal_capture_frames_and_dir(self) -> None:
+        result = self.run_script(
+            RUN_WRAPPER,
+            "--suffix",
+            "capture-frames",
+            "--no-gputrace",
+            "--capture-frames",
+            "820,840,860",
+            "--capture-dir",
+            "traces/custom-captures",
+            "--dry-run",
+        )
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("capture_frames: 820,840,860", result.stdout)
+        self.assertIn(
+            "DXMT_CAPTURE_FRAMES=820\\,840\\,860",
+            result.stdout,
+        )
+        self.assertIn(
+            "DXMT_EXPERIMENT_CAPTURE_DIR=/Users/dididi/workspaces/dxmt9/traces/custom-captures",
+            result.stdout,
+        )
+
+    def test_wrapper_rejects_invalid_internal_capture_range(self) -> None:
+        result = self.run_script(
+            RUN_WRAPPER,
+            "--no-gputrace",
+            "--capture-range",
+            "820-900",
+            "--dry-run",
+        )
+
+        self.assertEqual(result.returncode, 2)
+        self.assertIn("--capture-range must be START:END[:STEP]", result.stderr)
+
+    def test_wrapper_rejects_invalid_internal_capture_frames(self) -> None:
+        result = self.run_script(
+            RUN_WRAPPER,
+            "--no-gputrace",
+            "--capture-frames",
+            "820,bad",
+            "--dry-run",
+        )
+
+        self.assertEqual(result.returncode, 2)
+        self.assertIn("--capture-frames must be", result.stderr)
+
     def test_wrapper_rejects_invalid_top_level_watchdog_slack(self) -> None:
         result = self.run_script(
             RUN_WRAPPER,
@@ -1490,6 +1590,14 @@ class ThreeDMark05ProbeScriptTests(unittest.TestCase):
             "0x7836c3b4c98a465b",
             "--dump-indexed-geometry-ps",
             "0x11cc89f85cc54054",
+            "--dump-indexed-geometry-texture0",
+            "0x200000100000081",
+            "--dump-indexed-geometry-texture0-width",
+            "512",
+            "--dump-indexed-geometry-texture0-height",
+            "64",
+            "--dump-indexed-geometry-texture0-format",
+            "2",
             "--probe-reverse-indexed-triangles-rows",
             "60/0,60/1",
             "--dry-run",
@@ -1516,6 +1624,13 @@ class ThreeDMark05ProbeScriptTests(unittest.TestCase):
             "DXMT9_DUMP_INDEXED_GEOMETRY_PS=0x11cc89f85cc54054",
             result.stdout,
         )
+        self.assertIn(
+            "DXMT9_DUMP_INDEXED_GEOMETRY_TEXTURE0=0x200000100000081",
+            result.stdout,
+        )
+        self.assertIn("DXMT9_DUMP_INDEXED_GEOMETRY_TEXTURE0_WIDTH=512", result.stdout)
+        self.assertIn("DXMT9_DUMP_INDEXED_GEOMETRY_TEXTURE0_HEIGHT=64", result.stdout)
+        self.assertIn("DXMT9_DUMP_INDEXED_GEOMETRY_TEXTURE0_FORMAT=2", result.stdout)
         self.assertIn(
             "DXMT9_PROBE_REVERSE_INDEXED_TRIANGLES_ROWS=60/0\\,60/1",
             result.stdout,
@@ -1574,6 +1689,222 @@ class ThreeDMark05ProbeScriptTests(unittest.TestCase):
         self.assertIn(f"depth_attachment_dump: {depth_path}", result.stdout)
         self.assertIn(f"DXMT9_DUMP_DEPTH_ATTACHMENT_PATH={depth_path}", result.stdout)
 
+    def test_wrapper_dry_run_includes_color_attachment_dump_env(self) -> None:
+        color_path = REPO_ROOT / "traces/color-sidecar/analysis/color.bin"
+
+        result = self.run_script(
+            RUN_WRAPPER,
+            "--suffix",
+            "color-sidecar",
+            "--frame",
+            "50",
+            "--no-gputrace",
+            "--dump-color-attachment-handle",
+            "0x30000900000000b",
+            "--dump-color-attachment-seq",
+            "50",
+            "--dump-color-attachment-enc",
+            "2",
+            "--dump-color-attachment-path",
+            "traces/color-sidecar/analysis/color.bin",
+            "--dry-run",
+        )
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn(f"color_attachment_dump: {color_path}", result.stdout)
+        self.assertIn(
+            "DXMT9_DUMP_COLOR_ATTACHMENT_HANDLE=0x30000900000000b",
+            result.stdout,
+        )
+        self.assertIn(f"DXMT9_DUMP_COLOR_ATTACHMENT_PATH={color_path}", result.stdout)
+        self.assertIn("DXMT9_DUMP_COLOR_ATTACHMENT_SEQ=50", result.stdout)
+        self.assertIn("DXMT9_DUMP_COLOR_ATTACHMENT_ENC=2", result.stdout)
+
+    def test_wrapper_dry_run_defaults_color_attachment_dump_path(self) -> None:
+        color_path = (
+            REPO_ROOT
+            / "traces/app-d3d9-3dmark05-color-default/analysis/frame50-color.bin"
+        )
+
+        result = self.run_script(
+            RUN_WRAPPER,
+            "--suffix",
+            "color-default",
+            "--frame",
+            "50",
+            "--no-gputrace",
+            "--dump-color-attachment-handle",
+            "0x30000900000000b",
+            "--dry-run",
+        )
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn(f"color_attachment_dump: {color_path}", result.stdout)
+        self.assertIn(f"DXMT9_DUMP_COLOR_ATTACHMENT_PATH={color_path}", result.stdout)
+
+    def test_wrapper_dry_run_defaults_color_attachment_index_without_handle(self) -> None:
+        color_path = (
+            REPO_ROOT
+            / "traces/app-d3d9-3dmark05-color-index-default/analysis/frame50-color.bin"
+        )
+
+        result = self.run_script(
+            RUN_WRAPPER,
+            "--suffix",
+            "color-index-default",
+            "--frame",
+            "50",
+            "--no-gputrace",
+            "--dump-color-attachment-seq",
+            "50",
+            "--dump-color-attachment-enc",
+            "2",
+            "--dry-run",
+        )
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn(f"color_attachment_dump: {color_path}", result.stdout)
+        self.assertIn("DXMT9_DUMP_COLOR_ATTACHMENT_INDEX=0", result.stdout)
+        self.assertIn("DXMT9_DUMP_COLOR_ATTACHMENT_SEQ=50", result.stdout)
+        self.assertIn("DXMT9_DUMP_COLOR_ATTACHMENT_ENC=2", result.stdout)
+
+    def test_wrapper_dry_run_includes_color_attachment_after_draw_env(self) -> None:
+        color_path = REPO_ROOT / "traces/color-after-draw/analysis/color.bin"
+
+        result = self.run_script(
+            RUN_WRAPPER,
+            "--suffix",
+            "color-after-draw",
+            "--frame",
+            "517",
+            "--no-gputrace",
+            "--dump-color-attachment-seq",
+            "517",
+            "--dump-color-attachment-enc",
+            "2",
+            "--dump-color-attachment-after-draw",
+            "--dump-color-attachment-draw",
+            "272",
+            "--dump-color-attachment-texture0",
+            "0x200000100000077",
+            "--dump-color-attachment-path",
+            "traces/color-after-draw/analysis/color.bin",
+            "--dry-run",
+        )
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn(f"color_attachment_dump: {color_path}", result.stdout)
+        self.assertIn(f"DXMT9_DUMP_COLOR_ATTACHMENT_PATH={color_path}", result.stdout)
+        self.assertIn("DXMT9_DUMP_COLOR_ATTACHMENT_INDEX=0", result.stdout)
+        self.assertIn("DXMT9_DUMP_COLOR_ATTACHMENT_SEQ=517", result.stdout)
+        self.assertIn("DXMT9_DUMP_COLOR_ATTACHMENT_ENC=2", result.stdout)
+        self.assertIn("DXMT9_DUMP_COLOR_ATTACHMENT_AFTER_DRAW=1", result.stdout)
+        self.assertIn("DXMT9_DUMP_COLOR_ATTACHMENT_DRAW=272", result.stdout)
+        self.assertIn(
+            "DXMT9_DUMP_COLOR_ATTACHMENT_TEXTURE0=0x200000100000077",
+            result.stdout,
+        )
+
+    def test_wrapper_dry_run_includes_color_attachment_after_draws_dir_env(self) -> None:
+        color_dir = REPO_ROOT / "traces/color-history/analysis/color-history"
+
+        result = self.run_script(
+            RUN_WRAPPER,
+            "--suffix",
+            "color-history",
+            "--frame",
+            "517",
+            "--no-gputrace",
+            "--dump-color-attachment-seq",
+            "517",
+            "--dump-color-attachment-enc",
+            "2",
+            "--dump-color-attachment-after-draw",
+            "--dump-color-attachment-draws",
+            "272,273,274",
+            "--dump-color-attachment-texture0",
+            "0x200000100000077",
+            "--dump-color-attachment-dir",
+            "traces/color-history/analysis/color-history",
+            "--dry-run",
+        )
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn(f"color_attachment_dump_dir: {color_dir}", result.stdout)
+        self.assertIn(f"DXMT9_DUMP_COLOR_ATTACHMENT_DIR={color_dir}", result.stdout)
+        self.assertIn("DXMT9_DUMP_COLOR_ATTACHMENT_INDEX=0", result.stdout)
+        self.assertIn("DXMT9_DUMP_COLOR_ATTACHMENT_SEQ=517", result.stdout)
+        self.assertIn("DXMT9_DUMP_COLOR_ATTACHMENT_ENC=2", result.stdout)
+        self.assertIn("DXMT9_DUMP_COLOR_ATTACHMENT_AFTER_DRAW=1", result.stdout)
+        self.assertIn("DXMT9_DUMP_COLOR_ATTACHMENT_DRAWS=272\\,273\\,274", result.stdout)
+        self.assertIn(
+            "DXMT9_DUMP_COLOR_ATTACHMENT_TEXTURE0=0x200000100000077",
+            result.stdout,
+        )
+
+    def test_wrapper_dry_run_includes_color_attachment_command_index_range_env(self) -> None:
+        color_dir = REPO_ROOT / "traces/color-command-history/analysis/color-history"
+
+        result = self.run_script(
+            RUN_WRAPPER,
+            "--suffix",
+            "color-command-history",
+            "--frame",
+            "517",
+            "--no-gputrace",
+            "--dump-color-attachment-seq",
+            "517",
+            "--dump-color-attachment-after-draw",
+            "--dump-color-attachment-command-index-min",
+            "293",
+            "--dump-color-attachment-command-index-max",
+            "330",
+            "--dump-color-attachment-dir",
+            "traces/color-command-history/analysis/color-history",
+            "--dry-run",
+        )
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn(f"color_attachment_dump_dir: {color_dir}", result.stdout)
+        self.assertIn(f"DXMT9_DUMP_COLOR_ATTACHMENT_DIR={color_dir}", result.stdout)
+        self.assertIn("DXMT9_DUMP_COLOR_ATTACHMENT_INDEX=0", result.stdout)
+        self.assertIn("DXMT9_DUMP_COLOR_ATTACHMENT_SEQ=517", result.stdout)
+        self.assertIn("DXMT9_DUMP_COLOR_ATTACHMENT_AFTER_DRAW=1", result.stdout)
+        self.assertIn("DXMT9_DUMP_COLOR_ATTACHMENT_COMMAND_INDEX_MIN=293", result.stdout)
+        self.assertIn("DXMT9_DUMP_COLOR_ATTACHMENT_COMMAND_INDEX_MAX=330", result.stdout)
+
+    def test_wrapper_dry_run_includes_color_attachment_texture0s_dir_env(self) -> None:
+        color_dir = REPO_ROOT / "traces/color-texture-history/analysis/color-history"
+
+        result = self.run_script(
+            RUN_WRAPPER,
+            "--suffix",
+            "color-texture-history",
+            "--frame",
+            "517",
+            "--no-gputrace",
+            "--dump-color-attachment-seq",
+            "517",
+            "--dump-color-attachment-after-draw",
+            "--dump-color-attachment-texture0s",
+            "0x200000100000077,0x200000100000080",
+            "--dump-color-attachment-dir",
+            "traces/color-texture-history/analysis/color-history",
+            "--dry-run",
+        )
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn(f"color_attachment_dump_dir: {color_dir}", result.stdout)
+        self.assertIn(f"DXMT9_DUMP_COLOR_ATTACHMENT_DIR={color_dir}", result.stdout)
+        self.assertIn("DXMT9_DUMP_COLOR_ATTACHMENT_INDEX=0", result.stdout)
+        self.assertIn("DXMT9_DUMP_COLOR_ATTACHMENT_SEQ=517", result.stdout)
+        self.assertIn("DXMT9_PERF_ENCODER_BREAKDOWN_SEQ=517", result.stdout)
+        self.assertIn("DXMT9_DUMP_COLOR_ATTACHMENT_AFTER_DRAW=1", result.stdout)
+        self.assertIn(
+            "DXMT9_DUMP_COLOR_ATTACHMENT_TEXTURE0S=0x200000100000077\\,0x200000100000080",
+            result.stdout,
+        )
+
     def test_wrapper_dry_run_includes_draw_texture_dump_env(self) -> None:
         texture_dir = REPO_ROOT / "traces/texture-sidecar/analysis/textures"
 
@@ -1627,6 +1958,69 @@ class ThreeDMark05ProbeScriptTests(unittest.TestCase):
         self.assertIn(f"draw_texture_dump_dir: {texture_dir}", result.stdout)
         self.assertIn(f"DXMT9_DUMP_DRAW_TEXTURE_DIR={texture_dir}", result.stdout)
 
+    def test_wrapper_dry_run_includes_draw_texture_descriptor_dump_env(self) -> None:
+        texture_dir = (
+            REPO_ROOT
+            / "traces/app-d3d9-3dmark05-texture-desc/analysis/textures"
+        )
+
+        result = self.run_script(
+            RUN_WRAPPER,
+            "--suffix",
+            "texture-desc",
+            "--frame",
+            "506",
+            "--no-gputrace",
+            "--dump-draw-texture0-width",
+            "512",
+            "--dump-draw-texture0-height",
+            "64",
+            "--dump-draw-texture0-format",
+            "2",
+            "--dump-draw-texture-seq",
+            "506",
+            "--dump-draw-texture-enc",
+            "4",
+            "--dry-run",
+        )
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn(f"draw_texture_dump_dir: {texture_dir}", result.stdout)
+        self.assertIn(f"DXMT9_DUMP_DRAW_TEXTURE_DIR={texture_dir}", result.stdout)
+        self.assertIn("DXMT9_DUMP_DRAW_TEXTURE0_WIDTH=512", result.stdout)
+        self.assertIn("DXMT9_DUMP_DRAW_TEXTURE0_HEIGHT=64", result.stdout)
+        self.assertIn("DXMT9_DUMP_DRAW_TEXTURE0_FORMAT=2", result.stdout)
+        self.assertIn("DXMT9_DUMP_DRAW_TEXTURE_SEQ=506", result.stdout)
+        self.assertIn("DXMT9_DUMP_DRAW_TEXTURE_ENC=4", result.stdout)
+
+    def test_wrapper_dry_run_includes_draw_texture0_any_env(self) -> None:
+        texture_dir = (
+            REPO_ROOT
+            / "traces/app-d3d9-3dmark05-texture-any/analysis/textures"
+        )
+
+        result = self.run_script(
+            RUN_WRAPPER,
+            "--suffix",
+            "texture-any",
+            "--frame",
+            "506",
+            "--no-gputrace",
+            "--dump-draw-texture0-any",
+            "--dump-draw-texture-seq",
+            "506",
+            "--dump-draw-texture-enc",
+            "4",
+            "--dry-run",
+        )
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn(f"draw_texture_dump_dir: {texture_dir}", result.stdout)
+        self.assertIn(f"DXMT9_DUMP_DRAW_TEXTURE_DIR={texture_dir}", result.stdout)
+        self.assertIn("DXMT9_DUMP_DRAW_TEXTURE0_ANY=1", result.stdout)
+        self.assertIn("DXMT9_DUMP_DRAW_TEXTURE_SEQ=506", result.stdout)
+        self.assertIn("DXMT9_DUMP_DRAW_TEXTURE_ENC=4", result.stdout)
+
     def test_wrapper_rejects_draw_texture_dir_without_handles(self) -> None:
         result = self.run_script(
             RUN_WRAPPER,
@@ -1638,7 +2032,7 @@ class ThreeDMark05ProbeScriptTests(unittest.TestCase):
 
         self.assertEqual(result.returncode, 2)
         self.assertIn(
-            "--dump-draw-texture-seq/enc/dir require --dump-draw-texture-handles",
+            "--dump-draw-texture-seq/enc/dir require --dump-draw-texture-handles or --dump-draw-texture0-* filter",
             result.stderr,
             result.stderr,
         )
@@ -1657,6 +2051,153 @@ class ThreeDMark05ProbeScriptTests(unittest.TestCase):
             "--dump-depth-attachment-seq/enc/path require --dump-depth-attachment-handle",
             result.stderr,
         )
+
+    def test_wrapper_rejects_color_attachment_path_without_selector(self) -> None:
+        result = self.run_script(
+            RUN_WRAPPER,
+            "--no-gputrace",
+            "--dump-color-attachment-path",
+            "traces/color-sidecar/analysis/color.bin",
+            "--dry-run",
+        )
+
+        self.assertEqual(result.returncode, 2)
+        self.assertIn(
+            "--dump-color-attachment-path requires --dump-color-attachment-handle, --dump-color-attachment-index, --dump-color-attachment-seq/enc, --dump-color-attachment-draw, --dump-color-attachment-draws, --dump-color-attachment-command-index, --dump-color-attachment-command-index-min/max, --dump-color-attachment-texture0, or --dump-color-attachment-texture0s",
+            result.stderr,
+        )
+
+    def test_wrapper_rejects_color_attachment_after_draw_without_draw_or_texture(self) -> None:
+        result = self.run_script(
+            RUN_WRAPPER,
+            "--no-gputrace",
+            "--dump-color-attachment-after-draw",
+            "--dump-color-attachment-seq",
+            "517",
+            "--dry-run",
+        )
+
+        self.assertEqual(result.returncode, 2)
+        self.assertIn(
+            "--dump-color-attachment-after-draw requires --dump-color-attachment-draw, --dump-color-attachment-draws, --dump-color-attachment-command-index, --dump-color-attachment-command-index-min/max, --dump-color-attachment-texture0, or --dump-color-attachment-texture0s",
+            result.stderr,
+        )
+
+    def test_wrapper_rejects_color_attachment_draws_without_dir(self) -> None:
+        result = self.run_script(
+            RUN_WRAPPER,
+            "--no-gputrace",
+            "--dump-color-attachment-after-draw",
+            "--dump-color-attachment-seq",
+            "517",
+            "--dump-color-attachment-draws",
+            "272,273",
+            "--dry-run",
+        )
+
+        self.assertEqual(result.returncode, 2)
+        self.assertIn(
+            "--dump-color-attachment-draws requires --dump-color-attachment-dir or --dump-color-attachment-roi-summary-path",
+            result.stderr,
+        )
+
+    def test_wrapper_rejects_color_attachment_command_index_range_without_dir(self) -> None:
+        result = self.run_script(
+            RUN_WRAPPER,
+            "--no-gputrace",
+            "--dump-color-attachment-after-draw",
+            "--dump-color-attachment-seq",
+            "517",
+            "--dump-color-attachment-command-index-min",
+            "293",
+            "--dump-color-attachment-command-index-max",
+            "330",
+            "--dry-run",
+        )
+
+        self.assertEqual(result.returncode, 2)
+        self.assertIn(
+            "--dump-color-attachment-command-index-min/max requires --dump-color-attachment-dir or --dump-color-attachment-roi-summary-path",
+            result.stderr,
+        )
+
+    def test_wrapper_rejects_color_attachment_texture0s_without_dir(self) -> None:
+        result = self.run_script(
+            RUN_WRAPPER,
+            "--no-gputrace",
+            "--dump-color-attachment-after-draw",
+            "--dump-color-attachment-seq",
+            "517",
+            "--dump-color-attachment-texture0s",
+            "0x200000100000077,0x200000100000080",
+            "--dry-run",
+        )
+
+        self.assertEqual(result.returncode, 2)
+        self.assertIn(
+            "--dump-color-attachment-texture0s requires --dump-color-attachment-dir or --dump-color-attachment-roi-summary-path",
+            result.stderr,
+        )
+
+    def test_wrapper_dry_run_includes_color_attachment_roi_summary_env(self) -> None:
+        summary_path = (
+            REPO_ROOT
+            / "traces/color-roi-summary/analysis/color-roi-summary.csv"
+        )
+
+        result = self.run_script(
+            RUN_WRAPPER,
+            "--suffix",
+            "color-roi-summary",
+            "--frame",
+            "820",
+            "--no-gputrace",
+            "--dump-color-attachment-seq",
+            "820",
+            "--dump-color-attachment-after-draw",
+            "--dump-color-attachment-command-index-min",
+            "0",
+            "--dump-color-attachment-command-index-max",
+            "260",
+            "--dump-color-attachment-roi-summary-path",
+            "traces/color-roi-summary/analysis/color-roi-summary.csv",
+            "--dump-color-attachment-roi",
+            "700,190,850,330:muzzle",
+            "--dump-color-attachment-roi",
+            "500,120,900,430:weapon",
+            "--dump-color-attachment-bright-threshold",
+            "210",
+            "--dump-color-attachment-white-threshold",
+            "235",
+            "--dump-color-attachment-warm-red-threshold",
+            "175",
+            "--dump-color-attachment-warm-green-threshold",
+            "105",
+            "--dump-color-attachment-warm-blue-margin",
+            "40",
+            "--dry-run",
+        )
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn(f"color_attachment_roi_summary: {summary_path}", result.stdout)
+        self.assertIn("DXMT9_DUMP_COLOR_ATTACHMENT_INDEX=0", result.stdout)
+        self.assertIn("DXMT9_DUMP_COLOR_ATTACHMENT_SEQ=820", result.stdout)
+        self.assertIn("DXMT9_DUMP_COLOR_ATTACHMENT_AFTER_DRAW=1", result.stdout)
+        self.assertIn("DXMT9_DUMP_COLOR_ATTACHMENT_COMMAND_INDEX_MIN=0", result.stdout)
+        self.assertIn("DXMT9_DUMP_COLOR_ATTACHMENT_COMMAND_INDEX_MAX=260", result.stdout)
+        self.assertIn(
+            f"DXMT9_DUMP_COLOR_ATTACHMENT_ROI_SUMMARY_PATH={summary_path}",
+            result.stdout,
+        )
+        self.assertIn("DXMT9_DUMP_COLOR_ATTACHMENT_WARM_RED_THRESHOLD=175", result.stdout)
+        self.assertIn("DXMT9_DUMP_COLOR_ATTACHMENT_WARM_GREEN_THRESHOLD=105", result.stdout)
+        self.assertIn("DXMT9_DUMP_COLOR_ATTACHMENT_WARM_BLUE_MARGIN=40", result.stdout)
+        self.assertIn(
+            "DXMT9_DUMP_COLOR_ATTACHMENT_ROIS=700\\,190\\,850\\,330:muzzle\\;500\\,120\\,900\\,430:weapon",
+            result.stdout,
+        )
+        self.assertIn("DXMT9_DUMP_COLOR_ATTACHMENT_BRIGHT_THRESHOLD=210", result.stdout)
+        self.assertIn("DXMT9_DUMP_COLOR_ATTACHMENT_WHITE_THRESHOLD=235", result.stdout)
 
     def test_wrapper_dry_run_includes_x8_shader_alpha_fill_env(self) -> None:
         result = self.run_script(
@@ -1883,6 +2424,14 @@ class ThreeDMark05ProbeScriptTests(unittest.TestCase):
             "--disable-cull",
             "--disable-scissor",
             "--probe-disable-alpha-blend",
+            "--probe-disable-alpha-blend-texture0",
+            "0x200000100000080",
+            "--probe-disable-alpha-blend-texture0-width",
+            "128",
+            "--probe-disable-alpha-blend-texture0-height",
+            "128",
+            "--probe-disable-alpha-blend-texture0-format",
+            "2",
             "--probe-disable-depth-write",
             "--probe-depth-func-always",
             "--force-cull-mode",
@@ -1895,10 +2444,54 @@ class ThreeDMark05ProbeScriptTests(unittest.TestCase):
         self.assertIn("DXMT_DISABLE_CULL=1", result.stdout)
         self.assertIn("DXMT_DISABLE_SCISSOR=1", result.stdout)
         self.assertIn("DXMT9_PROBE_DISABLE_ALPHA_BLEND=1", result.stdout)
+        self.assertIn(
+            "DXMT9_PROBE_DISABLE_ALPHA_BLEND_TEXTURE0=0x200000100000080",
+            result.stdout,
+        )
+        self.assertIn(
+            "DXMT9_PROBE_DISABLE_ALPHA_BLEND_TEXTURE0_WIDTH=128",
+            result.stdout,
+        )
+        self.assertIn(
+            "DXMT9_PROBE_DISABLE_ALPHA_BLEND_TEXTURE0_HEIGHT=128",
+            result.stdout,
+        )
+        self.assertIn(
+            "DXMT9_PROBE_DISABLE_ALPHA_BLEND_TEXTURE0_FORMAT=2",
+            result.stdout,
+        )
         self.assertIn("DXMT9_PROBE_DISABLE_DEPTH_WRITE=1", result.stdout)
         self.assertIn("DXMT9_PROBE_DEPTH_FUNC_ALWAYS=1", result.stdout)
         self.assertIn("DXMT_DEBUG_FORCE_CULL_MODE=back", result.stdout)
         self.assertIn("DXMT_DEBUG_FORCE_VISIBLE=1", result.stdout)
+
+    def test_wrapper_dry_run_includes_scoped_depth_func_texture_env(self) -> None:
+        result = self.run_script(
+            RUN_WRAPPER,
+            "--no-gputrace",
+            "--probe-depth-func-always-row",
+            "506/4",
+            "--probe-depth-func-always-class",
+            "screen-blend",
+            "--probe-depth-func-always-texture0",
+            "0x200000100000075",
+            "--probe-depth-func-always-texture0-width",
+            "512",
+            "--probe-depth-func-always-texture0-height",
+            "64",
+            "--probe-depth-func-always-texture0-format",
+            "2",
+            "--dry-run",
+        )
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("DXMT9_PROBE_DEPTH_FUNC_ALWAYS=1", result.stdout)
+        self.assertIn("DXMT9_PROBE_DEPTH_FUNC_ALWAYS_ROW=506/4", result.stdout)
+        self.assertIn("DXMT9_PROBE_DEPTH_FUNC_ALWAYS_CLASS=screen-blend", result.stdout)
+        self.assertIn("DXMT9_PROBE_DEPTH_FUNC_ALWAYS_TEXTURE0=0x200000100000075", result.stdout)
+        self.assertIn("DXMT9_PROBE_DEPTH_FUNC_ALWAYS_TEXTURE0_WIDTH=512", result.stdout)
+        self.assertIn("DXMT9_PROBE_DEPTH_FUNC_ALWAYS_TEXTURE0_HEIGHT=64", result.stdout)
+        self.assertIn("DXMT9_PROBE_DEPTH_FUNC_ALWAYS_TEXTURE0_FORMAT=2", result.stdout)
 
     def test_wrapper_dry_run_includes_visibility_scout_env(self) -> None:
         result = self.run_script(
@@ -1941,6 +2534,18 @@ class ThreeDMark05ProbeScriptTests(unittest.TestCase):
             "50/2",
             "--probe-force-texture-white-classes",
             "depth-read,screen-blend,textured",
+            "--probe-force-texture-white-texture0",
+            "0x20000010000007f",
+            "--probe-force-texture-white-texture0-width",
+            "1024",
+            "--probe-force-texture-white-texture0-height",
+            "256",
+            "--probe-force-texture-white-texture0-format",
+            "31",
+            "--probe-indexed-triangle-encoder-draw-min",
+            "177",
+            "--probe-indexed-triangle-encoder-draw-max",
+            "186",
             "--dry-run",
         )
 
@@ -1951,9 +2556,130 @@ class ThreeDMark05ProbeScriptTests(unittest.TestCase):
             result.stdout,
         )
         self.assertIn(
+            "DXMT9_PROBE_FORCE_TEXTURE_WHITE_TEXTURE0=0x20000010000007f",
+            result.stdout,
+        )
+        self.assertIn(
+            "DXMT9_PROBE_FORCE_TEXTURE_WHITE_TEXTURE0_WIDTH=1024",
+            result.stdout,
+        )
+        self.assertIn(
+            "DXMT9_PROBE_FORCE_TEXTURE_WHITE_TEXTURE0_HEIGHT=256",
+            result.stdout,
+        )
+        self.assertIn(
+            "DXMT9_PROBE_FORCE_TEXTURE_WHITE_TEXTURE0_FORMAT=31",
+            result.stdout,
+        )
+        self.assertIn("DXMT9_PROBE_INDEXED_TRIANGLE_ENCODER_DRAW_MIN=177", result.stdout)
+        self.assertIn("DXMT9_PROBE_INDEXED_TRIANGLE_ENCODER_DRAW_MAX=186", result.stdout)
+        self.assertIn(
             "warning: --probe-force-texture-white is diagnostic only",
             result.stdout,
         )
+
+    def test_wrapper_dry_run_includes_draw_local_force_texture_white_env(self) -> None:
+        result = self.run_script(
+            RUN_WRAPPER,
+            "--no-gputrace",
+            "--probe-force-texture-white-row",
+            "520/2",
+            "--probe-force-texture-white-texture0",
+            "0x200000100000077",
+            "--probe-force-texture-white-draw-ordinal",
+            "325857",
+            "--probe-force-texture-white-draw-ordinal-min",
+            "325800",
+            "--probe-force-texture-white-draw-ordinal-max",
+            "325900",
+            "--probe-force-texture-white-command-index",
+            "7",
+            "--probe-force-texture-white-command-index-min",
+            "6",
+            "--probe-force-texture-white-command-index-max",
+            "8",
+            "--probe-force-texture-white-command-draw-index",
+            "4",
+            "--probe-force-texture-white-command-draw-index-min",
+            "3",
+            "--probe-force-texture-white-command-draw-index-max",
+            "5",
+            "--dry-run",
+        )
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("DXMT9_PROBE_FORCE_TEXTURE_WHITE_ROW=520/2", result.stdout)
+        self.assertIn(
+            "DXMT9_PROBE_FORCE_TEXTURE_WHITE_TEXTURE0=0x200000100000077",
+            result.stdout,
+        )
+        self.assertIn("DXMT9_PROBE_FORCE_TEXTURE_WHITE_DRAW_ORDINALS=325857", result.stdout)
+        self.assertIn("DXMT9_PROBE_FORCE_TEXTURE_WHITE_DRAW_ORDINAL_MIN=325800", result.stdout)
+        self.assertIn("DXMT9_PROBE_FORCE_TEXTURE_WHITE_DRAW_ORDINAL_MAX=325900", result.stdout)
+        self.assertIn("DXMT9_PROBE_FORCE_TEXTURE_WHITE_COMMAND_INDEXES=7", result.stdout)
+        self.assertIn("DXMT9_PROBE_FORCE_TEXTURE_WHITE_COMMAND_INDEX_MIN=6", result.stdout)
+        self.assertIn("DXMT9_PROBE_FORCE_TEXTURE_WHITE_COMMAND_INDEX_MAX=8", result.stdout)
+        self.assertIn(
+            "DXMT9_PROBE_FORCE_TEXTURE_WHITE_COMMAND_DRAW_INDEXES=4",
+            result.stdout,
+        )
+        self.assertIn(
+            "DXMT9_PROBE_FORCE_TEXTURE_WHITE_COMMAND_DRAW_INDEX_MIN=3",
+            result.stdout,
+        )
+        self.assertIn(
+            "DXMT9_PROBE_FORCE_TEXTURE_WHITE_COMMAND_DRAW_INDEX_MAX=5",
+            result.stdout,
+        )
+
+    def test_wrapper_dry_run_includes_effect_draw_trace_env(self) -> None:
+        result = self.run_script(
+            RUN_WRAPPER,
+            "--no-gputrace",
+            "--frame-sampling",
+            "--effect-draw-trace-seq",
+            "1037",
+            "--effect-draw-trace-seq-min",
+            "1000",
+            "--effect-draw-trace-seq-max",
+            "1100",
+            "--effect-draw-trace-enc",
+            "2",
+            "--effect-draw-trace-texture0",
+            "0x20000010000007f",
+            "--effect-draw-trace-texture0-width",
+            "1024",
+            "--effect-draw-trace-texture0-height",
+            "256",
+            "--effect-draw-trace-texture0-format",
+            "31",
+            "--effect-draw-trace-primitive-type",
+            "0",
+            "--effect-draw-trace-point-sprite",
+            "--effect-draw-trace-include-non-alpha",
+            "--effect-draw-trace-include-untextured",
+            "--effect-draw-trace-geometry-max-refs",
+            "96",
+            "--dry-run",
+        )
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("DXMT9_PERF_FRAME_SAMPLING=1", result.stdout)
+        self.assertIn("DXMT9_EFFECT_DRAW_TRACE=1", result.stdout)
+        self.assertIn("DXMT9_EFFECT_DRAW_TRACE_SEQ=1037", result.stdout)
+        self.assertIn("DXMT9_EFFECT_DRAW_TRACE_SEQ_MIN=1000", result.stdout)
+        self.assertIn("DXMT9_EFFECT_DRAW_TRACE_SEQ_MAX=1100", result.stdout)
+        self.assertIn("DXMT9_EFFECT_DRAW_TRACE_ENC=2", result.stdout)
+        self.assertIn("DXMT9_EFFECT_DRAW_TRACE_TEXTURE0=0x20000010000007f", result.stdout)
+        self.assertIn("DXMT9_EFFECT_DRAW_TRACE_TEXTURE0_WIDTH=1024", result.stdout)
+        self.assertIn("DXMT9_EFFECT_DRAW_TRACE_TEXTURE0_HEIGHT=256", result.stdout)
+        self.assertIn("DXMT9_EFFECT_DRAW_TRACE_TEXTURE0_FORMAT=31", result.stdout)
+        self.assertIn("DXMT9_EFFECT_DRAW_TRACE_PRIMITIVE_TYPE=0", result.stdout)
+        self.assertIn("DXMT9_EFFECT_DRAW_TRACE_POINT_SPRITE=1", result.stdout)
+        self.assertIn("DXMT9_EFFECT_DRAW_TRACE_INCLUDE_NON_ALPHA=1", result.stdout)
+        self.assertIn("DXMT9_EFFECT_DRAW_TRACE_INCLUDE_UNTEXTURED=1", result.stdout)
+        self.assertIn("DXMT9_EFFECT_DRAW_TRACE_GEOMETRY=1", result.stdout)
+        self.assertIn("DXMT9_EFFECT_DRAW_TRACE_GEOMETRY_MAX_REFS=96", result.stdout)
 
     def test_wrapper_dry_run_includes_force_expand_indexed_env(self) -> None:
         result = self.run_script(

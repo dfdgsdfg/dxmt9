@@ -80,6 +80,9 @@ specs/
 │   ├── requirements.md     Translation correctness, command encoding, PSO cache
 │   ├── design.md           Command queue, encoder lifecycle, resource allocation
 │   └── surface-ops/        UpdateSurface, StretchRect, ColorFill, GetRenderTargetData
+├── d3d9-renderer/          Opt-in modern Metal renderer (Frame Graph + Mesh + GPU-driven)
+│   ├── requirements.md     Dual-path coexistence (R-BACK-30..41), feature gates, parity
+│   └── design.md           IRenderBackend, Frame Graph DAG, mesh PSO clusters, ICB path
 ├── deploy/                 Wine runtime and application-local packaging
 │   ├── requirements.md     Runtime install, app-local DLL override, provider lookup
 │   └── design.md           Artifact matrix, provider locator, packaging manifest

@@ -6,8 +6,8 @@ order: 26
 title: Fragmentless Depth-Only Route Smoke Reaches the Full 60/0 Pass
 date: 2026-06-06
 type: validation
-status: accepted-runtime-smoke
-source: src/dxmt9/dxmt9_pipeline_cache.cpp; src/dxmt9/dxmt9_draw_encoder.mm; scripts/tools/run_3dmark05_perf_probe.sh; scripts/tools/summarize_3dmark05_perf.py; experiments/output/app-d3d9-3dmark05-fragmentless-depth-only-60-0-r5/3dmark05-perf-summary.md; experiments/output/app-d3d9-3dmark05-fragmentless-depth-only-60-0-r5/3dmark05-perf-encoders.csv; traces/app-d3d9-3dmark05-fragmentless-depth-only-60-0-r5/analysis/fragmentless-route-log-evidence.txt; experiments/output/app-d3d9-3dmark05-fragmentless-depth-only-60-0-current-smoke-r1/3dmark05-perf-summary.md; experiments/output/app-d3d9-3dmark05-fragmentless-depth-only-60-0-current-smoke-r1/3dmark05-perf-encoders.csv; docs/perfomance/hidden-backend-storage/hidden-backend-storage-shape.25.md
+status: accepted-runtime-smoke-rejected-equality
+source: src/dxmt9/dxmt9_pipeline_cache.cpp; src/dxmt9/dxmt9_draw_encoder.mm; scripts/tools/run_3dmark05_perf_probe.sh; scripts/tools/summarize_3dmark05_perf.py; scripts/tools/summarize_fragmentless_depth_route_gate.py; scripts/tools/compare_attachment_dumps.py; experiments/output/app-d3d9-3dmark05-fragmentless-depth-only-60-0-r5/3dmark05-perf-summary.md; experiments/output/app-d3d9-3dmark05-fragmentless-depth-only-60-0-r5/3dmark05-perf-encoders.csv; traces/app-d3d9-3dmark05-fragmentless-depth-only-60-0-r5/analysis/fragmentless-route-log-evidence.txt; experiments/output/app-d3d9-3dmark05-fragmentless-depth-only-60-0-current-smoke-r1/3dmark05-perf-summary.md; experiments/output/app-d3d9-3dmark05-fragmentless-depth-only-60-0-current-smoke-r1/3dmark05-perf-encoders.csv; experiments/output/app-d3d9-3dmark05-fragmentless-depth-only-60-0-current-smoke-r2/3dmark05-perf-summary.md; experiments/output/app-d3d9-3dmark05-fragmentless-depth-only-60-0-current-smoke-r2/3dmark05-perf-encoders.csv; traces/app-d3d9-3dmark05-fragmentless-depth-only-60-0-current-smoke-r2/analysis/fragmentless-depth-route-gate.md; experiments/output/app-d3d9-3dmark05-fragmentless-depth-only-60-0-equality-baseline-r1/3dmark05-perf-summary.md; experiments/output/app-d3d9-3dmark05-fragmentless-depth-only-60-0-equality-treatment-r1/3dmark05-perf-summary.md; traces/app-d3d9-3dmark05-fragmentless-depth-only-60-0-equality-compare-r1/analysis/frame60-enc0-depth-equality.csv; traces/app-d3d9-3dmark05-fragmentless-depth-only-60-0-equality-compare-r1/analysis/frame60-enc0-color-equality.csv; traces/app-d3d9-3dmark05-fragmentless-depth-only-60-0-equality-compare-r1/analysis/frame60-capture-equality.csv; traces/app-d3d9-3dmark05-fragmentless-depth-only-60-0-equality-compare-r1/analysis/fragmentless-depth-route-gate-with-equality.md; docs/perfomance/hidden-backend-storage/hidden-backend-storage-shape.25.md
 ---
 
 # Fragmentless Depth-Only Route Smoke Reaches the Full 60/0 Pass
@@ -120,42 +120,108 @@ no-pipeline skips. This repeat confirms the `60/0` reduced route remains
 isolated from the alpha/effect rows: it is still a depth-only backend-shape
 candidate, not a rifle-bloom or alpha-material fix.
 
+After cleanup removed the old current-smoke output directory, the same
+current-head preflight was regenerated as
+`app-d3d9-3dmark05-fragmentless-depth-only-60-0-current-smoke-r2`:
+
+```sh
+scripts/tools/run_3dmark05_perf_probe.sh \
+  --suffix fragmentless-depth-only-60-0-current-smoke-r2 \
+  --frame 60 --timeout 180 --no-gputrace \
+  --encoder-breakdown-seq 60 --measure-index-reuse \
+  --probe-fragmentless-depth-only-row 60/0
+```
+
+The app hit the final-frame watchdog and exited `124`, but this was a wrapper
+timeout with complete postprocess artifacts, not a manual kill. The summary was
+synthesized from `dxmt9.log`, reached `present_encoded=1680`, and reports
+`draw_skipped_no_pipeline=0`, `gpu_command_buffer_errors=0`, and the same
+route-decision split (`2` accepts, `0` rejects, `0` no-pipeline logs). The row
+gate output is now explicit:
+
+- `traces/app-d3d9-3dmark05-fragmentless-depth-only-60-0-current-smoke-r2/analysis/fragmentless-depth-route-gate.md`
+- `traces/app-d3d9-3dmark05-fragmentless-depth-only-60-0-current-smoke-r2/analysis/fragmentless-depth-route-gate.csv`
+
+| Gate | Current r2 value |
+|---|---:|
+| Overall verdict | `route-reachable-needs-equality` |
+| Xcode/gputrace readiness | `blocked-needs-equality` |
+| Route status | `passed-route` |
+| Draw / primitive / vertex coverage | `100.000000%` / `100.000000%` / `100.000000%` |
+| Target draws / primitives / vertices | `42` / `97,294` / `291,882` |
+| Probe draws / primitives / vertices | `42` / `97,294` / `291,882` |
+| VSOut layout | `0x0` |
+| Equality status | `missing-equality` |
+| Counter status | `missing-counters` |
+
+This makes the promotion rule machine-readable: the route is reachable, but it
+is **not** ready for another GT1 Xcode/gputrace spend until a same-input
+depth/color equality artifact exists. Once equality passes, the next Xcode
+counter export must compare baseline and treatment `60/0` and reject the route
+if `VS Buffer Device Memory Bytes Written / VS Invocations` stays flat.
+
+## Same-input equality gate
+
+`app-d3d9-3dmark05-fragmentless-depth-only-60-0-equality-baseline-r1` and
+`app-d3d9-3dmark05-fragmentless-depth-only-60-0-equality-treatment-r1` repeated
+frame 60 with the same capture and attachment sidecars, then compared the final
+frame, `60/0` pass-end color, and `60/0` pass-end depth:
+
+- `traces/app-d3d9-3dmark05-fragmentless-depth-only-60-0-equality-compare-r1/analysis/frame60-capture-equality.csv`
+- `traces/app-d3d9-3dmark05-fragmentless-depth-only-60-0-equality-compare-r1/analysis/frame60-enc0-color-equality.csv`
+- `traces/app-d3d9-3dmark05-fragmentless-depth-only-60-0-equality-compare-r1/analysis/frame60-enc0-depth-equality.csv`
+- `traces/app-d3d9-3dmark05-fragmentless-depth-only-60-0-equality-compare-r1/analysis/fragmentless-depth-route-gate-with-equality.md`
+
+The route still reaches the full row, but equality fails:
+
+| Artifact | Result |
+|---|---:|
+| Gate verdict | `blocked-equality-fail` |
+| Xcode/gputrace readiness | `blocked-equality` |
+| Final frame color | `170,328 / 786,432` changed pixels (`21.658325%`), max delta `252`, SSIM `0.998977` |
+| `60/0` pass-end color | `0 / 3,145,728` changed bytes, metadata compatible |
+| `60/0` pass-end depth | `1,252,096 / 3,145,728` changed bytes (`39.803060%`), max delta `255`, metadata compatible `D24X8` |
+
+The color sidecar result is important: this row writes no color, and the
+fragmentless path does not directly change the `60/0` color attachment. The
+depth sidecar does change materially, so the downstream final-frame difference
+is consistent with a changed depth prepass or depth-dependent coverage/post
+path. This is not safe to send to Xcode counters as a performance candidate.
+The next work, if this route remains interesting, is to explain why the
+fragmentless/position-only path changes depth before measuring hidden backend
+bytes.
+
 ```mermaid
 stateDiagram-v2
   [*] --> Candidate60_0
-  Candidate60_0 --> RouteReachable: r5 pass
-  RouteReachable --> NeedsDepthEquality: no full depth oracle yet
-  RouteReachable --> NeedsXcodeCounters: no VS-write counter export yet
-  NeedsDepthEquality --> ReducedAB
+  Candidate60_0 --> RouteReachable: r5/r2 route pass
+  RouteReachable --> Gate: fragmentless-depth-route gate
+  Gate --> NeedsDepthEquality: route-reachable-needs-equality
+  NeedsDepthEquality --> RejectRoute: depth equality fails
+  NeedsDepthEquality --> NeedsXcodeCounters: equality passes
   NeedsXcodeCounters --> ReducedAB
   ReducedAB --> PromoteCandidate: depth equality + VS bytes/inv move
-  ReducedAB --> RejectRoute: equality fail or VS bytes flat
+  ReducedAB --> RejectRoute: VS bytes flat
 ```
 
-**Verdict.** Accepted as a runtime route smoke, not as a performance win. The
-experiment proves the first reduced backend-route precondition: dxmt9 can
-isolate the current `60/0` depth-only row and compile/run it through a
-fragmentless, position-only render pipeline without reject or no-pipeline
-errors. It does **not** yet prove visual/depth equivalence or that the Apple
-hidden VS/tiler/parameter storage denominator moved. The r5 run was visually
-reported as sharper because subtle texture-over haze/blur and bloom-like
-coverage appeared to disappear. Because `60/0` writes no color, that
-observation would most likely mean a changed depth prepass result or a changed
-downstream depth-dependent coverage/postprocess, not a direct color write by
-this route. Time-based
-`actual.png` screenshots are different animation frames (`r5` shows
-`Frame 1014`, the `v0.0.1` visual anchor shows `Frame 351`), so they are useful
-only as broad triage. The next proof requires same-input/depth/color equality
-and an Xcode `.gputrace` counter export for the same row. If Xcode still reports
-flat `VS Buffer Device Memory Bytes Written` per invocation, the fragmentless
-route joins live-VSOut and stream/IB staging as another rejected denominator
-mechanism.
+**Verdict.** Accepted as a runtime route smoke, rejected as a performance
+promotion candidate. The experiment proves the first reduced backend-route
+precondition: dxmt9 can isolate the current `60/0` depth-only row and
+compile/run it through a fragmentless, position-only render pipeline without
+reject or no-pipeline errors. The same-input equality gate then proves this
+particular shortcut is not semantically equivalent: `60/0` color is exact, but
+`60/0` depth changes and the final frame changes. The route should not receive
+another GT1 Xcode/gputrace counter spend until the depth difference is explained
+and fixed. If a corrected route later passes equality, the Xcode counter gate
+still has to show `VS Buffer Device Memory Bytes Written / VS Invocations`
+movement before the backend-denominator claim can be promoted.
 
 **Meaning for the goal.** This is why the ongoing experiment matters: it turns
 the broad "M1 hardware should be faster" concern into a controlled yes/no test
-of one legal below-visible backend shape. It is intentionally scoped to `60/0`;
-it cannot explain or fix the larger `60/2` textured row, and it should not be
-promoted into `perf` until equality and Xcode counter movement both pass.
+of one legal below-visible backend shape. The current answer for this route is
+"reachable but wrong depth." It is intentionally scoped to `60/0`; it cannot
+explain or fix the larger `60/2` textured row, and it should not be promoted
+into `perf` until equality and Xcode counter movement both pass.
 
 **Related.** [[hidden-backend-storage]] ·
 [[hidden-backend-storage-shape.25]] · [[overview-3dmark05-gt1]].

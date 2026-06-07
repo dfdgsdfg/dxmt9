@@ -6,6 +6,7 @@
 #include "dxmt9_metal_labels.hpp"
 #include "dxmt9_perf_counters.hpp"
 #include "dxmt9_queue.hpp"
+#include "util/config/config.hpp"
 
 #include <algorithm>
 #include <chrono>
@@ -15,6 +16,15 @@
 #include <vector>
 
 namespace dxmt9::resources {
+namespace {
+
+bool dynamicBufferRenameEnabled() {
+  static const bool enabled =
+      !dxmt9::util::getenvFlag("DXMT9_DISABLE_DYNAMIC_BUFFER_RENAME");
+  return enabled;
+}
+
+}  // namespace
 
 BufferRecord* Pool::findBuffer(u64 handle) noexcept {
   return bufferArena_.find(handle);
@@ -212,9 +222,9 @@ core::BufferHandle Pool::createBuffer(WMT::Device device, const core::BufferDesc
   BufferRecord record;
   record.desc = desc;
   record.shadow.resize(static_cast<std::size_t>(desc.size));
-  // R-BACK-5.8 — DEFAULT + UsageDynamic selects the per-handle rename
-  // ring. Tag at create time so `finalizeBufferMap` can branch without
-  // re-checking pool/usage on every DISCARD lock. Heap-backed
+  // R-BACK-5.8 — DEFAULT + UsageDynamic can use the per-handle rename
+  // ring. Tag at create time so the unsafe rename experiment can branch
+  // without re-checking pool/usage on every DISCARD lock. Heap-backed
   // allocation is mutually exclusive with the rename ring (heap
   // classifyBuffer rejects UsageDynamic per R-BACK-14.2), so the
   // create-time allocation always lands in the ring's first slot.
@@ -856,6 +866,41 @@ void Pool::markBufferUse(core::Handle handle, u64 seqId) {
   });
 }
 
+void Pool::markBufferSnapshotUse(core::Handle handle,
+                                 const core::DrawBufferBindingSnapshot& snapshot,
+                                 u64 seqId) {
+  if (!handle || !snapshot.valid()) return;
+  bufferArena_.update(handle.value, [seqId, snapshot](BufferRecord& rec) {
+    rec.lastUsedSeqId = std::max(rec.lastUsedSeqId, seqId);
+    if (!rec.isDynamicRename) {
+      return;
+    }
+    for (auto& entry : rec.renameRing) {
+      if (entry.buffer && entry.buffer.handle == snapshot.metalHandle) {
+        entry.lastUsedSeqId = std::max(entry.lastUsedSeqId, seqId);
+        return;
+      }
+    }
+  });
+}
+
+core::DrawBufferBindingSnapshot
+Pool::snapshotBufferBinding(core::Handle handle) const noexcept {
+  core::DrawBufferBindingSnapshot snapshot{};
+  if (!handle) return snapshot;
+  bufferArena_.inspect(handle.value, [&snapshot](const BufferRecord& rec) {
+    if (!rec.isDynamicRename || !rec.buffer) {
+      return;
+    }
+    snapshot.metalHandle = rec.buffer.handle;
+    snapshot.contentsAddress =
+        static_cast<u64>(reinterpret_cast<std::uintptr_t>(rec.contents));
+    snapshot.byteSize = rec.desc.size;
+    snapshot.contentRevision = rec.contentRevision;
+  });
+  return snapshot;
+}
+
 void Pool::markTextureUse(core::Handle handle, u64 seqId) {
   if (!handle) return;
   textureArena_.update(handle.value, [seqId](TextureRecord& rec) {
@@ -1134,12 +1179,19 @@ ReorderedIndexBufferLookup Pool::getOrCreateReorderedIndexBuffer(
 }
 
 u64 Pool::mapWaitSeqId(core::BufferHandle handle, u32 flags) const noexcept {
-  if ((flags & core::UsageDiscard) != 0 || (flags & core::UsageNoOverwrite) != 0) {
+  if ((flags & core::UsageNoOverwrite) != 0) {
     return 0;
   }
+  const bool discard = (flags & core::UsageDiscard) != 0;
   u64 waitSeqId = 0;
-  bufferArena_.inspect(handle.value, [flags, &waitSeqId](const BufferRecord& record) {
+  bufferArena_.inspect(handle.value, [flags, discard, &waitSeqId](const BufferRecord& record) {
     if ((flags & core::UsageReadOnly) != 0 && record.desc.pool == core::Pool::Managed) {
+      return;
+    }
+    // Draw submissions snapshot the concrete Metal backing for dynamic
+    // buffers, so DISCARD can rotate away from in-flight storage instead of
+    // waiting for the logical BufferHandle to drain.
+    if (discard && record.isDynamicRename && dynamicBufferRenameEnabled()) {
       return;
     }
     waitSeqId = record.lastUsedSeqId;
@@ -1148,14 +1200,11 @@ u64 Pool::mapWaitSeqId(core::BufferHandle handle, u32 flags) const noexcept {
 }
 
 // R-BACK-5.8 — rotate a DYNAMIC + DEFAULT buffer's rename ring on
-// `D3DLOCK_DISCARD`. Walks the ring for an entry whose `lastUsedSeqId`
-// is at or below the GPU completion watermark and swaps it in as the
-// active allocation; if every entry is still in flight, allocates a
-// fresh `MTLStorageModeShared` buffer and appends it to the ring
-// rather than blocking on prior GPU completion. Mirrors the active
-// entry into `record.buffer / contents / lastUsedSeqId` for the
-// existing bind paths. Caller already serialized on the pool mutex
-// and confirmed `record->isDynamicRename`.
+// `D3DLOCK_DISCARD`. Walk the ring for an idle entry, or append a fresh Shared
+// allocation instead of blocking on prior GPU completion. Mirrors the active
+// entry into `record.buffer / contents / lastUsedSeqId` for the existing bind
+// paths. Caller already serialized on the pool mutex and confirmed
+// `record->isDynamicRename`.
 namespace {
 void rotateDynamicRename(WMT::Device device,
                          BufferRecord& record,
@@ -1225,10 +1274,10 @@ void* Pool::finalizeBufferMap(WMT::Device device,
                               u64 completedSeqId) {
   void* result = nullptr;
   bufferArena_.update(handle.value, [&](BufferRecord& record) {
-    // R-BACK-5.8 — rotate the rename ring before zero-fill so the bytes
-    // we clear belong to the freshly active allocation, not the old
-    // (possibly still-in-flight) one. Non-DYNAMIC paths skip this.
+    // R-BACK-5.8 — rotate before zero-fill so the bytes we clear belong to the
+    // freshly active allocation, not the old (possibly still-in-flight) one.
     if ((flags & core::UsageDiscard) != 0 && record.isDynamicRename &&
+        dynamicBufferRenameEnabled() &&
         !record.renameRing.empty()) {
       rotateDynamicRename(device, record, completedSeqId);
     }

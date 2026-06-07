@@ -20,6 +20,7 @@
 #include <exception>
 #include <initializer_list>
 #include <iostream>
+#include <limits>
 #include <span>
 #include <sstream>
 #include <stdexcept>
@@ -607,15 +608,38 @@ void assertDrawPrimitivesCommand(const RecordedCommand& command,
   checkEq(command.count, vertexCount, "drawPrimitives vertex count");
 }
 
+const RecordedCommand& firstVertexBufferBind(Capture& capture,
+                                             std::uint8_t slot,
+                                             std::string_view message) {
+  for (const auto& command : capture.commands) {
+    if (command.kind == RecordedKind::SetVertexBuffer &&
+        command.index == slot) {
+      return command;
+    }
+  }
+  fail(std::string(message));
+}
+
+const RecordedCommand& firstIndexedDraw(Capture& capture,
+                                        std::string_view message) {
+  for (const auto& command : capture.commands) {
+    if (command.kind == RecordedKind::DrawIndexedPrimitives) {
+      return command;
+    }
+  }
+  fail(std::string(message));
+}
+
 void runEncodeDraw(Harness& harness,
                    EncodeDrawRecorder& recorder,
                    dxmt9::core::CanonicalDrawState& state,
                    const dxmt9::core::DrawParam& param,
                    const PreUploadedDrawData& preUploaded,
-                   std::span<const std::uint8_t> arena,
-                   bool skipBaseStateBind = true,
-                   bool argbufHybridMode = false,
-                   TextureSamplerBindShadow* textureSamplerShadow = nullptr) {
+	                   std::span<const std::uint8_t> arena,
+	                   bool skipBaseStateBind = true,
+	                   bool argbufHybridMode = false,
+	                   TextureSamplerBindShadow* textureSamplerShadow = nullptr,
+	                   const dxmt9::core::DrawBindingSnapshot* bindingSnapshot = nullptr) {
   auto ctx = makeContext(harness, recorder);
   WMT::CommandBuffer commandBuffer{};
   WMT::RenderCommandEncoder encoder{};
@@ -635,9 +659,11 @@ void runEncodeDraw(Harness& harness,
       &cleanDirty,
       /*tileFfpMode=*/false,
       argbufHybridMode,
-      /*argbufResourceArray=*/false,
-      /*reopenArgbufHybrid=*/true,
-      textureSamplerShadow);
+	      /*argbufResourceArray=*/false,
+	      /*reopenArgbufHybrid=*/true,
+	      textureSamplerShadow,
+	      std::numeric_limits<std::uint32_t>::max(),
+	      bindingSnapshot);
 
   check(encoded, "encodeDraw emits a draw");
 }
@@ -2609,6 +2635,106 @@ void testPreUploadedNonIndexedUserVertexFoldsStartVertex() {
       5u);
 }
 
+void testStreamSnapshotOverridesLiveBufferHandle() {
+  Harness harness;
+  Capture capture;
+  auto recorder = makeRecorder(capture);
+
+  constexpr obj_handle_t kLiveVertex = 0x7d0000000000101ull;
+  constexpr obj_handle_t kSnapshotVertex = 0x7d0000000000102ull;
+
+  auto state = makeProgrammableState(20u);
+  setDeclPositionTexcoord(state, 12u, 20u);
+  state.hot.streamBuffers[0] = harness.createBoundBuffer(kLiveVertex, 4096u);
+  state.hot.streamOffsets[0] = 32u;
+  state.hot.streamStrides[0] = 20u;
+
+  std::array<std::uint8_t, 128> vertexBytes{};
+  dxmt9::core::DrawBindingSnapshot binding{};
+  binding.streamMask = 1u << 0u;
+  binding.streams[0].buffer = state.hot.streamBuffers[0];
+  binding.streams[0].offset = state.hot.streamOffsets[0];
+  binding.streams[0].stride = state.hot.streamStrides[0];
+  binding.streams[0].snapshot = dxmt9::core::DrawBufferBindingSnapshot{
+      .metalHandle = kSnapshotVertex,
+      .contentsAddress = static_cast<std::uint64_t>(
+          reinterpret_cast<std::uintptr_t>(vertexBytes.data())),
+      .byteSize = vertexBytes.size(),
+      .contentRevision = 3u,
+  };
+
+  dxmt9::core::DrawParam param{};
+  param.primitiveType = PrimitiveType::TriangleList;
+  param.primitiveCount = 1u;
+  param.indexed = false;
+
+  PreUploadedDrawData preUploaded{};
+  std::array<std::uint8_t, 1> arena{};
+  runEncodeDraw(harness, recorder, state, param, preUploaded, arena,
+                /*skipBaseStateBind=*/true,
+                /*argbufHybridMode=*/false,
+                /*textureSamplerShadow=*/nullptr,
+                &binding);
+
+  const auto& stream =
+      firstVertexBufferBind(capture, 1u, "missing snapshot stream0 bind");
+  checkEq(stream.bufferHandle, kSnapshotVertex,
+          "stream snapshot overrides live BufferRecord handle");
+  checkEq(stream.offset, std::uint64_t{32},
+          "stream snapshot preserves logical stream offset");
+}
+
+void testIndexSnapshotOverridesLiveBufferHandle() {
+  Harness harness;
+  Capture capture;
+  auto recorder = makeRecorder(capture);
+
+  constexpr obj_handle_t kLiveVertex = 0x7d0000000000201ull;
+  constexpr obj_handle_t kLiveIndex = 0x7d0000000000202ull;
+  constexpr obj_handle_t kSnapshotIndex = 0x7d0000000000203ull;
+
+  auto state = makeProgrammableState(20u);
+  setDeclPositionTexcoord(state, 12u, 20u);
+  state.hot.streamBuffers[0] = harness.createBoundBuffer(kLiveVertex, 4096u);
+  state.hot.streamOffsets[0] = 0u;
+  state.hot.streamStrides[0] = 20u;
+  state.hot.indexBuffer = harness.createBoundBuffer(kLiveIndex, 4096u);
+
+  std::array<std::uint8_t, 64> indexBytes{};
+  dxmt9::core::DrawBindingSnapshot binding{};
+  binding.indexBuffer = state.hot.indexBuffer;
+  binding.indexType = IndexType::UInt16;
+  binding.indexSnapshot = dxmt9::core::DrawBufferBindingSnapshot{
+      .metalHandle = kSnapshotIndex,
+      .contentsAddress = static_cast<std::uint64_t>(
+          reinterpret_cast<std::uintptr_t>(indexBytes.data())),
+      .byteSize = indexBytes.size(),
+      .contentRevision = 5u,
+  };
+  binding.indexSnapshotValid = true;
+
+  dxmt9::core::DrawParam param{};
+  param.primitiveType = PrimitiveType::TriangleList;
+  param.primitiveCount = 1u;
+  param.startIndex = 2u;
+  param.indexType = IndexType::UInt16;
+  param.indexed = true;
+
+  PreUploadedDrawData preUploaded{};
+  std::array<std::uint8_t, 1> arena{};
+  runEncodeDraw(harness, recorder, state, param, preUploaded, arena,
+                /*skipBaseStateBind=*/true,
+                /*argbufHybridMode=*/false,
+                /*textureSamplerShadow=*/nullptr,
+                &binding);
+
+  const auto& draw = firstIndexedDraw(capture, "missing snapshot indexed draw");
+  checkEq(draw.bufferHandle, kSnapshotIndex,
+          "index snapshot overrides live BufferRecord handle");
+  checkEq(draw.offset, std::uint64_t{4},
+          "index snapshot preserves startIndex byte offset");
+}
+
 void testBindingOverrideBaseStateRebindPolicy() {
   dxmt9::core::DrawShaderLayoutContext layout{};
   layout.vertexDecl.streams[0].stride = 24u;
@@ -2704,6 +2830,8 @@ int main() {
     testUserVertexAndUserIndexOrdering();
     testPreUploadedIndexedUserVertexIgnoresStartVertex();
     testPreUploadedNonIndexedUserVertexFoldsStartVertex();
+    testStreamSnapshotOverridesLiveBufferHandle();
+    testIndexSnapshotOverridesLiveBufferHandle();
     testBindingOverrideBaseStateRebindPolicy();
   } catch (const TestFailure& e) {
     std::cerr << "encode_draw_recorder_spec failed: " << e.what() << '\n';

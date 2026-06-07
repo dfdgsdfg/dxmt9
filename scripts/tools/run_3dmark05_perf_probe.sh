@@ -6,11 +6,16 @@ repo_root=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/../.." && pwd)
 frame=${DXMT_3DMARK05_PROBE_FRAME:-60}
 timeout=${DXMT_3DMARK05_PROBE_TIMEOUT:-}
 timeout_slack=${DXMT_3DMARK05_PROBE_TIMEOUT_SLACK:-45}
+capture_delay_sec=${DXMT_3DMARK05_CAPTURE_DELAY_SEC:-}
+capture_frames=${DXMT_3DMARK05_CAPTURE_FRAMES:-}
+capture_range=${DXMT_3DMARK05_CAPTURE_RANGE:-}
+capture_dir=${DXMT_3DMARK05_CAPTURE_DIR:-}
 suffix=${DXMT_3DMARK05_PROBE_SUFFIX:-}
 result_file=${DXMT_3DMARK05_RESULT_FILE:-dxmt9_gt1.3dr}
 capture_gputrace=1
 dry_run=0
 dump_shaders=0
+frame_sampling=${DXMT9_PERF_FRAME_SAMPLING:-0}
 recommended_gputrace_min_free_mb=2048
 trim_unused_varyings=0
 trim_unused_varyings_vs_hashes=
@@ -88,11 +93,40 @@ dump_indexed_geometry_cbufs=0
 dump_indexed_geometry_max_draws=${DXMT9_DUMP_INDEXED_GEOMETRY_MAX_DRAWS:-16}
 dump_indexed_geometry_vs=
 dump_indexed_geometry_ps=
+dump_indexed_geometry_texture0=
+dump_indexed_geometry_texture0_width=
+dump_indexed_geometry_texture0_height=
+dump_indexed_geometry_texture0_format=
 dump_depth_attachment_handle=${DXMT9_DUMP_DEPTH_ATTACHMENT_HANDLE:-}
 dump_depth_attachment_seq=${DXMT9_DUMP_DEPTH_ATTACHMENT_SEQ:-}
 dump_depth_attachment_enc=${DXMT9_DUMP_DEPTH_ATTACHMENT_ENC:-}
 dump_depth_attachment_path=${DXMT9_DUMP_DEPTH_ATTACHMENT_PATH:-}
+dump_color_attachment_after_draw=${DXMT9_DUMP_COLOR_ATTACHMENT_AFTER_DRAW:-0}
+dump_color_attachment_handle=${DXMT9_DUMP_COLOR_ATTACHMENT_HANDLE:-}
+dump_color_attachment_index=${DXMT9_DUMP_COLOR_ATTACHMENT_INDEX:-}
+dump_color_attachment_seq=${DXMT9_DUMP_COLOR_ATTACHMENT_SEQ:-}
+dump_color_attachment_enc=${DXMT9_DUMP_COLOR_ATTACHMENT_ENC:-}
+dump_color_attachment_draw=${DXMT9_DUMP_COLOR_ATTACHMENT_DRAW:-}
+dump_color_attachment_draws=${DXMT9_DUMP_COLOR_ATTACHMENT_DRAWS:-}
+dump_color_attachment_command_index=${DXMT9_DUMP_COLOR_ATTACHMENT_COMMAND_INDEX:-}
+dump_color_attachment_command_index_min=${DXMT9_DUMP_COLOR_ATTACHMENT_COMMAND_INDEX_MIN:-}
+dump_color_attachment_command_index_max=${DXMT9_DUMP_COLOR_ATTACHMENT_COMMAND_INDEX_MAX:-}
+dump_color_attachment_texture0=${DXMT9_DUMP_COLOR_ATTACHMENT_TEXTURE0:-}
+dump_color_attachment_texture0s=${DXMT9_DUMP_COLOR_ATTACHMENT_TEXTURE0S:-}
+dump_color_attachment_path=${DXMT9_DUMP_COLOR_ATTACHMENT_PATH:-}
+dump_color_attachment_dir=${DXMT9_DUMP_COLOR_ATTACHMENT_DIR:-}
+dump_color_attachment_roi_summary_path=${DXMT9_DUMP_COLOR_ATTACHMENT_ROI_SUMMARY_PATH:-}
+dump_color_attachment_rois=${DXMT9_DUMP_COLOR_ATTACHMENT_ROIS:-}
+dump_color_attachment_bright_threshold=${DXMT9_DUMP_COLOR_ATTACHMENT_BRIGHT_THRESHOLD:-}
+dump_color_attachment_white_threshold=${DXMT9_DUMP_COLOR_ATTACHMENT_WHITE_THRESHOLD:-}
+dump_color_attachment_warm_red_threshold=${DXMT9_DUMP_COLOR_ATTACHMENT_WARM_RED_THRESHOLD:-}
+dump_color_attachment_warm_green_threshold=${DXMT9_DUMP_COLOR_ATTACHMENT_WARM_GREEN_THRESHOLD:-}
+dump_color_attachment_warm_blue_margin=${DXMT9_DUMP_COLOR_ATTACHMENT_WARM_BLUE_MARGIN:-}
 dump_draw_texture_handles=${DXMT9_DUMP_DRAW_TEXTURE_HANDLES:-}
+dump_draw_texture0_any=0
+dump_draw_texture0_width=${DXMT9_DUMP_DRAW_TEXTURE0_WIDTH:-}
+dump_draw_texture0_height=${DXMT9_DUMP_DRAW_TEXTURE0_HEIGHT:-}
+dump_draw_texture0_format=${DXMT9_DUMP_DRAW_TEXTURE0_FORMAT:-}
 dump_draw_texture_seq=${DXMT9_DUMP_DRAW_TEXTURE_SEQ:-}
 dump_draw_texture_enc=${DXMT9_DUMP_DRAW_TEXTURE_ENC:-}
 dump_draw_texture_dir=${DXMT9_DUMP_DRAW_TEXTURE_DIR:-}
@@ -108,11 +142,31 @@ probe_force_texture_white_row=
 probe_force_texture_white_rows=
 probe_force_texture_white_class=
 probe_force_texture_white_classes=
+probe_force_texture_white_texture0=
+probe_force_texture_white_texture0_width=
+probe_force_texture_white_texture0_height=
+probe_force_texture_white_texture0_format=
+probe_force_texture_white_draw_ordinal=
+probe_force_texture_white_draw_ordinals=
+probe_force_texture_white_draw_ordinal_min=
+probe_force_texture_white_draw_ordinal_max=
+probe_force_texture_white_command_index=
+probe_force_texture_white_command_indexes=
+probe_force_texture_white_command_index_min=
+probe_force_texture_white_command_index_max=
+probe_force_texture_white_command_draw_index=
+probe_force_texture_white_command_draw_indexes=
+probe_force_texture_white_command_draw_index_min=
+probe_force_texture_white_command_draw_index_max=
 probe_disable_alpha_blend=0
 probe_disable_alpha_blend_row=
 probe_disable_alpha_blend_rows=
 probe_disable_alpha_blend_class=
 probe_disable_alpha_blend_classes=
+probe_disable_alpha_blend_texture0=
+probe_disable_alpha_blend_texture0_width=
+probe_disable_alpha_blend_texture0_height=
+probe_disable_alpha_blend_texture0_format=
 probe_disable_depth_write=0
 probe_disable_depth_write_row=
 probe_disable_depth_write_rows=
@@ -123,12 +177,31 @@ probe_depth_func_always_row=
 probe_depth_func_always_rows=
 probe_depth_func_always_class=
 probe_depth_func_always_classes=
+probe_depth_func_always_texture0=
+probe_depth_func_always_texture0_width=
+probe_depth_func_always_texture0_height=
+probe_depth_func_always_texture0_format=
 probe_fragmentless_depth_only=0
 probe_fragmentless_depth_only_row=
 probe_fragmentless_depth_only_rows=
 probe_fragmentless_depth_only_class=
 probe_fragmentless_depth_only_classes=
 force_visible=0
+effect_draw_trace=0
+effect_draw_trace_seq=
+effect_draw_trace_seq_min=
+effect_draw_trace_seq_max=
+effect_draw_trace_enc=
+effect_draw_trace_texture0=
+effect_draw_trace_texture0_width=
+effect_draw_trace_texture0_height=
+effect_draw_trace_texture0_format=
+effect_draw_trace_primitive_type=
+effect_draw_trace_point_sprite=0
+effect_draw_trace_include_non_alpha=0
+effect_draw_trace_include_untextured=0
+effect_draw_trace_geometry=0
+effect_draw_trace_geometry_max_refs=
 visibility_scout=0
 visibility_scout_row=
 visibility_scout_rows=
@@ -149,6 +222,7 @@ semantic_image_min_active_pct=${DXMT_3DMARK05_SEMANTIC_IMAGE_MIN_ACTIVE_PCT:-1}
 encoder_breakdown_seq=${DXMT_3DMARK05_ENCODER_BREAKDOWN_SEQ:-}
 encoder_breakdown_all_frames=0
 encoder_breakdown_enabled=1
+render_pass_reentry_top=${DXMT_3DMARK05_RENDER_PASS_REENTRY_TOP:-}
 require_color_dontcare_increase=0
 require_depth_dontcare_increase=0
 require_tile_preservation_decrease=0
@@ -222,6 +296,19 @@ Options:
                       180 with --no-gputrace; DXMT_3DMARK05_PROBE_TIMEOUT overrides)
                       The wrapper watchdog uses SEC + DXMT_3DMARK05_PROBE_TIMEOUT_SLACK
                       (default: 45) to clean up detached final-frame hangs.
+  --capture-delay-sec SEC
+                      Override run_experiment capture delay seconds. Use this
+                      for frame-window visual probes; the catalogue default is
+                      70s for 3DMark05 and may miss rifle close-up frames.
+  --capture-frames LIST
+                      Set DXMT_CAPTURE_FRAMES for deterministic internal
+                      backbuffer captures, e.g. 820,840,860. Writes BMP files
+                      under --capture-dir or traces/<run-id>/analysis/captures.
+  --capture-range START:END[:STEP]
+                      Set DXMT_CAPTURE_RANGE for deterministic internal
+                      backbuffer captures, e.g. 820:900:20.
+  --capture-dir DIR   Set DXMT_EXPERIMENT_CAPTURE_DIR for --capture-frames or
+                      --capture-range. Relative paths resolve under repo root.
   --result-file NAME  3DMark05 result filename argument (default: dxmt9_gt1.3dr)
   --no-gputrace       Do not set DXMT_METAL_CAPTURE_FRAME/PATH
                       The wrapper does not set MTL_CAPTURE_ENABLED by default:
@@ -242,6 +329,14 @@ Options:
                       Do not set DXMT9_PERF_ENCODER_BREAKDOWN. Use only for
                       no-gputrace run-level/default-policy smokes; Xcode proof
                       and per-row diagnostics need encoder breakdown.
+  --render-pass-reentry-top N
+                      Set DXMT9_PERF_RENDER_PASS_REENTRY_TOP=N to emit the
+                      top same-key render-pass re-entry rows per frame. Use
+                      with encoder breakdown when pass action shape needs to
+                      be joined to A/B role pairs.
+  --frame-sampling    Set DXMT9_PERF_FRAME_SAMPLING=1 and emit per-Present
+                      wall_ms/fps plus counter deltas. Use for visual/perf
+                      coupling probes such as bloom, glow, and muzzle effects.
   --dump-shaders      Dump translated MSL and D3D shader bytecode under
                       traces/<run-id>/analysis/shaders
   --trim-unused-varyings
@@ -465,7 +560,9 @@ Options:
   --probe-indexed-triangle-encoder-draw-min N
                       Set DXMT9_PROBE_INDEXED_TRIANGLE_ENCODER_DRAW_MIN=N.
                       Applies to reverse/sort/vertex-cache, screen-blend
-                      index-order, and split-large-indexed primitive probes
+                      index-order, split-large-indexed primitive probes, and
+                      row-scoped force-texture-white, disable-alpha-blend, and
+                      depth-func-always state probes
   --probe-indexed-triangle-encoder-draw-max N
                       Set DXMT9_PROBE_INDEXED_TRIANGLE_ENCODER_DRAW_MAX=N.
                       Use with a row selector to target a material window such
@@ -533,6 +630,15 @@ Options:
   --dump-indexed-geometry-ps HASH
                       Set DXMT9_DUMP_INDEXED_GEOMETRY_PS=HASH to dump only
                       draws using this pixel shader hash
+  --dump-indexed-geometry-texture0 HANDLE
+                      Set DXMT9_DUMP_INDEXED_GEOMETRY_TEXTURE0=HANDLE to dump
+                      only draws with this texture bound at fragment stage 0
+  --dump-indexed-geometry-texture0-width N
+                      Set DXMT9_DUMP_INDEXED_GEOMETRY_TEXTURE0_WIDTH=N
+  --dump-indexed-geometry-texture0-height N
+                      Set DXMT9_DUMP_INDEXED_GEOMETRY_TEXTURE0_HEIGHT=N
+  --dump-indexed-geometry-texture0-format N
+                      Set DXMT9_DUMP_INDEXED_GEOMETRY_TEXTURE0_FORMAT=N
   --dump-depth-attachment-handle HANDLE
                       Dump one active depth attachment by handle for mini
                       replay --depth-input. Pairs with optional seq/enc gates.
@@ -544,9 +650,90 @@ Options:
                       Output path for the raw depth sidecar. Relative paths
                       are resolved under the repository root; default is
                       traces/<run-id>/analysis/frame<N>-depth.bin
+  --dump-color-attachment-handle HANDLE
+                      Dump one active color attachment by handle for pass
+                      color-history/final-writer diagnostics. If omitted,
+                      seq/enc gates dump color attachment index 0 by default.
+  --dump-color-attachment-index N
+                      Set DXMT9_DUMP_COLOR_ATTACHMENT_INDEX=N. Useful when
+                      color RT handles are not stable across runs.
+  --dump-color-attachment-after-draw
+                      Set DXMT9_DUMP_COLOR_ATTACHMENT_AFTER_DRAW=1. Diagnostic
+                      only: ends the render encoder after a selected draw,
+                      dumps color, and resumes the pass with Load.
+  --dump-color-attachment-draw N
+                      Set DXMT9_DUMP_COLOR_ATTACHMENT_DRAW=N. Uses the same
+                      0-based encoder draw index convention as
+                      --probe-indexed-triangle-encoder-draw-min/max.
+  --dump-color-attachment-draws LIST
+                      Set DXMT9_DUMP_COLOR_ATTACHMENT_DRAWS=LIST and write
+                      one color sidecar per matching draw. Requires
+                      --dump-color-attachment-dir.
+  --dump-color-attachment-command-index N
+                      Set DXMT9_DUMP_COLOR_ATTACHMENT_COMMAND_INDEX=N. Uses
+                      the original replay command index, so it remains useful
+                      after diagnostic render-encoder splits.
+  --dump-color-attachment-command-index-min N
+                      Set DXMT9_DUMP_COLOR_ATTACHMENT_COMMAND_INDEX_MIN=N
+  --dump-color-attachment-command-index-max N
+                      Set DXMT9_DUMP_COLOR_ATTACHMENT_COMMAND_INDEX_MAX=N
+  --dump-color-attachment-texture0 HANDLE
+                      Set DXMT9_DUMP_COLOR_ATTACHMENT_TEXTURE0=HANDLE so the
+                      after-draw dump only triggers on matching texture0.
+  --dump-color-attachment-texture0s LIST
+                      Set DXMT9_DUMP_COLOR_ATTACHMENT_TEXTURE0S=LIST and write
+                      one color sidecar per matching texture0. Requires
+                      --dump-color-attachment-dir.
+  --dump-color-attachment-seq N
+                      Set DXMT9_DUMP_COLOR_ATTACHMENT_SEQ=N
+  --dump-color-attachment-enc N
+                      Set DXMT9_DUMP_COLOR_ATTACHMENT_ENC=N
+  --dump-color-attachment-path PATH
+                      Output path for the raw color sidecar. Relative paths
+                      are resolved under the repository root; default is
+                      traces/<run-id>/analysis/frame<N>-color.bin
+  --dump-color-attachment-dir DIR
+                      Output directory for multi-draw color sidecars. Relative
+                      paths are resolved under the repository root; generated
+                      files are named color-s<seq>-e<enc>-after-draw-d<N>.bin.
+  --dump-color-attachment-roi-summary-path PATH
+                      Set DXMT9_DUMP_COLOR_ATTACHMENT_ROI_SUMMARY_PATH. Writes
+                      a compact CSV with ROI max/bright/white stats instead of
+                      requiring full attachment sidecar files.
+  --dump-color-attachment-roi L,T,R,B[:NAME]
+                      Append one DXMT9_DUMP_COLOR_ATTACHMENT_ROIS entry.
+                      Multiple options are separated with semicolons.
+  --dump-color-attachment-bright-threshold N
+                      Set DXMT9_DUMP_COLOR_ATTACHMENT_BRIGHT_THRESHOLD
+                      (default in dxmt9: 220)
+  --dump-color-attachment-white-threshold N
+                      Set DXMT9_DUMP_COLOR_ATTACHMENT_WHITE_THRESHOLD
+                      (default in dxmt9: 240)
+  --dump-color-attachment-warm-red-threshold N
+                      Set DXMT9_DUMP_COLOR_ATTACHMENT_WARM_RED_THRESHOLD
+                      (default in dxmt9: 180)
+  --dump-color-attachment-warm-green-threshold N
+                      Set DXMT9_DUMP_COLOR_ATTACHMENT_WARM_GREEN_THRESHOLD
+                      (default in dxmt9: 110)
+  --dump-color-attachment-warm-blue-margin N
+                      Set DXMT9_DUMP_COLOR_ATTACHMENT_WARM_BLUE_MARGIN
+                      (default in dxmt9: 32). Warm pixels require
+                      blue <= red + margin, which rejects cyan beam hits.
   --dump-draw-texture-handles LIST
                       Dump live shader-read texture sidecars for a comma/space
                       separated handle list. Pairs with optional seq/enc gates.
+  --dump-draw-texture0-any
+                      Dump every unique live shader-read fragment texture0
+                      sidecar in the selected seq/enc gate
+  --dump-draw-texture0-width N
+                      Dump live shader-read fragment texture0 sidecars whose
+                      D3D descriptor width matches N
+  --dump-draw-texture0-height N
+                      Dump live shader-read fragment texture0 sidecars whose
+                      D3D descriptor height matches N
+  --dump-draw-texture0-format N
+                      Dump live shader-read fragment texture0 sidecars whose
+                      D3D descriptor format matches N
   --dump-draw-texture-seq N
                       Set DXMT9_DUMP_DRAW_TEXTURE_SEQ=N
   --dump-draw-texture-enc N
@@ -583,6 +770,38 @@ Options:
   --probe-force-texture-white-classes CLASSES
                       Set DXMT9_PROBE_FORCE_TEXTURE_WHITE_CLASSES=CLASSES.
                       Values are ANDed, e.g. depth-read,screen-blend,textured
+  --probe-force-texture-white-texture0 HANDLE
+                      Set DXMT9_PROBE_FORCE_TEXTURE_WHITE_TEXTURE0=HANDLE
+  --probe-force-texture-white-texture0-width N
+                      Set DXMT9_PROBE_FORCE_TEXTURE_WHITE_TEXTURE0_WIDTH=N
+  --probe-force-texture-white-texture0-height N
+                      Set DXMT9_PROBE_FORCE_TEXTURE_WHITE_TEXTURE0_HEIGHT=N
+  --probe-force-texture-white-texture0-format N
+                      Set DXMT9_PROBE_FORCE_TEXTURE_WHITE_TEXTURE0_FORMAT=N
+  --probe-force-texture-white-draw-ordinal N
+                      Set DXMT9_PROBE_FORCE_TEXTURE_WHITE_DRAW_ORDINALS=N
+  --probe-force-texture-white-draw-ordinals LIST
+                      Set DXMT9_PROBE_FORCE_TEXTURE_WHITE_DRAW_ORDINALS=LIST
+  --probe-force-texture-white-draw-ordinal-min N
+                      Set DXMT9_PROBE_FORCE_TEXTURE_WHITE_DRAW_ORDINAL_MIN=N
+  --probe-force-texture-white-draw-ordinal-max N
+                      Set DXMT9_PROBE_FORCE_TEXTURE_WHITE_DRAW_ORDINAL_MAX=N
+  --probe-force-texture-white-command-index N
+                      Set DXMT9_PROBE_FORCE_TEXTURE_WHITE_COMMAND_INDEXES=N
+  --probe-force-texture-white-command-indexes LIST
+                      Set DXMT9_PROBE_FORCE_TEXTURE_WHITE_COMMAND_INDEXES=LIST
+  --probe-force-texture-white-command-index-min N
+                      Set DXMT9_PROBE_FORCE_TEXTURE_WHITE_COMMAND_INDEX_MIN=N
+  --probe-force-texture-white-command-index-max N
+                      Set DXMT9_PROBE_FORCE_TEXTURE_WHITE_COMMAND_INDEX_MAX=N
+  --probe-force-texture-white-command-draw-index N
+                      Set DXMT9_PROBE_FORCE_TEXTURE_WHITE_COMMAND_DRAW_INDEXES=N
+  --probe-force-texture-white-command-draw-indexes LIST
+                      Set DXMT9_PROBE_FORCE_TEXTURE_WHITE_COMMAND_DRAW_INDEXES=LIST
+  --probe-force-texture-white-command-draw-index-min N
+                      Set DXMT9_PROBE_FORCE_TEXTURE_WHITE_COMMAND_DRAW_INDEX_MIN=N
+  --probe-force-texture-white-command-draw-index-max N
+                      Set DXMT9_PROBE_FORCE_TEXTURE_WHITE_COMMAND_DRAW_INDEX_MAX=N
   --probe-disable-alpha-blend
                       Set DXMT9_PROBE_DISABLE_ALPHA_BLEND=1 for blend state A/B
   --probe-disable-alpha-blend-row SEQ/ENC
@@ -596,6 +815,14 @@ Options:
   --probe-disable-alpha-blend-classes CLASSES
                       Set DXMT9_PROBE_DISABLE_ALPHA_BLEND_CLASSES=CLASSES.
                       Values are ANDed, e.g. large4096,screen-blend
+  --probe-disable-alpha-blend-texture0 HANDLE
+                      Set DXMT9_PROBE_DISABLE_ALPHA_BLEND_TEXTURE0=HANDLE
+  --probe-disable-alpha-blend-texture0-width N
+                      Set DXMT9_PROBE_DISABLE_ALPHA_BLEND_TEXTURE0_WIDTH=N
+  --probe-disable-alpha-blend-texture0-height N
+                      Set DXMT9_PROBE_DISABLE_ALPHA_BLEND_TEXTURE0_HEIGHT=N
+  --probe-disable-alpha-blend-texture0-format N
+                      Set DXMT9_PROBE_DISABLE_ALPHA_BLEND_TEXTURE0_FORMAT=N
   --probe-disable-depth-write
                       Set DXMT9_PROBE_DISABLE_DEPTH_WRITE=1 for depth-write A/B
   --probe-disable-depth-write-row SEQ/ENC
@@ -623,6 +850,14 @@ Options:
   --probe-depth-func-always-classes CLASSES
                       Set DXMT9_PROBE_DEPTH_FUNC_ALWAYS_CLASSES=CLASSES.
                       Values are ANDed, e.g. opaque-depth-write,large4096
+  --probe-depth-func-always-texture0 HANDLE
+                      Set DXMT9_PROBE_DEPTH_FUNC_ALWAYS_TEXTURE0=HANDLE
+  --probe-depth-func-always-texture0-width N
+                      Set DXMT9_PROBE_DEPTH_FUNC_ALWAYS_TEXTURE0_WIDTH=N
+  --probe-depth-func-always-texture0-height N
+                      Set DXMT9_PROBE_DEPTH_FUNC_ALWAYS_TEXTURE0_HEIGHT=N
+  --probe-depth-func-always-texture0-format N
+                      Set DXMT9_PROBE_DEPTH_FUNC_ALWAYS_TEXTURE0_FORMAT=N
   --probe-fragmentless-depth-only
                       Set DXMT9_PROBE_FRAGMENTLESS_DEPTH_ONLY=1 for scoped
                       depth-only backend-shape A/B. The encoder still gates
@@ -639,6 +874,50 @@ Options:
                       Set DXMT9_PROBE_FRAGMENTLESS_DEPTH_ONLY_CLASSES=CLASSES.
                       Values are ANDed, e.g. large4096,no-alpha-blend
   --force-visible     Set DXMT_DEBUG_FORCE_VISIBLE=1 for visibility/state A/B
+  --effect-draw-trace
+                      Set DXMT9_EFFECT_DRAW_TRACE=1 and log alpha-blended
+                      textured draw state to dxmt9.log
+  --effect-draw-trace-seq N
+                      Set DXMT9_EFFECT_DRAW_TRACE_SEQ=N and enable effect trace
+  --effect-draw-trace-seq-min N
+                      Set DXMT9_EFFECT_DRAW_TRACE_SEQ_MIN=N and enable
+                      effect trace
+  --effect-draw-trace-seq-max N
+                      Set DXMT9_EFFECT_DRAW_TRACE_SEQ_MAX=N and enable
+                      effect trace
+  --effect-draw-trace-enc N
+                      Set DXMT9_EFFECT_DRAW_TRACE_ENC=N and enable effect trace
+  --effect-draw-trace-texture0 HANDLE
+                      Set DXMT9_EFFECT_DRAW_TRACE_TEXTURE0=HANDLE and enable
+                      effect trace
+  --effect-draw-trace-texture0-width N
+                      Set DXMT9_EFFECT_DRAW_TRACE_TEXTURE0_WIDTH=N and enable
+                      effect trace
+  --effect-draw-trace-texture0-height N
+                      Set DXMT9_EFFECT_DRAW_TRACE_TEXTURE0_HEIGHT=N and enable
+                      effect trace
+  --effect-draw-trace-texture0-format N
+                      Set DXMT9_EFFECT_DRAW_TRACE_TEXTURE0_FORMAT=N and enable
+                      effect trace
+  --effect-draw-trace-primitive-type N
+                      Set DXMT9_EFFECT_DRAW_TRACE_PRIMITIVE_TYPE=N and enable
+                      effect trace. PrimitiveType enum: PointList=0,
+                      TriangleList=3
+  --effect-draw-trace-point-sprite
+                      Set DXMT9_EFFECT_DRAW_TRACE_POINT_SPRITE=1 and log only
+                      POINTSPRITEENABLE + PointList effect draw candidates
+  --effect-draw-trace-include-non-alpha
+                      Set DXMT9_EFFECT_DRAW_TRACE_INCLUDE_NON_ALPHA=1 so
+                      trace rows are not limited to alpha-blended draws
+  --effect-draw-trace-include-untextured
+                      Set DXMT9_EFFECT_DRAW_TRACE_INCLUDE_UNTEXTURED=1 so
+                      trace rows are not limited to texture-bound draws
+  --effect-draw-trace-geometry
+                      Set DXMT9_EFFECT_DRAW_TRACE_GEOMETRY=1 and add
+                      stream0/index bbox, UV, and diffuse-alpha summaries
+                      for matching indexed effect draws
+  --effect-draw-trace-geometry-max-refs N
+                      Set DXMT9_EFFECT_DRAW_TRACE_GEOMETRY_MAX_REFS=N
   --visibility-scout  Set DXMT9_VISIBILITY_SCOUT=1 and write Metal
                       visibility counts under traces/<run-id>/analysis
   --visibility-scout-row SEQ/ENC
@@ -855,6 +1134,22 @@ while (($#)); do
       timeout=${2:?missing value for --timeout}
       shift 2
       ;;
+    --capture-delay-sec)
+      capture_delay_sec=${2:?missing value for --capture-delay-sec}
+      shift 2
+      ;;
+    --capture-frames)
+      capture_frames=${2:?missing value for --capture-frames}
+      shift 2
+      ;;
+    --capture-range)
+      capture_range=${2:?missing value for --capture-range}
+      shift 2
+      ;;
+    --capture-dir)
+      capture_dir=${2:?missing value for --capture-dir}
+      shift 2
+      ;;
     --result-file)
       result_file=${2:?missing value for --result-file}
       shift 2
@@ -869,6 +1164,14 @@ while (($#)); do
       ;;
     --no-encoder-breakdown)
       encoder_breakdown_enabled=0
+      shift
+      ;;
+    --render-pass-reentry-top)
+      render_pass_reentry_top=${2:?missing value for --render-pass-reentry-top}
+      shift 2
+      ;;
+    --frame-sampling)
+      frame_sampling=1
       shift
       ;;
     --no-gputrace)
@@ -1189,6 +1492,22 @@ while (($#)); do
       dump_indexed_geometry_ps=${2:?missing value for --dump-indexed-geometry-ps}
       shift 2
       ;;
+    --dump-indexed-geometry-texture0)
+      dump_indexed_geometry_texture0=${2:?missing value for --dump-indexed-geometry-texture0}
+      shift 2
+      ;;
+    --dump-indexed-geometry-texture0-width)
+      dump_indexed_geometry_texture0_width=${2:?missing value for --dump-indexed-geometry-texture0-width}
+      shift 2
+      ;;
+    --dump-indexed-geometry-texture0-height)
+      dump_indexed_geometry_texture0_height=${2:?missing value for --dump-indexed-geometry-texture0-height}
+      shift 2
+      ;;
+    --dump-indexed-geometry-texture0-format)
+      dump_indexed_geometry_texture0_format=${2:?missing value for --dump-indexed-geometry-texture0-format}
+      shift 2
+      ;;
     --dump-depth-attachment-handle)
       dump_depth_attachment_handle=${2:?missing value for --dump-depth-attachment-handle}
       shift 2
@@ -1205,8 +1524,111 @@ while (($#)); do
       dump_depth_attachment_path=${2:?missing value for --dump-depth-attachment-path}
       shift 2
       ;;
+    --dump-color-attachment-handle)
+      dump_color_attachment_handle=${2:?missing value for --dump-color-attachment-handle}
+      shift 2
+      ;;
+    --dump-color-attachment-index)
+      dump_color_attachment_index=${2:?missing value for --dump-color-attachment-index}
+      shift 2
+      ;;
+    --dump-color-attachment-after-draw)
+      dump_color_attachment_after_draw=1
+      shift
+      ;;
+    --dump-color-attachment-draw)
+      dump_color_attachment_draw=${2:?missing value for --dump-color-attachment-draw}
+      shift 2
+      ;;
+    --dump-color-attachment-draws)
+      dump_color_attachment_draws=${2:?missing value for --dump-color-attachment-draws}
+      shift 2
+      ;;
+    --dump-color-attachment-command-index)
+      dump_color_attachment_command_index=${2:?missing value for --dump-color-attachment-command-index}
+      shift 2
+      ;;
+    --dump-color-attachment-command-index-min)
+      dump_color_attachment_command_index_min=${2:?missing value for --dump-color-attachment-command-index-min}
+      shift 2
+      ;;
+    --dump-color-attachment-command-index-max)
+      dump_color_attachment_command_index_max=${2:?missing value for --dump-color-attachment-command-index-max}
+      shift 2
+      ;;
+    --dump-color-attachment-texture0)
+      dump_color_attachment_texture0=${2:?missing value for --dump-color-attachment-texture0}
+      shift 2
+      ;;
+    --dump-color-attachment-texture0s)
+      dump_color_attachment_texture0s=${2:?missing value for --dump-color-attachment-texture0s}
+      shift 2
+      ;;
+    --dump-color-attachment-seq)
+      dump_color_attachment_seq=${2:?missing value for --dump-color-attachment-seq}
+      shift 2
+      ;;
+    --dump-color-attachment-enc)
+      dump_color_attachment_enc=${2:?missing value for --dump-color-attachment-enc}
+      shift 2
+      ;;
+    --dump-color-attachment-path)
+      dump_color_attachment_path=${2:?missing value for --dump-color-attachment-path}
+      shift 2
+      ;;
+    --dump-color-attachment-dir)
+      dump_color_attachment_dir=${2:?missing value for --dump-color-attachment-dir}
+      shift 2
+      ;;
+    --dump-color-attachment-roi-summary-path)
+      dump_color_attachment_roi_summary_path=${2:?missing value for --dump-color-attachment-roi-summary-path}
+      shift 2
+      ;;
+    --dump-color-attachment-roi)
+      if [[ -n "$dump_color_attachment_rois" ]]; then
+        dump_color_attachment_rois+=";"
+      fi
+      dump_color_attachment_rois+="${2:?missing value for --dump-color-attachment-roi}"
+      shift 2
+      ;;
+    --dump-color-attachment-bright-threshold)
+      dump_color_attachment_bright_threshold=${2:?missing value for --dump-color-attachment-bright-threshold}
+      shift 2
+      ;;
+    --dump-color-attachment-white-threshold)
+      dump_color_attachment_white_threshold=${2:?missing value for --dump-color-attachment-white-threshold}
+      shift 2
+      ;;
+    --dump-color-attachment-warm-red-threshold)
+      dump_color_attachment_warm_red_threshold=${2:?missing value for --dump-color-attachment-warm-red-threshold}
+      shift 2
+      ;;
+    --dump-color-attachment-warm-green-threshold)
+      dump_color_attachment_warm_green_threshold=${2:?missing value for --dump-color-attachment-warm-green-threshold}
+      shift 2
+      ;;
+    --dump-color-attachment-warm-blue-margin)
+      dump_color_attachment_warm_blue_margin=${2:?missing value for --dump-color-attachment-warm-blue-margin}
+      shift 2
+      ;;
     --dump-draw-texture-handles)
       dump_draw_texture_handles=${2:?missing value for --dump-draw-texture-handles}
+      shift 2
+      ;;
+    --dump-draw-texture0-any)
+      dump_draw_texture0_any=1
+      shift
+      ;;
+    --dump-draw-texture0-width)
+      dump_draw_texture0_width=${2:?missing value for --dump-draw-texture0-width}
+      shift 2
+      ;;
+    --dump-draw-texture0-height)
+      dump_draw_texture0_height=${2:?missing value for --dump-draw-texture0-height}
+      shift 2
+      ;;
+    --dump-draw-texture0-format)
+      dump_draw_texture0_format=${2:?missing value for --dump-draw-texture0-format}
       shift 2
       ;;
     --dump-draw-texture-seq)
@@ -1269,6 +1691,86 @@ while (($#)); do
       probe_force_texture_white_classes=${2:?missing value for --probe-force-texture-white-classes}
       shift 2
       ;;
+    --probe-force-texture-white-texture0)
+      probe_force_texture_white=1
+      probe_force_texture_white_texture0=${2:?missing value for --probe-force-texture-white-texture0}
+      shift 2
+      ;;
+    --probe-force-texture-white-texture0-width)
+      probe_force_texture_white=1
+      probe_force_texture_white_texture0_width=${2:?missing value for --probe-force-texture-white-texture0-width}
+      shift 2
+      ;;
+    --probe-force-texture-white-texture0-height)
+      probe_force_texture_white=1
+      probe_force_texture_white_texture0_height=${2:?missing value for --probe-force-texture-white-texture0-height}
+      shift 2
+      ;;
+    --probe-force-texture-white-texture0-format)
+      probe_force_texture_white=1
+      probe_force_texture_white_texture0_format=${2:?missing value for --probe-force-texture-white-texture0-format}
+      shift 2
+      ;;
+    --probe-force-texture-white-draw-ordinal)
+      probe_force_texture_white=1
+      probe_force_texture_white_draw_ordinal=${2:?missing value for --probe-force-texture-white-draw-ordinal}
+      shift 2
+      ;;
+    --probe-force-texture-white-draw-ordinals)
+      probe_force_texture_white=1
+      probe_force_texture_white_draw_ordinals=${2:?missing value for --probe-force-texture-white-draw-ordinals}
+      shift 2
+      ;;
+    --probe-force-texture-white-draw-ordinal-min)
+      probe_force_texture_white=1
+      probe_force_texture_white_draw_ordinal_min=${2:?missing value for --probe-force-texture-white-draw-ordinal-min}
+      shift 2
+      ;;
+    --probe-force-texture-white-draw-ordinal-max)
+      probe_force_texture_white=1
+      probe_force_texture_white_draw_ordinal_max=${2:?missing value for --probe-force-texture-white-draw-ordinal-max}
+      shift 2
+      ;;
+    --probe-force-texture-white-command-index)
+      probe_force_texture_white=1
+      probe_force_texture_white_command_index=${2:?missing value for --probe-force-texture-white-command-index}
+      shift 2
+      ;;
+    --probe-force-texture-white-command-indexes)
+      probe_force_texture_white=1
+      probe_force_texture_white_command_indexes=${2:?missing value for --probe-force-texture-white-command-indexes}
+      shift 2
+      ;;
+    --probe-force-texture-white-command-index-min)
+      probe_force_texture_white=1
+      probe_force_texture_white_command_index_min=${2:?missing value for --probe-force-texture-white-command-index-min}
+      shift 2
+      ;;
+    --probe-force-texture-white-command-index-max)
+      probe_force_texture_white=1
+      probe_force_texture_white_command_index_max=${2:?missing value for --probe-force-texture-white-command-index-max}
+      shift 2
+      ;;
+    --probe-force-texture-white-command-draw-index)
+      probe_force_texture_white=1
+      probe_force_texture_white_command_draw_index=${2:?missing value for --probe-force-texture-white-command-draw-index}
+      shift 2
+      ;;
+    --probe-force-texture-white-command-draw-indexes)
+      probe_force_texture_white=1
+      probe_force_texture_white_command_draw_indexes=${2:?missing value for --probe-force-texture-white-command-draw-indexes}
+      shift 2
+      ;;
+    --probe-force-texture-white-command-draw-index-min)
+      probe_force_texture_white=1
+      probe_force_texture_white_command_draw_index_min=${2:?missing value for --probe-force-texture-white-command-draw-index-min}
+      shift 2
+      ;;
+    --probe-force-texture-white-command-draw-index-max)
+      probe_force_texture_white=1
+      probe_force_texture_white_command_draw_index_max=${2:?missing value for --probe-force-texture-white-command-draw-index-max}
+      shift 2
+      ;;
     --probe-disable-alpha-blend)
       probe_disable_alpha_blend=1
       shift
@@ -1287,6 +1789,26 @@ while (($#)); do
       ;;
     --probe-disable-alpha-blend-classes)
       probe_disable_alpha_blend_classes=${2:?missing value for --probe-disable-alpha-blend-classes}
+      shift 2
+      ;;
+    --probe-disable-alpha-blend-texture0)
+      probe_disable_alpha_blend=1
+      probe_disable_alpha_blend_texture0=${2:?missing value for --probe-disable-alpha-blend-texture0}
+      shift 2
+      ;;
+    --probe-disable-alpha-blend-texture0-width)
+      probe_disable_alpha_blend=1
+      probe_disable_alpha_blend_texture0_width=${2:?missing value for --probe-disable-alpha-blend-texture0-width}
+      shift 2
+      ;;
+    --probe-disable-alpha-blend-texture0-height)
+      probe_disable_alpha_blend=1
+      probe_disable_alpha_blend_texture0_height=${2:?missing value for --probe-disable-alpha-blend-texture0-height}
+      shift 2
+      ;;
+    --probe-disable-alpha-blend-texture0-format)
+      probe_disable_alpha_blend=1
+      probe_disable_alpha_blend_texture0_format=${2:?missing value for --probe-disable-alpha-blend-texture0-format}
       shift 2
       ;;
     --probe-disable-depth-write)
@@ -1337,6 +1859,26 @@ while (($#)); do
       probe_depth_func_always_classes=${2:?missing value for --probe-depth-func-always-classes}
       shift 2
       ;;
+    --probe-depth-func-always-texture0)
+      probe_depth_func_always=1
+      probe_depth_func_always_texture0=${2:?missing value for --probe-depth-func-always-texture0}
+      shift 2
+      ;;
+    --probe-depth-func-always-texture0-width)
+      probe_depth_func_always=1
+      probe_depth_func_always_texture0_width=${2:?missing value for --probe-depth-func-always-texture0-width}
+      shift 2
+      ;;
+    --probe-depth-func-always-texture0-height)
+      probe_depth_func_always=1
+      probe_depth_func_always_texture0_height=${2:?missing value for --probe-depth-func-always-texture0-height}
+      shift 2
+      ;;
+    --probe-depth-func-always-texture0-format)
+      probe_depth_func_always=1
+      probe_depth_func_always_texture0_format=${2:?missing value for --probe-depth-func-always-texture0-format}
+      shift 2
+      ;;
     --probe-fragmentless-depth-only)
       probe_fragmentless_depth_only=1
       shift
@@ -1364,6 +1906,81 @@ while (($#)); do
     --force-visible)
       force_visible=1
       shift
+      ;;
+    --effect-draw-trace)
+      effect_draw_trace=1
+      shift
+      ;;
+    --effect-draw-trace-seq)
+      effect_draw_trace=1
+      effect_draw_trace_seq=${2:?missing value for --effect-draw-trace-seq}
+      shift 2
+      ;;
+    --effect-draw-trace-seq-min)
+      effect_draw_trace=1
+      effect_draw_trace_seq_min=${2:?missing value for --effect-draw-trace-seq-min}
+      shift 2
+      ;;
+    --effect-draw-trace-seq-max)
+      effect_draw_trace=1
+      effect_draw_trace_seq_max=${2:?missing value for --effect-draw-trace-seq-max}
+      shift 2
+      ;;
+    --effect-draw-trace-enc)
+      effect_draw_trace=1
+      effect_draw_trace_enc=${2:?missing value for --effect-draw-trace-enc}
+      shift 2
+      ;;
+    --effect-draw-trace-texture0)
+      effect_draw_trace=1
+      effect_draw_trace_texture0=${2:?missing value for --effect-draw-trace-texture0}
+      shift 2
+      ;;
+    --effect-draw-trace-texture0-width)
+      effect_draw_trace=1
+      effect_draw_trace_texture0_width=${2:?missing value for --effect-draw-trace-texture0-width}
+      shift 2
+      ;;
+    --effect-draw-trace-texture0-height)
+      effect_draw_trace=1
+      effect_draw_trace_texture0_height=${2:?missing value for --effect-draw-trace-texture0-height}
+      shift 2
+      ;;
+    --effect-draw-trace-texture0-format)
+      effect_draw_trace=1
+      effect_draw_trace_texture0_format=${2:?missing value for --effect-draw-trace-texture0-format}
+      shift 2
+      ;;
+    --effect-draw-trace-primitive-type)
+      effect_draw_trace=1
+      effect_draw_trace_primitive_type=${2:?missing value for --effect-draw-trace-primitive-type}
+      shift 2
+      ;;
+    --effect-draw-trace-point-sprite)
+      effect_draw_trace=1
+      effect_draw_trace_point_sprite=1
+      shift
+      ;;
+    --effect-draw-trace-include-non-alpha)
+      effect_draw_trace=1
+      effect_draw_trace_include_non_alpha=1
+      shift
+      ;;
+    --effect-draw-trace-include-untextured)
+      effect_draw_trace=1
+      effect_draw_trace_include_untextured=1
+      shift
+      ;;
+    --effect-draw-trace-geometry)
+      effect_draw_trace=1
+      effect_draw_trace_geometry=1
+      shift
+      ;;
+    --effect-draw-trace-geometry-max-refs)
+      effect_draw_trace=1
+      effect_draw_trace_geometry=1
+      effect_draw_trace_geometry_max_refs=${2:?missing value for --effect-draw-trace-geometry-max-refs}
+      shift 2
       ;;
     --visibility-scout)
       visibility_scout=1
@@ -1708,6 +2325,21 @@ if [[ ! "$timeout_slack" =~ ^[0-9]+([.][0-9]+)?$ ]]; then
   exit 2
 fi
 
+if [[ -n "$capture_delay_sec" && ! "$capture_delay_sec" =~ ^[0-9]+([.][0-9]+)?$ ]]; then
+  echo "--capture-delay-sec must be non-negative numeric seconds" >&2
+  exit 2
+fi
+
+if [[ -n "$capture_frames" && ! "$capture_frames" =~ ^[0-9]+([,;[:space:]][0-9]+)*$ ]]; then
+  echo "--capture-frames must be a comma/semicolon/space separated positive integer list" >&2
+  exit 2
+fi
+
+if [[ -n "$capture_range" && ! "$capture_range" =~ ^[0-9]+:[0-9]+(:[0-9]+)?$ ]]; then
+  echo "--capture-range must be START:END[:STEP] with non-negative integers" >&2
+  exit 2
+fi
+
 if [[ -z "$suffix" ]]; then
   suffix="probe-$(date +%Y%m%d-%H%M%S)-frame${frame}"
 fi
@@ -1817,6 +2449,181 @@ if [[ -n "$index_cache_candidate_frontier_cap" &&
   echo "--index-cache-candidate-frontier-cap must be a non-negative integer" >&2
   exit 2
 fi
+if [[ -n "$dump_indexed_geometry_texture0_width" &&
+      ! "$dump_indexed_geometry_texture0_width" =~ ^[0-9]+$ ]]; then
+  echo "--dump-indexed-geometry-texture0-width must be a non-negative integer" >&2
+  exit 2
+fi
+if [[ -n "$dump_indexed_geometry_texture0_height" &&
+      ! "$dump_indexed_geometry_texture0_height" =~ ^[0-9]+$ ]]; then
+  echo "--dump-indexed-geometry-texture0-height must be a non-negative integer" >&2
+  exit 2
+fi
+if [[ -n "$dump_indexed_geometry_texture0_format" &&
+      ! "$dump_indexed_geometry_texture0_format" =~ ^(0[xX][0-9a-fA-F]+|[0-9]+)$ ]]; then
+  echo "--dump-indexed-geometry-texture0-format must be an integer format value" >&2
+  exit 2
+fi
+if [[ -n "$probe_force_texture_white_texture0_width" &&
+      ! "$probe_force_texture_white_texture0_width" =~ ^[0-9]+$ ]]; then
+  echo "--probe-force-texture-white-texture0-width must be a non-negative integer" >&2
+  exit 2
+fi
+if [[ -n "$probe_force_texture_white_texture0" &&
+      ! "$probe_force_texture_white_texture0" =~ ^(0[xX][0-9a-fA-F]+|[0-9]+)$ ]]; then
+  echo "--probe-force-texture-white-texture0 must be an integer handle" >&2
+  exit 2
+fi
+if [[ -n "$probe_force_texture_white_texture0_height" &&
+      ! "$probe_force_texture_white_texture0_height" =~ ^[0-9]+$ ]]; then
+  echo "--probe-force-texture-white-texture0-height must be a non-negative integer" >&2
+  exit 2
+fi
+if [[ -n "$probe_force_texture_white_texture0_format" &&
+      ! "$probe_force_texture_white_texture0_format" =~ ^(0[xX][0-9a-fA-F]+|[0-9]+)$ ]]; then
+  echo "--probe-force-texture-white-texture0-format must be an integer format value" >&2
+  exit 2
+fi
+if [[ -n "$probe_force_texture_white_draw_ordinal" &&
+      ! "$probe_force_texture_white_draw_ordinal" =~ ^[0-9]+$ ]]; then
+  echo "--probe-force-texture-white-draw-ordinal must be a non-negative integer" >&2
+  exit 2
+fi
+if [[ -n "$probe_force_texture_white_draw_ordinals" &&
+      ! "$probe_force_texture_white_draw_ordinals" =~ ^[0-9,[:space:]]+$ ]]; then
+  echo "--probe-force-texture-white-draw-ordinals must be a comma/space separated non-negative integer list" >&2
+  exit 2
+fi
+if [[ -n "$probe_force_texture_white_draw_ordinal_min" &&
+      ! "$probe_force_texture_white_draw_ordinal_min" =~ ^[0-9]+$ ]]; then
+  echo "--probe-force-texture-white-draw-ordinal-min must be a non-negative integer" >&2
+  exit 2
+fi
+if [[ -n "$probe_force_texture_white_draw_ordinal_max" &&
+      ! "$probe_force_texture_white_draw_ordinal_max" =~ ^[0-9]+$ ]]; then
+  echo "--probe-force-texture-white-draw-ordinal-max must be a non-negative integer" >&2
+  exit 2
+fi
+if [[ -n "$probe_force_texture_white_command_index" &&
+      ! "$probe_force_texture_white_command_index" =~ ^[0-9]+$ ]]; then
+  echo "--probe-force-texture-white-command-index must be a non-negative integer" >&2
+  exit 2
+fi
+if [[ -n "$probe_force_texture_white_command_indexes" &&
+      ! "$probe_force_texture_white_command_indexes" =~ ^[0-9,[:space:]]+$ ]]; then
+  echo "--probe-force-texture-white-command-indexes must be a comma/space separated non-negative integer list" >&2
+  exit 2
+fi
+if [[ -n "$probe_force_texture_white_command_index_min" &&
+      ! "$probe_force_texture_white_command_index_min" =~ ^[0-9]+$ ]]; then
+  echo "--probe-force-texture-white-command-index-min must be a non-negative integer" >&2
+  exit 2
+fi
+if [[ -n "$probe_force_texture_white_command_index_max" &&
+      ! "$probe_force_texture_white_command_index_max" =~ ^[0-9]+$ ]]; then
+  echo "--probe-force-texture-white-command-index-max must be a non-negative integer" >&2
+  exit 2
+fi
+if [[ -n "$probe_force_texture_white_command_draw_index" &&
+      ! "$probe_force_texture_white_command_draw_index" =~ ^[0-9]+$ ]]; then
+  echo "--probe-force-texture-white-command-draw-index must be a non-negative integer" >&2
+  exit 2
+fi
+if [[ -n "$probe_force_texture_white_command_draw_indexes" &&
+      ! "$probe_force_texture_white_command_draw_indexes" =~ ^[0-9,[:space:]]+$ ]]; then
+  echo "--probe-force-texture-white-command-draw-indexes must be a comma/space separated non-negative integer list" >&2
+  exit 2
+fi
+if [[ -n "$probe_force_texture_white_command_draw_index_min" &&
+      ! "$probe_force_texture_white_command_draw_index_min" =~ ^[0-9]+$ ]]; then
+  echo "--probe-force-texture-white-command-draw-index-min must be a non-negative integer" >&2
+  exit 2
+fi
+if [[ -n "$probe_force_texture_white_command_draw_index_max" &&
+      ! "$probe_force_texture_white_command_draw_index_max" =~ ^[0-9]+$ ]]; then
+  echo "--probe-force-texture-white-command-draw-index-max must be a non-negative integer" >&2
+  exit 2
+fi
+if [[ -n "$probe_disable_alpha_blend_texture0_width" &&
+      ! "$probe_disable_alpha_blend_texture0_width" =~ ^[0-9]+$ ]]; then
+  echo "--probe-disable-alpha-blend-texture0-width must be a non-negative integer" >&2
+  exit 2
+fi
+if [[ -n "$probe_disable_alpha_blend_texture0" &&
+      ! "$probe_disable_alpha_blend_texture0" =~ ^(0[xX][0-9a-fA-F]+|[0-9]+)$ ]]; then
+  echo "--probe-disable-alpha-blend-texture0 must be an integer handle" >&2
+  exit 2
+fi
+if [[ -n "$probe_disable_alpha_blend_texture0_height" &&
+      ! "$probe_disable_alpha_blend_texture0_height" =~ ^[0-9]+$ ]]; then
+  echo "--probe-disable-alpha-blend-texture0-height must be a non-negative integer" >&2
+  exit 2
+fi
+if [[ -n "$probe_disable_alpha_blend_texture0_format" &&
+      ! "$probe_disable_alpha_blend_texture0_format" =~ ^(0[xX][0-9a-fA-F]+|[0-9]+)$ ]]; then
+  echo "--probe-disable-alpha-blend-texture0-format must be an integer format value" >&2
+  exit 2
+fi
+if [[ -n "$probe_depth_func_always_texture0_width" &&
+      ! "$probe_depth_func_always_texture0_width" =~ ^[0-9]+$ ]]; then
+  echo "--probe-depth-func-always-texture0-width must be a non-negative integer" >&2
+  exit 2
+fi
+if [[ -n "$probe_depth_func_always_texture0" &&
+      ! "$probe_depth_func_always_texture0" =~ ^(0[xX][0-9a-fA-F]+|[0-9]+)$ ]]; then
+  echo "--probe-depth-func-always-texture0 must be an integer handle" >&2
+  exit 2
+fi
+if [[ -n "$probe_depth_func_always_texture0_height" &&
+      ! "$probe_depth_func_always_texture0_height" =~ ^[0-9]+$ ]]; then
+  echo "--probe-depth-func-always-texture0-height must be a non-negative integer" >&2
+  exit 2
+fi
+if [[ -n "$probe_depth_func_always_texture0_format" &&
+      ! "$probe_depth_func_always_texture0_format" =~ ^(0[xX][0-9a-fA-F]+|[0-9]+)$ ]]; then
+  echo "--probe-depth-func-always-texture0-format must be an integer format value" >&2
+  exit 2
+fi
+if [[ -n "$effect_draw_trace_texture0" &&
+      ! "$effect_draw_trace_texture0" =~ ^(0[xX][0-9a-fA-F]+|[0-9]+)$ ]]; then
+  echo "--effect-draw-trace-texture0 must be an integer handle" >&2
+  exit 2
+fi
+if [[ -n "$effect_draw_trace_seq_min" &&
+      ! "$effect_draw_trace_seq_min" =~ ^[0-9]+$ ]]; then
+  echo "--effect-draw-trace-seq-min must be a non-negative integer" >&2
+  exit 2
+fi
+if [[ -n "$effect_draw_trace_seq_max" &&
+      ! "$effect_draw_trace_seq_max" =~ ^[0-9]+$ ]]; then
+  echo "--effect-draw-trace-seq-max must be a non-negative integer" >&2
+  exit 2
+fi
+if [[ -n "$effect_draw_trace_texture0_width" &&
+      ! "$effect_draw_trace_texture0_width" =~ ^[0-9]+$ ]]; then
+  echo "--effect-draw-trace-texture0-width must be a non-negative integer" >&2
+  exit 2
+fi
+if [[ -n "$effect_draw_trace_texture0_height" &&
+      ! "$effect_draw_trace_texture0_height" =~ ^[0-9]+$ ]]; then
+  echo "--effect-draw-trace-texture0-height must be a non-negative integer" >&2
+  exit 2
+fi
+if [[ -n "$effect_draw_trace_texture0_format" &&
+      ! "$effect_draw_trace_texture0_format" =~ ^(0[xX][0-9a-fA-F]+|[0-9]+)$ ]]; then
+  echo "--effect-draw-trace-texture0-format must be an integer format value" >&2
+  exit 2
+fi
+if [[ -n "$effect_draw_trace_primitive_type" &&
+      ! "$effect_draw_trace_primitive_type" =~ ^[0-9]+$ ]]; then
+  echo "--effect-draw-trace-primitive-type must be a non-negative integer" >&2
+  exit 2
+fi
+if [[ -n "$effect_draw_trace_geometry_max_refs" &&
+      ! "$effect_draw_trace_geometry_max_refs" =~ ^[0-9]+$ ]]; then
+  echo "--effect-draw-trace-geometry-max-refs must be a non-negative integer" >&2
+  exit 2
+fi
 if (( index_cache_candidate_lazy_frontier && index_cache_candidate_bucketed_select )); then
   echo "--index-cache-candidate-lazy-frontier and --index-cache-candidate-bucketed-select are mutually exclusive" >&2
   exit 2
@@ -1843,9 +2650,149 @@ if [[ -z "$dump_depth_attachment_handle" &&
   echo "--dump-depth-attachment-seq/enc/path require --dump-depth-attachment-handle" >&2
   exit 2
 fi
+if [[ -n "$dump_color_attachment_handle" &&
+      ! "$dump_color_attachment_handle" =~ ^(0[xX][0-9a-fA-F]+|[0-9]+)$ ]]; then
+  echo "--dump-color-attachment-handle must be an integer handle, e.g. 0x30000900000000b" >&2
+  exit 2
+fi
+if [[ -n "$dump_color_attachment_index" &&
+      ! "$dump_color_attachment_index" =~ ^[0-9]+$ ]]; then
+  echo "--dump-color-attachment-index must be a non-negative integer" >&2
+  exit 2
+fi
+if [[ -n "$dump_color_attachment_draw" &&
+      ! "$dump_color_attachment_draw" =~ ^[0-9]+$ ]]; then
+  echo "--dump-color-attachment-draw must be a non-negative integer" >&2
+  exit 2
+fi
+if [[ -n "$dump_color_attachment_draws" &&
+      ! "$dump_color_attachment_draws" =~ ^[0-9,:\;[:space:]]+$ ]]; then
+  echo "--dump-color-attachment-draws must be a comma/space separated non-negative integer list" >&2
+  exit 2
+fi
+if [[ -n "$dump_color_attachment_draws" &&
+      -z "$dump_color_attachment_dir$dump_color_attachment_roi_summary_path" ]]; then
+  echo "--dump-color-attachment-draws requires --dump-color-attachment-dir or --dump-color-attachment-roi-summary-path" >&2
+  exit 2
+fi
+if [[ -n "$dump_color_attachment_command_index" &&
+      ! "$dump_color_attachment_command_index" =~ ^[0-9]+$ ]]; then
+  echo "--dump-color-attachment-command-index must be a non-negative integer" >&2
+  exit 2
+fi
+if [[ -n "$dump_color_attachment_command_index_min" &&
+      ! "$dump_color_attachment_command_index_min" =~ ^[0-9]+$ ]]; then
+  echo "--dump-color-attachment-command-index-min must be a non-negative integer" >&2
+  exit 2
+fi
+if [[ -n "$dump_color_attachment_command_index_max" &&
+      ! "$dump_color_attachment_command_index_max" =~ ^[0-9]+$ ]]; then
+  echo "--dump-color-attachment-command-index-max must be a non-negative integer" >&2
+  exit 2
+fi
+if [[ -n "$dump_color_attachment_command_index_min$dump_color_attachment_command_index_max" &&
+      -z "$dump_color_attachment_dir$dump_color_attachment_roi_summary_path" ]]; then
+  echo "--dump-color-attachment-command-index-min/max requires --dump-color-attachment-dir or --dump-color-attachment-roi-summary-path" >&2
+  exit 2
+fi
+if [[ -n "$dump_color_attachment_texture0" &&
+      ! "$dump_color_attachment_texture0" =~ ^(0[xX][0-9a-fA-F]+|[0-9]+)$ ]]; then
+  echo "--dump-color-attachment-texture0 must be an integer handle, e.g. 0x200000100000077" >&2
+  exit 2
+fi
+if [[ -n "$dump_color_attachment_texture0s" &&
+      ! "$dump_color_attachment_texture0s" =~ ^[0-9a-fA-FxX,:\;\ ]+$ ]]; then
+  echo "--dump-color-attachment-texture0s must be a comma/space separated integer handle list" >&2
+  exit 2
+fi
+if [[ -n "$dump_color_attachment_texture0s" &&
+      -z "$dump_color_attachment_dir$dump_color_attachment_roi_summary_path" ]]; then
+  echo "--dump-color-attachment-texture0s requires --dump-color-attachment-dir or --dump-color-attachment-roi-summary-path" >&2
+  exit 2
+fi
+if [[ -n "$dump_color_attachment_seq" &&
+      ! "$dump_color_attachment_seq" =~ ^[0-9]+$ ]]; then
+  echo "--dump-color-attachment-seq must be a non-negative integer" >&2
+  exit 2
+fi
+if [[ -n "$dump_color_attachment_enc" &&
+      ! "$dump_color_attachment_enc" =~ ^[0-9]+$ ]]; then
+  echo "--dump-color-attachment-enc must be a non-negative integer" >&2
+  exit 2
+fi
+if [[ -n "$dump_color_attachment_path" &&
+      -z "$dump_color_attachment_handle$dump_color_attachment_index$dump_color_attachment_seq$dump_color_attachment_enc$dump_color_attachment_draw$dump_color_attachment_draws$dump_color_attachment_command_index$dump_color_attachment_command_index_min$dump_color_attachment_command_index_max$dump_color_attachment_texture0$dump_color_attachment_texture0s" ]]; then
+  echo "--dump-color-attachment-path requires --dump-color-attachment-handle, --dump-color-attachment-index, --dump-color-attachment-seq/enc, --dump-color-attachment-draw, --dump-color-attachment-draws, --dump-color-attachment-command-index, --dump-color-attachment-command-index-min/max, --dump-color-attachment-texture0, or --dump-color-attachment-texture0s" >&2
+  exit 2
+fi
+if [[ -n "$dump_color_attachment_dir" &&
+      -z "$dump_color_attachment_handle$dump_color_attachment_index$dump_color_attachment_seq$dump_color_attachment_enc$dump_color_attachment_draw$dump_color_attachment_draws$dump_color_attachment_command_index$dump_color_attachment_command_index_min$dump_color_attachment_command_index_max$dump_color_attachment_texture0$dump_color_attachment_texture0s" ]]; then
+  echo "--dump-color-attachment-dir requires --dump-color-attachment-handle, --dump-color-attachment-index, --dump-color-attachment-seq/enc, --dump-color-attachment-draw, --dump-color-attachment-draws, --dump-color-attachment-command-index, --dump-color-attachment-command-index-min/max, --dump-color-attachment-texture0, or --dump-color-attachment-texture0s" >&2
+  exit 2
+fi
+if [[ -n "$dump_color_attachment_roi_summary_path" &&
+      -z "$dump_color_attachment_handle$dump_color_attachment_index$dump_color_attachment_seq$dump_color_attachment_enc$dump_color_attachment_draw$dump_color_attachment_draws$dump_color_attachment_command_index$dump_color_attachment_command_index_min$dump_color_attachment_command_index_max$dump_color_attachment_texture0$dump_color_attachment_texture0s" ]]; then
+  echo "--dump-color-attachment-roi-summary-path requires --dump-color-attachment-handle, --dump-color-attachment-index, --dump-color-attachment-seq/enc, --dump-color-attachment-draw, --dump-color-attachment-draws, --dump-color-attachment-command-index, --dump-color-attachment-command-index-min/max, --dump-color-attachment-texture0, or --dump-color-attachment-texture0s" >&2
+  exit 2
+fi
+if [[ -n "$dump_color_attachment_roi_summary_path" &&
+      -z "$dump_color_attachment_rois" ]]; then
+  echo "--dump-color-attachment-roi-summary-path requires at least one --dump-color-attachment-roi" >&2
+  exit 2
+fi
+if [[ -n "$dump_color_attachment_rois" &&
+      ! "$dump_color_attachment_rois" =~ ^[0-9]+,[0-9]+,[0-9]+,[0-9]+(:[A-Za-z0-9_.-]+)?(\;[0-9]+,[0-9]+,[0-9]+,[0-9]+(:[A-Za-z0-9_.-]+)?)*$ ]]; then
+  echo "--dump-color-attachment-roi must be L,T,R,B[:NAME]; use the option multiple times for multiple ROIs" >&2
+  exit 2
+fi
+if [[ -n "$dump_color_attachment_bright_threshold" &&
+      ! "$dump_color_attachment_bright_threshold" =~ ^[0-9]+$ ]]; then
+  echo "--dump-color-attachment-bright-threshold must be a non-negative integer" >&2
+  exit 2
+fi
+if [[ -n "$dump_color_attachment_white_threshold" &&
+      ! "$dump_color_attachment_white_threshold" =~ ^[0-9]+$ ]]; then
+  echo "--dump-color-attachment-white-threshold must be a non-negative integer" >&2
+  exit 2
+fi
+if [[ -n "$dump_color_attachment_warm_red_threshold" &&
+      ! "$dump_color_attachment_warm_red_threshold" =~ ^[0-9]+$ ]]; then
+  echo "--dump-color-attachment-warm-red-threshold must be a non-negative integer" >&2
+  exit 2
+fi
+if [[ -n "$dump_color_attachment_warm_green_threshold" &&
+      ! "$dump_color_attachment_warm_green_threshold" =~ ^[0-9]+$ ]]; then
+  echo "--dump-color-attachment-warm-green-threshold must be a non-negative integer" >&2
+  exit 2
+fi
+if [[ -n "$dump_color_attachment_warm_blue_margin" &&
+      ! "$dump_color_attachment_warm_blue_margin" =~ ^[0-9]+$ ]]; then
+  echo "--dump-color-attachment-warm-blue-margin must be a non-negative integer" >&2
+  exit 2
+fi
+if (( dump_color_attachment_after_draw )) &&
+   [[ -z "$dump_color_attachment_draw$dump_color_attachment_draws$dump_color_attachment_command_index$dump_color_attachment_command_index_min$dump_color_attachment_command_index_max$dump_color_attachment_texture0$dump_color_attachment_texture0s" ]]; then
+  echo "--dump-color-attachment-after-draw requires --dump-color-attachment-draw, --dump-color-attachment-draws, --dump-color-attachment-command-index, --dump-color-attachment-command-index-min/max, --dump-color-attachment-texture0, or --dump-color-attachment-texture0s" >&2
+  exit 2
+fi
 if [[ -n "$dump_draw_texture_handles" &&
       ! "$dump_draw_texture_handles" =~ ^[0-9a-fA-FxX,:\;\ ]+$ ]]; then
   echo "--dump-draw-texture-handles must be a comma/space separated integer handle list" >&2
+  exit 2
+fi
+if [[ -n "$dump_draw_texture0_width" &&
+      ! "$dump_draw_texture0_width" =~ ^[0-9]+$ ]]; then
+  echo "--dump-draw-texture0-width must be a non-negative integer" >&2
+  exit 2
+fi
+if [[ -n "$dump_draw_texture0_height" &&
+      ! "$dump_draw_texture0_height" =~ ^[0-9]+$ ]]; then
+  echo "--dump-draw-texture0-height must be a non-negative integer" >&2
+  exit 2
+fi
+if [[ -n "$dump_draw_texture0_format" &&
+      ! "$dump_draw_texture0_format" =~ ^(0[xX][0-9a-fA-F]+|[0-9]+)$ ]]; then
+  echo "--dump-draw-texture0-format must be an integer format value" >&2
   exit 2
 fi
 if [[ -n "$dump_draw_texture_seq" &&
@@ -1858,11 +2805,12 @@ if [[ -n "$dump_draw_texture_enc" &&
   echo "--dump-draw-texture-enc must be a non-negative integer" >&2
   exit 2
 fi
-if [[ -z "$dump_draw_texture_handles" &&
+if [[ -z "$dump_draw_texture_handles$dump_draw_texture0_width$dump_draw_texture0_height$dump_draw_texture0_format" &&
+      "$dump_draw_texture0_any" -eq 0 &&
       ( -n "$dump_draw_texture_seq" ||
         -n "$dump_draw_texture_enc" ||
         -n "$dump_draw_texture_dir" ) ]]; then
-  echo "--dump-draw-texture-seq/enc/dir require --dump-draw-texture-handles" >&2
+  echo "--dump-draw-texture-seq/enc/dir require --dump-draw-texture-handles or --dump-draw-texture0-* filter" >&2
   exit 2
 fi
 
@@ -2117,6 +3065,12 @@ if (( ! encoder_breakdown_enabled )) && (( capture_gputrace )); then
 fi
 
 if (( encoder_breakdown_enabled )) &&
+   (( ! encoder_breakdown_all_frames )) &&
+   [[ -z "$encoder_breakdown_seq" && -n "$dump_color_attachment_seq" ]]; then
+  encoder_breakdown_seq=$dump_color_attachment_seq
+fi
+
+if (( encoder_breakdown_enabled )) &&
    (( capture_gputrace || frame_local_index_diagnostics_requested )) &&
    (( ! encoder_breakdown_all_frames )) &&
    [[ -z "$encoder_breakdown_seq" ]]; then
@@ -2184,6 +3138,13 @@ geometry_dump_dir="$analysis_dir/geometry"
 visibility_scout_default_path="$analysis_dir/frame${frame}-visibility-scout.csv"
 visibility_scout_summary_default_path="$analysis_dir/frame${frame}-visibility-scout-summary.md"
 visibility_scout_summary_csv_default_path="$analysis_dir/frame${frame}-visibility-scout-summary.csv"
+if [[ -n "$capture_frames$capture_range" ]]; then
+  if [[ -z "$capture_dir" ]]; then
+    capture_dir="$analysis_dir/captures"
+  elif [[ "$capture_dir" != /* ]]; then
+    capture_dir="$repo_root/$capture_dir"
+  fi
+fi
 if [[ -n "$dump_depth_attachment_handle" ]]; then
   if [[ -z "$dump_depth_attachment_path" ]]; then
     dump_depth_attachment_path="$analysis_dir/frame${frame}-depth.bin"
@@ -2191,7 +3152,27 @@ if [[ -n "$dump_depth_attachment_handle" ]]; then
     dump_depth_attachment_path="$repo_root/$dump_depth_attachment_path"
   fi
 fi
-if [[ -n "$dump_draw_texture_handles" ]]; then
+if [[ -n "$dump_color_attachment_handle$dump_color_attachment_index$dump_color_attachment_seq$dump_color_attachment_enc$dump_color_attachment_draw$dump_color_attachment_draws$dump_color_attachment_command_index$dump_color_attachment_command_index_min$dump_color_attachment_command_index_max$dump_color_attachment_texture0$dump_color_attachment_texture0s$dump_color_attachment_path$dump_color_attachment_dir$dump_color_attachment_roi_summary_path" ]]; then
+  if [[ -z "$dump_color_attachment_handle$dump_color_attachment_index" ]]; then
+    dump_color_attachment_index=0
+  fi
+  if [[ -n "$dump_color_attachment_dir" ]]; then
+    if [[ "$dump_color_attachment_dir" != /* ]]; then
+      dump_color_attachment_dir="$repo_root/$dump_color_attachment_dir"
+    fi
+  elif [[ -z "$dump_color_attachment_path" && -z "$dump_color_attachment_roi_summary_path" ]]; then
+    dump_color_attachment_path="$analysis_dir/frame${frame}-color.bin"
+  elif [[ -n "$dump_color_attachment_path" &&
+          "$dump_color_attachment_path" != /* ]]; then
+    dump_color_attachment_path="$repo_root/$dump_color_attachment_path"
+  fi
+  if [[ -n "$dump_color_attachment_roi_summary_path" &&
+        "$dump_color_attachment_roi_summary_path" != /* ]]; then
+    dump_color_attachment_roi_summary_path="$repo_root/$dump_color_attachment_roi_summary_path"
+  fi
+fi
+if [[ -n "$dump_draw_texture_handles$dump_draw_texture0_width$dump_draw_texture0_height$dump_draw_texture0_format" ||
+      "$dump_draw_texture0_any" -eq 1 ]]; then
   if [[ -z "$dump_draw_texture_dir" ]]; then
     dump_draw_texture_dir="$analysis_dir/textures"
   elif [[ "$dump_draw_texture_dir" != /* ]]; then
@@ -2241,6 +3222,14 @@ fi
 
 if (( encoder_breakdown_enabled )) && [[ -n "$encoder_breakdown_seq" ]]; then
   env_args+=("DXMT9_PERF_ENCODER_BREAKDOWN_SEQ=$encoder_breakdown_seq")
+fi
+
+if [[ -n "$render_pass_reentry_top" ]]; then
+  env_args+=("DXMT9_PERF_RENDER_PASS_REENTRY_TOP=$render_pass_reentry_top")
+fi
+
+if [[ "$frame_sampling" != "0" && -n "$frame_sampling" ]]; then
+  env_args+=("DXMT9_PERF_FRAME_SAMPLING=$frame_sampling")
 fi
 
 if (( capture_gputrace )); then
@@ -2560,6 +3549,18 @@ if (( dump_indexed_geometry )); then
   if [[ -n "$dump_indexed_geometry_ps" ]]; then
     env_args+=("DXMT9_DUMP_INDEXED_GEOMETRY_PS=$dump_indexed_geometry_ps")
   fi
+  if [[ -n "$dump_indexed_geometry_texture0" ]]; then
+    env_args+=("DXMT9_DUMP_INDEXED_GEOMETRY_TEXTURE0=$dump_indexed_geometry_texture0")
+  fi
+  if [[ -n "$dump_indexed_geometry_texture0_width" ]]; then
+    env_args+=("DXMT9_DUMP_INDEXED_GEOMETRY_TEXTURE0_WIDTH=$dump_indexed_geometry_texture0_width")
+  fi
+  if [[ -n "$dump_indexed_geometry_texture0_height" ]]; then
+    env_args+=("DXMT9_DUMP_INDEXED_GEOMETRY_TEXTURE0_HEIGHT=$dump_indexed_geometry_texture0_height")
+  fi
+  if [[ -n "$dump_indexed_geometry_texture0_format" ]]; then
+    env_args+=("DXMT9_DUMP_INDEXED_GEOMETRY_TEXTURE0_FORMAT=$dump_indexed_geometry_texture0_format")
+  fi
 fi
 
 if [[ -n "$dump_depth_attachment_handle" ]]; then
@@ -2575,11 +3576,96 @@ if [[ -n "$dump_depth_attachment_handle" ]]; then
   fi
 fi
 
-if [[ -n "$dump_draw_texture_handles" ]]; then
+if [[ -n "$dump_color_attachment_handle$dump_color_attachment_index$dump_color_attachment_seq$dump_color_attachment_enc$dump_color_attachment_draw$dump_color_attachment_draws$dump_color_attachment_command_index$dump_color_attachment_command_index_min$dump_color_attachment_command_index_max$dump_color_attachment_texture0$dump_color_attachment_texture0s$dump_color_attachment_path$dump_color_attachment_dir$dump_color_attachment_roi_summary_path" ]]; then
+  if [[ -n "$dump_color_attachment_path" ]]; then
+    env_args+=(
+      "DXMT9_DUMP_COLOR_ATTACHMENT_PATH=$dump_color_attachment_path"
+    )
+  fi
+  if [[ -n "$dump_color_attachment_dir" ]]; then
+    env_args+=(
+      "DXMT9_DUMP_COLOR_ATTACHMENT_DIR=$dump_color_attachment_dir"
+    )
+  fi
+  if [[ -n "$dump_color_attachment_roi_summary_path" ]]; then
+    env_args+=("DXMT9_DUMP_COLOR_ATTACHMENT_ROI_SUMMARY_PATH=$dump_color_attachment_roi_summary_path")
+  fi
+  if [[ -n "$dump_color_attachment_rois" ]]; then
+    env_args+=("DXMT9_DUMP_COLOR_ATTACHMENT_ROIS=$dump_color_attachment_rois")
+  fi
+  if [[ -n "$dump_color_attachment_bright_threshold" ]]; then
+    env_args+=("DXMT9_DUMP_COLOR_ATTACHMENT_BRIGHT_THRESHOLD=$dump_color_attachment_bright_threshold")
+  fi
+  if [[ -n "$dump_color_attachment_white_threshold" ]]; then
+    env_args+=("DXMT9_DUMP_COLOR_ATTACHMENT_WHITE_THRESHOLD=$dump_color_attachment_white_threshold")
+  fi
+  if [[ -n "$dump_color_attachment_warm_red_threshold" ]]; then
+    env_args+=("DXMT9_DUMP_COLOR_ATTACHMENT_WARM_RED_THRESHOLD=$dump_color_attachment_warm_red_threshold")
+  fi
+  if [[ -n "$dump_color_attachment_warm_green_threshold" ]]; then
+    env_args+=("DXMT9_DUMP_COLOR_ATTACHMENT_WARM_GREEN_THRESHOLD=$dump_color_attachment_warm_green_threshold")
+  fi
+  if [[ -n "$dump_color_attachment_warm_blue_margin" ]]; then
+    env_args+=("DXMT9_DUMP_COLOR_ATTACHMENT_WARM_BLUE_MARGIN=$dump_color_attachment_warm_blue_margin")
+  fi
+  if [[ -n "$dump_color_attachment_handle" ]]; then
+    env_args+=("DXMT9_DUMP_COLOR_ATTACHMENT_HANDLE=$dump_color_attachment_handle")
+  fi
+  if [[ -n "$dump_color_attachment_index" ]]; then
+    env_args+=("DXMT9_DUMP_COLOR_ATTACHMENT_INDEX=$dump_color_attachment_index")
+  fi
+  if [[ -n "$dump_color_attachment_seq" ]]; then
+    env_args+=("DXMT9_DUMP_COLOR_ATTACHMENT_SEQ=$dump_color_attachment_seq")
+  fi
+  if [[ -n "$dump_color_attachment_enc" ]]; then
+    env_args+=("DXMT9_DUMP_COLOR_ATTACHMENT_ENC=$dump_color_attachment_enc")
+  fi
+  if (( dump_color_attachment_after_draw )); then
+    env_args+=("DXMT9_DUMP_COLOR_ATTACHMENT_AFTER_DRAW=1")
+  fi
+  if [[ -n "$dump_color_attachment_draw" ]]; then
+    env_args+=("DXMT9_DUMP_COLOR_ATTACHMENT_DRAW=$dump_color_attachment_draw")
+  fi
+  if [[ -n "$dump_color_attachment_draws" ]]; then
+    env_args+=("DXMT9_DUMP_COLOR_ATTACHMENT_DRAWS=$dump_color_attachment_draws")
+  fi
+  if [[ -n "$dump_color_attachment_command_index" ]]; then
+    env_args+=("DXMT9_DUMP_COLOR_ATTACHMENT_COMMAND_INDEX=$dump_color_attachment_command_index")
+  fi
+  if [[ -n "$dump_color_attachment_command_index_min" ]]; then
+    env_args+=("DXMT9_DUMP_COLOR_ATTACHMENT_COMMAND_INDEX_MIN=$dump_color_attachment_command_index_min")
+  fi
+  if [[ -n "$dump_color_attachment_command_index_max" ]]; then
+    env_args+=("DXMT9_DUMP_COLOR_ATTACHMENT_COMMAND_INDEX_MAX=$dump_color_attachment_command_index_max")
+  fi
+  if [[ -n "$dump_color_attachment_texture0" ]]; then
+    env_args+=("DXMT9_DUMP_COLOR_ATTACHMENT_TEXTURE0=$dump_color_attachment_texture0")
+  fi
+  if [[ -n "$dump_color_attachment_texture0s" ]]; then
+    env_args+=("DXMT9_DUMP_COLOR_ATTACHMENT_TEXTURE0S=$dump_color_attachment_texture0s")
+  fi
+fi
+
+if [[ -n "$dump_draw_texture_handles$dump_draw_texture0_width$dump_draw_texture0_height$dump_draw_texture0_format" ||
+      "$dump_draw_texture0_any" -eq 1 ]]; then
   env_args+=(
-    "DXMT9_DUMP_DRAW_TEXTURE_HANDLES=$dump_draw_texture_handles"
     "DXMT9_DUMP_DRAW_TEXTURE_DIR=$dump_draw_texture_dir"
   )
+  if [[ -n "$dump_draw_texture_handles" ]]; then
+    env_args+=("DXMT9_DUMP_DRAW_TEXTURE_HANDLES=$dump_draw_texture_handles")
+  fi
+  if (( dump_draw_texture0_any )); then
+    env_args+=("DXMT9_DUMP_DRAW_TEXTURE0_ANY=1")
+  fi
+  if [[ -n "$dump_draw_texture0_width" ]]; then
+    env_args+=("DXMT9_DUMP_DRAW_TEXTURE0_WIDTH=$dump_draw_texture0_width")
+  fi
+  if [[ -n "$dump_draw_texture0_height" ]]; then
+    env_args+=("DXMT9_DUMP_DRAW_TEXTURE0_HEIGHT=$dump_draw_texture0_height")
+  fi
+  if [[ -n "$dump_draw_texture0_format" ]]; then
+    env_args+=("DXMT9_DUMP_DRAW_TEXTURE0_FORMAT=$dump_draw_texture0_format")
+  fi
   if [[ -n "$dump_draw_texture_seq" ]]; then
     env_args+=("DXMT9_DUMP_DRAW_TEXTURE_SEQ=$dump_draw_texture_seq")
   fi
@@ -2632,6 +3718,70 @@ if [[ -n "$probe_force_texture_white_classes" ]]; then
   env_args+=("DXMT9_PROBE_FORCE_TEXTURE_WHITE_CLASSES=$probe_force_texture_white_classes")
 fi
 
+if [[ -n "$probe_force_texture_white_texture0" ]]; then
+  env_args+=("DXMT9_PROBE_FORCE_TEXTURE_WHITE_TEXTURE0=$probe_force_texture_white_texture0")
+fi
+
+if [[ -n "$probe_force_texture_white_texture0_width" ]]; then
+  env_args+=("DXMT9_PROBE_FORCE_TEXTURE_WHITE_TEXTURE0_WIDTH=$probe_force_texture_white_texture0_width")
+fi
+
+if [[ -n "$probe_force_texture_white_texture0_height" ]]; then
+  env_args+=("DXMT9_PROBE_FORCE_TEXTURE_WHITE_TEXTURE0_HEIGHT=$probe_force_texture_white_texture0_height")
+fi
+
+if [[ -n "$probe_force_texture_white_texture0_format" ]]; then
+  env_args+=("DXMT9_PROBE_FORCE_TEXTURE_WHITE_TEXTURE0_FORMAT=$probe_force_texture_white_texture0_format")
+fi
+
+if [[ -n "$probe_force_texture_white_draw_ordinal" ]]; then
+  env_args+=("DXMT9_PROBE_FORCE_TEXTURE_WHITE_DRAW_ORDINALS=$probe_force_texture_white_draw_ordinal")
+fi
+
+if [[ -n "$probe_force_texture_white_draw_ordinals" ]]; then
+  env_args+=("DXMT9_PROBE_FORCE_TEXTURE_WHITE_DRAW_ORDINALS=$probe_force_texture_white_draw_ordinals")
+fi
+
+if [[ -n "$probe_force_texture_white_draw_ordinal_min" ]]; then
+  env_args+=("DXMT9_PROBE_FORCE_TEXTURE_WHITE_DRAW_ORDINAL_MIN=$probe_force_texture_white_draw_ordinal_min")
+fi
+
+if [[ -n "$probe_force_texture_white_draw_ordinal_max" ]]; then
+  env_args+=("DXMT9_PROBE_FORCE_TEXTURE_WHITE_DRAW_ORDINAL_MAX=$probe_force_texture_white_draw_ordinal_max")
+fi
+
+if [[ -n "$probe_force_texture_white_command_index" ]]; then
+  env_args+=("DXMT9_PROBE_FORCE_TEXTURE_WHITE_COMMAND_INDEXES=$probe_force_texture_white_command_index")
+fi
+
+if [[ -n "$probe_force_texture_white_command_indexes" ]]; then
+  env_args+=("DXMT9_PROBE_FORCE_TEXTURE_WHITE_COMMAND_INDEXES=$probe_force_texture_white_command_indexes")
+fi
+
+if [[ -n "$probe_force_texture_white_command_index_min" ]]; then
+  env_args+=("DXMT9_PROBE_FORCE_TEXTURE_WHITE_COMMAND_INDEX_MIN=$probe_force_texture_white_command_index_min")
+fi
+
+if [[ -n "$probe_force_texture_white_command_index_max" ]]; then
+  env_args+=("DXMT9_PROBE_FORCE_TEXTURE_WHITE_COMMAND_INDEX_MAX=$probe_force_texture_white_command_index_max")
+fi
+
+if [[ -n "$probe_force_texture_white_command_draw_index" ]]; then
+  env_args+=("DXMT9_PROBE_FORCE_TEXTURE_WHITE_COMMAND_DRAW_INDEXES=$probe_force_texture_white_command_draw_index")
+fi
+
+if [[ -n "$probe_force_texture_white_command_draw_indexes" ]]; then
+  env_args+=("DXMT9_PROBE_FORCE_TEXTURE_WHITE_COMMAND_DRAW_INDEXES=$probe_force_texture_white_command_draw_indexes")
+fi
+
+if [[ -n "$probe_force_texture_white_command_draw_index_min" ]]; then
+  env_args+=("DXMT9_PROBE_FORCE_TEXTURE_WHITE_COMMAND_DRAW_INDEX_MIN=$probe_force_texture_white_command_draw_index_min")
+fi
+
+if [[ -n "$probe_force_texture_white_command_draw_index_max" ]]; then
+  env_args+=("DXMT9_PROBE_FORCE_TEXTURE_WHITE_COMMAND_DRAW_INDEX_MAX=$probe_force_texture_white_command_draw_index_max")
+fi
+
 if (( probe_disable_alpha_blend )); then
   env_args+=("DXMT9_PROBE_DISABLE_ALPHA_BLEND=1")
 fi
@@ -2650,6 +3800,22 @@ fi
 
 if [[ -n "$probe_disable_alpha_blend_classes" ]]; then
   env_args+=("DXMT9_PROBE_DISABLE_ALPHA_BLEND_CLASSES=$probe_disable_alpha_blend_classes")
+fi
+
+if [[ -n "$probe_disable_alpha_blend_texture0" ]]; then
+  env_args+=("DXMT9_PROBE_DISABLE_ALPHA_BLEND_TEXTURE0=$probe_disable_alpha_blend_texture0")
+fi
+
+if [[ -n "$probe_disable_alpha_blend_texture0_width" ]]; then
+  env_args+=("DXMT9_PROBE_DISABLE_ALPHA_BLEND_TEXTURE0_WIDTH=$probe_disable_alpha_blend_texture0_width")
+fi
+
+if [[ -n "$probe_disable_alpha_blend_texture0_height" ]]; then
+  env_args+=("DXMT9_PROBE_DISABLE_ALPHA_BLEND_TEXTURE0_HEIGHT=$probe_disable_alpha_blend_texture0_height")
+fi
+
+if [[ -n "$probe_disable_alpha_blend_texture0_format" ]]; then
+  env_args+=("DXMT9_PROBE_DISABLE_ALPHA_BLEND_TEXTURE0_FORMAT=$probe_disable_alpha_blend_texture0_format")
 fi
 
 if (( probe_disable_depth_write )); then
@@ -2692,6 +3858,22 @@ if [[ -n "$probe_depth_func_always_classes" ]]; then
   env_args+=("DXMT9_PROBE_DEPTH_FUNC_ALWAYS_CLASSES=$probe_depth_func_always_classes")
 fi
 
+if [[ -n "$probe_depth_func_always_texture0" ]]; then
+  env_args+=("DXMT9_PROBE_DEPTH_FUNC_ALWAYS_TEXTURE0=$probe_depth_func_always_texture0")
+fi
+
+if [[ -n "$probe_depth_func_always_texture0_width" ]]; then
+  env_args+=("DXMT9_PROBE_DEPTH_FUNC_ALWAYS_TEXTURE0_WIDTH=$probe_depth_func_always_texture0_width")
+fi
+
+if [[ -n "$probe_depth_func_always_texture0_height" ]]; then
+  env_args+=("DXMT9_PROBE_DEPTH_FUNC_ALWAYS_TEXTURE0_HEIGHT=$probe_depth_func_always_texture0_height")
+fi
+
+if [[ -n "$probe_depth_func_always_texture0_format" ]]; then
+  env_args+=("DXMT9_PROBE_DEPTH_FUNC_ALWAYS_TEXTURE0_FORMAT=$probe_depth_func_always_texture0_format")
+fi
+
 if (( probe_fragmentless_depth_only )); then
   env_args+=("DXMT9_PROBE_FRAGMENTLESS_DEPTH_ONLY=1")
 fi
@@ -2714,6 +3896,66 @@ fi
 
 if (( force_visible )); then
   env_args+=("DXMT_DEBUG_FORCE_VISIBLE=1")
+fi
+
+if (( effect_draw_trace )); then
+  env_args+=("DXMT9_EFFECT_DRAW_TRACE=1")
+fi
+
+if [[ -n "$effect_draw_trace_seq" ]]; then
+  env_args+=("DXMT9_EFFECT_DRAW_TRACE_SEQ=$effect_draw_trace_seq")
+fi
+
+if [[ -n "$effect_draw_trace_seq_min" ]]; then
+  env_args+=("DXMT9_EFFECT_DRAW_TRACE_SEQ_MIN=$effect_draw_trace_seq_min")
+fi
+
+if [[ -n "$effect_draw_trace_seq_max" ]]; then
+  env_args+=("DXMT9_EFFECT_DRAW_TRACE_SEQ_MAX=$effect_draw_trace_seq_max")
+fi
+
+if [[ -n "$effect_draw_trace_enc" ]]; then
+  env_args+=("DXMT9_EFFECT_DRAW_TRACE_ENC=$effect_draw_trace_enc")
+fi
+
+if [[ -n "$effect_draw_trace_texture0" ]]; then
+  env_args+=("DXMT9_EFFECT_DRAW_TRACE_TEXTURE0=$effect_draw_trace_texture0")
+fi
+
+if [[ -n "$effect_draw_trace_texture0_width" ]]; then
+  env_args+=("DXMT9_EFFECT_DRAW_TRACE_TEXTURE0_WIDTH=$effect_draw_trace_texture0_width")
+fi
+
+if [[ -n "$effect_draw_trace_texture0_height" ]]; then
+  env_args+=("DXMT9_EFFECT_DRAW_TRACE_TEXTURE0_HEIGHT=$effect_draw_trace_texture0_height")
+fi
+
+if [[ -n "$effect_draw_trace_texture0_format" ]]; then
+  env_args+=("DXMT9_EFFECT_DRAW_TRACE_TEXTURE0_FORMAT=$effect_draw_trace_texture0_format")
+fi
+
+if [[ -n "$effect_draw_trace_primitive_type" ]]; then
+  env_args+=("DXMT9_EFFECT_DRAW_TRACE_PRIMITIVE_TYPE=$effect_draw_trace_primitive_type")
+fi
+
+if (( effect_draw_trace_point_sprite )); then
+  env_args+=("DXMT9_EFFECT_DRAW_TRACE_POINT_SPRITE=1")
+fi
+
+if (( effect_draw_trace_include_non_alpha )); then
+  env_args+=("DXMT9_EFFECT_DRAW_TRACE_INCLUDE_NON_ALPHA=1")
+fi
+
+if (( effect_draw_trace_include_untextured )); then
+  env_args+=("DXMT9_EFFECT_DRAW_TRACE_INCLUDE_UNTEXTURED=1")
+fi
+
+if (( effect_draw_trace_geometry )); then
+  env_args+=("DXMT9_EFFECT_DRAW_TRACE_GEOMETRY=1")
+fi
+
+if [[ -n "$effect_draw_trace_geometry_max_refs" ]]; then
+  env_args+=("DXMT9_EFFECT_DRAW_TRACE_GEOMETRY_MAX_REFS=$effect_draw_trace_geometry_max_refs")
 fi
 
 if (( visibility_scout )); then
@@ -2746,6 +3988,18 @@ if [[ -n "$visibility_scout_rows" ]]; then
   env_args+=("DXMT9_VISIBILITY_SCOUT_ROWS=$visibility_scout_rows")
 fi
 
+if [[ -n "$capture_frames" ]]; then
+  env_args+=("DXMT_CAPTURE_FRAMES=$capture_frames")
+fi
+
+if [[ -n "$capture_range" ]]; then
+  env_args+=("DXMT_CAPTURE_RANGE=$capture_range")
+fi
+
+if [[ -n "$capture_dir" ]]; then
+  env_args+=("DXMT_EXPERIMENT_CAPTURE_DIR=$capture_dir")
+fi
+
 if (( dump_shaders )); then
   env_args+=(
     "DXMT_DUMP_SHADER_DIR=$shader_msl_dump_dir"
@@ -2760,6 +4014,9 @@ cmd=(
   --output-suffix "$suffix"
   --timeout "$timeout"
 )
+if [[ -n "$capture_delay_sec" ]]; then
+  cmd+=(--capture-delay-sec "$capture_delay_sec")
+fi
 
 counter_compare_cmd=()
 if [[ -n "$compare_baseline_output" ]]; then
@@ -3057,6 +4314,18 @@ echo "free_space_mb: $free_mb"
 echo "min_free_space_mb: $min_free_mb"
 echo "runner_timeout_sec: $timeout"
 echo "watchdog_timeout_sec: ${timeout}+${timeout_slack}"
+if [[ -n "$capture_delay_sec" ]]; then
+  echo "capture_delay_sec: $capture_delay_sec"
+fi
+if [[ -n "$capture_frames" ]]; then
+  echo "capture_frames: $capture_frames"
+fi
+if [[ -n "$capture_range" ]]; then
+  echo "capture_range: $capture_range"
+fi
+if [[ -n "$capture_dir" ]]; then
+  echo "capture_dir: $capture_dir"
+fi
 if (( capture_gputrace )) && (( min_free_mb < recommended_gputrace_min_free_mb )); then
   echo "warning: gputrace min_free_space_mb is below the recommended ${recommended_gputrace_min_free_mb}MiB launch guard; set DXMT_3DMARK05_ALLOW_LOW_TRACE_FREE_MB=1 only for deliberate partial-run risk."
 fi
@@ -3082,7 +4351,19 @@ fi
 if [[ -n "$dump_depth_attachment_handle" ]]; then
   echo "depth_attachment_dump: $dump_depth_attachment_path"
 fi
-if [[ -n "$dump_draw_texture_handles" ]]; then
+if [[ -n "$dump_color_attachment_handle$dump_color_attachment_index$dump_color_attachment_seq$dump_color_attachment_enc$dump_color_attachment_draw$dump_color_attachment_draws$dump_color_attachment_command_index$dump_color_attachment_command_index_min$dump_color_attachment_command_index_max$dump_color_attachment_texture0$dump_color_attachment_texture0s$dump_color_attachment_path$dump_color_attachment_dir$dump_color_attachment_roi_summary_path" ]]; then
+  if [[ -n "$dump_color_attachment_path" ]]; then
+    echo "color_attachment_dump: $dump_color_attachment_path"
+  fi
+  if [[ -n "$dump_color_attachment_dir" ]]; then
+    echo "color_attachment_dump_dir: $dump_color_attachment_dir"
+  fi
+  if [[ -n "$dump_color_attachment_roi_summary_path" ]]; then
+    echo "color_attachment_roi_summary: $dump_color_attachment_roi_summary_path"
+  fi
+fi
+if [[ -n "$dump_draw_texture_handles$dump_draw_texture0_width$dump_draw_texture0_height$dump_draw_texture0_format" ||
+      "$dump_draw_texture0_any" -eq 1 ]]; then
   echo "draw_texture_dump_dir: $dump_draw_texture_dir"
 fi
 printf 'env:'
@@ -3196,8 +4477,22 @@ fi
 if [[ -n "$dump_depth_attachment_handle" ]]; then
   mkdir -p "$(dirname -- "$dump_depth_attachment_path")"
 fi
-if [[ -n "$dump_draw_texture_handles" ]]; then
+if [[ -n "$dump_color_attachment_handle$dump_color_attachment_index$dump_color_attachment_seq$dump_color_attachment_enc$dump_color_attachment_draw$dump_color_attachment_draws$dump_color_attachment_command_index$dump_color_attachment_command_index_min$dump_color_attachment_command_index_max$dump_color_attachment_texture0$dump_color_attachment_texture0s$dump_color_attachment_path$dump_color_attachment_dir$dump_color_attachment_roi_summary_path" ]]; then
+  if [[ -n "$dump_color_attachment_dir" ]]; then
+    mkdir -p "$dump_color_attachment_dir"
+  elif [[ -n "$dump_color_attachment_path" ]]; then
+    mkdir -p "$(dirname -- "$dump_color_attachment_path")"
+  fi
+  if [[ -n "$dump_color_attachment_roi_summary_path" ]]; then
+    mkdir -p "$(dirname -- "$dump_color_attachment_roi_summary_path")"
+  fi
+fi
+if [[ -n "$dump_draw_texture_handles$dump_draw_texture0_width$dump_draw_texture0_height$dump_draw_texture0_format" ||
+      "$dump_draw_texture0_any" -eq 1 ]]; then
   mkdir -p "$dump_draw_texture_dir"
+fi
+if [[ -n "$capture_dir" ]]; then
+  mkdir -p "$capture_dir"
 fi
 
 run_status=0
@@ -3287,7 +4582,31 @@ if [[ -n "$dump_depth_attachment_handle" ]]; then
     echo "warning: requested depth attachment dump was not written: $dump_depth_attachment_path" >&2
   fi
 fi
-if [[ -n "$dump_draw_texture_handles" ]]; then
+if [[ -n "$dump_color_attachment_handle$dump_color_attachment_index$dump_color_attachment_seq$dump_color_attachment_enc$dump_color_attachment_draw$dump_color_attachment_draws$dump_color_attachment_command_index$dump_color_attachment_command_index_min$dump_color_attachment_command_index_max$dump_color_attachment_texture0$dump_color_attachment_texture0s$dump_color_attachment_path$dump_color_attachment_dir$dump_color_attachment_roi_summary_path" ]]; then
+  if [[ -n "$dump_color_attachment_dir" ]]; then
+    shopt -s nullglob
+    color_attachment_dump_files=("$dump_color_attachment_dir"/*.bin)
+    shopt -u nullglob
+    if ((${#color_attachment_dump_files[@]})); then
+      echo "wrote color attachment dumps: $dump_color_attachment_dir (${#color_attachment_dump_files[@]} files)"
+    else
+      echo "warning: requested color attachment dumps were not written: $dump_color_attachment_dir" >&2
+    fi
+  elif [[ -e "$dump_color_attachment_path" ]]; then
+    echo "wrote color attachment dump: $dump_color_attachment_path"
+  elif [[ -n "$dump_color_attachment_path" ]]; then
+    echo "warning: requested color attachment dump was not written: $dump_color_attachment_path" >&2
+  fi
+  if [[ -n "$dump_color_attachment_roi_summary_path" ]]; then
+    if [[ -e "$dump_color_attachment_roi_summary_path" ]]; then
+      echo "wrote color attachment ROI summary: $dump_color_attachment_roi_summary_path"
+    else
+      echo "warning: requested color attachment ROI summary was not written: $dump_color_attachment_roi_summary_path" >&2
+    fi
+  fi
+fi
+if [[ -n "$dump_draw_texture_handles$dump_draw_texture0_width$dump_draw_texture0_height$dump_draw_texture0_format" ||
+      "$dump_draw_texture0_any" -eq 1 ]]; then
   if find "$dump_draw_texture_dir" -maxdepth 1 -name 'texture-*.json' -print -quit | grep -q .; then
     echo "wrote draw texture dump dir: $dump_draw_texture_dir"
   else

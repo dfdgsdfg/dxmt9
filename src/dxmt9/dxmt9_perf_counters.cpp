@@ -5,6 +5,7 @@
 #include <algorithm>
 #include <array>
 #include <atomic>
+#include <chrono>
 #include <cstdlib>
 #include <cstdio>
 #include <cstdint>
@@ -753,6 +754,20 @@ struct Counters {
   std::atomic<std::uint64_t> renderPassTilePreservationBytes{0};
   std::atomic<std::uint64_t> renderPassSameKeyAdjacent{0};
   std::atomic<std::uint64_t> renderPassSameKeyReentry{0};
+  std::atomic<std::uint64_t> renderPassSameKeyReentryDistance1{0};
+  std::atomic<std::uint64_t> renderPassSameKeyReentryDistance2{0};
+  std::atomic<std::uint64_t> renderPassSameKeyReentryDistance3To4{0};
+  std::atomic<std::uint64_t> renderPassSameKeyReentryDistance5To8{0};
+  std::atomic<std::uint64_t> renderPassSameKeyReentryDistance9To16{0};
+  std::atomic<std::uint64_t> renderPassSameKeyReentryDistance17Plus{0};
+  std::atomic<std::uint64_t> renderPassSameKeyReentryDistance1SameColor{0};
+  std::atomic<std::uint64_t> renderPassSameKeyReentryDistance1SameColorBytes{0};
+  std::atomic<std::uint64_t> renderPassSameKeyReentryDistance1SameDepth{0};
+  std::atomic<std::uint64_t> renderPassSameKeyReentryDistance1SameDepthBytes{0};
+  std::atomic<std::uint64_t> renderPassSameKeyReentryDistance1RtDepthChange{0};
+  std::atomic<std::uint64_t> renderPassSameKeyReentryDistance1RtDepthChangeBytes{0};
+  std::atomic<std::uint64_t> renderPassSameKeyReentryDistance1SampleChange{0};
+  std::atomic<std::uint64_t> renderPassSameKeyReentryDistance1SampleChangeBytes{0};
   std::atomic<std::uint64_t> renderPassSameKeyReentryPreservationBytes{0};
   std::atomic<std::uint64_t> renderPassSameKeyReentryColorPreservationBytes{0};
   std::atomic<std::uint64_t> renderPassSameKeyReentryDepthPreservationBytes{0};
@@ -1797,6 +1812,20 @@ constexpr CounterEntry kCounterTable[] = {
     {"render_pass_tile_preservation_bytes", CounterEntry::Kind::UnsignedCount, &Counters::renderPassTilePreservationBytes, nullptr, nullptr, 0.0},
     {"render_pass_same_key_adjacent", CounterEntry::Kind::UnsignedCount, &Counters::renderPassSameKeyAdjacent, nullptr, nullptr, 0.0},
     {"render_pass_same_key_reentry", CounterEntry::Kind::UnsignedCount, &Counters::renderPassSameKeyReentry, nullptr, nullptr, 0.0},
+    {"render_pass_same_key_reentry_distance_1", CounterEntry::Kind::UnsignedCount, &Counters::renderPassSameKeyReentryDistance1, nullptr, nullptr, 0.0},
+    {"render_pass_same_key_reentry_distance_2", CounterEntry::Kind::UnsignedCount, &Counters::renderPassSameKeyReentryDistance2, nullptr, nullptr, 0.0},
+    {"render_pass_same_key_reentry_distance_3_4", CounterEntry::Kind::UnsignedCount, &Counters::renderPassSameKeyReentryDistance3To4, nullptr, nullptr, 0.0},
+    {"render_pass_same_key_reentry_distance_5_8", CounterEntry::Kind::UnsignedCount, &Counters::renderPassSameKeyReentryDistance5To8, nullptr, nullptr, 0.0},
+    {"render_pass_same_key_reentry_distance_9_16", CounterEntry::Kind::UnsignedCount, &Counters::renderPassSameKeyReentryDistance9To16, nullptr, nullptr, 0.0},
+    {"render_pass_same_key_reentry_distance_17_plus", CounterEntry::Kind::UnsignedCount, &Counters::renderPassSameKeyReentryDistance17Plus, nullptr, nullptr, 0.0},
+    {"render_pass_same_key_reentry_distance_1_same_color", CounterEntry::Kind::UnsignedCount, &Counters::renderPassSameKeyReentryDistance1SameColor, nullptr, nullptr, 0.0},
+    {"render_pass_same_key_reentry_distance_1_same_color_preservation_bytes", CounterEntry::Kind::UnsignedCount, &Counters::renderPassSameKeyReentryDistance1SameColorBytes, nullptr, nullptr, 0.0},
+    {"render_pass_same_key_reentry_distance_1_same_depth", CounterEntry::Kind::UnsignedCount, &Counters::renderPassSameKeyReentryDistance1SameDepth, nullptr, nullptr, 0.0},
+    {"render_pass_same_key_reentry_distance_1_same_depth_preservation_bytes", CounterEntry::Kind::UnsignedCount, &Counters::renderPassSameKeyReentryDistance1SameDepthBytes, nullptr, nullptr, 0.0},
+    {"render_pass_same_key_reentry_distance_1_rt_depth_change", CounterEntry::Kind::UnsignedCount, &Counters::renderPassSameKeyReentryDistance1RtDepthChange, nullptr, nullptr, 0.0},
+    {"render_pass_same_key_reentry_distance_1_rt_depth_change_preservation_bytes", CounterEntry::Kind::UnsignedCount, &Counters::renderPassSameKeyReentryDistance1RtDepthChangeBytes, nullptr, nullptr, 0.0},
+    {"render_pass_same_key_reentry_distance_1_sample_change", CounterEntry::Kind::UnsignedCount, &Counters::renderPassSameKeyReentryDistance1SampleChange, nullptr, nullptr, 0.0},
+    {"render_pass_same_key_reentry_distance_1_sample_change_preservation_bytes", CounterEntry::Kind::UnsignedCount, &Counters::renderPassSameKeyReentryDistance1SampleChangeBytes, nullptr, nullptr, 0.0},
     {"render_pass_same_key_reentry_preservation_bytes", CounterEntry::Kind::UnsignedCount, &Counters::renderPassSameKeyReentryPreservationBytes, nullptr, nullptr, 0.0},
     {"render_pass_same_key_reentry_color_preservation_bytes", CounterEntry::Kind::UnsignedCount, &Counters::renderPassSameKeyReentryColorPreservationBytes, nullptr, nullptr, 0.0},
     {"render_pass_same_key_reentry_depth_preservation_bytes", CounterEntry::Kind::UnsignedCount, &Counters::renderPassSameKeyReentryDepthPreservationBytes, nullptr, nullptr, 0.0},
@@ -4071,6 +4100,42 @@ void countRenderPassSameKeyReentry() {
   add(counters().renderPassSameKeyReentry);
 }
 
+void countRenderPassSameKeyReentryDistance(std::uint32_t interveningPasses) {
+  auto& c = counters();
+  if (interveningPasses <= 1) {
+    add(c.renderPassSameKeyReentryDistance1);
+  } else if (interveningPasses == 2) {
+    add(c.renderPassSameKeyReentryDistance2);
+  } else if (interveningPasses <= 4) {
+    add(c.renderPassSameKeyReentryDistance3To4);
+  } else if (interveningPasses <= 8) {
+    add(c.renderPassSameKeyReentryDistance5To8);
+  } else if (interveningPasses <= 16) {
+    add(c.renderPassSameKeyReentryDistance9To16);
+  } else {
+    add(c.renderPassSameKeyReentryDistance17Plus);
+  }
+}
+
+void countRenderPassSameKeyReentryDistance1Shape(bool sameColor,
+                                                 bool sameDepth,
+                                                 std::uint64_t bytes) {
+  auto& c = counters();
+  if (sameColor && sameDepth) {
+    add(c.renderPassSameKeyReentryDistance1SampleChange);
+    add(c.renderPassSameKeyReentryDistance1SampleChangeBytes, bytes);
+  } else if (sameColor) {
+    add(c.renderPassSameKeyReentryDistance1SameColor);
+    add(c.renderPassSameKeyReentryDistance1SameColorBytes, bytes);
+  } else if (sameDepth) {
+    add(c.renderPassSameKeyReentryDistance1SameDepth);
+    add(c.renderPassSameKeyReentryDistance1SameDepthBytes, bytes);
+  } else {
+    add(c.renderPassSameKeyReentryDistance1RtDepthChange);
+    add(c.renderPassSameKeyReentryDistance1RtDepthChangeBytes, bytes);
+  }
+}
+
 void countRenderPassSameKeyReentryPreservationBytes(std::uint64_t bytes) {
   add(counters().renderPassSameKeyReentryPreservationBytes, bytes);
 }
@@ -4584,6 +4649,13 @@ void emitEncoderBreakdown(const EncoderBreakdown& b) {
       "depth_format=%llu depth_width=%llu depth_height=%llu depth_bpp=%llu "
       "depth_alias_texture=0x%llx depth_texture_usage=0x%llx "
       "depth_format_swizzle=%llu depth_texture_needs_shader_read_view=%llu "
+      "color_attachment_count=%llu color0_included=%llu "
+      "color0_load_action=%llu color0_store_action=%llu "
+      "color0_clear=%llu color_load_bytes=%llu color_store_bytes=%llu "
+      "depth_included=%llu depth_load_action=%llu depth_store_action=%llu "
+      "depth_clear=%llu depth_load_bytes=%llu depth_store_bytes=%llu "
+      "stencil_included=%llu stencil_load_action=%llu stencil_store_action=%llu "
+      "stencil_clear=%llu stencil_load_bytes=%llu stencil_store_bytes=%llu "
       "end_reason=%s draw_calls=%llu indexed_draws=%llu "
       "expanded_indexed_draws=%llu ffp_draws=%llu programmable_draws=%llu "
       "pretransformed_draws=%llu textured_draws=%llu "
@@ -4597,6 +4669,14 @@ void emitEncoderBreakdown(const EncoderBreakdown& b) {
       "blend_state_unique=%llu blend_state_unique_overflows=%llu "
       "blend_state_last=0x%llx blend_enabled_noop_draws=%llu "
       "blend_constant_factor_draws=%llu "
+      "blend_screen_draws=%llu blend_additive_draws=%llu "
+      "blend_alpha_composite_draws=%llu "
+      "alpha_blend_textured_draws=%llu "
+      "alpha_blend_textured_primitives=%llu "
+      "alpha_blend_textured_vertices=%llu "
+      "alpha_blend_small_draws=%llu "
+      "alpha_blend_small_primitives=%llu "
+      "alpha_blend_small_vertices=%llu "
       "alpha_test_enabled_draws=%llu alpha_test_effective_draws=%llu "
       "clip_plane_enabled_draws=%llu "
       "point_draws=%llu line_draws=%llu triangle_draws=%llu primitive_count=%llu "
@@ -4835,6 +4915,25 @@ void emitEncoderBreakdown(const EncoderBreakdown& b) {
       static_cast<unsigned long long>(b.depthTextureUsage),
       static_cast<unsigned long long>(b.depthFormatNeedsShaderReadSwizzle),
       static_cast<unsigned long long>(b.depthTextureNeedsShaderReadView),
+      static_cast<unsigned long long>(b.colorAttachmentCount),
+      static_cast<unsigned long long>(b.color0Included),
+      static_cast<unsigned long long>(b.color0LoadAction),
+      static_cast<unsigned long long>(b.color0StoreAction),
+      static_cast<unsigned long long>(b.color0Clear),
+      static_cast<unsigned long long>(b.colorLoadBytes),
+      static_cast<unsigned long long>(b.colorStoreBytes),
+      static_cast<unsigned long long>(b.depthIncluded),
+      static_cast<unsigned long long>(b.depthLoadAction),
+      static_cast<unsigned long long>(b.depthStoreAction),
+      static_cast<unsigned long long>(b.depthClear),
+      static_cast<unsigned long long>(b.depthLoadBytes),
+      static_cast<unsigned long long>(b.depthStoreBytes),
+      static_cast<unsigned long long>(b.stencilIncluded),
+      static_cast<unsigned long long>(b.stencilLoadAction),
+      static_cast<unsigned long long>(b.stencilStoreAction),
+      static_cast<unsigned long long>(b.stencilClear),
+      static_cast<unsigned long long>(b.stencilLoadBytes),
+      static_cast<unsigned long long>(b.stencilStoreBytes),
       splitReasonName(b.endReason),
       static_cast<unsigned long long>(b.drawCalls),
       static_cast<unsigned long long>(b.indexedDraws),
@@ -4863,6 +4962,15 @@ void emitEncoderBreakdown(const EncoderBreakdown& b) {
       static_cast<unsigned long long>(b.blendStateLast),
       static_cast<unsigned long long>(b.blendEnabledNoopDraws),
       static_cast<unsigned long long>(b.blendConstantFactorDraws),
+      static_cast<unsigned long long>(b.blendScreenDraws),
+      static_cast<unsigned long long>(b.blendAdditiveDraws),
+      static_cast<unsigned long long>(b.blendAlphaCompositeDraws),
+      static_cast<unsigned long long>(b.alphaBlendTexturedDraws),
+      static_cast<unsigned long long>(b.alphaBlendTexturedPrimitives),
+      static_cast<unsigned long long>(b.alphaBlendTexturedVertices),
+      static_cast<unsigned long long>(b.alphaBlendSmallDraws),
+      static_cast<unsigned long long>(b.alphaBlendSmallPrimitives),
+      static_cast<unsigned long long>(b.alphaBlendSmallVertices),
       static_cast<unsigned long long>(b.alphaTestEnabledDraws),
       static_cast<unsigned long long>(b.alphaTestEffectiveDraws),
       static_cast<unsigned long long>(b.clipPlaneEnabledDraws),
@@ -5217,6 +5325,17 @@ CounterSnapshot snapshot() {
 void emitFrameDelta(std::uint64_t frameId,
                     const CounterSnapshot& prev,
                     const CounterSnapshot& curr) {
+  using Clock = std::chrono::steady_clock;
+  static thread_local Clock::time_point prevEmitTime{};
+  const auto now = Clock::now();
+  double wallMs = 0.0;
+  if (prevEmitTime != Clock::time_point{}) {
+    wallMs =
+        std::chrono::duration<double, std::milli>(now - prevEmitTime).count();
+  }
+  prevEmitTime = now;
+  const double fps = wallMs > 0.0 ? 1000.0 / wallMs : 0.0;
+
   auto delta = [](std::uint64_t a, std::uint64_t b) -> std::uint64_t {
     // Atomic loads are relaxed and the snapshot covers many counters,
     // so a later snapshot field could lag a prior one if a writer is
@@ -5226,6 +5345,7 @@ void emitFrameDelta(std::uint64_t frameId,
   std::fprintf(
       stderr,
       "[dxmt9-perf-frame frame=%llu "
+      "wall_ms=%.3f fps=%.3f "
       "submit_draw=%llu submit_clear=%llu submit_stretch=%llu "
       "submit_present=%llu submit_flush=%llu command_buffers=%llu "
       "render_pass_begin=%llu render_pass_end=%llu "
@@ -5253,6 +5373,8 @@ void emitFrameDelta(std::uint64_t frameId,
       "render_encoder_gpu_time_ms=%.3f render_encoder_gpu_time_samples=%llu "
       "gpu_command_buffer_errors=%llu sub_command_buffers=%llu]\n",
       static_cast<unsigned long long>(frameId),
+      wallMs,
+      fps,
       static_cast<unsigned long long>(delta(prev.submitDraw, curr.submitDraw)),
       static_cast<unsigned long long>(delta(prev.submitClear, curr.submitClear)),
       static_cast<unsigned long long>(delta(prev.submitStretch, curr.submitStretch)),
