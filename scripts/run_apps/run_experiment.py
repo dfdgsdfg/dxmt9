@@ -114,6 +114,11 @@ class ExperimentApp:
     wine_id: str | None = None
     wine_alternatives: list[str] = field(default_factory=list)
     install_drive_letter: str = "d"
+    # Per-app renderer selection (R-BACK-39.5). Resolved ONCE at spawn into
+    # DXMT9_RENDER_MODE in the launched wine process environment, where the
+    # backend factory (src/dxmt9/render/backend_factory.cpp) reads it once.
+    # Valid: "traditional" (default) / "framegraph". Absent => "traditional".
+    render_mode: str = "traditional"
     # Optional probe-level expected-range gate. Each entry maps a counter
     # key (matching kCounterTable in src/dxmt9/dxmt9_perf_counters.cpp) to
     # an inclusive {min, max} range. Either bound may be omitted. Absent
@@ -164,7 +169,13 @@ class ExperimentApp:
             wine_id=data.get("wine_id"),
             wine_alternatives=list(data.get("wine_alternatives") or []),
             install_drive_letter=data.get("install_drive_letter", "d"),
+            render_mode=str(data.get("render_mode", "traditional")),
         )
+        if app.render_mode not in ("traditional", "framegraph"):
+            raise ValueError(
+                f"{app.name}: render_mode must be 'traditional' or 'framegraph', "
+                f"got {app.render_mode!r}"
+            )
         if app.require_positive_timeout and app.run_timeout_sec <= 0.0:
             raise ValueError(
                 f"{app.name}: require_positive_timeout needs run_timeout_sec > 0"
@@ -938,6 +949,12 @@ def run_experiment(app: ExperimentApp, args: argparse.Namespace) -> int:
                 "DXMT_EXPERIMENT_CAPTURE_PATH": str(actual_dump_path),
                 "DXMT_CAPTURE_FRAME": str(app.capture_frame),
                 "DXMT_EXPERIMENT_SKIP_STAGE": "1" if skip_stage else "",
+                # R-BACK-39.5: resolve the per-app renderer ONCE here, at the
+                # single point where the wine process is spawned, so it persists
+                # for that process lifetime. The dxmt9 backend factory reads
+                # DXMT9_RENDER_MODE once at startup ("traditional"/unset =>
+                # TraditionalBackend, "framegraph" => FrameGraphBackend).
+                "DXMT9_RENDER_MODE": app.render_mode,
             }
         )
         if app.wine_dll_overrides:
