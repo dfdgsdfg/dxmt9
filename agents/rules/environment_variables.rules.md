@@ -1,303 +1,31 @@
 # dxmt9 Environment Variables
 
-Master list of `DXMT*` environment variables honored by the dxmt9
-runtime or repository harnesses. Kept in this file so a developer can
-find every knob without grepping. Generated from source on demand:
+Index of `DXMT*` environment variables honored by the dxmt9 runtime or
+repository harnesses. The full per-knob tables live in the per-domain
+`environment_variables_<domain>.rules.md` files; this file is the map so a
+developer can find every knob without grepping. Regenerate the raw var list
+from source on demand:
 
 ```sh
 rg -o '"DXMT9?_[A-Z0-9_]+|DXMT_[A-Z0-9_]+"' src scripts/run_apps scripts/run_suites scripts/tools | sort -u
 ```
 
-Categories:
+A flag is "set" when its value is a non-empty string that is not `0`, unless
+documented otherwise.
 
-- **Capture / Debug** — frame capture, dump, validation.
-- **Logging / Tracing** — log level, log path, trace switches.
-- **Perf counters** — counter system + per-frame snapshot.
-- **Adapter spoofing** — D3D9 driver ID overrides.
-- **Present policy** — present-acquire / boundary / latency tuning.
-- **Encoder debug toggles** — force-state knobs for triaging.
-- **Pipeline cache** — archive prewarm and cache-root controls.
-- **PE bridge / recorder** — PE-side chunk recorder diagnostics.
-- **Compatibility** — opt-out / opt-in flags for known-issue surfaces.
+## Domains
 
-A flag is "set" when its value is a non-empty string that is not `0`,
-unless documented otherwise.
-
-## Capture / Debug
-
-| Var | Purpose | Default | Where |
-|---|---|---|---|
-| `MTL_CAPTURE_ENABLED` | Apple's Metal capture-layer env. Do **not** set this by default for 3DMark05 perf probes: current Wine/3DMark05 startup can black-screen with only this env present. `run_3dmark05_perf_probe.sh` uses dxmt9's own `DXMT_METAL_CAPTURE_FRAME/PATH` trigger and only adds this env when `DXMT_3DMARK05_SET_MTL_CAPTURE_ENABLED=1` is deliberately set | unset | Metal runtime |
-| `DXMT_METAL_CAPTURE_FRAME` | Capture this 1-based frame as `.gputrace` | unset | `dxmt9_capture.cpp` |
-| `DXMT_METAL_CAPTURE_PATH` | Output path for the capture | tmp file | `dxmt9_capture.cpp` |
-| `DXMT_METAL_CAPTURE_DESTINATION` | MTLCaptureManager destination: `gpuTraceDocument` / `gputrace` / `file` for file output, or `developerTools` / `xcode` for an attached-Xcode capture route | `gpuTraceDocument` | `dxmt9_capture.cpp` |
-| `DXMT_3DMARK05_METAL_CAPTURE_DESTINATION` | 3DMark05 wrapper-only forwarder for `DXMT_METAL_CAPTURE_DESTINATION`; use `developerTools` when testing Xcode-attached capture without defaulting to `MTL_CAPTURE_ENABLED=1` | unset | `run_3dmark05_perf_probe.sh` |
-| `DXMT_DUMP_GPU_TEXTURE_HANDLE` | Dump a specific texture (BMP) post-readback | unset | `dxmt9_capture.cpp` |
-| `DXMT_DUMP_GPU_TEXTURE_PATH` | Output path for texture BMP | unset | `dxmt9_capture.cpp` |
-| `DXMT_DUMP_TEXTURE_HANDLE` / `DXMT_DUMP_TEXTURE_DIR` | Texture dump (different stage) | unset | core/texture path |
-| `DXMT_DUMP_SHADER_DIR` / `DXMT_DUMP_SHADER_BYTECODE_DIR` | Shader translation dumps | unset | shader transform |
-| `DXMT_FORCE_PRESENT_TEXTURE_HANDLE` | Force a specific texture as present source | unset | presenter |
-| `DXMT_SKIP_TEXTURE_HANDLE` | Suppress texture by handle | unset | presenter / encoder |
-| `DXMT_CAPTURE_FRAME` | Internal backbuffer capture frame; also primary frame for multi-frame runs | unset | core / experiment runner |
-| `DXMT_CAPTURE_FRAMES` | Comma-separated internal backbuffer capture frame list | unset | core / experiment runner |
-| `DXMT_CAPTURE_RANGE` | Inclusive internal backbuffer capture range `start:end:interval` | unset | core / experiment runner |
-| `DXMT_EXPERIMENT_CAPTURE_PATH` | Single-frame experiment-harness capture path | unset | experiment runner |
-| `DXMT_EXPERIMENT_CAPTURE_DIR` | Multi-frame internal capture output directory (`frameNNNNNN.bmp`) | unset | core / experiment runner |
-| `DXMT_LEAK_STATEBLOCKS` | Skip stateblock destruction (leak-check triage) | unset | d3d9 |
-
-## Mini-replay / payload capture
-
-Diagnostic-only knobs for dumping replayable per-draw payloads and for the
-`scripts/tools/run_3dmark05_mini_replay.py` standalone replay harness. The dump
-vars reuse the reverse-indexed-triangle row/class/span filters and the indexed
-triangle encoder draw range; they read geometry/cbuf bytes on the draw path, so
-use only in paired diagnostic probes.
-
-| Var | Purpose | Default |
-|---|---|---|
-| `DXMT9_DUMP_INDEXED_GEOMETRY_DIR` | Directory for dumping per-draw indexed triangle geometry payloads (index + stream0/stream1 bytes). Exposed by `run_3dmark05_perf_probe.sh --dump-indexed-geometry`. Filtered by the reverse-indexed row/class/span filters and the encoder draw range | unset |
-| `DXMT9_DUMP_INDEXED_GEOMETRY_CBUFS` | Also dump real per-draw uniform (cbuf) payloads beside the geometry dumps. Exposed by `run_3dmark05_perf_probe.sh --dump-indexed-geometry-cbufs` | `0` |
-| `DXMT9_DUMP_INDEXED_GEOMETRY_MAX_DRAWS` | Cap on the number of indexed draw geometry payloads dumped. Exposed by `run_3dmark05_perf_probe.sh --dump-indexed-geometry-max-draws` | `16` |
-| `DXMT9_DUMP_INDEXED_GEOMETRY_VS` / `DXMT9_DUMP_INDEXED_GEOMETRY_PS` | Filter the geometry dump by VS/PS shader hash (decimal or `0x`-prefixed, matching `3dmark05-perf-indexed-probe-draws.csv`). Exposed by `run_3dmark05_perf_probe.sh --dump-indexed-geometry-vs/-ps` | unset |
-| `DXMT9_DUMP_DEPTH_ATTACHMENT_HANDLE` / `_PATH` / `_SEQ` / `_ENC` | Dump a render pass's raw D24X8 depth attachment sidecar for mini-replay `--depth-input`. `_HANDLE` selects the depth texture handle and `_PATH` the output file (both required to enable); `_SEQ`/`_ENC` optionally scope to one render-pass seq/encoder. Exposed by `run_3dmark05_perf_probe.sh --dump-depth-attachment-handle/-path/-seq/-enc` | unset |
-| `DXMT9_MINI_REPLAY_CAPTURE_PATH` | `run_3dmark05_mini_replay.py` `.gputrace` capture output path | unset |
-| `DXMT9_MINI_REPLAY_COLOR_OUTPUT_PATH` | `run_3dmark05_mini_replay.py` replay color output image path | unset |
-| `DXMT9_MINI_REPLAY_REPEAT` | `run_3dmark05_mini_replay.py` replay repeat count | `1` |
-| `DXMT9_MINI_REPLAY_MIN_CAPTURE_FREE_MB` | Free-space guard (MiB) before a mini-replay capture; overridable with `--min-capture-free-mb` | `2048` |
-
-## Logging / Tracing
-
-| Var | Purpose | Default |
-|---|---|---|
-| `DXMT_LOG_LEVEL` | `Error` / `Warn` / `Info` / `Debug` / `Trace` | `Warn` |
-| `DXMT_LOG_PATH` | Redirect log to file | stderr |
-| `DXMT_TRACE_FILE` | Trace output file | unset |
-| `DXMT_TRACE_RENDER` | Trace render encoder | unset |
-| `DXMT_TRACE_QUEUE` / `DXMT_TRACE_QUEUE_FROM` | Trace queue events | unset |
-| `DXMT_TRACE_ENCODE_SEQ` | Trace encode sequence ids | unset |
-| `DXMT_TRACE_FVF` / `DXMT_TRACE_FVF_TEX0` / `DXMT_TRACE_FVF_EXPANDED` | FVF decode trace | unset |
-| `DXMT_TRACE_SHADER_INPUTS` | Shader input binding trace | unset |
-| `DXMT_TRACE_TEXTURE_HANDLE` | Trace per-handle texture events | unset |
-| `DXMT9_TRACE_DRAW_GEOMETRY` / `DXMT9_TRACE_DRAW_GEOMETRY_LIMIT` | Draw geometry diagnostics | unset |
-| `DXMT9_BRIDGE_VERBOSE` | Log rejected or suspicious winemetal bridge handles | `0` |
-
-## Perf counters
-
-| Var | Purpose | Default |
-|---|---|---|
-| `DXMT_PERF_COUNTERS` | Enable `[dxmt9-perf]` counter line at exit | `0` |
-| `DXMT_PERF_COUNTERS_PERIODIC_PRESENTS` | Emit counters every N presents (numeric) | `0` |
-| `DXMT9_PERF_FRAME_SAMPLING` | Per-frame counter delta snapshots | `0` |
-| `DXMT9_PERF_ENCODER_GPU_TIME` | Opt-in per-encoder GPU-time via counter sample buffers at render-encoder boundaries; pairs with `DXMT_PERF_COUNTERS`. See `metal_debugging.rules.md` §5 path B | `0` |
-| `DXMT9_PERF_ENCODER_BREAKDOWN` | Emit per-render-encoder `[dxmt9-perf-encoder]` summary and `[dxmt9-perf-encoder-stream]` stream breakdown lines for stream handle/offset/stride churn, stream Metal-bind first/handle/offset reasons, stream/IB unique handle bytes/usage/pool buckets, IB handle churn, primitive/vertex/FFP/pre-transformed geometry shape, PSO/shader-variant/VSOut-layout attribution including layout-cache hit/miss counts, VS/PS shader hash and, when `DXMT_DUMP_SHADER_DIR` is set, exact VS/PS source hash attribution, argbuf table/cbuf bytes including VS/FFPVS first/rewrite/field splits, setVertexBytes slot-5/other bytes, transient vertex/index bytes split by UP preupload, decl/shadow fallback, and indexed expansion, VS float upload-plan ranges, and write attribution | `0` |
-| `DXMT9_PERF_ENCODER_BREAKDOWN_SEQ` | Optional numeric filter for `DXMT9_PERF_ENCODER_BREAKDOWN=1`; when set, emit encoder breakdown rows only for one render-pass sequence id such as frame-capture `seq=60`, keeping 3DMark05 no-gputrace logs bounded during per-frame attribution probes | unset |
-| `DXMT9_PERF_RENDER_PASS_REENTRY_TOP` | Optional top-N per-frame same-key render-pass re-entry diagnostic. Emits `[dxmt9-perf-render-pass-reentry]` rows with A/B attachment handles, true B->A encoder path, read-relation bits, store-proof owners, touch distances, and preservation bytes. Use with `DXMT9_PERF_ENCODER_BREAKDOWN=1` or wrapper `--render-pass-reentry-top N` when joining re-entry role pairs to encoder load/store/clear action shape | unset |
-| `DXMT9_PERF_TEXTURE_SAMPLER_DIRECT_SPLIT` | Heavy opt-in per-entry attribution for the fragment texture/sampler direct lane: texture resolve, direct texture branch/set, direct sampler branch/set. Use only for short no-gputrace CPU attribution probes because the nested scopes perturb the default perf profile | `0` |
-| `DXMT_3DMARK05_REQUIRE_UNLOCKED` | 3DMark05 launcher guard: fail early when macOS reports `CGSSessionScreenIsLocked=Yes`, avoiding false black/factory-only perf captures. Set to `0` only for deliberate locked-session experiments | `1` |
-| `DXMT_3DMARK05_PREFIX` | Direct 3DMark05 launcher prefix override. `run_3dmark05_perf_probe.sh` sets this to `experiments/prefixs/app-d3d9-3dmark05` so standard probes use the catalogue app prefix even if the optional `app-d3d9-3dmark05-verify` prefix was cleaned up | launcher default: verify prefix |
-| `DXMT_3DMARK05_RESULT_FILE` | Append a 3DMark05 result-file argument such as `dxmt9_gt1.3dr` after the selected command-line tests, enabling documented unattended result runs when the desktop is unlocked | unset |
-| `DXMT_3DMARK05_PROBE_TIMEOUT` | Default runner timeout for `run_3dmark05_perf_probe.sh`; when unset the wrapper uses `420s` with gputrace and `180s` with `--no-gputrace`, passes that value to `run_experiment.py --timeout`, and rejects disabled/zero timeouts because 3DMark05 may hang on the final frame | derived |
-| `DXMT_3DMARK05_PROBE_TIMEOUT_SLACK` | Extra seconds added to the perf wrapper's top-level watchdog beyond `DXMT_3DMARK05_PROBE_TIMEOUT` / `--timeout`. The watchdog runs the whole `caffeinate run_experiment.py ...` command in a fresh process group and terminates it if the catalogue runner does not return after its own timeout/finalization window | `45` |
-| `DXMT_3DMARK05_SET_MTL_CAPTURE_ENABLED` | Opt back into adding `MTL_CAPTURE_ENABLED=1` for 3DMark05 perf-probe gputrace runs. Keep unset for normal probes because `MTL_CAPTURE_ENABLED=1` alone has reproduced black-screen startup with draw/present counters at zero | `0` |
-| `DXMT_3DMARK05_METAL_CAPTURE_DESTINATION` | Forwarded to `DXMT_METAL_CAPTURE_DESTINATION` by the 3DMark05 perf wrapper; use `developerTools` for an attached-Xcode capture route, otherwise default file `.gputrace` capture remains `gpuTraceDocument` | unset |
-| `DXMT_3DMARK05_DIRECT_TIMEOUT` | Timeout used by `scripts/run_apps/run_app-d3d9-3dmark05-verify_direct.sh` for manual direct-prefix runs. The wrapper kills the process group on timeout so a final-frame hang does not require manual cleanup | `180` |
-| `DXMT_3DMARK05_DIRECT_DRY_RUN` | Print the direct 3DMark05 wrapper timeout and launcher command without starting Wine | `0` |
-| `DXMT_3DMARK05_LAUNCHER_TIMEOUT` | Direct-shell fallback timeout used by `experiments/launchers/app-d3d9-3dmark05.sh` only when it is not already supervised by `run_experiment.py` or the direct wrapper. Set a positive value for longer manual suites; disabled/zero values are rejected | `180` |
-| `DXMT_3DMARK05_ALLOW_UNSUPERVISED` | Bypass the 3DMark05 launcher's direct-shell fallback timeout. Use only when another documented supervisor owns process lifetime | `0` |
-| `DXMT_3DMARK05_KILL_SERVER_ON_EXIT` | Direct 3DMark05 launcher cleanup: kill the app prefix wineserver on normal exit or TERM/INT so timeout-finalized runs do not leave a detached 3DMark05 process alive | `1` |
-| `DXMT_3DMARK05_MIN_TRACE_FREE_MB` | `run_3dmark05_perf_probe.sh` free-space guard before launching Wine/gputrace; defaults to `2048` with gputrace and `256` with `--no-gputrace` | derived |
-| `DXMT_3DMARK05_CLASS_PROXY_TOP` | Default top-N indexed state/class proxy rows emitted by `finalize_3dmark05_perf_probe.sh` after Xcode/dxmt joining; use it to bound `frame<N>-indexed-state-class-xcode-proxy.{md,csv}` | `12` |
-| `DXMT_3DMARK05_MAX_TOP_UNEXPLAINED_BUFFER_WRITE_RATIO` | Default for the Xcode comparison gate `--max-top-unexplained-buffer-write-ratio`, failing candidates whose top encoder buffer-write traffic remains mostly unexplained by dxmt CPU-side writers | unset |
-| `DXMT_3DMARK05_MAX_CONST_UPLOAD_BREAK_COUNT_RATIO` | Default for the run-level comparison gate `--max-const-upload-break-count-ratio`, failing sparse/coalesced constant-upload candidates that reduce bytes by creating too many const-upload draw-run breaks | unset |
-
-## Present policy
-
-| Var | Purpose | Default |
-|---|---|---|
-| `DXMT9_PRESENT_ASYNC_ACQUIRE` | Request drawable on the encode thread async | `0` |
-| `DXMT9_PRESENT_PREACQUIRE` | Pre-acquire drawable before encode | `0` |
-| `DXMT9_PRESENT_ACQUIRE_ON_SUBMIT` | Acquire drawable at submit time | `0` |
-
-The three acquire-policy vars above are mutually exclusive in effect:
-the runtime resolves them once at Presenter construction into a single
-`AcquirePolicy` value with priority `Async > SyncOnSubmit > PreAcquire
-> Sync`. With multiple vars set the highest-priority one wins; the
-others are ignored. See `dxmt9::resolveAcquirePolicy` in
-`src/dxmt9/dxmt9_presenter.hpp` and the matrix spec
-`tests/native/backend/present_acquire_policy_spec.cpp`.
-| `DXMT9_PRESENT_BOUNDARY_AFTER_ACQUIRE` | Move `notePresentDequeued` to after acquire (selects `BoundaryPolicy::AfterAcquire`) | `0` |
-| `DXMT9_PRESENT_BOUNDARY_COMPLETION` | Wait on command-buffer `completedSeqId_` (selects `BoundaryPolicy::Completion`) | `0` |
-| `DXMT9_PRESENT_BOUNDARY_PRESENT_COMPLETION` | Wait on `presentCompletedSeqId_` (selects `BoundaryPolicy::PresentCompletion`) — default on; explicit `0` opts out | `1` |
-| `DXMT9_PRESENT_REFRESH_HZ` | Override refresh rate (numeric Hz) | derived |
-| `DXMT9_LAYER_DISPLAY_SYNC` | CAMetalLayer display sync opt-in; when set non-zero, the presenter sets `CAMetalLayer.displaySyncEnabled` from the D3D9 PresentationInterval. Default is **off** in code (`dxmt9_presenter.mm::layerDisplaySyncEnabled`), and the runtime instead enforces the per-present minimum duration via `MTLCommandBuffer::presentDrawableAfterMinimumDuration` | `0` (off — code default; the docs row historically said `1`, the code path defaults to off) |
-| `DXMT9_DISABLE_VSYNC` | Runtime "vsync off" override. When set non-zero, the presenter forces both `CAMetalLayer.displaySyncEnabled = NO` and the software `minimumPresentDuration = 0` regardless of the D3D9 PresentationInterval the app requested. Production-side counterpart to per-swapchain `D3DPRESENT_INTERVAL_IMMEDIATE`. Useful for perf triage and user-controlled "vsync off" without modifying the D3D9 app. Resolver: `resolveDisableVsync()` in `dxmt9_presenter.hpp`. Tested by `dxmt9-present-disable-vsync-spec` | `0` |
-| `DXMT9_DISABLE_PRESENT_BOUNDARY` | Skip the present-boundary wait entirely (selects `BoundaryPolicy::Disabled`) | `0` |
-| `DXMT9_SPLIT_PRESENT_CHUNK` / `DXMT9_SPLIT_PRESENT_ACQUIRE` | Split present chunks | `0` |
-| `DXMT9_SPLIT_STRETCH_CHUNK` | Split stretch-rect chunks | `0` |
-| `DXMT9_DRAW_CHUNK_COMMAND_LIMIT` | Max commands per chunk (numeric) | derived |
-| `DXMT9_CHUNK_DRAW_PAYLOAD_ARENA_LIMIT_BYTES` | Cap (numeric bytes) on the per-chunk draw-payload arena; `0`/unset/unparseable disables the cap | `0` |
-| `DXMT9_CAP_FRAME_LATENCY_TO_BACKBUFFERS` | Limit max frame latency to backbuffer count | `0` |
-| `DXMT9_MAX_FRAME_LATENCY` | Override max frame latency (numeric) | unset |
-| `DXMT9_SYNC_PRESENT_FLUSH` | Flush synchronously after present for present-path triage | `0` |
-
-The four `DXMT9_*PRESENT_BOUNDARY*` vars above resolve once at
-process init into a single `dxmt9::BoundaryPolicy` value with priority
-`Disabled > PresentCompletion > Completion > AfterAcquire > Default`
-— `Disabled` short-circuits the whole boundary; `PresentCompletion`
-is the historical default-on branch (null / empty env counts as set,
-only explicit `0` demotes). `AfterAcquire` is observationally a no-op
-when a higher-precedence wait branch is selected (those branches do
-not consult `presentDequeuedSeqId_`). See
-`dxmt9::resolveBoundaryPolicy` in `src/dxmt9/dxmt9_presenter.hpp`,
-the switch in `CommandQueue::presentBoundary`
-(`src/dxmt9/dxmt9_command_queue.cpp`), the AfterAcquire site in
-`src/dxmt9/dxmt9_draw_encoder.mm`, and the matrix spec
-`tests/native/backend/present_boundary_policy_spec.cpp`.
-
-## Pipeline cache
-
-| Var | Purpose | Default |
-|---|---|---|
-| `DXMT9_PREWARM` | Override Metal binary archive prewarm mode: `full` / `lazy` / `disabled` | release=`full`, debug=`lazy` |
-| `DXMT9_CACHE_DIR` | Override dxmt9 cache root for shader archives | platform cache dir |
-| `DXMT9_PSO_COMPILE_THREADS` | Override the PSO compile thread-pool worker count (numeric); `0`/unparseable falls back to the hardware-concurrency default | derived |
-
-## Encoder / state debug
-
-| Var | Purpose | Default |
-|---|---|---|
-| `DXMT_DEBUG_FORCE_CULL_MODE` | Force a specific cull mode (`none`, `front`, or `back`). For 3DMark05 perf work this is exposed by `run_3dmark05_perf_probe.sh --force-cull-mode` as a correctness-invalid cull/backend shape classifier; use only in paired gputrace probes and gate on Xcode VS buffer-write / VS invocation deltas | unset |
-| `DXMT_DEBUG_FORCE_TRANSIENT_DEDICATED` | Force dedicated transient buffer | `0` |
-| `DXMT_DEBUG_FORCE_VISIBLE` / `DXMT9_DEBUG_FORCE_VISIBLE_DRAW` | Force draw visible | `0` |
-| `DXMT_DEBUG_FORCE_FULLSCREEN_VERTEX` | Force fullscreen-quad vertices | `0` |
-| `DXMT_DEBUG_FORCE_FRAGMENT_COLOR` | Force fragment output color | unset |
-| `DXMT9_DRAW_SEQ_MIN` / `DXMT9_DRAW_SEQ_MAX` | Drop draws outside an inclusive submission seq-id range for visual bisection | unset |
-| `DXMT9_DRAW_ORDINAL_MIN` / `DXMT9_DRAW_ORDINAL_MAX` | Drop draws outside an inclusive draw-call ordinal range after any seq-id filter has been applied | unset |
-| `DXMT_DEBUG_FORCE_PIXEL_V_FLIP` | Flip v-coordinate in pixel shader | `0` |
-| `DXMT_DEBUG_FLIP_VERTEX_Y` | Flip y-coordinate in vertex shader | `0` |
-| `DXMT_DEBUG_FRONT_FACE_CCW` | Force CCW front-face | `0` |
-| `DXMT_DEBUG_FRAGMENT_MODE` | Override fragment shader mode | unset |
-| `DXMT_DEBUG_FFP_ALPHA` / `DXMT_DEBUG_FFP_TEXTURE` / `DXMT_DEBUG_FFP_UV` | FFP pipeline debug toggles | `0` |
-| `DXMT_DEBUG_NO_PER_DRAW_ALLOC` | Trip per-draw alloc invariant | `0` |
-| `DXMT_DEBUG_DISABLE_SHADER_ARCHIVE` | Skip shader archive load/save | `0` |
-| `DXMT9_DISABLE_ARGBUF_HYBRID` | Force Stage 2 argument-buffer hybrid binding path off | `0` |
-| `DXMT9_TILE_FFP` | Tile-FFP path selector override: `off` / `auto` / `force`. **`off` is the DEFAULT** (unset/empty/unrecognized) — interim safety: the tile encode wire (`523b66e`) issues `setTileRenderPipelineState`+`dispatchThreadsPerTile` instead of the base-colour draw, so any tile-routed draw renders the cleared imageblock = **black**; until the two-stage encode lands + is GPU-validated, tile-FFP is off and every FFP draw takes the correct portable lane. `auto` explicitly opts into the `selectTileFfpForPass` heuristic (the path the two-stage fix will validate behind this flag before the default flips back). `force` takes the tile lane for any draw that passes every eligibility gate (FFP shape, precision, A2C) — it does **not** force a genuinely-ineligible draw (non-Apple3 / non-FFP / textured / vertex-blended / precision-unsafe / A2C-with-alpha-test). Use `force` vs `off` to A/B the tile and portable readbacks (R-BACK-13.*). Read once at first use (`dxmt9_pipeline_cache.cpp::selectTileFfpForPass`). | `off` |
-| `DXMT_DISABLE_ALPHA_TEST` / `DXMT_DISABLE_CULL` / `DXMT_DISABLE_SCISSOR` | Disable specific state. For 3DMark05 perf work, `DXMT_DISABLE_ALPHA_TEST` is a correctness-invalid discard/raster backend classifier exposed by `run_3dmark05_perf_probe.sh --disable-alpha-test`; it strips generated alpha-test `discard_fragment()` from FFP/translated fragment source, participates in the shader debug-env key, and forces runtime alpha-test constants off. Use it to separate alpha-test discard shape from broader `DXMT_DEBUG_FORCE_FRAGMENT_COLOR` effects | `0` |
-| `DXMT_FORCE_EXPAND_INDEXED` | Force indexed-→-non-indexed expansion. For 3DMark05 perf work this is exposed by `run_3dmark05_perf_probe.sh --force-expand-indexed` as a primitive/backend pressure classifier; it changes vertex submission/cache behavior and can heavily regress cost, so use only in paired diagnostic probes | `0` |
-| `DXMT_DISABLE_AUTO_EXPAND_INDEXED` | Disable compatibility heuristic that auto-expands selected indexed draws | `0` |
-| `DXMT9_USE_NATIVE_METAL_BASE_VERTEX` | Use Metal's native `baseVertex` for indexed draws and keep the shader-side `vertexBaseIndex` at zero, instead of index/offset adjustment. Exposed by `run_3dmark05_perf_probe.sh` (`DXMT9_USE_NATIVE_METAL_BASE_VERTEX=1`) | `0` |
-| `DXMT9_DISABLE_DRAW_SUBMIT_BATCH` | Disable the PE chunk-replay draw-submission batching path (which coalesces consecutive draw packets); use to A/B the binding-override/batch work. Set (non-`0`) disables batching | `0` |
-| `DXMT9_ARGBUF_RESOURCE_ARRAY` | Argument-buffer resource-array mode toggle: emit the extended `ArgbufLayout` with texture/sampler arrays. Read once at first use | `0` |
-| `DXMT9_ARGBUF_CBUF_CONTENT_HASH` | Legacy/debug opt-in for hashing uploaded argbuf cbuf bytes into `ConstantBufferBinding::contentHash`. Default is off: the runtime relies on full uniform `payloadHash` plus per-category `identityHash`, avoiding the GT1 hot `hashConstantBufferBytes()` byte scan while keeping `contentHash=0` as a non-match sentinel | `0` |
-| `DXMT9_FORCE_FULL_CBUF_UPLOADS` | Diagnostic-only cbuf visual bisection knob: force VS/PS shader-constant upload plans to use full `VsConsts` / `PsConsts` sizes even when shader usage bounds allow the prefix-preserving dirty upload path. Use only to test whether a suspected visual artifact is caused by cbuf prefix sizing; default GT1 perf keeps the prefix path | `0` |
-| `DXMT9_MEASURE_INDEX_REUSE` | Diagnostic-only encoder breakdown extension: scan accessible index-buffer bytes and report per-encoder indexed reference count, draw-local unique index estimate, reuse ratio, and 16/32/64-entry finite vertex-cache miss estimates. Use with `DXMT9_PERF_ENCODER_BREAKDOWN=1`/`run_3dmark05_perf_probe.sh --measure-index-reuse` to compare dxmt's unique/cache-miss estimates with Xcode `VS Invocations`; the wrapper auto-scopes indexed diagnostic smoke runs to `--frame` unless `--encoder-breakdown-all-frames` is passed. Off by default because it reads index data on the draw path. | `0` |
-| `DXMT9_MEASURE_INDEX_CACHE_OPT_CANDIDATE` | Diagnostic-only extension for post-transform-cache investigations. With index reuse measurement enabled, build a cache-aware LRU32 reordered index candidate without submitting it and report original-vs-candidate LRU16/32/64 cache-miss estimates in encoder breakdown logs. Use `run_3dmark05_perf_probe.sh --measure-index-cache-opt-candidate` for full-frame probes after a mini replay shows cache-locality sensitivity. Off by default because it does extra index scanning and candidate construction on the draw path. | `0` |
-| `DXMT9_PROBE_INDEXED_TRIANGLE_ENCODER_DRAW_MIN` / `_MAX` / `_EXCLUDE` | Debug-only encoder-local draw-index gate shared by indexed triangle locality probes. `_MIN/_MAX` select an inclusive row-local draw window; `_EXCLUDE` subtracts a comma/semicolon/space-separated list from that window. Use for trace-local exact-safe sub-window proof, for example row `50/2` draw `14..32` except draw `18`; do not treat it as a production predicate. | unset |
-| `DXMT9_PROBE_APPLY_INDEX_CACHE_OPT_CANDIDATE` / `_MIN_GAIN_PCT` | Diagnostic-only mutating A/B probe for the cache-locality path. It builds the same LRU32 candidate as `DXMT9_MEASURE_INDEX_CACHE_OPT_CANDIDATE`, then submits it through a source-IB keyed reordered-buffer cache only when row/draw/class/span filters match, the draw is opaque depth-writing, the original index data comes from a stable buffer path, and the candidate reduces LRU32 misses by at least `_MIN_GAIN_PCT` (default `10`). Use `run_3dmark05_perf_probe.sh --probe-apply-index-cache-opt-candidate` for paired gputrace/Xcode counter validation; correctness and reordered-cache-hit cost must be checked before treating any win as production-safe. | `0` / `10` |
-| `DXMT9_PROBE_APPLY_INDEX_CACHE_OPT_CANDIDATE_UNSAFE_NONOPAQUE` | Diagnostic-only escape hatch for `DXMT9_PROBE_APPLY_INDEX_CACHE_OPT_CANDIDATE`. It bypasses the opaque-depth-writing safety gate and can reorder depth-read, blended, scissored, or otherwise visibility-sensitive rows. Use only with tight row/class/draw filters and same-input mini-replay image proof; primitive-id replay has shown that final color can change when the visible final writer changes even though geometry/depth coverage is still present. The GT1 wrapper now requires a semantic image gate when this unsafe path is combined with `--require-cache-opt-apply-proof`; use explicit target gates instead for mechanism-only Xcode runs. | `0` |
-| `DXMT9_OPTIMIZE_OPAQUE_DEPTH_INDEX_CACHE` / `_MIN_GAIN_PCT` | Production-shaped opt-in for the accepted cache-locality path. It submits cached LRU32 reordered index buffers only for opaque depth-writing triangle lists when a stable source-IB candidate clears the minimum gain threshold. It is not enabled by the shared `perf` profile, never bypasses the opaque-depth-writing safety gate, and does not inherit diagnostic reverse-triangle row/class/span filters. For 3DMark05/Xcode proof runs, pair the wrapper opt-in with `--require-opaque-depth-index-cache-proof`, not the diagnostic `--require-cache-opt-apply-proof`, because cached-prelookup rows are proven by cache-opt/effective LRU telemetry plus reordered-cache hits. | `0` / `10` |
-| `DXMT9_INDEX_CACHE_CANDIDATE_FRONTIER_CAP` | Diagnostic-only cap for the LRU32 index-cache candidate builder. `0` keeps the uncapped algorithm; positive values limit frontier width and report discarded neighbor candidates through `encode_draw_index_cache_candidate_frontier_dropped`. Exposed by `run_3dmark05_perf_probe.sh --index-cache-candidate-frontier-cap`. Use only to test whether candidate-selection CPU is dominated by wide-frontier rescoring; any CPU win must be paired with miss32/correctness proof because primitive order can change. | `0` |
-| `DXMT9_INDEX_CACHE_CANDIDATE_LAZY_FRONTIER` | Diagnostic-only alternate LRU32 candidate selector. It uses a lazily refreshed priority frontier instead of scanning the full active candidate vector every selection and reports heap activity through `encode_draw_index_cache_candidate_lazy_{heap_pops,refreshes,stale_drops,accepted}`. Exposed by `run_3dmark05_perf_probe.sh --index-cache-candidate-lazy-frontier`. Can change primitive order/candidate quality, so treat any CPU win as a hypothesis until miss32 and same-input correctness proof agree. | `0` |
-| `DXMT9_INDEX_CACHE_CANDIDATE_BUCKETED_SELECT` | Diagnostic-only alternate LRU32 candidate selector. It keeps active candidates in four cached-vertex-count buckets and moves only candidates adjacent to vertices that enter/leave the simulated post-transform cache, reporting work through `encode_draw_index_cache_candidate_bucket_{vertex_visits,moves,selected}`. Exposed by `run_3dmark05_perf_probe.sh --index-cache-candidate-bucketed-select`. Mutually exclusive with lazy frontier. It can change primitive order because it prioritizes cached-vertex count before the full score, so treat any CPU win as a hypothesis until miss32 and same-input correctness proof agree. | `0` |
-| `DXMT9_INDEX_CACHE_CANDIDATE_STRICT_LRU` | Diagnostic-only candidate-builder variant. It updates the simulated LRU cache with the same no-duplicate miss path as the LRU32 measurement helper, avoiding the historical builder's duplicate-on-fill behavior while the cache is warming. Exposed by `run_3dmark05_perf_probe.sh --index-cache-candidate-strict-lru`. Can change primitive order/candidate quality, so judge with no-gputrace miss32/CPU counters and `v0.0.1` visual-diff proof before promotion. | `0` |
-| `DXMT9_INDEX_CACHE_CANDIDATE_UPPER_BOUND_GATE` | Diagnostic-only pre-gate for LRU32 index-cache candidate construction. It measures original unique index count and skips building a reordered candidate when even the theoretical best candidate miss32 (`unique`) cannot satisfy the active `_MIN_GAIN_PCT`; reports skipped candidates through `encode_draw_index_cache_candidate_upper_bound_rejected`. Exposed by `run_3dmark05_perf_probe.sh --index-cache-candidate-upper-bound-gate`. Semantically this should only remove impossible candidates, but it adds unique-count work to the original measurement path and must be judged by no-gputrace CPU counters before promotion. | `0` |
-| `DXMT9_OPTIMIZE_SCREEN_BLEND_INDEX_CACHE` / `_MIN_GAIN_PCT` | Explicit-tolerance-only opt-in for strict screen-blend rows. The runtime predicate rejects depth-write, alpha-test, separate-alpha, stencil, clip-plane, and non-screen-blend shapes, but the path is destination-dependent and must not be generalized to broad depth-read reorder. Treat a run as proof only when paired with `--require-screen-blend-cache-proof` and same-input semantic images under an explicit `exact` or `lsb1` policy. | `0` / `10` |
-| `DXMT9_PROBE_REVERSE_INDEXED_TRIANGLES` / `_ROW` / `_ROWS` / `_CLASS` / `_CLASSES` / `_STREAM0_SPAN_MIN` | Diagnostic-only primitive-order reversal: keep indexed draws and render state intact but submit a transient index buffer with triangle-list primitive order reversed. Exposed by `run_3dmark05_perf_probe.sh --probe-reverse-indexed-triangles[-row/-rows/-class/-classes/-stream0-span-min]`. `_STREAM0_SPAN_MIN` filters by minimum original stream0 byte span (`0` disables). Correctness-invalid unless scoped and proven with same-input semantic images; use only in paired gputrace probes | `0` / unset |
-| `DXMT9_PROBE_REVERSE_OPAQUE_INDEXED_TRIANGLES` | Diagnostic-only: same as `DXMT9_PROBE_REVERSE_INDEXED_TRIANGLES` but applies only to opaque depth-writing triangle-list draws. Exposed by `run_3dmark05_perf_probe.sh --probe-reverse-opaque-indexed-triangles`; shares the reverse-indexed row/class/span filters | `0` |
-| `DXMT9_PROBE_REVERSE_NONOPAQUE_INDEXED_TRIANGLES` | Diagnostic-only: same as `DXMT9_PROBE_REVERSE_INDEXED_TRIANGLES` but applies only to triangle-list draws outside the opaque depth-writing subset, isolating blended/depth-write-off/visibility-sensitive rows. Exposed by `run_3dmark05_perf_probe.sh --probe-reverse-nonopaque-indexed-triangles`. Correctness-invalid; use only in paired gputrace probes | `0` |
-| `DXMT9_PROBE_SORT_INDEXED_TRIANGLES_BY_MIN_INDEX` | Diagnostic-only min-index primitive reorder scout: submit a transient index buffer sorted by triangle min/max index. Exposed by `run_3dmark05_perf_probe.sh --probe-sort-indexed-triangles-by-min-index`; uses the reverse-indexed row/class/span filters. Correctness-invalid; use only in paired gputrace probes | `0` |
-| `DXMT9_PROBE_OPTIMIZE_INDEXED_TRIANGLES_VERTEX_CACHE` | Diagnostic-only cache-aware reorder scout: submit a transient index buffer greedily reordered around a small post-transform vertex cache. Exposed by `run_3dmark05_perf_probe.sh --probe-optimize-indexed-triangles-vertex-cache`; uses the reverse-indexed row/class/span filters. Correctness-invalid; use only in paired gputrace probes | `0` |
-| `DXMT9_SPLIT_LARGE_INDEXED_DRAWS` / `_ROW` / `_ROWS` / `_CLASS` / `_CLASSES` / `_MAX_CHUNKS_PER_DRAW` / `_STREAM0_SPAN_MAX` | Order-preserving bounded split of indexed triangle-list draws larger than N primitives into multiple contiguous `drawIndexed` calls (`0` disables). Exposed by `run_3dmark05_perf_probe.sh --split-large-indexed-draws[-row/-rows/-class/-classes/-max-chunks-per-draw/-stream0-span-max]`. `_STREAM0_SPAN_MAX` additionally splits when a chunk's stream0 byte span would exceed the limit; `_MAX_CHUNKS_PER_DRAW` leaves a draw unsplit if it would exceed the chunk cap (`0` disables each). Preserves primitive order | `0` / unset |
-| `DXMT9_OPTIMIZE_SCREEN_BLEND_INDEX_ORDER` / `_ROW` / `_ROWS` / `_CLASS` / `_CLASSES` / `_STREAM0_SPAN_MIN` | Diagnostic-only env-gated screen-blend index-order reorder (DISTINCT from `DXMT9_OPTIMIZE_SCREEN_BLEND_INDEX_CACHE`): for strict screen-blend indexed triangle lists, submit a transient index buffer with primitive order reversed. Exposed by `run_3dmark05_perf_probe.sh --optimize-screen-blend-index-order[...]`. Screen-blend output is destination-dependent and same-input FS probes show bit-exact differences, so this is not production-safe; use only in paired gputrace probes | `0` / unset |
-| `DXMT_FORCE_WINDOWED` | Force windowed mode | `0` |
-| `DXMT_SKIP_ALL_DRAWS` | Discard every draw at submit | `0` |
-| `DXMT9_AGGRESSIVE_DEPTH_DONTCARE` | Aggressive Store=DontCare for depth | `0` |
-| `DXMT9_AGGRESSIVE_COLOR_DONTCARE` | Opt in to color Store=DontCare when the color handle does not reappear in the rest of the current chunk and no Present is seen; default remains conservative and only next-clear can DontCare-store color | `0` |
-| `DXMT9_SPLIT_SPARSE_CONST_RECORDS` | Opt-in PE recorder experiment: split sparse dirty shader-constant ranges into actual changed-register runs instead of one merged min/max const-upload record. Use only in paired perf probes because it may trade fewer const bytes for more const records | `0` |
-| `DXMT9_SUPPRESS_RT_PIXEL_FORMAT_VIEW` | Opt-in 3DMark05/Xcode experiment: for R32F render targets only, omit `PixelFormatView` usage and the swizzled shader-read texture view to test whether Metal lossless-compression/device-write pressure improves. Correctness-risky if the target is later sampled through D3D9's R32F swizzle contract; use only in paired gputrace probes | `0` |
-| `DXMT9_SUPPRESS_X8_RT_PIXEL_FORMAT_VIEW` | Opt-in 3DMark05/Xcode experiment: for X8R8G8B8/X8B8G8R8 render targets only, omit `PixelFormatView` usage and the swizzled shader-read texture view to classify Metal lossless-compression and texture/pass-store pressure. Correctness-risky if the target is later sampled and depends on D3D's X8 alpha-fill contract; use only in paired gputrace probes | `0` |
-| `DXMT9_X8_SHADER_ALPHA_FILL` | Opt-in companion probe for `DXMT9_SUPPRESS_X8_RT_PIXEL_FORMAT_VIEW`: fragment shader variants whose active sampler binds an X8 texture force sampled alpha to `1.0`, moving the D3D X8 alpha-fill contract from the Metal texture view into shader code for paired gputrace experiments | `0` |
-| `DXMT9_TRIM_UNUSED_VARYINGS` | Opt-in pair-local VSOut liveness trim. The fragment shader's actual stage-in reads select the shared VS/FS `VSOut` layout, keeping required fields such as high texcoords, fogFactor, color, secondaryColor, and pointSize when the paired FS can read them. Use as a paired perf/gputrace candidate; for 3DMark05 GT1 it has been measured and rejected as the first-order owner of Xcode's hidden VS-buffer-write bucket because top VS writes remain about `1.627GiB` and mostly unexplained. | `0` |
-| `DXMT9_PROBE_DISABLE_ALPHA_BLEND` / `_ROW` / `_ROWS` / `_CLASS` / `_CLASSES` | Opt-in 3DMark05/Xcode diagnostic: force Metal color blending off while preserving color-write masks. Use row/class scoped variants for hot-row backend-shape A/B; scoped variants select indexed triangle draws without setting the global all-draw flag. Correctness-invalid for alpha-dependent frames; use only in paired gputrace probes. | `0` / unset |
-| `DXMT9_PROBE_DEPTH_FUNC_ALWAYS` / `_ROW` / `_ROWS` / `_CLASS` / `_CLASSES` | Opt-in 3DMark05/Xcode diagnostic: keep depth enable/write state but force the Metal depth compare function to Always. This isolates depth-compare/backend shape from the existing `DXMT9_PROBE_DISABLE_DEPTH_WRITE` path, which keeps testing but disables writes. Row/class scoped variants select indexed triangle draws without setting the global all-draw flag. Correctness-invalid for depth-dependent frames; use only in paired gputrace probes. | `0` / unset |
-| `DXMT9_PROBE_DISABLE_DEPTH_WRITE` / `_ROW` / `_ROWS` / `_CLASS` / `_CLASSES` | Opt-in 3DMark05/Xcode diagnostic: keep depth testing enabled but force depth writes off; row/class scoped variants select indexed triangle draws without setting the global all-draw flag. Correctness-invalid for depth-dependent frames; use only in paired gputrace probes. | `0` / unset |
-| `DXMT9_PROBE_FRAGMENTLESS_DEPTH_ONLY` / `_ROW` / `_ROWS` / `_CLASS` / `_CLASSES` | Opt-in 3DMark05/Xcode diagnostic: for selected depth-only indexed triangle draws, request a fragmentless Metal render PSO with position-only VSOut. The encoder still requires color-write masks off, depth write on, and no alpha/stencil/clip/A2C; the pipeline cache rejects fragment shaders with discard/depth-output. Treat as route-smoke only until same-input/depth/color equality and Xcode counter movement both pass. | `0` / unset |
-| `DXMT_DISABLE_FOG` | Global fog-disable classifier: strips generated fog blend from FFP/translated fragment source and participates in the shader debug-env key. Exposed by `run_3dmark05_perf_probe.sh --disable-fog`; companion to `DXMT_DISABLE_ALPHA_TEST`/`DXMT_DISABLE_CULL`/`DXMT_DISABLE_SCISSOR`. Correctness-invalid for fogged frames; use only in paired gputrace probes | `0` |
-| `DXMT_FORCE_TEXTURE_WHITE` | Global texture classifier: replace fragment texture samples with white. Exposed by `run_3dmark05_perf_probe.sh --force-texture-white`; isolates texture/sampler cost from raster/ALU shape. Correctness-invalid for textured frames; use only in paired gputrace probes | `0` |
-| `DXMT9_PROBE_FORCE_TEXTURE_WHITE` / `_ROW` / `_ROWS` / `_CLASS` / `_CLASSES` | Row/class-scoped form of `DXMT_FORCE_TEXTURE_WHITE`: replace fragment texture samples with white only for selected indexed triangle-list draws. Exposed by `run_3dmark05_perf_probe.sh --probe-force-texture-white[-row/-rows/-class/-classes]`. Correctness-invalid; use only in paired gputrace probes | `0` / unset |
-| `DXMT9_PROBE_POSITION_ONLY_VSOUT` | Correctness-invalid diagnostic: force a position-only 16-byte `VSOut` (drop all user varyings) to test whether visible varying width owns Apple's hidden VS-buffer-write bucket. Exposed by `run_3dmark05_perf_probe.sh` (`DXMT9_PROBE_POSITION_ONLY_VSOUT=1`); use only in paired gputrace probes | `0` |
-| `DXMT9_PROBE_FORCE_CULL_MODE` / `_ROW` / `_ROWS` / `_CLASS` / `_CLASSES` | Row/class-scoped cull override (`none`/`front`/`back`) for selected indexed triangle-list draws, vs the global `DXMT_DEBUG_FORCE_CULL_MODE`. Exposed by `run_3dmark05_perf_probe.sh --probe-force-cull-mode[-row/-rows/-class/-classes]`. Correctness-invalid cull/backend-shape classifier; use only in paired gputrace probes | unset |
-| `DXMT9_PROBE_FORCE_EXPAND_INDEXED` / `_ROW` / `_ROWS` / `_CLASS` / `_CLASSES` | Row/class-scoped form of `DXMT_FORCE_EXPAND_INDEXED`: expand only selected indexed triangle-list draws into flat vertex lists. Exposed by `run_3dmark05_perf_probe.sh --probe-force-expand-indexed[-row/-rows/-class/-classes]`. Primitive/backend pressure classifier; use only in paired gputrace probes | `0` / unset |
-| `DXMT9_PROBE_SCISSOR_RECT` / `_ROW` / `_ROWS` / `_CLASS` / `_CLASSES` | Correctness-invalid diagnostic: preserve scissor enablement but override the scissor rectangle (`left,top,right,bottom`) for selected indexed triangle-list draws to classify tile-coverage/backend-storage effects. Exposed by `run_3dmark05_perf_probe.sh --probe-scissor-rect[-row/-rows/-class/-classes]`; use only in paired gputrace probes | unset |
-| `DXMT9_PROBE_DROP_VSOUT_POINT_SIZE` | Opt-in diagnostic probe: remove only the Metal `VSOut.pointSize [[point_size]]` field while preserving texcoords/color/fog. Use only in paired gputrace runs to test whether `[[point_size]]` changes Apple hidden vertex-stage buffer-write/codegen behavior; correctness-risky for point sprites or shaders that read point size | `0` |
-| `DXMT9_PROBE_HALF_VSOUT` | Opt-in diagnostic probe: request half-precision user varyings in the shared Metal `VSOut` (`half4` color/secondary/texcoord and `half` fogFactor) while keeping position, point_size, and clip_distance float. 3DMark05 GT1 frame50 Xcode proof rejected it as the current owner: it reduced top VS writes only `-2.44%` while top GPU time regressed `+3.40%`. Keep it as a diagnostic axis, not a production precision path without new evidence and semantic image proof | `0` |
-| `DXMT9_TRIM_VERTEX_TEMPS` | Opt-in translated vertex-shader temp-array experiment: size `float4 r[]` from observed temp source/dest usage instead of the conservative 32-slot array. Use only in paired perf/gputrace probes until broader shader-corpus coverage clears the prior VS trim regression risk | `0` |
-| `DXMT9_TRIM_VS_OUTPUT_SCRATCH` | Opt-in translated vertex-shader output-scratch experiment: size local `float4 outTexcoord[]` from emitted VSOut/declared output usage instead of the conservative 8-slot array. Use only in paired perf/gputrace probes; relative texcoord output access still promotes to all 8 slots | `0` |
-| `DXMT9_FS_HALF_PRECISION` | **EXPERIMENTAL — NOT FUNCTIONAL.** Rewrites translated FS bodies to half (fp16). Only ~33% of SFIV's FS sources compile under the current text-rewrite implementation; the remainder fail at MSL boundary type checks (sample-coord float2 requirement, helper-call dispatch, half4 ctor matching). Proper fix requires IR-level type propagation — see dxmt9_shader_sources.hpp header for the full status note. | `0` |
-| `DXMT9_LAYER_FRAMEBUFFER_ONLY` | Flip `CAMetalLayer.framebufferOnly` to `true` (Apple's tile-only fast path). Scope is the `CAMetalLayer` **drawable** only — the dxmt9 backbuffer `MTLTexture` returned by `IDirect3DSwapChain9::GetBackBuffer` is a separate pool-allocated texture with full read/blit usage, so D3D9 `IDirect3DSurface9::Lock()` and `IDirect3DDevice9::GetRenderTargetData()` on the backbuffer continue to follow their normal D3D9 contracts regardless of this flag (no silent no-op, no HRESULT change, no zero-fill, no per-call warning). The trade-off is therefore present-side only: tile-only mode lets Apple keep the drawable in tile memory and skip the system-memory round-trip used by the WindowServer compositor. Apps that read the **presented** drawable through a non-D3D9 path (e.g. screen-capture frameworks) may render wrong; D3D9-side readback is unaffected. See `specs/d3d9/wsi/requirements.md` §6 (R-CORE-WSI-6.1, R-CORE-WSI-6.2). Tested no-op on SFIV mean GPU time (compositor cost is parallel to SFIV's own fragment work, not stealing from it). | `0` |
-| `DXMT9_MID_CHUNK_COMMIT_POLICY` | Sub-CB chain split policy: `off` / `per-render-pass` / `per-n-records` (R-BACK-2.29-2.31, R-BACK-2.34 default-flip 2026-05-10) | `per-render-pass` |
-| `DXMT9_MID_CHUNK_COMMIT_RECORDS` | Records per sub-CB when policy=`per-n-records` | `64` |
-| `DXMT9_MID_CHUNK_COMMIT_CAP_PER_RENDER_PASS` | Max sub-CBs per chunk; `0` disables (R-BACK-2.33) | `4` |
-
-## PE bridge / recorder
-
-| Var | Purpose | Default |
-|---|---|---|
-| `DXMT9_PE_RECORDER_STATS` | Emit PE recorder aggregate stats | `0` |
-| `DXMT9_PE_RECORDER_CHUNK_LOG` | Emit PE recorder chunk boundary logs | `0` |
-| `DXMT9_PE_DRAW_FULL_SNAPSHOT` | Force every draw packet to ride a full PE state snapshot instead of the default delta. Applied in `src/d3d9/d3d9_pe_device.cpp::buildDrawPrimitivePacket` (lines ~497-583 under `if (dxmt9PeFullSnapshotEnabled())`). Trade-off: wire size grows ~10x (typical packet ~100 B → ~1 KB), the importer's run-coalescer (`packetHasNoStateDelta`) sees no empty packets so every draw breaks the coalesced run, but each packet is replayable in isolation — debug / stress / out-of-order-replay only. Equivalence with the default delta path is regression-guarded by `tests/native/bridge/pe_full_snapshot_equivalence_spec.cpp`. | `0` |
-| `DXMT9_PE_CHUNK_MAX_RECORDS` | Override max pending PE chunk records before commit | `64` |
-| `DXMT9_PE_CHUNK_MAX_BYTES` | Override max pending PE chunk bytes before commit | `262144` |
-
-## Adapter spoofing
-
-| Var | Purpose | Default |
-|---|---|---|
-| `DXMT_ADAPTER_NAME` | Override `Description` | system |
-| `DXMT_ADAPTER_VENDOR_ID` | Override vendor-id (numeric) | system |
-| `DXMT_ADAPTER_DEVICE_ID` | Override device-id (numeric) | system |
-| `DXMT_ADAPTER_DRIVER` | Override driver string | system |
-
-## Compatibility
-
-| Var | Purpose | Default |
-|---|---|---|
-| `DXMT_COMPAT_HUD` | Enable Compat HUD overlay | `0` |
-
-## Cross-process / Wine
-
-These are used by Wine, the PE/unix bridge, or repository experiment
-harnesses:
-
-| Var | Purpose |
+| Domain file | Covers |
 |---|---|
-| `DXMT9_WINEMETAL_SO` | Explicit winemetal.so provider path for app-local bridge loading |
-| `DXMT9_ALLOW_RUNTIME_PROVIDER_FALLBACK` | Allow legacy runtime-by-name provider fallback |
-| `DXMT_EXPERIMENT_WINE_DLLOVERRIDES` | Wine `WINEDLLOVERRIDES` snippet for the experiment harness |
-| `DXMT_EXPERIMENT_WINE_ID` | Select a Wine manifest entry for experiment runs |
-| `DXMT_EXPERIMENT_CX_BOTTLE` | Select a CrossOver bottle for experiment launchers |
-| `DXMT_EXPERIMENT_PROFILE` | Select the experiment runtime profile (`debug` / `perf`); `perf` selects the shared GT1 perf-path runtime defaults. Falls back to `DXMT_PROFILE`, then `debug` |
-| `DXMT_3DMARK05_DIRECT` | Use the direct-prefix 3DMark05 launcher path instead of the supervised `run_experiment.py` flow |
-| `DXMT_3DMARK05_LOG` | Log path for the direct 3DMark05 launcher path |
-| `DXMT_ASSERT` | Enable runtime assertions in experiment runs (also a log-failure marker scanned by mini-replay) |
-| `DXMT9_CONFORMANCE_DLLOVERRIDES` / `DXMT9_CONFORMANCE_WINEMETAL_SO` | `run_d3d9_conformance.py` overrides for the Wine `WINEDLLOVERRIDES` snippet and the explicit `winemetal.so` provider path |
-| `DXMT_EXPERIMENT_BINARY` / `DXMT_EXPERIMENT_LOG` / `DXMT_EXPERIMENT_NAME` / `DXMT_EXPERIMENT_OUTPUT_DIR` / `DXMT_EXPERIMENT_PREFIX` / `DXMT_EXPERIMENT_PE_BUILD_DIR` / `DXMT_EXPERIMENT_RUNTIME_PE_BUILD_DIR` / `DXMT_EXPERIMENT_UNIX_BUILD_DIR` / `DXMT_EXPERIMENT_WOW64_PE_BUILD_DIR` / `DXMT_EXPERIMENT_WOW64_RUNTIME_PE_BUILD_DIR` / `DXMT_EXPERIMENT_WINE_BIN` / `DXMT_EXPERIMENT_WINE_ROOT` / `DXMT_EXPERIMENT_SKIP_STAGE` | Internal `run_experiment.py` → launcher plumbing (app name/binary/prefix, staged PE/unix/wow64 build dirs, Wine bin/root, output/log paths, stage-skip flag). Set by the harness, not user knobs |
-| `DXMT_VALIDATE` | Enable validation-layer setup in experiment launchers |
-| `DXMT_UPSTREAM_ROOT` | Upstream shader-corpus checkout used by sync/drift tools |
-| `DXMT_UPSTREAM_COMMIT` | Upstream shader-corpus commit override used by sync/drift tools |
-| `DXMT_UPSTREAM_URL` | Upstream shader-corpus provenance URL override |
-| `DXMT_ORACLE_DATE` | Shader-corpus oracle provenance date override |
-
-## Apple-side (not honored by dxmt9 directly)
-
-These are macOS / Metal toolchain knobs you may want set for a debug
-session even though dxmt9 itself does not read them:
-
-| Var | Purpose |
-|---|---|
-| `MTL_DEBUG_LAYER` | Enable Metal Validation Layer |
-| `MTL_HUD_ENABLED` | Built-in Metal HUD overlay |
-| `MTL_SHADER_VALIDATION` | Shader validation pass |
+| [`environment_variables_capture.rules.md`](environment_variables_capture.rules.md) | **Capture / Debug** — frame capture, texture/shader dumps, validation, and **mini-replay** per-draw payload capture. |
+| [`environment_variables_logging.rules.md`](environment_variables_logging.rules.md) | **Logging / Tracing** — log level, log path, trace switches. |
+| [`environment_variables_perf.rules.md`](environment_variables_perf.rules.md) | **Perf counters** — counter system, per-frame snapshot, and 3DMark05 GT1 perf-probe launcher knobs. |
+| [`environment_variables_present.rules.md`](environment_variables_present.rules.md) | **Present policy** — present-acquire / boundary / latency tuning. |
+| [`environment_variables_cache.rules.md`](environment_variables_cache.rules.md) | **Pipeline cache** — archive prewarm and cache-root controls. |
+| [`environment_variables_encoder.rules.md`](environment_variables_encoder.rules.md) | **Encoder / state debug** — force-state knobs, index-cache locality opt-ins, and 3DMark05/Xcode backend-shape classifiers. |
+| [`environment_variables_bridge.rules.md`](environment_variables_bridge.rules.md) | **PE bridge / recorder** — PE-side chunk recorder diagnostics. |
+| [`environment_variables_adapter.rules.md`](environment_variables_adapter.rules.md) | **Adapter spoofing / Compatibility** — D3D9 driver ID overrides and known-issue opt-out / opt-in flags. |
+| [`environment_variables_wine.rules.md`](environment_variables_wine.rules.md) | **Cross-process / Wine / Apple-side** — Wine, PE/unix bridge, experiment-harness plumbing, and macOS / Metal toolchain knobs. |
 
 ## Notes
 
@@ -306,5 +34,5 @@ session even though dxmt9 itself does not read them:
   effect.
 - A zero string (`""`) and `"0"` mean "off" for boolean flags.
 - For tunable numerics, an unparseable value falls back to the default.
-- This file is **descriptive**, not a behavioral spec — for that, see
+- These files are **descriptive**, not a behavioral spec — for that, see
   `specs/`.
