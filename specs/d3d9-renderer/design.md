@@ -99,6 +99,7 @@ src/dxmt9/
       loadstore.cpp                 # store action selection
       reorder.cpp                   # dependency-respecting reorder
     fg_linearizer.{hpp,cpp}         # DAG → ordered call sequence
+    fg_debug_export.{hpp,cpp}       # DAG → JSON/.dot/mermaid debug artifact (R-BACK-39.7)
 
   gpudriven/
     object_scheduler.{hpp,cpp}      # CPU side; emits mesh dispatches
@@ -124,6 +125,7 @@ tests/native/
     fg_builder_spec.cpp             # chunk-record → DAG mapping
     fg_optimizer_spec.cpp           # per-pass golden outputs
     fg_linearizer_spec.cpp          # call sequence golden
+    fg_debug_export_spec.cpp        # golden JSON snapshot; side-effect-neutral (R-BACK-39.7)
   gpudriven/
     object_scheduler_spec.cpp       # cull, batch, dispatch shape
     mesh_pso_cluster_spec.cpp       # cluster picking, promotion
@@ -353,6 +355,83 @@ struct FrameGraph {
 The DAG is rebuilt every frame. Inter-frame reuse is limited to the
 ResourceNode pool (`memoryless_candidate` carries forward); pass and edge
 storage is reset.
+
+### 3.5 DAG Debug Export (R-BACK-39.7)
+
+`framegraph/fg_debug_export.{hpp,cpp}` serializes a `FrameGraph` to a
+development-only artifact. It is a **pure read transform** over the
+in-memory DAG — it takes a `const FrameGraph&` plus the caller-supplied
+chunk seq id and `stage` label (the `FrameGraph` carries `frame_id` but not
+the chunk seq id, which `onChunkReady` sources from its `ImportContext`)
+and returns owned bytes; it holds no Metal, queue, cache, or pool
+reference, so it cannot perturb the state R-BACK-39.7 requires it to
+leave untouched.
+
+`FrameGraphBackend::onChunkReady` invokes it at two points when
+`DXMT9_RENDERER_DUMP_DAG` is set: once right after `fg_builder` finishes
+(`stage="pre-opt"`) and once right after the optimizer pipeline finishes
+(`stage="post-opt"`). Emitting both lets a reader diff exactly what
+`dce` / `passcoalesce` / `memoryless` / `reorder` / `loadstore` changed.
+
+JSON is the primary format (one object per chunk):
+
+```json
+{
+  "frame_id": 60,
+  "chunk_seq_id": 1422,
+  "stage": "post-opt",
+  "passes": [
+    { "index": 0, "kind": "Render",
+      "color": ["0x...:rt0"], "depth": "0x...:ds",
+      "draws": { "first": 0, "count": 187 },
+      "state_profile": "0x...",
+      "load_store": { "color": ["Clear/Store"], "depth": "Clear/Store" } }
+  ],
+  "resources": [
+    { "handle": "0x...", "residency": "Persistent",
+      "first_use_pass": 0, "last_use_pass": 2,
+      "accesses": [ { "pass": 0, "kind": "write", "stage": "fragment" },
+                    { "pass": 2, "kind": "read",  "stage": "fragment" } ] }
+  ],
+  "edges": [ { "src_pass": 0, "dst_pass": 2, "resource": "0x..." } ]
+}
+```
+
+The `resources[].accesses` log and the `edges` set are the pass/resource-level
+producer→consumer surface the render-pass re-entry investigation needs: an
+`A → B → A` attachment re-entry appears as two edges sharing the same
+`resource` with `src_pass` alternating, directly readable from the JSON.
+
+`DXMT9_RENDERER_DUMP_DAG_FORMATS` (comma list, default `json`) selects
+additional human-visual renderings beside the JSON. Both extra formats
+consume the same `DagSnapshot` struct the JSON path builds — neither
+re-walks the DAG:
+
+- `dot` — Graphviz: passes as nodes, resource edges as labeled arcs.
+- `mermaid` — a `flowchart TD` of the same nodes/edges. This is the
+  preferred form: `docs/perfomance/` and these specs already render Mermaid
+  inline, so a dumped pass/resource graph pastes straight into a leaf doc
+  with no Graphviz install. A re-entry shows as two edges sharing a
+  `resource` arriving at the same later pass:
+
+  ```mermaid
+  flowchart TD
+    P0["pass0 Render · rt0,ds · draws 0..187"]
+    P2["pass2 Render · rt0,ds · draws 240..260"]
+    P0 -->|"0x..:rt0"| P2
+    P0 -->|"0x..:ds"| P2
+  ```
+
+Output path: `DXMT9_RENDERER_DUMP_DAG` is a directory; files are named
+`dag-frame<frame_id>-chunk<seq>-<stage>.{json,dot,mermaid}` per selected
+format. The exporter never creates the directory implicitly and skips
+silently (single warning, once) if the path is unwritable, so a dump
+misconfiguration cannot fail a render.
+
+`fg_debug_export` emits no `framegraph_*` counter and is excluded from the
+parity harness (R-BACK-39.1): an enabled dump must produce a byte-identical
+Metal stream to a disabled run, which the parity gate verifies by running
+with the dump off.
 
 ---
 
@@ -1005,7 +1084,7 @@ Mapped to `R-BACK-41` layers:
 | Layer | Modules to land | Tests to land | Acceptance |
 |---|---|---|---|
 | **L0 — Refactor** | `render/backend_interface.hpp`, `render/backend_factory.{hpp,cpp}`, `render/traditional_backend.{hpp,cpp}` (wrapper), `render/framegraph_backend.{hpp,cpp}` (no-feature), AEC split per §15 | `backend_interface_spec.cpp`, `parity_harness_spec.cpp`, `external_draw_emitter_spec.cpp` | Existing conformance pass rate unchanged. `traditional` and `framegraph` (empty features) produce byte-identical Metal call sequences on the parity capture set. GT1 perf unchanged (no claim either direction). |
-| **L1 — FG** | `framegraph/fg_dag.{hpp,cpp}`, `fg_builder.{hpp,cpp}`, `fg_optimizer/{dce,lifetime,memoryless,passcoalesce,loadstore,reorder}.cpp`, `fg_linearizer.{hpp,cpp}`, `TransientAttachmentPool` (§5.3) | `fg_dag_spec.cpp`, `fg_builder_spec.cpp`, `fg_optimizer_spec.cpp`, `fg_linearizer_spec.cpp` | **passcoalesce-only mode** passes R-BACK-39.1 byte-exact parity on the parity capture set. **memoryless** ships with a **separate, weaker** acceptance gate (memoryless is a semantic relaxation per R-BACK-40.4 and is excluded from byte-exact parity by construction): (i) route equality vs `passcoalesce`-only on the conformance set, (ii) `framegraph_virtual_attachment_misclassification_stale_persistent == 0` across the wild-test catalogue captures that listed `memoryless_one_frame_artifact` in `semantic_relaxations`, (iii) `framegraph_virtual_attachment_*` counters reflect optimizer decisions exactly. Memoryless never enters the same parity gate as passcoalesce. GT1 delta observed but not a pass criterion. |
+| **L1 — FG** | `framegraph/fg_dag.{hpp,cpp}`, `fg_builder.{hpp,cpp}`, `fg_optimizer/{dce,lifetime,memoryless,passcoalesce,loadstore,reorder}.cpp`, `fg_linearizer.{hpp,cpp}`, `fg_debug_export.{hpp,cpp}` (§3.5, R-BACK-39.7), `TransientAttachmentPool` (§5.3) | `fg_dag_spec.cpp`, `fg_builder_spec.cpp`, `fg_optimizer_spec.cpp`, `fg_linearizer_spec.cpp`, `fg_debug_export_spec.cpp` | **passcoalesce-only mode** passes R-BACK-39.1 byte-exact parity on the parity capture set. The DAG debug-export (R-BACK-39.7) lands here; its acceptance is golden pre-opt/post-opt JSON on the parity capture set plus a side-effect-neutrality check (dump-on vs dump-off produce a byte-identical Metal stream). **memoryless** ships with a **separate, weaker** acceptance gate (memoryless is a semantic relaxation per R-BACK-40.4 and is excluded from byte-exact parity by construction): (i) route equality vs `passcoalesce`-only on the conformance set, (ii) `framegraph_virtual_attachment_misclassification_stale_persistent == 0` across the wild-test catalogue captures that listed `memoryless_one_frame_artifact` in `semantic_relaxations`, (iii) `framegraph_virtual_attachment_*` counters reflect optimizer decisions exactly. Memoryless never enters the same parity gate as passcoalesce. GT1 delta observed but not a pass criterion. |
 | **L2 — Mesh+Bindless (no GPU scheduler)** | `gpudriven/mesh_pso_cluster.{hpp,cpp}`, `gpudriven/mesh_shader_lib.metal`, `gpudriven/bindless_heap.{hpp,cpp}`, CPU-side `object_scheduler.cpp` (no GPU shader) | `mesh_pso_cluster_spec.cpp`, `bindless_heap_spec.cpp`, `object_scheduler_cpu_spec.cpp` | **Route equality**: for every mesh-eligible D3D9 draw the per-draw counter family records the same dispatch count the CPU scheduler predicted; zero dropped / duplicated draws vs traditional. **Per-encoder counter equality** against L1 on the parity capture set (bound resources, PSO, viewport, scissor match). **Reduced-counter A/B**: `framegraph_*` counter subset matches between L1 and L2 on the conformance set. GT1 frame-time delta diagnostic only; not a pass criterion (per R-BACK-41.6 and `docs/perfomance/overview-3dmark05-gt1.md`). |
 | **L3 — GPU-Driven** | `gpudriven/object_shader.metal`, `gpudriven/icb_builder.{hpp,cpp}` (CPU prefill + GPU emit) | `object_shader_spec.cpp`, `icb_builder_spec.cpp` | **Route equality** vs L2: ICB dispatch count, mesh PSO indices, threadgroup counts identical to L2's CPU prefill on the same input. **Per-encoder counter equality** against L2 and L1. **Reduced-counter A/B** on the conformance set. GT1 frame-time delta diagnostic only. |
 

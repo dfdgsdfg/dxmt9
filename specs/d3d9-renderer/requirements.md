@@ -842,6 +842,37 @@ renderers' backbuffer and fails the run on the first sample-level divergence
 (by the policy specified in the catalogue entry). Default-off; used only by
 the parity harness and the per-PR regression run.
 
+**R-BACK-39.7** The Frame Graph must be serializable as a development-only
+debug artifact behind `DXMT9_RENDERER_DUMP_DAG=<path>`. When set, each
+`onChunkReady` invocation must emit, for the chunk it processed, **two**
+DAG snapshots — `pre-opt` (immediately after the builder runs, R-BACK-32.1)
+and `post-opt` (immediately after the optimizer pipeline runs,
+R-BACK-32.5) — so the optimizer's effect is diffable. Each snapshot must
+record, per `PassNode`: kind, attachment set (color handles + depth),
+draw range, dominant state profile, and resolved load/store policy; per
+`ResourceNode`: handle, the chronological access log (`pass_index`,
+`access_kind`, `stage`), `first_use_pass`, `last_use_pass`, and residency
+class; and the full producer→consumer edge set keyed by resource. The
+primary serialization format is **JSON** (one object per chunk, framed by
+`frame_id` and chunk seq id) so the artifact joins the existing
+`scripts/tools` / `analysis/` perf tooling. Optional human-visual
+renderings — Graphviz `.dot` and/or Mermaid `flowchart` — may be derived
+from the same in-memory snapshot when listed in
+`DXMT9_RENDERER_DUMP_DAG_FORMATS` (comma list; default `json`). Mermaid is
+the preferred visual form because the `docs/perfomance/` knowledge graph and
+these specs already render Mermaid inline, so a dumped DAG pastes directly
+into a leaf doc with no Graphviz toolchain. Every selected format is derived
+from one serialization pass — no format re-walks the DAG. The dump path is
+**side-effect neutral** in the same sense as R-BACK-39.3: writing it must
+not call any Metal API, must not allocate command buffers or aliases, must
+not mutate the PSO/shader cache, residency, retained-handle, or fence
+state, and must not change which Metal commands a non-dump run would emit.
+This artifact is the pass/resource-level observability surface for the
+render-pass re-entry and store/load investigations tracked in
+`docs/perfomance/render-pass-store/`; it is **not** a pixel-level
+final-writer oracle (per-pixel ownership after blend/depth remains a
+rasterization-downstream property outside the DAG's scope).
+
 ---
 
 ## 11. Compatibility Profiles
@@ -918,8 +949,10 @@ Without this layer the rest of the spec cannot be tested.
 
 **R-BACK-41.2 (Layer 1 — Frame Graph)**: enable `passcoalesce` and
 `memoryless` features. No mesh, no GPU-driven. The Frame Graph builder,
-optimizer pipeline, and resource virtualization land in this layer. This is
-the first layer that can produce a measurable GT1 delta on its own.
+optimizer pipeline, and resource virtualization land in this layer. The
+DAG debug-export (R-BACK-39.7) also lands in this layer, since it is the
+first layer where a real DAG exists to serialize. This is the first layer
+that can produce a measurable GT1 delta on its own.
 
 **R-BACK-41.3 (Layer 2 — Mesh and Bindless)**: enable `bindless` and `mesh`
 features. Mesh PSO cluster compilation, bindless heaps, mixed-path encoder
