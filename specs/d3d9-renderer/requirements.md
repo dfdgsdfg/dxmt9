@@ -873,6 +873,36 @@ render-pass re-entry and store/load investigations tracked in
 final-writer oracle (per-pixel ownership after blend/depth remains a
 rasterization-downstream property outside the DAG's scope).
 
+A real app (3DMark05, etc.) emits thousands of chunks per frame and would
+flood the dump directory if every chunk's DAG were serialized. The dump may
+therefore be scoped to a single frame with `DXMT9_RENDERER_DUMP_DAG_FRAME=N`,
+a 1-based inter-present frame number. A "frame" is the inter-present interval:
+a chunk belongs to the current frame, and a chunk that **contains** a Present
+is the last chunk of that frame (the frame counter advances after such a
+chunk). When the filter is set, only chunks belonging to frame N are
+serialized; all other chunks must early-out **before** the FrameGraph is
+built, so a filtered-out chunk costs only a cheap Present scan and no build /
+serialize / file-write work. When the filter is unset (or `0` / non-numeric),
+behavior is unchanged — every chunk is dumped, as before; real apps should set
+the filter to avoid flooding the dump directory. The frame counter is
+encode-thread-local (single writer). The `frame_id` stamped into the dump
+filename and JSON is this inter-present frame number; the chunk seq id remains
+the JSON `chunk_seq_id`.
+
+The single-frame filter may be widened to a ±radius **window** with
+`DXMT9_RENDERER_DUMP_DAG_FRAME_RADIUS=R`, a non-negative integer (default `0`,
+i.e. single frame). When `DXMT9_RENDERER_DUMP_DAG_FRAME=N` and the radius is
+`R`, every chunk whose inter-present frame falls in the **inclusive** window
+`[max(1, N-R), N+R]` is dumped; chunks outside that window early-out before the
+FrameGraph is built, exactly as the single-frame filter does. The low end is
+clamped at `1` because inter-present frames are 1-based, so no `frame 0` is ever
+selected (e.g. `N=1, R=5` dumps frames `1..6`). A radius of `0`, an empty
+value, or a non-numeric value resolves to `0` (single frame). The radius is
+ignored when no target frame is set (an unset target still dumps every chunk).
+`framegraph::resolveDumpDagFrameRadius(env)` is the pure resolver and
+`dumpDagFrameRadius()` reads the env once with the `dumpDagFrame()` static-const
+pattern.
+
 ---
 
 ## 11. Compatibility Profiles

@@ -64,15 +64,22 @@ class FrameGraphBackend final : public IRenderBackend {
 
   // Device-free observe+export side-channel (R-BACK-39.7 side-effect neutral).
   // Early-outs when the dump dir is unset AND no features are enabled (zero
-  // overhead on the default render path). Otherwise forwards to
-  // observeAndExportDagToDir with the resolved dump directory. onChunkReady
-  // calls this before delegating to encoders::encodeChunk.
+  // overhead on the default render path). Otherwise builds + dumps the DAG via
+  // the resolved dump directory. onChunkReady calls this before delegating to
+  // encoders::encodeChunk.
+  //
+  // NON-const because it advances the inter-present frame counter
+  // (observe_frame_). It also honors DXMT9_RENDERER_DUMP_DAG_FRAME and
+  // DXMT9_RENDERER_DUMP_DAG_FRAME_RADIUS: when that filter selects frame N with
+  // radius R, every chunk whose observe frame is OUTSIDE the inclusive window
+  // [max(1, N-R), N+R] early-outs BEFORE building the FrameGraph (only a cheap
+  // Present scan runs), so a real app dumping thousands of chunks/frames touches
+  // the disk for the selected window only (one frame when R=0).
   //
   // Public so the device-free unit test can drive the early-out directly:
   // onChunkReady is device-gated (needs an EncodeContext / MTLDevice) and the
   // class is `final`, so a test subclass / friend is not available.
-  void maybeObserveAndExportDag(const core::ChunkSlot& slot,
-                                std::uint64_t frameId) const;
+  void maybeObserveAndExportDag(const core::ChunkSlot& slot);
 
   // Explicit-directory observe+export, factored out so the unit test can drive
   // the build->optimize->serialize->write composition with a temp dir WITHOUT
@@ -84,9 +91,33 @@ class FrameGraphBackend final : public IRenderBackend {
   // and writes only those files — it must NOT mutate any shared / queue / Metal
   // state, so an enabled dump leaves the Metal stream byte-identical to a
   // disabled run. Never throws; an unwritable path is silently skipped.
+  //
+  // const / counter-free: the caller supplies frameId, so this is a pure test
+  // seam unaffected by the static DXMT9_RENDERER_DUMP_DAG_FRAME env cache.
   void observeAndExportDagToDir(const core::ChunkSlot& slot,
                                 std::uint64_t frameId,
                                 const std::string& dumpDir) const;
+
+  // Testable frame-filter seam (mirrors maybeObserveAndExportDag's per-frame
+  // filter + present-advance logic) but takes the resolved target frame, the
+  // window radius, and an explicit dump dir as arguments, so it can be driven
+  // across synthetic chunks without depending on the static
+  // DXMT9_RENDERER_DUMP_DAG_FRAME / _RADIUS env caches. NON-const: it advances
+  // observe_frame_ exactly like the production path. With `targetFrame` set,
+  // only chunks whose observe frame falls in the inclusive window
+  // [max(1, targetFrame-radius), targetFrame+radius] are dumped; with
+  // std::nullopt every chunk is dumped (unfiltered, `radius` ignored). The frame
+  // counter advances on a chunk that contains a Present (the last chunk of its
+  // frame). Reads only `slot`, writes only dump files + the observe-path perf
+  // counters.
+  void observeAndExportDagToDirForFrame(
+      const core::ChunkSlot& slot, const std::string& dumpDir,
+      std::optional<std::uint64_t> targetFrame, std::uint64_t radius = 0);
+
+  // Encode-thread-local inter-present frame counter (1-based). SINGLE WRITER:
+  // only the encode thread touches it (through maybeObserveAndExportDag /
+  // observeAndExportDagToDirForFrame), so no atomic / lock is needed.
+  std::uint64_t observeFrame() const { return observe_frame_; }
 
  private:
   RendererFeatureSet features_;
@@ -94,6 +125,10 @@ class FrameGraphBackend final : public IRenderBackend {
   // (parity baseline). Memoryless stays gated behind an explicit relaxation
   // (R-BACK-40.4) which does not exist yet, so it remains off here too.
   framegraph::OptimizerOptions options_{};
+  // Inter-present frame counter (1-based), only mutated on the encode thread
+  // (single writer; no atomic needed). Advances AFTER a chunk that contains a
+  // Present, so all of frame N's chunks share observe_frame_ == N.
+  std::uint64_t observe_frame_ = 1;
 };
 
 }  // namespace dxmt9::render

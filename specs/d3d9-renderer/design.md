@@ -449,6 +449,53 @@ format. The exporter never creates the directory implicitly and skips
 silently (single warning, once) if the path is unwritable, so a dump
 misconfiguration cannot fail a render.
 
+**Per-frame chunk filter (`DXMT9_RENDERER_DUMP_DAG_FRAME`).** Because a real
+app emits thousands of chunks per frame, `FrameGraphBackend` carries a private
+inter-present frame counter `observe_frame_` (1-based). It is touched only on
+the encode thread (`maybeObserveAndExportDag` is the single writer), so it
+needs no atomic. A "frame" is the inter-present interval: every chunk belongs
+to the current `observe_frame_`, and a chunk that **contains** a Present —
+detected by `framegraph::chunkContainsPresent(slot)`, a single cheap scan of
+`slot.commandHeaders` for `core::MetalCommandKind::Present` — is the last chunk
+of that frame, so `observe_frame_` advances *after* processing it. The
+advance happens whether or not the chunk was dumped, so all of frame N's
+multiple chunks dump before the counter moves to N+1.
+
+`framegraph::resolveDumpDagFrame(env)` resolves `DXMT9_RENDERER_DUMP_DAG_FRAME`
+to `std::optional<u64>`: nullptr / empty / `"0"` / non-numeric → `nullopt`
+("dump every chunk", the historical behavior); a positive decimal → that
+frame. `dumpDagFrame()` reads the env once with the same static-const pattern
+as `dumpDagDir()`.
+
+**Window radius (`DXMT9_RENDERER_DUMP_DAG_FRAME_RADIUS`).** The single-frame
+target may be widened to a ±radius window.
+`framegraph::resolveDumpDagFrameRadius(env)` resolves the env to a `u64`:
+nullptr / empty / `"0"` / non-numeric → `0` (single frame); a positive decimal
+→ that radius `R`. `dumpDagFrameRadius()` reads the env once with the same
+static-const pattern. The membership test is the file-local helper
+`frameInDumpWindow(frame, target, radius)` in `framegraph_backend.cpp`: a chunk
+dumps when `observe_frame_` is in the inclusive window
+`[max(1, target-radius), target+radius]`. The low end is clamped at `1`
+(inter-present frames are 1-based, so a wide radius never selects `frame 0`),
+and `radius == 0` degenerates to the original `frame == target` test. The radius
+is honored only when a target frame is set; an unset target still dumps every
+chunk.
+
+When the chunk's observe frame is outside the window, `maybeObserveAndExportDag`
+runs only the Present scan, advances the counter if a Present was seen, and
+returns **before** building the FrameGraph — so a filtered-out chunk costs no
+build / optimizer / serialize / write work, and the counter still advances so
+the window is reached and then left correctly. The
+`frame_id` passed to `writeDagDump` (and stamped into the filename and JSON) is
+`observe_frame_`, the inter-present frame number, so filenames read
+`dag-frame<N>-chunk<seq>-<stage>.json` meaningfully; the chunk seq id stays the
+JSON `chunk_seq_id`. The frame-filter path is exercised device-free by
+`framegraph_observe_spec.cpp` through the testable
+`observeAndExportDagToDirForFrame(slot, dir, targetFrame, radius)` seam (which
+takes the resolved target frame + radius as arguments, bypassing the static env
+caches) plus direct `resolveDumpDagFrame` / `resolveDumpDagFrameRadius` /
+`chunkContainsPresent` assertions.
+
 `fg_debug_export` emits no `framegraph_*` counter and is excluded from the
 parity harness (R-BACK-39.1): an enabled dump must produce a byte-identical
 Metal stream to a disabled run, which the parity gate verifies by running

@@ -25,6 +25,8 @@
 
 #include "fg_dag.hpp"
 
+#include "../dxmt9_backend_types.hpp"  // core::ChunkSlot, core::MetalCommandKind
+
 #include <cstdint>
 #include <optional>
 #include <string>
@@ -130,6 +132,36 @@ std::vector<DumpFormat> resolveDumpFormats(const char* env);
 // Reads DXMT9_RENDERER_DUMP_DAG once (static-const pattern). Returns the dump
 // directory if set to a non-empty value, else std::nullopt.
 std::optional<std::string> dumpDagDir();
+
+// Pure resolver for DXMT9_RENDERER_DUMP_DAG_FRAME (1-based inter-present frame
+// number). nullptr / empty / "0" / non-numeric all resolve to std::nullopt,
+// meaning "no filter — dump every chunk's DAG" (the historical behavior; real
+// apps such as 3DMark05 emit thousands of chunks/frames and should set this to
+// avoid flooding the dump dir). A positive integer N selects only frame N.
+// Testable without touching the environment.
+std::optional<std::uint64_t> resolveDumpDagFrame(const char* env);
+
+// Reads DXMT9_RENDERER_DUMP_DAG_FRAME once (static-const pattern; mirrors
+// dumpDagDir()). std::nullopt = dump all frames (unfiltered).
+std::optional<std::uint64_t> dumpDagFrame();
+
+// Pure resolver for DXMT9_RENDERER_DUMP_DAG_FRAME_RADIUS (non-negative window
+// radius R around DXMT9_RENDERER_DUMP_DAG_FRAME=N). nullptr / empty / "0" /
+// non-numeric all resolve to 0 (single-frame filter — the historical default).
+// A positive integer R widens the dumped set to the inclusive window
+// [max(1, N-R), N+R] (low end clamped at 1 because frames are 1-based).
+// Testable without touching the environment.
+std::uint64_t resolveDumpDagFrameRadius(const char* env);
+
+// Reads DXMT9_RENDERER_DUMP_DAG_FRAME_RADIUS once (static-const pattern;
+// mirrors dumpDagFrame()). 0 = single-frame filter (no widening).
+std::uint64_t dumpDagFrameRadius();
+
+// True if `slot` contains a Present command (core::MetalCommandKind::Present in
+// its commandHeaders). A chunk that contains a Present is the LAST chunk of its
+// inter-present frame, so the observe-path frame counter advances after it.
+// Pure/cheap: a single linear scan of slot.commandHeaders, no payload deref.
+bool chunkContainsPresent(const core::ChunkSlot& slot);
 
 // Side-effect-neutral file dump (R-BACK-39.7). If the dump dir is set, writes
 // `dag-frame<frameId>-chunk<seqId>-<stage>.{json,dot,mermaid}` per selected

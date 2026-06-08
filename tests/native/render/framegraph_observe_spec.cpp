@@ -38,6 +38,7 @@
 #include <exception>
 #include <fstream>
 #include <iostream>
+#include <optional>
 #include <sstream>
 #include <stdexcept>
 #include <string>
@@ -142,6 +143,20 @@ ChunkSlot buildScenario(std::uint64_t seqId) {
   return slot;
 }
 
+// A minimal chunk: one draw, optionally terminated by a Present. A chunk that
+// contains a Present is the LAST chunk of its inter-present frame.
+ChunkSlot buildChunk(std::uint64_t seqId, bool withPresent) {
+  ChunkSlot slot;
+  slot.seqId = seqId;
+  const Handle rt0{0xA000u};
+  const Handle ds{0xD000u};
+  appendDrawRun(slot, rt0, ds, /*sampled=*/{}, /*paramCount=*/1);
+  if (withPresent) {
+    appendPresent(slot, rt0);
+  }
+  return slot;
+}
+
 // --- temp dir + file helpers ------------------------------------------------
 
 std::string makeTempDir() {
@@ -201,7 +216,7 @@ void testDefaultPathIsNoOp(const std::string& probeDir) {
   ChunkSlot slot = buildScenario(/*seqId=*/11);
 
   // No dump dir env, no features → early-out. Must not throw.
-  backend.maybeObserveAndExportDag(slot, /*frameId=*/11);
+  backend.maybeObserveAndExportDag(slot);
 
   // Nothing should have been written anywhere we control.
   check(!fileExists(dumpPath(probeDir, 11, 11, "pre-opt")),
@@ -286,6 +301,273 @@ void testObserveMovesPerfCounters(const std::string& dir) {
         "L1 strict leaves framegraph_resources_memoryless unchanged");
 }
 
+// DXMT9_RENDERER_DUMP_DAG_FRAME pure resolver: unset / empty / "0" / garbage all
+// mean "no filter" (dump every chunk); a positive decimal selects that frame.
+void testResolveDumpDagFrame() {
+  using dxmt9::framegraph::resolveDumpDagFrame;
+  check(!resolveDumpDagFrame(nullptr).has_value(),
+        "resolveDumpDagFrame(nullptr) == nullopt");
+  check(!resolveDumpDagFrame("").has_value(),
+        "resolveDumpDagFrame(\"\") == nullopt");
+  check(!resolveDumpDagFrame("0").has_value(),
+        "resolveDumpDagFrame(\"0\") == nullopt");
+  check(!resolveDumpDagFrame("abc").has_value(),
+        "resolveDumpDagFrame(\"abc\") == nullopt");
+  check(!resolveDumpDagFrame("2x").has_value(),
+        "resolveDumpDagFrame(\"2x\") == nullopt (trailing garbage rejected)");
+  const auto two = resolveDumpDagFrame("2");
+  check(two.has_value() && *two == 2u, "resolveDumpDagFrame(\"2\") == 2");
+  const auto big = resolveDumpDagFrame("100");
+  check(big.has_value() && *big == 100u, "resolveDumpDagFrame(\"100\") == 100");
+}
+
+// DXMT9_RENDERER_DUMP_DAG_FRAME_RADIUS pure resolver: unset / empty / "0" /
+// garbage all mean 0 (single-frame filter); a non-negative decimal is the
+// window radius.
+void testResolveDumpDagFrameRadius() {
+  using dxmt9::framegraph::resolveDumpDagFrameRadius;
+  check(resolveDumpDagFrameRadius(nullptr) == 0u,
+        "resolveDumpDagFrameRadius(nullptr) == 0");
+  check(resolveDumpDagFrameRadius("") == 0u,
+        "resolveDumpDagFrameRadius(\"\") == 0");
+  check(resolveDumpDagFrameRadius("0") == 0u,
+        "resolveDumpDagFrameRadius(\"0\") == 0");
+  check(resolveDumpDagFrameRadius("x") == 0u,
+        "resolveDumpDagFrameRadius(\"x\") == 0");
+  check(resolveDumpDagFrameRadius("3x") == 0u,
+        "resolveDumpDagFrameRadius(\"3x\") == 0 (trailing garbage rejected)");
+  check(resolveDumpDagFrameRadius("10") == 10u,
+        "resolveDumpDagFrameRadius(\"10\") == 10");
+  check(resolveDumpDagFrameRadius("1") == 1u,
+        "resolveDumpDagFrameRadius(\"1\") == 1");
+}
+
+// chunkContainsPresent scans commandHeaders for MetalCommandKind::Present.
+void testChunkContainsPresent() {
+  using dxmt9::framegraph::chunkContainsPresent;
+  const ChunkSlot withPresent = buildChunk(/*seqId=*/1, /*withPresent=*/true);
+  const ChunkSlot noPresent = buildChunk(/*seqId=*/2, /*withPresent=*/false);
+  check(chunkContainsPresent(withPresent),
+        "chunkContainsPresent true for a present-terminated chunk");
+  check(!chunkContainsPresent(noPresent),
+        "chunkContainsPresent false for a draw-only chunk");
+}
+
+// Drive the observe path across a synthetic chunk stream:
+//   chunk seq 100 (draw)              -> frame 1
+//   chunk seq 101 (draw + Present)    -> frame 1, advances to frame 2 after
+//   chunk seq 102 (draw)              -> frame 2  <- target
+//   chunk seq 103 (draw + Present)    -> frame 2, advances to frame 3 after
+//   chunk seq 104 (draw)              -> frame 3
+// With the filter targeting frame 2, ONLY chunks 102 and 103 (frame-2 chunks)
+// must produce dag-frame2-*.json; frame-1 (100,101) and frame-3 (104) chunks
+// must produce nothing. Frame-2 chunks' files are named with frame_id=2 (the
+// observe frame number) and chunk<seqId> (the chunk seq id).
+void testFrameFilterDumpsOnlyTargetFrame(const std::string& dir) {
+  FrameGraphBackend backend;
+
+  struct Chunk {
+    std::uint64_t seqId;
+    bool present;
+    std::uint64_t expectFrame;  // 0 => filtered out (no files)
+  };
+  const Chunk chunks[] = {
+      {100, false, 0},  // frame 1, filtered
+      {101, true, 0},   // frame 1, filtered (advances to 2)
+      {102, false, 2},  // frame 2, DUMPED
+      {103, true, 2},   // frame 2, DUMPED (advances to 3)
+      {104, false, 0},  // frame 3, filtered
+  };
+
+  // Clean any pre-existing files for the seq ids we touch (across frames 1..3).
+  auto pathFor = [&](std::uint64_t frame, std::uint64_t seq, const char* stage) {
+    return dumpPath(dir, frame, seq, stage);
+  };
+  for (const Chunk& c : chunks) {
+    for (std::uint64_t f = 1; f <= 3; ++f) {
+      removeIfPresent(pathFor(f, c.seqId, "pre-opt"));
+      removeIfPresent(pathFor(f, c.seqId, "post-opt"));
+    }
+  }
+
+  for (const Chunk& c : chunks) {
+    ChunkSlot slot = buildChunk(c.seqId, c.present);
+    backend.observeAndExportDagToDirForFrame(slot, dir,
+                                             /*targetFrame=*/2u);
+  }
+
+  // The encode-thread-local frame counter must have advanced to 3 (two presents
+  // seen: frame 1 -> 2 -> 3).
+  check(backend.observeFrame() == 3u,
+        "observe_frame_ advanced past two presents to frame 3");
+
+  for (const Chunk& c : chunks) {
+    if (c.expectFrame == 0) {
+      // Filtered-out chunks: NO files at any frame number.
+      for (std::uint64_t f = 1; f <= 3; ++f) {
+        check(!fileExists(pathFor(f, c.seqId, "pre-opt")),
+              "filtered-out chunk wrote no pre-opt file");
+        check(!fileExists(pathFor(f, c.seqId, "post-opt")),
+              "filtered-out chunk wrote no post-opt file");
+      }
+    } else {
+      // Target-frame chunks: files named dag-frame2-chunk<seq>-*.json exist;
+      // the JSON stamps frame_id=2 (observe frame) and chunk_seq_id=<seq>.
+      const std::string pre = pathFor(c.expectFrame, c.seqId, "pre-opt");
+      const std::string post = pathFor(c.expectFrame, c.seqId, "post-opt");
+      check(fileExists(pre), "frame-2 chunk wrote its pre-opt file");
+      check(fileExists(post), "frame-2 chunk wrote its post-opt file");
+      const std::string preJson = readFile(pre);
+      check(contains(preJson, "\"frame_id\": 2"),
+            "frame-2 dump stamps frame_id=2 (observe frame number)");
+      check(contains(preJson,
+                     "\"chunk_seq_id\": " + std::to_string(c.seqId)),
+            "frame-2 dump stamps chunk_seq_id=<slot.seqId>");
+    }
+  }
+
+  // Cleanup.
+  for (const Chunk& c : chunks) {
+    for (std::uint64_t f = 1; f <= 3; ++f) {
+      removeIfPresent(pathFor(f, c.seqId, "pre-opt"));
+      removeIfPresent(pathFor(f, c.seqId, "post-opt"));
+    }
+  }
+}
+
+// Drive the observe path across a synthetic five-frame stream with target frame
+// 3 and radius 1 → the inclusive window is [2, 4], so ONLY frames 2, 3, 4 dump;
+// frame 1 and frame 5 must produce no files. Each frame is a single
+// present-terminated chunk so seq id == frame number for readability.
+//   chunk seq 1 (present) -> frame 1, filtered (advances to 2)
+//   chunk seq 2 (present) -> frame 2, DUMPED  (advances to 3)
+//   chunk seq 3 (present) -> frame 3, DUMPED  (advances to 4)
+//   chunk seq 4 (present) -> frame 4, DUMPED  (advances to 5)
+//   chunk seq 5 (present) -> frame 5, filtered (advances to 6)
+void testFrameWindowDumpsTargetPlusMinusRadius(const std::string& dir) {
+  FrameGraphBackend backend;
+
+  struct Chunk {
+    std::uint64_t frame;   // == seqId here (one present chunk per frame)
+    bool expectDumped;     // in window [2,4]?
+  };
+  const Chunk chunks[] = {
+      {1, false}, {2, true}, {3, true}, {4, true}, {5, false},
+  };
+
+  auto cleanup = [&]() {
+    for (const Chunk& c : chunks) {
+      removeIfPresent(dumpPath(dir, c.frame, c.frame, "pre-opt"));
+      removeIfPresent(dumpPath(dir, c.frame, c.frame, "post-opt"));
+    }
+  };
+  cleanup();
+
+  for (const Chunk& c : chunks) {
+    ChunkSlot slot = buildChunk(/*seqId=*/c.frame, /*withPresent=*/true);
+    backend.observeAndExportDagToDirForFrame(slot, dir,
+                                             /*targetFrame=*/3u, /*radius=*/1u);
+  }
+
+  // Five presents seen → counter advanced from 1 past frame 5 to frame 6.
+  check(backend.observeFrame() == 6u,
+        "windowed: observe_frame_ advanced past five presents to frame 6");
+
+  for (const Chunk& c : chunks) {
+    const std::string pre = dumpPath(dir, c.frame, c.frame, "pre-opt");
+    const std::string post = dumpPath(dir, c.frame, c.frame, "post-opt");
+    if (c.expectDumped) {
+      check(fileExists(pre), "windowed: in-window frame wrote its pre-opt file");
+      check(fileExists(post),
+            "windowed: in-window frame wrote its post-opt file");
+    } else {
+      check(!fileExists(pre),
+            "windowed: out-of-window frame wrote no pre-opt file");
+      check(!fileExists(post),
+            "windowed: out-of-window frame wrote no post-opt file");
+    }
+  }
+
+  cleanup();
+}
+
+// Low-clamp: target frame 1 with radius 5 → window is [max(1,1-5), 1+5] =
+// [1, 6]; frame 1 dumps and there is never a frame 0 to select. Verify frame 1
+// dumps and no dag-frame0-*.json is ever produced.
+void testFrameWindowLowClampAtFrameOne(const std::string& dir) {
+  FrameGraphBackend backend;
+
+  const std::uint64_t seqA = 300;  // frame 1, draw-only
+  const std::uint64_t seqB = 301;  // frame 1, present-terminated
+
+  auto cleanup = [&]() {
+    for (std::uint64_t f = 0; f <= 2; ++f) {
+      for (std::uint64_t s : {seqA, seqB}) {
+        removeIfPresent(dumpPath(dir, f, s, "pre-opt"));
+        removeIfPresent(dumpPath(dir, f, s, "post-opt"));
+      }
+    }
+  };
+  cleanup();
+
+  ChunkSlot a = buildChunk(seqA, /*withPresent=*/false);
+  ChunkSlot b = buildChunk(seqB, /*withPresent=*/true);
+  backend.observeAndExportDagToDirForFrame(a, dir, /*targetFrame=*/1u,
+                                           /*radius=*/5u);
+  backend.observeAndExportDagToDirForFrame(b, dir, /*targetFrame=*/1u,
+                                           /*radius=*/5u);
+
+  // Both frame-1 chunks dump under the clamped [1,6] window.
+  check(fileExists(dumpPath(dir, 1, seqA, "pre-opt")),
+        "low-clamp: frame-1 draw chunk dumped");
+  check(fileExists(dumpPath(dir, 1, seqB, "post-opt")),
+        "low-clamp: frame-1 present chunk dumped");
+  // No frame 0 is ever selected (the low end clamps at 1).
+  check(!fileExists(dumpPath(dir, 0, seqA, "pre-opt")),
+        "low-clamp: no dag-frame0 file produced");
+  check(!fileExists(dumpPath(dir, 0, seqB, "post-opt")),
+        "low-clamp: no dag-frame0 file produced");
+
+  cleanup();
+}
+
+// With no filter (nullopt target), every chunk is dumped and the counter still
+// tracks inter-present frames (frame_id in the filename follows observe_frame_).
+void testNoFilterDumpsEveryChunk(const std::string& dir) {
+  FrameGraphBackend backend;
+
+  // Two chunks: a draw chunk in frame 1, then a present-terminated chunk in
+  // frame 1 that advances the counter to 2.
+  const std::uint64_t seqA = 200;  // frame 1, draw-only
+  const std::uint64_t seqB = 201;  // frame 1, present-terminated
+
+  auto cleanup = [&]() {
+    for (std::uint64_t f = 1; f <= 2; ++f) {
+      for (std::uint64_t s : {seqA, seqB}) {
+        removeIfPresent(dumpPath(dir, f, s, "pre-opt"));
+        removeIfPresent(dumpPath(dir, f, s, "post-opt"));
+      }
+    }
+  };
+  cleanup();
+
+  ChunkSlot a = buildChunk(seqA, /*withPresent=*/false);
+  ChunkSlot b = buildChunk(seqB, /*withPresent=*/true);
+  backend.observeAndExportDagToDirForFrame(a, dir, /*targetFrame=*/std::nullopt);
+  backend.observeAndExportDagToDirForFrame(b, dir, /*targetFrame=*/std::nullopt);
+
+  // Both chunks belong to frame 1, so both dump as dag-frame1-chunk<seq>.
+  check(fileExists(dumpPath(dir, 1, seqA, "pre-opt")),
+        "unfiltered: draw chunk dumped at frame 1");
+  check(fileExists(dumpPath(dir, 1, seqB, "post-opt")),
+        "unfiltered: present chunk dumped at frame 1");
+  // The present chunk advanced the counter to 2.
+  check(backend.observeFrame() == 2u,
+        "unfiltered: observe_frame_ advanced to 2 after the present");
+
+  cleanup();
+}
+
 }  // namespace
 
 int main() {
@@ -308,6 +590,23 @@ int main() {
 
     // 3. Observe path moves the R-BACK-39.2 framegraph_* perf counters.
     testObserveMovesPerfCounters(dir);
+
+    // 4. DXMT9_RENDERER_DUMP_DAG_FRAME[_RADIUS] resolvers + present-scan helper.
+    testResolveDumpDagFrame();
+    testResolveDumpDagFrameRadius();
+    testChunkContainsPresent();
+
+    // 5. Per-frame chunk filter: only the target frame's chunks dump.
+    testFrameFilterDumpsOnlyTargetFrame(dir);
+
+    // 6. ±radius window: target=3, radius=1 dumps only frames 2,3,4.
+    testFrameWindowDumpsTargetPlusMinusRadius(dir);
+
+    // 7. Low-clamp: target=1, radius=5 → window starts at frame 1, no frame 0.
+    testFrameWindowLowClampAtFrameOne(dir);
+
+    // 8. No filter (nullopt) still dumps every chunk and tracks frames.
+    testNoFilterDumpsEveryChunk(dir);
 
     rmdir(dir.c_str());
   } catch (const TestFailure& failure) {

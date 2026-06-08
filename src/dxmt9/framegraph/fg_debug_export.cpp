@@ -414,6 +414,63 @@ std::optional<std::string> dumpDagDir() {
   return value;
 }
 
+std::optional<std::uint64_t> resolveDumpDagFrame(const char* env) {
+  if (env == nullptr || env[0] == '\0') {
+    return std::nullopt;
+  }
+  // Parse a non-negative decimal integer; reject any non-digit content. "0" and
+  // non-numeric strings resolve to nullopt ("dump all frames"). Frame numbers
+  // are 1-based, so 0 is not a selectable frame.
+  std::uint64_t value = 0;
+  for (const char* c = env; *c != '\0'; ++c) {
+    if (*c < '0' || *c > '9') {
+      return std::nullopt;
+    }
+    value = value * 10u + static_cast<std::uint64_t>(*c - '0');
+  }
+  if (value == 0) {
+    return std::nullopt;
+  }
+  return value;
+}
+
+std::optional<std::uint64_t> dumpDagFrame() {
+  static const std::optional<std::uint64_t> value =
+      resolveDumpDagFrame(std::getenv("DXMT9_RENDERER_DUMP_DAG_FRAME"));
+  return value;
+}
+
+std::uint64_t resolveDumpDagFrameRadius(const char* env) {
+  if (env == nullptr || env[0] == '\0') {
+    return 0;
+  }
+  // Parse a non-negative decimal integer; reject any non-digit content. Empty /
+  // "0" / non-numeric all resolve to 0 (single-frame filter — no widening).
+  std::uint64_t value = 0;
+  for (const char* c = env; *c != '\0'; ++c) {
+    if (*c < '0' || *c > '9') {
+      return 0;
+    }
+    value = value * 10u + static_cast<std::uint64_t>(*c - '0');
+  }
+  return value;
+}
+
+std::uint64_t dumpDagFrameRadius() {
+  static const std::uint64_t value =
+      resolveDumpDagFrameRadius(std::getenv("DXMT9_RENDERER_DUMP_DAG_FRAME_RADIUS"));
+  return value;
+}
+
+bool chunkContainsPresent(const core::ChunkSlot& slot) {
+  for (const auto& header : slot.commandHeaders) {
+    if (header.kind == core::MetalCommandKind::Present) {
+      return true;
+    }
+  }
+  return false;
+}
+
 namespace {
 
 const char* formatExtension(DumpFormat fmt) {

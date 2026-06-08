@@ -89,6 +89,17 @@ void writeDagJsonToDir(const framegraph::FrameGraph& fg, std::uint64_t frameId,
   }
 }
 
+// True if `frame` falls inside the inclusive ±radius window centered on
+// `target` (R-BACK-39.7). The low end is clamped at 1 because inter-present
+// frames are 1-based, so a wide radius can never select frame 0. radius==0
+// degenerates to the single-frame test `frame == target`.
+bool frameInDumpWindow(std::uint64_t frame, std::uint64_t target,
+                       std::uint64_t radius) {
+  const std::uint64_t low = (target > radius) ? (target - radius) : 1u;
+  const std::uint64_t high = target + radius;
+  return frame >= low && frame <= high;
+}
+
 // R-BACK-39.2 (Task B11, L1) — record the small frame-graph observe-path
 // perf counters. `passesBuilt` is sampled BEFORE runOptimizer (coalesce/dce
 // can shrink fg.passes), the rest come from the OptimizerStats runOptimizer
@@ -117,7 +128,7 @@ void FrameGraphBackend::observeAndExportDagToDir(const core::ChunkSlot& slot,
   // neutral) — reads only `slot`, writes only dump files plus the
   // observation-only perf counters below; mutates no shared / queue / Metal
   // state, so an enabled dump leaves the Metal stream byte-identical to a
-  // disabled run.
+  // disabled run. const / counter-free: the frame id is caller-supplied.
   framegraph::FrameGraph fg = framegraph::buildFrameGraph(slot, frameId);
   // Capture the built pass count before runOptimizer can prune/coalesce.
   const std::uint64_t passesBuilt =
@@ -129,26 +140,91 @@ void FrameGraphBackend::observeAndExportDagToDir(const core::ChunkSlot& slot,
   recordFramegraphObserveCounters(passesBuilt, stats);
 }
 
-void FrameGraphBackend::maybeObserveAndExportDag(const core::ChunkSlot& slot,
-                                                 std::uint64_t frameId) const {
+void FrameGraphBackend::observeAndExportDagToDirForFrame(
+    const core::ChunkSlot& slot, const std::string& dumpDir,
+    std::optional<std::uint64_t> targetFrame, std::uint64_t radius) {
+  // Testable mirror of maybeObserveAndExportDag's per-frame filter, but writing
+  // JSON to an explicit dir (bypassing the dumpDagDir() static cache) and taking
+  // the resolved target frame + window radius as arguments (bypassing the
+  // DXMT9_RENDERER_DUMP_DAG_FRAME / _RADIUS static caches). NON-const: advances
+  // observe_frame_ exactly like the production path.
+  //
+  // Cheap Present scan FIRST — when this chunk is filtered out we must not build
+  // the FrameGraph (the flood-avoiding early-out), but we still have to advance
+  // the frame counter when the chunk ends a frame.
+  const bool present = framegraph::chunkContainsPresent(slot);
+
+  if (targetFrame.has_value() &&
+      !frameInDumpWindow(observe_frame_, *targetFrame, radius)) {
+    // Outside the [max(1, N-R), N+R] window: skip the build/serialize entirely.
+    // Only the Present scan above ran. Advance the counter when this chunk
+    // closes its frame so the window is reached and then left correctly.
+    if (present) {
+      ++observe_frame_;
+    }
+    return;
+  }
+
+  // Target frame (or unfiltered): build -> dump pre-opt -> optimize -> dump
+  // post-opt. frame_id in the filename is the observe frame number; slot.seqId
+  // stays the chunk_seq_id (in the JSON body via writeDagJsonToDir).
+  framegraph::FrameGraph fg = framegraph::buildFrameGraph(slot, observe_frame_);
+  const std::uint64_t passesBuilt =
+      static_cast<std::uint64_t>(fg.passes.size());
+  writeDagJsonToDir(fg, observe_frame_, slot.seqId, "pre-opt", dumpDir);
+  framegraph::OptimizerStats stats;
+  framegraph::runOptimizer(fg, options_, /*observations=*/nullptr, &stats);
+  writeDagJsonToDir(fg, observe_frame_, slot.seqId, "post-opt", dumpDir);
+  recordFramegraphObserveCounters(passesBuilt, stats);
+
+  // Advance the frame counter EVEN when this chunk was dumped, so all of frame
+  // N's chunks dump and then the next chunk belongs to frame N+1.
+  if (present) {
+    ++observe_frame_;
+  }
+}
+
+void FrameGraphBackend::maybeObserveAndExportDag(const core::ChunkSlot& slot) {
   // Zero-overhead default path: skip entirely when there is nothing to observe
   // — no dump directory configured AND no features enabled. (At L1 strict the
   // feature set is always empty, so in practice this is gated purely on the
   // dump dir; the feature check keeps the early-out correct once L2+ enables
-  // sidecar-observable features.)
+  // sidecar-observable features.) Frame counter is NOT advanced here: with no
+  // dump dir there is nothing to scope by frame.
   if (!framegraph::dumpDagDir().has_value() && features_.empty()) {
+    return;
+  }
+
+  // Cheap Present scan FIRST so a filtered-out chunk never builds the
+  // FrameGraph (the flood-avoiding early-out for real apps that emit thousands
+  // of chunks/frames; DXMT9_RENDERER_DUMP_DAG_FRAME scopes the dump to one
+  // frame).
+  const bool present = framegraph::chunkContainsPresent(slot);
+  const std::optional<std::uint64_t> target = framegraph::dumpDagFrame();
+  const std::uint64_t radius = framegraph::dumpDagFrameRadius();
+
+  if (target.has_value() &&
+      !frameInDumpWindow(observe_frame_, *target, radius)) {
+    // Outside the [max(1, N-R), N+R] window: skip the build/serialize entirely.
+    // Advance the frame counter when this chunk closes its frame so the counter
+    // keeps tracking inter-present frames toward (and out of) the window.
+    if (present) {
+      ++observe_frame_;
+    }
     return;
   }
 
   // Production path: build -> dump pre-opt -> optimize -> dump post-opt via the
   // spec's writeDagDump, which honors DXMT9_RENDERER_DUMP_DAG_FORMATS (json /
   // dot / mermaid) and warns at most once on an unwritable dir (R-BACK-39.7).
-  // PURE OBSERVATION — reads only `slot`, writes only dump files.
-  framegraph::FrameGraph fg = framegraph::buildFrameGraph(slot, frameId);
+  // PURE OBSERVATION — reads only `slot`, writes only dump files. The frame_id
+  // stamped into the filename / JSON is the observe frame number (so the
+  // filenames read dag-frame<N>-...), while slot.seqId stays the chunk_seq_id.
+  framegraph::FrameGraph fg = framegraph::buildFrameGraph(slot, observe_frame_);
   // Capture the built pass count before runOptimizer can prune/coalesce.
   const std::uint64_t passesBuilt =
       static_cast<std::uint64_t>(fg.passes.size());
-  framegraph::writeDagDump(fg, frameId, slot.seqId, "pre-opt");
+  framegraph::writeDagDump(fg, observe_frame_, slot.seqId, "pre-opt");
 
   // Run the resolved optimizer passes (at L1 strict: lifetime + loadstore only,
   // since options_ is all-false → the R-BACK-40.5 parity baseline). No
@@ -159,8 +235,14 @@ void FrameGraphBackend::maybeObserveAndExportDag(const core::ChunkSlot& slot,
   // optimizer's decisions.
   framegraph::OptimizerStats stats;
   framegraph::runOptimizer(fg, options_, /*observations=*/nullptr, &stats);
-  framegraph::writeDagDump(fg, frameId, slot.seqId, "post-opt");
+  framegraph::writeDagDump(fg, observe_frame_, slot.seqId, "post-opt");
   recordFramegraphObserveCounters(passesBuilt, stats);
+
+  // Advance on present EVEN when the chunk was dumped, so frame N's multiple
+  // chunks all dump before the counter moves to N+1.
+  if (present) {
+    ++observe_frame_;
+  }
 }
 
 std::optional<core::metalqueue::QueueSubmissionRecord>
@@ -169,11 +251,11 @@ FrameGraphBackend::onChunkReady(encoders::EncodeContext& ctx,
                                 const core::ChunkSlot& slot) {
   // Side-effect-neutral observe + DAG export side-channel (R-BACK-39.7). This
   // runs BEFORE the encode but cannot influence it: it only reads `slot` and
-  // writes debug dump files. The frame id is sourced from `slot.seqId` — the
-  // backend keeps no separate frame counter (onFrameBegin is not overridden),
-  // and the chunk seq id is the stable per-chunk identifier the DAG export and
-  // its file names key off anyway (dag-frame<seqId>-chunk<seqId>-<stage>.json).
-  maybeObserveAndExportDag(slot, slot.seqId);
+  // writes debug dump files. maybeObserveAndExportDag tracks the inter-present
+  // frame number itself (encode-thread-local counter) so the file names read
+  // dag-frame<observeFrame>-chunk<seqId>-<stage>.json and
+  // DXMT9_RENDERER_DUMP_DAG_FRAME can scope the dump to a single frame.
+  maybeObserveAndExportDag(slot);
 
   // R-BACK-40.5: the Metal command stream stays byte-identical to the
   // traditional path. The DAG above is observation-only.
