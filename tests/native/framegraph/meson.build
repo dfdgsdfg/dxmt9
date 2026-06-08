@@ -35,3 +35,14 @@ fg_debug_export_spec = executable(
 
 test('dxmt9-framegraph-fg-debug-export-spec', fg_debug_export_spec,
      env: dxmt9_native_test_env)
+
+fg_optimizer_spec = executable(
+  'dxmt9-framegraph-fg-optimizer-spec',
+  'fg_optimizer_spec.cpp',
+  include_directories: dxmt9_inc,
+  dependencies: [dxmt9_dep, dxmt9_frontend_dep],
+  link_args: dxmt9_test_link_args,
+)
+
+test('dxmt9-framegraph-fg-optimizer-spec', fg_optimizer_spec,
+     env: dxmt9_native_test_env)
