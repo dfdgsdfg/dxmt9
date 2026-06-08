@@ -14,3 +14,11 @@ artifacts. None are wired to Meson tests.
   manifest.
 - `run_sfiv_benchmark_crossover_oracle.sh` — Street Fighter IV under
   CrossOver, used as a reference oracle.
+- `run_d3d9_conformance_render_modes.sh` — CI conformance gate that runs
+  `scripts/tools/run_d3d9_conformance.py` once per renderer
+  (`DXMT9_RENDER_MODE=traditional` and `=framegraph`), records each leg's
+  verdicts under a mode-tagged artifact, and exits non-zero on a
+  mode-specific regression (R-BACK-39.4). This is the merge-blocking gate:
+  the underlying conformance runner only records verdict JSON and always
+  exits 0, so the pass/fail decision is computed here from the per-mode
+  result files.
