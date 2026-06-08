@@ -54,6 +54,7 @@ subdir('native/core')
 subdir('native/shader')
 subdir('native/backend')
 subdir('native/render')
+subdir('native/framegraph')
 subdir('native/bridge')
 
 shader_runner = executable(
