@@ -1,4 +1,5 @@
 #include "dxmt9_command_queue.hpp"
+#include "render/backend_factory.hpp"
 #include "dxmt9/assert.hpp"
 #include "dxmt9_archive_prewarm.hpp"
 #include "dxmt9_debug_alloc_guard.hpp"
@@ -274,6 +275,12 @@ CommandQueue::CommandQueue(WMT::Device device, core::BackendLimits limits)
         : 0u;
   });
 
+  // R-BACK-31.7 — construct the render backend before the worker threads
+  // start, so backend_ is non-null the first time the encode loop runs.
+  // With DXMT9_RENDER_MODE unset this resolves to TraditionalBackend, whose
+  // onChunkReady forwards to encoders::encodeChunk — byte-identical baseline.
+  backend_ = render::createBackendFromEnv();
+
   // Spawn the three worker threads. Threads block on writeCv_ until the
   // first submit; no race with DeviceImpl's still-completing ctor because
   // submits can only happen after CreateDXMT9Device returns.
@@ -282,7 +289,7 @@ CommandQueue::CommandQueue(WMT::Device device, core::BackendLimits limits)
         runEncodeLoop(
             [this](std::size_t slotIndex, const core::ChunkSlot& slot) {
               auto ctx = makeEncodeContext();
-              return encoders::encodeChunk(ctx, slotIndex, slot);
+              return backend_->onChunkReady(ctx, slotIndex, slot);
             },
             [this](std::uint64_t) { allocators_.reclaim(completedSeqId_); });
       },

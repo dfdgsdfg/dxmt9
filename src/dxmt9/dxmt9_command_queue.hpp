@@ -53,6 +53,15 @@ class PresentDrawableToken;
 
 namespace encoders { struct EncodeContext; }
 namespace resources { class Initializer; }
+// R-BACK-31.7 — the queue owns the render backend via a unique_ptr to this
+// interface. A forward declaration (not the full render/backend_factory.hpp
+// include) is used deliberately: backend_factory.hpp transitively pulls in
+// dxmt9_draw_encoder.hpp, which needs the COMPLETE CommandQueue type
+// (PreUploadedDrawData stores CommandQueue::TransientBufferSlice). Including
+// it here — before CommandQueue is defined — is a hard include cycle. The
+// .cpp includes the full header where the complete IRenderBackend is needed
+// (factory call + out-of-line ~CommandQueue destroying the unique_ptr).
+namespace render { class IRenderBackend; }
 
 // Chunk-ring size + in-flight cap. Match upstream dxmt's kCommandChunkCount:
 // the ring may queue many chunks, while submitPresent() enforces present
@@ -423,6 +432,15 @@ class CommandQueue {
   WMT::Device device_{};
   WMT::Reference<WMT::CommandQueue> queue_{};
   WMT::CommandQueue queueView_{};  // non-owning view of queue_
+
+  // R-BACK-31.7 — CommandQueue owns the render backend. Declared before the
+  // worker-thread members so it is constructed first (the ctor assigns it
+  // before startThreads()) and, by reverse declaration order, destroyed after
+  // them. The encode lambda calls backend_->onChunkReady(...), so backend_
+  // MUST outlive the encode thread; the dtor joins threads via stopThreads()
+  // in its body, before any member destruction runs, so the lifetime is safe
+  // either way and this ordering documents the intent.
+  std::unique_ptr<render::IRenderBackend> backend_;
 
   std::thread encodeThread_{};
   std::thread finishThread_{};
