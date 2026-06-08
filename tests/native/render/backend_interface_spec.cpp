@@ -1,4 +1,5 @@
 #include "../../../src/dxmt9/render/backend_interface.hpp"
+#include "../../../src/dxmt9/render/backend_factory.hpp"
 
 #include <stdexcept>
 #include <string>
@@ -16,10 +17,30 @@ void testBackendModeAndCapsDefaults() {
   check(caps.supports_icb == false, "caps default supports_icb=false");
   check(static_cast<int>(BackendMode::Traditional) == 0, "Traditional is 0");
 }
+
+void testFactoryModeResolution() {
+  using namespace dxmt9::render;
+  check(resolveBackendMode(nullptr) == BackendMode::Traditional, "unset → Traditional");
+  check(resolveBackendMode("") == BackendMode::Traditional, "empty → Traditional");
+  check(resolveBackendMode("0") == BackendMode::Traditional, "\"0\" → Traditional");
+  check(resolveBackendMode("traditional") == BackendMode::Traditional, "traditional");
+  check(resolveBackendMode("framegraph") == BackendMode::FrameGraph, "framegraph");
+  check(resolveBackendMode("garbage") == BackendMode::Traditional, "unknown → Traditional");
+}
+
+void testCreateBackendByMode() {
+  using namespace dxmt9::render;
+  check(createBackend(BackendMode::Traditional)->mode() == BackendMode::Traditional, "createBackend Traditional");
+  check(createBackend(BackendMode::FrameGraph)->mode() == BackendMode::FrameGraph, "createBackend FrameGraph");
+}
 }  // namespace
 
 int main() {
-  try { testBackendModeAndCapsDefaults(); }
+  try {
+    testBackendModeAndCapsDefaults();
+    testFactoryModeResolution();
+    testCreateBackendByMode();
+  }
   catch (const std::exception& e) {
     std::cerr << "backend_interface_spec failed: " << e.what() << '\n'; return 1;
   }
