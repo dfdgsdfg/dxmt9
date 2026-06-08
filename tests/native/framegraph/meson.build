@@ -46,3 +46,14 @@ fg_optimizer_spec = executable(
 
 test('dxmt9-framegraph-fg-optimizer-spec', fg_optimizer_spec,
      env: dxmt9_native_test_env)
+
+fg_linearizer_spec = executable(
+  'dxmt9-framegraph-fg-linearizer-spec',
+  'fg_linearizer_spec.cpp',
+  include_directories: dxmt9_inc,
+  dependencies: [dxmt9_dep, dxmt9_frontend_dep],
+  link_args: dxmt9_test_link_args,
+)
+
+test('dxmt9-framegraph-fg-linearizer-spec', fg_linearizer_spec,
+     env: dxmt9_native_test_env)

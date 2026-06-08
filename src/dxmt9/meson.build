@@ -47,6 +47,7 @@ dxmt9_runtime_srcs = files(
   'dxmt9_uniform_dirty.cpp',
   'framegraph/fg_builder.cpp',
   'framegraph/fg_debug_export.cpp',
+  'framegraph/fg_linearizer.cpp',
   'framegraph/fg_optimizer.cpp',
   'framegraph/fg_optimizer/dce.cpp',
   'framegraph/fg_optimizer/lifetime.cpp',
