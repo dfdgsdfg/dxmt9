@@ -5,8 +5,15 @@
 //
 // design.md §6: for each PassNode in (optimized) order, open the pass, emit its
 // draws in order, close the pass; Present / Blit passes are single ops. Dead
-// passes (DCE, flags.dead) are skipped. The op order is the byte-identical
-// parity baseline under default OptimizerOptions (§14 L1 / R-BACK-39.1).
+// passes (DCE, flags.dead) are skipped. Under default OptimizerOptions the plan
+// reproduces the chunk's natural pass/draw OP ORDER (the parity baseline, §14 L1
+// / R-BACK-39.1). NOTE: executeLinearization is NOT byte-identical to
+// encoders::encodeChunk today — it re-derives clears via a per-pass scan, emits
+// draws one param at a time (bypassing encodeChunk's draw-submission batching /
+// binding-override path), and loadstore may pick a different first-pass color
+// load action. Executor byte-exact fidelity is proven by the device conformance
+// leg and is the deferred device-gated frontier; production encode stays on
+// encoders::encodeChunk until then.
 
 #include "fg_linearizer.hpp"
 

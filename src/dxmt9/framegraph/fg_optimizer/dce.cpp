@@ -84,7 +84,11 @@ void runDce(FrameGraph& graph, OptimizerStats* stats) {
     // it writes at least one resource and EVERY written resource is dead.
     bool wrote_anything = false;
     bool all_writes_dead = true;
-    bool any_cross_chunk_safe = false;
+    // Cross-chunk safety must hold for EVERY written resource, not just one:
+    // a pass writing both a memoryless-eligible R1 and a persistent R2 (both
+    // unread in-chunk) must NOT be dropped, or R2's write — which a future
+    // chunk may legitimately read — is silently lost. So AND across writes.
+    bool all_cross_chunk_safe = true;
     bool readback_on_any_write = false;
 
     for (const ResourceNode& node : graph.resources) {
@@ -110,11 +114,11 @@ void runDce(FrameGraph& graph, OptimizerStats* stats) {
       if (readAfterWriteInChunk(node, pass_index)) {
         all_writes_dead = false;
       }
-      // Cross-chunk safety (a) memoryless-eligible, or (b) fully overwritten
-      // later in this chunk.
-      if (node.residency == ResidencyClass::Memoryless ||
-          fullyOverwrittenLaterInChunk(node, pass_index)) {
-        any_cross_chunk_safe = true;
+      // Cross-chunk safety for THIS written resource: (a) memoryless-eligible,
+      // or (b) fully overwritten later in this chunk. ANDed across all writes.
+      if (node.residency != ResidencyClass::Memoryless &&
+          !fullyOverwrittenLaterInChunk(node, pass_index)) {
+        all_cross_chunk_safe = false;
       }
     }
 
@@ -123,7 +127,7 @@ void runDce(FrameGraph& graph, OptimizerStats* stats) {
     }
 
     const bool droppable = all_writes_dead && !readback_on_any_write &&
-                           any_cross_chunk_safe;
+                           all_cross_chunk_safe;
     if (droppable) {
       pass.flags.dead = true;
       if (stats) {
