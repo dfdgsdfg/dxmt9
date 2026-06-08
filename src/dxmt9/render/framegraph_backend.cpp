@@ -1,6 +1,7 @@
 #include "framegraph_backend.hpp"
 
 #include "../dxmt9_draw_encoder.hpp"
+#include "../dxmt9_perf_counters.hpp"
 #include "../framegraph/fg_builder.hpp"
 #include "../framegraph/fg_debug_export.hpp"
 #include "../framegraph/fg_optimizer.hpp"
@@ -88,6 +89,23 @@ void writeDagJsonToDir(const framegraph::FrameGraph& fg, std::uint64_t frameId,
   }
 }
 
+// R-BACK-39.2 (Task B11, L1) — record the small frame-graph observe-path
+// perf counters. `passesBuilt` is sampled BEFORE runOptimizer (coalesce/dce
+// can shrink fg.passes), the rest come from the OptimizerStats runOptimizer
+// filled. perf::count* helpers are process-global atomics that no-op unless
+// DXMT_PERF_COUNTERS is enabled, so this stays observation-only and keeps the
+// Metal command stream byte-identical (R-BACK-40.5). The deferred L2/on-device
+// counters (framegraph_icb_*, virtual-attachment misclassification) have no L1
+// callsite and are intentionally not recorded here.
+void recordFramegraphObserveCounters(std::uint64_t passesBuilt,
+                                     const framegraph::OptimizerStats& stats) {
+  perf::countFramegraphPassesBuilt(passesBuilt);
+  perf::countFramegraphPassesCoalesced(stats.pass_coalesced_count);
+  perf::countFramegraphPassesDead(stats.dce_dropped);
+  perf::countFramegraphResourcesMemoryless(stats.memoryless_promoted);
+  perf::countFramegraphDagDumpWritten();
+}
+
 }  // namespace
 
 void FrameGraphBackend::observeAndExportDagToDir(const core::ChunkSlot& slot,
@@ -96,14 +114,19 @@ void FrameGraphBackend::observeAndExportDagToDir(const core::ChunkSlot& slot,
     const {
   // Test-seam variant: write JSON to an explicit directory (bypasses the
   // dumpDagDir() static cache). PURE OBSERVATION (R-BACK-39.7 side-effect
-  // neutral) — reads only `slot`, writes only dump files; mutates no shared /
-  // queue / Metal state, so an enabled dump leaves the Metal stream
-  // byte-identical to a disabled run.
+  // neutral) — reads only `slot`, writes only dump files plus the
+  // observation-only perf counters below; mutates no shared / queue / Metal
+  // state, so an enabled dump leaves the Metal stream byte-identical to a
+  // disabled run.
   framegraph::FrameGraph fg = framegraph::buildFrameGraph(slot, frameId);
+  // Capture the built pass count before runOptimizer can prune/coalesce.
+  const std::uint64_t passesBuilt =
+      static_cast<std::uint64_t>(fg.passes.size());
   writeDagJsonToDir(fg, frameId, slot.seqId, "pre-opt", dumpDir);
-  framegraph::runOptimizer(fg, options_, /*observations=*/nullptr,
-                           /*stats=*/nullptr);
+  framegraph::OptimizerStats stats;
+  framegraph::runOptimizer(fg, options_, /*observations=*/nullptr, &stats);
   writeDagJsonToDir(fg, frameId, slot.seqId, "post-opt", dumpDir);
+  recordFramegraphObserveCounters(passesBuilt, stats);
 }
 
 void FrameGraphBackend::maybeObserveAndExportDag(const core::ChunkSlot& slot,
@@ -122,16 +145,22 @@ void FrameGraphBackend::maybeObserveAndExportDag(const core::ChunkSlot& slot,
   // dot / mermaid) and warns at most once on an unwritable dir (R-BACK-39.7).
   // PURE OBSERVATION — reads only `slot`, writes only dump files.
   framegraph::FrameGraph fg = framegraph::buildFrameGraph(slot, frameId);
+  // Capture the built pass count before runOptimizer can prune/coalesce.
+  const std::uint64_t passesBuilt =
+      static_cast<std::uint64_t>(fg.passes.size());
   framegraph::writeDagDump(fg, frameId, slot.seqId, "pre-opt");
 
   // Run the resolved optimizer passes (at L1 strict: lifetime + loadstore only,
   // since options_ is all-false → the R-BACK-40.5 parity baseline). No
   // cross-frame memoryless observations are tracked at L1 (memoryless stays
   // gated behind an explicit R-BACK-40.4 relaxation that does not exist yet),
-  // so pass nullptr for the observation/stats out-params.
-  framegraph::runOptimizer(fg, options_, /*observations=*/nullptr,
-                           /*stats=*/nullptr);
+  // so pass nullptr for the observation out-param. R-BACK-39.2 (Task B11):
+  // collect an OptimizerStats so the observe-path perf counters reflect the
+  // optimizer's decisions.
+  framegraph::OptimizerStats stats;
+  framegraph::runOptimizer(fg, options_, /*observations=*/nullptr, &stats);
   framegraph::writeDagDump(fg, frameId, slot.seqId, "post-opt");
+  recordFramegraphObserveCounters(passesBuilt, stats);
 }
 
 std::optional<core::metalqueue::QueueSubmissionRecord>

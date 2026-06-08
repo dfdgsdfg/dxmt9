@@ -103,6 +103,19 @@ void countSubCommandBufferSplitSuppressedByCap();
 void recordChunkSubCBCount(std::uint64_t perChunkCount);
 void countGpuCommandBufferError();
 void countMetalBuffer(std::size_t bytes);
+// R-BACK-39.2 (Task B11, L1 subset) — frame-graph observe-path counters,
+// driven from FrameGraphBackend's observe path
+// (render/framegraph_backend.cpp). built/coalesced/dead/memoryless read the
+// built FrameGraph + OptimizerStats that runOptimizer produces per observed
+// chunk; the dump counter bumps once per observe export. DEFERRED to L2/
+// on-device (no L1 callsite, would fail audit_perf_counter_callsites.py):
+// framegraph_icb_* and
+// framegraph_virtual_attachment_misclassification_stale_persistent.
+void countFramegraphPassesBuilt(std::uint64_t passes);
+void countFramegraphPassesCoalesced(std::uint64_t passes);
+void countFramegraphPassesDead(std::uint64_t passes);
+void countFramegraphResourcesMemoryless(std::uint64_t resources);
+void countFramegraphDagDumpWritten();
 void countPipelineBuild();
 void countPipelineCacheHit(PipelineKind kind);
 void countPipelineCacheMiss(PipelineKind kind);
@@ -574,6 +587,19 @@ struct ShaderDecoderRejectSnapshot {
   std::uint64_t declMethodUnsupported = 0;
 };
 ShaderDecoderRejectSnapshot snapshotShaderDecoderRejects();
+
+// Test-only seam for the R-BACK-39.2 (Task B11) frame-graph observe-path
+// counters. Raw counter atoms — zero unless DXMT_PERF_COUNTERS is set and the
+// observe path ran. Mirrors snapshotShaderDecoderRejects so the observe spec
+// can assert the counters moved without a full report parse.
+struct FramegraphObserveSnapshot {
+  std::uint64_t passesBuilt = 0;
+  std::uint64_t passesCoalesced = 0;
+  std::uint64_t passesDead = 0;
+  std::uint64_t resourcesMemoryless = 0;
+  std::uint64_t dagDumpsWritten = 0;
+};
+FramegraphObserveSnapshot snapshotFramegraphObserve();
 }  // namespace test
 
 // R-BACK-3.7 / 3.8 / 4.8 — MTLBinaryArchive prewarming counters.

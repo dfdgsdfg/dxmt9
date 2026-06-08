@@ -917,6 +917,19 @@ struct Counters {
   std::atomic<std::uint64_t> presentPreAcquireWaitMaxNs{0};
   std::atomic<std::uint64_t> presentSetPropsWaits{0};
   std::atomic<std::uint64_t> presentSetPropsWaitNs{0};
+  // R-BACK-39.2 (Task B11, L1 subset) — frame-graph observe-path gauges.
+  // Wired from the FrameGraphBackend observe path (framegraph_backend.cpp):
+  // built/coalesced/dead/memoryless reflect the FrameGraph + OptimizerStats
+  // that runOptimizer produces per observed chunk; dagDumpsWritten counts
+  // observe invocations that ran the build+optimize export side-channel.
+  // L2/L3 / on-device counters (framegraph_icb_*,
+  // framegraph_virtual_attachment_misclassification_stale_persistent) are
+  // DEFERRED — they have no L1 callsite and would trip the callsite audit.
+  std::atomic<std::uint64_t> framegraphPassesBuilt{0};
+  std::atomic<std::uint64_t> framegraphPassesCoalesced{0};
+  std::atomic<std::uint64_t> framegraphPassesDead{0};
+  std::atomic<std::uint64_t> framegraphResourcesMemoryless{0};
+  std::atomic<std::uint64_t> framegraphDagDumpsWritten{0};
   // Sliding rings (R-BENCH-1.2): 64-sample percentile windows paired with the
   // *_max_ms counters above. Used to emit P50/P95/P99 in the shutdown report
   // so regression detection isn't outlier-driven by a single GC pause.
@@ -2047,6 +2060,12 @@ constexpr CounterEntry kCounterTable[] = {
     {"present_set_props_wait_p50_ms", CounterEntry::Kind::PercentileMs, nullptr, nullptr, &Counters::presentSetPropsWaitRing, 0.5},
     {"present_set_props_wait_p95_ms", CounterEntry::Kind::PercentileMs, nullptr, nullptr, &Counters::presentSetPropsWaitRing, 0.95},
     {"present_set_props_wait_p99_ms", CounterEntry::Kind::PercentileMs, nullptr, nullptr, &Counters::presentSetPropsWaitRing, 0.99},
+    // R-BACK-39.2 (Task B11, L1) — frame-graph observe-path counters.
+    {"framegraph_passes_built", CounterEntry::Kind::UnsignedCount, &Counters::framegraphPassesBuilt, nullptr, nullptr, 0.0},
+    {"framegraph_passes_coalesced", CounterEntry::Kind::UnsignedCount, &Counters::framegraphPassesCoalesced, nullptr, nullptr, 0.0},
+    {"framegraph_passes_dead", CounterEntry::Kind::UnsignedCount, &Counters::framegraphPassesDead, nullptr, nullptr, 0.0},
+    {"framegraph_resources_memoryless", CounterEntry::Kind::UnsignedCount, &Counters::framegraphResourcesMemoryless, nullptr, nullptr, 0.0},
+    {"framegraph_dag_dumps_written", CounterEntry::Kind::UnsignedCount, &Counters::framegraphDagDumpsWritten, nullptr, nullptr, 0.0},
 };
 
 void report() {
@@ -2222,6 +2241,29 @@ void countGpuCommandBufferError() {
 void countMetalBuffer(std::size_t bytes) {
   add(counters().metalBuffers);
   add(counters().metalBufferBytes, static_cast<std::uint64_t>(bytes));
+}
+
+// R-BACK-39.2 (Task B11, L1) — frame-graph observe-path counters. Magnitude
+// variants (built/coalesced/dead/memoryless) mirror the `add(field, n)` byte
+// counters; dagDumpsWritten is an event increment like countChunkAdmit.
+void countFramegraphPassesBuilt(std::uint64_t passes) {
+  add(counters().framegraphPassesBuilt, passes);
+}
+
+void countFramegraphPassesCoalesced(std::uint64_t passes) {
+  add(counters().framegraphPassesCoalesced, passes);
+}
+
+void countFramegraphPassesDead(std::uint64_t passes) {
+  add(counters().framegraphPassesDead, passes);
+}
+
+void countFramegraphResourcesMemoryless(std::uint64_t resources) {
+  add(counters().framegraphResourcesMemoryless, resources);
+}
+
+void countFramegraphDagDumpWritten() {
+  add(counters().framegraphDagDumpsWritten);
 }
 
 void countPipelineBuild() {
@@ -4017,6 +4059,17 @@ ShaderDecoderRejectSnapshot snapshotShaderDecoderRejects() {
       load(c.shaderDecoderRejectLabelUnsupported),
       load(c.shaderDecoderRejectDeclUsageUnsupported),
       load(c.shaderDecoderRejectDeclMethodUnsupported),
+  };
+}
+
+FramegraphObserveSnapshot snapshotFramegraphObserve() {
+  const Counters& c = counters();
+  return FramegraphObserveSnapshot{
+      load(c.framegraphPassesBuilt),
+      load(c.framegraphPassesCoalesced),
+      load(c.framegraphPassesDead),
+      load(c.framegraphResourcesMemoryless),
+      load(c.framegraphDagDumpsWritten),
   };
 }
 }  // namespace test

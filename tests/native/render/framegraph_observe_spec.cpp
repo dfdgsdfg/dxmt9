@@ -27,6 +27,7 @@
 #include "../../../src/dxmt9/render/framegraph_backend.hpp"
 
 #include "../../../src/dxmt9/dxmt9_backend_types.hpp"
+#include "../../../src/dxmt9/dxmt9_perf_counters.hpp"
 #include "../../../src/dxmt9/framegraph/fg_debug_export.hpp"
 
 #include <unistd.h>  // mkdtemp, rmdir
@@ -250,9 +251,48 @@ void testObserveExportsPreAndPostOptDags(const std::string& dir) {
   removeIfPresent(post);
 }
 
+// R-BACK-39.2 (Task B11, L1): the observe path bumps the framegraph_* perf
+// counters. DXMT_PERF_COUNTERS is set in main() before any perf use (the perf
+// system reads its enable flag once at process start). At L1-strict the
+// optimizer options are all off, so coalesced/dead/memoryless stay 0 — but
+// passes_built and dag_dumps_written MUST move on each observe export.
+void testObserveMovesPerfCounters(const std::string& dir) {
+  FrameGraphBackend backend;
+  const std::uint64_t seqId = 77;
+  ChunkSlot slot = buildScenario(seqId);
+
+  const auto before = dxmt9::perf::test::snapshotFramegraphObserve();
+
+  const std::string pre = dumpPath(dir, seqId, seqId, "pre-opt");
+  const std::string post = dumpPath(dir, seqId, seqId, "post-opt");
+  removeIfPresent(pre);
+  removeIfPresent(post);
+  backend.observeAndExportDagToDir(slot, /*frameId=*/seqId, dir);
+  removeIfPresent(pre);
+  removeIfPresent(post);
+
+  const auto after = dxmt9::perf::test::snapshotFramegraphObserve();
+
+  check(after.passesBuilt > before.passesBuilt,
+        "observe bumped framegraph_passes_built");
+  check(after.dagDumpsWritten == before.dagDumpsWritten + 1,
+        "observe bumped framegraph_dag_dumps_written by exactly one");
+  // L1-strict parity baseline: no coalesce/dce/memoryless pass runs.
+  check(after.passesCoalesced == before.passesCoalesced,
+        "L1 strict leaves framegraph_passes_coalesced unchanged");
+  check(after.passesDead == before.passesDead,
+        "L1 strict leaves framegraph_passes_dead unchanged");
+  check(after.resourcesMemoryless == before.resourcesMemoryless,
+        "L1 strict leaves framegraph_resources_memoryless unchanged");
+}
+
 }  // namespace
 
 int main() {
+  // R-BACK-39.2 (Task B11): perf counters latch their enable flag once at
+  // process start, so opt in before any perf::count* runs.
+  setenv("DXMT_PERF_COUNTERS", "1", /*overwrite=*/1);
+
   std::string dir;
   try {
     // The DXMT9_RENDERER_DUMP_DAG env var is intentionally left UNSET for the
@@ -265,6 +305,9 @@ int main() {
 
     // 2. Explicit-dir export writes both pre-opt and post-opt DAG JSON.
     testObserveExportsPreAndPostOptDags(dir);
+
+    // 3. Observe path moves the R-BACK-39.2 framegraph_* perf counters.
+    testObserveMovesPerfCounters(dir);
 
     rmdir(dir.c_str());
   } catch (const TestFailure& failure) {
