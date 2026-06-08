@@ -11,8 +11,12 @@
 
 #include "backend_interface.hpp"
 
+#include "../framegraph/fg_optimizer.hpp"  // framegraph::OptimizerOptions
+
 #include <cstddef>
+#include <cstdint>
 #include <optional>
+#include <string>
 
 namespace dxmt9::render {
 
@@ -40,7 +44,10 @@ class FrameGraphBackend final : public IRenderBackend {
   FrameGraphBackend();
   ~FrameGraphBackend() override = default;
 
-  // L0: pure delegate — identical to the traditional path.
+  // L1 (R-BACK-40.5): the Metal encode stays byte-identical — onChunkReady
+  // delegates verbatim to encoders::encodeChunk. The only addition over L0 is
+  // the side-effect-neutral observe+export side-channel below, which builds and
+  // dumps the Frame Graph DAG for debugging WITHOUT touching the encode.
   std::optional<core::metalqueue::QueueSubmissionRecord> onChunkReady(
       encoders::EncodeContext& ctx,
       std::size_t slotIndex,
@@ -48,8 +55,45 @@ class FrameGraphBackend final : public IRenderBackend {
 
   BackendMode mode() const override { return BackendMode::FrameGraph; }
 
+  // Resolved optimizer options for this backend (from the L0 feature set). At
+  // L0/L1 strict the feature set is empty, so every option is false (parity
+  // baseline). Exposed for unit testing the option resolution.
+  const framegraph::OptimizerOptions& optimizerOptions() const {
+    return options_;
+  }
+
+  // Device-free observe+export side-channel (R-BACK-39.7 side-effect neutral).
+  // Early-outs when the dump dir is unset AND no features are enabled (zero
+  // overhead on the default render path). Otherwise forwards to
+  // observeAndExportDagToDir with the resolved dump directory. onChunkReady
+  // calls this before delegating to encoders::encodeChunk.
+  //
+  // Public so the device-free unit test can drive the early-out directly:
+  // onChunkReady is device-gated (needs an EncodeContext / MTLDevice) and the
+  // class is `final`, so a test subclass / friend is not available.
+  void maybeObserveAndExportDag(const core::ChunkSlot& slot,
+                                std::uint64_t frameId) const;
+
+  // Explicit-directory observe+export, factored out so the unit test can drive
+  // the build->optimize->serialize->write composition with a temp dir WITHOUT
+  // fighting framegraph::dumpDagDir()'s static DXMT9_RENDERER_DUMP_DAG cache
+  // (which cannot be reset in-process). Builds the FrameGraph from `slot`,
+  // writes the pre-opt DAG JSON, runs the resolved optimizer passes, then writes
+  // the post-opt DAG JSON, each as
+  // `<dir>/dag-frame<frameId>-chunk<slot.seqId>-<stage>.json`. Reads only `slot`
+  // and writes only those files — it must NOT mutate any shared / queue / Metal
+  // state, so an enabled dump leaves the Metal stream byte-identical to a
+  // disabled run. Never throws; an unwritable path is silently skipped.
+  void observeAndExportDagToDir(const core::ChunkSlot& slot,
+                                std::uint64_t frameId,
+                                const std::string& dumpDir) const;
+
  private:
   RendererFeatureSet features_;
+  // R-BACK-40.5: at L1 strict the feature set is empty, so these stay all-false
+  // (parity baseline). Memoryless stays gated behind an explicit relaxation
+  // (R-BACK-40.4) which does not exist yet, so it remains off here too.
+  framegraph::OptimizerOptions options_{};
 };
 
 }  // namespace dxmt9::render
