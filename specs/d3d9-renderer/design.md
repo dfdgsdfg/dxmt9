@@ -189,6 +189,27 @@ to `TraditionalBackend` with a single warning. The factory is called once at
 encoding flow; its implementation is a forwarding shim that does not change
 any existing call sites.
 
+### 2.1 Implementation name mapping (spec concept → code symbol)
+
+This spec and `specs/backend/design.md` use conceptual names that do **not**
+exist as code symbols. The implementation maps them onto the existing
+data-oriented encode path, which is already function-separated (so the §15
+"split" is interface introduction, not a class refactor):
+
+| Spec concept | Actual code symbol | Location |
+|---|---|---|
+| `ArgumentEncodingContext` (AEC) | `encoders::EncodeContext` (a view bundle, **not** a stateful class) + the free functions `encoders::beginRenderPass` / `encodeDraw` / `encodeChunk` | `src/dxmt9/dxmt9_draw_encoder.{hpp,mm}` |
+| `ChunkView` | `core::ChunkSlot` (SoA, already-imported per-kind record vectors: `commandHeaders`, `drawHotStates`, `drawParams`, `clearRecords`, …) | `src/dxmt9/dxmt9_backend_types.hpp` |
+| `ImportContext` / the `onChunkReady` hook | the `(slotIndex, const core::ChunkSlot&)` callback + `CommandQueue::makeEncodeContext()` boundary | `src/dxmt9/dxmt9_command_queue.cpp` (encode-loop lambda) |
+| AEC "encoder lifecycle" vs "draw emission" split (§15) | already distinct functions: `beginRenderPass` (open) / `encodeDraw` (+ a clear-within-pass) (emit) / `endEncoding` (close) | `src/dxmt9/dxmt9_draw_encoder.mm` |
+| `IExternalDrawEmitter` | new interface wrapping `encoders::encodeDraw` + a clear emitter; `endEncoding`/`beginRenderPass` stay caller-owned | new `src/dxmt9/render/` |
+
+The Frame Graph backend therefore consumes `ChunkSlot` (the same input
+`encoders::encodeChunk` consumes), not the PE-side `D9CCommandRecord*` wire
+records (those are decoded into `ChunkSlot` upstream on the PE→unix path in
+`src/d3d9/device_c_chunk_replay.cpp`). The §4.1 "chunk record kind → builder
+action" table is read against `ChunkSlot.commandHeaders`, not the wire enum.
+
 ---
 
 ## 3. Frame Graph Data Structures
