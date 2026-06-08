@@ -45,6 +45,8 @@ dxmt9_runtime_srcs = files(
   'dxmt9_queue.cpp',
   'dxmt9_queue_trace.cpp',
   'dxmt9_uniform_dirty.cpp',
+  'framegraph/fg_builder.cpp',
+  'framegraph/fg_debug_export.cpp',
   'render/backend_factory.cpp',
   'render/decision_recorder.cpp',
   'render/framegraph_backend.cpp',
