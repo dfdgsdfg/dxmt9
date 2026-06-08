@@ -53,6 +53,7 @@ test('dxmt9-smoke', smoke)
 subdir('native/core')
 subdir('native/shader')
 subdir('native/backend')
+subdir('native/render')
 subdir('native/bridge')
 
 shader_runner = executable(

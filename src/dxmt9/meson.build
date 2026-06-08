@@ -45,6 +45,9 @@ dxmt9_runtime_srcs = files(
   'dxmt9_queue.cpp',
   'dxmt9_queue_trace.cpp',
   'dxmt9_uniform_dirty.cpp',
+  'render/backend_factory.cpp',
+  'render/framegraph_backend.cpp',
+  'render/traditional_backend.cpp',
 ) + dxmt9_shader_pipeline_srcs
 
 dxmt9_runtime_internal_inc = include_directories('.', '..')
