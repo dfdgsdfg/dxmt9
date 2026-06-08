@@ -457,6 +457,50 @@ color attachments DontCare-load, and runs an in-chunk look-ahead at
 that are about to be cleared or overwritten. `R-BACK-2.6` is amended in
 that spec to allow conditional `MTLStoreActionDontCare` on RT change.
 
+### 3.1 `IDecisionRecorder` divergence seam (R-BACK-39.3)
+
+The modern-renderer transition (`specs/d3d9-renderer/`) needs a way to compare
+the modern path's per-chunk decisions against what the traditional encode path
+above would have decided, behind `DXMT9_RENDERER_LOG_DIVERGENCE=1`. The
+backend owns the recording interface because the decisions being compared
+(pass begin, per-draw PSO/draw, per-attachment load/store action, encoder
+split) are encode-lifecycle decisions described in this section. This is the
+cross-spec ownership noted in `specs/d3d9-renderer/design.md` §15.4.
+
+`IDecisionRecorder` (`src/dxmt9/render/decision_recorder.hpp`) is a small,
+POD-friendly recording interface with four record points that mirror the real
+encode decision sites:
+
+| Record point | Mirrors |
+|---|---|
+| `recordPassBegin(rt0, depth, colorCount)` | `encoders::beginRenderPass` attachment selection |
+| `recordDraw(psoKey, count, flags)` | `encoders::encodeDraw` |
+| `recordLoadStore(handle, load, storeOrProof)` | `RenderPass{Depth,Color}StoreProof` selection |
+| `recordEncoderSplit(reason)` | `perf::EncoderSplitReason` boundary |
+
+`DecisionRecord` is a flat POD (kind enum + three `u64` lanes) with no owning
+pointers, so a recorded sequence is trivially copyable and comparable.
+`VectorDecisionRecorder` appends records to a `std::vector` it exclusively
+owns, and `compareDecisions(modern, reference)` is a pure helper that reports
+whether two sequences diverge and at which index.
+
+**Side-effect neutrality (R-BACK-39.3).** A recorder is a pure observer: an
+implementation must not call any Metal API, allocate/commit an
+`MTLCommandBuffer`, invoke the presenter, mutate the PSO/shader cache or
+`MTLBinaryArchive`, touch `MTLHeap` residency or retained-handle sets, or
+update queue-level fence state. A divergence run must never change which Metal
+commands a non-divergence run would emit. `VectorDecisionRecorder` satisfies
+this by mutating only its own storage.
+
+**L0 scope / L1 deferral.** At L0 the FrameGraph backend is a pure delegate
+(byte-identical to traditional), so there is nothing to diverge yet. L0 lands
+only the interface, the POD record, the vector-backed recorder, the env
+resolver (`resolveLogDivergence` / `logDivergenceEnabledFromEnv`), and the
+unit-tested `compareDecisions` helper. The full dry-run engine — walking a
+chunk through a recorder-only adapter that reproduces the `TraditionalBackend`
+decision sequence and emitting per-chunk divergence points — is **deferred to
+L1**, when FrameGraph builds a DAG and a real divergence exists to detect.
+
 ---
 
 ## 4. Argument Buffer Binding
