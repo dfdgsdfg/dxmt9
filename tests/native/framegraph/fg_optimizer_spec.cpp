@@ -328,6 +328,85 @@ void testReorderPreservesEdges() {
   }
 }
 
+// reorder respects an ANTI-dependency (WAW / WAR) edge that has no RAW edge
+// between the two passes. The edge points P_x -> P_y where P_x has the HIGHER
+// original index, so the only way P_x can precede P_y in the output is if the
+// topo-sort honoured the edge. WITHOUT the edge, both passes are roots and the
+// tie-break (smallest original index first) would emit P_y before P_x, flipping
+// the order -> the edge is load-bearing.
+void testReorderRespectsAntiDepEdge() {
+  FrameGraph g;
+  // Original submission order: pass0 = P_y (rt A), pass1 = P_x (rt B).
+  addRenderPass(g, 0xA000u, 0u);  // 0 = P_y : writes rt A   (later writer / re-entry)
+  addRenderPass(g, 0xB000u, 0u);  // 1 = P_x : writes rt B
+  // WAW/WAR-style anti-dependency: P_x (pass1) must precede P_y (pass0) on some
+  // resource R. No RAW edge exists between them; this is purely the new
+  // anti-dependency constraint. src=1 (higher index) -> dst=0 (lower index).
+  g.edges.push_back(Edge{.src_pass = 1, .dst_pass = 0,
+                         .resource = ResourceHandle{0x5555u}});
+  // Resource access log consistent with the edge (R written in pass1, then a
+  // later anti-conflicting access in pass0 in the desired final order). The
+  // exact AccessKind does not change reorder (it consumes edges, not kinds), but
+  // keep the log self-consistent.
+  ResourceNode& r = addResource(g, 0x5555u);
+  access(r, 1, AccessKind::Write);
+  access(r, 0, AccessKind::Write);
+  runLifetime(g);
+
+  runReorder(g);
+
+  std::size_t pos_x = g.passes.size();  // rt B
+  std::size_t pos_y = g.passes.size();  // rt A
+  for (std::size_t i = 0; i < g.passes.size(); ++i) {
+    if (g.passes[i].targets.color[0] == TextureHandle{0xB000u}) pos_x = i;
+    if (g.passes[i].targets.color[0] == TextureHandle{0xA000u}) pos_y = i;
+  }
+  check(pos_x != g.passes.size() && pos_y != g.passes.size(),
+        "both passes present after reorder");
+  check(pos_x < pos_y,
+        "anti-dependency edge P_x -> P_y forced P_x before P_y, overriding the "
+        "smallest-original-index tie-break that would otherwise emit P_y first");
+  // The edge set is preserved and src still precedes dst after remap.
+  bool edge_present = false;
+  for (const Edge& e : g.edges) {
+    check(e.src_pass < e.dst_pass, "anti-dep edge src precedes dst after reorder");
+    if (e.resource == ResourceHandle{0x5555u}) {
+      edge_present = true;
+    }
+  }
+  check(edge_present, "anti-dependency edge survives reorder remap");
+}
+
+// passcoalesce must NOT merge a same-attachment pair when an intervening pass is
+// wedged by an anti-dependency: the pair (P_a, P_c) write rt A, and the
+// intervening pass P_b BOTH consumes from the pair and produces for the pair via
+// anti-dependency edges, so it can move neither before P_a nor after P_c.
+void testPassCoalesceBlockedByAntiDep() {
+  FrameGraph g;
+  addRenderPass(g, 0xA000u, 0u);  // 0 = P_a : writes rt A
+  addRenderPass(g, 0x9000u, 0u);  // 1 = P_b : intervening, different target
+  addRenderPass(g, 0xA000u, 0u);  // 2 = P_c : re-writes rt A (matches P_a)
+  // Anti-dependency wedge: P_a -> P_b (pair feeds P_b, e.g. WAR on some resource
+  // S) AND P_b -> P_c (P_b feeds the pair, e.g. WAW on some resource T). P_b is
+  // therefore reachable-from P_a and reaches P_c -> Move::Blocked -> not
+  // coalescable. Neither edge is a RAW edge between P_a and P_c.
+  g.edges.push_back(Edge{.src_pass = 0, .dst_pass = 1,
+                         .resource = ResourceHandle{0x7777u}});
+  g.edges.push_back(Edge{.src_pass = 1, .dst_pass = 2,
+                         .resource = ResourceHandle{0x8888u}});
+  ResourceNode& a = addResource(g, 0xA000u);
+  access(a, 0, AccessKind::Write);
+  access(a, 2, AccessKind::Write);
+  runLifetime(g);
+
+  OptimizerStats stats{};
+  runPassCoalesce(g, &stats);
+
+  check(stats.pass_coalesced_count == 0,
+        "anti-dependency-wedged intervening pass blocks coalesce");
+  check(g.passes.size() == 3, "all three passes survive (no merge)");
+}
+
 void testReorderIdentityWhenNoEdges() {
   FrameGraph g;
   addRenderPass(g, 0xA000u, 0u);
@@ -453,6 +532,8 @@ int main() {
     testDceOnDropsProvablyDead();
     testDceNeverDropsPresentOrQuery();
     testReorderPreservesEdges();
+    testReorderRespectsAntiDepEdge();
+    testPassCoalesceBlockedByAntiDep();
     testReorderIdentityWhenNoEdges();
     testMemorylessClassifier();
     testMemorylessBackbufferSkipped();

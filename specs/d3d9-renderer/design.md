@@ -532,11 +532,32 @@ construction. Lookahead happens in the optimizer phase (§5).
 
 ### 4.2 Dependency edge inference
 
-For each `DrawDescriptor` the builder reads, it walks the access log of every
-referenced resource. If the most recent prior write is from a different pass,
-an edge `prior_pass → current_pass` is recorded. Self-edges (same pass) are
-omitted. Edges are stored in CSR form (compressed sparse row) for fast
-iteration in §5 reorder.
+The edge set is a **hazard model**, not merely producer→consumer: it must
+capture **true (RAW), anti (WAR), and output (WAW)** dependencies. This is a
+correctness requirement, not analysis convenience — the edge-consuming
+optimizer passes `reorder` (§5.6 topological sort over the edge set) and
+`passcoalesce` (§5.4 intervening-pass relocation, decided by reachability over
+the edge set) would otherwise legally move a write before a prior read (WAR) or
+swap two writes to the same resource (WAW) and corrupt frame contents
+(R-BACK-32.9). Every edge points `earlier_pass → later_pass` — the `dst` pass
+must run after `src` (prior accesses always have `pass ≤ current`, and
+self-edges are dropped, so `src < dst`).
+
+For each resource access the builder records, against the **strictly-prior**
+access log of that resource:
+
+| New access | Edges added (`src → dst`, src = prior pass) |
+|---|---|
+| Read | **RAW**: most-recent prior Write → this read |
+| Write | **WAW**: most-recent prior Write → this write; **WAR**: every prior Read after that write → this write |
+| ReadWrite | both rows above (it is a read *and* a write) |
+
+`Clear` counts as a Write. Self-edges (same pass — e.g. multiple draws in one
+pass touching the same resource) are omitted; duplicate `(src, dst, resource)`
+edges are suppressed. Edges are stored as a flat `Vector<Edge>` and iterated by
+§5 reorder/passcoalesce and serialized by the §3.5 debug export. The
+`A → B → A` attachment re-entry that is a clear-then-write therefore surfaces as
+a WAW edge `P_a → P_a'` (in addition to its resource access log).
 
 ### 4.3 Determinism
 

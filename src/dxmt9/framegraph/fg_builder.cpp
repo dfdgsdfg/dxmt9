@@ -174,6 +174,9 @@ private:
       return;
     }
     ResourceNode& node = resourceFor(handle);
+    // Infer hazard edges against the STRICTLY-PRIOR access log (before this
+    // access is appended). All edges point earlier_pass -> later_pass.
+    addDependencyEdges(node, pass_index, kind, handle);
     recordAccess(node, pass_index, kind, stage);
     if (pass_index < node.first_use_pass) {
       node.first_use_pass = pass_index;
@@ -181,41 +184,72 @@ private:
     if (pass_index > node.last_use_pass) {
       node.last_use_pass = pass_index;
     }
-    if (kind == AccessKind::Read) {
-      maybeAddProducerEdge(node, pass_index, handle);
-    }
   }
 
-  // §4.2: when a Read's most recent prior Write came from a different pass,
-  // record a producer->consumer edge. Self-edges (same pass) are omitted and
-  // duplicate edges are suppressed (the access log can contain many reads of
-  // the same producer in the consuming pass).
-  void maybeAddProducerEdge(const ResourceNode& node, u32 consumer_pass,
-                            ResourceHandle handle) {
-    bool found_writer = false;
-    u32 producer_pass = 0;
-    // Walk chronologically; the last Write before this read wins. The current
-    // read has not been appended yet, so the whole log is "prior".
-    for (const auto& access : node.accesses) {
-      const auto kind = static_cast<AccessKind>(access.access_kind);
-      if (kind == AccessKind::Write || kind == AccessKind::ReadWrite ||
-          kind == AccessKind::Clear) {
-        found_writer = true;
-        producer_pass = access.pass_index;
-      }
-    }
-    if (!found_writer || producer_pass == consumer_pass) {
+  static bool accessReads(AccessKind k) {
+    return k == AccessKind::Read || k == AccessKind::ReadWrite;
+  }
+  static bool accessWrites(AccessKind k) {
+    return k == AccessKind::Write || k == AccessKind::Clear ||
+           k == AccessKind::ReadWrite;
+  }
+
+  // Insert a dependency edge `src -> dst` on `handle`. Self-edges (same pass)
+  // are omitted and duplicate (src, dst, resource) edges are suppressed.
+  void addEdgeOnce(u32 src, u32 dst, ResourceHandle handle) {
+    if (src == dst) {
       return;
     }
     for (const auto& edge : graph_.edges) {
-      if (edge.src_pass == producer_pass && edge.dst_pass == consumer_pass &&
+      if (edge.src_pass == src && edge.dst_pass == dst &&
           edge.resource == handle) {
         return;
       }
     }
-    graph_.edges.push_back(Edge{.src_pass = producer_pass,
-                                .dst_pass = consumer_pass,
-                                .resource = handle});
+    graph_.edges.push_back(
+        Edge{.src_pass = src, .dst_pass = dst, .resource = handle});
+  }
+
+  // §4.2 hazard-edge inference. The edge set must capture true (RAW), anti
+  // (WAR), and output (WAW) dependencies so the edge-consuming optimizer passes
+  // (reorder topo-sort §5.6, passcoalesce relocation §5.4) preserve D3D9
+  // ordering. `node.accesses` holds only strictly-prior accesses here.
+  //   new Read  : RAW = most-recent prior Write -> this read.
+  //   new Write : WAW = most-recent prior Write -> this write, and
+  //               WAR = every prior Read after that write -> this write.
+  // ReadWrite is both a read and a write; Clear counts as a write. Every edge
+  // points earlier_pass -> later_pass (prior accesses have pass <= current).
+  void addDependencyEdges(const ResourceNode& node, u32 pass, AccessKind kind,
+                          ResourceHandle handle) {
+    const bool is_read = accessReads(kind);
+    const bool is_write = accessWrites(kind);
+
+    // Position of the most-recent prior write in the chronological log.
+    int last_write_idx = -1;
+    for (std::size_t i = 0; i < node.accesses.size(); ++i) {
+      if (accessWrites(static_cast<AccessKind>(node.accesses[i].access_kind))) {
+        last_write_idx = static_cast<int>(i);
+      }
+    }
+
+    if (is_read && last_write_idx >= 0) {
+      addEdgeOnce(node.accesses[last_write_idx].pass_index, pass, handle);  // RAW
+    }
+
+    if (is_write) {
+      if (last_write_idx >= 0) {
+        addEdgeOnce(node.accesses[last_write_idx].pass_index, pass, handle);  // WAW
+      }
+      // WAR: every read after the most-recent prior write (or every read when
+      // there is no prior write) -> this write.
+      for (std::size_t i = static_cast<std::size_t>(last_write_idx + 1);
+           i < node.accesses.size(); ++i) {
+        if (accessReads(
+                static_cast<AccessKind>(node.accesses[i].access_kind))) {
+          addEdgeOnce(node.accesses[i].pass_index, pass, handle);  // WAR
+        }
+      }
+    }
   }
 
   // --- Command handlers -----------------------------------------------------

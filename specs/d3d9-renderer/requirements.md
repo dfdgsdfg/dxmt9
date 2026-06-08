@@ -263,6 +263,22 @@ records the pass index, the access kind (`read|write|read_write|preserve|
 clear`), and the stage (`vertex|fragment|compute|copy`). Resource handles use
 the same opaque-handle space as the traditional path.
 
+**R-BACK-32.9** The Frame Graph dependency edge set must be a complete hazard
+model: it must record **true (RAW: write → later read)**, **anti (WAR: read →
+later write)**, and **output (WAW: write → later write)** dependencies between
+passes for every resource. This is a correctness contract for the
+edge-consuming optimizer passes: `reorder` (R-BACK-32.5 / design §5.6) orders
+passes by the edge set and `passcoalesce` (R-BACK-34 / design §5.4) relocates
+intervening passes by reachability over the edge set, so a RAW-only edge set
+would let either pass move a write before a prior read or swap two writes and
+violate the observable-equivalence contract (R-BACK-30.3). Every edge points
+`earlier_pass → later_pass`; self-edges (same pass) and duplicate
+`(src, dst, resource)` edges are omitted. A `progressive`/`aggressive` profile
+must not enable `reorder` or `passcoalesce` unless the active builder produces
+WAR and WAW edges (a builder that emits RAW only must keep both passes
+disabled). The DAG observe/debug-export path (R-BACK-39.7) does not consume
+edges, so it is unaffected by edge completeness.
+
 **R-BACK-32.4** The Frame Graph must finalize the current chunk's DAG when any
 of these boundaries occur inside the chunk: an in-chunk `Lock`/`Unlock`
 record, a `GetRenderTargetData` record, a `StretchRect` that crosses

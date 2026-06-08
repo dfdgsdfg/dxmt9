@@ -225,6 +225,112 @@ void testCrossPassEdge() {
   check(found, "RAW edge pass0 -> pass1 on rt0 inferred");
 }
 
+// WAW (output dependency) — the A->B->A clear-then-write re-entry, exactly the
+// 3DMark05 shape. rt0 is written in pass P_a, an intervening pass uses a
+// DIFFERENT target (so it neither reads nor writes rt0 -> no RAW/WAR coupling
+// to rt0), then rt0 is written again in pass P_c. Under the old RAW-only model
+// this produced edges=0 between P_a and P_c; the new model must emit a WAW edge
+// P_a -> P_c on rt0 (earlier -> later).
+void testWawReentryEdge() {
+  ChunkSlot slot;
+  const Handle rt0{0xA000u};
+  const Handle ds{0xD000u};
+  const Handle rt1{0xB000u};
+
+  appendClearColor(slot, rt0, ds);   // command 0: clear rt0  -> pass 0 (write rt0)
+  appendDrawRun(slot, rt0, ds);      // command 1: draw rt0   -> continues pass 0
+  appendDrawRun(slot, rt1, {});      // command 2: draw rt1   -> pass 1 (different RT)
+  appendClearColor(slot, rt0, ds);   // command 3: clear rt0  -> pass 2 (re-enter, write rt0)
+  appendDrawRun(slot, rt0, ds);      // command 4: draw rt0   -> continues pass 2
+
+  const FrameGraph graph = buildFrameGraph(slot, 0);
+
+  // pass0 (clear+draw rt0), pass1 (draw rt1), pass2 (re-clear+draw rt0).
+  check(graph.passes.size() == 3,
+        "A->B->A re-entry produces three render passes");
+  check(graph.passes[0].targets.color[0] == TextureHandle{0xA000u},
+        "pass 0 writes rt0");
+  check(graph.passes[1].targets.color[0] == TextureHandle{0xB000u},
+        "pass 1 uses a different target (rt1)");
+  check(graph.passes[2].targets.color[0] == TextureHandle{0xA000u},
+        "pass 2 re-writes rt0");
+
+  // The WAW edge: most-recent prior write of rt0 (pass 0) -> the re-write (pass 2).
+  bool waw_0_to_2 = false;
+  for (const Edge& e : graph.edges) {
+    check(e.src_pass != e.dst_pass, "no self-edges emitted");
+    check(e.src_pass < e.dst_pass, "every edge points earlier_pass -> later_pass");
+    if (e.src_pass == 0 && e.dst_pass == 2 &&
+        e.resource == ResourceHandle{0xA000u}) {
+      waw_0_to_2 = true;
+    }
+  }
+  check(waw_0_to_2,
+        "WAW edge pass0 -> pass2 on rt0 emitted for the clear-then-write "
+        "re-entry (was edges=0 under the old RAW-only model)");
+
+  // The intervening rt1 pass must NOT have spuriously coupled to rt0.
+  for (const Edge& e : graph.edges) {
+    const bool touches_pass1 = (e.src_pass == 1 || e.dst_pass == 1);
+    check(!(touches_pass1 && e.resource == ResourceHandle{0xA000u}),
+          "intervening rt1 pass has no rt0 edge");
+  }
+}
+
+// WAR (anti-dependency) — a resource is READ (sampled) in pass P_a and later
+// WRITTEN as a render target in pass P_c. There is NO prior write before the
+// read, so the new Write must emit a WAR edge from the prior read to the write
+// (P_a -> P_c) and there must be NO RAW edge (there was no earlier writer).
+void testWarReadThenWriteEdge() {
+  ChunkSlot slot;
+  const Handle rtX{0xC000u};  // first pass's render target
+  const Handle texT{0xE000u}; // sampled in pass 0, then written as RT in pass 1
+  const Handle ds{0xD000u};
+
+  // command 0: draw to rtX sampling texT -> pass 0 READS texT (no prior write).
+  appendDrawRun(slot, rtX, ds, /*sampled=*/texT);
+  // command 1: draw to texT as the render target -> pass 1 WRITES texT.
+  appendDrawRun(slot, texT, {});
+
+  const FrameGraph graph = buildFrameGraph(slot, 0);
+
+  check(graph.passes.size() == 2, "read pass then write-as-RT pass");
+  check(graph.passes[0].targets.color[0] == TextureHandle{0xC000u},
+        "pass 0 renders to rtX");
+  check(graph.passes[1].targets.color[0] == TextureHandle{0xE000u},
+        "pass 1 renders to texT (the previously-read resource)");
+
+  // The texT access log must be Read(pass0) then Write(pass1).
+  const std::size_t texT_idx = findResourceIndex(graph, ResourceHandle{0xE000u});
+  check(texT_idx != graph.resources.size(), "texT resource node exists");
+  const ResourceNode& texT_node = graph.resources[texT_idx];
+  check(accessKindOf(texT_node.accesses.front()) == AccessKind::Read,
+        "texT is first read (sampled) in pass 0");
+
+  bool war_0_to_1 = false;
+  bool any_raw_on_texT = false;
+  for (const Edge& e : graph.edges) {
+    check(e.src_pass < e.dst_pass, "every edge points earlier_pass -> later_pass");
+    if (e.resource == ResourceHandle{0xE000u}) {
+      if (e.src_pass == 0 && e.dst_pass == 1) {
+        war_0_to_1 = true;
+      }
+    }
+  }
+  // There is exactly one writer of texT (pass1) and it is the LAST access, so a
+  // RAW edge (write->read) on texT is impossible by construction; assert that
+  // the only texT edge is the WAR one.
+  for (const Edge& e : graph.edges) {
+    if (e.resource == ResourceHandle{0xE000u} && !(e.src_pass == 0 && e.dst_pass == 1)) {
+      any_raw_on_texT = true;
+    }
+  }
+  check(war_0_to_1,
+        "WAR edge pass0 -> pass1 on texT emitted (read-then-write-as-RT)");
+  check(!any_raw_on_texT,
+        "no spurious non-WAR edge on texT (read precedes the only write)");
+}
+
 void testReadbackClassifier() {
   ChunkSlot slot;
   const Handle rt0{0x111u};
@@ -277,6 +383,8 @@ int main() {
     testDrawRefs();
     testResourceAccessLogs();
     testCrossPassEdge();
+    testWawReentryEdge();
+    testWarReadThenWriteEdge();
     testReadbackClassifier();
     testEmptyChunk();
     testDeterminism();
