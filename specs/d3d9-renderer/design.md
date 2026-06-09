@@ -203,6 +203,7 @@ data-oriented encode path, which is already function-separated (so the §15
 | `ImportContext` / the `onChunkReady` hook | the `(slotIndex, const core::ChunkSlot&)` callback + `CommandQueue::makeEncodeContext()` boundary | `src/dxmt9/dxmt9_command_queue.cpp` (encode-loop lambda) |
 | AEC "encoder lifecycle" vs "draw emission" split (§15) | already distinct functions: `beginRenderPass` (open) / `encodeDraw` (+ a clear-within-pass) (emit) / `endEncoding` (close) | `src/dxmt9/dxmt9_draw_encoder.mm` |
 | `IExternalDrawEmitter` | new interface wrapping `encoders::encodeDraw` + a clear emitter; `endEncoding`/`beginRenderPass` stay caller-owned | new `src/dxmt9/render/` |
+| DAG observe + export side-channel (R-BACK-39.7) | `render::DagObserver` — a shared, backend-agnostic observer owned by BOTH `TraditionalBackend` and `FrameGraphBackend` (each holds a `render::DagObserver observer_` member); the backend invokes `observer_.observeAndExport(slot)` from `onChunkReady`. It carries the owning backend's resolved `framegraph::OptimizerOptions` (default/all-off for traditional) plus the encode-thread-local `observe_frame_` counter | new `src/dxmt9/render/dag_observer.{hpp,cpp}` |
 
 The Frame Graph backend therefore consumes `ChunkSlot` (the same input
 `encoders::encodeChunk` consumes), not the PE-side `D9CCommandRecord*` wire
@@ -388,11 +389,27 @@ and returns owned bytes; it holds no Metal, queue, cache, or pool
 reference, so it cannot perturb the state R-BACK-39.7 requires it to
 leave untouched.
 
-`FrameGraphBackend::onChunkReady` invokes it at two points when
-`DXMT9_RENDERER_DUMP_DAG` is set: once right after `fg_builder` finishes
-(`stage="pre-opt"`) and once right after the optimizer pipeline finishes
-(`stage="post-opt"`). Emitting both lets a reader diff exactly what
-`dce` / `passcoalesce` / `memoryless` / `reorder` / `loadstore` changed.
+The shared `render::DagObserver` (§2.1; `render/dag_observer.{hpp,cpp}`) drives
+this at two points when `DXMT9_RENDERER_DUMP_DAG` is set: once right after
+`fg_builder` finishes (`stage="pre-opt"`) and once right after the optimizer
+pipeline finishes (`stage="post-opt"`). Emitting both lets a reader diff exactly
+what `dce` / `passcoalesce` / `memoryless` / `reorder` / `loadstore` changed.
+
+The dump is a **backend-agnostic perf/debug side-channel, not an encode input**
+(R-BACK-39.7). The same `render::DagObserver` is owned by BOTH backends — each
+holds a `DagObserver observer_` member and calls `observer_.observeAndExport(slot)`
+from `onChunkReady` before delegating to `encoders::encodeChunk`. Which backend
+encodes is irrelevant to the observation: on `traditional` the observer is
+constructed with default (all-off) `OptimizerOptions{}`, so the observed
+post-opt DAG reflects the order-preserving baseline while the traditional encode
+path stays unchanged and byte-identical; on `framegraph` the observer carries
+that backend's resolved feature options. The path is gated purely on
+`DXMT9_RENDERER_DUMP_DAG` — with the dump dir unset `observeAndExport` returns
+after one cached-optional check, so the default render path on either backend
+pays no observe cost and emits the identical Metal stream. The export itself
+(`serializeDagJson` / `writeDagDump`) records the small `framegraph_*` perf
+counters; those are process-global atomics that no-op unless `DXMT_PERF_COUNTERS`
+is set, keeping the channel observation-only.
 
 JSON is the primary format (one object per chunk):
 
@@ -450,10 +467,10 @@ silently (single warning, once) if the path is unwritable, so a dump
 misconfiguration cannot fail a render.
 
 **Per-frame chunk filter (`DXMT9_RENDERER_DUMP_DAG_FRAME`).** Because a real
-app emits thousands of chunks per frame, `FrameGraphBackend` carries a private
-inter-present frame counter `observe_frame_` (1-based). It is touched only on
-the encode thread (`maybeObserveAndExportDag` is the single writer), so it
-needs no atomic. A "frame" is the inter-present interval: every chunk belongs
+app emits thousands of chunks per frame, the shared `render::DagObserver`
+carries a private inter-present frame counter `observe_frame_` (1-based). It is
+touched only on the encode thread (`observeAndExport` is the single writer), so
+it needs no atomic. A "frame" is the inter-present interval: every chunk belongs
 to the current `observe_frame_`, and a chunk that **contains** a Present —
 detected by `framegraph::chunkContainsPresent(slot)`, a single cheap scan of
 `slot.commandHeaders` for `core::MetalCommandKind::Present` — is the last chunk
@@ -473,7 +490,7 @@ target may be widened to a ±radius window.
 nullptr / empty / `"0"` / non-numeric → `0` (single frame); a positive decimal
 → that radius `R`. `dumpDagFrameRadius()` reads the env once with the same
 static-const pattern. The membership test is the file-local helper
-`frameInDumpWindow(frame, target, radius)` in `framegraph_backend.cpp`: a chunk
+`frameInDumpWindow(frame, target, radius)` in `dag_observer.cpp`: a chunk
 dumps when `observe_frame_` is in the inclusive window
 `[max(1, target-radius), target+radius]`. The low end is clamped at `1`
 (inter-present frames are 1-based, so a wide radius never selects `frame 0`),
@@ -481,7 +498,7 @@ and `radius == 0` degenerates to the original `frame == target` test. The radius
 is honored only when a target frame is set; an unset target still dumps every
 chunk.
 
-When the chunk's observe frame is outside the window, `maybeObserveAndExportDag`
+When the chunk's observe frame is outside the window, `observeAndExport`
 runs only the Present scan, advances the counter if a Present was seen, and
 returns **before** building the FrameGraph — so a filtered-out chunk costs no
 build / optimizer / serialize / write work, and the counter still advances so

@@ -889,6 +889,20 @@ render-pass re-entry and store/load investigations tracked in
 final-writer oracle (per-pixel ownership after blend/depth remains a
 rasterization-downstream property outside the DAG's scope).
 
+The DAG debug dump is **backend-agnostic**: it must be available whenever
+`DXMT9_RENDERER_DUMP_DAG` is set, on BOTH the `traditional` and `framegraph`
+render modes, decoupled from `DXMT9_RENDER_MODE`. Because the dump is a pure
+observation side-channel — which backend actually encodes a chunk is irrelevant
+to it — both backends own the shared observer (`render::DagObserver`, design.md
+§2.1 / §3.5) and invoke it from `onChunkReady` before delegating to
+`encoders::encodeChunk`. On the `traditional` path the DAG is built purely for
+observation against default (all-off) optimizer options — the order-preserving
+parity baseline — and the traditional encode path stays unchanged and
+byte-identical; the dump is gated purely on `DXMT9_RENDERER_DUMP_DAG`, so a run
+without it pays only one cached-optional check and emits the identical Metal
+command stream. The frame-window filter (`DXMT9_RENDERER_DUMP_DAG_FRAME` /
+`_RADIUS`, below) applies identically on both backends.
+
 A real app (3DMark05, etc.) emits thousands of chunks per frame and would
 flood the dump directory if every chunk's DAG were serialized. The dump may
 therefore be scoped to a single frame with `DXMT9_RENDERER_DUMP_DAG_FRAME=N`,

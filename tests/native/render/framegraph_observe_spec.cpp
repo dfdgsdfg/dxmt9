@@ -1,23 +1,22 @@
-// Device-free spec for FrameGraphBackend's observe + DAG-export side-channel
-// (Task B12, L1).
+// Device-free spec for the shared render::DagObserver observe + DAG-export
+// side-channel (Task B12, L1; backend-agnostic per R-BACK-39.7).
 //
-// src/dxmt9/render/framegraph_backend.cpp wires a side-effect-neutral
-// observation path (R-BACK-39.7) into the FrameGraph backend: it builds a
+// The DAG dump is owned by render::DagObserver, which BOTH the FrameGraph and
+// Traditional backends embed (backend.observer()): it builds a
 // framegraph::FrameGraph from one core::ChunkSlot, dumps the pre-opt DAG, runs
-// the resolved (L1-strict empty) optimizer options, and dumps the post-opt DAG.
+// the owning backend's resolved optimizer options, and dumps the post-opt DAG.
 // The real Metal encode stays on encoders::encodeChunk (byte-identical,
 // R-BACK-40.5) and is NOT exercised here — there is no MTLDevice in the native
 // test host, so we cannot call onChunkReady. Instead this spec drives the
-// public maybeObserveAndExportDag path indirectly via a tiny test-only subclass
-// that exposes it, asserting the dump files are produced (or not) and contain
-// the expected JSON keys.
+// observer directly through backend.observer(), asserting the dump files are
+// produced (or not) and contain the expected JSON keys.
 //
 // framegraph::dumpDagDir() caches DXMT9_RENDERER_DUMP_DAG on first read
 // (static-const) and cannot be reset in-process. To test BOTH the
 // "no dump dir → early-out" and the "export writes both DAGs" behaviors in one
 // process, this spec:
-//   * tests the early-out through the env-gated maybeObserveAndExportDag while
-//     the env var is unset (this also primes the static cache to nullopt), then
+//   * tests the early-out through the env-gated observeAndExport while the env
+//     var is unset (this also primes the static cache to nullopt), then
 //   * tests the export through observeAndExportDagToDir, which takes the dump
 //     directory explicitly and therefore bypasses the cache.
 //
@@ -29,6 +28,8 @@
 #include "../../../src/dxmt9/dxmt9_backend_types.hpp"
 #include "../../../src/dxmt9/dxmt9_perf_counters.hpp"
 #include "../../../src/dxmt9/framegraph/fg_debug_export.hpp"
+#include "../../../src/dxmt9/render/dag_observer.hpp"
+#include "../../../src/dxmt9/render/traditional_backend.hpp"
 
 #include <unistd.h>  // mkdtemp, rmdir
 
@@ -72,11 +73,13 @@ void check(bool condition, std::string_view message) {
   }
 }
 
+using dxmt9::render::DagObserver;
 using dxmt9::render::FrameGraphBackend;
+using dxmt9::render::TraditionalBackend;
 
-// maybeObserveAndExportDag is the public device-free seam of the observe path
-// (onChunkReady itself is device-gated; the backend class is `final` so a test
-// subclass is not available). The test drives it directly.
+// The DAG observe path now lives in the shared render::DagObserver, owned by
+// both backends (backend.observer()). onChunkReady itself is device-gated and
+// the backends are `final`, so the test drives observer() directly.
 
 // --- ChunkSlot SoA fixture helpers (subset of fg_builder_spec.cpp) ----------
 
@@ -215,8 +218,9 @@ void testDefaultPathIsNoOp(const std::string& probeDir) {
   FrameGraphBackend backend;
   ChunkSlot slot = buildScenario(/*seqId=*/11);
 
-  // No dump dir env, no features → early-out. Must not throw.
-  backend.maybeObserveAndExportDag(slot);
+  // No dump dir env → early-out (the dump is purely DXMT9_RENDERER_DUMP_DAG-
+  // gated now). Must not throw.
+  backend.observer().observeAndExport(slot);
 
   // Nothing should have been written anywhere we control.
   check(!fileExists(dumpPath(probeDir, 11, 11, "pre-opt")),
@@ -240,7 +244,7 @@ void testObserveExportsPreAndPostOptDags(const std::string& dir) {
   removeIfPresent(post);
 
   // Explicit-dir overload bypasses dumpDagDir()'s static cache.
-  backend.observeAndExportDagToDir(slot, /*frameId=*/seqId, dir);
+  backend.observer().observeAndExportDagToDir(slot, /*frameId=*/seqId, dir);
 
   check(fileExists(pre), "pre-opt DAG dump was written");
   check(fileExists(post), "post-opt DAG dump was written");
@@ -282,7 +286,7 @@ void testObserveMovesPerfCounters(const std::string& dir) {
   const std::string post = dumpPath(dir, seqId, seqId, "post-opt");
   removeIfPresent(pre);
   removeIfPresent(post);
-  backend.observeAndExportDagToDir(slot, /*frameId=*/seqId, dir);
+  backend.observer().observeAndExportDagToDir(slot, /*frameId=*/seqId, dir);
   removeIfPresent(pre);
   removeIfPresent(post);
 
@@ -392,13 +396,13 @@ void testFrameFilterDumpsOnlyTargetFrame(const std::string& dir) {
 
   for (const Chunk& c : chunks) {
     ChunkSlot slot = buildChunk(c.seqId, c.present);
-    backend.observeAndExportDagToDirForFrame(slot, dir,
+    backend.observer().observeAndExportDagToDirForFrame(slot, dir,
                                              /*targetFrame=*/2u);
   }
 
   // The encode-thread-local frame counter must have advanced to 3 (two presents
   // seen: frame 1 -> 2 -> 3).
-  check(backend.observeFrame() == 3u,
+  check(backend.observer().observeFrame() == 3u,
         "observe_frame_ advanced past two presents to frame 3");
 
   for (const Chunk& c : chunks) {
@@ -465,12 +469,12 @@ void testFrameWindowDumpsTargetPlusMinusRadius(const std::string& dir) {
 
   for (const Chunk& c : chunks) {
     ChunkSlot slot = buildChunk(/*seqId=*/c.frame, /*withPresent=*/true);
-    backend.observeAndExportDagToDirForFrame(slot, dir,
+    backend.observer().observeAndExportDagToDirForFrame(slot, dir,
                                              /*targetFrame=*/3u, /*radius=*/1u);
   }
 
   // Five presents seen → counter advanced from 1 past frame 5 to frame 6.
-  check(backend.observeFrame() == 6u,
+  check(backend.observer().observeFrame() == 6u,
         "windowed: observe_frame_ advanced past five presents to frame 6");
 
   for (const Chunk& c : chunks) {
@@ -512,9 +516,9 @@ void testFrameWindowLowClampAtFrameOne(const std::string& dir) {
 
   ChunkSlot a = buildChunk(seqA, /*withPresent=*/false);
   ChunkSlot b = buildChunk(seqB, /*withPresent=*/true);
-  backend.observeAndExportDagToDirForFrame(a, dir, /*targetFrame=*/1u,
+  backend.observer().observeAndExportDagToDirForFrame(a, dir, /*targetFrame=*/1u,
                                            /*radius=*/5u);
-  backend.observeAndExportDagToDirForFrame(b, dir, /*targetFrame=*/1u,
+  backend.observer().observeAndExportDagToDirForFrame(b, dir, /*targetFrame=*/1u,
                                            /*radius=*/5u);
 
   // Both frame-1 chunks dump under the clamped [1,6] window.
@@ -553,8 +557,8 @@ void testNoFilterDumpsEveryChunk(const std::string& dir) {
 
   ChunkSlot a = buildChunk(seqA, /*withPresent=*/false);
   ChunkSlot b = buildChunk(seqB, /*withPresent=*/true);
-  backend.observeAndExportDagToDirForFrame(a, dir, /*targetFrame=*/std::nullopt);
-  backend.observeAndExportDagToDirForFrame(b, dir, /*targetFrame=*/std::nullopt);
+  backend.observer().observeAndExportDagToDirForFrame(a, dir, /*targetFrame=*/std::nullopt);
+  backend.observer().observeAndExportDagToDirForFrame(b, dir, /*targetFrame=*/std::nullopt);
 
   // Both chunks belong to frame 1, so both dump as dag-frame1-chunk<seq>.
   check(fileExists(dumpPath(dir, 1, seqA, "pre-opt")),
@@ -562,8 +566,92 @@ void testNoFilterDumpsEveryChunk(const std::string& dir) {
   check(fileExists(dumpPath(dir, 1, seqB, "post-opt")),
         "unfiltered: present chunk dumped at frame 1");
   // The present chunk advanced the counter to 2.
-  check(backend.observeFrame() == 2u,
+  check(backend.observer().observeFrame() == 2u,
         "unfiltered: observe_frame_ advanced to 2 after the present");
+
+  cleanup();
+}
+
+// The DAG dump is backend-agnostic (R-BACK-39.7): a TraditionalBackend owns the
+// same render::DagObserver, constructed with default OptimizerOptions{} (no
+// features — the order-preserving baseline). Driving its observer through the
+// explicit dir/frame seam must write dag-frame<N>-...json for the target window
+// exactly like the framegraph path, while the default (no-dir) observeAndExport
+// path stays a no-op. This proves the dump works without DXMT9_RENDER_MODE.
+void testTraditionalBackendObserverDumps(const std::string& dir) {
+  TraditionalBackend backend;
+
+  // Default-options parity baseline: traditional runs no optimizer passes.
+  const auto& opts = backend.observer().options();
+  check(!opts.passcoalesce && !opts.memoryless && !opts.dce && !opts.reorder,
+        "traditional DagObserver uses default (all-false) OptimizerOptions");
+
+  // Default path: no dump dir env primed to nullopt earlier → early-out, no
+  // throw, nothing written (byte-identical traditional encode preserved).
+  ChunkSlot probeSlot = buildScenario(/*seqId=*/41);
+  backend.observer().observeAndExport(probeSlot);
+  check(!fileExists(dumpPath(dir, 41, 41, "pre-opt")),
+        "traditional early-out wrote no pre-opt file");
+  check(!fileExists(dumpPath(dir, 41, 41, "post-opt")),
+        "traditional early-out wrote no post-opt file");
+
+  // Explicit-dir/frame seam: target frame 2, three chunks across two frames.
+  //   chunk 500 (draw)            -> frame 1, filtered
+  //   chunk 501 (draw + Present)  -> frame 1, filtered (advances to 2)
+  //   chunk 502 (draw + Present)  -> frame 2, DUMPED   (advances to 3)
+  struct Chunk {
+    std::uint64_t seqId;
+    bool present;
+    bool expectDumped;
+  };
+  const Chunk chunks[] = {
+      {500, false, false},
+      {501, true, false},
+      {502, true, true},
+  };
+
+  auto cleanup = [&]() {
+    for (const Chunk& c : chunks) {
+      for (std::uint64_t f = 1; f <= 3; ++f) {
+        removeIfPresent(dumpPath(dir, f, c.seqId, "pre-opt"));
+        removeIfPresent(dumpPath(dir, f, c.seqId, "post-opt"));
+      }
+    }
+  };
+  cleanup();
+
+  for (const Chunk& c : chunks) {
+    ChunkSlot slot = buildChunk(c.seqId, c.present);
+    backend.observer().observeAndExportDagToDirForFrame(slot, dir,
+                                                        /*targetFrame=*/2u);
+  }
+
+  // Two presents seen → counter advanced from 1 past frame 2 to frame 3.
+  check(backend.observer().observeFrame() == 3u,
+        "traditional observer advanced past two presents to frame 3");
+
+  for (const Chunk& c : chunks) {
+    if (c.expectDumped) {
+      const std::string pre = dumpPath(dir, 2, c.seqId, "pre-opt");
+      const std::string post = dumpPath(dir, 2, c.seqId, "post-opt");
+      check(fileExists(pre), "traditional frame-2 chunk wrote its pre-opt file");
+      check(fileExists(post),
+            "traditional frame-2 chunk wrote its post-opt file");
+      const std::string preJson = readFile(pre);
+      check(contains(preJson, "\"frame_id\": 2"),
+            "traditional dump stamps frame_id=2 (observe frame number)");
+      check(contains(preJson,
+                     "\"chunk_seq_id\": " + std::to_string(c.seqId)),
+            "traditional dump stamps chunk_seq_id=<slot.seqId>");
+    } else {
+      for (std::uint64_t f = 1; f <= 3; ++f) {
+        check(!fileExists(dumpPath(dir, f, c.seqId, "pre-opt")),
+              "traditional filtered-out chunk wrote no pre-opt file");
+        check(!fileExists(dumpPath(dir, f, c.seqId, "post-opt")),
+              "traditional filtered-out chunk wrote no post-opt file");
+      }
+    }
+  }
 
   cleanup();
 }
@@ -607,6 +695,10 @@ int main() {
 
     // 8. No filter (nullopt) still dumps every chunk and tracks frames.
     testNoFilterDumpsEveryChunk(dir);
+
+    // 9. Backend-agnostic: a TraditionalBackend-owned DagObserver dumps too,
+    //    decoupled from DXMT9_RENDER_MODE (default options, no-dir early-out).
+    testTraditionalBackendObserverDumps(dir);
 
     rmdir(dir.c_str());
   } catch (const TestFailure& failure) {

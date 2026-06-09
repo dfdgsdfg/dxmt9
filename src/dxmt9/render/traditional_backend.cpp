@@ -6,6 +6,11 @@ std::optional<core::metalqueue::QueueSubmissionRecord>
 TraditionalBackend::onChunkReady(encoders::EncodeContext& ctx,
                                  std::size_t slotIndex,
                                  const core::ChunkSlot& slot) {
+  // Backend-agnostic DAG observe + export side-channel (R-BACK-39.7). Reads only
+  // `slot`, writes only debug dump files when DXMT9_RENDERER_DUMP_DAG is set, and
+  // early-outs otherwise — so the traditional encode below stays byte-identical.
+  observer_.observeAndExport(slot);
+
   // Byte-identical traditional path: forward straight to the free function.
   return encoders::encodeChunk(ctx, slotIndex, slot);
 }

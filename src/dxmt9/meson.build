@@ -56,6 +56,7 @@ dxmt9_runtime_srcs = files(
   'framegraph/fg_optimizer/passcoalesce.cpp',
   'framegraph/fg_optimizer/reorder.cpp',
   'render/backend_factory.cpp',
+  'render/dag_observer.cpp',
   'render/decision_recorder.cpp',
   'render/framegraph_backend.cpp',
   'render/traditional_backend.cpp',
