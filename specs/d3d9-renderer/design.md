@@ -457,6 +457,44 @@ producer→consumer surface the render-pass re-entry investigation needs: an
 `A → B → A` attachment re-entry appears as two edges sharing the same
 `resource` with `src_pass` alternating, directly readable from the JSON.
 
+**Optional per-draw D3D9 detail (`DXMT9_RENDERER_DUMP_DAG_DRAWS`, L1-debug).**
+A pass node may carry a `draws_detail` array (one entry per draw-call ordinal in
+its `DrawRange`) when the export is given the source `core::ChunkSlot` AND
+`DXMT9_RENDERER_DUMP_DAG_DRAWS` is set. The slot is threaded through as an
+OPTIONAL parameter: `buildSnapshot(fg, seq, stage, slot=nullptr)`,
+`serializeDagJson(fg, seq, stage, slot=nullptr)`, and
+`writeDagDump(fg, frame, seq, stage, slot=nullptr)` all default the slot to
+`nullptr`; `render::DagObserver` passes the real `&slot` it already holds, while
+the pure FrameGraph-only overloads (and the device-free golden tests) pass none.
+When the slot is null or the flag is off, no draw is resolved (zero extra cost)
+and the JSON is byte-identical to the shape above — so `draws_detail` is
+strictly additive and off by default. When both are present, `buildSnapshot`
+walks each pass's `DrawRange → FrameGraph.draws[i]` (a `DrawRef`) →
+`slot.drawRunCommandAt(command_index)` and copies a BOUNDED hot-state summary:
+
+```json
+"draws_detail": [
+  { "command_index": 0, "draw_ordinal": 0,
+    "primitive_type": 3, "primitive_count": 5,
+    "vs_hash": "0x111", "ps_hash": "0x222", "texture_mask": 1,
+    "alpha_blend": 1, "z_enable": 1, "z_write": 0, "z_func": 4,
+    "alpha_test": 0, "cull": 0, "stream0_stride": 32 }
+]
+```
+
+Field sources (no geometry bytes are decoded): `primitive_type`/
+`primitive_count` from the per-ordinal `core::DrawParam`; `vs_hash`/`ps_hash`
+from the `core::DrawDebugSnapshot` (the same hashes the 3DMark05 indexed-probe
+CSV reports); `texture_mask` / `stream0_stride` from the
+`core::FlatDrawStateRecord`; and the render states via `core::flatStateOr` on
+the hot `FlatStateSet` (`RS_*` ids, with the encoder's `DrawDebugRecord`
+defaults). `resolveDumpDagDraws(env)` is the pure resolver and `dumpDagDraws()`
+reads the env once (static-const, mirroring `dumpDagDir()`). This is the SAME
+side-effect-neutral read transform as the rest of §3.5: it is **L1-debug only**
+and is NOT the deferred L2 production `DrawDescriptor` of §3.3 (per-draw
+geometry / bindless bindings for the mesh / GPU-driven path), which stays a
+separate, deferred production data structure.
+
 `DXMT9_RENDERER_DUMP_DAG_FORMATS` (comma list, default `json`) selects
 additional human-visual renderings beside the JSON. Both extra formats
 consume the same `DagSnapshot` struct the JSON path builds — neither

@@ -956,6 +956,30 @@ env still resolves to an all-off override because the operator opted in
 explicitly) and `dumpDagOptimizeOverride()` reads the env once with the
 `dumpDagFrame()` static-const pattern.
 
+**Optional per-draw D3D9 detail (`DXMT9_RENDERER_DUMP_DAG_DRAWS`).** The JSON
+dump may carry an L1-DEBUG per-pass `draws_detail` array — one entry per
+draw-call ordinal in the pass's `DrawRange` — when
+`DXMT9_RENDERER_DUMP_DAG_DRAWS` is set (repo env-flag semantics: a non-empty
+string that is not `0`). Each entry is a BOUNDED summary resolved from the
+source `core::ChunkSlot` hot state the linearizer already reads (not decoded
+geometry): `command_index`, `draw_ordinal`, `primitive_type`,
+`primitive_count`, `vs_hash`, `ps_hash` (the same VS/PS hashes the 3DMark05
+indexed-probe CSV reports), `texture_mask`, the key render states
+`alpha_blend` / `z_enable` / `z_write` / `z_func` / `alpha_test` / `cull`
+(read with `core::flatStateOr` on the hot `FlatStateSet`, using the encoder's
+`DrawDebugRecord` defaults), and `stream0_stride`. This is **DEBUG-ONLY and
+JSON-only**: it resolves only when the export is given the source ChunkSlot AND
+the flag is set, so when either is absent the JSON is byte-identical to the
+historical output and the device-free golden serializers (which pass no slot)
+are unaffected; it is a pure read that touches no Metal state and leaves the
+encode byte-identical, exactly like the rest of R-BACK-39.7. `draws_detail` is
+explicitly **L1-debug**: it is NOT the deferred L2 production `DrawDescriptor`
+(design.md §3.3) that carries per-draw geometry/bindings for the
+mesh / GPU-driven path — that remains a SEPARATE, deferred production data
+structure. `framegraph::resolveDumpDagDraws(env)` is the pure resolver and
+`dumpDagDraws()` reads the env once with the `dumpDagFrame()` static-const
+pattern.
+
 ---
 
 ## 11. Compatibility Profiles

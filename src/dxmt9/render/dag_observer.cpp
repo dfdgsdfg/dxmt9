@@ -20,7 +20,7 @@ namespace {
 // is honored. Never throws; an unwritable path is silently skipped.
 void writeDagJsonToDir(const framegraph::FrameGraph& fg, std::uint64_t frameId,
                        std::uint64_t seqId, const char* stage,
-                       const std::string& dir) {
+                       const std::string& dir, const core::ChunkSlot* slot) {
   std::string path = dir;
   if (!path.empty() && path.back() != '/') {
     path.push_back('/');
@@ -33,7 +33,10 @@ void writeDagJsonToDir(const framegraph::FrameGraph& fg, std::uint64_t frameId,
   path += (stage != nullptr ? stage : "");
   path += ".json";
 
-  const std::string contents = framegraph::serializeDagJson(fg, seqId, stage);
+  // `slot` enables the DEBUG-ONLY per-draw JSON detail (DXMT9_RENDERER_DUMP_-
+  // DAG_DRAWS); serializeDagJson resolves it only when both are present.
+  const std::string contents =
+      framegraph::serializeDagJson(fg, seqId, stage, slot);
   std::ofstream out(path, std::ios::out | std::ios::trunc | std::ios::binary);
   if (out.is_open()) {
     out << contents;  // best-effort: never fail a render on an unwritable dir.
@@ -83,7 +86,7 @@ void DagObserver::observeAndExportDagToDir(const core::ChunkSlot& slot,
   // Capture the built pass count before runOptimizer can prune/coalesce.
   const std::uint64_t passesBuilt =
       static_cast<std::uint64_t>(fg.passes.size());
-  writeDagJsonToDir(fg, frameId, slot.seqId, "pre-opt", dumpDir);
+  writeDagJsonToDir(fg, frameId, slot.seqId, "pre-opt", dumpDir, &slot);
   framegraph::OptimizerStats stats;
   // ANALYSIS-ONLY post-opt override (R-BACK-39.7): DXMT9_RENDERER_DUMP_DAG_OPTIMIZE
   // can select the optimizer passes the post-opt snapshot runs, independent of
@@ -94,7 +97,7 @@ void DagObserver::observeAndExportDagToDir(const core::ChunkSlot& slot,
   const framegraph::OptimizerOptions& opt =
       framegraph::dumpDagOptimizeOverride().value_or(options_);
   framegraph::runOptimizer(fg, opt, /*observations=*/nullptr, &stats);
-  writeDagJsonToDir(fg, frameId, slot.seqId, "post-opt", dumpDir);
+  writeDagJsonToDir(fg, frameId, slot.seqId, "post-opt", dumpDir, &slot);
   recordFramegraphObserveCounters(passesBuilt, stats);
 }
 
@@ -129,13 +132,13 @@ void DagObserver::observeAndExportDagToDirForFrame(
   framegraph::FrameGraph fg = framegraph::buildFrameGraph(slot, observe_frame_);
   const std::uint64_t passesBuilt =
       static_cast<std::uint64_t>(fg.passes.size());
-  writeDagJsonToDir(fg, observe_frame_, slot.seqId, "pre-opt", dumpDir);
+  writeDagJsonToDir(fg, observe_frame_, slot.seqId, "pre-opt", dumpDir, &slot);
   framegraph::OptimizerStats stats;
   // ANALYSIS-ONLY post-opt override (R-BACK-39.7) — see observeAndExportDagToDir.
   const framegraph::OptimizerOptions& opt =
       framegraph::dumpDagOptimizeOverride().value_or(options_);
   framegraph::runOptimizer(fg, opt, /*observations=*/nullptr, &stats);
-  writeDagJsonToDir(fg, observe_frame_, slot.seqId, "post-opt", dumpDir);
+  writeDagJsonToDir(fg, observe_frame_, slot.seqId, "post-opt", dumpDir, &slot);
   recordFramegraphObserveCounters(passesBuilt, stats);
 
   // Advance the frame counter EVEN when this chunk was dumped, so all of frame
@@ -185,7 +188,7 @@ void DagObserver::observeAndExport(const core::ChunkSlot& slot) {
   // Capture the built pass count before runOptimizer can prune/coalesce.
   const std::uint64_t passesBuilt =
       static_cast<std::uint64_t>(fg.passes.size());
-  framegraph::writeDagDump(fg, observe_frame_, slot.seqId, "pre-opt");
+  framegraph::writeDagDump(fg, observe_frame_, slot.seqId, "pre-opt", &slot);
 
   // Run the resolved optimizer passes (the owning backend's options_). For the
   // traditional backend and L1-strict framegraph these are all-false, so only
@@ -204,7 +207,7 @@ void DagObserver::observeAndExport(const core::ChunkSlot& slot) {
   const framegraph::OptimizerOptions& opt =
       framegraph::dumpDagOptimizeOverride().value_or(options_);
   framegraph::runOptimizer(fg, opt, /*observations=*/nullptr, &stats);
-  framegraph::writeDagDump(fg, observe_frame_, slot.seqId, "post-opt");
+  framegraph::writeDagDump(fg, observe_frame_, slot.seqId, "post-opt", &slot);
   recordFramegraphObserveCounters(passesBuilt, stats);
 
   // Advance on present EVEN when the chunk was dumped, so frame N's multiple

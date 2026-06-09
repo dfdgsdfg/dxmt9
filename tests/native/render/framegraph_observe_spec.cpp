@@ -27,6 +27,7 @@
 
 #include "../../../src/dxmt9/dxmt9_backend_types.hpp"
 #include "../../../src/dxmt9/dxmt9_perf_counters.hpp"
+#include "../../../src/dxmt9/framegraph/fg_builder.hpp"
 #include "../../../src/dxmt9/framegraph/fg_debug_export.hpp"
 #include "../../../src/dxmt9/render/dag_observer.hpp"
 #include "../../../src/dxmt9/render/traditional_backend.hpp"
@@ -105,6 +106,61 @@ void appendDrawRun(ChunkSlot& slot, Handle color0, Handle depth,
   const auto firstParam = static_cast<std::uint32_t>(slot.drawParams.size());
   for (std::uint32_t i = 0; i < paramCount; ++i) {
     slot.drawParams.push_back(dxmt9::core::DrawParam{});
+  }
+  DrawRunCommandRecord record{};
+  record.stateIndex = stateIndex;
+  record.firstParam = firstParam;
+  record.paramCount = paramCount;
+  slot.drawRunRecords.push_back(record);
+  slot.commandHeaders.push_back(MetalCommandHeader{
+      .kind = MetalCommandKind::DrawRun,
+      .payloadIndex = CommandPayloadIndex::fromU32(recordIndex),
+  });
+}
+
+// A single draw run with KNOWN per-draw detail, for the DXMT9_RENDERER_DUMP_-
+// DAG_DRAWS extension test: primitive type/count on each DrawParam ordinal,
+// VS/PS hash on the debug snapshot, texture mask + a couple render states +
+// stream0 stride on the hot record.
+void appendKnownDrawRun(ChunkSlot& slot, Handle color0, Handle depth,
+                        dxmt9::core::PrimitiveType primType,
+                        std::uint32_t primCount, std::uint64_t vsHash,
+                        std::uint64_t psHash, std::uint32_t alphaBlend,
+                        std::uint32_t stream0Stride,
+                        std::uint32_t paramCount = 1u) {
+  FlatDrawStateRecord hot{};
+  hot.colorAttachments[0].handle = color0;
+  hot.depthStencil.handle = depth;
+  if (color0.value != 0) {
+    hot.renderTargetMask = 1u;
+  }
+  hot.textures[0] = Handle{0x7777u};
+  hot.textureMask = 1u;
+  hot.streamStrides[0] = stream0Stride;
+  // Render states via the same FlatStateSet the encoder reads with flatStateOr.
+  // FlatStateSet must stay sorted ascending by state id (findFlatState binary
+  // searches): RS_Z_ENABLE=7 before RS_ALPHABLEND_ENABLE=27.
+  hot.renderStates.entries[0] = {dxmt9::core::RS_Z_ENABLE, 1u};
+  hot.renderStates.entries[1] = {dxmt9::core::RS_ALPHABLEND_ENABLE, alphaBlend};
+  hot.renderStates.count = 2u;
+
+  DrawDebugSnapshot debug{};
+  debug.vertexShaderHash = vsHash;
+  debug.pixelShaderHash = psHash;
+
+  const auto stateIndex = static_cast<std::uint32_t>(slot.drawHotStates.size());
+  slot.drawHotStates.push_back(hot);
+  slot.drawShaderLayouts.push_back(DrawShaderLayoutContext{});
+  slot.drawDebugSnapshots.push_back(debug);
+
+  const auto recordIndex =
+      static_cast<std::uint32_t>(slot.drawRunRecords.size());
+  const auto firstParam = static_cast<std::uint32_t>(slot.drawParams.size());
+  for (std::uint32_t i = 0; i < paramCount; ++i) {
+    dxmt9::core::DrawParam param{};
+    param.primitiveType = primType;
+    param.primitiveCount = primCount;
+    slot.drawParams.push_back(param);
   }
   DrawRunCommandRecord record{};
   record.stateIndex = stateIndex;
@@ -798,9 +854,90 @@ void testPostOptDefaultOptionsDoNotCoalesce(const std::string& dir) {
   removeIfPresent(post);
 }
 
+// DXMT9_RENDERER_DUMP_DAG_DRAWS pure resolver: repo env-flag semantics — "set"
+// is a non-empty string that is not "0".
+void testResolveDumpDagDraws() {
+  using dxmt9::framegraph::resolveDumpDagDraws;
+  check(!resolveDumpDagDraws(nullptr), "resolveDumpDagDraws(nullptr) == false");
+  check(!resolveDumpDagDraws(""), "resolveDumpDagDraws(\"\") == false");
+  check(!resolveDumpDagDraws("0"), "resolveDumpDagDraws(\"0\") == false");
+  check(resolveDumpDagDraws("1"), "resolveDumpDagDraws(\"1\") == true");
+  check(resolveDumpDagDraws("on"), "resolveDumpDagDraws(\"on\") == true");
+  check(resolveDumpDagDraws("00"),
+        "resolveDumpDagDraws(\"00\") == true (only exact \"0\" is off)");
+}
+
+// With DXMT9_RENDERER_DUMP_DAG_DRAWS set (latched in main) AND a slot supplied,
+// the JSON gains per-pass "draws_detail" carrying the known per-draw values.
+// With the slot ABSENT (the pure FrameGraph-only overload) there is NO
+// "draws_detail" even with the flag on — the off-by-default / golden-stable
+// invariant for the device-free serializers.
+void testDrawsDetailEmittedWithSlotAndFlag() {
+  using dxmt9::framegraph::buildFrameGraph;
+  using dxmt9::framegraph::serializeDagJson;
+
+  ChunkSlot slot;
+  slot.seqId = 9000;
+  const Handle rt0{0xA000u};
+  const Handle ds{0xD000u};
+  // Two draws in one pass (same attachments): a 5-tri triangle list with
+  // vs=0x111/ps=0x222/alphaBlend=1/stride=32, then a 2-prim line list with
+  // distinct hashes and alphaBlend=0/stride=12.
+  appendKnownDrawRun(slot, rt0, ds, dxmt9::core::PrimitiveType::TriangleList,
+                     /*primCount=*/5u, /*vsHash=*/0x111u, /*psHash=*/0x222u,
+                     /*alphaBlend=*/1u, /*stream0Stride=*/32u);
+  appendKnownDrawRun(slot, rt0, ds, dxmt9::core::PrimitiveType::LineList,
+                     /*primCount=*/2u, /*vsHash=*/0x333u, /*psHash=*/0x444u,
+                     /*alphaBlend=*/0u, /*stream0Stride=*/12u);
+
+  const auto fg = buildFrameGraph(slot, /*frame_id=*/7u);
+
+  // Slot-aware serialize (flag on): draws_detail present with both draws.
+  const std::string withSlot = serializeDagJson(fg, slot.seqId, "pre-opt", &slot);
+  check(contains(withSlot, "\"draws_detail\""),
+        "slot+flag: JSON carries draws_detail");
+  // Draw 0 fields (TriangleList=3, primCount 5, vs 0x111, ps 0x222, blend 1).
+  check(contains(withSlot, "\"primitive_type\": 3"),
+        "draw0 primitive_type == TriangleList(3)");
+  check(contains(withSlot, "\"primitive_count\": 5"),
+        "draw0 primitive_count == 5");
+  check(contains(withSlot, "\"vs_hash\": \"0x111\""), "draw0 vs_hash == 0x111");
+  check(contains(withSlot, "\"ps_hash\": \"0x222\""), "draw0 ps_hash == 0x222");
+  check(contains(withSlot, "\"alpha_blend\": 1"), "draw0 alpha_blend == 1");
+  check(contains(withSlot, "\"z_enable\": 1"), "draw0 z_enable == 1");
+  check(contains(withSlot, "\"stream0_stride\": 32"),
+        "draw0 stream0_stride == 32");
+  check(contains(withSlot, "\"texture_mask\": 1"), "draw0 texture_mask == 1");
+  check(contains(withSlot, "\"command_index\": 0"),
+        "draw0 command_index == 0");
+  check(contains(withSlot, "\"command_index\": 1"),
+        "draw1 command_index == 1");
+  // Draw 1 distinctive fields (LineList=1, primCount 2, vs 0x333, stride 12).
+  check(contains(withSlot, "\"primitive_type\": 1"),
+        "draw1 primitive_type == LineList(1)");
+  check(contains(withSlot, "\"vs_hash\": \"0x333\""), "draw1 vs_hash == 0x333");
+  check(contains(withSlot, "\"stream0_stride\": 12"),
+        "draw1 stream0_stride == 12");
+
+  // FrameGraph-only overload (no slot): NO draws_detail even with flag on.
+  const std::string noSlot = serializeDagJson(fg, slot.seqId, "pre-opt");
+  check(!contains(noSlot, "\"draws_detail\""),
+        "no slot: JSON omits draws_detail (golden-stable, off-by-default)");
+  // The base DAG keys are still present (the rest of the JSON is unchanged).
+  for (std::string_view key : {"\"passes\"", "\"draws\"", "\"resources\"",
+                               "\"edges\""}) {
+    check(contains(noSlot, key), "no-slot JSON keeps the base DAG keys");
+  }
+}
+
 }  // namespace
 
 int main() {
+  // DEBUG-ONLY per-draw detail opt-in. DXMT9_RENDERER_DUMP_DAG_DRAWS is
+  // static-cached on first read (dumpDagDraws()), so set it before any
+  // serialize/buildSnapshot runs.
+  setenv("DXMT9_RENDERER_DUMP_DAG_DRAWS", "1", /*overwrite=*/1);
+
   // R-BACK-39.2 (Task B11): perf counters latch their enable flag once at
   // process start, so opt in before any perf::count* runs.
   setenv("DXMT_PERF_COUNTERS", "1", /*overwrite=*/1);
@@ -846,6 +983,10 @@ int main() {
     testResolveDumpDagOptimize();
     testPostOptHonorsPasscoalesce(dir);
     testPostOptDefaultOptionsDoNotCoalesce(dir);
+
+    // 11. DXMT9_RENDERER_DUMP_DAG_DRAWS DEBUG-ONLY per-draw detail extension.
+    testResolveDumpDagDraws();
+    testDrawsDetailEmittedWithSlotAndFlag();
 
     rmdir(dir.c_str());
   } catch (const TestFailure& failure) {

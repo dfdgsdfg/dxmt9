@@ -8,8 +8,11 @@
 
 #include "fg_debug_export.hpp"
 
+#include "dxmt9/core_constants.hpp"     // core::RS_*, core::CompareFunc
+#include "dxmt9/core_snapshots.hpp"     // core::flatStateOr
 #include "util/log/log.hpp"
 
+#include <algorithm>
 #include <atomic>
 #include <cstdint>
 #include <cstdio>
@@ -150,10 +153,84 @@ std::string jsonEscape(std::string_view s) {
   return out;
 }
 
+// Resolve the DEBUG-ONLY per-draw detail for one pass's DrawRange out of the
+// source ChunkSlot. Pure read: it walks fg.draws[first..first+count) (each a
+// DrawRef into the slot), re-resolves the draw run via slot.drawRunCommandAt,
+// and copies the cheaply-available hot fields. No geometry bytes are decoded;
+// every value comes from the already-resolved hot/debug snapshot or per-ordinal
+// DrawParam. See SnapshotDraw in the header for the field-by-field source.
+void resolvePassDrawDetail(const FrameGraph& fg, const core::ChunkSlot& slot,
+                           const DrawRange& range,
+                           std::vector<SnapshotDraw>& out) {
+  const std::size_t first = range.first;
+  const std::size_t last =
+      first <= fg.draws.size() ? std::min<std::size_t>(
+                                     first + range.count, fg.draws.size())
+                               : fg.draws.size();
+  for (std::size_t d = first; d < last; ++d) {
+    const DrawRef& ref = fg.draws[d];
+    const core::MetalCommandView command =
+        slot.drawRunCommandAt(ref.command_index);
+    const core::FlatDrawStateRecord* hot = command.drawState.hot;
+    const core::DrawDebugSnapshot* debug = command.drawState.debug;
+
+    // VS/PS hash from the debug snapshot — the same hashes the 3dmark05
+    // indexed-probe CSV reports. Absent state leaves the zero defaults.
+    const u64 vs_hash = debug ? debug->vertexShaderHash : 0u;
+    const u64 ps_hash = debug ? debug->pixelShaderHash : 0u;
+    const u32 texture_mask = hot ? hot->textureMask : 0u;
+    const u32 stream0_stride = hot ? hot->streamStrides[0] : 0u;
+
+    // Render states via flatStateOr on the hot FlatStateSet, with the same
+    // defaults the encoder's DrawDebugRecord uses (dxmt9_draw_encoder.mm).
+    u32 alpha_blend = 0, z_enable = 0, z_write = 0, alpha_test = 0, cull = 0;
+    u32 z_func = static_cast<u32>(core::CompareFunc::LessEqual);
+    if (hot) {
+      alpha_blend =
+          core::flatStateOr(hot->renderStates, core::RS_ALPHABLEND_ENABLE, 0u);
+      z_enable = core::flatStateOr(hot->renderStates, core::RS_Z_ENABLE, 0u);
+      z_write = core::flatStateOr(hot->renderStates, core::RS_Z_WRITE_ENABLE, 0u);
+      z_func = core::flatStateOr(hot->renderStates, core::RS_Z_FUNC, z_func);
+      alpha_test =
+          core::flatStateOr(hot->renderStates, core::RS_ALPHA_TEST_ENABLE, 0u);
+      cull = core::flatStateOr(hot->renderStates, core::RS_CULL_MODE, 0u);
+    }
+
+    // One SnapshotDraw per draw-call ordinal covered by this DrawRef. The
+    // per-ordinal DrawParam carries primitive type/count; the rest of the hot
+    // state is shared across the run's ordinals.
+    const std::uint32_t ordinalCount =
+        static_cast<std::uint32_t>(command.drawParams.size());
+    for (std::uint32_t o = 0; o < ordinalCount; ++o) {
+      const core::DrawParam& param = command.drawParams[o];
+      out.push_back(SnapshotDraw{
+          .command_index = ref.command_index,
+          .draw_ordinal = ref.param_first + o,
+          .primitive_type = static_cast<u32>(param.primitiveType),
+          .primitive_count = param.primitiveCount,
+          .vs_hash = vs_hash,
+          .ps_hash = ps_hash,
+          .texture_mask = texture_mask,
+          .alpha_blend = alpha_blend,
+          .z_enable = z_enable,
+          .z_write = z_write,
+          .z_func = z_func,
+          .alpha_test = alpha_test,
+          .cull = cull,
+          .stream0_stride = stream0_stride,
+      });
+    }
+  }
+}
+
 }  // namespace
 
 DagSnapshot buildSnapshot(const FrameGraph& fg, std::uint64_t chunk_seq_id,
-                          const char* stage) {
+                          const char* stage, const core::ChunkSlot* slot) {
+  // DEBUG-ONLY per-draw detail is resolved only when a slot is supplied AND the
+  // operator opted in. Reading the flag once here keeps the off-path zero-cost
+  // (no draw walk, no allocation) and the JSON byte-identical to history.
+  const bool wantDraws = slot != nullptr && dumpDagDraws();
   DagSnapshot snap;
   snap.frame_id = fg.frame_id;
   snap.chunk_seq_id = chunk_seq_id;
@@ -178,6 +255,9 @@ DagSnapshot buildSnapshot(const FrameGraph& fg, std::uint64_t chunk_seq_id,
     sp.draws = p.draws;
     sp.state_profile = p.state_profile;
     sp.load_store = p.load_store;
+    if (wantDraws) {
+      resolvePassDrawDetail(fg, *slot, p.draws, sp.draws_detail);
+    }
     snap.passes.push_back(std::move(sp));
   }
 
@@ -247,7 +327,33 @@ std::string serializeDagJson(const DagSnapshot& snapshot) {
     }
     os << "], \"depth\": \""
        << loadStorePair(p.load_store.depth_load, p.load_store.depth_store)
-       << "\" } }";
+       << "\" }";
+    // DEBUG-ONLY per-draw detail (DXMT9_RENDERER_DUMP_DAG_DRAWS). Emitted ONLY
+    // when present, so the default JSON (no slot / flag off) is unchanged and
+    // existing golden tests stay valid.
+    if (!p.draws_detail.empty()) {
+      os << ", \"draws_detail\": [";
+      for (std::size_t d = 0; d < p.draws_detail.size(); ++d) {
+        const SnapshotDraw& dd = p.draws_detail[d];
+        os << (d == 0 ? "" : ", ")
+           << "{ \"command_index\": " << dd.command_index
+           << ", \"draw_ordinal\": " << dd.draw_ordinal
+           << ", \"primitive_type\": " << dd.primitive_type
+           << ", \"primitive_count\": " << dd.primitive_count
+           << ", \"vs_hash\": \"" << handleHex(ResourceHandle{dd.vs_hash})
+           << "\", \"ps_hash\": \"" << handleHex(ResourceHandle{dd.ps_hash})
+           << "\", \"texture_mask\": " << dd.texture_mask
+           << ", \"alpha_blend\": " << dd.alpha_blend
+           << ", \"z_enable\": " << dd.z_enable
+           << ", \"z_write\": " << dd.z_write
+           << ", \"z_func\": " << dd.z_func
+           << ", \"alpha_test\": " << dd.alpha_test
+           << ", \"cull\": " << dd.cull
+           << ", \"stream0_stride\": " << dd.stream0_stride << " }";
+      }
+      os << "]";
+    }
+    os << " }";
   }
   os << (snapshot.passes.empty() ? "" : "\n  ") << "],\n";
 
@@ -348,8 +454,8 @@ std::string serializeDagDot(const DagSnapshot& snapshot) {
 // const-FrameGraph overloads: build the snapshot once, delegate. (mermaid/dot
 // do not get a chunk seq / stage; those only frame the JSON object.)
 std::string serializeDagJson(const FrameGraph& fg, std::uint64_t chunk_seq_id,
-                             const char* stage) {
-  return serializeDagJson(buildSnapshot(fg, chunk_seq_id, stage));
+                             const char* stage, const core::ChunkSlot* slot) {
+  return serializeDagJson(buildSnapshot(fg, chunk_seq_id, stage, slot));
 }
 
 std::string serializeDagMermaid(const FrameGraph& fg) {
@@ -411,6 +517,18 @@ std::optional<std::string> dumpDagDir() {
     }
     return std::string(env);
   }();
+  return value;
+}
+
+bool resolveDumpDagDraws(const char* env) {
+  // Repo env-flag semantics: "set" = non-empty string that is not "0".
+  return env != nullptr && env[0] != '\0' &&
+         !(env[0] == '0' && env[1] == '\0');
+}
+
+bool dumpDagDraws() {
+  static const bool value =
+      resolveDumpDagDraws(std::getenv("DXMT9_RENDERER_DUMP_DAG_DRAWS"));
   return value;
 }
 
@@ -529,7 +647,8 @@ const char* formatExtension(DumpFormat fmt) {
 }  // namespace
 
 void writeDagDump(const FrameGraph& fg, std::uint64_t frame_id,
-                  std::uint64_t chunk_seq_id, const char* stage) {
+                  std::uint64_t chunk_seq_id, const char* stage,
+                  const core::ChunkSlot* slot) {
   const std::optional<std::string> dir = dumpDagDir();
   if (!dir.has_value()) {
     return;
@@ -540,8 +659,10 @@ void writeDagDump(const FrameGraph& fg, std::uint64_t frame_id,
   const std::vector<DumpFormat> formats =
       resolveDumpFormats(std::getenv("DXMT9_RENDERER_DUMP_DAG_FORMATS"));
 
-  // One field-walk, reused by every selected format (R-BACK-39.7).
-  const DagSnapshot snapshot = buildSnapshot(fg, chunk_seq_id, stage);
+  // One field-walk, reused by every selected format (R-BACK-39.7). The optional
+  // per-draw detail is resolved inside buildSnapshot only when slot != nullptr
+  // AND DXMT9_RENDERER_DUMP_DAG_DRAWS is set (DEBUG-ONLY; JSON-only).
+  const DagSnapshot snapshot = buildSnapshot(fg, chunk_seq_id, stage, slot);
 
   const std::string stageStr = stage ? std::string(stage) : std::string();
 

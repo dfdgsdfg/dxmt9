@@ -51,6 +51,40 @@ struct SnapshotAccess {
   AccessStage stage = AccessStage::Fragment;
 };
 
+// Optional per-draw D3D9 detail (DEBUG-ONLY; DXMT9_RENDERER_DUMP_DAG_DRAWS).
+//
+// This is L1-debug only: it carries a BOUNDED, cheaply-resolved per-draw
+// summary read out of the source core::ChunkSlot hot state for the JSON dump.
+// It is NOT the deferred L2 production `DrawDescriptor` (design.md §3.3), which
+// carries per-draw geometry/bindings for the mesh / GPU-driven path and remains
+// a separate, deferred production data structure. Field sources (resolved by
+// `buildSnapshot` from `slot.drawRunCommandAt(command_index)`):
+//   command_index/draw_ordinal — the DrawRef + ordinal within the draw run
+//   primitive_type/primitive_count — per-ordinal core::DrawParam (drawParams[])
+//   vs_hash/ps_hash — core::DrawDebugSnapshot (drawState.debug); the SAME VS/PS
+//                     hashes the 3dmark05 indexed-probe CSV reports
+//   texture_mask — core::FlatDrawStateRecord::textureMask (drawState.hot)
+//   alpha_blend/z_enable/z_write/z_func/alpha_test/cull — core::flatStateOr on
+//                     the hot FlatStateSet renderStates (RS_* ids, matching the
+//                     encoder's DrawDebugRecord defaults in dxmt9_draw_encoder.mm)
+//   stream0_stride — core::FlatDrawStateRecord::streamStrides[0]
+struct SnapshotDraw {
+  u32 command_index = 0;
+  u32 draw_ordinal = 0;
+  u32 primitive_type = 0;  // core::PrimitiveType enum value
+  u32 primitive_count = 0;
+  u64 vs_hash = 0;
+  u64 ps_hash = 0;
+  u32 texture_mask = 0;
+  u32 alpha_blend = 0;
+  u32 z_enable = 0;
+  u32 z_write = 0;
+  u32 z_func = 0;
+  u32 alpha_test = 0;
+  u32 cull = 0;
+  u32 stream0_stride = 0;
+};
+
 struct SnapshotPass {
   u32 index = 0;
   PassKind kind = PassKind::Render;
@@ -60,6 +94,10 @@ struct SnapshotPass {
   DrawRange draws{};
   u64 state_profile = 0;
   LoadStorePolicy load_store{};
+  // Filled ONLY when buildSnapshot is given a non-null slot AND
+  // DXMT9_RENDERER_DUMP_DAG_DRAWS is set. Empty otherwise, so the JSON omits
+  // "draws_detail" and existing golden output is unchanged.
+  std::vector<SnapshotDraw> draws_detail;
 };
 
 struct SnapshotResource {
@@ -88,8 +126,17 @@ struct DagSnapshot {
 // Single field-walk over the FrameGraph. `chunk_seq_id` / `stage` are
 // caller-supplied (the FrameGraph carries frame_id but not the chunk seq id,
 // which onChunkReady sources from its ImportContext — design.md §3.5).
+//
+// `slot` is the source ChunkSlot the FrameGraph's DrawRefs index into. It is
+// OPTIONAL: when non-null AND DXMT9_RENDERER_DUMP_DAG_DRAWS is set, each
+// SnapshotPass gets a per-draw `draws_detail` resolved from the slot's hot
+// state (DEBUG-ONLY; encode-neutral — pure read). When `slot` is null or the
+// flag is off, no draw detail is resolved (zero extra cost) and the JSON is
+// byte-identical to the historical output. The pure FrameGraph-only overload
+// passes slot=nullptr, so the device-free golden serializers are unaffected.
 DagSnapshot buildSnapshot(const FrameGraph& fg, std::uint64_t chunk_seq_id,
-                          const char* stage);
+                          const char* stage,
+                          const core::ChunkSlot* slot = nullptr);
 
 // ---------------------------------------------------------------------------
 // Format serializers. The const-FrameGraph overloads build a snapshot then
@@ -103,8 +150,12 @@ std::string serializeDagDot(const DagSnapshot& snapshot);
 
 // design.md §3.5 JSON object (frame_id, chunk_seq_id, stage, passes[],
 // resources[] with chronological accesses[], edges[]). Handle values use hex.
+// The optional `slot` enables the DEBUG-ONLY per-draw `draws_detail` extension
+// (see buildSnapshot). Defaulted nullptr keeps the existing call sites and
+// golden output unchanged.
 std::string serializeDagJson(const FrameGraph& fg, std::uint64_t chunk_seq_id,
-                             const char* stage);
+                             const char* stage,
+                             const core::ChunkSlot* slot = nullptr);
 
 // `flowchart TD`: one node per pass, one labeled edge per Edge (the re-entry
 // case shows as two edges sharing a resource into a later pass).
@@ -181,6 +232,15 @@ std::optional<OptimizerOptions> resolveDumpDagOptimize(const char* env);
 // dumpDagFrame()). std::nullopt = no override (use the backend's options).
 std::optional<OptimizerOptions> dumpDagOptimizeOverride();
 
+// Pure resolver for DXMT9_RENDERER_DUMP_DAG_DRAWS (repo env-flag semantics:
+// "set" = a non-empty string that is not "0"). DEBUG-ONLY opt-in for the
+// per-draw `draws_detail` JSON extension. Testable without the environment.
+bool resolveDumpDagDraws(const char* env);
+
+// Reads DXMT9_RENDERER_DUMP_DAG_DRAWS once (static-const pattern; mirrors
+// dumpDagDir()). false = no per-draw detail (the historical JSON shape).
+bool dumpDagDraws();
+
 // True if `slot` contains a Present command (core::MetalCommandKind::Present in
 // its commandHeaders). A chunk that contains a Present is the LAST chunk of its
 // inter-present frame, so the observe-path frame counter advances after it.
@@ -189,9 +249,14 @@ bool chunkContainsPresent(const core::ChunkSlot& slot);
 
 // Side-effect-neutral file dump (R-BACK-39.7). If the dump dir is set, writes
 // `dag-frame<frameId>-chunk<seqId>-<stage>.{json,dot,mermaid}` per selected
-// format. Reads only `fg`; writes only files. Never throws or fails a render —
-// an unwritable dir logs ONE warning (util Warn, "dxmt9-renderer") and skips.
+// format. Reads only `fg` (+ optional `slot` for the per-draw JSON detail);
+// writes only files. Never throws or fails a render — an unwritable dir logs
+// ONE warning (util Warn, "dxmt9-renderer") and skips. `slot` is OPTIONAL: when
+// non-null AND DXMT9_RENDERER_DUMP_DAG_DRAWS is set the JSON gains the
+// per-pass `draws_detail` array (DEBUG-ONLY; the dot/mermaid formats are
+// unaffected). Defaulted nullptr preserves the historical behavior/output.
 void writeDagDump(const FrameGraph& fg, std::uint64_t frame_id,
-                  std::uint64_t chunk_seq_id, const char* stage);
+                  std::uint64_t chunk_seq_id, const char* stage,
+                  const core::ChunkSlot* slot = nullptr);
 
 }  // namespace dxmt9::framegraph
