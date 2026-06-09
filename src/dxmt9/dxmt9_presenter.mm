@@ -766,6 +766,16 @@ bool encodePresent(WMT::CommandBuffer& commandBuffer,
     out << "[dxmt9-present] source.info"
         << " seq=" << static_cast<unsigned long long>(seqId)
         << " hwnd=" << static_cast<unsigned long long>(present.window.value)
+        // Present-source diagnostic (R-BACK debug): the D3D9 surface handle the
+        // app presented, the resolved Metal texture actually blitted to the
+        // drawable, and whether the MSAA resolve target was used. Correlate with
+        // a captured frame to test whether an intermittent visual anomaly is a
+        // present-source race (texture handle changes) vs a render/blend bug
+        // (handle stable but contents wrong).
+        << " srcSurface=0x" << std::hex
+        << static_cast<unsigned long long>(sourceHandle.value)
+        << " srcTex=0x" << static_cast<unsigned long long>(sourceTextureHandle)
+        << std::dec << " usedResolve=" << (source->resolveTexture ? 1 : 0)
         << " size=" << source->desc.width << "x" << source->desc.height
         << " fmt=" << static_cast<unsigned>(source->desc.format)
         << " sampleCount="
