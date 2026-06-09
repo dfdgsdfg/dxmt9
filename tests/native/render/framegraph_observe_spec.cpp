@@ -146,6 +146,38 @@ ChunkSlot buildScenario(std::uint64_t seqId) {
   return slot;
 }
 
+// A coalesceable re-entry chunk (mirrors fg_optimizer_spec's testPassCoalesceSafe
+// WAW shape, built through the ChunkSlot SoA helpers):
+//   P0 writes RT_A, P1 writes a DIFFERENT RT_B (independent — no sampling of A,
+//   no shared depth), P2 re-enters RT_A. P1 is independent of P0/P2, so
+//   passcoalesce merges P0+P2 (3 passes -> 2). The depth handle is shared only
+//   between the two RT_A passes, never RT_B, so P1 stays independent. No Present:
+//   the caller drives the observer through the explicit dir seam.
+ChunkSlot buildCoalesceableScenario(std::uint64_t seqId) {
+  ChunkSlot slot;
+  slot.seqId = seqId;
+  const Handle rtA{0xA000u};
+  const Handle rtB{0xB000u};
+  const Handle ds{0xD000u};
+  appendDrawRun(slot, rtA, ds, /*sampled=*/{}, /*paramCount=*/1);   // P0 -> RT_A
+  appendDrawRun(slot, rtB, {}, /*sampled=*/{}, /*paramCount=*/1);   // P1 -> RT_B (independent)
+  appendDrawRun(slot, rtA, ds, /*sampled=*/{}, /*paramCount=*/1);   // P2 -> RT_A (re-entry)
+  return slot;
+}
+
+// Count "index" occurrences in the passes[] array of a dumped DAG JSON. Each
+// SnapshotPass emits exactly one `"index": N` field, so this is the pass count.
+std::size_t countPassesInJson(const std::string& json) {
+  std::size_t count = 0;
+  std::size_t pos = 0;
+  const std::string_view needle = "\"index\":";
+  while ((pos = json.find(needle, pos)) != std::string::npos) {
+    ++count;
+    pos += needle.size();
+  }
+  return count;
+}
+
 // A minimal chunk: one draw, optionally terminated by a Present. A chunk that
 // contains a Present is the LAST chunk of its inter-present frame.
 ChunkSlot buildChunk(std::uint64_t seqId, bool withPresent) {
@@ -656,6 +688,116 @@ void testTraditionalBackendObserverDumps(const std::string& dir) {
   cleanup();
 }
 
+// DXMT9_RENDERER_DUMP_DAG_OPTIMIZE pure resolver (R-BACK-39.7, analysis-only):
+// nullptr / empty → nullopt (use backend options); a comma token list sets the
+// named gated passes; unknown tokens are ignored but a set-but-all-unknown env
+// still resolves to an (all-off) override (the operator opted in explicitly).
+void testResolveDumpDagOptimize() {
+  using dxmt9::framegraph::resolveDumpDagOptimize;
+
+  check(!resolveDumpDagOptimize(nullptr).has_value(),
+        "resolveDumpDagOptimize(nullptr) == nullopt");
+  check(!resolveDumpDagOptimize("").has_value(),
+        "resolveDumpDagOptimize(\"\") == nullopt");
+
+  const auto pc = resolveDumpDagOptimize("passcoalesce");
+  check(pc.has_value(), "\"passcoalesce\" → override present");
+  check(pc->passcoalesce && !pc->reorder && !pc->dce && !pc->memoryless,
+        "\"passcoalesce\" sets only passcoalesce");
+
+  const auto pcr = resolveDumpDagOptimize("passcoalesce,reorder");
+  check(pcr.has_value(), "\"passcoalesce,reorder\" → override present");
+  check(pcr->passcoalesce && pcr->reorder && !pcr->dce && !pcr->memoryless,
+        "\"passcoalesce,reorder\" sets both passcoalesce and reorder");
+
+  const auto all = resolveDumpDagOptimize("dce,memoryless");
+  check(all.has_value() && all->dce && all->memoryless && !all->passcoalesce &&
+            !all->reorder,
+        "\"dce,memoryless\" sets only dce and memoryless");
+
+  // Unknown tokens ignored, but the env was set → an all-off override, not
+  // nullopt (the post-opt snapshot then runs lifetime+loadstore only).
+  const auto unk = resolveDumpDagOptimize("bogus,nope");
+  check(unk.has_value() && !unk->passcoalesce && !unk->reorder && !unk->dce &&
+            !unk->memoryless,
+        "all-unknown tokens → set-but-all-off override (not nullopt)");
+
+  // Known token mixed with unknown: the known one still applies.
+  const auto mixed = resolveDumpDagOptimize("foo,passcoalesce,bar");
+  check(mixed.has_value() && mixed->passcoalesce && !mixed->reorder,
+        "unknown tokens around a known token are ignored");
+}
+
+// Analysis-only post-opt override behavior (R-BACK-39.7): a DagObserver
+// constructed with passcoalesce options must produce a post-opt DAG JSON with
+// FEWER passes than the pre-opt JSON for a coalesceable re-entry fixture, while
+// the pre-opt JSON keeps the original (builder) pass count. This proves the
+// pre/post diff = exactly what the chosen passes did, and that the post-opt
+// snapshot honors the selected optimizer options. (The DXMT9_RENDERER_DUMP_DAG_-
+// OPTIMIZE env override is exercised via resolveDumpDagOptimize above; here we
+// drive the same effect through the observer's constructed options so the env
+// static-cache need not be primed.)
+void testPostOptHonorsPasscoalesce(const std::string& dir) {
+  // Backend-provided options carrying passcoalesce — the env-override path
+  // value_or()s onto exactly this when DXMT9_RENDERER_DUMP_DAG_OPTIMIZE is unset.
+  dxmt9::framegraph::OptimizerOptions opts{};
+  opts.passcoalesce = true;
+  DagObserver observer(opts);
+
+  const std::uint64_t seqId = 88;
+  ChunkSlot slot = buildCoalesceableScenario(seqId);
+
+  const std::string pre = dumpPath(dir, seqId, seqId, "pre-opt");
+  const std::string post = dumpPath(dir, seqId, seqId, "post-opt");
+  removeIfPresent(pre);
+  removeIfPresent(post);
+
+  observer.observeAndExportDagToDir(slot, /*frameId=*/seqId, dir);
+
+  check(fileExists(pre), "coalesceable: pre-opt DAG written");
+  check(fileExists(post), "coalesceable: post-opt DAG written");
+
+  const std::size_t prePasses = countPassesInJson(readFile(pre));
+  const std::size_t postPasses = countPassesInJson(readFile(post));
+
+  check(prePasses == 3,
+        "pre-opt keeps the original 3-pass (un-optimized) baseline");
+  check(postPasses < prePasses,
+        "post-opt with passcoalesce has FEWER passes than pre-opt");
+  check(postPasses == 2,
+        "post-opt coalesced the matching RT_A re-entry pair (3 -> 2)");
+
+  removeIfPresent(pre);
+  removeIfPresent(post);
+}
+
+// Control: with default (all-off) options the SAME coalesceable fixture is NOT
+// coalesced — post-opt keeps all 3 passes. This isolates the override as the
+// only variable producing the pass-count drop (no override → backend options →
+// no coalesce).
+void testPostOptDefaultOptionsDoNotCoalesce(const std::string& dir) {
+  DagObserver observer;  // default OptimizerOptions{} (all gated passes off)
+
+  const std::uint64_t seqId = 89;
+  ChunkSlot slot = buildCoalesceableScenario(seqId);
+
+  const std::string pre = dumpPath(dir, seqId, seqId, "pre-opt");
+  const std::string post = dumpPath(dir, seqId, seqId, "post-opt");
+  removeIfPresent(pre);
+  removeIfPresent(post);
+
+  observer.observeAndExportDagToDir(slot, /*frameId=*/seqId, dir);
+
+  const std::size_t prePasses = countPassesInJson(readFile(pre));
+  const std::size_t postPasses = countPassesInJson(readFile(post));
+  check(prePasses == 3, "control pre-opt keeps 3 passes");
+  check(postPasses == 3,
+        "control post-opt with all-off options keeps 3 passes (no coalesce)");
+
+  removeIfPresent(pre);
+  removeIfPresent(post);
+}
+
 }  // namespace
 
 int main() {
@@ -699,6 +841,11 @@ int main() {
     // 9. Backend-agnostic: a TraditionalBackend-owned DagObserver dumps too,
     //    decoupled from DXMT9_RENDER_MODE (default options, no-dir early-out).
     testTraditionalBackendObserverDumps(dir);
+
+    // 10. DXMT9_RENDERER_DUMP_DAG_OPTIMIZE analysis-only post-opt override.
+    testResolveDumpDagOptimize();
+    testPostOptHonorsPasscoalesce(dir);
+    testPostOptDefaultOptionsDoNotCoalesce(dir);
 
     rmdir(dir.c_str());
   } catch (const TestFailure& failure) {

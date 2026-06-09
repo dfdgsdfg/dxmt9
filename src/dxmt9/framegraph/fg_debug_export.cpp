@@ -462,6 +462,47 @@ std::uint64_t dumpDagFrameRadius() {
   return value;
 }
 
+std::optional<OptimizerOptions> resolveDumpDagOptimize(const char* env) {
+  if (env == nullptr || env[0] == '\0') {
+    // No override: the observer uses the backend-provided options (the current
+    // pre-opt-baseline vs backend-post-opt behavior).
+    return std::nullopt;
+  }
+
+  // The operator explicitly set the override, so even an all-unknown token list
+  // resolves to an (all-off) OptimizerOptions — the post-opt snapshot then runs
+  // only the always-on lifetime + loadstore passes. This is analysis-only and
+  // never feeds the Metal encode.
+  OptimizerOptions options{};
+  std::string_view view(env);
+  std::size_t start = 0;
+  while (start <= view.size()) {
+    const std::size_t comma = view.find(',', start);
+    const std::string_view token = view.substr(
+        start, comma == std::string_view::npos ? std::string_view::npos
+                                               : comma - start);
+    if (token == "passcoalesce") {
+      options.passcoalesce = true;
+    } else if (token == "reorder") {
+      options.reorder = true;
+    } else if (token == "dce") {
+      options.dce = true;
+    } else if (token == "memoryless") {
+      options.memoryless = true;
+    }
+    // unknown / empty tokens ignored
+    if (comma == std::string_view::npos) break;
+    start = comma + 1;
+  }
+  return options;
+}
+
+std::optional<OptimizerOptions> dumpDagOptimizeOverride() {
+  static const std::optional<OptimizerOptions> value =
+      resolveDumpDagOptimize(std::getenv("DXMT9_RENDERER_DUMP_DAG_OPTIMIZE"));
+  return value;
+}
+
 bool chunkContainsPresent(const core::ChunkSlot& slot) {
   for (const auto& header : slot.commandHeaders) {
     if (header.kind == core::MetalCommandKind::Present) {

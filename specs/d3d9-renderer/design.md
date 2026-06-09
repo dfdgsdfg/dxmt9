@@ -395,6 +395,23 @@ this at two points when `DXMT9_RENDERER_DUMP_DAG` is set: once right after
 pipeline finishes (`stage="post-opt"`). Emitting both lets a reader diff exactly
 what `dce` / `passcoalesce` / `memoryless` / `reorder` / `loadstore` changed.
 
+**Post-opt optimizer override (`DXMT9_RENDERER_DUMP_DAG_OPTIMIZE`, R-BACK-39.7).**
+The `post-opt` snapshot honors an analysis-only override: when
+`DXMT9_RENDERER_DUMP_DAG_OPTIMIZE` is set, the observer's `post-opt`
+`runOptimizer` uses the `OptimizerOptions` parsed from that comma-token list
+(`framegraph::dumpDagOptimizeOverride().value_or(options_)`) instead of the
+backend's `options_`. The `pre-opt` snapshot is left unchanged — it stays the
+un-optimized builder baseline — so the `pre`/`post` diff equals what the
+chosen passes did (e.g. a device-gated "what would `passcoalesce` do" run on a
+3DMark05 frame). Because `DagObserver` never drives the Metal encode, the
+override cannot change rendered output; it is independent of
+`DXMT9_RENDERER_FEATURES` / `compat_profile` (which gate the production encode)
+because it is purely an observe-side analysis selector. The same
+`value_or(options_)` wiring lives in all three post-opt sites
+(`observeAndExport`, `observeAndExportDagToDir`,
+`observeAndExportDagToDirForFrame`), so the env override and the test seams
+behave identically.
+
 The dump is a **backend-agnostic perf/debug side-channel, not an encode input**
 (R-BACK-39.7). The same `render::DagObserver` is owned by BOTH backends — each
 holds a `DagObserver observer_` member and calls `observer_.observeAndExport(slot)`

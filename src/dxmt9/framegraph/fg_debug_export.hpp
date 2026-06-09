@@ -24,6 +24,7 @@
 //   byte-equal string.
 
 #include "fg_dag.hpp"
+#include "fg_optimizer.hpp"  // framegraph::OptimizerOptions
 
 #include "../dxmt9_backend_types.hpp"  // core::ChunkSlot, core::MetalCommandKind
 
@@ -156,6 +157,29 @@ std::uint64_t resolveDumpDagFrameRadius(const char* env);
 // Reads DXMT9_RENDERER_DUMP_DAG_FRAME_RADIUS once (static-const pattern;
 // mirrors dumpDagFrame()). 0 = single-frame filter (no widening).
 std::uint64_t dumpDagFrameRadius();
+
+// Pure resolver for DXMT9_RENDERER_DUMP_DAG_OPTIMIZE (R-BACK-39.7). This is a
+// DEBUG-ONLY ANALYSIS knob that OVERRIDES which optimizer passes the observer
+// runs for the POST-OPT DAG snapshot only — it never touches the Metal encode
+// (the DagObserver is a pure observation side-channel that does not drive
+// encoding), so it cannot change rendered output. It is independent of
+// DXMT9_RENDERER_FEATURES / compat_profile (which gate the production encode)
+// precisely because it is analysis-only.
+//
+// nullptr / empty → std::nullopt, meaning "use the backend-provided options"
+// (current behavior, pre-opt baseline vs the backend's post-opt). Otherwise the
+// comma-separated token list is parsed into an OptimizerOptions with the named
+// gated passes set: `passcoalesce`, `reorder`, `dce`, `memoryless`. Unknown
+// tokens are ignored. An env that lists only unknown tokens still resolves to a
+// (default-constructed, all-off) OptimizerOptions, NOT nullopt — the operator
+// explicitly asked for an override, so the post-opt snapshot runs the all-off
+// pipeline (lifetime + loadstore only). Testable without touching the
+// environment.
+std::optional<OptimizerOptions> resolveDumpDagOptimize(const char* env);
+
+// Reads DXMT9_RENDERER_DUMP_DAG_OPTIMIZE once (static-const pattern; mirrors
+// dumpDagFrame()). std::nullopt = no override (use the backend's options).
+std::optional<OptimizerOptions> dumpDagOptimizeOverride();
 
 // True if `slot` contains a Present command (core::MetalCommandKind::Present in
 // its commandHeaders). A chunk that contains a Present is the LAST chunk of its

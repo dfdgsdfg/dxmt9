@@ -933,6 +933,29 @@ ignored when no target frame is set (an unset target still dumps every chunk).
 `dumpDagFrameRadius()` reads the env once with the `dumpDagFrame()` static-const
 pattern.
 
+**Analysis-only post-opt optimizer override (`DXMT9_RENDERER_DUMP_DAG_OPTIMIZE`).**
+The observer's `post-opt` snapshot may be driven by an operator-selected set of
+optimizer passes instead of the owning backend's resolved options, so a
+device-gated "what would `passcoalesce` do" experiment can be run on real
+captured frames (e.g. 3DMark05 GT1). `DXMT9_RENDERER_DUMP_DAG_OPTIMIZE` is a
+comma-separated token list (`passcoalesce`, `reorder`, `dce`, `memoryless`;
+unknown tokens ignored). When set, the `post-opt` `runOptimizer` uses an
+`OptimizerOptions` with exactly the named gated passes enabled (lifetime +
+loadstore remain always-on); when unset, the `post-opt` snapshot keeps the
+current behavior (the backend's options). The `pre-opt` snapshot is unaffected —
+it remains the un-optimized builder baseline — so the `pre`/`post` diff is
+exactly what the chosen passes did. This knob is **analysis-only and MUST NOT
+affect the Metal encode**: the `render::DagObserver` is a pure observation
+side-channel that never drives encoding, so the override cannot change rendered
+output and only changes the serialized `post-opt` DAG and its `framegraph_*`
+observe counters. It is **independent of `DXMT9_RENDERER_FEATURES` /
+`compat_profile`** (which gate the production encode) precisely because it is
+analysis-only. `framegraph::resolveDumpDagOptimize(env)` is the pure resolver
+(nullptr / empty → `std::nullopt` = "use backend options"; a set-but-all-unknown
+env still resolves to an all-off override because the operator opted in
+explicitly) and `dumpDagOptimizeOverride()` reads the env once with the
+`dumpDagFrame()` static-const pattern.
+
 ---
 
 ## 11. Compatibility Profiles

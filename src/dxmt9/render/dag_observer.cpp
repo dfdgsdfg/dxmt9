@@ -85,7 +85,15 @@ void DagObserver::observeAndExportDagToDir(const core::ChunkSlot& slot,
       static_cast<std::uint64_t>(fg.passes.size());
   writeDagJsonToDir(fg, frameId, slot.seqId, "pre-opt", dumpDir);
   framegraph::OptimizerStats stats;
-  framegraph::runOptimizer(fg, options_, /*observations=*/nullptr, &stats);
+  // ANALYSIS-ONLY post-opt override (R-BACK-39.7): DXMT9_RENDERER_DUMP_DAG_OPTIMIZE
+  // can select the optimizer passes the post-opt snapshot runs, independent of
+  // the backend's encode options_. The observer never drives the Metal encode,
+  // so this cannot change rendered output — it only changes what the post-opt
+  // DAG (and its framegraph_* counters) reflects vs the un-optimized pre-opt
+  // baseline. With no override the backend's options_ are used (current behavior).
+  const framegraph::OptimizerOptions& opt =
+      framegraph::dumpDagOptimizeOverride().value_or(options_);
+  framegraph::runOptimizer(fg, opt, /*observations=*/nullptr, &stats);
   writeDagJsonToDir(fg, frameId, slot.seqId, "post-opt", dumpDir);
   recordFramegraphObserveCounters(passesBuilt, stats);
 }
@@ -123,7 +131,10 @@ void DagObserver::observeAndExportDagToDirForFrame(
       static_cast<std::uint64_t>(fg.passes.size());
   writeDagJsonToDir(fg, observe_frame_, slot.seqId, "pre-opt", dumpDir);
   framegraph::OptimizerStats stats;
-  framegraph::runOptimizer(fg, options_, /*observations=*/nullptr, &stats);
+  // ANALYSIS-ONLY post-opt override (R-BACK-39.7) — see observeAndExportDagToDir.
+  const framegraph::OptimizerOptions& opt =
+      framegraph::dumpDagOptimizeOverride().value_or(options_);
+  framegraph::runOptimizer(fg, opt, /*observations=*/nullptr, &stats);
   writeDagJsonToDir(fg, observe_frame_, slot.seqId, "post-opt", dumpDir);
   recordFramegraphObserveCounters(passesBuilt, stats);
 
@@ -182,8 +193,17 @@ void DagObserver::observeAndExport(const core::ChunkSlot& slot) {
   // memoryless observations are tracked here, so pass nullptr for the
   // observation out-param. R-BACK-39.2 (Task B11): collect an OptimizerStats so
   // the observe-path perf counters reflect the optimizer's decisions.
+  //
+  // ANALYSIS-ONLY post-opt override (R-BACK-39.7): when
+  // DXMT9_RENDERER_DUMP_DAG_OPTIMIZE is set it selects the optimizer passes for
+  // the post-opt snapshot instead of the backend's options_. The observer never
+  // drives the Metal encode, so this cannot change rendered output; it only
+  // changes what the post-opt DAG / framegraph_* counters reflect relative to
+  // the un-optimized pre-opt baseline. Unset → use options_ (current behavior).
   framegraph::OptimizerStats stats;
-  framegraph::runOptimizer(fg, options_, /*observations=*/nullptr, &stats);
+  const framegraph::OptimizerOptions& opt =
+      framegraph::dumpDagOptimizeOverride().value_or(options_);
+  framegraph::runOptimizer(fg, opt, /*observations=*/nullptr, &stats);
   framegraph::writeDagDump(fg, observe_frame_, slot.seqId, "post-opt");
   recordFramegraphObserveCounters(passesBuilt, stats);
 
