@@ -427,7 +427,7 @@ struct ChunkSlot {
     detail::chunkSlotReserveAtLeast(drawDebugSnapshots, stateCount);
   }
 
-  std::uint32_t appendDrawState(CanonicalDrawState state) {
+  std::uint32_t appendDrawState(CanonicalDrawState&& state) {
     DXMT_ASSERT(drawStateStorageConsistent() && "draw state SoA arrays diverged");
     const auto stateIndex = static_cast<std::uint32_t>(drawHotStates.size());
     drawHotStates.push_back(std::move(state.hot));
@@ -834,7 +834,7 @@ struct ChunkSlot {
       reserveDrawUniformPayloadLookup(drawUniformPayloads.size() + submissions.size());
     }
 
-    auto state = std::move(submissions.front().state);
+    auto& state = submissions.front().state;
     DrawPsoSubview psoSubview{};
     DrawRunInvariant invariant{};
     std::uint32_t stateIndex = 0;

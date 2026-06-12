@@ -127,7 +127,8 @@ target is not raw payload byte copying. The first-order children are:
 
 | Candidate | Reason |
 |---|---|
-| Compact or interned draw-run state | Avoid copying a full `CanonicalDrawState` for every small batch when a compact run-state key/subview is enough |
+| Remove obvious state value hops | [[state-churn-encode-encode-phase.30]] accepts this as the first CPU win |
+| Compact or interned draw-run state | After the value-hop fix, avoid storing a full state for every small batch when a compact run-state key/subview is enough |
 | Uniform lookup fast path | `draw_uniform_payload_lookup_last_hits=16,211`, bucket misses `872,379`, appends `874,058`; many submissions still perform the full lookup/append path |
 | Consecutive uniform handle reuse inside a batch | If adjacent submissions share payload/hash, pass the known handle instead of probing the lookup table again |
 | More effective batch coalescing | Larger records/group would amortize one state append and one record publication over more draws |

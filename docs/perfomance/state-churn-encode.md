@@ -59,6 +59,7 @@ bottleneck — that is owned by [[hidden-backend-storage]].
 | H39 | Snapshot cache misses may be inflated by declared draw-packet deltas that do not actually change non-binding state | rejected-current | [[state-churn-encode-encode-phase.28]] (`draw_packet_declared_nonbinding=419,990`, `actual_nonbinding=419,990`, `redundant_nonbinding=0`) |
 | H40 | Snapshot/uniform cost is mostly real payload construction and hashing, not redundant invalidation | accepted local CPU win; FPS flat | [[state-churn-encode-encode-phase.28]], [[snapshot-cache-snapshot.10]] (`uniform_refresh 2014.263ms→814.507ms`, snapshot submission `7622.807ms→6495.069ms`, sampled FPS `15.717→15.752`) |
 | H41 | The batch append owner is raw payload byte copy | rejected; state/uniform attribution accepted | [[state-churn-encode-encode-phase.29]] (`state=958ms`, `uniform=902ms`, `payload=65ms` despite `232.5MB` copied) |
+| H42 | Removing extra `CanonicalDrawState` value hops cuts the state append child | accepted CPU win | [[state-churn-encode-encode-phase.30]] (`append` `2708→2116ms`, `state` `958→720ms`, GPU flat) |
 
 ## Verification methods
 
@@ -171,6 +172,7 @@ flowchart TD
   EncodePhase27["encode-phase.27\nsnapshot invalidation candidate\nactual-change probe designed"]:::open
   EncodePhase28["encode-phase.28\nactual-change probe\nredundant nonbinding 0"]:::rejected
   EncodePhase29["encode-phase.29\nbatch append split\nstate 958ms / uniform 902ms\npayload 65ms"]:::accepted
+  EncodePhase30["encode-phase.30\nrvalue state append\nappend -21.85%\nstate -24.82%"]:::accepted
   Snapshot10["snapshot.10\nuniform-refresh fast path\nrefresh -59.6%\nFPS flat"]:::accepted
 
   Drawrun1 -->|"split-into"| Drawrun2
@@ -224,6 +226,7 @@ flowchart TD
   EncodePhase27 -->|"no-op delta proof"| EncodePhase28
   EncodePhase26 -->|"append child split"| EncodePhase29
   Snapshot10 -->|"queue append next"| EncodePhase29
+  EncodePhase29 -->|"remove value hops"| EncodePhase30
 ```
 
 ## Results synthesis
@@ -542,6 +545,16 @@ uniform lookup pass are poorly amortized. The next queue-side implementation
 bet should therefore compact or intern the run state, add a uniform-handle
 reuse fast path, or improve coalescing enough to raise records/group; do not
 spend the next iteration optimizing raw payload arena byte copies.
+
+[[state-churn-encode-encode-phase.30]] closes the first state-append
+implementation bet. `appendDrawState()` now consumes `CanonicalDrawState&&`, and
+`appendDrawRunBatch()` moves the first submission state directly into the slot
+instead of passing it through an extra local value and by-value parameter. That
+cuts the batch append parent `2707.789ms -> 2116.270ms` and the state child
+`958.031ms -> 720.274ms` over the same `1680` presents, while GPU time remains
+flat. The next queue-side work should split the remaining state child before a
+larger compact-state design, and should also revisit the now-largest child:
+per-submission uniform lookup/append (`837.360ms`) with mostly unique payloads.
 
 ## How to run
 Every experiment here is a 3DMark05 GT1 run via the standard wrapper. This is a
