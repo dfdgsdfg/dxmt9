@@ -7,7 +7,7 @@ title: H6 Benefit Ceiling — 38% of Tile Preservation Eliminable, ~3% of VS-wri
 date: 2026-06-09
 type: measurement
 status: accepted-gate
-source: experiments/output/app-d3d9-3dmark05-dagcheck-coalesce/3dmark05-perf-summary.md (render_pass_*_preservation_bytes, gpu_command_buffer_time_ms), traces/app-d3d9-3dmark05-dagcheck-coalesce/analysis/dag/ (100% coalesce), docs/perfomance/render-pass-store/render-pass-store-coalesce.02.md
+source: experiments/output/app-d3d9-3dmark05-dagcheck-coalesce/3dmark05-perf-summary.md (render_pass_*_preservation_bytes, gpu_command_buffer_time_ms), traces/app-d3d9-3dmark05-dagcheck-coalesce/analysis/dag/ (100% coalesce), experiments/output/app-d3d9-3dmark05-dag-current-20260612-203736/3dmark05-perf-summary.md, traces/app-d3d9-3dmark05-dag-current-20260612-203736/analysis/dag/, docs/perfomance/render-pass-store/render-pass-store-coalesce.02.md
 ---
 
 # H6 Benefit Ceiling — 38% of Tile Preservation Eliminable, ~3% of VS-write, FPS Conversion Unsettled
@@ -71,6 +71,30 @@ therefore justified only to *settle* the bandwidth-bound question (a potential
 single-digit GPU-time win on base-M1), not as a likely large FPS lever. The FPS
 mover remains **P0 = VS-invocation reduction** ([[index-cache-locality]],
 [[tvb-mechanism-proof]]), not pass coalescing.
+
+**2026-06-12 current confirmation.** A fresh normal-visual no-gputrace run
+(`app-d3d9-3dmark05-dag-current-20260612-203736`, `status: pass`, 1,680
+presents) reproduces the same shape:
+
+| Quantity | value |
+|---|---:|
+| Total tile preservation | 211.47 GB |
+| Same-key re-entry preservation | 84.25 GB |
+| Distance-1 RT+depth re-entry preservation | 79.68 GB |
+| Distance-1 re-entry count | 3,399 / 3,762 same-key re-entries |
+| DAG frame 48..52 pre-opt candidates | 5 / 5 safe-relocatable |
+| DAG frame 48..52 post-opt candidates | 0 / 5 after `passcoalesce` |
+| `framegraph_passes_coalesced` | 5 |
+| GPU command-buffer time | 5.09 s total, 3.03 ms/present average |
+| Completion/present wait | 39.52 s total, p50 25.60 ms, p95 33.38 ms |
+| Frame sampling | p50 17.42 fps, tail samples around 23-24 fps |
+
+This confirms the current visual-correctness state has not changed the H6
+classification: passcoalesce is still a real P1 store/load lever, but the
+wall-clock envelope is still dominated by completion/present pacing and the P0
+hidden vertex/TVB path remains the likely FPS mover. The new wrapper also makes
+the pre-opt/post-opt distinction explicit: pre-opt discovers candidates,
+post-opt verifies that the analysis-only optimizer removes them.
 
 **Related.** [[render-pass-store-coalesce.02]] (100% coalesceable) ·
 [[render-pass-store-coalesce.01]] (WAW edge) ·

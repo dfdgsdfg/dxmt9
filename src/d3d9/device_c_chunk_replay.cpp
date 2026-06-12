@@ -205,6 +205,13 @@ bool failed(int32_t hr) {
   return hr < 0;
 }
 
+void countDurationSince(std::chrono::steady_clock::time_point start,
+                        void (*counter)(std::uint64_t)) {
+  counter(static_cast<std::uint64_t>(
+      std::chrono::duration_cast<std::chrono::nanoseconds>(
+          std::chrono::steady_clock::now() - start).count()));
+}
+
 bool commitChunkRecordAllowsPendingDrawBatchThrough(std::uint32_t type) {
   switch (type) {
   case D9C_COMMAND_RECORD_SET_VS_CONST_F:
@@ -605,6 +612,192 @@ dxmt9::core::RenderTargetAttachment attachmentFromSurface(
                  : dxmt9::core::RenderTargetAttachment{};
 }
 
+bool drawPacketActualChangePerfEnabled() {
+  static const bool enabled = [] {
+    const char* env = std::getenv("DXMT9_PERF_DRAW_PACKET_ACTUAL_CHANGE");
+    return env && env[0] != '\0' && std::strcmp(env, "0") != 0;
+  }();
+  return enabled;
+}
+
+std::uint32_t drawPacketActualChangeMask(
+    const dxmt9::core::DeviceState& state,
+    const D9CDrawPrimitivePacket& packet) {
+  std::uint32_t mask = 0;
+  using namespace dxmt9::perf;
+
+  auto addIf = [&](bool changed, std::uint32_t bit) {
+    if (changed) {
+      mask |= bit;
+    }
+  };
+
+  for (uint32_t i = 0; i < packet.renderStateCount; ++i) {
+    const auto& entry = packet.renderStates[i];
+    bool changed = false;
+    if (dxmt9::core::RenderStateTable::validKey(entry.state)) {
+      changed = state.renderStates.valueOr(entry.state, 0u) != entry.value;
+    }
+    if (entry.state == dxmt9::core::RS_SCISSOR_TEST_ENABLE &&
+        state.scissorEnabled != (entry.value != 0)) {
+      changed = true;
+    }
+    addIf(changed, CommitChunkDrawDeltaRenderState);
+  }
+
+  for (uint32_t stage = 0;
+       stage < std::min<std::uint32_t>(D9C_DRAW_PACKET_MAX_TEXTURES,
+                                       dxmt9::core::kMaxTextures);
+       ++stage) {
+    if ((packet.textureMask & (1u << stage)) == 0) {
+      continue;
+    }
+    auto* texture = wireHandlePtr<D9CTexture>(packet.textures[stage]);
+    addIf(state.textures[stage] != (texture ? texture->obj : nullptr),
+          CommitChunkDrawDeltaTexture);
+  }
+
+  for (uint32_t stream = 0;
+       stream < std::min<std::uint32_t>(D9C_DRAW_PACKET_MAX_STREAMS,
+                                        dxmt9::core::kMaxStreams);
+       ++stream) {
+    if ((packet.streamSourceMask & (1u << stream)) == 0) {
+      continue;
+    }
+    const auto& source = packet.streamSources[stream];
+    addIf(bufferObjectHandleValue(state.streamBuffers[stream]) !=
+              wireBufferObjectHandleValue(source.buffer) ||
+          state.streamOffsets[stream] != source.offset ||
+          state.streamStrides[stream] != source.stride,
+          CommitChunkDrawDeltaStream);
+  }
+
+  if (packet.fvfValid) {
+    addIf(state.fvf != packet.fvf ||
+          state.vertexDecl.fvf != packet.fvf ||
+          !state.vertexDecl.elements.empty(),
+          CommitChunkDrawDeltaFvf);
+  }
+
+  if (packet.vsValid) {
+    auto* vs = wireHandlePtr<D9CShader>(packet.vsHandle);
+    addIf(state.vertexShader != (vs ? vs->ref : dxmt9::core::ShaderRef{}),
+          CommitChunkDrawDeltaShader);
+  }
+  if (packet.psValid) {
+    auto* ps = wireHandlePtr<D9CShader>(packet.psHandle);
+    addIf(state.pixelShader != (ps ? ps->ref : dxmt9::core::ShaderRef{}),
+          CommitChunkDrawDeltaShader);
+  }
+
+  if (packet.vdeclValid) {
+    auto* vd = wireHandlePtr<D9CVertexDecl>(packet.vdeclHandle);
+    const bool elementsChanged = vd ? state.vertexDecl.elements != vd->elements
+                                    : !state.vertexDecl.elements.empty();
+    addIf(elementsChanged || state.vertexDecl.fvf != state.fvf,
+          CommitChunkDrawDeltaVertexDecl);
+  }
+
+  for (uint32_t slot = 0;
+       slot < std::min<std::uint32_t>(D9C_DRAW_PACKET_MAX_RENDER_TARGETS,
+                                      dxmt9::core::kMaxRenderTargets);
+       ++slot) {
+    if ((packet.rtMask & (1u << slot)) == 0) {
+      continue;
+    }
+    auto* rt = wireHandlePtr<D9CSurface>(packet.rtHandles[slot]);
+    const auto surface = rt ? rt->obj : nullptr;
+    bool changed = state.renderTargets[slot] != attachmentFromSurface(surface);
+    if (slot == 0 && surface) {
+      const auto& desc = surface->desc();
+      const auto width = std::max(1u, desc.width);
+      const auto height = std::max(1u, desc.height);
+      const dxmt9::core::Viewport viewport{0, 0, width, height, 0.0f, 1.0f};
+      const dxmt9::core::Rect scissor{0, 0, static_cast<int32_t>(width),
+                                      static_cast<int32_t>(height)};
+      changed = changed || state.viewport != viewport || state.scissorRect != scissor;
+    }
+    addIf(changed, CommitChunkDrawDeltaRenderTarget);
+  }
+
+  if (packet.dsValid) {
+    auto* ds = wireHandlePtr<D9CSurface>(packet.dsHandle);
+    addIf(state.depthStencil != attachmentFromSurface(ds ? ds->obj : nullptr),
+          CommitChunkDrawDeltaDepthStencil);
+  }
+
+  if (packet.viewportValid) {
+    addIf(state.viewport != viewportFromC(packet.viewport),
+          CommitChunkDrawDeltaViewport);
+  }
+  if (packet.scissorValid) {
+    addIf(state.scissorRect != rectFromC(packet.scissor),
+          CommitChunkDrawDeltaScissor);
+  }
+
+  for (uint32_t i = 0; i < packet.tssCount; ++i) {
+    const auto& e = packet.tss[i];
+    const uint32_t stage = std::min(e.stage, dxmt9::core::kMaxTextureStages - 1);
+    const uint32_t key = std::min(e.type, dxmt9::core::kMaxTextureStageStates - 1);
+    addIf(state.textureStageStates[stage].valueOr(key, 0u) != e.value,
+          CommitChunkDrawDeltaTextureStageState);
+  }
+  for (uint32_t i = 0; i < packet.samplerStateCount; ++i) {
+    const auto& e = packet.samplerStates[i];
+    const bool valid =
+        e.sampler < dxmt9::core::kMaxSamplers &&
+        dxmt9::core::SamplerStateTable::validKey(e.type);
+    addIf(valid && state.samplerStates[e.sampler].valueOr(e.type, 0u) != e.value,
+          CommitChunkDrawDeltaSamplerState);
+  }
+
+  if (packet.materialValid) {
+    addIf(state.material != materialFromC(packet.material),
+          CommitChunkDrawDeltaMaterial);
+  }
+
+  for (uint32_t i = 0; i < dxmt9::core::kMaxClipPlanes; ++i) {
+    if ((packet.clipPlaneMask & (1u << i)) == 0) {
+      continue;
+    }
+    const dxmt9::core::ClipPlane plane{packet.clipPlanes[i * 4 + 0],
+                                       packet.clipPlanes[i * 4 + 1],
+                                       packet.clipPlanes[i * 4 + 2],
+                                       packet.clipPlanes[i * 4 + 3]};
+    addIf(state.clipPlanes[i] != plane, CommitChunkDrawDeltaClipPlane);
+  }
+
+  for (uint32_t i = 0; i < packet.transformCount; ++i) {
+    const auto& e = packet.transforms[i];
+    const auto key = transformStateFromD3D(e.state);
+    const auto matrix = matrixFromC(e.matrix);
+    addIf(dxmt9::core::TransformTable::validKey(key) &&
+              state.transforms.valueOr(key, dxmt9::core::Matrix4x4{}) != matrix,
+          CommitChunkDrawDeltaTransform);
+  }
+
+  for (uint32_t i = 0; i < D9C_DRAW_PACKET_MAX_LIGHTS; ++i) {
+    if ((packet.lightSlotMask & (1u << i)) == 0) {
+      continue;
+    }
+    addIf(i < dxmt9::core::kMaxLights &&
+              state.lights[i] != lightFromC(packet.lights[i]),
+          CommitChunkDrawDeltaLight);
+  }
+  for (uint32_t i = 0; i < D9C_DRAW_PACKET_MAX_LIGHTS; ++i) {
+    if ((packet.lightEnableValidMask & (1u << i)) == 0) {
+      continue;
+    }
+    const bool enabled = (packet.lightEnableMask & (1u << i)) != 0;
+    addIf(i < dxmt9::core::kMaxLights &&
+              (state.lightEnabled[i] != enabled ||
+               state.lights[i].enabled != enabled),
+          CommitChunkDrawDeltaLightEnable);
+  }
+
+  return mask;
+}
+
 int32_t validateDrawPacketStateDelta(const D9CDrawPrimitivePacket& packet) {
   if (packet.renderStateCount > D9C_DRAW_PACKET_MAX_RENDER_STATES ||
       packet.tssCount > D9C_DRAW_PACKET_MAX_TSS ||
@@ -807,9 +1000,14 @@ int32_t applyDrawPacketStateDirect(D9CDevice* d, const D9CDrawPrimitivePacket& p
     return dxmt9::core::D3D_OK;
   }
 
+  const std::uint32_t deltaMask = commitChunkDrawDeltaMask(packet);
+  if (drawPacketActualChangePerfEnabled()) {
+    dxmt9::perf::countDrawPacketActualChange(
+        deltaMask, drawPacketActualChangeMask(d->dev().state(), packet));
+  }
+
   auto& state = d->dev().mutableState(
-      drawStateInvalidationReasonFromCommitDeltaMask(
-          commitChunkDrawDeltaMask(packet)));
+      drawStateInvalidationReasonFromCommitDeltaMask(deltaMask));
 
   for (uint32_t i = 0; i < packet.renderStateCount; ++i) {
     const auto& entry = packet.renderStates[i];
@@ -947,6 +1145,13 @@ int32_t applyDrawPacketState(D9CDevice* d, const D9CDrawPrimitivePacket& packet)
   return applyDrawPacketStateDirect(d, packet);
 }
 
+int32_t timedApplyDrawPacketState(D9CDevice* d, const D9CDrawPrimitivePacket& packet) {
+  const auto start = std::chrono::steady_clock::now();
+  const int32_t hr = applyDrawPacketState(d, packet);
+  countDurationSince(start, dxmt9::perf::countCommitChunkApplyDrawStateCpuTime);
+  return hr;
+}
+
 bool recordRangeValid(std::uint32_t recordSize, std::uint32_t offset, std::uint32_t bytes) {
   return offset <= recordSize && bytes <= recordSize - offset;
 }
@@ -958,7 +1163,7 @@ bool recordRangeValid(std::uint32_t recordSize, std::uint32_t offset, std::uint3
 // importer is hot — every D9CCommandRecord_DRAW_* takes this path — so
 // removing that hop is meaningful per-draw cost relief.
 int32_t applyDrawPrimitivePacket(D9CDevice* d, const D9CDrawPrimitivePacket& packet) {
-  const int32_t stateHr = applyDrawPacketState(d, packet);
+  const int32_t stateHr = timedApplyDrawPacketState(d, packet);
   if (failed(stateHr)) {
     return stateHr;
   }
@@ -969,7 +1174,7 @@ int32_t applyDrawPrimitivePacket(D9CDevice* d, const D9CDrawPrimitivePacket& pac
 
 int32_t applyDrawIndexedPrimitivePacket(D9CDevice* d,
                                         const D9CDrawIndexedPrimitivePacket& packet) {
-  const int32_t stateHr = applyDrawPacketState(d, packet.state);
+  const int32_t stateHr = timedApplyDrawPacketState(d, packet.state);
   if (failed(stateHr)) {
     return stateHr;
   }
@@ -1007,32 +1212,44 @@ bool canBatchDrawPacket(D9CDevice* d,
 int32_t queueDrawPrimitiveSubmission(
     D9CDevice* d, const D9CDrawPrimitivePacket& packet,
     std::vector<dxmt9::core::DrawRunSubmission>& submissions) {
-  const int32_t stateHr = applyDrawPacketState(d, packet);
+  const auto queueStart = std::chrono::steady_clock::now();
+  const auto finish = [&](int32_t hr) {
+    countDurationSince(queueStart,
+                       dxmt9::perf::countCommitChunkQueueDrawSubmissionCpuTime);
+    return hr;
+  };
+  const int32_t stateHr = timedApplyDrawPacketState(d, packet);
   if (failed(stateHr)) {
-    return stateHr;
+    return finish(stateHr);
   }
   dxmt9::core::DrawRunSubmission submission{};
   const int32_t hr =
       d->dev().snapshotDrawSubmissionFromCurrentState(makeRunParam(packet),
                                                       submission);
   if (failed(hr)) {
-    return hr;
+    return finish(hr);
   }
   submissions.push_back(std::move(submission));
-  return dxmt9::core::D3D_OK;
+  return finish(dxmt9::core::D3D_OK);
 }
 
 int32_t queueDrawIndexedPrimitiveSubmission(
     D9CDevice* d, const D9CDrawIndexedPrimitivePacket& packet,
     std::vector<dxmt9::core::DrawRunSubmission>& submissions) {
-  const int32_t stateHr = applyDrawPacketState(d, packet.state);
+  const auto queueStart = std::chrono::steady_clock::now();
+  const auto finish = [&](int32_t hr) {
+    countDurationSince(queueStart,
+                       dxmt9::perf::countCommitChunkQueueDrawSubmissionCpuTime);
+    return hr;
+  };
+  const int32_t stateHr = timedApplyDrawPacketState(d, packet.state);
   if (failed(stateHr)) {
-    return stateHr;
+    return finish(stateHr);
   }
   if (packet.ibValid) {
     auto* ib = wireHandlePtr<D9CBuffer>(packet.ibHandle);
     const int32_t hr = dxmt9c_device_set_indices(d, ib);
-    if (failed(hr)) return hr;
+    if (failed(hr)) return finish(hr);
   }
   auto draw = makeRunParam(packet);
   draw.indexType = d->dev().state().indexType;
@@ -1040,17 +1257,17 @@ int32_t queueDrawIndexedPrimitiveSubmission(
   const int32_t hr =
       d->dev().snapshotDrawSubmissionFromCurrentState(draw, submission);
   if (failed(hr)) {
-    return hr;
+    return finish(hr);
   }
   submissions.push_back(std::move(submission));
-  return dxmt9::core::D3D_OK;
+  return finish(dxmt9::core::D3D_OK);
 }
 
 int32_t applyDrawPrimitiveUPPacket(D9CDevice* d,
                                    const D9CDrawPrimitiveUPPacket& packet,
                                    const dxmt9::core::u8* record,
                                    std::uint32_t recordSize) {
-  const int32_t stateHr = applyDrawPacketState(d, packet.state);
+  const int32_t stateHr = timedApplyDrawPacketState(d, packet.state);
   if (failed(stateHr)) {
     return stateHr;
   }
@@ -1067,7 +1284,7 @@ int32_t applyDrawIndexedPrimitiveUPPacket(D9CDevice* d,
                                           const D9CDrawIndexedPrimitiveUPPacket& packet,
                                           const dxmt9::core::u8* record,
                                           std::uint32_t recordSize) {
-  const int32_t stateHr = applyDrawPacketState(d, packet.state);
+  const int32_t stateHr = timedApplyDrawPacketState(d, packet.state);
   if (failed(stateHr)) {
     return stateHr;
   }
@@ -1087,14 +1304,12 @@ int32_t applyDrawIndexedPrimitiveUPPacket(D9CDevice* d,
 }  // namespace
 
 extern "C" int32_t dxmt9c_device_commit_chunk(D9CDevice* d, const D9CCommandChunk* chunk) {
-  // V1 boundary B2 — wall-clock latency of one bridge crossing. Sampled
-  // at the d3d9-side bridge entry (this function) so the measurement
-  // reflects WINE_UNIX_CALL marshalling + importer validation + seqId
-  // assignment in isolation from encode and GPU work. Recorded only at
-  // the success exit (mirrors countChunkAdmit) so a reject path with a
-  // fast-rejected malformed payload does not skew the success-path
-  // distribution that the bridge_empty probe regression-gates on.
+  // V1 boundary B2 — wall-clock latency of one commit_chunk bridge call.
+  // This includes importer validation, handle/resource marking, record
+  // replay, and queue submission construction. It excludes asynchronous
+  // encode/GPU work after this call returns.
   const auto bridgeCommitStart = std::chrono::steady_clock::now();
+  auto commitChunkStageStart = bridgeCommitStart;
   if (!d || !chunk || chunk->version != D9C_COMMAND_CHUNK_VERSION) {
     return commitChunkFail("bad-header");
   }
@@ -1123,6 +1338,11 @@ extern "C" int32_t dxmt9c_device_commit_chunk(D9CDevice* d, const D9CCommandChun
     return commitChunkFail("validation", validation.failedRecordIndex,
                            static_cast<std::uint32_t>(validation.status));
   }
+  auto commitChunkStageEnd = std::chrono::steady_clock::now();
+  dxmt9::perf::countCommitChunkImportCpuTime(static_cast<std::uint64_t>(
+      std::chrono::duration_cast<std::chrono::nanoseconds>(
+          commitChunkStageEnd - commitChunkStageStart).count()));
+  commitChunkStageStart = commitChunkStageEnd;
 
   // Phase 4 / 18: validate and retain only handles selected by record
   // handle ranges.
@@ -1258,6 +1478,11 @@ extern "C" int32_t dxmt9c_device_commit_chunk(D9CDevice* d, const D9CCommandChun
       resetGuard.upper = std::move(upper);
     }
   }
+  commitChunkStageEnd = std::chrono::steady_clock::now();
+  dxmt9::perf::countCommitChunkHandleCpuTime(static_cast<std::uint64_t>(
+      std::chrono::duration_cast<std::chrono::nanoseconds>(
+          commitChunkStageEnd - commitChunkStageStart).count()));
+  commitChunkStageStart = commitChunkStageEnd;
 
   std::vector<dxmt9::core::DrawRunSubmission> pendingDrawSubmissions;
   pendingDrawSubmissions.reserve(std::min<std::uint32_t>(importedChunk.recordCount, 256u));
@@ -1267,7 +1492,11 @@ extern "C" int32_t dxmt9c_device_commit_chunk(D9CDevice* d, const D9CCommandChun
     }
     dxmt9::perf::countCommitChunkDrawSubmissionBatch(
         static_cast<std::uint32_t>(pendingDrawSubmissions.size()));
+    const auto submitStart = std::chrono::steady_clock::now();
     d->dev().submitDrawSubmissionBatch(pendingDrawSubmissions);
+    dxmt9::perf::countCommitChunkDrawBatchSubmitCpuTime(static_cast<std::uint64_t>(
+        std::chrono::duration_cast<std::chrono::nanoseconds>(
+            std::chrono::steady_clock::now() - submitStart).count()));
     pendingDrawSubmissions.clear();
     return dxmt9::core::D3D_OK;
   };
@@ -1307,7 +1536,9 @@ extern "C" int32_t dxmt9c_device_commit_chunk(D9CDevice* d, const D9CCommandChun
       // append scanned DrawParam records into a flat span, then submit once
       // (single canonical hot-state build + single queue submission).
       // Falls through to per-record path if the run is just length-1.
+      const auto scanStart = std::chrono::steady_clock::now();
       const auto scan = scanImportedDrawRun(importedChunk, *recordView);
+      countDurationSince(scanStart, dxmt9::perf::countCommitChunkDrawRunScanCpuTime);
       countCommitChunkDrawRunScan(scan);
       if (scan.replayAsRun()) {
         hr = flushPendingDrawSubmissions();
@@ -1316,10 +1547,11 @@ extern "C" int32_t dxmt9c_device_commit_chunk(D9CDevice* d, const D9CCommandChun
         // later records ride alongside each DrawParam as low-level binding
         // overrides, then the public D3D state is advanced to the final
         // binding after the run is submitted.
-        hr = applyDrawPacketState(d, decoded.packet);
+        hr = timedApplyDrawPacketState(d, decoded.packet);
         if (failed(hr)) return commitChunkFail("draw-run-state", recordIndex, header.type, hr);
         const auto baseBindings = effectiveBindingsFromState(d->dev().state());
         auto effectiveBindings = baseBindings;
+        const auto runBuildStart = std::chrono::steady_clock::now();
         std::vector<dxmt9::core::DrawParam> runParams;
         runParams.reserve(scan.recordCount);
         std::vector<dxmt9::core::DrawBindingOverride> bindingOverrides;
@@ -1387,10 +1619,18 @@ extern "C" int32_t dxmt9c_device_commit_chunk(D9CDevice* d, const D9CCommandChun
         if (runPayloads.size() != runParams.size()) {
           return commitChunkFail("draw-run-payload-count", recordIndex, header.type);
         }
+        countDurationSince(runBuildStart,
+                           dxmt9::perf::countCommitChunkDrawRunBuildCpuTime);
 
+        const auto runSubmitStart = std::chrono::steady_clock::now();
         hr = d->dev().drawPrimitiveRun(runParams, runPayloads);
+        countDurationSince(runSubmitStart,
+                           dxmt9::perf::countCommitChunkDrawRunSubmitCpuTime);
         if (failed(hr)) return commitChunkFail("draw-run", recordIndex, header.type, hr);
+        const auto finalBindStart = std::chrono::steady_clock::now();
         hr = applyFinalBindingState(d, baseBindings, effectiveBindings);
+        countDurationSince(finalBindStart,
+                           dxmt9::perf::countCommitChunkDrawRunFinalBindCpuTime);
         if (failed(hr)) return commitChunkFail("draw-run-final-bind", recordIndex, header.type, hr);
         recordIndex = scan.endIndex;
         continue;
@@ -1413,12 +1653,14 @@ extern "C" int32_t dxmt9c_device_commit_chunk(D9CDevice* d, const D9CCommandChun
       // Same coalescing as DRAW_PRIMITIVE. Direct and indexed records may
       // share a run; DrawParam carries the per-draw indexed flag used by
       // the encoder to dispatch drawIndexed vs draw.
+      const auto scanStart = std::chrono::steady_clock::now();
       const auto scan = scanImportedDrawRun(importedChunk, *recordView);
+      countDurationSince(scanStart, dxmt9::perf::countCommitChunkDrawRunScanCpuTime);
       countCommitChunkDrawRunScan(scan);
       if (scan.replayAsRun()) {
         hr = flushPendingDrawSubmissions();
         if (failed(hr)) return commitChunkFail("indexed-draw-run-flush", recordIndex, header.type, hr);
-        hr = applyDrawPacketState(d, decoded.packet.state);
+        hr = timedApplyDrawPacketState(d, decoded.packet.state);
         if (failed(hr)) return commitChunkFail("indexed-draw-run-state", recordIndex, header.type, hr);
         if (decoded.packet.ibValid) {
           auto* ib = wireHandlePtr<D9CBuffer>(decoded.packet.ibHandle);
@@ -1427,6 +1669,7 @@ extern "C" int32_t dxmt9c_device_commit_chunk(D9CDevice* d, const D9CCommandChun
         }
         const auto baseBindings = effectiveBindingsFromState(d->dev().state());
         auto effectiveBindings = baseBindings;
+        const auto runBuildStart = std::chrono::steady_clock::now();
         std::vector<dxmt9::core::DrawParam> runParams;
         runParams.reserve(scan.recordCount);
         std::vector<dxmt9::core::DrawBindingOverride> bindingOverrides;
@@ -1494,10 +1737,18 @@ extern "C" int32_t dxmt9c_device_commit_chunk(D9CDevice* d, const D9CCommandChun
         if (runPayloads.size() != runParams.size()) {
           return commitChunkFail("indexed-draw-run-payload-count", recordIndex, header.type);
         }
+        countDurationSince(runBuildStart,
+                           dxmt9::perf::countCommitChunkDrawRunBuildCpuTime);
 
+        const auto runSubmitStart = std::chrono::steady_clock::now();
         hr = d->dev().drawPrimitiveRun(runParams, runPayloads);
+        countDurationSince(runSubmitStart,
+                           dxmt9::perf::countCommitChunkDrawRunSubmitCpuTime);
         if (failed(hr)) return commitChunkFail("indexed-draw-run", recordIndex, header.type, hr);
+        const auto finalBindStart = std::chrono::steady_clock::now();
         hr = applyFinalBindingState(d, baseBindings, effectiveBindings);
+        countDurationSince(finalBindStart,
+                           dxmt9::perf::countCommitChunkDrawRunFinalBindCpuTime);
         if (failed(hr)) return commitChunkFail("indexed-draw-run-final-bind", recordIndex, header.type, hr);
         recordIndex = scan.endIndex;
         continue;
@@ -1631,7 +1882,7 @@ extern "C" int32_t dxmt9c_device_commit_chunk(D9CDevice* d, const D9CCommandChun
       std::memcpy(&as, record, sizeof(as));
       // Apply the state delta only; draw fields in the packet
       // (primitiveType / primitiveCount / startVertex) are unused.
-      hr = applyDrawPacketState(d, as.packet);
+      hr = timedApplyDrawPacketState(d, as.packet);
       // C1 dirty tracking: APPLY_STATE bundles RS / transform / clip /
       // viewport / light / material deltas. False-dirty is safe per
       // task spec; the alternative (missing-dirty) is a correctness bug.
@@ -1644,6 +1895,7 @@ extern "C" int32_t dxmt9c_device_commit_chunk(D9CDevice* d, const D9CCommandChun
     case D9C_COMMAND_RECORD_SET_PS_CONST_F:
     case D9C_COMMAND_RECORD_SET_PS_CONST_I:
     case D9C_COMMAND_RECORD_SET_PS_CONST_B: {
+      const auto constUploadStart = std::chrono::steady_clock::now();
       D9CCommandRecordSetConst hdr{};
       std::memcpy(&hdr, record, sizeof(hdr));
       const auto* payload = record + sizeof(hdr);
@@ -1686,6 +1938,8 @@ extern "C" int32_t dxmt9c_device_commit_chunk(D9CDevice* d, const D9CCommandChun
         if (q) q->applyDirtyConstantSetPsB(hdr.start, hdr.count);
         break;
       }
+      countDurationSince(constUploadStart,
+                         dxmt9::perf::countCommitChunkConstUploadCpuTime);
       break;
     }
     default:
@@ -1711,6 +1965,10 @@ extern "C" int32_t dxmt9c_device_commit_chunk(D9CDevice* d, const D9CCommandChun
   if (recordIndex != importedChunk.recordCount) {
     return commitChunkFail("truncated-records", recordIndex, importedChunk.recordCount);
   }
+  commitChunkStageEnd = std::chrono::steady_clock::now();
+  dxmt9::perf::countCommitChunkReplayCpuTime(static_cast<std::uint64_t>(
+      std::chrono::duration_cast<std::chrono::nanoseconds>(
+          commitChunkStageEnd - commitChunkStageStart).count()));
   // R-BACK-2.10: chunk fully validated + replayed. Bumping admit at the
   // single success point keeps reject + admit symmetric.
   dxmt9::perf::countChunkAdmit();

@@ -71,12 +71,17 @@ Ranked by ROI:
 ### (b) Bridge-ABI throughput — `perf-d3d9-bridge-empty.sh` 🟢 HIGH
 
 A small in-tree app that issues 100k `commit_chunk()` calls with
-**header-only / zero-record** payloads. Measures pure PE→unix crossing
-cost without any encode or GPU work.
+**header-only / zero-record** payloads. Measures the empty
+`commit_chunk` round trip: PE→unix crossing plus minimal import/admit
+cost, without any encode or GPU work. In wild apps the same historical
+`bridge_commit_latency_ns` counter can include record replay and queued
+draw submission work.
 
 - **Boundary:** B2 only.
 - **Counters:** `chunk_admit`, `chunk_reject`, latency percentiles per commit (new perf counter `bridge_commit_latency_ns`).
-- **Detects:** any per-call regression in the WINE_UNIX_CALL marshalling, struct-pack ABI changes, importer validation overhead.
+- **Detects:** any per-call regression in the WINE_UNIX_CALL marshalling,
+  struct-pack ABI changes, or minimal importer validation overhead for the
+  empty-payload boundary probe.
 - **Implementation:** ~100 lines C++ + Wine wrapper, ~2 days.
 
 ### (c) Encode-only throughput — `perf-d3d9-encode-replay.sh` 🟢 HIGH

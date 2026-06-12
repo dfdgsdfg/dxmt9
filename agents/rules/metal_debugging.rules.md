@@ -199,7 +199,7 @@ choose cleanup targets. Do not delete raw trace artifacts automatically.
 already been emitted. Do not wait for natural process exit during perf work.
 Every 3DMark05 perf or `.gputrace` run must go through a positive runner
 timeout so the run can timeout-finalize `result.json`, perf logs, and trace
-paths consistently. The standard wrapper defaults to `180s` for no-gputrace
+paths consistently. The standard wrapper defaults to `120s` for no-gputrace
 scouts and `420s` for `.gputrace`/Xcode replay candidates, and passes that as
 an explicit `run_experiment.py --timeout`. It also wraps the entire
 `caffeinate run_experiment.py ...` command in a top-level watchdog at
@@ -213,18 +213,18 @@ to be killed manually because it was stuck at the final frame, treat that as a
 timeout-policy failure and verify the wrapper watchdog rather than repeating an
 unsupervised launch. For routine
 3DMark05 smoke/image runs, use the catalogue runner's default
-`run_timeout_sec=180` / `allow_timeout=true` / `require_positive_timeout=true`
+`run_timeout_sec=120` / `allow_timeout=true` / `require_positive_timeout=true`
 or pass an explicit positive `run_experiment.py --timeout N`; `--timeout 0` is
 rejected for this app. Do not run
 `experiments/launchers/app-d3d9-3dmark05.sh` or the
 `DXMT_3DMARK05_DIRECT=1` launcher path unsupervised from a shell. If the
 launcher is started directly and no `run_experiment.py` supervision is present,
 it applies a fallback positive timeout (`DXMT_3DMARK05_LAUNCHER_TIMEOUT`,
-default `180s`) and kills the child process group; set
+default `120s`) and kills the child process group; set
 `DXMT_3DMARK05_ALLOW_UNSUPERVISED=1` only when another documented supervisor is
 active. For direct verify-prefix runs, prefer
 `scripts/run_apps/run_app-d3d9-3dmark05-verify_direct.sh`; it supervises the
-launcher with `DXMT_3DMARK05_DIRECT_TIMEOUT=180` by default and kills the
+launcher with `DXMT_3DMARK05_DIRECT_TIMEOUT=120` by default and kills the
 process group on timeout. Use `DXMT_3DMARK05_DIRECT_DRY_RUN=1` first when
 checking the resolved timeout/command, and record any non-default timeout
 budget in the run notes. The 3DMark05 direct launcher also traps `TERM`/`INT`
@@ -574,9 +574,9 @@ exported Xcode counter CSV, or generated report used as evidence.
 ### Standard recipe
 
 ```sh
-# 1. Capture (no-gputrace scout = 180s, .gputrace/Xcode candidate = 420s)
+# 1. Capture (no-gputrace scout = 120s, .gputrace/Xcode candidate = 420s)
 bash scripts/tools/run_3dmark05_perf_probe.sh \
-  --suffix <tag> --frame <50|60> [--no-gputrace] <probe flags> --timeout <180|420>
+  --suffix <tag> --frame <50|60> [--no-gputrace] <probe flags> --timeout <120|420>
 
 # For no-gputrace run-level/default-policy smokes only, add
 # --no-encoder-breakdown to avoid per-encoder diagnostic overhead. Do not use it

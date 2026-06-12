@@ -82,7 +82,7 @@ class ThreeDMark05ProbeScriptTests(unittest.TestCase):
 
         self.assertEqual(result.returncode, 0, result.stderr)
         cmd_line = next(line for line in result.stdout.splitlines() if line.startswith("cmd:"))
-        self.assertIn("--timeout 180", cmd_line)
+        self.assertIn("--timeout 120", cmd_line)
 
     def test_wrapper_dry_run_prints_top_level_watchdog_timeout(self) -> None:
         result = self.run_script(
@@ -310,7 +310,7 @@ class ThreeDMark05ProbeScriptTests(unittest.TestCase):
         )
 
         self.assertEqual(result.returncode, 0, result.stderr)
-        self.assertIn("timeout: 180s", result.stdout)
+        self.assertIn("timeout: 120s", result.stdout)
         cmd_line = next(line for line in result.stdout.splitlines() if line.startswith("cmd:"))
         self.assertIn("experiments/launchers/app-d3d9-3dmark05.sh", cmd_line)
 
@@ -1304,6 +1304,78 @@ class ThreeDMark05ProbeScriptTests(unittest.TestCase):
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertNotIn("DXMT9_PERF_ENCODER_BREAKDOWN=1", result.stdout)
         self.assertNotIn("DXMT9_PERF_ENCODER_BREAKDOWN_SEQ=", result.stdout)
+
+    def test_wrapper_dry_run_includes_framegraph_dag_env(self) -> None:
+        result = self.run_script(
+            RUN_WRAPPER,
+            "--suffix",
+            "dag-dry-run",
+            "--no-gputrace",
+            "--dump-framegraph-dag",
+            "--framegraph-dag-frame",
+            "50",
+            "--framegraph-dag-frame-radius",
+            "2",
+            "--framegraph-dag-formats",
+            "json,mermaid",
+            "--framegraph-dag-optimize",
+            "passcoalesce",
+            "--framegraph-dag-draws",
+            "--dry-run",
+        )
+
+        dag_dir = REPO_ROOT / "traces" / "app-d3d9-3dmark05-dag-dry-run" / "analysis" / "dag"
+        analysis_dir = dag_dir.parent
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn(f"framegraph_dag_dir: {dag_dir}", result.stdout)
+        self.assertIn("framegraph_dag_frame: 50", result.stdout)
+        self.assertIn("framegraph_dag_frame_radius: 2", result.stdout)
+        self.assertIn("framegraph_dag_formats: json,mermaid", result.stdout)
+        self.assertIn("framegraph_dag_optimize: passcoalesce", result.stdout)
+        self.assertIn("framegraph_dag_draws: 1", result.stdout)
+        self.assertIn(f"framegraph_dag_summary: {analysis_dir / 'framegraph-dag-summary.md'}", result.stdout)
+        self.assertIn(f"framegraph_dag_candidates_csv: {analysis_dir / 'framegraph-dag-candidates.csv'}", result.stdout)
+        self.assertIn(f"framegraph_dag_preopt_summary: {analysis_dir / 'framegraph-dag-preopt-summary.md'}", result.stdout)
+        self.assertIn(f"framegraph_dag_preopt_candidates_csv: {analysis_dir / 'framegraph-dag-preopt-candidates.csv'}", result.stdout)
+        self.assertIn(f"framegraph_dag_postopt_summary: {analysis_dir / 'framegraph-dag-postopt-summary.md'}", result.stdout)
+        self.assertIn(f"framegraph_dag_postopt_candidates_csv: {analysis_dir / 'framegraph-dag-postopt-candidates.csv'}", result.stdout)
+        self.assertIn(f"DXMT9_RENDERER_DUMP_DAG={dag_dir}", result.stdout)
+        self.assertIn("DXMT9_RENDERER_DUMP_DAG_FRAME=50", result.stdout)
+        self.assertIn("DXMT9_RENDERER_DUMP_DAG_FRAME_RADIUS=2", result.stdout)
+        self.assertIn("DXMT9_RENDERER_DUMP_DAG_FORMATS=json\\,mermaid", result.stdout)
+        self.assertIn("DXMT9_RENDERER_DUMP_DAG_OPTIMIZE=passcoalesce", result.stdout)
+        self.assertIn("DXMT9_RENDERER_DUMP_DAG_DRAWS=1", result.stdout)
+
+    def test_wrapper_framegraph_dag_defaults_to_capture_frame(self) -> None:
+        result = self.run_script(
+            RUN_WRAPPER,
+            "--suffix",
+            "dag-defaults",
+            "--frame",
+            "60",
+            "--no-gputrace",
+            "--dump-framegraph-dag",
+            "--dry-run",
+        )
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("framegraph_dag_frame: 60", result.stdout)
+        self.assertIn("framegraph_dag_frame_radius: 0", result.stdout)
+        self.assertIn("framegraph_dag_formats: json,mermaid", result.stdout)
+        self.assertIn("DXMT9_RENDERER_DUMP_DAG_FRAME=60", result.stdout)
+        self.assertIn("DXMT9_RENDERER_DUMP_DAG_FRAME_RADIUS=0", result.stdout)
+
+    def test_wrapper_rejects_invalid_framegraph_dag_frame(self) -> None:
+        result = self.run_script(
+            RUN_WRAPPER,
+            "--no-gputrace",
+            "--framegraph-dag-frame",
+            "bad",
+            "--dry-run",
+        )
+
+        self.assertEqual(result.returncode, 2)
+        self.assertIn("--framegraph-dag-frame must be a positive integer", result.stderr)
 
     def test_wrapper_rejects_no_encoder_breakdown_with_gputrace(self) -> None:
         result = self.run_script(
@@ -2680,6 +2752,17 @@ class ThreeDMark05ProbeScriptTests(unittest.TestCase):
         self.assertIn("DXMT9_EFFECT_DRAW_TRACE_INCLUDE_UNTEXTURED=1", result.stdout)
         self.assertIn("DXMT9_EFFECT_DRAW_TRACE_GEOMETRY=1", result.stdout)
         self.assertIn("DXMT9_EFFECT_DRAW_TRACE_GEOMETRY_MAX_REFS=96", result.stdout)
+
+    def test_wrapper_dry_run_includes_draw_packet_actual_change_probe_env(self) -> None:
+        result = self.run_script(
+            RUN_WRAPPER,
+            "--no-gputrace",
+            "--probe-draw-packet-actual-change",
+            "--dry-run",
+        )
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("DXMT9_PERF_DRAW_PACKET_ACTUAL_CHANGE=1", result.stdout)
 
     def test_wrapper_dry_run_includes_force_expand_indexed_env(self) -> None:
         result = self.run_script(

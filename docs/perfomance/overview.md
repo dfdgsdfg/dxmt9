@@ -244,7 +244,8 @@ flowchart TD
   Start --> GPU[Metal/GPU]
   Start --> Sync[sync and pacing]
 
-  CPUFront --> BridgeCost[PE/unix bridge and import validation]
+  CPUFront --> BridgeCost[PE/unix bridge call boundary]
+  CPUFront --> CommitReplay[commit_chunk import/replay/submit]
   CPUFront --> RecordCost[packet construction and resource retention]
   CPUFront --> LockCost[buffer lock/map/shadow copy]
 
@@ -274,7 +275,7 @@ flowchart TD
   classDef gpu fill:#fff0d6,stroke:#b26b00,color:#2b1900
   classDef sync fill:#f3e8ff,stroke:#6b42b6,color:#1d0d2b
   class RootA,RootB,RootC,RootD,RootE hot
-  class CPUFront,BridgeCost,RecordCost,LockCost,Encode,RunCost,StateCost,UploadCost,BindCost,PSOCost cpu
+  class CPUFront,BridgeCost,CommitReplay,RecordCost,LockCost,Encode,RunCost,StateCost,UploadCost,BindCost,PSOCost cpu
   class GPU,PassCost,ShaderCost,ResidencyCost gpu
   class Sync,PresentCost,CompletionCost,QueryCost,RingCost sync
 ```
@@ -283,6 +284,8 @@ flowchart TD
 
 | Class | Symptom counters | Typical root cause | Preferred fix direction |
 |---|---|---|---|
+| Commit chunk replay | `bridge_commit_latency_ns`, `commit_chunk_import_cpu_ms`, `commit_chunk_handle_cpu_ms`, `commit_chunk_replay_cpu_ms`, `commit_chunk_queue_draw_submission_cpu_ms`, `commit_chunk_draw_batch_submit_cpu_ms`, draw-run child timers, `submit_draw_run_*_cpu_ms`, `submit_draw_run_batch_*_cpu_ms` | The synchronous `commit_chunk` call is spending time in unix-side record replay, draw-run scanning, snapshot/draw submission construction, queued submission flushing, or queue slot append/resource-mark/chunk-commit work. A large historical `bridge_commit_latency_ns` value is not necessarily raw PE/unix bridge overhead. | Split replay and submit children first; optimize snapshot/draw submission, record dispatch, draw-run scan, constant-upload pass-through, submission batch construction, resource marking, and chunk append/publish cost before changing the ABI. |
+| Snapshot cache invalidation | `d3d9_snapshot_cache_lookup_cpu_ms`, `d3d9_snapshot_cache_miss_cpu_ms`, `d3d9_snapshot_cache_uniform_refresh_cpu_ms`, `d3d9_snapshot_uniform_build_calls`, `draw_uniform_payload_appends`, `draw_packet_declared_nonbinding`, `draw_packet_actual_nonbinding`, `draw_packet_redundant_nonbinding`, `draw_packet_redundant_uniform` | D3D9 snapshot submission rebuilds shader layout, hot state, or uniform payload too often. Current GT1 proof rejects broad same-value non-binding deltas (`redundant_nonbinding=0`), and the accepted cache-hit uniform refresh fast path proves a large part is real component payload construction/hash rather than redundant invalidation. | Keep cache-hit shader-constant refresh on the fast path. Remaining work is miss hot-build, VS indexed constant fallback, and stronger proof before revisiting invalidation policy. |
 | Per-draw CPU encode | `encode_draw_cpu_ms`, `bind_*`, `pipeline_lookup`, `fvf_decode` | Draws are replayed one by one even when state is stable. | Improve draw-run formation, cache decoded state, skip redundant binds. |
 | Payload/upload pressure | `transient_upload_calls`, `transient_upload_bytes`, `uniform_*`, payload arena counters | Stable constants or state are uploaded at draw frequency. | Split stable/volatile payloads, coalesce slab reservations, skip duplicate payload copies. |
 | Render-pass churn | `render_pass_begin`, split reason counters, tile preservation bytes, store/load action counters | RT/depth/clear/hazard decisions force too many pass boundaries. | Exact hazard tracking, better clear/load/store proof, coalesce same RT/depth passes when legal. |
@@ -304,8 +307,8 @@ state separates GPU frame-time, CPU encode cost, and wallclock present pacing:
 | Screen-blend index locality | Strong measured movement, but destination-dependent; current gate is missing movement/semantic image inputs. | Keep as historical exact/`lsb1` proof artifact until the proof is reattached or regenerated; do not generalize to broad depth-read reorder. [[index-cache-locality-screenblend.05]], [[index-cache-locality-proofinput.01]], [[index-cache-locality-screenblend.04]] |
 | Broad depth-read reorder | Blocked by final-color correctness. | Needs a real final-color/final-writer oracle before another Xcode budget; the current D3D9 occlusion path is primitive-count only. [[mini-replay-bisection-semantic.01]], [[mini-replay-bisection-texture.08]] |
 | Non-reorder backend-shape | Current candidates rejected or unproven. | Half-VSOut and scoped `live-vsout` stayed flat in Xcode; the refreshed gate closes stale shader-output smokes. Future candidates need a new below-visible backend mechanism or bytes/inv preflight. [[hidden-backend-storage-shape.13]] |
-| Present pacing | Wallclock limiter, separate from GPU frame limiter. | `DXMT9_DISABLE_VSYNC=1` is accepted as user opt-in; encode-budget reduction remains open for vsync-on. [[present-pacing]] |
-| Per-draw CPU encode | Orthogonal to GPU limiter, still important for wallclock. | Focus on draw-run break reduction, snapshot rebuild, and measured bind/state churn rather than assuming bind-cache hit rates. [[state-churn-encode]] |
+| Present pacing | Wallclock limiter, separate from GPU frame limiter. | Historical `DXMT9_DISABLE_VSYNC=1` remains an opt-in for sync-paced workloads, but current GT1 direct is already immediate; use `present_schedule_*` counters before treating vsync-off as a lever. [[present-pacing]] |
+| Per-draw CPU encode | Orthogonal to GPU limiter, still important for wallclock. Commit_chunk stage counters now show large historical bridge latency can be replay-owned rather than ABI-owned. | Focus on draw-run break reduction, commit_chunk replay internals, snapshot rebuild, and measured bind/state churn rather than assuming bind-cache hit rates or raw bridge overhead. [[state-churn-encode]] |
 
 ```mermaid
 flowchart TD
@@ -320,8 +323,8 @@ flowchart TD
   Locality --> Broad["broad depth-read rejected\nfinal-color blocker"]
   Hidden --> Backend["non-reorder backend-shape\nneeds new mechanism"]
 
-  Wall --> Present["present/display-sync pacing\nvsync-off opt-in accepted"]
-  CPU --> Encode["draw-run/snapshot/state churn\northogonal but open"]
+  Wall --> Present["present completion pacing\ncurrent GT1 already immediate"]
+  CPU --> Encode["draw-run/commit_chunk replay/snapshot/state churn\northogonal but open"]
 
   classDef good fill:#e8f5e8,stroke:#4d8b4d,color:#102a10
   classDef warn fill:#fff3d6,stroke:#b98222,color:#2a1b00
@@ -486,8 +489,9 @@ with counters that distinguish work from waits:
   overlap decisions.
 - Present source counters identify selected source validity, source size,
   destination size, handle, texture, format, and sample count.
-- Completion buckets separate draw, present, compatibility, shader bucket, and
-  command-buffer execution time where available.
+- Completion buckets separate draw, present, compatibility, shader bucket,
+  completion-watcher dequeue age/status, and command-buffer execution time
+  where available.
 - Frame/present pacing counters separate drawable acquire, present boundary,
   frame-token wait, query/readback wait, and chunk ring pressure.
 
@@ -637,8 +641,9 @@ attractive but weak fixes:
    bind churn, FVF/declaration decode, and PSO lookup.
 3. If GPU execution dominates, rank render passes, tile preservation, store/load
    actions, shader families, texture sampling, and overdraw.
-4. If sync dominates, split present acquire, present boundary, completion,
-   query/readback, and ring pressure before changing latency policy.
+4. If sync dominates, split present acquire, present boundary, completion
+   dequeue age/status, query/readback, and ring pressure before changing
+   latency policy.
 5. Only after attribution is stable, choose a design change and validate with
    counters plus image/golden correctness checks.
 

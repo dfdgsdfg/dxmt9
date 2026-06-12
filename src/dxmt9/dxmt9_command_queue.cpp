@@ -1259,26 +1259,45 @@ void CommandQueue::submitDrawRun(core::CanonicalDrawState state,
   std::unique_lock lock(mutex_);
   std::vector<core::DrawBindingSnapshot> bindingSnapshots;
   std::vector<core::DrawParamPayloadView> snapshotPayloads;
-  const auto effectivePayloads =
-      snapshotDrawRunBindingPayloads(pool_,
-                                     state.hot,
-                                     draws,
-                                     payloads,
-                                     bindingSnapshots,
-                                     snapshotPayloads);
-  const std::size_t pendingPayloadBytes =
-      drawRunPayloadBytes(draws, effectivePayloads);
-  ensureWritingSlotUnlocked(*this, lock);
-  maybeCommitDrawPayloadArenaUnlocked(*this, pool_, lock, pendingPayloadBytes);
-  if (!skipDrawResourceMarking_ || forceDrawResourceMarkingAfterSplit_) {
-    const std::uint64_t seqId = seqIdForMark(*this, 0);
-    pool_.markDrawResources(state.hot, seqId);
-    markDrawBindingOverrideResources(pool_, effectivePayloads, seqId);
+  std::span<const core::DrawParamPayloadView> effectivePayloads{};
+  {
+    PerfScope stageScope(perf::countSubmitDrawRunBindingSnapshotCpuTime);
+    effectivePayloads =
+        snapshotDrawRunBindingPayloads(pool_,
+                                       state.hot,
+                                       draws,
+                                       payloads,
+                                       bindingSnapshots,
+                                       snapshotPayloads);
+  }
+  std::size_t pendingPayloadBytes = 0;
+  {
+    PerfScope stageScope(perf::countSubmitDrawRunPayloadBytesCpuTime);
+    pendingPayloadBytes = drawRunPayloadBytes(draws, effectivePayloads);
+  }
+  {
+    PerfScope stageScope(perf::countSubmitDrawRunSlotPrepareCpuTime);
+    ensureWritingSlotUnlocked(*this, lock);
+    maybeCommitDrawPayloadArenaUnlocked(*this, pool_, lock, pendingPayloadBytes);
+  }
+  {
+    PerfScope stageScope(perf::countSubmitDrawRunResourceMarkCpuTime);
+    if (!skipDrawResourceMarking_ || forceDrawResourceMarkingAfterSplit_) {
+      const std::uint64_t seqId = seqIdForMark(*this, 0);
+      pool_.markDrawResources(state.hot, seqId);
+      markDrawBindingOverrideResources(pool_, effectivePayloads, seqId);
+    }
   }
   currentBackBuffer_ = state.hot.colorAttachments[0].handle;
-  currentSlotUnlocked(*this).appendDrawRun(
-      std::move(state), uniforms, draws, effectivePayloads);
-  (void)maybeCommitDrawChunkUnlocked(*this, pool_, lock);
+  {
+    PerfScope stageScope(perf::countSubmitDrawRunAppendCpuTime);
+    currentSlotUnlocked(*this).appendDrawRun(
+        std::move(state), uniforms, draws, effectivePayloads);
+  }
+  {
+    PerfScope stageScope(perf::countSubmitDrawRunChunkCommitCpuTime);
+    (void)maybeCommitDrawChunkUnlocked(*this, pool_, lock);
+  }
 }
 
 void CommandQueue::submitDrawRunBatch(
@@ -1295,36 +1314,61 @@ void CommandQueue::submitDrawRunBatch(
   std::size_t batchStart = 0;
   while (batchStart < submissions.size()) {
     std::size_t batchEnd = batchStart + 1u;
-    while (batchEnd < submissions.size() &&
-           drawSubmissionStatesCompatible(submissions[batchStart], submissions[batchEnd])) {
-      ++batchEnd;
+    {
+      PerfScope stageScope(perf::countSubmitDrawRunBatchCompatScanCpuTime);
+      while (batchEnd < submissions.size() &&
+             drawSubmissionStatesCompatible(submissions[batchStart], submissions[batchEnd])) {
+        ++batchEnd;
+      }
     }
     auto batch = submissions.subspan(batchStart, batchEnd - batchStart);
-    prepareDrawRunBatchBindingOverrides(batch);
+    {
+      PerfScope stageScope(perf::countSubmitDrawRunBatchBindingOverrideCpuTime);
+      prepareDrawRunBatchBindingOverrides(batch);
+    }
     std::vector<core::DrawBindingSnapshot> bindingSnapshots;
-    snapshotDrawSubmissionBindingPayloads(pool_, batch, bindingSnapshots);
-    const std::size_t pendingPayloadBytes = drawRunSubmissionPayloadBytes(batch);
-    ensureWritingSlotUnlocked(*this, lock);
-    maybeCommitDrawPayloadArenaUnlocked(*this, pool_, lock, pendingPayloadBytes);
-    for (auto& submission : batch) {
-      std::span<const core::DrawParamPayloadView> payloads{};
-      if (!submission.payload.userVertexData.empty() ||
-          !submission.payload.userIndexData.empty() ||
-          !submission.payload.bindingOverrideData.empty() ||
-          !submission.payload.bindingSnapshotData.empty()) {
-        payloads = std::span<const core::DrawParamPayloadView>(&submission.payload, 1);
-      }
-      if (!skipDrawResourceMarking_ || forceDrawResourceMarkingAfterSplit_) {
-        const std::uint64_t seqId = seqIdForMark(*this, 0);
-        pool_.markDrawResources(submission.state.hot, seqId);
-        markDrawBindingOverrideResources(pool_, payloads, seqId);
+    {
+      PerfScope stageScope(perf::countSubmitDrawRunBatchBindingSnapshotCpuTime);
+      snapshotDrawSubmissionBindingPayloads(pool_, batch, bindingSnapshots);
+    }
+    std::size_t pendingPayloadBytes = 0;
+    {
+      PerfScope stageScope(perf::countSubmitDrawRunBatchPayloadBytesCpuTime);
+      pendingPayloadBytes = drawRunSubmissionPayloadBytes(batch);
+    }
+    {
+      PerfScope stageScope(perf::countSubmitDrawRunBatchSlotPrepareCpuTime);
+      ensureWritingSlotUnlocked(*this, lock);
+      maybeCommitDrawPayloadArenaUnlocked(*this, pool_, lock, pendingPayloadBytes);
+    }
+    {
+      PerfScope stageScope(perf::countSubmitDrawRunBatchResourceMarkCpuTime);
+      for (auto& submission : batch) {
+        std::span<const core::DrawParamPayloadView> payloads{};
+        if (!submission.payload.userVertexData.empty() ||
+            !submission.payload.userIndexData.empty() ||
+            !submission.payload.bindingOverrideData.empty() ||
+            !submission.payload.bindingSnapshotData.empty()) {
+          payloads = std::span<const core::DrawParamPayloadView>(&submission.payload, 1);
+        }
+        if (!skipDrawResourceMarking_ || forceDrawResourceMarkingAfterSplit_) {
+          const std::uint64_t seqId = seqIdForMark(*this, 0);
+          pool_.markDrawResources(submission.state.hot, seqId);
+          markDrawBindingOverrideResources(pool_, payloads, seqId);
+        }
       }
     }
     currentBackBuffer_ = batch.back().state.hot.colorAttachments[0].handle;
 
     perf::countSubmitDrawRunBatchGroup(static_cast<std::uint32_t>(batch.size()));
-    currentSlotUnlocked(*this).appendDrawRunBatch(batch);
-    (void)maybeCommitDrawChunkUnlocked(*this, pool_, lock);
+    {
+      PerfScope stageScope(perf::countSubmitDrawRunBatchAppendCpuTime);
+      currentSlotUnlocked(*this).appendDrawRunBatch(batch);
+    }
+    {
+      PerfScope stageScope(perf::countSubmitDrawRunBatchChunkCommitCpuTime);
+      (void)maybeCommitDrawChunkUnlocked(*this, pool_, lock);
+    }
     batchStart = batchEnd;
   }
 }

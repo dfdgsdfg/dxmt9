@@ -100,6 +100,34 @@ struct Counters {
   std::atomic<std::uint64_t> submitDrawRunBatchGroups{0};
   std::atomic<std::uint64_t> submitDrawRunBatchRecords{0};
   std::atomic<std::uint64_t> submitDrawRunBatchMaxRecords{0};
+  std::atomic<std::uint64_t> submitDrawRunBindingSnapshotCpuNs{0};
+  std::atomic<std::uint64_t> submitDrawRunBindingSnapshotCpuMaxNs{0};
+  std::atomic<std::uint64_t> submitDrawRunPayloadBytesCpuNs{0};
+  std::atomic<std::uint64_t> submitDrawRunPayloadBytesCpuMaxNs{0};
+  std::atomic<std::uint64_t> submitDrawRunSlotPrepareCpuNs{0};
+  std::atomic<std::uint64_t> submitDrawRunSlotPrepareCpuMaxNs{0};
+  std::atomic<std::uint64_t> submitDrawRunResourceMarkCpuNs{0};
+  std::atomic<std::uint64_t> submitDrawRunResourceMarkCpuMaxNs{0};
+  std::atomic<std::uint64_t> submitDrawRunAppendCpuNs{0};
+  std::atomic<std::uint64_t> submitDrawRunAppendCpuMaxNs{0};
+  std::atomic<std::uint64_t> submitDrawRunChunkCommitCpuNs{0};
+  std::atomic<std::uint64_t> submitDrawRunChunkCommitCpuMaxNs{0};
+  std::atomic<std::uint64_t> submitDrawRunBatchCompatScanCpuNs{0};
+  std::atomic<std::uint64_t> submitDrawRunBatchCompatScanCpuMaxNs{0};
+  std::atomic<std::uint64_t> submitDrawRunBatchBindingOverrideCpuNs{0};
+  std::atomic<std::uint64_t> submitDrawRunBatchBindingOverrideCpuMaxNs{0};
+  std::atomic<std::uint64_t> submitDrawRunBatchBindingSnapshotCpuNs{0};
+  std::atomic<std::uint64_t> submitDrawRunBatchBindingSnapshotCpuMaxNs{0};
+  std::atomic<std::uint64_t> submitDrawRunBatchPayloadBytesCpuNs{0};
+  std::atomic<std::uint64_t> submitDrawRunBatchPayloadBytesCpuMaxNs{0};
+  std::atomic<std::uint64_t> submitDrawRunBatchSlotPrepareCpuNs{0};
+  std::atomic<std::uint64_t> submitDrawRunBatchSlotPrepareCpuMaxNs{0};
+  std::atomic<std::uint64_t> submitDrawRunBatchResourceMarkCpuNs{0};
+  std::atomic<std::uint64_t> submitDrawRunBatchResourceMarkCpuMaxNs{0};
+  std::atomic<std::uint64_t> submitDrawRunBatchAppendCpuNs{0};
+  std::atomic<std::uint64_t> submitDrawRunBatchAppendCpuMaxNs{0};
+  std::atomic<std::uint64_t> submitDrawRunBatchChunkCommitCpuNs{0};
+  std::atomic<std::uint64_t> submitDrawRunBatchChunkCommitCpuMaxNs{0};
   std::atomic<std::uint64_t> commandBuffers{0};
   // R-BACK-2.29..2.32 — sub-command-buffer chain instrumentation.
   // subCommandBufferCommits aggregates every mid-chunk commit that a
@@ -180,6 +208,20 @@ struct Counters {
   std::atomic<std::uint64_t> commitChunkDrawSubmissionBatchSize9To16{0};
   std::atomic<std::uint64_t> commitChunkDrawSubmissionBatchSize17To32{0};
   std::atomic<std::uint64_t> commitChunkDrawSubmissionBatchSize33Plus{0};
+  std::atomic<std::uint64_t> commitChunkApplyDrawStateCpuNs{0};
+  std::atomic<std::uint64_t> commitChunkApplyDrawStateCpuMaxNs{0};
+  std::atomic<std::uint64_t> commitChunkDrawRunScanCpuNs{0};
+  std::atomic<std::uint64_t> commitChunkDrawRunScanCpuMaxNs{0};
+  std::atomic<std::uint64_t> commitChunkDrawRunBuildCpuNs{0};
+  std::atomic<std::uint64_t> commitChunkDrawRunBuildCpuMaxNs{0};
+  std::atomic<std::uint64_t> commitChunkDrawRunSubmitCpuNs{0};
+  std::atomic<std::uint64_t> commitChunkDrawRunSubmitCpuMaxNs{0};
+  std::atomic<std::uint64_t> commitChunkDrawRunFinalBindCpuNs{0};
+  std::atomic<std::uint64_t> commitChunkDrawRunFinalBindCpuMaxNs{0};
+  std::atomic<std::uint64_t> commitChunkQueueDrawSubmissionCpuNs{0};
+  std::atomic<std::uint64_t> commitChunkQueueDrawSubmissionCpuMaxNs{0};
+  std::atomic<std::uint64_t> commitChunkConstUploadCpuNs{0};
+  std::atomic<std::uint64_t> commitChunkConstUploadCpuMaxNs{0};
   std::atomic<std::uint64_t> d3d9DrawStateCacheHits{0};
   std::atomic<std::uint64_t> d3d9DrawStateCacheMisses{0};
   std::atomic<std::uint64_t> d3d9DrawStateCacheHitWithIndex{0};
@@ -288,6 +330,25 @@ struct Counters {
   std::atomic<std::uint64_t> commitChunkDrawDeltaStreamOffset{0};
   std::atomic<std::uint64_t> commitChunkDrawDeltaStreamStride{0};
   std::atomic<std::uint64_t> commitChunkDrawDeltaIndexBufferHandle{0};
+  std::atomic<std::uint64_t> drawPacketActualChangeSamples{0};
+  std::atomic<std::uint64_t> drawPacketDeclaredAny{0};
+  std::atomic<std::uint64_t> drawPacketActualAny{0};
+  std::atomic<std::uint64_t> drawPacketRedundantAny{0};
+  std::atomic<std::uint64_t> drawPacketDeclaredNonbinding{0};
+  std::atomic<std::uint64_t> drawPacketActualNonbinding{0};
+  std::atomic<std::uint64_t> drawPacketRedundantNonbinding{0};
+  std::atomic<std::uint64_t> drawPacketDeclaredUniform{0};
+  std::atomic<std::uint64_t> drawPacketActualUniform{0};
+  std::atomic<std::uint64_t> drawPacketRedundantUniform{0};
+  std::atomic<std::uint64_t> drawPacketRedundantTexture{0};
+  std::atomic<std::uint64_t> drawPacketRedundantShader{0};
+  std::atomic<std::uint64_t> drawPacketRedundantRenderState{0};
+  std::atomic<std::uint64_t> drawPacketRedundantFvfVdecl{0};
+  std::atomic<std::uint64_t> drawPacketRedundantRtDepth{0};
+  std::atomic<std::uint64_t> drawPacketRedundantViewportScissor{0};
+  std::atomic<std::uint64_t> drawPacketRedundantTssSampler{0};
+  std::atomic<std::uint64_t> drawPacketRedundantFfp{0};
+  std::atomic<std::uint64_t> drawPacketRedundantClip{0};
   std::atomic<std::uint64_t> drawCalls{0};
   std::atomic<std::uint64_t> drawIndexedCalls{0};
   std::atomic<std::uint64_t> drawExpandedIndexedCalls{0};
@@ -804,15 +865,44 @@ struct Counters {
   std::atomic<std::uint64_t> commandBufferCreateCpuMaxNs{0};
   std::atomic<std::uint64_t> commandBufferCommitCpuNs{0};
   std::atomic<std::uint64_t> commandBufferCommitCpuMaxNs{0};
-  // V1 boundary B2 — bridge commit latency (countBridgeCommitLatencyNs).
-  // Measured at the d3d9 PE-side commit_chunk entry, isolated from any
-  // encode or GPU work so a marshalling / importer regression surfaces
-  // even on near-empty chunks where chunk_admit alone would be flat.
+  // V1 boundary B2 — commit_chunk bridge-call latency
+  // (countBridgeCommitLatencyNs). This is broader than the bridge ABI
+  // crossing: it includes unix-side import/replay/queue-submit work, but
+  // excludes asynchronous encode and GPU work after commit_chunk returns.
   std::atomic<std::uint64_t> bridgeCommitLatencyNs{0};
   std::atomic<std::uint64_t> bridgeCommitLatencyMaxNs{0};
+  std::atomic<std::uint64_t> commitChunkImportCpuNs{0};
+  std::atomic<std::uint64_t> commitChunkImportCpuMaxNs{0};
+  std::atomic<std::uint64_t> commitChunkHandleCpuNs{0};
+  std::atomic<std::uint64_t> commitChunkHandleCpuMaxNs{0};
+  std::atomic<std::uint64_t> commitChunkReplayCpuNs{0};
+  std::atomic<std::uint64_t> commitChunkReplayCpuMaxNs{0};
+  std::atomic<std::uint64_t> commitChunkDrawBatchSubmitCpuNs{0};
+  std::atomic<std::uint64_t> commitChunkDrawBatchSubmitCpuMaxNs{0};
   std::atomic<std::uint64_t> completionWaits{0};
   std::atomic<std::uint64_t> completionWaitNs{0};
   std::atomic<std::uint64_t> completionWaitMaxNs{0};
+  std::atomic<std::uint64_t> completionDequeueSamples{0};
+  std::atomic<std::uint64_t> completionDequeueAgeNs{0};
+  std::atomic<std::uint64_t> completionDequeueAgeMaxNs{0};
+  std::atomic<std::uint64_t> completionPendingDepthMax{0};
+  std::atomic<std::uint64_t> completionDequeueStatusNotEnqueued{0};
+  std::atomic<std::uint64_t> completionDequeueStatusEnqueued{0};
+  std::atomic<std::uint64_t> completionDequeueStatusCommitted{0};
+  std::atomic<std::uint64_t> completionDequeueStatusScheduled{0};
+  std::atomic<std::uint64_t> completionDequeueStatusCompleted{0};
+  std::atomic<std::uint64_t> completionDequeueStatusError{0};
+  std::atomic<std::uint64_t> completionDequeueStatusUnknown{0};
+  std::atomic<std::uint64_t> completionWaitStatusNotEnqueued{0};
+  std::atomic<std::uint64_t> completionWaitStatusNotEnqueuedNs{0};
+  std::atomic<std::uint64_t> completionWaitStatusEnqueued{0};
+  std::atomic<std::uint64_t> completionWaitStatusEnqueuedNs{0};
+  std::atomic<std::uint64_t> completionWaitStatusCommitted{0};
+  std::atomic<std::uint64_t> completionWaitStatusCommittedNs{0};
+  std::atomic<std::uint64_t> completionWaitStatusScheduled{0};
+  std::atomic<std::uint64_t> completionWaitStatusScheduledNs{0};
+  std::atomic<std::uint64_t> completionWaitStatusUnknown{0};
+  std::atomic<std::uint64_t> completionWaitStatusUnknownNs{0};
   std::atomic<std::uint64_t> completionPresentWaits{0};
   std::atomic<std::uint64_t> completionPresentWaitNs{0};
   std::atomic<std::uint64_t> completionPresentWaitMaxNs{0};
@@ -895,6 +985,12 @@ struct Counters {
   std::atomic<std::uint64_t> presentPassDstHeight{0};
   std::atomic<std::uint64_t> presentPassDstMaxWidth{0};
   std::atomic<std::uint64_t> presentPassDstMaxHeight{0};
+  std::atomic<std::uint64_t> presentScheduleRequestedSync{0};
+  std::atomic<std::uint64_t> presentScheduleRequestedImmediate{0};
+  std::atomic<std::uint64_t> presentScheduleAfterMinimumDuration{0};
+  std::atomic<std::uint64_t> presentScheduleImmediate{0};
+  std::atomic<std::uint64_t> presentMinimumDurationNs{0};
+  std::atomic<std::uint64_t> presentMinimumDurationMaxNs{0};
   std::atomic<std::uint64_t> presentAcquireWaits{0};
   std::atomic<std::uint64_t> presentAcquireWaitNs{0};
   std::atomic<std::uint64_t> presentAcquireWaitMaxNs{0};
@@ -953,6 +1049,18 @@ struct Counters {
   PercentileRing commandBufferCommitCpuRing;
   // V1 boundary B2 — paired with bridgeCommitLatency*Ns above.
   PercentileRing bridgeCommitLatencyRing;
+  PercentileRing commitChunkImportCpuRing;
+  PercentileRing commitChunkHandleCpuRing;
+  PercentileRing commitChunkReplayCpuRing;
+  PercentileRing commitChunkDrawBatchSubmitCpuRing;
+  PercentileRing commitChunkApplyDrawStateCpuRing;
+  PercentileRing commitChunkDrawRunScanCpuRing;
+  PercentileRing commitChunkDrawRunBuildCpuRing;
+  PercentileRing commitChunkDrawRunSubmitCpuRing;
+  PercentileRing commitChunkDrawRunFinalBindCpuRing;
+  PercentileRing commitChunkQueueDrawSubmissionCpuRing;
+  PercentileRing commitChunkConstUploadCpuRing;
+  PercentileRing completionDequeueAgeRing;
   PercentileRing completionWaitRing;
   PercentileRing completionPresentWaitRing;
   PercentileRing completionDrawWaitRing;
@@ -1061,6 +1169,54 @@ std::atomic<std::uint64_t>& pipelineBuildCounter(Counters& c, PipelineKind kind)
   return c.pipelineBuildDraw;
 }
 
+std::atomic<std::uint64_t>& completionDequeueStatusCounter(Counters& c,
+                                                           std::uint64_t status) {
+  switch (status) {
+    case 0:
+      return c.completionDequeueStatusNotEnqueued;
+    case 1:
+      return c.completionDequeueStatusEnqueued;
+    case 2:
+      return c.completionDequeueStatusCommitted;
+    case 3:
+      return c.completionDequeueStatusScheduled;
+    case 4:
+      return c.completionDequeueStatusCompleted;
+    case 5:
+      return c.completionDequeueStatusError;
+  }
+  return c.completionDequeueStatusUnknown;
+}
+
+void addCompletionWaitStatusBucket(Counters& c,
+                                   std::uint64_t status,
+                                   std::uint64_t nanoseconds) {
+  std::atomic<std::uint64_t>* count = &c.completionWaitStatusUnknown;
+  std::atomic<std::uint64_t>* totalNs = &c.completionWaitStatusUnknownNs;
+  switch (status) {
+    case 0:
+      count = &c.completionWaitStatusNotEnqueued;
+      totalNs = &c.completionWaitStatusNotEnqueuedNs;
+      break;
+    case 1:
+      count = &c.completionWaitStatusEnqueued;
+      totalNs = &c.completionWaitStatusEnqueuedNs;
+      break;
+    case 2:
+      count = &c.completionWaitStatusCommitted;
+      totalNs = &c.completionWaitStatusCommittedNs;
+      break;
+    case 3:
+      count = &c.completionWaitStatusScheduled;
+      totalNs = &c.completionWaitStatusScheduledNs;
+      break;
+    default:
+      break;
+  }
+  count->fetch_add(1, std::memory_order_relaxed);
+  totalNs->fetch_add(nanoseconds, std::memory_order_relaxed);
+}
+
 std::atomic<std::uint64_t>& splitReasonCounter(Counters& c, EncoderSplitReason reason) {
   switch (reason) {
     case EncoderSplitReason::Final:
@@ -1127,9 +1283,9 @@ struct CounterEntry {
     Hex64,           // " key=0x%llx" for handle/hash values
     WidthByHeight,   // " key=%llux%llu" using both atomicField and field2
     PercentileMs,    // " key=%.3f" from PercentileRing::percentile(p) / 1e6
-    // V1 boundary B2: bridge commit latency is reported in raw nanoseconds
-    // (not /1e6 ms) because per-call bridge cost is sub-microsecond and a
-    // ms-rounded value collapses to 0.000 across an entire run.
+    // V1 boundary B2: the historical bridge_commit_latency counter is still
+    // reported in raw nanoseconds, but it now represents the whole
+    // commit_chunk call wall time, not a raw ABI-only bridge cost.
     PercentileNs,    // " key=%llu" from PercentileRing::percentile(p)
   };
 
@@ -1195,6 +1351,34 @@ constexpr CounterEntry kCounterTable[] = {
     {"submit_draw_run_batch_groups", CounterEntry::Kind::UnsignedCount, &Counters::submitDrawRunBatchGroups, nullptr, nullptr, 0.0},
     {"submit_draw_run_batch_records", CounterEntry::Kind::UnsignedCount, &Counters::submitDrawRunBatchRecords, nullptr, nullptr, 0.0},
     {"submit_draw_run_batch_max_records", CounterEntry::Kind::UnsignedCount, &Counters::submitDrawRunBatchMaxRecords, nullptr, nullptr, 0.0},
+    {"submit_draw_run_binding_snapshot_cpu_ms", CounterEntry::Kind::Milliseconds, &Counters::submitDrawRunBindingSnapshotCpuNs, nullptr, nullptr, 0.0},
+    {"submit_draw_run_binding_snapshot_cpu_max_ms", CounterEntry::Kind::Milliseconds, &Counters::submitDrawRunBindingSnapshotCpuMaxNs, nullptr, nullptr, 0.0},
+    {"submit_draw_run_payload_bytes_cpu_ms", CounterEntry::Kind::Milliseconds, &Counters::submitDrawRunPayloadBytesCpuNs, nullptr, nullptr, 0.0},
+    {"submit_draw_run_payload_bytes_cpu_max_ms", CounterEntry::Kind::Milliseconds, &Counters::submitDrawRunPayloadBytesCpuMaxNs, nullptr, nullptr, 0.0},
+    {"submit_draw_run_slot_prepare_cpu_ms", CounterEntry::Kind::Milliseconds, &Counters::submitDrawRunSlotPrepareCpuNs, nullptr, nullptr, 0.0},
+    {"submit_draw_run_slot_prepare_cpu_max_ms", CounterEntry::Kind::Milliseconds, &Counters::submitDrawRunSlotPrepareCpuMaxNs, nullptr, nullptr, 0.0},
+    {"submit_draw_run_resource_mark_cpu_ms", CounterEntry::Kind::Milliseconds, &Counters::submitDrawRunResourceMarkCpuNs, nullptr, nullptr, 0.0},
+    {"submit_draw_run_resource_mark_cpu_max_ms", CounterEntry::Kind::Milliseconds, &Counters::submitDrawRunResourceMarkCpuMaxNs, nullptr, nullptr, 0.0},
+    {"submit_draw_run_append_cpu_ms", CounterEntry::Kind::Milliseconds, &Counters::submitDrawRunAppendCpuNs, nullptr, nullptr, 0.0},
+    {"submit_draw_run_append_cpu_max_ms", CounterEntry::Kind::Milliseconds, &Counters::submitDrawRunAppendCpuMaxNs, nullptr, nullptr, 0.0},
+    {"submit_draw_run_chunk_commit_cpu_ms", CounterEntry::Kind::Milliseconds, &Counters::submitDrawRunChunkCommitCpuNs, nullptr, nullptr, 0.0},
+    {"submit_draw_run_chunk_commit_cpu_max_ms", CounterEntry::Kind::Milliseconds, &Counters::submitDrawRunChunkCommitCpuMaxNs, nullptr, nullptr, 0.0},
+    {"submit_draw_run_batch_compat_scan_cpu_ms", CounterEntry::Kind::Milliseconds, &Counters::submitDrawRunBatchCompatScanCpuNs, nullptr, nullptr, 0.0},
+    {"submit_draw_run_batch_compat_scan_cpu_max_ms", CounterEntry::Kind::Milliseconds, &Counters::submitDrawRunBatchCompatScanCpuMaxNs, nullptr, nullptr, 0.0},
+    {"submit_draw_run_batch_binding_override_cpu_ms", CounterEntry::Kind::Milliseconds, &Counters::submitDrawRunBatchBindingOverrideCpuNs, nullptr, nullptr, 0.0},
+    {"submit_draw_run_batch_binding_override_cpu_max_ms", CounterEntry::Kind::Milliseconds, &Counters::submitDrawRunBatchBindingOverrideCpuMaxNs, nullptr, nullptr, 0.0},
+    {"submit_draw_run_batch_binding_snapshot_cpu_ms", CounterEntry::Kind::Milliseconds, &Counters::submitDrawRunBatchBindingSnapshotCpuNs, nullptr, nullptr, 0.0},
+    {"submit_draw_run_batch_binding_snapshot_cpu_max_ms", CounterEntry::Kind::Milliseconds, &Counters::submitDrawRunBatchBindingSnapshotCpuMaxNs, nullptr, nullptr, 0.0},
+    {"submit_draw_run_batch_payload_bytes_cpu_ms", CounterEntry::Kind::Milliseconds, &Counters::submitDrawRunBatchPayloadBytesCpuNs, nullptr, nullptr, 0.0},
+    {"submit_draw_run_batch_payload_bytes_cpu_max_ms", CounterEntry::Kind::Milliseconds, &Counters::submitDrawRunBatchPayloadBytesCpuMaxNs, nullptr, nullptr, 0.0},
+    {"submit_draw_run_batch_slot_prepare_cpu_ms", CounterEntry::Kind::Milliseconds, &Counters::submitDrawRunBatchSlotPrepareCpuNs, nullptr, nullptr, 0.0},
+    {"submit_draw_run_batch_slot_prepare_cpu_max_ms", CounterEntry::Kind::Milliseconds, &Counters::submitDrawRunBatchSlotPrepareCpuMaxNs, nullptr, nullptr, 0.0},
+    {"submit_draw_run_batch_resource_mark_cpu_ms", CounterEntry::Kind::Milliseconds, &Counters::submitDrawRunBatchResourceMarkCpuNs, nullptr, nullptr, 0.0},
+    {"submit_draw_run_batch_resource_mark_cpu_max_ms", CounterEntry::Kind::Milliseconds, &Counters::submitDrawRunBatchResourceMarkCpuMaxNs, nullptr, nullptr, 0.0},
+    {"submit_draw_run_batch_append_cpu_ms", CounterEntry::Kind::Milliseconds, &Counters::submitDrawRunBatchAppendCpuNs, nullptr, nullptr, 0.0},
+    {"submit_draw_run_batch_append_cpu_max_ms", CounterEntry::Kind::Milliseconds, &Counters::submitDrawRunBatchAppendCpuMaxNs, nullptr, nullptr, 0.0},
+    {"submit_draw_run_batch_chunk_commit_cpu_ms", CounterEntry::Kind::Milliseconds, &Counters::submitDrawRunBatchChunkCommitCpuNs, nullptr, nullptr, 0.0},
+    {"submit_draw_run_batch_chunk_commit_cpu_max_ms", CounterEntry::Kind::Milliseconds, &Counters::submitDrawRunBatchChunkCommitCpuMaxNs, nullptr, nullptr, 0.0},
     {"render_pass_begin", CounterEntry::Kind::UnsignedCount, &Counters::renderPassBegin, nullptr, nullptr, 0.0},
     {"render_pass_end", CounterEntry::Kind::UnsignedCount, &Counters::renderPassEnd, nullptr, nullptr, 0.0},
     {"render_split_final", CounterEntry::Kind::UnsignedCount, &Counters::renderSplitFinal, nullptr, nullptr, 0.0},
@@ -1233,6 +1417,34 @@ constexpr CounterEntry kCounterTable[] = {
     {"commit_chunk_draw_submission_batch_size_9_16", CounterEntry::Kind::UnsignedCount, &Counters::commitChunkDrawSubmissionBatchSize9To16, nullptr, nullptr, 0.0},
     {"commit_chunk_draw_submission_batch_size_17_32", CounterEntry::Kind::UnsignedCount, &Counters::commitChunkDrawSubmissionBatchSize17To32, nullptr, nullptr, 0.0},
     {"commit_chunk_draw_submission_batch_size_33_plus", CounterEntry::Kind::UnsignedCount, &Counters::commitChunkDrawSubmissionBatchSize33Plus, nullptr, nullptr, 0.0},
+    {"commit_chunk_apply_draw_state_cpu_ms", CounterEntry::Kind::Milliseconds, &Counters::commitChunkApplyDrawStateCpuNs, nullptr, nullptr, 0.0},
+    {"commit_chunk_apply_draw_state_cpu_max_ms", CounterEntry::Kind::Milliseconds, &Counters::commitChunkApplyDrawStateCpuMaxNs, nullptr, nullptr, 0.0},
+    {"commit_chunk_apply_draw_state_cpu_p50_ms", CounterEntry::Kind::PercentileMs, nullptr, nullptr, &Counters::commitChunkApplyDrawStateCpuRing, 0.5},
+    {"commit_chunk_apply_draw_state_cpu_p95_ms", CounterEntry::Kind::PercentileMs, nullptr, nullptr, &Counters::commitChunkApplyDrawStateCpuRing, 0.95},
+    {"commit_chunk_draw_run_scan_cpu_ms", CounterEntry::Kind::Milliseconds, &Counters::commitChunkDrawRunScanCpuNs, nullptr, nullptr, 0.0},
+    {"commit_chunk_draw_run_scan_cpu_max_ms", CounterEntry::Kind::Milliseconds, &Counters::commitChunkDrawRunScanCpuMaxNs, nullptr, nullptr, 0.0},
+    {"commit_chunk_draw_run_scan_cpu_p50_ms", CounterEntry::Kind::PercentileMs, nullptr, nullptr, &Counters::commitChunkDrawRunScanCpuRing, 0.5},
+    {"commit_chunk_draw_run_scan_cpu_p95_ms", CounterEntry::Kind::PercentileMs, nullptr, nullptr, &Counters::commitChunkDrawRunScanCpuRing, 0.95},
+    {"commit_chunk_draw_run_build_cpu_ms", CounterEntry::Kind::Milliseconds, &Counters::commitChunkDrawRunBuildCpuNs, nullptr, nullptr, 0.0},
+    {"commit_chunk_draw_run_build_cpu_max_ms", CounterEntry::Kind::Milliseconds, &Counters::commitChunkDrawRunBuildCpuMaxNs, nullptr, nullptr, 0.0},
+    {"commit_chunk_draw_run_build_cpu_p50_ms", CounterEntry::Kind::PercentileMs, nullptr, nullptr, &Counters::commitChunkDrawRunBuildCpuRing, 0.5},
+    {"commit_chunk_draw_run_build_cpu_p95_ms", CounterEntry::Kind::PercentileMs, nullptr, nullptr, &Counters::commitChunkDrawRunBuildCpuRing, 0.95},
+    {"commit_chunk_draw_run_submit_cpu_ms", CounterEntry::Kind::Milliseconds, &Counters::commitChunkDrawRunSubmitCpuNs, nullptr, nullptr, 0.0},
+    {"commit_chunk_draw_run_submit_cpu_max_ms", CounterEntry::Kind::Milliseconds, &Counters::commitChunkDrawRunSubmitCpuMaxNs, nullptr, nullptr, 0.0},
+    {"commit_chunk_draw_run_submit_cpu_p50_ms", CounterEntry::Kind::PercentileMs, nullptr, nullptr, &Counters::commitChunkDrawRunSubmitCpuRing, 0.5},
+    {"commit_chunk_draw_run_submit_cpu_p95_ms", CounterEntry::Kind::PercentileMs, nullptr, nullptr, &Counters::commitChunkDrawRunSubmitCpuRing, 0.95},
+    {"commit_chunk_draw_run_final_bind_cpu_ms", CounterEntry::Kind::Milliseconds, &Counters::commitChunkDrawRunFinalBindCpuNs, nullptr, nullptr, 0.0},
+    {"commit_chunk_draw_run_final_bind_cpu_max_ms", CounterEntry::Kind::Milliseconds, &Counters::commitChunkDrawRunFinalBindCpuMaxNs, nullptr, nullptr, 0.0},
+    {"commit_chunk_draw_run_final_bind_cpu_p50_ms", CounterEntry::Kind::PercentileMs, nullptr, nullptr, &Counters::commitChunkDrawRunFinalBindCpuRing, 0.5},
+    {"commit_chunk_draw_run_final_bind_cpu_p95_ms", CounterEntry::Kind::PercentileMs, nullptr, nullptr, &Counters::commitChunkDrawRunFinalBindCpuRing, 0.95},
+    {"commit_chunk_queue_draw_submission_cpu_ms", CounterEntry::Kind::Milliseconds, &Counters::commitChunkQueueDrawSubmissionCpuNs, nullptr, nullptr, 0.0},
+    {"commit_chunk_queue_draw_submission_cpu_max_ms", CounterEntry::Kind::Milliseconds, &Counters::commitChunkQueueDrawSubmissionCpuMaxNs, nullptr, nullptr, 0.0},
+    {"commit_chunk_queue_draw_submission_cpu_p50_ms", CounterEntry::Kind::PercentileMs, nullptr, nullptr, &Counters::commitChunkQueueDrawSubmissionCpuRing, 0.5},
+    {"commit_chunk_queue_draw_submission_cpu_p95_ms", CounterEntry::Kind::PercentileMs, nullptr, nullptr, &Counters::commitChunkQueueDrawSubmissionCpuRing, 0.95},
+    {"commit_chunk_const_upload_cpu_ms", CounterEntry::Kind::Milliseconds, &Counters::commitChunkConstUploadCpuNs, nullptr, nullptr, 0.0},
+    {"commit_chunk_const_upload_cpu_max_ms", CounterEntry::Kind::Milliseconds, &Counters::commitChunkConstUploadCpuMaxNs, nullptr, nullptr, 0.0},
+    {"commit_chunk_const_upload_cpu_p50_ms", CounterEntry::Kind::PercentileMs, nullptr, nullptr, &Counters::commitChunkConstUploadCpuRing, 0.5},
+    {"commit_chunk_const_upload_cpu_p95_ms", CounterEntry::Kind::PercentileMs, nullptr, nullptr, &Counters::commitChunkConstUploadCpuRing, 0.95},
     {"d3d9_draw_state_cache_hits", CounterEntry::Kind::UnsignedCount, &Counters::d3d9DrawStateCacheHits, nullptr, nullptr, 0.0},
     {"d3d9_draw_state_cache_misses", CounterEntry::Kind::UnsignedCount, &Counters::d3d9DrawStateCacheMisses, nullptr, nullptr, 0.0},
     {"d3d9_draw_state_cache_hit_with_index", CounterEntry::Kind::UnsignedCount, &Counters::d3d9DrawStateCacheHitWithIndex, nullptr, nullptr, 0.0},
@@ -1341,6 +1553,25 @@ constexpr CounterEntry kCounterTable[] = {
     {"commit_chunk_draw_delta_stream_offset", CounterEntry::Kind::UnsignedCount, &Counters::commitChunkDrawDeltaStreamOffset, nullptr, nullptr, 0.0},
     {"commit_chunk_draw_delta_stream_stride", CounterEntry::Kind::UnsignedCount, &Counters::commitChunkDrawDeltaStreamStride, nullptr, nullptr, 0.0},
     {"commit_chunk_draw_delta_ib_handle", CounterEntry::Kind::UnsignedCount, &Counters::commitChunkDrawDeltaIndexBufferHandle, nullptr, nullptr, 0.0},
+    {"draw_packet_actual_change_samples", CounterEntry::Kind::UnsignedCount, &Counters::drawPacketActualChangeSamples, nullptr, nullptr, 0.0},
+    {"draw_packet_declared_any", CounterEntry::Kind::UnsignedCount, &Counters::drawPacketDeclaredAny, nullptr, nullptr, 0.0},
+    {"draw_packet_actual_any", CounterEntry::Kind::UnsignedCount, &Counters::drawPacketActualAny, nullptr, nullptr, 0.0},
+    {"draw_packet_redundant_any", CounterEntry::Kind::UnsignedCount, &Counters::drawPacketRedundantAny, nullptr, nullptr, 0.0},
+    {"draw_packet_declared_nonbinding", CounterEntry::Kind::UnsignedCount, &Counters::drawPacketDeclaredNonbinding, nullptr, nullptr, 0.0},
+    {"draw_packet_actual_nonbinding", CounterEntry::Kind::UnsignedCount, &Counters::drawPacketActualNonbinding, nullptr, nullptr, 0.0},
+    {"draw_packet_redundant_nonbinding", CounterEntry::Kind::UnsignedCount, &Counters::drawPacketRedundantNonbinding, nullptr, nullptr, 0.0},
+    {"draw_packet_declared_uniform", CounterEntry::Kind::UnsignedCount, &Counters::drawPacketDeclaredUniform, nullptr, nullptr, 0.0},
+    {"draw_packet_actual_uniform", CounterEntry::Kind::UnsignedCount, &Counters::drawPacketActualUniform, nullptr, nullptr, 0.0},
+    {"draw_packet_redundant_uniform", CounterEntry::Kind::UnsignedCount, &Counters::drawPacketRedundantUniform, nullptr, nullptr, 0.0},
+    {"draw_packet_redundant_texture", CounterEntry::Kind::UnsignedCount, &Counters::drawPacketRedundantTexture, nullptr, nullptr, 0.0},
+    {"draw_packet_redundant_shader", CounterEntry::Kind::UnsignedCount, &Counters::drawPacketRedundantShader, nullptr, nullptr, 0.0},
+    {"draw_packet_redundant_render_state", CounterEntry::Kind::UnsignedCount, &Counters::drawPacketRedundantRenderState, nullptr, nullptr, 0.0},
+    {"draw_packet_redundant_fvf_vdecl", CounterEntry::Kind::UnsignedCount, &Counters::drawPacketRedundantFvfVdecl, nullptr, nullptr, 0.0},
+    {"draw_packet_redundant_rt_depth", CounterEntry::Kind::UnsignedCount, &Counters::drawPacketRedundantRtDepth, nullptr, nullptr, 0.0},
+    {"draw_packet_redundant_viewport_scissor", CounterEntry::Kind::UnsignedCount, &Counters::drawPacketRedundantViewportScissor, nullptr, nullptr, 0.0},
+    {"draw_packet_redundant_tss_sampler", CounterEntry::Kind::UnsignedCount, &Counters::drawPacketRedundantTssSampler, nullptr, nullptr, 0.0},
+    {"draw_packet_redundant_ffp", CounterEntry::Kind::UnsignedCount, &Counters::drawPacketRedundantFfp, nullptr, nullptr, 0.0},
+    {"draw_packet_redundant_clip", CounterEntry::Kind::UnsignedCount, &Counters::drawPacketRedundantClip, nullptr, nullptr, 0.0},
     {"draw_calls", CounterEntry::Kind::UnsignedCount, &Counters::drawCalls, nullptr, nullptr, 0.0},
     {"draw_indexed", CounterEntry::Kind::UnsignedCount, &Counters::drawIndexedCalls, nullptr, nullptr, 0.0},
     {"draw_expanded_indexed", CounterEntry::Kind::UnsignedCount, &Counters::drawExpandedIndexedCalls, nullptr, nullptr, 0.0},
@@ -1881,13 +2112,57 @@ constexpr CounterEntry kCounterTable[] = {
     {"command_buffer_commit_cpu_p50_ms", CounterEntry::Kind::PercentileMs, nullptr, nullptr, &Counters::commandBufferCommitCpuRing, 0.5},
     {"command_buffer_commit_cpu_p95_ms", CounterEntry::Kind::PercentileMs, nullptr, nullptr, &Counters::commandBufferCommitCpuRing, 0.95},
     {"command_buffer_commit_cpu_p99_ms", CounterEntry::Kind::PercentileMs, nullptr, nullptr, &Counters::commandBufferCommitCpuRing, 0.99},
-    // V1 boundary B2 — bridge commit latency in raw nanoseconds (sub-us
-    // per-call cost would round to 0 in ms). Sum + max + 3 percentiles.
+    // V1 boundary B2 — whole commit_chunk bridge-call latency in raw
+    // nanoseconds. Sum + max + 3 percentiles.
     {"bridge_commit_latency_ns", CounterEntry::Kind::UnsignedCount, &Counters::bridgeCommitLatencyNs, nullptr, nullptr, 0.0},
     {"bridge_commit_latency_max_ns", CounterEntry::Kind::UnsignedCount, &Counters::bridgeCommitLatencyMaxNs, nullptr, nullptr, 0.0},
     {"bridge_commit_latency_p50_ns", CounterEntry::Kind::PercentileNs, nullptr, nullptr, &Counters::bridgeCommitLatencyRing, 0.5},
     {"bridge_commit_latency_p95_ns", CounterEntry::Kind::PercentileNs, nullptr, nullptr, &Counters::bridgeCommitLatencyRing, 0.95},
     {"bridge_commit_latency_p99_ns", CounterEntry::Kind::PercentileNs, nullptr, nullptr, &Counters::bridgeCommitLatencyRing, 0.99},
+    {"commit_chunk_import_cpu_ms", CounterEntry::Kind::Milliseconds, &Counters::commitChunkImportCpuNs, nullptr, nullptr, 0.0},
+    {"commit_chunk_import_cpu_max_ms", CounterEntry::Kind::Milliseconds, &Counters::commitChunkImportCpuMaxNs, nullptr, nullptr, 0.0},
+    {"commit_chunk_import_cpu_p50_ms", CounterEntry::Kind::PercentileMs, nullptr, nullptr, &Counters::commitChunkImportCpuRing, 0.5},
+    {"commit_chunk_import_cpu_p95_ms", CounterEntry::Kind::PercentileMs, nullptr, nullptr, &Counters::commitChunkImportCpuRing, 0.95},
+    {"commit_chunk_import_cpu_p99_ms", CounterEntry::Kind::PercentileMs, nullptr, nullptr, &Counters::commitChunkImportCpuRing, 0.99},
+    {"commit_chunk_handle_cpu_ms", CounterEntry::Kind::Milliseconds, &Counters::commitChunkHandleCpuNs, nullptr, nullptr, 0.0},
+    {"commit_chunk_handle_cpu_max_ms", CounterEntry::Kind::Milliseconds, &Counters::commitChunkHandleCpuMaxNs, nullptr, nullptr, 0.0},
+    {"commit_chunk_handle_cpu_p50_ms", CounterEntry::Kind::PercentileMs, nullptr, nullptr, &Counters::commitChunkHandleCpuRing, 0.5},
+    {"commit_chunk_handle_cpu_p95_ms", CounterEntry::Kind::PercentileMs, nullptr, nullptr, &Counters::commitChunkHandleCpuRing, 0.95},
+    {"commit_chunk_handle_cpu_p99_ms", CounterEntry::Kind::PercentileMs, nullptr, nullptr, &Counters::commitChunkHandleCpuRing, 0.99},
+    {"commit_chunk_replay_cpu_ms", CounterEntry::Kind::Milliseconds, &Counters::commitChunkReplayCpuNs, nullptr, nullptr, 0.0},
+    {"commit_chunk_replay_cpu_max_ms", CounterEntry::Kind::Milliseconds, &Counters::commitChunkReplayCpuMaxNs, nullptr, nullptr, 0.0},
+    {"commit_chunk_replay_cpu_p50_ms", CounterEntry::Kind::PercentileMs, nullptr, nullptr, &Counters::commitChunkReplayCpuRing, 0.5},
+    {"commit_chunk_replay_cpu_p95_ms", CounterEntry::Kind::PercentileMs, nullptr, nullptr, &Counters::commitChunkReplayCpuRing, 0.95},
+    {"commit_chunk_replay_cpu_p99_ms", CounterEntry::Kind::PercentileMs, nullptr, nullptr, &Counters::commitChunkReplayCpuRing, 0.99},
+    {"commit_chunk_draw_batch_submit_cpu_ms", CounterEntry::Kind::Milliseconds, &Counters::commitChunkDrawBatchSubmitCpuNs, nullptr, nullptr, 0.0},
+    {"commit_chunk_draw_batch_submit_cpu_max_ms", CounterEntry::Kind::Milliseconds, &Counters::commitChunkDrawBatchSubmitCpuMaxNs, nullptr, nullptr, 0.0},
+    {"commit_chunk_draw_batch_submit_cpu_p50_ms", CounterEntry::Kind::PercentileMs, nullptr, nullptr, &Counters::commitChunkDrawBatchSubmitCpuRing, 0.5},
+    {"commit_chunk_draw_batch_submit_cpu_p95_ms", CounterEntry::Kind::PercentileMs, nullptr, nullptr, &Counters::commitChunkDrawBatchSubmitCpuRing, 0.95},
+    {"commit_chunk_draw_batch_submit_cpu_p99_ms", CounterEntry::Kind::PercentileMs, nullptr, nullptr, &Counters::commitChunkDrawBatchSubmitCpuRing, 0.99},
+    {"completion_dequeue_samples", CounterEntry::Kind::UnsignedCount, &Counters::completionDequeueSamples, nullptr, nullptr, 0.0},
+    {"completion_dequeue_age_ms", CounterEntry::Kind::Milliseconds, &Counters::completionDequeueAgeNs, nullptr, nullptr, 0.0},
+    {"completion_dequeue_age_max_ms", CounterEntry::Kind::Milliseconds, &Counters::completionDequeueAgeMaxNs, nullptr, nullptr, 0.0},
+    {"completion_dequeue_age_p50_ms", CounterEntry::Kind::PercentileMs, nullptr, nullptr, &Counters::completionDequeueAgeRing, 0.5},
+    {"completion_dequeue_age_p95_ms", CounterEntry::Kind::PercentileMs, nullptr, nullptr, &Counters::completionDequeueAgeRing, 0.95},
+    {"completion_dequeue_age_p99_ms", CounterEntry::Kind::PercentileMs, nullptr, nullptr, &Counters::completionDequeueAgeRing, 0.99},
+    {"completion_pending_depth_max", CounterEntry::Kind::UnsignedCount, &Counters::completionPendingDepthMax, nullptr, nullptr, 0.0},
+    {"completion_dequeue_status_not_enqueued", CounterEntry::Kind::UnsignedCount, &Counters::completionDequeueStatusNotEnqueued, nullptr, nullptr, 0.0},
+    {"completion_dequeue_status_enqueued", CounterEntry::Kind::UnsignedCount, &Counters::completionDequeueStatusEnqueued, nullptr, nullptr, 0.0},
+    {"completion_dequeue_status_committed", CounterEntry::Kind::UnsignedCount, &Counters::completionDequeueStatusCommitted, nullptr, nullptr, 0.0},
+    {"completion_dequeue_status_scheduled", CounterEntry::Kind::UnsignedCount, &Counters::completionDequeueStatusScheduled, nullptr, nullptr, 0.0},
+    {"completion_dequeue_status_completed", CounterEntry::Kind::UnsignedCount, &Counters::completionDequeueStatusCompleted, nullptr, nullptr, 0.0},
+    {"completion_dequeue_status_error", CounterEntry::Kind::UnsignedCount, &Counters::completionDequeueStatusError, nullptr, nullptr, 0.0},
+    {"completion_dequeue_status_unknown", CounterEntry::Kind::UnsignedCount, &Counters::completionDequeueStatusUnknown, nullptr, nullptr, 0.0},
+    {"completion_wait_status_not_enqueued", CounterEntry::Kind::UnsignedCount, &Counters::completionWaitStatusNotEnqueued, nullptr, nullptr, 0.0},
+    {"completion_wait_status_not_enqueued_ms", CounterEntry::Kind::Milliseconds, &Counters::completionWaitStatusNotEnqueuedNs, nullptr, nullptr, 0.0},
+    {"completion_wait_status_enqueued", CounterEntry::Kind::UnsignedCount, &Counters::completionWaitStatusEnqueued, nullptr, nullptr, 0.0},
+    {"completion_wait_status_enqueued_ms", CounterEntry::Kind::Milliseconds, &Counters::completionWaitStatusEnqueuedNs, nullptr, nullptr, 0.0},
+    {"completion_wait_status_committed", CounterEntry::Kind::UnsignedCount, &Counters::completionWaitStatusCommitted, nullptr, nullptr, 0.0},
+    {"completion_wait_status_committed_ms", CounterEntry::Kind::Milliseconds, &Counters::completionWaitStatusCommittedNs, nullptr, nullptr, 0.0},
+    {"completion_wait_status_scheduled", CounterEntry::Kind::UnsignedCount, &Counters::completionWaitStatusScheduled, nullptr, nullptr, 0.0},
+    {"completion_wait_status_scheduled_ms", CounterEntry::Kind::Milliseconds, &Counters::completionWaitStatusScheduledNs, nullptr, nullptr, 0.0},
+    {"completion_wait_status_unknown", CounterEntry::Kind::UnsignedCount, &Counters::completionWaitStatusUnknown, nullptr, nullptr, 0.0},
+    {"completion_wait_status_unknown_ms", CounterEntry::Kind::Milliseconds, &Counters::completionWaitStatusUnknownNs, nullptr, nullptr, 0.0},
     {"completion_waits", CounterEntry::Kind::UnsignedCount, &Counters::completionWaits, nullptr, nullptr, 0.0},
     {"completion_wait_ms", CounterEntry::Kind::Milliseconds, &Counters::completionWaitNs, nullptr, nullptr, 0.0},
     {"completion_wait_max_ms", CounterEntry::Kind::Milliseconds, &Counters::completionWaitMaxNs, nullptr, nullptr, 0.0},
@@ -2023,6 +2298,12 @@ constexpr CounterEntry kCounterTable[] = {
     {"present_src", CounterEntry::Kind::WidthByHeight, &Counters::presentPassSrcWidth, &Counters::presentPassSrcHeight, nullptr, 0.0},
     {"present_dst", CounterEntry::Kind::WidthByHeight, &Counters::presentPassDstWidth, &Counters::presentPassDstHeight, nullptr, 0.0},
     {"present_dst_max", CounterEntry::Kind::WidthByHeight, &Counters::presentPassDstMaxWidth, &Counters::presentPassDstMaxHeight, nullptr, 0.0},
+    {"present_schedule_requested_sync", CounterEntry::Kind::UnsignedCount, &Counters::presentScheduleRequestedSync, nullptr, nullptr, 0.0},
+    {"present_schedule_requested_immediate", CounterEntry::Kind::UnsignedCount, &Counters::presentScheduleRequestedImmediate, nullptr, nullptr, 0.0},
+    {"present_schedule_after_minimum_duration", CounterEntry::Kind::UnsignedCount, &Counters::presentScheduleAfterMinimumDuration, nullptr, nullptr, 0.0},
+    {"present_schedule_immediate", CounterEntry::Kind::UnsignedCount, &Counters::presentScheduleImmediate, nullptr, nullptr, 0.0},
+    {"present_minimum_duration_ms", CounterEntry::Kind::Milliseconds, &Counters::presentMinimumDurationNs, nullptr, nullptr, 0.0},
+    {"present_minimum_duration_max_ms", CounterEntry::Kind::Milliseconds, &Counters::presentMinimumDurationMaxNs, nullptr, nullptr, 0.0},
     {"present_acquire_waits", CounterEntry::Kind::UnsignedCount, &Counters::presentAcquireWaits, nullptr, nullptr, 0.0},
     {"present_acquire_wait_ms", CounterEntry::Kind::Milliseconds, &Counters::presentAcquireWaitNs, nullptr, nullptr, 0.0},
     {"present_acquire_wait_max_ms", CounterEntry::Kind::Milliseconds, &Counters::presentAcquireWaitMaxNs, nullptr, nullptr, 0.0},
@@ -2133,6 +2414,13 @@ void updateMax(std::atomic<std::uint64_t>& counter, std::uint64_t value) {
   while (current < value &&
          !counter.compare_exchange_weak(current, value, std::memory_order_relaxed)) {
   }
+}
+
+void recordCpuTime(std::atomic<std::uint64_t>& total,
+                   std::atomic<std::uint64_t>& max,
+                   std::uint64_t nanoseconds) {
+  add(total, nanoseconds);
+  updateMax(max, nanoseconds);
 }
 
 void store(std::atomic<std::uint64_t>& counter, std::uint64_t value) {
@@ -2390,6 +2678,99 @@ void countCommitChunkDrawReplay(bool indexed, std::uint32_t deltaMask) {
   addIf(CommitChunkDrawDeltaIndexBuffer, c.commitChunkDrawDeltaIndexBuffer);
 }
 
+void countDrawPacketActualChange(std::uint32_t declaredMask,
+                                 std::uint32_t actualMask) {
+  auto& c = counters();
+  add(c.drawPacketActualChangeSamples);
+  if (declaredMask != 0) {
+    add(c.drawPacketDeclaredAny);
+  }
+  if (actualMask != 0) {
+    add(c.drawPacketActualAny);
+  } else if (declaredMask != 0) {
+    add(c.drawPacketRedundantAny);
+  }
+
+  constexpr std::uint32_t bindingMask =
+      CommitChunkDrawDeltaStream |
+      CommitChunkDrawDeltaIndexBuffer;
+  constexpr std::uint32_t uniformMask =
+      CommitChunkDrawDeltaRenderState |
+      CommitChunkDrawDeltaTextureStageState |
+      CommitChunkDrawDeltaSamplerState |
+      CommitChunkDrawDeltaMaterial |
+      CommitChunkDrawDeltaClipPlane |
+      CommitChunkDrawDeltaTransform |
+      CommitChunkDrawDeltaLight |
+      CommitChunkDrawDeltaLightEnable |
+      CommitChunkDrawDeltaViewport |
+      CommitChunkDrawDeltaScissor;
+  constexpr std::uint32_t textureMask =
+      CommitChunkDrawDeltaTexture |
+      CommitChunkDrawDeltaTextureStageState |
+      CommitChunkDrawDeltaSamplerState;
+  constexpr std::uint32_t shaderMask = CommitChunkDrawDeltaShader;
+  constexpr std::uint32_t renderStateMask = CommitChunkDrawDeltaRenderState;
+  constexpr std::uint32_t fvfVdeclMask =
+      CommitChunkDrawDeltaFvf |
+      CommitChunkDrawDeltaVertexDecl;
+  constexpr std::uint32_t rtDepthMask =
+      CommitChunkDrawDeltaRenderTarget |
+      CommitChunkDrawDeltaDepthStencil;
+  constexpr std::uint32_t viewportScissorMask =
+      CommitChunkDrawDeltaViewport |
+      CommitChunkDrawDeltaScissor;
+  constexpr std::uint32_t tssSamplerMask =
+      CommitChunkDrawDeltaTextureStageState |
+      CommitChunkDrawDeltaSamplerState;
+  constexpr std::uint32_t ffpMask =
+      CommitChunkDrawDeltaMaterial |
+      CommitChunkDrawDeltaTransform |
+      CommitChunkDrawDeltaLight |
+      CommitChunkDrawDeltaLightEnable;
+  constexpr std::uint32_t clipMask = CommitChunkDrawDeltaClipPlane;
+
+  const std::uint32_t declaredNonbinding = declaredMask & ~bindingMask;
+  const std::uint32_t actualNonbinding = actualMask & ~bindingMask;
+  if (declaredNonbinding != 0) {
+    add(c.drawPacketDeclaredNonbinding);
+    if (actualNonbinding == 0) {
+      add(c.drawPacketRedundantNonbinding);
+    }
+  }
+  if (actualNonbinding != 0) {
+    add(c.drawPacketActualNonbinding);
+  }
+
+  const std::uint32_t declaredUniform = declaredMask & uniformMask;
+  const std::uint32_t actualUniform = actualMask & uniformMask;
+  if (declaredUniform != 0) {
+    add(c.drawPacketDeclaredUniform);
+    if (actualUniform == 0) {
+      add(c.drawPacketRedundantUniform);
+    }
+  }
+  if (actualUniform != 0) {
+    add(c.drawPacketActualUniform);
+  }
+
+  auto addRedundantClass = [&](std::uint32_t mask,
+                               std::atomic<std::uint64_t>& counter) {
+    if ((declaredMask & mask) != 0 && (actualMask & mask) == 0) {
+      add(counter);
+    }
+  };
+  addRedundantClass(textureMask, c.drawPacketRedundantTexture);
+  addRedundantClass(shaderMask, c.drawPacketRedundantShader);
+  addRedundantClass(renderStateMask, c.drawPacketRedundantRenderState);
+  addRedundantClass(fvfVdeclMask, c.drawPacketRedundantFvfVdecl);
+  addRedundantClass(rtDepthMask, c.drawPacketRedundantRtDepth);
+  addRedundantClass(viewportScissorMask, c.drawPacketRedundantViewportScissor);
+  addRedundantClass(tssSamplerMask, c.drawPacketRedundantTssSampler);
+  addRedundantClass(ffpMask, c.drawPacketRedundantFfp);
+  addRedundantClass(clipMask, c.drawPacketRedundantClip);
+}
+
 void countCommitChunkDrawStreamDeltaDetails(std::uint32_t handleChanges,
                                             std::uint32_t offsetChanges,
                                             std::uint32_t strideChanges) {
@@ -2626,11 +3007,158 @@ void countCommitChunkDrawSubmissionBatch(std::uint32_t recordCount) {
   }
 }
 
+void countCommitChunkApplyDrawStateCpuTime(std::uint64_t nanoseconds) {
+  auto& c = counters();
+  add(c.commitChunkApplyDrawStateCpuNs, nanoseconds);
+  updateMax(c.commitChunkApplyDrawStateCpuMaxNs, nanoseconds);
+  recordRing(c.commitChunkApplyDrawStateCpuRing, nanoseconds);
+}
+
+void countCommitChunkDrawRunScanCpuTime(std::uint64_t nanoseconds) {
+  auto& c = counters();
+  add(c.commitChunkDrawRunScanCpuNs, nanoseconds);
+  updateMax(c.commitChunkDrawRunScanCpuMaxNs, nanoseconds);
+  recordRing(c.commitChunkDrawRunScanCpuRing, nanoseconds);
+}
+
+void countCommitChunkDrawRunBuildCpuTime(std::uint64_t nanoseconds) {
+  auto& c = counters();
+  add(c.commitChunkDrawRunBuildCpuNs, nanoseconds);
+  updateMax(c.commitChunkDrawRunBuildCpuMaxNs, nanoseconds);
+  recordRing(c.commitChunkDrawRunBuildCpuRing, nanoseconds);
+}
+
+void countCommitChunkDrawRunSubmitCpuTime(std::uint64_t nanoseconds) {
+  auto& c = counters();
+  add(c.commitChunkDrawRunSubmitCpuNs, nanoseconds);
+  updateMax(c.commitChunkDrawRunSubmitCpuMaxNs, nanoseconds);
+  recordRing(c.commitChunkDrawRunSubmitCpuRing, nanoseconds);
+}
+
+void countCommitChunkDrawRunFinalBindCpuTime(std::uint64_t nanoseconds) {
+  auto& c = counters();
+  add(c.commitChunkDrawRunFinalBindCpuNs, nanoseconds);
+  updateMax(c.commitChunkDrawRunFinalBindCpuMaxNs, nanoseconds);
+  recordRing(c.commitChunkDrawRunFinalBindCpuRing, nanoseconds);
+}
+
+void countCommitChunkQueueDrawSubmissionCpuTime(std::uint64_t nanoseconds) {
+  auto& c = counters();
+  add(c.commitChunkQueueDrawSubmissionCpuNs, nanoseconds);
+  updateMax(c.commitChunkQueueDrawSubmissionCpuMaxNs, nanoseconds);
+  recordRing(c.commitChunkQueueDrawSubmissionCpuRing, nanoseconds);
+}
+
+void countCommitChunkConstUploadCpuTime(std::uint64_t nanoseconds) {
+  auto& c = counters();
+  add(c.commitChunkConstUploadCpuNs, nanoseconds);
+  updateMax(c.commitChunkConstUploadCpuMaxNs, nanoseconds);
+  recordRing(c.commitChunkConstUploadCpuRing, nanoseconds);
+}
+
 void countSubmitDrawRunBatchGroup(std::uint32_t recordCount) {
   auto& c = counters();
   add(c.submitDrawRunBatchGroups);
   add(c.submitDrawRunBatchRecords, recordCount);
   updateMax(c.submitDrawRunBatchMaxRecords, recordCount);
+}
+
+void countSubmitDrawRunBindingSnapshotCpuTime(std::uint64_t nanoseconds) {
+  auto& c = counters();
+  recordCpuTime(c.submitDrawRunBindingSnapshotCpuNs,
+                c.submitDrawRunBindingSnapshotCpuMaxNs,
+                nanoseconds);
+}
+
+void countSubmitDrawRunPayloadBytesCpuTime(std::uint64_t nanoseconds) {
+  auto& c = counters();
+  recordCpuTime(c.submitDrawRunPayloadBytesCpuNs,
+                c.submitDrawRunPayloadBytesCpuMaxNs,
+                nanoseconds);
+}
+
+void countSubmitDrawRunSlotPrepareCpuTime(std::uint64_t nanoseconds) {
+  auto& c = counters();
+  recordCpuTime(c.submitDrawRunSlotPrepareCpuNs,
+                c.submitDrawRunSlotPrepareCpuMaxNs,
+                nanoseconds);
+}
+
+void countSubmitDrawRunResourceMarkCpuTime(std::uint64_t nanoseconds) {
+  auto& c = counters();
+  recordCpuTime(c.submitDrawRunResourceMarkCpuNs,
+                c.submitDrawRunResourceMarkCpuMaxNs,
+                nanoseconds);
+}
+
+void countSubmitDrawRunAppendCpuTime(std::uint64_t nanoseconds) {
+  auto& c = counters();
+  recordCpuTime(c.submitDrawRunAppendCpuNs,
+                c.submitDrawRunAppendCpuMaxNs,
+                nanoseconds);
+}
+
+void countSubmitDrawRunChunkCommitCpuTime(std::uint64_t nanoseconds) {
+  auto& c = counters();
+  recordCpuTime(c.submitDrawRunChunkCommitCpuNs,
+                c.submitDrawRunChunkCommitCpuMaxNs,
+                nanoseconds);
+}
+
+void countSubmitDrawRunBatchCompatScanCpuTime(std::uint64_t nanoseconds) {
+  auto& c = counters();
+  recordCpuTime(c.submitDrawRunBatchCompatScanCpuNs,
+                c.submitDrawRunBatchCompatScanCpuMaxNs,
+                nanoseconds);
+}
+
+void countSubmitDrawRunBatchBindingOverrideCpuTime(std::uint64_t nanoseconds) {
+  auto& c = counters();
+  recordCpuTime(c.submitDrawRunBatchBindingOverrideCpuNs,
+                c.submitDrawRunBatchBindingOverrideCpuMaxNs,
+                nanoseconds);
+}
+
+void countSubmitDrawRunBatchBindingSnapshotCpuTime(std::uint64_t nanoseconds) {
+  auto& c = counters();
+  recordCpuTime(c.submitDrawRunBatchBindingSnapshotCpuNs,
+                c.submitDrawRunBatchBindingSnapshotCpuMaxNs,
+                nanoseconds);
+}
+
+void countSubmitDrawRunBatchPayloadBytesCpuTime(std::uint64_t nanoseconds) {
+  auto& c = counters();
+  recordCpuTime(c.submitDrawRunBatchPayloadBytesCpuNs,
+                c.submitDrawRunBatchPayloadBytesCpuMaxNs,
+                nanoseconds);
+}
+
+void countSubmitDrawRunBatchSlotPrepareCpuTime(std::uint64_t nanoseconds) {
+  auto& c = counters();
+  recordCpuTime(c.submitDrawRunBatchSlotPrepareCpuNs,
+                c.submitDrawRunBatchSlotPrepareCpuMaxNs,
+                nanoseconds);
+}
+
+void countSubmitDrawRunBatchResourceMarkCpuTime(std::uint64_t nanoseconds) {
+  auto& c = counters();
+  recordCpuTime(c.submitDrawRunBatchResourceMarkCpuNs,
+                c.submitDrawRunBatchResourceMarkCpuMaxNs,
+                nanoseconds);
+}
+
+void countSubmitDrawRunBatchAppendCpuTime(std::uint64_t nanoseconds) {
+  auto& c = counters();
+  recordCpuTime(c.submitDrawRunBatchAppendCpuNs,
+                c.submitDrawRunBatchAppendCpuMaxNs,
+                nanoseconds);
+}
+
+void countSubmitDrawRunBatchChunkCommitCpuTime(std::uint64_t nanoseconds) {
+  auto& c = counters();
+  recordCpuTime(c.submitDrawRunBatchChunkCommitCpuNs,
+                c.submitDrawRunBatchChunkCommitCpuMaxNs,
+                nanoseconds);
 }
 
 void countD3D9DrawStateCacheLookup(bool hit, bool includeIndexBuffer) {
@@ -4316,13 +4844,55 @@ void countCommandBufferCommitCpuTime(std::uint64_t nanoseconds) {
 }
 
 void countBridgeCommitLatencyNs(std::uint64_t nanoseconds) {
-  // V1 boundary B2 — measured at the d3d9 PE-side commit_chunk entry,
-  // covers the WINE_UNIX_CALL marshalling, importer validation, and
-  // seqId assignment cost. The matching call site is in
-  // src/d3d9/device_c_chunk_replay.cpp (dxmt9c_device_commit_chunk).
+  // V1 boundary B2 — measured across the whole commit_chunk bridge call.
+  // This includes unix-side import/replay/queue-submit work and excludes
+  // asynchronous encode/GPU work after the call returns. The matching call
+  // site is in src/d3d9/device_c_chunk_replay.cpp
+  // (dxmt9c_device_commit_chunk).
   add(counters().bridgeCommitLatencyNs, nanoseconds);
   updateMax(counters().bridgeCommitLatencyMaxNs, nanoseconds);
   recordRing(counters().bridgeCommitLatencyRing, nanoseconds);
+}
+
+void countCommitChunkImportCpuTime(std::uint64_t nanoseconds) {
+  add(counters().commitChunkImportCpuNs, nanoseconds);
+  updateMax(counters().commitChunkImportCpuMaxNs, nanoseconds);
+  recordRing(counters().commitChunkImportCpuRing, nanoseconds);
+}
+
+void countCommitChunkHandleCpuTime(std::uint64_t nanoseconds) {
+  add(counters().commitChunkHandleCpuNs, nanoseconds);
+  updateMax(counters().commitChunkHandleCpuMaxNs, nanoseconds);
+  recordRing(counters().commitChunkHandleCpuRing, nanoseconds);
+}
+
+void countCommitChunkReplayCpuTime(std::uint64_t nanoseconds) {
+  add(counters().commitChunkReplayCpuNs, nanoseconds);
+  updateMax(counters().commitChunkReplayCpuMaxNs, nanoseconds);
+  recordRing(counters().commitChunkReplayCpuRing, nanoseconds);
+}
+
+void countCommitChunkDrawBatchSubmitCpuTime(std::uint64_t nanoseconds) {
+  add(counters().commitChunkDrawBatchSubmitCpuNs, nanoseconds);
+  updateMax(counters().commitChunkDrawBatchSubmitCpuMaxNs, nanoseconds);
+  recordRing(counters().commitChunkDrawBatchSubmitCpuRing, nanoseconds);
+}
+
+void countCompletionDequeue(std::uint64_t ageNanoseconds,
+                            std::uint64_t pendingDepthAfterPop,
+                            std::uint64_t commandBufferStatus) {
+  auto& c = counters();
+  add(c.completionDequeueSamples);
+  add(c.completionDequeueAgeNs, ageNanoseconds);
+  updateMax(c.completionDequeueAgeMaxNs, ageNanoseconds);
+  updateMax(c.completionPendingDepthMax, pendingDepthAfterPop);
+  recordRing(c.completionDequeueAgeRing, ageNanoseconds);
+  add(completionDequeueStatusCounter(c, commandBufferStatus));
+}
+
+void countCompletionWaitStatus(std::uint64_t nanoseconds,
+                               std::uint64_t commandBufferStatus) {
+  addCompletionWaitStatusBucket(counters(), commandBufferStatus, nanoseconds);
 }
 
 void countCompletionWait(std::uint64_t nanoseconds,
@@ -4576,6 +5146,26 @@ void countPresentPass(std::uint32_t sourceWidth,
   store(counters().presentPassDstHeight, targetHeight);
   updateMax(counters().presentPassDstMaxWidth, targetWidth);
   updateMax(counters().presentPassDstMaxHeight, targetHeight);
+}
+
+void countPresentSchedule(bool requestedDisplaySync, double minimumPresentDuration) {
+  if (!enabled()) {
+    return;
+  }
+  if (requestedDisplaySync) {
+    add(counters().presentScheduleRequestedSync);
+  } else {
+    add(counters().presentScheduleRequestedImmediate);
+  }
+  if (minimumPresentDuration > 0.0) {
+    add(counters().presentScheduleAfterMinimumDuration);
+    const auto nanoseconds =
+        static_cast<std::uint64_t>(minimumPresentDuration * 1000000000.0 + 0.5);
+    add(counters().presentMinimumDurationNs, nanoseconds);
+    updateMax(counters().presentMinimumDurationMaxNs, nanoseconds);
+  } else {
+    add(counters().presentScheduleImmediate);
+  }
 }
 
 void countPresentAcquireWait(std::uint64_t nanoseconds) {

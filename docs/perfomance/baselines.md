@@ -41,7 +41,7 @@ every A/B delta elsewhere is measured against [[baselines-frame50.01]],
 - **`--no-gputrace`** — scout mode: emits `result.json` + perf counters without
   the expensive `.gputrace`/Xcode export; proves runtime-shape stability cheaply
   ([[baselines-frame50.02]], [[baselines-frame50.03]]).
-- **Timeout policy** — `--timeout` is mandatory and positive (180s no-gputrace,
+- **Timeout policy** — `--timeout` is mandatory and positive (120s no-gputrace,
   420s gputrace); 3DMark05 hangs on the final frame, so the wrapper
   timeout-finalizes (`timed_out=true`, `returncode=143`/`-15`). A
   timeout-finalized run with expected artifacts is a valid counter sample;
@@ -160,7 +160,7 @@ authoritative Xcode/dxmt joined baseline:
 ```sh
 # Cheap scout: result.json + perf counters, no Xcode export
 bash scripts/tools/run_3dmark05_perf_probe.sh --suffix baseline --frame 50 \
-  --no-gputrace --timeout 180
+  --no-gputrace --timeout 120
 
 # Authoritative baseline: capture .gputrace, then after Xcode export
 bash scripts/tools/run_3dmark05_perf_probe.sh --suffix baseline --frame 50 --timeout 420

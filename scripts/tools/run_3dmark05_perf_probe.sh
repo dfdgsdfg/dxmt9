@@ -16,6 +16,7 @@ capture_gputrace=1
 dry_run=0
 dump_shaders=0
 frame_sampling=${DXMT9_PERF_FRAME_SAMPLING:-0}
+draw_packet_actual_change=${DXMT9_PERF_DRAW_PACKET_ACTUAL_CHANGE:-0}
 recommended_gputrace_min_free_mb=2048
 trim_unused_varyings=0
 trim_unused_varyings_vs_hashes=
@@ -223,6 +224,12 @@ encoder_breakdown_seq=${DXMT_3DMARK05_ENCODER_BREAKDOWN_SEQ:-}
 encoder_breakdown_all_frames=0
 encoder_breakdown_enabled=1
 render_pass_reentry_top=${DXMT_3DMARK05_RENDER_PASS_REENTRY_TOP:-}
+dump_framegraph_dag=${DXMT_3DMARK05_DUMP_FRAMEGRAPH_DAG:-0}
+framegraph_dag_frame=${DXMT_3DMARK05_DUMP_FRAMEGRAPH_DAG_FRAME:-}
+framegraph_dag_frame_radius=${DXMT_3DMARK05_DUMP_FRAMEGRAPH_DAG_FRAME_RADIUS:-}
+framegraph_dag_formats=${DXMT_3DMARK05_DUMP_FRAMEGRAPH_DAG_FORMATS:-json,mermaid}
+framegraph_dag_optimize=${DXMT_3DMARK05_DUMP_FRAMEGRAPH_DAG_OPTIMIZE:-}
+framegraph_dag_draws=${DXMT_3DMARK05_DUMP_FRAMEGRAPH_DAG_DRAWS:-0}
 require_color_dontcare_increase=0
 require_depth_dontcare_increase=0
 require_tile_preservation_decrease=0
@@ -293,7 +300,7 @@ Options:
   --suffix NAME       Output suffix (default: probe-<timestamp>-frame<N>)
   --frame N           1-based Metal capture frame (default: 60)
   --timeout SEC       run_experiment timeout seconds (default: 420 with gputrace,
-                      180 with --no-gputrace; DXMT_3DMARK05_PROBE_TIMEOUT overrides)
+                      120 with --no-gputrace; DXMT_3DMARK05_PROBE_TIMEOUT overrides)
                       The wrapper watchdog uses SEC + DXMT_3DMARK05_PROBE_TIMEOUT_SLACK
                       (default: 45) to clean up detached final-frame hangs.
   --capture-delay-sec SEC
@@ -334,9 +341,35 @@ Options:
                       top same-key render-pass re-entry rows per frame. Use
                       with encoder breakdown when pass action shape needs to
                       be joined to A/B role pairs.
+  --dump-framegraph-dag
+                      Set DXMT9_RENDERER_DUMP_DAG under
+                      traces/<run-id>/analysis/dag and summarize combined,
+                      pre-opt, and post-opt same-attachment re-entry
+                      candidates after the run.
+  --framegraph-dag-frame N
+                      Set DXMT9_RENDERER_DUMP_DAG_FRAME=N. Implies
+                      --dump-framegraph-dag. Defaults to --frame when the DAG
+                      dump is enabled.
+  --framegraph-dag-frame-radius N
+                      Set DXMT9_RENDERER_DUMP_DAG_FRAME_RADIUS=N. Implies
+                      --dump-framegraph-dag. Defaults to 0.
+  --framegraph-dag-formats LIST
+                      Set DXMT9_RENDERER_DUMP_DAG_FORMATS, e.g. json,mermaid.
+                      JSON is needed for the wrapper's post-run summary.
+  --framegraph-dag-optimize LIST
+                      Set DXMT9_RENDERER_DUMP_DAG_OPTIMIZE for analysis-only
+                      post-opt dumps, e.g. passcoalesce.
+  --framegraph-dag-draws
+                      Set DXMT9_RENDERER_DUMP_DAG_DRAWS=1 to include
+                      draw-level JSON detail in DAG dumps.
   --frame-sampling    Set DXMT9_PERF_FRAME_SAMPLING=1 and emit per-Present
                       wall_ms/fps plus counter deltas. Use for visual/perf
                       coupling probes such as bloom, glow, and muzzle effects.
+  --probe-draw-packet-actual-change
+                      Set DXMT9_PERF_DRAW_PACKET_ACTUAL_CHANGE=1. Counts
+                      declared draw-packet state deltas whose values do or do
+                      not actually change the unix-side DeviceState before
+                      snapshot invalidation.
   --dump-shaders      Dump translated MSL and D3D shader bytecode under
                       traces/<run-id>/analysis/shaders
   --trim-unused-varyings
@@ -1170,8 +1203,41 @@ while (($#)); do
       render_pass_reentry_top=${2:?missing value for --render-pass-reentry-top}
       shift 2
       ;;
+    --dump-framegraph-dag)
+      dump_framegraph_dag=1
+      shift
+      ;;
+    --framegraph-dag-frame)
+      dump_framegraph_dag=1
+      framegraph_dag_frame=${2:?missing value for --framegraph-dag-frame}
+      shift 2
+      ;;
+    --framegraph-dag-frame-radius)
+      dump_framegraph_dag=1
+      framegraph_dag_frame_radius=${2:?missing value for --framegraph-dag-frame-radius}
+      shift 2
+      ;;
+    --framegraph-dag-formats)
+      dump_framegraph_dag=1
+      framegraph_dag_formats=${2:?missing value for --framegraph-dag-formats}
+      shift 2
+      ;;
+    --framegraph-dag-optimize)
+      dump_framegraph_dag=1
+      framegraph_dag_optimize=${2:?missing value for --framegraph-dag-optimize}
+      shift 2
+      ;;
+    --framegraph-dag-draws)
+      dump_framegraph_dag=1
+      framegraph_dag_draws=1
+      shift
+      ;;
     --frame-sampling)
       frame_sampling=1
+      shift
+      ;;
+    --probe-draw-packet-actual-change)
+      draw_packet_actual_change=1
       shift
       ;;
     --no-gputrace)
@@ -2310,7 +2376,7 @@ if [[ -z "$timeout" ]]; then
   if (( capture_gputrace )); then
     timeout=420
   else
-    timeout=180
+    timeout=120
   fi
 fi
 
@@ -2338,6 +2404,46 @@ fi
 if [[ -n "$capture_range" && ! "$capture_range" =~ ^[0-9]+:[0-9]+(:[0-9]+)?$ ]]; then
   echo "--capture-range must be START:END[:STEP] with non-negative integers" >&2
   exit 2
+fi
+
+if [[ -n "$dump_framegraph_dag" && ! "$dump_framegraph_dag" =~ ^[0-9]+$ ]]; then
+  echo "DXMT_3DMARK05_DUMP_FRAMEGRAPH_DAG must be a non-negative integer flag" >&2
+  exit 2
+fi
+
+if [[ -n "$framegraph_dag_draws" && ! "$framegraph_dag_draws" =~ ^[0-9]+$ ]]; then
+  echo "DXMT_3DMARK05_DUMP_FRAMEGRAPH_DAG_DRAWS must be a non-negative integer flag" >&2
+  exit 2
+fi
+
+if (( dump_framegraph_dag )); then
+  if [[ -z "$framegraph_dag_frame" ]]; then
+    framegraph_dag_frame=$frame
+  fi
+  if [[ -z "$framegraph_dag_frame_radius" ]]; then
+    framegraph_dag_frame_radius=0
+  fi
+  if [[ ! "$framegraph_dag_frame" =~ ^[0-9]+$ ]] || (( framegraph_dag_frame == 0 )); then
+    echo "--framegraph-dag-frame must be a positive integer" >&2
+    exit 2
+  fi
+  if [[ ! "$framegraph_dag_frame_radius" =~ ^[0-9]+$ ]]; then
+    echo "--framegraph-dag-frame-radius must be a non-negative integer" >&2
+    exit 2
+  fi
+  if [[ -z "$framegraph_dag_formats" ]]; then
+    echo "--framegraph-dag-formats must not be empty" >&2
+    exit 2
+  fi
+  if [[ ! "$framegraph_dag_formats" =~ ^[A-Za-z0-9_,.-]+$ ]]; then
+    echo "--framegraph-dag-formats must be a comma-separated token list" >&2
+    exit 2
+  fi
+  if [[ -n "$framegraph_dag_optimize" &&
+        ! "$framegraph_dag_optimize" =~ ^[A-Za-z0-9_,.-]+$ ]]; then
+    echo "--framegraph-dag-optimize must be a comma-separated token list" >&2
+    exit 2
+  fi
 fi
 
 if [[ -z "$suffix" ]]; then
@@ -3135,6 +3241,16 @@ shader_dump_dir="$analysis_dir/shaders"
 shader_msl_dump_dir="$shader_dump_dir/msl"
 shader_bytecode_dump_dir="$shader_dump_dir/bytecode"
 geometry_dump_dir="$analysis_dir/geometry"
+framegraph_dag_dir="$analysis_dir/dag"
+framegraph_dag_summary="$analysis_dir/framegraph-dag-summary.md"
+framegraph_dag_summary_csv="$analysis_dir/framegraph-dag-summary.csv"
+framegraph_dag_candidates_csv="$analysis_dir/framegraph-dag-candidates.csv"
+framegraph_dag_preopt_summary="$analysis_dir/framegraph-dag-preopt-summary.md"
+framegraph_dag_preopt_summary_csv="$analysis_dir/framegraph-dag-preopt-summary.csv"
+framegraph_dag_preopt_candidates_csv="$analysis_dir/framegraph-dag-preopt-candidates.csv"
+framegraph_dag_postopt_summary="$analysis_dir/framegraph-dag-postopt-summary.md"
+framegraph_dag_postopt_summary_csv="$analysis_dir/framegraph-dag-postopt-summary.csv"
+framegraph_dag_postopt_candidates_csv="$analysis_dir/framegraph-dag-postopt-candidates.csv"
 visibility_scout_default_path="$analysis_dir/frame${frame}-visibility-scout.csv"
 visibility_scout_summary_default_path="$analysis_dir/frame${frame}-visibility-scout-summary.md"
 visibility_scout_summary_csv_default_path="$analysis_dir/frame${frame}-visibility-scout-summary.csv"
@@ -3230,6 +3346,25 @@ fi
 
 if [[ "$frame_sampling" != "0" && -n "$frame_sampling" ]]; then
   env_args+=("DXMT9_PERF_FRAME_SAMPLING=$frame_sampling")
+fi
+
+if [[ "$draw_packet_actual_change" != "0" && -n "$draw_packet_actual_change" ]]; then
+  env_args+=("DXMT9_PERF_DRAW_PACKET_ACTUAL_CHANGE=$draw_packet_actual_change")
+fi
+
+if (( dump_framegraph_dag )); then
+  env_args+=(
+    "DXMT9_RENDERER_DUMP_DAG=$framegraph_dag_dir"
+    "DXMT9_RENDERER_DUMP_DAG_FRAME=$framegraph_dag_frame"
+    "DXMT9_RENDERER_DUMP_DAG_FRAME_RADIUS=$framegraph_dag_frame_radius"
+    "DXMT9_RENDERER_DUMP_DAG_FORMATS=$framegraph_dag_formats"
+  )
+  if [[ -n "$framegraph_dag_optimize" ]]; then
+    env_args+=("DXMT9_RENDERER_DUMP_DAG_OPTIMIZE=$framegraph_dag_optimize")
+  fi
+  if (( framegraph_dag_draws )); then
+    env_args+=("DXMT9_RENDERER_DUMP_DAG_DRAWS=1")
+  fi
 fi
 
 if (( capture_gputrace )); then
@@ -4340,6 +4475,27 @@ fi
 if (( dump_indexed_geometry )); then
   echo "geometry_dump_dir: $geometry_dump_dir"
 fi
+if (( dump_framegraph_dag )); then
+  echo "framegraph_dag_dir: $framegraph_dag_dir"
+  echo "framegraph_dag_frame: $framegraph_dag_frame"
+  echo "framegraph_dag_frame_radius: $framegraph_dag_frame_radius"
+  echo "framegraph_dag_formats: $framegraph_dag_formats"
+  if [[ -n "$framegraph_dag_optimize" ]]; then
+    echo "framegraph_dag_optimize: $framegraph_dag_optimize"
+  fi
+  if (( framegraph_dag_draws )); then
+    echo "framegraph_dag_draws: 1"
+  fi
+  echo "framegraph_dag_summary: $framegraph_dag_summary"
+  echo "framegraph_dag_summary_csv: $framegraph_dag_summary_csv"
+  echo "framegraph_dag_candidates_csv: $framegraph_dag_candidates_csv"
+  echo "framegraph_dag_preopt_summary: $framegraph_dag_preopt_summary"
+  echo "framegraph_dag_preopt_summary_csv: $framegraph_dag_preopt_summary_csv"
+  echo "framegraph_dag_preopt_candidates_csv: $framegraph_dag_preopt_candidates_csv"
+  echo "framegraph_dag_postopt_summary: $framegraph_dag_postopt_summary"
+  echo "framegraph_dag_postopt_summary_csv: $framegraph_dag_postopt_summary_csv"
+  echo "framegraph_dag_postopt_candidates_csv: $framegraph_dag_postopt_candidates_csv"
+fi
 if (( visibility_scout )); then
   echo "visibility_scout_csv: $visibility_scout_path"
   echo "visibility_scout_summary: $visibility_scout_summary_output"
@@ -4474,6 +4630,9 @@ fi
 if (( dump_indexed_geometry )); then
   mkdir -p "$geometry_dump_dir"
 fi
+if (( dump_framegraph_dag )); then
+  mkdir -p "$framegraph_dag_dir"
+fi
 if [[ -n "$dump_depth_attachment_handle" ]]; then
   mkdir -p "$(dirname -- "$dump_depth_attachment_path")"
 fi
@@ -4536,6 +4695,27 @@ if (( visibility_scout )); then
   fi
 fi
 
+if (( dump_framegraph_dag )); then
+  if find "$framegraph_dag_dir" -maxdepth 1 -name 'dag-frame*-chunk*-*.json' -print -quit | grep -q .; then
+    python3 "$repo_root/scripts/tools/summarize_framegraph_dag.py" "$framegraph_dag_dir" \
+      --summary-csv "$framegraph_dag_summary_csv" \
+      --csv "$framegraph_dag_candidates_csv" \
+      --markdown "$framegraph_dag_summary"
+    python3 "$repo_root/scripts/tools/summarize_framegraph_dag.py" "$framegraph_dag_dir" \
+      --stage pre-opt \
+      --summary-csv "$framegraph_dag_preopt_summary_csv" \
+      --csv "$framegraph_dag_preopt_candidates_csv" \
+      --markdown "$framegraph_dag_preopt_summary"
+    python3 "$repo_root/scripts/tools/summarize_framegraph_dag.py" "$framegraph_dag_dir" \
+      --stage post-opt \
+      --summary-csv "$framegraph_dag_postopt_summary_csv" \
+      --csv "$framegraph_dag_postopt_candidates_csv" \
+      --markdown "$framegraph_dag_postopt_summary"
+  else
+    echo "warning: framegraph DAG dump was enabled but no JSON files were written: $framegraph_dag_dir" >&2
+  fi
+fi
+
 if (( capture_gputrace )) && [[ ! -e "$capture_path" ]]; then
   echo "Metal gputrace capture was requested but no capture was written: $capture_path" >&2
   echo "check the run log for MTLCaptureManager errors:" >&2
@@ -4562,6 +4742,36 @@ if (( visibility_scout )); then
   echo "wrote visibility scout csv: $visibility_scout_path"
   echo "wrote visibility scout summary: $visibility_scout_summary_output"
   echo "wrote visibility scout summary csv: $visibility_scout_summary_csv_output"
+fi
+if (( dump_framegraph_dag )); then
+  echo "wrote framegraph DAG dir: $framegraph_dag_dir"
+  if [[ -e "$framegraph_dag_summary" ]]; then
+    echo "wrote framegraph DAG summary: $framegraph_dag_summary"
+  fi
+  if [[ -e "$framegraph_dag_summary_csv" ]]; then
+    echo "wrote framegraph DAG summary csv: $framegraph_dag_summary_csv"
+  fi
+  if [[ -e "$framegraph_dag_candidates_csv" ]]; then
+    echo "wrote framegraph DAG candidates csv: $framegraph_dag_candidates_csv"
+  fi
+  if [[ -e "$framegraph_dag_preopt_summary" ]]; then
+    echo "wrote framegraph DAG preopt summary: $framegraph_dag_preopt_summary"
+  fi
+  if [[ -e "$framegraph_dag_preopt_summary_csv" ]]; then
+    echo "wrote framegraph DAG preopt summary csv: $framegraph_dag_preopt_summary_csv"
+  fi
+  if [[ -e "$framegraph_dag_preopt_candidates_csv" ]]; then
+    echo "wrote framegraph DAG preopt candidates csv: $framegraph_dag_preopt_candidates_csv"
+  fi
+  if [[ -e "$framegraph_dag_postopt_summary" ]]; then
+    echo "wrote framegraph DAG postopt summary: $framegraph_dag_postopt_summary"
+  fi
+  if [[ -e "$framegraph_dag_postopt_summary_csv" ]]; then
+    echo "wrote framegraph DAG postopt summary csv: $framegraph_dag_postopt_summary_csv"
+  fi
+  if [[ -e "$framegraph_dag_postopt_candidates_csv" ]]; then
+    echo "wrote framegraph DAG postopt candidates csv: $framegraph_dag_postopt_candidates_csv"
+  fi
 fi
 if ((${#counter_compare_cmd[@]})); then
   echo "wrote perf counter comparison: $counter_comparison_path"

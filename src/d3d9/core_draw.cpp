@@ -490,15 +490,6 @@ u64 hashClipPlanes(const std::array<ClipPlane, kMaxClipPlanes> &planes) {
 u64 hashLight(const Light &light);
 u64 hashMaterial(const Material &material);
 
-struct DrawUniformPayloadHashes {
-  u64 vertexConstantsHash = 0;
-  u64 pixelConstantsHash = 0;
-  u64 worldViewProjHash = 0;
-  u64 ffpBlendWorldViewProjHash = 0;
-  u64 textureTransformsHash = 0;
-  u64 clipPlanesHash = 0;
-};
-
 struct ShaderConstantHashResult {
   u64 hash = 0;
   std::uint64_t bytes = 0;
@@ -575,19 +566,14 @@ ShaderConstantHashResult hashShaderConstantsForUsage(
   };
 }
 
-u64 hashDrawUniformPayload(const DrawUniformPayload &payload,
-                           DrawUniformPayloadHashes *componentHashes = nullptr,
-                           DrawUniformPayloadHashOptions options = {}) {
+void hashDrawUniformShaderConstantComponents(
+    const DrawUniformPayload &payload, DrawUniformPayloadHashes &hashes,
+    DrawUniformPayloadHashOptions options = {}) {
   const bool recordPerf = options.recordSnapshotPerf && dxmt9::perf::enabled();
   auto recorder = [&](void (*fn)(std::uint64_t)) {
     return recordPerf ? fn : nullptr;
   };
 
-  DrawUniformPayloadHashes hashes{};
-  u64 ffpWorldViewHash = 0;
-  u64 ffpNormalMatrixHash = 0;
-  u64 materialHash = 0;
-  std::array<u64, kMaxLights> lightHashes{};
   {
     PerfScope scope(recorder(
         dxmt9::perf::countD3D9SnapshotUniformBuildVsConstHashCpuTime));
@@ -654,6 +640,16 @@ u64 hashDrawUniformPayload(const DrawUniformPayload &payload,
       }
     }
   }
+}
+
+void hashDrawUniformNonConstantComponents(
+    const DrawUniformPayload &payload, DrawUniformPayloadHashes &hashes,
+    DrawUniformPayloadHashOptions options = {}) {
+  const bool recordPerf = options.recordSnapshotPerf && dxmt9::perf::enabled();
+  auto recorder = [&](void (*fn)(std::uint64_t)) {
+    return recordPerf ? fn : nullptr;
+  };
+
   {
     PerfScope scope(recorder(
         dxmt9::perf::countD3D9SnapshotUniformBuildNonConstHashCpuTime));
@@ -665,23 +661,23 @@ u64 hashDrawUniformPayload(const DrawUniformPayload &payload,
     {
       PerfScope fieldScope(recorder(
           dxmt9::perf::countD3D9SnapshotUniformBuildNonConstHashFfpWorldViewCpuTime));
-      ffpWorldViewHash = hashTrivial(payload.ffpWorldView);
+      hashes.ffpWorldViewHash = hashTrivial(payload.ffpWorldView);
     }
     {
       PerfScope fieldScope(recorder(
           dxmt9::perf::countD3D9SnapshotUniformBuildNonConstHashFfpNormalMatrixCpuTime));
-      ffpNormalMatrixHash = hashTrivial(payload.ffpNormalMatrix);
+      hashes.ffpNormalMatrixHash = hashTrivial(payload.ffpNormalMatrix);
     }
     {
       PerfScope fieldScope(recorder(
           dxmt9::perf::countD3D9SnapshotUniformBuildNonConstHashMaterialCpuTime));
-      materialHash = hashMaterial(payload.material);
+      hashes.materialHash = hashMaterial(payload.material);
     }
     {
       PerfScope fieldScope(recorder(
           dxmt9::perf::countD3D9SnapshotUniformBuildNonConstHashLightsCpuTime));
       for (std::size_t i = 0; i < payload.lights.size(); ++i) {
-        lightHashes[i] = hashLight(payload.lights[i]);
+        hashes.lightHashes[i] = hashLight(payload.lights[i]);
       }
     }
     {
@@ -702,26 +698,45 @@ u64 hashDrawUniformPayload(const DrawUniformPayload &payload,
       hashes.clipPlanesHash = hashClipPlanes(payload.clipPlanes);
     }
   }
-  if (componentHashes) {
-    *componentHashes = hashes;
-  }
+}
+
+u64 combineDrawUniformPayloadHashes(const DrawUniformPayloadHashes &hashes,
+                                    u32 clipPlaneMask,
+                                    bool recordSnapshotPerf = false) {
+  const bool recordPerf = recordSnapshotPerf && dxmt9::perf::enabled();
+  auto recorder = [&](void (*fn)(std::uint64_t)) {
+    return recordPerf ? fn : nullptr;
+  };
 
   PerfScope scope(recorder(
       dxmt9::perf::countD3D9SnapshotUniformBuildPayloadCombineHashCpuTime));
   u64 hash = hashCombine(kFnvOffset, hashes.vertexConstantsHash);
   hash = hashCombine(hash, hashes.pixelConstantsHash);
   hash = hashCombine(hash, hashes.worldViewProjHash);
-  hash = hashCombine(hash, ffpWorldViewHash);
-  hash = hashCombine(hash, ffpNormalMatrixHash);
-  hash = hashCombine(hash, materialHash);
-  for (const auto lightHash : lightHashes) {
+  hash = hashCombine(hash, hashes.ffpWorldViewHash);
+  hash = hashCombine(hash, hashes.ffpNormalMatrixHash);
+  hash = hashCombine(hash, hashes.materialHash);
+  for (const auto lightHash : hashes.lightHashes) {
     hash = hashCombine(hash, lightHash);
   }
   hash = hashCombine(hash, hashes.ffpBlendWorldViewProjHash);
   hash = hashCombine(hash, hashes.textureTransformsHash);
-  hash = hashCombine(hash, payload.clipPlaneMask);
+  hash = hashCombine(hash, clipPlaneMask);
   hash = hashCombine(hash, hashes.clipPlanesHash);
   return hash;
+}
+
+u64 hashDrawUniformPayload(const DrawUniformPayload &payload,
+                           DrawUniformPayloadHashes *componentHashes = nullptr,
+                           DrawUniformPayloadHashOptions options = {}) {
+  DrawUniformPayloadHashes hashes{};
+  hashDrawUniformShaderConstantComponents(payload, hashes, options);
+  hashDrawUniformNonConstantComponents(payload, hashes, options);
+  if (componentHashes) {
+    *componentHashes = hashes;
+  }
+  return combineDrawUniformPayloadHashes(
+      hashes, payload.clipPlaneMask, options.recordSnapshotPerf);
 }
 
 void applyDrawUniformPayloadHashes(FlatDrawStateRecord &hot,
@@ -1537,6 +1552,48 @@ DrawUniformPayload makeDrawUniformPayloadFromState(
   return payload;
 }
 
+void refreshDrawUniformPayloadShaderConstantsFromState(
+    const DeviceState &state, DrawUniformPayload &payload,
+    DrawUniformPayloadHashes &componentHashes,
+    const DrawShaderLayoutContext &shaderLayout,
+    bool recordSnapshotPerf = false) {
+  const bool recordPerf = recordSnapshotPerf && dxmt9::perf::enabled();
+  auto recorder = [&](void (*fn)(std::uint64_t)) {
+    return recordPerf ? fn : nullptr;
+  };
+  if (recordPerf) {
+    dxmt9::perf::countD3D9SnapshotUniformBuildCall();
+  }
+  {
+    PerfScope scope(recorder(
+        dxmt9::perf::countD3D9SnapshotUniformBuildVsConstCopyCpuTime));
+    payload.vsConst = state.vsConst;
+  }
+  {
+    PerfScope scope(recorder(
+        dxmt9::perf::countD3D9SnapshotUniformBuildPsConstCopyCpuTime));
+    payload.psConst = state.psConst;
+  }
+  {
+    PerfScope scope(recorder(
+        dxmt9::perf::countD3D9SnapshotUniformBuildHashCpuTime));
+    const DrawUniformPayloadHashOptions options{
+        .vertexUsage = &shaderLayout.vertexConstantUsage,
+        .pixelUsage = &shaderLayout.pixelConstantUsage,
+        .vertexUsageFromBytecode =
+            shaderLayout.vertexShader.kind == ShaderRef::Kind::Bytecode,
+        .pixelUsageFromBytecode =
+            shaderLayout.pixelShader.kind == ShaderRef::Kind::Bytecode,
+        .recordSnapshotPerf = recordSnapshotPerf,
+    };
+    hashDrawUniformShaderConstantComponents(payload, componentHashes, options);
+    payload.vertexConstantsHash = componentHashes.vertexConstantsHash;
+    payload.pixelConstantsHash = componentHashes.pixelConstantsHash;
+    payload.hash = combineDrawUniformPayloadHashes(
+        componentHashes, payload.clipPlaneMask, recordSnapshotPerf);
+  }
+}
+
 namespace fixture {
 
 DrawDesc makeDrawDescFromState(const DeviceState &state,
@@ -2234,18 +2291,17 @@ Device::cachedBaseDrawState(bool includeIndexBuffer) {
   auto &cache =
       includeIndexBuffer ? drawStateCacheWithIndex_ : drawStateCacheNoIndex_;
   const auto refreshUniforms = [&]() {
-    DrawUniformPayloadHashes uniformHashes{};
     {
       PerfScope uniformBuildScope(
           dxmt9::perf::countD3D9SnapshotCacheUniformBuildCpuTime);
-      cache.uniforms = makeDrawUniformPayloadFromState(
-          state_, cache.shaderLayout.clipPlaneMask, &uniformHashes,
-          /*recordSnapshotPerf=*/true, &cache.shaderLayout);
+      refreshDrawUniformPayloadShaderConstantsFromState(
+          state_, cache.uniforms, cache.uniformHashes, cache.shaderLayout,
+          /*recordSnapshotPerf=*/true);
     }
     {
       PerfScope uniformHashScope(
           dxmt9::perf::countD3D9SnapshotCacheUniformHashCpuTime);
-      applyDrawUniformPayloadHashes(cache.hot, uniformHashes);
+      applyDrawUniformPayloadHashes(cache.hot, cache.uniformHashes);
     }
     cache.uniformGeneration = drawUniformGeneration_;
   };
@@ -2282,6 +2338,7 @@ Device::cachedBaseDrawState(bool includeIndexBuffer) {
       cache.uniforms = makeDrawUniformPayloadFromState(
           baseState, cache.shaderLayout.clipPlaneMask, &uniformHashes,
           /*recordSnapshotPerf=*/true, &cache.shaderLayout);
+      cache.uniformHashes = uniformHashes;
     }
     {
       PerfScope hotBuildScope(
@@ -2307,18 +2364,17 @@ Device::cachedBaseDrawStateForSubmissionBatch() {
     refreshShaderLayoutExtraStreamStrides(cache.shaderLayout, state_);
   };
   const auto refreshUniforms = [&]() {
-    DrawUniformPayloadHashes uniformHashes{};
     {
       PerfScope uniformBuildScope(
           dxmt9::perf::countD3D9SnapshotCacheUniformBuildCpuTime);
-      cache.uniforms = makeDrawUniformPayloadFromState(
-          state_, cache.shaderLayout.clipPlaneMask, &uniformHashes,
-          /*recordSnapshotPerf=*/true, &cache.shaderLayout);
+      refreshDrawUniformPayloadShaderConstantsFromState(
+          state_, cache.uniforms, cache.uniformHashes, cache.shaderLayout,
+          /*recordSnapshotPerf=*/true);
     }
     {
       PerfScope uniformHashScope(
           dxmt9::perf::countD3D9SnapshotCacheUniformHashCpuTime);
-      applyDrawUniformPayloadHashes(cache.hot, uniformHashes);
+      applyDrawUniformPayloadHashes(cache.hot, cache.uniformHashes);
       clearDrawStateBindingFields(cache.hot);
     }
     cache.uniformGeneration = drawUniformGeneration_;
@@ -2367,6 +2423,7 @@ Device::cachedBaseDrawStateForSubmissionBatch() {
       cache.uniforms = makeDrawUniformPayloadFromState(
           state_, cache.shaderLayout.clipPlaneMask, &uniformHashes,
           /*recordSnapshotPerf=*/true, &cache.shaderLayout);
+      cache.uniformHashes = uniformHashes;
     }
     {
       PerfScope hotBuildScope(

@@ -29,7 +29,7 @@ resolve_launcher_timeout_app-d3d9-3dmark05() {
     validate_timeout_app-d3d9-3dmark05 DXMT_3DMARK05_DIRECT_TIMEOUT "$DXMT_3DMARK05_DIRECT_TIMEOUT"
     printf '%s\n' "$DXMT_3DMARK05_DIRECT_TIMEOUT"
   else
-    printf '180\n'
+    printf '120\n'
   fi
 }
 

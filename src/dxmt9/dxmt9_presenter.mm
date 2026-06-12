@@ -655,6 +655,7 @@ Presenter::EncodeResult Presenter::encodeCommands(WMT::CommandBuffer& commandBuf
   encoder.drawPrimitives(WMTPrimitiveTypeTriangle, 0, 3);
   encoder.endEncoding();
   perf::countPresentPass(params.width, params.height, targetWidth, targetHeight);
+  perf::countPresentSchedule(params.displaySyncEnabled, params.minimumPresentDuration);
   if (params.minimumPresentDuration > 0.0) {
     commandBuffer.presentDrawableAfterMinimumDuration(drawable, params.minimumPresentDuration);
   } else {

@@ -53,6 +53,11 @@ bottleneck — that is owned by [[hidden-backend-storage]].
 | H33 | Current stream/IB churn is a direct backend-storage Xcode candidate | rejected-current; handle-stable A/B required | [[state-churn-encode-stream.04]] (`60/2` binding tuple changes `160/187`, unique tuples `58`, stream1 extra changes `111`, explicit writers `0.089 B/vertex`) |
 | H34 | Row-scoped staging can isolate stream/IB handle churn without changing draw/PSO/argbuf shape | accepted diagnostic; GPU win unproven | [[state-churn-encode-stream.08]] (`60/2` stream handle changes `271 -> 0`, IB `160 -> 0`, PSO `48 -> 48`, argbuf table `5056 -> 5056`, but staged copy `7.38 MiB` and offset churn remains) |
 | H35 | Stream/IB handle identity owns the Xcode hidden backend write bucket | rejected as first-order GPU owner | [[state-churn-encode-stream.09]] (`60/2` stream/IB handle changes `271/160 -> 0/0`, but GPU `19.184 -> 19.278 ms`, VS write `981.159 -> 981.166 MiB`, VS invocations unchanged) |
+| H36 | `bridge_commit_latency_ns` is raw Wine bridge/ABI overhead | rejected as bridge owner; commit_chunk replay accepted | [[state-churn-encode-encode-phase.24]] (`bridge_commit_latency=22.473s`, replay `21.839s`, import `88ms`, handle `542ms`, draw-batch-submit `3.234s`) |
+| H37 | `commit_chunk_replay_cpu_ms` is mostly draw-run scan/state/const dispatch | rejected; queued submission/snapshot accepted | [[state-churn-encode-encode-phase.25]] (replay `22.224s`, queue submission `9.927s`, nested snapshot `7.697s`, draw-batch submit `3.229s`, draw-run submit `2.094s`) |
+| H38 | `CommandQueue` submit residual can be localized before changing batching behavior | accepted attribution | [[state-churn-encode-encode-phase.26]] (`commit_chunk_draw_batch_submit_cpu_ms=3629.383`; batch append `2379.837ms`, compat scan `559.625ms`; resource mark/slot/chunk commit are small) |
+| H39 | Snapshot cache misses may be inflated by declared draw-packet deltas that do not actually change non-binding state | rejected-current | [[state-churn-encode-encode-phase.28]] (`draw_packet_declared_nonbinding=419,990`, `actual_nonbinding=419,990`, `redundant_nonbinding=0`) |
+| H40 | Snapshot/uniform cost is mostly real payload construction and hashing, not redundant invalidation | accepted local CPU win; FPS flat | [[state-churn-encode-encode-phase.28]], [[snapshot-cache-snapshot.10]] (`uniform_refresh 2014.263ms→814.507ms`, snapshot submission `7622.807ms→6495.069ms`, sampled FPS `15.717→15.752`) |
 
 ## Verification methods
 
@@ -71,6 +76,27 @@ bottleneck — that is owned by [[hidden-backend-storage]].
   (`_const_upload`), and the state-delta sub-buckets (`_stream_only`, `_ib_only`,
   `_texture_only`, `_mixed`, `_mixed_group2/3/4plus`, `_mixed_pair_stream_ib`,
   `_stream_ib_only`). Size each draw-run break class exactly.
+- **`commit_chunk_*_cpu_ms` stage counters** — split the historical
+  `bridge_commit_latency_ns` wall time into wire import, handle/resource
+  marking, record replay, and nested draw-batch submit. Use these before
+  treating a large bridge latency number as an ABI or Wine thunking problem.
+- **Replay child counters** — `commit_chunk_queue_draw_submission_cpu_ms`,
+  `commit_chunk_draw_run_scan_cpu_ms`, `commit_chunk_draw_run_build_cpu_ms`,
+  `commit_chunk_draw_run_submit_cpu_ms`, `commit_chunk_apply_draw_state_cpu_ms`,
+  and `commit_chunk_const_upload_cpu_ms` split the replay owner after the broad
+  stage counter has already named `commit_chunk` replay.
+- **`CommandQueue` submit child counters** —
+  `submit_draw_run_*_cpu_ms` and `submit_draw_run_batch_*_cpu_ms` split the
+  queued draw submission residual into binding snapshot, payload byte scan,
+  slot/payload-arena preparation, resource marking, append, and chunk-commit
+  stages. Use them after `commit_chunk_queue_draw_submission_cpu_ms` or
+  `commit_chunk_draw_*_submit_cpu_ms` is proven hot.
+- **Draw-packet actual-change counters** —
+  `draw_packet_declared_*`, `draw_packet_actual_*`, and
+  `draw_packet_redundant_*` are opt-in via
+  `--probe-draw-packet-actual-change`. Use them to decide whether snapshot
+  cache invalidation is inflated by declared non-binding/uniform deltas that
+  repeat the current `DeviceState` value.
 - **`DrawBindingOverride` payload** — per-draw serialized stream/IB binding range
   in `DrawParam`; lets `scanImportedDrawRun()` accept stream-only and
   stream+IB-only runs. Counters: `commit_chunk_draw_run_binding_override_{records,bytes,stream_records,ib_records}`.
@@ -138,6 +164,12 @@ flowchart TD
   EncodePhase21["encode-phase.21\nbinding-packet sampler key hash reuse\nplan -9.97%/present"]:::accepted
   EncodePhase22["encode-phase.22\nforce full cbuf diagnostic\nbytes +519%\nvisual inconclusive"]:::open
   EncodePhase23["encode-phase.23\nper-draw payload cbuf identity\nvisual smoke restored\nbytes -34% vs dirty fix"]:::accepted
+  EncodePhase24["encode-phase.24\ncommit_chunk stage split\nreplay 21.84s / import 88ms"]:::accepted
+  EncodePhase25["encode-phase.25\nreplay child split\nqueue 9.93s / snapshot 7.70s"]:::accepted
+  EncodePhase26["encode-phase.26\nCommandQueue submit split\nappend 2379ms\ncompat scan 560ms"]:::accepted
+  EncodePhase27["encode-phase.27\nsnapshot invalidation candidate\nactual-change probe designed"]:::open
+  EncodePhase28["encode-phase.28\nactual-change probe\nredundant nonbinding 0"]:::rejected
+  Snapshot10["snapshot.10\nuniform-refresh fast path\nrefresh -59.6%\nFPS flat"]:::accepted
 
   Drawrun1 -->|"split-into"| Drawrun2
   Drawrun1 -->|"measured-by"| Enc1
@@ -177,11 +209,17 @@ flowchart TD
   EncodePhase15 -->|"try texture source pre-resolve"| EncodePhase16
   EncodePhase16 -->|"return to cbuf bucket"| EncodePhase17
   EncodePhase17 -->|"split residual"| EncodePhase18
+  EncodePhase28 -->|"real payload work"| Snapshot10
   EncodePhase18 -->|"remove unused hash"| EncodePhase19
   EncodePhase19 -->|"avoid full cbuf build"| EncodePhase20
   EncodePhase20 -->|"next residual packet plan"| EncodePhase21
   EncodePhase20 -->|"visual bisection"| EncodePhase22
   EncodePhase22 -->|"diff + disable-batch A/B"| EncodePhase23
+  EncodePhase23 -->|"commit call owner split"| EncodePhase24
+  EncodePhase24 -->|"replay child split"| EncodePhase25
+  EncodePhase25 -->|"submit path split"| EncodePhase26
+  EncodePhase25 -->|"snapshot owner analysis"| EncodePhase27
+  EncodePhase27 -->|"no-op delta proof"| EncodePhase28
 ```
 
 ## Results synthesis
@@ -292,14 +330,16 @@ binding-packet bet is now closed as a CPU win:
 `DrawBindingPacketPlan` directly and compares only active binding/sampler
 prefixes, cutting `encode_draw_binding_packet_cache_cpu_ms` by `57.34%` and
 total `encode_draw_cpu_ms` by `7.40%` versus current identity smoke with a
-normal GT1 frame. After [[snapshot-cache-snapshot.09]], the priority has shifted
-again: D3D9 snapshot submission is down to `7196.881ms` over `1740` presents,
-while backend `encode_draw_cpu_ms` is `17711.215ms`. The packet-cache bucket
-itself is no longer first-order (`965.745ms`), but the broader encode path still
-is: argbuf setup (`4033.644ms`), binding-packet plan/cache (`2944.990ms`),
-stream/texture binding (`2618.304ms` / `1017.715ms`), and issue cost
-(`1094.704ms`) are the next named buckets to split or reduce before another
-generic bind-cache guess.
+normal GT1 frame. After [[snapshot-cache-snapshot.10]], the priority has shifted
+again: the uniform-refresh fast path drops D3D9 snapshot submission
+`7622.807ms→6495.069ms` and refresh cost `2014.263ms→814.507ms` over `1680`
+presents, but sampled FPS remains flat (`15.717→15.752`). The packet-cache
+bucket itself is no longer first-order, and residual snapshot is now a named
+CPU cleanup rather than a run-level limiter by itself. The broader encode path
+still is: argbuf setup (`3357.980ms`), binding-packet plan/cache
+(`2705.893ms`), stream/index bind, queue append (`2403.727ms`), and issue cost
+are the next named buckets to split or reduce before another generic bind-cache
+guess.
 
 The first follow-up split of that broader encode path is
 [[state-churn-encode-encode-phase.09]]. It rejects the simple "argbuf open is
@@ -463,6 +503,30 @@ component hashes in `DrawUniformPayload` and uses those for argbuf cbuf identity
 It keeps normal visual smoke, retains batching, and cuts the temporary
 all-dirty correctness fix's argbuf traffic by `34.24%`.
 
+[[state-churn-encode-encode-phase.24]] corrects the next CPU attribution
+mistake. The historical `bridge_commit_latency_ns` key is not raw Wine bridge
+or ABI crossing cost; it measures the whole synchronous
+`dxmt9c_device_commit_chunk()` call up to return to PE. A no-gputrace stage
+split shows `22.473s` total bridge-call time, but `21.839s` is record replay,
+only `88ms` is import validation, `542ms` is handle/resource marking, and
+`3.234s` is nested `submitDrawSubmissionBatch()` work. The next CPU split
+therefore belongs inside `commit_chunk` replay - record dispatch, draw-run scan,
+constant-upload pass-through, draw packet state application, batch construction,
+and snapshot/payload lookup - not in bridge ABI tuning.
+
+[[state-churn-encode-encode-phase.25]] names the first child inside that replay
+bucket. A watchdog-finalized partial-log run still reached `1680` presents and
+produced a normal-looking `actual.png`. `commit_chunk_replay_cpu_ms` was
+`22.224s`; the dominant named child is queued draw submission
+(`9.927s`), and its nested `snapshotDrawSubmissionFromCurrentState()` timer is
+`7.697s`. The next tier is `submitDrawSubmissionBatch()` (`3.229s`) and
+`drawPrimitiveRun()` (`2.094s`). Draw-run scan (`168ms`), draw-state apply
+(`369ms`), draw-run build (`223ms`), constant upload record dispatch
+(`152ms`), and final binding (`14ms`) are not first-order owners. The next CPU
+work should therefore split/reduce snapshot cache lookup/miss hot-build,
+uniform refresh/build/hash, payload lookup collisions, and the two draw submit
+paths before changing scan heuristics.
+
 ## How to run
 Every experiment here is a 3DMark05 GT1 run via the standard wrapper. This is a
 CPU draw-run / handle-churn domain: enable the per-encoder breakdown, run a cheap
@@ -471,7 +535,7 @@ CPU draw-run / handle-churn domain: enable the per-encoder breakdown, run a chea
 ```sh
 DXMT9_PERF_ENCODER_BREAKDOWN=1 \
 bash scripts/tools/run_3dmark05_perf_probe.sh --suffix state-churn --frame 60 \
-  --no-gputrace --timeout 180
+  --no-gputrace --timeout 120
 
 bash scripts/tools/finalize_3dmark05_perf_probe.sh --suffix state-churn --frame 60 \
   --baseline-output experiments/output/<baseline>/result.json \
@@ -480,7 +544,8 @@ bash scripts/tools/finalize_3dmark05_perf_probe.sh --suffix state-churn --frame 
 ```
 
 The `[dxmt9-perf-encoder]` / `[dxmt9-perf-encoder-stream]` lines and
-`commit_chunk_draw_run_*` counters carry the churn attribution. The exact
+`commit_chunk_draw_run_*` plus `commit_chunk_*_cpu_ms` counters carry the churn
+and replay attribution. The exact
 per-experiment flags live in each leaf's `**Method.**` field. See
 `agents/rules/environment_variables.rules.md` for env-var meanings and
 `agents/rules/metal_debugging.rules.md` for the full workflow.

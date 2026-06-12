@@ -33,6 +33,7 @@ write" owner ([[hidden-backend-storage]]).
 | H10 | Remaining uniform payload build cost is large state copy / FFP construction | rejected; `hashDrawUniformPayload()` owns ~85.75% of combined parent build | [[snapshot-cache-snapshot.07]] |
 | H11 | Shader-usage/range-aware uniform payload hashing can remove the full payload hash cost | accepted CPU win; hash/build `11.322us→2.590us`, parent build `13.204us→4.372us` | [[snapshot-cache-snapshot.08]] |
 | H12 | Non-bytecode/FFP shaders can avoid programmable constant full fallback | accepted CPU win; PS full fallback `84,380→0`, hash/build `2.590us→2.082us` | [[snapshot-cache-snapshot.09]] |
+| H13 | Cache-hit uniform refresh can reuse non-constant payload fields and hashes | accepted CPU win; uniform refresh `2014.263ms→814.507ms`, snapshot submission `7622.807ms→6495.069ms`, FPS flat | [[snapshot-cache-snapshot.10]] |
 
 ## Verification methods
 
@@ -92,6 +93,7 @@ flowchart TD
   S7["snapshot.07\npayload build split\nhash=9.75s / 11.32us per call\n~85.75% of parent"]:::accepted
   S8["snapshot.08\nusage-aware payload hash\nhash/build 11.32→2.59us\nparent/build 13.20→4.37us"]:::accepted
   S9["snapshot.09\nFFP known-zero usage\nPS full fallback 84k→0\nhash/build 2.59→2.08us"]:::accepted
+  S10["snapshot.10\nuniform-refresh fast path\nrefresh 2014→815ms\nsnapshot CPU -14.8%"]:::accepted
 
   S1 -->|"hits=0 → split"| S2
   S2 -->|"−3% only → classify"| S3
@@ -103,7 +105,8 @@ flowchart TD
   S6 -->|"no-op rejected → split payload build"| S7
   S7 -->|"full hash owner → narrow by shader usage"| S8
   S8 -->|"full fallback remains → split reason"| S9
-  S9 -.->|"fps proof still open"| OPEN["open CPU tracks\nnonconst hash / VS indexed fallback,\ncompletion_wait 32s"]:::open
+  S9 -->|"refresh path still hashes nonconst"| S10
+  S10 -.->|"fps proof still open"| OPEN["open CPU tracks\nmiss hot-build / VS indexed fallback,\ncompletion_wait"]:::open
 ```
 
 ## Results synthesis
@@ -192,14 +195,26 @@ proof exists. `encode_draw_cpu_ms`, GPU CB time, and `completion_wait_ms` remain
 flat/noisy per present, so this is still a CPU/hash cleanup rather than a
 vsync-on fps proof.
 
-Current priority after [[snapshot-cache-snapshot.09]]: snapshot rebuild remains
-worth tracking (`7196.881ms`, `4.136ms/present`), but it has moved behind the
-backend encode path (`encode_draw_cpu_ms=17711.215`, `10.179ms/present`) and
-the display-sync wait (`completion_wait_ms=39978.924`). The next CPU budget
-should therefore compare residual snapshot ideas against named encode buckets
-such as argbuf setup (`4033.644ms`), binding-packet construction/cache
-(`2944.990ms`), stream/texture bind (`2618.304ms` / `1017.715ms`), and issue
-cost (`1094.704ms`) before treating snapshot as the sole first-order owner.
+The uniform-refresh fast path then accepts a narrower component-reuse win.
+Cache-hit refreshes caused by shader-constant uploads do not need to rebuild
+matrix/material/light/texture-transform/clip fields or rehash their components.
+Retaining those non-constant component hashes inside `CachedBaseDrawState` drops
+`d3d9_snapshot_cache_uniform_refresh_cpu_ms` `2014.263ms→814.507ms`,
+`d3d9_snapshot_uniform_build_nonconst_hash_cpu_ms` `1431.001ms→783.573ms`, and
+total snapshot submission CPU `7622.807ms→6495.069ms` over the same `1680`
+presents. `sampled_avg_fps` stays flat (`15.717→15.752`), and GPU time /
+completion wait stay noisy, so this is another local CPU win rather than a
+run-level fps proof.
+
+Current priority after [[snapshot-cache-snapshot.10]]: snapshot rebuild remains
+worth tracking (`6495.069ms`, `3.866ms/present` in the latest no-gputrace run),
+but it is behind backend encode (`encode_draw_cpu_ms=16520.675`) and
+completion wait (`completion_wait_ms=39290.753`). The next CPU budget should
+therefore compare residual snapshot ideas such as miss hot-build
+(`1573.980ms`) and VS indexed-float fallback (`115,933` full hashes) against
+named encode buckets such as argbuf setup (`3357.980ms`), binding-packet
+construction/cache (`2705.893ms`), queue append (`2403.727ms`), stream/index
+bind, and issue cost before treating snapshot as the sole first-order owner.
 
 ## How to run
 Every experiment here is a 3DMark05 GT1 run via the standard wrapper. This is a
@@ -209,7 +224,7 @@ with perf counters on, judged by run-level CPU/cache gates against a baseline:
 ```sh
 DXMT_PERF_COUNTERS=1 \
 bash scripts/tools/run_3dmark05_perf_probe.sh --suffix snapshot --frame 60 \
-  --no-gputrace --timeout 180
+  --no-gputrace --timeout 120
 
 bash scripts/tools/finalize_3dmark05_perf_probe.sh --suffix snapshot --frame 60 \
   --baseline-output experiments/output/<baseline>/result.json \

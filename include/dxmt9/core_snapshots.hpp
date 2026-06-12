@@ -727,6 +727,19 @@ struct DrawUniformPayload {
   friend bool operator==(const DrawUniformPayload&, const DrawUniformPayload&) = default;
 };
 
+struct DrawUniformPayloadHashes {
+  u64 vertexConstantsHash = 0;
+  u64 pixelConstantsHash = 0;
+  u64 worldViewProjHash = 0;
+  u64 ffpWorldViewHash = 0;
+  u64 ffpNormalMatrixHash = 0;
+  u64 materialHash = 0;
+  std::array<u64, kMaxLights> lightHashes{};
+  u64 ffpBlendWorldViewProjHash = 0;
+  u64 textureTransformsHash = 0;
+  u64 clipPlanesHash = 0;
+};
+
 struct DrawUniformHandle {
   u32 index = 0;
   u32 generation = 0;
@@ -1753,6 +1766,7 @@ class Device : public std::enable_shared_from_this<Device> {
     FlatDrawStateRecord hot{};
     DrawShaderLayoutContext shaderLayout{};
     DrawUniformPayload uniforms{};
+    DrawUniformPayloadHashes uniformHashes{};
   };
 
   void invalidateDrawStateCache(u32 reasonMask = DrawStateInvalidationUnknown) noexcept;

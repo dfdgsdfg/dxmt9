@@ -155,6 +155,8 @@ enum CommitChunkDrawDeltaBits : std::uint32_t {
   CommitChunkDrawDeltaIndexBuffer = 1u << 17,
 };
 void countCommitChunkDrawReplay(bool indexed, std::uint32_t deltaMask);
+void countDrawPacketActualChange(std::uint32_t declaredMask,
+                                 std::uint32_t actualMask);
 void countCommitChunkDrawStreamDeltaDetails(std::uint32_t handleChanges,
                                             std::uint32_t offsetChanges,
                                             std::uint32_t strideChanges);
@@ -170,7 +172,28 @@ void countCommitChunkDrawRunBindingOverride(bool streamOverride,
                                             std::size_t bytes);
 void countCommitChunkDrawBatchConstUploadPassthrough();
 void countCommitChunkDrawSubmissionBatch(std::uint32_t recordCount);
+void countCommitChunkApplyDrawStateCpuTime(std::uint64_t nanoseconds);
+void countCommitChunkDrawRunScanCpuTime(std::uint64_t nanoseconds);
+void countCommitChunkDrawRunBuildCpuTime(std::uint64_t nanoseconds);
+void countCommitChunkDrawRunSubmitCpuTime(std::uint64_t nanoseconds);
+void countCommitChunkDrawRunFinalBindCpuTime(std::uint64_t nanoseconds);
+void countCommitChunkQueueDrawSubmissionCpuTime(std::uint64_t nanoseconds);
+void countCommitChunkConstUploadCpuTime(std::uint64_t nanoseconds);
 void countSubmitDrawRunBatchGroup(std::uint32_t recordCount);
+void countSubmitDrawRunBindingSnapshotCpuTime(std::uint64_t nanoseconds);
+void countSubmitDrawRunPayloadBytesCpuTime(std::uint64_t nanoseconds);
+void countSubmitDrawRunSlotPrepareCpuTime(std::uint64_t nanoseconds);
+void countSubmitDrawRunResourceMarkCpuTime(std::uint64_t nanoseconds);
+void countSubmitDrawRunAppendCpuTime(std::uint64_t nanoseconds);
+void countSubmitDrawRunChunkCommitCpuTime(std::uint64_t nanoseconds);
+void countSubmitDrawRunBatchCompatScanCpuTime(std::uint64_t nanoseconds);
+void countSubmitDrawRunBatchBindingOverrideCpuTime(std::uint64_t nanoseconds);
+void countSubmitDrawRunBatchBindingSnapshotCpuTime(std::uint64_t nanoseconds);
+void countSubmitDrawRunBatchPayloadBytesCpuTime(std::uint64_t nanoseconds);
+void countSubmitDrawRunBatchSlotPrepareCpuTime(std::uint64_t nanoseconds);
+void countSubmitDrawRunBatchResourceMarkCpuTime(std::uint64_t nanoseconds);
+void countSubmitDrawRunBatchAppendCpuTime(std::uint64_t nanoseconds);
+void countSubmitDrawRunBatchChunkCommitCpuTime(std::uint64_t nanoseconds);
 void countD3D9DrawStateCacheLookup(bool hit, bool includeIndexBuffer);
 void countD3D9DrawStateCacheUniformRefresh();
 void countD3D9DrawStateCacheMissReason(std::uint32_t reasonMask);
@@ -639,13 +662,21 @@ void countRenderPassDepthStoreProof(RenderPassDepthStoreProof proof);
 void countCommandBufferCreateCpuTime(std::uint64_t nanoseconds);
 void countCommandBufferCommitCpuTime(std::uint64_t nanoseconds);
 // R-VERIF / V1 boundary B2 — wall-clock latency of one commit_chunk()
-// round trip (PE -> unix import -> seqId assignment -> return). Sampled
-// at the d3d9 PE-side bridge entry (dxmt9c_device_commit_chunk in
-// device_c_chunk_replay.cpp) so the measurement isolates the bridge ABI
-// crossing cost from encode and GPU work, and so a regression in
-// marshalling / importer validation surfaces independently of the
-// existing chunk_admit / chunk_reject opcode counts.
+// round trip (PE -> unix import/replay/queue submit -> return). Sampled
+// at dxmt9c_device_commit_chunk in device_c_chunk_replay.cpp. This excludes
+// asynchronous encode and GPU work after the call returns, but includes
+// importer validation, handle/resource marking, record replay, and queued
+// draw submission construction.
 void countBridgeCommitLatencyNs(std::uint64_t nanoseconds);
+void countCommitChunkImportCpuTime(std::uint64_t nanoseconds);
+void countCommitChunkHandleCpuTime(std::uint64_t nanoseconds);
+void countCommitChunkReplayCpuTime(std::uint64_t nanoseconds);
+void countCommitChunkDrawBatchSubmitCpuTime(std::uint64_t nanoseconds);
+void countCompletionDequeue(std::uint64_t ageNanoseconds,
+                            std::uint64_t pendingDepthAfterPop,
+                            std::uint64_t commandBufferStatus);
+void countCompletionWaitStatus(std::uint64_t nanoseconds,
+                               std::uint64_t commandBufferStatus);
 void countCompletionWait(std::uint64_t nanoseconds,
                          bool hasDraw,
                          bool hasPresent,
@@ -685,6 +716,7 @@ void countPresentPass(std::uint32_t sourceWidth,
                       std::uint32_t sourceHeight,
                       std::uint64_t targetWidth,
                       std::uint64_t targetHeight);
+void countPresentSchedule(bool requestedDisplaySync, double minimumPresentDuration);
 void countPresentAcquireWait(std::uint64_t nanoseconds);
 void countPresentAsyncAcquireRequest();
 void countPresentAsyncAcquireIssued();

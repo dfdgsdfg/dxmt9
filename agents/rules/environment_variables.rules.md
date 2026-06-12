@@ -21,6 +21,7 @@ documented otherwise.
 | [`environment_variables_logging.rules.md`](environment_variables_logging.rules.md) | **Logging / Tracing** — log level, log path, trace switches. |
 | [`environment_variables_perf.rules.md`](environment_variables_perf.rules.md) | **Perf counters** — counter system, per-frame snapshot, and 3DMark05 GT1 perf-probe launcher knobs. |
 | [`environment_variables_present.rules.md`](environment_variables_present.rules.md) | **Present policy** — present-acquire / boundary / latency tuning. |
+| [`environment_variables_renderer.rules.md`](environment_variables_renderer.rules.md) | **Renderer / Frame Graph** — backend selection, modern-renderer feature gates, and DAG debug export. |
 | [`environment_variables_cache.rules.md`](environment_variables_cache.rules.md) | **Pipeline cache** — archive prewarm and cache-root controls. |
 | [`environment_variables_encoder.rules.md`](environment_variables_encoder.rules.md) | **Encoder / state debug** — force-state knobs, index-cache locality opt-ins, and 3DMark05/Xcode backend-shape classifiers. |
 | [`environment_variables_bridge.rules.md`](environment_variables_bridge.rules.md) | **PE bridge / recorder** — PE-side chunk recorder diagnostics. |

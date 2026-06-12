@@ -1160,6 +1160,7 @@ void QueueLifecycleController::submit(QueueSubmissionRecord& record) {
     pending.slotIndex = record.slotIndex;
     pending.seqId = record.seqId;
     pending.commandBufferChainLength = record.commandBufferChainLength;
+    pending.enqueueTime = std::chrono::steady_clock::now();
     pending.renderEncoderGpuSampleBuffer =
         std::move(record.renderEncoderGpuSampleBuffer);
     pending.renderEncoderGpuSamples =
@@ -1175,6 +1176,7 @@ void QueueLifecycleController::submit(QueueSubmissionRecord& record) {
 
 bool QueueLifecycleController::processOnePendingCompletion(bool& stop) {
   PendingCompletion pending;
+  size_t pendingDepthAfterPop = 0;
   {
     std::unique_lock<std::mutex> lock(pendingCompletionMutex_);
     pendingCompletionCv_.wait(lock, [&] { return stop || !pendingCompletion_.empty(); });
@@ -1183,16 +1185,32 @@ bool QueueLifecycleController::processOnePendingCompletion(bool& stop) {
     }
     pending = std::move(pendingCompletion_.front());
     pendingCompletion_.pop_front();
+    pendingDepthAfterPop = pendingCompletion_.size();
+  }
+
+  const WMTCommandBufferStatus dequeueStatus =
+      pending.commandBuffer ? pending.commandBuffer.status()
+                            : WMTCommandBufferStatusNotEnqueued;
+  if (pending.enqueueTime != std::chrono::steady_clock::time_point{}) {
+    const auto age = std::chrono::steady_clock::now() - pending.enqueueTime;
+    perf::countCompletionDequeue(
+        static_cast<std::uint64_t>(std::chrono::duration_cast<std::chrono::nanoseconds>(age).count()),
+        static_cast<std::uint64_t>(pendingDepthAfterPop),
+        static_cast<std::uint64_t>(dequeueStatus));
   }
 
   // Block until GPU completes — upstream dxmt's WaitForFinishThread pattern.
   if (pending.commandBuffer &&
-      pending.commandBuffer.status() <= WMTCommandBufferStatusScheduled) {
+      dequeueStatus <= WMTCommandBufferStatusScheduled) {
     const auto started = std::chrono::steady_clock::now();
     pending.commandBuffer.waitUntilCompleted();
     const auto elapsed = std::chrono::steady_clock::now() - started;
+    const auto elapsedNs = static_cast<std::uint64_t>(
+        std::chrono::duration_cast<std::chrono::nanoseconds>(elapsed).count());
+    perf::countCompletionWaitStatus(elapsedNs,
+                                    static_cast<std::uint64_t>(dequeueStatus));
     perf::countCompletionWait(
-        static_cast<std::uint64_t>(std::chrono::duration_cast<std::chrono::nanoseconds>(elapsed).count()),
+        elapsedNs,
         pending.diagnostics.hasDraw,
         pending.diagnostics.hasPresent,
         pending.diagnostics.hasBlit,

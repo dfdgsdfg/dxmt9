@@ -4,7 +4,7 @@ set -euo pipefail
 script_dir=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
 repo_root=$(cd -- "$script_dir/../.." && pwd)
 
-timeout_sec=${DXMT_3DMARK05_DIRECT_TIMEOUT:-180}
+timeout_sec=${DXMT_3DMARK05_DIRECT_TIMEOUT:-120}
 
 if [[ ! "$timeout_sec" =~ ^[0-9]+([.][0-9]+)?$ ||
       "$timeout_sec" =~ ^0+([.]0+)?$ ]]; then

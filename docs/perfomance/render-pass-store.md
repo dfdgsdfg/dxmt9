@@ -59,6 +59,28 @@ real lever — dependency-aware pass reordering/coalescing — is still **open**
   summary joins these into the same-key re-entry role table as `B pass action`
   and `A pass action`, so the hot role-pair ping-pong can be split by actual
   Load/Store/Clear shape.
+- **`DXMT9_RENDERER_DUMP_DAG=<traces/.../analysis/dag>`** — backend-agnostic,
+  observation-only Frame Graph export on the traditional or framegraph path.
+  Always pair with `DXMT9_RENDERER_DUMP_DAG_FRAME=N` and usually
+  `DXMT9_RENDERER_DUMP_DAG_FRAME_RADIUS=R` on 3DMark05 to avoid dumping every
+  chunk. Summarize the resulting JSON with
+  `scripts/tools/summarize_framegraph_dag.py` to extract same-attachment
+  re-entry pairs, direct A->B edge resources, intervening same-attachment
+  accesses, intervening edge counts, and load/store shape before spending
+  another Xcode capture on H6.
+
+**Current DAG sidecar observation.** Running
+`summarize_framegraph_dag.py` on
+`traces/app-d3d9-3dmark05-dag-current-20260612-203736/analysis/dag` reports
+`5` pre-opt files, `5` same-attachment re-entry pairs, and `5`
+safe-relocatable candidates for frames `48..52`. The matching post-opt summary
+reports `5` files and `0` same-attachment pairs, while run counters report
+`framegraph_passes_coalesced=5`. This is a structural candidate/effect signal
+only: it says the dumped DAG has no intervening same-attachment accesses or
+intervening edges for those `P0 -> P2` pairs, and that the analysis-only
+`passcoalesce` pass removes them from the exported post-opt DAG. It still needs
+the device-gated linearized executor plus byte-equal output and Xcode counters
+before becoming an accepted performance optimization.
 
 ## Experiment dependency graph
 
@@ -205,6 +227,31 @@ bash scripts/tools/finalize_3dmark05_perf_probe.sh --suffix color-dontcare --fra
 The exact per-experiment flags live in each leaf's `**Method.**` field. See
 `agents/rules/environment_variables.rules.md` for env-var meanings and
 `agents/rules/metal_debugging.rules.md` for the full workflow.
+
+For H6 DAG observation, keep the Metal stream on the default traditional encode
+path and use the DAG as a side-channel:
+
+```sh
+bash scripts/tools/run_3dmark05_perf_probe.sh \
+  --suffix <tag> --frame 50 --no-gputrace --timeout 120 \
+  --dump-framegraph-dag \
+  --framegraph-dag-frame 50 \
+  --framegraph-dag-frame-radius 2 \
+  --framegraph-dag-formats json,mermaid \
+  --framegraph-dag-optimize passcoalesce
+```
+
+The wrapper writes raw DAG files under
+`traces/app-d3d9-3dmark05-<tag>/analysis/dag` and, when JSON dumps exist,
+generates combined `framegraph-dag-summary.{md,csv}` /
+`framegraph-dag-candidates.csv`, plus stage-specific
+`framegraph-dag-preopt-*` and `framegraph-dag-postopt-*` files in the same
+`analysis/` directory. Pre-opt owns candidate discovery; post-opt owns
+analysis-optimizer effect confirmation.
+`--framegraph-dag-optimize passcoalesce` only changes the exported post-opt DAG
+and `framegraph_*` observe counters. It is not a rendered-output or Xcode
+GPU-counter proof until the device-gated linearized executor drives the Metal
+stream and passes a byte-equal output gate.
 
 ## Cross-references
 - [[overview-3dmark05-gt1]] — root priority DAG; this is the P1 GPU-memory track, secondary to the P0 hidden-backend bucket.

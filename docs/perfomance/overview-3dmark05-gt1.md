@@ -481,11 +481,11 @@ flowchart TD
   GPU --> TFFP["DXMT9_TILE_FFP<br/>implemented but narrow/default-off FFP tile path"]
 
   %% CPU side
-  Base --> CPU{{"CPU / pacing cost\ncompletion_wait ~40s,\nencode_draw ~17.7s,\nsnapshot ~7.2s\n(orthogonal to GPU limiter)"}}
+  Base --> CPU{{"CPU / pacing cost\ncompletion_wait ~39-40s,\ncommit_chunk replay ~21.8s,\nencode_draw ~17.1s,\nsnapshot ~7.8s\n(orthogonal to GPU limiter)"}}
   CPU --> SNAP["[[snapshot-cache]]<br/>D3D9 draw-state rebuild\n(historical owner, now residual)"]
-  CPU --> SCE["[[state-churn-encode]]<br/>stream/IB handle churn breaks draw-runs"]
+  CPU --> SCE["[[state-churn-encode]]<br/>stream/IB churn and commit_chunk replay"]
   CPU --> CU["[[const-upload]]<br/>cbuf/argbuf traffic (CPU amplifier)"]
-  CPU --> PP["[[present-pacing]]<br/>completion_wait dominated by display-sync (NEW)"]
+  CPU --> PP["[[present-pacing]]<br/>completion_wait dominated by present completion<br/>current direct path already immediate"]
   SCE --> SNAP
   PP --> SCE
 
@@ -515,9 +515,9 @@ flowchart LR
 
   P0 --> P0r["→ [[hidden-backend-storage]] → [[tvb-mechanism-proof]]\n→ [[index-cache-locality]] (accepted numerator lever)\n→ hidden denominator mechanisms still open"]
   P1 --> P1r["→ [[render-pass-store]] (re-entry real; A/B/A immediate target reuse; coalescing open)"]
-  P2 --> P2r["→ [[state-churn-encode]] + [[snapshot-cache]] (CPU wins, GPU flat)"]
+  P2 --> P2r["→ [[state-churn-encode]] + [[snapshot-cache]] (CPU wins, replay split, GPU flat)"]
   P3 --> P3r["→ [[const-upload]] (CPU bytes ↓ 4.6GB→1GB, GPU flat)"]
-  P4 --> P4r["completion_wait is present/display-sync paced\nvsync-off opt-in accepted; encode-budget path open"]
+  P4 --> P4r["completion_wait is present-completion paced\ncurrent direct path already immediate\nwatcher backlog rejected; Committed wait remains"]
 
   classDef p0 fill:#ffe8e8,stroke:#b64242,color:#2b0d0d
   classDef p1 fill:#fff0d6,stroke:#b26b00,color:#2b1900
@@ -610,7 +610,7 @@ equivalence open rather than promoting the route
 | Index-cache CPU reduction | reject current attempts | Fixed cap cuts slots but not CPU; heap lazy frontier cuts scored work `-80.97%` but select CPU regresses `+21.40%`; bucketed select cuts scored work `-72.61%` but select CPU regresses `+32.46%`; unique upper-bound gate rejects `76` candidates but candidate CPU regresses `+8.50%`; persistent rejected verdicts are already implemented (`401,681` rejected hits / `143` cold misses); non-scope draw-shape prefiltering already happens before lookup; strict LRU builder normalization worsens candidate miss32 by `+46` and total encode CPU by `+36.930ms` | Do not spend more Xcode budget on these CPU-only variants. Next CPU work needs cheaper cold-miss candidate construction, a telemetry-proven eligible-subclass exclusion, or broader semantic-safe GPU payoff before no-gputrace promotion. [[index-cache-locality-cpucost.11]], [[index-cache-locality-cpucost.12]], [[index-cache-locality-cpucost.13]], [[index-cache-locality-cpucost.14]], [[index-cache-locality-cpucost.15]], [[index-cache-locality-cpucost.16]], [[index-cache-locality-cpucost.17]] |
 | Current no-gputrace baseline | accepted as counter sample | Watchdog-cleanup scout: 1440 presents; GPU CB `+0.15%`, completion wait `+0.14%`, draws `-0.01%` vs baseline | Use as the current supervised timeout shape; it does not justify new Xcode budget by itself. [[baselines-frame50.04]] |
 | Current visual-coupling frame60 scout | accepted as counter sample; not Xcode proof | Frame60 seq breakdown no-gputrace: `present_encoded=1680`, `draw_skipped_no_pipeline=0`, `gpu_command_buffer_errors=0`, tracked frame60 overflows `0`, `map_buffer_wait_ms=0`, `queue_sequence_wait_ms=0`; hazard bloom is entirely false-positive (`104,004 / 104,004`) but `render_split_hazard=0`; split reasons are RT/depth `13,169`, clear `4,906`, present `1,673`; render-pass preservation remains `120.10MiB/present`. A post-`01:05` oracle refresh (`current-residual-perf-after-oracle-r1`) stayed flat: `draw_calls -0.02%`, `render_pass_begin -0.09%`, `render_split_rt_change=13,163`, clear `4,895`, present `1,673`, `tile_preservation +0.03%`, `gpu_command_buffer_time_ms -0.26%`, `completion_wait_ms -2.44%`, sampled average `15.753fps`, late steady frames `~23fps`. Same-run wide-scene after-draw color history confirms two `0x80` sidecars; the second (`seq=1094/enc=3/draw=0/cmd=320`) writes the round candidate ROI (`bright=706`, `white=196`, `warm=909`) | Use for visual-fix before/after wrong-path gates. It narrows skipped/error/overflow/hazard-split, depth-alone rejection, and blank/unsent effect draws as the obvious explanations. The `0x80` sidecar proves the wide-scene rifle bloom writer, but remains diagnostic split evidence rather than a production perf sample. The current refresh confirms the residual performance owner did not move toward skipped/error handling after the muzzle writer was identified; continue with TVB/PB, RT/depth re-entry, and completion/present pacing. [[baselines-frame60.03]], [[backend-shape-classifiers-alpha.04]] |
-| Encode CPU attribution | CPU wins accepted, fps proof still open | No-gputrace attribution has narrowed broad encode guesses into named CPU-only children: cbuf identity, packet-cache, snapshot, argbuf-open, sampler, and transient fast-append work all moved CPU but not GPU. Cbuf residual split named binding content hash as a dominant child (`570.070ms`, VS `489.627ms`), then the default path removed that byte scan (`binding_hash=0`) and cut cbuf update `1.216 -> 0.875ms/present`; prefix-preserving cbuf builders then cut cbuf build `0.333815 -> 0.175342ms/present`; binding-packet sampler key-hash reuse cut packet plan `0.666122 -> 0.599724ms/present`. A full-cbuf visual bisection knob rejects full upload as a default workaround (`argbuf_hybrid_bytes_per_encoder` +519.59%, no obvious visual normalization); the later visual fix is per-draw payload component hashes for argbuf cbuf identity, not full cbuf upload. | No Xcode spend from these CPU results alone. Continue no-gputrace work on cbuf upload/probe/repoint residual, binding-packet stronger identity/plan reuse, index setup/source resolve, shader-stream diversity, issue cost, and residual snapshot. Do not chase broad D3D9 setter no-op guards, slot-30 bind shadowing, dirty-category identity repoint, FFP stream binding, resource-array binding, vertex texture binding, LOD-bias upload, sampler lookup/rehash skip, texture pre-resolve source matching, raw cbuf `setBuffer`, cbuf upload-plan, observer callbacks, default cbuf content hashing, live-range-only cbuf prefix zeroing, full VS/PS cbuf fallback, or another sampler `FlatStateSet` rehash removal unless cheap instrumentation first proves a new non-zero opportunity. Require visual smoke/same-input image proof for future cbuf/binding semantic changes. [[state-churn-encode-encode-phase.02]], [[state-churn-encode-encode-phase.03]], [[state-churn-encode-encode-phase.04]], [[state-churn-encode-encode-phase.05]], [[state-churn-encode-encode-phase.06]], [[state-churn-encode-encode-phase.07]], [[state-churn-encode-encode-phase.08]], [[state-churn-encode-encode-phase.09]], [[state-churn-encode-encode-phase.10]], [[state-churn-encode-encode-phase.11]], [[state-churn-encode-encode-phase.12]], [[state-churn-encode-encode-phase.13]], [[state-churn-encode-encode-phase.14]], [[state-churn-encode-encode-phase.15]], [[state-churn-encode-encode-phase.16]], [[state-churn-encode-encode-phase.17]], [[state-churn-encode-encode-phase.18]], [[state-churn-encode-encode-phase.19]], [[state-churn-encode-encode-phase.20]], [[state-churn-encode-encode-phase.21]], [[state-churn-encode-encode-phase.22]], [[state-churn-encode-encode-phase.23]], [[snapshot-cache-snapshot.04]], [[snapshot-cache-snapshot.05]], [[snapshot-cache-snapshot.06]], [[snapshot-cache-snapshot.07]], [[snapshot-cache-snapshot.08]], [[snapshot-cache-snapshot.09]] |
+| Encode CPU attribution | CPU wins accepted, fps proof still open | No-gputrace attribution has narrowed broad encode guesses into named CPU-only children: cbuf identity, packet-cache, snapshot, argbuf-open, sampler, and transient fast-append work all moved CPU but not GPU. Cbuf residual split named binding content hash as a dominant child (`570.070ms`, VS `489.627ms`), then the default path removed that byte scan (`binding_hash=0`) and cut cbuf update `1.216 -> 0.875ms/present`; prefix-preserving cbuf builders then cut cbuf build `0.333815 -> 0.175342ms/present`; binding-packet sampler key-hash reuse cut packet plan `0.666122 -> 0.599724ms/present`; uniform-refresh component reuse cuts refresh `2014.263ms→814.507ms` and snapshot submission `7622.807ms→6495.069ms` with FPS flat. A full-cbuf visual bisection knob rejects full upload as a default workaround (`argbuf_hybrid_bytes_per_encoder` +519.59%, no obvious visual normalization); the later visual fix is per-draw payload component hashes for argbuf cbuf identity, not full cbuf upload. The commit_chunk stage split rejects raw bridge/ABI overhead as the owner (`bridge_commit_latency=22.473s`, replay `21.839s`), and the child split names queued draw submission/snapshot as the first replay owner (`replay=22.224s`, queue submission `9.927s`, nested snapshot `7.697s`, draw-batch submit `3.229s`, draw-run submit `2.094s`). | No Xcode spend from these CPU results alone. Continue no-gputrace work on cbuf upload/probe/repoint residual, binding-packet stronger identity/plan reuse, index setup/source resolve, shader-stream diversity, issue cost, residual snapshot miss/uniform work, and commit_chunk submit-path internals. Do not chase broad D3D9 setter no-op guards, slot-30 bind shadowing, dirty-category identity repoint, FFP stream binding, resource-array binding, vertex texture binding, LOD-bias upload, sampler lookup/rehash skip, texture pre-resolve source matching, raw cbuf `setBuffer`, cbuf upload-plan, observer callbacks, default cbuf content hashing, live-range-only cbuf prefix zeroing, full VS/PS cbuf fallback, another sampler `FlatStateSet` rehash removal, bridge ABI tuning, or draw-run scan heuristics unless cheap instrumentation first proves a new non-zero opportunity. Require visual smoke/same-input image proof for future cbuf/binding semantic changes. [[state-churn-encode-encode-phase.02]], [[state-churn-encode-encode-phase.03]], [[state-churn-encode-encode-phase.04]], [[state-churn-encode-encode-phase.05]], [[state-churn-encode-encode-phase.06]], [[state-churn-encode-encode-phase.07]], [[state-churn-encode-encode-phase.08]], [[state-churn-encode-encode-phase.09]], [[state-churn-encode-encode-phase.10]], [[state-churn-encode-encode-phase.11]], [[state-churn-encode-encode-phase.12]], [[state-churn-encode-encode-phase.13]], [[state-churn-encode-encode-phase.14]], [[state-churn-encode-encode-phase.15]], [[state-churn-encode-encode-phase.16]], [[state-churn-encode-encode-phase.17]], [[state-churn-encode-encode-phase.18]], [[state-churn-encode-encode-phase.19]], [[state-churn-encode-encode-phase.20]], [[state-churn-encode-encode-phase.21]], [[state-churn-encode-encode-phase.22]], [[state-churn-encode-encode-phase.23]], [[state-churn-encode-encode-phase.24]], [[state-churn-encode-encode-phase.25]], [[snapshot-cache-snapshot.04]], [[snapshot-cache-snapshot.05]], [[snapshot-cache-snapshot.06]], [[snapshot-cache-snapshot.07]], [[snapshot-cache-snapshot.08]], [[snapshot-cache-snapshot.09]], [[snapshot-cache-snapshot.10]] |
 
 ```mermaid
 flowchart TD
@@ -635,7 +635,7 @@ flowchart TD
   Start --> Cpu{"generic CPU frontier\nonly?"}
   Cpu -- "Yes" --> CpuProbe{"has no-gputrace\nphase attribution?"}
   CpuProbe -- "No" --> CpuReject["no Xcode spend\nadd counters first"]
-  CpuProbe -- "Yes" --> CpuNarrow["cbuf + packet + snapshot CPU wins\nargbuf fast append accepted CPU win\nstream split names texture/index/shader/raster\ntexture split names fragment resolve/direct\nsampler pre-handle + hash reuse accepted\ntexture pre-resolve + dirty identity rejected\ncbuf hash + build reduced\nnext: cbuf repoint/upload/probe / packet / index+stream / issue\nplus residual snapshot"]
+  CpuProbe -- "Yes" --> CpuNarrow["cbuf + packet + snapshot CPU wins\nargbuf fast append accepted CPU win\nstream split names texture/index/shader/raster\ntexture split names fragment resolve/direct\nsampler pre-handle + hash reuse accepted\ntexture pre-resolve + dirty identity rejected\ncbuf hash + build reduced\ncommit_chunk replay split rejects raw bridge owner\nreplay child split names queued submission/snapshot\nnext: cbuf repoint/upload/probe / packet / index+stream / issue\nplus submit-path internals and residual snapshot"]
   CpuNarrow --> Packet21["packet sampler key-hash reuse\naccepted CPU cleanup\nplan -9.97%/present"]
   CpuNarrow --> FullCbufDiag["full cbuf fallback diagnostic\nbytes +519%\nnot default workaround"]
 
@@ -876,16 +876,47 @@ explanation for the same scene shape.
   next proof has to preserve D3D9 ordering while moving or coalescing
   `Load+Store` depth-read work around `Clear+Store` opaque work.
   [[render-pass-store]]
-- Remaining CPU tracks: pacing/completion wait, backend encode, and residual
-  snapshot rebuild. After the accepted cbuf identity, packet-cache, and snapshot
-  hash work, the latest `snapshot.09` no-gputrace sample is
+- Remaining CPU tracks: pacing/completion wait, backend encode, commit_chunk
+  replay, and residual snapshot rebuild. After the accepted cbuf identity,
+  packet-cache, and snapshot hash work, `snapshot.09` was
   `completion_wait_ms=39978.924`, `encode_draw_cpu_ms=17711.215`, and
   `d3d9_snapshot_draw_submission_cpu_ms=7196.881` over `1740` presents. The
-  broad bind-cache and broad setter-skip guesses are rejected. The remaining
-  no-gputrace work should split or reduce named encode buckets first:
-  cbuf upload/probe/repoint residual, binding-packet plan/cache, index setup/source resolve,
-  shader-stream binding diversity, and `encode_draw_issue_cpu_ms`-class issue
-  cost. The first
+  latest commit_chunk stage split is similar end-to-end but corrects the
+  attribution: `completion_wait_ms=38990.561`, `encode_draw_cpu_ms=17051.620`,
+  `d3d9_snapshot_draw_submission_cpu_ms=7779.855`, and
+  `bridge_commit_latency=22.473s`, of which `21.839s` is replay, not raw
+  bridge ABI cost. The replay child split then names queued draw submission and
+  snapshot as the first replay owner: `commit_chunk_replay_cpu_ms=22223.637`,
+  `commit_chunk_queue_draw_submission_cpu_ms=9927.191`, nested
+  `d3d9_snapshot_draw_submission_cpu_ms=7696.922`,
+  `commit_chunk_draw_batch_submit_cpu_ms=3229.424`, and
+  `commit_chunk_draw_run_submit_cpu_ms=2093.639`; draw-run scan, state apply,
+  and const upload record dispatch are all sub-400ms. The broad bind-cache,
+  broad setter-skip, bridge-ABI, and draw-run-scan guesses are rejected. The
+  next no-gputrace scout should read the new `submit_draw_run_*_cpu_ms` and
+  `submit_draw_run_batch_*_cpu_ms` child counters added in
+  [[state-churn-encode-encode-phase.26]] before mutating batching behavior.
+  Static follow-up [[state-churn-encode-encode-phase.27]] points at the nested
+  snapshot side as an equally important candidate: snapshot cache lookup is
+  `6350.751ms`, cache miss is `5271.187ms`, uniform build calls are `928,656`,
+  and queue-slot uniform payload dedup appends `874,477` payloads. The key
+  unproven assumption is whether declared draw-packet non-binding deltas often
+  repeat the current value; if so, invalidating from actual changed reason
+  rather than declared delta mask could reduce snapshot misses. The
+  `--probe-draw-packet-actual-change` no-gputrace scout
+  [[state-churn-encode-encode-phase.28]] rejects that branch for current GT1:
+  `draw_packet_declared_nonbinding=419,990`,
+  `draw_packet_actual_nonbinding=419,990`, and
+  `draw_packet_redundant_nonbinding=0`. The follow-up
+  [[snapshot-cache-snapshot.10]] accepts the narrower shader-constant refresh
+  fast path: snapshot submission drops `7622.807ms→6495.069ms`, uniform refresh
+  drops `2014.263ms→814.507ms`, and user-observed muzzle flash / particles /
+  fog remain correct, but sampled FPS is flat (`15.717→15.752`). The remaining
+  no-gputrace work should split or reduce named buckets first: cbuf
+  upload/probe/repoint residual, binding-packet plan/cache, index setup/source
+  resolve, shader-stream binding diversity, `encode_draw_issue_cpu_ms`-class
+  issue cost, snapshot miss hot-build/VS indexed fallback, and the two draw
+  submit paths. The first
   argbuf-open split shows
   slot-30 bind shadowing is not useful (`table_bind_skipped=0`), and transient
   arena fast append has already removed the simple reserve-scan cost
@@ -946,12 +977,15 @@ explanation for the same scene shape.
   [[state-churn-encode-encode-phase.21]],
   [[state-churn-encode-encode-phase.22]],
   [[state-churn-encode-encode-phase.23]],
+  [[state-churn-encode-encode-phase.24]],
+  [[state-churn-encode-encode-phase.25]],
   [[snapshot-cache-snapshot.04]],
   [[snapshot-cache-snapshot.05]],
   [[snapshot-cache-snapshot.06]],
   [[snapshot-cache-snapshot.07]],
   [[snapshot-cache-snapshot.08]],
   [[snapshot-cache-snapshot.09]],
+  [[snapshot-cache-snapshot.10]],
   [[snapshot-cache]],
   [[present-pacing]]
 

@@ -26,7 +26,19 @@ build. `shader_corpus_tool.py` is also imported by the Meson tests under
   runtime-visible draw telemetry before spending another `.gputrace`. Future
   rows also include `stream_extra_bindings` (`sN:0xhandle@offset/stride`) so
   stream1+ handle alternation can be joined to draw windows rather than only
-  encoder-level totals.
+  encoder-level totals. Use
+  `run_3dmark05_perf_probe.sh --probe-draw-packet-actual-change` when snapshot
+  cache misses need declared-vs-actual draw-packet delta evidence.
+- `summarize_framegraph_dag.py` — parse
+  `DXMT9_RENDERER_DUMP_DAG` JSON dumps and report same-attachment re-entry
+  pairs, direct A->B edge resources, intervening same-attachment accesses,
+  intervening edge counts, draw ranges, and load/store shape. Use it on
+  `traces/<app-runid>/analysis/dag` after a frame-scoped DAG run, or let
+  `run_3dmark05_perf_probe.sh --dump-framegraph-dag` invoke it automatically,
+  to turn H6 render-pass coalesce candidates into CSV/Markdown before spending
+  another Xcode counter capture. The wrapper writes combined, pre-opt, and
+  post-opt summaries; pre-opt owns candidate discovery, post-opt owns
+  optimizer-effect confirmation.
 - `select_3dmark05_payload_window.py` — rank row-local shader/state draw groups
   from an indexed-probe CSV and emit a same-run payload-window selection with
   geometry capture flags. Use it before `--dump-indexed-geometry`; row-local

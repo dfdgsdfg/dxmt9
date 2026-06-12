@@ -31,10 +31,14 @@ the captured 313 calls.
 | `bridge_commit_latency_max_ns` | 656,166 (656 µs) |
 | `bridge_commit_latency_ns` (sum) | 5,196,575 (5.2 ms total) |
 
-Headline: **steady-state PE→unix bridge round trip is ~10 µs**,
-with a heavy tail. Worst-case 656 µs is large enough to matter for
-draw-heavy frames, but only as the rare outlier — the p95/p50 ratio
-is just 1.18×.
+Headline: **steady-state empty `commit_chunk` round trip is ~10 µs**,
+with a heavy tail. This B2 probe uses a near-empty payload, so the
+number is close to PE/unix bridge plus minimal import/admit cost. It
+must not be generalized to replay-heavy wild-app chunks, where the same
+historical counter also includes unix-side record replay and queued draw
+submission work. Worst-case 656 µs is large enough to matter for
+draw-heavy frames, but only as the rare outlier — the p95/p50 ratio is
+just 1.18×.
 
 This is the first-ever per-call bridge latency number for dxmt9.
 Previously only `chunk_admit` count was visible.

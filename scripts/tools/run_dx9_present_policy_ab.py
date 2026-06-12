@@ -105,10 +105,11 @@ BACKEND_COUNTER_FIELDS = [
     "render_pass_tile_preservation_bytes",
     "chunk_admit",
     "chunk_reject",
-    # V1 boundary B2 (audit item (b)) — bridge commit latency in raw
-    # nanoseconds. Surfaced here so cross-policy A/B diff can detect a
-    # bridge-ABI regression (bigger marshalling struct, extra importer
-    # validation) that chunk_admit alone would not catch.
+    # V1 boundary B2 (audit item (b)) — historical bridge commit latency in
+    # raw nanoseconds. The counter measures the whole synchronous
+    # commit_chunk call. In the header-only boundary probe this is close to
+    # bridge + minimal import/admit cost; in real apps it can include replay
+    # and queued draw submission work.
     "bridge_commit_latency_ns",
     "bridge_commit_latency_max_ns",
     "bridge_commit_latency_p50_ns",

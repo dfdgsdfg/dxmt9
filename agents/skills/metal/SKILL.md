@@ -219,7 +219,7 @@ Required Xcode sequence:
 For dxmt9 3DMark05 perf probes, always launch through
 `scripts/tools/run_3dmark05_perf_probe.sh`. 3DMark05 can hang on the final frame
 after the useful capture/perf artifacts have already been written, so the
-wrapper always passes a positive `run_experiment.py --timeout`: `180s` for
+wrapper always passes a positive `run_experiment.py --timeout`: `120s` for
 no-gputrace scouts and `420s` for `.gputrace`/Xcode replay candidates unless
 `--timeout` or `DXMT_3DMARK05_PROBE_TIMEOUT` overrides it. Treat a
 timeout-finalized run with complete artifacts as valid input for the finalizer.
@@ -227,18 +227,18 @@ If a 3DMark05 run had to be killed manually because it was stuck at the final
 frame, treat that as a timeout-policy failure and use a shorter positive
 timeout for the next run; do not use the manual-kill lifetime as a perf sample.
 For non-probe smoke/image checks, use the catalogue runner default
-`run_timeout_sec=180` / `allow_timeout=true` / `require_positive_timeout=true`,
+`run_timeout_sec=120` / `allow_timeout=true` / `require_positive_timeout=true`,
 or pass an explicit positive
 `python3 scripts/run_apps/run_experiment.py run app-d3d9-3dmark05 --timeout N`;
 `--timeout 0` is rejected for this app.
 Do not start the 3DMark05 launcher script directly without an external timeout
 or process supervisor. If the launcher is started directly without
 `run_experiment.py`, it now falls back to
-`DXMT_3DMARK05_LAUNCHER_TIMEOUT=180` and terminates the child process group on
+`DXMT_3DMARK05_LAUNCHER_TIMEOUT=120` and terminates the child process group on
 timeout; use `DXMT_3DMARK05_ALLOW_UNSUPERVISED=1` only when another supervisor
 is documented. For direct verify-prefix runs, use
 `scripts/run_apps/run_app-d3d9-3dmark05-verify_direct.sh`; it supervises the
-launcher with `DXMT_3DMARK05_DIRECT_TIMEOUT=180` by default and supports
+launcher with `DXMT_3DMARK05_DIRECT_TIMEOUT=120` by default and supports
 `DXMT_3DMARK05_DIRECT_DRY_RUN=1` for command/timeout checks without starting
 Wine. The direct launcher traps `TERM`/`INT` and kills the app-prefix
 wineserver on exit by default (`DXMT_3DMARK05_KILL_SERVER_ON_EXIT=1`) so a
@@ -1293,10 +1293,37 @@ but still failed file capture with `Capture layer is not inserted`. Treat that
 as a negative capture-layer result unless a future run proves that Xcode itself
 launched or attached the real Wine temp child.
 
+For render-pass dependency debugging, use the Frame Graph DAG dump as a
+no-Xcode sidecar before escalating to another `.gputrace`. It is an
+observation-only channel on both the traditional and framegraph backends:
+
 ```sh
-# capture (no-gputrace scout = 180s, .gputrace/Xcode candidate = 420s)
 bash scripts/tools/run_3dmark05_perf_probe.sh \
-  --suffix <tag> --frame <50|60> [--no-gputrace] <probe flags> --timeout <180|420>
+  --suffix <tag> --frame <N> --no-gputrace --timeout 120 \
+  --dump-framegraph-dag \
+  --framegraph-dag-frame <N> \
+  --framegraph-dag-frame-radius 2 \
+  --framegraph-dag-formats json,mermaid \
+  --framegraph-dag-optimize passcoalesce
+# Add --framegraph-dag-draws when JSON draw ownership is needed.
+```
+
+Do not leave the DAG frame filter unset on 3DMark05 unless you are deliberately
+collecting a flood of chunks. The wrapper stores raw dumps under
+`traces/<app-runid>/analysis/dag` and writes combined
+`framegraph-dag-summary.{md,csv}` / `framegraph-dag-candidates.csv`, plus
+stage-specific `framegraph-dag-preopt-*` and `framegraph-dag-postopt-*`
+summaries. Use pre-opt candidates to find legal-looking coalesce targets, and
+post-opt summaries to confirm the analysis optimizer removed those re-entry
+pairs from the exported DAG.
+Interpret `--framegraph-dag-optimize passcoalesce` as a structural proof of
+candidate coalescing only; production encode still has to be verified
+separately by byte-equal output and Xcode counters.
+
+```sh
+# capture (no-gputrace scout = 120s, .gputrace/Xcode candidate = 420s)
+bash scripts/tools/run_3dmark05_perf_probe.sh \
+  --suffix <tag> --frame <50|60> [--no-gputrace] <probe flags> --timeout <120|420>
 # then export Encoder Counters from Xcode (see §2b), then:
 bash scripts/tools/finalize_3dmark05_perf_probe.sh \
   --suffix <tag> --frame <N> [--baseline-joined <csv> <proof gates>]

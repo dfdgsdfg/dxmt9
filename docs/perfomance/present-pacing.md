@@ -21,12 +21,13 @@ GPU frame-time story is owned by [[hidden-backend-storage]] /
 | # | Hypothesis | Verdict | Evidence |
 |---|------------|---------|----------|
 | H1 | `completion_wait_ms` is dominated by Present-bearing CBs, not draw/blit/sync/queue waits | accepted | [[present-pacing-display-sync.01]] (100% `completion_present_wait_ms`) |
-| H2 | The wait is display-sync pacing (`waitUntilCompleted()` returning at compositor refresh) rather than GPU compute | accepted | [[present-pacing-display-sync.01]] (`DXMT9_LAYER_DISPLAY_SYNC=0` cuts elapsed 251 s → 83 s, per-CB p50 unchanged) |
+| H2 | The wait is display/present-completion pacing (`waitUntilCompleted()` returning after drawable/compositor acceptance) rather than pure GPU compute | accepted historically; current mechanism refined | [[present-pacing-display-sync.01]] showed the original display-sync attribution. Current [[present-pacing-current-immediate.02]] shows GT1 direct now requests Immediate and never uses `presentDrawableAfterMinimumDuration`, yet `completion_present_wait_ms` remains ~39 s. [[present-pacing-completion-watcher-status.03]] shows the watcher pops immediately (`p50 0.041ms`, `pending_depth_max=0`) and waits mostly from `Committed` status. |
 | H3 | Per-CB encode (`encode_draw_cpu_ms / CB`) sits at ~11 ms, near the 16.67 ms vsync budget | accepted | [[present-pacing-display-sync.01]] (per-CB encode 11.45 ms baseline, 11.23 ms DSync-off) |
 | H4 | `DXMT9_MAX_FRAME_LATENCY=3` + `DXMT9_CAP_FRAME_LATENCY_TO_BACKBUFFERS=0` recovers slack with vsync on | rejected | [[present-pacing-frame-latency.01]] (wallclock Δ +0.07%, p95 +31%) |
 | H5 | `DXMT9_PRESENT_ASYNC_ACQUIRE=1` reduces the completion-path acquire cost | rejected (axis not load-bearing) | [[present-pacing-async-acquire.01]] (acquire wait −37.5% but axis < 0.5% of total; wallclock Δ +0.22%) |
 | H6 | Reducing per-CB encode below the vsync budget (<= 16.67 ms / CB) restores fps without changing pacing policy | open, with CPU wins | [[present-pacing-encode-budget.01]] sized the gap; [[present-pacing-bind-cache-work-a.01]] rejected broad bind-cache as the main lever; cbuf identity repoint, plan-direct binding-packet cache, component-hash reuse, usage-aware payload hashing, and FFP known-zero usage are accepted CPU wins. Latest [[snapshot-cache-snapshot.09]] sample is still not a vsync-on fps proof: `completion_wait_ms=39978.924`, `encode_draw_cpu_ms=17711.215`, and `d3d9_snapshot_draw_submission_cpu_ms=7196.881` over `1740` presents. [[state-churn-encode-encode-phase.09]] splits argbuf open: reserve `745.942ms`, `setArgumentBuffer=115.192ms`, table bind `192.913ms`, table-bind skip `0`; [[state-churn-encode-encode-phase.10]] then cuts reserve by `-51.95%` and `encode_draw_cpu_ms` by `-3.87%` in a same-present A/B. [[state-churn-encode-encode-phase.11]] rejects dirty-category identity repoint (`0` hits). [[state-churn-encode-encode-phase.12]] splits `stream_bind` into texture/sampler (`1065ms`), index (`670ms`), shader stream (`497ms`), and raster (`389ms`) phases; [[state-churn-encode-encode-phase.13]] narrows texture/sampler to fragment resolve (`575ms`) and fragment direct bind (`317ms`); [[state-churn-encode-encode-phase.14]] accepts sampler pre-handle skip as a CPU win (`texture_sampler` -18.84%, `encode_draw` -117ms); [[state-churn-encode-encode-phase.15]] then reuses the packet sampler-state hash (`fragment_direct` -68ms, texture/sampler parent -69.6ms); [[state-churn-encode-encode-phase.16]] rejects texture pre-resolve skip as a default win (`1.206M` skips but texture/sampler parent +48ms), removes the rejected branch, and verifies texture/sampler parent returns to baseline (`822.864 -> 821.007`). The next no-gputrace targets remain named encode buckets plus residual snapshot hash/indexed-fallback work. |
-| H7 | A user-opt-in vsync-off env recovers fps without a code-side encode optimisation | accepted | [[present-pacing-vsync-off.01]] (DXMT9_DISABLE_VSYNC=1 on full GT1 workload: −46.9% wallclock, ~+88% fps, status pass, same CB count + same GPU work as baseline) |
+| H7 | A user-opt-in vsync-off env recovers fps without a code-side encode optimisation | accepted historically; not load-bearing for current GT1 direct path | [[present-pacing-vsync-off.01]] measured a full-workload wallclock win when the present path was sync-paced. Current [[present-pacing-current-immediate.02]] shows both default and `DXMT9_DISABLE_VSYNC=1` already use `present_schedule_immediate=1680`, frame p50/p95 are flat, and `present_schedule_after_minimum_duration=0`. |
+| H8 | Completion wait is caused by completion watcher backlog | rejected | [[present-pacing-completion-watcher-status.03]]: `completion_pending_depth_max=0`, dequeue age p50/p95 `0.041/0.067ms`, and `completion_dequeue_status_completed=0`. The watcher is not late; it waits on just-committed command buffers. |
 
 ## Verification methods
 
@@ -39,6 +40,18 @@ GPU frame-time story is owned by [[hidden-backend-storage]] /
   (synchronous flush), `queue_writer_wait_ms` / `queue_commit_wait_ms` /
   `queue_sequence_wait_ms` (queue ring / submit ordering). Together they
   enumerate every CPU stall the runtime can attribute.
+- **Present scheduling counters**: `present_schedule_requested_sync`,
+  `present_schedule_requested_immediate`,
+  `present_schedule_after_minimum_duration`, `present_schedule_immediate`,
+  and `present_minimum_duration_ms` prove whether a run actually enters
+  the software `presentDrawableAfterMinimumDuration` path. Current GT1 direct
+  is already immediate, so `DXMT9_DISABLE_VSYNC=1` is not a valid fps lever
+  unless these counters first show sync-paced scheduling.
+- **Completion watcher status counters**: `completion_dequeue_age_ms`,
+  `completion_pending_depth_max`, `completion_dequeue_status_*`, and
+  `completion_wait_status_*` split completion wait between dxmt9's pending
+  queue and Metal command-buffer status. A backlog diagnosis requires
+  non-trivial dequeue age or pending depth; current GT1 has neither.
 - **Env-knob A/B**: parent shell prefix
   (`DXMT9_LAYER_DISPLAY_SYNC=0 bash scripts/tools/run_3dmark05_perf_probe.sh
   --no-gputrace --suffix <name>`). The wrapper's `env "${env_args[@]}"
@@ -63,6 +76,8 @@ flowchart TD
   classDef proposed fill:#e0e7ff,stroke:#445588,color:#102
 
   DSync["display-sync.01\n100% present wait;\nDSync=0 → 2.99× scene throughput\n(diagnostic only)"]
+  CurrentImmediate["current-immediate.02\nGT1 direct already immediate;\nDISABLE_VSYNC flat"]
+  CompletionStatus["completion-watcher-status.03\nno pending backlog;\nwait mostly from Committed CB"]
   FrameLatency["frame-latency.01\nMAX_FRAME_LATENCY=3 + CAP=0\n(rejected: Δ +0.07%)"]
   AsyncAcq["async-acquire.01\nPRESENT_ASYNC_ACQUIRE=1\n(rejected: axis < 0.5% of wait)"]
   EncodeBudget["encode-budget.01\nencode_chunk p50 20.45 ms\nvs 16.67 ms vsync slot\n(attribution accepted)"]
@@ -95,6 +110,9 @@ flowchart TD
 
   DSync --> FrameLatency
   DSync --> AsyncAcq
+  DSync --> CurrentImmediate
+  CurrentImmediate --> CompletionStatus
+  CompletionStatus --> EncodeBudget
   FrameLatency --> EncodeBudget
   AsyncAcq --> EncodeBudget
   EncodeBudget --> FixProposal
@@ -124,7 +142,7 @@ flowchart TD
   TexturePreResolve --> Remaining
   Remaining --> SCE
 
-  class DSync,EncodeBudget accepted
+  class DSync,EncodeBudget,CurrentImmediate,CompletionStatus accepted
   class FrameLatency,AsyncAcq,WorkA,StateNoop,DirtyIdentity,TexturePreResolve rejected
   class FixProposal,Remaining,SCE proposed
   class Attribution,NextSplit,CleanGate,ReopenMask,Identity,IdentitySmoke,PacketSplit,PlanDirect,SnapshotSplit,SnapshotHash,PayloadSplit,UsageHash,FfpZero,ArgbufOpen,FastAppend,StreamBindSplit,TextureSplit,SamplerSkip,SamplerHash accepted
@@ -305,6 +323,25 @@ flowchart TD
   partial-workload side effect of the diagnostic env; the +88%
   full-workload figure is what to ship against. Trade-off: tearing,
   no display sync. Opt-in only.
+- [[present-pacing-current-immediate.02]] — ACCEPTED REFINEMENT.
+  Current GT1 direct no-gputrace A/B shows both default and
+  `DXMT9_DISABLE_VSYNC=1` already schedule every present as immediate:
+  `present_schedule_requested_immediate=1680`,
+  `present_schedule_after_minimum_duration=0`, and
+  `present_schedule_immediate=1680`. Frame sampling is flat
+  (`wall_ms` p50 `56.562 → 56.450`, p95 `90.313 → 91.178`,
+  sampled wall sum `103.546s → 103.537s`). For current GT1 direct,
+  vsync-off is not load-bearing; the residual wait is immediate-present
+  completion/compositor behavior below dxmt9's software duration branch.
+- [[present-pacing-completion-watcher-status.03]] — ACCEPTED.
+  Current GT1 direct completion watcher status split shows no pending
+  completion backlog: `completion_pending_depth_max=0`,
+  `completion_dequeue_age_p50_ms=0.041`, and
+  `completion_dequeue_age_p95_ms=0.067`. The watcher pops almost every
+  command buffer while it is still `Committed`
+  (`completion_dequeue_status_committed=1672/1679`) and spends
+  `39520.923ms` of `39698.863ms` waiting from that state. The wait owner is
+  therefore below dxmt9's pending-completion queue.
 
 ## Cross-links
 
@@ -322,17 +359,24 @@ flowchart TD
   CPU completion thread waiting for Present-bearing `waitUntilCompleted()`
   to return after the compositor accepts the drawable.
   [[present-pacing-display-sync.01]]
-- The wait is display-sync pacing, not GPU compute: per-CB p50 wait
-  unchanged when sync is off, but scene completes 3× faster. Apple
-  `CAMetalLayer` honours `displaySyncEnabled=YES` by holding
-  `waitUntilCompleted` until the compositor's next vsync slot.
+- The wait is present-completion pacing, not pure GPU compute. Historical
+  sync-paced runs attributed it to display sync; current direct GT1 refines
+  that mechanism because every present is already immediate and still waits
+  in `waitUntilCompleted()`.
+- The completion watcher is not backlogged. It pops almost immediately
+  after enqueue and waits on command buffers still in `Committed` status, so
+  moving the wait to a later watcher policy would not by itself make
+  resource or present waterlines advance earlier.
 - Per-CB encode CPU (~11 ms) sits at ~69% of the 16.67 ms 60 Hz budget,
   which is why the average frame slips a vsync slot.
 
 **Open target**
 
-- Recovering the vsync-on fps without disabling vsync still requires reducing
-  work that causes present-bearing chunks to miss refresh slots. The old
+- Recovering current GT1 direct fps requires reducing work that feeds
+  present-bearing chunks or redesigning the completion wait/waterline model;
+  toggling
+  `DXMT9_DISABLE_VSYNC` is no longer a valid lever unless
+  `present_schedule_after_minimum_duration` is nonzero. The old
   "bind calls dominate the 73% unattributed encode remainder" attribution is
   rejected by [[present-pacing-bind-cache-work-a.01]]. Category identity cbuf
   reuse, plan-direct binding-packet cache lookup, snapshot component-hash reuse,

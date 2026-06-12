@@ -4,6 +4,7 @@
 #include "dxmt9_capture.hpp"
 #include "../winemetal/Metal.hpp"
 
+#include <chrono>
 #include <cstdint>
 #include <functional>
 #include <optional>
@@ -574,6 +575,7 @@ class QueueLifecycleController {
     size_t slotIndex = 0;
     u64 seqId = 0;
     u64 commandBufferChainLength = 1;
+    std::chrono::steady_clock::time_point enqueueTime{};
     WMT::Reference<WMT::CounterSampleBuffer> renderEncoderGpuSampleBuffer{};
     std::vector<QueueSubmissionRecord::RenderEncoderGpuSample> renderEncoderGpuSamples{};
     std::vector<std::function<void()>> completionCallbacks;
