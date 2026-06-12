@@ -58,6 +58,7 @@ bottleneck — that is owned by [[hidden-backend-storage]].
 | H38 | `CommandQueue` submit residual can be localized before changing batching behavior | accepted attribution | [[state-churn-encode-encode-phase.26]] (`commit_chunk_draw_batch_submit_cpu_ms=3629.383`; batch append `2379.837ms`, compat scan `559.625ms`; resource mark/slot/chunk commit are small) |
 | H39 | Snapshot cache misses may be inflated by declared draw-packet deltas that do not actually change non-binding state | rejected-current | [[state-churn-encode-encode-phase.28]] (`draw_packet_declared_nonbinding=419,990`, `actual_nonbinding=419,990`, `redundant_nonbinding=0`) |
 | H40 | Snapshot/uniform cost is mostly real payload construction and hashing, not redundant invalidation | accepted local CPU win; FPS flat | [[state-churn-encode-encode-phase.28]], [[snapshot-cache-snapshot.10]] (`uniform_refresh 2014.263ms→814.507ms`, snapshot submission `7622.807ms→6495.069ms`, sampled FPS `15.717→15.752`) |
+| H41 | The batch append owner is raw payload byte copy | rejected; state/uniform attribution accepted | [[state-churn-encode-encode-phase.29]] (`state=958ms`, `uniform=902ms`, `payload=65ms` despite `232.5MB` copied) |
 
 ## Verification methods
 
@@ -169,6 +170,7 @@ flowchart TD
   EncodePhase26["encode-phase.26\nCommandQueue submit split\nappend 2379ms\ncompat scan 560ms"]:::accepted
   EncodePhase27["encode-phase.27\nsnapshot invalidation candidate\nactual-change probe designed"]:::open
   EncodePhase28["encode-phase.28\nactual-change probe\nredundant nonbinding 0"]:::rejected
+  EncodePhase29["encode-phase.29\nbatch append split\nstate 958ms / uniform 902ms\npayload 65ms"]:::accepted
   Snapshot10["snapshot.10\nuniform-refresh fast path\nrefresh -59.6%\nFPS flat"]:::accepted
 
   Drawrun1 -->|"split-into"| Drawrun2
@@ -220,6 +222,8 @@ flowchart TD
   EncodePhase25 -->|"submit path split"| EncodePhase26
   EncodePhase25 -->|"snapshot owner analysis"| EncodePhase27
   EncodePhase27 -->|"no-op delta proof"| EncodePhase28
+  EncodePhase26 -->|"append child split"| EncodePhase29
+  Snapshot10 -->|"queue append next"| EncodePhase29
 ```
 
 ## Results synthesis
@@ -337,9 +341,8 @@ presents, but sampled FPS remains flat (`15.717→15.752`). The packet-cache
 bucket itself is no longer first-order, and residual snapshot is now a named
 CPU cleanup rather than a run-level limiter by itself. The broader encode path
 still is: argbuf setup (`3357.980ms`), binding-packet plan/cache
-(`2705.893ms`), stream/index bind, queue append (`2403.727ms`), and issue cost
-are the next named buckets to split or reduce before another generic bind-cache
-guess.
+(`2705.893ms`), stream/index bind, queue append, and issue cost are the next
+named buckets to split or reduce before another generic bind-cache guess.
 
 The first follow-up split of that broader encode path is
 [[state-churn-encode-encode-phase.09]]. It rejects the simple "argbuf open is
@@ -526,6 +529,19 @@ produced a normal-looking `actual.png`. `commit_chunk_replay_cpu_ms` was
 work should therefore split/reduce snapshot cache lookup/miss hot-build,
 uniform refresh/build/hash, payload lookup collisions, and the two draw submit
 paths before changing scan heuristics.
+
+[[state-churn-encode-encode-phase.26]] and
+[[state-churn-encode-encode-phase.29]] split the queued submit path far enough
+to reject the simplest copy-volume hypothesis. The batch append parent remains
+large (`2707.789ms` in the 120-second append-split run), but payload byte copy
+is only `65.088ms` while copying `232.5MB`. The dominant children are full
+draw-state append / PSO subview / invariant construction (`958.031ms`) and
+per-submission uniform payload lookup/append (`901.830ms`). The average batch is
+only `1.877` records per group, so one copied `CanonicalDrawState` and one
+uniform lookup pass are poorly amortized. The next queue-side implementation
+bet should therefore compact or intern the run state, add a uniform-handle
+reuse fast path, or improve coalescing enough to raise records/group; do not
+spend the next iteration optimizing raw payload arena byte copies.
 
 ## How to run
 Every experiment here is a 3DMark05 GT1 run via the standard wrapper. This is a

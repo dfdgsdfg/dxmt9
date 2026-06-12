@@ -6,6 +6,7 @@
 
 #include <array>
 #include <bit>
+#include <chrono>
 #include <cstdint>
 #include <limits>
 #include <span>
@@ -253,6 +254,32 @@ inline std::size_t chunkSlotUniformLookupBucket(u64 hash, std::size_t bucketCoun
   const u64 mixedHash = hash ^ (hash >> 32u) ^ (hash >> 17u);
   return static_cast<std::size_t>(mixedHash % bucketCount);
 }
+
+class ChunkSlotPerfScope {
+ public:
+  explicit ChunkSlotPerfScope(void (*record)(std::uint64_t)) noexcept
+      : record_(dxmt9::perf::enabled() ? record : nullptr) {
+    if (record_) {
+      started_ = std::chrono::steady_clock::now();
+    }
+  }
+
+  ~ChunkSlotPerfScope() {
+    if (!record_) {
+      return;
+    }
+    const auto elapsed = std::chrono::steady_clock::now() - started_;
+    record_(static_cast<std::uint64_t>(
+        std::chrono::duration_cast<std::chrono::nanoseconds>(elapsed).count()));
+  }
+
+  ChunkSlotPerfScope(const ChunkSlotPerfScope&) = delete;
+  ChunkSlotPerfScope& operator=(const ChunkSlotPerfScope&) = delete;
+
+ private:
+  void (*record_)(std::uint64_t) = nullptr;
+  std::chrono::steady_clock::time_point started_{};
+};
 
 template <typename Vector>
 void chunkSlotReserveAtLeast(Vector& storage, std::size_t required) {
@@ -790,29 +817,43 @@ struct ChunkSlot {
       return;
     }
 
-    detail::chunkSlotReserveAtLeast(commandHeaders, commandHeaders.size() + 1u);
-    detail::chunkSlotReserveAtLeast(drawRunRecords, drawRunRecords.size() + 1u);
-    reserveDrawStateStorage(drawHotStates.size() + 1u);
-    detail::chunkSlotReserveAtLeast(drawPsoSubviews, drawPsoSubviews.size() + 1u);
-    detail::chunkSlotReserveAtLeast(drawParams, drawParams.size() + submissions.size());
-    detail::chunkSlotReserveAtLeast(drawPayloadArena, drawPayloadArena.size() + payloadBytes);
-    detail::chunkSlotReserveAtLeast(drawUniformPayloads,
-                                    drawUniformPayloads.size() + submissions.size());
-    reserveDrawUniformPayloadLookup(drawUniformPayloads.size() + submissions.size());
+    dxmt9::perf::countSubmitDrawRunBatchAppendParams(submissions.size());
+    dxmt9::perf::countSubmitDrawRunBatchAppendPayloadBytes(payloadBytes);
+
+    {
+      detail::ChunkSlotPerfScope scope(
+          dxmt9::perf::countSubmitDrawRunBatchAppendReserveCpuTime);
+      detail::chunkSlotReserveAtLeast(commandHeaders, commandHeaders.size() + 1u);
+      detail::chunkSlotReserveAtLeast(drawRunRecords, drawRunRecords.size() + 1u);
+      reserveDrawStateStorage(drawHotStates.size() + 1u);
+      detail::chunkSlotReserveAtLeast(drawPsoSubviews, drawPsoSubviews.size() + 1u);
+      detail::chunkSlotReserveAtLeast(drawParams, drawParams.size() + submissions.size());
+      detail::chunkSlotReserveAtLeast(drawPayloadArena, drawPayloadArena.size() + payloadBytes);
+      detail::chunkSlotReserveAtLeast(drawUniformPayloads,
+                                      drawUniformPayloads.size() + submissions.size());
+      reserveDrawUniformPayloadLookup(drawUniformPayloads.size() + submissions.size());
+    }
 
     auto state = std::move(submissions.front().state);
-    const auto psoSubview = makeDrawPsoSubview(state);
-    const DrawRunInvariant invariant{
-        .viewportScissorHash = state.hot.key.viewportHash,
-        .runStableBindingHash =
-            state.hot.key.renderStateHash ^ (state.hot.key.vertexDeclHash << 1) ^
-            (static_cast<u64>(state.hot.textureMask) << 2) ^
-            (static_cast<u64>(state.hot.key.samplerStateMask) << 3),
-        .streamMask = state.hot.streamMask,
-        .textureMask = state.hot.textureMask,
-        .samplerStateMask = state.hot.key.samplerStateMask,
-    };
-    const auto stateIndex = appendDrawState(std::move(state));
+    DrawPsoSubview psoSubview{};
+    DrawRunInvariant invariant{};
+    std::uint32_t stateIndex = 0;
+    {
+      detail::ChunkSlotPerfScope scope(
+          dxmt9::perf::countSubmitDrawRunBatchAppendStateCpuTime);
+      psoSubview = makeDrawPsoSubview(state);
+      invariant = DrawRunInvariant{
+          .viewportScissorHash = state.hot.key.viewportHash,
+          .runStableBindingHash =
+              state.hot.key.renderStateHash ^ (state.hot.key.vertexDeclHash << 1) ^
+              (static_cast<u64>(state.hot.textureMask) << 2) ^
+              (static_cast<u64>(state.hot.key.samplerStateMask) << 3),
+          .streamMask = state.hot.streamMask,
+          .textureMask = state.hot.textureMask,
+          .samplerStateMask = state.hot.key.samplerStateMask,
+      };
+      stateIndex = appendDrawState(std::move(state));
+    }
     const auto firstParam = static_cast<std::uint32_t>(drawParams.size());
     const auto payloadOffset = static_cast<std::uint32_t>(drawPayloadArena.size());
 
@@ -831,39 +872,62 @@ struct ChunkSlot {
     };
 
     DrawUniformHandle firstUniformHandle{};
-    for (std::size_t i = 0; i < submissions.size(); ++i) {
-      DrawUniformHandle uniformHandle = findDrawUniformPayload(submissions[i].uniforms);
-      if (!uniformHandle.valid()) {
-        uniformHandle = appendDrawUniformPayload(submissions[i].uniforms);
+    {
+      detail::ChunkSlotPerfScope scope(
+          dxmt9::perf::countSubmitDrawRunBatchAppendUniformCpuTime);
+      for (std::size_t i = 0; i < submissions.size(); ++i) {
+        DrawUniformHandle uniformHandle = findDrawUniformPayload(submissions[i].uniforms);
         if (!uniformHandle.valid()) {
-          return;
+          uniformHandle = appendDrawUniformPayload(submissions[i].uniforms);
+          if (!uniformHandle.valid()) {
+            return;
+          }
         }
+        if (i == 0) {
+          firstUniformHandle = uniformHandle;
+        }
+        submissions[i].draw.uniformHandle = uniformHandle;
       }
-      if (i == 0) {
-        firstUniformHandle = uniformHandle;
-      }
-      DrawParam param = submissions[i].draw;
-      param.userVertexRange = appendPayloadBytes(submissions[i].payload.userVertexData);
-      param.userIndexRange = appendPayloadBytes(submissions[i].payload.userIndexData);
-      param.bindingOverrideRange =
-          appendPayloadBytes(submissions[i].payload.bindingOverrideData);
-      param.bindingSnapshotRange =
-          appendPayloadBytes(submissions[i].payload.bindingSnapshotData);
-      param.uniformHandle = uniformHandle;
-      drawParams.push_back(std::move(param));
     }
 
-    commandHeaders.push_back({MetalCommandKind::DrawRun, drawRunRecordIndex});
-    drawRunRecords.push_back(DrawRunCommandRecord{
-        .stateIndex = stateIndex,
-        .firstParam = firstParam,
-        .paramCount = static_cast<std::uint32_t>(submissions.size()),
-        .payloadOffset = payloadOffset,
-        .payloadSize = recordPayloadSize,
-        .uniformHandle = firstUniformHandle,
-        .invariant = invariant,
-    });
-    drawPsoSubviews.push_back(psoSubview);
+    {
+      detail::ChunkSlotPerfScope scope(
+          dxmt9::perf::countSubmitDrawRunBatchAppendPayloadCpuTime);
+      for (auto& submission : submissions) {
+        submission.draw.userVertexRange =
+            appendPayloadBytes(submission.payload.userVertexData);
+        submission.draw.userIndexRange =
+            appendPayloadBytes(submission.payload.userIndexData);
+        submission.draw.bindingOverrideRange =
+            appendPayloadBytes(submission.payload.bindingOverrideData);
+        submission.draw.bindingSnapshotRange =
+            appendPayloadBytes(submission.payload.bindingSnapshotData);
+      }
+    }
+
+    {
+      detail::ChunkSlotPerfScope scope(
+          dxmt9::perf::countSubmitDrawRunBatchAppendParamCpuTime);
+      for (auto& submission : submissions) {
+        drawParams.push_back(std::move(submission.draw));
+      }
+    }
+
+    {
+      detail::ChunkSlotPerfScope scope(
+          dxmt9::perf::countSubmitDrawRunBatchAppendRecordCpuTime);
+      commandHeaders.push_back({MetalCommandKind::DrawRun, drawRunRecordIndex});
+      drawRunRecords.push_back(DrawRunCommandRecord{
+          .stateIndex = stateIndex,
+          .firstParam = firstParam,
+          .paramCount = static_cast<std::uint32_t>(submissions.size()),
+          .payloadOffset = payloadOffset,
+          .payloadSize = recordPayloadSize,
+          .uniformHandle = firstUniformHandle,
+          .invariant = invariant,
+      });
+      drawPsoSubviews.push_back(psoSubview);
+    }
   }
 
   void setDrawRunPsoHandles(std::size_t commandIndex,

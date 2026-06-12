@@ -126,6 +126,20 @@ struct Counters {
   std::atomic<std::uint64_t> submitDrawRunBatchResourceMarkCpuMaxNs{0};
   std::atomic<std::uint64_t> submitDrawRunBatchAppendCpuNs{0};
   std::atomic<std::uint64_t> submitDrawRunBatchAppendCpuMaxNs{0};
+  std::atomic<std::uint64_t> submitDrawRunBatchAppendReserveCpuNs{0};
+  std::atomic<std::uint64_t> submitDrawRunBatchAppendReserveCpuMaxNs{0};
+  std::atomic<std::uint64_t> submitDrawRunBatchAppendStateCpuNs{0};
+  std::atomic<std::uint64_t> submitDrawRunBatchAppendStateCpuMaxNs{0};
+  std::atomic<std::uint64_t> submitDrawRunBatchAppendUniformCpuNs{0};
+  std::atomic<std::uint64_t> submitDrawRunBatchAppendUniformCpuMaxNs{0};
+  std::atomic<std::uint64_t> submitDrawRunBatchAppendPayloadCpuNs{0};
+  std::atomic<std::uint64_t> submitDrawRunBatchAppendPayloadCpuMaxNs{0};
+  std::atomic<std::uint64_t> submitDrawRunBatchAppendParamCpuNs{0};
+  std::atomic<std::uint64_t> submitDrawRunBatchAppendParamCpuMaxNs{0};
+  std::atomic<std::uint64_t> submitDrawRunBatchAppendRecordCpuNs{0};
+  std::atomic<std::uint64_t> submitDrawRunBatchAppendRecordCpuMaxNs{0};
+  std::atomic<std::uint64_t> submitDrawRunBatchAppendPayloadBytes{0};
+  std::atomic<std::uint64_t> submitDrawRunBatchAppendParams{0};
   std::atomic<std::uint64_t> submitDrawRunBatchChunkCommitCpuNs{0};
   std::atomic<std::uint64_t> submitDrawRunBatchChunkCommitCpuMaxNs{0};
   std::atomic<std::uint64_t> commandBuffers{0};
@@ -1377,6 +1391,20 @@ constexpr CounterEntry kCounterTable[] = {
     {"submit_draw_run_batch_resource_mark_cpu_max_ms", CounterEntry::Kind::Milliseconds, &Counters::submitDrawRunBatchResourceMarkCpuMaxNs, nullptr, nullptr, 0.0},
     {"submit_draw_run_batch_append_cpu_ms", CounterEntry::Kind::Milliseconds, &Counters::submitDrawRunBatchAppendCpuNs, nullptr, nullptr, 0.0},
     {"submit_draw_run_batch_append_cpu_max_ms", CounterEntry::Kind::Milliseconds, &Counters::submitDrawRunBatchAppendCpuMaxNs, nullptr, nullptr, 0.0},
+    {"submit_draw_run_batch_append_reserve_cpu_ms", CounterEntry::Kind::Milliseconds, &Counters::submitDrawRunBatchAppendReserveCpuNs, nullptr, nullptr, 0.0},
+    {"submit_draw_run_batch_append_reserve_cpu_max_ms", CounterEntry::Kind::Milliseconds, &Counters::submitDrawRunBatchAppendReserveCpuMaxNs, nullptr, nullptr, 0.0},
+    {"submit_draw_run_batch_append_state_cpu_ms", CounterEntry::Kind::Milliseconds, &Counters::submitDrawRunBatchAppendStateCpuNs, nullptr, nullptr, 0.0},
+    {"submit_draw_run_batch_append_state_cpu_max_ms", CounterEntry::Kind::Milliseconds, &Counters::submitDrawRunBatchAppendStateCpuMaxNs, nullptr, nullptr, 0.0},
+    {"submit_draw_run_batch_append_uniform_cpu_ms", CounterEntry::Kind::Milliseconds, &Counters::submitDrawRunBatchAppendUniformCpuNs, nullptr, nullptr, 0.0},
+    {"submit_draw_run_batch_append_uniform_cpu_max_ms", CounterEntry::Kind::Milliseconds, &Counters::submitDrawRunBatchAppendUniformCpuMaxNs, nullptr, nullptr, 0.0},
+    {"submit_draw_run_batch_append_payload_cpu_ms", CounterEntry::Kind::Milliseconds, &Counters::submitDrawRunBatchAppendPayloadCpuNs, nullptr, nullptr, 0.0},
+    {"submit_draw_run_batch_append_payload_cpu_max_ms", CounterEntry::Kind::Milliseconds, &Counters::submitDrawRunBatchAppendPayloadCpuMaxNs, nullptr, nullptr, 0.0},
+    {"submit_draw_run_batch_append_param_cpu_ms", CounterEntry::Kind::Milliseconds, &Counters::submitDrawRunBatchAppendParamCpuNs, nullptr, nullptr, 0.0},
+    {"submit_draw_run_batch_append_param_cpu_max_ms", CounterEntry::Kind::Milliseconds, &Counters::submitDrawRunBatchAppendParamCpuMaxNs, nullptr, nullptr, 0.0},
+    {"submit_draw_run_batch_append_record_cpu_ms", CounterEntry::Kind::Milliseconds, &Counters::submitDrawRunBatchAppendRecordCpuNs, nullptr, nullptr, 0.0},
+    {"submit_draw_run_batch_append_record_cpu_max_ms", CounterEntry::Kind::Milliseconds, &Counters::submitDrawRunBatchAppendRecordCpuMaxNs, nullptr, nullptr, 0.0},
+    {"submit_draw_run_batch_append_payload_bytes", CounterEntry::Kind::UnsignedCount, &Counters::submitDrawRunBatchAppendPayloadBytes, nullptr, nullptr, 0.0},
+    {"submit_draw_run_batch_append_params", CounterEntry::Kind::UnsignedCount, &Counters::submitDrawRunBatchAppendParams, nullptr, nullptr, 0.0},
     {"submit_draw_run_batch_chunk_commit_cpu_ms", CounterEntry::Kind::Milliseconds, &Counters::submitDrawRunBatchChunkCommitCpuNs, nullptr, nullptr, 0.0},
     {"submit_draw_run_batch_chunk_commit_cpu_max_ms", CounterEntry::Kind::Milliseconds, &Counters::submitDrawRunBatchChunkCommitCpuMaxNs, nullptr, nullptr, 0.0},
     {"render_pass_begin", CounterEntry::Kind::UnsignedCount, &Counters::renderPassBegin, nullptr, nullptr, 0.0},
@@ -3152,6 +3180,56 @@ void countSubmitDrawRunBatchAppendCpuTime(std::uint64_t nanoseconds) {
   recordCpuTime(c.submitDrawRunBatchAppendCpuNs,
                 c.submitDrawRunBatchAppendCpuMaxNs,
                 nanoseconds);
+}
+
+void countSubmitDrawRunBatchAppendReserveCpuTime(std::uint64_t nanoseconds) {
+  auto& c = counters();
+  recordCpuTime(c.submitDrawRunBatchAppendReserveCpuNs,
+                c.submitDrawRunBatchAppendReserveCpuMaxNs,
+                nanoseconds);
+}
+
+void countSubmitDrawRunBatchAppendStateCpuTime(std::uint64_t nanoseconds) {
+  auto& c = counters();
+  recordCpuTime(c.submitDrawRunBatchAppendStateCpuNs,
+                c.submitDrawRunBatchAppendStateCpuMaxNs,
+                nanoseconds);
+}
+
+void countSubmitDrawRunBatchAppendUniformCpuTime(std::uint64_t nanoseconds) {
+  auto& c = counters();
+  recordCpuTime(c.submitDrawRunBatchAppendUniformCpuNs,
+                c.submitDrawRunBatchAppendUniformCpuMaxNs,
+                nanoseconds);
+}
+
+void countSubmitDrawRunBatchAppendPayloadCpuTime(std::uint64_t nanoseconds) {
+  auto& c = counters();
+  recordCpuTime(c.submitDrawRunBatchAppendPayloadCpuNs,
+                c.submitDrawRunBatchAppendPayloadCpuMaxNs,
+                nanoseconds);
+}
+
+void countSubmitDrawRunBatchAppendParamCpuTime(std::uint64_t nanoseconds) {
+  auto& c = counters();
+  recordCpuTime(c.submitDrawRunBatchAppendParamCpuNs,
+                c.submitDrawRunBatchAppendParamCpuMaxNs,
+                nanoseconds);
+}
+
+void countSubmitDrawRunBatchAppendRecordCpuTime(std::uint64_t nanoseconds) {
+  auto& c = counters();
+  recordCpuTime(c.submitDrawRunBatchAppendRecordCpuNs,
+                c.submitDrawRunBatchAppendRecordCpuMaxNs,
+                nanoseconds);
+}
+
+void countSubmitDrawRunBatchAppendPayloadBytes(std::uint64_t bytes) {
+  add(counters().submitDrawRunBatchAppendPayloadBytes, bytes);
+}
+
+void countSubmitDrawRunBatchAppendParams(std::uint64_t paramCount) {
+  add(counters().submitDrawRunBatchAppendParams, paramCount);
 }
 
 void countSubmitDrawRunBatchChunkCommitCpuTime(std::uint64_t nanoseconds) {

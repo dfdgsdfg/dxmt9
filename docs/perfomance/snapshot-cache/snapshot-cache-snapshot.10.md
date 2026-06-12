@@ -101,7 +101,7 @@ noisy at the run level.
 |---|---|
 | Snapshot miss hot-build | `d3d9_snapshot_cache_miss_hot_build_cpu_ms=1573.980ms` remains unchanged |
 | VS indexed-float fallback | `d3d9_snapshot_uniform_build_vs_const_hash_full_indexed_float=115,933` still forces full VS constant hashing |
-| Queue append copy path | `submit_draw_run_batch_append_cpu_ms=2403.727ms` remains the largest submit child |
+| Queue append state/uniform path | [[state-churn-encode-encode-phase.29]] rejects raw payload copy as owner; state append and uniform lookup/append dominate the batch append child |
 | Backend encode buckets | `encode_draw_argbuf_setup_cpu_ms=3357.980ms`, `encode_draw_binding_packet_cpu_ms=2705.893ms`, and stream/index bind remain larger than this residual snapshot win |
 
 **Related.** [[snapshot-cache]] · [[state-churn-encode]] ·
