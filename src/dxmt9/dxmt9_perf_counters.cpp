@@ -130,6 +130,12 @@ struct Counters {
   std::atomic<std::uint64_t> submitDrawRunBatchAppendReserveCpuMaxNs{0};
   std::atomic<std::uint64_t> submitDrawRunBatchAppendStateCpuNs{0};
   std::atomic<std::uint64_t> submitDrawRunBatchAppendStateCpuMaxNs{0};
+  std::atomic<std::uint64_t> submitDrawRunBatchAppendStatePsoCpuNs{0};
+  std::atomic<std::uint64_t> submitDrawRunBatchAppendStatePsoCpuMaxNs{0};
+  std::atomic<std::uint64_t> submitDrawRunBatchAppendStateInvariantCpuNs{0};
+  std::atomic<std::uint64_t> submitDrawRunBatchAppendStateInvariantCpuMaxNs{0};
+  std::atomic<std::uint64_t> submitDrawRunBatchAppendStateSoaCpuNs{0};
+  std::atomic<std::uint64_t> submitDrawRunBatchAppendStateSoaCpuMaxNs{0};
   std::atomic<std::uint64_t> submitDrawRunBatchAppendUniformCpuNs{0};
   std::atomic<std::uint64_t> submitDrawRunBatchAppendUniformCpuMaxNs{0};
   std::atomic<std::uint64_t> submitDrawRunBatchAppendPayloadCpuNs{0};
@@ -1395,6 +1401,12 @@ constexpr CounterEntry kCounterTable[] = {
     {"submit_draw_run_batch_append_reserve_cpu_max_ms", CounterEntry::Kind::Milliseconds, &Counters::submitDrawRunBatchAppendReserveCpuMaxNs, nullptr, nullptr, 0.0},
     {"submit_draw_run_batch_append_state_cpu_ms", CounterEntry::Kind::Milliseconds, &Counters::submitDrawRunBatchAppendStateCpuNs, nullptr, nullptr, 0.0},
     {"submit_draw_run_batch_append_state_cpu_max_ms", CounterEntry::Kind::Milliseconds, &Counters::submitDrawRunBatchAppendStateCpuMaxNs, nullptr, nullptr, 0.0},
+    {"submit_draw_run_batch_append_state_pso_cpu_ms", CounterEntry::Kind::Milliseconds, &Counters::submitDrawRunBatchAppendStatePsoCpuNs, nullptr, nullptr, 0.0},
+    {"submit_draw_run_batch_append_state_pso_cpu_max_ms", CounterEntry::Kind::Milliseconds, &Counters::submitDrawRunBatchAppendStatePsoCpuMaxNs, nullptr, nullptr, 0.0},
+    {"submit_draw_run_batch_append_state_invariant_cpu_ms", CounterEntry::Kind::Milliseconds, &Counters::submitDrawRunBatchAppendStateInvariantCpuNs, nullptr, nullptr, 0.0},
+    {"submit_draw_run_batch_append_state_invariant_cpu_max_ms", CounterEntry::Kind::Milliseconds, &Counters::submitDrawRunBatchAppendStateInvariantCpuMaxNs, nullptr, nullptr, 0.0},
+    {"submit_draw_run_batch_append_state_soa_cpu_ms", CounterEntry::Kind::Milliseconds, &Counters::submitDrawRunBatchAppendStateSoaCpuNs, nullptr, nullptr, 0.0},
+    {"submit_draw_run_batch_append_state_soa_cpu_max_ms", CounterEntry::Kind::Milliseconds, &Counters::submitDrawRunBatchAppendStateSoaCpuMaxNs, nullptr, nullptr, 0.0},
     {"submit_draw_run_batch_append_uniform_cpu_ms", CounterEntry::Kind::Milliseconds, &Counters::submitDrawRunBatchAppendUniformCpuNs, nullptr, nullptr, 0.0},
     {"submit_draw_run_batch_append_uniform_cpu_max_ms", CounterEntry::Kind::Milliseconds, &Counters::submitDrawRunBatchAppendUniformCpuMaxNs, nullptr, nullptr, 0.0},
     {"submit_draw_run_batch_append_payload_cpu_ms", CounterEntry::Kind::Milliseconds, &Counters::submitDrawRunBatchAppendPayloadCpuNs, nullptr, nullptr, 0.0},
@@ -3193,6 +3205,27 @@ void countSubmitDrawRunBatchAppendStateCpuTime(std::uint64_t nanoseconds) {
   auto& c = counters();
   recordCpuTime(c.submitDrawRunBatchAppendStateCpuNs,
                 c.submitDrawRunBatchAppendStateCpuMaxNs,
+                nanoseconds);
+}
+
+void countSubmitDrawRunBatchAppendStatePsoCpuTime(std::uint64_t nanoseconds) {
+  auto& c = counters();
+  recordCpuTime(c.submitDrawRunBatchAppendStatePsoCpuNs,
+                c.submitDrawRunBatchAppendStatePsoCpuMaxNs,
+                nanoseconds);
+}
+
+void countSubmitDrawRunBatchAppendStateInvariantCpuTime(std::uint64_t nanoseconds) {
+  auto& c = counters();
+  recordCpuTime(c.submitDrawRunBatchAppendStateInvariantCpuNs,
+                c.submitDrawRunBatchAppendStateInvariantCpuMaxNs,
+                nanoseconds);
+}
+
+void countSubmitDrawRunBatchAppendStateSoaCpuTime(std::uint64_t nanoseconds) {
+  auto& c = counters();
+  recordCpuTime(c.submitDrawRunBatchAppendStateSoaCpuNs,
+                c.submitDrawRunBatchAppendStateSoaCpuMaxNs,
                 nanoseconds);
 }
 

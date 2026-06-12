@@ -841,18 +841,30 @@ struct ChunkSlot {
     {
       detail::ChunkSlotPerfScope scope(
           dxmt9::perf::countSubmitDrawRunBatchAppendStateCpuTime);
-      psoSubview = makeDrawPsoSubview(state);
-      invariant = DrawRunInvariant{
-          .viewportScissorHash = state.hot.key.viewportHash,
-          .runStableBindingHash =
-              state.hot.key.renderStateHash ^ (state.hot.key.vertexDeclHash << 1) ^
-              (static_cast<u64>(state.hot.textureMask) << 2) ^
-              (static_cast<u64>(state.hot.key.samplerStateMask) << 3),
-          .streamMask = state.hot.streamMask,
-          .textureMask = state.hot.textureMask,
-          .samplerStateMask = state.hot.key.samplerStateMask,
-      };
-      stateIndex = appendDrawState(std::move(state));
+      {
+        detail::ChunkSlotPerfScope psoScope(
+            dxmt9::perf::countSubmitDrawRunBatchAppendStatePsoCpuTime);
+        psoSubview = makeDrawPsoSubview(state);
+      }
+      {
+        detail::ChunkSlotPerfScope invariantScope(
+            dxmt9::perf::countSubmitDrawRunBatchAppendStateInvariantCpuTime);
+        invariant = DrawRunInvariant{
+            .viewportScissorHash = state.hot.key.viewportHash,
+            .runStableBindingHash =
+                state.hot.key.renderStateHash ^ (state.hot.key.vertexDeclHash << 1) ^
+                (static_cast<u64>(state.hot.textureMask) << 2) ^
+                (static_cast<u64>(state.hot.key.samplerStateMask) << 3),
+            .streamMask = state.hot.streamMask,
+            .textureMask = state.hot.textureMask,
+            .samplerStateMask = state.hot.key.samplerStateMask,
+        };
+      }
+      {
+        detail::ChunkSlotPerfScope soaScope(
+            dxmt9::perf::countSubmitDrawRunBatchAppendStateSoaCpuTime);
+        stateIndex = appendDrawState(std::move(state));
+      }
     }
     const auto firstParam = static_cast<std::uint32_t>(drawParams.size());
     const auto payloadOffset = static_cast<std::uint32_t>(drawPayloadArena.size());
