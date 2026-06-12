@@ -221,8 +221,11 @@ For dxmt9 3DMark05 perf probes, always launch through
 after the useful capture/perf artifacts have already been written, so the
 wrapper always passes a positive `run_experiment.py --timeout`: `120s` for
 no-gputrace scouts and `420s` for `.gputrace`/Xcode replay candidates unless
-`--timeout` or `DXMT_3DMARK05_PROBE_TIMEOUT` overrides it. Treat a
-timeout-finalized run with complete artifacts as valid input for the finalizer.
+`--timeout` or `DXMT_3DMARK05_PROBE_TIMEOUT` overrides it. The wrapper's
+top-level watchdog must include the effective capture delay before adding
+`DXMT_3DMARK05_PROBE_TIMEOUT_SLACK`, because `run_experiment.py` applies its
+timeout after the capture-delay/screenshot phase. Treat a timeout-finalized run
+with complete artifacts as valid input for the finalizer.
 If a 3DMark05 run had to be killed manually because it was stuck at the final
 frame, treat that as a timeout-policy failure and use a shorter positive
 timeout for the next run; do not use the manual-kill lifetime as a perf sample.

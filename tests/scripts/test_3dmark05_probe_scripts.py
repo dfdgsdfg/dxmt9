@@ -98,7 +98,8 @@ class ThreeDMark05ProbeScriptTests(unittest.TestCase):
 
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertIn("runner_timeout_sec: 10", result.stdout)
-        self.assertIn("watchdog_timeout_sec: 10+7", result.stdout)
+        self.assertIn("watchdog_timeout_sec: 10+70+7", result.stdout)
+        self.assertIn("capture_delay_sec: 70 (catalogue default)", result.stdout)
         cmd_line = next(line for line in result.stdout.splitlines() if line.startswith("cmd:"))
         self.assertIn("--timeout 10", cmd_line)
 
@@ -115,6 +116,7 @@ class ThreeDMark05ProbeScriptTests(unittest.TestCase):
 
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertIn("capture_delay_sec: 50", result.stdout)
+        self.assertIn("watchdog_timeout_sec: 120+50+45", result.stdout)
         cmd_line = next(line for line in result.stdout.splitlines() if line.startswith("cmd:"))
         self.assertIn("--capture-delay-sec 50", cmd_line)
 

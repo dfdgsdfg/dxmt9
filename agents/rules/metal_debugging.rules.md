@@ -203,9 +203,11 @@ paths consistently. The standard wrapper defaults to `120s` for no-gputrace
 scouts and `420s` for `.gputrace`/Xcode replay candidates, and passes that as
 an explicit `run_experiment.py --timeout`. It also wraps the entire
 `caffeinate run_experiment.py ...` command in a top-level watchdog at
-`timeout + DXMT_3DMARK05_PROBE_TIMEOUT_SLACK` (default slack `45s`) so a
-detached Wine/final-frame hang still gets terminated and postprocessed. Override
-wrapper `--timeout` only when the experiment needs a documented budget. A
+`timeout + effective capture delay + DXMT_3DMARK05_PROBE_TIMEOUT_SLACK`
+(default capture delay `70s`, default slack `45s`) so a detached
+Wine/final-frame hang still gets terminated after `run_experiment.py` has had
+time to timeout-finalize `result.json`. Override wrapper `--timeout` only when
+the experiment needs a documented budget. A
 timeout-finalized run with the
 expected artifacts is acceptable input for finalizer comparison; do not use the
 Wine process lifetime or a manual kill as a performance metric. If a run had

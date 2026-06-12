@@ -32,6 +32,7 @@ every A/B delta elsewhere is measured against [[baselines-frame50.01]],
 | H8 | The `v0.0.1` tag is the known-good visual correctness / alignment anchor for GT1 regression triage, and screenshot diffs against it are useful corruption finders | accepted | [[baselines-visual-capture.02]] |
 | H9 | `MTL_CAPTURE_ENABLED=1` is required for standard 3DMark05 gputrace probes | rejected | [[baselines-gputrace-capture.01]] (`MTL_CAPTURE_ENABLED=1` alone reproduced black-screen startup with draw/present counters at zero; omitting it restores normal GT1, but file/simple `developerTools` capture still need an inserted layer; external `.app` plist does not reach Wine's temp child, and tmp embedded-plist roots are not runtime-equivalent yet) |
 | H10 | Current visual-coupling frame60 smoke shows skipped/error/overflow/hazard-split work as the obvious muzzle/glow perf owner | rejected-current-smoke; post-`01:05` oracle refresh stays flat (`draw_skipped_no_pipeline=0`, `gpu_command_buffer_errors=0`, `map_buffer_wait_ms=0`, `queue_sequence_wait_ms=0`), while RT/depth/clear/present pass churn remains open | [[baselines-frame60.03]] |
+| H11 | The 120s no-gputrace timeout policy still produces standard `result.json` evidence when the wrapper watchdog includes capture delay | accepted | [[baselines-frame50.05]] |
 
 ## Verification methods
 
@@ -42,8 +43,10 @@ every A/B delta elsewhere is measured against [[baselines-frame50.01]],
   the expensive `.gputrace`/Xcode export; proves runtime-shape stability cheaply
   ([[baselines-frame50.02]], [[baselines-frame50.03]]).
 - **Timeout policy** — `--timeout` is mandatory and positive (120s no-gputrace,
-  420s gputrace); 3DMark05 hangs on the final frame, so the wrapper
-  timeout-finalizes (`timed_out=true`, `returncode=143`/`-15`). A
+  420s gputrace); 3DMark05 hangs on the final frame, so `run_experiment.py`
+  timeout-finalizes (`timed_out=true`, `returncode=143`/`-15`). The wrapper's
+  top-level watchdog must include the effective capture delay before adding
+  slack, otherwise it can kill the runner before `result.json` is written. A
   timeout-finalized run with expected artifacts is a valid counter sample;
   `process_elapsed_sec` is NOT an FPS metric.
 - **`scripts/tools/finalize_3dmark05_perf_probe.sh`** — after Xcode exports
@@ -67,6 +70,7 @@ flowchart TD
   F50san["baselines-frame50.02\nno-gputrace sanity\nFPS 9, shape stable"]
   F50to["baselines-frame50.03\ntimeout no-gputrace scout\n2026-06-05, gpu cb 4193ms"]
   F50wd["baselines-frame50.04\nwatchdog-cleanup scout\n2026-06-06, gpu cb 4208ms\nsame shape, no manual kill"]
+  F50wd120["baselines-frame50.05\n120s capture-delay-aware watchdog\n2026-06-12, result.json preserved\nsame post-uniform shape"]
   Visual["baselines-visual-capture.01\ntime-based screenshot caveat\nnot a visual oracle"]
   VisualAnchor["baselines-visual-capture.02\nv0.0.1 visual correctness anchor\ndiff-assisted triage"]
   CaptureEnv["baselines-gputrace-capture.01\nMTL_CAPTURE_ENABLED black-screen\nwrapper omits it by default"]
@@ -82,6 +86,7 @@ flowchart TD
   F50san -->|shape-stable, superseded-by| F50
   F50 -->|refreshed-by| F50to
   F50to -->|supervised-timeout-refresh| F50wd
+  F50wd -->|120s policy refresh| F50wd120
   F50wd -->|visual-smoke-caveat| Visual
   Visual -->|anchor-refined-by| VisualAnchor
   VisualAnchor -->|visual-alignment anchor for| F60post
@@ -94,7 +99,7 @@ flowchart TD
   F60post -->|baseline-for| Backend["[[backend-shape-classifiers]]"]
   F60post -->|baseline-for| Churn["[[state-churn-encode]]"]
 
-  class F120,F50,F50san,F50to,F50wd,F60,F60post,F60vc,RunLevel,VisualAnchor accepted
+  class F120,F50,F50san,F50to,F50wd,F50wd120,F60,F60post,F60vc,RunLevel,VisualAnchor accepted
   class Visual,CaptureEnv rejected
   class Store,IdxCache,VSOut,Backend,Churn open
 ```
@@ -109,6 +114,7 @@ flowchart TD
 | [[baselines-frame50.02]] | 2026-06-04 | — (HUD FPS 9) | — | no-gputrace; rows `50/0..3` match prior samples; `gpu_command_buffer_time_ms=4151.436` |
 | [[baselines-frame50.03]] | 2026-06-05 | — | — | no-gputrace timeout scout; `present_encoded=1440`, `gpu_command_buffer_time_ms=4193.474` |
 | [[baselines-frame50.04]] | 2026-06-06 | — | — | watchdog-cleanup no-gputrace scout; `present_encoded=1440`, `gpu_command_buffer_time_ms=4207.759`, `completion_wait_ms=31071.820`; shape flat vs baseline |
+| [[baselines-frame50.05]] | 2026-06-12 | — | — | 120s capture-delay-aware watchdog scout; `present_encoded=1680`, `result.json` preserved, `gpu_command_buffer_time_ms=5190.021`, `completion_wait_ms=40226.532`, `encode_draw_cpu_ms=16521.072`, `d3d9_snapshot_draw_submission_cpu_ms=6487.666`; shape flat vs [[snapshot-cache-snapshot.10]] |
 | [[baselines-frame60.01]] | 2026-06-01 | `34.02ms` | `33.481ms` / `98.41%` | VS write `1627.414MiB`; dxmt CPU `0.444MiB`; unexplained `1627.642MiB`; `7.9x` |
 | [[baselines-frame60.02]] | 2026-06-06 | `33.614ms` | `32.984ms` / `98.12%` | post-visualfix refresh; VS write `1627.332MiB`; hidden backend `1597.755MiB`; dxmt CPU `0.202MiB`; `7.9x` |
 | [[baselines-frame60.03]] | 2026-06-07/08 | — | — | visual-coupling no-gputrace scouts; initial run and post-`01:05` oracle refresh both keep `present_encoded=1680`, `draw_skipped_no_pipeline=0`, `gpu_command_buffer_errors=0`, `map_buffer_wait_ms=0`, `queue_sequence_wait_ms=0`; refresh split reasons are RT/depth `13,163`, clear `4,895`, present `1,673`; render-pass preservation remains `~120.1MiB/present`; sampled average `15.753fps`, steady late frames `~23fps` |
@@ -133,7 +139,8 @@ CPU writers explain ≈ `0.4 MiB`, and the visible `184B` MSL VSOut width is
 refresh confirms this shape after the latest visual/cbuf identity path:
 `33.614ms` total GPU, top-3 `98.12%`, VS write `1627.3MiB`, and hidden
 backend `1597.8MiB`. The no-gputrace [[baselines-frame50.02]] /
-[[baselines-frame50.03]] / [[baselines-frame50.04]] scouts prove the runtime shape is stable enough to
+[[baselines-frame50.03]] / [[baselines-frame50.04]] /
+[[baselines-frame50.05]] scouts prove the runtime shape is stable enough to
 treat frame50/frame60 as fixed A/B denominators.
 
 What is settled: the baseline numbers and the capture/finalize methodology

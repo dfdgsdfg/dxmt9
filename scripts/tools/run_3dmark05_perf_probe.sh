@@ -7,6 +7,21 @@ frame=${DXMT_3DMARK05_PROBE_FRAME:-60}
 timeout=${DXMT_3DMARK05_PROBE_TIMEOUT:-}
 timeout_slack=${DXMT_3DMARK05_PROBE_TIMEOUT_SLACK:-45}
 capture_delay_sec=${DXMT_3DMARK05_CAPTURE_DELAY_SEC:-}
+catalogue_capture_delay_sec=$(python3 - "$repo_root/experiments/CATALOGUE.toml" <<'PY'
+import sys
+import tomllib
+from pathlib import Path
+
+with Path(sys.argv[1]).open("rb") as handle:
+    catalogue = tomllib.load(handle)
+for app in catalogue.get("app", []):
+    if app.get("name") == "app-d3d9-3dmark05":
+        print(f"{float(app.get('capture_delay_sec', 70.0)):g}")
+        break
+else:
+    print("70")
+PY
+)
 capture_frames=${DXMT_3DMARK05_CAPTURE_FRAMES:-}
 capture_range=${DXMT_3DMARK05_CAPTURE_RANGE:-}
 capture_dir=${DXMT_3DMARK05_CAPTURE_DIR:-}
@@ -2395,6 +2410,15 @@ if [[ -n "$capture_delay_sec" && ! "$capture_delay_sec" =~ ^[0-9]+([.][0-9]+)?$ 
   echo "--capture-delay-sec must be non-negative numeric seconds" >&2
   exit 2
 fi
+effective_capture_delay_sec=${capture_delay_sec:-$catalogue_capture_delay_sec}
+watchdog_base_sec=$(python3 - "$timeout" "$effective_capture_delay_sec" <<'PY'
+import sys
+
+timeout = float(sys.argv[1])
+capture_delay = float(sys.argv[2])
+print(f"{timeout + capture_delay:g}")
+PY
+)
 
 if [[ -n "$capture_frames" && ! "$capture_frames" =~ ^[0-9]+([,;[:space:]][0-9]+)*$ ]]; then
   echo "--capture-frames must be a comma/semicolon/space separated positive integer list" >&2
@@ -4448,9 +4472,11 @@ echo "session_locked: $session_locked"
 echo "free_space_mb: $free_mb"
 echo "min_free_space_mb: $min_free_mb"
 echo "runner_timeout_sec: $timeout"
-echo "watchdog_timeout_sec: ${timeout}+${timeout_slack}"
+echo "watchdog_timeout_sec: ${timeout}+${effective_capture_delay_sec}+${timeout_slack}"
 if [[ -n "$capture_delay_sec" ]]; then
   echo "capture_delay_sec: $capture_delay_sec"
+else
+  echo "capture_delay_sec: ${effective_capture_delay_sec} (catalogue default)"
 fi
 if [[ -n "$capture_frames" ]]; then
   echo "capture_frames: $capture_frames"
@@ -4658,7 +4684,7 @@ run_status=0
 (
   cd "$repo_root"
   python3 scripts/tools/run_with_timeout.py \
-    --timeout "$timeout" \
+    --timeout "$watchdog_base_sec" \
     --slack "$timeout_slack" \
     --label 3dmark05-perf-wrapper \
     -- \
