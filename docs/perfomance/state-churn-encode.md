@@ -64,6 +64,7 @@ bottleneck — that is owned by [[hidden-backend-storage]].
 | H44 | Slot-local full-state interning amortizes the state SoA push | rejected; frontend generation fast path accepted as next proof | [[state-churn-encode-encode-phase.32]] (`0.150866%` state reuse hit rate; SoA `707ms→962ms`; first add generation/lane opportunity counters) |
 | H45 | Adjacent same stable-generation/lane submissions can skip the deep compat compare | accepted proof | [[state-churn-encode-encode-phase.33]] (`52.524409%` same-generation/lane pairs; `385,120/385,120` compatible; `0` incompatible) |
 | H46 | Using the generation/lane stamp as a compat fast path removes the compat scan bucket | accepted CPU win | [[state-churn-encode-encode-phase.34]] (`compat_scan` `557.621ms→44.923ms`; `draw_batch_submit` `3491.771ms→3070.200ms`) |
+| H47 | Filling queued `DrawRunSubmission` entries in place removes a first-order queue copy | accepted small CPU win; rejected as first-order | [[state-churn-encode-encode-phase.35]] (`queue-snapshot residual` `2286.890ms→2193.875ms`; total queue `-0.60%`) |
 
 ## Verification methods
 
@@ -186,6 +187,7 @@ flowchart TD
   EncodePhase32["encode-phase.32\nslot-state intern rejected\n0.15% reuse hits\nnext: generation/lane counters"]:::accepted
   EncodePhase33["encode-phase.33\ngeneration/lane proof\n52.5% pairs; 0 incompatible\nnext: compat fast path"]:::accepted
   EncodePhase34["encode-phase.34\ngeneration/lane fast path\ncompat scan -91.9%\nqueue still copy-bound"]:::accepted
+  EncodePhase35["encode-phase.35\nin-place submission fill\nresidual -93ms\nnot first-order"]:::accepted
   Snapshot10["snapshot.10\nuniform-refresh fast path\nrefresh -59.6%\nFPS flat"]:::accepted
 
   Drawrun1 -->|"split-into"| Drawrun2
@@ -244,6 +246,7 @@ flowchart TD
   EncodePhase31 -->|"slot interning rejected;\nmove upstream"| EncodePhase32
   EncodePhase32 -->|"stamp and count generation/lane"| EncodePhase33
   EncodePhase33 -->|"skip proven deep compares"| EncodePhase34
+  EncodePhase34 -->|"remove temporary submission move"| EncodePhase35
 ```
 
 ## Results synthesis
@@ -625,6 +628,18 @@ visible GT1 frame with machine-gun muzzle flash/bloom, and cuts
 snapshot/state copy and append work, so the next CPU work should move to F2
 in-place queue fill, persistent replay scratch, and then stronger state/layout
 copy elision for same-generation non-front submissions.
+
+[[state-churn-encode-encode-phase.35]] closes the first F2 microfix. The replay
+queue now fills `pendingDrawSubmissions.emplace_back()` directly instead of
+constructing a stack `DrawRunSubmission` and `push_back(move)`-ing it. The run
+is same-present versus phase.34 (`1740`), keeps a normal visible GT1 frame, and
+cuts the queue residual after subtracting nested snapshot time
+`2286.890ms -> 2193.875ms` (`1.314305 -> 1.260848ms/present`). The total
+`commit_chunk_queue_draw_submission_cpu_ms` moves only `8873.818ms ->
+8820.641ms` (`-0.60%`), so the old move was real waste but not the first-order
+owner. Continue with persistent replay scratch only as an isolated allocation
+test; the major remaining work is still snapshot/cache lookup, state/layout
+copy width, and append/state storage.
 
 ## How to run
 Every experiment here is a 3DMark05 GT1 run via the standard wrapper. This is a

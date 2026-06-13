@@ -1222,14 +1222,14 @@ int32_t queueDrawPrimitiveSubmission(
   if (failed(stateHr)) {
     return finish(stateHr);
   }
-  dxmt9::core::DrawRunSubmission submission{};
+  auto& submission = submissions.emplace_back();
   const int32_t hr =
       d->dev().snapshotDrawSubmissionFromCurrentState(makeRunParam(packet),
                                                       submission);
   if (failed(hr)) {
+    submissions.pop_back();
     return finish(hr);
   }
-  submissions.push_back(std::move(submission));
   return finish(dxmt9::core::D3D_OK);
 }
 
@@ -1253,13 +1253,13 @@ int32_t queueDrawIndexedPrimitiveSubmission(
   }
   auto draw = makeRunParam(packet);
   draw.indexType = d->dev().state().indexType;
-  dxmt9::core::DrawRunSubmission submission{};
+  auto& submission = submissions.emplace_back();
   const int32_t hr =
       d->dev().snapshotDrawSubmissionFromCurrentState(draw, submission);
   if (failed(hr)) {
+    submissions.pop_back();
     return finish(hr);
   }
-  submissions.push_back(std::move(submission));
   return finish(dxmt9::core::D3D_OK);
 }
 
