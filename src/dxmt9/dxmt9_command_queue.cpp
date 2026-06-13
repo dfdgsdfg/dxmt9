@@ -1265,6 +1265,18 @@ void CommandQueue::setSkipDrawResourceMarking(bool skip) {
   forceDrawResourceMarkingAfterSplit_ = false;
 }
 
+void CommandQueue::noteCommitChunkEntryForCompletionGap() {
+  queueLifecycle_.recordNoEnqueueWaitGapToCommitChunkEntry();
+}
+
+void CommandQueue::noteCommitChunkReplayStartForCompletionGap() {
+  queueLifecycle_.recordNoEnqueueWaitGapToCommitChunkReplayStart();
+}
+
+void CommandQueue::noteCommitChunkReplayEndForCompletionGap() {
+  queueLifecycle_.recordNoEnqueueWaitGapToCommitChunkReplayEnd();
+}
+
 void CommandQueue::markChunkResources(std::span<const core::ChunkHandleEntry> entries) {
   if (entries.empty()) {
     return;

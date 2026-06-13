@@ -1313,6 +1313,9 @@ extern "C" int32_t dxmt9c_device_commit_chunk(D9CDevice* d, const D9CCommandChun
   if (!d || !chunk || chunk->version != D9C_COMMAND_CHUNK_VERSION) {
     return commitChunkFail("bad-header");
   }
+  if (auto* q = findDirtyQueue(d)) {
+    q->noteCommitChunkEntryForCompletionGap();
+  }
   const auto* records = chunk->recordBytes != 0
                             ? wireHandlePtr<const dxmt9::core::u8>(chunk->records)
                             : nullptr;
@@ -1483,6 +1486,9 @@ extern "C" int32_t dxmt9c_device_commit_chunk(D9CDevice* d, const D9CCommandChun
       std::chrono::duration_cast<std::chrono::nanoseconds>(
           commitChunkStageEnd - commitChunkStageStart).count()));
   commitChunkStageStart = commitChunkStageEnd;
+  if (auto* q = findDirtyQueue(d)) {
+    q->noteCommitChunkReplayStartForCompletionGap();
+  }
 
   std::vector<dxmt9::core::DrawRunSubmission> pendingDrawSubmissions;
   pendingDrawSubmissions.reserve(std::min<std::uint32_t>(importedChunk.recordCount, 256u));
@@ -1966,6 +1972,9 @@ extern "C" int32_t dxmt9c_device_commit_chunk(D9CDevice* d, const D9CCommandChun
     return commitChunkFail("truncated-records", recordIndex, importedChunk.recordCount);
   }
   commitChunkStageEnd = std::chrono::steady_clock::now();
+  if (auto* q = findDirtyQueue(d)) {
+    q->noteCommitChunkReplayEndForCompletionGap();
+  }
   dxmt9::perf::countCommitChunkReplayCpuTime(static_cast<std::uint64_t>(
       std::chrono::duration_cast<std::chrono::nanoseconds>(
           commitChunkStageEnd - commitChunkStageStart).count()));

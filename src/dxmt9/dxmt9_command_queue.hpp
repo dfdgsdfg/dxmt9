@@ -156,6 +156,9 @@ class CommandQueue {
   // the existing value). Default false keeps non-chunk test/core paths
   // pinned by the run's hot resource set.
   void setSkipDrawResourceMarking(bool skip);
+  void noteCommitChunkEntryForCompletionGap();
+  void noteCommitChunkReplayStartForCompletionGap();
+  void noteCommitChunkReplayEndForCompletionGap();
   void submitClear(const core::ClearDesc& desc);
   void submitSurfaceCopy(const core::SurfaceCopyDesc& desc);
   void submitStretchRect(const core::StretchRectDesc& desc);

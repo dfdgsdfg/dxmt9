@@ -704,6 +704,9 @@ void countCompletionWaitStatus(std::uint64_t nanoseconds,
 void countCompletionWaitOverlap(std::uint64_t nanoseconds,
                                 std::uint64_t enqueuesDuringWait,
                                 bool hasPresent);
+void countCompletionNoEnqueueWaitToCommitChunkEntry(std::uint64_t nanoseconds);
+void countCompletionNoEnqueueWaitToCommitChunkReplayStart(std::uint64_t nanoseconds);
+void countCompletionNoEnqueueWaitToCommitChunkReplayEnd(std::uint64_t nanoseconds);
 void countCompletionNoEnqueueWaitToCommitPublish(std::uint64_t nanoseconds);
 void countCompletionNoEnqueueWaitToEncodeDequeue(std::uint64_t nanoseconds);
 void countCompletionNoEnqueueWaitToCommandBufferCommit(std::uint64_t nanoseconds);

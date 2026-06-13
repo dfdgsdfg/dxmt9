@@ -474,6 +474,11 @@ class QueueLifecycleController {
   void reclaimCompletedGpuSlots(u64 seqId);
   // TLA+: BeginWaitForSequence / EndWaitForSequence.
   void waitForSequence(std::unique_lock<std::mutex>& lock, u64 targetSeqId);
+  // Diagnostic stage probes from the last no-enqueue completion wait end to
+  // producer-side commit_chunk milestones.
+  void recordNoEnqueueWaitGapToCommitChunkEntry();
+  void recordNoEnqueueWaitGapToCommitChunkReplayStart();
+  void recordNoEnqueueWaitGapToCommitChunkReplayEnd();
 
  private:
   QueueControllerState currentState() const;
@@ -604,6 +609,9 @@ class QueueLifecycleController {
   bool noEnqueueGapCommitPublishRecorded_ = false;
   bool noEnqueueGapEncodeDequeueRecorded_ = false;
   bool noEnqueueGapCommandBufferCommitRecorded_ = false;
+  bool noEnqueueGapCommitChunkEntryRecorded_ = false;
+  bool noEnqueueGapCommitChunkReplayStartRecorded_ = false;
+  bool noEnqueueGapCommitChunkReplayEndRecorded_ = false;
 };
 
 class CompletionTracker {

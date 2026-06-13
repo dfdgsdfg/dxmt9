@@ -988,6 +988,24 @@ proof.
   pending enqueue `36.502/55.508ms`. The current wallclock owner is therefore
   hard under-pipelining at the P4 boundary plus P2/P3 CPU cadence that runs
   after the exposed wait instead of feeding a next command buffer during it.
+  The direct boundary/latency A/B
+  [[present-pacing-boundary-latency-ab.06]] rejects dxmt9's explicit boundary
+  wait as that missing producer-overlap lever: fresh baseline,
+  `DXMT9_DISABLE_PRESENT_BOUNDARY=1`, and
+  `DXMT9_MAX_FRAME_LATENCY=6 DXMT9_CAP_FRAME_LATENCY_TO_BACKBUFFERS=0` all keep
+  `present_boundary_waits=0`, `completion_wait_without_enqueue_ms≈44s`, and
+  sampled FPS p50 `17.8-18.0`; the disabled-boundary run proves env propagation
+  with `present_boundary_skipped=1740`. The next localization must therefore
+  timestamp before `CommitPublish` or outside dxmt9's explicit boundary wait
+  instead of re-tuning `DXMT9_*PRESENT_BOUNDARY*` policy.
+  That follow-up [[present-pacing-prepublish-stage.07]] shows the app/Wine/PE
+  side is not the long edge: wait-end to unix `commit_chunk` entry is only
+  p50/p95 `1.040/2.668ms`, while wait-end to `CommitPublish` remains
+  `15.894/29.912ms` and wait-end to Metal commit remains `22.276/54.146ms`.
+  Current average-FPS work is therefore back inside dxmt9 commit/replay/submit
+  and backend encode, with `commit_chunk_replay_cpu_ms=18981.064`, nested
+  `commit_chunk_queue_draw_submission_cpu_ms=8154.509`, and nested
+  `d3d9_snapshot_draw_submission_cpu_ms=6636.191` in the new scout.
   After the
   accepted cbuf identity, packet-cache, and snapshot hash
   work, `snapshot.09` was

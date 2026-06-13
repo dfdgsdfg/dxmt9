@@ -30,6 +30,8 @@ GPU frame-time story is owned by [[hidden-backend-storage]] /
 | H8 | Completion wait is caused by completion watcher backlog | rejected | [[present-pacing-completion-watcher-status.03]]: `completion_pending_depth_max=0`, dequeue age p50/p95 `0.041/0.067ms`, and `completion_dequeue_status_completed=0`. The watcher is not late; it waits on just-committed command buffers. |
 | H9 | Current average FPS should be attacked through P2/P3 CPU cadence plus P4 present-completion wait, not hot-frame GPU locality first | accepted gate split | [[present-pacing-current-fps-owner.04]]: current low-overhead scout has sampled FPS p50/p95 `18.102/26.630`, frame wall p50/p95 `55.242/84.648ms`, `completion_present_wait_ms=25.091ms/present`, `gpu_command_buffer_time_ms=3.113ms/present`, immediate presents only, `present_boundary_wait_ms=0`, and `completion_pending_depth_max=0`. GPU locality remains a hot-frame/ceiling lane, but average FPS requires P2/P3 wins and P4 pipeline-depth recovery. |
 | H10 | Completion wait is overlapped by next-frame enqueue/encode work | rejected; hard under-pipelining accepted | [[present-pacing-pipeline-overlap.05]]: `1799 / 1799` waits have no later CB enqueue during `waitUntilCompleted()`, `completion_wait_with_enqueue_ms=0`, `completion_wait_without_enqueue_ms=44789.044`, `completion_enqueue_while_waiting=0`, and enqueue-side pending depth max is only `1`. Stage run: wait-end -> publish/encode-dequeue/Metal-commit/enqueue p50 `16.645/20.116/36.470/36.502ms`, so producer and encode work both run after the wait instead of hiding under it. |
+| H11 | `DXMT9_DISABLE_PRESENT_BOUNDARY` or deeper `DXMT9_MAX_FRAME_LATENCY` makes the producer run while completion waits | rejected as current owner | [[present-pacing-boundary-latency-ab.06]]: fresh baseline, boundary-disabled, and latency6 scouts all keep `present_boundary_waits=0`, `completion_wait_without_enqueue_ms≈44.0-44.5s`, and sampled FPS p50 `17.8-18.0`. `DXMT9_DISABLE_PRESENT_BOUNDARY=1` reaches the runtime (`present_boundary_skipped=1740`) but creates only one noise-level overlap event also seen in baseline. The remaining owner is before `CommitPublish` or outside dxmt9's explicit boundary wait. |
+| H12 | The post-wait producer gap is app/Wine/macdrv-side, before unix `commit_chunk` entry | rejected; unix replay/submit owner accepted | [[present-pacing-prepublish-stage.07]]: wait-end -> `commit_chunk` entry p50/p95 is only `1.040/2.668ms`, while wait-end -> `CommitPublish` is `15.894/29.912ms` and wait-end -> Metal commit is `22.276/54.146ms`. `commit_chunk_replay_cpu_ms=18981.064`, nested queue draw submission is `8154.509ms`, and nested snapshot submission is `6636.191ms`, so the average-FPS lane remains commit/replay/snapshot/encode, not app/Wine event pacing. |
 
 ## Verification methods
 
@@ -89,6 +91,8 @@ flowchart TD
   CompletionStatus["completion-watcher-status.03\nno pending backlog;\nwait mostly from Committed CB"]
   CurrentOwner["current-fps-owner.04\nFPS owner split\nP2/P3 CPU cadence + P4 wait"]
   PipelineOverlap["pipeline-overlap.05\n1799/1799 waits have no later enqueue\npublish p50 16.6ms, commit p50 36.5ms after wait"]
+  BoundaryLatency["boundary-latency-ab.06\nDISABLE_PRESENT_BOUNDARY / latency6 flat\nexplicit boundary not owner"]
+  PrePublish["prepublish-stage.07\ncommit_chunk entry p50 1.0ms\npublish p50 15.9ms\nreplay/submit owner"]
   FrameLatency["frame-latency.01\nMAX_FRAME_LATENCY=3 + CAP=0\n(rejected: Δ +0.07%)"]
   AsyncAcq["async-acquire.01\nPRESENT_ASYNC_ACQUIRE=1\n(rejected: axis < 0.5% of wait)"]
   EncodeBudget["encode-budget.01\nencode_chunk p50 20.45 ms\nvs 16.67 ms vsync slot\n(attribution accepted)"]
@@ -125,6 +129,9 @@ flowchart TD
   CurrentImmediate --> CompletionStatus
   CompletionStatus --> CurrentOwner
   CurrentOwner --> PipelineOverlap
+  PipelineOverlap --> BoundaryLatency
+  BoundaryLatency --> PrePublish
+  PrePublish --> EncodeBudget
   PipelineOverlap --> EncodeBudget
   FrameLatency --> EncodeBudget
   AsyncAcq --> EncodeBudget
@@ -155,8 +162,8 @@ flowchart TD
   TexturePreResolve --> Remaining
   Remaining --> SCE
 
-  class DSync,EncodeBudget,CurrentImmediate,CompletionStatus,CurrentOwner,PipelineOverlap accepted
-  class FrameLatency,AsyncAcq,WorkA,StateNoop,DirtyIdentity,TexturePreResolve rejected
+  class DSync,EncodeBudget,CurrentImmediate,CompletionStatus,CurrentOwner,PipelineOverlap,PrePublish accepted
+  class FrameLatency,AsyncAcq,WorkA,StateNoop,DirtyIdentity,TexturePreResolve,BoundaryLatency rejected
   class FixProposal,Remaining,SCE proposed
   class Attribution,NextSplit,CleanGate,ReopenMask,Identity,IdentitySmoke,PacketSplit,PlanDirect,SnapshotSplit,SnapshotHash,PayloadSplit,UsageHash,FfpZero,ArgbufOpen,FastAppend,StreamBindSplit,TextureSplit,SamplerSkip,SamplerHash accepted
 ```
@@ -374,6 +381,24 @@ flowchart TD
   completion, with p50 `16.645/20.116/36.470/36.502ms`. P2/P3 wins should now
   be judged by whether they create overlap (`completion_wait_with_enqueue_ms`)
   or shrink the exposed no-enqueue wait and post-wait publish/encode gap.
+- [[present-pacing-boundary-latency-ab.06]] — REJECTED AS CURRENT OWNER.
+  A fresh same-code baseline plus `DXMT9_DISABLE_PRESENT_BOUNDARY=1` and
+  `DXMT9_MAX_FRAME_LATENCY=6 DXMT9_CAP_FRAME_LATENCY_TO_BACKBUFFERS=0` A/Bs
+  show the env knobs are not the missing producer-overlap lever. Boundary-off
+  reaches the runtime (`present_boundary_skipped=1740`), but all three runs keep
+  `present_boundary_waits=0`, `completion_wait_without_enqueue_ms≈44s`, and
+  sampled FPS p50 `17.8-18.0`. The next localization target is before
+  `CommitPublish` or outside dxmt9's explicit boundary wait.
+- [[present-pacing-prepublish-stage.07]] — ACCEPTED ATTRIBUTION.
+  New no-enqueue stage probes show the app/Wine/PE side re-enters unix
+  `commit_chunk` quickly after the completion wait ends: entry p50/p95 is
+  `1.040/2.668ms`. The queue still publishes much later
+  (`CommitPublish` p50/p95 `15.894/29.912ms`), and the run-level owners are
+  `commit_chunk_replay_cpu_ms=18981.064`,
+  `commit_chunk_queue_draw_submission_cpu_ms=8154.509`, and nested
+  `d3d9_snapshot_draw_submission_cpu_ms=6636.191`. The average-FPS target is
+  therefore unix replay/submit/snapshot plus backend encode, not app/Wine event
+  pacing.
 
 ## Cross-links
 
@@ -406,12 +431,19 @@ flowchart TD
   current failure mode is hard under-pipelining: no next command buffer is
   enqueued while the watcher waits. Hot-frame GPU locality remains open as a
   ceiling problem, not the first average-FPS lever.
+- dxmt9's explicit present-boundary wait and max-frame-latency token are not the
+  current under-pipelining owner. They are applied/skipped as requested, but
+  `present_boundary_waits=0` and the completion no-enqueue wait remains flat.
+- The post-wait producer path reaches unix `commit_chunk` quickly; the exposed
+  gap expands inside commit/replay/submit before queue publish and Metal commit.
 
 **Open target**
 
 - Recovering current GT1 direct fps requires reducing P2/P3 work that feeds
   present-bearing chunks, then proving that P4 completion/present wait and
-  frame sampling move, or redesigning the completion wait/waterline model;
+  frame sampling move. The latest stage split makes that P2/P3 work concrete:
+  unix commit/replay/snapshot/submit before `CommitPublish`, then backend
+  encode after `EncodeDequeue`;
   toggling
   `DXMT9_DISABLE_VSYNC` is no longer a valid lever unless
   `present_schedule_after_minimum_duration` is nonzero. The old
@@ -449,6 +481,13 @@ flowchart TD
   The compositor's vsync pacing dominates the per-CB wait regardless of
   how many frames are queued ahead.
   [[present-pacing-frame-latency.01]]
+- Current direct-path boundary/latency A/B as a producer-overlap lever:
+  `DXMT9_DISABLE_PRESENT_BOUNDARY=1` and
+  `DXMT9_MAX_FRAME_LATENCY=6 DXMT9_CAP_FRAME_LATENCY_TO_BACKBUFFERS=0` leave
+  `completion_wait_without_enqueue_ms≈44s` and sampled FPS p50 `17.8-18.0`.
+  The disabled-boundary run proves env propagation (`present_boundary_skipped =
+  1740`), but the explicit boundary was never sleeping (`present_boundary_waits
+  = 0`) in baseline. [[present-pacing-boundary-latency-ab.06]]
 - `DXMT9_PRESENT_ASYNC_ACQUIRE=1`: did exactly what its name says
   (`present_acquire_wait_ms` −37.5%) but the axis is < 0.5% of total
   wait budget; wallclock Δ +0.22% (noise); encode CPU +8.3% from

@@ -936,6 +936,15 @@ struct Counters {
   std::atomic<std::uint64_t> completionPresentWaitWithoutEnqueueNs{0};
   std::atomic<std::uint64_t> completionWaitEnqueuesDuringWait{0};
   std::atomic<std::uint64_t> completionWaitEnqueuesDuringWaitMax{0};
+  std::atomic<std::uint64_t> completionNoEnqueueWaitToCommitChunkEntry{0};
+  std::atomic<std::uint64_t> completionNoEnqueueWaitToCommitChunkEntryNs{0};
+  std::atomic<std::uint64_t> completionNoEnqueueWaitToCommitChunkEntryMaxNs{0};
+  std::atomic<std::uint64_t> completionNoEnqueueWaitToCommitChunkReplayStart{0};
+  std::atomic<std::uint64_t> completionNoEnqueueWaitToCommitChunkReplayStartNs{0};
+  std::atomic<std::uint64_t> completionNoEnqueueWaitToCommitChunkReplayStartMaxNs{0};
+  std::atomic<std::uint64_t> completionNoEnqueueWaitToCommitChunkReplayEnd{0};
+  std::atomic<std::uint64_t> completionNoEnqueueWaitToCommitChunkReplayEndNs{0};
+  std::atomic<std::uint64_t> completionNoEnqueueWaitToCommitChunkReplayEndMaxNs{0};
   std::atomic<std::uint64_t> completionNoEnqueueWaitToCommitPublish{0};
   std::atomic<std::uint64_t> completionNoEnqueueWaitToCommitPublishNs{0};
   std::atomic<std::uint64_t> completionNoEnqueueWaitToCommitPublishMaxNs{0};
@@ -1129,6 +1138,9 @@ struct Counters {
   PercentileRing commitChunkQueueDrawSubmissionCpuRing;
   PercentileRing commitChunkConstUploadCpuRing;
   PercentileRing completionDequeueAgeRing;
+  PercentileRing completionNoEnqueueWaitToCommitChunkEntryRing;
+  PercentileRing completionNoEnqueueWaitToCommitChunkReplayStartRing;
+  PercentileRing completionNoEnqueueWaitToCommitChunkReplayEndRing;
   PercentileRing completionNoEnqueueWaitToCommitPublishRing;
   PercentileRing completionNoEnqueueWaitToEncodeDequeueRing;
   PercentileRing completionNoEnqueueWaitToCommandBufferCommitRing;
@@ -2265,6 +2277,24 @@ constexpr CounterEntry kCounterTable[] = {
     {"completion_present_wait_without_enqueue_ms", CounterEntry::Kind::Milliseconds, &Counters::completionPresentWaitWithoutEnqueueNs, nullptr, nullptr, 0.0},
     {"completion_wait_enqueues_during_wait", CounterEntry::Kind::UnsignedCount, &Counters::completionWaitEnqueuesDuringWait, nullptr, nullptr, 0.0},
     {"completion_wait_enqueues_during_wait_max", CounterEntry::Kind::UnsignedCount, &Counters::completionWaitEnqueuesDuringWaitMax, nullptr, nullptr, 0.0},
+    {"completion_no_enqueue_wait_to_commit_chunk_entry", CounterEntry::Kind::UnsignedCount, &Counters::completionNoEnqueueWaitToCommitChunkEntry, nullptr, nullptr, 0.0},
+    {"completion_no_enqueue_wait_to_commit_chunk_entry_ms", CounterEntry::Kind::Milliseconds, &Counters::completionNoEnqueueWaitToCommitChunkEntryNs, nullptr, nullptr, 0.0},
+    {"completion_no_enqueue_wait_to_commit_chunk_entry_max_ms", CounterEntry::Kind::Milliseconds, &Counters::completionNoEnqueueWaitToCommitChunkEntryMaxNs, nullptr, nullptr, 0.0},
+    {"completion_no_enqueue_wait_to_commit_chunk_entry_p50_ms", CounterEntry::Kind::PercentileMs, nullptr, nullptr, &Counters::completionNoEnqueueWaitToCommitChunkEntryRing, 0.5},
+    {"completion_no_enqueue_wait_to_commit_chunk_entry_p95_ms", CounterEntry::Kind::PercentileMs, nullptr, nullptr, &Counters::completionNoEnqueueWaitToCommitChunkEntryRing, 0.95},
+    {"completion_no_enqueue_wait_to_commit_chunk_entry_p99_ms", CounterEntry::Kind::PercentileMs, nullptr, nullptr, &Counters::completionNoEnqueueWaitToCommitChunkEntryRing, 0.99},
+    {"completion_no_enqueue_wait_to_commit_chunk_replay_start", CounterEntry::Kind::UnsignedCount, &Counters::completionNoEnqueueWaitToCommitChunkReplayStart, nullptr, nullptr, 0.0},
+    {"completion_no_enqueue_wait_to_commit_chunk_replay_start_ms", CounterEntry::Kind::Milliseconds, &Counters::completionNoEnqueueWaitToCommitChunkReplayStartNs, nullptr, nullptr, 0.0},
+    {"completion_no_enqueue_wait_to_commit_chunk_replay_start_max_ms", CounterEntry::Kind::Milliseconds, &Counters::completionNoEnqueueWaitToCommitChunkReplayStartMaxNs, nullptr, nullptr, 0.0},
+    {"completion_no_enqueue_wait_to_commit_chunk_replay_start_p50_ms", CounterEntry::Kind::PercentileMs, nullptr, nullptr, &Counters::completionNoEnqueueWaitToCommitChunkReplayStartRing, 0.5},
+    {"completion_no_enqueue_wait_to_commit_chunk_replay_start_p95_ms", CounterEntry::Kind::PercentileMs, nullptr, nullptr, &Counters::completionNoEnqueueWaitToCommitChunkReplayStartRing, 0.95},
+    {"completion_no_enqueue_wait_to_commit_chunk_replay_start_p99_ms", CounterEntry::Kind::PercentileMs, nullptr, nullptr, &Counters::completionNoEnqueueWaitToCommitChunkReplayStartRing, 0.99},
+    {"completion_no_enqueue_wait_to_commit_chunk_replay_end", CounterEntry::Kind::UnsignedCount, &Counters::completionNoEnqueueWaitToCommitChunkReplayEnd, nullptr, nullptr, 0.0},
+    {"completion_no_enqueue_wait_to_commit_chunk_replay_end_ms", CounterEntry::Kind::Milliseconds, &Counters::completionNoEnqueueWaitToCommitChunkReplayEndNs, nullptr, nullptr, 0.0},
+    {"completion_no_enqueue_wait_to_commit_chunk_replay_end_max_ms", CounterEntry::Kind::Milliseconds, &Counters::completionNoEnqueueWaitToCommitChunkReplayEndMaxNs, nullptr, nullptr, 0.0},
+    {"completion_no_enqueue_wait_to_commit_chunk_replay_end_p50_ms", CounterEntry::Kind::PercentileMs, nullptr, nullptr, &Counters::completionNoEnqueueWaitToCommitChunkReplayEndRing, 0.5},
+    {"completion_no_enqueue_wait_to_commit_chunk_replay_end_p95_ms", CounterEntry::Kind::PercentileMs, nullptr, nullptr, &Counters::completionNoEnqueueWaitToCommitChunkReplayEndRing, 0.95},
+    {"completion_no_enqueue_wait_to_commit_chunk_replay_end_p99_ms", CounterEntry::Kind::PercentileMs, nullptr, nullptr, &Counters::completionNoEnqueueWaitToCommitChunkReplayEndRing, 0.99},
     {"completion_no_enqueue_wait_to_commit_publish", CounterEntry::Kind::UnsignedCount, &Counters::completionNoEnqueueWaitToCommitPublish, nullptr, nullptr, 0.0},
     {"completion_no_enqueue_wait_to_commit_publish_ms", CounterEntry::Kind::Milliseconds, &Counters::completionNoEnqueueWaitToCommitPublishNs, nullptr, nullptr, 0.0},
     {"completion_no_enqueue_wait_to_commit_publish_max_ms", CounterEntry::Kind::Milliseconds, &Counters::completionNoEnqueueWaitToCommitPublishMaxNs, nullptr, nullptr, 0.0},
@@ -5220,6 +5250,30 @@ void countCompletionNoEnqueueWaitToCommitPublish(std::uint64_t nanoseconds) {
   add(c.completionNoEnqueueWaitToCommitPublishNs, nanoseconds);
   updateMax(c.completionNoEnqueueWaitToCommitPublishMaxNs, nanoseconds);
   recordRing(c.completionNoEnqueueWaitToCommitPublishRing, nanoseconds);
+}
+
+void countCompletionNoEnqueueWaitToCommitChunkEntry(std::uint64_t nanoseconds) {
+  auto& c = counters();
+  add(c.completionNoEnqueueWaitToCommitChunkEntry);
+  add(c.completionNoEnqueueWaitToCommitChunkEntryNs, nanoseconds);
+  updateMax(c.completionNoEnqueueWaitToCommitChunkEntryMaxNs, nanoseconds);
+  recordRing(c.completionNoEnqueueWaitToCommitChunkEntryRing, nanoseconds);
+}
+
+void countCompletionNoEnqueueWaitToCommitChunkReplayStart(std::uint64_t nanoseconds) {
+  auto& c = counters();
+  add(c.completionNoEnqueueWaitToCommitChunkReplayStart);
+  add(c.completionNoEnqueueWaitToCommitChunkReplayStartNs, nanoseconds);
+  updateMax(c.completionNoEnqueueWaitToCommitChunkReplayStartMaxNs, nanoseconds);
+  recordRing(c.completionNoEnqueueWaitToCommitChunkReplayStartRing, nanoseconds);
+}
+
+void countCompletionNoEnqueueWaitToCommitChunkReplayEnd(std::uint64_t nanoseconds) {
+  auto& c = counters();
+  add(c.completionNoEnqueueWaitToCommitChunkReplayEnd);
+  add(c.completionNoEnqueueWaitToCommitChunkReplayEndNs, nanoseconds);
+  updateMax(c.completionNoEnqueueWaitToCommitChunkReplayEndMaxNs, nanoseconds);
+  recordRing(c.completionNoEnqueueWaitToCommitChunkReplayEndRing, nanoseconds);
 }
 
 void countCompletionNoEnqueueWaitToEncodeDequeue(std::uint64_t nanoseconds) {
