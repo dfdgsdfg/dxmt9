@@ -400,6 +400,63 @@ Hot-path allocation policy:
   objects, but steady-state replay of imported records must not allocate from the
   system heap.
 
+### 2.5 Draw-Run Batch Compatibility
+
+Draw-run batching coalesces adjacent draws that share one canonical render state
+into a single execution record, so the encoder binds state once and issues N draw
+calls. Grouping keys on the producer's `{stateGeneration, stateLane}` stamp: the
+stamp is the producer's witness that two `DrawRunSubmission`s were snapshotted
+from the same stable cache object (`cachedBaseDrawStateForSubmissionBatch()`),
+which is sufficient for them to share one canonical state. Per-draw differences
+ride `DrawParam`, the binding-override / snapshot payloads, and the interned
+`DrawUniformHandle`; the per-draw binding rides a `DrawBindingOverride` built from
+the live `DeviceState`, so `state.hot` is binding-agnostic
+(`clearDrawStateBindingFields`).
+
+The producer materializes one canonical state per stamp-run — the run front — and
+elides the `state.hot` / `shaderLayout` copy for same-stamp continuations.
+`CommandQueue::submitDrawRunBatch` groups adjacent submissions whose stamps match,
+and `ChunkSlot::appendDrawRunBatch` stores the run-front state once. The only
+canonical state ever materialized is the one the batch keeps — the
+no-discarded-materialization floor for draw state (R-ARCH-7.2, carrier part of
+R-ARCH-7.4).
+
+```mermaid
+flowchart LR
+  Draw["per-draw snapshot"] --> Same{"same {generation,lane}\nas previous submission?"}
+  Same -->|yes| Elide["carry DrawParam + binding +\nuniform handle only\n(no state.hot / shaderLayout copy)"]
+  Same -->|no| Front["materialize run-front state\n(FlatDrawStateRecord + shaderLayout)"]
+  Elide --> Group["submitDrawRunBatch:\ngroup by stamp"]
+  Front --> Group
+  Group --> Append["appendDrawRunBatch:\nstore front state once"]
+```
+
+**Invariants.**
+
+- *Stamp soundness.* Equal `{generation, lane}` implies byte-equal batch-consumed
+  state. Only `front().state` is consumed downstream — by `makeDrawPsoSubview`,
+  the `DrawRunInvariant` (render / decl / texture / sampler / stream masks and
+  hashes), resource marking (`markDrawResources`), the back-buffer handle, and
+  encode; every batch-front read addresses `front()`, never `back()`. The stamp
+  covers every field those readers touch: constant-value drift within a generation
+  is safe (none read the constant hashes — constants ride the per-draw
+  `DrawUniformHandle`), and binding-field drift is safe (binding-agnostic
+  `state.hot` clears those fields and the encoder binds from the per-draw
+  `DrawBindingOverride`). Any field a mid-generation refresh (uniform refresh,
+  binding-layout stride refresh) can change while the stamp stays equal, and that
+  a front reader also consumes, forces a new generation or is excluded from the
+  elided record.
+- *Run-front availability.* Every group front is a materialized run front: a group
+  boundary is a stamp change, and the elide materializes exactly the submissions
+  whose stamp differs from their predecessor.
+
+**Stamp-only grouping.** Grouping reads only the stamp, never a non-front
+`state.hot`, so an elided continuation never needs a materialized state for a
+state-reading fallback — there is none. Batching granularity is therefore
+snapshot identity: a stamp-run is as long as the stable-state-generation run that
+produced it, so the producer keeps the cache snapshot stable across compatible
+draws to keep runs long.
+
 ---
 
 ## 3. Encoder Lifecycle
