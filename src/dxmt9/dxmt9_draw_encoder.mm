@@ -2131,28 +2131,12 @@ void countVertexBufferBindSkipped() {
   perf::countBaseStateBindSkipExtended(1, 0, 0, 0, 0, 0, 0);
 }
 
-void countIndexBufferBindSkipped() {
-  perf::countBaseStateBindSkipExtended(0, 1, 0, 0, 0, 0, 0);
-}
-
 void countPipelineBindSkipped() {
   perf::countBaseStateBindSkipExtended(0, 0, 1, 0, 0, 0, 0);
 }
 
 void countDepthStateBindSkipped() {
   perf::countBaseStateBindSkipExtended(0, 0, 0, 1, 0, 0, 0);
-}
-
-void countViewportBindSkipped() {
-  perf::countBaseStateBindSkipExtended(0, 0, 0, 0, 1, 0, 0);
-}
-
-void countScissorBindSkipped() {
-  perf::countBaseStateBindSkipExtended(0, 0, 0, 0, 0, 1, 0);
-}
-
-void countRasterizerBindSkipped() {
-  perf::countBaseStateBindSkipExtended(0, 0, 0, 0, 0, 0, 1);
 }
 
 u64 textureSamplerShadowHash(u64 tag,
@@ -10200,14 +10184,26 @@ bool encodeDraw(EncodeContext& ctx,
   if (argbufHybridMode && reopenArgbufHybrid) {
     PerfScope argbufSetupScope(perf::countEncodeDrawArgbufSetupCpuTime);
     PerfScope argbufOpenScope(perf::countEncodeDrawArgbufOpenCpuTime);
-    const auto populated = dxmt9::argbuf_hybrid::openArgbuf(
-        ctx.queue, argbufEncoderForDraw, seqId);
+    const auto populated = [&]() {
+      PerfScope argbufOpenCallScope(
+          perf::countEncodeDrawArgbufOpenCallCpuTime);
+      return dxmt9::argbuf_hybrid::openArgbuf(
+          ctx.queue, argbufEncoderForDraw, seqId);
+    }();
     if (populated && !suppressRecordedMetalCalls(ctx)) {
-      const u64 tableHash =
-          argbufTableShadowHash(populated.storage.handle, populated.offset);
-      const bool tableUnchanged =
-          textureSamplerShadow && textureSamplerShadow->argbufTableValid &&
-          textureSamplerShadow->argbufTableHash == tableHash;
+      PerfScope argbufReopenPostScope(
+          perf::countEncodeDrawArgbufReopenPostCpuTime);
+      u64 tableHash = 0;
+      bool tableUnchanged = false;
+      {
+        PerfScope tableProbeScope(
+            perf::countEncodeDrawArgbufReopenTableProbeCpuTime);
+        tableHash =
+            argbufTableShadowHash(populated.storage.handle, populated.offset);
+        tableUnchanged =
+            textureSamplerShadow && textureSamplerShadow->argbufTableValid &&
+            textureSamplerShadow->argbufTableHash == tableHash;
+      }
       if (!tableUnchanged) {
         PerfScope tableBindScope(perf::countEncodeDrawArgbufTableBindCpuTime);
         encoder.setVertexBuffer(populated.storage, populated.offset,
@@ -10216,6 +10212,8 @@ bool encodeDraw(EncodeContext& ctx,
                                   dxmt9::shaders::kArgbufHybridBindSlot);
         perf::countEncodeDrawArgbufTableBindCalls(1u);
         if (textureSamplerShadow) {
+          PerfScope tableShadowStoreScope(
+              perf::countEncodeDrawArgbufReopenTableShadowStoreCpuTime);
           textureSamplerShadow->argbufTableValid = true;
           textureSamplerShadow->argbufTableHash = tableHash;
           if (dxmt9::shaders::kArgbufHybridBindSlot <
@@ -10228,23 +10226,38 @@ bool encodeDraw(EncodeContext& ctx,
       } else {
         perf::countEncodeDrawArgbufTableBindSkipped(1u);
       }
-      perf::countArgbufHybridBytes(populated.length);
-      if (encoderBreakdown) {
-        encoderBreakdown->addArgbufTableBytes(populated.length);
+      {
+        PerfScope byteAccountScope(
+            perf::countEncodeDrawArgbufReopenByteAccountCpuTime);
+        perf::countArgbufHybridBytes(populated.length);
+        if (encoderBreakdown) {
+          encoderBreakdown->addArgbufTableBytes(populated.length);
+        }
       }
-      const bool canRepointCachedCbufs =
-          argbufCbufCache &&
-          argbufCbufCache->matches(argbufPayloadHash) &&
-          !uniform::anyDirty(*dirtyPtr, argbufConsumedBits);
+      bool canRepointCachedCbufs = false;
+      {
+        PerfScope cbufCacheProbeScope(
+            perf::countEncodeDrawArgbufReopenCbufCacheProbeCpuTime);
+        canRepointCachedCbufs =
+            argbufCbufCache &&
+            argbufCbufCache->matches(argbufPayloadHash) &&
+            !uniform::anyDirty(*dirtyPtr, argbufConsumedBits);
+      }
       if (canRepointCachedCbufs) {
         perf::countEncodeDrawArgbufCbufReopenFullRepointCalls(1u);
-        for (u32 i = 0; i < argbufCbufCache->bindings.entries.size(); ++i) {
-          dxmt9::argbuf_hybrid::pointConstantBufferBinding(
-              argbufEncoderForDraw, i, argbufCbufCache->bindings.entries[i],
-              nullptr, encoder);
+        {
+          PerfScope fullRepointScope(
+              perf::countEncodeDrawArgbufCbufFullRepointCpuTime);
+          for (u32 i = 0; i < argbufCbufCache->bindings.entries.size(); ++i) {
+            dxmt9::argbuf_hybrid::pointConstantBufferBinding(
+                argbufEncoderForDraw, i, argbufCbufCache->bindings.entries[i],
+                nullptr, encoder);
+          }
         }
       } else {
         auto forceDirty = [&](std::uint16_t mask) {
+          PerfScope forceDirtyScope(
+              perf::countEncodeDrawArgbufReopenCbufForceDirtyCpuTime);
           dirtyPtr->mask = static_cast<std::uint16_t>(dirtyPtr->mask | mask);
         };
         auto pointCachedBinding = [&](u32 argbufIndex) -> bool {
@@ -10262,8 +10275,13 @@ bool encodeDraw(EncodeContext& ctx,
           perf::countEncodeDrawArgbufCbufCachedRepointBytes(binding.bytes);
           return true;
         };
-        const bool hasAnyCbufDirty =
-            uniform::anyDirty(*dirtyPtr, argbufConsumedBits);
+        bool hasAnyCbufDirty = false;
+        {
+          PerfScope dirtyScanScope(
+              perf::countEncodeDrawArgbufReopenCbufDirtyScanCpuTime);
+          hasAnyCbufDirty =
+              uniform::anyDirty(*dirtyPtr, argbufConsumedBits);
+        }
         if (!hasAnyCbufDirty) {
           // Payload hash drift without matching dirty bits is not trusted as
           // a whole-payload decision. Probe each cbuf category by its current
@@ -10347,20 +10365,30 @@ bool encodeDraw(EncodeContext& ctx,
               perf::countEncodeDrawArgbufCbufContentProbeFfpPsMisses);
         } else {
           perf::countEncodeDrawArgbufCbufReopenPartialCandidates(1u);
-          if (uniform::anyDirty(*dirtyPtr, uniform::kVsAny)) {
-            perf::countEncodeDrawArgbufCbufReopenDirtyVs(1u);
-          }
-          if (uniform::anyDirty(*dirtyPtr, uniform::kPsAny)) {
-            perf::countEncodeDrawArgbufCbufReopenDirtyPs(1u);
-          }
-          if (uniform::anyDirty(*dirtyPtr, uniform::kFfpVsAny)) {
-            perf::countEncodeDrawArgbufCbufReopenDirtyFfpVs(1u);
-          }
-          if (uniform::anyDirty(*dirtyPtr, uniform::kFfpPsAny)) {
-            perf::countEncodeDrawArgbufCbufReopenDirtyFfpPs(1u);
+          {
+            PerfScope dirtyScanScope(
+                perf::countEncodeDrawArgbufReopenCbufDirtyScanCpuTime);
+            if (uniform::anyDirty(*dirtyPtr, uniform::kVsAny)) {
+              perf::countEncodeDrawArgbufCbufReopenDirtyVs(1u);
+            }
+            if (uniform::anyDirty(*dirtyPtr, uniform::kPsAny)) {
+              perf::countEncodeDrawArgbufCbufReopenDirtyPs(1u);
+            }
+            if (uniform::anyDirty(*dirtyPtr, uniform::kFfpVsAny)) {
+              perf::countEncodeDrawArgbufCbufReopenDirtyFfpVs(1u);
+            }
+            if (uniform::anyDirty(*dirtyPtr, uniform::kFfpPsAny)) {
+              perf::countEncodeDrawArgbufCbufReopenDirtyFfpPs(1u);
+            }
           }
           auto repointCleanOrForceDirty = [&](std::uint16_t mask, u32 argbufIndex) {
-            if (uniform::anyDirty(*dirtyPtr, mask)) {
+            bool dirty = false;
+            {
+              PerfScope dirtyScanScope(
+                  perf::countEncodeDrawArgbufReopenCbufDirtyScanCpuTime);
+              dirty = uniform::anyDirty(*dirtyPtr, mask);
+            }
+            if (dirty) {
               return;
             }
             if (!pointCachedBinding(argbufIndex)) {
@@ -12229,6 +12257,15 @@ bool encodeDraw(EncodeContext& ctx,
     u64 splitChunkStream0SpanMax = 0u;
     bool splitWouldApply = false;
     bool indexReorderApplied = false;
+    const bool encoderBreakdownActive =
+        encoderBreakdown && encoderBreakdown->enabled;
+    const bool streamIbStagingEnabled =
+        streamIbStagingActive(streamIbStagingCache);
+    const bool indexedDiagnosticsEnabled =
+        debug::indexedTriangleDiagnosticsEnabled() ||
+        (effectDrawTraceEnabled() && effectDrawTraceGeometryEnabled());
+    const bool needIndexBytesForDiagnostics =
+        encoderBreakdownActive || indexedDiagnosticsEnabled;
     {
       PerfScope streamBindIndexScope(perf::countEncodeDrawStreamBindCpuTime);
       PerfScope streamBindIndexPhaseScope(
@@ -12260,15 +12297,17 @@ bool encodeDraw(EncodeContext& ctx,
             indexBuffer = WMT::Buffer{indexSnapshot
                 ? indexSnapshot->metalHandle
                 : buffer->buffer.handle};
-            if (const auto bytes = snapshotBufferBytes(indexSnapshot);
-                !bytes.empty()) {
-              indexBytesForReuse = bytes;
-            } else if (!buffer->shadow.empty()) {
-              indexBytesForReuse = buffer->shadow;
-            } else if (buffer->contents) {
-              indexBytesForReuse = std::span<const u8>(
-                  static_cast<const u8*>(buffer->contents),
-                  static_cast<std::size_t>(buffer->desc.size));
+            if (needIndexBytesForDiagnostics) {
+              if (const auto bytes = snapshotBufferBytes(indexSnapshot);
+                  !bytes.empty()) {
+                indexBytesForReuse = bytes;
+              } else if (!buffer->shadow.empty()) {
+                indexBytesForReuse = buffer->shadow;
+              } else if (buffer->contents) {
+                indexBytesForReuse = std::span<const u8>(
+                    static_cast<const u8*>(buffer->contents),
+                    static_cast<std::size_t>(buffer->desc.size));
+              }
             }
           } else if (buffer && !buffer->shadow.empty()) {
             indexBytesForReuse = buffer->shadow;
@@ -12282,6 +12321,13 @@ bool encodeDraw(EncodeContext& ctx,
           }
         }
       }
+      const bool defaultIndexedFastPath =
+          !needIndexBytesForDiagnostics && !streamIbStagingEnabled;
+      if (defaultIndexedFastPath) {
+        if (indexBuffer) {
+          countIndexBufferBind();
+        }
+      } else {
       const std::span<const u8> originalIndexBytesForReuse = indexBytesForReuse;
       const u32 originalIndexReuseStartIndex = indexReuseStartIndex;
       const char* effectiveIndexSource = "original";
@@ -12297,8 +12343,6 @@ bool encodeDraw(EncodeContext& ctx,
       splitMaxChunksPerDraw = debug::splitLargeIndexedDrawMaxChunksPerDraw();
       const bool triangleList =
           pv.primitiveType == core::PrimitiveType::TriangleList;
-      const bool encoderBreakdownActive =
-          encoderBreakdown && encoderBreakdown->enabled;
       // When a seq filter is active, keep expensive indexed diagnostics inside
       // the selected frame. Otherwise measurement can slow 3DMark05 enough to
       // change which semantic workload a frame/encoder row represents.
@@ -12845,7 +12889,7 @@ bool encodeDraw(EncodeContext& ctx,
           }
         }
       }
-      if (streamIbStagingActive(streamIbStagingCache) &&
+      if (streamIbStagingEnabled &&
           !probeApplied &&
           !optimizedApplied &&
           pv.userIndexData.empty() &&
@@ -13110,6 +13154,7 @@ bool encodeDraw(EncodeContext& ctx,
         if (encoderBreakdown) {
           encoderBreakdown->recordIndexBufferMetalBind();
         }
+      }
       }
     }
     if (indexBuffer) {

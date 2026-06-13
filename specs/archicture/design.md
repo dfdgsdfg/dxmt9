@@ -128,15 +128,25 @@ Copies that should be treated as regressions:
   surviving record is materialized and per-draw deltas ride `DrawParam` +
   binding-override/snapshot payloads (R-ARCH-7.2);
 - building a record in an intermediate carrier and copying it into the owned
-  arena/SoA slot when the destination was already known — the producer
-  constructs in place into the owned slot instead (R-ARCH-7.4).
+  arena/SoA slot when the destination was already known — the target design is
+  to construct directly into the owned slot instead (R-ARCH-7.4).
 
 Construct-in-place and unified memory (R-ARCH-7.4, R-ARCH-7.5):
 
-- The producer builds the surviving canonical draw state and the per-draw
-  uniform/constant bytes directly into their owned destinations — the ChunkSlot
-  SoA slot and the shared-storage transient/argbuf allocation — rather than into
-  a `DrawRunSubmission`-style carrier that is then copied in.
+- Target: the producer builds the surviving canonical draw state and the
+  per-draw uniform/constant bytes directly into their owned destinations — the
+  ChunkSlot SoA slot and the shared-storage transient/argbuf allocation —
+  rather than into a `DrawRunSubmission`-style carrier that is then copied in.
+- Current status: dirty constant bytes are built directly into shared-storage
+  transient/argbuf memory. Draw-run state now avoids materializing same-stamp
+  N-1 non-front records in the default binding-agnostic snapshot path, and the
+  queue accepts elided continuations without reducing normal compatibility
+  grouping. The surviving front/materialized state still travels through
+  `DrawRunSubmission` before `ChunkSlot::appendDrawRunBatch` stores it, so
+  direct construction into the queue-owned slot remains open. Adjacent uniform
+  payload elision is measured and rejected for 3DMark05 GT1:
+  `d3d9_snapshot_uniform_elided=0`, so uniform snapshot reuse is not a live GT1
+  target.
 - A shared (`MTLStorageModeShared`) backing is the GPU-read allocation itself, so
   on Apple Silicon the in-place build of dirty constants is the upload; no
   separate CPU-struct-then-staging copy is required (R-BACK-5.7). The allocation
@@ -146,9 +156,11 @@ Construct-in-place and unified memory (R-ARCH-7.4, R-ARCH-7.5):
 The copy-class map marks each materialization point on the target warm draw path.
 Green is a mandatory floor copy or construct-in-place materialization
 (R-ARCH-7.1 / R-ARCH-7.5); blue is a move, reference, or direct bind that copies
-no payload bytes. The surviving front draw state is constructed directly into the
-queue-owned slot (R-ARCH-7.2 / R-ARCH-7.4), so no per-draw carrier copy appears;
-the current shortfall against this target is tracked in `gap.md`.
+no payload bytes. The diagram is the target warm draw path: the surviving front
+draw state is constructed directly into the queue-owned slot (R-ARCH-7.2 /
+R-ARCH-7.4), so no per-draw carrier copy appears. The current implementation is
+short of that target for draw state; `gap.md` tracks the default same-stamp
+state elision and the remaining direct-construct work.
 
 ```mermaid
 flowchart TD

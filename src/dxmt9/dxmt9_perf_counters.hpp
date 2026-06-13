@@ -71,6 +71,26 @@ enum class RingArenaKind : std::uint8_t {
   CopyTemp,
 };
 
+enum class D3D9SnapshotUniformBuildContext : std::uint8_t {
+  None = 0,
+  BatchMiss,
+};
+
+class ScopedD3D9SnapshotUniformBuildContext {
+ public:
+  explicit ScopedD3D9SnapshotUniformBuildContext(
+      D3D9SnapshotUniformBuildContext context) noexcept;
+  ~ScopedD3D9SnapshotUniformBuildContext();
+
+  ScopedD3D9SnapshotUniformBuildContext(
+      const ScopedD3D9SnapshotUniformBuildContext&) = delete;
+  ScopedD3D9SnapshotUniformBuildContext& operator=(
+      const ScopedD3D9SnapshotUniformBuildContext&) = delete;
+
+ private:
+  D3D9SnapshotUniformBuildContext previous_;
+};
+
 // R-BACK-2.10 / 2.27: chunk admit/reject + ring arena heap fallback
 // counters. Aggregate values surface bridge backpressure and ring
 // exhaustion that R-BACK-2.6/2.13 invariants assume bounded.
@@ -178,8 +198,11 @@ void countCommitChunkDrawRunBuildCpuTime(std::uint64_t nanoseconds);
 void countCommitChunkDrawRunSubmitCpuTime(std::uint64_t nanoseconds);
 void countCommitChunkDrawRunFinalBindCpuTime(std::uint64_t nanoseconds);
 void countCommitChunkQueueDrawSubmissionCpuTime(std::uint64_t nanoseconds);
+void countCommitChunkQueueDrawSubmissionEmplaceCpuTime(std::uint64_t nanoseconds);
 void countCommitChunkConstUploadCpuTime(std::uint64_t nanoseconds);
 void countSubmitDrawRunBatchGroup(std::uint32_t recordCount);
+void countSubmitDrawRunBatchDiscardedState(std::uint64_t records,
+                                           std::uint64_t bytes);
 void countSubmitDrawRunBindingSnapshotCpuTime(std::uint64_t nanoseconds);
 void countSubmitDrawRunPayloadBytesCpuTime(std::uint64_t nanoseconds);
 void countSubmitDrawRunSlotPrepareCpuTime(std::uint64_t nanoseconds);
@@ -208,12 +231,18 @@ void countSubmitDrawRunBatchAppendPayloadBytes(std::uint64_t bytes);
 void countSubmitDrawRunBatchAppendParams(std::uint64_t paramCount);
 void countSubmitDrawRunBatchChunkCommitCpuTime(std::uint64_t nanoseconds);
 void countD3D9DrawStateCacheLookup(bool hit, bool includeIndexBuffer);
+void countD3D9DrawStateCacheDirectLookup(bool hit, bool includeIndexBuffer);
+void countD3D9DrawStateCacheBatchLookup(bool hit);
 void countD3D9DrawStateCacheUniformRefresh();
 void countD3D9DrawStateCacheMissReason(std::uint32_t reasonMask);
 void countD3D9SnapshotDrawSubmissionCpuTime(std::uint64_t nanoseconds);
 void countD3D9SnapshotCacheLookupCpuTime(std::uint64_t nanoseconds);
 void countD3D9SnapshotCacheHitCpuTime(std::uint64_t nanoseconds);
 void countD3D9SnapshotCacheMissCpuTime(std::uint64_t nanoseconds);
+void countD3D9SnapshotCacheDirectHitCpuTime(std::uint64_t nanoseconds);
+void countD3D9SnapshotCacheDirectMissCpuTime(std::uint64_t nanoseconds);
+void countD3D9SnapshotCacheBatchHitCpuTime(std::uint64_t nanoseconds);
+void countD3D9SnapshotCacheBatchMissCpuTime(std::uint64_t nanoseconds);
 void countD3D9SnapshotCacheBindingLayoutCpuTime(std::uint64_t nanoseconds);
 void countD3D9SnapshotCacheUniformRefreshCpuTime(std::uint64_t nanoseconds);
 void countD3D9SnapshotCacheUniformBuildCpuTime(std::uint64_t nanoseconds);
@@ -221,6 +250,32 @@ void countD3D9SnapshotCacheUniformHashCpuTime(std::uint64_t nanoseconds);
 void countD3D9SnapshotCacheMissShaderLayoutCpuTime(std::uint64_t nanoseconds);
 void countD3D9SnapshotCacheMissUniformBuildCpuTime(std::uint64_t nanoseconds);
 void countD3D9SnapshotCacheMissHotBuildCpuTime(std::uint64_t nanoseconds);
+void countD3D9SnapshotCacheDirectMissShaderLayoutCpuTime(std::uint64_t nanoseconds);
+void countD3D9SnapshotCacheDirectMissUniformBuildCpuTime(std::uint64_t nanoseconds);
+void countD3D9SnapshotCacheDirectMissHotBuildCpuTime(std::uint64_t nanoseconds);
+void countD3D9SnapshotCacheBatchMissShaderLayoutCpuTime(std::uint64_t nanoseconds);
+void countD3D9SnapshotCacheBatchMissUniformBuildCpuTime(std::uint64_t nanoseconds);
+void countD3D9SnapshotCacheBatchMissHotBuildCpuTime(std::uint64_t nanoseconds);
+void countD3D9SnapshotCacheBatchMissHotBuildZeroInitCpuTime(std::uint64_t nanoseconds);
+void countD3D9SnapshotCacheBatchMissHotBuildKeyCpuTime(std::uint64_t nanoseconds);
+void countD3D9SnapshotCacheBatchMissHotBuildKeyZeroInitCpuTime(std::uint64_t nanoseconds);
+void countD3D9SnapshotCacheBatchMissHotBuildKeyStreamCpuTime(std::uint64_t nanoseconds);
+void countD3D9SnapshotCacheBatchMissHotBuildKeyShaderCpuTime(std::uint64_t nanoseconds);
+void countD3D9SnapshotCacheBatchMissHotBuildKeyConstantCpuTime(std::uint64_t nanoseconds);
+void countD3D9SnapshotCacheBatchMissHotBuildKeyTextureCpuTime(std::uint64_t nanoseconds);
+void countD3D9SnapshotCacheBatchMissHotBuildKeySamplerCpuTime(std::uint64_t nanoseconds);
+void countD3D9SnapshotCacheBatchMissHotBuildKeyRenderStateCpuTime(std::uint64_t nanoseconds);
+void countD3D9SnapshotCacheBatchMissHotBuildKeyAttachmentCpuTime(std::uint64_t nanoseconds);
+void countD3D9SnapshotCacheBatchMissHotBuildKeyUniformCpuTime(std::uint64_t nanoseconds);
+void countD3D9SnapshotCacheBatchMissHotBuildBindingCopyCpuTime(std::uint64_t nanoseconds);
+void countD3D9SnapshotCacheBatchMissHotBuildRenderStateCpuTime(std::uint64_t nanoseconds);
+void countD3D9SnapshotCacheBatchMissHotBuildTextureStageStateCpuTime(std::uint64_t nanoseconds);
+void countD3D9SnapshotCacheBatchMissHotBuildSamplerStateCpuTime(std::uint64_t nanoseconds);
+void countD3D9SnapshotCacheBatchMissHotBuildTailCopyCpuTime(std::uint64_t nanoseconds);
+void countD3D9SnapshotCacheBatchMissHotBuildFlatRenderReuse(bool reused);
+void countD3D9SnapshotCacheBatchMissHotBuildFlatTssReuse(bool reused);
+void countD3D9SnapshotCacheBatchMissHotBuildFlatSamplerReuse(bool reused);
+void countD3D9SnapshotCacheBatchMissUniformNonConstHashReuse(bool reused);
 void countD3D9SnapshotUniformBuildCall();
 void countD3D9SnapshotUniformBuildVsConstCopyCpuTime(std::uint64_t nanoseconds);
 void countD3D9SnapshotUniformBuildPsConstCopyCpuTime(std::uint64_t nanoseconds);
@@ -252,6 +307,8 @@ void countD3D9SnapshotUniformBuildPsConstHashFullUnknownBytecode();
 void countD3D9SnapshotUniformBuildVsConstHashFullUnknownNonBytecode();
 void countD3D9SnapshotUniformBuildPsConstHashFullUnknownNonBytecode();
 void countD3D9SnapshotUniformBuildVsConstHashFullIndexedFloat();
+void countD3D9SnapshotUniformBuildVsConstHashFullIndexedFloatMinSafeBytes(std::uint64_t bytes);
+void countD3D9SnapshotUniformBuildVsConstHashFullIndexedFloatPotentialSavedBytes(std::uint64_t bytes);
 void countD3D9SnapshotUniformBuildPsConstHashFullIndexedFloat();
 void countD3D9SnapshotUniformBuildVsConstHashFullIndexedInt();
 void countD3D9SnapshotUniformBuildPsConstHashFullIndexedInt();
@@ -260,7 +317,11 @@ void countD3D9SnapshotUniformBuildPsConstHashFullIndexedBool();
 void countD3D9SnapshotUniformBuildVsConstHashBytes(std::uint64_t bytes);
 void countD3D9SnapshotUniformBuildPsConstHashBytes(std::uint64_t bytes);
 void countD3D9SnapshotUniformCopyCpuTime(std::uint64_t nanoseconds);
+void countD3D9SnapshotUniformMaterialized(std::uint64_t bytes);
+void countD3D9SnapshotUniformElided(std::uint64_t bytes);
 void countD3D9SnapshotStateCopyCpuTime(std::uint64_t nanoseconds);
+void countD3D9SnapshotStateMaterialized(std::uint64_t bytes);
+void countD3D9SnapshotStateElided(std::uint64_t bytes);
 void countD3D9SnapshotDebugSnapshotCpuTime(std::uint64_t nanoseconds);
 void countD3D9SnapshotFlatStateEntries(std::uint32_t renderStateEntries,
                                        std::uint32_t textureStageStateEntries,
@@ -282,7 +343,12 @@ void countDrawUniformPayloadLookupLinearHit();
 void countDrawUniformPayloadLookupBucketProbe(std::uint64_t probes);
 void countDrawUniformPayloadLookupBucketCollision(std::uint64_t collisions);
 void countDrawUniformPayloadLookupHashCollision(std::uint64_t collisions);
+void countDrawUniformPayloadLookupCpuTime(std::uint64_t nanoseconds);
+void countDrawUniformPayloadLookupBucketCpuTime(std::uint64_t nanoseconds);
 void countDrawUniformPayloadAppend();
+void countDrawUniformPayloadAppendReserveCpuTime(std::uint64_t nanoseconds);
+void countDrawUniformPayloadAppendCopyCpuTime(std::uint64_t nanoseconds);
+void countDrawUniformPayloadAppendLinkCpuTime(std::uint64_t nanoseconds);
 void countDrawCall(std::uint32_t primitiveType,
                    std::uint32_t primitiveCount,
                    std::uint64_t vertexCount,
@@ -360,6 +426,19 @@ void countEncodeDrawBindingPacketCacheCollisions(std::uint64_t collisions);
 void countEncodeDrawBindingPacketTextureRecordCpuTime(std::uint64_t nanoseconds);
 void countEncodeDrawArgbufSetupCpuTime(std::uint64_t nanoseconds);
 void countEncodeDrawArgbufOpenCpuTime(std::uint64_t nanoseconds);
+void countEncodeDrawArgbufOpenCallCpuTime(std::uint64_t nanoseconds);
+void countEncodeDrawArgbufReopenPostCpuTime(std::uint64_t nanoseconds);
+void countEncodeDrawArgbufReopenTableProbeCpuTime(std::uint64_t nanoseconds);
+void countEncodeDrawArgbufReopenTableShadowStoreCpuTime(
+    std::uint64_t nanoseconds);
+void countEncodeDrawArgbufReopenByteAccountCpuTime(
+    std::uint64_t nanoseconds);
+void countEncodeDrawArgbufReopenCbufCacheProbeCpuTime(
+    std::uint64_t nanoseconds);
+void countEncodeDrawArgbufReopenCbufDirtyScanCpuTime(
+    std::uint64_t nanoseconds);
+void countEncodeDrawArgbufReopenCbufForceDirtyCpuTime(
+    std::uint64_t nanoseconds);
 void countEncodeDrawArgbufOpenReserveCpuTime(std::uint64_t nanoseconds);
 void countEncodeDrawArgbufOpenSetArgumentBufferCpuTime(std::uint64_t nanoseconds);
 void countEncodeDrawArgbufTableBindCpuTime(std::uint64_t nanoseconds);
@@ -405,6 +484,7 @@ void countEncodeDrawArgbufCbufObserverFfpVsCpuTime(std::uint64_t nanoseconds);
 void countEncodeDrawArgbufCbufObserverFfpPsCpuTime(std::uint64_t nanoseconds);
 void countEncodeDrawArgbufCbufCacheMergeCpuTime(std::uint64_t nanoseconds);
 void countEncodeDrawArgbufCbufCachedRepointCpuTime(std::uint64_t nanoseconds);
+void countEncodeDrawArgbufCbufFullRepointCpuTime(std::uint64_t nanoseconds);
 void countEncodeDrawArgbufCbufCachedRepointCalls(std::uint64_t calls);
 void countEncodeDrawArgbufCbufCachedRepointBytes(std::uint64_t bytes);
 void countEncodeDrawArgbufCbufContentProbeCpuTime(std::uint64_t nanoseconds);
@@ -710,6 +790,9 @@ void countCompletionNoEnqueueWaitToCommitChunkReplayEnd(std::uint64_t nanosecond
 void countCompletionNoEnqueueWaitToCommitPublish(std::uint64_t nanoseconds);
 void countCompletionNoEnqueueWaitToEncodeDequeue(std::uint64_t nanoseconds);
 void countCompletionNoEnqueueWaitToCommandBufferCommit(std::uint64_t nanoseconds);
+void countCompletionNoEnqueueStageCommitEntryToPublish(std::uint64_t nanoseconds);
+void countCompletionNoEnqueueStagePublishToEncodeDequeue(std::uint64_t nanoseconds);
+void countCompletionNoEnqueueStageEncodeDequeueToCommandBufferCommit(std::uint64_t nanoseconds);
 void countCompletionNoEnqueueWaitToNextEnqueue(std::uint64_t nanoseconds,
                                                bool hasPresent);
 void countCompletionWait(std::uint64_t nanoseconds,

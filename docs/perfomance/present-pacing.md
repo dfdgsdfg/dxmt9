@@ -32,6 +32,7 @@ GPU frame-time story is owned by [[hidden-backend-storage]] /
 | H10 | Completion wait is overlapped by next-frame enqueue/encode work | rejected; hard under-pipelining accepted | [[present-pacing-pipeline-overlap.05]]: `1799 / 1799` waits have no later CB enqueue during `waitUntilCompleted()`, `completion_wait_with_enqueue_ms=0`, `completion_wait_without_enqueue_ms=44789.044`, `completion_enqueue_while_waiting=0`, and enqueue-side pending depth max is only `1`. Stage run: wait-end -> publish/encode-dequeue/Metal-commit/enqueue p50 `16.645/20.116/36.470/36.502ms`, so producer and encode work both run after the wait instead of hiding under it. |
 | H11 | `DXMT9_DISABLE_PRESENT_BOUNDARY` or deeper `DXMT9_MAX_FRAME_LATENCY` makes the producer run while completion waits | rejected as current owner | [[present-pacing-boundary-latency-ab.06]]: fresh baseline, boundary-disabled, and latency6 scouts all keep `present_boundary_waits=0`, `completion_wait_without_enqueue_ms≈44.0-44.5s`, and sampled FPS p50 `17.8-18.0`. `DXMT9_DISABLE_PRESENT_BOUNDARY=1` reaches the runtime (`present_boundary_skipped=1740`) but creates only one noise-level overlap event also seen in baseline. The remaining owner is before `CommitPublish` or outside dxmt9's explicit boundary wait. |
 | H12 | The post-wait producer gap is app/Wine/macdrv-side, before unix `commit_chunk` entry | rejected; unix replay/submit owner accepted | [[present-pacing-prepublish-stage.07]]: wait-end -> `commit_chunk` entry p50/p95 is only `1.040/2.668ms`, while wait-end -> `CommitPublish` is `15.894/29.912ms` and wait-end -> Metal commit is `22.276/54.146ms`. `commit_chunk_replay_cpu_ms=18981.064`, nested queue draw submission is `8154.509ms`, and nested snapshot submission is `6636.191ms`, so the average-FPS lane remains commit/replay/snapshot/encode, not app/Wine event pacing. |
+| H13 | Same-sample stage deltas can split the exposed no-enqueue gap without subtracting unrelated percentiles | accepted | [[present-pacing-stage-delta.08]]: current 120s scout keeps `completion_wait_with_enqueue_ms=0`, then splits the exposed path into `commit_chunk entry -> CommitPublish` p50/p95 `6.172/28.101ms`, `CommitPublish -> EncodeDequeue` `2.535/5.086ms`, and `EncodeDequeue -> commandBuffer.commit()` `11.384/22.232ms`. Queue wake is secondary; pre-publish replay/submit/snapshot and backend encode are the two load-bearing CPU stages. |
 
 ## Verification methods
 
@@ -63,6 +64,12 @@ GPU frame-time story is owned by [[hidden-backend-storage]] /
   wait is hidden behind later command-buffer production. Current GT1 has no
   overlap: every wait is a no-enqueue wait, followed by a non-trivial
   wait-end to next-enqueue gap.
+- **No-enqueue stage-delta counters**:
+  `completion_no_enqueue_stage_commit_entry_to_publish_*`,
+  `completion_no_enqueue_stage_publish_to_encode_dequeue_*`, and
+  `completion_no_enqueue_stage_encode_dequeue_to_command_buffer_commit_*`
+  record same-cycle deltas after a no-enqueue wait. Use these instead of
+  subtracting independent wait-end percentile rows.
 - **Env-knob A/B**: parent shell prefix
   (`DXMT9_LAYER_DISPLAY_SYNC=0 bash scripts/tools/run_3dmark05_perf_probe.sh
   --no-gputrace --suffix <name>`). The wrapper's `env "${env_args[@]}"
@@ -93,6 +100,7 @@ flowchart TD
   PipelineOverlap["pipeline-overlap.05\n1799/1799 waits have no later enqueue\npublish p50 16.6ms, commit p50 36.5ms after wait"]
   BoundaryLatency["boundary-latency-ab.06\nDISABLE_PRESENT_BOUNDARY / latency6 flat\nexplicit boundary not owner"]
   PrePublish["prepublish-stage.07\ncommit_chunk entry p50 1.0ms\npublish p50 15.9ms\nreplay/submit owner"]
+  StageDelta["stage-delta.08\nsame-sample split\nentry→publish p50 6.2ms\nencode→commit p50 11.4ms"]
   FrameLatency["frame-latency.01\nMAX_FRAME_LATENCY=3 + CAP=0\n(rejected: Δ +0.07%)"]
   AsyncAcq["async-acquire.01\nPRESENT_ASYNC_ACQUIRE=1\n(rejected: axis < 0.5% of wait)"]
   EncodeBudget["encode-budget.01\nencode_chunk p50 20.45 ms\nvs 16.67 ms vsync slot\n(attribution accepted)"]
@@ -131,7 +139,9 @@ flowchart TD
   CurrentOwner --> PipelineOverlap
   PipelineOverlap --> BoundaryLatency
   BoundaryLatency --> PrePublish
+  PrePublish --> StageDelta
   PrePublish --> EncodeBudget
+  StageDelta --> EncodeBudget
   PipelineOverlap --> EncodeBudget
   FrameLatency --> EncodeBudget
   AsyncAcq --> EncodeBudget
@@ -162,7 +172,7 @@ flowchart TD
   TexturePreResolve --> Remaining
   Remaining --> SCE
 
-  class DSync,EncodeBudget,CurrentImmediate,CompletionStatus,CurrentOwner,PipelineOverlap,PrePublish accepted
+  class DSync,EncodeBudget,CurrentImmediate,CompletionStatus,CurrentOwner,PipelineOverlap,PrePublish,StageDelta accepted
   class FrameLatency,AsyncAcq,WorkA,StateNoop,DirtyIdentity,TexturePreResolve,BoundaryLatency rejected
   class FixProposal,Remaining,SCE proposed
   class Attribution,NextSplit,CleanGate,ReopenMask,Identity,IdentitySmoke,PacketSplit,PlanDirect,SnapshotSplit,SnapshotHash,PayloadSplit,UsageHash,FfpZero,ArgbufOpen,FastAppend,StreamBindSplit,TextureSplit,SamplerSkip,SamplerHash accepted
@@ -399,6 +409,15 @@ flowchart TD
   `d3d9_snapshot_draw_submission_cpu_ms=6636.191`. The average-FPS target is
   therefore unix replay/submit/snapshot plus backend encode, not app/Wine event
   pacing.
+- [[present-pacing-stage-delta.08]] — ACCEPTED ATTRIBUTION.
+  Same-sample no-enqueue stage counters remove the need to subtract independent
+  wait-end percentile rows. Current GT1 still has no overlap
+  (`completion_wait_with_enqueue_ms=0`, `1799` no-enqueue waits). The exposed
+  path splits into `commit_chunk entry -> CommitPublish` p50/p95
+  `6.172/28.101ms`, `CommitPublish -> EncodeDequeue` `2.535/5.086ms`, and
+  `EncodeDequeue -> commandBuffer.commit()` `11.384/22.232ms`. Queue wake is
+  secondary; the two primary CPU stages are pre-publish replay/submit/snapshot
+  and backend encode.
 
 ## Cross-links
 
@@ -435,15 +454,18 @@ flowchart TD
   current under-pipelining owner. They are applied/skipped as requested, but
   `present_boundary_waits=0` and the completion no-enqueue wait remains flat.
 - The post-wait producer path reaches unix `commit_chunk` quickly; the exposed
-  gap expands inside commit/replay/submit before queue publish and Metal commit.
+  gap expands inside commit/replay/submit before queue publish, then inside
+  backend encode after `EncodeDequeue`.
 
 **Open target**
 
 - Recovering current GT1 direct fps requires reducing P2/P3 work that feeds
   present-bearing chunks, then proving that P4 completion/present wait and
   frame sampling move. The latest stage split makes that P2/P3 work concrete:
-  unix commit/replay/snapshot/submit before `CommitPublish`, then backend
-  encode after `EncodeDequeue`;
+  same-sample p50/p95 is `6.172/28.101ms` for unix
+  commit/replay/snapshot/submit before `CommitPublish`, `2.535/5.086ms` for
+  queue publish-to-dequeue, and `11.384/22.232ms` for backend encode after
+  `EncodeDequeue`;
   toggling
   `DXMT9_DISABLE_VSYNC` is no longer a valid lever unless
   `present_schedule_after_minimum_duration` is nonzero. The old

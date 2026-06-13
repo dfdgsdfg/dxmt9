@@ -52,6 +52,14 @@ WMT::String makeLabelStringFmt(const char* fmt, ...) {
 
 std::atomic_uint64_t gCommandBufferLabelCounter{0};
 
+bool drawRunGroupByGenerationLaneEnabled() {
+  static const bool enabled = [] {
+    const char* env = std::getenv("DXMT9_DRAWRUN_GROUP_BY_GEN_LANE");
+    return env && env[0] != '\0' && std::strcmp(env, "0") != 0;
+  }();
+  return enabled;
+}
+
 enum class QueueWorkerRole {
   Encode,
   Finish,
@@ -811,14 +819,58 @@ bool drawSubmissionStatesCompatible(
     const core::DrawRunSubmission& b) noexcept {
   const bool sameGenerationLane =
       core::drawRunSubmissionSameStateGenerationLane(a, b);
+  if (drawRunGroupByGenerationLaneEnabled()) {
+    perf::countSubmitDrawRunBatchCompatPair(sameGenerationLane,
+                                            sameGenerationLane);
+    return sameGenerationLane;
+  }
   if (sameGenerationLane) {
 #ifndef NDEBUG
-    DXMT_ASSERT(core::drawRunSubmissionStatesCompatibleForBatch(a, b));
+    if (a.stateMaterialized && b.stateMaterialized) {
+      DXMT_ASSERT(core::drawRunSubmissionStatesCompatibleForBatch(a, b));
+    }
 #endif
     perf::countSubmitDrawRunBatchCompatPair(true, true);
     return true;
   }
+  DXMT_ASSERT(a.stateMaterialized && b.stateMaterialized);
   const bool compatible = core::drawRunSubmissionStatesCompatibleForBatch(a, b);
+  perf::countSubmitDrawRunBatchCompatPair(false, compatible);
+  return compatible;
+}
+
+bool drawSubmissionStatesCompatibleWithAcceptedPrevious(
+    const core::DrawRunSubmission& base,
+    const core::DrawRunSubmission& previous,
+    const core::DrawRunSubmission& candidate) noexcept {
+  if (drawRunGroupByGenerationLaneEnabled()) {
+    return drawSubmissionStatesCompatible(base, candidate);
+  }
+
+  const bool sameBaseGenerationLane =
+      core::drawRunSubmissionSameStateGenerationLane(base, candidate);
+  if (sameBaseGenerationLane) {
+#ifndef NDEBUG
+    if (base.stateMaterialized && candidate.stateMaterialized) {
+      DXMT_ASSERT(core::drawRunSubmissionStatesCompatibleForBatch(base,
+                                                                  candidate));
+    }
+#endif
+    perf::countSubmitDrawRunBatchCompatPair(true, true);
+    return true;
+  }
+
+  if (core::drawRunSubmissionUsesAcceptedPreviousStateGenerationLane(
+          base, previous, candidate)) {
+    // The previous submission is already in this batch; sharing its producer
+    // stamp makes the elided candidate compatible by transitivity.
+    perf::countSubmitDrawRunBatchCompatPair(false, true);
+    return true;
+  }
+
+  DXMT_ASSERT(candidate.stateMaterialized);
+  const bool compatible =
+      core::drawRunSubmissionStatesCompatibleForBatch(base, candidate);
   perf::countSubmitDrawRunBatchCompatPair(false, compatible);
   return compatible;
 }
@@ -830,6 +882,24 @@ void countDrawSubmissionAdjacentStateGenerations(
         core::drawRunSubmissionSameStateGenerationLane(submissions[i - 1],
                                                        submissions[i]));
   }
+}
+
+void countDrawRunBatchDiscardedMaterializedStates(
+    std::span<const core::DrawRunSubmission> submissions) noexcept {
+  if (submissions.size() <= 1u) {
+    return;
+  }
+  std::uint64_t records = 0;
+  for (std::size_t i = 1; i < submissions.size(); ++i) {
+    if (submissions[i].stateMaterialized) {
+      ++records;
+    }
+  }
+  if (records == 0) {
+    return;
+  }
+  perf::countSubmitDrawRunBatchDiscardedState(
+      records, records * core::drawRunSubmissionStateCopyBytes());
 }
 
 struct DrawSubmitScratch {
@@ -870,7 +940,16 @@ void prepareDrawRunBatchBindingOverrides(
     return;
   }
   const auto& base = submissions.front();
+  DXMT_ASSERT(base.stateMaterialized);
   for (auto& submission : submissions) {
+    if (!submission.stateMaterialized) {
+      if (core::drawRunSubmissionHasExternalBindingOverride(submission)) {
+        core::ensureDrawRunSubmissionBindingOverridePayload(submission);
+      } else {
+        submission.bindingOverride = {};
+      }
+      continue;
+    }
     core::prepareDrawRunSubmissionBindingOverride(base, submission);
   }
 }
@@ -1005,13 +1084,21 @@ void snapshotDrawSubmissionBindingPayloads(
     std::vector<core::DrawBindingSnapshot>& bindingSnapshots) {
   bindingSnapshots.clear();
   bindingSnapshots.reserve(submissions.size());
+  if (submissions.empty()) {
+    return;
+  }
+  DXMT_ASSERT(submissions.front().stateMaterialized);
+  const auto& frontHot = submissions.front().materializedState().hot;
 
   for (auto& submission : submissions) {
     core::DrawParamPayloadView payload = submission.payload;
     core::DrawBindingSnapshot snapshot{};
     bool addedSnapshots = false;
+    const auto& hot = submission.stateMaterialized
+        ? submission.materializedState().hot
+        : frontHot;
     addDynamicBufferSnapshots(pool,
-                              submission.state.hot,
+                              hot,
                               submission.draw,
                               payload,
                               snapshot,
@@ -1387,11 +1474,14 @@ void CommandQueue::submitDrawRunBatch(
     {
       PerfScope stageScope(perf::countSubmitDrawRunBatchCompatScanCpuTime);
       while (batchEnd < submissions.size() &&
-             drawSubmissionStatesCompatible(submissions[batchStart], submissions[batchEnd])) {
+             drawSubmissionStatesCompatibleWithAcceptedPrevious(
+                 submissions[batchStart], submissions[batchEnd - 1u],
+                 submissions[batchEnd])) {
         ++batchEnd;
       }
     }
     auto batch = submissions.subspan(batchStart, batchEnd - batchStart);
+    countDrawRunBatchDiscardedMaterializedStates(batch);
     {
       PerfScope stageScope(perf::countSubmitDrawRunBatchBindingOverrideCpuTime);
       prepareDrawRunBatchBindingOverrides(batch);
@@ -1414,7 +1504,7 @@ void CommandQueue::submitDrawRunBatch(
       PerfScope stageScope(perf::countSubmitDrawRunBatchResourceMarkCpuTime);
       if (!skipDrawResourceMarking_ || forceDrawResourceMarkingAfterSplit_) {
         const std::uint64_t seqId = seqIdForMark(*this, 0);
-        pool_.markDrawResources(batch.front().state.hot, seqId);
+        pool_.markDrawResources(batch.front().materializedState().hot, seqId);
         for (auto& submission : batch) {
           std::span<const core::DrawParamPayloadView> payloads{};
           if (!submission.payload.userVertexData.empty() ||
@@ -1427,7 +1517,9 @@ void CommandQueue::submitDrawRunBatch(
         }
       }
     }
-    currentBackBuffer_ = batch.back().state.hot.colorAttachments[0].handle;
+    DXMT_ASSERT(batch.front().stateMaterialized);
+    currentBackBuffer_ =
+        batch.front().materializedState().hot.colorAttachments[0].handle;
 
     perf::countSubmitDrawRunBatchGroup(static_cast<std::uint32_t>(batch.size()));
     {

@@ -72,6 +72,20 @@ bottleneck — that is owned by [[hidden-backend-storage]].
 | H52 | Texture-stage `FlatStateSet` active-entry capacity can be split from the 64-key DeviceState id space | accepted targeted CPU win | [[state-churn-encode-encode-phase.40]] (`FlatDrawStateRecord` `11,056→9,008B`; `append_state_soa` `0.263628→0.220626ms/present`; `encode_draw` mixed) |
 | H53 | Render-state `FlatStateSet` needs an active-entry count proof before compaction | accepted proof; shrink held | [[state-churn-encode-encode-phase.41]] (`render_state_entries_max=62`, `gt64=0`, but default table already has 62 entries) |
 | H54 | Render-state flat payload can use a 128-slot priority active-entry set while keeping the full 256-state digest | accepted bounded CPU width win | [[state-churn-encode-encode-phase.42]] (`FlatDrawStateRecord` `9,008→7,984B`; GT1 render max `62`, overflow `0`; GPU flat) |
+| H55 | Same-stamp non-front submissions can skip copied canonical state if batching is stamp-only | accepted proof; strict grouping remains diagnostic | [[state-churn-encode-encode-phase.44]] (`DXMT9_DRAWRUN_GROUP_BY_GEN_LANE=1`; `4.10GB` state bytes elided, state-copy CPU `-46.07%`, sampled FPS flat) |
+| H56 | Elided submissions may still pay large `DrawRunSubmission` carrier construction cost | accepted bounded attribution | [[state-churn-encode-encode-phase.45]] (`emplace=1,123.253ms`, `13.99%` of queued submission, `0.646ms/present`; phase36 scratch reuse remains rejected) |
+| H57 | Optional queued-submission carrier storage removes default construction without reusing vector capacity | accepted bounded CPU win | [[state-churn-encode-encode-phase.46]] (`emplace` `1,123.253→573.056ms`, `-48.98%`; queue submission `-2.04%`; sampled FPS `+0.64%`) |
+| H58 | Default path still materializes non-front state that batch append discards | accepted attribution | [[state-churn-encode-encode-phase.47]] (`411,362` records / `4.209GB`, `46.70%` of batch records) |
+| H59 | Same-stamp N-1 state-copy elision can be promoted without stamp-only batching | accepted default CPU cleanup | [[state-churn-encode-encode-phase.48]] (`discarded_state_records 411,362→0`, `state_elided=412,180`, state-copy CPU `261.001→138.856ms`, FPS flat/noisy) |
+| H60 | Binding-packet cache associativity can reduce direct-map collision misses enough to cut encode CPU | rejected-current | [[state-churn-encode-encode-phase.49]] (misses/collisions `189k→133k`, but cache CPU `706.875→816.355ms` and encode CPU `+86ms`; code reverted) |
+| H61 | The default indexed path spends CPU preparing diagnostic index byte spans even when all diagnostics/reorder paths are off | accepted CPU cleanup | [[state-churn-encode-encode-phase.50]] (`index_setup` `636.514→342.602ms`, index phase `775.311→480.350ms`, total encode only `-0.73%`, FPS flat/noisy) |
+| H62 | Uniform payload append cost is dominated by repeated lookup-reserve checks | rejected-current | [[state-churn-encode-encode-phase.51]] (`append_uniform/present` `0.474488→0.474157ms`, parent append `+2.05%`; code reverted) |
+| H63 | The remaining uniform append child is mostly payload copy/materialization rather than reserve/linking | accepted attribution | [[state-churn-encode-encode-phase.52]] (`append_copy=813.196ms`, lookup `294.215ms`, reserve `53.018ms`; attribution timers only) |
+| H64 | Uniform payload append copy includes an avoidable aggregate-record temporary | accepted CPU cleanup | [[state-churn-encode-encode-phase.53]] (`append_copy` `813.196→602.274ms`, append-uniform parent `-13.15%`; FPS flat/noisy) |
+| H65 | Reusing resolved prefetched PSO handles removes the remaining pipeline-lookup parent | rejected-current | [[state-churn-encode-encode-phase.54]] (`152,261` cache hits, but `pipeline_lookup` `934.420→950.626ms`; code reverted) |
+| H66 | The `argbuf_open` parent is mostly actual Metal argument-buffer open work | rejected as phrased; post-open attribution accepted | [[state-churn-encode-encode-phase.55]] (`open_call=573.804ms`, `reopen_post=891.359ms`, table bind `178.803ms`, cached repoint `269.898ms`, content probe `123.303ms`) |
+| H67 | Pre-open component identity can skip whole argbuf table reopen in GT1 | rejected-current | [[state-churn-encode-encode-phase.56]] (`961,473` candidates, `0` skips; VS misses `812,520`; identity check cost `956.102ms`) |
+| H68 | The phase55 post-open residual is a single hidden argbuf child | rejected; distributed bookkeeping accepted | [[state-churn-encode-encode-phase.57]] (table probe `50.933ms`, byte account `51.990ms`, cbuf cache/dirty scans `118.813ms`, force dirty `104.757ms`; attribution timers add overhead) |
 
 ## Verification methods
 
@@ -98,7 +112,10 @@ bottleneck — that is owned by [[hidden-backend-storage]].
   `commit_chunk_draw_run_scan_cpu_ms`, `commit_chunk_draw_run_build_cpu_ms`,
   `commit_chunk_draw_run_submit_cpu_ms`, `commit_chunk_apply_draw_state_cpu_ms`,
   and `commit_chunk_const_upload_cpu_ms` split the replay owner after the broad
-  stage counter has already named `commit_chunk` replay.
+  stage counter has already named `commit_chunk` replay. Use
+  `commit_chunk_queue_draw_submission_emplace_cpu_ms` only to size the
+  default-construction/reallocation part of queued submission creation before an
+  optional-state/direct-construct carrier refactor.
 - **`CommandQueue` submit child counters** —
   `submit_draw_run_*_cpu_ms` and `submit_draw_run_batch_*_cpu_ms` split the
   queued draw submission residual into binding snapshot, payload byte scan,
@@ -110,6 +127,20 @@ bottleneck — that is owned by [[hidden-backend-storage]].
   `submit_draw_run_batch_compat_same_generation_lane_*` prove whether frontend
   stable-state cache identity agrees with the queue's deep compatibility
   comparison before enabling a generation fast path.
+- **Discarded-state counters** —
+  `submit_draw_run_batch_discarded_state_{records,bytes}` count non-front
+  `DrawRunSubmission` states that were materialized in the default path but are
+  not stored by `appendDrawRunBatch()`. After
+  [[state-churn-encode-encode-phase.48]], these should stay zero on the default
+  binding-agnostic path. If they rise again, the same-stamp state-elision
+  contract regressed or a new materialized non-front class appeared.
+- **Uniform payload append split counters** —
+  `draw_uniform_payload_lookup_cpu_ms`,
+  `draw_uniform_payload_lookup_bucket_cpu_ms`, and
+  `draw_uniform_payload_append_{reserve,copy,link}_cpu_ms` attribute the
+  `submit_draw_run_batch_append_uniform_cpu_ms` child. These timers are hot-path
+  attribution probes, so read parent movement as measurement overhead unless a
+  separate no-extra-timer A/B confirms it.
 - **Snapshot flat-state entry counters** —
   `d3d9_snapshot_flat_render_state_entries{,_max,_gt64,_gt128}`,
   `d3d9_snapshot_flat_tss_{entries,stage_entries_max}`, and
@@ -208,6 +239,21 @@ flowchart TD
   EncodePhase40["encode-phase.40\nTSS active-entry compact\nFlatDrawState -18.5%\nSoA -16.3%"]:::accepted
   EncodePhase41["encode-phase.41\nrender-state count proof\nmax 62 / gt64 0\nshrink held"]:::accepted
   EncodePhase42["encode-phase.42\nrender-state priority compact\nFlatDrawState -11.4%\noverflow 0 / GPU flat"]:::accepted
+  EncodePhase43["encode-phase.43\nfront resource marking\nresource mark -8.9%"]:::accepted
+  EncodePhase44["encode-phase.44\nsame-stamp state elision\n4.10GB elided\nFPS flat"]:::accepted
+  EncodePhase45["encode-phase.45\ncarrier emplace split\n13.99% of queue"]:::accepted
+  EncodePhase46["encode-phase.46\noptional carrier storage\nemplace -49%"]:::accepted
+  EncodePhase47["encode-phase.47\ndiscarded materialized state\n411k / 4.21GB"]:::accepted
+  EncodePhase48["encode-phase.48\ndefault state elision\ndiscarded -> 0"]:::accepted
+  EncodePhase49["encode-phase.49\n2-way binding cache\nmisses down\nCPU regresses"]:::rejected
+  EncodePhase50["encode-phase.50\nindexed fast path\nindex setup -46%\nFPS flat"]:::accepted
+  EncodePhase51["encode-phase.51\nuniform lookup prereserve\nappend_uniform flat\nreverted"]:::rejected
+  EncodePhase52["encode-phase.52\nuniform append split\ncopy 813ms\nreserve 53ms"]:::accepted
+  EncodePhase53["encode-phase.53\nuniform record emplace\ncopy -25.9%"]:::accepted
+  EncodePhase54["encode-phase.54\nPSO resolve cache\nhits exist\nlookup no win"]:::rejected
+  EncodePhase55["encode-phase.55\nargbuf reopen split\nopen_call 574ms\npost 891ms"]:::accepted
+  EncodePhase56["encode-phase.56\nwhole-table argbuf reuse\n961k checks / 0 skips"]:::rejected
+  EncodePhase57["encode-phase.57\npost-open residual split\nsmall bookkeeping children"]:::accepted
   Snapshot10["snapshot.10\nuniform-refresh fast path\nrefresh -59.6%\nFPS flat"]:::accepted
 
   Drawrun1 -->|"split-into"| Drawrun2
@@ -274,6 +320,21 @@ flowchart TD
   EncodePhase39 -->|"split TSS id space vs active entries"| EncodePhase40
   EncodePhase40 -->|"prove render-state count before shrinking"| EncodePhase41
   EncodePhase41 -->|"use 128-slot priority payload"| EncodePhase42
+  EncodePhase42 -->|"avoid duplicate resource marking"| EncodePhase43
+  EncodePhase43 -->|"skip N-1 copied states behind gate"| EncodePhase44
+  EncodePhase44 -->|"measure remaining carrier construction"| EncodePhase45
+  EncodePhase45 -->|"avoid default construction"| EncodePhase46
+  EncodePhase46 -->|"size default-path discarded state"| EncodePhase47
+  EncodePhase47 -->|"promote safe same-stamp elision"| EncodePhase48
+  EncodePhase21 -->|"test cache associativity later"| EncodePhase49
+  EncodePhase12 -->|"remove default diagnostic index bytes"| EncodePhase50
+  EncodePhase48 -->|"probe uniform append reserve overhead"| EncodePhase51
+  EncodePhase51 -->|"split append miss path"| EncodePhase52
+  EncodePhase52 -->|"remove record temporary"| EncodePhase53
+  EncodePhase53 -->|"probe prefetched PSO resolve residual"| EncodePhase54
+  EncodePhase54 -->|"return to larger argbuf child"| EncodePhase55
+  EncodePhase55 -->|"try pre-open whole-table skip"| EncodePhase56
+  EncodePhase56 -->|"split residual instead"| EncodePhase57
 ```
 
 ## Results synthesis
@@ -782,6 +843,167 @@ normal and moves the intended bucket:
 Broader `submit_draw_cpu_ms` drops `-1.87%`, while `gpu_command_buffer_time_ms`
 is flat (`+0.32%`) and completion wait worsens (`+2.00%`), so this is a
 targeted CPU micro-win, not a GPU bottleneck fix.
+
+[[state-churn-encode-encode-phase.44]] implements the F1 N-1 state-copy elision
+behind `DXMT9_DRAWRUN_GROUP_BY_GEN_LANE=1`. Same-stamp continuations now skip
+the `state.hot` / `shaderLayout` cache copy, and the queue groups by stamp only
+so elided non-front state is never deep-compared. The 2026-06-14 no-gputrace
+GT1 A/B proves the intended mechanism (`400,838` elisions, `4.10GB` elided
+state bytes, `d3d9_snapshot_state_copy_cpu_ms` `258.969 -> 139.672`), but it is
+not an FPS lever by itself: sampled mean FPS is flat (`18.435 -> 18.403`) and
+GPU/completion wait move slightly the wrong way. At this point the strict
+stamp-only mode stayed diagnostic; phase48 later promotes only the safe
+same-stamp copy-elision subset while preserving normal compatibility grouping.
+
+[[state-churn-encode-encode-phase.45]] adds the next split before that larger
+carrier refactor: `commit_chunk_queue_draw_submission_emplace_cpu_ms` times only
+`submissions.emplace_back()` in the primitive and indexed queued-submission
+paths. The 120s GT1 scout accepts this as a bounded target:
+`commit_chunk_queue_draw_submission_emplace_cpu_ms=1,123.253`, `13.99%` of
+queued-submission CPU and `0.646ms/present`, with a normal output frame. This
+does not repeat the rejected phase36 capacity-reuse branch and does not explain
+the remaining FPS limit by itself; it only justifies an optional-state or
+direct-construct carrier experiment if we want the next CPU cleanup.
+
+[[state-churn-encode-encode-phase.46]] implements that cleanup without changing
+vector ownership: `DrawRunSubmission::state` and `uniforms` become optional
+storage, materialized only by `snapshotDrawSubmissionFromCurrentState()`. This
+slightly increases `DrawRunSubmission` width (`20,992 -> 21,008B`) but avoids
+default construction for the large carrier fields. The no-gputrace A/B moves the
+target bucket directly: `commit_chunk_queue_draw_submission_emplace_cpu_ms`
+`1,123.253 -> 573.056` (`-48.98%`), with queued-submission CPU down `-2.04%`.
+Output stayed visually normal. Broader FPS movement is small (`+0.64%`) and
+should be treated as supportive but not a final average-FPS fix. The after-run
+residual also closes the carrier branch for now: queue submission is still
+`4.522ms/present`, but snapshot accounts for `3.900ms/present`, emplace accounts
+for `0.329ms/present`, and the remainder is only `0.292ms/present`.
+`d3d9_snapshot_cache_lookup_cpu_ms` remains `3.343ms/present`, so the next CPU
+owner is snapshot/cache lookup or backend encode cadence, not more
+queued-carrier construction.
+
+[[state-churn-encode-encode-phase.47]] then adds a non-mutating counter for the
+copy-policy frontier that remains after optional carrier storage. In the default
+path, `submit_draw_run_batch_discarded_state_records=411,362` and
+`submit_draw_run_batch_discarded_state_bytes=4,209,055,984`, which is `46.70%`
+of batch records and materialized state bytes. This independently matches the
+phase44 opt-in elision magnitude while leaving runtime behavior unchanged. The
+next state-copy implementation should therefore target direct construction into
+queue-owned storage or an interned compact draw-state carrier for this
+materialized-but-discarded non-front class. It should not keep digging in
+queued-carrier default construction unless a new counter names another child.
+
+[[state-churn-encode-encode-phase.48]] promotes the safe subset of that target:
+same-stamp non-front submissions now elide their canonical state copy in the
+default binding-agnostic snapshot path, while the queue keeps the normal
+compatibility policy and accepts elided candidates through the previously
+accepted draw when needed. The 120s GT1 scout removes the phase47 waste
+directly: `submit_draw_run_batch_discarded_state_records` `411,362 -> 0`,
+`d3d9_snapshot_state_elided=412,180`, and `d3d9_snapshot_state_copy_cpu_ms`
+`261.001 -> 138.856` (`-46.80%`). Broader queue submission improves
+`7,463.771 -> 7,023.458ms` (`-5.90%`), the output frame remains visually
+normal, and pipeline skips/errors stay zero. This is accepted as a default
+copy-policy cleanup, not as the average-FPS owner: GPU command-buffer time and
+completion wait stay flat/noisy. `DXMT9_DRAWRUN_GROUP_BY_GEN_LANE=1` remains a
+strict stamp-only batching diagnostic, not the required default elision gate.
+
+[[state-churn-encode-encode-phase.49]] then rejects the next obvious
+binding-packet cache idea. A 2-way set cache does remove direct-map misses and
+collisions (`189,178/189,050 -> 132,947/132,819`), but the extra probe,
+promotion, shift, and larger packet-store work costs more than the saved misses:
+`encode_draw_binding_packet_cache_cpu_ms` regresses `706.875 -> 816.355` and
+the parent `encode_draw_binding_packet_cpu_ms` regresses `1,835.316 ->
+1,939.451`. The candidate code was reverted; do not chase cache associativity
+again unless a new plan reduces the packet identity/probe width rather than
+retaining more full packet entries.
+
+[[state-churn-encode-encode-phase.50]] accepts the indexed draw default fast
+path as a local cleanup. With encoder breakdown, index-cache/reorder/split, dump,
+and stream/IB staging all off, the encoder no longer prepares reusable CPU index
+byte spans just to skip every diagnostic path. This cuts
+`encode_draw_index_setup_cpu_ms` `636.514 -> 342.602` and the index phase
+`775.311 -> 480.350`, but total `encode_draw_cpu_ms` moves only
+`16,023.609 -> 15,906.915` and sampled FPS/GPU/completion remain flat/noisy.
+Treat the default diagnostic-byte-span class as closed; remaining index work
+needs a new counter-named owner rather than another broad pass through the same
+block.
+
+[[state-churn-encode-encode-phase.51]] rejects the simple
+`DrawUniformPayload` lookup prereserve cleanup. `appendDrawRunBatch()` already
+reserves uniform storage/lookup for the whole batch, so the probe skipped the
+inner `reserveDrawUniformPayloadLookup()` call on the miss append path. The run
+was visually normal, but normalized counters do not support the change:
+`submit_draw_run_batch_append_uniform_cpu_ms / present` is effectively flat
+(`0.474488 -> 0.474157ms`) and the parent append bucket regresses
+(`1.047767 -> 1.069220ms`). The code was reverted. If the uniform-append child
+is pursued again, split lookup bucket walk, payload equality compare, payload
+copy, and lookup linking first; do not re-try the reserve-check shortcut.
+
+[[state-churn-encode-encode-phase.52]] performs that split as attribution-only
+instrumentation. It confirms the reserve shortcut was the wrong lever:
+`draw_uniform_payload_append_reserve_cpu_ms` is only `53.018ms`, while
+`draw_uniform_payload_append_copy_cpu_ms` is `813.196ms`. Lookup remains visible
+(`294.215ms`, with `154.102ms` in bucket chains), but the miss path is dominated
+by materializing the owned `DrawUniformPayloadRecord`. Future work on this child
+should target fewer/narrower payload copies or a proven lifetime-safe interned
+payload representation, not another reserve/linking micro-optimization.
+
+[[state-churn-encode-encode-phase.53]] closes the easy copy-construction part of
+that bucket. Constructing `DrawUniformPayloadRecord` in-place avoids the
+aggregate temporary on append miss and cuts
+`draw_uniform_payload_append_copy_cpu_ms` `813.196 -> 602.274ms`; the
+append-uniform parent follows `1299.014 -> 1128.212ms`. The run is visually
+normal and GPU/completion/FPS stay flat/noisy, so this is a local submit-side
+cleanup, not the frame-rate owner. Any next uniform-payload change needs a
+storage-shape proof: fewer append misses, component interning, or compact owned
+payload storage.
+
+[[state-churn-encode-encode-phase.54]] rejects a simple prefetched-PSO resolve
+cache as the next encode target. The transient cache saw `152,261` same-handle
+hits, but `encode_draw_pipeline_lookup_cpu_ms` moved the wrong way
+(`934.420 -> 950.626ms`) while FPS/GPU/completion stayed flat. The experiment
+code was reverted. Keep `pipeline_lookup` below the larger `argbuf_setup`,
+`stream_bind`, `binding_packet`, `issue`, snapshot/replay, and completion-pacing
+buckets unless a split counter first names a larger subchild.
+
+[[state-churn-encode-encode-phase.55]] then fixes the argbuf-open attribution.
+The legacy `encode_draw_argbuf_open_cpu_ms` counter is a per-draw reopen-block
+parent, not just the `openArgbuf()` call. In the 120s GT1 scout,
+`open_cpu_ms=1625.608`, actual `openArgbuf()` is `573.804ms`, and post-open
+table/cache bookkeeping is larger at `891.359ms`. The live post-open children
+are table bind (`178.803ms`), cached cbuf repoint (`269.898ms`), no-dirty
+component probe (`123.303ms`), and an inferred `~319ms` residual; the full-cbuf
+repoint branch is dead for GT1 (`0`). This is attribution-only and does not
+move FPS/GPU/completion. Future argbuf work should avoid treating `openArgbuf()`
+as the single owner; reduce reopen frequency only with a pre-open component
+identity proof that preserves per-draw table lifetime, or split the post-open
+residual further before optimizing it.
+
+[[state-churn-encode-encode-phase.56]] rejects that pre-open whole-table skip
+for GT1. A temporary default-off gate checked only constants-only argbuf draws
+where the previous slot-30 table shadow was still valid, the cbuf cache was
+complete, no cbuf dirty bits were pending, and VS/PS/FFPVS/FFPPS identities all
+matched. It reached `961,473` candidates but skipped `0`: VS identity misses
+dominated (`812,520`), followed by PS (`310,696`) and FFPPS (`33,233`). The
+check cost `956.102ms` when enabled and regressed `encode_draw_cpu_ms` by
+`+4.46%`, while FPS/GPU/completion stayed noisy-flat. The temporary code was
+removed after the run. Do not pursue whole-table argbuf reuse as the next GT1
+lever; either split the phase55 post-open residual further or prove that the VS
+identity misses are false misses before touching this area again.
+
+[[state-churn-encode-encode-phase.57]] performs that residual split. It adds
+attribution-only timers inside `encode_draw_argbuf_reopen_post_cpu_ms` and keeps
+behavior unchanged. The run passes with a normal machine-gun muzzle-bloom frame,
+`draw_skipped_no_pipeline=0`, and `gpu_command_buffer_errors=0`. The added
+hot-path timers are not free (`encode_draw_us_per_draw` rises
+`11.926 -> 12.833us`), so parent movement is measurement overhead rather than a
+runtime regression. The useful signal is internal distribution: table probe
+(`50.933ms`), byte accounting (`51.990ms`), cbuf cache/dirty scans
+(`60.990 + 57.823ms`), and force-dirty writes (`104.757ms`) explain the old
+phase55 residual as distributed bookkeeping. `table_shadow_store=48.420ms` is a
+sub-slice of the table-bind parent. Do not chase a single hidden post-open API
+child; the next argbuf work must either reduce reopen frequency with a
+correctness proof or consolidate the required cbuf decision/repoint control
+flow.
 
 ## How to run
 Every experiment here is a 3DMark05 GT1 run via the standard wrapper. This is a

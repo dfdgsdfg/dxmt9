@@ -14,6 +14,7 @@
 #include <cstddef>
 #include <cstdarg>
 #include <cstdio>
+#include <cstdlib>
 #include <cstring>
 #include <limits>
 #include <optional>
@@ -664,6 +665,8 @@ u64 hashMaterial(const Material &material);
 struct ShaderConstantHashResult {
   u64 hash = 0;
   std::uint64_t bytes = 0;
+  std::uint64_t indexedFloatMinSafeBytes = 0;
+  std::uint64_t indexedFloatPotentialSavedBytes = 0;
   bool full = false;
   bool noUsage = false;
   bool unknown = false;
@@ -675,6 +678,7 @@ struct ShaderConstantHashResult {
 struct DrawUniformPayloadHashOptions {
   const ShaderConstantUsageBounds *vertexUsage = nullptr;
   const ShaderConstantUsageBounds *pixelUsage = nullptr;
+  const DrawUniformPayloadHashes *reusableNonConstantHashes = nullptr;
   bool vertexUsageFromBytecode = false;
   bool pixelUsageFromBytecode = false;
   bool recordSnapshotPerf = false;
@@ -688,6 +692,22 @@ u64 hashArrayPrefix(const std::array<T, Count> &values, std::size_t count) {
 }
 
 template <std::size_t FloatCount>
+std::uint64_t indexedFloatMinimumSafeHashBytes(
+    const ShaderConstantSnapshot<FloatCount> &constants,
+    const ShaderConstantUsageBounds *usage) {
+  if (!usage || !usage->indexedFloat) {
+    return sizeof(constants);
+  }
+  const auto intCount =
+      std::min<std::size_t>(usage->intCount, constants.int4.size());
+  const auto boolCount =
+      std::min<std::size_t>(usage->boolCount, constants.bools.size());
+  return sizeof(constants.float4) +
+         static_cast<std::uint64_t>(intCount) * sizeof(constants.int4[0]) +
+         static_cast<std::uint64_t>(boolCount) * sizeof(constants.bools[0]);
+}
+
+template <std::size_t FloatCount>
 ShaderConstantHashResult hashShaderConstantsForUsage(
     const ShaderConstantSnapshot<FloatCount> &constants,
     const ShaderConstantUsageBounds *usage) {
@@ -695,9 +715,17 @@ ShaderConstantHashResult hashShaderConstantsForUsage(
       !usage || usage->unknown || usage->indexedFloat || usage->indexedInt ||
       usage->indexedBool;
   if (full) {
+    const auto indexedFloatMinSafeBytes =
+        indexedFloatMinimumSafeHashBytes(constants, usage);
+    const auto indexedFloatPotentialSavedBytes =
+        indexedFloatMinSafeBytes < sizeof(constants)
+            ? sizeof(constants) - indexedFloatMinSafeBytes
+            : 0u;
     return ShaderConstantHashResult{
         .hash = hashTrivial(constants),
         .bytes = sizeof(constants),
+        .indexedFloatMinSafeBytes = indexedFloatMinSafeBytes,
+        .indexedFloatPotentialSavedBytes = indexedFloatPotentialSavedBytes,
         .full = true,
         .noUsage = !usage,
         .unknown = usage ? usage->unknown : false,
@@ -768,6 +796,10 @@ void hashDrawUniformShaderConstantComponents(
         }
         if (result.indexedFloat) {
           dxmt9::perf::countD3D9SnapshotUniformBuildVsConstHashFullIndexedFloat();
+          dxmt9::perf::countD3D9SnapshotUniformBuildVsConstHashFullIndexedFloatMinSafeBytes(
+              result.indexedFloatMinSafeBytes);
+          dxmt9::perf::countD3D9SnapshotUniformBuildVsConstHashFullIndexedFloatPotentialSavedBytes(
+              result.indexedFloatPotentialSavedBytes);
         }
         if (result.indexedInt) {
           dxmt9::perf::countD3D9SnapshotUniformBuildVsConstHashFullIndexedInt();
@@ -902,7 +934,26 @@ u64 hashDrawUniformPayload(const DrawUniformPayload &payload,
                            DrawUniformPayloadHashOptions options = {}) {
   DrawUniformPayloadHashes hashes{};
   hashDrawUniformShaderConstantComponents(payload, hashes, options);
-  hashDrawUniformNonConstantComponents(payload, hashes, options);
+  if (options.reusableNonConstantHashes) {
+    hashes.worldViewProjHash =
+        options.reusableNonConstantHashes->worldViewProjHash;
+    hashes.ffpWorldViewHash =
+        options.reusableNonConstantHashes->ffpWorldViewHash;
+    hashes.ffpNormalMatrixHash =
+        options.reusableNonConstantHashes->ffpNormalMatrixHash;
+    hashes.materialHash =
+        options.reusableNonConstantHashes->materialHash;
+    hashes.lightHashes =
+        options.reusableNonConstantHashes->lightHashes;
+    hashes.ffpBlendWorldViewProjHash =
+        options.reusableNonConstantHashes->ffpBlendWorldViewProjHash;
+    hashes.textureTransformsHash =
+        options.reusableNonConstantHashes->textureTransformsHash;
+    hashes.clipPlanesHash =
+        options.reusableNonConstantHashes->clipPlanesHash;
+  } else {
+    hashDrawUniformNonConstantComponents(payload, hashes, options);
+  }
   if (componentHashes) {
     *componentHashes = hashes;
   }
@@ -1655,7 +1706,8 @@ DrawUniformPayload makeDrawUniformPayloadFromState(
     const DeviceState &state, u32 clipPlaneMask,
     DrawUniformPayloadHashes *componentHashes = nullptr,
     bool recordSnapshotPerf = false,
-    const DrawShaderLayoutContext *shaderLayout = nullptr) {
+    const DrawShaderLayoutContext *shaderLayout = nullptr,
+    const DrawUniformPayloadHashes *reusableNonConstantHashes = nullptr) {
   const bool recordPerf = recordSnapshotPerf && dxmt9::perf::enabled();
   auto recorder = [&](void (*fn)(std::uint64_t)) {
     return recordPerf ? fn : nullptr;
@@ -1706,6 +1758,7 @@ DrawUniformPayload makeDrawUniformPayloadFromState(
     const DrawUniformPayloadHashOptions options{
         .vertexUsage = shaderLayout ? &shaderLayout->vertexConstantUsage : nullptr,
         .pixelUsage = shaderLayout ? &shaderLayout->pixelConstantUsage : nullptr,
+        .reusableNonConstantHashes = reusableNonConstantHashes,
         .vertexUsageFromBytecode =
             shaderLayout && shaderLayout->vertexShader.kind == ShaderRef::Kind::Bytecode,
         .pixelUsageFromBytecode =
@@ -1915,117 +1968,223 @@ FlatDrawStateRecord makeFlatDrawStateRecord(const DrawDesc &desc) {
 
 namespace {
 
+void bumpGeneration(u64 &generation) noexcept {
+  ++generation;
+  if (generation == 0) {
+    generation = 1;
+  }
+}
+
+struct FlatDrawStateRecordBuildPerfOptions {
+  bool recordBatchMissHotBuild = false;
+  const FlatRenderStateSet *reusableRenderStates = nullptr;
+  const std::array<FlatStateSet<kMaxFlatTextureStageStates>,
+                   kMaxTextureStages> *reusableTextureStageStates = nullptr;
+  const std::array<FlatStateSet<kMaxSamplerStates>,
+                   kMaxSamplers> *reusableSamplerStates = nullptr;
+};
+
 FlatDrawStateKey makeFlatDrawStateKeyFromState(
     const DeviceState &state, const DrawShaderLayoutContext &shaderLayout,
     const DrawUniformPayload &uniforms, const ViewportScissor &viewport,
-    const DrawUniformPayloadHashes *uniformHashes = nullptr) {
-  FlatDrawStateKey key{};
+    const DrawUniformPayloadHashes *uniformHashes = nullptr,
+    FlatDrawStateRecordBuildPerfOptions perfOptions = {}) {
+  const bool recordPerf =
+      perfOptions.recordBatchMissHotBuild && dxmt9::perf::enabled();
+  auto recorder = [&](void (*fn)(std::uint64_t)) {
+    return recordPerf ? fn : nullptr;
+  };
+  FlatDrawStateKey key = [&] {
+    PerfScope scope(recorder(
+        dxmt9::perf::countD3D9SnapshotCacheBatchMissHotBuildKeyZeroInitCpuTime));
+    return FlatDrawStateKey{};
+  }();
 
-  for (size_t i = 0; i < kMaxStreams; ++i) {
-    key.streamBuffers[i] =
-        state.streamBuffers[i] ? state.streamBuffers[i]->handle() : Handle{};
-    key.streamOffsets[i] = state.streamOffsets[i];
-    key.streamStrides[i] = state.streamStrides[i];
-    if (key.streamBuffers[i]) {
-      key.streamMask |= 1u << i;
+  {
+    PerfScope scope(recorder(
+        dxmt9::perf::countD3D9SnapshotCacheBatchMissHotBuildKeyStreamCpuTime));
+    for (size_t i = 0; i < kMaxStreams; ++i) {
+      key.streamBuffers[i] =
+          state.streamBuffers[i] ? state.streamBuffers[i]->handle() : Handle{};
+      key.streamOffsets[i] = state.streamOffsets[i];
+      key.streamStrides[i] = state.streamStrides[i];
+      if (key.streamBuffers[i]) {
+        key.streamMask |= 1u << i;
+      }
+    }
+    key.indexBuffer = state.indexBuffer ? state.indexBuffer->handle() : Handle{};
+  }
+
+  {
+    PerfScope scope(recorder(
+        dxmt9::perf::countD3D9SnapshotCacheBatchMissHotBuildKeyShaderCpuTime));
+    key.vertexElementCount =
+        static_cast<u32>(shaderLayout.vertexDecl.elements.size());
+    key.fvf = shaderLayout.vertexDecl.fvf;
+    key.vertexDeclHash = hashVertexDeclElements(shaderLayout.vertexDecl);
+    key.vertexShaderKind = shaderLayout.vertexShader.kind;
+    key.pixelShaderKind = shaderLayout.pixelShader.kind;
+    key.vertexShaderHash = hashShaderRefSummary(shaderLayout.vertexShader);
+    key.pixelShaderHash = hashShaderRefSummary(shaderLayout.pixelShader);
+  }
+
+  {
+    PerfScope scope(recorder(
+        dxmt9::perf::countD3D9SnapshotCacheBatchMissHotBuildKeyConstantCpuTime));
+    key.vertexConstantsHash = uniformHashes ? uniformHashes->vertexConstantsHash
+                                            : hashTrivial(state.vsConst);
+    key.pixelConstantsHash = uniformHashes ? uniformHashes->pixelConstantsHash
+                                           : hashTrivial(state.psConst);
+  }
+
+  {
+    PerfScope scope(recorder(
+        dxmt9::perf::countD3D9SnapshotCacheBatchMissHotBuildKeyTextureCpuTime));
+    for (size_t i = 0; i < kMaxTextures; ++i) {
+      key.textures[i] =
+          state.textures[i] ? state.textures[i]->handle() : Handle{};
+      key.textureLods[i] = state.textures[i] ? state.textures[i]->lod() : 0;
+      if (key.textures[i]) {
+        key.textureMask |= 1u << i;
+      }
+      if (i < kMaxTextureStages) {
+        key.textureStageStateHashes[i] =
+            hashStateMap(state.textureStageStates[i]);
+      }
     }
   }
 
-  key.indexBuffer = state.indexBuffer ? state.indexBuffer->handle() : Handle{};
-  key.vertexElementCount =
-      static_cast<u32>(shaderLayout.vertexDecl.elements.size());
-  key.fvf = shaderLayout.vertexDecl.fvf;
-  key.vertexDeclHash = hashVertexDeclElements(shaderLayout.vertexDecl);
-  key.vertexShaderKind = shaderLayout.vertexShader.kind;
-  key.pixelShaderKind = shaderLayout.pixelShader.kind;
-  key.vertexShaderHash = hashShaderRefSummary(shaderLayout.vertexShader);
-  key.pixelShaderHash = hashShaderRefSummary(shaderLayout.pixelShader);
-  key.vertexConstantsHash = uniformHashes ? uniformHashes->vertexConstantsHash
-                                          : hashTrivial(state.vsConst);
-  key.pixelConstantsHash = uniformHashes ? uniformHashes->pixelConstantsHash
-                                         : hashTrivial(state.psConst);
-
-  for (size_t i = 0; i < kMaxTextures; ++i) {
-    key.textures[i] =
-        state.textures[i] ? state.textures[i]->handle() : Handle{};
-    key.textureLods[i] = state.textures[i] ? state.textures[i]->lod() : 0;
-    if (key.textures[i]) {
-      key.textureMask |= 1u << i;
-    }
-    if (i < kMaxTextureStages) {
-      key.textureStageStateHashes[i] =
-          hashStateMap(state.textureStageStates[i]);
+  {
+    PerfScope scope(recorder(
+        dxmt9::perf::countD3D9SnapshotCacheBatchMissHotBuildKeySamplerCpuTime));
+    for (size_t i = 0; i < kMaxSamplers; ++i) {
+      key.samplerStateHashes[i] = hashStateMap(state.samplerStates[i]);
+      if (!state.samplerStates[i].empty()) {
+        key.samplerStateMask |= 1u << i;
+      }
     }
   }
 
-  for (size_t i = 0; i < kMaxSamplers; ++i) {
-    key.samplerStateHashes[i] = hashStateMap(state.samplerStates[i]);
-    if (!state.samplerStates[i].empty()) {
-      key.samplerStateMask |= 1u << i;
+  {
+    PerfScope scope(recorder(dxmt9::perf::
+        countD3D9SnapshotCacheBatchMissHotBuildKeyRenderStateCpuTime));
+    key.renderStateHash = hashStateMap(state.renderStates);
+  }
+
+  {
+    PerfScope scope(recorder(dxmt9::perf::
+        countD3D9SnapshotCacheBatchMissHotBuildKeyAttachmentCpuTime));
+    key.colorAttachments = state.renderTargets;
+    key.depthStencil = state.depthStencil;
+    for (size_t i = 0; i < kMaxRenderTargets; ++i) {
+      if (key.colorAttachments[i].handle) {
+        key.renderTargetMask |= 1u << i;
+      }
     }
   }
 
-  key.renderStateHash = hashStateMap(state.renderStates);
-  key.colorAttachments = state.renderTargets;
-  key.depthStencil = state.depthStencil;
-  for (size_t i = 0; i < kMaxRenderTargets; ++i) {
-    if (key.colorAttachments[i].handle) {
-      key.renderTargetMask |= 1u << i;
-    }
+  {
+    PerfScope scope(recorder(
+        dxmt9::perf::countD3D9SnapshotCacheBatchMissHotBuildKeyUniformCpuTime));
+    key.viewportHash = hashViewportScissor(viewport);
+    key.worldViewProjHash = uniformHashes ? uniformHashes->worldViewProjHash
+                                          : hashTrivial(uniforms.worldViewProj);
+    key.ffpBlendWorldViewProjHash =
+        uniformHashes ? uniformHashes->ffpBlendWorldViewProjHash
+                      : hashBlendWorldViewProj(uniforms.ffpBlendWorldViewProj);
+    key.textureTransformsHash =
+        uniformHashes ? uniformHashes->textureTransformsHash
+                      : hashTextureTransforms(uniforms.textureTransforms);
+    key.clipPlaneMask = shaderLayout.clipPlaneMask;
+    key.clipPlanesHash = uniformHashes ? uniformHashes->clipPlanesHash
+                                       : hashClipPlanes(uniforms.clipPlanes);
   }
-
-  key.viewportHash = hashViewportScissor(viewport);
-  key.worldViewProjHash = uniformHashes ? uniformHashes->worldViewProjHash
-                                        : hashTrivial(uniforms.worldViewProj);
-  key.ffpBlendWorldViewProjHash =
-      uniformHashes ? uniformHashes->ffpBlendWorldViewProjHash
-                    : hashBlendWorldViewProj(uniforms.ffpBlendWorldViewProj);
-  key.textureTransformsHash =
-      uniformHashes ? uniformHashes->textureTransformsHash
-                    : hashTextureTransforms(uniforms.textureTransforms);
-  key.clipPlaneMask = shaderLayout.clipPlaneMask;
-  key.clipPlanesHash = uniformHashes ? uniformHashes->clipPlanesHash
-                                     : hashClipPlanes(uniforms.clipPlanes);
   return key;
 }
 
 FlatDrawStateRecord makeFlatDrawStateRecordFromState(
     const DeviceState &state, const DrawShaderLayoutContext &shaderLayout,
     const DrawUniformPayload &uniforms, const ViewportScissor &viewport,
-    const DrawUniformPayloadHashes *uniformHashes = nullptr) {
-  FlatDrawStateRecord record{};
-  record.key =
-      makeFlatDrawStateKeyFromState(state, shaderLayout, uniforms, viewport,
-                                    uniformHashes);
-  record.streamBuffers = record.key.streamBuffers;
-  record.streamOffsets = record.key.streamOffsets;
-  record.streamStrides = record.key.streamStrides;
-  record.streamMask = record.key.streamMask;
-  record.indexBuffer = record.key.indexBuffer;
-  record.textures = record.key.textures;
-  record.textureLods = record.key.textureLods;
-  record.textureMask = record.key.textureMask;
-  record.renderStates = makePrioritizedFlatStateSet<kMaxFlatRenderStates>(
-      state.renderStates, kFlatRenderStatePreservedKeys);
-  for (size_t i = 0; i < kMaxTextureStages; ++i) {
-    record.textureStageStates[i] =
-        makeFlatStateSet<kMaxFlatTextureStageStates>(state.textureStageStates[i]);
+    const DrawUniformPayloadHashes *uniformHashes = nullptr,
+    FlatDrawStateRecordBuildPerfOptions perfOptions = {}) {
+  const bool recordPerf =
+      perfOptions.recordBatchMissHotBuild && dxmt9::perf::enabled();
+  auto recorder = [&](void (*fn)(std::uint64_t)) {
+    return recordPerf ? fn : nullptr;
+  };
+  FlatDrawStateRecord record = [&] {
+    PerfScope scope(recorder(
+        dxmt9::perf::countD3D9SnapshotCacheBatchMissHotBuildZeroInitCpuTime));
+    return FlatDrawStateRecord{};
+  }();
+  {
+    PerfScope scope(recorder(
+        dxmt9::perf::countD3D9SnapshotCacheBatchMissHotBuildKeyCpuTime));
+    record.key =
+        makeFlatDrawStateKeyFromState(state, shaderLayout, uniforms, viewport,
+                                      uniformHashes, perfOptions);
   }
-  for (size_t i = 0; i < kMaxSamplers; ++i) {
-    record.samplerStates[i] =
-        makeFlatStateSet<kMaxSamplerStates>(state.samplerStates[i]);
+  {
+    PerfScope scope(recorder(dxmt9::perf::
+        countD3D9SnapshotCacheBatchMissHotBuildBindingCopyCpuTime));
+    record.streamBuffers = record.key.streamBuffers;
+    record.streamOffsets = record.key.streamOffsets;
+    record.streamStrides = record.key.streamStrides;
+    record.streamMask = record.key.streamMask;
+    record.indexBuffer = record.key.indexBuffer;
+    record.textures = record.key.textures;
+    record.textureLods = record.key.textureLods;
+    record.textureMask = record.key.textureMask;
   }
-  record.colorAttachments = record.key.colorAttachments;
-  record.depthStencil = record.key.depthStencil;
-  record.renderTargetMask = record.key.renderTargetMask;
-  record.viewport = viewport;
-  record.vertexConstantsHash = record.key.vertexConstantsHash;
-  record.pixelConstantsHash = record.key.pixelConstantsHash;
-  record.worldViewProjHash = record.key.worldViewProjHash;
-  record.ffpBlendWorldViewProjHash = record.key.ffpBlendWorldViewProjHash;
-  record.textureTransformsHash = record.key.textureTransformsHash;
-  record.clipPlaneMask = record.key.clipPlaneMask;
-  record.clipPlanesHash = record.key.clipPlanesHash;
+  {
+    PerfScope scope(recorder(dxmt9::perf::
+        countD3D9SnapshotCacheBatchMissHotBuildRenderStateCpuTime));
+    if (perfOptions.reusableRenderStates) {
+      record.renderStates = *perfOptions.reusableRenderStates;
+    } else {
+      record.renderStates = makePrioritizedFlatStateSet<kMaxFlatRenderStates>(
+          state.renderStates, kFlatRenderStatePreservedKeys);
+    }
+  }
+  {
+    PerfScope scope(recorder(dxmt9::perf::
+        countD3D9SnapshotCacheBatchMissHotBuildTextureStageStateCpuTime));
+    if (perfOptions.reusableTextureStageStates) {
+      record.textureStageStates = *perfOptions.reusableTextureStageStates;
+    } else {
+      for (size_t i = 0; i < kMaxTextureStages; ++i) {
+        record.textureStageStates[i] = makeFlatStateSet<
+            kMaxFlatTextureStageStates>(state.textureStageStates[i]);
+      }
+    }
+  }
+  {
+    PerfScope scope(recorder(dxmt9::perf::
+        countD3D9SnapshotCacheBatchMissHotBuildSamplerStateCpuTime));
+    if (perfOptions.reusableSamplerStates) {
+      record.samplerStates = *perfOptions.reusableSamplerStates;
+    } else {
+      for (size_t i = 0; i < kMaxSamplers; ++i) {
+        record.samplerStates[i] =
+            makeFlatStateSet<kMaxSamplerStates>(state.samplerStates[i]);
+      }
+    }
+  }
+  {
+    PerfScope scope(recorder(
+        dxmt9::perf::countD3D9SnapshotCacheBatchMissHotBuildTailCopyCpuTime));
+    record.colorAttachments = record.key.colorAttachments;
+    record.depthStencil = record.key.depthStencil;
+    record.renderTargetMask = record.key.renderTargetMask;
+    record.viewport = viewport;
+    record.vertexConstantsHash = record.key.vertexConstantsHash;
+    record.pixelConstantsHash = record.key.pixelConstantsHash;
+    record.worldViewProjHash = record.key.worldViewProjHash;
+    record.ffpBlendWorldViewProjHash = record.key.ffpBlendWorldViewProjHash;
+    record.textureTransformsHash = record.key.textureTransformsHash;
+    record.clipPlaneMask = record.key.clipPlaneMask;
+    record.clipPlanesHash = record.key.clipPlanesHash;
+  }
   return record;
 }
 
@@ -2401,6 +2560,19 @@ bool drawStateInvalidationIsBindingOnly(u32 reasonMask) noexcept {
          (reasonMask & ~kBindingOnlyMask) == 0;
 }
 
+bool drawStateInvalidationAffectsUniformNonConstants(u32 reasonMask) noexcept {
+  constexpr u32 kNonConstantMask =
+      DrawStateInvalidationMutableState |
+      DrawStateInvalidationRenderState |
+      DrawStateInvalidationFfpState |
+      DrawStateInvalidationClipPlane |
+      DrawStateInvalidationStateBlock |
+      DrawStateInvalidationReset |
+      DrawStateInvalidationSwapChain;
+  return reasonMask == DrawStateInvalidationUnknown ||
+         (reasonMask & kNonConstantMask) != 0;
+}
+
 void Device::submitDrawRunInternalFromState(
     DeviceState baseState, std::span<const DrawParam> draws,
     std::span<const DrawParamPayloadView> payloads) {
@@ -2439,23 +2611,50 @@ void Device::invalidateDrawStateCache(u32 reasonMask) noexcept {
   } else {
     drawStateInvalidationReasonMask_ |= reasonMask;
   }
-  ++drawStateGeneration_;
-  if (drawStateGeneration_ == 0) {
-    drawStateGeneration_ = 1;
-  }
+  bumpGeneration(drawStateGeneration_);
+  invalidateDrawFlatStateSetCache(reasonMask);
   if (!drawStateInvalidationIsBindingOnly(reasonMask)) {
-    ++drawStableStateGeneration_;
-    if (drawStableStateGeneration_ == 0) {
-      drawStableStateGeneration_ = 1;
+    bumpGeneration(drawStableStateGeneration_);
+    if (drawStateInvalidationAffectsUniformNonConstants(reasonMask)) {
+      invalidateDrawUniformNonConstantCache();
     }
     invalidateDrawUniformCache();
   }
 }
 
 void Device::invalidateDrawUniformCache() noexcept {
-  ++drawUniformGeneration_;
-  if (drawUniformGeneration_ == 0) {
-    drawUniformGeneration_ = 1;
+  bumpGeneration(drawUniformGeneration_);
+}
+
+void Device::invalidateDrawUniformNonConstantCache() noexcept {
+  bumpGeneration(drawUniformNonConstantGeneration_);
+}
+
+void Device::invalidateDrawFlatStateSetCache(u32 reasonMask) noexcept {
+  const bool broad =
+      reasonMask == DrawStateInvalidationUnknown ||
+      (reasonMask & (DrawStateInvalidationMutableState |
+                     DrawStateInvalidationStateBlock |
+                     DrawStateInvalidationReset)) != 0;
+  const bool hasSpecificStageSampler =
+      (reasonMask & (DrawStateInvalidationTextureStageState |
+                     DrawStateInvalidationSamplerState)) != 0;
+  const bool aggregateStageSamplerOnly =
+      !hasSpecificStageSampler &&
+      (reasonMask & DrawStateInvalidationTextureStageSampler) != 0;
+
+  if (broad || (reasonMask & DrawStateInvalidationRenderState) != 0) {
+    bumpGeneration(drawRenderStateFlatGeneration_);
+  }
+  if (broad ||
+      aggregateStageSamplerOnly ||
+      (reasonMask & DrawStateInvalidationTextureStageState) != 0) {
+    bumpGeneration(drawTextureStageStateFlatGeneration_);
+  }
+  if (broad ||
+      aggregateStageSamplerOnly ||
+      (reasonMask & DrawStateInvalidationSamplerState) != 0) {
+    bumpGeneration(drawSamplerStateFlatGeneration_);
   }
 }
 
@@ -2480,7 +2679,11 @@ Device::cachedBaseDrawState(bool includeIndexBuffer) {
   };
   if (cache.valid && cache.generation == drawStateGeneration_) {
     PerfScope hitScope(dxmt9::perf::countD3D9SnapshotCacheHitCpuTime);
+    PerfScope directHitScope(
+        dxmt9::perf::countD3D9SnapshotCacheDirectHitCpuTime);
     dxmt9::perf::countD3D9DrawStateCacheLookup(/*hit=*/true, includeIndexBuffer);
+    dxmt9::perf::countD3D9DrawStateCacheDirectLookup(/*hit=*/true,
+                                                     includeIndexBuffer);
     if (cache.uniformGeneration != drawUniformGeneration_) {
       dxmt9::perf::countD3D9DrawStateCacheUniformRefresh();
       PerfScope uniformRefreshScope(
@@ -2491,7 +2694,11 @@ Device::cachedBaseDrawState(bool includeIndexBuffer) {
   }
   {
     PerfScope missScope(dxmt9::perf::countD3D9SnapshotCacheMissCpuTime);
+    PerfScope directMissScope(
+        dxmt9::perf::countD3D9SnapshotCacheDirectMissCpuTime);
     dxmt9::perf::countD3D9DrawStateCacheLookup(/*hit=*/false, includeIndexBuffer);
+    dxmt9::perf::countD3D9DrawStateCacheDirectLookup(/*hit=*/false,
+                                                     includeIndexBuffer);
     dxmt9::perf::countD3D9DrawStateCacheMissReason(
         drawStateInvalidationReasonMask_);
 
@@ -2502,12 +2709,16 @@ Device::cachedBaseDrawState(bool includeIndexBuffer) {
     {
       PerfScope shaderLayoutScope(
           dxmt9::perf::countD3D9SnapshotCacheMissShaderLayoutCpuTime);
+      PerfScope directShaderLayoutScope(
+          dxmt9::perf::countD3D9SnapshotCacheDirectMissShaderLayoutCpuTime);
       cache.shaderLayout = makeDrawShaderLayoutContextFromState(baseState);
     }
     DrawUniformPayloadHashes uniformHashes{};
     {
       PerfScope uniformBuildScope(
           dxmt9::perf::countD3D9SnapshotCacheMissUniformBuildCpuTime);
+      PerfScope directUniformBuildScope(
+          dxmt9::perf::countD3D9SnapshotCacheDirectMissUniformBuildCpuTime);
       cache.uniforms = makeDrawUniformPayloadFromState(
           baseState, cache.shaderLayout.clipPlaneMask, &uniformHashes,
           /*recordSnapshotPerf=*/true, &cache.shaderLayout);
@@ -2516,6 +2727,8 @@ Device::cachedBaseDrawState(bool includeIndexBuffer) {
     {
       PerfScope hotBuildScope(
           dxmt9::perf::countD3D9SnapshotCacheMissHotBuildCpuTime);
+      PerfScope directHotBuildScope(
+          dxmt9::perf::countD3D9SnapshotCacheDirectMissHotBuildCpuTime);
       const auto viewport = makeViewportScissorFromState(baseState);
       cache.hot = makeFlatDrawStateRecordFromState(baseState,
                                                    cache.shaderLayout,
@@ -2524,6 +2737,10 @@ Device::cachedBaseDrawState(bool includeIndexBuffer) {
     }
     cache.generation = drawStateGeneration_;
     cache.uniformGeneration = drawUniformGeneration_;
+    cache.uniformNonConstantGeneration = drawUniformNonConstantGeneration_;
+    cache.renderStateFlatGeneration = drawRenderStateFlatGeneration_;
+    cache.textureStageStateFlatGeneration = drawTextureStageStateFlatGeneration_;
+    cache.samplerStateFlatGeneration = drawSamplerStateFlatGeneration_;
     cache.valid = true;
     drawStateInvalidationReasonMask_ = DrawStateInvalidationUnknown;
   }
@@ -2554,8 +2771,11 @@ Device::cachedBaseDrawStateForSubmissionBatch() {
   };
   if (cache.valid && cache.generation == drawStableStateGeneration_) {
     PerfScope hitScope(dxmt9::perf::countD3D9SnapshotCacheHitCpuTime);
+    PerfScope batchHitScope(
+        dxmt9::perf::countD3D9SnapshotCacheBatchHitCpuTime);
     dxmt9::perf::countD3D9DrawStateCacheLookup(/*hit=*/true,
                                                 /*includeIndexBuffer=*/false);
+    dxmt9::perf::countD3D9DrawStateCacheBatchLookup(/*hit=*/true);
     if (drawStateInvalidationIsBindingOnly(drawStateInvalidationReasonMask_)) {
       drawStateInvalidationReasonMask_ = DrawStateInvalidationUnknown;
     }
@@ -2574,14 +2794,19 @@ Device::cachedBaseDrawStateForSubmissionBatch() {
   }
   {
     PerfScope missScope(dxmt9::perf::countD3D9SnapshotCacheMissCpuTime);
+    PerfScope batchMissScope(
+        dxmt9::perf::countD3D9SnapshotCacheBatchMissCpuTime);
     dxmt9::perf::countD3D9DrawStateCacheLookup(/*hit=*/false,
                                                 /*includeIndexBuffer=*/false);
+    dxmt9::perf::countD3D9DrawStateCacheBatchLookup(/*hit=*/false);
     dxmt9::perf::countD3D9DrawStateCacheMissReason(
         drawStateInvalidationReasonMask_);
 
     {
       PerfScope shaderLayoutScope(
           dxmt9::perf::countD3D9SnapshotCacheMissShaderLayoutCpuTime);
+      PerfScope batchShaderLayoutScope(
+          dxmt9::perf::countD3D9SnapshotCacheBatchMissShaderLayoutCpuTime);
       cache.shaderLayout = makeDrawShaderLayoutContextFromState(state_);
     }
     {
@@ -2590,25 +2815,70 @@ Device::cachedBaseDrawStateForSubmissionBatch() {
       refreshBindingLayout();
     }
     DrawUniformPayloadHashes uniformHashes{};
+    const DrawUniformPayloadHashes *reusableNonConstantHashes =
+        cache.valid &&
+            cache.uniformNonConstantGeneration ==
+                drawUniformNonConstantGeneration_
+            ? &cache.uniformHashes
+            : nullptr;
+    dxmt9::perf::countD3D9SnapshotCacheBatchMissUniformNonConstHashReuse(
+        reusableNonConstantHashes != nullptr);
     {
       PerfScope uniformBuildScope(
           dxmt9::perf::countD3D9SnapshotCacheMissUniformBuildCpuTime);
+      PerfScope batchUniformBuildScope(
+          dxmt9::perf::countD3D9SnapshotCacheBatchMissUniformBuildCpuTime);
+      dxmt9::perf::ScopedD3D9SnapshotUniformBuildContext uniformBuildContext(
+          dxmt9::perf::D3D9SnapshotUniformBuildContext::BatchMiss);
       cache.uniforms = makeDrawUniformPayloadFromState(
           state_, cache.shaderLayout.clipPlaneMask, &uniformHashes,
-          /*recordSnapshotPerf=*/true, &cache.shaderLayout);
+          /*recordSnapshotPerf=*/true, &cache.shaderLayout,
+          reusableNonConstantHashes);
       cache.uniformHashes = uniformHashes;
     }
     {
       PerfScope hotBuildScope(
           dxmt9::perf::countD3D9SnapshotCacheMissHotBuildCpuTime);
+      PerfScope batchHotBuildScope(
+          dxmt9::perf::countD3D9SnapshotCacheBatchMissHotBuildCpuTime);
       const auto viewport = makeViewportScissorFromState(state_);
+      const bool reuseRenderStates =
+          cache.valid &&
+          cache.renderStateFlatGeneration == drawRenderStateFlatGeneration_;
+      const bool reuseTextureStageStates =
+          cache.valid &&
+          cache.textureStageStateFlatGeneration ==
+              drawTextureStageStateFlatGeneration_;
+      const bool reuseSamplerStates =
+          cache.valid &&
+          cache.samplerStateFlatGeneration == drawSamplerStateFlatGeneration_;
+      dxmt9::perf::countD3D9SnapshotCacheBatchMissHotBuildFlatRenderReuse(
+          reuseRenderStates);
+      dxmt9::perf::countD3D9SnapshotCacheBatchMissHotBuildFlatTssReuse(
+          reuseTextureStageStates);
+      dxmt9::perf::countD3D9SnapshotCacheBatchMissHotBuildFlatSamplerReuse(
+          reuseSamplerStates);
+      const FlatDrawStateRecordBuildPerfOptions hotBuildPerf{
+          .recordBatchMissHotBuild = true,
+          .reusableRenderStates =
+              reuseRenderStates ? &cache.hot.renderStates : nullptr,
+          .reusableTextureStageStates =
+              reuseTextureStageStates ? &cache.hot.textureStageStates : nullptr,
+          .reusableSamplerStates =
+              reuseSamplerStates ? &cache.hot.samplerStates : nullptr,
+      };
       cache.hot = makeFlatDrawStateRecordFromState(state_, cache.shaderLayout,
                                                    cache.uniforms, viewport,
-                                                   &uniformHashes);
+                                                   &uniformHashes,
+                                                   hotBuildPerf);
       clearDrawStateBindingFields(cache.hot);
     }
     cache.generation = drawStableStateGeneration_;
     cache.uniformGeneration = drawUniformGeneration_;
+    cache.uniformNonConstantGeneration = drawUniformNonConstantGeneration_;
+    cache.renderStateFlatGeneration = drawRenderStateFlatGeneration_;
+    cache.textureStageStateFlatGeneration = drawTextureStageStateFlatGeneration_;
+    cache.samplerStateFlatGeneration = drawSamplerStateFlatGeneration_;
     cache.valid = true;
     drawStateInvalidationReasonMask_ = DrawStateInvalidationUnknown;
   }
@@ -2637,7 +2907,8 @@ void Device::submitDrawRunInternalFromCurrentState(
 }
 
 HResult Device::snapshotDrawSubmissionFromCurrentState(
-    DrawParam draw, DrawRunSubmission &submission) {
+    DrawParam draw, DrawRunSubmission &submission,
+    const DrawRunSubmission* previousSubmission) {
   PerfScope scope(dxmt9::perf::countD3D9SnapshotDrawSubmissionCpuTime);
   if (draw.primitiveType == PrimitiveType::TriangleFan) {
     return D3DERR_INVALIDCALL;
@@ -2656,31 +2927,59 @@ HResult Device::snapshotDrawSubmissionFromCurrentState(
         : cachedBaseDrawState(includeIndexBuffer));
   }
   const auto& cached = *cachedPtr;
-  {
-    PerfScope uniformCopyScope(
-        dxmt9::perf::countD3D9SnapshotUniformCopyCpuTime);
-    submission.uniforms = cached.uniforms;
-  }
   submission.draw = draw;
   submission.payload = {};
   submission.bindingOverride = {};
   submission.stateGeneration = cached.generation;
+  submission.uniformGeneration = cached.uniformGeneration;
   submission.stateLane = useBindingAgnosticSnapshot
       ? DrawRunSubmissionStateLane::BindingAgnostic
       : (includeIndexBuffer
           ? DrawRunSubmissionStateLane::FullWithIndex
           : DrawRunSubmissionStateLane::FullNoIndex);
-  {
-    PerfScope stateCopyScope(
-        dxmt9::perf::countD3D9SnapshotStateCopyCpuTime);
-    submission.state.hot = cached.hot;
-    submission.state.shaderLayout = cached.shaderLayout;
+  const bool samePreviousGenerationLane = previousSubmission &&
+      drawRunSubmissionSameStateGenerationLane(*previousSubmission, submission);
+  const bool stateCopyElisionEnabled = useBindingAgnosticSnapshot;
+  const bool elideUniformCopy = stateCopyElisionEnabled &&
+      samePreviousGenerationLane &&
+      drawRunSubmissionSameUniformGeneration(*previousSubmission, submission);
+  if (elideUniformCopy) {
+    submission.uniforms.reset();
+    dxmt9::perf::countD3D9SnapshotUniformElided(
+        drawRunSubmissionUniformCopyBytes());
+  } else {
+    {
+      PerfScope uniformCopyScope(
+          dxmt9::perf::countD3D9SnapshotUniformCopyCpuTime);
+      submission.uniforms.emplace(cached.uniforms);
+    }
+    dxmt9::perf::countD3D9SnapshotUniformMaterialized(
+        drawRunSubmissionUniformCopyBytes());
+  }
+  const bool elideStateCopy = stateCopyElisionEnabled &&
+      samePreviousGenerationLane;
+  submission.stateMaterialized = !elideStateCopy;
+  if (elideStateCopy) {
+    submission.state.reset();
+    dxmt9::perf::countD3D9SnapshotStateElided(
+        drawRunSubmissionStateCopyBytes());
+  } else {
+    auto& state = submission.state.emplace();
+    {
+      PerfScope stateCopyScope(
+          dxmt9::perf::countD3D9SnapshotStateCopyCpuTime);
+      state.hot = cached.hot;
+      state.shaderLayout = cached.shaderLayout;
+    }
+    dxmt9::perf::countD3D9SnapshotStateMaterialized(
+        drawRunSubmissionStateCopyBytes());
   }
   countFlatDrawStateRecordEntries(cached.hot);
-  {
+  if (submission.stateMaterialized) {
+    auto& state = submission.materializedState();
     PerfScope debugSnapshotScope(
         dxmt9::perf::countD3D9SnapshotDebugSnapshotCpuTime);
-    submission.state.debug = makeDrawDebugSnapshot(
+    state.debug = makeDrawDebugSnapshot(
         DrawCallArgs{draw.primitiveType, draw.primitiveCount,
                      draw.startVertex, draw.baseVertexIndex,
                      draw.startIndex, draw.indexType},
@@ -2712,7 +3011,10 @@ HResult Device::snapshotDrawSubmissionFromCurrentState(
     }
     dxmt9::perf::countD3D9SnapshotBindingOverride(
         kMaxStreams, streamRecords, draw.indexed);
-    submission.state.debug.streamMask = submission.bindingOverride.streamMask;
+    if (submission.stateMaterialized) {
+      submission.materializedState().debug.streamMask =
+          submission.bindingOverride.streamMask;
+    }
   }
   return D3D_OK;
 }
@@ -2808,6 +3110,9 @@ void Device::submitDrawSubmissionBatch(
   }
 
   if (renderTraceEnabled()) {
+    const auto& frontState = submissions.front().materializedState();
+    const DrawUniformPayload* previousUniform = nullptr;
+    u64 previousUniformGeneration = 0;
     for (auto &submission : submissions) {
       const std::span<const DrawParam> draws(&submission.draw, 1);
       std::span<const DrawParamPayloadView> payloads{};
@@ -2817,8 +3122,19 @@ void Device::submitDrawSubmissionBatch(
           !submission.payload.bindingSnapshotData.empty()) {
         payloads = std::span<const DrawParamPayloadView>(&submission.payload, 1);
       }
-      submitDrawRunInternal(std::move(submission.state), submission.uniforms,
-                            draws, payloads);
+      CanonicalDrawState state = submission.stateMaterialized
+          ? submission.materializedState()
+          : frontState;
+      if (submission.uniforms.has_value()) {
+        previousUniform = &submission.uniformPayload();
+        previousUniformGeneration = submission.uniformGeneration;
+      } else {
+        const bool sameUniformGeneration =
+            submission.uniformGeneration == previousUniformGeneration;
+        DXMT_ASSERT(previousUniform && sameUniformGeneration);
+        (void)sameUniformGeneration;
+      }
+      submitDrawRunInternal(std::move(state), *previousUniform, draws, payloads);
     }
     return;
   }

@@ -34,12 +34,27 @@ write" owner ([[hidden-backend-storage]]).
 | H11 | Shader-usage/range-aware uniform payload hashing can remove the full payload hash cost | accepted CPU win; hash/build `11.322us→2.590us`, parent build `13.204us→4.372us` | [[snapshot-cache-snapshot.08]] |
 | H12 | Non-bytecode/FFP shaders can avoid programmable constant full fallback | accepted CPU win; PS full fallback `84,380→0`, hash/build `2.590us→2.082us` | [[snapshot-cache-snapshot.09]] |
 | H13 | Cache-hit uniform refresh can reuse non-constant payload fields and hashes | accepted CPU win; uniform refresh `2014.263ms→814.507ms`, snapshot submission `7622.807ms→6495.069ms`, FPS flat | [[snapshot-cache-snapshot.10]] |
+| H14 | Current lookup residual belongs to the queued draw-submission batch lane, not direct/no-index ambiguity | accepted attribution; batch hit+miss `5692.001ms` matches lookup parent `5892.464ms`, direct miss `1283.032ms` is separate draw-run caller work | [[snapshot-cache-snapshot.11]] |
+| H15 | Batch miss is dominated by uniform-build and hot-build, not shader-layout rebuild | accepted attribution; batch miss `4756.913ms` splits into uniform build `2083.529ms`, hot build `1774.774ms`, shader layout `607.942ms` | [[snapshot-cache-snapshot.12]] |
+| H16 | Batch miss uniform-build is dominated by hashing, not copy or FFP construction | accepted attribution; batch uniform build `2175.433ms` splits into hash `1413.471ms` (`64.97%`), VS constant hash `490.107ms`, non-constant hash `677.447ms`; VS full fallback remains indexed-float (`73,676` calls) | [[snapshot-cache-snapshot.13]] |
+| H17 | Batch miss non-constant hashes can be reused when non-constant uniform generation is unchanged | accepted CPU win; reuse hits `376,949 / 418,143` (`90.15%`), non-constant hash `677.447ms→73.490ms`, batch uniform build `2175.433ms→1591.208ms`, FPS flat | [[snapshot-cache-snapshot.14]] |
+| H18 | Batch miss hot-build is dominated by repeated flat state-set materialization | accepted attribution; render-state `FlatStateSet` build `1202.861ms` owns the split, ahead of key build `485.840ms`, sampler `213.765ms`, and TSS `204.392ms` | [[snapshot-cache-snapshot.15]] |
+| H19 | Batch miss flat-state sets can be reused by exact dirty generation | accepted CPU win; render/TSS/sampler flat reuse hit rates `90.12%` / `99.36%` / `79.93%`, hot-build `1.444→0.684ms/present`, snapshot submission `4.255→3.469ms/present`, FPS flat/noisy | [[snapshot-cache-snapshot.16]] |
+| H20 | Same-generation/lane draws can also elide adjacent uniform snapshots | rejected for GT1; state elision fires `411,758` times, but uniform elision fires `0` times because `uniformGeneration` changes across those groups | [[snapshot-cache-snapshot.17]] |
+| H21 | VS indexed-float fallback can safely hash full float constants but prefix int/bool tails | rejected as next target; safe tail reduction is real but only `20.720MB` / `5.47%` of batch VS-constant hash bytes | [[snapshot-cache-snapshot.18]] |
 
 ## Verification methods
 
 - `d3d9_draw_state_cache_hits` / `_misses` / `_hit_with_index` / `_miss_with_index`
   / `_hit_no_index` / `_miss_no_index` / `_uniform_refreshes` — proves whether the
   base draw-state cache serves any hit and whether the indexed path is the misser.
+- `d3d9_draw_state_cache_direct_{hits,misses}` plus the direct
+  `{hit,miss}_{with,no}_index` split, and
+  `d3d9_draw_state_cache_batch_{hits,misses}` — separates legacy/direct
+  `cachedBaseDrawState()` callers from the draw-submission batch
+  `cachedBaseDrawStateForSubmissionBatch()` lane. This removes the older
+  ambiguity where binding-agnostic batch lookups and no-index direct lookups both
+  landed in `_hit_no_index` / `_miss_no_index`.
 - `d3d9_snapshot_draw_submission_cpu_ms` (+ `_max/_p50/_p95/_p99`) — the direct CPU
   proof that snapshot rebuild churn moved.
 - `d3d9_snapshot_cache_lookup_cpu_ms`, `_uniform_copy_cpu_ms`,
@@ -51,15 +66,42 @@ write" owner ([[hidden-backend-storage]]).
   `_index_records` — proves whether the per-draw 16-stream scan is actually
   large enough to matter.
 - `d3d9_snapshot_cache_hit_cpu_ms`, `_miss_cpu_ms`,
+  `_direct_hit_cpu_ms`, `_direct_miss_cpu_ms`, `_batch_hit_cpu_ms`,
+  `_batch_miss_cpu_ms`,
   `_uniform_refresh_cpu_ms`, `_uniform_build_cpu_ms`,
   `_uniform_hash_cpu_ms`, `_miss_uniform_build_cpu_ms`,
-  `_miss_hot_build_cpu_ms` — splits `cachedBaseDrawState*()` lookup into
-  hit/miss rebuild and proves whether duplicate hashing or payload construction
-  owns the path.
+  `_miss_hot_build_cpu_ms`, plus
+  `_direct_miss_{shader_layout,uniform_build,hot_build}_cpu_ms` and
+  `_batch_miss_{shader_layout,uniform_build,hot_build}_cpu_ms` — splits
+  `cachedBaseDrawState*()` lookup into hit/miss rebuild, then separates direct
+  vs draw-submission batch ownership and miss-child ownership so a current
+  no-gputrace run can identify whether the remaining lookup cost belongs to
+  ordinary direct draws or the chunk-replay batch path.
 - `d3d9_snapshot_uniform_build_{vs,ps}_const_hash_full_{no_usage,unknown,unknown_bytecode,unknown_non_bytecode,indexed_float,indexed_int,indexed_bool}`
   — classifies why usage-aware constant hashing had to fall back to full
   constant snapshots; this split proved the residual PS full fallback was
   non-bytecode/FFP, not bytecode scanner failure.
+- `d3d9_snapshot_*_vs_const_hash_full_indexed_float_{min_safe_bytes,potential_saved_bytes}`
+  — estimates the correctness-preserving sub-case where an indexed-float shader
+  still needs the full float register file but can keep int/bool constant tails
+  usage-prefix bounded. Use this as an opportunity counter only; the current GT1
+  sample reports a small tail (`272B` per call), not a next large CPU lever.
+- `d3d9_snapshot_cache_batch_miss_uniform_build_*` — repeats the uniform-build
+  component timers and fallback counters only while the batch-miss
+  `makeDrawUniformPayloadFromState()` call is active. This prevents the
+  direct-miss and uniform-refresh paths from hiding the local owner.
+- `d3d9_snapshot_cache_batch_miss_uniform_nonconst_hash_reuse_{hits,misses}` —
+  proves whether the generation-gated batch miss path reused cached
+  non-constant component hashes or had to rehash them.
+- `d3d9_snapshot_cache_batch_miss_hot_build_*` — splits the batch-miss
+  `makeFlatDrawStateRecordFromState()` child into zero-init, key build,
+  binding/tail copies, and render/TSS/sampler `FlatStateSet` materialization.
+  This is an attribution-only nested-timer split; use sibling ranking rather
+  than exact closed-sum percentages.
+- `d3d9_snapshot_uniform_{materialized,elided}{,_bytes}` — proves whether the
+  opt-in same-generation/lane path could skip `DrawUniformPayload`
+  materialization. In GT1 this closes as a no-opportunity target: state copy
+  elision fires, uniform copy elision does not.
 - `d3d9_draw_state_cache_miss_after_{draw_packet,stream,index_buffer,texture,shader,fvf_vdecl}`
   — classifies which state delta caused each remaining miss (stream/IB dominate).
 - `commit_chunk_draw_delta_stream_handle` / `_ib_handle` — confirms real handle
@@ -94,6 +136,14 @@ flowchart TD
   S8["snapshot.08\nusage-aware payload hash\nhash/build 11.32→2.59us\nparent/build 13.20→4.37us"]:::accepted
   S9["snapshot.09\nFFP known-zero usage\nPS full fallback 84k→0\nhash/build 2.59→2.08us"]:::accepted
   S10["snapshot.10\nuniform-refresh fast path\nrefresh 2014→815ms\nsnapshot CPU -14.8%"]:::accepted
+  S11["snapshot.11\ndirect vs batch split\nbatch miss 4.73s\nlookup owner confirmed"]:::accepted
+  S12["snapshot.12\nbatch miss child split\nuniform 2.08s\nhot 1.77s"]:::accepted
+  S13["snapshot.13\nbatch uniform split\nhash 1.41s / 65%\nnonconst + VS indexed"]:::accepted
+  S14["snapshot.14\nnonconst hash reuse\nreuse 90.15%\nnonconst 677→73ms"]:::accepted
+  S15["snapshot.15\nhot-build split\nrender-state set 1.20s\nkey 0.49s"]:::accepted
+  S16["snapshot.16\nflat-state reuse\nhot-build/present -52.6%\nsnapshot/present -18.5%"]:::accepted
+  S17["snapshot.17\nuniform N-1 elision\nstate elides 411k\nuniform elides 0"]:::rejected
+  S18["snapshot.18\nVS indexed-float shape\nsafe tail only 20.7MB\nreject next target"]:::rejected
 
   S1 -->|"hits=0 → split"| S2
   S2 -->|"−3% only → classify"| S3
@@ -106,7 +156,15 @@ flowchart TD
   S7 -->|"full hash owner → narrow by shader usage"| S8
   S8 -->|"full fallback remains → split reason"| S9
   S9 -->|"refresh path still hashes nonconst"| S10
-  S10 -.->|"fps proof still open"| OPEN["open CPU tracks\nmiss hot-build / VS indexed fallback,\ncompletion_wait"]:::open
+  S10 -->|"lookup residual caller ambiguity"| S11
+  S11 -->|"which batch miss child?"| S12
+  S12 -->|"which uniform child?"| S13
+  S13 -->|"generation-gated reuse"| S14
+  S14 -->|"hot-build remains open"| S15
+  S15 -->|"flat-state generations"| S16
+  S16 -->|"try adjacent uniform reuse"| S17
+  S17 -->|"measure indexed-float tail"| S18
+  S18 -.->|"fps proof still open"| OPEN["open CPU tracks\nraw-run state N-1,\ndirect-construct / interned state,\ncompletion_wait"]:::open
 ```
 
 ## Results synthesis
@@ -206,15 +264,93 @@ presents. `sampled_avg_fps` stays flat (`15.717→15.752`), and GPU time /
 completion wait stay noisy, so this is another local CPU win rather than a
 run-level fps proof.
 
-Current priority after [[snapshot-cache-snapshot.10]]: snapshot rebuild remains
-worth tracking (`6495.069ms`, `3.866ms/present` in the latest no-gputrace run),
-but it is behind backend encode (`encode_draw_cpu_ms=16520.675`) and
-completion wait (`completion_wait_ms=39290.753`). The next CPU budget should
-therefore compare residual snapshot ideas such as miss hot-build
-(`1573.980ms`) and VS indexed-float fallback (`115,933` full hashes) against
-named encode buckets such as argbuf setup (`3357.980ms`), binding-packet
-construction/cache (`2705.893ms`), queue append (`2403.727ms`), stream/index
-bind, and issue cost before treating snapshot as the sole first-order owner.
+The direct-vs-batch split then resolves the current lookup-parent ambiguity.
+In [[snapshot-cache-snapshot.11]], the new batch timers account for almost all
+of `d3d9_snapshot_cache_lookup_cpu_ms`: `batch_hit + batch_miss =
+5692.001ms` versus lookup `5892.464ms`. The direct path still has real work
+(`direct_miss=1283.032ms`, mostly indexed direct/draw-run callers), but it is
+not the owner of the queued snapshot parent. The next snapshot implementation
+should therefore target the batch miss lane, not generic no-index direct lookup
+or more carrier-copy cleanup.
+
+The batch-miss child split then names the local implementation target.
+[[snapshot-cache-snapshot.12]] reports batch miss `4756.913ms`: uniform build
+`2083.529ms`, hot build `1774.774ms`, and shader layout only `607.942ms`.
+This rejects shader-layout micro-optimization as the first snapshot lever. The
+next snapshot work should split or reduce batch uniform-build and batch hot-build
+work, with the VS indexed-float fallback still requiring a correctness proof
+before narrowing.
+
+The batch-miss uniform-build split then rejects payload copy and FFP
+construction as the local uniform owner. [[snapshot-cache-snapshot.13]] reports
+batch uniform build `2175.433ms`, of which hash work is `1413.471ms`
+(`64.97%`). The two largest named hash children are non-constant hash
+(`677.447ms`) and VS constant hash (`490.107ms`); the VS full fallback remains
+entirely indexed-float (`73,676` calls, `366.471MB` hashed). The next uniform
+work should therefore target component-hash reuse or a correctness proof for a
+narrower indexed-float subset, not another copy/FFP micro-optimization.
+
+The generation-gated non-constant hash reuse then accepts that component-hash
+target as a local CPU win. [[snapshot-cache-snapshot.14]] adds a
+`drawUniformNonConstantGeneration_` and reuses cached non-constant component
+hashes on batch misses when Transform/Light/Material/Clip/RenderState-class
+state has not changed. The GT1 scout reports reuse on `376,949 / 418,143`
+batch uniform builds (`90.15%`), dropping non-constant hash
+`677.447ms→73.490ms`, total hash `1413.471ms→807.075ms`, and batch uniform build
+`2175.433ms→1591.208ms`. The final frame stays visually normal. Average FPS,
+GPU command-buffer time, and completion wait remain flat/noisy, so this closes
+the non-constant hash child but not the frame-rate owner.
+
+The batch-miss hot-build split then names the remaining local hot-state owner.
+[[snapshot-cache-snapshot.15]] is an attribution run with nested timer overhead,
+but sibling ranking is clear: render-state `FlatStateSet` materialization
+(`1202.861ms`) dominates hot-build, followed by key construction (`485.840ms`),
+sampler `FlatStateSet` (`213.765ms`), and TSS `FlatStateSet` (`204.392ms`).
+Binding/tail copies are small. Because most batch misses are caused by
+stream/IB/texture/shader/FVF churn, repeatedly rebuilding unchanged render and
+sampler/TSS flat sets is avoidable component work.
+
+Generation-gated flat-state reuse then accepts that hot-build target as a CPU
+win. [[snapshot-cache-snapshot.16]] stores exact dirty generations for render,
+TSS, and sampler flat-state classes, then reuses unchanged sets across batch
+misses. GT1 hit rates are high enough to matter: render `90.12%`, TSS `99.36%`,
+sampler `79.93%`. Hot-build drops `1.444→0.684ms/present`, render-state set
+materialization `0.691→0.089ms/present`, and total snapshot submission
+`4.255→3.469ms/present`. The final frame stays visually normal. Average FPS,
+GPU command-buffer time, and completion wait remain flat/noisy, so this closes
+the flat-state child but not the frame-rate owner.
+
+The adjacent uniform payload copy-elision probe then rejects the obvious next
+N-1 carrier target for GT1. [[snapshot-cache-snapshot.17]] enables
+`DXMT9_DRAWRUN_GROUP_BY_GEN_LANE=1` and stamps `uniformGeneration` so a
+non-front submission could reuse the previous `DrawUniformHandle` when both
+state generation/lane and uniform generation match. State elision fires
+`411,758` times and removes `4.21GB` of state-copy materialization, but uniform
+elision fires `0` times. `d3d9_snapshot_uniform_copy_cpu_ms` stays flat
+(`245.388→247.167ms`) and `submit_draw_run_batch_append_uniform_cpu_ms` stays
+flat (`850.245→853.835ms`). Therefore GT1's same-state batches still change
+uniform generation, and adjacent uniform snapshot reuse is not a live
+optimization target.
+
+The VS indexed-float shape probe then closes the remaining uniform-hash fallback
+as the next large snapshot target. [[snapshot-cache-snapshot.18]] proves the
+safe sub-case exists: all batch full fallback is `indexedFloat`, while
+`indexedInt` and `indexedBool` stay `0`, so a future hash could keep the full
+float register file and only hash the used int/bool prefix. The measured tail is
+small, though: `20.720MB` over the batch-miss path, `272B` per call, and
+`5.47%` of batch VS-constant hash bytes. That is a possible micro-cleanup if the
+uniform hash code is being touched anyway, not the next GT1 FPS lever.
+
+Current priority after [[snapshot-cache-snapshot.18]]: snapshot rebuild remains
+worth tracking, but it is still behind backend encode and completion wait as an
+average-FPS owner. Further snapshot work should target proved larger copy-policy
+children only: raw-run / generation-lane state N-1 materialization,
+direct construction into queue-owned storage, or interned compact draw-state
+storage. Do not pursue adjacent uniform snapshot reuse for GT1 without a new
+non-zero `d3d9_snapshot_uniform_elided` counter sample, and do not promote VS
+indexed-float partial hashing as a standalone optimization. Average-FPS proof
+still needs movement in the pacing/overlap lane or a larger end-to-end CPU
+reduction.
 
 ## How to run
 Every experiment here is a 3DMark05 GT1 run via the standard wrapper. This is a

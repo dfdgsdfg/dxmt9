@@ -661,6 +661,12 @@ bool measureIndexReuse();
 // Env: DXMT9_MEASURE_INDEX_CACHE_OPT_CANDIDATE.
 bool measureIndexCacheOptCandidate();
 
+// True when indexed triangle-list diagnostics or opt-in reordering paths are
+// enabled. The draw encoder uses this to keep the default indexed path from
+// preparing diagnostic byte spans and row/class filters when every such knob is
+// off.
+bool indexedTriangleDiagnosticsEnabled();
+
 // Diagnostic-only: directory for dumping replayable indexed triangle geometry
 // payloads. Uses the reverse-indexed-triangle row/class/span filters and the
 // indexed triangle encoder draw range. Env: DXMT9_DUMP_INDEXED_GEOMETRY_DIR.

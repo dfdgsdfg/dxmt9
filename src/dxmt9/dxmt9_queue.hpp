@@ -612,6 +612,9 @@ class QueueLifecycleController {
   bool noEnqueueGapCommitChunkEntryRecorded_ = false;
   bool noEnqueueGapCommitChunkReplayStartRecorded_ = false;
   bool noEnqueueGapCommitChunkReplayEndRecorded_ = false;
+  std::chrono::steady_clock::time_point noEnqueueGapCommitChunkEntryTime_{};
+  std::chrono::steady_clock::time_point noEnqueueGapCommitPublishTime_{};
+  std::chrono::steady_clock::time_point noEnqueueGapEncodeDequeueTime_{};
 };
 
 class CompletionTracker {

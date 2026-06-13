@@ -745,7 +745,8 @@ void testDrawRunBatchBindingOverrideNormalizesStreamAndIndexState() {
   submissions[1].draw.indexed = true;
   submissions[1].draw.indexType = IndexType::UInt32;
 
-  check(!(submissions[0].state.hot == submissions[1].state.hot),
+  check(!(submissions[0].materializedState().hot ==
+          submissions[1].materializedState().hot),
         "raw stream/IB states differ before normalization");
   check(drawRunSubmissionStatesCompatibleForBatch(submissions[0], submissions[1]),
         "stream/IB and uniform-only state changes are compatible for draw-run batching");
@@ -779,12 +780,13 @@ void testDrawRunBatchBindingOverrideNormalizesStreamAndIndexState() {
         "binding override captures index type");
 
   auto textureChanged = submissions[1];
-  textureChanged.state.hot.textures[0] = Handle{0x6100u};
-  textureChanged.state.hot.textureMask = 0x1u;
-  textureChanged.state.hot.key.textures[0] =
-      textureChanged.state.hot.textures[0];
-  textureChanged.state.hot.key.textureMask =
-      textureChanged.state.hot.textureMask;
+  auto& textureChangedState = textureChanged.materializedState();
+  textureChangedState.hot.textures[0] = Handle{0x6100u};
+  textureChangedState.hot.textureMask = 0x1u;
+  textureChangedState.hot.key.textures[0] =
+      textureChangedState.hot.textures[0];
+  textureChangedState.hot.key.textureMask =
+      textureChangedState.hot.textureMask;
   check(!drawRunSubmissionStatesCompatibleForBatch(submissions[0], textureChanged),
         "external binding override does not hide texture binding changes");
 
@@ -803,6 +805,126 @@ void testDrawRunBatchBindingOverrideNormalizesStreamAndIndexState() {
           "second draw param points at serialized binding override");
 }
 
+void testChunkSlotDrawRunBatchKeepsElidedNonFrontDrawData() {
+  DrawDesc desc{};
+  desc.primitiveCount = 1u;
+  desc.rts.color[0] = RenderTargetAttachment{.handle = Handle{0x3000u}};
+
+  DrawDesc firstDesc = desc;
+  DrawDesc secondDesc = desc;
+  firstDesc.vsConst.float4[0][0] = 17.0f;
+  secondDesc.vsConst.float4[0][0] = 23.0f;
+
+  std::array<DrawRunSubmission, 2> submissions{};
+  submissions[0].state = makeCanonicalDrawStateForTest(desc);
+  submissions[0].uniforms = makeDrawUniformPayload(firstDesc);
+  submissions[0].draw = makeDrawParam(1u, 0u);
+  submissions[0].stateGeneration = 11u;
+  submissions[0].stateLane = DrawRunSubmissionStateLane::BindingAgnostic;
+  submissions[0].stateMaterialized = true;
+
+  submissions[1].uniforms = makeDrawUniformPayload(secondDesc);
+  submissions[1].draw = makeDrawParam(1u, 3u);
+  submissions[1].stateGeneration = submissions[0].stateGeneration;
+  submissions[1].stateLane = submissions[0].stateLane;
+  submissions[1].stateMaterialized = false;
+
+  ChunkSlot slot{};
+  slot.appendDrawRunBatch(
+      std::span<DrawRunSubmission>(submissions.data(), submissions.size()));
+
+  checkEq(slot.commandCount(), std::size_t{1},
+          "elided non-front batch appends one draw-run command");
+  checkEq(slot.drawHotStates.size(), std::size_t{1},
+          "elided non-front batch stores only the materialized front state");
+  checkEq(slot.drawParams.size(), std::size_t{2},
+          "elided non-front batch keeps both draw params");
+
+  const auto command = slot.drawRunCommandAt(0u);
+  const auto* firstUniform =
+      drawRunUniformPayloadForParam(command, command.drawParams[0]);
+  const auto* secondUniform =
+      drawRunUniformPayloadForParam(command, command.drawParams[1]);
+  check(firstUniform && secondUniform,
+        "elided non-front batch keeps per-draw uniform handles");
+  check(firstUniform->vsConst.float4[0][0] == 17.0f,
+        "front draw keeps its uniform payload");
+  check(secondUniform->vsConst.float4[0][0] == 23.0f,
+        "elided non-front draw keeps its uniform payload");
+}
+
+void testChunkSlotDrawRunBatchReusesElidedUniformPayload() {
+  DrawDesc desc{};
+  desc.primitiveCount = 1u;
+  desc.rts.color[0] = RenderTargetAttachment{.handle = Handle{0x3000u}};
+  desc.vsConst.float4[0][0] = 31.0f;
+
+  std::array<DrawRunSubmission, 2> submissions{};
+  submissions[0].state = makeCanonicalDrawStateForTest(desc);
+  submissions[0].uniforms = makeDrawUniformPayload(desc);
+  submissions[0].draw = makeDrawParam(1u, 0u);
+  submissions[0].stateGeneration = 41u;
+  submissions[0].uniformGeneration = 59u;
+  submissions[0].stateLane = DrawRunSubmissionStateLane::BindingAgnostic;
+  submissions[0].stateMaterialized = true;
+
+  submissions[1].draw = makeDrawParam(1u, 3u);
+  submissions[1].stateGeneration = submissions[0].stateGeneration;
+  submissions[1].uniformGeneration = submissions[0].uniformGeneration;
+  submissions[1].stateLane = submissions[0].stateLane;
+  submissions[1].stateMaterialized = false;
+
+  ChunkSlot slot{};
+  slot.appendDrawRunBatch(
+      std::span<DrawRunSubmission>(submissions.data(), submissions.size()));
+
+  checkEq(slot.commandCount(), std::size_t{1},
+          "uniform-elided batch appends one draw-run command");
+  checkEq(slot.drawHotStates.size(), std::size_t{1},
+          "uniform-elided batch stores one front state");
+  checkEq(slot.drawUniformPayloads.size(), std::size_t{1},
+          "uniform-elided batch interns only the materialized uniform payload");
+
+  const auto command = slot.drawRunCommandAt(0u);
+  const auto* firstUniform =
+      drawRunUniformPayloadForParam(command, command.drawParams[0]);
+  const auto* secondUniform =
+      drawRunUniformPayloadForParam(command, command.drawParams[1]);
+  check(firstUniform && secondUniform,
+        "uniform-elided batch resolves both draw uniform payloads");
+  check(firstUniform == secondUniform,
+        "uniform-elided non-front draw reuses the previous uniform handle");
+  check(secondUniform->vsConst.float4[0][0] == 31.0f,
+        "uniform-elided draw reads the reused uniform payload");
+}
+
+void testDrawRunSubmissionAcceptedPreviousStateChain() {
+  std::array<DrawRunSubmission, 3> submissions{};
+  submissions[0].stateGeneration = 7u;
+  submissions[0].stateLane = DrawRunSubmissionStateLane::BindingAgnostic;
+  submissions[0].stateMaterialized = true;
+
+  submissions[1].stateGeneration = 11u;
+  submissions[1].stateLane = DrawRunSubmissionStateLane::BindingAgnostic;
+  submissions[1].stateMaterialized = true;
+
+  submissions[2].stateGeneration = submissions[1].stateGeneration;
+  submissions[2].stateLane = submissions[1].stateLane;
+  submissions[2].stateMaterialized = false;
+
+  check(!drawRunSubmissionSameStateGenerationLane(submissions[0],
+                                                  submissions[2]),
+        "candidate is not directly same-stamp with the batch front");
+  check(drawRunSubmissionUsesAcceptedPreviousStateGenerationLane(
+            submissions[0], submissions[1], submissions[2]),
+        "elided candidate can inherit compatibility from accepted previous draw");
+
+  submissions[2].stateMaterialized = true;
+  check(!drawRunSubmissionUsesAcceptedPreviousStateGenerationLane(
+            submissions[0], submissions[1], submissions[2]),
+        "materialized candidates must still use direct state compatibility");
+}
+
 } // namespace
 
 int main() {
@@ -813,6 +935,9 @@ int main() {
     testChunkSlotDrawRunBatchKeepsPerDrawUniformPayloads();
     testChunkSlotUniformPayloadLookupHashCollisionKeepsDistinctPayloads();
     testDrawRunBatchBindingOverrideNormalizesStreamAndIndexState();
+    testChunkSlotDrawRunBatchKeepsElidedNonFrontDrawData();
+    testChunkSlotDrawRunBatchReusesElidedUniformPayload();
+    testDrawRunSubmissionAcceptedPreviousStateChain();
   } catch (const TestFailure &e) {
     std::cerr << "dod_replay_observer_spec failed: " << e.what() << '\n';
     return EXIT_FAILURE;

@@ -23,7 +23,7 @@ real lever — dependency-aware pass reordering/coalescing — is still **open**
 | H3 | A color/depth live-out `StoreActionDontCare` proof can discard re-entry stores | model representable, GT1 gap | [[render-pass-store-dontcare.01]] |
 | H4 | The conservative color next-clear DontCare proof fires on GT1 | **rejected** (`render_pass_store_action_dontcare=0`; re-entry is preserve-before-load) | [[render-pass-store-dontcare.02]] |
 | H5 | The re-entry budget is dominated by one attachment (single-attachment DontCare would suffice) | rejected (split ~50/50 color/depth) | [[render-pass-store-passchain.01]] |
-| H6 | Dependency-aware pass reordering/coalescing is the real lever (most switches change BOTH RT and depth) | **OPEN** — the modern-renderer Frame Graph DAG (RAW+WAR+WAW edges) now makes the candidate/safety judgment machine-decidable per frame; the device-gated coalesce-execution + byte-equal/preservation proof is still owed | [[render-pass-store-passchain.01]], [[render-pass-store-coalesce.01]] |
+| H6 | Dependency-aware pass reordering/coalescing is the real lever (most switches change BOTH RT and depth) | **OPEN** — the modern-renderer Frame Graph DAG (RAW+WAR+WAW edges) now makes the candidate/safety judgment machine-decidable per frame; the current frame60 refresh still reports 5/5 pre-opt safe candidates and 0/5 post-opt re-entries, but the device-gated coalesce-execution + byte-equal/preservation proof is still owed | [[render-pass-store-passchain.01]], [[render-pass-store-coalesce.01]], [[render-pass-store-coalesce.05]] |
 | H7 | Transient D3D9 intermediate RTs can be allocated as `MTLStorageModeMemoryless` to skip device RAM entirely | **OPEN (proposal)** — landing surface narrow without H6 coalesce; same-pass scope only | [[render-pass-store-memoryless.01]] |
 | H8 | Same-key re-entry is a short ping-pong pattern rather than a long dependency chain | accepted-counter-sample (`distance_1=90.35-90.77%`; one-hop shape is `100%` RT+depth-both-changed) | [[render-pass-store-reentry-distance.01]] |
 | H9 | One-hop ping-pong is exact-handle random, but depth-pair/true B->A encoder-path stable | accepted-counter-sample (`B 0x...001 -> A 0x...004 @ 2->3` owns `45.57GB`) | [[render-pass-store-reentry-distance.01]] |
@@ -69,18 +69,21 @@ real lever — dependency-aware pass reordering/coalescing — is still **open**
   accesses, intervening edge counts, and load/store shape before spending
   another Xcode capture on H6.
 
-**Current DAG sidecar observation.** Running
-`summarize_framegraph_dag.py` on
-`traces/app-d3d9-3dmark05-dag-current-20260612-203736/analysis/dag` reports
-`5` pre-opt files, `5` same-attachment re-entry pairs, and `5`
-safe-relocatable candidates for frames `48..52`. The matching post-opt summary
+**Current DAG sidecar observation.** The latest refresh
+([[render-pass-store-coalesce.05]]) runs frame60 ±2 on the current code state.
+It reports `5` pre-opt files, `5` same-attachment re-entry pairs, and `5`
+safe-relocatable candidates for frames `58..62`. The matching post-opt summary
 reports `5` files and `0` same-attachment pairs, while run counters report
-`framegraph_passes_coalesced=5`. This is a structural candidate/effect signal
-only: it says the dumped DAG has no intervening same-attachment accesses or
-intervening edges for those `P0 -> P2` pairs, and that the analysis-only
-`passcoalesce` pass removes them from the exported post-opt DAG. It still needs
-the device-gated linearized executor plus byte-equal output and Xcode counters
-before becoming an accepted performance optimization.
+`framegraph_passes_coalesced=5`. The run-level preservation shape is still the
+same P1 opportunity: `render_pass_tile_preservation_bytes=211.286GiB`,
+same-key re-entry preservation `85.918GiB` (`40.66%`), and distance-1 RT+depth
+re-entry preservation `81.430GiB` (`38.54%`). This is a structural
+candidate/effect signal only: it says the dumped DAG has no intervening
+same-attachment accesses or intervening edges for those `P0 -> P2` pairs, and
+that the analysis-only `passcoalesce` pass removes them from the exported
+post-opt DAG. It still needs the device-gated linearized executor plus
+byte-equal output and Xcode counters before becoming an accepted performance
+optimization.
 
 ## Experiment dependency graph
 
@@ -259,3 +262,4 @@ stream and passes a byte-equal output gate.
 - [[const-upload]] — the CPU-side upload-traffic sibling that, like the DontCare proofs here, moves bytes but not the GT1 GPU bottleneck.
 - [[baselines]] — frame120 reference where `rt=0x30000460000000c,depth=0x300000100000001` re-entry costs 24.643 ms / 73.32% of the frame.
 - [[render-pass-store-coalesce.01]] — the `specs/d3d9-renderer/` Frame Graph DAG + WAR/WAW edges operationalize the H6 re-entry coalesce (candidate/ordering/no-intervening-writer safety) machine-decidably on real GT1 frames (frame50 `P0→P2` WAW on color+depth); coalesce execution is device-gated.
+- [[render-pass-store-coalesce.05]] — current frame60 DAG refresh: 5/5 pre-opt safe candidates, 0 post-opt same-attachment pairs, `81.430GiB` distance-1 RT+depth preservation still structurally eliminable.

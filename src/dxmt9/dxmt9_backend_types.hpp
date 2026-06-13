@@ -122,6 +122,11 @@ struct DrawPsoSubview {
 struct DrawUniformPayloadRecord {
   DrawUniformHandle handle{};
   DrawUniformPayload payload{};
+
+  DrawUniformPayloadRecord() = default;
+  DrawUniformPayloadRecord(DrawUniformHandle uniformHandle,
+                           const DrawUniformPayload& uniformPayload)
+      : handle(uniformHandle), payload(uniformPayload) {}
 };
 
 struct MetalCommandHeader {
@@ -511,6 +516,8 @@ struct ChunkSlot {
 
   DrawUniformHandle findDrawUniformPayload(const DrawUniformPayload& payload,
                                            DrawUniformHandle candidate = {}) noexcept {
+    detail::ChunkSlotPerfScope lookupScope(
+        dxmt9::perf::countDrawUniformPayloadLookupCpuTime);
     const bool recordPerf = dxmt9::perf::enabled();
     if (const auto* record = drawUniformPayloadRecord(candidate)) {
       if (record->handle.hash == payload.hash && record->payload == payload) {
@@ -532,6 +539,8 @@ struct ChunkSlot {
     }
 
     if (drawUniformPayloadLookupReady()) {
+      detail::ChunkSlotPerfScope bucketScope(
+          dxmt9::perf::countDrawUniformPayloadLookupBucketCpuTime);
       const auto bucketIndex = detail::chunkSlotUniformLookupBucket(
           payload.hash, drawUniformPayloadLookupHeads.size());
       auto uniformIndex = drawUniformPayloadLookupHeads[bucketIndex];
@@ -611,12 +620,21 @@ struct ChunkSlot {
     if (dxmt9::perf::enabled()) {
       dxmt9::perf::countDrawUniformPayloadAppend();
     }
-    reserveDrawUniformPayloadLookup(drawUniformPayloads.size() + 1u);
-    drawUniformPayloads.push_back(DrawUniformPayloadRecord{
-        .handle = uniformHandle,
-        .payload = payload,
-    });
-    appendDrawUniformPayloadLookup(uniformIndex);
+    {
+      detail::ChunkSlotPerfScope scope(
+          dxmt9::perf::countDrawUniformPayloadAppendReserveCpuTime);
+      reserveDrawUniformPayloadLookup(drawUniformPayloads.size() + 1u);
+    }
+    {
+      detail::ChunkSlotPerfScope scope(
+          dxmt9::perf::countDrawUniformPayloadAppendCopyCpuTime);
+      drawUniformPayloads.emplace_back(uniformHandle, payload);
+    }
+    {
+      detail::ChunkSlotPerfScope scope(
+          dxmt9::perf::countDrawUniformPayloadAppendLinkCpuTime);
+      appendDrawUniformPayloadLookup(uniformIndex);
+    }
     lastUniformHandle = uniformHandle;
     return uniformHandle;
   }
@@ -834,7 +852,9 @@ struct ChunkSlot {
       reserveDrawUniformPayloadLookup(drawUniformPayloads.size() + submissions.size());
     }
 
-    auto& state = submissions.front().state;
+    DXMT_ASSERT(submissions.front().stateMaterialized &&
+                "draw-run batch front must own the canonical state");
+    auto& state = submissions.front().materializedState();
     DrawPsoSubview psoSubview{};
     DrawRunInvariant invariant{};
     std::uint32_t stateIndex = 0;
@@ -887,13 +907,31 @@ struct ChunkSlot {
     {
       detail::ChunkSlotPerfScope scope(
           dxmt9::perf::countSubmitDrawRunBatchAppendUniformCpuTime);
+      DrawUniformHandle previousUniformHandle{};
+      std::uint64_t previousUniformGeneration = 0;
       for (std::size_t i = 0; i < submissions.size(); ++i) {
-        DrawUniformHandle uniformHandle = findDrawUniformPayload(submissions[i].uniforms);
-        if (!uniformHandle.valid()) {
-          uniformHandle = appendDrawUniformPayload(submissions[i].uniforms);
+        DrawUniformHandle uniformHandle{};
+        if (submissions[i].uniforms.has_value()) {
+          uniformHandle = findDrawUniformPayload(submissions[i].uniformPayload());
           if (!uniformHandle.valid()) {
-            return;
+            uniformHandle =
+                appendDrawUniformPayload(submissions[i].uniformPayload());
+            if (!uniformHandle.valid()) {
+              return;
+            }
           }
+          previousUniformHandle = uniformHandle;
+          previousUniformGeneration = submissions[i].uniformGeneration;
+        } else {
+          const bool sameUniformGeneration =
+              submissions[i].uniformGeneration != 0 &&
+              submissions[i].uniformGeneration == previousUniformGeneration;
+          DXMT_ASSERT(i != 0u &&
+                      "batch-front draw submission must materialize uniforms");
+          DXMT_ASSERT(sameUniformGeneration && previousUniformHandle.valid() &&
+                      "elided draw submission uniforms require previous handle");
+          (void)sameUniformGeneration;
+          uniformHandle = previousUniformHandle;
         }
         if (i == 0) {
           firstUniformHandle = uniformHandle;

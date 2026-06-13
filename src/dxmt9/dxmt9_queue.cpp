@@ -304,6 +304,13 @@ void QueueLifecycleController::recordNoEnqueueWaitGapToCommitPublish() {
   const auto elapsed = std::chrono::steady_clock::now() - lastNoEnqueueCompletionWaitEnd_;
   perf::countCompletionNoEnqueueWaitToCommitPublish(
       static_cast<std::uint64_t>(std::chrono::duration_cast<std::chrono::nanoseconds>(elapsed).count()));
+  const auto now = std::chrono::steady_clock::now();
+  if (noEnqueueGapCommitChunkEntryTime_ != std::chrono::steady_clock::time_point{}) {
+    perf::countCompletionNoEnqueueStageCommitEntryToPublish(
+        static_cast<std::uint64_t>(std::chrono::duration_cast<std::chrono::nanoseconds>(
+            now - noEnqueueGapCommitChunkEntryTime_).count()));
+  }
+  noEnqueueGapCommitPublishTime_ = now;
   noEnqueueGapCommitPublishRecorded_ = true;
 }
 
@@ -316,6 +323,13 @@ void QueueLifecycleController::recordNoEnqueueWaitGapToEncodeDequeue() {
   const auto elapsed = std::chrono::steady_clock::now() - lastNoEnqueueCompletionWaitEnd_;
   perf::countCompletionNoEnqueueWaitToEncodeDequeue(
       static_cast<std::uint64_t>(std::chrono::duration_cast<std::chrono::nanoseconds>(elapsed).count()));
+  const auto now = std::chrono::steady_clock::now();
+  if (noEnqueueGapCommitPublishTime_ != std::chrono::steady_clock::time_point{}) {
+    perf::countCompletionNoEnqueueStagePublishToEncodeDequeue(
+        static_cast<std::uint64_t>(std::chrono::duration_cast<std::chrono::nanoseconds>(
+            now - noEnqueueGapCommitPublishTime_).count()));
+  }
+  noEnqueueGapEncodeDequeueTime_ = now;
   noEnqueueGapEncodeDequeueRecorded_ = true;
 }
 
@@ -328,6 +342,12 @@ void QueueLifecycleController::recordNoEnqueueWaitGapToCommandBufferCommit() {
   const auto elapsed = std::chrono::steady_clock::now() - lastNoEnqueueCompletionWaitEnd_;
   perf::countCompletionNoEnqueueWaitToCommandBufferCommit(
       static_cast<std::uint64_t>(std::chrono::duration_cast<std::chrono::nanoseconds>(elapsed).count()));
+  const auto now = std::chrono::steady_clock::now();
+  if (noEnqueueGapEncodeDequeueTime_ != std::chrono::steady_clock::time_point{}) {
+    perf::countCompletionNoEnqueueStageEncodeDequeueToCommandBufferCommit(
+        static_cast<std::uint64_t>(std::chrono::duration_cast<std::chrono::nanoseconds>(
+            now - noEnqueueGapEncodeDequeueTime_).count()));
+  }
   noEnqueueGapCommandBufferCommitRecorded_ = true;
 }
 
@@ -340,6 +360,7 @@ void QueueLifecycleController::recordNoEnqueueWaitGapToCommitChunkEntry() {
   const auto elapsed = std::chrono::steady_clock::now() - lastNoEnqueueCompletionWaitEnd_;
   perf::countCompletionNoEnqueueWaitToCommitChunkEntry(
       static_cast<std::uint64_t>(std::chrono::duration_cast<std::chrono::nanoseconds>(elapsed).count()));
+  noEnqueueGapCommitChunkEntryTime_ = std::chrono::steady_clock::now();
   noEnqueueGapCommitChunkEntryRecorded_ = true;
 }
 
@@ -1243,6 +1264,9 @@ void QueueLifecycleController::submit(QueueSubmissionRecord& record) {
       noEnqueueGapCommitChunkEntryRecorded_ = false;
       noEnqueueGapCommitChunkReplayStartRecorded_ = false;
       noEnqueueGapCommitChunkReplayEndRecorded_ = false;
+      noEnqueueGapCommitChunkEntryTime_ = {};
+      noEnqueueGapCommitPublishTime_ = {};
+      noEnqueueGapEncodeDequeueTime_ = {};
     }
     PendingCompletion pending;
     pending.commandBuffer = std::move(record.commandBuffer);
@@ -1325,6 +1349,9 @@ bool QueueLifecycleController::processOnePendingCompletion(bool& stop) {
         noEnqueueGapCommitChunkEntryRecorded_ = false;
         noEnqueueGapCommitChunkReplayStartRecorded_ = false;
         noEnqueueGapCommitChunkReplayEndRecorded_ = false;
+        noEnqueueGapCommitChunkEntryTime_ = {};
+        noEnqueueGapCommitPublishTime_ = {};
+        noEnqueueGapEncodeDequeueTime_ = {};
       }
     }
     perf::countCompletionWaitStatus(elapsedNs,

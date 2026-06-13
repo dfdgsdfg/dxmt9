@@ -1,5 +1,6 @@
 #pragma once
 
+#include "dxmt9/assert.hpp"
 #include "dxmt9/core_constants.hpp"
 
 #include <algorithm>
@@ -240,6 +241,8 @@ enum DrawStateInvalidationBits : u32 {
   DrawStateInvalidationReset = 1u << 14,
   DrawStateInvalidationSwapChain = 1u << 15,
   DrawStateInvalidationTextureLod = 1u << 16,
+  DrawStateInvalidationTextureStageState = 1u << 17,
+  DrawStateInvalidationSamplerState = 1u << 18,
 };
 
 struct TextureBinding {
@@ -895,13 +898,32 @@ enum class DrawRunSubmissionStateLane : u8 {
 };
 
 struct DrawRunSubmission {
-  CanonicalDrawState state{};
-  DrawUniformPayload uniforms{};
+  std::optional<CanonicalDrawState> state{};
+  std::optional<DrawUniformPayload> uniforms{};
   DrawParam draw{};
   DrawParamPayloadView payload{};
   DrawBindingOverride bindingOverride{};
   u64 stateGeneration = 0;
+  u64 uniformGeneration = 0;
   DrawRunSubmissionStateLane stateLane = DrawRunSubmissionStateLane::Unknown;
+  bool stateMaterialized = true;
+
+  CanonicalDrawState& materializedState() noexcept {
+    DXMT_ASSERT(stateMaterialized && state.has_value());
+    return *state;
+  }
+  const CanonicalDrawState& materializedState() const noexcept {
+    DXMT_ASSERT(stateMaterialized && state.has_value());
+    return *state;
+  }
+  DrawUniformPayload& uniformPayload() noexcept {
+    DXMT_ASSERT(uniforms.has_value());
+    return *uniforms;
+  }
+  const DrawUniformPayload& uniformPayload() const noexcept {
+    DXMT_ASSERT(uniforms.has_value());
+    return *uniforms;
+  }
 };
 
 inline std::span<const u8> drawBindingOverrideBytes(
@@ -1015,9 +1037,11 @@ inline bool shaderLayoutsCompatibleForDrawRunBatch(
 inline bool drawRunSubmissionStatesCompatibleForBatch(
     const DrawRunSubmission& a,
     const DrawRunSubmission& b) noexcept {
-  return drawStatesCompatibleForDrawRunBatch(a.state.hot, b.state.hot) &&
-         shaderLayoutsCompatibleForDrawRunBatch(a.state.shaderLayout,
-                                                b.state.shaderLayout);
+  const auto& aState = a.materializedState();
+  const auto& bState = b.materializedState();
+  return drawStatesCompatibleForDrawRunBatch(aState.hot, bState.hot) &&
+         shaderLayoutsCompatibleForDrawRunBatch(aState.shaderLayout,
+                                                bState.shaderLayout);
 }
 
 inline bool drawRunSubmissionSameStateGenerationLane(
@@ -1029,6 +1053,30 @@ inline bool drawRunSubmissionSameStateGenerationLane(
          a.stateLane == b.stateLane;
 }
 
+inline bool drawRunSubmissionUsesAcceptedPreviousStateGenerationLane(
+    const DrawRunSubmission& base,
+    const DrawRunSubmission& previous,
+    const DrawRunSubmission& candidate) noexcept {
+  return !drawRunSubmissionSameStateGenerationLane(base, candidate) &&
+         !candidate.stateMaterialized &&
+         drawRunSubmissionSameStateGenerationLane(previous, candidate);
+}
+
+inline std::uint64_t drawRunSubmissionStateCopyBytes() noexcept {
+  return sizeof(FlatDrawStateRecord) + sizeof(DrawShaderLayoutContext);
+}
+
+inline std::uint64_t drawRunSubmissionUniformCopyBytes() noexcept {
+  return sizeof(DrawUniformPayload);
+}
+
+inline bool drawRunSubmissionSameUniformGeneration(
+    const DrawRunSubmission& a,
+    const DrawRunSubmission& b) noexcept {
+  return a.uniformGeneration != 0 &&
+         a.uniformGeneration == b.uniformGeneration;
+}
+
 inline void prepareDrawRunSubmissionBindingOverride(
     const DrawRunSubmission& base,
     DrawRunSubmission& submission) noexcept {
@@ -1037,24 +1085,26 @@ inline void prepareDrawRunSubmissionBindingOverride(
     return;
   }
 
+  const auto& baseState = base.materializedState();
+  const auto& submissionState = submission.materializedState();
   submission.bindingOverride = {};
   for (u32 stream = 0; stream < kMaxStreams; ++stream) {
-    if (base.state.hot.streamBuffers[stream] == submission.state.hot.streamBuffers[stream] &&
-        base.state.hot.streamOffsets[stream] == submission.state.hot.streamOffsets[stream] &&
-        base.state.hot.streamStrides[stream] == submission.state.hot.streamStrides[stream]) {
+    if (baseState.hot.streamBuffers[stream] == submissionState.hot.streamBuffers[stream] &&
+        baseState.hot.streamOffsets[stream] == submissionState.hot.streamOffsets[stream] &&
+        baseState.hot.streamStrides[stream] == submissionState.hot.streamStrides[stream]) {
       continue;
     }
     submission.bindingOverride.streamMask |= 1u << stream;
     submission.bindingOverride.streams[stream] = DrawStreamBindingOverride{
-        .buffer = submission.state.hot.streamBuffers[stream],
-        .offset = submission.state.hot.streamOffsets[stream],
-        .stride = submission.state.hot.streamStrides[stream],
+        .buffer = submissionState.hot.streamBuffers[stream],
+        .offset = submissionState.hot.streamOffsets[stream],
+        .stride = submissionState.hot.streamStrides[stream],
     };
   }
 
-  if (base.state.hot.indexBuffer != submission.state.hot.indexBuffer ||
+  if (baseState.hot.indexBuffer != submissionState.hot.indexBuffer ||
       base.draw.indexType != submission.draw.indexType) {
-    submission.bindingOverride.indexBuffer = submission.state.hot.indexBuffer;
+    submission.bindingOverride.indexBuffer = submissionState.hot.indexBuffer;
     submission.bindingOverride.indexType = submission.draw.indexType;
     submission.bindingOverride.indexBufferValid = true;
   }
@@ -1691,8 +1741,9 @@ class Device : public std::enable_shared_from_this<Device> {
   HResult drawPrimitiveRun(std::span<const DrawParam> draws);
   HResult drawPrimitiveRun(std::span<const DrawParam> draws,
                            std::span<const DrawParamPayloadView> payloads);
-  HResult snapshotDrawSubmissionFromCurrentState(DrawParam draw,
-                                                 DrawRunSubmission& submission);
+  HResult snapshotDrawSubmissionFromCurrentState(
+      DrawParam draw, DrawRunSubmission& submission,
+      const DrawRunSubmission* previousSubmission = nullptr);
   void submitDrawSubmissionBatch(std::span<DrawRunSubmission> submissions);
   HResult present();
   HResult reset(const PresentParameters& params);
@@ -1782,6 +1833,10 @@ class Device : public std::enable_shared_from_this<Device> {
   struct CachedBaseDrawState {
     u64 generation = 0;
     u64 uniformGeneration = 0;
+    u64 uniformNonConstantGeneration = 0;
+    u64 renderStateFlatGeneration = 0;
+    u64 textureStageStateFlatGeneration = 0;
+    u64 samplerStateFlatGeneration = 0;
     bool valid = false;
     FlatDrawStateRecord hot{};
     DrawShaderLayoutContext shaderLayout{};
@@ -1791,6 +1846,8 @@ class Device : public std::enable_shared_from_this<Device> {
 
   void invalidateDrawStateCache(u32 reasonMask = DrawStateInvalidationUnknown) noexcept;
   void invalidateDrawUniformCache() noexcept;
+  void invalidateDrawUniformNonConstantCache() noexcept;
+  void invalidateDrawFlatStateSetCache(u32 reasonMask) noexcept;
   const CachedBaseDrawState& cachedBaseDrawState(bool includeIndexBuffer);
   const CachedBaseDrawState& cachedBaseDrawStateForSubmissionBatch();
 
@@ -1811,6 +1868,10 @@ class Device : public std::enable_shared_from_this<Device> {
   u64 drawStateGeneration_ = 1;
   u64 drawStableStateGeneration_ = 1;
   u64 drawUniformGeneration_ = 1;
+  u64 drawUniformNonConstantGeneration_ = 1;
+  u64 drawRenderStateFlatGeneration_ = 1;
+  u64 drawTextureStageStateFlatGeneration_ = 1;
+  u64 drawSamplerStateFlatGeneration_ = 1;
   u32 drawStateInvalidationReasonMask_ = DrawStateInvalidationUnknown;
   CachedBaseDrawState drawStateCacheWithIndex_{};
   CachedBaseDrawState drawStateCacheNoIndex_{};

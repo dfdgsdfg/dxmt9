@@ -331,6 +331,12 @@ std::uint32_t drawStateInvalidationReasonFromCommitDeltaMask(std::uint32_t delta
                     CommitChunkDrawDeltaSamplerState)) != 0) {
     reason |= DrawStateInvalidationTextureStageSampler;
   }
+  if ((deltaMask & CommitChunkDrawDeltaTextureStageState) != 0) {
+    reason |= DrawStateInvalidationTextureStageState;
+  }
+  if ((deltaMask & CommitChunkDrawDeltaSamplerState) != 0) {
+    reason |= DrawStateInvalidationSamplerState;
+  }
   if ((deltaMask & (CommitChunkDrawDeltaMaterial |
                     CommitChunkDrawDeltaTransform |
                     CommitChunkDrawDeltaLight |
@@ -1222,10 +1228,18 @@ int32_t queueDrawPrimitiveSubmission(
   if (failed(stateHr)) {
     return finish(stateHr);
   }
+  const std::size_t previousIndex = submissions.size();
+  const auto emplaceStart = std::chrono::steady_clock::now();
   auto& submission = submissions.emplace_back();
+  countDurationSince(
+      emplaceStart,
+      dxmt9::perf::countCommitChunkQueueDrawSubmissionEmplaceCpuTime);
+  const auto* previousSubmission =
+      previousIndex == 0u ? nullptr : &submissions[previousIndex - 1u];
   const int32_t hr =
       d->dev().snapshotDrawSubmissionFromCurrentState(makeRunParam(packet),
-                                                      submission);
+                                                      submission,
+                                                      previousSubmission);
   if (failed(hr)) {
     submissions.pop_back();
     return finish(hr);
@@ -1253,9 +1267,17 @@ int32_t queueDrawIndexedPrimitiveSubmission(
   }
   auto draw = makeRunParam(packet);
   draw.indexType = d->dev().state().indexType;
+  const std::size_t previousIndex = submissions.size();
+  const auto emplaceStart = std::chrono::steady_clock::now();
   auto& submission = submissions.emplace_back();
+  countDurationSince(
+      emplaceStart,
+      dxmt9::perf::countCommitChunkQueueDrawSubmissionEmplaceCpuTime);
+  const auto* previousSubmission =
+      previousIndex == 0u ? nullptr : &submissions[previousIndex - 1u];
   const int32_t hr =
-      d->dev().snapshotDrawSubmissionFromCurrentState(draw, submission);
+      d->dev().snapshotDrawSubmissionFromCurrentState(draw, submission,
+                                                      previousSubmission);
   if (failed(hr)) {
     submissions.pop_back();
     return finish(hr);

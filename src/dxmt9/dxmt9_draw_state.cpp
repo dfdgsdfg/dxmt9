@@ -108,6 +108,9 @@ void copyBoolPrefixToUpload(std::span<std::byte> dst,
                             const std::array<bool, Count>& src,
                             std::size_t count) {
   const auto clamped = std::min<std::size_t>(count, src.size());
+  if (clamped == 0) {
+    return;
+  }
   DXMT_ASSERT(offset + clamped * sizeof(u32) <= dst.size());
   for (std::size_t i = 0; i < clamped; ++i) {
     const u32 value = src[i] ? 1u : 0u;

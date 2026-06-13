@@ -832,7 +832,8 @@ HResult Device::setTextureStageState(u32 stage, u32 key, u32 value) {
   stage = std::min<u32>(stage, kMaxTextureStages - 1);
   key = std::min<u32>(key, kMaxTextureStageStates - 1);
   state_.textureStageStates[stage].set(key, value);
-  invalidateDrawStateCache(DrawStateInvalidationTextureStageSampler);
+  invalidateDrawStateCache(DrawStateInvalidationTextureStageSampler |
+                           DrawStateInvalidationTextureStageState);
   return D3D_OK;
 }
 
@@ -852,7 +853,8 @@ HResult Device::setSamplerState(u32 sampler, u32 key, u32 value) {
     return D3DERR_INVALIDCALL;
   }
   state_.samplerStates[sampler].set(key, value);
-  invalidateDrawStateCache(DrawStateInvalidationTextureStageSampler);
+  invalidateDrawStateCache(DrawStateInvalidationTextureStageSampler |
+                           DrawStateInvalidationSamplerState);
   return D3D_OK;
 }
 
@@ -918,7 +920,8 @@ HResult Device::setTexture(u32 stage, std::shared_ptr<Texture> texture) {
   }
   state_.textures[stage] = std::move(texture);
   invalidateDrawStateCache(DrawStateInvalidationTexture |
-                           DrawStateInvalidationTextureStageSampler);
+                           DrawStateInvalidationTextureStageSampler |
+                           DrawStateInvalidationTextureStageState);
   return D3D_OK;
 }
 

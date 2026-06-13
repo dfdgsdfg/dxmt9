@@ -1280,6 +1280,25 @@ bool measureIndexCacheOptCandidate() {
   return v;
 }
 
+bool indexedTriangleDiagnosticsEnabled() {
+  static const bool v =
+      optimizeScreenBlendIndexOrder() ||
+      splitLargeIndexedDrawPrimitiveLimit() != 0u ||
+      splitLargeIndexedDrawStream0SpanMax() != 0u ||
+      probeReverseIndexedTriangles() ||
+      probeReverseOpaqueIndexedTriangles() ||
+      probeReverseNonOpaqueIndexedTriangles() ||
+      probeSortIndexedTrianglesByMinIndex() ||
+      probeOptimizeIndexedTrianglesVertexCache() ||
+      optimizeOpaqueDepthIndexCache() ||
+      optimizeScreenBlendIndexCache() ||
+      probeApplyIndexCacheOptCandidate() ||
+      measureIndexReuse() ||
+      measureIndexCacheOptCandidate() ||
+      !indexedGeometryDumpDir().empty();
+  return v;
+}
+
 std::string_view indexedGeometryDumpDir() {
   static const std::string dir =
       util::getenvString("DXMT9_DUMP_INDEXED_GEOMETRY_DIR");

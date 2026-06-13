@@ -14,6 +14,15 @@
 namespace dxmt9::perf {
 namespace {
 
+thread_local D3D9SnapshotUniformBuildContext
+    gD3D9SnapshotUniformBuildContext =
+        D3D9SnapshotUniformBuildContext::None;
+
+bool inD3D9SnapshotUniformBuildBatchMissContext() noexcept {
+  return gD3D9SnapshotUniformBuildContext ==
+      D3D9SnapshotUniformBuildContext::BatchMiss;
+}
+
 // 256-sample sliding ring of nanosecond samples used to compute P50/P95/P99
 // in the shutdown report. Lock-free: writers race only on `head_` (atomic
 // fetch_add, relaxed) and on the slot store (relaxed). Two threads racing for
@@ -100,6 +109,8 @@ struct Counters {
   std::atomic<std::uint64_t> submitDrawRunBatchGroups{0};
   std::atomic<std::uint64_t> submitDrawRunBatchRecords{0};
   std::atomic<std::uint64_t> submitDrawRunBatchMaxRecords{0};
+  std::atomic<std::uint64_t> submitDrawRunBatchDiscardedStateRecords{0};
+  std::atomic<std::uint64_t> submitDrawRunBatchDiscardedStateBytes{0};
   std::atomic<std::uint64_t> submitDrawRunBindingSnapshotCpuNs{0};
   std::atomic<std::uint64_t> submitDrawRunBindingSnapshotCpuMaxNs{0};
   std::atomic<std::uint64_t> submitDrawRunPayloadBytesCpuNs{0};
@@ -248,6 +259,8 @@ struct Counters {
   std::atomic<std::uint64_t> commitChunkDrawRunFinalBindCpuMaxNs{0};
   std::atomic<std::uint64_t> commitChunkQueueDrawSubmissionCpuNs{0};
   std::atomic<std::uint64_t> commitChunkQueueDrawSubmissionCpuMaxNs{0};
+  std::atomic<std::uint64_t> commitChunkQueueDrawSubmissionEmplaceCpuNs{0};
+  std::atomic<std::uint64_t> commitChunkQueueDrawSubmissionEmplaceCpuMaxNs{0};
   std::atomic<std::uint64_t> commitChunkConstUploadCpuNs{0};
   std::atomic<std::uint64_t> commitChunkConstUploadCpuMaxNs{0};
   std::atomic<std::uint64_t> d3d9DrawStateCacheHits{0};
@@ -256,6 +269,14 @@ struct Counters {
   std::atomic<std::uint64_t> d3d9DrawStateCacheMissWithIndex{0};
   std::atomic<std::uint64_t> d3d9DrawStateCacheHitNoIndex{0};
   std::atomic<std::uint64_t> d3d9DrawStateCacheMissNoIndex{0};
+  std::atomic<std::uint64_t> d3d9DrawStateCacheDirectHits{0};
+  std::atomic<std::uint64_t> d3d9DrawStateCacheDirectMisses{0};
+  std::atomic<std::uint64_t> d3d9DrawStateCacheDirectHitWithIndex{0};
+  std::atomic<std::uint64_t> d3d9DrawStateCacheDirectMissWithIndex{0};
+  std::atomic<std::uint64_t> d3d9DrawStateCacheDirectHitNoIndex{0};
+  std::atomic<std::uint64_t> d3d9DrawStateCacheDirectMissNoIndex{0};
+  std::atomic<std::uint64_t> d3d9DrawStateCacheBatchHits{0};
+  std::atomic<std::uint64_t> d3d9DrawStateCacheBatchMisses{0};
   std::atomic<std::uint64_t> d3d9DrawStateCacheUniformRefreshes{0};
   std::atomic<std::uint64_t> d3d9DrawStateCacheMissAfterUnknown{0};
   std::atomic<std::uint64_t> d3d9DrawStateCacheMissAfterMutableState{0};
@@ -490,6 +511,14 @@ struct Counters {
   std::atomic<std::uint64_t> encodeDrawBindingPacketTextureRecordCpuNs{0};
   std::atomic<std::uint64_t> encodeDrawArgbufSetupCpuNs{0};
   std::atomic<std::uint64_t> encodeDrawArgbufOpenCpuNs{0};
+  std::atomic<std::uint64_t> encodeDrawArgbufOpenCallCpuNs{0};
+  std::atomic<std::uint64_t> encodeDrawArgbufReopenPostCpuNs{0};
+  std::atomic<std::uint64_t> encodeDrawArgbufReopenTableProbeCpuNs{0};
+  std::atomic<std::uint64_t> encodeDrawArgbufReopenTableShadowStoreCpuNs{0};
+  std::atomic<std::uint64_t> encodeDrawArgbufReopenByteAccountCpuNs{0};
+  std::atomic<std::uint64_t> encodeDrawArgbufReopenCbufCacheProbeCpuNs{0};
+  std::atomic<std::uint64_t> encodeDrawArgbufReopenCbufDirtyScanCpuNs{0};
+  std::atomic<std::uint64_t> encodeDrawArgbufReopenCbufForceDirtyCpuNs{0};
   std::atomic<std::uint64_t> encodeDrawArgbufOpenReserveCpuNs{0};
   std::atomic<std::uint64_t> encodeDrawArgbufOpenSetArgumentBufferCpuNs{0};
   std::atomic<std::uint64_t> encodeDrawArgbufTableBindCpuNs{0};
@@ -535,6 +564,7 @@ struct Counters {
   std::atomic<std::uint64_t> encodeDrawArgbufCbufObserverFfpPsCpuNs{0};
   std::atomic<std::uint64_t> encodeDrawArgbufCbufCacheMergeCpuNs{0};
   std::atomic<std::uint64_t> encodeDrawArgbufCbufCachedRepointCpuNs{0};
+  std::atomic<std::uint64_t> encodeDrawArgbufCbufFullRepointCpuNs{0};
   std::atomic<std::uint64_t> encodeDrawArgbufCbufCachedRepointCalls{0};
   std::atomic<std::uint64_t> encodeDrawArgbufCbufCachedRepointBytes{0};
   std::atomic<std::uint64_t> encodeDrawArgbufCbufContentProbeCpuNs{0};
@@ -661,6 +691,10 @@ struct Counters {
   std::atomic<std::uint64_t> d3d9SnapshotCacheLookupCpuNs{0};
   std::atomic<std::uint64_t> d3d9SnapshotCacheHitCpuNs{0};
   std::atomic<std::uint64_t> d3d9SnapshotCacheMissCpuNs{0};
+  std::atomic<std::uint64_t> d3d9SnapshotCacheDirectHitCpuNs{0};
+  std::atomic<std::uint64_t> d3d9SnapshotCacheDirectMissCpuNs{0};
+  std::atomic<std::uint64_t> d3d9SnapshotCacheBatchHitCpuNs{0};
+  std::atomic<std::uint64_t> d3d9SnapshotCacheBatchMissCpuNs{0};
   std::atomic<std::uint64_t> d3d9SnapshotCacheBindingLayoutCpuNs{0};
   std::atomic<std::uint64_t> d3d9SnapshotCacheUniformRefreshCpuNs{0};
   std::atomic<std::uint64_t> d3d9SnapshotCacheUniformBuildCpuNs{0};
@@ -668,6 +702,36 @@ struct Counters {
   std::atomic<std::uint64_t> d3d9SnapshotCacheMissShaderLayoutCpuNs{0};
   std::atomic<std::uint64_t> d3d9SnapshotCacheMissUniformBuildCpuNs{0};
   std::atomic<std::uint64_t> d3d9SnapshotCacheMissHotBuildCpuNs{0};
+  std::atomic<std::uint64_t> d3d9SnapshotCacheDirectMissShaderLayoutCpuNs{0};
+  std::atomic<std::uint64_t> d3d9SnapshotCacheDirectMissUniformBuildCpuNs{0};
+  std::atomic<std::uint64_t> d3d9SnapshotCacheDirectMissHotBuildCpuNs{0};
+  std::atomic<std::uint64_t> d3d9SnapshotCacheBatchMissShaderLayoutCpuNs{0};
+  std::atomic<std::uint64_t> d3d9SnapshotCacheBatchMissUniformBuildCpuNs{0};
+  std::atomic<std::uint64_t> d3d9SnapshotCacheBatchMissHotBuildCpuNs{0};
+  std::atomic<std::uint64_t> d3d9SnapshotCacheBatchMissHotBuildZeroInitCpuNs{0};
+  std::atomic<std::uint64_t> d3d9SnapshotCacheBatchMissHotBuildKeyCpuNs{0};
+  std::atomic<std::uint64_t> d3d9SnapshotCacheBatchMissHotBuildKeyZeroInitCpuNs{0};
+  std::atomic<std::uint64_t> d3d9SnapshotCacheBatchMissHotBuildKeyStreamCpuNs{0};
+  std::atomic<std::uint64_t> d3d9SnapshotCacheBatchMissHotBuildKeyShaderCpuNs{0};
+  std::atomic<std::uint64_t> d3d9SnapshotCacheBatchMissHotBuildKeyConstantCpuNs{0};
+  std::atomic<std::uint64_t> d3d9SnapshotCacheBatchMissHotBuildKeyTextureCpuNs{0};
+  std::atomic<std::uint64_t> d3d9SnapshotCacheBatchMissHotBuildKeySamplerCpuNs{0};
+  std::atomic<std::uint64_t> d3d9SnapshotCacheBatchMissHotBuildKeyRenderStateCpuNs{0};
+  std::atomic<std::uint64_t> d3d9SnapshotCacheBatchMissHotBuildKeyAttachmentCpuNs{0};
+  std::atomic<std::uint64_t> d3d9SnapshotCacheBatchMissHotBuildKeyUniformCpuNs{0};
+  std::atomic<std::uint64_t> d3d9SnapshotCacheBatchMissHotBuildBindingCopyCpuNs{0};
+  std::atomic<std::uint64_t> d3d9SnapshotCacheBatchMissHotBuildRenderStateCpuNs{0};
+  std::atomic<std::uint64_t> d3d9SnapshotCacheBatchMissHotBuildTextureStageStateCpuNs{0};
+  std::atomic<std::uint64_t> d3d9SnapshotCacheBatchMissHotBuildSamplerStateCpuNs{0};
+  std::atomic<std::uint64_t> d3d9SnapshotCacheBatchMissHotBuildTailCopyCpuNs{0};
+  std::atomic<std::uint64_t> d3d9SnapshotCacheBatchMissHotBuildFlatRenderReuseHits{0};
+  std::atomic<std::uint64_t> d3d9SnapshotCacheBatchMissHotBuildFlatRenderReuseMisses{0};
+  std::atomic<std::uint64_t> d3d9SnapshotCacheBatchMissHotBuildFlatTssReuseHits{0};
+  std::atomic<std::uint64_t> d3d9SnapshotCacheBatchMissHotBuildFlatTssReuseMisses{0};
+  std::atomic<std::uint64_t> d3d9SnapshotCacheBatchMissHotBuildFlatSamplerReuseHits{0};
+  std::atomic<std::uint64_t> d3d9SnapshotCacheBatchMissHotBuildFlatSamplerReuseMisses{0};
+  std::atomic<std::uint64_t> d3d9SnapshotCacheBatchMissUniformNonConstHashReuseHits{0};
+  std::atomic<std::uint64_t> d3d9SnapshotCacheBatchMissUniformNonConstHashReuseMisses{0};
   std::atomic<std::uint64_t> d3d9SnapshotUniformBuildCalls{0};
   std::atomic<std::uint64_t> d3d9SnapshotUniformBuildVsConstCopyCpuNs{0};
   std::atomic<std::uint64_t> d3d9SnapshotUniformBuildPsConstCopyCpuNs{0};
@@ -699,6 +763,8 @@ struct Counters {
   std::atomic<std::uint64_t> d3d9SnapshotUniformBuildVsConstHashFullUnknownNonBytecode{0};
   std::atomic<std::uint64_t> d3d9SnapshotUniformBuildPsConstHashFullUnknownNonBytecode{0};
   std::atomic<std::uint64_t> d3d9SnapshotUniformBuildVsConstHashFullIndexedFloat{0};
+  std::atomic<std::uint64_t> d3d9SnapshotUniformBuildVsConstHashFullIndexedFloatMinSafeBytes{0};
+  std::atomic<std::uint64_t> d3d9SnapshotUniformBuildVsConstHashFullIndexedFloatPotentialSavedBytes{0};
   std::atomic<std::uint64_t> d3d9SnapshotUniformBuildPsConstHashFullIndexedFloat{0};
   std::atomic<std::uint64_t> d3d9SnapshotUniformBuildVsConstHashFullIndexedInt{0};
   std::atomic<std::uint64_t> d3d9SnapshotUniformBuildPsConstHashFullIndexedInt{0};
@@ -706,8 +772,56 @@ struct Counters {
   std::atomic<std::uint64_t> d3d9SnapshotUniformBuildPsConstHashFullIndexedBool{0};
   std::atomic<std::uint64_t> d3d9SnapshotUniformBuildVsConstHashBytes{0};
   std::atomic<std::uint64_t> d3d9SnapshotUniformBuildPsConstHashBytes{0};
+  std::atomic<std::uint64_t> d3d9SnapshotUniformMaterialized{0};
+  std::atomic<std::uint64_t> d3d9SnapshotUniformMaterializedBytes{0};
+  std::atomic<std::uint64_t> d3d9SnapshotUniformElided{0};
+  std::atomic<std::uint64_t> d3d9SnapshotUniformElidedBytes{0};
+  std::atomic<std::uint64_t> d3d9SnapshotCacheBatchMissUniformBuildCalls{0};
+  std::atomic<std::uint64_t> d3d9SnapshotCacheBatchMissUniformBuildVsConstCopyCpuNs{0};
+  std::atomic<std::uint64_t> d3d9SnapshotCacheBatchMissUniformBuildPsConstCopyCpuNs{0};
+  std::atomic<std::uint64_t> d3d9SnapshotCacheBatchMissUniformBuildFfpMatrixCpuNs{0};
+  std::atomic<std::uint64_t> d3d9SnapshotCacheBatchMissUniformBuildFfpMaterialLightCpuNs{0};
+  std::atomic<std::uint64_t> d3d9SnapshotCacheBatchMissUniformBuildTextureTransformCpuNs{0};
+  std::atomic<std::uint64_t> d3d9SnapshotCacheBatchMissUniformBuildClipPlaneCpuNs{0};
+  std::atomic<std::uint64_t> d3d9SnapshotCacheBatchMissUniformBuildHashCpuNs{0};
+  std::atomic<std::uint64_t> d3d9SnapshotCacheBatchMissUniformBuildVsConstHashCpuNs{0};
+  std::atomic<std::uint64_t> d3d9SnapshotCacheBatchMissUniformBuildPsConstHashCpuNs{0};
+  std::atomic<std::uint64_t> d3d9SnapshotCacheBatchMissUniformBuildNonConstHashCpuNs{0};
+  std::atomic<std::uint64_t> d3d9SnapshotCacheBatchMissUniformBuildNonConstHashWorldViewProjCpuNs{0};
+  std::atomic<std::uint64_t> d3d9SnapshotCacheBatchMissUniformBuildNonConstHashFfpWorldViewCpuNs{0};
+  std::atomic<std::uint64_t> d3d9SnapshotCacheBatchMissUniformBuildNonConstHashFfpNormalMatrixCpuNs{0};
+  std::atomic<std::uint64_t> d3d9SnapshotCacheBatchMissUniformBuildNonConstHashMaterialCpuNs{0};
+  std::atomic<std::uint64_t> d3d9SnapshotCacheBatchMissUniformBuildNonConstHashLightsCpuNs{0};
+  std::atomic<std::uint64_t> d3d9SnapshotCacheBatchMissUniformBuildNonConstHashFfpBlendWvpCpuNs{0};
+  std::atomic<std::uint64_t> d3d9SnapshotCacheBatchMissUniformBuildNonConstHashTextureTransformsCpuNs{0};
+  std::atomic<std::uint64_t> d3d9SnapshotCacheBatchMissUniformBuildNonConstHashClipPlanesCpuNs{0};
+  std::atomic<std::uint64_t> d3d9SnapshotCacheBatchMissUniformBuildPayloadCombineHashCpuNs{0};
+  std::atomic<std::uint64_t> d3d9SnapshotCacheBatchMissUniformBuildVsConstHashFull{0};
+  std::atomic<std::uint64_t> d3d9SnapshotCacheBatchMissUniformBuildPsConstHashFull{0};
+  std::atomic<std::uint64_t> d3d9SnapshotCacheBatchMissUniformBuildVsConstHashFullNoUsage{0};
+  std::atomic<std::uint64_t> d3d9SnapshotCacheBatchMissUniformBuildPsConstHashFullNoUsage{0};
+  std::atomic<std::uint64_t> d3d9SnapshotCacheBatchMissUniformBuildVsConstHashFullUnknown{0};
+  std::atomic<std::uint64_t> d3d9SnapshotCacheBatchMissUniformBuildPsConstHashFullUnknown{0};
+  std::atomic<std::uint64_t> d3d9SnapshotCacheBatchMissUniformBuildVsConstHashFullUnknownBytecode{0};
+  std::atomic<std::uint64_t> d3d9SnapshotCacheBatchMissUniformBuildPsConstHashFullUnknownBytecode{0};
+  std::atomic<std::uint64_t> d3d9SnapshotCacheBatchMissUniformBuildVsConstHashFullUnknownNonBytecode{0};
+  std::atomic<std::uint64_t> d3d9SnapshotCacheBatchMissUniformBuildPsConstHashFullUnknownNonBytecode{0};
+  std::atomic<std::uint64_t> d3d9SnapshotCacheBatchMissUniformBuildVsConstHashFullIndexedFloat{0};
+  std::atomic<std::uint64_t> d3d9SnapshotCacheBatchMissUniformBuildVsConstHashFullIndexedFloatMinSafeBytes{0};
+  std::atomic<std::uint64_t> d3d9SnapshotCacheBatchMissUniformBuildVsConstHashFullIndexedFloatPotentialSavedBytes{0};
+  std::atomic<std::uint64_t> d3d9SnapshotCacheBatchMissUniformBuildPsConstHashFullIndexedFloat{0};
+  std::atomic<std::uint64_t> d3d9SnapshotCacheBatchMissUniformBuildVsConstHashFullIndexedInt{0};
+  std::atomic<std::uint64_t> d3d9SnapshotCacheBatchMissUniformBuildPsConstHashFullIndexedInt{0};
+  std::atomic<std::uint64_t> d3d9SnapshotCacheBatchMissUniformBuildVsConstHashFullIndexedBool{0};
+  std::atomic<std::uint64_t> d3d9SnapshotCacheBatchMissUniformBuildPsConstHashFullIndexedBool{0};
+  std::atomic<std::uint64_t> d3d9SnapshotCacheBatchMissUniformBuildVsConstHashBytes{0};
+  std::atomic<std::uint64_t> d3d9SnapshotCacheBatchMissUniformBuildPsConstHashBytes{0};
   std::atomic<std::uint64_t> d3d9SnapshotUniformCopyCpuNs{0};
   std::atomic<std::uint64_t> d3d9SnapshotStateCopyCpuNs{0};
+  std::atomic<std::uint64_t> d3d9SnapshotStateMaterialized{0};
+  std::atomic<std::uint64_t> d3d9SnapshotStateMaterializedBytes{0};
+  std::atomic<std::uint64_t> d3d9SnapshotStateElided{0};
+  std::atomic<std::uint64_t> d3d9SnapshotStateElidedBytes{0};
   std::atomic<std::uint64_t> d3d9SnapshotDebugSnapshotCpuNs{0};
   std::atomic<std::uint64_t> d3d9SnapshotFlatStateSamples{0};
   std::atomic<std::uint64_t> d3d9SnapshotFlatRenderStateEntries{0};
@@ -733,7 +847,17 @@ struct Counters {
   std::atomic<std::uint64_t> drawUniformPayloadLookupBucketProbes{0};
   std::atomic<std::uint64_t> drawUniformPayloadLookupBucketCollisions{0};
   std::atomic<std::uint64_t> drawUniformPayloadLookupHashCollisions{0};
+  std::atomic<std::uint64_t> drawUniformPayloadLookupCpuNs{0};
+  std::atomic<std::uint64_t> drawUniformPayloadLookupCpuMaxNs{0};
+  std::atomic<std::uint64_t> drawUniformPayloadLookupBucketCpuNs{0};
+  std::atomic<std::uint64_t> drawUniformPayloadLookupBucketCpuMaxNs{0};
   std::atomic<std::uint64_t> drawUniformPayloadAppends{0};
+  std::atomic<std::uint64_t> drawUniformPayloadAppendReserveCpuNs{0};
+  std::atomic<std::uint64_t> drawUniformPayloadAppendReserveCpuMaxNs{0};
+  std::atomic<std::uint64_t> drawUniformPayloadAppendCopyCpuNs{0};
+  std::atomic<std::uint64_t> drawUniformPayloadAppendCopyCpuMaxNs{0};
+  std::atomic<std::uint64_t> drawUniformPayloadAppendLinkCpuNs{0};
+  std::atomic<std::uint64_t> drawUniformPayloadAppendLinkCpuMaxNs{0};
   std::atomic<std::uint64_t> transientUploadCalls{0};
   std::atomic<std::uint64_t> transientUploadBytes{0};
   std::atomic<std::uint64_t> transientUploadCpuNs{0};
@@ -954,6 +1078,15 @@ struct Counters {
   std::atomic<std::uint64_t> completionNoEnqueueWaitToCommandBufferCommit{0};
   std::atomic<std::uint64_t> completionNoEnqueueWaitToCommandBufferCommitNs{0};
   std::atomic<std::uint64_t> completionNoEnqueueWaitToCommandBufferCommitMaxNs{0};
+  std::atomic<std::uint64_t> completionNoEnqueueStageCommitEntryToPublish{0};
+  std::atomic<std::uint64_t> completionNoEnqueueStageCommitEntryToPublishNs{0};
+  std::atomic<std::uint64_t> completionNoEnqueueStageCommitEntryToPublishMaxNs{0};
+  std::atomic<std::uint64_t> completionNoEnqueueStagePublishToEncodeDequeue{0};
+  std::atomic<std::uint64_t> completionNoEnqueueStagePublishToEncodeDequeueNs{0};
+  std::atomic<std::uint64_t> completionNoEnqueueStagePublishToEncodeDequeueMaxNs{0};
+  std::atomic<std::uint64_t> completionNoEnqueueStageEncodeDequeueToCommandBufferCommit{0};
+  std::atomic<std::uint64_t> completionNoEnqueueStageEncodeDequeueToCommandBufferCommitNs{0};
+  std::atomic<std::uint64_t> completionNoEnqueueStageEncodeDequeueToCommandBufferCommitMaxNs{0};
   std::atomic<std::uint64_t> completionNoEnqueueWaitToNextEnqueue{0};
   std::atomic<std::uint64_t> completionNoEnqueueWaitToNextEnqueueNs{0};
   std::atomic<std::uint64_t> completionNoEnqueueWaitToNextEnqueueMaxNs{0};
@@ -1136,6 +1269,7 @@ struct Counters {
   PercentileRing commitChunkDrawRunSubmitCpuRing;
   PercentileRing commitChunkDrawRunFinalBindCpuRing;
   PercentileRing commitChunkQueueDrawSubmissionCpuRing;
+  PercentileRing commitChunkQueueDrawSubmissionEmplaceCpuRing;
   PercentileRing commitChunkConstUploadCpuRing;
   PercentileRing completionDequeueAgeRing;
   PercentileRing completionNoEnqueueWaitToCommitChunkEntryRing;
@@ -1144,6 +1278,9 @@ struct Counters {
   PercentileRing completionNoEnqueueWaitToCommitPublishRing;
   PercentileRing completionNoEnqueueWaitToEncodeDequeueRing;
   PercentileRing completionNoEnqueueWaitToCommandBufferCommitRing;
+  PercentileRing completionNoEnqueueStageCommitEntryToPublishRing;
+  PercentileRing completionNoEnqueueStagePublishToEncodeDequeueRing;
+  PercentileRing completionNoEnqueueStageEncodeDequeueToCommandBufferCommitRing;
   PercentileRing completionNoEnqueueWaitToNextEnqueueRing;
   PercentileRing completionWaitRing;
   PercentileRing completionPresentWaitRing;
@@ -1435,6 +1572,8 @@ constexpr CounterEntry kCounterTable[] = {
     {"submit_draw_run_batch_groups", CounterEntry::Kind::UnsignedCount, &Counters::submitDrawRunBatchGroups, nullptr, nullptr, 0.0},
     {"submit_draw_run_batch_records", CounterEntry::Kind::UnsignedCount, &Counters::submitDrawRunBatchRecords, nullptr, nullptr, 0.0},
     {"submit_draw_run_batch_max_records", CounterEntry::Kind::UnsignedCount, &Counters::submitDrawRunBatchMaxRecords, nullptr, nullptr, 0.0},
+    {"submit_draw_run_batch_discarded_state_records", CounterEntry::Kind::UnsignedCount, &Counters::submitDrawRunBatchDiscardedStateRecords, nullptr, nullptr, 0.0},
+    {"submit_draw_run_batch_discarded_state_bytes", CounterEntry::Kind::UnsignedCount, &Counters::submitDrawRunBatchDiscardedStateBytes, nullptr, nullptr, 0.0},
     {"submit_draw_run_binding_snapshot_cpu_ms", CounterEntry::Kind::Milliseconds, &Counters::submitDrawRunBindingSnapshotCpuNs, nullptr, nullptr, 0.0},
     {"submit_draw_run_binding_snapshot_cpu_max_ms", CounterEntry::Kind::Milliseconds, &Counters::submitDrawRunBindingSnapshotCpuMaxNs, nullptr, nullptr, 0.0},
     {"submit_draw_run_payload_bytes_cpu_ms", CounterEntry::Kind::Milliseconds, &Counters::submitDrawRunPayloadBytesCpuNs, nullptr, nullptr, 0.0},
@@ -1553,6 +1692,10 @@ constexpr CounterEntry kCounterTable[] = {
     {"commit_chunk_queue_draw_submission_cpu_max_ms", CounterEntry::Kind::Milliseconds, &Counters::commitChunkQueueDrawSubmissionCpuMaxNs, nullptr, nullptr, 0.0},
     {"commit_chunk_queue_draw_submission_cpu_p50_ms", CounterEntry::Kind::PercentileMs, nullptr, nullptr, &Counters::commitChunkQueueDrawSubmissionCpuRing, 0.5},
     {"commit_chunk_queue_draw_submission_cpu_p95_ms", CounterEntry::Kind::PercentileMs, nullptr, nullptr, &Counters::commitChunkQueueDrawSubmissionCpuRing, 0.95},
+    {"commit_chunk_queue_draw_submission_emplace_cpu_ms", CounterEntry::Kind::Milliseconds, &Counters::commitChunkQueueDrawSubmissionEmplaceCpuNs, nullptr, nullptr, 0.0},
+    {"commit_chunk_queue_draw_submission_emplace_cpu_max_ms", CounterEntry::Kind::Milliseconds, &Counters::commitChunkQueueDrawSubmissionEmplaceCpuMaxNs, nullptr, nullptr, 0.0},
+    {"commit_chunk_queue_draw_submission_emplace_cpu_p50_ms", CounterEntry::Kind::PercentileMs, nullptr, nullptr, &Counters::commitChunkQueueDrawSubmissionEmplaceCpuRing, 0.5},
+    {"commit_chunk_queue_draw_submission_emplace_cpu_p95_ms", CounterEntry::Kind::PercentileMs, nullptr, nullptr, &Counters::commitChunkQueueDrawSubmissionEmplaceCpuRing, 0.95},
     {"commit_chunk_const_upload_cpu_ms", CounterEntry::Kind::Milliseconds, &Counters::commitChunkConstUploadCpuNs, nullptr, nullptr, 0.0},
     {"commit_chunk_const_upload_cpu_max_ms", CounterEntry::Kind::Milliseconds, &Counters::commitChunkConstUploadCpuMaxNs, nullptr, nullptr, 0.0},
     {"commit_chunk_const_upload_cpu_p50_ms", CounterEntry::Kind::PercentileMs, nullptr, nullptr, &Counters::commitChunkConstUploadCpuRing, 0.5},
@@ -1563,6 +1706,14 @@ constexpr CounterEntry kCounterTable[] = {
     {"d3d9_draw_state_cache_miss_with_index", CounterEntry::Kind::UnsignedCount, &Counters::d3d9DrawStateCacheMissWithIndex, nullptr, nullptr, 0.0},
     {"d3d9_draw_state_cache_hit_no_index", CounterEntry::Kind::UnsignedCount, &Counters::d3d9DrawStateCacheHitNoIndex, nullptr, nullptr, 0.0},
     {"d3d9_draw_state_cache_miss_no_index", CounterEntry::Kind::UnsignedCount, &Counters::d3d9DrawStateCacheMissNoIndex, nullptr, nullptr, 0.0},
+    {"d3d9_draw_state_cache_direct_hits", CounterEntry::Kind::UnsignedCount, &Counters::d3d9DrawStateCacheDirectHits, nullptr, nullptr, 0.0},
+    {"d3d9_draw_state_cache_direct_misses", CounterEntry::Kind::UnsignedCount, &Counters::d3d9DrawStateCacheDirectMisses, nullptr, nullptr, 0.0},
+    {"d3d9_draw_state_cache_direct_hit_with_index", CounterEntry::Kind::UnsignedCount, &Counters::d3d9DrawStateCacheDirectHitWithIndex, nullptr, nullptr, 0.0},
+    {"d3d9_draw_state_cache_direct_miss_with_index", CounterEntry::Kind::UnsignedCount, &Counters::d3d9DrawStateCacheDirectMissWithIndex, nullptr, nullptr, 0.0},
+    {"d3d9_draw_state_cache_direct_hit_no_index", CounterEntry::Kind::UnsignedCount, &Counters::d3d9DrawStateCacheDirectHitNoIndex, nullptr, nullptr, 0.0},
+    {"d3d9_draw_state_cache_direct_miss_no_index", CounterEntry::Kind::UnsignedCount, &Counters::d3d9DrawStateCacheDirectMissNoIndex, nullptr, nullptr, 0.0},
+    {"d3d9_draw_state_cache_batch_hits", CounterEntry::Kind::UnsignedCount, &Counters::d3d9DrawStateCacheBatchHits, nullptr, nullptr, 0.0},
+    {"d3d9_draw_state_cache_batch_misses", CounterEntry::Kind::UnsignedCount, &Counters::d3d9DrawStateCacheBatchMisses, nullptr, nullptr, 0.0},
     {"d3d9_draw_state_cache_uniform_refreshes", CounterEntry::Kind::UnsignedCount, &Counters::d3d9DrawStateCacheUniformRefreshes, nullptr, nullptr, 0.0},
     {"d3d9_draw_state_cache_miss_after_unknown", CounterEntry::Kind::UnsignedCount, &Counters::d3d9DrawStateCacheMissAfterUnknown, nullptr, nullptr, 0.0},
     {"d3d9_draw_state_cache_miss_after_mutable_state", CounterEntry::Kind::UnsignedCount, &Counters::d3d9DrawStateCacheMissAfterMutableState, nullptr, nullptr, 0.0},
@@ -1820,6 +1971,14 @@ constexpr CounterEntry kCounterTable[] = {
     {"encode_draw_binding_packet_texture_record_cpu_ms", CounterEntry::Kind::Milliseconds, &Counters::encodeDrawBindingPacketTextureRecordCpuNs, nullptr, nullptr, 0.0},
     {"encode_draw_argbuf_setup_cpu_ms", CounterEntry::Kind::Milliseconds, &Counters::encodeDrawArgbufSetupCpuNs, nullptr, nullptr, 0.0},
     {"encode_draw_argbuf_open_cpu_ms", CounterEntry::Kind::Milliseconds, &Counters::encodeDrawArgbufOpenCpuNs, nullptr, nullptr, 0.0},
+    {"encode_draw_argbuf_open_call_cpu_ms", CounterEntry::Kind::Milliseconds, &Counters::encodeDrawArgbufOpenCallCpuNs, nullptr, nullptr, 0.0},
+    {"encode_draw_argbuf_reopen_post_cpu_ms", CounterEntry::Kind::Milliseconds, &Counters::encodeDrawArgbufReopenPostCpuNs, nullptr, nullptr, 0.0},
+    {"encode_draw_argbuf_reopen_table_probe_cpu_ms", CounterEntry::Kind::Milliseconds, &Counters::encodeDrawArgbufReopenTableProbeCpuNs, nullptr, nullptr, 0.0},
+    {"encode_draw_argbuf_reopen_table_shadow_store_cpu_ms", CounterEntry::Kind::Milliseconds, &Counters::encodeDrawArgbufReopenTableShadowStoreCpuNs, nullptr, nullptr, 0.0},
+    {"encode_draw_argbuf_reopen_byte_account_cpu_ms", CounterEntry::Kind::Milliseconds, &Counters::encodeDrawArgbufReopenByteAccountCpuNs, nullptr, nullptr, 0.0},
+    {"encode_draw_argbuf_reopen_cbuf_cache_probe_cpu_ms", CounterEntry::Kind::Milliseconds, &Counters::encodeDrawArgbufReopenCbufCacheProbeCpuNs, nullptr, nullptr, 0.0},
+    {"encode_draw_argbuf_reopen_cbuf_dirty_scan_cpu_ms", CounterEntry::Kind::Milliseconds, &Counters::encodeDrawArgbufReopenCbufDirtyScanCpuNs, nullptr, nullptr, 0.0},
+    {"encode_draw_argbuf_reopen_cbuf_force_dirty_cpu_ms", CounterEntry::Kind::Milliseconds, &Counters::encodeDrawArgbufReopenCbufForceDirtyCpuNs, nullptr, nullptr, 0.0},
     {"encode_draw_argbuf_open_reserve_cpu_ms", CounterEntry::Kind::Milliseconds, &Counters::encodeDrawArgbufOpenReserveCpuNs, nullptr, nullptr, 0.0},
     {"encode_draw_argbuf_open_set_argument_buffer_cpu_ms", CounterEntry::Kind::Milliseconds, &Counters::encodeDrawArgbufOpenSetArgumentBufferCpuNs, nullptr, nullptr, 0.0},
     {"encode_draw_argbuf_table_bind_cpu_ms", CounterEntry::Kind::Milliseconds, &Counters::encodeDrawArgbufTableBindCpuNs, nullptr, nullptr, 0.0},
@@ -1865,6 +2024,7 @@ constexpr CounterEntry kCounterTable[] = {
     {"encode_draw_argbuf_cbuf_observer_ffp_ps_cpu_ms", CounterEntry::Kind::Milliseconds, &Counters::encodeDrawArgbufCbufObserverFfpPsCpuNs, nullptr, nullptr, 0.0},
     {"encode_draw_argbuf_cbuf_cache_merge_cpu_ms", CounterEntry::Kind::Milliseconds, &Counters::encodeDrawArgbufCbufCacheMergeCpuNs, nullptr, nullptr, 0.0},
     {"encode_draw_argbuf_cbuf_cached_repoint_cpu_ms", CounterEntry::Kind::Milliseconds, &Counters::encodeDrawArgbufCbufCachedRepointCpuNs, nullptr, nullptr, 0.0},
+    {"encode_draw_argbuf_cbuf_full_repoint_cpu_ms", CounterEntry::Kind::Milliseconds, &Counters::encodeDrawArgbufCbufFullRepointCpuNs, nullptr, nullptr, 0.0},
     {"encode_draw_argbuf_cbuf_cached_repoint_calls", CounterEntry::Kind::UnsignedCount, &Counters::encodeDrawArgbufCbufCachedRepointCalls, nullptr, nullptr, 0.0},
     {"encode_draw_argbuf_cbuf_cached_repoint_bytes", CounterEntry::Kind::UnsignedCount, &Counters::encodeDrawArgbufCbufCachedRepointBytes, nullptr, nullptr, 0.0},
     {"encode_draw_argbuf_cbuf_content_probe_cpu_ms", CounterEntry::Kind::Milliseconds, &Counters::encodeDrawArgbufCbufContentProbeCpuNs, nullptr, nullptr, 0.0},
@@ -2000,6 +2160,10 @@ constexpr CounterEntry kCounterTable[] = {
     {"d3d9_snapshot_cache_lookup_cpu_ms", CounterEntry::Kind::Milliseconds, &Counters::d3d9SnapshotCacheLookupCpuNs, nullptr, nullptr, 0.0},
     {"d3d9_snapshot_cache_hit_cpu_ms", CounterEntry::Kind::Milliseconds, &Counters::d3d9SnapshotCacheHitCpuNs, nullptr, nullptr, 0.0},
     {"d3d9_snapshot_cache_miss_cpu_ms", CounterEntry::Kind::Milliseconds, &Counters::d3d9SnapshotCacheMissCpuNs, nullptr, nullptr, 0.0},
+    {"d3d9_snapshot_cache_direct_hit_cpu_ms", CounterEntry::Kind::Milliseconds, &Counters::d3d9SnapshotCacheDirectHitCpuNs, nullptr, nullptr, 0.0},
+    {"d3d9_snapshot_cache_direct_miss_cpu_ms", CounterEntry::Kind::Milliseconds, &Counters::d3d9SnapshotCacheDirectMissCpuNs, nullptr, nullptr, 0.0},
+    {"d3d9_snapshot_cache_batch_hit_cpu_ms", CounterEntry::Kind::Milliseconds, &Counters::d3d9SnapshotCacheBatchHitCpuNs, nullptr, nullptr, 0.0},
+    {"d3d9_snapshot_cache_batch_miss_cpu_ms", CounterEntry::Kind::Milliseconds, &Counters::d3d9SnapshotCacheBatchMissCpuNs, nullptr, nullptr, 0.0},
     {"d3d9_snapshot_cache_binding_layout_cpu_ms", CounterEntry::Kind::Milliseconds, &Counters::d3d9SnapshotCacheBindingLayoutCpuNs, nullptr, nullptr, 0.0},
     {"d3d9_snapshot_cache_uniform_refresh_cpu_ms", CounterEntry::Kind::Milliseconds, &Counters::d3d9SnapshotCacheUniformRefreshCpuNs, nullptr, nullptr, 0.0},
     {"d3d9_snapshot_cache_uniform_build_cpu_ms", CounterEntry::Kind::Milliseconds, &Counters::d3d9SnapshotCacheUniformBuildCpuNs, nullptr, nullptr, 0.0},
@@ -2007,6 +2171,36 @@ constexpr CounterEntry kCounterTable[] = {
     {"d3d9_snapshot_cache_miss_shader_layout_cpu_ms", CounterEntry::Kind::Milliseconds, &Counters::d3d9SnapshotCacheMissShaderLayoutCpuNs, nullptr, nullptr, 0.0},
     {"d3d9_snapshot_cache_miss_uniform_build_cpu_ms", CounterEntry::Kind::Milliseconds, &Counters::d3d9SnapshotCacheMissUniformBuildCpuNs, nullptr, nullptr, 0.0},
     {"d3d9_snapshot_cache_miss_hot_build_cpu_ms", CounterEntry::Kind::Milliseconds, &Counters::d3d9SnapshotCacheMissHotBuildCpuNs, nullptr, nullptr, 0.0},
+    {"d3d9_snapshot_cache_direct_miss_shader_layout_cpu_ms", CounterEntry::Kind::Milliseconds, &Counters::d3d9SnapshotCacheDirectMissShaderLayoutCpuNs, nullptr, nullptr, 0.0},
+    {"d3d9_snapshot_cache_direct_miss_uniform_build_cpu_ms", CounterEntry::Kind::Milliseconds, &Counters::d3d9SnapshotCacheDirectMissUniformBuildCpuNs, nullptr, nullptr, 0.0},
+    {"d3d9_snapshot_cache_direct_miss_hot_build_cpu_ms", CounterEntry::Kind::Milliseconds, &Counters::d3d9SnapshotCacheDirectMissHotBuildCpuNs, nullptr, nullptr, 0.0},
+    {"d3d9_snapshot_cache_batch_miss_shader_layout_cpu_ms", CounterEntry::Kind::Milliseconds, &Counters::d3d9SnapshotCacheBatchMissShaderLayoutCpuNs, nullptr, nullptr, 0.0},
+    {"d3d9_snapshot_cache_batch_miss_uniform_build_cpu_ms", CounterEntry::Kind::Milliseconds, &Counters::d3d9SnapshotCacheBatchMissUniformBuildCpuNs, nullptr, nullptr, 0.0},
+    {"d3d9_snapshot_cache_batch_miss_hot_build_cpu_ms", CounterEntry::Kind::Milliseconds, &Counters::d3d9SnapshotCacheBatchMissHotBuildCpuNs, nullptr, nullptr, 0.0},
+    {"d3d9_snapshot_cache_batch_miss_hot_build_zero_init_cpu_ms", CounterEntry::Kind::Milliseconds, &Counters::d3d9SnapshotCacheBatchMissHotBuildZeroInitCpuNs, nullptr, nullptr, 0.0},
+    {"d3d9_snapshot_cache_batch_miss_hot_build_key_cpu_ms", CounterEntry::Kind::Milliseconds, &Counters::d3d9SnapshotCacheBatchMissHotBuildKeyCpuNs, nullptr, nullptr, 0.0},
+    {"d3d9_snapshot_cache_batch_miss_hot_build_key_zero_init_cpu_ms", CounterEntry::Kind::Milliseconds, &Counters::d3d9SnapshotCacheBatchMissHotBuildKeyZeroInitCpuNs, nullptr, nullptr, 0.0},
+    {"d3d9_snapshot_cache_batch_miss_hot_build_key_stream_cpu_ms", CounterEntry::Kind::Milliseconds, &Counters::d3d9SnapshotCacheBatchMissHotBuildKeyStreamCpuNs, nullptr, nullptr, 0.0},
+    {"d3d9_snapshot_cache_batch_miss_hot_build_key_shader_cpu_ms", CounterEntry::Kind::Milliseconds, &Counters::d3d9SnapshotCacheBatchMissHotBuildKeyShaderCpuNs, nullptr, nullptr, 0.0},
+    {"d3d9_snapshot_cache_batch_miss_hot_build_key_constant_cpu_ms", CounterEntry::Kind::Milliseconds, &Counters::d3d9SnapshotCacheBatchMissHotBuildKeyConstantCpuNs, nullptr, nullptr, 0.0},
+    {"d3d9_snapshot_cache_batch_miss_hot_build_key_texture_cpu_ms", CounterEntry::Kind::Milliseconds, &Counters::d3d9SnapshotCacheBatchMissHotBuildKeyTextureCpuNs, nullptr, nullptr, 0.0},
+    {"d3d9_snapshot_cache_batch_miss_hot_build_key_sampler_cpu_ms", CounterEntry::Kind::Milliseconds, &Counters::d3d9SnapshotCacheBatchMissHotBuildKeySamplerCpuNs, nullptr, nullptr, 0.0},
+    {"d3d9_snapshot_cache_batch_miss_hot_build_key_render_state_cpu_ms", CounterEntry::Kind::Milliseconds, &Counters::d3d9SnapshotCacheBatchMissHotBuildKeyRenderStateCpuNs, nullptr, nullptr, 0.0},
+    {"d3d9_snapshot_cache_batch_miss_hot_build_key_attachment_cpu_ms", CounterEntry::Kind::Milliseconds, &Counters::d3d9SnapshotCacheBatchMissHotBuildKeyAttachmentCpuNs, nullptr, nullptr, 0.0},
+    {"d3d9_snapshot_cache_batch_miss_hot_build_key_uniform_cpu_ms", CounterEntry::Kind::Milliseconds, &Counters::d3d9SnapshotCacheBatchMissHotBuildKeyUniformCpuNs, nullptr, nullptr, 0.0},
+    {"d3d9_snapshot_cache_batch_miss_hot_build_binding_copy_cpu_ms", CounterEntry::Kind::Milliseconds, &Counters::d3d9SnapshotCacheBatchMissHotBuildBindingCopyCpuNs, nullptr, nullptr, 0.0},
+    {"d3d9_snapshot_cache_batch_miss_hot_build_render_state_cpu_ms", CounterEntry::Kind::Milliseconds, &Counters::d3d9SnapshotCacheBatchMissHotBuildRenderStateCpuNs, nullptr, nullptr, 0.0},
+    {"d3d9_snapshot_cache_batch_miss_hot_build_texture_stage_state_cpu_ms", CounterEntry::Kind::Milliseconds, &Counters::d3d9SnapshotCacheBatchMissHotBuildTextureStageStateCpuNs, nullptr, nullptr, 0.0},
+    {"d3d9_snapshot_cache_batch_miss_hot_build_sampler_state_cpu_ms", CounterEntry::Kind::Milliseconds, &Counters::d3d9SnapshotCacheBatchMissHotBuildSamplerStateCpuNs, nullptr, nullptr, 0.0},
+    {"d3d9_snapshot_cache_batch_miss_hot_build_tail_copy_cpu_ms", CounterEntry::Kind::Milliseconds, &Counters::d3d9SnapshotCacheBatchMissHotBuildTailCopyCpuNs, nullptr, nullptr, 0.0},
+    {"d3d9_snapshot_cache_batch_miss_hot_build_flat_render_reuse_hits", CounterEntry::Kind::UnsignedCount, &Counters::d3d9SnapshotCacheBatchMissHotBuildFlatRenderReuseHits, nullptr, nullptr, 0.0},
+    {"d3d9_snapshot_cache_batch_miss_hot_build_flat_render_reuse_misses", CounterEntry::Kind::UnsignedCount, &Counters::d3d9SnapshotCacheBatchMissHotBuildFlatRenderReuseMisses, nullptr, nullptr, 0.0},
+    {"d3d9_snapshot_cache_batch_miss_hot_build_flat_tss_reuse_hits", CounterEntry::Kind::UnsignedCount, &Counters::d3d9SnapshotCacheBatchMissHotBuildFlatTssReuseHits, nullptr, nullptr, 0.0},
+    {"d3d9_snapshot_cache_batch_miss_hot_build_flat_tss_reuse_misses", CounterEntry::Kind::UnsignedCount, &Counters::d3d9SnapshotCacheBatchMissHotBuildFlatTssReuseMisses, nullptr, nullptr, 0.0},
+    {"d3d9_snapshot_cache_batch_miss_hot_build_flat_sampler_reuse_hits", CounterEntry::Kind::UnsignedCount, &Counters::d3d9SnapshotCacheBatchMissHotBuildFlatSamplerReuseHits, nullptr, nullptr, 0.0},
+    {"d3d9_snapshot_cache_batch_miss_hot_build_flat_sampler_reuse_misses", CounterEntry::Kind::UnsignedCount, &Counters::d3d9SnapshotCacheBatchMissHotBuildFlatSamplerReuseMisses, nullptr, nullptr, 0.0},
+    {"d3d9_snapshot_cache_batch_miss_uniform_nonconst_hash_reuse_hits", CounterEntry::Kind::UnsignedCount, &Counters::d3d9SnapshotCacheBatchMissUniformNonConstHashReuseHits, nullptr, nullptr, 0.0},
+    {"d3d9_snapshot_cache_batch_miss_uniform_nonconst_hash_reuse_misses", CounterEntry::Kind::UnsignedCount, &Counters::d3d9SnapshotCacheBatchMissUniformNonConstHashReuseMisses, nullptr, nullptr, 0.0},
     {"d3d9_snapshot_uniform_build_calls", CounterEntry::Kind::UnsignedCount, &Counters::d3d9SnapshotUniformBuildCalls, nullptr, nullptr, 0.0},
     {"d3d9_snapshot_uniform_build_vs_const_copy_cpu_ms", CounterEntry::Kind::Milliseconds, &Counters::d3d9SnapshotUniformBuildVsConstCopyCpuNs, nullptr, nullptr, 0.0},
     {"d3d9_snapshot_uniform_build_ps_const_copy_cpu_ms", CounterEntry::Kind::Milliseconds, &Counters::d3d9SnapshotUniformBuildPsConstCopyCpuNs, nullptr, nullptr, 0.0},
@@ -2038,6 +2232,8 @@ constexpr CounterEntry kCounterTable[] = {
     {"d3d9_snapshot_uniform_build_vs_const_hash_full_unknown_non_bytecode", CounterEntry::Kind::UnsignedCount, &Counters::d3d9SnapshotUniformBuildVsConstHashFullUnknownNonBytecode, nullptr, nullptr, 0.0},
     {"d3d9_snapshot_uniform_build_ps_const_hash_full_unknown_non_bytecode", CounterEntry::Kind::UnsignedCount, &Counters::d3d9SnapshotUniformBuildPsConstHashFullUnknownNonBytecode, nullptr, nullptr, 0.0},
     {"d3d9_snapshot_uniform_build_vs_const_hash_full_indexed_float", CounterEntry::Kind::UnsignedCount, &Counters::d3d9SnapshotUniformBuildVsConstHashFullIndexedFloat, nullptr, nullptr, 0.0},
+    {"d3d9_snapshot_uniform_build_vs_const_hash_full_indexed_float_min_safe_bytes", CounterEntry::Kind::UnsignedCount, &Counters::d3d9SnapshotUniformBuildVsConstHashFullIndexedFloatMinSafeBytes, nullptr, nullptr, 0.0},
+    {"d3d9_snapshot_uniform_build_vs_const_hash_full_indexed_float_potential_saved_bytes", CounterEntry::Kind::UnsignedCount, &Counters::d3d9SnapshotUniformBuildVsConstHashFullIndexedFloatPotentialSavedBytes, nullptr, nullptr, 0.0},
     {"d3d9_snapshot_uniform_build_ps_const_hash_full_indexed_float", CounterEntry::Kind::UnsignedCount, &Counters::d3d9SnapshotUniformBuildPsConstHashFullIndexedFloat, nullptr, nullptr, 0.0},
     {"d3d9_snapshot_uniform_build_vs_const_hash_full_indexed_int", CounterEntry::Kind::UnsignedCount, &Counters::d3d9SnapshotUniformBuildVsConstHashFullIndexedInt, nullptr, nullptr, 0.0},
     {"d3d9_snapshot_uniform_build_ps_const_hash_full_indexed_int", CounterEntry::Kind::UnsignedCount, &Counters::d3d9SnapshotUniformBuildPsConstHashFullIndexedInt, nullptr, nullptr, 0.0},
@@ -2045,8 +2241,56 @@ constexpr CounterEntry kCounterTable[] = {
     {"d3d9_snapshot_uniform_build_ps_const_hash_full_indexed_bool", CounterEntry::Kind::UnsignedCount, &Counters::d3d9SnapshotUniformBuildPsConstHashFullIndexedBool, nullptr, nullptr, 0.0},
     {"d3d9_snapshot_uniform_build_vs_const_hash_bytes", CounterEntry::Kind::UnsignedCount, &Counters::d3d9SnapshotUniformBuildVsConstHashBytes, nullptr, nullptr, 0.0},
     {"d3d9_snapshot_uniform_build_ps_const_hash_bytes", CounterEntry::Kind::UnsignedCount, &Counters::d3d9SnapshotUniformBuildPsConstHashBytes, nullptr, nullptr, 0.0},
+    {"d3d9_snapshot_cache_batch_miss_uniform_build_calls", CounterEntry::Kind::UnsignedCount, &Counters::d3d9SnapshotCacheBatchMissUniformBuildCalls, nullptr, nullptr, 0.0},
+    {"d3d9_snapshot_cache_batch_miss_uniform_build_vs_const_copy_cpu_ms", CounterEntry::Kind::Milliseconds, &Counters::d3d9SnapshotCacheBatchMissUniformBuildVsConstCopyCpuNs, nullptr, nullptr, 0.0},
+    {"d3d9_snapshot_cache_batch_miss_uniform_build_ps_const_copy_cpu_ms", CounterEntry::Kind::Milliseconds, &Counters::d3d9SnapshotCacheBatchMissUniformBuildPsConstCopyCpuNs, nullptr, nullptr, 0.0},
+    {"d3d9_snapshot_cache_batch_miss_uniform_build_ffp_matrix_cpu_ms", CounterEntry::Kind::Milliseconds, &Counters::d3d9SnapshotCacheBatchMissUniformBuildFfpMatrixCpuNs, nullptr, nullptr, 0.0},
+    {"d3d9_snapshot_cache_batch_miss_uniform_build_ffp_material_light_cpu_ms", CounterEntry::Kind::Milliseconds, &Counters::d3d9SnapshotCacheBatchMissUniformBuildFfpMaterialLightCpuNs, nullptr, nullptr, 0.0},
+    {"d3d9_snapshot_cache_batch_miss_uniform_build_texture_transform_cpu_ms", CounterEntry::Kind::Milliseconds, &Counters::d3d9SnapshotCacheBatchMissUniformBuildTextureTransformCpuNs, nullptr, nullptr, 0.0},
+    {"d3d9_snapshot_cache_batch_miss_uniform_build_clip_plane_cpu_ms", CounterEntry::Kind::Milliseconds, &Counters::d3d9SnapshotCacheBatchMissUniformBuildClipPlaneCpuNs, nullptr, nullptr, 0.0},
+    {"d3d9_snapshot_cache_batch_miss_uniform_build_hash_cpu_ms", CounterEntry::Kind::Milliseconds, &Counters::d3d9SnapshotCacheBatchMissUniformBuildHashCpuNs, nullptr, nullptr, 0.0},
+    {"d3d9_snapshot_cache_batch_miss_uniform_build_vs_const_hash_cpu_ms", CounterEntry::Kind::Milliseconds, &Counters::d3d9SnapshotCacheBatchMissUniformBuildVsConstHashCpuNs, nullptr, nullptr, 0.0},
+    {"d3d9_snapshot_cache_batch_miss_uniform_build_ps_const_hash_cpu_ms", CounterEntry::Kind::Milliseconds, &Counters::d3d9SnapshotCacheBatchMissUniformBuildPsConstHashCpuNs, nullptr, nullptr, 0.0},
+    {"d3d9_snapshot_cache_batch_miss_uniform_build_nonconst_hash_cpu_ms", CounterEntry::Kind::Milliseconds, &Counters::d3d9SnapshotCacheBatchMissUniformBuildNonConstHashCpuNs, nullptr, nullptr, 0.0},
+    {"d3d9_snapshot_cache_batch_miss_uniform_build_nonconst_hash_world_view_proj_cpu_ms", CounterEntry::Kind::Milliseconds, &Counters::d3d9SnapshotCacheBatchMissUniformBuildNonConstHashWorldViewProjCpuNs, nullptr, nullptr, 0.0},
+    {"d3d9_snapshot_cache_batch_miss_uniform_build_nonconst_hash_ffp_world_view_cpu_ms", CounterEntry::Kind::Milliseconds, &Counters::d3d9SnapshotCacheBatchMissUniformBuildNonConstHashFfpWorldViewCpuNs, nullptr, nullptr, 0.0},
+    {"d3d9_snapshot_cache_batch_miss_uniform_build_nonconst_hash_ffp_normal_matrix_cpu_ms", CounterEntry::Kind::Milliseconds, &Counters::d3d9SnapshotCacheBatchMissUniformBuildNonConstHashFfpNormalMatrixCpuNs, nullptr, nullptr, 0.0},
+    {"d3d9_snapshot_cache_batch_miss_uniform_build_nonconst_hash_material_cpu_ms", CounterEntry::Kind::Milliseconds, &Counters::d3d9SnapshotCacheBatchMissUniformBuildNonConstHashMaterialCpuNs, nullptr, nullptr, 0.0},
+    {"d3d9_snapshot_cache_batch_miss_uniform_build_nonconst_hash_lights_cpu_ms", CounterEntry::Kind::Milliseconds, &Counters::d3d9SnapshotCacheBatchMissUniformBuildNonConstHashLightsCpuNs, nullptr, nullptr, 0.0},
+    {"d3d9_snapshot_cache_batch_miss_uniform_build_nonconst_hash_ffp_blend_wvp_cpu_ms", CounterEntry::Kind::Milliseconds, &Counters::d3d9SnapshotCacheBatchMissUniformBuildNonConstHashFfpBlendWvpCpuNs, nullptr, nullptr, 0.0},
+    {"d3d9_snapshot_cache_batch_miss_uniform_build_nonconst_hash_texture_transforms_cpu_ms", CounterEntry::Kind::Milliseconds, &Counters::d3d9SnapshotCacheBatchMissUniformBuildNonConstHashTextureTransformsCpuNs, nullptr, nullptr, 0.0},
+    {"d3d9_snapshot_cache_batch_miss_uniform_build_nonconst_hash_clip_planes_cpu_ms", CounterEntry::Kind::Milliseconds, &Counters::d3d9SnapshotCacheBatchMissUniformBuildNonConstHashClipPlanesCpuNs, nullptr, nullptr, 0.0},
+    {"d3d9_snapshot_cache_batch_miss_uniform_build_payload_combine_hash_cpu_ms", CounterEntry::Kind::Milliseconds, &Counters::d3d9SnapshotCacheBatchMissUniformBuildPayloadCombineHashCpuNs, nullptr, nullptr, 0.0},
+    {"d3d9_snapshot_cache_batch_miss_uniform_build_vs_const_hash_full", CounterEntry::Kind::UnsignedCount, &Counters::d3d9SnapshotCacheBatchMissUniformBuildVsConstHashFull, nullptr, nullptr, 0.0},
+    {"d3d9_snapshot_cache_batch_miss_uniform_build_ps_const_hash_full", CounterEntry::Kind::UnsignedCount, &Counters::d3d9SnapshotCacheBatchMissUniformBuildPsConstHashFull, nullptr, nullptr, 0.0},
+    {"d3d9_snapshot_cache_batch_miss_uniform_build_vs_const_hash_full_no_usage", CounterEntry::Kind::UnsignedCount, &Counters::d3d9SnapshotCacheBatchMissUniformBuildVsConstHashFullNoUsage, nullptr, nullptr, 0.0},
+    {"d3d9_snapshot_cache_batch_miss_uniform_build_ps_const_hash_full_no_usage", CounterEntry::Kind::UnsignedCount, &Counters::d3d9SnapshotCacheBatchMissUniformBuildPsConstHashFullNoUsage, nullptr, nullptr, 0.0},
+    {"d3d9_snapshot_cache_batch_miss_uniform_build_vs_const_hash_full_unknown", CounterEntry::Kind::UnsignedCount, &Counters::d3d9SnapshotCacheBatchMissUniformBuildVsConstHashFullUnknown, nullptr, nullptr, 0.0},
+    {"d3d9_snapshot_cache_batch_miss_uniform_build_ps_const_hash_full_unknown", CounterEntry::Kind::UnsignedCount, &Counters::d3d9SnapshotCacheBatchMissUniformBuildPsConstHashFullUnknown, nullptr, nullptr, 0.0},
+    {"d3d9_snapshot_cache_batch_miss_uniform_build_vs_const_hash_full_unknown_bytecode", CounterEntry::Kind::UnsignedCount, &Counters::d3d9SnapshotCacheBatchMissUniformBuildVsConstHashFullUnknownBytecode, nullptr, nullptr, 0.0},
+    {"d3d9_snapshot_cache_batch_miss_uniform_build_ps_const_hash_full_unknown_bytecode", CounterEntry::Kind::UnsignedCount, &Counters::d3d9SnapshotCacheBatchMissUniformBuildPsConstHashFullUnknownBytecode, nullptr, nullptr, 0.0},
+    {"d3d9_snapshot_cache_batch_miss_uniform_build_vs_const_hash_full_unknown_non_bytecode", CounterEntry::Kind::UnsignedCount, &Counters::d3d9SnapshotCacheBatchMissUniformBuildVsConstHashFullUnknownNonBytecode, nullptr, nullptr, 0.0},
+    {"d3d9_snapshot_cache_batch_miss_uniform_build_ps_const_hash_full_unknown_non_bytecode", CounterEntry::Kind::UnsignedCount, &Counters::d3d9SnapshotCacheBatchMissUniformBuildPsConstHashFullUnknownNonBytecode, nullptr, nullptr, 0.0},
+    {"d3d9_snapshot_cache_batch_miss_uniform_build_vs_const_hash_full_indexed_float", CounterEntry::Kind::UnsignedCount, &Counters::d3d9SnapshotCacheBatchMissUniformBuildVsConstHashFullIndexedFloat, nullptr, nullptr, 0.0},
+    {"d3d9_snapshot_cache_batch_miss_uniform_build_vs_const_hash_full_indexed_float_min_safe_bytes", CounterEntry::Kind::UnsignedCount, &Counters::d3d9SnapshotCacheBatchMissUniformBuildVsConstHashFullIndexedFloatMinSafeBytes, nullptr, nullptr, 0.0},
+    {"d3d9_snapshot_cache_batch_miss_uniform_build_vs_const_hash_full_indexed_float_potential_saved_bytes", CounterEntry::Kind::UnsignedCount, &Counters::d3d9SnapshotCacheBatchMissUniformBuildVsConstHashFullIndexedFloatPotentialSavedBytes, nullptr, nullptr, 0.0},
+    {"d3d9_snapshot_cache_batch_miss_uniform_build_ps_const_hash_full_indexed_float", CounterEntry::Kind::UnsignedCount, &Counters::d3d9SnapshotCacheBatchMissUniformBuildPsConstHashFullIndexedFloat, nullptr, nullptr, 0.0},
+    {"d3d9_snapshot_cache_batch_miss_uniform_build_vs_const_hash_full_indexed_int", CounterEntry::Kind::UnsignedCount, &Counters::d3d9SnapshotCacheBatchMissUniformBuildVsConstHashFullIndexedInt, nullptr, nullptr, 0.0},
+    {"d3d9_snapshot_cache_batch_miss_uniform_build_ps_const_hash_full_indexed_int", CounterEntry::Kind::UnsignedCount, &Counters::d3d9SnapshotCacheBatchMissUniformBuildPsConstHashFullIndexedInt, nullptr, nullptr, 0.0},
+    {"d3d9_snapshot_cache_batch_miss_uniform_build_vs_const_hash_full_indexed_bool", CounterEntry::Kind::UnsignedCount, &Counters::d3d9SnapshotCacheBatchMissUniformBuildVsConstHashFullIndexedBool, nullptr, nullptr, 0.0},
+    {"d3d9_snapshot_cache_batch_miss_uniform_build_ps_const_hash_full_indexed_bool", CounterEntry::Kind::UnsignedCount, &Counters::d3d9SnapshotCacheBatchMissUniformBuildPsConstHashFullIndexedBool, nullptr, nullptr, 0.0},
+    {"d3d9_snapshot_cache_batch_miss_uniform_build_vs_const_hash_bytes", CounterEntry::Kind::UnsignedCount, &Counters::d3d9SnapshotCacheBatchMissUniformBuildVsConstHashBytes, nullptr, nullptr, 0.0},
+    {"d3d9_snapshot_cache_batch_miss_uniform_build_ps_const_hash_bytes", CounterEntry::Kind::UnsignedCount, &Counters::d3d9SnapshotCacheBatchMissUniformBuildPsConstHashBytes, nullptr, nullptr, 0.0},
     {"d3d9_snapshot_uniform_copy_cpu_ms", CounterEntry::Kind::Milliseconds, &Counters::d3d9SnapshotUniformCopyCpuNs, nullptr, nullptr, 0.0},
+    {"d3d9_snapshot_uniform_materialized", CounterEntry::Kind::UnsignedCount, &Counters::d3d9SnapshotUniformMaterialized, nullptr, nullptr, 0.0},
+    {"d3d9_snapshot_uniform_materialized_bytes", CounterEntry::Kind::UnsignedCount, &Counters::d3d9SnapshotUniformMaterializedBytes, nullptr, nullptr, 0.0},
+    {"d3d9_snapshot_uniform_elided", CounterEntry::Kind::UnsignedCount, &Counters::d3d9SnapshotUniformElided, nullptr, nullptr, 0.0},
+    {"d3d9_snapshot_uniform_elided_bytes", CounterEntry::Kind::UnsignedCount, &Counters::d3d9SnapshotUniformElidedBytes, nullptr, nullptr, 0.0},
     {"d3d9_snapshot_state_copy_cpu_ms", CounterEntry::Kind::Milliseconds, &Counters::d3d9SnapshotStateCopyCpuNs, nullptr, nullptr, 0.0},
+    {"d3d9_snapshot_state_materialized", CounterEntry::Kind::UnsignedCount, &Counters::d3d9SnapshotStateMaterialized, nullptr, nullptr, 0.0},
+    {"d3d9_snapshot_state_materialized_bytes", CounterEntry::Kind::UnsignedCount, &Counters::d3d9SnapshotStateMaterializedBytes, nullptr, nullptr, 0.0},
+    {"d3d9_snapshot_state_elided", CounterEntry::Kind::UnsignedCount, &Counters::d3d9SnapshotStateElided, nullptr, nullptr, 0.0},
+    {"d3d9_snapshot_state_elided_bytes", CounterEntry::Kind::UnsignedCount, &Counters::d3d9SnapshotStateElidedBytes, nullptr, nullptr, 0.0},
     {"d3d9_snapshot_debug_snapshot_cpu_ms", CounterEntry::Kind::Milliseconds, &Counters::d3d9SnapshotDebugSnapshotCpuNs, nullptr, nullptr, 0.0},
     {"d3d9_snapshot_flat_state_samples", CounterEntry::Kind::UnsignedCount, &Counters::d3d9SnapshotFlatStateSamples, nullptr, nullptr, 0.0},
     {"d3d9_snapshot_flat_render_state_entries", CounterEntry::Kind::UnsignedCount, &Counters::d3d9SnapshotFlatRenderStateEntries, nullptr, nullptr, 0.0},
@@ -2072,7 +2316,17 @@ constexpr CounterEntry kCounterTable[] = {
     {"draw_uniform_payload_lookup_bucket_probes", CounterEntry::Kind::UnsignedCount, &Counters::drawUniformPayloadLookupBucketProbes, nullptr, nullptr, 0.0},
     {"draw_uniform_payload_lookup_bucket_collisions", CounterEntry::Kind::UnsignedCount, &Counters::drawUniformPayloadLookupBucketCollisions, nullptr, nullptr, 0.0},
     {"draw_uniform_payload_lookup_hash_collisions", CounterEntry::Kind::UnsignedCount, &Counters::drawUniformPayloadLookupHashCollisions, nullptr, nullptr, 0.0},
+    {"draw_uniform_payload_lookup_cpu_ms", CounterEntry::Kind::Milliseconds, &Counters::drawUniformPayloadLookupCpuNs, nullptr, nullptr, 0.0},
+    {"draw_uniform_payload_lookup_cpu_max_ms", CounterEntry::Kind::Milliseconds, &Counters::drawUniformPayloadLookupCpuMaxNs, nullptr, nullptr, 0.0},
+    {"draw_uniform_payload_lookup_bucket_cpu_ms", CounterEntry::Kind::Milliseconds, &Counters::drawUniformPayloadLookupBucketCpuNs, nullptr, nullptr, 0.0},
+    {"draw_uniform_payload_lookup_bucket_cpu_max_ms", CounterEntry::Kind::Milliseconds, &Counters::drawUniformPayloadLookupBucketCpuMaxNs, nullptr, nullptr, 0.0},
     {"draw_uniform_payload_appends", CounterEntry::Kind::UnsignedCount, &Counters::drawUniformPayloadAppends, nullptr, nullptr, 0.0},
+    {"draw_uniform_payload_append_reserve_cpu_ms", CounterEntry::Kind::Milliseconds, &Counters::drawUniformPayloadAppendReserveCpuNs, nullptr, nullptr, 0.0},
+    {"draw_uniform_payload_append_reserve_cpu_max_ms", CounterEntry::Kind::Milliseconds, &Counters::drawUniformPayloadAppendReserveCpuMaxNs, nullptr, nullptr, 0.0},
+    {"draw_uniform_payload_append_copy_cpu_ms", CounterEntry::Kind::Milliseconds, &Counters::drawUniformPayloadAppendCopyCpuNs, nullptr, nullptr, 0.0},
+    {"draw_uniform_payload_append_copy_cpu_max_ms", CounterEntry::Kind::Milliseconds, &Counters::drawUniformPayloadAppendCopyCpuMaxNs, nullptr, nullptr, 0.0},
+    {"draw_uniform_payload_append_link_cpu_ms", CounterEntry::Kind::Milliseconds, &Counters::drawUniformPayloadAppendLinkCpuNs, nullptr, nullptr, 0.0},
+    {"draw_uniform_payload_append_link_cpu_max_ms", CounterEntry::Kind::Milliseconds, &Counters::drawUniformPayloadAppendLinkCpuMaxNs, nullptr, nullptr, 0.0},
     {"transient_upload_calls", CounterEntry::Kind::UnsignedCount, &Counters::transientUploadCalls, nullptr, nullptr, 0.0},
     {"transient_upload_bytes", CounterEntry::Kind::UnsignedCount, &Counters::transientUploadBytes, nullptr, nullptr, 0.0},
     {"transient_upload_cpu_ms", CounterEntry::Kind::Milliseconds, &Counters::transientUploadCpuNs, nullptr, nullptr, 0.0},
@@ -2313,6 +2567,24 @@ constexpr CounterEntry kCounterTable[] = {
     {"completion_no_enqueue_wait_to_command_buffer_commit_p50_ms", CounterEntry::Kind::PercentileMs, nullptr, nullptr, &Counters::completionNoEnqueueWaitToCommandBufferCommitRing, 0.5},
     {"completion_no_enqueue_wait_to_command_buffer_commit_p95_ms", CounterEntry::Kind::PercentileMs, nullptr, nullptr, &Counters::completionNoEnqueueWaitToCommandBufferCommitRing, 0.95},
     {"completion_no_enqueue_wait_to_command_buffer_commit_p99_ms", CounterEntry::Kind::PercentileMs, nullptr, nullptr, &Counters::completionNoEnqueueWaitToCommandBufferCommitRing, 0.99},
+    {"completion_no_enqueue_stage_commit_entry_to_publish", CounterEntry::Kind::UnsignedCount, &Counters::completionNoEnqueueStageCommitEntryToPublish, nullptr, nullptr, 0.0},
+    {"completion_no_enqueue_stage_commit_entry_to_publish_ms", CounterEntry::Kind::Milliseconds, &Counters::completionNoEnqueueStageCommitEntryToPublishNs, nullptr, nullptr, 0.0},
+    {"completion_no_enqueue_stage_commit_entry_to_publish_max_ms", CounterEntry::Kind::Milliseconds, &Counters::completionNoEnqueueStageCommitEntryToPublishMaxNs, nullptr, nullptr, 0.0},
+    {"completion_no_enqueue_stage_commit_entry_to_publish_p50_ms", CounterEntry::Kind::PercentileMs, nullptr, nullptr, &Counters::completionNoEnqueueStageCommitEntryToPublishRing, 0.5},
+    {"completion_no_enqueue_stage_commit_entry_to_publish_p95_ms", CounterEntry::Kind::PercentileMs, nullptr, nullptr, &Counters::completionNoEnqueueStageCommitEntryToPublishRing, 0.95},
+    {"completion_no_enqueue_stage_commit_entry_to_publish_p99_ms", CounterEntry::Kind::PercentileMs, nullptr, nullptr, &Counters::completionNoEnqueueStageCommitEntryToPublishRing, 0.99},
+    {"completion_no_enqueue_stage_publish_to_encode_dequeue", CounterEntry::Kind::UnsignedCount, &Counters::completionNoEnqueueStagePublishToEncodeDequeue, nullptr, nullptr, 0.0},
+    {"completion_no_enqueue_stage_publish_to_encode_dequeue_ms", CounterEntry::Kind::Milliseconds, &Counters::completionNoEnqueueStagePublishToEncodeDequeueNs, nullptr, nullptr, 0.0},
+    {"completion_no_enqueue_stage_publish_to_encode_dequeue_max_ms", CounterEntry::Kind::Milliseconds, &Counters::completionNoEnqueueStagePublishToEncodeDequeueMaxNs, nullptr, nullptr, 0.0},
+    {"completion_no_enqueue_stage_publish_to_encode_dequeue_p50_ms", CounterEntry::Kind::PercentileMs, nullptr, nullptr, &Counters::completionNoEnqueueStagePublishToEncodeDequeueRing, 0.5},
+    {"completion_no_enqueue_stage_publish_to_encode_dequeue_p95_ms", CounterEntry::Kind::PercentileMs, nullptr, nullptr, &Counters::completionNoEnqueueStagePublishToEncodeDequeueRing, 0.95},
+    {"completion_no_enqueue_stage_publish_to_encode_dequeue_p99_ms", CounterEntry::Kind::PercentileMs, nullptr, nullptr, &Counters::completionNoEnqueueStagePublishToEncodeDequeueRing, 0.99},
+    {"completion_no_enqueue_stage_encode_dequeue_to_command_buffer_commit", CounterEntry::Kind::UnsignedCount, &Counters::completionNoEnqueueStageEncodeDequeueToCommandBufferCommit, nullptr, nullptr, 0.0},
+    {"completion_no_enqueue_stage_encode_dequeue_to_command_buffer_commit_ms", CounterEntry::Kind::Milliseconds, &Counters::completionNoEnqueueStageEncodeDequeueToCommandBufferCommitNs, nullptr, nullptr, 0.0},
+    {"completion_no_enqueue_stage_encode_dequeue_to_command_buffer_commit_max_ms", CounterEntry::Kind::Milliseconds, &Counters::completionNoEnqueueStageEncodeDequeueToCommandBufferCommitMaxNs, nullptr, nullptr, 0.0},
+    {"completion_no_enqueue_stage_encode_dequeue_to_command_buffer_commit_p50_ms", CounterEntry::Kind::PercentileMs, nullptr, nullptr, &Counters::completionNoEnqueueStageEncodeDequeueToCommandBufferCommitRing, 0.5},
+    {"completion_no_enqueue_stage_encode_dequeue_to_command_buffer_commit_p95_ms", CounterEntry::Kind::PercentileMs, nullptr, nullptr, &Counters::completionNoEnqueueStageEncodeDequeueToCommandBufferCommitRing, 0.95},
+    {"completion_no_enqueue_stage_encode_dequeue_to_command_buffer_commit_p99_ms", CounterEntry::Kind::PercentileMs, nullptr, nullptr, &Counters::completionNoEnqueueStageEncodeDequeueToCommandBufferCommitRing, 0.99},
     {"completion_no_enqueue_wait_to_next_enqueue", CounterEntry::Kind::UnsignedCount, &Counters::completionNoEnqueueWaitToNextEnqueue, nullptr, nullptr, 0.0},
     {"completion_no_enqueue_wait_to_next_enqueue_ms", CounterEntry::Kind::Milliseconds, &Counters::completionNoEnqueueWaitToNextEnqueueNs, nullptr, nullptr, 0.0},
     {"completion_no_enqueue_wait_to_next_enqueue_max_ms", CounterEntry::Kind::Milliseconds, &Counters::completionNoEnqueueWaitToNextEnqueueMaxNs, nullptr, nullptr, 0.0},
@@ -2588,6 +2860,14 @@ void add(std::atomic<std::uint64_t>& counter, std::uint64_t value = 1) {
   counter.fetch_add(value, std::memory_order_relaxed);
 }
 
+void addBatchMissUniformBuild(std::atomic<std::uint64_t>& counter,
+                              std::uint64_t value = 1) {
+  if (!inD3D9SnapshotUniformBuildBatchMissContext()) {
+    return;
+  }
+  add(counter, value);
+}
+
 void updateMax(std::atomic<std::uint64_t>& counter, std::uint64_t value) {
   if (!enabled()) {
     return;
@@ -2624,6 +2904,16 @@ void recordRing(PercentileRing& ring, std::uint64_t nanoseconds) {
 bool enabled() {
   ensureRegistered();
   return enabledFlag();
+}
+
+ScopedD3D9SnapshotUniformBuildContext::ScopedD3D9SnapshotUniformBuildContext(
+    D3D9SnapshotUniformBuildContext context) noexcept
+    : previous_(gD3D9SnapshotUniformBuildContext) {
+  gD3D9SnapshotUniformBuildContext = context;
+}
+
+ScopedD3D9SnapshotUniformBuildContext::~ScopedD3D9SnapshotUniformBuildContext() {
+  gD3D9SnapshotUniformBuildContext = previous_;
 }
 
 void countSubmitDraw() {
@@ -3231,6 +3521,13 @@ void countCommitChunkQueueDrawSubmissionCpuTime(std::uint64_t nanoseconds) {
   recordRing(c.commitChunkQueueDrawSubmissionCpuRing, nanoseconds);
 }
 
+void countCommitChunkQueueDrawSubmissionEmplaceCpuTime(std::uint64_t nanoseconds) {
+  auto& c = counters();
+  add(c.commitChunkQueueDrawSubmissionEmplaceCpuNs, nanoseconds);
+  updateMax(c.commitChunkQueueDrawSubmissionEmplaceCpuMaxNs, nanoseconds);
+  recordRing(c.commitChunkQueueDrawSubmissionEmplaceCpuRing, nanoseconds);
+}
+
 void countCommitChunkConstUploadCpuTime(std::uint64_t nanoseconds) {
   auto& c = counters();
   add(c.commitChunkConstUploadCpuNs, nanoseconds);
@@ -3243,6 +3540,13 @@ void countSubmitDrawRunBatchGroup(std::uint32_t recordCount) {
   add(c.submitDrawRunBatchGroups);
   add(c.submitDrawRunBatchRecords, recordCount);
   updateMax(c.submitDrawRunBatchMaxRecords, recordCount);
+}
+
+void countSubmitDrawRunBatchDiscardedState(std::uint64_t records,
+                                           std::uint64_t bytes) {
+  auto& c = counters();
+  add(c.submitDrawRunBatchDiscardedStateRecords, records);
+  add(c.submitDrawRunBatchDiscardedStateBytes, bytes);
 }
 
 void countSubmitDrawRunBindingSnapshotCpuTime(std::uint64_t nanoseconds) {
@@ -3448,6 +3752,25 @@ void countD3D9DrawStateCacheLookup(bool hit, bool includeIndexBuffer) {
     add(includeIndexBuffer ? c.d3d9DrawStateCacheMissWithIndex
                            : c.d3d9DrawStateCacheMissNoIndex);
   }
+}
+
+void countD3D9DrawStateCacheDirectLookup(bool hit, bool includeIndexBuffer) {
+  auto& c = counters();
+  if (hit) {
+    add(c.d3d9DrawStateCacheDirectHits);
+    add(includeIndexBuffer ? c.d3d9DrawStateCacheDirectHitWithIndex
+                           : c.d3d9DrawStateCacheDirectHitNoIndex);
+  } else {
+    add(c.d3d9DrawStateCacheDirectMisses);
+    add(includeIndexBuffer ? c.d3d9DrawStateCacheDirectMissWithIndex
+                           : c.d3d9DrawStateCacheDirectMissNoIndex);
+  }
+}
+
+void countD3D9DrawStateCacheBatchLookup(bool hit) {
+  auto& c = counters();
+  add(hit ? c.d3d9DrawStateCacheBatchHits
+          : c.d3d9DrawStateCacheBatchMisses);
 }
 
 void countD3D9DrawStateCacheUniformRefresh() {
@@ -3772,6 +4095,44 @@ void countEncodeDrawArgbufOpenCpuTime(std::uint64_t nanoseconds) {
   add(counters().encodeDrawArgbufOpenCpuNs, nanoseconds);
 }
 
+void countEncodeDrawArgbufOpenCallCpuTime(std::uint64_t nanoseconds) {
+  add(counters().encodeDrawArgbufOpenCallCpuNs, nanoseconds);
+}
+
+void countEncodeDrawArgbufReopenPostCpuTime(std::uint64_t nanoseconds) {
+  add(counters().encodeDrawArgbufReopenPostCpuNs, nanoseconds);
+}
+
+void countEncodeDrawArgbufReopenTableProbeCpuTime(
+    std::uint64_t nanoseconds) {
+  add(counters().encodeDrawArgbufReopenTableProbeCpuNs, nanoseconds);
+}
+
+void countEncodeDrawArgbufReopenTableShadowStoreCpuTime(
+    std::uint64_t nanoseconds) {
+  add(counters().encodeDrawArgbufReopenTableShadowStoreCpuNs, nanoseconds);
+}
+
+void countEncodeDrawArgbufReopenByteAccountCpuTime(
+    std::uint64_t nanoseconds) {
+  add(counters().encodeDrawArgbufReopenByteAccountCpuNs, nanoseconds);
+}
+
+void countEncodeDrawArgbufReopenCbufCacheProbeCpuTime(
+    std::uint64_t nanoseconds) {
+  add(counters().encodeDrawArgbufReopenCbufCacheProbeCpuNs, nanoseconds);
+}
+
+void countEncodeDrawArgbufReopenCbufDirtyScanCpuTime(
+    std::uint64_t nanoseconds) {
+  add(counters().encodeDrawArgbufReopenCbufDirtyScanCpuNs, nanoseconds);
+}
+
+void countEncodeDrawArgbufReopenCbufForceDirtyCpuTime(
+    std::uint64_t nanoseconds) {
+  add(counters().encodeDrawArgbufReopenCbufForceDirtyCpuNs, nanoseconds);
+}
+
 void countEncodeDrawArgbufOpenReserveCpuTime(std::uint64_t nanoseconds) {
   add(counters().encodeDrawArgbufOpenReserveCpuNs, nanoseconds);
 }
@@ -3950,6 +4311,10 @@ void countEncodeDrawArgbufCbufCacheMergeCpuTime(std::uint64_t nanoseconds) {
 
 void countEncodeDrawArgbufCbufCachedRepointCpuTime(std::uint64_t nanoseconds) {
   add(counters().encodeDrawArgbufCbufCachedRepointCpuNs, nanoseconds);
+}
+
+void countEncodeDrawArgbufCbufFullRepointCpuTime(std::uint64_t nanoseconds) {
+  add(counters().encodeDrawArgbufCbufFullRepointCpuNs, nanoseconds);
 }
 
 void countEncodeDrawArgbufCbufCachedRepointCalls(std::uint64_t calls) {
@@ -4409,6 +4774,22 @@ void countD3D9SnapshotCacheMissCpuTime(std::uint64_t nanoseconds) {
   add(counters().d3d9SnapshotCacheMissCpuNs, nanoseconds);
 }
 
+void countD3D9SnapshotCacheDirectHitCpuTime(std::uint64_t nanoseconds) {
+  add(counters().d3d9SnapshotCacheDirectHitCpuNs, nanoseconds);
+}
+
+void countD3D9SnapshotCacheDirectMissCpuTime(std::uint64_t nanoseconds) {
+  add(counters().d3d9SnapshotCacheDirectMissCpuNs, nanoseconds);
+}
+
+void countD3D9SnapshotCacheBatchHitCpuTime(std::uint64_t nanoseconds) {
+  add(counters().d3d9SnapshotCacheBatchHitCpuNs, nanoseconds);
+}
+
+void countD3D9SnapshotCacheBatchMissCpuTime(std::uint64_t nanoseconds) {
+  add(counters().d3d9SnapshotCacheBatchMissCpuNs, nanoseconds);
+}
+
 void countD3D9SnapshotCacheBindingLayoutCpuTime(std::uint64_t nanoseconds) {
   add(counters().d3d9SnapshotCacheBindingLayoutCpuNs, nanoseconds);
 }
@@ -4437,164 +4818,415 @@ void countD3D9SnapshotCacheMissHotBuildCpuTime(std::uint64_t nanoseconds) {
   add(counters().d3d9SnapshotCacheMissHotBuildCpuNs, nanoseconds);
 }
 
+void countD3D9SnapshotCacheDirectMissShaderLayoutCpuTime(std::uint64_t nanoseconds) {
+  add(counters().d3d9SnapshotCacheDirectMissShaderLayoutCpuNs, nanoseconds);
+}
+
+void countD3D9SnapshotCacheDirectMissUniformBuildCpuTime(std::uint64_t nanoseconds) {
+  add(counters().d3d9SnapshotCacheDirectMissUniformBuildCpuNs, nanoseconds);
+}
+
+void countD3D9SnapshotCacheDirectMissHotBuildCpuTime(std::uint64_t nanoseconds) {
+  add(counters().d3d9SnapshotCacheDirectMissHotBuildCpuNs, nanoseconds);
+}
+
+void countD3D9SnapshotCacheBatchMissShaderLayoutCpuTime(std::uint64_t nanoseconds) {
+  add(counters().d3d9SnapshotCacheBatchMissShaderLayoutCpuNs, nanoseconds);
+}
+
+void countD3D9SnapshotCacheBatchMissUniformBuildCpuTime(std::uint64_t nanoseconds) {
+  add(counters().d3d9SnapshotCacheBatchMissUniformBuildCpuNs, nanoseconds);
+}
+
+void countD3D9SnapshotCacheBatchMissHotBuildCpuTime(std::uint64_t nanoseconds) {
+  add(counters().d3d9SnapshotCacheBatchMissHotBuildCpuNs, nanoseconds);
+}
+
+void countD3D9SnapshotCacheBatchMissHotBuildZeroInitCpuTime(std::uint64_t nanoseconds) {
+  add(counters().d3d9SnapshotCacheBatchMissHotBuildZeroInitCpuNs, nanoseconds);
+}
+
+void countD3D9SnapshotCacheBatchMissHotBuildKeyCpuTime(std::uint64_t nanoseconds) {
+  add(counters().d3d9SnapshotCacheBatchMissHotBuildKeyCpuNs, nanoseconds);
+}
+
+void countD3D9SnapshotCacheBatchMissHotBuildKeyZeroInitCpuTime(std::uint64_t nanoseconds) {
+  add(counters().d3d9SnapshotCacheBatchMissHotBuildKeyZeroInitCpuNs, nanoseconds);
+}
+
+void countD3D9SnapshotCacheBatchMissHotBuildKeyStreamCpuTime(std::uint64_t nanoseconds) {
+  add(counters().d3d9SnapshotCacheBatchMissHotBuildKeyStreamCpuNs, nanoseconds);
+}
+
+void countD3D9SnapshotCacheBatchMissHotBuildKeyShaderCpuTime(std::uint64_t nanoseconds) {
+  add(counters().d3d9SnapshotCacheBatchMissHotBuildKeyShaderCpuNs, nanoseconds);
+}
+
+void countD3D9SnapshotCacheBatchMissHotBuildKeyConstantCpuTime(std::uint64_t nanoseconds) {
+  add(counters().d3d9SnapshotCacheBatchMissHotBuildKeyConstantCpuNs, nanoseconds);
+}
+
+void countD3D9SnapshotCacheBatchMissHotBuildKeyTextureCpuTime(std::uint64_t nanoseconds) {
+  add(counters().d3d9SnapshotCacheBatchMissHotBuildKeyTextureCpuNs, nanoseconds);
+}
+
+void countD3D9SnapshotCacheBatchMissHotBuildKeySamplerCpuTime(std::uint64_t nanoseconds) {
+  add(counters().d3d9SnapshotCacheBatchMissHotBuildKeySamplerCpuNs, nanoseconds);
+}
+
+void countD3D9SnapshotCacheBatchMissHotBuildKeyRenderStateCpuTime(std::uint64_t nanoseconds) {
+  add(counters().d3d9SnapshotCacheBatchMissHotBuildKeyRenderStateCpuNs, nanoseconds);
+}
+
+void countD3D9SnapshotCacheBatchMissHotBuildKeyAttachmentCpuTime(std::uint64_t nanoseconds) {
+  add(counters().d3d9SnapshotCacheBatchMissHotBuildKeyAttachmentCpuNs, nanoseconds);
+}
+
+void countD3D9SnapshotCacheBatchMissHotBuildKeyUniformCpuTime(std::uint64_t nanoseconds) {
+  add(counters().d3d9SnapshotCacheBatchMissHotBuildKeyUniformCpuNs, nanoseconds);
+}
+
+void countD3D9SnapshotCacheBatchMissHotBuildBindingCopyCpuTime(std::uint64_t nanoseconds) {
+  add(counters().d3d9SnapshotCacheBatchMissHotBuildBindingCopyCpuNs, nanoseconds);
+}
+
+void countD3D9SnapshotCacheBatchMissHotBuildRenderStateCpuTime(std::uint64_t nanoseconds) {
+  add(counters().d3d9SnapshotCacheBatchMissHotBuildRenderStateCpuNs, nanoseconds);
+}
+
+void countD3D9SnapshotCacheBatchMissHotBuildTextureStageStateCpuTime(std::uint64_t nanoseconds) {
+  add(counters().d3d9SnapshotCacheBatchMissHotBuildTextureStageStateCpuNs, nanoseconds);
+}
+
+void countD3D9SnapshotCacheBatchMissHotBuildSamplerStateCpuTime(std::uint64_t nanoseconds) {
+  add(counters().d3d9SnapshotCacheBatchMissHotBuildSamplerStateCpuNs, nanoseconds);
+}
+
+void countD3D9SnapshotCacheBatchMissHotBuildTailCopyCpuTime(std::uint64_t nanoseconds) {
+  add(counters().d3d9SnapshotCacheBatchMissHotBuildTailCopyCpuNs, nanoseconds);
+}
+
+void countD3D9SnapshotCacheBatchMissHotBuildFlatRenderReuse(bool reused) {
+  auto& c = counters();
+  add(reused ? c.d3d9SnapshotCacheBatchMissHotBuildFlatRenderReuseHits
+             : c.d3d9SnapshotCacheBatchMissHotBuildFlatRenderReuseMisses);
+}
+
+void countD3D9SnapshotCacheBatchMissHotBuildFlatTssReuse(bool reused) {
+  auto& c = counters();
+  add(reused ? c.d3d9SnapshotCacheBatchMissHotBuildFlatTssReuseHits
+             : c.d3d9SnapshotCacheBatchMissHotBuildFlatTssReuseMisses);
+}
+
+void countD3D9SnapshotCacheBatchMissHotBuildFlatSamplerReuse(bool reused) {
+  auto& c = counters();
+  add(reused ? c.d3d9SnapshotCacheBatchMissHotBuildFlatSamplerReuseHits
+             : c.d3d9SnapshotCacheBatchMissHotBuildFlatSamplerReuseMisses);
+}
+
+void countD3D9SnapshotCacheBatchMissUniformNonConstHashReuse(bool reused) {
+  auto& c = counters();
+  add(reused ? c.d3d9SnapshotCacheBatchMissUniformNonConstHashReuseHits
+             : c.d3d9SnapshotCacheBatchMissUniformNonConstHashReuseMisses);
+}
+
 void countD3D9SnapshotUniformBuildCall() {
   add(counters().d3d9SnapshotUniformBuildCalls);
+  addBatchMissUniformBuild(
+      counters().d3d9SnapshotCacheBatchMissUniformBuildCalls);
 }
 
 void countD3D9SnapshotUniformBuildVsConstCopyCpuTime(std::uint64_t nanoseconds) {
   add(counters().d3d9SnapshotUniformBuildVsConstCopyCpuNs, nanoseconds);
+  addBatchMissUniformBuild(
+      counters().d3d9SnapshotCacheBatchMissUniformBuildVsConstCopyCpuNs,
+      nanoseconds);
 }
 
 void countD3D9SnapshotUniformBuildPsConstCopyCpuTime(std::uint64_t nanoseconds) {
   add(counters().d3d9SnapshotUniformBuildPsConstCopyCpuNs, nanoseconds);
+  addBatchMissUniformBuild(
+      counters().d3d9SnapshotCacheBatchMissUniformBuildPsConstCopyCpuNs,
+      nanoseconds);
 }
 
 void countD3D9SnapshotUniformBuildFfpMatrixCpuTime(std::uint64_t nanoseconds) {
   add(counters().d3d9SnapshotUniformBuildFfpMatrixCpuNs, nanoseconds);
+  addBatchMissUniformBuild(
+      counters().d3d9SnapshotCacheBatchMissUniformBuildFfpMatrixCpuNs,
+      nanoseconds);
 }
 
 void countD3D9SnapshotUniformBuildFfpMaterialLightCpuTime(std::uint64_t nanoseconds) {
   add(counters().d3d9SnapshotUniformBuildFfpMaterialLightCpuNs, nanoseconds);
+  addBatchMissUniformBuild(
+      counters().d3d9SnapshotCacheBatchMissUniformBuildFfpMaterialLightCpuNs,
+      nanoseconds);
 }
 
 void countD3D9SnapshotUniformBuildTextureTransformCpuTime(std::uint64_t nanoseconds) {
   add(counters().d3d9SnapshotUniformBuildTextureTransformCpuNs, nanoseconds);
+  addBatchMissUniformBuild(
+      counters().d3d9SnapshotCacheBatchMissUniformBuildTextureTransformCpuNs,
+      nanoseconds);
 }
 
 void countD3D9SnapshotUniformBuildClipPlaneCpuTime(std::uint64_t nanoseconds) {
   add(counters().d3d9SnapshotUniformBuildClipPlaneCpuNs, nanoseconds);
+  addBatchMissUniformBuild(
+      counters().d3d9SnapshotCacheBatchMissUniformBuildClipPlaneCpuNs,
+      nanoseconds);
 }
 
 void countD3D9SnapshotUniformBuildHashCpuTime(std::uint64_t nanoseconds) {
   add(counters().d3d9SnapshotUniformBuildHashCpuNs, nanoseconds);
+  addBatchMissUniformBuild(
+      counters().d3d9SnapshotCacheBatchMissUniformBuildHashCpuNs,
+      nanoseconds);
 }
 
 void countD3D9SnapshotUniformBuildVsConstHashCpuTime(std::uint64_t nanoseconds) {
   add(counters().d3d9SnapshotUniformBuildVsConstHashCpuNs, nanoseconds);
+  addBatchMissUniformBuild(
+      counters().d3d9SnapshotCacheBatchMissUniformBuildVsConstHashCpuNs,
+      nanoseconds);
 }
 
 void countD3D9SnapshotUniformBuildPsConstHashCpuTime(std::uint64_t nanoseconds) {
   add(counters().d3d9SnapshotUniformBuildPsConstHashCpuNs, nanoseconds);
+  addBatchMissUniformBuild(
+      counters().d3d9SnapshotCacheBatchMissUniformBuildPsConstHashCpuNs,
+      nanoseconds);
 }
 
 void countD3D9SnapshotUniformBuildNonConstHashCpuTime(std::uint64_t nanoseconds) {
   add(counters().d3d9SnapshotUniformBuildNonConstHashCpuNs, nanoseconds);
+  addBatchMissUniformBuild(
+      counters().d3d9SnapshotCacheBatchMissUniformBuildNonConstHashCpuNs,
+      nanoseconds);
 }
 
 void countD3D9SnapshotUniformBuildNonConstHashWorldViewProjCpuTime(std::uint64_t nanoseconds) {
   add(counters().d3d9SnapshotUniformBuildNonConstHashWorldViewProjCpuNs, nanoseconds);
+  addBatchMissUniformBuild(
+      counters().d3d9SnapshotCacheBatchMissUniformBuildNonConstHashWorldViewProjCpuNs,
+      nanoseconds);
 }
 
 void countD3D9SnapshotUniformBuildNonConstHashFfpWorldViewCpuTime(std::uint64_t nanoseconds) {
   add(counters().d3d9SnapshotUniformBuildNonConstHashFfpWorldViewCpuNs, nanoseconds);
+  addBatchMissUniformBuild(
+      counters().d3d9SnapshotCacheBatchMissUniformBuildNonConstHashFfpWorldViewCpuNs,
+      nanoseconds);
 }
 
 void countD3D9SnapshotUniformBuildNonConstHashFfpNormalMatrixCpuTime(std::uint64_t nanoseconds) {
   add(counters().d3d9SnapshotUniformBuildNonConstHashFfpNormalMatrixCpuNs, nanoseconds);
+  addBatchMissUniformBuild(
+      counters().d3d9SnapshotCacheBatchMissUniformBuildNonConstHashFfpNormalMatrixCpuNs,
+      nanoseconds);
 }
 
 void countD3D9SnapshotUniformBuildNonConstHashMaterialCpuTime(std::uint64_t nanoseconds) {
   add(counters().d3d9SnapshotUniformBuildNonConstHashMaterialCpuNs, nanoseconds);
+  addBatchMissUniformBuild(
+      counters().d3d9SnapshotCacheBatchMissUniformBuildNonConstHashMaterialCpuNs,
+      nanoseconds);
 }
 
 void countD3D9SnapshotUniformBuildNonConstHashLightsCpuTime(std::uint64_t nanoseconds) {
   add(counters().d3d9SnapshotUniformBuildNonConstHashLightsCpuNs, nanoseconds);
+  addBatchMissUniformBuild(
+      counters().d3d9SnapshotCacheBatchMissUniformBuildNonConstHashLightsCpuNs,
+      nanoseconds);
 }
 
 void countD3D9SnapshotUniformBuildNonConstHashFfpBlendWvpCpuTime(std::uint64_t nanoseconds) {
   add(counters().d3d9SnapshotUniformBuildNonConstHashFfpBlendWvpCpuNs, nanoseconds);
+  addBatchMissUniformBuild(
+      counters().d3d9SnapshotCacheBatchMissUniformBuildNonConstHashFfpBlendWvpCpuNs,
+      nanoseconds);
 }
 
 void countD3D9SnapshotUniformBuildNonConstHashTextureTransformsCpuTime(std::uint64_t nanoseconds) {
   add(counters().d3d9SnapshotUniformBuildNonConstHashTextureTransformsCpuNs, nanoseconds);
+  addBatchMissUniformBuild(
+      counters().d3d9SnapshotCacheBatchMissUniformBuildNonConstHashTextureTransformsCpuNs,
+      nanoseconds);
 }
 
 void countD3D9SnapshotUniformBuildNonConstHashClipPlanesCpuTime(std::uint64_t nanoseconds) {
   add(counters().d3d9SnapshotUniformBuildNonConstHashClipPlanesCpuNs, nanoseconds);
+  addBatchMissUniformBuild(
+      counters().d3d9SnapshotCacheBatchMissUniformBuildNonConstHashClipPlanesCpuNs,
+      nanoseconds);
 }
 
 void countD3D9SnapshotUniformBuildPayloadCombineHashCpuTime(std::uint64_t nanoseconds) {
   add(counters().d3d9SnapshotUniformBuildPayloadCombineHashCpuNs, nanoseconds);
+  addBatchMissUniformBuild(
+      counters().d3d9SnapshotCacheBatchMissUniformBuildPayloadCombineHashCpuNs,
+      nanoseconds);
 }
 
 void countD3D9SnapshotUniformBuildVsConstHashFull() {
   add(counters().d3d9SnapshotUniformBuildVsConstHashFull);
+  addBatchMissUniformBuild(
+      counters().d3d9SnapshotCacheBatchMissUniformBuildVsConstHashFull);
 }
 
 void countD3D9SnapshotUniformBuildPsConstHashFull() {
   add(counters().d3d9SnapshotUniformBuildPsConstHashFull);
+  addBatchMissUniformBuild(
+      counters().d3d9SnapshotCacheBatchMissUniformBuildPsConstHashFull);
 }
 
 void countD3D9SnapshotUniformBuildVsConstHashFullNoUsage() {
   add(counters().d3d9SnapshotUniformBuildVsConstHashFullNoUsage);
+  addBatchMissUniformBuild(
+      counters().d3d9SnapshotCacheBatchMissUniformBuildVsConstHashFullNoUsage);
 }
 
 void countD3D9SnapshotUniformBuildPsConstHashFullNoUsage() {
   add(counters().d3d9SnapshotUniformBuildPsConstHashFullNoUsage);
+  addBatchMissUniformBuild(
+      counters().d3d9SnapshotCacheBatchMissUniformBuildPsConstHashFullNoUsage);
 }
 
 void countD3D9SnapshotUniformBuildVsConstHashFullUnknown() {
   add(counters().d3d9SnapshotUniformBuildVsConstHashFullUnknown);
+  addBatchMissUniformBuild(
+      counters().d3d9SnapshotCacheBatchMissUniformBuildVsConstHashFullUnknown);
 }
 
 void countD3D9SnapshotUniformBuildPsConstHashFullUnknown() {
   add(counters().d3d9SnapshotUniformBuildPsConstHashFullUnknown);
+  addBatchMissUniformBuild(
+      counters().d3d9SnapshotCacheBatchMissUniformBuildPsConstHashFullUnknown);
 }
 
 void countD3D9SnapshotUniformBuildVsConstHashFullUnknownBytecode() {
   add(counters().d3d9SnapshotUniformBuildVsConstHashFullUnknownBytecode);
+  addBatchMissUniformBuild(
+      counters().d3d9SnapshotCacheBatchMissUniformBuildVsConstHashFullUnknownBytecode);
 }
 
 void countD3D9SnapshotUniformBuildPsConstHashFullUnknownBytecode() {
   add(counters().d3d9SnapshotUniformBuildPsConstHashFullUnknownBytecode);
+  addBatchMissUniformBuild(
+      counters().d3d9SnapshotCacheBatchMissUniformBuildPsConstHashFullUnknownBytecode);
 }
 
 void countD3D9SnapshotUniformBuildVsConstHashFullUnknownNonBytecode() {
   add(counters().d3d9SnapshotUniformBuildVsConstHashFullUnknownNonBytecode);
+  addBatchMissUniformBuild(
+      counters().d3d9SnapshotCacheBatchMissUniformBuildVsConstHashFullUnknownNonBytecode);
 }
 
 void countD3D9SnapshotUniformBuildPsConstHashFullUnknownNonBytecode() {
   add(counters().d3d9SnapshotUniformBuildPsConstHashFullUnknownNonBytecode);
+  addBatchMissUniformBuild(
+      counters().d3d9SnapshotCacheBatchMissUniformBuildPsConstHashFullUnknownNonBytecode);
 }
 
 void countD3D9SnapshotUniformBuildVsConstHashFullIndexedFloat() {
   add(counters().d3d9SnapshotUniformBuildVsConstHashFullIndexedFloat);
+  addBatchMissUniformBuild(
+      counters().d3d9SnapshotCacheBatchMissUniformBuildVsConstHashFullIndexedFloat);
+}
+
+void countD3D9SnapshotUniformBuildVsConstHashFullIndexedFloatMinSafeBytes(
+    std::uint64_t bytes) {
+  add(counters().d3d9SnapshotUniformBuildVsConstHashFullIndexedFloatMinSafeBytes,
+      bytes);
+  addBatchMissUniformBuild(
+      counters().d3d9SnapshotCacheBatchMissUniformBuildVsConstHashFullIndexedFloatMinSafeBytes,
+      bytes);
+}
+
+void countD3D9SnapshotUniformBuildVsConstHashFullIndexedFloatPotentialSavedBytes(
+    std::uint64_t bytes) {
+  add(counters().d3d9SnapshotUniformBuildVsConstHashFullIndexedFloatPotentialSavedBytes,
+      bytes);
+  addBatchMissUniformBuild(
+      counters().d3d9SnapshotCacheBatchMissUniformBuildVsConstHashFullIndexedFloatPotentialSavedBytes,
+      bytes);
 }
 
 void countD3D9SnapshotUniformBuildPsConstHashFullIndexedFloat() {
   add(counters().d3d9SnapshotUniformBuildPsConstHashFullIndexedFloat);
+  addBatchMissUniformBuild(
+      counters().d3d9SnapshotCacheBatchMissUniformBuildPsConstHashFullIndexedFloat);
 }
 
 void countD3D9SnapshotUniformBuildVsConstHashFullIndexedInt() {
   add(counters().d3d9SnapshotUniformBuildVsConstHashFullIndexedInt);
+  addBatchMissUniformBuild(
+      counters().d3d9SnapshotCacheBatchMissUniformBuildVsConstHashFullIndexedInt);
 }
 
 void countD3D9SnapshotUniformBuildPsConstHashFullIndexedInt() {
   add(counters().d3d9SnapshotUniformBuildPsConstHashFullIndexedInt);
+  addBatchMissUniformBuild(
+      counters().d3d9SnapshotCacheBatchMissUniformBuildPsConstHashFullIndexedInt);
 }
 
 void countD3D9SnapshotUniformBuildVsConstHashFullIndexedBool() {
   add(counters().d3d9SnapshotUniformBuildVsConstHashFullIndexedBool);
+  addBatchMissUniformBuild(
+      counters().d3d9SnapshotCacheBatchMissUniformBuildVsConstHashFullIndexedBool);
 }
 
 void countD3D9SnapshotUniformBuildPsConstHashFullIndexedBool() {
   add(counters().d3d9SnapshotUniformBuildPsConstHashFullIndexedBool);
+  addBatchMissUniformBuild(
+      counters().d3d9SnapshotCacheBatchMissUniformBuildPsConstHashFullIndexedBool);
 }
 
 void countD3D9SnapshotUniformBuildVsConstHashBytes(std::uint64_t bytes) {
   add(counters().d3d9SnapshotUniformBuildVsConstHashBytes, bytes);
+  addBatchMissUniformBuild(
+      counters().d3d9SnapshotCacheBatchMissUniformBuildVsConstHashBytes,
+      bytes);
 }
 
 void countD3D9SnapshotUniformBuildPsConstHashBytes(std::uint64_t bytes) {
   add(counters().d3d9SnapshotUniformBuildPsConstHashBytes, bytes);
+  addBatchMissUniformBuild(
+      counters().d3d9SnapshotCacheBatchMissUniformBuildPsConstHashBytes,
+      bytes);
 }
 
 void countD3D9SnapshotUniformCopyCpuTime(std::uint64_t nanoseconds) {
   add(counters().d3d9SnapshotUniformCopyCpuNs, nanoseconds);
 }
 
+void countD3D9SnapshotUniformMaterialized(std::uint64_t bytes) {
+  auto& c = counters();
+  add(c.d3d9SnapshotUniformMaterialized);
+  add(c.d3d9SnapshotUniformMaterializedBytes, bytes);
+}
+
+void countD3D9SnapshotUniformElided(std::uint64_t bytes) {
+  auto& c = counters();
+  add(c.d3d9SnapshotUniformElided);
+  add(c.d3d9SnapshotUniformElidedBytes, bytes);
+}
+
 void countD3D9SnapshotStateCopyCpuTime(std::uint64_t nanoseconds) {
   add(counters().d3d9SnapshotStateCopyCpuNs, nanoseconds);
+}
+
+void countD3D9SnapshotStateMaterialized(std::uint64_t bytes) {
+  auto& c = counters();
+  add(c.d3d9SnapshotStateMaterialized);
+  add(c.d3d9SnapshotStateMaterializedBytes, bytes);
+}
+
+void countD3D9SnapshotStateElided(std::uint64_t bytes) {
+  auto& c = counters();
+  add(c.d3d9SnapshotStateElided);
+  add(c.d3d9SnapshotStateElidedBytes, bytes);
 }
 
 void countD3D9SnapshotDebugSnapshotCpuTime(std::uint64_t nanoseconds) {
@@ -4680,8 +5312,33 @@ void countDrawUniformPayloadLookupHashCollision(std::uint64_t collisions) {
   add(counters().drawUniformPayloadLookupHashCollisions, collisions);
 }
 
+void countDrawUniformPayloadLookupCpuTime(std::uint64_t nanoseconds) {
+  add(counters().drawUniformPayloadLookupCpuNs, nanoseconds);
+  updateMax(counters().drawUniformPayloadLookupCpuMaxNs, nanoseconds);
+}
+
+void countDrawUniformPayloadLookupBucketCpuTime(std::uint64_t nanoseconds) {
+  add(counters().drawUniformPayloadLookupBucketCpuNs, nanoseconds);
+  updateMax(counters().drawUniformPayloadLookupBucketCpuMaxNs, nanoseconds);
+}
+
 void countDrawUniformPayloadAppend() {
   add(counters().drawUniformPayloadAppends);
+}
+
+void countDrawUniformPayloadAppendReserveCpuTime(std::uint64_t nanoseconds) {
+  add(counters().drawUniformPayloadAppendReserveCpuNs, nanoseconds);
+  updateMax(counters().drawUniformPayloadAppendReserveCpuMaxNs, nanoseconds);
+}
+
+void countDrawUniformPayloadAppendCopyCpuTime(std::uint64_t nanoseconds) {
+  add(counters().drawUniformPayloadAppendCopyCpuNs, nanoseconds);
+  updateMax(counters().drawUniformPayloadAppendCopyCpuMaxNs, nanoseconds);
+}
+
+void countDrawUniformPayloadAppendLinkCpuTime(std::uint64_t nanoseconds) {
+  add(counters().drawUniformPayloadAppendLinkCpuNs, nanoseconds);
+  updateMax(counters().drawUniformPayloadAppendLinkCpuMaxNs, nanoseconds);
 }
 
 void countTransientUploadCpuTime(std::uint64_t nanoseconds, std::size_t bytes) {
@@ -5290,6 +5947,30 @@ void countCompletionNoEnqueueWaitToCommandBufferCommit(std::uint64_t nanoseconds
   add(c.completionNoEnqueueWaitToCommandBufferCommitNs, nanoseconds);
   updateMax(c.completionNoEnqueueWaitToCommandBufferCommitMaxNs, nanoseconds);
   recordRing(c.completionNoEnqueueWaitToCommandBufferCommitRing, nanoseconds);
+}
+
+void countCompletionNoEnqueueStageCommitEntryToPublish(std::uint64_t nanoseconds) {
+  auto& c = counters();
+  add(c.completionNoEnqueueStageCommitEntryToPublish);
+  add(c.completionNoEnqueueStageCommitEntryToPublishNs, nanoseconds);
+  updateMax(c.completionNoEnqueueStageCommitEntryToPublishMaxNs, nanoseconds);
+  recordRing(c.completionNoEnqueueStageCommitEntryToPublishRing, nanoseconds);
+}
+
+void countCompletionNoEnqueueStagePublishToEncodeDequeue(std::uint64_t nanoseconds) {
+  auto& c = counters();
+  add(c.completionNoEnqueueStagePublishToEncodeDequeue);
+  add(c.completionNoEnqueueStagePublishToEncodeDequeueNs, nanoseconds);
+  updateMax(c.completionNoEnqueueStagePublishToEncodeDequeueMaxNs, nanoseconds);
+  recordRing(c.completionNoEnqueueStagePublishToEncodeDequeueRing, nanoseconds);
+}
+
+void countCompletionNoEnqueueStageEncodeDequeueToCommandBufferCommit(std::uint64_t nanoseconds) {
+  auto& c = counters();
+  add(c.completionNoEnqueueStageEncodeDequeueToCommandBufferCommit);
+  add(c.completionNoEnqueueStageEncodeDequeueToCommandBufferCommitNs, nanoseconds);
+  updateMax(c.completionNoEnqueueStageEncodeDequeueToCommandBufferCommitMaxNs, nanoseconds);
+  recordRing(c.completionNoEnqueueStageEncodeDequeueToCommandBufferCommitRing, nanoseconds);
 }
 
 void countCompletionNoEnqueueWaitToNextEnqueue(std::uint64_t nanoseconds,
