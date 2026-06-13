@@ -2534,7 +2534,8 @@ ShaderRef makeShaderRef(const ShaderSection& section) {
   ShaderRef ref;
   ref.kind = ShaderRef::Kind::Bytecode;
   ref.bytecode.bytes = section.bytecode;
-  ref.bytecode.hash = hashBytes(std::as_bytes(std::span(ref.bytecode.bytes)));
+  ref.bytecode.hash = hashBytes(std::as_bytes(std::span<const u8>(
+      ref.bytecode.bytes.data(), ref.bytecode.bytes.size())));
   return ref;
 }
 

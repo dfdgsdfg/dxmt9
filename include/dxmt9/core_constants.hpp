@@ -1,5 +1,6 @@
 #pragma once
 
+#include <algorithm>
 #include <array>
 #include <cstddef>
 #include <cstdint>
@@ -741,8 +742,57 @@ struct StreamBinding {
   friend bool operator==(const StreamBinding&, const StreamBinding&) = default;
 };
 
+class ShaderBytecodeBytes {
+ public:
+  ShaderBytecodeBytes() = default;
+  ShaderBytecodeBytes(const ShaderBytecodeBytes&) noexcept = default;
+  ShaderBytecodeBytes(ShaderBytecodeBytes&&) noexcept = default;
+  ShaderBytecodeBytes& operator=(const ShaderBytecodeBytes&) noexcept = default;
+  ShaderBytecodeBytes& operator=(ShaderBytecodeBytes&&) noexcept = default;
+
+  ShaderBytecodeBytes& operator=(const std::vector<u8>& bytes) {
+    assign(bytes.begin(), bytes.end());
+    return *this;
+  }
+
+  ShaderBytecodeBytes& operator=(std::vector<u8>&& bytes) {
+    storage_ = std::make_shared<const std::vector<u8>>(std::move(bytes));
+    return *this;
+  }
+
+  template <typename It>
+  void assign(It first, It last) {
+    storage_ = std::make_shared<const std::vector<u8>>(first, last);
+  }
+
+  bool empty() const noexcept { return size() == 0; }
+  std::size_t size() const noexcept { return storage_ ? storage_->size() : 0u; }
+  const u8* data() const noexcept {
+    return storage_ && !storage_->empty() ? storage_->data() : nullptr;
+  }
+  const u8* begin() const noexcept { return data(); }
+  const u8* end() const noexcept {
+    const auto* first = data();
+    return first ? first + size() : nullptr;
+  }
+
+  friend bool operator==(const ShaderBytecodeBytes& a,
+                         const ShaderBytecodeBytes& b) noexcept {
+    if (a.storage_ == b.storage_) {
+      return true;
+    }
+    if (a.size() != b.size()) {
+      return false;
+    }
+    return a.empty() || std::equal(a.begin(), a.end(), b.begin());
+  }
+
+ private:
+  std::shared_ptr<const std::vector<u8>> storage_;
+};
+
 struct ShaderBytecode {
-  std::vector<u8> bytes;
+  ShaderBytecodeBytes bytes;
   u64 hash = 0;
 
   friend bool operator==(const ShaderBytecode&, const ShaderBytecode&) = default;

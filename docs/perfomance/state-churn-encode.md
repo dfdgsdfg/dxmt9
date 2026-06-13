@@ -67,6 +67,7 @@ bottleneck — that is owned by [[hidden-backend-storage]].
 | H47 | Filling queued `DrawRunSubmission` entries in place removes a first-order queue copy | accepted small CPU win; rejected as first-order | [[state-churn-encode-encode-phase.35]] (`queue-snapshot residual` `2286.890ms→2193.875ms`; total queue `-0.60%`) |
 | H48 | Reusing a device-owned pending submission vector removes per-chunk allocation churn | rejected-current | [[state-churn-encode-encode-phase.36]] (`queue-snapshot residual` `2193.875ms→2200.657ms`; scratch branch removed) |
 | H49 | Reusing draw binding snapshot scratch removes per-group vector allocation churn | accepted small CPU win | [[state-churn-encode-encode-phase.37]] (`batch_binding_snapshot` `0.119755→0.089566ms/present`; total replay flat) |
+| H50 | Shader bytecode value ownership makes layout/state copies allocate and copy bytecode per draw | accepted CPU win | [[state-churn-encode-encode-phase.38]] (`state_copy` `0.421921→0.271225ms/present`; queue submit `5.176033→4.792983ms/present`) |
 
 ## Verification methods
 
@@ -192,6 +193,7 @@ flowchart TD
   EncodePhase35["encode-phase.35\nin-place submission fill\nresidual -93ms\nnot first-order"]:::accepted
   EncodePhase36["encode-phase.36\npersistent pending scratch\nno residual win\nremoved"]:::rejected
   EncodePhase37["encode-phase.37\nTLS binding snapshot scratch\nsnapshot bucket -27.3%\nreplay flat"]:::accepted
+  EncodePhase38["encode-phase.38\nshared shader bytecode storage\nstate copy -35.7%\nqueue -7.4%"]:::accepted
   Snapshot10["snapshot.10\nuniform-refresh fast path\nrefresh -59.6%\nFPS flat"]:::accepted
 
   Drawrun1 -->|"split-into"| Drawrun2
@@ -253,6 +255,7 @@ flowchart TD
   EncodePhase34 -->|"remove temporary submission move"| EncodePhase35
   EncodePhase35 -->|"test vector capacity reuse"| EncodePhase36
   EncodePhase36 -->|"fix submit scratch allocation"| EncodePhase37
+  EncodePhase37 -->|"remove bytecode value copies"| EncodePhase38
 ```
 
 ## Results synthesis
@@ -669,6 +672,21 @@ non-batch snapshot bucket drops `0.054349 -> 0.043882ms/present`. The broader
 stay flat within run noise on a per-present basis, so this closes F6 as perf
 hygiene and leaves the large owners unchanged: snapshot/cache lookup,
 uniform/hash work, state/layout copy width, and same-generation copy elision.
+
+[[state-churn-encode-encode-phase.38]] accepts the first F3 ownership fix.
+`ShaderBytecode` no longer owns a mutable `std::vector<u8>` by value inside
+copied draw-state/layout records; it now carries shared immutable byte storage,
+so cache hits, snapshot submissions, and per-draw shader-layout overrides do
+not allocate and memcpy VS/PS bytecode payloads. The 120s no-gputrace scout
+keeps a normal visible GT1 frame and cuts the targeted copy-shaped buckets:
+`d3d9_snapshot_state_copy_cpu_ms` `0.421921 -> 0.271225ms/present`,
+`d3d9_snapshot_cache_miss_shader_layout_cpu_ms`
+`0.532211 -> 0.409452ms/present`, and
+`commit_chunk_queue_draw_submission_cpu_ms`
+`5.176033 -> 4.792983ms/present`. This confirms the review's bytecode-copy
+critique, but it does not remove the remaining fixed-width `FlatDrawStateRecord`
+SoA push or N-1 same-generation state/layout copies; those remain separate F1/F4
+design work.
 
 ## How to run
 Every experiment here is a 3DMark05 GT1 run via the standard wrapper. This is a

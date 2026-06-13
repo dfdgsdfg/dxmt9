@@ -1294,7 +1294,8 @@ SpirvModule translateD3DBytecodeToSpirv(const ShaderRef& shader,
                                         const ShaderSourceContext& context) {
   SpirvModule module;
   try {
-  const auto& bytes = shader.bytecode.bytes;
+  const auto bytes = std::span<const u8>(
+      shader.bytecode.bytes.data(), shader.bytecode.bytes.size());
   if (bytes.empty() || bytes.size() < sizeof(u32)) {
     throw DecoderReject{DecoderRejectReason::Truncated,
                          "D3D bytecode shorter than version token"};
@@ -1304,7 +1305,9 @@ SpirvModule translateD3DBytecodeToSpirv(const ShaderRef& shader,
                          "D3D bytecode size is not DWORD aligned"};
   }
 
-  const u64 bytecodeHash = shader.bytecode.hash ? shader.bytecode.hash : hashBytes(std::as_bytes(std::span(bytes)));
+  const u64 bytecodeHash = shader.bytecode.hash
+      ? shader.bytecode.hash
+      : hashBytes(std::as_bytes(bytes));
   module.hash = bytecodeHash ^ (vertex ? 0x5356505653455254ull : 0x5350465348454453ull) ^
                 context.clipPlaneMask ^ (static_cast<u64>(context.sampleCount) << 32);
   module.words.reserve(bytes.size() / sizeof(u32));
