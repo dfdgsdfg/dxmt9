@@ -58,6 +58,7 @@ every other domain at the lever that actually moves the bucket.
 | H36 | The `60/0` depth-only route can be reached by a fragmentless Metal PSO | accepted (runtime smoke), rejected for Xcode promotion | [[hidden-backend-storage-shape.26]] (`60/0` probe covers all `42` draws / `97,294` primitives / `291,882` vertices, reports position-only VSOut key `0x0`, and logs `2` accepted / `0` rejected fragmentless PSO variants; same-input gate then fails depth equality: `D24X8` depth changes `1,252,096 / 3,145,728` bytes, while `60/0` color is exact and the final frame still changes `21.658325%`; Xcode counter spend is blocked until depth semantics are fixed) |
 | H37 | System Trace can provide route-attributed timing while `.gputrace` is blocked | accepted (sidecar evidence) | [[hidden-backend-storage-shape.28]] (`215/215` xctrace rows joined, `1005..1024` captured seq, indexed probe rows `1000..1035` with `0` out-of-range rows; vertex share `88.86%`; route split: programmable color `45.65%`, programmable textured `40.49%`, mixed `12.02%`, depth-only `1.85%`) |
 | H38 | Route-attributed System Trace sidecars must require indexed per-draw logging | rejected-current | [[hidden-backend-storage-shape.29]] (encoder breakdown emits `route_*` primitive counters; no-indexed sidecar now verifies `route_source=encoder-summary` on `1633/1633` joined rows, while indexed rows remain optional override detail) |
+| H39 | "GPU floor" and "average FPS owner" are the same question | rejected | [[hidden-backend-storage-shape.30]] (`replay.03` proves `3.86x` hidden-write density headroom at the same VS invocation count; no-gputrace counters show average wall-clock is completion/present paced) |
 
 ## Verification methods
 
@@ -129,6 +130,7 @@ flowchart TD
   FragmentlessRoute["shape.26\nfragmentless depth-only route\nreachability pass, equality fail"]:::rejected
   SystemTraceRoute["shape.28\nseq-range System Trace sidecar\nroute timing joined"]:::accepted
   EncoderRouteSummary["shape.29\nencoder-summary route counters\nno indexed rows required"]:::accepted
+  FloorVsWall["shape.30\nGPU floor != wall-clock owner\n3.86x order density headroom"]:::accepted
   OcclusionGate["texture.08\nocclusion oracle feasibility\nexisting query not enough"]:::rejected
   ScopedSemantic["semantic.02\nselected 60/2 depth-read/no-blend\nexact mini replay\nscoped only"]:::accepted
 
@@ -178,6 +180,8 @@ flowchart TD
   SystemTraceRoute -->|"programmable color/textured dominate current sidecar"| NextTriage
   SystemTraceRoute -->|"measurement overhead reduced by"| EncoderRouteSummary
   EncoderRouteSummary -->|"next sidecar without per-draw index logs"| NextTriage
+  Scale2 -->|"separate hot-frame GPU from average FPS"| FloorVsWall
+  FloorVsWall -->|"GPU locality gate and pacing gate stay separate"| NextTriage
   ProgrammableRoute -->|"next reduced route candidate"| NextTriage
   NextTriage -->|"oracle feasibility"| OcclusionGate
   Model -->|"frames"| Shape
@@ -228,7 +232,12 @@ What is still open: *which* sub-component of the model dominates — VS stage-ou
 primitive/binning/tiler parameter storage, or compiler/backend spill. Visible
 shape is rejected, so [[hidden-backend-storage-shape.01]] hands off to backend-
 shape classifiers, primitive-reorder diagnostics, and the row-local
-[[tvb-mechanism-proof]]. The current non-reorder backend-shape gate
+[[tvb-mechanism-proof]]. [[hidden-backend-storage-shape.30]] pins the
+interpretation of that handoff: the mini-replay sorted-row control rejects a
+hardware-floor reading (`1710.0 -> 442.6 B/VS invocation` with nearly unchanged
+VS invocations), while current no-gputrace runs show average wall-clock FPS is
+completion/present paced. GPU hot-frame locality and average-FPS pacing are
+therefore separate gates. The current non-reorder backend-shape gate
 ([[hidden-backend-storage-shape.02]]) is negative: half-VSOut is the best
 bytes/invocation mover so far (`-1.94%`) but regresses GPU time, so it does not
 justify another Xcode capture by itself. The only production lever that has so
