@@ -2473,13 +2473,14 @@ HResult Device::snapshotDrawSubmissionFromCurrentState(
   draw.primitiveType = canonicalPrimitiveType(draw.primitiveType);
   const CachedBaseDrawState* cachedPtr = nullptr;
   const bool useBindingAgnosticSnapshot = !renderTraceEnabled();
+  const bool includeIndexBuffer = !useBindingAgnosticSnapshot &&
+      drawRunUsesBoundIndexBuffer(std::span<const DrawParam>(&draw, 1), {});
   {
     PerfScope cacheLookupScope(
         dxmt9::perf::countD3D9SnapshotCacheLookupCpuTime);
     cachedPtr = &(useBindingAgnosticSnapshot
         ? cachedBaseDrawStateForSubmissionBatch()
-        : cachedBaseDrawState(drawRunUsesBoundIndexBuffer(
-              std::span<const DrawParam>(&draw, 1), {})));
+        : cachedBaseDrawState(includeIndexBuffer));
   }
   const auto& cached = *cachedPtr;
   {
@@ -2490,6 +2491,12 @@ HResult Device::snapshotDrawSubmissionFromCurrentState(
   submission.draw = draw;
   submission.payload = {};
   submission.bindingOverride = {};
+  submission.stateGeneration = cached.generation;
+  submission.stateLane = useBindingAgnosticSnapshot
+      ? DrawRunSubmissionStateLane::BindingAgnostic
+      : (includeIndexBuffer
+          ? DrawRunSubmissionStateLane::FullWithIndex
+          : DrawRunSubmissionStateLane::FullNoIndex);
   {
     PerfScope stateCopyScope(
         dxmt9::perf::countD3D9SnapshotStateCopyCpuTime);

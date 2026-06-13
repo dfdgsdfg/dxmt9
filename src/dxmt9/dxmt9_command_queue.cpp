@@ -809,7 +809,20 @@ std::size_t drawRunSubmissionPayloadBytes(
 bool drawSubmissionStatesCompatible(
     const core::DrawRunSubmission& a,
     const core::DrawRunSubmission& b) noexcept {
-  return core::drawRunSubmissionStatesCompatibleForBatch(a, b);
+  const bool sameGenerationLane =
+      core::drawRunSubmissionSameStateGenerationLane(a, b);
+  const bool compatible = core::drawRunSubmissionStatesCompatibleForBatch(a, b);
+  perf::countSubmitDrawRunBatchCompatPair(sameGenerationLane, compatible);
+  return compatible;
+}
+
+void countDrawSubmissionAdjacentStateGenerations(
+    std::span<const core::DrawRunSubmission> submissions) noexcept {
+  for (std::size_t i = 1; i < submissions.size(); ++i) {
+    perf::countSubmitDrawRunBatchSubmissionAdjacent(
+        core::drawRunSubmissionSameStateGenerationLane(submissions[i - 1],
+                                                       submissions[i]));
+  }
 }
 
 void prepareDrawRunBatchBindingOverrides(
@@ -1309,6 +1322,7 @@ void CommandQueue::submitDrawRunBatch(
   for (std::size_t i = 0; i < submissions.size(); ++i) {
     perf::countSubmitDraw();
   }
+  countDrawSubmissionAdjacentStateGenerations(submissions);
   PerfScope scope(perf::countSubmitDrawCpuTime);
   std::unique_lock lock(mutex_);
   std::size_t batchStart = 0;

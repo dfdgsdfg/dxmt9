@@ -187,6 +187,8 @@ void countSubmitDrawRunResourceMarkCpuTime(std::uint64_t nanoseconds);
 void countSubmitDrawRunAppendCpuTime(std::uint64_t nanoseconds);
 void countSubmitDrawRunChunkCommitCpuTime(std::uint64_t nanoseconds);
 void countSubmitDrawRunBatchCompatScanCpuTime(std::uint64_t nanoseconds);
+void countSubmitDrawRunBatchSubmissionAdjacent(bool sameGenerationLane);
+void countSubmitDrawRunBatchCompatPair(bool sameGenerationLane, bool compatible);
 void countSubmitDrawRunBatchBindingOverrideCpuTime(std::uint64_t nanoseconds);
 void countSubmitDrawRunBatchBindingSnapshotCpuTime(std::uint64_t nanoseconds);
 void countSubmitDrawRunBatchPayloadBytesCpuTime(std::uint64_t nanoseconds);

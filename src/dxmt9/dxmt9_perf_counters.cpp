@@ -114,6 +114,14 @@ struct Counters {
   std::atomic<std::uint64_t> submitDrawRunChunkCommitCpuMaxNs{0};
   std::atomic<std::uint64_t> submitDrawRunBatchCompatScanCpuNs{0};
   std::atomic<std::uint64_t> submitDrawRunBatchCompatScanCpuMaxNs{0};
+  std::atomic<std::uint64_t> submitDrawRunBatchSubmissionAdjacentPairs{0};
+  std::atomic<std::uint64_t> submitDrawRunBatchSubmissionAdjacentSameGenerationLane{0};
+  std::atomic<std::uint64_t> submitDrawRunBatchCompatPairs{0};
+  std::atomic<std::uint64_t> submitDrawRunBatchCompatCompatible{0};
+  std::atomic<std::uint64_t> submitDrawRunBatchCompatIncompatible{0};
+  std::atomic<std::uint64_t> submitDrawRunBatchCompatSameGenerationLane{0};
+  std::atomic<std::uint64_t> submitDrawRunBatchCompatSameGenerationLaneCompatible{0};
+  std::atomic<std::uint64_t> submitDrawRunBatchCompatSameGenerationLaneIncompatible{0};
   std::atomic<std::uint64_t> submitDrawRunBatchBindingOverrideCpuNs{0};
   std::atomic<std::uint64_t> submitDrawRunBatchBindingOverrideCpuMaxNs{0};
   std::atomic<std::uint64_t> submitDrawRunBatchBindingSnapshotCpuNs{0};
@@ -1385,6 +1393,14 @@ constexpr CounterEntry kCounterTable[] = {
     {"submit_draw_run_chunk_commit_cpu_max_ms", CounterEntry::Kind::Milliseconds, &Counters::submitDrawRunChunkCommitCpuMaxNs, nullptr, nullptr, 0.0},
     {"submit_draw_run_batch_compat_scan_cpu_ms", CounterEntry::Kind::Milliseconds, &Counters::submitDrawRunBatchCompatScanCpuNs, nullptr, nullptr, 0.0},
     {"submit_draw_run_batch_compat_scan_cpu_max_ms", CounterEntry::Kind::Milliseconds, &Counters::submitDrawRunBatchCompatScanCpuMaxNs, nullptr, nullptr, 0.0},
+    {"submit_draw_run_batch_submission_adjacent_pairs", CounterEntry::Kind::UnsignedCount, &Counters::submitDrawRunBatchSubmissionAdjacentPairs, nullptr, nullptr, 0.0},
+    {"submit_draw_run_batch_submission_adjacent_same_generation_lane", CounterEntry::Kind::UnsignedCount, &Counters::submitDrawRunBatchSubmissionAdjacentSameGenerationLane, nullptr, nullptr, 0.0},
+    {"submit_draw_run_batch_compat_pairs", CounterEntry::Kind::UnsignedCount, &Counters::submitDrawRunBatchCompatPairs, nullptr, nullptr, 0.0},
+    {"submit_draw_run_batch_compat_compatible", CounterEntry::Kind::UnsignedCount, &Counters::submitDrawRunBatchCompatCompatible, nullptr, nullptr, 0.0},
+    {"submit_draw_run_batch_compat_incompatible", CounterEntry::Kind::UnsignedCount, &Counters::submitDrawRunBatchCompatIncompatible, nullptr, nullptr, 0.0},
+    {"submit_draw_run_batch_compat_same_generation_lane", CounterEntry::Kind::UnsignedCount, &Counters::submitDrawRunBatchCompatSameGenerationLane, nullptr, nullptr, 0.0},
+    {"submit_draw_run_batch_compat_same_generation_lane_compatible", CounterEntry::Kind::UnsignedCount, &Counters::submitDrawRunBatchCompatSameGenerationLaneCompatible, nullptr, nullptr, 0.0},
+    {"submit_draw_run_batch_compat_same_generation_lane_incompatible", CounterEntry::Kind::UnsignedCount, &Counters::submitDrawRunBatchCompatSameGenerationLaneIncompatible, nullptr, nullptr, 0.0},
     {"submit_draw_run_batch_binding_override_cpu_ms", CounterEntry::Kind::Milliseconds, &Counters::submitDrawRunBatchBindingOverrideCpuNs, nullptr, nullptr, 0.0},
     {"submit_draw_run_batch_binding_override_cpu_max_ms", CounterEntry::Kind::Milliseconds, &Counters::submitDrawRunBatchBindingOverrideCpuMaxNs, nullptr, nullptr, 0.0},
     {"submit_draw_run_batch_binding_snapshot_cpu_ms", CounterEntry::Kind::Milliseconds, &Counters::submitDrawRunBatchBindingSnapshotCpuNs, nullptr, nullptr, 0.0},
@@ -3150,6 +3166,29 @@ void countSubmitDrawRunBatchCompatScanCpuTime(std::uint64_t nanoseconds) {
   recordCpuTime(c.submitDrawRunBatchCompatScanCpuNs,
                 c.submitDrawRunBatchCompatScanCpuMaxNs,
                 nanoseconds);
+}
+
+void countSubmitDrawRunBatchSubmissionAdjacent(bool sameGenerationLane) {
+  auto& c = counters();
+  add(c.submitDrawRunBatchSubmissionAdjacentPairs);
+  if (sameGenerationLane) {
+    add(c.submitDrawRunBatchSubmissionAdjacentSameGenerationLane);
+  }
+}
+
+void countSubmitDrawRunBatchCompatPair(bool sameGenerationLane,
+                                       bool compatible) {
+  auto& c = counters();
+  add(c.submitDrawRunBatchCompatPairs);
+  add(compatible ? c.submitDrawRunBatchCompatCompatible
+                 : c.submitDrawRunBatchCompatIncompatible);
+  if (!sameGenerationLane) {
+    return;
+  }
+  add(c.submitDrawRunBatchCompatSameGenerationLane);
+  add(compatible
+          ? c.submitDrawRunBatchCompatSameGenerationLaneCompatible
+          : c.submitDrawRunBatchCompatSameGenerationLaneIncompatible);
 }
 
 void countSubmitDrawRunBatchBindingOverrideCpuTime(std::uint64_t nanoseconds) {

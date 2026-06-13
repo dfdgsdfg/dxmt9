@@ -885,12 +885,21 @@ struct DrawParamPayloadView {
   std::span<const u8> bindingSnapshotData{};
 };
 
+enum class DrawRunSubmissionStateLane : u8 {
+  Unknown = 0,
+  BindingAgnostic = 1,
+  FullNoIndex = 2,
+  FullWithIndex = 3,
+};
+
 struct DrawRunSubmission {
   CanonicalDrawState state{};
   DrawUniformPayload uniforms{};
   DrawParam draw{};
   DrawParamPayloadView payload{};
   DrawBindingOverride bindingOverride{};
+  u64 stateGeneration = 0;
+  DrawRunSubmissionStateLane stateLane = DrawRunSubmissionStateLane::Unknown;
 };
 
 inline std::span<const u8> drawBindingOverrideBytes(
@@ -1007,6 +1016,15 @@ inline bool drawRunSubmissionStatesCompatibleForBatch(
   return drawStatesCompatibleForDrawRunBatch(a.state.hot, b.state.hot) &&
          shaderLayoutsCompatibleForDrawRunBatch(a.state.shaderLayout,
                                                 b.state.shaderLayout);
+}
+
+inline bool drawRunSubmissionSameStateGenerationLane(
+    const DrawRunSubmission& a,
+    const DrawRunSubmission& b) noexcept {
+  return a.stateGeneration != 0 &&
+         a.stateGeneration == b.stateGeneration &&
+         a.stateLane != DrawRunSubmissionStateLane::Unknown &&
+         a.stateLane == b.stateLane;
 }
 
 inline void prepareDrawRunSubmissionBindingOverride(

@@ -62,6 +62,7 @@ bottleneck — that is owned by [[hidden-backend-storage]].
 | H42 | Removing extra `CanonicalDrawState` value hops cuts the state append child | accepted CPU win | [[state-churn-encode-encode-phase.30]] (`append` `2708→2116ms`, `state` `958→720ms`, GPU flat) |
 | H43 | Remaining state append cost is PSO/invariant construction | rejected; SoA append attribution accepted | [[state-churn-encode-encode-phase.31]] (`state=879ms`, `SoA=707ms`, `PSO=50ms`, `invariant=22ms`; split timers add overhead) |
 | H44 | Slot-local full-state interning amortizes the state SoA push | rejected; frontend generation fast path accepted as next proof | [[state-churn-encode-encode-phase.32]] (`0.150866%` state reuse hit rate; SoA `707ms→962ms`; first add generation/lane opportunity counters) |
+| H45 | Adjacent same stable-generation/lane submissions can skip the deep compat compare | accepted proof | [[state-churn-encode-encode-phase.33]] (`52.524409%` same-generation/lane pairs; `385,120/385,120` compatible; `0` incompatible) |
 
 ## Verification methods
 
@@ -95,6 +96,11 @@ bottleneck — that is owned by [[hidden-backend-storage]].
   slot/payload-arena preparation, resource marking, append, and chunk-commit
   stages. Use them after `commit_chunk_queue_draw_submission_cpu_ms` or
   `commit_chunk_draw_*_submit_cpu_ms` is proven hot.
+- **Submission generation/lane counters** —
+  `submit_draw_run_batch_submission_adjacent_*` and
+  `submit_draw_run_batch_compat_same_generation_lane_*` prove whether frontend
+  stable-state cache identity agrees with the queue's deep compatibility
+  comparison before enabling a generation fast path.
 - **Draw-packet actual-change counters** —
   `draw_packet_declared_*`, `draw_packet_actual_*`, and
   `draw_packet_redundant_*` are opt-in via
@@ -177,6 +183,7 @@ flowchart TD
   EncodePhase30["encode-phase.30\nrvalue state append\nappend -21.85%\nstate -24.82%"]:::accepted
   EncodePhase31["encode-phase.31\nstate inner split\nSoA 707ms\nPSO 50ms / invariant 22ms"]:::accepted
   EncodePhase32["encode-phase.32\nslot-state intern rejected\n0.15% reuse hits\nnext: generation/lane counters"]:::accepted
+  EncodePhase33["encode-phase.33\ngeneration/lane proof\n52.5% pairs; 0 incompatible\nnext: compat fast path"]:::accepted
   Snapshot10["snapshot.10\nuniform-refresh fast path\nrefresh -59.6%\nFPS flat"]:::accepted
 
   Drawrun1 -->|"split-into"| Drawrun2
@@ -233,6 +240,7 @@ flowchart TD
   EncodePhase29 -->|"remove value hops"| EncodePhase30
   EncodePhase30 -->|"split remaining state child"| EncodePhase31
   EncodePhase31 -->|"slot interning rejected;\nmove upstream"| EncodePhase32
+  EncodePhase32 -->|"stamp and count generation/lane"| EncodePhase33
 ```
 
 ## Results synthesis
@@ -587,6 +595,19 @@ the compat scan use a generation fast path or the snapshot code skip N-1
 state/layout copies. Per-draw binding overrides and dynamic backing snapshots
 must remain per-draw until resource-lifetime marking proves they can be safely
 coalesced.
+
+[[state-churn-encode-encode-phase.33]] closes that non-mutating proof. In a
+120s no-gputrace scout, `submitDrawRunBatch()` saw `733,221` adjacent compat
+pairs; `385,120` pairs (`52.524409%`) had the same stable generation and
+snapshot lane, and all `385,120` were compatible by the existing deep compare.
+Same-generation/lane incompatible cases were `0`. This makes a guarded compat
+scan fast path safe for the next implementation: return compatible immediately
+for same generation/lane, otherwise keep the current deep compare. Its direct
+target is the `557.621ms` compat-scan bucket, not the entire queued-submission
+cost. The same counter also sizes a future copy-elision opportunity for
+`385,120` non-front records, but state/layout copy elision must keep per-draw
+uniforms, binding overrides, dynamic backing snapshots, and resource marking
+correct.
 
 ## How to run
 Every experiment here is a 3DMark05 GT1 run via the standard wrapper. This is a
