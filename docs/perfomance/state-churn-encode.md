@@ -65,6 +65,7 @@ bottleneck — that is owned by [[hidden-backend-storage]].
 | H45 | Adjacent same stable-generation/lane submissions can skip the deep compat compare | accepted proof | [[state-churn-encode-encode-phase.33]] (`52.524409%` same-generation/lane pairs; `385,120/385,120` compatible; `0` incompatible) |
 | H46 | Using the generation/lane stamp as a compat fast path removes the compat scan bucket | accepted CPU win | [[state-churn-encode-encode-phase.34]] (`compat_scan` `557.621ms→44.923ms`; `draw_batch_submit` `3491.771ms→3070.200ms`) |
 | H47 | Filling queued `DrawRunSubmission` entries in place removes a first-order queue copy | accepted small CPU win; rejected as first-order | [[state-churn-encode-encode-phase.35]] (`queue-snapshot residual` `2286.890ms→2193.875ms`; total queue `-0.60%`) |
+| H48 | Reusing a device-owned pending submission vector removes per-chunk allocation churn | rejected-current | [[state-churn-encode-encode-phase.36]] (`queue-snapshot residual` `2193.875ms→2200.657ms`; scratch branch removed) |
 
 ## Verification methods
 
@@ -188,6 +189,7 @@ flowchart TD
   EncodePhase33["encode-phase.33\ngeneration/lane proof\n52.5% pairs; 0 incompatible\nnext: compat fast path"]:::accepted
   EncodePhase34["encode-phase.34\ngeneration/lane fast path\ncompat scan -91.9%\nqueue still copy-bound"]:::accepted
   EncodePhase35["encode-phase.35\nin-place submission fill\nresidual -93ms\nnot first-order"]:::accepted
+  EncodePhase36["encode-phase.36\npersistent pending scratch\nno residual win\nremoved"]:::rejected
   Snapshot10["snapshot.10\nuniform-refresh fast path\nrefresh -59.6%\nFPS flat"]:::accepted
 
   Drawrun1 -->|"split-into"| Drawrun2
@@ -247,6 +249,7 @@ flowchart TD
   EncodePhase32 -->|"stamp and count generation/lane"| EncodePhase33
   EncodePhase33 -->|"skip proven deep compares"| EncodePhase34
   EncodePhase34 -->|"remove temporary submission move"| EncodePhase35
+  EncodePhase35 -->|"test vector capacity reuse"| EncodePhase36
 ```
 
 ## Results synthesis
@@ -640,6 +643,17 @@ cuts the queue residual after subtracting nested snapshot time
 owner. Continue with persistent replay scratch only as an isolated allocation
 test; the major remaining work is still snapshot/cache lookup, state/layout
 copy width, and append/state storage.
+
+[[state-churn-encode-encode-phase.36]] rejects the remaining F2 persistent
+scratch bet for the current path. A temporary `D9CDevice`-owned
+`pendingDrawSubmissions` vector reused capacity across `commit_chunk` calls and
+kept a release fallback for reentrancy, but it did not reduce the residual
+after subtracting nested snapshot time (`2193.875ms -> 2200.657ms`). The total
+queue timer moved with snapshot noise, while draw-batch submit and append
+slightly worsened. The scratch branch was removed. This closes F2 allocation
+churn as a near-term owner; the next queue work should target snapshot/cache
+lookup, state/layout copy width, and same-generation copy elision rather than
+per-chunk vector capacity.
 
 ## How to run
 Every experiment here is a 3DMark05 GT1 run via the standard wrapper. This is a
