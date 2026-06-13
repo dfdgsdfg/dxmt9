@@ -1352,13 +1352,16 @@ with `--wait-unlocked-sec N`, records `traces/<run>/metal-system.trace`, then ex
 can still use `xcrun xctrace record --template 'Metal System Trace'
 --all-processes`, keep the trace at `traces/<run>/metal-system.trace`, and run
 the wrapper-printed `xctrace_system_trace_export_cmd` and
-`xctrace_system_trace_summary_cmd`. For backend-route selection, include
-`--measure-index-reuse` in the 3DMark05 probe so `--indexed-probe-draws` joins
-real draw rows and the System Trace summary can emit depth-only/textured/color
-route verdicts. The wrapper/summarizer require RenderPass-labelled xctrace
-rows and high dxmt encoder join coverage; when indexed telemetry is enabled,
-they also use `--require-indexed-probe-routes` so a header-only or non-joining
-probe CSV fails instead of producing a misleading `route-unavailable` sidecar.
+`xctrace_system_trace_summary_cmd`. For backend-route selection, current
+encoder-breakdown rows carry coarse `route_*` primitive counters, so the
+System Trace summary can emit depth-only/textured/color route verdicts without
+indexed per-draw logging. Add `--measure-index-reuse` only when per-draw route
+detail, exact draw selectors, or indexed-cache metrics are needed; indexed
+rows override the coarse encoder summary and are guarded by
+`--require-indexed-probe-routes` when requested. The wrapper/summarizer require
+RenderPass-labelled xctrace rows, high dxmt encoder join coverage, and at least
+one route verdict so a header-only or non-joining telemetry path fails instead
+of producing a misleading `route-unavailable` sidecar.
 The sidecar defaults to `--encoder-breakdown-all-frames` on the wrapped probe
 and rejects exact scoped encoder-breakdown sequence settings, because xctrace
 records a wall-clock window rather than the single sequence selected by

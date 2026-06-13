@@ -3482,6 +3482,34 @@ struct ActiveEncoderBreakdown {
         ++stats.alphaTestEffectiveDraws;
       }
     }
+    const auto colorWrite =
+        core::flatStateOr(renderStates, RS_COLOR_WRITE_ENABLE, 0xfu);
+    const auto addRouteClass =
+        [&](std::uint64_t& draws, std::uint64_t& primitives,
+            std::uint64_t& vertices) {
+          ++draws;
+          primitives += primitiveCount;
+          vertices += vertexCount;
+        };
+    if (depthWrite && colorWrite == 0u && !alphaBlendEnabled && !alphaTestEnabled) {
+      addRouteClass(stats.routeDepthOnlyDraws,
+                    stats.routeDepthOnlyPrimitives,
+                    stats.routeDepthOnlyVertices);
+    } else if (textureMask != 0) {
+      addRouteClass(stats.routeProgrammableTexturedDraws,
+                    stats.routeProgrammableTexturedPrimitives,
+                    stats.routeProgrammableTexturedVertices);
+    } else {
+      addRouteClass(stats.routeProgrammableColorDraws,
+                    stats.routeProgrammableColorPrimitives,
+                    stats.routeProgrammableColorVertices);
+    }
+    if (alphaBlendEnabled) {
+      stats.routeAlphaBlendPrimitives += primitiveCount;
+    }
+    if (alphaTestEnabled) {
+      stats.routeAlphaTestPrimitives += primitiveCount;
+    }
     const bool clipPlaneEnabled =
         core::flatStateOr(renderStates, core::RS_CLIP_PLANE_ENABLE, 0u) != 0u;
     if (clipPlaneEnabled) {

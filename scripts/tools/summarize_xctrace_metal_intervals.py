@@ -309,11 +309,57 @@ def load_indexed_probe_routes(path: Path | None) -> dict[tuple[int, int], dict[s
             alpha_test_primitives=alpha_test_primitives,
         )
         result[key] = {
+            "route_source": "indexed-probe",
             "route_verdict": verdict,
             "route_reason": reason,
             "route_draws": len(group_rows),
             "route_primitives": primitives,
             "route_vertices": vertices,
+            "route_depth_only_primitives": depth_only_primitives,
+            "route_programmable_textured_primitives": programmable_textured_primitives,
+            "route_programmable_color_primitives": programmable_color_primitives,
+        }
+    return result
+
+
+def load_encoder_summary_routes(dxmt_rows: dict[tuple[int, int], dict[str, str]]) -> dict[tuple[int, int], dict[str, Any]]:
+    result: dict[tuple[int, int], dict[str, Any]] = {}
+    for key, row in dxmt_rows.items():
+        depth_only_primitives = as_int(row.get("route_depth_only_primitives"))
+        programmable_textured_primitives = as_int(row.get("route_programmable_textured_primitives"))
+        programmable_color_primitives = as_int(row.get("route_programmable_color_primitives"))
+        primitives = (
+            depth_only_primitives +
+            programmable_textured_primitives +
+            programmable_color_primitives
+        )
+        if primitives == 0:
+            continue
+        alpha_blend_primitives = as_int(row.get("route_alpha_blend_primitives"))
+        alpha_test_primitives = as_int(row.get("route_alpha_test_primitives"))
+        verdict, reason = classify_route_group(
+            primitives=primitives,
+            depth_only_primitives=depth_only_primitives,
+            programmable_textured_primitives=programmable_textured_primitives,
+            programmable_color_primitives=programmable_color_primitives,
+            alpha_blend_primitives=alpha_blend_primitives,
+            alpha_test_primitives=alpha_test_primitives,
+        )
+        result[key] = {
+            "route_source": "encoder-summary",
+            "route_verdict": verdict,
+            "route_reason": f"{reason} (encoder summary)",
+            "route_draws": (
+                as_int(row.get("route_depth_only_draws")) +
+                as_int(row.get("route_programmable_textured_draws")) +
+                as_int(row.get("route_programmable_color_draws"))
+            ),
+            "route_primitives": primitives,
+            "route_vertices": (
+                as_int(row.get("route_depth_only_vertices")) +
+                as_int(row.get("route_programmable_textured_vertices")) +
+                as_int(row.get("route_programmable_color_vertices"))
+            ),
             "route_depth_only_primitives": depth_only_primitives,
             "route_programmable_textured_primitives": programmable_textured_primitives,
             "route_programmable_color_primitives": programmable_color_primitives,
@@ -387,6 +433,17 @@ def join_dxmt(rows: list[dict[str, Any]], dxmt_rows: dict[tuple[int, int], dict[
             "transient_vertex_bytes",
             "transient_index_bytes",
             "end_reason",
+            "route_depth_only_draws",
+            "route_depth_only_primitives",
+            "route_depth_only_vertices",
+            "route_programmable_textured_draws",
+            "route_programmable_textured_primitives",
+            "route_programmable_textured_vertices",
+            "route_programmable_color_draws",
+            "route_programmable_color_primitives",
+            "route_programmable_color_vertices",
+            "route_alpha_blend_primitives",
+            "route_alpha_test_primitives",
         ):
             row[key] = dxmt.get(key, "")
         row["primitive_class"] = primitive_class(row)
@@ -403,6 +460,7 @@ def join_dxmt(rows: list[dict[str, Any]], dxmt_rows: dict[tuple[int, int], dict[
 def join_indexed_probe_routes(rows: list[dict[str, Any]], routes: dict[tuple[int, int], dict[str, Any]]) -> None:
     for row in rows:
         route = routes.get((as_int(row.get("seq")), as_int(row.get("encoder"))), {})
+        row["route_source"] = route.get("route_source", "")
         row["route_verdict"] = route.get("route_verdict", "route-unavailable")
         row["route_reason"] = route.get("route_reason", "no indexed probe draw row joined")
         for key in (
@@ -448,6 +506,7 @@ def write_csv(path: Path, rows: list[dict[str, Any]]) -> None:
         "xctrace_vertex_ms_per_mvertex",
         "xctrace_stage_ms_per_mvertex",
         "route_verdict",
+        "route_source",
         "route_reason",
         "route_draws",
         "route_primitives",
@@ -617,6 +676,8 @@ def main() -> None:
                         help="Fail if dxmt encoder attribution coverage is below this ratio, e.g. 0.99")
     parser.add_argument("--require-indexed-probe-routes", action="store_true",
                         help="Fail if indexed probe draw rows are missing or do not join to any xctrace rows")
+    parser.add_argument("--require-route-verdicts", action="store_true",
+                        help="Fail if no route verdicts join from encoder summaries or indexed probe draw rows")
     parser.add_argument("--run-label", default="")
     parser.add_argument("--trace", type=Path, default=Path(""))
     parser.add_argument("--top", type=int, default=20)
@@ -625,11 +686,13 @@ def main() -> None:
     rows = aggregate_gpu_intervals(parse_xctrace_rows(args.gpu_intervals))
     dxmt = load_dxmt_encoders(args.dxmt_encoders)
     join_dxmt(rows, dxmt)
-    routes = load_indexed_probe_routes(args.indexed_probe_draws)
+    routes = load_encoder_summary_routes(dxmt)
+    routes.update(load_indexed_probe_routes(args.indexed_probe_draws))
     join_indexed_probe_routes(rows, routes)
     rows.sort(key=lambda row: float(row["xctrace_stage_sum_ms"]), reverse=True)
     matches = sum(1 for row in rows if (as_int(row.get("seq")), as_int(row.get("encoder"))) in dxmt)
     route_matches = sum(1 for row in rows if row.get("route_verdict") != "route-unavailable")
+    indexed_route_matches = sum(1 for row in rows if row.get("route_source") == "indexed-probe")
 
     if args.require_xctrace_render_rows and not rows:
         raise SystemExit(
@@ -645,7 +708,16 @@ def main() -> None:
                 "check xctrace label coverage and use the same-run 3DMark05 encoder CSV"
             )
 
-    if args.require_indexed_probe_routes and route_matches == 0:
+    if args.require_route_verdicts and route_matches == 0:
+        source = args.indexed_probe_draws if args.indexed_probe_draws else "<missing>"
+        raise SystemExit(
+            "route verdict join required, but no route rows joined "
+            f"(indexed source: {source}); rerun with a current dxmt encoder "
+            "summary that includes route_* fields, or add same-run "
+            "--measure-index-reuse telemetry"
+        )
+
+    if args.require_indexed_probe_routes and indexed_route_matches == 0:
         source = args.indexed_probe_draws if args.indexed_probe_draws else "<missing>"
         raise SystemExit(
             "indexed probe route join required, but no route rows joined "

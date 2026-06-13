@@ -519,13 +519,15 @@ against dxmt encoder attribution. The lower-level
 fallbacks. Those summary commands require RenderPass-labelled xctrace rows and
 at least `0.99` dxmt encoder join coverage, so an empty all-processes trace or
 wrong-run encoder CSV fails instead of producing a misleading sidecar. When
-the goal is to select a depth-only/textured/color backend route, run the
-3DMark05 probe with indexed draw telemetry
-(`--measure-index-reuse` or a flag that implies it) so the summary command's
-`--indexed-probe-draws` input contains rows instead of a header-only CSV. The
-wrapper now adds `--require-indexed-probe-routes` when indexed telemetry is
-requested, so a same-run route-selection sidecar fails instead of silently
-emitting only `route-unavailable` rows. The sidecar defaults to
+the goal is to select a depth-only/textured/color backend route, current
+encoder-breakdown rows carry coarse `route_*` primitive counters, so the
+summary command can emit route verdicts without per-draw indexed telemetry.
+Add `--measure-index-reuse` only when per-draw route detail, exact draw
+selectors, or indexed-cache metrics are needed; indexed rows override the
+coarse encoder summary and are still guarded by
+`--require-indexed-probe-routes` when requested. The sidecar itself requires at
+least one route verdict, so a same-run route-selection sidecar fails instead of
+silently emitting only `route-unavailable` rows. The sidecar defaults to
 `--encoder-breakdown-all-frames` on the wrapped probe and rejects exact scoped
 encoder-breakdown sequence settings. System Trace captures a wall-clock window,
 so a single `DXMT9_PERF_ENCODER_BREAKDOWN_SEQ=<frame>` CSV covers only one
@@ -635,10 +637,10 @@ bash scripts/tools/finalize_3dmark05_perf_probe.sh \
 # For xctrace Metal System Trace sidecars, prefer the guarded runner. It
 # refuses locked sessions before recording xctrace; add --wait-unlocked-sec N
 # if the command should poll until the desktop unlocks. Add
-# --measure-index-reuse when route verdicts are needed.
+# --measure-index-reuse only when per-draw route/index detail is needed.
 bash scripts/tools/run_3dmark05_system_trace_sidecar.sh -- \
   --suffix <tag> --frame <50|60> --no-gputrace --timeout 120 \
-  --measure-index-reuse <probe flags>
+  <probe flags>
 ```
 
 ### Experiment classes → flags → docs/perfomance domain

@@ -943,6 +943,17 @@ struct EncoderBreakdown {
   std::uint64_t primitiveCount = 0;
   std::uint64_t triangleEstimate = 0;
   std::uint64_t vertexCount = 0;
+  std::uint64_t routeDepthOnlyDraws = 0;
+  std::uint64_t routeDepthOnlyPrimitives = 0;
+  std::uint64_t routeDepthOnlyVertices = 0;
+  std::uint64_t routeProgrammableTexturedDraws = 0;
+  std::uint64_t routeProgrammableTexturedPrimitives = 0;
+  std::uint64_t routeProgrammableTexturedVertices = 0;
+  std::uint64_t routeProgrammableColorDraws = 0;
+  std::uint64_t routeProgrammableColorPrimitives = 0;
+  std::uint64_t routeProgrammableColorVertices = 0;
+  std::uint64_t routeAlphaBlendPrimitives = 0;
+  std::uint64_t routeAlphaTestPrimitives = 0;
   std::uint64_t tileFfpRoutedTileDraws = 0;
   std::uint64_t tileFfpRoutedTilePrimitives = 0;
   std::uint64_t tileFfpRoutedTileVertices = 0;

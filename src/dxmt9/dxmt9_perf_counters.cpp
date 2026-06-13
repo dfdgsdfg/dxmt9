@@ -5573,6 +5573,17 @@ void emitEncoderBreakdown(const EncoderBreakdown& b) {
       "clip_plane_enabled_draws=%llu "
       "point_draws=%llu line_draws=%llu triangle_draws=%llu primitive_count=%llu "
       "triangle_estimate=%llu vertex_count=%llu "
+      "route_depth_only_draws=%llu "
+      "route_depth_only_primitives=%llu "
+      "route_depth_only_vertices=%llu "
+      "route_programmable_textured_draws=%llu "
+      "route_programmable_textured_primitives=%llu "
+      "route_programmable_textured_vertices=%llu "
+      "route_programmable_color_draws=%llu "
+      "route_programmable_color_primitives=%llu "
+      "route_programmable_color_vertices=%llu "
+      "route_alpha_blend_primitives=%llu "
+      "route_alpha_test_primitives=%llu "
       "tile_ffp_routed_tile_draws=%llu "
       "tile_ffp_routed_tile_primitives=%llu "
       "tile_ffp_routed_tile_vertices=%llu "
@@ -5872,6 +5883,17 @@ void emitEncoderBreakdown(const EncoderBreakdown& b) {
       static_cast<unsigned long long>(b.primitiveCount),
       static_cast<unsigned long long>(b.triangleEstimate),
       static_cast<unsigned long long>(b.vertexCount),
+      static_cast<unsigned long long>(b.routeDepthOnlyDraws),
+      static_cast<unsigned long long>(b.routeDepthOnlyPrimitives),
+      static_cast<unsigned long long>(b.routeDepthOnlyVertices),
+      static_cast<unsigned long long>(b.routeProgrammableTexturedDraws),
+      static_cast<unsigned long long>(b.routeProgrammableTexturedPrimitives),
+      static_cast<unsigned long long>(b.routeProgrammableTexturedVertices),
+      static_cast<unsigned long long>(b.routeProgrammableColorDraws),
+      static_cast<unsigned long long>(b.routeProgrammableColorPrimitives),
+      static_cast<unsigned long long>(b.routeProgrammableColorVertices),
+      static_cast<unsigned long long>(b.routeAlphaBlendPrimitives),
+      static_cast<unsigned long long>(b.routeAlphaTestPrimitives),
       static_cast<unsigned long long>(b.tileFfpRoutedTileDraws),
       static_cast<unsigned long long>(b.tileFfpRoutedTilePrimitives),
       static_cast<unsigned long long>(b.tileFfpRoutedTileVertices),

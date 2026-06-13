@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import json
 import importlib.util
+import csv
 import os
 import subprocess
 import tempfile
@@ -1674,7 +1675,7 @@ OUT
         self.assertIn("--indexed-probe-draws", summary_line)
         self.assertIn("--require-xctrace-render-rows", summary_line)
         self.assertIn("--min-dxmt-join-coverage", summary_line)
-        self.assertIn("--require-indexed-probe-routes", summary_line)
+        self.assertIn("--require-route-verdicts", summary_line)
         self.assertIn("3dmark05-perf-indexed-probe-draws.csv", summary_line)
         self.assertIn("xctrace-metal-gpu-intervals-summary.md", summary_line)
 
@@ -2541,6 +2542,13 @@ OUT
                 "\n".join([
                     "[dxmt9-bridge-perf] bridge_factory=1 bridge_draw=2",
                     "[dxmt9-perf-encoder seq=60 encoder=2 draw_calls=3 "
+                    "primitive_count=30 vertex_count=90 "
+                    "route_depth_only_draws=1 route_depth_only_primitives=10 "
+                    "route_depth_only_vertices=30 "
+                    "route_programmable_textured_draws=2 "
+                    "route_programmable_textured_primitives=20 "
+                    "route_programmable_textured_vertices=60 "
+                    "route_alpha_blend_primitives=20 "
                     "pso_state_samples=3 stream_handle_changes=4]",
                     "[dxmt9-perf-encoder-stream seq=60 encoder=2 stream=0 samples=3 "
                     "metal_binds=3]",
@@ -2564,7 +2572,14 @@ OUT
             text = summary.read_text(encoding="utf-8")
             self.assertIn("- Status: `partial-log`", text)
             self.assertIn("| `present_encoded` | `5` |", text)
-            self.assertTrue(output_dir.joinpath("3dmark05-perf-encoders.csv").exists())
+            encoder_csv = output_dir / "3dmark05-perf-encoders.csv"
+            self.assertTrue(encoder_csv.exists())
+            with encoder_csv.open(newline="", encoding="utf-8") as f:
+                rows = list(csv.DictReader(f))
+            self.assertEqual(len(rows), 1)
+            self.assertEqual(rows[0]["route_depth_only_primitives"], "10")
+            self.assertEqual(rows[0]["route_programmable_textured_primitives"], "20")
+            self.assertEqual(rows[0]["route_alpha_blend_primitives"], "20")
             self.assertTrue(output_dir.joinpath("3dmark05-perf-encoder-streams.csv").exists())
 
     def test_finalizer_result_json_gate_rejects_partial_log(self) -> None:
@@ -3351,7 +3366,7 @@ OUT
             self.assertIn("system_trace_summary_cmd:", result.stdout)
             self.assertIn("--require-xctrace-render-rows", result.stdout)
             self.assertIn("--min-dxmt-join-coverage", result.stdout)
-            self.assertIn("--require-indexed-probe-routes", result.stdout)
+            self.assertIn("--require-route-verdicts", result.stdout)
             self.assertIn("--time-limit 2s", result.stdout)
             self.assertIn("system_trace_encoder_breakdown: all_frames", result.stdout)
             self.assertIn("system_trace_summary_top: 7", result.stdout)

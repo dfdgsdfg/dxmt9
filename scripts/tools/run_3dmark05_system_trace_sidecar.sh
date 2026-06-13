@@ -331,7 +331,7 @@ if (( ! allow_gputrace )) && [[ "$gputrace" != disabled ]]; then
 fi
 
 if [[ "$measure_index_reuse" != 1 ]]; then
-  echo "warning: --measure-index-reuse is not enabled; route verdict joins may stay route-unavailable" >&2
+  echo "note: --measure-index-reuse is not enabled; route verdicts will use encoder-summary route_* fields when the active provider supports them" >&2
 fi
 
 summary_cmd=(
@@ -346,10 +346,8 @@ summary_cmd=(
   --top "$summary_top"
   --require-xctrace-render-rows
   --min-dxmt-join-coverage 0.99
+  --require-route-verdicts
 )
-if [[ "$measure_index_reuse" == 1 ]]; then
-  summary_cmd+=(--require-indexed-probe-routes)
-fi
 
 printf 'system_trace_record_cmd:'
 printf ' %q' "${xctrace_prefix[@]}" record \

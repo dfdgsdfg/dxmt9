@@ -24,6 +24,17 @@ def write_encoder_rows(path: Path) -> None:
         "vertex_count",
         "indexed_triangle_opaque_depth_write_primitives",
         "indexed_triangle_alpha_blend_primitives",
+        "route_depth_only_draws",
+        "route_depth_only_primitives",
+        "route_depth_only_vertices",
+        "route_programmable_textured_draws",
+        "route_programmable_textured_primitives",
+        "route_programmable_textured_vertices",
+        "route_programmable_color_draws",
+        "route_programmable_color_primitives",
+        "route_programmable_color_vertices",
+        "route_alpha_blend_primitives",
+        "route_alpha_test_primitives",
         "end_reason",
     ]
     rows = [
@@ -35,6 +46,17 @@ def write_encoder_rows(path: Path) -> None:
             "vertex_count": "1000000",
             "indexed_triangle_opaque_depth_write_primitives": "333333",
             "indexed_triangle_alpha_blend_primitives": "0",
+            "route_depth_only_draws": "100",
+            "route_depth_only_primitives": "333333",
+            "route_depth_only_vertices": "1000000",
+            "route_programmable_textured_draws": "0",
+            "route_programmable_textured_primitives": "0",
+            "route_programmable_textured_vertices": "0",
+            "route_programmable_color_draws": "0",
+            "route_programmable_color_primitives": "0",
+            "route_programmable_color_vertices": "0",
+            "route_alpha_blend_primitives": "0",
+            "route_alpha_test_primitives": "0",
             "end_reason": "rt_change",
         },
         {
@@ -45,6 +67,17 @@ def write_encoder_rows(path: Path) -> None:
             "vertex_count": "750000",
             "indexed_triangle_opaque_depth_write_primitives": "0",
             "indexed_triangle_alpha_blend_primitives": "250000",
+            "route_depth_only_draws": "0",
+            "route_depth_only_primitives": "0",
+            "route_depth_only_vertices": "0",
+            "route_programmable_textured_draws": "80",
+            "route_programmable_textured_primitives": "250000",
+            "route_programmable_textured_vertices": "750000",
+            "route_programmable_color_draws": "0",
+            "route_programmable_color_primitives": "0",
+            "route_programmable_color_vertices": "0",
+            "route_alpha_blend_primitives": "250000",
+            "route_alpha_test_primitives": "0",
             "end_reason": "rt_change",
         },
     ]
@@ -189,12 +222,14 @@ class SummarizeXctraceMetalIntervalsTests(unittest.TestCase):
             self.assertAlmostEqual(float(opaque["xctrace_vertex_ms_per_mvertex"]), 10.0)
             self.assertAlmostEqual(float(opaque["xctrace_stage_ms_per_mvertex"]), 10.5)
             self.assertEqual(opaque["route_verdict"], "candidate-depth-only-route")
+            self.assertEqual(opaque["route_source"], "indexed-probe")
             self.assertEqual(opaque["route_depth_only_primitives"], "333333")
 
             alpha = rows[("60", "3")]
             self.assertEqual(alpha["primitive_class"], "alpha-blend-indexed")
             self.assertAlmostEqual(float(alpha["xctrace_vertex_ms_per_mvertex"]), 20.0)
             self.assertEqual(alpha["route_verdict"], "needs-programmable-textured-route")
+            self.assertEqual(alpha["route_source"], "indexed-probe")
             self.assertEqual(alpha["route_programmable_textured_primitives"], "250000")
 
             markdown = output_md.read_text(encoding="utf-8")
@@ -210,6 +245,68 @@ class SummarizeXctraceMetalIntervalsTests(unittest.TestCase):
             self.assertIn("`candidate-depth-only-route`", markdown)
             self.assertIn("`needs-programmable-textured-route`", markdown)
             self.assertIn("Route", markdown)
+
+    def test_uses_encoder_summary_route_fields_without_indexed_probe_csv(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            intervals = root / "metal-gpu-intervals.xml"
+            encoders = root / "3dmark05-perf-encoders.csv"
+            output_csv = root / "summary.csv"
+            output_md = root / "summary.md"
+            intervals.write_text(
+                textwrap.dedent(
+                    """\
+                    <trace-toc>
+                      <run>
+                        <data>
+                          <table schema="metal-gpu-intervals">
+                            <row>
+                              <formatted-label>RenderPass[seq=60,enc=2,rt=0x1,depth=0x2]</formatted-label>
+                              <duration>10 ms</duration>
+                              <gpu-channel-name>Vertex</gpu-channel-name>
+                            </row>
+                            <row>
+                              <formatted-label>RenderPass[seq=60,enc=3,rt=0x3,depth=0x2]</formatted-label>
+                              <duration>15 ms</duration>
+                              <gpu-channel-name>Vertex</gpu-channel-name>
+                            </row>
+                          </table>
+                        </data>
+                      </run>
+                    </trace-toc>
+                    """
+                ),
+                encoding="utf-8",
+            )
+            write_encoder_rows(encoders)
+
+            result = subprocess.run(
+                [
+                    sys.executable,
+                    str(SCRIPT),
+                    "--gpu-intervals",
+                    str(intervals),
+                    "--dxmt-encoders",
+                    str(encoders),
+                    "--output-csv",
+                    str(output_csv),
+                    "--output-md",
+                    str(output_md),
+                    "--require-route-verdicts",
+                ],
+                cwd=REPO_ROOT,
+                text=True,
+                capture_output=True,
+                check=False,
+            )
+
+            self.assertEqual(result.returncode, 0, result.stderr)
+            with output_csv.open(newline="", encoding="utf-8") as handle:
+                rows = {(row["seq"], row["encoder"]): row for row in csv.DictReader(handle)}
+            self.assertEqual(rows[("60", "2")]["route_source"], "encoder-summary")
+            self.assertEqual(rows[("60", "2")]["route_verdict"], "candidate-depth-only-route")
+            self.assertEqual(rows[("60", "3")]["route_source"], "encoder-summary")
+            self.assertEqual(rows[("60", "3")]["route_verdict"], "needs-programmable-textured-route")
 
     def test_require_xctrace_render_rows_rejects_unlabelled_xml(self) -> None:
         with tempfile.TemporaryDirectory() as td:

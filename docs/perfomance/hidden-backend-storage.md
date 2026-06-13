@@ -57,6 +57,7 @@ every other domain at the lever that actually moves the bucket.
 | H35 | Programmable route work is one uniform textured backend problem | rejected; split into depth-only, color, and textured routes | [[hidden-backend-storage-shape.25]] (`60/0` is `candidate-depth-only-route`; `60/1` needs programmable color; `60/2` needs programmable textured route) |
 | H36 | The `60/0` depth-only route can be reached by a fragmentless Metal PSO | accepted (runtime smoke), rejected for Xcode promotion | [[hidden-backend-storage-shape.26]] (`60/0` probe covers all `42` draws / `97,294` primitives / `291,882` vertices, reports position-only VSOut key `0x0`, and logs `2` accepted / `0` rejected fragmentless PSO variants; same-input gate then fails depth equality: `D24X8` depth changes `1,252,096 / 3,145,728` bytes, while `60/0` color is exact and the final frame still changes `21.658325%`; Xcode counter spend is blocked until depth semantics are fixed) |
 | H37 | System Trace can provide route-attributed timing while `.gputrace` is blocked | accepted (sidecar evidence) | [[hidden-backend-storage-shape.28]] (`215/215` xctrace rows joined, `1005..1024` captured seq, indexed probe rows `1000..1035` with `0` out-of-range rows; vertex share `88.86%`; route split: programmable color `45.65%`, programmable textured `40.49%`, mixed `12.02%`, depth-only `1.85%`) |
+| H38 | Route-attributed System Trace sidecars must require indexed per-draw logging | rejected-current | [[hidden-backend-storage-shape.29]] (encoder breakdown emits `route_*` primitive counters; no-indexed sidecar now verifies `route_source=encoder-summary` on `1633/1633` joined rows, while indexed rows remain optional override detail) |
 
 ## Verification methods
 
@@ -127,6 +128,7 @@ flowchart TD
   ProgrammableRoute["shape.25\nprogrammable route feasibility\n60/0 depth-only candidate"]:::accepted
   FragmentlessRoute["shape.26\nfragmentless depth-only route\nreachability pass, equality fail"]:::rejected
   SystemTraceRoute["shape.28\nseq-range System Trace sidecar\nroute timing joined"]:::accepted
+  EncoderRouteSummary["shape.29\nencoder-summary route counters\nno indexed rows required"]:::accepted
   OcclusionGate["texture.08\nocclusion oracle feasibility\nexisting query not enough"]:::rejected
   ScopedSemantic["semantic.02\nselected 60/2 depth-read/no-blend\nexact mini replay\nscoped only"]:::accepted
 
@@ -174,6 +176,8 @@ flowchart TD
   FragmentlessRoute -->|"blocked by depth equality fail"| NextTriage
   ProgrammableRoute -->|"route verdict follow-up"| SystemTraceRoute
   SystemTraceRoute -->|"programmable color/textured dominate current sidecar"| NextTriage
+  SystemTraceRoute -->|"measurement overhead reduced by"| EncoderRouteSummary
+  EncoderRouteSummary -->|"next sidecar without per-draw index logs"| NextTriage
   ProgrammableRoute -->|"next reduced route candidate"| NextTriage
   NextTriage -->|"oracle feasibility"| OcclusionGate
   Model -->|"frames"| Shape
@@ -212,8 +216,13 @@ that path more usable: after ensuring the active Wine unix provider is rebuilt,
 same seq window (`1000..1035`, out-of-range rows `0`). The captured window is
 still vertex dominated (`88.86%` vertex share), but the route split is now
 known: programmable color (`45.65%`) and programmable textured (`40.49%`) rows
-own most of the stage time, while depth-only rows are only `1.85%`. This is
-route-attributed timing evidence, not a substitute for Xcode replay counters.
+own most of the stage time, while depth-only rows are only `1.85%`. The
+encoder-summary route follow-up ([[hidden-backend-storage-shape.29]]) then
+removes the indexed per-draw requirement for that timing lane: a no-indexed
+sidecar joined `1633/1633` rows from `route_source=encoder-summary`, with
+`91.90%` vertex-stage share and route split dominated by programmable color
+(`57.04%`) plus programmable textured (`29.22%`). This is route-attributed
+timing evidence, not a substitute for Xcode replay counters.
 
 What is still open: *which* sub-component of the model dominates — VS stage-out,
 primitive/binning/tiler parameter storage, or compiler/backend spill. Visible

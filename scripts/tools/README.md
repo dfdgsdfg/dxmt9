@@ -38,10 +38,11 @@ build. `shader_corpus_tool.py` is also imported by the Meson tests under
   scene-phase changes can be separated from raw total-time changes. The
   Markdown also emits aggregate tables by primitive class and render-pass end
   reason, which is the fastest way to see whether the residual owner is
-  opaque/depth, alpha, clear, RT-change, or present work. Pass
-  `--indexed-probe-draws <3dmark05-perf-indexed-probe-draws.csv>` when that
-  CSV contains draw rows; the sidecar then adds depth-only/textured/color route
-  verdicts for the same top System Trace rows.
+  opaque/depth, alpha, clear, RT-change, or present work. Current encoder
+  breakdown rows also carry route-level primitive counters, so the sidecar can
+  add depth-only/textured/color route verdicts without per-draw indexed probe
+  logging. Pass `--indexed-probe-draws <3dmark05-perf-indexed-probe-draws.csv>`
+  only when that CSV contains draw rows and per-draw route detail is needed.
 - `run_3dmark05_system_trace_sidecar.sh` — guarded wrapper around
   `run_3dmark05_perf_probe.sh` and `xcrun xctrace record --template
   'Metal System Trace' --all-processes`. It runs the probe wrapper dry-run
@@ -51,11 +52,13 @@ build. `shader_corpus_tool.py` is also imported by the Meson tests under
   `3dmark05-perf-indexed-probe-draws.csv`. Use `--wait-unlocked-sec N` when
   the command should poll preflight and start automatically after the desktop
   unlocks; locked waits and dry-runs do not create trace artifacts. When the
-  trace is summarized, RenderPass-labelled xctrace rows and high dxmt encoder
-  join coverage are required. When the probe reports `measure_index_reuse: 1`,
-  the sidecar also requires indexed route rows to join the System Trace rows
-  and fails otherwise, preventing another route-selection capture from ending
-  as a silent `route-unavailable` sample. The sidecar defaults to
+  trace is summarized, RenderPass-labelled xctrace rows, high dxmt encoder
+  join coverage, and at least one route verdict are required. Route verdicts
+  normally come from encoder-summary `route_*` fields; indexed probe rows are
+  optional and override the summary when per-draw detail is needed. This
+  prevents another route-selection capture from ending as a silent
+  `route-unavailable` sample while avoiding unnecessary indexed per-draw log
+  volume. The sidecar defaults to
   `--encoder-breakdown-all-frames` on the wrapped probe, because xctrace
   records a wall-clock window and cannot reliably join against a single
   `DXMT9_PERF_ENCODER_BREAKDOWN_SEQ=<frame>` CSV. All-frame breakdown is valid
@@ -262,8 +265,8 @@ build. `shader_corpus_tool.py` is also imported by the Meson tests under
   run should wait for unlock and then launch automatically. Manual runs can
   still use the wrapper-printed `xctrace_system_trace_export_cmd` and
   `xctrace_system_trace_summary_cmd` for traces recorded as
-  `traces/<run>/metal-system.trace`; add `--measure-index-reuse` when route
-  verdicts are needed.
+  `traces/<run>/metal-system.trace`; add `--measure-index-reuse` only when
+  per-draw route/index detail is needed.
 - `compare_experiment_images.py` — compare before/after screenshots or
   deterministic capture PNGs for semantic gates. Use repeatable
   `--roi L,T,R,B[:name]` regions when full-frame changes are too broad, for

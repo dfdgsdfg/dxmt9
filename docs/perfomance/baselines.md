@@ -14,7 +14,9 @@ attribution gates, and the post-visualfix **frame60** refresh that confirms the
 same owner after the latest correctness path. It also
 keeps the whole-run counter shape that contextualizes the single-frame
 captures. The latest frame60 no-gputrace visual-coupling scout keeps the
-wrong-path counter interpretation separate from the Xcode GPU proof. Almost
+wrong-path counter interpretation separate from the Xcode GPU proof. The
+latest low-overhead recovery scout separates transient/heavy-instrumentation
+FPS-zero observations from the current normal renderer path. Almost
 every A/B delta elsewhere is measured against [[baselines-frame50.01]],
 [[baselines-frame60.01]], or the refreshed [[baselines-frame60.02]].
 
@@ -33,6 +35,7 @@ every A/B delta elsewhere is measured against [[baselines-frame50.01]],
 | H9 | `MTL_CAPTURE_ENABLED=1` is required for standard 3DMark05 gputrace probes | rejected | [[baselines-gputrace-capture.01]] (`MTL_CAPTURE_ENABLED=1` alone reproduced black-screen startup with draw/present counters at zero; omitting it restores normal GT1, but file/simple `developerTools` capture still need an inserted layer; temporary original-name Wine patching can produce `.gputrace` for synthetic Wine/D3D9, but 3DMark05 still black-screens before draw/present when that layer reaches the real temp `wine.real`) |
 | H10 | Current visual-coupling frame60 smoke shows skipped/error/overflow/hazard-split work as the obvious muzzle/glow perf owner | rejected-current-smoke; post-`01:05` oracle refresh stays flat (`draw_skipped_no_pipeline=0`, `gpu_command_buffer_errors=0`, `map_buffer_wait_ms=0`, `queue_sequence_wait_ms=0`), while RT/depth/clear/present pass churn remains open | [[baselines-frame60.03]] |
 | H11 | The 120s no-gputrace timeout policy still produces standard `result.json` evidence when the wrapper watchdog includes capture delay | accepted | [[baselines-frame50.05]] |
+| H12 | The current renderer is stuck in an FPS-zero state after the latest sidecar/visual work | rejected-current | [[baselines-frame60.04]] (`--no-encoder-breakdown` scout p50/p95 FPS `18.081`/`26.648`, last sample `24.798fps`, visual state observed normal; heavy sidecar FPS tails remain instrumentation caveat) |
 
 ## Verification methods
 
@@ -77,12 +80,14 @@ flowchart TD
   F60["baselines-frame60.01\nframe60 validation\n34.02ms / top3 98.41%\nVS write 1627.4MiB"]
   F60post["baselines-frame60.02\npost-visualfix frame60\n33.614ms / top3 98.12%\nhidden 1597.8MiB"]
   F60vc["baselines-frame60.03\nvisual-coupling no-gputrace\nskips/errors/overflows 0\nhazard split 0\nRT/depth churn open"]
+  F60low["baselines-frame60.04\nlow-overhead recovery scout\np50 18.081fps / p95 26.648fps\nvisual normal"]
 
   RunLevel -->|context-for| F120
   F120 -->|same-shape, narrowed-to| F50
   F120 -->|same-shape, narrowed-to| F60
   F60 -->|refreshed-after-visual-fix| F60post
   F60post -->|runtime wrong-path scout| F60vc
+  F60vc -->|current low-overhead recovery| F60low
   F50san -->|shape-stable, superseded-by| F50
   F50 -->|refreshed-by| F50to
   F50to -->|supervised-timeout-refresh| F50wd
@@ -92,6 +97,7 @@ flowchart TD
   VisualAnchor -->|visual-alignment anchor for| F60post
   CaptureEnv -->|standard gputrace launch hygiene for| F60post
   F60vc -->|feeds correctness gate for| Backend
+  F60low -->|baseline FPS sanity for| Churn
 
   F120 -->|feeds| Store["[[render-pass-store]]\n+ bottleneck shape"]
   F50 -->|baseline-for| IdxCache["[[index-cache-locality]]\nopaque / screen-blend proofs"]
@@ -99,7 +105,7 @@ flowchart TD
   F60post -->|baseline-for| Backend["[[backend-shape-classifiers]]"]
   F60post -->|baseline-for| Churn["[[state-churn-encode]]"]
 
-  class F120,F50,F50san,F50to,F50wd,F50wd120,F60,F60post,F60vc,RunLevel,VisualAnchor accepted
+  class F120,F50,F50san,F50to,F50wd,F50wd120,F60,F60post,F60vc,F60low,RunLevel,VisualAnchor accepted
   class Visual,CaptureEnv rejected
   class Store,IdxCache,VSOut,Backend,Churn open
 ```
@@ -118,6 +124,7 @@ flowchart TD
 | [[baselines-frame60.01]] | 2026-06-01 | `34.02ms` | `33.481ms` / `98.41%` | VS write `1627.414MiB`; dxmt CPU `0.444MiB`; unexplained `1627.642MiB`; `7.9x` |
 | [[baselines-frame60.02]] | 2026-06-06 | `33.614ms` | `32.984ms` / `98.12%` | post-visualfix refresh; VS write `1627.332MiB`; hidden backend `1597.755MiB`; dxmt CPU `0.202MiB`; `7.9x` |
 | [[baselines-frame60.03]] | 2026-06-07/08 | — | — | visual-coupling no-gputrace scouts; initial run and post-`01:05` oracle refresh both keep `present_encoded=1680`, `draw_skipped_no_pipeline=0`, `gpu_command_buffer_errors=0`, `map_buffer_wait_ms=0`, `queue_sequence_wait_ms=0`; refresh split reasons are RT/depth `13,163`, clear `4,895`, present `1,673`; render-pass preservation remains `~120.1MiB/present`; sampled average `15.753fps`, steady late frames `~23fps` |
+| [[baselines-frame60.04]] | 2026-06-13 | — | — | low-overhead no-gputrace recovery scout after FPS-zero observation; `--no-encoder-breakdown`, `1,807` frame samples, p50/p95/max FPS `18.081`/`26.648`/`30.351`, last sample `24.798fps`, `present_boundary_wait_ms` max `0.000`; visual state observed normal |
 | [[baselines-visual-capture.02]] | 2026-06-06 | — | — | `v0.0.1` is the known-good visual correctness / alignment anchor; same 40s screenshot can still drift (`Frame 351` vs `483`), but PNG diff is useful for broad texture/color/geometry, black/translucent vertex, UV, and cbuf-identity triage |
 | [[baselines-gputrace-capture.01]] | 2026-06-06 | — | — | capture workflow fix: `MTL_CAPTURE_ENABLED=1` alone can black-screen 3DMark05 startup with draw/present `0`; no-layer runs restore normal GT1 (`present_encoded=1680`) but file `.gputrace`, simple Xcode-open `developerTools`, external `.app` plist, and tmp embedded-plist roots are still not valid 3DMark05 capture routes; original-name Wine patching works for synthetic Wine/D3D9 `.gputrace` but also black-screens 3DMark05 before draw/present |
 
@@ -141,7 +148,13 @@ refresh confirms this shape after the latest visual/cbuf identity path:
 backend `1597.8MiB`. The no-gputrace [[baselines-frame50.02]] /
 [[baselines-frame50.03]] / [[baselines-frame50.04]] /
 [[baselines-frame50.05]] scouts prove the runtime shape is stable enough to
-treat frame50/frame60 as fixed A/B denominators.
+treat frame50/frame60 as fixed A/B denominators. The latest
+[[baselines-frame60.04]] scout rejects the current "FPS zero" interpretation
+for the low-overhead renderer path: with encoder breakdown disabled, the run
+returns to the established `~18fps` median / `~26fps` p95 envelope and has no
+present-boundary tail. Treat heavy System Trace / all-frame attribution FPS
+tails as instrumentation caveats unless a matching low-overhead scout
+reproduces them.
 
 What is settled: the baseline numbers and the capture/finalize methodology
 (wrapper, `--frame`, `--no-gputrace`, timeout policy, finalizer join + gates).

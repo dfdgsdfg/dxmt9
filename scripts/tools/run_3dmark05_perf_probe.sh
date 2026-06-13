@@ -4524,6 +4524,7 @@ xctrace_summary_cmd=(
   --top "$top_n"
   --require-xctrace-render-rows
   --min-dxmt-join-coverage 0.99
+  --require-route-verdicts
 )
 if (( measure_index_reuse )); then
   xctrace_summary_cmd+=(--require-indexed-probe-routes)
