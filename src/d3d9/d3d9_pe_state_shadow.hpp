@@ -19,7 +19,9 @@ static constexpr std::uint32_t kPeVertexTextureSamplerSlots = 4;
 static constexpr std::uint32_t kPeTextureSlots =
     kPeFragmentSamplerSlots + kPeVertexTextureSamplerSlots;
 static constexpr std::uint32_t kPeSamplerSlots = kPeTextureSlots;
-static constexpr std::uint32_t kPeSamplerStateSlots = 64;
+// D3DSAMP_* ordinals occupy 1..13. Keep the PE-side identity-mapped shadow
+// compact while preserving all public sampler-state slots.
+static constexpr std::uint32_t kPeSamplerStateSlots = 16;
 static constexpr std::uint32_t kPeTransformTextureSlots = 8;
 static constexpr std::uint32_t kPeTransformWorldSlots = 256;
 static constexpr std::uint32_t kPeTransformTextureBaseSlot = 2;

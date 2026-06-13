@@ -59,7 +59,9 @@ inline constexpr u32 kMaxIntegerConstants = 16;
 inline constexpr u32 kMaxBoolConstants = 16;
 inline constexpr u32 kMaxStateSlots = 256;
 inline constexpr u32 kMaxTextureStageStates = 64;
-inline constexpr u32 kMaxSamplerStates = 64;
+// D3DSAMP_* ordinals occupy 1..13. Keep the identity-mapped state table
+// compact while leaving slot 0 and two spare slots inside one bitset word.
+inline constexpr u32 kMaxSamplerStates = 16;
 // D3DGAMMARAMP carries 256 WORD entries per channel (red/green/blue).
 // Pinned here so SwapDesc::gammaRamp and the unix-side present-pass apply
 // agree on the entry count without #include-ing <d3d9types.h>.
@@ -616,6 +618,8 @@ inline constexpr u32 SAMP_MAX_MIP_LEVEL = 9;  // D3DSAMP_MAXMIPLEVEL — clamps
                                               // `lod_min_clamp`.
 inline constexpr u32 SAMP_MAX_ANISOTROPY = 10;
 inline constexpr u32 SAMP_SRGB_TEXTURE = 11;
+inline constexpr u32 SAMP_ELEMENT_INDEX = 12;
+inline constexpr u32 SAMP_DMAP_OFFSET = 13;
 
 // `samplerStateSlot` in `d3d9_pe_state_shadow.hpp` identity-maps
 // `D3DSAMPLERSTATETYPE` to the canonical record's slot index, so each
@@ -635,6 +639,10 @@ static_assert(SAMP_MIPMAP_LOD_BIAS == 8, "D3DSAMP_MIPMAPLODBIAS = 8");
 static_assert(SAMP_MAX_MIP_LEVEL == 9, "D3DSAMP_MAXMIPLEVEL = 9");
 static_assert(SAMP_MAX_ANISOTROPY == 10, "D3DSAMP_MAXANISOTROPY = 10");
 static_assert(SAMP_SRGB_TEXTURE == 11, "D3DSAMP_SRGBTEXTURE = 11");
+static_assert(SAMP_ELEMENT_INDEX == 12, "D3DSAMP_ELEMENTINDEX = 12");
+static_assert(SAMP_DMAP_OFFSET == 13, "D3DSAMP_DMAPOFFSET = 13");
+static_assert(SAMP_DMAP_OFFSET < kMaxSamplerStates,
+              "SamplerStateTable must contain every D3DSAMP_* ordinal");
 
 inline constexpr u32 QUERY_GETDATA_FLUSH = 1u << 0;
 

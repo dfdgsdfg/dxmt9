@@ -68,6 +68,7 @@ bottleneck — that is owned by [[hidden-backend-storage]].
 | H48 | Reusing a device-owned pending submission vector removes per-chunk allocation churn | rejected-current | [[state-churn-encode-encode-phase.36]] (`queue-snapshot residual` `2193.875ms→2200.657ms`; scratch branch removed) |
 | H49 | Reusing draw binding snapshot scratch removes per-group vector allocation churn | accepted small CPU win | [[state-churn-encode-encode-phase.37]] (`batch_binding_snapshot` `0.119755→0.089566ms/present`; total replay flat) |
 | H50 | Shader bytecode value ownership makes layout/state copies allocate and copy bytecode per draw | accepted CPU win | [[state-churn-encode-encode-phase.38]] (`state_copy` `0.421921→0.271225ms/present`; queue submit `5.176033→4.792983ms/present`) |
+| H51 | Sampler `FlatStateSet` capacity can be reduced from ID-space 64 to public D3DSAMP 16 | accepted CPU win | [[state-churn-encode-encode-phase.39]] (`FlatDrawStateRecord` `18,736→11,056B`; `state_copy` `0.271225→0.181239ms/present`) |
 
 ## Verification methods
 
@@ -194,6 +195,7 @@ flowchart TD
   EncodePhase36["encode-phase.36\npersistent pending scratch\nno residual win\nremoved"]:::rejected
   EncodePhase37["encode-phase.37\nTLS binding snapshot scratch\nsnapshot bucket -27.3%\nreplay flat"]:::accepted
   EncodePhase38["encode-phase.38\nshared shader bytecode storage\nstate copy -35.7%\nqueue -7.4%"]:::accepted
+  EncodePhase39["encode-phase.39\nsampler state compact\nFlatDrawState -41%\nqueue -12.3%"]:::accepted
   Snapshot10["snapshot.10\nuniform-refresh fast path\nrefresh -59.6%\nFPS flat"]:::accepted
 
   Drawrun1 -->|"split-into"| Drawrun2
@@ -256,6 +258,7 @@ flowchart TD
   EncodePhase35 -->|"test vector capacity reuse"| EncodePhase36
   EncodePhase36 -->|"fix submit scratch allocation"| EncodePhase37
   EncodePhase37 -->|"remove bytecode value copies"| EncodePhase38
+  EncodePhase38 -->|"reduce sampler state width"| EncodePhase39
 ```
 
 ## Results synthesis
@@ -687,6 +690,24 @@ keeps a normal visible GT1 frame and cuts the targeted copy-shaped buckets:
 critique, but it does not remove the remaining fixed-width `FlatDrawStateRecord`
 SoA push or N-1 same-generation state/layout copies; those remain separate F1/F4
 design work.
+
+[[state-churn-encode-encode-phase.39]] accepts the first F4 width fix. Render
+state capacity stays `256` because D3DRS ids reach `209`, and texture-stage
+capacity stays `64` because dxmt9 uses internal `TSS_TEXTURE_TYPE=63`. Sampler
+states are different: public D3DSAMP ordinals are `1..13`, so
+`kMaxSamplerStates` and the PE sampler shadow can shrink from `64` to `16`
+without changing identity mapping. This cuts `FlatStateSet<sampler>` from
+`536B` to `152B`, `FlatDrawStateRecord` from `18,736B` to `11,056B`,
+`CanonicalDrawState` from `21,080B` to `13,384B`, and `DrawRunSubmission` from
+`31,744B` to `24,064B`. In the rebuilt-unix 120s scout, per-present
+`d3d9_snapshot_state_copy_cpu_ms` drops `0.271225 -> 0.181239`,
+`submit_draw_run_batch_append_state_soa_cpu_ms` drops
+`0.387479 -> 0.263628`, and
+`commit_chunk_queue_draw_submission_cpu_ms` drops
+`4.792983 -> 4.205132`. The visible smoke frame is normal. This validates
+sampler-state compaction as a real CPU win, but the larger F4 render-state/TSS
+compaction still requires sparse id remapping or a different compact record
+shape.
 
 ## How to run
 Every experiment here is a 3DMark05 GT1 run via the standard wrapper. This is a
