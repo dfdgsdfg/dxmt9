@@ -811,8 +811,15 @@ bool drawSubmissionStatesCompatible(
     const core::DrawRunSubmission& b) noexcept {
   const bool sameGenerationLane =
       core::drawRunSubmissionSameStateGenerationLane(a, b);
+  if (sameGenerationLane) {
+#ifndef NDEBUG
+    DXMT_ASSERT(core::drawRunSubmissionStatesCompatibleForBatch(a, b));
+#endif
+    perf::countSubmitDrawRunBatchCompatPair(true, true);
+    return true;
+  }
   const bool compatible = core::drawRunSubmissionStatesCompatibleForBatch(a, b);
-  perf::countSubmitDrawRunBatchCompatPair(sameGenerationLane, compatible);
+  perf::countSubmitDrawRunBatchCompatPair(false, compatible);
   return compatible;
 }
 

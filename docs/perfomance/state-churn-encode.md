@@ -63,6 +63,7 @@ bottleneck — that is owned by [[hidden-backend-storage]].
 | H43 | Remaining state append cost is PSO/invariant construction | rejected; SoA append attribution accepted | [[state-churn-encode-encode-phase.31]] (`state=879ms`, `SoA=707ms`, `PSO=50ms`, `invariant=22ms`; split timers add overhead) |
 | H44 | Slot-local full-state interning amortizes the state SoA push | rejected; frontend generation fast path accepted as next proof | [[state-churn-encode-encode-phase.32]] (`0.150866%` state reuse hit rate; SoA `707ms→962ms`; first add generation/lane opportunity counters) |
 | H45 | Adjacent same stable-generation/lane submissions can skip the deep compat compare | accepted proof | [[state-churn-encode-encode-phase.33]] (`52.524409%` same-generation/lane pairs; `385,120/385,120` compatible; `0` incompatible) |
+| H46 | Using the generation/lane stamp as a compat fast path removes the compat scan bucket | accepted CPU win | [[state-churn-encode-encode-phase.34]] (`compat_scan` `557.621ms→44.923ms`; `draw_batch_submit` `3491.771ms→3070.200ms`) |
 
 ## Verification methods
 
@@ -184,6 +185,7 @@ flowchart TD
   EncodePhase31["encode-phase.31\nstate inner split\nSoA 707ms\nPSO 50ms / invariant 22ms"]:::accepted
   EncodePhase32["encode-phase.32\nslot-state intern rejected\n0.15% reuse hits\nnext: generation/lane counters"]:::accepted
   EncodePhase33["encode-phase.33\ngeneration/lane proof\n52.5% pairs; 0 incompatible\nnext: compat fast path"]:::accepted
+  EncodePhase34["encode-phase.34\ngeneration/lane fast path\ncompat scan -91.9%\nqueue still copy-bound"]:::accepted
   Snapshot10["snapshot.10\nuniform-refresh fast path\nrefresh -59.6%\nFPS flat"]:::accepted
 
   Drawrun1 -->|"split-into"| Drawrun2
@@ -241,6 +243,7 @@ flowchart TD
   EncodePhase30 -->|"split remaining state child"| EncodePhase31
   EncodePhase31 -->|"slot interning rejected;\nmove upstream"| EncodePhase32
   EncodePhase32 -->|"stamp and count generation/lane"| EncodePhase33
+  EncodePhase33 -->|"skip proven deep compares"| EncodePhase34
 ```
 
 ## Results synthesis
@@ -608,6 +611,20 @@ cost. The same counter also sizes a future copy-elision opportunity for
 `385,120` non-front records, but state/layout copy elision must keep per-draw
 uniforms, binding overrides, dynamic backing snapshots, and resource marking
 correct.
+
+[[state-churn-encode-encode-phase.34]] applies the guarded compat fast path.
+Same-generation/lane pairs now return compatible without the deep
+`FlatStateSet` and shader-layout comparison; debug builds still assert that the
+old deep comparison would agree. The 120s no-gputrace scout keeps a normal
+visible GT1 frame with machine-gun muzzle flash/bloom, and cuts
+`submit_draw_run_batch_compat_scan_cpu_ms` `557.621ms -> 44.923ms`
+(`0.331917 -> 0.025818ms/present`). The parent
+`commit_chunk_draw_batch_submit_cpu_ms` drops `3491.771ms -> 3070.200ms`
+(`2.078435 -> 1.764483ms/present`). The larger
+`commit_chunk_queue_draw_submission_cpu_ms` remains effectively dominated by
+snapshot/state copy and append work, so the next CPU work should move to F2
+in-place queue fill, persistent replay scratch, and then stronger state/layout
+copy elision for same-generation non-front submissions.
 
 ## How to run
 Every experiment here is a 3DMark05 GT1 run via the standard wrapper. This is a
