@@ -61,6 +61,7 @@ bottleneck — that is owned by [[hidden-backend-storage]].
 | H41 | The batch append owner is raw payload byte copy | rejected; state/uniform attribution accepted | [[state-churn-encode-encode-phase.29]] (`state=958ms`, `uniform=902ms`, `payload=65ms` despite `232.5MB` copied) |
 | H42 | Removing extra `CanonicalDrawState` value hops cuts the state append child | accepted CPU win | [[state-churn-encode-encode-phase.30]] (`append` `2708→2116ms`, `state` `958→720ms`, GPU flat) |
 | H43 | Remaining state append cost is PSO/invariant construction | rejected; SoA append attribution accepted | [[state-churn-encode-encode-phase.31]] (`state=879ms`, `SoA=707ms`, `PSO=50ms`, `invariant=22ms`; split timers add overhead) |
+| H44 | Slot-local full-state interning amortizes the state SoA push | rejected; frontend generation fast path accepted as next proof | [[state-churn-encode-encode-phase.32]] (`0.150866%` state reuse hit rate; SoA `707ms→962ms`; first add generation/lane opportunity counters) |
 
 ## Verification methods
 
@@ -175,6 +176,7 @@ flowchart TD
   EncodePhase29["encode-phase.29\nbatch append split\nstate 958ms / uniform 902ms\npayload 65ms"]:::accepted
   EncodePhase30["encode-phase.30\nrvalue state append\nappend -21.85%\nstate -24.82%"]:::accepted
   EncodePhase31["encode-phase.31\nstate inner split\nSoA 707ms\nPSO 50ms / invariant 22ms"]:::accepted
+  EncodePhase32["encode-phase.32\nslot-state intern rejected\n0.15% reuse hits\nnext: generation/lane counters"]:::accepted
   Snapshot10["snapshot.10\nuniform-refresh fast path\nrefresh -59.6%\nFPS flat"]:::accepted
 
   Drawrun1 -->|"split-into"| Drawrun2
@@ -230,6 +232,7 @@ flowchart TD
   Snapshot10 -->|"queue append next"| EncodePhase29
   EncodePhase29 -->|"remove value hops"| EncodePhase30
   EncodePhase30 -->|"split remaining state child"| EncodePhase31
+  EncodePhase31 -->|"slot interning rejected;\nmove upstream"| EncodePhase32
 ```
 
 ## Results synthesis
@@ -567,6 +570,23 @@ state parent), while `makeDrawPsoSubview()` is only `50.156ms` and invariant
 construction is `22.451ms`. The next implementation bet should therefore change
 the stored state shape or amortization, not micro-optimize PSO subview or
 run-invariant construction.
+
+[[state-churn-encode-encode-phase.32]] rejects the first stored-state
+amortization attempt and refines the target. Slot-local full-state interning
+found only `663` hits across `439,464` batch groups (`0.150866%`) and made the
+state SoA child worse (`707.490ms -> 961.947ms`) because the fingerprint/probe
+work ran after the queue had already copied and compared the large submission
+states. The useful critique is upstream: `cachedBaseDrawStateForSubmissionBatch`
+already proves stable-state identity by generation, while
+`submitDrawRunBatch()` rediscovers compatibility through deep `FlatStateSet`
+and shader-layout comparisons before storing only `submissions.front().state`.
+The next non-mutating proof should stamp submissions with stable generation and
+snapshot lane, then count adjacent same-generation/lane opportunities and their
+agreement with the existing deep compare. Only after that counter is high should
+the compat scan use a generation fast path or the snapshot code skip N-1
+state/layout copies. Per-draw binding overrides and dynamic backing snapshots
+must remain per-draw until resource-lifetime marking proves they can be safely
+coalesced.
 
 ## How to run
 Every experiment here is a 3DMark05 GT1 run via the standard wrapper. This is a
