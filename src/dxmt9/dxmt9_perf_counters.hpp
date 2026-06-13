@@ -693,11 +693,22 @@ void countCommitChunkImportCpuTime(std::uint64_t nanoseconds);
 void countCommitChunkHandleCpuTime(std::uint64_t nanoseconds);
 void countCommitChunkReplayCpuTime(std::uint64_t nanoseconds);
 void countCommitChunkDrawBatchSubmitCpuTime(std::uint64_t nanoseconds);
+void countCompletionEnqueue(std::uint64_t pendingDepthAfterPush,
+                            bool whileWaiting,
+                            bool hasPresent);
 void countCompletionDequeue(std::uint64_t ageNanoseconds,
                             std::uint64_t pendingDepthAfterPop,
                             std::uint64_t commandBufferStatus);
 void countCompletionWaitStatus(std::uint64_t nanoseconds,
                                std::uint64_t commandBufferStatus);
+void countCompletionWaitOverlap(std::uint64_t nanoseconds,
+                                std::uint64_t enqueuesDuringWait,
+                                bool hasPresent);
+void countCompletionNoEnqueueWaitToCommitPublish(std::uint64_t nanoseconds);
+void countCompletionNoEnqueueWaitToEncodeDequeue(std::uint64_t nanoseconds);
+void countCompletionNoEnqueueWaitToCommandBufferCommit(std::uint64_t nanoseconds);
+void countCompletionNoEnqueueWaitToNextEnqueue(std::uint64_t nanoseconds,
+                                               bool hasPresent);
 void countCompletionWait(std::uint64_t nanoseconds,
                          bool hasDraw,
                          bool hasPresent,

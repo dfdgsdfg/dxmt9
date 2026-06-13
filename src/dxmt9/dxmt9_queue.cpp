@@ -295,6 +295,42 @@ CommandBufferDiagnostics QueueLifecycleController::summarizeSubmission(
   return summarizeCommands(seqId, slotIndex, submissionBinding_.slots[slotIndex], resolveSurfaceFlags);
 }
 
+void QueueLifecycleController::recordNoEnqueueWaitGapToCommitPublish() {
+  std::lock_guard lock(pendingCompletionMutex_);
+  if (lastNoEnqueueCompletionWaitEnd_ == std::chrono::steady_clock::time_point{} ||
+      noEnqueueGapCommitPublishRecorded_) {
+    return;
+  }
+  const auto elapsed = std::chrono::steady_clock::now() - lastNoEnqueueCompletionWaitEnd_;
+  perf::countCompletionNoEnqueueWaitToCommitPublish(
+      static_cast<std::uint64_t>(std::chrono::duration_cast<std::chrono::nanoseconds>(elapsed).count()));
+  noEnqueueGapCommitPublishRecorded_ = true;
+}
+
+void QueueLifecycleController::recordNoEnqueueWaitGapToEncodeDequeue() {
+  std::lock_guard lock(pendingCompletionMutex_);
+  if (lastNoEnqueueCompletionWaitEnd_ == std::chrono::steady_clock::time_point{} ||
+      noEnqueueGapEncodeDequeueRecorded_) {
+    return;
+  }
+  const auto elapsed = std::chrono::steady_clock::now() - lastNoEnqueueCompletionWaitEnd_;
+  perf::countCompletionNoEnqueueWaitToEncodeDequeue(
+      static_cast<std::uint64_t>(std::chrono::duration_cast<std::chrono::nanoseconds>(elapsed).count()));
+  noEnqueueGapEncodeDequeueRecorded_ = true;
+}
+
+void QueueLifecycleController::recordNoEnqueueWaitGapToCommandBufferCommit() {
+  std::lock_guard lock(pendingCompletionMutex_);
+  if (lastNoEnqueueCompletionWaitEnd_ == std::chrono::steady_clock::time_point{} ||
+      noEnqueueGapCommandBufferCommitRecorded_) {
+    return;
+  }
+  const auto elapsed = std::chrono::steady_clock::now() - lastNoEnqueueCompletionWaitEnd_;
+  perf::countCompletionNoEnqueueWaitToCommandBufferCommit(
+      static_cast<std::uint64_t>(std::chrono::duration_cast<std::chrono::nanoseconds>(elapsed).count()));
+  noEnqueueGapCommandBufferCommitRecorded_ = true;
+}
+
 void QueueLifecycleController::observeTransition(const QueueTransitionRecord& record) const {
   switch (classifyTransition(record)) {
     case QueueLifecycleEvent::PresentEnqueue:
@@ -503,6 +539,7 @@ bool QueueLifecycleController::commitCurrentChunk(
   const size_t publishedSlotIndex = **writingSlot;
   const u64 publishedSeqId = *nextSeqId;
   observeCommitWait(publishedSlotIndex, slot.seqId, inflightLimit);
+  recordNoEnqueueWaitGapToCommitPublish();
   commitPublish(publishedSlotIndex, publishedSeqId, inflightLimit, [&] {
     slot.seqId = (*nextSeqId)++;
     slot.state = ChunkSlot::State::Pending;
@@ -539,6 +576,7 @@ bool QueueLifecycleController::dequeueReadySlot(std::unique_lock<std::mutex>& lo
 
   slotIndex = readySlots->front();
   auto& slot = submissionBinding_.slots[slotIndex];
+  recordNoEnqueueWaitGapToEncodeDequeue();
   encodeDequeue(slotIndex, slot.seqId, [&] {
     readySlots->pop_front();
     slot.state = ChunkSlot::State::Encoding;
@@ -1149,10 +1187,24 @@ void QueueLifecycleController::submit(QueueSubmissionRecord& record) {
   // commandBufferChainLength > 1, completion of the tail is the public seqId
   // completion point because earlier sub-CBs were committed in encodeChunk on
   // the same Metal queue.
+  recordNoEnqueueWaitGapToCommandBufferCommit();
   commitCommandBuffer();
 
   {
     std::lock_guard lock(pendingCompletionMutex_);
+    const bool completionWaitActive = completionWaitActive_;
+    const auto enqueueTime = std::chrono::steady_clock::now();
+    if (!completionWaitActive &&
+        lastNoEnqueueCompletionWaitEnd_ != std::chrono::steady_clock::time_point{}) {
+      perf::countCompletionNoEnqueueWaitToNextEnqueue(
+          static_cast<std::uint64_t>(std::chrono::duration_cast<std::chrono::nanoseconds>(
+              enqueueTime - lastNoEnqueueCompletionWaitEnd_).count()),
+          preparedDiagnostics.hasPresent);
+      lastNoEnqueueCompletionWaitEnd_ = {};
+      noEnqueueGapCommitPublishRecorded_ = false;
+      noEnqueueGapEncodeDequeueRecorded_ = false;
+      noEnqueueGapCommandBufferCommitRecorded_ = false;
+    }
     PendingCompletion pending;
     pending.commandBuffer = std::move(record.commandBuffer);
     pending.diagnostics = preparedDiagnostics;
@@ -1160,13 +1212,20 @@ void QueueLifecycleController::submit(QueueSubmissionRecord& record) {
     pending.slotIndex = record.slotIndex;
     pending.seqId = record.seqId;
     pending.commandBufferChainLength = record.commandBufferChainLength;
-    pending.enqueueTime = std::chrono::steady_clock::now();
+    pending.enqueueTime = enqueueTime;
     pending.renderEncoderGpuSampleBuffer =
         std::move(record.renderEncoderGpuSampleBuffer);
     pending.renderEncoderGpuSamples =
         std::move(record.renderEncoderGpuSamples);
     pending.completionCallbacks = std::move(record.completionCallbacks);
     pendingCompletion_.push_back(std::move(pending));
+    const auto pendingDepthAfterPush = pendingCompletion_.size();
+    if (completionWaitActive) {
+      ++completionWaitEnqueues_;
+    }
+    perf::countCompletionEnqueue(static_cast<std::uint64_t>(pendingDepthAfterPush),
+                                 completionWaitActive,
+                                 preparedDiagnostics.hasPresent);
 #ifndef NDEBUG
     assertPendingCompletionInvariantsLocked();
 #endif
@@ -1202,13 +1261,35 @@ bool QueueLifecycleController::processOnePendingCompletion(bool& stop) {
   // Block until GPU completes — upstream dxmt's WaitForFinishThread pattern.
   if (pending.commandBuffer &&
       dequeueStatus <= WMTCommandBufferStatusScheduled) {
+    {
+      std::lock_guard lock(pendingCompletionMutex_);
+      completionWaitActive_ = true;
+      completionWaitEnqueues_ = 0;
+    }
     const auto started = std::chrono::steady_clock::now();
     pending.commandBuffer.waitUntilCompleted();
-    const auto elapsed = std::chrono::steady_clock::now() - started;
+    const auto completed = std::chrono::steady_clock::now();
+    const auto elapsed = completed - started;
     const auto elapsedNs = static_cast<std::uint64_t>(
         std::chrono::duration_cast<std::chrono::nanoseconds>(elapsed).count());
+    std::uint64_t enqueuesDuringWait = 0;
+    {
+      std::lock_guard lock(pendingCompletionMutex_);
+      enqueuesDuringWait = completionWaitEnqueues_;
+      completionWaitActive_ = false;
+      completionWaitEnqueues_ = 0;
+      if (enqueuesDuringWait == 0) {
+        lastNoEnqueueCompletionWaitEnd_ = completed;
+        noEnqueueGapCommitPublishRecorded_ = false;
+        noEnqueueGapEncodeDequeueRecorded_ = false;
+        noEnqueueGapCommandBufferCommitRecorded_ = false;
+      }
+    }
     perf::countCompletionWaitStatus(elapsedNs,
                                     static_cast<std::uint64_t>(dequeueStatus));
+    perf::countCompletionWaitOverlap(elapsedNs,
+                                     enqueuesDuringWait,
+                                     pending.diagnostics.hasPresent);
     perf::countCompletionWait(
         elapsedNs,
         pending.diagnostics.hasDraw,

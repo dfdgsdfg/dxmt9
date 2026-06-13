@@ -535,11 +535,11 @@ flowchart TD
   GPU --> TFFP["DXMT9_TILE_FFP<br/>implemented but narrow/default-off FFP tile path"]
 
   %% CPU side
-  Base --> CPU{{"CPU / pacing cost\ncurrent low-overhead: completion_wait 45.2s,\ncommit_chunk replay 19.3s,\nencode_draw 16.4s,\nsnapshot 6.7s\n(average-FPS owner with P4 wait)"}}
+  Base --> CPU{{"CPU / pacing cost\ncurrent low-overhead: completion_wait 44.8s,\ncommit_chunk replay 19.5s,\nencode_draw 16.5s,\nsnapshot 6.8s\n(hard under-pipelined P4)"}}
   CPU --> SNAP["[[snapshot-cache]]<br/>D3D9 draw-state rebuild\n(historical owner, now residual)"]
   CPU --> SCE["[[state-churn-encode]]<br/>stream/IB churn and commit_chunk replay"]
   CPU --> CU["[[const-upload]]<br/>cbuf/argbuf traffic (CPU amplifier)"]
-  CPU --> PP["[[present-pacing]]<br/>completion_wait dominated by present completion<br/>current direct path already immediate"]
+  CPU --> PP["[[present-pacing]]<br/>completion_wait dominated by present completion<br/>current direct path already immediate<br/>no next-CB enqueue during wait<br/>publish p50 16.6ms, commit p50 36.5ms after wait"]
   SCE --> SNAP
   PP --> SCE
 
@@ -573,7 +573,7 @@ flowchart LR
   P1 --> P1r["→ [[render-pass-store]] (re-entry real; A/B/A immediate target reuse; coalescing open)"]
   P2 --> P2r["→ [[state-churn-encode]] + [[snapshot-cache]] (CPU wins, replay split, GPU flat)"]
   P3 --> P3r["→ [[const-upload]] (CPU bytes ↓ 4.6GB→1GB, GPU flat)"]
-  P4 --> P4r["completion_wait is present-completion paced\ncurrent direct path already immediate\nwatcher backlog rejected\ncurrent owner = P2/P3 + P4 collapse"]
+  P4 --> P4r["completion_wait is present-completion paced\ncurrent direct path already immediate\nwatcher backlog rejected\n1799/1799 waits have no next-CB enqueue\nwait-end→publish/commit p50 16.6/36.5ms\ncurrent owner = pipeline-depth recovery + P2/P3"]
 
   classDef p0 fill:#ffe8e8,stroke:#b64242,color:#2b0d0d
   classDef p1 fill:#fff0d6,stroke:#b26b00,color:#2b1900
@@ -973,8 +973,23 @@ proof.
   `commit_chunk_queue_draw_submission_cpu_ms=4.596ms/present`,
   and `d3d9_snapshot_draw_submission_cpu_ms=3.748ms/present`. Immediate
   presents, `present_boundary_wait_ms=0`, and `completion_pending_depth_max=0`
-  mean P4 is the observed wait bucket, while the practical lever is P2/P3 CPU
-  cadence. After the accepted cbuf identity, packet-cache, and snapshot hash
+  mean P4 is the observed wait bucket. The follow-up overlap scout
+  `app-d3d9-3dmark05-pipeline-overlap-r1-20260613` makes the mechanism sharper:
+  `completion_wait_with_enqueue_ms=0`,
+  `completion_wait_without_enqueue_ms=44789.044`,
+  `completion_enqueue_while_waiting=0`,
+  `completion_enqueue_pending_depth_max=1`, and
+  `completion_dequeue_age_p50/p95_ms=0.044/0.065`. The gap follow-up
+  `app-d3d9-3dmark05-pipeline-gap-r1-20260613` then shows wait-end to next
+  enqueue p50/p95/p99 `20.501/54.643/63.634ms`. The stage split
+  `app-d3d9-3dmark05-pipeline-stage-r1-20260613` refines that edge:
+  wait-end to `CommitPublish` p50/p95 `16.645/30.880ms`,
+  `EncodeDequeue` `20.116/35.167ms`, Metal commit `36.470/55.470ms`, and
+  pending enqueue `36.502/55.508ms`. The current wallclock owner is therefore
+  hard under-pipelining at the P4 boundary plus P2/P3 CPU cadence that runs
+  after the exposed wait instead of feeding a next command buffer during it.
+  After the
+  accepted cbuf identity, packet-cache, and snapshot hash
   work, `snapshot.09` was
   `completion_wait_ms=39978.924`, `encode_draw_cpu_ms=17711.215`, and
   `d3d9_snapshot_draw_submission_cpu_ms=7196.881` over `1740` presents. The

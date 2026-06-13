@@ -28,7 +28,8 @@ GPU frame-time story is owned by [[hidden-backend-storage]] /
 | H6 | Reducing per-CB encode below the vsync budget (<= 16.67 ms / CB) restores fps without changing pacing policy | open, with CPU wins | [[present-pacing-encode-budget.01]] sized the gap; [[present-pacing-bind-cache-work-a.01]] rejected broad bind-cache as the main lever; cbuf identity repoint, plan-direct binding-packet cache, component-hash reuse, usage-aware payload hashing, and FFP known-zero usage are accepted CPU wins. Latest [[snapshot-cache-snapshot.09]] sample is still not a vsync-on fps proof: `completion_wait_ms=39978.924`, `encode_draw_cpu_ms=17711.215`, and `d3d9_snapshot_draw_submission_cpu_ms=7196.881` over `1740` presents. [[state-churn-encode-encode-phase.09]] splits argbuf open: reserve `745.942ms`, `setArgumentBuffer=115.192ms`, table bind `192.913ms`, table-bind skip `0`; [[state-churn-encode-encode-phase.10]] then cuts reserve by `-51.95%` and `encode_draw_cpu_ms` by `-3.87%` in a same-present A/B. [[state-churn-encode-encode-phase.11]] rejects dirty-category identity repoint (`0` hits). [[state-churn-encode-encode-phase.12]] splits `stream_bind` into texture/sampler (`1065ms`), index (`670ms`), shader stream (`497ms`), and raster (`389ms`) phases; [[state-churn-encode-encode-phase.13]] narrows texture/sampler to fragment resolve (`575ms`) and fragment direct bind (`317ms`); [[state-churn-encode-encode-phase.14]] accepts sampler pre-handle skip as a CPU win (`texture_sampler` -18.84%, `encode_draw` -117ms); [[state-churn-encode-encode-phase.15]] then reuses the packet sampler-state hash (`fragment_direct` -68ms, texture/sampler parent -69.6ms); [[state-churn-encode-encode-phase.16]] rejects texture pre-resolve skip as a default win (`1.206M` skips but texture/sampler parent +48ms), removes the rejected branch, and verifies texture/sampler parent returns to baseline (`822.864 -> 821.007`). The next no-gputrace targets remain named encode buckets plus residual snapshot hash/indexed-fallback work. |
 | H7 | A user-opt-in vsync-off env recovers fps without a code-side encode optimisation | accepted historically; not load-bearing for current GT1 direct path | [[present-pacing-vsync-off.01]] measured a full-workload wallclock win when the present path was sync-paced. Current [[present-pacing-current-immediate.02]] shows both default and `DXMT9_DISABLE_VSYNC=1` already use `present_schedule_immediate=1680`, frame p50/p95 are flat, and `present_schedule_after_minimum_duration=0`. |
 | H8 | Completion wait is caused by completion watcher backlog | rejected | [[present-pacing-completion-watcher-status.03]]: `completion_pending_depth_max=0`, dequeue age p50/p95 `0.041/0.067ms`, and `completion_dequeue_status_completed=0`. The watcher is not late; it waits on just-committed command buffers. |
-| H9 | Current average FPS should be attacked through P2/P3 CPU cadence plus P4 present-completion wait, not hot-frame GPU locality first | accepted gate split | [[present-pacing-current-fps-owner.04]]: current low-overhead scout has sampled FPS p50/p95 `18.102/26.630`, frame wall p50/p95 `55.242/84.648ms`, `completion_present_wait_ms=25.091ms/present`, `gpu_command_buffer_time_ms=3.113ms/present`, immediate presents only, `present_boundary_wait_ms=0`, and `completion_pending_depth_max=0`. GPU locality remains a hot-frame/ceiling lane, but average FPS requires P2/P3 wins to collapse the P4 wait. |
+| H9 | Current average FPS should be attacked through P2/P3 CPU cadence plus P4 present-completion wait, not hot-frame GPU locality first | accepted gate split | [[present-pacing-current-fps-owner.04]]: current low-overhead scout has sampled FPS p50/p95 `18.102/26.630`, frame wall p50/p95 `55.242/84.648ms`, `completion_present_wait_ms=25.091ms/present`, `gpu_command_buffer_time_ms=3.113ms/present`, immediate presents only, `present_boundary_wait_ms=0`, and `completion_pending_depth_max=0`. GPU locality remains a hot-frame/ceiling lane, but average FPS requires P2/P3 wins and P4 pipeline-depth recovery. |
+| H10 | Completion wait is overlapped by next-frame enqueue/encode work | rejected; hard under-pipelining accepted | [[present-pacing-pipeline-overlap.05]]: `1799 / 1799` waits have no later CB enqueue during `waitUntilCompleted()`, `completion_wait_with_enqueue_ms=0`, `completion_wait_without_enqueue_ms=44789.044`, `completion_enqueue_while_waiting=0`, and enqueue-side pending depth max is only `1`. Stage run: wait-end -> publish/encode-dequeue/Metal-commit/enqueue p50 `16.645/20.116/36.470/36.502ms`, so producer and encode work both run after the wait instead of hiding under it. |
 
 ## Verification methods
 
@@ -53,6 +54,13 @@ GPU frame-time story is owned by [[hidden-backend-storage]] /
   `completion_wait_status_*` split completion wait between dxmt9's pending
   queue and Metal command-buffer status. A backlog diagnosis requires
   non-trivial dequeue age or pending depth; current GT1 has neither.
+- **Completion overlap counters**: `completion_wait_with_enqueue_ms`,
+  `completion_wait_without_enqueue_ms`, `completion_enqueue_while_waiting`,
+  `completion_enqueue_pending_depth_max`, and
+  `completion_no_enqueue_wait_to_next_enqueue_p*_ms` decide whether completion
+  wait is hidden behind later command-buffer production. Current GT1 has no
+  overlap: every wait is a no-enqueue wait, followed by a non-trivial
+  wait-end to next-enqueue gap.
 - **Env-knob A/B**: parent shell prefix
   (`DXMT9_LAYER_DISPLAY_SYNC=0 bash scripts/tools/run_3dmark05_perf_probe.sh
   --no-gputrace --suffix <name>`). The wrapper's `env "${env_args[@]}"
@@ -80,6 +88,7 @@ flowchart TD
   CurrentImmediate["current-immediate.02\nGT1 direct already immediate;\nDISABLE_VSYNC flat"]
   CompletionStatus["completion-watcher-status.03\nno pending backlog;\nwait mostly from Committed CB"]
   CurrentOwner["current-fps-owner.04\nFPS owner split\nP2/P3 CPU cadence + P4 wait"]
+  PipelineOverlap["pipeline-overlap.05\n1799/1799 waits have no later enqueue\npublish p50 16.6ms, commit p50 36.5ms after wait"]
   FrameLatency["frame-latency.01\nMAX_FRAME_LATENCY=3 + CAP=0\n(rejected: Δ +0.07%)"]
   AsyncAcq["async-acquire.01\nPRESENT_ASYNC_ACQUIRE=1\n(rejected: axis < 0.5% of wait)"]
   EncodeBudget["encode-budget.01\nencode_chunk p50 20.45 ms\nvs 16.67 ms vsync slot\n(attribution accepted)"]
@@ -115,7 +124,8 @@ flowchart TD
   DSync --> CurrentImmediate
   CurrentImmediate --> CompletionStatus
   CompletionStatus --> CurrentOwner
-  CurrentOwner --> EncodeBudget
+  CurrentOwner --> PipelineOverlap
+  PipelineOverlap --> EncodeBudget
   FrameLatency --> EncodeBudget
   AsyncAcq --> EncodeBudget
   EncodeBudget --> FixProposal
@@ -145,7 +155,7 @@ flowchart TD
   TexturePreResolve --> Remaining
   Remaining --> SCE
 
-  class DSync,EncodeBudget,CurrentImmediate,CompletionStatus,CurrentOwner accepted
+  class DSync,EncodeBudget,CurrentImmediate,CompletionStatus,CurrentOwner,PipelineOverlap accepted
   class FrameLatency,AsyncAcq,WorkA,StateNoop,DirtyIdentity,TexturePreResolve rejected
   class FixProposal,Remaining,SCE proposed
   class Attribution,NextSplit,CleanGate,ReopenMask,Identity,IdentitySmoke,PacketSplit,PlanDirect,SnapshotSplit,SnapshotHash,PayloadSplit,UsageHash,FfpZero,ArgbufOpen,FastAppend,StreamBindSplit,TextureSplit,SamplerSkip,SamplerHash accepted
@@ -354,6 +364,16 @@ flowchart TD
   `present_boundary_wait_ms=0`, and `completion_pending_depth_max=0`. Work the
   average-FPS lane through P2/P3 CPU cadence plus P4 wait collapse; keep
   `.gputrace` for hot-frame GPU locality/ceiling proof.
+- [[present-pacing-pipeline-overlap.05]] — ACCEPTED REFINEMENT.
+  The current P4 wait is hard under-pipelined rather than hidden behind next
+  work: `1799 / 1799` waits have no later command-buffer enqueue during
+  `waitUntilCompleted()`, `completion_wait_with_enqueue_ms=0`,
+  `completion_wait_without_enqueue_ms=44789.044`, and
+  `completion_enqueue_while_waiting=0`. The stage run adds that next
+  `CommitPublish`/`EncodeDequeue`/Metal commit/enqueue arrive only after
+  completion, with p50 `16.645/20.116/36.470/36.502ms`. P2/P3 wins should now
+  be judged by whether they create overlap (`completion_wait_with_enqueue_ms`)
+  or shrink the exposed no-enqueue wait and post-wait publish/encode gap.
 
 ## Cross-links
 
@@ -383,9 +403,9 @@ flowchart TD
   which is why the average frame slips a vsync slot.
 - Current low-overhead FPS attribution splits the lanes: P4
   `completion_present_wait_ms` is still the observed wallclock bucket, but the
-  practical lever is reducing P2/P3 work that feeds present-bearing command
-  buffers. Hot-frame GPU locality remains open as a ceiling problem, not the
-  first average-FPS lever.
+  current failure mode is hard under-pipelining: no next command buffer is
+  enqueued while the watcher waits. Hot-frame GPU locality remains open as a
+  ceiling problem, not the first average-FPS lever.
 
 **Open target**
 

@@ -485,6 +485,9 @@ class QueueLifecycleController {
   CommandBufferDiagnostics summarizeSubmission(
       u64 seqId,
       size_t slotIndex) const;
+  void recordNoEnqueueWaitGapToCommitPublish();
+  void recordNoEnqueueWaitGapToEncodeDequeue();
+  void recordNoEnqueueWaitGapToCommandBufferCommit();
   void observeTransition(const QueueTransitionRecord& record) const;
   void enqueuePresent(size_t slotIndex,
                       u64 eventSeqId,
@@ -595,6 +598,12 @@ class QueueLifecycleController {
   std::mutex pendingCompletionMutex_{};
   std::condition_variable pendingCompletionCv_{};
   std::deque<PendingCompletion> pendingCompletion_{};
+  bool completionWaitActive_ = false;
+  std::uint64_t completionWaitEnqueues_ = 0;
+  std::chrono::steady_clock::time_point lastNoEnqueueCompletionWaitEnd_{};
+  bool noEnqueueGapCommitPublishRecorded_ = false;
+  bool noEnqueueGapEncodeDequeueRecorded_ = false;
+  bool noEnqueueGapCommandBufferCommitRecorded_ = false;
 };
 
 class CompletionTracker {
