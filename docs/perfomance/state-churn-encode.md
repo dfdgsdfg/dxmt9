@@ -66,6 +66,7 @@ bottleneck — that is owned by [[hidden-backend-storage]].
 | H46 | Using the generation/lane stamp as a compat fast path removes the compat scan bucket | accepted CPU win | [[state-churn-encode-encode-phase.34]] (`compat_scan` `557.621ms→44.923ms`; `draw_batch_submit` `3491.771ms→3070.200ms`) |
 | H47 | Filling queued `DrawRunSubmission` entries in place removes a first-order queue copy | accepted small CPU win; rejected as first-order | [[state-churn-encode-encode-phase.35]] (`queue-snapshot residual` `2286.890ms→2193.875ms`; total queue `-0.60%`) |
 | H48 | Reusing a device-owned pending submission vector removes per-chunk allocation churn | rejected-current | [[state-churn-encode-encode-phase.36]] (`queue-snapshot residual` `2193.875ms→2200.657ms`; scratch branch removed) |
+| H49 | Reusing draw binding snapshot scratch removes per-group vector allocation churn | accepted small CPU win | [[state-churn-encode-encode-phase.37]] (`batch_binding_snapshot` `0.119755→0.089566ms/present`; total replay flat) |
 
 ## Verification methods
 
@@ -190,6 +191,7 @@ flowchart TD
   EncodePhase34["encode-phase.34\ngeneration/lane fast path\ncompat scan -91.9%\nqueue still copy-bound"]:::accepted
   EncodePhase35["encode-phase.35\nin-place submission fill\nresidual -93ms\nnot first-order"]:::accepted
   EncodePhase36["encode-phase.36\npersistent pending scratch\nno residual win\nremoved"]:::rejected
+  EncodePhase37["encode-phase.37\nTLS binding snapshot scratch\nsnapshot bucket -27.3%\nreplay flat"]:::accepted
   Snapshot10["snapshot.10\nuniform-refresh fast path\nrefresh -59.6%\nFPS flat"]:::accepted
 
   Drawrun1 -->|"split-into"| Drawrun2
@@ -250,6 +252,7 @@ flowchart TD
   EncodePhase33 -->|"skip proven deep compares"| EncodePhase34
   EncodePhase34 -->|"remove temporary submission move"| EncodePhase35
   EncodePhase35 -->|"test vector capacity reuse"| EncodePhase36
+  EncodePhase36 -->|"fix submit scratch allocation"| EncodePhase37
 ```
 
 ## Results synthesis
@@ -654,6 +657,18 @@ slightly worsened. The scratch branch was removed. This closes F2 allocation
 churn as a near-term owner; the next queue work should target snapshot/cache
 lookup, state/layout copy width, and same-generation copy elision rather than
 per-chunk vector capacity.
+
+[[state-churn-encode-encode-phase.37]] accepts the narrower F6 hygiene fix but
+not as a first-order owner. `submitDrawRun()` and `submitDrawRunBatch()` no
+longer create local `DrawBindingSnapshot` / `DrawParamPayloadView` vectors under
+the submit hot path; they reuse thread-local scratch so payload spans remain
+valid even if queue chunk commit temporarily releases the queue mutex. The
+batch binding-snapshot bucket drops `0.119755 -> 0.089566ms/present`, and the
+non-batch snapshot bucket drops `0.054349 -> 0.043882ms/present`. The broader
+`commit_chunk_replay_cpu_ms` and `commit_chunk_queue_draw_submission_cpu_ms`
+stay flat within run noise on a per-present basis, so this closes F6 as perf
+hygiene and leaves the large owners unchanged: snapshot/cache lookup,
+uniform/hash work, state/layout copy width, and same-generation copy elision.
 
 ## How to run
 Every experiment here is a 3DMark05 GT1 run via the standard wrapper. This is a

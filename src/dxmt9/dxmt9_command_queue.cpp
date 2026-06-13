@@ -832,6 +832,38 @@ void countDrawSubmissionAdjacentStateGenerations(
   }
 }
 
+struct DrawSubmitScratch {
+  std::vector<core::DrawBindingSnapshot> bindingSnapshots;
+  std::vector<core::DrawParamPayloadView> snapshotPayloads;
+  bool inUse = false;
+};
+
+DrawSubmitScratch& drawSubmitScratch() {
+  static thread_local DrawSubmitScratch scratch;
+  return scratch;
+}
+
+class ScopedDrawSubmitScratchUse {
+public:
+  explicit ScopedDrawSubmitScratchUse(DrawSubmitScratch& scratch) noexcept
+      : scratch_(scratch) {
+    DXMT_ASSERT(!scratch_.inUse);
+    scratch_.inUse = true;
+  }
+
+  ~ScopedDrawSubmitScratchUse() {
+    scratch_.bindingSnapshots.clear();
+    scratch_.snapshotPayloads.clear();
+    scratch_.inUse = false;
+  }
+
+  ScopedDrawSubmitScratchUse(const ScopedDrawSubmitScratchUse&) = delete;
+  ScopedDrawSubmitScratchUse& operator=(const ScopedDrawSubmitScratchUse&) = delete;
+
+private:
+  DrawSubmitScratch& scratch_;
+};
+
 void prepareDrawRunBatchBindingOverrides(
     std::span<core::DrawRunSubmission> submissions) noexcept {
   if (submissions.empty()) {
@@ -1268,6 +1300,10 @@ void CommandQueue::submitDrawRun(core::CanonicalDrawState state,
   if (draws.empty()) {
     return;
   }
+  auto& scratch = drawSubmitScratch();
+  ScopedDrawSubmitScratchUse scratchUse(scratch);
+  scratch.bindingSnapshots.reserve(draws.size());
+  scratch.snapshotPayloads.reserve(draws.size());
   // Per-draw-run hot entry. Heap-allocation invariant per
   // codebase_conventions.rules.md; debug-only guard, no-op unless
   // DXMT_DEBUG_NO_PER_DRAW_ALLOC=1 build flag and env are both set.
@@ -1277,8 +1313,6 @@ void CommandQueue::submitDrawRun(core::CanonicalDrawState state,
   }
   PerfScope scope(perf::countSubmitDrawCpuTime);
   std::unique_lock lock(mutex_);
-  std::vector<core::DrawBindingSnapshot> bindingSnapshots;
-  std::vector<core::DrawParamPayloadView> snapshotPayloads;
   std::span<const core::DrawParamPayloadView> effectivePayloads{};
   {
     PerfScope stageScope(perf::countSubmitDrawRunBindingSnapshotCpuTime);
@@ -1287,8 +1321,8 @@ void CommandQueue::submitDrawRun(core::CanonicalDrawState state,
                                        state.hot,
                                        draws,
                                        payloads,
-                                       bindingSnapshots,
-                                       snapshotPayloads);
+                                       scratch.bindingSnapshots,
+                                       scratch.snapshotPayloads);
   }
   std::size_t pendingPayloadBytes = 0;
   {
@@ -1325,6 +1359,9 @@ void CommandQueue::submitDrawRunBatch(
   if (submissions.empty()) {
     return;
   }
+  auto& scratch = drawSubmitScratch();
+  ScopedDrawSubmitScratchUse scratchUse(scratch);
+  scratch.bindingSnapshots.reserve(submissions.size());
   DXMT_DEBUG_NO_HEAP_ALLOC_SCOPE("submitDrawRunBatch");
   for (std::size_t i = 0; i < submissions.size(); ++i) {
     perf::countSubmitDraw();
@@ -1347,10 +1384,9 @@ void CommandQueue::submitDrawRunBatch(
       PerfScope stageScope(perf::countSubmitDrawRunBatchBindingOverrideCpuTime);
       prepareDrawRunBatchBindingOverrides(batch);
     }
-    std::vector<core::DrawBindingSnapshot> bindingSnapshots;
     {
       PerfScope stageScope(perf::countSubmitDrawRunBatchBindingSnapshotCpuTime);
-      snapshotDrawSubmissionBindingPayloads(pool_, batch, bindingSnapshots);
+      snapshotDrawSubmissionBindingPayloads(pool_, batch, scratch.bindingSnapshots);
     }
     std::size_t pendingPayloadBytes = 0;
     {
