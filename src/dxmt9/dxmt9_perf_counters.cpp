@@ -5486,6 +5486,48 @@ std::uint64_t encoderBreakdownSeqFilter() {
   return value;
 }
 
+namespace {
+
+std::uint64_t parseEnvU64(const char* name) {
+  const char* env = std::getenv(name);
+  if (!env || env[0] == '\0') {
+    return 0;
+  }
+  char* end = nullptr;
+  const auto parsed = std::strtoull(env, &end, 10);
+  return end != env ? static_cast<std::uint64_t>(parsed) : 0;
+}
+
+}  // namespace
+
+bool encoderBreakdownSeqAllowed(std::uint64_t seq) {
+  const auto exact = encoderBreakdownSeqFilter();
+  if (exact != 0) {
+    return seq == exact;
+  }
+  static const std::uint64_t minSeq =
+      parseEnvU64("DXMT9_PERF_ENCODER_BREAKDOWN_SEQ_MIN");
+  static const std::uint64_t maxSeq =
+      parseEnvU64("DXMT9_PERF_ENCODER_BREAKDOWN_SEQ_MAX");
+  if (minSeq != 0 && seq < minSeq) {
+    return false;
+  }
+  if (maxSeq != 0 && seq > maxSeq) {
+    return false;
+  }
+  return minSeq == 0 || maxSeq == 0 || minSeq <= maxSeq;
+}
+
+bool encoderBreakdownSeqFilterActive() {
+  if (encoderBreakdownSeqFilter() != 0) {
+    return true;
+  }
+  static const bool value =
+      parseEnvU64("DXMT9_PERF_ENCODER_BREAKDOWN_SEQ_MIN") != 0 ||
+      parseEnvU64("DXMT9_PERF_ENCODER_BREAKDOWN_SEQ_MAX") != 0;
+  return value;
+}
+
 void emitEncoderBreakdown(const EncoderBreakdown& b) {
   if (!encoderBreakdownEnabled()) {
     return;

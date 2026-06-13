@@ -2484,8 +2484,7 @@ struct ActiveEncoderBreakdown {
 
   void begin(u64 seqId, u64 encoderIndex, u64 rtHandle, u64 depthHandle) {
     enabled = perf::encoderBreakdownEnabled();
-    const auto seqFilter = perf::encoderBreakdownSeqFilter();
-    if (enabled && seqFilter != 0 && seqId != seqFilter) {
+    if (enabled && !perf::encoderBreakdownSeqAllowed(seqId)) {
       enabled = false;
     }
     stats = {};
@@ -12276,7 +12275,7 @@ bool encodeDraw(EncodeContext& ctx,
       // the selected frame. Otherwise measurement can slow 3DMark05 enough to
       // change which semantic workload a frame/encoder row represents.
       const bool indexedDiagnosticSeqScopeActive =
-          perf::encoderBreakdownSeqFilter() == 0u || encoderBreakdownActive;
+          !perf::encoderBreakdownSeqFilterActive() || encoderBreakdownActive;
       const bool reverseAllIndexedTriangles = debug::probeReverseIndexedTriangles();
       const bool reverseOpaqueIndexedTriangles =
           debug::probeReverseOpaqueIndexedTriangles();
@@ -12423,7 +12422,7 @@ bool encodeDraw(EncodeContext& ctx,
       const bool measureProductionCacheOptPrelookup =
           cacheOptPrelookupPositive &&
           encoderBreakdownActive &&
-          perf::encoderBreakdownSeqFilter() != 0u;
+          perf::encoderBreakdownSeqFilterActive();
       const bool measureCacheOptCandidate =
           triangleList &&
           (explicitMeasureCacheOptCandidate ||
@@ -12883,7 +12882,7 @@ bool encodeDraw(EncodeContext& ctx,
             !scissorRectProbeConsidered &&
             !optimizedConsidered;
         const bool emitIndexedProbeDrawLine =
-            !productionCacheOptOnly || perf::encoderBreakdownSeqFilter() != 0u;
+            !productionCacheOptOnly || perf::encoderBreakdownSeqFilterActive();
         const auto originalIndexReuse =
             measureProbeIndexLocality ? originalIndexReuseForProbe
                                       : IndexReuseMeasure{.references = vertexCount};

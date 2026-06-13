@@ -15,6 +15,8 @@ from pathlib import Path
 REPO_ROOT = Path(__file__).resolve().parents[2]
 RUN_WRAPPER = REPO_ROOT / "scripts" / "tools" / "run_3dmark05_perf_probe.sh"
 FINALIZER = REPO_ROOT / "scripts" / "tools" / "finalize_3dmark05_perf_probe.sh"
+CAPTURE_LAYER_WRAPPER = REPO_ROOT / "scripts" / "tools" / "run_with_wine_metal_capture_layer.sh"
+SYSTEM_TRACE_SIDECAR = REPO_ROOT / "scripts" / "tools" / "run_3dmark05_system_trace_sidecar.sh"
 SUMMARIZER = REPO_ROOT / "scripts" / "tools" / "summarize_3dmark05_perf.py"
 XCODE_SUMMARIZER = REPO_ROOT / "scripts" / "tools" / "summarize_xcode_encoder_counters.py"
 RUN_EXPERIMENT = REPO_ROOT / "scripts" / "run_apps" / "run_experiment.py"
@@ -41,6 +43,153 @@ def write_result(path: Path) -> None:
 
 
 class ThreeDMark05ProbeScriptTests(unittest.TestCase):
+    def write_capture_layer_wine_root(self, path: Path) -> None:
+        bin_dir = path / "bin"
+        bin_dir.mkdir(parents=True, exist_ok=True)
+        originals = {
+            "wine.real": "original wine.real\n",
+            "wine-preloader": "original wine-preloader\n",
+        }
+        captures = {
+            "wine.capture.real": "capture wine.real\nMetalCaptureEnabled\n",
+            "wine.capture.real-preloader": "capture wine-preloader\nMetalCaptureEnabled\n",
+        }
+        for name, text in {**originals, **captures}.items():
+            file = bin_dir / name
+            file.write_text(text, encoding="utf-8")
+            file.chmod(0o755)
+
+    def write_system_trace_fake_wrapper(
+        self,
+        path: Path,
+        *,
+        output_dir: Path,
+        trace_dir: Path,
+        actual_marker: Path,
+        session_locked: str = "no",
+        gputrace: str = "disabled",
+        measure_index_reuse: str = "1",
+        actual_sleep_sec: str = "0",
+    ) -> None:
+        path.write_text(
+            f"""#!/usr/bin/env bash
+set -euo pipefail
+dry_run=0
+for arg in "$@"; do
+  if [[ "$arg" == "--dry-run" ]]; then
+    dry_run=1
+  fi
+done
+if (( dry_run )); then
+  cat <<'OUT'
+run_id: app-d3d9-3dmark05-fake-sidecar
+output_dir: {output_dir}
+trace_dir: {trace_dir}
+summary: {output_dir}/3dmark05-perf-summary.md
+indexed_probe_draws: {output_dir}/3dmark05-perf-indexed-probe-draws.csv
+metal_system_trace: {trace_dir}/metal-system.trace
+metal_gpu_intervals_xml: {trace_dir}/analysis/metal-gpu-intervals.xml
+xctrace_gpu_intervals_summary: {trace_dir}/analysis/xctrace-metal-gpu-intervals-summary.md
+measure_index_reuse: {measure_index_reuse}
+session_locked: {session_locked}
+gputrace: {gputrace}
+OUT
+  exit 0
+fi
+mkdir -p "$(dirname -- {actual_marker})"
+printf '%s\n' "$*" > {actual_marker}
+sleep {actual_sleep_sec}
+exit 0
+""",
+            encoding="utf-8",
+        )
+        path.chmod(0o755)
+
+    def write_system_trace_flipping_fake_wrapper(
+        self,
+        path: Path,
+        *,
+        output_dir: Path,
+        trace_dir: Path,
+        actual_marker: Path,
+        counter_file: Path,
+        locked_dry_runs: int = 1,
+        actual_sleep_sec: str = "0",
+    ) -> None:
+        path.write_text(
+            f"""#!/usr/bin/env bash
+set -euo pipefail
+dry_run=0
+for arg in "$@"; do
+  if [[ "$arg" == "--dry-run" ]]; then
+    dry_run=1
+  fi
+done
+if (( dry_run )); then
+  count=0
+  if [[ -f {counter_file} ]]; then
+    count=$(cat {counter_file})
+  fi
+  count=$((count + 1))
+  mkdir -p "$(dirname -- {counter_file})"
+  echo "$count" > {counter_file}
+  locked=yes
+  if (( count > {locked_dry_runs} )); then
+    locked=no
+  fi
+  cat <<OUT
+run_id: app-d3d9-3dmark05-fake-sidecar
+output_dir: {output_dir}
+trace_dir: {trace_dir}
+summary: {output_dir}/3dmark05-perf-summary.md
+indexed_probe_draws: {output_dir}/3dmark05-perf-indexed-probe-draws.csv
+metal_system_trace: {trace_dir}/metal-system.trace
+metal_gpu_intervals_xml: {trace_dir}/analysis/metal-gpu-intervals.xml
+xctrace_gpu_intervals_summary: {trace_dir}/analysis/xctrace-metal-gpu-intervals-summary.md
+measure_index_reuse: 1
+session_locked: $locked
+gputrace: disabled
+OUT
+  exit 0
+fi
+mkdir -p "$(dirname -- {actual_marker})"
+printf '%s\n' "$*" > {actual_marker}
+sleep {actual_sleep_sec}
+exit 0
+""",
+            encoding="utf-8",
+        )
+        path.chmod(0o755)
+
+    def write_system_trace_fake_xctrace(self, path: Path, marker: Path) -> None:
+        path.write_text(
+            f"""#!/usr/bin/env bash
+set -euo pipefail
+if [[ "${{1:-}}" != "record" ]]; then
+  echo "unexpected xctrace command: $*" >&2
+  exit 2
+fi
+output=
+while (($#)); do
+  case "$1" in
+    --output)
+      output=$2
+      shift 2
+      ;;
+    *)
+      shift
+      ;;
+  esac
+done
+[[ -n "$output" ]] || exit 2
+mkdir -p "$(dirname -- {marker})"
+echo "$output" > {marker}
+mkdir -p "$output"
+""",
+            encoding="utf-8",
+        )
+        path.chmod(0o755)
+
     def run_script(
         self,
         script: Path,
@@ -292,6 +441,41 @@ class ThreeDMark05ProbeScriptTests(unittest.TestCase):
 
         self.assertEqual(result.returncode, 2)
         self.assertIn("--timeout must be positive numeric seconds", result.stderr)
+
+    def test_wrapper_rejects_locked_session_before_actual_probe(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            fake_bin = root / "bin"
+            fake_bin.mkdir()
+            fake_ioreg = fake_bin / "ioreg"
+            fake_ioreg.write_text(
+                """#!/usr/bin/env bash
+cat <<'OUT'
+"CGSSessionScreenIsLocked"=Yes
+OUT
+""",
+                encoding="utf-8",
+            )
+            fake_ioreg.chmod(0o755)
+            suffix = f"locked-session-{root.name}"
+            output_dir = REPO_ROOT / "experiments" / "output" / f"app-d3d9-3dmark05-{suffix}"
+            trace_dir = REPO_ROOT / "traces" / f"app-d3d9-3dmark05-{suffix}"
+
+            result = self.run_script(
+                RUN_WRAPPER,
+                "--suffix",
+                suffix,
+                "--no-gputrace",
+                "--timeout",
+                "120",
+                env={"PATH": f"{fake_bin}{os.pathsep}{os.environ.get('PATH', '')}"},
+            )
+
+            self.assertEqual(result.returncode, 2)
+            self.assertIn("session_locked: yes", result.stdout)
+            self.assertIn("macOS session is locked", result.stderr)
+            self.assertFalse(output_dir.exists())
+            self.assertFalse(trace_dir.exists())
 
     def test_catalogue_runner_rejects_disabled_timeout_for_3dmark05(self) -> None:
         result = self.run_script(
@@ -1293,6 +1477,37 @@ class ThreeDMark05ProbeScriptTests(unittest.TestCase):
         self.assertIn("DXMT9_PERF_ENCODER_BREAKDOWN=1", result.stdout)
         self.assertNotIn("DXMT9_PERF_ENCODER_BREAKDOWN_SEQ=", result.stdout)
 
+    def test_wrapper_dry_run_supports_encoder_breakdown_seq_range(self) -> None:
+        result = self.run_script(
+            RUN_WRAPPER,
+            "--frame",
+            "50",
+            "--encoder-breakdown-seq-range",
+            "1000:1700",
+            "--dry-run",
+        )
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("DXMT9_PERF_ENCODER_BREAKDOWN=1", result.stdout)
+        self.assertIn("DXMT9_PERF_ENCODER_BREAKDOWN_SEQ_MIN=1000", result.stdout)
+        self.assertIn("DXMT9_PERF_ENCODER_BREAKDOWN_SEQ_MAX=1700", result.stdout)
+        self.assertNotIn("DXMT9_PERF_ENCODER_BREAKDOWN_SEQ=50", result.stdout)
+
+    def test_wrapper_rejects_exact_and_range_encoder_breakdown(self) -> None:
+        result = self.run_script(
+            RUN_WRAPPER,
+            "--frame",
+            "50",
+            "--encoder-breakdown-seq",
+            "50",
+            "--encoder-breakdown-seq-range",
+            "1000:1700",
+            "--dry-run",
+        )
+
+        self.assertEqual(result.returncode, 2)
+        self.assertIn("mutually exclusive", result.stderr)
+
     def test_wrapper_no_encoder_breakdown_for_no_gputrace_smoke(self) -> None:
         result = self.run_script(
             RUN_WRAPPER,
@@ -1430,6 +1645,38 @@ class ThreeDMark05ProbeScriptTests(unittest.TestCase):
 
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertIn("DXMT9_MEASURE_INDEX_REUSE=1", result.stdout)
+
+    def test_wrapper_dry_run_prints_xctrace_sidecar_commands(self) -> None:
+        result = self.run_script(
+            RUN_WRAPPER,
+            "--suffix",
+            "xctrace-sidecar",
+            "--no-gputrace",
+            "--measure-index-reuse",
+            "--dry-run",
+        )
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("measure_index_reuse: 1", result.stdout)
+        self.assertIn("metal_system_trace:", result.stdout)
+        self.assertIn("metal_gpu_intervals_xml:", result.stdout)
+        export_line = next(
+            line for line in result.stdout.splitlines()
+            if line.startswith("xctrace_system_trace_export_cmd:")
+        )
+        summary_line = next(
+            line for line in result.stdout.splitlines()
+            if line.startswith("xctrace_system_trace_summary_cmd:")
+        )
+        self.assertIn("xcrun xctrace export", export_line)
+        self.assertIn("metal-system.trace", export_line)
+        self.assertIn("summarize_xctrace_metal_intervals.py", summary_line)
+        self.assertIn("--indexed-probe-draws", summary_line)
+        self.assertIn("--require-xctrace-render-rows", summary_line)
+        self.assertIn("--min-dxmt-join-coverage", summary_line)
+        self.assertIn("--require-indexed-probe-routes", summary_line)
+        self.assertIn("3dmark05-perf-indexed-probe-draws.csv", summary_line)
+        self.assertIn("xctrace-metal-gpu-intervals-summary.md", summary_line)
 
     def test_wrapper_dry_run_includes_index_cache_opt_candidate_env(self) -> None:
         result = self.run_script(
@@ -2954,6 +3201,340 @@ class ThreeDMark05ProbeScriptTests(unittest.TestCase):
 
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertNotIn("MTL_CAPTURE_ENABLED=1", result.stdout)
+
+    def test_capture_layer_wrapper_rejects_3dmark05_by_default(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            wine_root = Path(tmp) / "wine"
+            self.write_capture_layer_wine_root(wine_root)
+
+            result = self.run_script(
+                CAPTURE_LAYER_WRAPPER,
+                "--wine-root",
+                str(wine_root),
+                "--",
+                "/bin/echo",
+                "app-d3d9-3dmark05",
+            )
+
+            self.assertEqual(result.returncode, 2)
+            self.assertIn("refusing 3DMark05 capture-layer run", result.stderr)
+            self.assertEqual(
+                (wine_root / "bin" / "wine.real").read_text(encoding="utf-8"),
+                "original wine.real\n",
+            )
+            self.assertEqual(
+                (wine_root / "bin" / "wine-preloader").read_text(encoding="utf-8"),
+                "original wine-preloader\n",
+            )
+
+    def test_capture_layer_wrapper_allows_explicit_3dmark05_diagnostic(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            wine_root = Path(tmp) / "wine"
+            self.write_capture_layer_wine_root(wine_root)
+
+            result = self.run_script(
+                CAPTURE_LAYER_WRAPPER,
+                "--wine-root",
+                str(wine_root),
+                "--allow-3dmark05",
+                "--",
+                "/bin/echo",
+                "app-d3d9-3dmark05",
+            )
+
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertIn("app-d3d9-3dmark05", result.stdout)
+            self.assertIn("run_with_wine_metal_capture_layer: patched", result.stderr)
+            self.assertIn("run_with_wine_metal_capture_layer: restored", result.stderr)
+            self.assertEqual(
+                (wine_root / "bin" / "wine.real").read_text(encoding="utf-8"),
+                "original wine.real\n",
+            )
+            self.assertEqual(
+                (wine_root / "bin" / "wine-preloader").read_text(encoding="utf-8"),
+                "original wine-preloader\n",
+            )
+
+    def test_system_trace_sidecar_rejects_locked_before_actual_probe(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            fake_wrapper = root / "fake-probe.sh"
+            actual_marker = root / "actual-called"
+            trace_dir = root / "trace"
+            self.write_system_trace_fake_wrapper(
+                fake_wrapper,
+                output_dir=root / "out",
+                trace_dir=trace_dir,
+                actual_marker=actual_marker,
+                session_locked="yes",
+            )
+
+            result = self.run_script(
+                SYSTEM_TRACE_SIDECAR,
+                "--wrapper",
+                str(fake_wrapper),
+                "--",
+                "--suffix",
+                "fake-sidecar",
+            )
+
+            self.assertEqual(result.returncode, 2)
+            self.assertIn("macOS session is locked", result.stderr)
+            self.assertFalse(actual_marker.exists())
+            self.assertFalse(trace_dir.exists())
+
+    def test_system_trace_sidecar_wait_unlocked_times_out_without_artifacts(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            fake_wrapper = root / "fake-probe.sh"
+            actual_marker = root / "actual-called"
+            trace_dir = root / "trace"
+            self.write_system_trace_fake_wrapper(
+                fake_wrapper,
+                output_dir=root / "out",
+                trace_dir=trace_dir,
+                actual_marker=actual_marker,
+                session_locked="yes",
+            )
+
+            result = self.run_script(
+                SYSTEM_TRACE_SIDECAR,
+                "--wrapper",
+                str(fake_wrapper),
+                "--wait-unlocked-sec",
+                "1",
+                "--wait-unlocked-interval-sec",
+                "1",
+                "--",
+                "--suffix",
+                "fake-sidecar",
+            )
+
+            self.assertEqual(result.returncode, 2)
+            self.assertIn("after waiting 1s", result.stderr)
+            self.assertFalse(actual_marker.exists())
+            self.assertFalse(trace_dir.exists())
+
+    def test_system_trace_sidecar_dry_run_prints_record_plan(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            fake_wrapper = root / "fake-probe.sh"
+            actual_marker = root / "actual-called"
+            trace_dir = root / "trace"
+            self.write_system_trace_fake_wrapper(
+                fake_wrapper,
+                output_dir=root / "out",
+                trace_dir=trace_dir,
+                actual_marker=actual_marker,
+            )
+
+            result = self.run_script(
+                SYSTEM_TRACE_SIDECAR,
+                "--wrapper",
+                str(fake_wrapper),
+                "--xctrace-bin",
+                "/bin/false",
+                "--record-delay-sec",
+                "1",
+                "--time-limit-sec",
+                "2",
+                "--summary-top",
+                "7",
+                "--dry-run",
+                "--",
+                "--suffix",
+                "fake-sidecar",
+            )
+
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertIn("system_trace_record_cmd:", result.stdout)
+            self.assertIn("system_trace_summary_cmd:", result.stdout)
+            self.assertIn("--require-xctrace-render-rows", result.stdout)
+            self.assertIn("--min-dxmt-join-coverage", result.stdout)
+            self.assertIn("--require-indexed-probe-routes", result.stdout)
+            self.assertIn("--time-limit 2s", result.stdout)
+            self.assertIn("system_trace_encoder_breakdown: all_frames", result.stdout)
+            self.assertIn("system_trace_summary_top: 7", result.stdout)
+            self.assertFalse(actual_marker.exists())
+            self.assertFalse(trace_dir.exists())
+
+    def test_system_trace_sidecar_rejects_scoped_encoder_breakdown(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            fake_wrapper = root / "fake-probe.sh"
+            actual_marker = root / "actual-called"
+            trace_dir = root / "trace"
+            self.write_system_trace_fake_wrapper(
+                fake_wrapper,
+                output_dir=root / "out",
+                trace_dir=trace_dir,
+                actual_marker=actual_marker,
+            )
+
+            result = self.run_script(
+                SYSTEM_TRACE_SIDECAR,
+                "--wrapper",
+                str(fake_wrapper),
+                "--",
+                "--suffix",
+                "fake-sidecar",
+                "--encoder-breakdown-seq",
+                "60",
+            )
+
+            self.assertEqual(result.returncode, 2)
+            self.assertIn("requires all-frame or range encoder breakdown", result.stderr)
+            self.assertFalse(actual_marker.exists())
+            self.assertFalse(trace_dir.exists())
+
+    def test_system_trace_sidecar_forwards_encoder_breakdown_seq_range(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            fake_wrapper = root / "fake-probe.sh"
+            fake_xctrace = root / "fake-xctrace.sh"
+            actual_marker = root / "actual-called"
+            xctrace_marker = root / "xctrace-called"
+            output_dir = root / "out"
+            trace_dir = root / "trace"
+            self.write_system_trace_fake_wrapper(
+                fake_wrapper,
+                output_dir=output_dir,
+                trace_dir=trace_dir,
+                actual_marker=actual_marker,
+                actual_sleep_sec="1",
+            )
+            self.write_system_trace_fake_xctrace(fake_xctrace, xctrace_marker)
+
+            result = self.run_script(
+                SYSTEM_TRACE_SIDECAR,
+                "--wrapper",
+                str(fake_wrapper),
+                "--xctrace-bin",
+                str(fake_xctrace),
+                "--record-delay-sec",
+                "0",
+                "--time-limit-sec",
+                "1",
+                "--encoder-breakdown-seq-range",
+                "1000:1700",
+                "--skip-export-summary",
+                "--",
+                "--suffix",
+                "fake-sidecar",
+            )
+
+            self.assertEqual(result.returncode, 0, result.stderr)
+            actual_args = actual_marker.read_text(encoding="utf-8")
+            self.assertIn("--encoder-breakdown-seq-range 1000:1700", actual_args)
+            self.assertNotIn("--encoder-breakdown-all-frames", actual_args)
+            self.assertIn(
+                "system_trace_encoder_breakdown: range 1000:1700",
+                result.stdout,
+            )
+
+    def test_system_trace_sidecar_waits_then_records_when_unlocked(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            fake_wrapper = root / "fake-probe.sh"
+            fake_xctrace = root / "fake-xctrace.sh"
+            actual_marker = root / "actual-called"
+            xctrace_marker = root / "xctrace-called"
+            counter_file = root / "dry-run-count"
+            output_dir = root / "out"
+            trace_dir = root / "trace"
+            self.write_system_trace_flipping_fake_wrapper(
+                fake_wrapper,
+                output_dir=output_dir,
+                trace_dir=trace_dir,
+                actual_marker=actual_marker,
+                counter_file=counter_file,
+                locked_dry_runs=1,
+                actual_sleep_sec="1",
+            )
+            self.write_system_trace_fake_xctrace(fake_xctrace, xctrace_marker)
+
+            result = self.run_script(
+                SYSTEM_TRACE_SIDECAR,
+                "--wrapper",
+                str(fake_wrapper),
+                "--xctrace-bin",
+                str(fake_xctrace),
+                "--record-delay-sec",
+                "0",
+                "--time-limit-sec",
+                "1",
+                "--wait-unlocked-sec",
+                "2",
+                "--wait-unlocked-interval-sec",
+                "1",
+                "--skip-export-summary",
+                "--",
+                "--suffix",
+                "fake-sidecar",
+            )
+
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertEqual(counter_file.read_text(encoding="utf-8").strip(), "2")
+            self.assertTrue(actual_marker.exists())
+            self.assertIn(
+                "--encoder-breakdown-all-frames",
+                actual_marker.read_text(encoding="utf-8"),
+            )
+            self.assertEqual(
+                xctrace_marker.read_text(encoding="utf-8").strip(),
+                str(trace_dir / "metal-system.trace"),
+            )
+            self.assertTrue((trace_dir / "metal-system.trace").is_dir())
+
+    def test_system_trace_sidecar_actual_records_when_unlocked(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            fake_wrapper = root / "fake-probe.sh"
+            fake_xctrace = root / "fake-xctrace.sh"
+            actual_marker = root / "actual-called"
+            xctrace_marker = root / "xctrace-called"
+            output_dir = root / "out"
+            trace_dir = root / "trace"
+            self.write_system_trace_fake_wrapper(
+                fake_wrapper,
+                output_dir=output_dir,
+                trace_dir=trace_dir,
+                actual_marker=actual_marker,
+                actual_sleep_sec="1",
+            )
+            self.write_system_trace_fake_xctrace(fake_xctrace, xctrace_marker)
+
+            result = self.run_script(
+                SYSTEM_TRACE_SIDECAR,
+                "--wrapper",
+                str(fake_wrapper),
+                "--xctrace-bin",
+                str(fake_xctrace),
+                "--record-delay-sec",
+                "0",
+                "--time-limit-sec",
+                "1",
+                "--skip-export-summary",
+                "--",
+                "--suffix",
+                "fake-sidecar",
+            )
+
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertTrue(actual_marker.exists())
+            self.assertIn(
+                "--encoder-breakdown-all-frames",
+                actual_marker.read_text(encoding="utf-8"),
+            )
+            self.assertEqual(
+                xctrace_marker.read_text(encoding="utf-8").strip(),
+                str(trace_dir / "metal-system.trace"),
+            )
+            self.assertTrue((trace_dir / "metal-system.trace").is_dir())
+            self.assertTrue(
+                (trace_dir / "analysis" / "system-trace-preflight.log").exists()
+            )
+            self.assertIn("wrote metal system trace:", result.stdout)
 
     def test_wrapper_forwards_const_upload_gates_to_finalizer(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

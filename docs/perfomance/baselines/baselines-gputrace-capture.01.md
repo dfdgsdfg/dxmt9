@@ -7,7 +7,7 @@ title: 3DMark05 gputrace Capture Must Avoid MTL_CAPTURE_ENABLED Startup Black Sc
 date: 2026-06-06
 type: workflow-validation
 status: accepted-capture-workflow-fix
-source: experiments/output/app-d3d9-3dmark05-fragmentless-depth-only-60-0-xcode-r2/3dmark05-direct.log; experiments/output/app-d3d9-3dmark05-fragmentless-depth-only-60-0-xcode-r2/dxmt9.log; experiments/output/app-d3d9-3dmark05-capture-env-only-sanity-r1/3dmark05-direct.log; experiments/output/app-d3d9-3dmark05-capture-env-only-sanity-r1/dxmt9.log; experiments/output/app-d3d9-3dmark05-fragmentless-depth-only-60-0-xcode-r3/3dmark05-direct.log; experiments/output/app-d3d9-3dmark05-fragmentless-depth-only-60-0-xcode-r3/3dmark05-perf-summary.md; experiments/output/app-d3d9-3dmark05-current-frame60-gputrace-capturelayer-r1/dxmt9.log; experiments/output/app-d3d9-3dmark05-current-frame60-gputrace-capturelayer-r1/actual.png; experiments/output/app-d3d9-3dmark05-current-frame60-gputrace-devtools-r1/dxmt9.log; experiments/output/app-d3d9-3dmark05-current-frame60-gputrace-devtools-r1/3dmark05-perf-summary.md; traces/app-d3d9-3dmark05-current-frame60-gputrace-devtools-r1/analysis/frame60-summary-counter-comparison-vs-post-visualfix.md; scripts/tools/run_3dmark05_perf_probe.sh
+source: experiments/output/app-d3d9-3dmark05-fragmentless-depth-only-60-0-xcode-r2/3dmark05-direct.log; experiments/output/app-d3d9-3dmark05-fragmentless-depth-only-60-0-xcode-r2/dxmt9.log; experiments/output/app-d3d9-3dmark05-capture-env-only-sanity-r1/3dmark05-direct.log; experiments/output/app-d3d9-3dmark05-capture-env-only-sanity-r1/dxmt9.log; experiments/output/app-d3d9-3dmark05-fragmentless-depth-only-60-0-xcode-r3/3dmark05-direct.log; experiments/output/app-d3d9-3dmark05-fragmentless-depth-only-60-0-xcode-r3/3dmark05-perf-summary.md; experiments/output/app-d3d9-3dmark05-current-frame60-gputrace-capturelayer-r1/dxmt9.log; experiments/output/app-d3d9-3dmark05-current-frame60-gputrace-capturelayer-r1/actual.png; experiments/output/app-d3d9-3dmark05-current-frame60-gputrace-devtools-r1/dxmt9.log; experiments/output/app-d3d9-3dmark05-current-frame60-gputrace-devtools-r1/3dmark05-perf-summary.md; traces/app-d3d9-3dmark05-current-frame60-gputrace-devtools-r1/analysis/frame60-summary-counter-comparison-vs-post-visualfix.md; traces/capture-layer-present-loop-script-r1/frame2.gputrace; experiments/output/app-d3d9-3dmark05-capture-layer-inplace-frame60-r1/result.json; experiments/output/app-d3d9-3dmark05-capture-layer-inplace-frame60-r1/3dmark05-direct.log; scripts/tools/run_3dmark05_perf_probe.sh; scripts/tools/run_with_wine_metal_capture_layer.sh
 ---
 
 # 3DMark05 gputrace Capture Must Avoid `MTL_CAPTURE_ENABLED`
@@ -130,6 +130,25 @@ Xcode did not receive a new capture document; the previously opened
    The run was terminated after the capture failure had been observed, so its
    status is `fail` by SIGTERM even though the rendering/counter path was live.
 
+9. Test temporary in-place replacement of the actual Wine launcher names with
+   `scripts/tools/run_with_wine_metal_capture_layer.sh`. This wrapper backs up
+   `bin/wine.real` and `bin/wine-preloader`, replaces those exact names with
+   the capture-enabled copies, runs a command, then restores the originals. It
+   succeeded for a synthetic Wine/D3D9 app:
+   `traces/capture-layer-present-loop-script-r1/frame2.gputrace` was written,
+   and hash checks confirmed that the original Wine binaries were restored.
+   The reason this works where copied names failed is that Wine's temp
+   executable is copied from the original `wine-preloader` / `wine.real` names.
+
+   The same mechanism is **not** a valid 3DMark05 path. During
+   `app-d3d9-3dmark05-capture-layer-inplace-frame60-r1`, the live
+   `/var/folders/.../winetemp.../wine.real` had `MetalCaptureEnabled` and
+   `Info.plist entries=13`, proving the capture layer precondition reached the
+   real launcher. 3DMark05 still black-screened before D3D9 draw/present:
+   `bridge_draw=0`, `bridge_present=0`, `actual.png` was fully black, and no
+   `frame60.gputrace` was written. The wrapper restored `wine.real` and
+   `wine-preloader` to the backup hashes.
+
 **Result.**
 
 The capture attempts split as:
@@ -145,6 +164,8 @@ The capture attempts split as:
 | `current-frame60-gputrace-embeddedplist-r2` | tmp Wine root with embedded `MetalCaptureEnabled` patched into `wine.real` | invalid runtime smoke; 3DMark05 failed before rendering with `status c0000018` |
 | `current-tmpwine-plain-smoke-r1` | same tmp Wine-root structure without `MetalCaptureEnabled`, no gputrace | same `status c0000018`, proving the tmp root is not runtime-equivalent yet |
 | `captureplist-frame60-gputrace-r1` | normal Wine root, copied `wine.capture.real` + `wine.capture.real-preloader` with embedded `MetalCaptureEnabled`, no `MTL_CAPTURE_ENABLED=1` | normal GT1 rendering and counters (`present_encoded=1680`, `draw_skipped_no_pipeline=0`, `gpu_command_buffer_errors=0`), but file capture still failed with `Capture layer is not inserted`; no `.gputrace` |
+| `capture-layer-present-loop-script-r1` | temporary replacement of actual `wine.real`/`wine-preloader` names using `run_with_wine_metal_capture_layer.sh` | valid synthetic proof; `frame2.gputrace` was written for `perf-d3d9-present-loop`; originals restored by hash |
+| `capture-layer-inplace-frame60-r1` | same temporary replacement applied to 3DMark05 | invalid 3DMark05 sample; temp `wine.real` had `MetalCaptureEnabled`, but startup black-screened before draw/present (`bridge_draw=0`, `bridge_present=0`); no `.gputrace` |
 
 The `capture-env-only-sanity-r1` log is the isolating evidence: it did not set
 `DXMT_METAL_CAPTURE_FRAME/PATH`, yet it still reached only factory bridge calls
@@ -190,13 +211,16 @@ flowchart TD
   WineTemp --> DevFail
   Layer -- "try embedded plist" --> TmpRoot["patch wine.real __info_plist<br/>tmp Wine root"]
   TmpRoot --> TmpInvalid["not runtime-equivalent yet<br/>3DMark05 c0000018 even without capture key"]
+  Layer -- "patch original names" --> WineNamePatch["temporarily replace actual<br/>wine.real + wine-preloader"]
+  WineNamePatch --> SyntheticOk["synthetic Wine/D3D9<br/>.gputrace succeeds"]
+  WineNamePatch --> ThreeDMarkBlack["3DMark05 black screen<br/>draw/present = 0"]
 
   classDef accepted fill:#d6f5d6,stroke:#2b7a2b,color:#063
   classDef pending fill:#fff3cd,stroke:#b8860b,color:#5a3b00
   classDef rejected fill:#f8d7da,stroke:#a33,color:#600
-  class DxmtCapture,Normal,GpuTrace,Xcode accepted
-  class Layer,DevTools,DevLayer,XcodeCapture,TmpRoot pending
-  class Black,DevFail,AppBundle,WineTemp,TmpInvalid rejected
+  class DxmtCapture,Normal,GpuTrace,Xcode,SyntheticOk accepted
+  class Layer,DevTools,DevLayer,XcodeCapture,TmpRoot,WineNamePatch pending
+  class Black,DevFail,AppBundle,WineTemp,TmpInvalid,ThreeDMarkBlack rejected
 ```
 
 **Verdict.** Accepted as a capture workflow fix. For 3DMark05 perf probes, do
@@ -213,7 +237,10 @@ Xcode: launch/attach under Xcode with the capture layer inserted, or a Wine
 loader/Info.plist route that remains runtime-equivalent. A simple external
 `.app` wrapper is insufficient because Wine re-execs a temp child, and the tmp
 embedded-plist Wine root is not valid until the `c0000018` main-module failure
-is solved even without capture enabled.
+is solved even without capture enabled. Temporary replacement of the actual
+`wine.real`/`wine-preloader` names is now proven for synthetic Wine/D3D9
+captures, but it is rejected for 3DMark05 because inserting the capture layer
+itself reproduces the black-screen/no-draw startup failure.
 
 Reference: Apple's
 [Capturing a Metal workload programmatically](https://developer.apple.com/documentation/xcode/capturing-a-metal-workload-programmatically)

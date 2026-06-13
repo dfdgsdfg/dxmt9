@@ -1192,6 +1192,8 @@ struct EncoderBreakdown {
 
 bool encoderBreakdownEnabled();
 std::uint64_t encoderBreakdownSeqFilter();
+bool encoderBreakdownSeqFilterActive();
+bool encoderBreakdownSeqAllowed(std::uint64_t seq);
 void emitEncoderBreakdown(const EncoderBreakdown& breakdown);
 
 }  // namespace dxmt9::perf

@@ -158,6 +158,43 @@ ensure_meson_postprocess() {
   ninja -C "$build_root" "$rel_target"
 }
 
+ensure_meson_artifact() {
+  local artifact build_root rel_target parent
+  artifact=$1
+
+  build_root=$(dirname -- "$artifact")
+  while [[ "$build_root" != "/" ]]; do
+    if [[ -f "$build_root/build.ninja" ]]; then
+      break
+    fi
+    parent=$(dirname -- "$build_root")
+    if [[ "$parent" == "$build_root" ]]; then
+      break
+    fi
+    build_root=$parent
+  done
+
+  if [[ ! -f "$build_root/build.ninja" ]]; then
+    return 0
+  fi
+
+  rel_target=${artifact#"$build_root"/}
+  if [[ "$rel_target" == "$artifact" ]]; then
+    return 0
+  fi
+
+  if ! rg -q --fixed-strings "build $rel_target:" "$build_root/build.ninja"; then
+    return 0
+  fi
+
+  if ! command -v ninja >/dev/null 2>&1; then
+    printf 'error: ninja is required to build Meson target: %s\n' "$rel_target" >&2
+    exit 1
+  fi
+
+  ninja -C "$build_root" "$rel_target"
+}
+
 
 prefix=""
 wine_root=""
@@ -288,6 +325,7 @@ fi
 if [[ -n "$wow64_runtime_pe_build_dir" ]]; then
   ensure_meson_postprocess "$wow64_runtime_pe_build_dir/winemetal.dll"
 fi
+ensure_meson_artifact "$unix_build_dir/winemetal/unix/winemetal.so"
 
 install_file "$pe_build_dir/d3d9.dll" "$system32_dir/d3d9.dll"
 install_file "$pe_build_dir/d3d9.dll" "$windows_runtime_dir/d3d9.dll"

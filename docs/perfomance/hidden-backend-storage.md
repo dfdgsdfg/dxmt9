@@ -56,6 +56,7 @@ every other domain at the lever that actually moves the bucket.
 | H34 | Tile-FFP hot-row coverage can be recovered by widening the current FFP selector | rejected; programmable/textured route required | [[hidden-backend-storage-shape.24]] (`60/2` and `60/1` are `100%` not-FFP fallback; `60/0` is `100%` unsupported-state; full gate carries `tile-ffp=blocked-hot-row-coverage/needs-programmable-tile-route`) |
 | H35 | Programmable route work is one uniform textured backend problem | rejected; split into depth-only, color, and textured routes | [[hidden-backend-storage-shape.25]] (`60/0` is `candidate-depth-only-route`; `60/1` needs programmable color; `60/2` needs programmable textured route) |
 | H36 | The `60/0` depth-only route can be reached by a fragmentless Metal PSO | accepted (runtime smoke), rejected for Xcode promotion | [[hidden-backend-storage-shape.26]] (`60/0` probe covers all `42` draws / `97,294` primitives / `291,882` vertices, reports position-only VSOut key `0x0`, and logs `2` accepted / `0` rejected fragmentless PSO variants; same-input gate then fails depth equality: `D24X8` depth changes `1,252,096 / 3,145,728` bytes, while `60/0` color is exact and the final frame still changes `21.658325%`; Xcode counter spend is blocked until depth semantics are fixed) |
+| H37 | System Trace can provide route-attributed timing while `.gputrace` is blocked | accepted (sidecar evidence) | [[hidden-backend-storage-shape.28]] (`215/215` xctrace rows joined, `1005..1024` captured seq, indexed probe rows `1000..1035` with `0` out-of-range rows; vertex share `88.86%`; route split: programmable color `45.65%`, programmable textured `40.49%`, mixed `12.02%`, depth-only `1.85%`) |
 
 ## Verification methods
 
@@ -125,6 +126,7 @@ flowchart TD
   TileFfpExpansion["shape.24\nTile-FFP expansion analysis\nprogrammable route required"]:::rejected
   ProgrammableRoute["shape.25\nprogrammable route feasibility\n60/0 depth-only candidate"]:::accepted
   FragmentlessRoute["shape.26\nfragmentless depth-only route\nreachability pass, equality fail"]:::rejected
+  SystemTraceRoute["shape.28\nseq-range System Trace sidecar\nroute timing joined"]:::accepted
   OcclusionGate["texture.08\nocclusion oracle feasibility\nexisting query not enough"]:::rejected
   ScopedSemantic["semantic.02\nselected 60/2 depth-read/no-blend\nexact mini replay\nscoped only"]:::accepted
 
@@ -170,6 +172,8 @@ flowchart TD
   TileFfpExpansion -->|"route class split"| ProgrammableRoute
   ProgrammableRoute -->|"reduced runtime smoke"| FragmentlessRoute
   FragmentlessRoute -->|"blocked by depth equality fail"| NextTriage
+  ProgrammableRoute -->|"route verdict follow-up"| SystemTraceRoute
+  SystemTraceRoute -->|"programmable color/textured dominate current sidecar"| NextTriage
   ProgrammableRoute -->|"next reduced route candidate"| NextTriage
   NextTriage -->|"oracle feasibility"| OcclusionGate
   Model -->|"frames"| Shape
@@ -202,6 +206,14 @@ timing path: `metal-gpu-intervals` joined `3590/3590` dxmt encoder labels across
 `8.68%` fragment. The top rows are the same large-geometry `/11` shape
 (`1.5M..1.86M` vertices per encoder), so this is consistent with the accepted
 vertex/tiler backend-storage model while remaining timing-only evidence.
+The seq-range sidecar follow-up ([[hidden-backend-storage-shape.28]]) makes
+that path more usable: after ensuring the active Wine unix provider is rebuilt,
+`metal-gpu-intervals` joined `215/215` rows with indexed draw telemetry in the
+same seq window (`1000..1035`, out-of-range rows `0`). The captured window is
+still vertex dominated (`88.86%` vertex share), but the route split is now
+known: programmable color (`45.65%`) and programmable textured (`40.49%`) rows
+own most of the stage time, while depth-only rows are only `1.85%`. This is
+route-attributed timing evidence, not a substitute for Xcode replay counters.
 
 What is still open: *which* sub-component of the model dominates — VS stage-out,
 primitive/binning/tiler parameter storage, or compiler/backend spill. Visible
@@ -522,6 +534,10 @@ per-experiment flags live in each leaf's `**Method.**` field; see
   proves the `60/0` route is reachable and fully covers the row, but same-input
   depth equality fails, so Xcode counter promotion is blocked until depth
   semantics are fixed.
+- [[hidden-backend-storage-shape.27]] — Metal System Trace sidecar after
+  compact draw-state work; confirms the residual top rows remain vertex-stage
+  dominated large indexed encoders while `.gputrace` replay remains blocked by
+  capture-layer startup mutation.
 - [[state-churn-encode-stream.04]] — stream/IB backend preflight; confirms
   handle-dominant hot rows but requires a handle-stable A/B before Xcode.
 - [[state-churn-encode-stream.09]] — Xcode handle-stable gate; shows `60/2`

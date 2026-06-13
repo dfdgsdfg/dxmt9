@@ -236,6 +236,8 @@ semantic_image_summary_output=${DXMT_3DMARK05_SEMANTIC_IMAGE_SUMMARY_OUTPUT:-}
 semantic_image_diff_output=${DXMT_3DMARK05_SEMANTIC_IMAGE_DIFF_OUTPUT:-}
 semantic_image_min_active_pct=${DXMT_3DMARK05_SEMANTIC_IMAGE_MIN_ACTIVE_PCT:-1}
 encoder_breakdown_seq=${DXMT_3DMARK05_ENCODER_BREAKDOWN_SEQ:-}
+encoder_breakdown_seq_min=${DXMT_3DMARK05_ENCODER_BREAKDOWN_SEQ_MIN:-}
+encoder_breakdown_seq_max=${DXMT_3DMARK05_ENCODER_BREAKDOWN_SEQ_MAX:-}
 encoder_breakdown_all_frames=0
 encoder_breakdown_enabled=1
 render_pass_reentry_top=${DXMT_3DMARK05_RENDER_PASS_REENTRY_TOP:-}
@@ -344,6 +346,10 @@ Options:
   --encoder-breakdown-seq N
                       Set DXMT9_PERF_ENCODER_BREAKDOWN_SEQ=N to emit only one
                       RenderPass[seq=N,...] frame's encoder breakdown
+  --encoder-breakdown-seq-range MIN:MAX
+                      Set DXMT9_PERF_ENCODER_BREAKDOWN_SEQ_MIN/MAX to emit a
+                      bounded RenderPass seq window. Useful for xctrace
+                      sidecars where a full all-frame breakdown is too heavy.
   --encoder-breakdown-all-frames
                       Do not auto-scope encoder/index diagnostics to --frame
                       when gputrace capture is enabled
@@ -1204,6 +1210,16 @@ while (($#)); do
       ;;
     --encoder-breakdown-seq)
       encoder_breakdown_seq=${2:?missing value for --encoder-breakdown-seq}
+      shift 2
+      ;;
+    --encoder-breakdown-seq-range)
+      range=${2:?missing value for --encoder-breakdown-seq-range}
+      if [[ ! "$range" =~ ^[0-9]+:[0-9]+$ ]]; then
+        echo "--encoder-breakdown-seq-range expects MIN:MAX" >&2
+        exit 2
+      fi
+      encoder_breakdown_seq_min=${range%%:*}
+      encoder_breakdown_seq_max=${range#*:}
       shift 2
       ;;
     --encoder-breakdown-all-frames)
@@ -3194,16 +3210,33 @@ if (( ! encoder_breakdown_enabled )) && (( capture_gputrace )); then
   exit 2
 fi
 
+if [[ -n "$encoder_breakdown_seq" &&
+      -n "$encoder_breakdown_seq_min$encoder_breakdown_seq_max" ]]; then
+  echo "--encoder-breakdown-seq and --encoder-breakdown-seq-range are mutually exclusive" >&2
+  exit 2
+fi
+
+if [[ -n "$encoder_breakdown_seq_min$encoder_breakdown_seq_max" ]]; then
+  if [[ -z "$encoder_breakdown_seq_min" || -z "$encoder_breakdown_seq_max" ]]; then
+    echo "encoder breakdown seq range requires both min and max" >&2
+    exit 2
+  fi
+  if (( encoder_breakdown_seq_min > encoder_breakdown_seq_max )); then
+    echo "encoder breakdown seq range min must be <= max" >&2
+    exit 2
+  fi
+fi
+
 if (( encoder_breakdown_enabled )) &&
    (( ! encoder_breakdown_all_frames )) &&
-   [[ -z "$encoder_breakdown_seq" && -n "$dump_color_attachment_seq" ]]; then
+   [[ -z "$encoder_breakdown_seq$encoder_breakdown_seq_min$encoder_breakdown_seq_max" && -n "$dump_color_attachment_seq" ]]; then
   encoder_breakdown_seq=$dump_color_attachment_seq
 fi
 
 if (( encoder_breakdown_enabled )) &&
    (( capture_gputrace || frame_local_index_diagnostics_requested )) &&
    (( ! encoder_breakdown_all_frames )) &&
-   [[ -z "$encoder_breakdown_seq" ]]; then
+   [[ -z "$encoder_breakdown_seq$encoder_breakdown_seq_min$encoder_breakdown_seq_max" ]]; then
   encoder_breakdown_seq=$frame
 fi
 
@@ -3326,6 +3359,10 @@ probe_draws_csv="$output_dir/3dmark05-perf-indexed-probe-draws.csv"
 index_cache_runtime_report="$output_dir/3dmark05-index-cache-runtime-summary.md"
 index_cache_runtime_csv="$output_dir/3dmark05-index-cache-runtime-summary.csv"
 capture_path="$trace_dir/frame${frame}.gputrace"
+metal_system_trace="$trace_dir/metal-system.trace"
+metal_gpu_intervals_xml="$analysis_dir/metal-gpu-intervals.xml"
+xctrace_gpu_intervals_summary_csv="$analysis_dir/xctrace-metal-gpu-intervals-summary.csv"
+xctrace_gpu_intervals_summary_md="$analysis_dir/xctrace-metal-gpu-intervals-summary.md"
 counter_comparison_path="$analysis_dir/frame${frame}-perf-counter-comparison.md"
 free_mb=unknown
 if command -v df >/dev/null 2>&1; then
@@ -3362,6 +3399,12 @@ fi
 
 if (( encoder_breakdown_enabled )) && [[ -n "$encoder_breakdown_seq" ]]; then
   env_args+=("DXMT9_PERF_ENCODER_BREAKDOWN_SEQ=$encoder_breakdown_seq")
+fi
+if (( encoder_breakdown_enabled )) && [[ -n "$encoder_breakdown_seq_min" ]]; then
+  env_args+=("DXMT9_PERF_ENCODER_BREAKDOWN_SEQ_MIN=$encoder_breakdown_seq_min")
+fi
+if (( encoder_breakdown_enabled )) && [[ -n "$encoder_breakdown_seq_max" ]]; then
+  env_args+=("DXMT9_PERF_ENCODER_BREAKDOWN_SEQ_MAX=$encoder_breakdown_seq_max")
 fi
 
 if [[ -n "$render_pass_reentry_top" ]]; then
@@ -4463,11 +4506,39 @@ if (( capture_gputrace )); then
   fi
 fi
 
+xctrace_export_cmd=(
+  xcrun xctrace export
+  --input "$metal_system_trace"
+  --output "$metal_gpu_intervals_xml"
+  --xpath '/trace-toc/run[@number="1"]/data/table[@schema="metal-gpu-intervals"]'
+)
+xctrace_summary_cmd=(
+  python3 scripts/tools/summarize_xctrace_metal_intervals.py
+  --gpu-intervals "$metal_gpu_intervals_xml"
+  --dxmt-encoders "$encoders_csv"
+  --indexed-probe-draws "$probe_draws_csv"
+  --output-csv "$xctrace_gpu_intervals_summary_csv"
+  --output-md "$xctrace_gpu_intervals_summary_md"
+  --run-label "$run_id"
+  --trace "$metal_system_trace"
+  --top "$top_n"
+  --require-xctrace-render-rows
+  --min-dxmt-join-coverage 0.99
+)
+if (( measure_index_reuse )); then
+  xctrace_summary_cmd+=(--require-indexed-probe-routes)
+fi
+
 echo "run_id: $run_id"
 echo "output_dir: $output_dir"
 echo "trace_dir: $trace_dir"
 echo "summary: $summary_path"
 echo "index_cache_runtime_report: $index_cache_runtime_report"
+echo "indexed_probe_draws: $probe_draws_csv"
+echo "metal_system_trace: $metal_system_trace"
+echo "metal_gpu_intervals_xml: $metal_gpu_intervals_xml"
+echo "xctrace_gpu_intervals_summary: $xctrace_gpu_intervals_summary_md"
+echo "measure_index_reuse: $measure_index_reuse"
 echo "session_locked: $session_locked"
 echo "free_space_mb: $free_mb"
 echo "min_free_space_mb: $min_free_mb"
@@ -4564,6 +4635,12 @@ if ((${#finalize_cmd[@]})); then
   printf ' %q' "${finalize_cmd[@]}"
   printf '\n'
 fi
+printf 'xctrace_system_trace_export_cmd:'
+printf ' %q' "${xctrace_export_cmd[@]}"
+printf '\n'
+printf 'xctrace_system_trace_summary_cmd:'
+printf ' %q' "${xctrace_summary_cmd[@]}"
+printf '\n'
 if (( probe_disable_alpha_blend )); then
   echo "warning: --probe-disable-alpha-blend is diagnostic only and can corrupt frame output (for example solid yellow/clear-like GT1 output); do not treat it as correctness-preserving."
 fi

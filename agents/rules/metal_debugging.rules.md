@@ -266,10 +266,20 @@ env when `DXMT_3DMARK05_SET_MTL_CAPTURE_ENABLED=1` is deliberately set.
 Apple's file `.gputrace` destination still requires the process capture layer
 (`MetalCaptureEnabled` Info.plist key or macOS 14+ `MTL_CAPTURE_ENABLED=1`), so
 without that layer the expected failure is `Capture layer is not inserted`.
-If that path reaches normal rendering but fails with `Capture layer is not
-inserted`, attach Xcode and rerun with
-`DXMT_3DMARK05_METAL_CAPTURE_DESTINATION=developerTools` to route the capture
-to Xcode instead of the file `.gputrace` destination.
+For general Wine/D3D9 capture-layer diagnostics, use
+`scripts/tools/run_with_wine_metal_capture_layer.sh --wine-root <root> -- ...`.
+It temporarily replaces `<root>/bin/wine.real` and `wine-preloader` with
+capture-enabled copies, lets Wine copy those names into its
+`/var/folders/.../winetemp...` launcher, then restores the originals. This has
+produced a valid `.gputrace` for `perf-d3d9-present-loop`.
+Do **not** use that wrapper as a standard 3DMark05 path: on 2026-06-13 it
+proved the temp `wine.real` had `MetalCaptureEnabled`, but 3DMark05 still
+black-screened before draw/present (`bridge_draw=0`, `bridge_present=0`) and
+no `.gputrace` was written. Treat capture-layer-inserted 3DMark05 startup as
+invalid evidence unless a later Xcode attach-after-normal-start route proves
+otherwise. The wrapper refuses 3DMark05 command lines by default; use
+`--allow-3dmark05` or `DXMT9_ALLOW_3DMARK05_CAPTURE_LAYER=1` only for a
+deliberate diagnostic that is expected to be invalid as a perf sample.
 
 Trigger sites: `dxmt9_command_queue.cpp:1083` (request) and
 `dxmt9_queue.cpp:1083-1095` (start/stop around `commit()`).
@@ -498,7 +508,37 @@ Trace' --all-processes` + the `metal-gpu-intervals` schema for
 per-encoder GPU time (see §4 and the encoder labels set at
 `dxmt9_draw_encoder.mm:2226`, `dxmt9_blit_encoders.cpp:200`,
 `dxmt9_blit_encoders.cpp:302`, `dxmt9_blit_encoders.cpp:380`,
-`dxmt9_presenter.cpp:480`).
+`dxmt9_presenter.cpp:480`). For 3DMark05, prefer
+`scripts/tools/run_3dmark05_system_trace_sidecar.sh -- ...` over manual
+parallel shell orchestration; it runs the probe wrapper dry-run first, refuses
+locked sessions before starting xctrace, can wait for unlock with
+`--wait-unlocked-sec N`, then exports and summarizes `metal-gpu-intervals`
+against dxmt encoder attribution. The lower-level
+3DMark05 wrapper also prints `xctrace_system_trace_export_cmd` and
+`xctrace_system_trace_summary_cmd` in dry-run and real-run output for manual
+fallbacks. Those summary commands require RenderPass-labelled xctrace rows and
+at least `0.99` dxmt encoder join coverage, so an empty all-processes trace or
+wrong-run encoder CSV fails instead of producing a misleading sidecar. When
+the goal is to select a depth-only/textured/color backend route, run the
+3DMark05 probe with indexed draw telemetry
+(`--measure-index-reuse` or a flag that implies it) so the summary command's
+`--indexed-probe-draws` input contains rows instead of a header-only CSV. The
+wrapper now adds `--require-indexed-probe-routes` when indexed telemetry is
+requested, so a same-run route-selection sidecar fails instead of silently
+emitting only `route-unavailable` rows. The sidecar defaults to
+`--encoder-breakdown-all-frames` on the wrapped probe and rejects exact scoped
+encoder-breakdown sequence settings. System Trace captures a wall-clock window,
+so a single `DXMT9_PERF_ENCODER_BREAKDOWN_SEQ=<frame>` CSV covers only one
+sequence and produces zero or partial join coverage once xctrace starts later
+in the run. All-frame breakdown is a valid join proof but is too heavy for
+representative runtime FPS; for lower-overhead timing samples, pass sidecar
+`--encoder-breakdown-seq-range MIN:MAX`, which forwards
+`DXMT9_PERF_ENCODER_BREAKDOWN_SEQ_MIN/MAX` and lets the join gate prove the
+range covered xctrace's RenderPass seq window. If a range run logs
+`dxmt9-perf-encoder` or `dxmt9-perf-indexed-probe-draw` rows before `MIN`,
+check for a stale installed `winemetal.so` before interpreting runtime FPS:
+the active Wine unix provider must be rebuilt and restaged for new perf env
+filters to exist.
 
 ## 6. Device capabilities
 
@@ -591,6 +631,14 @@ bash scripts/tools/run_3dmark05_perf_probe.sh \
 # 3. Join + gate
 bash scripts/tools/finalize_3dmark05_perf_probe.sh \
   --suffix <tag> --frame <N> [--baseline-joined <baseline.csv> <proof gates>]
+
+# For xctrace Metal System Trace sidecars, prefer the guarded runner. It
+# refuses locked sessions before recording xctrace; add --wait-unlocked-sec N
+# if the command should poll until the desktop unlocks. Add
+# --measure-index-reuse when route verdicts are needed.
+bash scripts/tools/run_3dmark05_system_trace_sidecar.sh -- \
+  --suffix <tag> --frame <50|60> --no-gputrace --timeout 120 \
+  --measure-index-reuse <probe flags>
 ```
 
 ### Experiment classes → flags → docs/perfomance domain

@@ -32,7 +32,54 @@ build. `shader_corpus_tool.py` is also imported by the Meson tests under
 - `summarize_xctrace_metal_intervals.py` — parse xctrace
   `metal-gpu-intervals` XML and join dxmt9 encoder attribution by
   `RenderPass[seq=...,enc=...]`. Use it as a timing/label sidecar for 3DMark05
-  when `.gputrace` replay counters are blocked by capture-layer mechanics.
+  when `.gputrace` replay counters are blocked by capture-layer mechanics. The
+  joined CSV and Markdown include primitive-class labels plus normalized
+  `xctrace_vertex_ms_per_mvertex` / `xctrace_stage_ms_per_mvertex` so
+  scene-phase changes can be separated from raw total-time changes. The
+  Markdown also emits aggregate tables by primitive class and render-pass end
+  reason, which is the fastest way to see whether the residual owner is
+  opaque/depth, alpha, clear, RT-change, or present work. Pass
+  `--indexed-probe-draws <3dmark05-perf-indexed-probe-draws.csv>` when that
+  CSV contains draw rows; the sidecar then adds depth-only/textured/color route
+  verdicts for the same top System Trace rows.
+- `run_3dmark05_system_trace_sidecar.sh` — guarded wrapper around
+  `run_3dmark05_perf_probe.sh` and `xcrun xctrace record --template
+  'Metal System Trace' --all-processes`. It runs the probe wrapper dry-run
+  first, refuses locked sessions before starting xctrace, records a short
+  normal-rendering no-gputrace sidecar, then exports/summarizes
+  `metal-gpu-intervals` against `3dmark05-perf-encoders.csv` and
+  `3dmark05-perf-indexed-probe-draws.csv`. Use `--wait-unlocked-sec N` when
+  the command should poll preflight and start automatically after the desktop
+  unlocks; locked waits and dry-runs do not create trace artifacts. When the
+  trace is summarized, RenderPass-labelled xctrace rows and high dxmt encoder
+  join coverage are required. When the probe reports `measure_index_reuse: 1`,
+  the sidecar also requires indexed route rows to join the System Trace rows
+  and fails otherwise, preventing another route-selection capture from ending
+  as a silent `route-unavailable` sample. The sidecar defaults to
+  `--encoder-breakdown-all-frames` on the wrapped probe, because xctrace
+  records a wall-clock window and cannot reliably join against a single
+  `DXMT9_PERF_ENCODER_BREAKDOWN_SEQ=<frame>` CSV. All-frame breakdown is valid
+  as a join proof but is too heavy for representative runtime FPS. For actual
+  timing samples, pass `--encoder-breakdown-seq-range MIN:MAX` with a window
+  that covers the expected xctrace RenderPass seq range; the wrapper forwards
+  that to `DXMT9_PERF_ENCODER_BREAKDOWN_SEQ_MIN/MAX` and the join coverage gate
+  verifies the range was correct. Exact scoped encoder-breakdown settings are
+  rejected for this wrapper. If a range run logs encoder or indexed-probe rows
+  before `MIN`, suspect a stale installed unix provider first: the standard
+  staging path now builds `build-x86_64-builtin/src/winemetal/unix/winemetal.so`
+  before copying it, but manual installs must do the same or new env filters
+  will not exist in the active Wine provider.
+- `run_with_wine_metal_capture_layer.sh` — temporarily replace a Wine root's
+  actual `bin/wine.real` and `bin/wine-preloader` names with capture-enabled
+  copies, run a command, then restore the originals. Use it for non-3DMark05
+  Wine/D3D9 `.gputrace` diagnostics when `DXMT_METAL_CAPTURE_FRAME/PATH`
+  reports `Capture layer is not inserted`. Do not use it as a standard
+  3DMark05 path: it proves the temp Wine launcher can receive
+  `MetalCaptureEnabled`, but current 3DMark05 black-screens before draw/present
+  when that layer is present. The wrapper rejects 3DMark05 command lines by
+  default; pass `--allow-3dmark05` or set
+  `DXMT9_ALLOW_3DMARK05_CAPTURE_LAYER=1` only for an explicit invalid-sample
+  diagnostic.
 - `summarize_framegraph_dag.py` — parse
   `DXMT9_RENDERER_DUMP_DAG` JSON dumps and report same-attachment re-entry
   pairs, direct A->B edge resources, intervening same-attachment accesses,
@@ -205,9 +252,18 @@ build. `shader_corpus_tool.py` is also imported by the Meson tests under
   env has reproduced 3DMark05 black-screen startup with draw/present counters
   at zero. Use `DXMT_3DMARK05_SET_MTL_CAPTURE_ENABLED=1` only for deliberate
   capture-layer experiments. If normal rendering works but file capture reports
-  `Capture layer is not inserted`, attach Xcode and set
-  `DXMT_3DMARK05_METAL_CAPTURE_DESTINATION=developerTools` for an Xcode-targeted
-  capture route.
+  `Capture layer is not inserted`, do not automatically escalate to
+  `run_with_wine_metal_capture_layer.sh` for 3DMark05: that wrapper works for a
+  synthetic Wine/D3D9 `.gputrace` but currently black-screens 3DMark05 before
+  draw/present. Use `run_3dmark05_system_trace_sidecar.sh -- ...` for the
+  normal-rendering xctrace Metal System Trace path, or an explicitly validated
+  Xcode attach-after-normal-start route instead. The sidecar runner refuses
+  locked sessions before recording xctrace; pass `--wait-unlocked-sec N` if the
+  run should wait for unlock and then launch automatically. Manual runs can
+  still use the wrapper-printed `xctrace_system_trace_export_cmd` and
+  `xctrace_system_trace_summary_cmd` for traces recorded as
+  `traces/<run>/metal-system.trace`; add `--measure-index-reuse` when route
+  verdicts are needed.
 - `compare_experiment_images.py` — compare before/after screenshots or
   deterministic capture PNGs for semantic gates. Use repeatable
   `--roi L,T,R,B[:name]` regions when full-frame changes are too broad, for
