@@ -262,6 +262,14 @@ void countD3D9SnapshotUniformBuildPsConstHashBytes(std::uint64_t bytes);
 void countD3D9SnapshotUniformCopyCpuTime(std::uint64_t nanoseconds);
 void countD3D9SnapshotStateCopyCpuTime(std::uint64_t nanoseconds);
 void countD3D9SnapshotDebugSnapshotCpuTime(std::uint64_t nanoseconds);
+void countD3D9SnapshotFlatStateEntries(std::uint32_t renderStateEntries,
+                                       std::uint32_t textureStageStateEntries,
+                                       std::uint32_t textureStageStateEntryMax,
+                                       std::uint32_t samplerStateEntries,
+                                       std::uint32_t samplerStateEntryMax,
+                                       bool renderStateOverflow,
+                                       bool textureStageStateOverflow,
+                                       bool samplerStateOverflow);
 void countD3D9SnapshotBindingOverrideCpuTime(std::uint64_t nanoseconds);
 void countD3D9SnapshotBindingOverride(std::uint32_t streamScans,
                                       std::uint32_t streamRecords,

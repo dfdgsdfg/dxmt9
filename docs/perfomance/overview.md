@@ -289,6 +289,7 @@ flowchart TD
 | Per-draw CPU encode | `encode_draw_cpu_ms`, `bind_*`, `pipeline_lookup`, `fvf_decode` | Draws are replayed one by one even when state is stable. | Improve draw-run formation, cache decoded state, skip redundant binds. |
 | Payload/upload pressure | `transient_upload_calls`, `transient_upload_bytes`, `uniform_*`, payload arena counters | Stable constants or state are uploaded at draw frequency. | Split stable/volatile payloads, coalesce slab reservations, skip duplicate payload copies. |
 | Render-pass churn | `render_pass_begin`, split reason counters, tile preservation bytes, store/load action counters | RT/depth/clear/hazard decisions force too many pass boundaries. | Exact hazard tracking, better clear/load/store proof, coalesce same RT/depth passes when legal. |
+| GPU vertex/tiler backend storage | Xcode `VS Buffer Device Memory Bytes Written`, VS invocations, `gpu_command_buffer_time_ms`; derived `dxmt_vs_buffer_write_share`, `dxmt_unexplained_buffer_write_ratio`, `dxmt_tvb_pressure_proxy_mib` — high while dxmt CPU writers (argbuf/transient/cbuf) stay tiny | Hidden Apple vertex-stage / tiler / parameter-buffer (TVB/PB) storage that scales with VS invocations × per-invocation backend bytes — not with visible `VSOut` width, dxmt CPU upload bytes, or fragment volume. The firmware-owned parameter buffer grows during vertex binning and emits partial-render store/reload on overflow. This is usually the dominant GPU frame-time limiter; the CPU-encode and sync classes are largely orthogonal to it. | Reduce VS invocations where semantics allow (post-transform index-cache locality); do **not** chase visible varying width, shader temps, or stream/IB handle identity. Prove with `compare_xcode_dxmt_bottlenecks.py --require-tvb-mechanism-proof` (VS write, VS invocations, and `gpu_ms` all decrease). |
 | Present pacing | `present_acquire_wait_ms`, `present_boundary_wait_ms`, `completion_present_wait_ms` | Drawable availability or frame-latency token dominates wall time. | Keep pacing counters separate; tune latency only after encode/GPU attribution is clear. |
 | Command-buffer grain | `command_buffers`, `sub_command_buffers`, `chunk_subcb_count_max`, `gpu_command_buffer_time_ms` | 1 CB can serialize GPU behind encode; too many CBs add tile/commit cost. | Current default: per-render-pass split with cap=4; validate by workload. |
 | Lock/map compatibility | `map_buffer_total_ms`, `map_buffer_wait_ms`, `d3d9_buffer_lock_*` | 32-bit app needs low4GB CPU-visible pointer; native storage may not be 32-bit safe. | Reuse low4GB CPU shadows; free on resource destroy, not every lock. |
@@ -302,7 +303,7 @@ state separates GPU frame-time, CPU encode cost, and wallclock present pacing:
 
 | General class | 3DMark05 GT1 status | Decision |
 |---|---|---|
-| GPU hidden backend storage | Dominant GPU frame limiter. Xcode VS-buffer write tracks VS invocations, not dxmt CPU writers, visible `VSOut`, or fragment volume. | Reduce VS invocations when semantics allow; do not chase visible varying width as the first-order owner. [[hidden-backend-storage]] |
+| GPU hidden backend storage | Dominant GPU frame limiter. Xcode VS-buffer write tracks VS invocations, not dxmt CPU writers, visible `VSOut`, or fragment volume. Current `xctrace` Metal System Trace sidecar can join dxmt encoder labels and confirms vertex-heavy timing (`91.32%` vertex share in the phase43 sidecar), but it does not expose `VS Buffer Device Memory Bytes Written`. | Reduce VS invocations when semantics allow; do not chase visible varying width as the first-order owner. Use xctrace as timing/label sidecar only; keep Xcode `.gputrace` replay counters as the proof gate for hidden-storage byte movement. [[hidden-backend-storage]] |
 | Opaque-depth index locality | Accepted production-shaped GPU win: historical target `50/0+50/1` GPU `-18.39%`, VS invocations `-14.12%`, VS write `-16.79%`; refreshed frame60 target `60/0+60/1` GPU `-10.64%`, VS invocations `-14.12%`, VS write `-16.77%`. | Keep as opt-in locality path. The current opaque proof reattaches the movement to refreshed rows, but this is still not a shared `perf` default until index-setup CPU cost is lower or a broader runtime gate proves net positive. [[index-cache-locality-opaque.08]], [[index-cache-locality-proofinput.01]], [[index-cache-locality]] |
 | Screen-blend index locality | Strong measured movement, but destination-dependent; current gate is missing movement/semantic image inputs. | Keep as historical exact/`lsb1` proof artifact until the proof is reattached or regenerated; do not generalize to broad depth-read reorder. [[index-cache-locality-screenblend.05]], [[index-cache-locality-proofinput.01]], [[index-cache-locality-screenblend.04]] |
 | Broad depth-read reorder | Blocked by final-color correctness. | Needs a real final-color/final-writer oracle before another Xcode budget; the current D3D9 occlusion path is primitive-count only. [[mini-replay-bisection-semantic.01]], [[mini-replay-bisection-texture.08]] |
@@ -333,6 +334,24 @@ flowchart TD
   class Workload,GPU,Wall,CPU,Screen,Backend,Encode warn
   class Broad bad
 ```
+
+### Bandwidth Ceiling (SKU-dependent)
+
+The GPU vertex/tiler backend-storage class is a *memory-write* limiter, so whether
+it actually caps fps depends on the memory system, not just the byte count. At the
+3DMark05 GT1 calibration shape, frame60's `~1.6 GiB` VS write at `~22 fps` is
+already `~37 GB/s` of vertex-stage write traffic alone — before texture reads,
+depth/color attachment traffic, tile store/load, and CPU/GPU coherence. On a base
+M1-class `~68 GB/s` memory system that single counter is `~55%` of peak bandwidth,
+so the scene can be a true bandwidth limiter once the rest of the traffic is added.
+On M1 Pro/Max/Ultra-class systems (`~200-400 GB/s`) the same byte rate is a much
+smaller fraction of peak, so the *same* scene can be backend-storage/bandwidth-bound
+on a base SKU yet CPU-encode- or pacing-bound on a high-bandwidth SKU. Decide which
+regime a given machine is in with the named/proxy TVB counters
+(`dxmt_tvb_pressure_proxy_mib`, `dxmt_vs_buffer_write_to_tvb_proxy_ratio`,
+`dxmt_unexplained_buffer_write_ratio`), not with wallclock fps alone. See
+[[hidden-backend-storage]] and the `VS Buffer Device Memory Bytes Written` / TVB
+notes in `agents/rules/metal_debugging.rules.md` §5.
 
 ## Ideal Design
 

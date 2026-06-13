@@ -66,6 +66,13 @@ every other domain at the lever that actually moves the bucket.
   — authoritative `VS Buffer Device Memory Bytes Written`, VS invocations,
   named tiled counters, VS L1/LLC write, and the derived hidden-backend
   classifier in `frame<N>-xcode-dxmt-bottleneck-report.md`.
+- **Instruments Metal System Trace sidecar** —
+  `xcrun xctrace record --template 'Metal System Trace' --all-processes` plus
+  `summarize_xctrace_metal_intervals.py` can join `metal-gpu-intervals` timing
+  back to dxmt encoder labels when `.gputrace` capture is blocked. This is
+  useful for vertex-vs-fragment timing attribution, but it is not a replacement
+  for Xcode replay counters because it does not expose `VS Buffer Device Memory
+  Bytes Written`.
 - **`analyze_vs_buffer_scaling.py`** — cross-capture Pearson correlation of the
   bucket vs geometry / VS invocations / dxmt writers / FS invocations; proves
   the scaling dimension.
@@ -186,6 +193,15 @@ invocations (`0.034`). The five-component model
 ([[hidden-backend-storage-model.01]]) is corroborated by external AGX/UVS/PPP
 literature ([[hidden-backend-storage-model.02]]). The model's core claim is
 therefore **ACCEPTED**.
+
+A current-head `xctrace` sidecar
+(`app-d3d9-3dmark05-phase43-xctrace-system-r1-20260613`) does not add the
+missing replay-counter denominator, but it validates the capture-layer-free
+timing path: `metal-gpu-intervals` joined `3590/3590` dxmt encoder labels across
+`200` seq ids, with `9303.143ms` captured stage time split `91.32%` vertex /
+`8.68%` fragment. The top rows are the same large-geometry `/11` shape
+(`1.5M..1.86M` vertices per encoder), so this is consistent with the accepted
+vertex/tiler backend-storage model while remaining timing-only evidence.
 
 What is still open: *which* sub-component of the model dominates — VS stage-out,
 primitive/binning/tiler parameter storage, or compiler/backend spill. Visible

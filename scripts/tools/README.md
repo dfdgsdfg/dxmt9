@@ -29,6 +29,10 @@ build. `shader_corpus_tool.py` is also imported by the Meson tests under
   encoder-level totals. Use
   `run_3dmark05_perf_probe.sh --probe-draw-packet-actual-change` when snapshot
   cache misses need declared-vs-actual draw-packet delta evidence.
+- `summarize_xctrace_metal_intervals.py` — parse xctrace
+  `metal-gpu-intervals` XML and join dxmt9 encoder attribution by
+  `RenderPass[seq=...,enc=...]`. Use it as a timing/label sidecar for 3DMark05
+  when `.gputrace` replay counters are blocked by capture-layer mechanics.
 - `summarize_framegraph_dag.py` — parse
   `DXMT9_RENDERER_DUMP_DAG` JSON dumps and report same-attachment re-entry
   pairs, direct A->B edge resources, intervening same-attachment accesses,

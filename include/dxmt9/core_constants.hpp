@@ -58,7 +58,15 @@ inline constexpr u32 kMaxPixelConstants = 224;
 inline constexpr u32 kMaxIntegerConstants = 16;
 inline constexpr u32 kMaxBoolConstants = 16;
 inline constexpr u32 kMaxStateSlots = 256;
+// D3DRS_* uses a sparse 0..255 id space. DeviceState keeps that whole table
+// for Set/GetRenderState, but FlatDrawStateRecord only needs a prioritized
+// active-entry payload for backend consumers and diagnostics.
+inline constexpr u32 kMaxFlatRenderStates = 128;
 inline constexpr u32 kMaxTextureStageStates = 64;
+// Active public D3DTSS entries occupy 18 ids, plus dxmt9's internal
+// TSS_TEXTURE_TYPE key. Keep the DeviceState id space at 64 while storing a
+// smaller sorted active-entry set in FlatDrawStateRecord.
+inline constexpr u32 kMaxFlatTextureStageStates = 32;
 // D3DSAMP_* ordinals occupy 1..13. Keep the identity-mapped state table
 // compact while leaving slot 0 and two spare slots inside one bitset word.
 inline constexpr u32 kMaxSamplerStates = 16;

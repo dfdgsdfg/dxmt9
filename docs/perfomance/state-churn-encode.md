@@ -69,6 +69,9 @@ bottleneck — that is owned by [[hidden-backend-storage]].
 | H49 | Reusing draw binding snapshot scratch removes per-group vector allocation churn | accepted small CPU win | [[state-churn-encode-encode-phase.37]] (`batch_binding_snapshot` `0.119755→0.089566ms/present`; total replay flat) |
 | H50 | Shader bytecode value ownership makes layout/state copies allocate and copy bytecode per draw | accepted CPU win | [[state-churn-encode-encode-phase.38]] (`state_copy` `0.421921→0.271225ms/present`; queue submit `5.176033→4.792983ms/present`) |
 | H51 | Sampler `FlatStateSet` capacity can be reduced from ID-space 64 to public D3DSAMP 16 | accepted CPU win | [[state-churn-encode-encode-phase.39]] (`FlatDrawStateRecord` `18,736→11,056B`; `state_copy` `0.271225→0.181239ms/present`) |
+| H52 | Texture-stage `FlatStateSet` active-entry capacity can be split from the 64-key DeviceState id space | accepted targeted CPU win | [[state-churn-encode-encode-phase.40]] (`FlatDrawStateRecord` `11,056→9,008B`; `append_state_soa` `0.263628→0.220626ms/present`; `encode_draw` mixed) |
+| H53 | Render-state `FlatStateSet` needs an active-entry count proof before compaction | accepted proof; shrink held | [[state-churn-encode-encode-phase.41]] (`render_state_entries_max=62`, `gt64=0`, but default table already has 62 entries) |
+| H54 | Render-state flat payload can use a 128-slot priority active-entry set while keeping the full 256-state digest | accepted bounded CPU width win | [[state-churn-encode-encode-phase.42]] (`FlatDrawStateRecord` `9,008→7,984B`; GT1 render max `62`, overflow `0`; GPU flat) |
 
 ## Verification methods
 
@@ -107,6 +110,12 @@ bottleneck — that is owned by [[hidden-backend-storage]].
   `submit_draw_run_batch_compat_same_generation_lane_*` prove whether frontend
   stable-state cache identity agrees with the queue's deep compatibility
   comparison before enabling a generation fast path.
+- **Snapshot flat-state entry counters** —
+  `d3d9_snapshot_flat_render_state_entries{,_max,_gt64,_gt128}`,
+  `d3d9_snapshot_flat_tss_{entries,stage_entries_max}`, and
+  `d3d9_snapshot_flat_sampler_{entries,slot_entries_max}` prove whether a
+  copied active-entry capacity change is safe for the weighted draw-submission
+  path. Overflow counters must stay zero before accepting any cap split.
 - **Draw-packet actual-change counters** —
   `draw_packet_declared_*`, `draw_packet_actual_*`, and
   `draw_packet_redundant_*` are opt-in via
@@ -196,6 +205,9 @@ flowchart TD
   EncodePhase37["encode-phase.37\nTLS binding snapshot scratch\nsnapshot bucket -27.3%\nreplay flat"]:::accepted
   EncodePhase38["encode-phase.38\nshared shader bytecode storage\nstate copy -35.7%\nqueue -7.4%"]:::accepted
   EncodePhase39["encode-phase.39\nsampler state compact\nFlatDrawState -41%\nqueue -12.3%"]:::accepted
+  EncodePhase40["encode-phase.40\nTSS active-entry compact\nFlatDrawState -18.5%\nSoA -16.3%"]:::accepted
+  EncodePhase41["encode-phase.41\nrender-state count proof\nmax 62 / gt64 0\nshrink held"]:::accepted
+  EncodePhase42["encode-phase.42\nrender-state priority compact\nFlatDrawState -11.4%\noverflow 0 / GPU flat"]:::accepted
   Snapshot10["snapshot.10\nuniform-refresh fast path\nrefresh -59.6%\nFPS flat"]:::accepted
 
   Drawrun1 -->|"split-into"| Drawrun2
@@ -259,6 +271,9 @@ flowchart TD
   EncodePhase36 -->|"fix submit scratch allocation"| EncodePhase37
   EncodePhase37 -->|"remove bytecode value copies"| EncodePhase38
   EncodePhase38 -->|"reduce sampler state width"| EncodePhase39
+  EncodePhase39 -->|"split TSS id space vs active entries"| EncodePhase40
+  EncodePhase40 -->|"prove render-state count before shrinking"| EncodePhase41
+  EncodePhase41 -->|"use 128-slot priority payload"| EncodePhase42
 ```
 
 ## Results synthesis
@@ -709,6 +724,65 @@ sampler-state compaction as a real CPU win, but the larger F4 render-state/TSS
 compaction still requires sparse id remapping or a different compact record
 shape.
 
+[[state-churn-encode-encode-phase.40]] refines that last sentence: the
+DeviceState texture-stage id space must stay `64`, but the copied
+`FlatDrawStateRecord` active-entry set can use a separate capacity. PE validates
+public `D3DTSS_*` ids to `18` possible entries and dxmt9 adds one internal
+`TSS_TEXTURE_TYPE=63`, so `kMaxFlatTextureStageStates=32` keeps a conservative
+active-entry bound without remapping keys. The structural width drops
+`FlatDrawStateRecord` `11,056 -> 9,008B`, `CanonicalDrawState`
+`13,384 -> 11,336B`, and `DrawRunSubmission` `24,064 -> 22,016B`. The primary
+same-present scout shows targeted copy wins:
+`d3d9_snapshot_state_copy_cpu_ms` `0.181239 -> 0.158232ms/present`,
+`submit_draw_run_batch_append_state_cpu_ms`
+`0.367501 -> 0.323385ms/present`, and
+`submit_draw_run_batch_append_state_soa_cpu_ms`
+`0.263628 -> 0.220626ms/present`. Broader encode remains mixed
+(`encode_draw_cpu_ms` `+1.55%` per present), so this is accepted as a
+state-width reduction, not a GPU/encode-bottleneck fix. The next F4 target,
+render-state compaction, still needs a sparse/remapped record or supported-ID
+proof before reducing any capacity.
+
+[[state-churn-encode-encode-phase.41]] adds that proof layer without changing
+render-state storage. New snapshot flat-state counters show the weighted GT1
+submission path has `883,062` samples, `render_state_entries_max=62`,
+`render_state_entries_gt64=0`, and no render/TSS/sampler overflow. TSS and
+sampler caps are additionally validated by `tss_stage_entries_max=11` and
+`sampler_slot_entries_max=9`. This proves `FlatStateSet<64>` would fit current
+GT1, but it does not yet justify changing the default: `DeviceState::reset()`
+already initializes `62` render-state entries, leaving only two spare entries
+for arbitrary `SetRenderState()` ids. Render-state compaction therefore remains
+either a wider active-entry cap with broader app evidence (`96`/`128`) or a
+sparse/remapped record that stores encoder-consumed states separately from the
+full compatibility digest.
+
+[[state-churn-encode-encode-phase.42]] implements the conservative variant of
+that design: `DeviceState` keeps the full `256` render-state id space, while the
+copied `FlatDrawStateRecord::renderStates` payload becomes a `128`-entry
+priority active set. Backend-consumed high-id states are appended first,
+remaining ids fill spare slots, and the full render-state hash remains the
+compatibility/debug digest. The structural width drops `FlatDrawStateRecord`
+`9,008 -> 7,984B`, `CanonicalDrawState` `11,336 -> 10,312B`, and
+`DrawRunSubmission` `22,016 -> 20,992B`. The 120s GT1 scout stays visually
+normal and reports `render_state_entries_max=62`, `gt128=0`, and overflow `0`.
+This is accepted as another bounded state-width reduction: direct state-copy and
+state-SoA children improve, but broader queue/snapshot and GPU totals remain
+run-variance dominated.
+
+[[state-churn-encode-encode-phase.43]] accepts a smaller resource-retention
+cleanup from the F1 critique. `appendDrawRunBatch()` stores one front
+`CanonicalDrawState` plus N draw params, so `CommandQueue::submitDrawRunBatch`
+now marks `batch.front().state.hot` once and keeps only binding
+override/snapshot payload marking per submission. The companion test update
+records the current contract for single imported batch submissions: base
+stream/index hot fields are binding-agnostic, and effective bindings live in
+`DrawBindingOverride` payloads. The 120s no-gputrace scout remains visually
+normal and moves the intended bucket:
+`submit_draw_run_batch_resource_mark_cpu_ms` `27.146 -> 24.739` (`-8.87%`).
+Broader `submit_draw_cpu_ms` drops `-1.87%`, while `gpu_command_buffer_time_ms`
+is flat (`+0.32%`) and completion wait worsens (`+2.00%`), so this is a
+targeted CPU micro-win, not a GPU bottleneck fix.
+
 ## How to run
 Every experiment here is a 3DMark05 GT1 run via the standard wrapper. This is a
 CPU draw-run / handle-churn domain: enable the per-encoder breakdown, run a cheap
@@ -724,6 +798,9 @@ bash scripts/tools/finalize_3dmark05_perf_probe.sh --suffix state-churn --frame 
   --require-binding-overrides-present --require-draw-submission-batch-present \
   --require-draw-run-records-increase --require-encode-draw-cpu-decrease
 ```
+
+For state-width-only changes, do not require draw-run record growth; those
+patches should compare per-present copy and append buckets instead.
 
 The `[dxmt9-perf-encoder]` / `[dxmt9-perf-encoder-stream]` lines and
 `commit_chunk_draw_run_*` plus `commit_chunk_*_cpu_ms` counters carry the churn

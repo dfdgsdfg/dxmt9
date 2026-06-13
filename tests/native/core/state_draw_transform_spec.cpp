@@ -1846,6 +1846,75 @@ void testRenderStateIntentPayloadAcrossDrawRunBoundary() {
         "single render-state intent change produces a distinct debug hash");
 }
 
+void testRenderStateFlatPayloadPreservesBackendKeysWhenOverflowing() {
+  DeviceState state;
+  state.reset();
+
+  for (u32 key = 0; key < kMaxStateSlots &&
+                    state.renderStates.size() <= kMaxFlatRenderStates + 16u; ++key) {
+    if (!state.renderStates.contains(key)) {
+      state.renderStates[key] = 0x90000000u | key;
+    }
+  }
+
+  state.renderStates[RS_SEPARATE_ALPHA_BLEND_ENABLE] = 1u;
+  state.renderStates[RS_SRC_BLEND_ALPHA] = static_cast<u32>(BlendFactor::BlendFactor);
+  state.renderStates[RS_DEST_BLEND_ALPHA] = static_cast<u32>(BlendFactor::InvBlendFactor);
+  state.renderStates[RS_BLEND_OP_ALPHA] = static_cast<u32>(BlendOp::Max);
+  state.renderStates[RS_COLOR_WRITE_ENABLE3] = 0x9u;
+  state.renderStates[RS_STENCIL_CCW_ZFAIL] = static_cast<u32>(StencilOp::Invert);
+  state.renderStates[RS_DEPTH_BIAS] = std::bit_cast<u32>(0.125f);
+  state.renderStates[RS_SLOPE_SCALE_DEPTH_BIAS] = std::bit_cast<u32>(2.0f);
+  state.renderStates[RS_ADAPTIVETESS_Y] = kFourCcAtoc;
+  state.renderStates[RS_POINT_SPRITE_ENABLE] = 1u;
+
+  check(state.renderStates.size() > kMaxFlatRenderStates,
+        "render-state test setup must overflow the compact flat payload");
+
+  const DrawDesc desc = makeDrawDescFromState(state, {});
+  const auto expectedKey = makeFlatDrawStateKey(desc);
+  const auto fixtureCanonical = makeCanonicalDrawStateForTest(desc);
+  const auto directCanonical = makeCanonicalDrawStateFromState(state, {});
+
+  check(fixtureCanonical.hot.renderStates.overflow,
+        "fixture canonical render-state payload marks compact overflow");
+  check(directCanonical.hot.renderStates.overflow,
+        "direct canonical render-state payload marks compact overflow");
+  checkEq(directCanonical.hot.renderStates.count, kMaxFlatRenderStates,
+          "direct canonical render-state payload is capped");
+  checkEq(fixtureCanonical.hot.renderStates.hash, expectedKey.renderStateHash,
+          "fixture compact payload keeps the full render-state hash");
+  checkEq(directCanonical.hot.renderStates.hash, expectedKey.renderStateHash,
+          "direct compact payload keeps the full render-state hash");
+
+  checkFlatStateValue(directCanonical.hot.renderStates, RS_SEPARATE_ALPHA_BLEND_ENABLE, 1u,
+                      "compact payload preserves separate alpha blend enable");
+  checkFlatStateValue(directCanonical.hot.renderStates, RS_SRC_BLEND_ALPHA,
+                      static_cast<u32>(BlendFactor::BlendFactor),
+                      "compact payload preserves source alpha blend factor");
+  checkFlatStateValue(directCanonical.hot.renderStates, RS_DEST_BLEND_ALPHA,
+                      static_cast<u32>(BlendFactor::InvBlendFactor),
+                      "compact payload preserves destination alpha blend factor");
+  checkFlatStateValue(directCanonical.hot.renderStates, RS_BLEND_OP_ALPHA,
+                      static_cast<u32>(BlendOp::Max),
+                      "compact payload preserves alpha blend op");
+  checkFlatStateValue(directCanonical.hot.renderStates, RS_COLOR_WRITE_ENABLE3, 0x9u,
+                      "compact payload preserves high color-write mask");
+  checkFlatStateValue(directCanonical.hot.renderStates, RS_STENCIL_CCW_ZFAIL,
+                      static_cast<u32>(StencilOp::Invert),
+                      "compact payload preserves back-face stencil zfail");
+  checkFlatStateValue(directCanonical.hot.renderStates, RS_DEPTH_BIAS,
+                      std::bit_cast<u32>(0.125f),
+                      "compact payload preserves depth bias");
+  checkFlatStateValue(directCanonical.hot.renderStates, RS_SLOPE_SCALE_DEPTH_BIAS,
+                      std::bit_cast<u32>(2.0f),
+                      "compact payload preserves slope-scale depth bias");
+  checkFlatStateValue(directCanonical.hot.renderStates, RS_ADAPTIVETESS_Y, kFourCcAtoc,
+                      "compact payload preserves ATOC render-state hack");
+  checkFlatStateValue(directCanonical.hot.renderStates, RS_POINT_SPRITE_ENABLE, 1u,
+                      "compact payload preserves point sprite enable");
+}
+
 void testSamplerAndTextureStageDirtyHashPayloadBoundaries() {
   DeviceState state;
   state.reset();
@@ -2623,6 +2692,7 @@ int main() {
   testVertexDeclFvfAndStreamBindings();
   testTextureStageArgumentCanonicalValues();
   testRenderStateIntentPayloadAcrossDrawRunBoundary();
+  testRenderStateFlatPayloadPreservesBackendKeysWhenOverflowing();
   testSamplerAndTextureStageDirtyHashPayloadBoundaries();
   testVertexDeclSnapshotSurvivesLaterStateMutation();
   testIndexedDrawRunPolicyDataContract();

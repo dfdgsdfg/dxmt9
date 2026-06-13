@@ -213,6 +213,21 @@ struct RecordingDxmt9Device final : dxmt9::Device {
   BackendDevice::PresentationStatusObserver presentationStatusObserver;
 };
 
+std::span<const u8> recordedPayloadBytes(const RecordedDrawRun& run,
+                                         DrawPayloadRange range) {
+  return drawRunPayloadBytes(range, std::span<const u8>(run.payloadArena));
+}
+
+DrawBindingOverride recordedBindingOverride(const RecordedDrawRun& run,
+                                            DrawPayloadRange range,
+                                            std::string_view message) {
+  const auto bytes = recordedPayloadBytes(run, range);
+  checkEq(bytes.size(), sizeof(DrawBindingOverride), message);
+  DrawBindingOverride binding{};
+  std::memcpy(&binding, bytes.data(), sizeof(binding));
+  return binding;
+}
+
 D9CWireHandle wireHandleFromValue(std::uint64_t value) {
   D9CWireHandle handle{};
   handle.lo = static_cast<std::uint32_t>(value);
@@ -579,18 +594,32 @@ void testImportedChunkBulkRetentionAndBarrierOrdering() {
           "first draw run records canonical and flat hot state together");
     checkEq(firstDrawRun.hot.colorAttachments[0].handle.value,
             renderTarget->handle().value, "first draw observes imported RT state");
-    checkEq(firstDrawRun.hot.streamBuffers[0].value, vertexBuffer->handle().value,
-            "first draw observes imported stream state");
+    checkEq(firstDrawRun.hot.streamBuffers[0].value, std::uint64_t{0},
+            "first draw base stream buffer is binding-agnostic");
     checkEq(firstDrawRun.hot.streamOffsets[0], 0u,
-            "first draw observes imported stream offset");
-    checkEq(firstDrawRun.hot.streamStrides[0], 16u,
-            "first draw observes imported stream stride");
+            "first draw base stream offset is binding-agnostic");
+    checkEq(firstDrawRun.hot.streamStrides[0], 0u,
+            "first draw base stream stride is binding-agnostic");
+    checkEq(firstDrawRun.hot.streamMask, 0u,
+            "first draw base stream mask is binding-agnostic");
+    const auto firstBinding = recordedBindingOverride(
+        firstDrawRun, firstDrawRun.draws[0].bindingOverrideRange,
+        "first draw binding override payload size");
+    checkEq(firstBinding.streamMask, 1u, "first draw binding stream mask");
+    checkEq(firstBinding.streams[0].buffer.value, vertexBuffer->handle().value,
+            "first draw binding stream buffer");
+    checkEq(firstBinding.streams[0].offset, 0u,
+            "first draw binding stream offset");
+    checkEq(firstBinding.streams[0].stride, 16u,
+            "first draw binding stream stride");
     checkEq(firstDrawRun.draws[0].startVertex, 0u,
             "first draw param keeps imported start vertex");
     check(!firstDrawRun.draws[0].indexed,
           "first draw param remains non-indexed");
-    check(firstDrawRun.payloadArena.empty(),
-          "first draw run has no UP payload arena");
+    check(firstDrawRun.draws[0].userVertexRange.empty(),
+          "first draw uses bound vertex buffer, not user vertex payload");
+    check(firstDrawRun.draws[0].userIndexRange.empty(),
+          "first draw has no user index payload");
 
     const auto& secondDrawRun = recorder->events[4].drawRun;
     checkEq(secondDrawRun.draws.size(), static_cast<std::size_t>(1),
@@ -601,8 +630,18 @@ void testImportedChunkBulkRetentionAndBarrierOrdering() {
             "second draw param remains in record order");
     checkEq(secondDrawRun.hot.colorAttachments[0].handle.value,
             renderTarget->handle().value, "second draw observes imported RT state");
-    checkEq(secondDrawRun.hot.streamBuffers[0].value, vertexBuffer->handle().value,
-            "second draw observes imported stream state");
+    checkEq(secondDrawRun.hot.streamBuffers[0].value, std::uint64_t{0},
+            "second draw base stream buffer is binding-agnostic");
+    const auto secondBinding = recordedBindingOverride(
+        secondDrawRun, secondDrawRun.draws[0].bindingOverrideRange,
+        "second draw binding override payload size");
+    checkEq(secondBinding.streamMask, 1u, "second draw binding stream mask");
+    checkEq(secondBinding.streams[0].buffer.value, vertexBuffer->handle().value,
+            "second draw binding stream buffer");
+    checkEq(secondBinding.streams[0].offset, 0u,
+            "second draw binding stream offset");
+    checkEq(secondBinding.streams[0].stride, 16u,
+            "second draw binding stream stride");
     checkEq(recorder->events[5].readback.source.value, renderTarget->handle().value,
             "readback source handle");
     checkEq(recorder->events[5].readback.destination.value,
@@ -782,15 +821,31 @@ void testReadbackBoundarySplitsCoalescedImportedDrawRun() {
     checkEq(afterReadback.hot.colorAttachments[0].handle.value,
             renderTarget->handle().value,
             "post-readback run keeps applied render target");
-    checkEq(afterReadback.hot.streamBuffers[0].value,
-            vertexBuffer->handle().value,
-            "post-readback run keeps applied stream buffer");
+    checkEq(afterReadback.hot.streamBuffers[0].value, std::uint64_t{0},
+            "post-readback run base stream buffer is binding-agnostic");
+    checkEq(afterReadback.hot.streamOffsets[0], 0u,
+            "post-readback run base stream offset is binding-agnostic");
+    checkEq(afterReadback.hot.streamStrides[0], 0u,
+            "post-readback run base stream stride is binding-agnostic");
+    const auto afterBinding = recordedBindingOverride(
+        afterReadback, afterReadback.draws[0].bindingOverrideRange,
+        "post-readback draw binding override payload size");
+    checkEq(afterBinding.streamMask, 1u,
+            "post-readback draw binding stream mask");
+    checkEq(afterBinding.streams[0].buffer.value, vertexBuffer->handle().value,
+            "post-readback draw binding stream buffer");
+    checkEq(afterBinding.streams[0].offset, 8u,
+            "post-readback draw binding stream offset");
+    checkEq(afterBinding.streams[0].stride, 24u,
+            "post-readback draw binding stream stride");
     checkEq(afterReadback.draws[0].startVertex, 11u,
             "post-readback draw keeps start vertex");
     checkEq(afterReadback.draws[0].primitiveCount, 3u,
             "post-readback draw keeps primitive count");
-    check(afterReadback.payloadArena.empty(),
-          "post-readback run has no UP payload arena");
+    check(afterReadback.draws[0].userVertexRange.empty(),
+          "post-readback draw uses bound vertex buffer, not user vertex payload");
+    check(afterReadback.draws[0].userIndexRange.empty(),
+          "post-readback draw has no user index payload");
   }
 
   checkEq(device->Release(), 0u, "release readback-run recording d3d device");
@@ -909,14 +964,31 @@ void testImportedIndexedDrawPreservesBoundIndexPolicy() {
           "indexed imported draw records canonical and flat hot state together");
     checkEq(drawRun.hot.colorAttachments[0].handle.value,
             renderTarget->handle().value, "indexed draw observes imported RT state");
-    checkEq(drawRun.hot.streamBuffers[0].value, vertexBuffer->handle().value,
-            "indexed draw observes imported stream state");
-    checkEq(drawRun.hot.streamOffsets[0], 12u,
-            "indexed draw observes imported stream offset");
-    checkEq(drawRun.hot.streamStrides[0], 16u,
-            "indexed draw observes imported stream stride");
-    checkEq(drawRun.hot.indexBuffer.value, indexBuffer->handle().value,
-            "indexed draw keeps imported index buffer in hot state");
+    checkEq(drawRun.hot.streamBuffers[0].value, std::uint64_t{0},
+            "indexed draw base stream buffer is binding-agnostic");
+    checkEq(drawRun.hot.streamOffsets[0], 0u,
+            "indexed draw base stream offset is binding-agnostic");
+    checkEq(drawRun.hot.streamStrides[0], 0u,
+            "indexed draw base stream stride is binding-agnostic");
+    checkEq(drawRun.hot.streamMask, 0u,
+            "indexed draw base stream mask is binding-agnostic");
+    checkEq(drawRun.hot.indexBuffer.value, std::uint64_t{0},
+            "indexed draw base index buffer is binding-agnostic");
+    const auto binding = recordedBindingOverride(
+        drawRun, drawRun.draws[0].bindingOverrideRange,
+        "indexed draw binding override payload size");
+    checkEq(binding.streamMask, 1u, "indexed draw binding stream mask");
+    checkEq(binding.streams[0].buffer.value, vertexBuffer->handle().value,
+            "indexed draw binding stream buffer");
+    checkEq(binding.streams[0].offset, 12u,
+            "indexed draw binding stream offset");
+    checkEq(binding.streams[0].stride, 16u,
+            "indexed draw binding stream stride");
+    check(binding.indexBufferValid, "indexed draw binding index valid");
+    checkEq(binding.indexBuffer.value, indexBuffer->handle().value,
+            "indexed draw binding index buffer");
+    check(binding.indexType == IndexType::UInt16,
+          "indexed draw binding index type");
     check(drawRun.draws[0].primitiveType == PrimitiveType::TriangleList,
           "indexed draw maps imported primitive type");
     checkEq(drawRun.draws[0].primitiveCount, 2u,
@@ -929,8 +1001,8 @@ void testImportedIndexedDrawPreservesBoundIndexPolicy() {
             "indexed draw keeps imported start index");
     check(drawRun.draws[0].userIndexRange.empty(),
           "indexed draw uses bound index buffer, not user index payload");
-    check(drawRun.payloadArena.empty(),
-          "indexed draw run has no UP payload arena");
+    check(drawRun.draws[0].userVertexRange.empty(),
+          "indexed draw uses bound vertex buffer, not user vertex payload");
   }
 
   checkEq(device->Release(), 0u, "release indexed recording d3d device");
@@ -1433,16 +1505,30 @@ void testImportedDrawRetainsOnlyRecordScopedHandles() {
     checkEq(drawRun.hot.colorAttachments[0].handle.value,
             renderTarget->handle().value,
             "scoped-handle draw uses the record-scoped RT");
-    checkEq(drawRun.hot.streamBuffers[0].value, vertexBuffer->handle().value,
-            "scoped-handle draw uses the record-scoped stream");
+    checkEq(drawRun.hot.streamBuffers[0].value, std::uint64_t{0},
+            "scoped-handle draw base stream buffer is binding-agnostic");
     checkEq(drawRun.hot.streamOffsets[0], 0u,
-            "scoped-handle draw keeps stream offset");
-    checkEq(drawRun.hot.streamStrides[0], 16u,
-            "scoped-handle draw keeps stream stride");
+            "scoped-handle draw base stream offset is binding-agnostic");
+    checkEq(drawRun.hot.streamStrides[0], 0u,
+            "scoped-handle draw base stream stride is binding-agnostic");
+    checkEq(drawRun.hot.streamMask, 0u,
+            "scoped-handle draw base stream mask is binding-agnostic");
+    const auto binding = recordedBindingOverride(
+        drawRun, drawRun.draws[0].bindingOverrideRange,
+        "scoped-handle draw binding override payload size");
+    checkEq(binding.streamMask, 1u, "scoped-handle draw binding stream mask");
+    checkEq(binding.streams[0].buffer.value, vertexBuffer->handle().value,
+            "scoped-handle draw binding stream buffer");
+    checkEq(binding.streams[0].offset, 0u,
+            "scoped-handle draw binding stream offset");
+    checkEq(binding.streams[0].stride, 16u,
+            "scoped-handle draw binding stream stride");
     checkEq(drawRun.draws[0].startVertex, 4u,
             "scoped-handle draw keeps start vertex");
-    check(drawRun.payloadArena.empty(),
-          "scoped-handle draw has no UP payload arena");
+    check(drawRun.draws[0].userVertexRange.empty(),
+          "scoped-handle draw uses bound vertex buffer, not user vertex payload");
+    check(drawRun.draws[0].userIndexRange.empty(),
+          "scoped-handle draw has no user index payload");
   }
 
   checkEq(device->Release(), 0u, "release scoped-handle recording d3d device");

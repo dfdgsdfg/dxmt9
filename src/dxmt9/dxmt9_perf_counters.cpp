@@ -709,6 +709,18 @@ struct Counters {
   std::atomic<std::uint64_t> d3d9SnapshotUniformCopyCpuNs{0};
   std::atomic<std::uint64_t> d3d9SnapshotStateCopyCpuNs{0};
   std::atomic<std::uint64_t> d3d9SnapshotDebugSnapshotCpuNs{0};
+  std::atomic<std::uint64_t> d3d9SnapshotFlatStateSamples{0};
+  std::atomic<std::uint64_t> d3d9SnapshotFlatRenderStateEntries{0};
+  std::atomic<std::uint64_t> d3d9SnapshotFlatRenderStateEntriesMax{0};
+  std::atomic<std::uint64_t> d3d9SnapshotFlatRenderStateEntriesGt64{0};
+  std::atomic<std::uint64_t> d3d9SnapshotFlatRenderStateEntriesGt128{0};
+  std::atomic<std::uint64_t> d3d9SnapshotFlatRenderStateOverflow{0};
+  std::atomic<std::uint64_t> d3d9SnapshotFlatTssEntries{0};
+  std::atomic<std::uint64_t> d3d9SnapshotFlatTssStageEntriesMax{0};
+  std::atomic<std::uint64_t> d3d9SnapshotFlatTssOverflow{0};
+  std::atomic<std::uint64_t> d3d9SnapshotFlatSamplerEntries{0};
+  std::atomic<std::uint64_t> d3d9SnapshotFlatSamplerSlotEntriesMax{0};
+  std::atomic<std::uint64_t> d3d9SnapshotFlatSamplerOverflow{0};
   std::atomic<std::uint64_t> d3d9SnapshotBindingOverrideCpuNs{0};
   std::atomic<std::uint64_t> d3d9SnapshotBindingOverrideStreamScans{0};
   std::atomic<std::uint64_t> d3d9SnapshotBindingOverrideStreamRecords{0};
@@ -1992,6 +2004,18 @@ constexpr CounterEntry kCounterTable[] = {
     {"d3d9_snapshot_uniform_copy_cpu_ms", CounterEntry::Kind::Milliseconds, &Counters::d3d9SnapshotUniformCopyCpuNs, nullptr, nullptr, 0.0},
     {"d3d9_snapshot_state_copy_cpu_ms", CounterEntry::Kind::Milliseconds, &Counters::d3d9SnapshotStateCopyCpuNs, nullptr, nullptr, 0.0},
     {"d3d9_snapshot_debug_snapshot_cpu_ms", CounterEntry::Kind::Milliseconds, &Counters::d3d9SnapshotDebugSnapshotCpuNs, nullptr, nullptr, 0.0},
+    {"d3d9_snapshot_flat_state_samples", CounterEntry::Kind::UnsignedCount, &Counters::d3d9SnapshotFlatStateSamples, nullptr, nullptr, 0.0},
+    {"d3d9_snapshot_flat_render_state_entries", CounterEntry::Kind::UnsignedCount, &Counters::d3d9SnapshotFlatRenderStateEntries, nullptr, nullptr, 0.0},
+    {"d3d9_snapshot_flat_render_state_entries_max", CounterEntry::Kind::UnsignedCount, &Counters::d3d9SnapshotFlatRenderStateEntriesMax, nullptr, nullptr, 0.0},
+    {"d3d9_snapshot_flat_render_state_entries_gt64", CounterEntry::Kind::UnsignedCount, &Counters::d3d9SnapshotFlatRenderStateEntriesGt64, nullptr, nullptr, 0.0},
+    {"d3d9_snapshot_flat_render_state_entries_gt128", CounterEntry::Kind::UnsignedCount, &Counters::d3d9SnapshotFlatRenderStateEntriesGt128, nullptr, nullptr, 0.0},
+    {"d3d9_snapshot_flat_render_state_overflow", CounterEntry::Kind::UnsignedCount, &Counters::d3d9SnapshotFlatRenderStateOverflow, nullptr, nullptr, 0.0},
+    {"d3d9_snapshot_flat_tss_entries", CounterEntry::Kind::UnsignedCount, &Counters::d3d9SnapshotFlatTssEntries, nullptr, nullptr, 0.0},
+    {"d3d9_snapshot_flat_tss_stage_entries_max", CounterEntry::Kind::UnsignedCount, &Counters::d3d9SnapshotFlatTssStageEntriesMax, nullptr, nullptr, 0.0},
+    {"d3d9_snapshot_flat_tss_overflow", CounterEntry::Kind::UnsignedCount, &Counters::d3d9SnapshotFlatTssOverflow, nullptr, nullptr, 0.0},
+    {"d3d9_snapshot_flat_sampler_entries", CounterEntry::Kind::UnsignedCount, &Counters::d3d9SnapshotFlatSamplerEntries, nullptr, nullptr, 0.0},
+    {"d3d9_snapshot_flat_sampler_slot_entries_max", CounterEntry::Kind::UnsignedCount, &Counters::d3d9SnapshotFlatSamplerSlotEntriesMax, nullptr, nullptr, 0.0},
+    {"d3d9_snapshot_flat_sampler_overflow", CounterEntry::Kind::UnsignedCount, &Counters::d3d9SnapshotFlatSamplerOverflow, nullptr, nullptr, 0.0},
     {"d3d9_snapshot_binding_override_cpu_ms", CounterEntry::Kind::Milliseconds, &Counters::d3d9SnapshotBindingOverrideCpuNs, nullptr, nullptr, 0.0},
     {"d3d9_snapshot_binding_override_stream_scans", CounterEntry::Kind::UnsignedCount, &Counters::d3d9SnapshotBindingOverrideStreamScans, nullptr, nullptr, 0.0},
     {"d3d9_snapshot_binding_override_stream_records", CounterEntry::Kind::UnsignedCount, &Counters::d3d9SnapshotBindingOverrideStreamRecords, nullptr, nullptr, 0.0},
@@ -4473,6 +4497,39 @@ void countD3D9SnapshotStateCopyCpuTime(std::uint64_t nanoseconds) {
 
 void countD3D9SnapshotDebugSnapshotCpuTime(std::uint64_t nanoseconds) {
   add(counters().d3d9SnapshotDebugSnapshotCpuNs, nanoseconds);
+}
+
+void countD3D9SnapshotFlatStateEntries(std::uint32_t renderStateEntries,
+                                       std::uint32_t textureStageStateEntries,
+                                       std::uint32_t textureStageStateEntryMax,
+                                       std::uint32_t samplerStateEntries,
+                                       std::uint32_t samplerStateEntryMax,
+                                       bool renderStateOverflow,
+                                       bool textureStageStateOverflow,
+                                       bool samplerStateOverflow) {
+  auto& c = counters();
+  add(c.d3d9SnapshotFlatStateSamples);
+  add(c.d3d9SnapshotFlatRenderStateEntries, renderStateEntries);
+  updateMax(c.d3d9SnapshotFlatRenderStateEntriesMax, renderStateEntries);
+  if (renderStateEntries > 64u) {
+    add(c.d3d9SnapshotFlatRenderStateEntriesGt64);
+  }
+  if (renderStateEntries > 128u) {
+    add(c.d3d9SnapshotFlatRenderStateEntriesGt128);
+  }
+  if (renderStateOverflow) {
+    add(c.d3d9SnapshotFlatRenderStateOverflow);
+  }
+  add(c.d3d9SnapshotFlatTssEntries, textureStageStateEntries);
+  updateMax(c.d3d9SnapshotFlatTssStageEntriesMax, textureStageStateEntryMax);
+  if (textureStageStateOverflow) {
+    add(c.d3d9SnapshotFlatTssOverflow);
+  }
+  add(c.d3d9SnapshotFlatSamplerEntries, samplerStateEntries);
+  updateMax(c.d3d9SnapshotFlatSamplerSlotEntriesMax, samplerStateEntryMax);
+  if (samplerStateOverflow) {
+    add(c.d3d9SnapshotFlatSamplerOverflow);
+  }
 }
 
 void countD3D9SnapshotBindingOverrideCpuTime(std::uint64_t nanoseconds) {

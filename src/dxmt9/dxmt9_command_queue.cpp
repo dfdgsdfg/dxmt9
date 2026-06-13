@@ -1400,17 +1400,17 @@ void CommandQueue::submitDrawRunBatch(
     }
     {
       PerfScope stageScope(perf::countSubmitDrawRunBatchResourceMarkCpuTime);
-      for (auto& submission : batch) {
-        std::span<const core::DrawParamPayloadView> payloads{};
-        if (!submission.payload.userVertexData.empty() ||
-            !submission.payload.userIndexData.empty() ||
-            !submission.payload.bindingOverrideData.empty() ||
-            !submission.payload.bindingSnapshotData.empty()) {
-          payloads = std::span<const core::DrawParamPayloadView>(&submission.payload, 1);
-        }
-        if (!skipDrawResourceMarking_ || forceDrawResourceMarkingAfterSplit_) {
-          const std::uint64_t seqId = seqIdForMark(*this, 0);
-          pool_.markDrawResources(submission.state.hot, seqId);
+      if (!skipDrawResourceMarking_ || forceDrawResourceMarkingAfterSplit_) {
+        const std::uint64_t seqId = seqIdForMark(*this, 0);
+        pool_.markDrawResources(batch.front().state.hot, seqId);
+        for (auto& submission : batch) {
+          std::span<const core::DrawParamPayloadView> payloads{};
+          if (!submission.payload.userVertexData.empty() ||
+              !submission.payload.userIndexData.empty() ||
+              !submission.payload.bindingOverrideData.empty() ||
+              !submission.payload.bindingSnapshotData.empty()) {
+            payloads = std::span<const core::DrawParamPayloadView>(&submission.payload, 1);
+          }
           markDrawBindingOverrideResources(pool_, payloads, seqId);
         }
       }

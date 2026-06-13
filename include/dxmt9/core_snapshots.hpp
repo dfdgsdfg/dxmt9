@@ -606,6 +606,8 @@ struct FlatStateSet {
   friend constexpr bool operator==(const FlatStateSet&, const FlatStateSet&) = default;
 };
 
+using FlatRenderStateSet = FlatStateSet<kMaxFlatRenderStates>;
+
 template <std::size_t MaxEntries>
 constexpr const FlatStateEntry* findFlatState(const FlatStateSet<MaxEntries>& set,
                                               u32 state) noexcept {
@@ -679,8 +681,8 @@ struct FlatDrawStateRecord {
   std::array<Handle, kMaxTextures> textures{};
   std::array<u32, kMaxTextures> textureLods{};
   u32 textureMask = 0;
-  FlatStateSet<kMaxStateSlots> renderStates{};
-  std::array<FlatStateSet<kMaxTextureStageStates>, kMaxTextureStages> textureStageStates{};
+  FlatRenderStateSet renderStates{};
+  std::array<FlatStateSet<kMaxFlatTextureStageStates>, kMaxTextureStages> textureStageStates{};
   std::array<FlatStateSet<kMaxSamplerStates>, kMaxSamplers> samplerStates{};
   std::array<RenderTargetAttachment, kMaxRenderTargets> colorAttachments{};
   RenderTargetAttachment depthStencil{};

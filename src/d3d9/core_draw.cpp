@@ -113,6 +113,177 @@ FlatStateSet<MaxEntries> makeFlatStateSet(const auto &values) {
   return set;
 }
 
+constexpr auto kFlatRenderStatePreservedKeys = std::to_array<u32>({
+    RS_Z_ENABLE,
+    RS_FILL_MODE,
+    9u,   // D3DRS_SHADEMODE.
+    RS_Z_WRITE_ENABLE,
+    RS_ALPHA_TEST_ENABLE,
+    16u,  // D3DRS_LASTPIXEL.
+    RS_SRC_BLEND,
+    RS_DEST_BLEND,
+    RS_CULL_MODE,
+    RS_Z_FUNC,
+    RS_ALPHA_REF,
+    RS_ALPHA_FUNC,
+    26u,  // D3DRS_DITHERENABLE.
+    RS_ALPHABLEND_ENABLE,
+    RS_FOG_ENABLE,
+    RS_SPECULAR_ENABLE,
+    RS_FOG_COLOR,
+    RS_FOG_TABLE_MODE,
+    RS_FOG_START,
+    RS_FOG_END,
+    RS_FOG_DENSITY,
+    RS_RANGE_FOG,
+    RS_STENCIL_ENABLE,
+    RS_STENCIL_FAIL,
+    RS_STENCIL_ZFAIL,
+    RS_STENCIL_PASS,
+    RS_STENCIL_FUNC,
+    RS_STENCIL_REF,
+    RS_STENCIL_MASK,
+    RS_STENCIL_WRITEMASK,
+    RS_TEXTURE_FACTOR,
+    RS_WRAP0,
+    RS_WRAP1,
+    RS_WRAP2,
+    RS_WRAP3,
+    RS_WRAP4,
+    RS_WRAP5,
+    RS_WRAP6,
+    RS_WRAP7,
+    136u,  // D3DRS_CLIPPING.
+    RS_LIGHTING,
+    RS_AMBIENT,
+    RS_FOG_FROM_VERTEX,
+    141u,  // D3DRS_COLORVERTEX.
+    142u,  // D3DRS_LOCALVIEWER.
+    RS_NORMALIZE_NORMALS,
+    RS_DIFFUSE_MATERIAL_SOURCE,
+    RS_SPECULAR_MATERIAL_SOURCE,
+    RS_AMBIENT_MATERIAL_SOURCE,
+    RS_EMISSIVE_MATERIAL_SOURCE,
+    RS_VERTEX_BLEND,
+    RS_CLIP_PLANE_ENABLE,
+    RS_POINTSIZE,
+    RS_POINTSIZE_MIN,
+    RS_POINT_SPRITE_ENABLE,
+    RS_POINT_SCALE_ENABLE,
+    RS_POINTSCALE_A,
+    RS_POINTSCALE_B,
+    RS_POINTSCALE_C,
+    161u,  // D3DRS_MULTISAMPLEANTIALIAS.
+    162u,  // D3DRS_MULTISAMPLEMASK.
+    163u,  // D3DRS_PATCHEDGESTYLE.
+    RS_POINTSIZE_MAX,
+    RS_INDEXED_VERTEX_BLEND_ENABLE,
+    RS_COLOR_WRITE_ENABLE,
+    170u,  // D3DRS_TWEENFACTOR.
+    RS_BLEND_OP,
+    172u,  // D3DRS_POSITIONDEGREE.
+    173u,  // D3DRS_NORMALDEGREE.
+    RS_SCISSOR_TEST_ENABLE,
+    RS_SLOPE_SCALE_DEPTH_BIAS,
+    176u,  // D3DRS_ANTIALIASEDLINEENABLE.
+    178u,  // D3DRS_MINTESSELLATIONLEVEL.
+    179u,  // D3DRS_MAXTESSELLATIONLEVEL.
+    180u,  // D3DRS_ADAPTIVETESS_X.
+    RS_ADAPTIVETESS_Y,
+    182u,  // D3DRS_ADAPTIVETESS_Z.
+    183u,  // D3DRS_ADAPTIVETESS_W.
+    184u,  // D3DRS_ENABLEADAPTIVETESSELLATION.
+    RS_TWO_SIDED_STENCIL_MODE,
+    RS_STENCIL_CCW_FAIL,
+    RS_STENCIL_CCW_ZFAIL,
+    RS_STENCIL_CCW_PASS,
+    RS_STENCIL_CCW_FUNC,
+    RS_COLOR_WRITE_ENABLE1,
+    RS_COLOR_WRITE_ENABLE2,
+    RS_COLOR_WRITE_ENABLE3,
+    RS_BLEND_FACTOR,
+    RS_SRGB_WRITE_ENABLE,
+    RS_DEPTH_BIAS,
+    RS_WRAP8,
+    RS_WRAP9,
+    RS_WRAP10,
+    RS_WRAP11,
+    RS_WRAP12,
+    RS_WRAP13,
+    RS_WRAP14,
+    RS_WRAP15,
+    RS_SEPARATE_ALPHA_BLEND_ENABLE,
+    RS_SRC_BLEND_ALPHA,
+    RS_DEST_BLEND_ALPHA,
+    RS_BLEND_OP_ALPHA,
+});
+
+template <std::size_t MaxEntries, typename StateTable>
+void appendFlatStateEntryIfPresent(FlatStateSet<MaxEntries> &set,
+                                   const StateTable &values, u32 state) {
+  for (u32 i = 0; i < set.count; ++i) {
+    if (set.entries[i].state == state) {
+      return;
+    }
+  }
+  if (set.count >= MaxEntries || !values.contains(state)) {
+    return;
+  }
+  set.entries[set.count++] =
+      FlatStateEntry{.state = state, .value = values.at(state)};
+}
+
+template <std::size_t MaxEntries, typename StateTable, std::size_t PreserveCount>
+FlatStateSet<MaxEntries> makePrioritizedFlatStateSet(
+    const StateTable &values,
+    const std::array<u32, PreserveCount> &preservedStates) {
+  FlatStateSet<MaxEntries> set{};
+  set.hash = hashStateMap(values);
+  set.overflow = values.size() > MaxEntries;
+
+  for (const u32 state : preservedStates) {
+    appendFlatStateEntryIfPresent(set, values, state);
+  }
+  for (const auto &entry : values) {
+    appendFlatStateEntryIfPresent(set, values, entry.first);
+  }
+  std::sort(set.entries.begin(), set.entries.begin() + set.count,
+            [](const FlatStateEntry &a, const FlatStateEntry &b) {
+              return a.state < b.state;
+            });
+  return set;
+}
+
+void countFlatDrawStateRecordEntries(const FlatDrawStateRecord &record) {
+  if (!dxmt9::perf::enabled()) {
+    return;
+  }
+
+  u32 textureStageEntries = 0;
+  u32 textureStageEntryMax = 0;
+  bool textureStageOverflow = false;
+  for (const auto &states : record.textureStageStates) {
+    textureStageEntries += states.count;
+    textureStageEntryMax = std::max(textureStageEntryMax, states.count);
+    textureStageOverflow = textureStageOverflow || states.overflow;
+  }
+
+  u32 samplerEntries = 0;
+  u32 samplerEntryMax = 0;
+  bool samplerOverflow = false;
+  for (const auto &states : record.samplerStates) {
+    samplerEntries += states.count;
+    samplerEntryMax = std::max(samplerEntryMax, states.count);
+    samplerOverflow = samplerOverflow || states.overflow;
+  }
+
+  dxmt9::perf::countD3D9SnapshotFlatStateEntries(
+      record.renderStates.count,
+      textureStageEntries, textureStageEntryMax,
+      samplerEntries, samplerEntryMax,
+      record.renderStates.overflow, textureStageOverflow, samplerOverflow);
+}
+
 u64 hashVertexDeclElements(const VertexDeclSnapshot &decl) {
   u64 hash = hashCombine(kFnvOffset, static_cast<u64>(decl.elements.size()));
   hash = hashCombine(hash, decl.fvf);
@@ -1716,10 +1887,11 @@ FlatDrawStateRecord makeFlatDrawStateRecord(const DrawDesc &desc) {
   record.textures = record.key.textures;
   record.textureLods = record.key.textureLods;
   record.textureMask = record.key.textureMask;
-  record.renderStates = makeFlatStateSet<kMaxStateSlots>(desc.rs.values);
+  record.renderStates = makePrioritizedFlatStateSet<kMaxFlatRenderStates>(
+      desc.rs.values, kFlatRenderStatePreservedKeys);
   for (size_t i = 0; i < kMaxTextureStages; ++i) {
     record.textureStageStates[i] =
-        makeFlatStateSet<kMaxTextureStageStates>(desc.textures[i].stageStates);
+        makeFlatStateSet<kMaxFlatTextureStageStates>(desc.textures[i].stageStates);
   }
   for (size_t i = 0; i < kMaxSamplers; ++i) {
     record.samplerStates[i] =
@@ -1833,10 +2005,11 @@ FlatDrawStateRecord makeFlatDrawStateRecordFromState(
   record.textures = record.key.textures;
   record.textureLods = record.key.textureLods;
   record.textureMask = record.key.textureMask;
-  record.renderStates = makeFlatStateSet<kMaxStateSlots>(state.renderStates);
+  record.renderStates = makePrioritizedFlatStateSet<kMaxFlatRenderStates>(
+      state.renderStates, kFlatRenderStatePreservedKeys);
   for (size_t i = 0; i < kMaxTextureStages; ++i) {
     record.textureStageStates[i] =
-        makeFlatStateSet<kMaxTextureStageStates>(state.textureStageStates[i]);
+        makeFlatStateSet<kMaxFlatTextureStageStates>(state.textureStageStates[i]);
   }
   for (size_t i = 0; i < kMaxSamplers; ++i) {
     record.samplerStates[i] =
@@ -2503,6 +2676,7 @@ HResult Device::snapshotDrawSubmissionFromCurrentState(
     submission.state.hot = cached.hot;
     submission.state.shaderLayout = cached.shaderLayout;
   }
+  countFlatDrawStateRecordEntries(cached.hot);
   {
     PerfScope debugSnapshotScope(
         dxmt9::perf::countD3D9SnapshotDebugSnapshotCpuTime);

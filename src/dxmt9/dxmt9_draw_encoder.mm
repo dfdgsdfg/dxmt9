@@ -2679,7 +2679,7 @@ struct ActiveEncoderBreakdown {
                                 u32 drawVertexStreamOffset,
                                 u32 startIndex,
                                 core::IndexType indexType,
-                                const core::FlatStateSet<core::kMaxStateSlots>& renderStates,
+                                const core::FlatRenderStateSet& renderStates,
                                 const core::ViewportScissor& viewport,
                                 WMTCullMode cullMode,
                                 WMTTriangleFillMode fillMode) const {
@@ -2910,7 +2910,7 @@ struct ActiveEncoderBreakdown {
                                  u64 vertexCount,
                                  u32 textureMask,
                                  std::span<const core::Handle> fragmentTextures,
-                                 const core::FlatStateSet<core::kMaxStateSlots>& renderStates,
+                                 const core::FlatRenderStateSet& renderStates,
                                  const core::ViewportScissor& viewport,
                                  WMTCullMode cullMode,
                                  WMTTriangleFillMode fillMode,
@@ -3360,7 +3360,7 @@ struct ActiveEncoderBreakdown {
                        bool nativeBaseVertexUsed,
                        u32 startIndex,
                        core::IndexType indexType,
-                       const core::FlatStateSet<core::kMaxStateSlots>& renderStates,
+                       const core::FlatRenderStateSet& renderStates,
                        const core::ViewportScissor& viewport,
                        WMTCullMode cullMode,
                        WMTTriangleFillMode fillMode) {
@@ -3841,7 +3841,7 @@ struct ActiveEncoderBreakdown {
                  stats.vsOutLayoutUnique, stats.vsOutLayoutUniqueOverflows);
   }
 
-  void recordBlendState(const core::FlatStateSet<core::kMaxStateSlots>& renderStates) {
+  void recordBlendState(const core::FlatRenderStateSet& renderStates) {
     if (!enabled) {
       return;
     }
@@ -4739,7 +4739,7 @@ void recordArgbufCbufUploadForBreakdown(void* userdata,
       argbufIndex, data, bytes, hostStructBytes);
 }
 
-bool blendFactorNeedsConstantColor(const core::FlatStateSet<core::kMaxStateSlots>& rs) {
+bool blendFactorNeedsConstantColor(const core::FlatRenderStateSet& rs) {
   const auto isConstantBlend = [](u32 factor) {
     return factor == static_cast<u32>(core::BlendFactor::BlendFactor) ||
            factor == static_cast<u32>(core::BlendFactor::InvBlendFactor);
@@ -4909,7 +4909,7 @@ WMTCullMode applyDebugCullOverride(WMTCullMode cullMode) {
 }
 
 WMTTriangleFillMode triangleFillModeFromRenderState(
-    const core::FlatStateSet<core::kMaxStateSlots>& renderStates) {
+    const core::FlatRenderStateSet& renderStates) {
   constexpr u32 kD3DFillWireframe = 2u;
   return core::flatStateOr(renderStates, core::RS_FILL_MODE, 3u) == kD3DFillWireframe
              ? WMTTriangleFillModeLines
@@ -4918,7 +4918,7 @@ WMTTriangleFillMode triangleFillModeFromRenderState(
 
 void setRasterizerCullMode(EncodeContext& ctx,
                            WMT::RenderCommandEncoder& encoder,
-                           const core::FlatStateSet<core::kMaxStateSlots>& renderStates,
+                           const core::FlatRenderStateSet& renderStates,
                            WMTCullMode cullMode) {
   cullMode = applyDebugCullOverride(cullMode);
   // D3D9 RS_DEPTH_BIAS / RS_SLOPE_SCALE_DEPTH_BIAS are stored as DWORDs but
@@ -8242,7 +8242,7 @@ WMTCullMode toWmtCullMode(debug::CullModeOverride mode,
 }
 
 bool indexedTriangleOpaqueDepthWriteClass(
-    const core::FlatStateSet<core::kMaxStateSlots>& renderStates,
+    const core::FlatRenderStateSet& renderStates,
     WMTTriangleFillMode fillMode) {
   if (fillMode != WMTTriangleFillModeFill) {
     return false;
@@ -8270,7 +8270,7 @@ bool indexedTriangleOpaqueDepthWriteClass(
 }
 
 bool indexedTriangleBlendEquationMatches(
-    const core::FlatStateSet<core::kMaxStateSlots>& renderStates,
+    const core::FlatRenderStateSet& renderStates,
     core::BlendFactor src,
     core::BlendFactor dst,
     core::BlendOp op) {
@@ -8298,7 +8298,7 @@ bool indexedTriangleClassMatches(
     debug::IndexedTriangleClassFilter filter,
     u32 primitiveCount,
     u32 textureMask,
-    const core::FlatStateSet<core::kMaxStateSlots>& renderStates,
+    const core::FlatRenderStateSet& renderStates,
     const core::ViewportScissor& viewport,
     WMTTriangleFillMode fillMode) {
   if (filter == debug::IndexedTriangleClassFilter::Any) {
@@ -8358,7 +8358,7 @@ bool indexedTriangleClassMatches(
     const debug::IndexedTriangleClassFilterList& filters,
     u32 primitiveCount,
     u32 textureMask,
-    const core::FlatStateSet<core::kMaxStateSlots>& renderStates,
+    const core::FlatRenderStateSet& renderStates,
     const core::ViewportScissor& viewport,
     WMTTriangleFillMode fillMode) {
   for (std::size_t i = 0; i < filters.count; ++i) {
@@ -8376,7 +8376,7 @@ bool indexedTriangleClassMatches(
 
 bool scissorRectProbeClassMatches(u32 primitiveCount,
                                   u32 textureMask,
-                                  const core::FlatStateSet<core::kMaxStateSlots>& renderStates,
+                                  const core::FlatRenderStateSet& renderStates,
                                   const core::ViewportScissor& viewport,
                                   WMTTriangleFillMode fillMode) {
   return indexedTriangleClassMatches(debug::probeScissorRectClassFilter(),
@@ -8395,7 +8395,7 @@ bool scissorRectProbeClassMatches(u32 primitiveCount,
 
 bool forceCullModeProbeClassMatches(u32 primitiveCount,
                                     u32 textureMask,
-                                    const core::FlatStateSet<core::kMaxStateSlots>& renderStates,
+                                    const core::FlatRenderStateSet& renderStates,
                                     const core::ViewportScissor& viewport,
                                     WMTTriangleFillMode fillMode) {
   return indexedTriangleClassMatches(debug::probeForceCullModeClassFilter(),
@@ -8415,7 +8415,7 @@ bool forceCullModeProbeClassMatches(u32 primitiveCount,
 bool forceTextureWhiteProbeClassMatches(
     u32 primitiveCount,
     u32 textureMask,
-    const core::FlatStateSet<core::kMaxStateSlots>& renderStates,
+    const core::FlatRenderStateSet& renderStates,
     const core::ViewportScissor& viewport,
     WMTTriangleFillMode fillMode) {
   return indexedTriangleClassMatches(debug::probeForceTextureWhiteClassFilter(),
@@ -8435,7 +8435,7 @@ bool forceTextureWhiteProbeClassMatches(
 bool forceExpandIndexedProbeClassMatches(
     u32 primitiveCount,
     u32 textureMask,
-    const core::FlatStateSet<core::kMaxStateSlots>& renderStates,
+    const core::FlatRenderStateSet& renderStates,
     const core::ViewportScissor& viewport,
     WMTTriangleFillMode fillMode) {
   return indexedTriangleClassMatches(debug::probeForceExpandIndexedClassFilter(),
@@ -8455,7 +8455,7 @@ bool forceExpandIndexedProbeClassMatches(
 bool disableAlphaBlendProbeClassMatches(
     u32 primitiveCount,
     u32 textureMask,
-    const core::FlatStateSet<core::kMaxStateSlots>& renderStates,
+    const core::FlatRenderStateSet& renderStates,
     const core::ViewportScissor& viewport,
     WMTTriangleFillMode fillMode) {
   return indexedTriangleClassMatches(debug::probeDisableAlphaBlendClassFilter(),
@@ -8475,7 +8475,7 @@ bool disableAlphaBlendProbeClassMatches(
 bool disableDepthWriteProbeClassMatches(
     u32 primitiveCount,
     u32 textureMask,
-    const core::FlatStateSet<core::kMaxStateSlots>& renderStates,
+    const core::FlatRenderStateSet& renderStates,
     const core::ViewportScissor& viewport,
     WMTTriangleFillMode fillMode) {
   return indexedTriangleClassMatches(debug::probeDisableDepthWriteClassFilter(),
@@ -8495,7 +8495,7 @@ bool disableDepthWriteProbeClassMatches(
 bool depthFuncAlwaysProbeClassMatches(
     u32 primitiveCount,
     u32 textureMask,
-    const core::FlatStateSet<core::kMaxStateSlots>& renderStates,
+    const core::FlatRenderStateSet& renderStates,
     const core::ViewportScissor& viewport,
     WMTTriangleFillMode fillMode) {
   return indexedTriangleClassMatches(debug::probeDepthFuncAlwaysClassFilter(),
@@ -8515,7 +8515,7 @@ bool depthFuncAlwaysProbeClassMatches(
 bool fragmentlessDepthOnlyProbeClassMatches(
     u32 primitiveCount,
     u32 textureMask,
-    const core::FlatStateSet<core::kMaxStateSlots>& renderStates,
+    const core::FlatRenderStateSet& renderStates,
     const core::ViewportScissor& viewport,
     WMTTriangleFillMode fillMode) {
   return indexedTriangleClassMatches(debug::probeFragmentlessDepthOnlyClassFilter(),
