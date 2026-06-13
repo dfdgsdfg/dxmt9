@@ -212,3 +212,57 @@ expose counters for the spread between `completedSeqId` and
 wait time attributed to each signal separately. Cross-axis blocking is a
 regression and must be detectable from these counters without timing-based
 heuristics.
+
+---
+
+## 7. Minimal-Copy Policy
+
+This section consolidates the copy and ownership rules that are otherwise spread
+across R-ARCH-2.4/2.5, R-ARCH-6.4/6.6, `design.md` §2.2, and the backend
+specializations (R-BACK-2.17, R-BACK-2.23, R-BACK-2.26, R-BACK-5.7,
+R-BACK-12.13, R-CORE-11.11). It states the warm-path materialization floor: each
+unique encoder-visible record or payload must reach owned storage at most once,
+and only when the encoder will actually read it. Subsystem specs specialize this
+policy; they must not restate or weaken it.
+
+**R-ARCH-7.1** A byte copy on the warm draw path is permitted only to establish
+ownership across a thread, process, or ABI boundary; stage user-provided D3D9
+memory (R-CORE-11.11); build a contiguous POD wire blob (R-ARCH-2.2); or intern a
+payload into queue-owned storage on a cache miss. Every other per-draw byte copy
+after warm-up is a regression (R-ARCH-2.5).
+
+**R-ARCH-7.2** The producer must not materialize a per-draw state or payload
+record that draw-run batching or uniform dedup will discard or collapse into a
+shared record. When a generation/lane or equivalent stamp proves a run shares one
+canonical state, only the surviving shared record may be materialized; per-draw
+differences must ride compact per-draw fields — `DrawParam` and
+binding-override/snapshot payloads (R-ARCH-2.3) — not a duplicated full state
+copy.
+
+**R-ARCH-7.3** Large draw payloads — shader constants, FFP matrices,
+DrawPrimitiveUP geometry, and shader/layout sidecars — must be referenced by a
+stable queue-local handle, span, or hash. A payload whose hash or handle is
+unchanged from a resident copy must be referenced, not re-copied; hot PSO and
+resource decisions must read hashes and compact flat records, not full constant
+arrays (R-BACK-2.17).
+
+**R-ARCH-7.4** Where the owned destination slot and its lifetime are determined
+before a record is built, the producer must construct the record directly into
+that owned storage. Pre-reserved arena and SoA slots (R-BACK-2.23, R-BACK-2.26)
+exist for this; building a record in an intermediate carrier and then copying it
+into the owned slot on the warm path is a regression.
+
+**R-ARCH-7.5** On a unified-memory device, data the GPU reads must be constructed
+in place into a shared-storage Metal allocation; that in-place build is the
+upload and must not be preceded by a separate CPU-struct-then-staging copy
+(R-BACK-5.7). A shared backing is a Metal allocation, not an arbitrary CPU
+pointer: the GPU reads it only through that allocation, and the allocation's
+lifetime must follow queue-owned sequence-ID retention (R-ARCH-6.4), not CPU-side
+scope.
+
+**R-ARCH-7.6** Conformance to this section must be evidenced by per-class copy and
+byte counters — per-draw state-copy bytes, discarded-materialization count,
+uniform intern hit/miss, transient and argument-buffer upload bytes, and
+warm-path heap-allocation count — not by frame timing alone (R-ARCH-2.6).
+Per-draw materialization that exceeds one surviving record per draw-run group, or
+a second copy of a payload whose hash is unchanged, is a regression signal.

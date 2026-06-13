@@ -102,7 +102,12 @@ avoiding a single fat command union that carries every possible payload.
 
 ### 2.2 Copy Policy
 
-Allowed copies:
+This is the design companion to the normative Minimal-Copy Policy
+(`requirements.md` §7, R-ARCH-7.1–7.6). The floor is: each unique
+encoder-visible record or payload reaches owned storage at most once, and only
+when the encoder will read it.
+
+Allowed copies (R-ARCH-7.1):
 
 - borrowed span to queue-owned storage;
 - user-provided UP memory into payload/staging arenas;
@@ -112,11 +117,61 @@ Allowed copies:
 
 Copies that should be treated as regressions:
 
-- one heap allocation per ordinary draw after warm-up;
+- one heap allocation per ordinary draw after warm-up (R-ARCH-7.1);
 - one bridge call per `Set*` or draw;
 - copying PE COM state into backend execution records;
 - storing process-local pointers in wire payloads;
-- rebuilding large shader/layout payloads when hashes or handles are enough.
+- rebuilding large shader/layout payloads when hashes or handles are enough
+  (R-ARCH-7.3);
+- materializing per-draw state records that draw-run batching then discards —
+  when a generation/lane stamp proves a shared canonical state, only the
+  surviving record is materialized and per-draw deltas ride `DrawParam` +
+  binding-override/snapshot payloads (R-ARCH-7.2);
+- building a record in an intermediate carrier and copying it into the owned
+  arena/SoA slot when the destination was already known — the producer
+  constructs in place into the owned slot instead (R-ARCH-7.4).
+
+Construct-in-place and unified memory (R-ARCH-7.4, R-ARCH-7.5):
+
+- The producer builds the surviving canonical draw state and the per-draw
+  uniform/constant bytes directly into their owned destinations — the ChunkSlot
+  SoA slot and the shared-storage transient/argbuf allocation — rather than into
+  a `DrawRunSubmission`-style carrier that is then copied in.
+- A shared (`MTLStorageModeShared`) backing is the GPU-read allocation itself, so
+  on Apple Silicon the in-place build of dirty constants is the upload; no
+  separate CPU-struct-then-staging copy is required (R-BACK-5.7). The allocation
+  is retained by queue sequence ID until GPU completion (R-ARCH-6.4); a reference
+  handle does not extend its lifetime by itself.
+
+The copy-class map marks each materialization point on the target warm draw path.
+Green is a mandatory floor copy or construct-in-place materialization
+(R-ARCH-7.1 / R-ARCH-7.5); blue is a move, reference, or direct bind that copies
+no payload bytes. The surviving front draw state is constructed directly into the
+queue-owned slot (R-ARCH-7.2 / R-ARCH-7.4), so no per-draw carrier copy appears;
+the current shortfall against this target is tracked in `gap.md`.
+
+```mermaid
+flowchart TD
+  DS["PE DeviceState"] --> Cache["producer cache<br/>built once per generation"]
+  Cache --> C8{{"construct front state in place<br/>one surviving record"}}
+  C8 --> SoA["ChunkSlot SoA<br/>queue-owned"]
+  SoA --> C4{{"uniform intern<br/>on cache miss"}}
+  SoA --> View["FlatDrawStateView<br/>reference, no copy"]
+  View --> Enc["encode thread"]
+  Enc --> C5{{"build dirty constants in place<br/>into Shared MTLBuffer"}}
+  C5 --> GPU["GPU read"]
+  PEw["PE chunk bytes"] --> C6{{"wire blob copy<br/>cross-boundary"}}
+  C6 --> Imp["unix import, owned"]
+  AppVB["app DEFAULT VB/IB"] --> Bind["bound directly<br/>NO copy"]
+  Bind --> Enc
+  UP["DrawPrimitiveUP memory"] --> C7{{"stage user memory"}}
+  C7 --> SoA
+
+  classDef floor fill:#d6f5d6,stroke:#2b7a2b,color:#063
+  classDef free fill:#e8eefc,stroke:#3559a8,color:#0b2239
+  class C4,C5,C6,C7,C8 floor
+  class View,Bind free
+```
 
 ---
 
