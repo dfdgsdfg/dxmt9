@@ -4856,6 +4856,14 @@ bool argbufCbufDirtyIdentityPerfEnabled() {
   return enabled;
 }
 
+bool argbufPayloadDeltaPerfEnabled() {
+  static const bool enabled = [] {
+    const char* env = std::getenv("DXMT9_PERF_ARGBUF_PAYLOAD_DELTA");
+    return env && env[0] != '\0' && env[0] != '0';
+  }();
+  return enabled;
+}
+
 using PerfCounterFn = void (*)(std::uint64_t);
 
 PerfCounterFn argbufCbufCachedRepointCpuRecorder(u32 argbufIndex) noexcept {
@@ -13799,7 +13807,21 @@ std::optional<core::metalqueue::QueueSubmissionRecord> encodeChunk(
   // (no fresh reservation, no rebind); a changed payload forces a fresh
   // table so draws can't observe last-write-wins on a shared table. Reset
   // whenever a new encoder opens (its argbuf table starts empty).
+  struct ArgbufPayloadDeltaKey {
+    u64 hash = 0;
+    u64 vertexConstantsHash = 0;
+    u64 pixelConstantsHash = 0;
+  };
+  auto makeArgbufPayloadDeltaKey =
+      [](const core::DrawUniformPayload& payload) {
+        return ArgbufPayloadDeltaKey{
+            .hash = payload.hash,
+            .vertexConstantsHash = payload.vertexConstantsHash,
+            .pixelConstantsHash = payload.pixelConstantsHash,
+        };
+      };
   std::optional<u64> lastArgbufPayloadHash;
+  std::optional<ArgbufPayloadDeltaKey> lastArgbufPayloadDeltaKey;
   ArgbufCbufCache argbufCbufCache;
   StreamIbStagingCache activeStreamIbStaging;
   TextureSamplerBindShadow textureSamplerShadow{};
@@ -14165,6 +14187,7 @@ std::optional<core::metalqueue::QueueSubmissionRecord> encodeChunk(
     // first draw of this pass must reopen + populate regardless of its
     // payload hash.
     lastArgbufPayloadHash.reset();
+    lastArgbufPayloadDeltaKey.reset();
     argbufCbufCache.reset();
     assertEncoderLifecycleInvariant();
   };
@@ -14505,6 +14528,8 @@ std::optional<core::metalqueue::QueueSubmissionRecord> encodeChunk(
         drawStateView.hot = &overrideHot;
       }
       drawStateView.uniforms = drawUniformPayload;
+      const auto drawArgbufPayloadDeltaKey =
+          makeArgbufPayloadDeltaKey(*drawUniformPayload);
       const u64 drawArgbufPayloadHash = drawUniformPayload->hash;
       const bool argbufPayloadChanged =
           !lastArgbufPayloadHash.has_value() ||
@@ -14512,6 +14537,47 @@ std::optional<core::metalqueue::QueueSubmissionRecord> encodeChunk(
       const bool reopenArgbuf =
           activePassUsesArgbufResourceArray ||
           argbufPayloadChanged;
+      if (activePassUsesArgbufHybrid && argbufPayloadDeltaPerfEnabled()) {
+        perf::countEncodeDrawArgbufPayloadDeltaProbeCalls(1u);
+        if (activePassUsesArgbufResourceArray && reopenArgbuf) {
+          perf::countEncodeDrawArgbufPayloadDeltaReopenResourceArray(1u);
+        }
+        if (!lastArgbufPayloadDeltaKey.has_value()) {
+          perf::countEncodeDrawArgbufPayloadDeltaFirst(1u);
+          if (reopenArgbuf) {
+            perf::countEncodeDrawArgbufPayloadDeltaReopenFirst(1u);
+          }
+        } else if (lastArgbufPayloadDeltaKey->hash ==
+                   drawArgbufPayloadDeltaKey.hash) {
+          perf::countEncodeDrawArgbufPayloadDeltaSame(1u);
+          if (reopenArgbuf) {
+            perf::countEncodeDrawArgbufPayloadDeltaReopenPayloadSame(1u);
+          }
+        } else {
+          perf::countEncodeDrawArgbufPayloadDeltaChanged(1u);
+          if (reopenArgbuf) {
+            perf::countEncodeDrawArgbufPayloadDeltaReopenPayloadChanged(1u);
+          }
+          const bool vsChanged =
+              lastArgbufPayloadDeltaKey->vertexConstantsHash !=
+              drawArgbufPayloadDeltaKey.vertexConstantsHash;
+          const bool psChanged =
+              lastArgbufPayloadDeltaKey->pixelConstantsHash !=
+              drawArgbufPayloadDeltaKey.pixelConstantsHash;
+          if (vsChanged) {
+            perf::countEncodeDrawArgbufPayloadDeltaChangedVs(1u);
+          }
+          if (psChanged) {
+            perf::countEncodeDrawArgbufPayloadDeltaChangedPs(1u);
+          }
+          if (vsChanged && psChanged) {
+            perf::countEncodeDrawArgbufPayloadDeltaChangedVsPs(1u);
+          }
+          if (!vsChanged && !psChanged) {
+            perf::countEncodeDrawArgbufPayloadDeltaChangedNonConstOnly(1u);
+          }
+        }
+      }
       const bool baseStateCompatible =
           activeDrawStateKey.has_value() &&
           activeDrawStateUsesPrefetchedPsoLayout &&
@@ -14563,6 +14629,7 @@ std::optional<core::metalqueue::QueueSubmissionRecord> encodeChunk(
         activeDrawStateKey = drawStateView.hot->key;
         activeDrawStateUsesPrefetchedPsoLayout = !overrideNeedsBaseStateBind;
         lastArgbufPayloadHash = drawArgbufPayloadHash;
+        lastArgbufPayloadDeltaKey = drawArgbufPayloadDeltaKey;
         if (colorAttachmentDumpAfterDrawWantsSplit(
                 activeColorAttachmentDump,
                 drawStateView,

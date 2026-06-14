@@ -817,7 +817,11 @@ FFPPS repoint ([[state-churn-encode-encode-phase.61]]). The dirty VS identity
 refresh closes the local dirty-mirror skip variant too: `808,845` dirty VS
 probes produce `0` hits, `788,347` misses, and `20,498` no-cache rows matching
 render-pass begin. Treat dirty VS updates as real current-model identity churn,
-not stale cache repeats ([[state-churn-encode-encode-phase.62]]).
+not stale cache repeats ([[state-churn-encode-encode-phase.62]]). The follow-up
+payload-delta probe also rejects broad non-shader payload hash churn as the
+argbuf reopen owner: all `931,917` changed-payload reopens are explained by
+VS/PS constant hashes and `changed_nonconst_only=0`
+([[state-churn-encode-encode-phase.63]]).
 
 ```mermaid
 flowchart TD
@@ -1256,6 +1260,7 @@ proof.
   [[state-churn-encode-encode-phase.25]],
   [[state-churn-encode-encode-phase.61]],
   [[state-churn-encode-encode-phase.62]],
+  [[state-churn-encode-encode-phase.63]],
   [[snapshot-cache-snapshot.04]],
   [[snapshot-cache-snapshot.05]],
   [[snapshot-cache-snapshot.06]],
@@ -1282,7 +1287,7 @@ proof.
 | [[backend-shape-classifiers]] | alpha/depth/cull/scissor/fog/texture/expand | REJECTED/secondary; indexed path mandatory |
 | [[attachment-pixelformat]] | R32F / X8 PixelFormatView suppression | secondary (texture-write), not VS owner |
 | [[const-upload]] | cbuf/argbuf class/volatility/dirty-range/sparse | CPU amplifier, GPU unmoved |
-| [[state-churn-encode]] | stream/IB churn, draw-run, binding override | CPU wins, GPU flat; stream/IB handle-stable A/B accepted as diagnostic in [[state-churn-encode-stream.08]], Xcode rejected handle identity in [[state-churn-encode-stream.09]] |
+| [[state-churn-encode]] | stream/IB churn, draw-run, binding override | CPU wins, GPU flat; stream/IB handle-stable A/B accepted as diagnostic in [[state-churn-encode-stream.08]], Xcode rejected handle identity in [[state-churn-encode-stream.09]], argbuf broad-payload-hash reopen path rejected in [[state-churn-encode-encode-phase.63]] |
 | [[snapshot-cache]] | D3D9 draw-state snapshot rebuild | historical CPU owner; recovered to residual |
 | [[render-pass-store]] | RT/depth re-entry, store DontCare, pass-chain | re-entry real; dominant top rows are immediate role-pair A/B/A target reuse; coalescing OPEN |
 

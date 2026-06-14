@@ -91,6 +91,7 @@ bottleneck — that is owned by [[hidden-backend-storage]].
 | H71 | The `encode_draw_issue_cpu_ms` bucket hides dxmt9 wrapper or diagnostic overhead | rejected; indexed Metal draw-call attribution accepted | [[state-churn-encode-encode-phase.60]] (`DXMT9_PERF_DRAW_ISSUE_SPLIT=1`: all draws indexed, visibility/expanded/split/nonindexed `0`, Metal draw call `897.049ms` / `77.0%` of issue parent) |
 | H72 | Argbuf cached-repoint/content-probe residual has one stage worth primary optimization | rejected as primary lever; attribution accepted | [[state-churn-encode-encode-phase.61]] (`DXMT9_PERF_ARGBUF_CBUF_PROBE_SPLIT=1`: FFPPS repoint `899,453` calls / `345.390MB` but `137.306ms`; VS probe `143,728` hits / `788,015` misses and `83.048ms`; dirty VS update remains `936.123ms`) |
 | H73 | Dirty VS cbuf updates are stale-cache repeats that can be repointed or skipped by identity | rejected-current | [[state-churn-encode-encode-phase.62]] (`DXMT9_PERF_ARGBUF_CBUF_DIRTY_IDENTITY=1`: dirty VS probes `808,845`, hits `0`, misses `788,347`, no-cache `20,498` matching render-pass begin; cached dirty VS miss rate `100%`) |
+| H74 | Argbuf table reopen is mostly caused by over-broad non-shader payload hash changes | rejected-current; shader-constant attribution accepted | [[state-churn-encode-encode-phase.63]] (`DXMT9_PERF_ARGBUF_PAYLOAD_DELTA=1`: payload changes `931,917` exactly match no-dirty reopen rows, `nonconst_only=0`, VS/PS explain all changes; resource-array forced reopen `0`) |
 
 ## Verification methods
 
@@ -1087,6 +1088,20 @@ not add a dirty-mirror cached-repoint fast path for GT1 without a new upstream
 semantic change. The remaining argbuf work is now specifically table reopen
 frequency, cheaper per-draw VS constant storage, or reducing upstream VS dirty
 frequency.
+
+[[state-churn-encode-encode-phase.63]] closes the broad-payload-hash variant of
+the argbuf reopen question. The opt-in
+`DXMT9_PERF_ARGBUF_PAYLOAD_DELTA=1` probe shows `payload_changed=931,917`,
+exactly matching `encode_draw_argbuf_cbuf_reopen_no_dirty_hash_mismatch`, while
+`payload_same=330,687` exactly matches the clean-skip rows and first draws
+match `render_pass_begin=20,475`. Most importantly, `changed_nonconst_only=0`:
+all changed-payload reopens are explained by VS and/or PS constant component
+hash movement (`624,768` VS-only, `144,058` PS-only, `163,091` both). Do not
+try to save GT1 argbuf reopens by replacing the full payload hash with only
+shader-constant component hashes; the current workload is already shader-
+constant driven. The remaining choices are upstream constant churn reduction,
+cheaper changed-constant cbuf storage, or a table model that avoids per-change
+reopen side effects without reusing mutable table contents unsafely.
 
 ## How to run
 Every experiment here is a 3DMark05 GT1 run via the standard wrapper. This is a

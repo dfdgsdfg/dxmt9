@@ -619,6 +619,18 @@ struct Counters {
   std::atomic<std::uint64_t> encodeDrawArgbufCbufDirtyVsIdentityNoCache{0};
   std::atomic<std::uint64_t> encodeDrawArgbufCbufDirtyVsIdentityHitBytes{0};
   std::atomic<std::uint64_t> encodeDrawArgbufCbufDirtyVsIdentityMissBytes{0};
+  std::atomic<std::uint64_t> encodeDrawArgbufPayloadDeltaProbeCalls{0};
+  std::atomic<std::uint64_t> encodeDrawArgbufPayloadDeltaFirst{0};
+  std::atomic<std::uint64_t> encodeDrawArgbufPayloadDeltaSame{0};
+  std::atomic<std::uint64_t> encodeDrawArgbufPayloadDeltaChanged{0};
+  std::atomic<std::uint64_t> encodeDrawArgbufPayloadDeltaChangedVs{0};
+  std::atomic<std::uint64_t> encodeDrawArgbufPayloadDeltaChangedPs{0};
+  std::atomic<std::uint64_t> encodeDrawArgbufPayloadDeltaChangedVsPs{0};
+  std::atomic<std::uint64_t> encodeDrawArgbufPayloadDeltaChangedNonConstOnly{0};
+  std::atomic<std::uint64_t> encodeDrawArgbufPayloadDeltaReopenFirst{0};
+  std::atomic<std::uint64_t> encodeDrawArgbufPayloadDeltaReopenPayloadChanged{0};
+  std::atomic<std::uint64_t> encodeDrawArgbufPayloadDeltaReopenPayloadSame{0};
+  std::atomic<std::uint64_t> encodeDrawArgbufPayloadDeltaReopenResourceArray{0};
   std::atomic<std::uint64_t> encodeDrawStreamBindCpuNs{0};
   std::atomic<std::uint64_t> encodeDrawStreamBindCpuMaxNs{0};
   std::atomic<std::uint64_t> encodeDrawStreamBindRasterPhaseCpuNs{0};
@@ -2122,6 +2134,18 @@ constexpr CounterEntry kCounterTable[] = {
     {"encode_draw_argbuf_cbuf_dirty_vs_identity_no_cache", CounterEntry::Kind::UnsignedCount, &Counters::encodeDrawArgbufCbufDirtyVsIdentityNoCache, nullptr, nullptr, 0.0},
     {"encode_draw_argbuf_cbuf_dirty_vs_identity_hit_bytes", CounterEntry::Kind::UnsignedCount, &Counters::encodeDrawArgbufCbufDirtyVsIdentityHitBytes, nullptr, nullptr, 0.0},
     {"encode_draw_argbuf_cbuf_dirty_vs_identity_miss_bytes", CounterEntry::Kind::UnsignedCount, &Counters::encodeDrawArgbufCbufDirtyVsIdentityMissBytes, nullptr, nullptr, 0.0},
+    {"encode_draw_argbuf_payload_delta_probe_calls", CounterEntry::Kind::UnsignedCount, &Counters::encodeDrawArgbufPayloadDeltaProbeCalls, nullptr, nullptr, 0.0},
+    {"encode_draw_argbuf_payload_delta_first", CounterEntry::Kind::UnsignedCount, &Counters::encodeDrawArgbufPayloadDeltaFirst, nullptr, nullptr, 0.0},
+    {"encode_draw_argbuf_payload_delta_same", CounterEntry::Kind::UnsignedCount, &Counters::encodeDrawArgbufPayloadDeltaSame, nullptr, nullptr, 0.0},
+    {"encode_draw_argbuf_payload_delta_changed", CounterEntry::Kind::UnsignedCount, &Counters::encodeDrawArgbufPayloadDeltaChanged, nullptr, nullptr, 0.0},
+    {"encode_draw_argbuf_payload_delta_changed_vs", CounterEntry::Kind::UnsignedCount, &Counters::encodeDrawArgbufPayloadDeltaChangedVs, nullptr, nullptr, 0.0},
+    {"encode_draw_argbuf_payload_delta_changed_ps", CounterEntry::Kind::UnsignedCount, &Counters::encodeDrawArgbufPayloadDeltaChangedPs, nullptr, nullptr, 0.0},
+    {"encode_draw_argbuf_payload_delta_changed_vs_ps", CounterEntry::Kind::UnsignedCount, &Counters::encodeDrawArgbufPayloadDeltaChangedVsPs, nullptr, nullptr, 0.0},
+    {"encode_draw_argbuf_payload_delta_changed_nonconst_only", CounterEntry::Kind::UnsignedCount, &Counters::encodeDrawArgbufPayloadDeltaChangedNonConstOnly, nullptr, nullptr, 0.0},
+    {"encode_draw_argbuf_payload_delta_reopen_first", CounterEntry::Kind::UnsignedCount, &Counters::encodeDrawArgbufPayloadDeltaReopenFirst, nullptr, nullptr, 0.0},
+    {"encode_draw_argbuf_payload_delta_reopen_payload_changed", CounterEntry::Kind::UnsignedCount, &Counters::encodeDrawArgbufPayloadDeltaReopenPayloadChanged, nullptr, nullptr, 0.0},
+    {"encode_draw_argbuf_payload_delta_reopen_payload_same", CounterEntry::Kind::UnsignedCount, &Counters::encodeDrawArgbufPayloadDeltaReopenPayloadSame, nullptr, nullptr, 0.0},
+    {"encode_draw_argbuf_payload_delta_reopen_resource_array", CounterEntry::Kind::UnsignedCount, &Counters::encodeDrawArgbufPayloadDeltaReopenResourceArray, nullptr, nullptr, 0.0},
     {"encode_draw_stream_bind_cpu_ms", CounterEntry::Kind::Milliseconds, &Counters::encodeDrawStreamBindCpuNs, nullptr, nullptr, 0.0},
     {"encode_draw_stream_bind_cpu_max_ms", CounterEntry::Kind::Milliseconds, &Counters::encodeDrawStreamBindCpuMaxNs, nullptr, nullptr, 0.0},
     {"encode_draw_stream_bind_cpu_p50_ms", CounterEntry::Kind::PercentileMs, nullptr, nullptr, &Counters::encodeDrawStreamBindCpuRing, 0.5},
@@ -4618,6 +4642,54 @@ void countEncodeDrawArgbufCbufDirtyVsIdentityHitBytes(std::uint64_t bytes) {
 
 void countEncodeDrawArgbufCbufDirtyVsIdentityMissBytes(std::uint64_t bytes) {
   add(counters().encodeDrawArgbufCbufDirtyVsIdentityMissBytes, bytes);
+}
+
+void countEncodeDrawArgbufPayloadDeltaProbeCalls(std::uint64_t calls) {
+  add(counters().encodeDrawArgbufPayloadDeltaProbeCalls, calls);
+}
+
+void countEncodeDrawArgbufPayloadDeltaFirst(std::uint64_t calls) {
+  add(counters().encodeDrawArgbufPayloadDeltaFirst, calls);
+}
+
+void countEncodeDrawArgbufPayloadDeltaSame(std::uint64_t calls) {
+  add(counters().encodeDrawArgbufPayloadDeltaSame, calls);
+}
+
+void countEncodeDrawArgbufPayloadDeltaChanged(std::uint64_t calls) {
+  add(counters().encodeDrawArgbufPayloadDeltaChanged, calls);
+}
+
+void countEncodeDrawArgbufPayloadDeltaChangedVs(std::uint64_t calls) {
+  add(counters().encodeDrawArgbufPayloadDeltaChangedVs, calls);
+}
+
+void countEncodeDrawArgbufPayloadDeltaChangedPs(std::uint64_t calls) {
+  add(counters().encodeDrawArgbufPayloadDeltaChangedPs, calls);
+}
+
+void countEncodeDrawArgbufPayloadDeltaChangedVsPs(std::uint64_t calls) {
+  add(counters().encodeDrawArgbufPayloadDeltaChangedVsPs, calls);
+}
+
+void countEncodeDrawArgbufPayloadDeltaChangedNonConstOnly(std::uint64_t calls) {
+  add(counters().encodeDrawArgbufPayloadDeltaChangedNonConstOnly, calls);
+}
+
+void countEncodeDrawArgbufPayloadDeltaReopenFirst(std::uint64_t calls) {
+  add(counters().encodeDrawArgbufPayloadDeltaReopenFirst, calls);
+}
+
+void countEncodeDrawArgbufPayloadDeltaReopenPayloadChanged(std::uint64_t calls) {
+  add(counters().encodeDrawArgbufPayloadDeltaReopenPayloadChanged, calls);
+}
+
+void countEncodeDrawArgbufPayloadDeltaReopenPayloadSame(std::uint64_t calls) {
+  add(counters().encodeDrawArgbufPayloadDeltaReopenPayloadSame, calls);
+}
+
+void countEncodeDrawArgbufPayloadDeltaReopenResourceArray(std::uint64_t calls) {
+  add(counters().encodeDrawArgbufPayloadDeltaReopenResourceArray, calls);
 }
 
 void countEncodeDrawStreamBindCpuTime(std::uint64_t nanoseconds) {
