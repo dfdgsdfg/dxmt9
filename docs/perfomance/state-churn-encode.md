@@ -92,6 +92,7 @@ bottleneck — that is owned by [[hidden-backend-storage]].
 | H72 | Argbuf cached-repoint/content-probe residual has one stage worth primary optimization | rejected as primary lever; attribution accepted | [[state-churn-encode-encode-phase.61]] (`DXMT9_PERF_ARGBUF_CBUF_PROBE_SPLIT=1`: FFPPS repoint `899,453` calls / `345.390MB` but `137.306ms`; VS probe `143,728` hits / `788,015` misses and `83.048ms`; dirty VS update remains `936.123ms`) |
 | H73 | Dirty VS cbuf updates are stale-cache repeats that can be repointed or skipped by identity | rejected-current | [[state-churn-encode-encode-phase.62]] (`DXMT9_PERF_ARGBUF_CBUF_DIRTY_IDENTITY=1`: dirty VS probes `808,845`, hits `0`, misses `788,347`, no-cache `20,498` matching render-pass begin; cached dirty VS miss rate `100%`) |
 | H74 | Argbuf table reopen is mostly caused by over-broad non-shader payload hash changes | rejected-current; shader-constant attribution accepted | [[state-churn-encode-encode-phase.63]] (`DXMT9_PERF_ARGBUF_PAYLOAD_DELTA=1`: payload changes `931,917` exactly match no-dirty reopen rows, `nonconst_only=0`, VS/PS explain all changes; resource-array forced reopen `0`) |
+| H75 | Dirty VS cbuf upload width is mostly the dirty register range | rejected-current; usage-prefix attribution accepted | [[state-churn-encode-encode-phase.64]] (frame60 avg dirty float regs/upload `0.702`, usage `45.147`, plan `57.483`, VS bytes/upload `984.712`; indexed-float full fallback `20.21%`) |
 
 ## Verification methods
 
@@ -265,6 +266,8 @@ flowchart TD
   EncodePhase60["encode-phase.60\nissue split\nMetal indexed draw\nowns issue"]:::accepted
   EncodePhase61["encode-phase.61\nargbuf cbuf probe split\nno single stage owner"]:::accepted
   EncodePhase62["encode-phase.62\ndirty VS identity\n0 hits / 788k misses"]:::rejected
+  EncodePhase63["encode-phase.63\npayload delta\nVS/PS constants own reopen"]:::rejected
+  EncodePhase64["encode-phase.64\nVS cbuf plan shape\nusage prefix dominates"]:::accepted
   Snapshot10["snapshot.10\nuniform-refresh fast path\nrefresh -59.6%\nFPS flat"]:::accepted
 
   Drawrun1 -->|"split-into"| Drawrun2
@@ -351,6 +354,8 @@ flowchart TD
   EncodePhase58 -->|"split draw issue bucket"| EncodePhase60
   EncodePhase57 -->|"split cbuf probe/repoint stages"| EncodePhase61
   EncodePhase61 -->|"refresh dirty VS skip proof"| EncodePhase62
+  EncodePhase62 -->|"split argbuf reopen payload delta"| EncodePhase63
+  EncodePhase63 -->|"measure cbuf plan shape"| EncodePhase64
 ```
 
 ## Results synthesis
@@ -1102,6 +1107,18 @@ shader-constant component hashes; the current workload is already shader-
 constant driven. The remaining choices are upstream constant churn reduction,
 cheaper changed-constant cbuf storage, or a table model that avoids per-change
 reopen side effects without reusing mutable table contents unsafely.
+
+[[state-churn-encode-encode-phase.64]] then rejects the narrower "dirty range
+is still too large" explanation for dirty VS cbuf width. In a scoped frame60
+encoder-breakdown run, VS uploads average `984.712` bytes, but the dirty
+high-water range averages only `0.702` float regs per upload. The width is
+instead dominated by shader usage and fallback shape: usage averages `45.147`
+float regs, the final plan averages `57.483` regs, and indexed-float access
+forces full-struct uploads for `20.21%` of frame60 VS uploads. The current
+prefix-preserving builder is already using the safe range trim available to
+the MSL-visible `VsConsts` ABI. Further large cbuf wins need upstream constant
+churn reduction, persistent/segmented constant storage, or shader-specific
+packed constant layouts rather than another dirty-range micro-trim.
 
 ## How to run
 Every experiment here is a 3DMark05 GT1 run via the standard wrapper. This is a

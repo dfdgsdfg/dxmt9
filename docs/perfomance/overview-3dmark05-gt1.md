@@ -821,7 +821,13 @@ not stale cache repeats ([[state-churn-encode-encode-phase.62]]). The follow-up
 payload-delta probe also rejects broad non-shader payload hash churn as the
 argbuf reopen owner: all `931,917` changed-payload reopens are explained by
 VS/PS constant hashes and `changed_nonconst_only=0`
-([[state-churn-encode-encode-phase.63]]).
+([[state-churn-encode-encode-phase.63]]). The scoped VS-cbuf plan-shape run
+then rejects dirty-range width as the next large cbuf owner: frame60 averages
+`0.702` dirty float regs/upload but `57.483` planned float regs/upload, with
+`20.21%` indexed-float full-struct fallback. The cbuf lane now points at
+constant churn, segmented/persistent storage, or shader-specific packed
+constant layouts, not another prefix trim
+([[state-churn-encode-encode-phase.64]]).
 
 ```mermaid
 flowchart TD
@@ -1261,6 +1267,7 @@ proof.
   [[state-churn-encode-encode-phase.61]],
   [[state-churn-encode-encode-phase.62]],
   [[state-churn-encode-encode-phase.63]],
+  [[state-churn-encode-encode-phase.64]],
   [[snapshot-cache-snapshot.04]],
   [[snapshot-cache-snapshot.05]],
   [[snapshot-cache-snapshot.06]],
@@ -1287,7 +1294,7 @@ proof.
 | [[backend-shape-classifiers]] | alpha/depth/cull/scissor/fog/texture/expand | REJECTED/secondary; indexed path mandatory |
 | [[attachment-pixelformat]] | R32F / X8 PixelFormatView suppression | secondary (texture-write), not VS owner |
 | [[const-upload]] | cbuf/argbuf class/volatility/dirty-range/sparse | CPU amplifier, GPU unmoved |
-| [[state-churn-encode]] | stream/IB churn, draw-run, binding override | CPU wins, GPU flat; stream/IB handle-stable A/B accepted as diagnostic in [[state-churn-encode-stream.08]], Xcode rejected handle identity in [[state-churn-encode-stream.09]], argbuf broad-payload-hash reopen path rejected in [[state-churn-encode-encode-phase.63]] |
+| [[state-churn-encode]] | stream/IB churn, draw-run, binding override | CPU wins, GPU flat; stream/IB handle-stable A/B accepted as diagnostic in [[state-churn-encode-stream.08]], Xcode rejected handle identity in [[state-churn-encode-stream.09]], argbuf broad-payload-hash reopen path rejected in [[state-churn-encode-encode-phase.63]], dirty VS cbuf width attributed to usage-prefix/indexed fallback in [[state-churn-encode-encode-phase.64]] |
 | [[snapshot-cache]] | D3D9 draw-state snapshot rebuild | historical CPU owner; recovered to residual |
 | [[render-pass-store]] | RT/depth re-entry, store DontCare, pass-chain | re-entry real; dominant top rows are immediate role-pair A/B/A target reuse; coalescing OPEN |
 
