@@ -4848,6 +4848,14 @@ bool argbufCbufProbeSplitPerfEnabled() {
   return enabled;
 }
 
+bool argbufCbufDirtyIdentityPerfEnabled() {
+  static const bool enabled = [] {
+    const char* env = std::getenv("DXMT9_PERF_ARGBUF_CBUF_DIRTY_IDENTITY");
+    return env && env[0] != '\0' && env[0] != '0';
+  }();
+  return enabled;
+}
+
 using PerfCounterFn = void (*)(std::uint64_t);
 
 PerfCounterFn argbufCbufCachedRepointCpuRecorder(u32 argbufIndex) noexcept {
@@ -10260,6 +10268,8 @@ bool encodeDraw(EncodeContext& ctx,
   // below is a no-op (the prior draw already consumed the const dirty bits).
   const bool argbufCbufProbeSplit =
       argbufHybridMode && argbufCbufProbeSplitPerfEnabled();
+  const bool argbufCbufDirtyIdentityProbe =
+      argbufHybridMode && argbufCbufDirtyIdentityPerfEnabled();
   if (argbufHybridMode && reopenArgbufHybrid) {
     PerfScope argbufSetupScope(perf::countEncodeDrawArgbufSetupCpuTime);
     PerfScope argbufOpenScope(perf::countEncodeDrawArgbufOpenCpuTime);
@@ -10540,6 +10550,33 @@ bool encodeDraw(EncodeContext& ctx,
       perf::countEncodeDrawArgbufCbufUpdateDirtyCalls(1u);
       PerfScope argbufCbufUpdateScope(
           perf::countEncodeDrawArgbufCbufUpdateCpuTime);
+      if (argbufCbufDirtyIdentityProbe &&
+          uniform::anyDirty(dirtyForArgbuf, uniform::kVsAny)) {
+        perf::countEncodeDrawArgbufCbufDirtyVsIdentityProbeCalls(1u);
+        const auto vsPlan =
+            uniform::makeVsConstantUploadPlan(
+                dirtyForArgbuf, shaderUsage.vertexConstantUsage);
+        const auto vsBytes = uniform::vsConstantUploadBytes(vsPlan);
+        const auto vsIdentityHash =
+            makeArgbufCbufIdentityHash(
+                0x76735f636275665full,
+                drawStateVertexCbufSourceHash(drawState),
+                vsBytes);
+        if (!argbufCbufCache ||
+            !argbufCbufCache->hasBinding(
+                dxmt9::argbuf_hybrid::kConstantBufferVsIndex)) {
+          perf::countEncodeDrawArgbufCbufDirtyVsIdentityNoCache(1u);
+        } else if (argbufCbufCache->hasMatchingIdentity(
+                       dxmt9::argbuf_hybrid::kConstantBufferVsIndex,
+                       vsIdentityHash,
+                       vsBytes)) {
+          perf::countEncodeDrawArgbufCbufDirtyVsIdentityHits(1u);
+          perf::countEncodeDrawArgbufCbufDirtyVsIdentityHitBytes(vsBytes);
+        } else {
+          perf::countEncodeDrawArgbufCbufDirtyVsIdentityMisses(1u);
+          perf::countEncodeDrawArgbufCbufDirtyVsIdentityMissBytes(vsBytes);
+        }
+      }
       dxmt9::argbuf_hybrid::ConstantBufferBindings writtenCbufBindings{};
       dxmt9::argbuf_hybrid::ConstantBufferUploadObserver cbufUploadObserver{};
       if (encoderBreakdown && encoderBreakdown->enabled) {

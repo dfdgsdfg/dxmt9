@@ -613,6 +613,12 @@ struct Counters {
   std::atomic<std::uint64_t> encodeDrawArgbufCbufUpdatePsBytes{0};
   std::atomic<std::uint64_t> encodeDrawArgbufCbufUpdateFfpVsBytes{0};
   std::atomic<std::uint64_t> encodeDrawArgbufCbufUpdateFfpPsBytes{0};
+  std::atomic<std::uint64_t> encodeDrawArgbufCbufDirtyVsIdentityProbeCalls{0};
+  std::atomic<std::uint64_t> encodeDrawArgbufCbufDirtyVsIdentityHits{0};
+  std::atomic<std::uint64_t> encodeDrawArgbufCbufDirtyVsIdentityMisses{0};
+  std::atomic<std::uint64_t> encodeDrawArgbufCbufDirtyVsIdentityNoCache{0};
+  std::atomic<std::uint64_t> encodeDrawArgbufCbufDirtyVsIdentityHitBytes{0};
+  std::atomic<std::uint64_t> encodeDrawArgbufCbufDirtyVsIdentityMissBytes{0};
   std::atomic<std::uint64_t> encodeDrawStreamBindCpuNs{0};
   std::atomic<std::uint64_t> encodeDrawStreamBindCpuMaxNs{0};
   std::atomic<std::uint64_t> encodeDrawStreamBindRasterPhaseCpuNs{0};
@@ -2110,6 +2116,12 @@ constexpr CounterEntry kCounterTable[] = {
     {"encode_draw_argbuf_cbuf_update_ps_bytes", CounterEntry::Kind::UnsignedCount, &Counters::encodeDrawArgbufCbufUpdatePsBytes, nullptr, nullptr, 0.0},
     {"encode_draw_argbuf_cbuf_update_ffp_vs_bytes", CounterEntry::Kind::UnsignedCount, &Counters::encodeDrawArgbufCbufUpdateFfpVsBytes, nullptr, nullptr, 0.0},
     {"encode_draw_argbuf_cbuf_update_ffp_ps_bytes", CounterEntry::Kind::UnsignedCount, &Counters::encodeDrawArgbufCbufUpdateFfpPsBytes, nullptr, nullptr, 0.0},
+    {"encode_draw_argbuf_cbuf_dirty_vs_identity_probe_calls", CounterEntry::Kind::UnsignedCount, &Counters::encodeDrawArgbufCbufDirtyVsIdentityProbeCalls, nullptr, nullptr, 0.0},
+    {"encode_draw_argbuf_cbuf_dirty_vs_identity_hits", CounterEntry::Kind::UnsignedCount, &Counters::encodeDrawArgbufCbufDirtyVsIdentityHits, nullptr, nullptr, 0.0},
+    {"encode_draw_argbuf_cbuf_dirty_vs_identity_misses", CounterEntry::Kind::UnsignedCount, &Counters::encodeDrawArgbufCbufDirtyVsIdentityMisses, nullptr, nullptr, 0.0},
+    {"encode_draw_argbuf_cbuf_dirty_vs_identity_no_cache", CounterEntry::Kind::UnsignedCount, &Counters::encodeDrawArgbufCbufDirtyVsIdentityNoCache, nullptr, nullptr, 0.0},
+    {"encode_draw_argbuf_cbuf_dirty_vs_identity_hit_bytes", CounterEntry::Kind::UnsignedCount, &Counters::encodeDrawArgbufCbufDirtyVsIdentityHitBytes, nullptr, nullptr, 0.0},
+    {"encode_draw_argbuf_cbuf_dirty_vs_identity_miss_bytes", CounterEntry::Kind::UnsignedCount, &Counters::encodeDrawArgbufCbufDirtyVsIdentityMissBytes, nullptr, nullptr, 0.0},
     {"encode_draw_stream_bind_cpu_ms", CounterEntry::Kind::Milliseconds, &Counters::encodeDrawStreamBindCpuNs, nullptr, nullptr, 0.0},
     {"encode_draw_stream_bind_cpu_max_ms", CounterEntry::Kind::Milliseconds, &Counters::encodeDrawStreamBindCpuMaxNs, nullptr, nullptr, 0.0},
     {"encode_draw_stream_bind_cpu_p50_ms", CounterEntry::Kind::PercentileMs, nullptr, nullptr, &Counters::encodeDrawStreamBindCpuRing, 0.5},
@@ -4582,6 +4594,30 @@ void countEncodeDrawArgbufCbufUpdateFfpVsBytes(std::uint64_t bytes) {
 
 void countEncodeDrawArgbufCbufUpdateFfpPsBytes(std::uint64_t bytes) {
   add(counters().encodeDrawArgbufCbufUpdateFfpPsBytes, bytes);
+}
+
+void countEncodeDrawArgbufCbufDirtyVsIdentityProbeCalls(std::uint64_t calls) {
+  add(counters().encodeDrawArgbufCbufDirtyVsIdentityProbeCalls, calls);
+}
+
+void countEncodeDrawArgbufCbufDirtyVsIdentityHits(std::uint64_t hits) {
+  add(counters().encodeDrawArgbufCbufDirtyVsIdentityHits, hits);
+}
+
+void countEncodeDrawArgbufCbufDirtyVsIdentityMisses(std::uint64_t misses) {
+  add(counters().encodeDrawArgbufCbufDirtyVsIdentityMisses, misses);
+}
+
+void countEncodeDrawArgbufCbufDirtyVsIdentityNoCache(std::uint64_t calls) {
+  add(counters().encodeDrawArgbufCbufDirtyVsIdentityNoCache, calls);
+}
+
+void countEncodeDrawArgbufCbufDirtyVsIdentityHitBytes(std::uint64_t bytes) {
+  add(counters().encodeDrawArgbufCbufDirtyVsIdentityHitBytes, bytes);
+}
+
+void countEncodeDrawArgbufCbufDirtyVsIdentityMissBytes(std::uint64_t bytes) {
+  add(counters().encodeDrawArgbufCbufDirtyVsIdentityMissBytes, bytes);
 }
 
 void countEncodeDrawStreamBindCpuTime(std::uint64_t nanoseconds) {

@@ -813,7 +813,11 @@ single-stage primary target: FFPPS repoint is large in bytes
 with low hits (`143,728 / 931,743`), and dirty VS update remains larger at
 `936.123ms`. Keep the next argbuf work on table reopen frequency/storage shape
 or dirty VS upload frequency rather than skipping VS probe or micro-optimizing
-FFPPS repoint ([[state-churn-encode-encode-phase.61]]).
+FFPPS repoint ([[state-churn-encode-encode-phase.61]]). The dirty VS identity
+refresh closes the local dirty-mirror skip variant too: `808,845` dirty VS
+probes produce `0` hits, `788,347` misses, and `20,498` no-cache rows matching
+render-pass begin. Treat dirty VS updates as real current-model identity churn,
+not stale cache repeats ([[state-churn-encode-encode-phase.62]]).
 
 ```mermaid
 flowchart TD
@@ -838,7 +842,7 @@ flowchart TD
   Start --> Cpu{"generic CPU frontier\nonly?"}
   Cpu -- "Yes" --> CpuProbe{"has no-gputrace\nphase attribution?"}
   CpuProbe -- "No" --> CpuReject["no Xcode spend\nadd counters first"]
-  CpuProbe -- "Yes" --> CpuNarrow["cbuf + packet + snapshot CPU wins\nargbuf fast append accepted CPU win\nstream split names texture/index/shader/raster\ntexture split names fragment resolve/direct\nsampler pre-handle + hash reuse accepted\ntexture pre-resolve + dirty identity rejected\ncbuf hash + build reduced\ncommit_chunk replay split rejects raw bridge owner\nreplay child split names queued submission/snapshot\nissue split = Metal indexed draw call\nprobe/repoint split rejects one-stage cbuf micro\nnext: argbuf table reopen / dirty VS update\nplus packet, index+stream, submit internals, snapshot"]
+  CpuProbe -- "Yes" --> CpuNarrow["cbuf + packet + snapshot CPU wins\nargbuf fast append accepted CPU win\nstream split names texture/index/shader/raster\ntexture split names fragment resolve/direct\nsampler pre-handle + hash reuse accepted\ntexture pre-resolve + dirty identity rejected\ncbuf hash + build reduced\ncommit_chunk replay split rejects raw bridge owner\nreplay child split names queued submission/snapshot\nissue split = Metal indexed draw call\nprobe/repoint split rejects one-stage cbuf micro\ndirty VS identity skip rejected\nnext: argbuf table reopen / cbuf storage shape\nplus packet, index+stream, submit internals, snapshot"]
   CpuNarrow --> Packet21["packet sampler key-hash reuse\naccepted CPU cleanup\nplan -9.97%/present"]
   CpuNarrow --> FullCbufDiag["full cbuf fallback diagnostic\nbytes +519%\nnot default workaround"]
 
@@ -1220,9 +1224,10 @@ proof.
   repoint/content-probe as a single-stage primary target: FFPPS repoint is many
   calls and bytes (`899,453` / `345.390MB`) but only `137.306ms`, VS probe is
   `83.048ms` with low hits, and dirty VS update remains larger
-  (`936.123ms`). Remaining argbuf targets are now fewer table reopens, fewer
-  dirty VS uploads, or a storage model that avoids fresh per-draw table
-  rebuild/repoint work.
+  (`936.123ms`). The dirty VS identity refresh then reports `0` cached hits
+  over `788,347` cached dirty VS probes, so a local dirty-mirror repoint/skip
+  path is closed. Remaining argbuf targets are now fewer table reopens, cheaper
+  per-draw VS cbuf storage, or upstream VS dirty-frequency reduction.
   Snapshot work is still open, especially residual non-constant payload hashing
   and VS indexed constant fallback, but it is no longer the sole first-order CPU
   owner.
@@ -1250,6 +1255,7 @@ proof.
   [[state-churn-encode-encode-phase.24]],
   [[state-churn-encode-encode-phase.25]],
   [[state-churn-encode-encode-phase.61]],
+  [[state-churn-encode-encode-phase.62]],
   [[snapshot-cache-snapshot.04]],
   [[snapshot-cache-snapshot.05]],
   [[snapshot-cache-snapshot.06]],
