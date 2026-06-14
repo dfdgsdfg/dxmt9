@@ -47,6 +47,12 @@ GPU frame-time story is owned by [[hidden-backend-storage]] /
 | H25 | The stable owner above the wrapper stubs is still hidden | rejected; 3DMark05 command-dispatch cadence accepted | [[present-pacing-pe-caller-stack.20]]: PE stack logging shows milestones 2..8 share higher frame `3DMark05.exe+0x88760` in `1,707 / 1,707` matching ordinals. `0x2AF4F` and `0x2B061` are D3D wrapper stubs; `0x88760` is the return site of a command-object dispatcher (`0x4886E0`) whose virtual `call *0x18(%eax)` executes the D3D wrapper command. `SetRenderTarget` return -> `Clear` entry remains p50 `17.429ms`. The front gate is therefore when 3DMark05 dispatches the record-producing `Clear` command object, not a dxmt9 boundary/latency/ring wait. |
 | H26 | The `Clear` front gate or next Metal enqueue waits on dxmt9 completed-seq/waterline publication | rejected for dxmt9 completion signal; actual Metal/CA completion remains separate | [[present-pacing-completion-signal-delay.21]]: `DXMT9_PERF_COMPLETION_SIGNAL_DELAY_MS=8` applies `1696` sleeps / `13568ms` after `waitUntilCompleted()` and before completed-seq publication, but `SetRenderTarget -> Clear` p50 stays `17.631 -> 17.550ms`, first chunk p50 stays `20.802 -> 20.827ms`, and next enqueue p50 stays `21.558 -> 20.274ms`. The front gate is not waiting on dxmt9's completion signal. |
 | H27 | Flushing the PE chunk immediately after `Clear` creates producer overlap | rejected as a simple early-publish lever | [[present-pacing-pe-clear-flush.22]]: `DXMT9_PE_FLUSH_AFTER_CLEAR=1` changes the first chunk from `capacity_post` / `64` records to `clear` / `2` records and moves first-chunk p50 `20.582 -> 18.935ms`, but `completion_wait_with_enqueue_ms` remains `0.000`, `completion_enqueue_while_waiting=0`, and `commitCount` rises `41947 -> 45857`. Keep it diagnostic-only; continue P2/P3 replay/snapshot/encode reductions or a larger producer-overlap design. |
+| H28 | The current low-overhead code state makes `DXMT9_PE_FLUSH_AFTER_CLEAR=1` useful after recent encode/copy cleanup | rejected-current | [[present-pacing-pe-clear-flush.23]]: matching recorder-stats runs still move the first chunk earlier (`20.710 -> 19.089ms`) and shrink it (`64 -> 2` records), but `completion_wait_with_enqueue` moves `2 -> 0`, tail-600 FPS p50 moves `15.788 -> 15.681`, and `commitCount` rises `41,429 -> 45,617`. |
+| H29 | Current low-overhead FPS is blocked by serialized post-wait P2/P3 work, not by missing app/D3D9 calls after completion | accepted attribution | [[present-pacing-lowoverhead-serial.24]]: the next unix commit entry follows completion quickly (`0.861ms` p50), while same-cycle post-wait stages remain large: `commit_chunk entry -> CommitPublish` `14.068ms` p50, `CommitPublish -> EncodeDequeue` `3.678ms`, and `EncodeDequeue -> commandBuffer.commit()` `11.528ms`. Disabling Stage 2 argbuf cuts encode per present (`9.388 -> 6.143ms`) but raises completion wait (`27.116 -> 31.148ms/present`), so local CPU wins need a P4/overlap proof. |
+| H30 | Raising the mid-chunk sub-command-buffer cap recovers average FPS by allowing more early commits | rejected-current | [[present-pacing-subcb-cap.25]]: `DXMT9_MID_CHUNK_COMMIT_CAP_PER_RENDER_PASS=8` reaches the runtime (`chunk_subcb_count_max 4 -> 8`), doubles sub-CBs (`5,355 -> 12,173`), and drops cap suppression (`8,658 -> 1,471`), but tail-600 FPS p50 worsens (`16.849 -> 16.665`), completion wait per present rises (`27.116 -> 28.900ms`), and wait-end -> next-enqueue p50 worsens (`15.135 -> 19.980ms`). |
+| H31 | Moving publish-time PSO prefetch out of the serialized Present publish path can improve sampled FPS even if encode lookup rises | accepted placement signal; superseded by H32 default | [[present-pacing-publish-pso-prefetch.26]]: `DXMT9_DISABLE_PUBLISH_PSO_PREFETCH=1` cuts Present replay by `-2.488ms/present`, raises encode pipeline lookup by `+2.222ms/present`, reduces `completion_wait_ms` by `-2.420ms/present`, and improves repeated warm FPS p50 by `+0.564`. |
+| H32 | Encode-slot PSO prefetch is a better default than publish-time PSO prefetch for current GT1 | accepted default | [[present-pacing-publish-pso-prefetch.27]]: default run keeps `encode_draw_pso_prefetch_handle_missing=0`, moves `prepare_slot_pso_prefetch_cpu_ms` to `0`, records `encode_slot_pso_prefetch_cpu_ms=2.605ms/present`, cuts completion wait by `-1.509ms/present`, and improves warm FPS avg by `+0.717`. |
+| H33 | The remaining PSO prefetch work is now an encode-stage key/lookup problem, not a Present pacing problem | accepted attribution | [[state-churn-encode-encode-phase.71]]: split counters show `encode_slot_pso_prefetch_cpu_ms=2.806ms/present`, dominated by draw PSO lookup/key work at `2.506ms/present`; `prepare_slot_pso_prefetch_cpu_ms` remains effectively zero and handle misses remain `0`. |
 
 ## Verification methods
 
@@ -84,6 +90,14 @@ GPU frame-time story is owned by [[hidden-backend-storage]] /
   `completion_no_enqueue_stage_encode_dequeue_to_command_buffer_commit_*`
   record same-cycle deltas after a no-enqueue wait. Use these instead of
   subtracting independent wait-end percentile rows.
+- **Present publish counters**:
+  `submit_present_*_cpu_ms` and
+  `prepare_slot_{publish,resource_mark,pso_prefetch}_cpu_ms` decide whether a
+  Present record is display/acquire/boundary cost or serialized queue publish
+  work. After [[present-pacing-publish-pso-prefetch.27]], the normal path should
+  report `prepare_slot_pso_prefetch_cpu_ms=0` and non-zero
+  `encode_slot_pso_prefetch_cpu_ms`; use `DXMT9_ENABLE_PUBLISH_PSO_PREFETCH=1`
+  only to restore the legacy serialized placement for A/B or cold-PSO tests.
 - **Completion-signal perturbation**:
   `DXMT9_PERF_COMPLETION_SIGNAL_DELAY_MS=N` delays completed-seq/waterline
   publication after `waitUntilCompleted()` returns. Confirm application through
@@ -145,6 +159,9 @@ flowchart TD
   PeCallerStack["pe-caller-stack.20\nhigher caller frame 0x88760\ncommand dispatcher 0x4886E0\nSetRT→Clear gap p50 17.429ms"]
   CompletionSignalDelay["completion-signal-delay.21\n8ms x1696 completion-signal delay\nSetRT→Clear and first chunk flat"]
   PeClearFlush["pe-clear-flush.22\nClear publishes 2-record chunk\nfirst chunk 20.6→18.9ms\nno enqueue overlap"]
+  PeClearFlushRefresh["pe-clear-flush.23\ncurrent low-overhead refresh\nfirst chunk 20.7→19.1ms\nFPS flat/worse"]
+  LowOverheadSerial["lowoverhead-serial.24\nnext unix entry ~0.9ms\npublish/encode still serial\nStage1 CPU win no FPS"]
+  SubCBCap["subcb-cap.25\ncap 4→8 doubles sub-CBs\nFPS flat/worse\nnext enqueue p50 worse"]
   FrameLatency["frame-latency.01\nMAX_FRAME_LATENCY=3 + CAP=0\n(rejected: Δ +0.07%)"]
   AsyncAcq["async-acquire.01\nPRESENT_ASYNC_ACQUIRE=1\n(rejected: axis < 0.5% of wait)"]
   EncodeBudget["encode-budget.01\nencode_chunk p50 20.45 ms\nvs 16.67 ms vsync slot\n(attribution accepted)"]
@@ -198,6 +215,9 @@ flowchart TD
   PeCallerPc --> PeCallerStack
   PeCallerStack --> CompletionSignalDelay
   CompletionSignalDelay --> PeClearFlush
+  PeClearFlush --> PeClearFlushRefresh
+  PeClearFlushRefresh --> LowOverheadSerial
+  LowOverheadSerial --> SubCBCap
   PrePublish --> EncodeBudget
   StageDelta --> EncodeBudget
   PeChunkCadence --> EncodeBudget
@@ -208,6 +228,8 @@ flowchart TD
   PeClearNoSampling --> EncodeBudget
   PeWideCall --> EncodeBudget
   PeClearFlush --> EncodeBudget
+  LowOverheadSerial --> EncodeBudget
+  SubCBCap --> EncodeBudget
   PipelineOverlap --> EncodeBudget
   FrameLatency --> EncodeBudget
   AsyncAcq --> EncodeBudget
@@ -239,7 +261,8 @@ flowchart TD
   Remaining --> SCE
 
   class DSync,EncodeBudget,CurrentImmediate,CompletionStatus,CurrentOwner,PipelineOverlap,PrePublish,StageDelta,PeChunkCadence,PeRecordMilestones,PeClearGate accepted
-  class FrameLatency,AsyncAcq,WorkA,StateNoop,DirtyIdentity,TexturePreResolve,BoundaryLatency,PePresent,PeCallCadence,PeChunkSize,PeCallSequence,PeClearFlush rejected
+  class FrameLatency,AsyncAcq,WorkA,StateNoop,DirtyIdentity,TexturePreResolve,BoundaryLatency,PePresent,PeCallCadence,PeChunkSize,PeCallSequence,PeClearFlush,PeClearFlushRefresh,SubCBCap rejected
+  class LowOverheadSerial accepted
   class PeClearNoSampling,PeWideCall,PeThreadState rejected
   class PeCallerPc,PeCallerStack,CompletionSignalDelay accepted
   class FixProposal,Remaining,SCE proposed
@@ -581,6 +604,33 @@ flowchart TD
   still creates no producer overlap (`completion_wait_with_enqueue_ms=0.000`,
   `completion_enqueue_while_waiting=0`) and raises PE commit count
   `41947 -> 45857`, so it stays diagnostic-only.
+- [[present-pacing-pe-clear-flush.23]] — REJECTED CURRENT REFRESH. Matching
+  low-overhead recorder-stats runs after the latest encode/copy work preserve
+  the rejection: first chunk p50 still moves earlier (`20.710 -> 19.089ms`) and
+  shrinks to `2` records, but `completion_wait_with_enqueue` does not improve
+  (`2 -> 0`), tail-600 FPS p50 is flat/worse (`15.788 -> 15.681`), and
+  `commitCount` rises (`41,429 -> 45,617`). Do not promote clear flush to
+  `perf`; it remains diagnostic-only.
+- [[present-pacing-lowoverhead-serial.24]] — ACCEPTED CURRENT ATTRIBUTION.
+  The latest low-overhead Stage 2 baseline corrects the "app does not issue
+  N+1" framing: completion end -> next unix `commit_chunk` entry is only
+  `0.861ms` p50. The exposed time is then spent in serial P2/P3 stages:
+  `commit_chunk` entry -> `CommitPublish` `14.068ms` p50, publish ->
+  `EncodeDequeue` `3.678ms`, and `EncodeDequeue` -> Metal commit `11.528ms`.
+  Disabling Stage 2 argbuf proves a large local encode CPU win is not enough:
+  `encode_draw_cpu_ms / present` falls `9.388 -> 6.143ms`, but
+  `completion_wait_ms / present` rises `27.116 -> 31.148ms` and sampled FPS is
+  flat. Average-FPS promotion now requires P4/overlap movement, not just a
+  smaller local CPU bucket.
+- [[present-pacing-subcb-cap.25]] — REJECTED CURRENT FPS LEVER. Raising
+  `DXMT9_MID_CHUNK_COMMIT_CAP_PER_RENDER_PASS` from `4` to `8` proves the cap
+  is active (`sub_command_buffers 5,355 -> 12,173`,
+  `subcb_split_suppressed_by_cap 8,658 -> 1,471`) but does not recover
+  average FPS. Tail-600 FPS p50 moves `16.849 -> 16.665`, completion wait per
+  present moves `27.116 -> 28.900ms`, and wait-end -> next-enqueue p50 moves
+  `15.135 -> 19.980ms`. Keep cap tuning diagnostic-only. The no-gputrace GPU
+  time counter is not a total GPU-cost proof for mid-chunk chains because frame
+  rows still have one GPU-time sample while tail command buffers rise to `8`.
 
 ## Cross-links
 
@@ -674,7 +724,20 @@ flowchart TD
   path changes the first unix-visible chunk from a `capacity_post` 64-record
   chunk to a `clear` 2-record chunk and moves first-chunk p50 by about
   `1.65ms`, but `completion_wait_with_enqueue_ms` remains `0.000` and chunk
-  count increases. [[present-pacing-pe-clear-flush.22]]
+  count increases. The current low-overhead refresh keeps the same conclusion:
+  first chunk p50 moves `20.710 -> 19.089ms`, but tail-600 FPS p50 moves
+  `15.788 -> 15.681` and `commitCount` rises `41,429 -> 45,617`.
+  [[present-pacing-pe-clear-flush.22]], [[present-pacing-pe-clear-flush.23]]
+- The latest low-overhead Stage2/Stage1 comparison shows why local CPU wins
+  must be gated by P4 movement. Stage1 removes `~3.25ms/present` of
+  `encode_draw_cpu_ms`, but `completion_wait_ms / present` rises by
+  `~4.03ms` and tail FPS stays flat. The current no-enqueue path reaches unix
+  quickly after completion, then spends large serial time in replay/snapshot/
+  submit and backend encode. [[present-pacing-lowoverhead-serial.24]]
+- Raising the mid-chunk sub-CB cap is not the missing overlap lever in the
+  current shape. Cap=8 makes the mechanism move (`sub_command_buffers` roughly
+  double and cap suppression largely disappears), but tail FPS is flat/worse and
+  wait-end -> next-enqueue p50 gets longer. [[present-pacing-subcb-cap.25]]
 
 **Open target**
 
@@ -716,7 +779,9 @@ flowchart TD
   perturbation happens after `waitUntilCompleted()` has already returned. The
   simple post-`Clear` early-publish probe is now rejected: it publishes a
   2-record chunk earlier, but it still does not enqueue while completion waits
-  and it increases chunk count. A larger producer-overlap design would have to
+  and it increases chunk count. The current low-overhead refresh confirms this
+  remains true after recent encode/copy cleanup. A larger producer-overlap
+  design would have to
   publish useful work before the app's `Clear` dispatch gate, or reduce the
   pre-publish replay/snapshot and backend encode stages enough that the
   completion wait no longer exposes a full extra frame slot. Any earlier-flush

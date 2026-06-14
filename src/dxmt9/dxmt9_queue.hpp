@@ -454,7 +454,7 @@ class QueueLifecycleController {
   // TLA+: EncodeDequeue followed by EncodeSubmitToGpu or EncodeCompleteInline.
   bool runEncodeIteration(
       std::unique_lock<std::mutex>& lock,
-      const std::function<std::optional<QueueSubmissionRecord>(size_t, const ChunkSlot&)>& encodeFn,
+      const std::function<std::optional<QueueSubmissionRecord>(size_t, ChunkSlot&)>& encodeFn,
       const std::function<void(u64)>& onInlineComplete = {});
   // TLA+: present-bearing metadata append before CommitPublish.
   void appendPresentCommand(const SwapDesc& present, Handle sourceHandle);

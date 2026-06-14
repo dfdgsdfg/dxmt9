@@ -672,7 +672,7 @@ bool QueueLifecycleController::dequeueReadySlot(std::unique_lock<std::mutex>& lo
 
 bool QueueLifecycleController::runEncodeIteration(
     std::unique_lock<std::mutex>& lock,
-    const std::function<std::optional<QueueSubmissionRecord>(size_t, const ChunkSlot&)>& encodeFn,
+    const std::function<std::optional<QueueSubmissionRecord>(size_t, ChunkSlot&)>& encodeFn,
     const std::function<void(u64)>& onInlineComplete) {
   // TLA+: EncodeDequeue followed by EncodeSubmitToGpu or EncodeCompleteInline.
   size_t slotIndex = 0;

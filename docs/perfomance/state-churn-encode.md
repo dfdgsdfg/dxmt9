@@ -93,6 +93,14 @@ bottleneck — that is owned by [[hidden-backend-storage]].
 | H73 | Dirty VS cbuf updates are stale-cache repeats that can be repointed or skipped by identity | rejected-current | [[state-churn-encode-encode-phase.62]] (`DXMT9_PERF_ARGBUF_CBUF_DIRTY_IDENTITY=1`: dirty VS probes `808,845`, hits `0`, misses `788,347`, no-cache `20,498` matching render-pass begin; cached dirty VS miss rate `100%`) |
 | H74 | Argbuf table reopen is mostly caused by over-broad non-shader payload hash changes | rejected-current; shader-constant attribution accepted | [[state-churn-encode-encode-phase.63]] (`DXMT9_PERF_ARGBUF_PAYLOAD_DELTA=1`: payload changes `931,917` exactly match no-dirty reopen rows, `nonconst_only=0`, VS/PS explain all changes; resource-array forced reopen `0`) |
 | H75 | Dirty VS cbuf upload width is mostly the dirty register range | rejected-current; usage-prefix attribution accepted | [[state-churn-encode-encode-phase.64]] (frame60 avg dirty float regs/upload `0.702`, usage `45.147`, plan `57.483`, VS bytes/upload `984.712`; indexed-float full fallback `20.21%`) |
+| H76 | Shader-specific packed constants for non-indexed shaders are the next large cbuf width target | rejected-current; indexed BLENDINDICES window proof remains open | [[state-churn-encode-encode-phase.65]] (frame60 bytecode corpus safe packed save `0`; theoretical gap is entirely indexed VS, `59` draws / `59` full uploads; all hot indexed rows use static offsets `0;1;2` with `a0.x/a0.y`, requiring vertex BLENDINDICES dynamic-window proof before packing) |
+| H77 | Indexed VS `a0.x/a0.y + 0..2` can be bounded to a narrow BLENDINDICES window | rejected-current for top indexed VS sample | [[state-churn-encode-encode-phase.66]] (`--dump-indexed-geometry-vs 0x18ffaf75e52f4615`: `12` payloads, `75,395` vertices sampled; many draws need <=`50` regs, but draw `30615` observes `a0.x=0..255`, `a0.y=0..254`, requiring full-range fallback) |
+| H78 | Stage 2 argument-buffer hybrid is a net CPU win over Stage 1 direct cbuf binds for current GT1 | rejected-current as CPU policy; accepted attribution | [[state-churn-encode-encode-phase.67]] (`DXMT9_DISABLE_ARGBUF_HYBRID=1`: same `1740` presents / `1.285M` draws; `encode_draw_cpu_ms` `17,399.519 -> 12,847.687`, argbuf setup `4,322.402 -> 0`, transient bytes `909.169MB -> 62.660MB`, but completion wait rises `46.913s -> 49.233s`) |
+| H79 | Disabling Stage 2 argument-buffer hybrid improves average FPS once measured with low-overhead frame sampling | rejected-current as FPS policy | [[state-churn-encode-encode-phase.68]] (warm `encode_draw_cpu_ms` p50 `8.621 -> 5.545ms`, but warm `completion_wait_ms` p50 `27.409 -> 30.010ms`; warm FPS p50 `17.202 -> 17.323`, tail-600 FPS p50 `16.855 -> 16.817`) |
+| H80 | Publish-time PSO prefetch is the current Present-record replay owner | accepted diagnostic placement; superseded by H81 default | [[state-churn-encode-encode-phase.69]] (`commit_chunk_replay_present_record_cpu_ms=2.757ms/present`; `prepare_slot_pso_prefetch_cpu_ms=2.497ms/present`, `90.6%` of the Present record. `DXMT9_DISABLE_PUBLISH_PSO_PREFETCH=1` moves the work to encode lookup but improves repeated warm FPS p50 by `+0.564`) |
+| H81 | Encode-worker slot-copy PSO prefetch removes the serialized Present cost while preserving prefetched handles | accepted default | [[state-churn-encode-encode-phase.70]] (new default: `prepare_slot_pso_prefetch_cpu_ms=0`, `encode_slot_pso_prefetch_cpu_ms=2.605ms/present`, `encode_draw_pso_prefetch_handle_missing=0`, warm FPS avg `17.628 -> 18.345`) |
+| H82 | The remaining encode-slot PSO prefetch cost is repeated draw PSO lookup/key work, not selector or depth lookup overhead | accepted attribution | [[state-churn-encode-encode-phase.71]] (`encode_slot_pso_prefetch_cpu_ms=2.806ms/present`, draw lookup `2.506ms/present`, depth lookup `0.127ms/present`, `591,477` eligible candidates, `503` draw PSO slots, handle misses `0`) |
+| H83 | Most encode-slot draw PSO lookups resolve to final handles already seen in the same slot | accepted opportunity | [[state-churn-encode-encode-phase.72]] (`584,441` observed final handles; `484,107` slot-repeat hits = `82.832%`; adjacent hit ratio `35.550%`; overflow `0`; repeated-handle share of current draw lookup ~= `2.061ms/present`) |
 
 ## Verification methods
 
@@ -101,6 +109,15 @@ bottleneck — that is owned by [[hidden-backend-storage]].
   lines: stream/IB samples, Metal binds, handle/offset/stride changes, argbuf
   table/cbuf bytes, `setVertexBytes`, geometry transient vertex/index bytes,
   unique-handle counts/bytes/pool buckets. Proves churn is handle-dominated.
+- **`analyze_shader_constant_sparsity.py`** — offline analyzer for
+  `--dump-shaders` D3D bytecode dumps. It records exact float/int/bool constant
+  register sets, tracks indexed constant access, and joins optional
+  `3dmark05-perf-indexed-probe-draws.csv` rows to distinguish safe non-indexed
+  packed savings from theoretical indexed gaps.
+- **`analyze_blendindices_geometry.py`** — offline analyzer for
+  `--dump-indexed-geometry` payloads. It reads `.meta`, `.index.bin`, and
+  `.streamN.bin`, finds `D3DDECLUSAGE_BLENDINDICES`, and measures the actual
+  vertex values feeding `a0.x/a0.y` for indexed constant-window proofs.
 - **`analyze_stream_ib_backend_churn.py`** — hot-row preflight for stream/IB as
   a possible hidden-backend denominator experiment. It proved the frame60 rows
   were handle-churn-dominant and named the row-scoped staging A/B target. The
@@ -129,6 +146,28 @@ bottleneck — that is owned by [[hidden-backend-storage]].
   slot/payload-arena preparation, resource marking, append, and chunk-commit
   stages. Use them after `commit_chunk_queue_draw_submission_cpu_ms` or
   `commit_chunk_draw_*_submit_cpu_ms` is proven hot.
+- **Present publish split counters** —
+  `commit_chunk_replay_present_record_cpu_ms`, `submit_present_*_cpu_ms`,
+  and `prepare_slot_{publish,resource_mark,pso_prefetch}_cpu_ms` split a hot
+  Present record between drawable acquire, queue commit/publish, boundary
+  policy, resource marking, and publish-time PSO prefetch. Use these before
+  treating Present replay CPU as a display or Wine pacing problem.
+- **Encode-slot PSO prefetch counter** —
+  `encode_slot_pso_prefetch_cpu_ms` is the default home for slot-level PSO /
+  depth-state handle resolution after [[state-churn-encode-encode-phase.70]].
+  It should replace, not add to, `prepare_slot_pso_prefetch_cpu_ms` in normal
+  runs. A non-zero publish prefetch counter now means
+  `DXMT9_ENABLE_PUBLISH_PSO_PREFETCH=1` or a policy regression. Its child
+  counters (`encode_slot_pso_prefetch_{draw_lookup,depth_lookup,state_copy,
+  tile_select,argbuf_select}_cpu_ms`) are the first attribution layer for
+  reducing the encode-worker prefetch cost; phase 71 names draw PSO lookup/key
+  work as the current owner.
+- **Encode-slot PSO handle reuse counters** —
+  `encode_slot_pso_prefetch_draw_handle_{adjacent,slot}_*` are opportunity
+  counters only. They classify the final `PsoHandle` after the authoritative
+  lookup has already completed, so they prove repeated results but not a safe
+  reduced memo key. Use them to size an exact-key/final-handle slot-local memo
+  candidate; do not treat `DrawPsoSubview` alone as enough PSO identity.
 - **Submission generation/lane counters** —
   `submit_draw_run_batch_submission_adjacent_*` and
   `submit_draw_run_batch_compat_same_generation_lane_*` prove whether frontend
@@ -268,6 +307,10 @@ flowchart TD
   EncodePhase62["encode-phase.62\ndirty VS identity\n0 hits / 788k misses"]:::rejected
   EncodePhase63["encode-phase.63\npayload delta\nVS/PS constants own reopen"]:::rejected
   EncodePhase64["encode-phase.64\nVS cbuf plan shape\nusage prefix dominates"]:::accepted
+  EncodePhase65["encode-phase.65\nconstant sparsity\nsafe packed save 0"]:::rejected
+  EncodePhase66["encode-phase.66\nBLENDINDICES window\ntop VS full-range draw"]:::rejected
+  EncodePhase67["encode-phase.67\nStage2 off scout\nencode_draw -4.55s\ncompletion wait up"]:::accepted
+  EncodePhase68["encode-phase.68\nlow-overhead FPS gate\nencode -3ms/frame\nFPS flat"]:::rejected
   Snapshot10["snapshot.10\nuniform-refresh fast path\nrefresh -59.6%\nFPS flat"]:::accepted
 
   Drawrun1 -->|"split-into"| Drawrun2
@@ -356,6 +399,10 @@ flowchart TD
   EncodePhase61 -->|"refresh dirty VS skip proof"| EncodePhase62
   EncodePhase62 -->|"split argbuf reopen payload delta"| EncodePhase63
   EncodePhase63 -->|"measure cbuf plan shape"| EncodePhase64
+  EncodePhase64 -->|"scan exact register sparsity"| EncodePhase65
+  EncodePhase65 -->|"dump geometry + measure a0 range"| EncodePhase66
+  EncodePhase66 -->|"fallback to storage-model scout"| EncodePhase67
+  EncodePhase67 -->|"low-overhead FPS A/B"| EncodePhase68
 ```
 
 ## Results synthesis
@@ -1119,6 +1166,46 @@ prefix-preserving builder is already using the safe range trim available to
 the MSL-visible `VsConsts` ABI. Further large cbuf wins need upstream constant
 churn reduction, persistent/segmented constant storage, or shader-specific
 packed constant layouts rather than another dirty-range micro-trim.
+[[state-churn-encode-encode-phase.65]] lowers that last packed-constant branch:
+the exact bytecode scan finds no safe non-indexed packed savings in frame60.
+The theoretical gap is large only for indexed VS shaders (`59` draws matching
+the `59` full/indexed VS uploads). Those rows are not arbitrary indexed
+constant access: every draw-weighted indexed VS row uses static offsets
+`0;1;2` with relative sources `a0.x/a0.y`, the matrix-palette skinning shape.
+Packing is still illegal until a per-draw or per-resource vertex BLENDINDICES
+range proves the runtime `a0` window and the translator/ABI can rewrite
+`c[a0+n]` safely. The current cbuf direction therefore stays on upstream
+constant churn, segmented/persistent storage, or a hard indexed-window proof
+rather than a generic non-indexed packed layout.
+[[state-churn-encode-encode-phase.66]] then probes that indexed-window branch
+with real geometry payloads for the hottest indexed VS. The bytecode side is
+indeed matrix-palette skinning (`BLENDINDICES` UBYTE4 at stream0 offset `12`,
+stride `24`), but the sampled draw set contains one full-range draw:
+`a0.x=0..255`, `a0.y=0..254`, making the required `c[a0 + 0..2]` window
+`0..257`. That rejects packed indexed VS constants as a current broad safe
+target. The cbuf track should now focus on reducing constant-change frequency,
+argbuf table reopen frequency, or storage shape that preserves full indexed
+access semantics.
+[[state-churn-encode-encode-phase.67]] converts that storage-model question into
+a direct Stage2-vs-Stage1 scout. With `DXMT9_DISABLE_ARGBUF_HYBRID=1`, the same
+120s GT1 shape (`1740` presents and `1.285M` draws) drops
+`encode_draw_cpu_ms` from `17,399.519` to `12,847.687` and removes the
+`4,322.402ms` argbuf setup bucket plus `846.5MB` of transient traffic. Direct
+uniform build and pipeline lookup grow, and completion wait rises, so this is
+not an immediate default flip. It is a stronger architectural signal that the
+current Stage 2 constants-only argbuf table model is CPU-negative for GT1 unless
+it gets a cheaper immutable-per-draw table or persistent/segmented cbuf storage
+strategy.
+[[state-churn-encode-encode-phase.68]] runs the required low-overhead FPS gate
+for that same policy question. Disabling Stage 2 still removes encode work
+(warm `encode_draw_cpu_ms` p50 `8.621 -> 5.545ms` and warm
+`encode_chunk_cpu_ms` p50 `10.453 -> 7.326ms`), but completion wait grows in the
+same window (`27.409 -> 30.010ms` p50, `40.548 -> 45.961ms` p95). Warm FPS p50
+moves only `17.202 -> 17.323`, and tail-600 FPS p50 is effectively flat
+(`16.855 -> 16.817`). This rejects an argbuf-hybrid default flip as the current
+average-FPS lever. The Stage 2 table model remains a CPU/storage cleanup target,
+but the next FPS proof must move completion overlap, producer cadence, or earlier
+PE/unix publish rather than only local encode CPU.
 
 ## How to run
 Every experiment here is a 3DMark05 GT1 run via the standard wrapper. This is a

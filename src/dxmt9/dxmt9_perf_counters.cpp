@@ -106,6 +106,46 @@ struct Counters {
   std::atomic<std::uint64_t> stretchFullscreen{0};
   std::atomic<std::uint64_t> submitPresent{0};
   std::atomic<std::uint64_t> submitFlush{0};
+  std::atomic<std::uint64_t> submitPresentCpuNs{0};
+  std::atomic<std::uint64_t> submitPresentCpuMaxNs{0};
+  std::atomic<std::uint64_t> submitPresentAcquireCpuNs{0};
+  std::atomic<std::uint64_t> submitPresentAcquireCpuMaxNs{0};
+  std::atomic<std::uint64_t> submitPresentCommitCpuNs{0};
+  std::atomic<std::uint64_t> submitPresentCommitCpuMaxNs{0};
+  std::atomic<std::uint64_t> submitPresentBoundaryCpuNs{0};
+  std::atomic<std::uint64_t> submitPresentBoundaryCpuMaxNs{0};
+  std::atomic<std::uint64_t> prepareSlotForPublishCpuNs{0};
+  std::atomic<std::uint64_t> prepareSlotForPublishCpuMaxNs{0};
+  std::atomic<std::uint64_t> prepareSlotResourceMarkCpuNs{0};
+  std::atomic<std::uint64_t> prepareSlotResourceMarkCpuMaxNs{0};
+  std::atomic<std::uint64_t> prepareSlotPsoPrefetchCpuNs{0};
+  std::atomic<std::uint64_t> prepareSlotPsoPrefetchCpuMaxNs{0};
+  std::atomic<std::uint64_t> encodeSlotPsoPrefetchCpuNs{0};
+  std::atomic<std::uint64_t> encodeSlotPsoPrefetchCpuMaxNs{0};
+  std::atomic<std::uint64_t> encodeSlotPsoPrefetchCommands{0};
+  std::atomic<std::uint64_t> encodeSlotPsoPrefetchCandidates{0};
+  std::atomic<std::uint64_t> encodeSlotPsoPrefetchTileCandidates{0};
+  std::atomic<std::uint64_t> encodeSlotPsoPrefetchArgbufStage2Candidates{0};
+  std::atomic<std::uint64_t> encodeSlotPsoPrefetchArgbufResourceArrayCandidates{0};
+  std::atomic<std::uint64_t> encodeSlotPsoPrefetchStateCopyCpuNs{0};
+  std::atomic<std::uint64_t> encodeSlotPsoPrefetchStateCopyCpuMaxNs{0};
+  std::atomic<std::uint64_t> encodeSlotPsoPrefetchDepthLookupCpuNs{0};
+  std::atomic<std::uint64_t> encodeSlotPsoPrefetchDepthLookupCpuMaxNs{0};
+  std::atomic<std::uint64_t> encodeSlotPsoPrefetchTileSelectCpuNs{0};
+  std::atomic<std::uint64_t> encodeSlotPsoPrefetchTileSelectCpuMaxNs{0};
+  std::atomic<std::uint64_t> encodeSlotPsoPrefetchTileBaseLookupCpuNs{0};
+  std::atomic<std::uint64_t> encodeSlotPsoPrefetchTileBaseLookupCpuMaxNs{0};
+  std::atomic<std::uint64_t> encodeSlotPsoPrefetchTileDrawLookupCpuNs{0};
+  std::atomic<std::uint64_t> encodeSlotPsoPrefetchTileDrawLookupCpuMaxNs{0};
+  std::atomic<std::uint64_t> encodeSlotPsoPrefetchArgbufSelectCpuNs{0};
+  std::atomic<std::uint64_t> encodeSlotPsoPrefetchArgbufSelectCpuMaxNs{0};
+  std::atomic<std::uint64_t> encodeSlotPsoPrefetchDrawLookupCpuNs{0};
+  std::atomic<std::uint64_t> encodeSlotPsoPrefetchDrawLookupCpuMaxNs{0};
+  std::atomic<std::uint64_t> encodeSlotPsoPrefetchDrawHandleAdjacentCandidates{0};
+  std::atomic<std::uint64_t> encodeSlotPsoPrefetchDrawHandleAdjacentHits{0};
+  std::atomic<std::uint64_t> encodeSlotPsoPrefetchDrawHandleSlotRepeatHits{0};
+  std::atomic<std::uint64_t> encodeSlotPsoPrefetchDrawHandleSlotUnique{0};
+  std::atomic<std::uint64_t> encodeSlotPsoPrefetchDrawHandleSlotOverflow{0};
   std::atomic<std::uint64_t> submitDrawRunBatchGroups{0};
   std::atomic<std::uint64_t> submitDrawRunBatchRecords{0};
   std::atomic<std::uint64_t> submitDrawRunBatchMaxRecords{0};
@@ -261,6 +301,30 @@ struct Counters {
   std::atomic<std::uint64_t> commitChunkQueueDrawSubmissionCpuMaxNs{0};
   std::atomic<std::uint64_t> commitChunkQueueDrawSubmissionEmplaceCpuNs{0};
   std::atomic<std::uint64_t> commitChunkQueueDrawSubmissionEmplaceCpuMaxNs{0};
+  std::atomic<std::uint64_t> commitChunkQueueDrawSubmissionSnapshotCpuNs{0};
+  std::atomic<std::uint64_t> commitChunkQueueDrawSubmissionSnapshotCpuMaxNs{0};
+  std::atomic<std::uint64_t> commitChunkIndexBindCpuNs{0};
+  std::atomic<std::uint64_t> commitChunkIndexBindCpuMaxNs{0};
+  std::atomic<std::uint64_t> commitChunkReplayPendingFlushCpuNs{0};
+  std::atomic<std::uint64_t> commitChunkReplayPendingFlushCpuMaxNs{0};
+  std::atomic<std::uint64_t> commitChunkReplayDrawRecordCpuNs{0};
+  std::atomic<std::uint64_t> commitChunkReplayDrawRecordCpuMaxNs{0};
+  std::atomic<std::uint64_t> commitChunkReplayNonDrawRecordCpuNs{0};
+  std::atomic<std::uint64_t> commitChunkReplayNonDrawRecordCpuMaxNs{0};
+  std::atomic<std::uint64_t> commitChunkReplayConstRecordCpuNs{0};
+  std::atomic<std::uint64_t> commitChunkReplayConstRecordCpuMaxNs{0};
+  std::atomic<std::uint64_t> commitChunkReplayApplyStateRecordCpuNs{0};
+  std::atomic<std::uint64_t> commitChunkReplayApplyStateRecordCpuMaxNs{0};
+  std::atomic<std::uint64_t> commitChunkReplayClearRecordCpuNs{0};
+  std::atomic<std::uint64_t> commitChunkReplayClearRecordCpuMaxNs{0};
+  std::atomic<std::uint64_t> commitChunkReplayPresentRecordCpuNs{0};
+  std::atomic<std::uint64_t> commitChunkReplayPresentRecordCpuMaxNs{0};
+  std::atomic<std::uint64_t> commitChunkReplaySurfaceRecordCpuNs{0};
+  std::atomic<std::uint64_t> commitChunkReplaySurfaceRecordCpuMaxNs{0};
+  std::atomic<std::uint64_t> commitChunkReplayQueryRecordCpuNs{0};
+  std::atomic<std::uint64_t> commitChunkReplayQueryRecordCpuMaxNs{0};
+  std::atomic<std::uint64_t> commitChunkReplayOtherRecordCpuNs{0};
+  std::atomic<std::uint64_t> commitChunkReplayOtherRecordCpuMaxNs{0};
   std::atomic<std::uint64_t> commitChunkConstUploadCpuNs{0};
   std::atomic<std::uint64_t> commitChunkConstUploadCpuMaxNs{0};
   std::atomic<std::uint64_t> d3d9DrawStateCacheHits{0};
@@ -1312,6 +1376,21 @@ struct Counters {
   PercentileRing d3d9BufferLockShadowCopyRing;
   PercentileRing commandBufferCreateCpuRing;
   PercentileRing commandBufferCommitCpuRing;
+  PercentileRing submitPresentCpuRing;
+  PercentileRing submitPresentAcquireCpuRing;
+  PercentileRing submitPresentCommitCpuRing;
+  PercentileRing submitPresentBoundaryCpuRing;
+  PercentileRing prepareSlotForPublishCpuRing;
+  PercentileRing prepareSlotResourceMarkCpuRing;
+  PercentileRing prepareSlotPsoPrefetchCpuRing;
+  PercentileRing encodeSlotPsoPrefetchCpuRing;
+  PercentileRing encodeSlotPsoPrefetchStateCopyCpuRing;
+  PercentileRing encodeSlotPsoPrefetchDepthLookupCpuRing;
+  PercentileRing encodeSlotPsoPrefetchTileSelectCpuRing;
+  PercentileRing encodeSlotPsoPrefetchTileBaseLookupCpuRing;
+  PercentileRing encodeSlotPsoPrefetchTileDrawLookupCpuRing;
+  PercentileRing encodeSlotPsoPrefetchArgbufSelectCpuRing;
+  PercentileRing encodeSlotPsoPrefetchDrawLookupCpuRing;
   // V1 boundary B2 — paired with bridgeCommitLatency*Ns above.
   PercentileRing bridgeCommitLatencyRing;
   PercentileRing commitChunkImportCpuRing;
@@ -1325,6 +1404,18 @@ struct Counters {
   PercentileRing commitChunkDrawRunFinalBindCpuRing;
   PercentileRing commitChunkQueueDrawSubmissionCpuRing;
   PercentileRing commitChunkQueueDrawSubmissionEmplaceCpuRing;
+  PercentileRing commitChunkQueueDrawSubmissionSnapshotCpuRing;
+  PercentileRing commitChunkIndexBindCpuRing;
+  PercentileRing commitChunkReplayPendingFlushCpuRing;
+  PercentileRing commitChunkReplayDrawRecordCpuRing;
+  PercentileRing commitChunkReplayNonDrawRecordCpuRing;
+  PercentileRing commitChunkReplayConstRecordCpuRing;
+  PercentileRing commitChunkReplayApplyStateRecordCpuRing;
+  PercentileRing commitChunkReplayClearRecordCpuRing;
+  PercentileRing commitChunkReplayPresentRecordCpuRing;
+  PercentileRing commitChunkReplaySurfaceRecordCpuRing;
+  PercentileRing commitChunkReplayQueryRecordCpuRing;
+  PercentileRing commitChunkReplayOtherRecordCpuRing;
   PercentileRing commitChunkConstUploadCpuRing;
   PercentileRing completionDequeueAgeRing;
   PercentileRing completionNoEnqueueWaitToCommitChunkEntryRing;
@@ -1594,6 +1685,76 @@ constexpr CounterEntry kCounterTable[] = {
     {"stretch_full", CounterEntry::Kind::UnsignedCount, &Counters::stretchFullscreen, nullptr, nullptr, 0.0},
     {"submit_present", CounterEntry::Kind::UnsignedCount, &Counters::submitPresent, nullptr, nullptr, 0.0},
     {"submit_flush", CounterEntry::Kind::UnsignedCount, &Counters::submitFlush, nullptr, nullptr, 0.0},
+    {"submit_present_cpu_ms", CounterEntry::Kind::Milliseconds, &Counters::submitPresentCpuNs, nullptr, nullptr, 0.0},
+    {"submit_present_cpu_max_ms", CounterEntry::Kind::Milliseconds, &Counters::submitPresentCpuMaxNs, nullptr, nullptr, 0.0},
+    {"submit_present_cpu_p50_ms", CounterEntry::Kind::PercentileMs, nullptr, nullptr, &Counters::submitPresentCpuRing, 0.5},
+    {"submit_present_cpu_p95_ms", CounterEntry::Kind::PercentileMs, nullptr, nullptr, &Counters::submitPresentCpuRing, 0.95},
+    {"submit_present_acquire_cpu_ms", CounterEntry::Kind::Milliseconds, &Counters::submitPresentAcquireCpuNs, nullptr, nullptr, 0.0},
+    {"submit_present_acquire_cpu_max_ms", CounterEntry::Kind::Milliseconds, &Counters::submitPresentAcquireCpuMaxNs, nullptr, nullptr, 0.0},
+    {"submit_present_acquire_cpu_p50_ms", CounterEntry::Kind::PercentileMs, nullptr, nullptr, &Counters::submitPresentAcquireCpuRing, 0.5},
+    {"submit_present_acquire_cpu_p95_ms", CounterEntry::Kind::PercentileMs, nullptr, nullptr, &Counters::submitPresentAcquireCpuRing, 0.95},
+    {"submit_present_commit_cpu_ms", CounterEntry::Kind::Milliseconds, &Counters::submitPresentCommitCpuNs, nullptr, nullptr, 0.0},
+    {"submit_present_commit_cpu_max_ms", CounterEntry::Kind::Milliseconds, &Counters::submitPresentCommitCpuMaxNs, nullptr, nullptr, 0.0},
+    {"submit_present_commit_cpu_p50_ms", CounterEntry::Kind::PercentileMs, nullptr, nullptr, &Counters::submitPresentCommitCpuRing, 0.5},
+    {"submit_present_commit_cpu_p95_ms", CounterEntry::Kind::PercentileMs, nullptr, nullptr, &Counters::submitPresentCommitCpuRing, 0.95},
+    {"submit_present_boundary_cpu_ms", CounterEntry::Kind::Milliseconds, &Counters::submitPresentBoundaryCpuNs, nullptr, nullptr, 0.0},
+    {"submit_present_boundary_cpu_max_ms", CounterEntry::Kind::Milliseconds, &Counters::submitPresentBoundaryCpuMaxNs, nullptr, nullptr, 0.0},
+    {"submit_present_boundary_cpu_p50_ms", CounterEntry::Kind::PercentileMs, nullptr, nullptr, &Counters::submitPresentBoundaryCpuRing, 0.5},
+    {"submit_present_boundary_cpu_p95_ms", CounterEntry::Kind::PercentileMs, nullptr, nullptr, &Counters::submitPresentBoundaryCpuRing, 0.95},
+    {"prepare_slot_publish_cpu_ms", CounterEntry::Kind::Milliseconds, &Counters::prepareSlotForPublishCpuNs, nullptr, nullptr, 0.0},
+    {"prepare_slot_publish_cpu_max_ms", CounterEntry::Kind::Milliseconds, &Counters::prepareSlotForPublishCpuMaxNs, nullptr, nullptr, 0.0},
+    {"prepare_slot_publish_cpu_p50_ms", CounterEntry::Kind::PercentileMs, nullptr, nullptr, &Counters::prepareSlotForPublishCpuRing, 0.5},
+    {"prepare_slot_publish_cpu_p95_ms", CounterEntry::Kind::PercentileMs, nullptr, nullptr, &Counters::prepareSlotForPublishCpuRing, 0.95},
+    {"prepare_slot_resource_mark_cpu_ms", CounterEntry::Kind::Milliseconds, &Counters::prepareSlotResourceMarkCpuNs, nullptr, nullptr, 0.0},
+    {"prepare_slot_resource_mark_cpu_max_ms", CounterEntry::Kind::Milliseconds, &Counters::prepareSlotResourceMarkCpuMaxNs, nullptr, nullptr, 0.0},
+    {"prepare_slot_resource_mark_cpu_p50_ms", CounterEntry::Kind::PercentileMs, nullptr, nullptr, &Counters::prepareSlotResourceMarkCpuRing, 0.5},
+    {"prepare_slot_resource_mark_cpu_p95_ms", CounterEntry::Kind::PercentileMs, nullptr, nullptr, &Counters::prepareSlotResourceMarkCpuRing, 0.95},
+    {"prepare_slot_pso_prefetch_cpu_ms", CounterEntry::Kind::Milliseconds, &Counters::prepareSlotPsoPrefetchCpuNs, nullptr, nullptr, 0.0},
+    {"prepare_slot_pso_prefetch_cpu_max_ms", CounterEntry::Kind::Milliseconds, &Counters::prepareSlotPsoPrefetchCpuMaxNs, nullptr, nullptr, 0.0},
+    {"prepare_slot_pso_prefetch_cpu_p50_ms", CounterEntry::Kind::PercentileMs, nullptr, nullptr, &Counters::prepareSlotPsoPrefetchCpuRing, 0.5},
+    {"prepare_slot_pso_prefetch_cpu_p95_ms", CounterEntry::Kind::PercentileMs, nullptr, nullptr, &Counters::prepareSlotPsoPrefetchCpuRing, 0.95},
+    {"encode_slot_pso_prefetch_cpu_ms", CounterEntry::Kind::Milliseconds, &Counters::encodeSlotPsoPrefetchCpuNs, nullptr, nullptr, 0.0},
+    {"encode_slot_pso_prefetch_cpu_max_ms", CounterEntry::Kind::Milliseconds, &Counters::encodeSlotPsoPrefetchCpuMaxNs, nullptr, nullptr, 0.0},
+    {"encode_slot_pso_prefetch_cpu_p50_ms", CounterEntry::Kind::PercentileMs, nullptr, nullptr, &Counters::encodeSlotPsoPrefetchCpuRing, 0.5},
+    {"encode_slot_pso_prefetch_cpu_p95_ms", CounterEntry::Kind::PercentileMs, nullptr, nullptr, &Counters::encodeSlotPsoPrefetchCpuRing, 0.95},
+    {"encode_slot_pso_prefetch_commands", CounterEntry::Kind::UnsignedCount, &Counters::encodeSlotPsoPrefetchCommands, nullptr, nullptr, 0.0},
+    {"encode_slot_pso_prefetch_candidates", CounterEntry::Kind::UnsignedCount, &Counters::encodeSlotPsoPrefetchCandidates, nullptr, nullptr, 0.0},
+    {"encode_slot_pso_prefetch_tile_candidates", CounterEntry::Kind::UnsignedCount, &Counters::encodeSlotPsoPrefetchTileCandidates, nullptr, nullptr, 0.0},
+    {"encode_slot_pso_prefetch_argbuf_stage2_candidates", CounterEntry::Kind::UnsignedCount, &Counters::encodeSlotPsoPrefetchArgbufStage2Candidates, nullptr, nullptr, 0.0},
+    {"encode_slot_pso_prefetch_argbuf_resource_array_candidates", CounterEntry::Kind::UnsignedCount, &Counters::encodeSlotPsoPrefetchArgbufResourceArrayCandidates, nullptr, nullptr, 0.0},
+    {"encode_slot_pso_prefetch_state_copy_cpu_ms", CounterEntry::Kind::Milliseconds, &Counters::encodeSlotPsoPrefetchStateCopyCpuNs, nullptr, nullptr, 0.0},
+    {"encode_slot_pso_prefetch_state_copy_cpu_max_ms", CounterEntry::Kind::Milliseconds, &Counters::encodeSlotPsoPrefetchStateCopyCpuMaxNs, nullptr, nullptr, 0.0},
+    {"encode_slot_pso_prefetch_state_copy_cpu_p50_ms", CounterEntry::Kind::PercentileMs, nullptr, nullptr, &Counters::encodeSlotPsoPrefetchStateCopyCpuRing, 0.5},
+    {"encode_slot_pso_prefetch_state_copy_cpu_p95_ms", CounterEntry::Kind::PercentileMs, nullptr, nullptr, &Counters::encodeSlotPsoPrefetchStateCopyCpuRing, 0.95},
+    {"encode_slot_pso_prefetch_depth_lookup_cpu_ms", CounterEntry::Kind::Milliseconds, &Counters::encodeSlotPsoPrefetchDepthLookupCpuNs, nullptr, nullptr, 0.0},
+    {"encode_slot_pso_prefetch_depth_lookup_cpu_max_ms", CounterEntry::Kind::Milliseconds, &Counters::encodeSlotPsoPrefetchDepthLookupCpuMaxNs, nullptr, nullptr, 0.0},
+    {"encode_slot_pso_prefetch_depth_lookup_cpu_p50_ms", CounterEntry::Kind::PercentileMs, nullptr, nullptr, &Counters::encodeSlotPsoPrefetchDepthLookupCpuRing, 0.5},
+    {"encode_slot_pso_prefetch_depth_lookup_cpu_p95_ms", CounterEntry::Kind::PercentileMs, nullptr, nullptr, &Counters::encodeSlotPsoPrefetchDepthLookupCpuRing, 0.95},
+    {"encode_slot_pso_prefetch_tile_select_cpu_ms", CounterEntry::Kind::Milliseconds, &Counters::encodeSlotPsoPrefetchTileSelectCpuNs, nullptr, nullptr, 0.0},
+    {"encode_slot_pso_prefetch_tile_select_cpu_max_ms", CounterEntry::Kind::Milliseconds, &Counters::encodeSlotPsoPrefetchTileSelectCpuMaxNs, nullptr, nullptr, 0.0},
+    {"encode_slot_pso_prefetch_tile_select_cpu_p50_ms", CounterEntry::Kind::PercentileMs, nullptr, nullptr, &Counters::encodeSlotPsoPrefetchTileSelectCpuRing, 0.5},
+    {"encode_slot_pso_prefetch_tile_select_cpu_p95_ms", CounterEntry::Kind::PercentileMs, nullptr, nullptr, &Counters::encodeSlotPsoPrefetchTileSelectCpuRing, 0.95},
+    {"encode_slot_pso_prefetch_tile_base_lookup_cpu_ms", CounterEntry::Kind::Milliseconds, &Counters::encodeSlotPsoPrefetchTileBaseLookupCpuNs, nullptr, nullptr, 0.0},
+    {"encode_slot_pso_prefetch_tile_base_lookup_cpu_max_ms", CounterEntry::Kind::Milliseconds, &Counters::encodeSlotPsoPrefetchTileBaseLookupCpuMaxNs, nullptr, nullptr, 0.0},
+    {"encode_slot_pso_prefetch_tile_base_lookup_cpu_p50_ms", CounterEntry::Kind::PercentileMs, nullptr, nullptr, &Counters::encodeSlotPsoPrefetchTileBaseLookupCpuRing, 0.5},
+    {"encode_slot_pso_prefetch_tile_base_lookup_cpu_p95_ms", CounterEntry::Kind::PercentileMs, nullptr, nullptr, &Counters::encodeSlotPsoPrefetchTileBaseLookupCpuRing, 0.95},
+    {"encode_slot_pso_prefetch_tile_draw_lookup_cpu_ms", CounterEntry::Kind::Milliseconds, &Counters::encodeSlotPsoPrefetchTileDrawLookupCpuNs, nullptr, nullptr, 0.0},
+    {"encode_slot_pso_prefetch_tile_draw_lookup_cpu_max_ms", CounterEntry::Kind::Milliseconds, &Counters::encodeSlotPsoPrefetchTileDrawLookupCpuMaxNs, nullptr, nullptr, 0.0},
+    {"encode_slot_pso_prefetch_tile_draw_lookup_cpu_p50_ms", CounterEntry::Kind::PercentileMs, nullptr, nullptr, &Counters::encodeSlotPsoPrefetchTileDrawLookupCpuRing, 0.5},
+    {"encode_slot_pso_prefetch_tile_draw_lookup_cpu_p95_ms", CounterEntry::Kind::PercentileMs, nullptr, nullptr, &Counters::encodeSlotPsoPrefetchTileDrawLookupCpuRing, 0.95},
+    {"encode_slot_pso_prefetch_argbuf_select_cpu_ms", CounterEntry::Kind::Milliseconds, &Counters::encodeSlotPsoPrefetchArgbufSelectCpuNs, nullptr, nullptr, 0.0},
+    {"encode_slot_pso_prefetch_argbuf_select_cpu_max_ms", CounterEntry::Kind::Milliseconds, &Counters::encodeSlotPsoPrefetchArgbufSelectCpuMaxNs, nullptr, nullptr, 0.0},
+    {"encode_slot_pso_prefetch_argbuf_select_cpu_p50_ms", CounterEntry::Kind::PercentileMs, nullptr, nullptr, &Counters::encodeSlotPsoPrefetchArgbufSelectCpuRing, 0.5},
+    {"encode_slot_pso_prefetch_argbuf_select_cpu_p95_ms", CounterEntry::Kind::PercentileMs, nullptr, nullptr, &Counters::encodeSlotPsoPrefetchArgbufSelectCpuRing, 0.95},
+    {"encode_slot_pso_prefetch_draw_lookup_cpu_ms", CounterEntry::Kind::Milliseconds, &Counters::encodeSlotPsoPrefetchDrawLookupCpuNs, nullptr, nullptr, 0.0},
+    {"encode_slot_pso_prefetch_draw_lookup_cpu_max_ms", CounterEntry::Kind::Milliseconds, &Counters::encodeSlotPsoPrefetchDrawLookupCpuMaxNs, nullptr, nullptr, 0.0},
+    {"encode_slot_pso_prefetch_draw_lookup_cpu_p50_ms", CounterEntry::Kind::PercentileMs, nullptr, nullptr, &Counters::encodeSlotPsoPrefetchDrawLookupCpuRing, 0.5},
+    {"encode_slot_pso_prefetch_draw_lookup_cpu_p95_ms", CounterEntry::Kind::PercentileMs, nullptr, nullptr, &Counters::encodeSlotPsoPrefetchDrawLookupCpuRing, 0.95},
+    {"encode_slot_pso_prefetch_draw_handle_adjacent_candidates", CounterEntry::Kind::UnsignedCount, &Counters::encodeSlotPsoPrefetchDrawHandleAdjacentCandidates, nullptr, nullptr, 0.0},
+    {"encode_slot_pso_prefetch_draw_handle_adjacent_hits", CounterEntry::Kind::UnsignedCount, &Counters::encodeSlotPsoPrefetchDrawHandleAdjacentHits, nullptr, nullptr, 0.0},
+    {"encode_slot_pso_prefetch_draw_handle_slot_repeat_hits", CounterEntry::Kind::UnsignedCount, &Counters::encodeSlotPsoPrefetchDrawHandleSlotRepeatHits, nullptr, nullptr, 0.0},
+    {"encode_slot_pso_prefetch_draw_handle_slot_unique", CounterEntry::Kind::UnsignedCount, &Counters::encodeSlotPsoPrefetchDrawHandleSlotUnique, nullptr, nullptr, 0.0},
+    {"encode_slot_pso_prefetch_draw_handle_slot_overflow", CounterEntry::Kind::UnsignedCount, &Counters::encodeSlotPsoPrefetchDrawHandleSlotOverflow, nullptr, nullptr, 0.0},
     {"command_buffers", CounterEntry::Kind::UnsignedCount, &Counters::commandBuffers, nullptr, nullptr, 0.0},
     {"sub_command_buffers", CounterEntry::Kind::UnsignedCount, &Counters::subCommandBufferCommits, nullptr, nullptr, 0.0},
     {"chunk_subcb_count_max", CounterEntry::Kind::UnsignedCount, &Counters::chunkSubCBCountMax, nullptr, nullptr, 0.0},
@@ -1751,6 +1912,54 @@ constexpr CounterEntry kCounterTable[] = {
     {"commit_chunk_queue_draw_submission_emplace_cpu_max_ms", CounterEntry::Kind::Milliseconds, &Counters::commitChunkQueueDrawSubmissionEmplaceCpuMaxNs, nullptr, nullptr, 0.0},
     {"commit_chunk_queue_draw_submission_emplace_cpu_p50_ms", CounterEntry::Kind::PercentileMs, nullptr, nullptr, &Counters::commitChunkQueueDrawSubmissionEmplaceCpuRing, 0.5},
     {"commit_chunk_queue_draw_submission_emplace_cpu_p95_ms", CounterEntry::Kind::PercentileMs, nullptr, nullptr, &Counters::commitChunkQueueDrawSubmissionEmplaceCpuRing, 0.95},
+    {"commit_chunk_queue_draw_submission_snapshot_cpu_ms", CounterEntry::Kind::Milliseconds, &Counters::commitChunkQueueDrawSubmissionSnapshotCpuNs, nullptr, nullptr, 0.0},
+    {"commit_chunk_queue_draw_submission_snapshot_cpu_max_ms", CounterEntry::Kind::Milliseconds, &Counters::commitChunkQueueDrawSubmissionSnapshotCpuMaxNs, nullptr, nullptr, 0.0},
+    {"commit_chunk_queue_draw_submission_snapshot_cpu_p50_ms", CounterEntry::Kind::PercentileMs, nullptr, nullptr, &Counters::commitChunkQueueDrawSubmissionSnapshotCpuRing, 0.5},
+    {"commit_chunk_queue_draw_submission_snapshot_cpu_p95_ms", CounterEntry::Kind::PercentileMs, nullptr, nullptr, &Counters::commitChunkQueueDrawSubmissionSnapshotCpuRing, 0.95},
+    {"commit_chunk_index_bind_cpu_ms", CounterEntry::Kind::Milliseconds, &Counters::commitChunkIndexBindCpuNs, nullptr, nullptr, 0.0},
+    {"commit_chunk_index_bind_cpu_max_ms", CounterEntry::Kind::Milliseconds, &Counters::commitChunkIndexBindCpuMaxNs, nullptr, nullptr, 0.0},
+    {"commit_chunk_index_bind_cpu_p50_ms", CounterEntry::Kind::PercentileMs, nullptr, nullptr, &Counters::commitChunkIndexBindCpuRing, 0.5},
+    {"commit_chunk_index_bind_cpu_p95_ms", CounterEntry::Kind::PercentileMs, nullptr, nullptr, &Counters::commitChunkIndexBindCpuRing, 0.95},
+    {"commit_chunk_replay_pending_flush_cpu_ms", CounterEntry::Kind::Milliseconds, &Counters::commitChunkReplayPendingFlushCpuNs, nullptr, nullptr, 0.0},
+    {"commit_chunk_replay_pending_flush_cpu_max_ms", CounterEntry::Kind::Milliseconds, &Counters::commitChunkReplayPendingFlushCpuMaxNs, nullptr, nullptr, 0.0},
+    {"commit_chunk_replay_pending_flush_cpu_p50_ms", CounterEntry::Kind::PercentileMs, nullptr, nullptr, &Counters::commitChunkReplayPendingFlushCpuRing, 0.5},
+    {"commit_chunk_replay_pending_flush_cpu_p95_ms", CounterEntry::Kind::PercentileMs, nullptr, nullptr, &Counters::commitChunkReplayPendingFlushCpuRing, 0.95},
+    {"commit_chunk_replay_draw_record_cpu_ms", CounterEntry::Kind::Milliseconds, &Counters::commitChunkReplayDrawRecordCpuNs, nullptr, nullptr, 0.0},
+    {"commit_chunk_replay_draw_record_cpu_max_ms", CounterEntry::Kind::Milliseconds, &Counters::commitChunkReplayDrawRecordCpuMaxNs, nullptr, nullptr, 0.0},
+    {"commit_chunk_replay_draw_record_cpu_p50_ms", CounterEntry::Kind::PercentileMs, nullptr, nullptr, &Counters::commitChunkReplayDrawRecordCpuRing, 0.5},
+    {"commit_chunk_replay_draw_record_cpu_p95_ms", CounterEntry::Kind::PercentileMs, nullptr, nullptr, &Counters::commitChunkReplayDrawRecordCpuRing, 0.95},
+    {"commit_chunk_replay_non_draw_record_cpu_ms", CounterEntry::Kind::Milliseconds, &Counters::commitChunkReplayNonDrawRecordCpuNs, nullptr, nullptr, 0.0},
+    {"commit_chunk_replay_non_draw_record_cpu_max_ms", CounterEntry::Kind::Milliseconds, &Counters::commitChunkReplayNonDrawRecordCpuMaxNs, nullptr, nullptr, 0.0},
+    {"commit_chunk_replay_non_draw_record_cpu_p50_ms", CounterEntry::Kind::PercentileMs, nullptr, nullptr, &Counters::commitChunkReplayNonDrawRecordCpuRing, 0.5},
+    {"commit_chunk_replay_non_draw_record_cpu_p95_ms", CounterEntry::Kind::PercentileMs, nullptr, nullptr, &Counters::commitChunkReplayNonDrawRecordCpuRing, 0.95},
+    {"commit_chunk_replay_const_record_cpu_ms", CounterEntry::Kind::Milliseconds, &Counters::commitChunkReplayConstRecordCpuNs, nullptr, nullptr, 0.0},
+    {"commit_chunk_replay_const_record_cpu_max_ms", CounterEntry::Kind::Milliseconds, &Counters::commitChunkReplayConstRecordCpuMaxNs, nullptr, nullptr, 0.0},
+    {"commit_chunk_replay_const_record_cpu_p50_ms", CounterEntry::Kind::PercentileMs, nullptr, nullptr, &Counters::commitChunkReplayConstRecordCpuRing, 0.5},
+    {"commit_chunk_replay_const_record_cpu_p95_ms", CounterEntry::Kind::PercentileMs, nullptr, nullptr, &Counters::commitChunkReplayConstRecordCpuRing, 0.95},
+    {"commit_chunk_replay_apply_state_record_cpu_ms", CounterEntry::Kind::Milliseconds, &Counters::commitChunkReplayApplyStateRecordCpuNs, nullptr, nullptr, 0.0},
+    {"commit_chunk_replay_apply_state_record_cpu_max_ms", CounterEntry::Kind::Milliseconds, &Counters::commitChunkReplayApplyStateRecordCpuMaxNs, nullptr, nullptr, 0.0},
+    {"commit_chunk_replay_apply_state_record_cpu_p50_ms", CounterEntry::Kind::PercentileMs, nullptr, nullptr, &Counters::commitChunkReplayApplyStateRecordCpuRing, 0.5},
+    {"commit_chunk_replay_apply_state_record_cpu_p95_ms", CounterEntry::Kind::PercentileMs, nullptr, nullptr, &Counters::commitChunkReplayApplyStateRecordCpuRing, 0.95},
+    {"commit_chunk_replay_clear_record_cpu_ms", CounterEntry::Kind::Milliseconds, &Counters::commitChunkReplayClearRecordCpuNs, nullptr, nullptr, 0.0},
+    {"commit_chunk_replay_clear_record_cpu_max_ms", CounterEntry::Kind::Milliseconds, &Counters::commitChunkReplayClearRecordCpuMaxNs, nullptr, nullptr, 0.0},
+    {"commit_chunk_replay_clear_record_cpu_p50_ms", CounterEntry::Kind::PercentileMs, nullptr, nullptr, &Counters::commitChunkReplayClearRecordCpuRing, 0.5},
+    {"commit_chunk_replay_clear_record_cpu_p95_ms", CounterEntry::Kind::PercentileMs, nullptr, nullptr, &Counters::commitChunkReplayClearRecordCpuRing, 0.95},
+    {"commit_chunk_replay_present_record_cpu_ms", CounterEntry::Kind::Milliseconds, &Counters::commitChunkReplayPresentRecordCpuNs, nullptr, nullptr, 0.0},
+    {"commit_chunk_replay_present_record_cpu_max_ms", CounterEntry::Kind::Milliseconds, &Counters::commitChunkReplayPresentRecordCpuMaxNs, nullptr, nullptr, 0.0},
+    {"commit_chunk_replay_present_record_cpu_p50_ms", CounterEntry::Kind::PercentileMs, nullptr, nullptr, &Counters::commitChunkReplayPresentRecordCpuRing, 0.5},
+    {"commit_chunk_replay_present_record_cpu_p95_ms", CounterEntry::Kind::PercentileMs, nullptr, nullptr, &Counters::commitChunkReplayPresentRecordCpuRing, 0.95},
+    {"commit_chunk_replay_surface_record_cpu_ms", CounterEntry::Kind::Milliseconds, &Counters::commitChunkReplaySurfaceRecordCpuNs, nullptr, nullptr, 0.0},
+    {"commit_chunk_replay_surface_record_cpu_max_ms", CounterEntry::Kind::Milliseconds, &Counters::commitChunkReplaySurfaceRecordCpuMaxNs, nullptr, nullptr, 0.0},
+    {"commit_chunk_replay_surface_record_cpu_p50_ms", CounterEntry::Kind::PercentileMs, nullptr, nullptr, &Counters::commitChunkReplaySurfaceRecordCpuRing, 0.5},
+    {"commit_chunk_replay_surface_record_cpu_p95_ms", CounterEntry::Kind::PercentileMs, nullptr, nullptr, &Counters::commitChunkReplaySurfaceRecordCpuRing, 0.95},
+    {"commit_chunk_replay_query_record_cpu_ms", CounterEntry::Kind::Milliseconds, &Counters::commitChunkReplayQueryRecordCpuNs, nullptr, nullptr, 0.0},
+    {"commit_chunk_replay_query_record_cpu_max_ms", CounterEntry::Kind::Milliseconds, &Counters::commitChunkReplayQueryRecordCpuMaxNs, nullptr, nullptr, 0.0},
+    {"commit_chunk_replay_query_record_cpu_p50_ms", CounterEntry::Kind::PercentileMs, nullptr, nullptr, &Counters::commitChunkReplayQueryRecordCpuRing, 0.5},
+    {"commit_chunk_replay_query_record_cpu_p95_ms", CounterEntry::Kind::PercentileMs, nullptr, nullptr, &Counters::commitChunkReplayQueryRecordCpuRing, 0.95},
+    {"commit_chunk_replay_other_record_cpu_ms", CounterEntry::Kind::Milliseconds, &Counters::commitChunkReplayOtherRecordCpuNs, nullptr, nullptr, 0.0},
+    {"commit_chunk_replay_other_record_cpu_max_ms", CounterEntry::Kind::Milliseconds, &Counters::commitChunkReplayOtherRecordCpuMaxNs, nullptr, nullptr, 0.0},
+    {"commit_chunk_replay_other_record_cpu_p50_ms", CounterEntry::Kind::PercentileMs, nullptr, nullptr, &Counters::commitChunkReplayOtherRecordCpuRing, 0.5},
+    {"commit_chunk_replay_other_record_cpu_p95_ms", CounterEntry::Kind::PercentileMs, nullptr, nullptr, &Counters::commitChunkReplayOtherRecordCpuRing, 0.95},
     {"commit_chunk_const_upload_cpu_ms", CounterEntry::Kind::Milliseconds, &Counters::commitChunkConstUploadCpuNs, nullptr, nullptr, 0.0},
     {"commit_chunk_const_upload_cpu_max_ms", CounterEntry::Kind::Milliseconds, &Counters::commitChunkConstUploadCpuMaxNs, nullptr, nullptr, 0.0},
     {"commit_chunk_const_upload_cpu_p50_ms", CounterEntry::Kind::PercentileMs, nullptr, nullptr, &Counters::commitChunkConstUploadCpuRing, 0.5},
@@ -3088,6 +3297,151 @@ void countSubmitFlush() {
   add(counters().submitFlush);
 }
 
+void countSubmitPresentCpuTime(std::uint64_t nanoseconds) {
+  auto& c = counters();
+  add(c.submitPresentCpuNs, nanoseconds);
+  updateMax(c.submitPresentCpuMaxNs, nanoseconds);
+  recordRing(c.submitPresentCpuRing, nanoseconds);
+}
+
+void countSubmitPresentAcquireCpuTime(std::uint64_t nanoseconds) {
+  auto& c = counters();
+  add(c.submitPresentAcquireCpuNs, nanoseconds);
+  updateMax(c.submitPresentAcquireCpuMaxNs, nanoseconds);
+  recordRing(c.submitPresentAcquireCpuRing, nanoseconds);
+}
+
+void countSubmitPresentCommitCpuTime(std::uint64_t nanoseconds) {
+  auto& c = counters();
+  add(c.submitPresentCommitCpuNs, nanoseconds);
+  updateMax(c.submitPresentCommitCpuMaxNs, nanoseconds);
+  recordRing(c.submitPresentCommitCpuRing, nanoseconds);
+}
+
+void countSubmitPresentBoundaryCpuTime(std::uint64_t nanoseconds) {
+  auto& c = counters();
+  add(c.submitPresentBoundaryCpuNs, nanoseconds);
+  updateMax(c.submitPresentBoundaryCpuMaxNs, nanoseconds);
+  recordRing(c.submitPresentBoundaryCpuRing, nanoseconds);
+}
+
+void countPrepareSlotForPublishCpuTime(std::uint64_t nanoseconds) {
+  auto& c = counters();
+  add(c.prepareSlotForPublishCpuNs, nanoseconds);
+  updateMax(c.prepareSlotForPublishCpuMaxNs, nanoseconds);
+  recordRing(c.prepareSlotForPublishCpuRing, nanoseconds);
+}
+
+void countPrepareSlotResourceMarkCpuTime(std::uint64_t nanoseconds) {
+  auto& c = counters();
+  add(c.prepareSlotResourceMarkCpuNs, nanoseconds);
+  updateMax(c.prepareSlotResourceMarkCpuMaxNs, nanoseconds);
+  recordRing(c.prepareSlotResourceMarkCpuRing, nanoseconds);
+}
+
+void countPrepareSlotPsoPrefetchCpuTime(std::uint64_t nanoseconds) {
+  auto& c = counters();
+  add(c.prepareSlotPsoPrefetchCpuNs, nanoseconds);
+  updateMax(c.prepareSlotPsoPrefetchCpuMaxNs, nanoseconds);
+  recordRing(c.prepareSlotPsoPrefetchCpuRing, nanoseconds);
+}
+
+void countEncodeSlotPsoPrefetchCpuTime(std::uint64_t nanoseconds) {
+  auto& c = counters();
+  add(c.encodeSlotPsoPrefetchCpuNs, nanoseconds);
+  updateMax(c.encodeSlotPsoPrefetchCpuMaxNs, nanoseconds);
+  recordRing(c.encodeSlotPsoPrefetchCpuRing, nanoseconds);
+}
+
+void countEncodeSlotPsoPrefetchCommands(std::uint64_t count) {
+  add(counters().encodeSlotPsoPrefetchCommands, count);
+}
+
+void countEncodeSlotPsoPrefetchCandidates(std::uint64_t count) {
+  add(counters().encodeSlotPsoPrefetchCandidates, count);
+}
+
+void countEncodeSlotPsoPrefetchTileCandidates(std::uint64_t count) {
+  add(counters().encodeSlotPsoPrefetchTileCandidates, count);
+}
+
+void countEncodeSlotPsoPrefetchArgbufStage2Candidates(std::uint64_t count) {
+  add(counters().encodeSlotPsoPrefetchArgbufStage2Candidates, count);
+}
+
+void countEncodeSlotPsoPrefetchArgbufResourceArrayCandidates(std::uint64_t count) {
+  add(counters().encodeSlotPsoPrefetchArgbufResourceArrayCandidates, count);
+}
+
+void countEncodeSlotPsoPrefetchStateCopyCpuTime(std::uint64_t nanoseconds) {
+  auto& c = counters();
+  add(c.encodeSlotPsoPrefetchStateCopyCpuNs, nanoseconds);
+  updateMax(c.encodeSlotPsoPrefetchStateCopyCpuMaxNs, nanoseconds);
+  recordRing(c.encodeSlotPsoPrefetchStateCopyCpuRing, nanoseconds);
+}
+
+void countEncodeSlotPsoPrefetchDepthLookupCpuTime(std::uint64_t nanoseconds) {
+  auto& c = counters();
+  add(c.encodeSlotPsoPrefetchDepthLookupCpuNs, nanoseconds);
+  updateMax(c.encodeSlotPsoPrefetchDepthLookupCpuMaxNs, nanoseconds);
+  recordRing(c.encodeSlotPsoPrefetchDepthLookupCpuRing, nanoseconds);
+}
+
+void countEncodeSlotPsoPrefetchTileSelectCpuTime(std::uint64_t nanoseconds) {
+  auto& c = counters();
+  add(c.encodeSlotPsoPrefetchTileSelectCpuNs, nanoseconds);
+  updateMax(c.encodeSlotPsoPrefetchTileSelectCpuMaxNs, nanoseconds);
+  recordRing(c.encodeSlotPsoPrefetchTileSelectCpuRing, nanoseconds);
+}
+
+void countEncodeSlotPsoPrefetchTileBaseLookupCpuTime(std::uint64_t nanoseconds) {
+  auto& c = counters();
+  add(c.encodeSlotPsoPrefetchTileBaseLookupCpuNs, nanoseconds);
+  updateMax(c.encodeSlotPsoPrefetchTileBaseLookupCpuMaxNs, nanoseconds);
+  recordRing(c.encodeSlotPsoPrefetchTileBaseLookupCpuRing, nanoseconds);
+}
+
+void countEncodeSlotPsoPrefetchTileDrawLookupCpuTime(std::uint64_t nanoseconds) {
+  auto& c = counters();
+  add(c.encodeSlotPsoPrefetchTileDrawLookupCpuNs, nanoseconds);
+  updateMax(c.encodeSlotPsoPrefetchTileDrawLookupCpuMaxNs, nanoseconds);
+  recordRing(c.encodeSlotPsoPrefetchTileDrawLookupCpuRing, nanoseconds);
+}
+
+void countEncodeSlotPsoPrefetchArgbufSelectCpuTime(std::uint64_t nanoseconds) {
+  auto& c = counters();
+  add(c.encodeSlotPsoPrefetchArgbufSelectCpuNs, nanoseconds);
+  updateMax(c.encodeSlotPsoPrefetchArgbufSelectCpuMaxNs, nanoseconds);
+  recordRing(c.encodeSlotPsoPrefetchArgbufSelectCpuRing, nanoseconds);
+}
+
+void countEncodeSlotPsoPrefetchDrawLookupCpuTime(std::uint64_t nanoseconds) {
+  auto& c = counters();
+  add(c.encodeSlotPsoPrefetchDrawLookupCpuNs, nanoseconds);
+  updateMax(c.encodeSlotPsoPrefetchDrawLookupCpuMaxNs, nanoseconds);
+  recordRing(c.encodeSlotPsoPrefetchDrawLookupCpuRing, nanoseconds);
+}
+
+void countEncodeSlotPsoPrefetchDrawHandleAdjacentCandidates(std::uint64_t count) {
+  add(counters().encodeSlotPsoPrefetchDrawHandleAdjacentCandidates, count);
+}
+
+void countEncodeSlotPsoPrefetchDrawHandleAdjacentHits(std::uint64_t count) {
+  add(counters().encodeSlotPsoPrefetchDrawHandleAdjacentHits, count);
+}
+
+void countEncodeSlotPsoPrefetchDrawHandleSlotRepeatHits(std::uint64_t count) {
+  add(counters().encodeSlotPsoPrefetchDrawHandleSlotRepeatHits, count);
+}
+
+void countEncodeSlotPsoPrefetchDrawHandleSlotUnique(std::uint64_t count) {
+  add(counters().encodeSlotPsoPrefetchDrawHandleSlotUnique, count);
+}
+
+void countEncodeSlotPsoPrefetchDrawHandleSlotOverflow(std::uint64_t count) {
+  add(counters().encodeSlotPsoPrefetchDrawHandleSlotOverflow, count);
+}
+
 void countCommandBuffer() {
   add(counters().commandBuffers);
 }
@@ -3636,6 +3990,90 @@ void countCommitChunkQueueDrawSubmissionEmplaceCpuTime(std::uint64_t nanoseconds
   add(c.commitChunkQueueDrawSubmissionEmplaceCpuNs, nanoseconds);
   updateMax(c.commitChunkQueueDrawSubmissionEmplaceCpuMaxNs, nanoseconds);
   recordRing(c.commitChunkQueueDrawSubmissionEmplaceCpuRing, nanoseconds);
+}
+
+void countCommitChunkQueueDrawSubmissionSnapshotCpuTime(std::uint64_t nanoseconds) {
+  auto& c = counters();
+  add(c.commitChunkQueueDrawSubmissionSnapshotCpuNs, nanoseconds);
+  updateMax(c.commitChunkQueueDrawSubmissionSnapshotCpuMaxNs, nanoseconds);
+  recordRing(c.commitChunkQueueDrawSubmissionSnapshotCpuRing, nanoseconds);
+}
+
+void countCommitChunkIndexBindCpuTime(std::uint64_t nanoseconds) {
+  auto& c = counters();
+  add(c.commitChunkIndexBindCpuNs, nanoseconds);
+  updateMax(c.commitChunkIndexBindCpuMaxNs, nanoseconds);
+  recordRing(c.commitChunkIndexBindCpuRing, nanoseconds);
+}
+
+void countCommitChunkReplayPendingFlushCpuTime(std::uint64_t nanoseconds) {
+  auto& c = counters();
+  add(c.commitChunkReplayPendingFlushCpuNs, nanoseconds);
+  updateMax(c.commitChunkReplayPendingFlushCpuMaxNs, nanoseconds);
+  recordRing(c.commitChunkReplayPendingFlushCpuRing, nanoseconds);
+}
+
+void countCommitChunkReplayDrawRecordCpuTime(std::uint64_t nanoseconds) {
+  auto& c = counters();
+  add(c.commitChunkReplayDrawRecordCpuNs, nanoseconds);
+  updateMax(c.commitChunkReplayDrawRecordCpuMaxNs, nanoseconds);
+  recordRing(c.commitChunkReplayDrawRecordCpuRing, nanoseconds);
+}
+
+void countCommitChunkReplayNonDrawRecordCpuTime(std::uint64_t nanoseconds) {
+  auto& c = counters();
+  add(c.commitChunkReplayNonDrawRecordCpuNs, nanoseconds);
+  updateMax(c.commitChunkReplayNonDrawRecordCpuMaxNs, nanoseconds);
+  recordRing(c.commitChunkReplayNonDrawRecordCpuRing, nanoseconds);
+}
+
+void countCommitChunkReplayConstRecordCpuTime(std::uint64_t nanoseconds) {
+  auto& c = counters();
+  add(c.commitChunkReplayConstRecordCpuNs, nanoseconds);
+  updateMax(c.commitChunkReplayConstRecordCpuMaxNs, nanoseconds);
+  recordRing(c.commitChunkReplayConstRecordCpuRing, nanoseconds);
+}
+
+void countCommitChunkReplayApplyStateRecordCpuTime(std::uint64_t nanoseconds) {
+  auto& c = counters();
+  add(c.commitChunkReplayApplyStateRecordCpuNs, nanoseconds);
+  updateMax(c.commitChunkReplayApplyStateRecordCpuMaxNs, nanoseconds);
+  recordRing(c.commitChunkReplayApplyStateRecordCpuRing, nanoseconds);
+}
+
+void countCommitChunkReplayClearRecordCpuTime(std::uint64_t nanoseconds) {
+  auto& c = counters();
+  add(c.commitChunkReplayClearRecordCpuNs, nanoseconds);
+  updateMax(c.commitChunkReplayClearRecordCpuMaxNs, nanoseconds);
+  recordRing(c.commitChunkReplayClearRecordCpuRing, nanoseconds);
+}
+
+void countCommitChunkReplayPresentRecordCpuTime(std::uint64_t nanoseconds) {
+  auto& c = counters();
+  add(c.commitChunkReplayPresentRecordCpuNs, nanoseconds);
+  updateMax(c.commitChunkReplayPresentRecordCpuMaxNs, nanoseconds);
+  recordRing(c.commitChunkReplayPresentRecordCpuRing, nanoseconds);
+}
+
+void countCommitChunkReplaySurfaceRecordCpuTime(std::uint64_t nanoseconds) {
+  auto& c = counters();
+  add(c.commitChunkReplaySurfaceRecordCpuNs, nanoseconds);
+  updateMax(c.commitChunkReplaySurfaceRecordCpuMaxNs, nanoseconds);
+  recordRing(c.commitChunkReplaySurfaceRecordCpuRing, nanoseconds);
+}
+
+void countCommitChunkReplayQueryRecordCpuTime(std::uint64_t nanoseconds) {
+  auto& c = counters();
+  add(c.commitChunkReplayQueryRecordCpuNs, nanoseconds);
+  updateMax(c.commitChunkReplayQueryRecordCpuMaxNs, nanoseconds);
+  recordRing(c.commitChunkReplayQueryRecordCpuRing, nanoseconds);
+}
+
+void countCommitChunkReplayOtherRecordCpuTime(std::uint64_t nanoseconds) {
+  auto& c = counters();
+  add(c.commitChunkReplayOtherRecordCpuNs, nanoseconds);
+  updateMax(c.commitChunkReplayOtherRecordCpuMaxNs, nanoseconds);
+  recordRing(c.commitChunkReplayOtherRecordCpuRing, nanoseconds);
 }
 
 void countCommitChunkConstUploadCpuTime(std::uint64_t nanoseconds) {

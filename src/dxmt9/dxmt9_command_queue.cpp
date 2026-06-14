@@ -60,6 +60,38 @@ bool drawRunGroupByGenerationLaneEnabled() {
   return enabled;
 }
 
+bool publishPsoPrefetchDisabled() {
+  static const bool disabled = [] {
+    const char* env = std::getenv("DXMT9_DISABLE_PUBLISH_PSO_PREFETCH");
+    return env && env[0] != '\0' && std::strcmp(env, "0") != 0;
+  }();
+  return disabled;
+}
+
+bool publishPsoPrefetchForced() {
+  static const bool enabled = [] {
+    const char* env = std::getenv("DXMT9_ENABLE_PUBLISH_PSO_PREFETCH");
+    return env && env[0] != '\0' && std::strcmp(env, "0") != 0;
+  }();
+  return enabled;
+}
+
+bool publishPsoPrefetchEnabled() {
+  return publishPsoPrefetchForced() && !publishPsoPrefetchDisabled();
+}
+
+bool encodeSlotPsoPrefetchDisabled() {
+  static const bool disabled = [] {
+    const char* env = std::getenv("DXMT9_DISABLE_ENCODE_SLOT_PSO_PREFETCH");
+    return env && env[0] != '\0' && std::strcmp(env, "0") != 0;
+  }();
+  return disabled;
+}
+
+bool encodeSlotPsoPrefetchEnabled() {
+  return !publishPsoPrefetchEnabled() && !encodeSlotPsoPrefetchDisabled();
+}
+
 enum class QueueWorkerRole {
   Encode,
   Finish,
@@ -295,7 +327,12 @@ CommandQueue::CommandQueue(WMT::Device device, core::BackendLimits limits)
   startThreads(
       [this] {
         runEncodeLoop(
-            [this](std::size_t slotIndex, const core::ChunkSlot& slot) {
+            [this](std::size_t slotIndex, core::ChunkSlot& slot) {
+              if (encodeSlotPsoPrefetchEnabled() &&
+                  !slot.prefetchedPipelinesSealed()) {
+                PerfScope scope(perf::countEncodeSlotPsoPrefetchCpuTime);
+                prefetchSlotPipelines(slot);
+              }
               auto ctx = makeEncodeContext();
               return backend_->onChunkReady(ctx, slotIndex, slot);
             },
@@ -332,7 +369,60 @@ void CommandQueue::prefetchSlotPipelines(core::ChunkSlot& slot) {
     slot.sealPrefetchedPipelines();
     return;
   }
-  for (std::size_t i = 0; i < slot.commandCount(); ++i) {
+  const auto commandCount = slot.commandCount();
+  perf::countEncodeSlotPsoPrefetchCommands(
+      static_cast<std::uint64_t>(commandCount));
+  static constexpr std::size_t kDrawHandleReuseTableCapacity = 2048;
+  static_assert((kDrawHandleReuseTableCapacity &
+                 (kDrawHandleReuseTableCapacity - 1)) == 0,
+                "draw handle reuse table capacity must be a power of two");
+  std::array<core::PsoHandle, kDrawHandleReuseTableCapacity>
+      seenDrawPsoHandles{};
+  core::PsoHandle previousDrawPsoHandle{};
+  bool hasPreviousDrawPsoHandle = false;
+  auto recordDrawPsoHandleReuseOpportunity = [&seenDrawPsoHandles,
+                                               &previousDrawPsoHandle,
+                                               &hasPreviousDrawPsoHandle](
+                                                  core::PsoHandle handle) {
+    if (!handle.valid()) {
+      return;
+    }
+    if (hasPreviousDrawPsoHandle) {
+      perf::countEncodeSlotPsoPrefetchDrawHandleAdjacentCandidates();
+      if (previousDrawPsoHandle == handle) {
+        perf::countEncodeSlotPsoPrefetchDrawHandleAdjacentHits();
+      }
+    }
+
+    const auto key =
+        (static_cast<std::uint32_t>(handle.slot) << 16) |
+        static_cast<std::uint32_t>(handle.generation);
+    std::size_t index =
+        (key * 2654435761u) & (kDrawHandleReuseTableCapacity - 1);
+    for (std::size_t probe = 0; probe < kDrawHandleReuseTableCapacity;
+         ++probe) {
+      auto& seen = seenDrawPsoHandles[index];
+      if (!seen.valid()) {
+        seen = handle;
+        perf::countEncodeSlotPsoPrefetchDrawHandleSlotUnique();
+        previousDrawPsoHandle = handle;
+        hasPreviousDrawPsoHandle = true;
+        return;
+      }
+      if (seen == handle) {
+        perf::countEncodeSlotPsoPrefetchDrawHandleSlotRepeatHits();
+        previousDrawPsoHandle = handle;
+        hasPreviousDrawPsoHandle = true;
+        return;
+      }
+      index = (index + 1) & (kDrawHandleReuseTableCapacity - 1);
+    }
+
+    perf::countEncodeSlotPsoPrefetchDrawHandleSlotOverflow();
+    previousDrawPsoHandle = handle;
+    hasPreviousDrawPsoHandle = true;
+  };
+  for (std::size_t i = 0; i < commandCount; ++i) {
     const auto command = slot.commandAt(i);
     if (command.kind != core::MetalCommandKind::DrawRun ||
         !command.drawPsoSubview ||
@@ -341,41 +431,81 @@ void CommandQueue::prefetchSlotPipelines(core::ChunkSlot& slot) {
         !command.drawState.hasShaderContext()) {
       continue;
     }
+    perf::countEncodeSlotPsoPrefetchCandidates();
 
     // DrawPsoSubview is the PE/draw-run-side summary that proves this run has
     // PSO-bearing state. Final key completion still happens below because RT/DS
     // formats and tile/argbuf selectors are Metal-device/pool dependent.
-    auto drawState = command.drawState;
-    drawState.uniforms = command.drawUniformPayload;
-    auto depthLookup = pipelineCache_.depthStencilStateHandleFor(
-        device_, state::makeDepthStencilKey(drawState));
+    core::FlatDrawStateView drawState{};
+    {
+      PerfScope stageScope(perf::countEncodeSlotPsoPrefetchStateCopyCpuTime);
+      drawState = command.drawState;
+      drawState.uniforms = command.drawUniformPayload;
+    }
+    pipeline::DepthStencilLookup depthLookup{};
+    {
+      PerfScope stageScope(perf::countEncodeSlotPsoPrefetchDepthLookupCpuTime);
+      depthLookup = pipelineCache_.depthStencilStateHandleFor(
+          device_, state::makeDepthStencilKey(drawState));
+    }
     slot.setDrawRunDepthStencilHandle(i, depthLookup.handle);
-    const auto tileSelection =
-        pipeline::selectTileFfpForPass(drawState, pool_.supportsApple3());
+    pipeline::TileFfpSelection tileSelection{};
+    {
+      PerfScope stageScope(perf::countEncodeSlotPsoPrefetchTileSelectCpuTime);
+      tileSelection =
+          pipeline::selectTileFfpForPass(drawState, pool_.supportsApple3());
+    }
     const bool tileFfpMode =
         tileSelection.decision == pipeline::TileFfpDecision::Tile;
     if (tileFfpMode) {
-      auto baseLookup = pipelineCache_.getOrBuildTileFfpBaseColorPipelineHandleForState(
-          device_, limits_, pool_, drawState, &shaderArchive_.reference(),
-          &shaderArchive_.path());
-      auto tileLookup = pipelineCache_.getOrBuildDrawPipelineHandleForState(
-          device_, limits_, pool_, drawState, &shaderArchive_.reference(),
-          &shaderArchive_.path(), /*tileFfpMode=*/true,
-          /*argbufHybridMode=*/false, /*argbufResourceArray=*/false);
+      perf::countEncodeSlotPsoPrefetchTileCandidates();
+      pipeline::DrawPipelineLookup baseLookup{};
+      {
+        PerfScope stageScope(
+            perf::countEncodeSlotPsoPrefetchTileBaseLookupCpuTime);
+        baseLookup =
+            pipelineCache_.getOrBuildTileFfpBaseColorPipelineHandleForState(
+                device_, limits_, pool_, drawState, &shaderArchive_.reference(),
+                &shaderArchive_.path());
+      }
+      pipeline::DrawPipelineLookup tileLookup{};
+      {
+        PerfScope stageScope(
+            perf::countEncodeSlotPsoPrefetchTileDrawLookupCpuTime);
+        tileLookup = pipelineCache_.getOrBuildDrawPipelineHandleForState(
+            device_, limits_, pool_, drawState, &shaderArchive_.reference(),
+            &shaderArchive_.path(), /*tileFfpMode=*/true,
+            /*argbufHybridMode=*/false, /*argbufResourceArray=*/false);
+      }
       slot.setDrawRunPsoHandles(i, baseLookup.handle, tileLookup.handle);
       continue;
     }
 
-    const bool argbufHybridMode =
-        pipeline::selectArgbufHybridForPass(drawState, pool_.argbufHybridEnabled()) ==
-        pipeline::ArgbufHybridDecision::Stage2;
+    bool argbufHybridMode = false;
+    {
+      PerfScope stageScope(perf::countEncodeSlotPsoPrefetchArgbufSelectCpuTime);
+      argbufHybridMode =
+          pipeline::selectArgbufHybridForPass(drawState, pool_.argbufHybridEnabled()) ==
+          pipeline::ArgbufHybridDecision::Stage2;
+    }
+    if (argbufHybridMode) {
+      perf::countEncodeSlotPsoPrefetchArgbufStage2Candidates();
+    }
     const bool argbufResourceArray =
         argbufHybridMode && resourceArrayLaneActive_ &&
         resourceArrayEncoderResource_.initialized();
-    auto lookup = pipelineCache_.getOrBuildDrawPipelineHandleForState(
-        device_, limits_, pool_, drawState, &shaderArchive_.reference(),
-        &shaderArchive_.path(), /*tileFfpMode=*/false, argbufHybridMode,
-        argbufResourceArray);
+    if (argbufResourceArray) {
+      perf::countEncodeSlotPsoPrefetchArgbufResourceArrayCandidates();
+    }
+    pipeline::DrawPipelineLookup lookup{};
+    {
+      PerfScope stageScope(perf::countEncodeSlotPsoPrefetchDrawLookupCpuTime);
+      lookup = pipelineCache_.getOrBuildDrawPipelineHandleForState(
+          device_, limits_, pool_, drawState, &shaderArchive_.reference(),
+          &shaderArchive_.path(), /*tileFfpMode=*/false, argbufHybridMode,
+          argbufResourceArray);
+    }
+    recordDrawPsoHandleReuseOpportunity(lookup.handle);
     slot.setDrawRunPsoHandles(i, lookup.handle);
   }
   slot.sealPrefetchedPipelines();
@@ -1287,8 +1417,17 @@ void markSlotResourcesUnlocked(resources::Pool& pool, const core::ChunkSlot& slo
 void prepareSlotForPublish(CommandQueue& q,
                            resources::Pool& pool,
                            core::ChunkSlot& slot) {
-  markSlotResourcesUnlocked(pool, slot);
-  q.prefetchSlotPipelines(slot);
+  PerfScope scope(perf::countPrepareSlotForPublishCpuTime);
+  {
+    PerfScope stageScope(perf::countPrepareSlotResourceMarkCpuTime);
+    markSlotResourcesUnlocked(pool, slot);
+  }
+  {
+    PerfScope stageScope(perf::countPrepareSlotPsoPrefetchCpuTime);
+    if (publishPsoPrefetchEnabled()) {
+      q.prefetchSlotPipelines(slot);
+    }
+  }
 }
 
 bool maybeCommitDrawChunkUnlocked(
@@ -1612,6 +1751,7 @@ void CommandQueue::submitDepthResolve(const core::DepthResolveDesc& desc) {
 std::uint64_t CommandQueue::submitPresent(const core::SwapDesc& desc) {
   // TLA+: PresentFrameLatency / CommitPresent.
   perf::countSubmitPresent();
+  PerfScope scope(perf::countSubmitPresentCpuTime);
   core::SwapDesc queuedDesc = desc;
   // Resolve the queue-local Presenter binding once. Stale ids (swapchain
   // destroyed between snapshotSwapDesc and submitPresent) resolve to
@@ -1619,6 +1759,7 @@ std::uint64_t CommandQueue::submitPresent(const core::SwapDesc& desc) {
   // the rest of this function preserves the same control flow.
   Presenter* presenter = lookupPresenter(queuedDesc.presentId);
   if (presenter) {
+    PerfScope stageScope(perf::countSubmitPresentAcquireCpuTime);
     switch (presenter->acquirePolicy()) {
       case AcquirePolicy::Async: {
         perf::countPresentAsyncAcquireRequest();
@@ -1656,6 +1797,7 @@ std::uint64_t CommandQueue::submitPresent(const core::SwapDesc& desc) {
 
   std::uint64_t presentSeqId = 0;
   {
+    PerfScope stageScope(perf::countSubmitPresentCommitCpuTime);
     std::unique_lock lock(mutex_);
     const core::Handle sourceHandle =
         core::metalqueue::selectPresentSourceHandle(queuedDesc, currentBackBuffer_);
@@ -1685,6 +1827,7 @@ std::uint64_t CommandQueue::submitPresent(const core::SwapDesc& desc) {
   }
 
   if (shouldApplyPresentBoundary(queuedDesc)) {
+    PerfScope stageScope(perf::countSubmitPresentBoundaryCpuTime);
     perf::countPresentBoundaryApplied();
     presentBoundary(presentSeqId, presentBoundaryLatency(queuedDesc));
   } else {

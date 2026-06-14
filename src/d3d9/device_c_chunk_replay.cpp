@@ -212,6 +212,38 @@ void countDurationSince(std::chrono::steady_clock::time_point start,
           std::chrono::steady_clock::now() - start).count()));
 }
 
+bool commitChunkRecordIsDrawReplay(std::uint32_t type);
+void (*commitChunkReplayRecordDetailCounter(std::uint32_t type))(std::uint64_t);
+
+class ReplayRecordCpuScope {
+ public:
+  explicit ReplayRecordCpuScope(std::uint32_t recordType)
+      : start_(std::chrono::steady_clock::now()),
+        broadCounter_(commitChunkRecordIsDrawReplay(recordType)
+                          ? dxmt9::perf::countCommitChunkReplayDrawRecordCpuTime
+                          : dxmt9::perf::countCommitChunkReplayNonDrawRecordCpuTime),
+        detailCounter_(commitChunkReplayRecordDetailCounter(recordType)) {
+  }
+
+  ~ReplayRecordCpuScope() {
+    const auto nanoseconds = static_cast<std::uint64_t>(
+        std::chrono::duration_cast<std::chrono::nanoseconds>(
+            std::chrono::steady_clock::now() - start_).count());
+    broadCounter_(nanoseconds);
+    if (detailCounter_) {
+      detailCounter_(nanoseconds);
+    }
+  }
+
+  ReplayRecordCpuScope(const ReplayRecordCpuScope&) = delete;
+  ReplayRecordCpuScope& operator=(const ReplayRecordCpuScope&) = delete;
+
+ private:
+  std::chrono::steady_clock::time_point start_;
+  void (*broadCounter_)(std::uint64_t);
+  void (*detailCounter_)(std::uint64_t);
+};
+
 bool commitChunkRecordAllowsPendingDrawBatchThrough(std::uint32_t type) {
   switch (type) {
   case D9C_COMMAND_RECORD_SET_VS_CONST_F:
@@ -228,6 +260,52 @@ bool commitChunkRecordAllowsPendingDrawBatchThrough(std::uint32_t type) {
 
 bool commitChunkRecordIsConstantUpload(std::uint32_t type) {
   return commitChunkRecordAllowsPendingDrawBatchThrough(type);
+}
+
+bool commitChunkRecordIsDrawReplay(std::uint32_t type) {
+  switch (type) {
+  case D9C_COMMAND_RECORD_DRAW_PRIMITIVE:
+  case D9C_COMMAND_RECORD_DRAW_INDEXED_PRIMITIVE:
+  case D9C_COMMAND_RECORD_DRAW_PRIMITIVE_UP:
+  case D9C_COMMAND_RECORD_DRAW_INDEXED_PRIMITIVE_UP:
+    return true;
+  default:
+    return false;
+  }
+}
+
+void (*commitChunkReplayRecordDetailCounter(std::uint32_t type))(std::uint64_t) {
+  switch (type) {
+  case D9C_COMMAND_RECORD_SET_VS_CONST_F:
+  case D9C_COMMAND_RECORD_SET_VS_CONST_I:
+  case D9C_COMMAND_RECORD_SET_VS_CONST_B:
+  case D9C_COMMAND_RECORD_SET_PS_CONST_F:
+  case D9C_COMMAND_RECORD_SET_PS_CONST_I:
+  case D9C_COMMAND_RECORD_SET_PS_CONST_B:
+    return dxmt9::perf::countCommitChunkReplayConstRecordCpuTime;
+  case D9C_COMMAND_RECORD_APPLY_STATE:
+    return dxmt9::perf::countCommitChunkReplayApplyStateRecordCpuTime;
+  case D9C_COMMAND_RECORD_CLEAR:
+    return dxmt9::perf::countCommitChunkReplayClearRecordCpuTime;
+  case D9C_COMMAND_RECORD_PRESENT:
+    return dxmt9::perf::countCommitChunkReplayPresentRecordCpuTime;
+  case D9C_COMMAND_RECORD_STRETCH_RECT:
+  case D9C_COMMAND_RECORD_COLOR_FILL:
+  case D9C_COMMAND_RECORD_UPDATE_TEXTURE:
+  case D9C_COMMAND_RECORD_UPDATE_SURFACE:
+  case D9C_COMMAND_RECORD_READBACK:
+  case D9C_COMMAND_RECORD_RESZ_DEPTH_RESOLVE:
+    return dxmt9::perf::countCommitChunkReplaySurfaceRecordCpuTime;
+  case D9C_COMMAND_RECORD_QUERY_ISSUE:
+    return dxmt9::perf::countCommitChunkReplayQueryRecordCpuTime;
+  case D9C_COMMAND_RECORD_DRAW_PRIMITIVE:
+  case D9C_COMMAND_RECORD_DRAW_INDEXED_PRIMITIVE:
+  case D9C_COMMAND_RECORD_DRAW_PRIMITIVE_UP:
+  case D9C_COMMAND_RECORD_DRAW_INDEXED_PRIMITIVE_UP:
+    return nullptr;
+  default:
+    return dxmt9::perf::countCommitChunkReplayOtherRecordCpuTime;
+  }
 }
 
 struct ConstantUploadRecordSize {
@@ -549,7 +627,10 @@ int32_t applyFinalBindingState(D9CDevice* d,
   }
   if (base.indexHandle != effective.indexHandle ||
       base.indexType != effective.indexType) {
+    const auto indexBindStart = std::chrono::steady_clock::now();
     const int32_t hr = dxmt9c_device_set_indices(d, effective.indexBuffer);
+    countDurationSince(indexBindStart,
+                       dxmt9::perf::countCommitChunkIndexBindCpuTime);
     if (failed(hr)) {
       return hr;
     }
@@ -1188,7 +1269,10 @@ int32_t applyDrawIndexedPrimitivePacket(D9CDevice* d,
   // it overrides any prior IB state, BEFORE the actual indexed draw.
   if (packet.ibValid) {
     auto* ib = wireHandlePtr<D9CBuffer>(packet.ibHandle);
+    const auto indexBindStart = std::chrono::steady_clock::now();
     const int32_t hr = dxmt9c_device_set_indices(d, ib);
+    countDurationSince(indexBindStart,
+                       dxmt9::perf::countCommitChunkIndexBindCpuTime);
     if (failed(hr)) return hr;
   }
   const auto& state = d->dev().state();
@@ -1236,10 +1320,14 @@ int32_t queueDrawPrimitiveSubmission(
       dxmt9::perf::countCommitChunkQueueDrawSubmissionEmplaceCpuTime);
   const auto* previousSubmission =
       previousIndex == 0u ? nullptr : &submissions[previousIndex - 1u];
+  const auto snapshotStart = std::chrono::steady_clock::now();
   const int32_t hr =
       d->dev().snapshotDrawSubmissionFromCurrentState(makeRunParam(packet),
                                                       submission,
                                                       previousSubmission);
+  countDurationSince(
+      snapshotStart,
+      dxmt9::perf::countCommitChunkQueueDrawSubmissionSnapshotCpuTime);
   if (failed(hr)) {
     submissions.pop_back();
     return finish(hr);
@@ -1262,7 +1350,10 @@ int32_t queueDrawIndexedPrimitiveSubmission(
   }
   if (packet.ibValid) {
     auto* ib = wireHandlePtr<D9CBuffer>(packet.ibHandle);
+    const auto indexBindStart = std::chrono::steady_clock::now();
     const int32_t hr = dxmt9c_device_set_indices(d, ib);
+    countDurationSince(indexBindStart,
+                       dxmt9::perf::countCommitChunkIndexBindCpuTime);
     if (failed(hr)) return finish(hr);
   }
   auto draw = makeRunParam(packet);
@@ -1275,9 +1366,13 @@ int32_t queueDrawIndexedPrimitiveSubmission(
       dxmt9::perf::countCommitChunkQueueDrawSubmissionEmplaceCpuTime);
   const auto* previousSubmission =
       previousIndex == 0u ? nullptr : &submissions[previousIndex - 1u];
+  const auto snapshotStart = std::chrono::steady_clock::now();
   const int32_t hr =
       d->dev().snapshotDrawSubmissionFromCurrentState(draw, submission,
                                                       previousSubmission);
+  countDurationSince(
+      snapshotStart,
+      dxmt9::perf::countCommitChunkQueueDrawSubmissionSnapshotCpuTime);
   if (failed(hr)) {
     submissions.pop_back();
     return finish(hr);
@@ -1518,6 +1613,7 @@ extern "C" int32_t dxmt9c_device_commit_chunk(D9CDevice* d, const D9CCommandChun
     if (pendingDrawSubmissions.empty()) {
       return dxmt9::core::D3D_OK;
     }
+    const auto flushStart = std::chrono::steady_clock::now();
     dxmt9::perf::countCommitChunkDrawSubmissionBatch(
         static_cast<std::uint32_t>(pendingDrawSubmissions.size()));
     const auto submitStart = std::chrono::steady_clock::now();
@@ -1526,6 +1622,8 @@ extern "C" int32_t dxmt9c_device_commit_chunk(D9CDevice* d, const D9CCommandChun
         std::chrono::duration_cast<std::chrono::nanoseconds>(
             std::chrono::steady_clock::now() - submitStart).count()));
     pendingDrawSubmissions.clear();
+    countDurationSince(flushStart,
+                       dxmt9::perf::countCommitChunkReplayPendingFlushCpuTime);
     return dxmt9::core::D3D_OK;
   };
 
@@ -1551,6 +1649,7 @@ extern "C" int32_t dxmt9c_device_commit_chunk(D9CDevice* d, const D9CCommandChun
     } else if (batchThroughRecord && !pendingDrawSubmissions.empty()) {
       dxmt9::perf::countCommitChunkDrawBatchConstUploadPassthrough();
     }
+    ReplayRecordCpuScope replayRecordCpu(header.type);
     switch (header.type) {
     case D9C_COMMAND_RECORD_DRAW_PRIMITIVE: {
       D9CCommandRecordDrawPrimitive decoded{};
@@ -1692,7 +1791,10 @@ extern "C" int32_t dxmt9c_device_commit_chunk(D9CDevice* d, const D9CCommandChun
         if (failed(hr)) return commitChunkFail("indexed-draw-run-state", recordIndex, header.type, hr);
         if (decoded.packet.ibValid) {
           auto* ib = wireHandlePtr<D9CBuffer>(decoded.packet.ibHandle);
+          const auto indexBindStart = std::chrono::steady_clock::now();
           hr = dxmt9c_device_set_indices(d, ib);
+          countDurationSince(indexBindStart,
+                             dxmt9::perf::countCommitChunkIndexBindCpuTime);
           if (failed(hr)) return commitChunkFail("indexed-draw-run-ib", recordIndex, header.type, hr);
         }
         const auto baseBindings = effectiveBindingsFromState(d->dev().state());

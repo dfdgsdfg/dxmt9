@@ -331,7 +331,7 @@ class CommandQueue {
   // External callers should not use these.
   using EncodeChunkFn =
       std::function<std::optional<core::metalqueue::QueueSubmissionRecord>(
-          std::size_t slotIndex, const core::ChunkSlot& slot)>;
+          std::size_t slotIndex, core::ChunkSlot& slot)>;
   using OnSubmittedFn = std::function<void(std::uint64_t completedSeqId)>;
   void runEncodeLoop(EncodeChunkFn encodeChunk, OnSubmittedFn onSubmitted);
   void runFinishLoop();
