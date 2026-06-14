@@ -27,6 +27,7 @@ enum class PeRecorderFlushReason : std::uint32_t {
     Child,
     Destructor,
     StateMutation,
+    Clear,
     Count,
 };
 
@@ -61,6 +62,7 @@ inline const char* peRecorderFlushReasonName(PeRecorderFlushReason reason) {
     case PeRecorderFlushReason::Child: return "child";
     case PeRecorderFlushReason::Destructor: return "destructor";
     case PeRecorderFlushReason::StateMutation: return "state_mutation";
+    case PeRecorderFlushReason::Clear: return "clear";
     case PeRecorderFlushReason::Count: break;
     }
     return "unknown";

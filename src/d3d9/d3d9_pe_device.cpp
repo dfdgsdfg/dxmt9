@@ -62,6 +62,11 @@ static bool dxmt9PeRecorderChunkLogEnabled() {
     return enabled;
 }
 
+static bool dxmt9PeFlushAfterClearEnabled() {
+    static const bool enabled = dxmt9::util::getenvFlag("DXMT9_PE_FLUSH_AFTER_CLEAR");
+    return enabled;
+}
+
 static double dxmt9ElapsedMs(std::chrono::steady_clock::time_point start,
                              std::chrono::steady_clock::time_point end) {
     return std::chrono::duration<double, std::milli>(end - start).count();
@@ -6059,7 +6064,8 @@ class D3D9DeviceImpl final : public IDirect3DDevice9Ex, public D3D9PeRecorderFlu
             "handleCountTotal=%llu handleCountMax=%llu "
             "flushReasons{explicit=%llu capacityPre=%llu capacityPost=%llu "
             "barrier=%llu present=%llu readback=%llu reset=%llu "
-            "stateblock=%llu child=%llu destructor=%llu stateMutation=%llu} "
+            "stateblock=%llu child=%llu destructor=%llu stateMutation=%llu "
+            "clear=%llu} "
             "up{drawPrimitiveUPCalls=%llu drawIndexedPrimitiveUPCalls=%llu "
             "vertexBytes=%llu indexBytes=%llu}",
             event ? event : "unknown", this,
@@ -6103,6 +6109,9 @@ class D3D9DeviceImpl final : public IDirect3DDevice9Ex, public D3D9PeRecorderFlu
             static_cast<unsigned long long>(
                 peRecorderStats_.flushReasons[
                     static_cast<std::size_t>(PeRecorderFlushReason::StateMutation)]),
+            static_cast<unsigned long long>(
+                peRecorderStats_.flushReasons[
+                    static_cast<std::size_t>(PeRecorderFlushReason::Clear)]),
             static_cast<unsigned long long>(peRecorderStats_.drawPrimitiveUPCalls),
             static_cast<unsigned long long>(peRecorderStats_.drawIndexedPrimitiveUPCalls),
             static_cast<unsigned long long>(peRecorderStats_.upVertexBytes),
@@ -8324,6 +8333,11 @@ public:
                     std::memcpy(record + header.rectOffset, pRects, rectBytes);
                 }
             });
+        if (SUCCEEDED(hr) && dxmt9PeFlushAfterClearEnabled()) {
+            const HRESULT flushHr = flushPendingCommandChunk(
+                PeRecorderFlushReason::Clear);
+            if (FAILED(flushHr)) return finishPeCall(flushHr);
+        }
         return finishPeCall(hr);
     }
 

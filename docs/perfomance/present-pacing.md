@@ -46,6 +46,7 @@ GPU frame-time story is owned by [[hidden-backend-storage]] /
 | H24 | The `Clear` front gate is a hidden dxmt9 D3D9 API wait | rejected; wrapper-level attribution accepted, higher owner superseded | [[present-pacing-pe-caller-pc.19]]: PE caller-PC/module logging shows the steady sequence is identical in `1,716 / 1,716` ordinals. `SetRenderTarget` returns from 3DMark05.exe wrapper RVA `0x2AF4F` at p50 `0.730ms`, its nested `Surface::GetDesc` caller resolves to `d3d9.dll!0x13EE9` and takes only p50 `0.020ms`, and `Clear` enters later from 3DMark05.exe wrapper RVA `0x2B061` at p50 `18.373ms`. The p50 `17.484ms` gap is not inside `SetRenderTarget`, `Clear`, or a hidden child getter. Caller-stack follow-up supersedes the claim that these wrapper RVAs are the higher render-loop owner. |
 | H25 | The stable owner above the wrapper stubs is still hidden | rejected; 3DMark05 command-dispatch cadence accepted | [[present-pacing-pe-caller-stack.20]]: PE stack logging shows milestones 2..8 share higher frame `3DMark05.exe+0x88760` in `1,707 / 1,707` matching ordinals. `0x2AF4F` and `0x2B061` are D3D wrapper stubs; `0x88760` is the return site of a command-object dispatcher (`0x4886E0`) whose virtual `call *0x18(%eax)` executes the D3D wrapper command. `SetRenderTarget` return -> `Clear` entry remains p50 `17.429ms`. The front gate is therefore when 3DMark05 dispatches the record-producing `Clear` command object, not a dxmt9 boundary/latency/ring wait. |
 | H26 | The `Clear` front gate or next Metal enqueue waits on dxmt9 completed-seq/waterline publication | rejected for dxmt9 completion signal; actual Metal/CA completion remains separate | [[present-pacing-completion-signal-delay.21]]: `DXMT9_PERF_COMPLETION_SIGNAL_DELAY_MS=8` applies `1696` sleeps / `13568ms` after `waitUntilCompleted()` and before completed-seq publication, but `SetRenderTarget -> Clear` p50 stays `17.631 -> 17.550ms`, first chunk p50 stays `20.802 -> 20.827ms`, and next enqueue p50 stays `21.558 -> 20.274ms`. The front gate is not waiting on dxmt9's completion signal. |
+| H27 | Flushing the PE chunk immediately after `Clear` creates producer overlap | rejected as a simple early-publish lever | [[present-pacing-pe-clear-flush.22]]: `DXMT9_PE_FLUSH_AFTER_CLEAR=1` changes the first chunk from `capacity_post` / `64` records to `clear` / `2` records and moves first-chunk p50 `20.582 -> 18.935ms`, but `completion_wait_with_enqueue_ms` remains `0.000`, `completion_enqueue_while_waiting=0`, and `commitCount` rises `41947 -> 45857`. Keep it diagnostic-only; continue P2/P3 replay/snapshot/encode reductions or a larger producer-overlap design. |
 
 ## Verification methods
 
@@ -143,6 +144,7 @@ flowchart TD
   PeCallerPc["pe-caller-pc.19\nsteady wrapper PCs 1716/1716\nSetRT wrapper RVA 0x2AF4F\nClear wrapper RVA 0x2B061\ngap p50 17.484ms"]
   PeCallerStack["pe-caller-stack.20\nhigher caller frame 0x88760\ncommand dispatcher 0x4886E0\nSetRT→Clear gap p50 17.429ms"]
   CompletionSignalDelay["completion-signal-delay.21\n8ms x1696 completion-signal delay\nSetRT→Clear and first chunk flat"]
+  PeClearFlush["pe-clear-flush.22\nClear publishes 2-record chunk\nfirst chunk 20.6→18.9ms\nno enqueue overlap"]
   FrameLatency["frame-latency.01\nMAX_FRAME_LATENCY=3 + CAP=0\n(rejected: Δ +0.07%)"]
   AsyncAcq["async-acquire.01\nPRESENT_ASYNC_ACQUIRE=1\n(rejected: axis < 0.5% of wait)"]
   EncodeBudget["encode-budget.01\nencode_chunk p50 20.45 ms\nvs 16.67 ms vsync slot\n(attribution accepted)"]
@@ -195,6 +197,7 @@ flowchart TD
   PeThreadState --> PeCallerPc
   PeCallerPc --> PeCallerStack
   PeCallerStack --> CompletionSignalDelay
+  CompletionSignalDelay --> PeClearFlush
   PrePublish --> EncodeBudget
   StageDelta --> EncodeBudget
   PeChunkCadence --> EncodeBudget
@@ -204,6 +207,7 @@ flowchart TD
   PeClearGate --> EncodeBudget
   PeClearNoSampling --> EncodeBudget
   PeWideCall --> EncodeBudget
+  PeClearFlush --> EncodeBudget
   PipelineOverlap --> EncodeBudget
   FrameLatency --> EncodeBudget
   AsyncAcq --> EncodeBudget
@@ -235,7 +239,7 @@ flowchart TD
   Remaining --> SCE
 
   class DSync,EncodeBudget,CurrentImmediate,CompletionStatus,CurrentOwner,PipelineOverlap,PrePublish,StageDelta,PeChunkCadence,PeRecordMilestones,PeClearGate accepted
-  class FrameLatency,AsyncAcq,WorkA,StateNoop,DirtyIdentity,TexturePreResolve,BoundaryLatency,PePresent,PeCallCadence,PeChunkSize,PeCallSequence rejected
+  class FrameLatency,AsyncAcq,WorkA,StateNoop,DirtyIdentity,TexturePreResolve,BoundaryLatency,PePresent,PeCallCadence,PeChunkSize,PeCallSequence,PeClearFlush rejected
   class PeClearNoSampling,PeWideCall,PeThreadState rejected
   class PeCallerPc,PeCallerStack,CompletionSignalDelay accepted
   class FixProposal,Remaining,SCE proposed
@@ -570,6 +574,13 @@ flowchart TD
   next-enqueue p50 `21.558 -> 20.274ms`. This rejects a dxmt9
   completed-seq/waterline dependency; it does not test a lower actual Metal/CA
   completion dependency because the perturbation occurs after Metal completion.
+- [[present-pacing-pe-clear-flush.22]] — REJECTED SIMPLE EARLY-PUBLISH LEVER.
+  `DXMT9_PE_FLUSH_AFTER_CLEAR=1` proves an earlier post-`Clear` publish is
+  possible: the first chunk changes from `capacity_post` / `64` records to
+  `clear` / `2` records and first-chunk p50 moves `20.582 -> 18.935ms`. It
+  still creates no producer overlap (`completion_wait_with_enqueue_ms=0.000`,
+  `completion_enqueue_while_waiting=0`) and raises PE commit count
+  `41947 -> 45857`, so it stays diagnostic-only.
 
 ## Cross-links
 
@@ -658,6 +669,12 @@ flowchart TD
   remains `19.025 -> 19.011ms`, and first chunk p50 remains
   `20.802 -> 20.827ms`. Therefore the gate is not a dxmt9 completed
   seq/waterline dependency. [[present-pacing-completion-signal-delay.21]]
+- Flushing immediately after the record-producing `Clear` is not enough to
+  create producer run-ahead. The diagnostic `DXMT9_PE_FLUSH_AFTER_CLEAR=1`
+  path changes the first unix-visible chunk from a `capacity_post` 64-record
+  chunk to a `clear` 2-record chunk and moves first-chunk p50 by about
+  `1.65ms`, but `completion_wait_with_enqueue_ms` remains `0.000` and chunk
+  count increases. [[present-pacing-pe-clear-flush.22]]
 
 **Open target**
 
@@ -696,13 +713,15 @@ flowchart TD
   hidden dxmt9 API-call duration, and dxmt9 completion-signal delay have been
   rejected or weakened as that owner. A lower actual Metal/CA completion
   dependency is still a separate open experiment because the current
-  perturbation happens after `waitUntilCompleted()` has already returned. Then
-  decide whether earlier useful chunk publish than the current `64`-record
-  capacity cadence can beat its extra bridge/replay/render-pass costs, or
-  reduce the pre-publish replay/snapshot and backend encode stages enough that
-  the completion wait no longer exposes a full extra frame slot. Any
-  earlier-flush design must still preserve D3D9 ordering, resource lifetime,
-  render-pass coalescing, and dynamic-buffer snapshot correctness.
+  perturbation happens after `waitUntilCompleted()` has already returned. The
+  simple post-`Clear` early-publish probe is now rejected: it publishes a
+  2-record chunk earlier, but it still does not enqueue while completion waits
+  and it increases chunk count. A larger producer-overlap design would have to
+  publish useful work before the app's `Clear` dispatch gate, or reduce the
+  pre-publish replay/snapshot and backend encode stages enough that the
+  completion wait no longer exposes a full extra frame slot. Any earlier-flush
+  design must still preserve D3D9 ordering, resource lifetime, render-pass
+  coalescing, and dynamic-buffer snapshot correctness.
 
 **Proposed (not yet built)**
 
