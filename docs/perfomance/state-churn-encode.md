@@ -88,6 +88,7 @@ bottleneck — that is owned by [[hidden-backend-storage]].
 | H68 | The phase55 post-open residual is a single hidden argbuf child | rejected; distributed bookkeeping accepted | [[state-churn-encode-encode-phase.57]] (table probe `50.933ms`, byte account `51.990ms`, cbuf cache/dirty scans `118.813ms`, force dirty `104.757ms`; attribution timers add overhead) |
 | H69 | The remaining binding-packet plan parent has one large child worth primary optimization | rejected as primary lever; attribution accepted | [[state-churn-encode-encode-phase.58]] (`DXMT9_PERF_BINDING_PACKET_PLAN_SPLIT=1`: fragment plan largest at `0.204682ms/present`; default-off guard keeps child counters `0` and parent near baseline) |
 | H70 | Slot-local `DrawUniformPayload` dedup lookup is worth its GT1 CPU cost | rejected as default assumption; accepted diagnostic micro-win | [[state-churn-encode-encode-phase.59]] (`DXMT9_DISABLE_DRAW_UNIFORM_PAYLOAD_DEDUP=1`: lookup `276.107→0ms`, appends `877,508→930,994`, append-uniform `1041.108→799.528ms`, but queue submission flat) |
+| H71 | The `encode_draw_issue_cpu_ms` bucket hides dxmt9 wrapper or diagnostic overhead | rejected; indexed Metal draw-call attribution accepted | [[state-churn-encode-encode-phase.60]] (`DXMT9_PERF_DRAW_ISSUE_SPLIT=1`: all draws indexed, visibility/expanded/split/nonindexed `0`, Metal draw call `897.049ms` / `77.0%` of issue parent) |
 
 ## Verification methods
 
@@ -258,6 +259,7 @@ flowchart TD
   EncodePhase57["encode-phase.57\npost-open residual split\nsmall bookkeeping children"]:::accepted
   EncodePhase58["encode-phase.58\nbinding-plan split\nfragment largest child\nopt-in only"]:::accepted
   EncodePhase59["encode-phase.59\nuniform dedup off\nappend_uniform -242ms\nqueue flat"]:::accepted
+  EncodePhase60["encode-phase.60\nissue split\nMetal indexed draw\nowns issue"]:::accepted
   Snapshot10["snapshot.10\nuniform-refresh fast path\nrefresh -59.6%\nFPS flat"]:::accepted
 
   Drawrun1 -->|"split-into"| Drawrun2
@@ -341,6 +343,7 @@ flowchart TD
   EncodePhase56 -->|"split residual instead"| EncodePhase57
   EncodePhase57 -->|"check packet-plan residual"| EncodePhase58
   EncodePhase53 -->|"test uniform payload dedup value"| EncodePhase59
+  EncodePhase58 -->|"split draw issue bucket"| EncodePhase60
 ```
 
 ## Results synthesis
@@ -458,8 +461,10 @@ presents, but sampled FPS remains flat (`15.717→15.752`). The packet-cache
 bucket itself is no longer first-order, and residual snapshot is now a named
 CPU cleanup rather than a run-level limiter by itself. The broader encode path
 still is: argbuf setup (`3357.980ms`), binding-packet plan/cache
-(`2705.893ms`), stream/index bind, queue append, and issue cost are the next
-named buckets to split or reduce before another generic bind-cache guess.
+(`2705.893ms`), stream/index bind, and queue append are the next named buckets
+to split or reduce before another generic bind-cache guess. The later
+[[state-churn-encode-encode-phase.60]] closes issue cost as indexed Metal draw
+call attribution rather than wrapper overhead.
 
 The first follow-up split of that broader encode path is
 [[state-churn-encode-encode-phase.09]]. It rejects the simple "argbuf open is
@@ -968,8 +973,10 @@ cache as the next encode target. The transient cache saw `152,261` same-handle
 hits, but `encode_draw_pipeline_lookup_cpu_ms` moved the wrong way
 (`934.420 -> 950.626ms`) while FPS/GPU/completion stayed flat. The experiment
 code was reverted. Keep `pipeline_lookup` below the larger `argbuf_setup`,
-`stream_bind`, `binding_packet`, `issue`, snapshot/replay, and completion-pacing
-buckets unless a split counter first names a larger subchild.
+`stream_bind`, `binding_packet`, snapshot/replay, and completion-pacing buckets
+unless a split counter first names a larger subchild. `issue` is now split in
+[[state-churn-encode-encode-phase.60]] and reads as per-draw Metal indexed
+draw-call cost.
 
 [[state-churn-encode-encode-phase.55]] then fixes the argbuf-open attribution.
 The legacy `encode_draw_argbuf_open_cpu_ms` counter is a per-draw reopen-block
@@ -1037,6 +1044,17 @@ the targeted append-uniform parent improves `1041.108 -> 799.528ms`
 and completion/GPU movement is noise, so this is a diagnostic micro-win, not a
 new FPS owner. Keep the env for A/Bs; do not promote a default policy change
 without repeated runs or a memory-pressure check.
+
+[[state-churn-encode-encode-phase.60]] closes the `encode_draw_issue_cpu_ms`
+owner as attribution. The opt-in `DXMT9_PERF_DRAW_ISSUE_SPLIT=1` run is
+heavy (`present_encoded=1620` instead of the adjacent `1680`), so it is not an
+A/B performance result. The internal signal is still decisive: GT1 issue work
+is entirely indexed (`draw_indexed=draw_calls=1,199,600`), with
+non-indexed, expanded-indexed, split-indexed, and visibility-scout children all
+`0`. The Metal draw-call child is `897.049ms`, which is `77.0%` of the issue
+parent and `86.9%` of the indexed-path child. Do not treat issue as a hidden
+dxmt9 wrapper bucket; moving it materially requires fewer submitted Metal draws
+or a different submission model, not micro-optimizing the call wrapper.
 
 ## How to run
 Every experiment here is a 3DMark05 GT1 run via the standard wrapper. This is a

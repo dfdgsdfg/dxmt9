@@ -682,6 +682,12 @@ struct Counters {
   std::atomic<std::uint64_t> reorderedIndexCacheCreatedBytes{0};
   std::atomic<std::uint64_t> encodeDrawIssueCpuNs{0};
   std::atomic<std::uint64_t> encodeDrawIssueCpuMaxNs{0};
+  std::atomic<std::uint64_t> encodeDrawIssueIndexedCpuNs{0};
+  std::atomic<std::uint64_t> encodeDrawIssueNonIndexedCpuNs{0};
+  std::atomic<std::uint64_t> encodeDrawIssueExpandedIndexedCpuNs{0};
+  std::atomic<std::uint64_t> encodeDrawIssueSplitIndexedCpuNs{0};
+  std::atomic<std::uint64_t> encodeDrawIssueMetalCpuNs{0};
+  std::atomic<std::uint64_t> encodeDrawIssueVisibilityCpuNs{0};
   std::atomic<std::uint64_t> encodeDrawPsoPrefetchHandleAvailable{0};
   std::atomic<std::uint64_t> encodeDrawPsoPrefetchHandleUsed{0};
   std::atomic<std::uint64_t> encodeDrawPsoPrefetchHandleMissing{0};
@@ -2164,6 +2170,12 @@ constexpr CounterEntry kCounterTable[] = {
     {"encode_draw_issue_cpu_p50_ms", CounterEntry::Kind::PercentileMs, nullptr, nullptr, &Counters::encodeDrawIssueCpuRing, 0.5},
     {"encode_draw_issue_cpu_p95_ms", CounterEntry::Kind::PercentileMs, nullptr, nullptr, &Counters::encodeDrawIssueCpuRing, 0.95},
     {"encode_draw_issue_cpu_p99_ms", CounterEntry::Kind::PercentileMs, nullptr, nullptr, &Counters::encodeDrawIssueCpuRing, 0.99},
+    {"encode_draw_issue_indexed_cpu_ms", CounterEntry::Kind::Milliseconds, &Counters::encodeDrawIssueIndexedCpuNs, nullptr, nullptr, 0.0},
+    {"encode_draw_issue_nonindexed_cpu_ms", CounterEntry::Kind::Milliseconds, &Counters::encodeDrawIssueNonIndexedCpuNs, nullptr, nullptr, 0.0},
+    {"encode_draw_issue_expanded_indexed_cpu_ms", CounterEntry::Kind::Milliseconds, &Counters::encodeDrawIssueExpandedIndexedCpuNs, nullptr, nullptr, 0.0},
+    {"encode_draw_issue_split_indexed_cpu_ms", CounterEntry::Kind::Milliseconds, &Counters::encodeDrawIssueSplitIndexedCpuNs, nullptr, nullptr, 0.0},
+    {"encode_draw_issue_metal_cpu_ms", CounterEntry::Kind::Milliseconds, &Counters::encodeDrawIssueMetalCpuNs, nullptr, nullptr, 0.0},
+    {"encode_draw_issue_visibility_cpu_ms", CounterEntry::Kind::Milliseconds, &Counters::encodeDrawIssueVisibilityCpuNs, nullptr, nullptr, 0.0},
     {"encode_draw_pso_prefetch_handle_available", CounterEntry::Kind::UnsignedCount, &Counters::encodeDrawPsoPrefetchHandleAvailable, nullptr, nullptr, 0.0},
     {"encode_draw_pso_prefetch_handle_used", CounterEntry::Kind::UnsignedCount, &Counters::encodeDrawPsoPrefetchHandleUsed, nullptr, nullptr, 0.0},
     {"encode_draw_pso_prefetch_handle_missing", CounterEntry::Kind::UnsignedCount, &Counters::encodeDrawPsoPrefetchHandleMissing, nullptr, nullptr, 0.0},
@@ -4778,6 +4790,30 @@ void countEncodeDrawIssueCpuTime(std::uint64_t nanoseconds) {
   add(counters().encodeDrawIssueCpuNs, nanoseconds);
   updateMax(counters().encodeDrawIssueCpuMaxNs, nanoseconds);
   recordRing(counters().encodeDrawIssueCpuRing, nanoseconds);
+}
+
+void countEncodeDrawIssueIndexedCpuTime(std::uint64_t nanoseconds) {
+  add(counters().encodeDrawIssueIndexedCpuNs, nanoseconds);
+}
+
+void countEncodeDrawIssueNonIndexedCpuTime(std::uint64_t nanoseconds) {
+  add(counters().encodeDrawIssueNonIndexedCpuNs, nanoseconds);
+}
+
+void countEncodeDrawIssueExpandedIndexedCpuTime(std::uint64_t nanoseconds) {
+  add(counters().encodeDrawIssueExpandedIndexedCpuNs, nanoseconds);
+}
+
+void countEncodeDrawIssueSplitIndexedCpuTime(std::uint64_t nanoseconds) {
+  add(counters().encodeDrawIssueSplitIndexedCpuNs, nanoseconds);
+}
+
+void countEncodeDrawIssueMetalCpuTime(std::uint64_t nanoseconds) {
+  add(counters().encodeDrawIssueMetalCpuNs, nanoseconds);
+}
+
+void countEncodeDrawIssueVisibilityCpuTime(std::uint64_t nanoseconds) {
+  add(counters().encodeDrawIssueVisibilityCpuNs, nanoseconds);
 }
 
 void countEncodeDrawPsoPrefetch(bool handleAvailable,

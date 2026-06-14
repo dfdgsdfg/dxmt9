@@ -4832,6 +4832,14 @@ bool bindingPacketPlanSplitPerfEnabled() {
   return enabled;
 }
 
+bool drawIssueSplitPerfEnabled() {
+  static const bool enabled = [] {
+    const char* env = std::getenv("DXMT9_PERF_DRAW_ISSUE_SPLIT");
+    return env && env[0] != '\0' && env[0] != '0';
+  }();
+  return enabled;
+}
+
 // R-BACK-2.29..2.32 — env-driven mid-chunk commit policy. Read once at
 // process start; subsequent runs need a re-launch to change it. This is
 // the cleanest invariant under R-BACK-2.31 (deterministic split
@@ -12270,9 +12278,16 @@ bool encodeDraw(EncodeContext& ctx,
                      pv.userIndexData.size());
       pushDrawVolatile();
       {
+        const bool issueSplit = drawIssueSplitPerfEnabled();
         PerfScope issueScope(perf::countEncodeDrawIssueCpuTime);
+        PerfScope issuePathScope(
+            issueSplit ? perf::countEncodeDrawIssueExpandedIndexedCpuTime
+                       : nullptr);
         std::optional<std::uint32_t> visibilityResult;
         if (visibilityScout) {
+          PerfScope visibilityScope(
+              issueSplit ? perf::countEncodeDrawIssueVisibilityCpuTime
+                         : nullptr);
           visibilityResult = beginVisibilityScoutDraw(
               visibilityScout, encoder,
               makeVisibilityScoutDrawRecord(*visibilityScout, drawState,
@@ -12284,8 +12299,17 @@ bool encodeDraw(EncodeContext& ctx,
                                             /*splitChunk=*/0,
                                             effectiveCullMode, fillMode));
         }
-        recordedDrawPrimitives(ctx, encoder, primitiveType, 0, (uint64_t)vertexCount);
-        endVisibilityScoutDraw(visibilityScout, encoder, visibilityResult);
+        {
+          PerfScope metalScope(
+              issueSplit ? perf::countEncodeDrawIssueMetalCpuTime : nullptr);
+          recordedDrawPrimitives(ctx, encoder, primitiveType, 0, (uint64_t)vertexCount);
+        }
+        if (visibilityScout) {
+          PerfScope visibilityScope(
+              issueSplit ? perf::countEncodeDrawIssueVisibilityCpuTime
+                         : nullptr);
+          endVisibilityScoutDraw(visibilityScout, encoder, visibilityResult);
+        }
       }
       // R-BACK-13.1: run the tile-FFP imageblock post-pass after this draw.
       emitTileFfpPostPass();
@@ -13238,11 +13262,18 @@ bool encodeDraw(EncodeContext& ctx,
                      pv.userIndexData.size());
       pushDrawVolatile();
       {
+        const bool issueSplit = drawIssueSplitPerfEnabled();
         PerfScope issueScope(perf::countEncodeDrawIssueCpuTime);
         const i32 metalBaseVertex = nativeBaseVertexUsed ? pv.baseVertexIndex : 0;
         const auto metalIndexType = toIndexType(pv.indexType);
         const bool submitSplitIndexed =
             splitWouldApply && !indexReorderApplied;
+        PerfScope issuePathScope(
+            issueSplit
+                ? (submitSplitIndexed
+                       ? perf::countEncodeDrawIssueSplitIndexedCpuTime
+                       : perf::countEncodeDrawIssueIndexedCpuTime)
+                : nullptr);
         if (submitSplitIndexed) {
           const u64 indexSize = indexElementSize(pv.indexType);
           for (const auto& chunk : splitChunks) {
@@ -13255,6 +13286,9 @@ bool encodeDraw(EncodeContext& ctx,
                 indexBufferOffset + static_cast<u64>(primitivesEmitted) * 3u * indexSize;
             std::optional<std::uint32_t> visibilityResult;
             if (visibilityScout) {
+              PerfScope visibilityScope(
+                  issueSplit ? perf::countEncodeDrawIssueVisibilityCpuTime
+                             : nullptr);
               visibilityResult = beginVisibilityScoutDraw(
                   visibilityScout, encoder,
                   makeVisibilityScoutDrawRecord(*visibilityScout, drawState,
@@ -13267,12 +13301,22 @@ bool encodeDraw(EncodeContext& ctx,
                                                 chunk.startPrimitive,
                                                 effectiveCullMode, fillMode));
             }
-            recordedDrawIndexedPrimitives(ctx, encoder, primitiveType,
-                                          metalIndexType,
-                                          static_cast<u64>(chunkPrimitives) * 3u,
-                                          indexBuffer, chunkIndexOffset, 1,
-                                          metalBaseVertex, 0);
-            endVisibilityScoutDraw(visibilityScout, encoder, visibilityResult);
+            {
+              PerfScope metalScope(
+                  issueSplit ? perf::countEncodeDrawIssueMetalCpuTime
+                             : nullptr);
+              recordedDrawIndexedPrimitives(ctx, encoder, primitiveType,
+                                            metalIndexType,
+                                            static_cast<u64>(chunkPrimitives) * 3u,
+                                            indexBuffer, chunkIndexOffset, 1,
+                                            metalBaseVertex, 0);
+            }
+            if (visibilityScout) {
+              PerfScope visibilityScope(
+                  issueSplit ? perf::countEncodeDrawIssueVisibilityCpuTime
+                             : nullptr);
+              endVisibilityScoutDraw(visibilityScout, encoder, visibilityResult);
+            }
           }
           if (encoderBreakdown) {
             encoderBreakdown->recordSplitLargeIndexedDraw(
@@ -13285,6 +13329,9 @@ bool encodeDraw(EncodeContext& ctx,
         } else {
           std::optional<std::uint32_t> visibilityResult;
           if (visibilityScout) {
+            PerfScope visibilityScope(
+                issueSplit ? perf::countEncodeDrawIssueVisibilityCpuTime
+                           : nullptr);
             visibilityResult = beginVisibilityScoutDraw(
                 visibilityScout, encoder,
                 makeVisibilityScoutDrawRecord(*visibilityScout, drawState,
@@ -13296,11 +13343,20 @@ bool encodeDraw(EncodeContext& ctx,
                                               /*splitChunk=*/0,
                                               effectiveCullMode, fillMode));
           }
-          recordedDrawIndexedPrimitives(ctx, encoder, primitiveType,
-                                        metalIndexType,
-                                        (uint64_t)vertexCount, indexBuffer,
-                                        indexBufferOffset, 1, metalBaseVertex, 0);
-          endVisibilityScoutDraw(visibilityScout, encoder, visibilityResult);
+          {
+            PerfScope metalScope(
+                issueSplit ? perf::countEncodeDrawIssueMetalCpuTime : nullptr);
+            recordedDrawIndexedPrimitives(ctx, encoder, primitiveType,
+                                          metalIndexType,
+                                          (uint64_t)vertexCount, indexBuffer,
+                                          indexBufferOffset, 1, metalBaseVertex, 0);
+          }
+          if (visibilityScout) {
+            PerfScope visibilityScope(
+                issueSplit ? perf::countEncodeDrawIssueVisibilityCpuTime
+                           : nullptr);
+            endVisibilityScoutDraw(visibilityScout, encoder, visibilityResult);
+          }
         }
       }
       // R-BACK-13.1: run the tile-FFP imageblock post-pass after this draw.
@@ -13366,9 +13422,14 @@ bool encodeDraw(EncodeContext& ctx,
     if (encoderBreakdown) {
       encoderBreakdown->addSetVertexBytes(sizeof(DrawVolatile), 5);
     }
+    const bool issueSplit = drawIssueSplitPerfEnabled();
     PerfScope issueScope(perf::countEncodeDrawIssueCpuTime);
+    PerfScope issuePathScope(
+        issueSplit ? perf::countEncodeDrawIssueNonIndexedCpuTime : nullptr);
     std::optional<std::uint32_t> visibilityResult;
     if (visibilityScout) {
+      PerfScope visibilityScope(
+          issueSplit ? perf::countEncodeDrawIssueVisibilityCpuTime : nullptr);
       visibilityResult = beginVisibilityScoutDraw(
           visibilityScout, encoder,
           makeVisibilityScoutDrawRecord(*visibilityScout, drawState,
@@ -13380,8 +13441,16 @@ bool encodeDraw(EncodeContext& ctx,
                                         /*splitChunk=*/0,
                                         effectiveCullMode, fillMode));
     }
-    recordedDrawPrimitives(ctx, encoder, primitiveType, 0, (uint64_t)vertexCount);
-    endVisibilityScoutDraw(visibilityScout, encoder, visibilityResult);
+    {
+      PerfScope metalScope(
+          issueSplit ? perf::countEncodeDrawIssueMetalCpuTime : nullptr);
+      recordedDrawPrimitives(ctx, encoder, primitiveType, 0, (uint64_t)vertexCount);
+    }
+    if (visibilityScout) {
+      PerfScope visibilityScope(
+          issueSplit ? perf::countEncodeDrawIssueVisibilityCpuTime : nullptr);
+      endVisibilityScoutDraw(visibilityScout, encoder, visibilityResult);
+    }
   }
   // R-BACK-13.1: run the tile-FFP imageblock post-pass after this draw.
   emitTileFfpPostPass();

@@ -602,6 +602,12 @@ void countReorderedIndexCacheLookup(bool hit,
                                     bool created,
                                     std::uint64_t createdBytes);
 void countEncodeDrawIssueCpuTime(std::uint64_t nanoseconds);
+void countEncodeDrawIssueIndexedCpuTime(std::uint64_t nanoseconds);
+void countEncodeDrawIssueNonIndexedCpuTime(std::uint64_t nanoseconds);
+void countEncodeDrawIssueExpandedIndexedCpuTime(std::uint64_t nanoseconds);
+void countEncodeDrawIssueSplitIndexedCpuTime(std::uint64_t nanoseconds);
+void countEncodeDrawIssueMetalCpuTime(std::uint64_t nanoseconds);
+void countEncodeDrawIssueVisibilityCpuTime(std::uint64_t nanoseconds);
 void countEncodeDrawPsoPrefetch(bool handleAvailable,
                                 bool usedHandle,
                                 bool hasBindingOverride,
