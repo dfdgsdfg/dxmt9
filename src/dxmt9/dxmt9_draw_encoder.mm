@@ -4840,6 +4840,67 @@ bool drawIssueSplitPerfEnabled() {
   return enabled;
 }
 
+bool argbufCbufProbeSplitPerfEnabled() {
+  static const bool enabled = [] {
+    const char* env = std::getenv("DXMT9_PERF_ARGBUF_CBUF_PROBE_SPLIT");
+    return env && env[0] != '\0' && env[0] != '0';
+  }();
+  return enabled;
+}
+
+using PerfCounterFn = void (*)(std::uint64_t);
+
+PerfCounterFn argbufCbufCachedRepointCpuRecorder(u32 argbufIndex) noexcept {
+  switch (argbufIndex) {
+    case dxmt9::argbuf_hybrid::kConstantBufferVsIndex:
+      return perf::countEncodeDrawArgbufCbufCachedRepointVsCpuTime;
+    case dxmt9::argbuf_hybrid::kConstantBufferPsIndex:
+      return perf::countEncodeDrawArgbufCbufCachedRepointPsCpuTime;
+    case dxmt9::argbuf_hybrid::kConstantBufferFfpVsIndex:
+      return perf::countEncodeDrawArgbufCbufCachedRepointFfpVsCpuTime;
+    case dxmt9::argbuf_hybrid::kConstantBufferFfpPsIndex:
+      return perf::countEncodeDrawArgbufCbufCachedRepointFfpPsCpuTime;
+    default:
+      return nullptr;
+  }
+}
+
+PerfCounterFn argbufCbufContentProbeCpuRecorder(u32 argbufIndex) noexcept {
+  switch (argbufIndex) {
+    case dxmt9::argbuf_hybrid::kConstantBufferVsIndex:
+      return perf::countEncodeDrawArgbufCbufContentProbeVsCpuTime;
+    case dxmt9::argbuf_hybrid::kConstantBufferPsIndex:
+      return perf::countEncodeDrawArgbufCbufContentProbePsCpuTime;
+    case dxmt9::argbuf_hybrid::kConstantBufferFfpPsIndex:
+      return perf::countEncodeDrawArgbufCbufContentProbeFfpPsCpuTime;
+    default:
+      return nullptr;
+  }
+}
+
+void countArgbufCbufCachedRepointStage(u32 argbufIndex, u64 bytes) noexcept {
+  switch (argbufIndex) {
+    case dxmt9::argbuf_hybrid::kConstantBufferVsIndex:
+      perf::countEncodeDrawArgbufCbufCachedRepointVsCalls(1u);
+      perf::countEncodeDrawArgbufCbufCachedRepointVsBytes(bytes);
+      break;
+    case dxmt9::argbuf_hybrid::kConstantBufferPsIndex:
+      perf::countEncodeDrawArgbufCbufCachedRepointPsCalls(1u);
+      perf::countEncodeDrawArgbufCbufCachedRepointPsBytes(bytes);
+      break;
+    case dxmt9::argbuf_hybrid::kConstantBufferFfpVsIndex:
+      perf::countEncodeDrawArgbufCbufCachedRepointFfpVsCalls(1u);
+      perf::countEncodeDrawArgbufCbufCachedRepointFfpVsBytes(bytes);
+      break;
+    case dxmt9::argbuf_hybrid::kConstantBufferFfpPsIndex:
+      perf::countEncodeDrawArgbufCbufCachedRepointFfpPsCalls(1u);
+      perf::countEncodeDrawArgbufCbufCachedRepointFfpPsBytes(bytes);
+      break;
+    default:
+      break;
+  }
+}
+
 // R-BACK-2.29..2.32 — env-driven mid-chunk commit policy. Read once at
 // process start; subsequent runs need a re-launch to change it. This is
 // the cleanest invariant under R-BACK-2.31 (deterministic split
@@ -10197,6 +10258,8 @@ bool encodeDraw(EncodeContext& ctx,
   // we leave slot 30 bound to the prior draw's table — correct because its
   // pointers still describe the unchanged constants — and the dirty mirror
   // below is a no-op (the prior draw already consumed the const dirty bits).
+  const bool argbufCbufProbeSplit =
+      argbufHybridMode && argbufCbufProbeSplitPerfEnabled();
   if (argbufHybridMode && reopenArgbufHybrid) {
     PerfScope argbufSetupScope(perf::countEncodeDrawArgbufSetupCpuTime);
     PerfScope argbufOpenScope(perf::countEncodeDrawArgbufOpenCpuTime);
@@ -10284,11 +10347,18 @@ bool encodeDraw(EncodeContext& ctx,
           {
             PerfScope cachedRepointScope(
                 perf::countEncodeDrawArgbufCbufCachedRepointCpuTime);
+            PerfScope cachedRepointStageScope(
+                argbufCbufProbeSplit
+                    ? argbufCbufCachedRepointCpuRecorder(argbufIndex)
+                    : nullptr);
             dxmt9::argbuf_hybrid::pointConstantBufferBinding(
                 argbufEncoderForDraw, argbufIndex, binding, nullptr, encoder);
           }
           perf::countEncodeDrawArgbufCbufCachedRepointCalls(1u);
           perf::countEncodeDrawArgbufCbufCachedRepointBytes(binding.bytes);
+          if (argbufCbufProbeSplit) {
+            countArgbufCbufCachedRepointStage(argbufIndex, binding.bytes);
+          }
           return true;
         };
         bool hasAnyCbufDirty = false;
@@ -10310,35 +10380,56 @@ bool encodeDraw(EncodeContext& ctx,
           {
             PerfScope probeScope(
                 perf::countEncodeDrawArgbufCbufContentProbeCpuTime);
-            const auto vsPlan =
-                uniform::makeVsConstantUploadPlan(
-                    *dirtyPtr, shaderUsage.vertexConstantUsage);
-            const auto vsBytes = uniform::vsConstantUploadBytes(vsPlan);
-            vsProbe = ArgbufCbufIdentityProbe{
-                .bytes = vsBytes,
-                .hash = makeArgbufCbufIdentityHash(
-                    0x76735f636275665full,
-                    drawStateVertexCbufSourceHash(drawState),
-                    vsBytes),
-            };
+            {
+              PerfScope vsProbeScope(
+                  argbufCbufProbeSplit
+                      ? argbufCbufContentProbeCpuRecorder(
+                            dxmt9::argbuf_hybrid::kConstantBufferVsIndex)
+                      : nullptr);
+              const auto vsPlan =
+                  uniform::makeVsConstantUploadPlan(
+                      *dirtyPtr, shaderUsage.vertexConstantUsage);
+              const auto vsBytes = uniform::vsConstantUploadBytes(vsPlan);
+              vsProbe = ArgbufCbufIdentityProbe{
+                  .bytes = vsBytes,
+                  .hash = makeArgbufCbufIdentityHash(
+                      0x76735f636275665full,
+                      drawStateVertexCbufSourceHash(drawState),
+                      vsBytes),
+              };
+            }
 
-            const auto psPlan =
-                uniform::makePsConstantUploadPlan(
-                    *dirtyPtr, shaderUsage.pixelConstantUsage);
-            const auto psBytes = uniform::psConstantUploadBytes(psPlan);
-            psProbe = ArgbufCbufIdentityProbe{
-                .bytes = psBytes,
-                .hash = makeArgbufCbufIdentityHash(
-                    0x70735f636275665full,
-                    drawStatePixelCbufSourceHash(drawState),
-                    psBytes),
-            };
+            {
+              PerfScope psProbeScope(
+                  argbufCbufProbeSplit
+                      ? argbufCbufContentProbeCpuRecorder(
+                            dxmt9::argbuf_hybrid::kConstantBufferPsIndex)
+                      : nullptr);
+              const auto psPlan =
+                  uniform::makePsConstantUploadPlan(
+                      *dirtyPtr, shaderUsage.pixelConstantUsage);
+              const auto psBytes = uniform::psConstantUploadBytes(psPlan);
+              psProbe = ArgbufCbufIdentityProbe{
+                  .bytes = psBytes,
+                  .hash = makeArgbufCbufIdentityHash(
+                      0x70735f636275665full,
+                      drawStatePixelCbufSourceHash(drawState),
+                      psBytes),
+              };
+            }
 
-            ffpPsProbe = ArgbufCbufIdentityProbe{
-                .bytes = sizeof(FfpPsConsts),
-                .hash = makeArgbufFfpPsIdentityHash(
-                    drawState, sizeof(FfpPsConsts)),
-            };
+            {
+              PerfScope ffpPsProbeScope(
+                  argbufCbufProbeSplit
+                      ? argbufCbufContentProbeCpuRecorder(
+                            dxmt9::argbuf_hybrid::kConstantBufferFfpPsIndex)
+                      : nullptr);
+              ffpPsProbe = ArgbufCbufIdentityProbe{
+                  .bytes = sizeof(FfpPsConsts),
+                  .hash = makeArgbufFfpPsIdentityHash(
+                      drawState, sizeof(FfpPsConsts)),
+              };
+            }
           }
 
           auto pointCachedByIdentity =

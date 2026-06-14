@@ -569,9 +569,24 @@ struct Counters {
   std::atomic<std::uint64_t> encodeDrawArgbufCbufCacheMergeCpuNs{0};
   std::atomic<std::uint64_t> encodeDrawArgbufCbufCachedRepointCpuNs{0};
   std::atomic<std::uint64_t> encodeDrawArgbufCbufFullRepointCpuNs{0};
+  std::atomic<std::uint64_t> encodeDrawArgbufCbufCachedRepointVsCpuNs{0};
+  std::atomic<std::uint64_t> encodeDrawArgbufCbufCachedRepointPsCpuNs{0};
+  std::atomic<std::uint64_t> encodeDrawArgbufCbufCachedRepointFfpVsCpuNs{0};
+  std::atomic<std::uint64_t> encodeDrawArgbufCbufCachedRepointFfpPsCpuNs{0};
   std::atomic<std::uint64_t> encodeDrawArgbufCbufCachedRepointCalls{0};
   std::atomic<std::uint64_t> encodeDrawArgbufCbufCachedRepointBytes{0};
+  std::atomic<std::uint64_t> encodeDrawArgbufCbufCachedRepointVsCalls{0};
+  std::atomic<std::uint64_t> encodeDrawArgbufCbufCachedRepointPsCalls{0};
+  std::atomic<std::uint64_t> encodeDrawArgbufCbufCachedRepointFfpVsCalls{0};
+  std::atomic<std::uint64_t> encodeDrawArgbufCbufCachedRepointFfpPsCalls{0};
+  std::atomic<std::uint64_t> encodeDrawArgbufCbufCachedRepointVsBytes{0};
+  std::atomic<std::uint64_t> encodeDrawArgbufCbufCachedRepointPsBytes{0};
+  std::atomic<std::uint64_t> encodeDrawArgbufCbufCachedRepointFfpVsBytes{0};
+  std::atomic<std::uint64_t> encodeDrawArgbufCbufCachedRepointFfpPsBytes{0};
   std::atomic<std::uint64_t> encodeDrawArgbufCbufContentProbeCpuNs{0};
+  std::atomic<std::uint64_t> encodeDrawArgbufCbufContentProbeVsCpuNs{0};
+  std::atomic<std::uint64_t> encodeDrawArgbufCbufContentProbePsCpuNs{0};
+  std::atomic<std::uint64_t> encodeDrawArgbufCbufContentProbeFfpPsCpuNs{0};
   std::atomic<std::uint64_t> encodeDrawArgbufCbufContentProbeCalls{0};
   std::atomic<std::uint64_t> encodeDrawArgbufCbufContentProbeVsHits{0};
   std::atomic<std::uint64_t> encodeDrawArgbufCbufContentProbeVsMisses{0};
@@ -2051,9 +2066,24 @@ constexpr CounterEntry kCounterTable[] = {
     {"encode_draw_argbuf_cbuf_cache_merge_cpu_ms", CounterEntry::Kind::Milliseconds, &Counters::encodeDrawArgbufCbufCacheMergeCpuNs, nullptr, nullptr, 0.0},
     {"encode_draw_argbuf_cbuf_cached_repoint_cpu_ms", CounterEntry::Kind::Milliseconds, &Counters::encodeDrawArgbufCbufCachedRepointCpuNs, nullptr, nullptr, 0.0},
     {"encode_draw_argbuf_cbuf_full_repoint_cpu_ms", CounterEntry::Kind::Milliseconds, &Counters::encodeDrawArgbufCbufFullRepointCpuNs, nullptr, nullptr, 0.0},
+    {"encode_draw_argbuf_cbuf_cached_repoint_vs_cpu_ms", CounterEntry::Kind::Milliseconds, &Counters::encodeDrawArgbufCbufCachedRepointVsCpuNs, nullptr, nullptr, 0.0},
+    {"encode_draw_argbuf_cbuf_cached_repoint_ps_cpu_ms", CounterEntry::Kind::Milliseconds, &Counters::encodeDrawArgbufCbufCachedRepointPsCpuNs, nullptr, nullptr, 0.0},
+    {"encode_draw_argbuf_cbuf_cached_repoint_ffp_vs_cpu_ms", CounterEntry::Kind::Milliseconds, &Counters::encodeDrawArgbufCbufCachedRepointFfpVsCpuNs, nullptr, nullptr, 0.0},
+    {"encode_draw_argbuf_cbuf_cached_repoint_ffp_ps_cpu_ms", CounterEntry::Kind::Milliseconds, &Counters::encodeDrawArgbufCbufCachedRepointFfpPsCpuNs, nullptr, nullptr, 0.0},
     {"encode_draw_argbuf_cbuf_cached_repoint_calls", CounterEntry::Kind::UnsignedCount, &Counters::encodeDrawArgbufCbufCachedRepointCalls, nullptr, nullptr, 0.0},
     {"encode_draw_argbuf_cbuf_cached_repoint_bytes", CounterEntry::Kind::UnsignedCount, &Counters::encodeDrawArgbufCbufCachedRepointBytes, nullptr, nullptr, 0.0},
+    {"encode_draw_argbuf_cbuf_cached_repoint_vs_calls", CounterEntry::Kind::UnsignedCount, &Counters::encodeDrawArgbufCbufCachedRepointVsCalls, nullptr, nullptr, 0.0},
+    {"encode_draw_argbuf_cbuf_cached_repoint_ps_calls", CounterEntry::Kind::UnsignedCount, &Counters::encodeDrawArgbufCbufCachedRepointPsCalls, nullptr, nullptr, 0.0},
+    {"encode_draw_argbuf_cbuf_cached_repoint_ffp_vs_calls", CounterEntry::Kind::UnsignedCount, &Counters::encodeDrawArgbufCbufCachedRepointFfpVsCalls, nullptr, nullptr, 0.0},
+    {"encode_draw_argbuf_cbuf_cached_repoint_ffp_ps_calls", CounterEntry::Kind::UnsignedCount, &Counters::encodeDrawArgbufCbufCachedRepointFfpPsCalls, nullptr, nullptr, 0.0},
+    {"encode_draw_argbuf_cbuf_cached_repoint_vs_bytes", CounterEntry::Kind::UnsignedCount, &Counters::encodeDrawArgbufCbufCachedRepointVsBytes, nullptr, nullptr, 0.0},
+    {"encode_draw_argbuf_cbuf_cached_repoint_ps_bytes", CounterEntry::Kind::UnsignedCount, &Counters::encodeDrawArgbufCbufCachedRepointPsBytes, nullptr, nullptr, 0.0},
+    {"encode_draw_argbuf_cbuf_cached_repoint_ffp_vs_bytes", CounterEntry::Kind::UnsignedCount, &Counters::encodeDrawArgbufCbufCachedRepointFfpVsBytes, nullptr, nullptr, 0.0},
+    {"encode_draw_argbuf_cbuf_cached_repoint_ffp_ps_bytes", CounterEntry::Kind::UnsignedCount, &Counters::encodeDrawArgbufCbufCachedRepointFfpPsBytes, nullptr, nullptr, 0.0},
     {"encode_draw_argbuf_cbuf_content_probe_cpu_ms", CounterEntry::Kind::Milliseconds, &Counters::encodeDrawArgbufCbufContentProbeCpuNs, nullptr, nullptr, 0.0},
+    {"encode_draw_argbuf_cbuf_content_probe_vs_cpu_ms", CounterEntry::Kind::Milliseconds, &Counters::encodeDrawArgbufCbufContentProbeVsCpuNs, nullptr, nullptr, 0.0},
+    {"encode_draw_argbuf_cbuf_content_probe_ps_cpu_ms", CounterEntry::Kind::Milliseconds, &Counters::encodeDrawArgbufCbufContentProbePsCpuNs, nullptr, nullptr, 0.0},
+    {"encode_draw_argbuf_cbuf_content_probe_ffp_ps_cpu_ms", CounterEntry::Kind::Milliseconds, &Counters::encodeDrawArgbufCbufContentProbeFfpPsCpuNs, nullptr, nullptr, 0.0},
     {"encode_draw_argbuf_cbuf_content_probe_calls", CounterEntry::Kind::UnsignedCount, &Counters::encodeDrawArgbufCbufContentProbeCalls, nullptr, nullptr, 0.0},
     {"encode_draw_argbuf_cbuf_content_probe_vs_hits", CounterEntry::Kind::UnsignedCount, &Counters::encodeDrawArgbufCbufContentProbeVsHits, nullptr, nullptr, 0.0},
     {"encode_draw_argbuf_cbuf_content_probe_vs_misses", CounterEntry::Kind::UnsignedCount, &Counters::encodeDrawArgbufCbufContentProbeVsMisses, nullptr, nullptr, 0.0},
@@ -4378,6 +4408,22 @@ void countEncodeDrawArgbufCbufFullRepointCpuTime(std::uint64_t nanoseconds) {
   add(counters().encodeDrawArgbufCbufFullRepointCpuNs, nanoseconds);
 }
 
+void countEncodeDrawArgbufCbufCachedRepointVsCpuTime(std::uint64_t nanoseconds) {
+  add(counters().encodeDrawArgbufCbufCachedRepointVsCpuNs, nanoseconds);
+}
+
+void countEncodeDrawArgbufCbufCachedRepointPsCpuTime(std::uint64_t nanoseconds) {
+  add(counters().encodeDrawArgbufCbufCachedRepointPsCpuNs, nanoseconds);
+}
+
+void countEncodeDrawArgbufCbufCachedRepointFfpVsCpuTime(std::uint64_t nanoseconds) {
+  add(counters().encodeDrawArgbufCbufCachedRepointFfpVsCpuNs, nanoseconds);
+}
+
+void countEncodeDrawArgbufCbufCachedRepointFfpPsCpuTime(std::uint64_t nanoseconds) {
+  add(counters().encodeDrawArgbufCbufCachedRepointFfpPsCpuNs, nanoseconds);
+}
+
 void countEncodeDrawArgbufCbufCachedRepointCalls(std::uint64_t calls) {
   add(counters().encodeDrawArgbufCbufCachedRepointCalls, calls);
 }
@@ -4386,8 +4432,52 @@ void countEncodeDrawArgbufCbufCachedRepointBytes(std::uint64_t bytes) {
   add(counters().encodeDrawArgbufCbufCachedRepointBytes, bytes);
 }
 
+void countEncodeDrawArgbufCbufCachedRepointVsCalls(std::uint64_t calls) {
+  add(counters().encodeDrawArgbufCbufCachedRepointVsCalls, calls);
+}
+
+void countEncodeDrawArgbufCbufCachedRepointPsCalls(std::uint64_t calls) {
+  add(counters().encodeDrawArgbufCbufCachedRepointPsCalls, calls);
+}
+
+void countEncodeDrawArgbufCbufCachedRepointFfpVsCalls(std::uint64_t calls) {
+  add(counters().encodeDrawArgbufCbufCachedRepointFfpVsCalls, calls);
+}
+
+void countEncodeDrawArgbufCbufCachedRepointFfpPsCalls(std::uint64_t calls) {
+  add(counters().encodeDrawArgbufCbufCachedRepointFfpPsCalls, calls);
+}
+
+void countEncodeDrawArgbufCbufCachedRepointVsBytes(std::uint64_t bytes) {
+  add(counters().encodeDrawArgbufCbufCachedRepointVsBytes, bytes);
+}
+
+void countEncodeDrawArgbufCbufCachedRepointPsBytes(std::uint64_t bytes) {
+  add(counters().encodeDrawArgbufCbufCachedRepointPsBytes, bytes);
+}
+
+void countEncodeDrawArgbufCbufCachedRepointFfpVsBytes(std::uint64_t bytes) {
+  add(counters().encodeDrawArgbufCbufCachedRepointFfpVsBytes, bytes);
+}
+
+void countEncodeDrawArgbufCbufCachedRepointFfpPsBytes(std::uint64_t bytes) {
+  add(counters().encodeDrawArgbufCbufCachedRepointFfpPsBytes, bytes);
+}
+
 void countEncodeDrawArgbufCbufContentProbeCpuTime(std::uint64_t nanoseconds) {
   add(counters().encodeDrawArgbufCbufContentProbeCpuNs, nanoseconds);
+}
+
+void countEncodeDrawArgbufCbufContentProbeVsCpuTime(std::uint64_t nanoseconds) {
+  add(counters().encodeDrawArgbufCbufContentProbeVsCpuNs, nanoseconds);
+}
+
+void countEncodeDrawArgbufCbufContentProbePsCpuTime(std::uint64_t nanoseconds) {
+  add(counters().encodeDrawArgbufCbufContentProbePsCpuNs, nanoseconds);
+}
+
+void countEncodeDrawArgbufCbufContentProbeFfpPsCpuTime(std::uint64_t nanoseconds) {
+  add(counters().encodeDrawArgbufCbufContentProbeFfpPsCpuNs, nanoseconds);
 }
 
 void countEncodeDrawArgbufCbufContentProbeCalls(std::uint64_t calls) {

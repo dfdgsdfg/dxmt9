@@ -89,6 +89,7 @@ bottleneck — that is owned by [[hidden-backend-storage]].
 | H69 | The remaining binding-packet plan parent has one large child worth primary optimization | rejected as primary lever; attribution accepted | [[state-churn-encode-encode-phase.58]] (`DXMT9_PERF_BINDING_PACKET_PLAN_SPLIT=1`: fragment plan largest at `0.204682ms/present`; default-off guard keeps child counters `0` and parent near baseline) |
 | H70 | Slot-local `DrawUniformPayload` dedup lookup is worth its GT1 CPU cost | rejected as default assumption; accepted diagnostic micro-win | [[state-churn-encode-encode-phase.59]] (`DXMT9_DISABLE_DRAW_UNIFORM_PAYLOAD_DEDUP=1`: lookup `276.107→0ms`, appends `877,508→930,994`, append-uniform `1041.108→799.528ms`, but queue submission flat) |
 | H71 | The `encode_draw_issue_cpu_ms` bucket hides dxmt9 wrapper or diagnostic overhead | rejected; indexed Metal draw-call attribution accepted | [[state-churn-encode-encode-phase.60]] (`DXMT9_PERF_DRAW_ISSUE_SPLIT=1`: all draws indexed, visibility/expanded/split/nonindexed `0`, Metal draw call `897.049ms` / `77.0%` of issue parent) |
+| H72 | Argbuf cached-repoint/content-probe residual has one stage worth primary optimization | rejected as primary lever; attribution accepted | [[state-churn-encode-encode-phase.61]] (`DXMT9_PERF_ARGBUF_CBUF_PROBE_SPLIT=1`: FFPPS repoint `899,453` calls / `345.390MB` but `137.306ms`; VS probe `143,728` hits / `788,015` misses and `83.048ms`; dirty VS update remains `936.123ms`) |
 
 ## Verification methods
 
@@ -260,6 +261,7 @@ flowchart TD
   EncodePhase58["encode-phase.58\nbinding-plan split\nfragment largest child\nopt-in only"]:::accepted
   EncodePhase59["encode-phase.59\nuniform dedup off\nappend_uniform -242ms\nqueue flat"]:::accepted
   EncodePhase60["encode-phase.60\nissue split\nMetal indexed draw\nowns issue"]:::accepted
+  EncodePhase61["encode-phase.61\nargbuf cbuf probe split\nno single stage owner"]:::accepted
   Snapshot10["snapshot.10\nuniform-refresh fast path\nrefresh -59.6%\nFPS flat"]:::accepted
 
   Drawrun1 -->|"split-into"| Drawrun2
@@ -344,6 +346,7 @@ flowchart TD
   EncodePhase57 -->|"check packet-plan residual"| EncodePhase58
   EncodePhase53 -->|"test uniform payload dedup value"| EncodePhase59
   EncodePhase58 -->|"split draw issue bucket"| EncodePhase60
+  EncodePhase57 -->|"split cbuf probe/repoint stages"| EncodePhase61
 ```
 
 ## Results synthesis
@@ -1055,6 +1058,20 @@ non-indexed, expanded-indexed, split-indexed, and visibility-scout children all
 parent and `86.9%` of the indexed-path child. Do not treat issue as a hidden
 dxmt9 wrapper bucket; moving it materially requires fewer submitted Metal draws
 or a different submission model, not micro-optimizing the call wrapper.
+
+[[state-churn-encode-encode-phase.61]] closes the next argbuf cbuf attribution
+question as a negative primary lever. The opt-in
+`DXMT9_PERF_ARGBUF_CBUF_PROBE_SPLIT=1` run adds nested hot-path timers, so the
+parent bucket movement is instrumentation overhead. The useful stage split says
+FFPPS repoint has the largest byte/call count (`899,453` calls,
+`345.390MB`) but only `137.306ms`; PS repoint is `108.299ms`; and VS repoint is
+only `28.678ms`. VS content probing has a low hit rate
+(`143,728 / 931,743`) and costs `83.048ms`, but skipping it would convert those
+hits into more VS uploads. Dirty VS update remains larger
+(`936.123ms`) than any probe/repoint child. Do not pursue a default "skip VS
+probe" or FFPPS repoint micro-optimization without a stronger A/B; the next
+argbuf work should reduce table reopen frequency, dirty VS upload frequency, or
+the table storage model itself.
 
 ## How to run
 Every experiment here is a 3DMark05 GT1 run via the standard wrapper. This is a
