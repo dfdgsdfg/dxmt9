@@ -500,6 +500,10 @@ struct Counters {
   std::atomic<std::uint64_t> encodeDrawFvfDecodeCpuMaxNs{0};
   std::atomic<std::uint64_t> encodeDrawBindingPacketCpuNs{0};
   std::atomic<std::uint64_t> encodeDrawBindingPacketPlanCpuNs{0};
+  std::atomic<std::uint64_t> encodeDrawBindingPacketPlanFragmentCpuNs{0};
+  std::atomic<std::uint64_t> encodeDrawBindingPacketPlanVertexCpuNs{0};
+  std::atomic<std::uint64_t> encodeDrawBindingPacketPlanExtraStreamCpuNs{0};
+  std::atomic<std::uint64_t> encodeDrawBindingPacketPlanRasterCpuNs{0};
   std::atomic<std::uint64_t> encodeDrawBindingPacketCacheCpuNs{0};
   std::atomic<std::uint64_t> encodeDrawBindingPacketCacheKeyCpuNs{0};
   std::atomic<std::uint64_t> encodeDrawBindingPacketCacheHashCpuNs{0};
@@ -706,6 +710,10 @@ struct Counters {
   std::atomic<std::uint64_t> d3d9SnapshotCacheDirectMissUniformBuildCpuNs{0};
   std::atomic<std::uint64_t> d3d9SnapshotCacheDirectMissHotBuildCpuNs{0};
   std::atomic<std::uint64_t> d3d9SnapshotCacheBatchMissShaderLayoutCpuNs{0};
+  std::atomic<std::uint64_t> d3d9SnapshotCacheBatchMissShaderLayoutCompatibleHits{0};
+  std::atomic<std::uint64_t> d3d9SnapshotCacheBatchMissShaderLayoutCompatibleMisses{0};
+  std::atomic<std::uint64_t> d3d9SnapshotCacheBatchMissShaderLayoutReuseHits{0};
+  std::atomic<std::uint64_t> d3d9SnapshotCacheBatchMissShaderLayoutReuseMisses{0};
   std::atomic<std::uint64_t> d3d9SnapshotCacheBatchMissUniformBuildCpuNs{0};
   std::atomic<std::uint64_t> d3d9SnapshotCacheBatchMissHotBuildCpuNs{0};
   std::atomic<std::uint64_t> d3d9SnapshotCacheBatchMissHotBuildZeroInitCpuNs{0};
@@ -776,6 +784,12 @@ struct Counters {
   std::atomic<std::uint64_t> d3d9SnapshotUniformMaterializedBytes{0};
   std::atomic<std::uint64_t> d3d9SnapshotUniformElided{0};
   std::atomic<std::uint64_t> d3d9SnapshotUniformElidedBytes{0};
+  std::atomic<std::uint64_t> d3d9SnapshotUniformAdjacentSameGen{0};
+  std::atomic<std::uint64_t> d3d9SnapshotUniformAdjacentSameGenBytes{0};
+  std::atomic<std::uint64_t> d3d9SnapshotUniformAdjacentSameGenSameState{0};
+  std::atomic<std::uint64_t> d3d9SnapshotUniformAdjacentSameGenSameStateBytes{0};
+  std::atomic<std::uint64_t> d3d9SnapshotUniformAdjacentSameGenDiffState{0};
+  std::atomic<std::uint64_t> d3d9SnapshotUniformAdjacentSameGenDiffStateBytes{0};
   std::atomic<std::uint64_t> d3d9SnapshotCacheBatchMissUniformBuildCalls{0};
   std::atomic<std::uint64_t> d3d9SnapshotCacheBatchMissUniformBuildVsConstCopyCpuNs{0};
   std::atomic<std::uint64_t> d3d9SnapshotCacheBatchMissUniformBuildPsConstCopyCpuNs{0};
@@ -1060,6 +1074,8 @@ struct Counters {
   std::atomic<std::uint64_t> completionPresentWaitWithoutEnqueueNs{0};
   std::atomic<std::uint64_t> completionWaitEnqueuesDuringWait{0};
   std::atomic<std::uint64_t> completionWaitEnqueuesDuringWaitMax{0};
+  std::atomic<std::uint64_t> completionSignalDelay{0};
+  std::atomic<std::uint64_t> completionSignalDelayNs{0};
   std::atomic<std::uint64_t> completionNoEnqueueWaitToCommitChunkEntry{0};
   std::atomic<std::uint64_t> completionNoEnqueueWaitToCommitChunkEntryNs{0};
   std::atomic<std::uint64_t> completionNoEnqueueWaitToCommitChunkEntryMaxNs{0};
@@ -1960,6 +1976,10 @@ constexpr CounterEntry kCounterTable[] = {
     {"encode_draw_fvf_decode_cpu_p99_ms", CounterEntry::Kind::PercentileMs, nullptr, nullptr, &Counters::encodeDrawFvfDecodeCpuRing, 0.99},
     {"encode_draw_binding_packet_cpu_ms", CounterEntry::Kind::Milliseconds, &Counters::encodeDrawBindingPacketCpuNs, nullptr, nullptr, 0.0},
     {"encode_draw_binding_packet_plan_cpu_ms", CounterEntry::Kind::Milliseconds, &Counters::encodeDrawBindingPacketPlanCpuNs, nullptr, nullptr, 0.0},
+    {"encode_draw_binding_packet_plan_fragment_cpu_ms", CounterEntry::Kind::Milliseconds, &Counters::encodeDrawBindingPacketPlanFragmentCpuNs, nullptr, nullptr, 0.0},
+    {"encode_draw_binding_packet_plan_vertex_cpu_ms", CounterEntry::Kind::Milliseconds, &Counters::encodeDrawBindingPacketPlanVertexCpuNs, nullptr, nullptr, 0.0},
+    {"encode_draw_binding_packet_plan_extra_stream_cpu_ms", CounterEntry::Kind::Milliseconds, &Counters::encodeDrawBindingPacketPlanExtraStreamCpuNs, nullptr, nullptr, 0.0},
+    {"encode_draw_binding_packet_plan_raster_cpu_ms", CounterEntry::Kind::Milliseconds, &Counters::encodeDrawBindingPacketPlanRasterCpuNs, nullptr, nullptr, 0.0},
     {"encode_draw_binding_packet_cache_cpu_ms", CounterEntry::Kind::Milliseconds, &Counters::encodeDrawBindingPacketCacheCpuNs, nullptr, nullptr, 0.0},
     {"encode_draw_binding_packet_cache_key_cpu_ms", CounterEntry::Kind::Milliseconds, &Counters::encodeDrawBindingPacketCacheKeyCpuNs, nullptr, nullptr, 0.0},
     {"encode_draw_binding_packet_cache_hash_cpu_ms", CounterEntry::Kind::Milliseconds, &Counters::encodeDrawBindingPacketCacheHashCpuNs, nullptr, nullptr, 0.0},
@@ -2175,6 +2195,10 @@ constexpr CounterEntry kCounterTable[] = {
     {"d3d9_snapshot_cache_direct_miss_uniform_build_cpu_ms", CounterEntry::Kind::Milliseconds, &Counters::d3d9SnapshotCacheDirectMissUniformBuildCpuNs, nullptr, nullptr, 0.0},
     {"d3d9_snapshot_cache_direct_miss_hot_build_cpu_ms", CounterEntry::Kind::Milliseconds, &Counters::d3d9SnapshotCacheDirectMissHotBuildCpuNs, nullptr, nullptr, 0.0},
     {"d3d9_snapshot_cache_batch_miss_shader_layout_cpu_ms", CounterEntry::Kind::Milliseconds, &Counters::d3d9SnapshotCacheBatchMissShaderLayoutCpuNs, nullptr, nullptr, 0.0},
+    {"d3d9_snapshot_cache_batch_miss_shader_layout_compatible_hits", CounterEntry::Kind::UnsignedCount, &Counters::d3d9SnapshotCacheBatchMissShaderLayoutCompatibleHits, nullptr, nullptr, 0.0},
+    {"d3d9_snapshot_cache_batch_miss_shader_layout_compatible_misses", CounterEntry::Kind::UnsignedCount, &Counters::d3d9SnapshotCacheBatchMissShaderLayoutCompatibleMisses, nullptr, nullptr, 0.0},
+    {"d3d9_snapshot_cache_batch_miss_shader_layout_reuse_hits", CounterEntry::Kind::UnsignedCount, &Counters::d3d9SnapshotCacheBatchMissShaderLayoutReuseHits, nullptr, nullptr, 0.0},
+    {"d3d9_snapshot_cache_batch_miss_shader_layout_reuse_misses", CounterEntry::Kind::UnsignedCount, &Counters::d3d9SnapshotCacheBatchMissShaderLayoutReuseMisses, nullptr, nullptr, 0.0},
     {"d3d9_snapshot_cache_batch_miss_uniform_build_cpu_ms", CounterEntry::Kind::Milliseconds, &Counters::d3d9SnapshotCacheBatchMissUniformBuildCpuNs, nullptr, nullptr, 0.0},
     {"d3d9_snapshot_cache_batch_miss_hot_build_cpu_ms", CounterEntry::Kind::Milliseconds, &Counters::d3d9SnapshotCacheBatchMissHotBuildCpuNs, nullptr, nullptr, 0.0},
     {"d3d9_snapshot_cache_batch_miss_hot_build_zero_init_cpu_ms", CounterEntry::Kind::Milliseconds, &Counters::d3d9SnapshotCacheBatchMissHotBuildZeroInitCpuNs, nullptr, nullptr, 0.0},
@@ -2286,6 +2310,12 @@ constexpr CounterEntry kCounterTable[] = {
     {"d3d9_snapshot_uniform_materialized_bytes", CounterEntry::Kind::UnsignedCount, &Counters::d3d9SnapshotUniformMaterializedBytes, nullptr, nullptr, 0.0},
     {"d3d9_snapshot_uniform_elided", CounterEntry::Kind::UnsignedCount, &Counters::d3d9SnapshotUniformElided, nullptr, nullptr, 0.0},
     {"d3d9_snapshot_uniform_elided_bytes", CounterEntry::Kind::UnsignedCount, &Counters::d3d9SnapshotUniformElidedBytes, nullptr, nullptr, 0.0},
+    {"d3d9_snapshot_uniform_adjacent_same_generation", CounterEntry::Kind::UnsignedCount, &Counters::d3d9SnapshotUniformAdjacentSameGen, nullptr, nullptr, 0.0},
+    {"d3d9_snapshot_uniform_adjacent_same_generation_bytes", CounterEntry::Kind::UnsignedCount, &Counters::d3d9SnapshotUniformAdjacentSameGenBytes, nullptr, nullptr, 0.0},
+    {"d3d9_snapshot_uniform_adjacent_same_generation_same_state_lane", CounterEntry::Kind::UnsignedCount, &Counters::d3d9SnapshotUniformAdjacentSameGenSameState, nullptr, nullptr, 0.0},
+    {"d3d9_snapshot_uniform_adjacent_same_generation_same_state_lane_bytes", CounterEntry::Kind::UnsignedCount, &Counters::d3d9SnapshotUniformAdjacentSameGenSameStateBytes, nullptr, nullptr, 0.0},
+    {"d3d9_snapshot_uniform_adjacent_same_generation_diff_state_lane", CounterEntry::Kind::UnsignedCount, &Counters::d3d9SnapshotUniformAdjacentSameGenDiffState, nullptr, nullptr, 0.0},
+    {"d3d9_snapshot_uniform_adjacent_same_generation_diff_state_lane_bytes", CounterEntry::Kind::UnsignedCount, &Counters::d3d9SnapshotUniformAdjacentSameGenDiffStateBytes, nullptr, nullptr, 0.0},
     {"d3d9_snapshot_state_copy_cpu_ms", CounterEntry::Kind::Milliseconds, &Counters::d3d9SnapshotStateCopyCpuNs, nullptr, nullptr, 0.0},
     {"d3d9_snapshot_state_materialized", CounterEntry::Kind::UnsignedCount, &Counters::d3d9SnapshotStateMaterialized, nullptr, nullptr, 0.0},
     {"d3d9_snapshot_state_materialized_bytes", CounterEntry::Kind::UnsignedCount, &Counters::d3d9SnapshotStateMaterializedBytes, nullptr, nullptr, 0.0},
@@ -2531,6 +2561,8 @@ constexpr CounterEntry kCounterTable[] = {
     {"completion_present_wait_without_enqueue_ms", CounterEntry::Kind::Milliseconds, &Counters::completionPresentWaitWithoutEnqueueNs, nullptr, nullptr, 0.0},
     {"completion_wait_enqueues_during_wait", CounterEntry::Kind::UnsignedCount, &Counters::completionWaitEnqueuesDuringWait, nullptr, nullptr, 0.0},
     {"completion_wait_enqueues_during_wait_max", CounterEntry::Kind::UnsignedCount, &Counters::completionWaitEnqueuesDuringWaitMax, nullptr, nullptr, 0.0},
+    {"completion_signal_delay", CounterEntry::Kind::UnsignedCount, &Counters::completionSignalDelay, nullptr, nullptr, 0.0},
+    {"completion_signal_delay_ms", CounterEntry::Kind::Milliseconds, &Counters::completionSignalDelayNs, nullptr, nullptr, 0.0},
     {"completion_no_enqueue_wait_to_commit_chunk_entry", CounterEntry::Kind::UnsignedCount, &Counters::completionNoEnqueueWaitToCommitChunkEntry, nullptr, nullptr, 0.0},
     {"completion_no_enqueue_wait_to_commit_chunk_entry_ms", CounterEntry::Kind::Milliseconds, &Counters::completionNoEnqueueWaitToCommitChunkEntryNs, nullptr, nullptr, 0.0},
     {"completion_no_enqueue_wait_to_commit_chunk_entry_max_ms", CounterEntry::Kind::Milliseconds, &Counters::completionNoEnqueueWaitToCommitChunkEntryMaxNs, nullptr, nullptr, 0.0},
@@ -4051,6 +4083,23 @@ void countEncodeDrawBindingPacketPlanCpuTime(std::uint64_t nanoseconds) {
   add(counters().encodeDrawBindingPacketPlanCpuNs, nanoseconds);
 }
 
+void countEncodeDrawBindingPacketPlanFragmentCpuTime(std::uint64_t nanoseconds) {
+  add(counters().encodeDrawBindingPacketPlanFragmentCpuNs, nanoseconds);
+}
+
+void countEncodeDrawBindingPacketPlanVertexCpuTime(std::uint64_t nanoseconds) {
+  add(counters().encodeDrawBindingPacketPlanVertexCpuNs, nanoseconds);
+}
+
+void countEncodeDrawBindingPacketPlanExtraStreamCpuTime(
+    std::uint64_t nanoseconds) {
+  add(counters().encodeDrawBindingPacketPlanExtraStreamCpuNs, nanoseconds);
+}
+
+void countEncodeDrawBindingPacketPlanRasterCpuTime(std::uint64_t nanoseconds) {
+  add(counters().encodeDrawBindingPacketPlanRasterCpuNs, nanoseconds);
+}
+
 void countEncodeDrawBindingPacketCacheCpuTime(std::uint64_t nanoseconds) {
   add(counters().encodeDrawBindingPacketCacheCpuNs, nanoseconds);
 }
@@ -4834,6 +4883,18 @@ void countD3D9SnapshotCacheBatchMissShaderLayoutCpuTime(std::uint64_t nanosecond
   add(counters().d3d9SnapshotCacheBatchMissShaderLayoutCpuNs, nanoseconds);
 }
 
+void countD3D9SnapshotCacheBatchMissShaderLayoutCompatible(bool compatible) {
+  auto& c = counters();
+  add(compatible ? c.d3d9SnapshotCacheBatchMissShaderLayoutCompatibleHits
+                 : c.d3d9SnapshotCacheBatchMissShaderLayoutCompatibleMisses);
+}
+
+void countD3D9SnapshotCacheBatchMissShaderLayoutReuse(bool reused) {
+  auto& c = counters();
+  add(reused ? c.d3d9SnapshotCacheBatchMissShaderLayoutReuseHits
+             : c.d3d9SnapshotCacheBatchMissShaderLayoutReuseMisses);
+}
+
 void countD3D9SnapshotCacheBatchMissUniformBuildCpuTime(std::uint64_t nanoseconds) {
   add(counters().d3d9SnapshotCacheBatchMissUniformBuildCpuNs, nanoseconds);
 }
@@ -5211,6 +5272,20 @@ void countD3D9SnapshotUniformElided(std::uint64_t bytes) {
   auto& c = counters();
   add(c.d3d9SnapshotUniformElided);
   add(c.d3d9SnapshotUniformElidedBytes, bytes);
+}
+
+void countD3D9SnapshotUniformAdjacentSameGeneration(bool sameStateLane,
+                                                    std::uint64_t bytes) {
+  auto& c = counters();
+  add(c.d3d9SnapshotUniformAdjacentSameGen);
+  add(c.d3d9SnapshotUniformAdjacentSameGenBytes, bytes);
+  if (sameStateLane) {
+    add(c.d3d9SnapshotUniformAdjacentSameGenSameState);
+    add(c.d3d9SnapshotUniformAdjacentSameGenSameStateBytes, bytes);
+  } else {
+    add(c.d3d9SnapshotUniformAdjacentSameGenDiffState);
+    add(c.d3d9SnapshotUniformAdjacentSameGenDiffStateBytes, bytes);
+  }
 }
 
 void countD3D9SnapshotStateCopyCpuTime(std::uint64_t nanoseconds) {
@@ -5899,6 +5974,12 @@ void countCompletionWaitOverlap(std::uint64_t nanoseconds,
     add(c.completionPresentWaitWithoutEnqueue);
     add(c.completionPresentWaitWithoutEnqueueNs, nanoseconds);
   }
+}
+
+void countCompletionSignalDelay(std::uint64_t nanoseconds) {
+  auto& c = counters();
+  add(c.completionSignalDelay);
+  add(c.completionSignalDelayNs, nanoseconds);
 }
 
 void countCompletionNoEnqueueWaitToCommitPublish(std::uint64_t nanoseconds) {
@@ -7092,6 +7173,14 @@ CounterSnapshot snapshot() {
   s.encodeDrawFvfDecodeCpuNs = load(c.encodeDrawFvfDecodeCpuNs);
   s.encodeDrawBindingPacketCpuNs = load(c.encodeDrawBindingPacketCpuNs);
   s.encodeDrawBindingPacketPlanCpuNs = load(c.encodeDrawBindingPacketPlanCpuNs);
+  s.encodeDrawBindingPacketPlanFragmentCpuNs =
+      load(c.encodeDrawBindingPacketPlanFragmentCpuNs);
+  s.encodeDrawBindingPacketPlanVertexCpuNs =
+      load(c.encodeDrawBindingPacketPlanVertexCpuNs);
+  s.encodeDrawBindingPacketPlanExtraStreamCpuNs =
+      load(c.encodeDrawBindingPacketPlanExtraStreamCpuNs);
+  s.encodeDrawBindingPacketPlanRasterCpuNs =
+      load(c.encodeDrawBindingPacketPlanRasterCpuNs);
   s.encodeDrawBindingPacketCacheCpuNs = load(c.encodeDrawBindingPacketCacheCpuNs);
   s.encodeDrawBindingPacketTextureRecordCpuNs =
       load(c.encodeDrawBindingPacketTextureRecordCpuNs);
@@ -7157,6 +7246,10 @@ void emitFrameDelta(std::uint64_t frameId,
       "encode_draw_fvf_decode_cpu_ms=%.3f "
       "encode_draw_binding_packet_cpu_ms=%.3f "
       "encode_draw_binding_packet_plan_cpu_ms=%.3f "
+      "encode_draw_binding_packet_plan_fragment_cpu_ms=%.3f "
+      "encode_draw_binding_packet_plan_vertex_cpu_ms=%.3f "
+      "encode_draw_binding_packet_plan_extra_stream_cpu_ms=%.3f "
+      "encode_draw_binding_packet_plan_raster_cpu_ms=%.3f "
       "encode_draw_binding_packet_cache_cpu_ms=%.3f "
       "encode_draw_binding_packet_texture_record_cpu_ms=%.3f "
       "encode_draw_argbuf_setup_cpu_ms=%.3f "
@@ -7206,6 +7299,22 @@ void emitFrameDelta(std::uint64_t frameId,
           1000000.0,
       static_cast<double>(delta(prev.encodeDrawBindingPacketPlanCpuNs,
                                  curr.encodeDrawBindingPacketPlanCpuNs)) /
+          1000000.0,
+      static_cast<double>(
+          delta(prev.encodeDrawBindingPacketPlanFragmentCpuNs,
+                curr.encodeDrawBindingPacketPlanFragmentCpuNs)) /
+          1000000.0,
+      static_cast<double>(
+          delta(prev.encodeDrawBindingPacketPlanVertexCpuNs,
+                curr.encodeDrawBindingPacketPlanVertexCpuNs)) /
+          1000000.0,
+      static_cast<double>(
+          delta(prev.encodeDrawBindingPacketPlanExtraStreamCpuNs,
+                curr.encodeDrawBindingPacketPlanExtraStreamCpuNs)) /
+          1000000.0,
+      static_cast<double>(
+          delta(prev.encodeDrawBindingPacketPlanRasterCpuNs,
+                curr.encodeDrawBindingPacketPlanRasterCpuNs)) /
           1000000.0,
       static_cast<double>(delta(prev.encodeDrawBindingPacketCacheCpuNs,
                                  curr.encodeDrawBindingPacketCacheCpuNs)) /

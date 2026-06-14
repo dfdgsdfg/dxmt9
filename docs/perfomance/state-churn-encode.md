@@ -86,6 +86,8 @@ bottleneck — that is owned by [[hidden-backend-storage]].
 | H66 | The `argbuf_open` parent is mostly actual Metal argument-buffer open work | rejected as phrased; post-open attribution accepted | [[state-churn-encode-encode-phase.55]] (`open_call=573.804ms`, `reopen_post=891.359ms`, table bind `178.803ms`, cached repoint `269.898ms`, content probe `123.303ms`) |
 | H67 | Pre-open component identity can skip whole argbuf table reopen in GT1 | rejected-current | [[state-churn-encode-encode-phase.56]] (`961,473` candidates, `0` skips; VS misses `812,520`; identity check cost `956.102ms`) |
 | H68 | The phase55 post-open residual is a single hidden argbuf child | rejected; distributed bookkeeping accepted | [[state-churn-encode-encode-phase.57]] (table probe `50.933ms`, byte account `51.990ms`, cbuf cache/dirty scans `118.813ms`, force dirty `104.757ms`; attribution timers add overhead) |
+| H69 | The remaining binding-packet plan parent has one large child worth primary optimization | rejected as primary lever; attribution accepted | [[state-churn-encode-encode-phase.58]] (`DXMT9_PERF_BINDING_PACKET_PLAN_SPLIT=1`: fragment plan largest at `0.204682ms/present`; default-off guard keeps child counters `0` and parent near baseline) |
+| H70 | Slot-local `DrawUniformPayload` dedup lookup is worth its GT1 CPU cost | rejected as default assumption; accepted diagnostic micro-win | [[state-churn-encode-encode-phase.59]] (`DXMT9_DISABLE_DRAW_UNIFORM_PAYLOAD_DEDUP=1`: lookup `276.107→0ms`, appends `877,508→930,994`, append-uniform `1041.108→799.528ms`, but queue submission flat) |
 
 ## Verification methods
 
@@ -254,6 +256,8 @@ flowchart TD
   EncodePhase55["encode-phase.55\nargbuf reopen split\nopen_call 574ms\npost 891ms"]:::accepted
   EncodePhase56["encode-phase.56\nwhole-table argbuf reuse\n961k checks / 0 skips"]:::rejected
   EncodePhase57["encode-phase.57\npost-open residual split\nsmall bookkeeping children"]:::accepted
+  EncodePhase58["encode-phase.58\nbinding-plan split\nfragment largest child\nopt-in only"]:::accepted
+  EncodePhase59["encode-phase.59\nuniform dedup off\nappend_uniform -242ms\nqueue flat"]:::accepted
   Snapshot10["snapshot.10\nuniform-refresh fast path\nrefresh -59.6%\nFPS flat"]:::accepted
 
   Drawrun1 -->|"split-into"| Drawrun2
@@ -335,6 +339,8 @@ flowchart TD
   EncodePhase54 -->|"return to larger argbuf child"| EncodePhase55
   EncodePhase55 -->|"try pre-open whole-table skip"| EncodePhase56
   EncodePhase56 -->|"split residual instead"| EncodePhase57
+  EncodePhase57 -->|"check packet-plan residual"| EncodePhase58
+  EncodePhase53 -->|"test uniform payload dedup value"| EncodePhase59
 ```
 
 ## Results synthesis
@@ -1004,6 +1010,33 @@ sub-slice of the table-bind parent. Do not chase a single hidden post-open API
 child; the next argbuf work must either reduce reopen frequency with a
 correctness proof or consolidate the required cbuf decision/repoint control
 flow.
+
+[[state-churn-encode-encode-phase.58]] performs the same attribution-only split
+for the binding-packet plan parent. The useful signal is negative: fragment
+texture/sampler planning is the largest named child (`356.146ms`,
+`0.204682ms/present`, `48.3%` of named children), but the absolute size is
+smaller than the larger default owners such as argbuf setup, stream bind,
+binding-packet cache/probe, snapshot/replay, and present under-pipelining. The
+child timers are explicitly opt-in via
+`DXMT9_PERF_BINDING_PACKET_PLAN_SPLIT=1`; the default-off validation keeps the
+child counters at `0` and the parent near baseline (`0.314560ms/present`).
+Do not make binding-packet plan reuse the next primary FPS bet unless a future
+patch can reuse the fragment plan without a per-entry check that recreates the
+texture pre-resolve regression from [[state-churn-encode-encode-phase.16]].
+
+[[state-churn-encode-encode-phase.59]] closes the adjacent-uniform follow-up on
+the backend append side. Since [[snapshot-cache-snapshot.20]] reports `0`
+adjacent same-`uniformGeneration` submissions, the next question was whether the
+slot-local `DrawUniformPayload` dedup table is doing useful work at all. The
+diagnostic `DXMT9_DISABLE_DRAW_UNIFORM_PAYLOAD_DEDUP=1` skips lookup/reserve/link
+and appends every materialized payload. In a same-present no-gputrace run,
+lookup drops `276.107 -> 0ms` and append-copy rises `574.305 -> 629.058ms`;
+the targeted append-uniform parent improves `1041.108 -> 799.528ms`
+(`0.619707 -> 0.475910ms/present`). But
+`commit_chunk_queue_draw_submission_cpu_ms` is flat (`6813.183 -> 6817.526ms`)
+and completion/GPU movement is noise, so this is a diagnostic micro-win, not a
+new FPS owner. Keep the env for A/Bs; do not promote a default policy change
+without repeated runs or a memory-pressure check.
 
 ## How to run
 Every experiment here is a 3DMark05 GT1 run via the standard wrapper. This is a

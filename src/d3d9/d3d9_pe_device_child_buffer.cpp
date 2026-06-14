@@ -208,6 +208,9 @@ public:
   }
   HRESULT STDMETHODCALLTYPE Lock(UINT off, UINT size, void **pp,
                                  DWORD flags) noexcept override {
+    if (recorder_)
+      recorder_->NotifyPeFirstCallAfterPresentForChild(
+          "VertexBuffer::Lock", DXMT9_PE_CALLSITE_PC());
     // Wine d3d9 conformance: validate the argument shape before the
     // recorder flush so a bogus Lock never causes pending work to
     // commit. The four invariants below mirror dlls/d3d9/buffer.c
@@ -255,13 +258,23 @@ public:
   }
   HRESULT STDMETHODCALLTYPE
   GetDesc(D3DVERTEXBUFFER_DESC *pDesc) noexcept override {
+    const auto peCall = recorder_
+        ? recorder_->NotifyPeFirstCallAfterPresentForChild(
+              "VertexBuffer::GetDesc", DXMT9_PE_CALLSITE_PC())
+        : D3D9PePresentCallToken{};
+    const auto finishPeCall = [&](HRESULT hr) noexcept {
+      if (recorder_)
+        recorder_->NotifyPeCallReturnAfterPresentForChild(
+            peCall, "VertexBuffer::GetDesc", hr);
+      return hr;
+    };
     if (!pDesc)
-      return D3DERR_INVALIDCALL;
+      return finishPeCall(D3DERR_INVALIDCALL);
     D9CBufferDesc desc{};
     const HRESULT hr = hr32(dxmt9c_buffer_get_desc(b_, &desc));
     if (FAILED(hr)) {
       dxmt9DeviceDebugLog("vb_get_desc vb=%p -> hr=0x%08x", this, (unsigned)hr);
-      return hr;
+      return finishPeCall(hr);
     }
     pDesc->Format = D3DFMT_VERTEXDATA;
     pDesc->Type = D3DRTYPE_VERTEXBUFFER;
@@ -272,7 +285,7 @@ public:
     dxmt9DeviceDebugLog(
         "vb_get_desc vb=%p -> size=%u usage=0x%x pool=%u fvf=0x%x", this,
         desc.size, desc.usage, desc.pool, desc.fvf);
-    return S_OK;
+    return finishPeCall(S_OK);
   }
 };
 
@@ -369,6 +382,9 @@ public:
   }
   HRESULT STDMETHODCALLTYPE Lock(UINT off, UINT size, void **pp,
                                  DWORD flags) noexcept override {
+    if (recorder_)
+      recorder_->NotifyPeFirstCallAfterPresentForChild(
+          "IndexBuffer::Lock", DXMT9_PE_CALLSITE_PC());
     const HRESULT flushHr =
         flushChildRecorderForBufferLock(recorder_, b_, flags);
     if (FAILED(flushHr))
@@ -395,13 +411,23 @@ public:
   }
   HRESULT STDMETHODCALLTYPE
   GetDesc(D3DINDEXBUFFER_DESC *pDesc) noexcept override {
+    const auto peCall = recorder_
+        ? recorder_->NotifyPeFirstCallAfterPresentForChild(
+              "IndexBuffer::GetDesc", DXMT9_PE_CALLSITE_PC())
+        : D3D9PePresentCallToken{};
+    const auto finishPeCall = [&](HRESULT hr) noexcept {
+      if (recorder_)
+        recorder_->NotifyPeCallReturnAfterPresentForChild(
+            peCall, "IndexBuffer::GetDesc", hr);
+      return hr;
+    };
     if (!pDesc)
-      return D3DERR_INVALIDCALL;
+      return finishPeCall(D3DERR_INVALIDCALL);
     D9CBufferDesc desc{};
     const HRESULT hr = hr32(dxmt9c_buffer_get_desc(b_, &desc));
     if (FAILED(hr)) {
       dxmt9DeviceDebugLog("ib_get_desc ib=%p -> hr=0x%08x", this, (unsigned)hr);
-      return hr;
+      return finishPeCall(hr);
     }
     pDesc->Format = static_cast<D3DFORMAT>(desc.format);
     pDesc->Type = D3DRTYPE_INDEXBUFFER;
@@ -411,7 +437,7 @@ public:
     dxmt9DeviceDebugLog(
         "ib_get_desc ib=%p -> size=%u usage=0x%x pool=%u fmt=%u", this,
         desc.size, desc.usage, desc.pool, desc.format);
-    return S_OK;
+    return finishPeCall(S_OK);
   }
 };
 

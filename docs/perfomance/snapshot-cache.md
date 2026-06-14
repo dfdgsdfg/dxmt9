@@ -42,6 +42,8 @@ write" owner ([[hidden-backend-storage]]).
 | H19 | Batch miss flat-state sets can be reused by exact dirty generation | accepted CPU win; render/TSS/sampler flat reuse hit rates `90.12%` / `99.36%` / `79.93%`, hot-build `1.444→0.684ms/present`, snapshot submission `4.255→3.469ms/present`, FPS flat/noisy | [[snapshot-cache-snapshot.16]] |
 | H20 | Same-generation/lane draws can also elide adjacent uniform snapshots | rejected for GT1; state elision fires `411,758` times, but uniform elision fires `0` times because `uniformGeneration` changes across those groups | [[snapshot-cache-snapshot.17]] |
 | H21 | VS indexed-float fallback can safely hash full float constants but prefix int/bool tails | rejected as next target; safe tail reduction is real but only `20.720MB` / `5.47%` of batch VS-constant hash bytes | [[snapshot-cache-snapshot.18]] |
+| H22 | Batch-miss shader layout can be reused for reason-mask-safe misses | accepted micro-win; compatible rebuilds are `154,985 / 380,288` (`40.75%`), but the safe default subset is only `7,565 / 390,712` (`1.94%`), cutting shader-layout rebuild `0.3715→0.3386ms/present` | [[snapshot-cache-snapshot.19]] |
+| H23 | Adjacent uniform snapshot elision is blocked only by the same-state/lane safety gate | rejected; same-`uniformGeneration` adjacent submissions are `0`, including the different-state/lane opportunity bucket | [[snapshot-cache-snapshot.20]] |
 
 ## Verification methods
 
@@ -86,6 +88,11 @@ write" owner ([[hidden-backend-storage]]).
   still needs the full float register file but can keep int/bool constant tails
   usage-prefix bounded. Use this as an opportunity counter only; the current GT1
   sample reports a small tail (`272B` per call), not a next large CPU lever.
+- `d3d9_snapshot_cache_batch_miss_shader_layout_compatible_{hits,misses}` and
+  `_reuse_{hits,misses}` — separate the broad post-build compatibility ceiling
+  from the conservative reason-mask-safe default reuse. The current GT1 sample
+  shows many compatible rebuilds but only a small safe subset, so this is a
+  micro-cleanup counter rather than a major target.
 - `d3d9_snapshot_cache_batch_miss_uniform_build_*` — repeats the uniform-build
   component timers and fallback counters only while the batch-miss
   `makeDrawUniformPayloadFromState()` call is active. This prevents the
@@ -102,6 +109,11 @@ write" owner ([[hidden-backend-storage]]).
   opt-in same-generation/lane path could skip `DrawUniformPayload`
   materialization. In GT1 this closes as a no-opportunity target: state copy
   elision fires, uniform copy elision does not.
+- `d3d9_snapshot_uniform_adjacent_same_generation*` — proves whether adjacent
+  submissions have a reusable uniform payload even when the current same-state
+  elision gate rejects them. A non-zero `_diff_state_lane` bucket would need a
+  batch-boundary-safe handle-carry design before behavior changes; the current
+  GT1 sample is all `0`.
 - `d3d9_draw_state_cache_miss_after_{draw_packet,stream,index_buffer,texture,shader,fvf_vdecl}`
   — classifies which state delta caused each remaining miss (stream/IB dominate).
 - `commit_chunk_draw_delta_stream_handle` / `_ib_handle` — confirms real handle
@@ -144,6 +156,7 @@ flowchart TD
   S16["snapshot.16\nflat-state reuse\nhot-build/present -52.6%\nsnapshot/present -18.5%"]:::accepted
   S17["snapshot.17\nuniform N-1 elision\nstate elides 411k\nuniform elides 0"]:::rejected
   S18["snapshot.18\nVS indexed-float shape\nsafe tail only 20.7MB\nreject next target"]:::rejected
+  S19["snapshot.19\nshader-layout safe reuse\nreuse only 1.94%\nsmall CPU cleanup"]:::accepted
 
   S1 -->|"hits=0 → split"| S2
   S2 -->|"−3% only → classify"| S3
@@ -164,7 +177,8 @@ flowchart TD
   S15 -->|"flat-state generations"| S16
   S16 -->|"try adjacent uniform reuse"| S17
   S17 -->|"measure indexed-float tail"| S18
-  S18 -.->|"fps proof still open"| OPEN["open CPU tracks\nraw-run state N-1,\ndirect-construct / interned state,\ncompletion_wait"]:::open
+  S18 -->|"measure shader-layout ceiling"| S19
+  S19 -.->|"fps proof still open"| OPEN["open CPU tracks\nraw-run state N-1,\ndirect-construct / interned state,\ncompletion_wait"]:::open
 ```
 
 ## Results synthesis
@@ -341,16 +355,34 @@ small, though: `20.720MB` over the batch-miss path, `272B` per call, and
 `5.47%` of batch VS-constant hash bytes. That is a possible micro-cleanup if the
 uniform hash code is being touched anyway, not the next GT1 FPS lever.
 
-Current priority after [[snapshot-cache-snapshot.18]]: snapshot rebuild remains
+The shader-layout reuse follow-up then closes another smaller batch-miss child.
+[[snapshot-cache-snapshot.19]] shows a broad post-build compatibility ceiling
+(`154,985 / 380,288`, `40.75%`), but the reason-mask-safe default subset is
+only `7,565 / 390,712` (`1.94%`). The accepted conservative reuse cuts
+shader-layout rebuild from `0.3715` to `0.3386ms/present`, with pass status and
+normal image metrics, but it does not move completion wait.
+
+The adjacent uniform-generation follow-up then closes the remaining safety-gate
+ambiguity in the uniform-elision idea. [[snapshot-cache-snapshot.20]] adds
+`d3d9_snapshot_uniform_adjacent_same_generation*` counters while keeping the
+existing same-state/lane elision predicate unchanged. The GT1 run reports
+`0` adjacent same-`uniformGeneration` submissions, including `0` in the
+different-state/lane opportunity bucket. Therefore cross-batch
+`DrawUniformHandle` carry or batch-front re-materialization would have no
+measured opportunity in this workload; the residual append-uniform cost belongs
+to payload interning/storage and lookup width, not missing adjacent snapshot
+elision.
+
+Current priority after [[snapshot-cache-snapshot.20]]: snapshot rebuild remains
 worth tracking, but it is still behind backend encode and completion wait as an
 average-FPS owner. Further snapshot work should target proved larger copy-policy
 children only: raw-run / generation-lane state N-1 materialization,
 direct construction into queue-owned storage, or interned compact draw-state
 storage. Do not pursue adjacent uniform snapshot reuse for GT1 without a new
-non-zero `d3d9_snapshot_uniform_elided` counter sample, and do not promote VS
-indexed-float partial hashing as a standalone optimization. Average-FPS proof
-still needs movement in the pacing/overlap lane or a larger end-to-end CPU
-reduction.
+non-zero `d3d9_snapshot_uniform_adjacent_same_generation` counter sample, and do
+not promote VS indexed-float partial hashing or broad shader-layout reuse as
+standalone optimizations. Average-FPS proof still needs movement in the
+pacing/overlap lane or a larger end-to-end CPU reduction.
 
 ## How to run
 Every experiment here is a 3DMark05 GT1 run via the standard wrapper. This is a

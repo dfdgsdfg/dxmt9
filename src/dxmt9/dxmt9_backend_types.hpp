@@ -7,6 +7,7 @@
 #include <array>
 #include <bit>
 #include <chrono>
+#include <cstdlib>
 #include <cstdint>
 #include <limits>
 #include <span>
@@ -258,6 +259,14 @@ inline std::size_t chunkSlotUniformLookupBucket(u64 hash, std::size_t bucketCoun
   DXMT_ASSERT(bucketCount > 0 && "uniform lookup bucket table must not be empty");
   const u64 mixedHash = hash ^ (hash >> 32u) ^ (hash >> 17u);
   return static_cast<std::size_t>(mixedHash % bucketCount);
+}
+
+inline bool chunkSlotDisableDrawUniformPayloadDedup() noexcept {
+  static const bool disabled = []() noexcept {
+    const char* env = std::getenv("DXMT9_DISABLE_DRAW_UNIFORM_PAYLOAD_DEDUP");
+    return env && env[0] != '\0' && env[0] != '0';
+  }();
+  return disabled;
 }
 
 class ChunkSlotPerfScope {
@@ -623,7 +632,9 @@ struct ChunkSlot {
     {
       detail::ChunkSlotPerfScope scope(
           dxmt9::perf::countDrawUniformPayloadAppendReserveCpuTime);
-      reserveDrawUniformPayloadLookup(drawUniformPayloads.size() + 1u);
+      if (!detail::chunkSlotDisableDrawUniformPayloadDedup()) {
+        reserveDrawUniformPayloadLookup(drawUniformPayloads.size() + 1u);
+      }
     }
     {
       detail::ChunkSlotPerfScope scope(
@@ -633,7 +644,9 @@ struct ChunkSlot {
     {
       detail::ChunkSlotPerfScope scope(
           dxmt9::perf::countDrawUniformPayloadAppendLinkCpuTime);
-      appendDrawUniformPayloadLookup(uniformIndex);
+      if (!detail::chunkSlotDisableDrawUniformPayloadDedup()) {
+        appendDrawUniformPayloadLookup(uniformIndex);
+      }
     }
     lastUniformHandle = uniformHandle;
     return uniformHandle;
@@ -701,7 +714,10 @@ struct ChunkSlot {
       return;
     }
 
-    DrawUniformHandle uniformHandle = findDrawUniformPayload(uniformPayload, uniformHandleCandidate);
+    DrawUniformHandle uniformHandle =
+        detail::chunkSlotDisableDrawUniformPayloadDedup()
+            ? DrawUniformHandle{}
+            : findDrawUniformPayload(uniformPayload, uniformHandleCandidate);
     const bool needsUniformAppend = !uniformHandle.valid();
     CommandPayloadIndex drawRunRecordIndex{};
     if (!detail::chunkSlotTryMakeCommandPayloadIndex(commandHeaders.size(), drawRunRecords.size(),
@@ -738,7 +754,9 @@ struct ChunkSlot {
     detail::chunkSlotReserveAtLeast(drawPayloadArena, drawPayloadArena.size() + payloadBytes);
     if (needsUniformAppend) {
       detail::chunkSlotReserveAtLeast(drawUniformPayloads, drawUniformPayloads.size() + 1u);
-      reserveDrawUniformPayloadLookup(drawUniformPayloads.size() + 1u);
+      if (!detail::chunkSlotDisableDrawUniformPayloadDedup()) {
+        reserveDrawUniformPayloadLookup(drawUniformPayloads.size() + 1u);
+      }
     }
 
     if (needsUniformAppend) {
@@ -849,7 +867,9 @@ struct ChunkSlot {
       detail::chunkSlotReserveAtLeast(drawPayloadArena, drawPayloadArena.size() + payloadBytes);
       detail::chunkSlotReserveAtLeast(drawUniformPayloads,
                                       drawUniformPayloads.size() + submissions.size());
-      reserveDrawUniformPayloadLookup(drawUniformPayloads.size() + submissions.size());
+      if (!detail::chunkSlotDisableDrawUniformPayloadDedup()) {
+        reserveDrawUniformPayloadLookup(drawUniformPayloads.size() + submissions.size());
+      }
     }
 
     DXMT_ASSERT(submissions.front().stateMaterialized &&
@@ -912,7 +932,9 @@ struct ChunkSlot {
       for (std::size_t i = 0; i < submissions.size(); ++i) {
         DrawUniformHandle uniformHandle{};
         if (submissions[i].uniforms.has_value()) {
-          uniformHandle = findDrawUniformPayload(submissions[i].uniformPayload());
+          if (!detail::chunkSlotDisableDrawUniformPayloadDedup()) {
+            uniformHandle = findDrawUniformPayload(submissions[i].uniformPayload());
+          }
           if (!uniformHandle.valid()) {
             uniformHandle =
                 appendDrawUniformPayload(submissions[i].uniformPayload());

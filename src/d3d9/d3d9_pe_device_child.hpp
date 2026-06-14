@@ -4,9 +4,18 @@
 
 #include "d3d9_pe_state_shadow.hpp"
 
+#include <array>
 #include <cstddef>
 #include <cstdint>
 #include <vector>
+
+#if defined(__GNUC__) || defined(__clang__)
+#define DXMT9_PE_CALLSITE_PC() (__builtin_return_address(0))
+#else
+#define DXMT9_PE_CALLSITE_PC() nullptr
+#endif
+
+static constexpr std::size_t D3D9PePresentCallStackDepth = 12;
 
 // PE-side snapshot taken by D3D9StateBlockImpl::Capture(). Lives entirely in
 // the PE process; never crosses the unix boundary. Holds enough state to
@@ -32,6 +41,17 @@ struct D3D9StateBlockShadow {
   bool initialized = false;
 };
 
+struct D3D9PePresentCallToken {
+  bool tracked = false;
+  std::uint64_t ordinal = 0;
+  std::uint32_t callCount = 0;
+  std::int64_t returnNs = 0;
+  std::int64_t entryNs = 0;
+  const void *callerPc = nullptr;
+  std::uint8_t callerStackCount = 0;
+  std::array<const void *, D3D9PePresentCallStackDepth> callerStack{};
+};
+
 struct D3D9PeRecorderFlush {
   virtual HRESULT FlushPeRecorderForChild() = 0;
   virtual bool IsStateBlockRecordingForChild() const = 0;
@@ -41,6 +61,19 @@ struct D3D9PeRecorderFlush {
   virtual bool IsChunkRecorderEnabledForChild() const = 0;
   virtual HRESULT AppendRecordForChild(const void *data, size_t bytes) = 0;
   virtual HRESULT FlushPeRecorderForBufferHazardForChild(D9CBuffer *buffer) = 0;
+  virtual D3D9PePresentCallToken NotifyPeFirstCallAfterPresentForChild(
+      const char *callName, const void *callerPc = nullptr) noexcept {
+    (void)callName;
+    (void)callerPc;
+    return {};
+  }
+  virtual void NotifyPeCallReturnAfterPresentForChild(
+      const D3D9PePresentCallToken &token,
+      const char *callName, HRESULT hr) noexcept {
+    (void)token;
+    (void)callName;
+    (void)hr;
+  }
 
   // PE-shadow stateblock support. Captures the device's current transform /
   // shader-constant / vdecl shadow into `out`, AddRef'ing any held COM

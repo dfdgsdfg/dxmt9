@@ -33,6 +33,19 @@ GPU frame-time story is owned by [[hidden-backend-storage]] /
 | H11 | `DXMT9_DISABLE_PRESENT_BOUNDARY` or deeper `DXMT9_MAX_FRAME_LATENCY` makes the producer run while completion waits | rejected as current owner | [[present-pacing-boundary-latency-ab.06]]: fresh baseline, boundary-disabled, and latency6 scouts all keep `present_boundary_waits=0`, `completion_wait_without_enqueue_ms≈44.0-44.5s`, and sampled FPS p50 `17.8-18.0`. `DXMT9_DISABLE_PRESENT_BOUNDARY=1` reaches the runtime (`present_boundary_skipped=1740`) but creates only one noise-level overlap event also seen in baseline. The remaining owner is before `CommitPublish` or outside dxmt9's explicit boundary wait. |
 | H12 | The post-wait producer gap is app/Wine/macdrv-side, before unix `commit_chunk` entry | rejected; unix replay/submit owner accepted | [[present-pacing-prepublish-stage.07]]: wait-end -> `commit_chunk` entry p50/p95 is only `1.040/2.668ms`, while wait-end -> `CommitPublish` is `15.894/29.912ms` and wait-end -> Metal commit is `22.276/54.146ms`. `commit_chunk_replay_cpu_ms=18981.064`, nested queue draw submission is `8154.509ms`, and nested snapshot submission is `6636.191ms`, so the average-FPS lane remains commit/replay/snapshot/encode, not app/Wine event pacing. |
 | H13 | Same-sample stage deltas can split the exposed no-enqueue gap without subtracting unrelated percentiles | accepted | [[present-pacing-stage-delta.08]]: current 120s scout keeps `completion_wait_with_enqueue_ms=0`, then splits the exposed path into `commit_chunk entry -> CommitPublish` p50/p95 `6.172/28.101ms`, `CommitPublish -> EncodeDequeue` `2.535/5.086ms`, and `EncodeDequeue -> commandBuffer.commit()` `11.384/22.232ms`. Queue wake is secondary; pre-publish replay/submit/snapshot and backend encode are the two load-bearing CPU stages. |
+| H14 | The app thread is blocked inside PE `Present()` for the whole completion wait | rejected | [[present-pacing-pe-present-timing.09]]: with `DXMT9_PE_RECORDER_STATS=1 DXMT_LOG_LEVEL=info`, PE `Present total_ms` p50/p95/max is only `2.580/5.077/22.659ms`, almost entirely `flush_ms`, while `completion_wait_ms` p50/p95/max is `28.419/39.576/52.217ms`. The next unix chunk still crosses quickly after completion (`wait_to_commit_chunk_entry` p50/p95 `0.888/3.025ms`), but that is not a PE API-call timestamp. |
+| H15 | The app/Wine loop does not call D3D9 until Metal completion | rejected; PE-local next-frame recording accepted | [[present-pacing-pe-call-cadence.10]]: after successful PE `Present`, the next PE D3D9 call is almost always `BeginScene` (`1702 / 1703` rows) and arrives with `entry_delta_ms` p50/p95/p99 `0.310/0.436/1.811ms`. `completion_wait_with_enqueue_ms=0` still holds, so the missing overlap is not app API-call cadence; it is PE-recorder/unix submission boundary or later (`commit_chunk` replay/publish/snapshot and backend encode). |
+| H16 | PE-local next-frame work crosses into unix immediately after the first PE call | rejected; chunk-fill cadence accepted | [[present-pacing-pe-chunk-cadence.11]]: first PE call p50 is `0.308ms`, but the first non-empty chunk after `Present` is always `capacity_post`, always `64` records, and crosses into unix at steady p50/p95 `19.908/34.810ms` after `Present` return. The first bridge itself is cheap (`bridge_ms` p50/p95 `0.504/0.617ms`). |
+| H17 | Lowering PE chunk capacity from `64` to `32` creates producer run-ahead | rejected as a simple knob | [[present-pacing-pe-chunk-size-ab.12]]: chunk32 reaches the recorder (`recordCount=32`) and slightly lowers first-chunk p50 (`19.908 -> 19.034ms`) and no-enqueue wait-to-commit-entry p50 (`0.917 -> 0.471ms`), but `completion_wait_with_enqueue_ms` remains `0.000` and replay/encode do not materially improve. Earlier publish remains an architecture experiment, not a global capacity knob. |
+| H18 | The first chunk is late because filling 64 records takes most of the time | rejected; first-record append delay accepted | [[present-pacing-pe-record-milestones.13]]: after `Present`, `BeginScene` still arrives at p50 `0.306ms`, but the first appendable record is `apply_state` at p50 `18.061ms`. Records `1 -> 64` then arrive quickly (`18.061 -> 19.683ms` p50), and the first chunk follows at `19.706ms`. Chunk threshold is not the front gate; the first record-producing state/draw boundary is. |
+| H19 | The hidden N+1 dependency sits on one of the first D3D9 calls after `Present` | rejected; initial call-sequence attribution superseded | [[present-pacing-pe-call-sequence.14]]: calls `1..4` after `Present` are `BeginScene`, `GetRenderTarget`, `GetRenderTarget`, and `SetRenderTarget`, all at p50 `<= 0.532ms`. The run initially placed the long gap before `SetVertexShaderConstantF`, but that was incomplete because `Clear` and `EndScene` were not in the call milestone sequence. |
+| H20 | The first record-producing front gate is `Clear`, after a post-RT-setup gap | accepted | [[present-pacing-pe-clear-gate.15]]: with `Clear`/`EndScene` included, call 5 is steady `Clear` at p50 `18.408ms`; `SetRenderTarget` return is p50 `0.581ms` with only `0.015ms` duration, so `SetRenderTarget` is not the sleeper. The p50 gap is `SetRenderTarget` return -> `Clear` entry `17.635ms`; record 1 `apply_state` is appended inside `Clear` at p50 `18.554ms`, and the first `capacity_post` chunk follows at p50 `20.400ms`. |
+| H21 | Frame-sampling logs create or amplify the post-RT-setup `Clear` gate | rejected | [[present-pacing-pe-clear-nosampling.16]]: removing `--frame-sampling` drops `dxmt9-perf-frame` lines from `1,726` to `0`, but `SetRenderTarget` return -> `Clear` entry remains p50 `17.651ms -> 17.646ms` and first chunk remains p50 `20.402ms -> 20.386ms`. The perf-frame line is a correlation marker, not the stall owner. |
+| H22 | The apparent `SetRenderTarget` -> `Clear` gap is really an uninstrumented child getter stall | rejected; hidden calls found but not sleeper | [[present-pacing-pe-wide-call-coverage.17]]: wider coverage reveals `Surface::GetDesc` and `Texture::GetSurfaceLevel` before `Clear`, but child return logging shows they return quickly (`Surface::GetDesc` call 7 duration p50 `0.013ms`, `Texture::GetSurfaceLevel` p50 `0.054ms`). The last logged return is p50 `0.674ms`, and `Clear` still enters at p50 `18.421ms`, leaving a `17.656ms` p50 gap. |
+| H23 | The remaining front gap is a broad app/Wine runloop or macdrv sleep | rejected as broad owner; exact PC owner open | [[present-pacing-xctrace-threadstate.18]]: re-exported `Metal System Trace` CPU tables show the D3D/Wine producer thread `0x3b1b5c` has `15,354ms` Running sample weight across a `15.563s` trace, while `runloop-events` has only two `3DMark05.exe` rows on a different main thread. This does not pinpoint the current `SetRenderTarget` -> `Clear` PC, but it weakens sleep/runloop as the broad explanation. |
+| H24 | The `Clear` front gate is a hidden dxmt9 D3D9 API wait | rejected; wrapper-level attribution accepted, higher owner superseded | [[present-pacing-pe-caller-pc.19]]: PE caller-PC/module logging shows the steady sequence is identical in `1,716 / 1,716` ordinals. `SetRenderTarget` returns from 3DMark05.exe wrapper RVA `0x2AF4F` at p50 `0.730ms`, its nested `Surface::GetDesc` caller resolves to `d3d9.dll!0x13EE9` and takes only p50 `0.020ms`, and `Clear` enters later from 3DMark05.exe wrapper RVA `0x2B061` at p50 `18.373ms`. The p50 `17.484ms` gap is not inside `SetRenderTarget`, `Clear`, or a hidden child getter. Caller-stack follow-up supersedes the claim that these wrapper RVAs are the higher render-loop owner. |
+| H25 | The stable owner above the wrapper stubs is still hidden | rejected; 3DMark05 command-dispatch cadence accepted | [[present-pacing-pe-caller-stack.20]]: PE stack logging shows milestones 2..8 share higher frame `3DMark05.exe+0x88760` in `1,707 / 1,707` matching ordinals. `0x2AF4F` and `0x2B061` are D3D wrapper stubs; `0x88760` is the return site of a command-object dispatcher (`0x4886E0`) whose virtual `call *0x18(%eax)` executes the D3D wrapper command. `SetRenderTarget` return -> `Clear` entry remains p50 `17.429ms`. The front gate is therefore when 3DMark05 dispatches the record-producing `Clear` command object, not a dxmt9 boundary/latency/ring wait. |
+| H26 | The `Clear` front gate or next Metal enqueue waits on dxmt9 completed-seq/waterline publication | rejected for dxmt9 completion signal; actual Metal/CA completion remains separate | [[present-pacing-completion-signal-delay.21]]: `DXMT9_PERF_COMPLETION_SIGNAL_DELAY_MS=8` applies `1696` sleeps / `13568ms` after `waitUntilCompleted()` and before completed-seq publication, but `SetRenderTarget -> Clear` p50 stays `17.631 -> 17.550ms`, first chunk p50 stays `20.802 -> 20.827ms`, and next enqueue p50 stays `21.558 -> 20.274ms`. The front gate is not waiting on dxmt9's completion signal. |
 
 ## Verification methods
 
@@ -70,6 +83,22 @@ GPU frame-time story is owned by [[hidden-backend-storage]] /
   `completion_no_enqueue_stage_encode_dequeue_to_command_buffer_commit_*`
   record same-cycle deltas after a no-enqueue wait. Use these instead of
   subtracting independent wait-end percentile rows.
+- **Completion-signal perturbation**:
+  `DXMT9_PERF_COMPLETION_SIGNAL_DELAY_MS=N` delays completed-seq/waterline
+  publication after `waitUntilCompleted()` returns. Confirm application through
+  `completion_signal_delay` and `completion_signal_delay_ms`, then compare PE
+  cadence and `completion_no_enqueue_wait_to_next_enqueue_*` against a baseline.
+- **PE cadence telemetry**: with `DXMT9_PE_RECORDER_STATS=1` and
+  `DXMT_LOG_LEVEL=info`, `pe_present_timing` measures PE `Present()` itself,
+  `pe_present_next_call` measures the first PE D3D9 call after `Present`
+  returns, `pe_present_call_milestone` samples the first calls in that
+  post-Present sequence, `pe_present_call_return` measures selected call
+  durations/return timestamps, and `pe_present_next_chunk` measures the first
+  non-empty PE chunk crossing into unix after that return. This distinguishes
+  "the app did not call D3D9" from "the app recorded PE-local work but
+  chunk/Metal submission did not happen yet." `pe_present_record_milestone`
+  names appendable record cadence; its `call` field is last-call context and
+  may be stale when append happens through a helper/flush path.
 - **Env-knob A/B**: parent shell prefix
   (`DXMT9_LAYER_DISPLAY_SYNC=0 bash scripts/tools/run_3dmark05_perf_probe.sh
   --no-gputrace --suffix <name>`). The wrapper's `env "${env_args[@]}"
@@ -101,6 +130,19 @@ flowchart TD
   BoundaryLatency["boundary-latency-ab.06\nDISABLE_PRESENT_BOUNDARY / latency6 flat\nexplicit boundary not owner"]
   PrePublish["prepublish-stage.07\ncommit_chunk entry p50 1.0ms\npublish p50 15.9ms\nreplay/submit owner"]
   StageDelta["stage-delta.08\nsame-sample split\nentry→publish p50 6.2ms\nencode→commit p50 11.4ms"]
+  PePresent["pe-present-timing.09\nPE Present p50 2.6ms\ncompletion wait p50 28.4ms\nPresent-block rejected"]
+  PeCallCadence["pe-call-cadence.10\nnext PE call p50 0.31ms\n1702/1703 BeginScene\napp-call wait rejected"]
+  PeChunkCadence["pe-chunk-cadence.11\nfirst chunk p50 19.9ms\ncapacity_post 64 records\nchunk-fill cadence accepted"]
+  PeChunkSize["pe-chunk-size-ab.12\n64→32 capacity\nfirst chunk p50 19.9→19.0ms\nno enqueue overlap"]
+  PeRecordMilestones["pe-record-milestones.13\nBeginScene p50 0.31ms\nrecord1 p50 18.1ms\nrecord64 p50 19.7ms"]
+  PeCallSequence["pe-call-sequence.14\ncalls 1..4 <=0.53ms\nClear omitted\nsuperseded"]
+  PeClearGate["pe-clear-gate.15\nSetRT return p50 0.58ms\nClear p50 18.41ms\nrecord1 inside Clear"]
+  PeClearNoSampling["pe-clear-nosampling.16\nframe sampling off\nperf-frame lines 1726->0\ngap p50 17.65->17.65ms"]
+  PeWideCall["pe-wide-call-coverage.17\nSurface::GetDesc / Texture::GetSurfaceLevel visible\nlast return p50 0.674ms\nClear p50 18.421ms"]
+  PeThreadState["xctrace-threadstate.18\nproducer 15.354s Running / 15.563s\nrunloop sleep weakened\nexact PE PC open"]
+  PeCallerPc["pe-caller-pc.19\nsteady wrapper PCs 1716/1716\nSetRT wrapper RVA 0x2AF4F\nClear wrapper RVA 0x2B061\ngap p50 17.484ms"]
+  PeCallerStack["pe-caller-stack.20\nhigher caller frame 0x88760\ncommand dispatcher 0x4886E0\nSetRT→Clear gap p50 17.429ms"]
+  CompletionSignalDelay["completion-signal-delay.21\n8ms x1696 completion-signal delay\nSetRT→Clear and first chunk flat"]
   FrameLatency["frame-latency.01\nMAX_FRAME_LATENCY=3 + CAP=0\n(rejected: Δ +0.07%)"]
   AsyncAcq["async-acquire.01\nPRESENT_ASYNC_ACQUIRE=1\n(rejected: axis < 0.5% of wait)"]
   EncodeBudget["encode-budget.01\nencode_chunk p50 20.45 ms\nvs 16.67 ms vsync slot\n(attribution accepted)"]
@@ -140,8 +182,28 @@ flowchart TD
   PipelineOverlap --> BoundaryLatency
   BoundaryLatency --> PrePublish
   PrePublish --> StageDelta
+  StageDelta --> PePresent
+  PePresent --> PeCallCadence
+  PeCallCadence --> PeChunkCadence
+  PeChunkCadence --> PeChunkSize
+  PeChunkSize --> PeRecordMilestones
+  PeRecordMilestones --> PeCallSequence
+  PeCallSequence --> PeClearGate
+  PeClearGate --> PeClearNoSampling
+  PeClearNoSampling --> PeWideCall
+  PeWideCall --> PeThreadState
+  PeThreadState --> PeCallerPc
+  PeCallerPc --> PeCallerStack
+  PeCallerStack --> CompletionSignalDelay
   PrePublish --> EncodeBudget
   StageDelta --> EncodeBudget
+  PeChunkCadence --> EncodeBudget
+  PeChunkSize --> EncodeBudget
+  PeRecordMilestones --> EncodeBudget
+  PeCallSequence --> EncodeBudget
+  PeClearGate --> EncodeBudget
+  PeClearNoSampling --> EncodeBudget
+  PeWideCall --> EncodeBudget
   PipelineOverlap --> EncodeBudget
   FrameLatency --> EncodeBudget
   AsyncAcq --> EncodeBudget
@@ -172,8 +234,10 @@ flowchart TD
   TexturePreResolve --> Remaining
   Remaining --> SCE
 
-  class DSync,EncodeBudget,CurrentImmediate,CompletionStatus,CurrentOwner,PipelineOverlap,PrePublish,StageDelta accepted
-  class FrameLatency,AsyncAcq,WorkA,StateNoop,DirtyIdentity,TexturePreResolve,BoundaryLatency rejected
+  class DSync,EncodeBudget,CurrentImmediate,CompletionStatus,CurrentOwner,PipelineOverlap,PrePublish,StageDelta,PeChunkCadence,PeRecordMilestones,PeClearGate accepted
+  class FrameLatency,AsyncAcq,WorkA,StateNoop,DirtyIdentity,TexturePreResolve,BoundaryLatency,PePresent,PeCallCadence,PeChunkSize,PeCallSequence rejected
+  class PeClearNoSampling,PeWideCall,PeThreadState rejected
+  class PeCallerPc,PeCallerStack,CompletionSignalDelay accepted
   class FixProposal,Remaining,SCE proposed
   class Attribution,NextSplit,CleanGate,ReopenMask,Identity,IdentitySmoke,PacketSplit,PlanDirect,SnapshotSplit,SnapshotHash,PayloadSplit,UsageHash,FfpZero,ArgbufOpen,FastAppend,StreamBindSplit,TextureSplit,SamplerSkip,SamplerHash accepted
 ```
@@ -418,6 +482,94 @@ flowchart TD
   `EncodeDequeue -> commandBuffer.commit()` `11.384/22.232ms`. Queue wake is
   secondary; the two primary CPU stages are pre-publish replay/submit/snapshot
   and backend encode.
+- [[present-pacing-pe-present-timing.09]] — REJECTED PRESENT-BLOCK OWNER.
+  PE `Present()` is not the whole completion wait: `Present total_ms`
+  p50/p95/max is `2.580/5.077/22.659ms` while `completion_wait_ms`
+  p50/p95/max is `28.419/39.576/52.217ms`. The next unix chunk crossing still
+  happens quickly after completion, but that is not an app API-call timestamp.
+- [[present-pacing-pe-call-cadence.10]] — REJECTED APP-CALL WAIT OWNER /
+  ACCEPTED PE-LOCAL RECORDING SHAPE. The first PE call after successful
+  `Present` is almost always `BeginScene` (`1702 / 1703` rows) and arrives
+  with `entry_delta_ms` p50/p95/p99 `0.310/0.436/1.811ms`. The app starts
+  next-frame PE work quickly; the reason `completion_wait_with_enqueue_ms`
+  remains zero must be PE-recorder/unix submission boundary or later.
+- [[present-pacing-pe-chunk-cadence.11]] — ACCEPTED ATTRIBUTION. The first
+  PE call is fast, but the first non-empty PE chunk after `Present` is always
+  a `capacity_post` flush of `64` records and crosses into unix at steady
+  p50/p95 `19.908/34.810ms` after `Present` return. The first bridge itself
+  is cheap (`bridge_ms` p50/p95 `0.504/0.617ms`), so the gap is PE-local chunk
+  fill plus later replay/publish/encode, not app API-call absence.
+- [[present-pacing-pe-chunk-size-ab.12]] — REJECTED SIMPLE KNOB. Lowering
+  `DXMT9_PE_CHUNK_MAX_RECORDS` from `64` to `32` proves the chunk boundary is
+  capacity-driven, but it does not create producer run-ahead:
+  `completion_wait_with_enqueue_ms` stays `0.000`. First-chunk p50 only moves
+  `19.908 -> 19.034ms`; replay and encode stay flat/noisy. Treat earlier
+  publish as a targeted architecture experiment, not a global capacity default.
+- [[present-pacing-pe-record-milestones.13]] — ACCEPTED ATTRIBUTION. The
+  missing middle between fast `BeginScene` and late first chunk is the first
+  appendable record: `BeginScene` p50 is `0.306ms`, but record 1 is an
+  `apply_state` at p50 `18.061ms`; record 64 follows at `19.683ms`, and the
+  first chunk follows at `19.706ms`. The front gate is not filling 64 records.
+  It is the state/draw boundary that first materializes PE-local state into a
+  chunk record.
+- [[present-pacing-pe-call-sequence.14]] — SUPERSEDED COVERAGE GAP. Calls
+  `1..4` after `Present` are early RT setup and all arrive at p50
+  `<= 0.532ms`, but the apparent call 5 `SetVertexShaderConstantF` gap was
+  incomplete because `Clear` and `EndScene` were not yet in the call milestone
+  sequence.
+- [[present-pacing-pe-clear-gate.15]] — ACCEPTED ATTRIBUTION. With `Clear` and
+  `EndScene` included, steady call 5 is `Clear` at p50 `18.408ms`.
+  `SetRenderTarget` returns at p50 `0.581ms` and lasts only `0.015ms`, so it is
+  not the sleeper. The exposed gap is `SetRenderTarget` return -> `Clear`
+  entry p50/p95 `17.635/30.489ms`; record 1 is `apply_state` inside `Clear`
+  at p50 `18.554ms`; first chunk is `capacity_post` at p50 `20.400ms`.
+- [[present-pacing-pe-clear-nosampling.16]] — REJECTED SAMPLING ARTIFACT.
+  Removing `--frame-sampling` drops `dxmt9-perf-frame` lines from `1,726` to
+  `0`, but the exposed `SetRenderTarget` return -> `Clear` entry gap stays
+  p50 `17.651 -> 17.646ms`, and the first chunk stays p50
+  `20.402 -> 20.386ms`. The frame summary log is not the gap owner.
+- [[present-pacing-pe-wide-call-coverage.17]] — REJECTED CHILD-GETTER STALL.
+  Wider coverage finds previously hidden early calls:
+  `Surface::GetDesc`, `Texture::GetSurfaceLevel`, another `GetRenderTarget`,
+  `SetRenderTarget`, and another `Surface::GetDesc`. Return logging rejects
+  them as sleepers: the last `Surface::GetDesc` returns at p50 `0.674ms`, but
+  `Clear` enters at p50 `18.421ms`; the last-return -> `Clear` gap is
+  p50/p95 `17.656/30.638ms`.
+- [[present-pacing-xctrace-threadstate.18]] — REJECTED BROAD RUNLOOP SLEEP /
+  ACCEPTED CPU-RUNNING SHAPE. Re-exported `phase43` `Metal System Trace` CPU
+  tables show thread `3DMark05.exe (0x3b1b5c)` with `15,354ms` Running sample
+  weight across a `15.563s` trace. CA present request gaps are p50/p95
+  `74.398/98.436ms`, request -> presented handler p50/p95 is
+  `33.637/42.348ms`, and `runloop-events` has only two `3DMark05.exe` rows on
+  a different main thread. This does not identify the exact current
+  `SetRenderTarget` -> `Clear` PC, but weakens broad app/Wine runloop sleep as
+  the front-gap owner.
+- [[present-pacing-pe-caller-pc.19]] — REJECTED HIDDEN DXMT9 API WAIT /
+  ACCEPTED WRAPPER-LEVEL GAP. Caller-PC/module logging on the existing
+  `DXMT9_PE_RECORDER_STATS=1` path shows the steady post-`Present` call
+  sequence is identical in `1,716 / 1,716` ordinals. `SetRenderTarget`
+  returns from 3DMark05.exe wrapper RVA `0x2AF4F` at p50 `0.730ms`, the nested
+  `Surface::GetDesc` resolves to `d3d9.dll!0x13EE9` and takes only p50
+  `0.020ms`, and `Clear` enters from 3DMark05.exe wrapper RVA `0x2B061` at
+  p50 `18.373ms`. Caller-stack follow-up supersedes the higher-owner claim:
+  these PCs are D3D wrapper stubs.
+- [[present-pacing-pe-caller-stack.20]] — ACCEPTED COMMAND-DISPATCH CADENCE.
+  PE stack logging shows milestones 2..8 share higher frame
+  `3DMark05.exe+0x88760` in `1,707 / 1,707` matching ordinals. Disassembly
+  identifies `0x88760` as the return site of command-object dispatcher
+  `0x4886E0`, where virtual `call *0x18(%eax)` executes D3D wrapper commands.
+  `SetRenderTarget` return -> `Clear` entry remains p50 `17.429ms`, so the P4
+  front gate is when 3DMark05 dispatches the record-producing `Clear` command
+  object, not a dxmt9 boundary/latency/ring wait.
+- [[present-pacing-completion-signal-delay.21]] — REJECTED DXMT9 COMPLETION
+  SIGNAL DEPENDENCY. `DXMT9_PERF_COMPLETION_SIGNAL_DELAY_MS=8` applies
+  `1696` sleeps / `13568ms` after `waitUntilCompleted()` and before
+  completed-seq publication, but PE cadence remains flat:
+  `SetRenderTarget -> Clear` p50 `17.631 -> 17.550ms`, record 1 p50
+  `19.025 -> 19.011ms`, first chunk p50 `20.802 -> 20.827ms`, and
+  next-enqueue p50 `21.558 -> 20.274ms`. This rejects a dxmt9
+  completed-seq/waterline dependency; it does not test a lower actual Metal/CA
+  completion dependency because the perturbation occurs after Metal completion.
 
 ## Cross-links
 
@@ -456,6 +608,56 @@ flowchart TD
 - The post-wait producer path reaches unix `commit_chunk` quickly; the exposed
   gap expands inside commit/replay/submit before queue publish, then inside
   backend encode after `EncodeDequeue`.
+- The fast post-wait unix crossing must not be misread as a PE API-call
+  timestamp. PE `Present()` itself is not the hidden `completion_wait_ms`
+  sleeper: its p50/p95 is `2.580/5.077ms` versus completion wait
+  `28.419/39.576ms`.
+- The app/Wine loop does call back into PE D3D9 almost immediately after
+  `Present` returns. The first next-frame PE call is `BeginScene` in
+  `1702 / 1703` rows, with `entry_delta_ms` p50/p95 `0.310/0.436ms`.
+  Therefore the no-enqueue completion window is not caused by missing app API
+  calls; it is caused by PE-local recording not becoming a Metal enqueue until
+  the PE-recorder/unix submission boundary or later.
+- The first non-empty PE chunk after `Present` is not immediate. It is a
+  `capacity_post` flush of `64` records at steady p50/p95
+  `19.908/34.810ms` after `Present` return, while the first bridge call itself
+  is only `0.504/0.617ms` p50/p95. This identifies PE chunk-fill cadence as the
+  first exposed boundary before unix replay/publish/encode.
+- The first-call dependency hypothesis is now too broad, and the first
+  record-producing D3D9 call is now identified. Calls `1..4` after `Present`
+  are immediate early setup, then the p50 `17.635ms` gap is between
+  `SetRenderTarget` return and `Clear` entry. The first appendable
+  `APPLY_STATE` record is produced inside `Clear`, not inside the early RT
+  setup calls.
+- The `SetRenderTarget` return -> `Clear` entry gap is not caused by
+  frame-sampling telemetry. A no-frame-sampling run removes all
+  `dxmt9-perf-frame` lines while preserving the same p50 gap and first-chunk
+  cadence.
+- Wider PE call coverage found hidden descriptor/subresource getters before
+  `Clear`, but return timestamps reject them as the sleeper. The final
+  meaningful logged D3D9 child getter returns at p50 `0.674ms`, leaving the
+  same p50 `17.656ms` gap before `Clear`.
+- Existing System Trace CPU tables weaken the broad "producer is sleeping in a
+  runloop/macdrv wait" explanation. The representative `phase43` sidecar shows
+  the D3D/Wine producer thread sampled as Running for `15,354ms` of a
+  `15.563s` trace, while CA present still has p50 `74.398ms` request cadence
+  and p50 `33.637ms` request -> presented-handler latency. The exact current
+  `SetRenderTarget` -> `Clear` program counter remains unmapped because that
+  trace predates the PE milestone markers.
+- PE caller-PC logging maps the remaining front gate to stable callsites.
+  Across `1,725` steady ordinals, `SetRenderTarget` returns from
+  3DMark05.exe PC `0x0042AF4F`, then `Clear` enters from 3DMark05.exe PC
+  `0x0042B061` after a p50 `17.453ms` gap. `Clear` itself is short
+  (p50 `0.231ms`) and produces record 1 immediately after entry. The front
+  gate is therefore between two app callsites, not inside dxmt9's
+  `SetRenderTarget`, `Clear`, descriptor/getter, lock, or query paths.
+- Delaying dxmt9's completion signal after Metal completion does not move the
+  front gate. The `DXMT9_PERF_COMPLETION_SIGNAL_DELAY_MS=8` perturbation
+  applies `1696` sleeps / `13568ms` before completed-seq publication, but
+  `SetRenderTarget -> Clear` p50 remains `17.631 -> 17.550ms`, record 1 p50
+  remains `19.025 -> 19.011ms`, and first chunk p50 remains
+  `20.802 -> 20.827ms`. Therefore the gate is not a dxmt9 completed
+  seq/waterline dependency. [[present-pacing-completion-signal-delay.21]]
 
 **Open target**
 
@@ -485,6 +687,22 @@ flowchart TD
   residual snapshot work (`7196.881ms`) such as non-constant payload hashing
   and VS indexed constant fallback. These are owned by
   [[state-churn-encode]] and [[snapshot-cache]].
+- A larger producer-overlap architecture is still open, but the target is now
+  concrete: the app-side interval between `SetRenderTarget` caller PC
+  `0x0042AF4F` and `Clear` caller PC `0x0042B061` is command-dispatch cadence
+  around `3DMark05.exe+0x88760`, and it is not waiting on dxmt9's completed
+  seq/waterline publication. Frame sampling, child descriptor/subresource
+  getters, lock/query/swapchain milestone coverage, broad runloop/macdrv sleep,
+  hidden dxmt9 API-call duration, and dxmt9 completion-signal delay have been
+  rejected or weakened as that owner. A lower actual Metal/CA completion
+  dependency is still a separate open experiment because the current
+  perturbation happens after `waitUntilCompleted()` has already returned. Then
+  decide whether earlier useful chunk publish than the current `64`-record
+  capacity cadence can beat its extra bridge/replay/render-pass costs, or
+  reduce the pre-publish replay/snapshot and backend encode stages enough that
+  the completion wait no longer exposes a full extra frame slot. Any
+  earlier-flush design must still preserve D3D9 ordering, resource lifetime,
+  render-pass coalescing, and dynamic-buffer snapshot correctness.
 
 **Proposed (not yet built)**
 

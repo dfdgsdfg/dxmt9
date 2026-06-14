@@ -178,12 +178,21 @@ public:
     return S_OK;
   }
   D3DQUERYTYPE STDMETHODCALLTYPE GetType() noexcept override {
+    if (recorder_)
+      recorder_->NotifyPeFirstCallAfterPresentForChild(
+          "Query::GetType", DXMT9_PE_CALLSITE_PC());
     return (D3DQUERYTYPE)dxmt9c_query_get_type(q_);
   }
   DWORD STDMETHODCALLTYPE GetDataSize() noexcept override {
+    if (recorder_)
+      recorder_->NotifyPeFirstCallAfterPresentForChild(
+          "Query::GetDataSize", DXMT9_PE_CALLSITE_PC());
     return dxmt9c_query_get_data_size(q_);
   }
   HRESULT STDMETHODCALLTYPE Issue(DWORD flags) noexcept override {
+    if (recorder_)
+      recorder_->NotifyPeFirstCallAfterPresentForChild(
+          "Query::Issue", DXMT9_PE_CALLSITE_PC());
     // Phase 20: Query::Issue (D3DISSUE_BEGIN / D3DISSUE_END) is
     // fire-and-forget — server records it into the query object,
     // PE caller doesn't wait. Chunk-record path keeps it ordered
@@ -204,6 +213,9 @@ public:
   }
   HRESULT STDMETHODCALLTYPE GetData(void *pData, DWORD size,
                                     DWORD flags) noexcept override {
+    if (recorder_)
+      recorder_->NotifyPeFirstCallAfterPresentForChild(
+          "Query::GetData", DXMT9_PE_CALLSITE_PC());
     const HRESULT flushHr = flushChildRecorder(recorder_);
     if (FAILED(flushHr))
       return flushHr;
@@ -373,6 +385,8 @@ public:
     return S_OK;
   }
   HRESULT STDMETHODCALLTYPE Capture() noexcept override {
+    if (recorder_)
+      recorder_->NotifyPeFirstCallAfterPresentForChild("StateBlock::Capture");
     dxmt9DeviceDebugLog("stateblock_capture sb=%p", this);
     if (isChildStateBlockRecording(recorder_)) {
       return D3DERR_INVALIDCALL;
@@ -392,6 +406,8 @@ public:
     return hr;
   }
   HRESULT STDMETHODCALLTYPE Apply() noexcept override {
+    if (recorder_)
+      recorder_->NotifyPeFirstCallAfterPresentForChild("StateBlock::Apply");
     dxmt9DeviceDebugLog("stateblock_apply sb=%p", this);
     if (isChildStateBlockRecording(recorder_)) {
       return D3DERR_INVALIDCALL;
@@ -533,6 +549,9 @@ public:
 
   HRESULT STDMETHODCALLTYPE GetBackBuffer(
       UINT idx, D3DBACKBUFFER_TYPE, IDirect3DSurface9 **ppS) noexcept override {
+    if (recorder_)
+      recorder_->NotifyPeFirstCallAfterPresentForChild(
+          "SwapChain::GetBackBuffer", DXMT9_PE_CALLSITE_PC());
     if (!ppS)
       return D3DERR_INVALIDCALL;
     dxmt9DeviceDebugLog("swapchain_get_back_buffer sc=%p idx=%u", this, idx);
@@ -566,6 +585,9 @@ public:
   }
   HRESULT STDMETHODCALLTYPE
   GetRasterStatus(D3DRASTER_STATUS *p) noexcept override {
+    if (recorder_)
+      recorder_->NotifyPeFirstCallAfterPresentForChild(
+          "SwapChain::GetRasterStatus", DXMT9_PE_CALLSITE_PC());
     if (!p)
       return S_OK;
     // Synthesize a monotonically-advancing ScanLine so apps that VBlank-poll do
@@ -586,6 +608,9 @@ public:
   }
   HRESULT STDMETHODCALLTYPE
   GetDisplayMode(D3DDISPLAYMODE *p) noexcept override {
+    if (recorder_)
+      recorder_->NotifyPeFirstCallAfterPresentForChild(
+          "SwapChain::GetDisplayMode", DXMT9_PE_CALLSITE_PC());
     if (!p)
       return D3DERR_INVALIDCALL;
     dxmt9DeviceDebugLog("swapchain_get_display_mode sc=%p", this);
@@ -619,6 +644,9 @@ public:
   }
   HRESULT STDMETHODCALLTYPE
   GetPresentParameters(D3DPRESENT_PARAMETERS *pPP) noexcept override {
+    if (recorder_)
+      recorder_->NotifyPeFirstCallAfterPresentForChild(
+          "SwapChain::GetPresentParameters", DXMT9_PE_CALLSITE_PC());
     if (!pPP)
       return D3DERR_INVALIDCALL;
     D9CPresentParams cpp{};
@@ -644,6 +672,9 @@ public:
 
   HRESULT STDMETHODCALLTYPE
   GetLastPresentCount(UINT *pLastPresentCount) noexcept override {
+    if (recorder_)
+      recorder_->NotifyPeFirstCallAfterPresentForChild(
+          "SwapChain::GetLastPresentCount", DXMT9_PE_CALLSITE_PC());
     // stub: Wine returns S_OK; presentation statistics not measured.
     if (pLastPresentCount)
       *pLastPresentCount = 0u;
@@ -652,6 +683,9 @@ public:
 
   HRESULT STDMETHODCALLTYPE
   GetPresentStats(D3DPRESENTSTATS *pPresentationStatistics) noexcept override {
+    if (recorder_)
+      recorder_->NotifyPeFirstCallAfterPresentForChild(
+          "SwapChain::GetPresentStats", DXMT9_PE_CALLSITE_PC());
     // stub: Wine returns S_OK; presentation statistics not measured.
     if (pPresentationStatistics) {
       memset(pPresentationStatistics, 0, sizeof(*pPresentationStatistics));
@@ -662,6 +696,9 @@ public:
   HRESULT STDMETHODCALLTYPE
   GetDisplayModeEx(D3DDISPLAYMODEEX *pMode,
                    D3DDISPLAYROTATION *pRotation) noexcept override {
+    if (recorder_)
+      recorder_->NotifyPeFirstCallAfterPresentForChild(
+          "SwapChain::GetDisplayModeEx", DXMT9_PE_CALLSITE_PC());
     if (!pMode)
       return D3DERR_INVALIDCALL;
     if (pMode->Size != sizeof(D3DDISPLAYMODEEX))

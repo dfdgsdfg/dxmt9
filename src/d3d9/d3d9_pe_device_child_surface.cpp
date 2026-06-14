@@ -533,8 +533,18 @@ public:
     return container_->QueryInterface(riid, ppv);
   }
   HRESULT STDMETHODCALLTYPE GetDesc(D3DSURFACE_DESC *pD) noexcept override {
+    const auto peCall = recorder_
+        ? recorder_->NotifyPeFirstCallAfterPresentForChild(
+              "Surface::GetDesc", DXMT9_PE_CALLSITE_PC())
+        : D3D9PePresentCallToken{};
+    const auto finishPeCall = [&](HRESULT hr) noexcept {
+      if (recorder_)
+        recorder_->NotifyPeCallReturnAfterPresentForChild(
+            peCall, "Surface::GetDesc", hr);
+      return hr;
+    };
     if (!pD)
-      return D3DERR_INVALIDCALL;
+      return finishPeCall(D3DERR_INVALIDCALL);
     D9CSurfaceDesc sd{};
     HRESULT hr = hr32(dxmt9c_surface_get_desc(s_, &sd));
     if (SUCCEEDED(hr)) {
@@ -559,10 +569,13 @@ public:
       dxmt9DeviceDebugLog("surface_get_desc this=%p -> hr=0x%08x", this,
                           (unsigned)hr);
     }
-    return hr;
+    return finishPeCall(hr);
   }
   HRESULT STDMETHODCALLTYPE LockRect(D3DLOCKED_RECT *pLR, const RECT *pRect,
                                      DWORD flags) noexcept override {
+    if (recorder_)
+      recorder_->NotifyPeFirstCallAfterPresentForChild(
+          "Surface::LockRect", DXMT9_PE_CALLSITE_PC());
     if (!pLR)
       return D3DERR_INVALIDCALL;
     // Wine lockable_backbuffer_lock_policy / nonlockable_backbuffer_getdc_policy:
@@ -935,8 +948,18 @@ public:
   }
   HRESULT STDMETHODCALLTYPE
   GetLevelDesc(UINT level, D3DSURFACE_DESC *pD) noexcept override {
+    const auto peCall = recorder_
+        ? recorder_->NotifyPeFirstCallAfterPresentForChild(
+              "Texture::GetLevelDesc", DXMT9_PE_CALLSITE_PC())
+        : D3D9PePresentCallToken{};
+    const auto finishPeCall = [&](HRESULT hr) noexcept {
+      if (recorder_)
+        recorder_->NotifyPeCallReturnAfterPresentForChild(
+            peCall, "Texture::GetLevelDesc", hr);
+      return hr;
+    };
     if (!pD)
-      return D3DERR_INVALIDCALL;
+      return finishPeCall(D3DERR_INVALIDCALL);
     D9CSurfaceDesc sd{};
     HRESULT hr = hr32(dxmt9c_texture_get_level_desc(t_, level, &sd));
     if (SUCCEEDED(hr)) {
@@ -950,12 +973,22 @@ public:
       pD->Width = sd.width;
       pD->Height = sd.height;
     }
-    return hr;
+    return finishPeCall(hr);
   }
   HRESULT STDMETHODCALLTYPE
   GetSurfaceLevel(UINT level, IDirect3DSurface9 **ppS) noexcept override {
+    const auto peCall = recorder_
+        ? recorder_->NotifyPeFirstCallAfterPresentForChild(
+              "Texture::GetSurfaceLevel", DXMT9_PE_CALLSITE_PC())
+        : D3D9PePresentCallToken{};
+    const auto finishPeCall = [&](HRESULT hr) noexcept {
+      if (recorder_)
+        recorder_->NotifyPeCallReturnAfterPresentForChild(
+            peCall, "Texture::GetSurfaceLevel", hr);
+      return hr;
+    };
     if (!ppS)
-      return D3DERR_INVALIDCALL;
+      return finishPeCall(D3DERR_INVALIDCALL);
     *ppS = nullptr;
     dxmt9DeviceDebugLog("texture_get_surface_level this=%p level=%u", this,
                         level);
@@ -963,18 +996,21 @@ public:
     if (!s) {
       dxmt9DeviceDebugLog(
           "texture_get_surface_level this=%p level=%u -> invalid", this, level);
-      return D3DERR_INVALIDCALL;
+      return finishPeCall(D3DERR_INVALIDCALL);
     }
     *ppS = new D3D9SurfaceImpl(
         s, device_, static_cast<IDirect3DBaseTexture9 *>(this), recorder_);
     dxmt9DeviceDebugLog(
         "texture_get_surface_level this=%p level=%u -> surface=%p", this, level,
         *ppS);
-    return S_OK;
+    return finishPeCall(S_OK);
   }
   HRESULT STDMETHODCALLTYPE LockRect(UINT level, D3DLOCKED_RECT *pLR,
                                      const RECT *pRect,
                                      DWORD flags) noexcept override {
+    if (recorder_)
+      recorder_->NotifyPeFirstCallAfterPresentForChild(
+          "Texture::LockRect", DXMT9_PE_CALLSITE_PC());
     if (!pLR)
       return D3DERR_INVALIDCALL;
     // Wine d3d9 conformance (test_resource_lock_error_policy /
@@ -1219,8 +1255,18 @@ public:
   }
   HRESULT STDMETHODCALLTYPE
   GetLevelDesc(UINT level, D3DSURFACE_DESC *pD) noexcept override {
+    const auto peCall = recorder_
+        ? recorder_->NotifyPeFirstCallAfterPresentForChild(
+              "CubeTexture::GetLevelDesc", DXMT9_PE_CALLSITE_PC())
+        : D3D9PePresentCallToken{};
+    const auto finishPeCall = [&](HRESULT hr) noexcept {
+      if (recorder_)
+        recorder_->NotifyPeCallReturnAfterPresentForChild(
+            peCall, "CubeTexture::GetLevelDesc", hr);
+      return hr;
+    };
     if (!pD)
-      return D3DERR_INVALIDCALL;
+      return finishPeCall(D3DERR_INVALIDCALL);
     D9CSurfaceDesc sd{};
     HRESULT hr = hr32(dxmt9c_texture_get_level_desc(t_, level, &sd));
     if (SUCCEEDED(hr)) {
@@ -1235,13 +1281,23 @@ public:
       pD->Width = sd.width;
       pD->Height = sd.height;
     }
-    return hr;
+    return finishPeCall(hr);
   }
   HRESULT STDMETHODCALLTYPE
   GetCubeMapSurface(D3DCUBEMAP_FACES face, UINT level,
                     IDirect3DSurface9 **ppS) noexcept override {
+    const auto peCall = recorder_
+        ? recorder_->NotifyPeFirstCallAfterPresentForChild(
+              "CubeTexture::GetCubeMapSurface", DXMT9_PE_CALLSITE_PC())
+        : D3D9PePresentCallToken{};
+    const auto finishPeCall = [&](HRESULT hr) noexcept {
+      if (recorder_)
+        recorder_->NotifyPeCallReturnAfterPresentForChild(
+            peCall, "CubeTexture::GetCubeMapSurface", hr);
+      return hr;
+    };
     if (!ppS)
-      return D3DERR_INVALIDCALL;
+      return finishPeCall(D3DERR_INVALIDCALL);
     *ppS = nullptr;
     dxmt9DeviceDebugLog("cube_get_surface_level this=%p face=%u level=%u", this,
                         static_cast<unsigned>(face), level);
@@ -1250,25 +1306,28 @@ public:
       dxmt9DeviceDebugLog(
           "cube_get_surface_level this=%p face=%u level=%u -> invalid", this,
           static_cast<unsigned>(face), level);
-      return D3DERR_INVALIDCALL;
+      return finishPeCall(D3DERR_INVALIDCALL);
     }
     D9CSurface *s = dxmt9c_texture_get_surface_level(t_, idx);
     if (!s) {
       dxmt9DeviceDebugLog(
           "cube_get_surface_level this=%p face=%u level=%u -> invalid", this,
           static_cast<unsigned>(face), level);
-      return D3DERR_INVALIDCALL;
+      return finishPeCall(D3DERR_INVALIDCALL);
     }
     *ppS = new D3D9SurfaceImpl(
         s, device_, static_cast<IDirect3DBaseTexture9 *>(this), recorder_);
     dxmt9DeviceDebugLog(
         "cube_get_surface_level this=%p face=%u level=%u -> surface=%p", this,
         static_cast<unsigned>(face), level, *ppS);
-    return S_OK;
+    return finishPeCall(S_OK);
   }
   HRESULT STDMETHODCALLTYPE LockRect(D3DCUBEMAP_FACES face, UINT level,
                                      D3DLOCKED_RECT *pLR, const RECT *pRect,
                                      DWORD flags) noexcept override {
+    if (recorder_)
+      recorder_->NotifyPeFirstCallAfterPresentForChild(
+          "CubeTexture::LockRect", DXMT9_PE_CALLSITE_PC());
     if (!pLR)
       return D3DERR_INVALIDCALL;
     const HRESULT flushHr = flushChildRecorder(recorder_);
@@ -1397,12 +1456,22 @@ public:
     return container_->QueryInterface(riid, ppv);
   }
   HRESULT STDMETHODCALLTYPE GetDesc(D3DVOLUME_DESC *pD) noexcept override {
+    const auto peCall = recorder_
+        ? recorder_->NotifyPeFirstCallAfterPresentForChild(
+              "Volume::GetDesc", DXMT9_PE_CALLSITE_PC())
+        : D3D9PePresentCallToken{};
+    const auto finishPeCall = [&](HRESULT hr) noexcept {
+      if (recorder_)
+        recorder_->NotifyPeCallReturnAfterPresentForChild(
+            peCall, "Volume::GetDesc", hr);
+      return hr;
+    };
     if (!pD)
-      return D3DERR_INVALIDCALL;
+      return finishPeCall(D3DERR_INVALIDCALL);
     D9CSurfaceDesc sd{};
     const HRESULT hr = hr32(dxmt9c_texture_get_level_desc(t_, level_, &sd));
     if (FAILED(hr))
-      return hr;
+      return finishPeCall(hr);
     pD->Format = static_cast<D3DFORMAT>(sd.format);
     pD->Type = D3DRTYPE_VOLUME;
     pD->Usage = sd.usage;
@@ -1410,10 +1479,13 @@ public:
     pD->Width = sd.width;
     pD->Height = sd.height;
     pD->Depth = sd.depth;
-    return S_OK;
+    return finishPeCall(S_OK);
   }
   HRESULT STDMETHODCALLTYPE LockBox(D3DLOCKED_BOX *locked, const D3DBOX *box,
                                     DWORD flags) noexcept override {
+    if (recorder_)
+      recorder_->NotifyPeFirstCallAfterPresentForChild(
+          "Volume::LockBox", DXMT9_PE_CALLSITE_PC());
     return lockTextureBox(t_, level_, locked, box, flags, recorder_);
   }
   HRESULT STDMETHODCALLTYPE UnlockBox() noexcept override {
@@ -1552,12 +1624,22 @@ public:
   }
   HRESULT STDMETHODCALLTYPE GetLevelDesc(UINT level,
                                          D3DVOLUME_DESC *pD) noexcept override {
+    const auto peCall = recorder_
+        ? recorder_->NotifyPeFirstCallAfterPresentForChild(
+              "VolumeTexture::GetLevelDesc", DXMT9_PE_CALLSITE_PC())
+        : D3D9PePresentCallToken{};
+    const auto finishPeCall = [&](HRESULT hr) noexcept {
+      if (recorder_)
+        recorder_->NotifyPeCallReturnAfterPresentForChild(
+            peCall, "VolumeTexture::GetLevelDesc", hr);
+      return hr;
+    };
     if (!pD)
-      return D3DERR_INVALIDCALL;
+      return finishPeCall(D3DERR_INVALIDCALL);
     D9CSurfaceDesc sd{};
     const HRESULT hr = hr32(dxmt9c_texture_get_level_desc(t_, level, &sd));
     if (FAILED(hr))
-      return hr;
+      return finishPeCall(hr);
     pD->Format = static_cast<D3DFORMAT>(sd.format);
     pD->Type = D3DRTYPE_VOLUME;
     pD->Usage = sd.usage;
@@ -1565,23 +1647,36 @@ public:
     pD->Width = sd.width;
     pD->Height = sd.height;
     pD->Depth = sd.depth;
-    return S_OK;
+    return finishPeCall(S_OK);
   }
   HRESULT STDMETHODCALLTYPE
   GetVolumeLevel(UINT level, IDirect3DVolume9 **ppVolume) noexcept override {
+    const auto peCall = recorder_
+        ? recorder_->NotifyPeFirstCallAfterPresentForChild(
+              "VolumeTexture::GetVolumeLevel", DXMT9_PE_CALLSITE_PC())
+        : D3D9PePresentCallToken{};
+    const auto finishPeCall = [&](HRESULT hr) noexcept {
+      if (recorder_)
+        recorder_->NotifyPeCallReturnAfterPresentForChild(
+            peCall, "VolumeTexture::GetVolumeLevel", hr);
+      return hr;
+    };
     if (!ppVolume)
-      return D3DERR_INVALIDCALL;
+      return finishPeCall(D3DERR_INVALIDCALL);
     *ppVolume = nullptr;
     if (level >= dxmt9c_texture_get_level_count(t_))
-      return D3DERR_INVALIDCALL;
+      return finishPeCall(D3DERR_INVALIDCALL);
     *ppVolume = new D3D9VolumeImpl(t_, device_,
                                    static_cast<IDirect3DBaseTexture9 *>(this),
                                    recorder_, level);
-    return S_OK;
+    return finishPeCall(S_OK);
   }
   HRESULT STDMETHODCALLTYPE LockBox(UINT level, D3DLOCKED_BOX *locked,
                                     const D3DBOX *box,
                                     DWORD flags) noexcept override {
+    if (recorder_)
+      recorder_->NotifyPeFirstCallAfterPresentForChild(
+          "VolumeTexture::LockBox", DXMT9_PE_CALLSITE_PC());
     if (!locked)
       return D3DERR_INVALIDCALL;
     if (level >= dxmt9c_texture_get_level_count(t_))

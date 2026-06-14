@@ -12,6 +12,7 @@
 #include <chrono>
 #include <cstdlib>
 #include <sstream>
+#include <thread>
 
 namespace dxmt9::core::metalqueue {
 
@@ -81,6 +82,33 @@ u64 shaderVariantHashForDraw(FlatDrawStateView draw) {
   hash ^= hot.vertexConstantsHash << 1;
   hash ^= hot.pixelConstantsHash << 2;
   return hash;
+}
+
+std::uint32_t completionSignalDelayMs() noexcept {
+  static const std::uint32_t delayMs = [] {
+    const char* env = std::getenv("DXMT9_PERF_COMPLETION_SIGNAL_DELAY_MS");
+    if (!env || env[0] == '\0') {
+      return 0u;
+    }
+    char* end = nullptr;
+    const unsigned long parsed = std::strtoul(env, &end, 10);
+    if (end == env || parsed == 0) {
+      return 0u;
+    }
+    return static_cast<std::uint32_t>(std::min<unsigned long>(parsed, 250));
+  }();
+  return delayMs;
+}
+
+void delayCompletionSignalForPerfProbe() {
+  const std::uint32_t delayMs = completionSignalDelayMs();
+  if (delayMs == 0) {
+    return;
+  }
+  const auto delay = std::chrono::milliseconds(delayMs);
+  std::this_thread::sleep_for(delay);
+  perf::countCompletionSignalDelay(static_cast<std::uint64_t>(
+      std::chrono::duration_cast<std::chrono::nanoseconds>(delay).count()));
 }
 
 u32 compatFlagsForClear(const ClearDesc& clear, const std::function<u32(Handle)>& resolveSurfaceFlags) {
@@ -1370,6 +1398,8 @@ bool QueueLifecycleController::processOnePendingCompletion(bool& stop) {
         pending.diagnostics.pixelShaderHash,
         pending.diagnostics.shaderVariantHash);
   }
+
+  delayCompletionSignalForPerfProbe();
 
   const auto binding = submissionBinding_;
   auto* diagnosticsController = binding.submissionDiagnostics;

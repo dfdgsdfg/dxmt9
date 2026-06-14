@@ -4,7 +4,9 @@
 #include <algorithm>
 #include <array>
 #include <atomic>
+#include <chrono>
 #include <cmath>
+#include <cstdio>
 #include <cstdarg>
 #include <cstdint>
 #include <cstdlib>
@@ -58,6 +60,99 @@ static bool dxmt9SplitSparseConstRecordsEnabled() {
 static bool dxmt9PeRecorderChunkLogEnabled() {
     static const bool enabled = dxmt9::util::getenvFlag("DXMT9_PE_RECORDER_CHUNK_LOG");
     return enabled;
+}
+
+static double dxmt9ElapsedMs(std::chrono::steady_clock::time_point start,
+                             std::chrono::steady_clock::time_point end) {
+    return std::chrono::duration<double, std::milli>(end - start).count();
+}
+
+static std::int64_t dxmt9SteadyClockNs(std::chrono::steady_clock::time_point t) {
+    return std::chrono::duration_cast<std::chrono::nanoseconds>(
+        t.time_since_epoch()).count();
+}
+
+static thread_local const char* dxmt9PeCurrentCallName = nullptr;
+
+struct Dxmt9PeCallerModuleInfo {
+    const void* base = nullptr;
+    std::uintptr_t rva = 0;
+    std::array<char, 260> path{};
+};
+
+static const char* dxmt9PeCallerModuleLeaf(const Dxmt9PeCallerModuleInfo& info) {
+    const char* leaf = info.path.data();
+    for (const char* p = info.path.data(); *p; ++p) {
+        if (*p == '\\' || *p == '/') {
+            leaf = p + 1;
+        }
+    }
+    return *leaf ? leaf : "unknown";
+}
+
+static Dxmt9PeCallerModuleInfo dxmt9PeResolveCallerModule(
+    const void* callerPc) {
+    Dxmt9PeCallerModuleInfo info{};
+    if (!callerPc) {
+        return info;
+    }
+    MEMORY_BASIC_INFORMATION mbi{};
+    if (!VirtualQuery(callerPc, &mbi, sizeof(mbi)) || !mbi.AllocationBase) {
+        return info;
+    }
+    info.base = mbi.AllocationBase;
+    info.rva = reinterpret_cast<std::uintptr_t>(callerPc) -
+               reinterpret_cast<std::uintptr_t>(mbi.AllocationBase);
+    const DWORD written = GetModuleFileNameA(
+        reinterpret_cast<HMODULE>(mbi.AllocationBase),
+        info.path.data(), static_cast<DWORD>(info.path.size()));
+    if (written == 0) {
+        std::strncpy(info.path.data(), "unknown", info.path.size() - 1);
+    } else {
+        info.path.back() = '\0';
+    }
+    return info;
+}
+
+static void dxmt9PeCaptureCallStack(D3D9PePresentCallToken& sample) {
+#if defined(_WIN32)
+    void* frames[D3D9PePresentCallStackDepth]{};
+    const USHORT count = RtlCaptureStackBackTrace(
+        0, static_cast<DWORD>(D3D9PePresentCallStackDepth), frames, nullptr);
+    sample.callerStackCount = static_cast<std::uint8_t>(
+        std::min<std::size_t>(count, sample.callerStack.size()));
+    for (std::size_t i = 0; i < sample.callerStackCount; ++i) {
+        sample.callerStack[i] = frames[i];
+    }
+#else
+    (void)sample;
+#endif
+}
+
+static std::array<char, 2048> dxmt9PeFormatCallerStack(
+    const D3D9PePresentCallToken& sample) {
+    std::array<char, 2048> out{};
+    std::size_t used = 0;
+    if (sample.callerStackCount == 0) {
+        std::snprintf(out.data(), out.size(), "empty");
+        return out;
+    }
+    for (std::size_t i = 0; i < sample.callerStackCount && used < out.size(); ++i) {
+        const auto frameInfo = dxmt9PeResolveCallerModule(sample.callerStack[i]);
+        const int written = std::snprintf(
+            out.data() + used, out.size() - used, "%s%u:%s+0x%llx@%p",
+            i == 0 ? "" : ";", static_cast<unsigned>(i),
+            dxmt9PeCallerModuleLeaf(frameInfo),
+            static_cast<unsigned long long>(frameInfo.rva),
+            sample.callerStack[i]);
+        if (written <= 0) {
+            break;
+        }
+        used += std::min<std::size_t>(static_cast<std::size_t>(written),
+                                      out.size() - used);
+    }
+    out.back() = '\0';
+    return out;
 }
 
 // Structural invariant: the chunk recorder and PE state shadow are the
@@ -3025,6 +3120,15 @@ class D3D9DeviceImpl final : public IDirect3DDevice9Ex, public D3D9PeRecorderFlu
     PeCommandChunkBuilder commandChunk_{};
     PeRecorderStats peRecorderStats_{};
     std::uint64_t peRecorderStatsLastLoggedCommitCount_ = 0;
+    std::atomic<std::uint64_t> pePresentCadenceOrdinal_{0};
+    std::atomic<std::uint64_t> pePresentCadencePendingOrdinal_{0};
+    std::atomic<std::uint64_t> pePresentCallMilestonePendingOrdinal_{0};
+    std::atomic<std::uint32_t> pePresentCallCount_{0};
+    std::atomic<std::uint32_t> pePresentCallMilestoneMask_{0};
+    std::atomic<std::uint64_t> pePresentChunkPendingOrdinal_{0};
+    std::atomic<std::uint64_t> pePresentRecordPendingOrdinal_{0};
+    std::atomic<std::uint32_t> pePresentRecordMilestoneMask_{0};
+    std::atomic<std::int64_t> pePresentCadenceReturnNs_{0};
 
     /* present params copy for GetCreationParameters */
     HWND creationWindow_ = nullptr;
@@ -5583,6 +5687,333 @@ class D3D9DeviceImpl final : public IDirect3DDevice9Ex, public D3D9PeRecorderFlu
         }
     }
 
+    struct PePresentCadenceClaim {
+        bool claimed = false;
+        std::uint64_t ordinal = 0;
+        std::int64_t returnNs = 0;
+        std::int64_t entryNs = 0;
+    };
+
+    using PePresentCallSample = D3D9PePresentCallToken;
+
+    PePresentCadenceClaim claimPeFirstCallAfterPresent() {
+        if (!dxmt9PeRecorderStatsEnabled()) {
+            return {};
+        }
+        std::uint64_t ordinal =
+            pePresentCadencePendingOrdinal_.load(std::memory_order_acquire);
+        if (ordinal == 0) {
+            return {};
+        }
+        const auto entry = std::chrono::steady_clock::now();
+        if (!pePresentCadencePendingOrdinal_.compare_exchange_strong(
+                ordinal, 0, std::memory_order_acq_rel,
+                std::memory_order_acquire)) {
+            return {};
+        }
+        return PePresentCadenceClaim{
+            true, ordinal,
+            pePresentCadenceReturnNs_.load(std::memory_order_acquire),
+            dxmt9SteadyClockNs(entry)};
+    }
+
+    void logPeFirstCallAfterPresent(const char* callName,
+                                    const PePresentCadenceClaim& claim,
+                                    const PePresentCallSample& sample) {
+        if (!claim.claimed) {
+            return;
+        }
+        const std::int64_t observedNs =
+            dxmt9SteadyClockNs(std::chrono::steady_clock::now());
+        const auto callerInfo = dxmt9PeResolveCallerModule(sample.callerPc);
+        const auto callerStack = dxmt9PeFormatCallerStack(sample);
+        dxmt9DeviceInfoLog(
+            "pe_present_next_call device=%p ordinal=%llu call=%s "
+            "entry_delta_ms=%.3f observed_delta_ms=%.3f "
+            "observed_wait_ms=%.3f caller_pc=%p caller_module=%s "
+            "caller_base=%p caller_rva=0x%llx caller_stack=%s",
+            this, static_cast<unsigned long long>(claim.ordinal),
+            callName ? callName : "unknown",
+            static_cast<double>(claim.entryNs - claim.returnNs) / 1000000.0,
+            static_cast<double>(observedNs - claim.returnNs) / 1000000.0,
+            static_cast<double>(observedNs - claim.entryNs) / 1000000.0,
+            sample.callerPc, dxmt9PeCallerModuleLeaf(callerInfo),
+            callerInfo.base, static_cast<unsigned long long>(callerInfo.rva),
+            callerStack.data());
+    }
+
+    PePresentCallSample notePeDeviceCallAfterPresent(const char* callName,
+                                                     const void* callerPc = nullptr) {
+        dxmt9PeCurrentCallName = callName;
+        const PePresentCallSample sample =
+            logPeCallMilestoneAfterPresent(callName, callerPc);
+        logPeFirstCallAfterPresent(callName, claimPeFirstCallAfterPresent(),
+                                   sample);
+        return sample;
+    }
+
+    void markPePresentReturnedForCadence() {
+        if (!dxmt9PeRecorderStatsEnabled()) {
+            return;
+        }
+        const auto now = std::chrono::steady_clock::now();
+        const std::uint64_t ordinal =
+            pePresentCadenceOrdinal_.fetch_add(1, std::memory_order_relaxed) + 1;
+        pePresentCadenceReturnNs_.store(dxmt9SteadyClockNs(now),
+                                        std::memory_order_release);
+        pePresentCadencePendingOrdinal_.store(ordinal, std::memory_order_release);
+        pePresentCallCount_.store(0, std::memory_order_release);
+        pePresentCallMilestoneMask_.store(0, std::memory_order_release);
+        pePresentCallMilestonePendingOrdinal_.store(ordinal,
+                                                   std::memory_order_release);
+        pePresentChunkPendingOrdinal_.store(ordinal, std::memory_order_release);
+        pePresentRecordMilestoneMask_.store(0, std::memory_order_release);
+        pePresentRecordPendingOrdinal_.store(ordinal, std::memory_order_release);
+    }
+
+    static bool peCallMilestoneBit(std::uint32_t callCount,
+                                   std::uint32_t& bit) noexcept {
+        switch (callCount) {
+        case 1: bit = 1u << 0; return true;
+        case 2: bit = 1u << 1; return true;
+        case 3: bit = 1u << 2; return true;
+        case 4: bit = 1u << 3; return true;
+        case 5: bit = 1u << 4; return true;
+        case 6: bit = 1u << 5; return true;
+        case 7: bit = 1u << 6; return true;
+        case 8: bit = 1u << 7; return true;
+        case 16: bit = 1u << 8; return true;
+        case 32: bit = 1u << 9; return true;
+        case 64: bit = 1u << 10; return true;
+        default:
+            bit = 0;
+            return false;
+        }
+    }
+
+    PePresentCallSample logPeCallMilestoneAfterPresent(const char* callName,
+                                                       const void* callerPc) {
+        if (!dxmt9PeRecorderStatsEnabled()) {
+            return {};
+        }
+        const std::uint64_t ordinal =
+            pePresentCallMilestonePendingOrdinal_.load(std::memory_order_acquire);
+        if (ordinal == 0) {
+            return {};
+        }
+        const auto entry = std::chrono::steady_clock::now();
+        const std::int64_t entryNs = dxmt9SteadyClockNs(entry);
+        const std::uint32_t callCount =
+            pePresentCallCount_.fetch_add(1, std::memory_order_acq_rel) + 1;
+        const std::int64_t returnNs =
+            pePresentCadenceReturnNs_.load(std::memory_order_acquire);
+        std::uint32_t milestoneBit = 0;
+        const bool milestone = peCallMilestoneBit(callCount, milestoneBit);
+        PePresentCallSample sample{
+            true, ordinal, callCount, returnNs, entryNs, callerPc};
+        if (callCount <= 8 || milestone) {
+            dxmt9PeCaptureCallStack(sample);
+        }
+        if (!milestone) {
+            return sample;
+        }
+        std::uint32_t mask =
+            pePresentCallMilestoneMask_.load(std::memory_order_acquire);
+        while ((mask & milestoneBit) == 0) {
+            if (pePresentCallMilestoneMask_.compare_exchange_weak(
+                    mask, mask | milestoneBit, std::memory_order_acq_rel,
+                    std::memory_order_acquire)) {
+                const auto callerInfo = dxmt9PeResolveCallerModule(callerPc);
+                const auto callerStack = dxmt9PeFormatCallerStack(sample);
+                dxmt9DeviceInfoLog(
+                    "pe_present_call_milestone device=%p ordinal=%llu "
+                    "milestone=%u call=%s entry_delta_ms=%.3f caller_pc=%p "
+                    "caller_module=%s caller_base=%p caller_rva=0x%llx "
+                    "caller_stack=%s",
+                    this, static_cast<unsigned long long>(ordinal), callCount,
+                    callName ? callName : "unknown",
+                    static_cast<double>(entryNs - returnNs) / 1000000.0,
+                    callerPc, dxmt9PeCallerModuleLeaf(callerInfo),
+                    callerInfo.base,
+                    static_cast<unsigned long long>(callerInfo.rva),
+                    callerStack.data());
+                return sample;
+            }
+        }
+        return sample;
+    }
+
+    void logPeCallReturnAfterPresent(const PePresentCallSample& sample,
+                                     const char* callName,
+                                     HRESULT hr) {
+        if (!dxmt9PeRecorderStatsEnabled() || !sample.tracked ||
+            sample.callCount > 8) {
+            return;
+        }
+        const std::int64_t exitNs =
+            dxmt9SteadyClockNs(std::chrono::steady_clock::now());
+        const auto callerInfo = dxmt9PeResolveCallerModule(sample.callerPc);
+        const auto callerStack = dxmt9PeFormatCallerStack(sample);
+        dxmt9DeviceInfoLog(
+            "pe_present_call_return device=%p ordinal=%llu milestone=%u "
+            "call=%s hr=0x%08x return_delta_ms=%.3f duration_ms=%.3f "
+            "caller_pc=%p caller_module=%s caller_base=%p caller_rva=0x%llx "
+            "caller_stack=%s",
+            this, static_cast<unsigned long long>(sample.ordinal),
+            sample.callCount, callName ? callName : "unknown",
+            static_cast<unsigned>(hr),
+            static_cast<double>(exitNs - sample.returnNs) / 1000000.0,
+            static_cast<double>(exitNs - sample.entryNs) / 1000000.0,
+            sample.callerPc, dxmt9PeCallerModuleLeaf(callerInfo),
+            callerInfo.base,
+            static_cast<unsigned long long>(callerInfo.rva),
+            callerStack.data());
+    }
+
+    static const char* peCommandRecordTypeName(std::uint32_t type) noexcept {
+        switch (type) {
+        case D9C_COMMAND_RECORD_DRAW_PRIMITIVE:
+            return "draw";
+        case D9C_COMMAND_RECORD_DRAW_INDEXED_PRIMITIVE:
+            return "draw_indexed";
+        case D9C_COMMAND_RECORD_DRAW_PRIMITIVE_UP:
+            return "draw_up";
+        case D9C_COMMAND_RECORD_DRAW_INDEXED_PRIMITIVE_UP:
+            return "draw_indexed_up";
+        case D9C_COMMAND_RECORD_SET_VS_CONST_F:
+            return "set_vs_const_f";
+        case D9C_COMMAND_RECORD_SET_VS_CONST_I:
+            return "set_vs_const_i";
+        case D9C_COMMAND_RECORD_SET_VS_CONST_B:
+            return "set_vs_const_b";
+        case D9C_COMMAND_RECORD_SET_PS_CONST_F:
+            return "set_ps_const_f";
+        case D9C_COMMAND_RECORD_SET_PS_CONST_I:
+            return "set_ps_const_i";
+        case D9C_COMMAND_RECORD_SET_PS_CONST_B:
+            return "set_ps_const_b";
+        case D9C_COMMAND_RECORD_CLEAR:
+            return "clear";
+        case D9C_COMMAND_RECORD_PRESENT:
+            return "present";
+        case D9C_COMMAND_RECORD_STRETCH_RECT:
+            return "stretch_rect";
+        case D9C_COMMAND_RECORD_COLOR_FILL:
+            return "color_fill";
+        case D9C_COMMAND_RECORD_UPDATE_TEXTURE:
+            return "update_texture";
+        case D9C_COMMAND_RECORD_UPDATE_SURFACE:
+            return "update_surface";
+        case D9C_COMMAND_RECORD_QUERY_ISSUE:
+            return "query_issue";
+        case D9C_COMMAND_RECORD_READBACK:
+            return "readback";
+        case D9C_COMMAND_RECORD_APPLY_STATE:
+            return "apply_state";
+        case D9C_COMMAND_RECORD_RESZ_DEPTH_RESOLVE:
+            return "resz_depth_resolve";
+        default:
+            return "unknown";
+        }
+    }
+
+    static bool peRecordMilestoneBit(std::uint32_t recordCount,
+                                     std::uint32_t& bit) noexcept {
+        switch (recordCount) {
+        case 1: bit = 1u << 0; return true;
+        case 4: bit = 1u << 1; return true;
+        case 8: bit = 1u << 2; return true;
+        case 16: bit = 1u << 3; return true;
+        case 32: bit = 1u << 4; return true;
+        case 64: bit = 1u << 5; return true;
+        default:
+            bit = 0;
+            return false;
+        }
+    }
+
+    void logPeRecordMilestoneAfterPresent(std::uint32_t type,
+                                          std::uint32_t recordCount,
+                                          std::uint32_t payloadBytes,
+                                          std::int64_t entryNs) {
+        if (!dxmt9PeRecorderStatsEnabled()) {
+            return;
+        }
+        std::uint32_t milestoneBit = 0;
+        if (!peRecordMilestoneBit(recordCount, milestoneBit)) {
+            return;
+        }
+        const std::uint64_t ordinal =
+            pePresentRecordPendingOrdinal_.load(std::memory_order_acquire);
+        if (ordinal == 0) {
+            return;
+        }
+        std::uint32_t mask =
+            pePresentRecordMilestoneMask_.load(std::memory_order_acquire);
+        while ((mask & milestoneBit) == 0) {
+            if (pePresentRecordMilestoneMask_.compare_exchange_weak(
+                    mask, mask | milestoneBit, std::memory_order_acq_rel,
+                    std::memory_order_acquire)) {
+                const std::int64_t returnNs =
+                    pePresentCadenceReturnNs_.load(std::memory_order_acquire);
+                dxmt9DeviceInfoLog(
+                    "pe_present_record_milestone device=%p ordinal=%llu "
+                    "milestone=%u type=%s typeId=%u call=%s "
+                    "entry_delta_ms=%.3f recordCount=%u payloadBytes=%u",
+                    this, static_cast<unsigned long long>(ordinal), recordCount,
+                    peCommandRecordTypeName(type), type,
+                    dxmt9PeCurrentCallName ? dxmt9PeCurrentCallName : "unknown",
+                    static_cast<double>(entryNs - returnNs) / 1000000.0,
+                    recordCount, payloadBytes);
+                return;
+            }
+        }
+    }
+
+    PePresentCadenceClaim claimPeFirstChunkAfterPresent() {
+        if (!dxmt9PeRecorderStatsEnabled()) {
+            return {};
+        }
+        std::uint64_t ordinal =
+            pePresentChunkPendingOrdinal_.load(std::memory_order_acquire);
+        if (ordinal == 0) {
+            return {};
+        }
+        const auto entry = std::chrono::steady_clock::now();
+        if (!pePresentChunkPendingOrdinal_.compare_exchange_strong(
+                ordinal, 0, std::memory_order_acq_rel,
+                std::memory_order_acquire)) {
+            return {};
+        }
+        return PePresentCadenceClaim{
+            true, ordinal,
+            pePresentCadenceReturnNs_.load(std::memory_order_acquire),
+            dxmt9SteadyClockNs(entry)};
+    }
+
+    void logPeFirstChunkAfterPresent(PeRecorderFlushReason reason,
+                                     const PePresentCadenceClaim& claim,
+                                     HRESULT hr,
+                                     const PeCommandChunkCommitInfo& info) {
+        if (!claim.claimed) {
+            return;
+        }
+        const std::int64_t observedNs =
+            dxmt9SteadyClockNs(std::chrono::steady_clock::now());
+        dxmt9DeviceInfoLog(
+            "pe_present_next_chunk device=%p ordinal=%llu reason=%s "
+            "hr=0x%08x entry_delta_ms=%.3f return_delta_ms=%.3f "
+            "bridge_ms=%.3f recordCount=%u payloadBytes=%u "
+            "handleCount=%u wireBytes=%u",
+            this, static_cast<unsigned long long>(claim.ordinal),
+            peRecorderFlushReasonName(reason), static_cast<unsigned>(hr),
+            static_cast<double>(claim.entryNs - claim.returnNs) / 1000000.0,
+            static_cast<double>(observedNs - claim.returnNs) / 1000000.0,
+            static_cast<double>(observedNs - claim.entryNs) / 1000000.0,
+            info.recordCount, info.payloadBytes, info.handleCount,
+            info.wireBytes);
+    }
+
     void recordPeChunkCommit(PeRecorderFlushReason reason,
                              std::uint32_t recordCount,
                              std::uint32_t payloadBytes,
@@ -5698,7 +6129,9 @@ class D3D9DeviceImpl final : public IDirect3DDevice9Ex, public D3D9PeRecorderFlu
             [this](PeRecorderFlushReason commitReason,
                    const D9CCommandChunk& chunk,
                    const PeCommandChunkCommitInfo& info) {
+                auto chunkCadence = claimPeFirstChunkAfterPresent();
                 const HRESULT hr = hr32(dxmt9c_device_commit_chunk(dev_, &chunk));
+                logPeFirstChunkAfterPresent(commitReason, chunkCadence, hr, info);
                 if (SUCCEEDED(hr)) {
                     recordPeChunkCommit(commitReason, info.recordCount,
                                         info.payloadBytes, info.handleCount,
@@ -5711,8 +6144,20 @@ class D3D9DeviceImpl final : public IDirect3DDevice9Ex, public D3D9PeRecorderFlu
     template<typename WriteFn>
     HRESULT appendCommandRecordDirect(uint32_t type, size_t bytes, WriteFn write) {
         std::lock_guard<std::recursive_mutex> recorderLock(recorderMutex_);
-        return commandChunk_.appendRecordDirect(
-            type, bytes, maxPendingCommandRecords(), maxPendingCommandBytes(),
+        const auto maxRecords = maxPendingCommandRecords();
+        const auto maxBytes = maxPendingCommandBytes();
+        const auto recordCountBefore = commandChunk_.recordCount();
+        const auto payloadBytesBefore = commandChunk_.payloadSize();
+        const bool willFlushBeforeAppend =
+            commandChunk_.shouldFlushBeforeAppend(bytes, maxRecords, maxBytes);
+        const std::uint32_t appendedRecordCount =
+            willFlushBeforeAppend ? 1u : recordCountBefore + 1u;
+        const auto appendedPayloadBytes =
+            willFlushBeforeAppend ? bytes : payloadBytesBefore + bytes;
+        const auto appendEntryNs =
+            dxmt9SteadyClockNs(std::chrono::steady_clock::now());
+        const HRESULT hr = commandChunk_.appendRecordDirect(
+            type, bytes, maxRecords, maxBytes,
             std::forward<WriteFn>(write),
             [this](const D9CCommandChunkWireRecordHeader& wireRecord,
                    const std::uint8_t* payload,
@@ -5724,6 +6169,14 @@ class D3D9DeviceImpl final : public IDirect3DDevice9Ex, public D3D9PeRecorderFlu
             [this](PeRecorderFlushReason flushReason) {
                 return flushPendingCommandChunk(flushReason);
             });
+        if (SUCCEEDED(hr)) {
+            logPeRecordMilestoneAfterPresent(
+                type, appendedRecordCount,
+                static_cast<std::uint32_t>(std::min<std::size_t>(
+                    appendedPayloadBytes, std::numeric_limits<std::uint32_t>::max())),
+                appendEntryNs);
+        }
+        return hr;
     }
 
     HRESULT appendCommandRecord(const void* data, size_t bytes) {
@@ -6330,6 +6783,15 @@ public:
         }
         return flushPeRecorder(PeRecorderFlushReason::Child);
     }
+    D3D9PePresentCallToken NotifyPeFirstCallAfterPresentForChild(
+        const char* callName, const void* callerPc = nullptr) noexcept override {
+        return notePeDeviceCallAfterPresent(callName, callerPc);
+    }
+    void NotifyPeCallReturnAfterPresentForChild(
+        const D3D9PePresentCallToken& token,
+        const char* callName, HRESULT hr) noexcept override {
+        logPeCallReturnAfterPresent(token, callName, hr);
+    }
     bool IsStateBlockRecordingForChild() const noexcept override {
         return stateBlockRecording_;
     }
@@ -6704,6 +7166,7 @@ public:
 
     HRESULT STDMETHODCALLTYPE GetSwapChain(UINT index,
                                             IDirect3DSwapChain9** ppSC) noexcept override {
+        notePeDeviceCallAfterPresent("GetSwapChain");
         if (!ppSC) return D3DERR_INVALIDCALL;
         *ppSC = nullptr;
         if (auto it = swapchainWrappers_.find(index);
@@ -6803,7 +7266,13 @@ public:
 
     HRESULT STDMETHODCALLTYPE Present(const RECT* src, const RECT* dst,
                                        HWND wnd, const RGNDATA* dirty) noexcept override {
+        const bool recordPresentTiming = dxmt9PeRecorderStatsEnabled();
+        const auto presentTimingEnter = std::chrono::steady_clock::now();
         std::lock_guard<std::recursive_mutex> recorderLock(recorderMutex_);
+        const auto presentTimingStart = std::chrono::steady_clock::now();
+        auto presentTimingBarrierEnd = presentTimingStart;
+        auto presentTimingAppendEnd = presentTimingStart;
+        auto presentTimingFlushEnd = presentTimingStart;
         // T2 device-lost gate: render-path methods must early-return
         // D3DERR_DEVICELOST while the device awaits Reset.
         if (deviceNotReset_) return D3DERR_DEVICELOST;
@@ -6823,7 +7292,24 @@ public:
         // chunk boundary. Dirty-region payload is dropped (the
         // backend present path doesn't consume it).
         const HRESULT barrierHr = chunkBarrierFlush();
-        if (FAILED(barrierHr)) return barrierHr;
+        if (recordPresentTiming) {
+            presentTimingBarrierEnd = std::chrono::steady_clock::now();
+            presentTimingAppendEnd = presentTimingBarrierEnd;
+            presentTimingFlushEnd = presentTimingBarrierEnd;
+        }
+        if (FAILED(barrierHr)) {
+            if (recordPresentTiming) {
+                dxmt9DeviceInfoLog(
+                    "pe_present_timing device=%p hr=0x%08x total_ms=%.3f "
+                    "lock_wait_ms=%.3f barrier_ms=%.3f append_ms=0.000 "
+                    "flush_ms=0.000",
+                    this, static_cast<unsigned>(barrierHr),
+                    dxmt9ElapsedMs(presentTimingEnter, presentTimingBarrierEnd),
+                    dxmt9ElapsedMs(presentTimingEnter, presentTimingStart),
+                    dxmt9ElapsedMs(presentTimingStart, presentTimingBarrierEnd));
+            }
+            return barrierHr;
+        }
 
         D9CCommandRecordPresent record{};
         record.header.type = D9C_COMMAND_RECORD_PRESENT;
@@ -6835,12 +7321,43 @@ public:
         if (src) record.src = cs;
         if (dst) record.dst = cd;
         const HRESULT appendHr = appendCommandRecord(&record, sizeof(record));
-        if (FAILED(appendHr)) return appendHr;
+        if (recordPresentTiming) {
+            presentTimingAppendEnd = std::chrono::steady_clock::now();
+            presentTimingFlushEnd = presentTimingAppendEnd;
+        }
+        if (FAILED(appendHr)) {
+            if (recordPresentTiming) {
+                dxmt9DeviceInfoLog(
+                    "pe_present_timing device=%p hr=0x%08x total_ms=%.3f "
+                    "lock_wait_ms=%.3f barrier_ms=%.3f append_ms=%.3f "
+                    "flush_ms=0.000",
+                    this, static_cast<unsigned>(appendHr),
+                    dxmt9ElapsedMs(presentTimingEnter, presentTimingAppendEnd),
+                    dxmt9ElapsedMs(presentTimingEnter, presentTimingStart),
+                    dxmt9ElapsedMs(presentTimingStart, presentTimingBarrierEnd),
+                    dxmt9ElapsedMs(presentTimingBarrierEnd, presentTimingAppendEnd));
+            }
+            return appendHr;
+        }
         // Force-commit so Present runs at the bridge boundary even
         // if the chunk is below the byte/record threshold.
         const HRESULT flushHr = flushPendingCommandChunk(PeRecorderFlushReason::Present);
+        if (recordPresentTiming) {
+            presentTimingFlushEnd = std::chrono::steady_clock::now();
+            dxmt9DeviceInfoLog(
+                "pe_present_timing device=%p hr=0x%08x total_ms=%.3f "
+                "lock_wait_ms=%.3f barrier_ms=%.3f append_ms=%.3f "
+                "flush_ms=%.3f",
+                this, static_cast<unsigned>(flushHr),
+                dxmt9ElapsedMs(presentTimingEnter, presentTimingFlushEnd),
+                dxmt9ElapsedMs(presentTimingEnter, presentTimingStart),
+                dxmt9ElapsedMs(presentTimingStart, presentTimingBarrierEnd),
+                dxmt9ElapsedMs(presentTimingBarrierEnd, presentTimingAppendEnd),
+                dxmt9ElapsedMs(presentTimingAppendEnd, presentTimingFlushEnd));
+        }
         if (SUCCEEDED(flushHr)) {
             logPeRecorderStats("present");
+            markPePresentReturnedForCadence();
         }
         return flushHr;
     }
@@ -6848,6 +7365,7 @@ public:
     HRESULT STDMETHODCALLTYPE GetBackBuffer(UINT sc, UINT idx,
                                              D3DBACKBUFFER_TYPE type,
                                              IDirect3DSurface9** ppS) noexcept override {
+        notePeDeviceCallAfterPresent("GetBackBuffer", DXMT9_PE_CALLSITE_PC());
         if (!ppS) return D3DERR_INVALIDCALL;
         *ppS = nullptr;
         dxmt9DeviceDebugLog("device_get_back_buffer device=%p sc=%u idx=%u", this, sc, idx);
@@ -6900,6 +7418,7 @@ public:
     }
 
     HRESULT STDMETHODCALLTYPE GetRasterStatus(UINT swapChain, D3DRASTER_STATUS* p) noexcept override {
+        notePeDeviceCallAfterPresent("GetRasterStatus");
         if (!p || swapChain != 0) {
             return D3DERR_INVALIDCALL;
         }
@@ -7329,7 +7848,12 @@ public:
 
     HRESULT STDMETHODCALLTYPE GetRenderTargetData(IDirect3DSurface9* rt,
                                                    IDirect3DSurface9* dst) noexcept override {
+        auto peCadence = claimPeFirstCallAfterPresent();
+        const void* callerPc = DXMT9_PE_CALLSITE_PC();
         std::lock_guard<std::recursive_mutex> recorderLock(recorderMutex_);
+        const auto peCall =
+            logPeCallMilestoneAfterPresent("GetRenderTargetData", callerPc);
+        logPeFirstCallAfterPresent("GetRenderTargetData", peCadence, peCall);
         dxmt9DeviceDebugLog("device_get_render_target_data device=%p rt=%p dst=%p",
                             this, rt, dst);
         // get_render_target_data_policy: both args must be non-NULL. Wine
@@ -7560,9 +8084,15 @@ public:
 
     HRESULT STDMETHODCALLTYPE SetRenderTarget(DWORD idx,
                                                IDirect3DSurface9* pSurf) noexcept override {
+        const auto peCall = notePeDeviceCallAfterPresent(
+            "SetRenderTarget", DXMT9_PE_CALLSITE_PC());
+        const auto finishPeCall = [&](HRESULT hr) noexcept {
+            logPeCallReturnAfterPresent(peCall, "SetRenderTarget", hr);
+            return hr;
+        };
         dxmt9DeviceDebugLog("device_set_render_target device=%p idx=%u surf=%p",
                             this, (unsigned)idx, pSurf);
-        if (idx >= 4) return D3DERR_INVALIDCALL;
+        if (idx >= 4) return finishPeCall(D3DERR_INVALIDCALL);
         // render_target_device_mismatch: a surface created by a different
         // device cannot be bound. Compare via GetDevice; it AddRef's, so
         // Release the borrowed pointer immediately.
@@ -7571,7 +8101,7 @@ public:
             if (SUCCEEDED(pSurf->GetDevice(&owner)) && owner) {
                 const bool foreign = owner != static_cast<IDirect3DDevice9*>(this);
                 owner->Release();
-                if (foreign) return D3DERR_INVALIDCALL;
+                if (foreign) return finishPeCall(D3DERR_INVALIDCALL);
             }
         }
         if (idx == 0) {
@@ -7589,7 +8119,7 @@ public:
         if (idx == 0 && pSurf) {
             D3DSURFACE_DESC desc{};
             const HRESULT descHr = pSurf->GetDesc(&desc);
-            if (FAILED(descHr)) return descHr;
+            if (FAILED(descHr)) return finishPeCall(descHr);
             const uint32_t w = std::max<uint32_t>(1u, desc.Width);
             const uint32_t h = std::max<uint32_t>(1u, desc.Height);
             peState_.viewportShadow = D9CViewport{0, 0, w, h, 0.0f, 1.0f};
@@ -7598,12 +8128,18 @@ public:
             peState_.pendingViewport = true;
             peState_.pendingScissor = true;
         }
-        return S_OK;
+        return finishPeCall(S_OK);
     }
 
     HRESULT STDMETHODCALLTYPE GetRenderTarget(DWORD idx,
                                                IDirect3DSurface9** ppS) noexcept override {
-        if (!ppS) return D3DERR_INVALIDCALL;
+        const auto peCall = notePeDeviceCallAfterPresent(
+            "GetRenderTarget", DXMT9_PE_CALLSITE_PC());
+        const auto finishPeCall = [&](HRESULT hr) noexcept {
+            logPeCallReturnAfterPresent(peCall, "GetRenderTarget", hr);
+            return hr;
+        };
+        if (!ppS) return finishPeCall(D3DERR_INVALIDCALL);
         dxmt9DeviceDebugLog("device_get_render_target device=%p idx=%u",
                             this, (unsigned)idx);
         if (idx < 4 && rtSlotExplicit_[idx]) {
@@ -7611,29 +8147,30 @@ public:
                 *ppS = nullptr;
                 dxmt9DeviceDebugLog("device_get_render_target device=%p idx=%u -> explicit null",
                                     this, (unsigned)idx);
-                return D3DERR_NOTFOUND;
+                return finishPeCall(D3DERR_NOTFOUND);
             }
             rtSlots_[idx]->AddRef();
             *ppS = rtSlots_[idx];
             dxmt9DeviceDebugLog("device_get_render_target device=%p idx=%u -> cached rt=%p",
                                 this, (unsigned)idx, static_cast<void*>(*ppS));
-            return S_OK;
+            return finishPeCall(S_OK);
         }
         if (idx == 0 && cachedBackBuffer0_) {
             cachedBackBuffer0_->AddRef();
             *ppS = cachedBackBuffer0_;
             dxmt9DeviceDebugLog("device_get_render_target device=%p idx=%u -> cached backbuffer=%p",
                                 this, (unsigned)idx, static_cast<void*>(*ppS));
-            return S_OK;
+            return finishPeCall(S_OK);
         }
         D9CSurface* s = dxmt9c_device_get_render_target(dev_, idx);
         *ppS = s ? CreatePeSurface(s, this, nullptr, this, false) : nullptr;
         dxmt9DeviceDebugLog("device_get_render_target device=%p idx=%u -> surface=%p",
                             this, (unsigned)idx, ppS ? static_cast<void*>(*ppS) : nullptr);
-        return s ? S_OK : D3DERR_NOTFOUND;
+        return finishPeCall(s ? S_OK : D3DERR_NOTFOUND);
     }
 
     HRESULT STDMETHODCALLTYPE SetDepthStencilSurface(IDirect3DSurface9* pSurf) noexcept override {
+        notePeDeviceCallAfterPresent("SetDepthStencilSurface");
         dxmt9DeviceDebugLog("device_set_depth_stencil device=%p surf=%p", this, pSurf);
         // render_target_device_mismatch: reject foreign-device surfaces.
         if (pSurf) {
@@ -7673,6 +8210,7 @@ public:
     }
 
     HRESULT STDMETHODCALLTYPE GetDepthStencilSurface(IDirect3DSurface9** ppS) noexcept override {
+        notePeDeviceCallAfterPresent("GetDepthStencilSurface");
         if (!ppS) return D3DERR_INVALIDCALL;
         // Wine d3d9 contract: when there is no depth-stencil surface bound,
         // the return code is D3DERR_NOTFOUND (not S_FALSE) and *ppS is NULL.
@@ -7697,42 +8235,64 @@ public:
 
     /* ── scene ── */
     HRESULT STDMETHODCALLTYPE BeginScene() noexcept override {
+        const auto peCall = notePeDeviceCallAfterPresent(
+            "BeginScene", DXMT9_PE_CALLSITE_PC());
+        const auto finishPeCall = [&](HRESULT hr) noexcept {
+            logPeCallReturnAfterPresent(peCall, "BeginScene", hr);
+            return hr;
+        };
         // T2 device-lost gate.
-        if (deviceNotReset_) return D3DERR_DEVICELOST;
+        if (deviceNotReset_) return finishPeCall(D3DERR_DEVICELOST);
         dxmt9DeviceDebugLog("device_begin_scene device=%p", this);
         const HRESULT hr = hr32(dxmt9c_device_begin_scene(dev_));
         dxmt9DeviceDebugLog("device_begin_scene -> hr=0x%08x", (unsigned)hr);
-        return hr;
+        return finishPeCall(hr);
     }
     HRESULT STDMETHODCALLTYPE EndScene()   noexcept override {
+        const auto peCall = notePeDeviceCallAfterPresent(
+            "EndScene", DXMT9_PE_CALLSITE_PC());
+        const auto finishPeCall = [&](HRESULT hr) noexcept {
+            logPeCallReturnAfterPresent(peCall, "EndScene", hr);
+            return hr;
+        };
         std::lock_guard<std::recursive_mutex> recorderLock(recorderMutex_);
         // T2 device-lost gate.
-        if (deviceNotReset_) return D3DERR_DEVICELOST;
+        if (deviceNotReset_) return finishPeCall(D3DERR_DEVICELOST);
         dxmt9DeviceDebugLog("device_end_scene device=%p", this);
         const HRESULT flushHr = flushPeRecorder();
-        if (FAILED(flushHr)) return flushHr;
+        if (FAILED(flushHr)) return finishPeCall(flushHr);
         const HRESULT hr = hr32(dxmt9c_device_end_scene(dev_));
         dxmt9DeviceDebugLog("device_end_scene -> hr=0x%08x", (unsigned)hr);
-        return hr;
+        return finishPeCall(hr);
     }
 
     HRESULT STDMETHODCALLTYPE Clear(DWORD count, const D3DRECT* pRects,
                                      DWORD flags, D3DCOLOR color,
                                      float z, DWORD stencil) noexcept override {
+        const auto peCall = notePeDeviceCallAfterPresent(
+            "Clear", DXMT9_PE_CALLSITE_PC());
+        const auto finishPeCall = [&](HRESULT hr) noexcept {
+            logPeCallReturnAfterPresent(peCall, "Clear", hr);
+            return hr;
+        };
         std::lock_guard<std::recursive_mutex> recorderLock(recorderMutex_);
         // T2 device-lost gate.
-        if (deviceNotReset_) return D3DERR_DEVICELOST;
+        if (deviceNotReset_) return finishPeCall(D3DERR_DEVICELOST);
         // Wine d3d9: Clear count/pRects must agree, and Z clears require
         // a bound depth-stencil. visual_clear_color_only_policy /
         // visual_depth_buffer_clear_policy.
-        if (count == 0 && pRects != nullptr) return D3DERR_INVALIDCALL;
-        if (count > 0 && pRects == nullptr) return D3DERR_INVALIDCALL;
+        if (count == 0 && pRects != nullptr) {
+            return finishPeCall(D3DERR_INVALIDCALL);
+        }
+        if (count > 0 && pRects == nullptr) {
+            return finishPeCall(D3DERR_INVALIDCALL);
+        }
         if ((flags & D3DCLEAR_ZBUFFER) && !dsSurfaceExplicit_) {
             D9CSurface* s = dxmt9c_device_get_depth_stencil(dev_);
-            if (!s) return D3DERR_INVALIDCALL;
+            if (!s) return finishPeCall(D3DERR_INVALIDCALL);
             dxmt9c_surface_release(s);
         } else if ((flags & D3DCLEAR_ZBUFFER) && dsSurfaceExplicit_ && !dsSurface_) {
-            return D3DERR_INVALIDCALL;
+            return finishPeCall(D3DERR_INVALIDCALL);
         }
         dxmt9DeviceDebugLog("device_clear device=%p count=%u flags=0x%x color=0x%08x z=%f stencil=%u",
                             this, (unsigned)count, (unsigned)flags, (unsigned)color, z,
@@ -7743,7 +8303,7 @@ public:
         // appends a CLEAR record carrying flags + color + z + stencil
         // + the optional rect array as a tail payload.
         const HRESULT barrierHr = chunkBarrierFlush();
-        if (FAILED(barrierHr)) return barrierHr;
+        if (FAILED(barrierHr)) return finishPeCall(barrierHr);
 
         const std::uint32_t rectBytes = static_cast<std::uint32_t>(count) * sizeof(D9CRect);
         D9CCommandRecordClear header{};
@@ -7756,7 +8316,7 @@ public:
         header.rectCount = (uint32_t)count;
         header.rectOffset = sizeof(header);
 
-        return appendCommandRecordDirect(
+        const HRESULT hr = appendCommandRecordDirect(
             header.header.type, header.header.size,
             [&header, pRects, rectBytes](std::uint8_t* record) {
                 std::memcpy(record, &header, sizeof(header));
@@ -7764,11 +8324,13 @@ public:
                     std::memcpy(record + header.rectOffset, pRects, rectBytes);
                 }
             });
+        return finishPeCall(hr);
     }
 
     /* ── transforms ── */
     HRESULT STDMETHODCALLTYPE SetTransform(D3DTRANSFORMSTATETYPE state,
                                             const D3DMATRIX* pM) noexcept override {
+        notePeDeviceCallAfterPresent("SetTransform");
         if (!pM) return D3DERR_INVALIDCALL;
         dxmt9DeviceDebugLog(
             "device_set_transform device=%p state=%u "
@@ -7841,6 +8403,7 @@ public:
     }
     HRESULT STDMETHODCALLTYPE GetTransform(D3DTRANSFORMSTATETYPE state,
                                             D3DMATRIX* pM) noexcept override {
+        notePeDeviceCallAfterPresent("GetTransform");
         if (!pM) return D3DERR_INVALIDCALL;
         dxmt9DeviceDebugLog("device_get_transform device=%p state=%u", this, (unsigned)state);
         const uint32_t stateKey = static_cast<uint32_t>(state);
@@ -7854,6 +8417,7 @@ public:
     }
     HRESULT STDMETHODCALLTYPE MultiplyTransform(D3DTRANSFORMSTATETYPE state,
                                                  const D3DMATRIX* pM) noexcept override {
+        notePeDeviceCallAfterPresent("MultiplyTransform");
         if (!pM) return D3DERR_INVALIDCALL;
         dxmt9DeviceDebugLog("device_multiply_transform device=%p state=%u", this, (unsigned)state);
         D3DMATRIX cur{};
@@ -7886,6 +8450,7 @@ public:
 
     /* ── viewport / scissor ── */
     HRESULT STDMETHODCALLTYPE SetViewport(const D3DVIEWPORT9* pVP) noexcept override {
+        notePeDeviceCallAfterPresent("SetViewport");
         if (!pVP) return D3DERR_INVALIDCALL;
         dxmt9DeviceDebugLog("device_set_viewport device=%p x=%u y=%u w=%u h=%u minZ=%f maxZ=%f",
                             this, pVP->X, pVP->Y, pVP->Width, pVP->Height, pVP->MinZ, pVP->MaxZ);
@@ -7903,6 +8468,7 @@ public:
         return S_OK;
     }
     HRESULT STDMETHODCALLTYPE GetViewport(D3DVIEWPORT9* pVP) noexcept override {
+        notePeDeviceCallAfterPresent("GetViewport");
         if (!pVP) return D3DERR_INVALIDCALL;
         // Phase 12: PE shadow is the source of truth. SetViewport writes
         // only into peState_.viewportShadow (recorder-active path);
@@ -7916,6 +8482,7 @@ public:
         return S_OK;
     }
     HRESULT STDMETHODCALLTYPE SetScissorRect(const RECT* pR) noexcept override {
+        notePeDeviceCallAfterPresent("SetScissorRect");
         if (!pR) return D3DERR_INVALIDCALL;
         dxmt9DeviceDebugLog("device_set_scissor_rect device=%p rect=%ld,%ld-%ld,%ld",
                             this, (long)pR->left, (long)pR->top, (long)pR->right, (long)pR->bottom);
@@ -7929,6 +8496,7 @@ public:
         return S_OK;
     }
     HRESULT STDMETHODCALLTYPE GetScissorRect(RECT* pR) noexcept override {
+        notePeDeviceCallAfterPresent("GetScissorRect");
         if (!pR) return D3DERR_INVALIDCALL;
         // Phase 12: PE shadow is the source of truth (see GetViewport).
         const D9CRect& cr = peState_.scissorShadow;
@@ -7939,6 +8507,7 @@ public:
 
     /* ── material / lights ── */
     HRESULT STDMETHODCALLTYPE SetMaterial(const D3DMATERIAL9* pM) noexcept override {
+        notePeDeviceCallAfterPresent("SetMaterial");
         if (!pM) return D3DERR_INVALIDCALL;
         dxmt9DeviceDebugLog("device_set_material device=%p", this);
         if (std::memcmp(&peState_.materialShadow, pM, sizeof(D9CMaterial)) == 0) {
@@ -7949,6 +8518,7 @@ public:
         return S_OK;
     }
     HRESULT STDMETHODCALLTYPE GetMaterial(D3DMATERIAL9* pM) noexcept override {
+        notePeDeviceCallAfterPresent("GetMaterial");
         if (!pM) return D3DERR_INVALIDCALL;
         dxmt9DeviceDebugLog("device_get_material device=%p", this);
         // PE-shadow is the source of truth: SetMaterial only writes the
@@ -7958,6 +8528,7 @@ public:
         return S_OK;
     }
     HRESULT STDMETHODCALLTYPE SetLight(DWORD idx, const D3DLIGHT9* pL) noexcept override {
+        notePeDeviceCallAfterPresent("SetLight");
         if (!pL) return D3DERR_INVALIDCALL;
         dxmt9DeviceDebugLog("device_set_light device=%p idx=%u type=%u", this, (unsigned)idx, (unsigned)pL->Type);
         D9CLight cl{};
@@ -7995,6 +8566,7 @@ public:
         return hr32(dxmt9c_device_set_light(dev_, idx, &cl));
     }
     HRESULT STDMETHODCALLTYPE GetLight(DWORD idx, D3DLIGHT9* pL) noexcept override {
+        notePeDeviceCallAfterPresent("GetLight");
         dxmt9DeviceDebugLog("device_get_light device=%p idx=%u", this, (unsigned)idx);
         if (!pL) return D3DERR_INVALIDCALL;
         if (idx >= D9C_DRAW_PACKET_MAX_LIGHTS) {
@@ -8022,6 +8594,7 @@ public:
         return S_OK;
     }
     HRESULT STDMETHODCALLTYPE LightEnable(DWORD idx, BOOL en) noexcept override {
+        notePeDeviceCallAfterPresent("LightEnable");
         dxmt9DeviceDebugLog("device_light_enable device=%p idx=%u enable=%u", this, (unsigned)idx, (unsigned)en);
         // Phase 12: PE-shadow-only when chunk recorder is active.
         if (idx < D9C_DRAW_PACKET_MAX_LIGHTS) {
@@ -8047,6 +8620,7 @@ public:
         return hr32(dxmt9c_device_light_enable(dev_, idx, en ? 1u : 0u));
     }
     HRESULT STDMETHODCALLTYPE GetLightEnable(DWORD idx, BOOL* pEn) noexcept override {
+        notePeDeviceCallAfterPresent("GetLightEnable");
         dxmt9DeviceDebugLog("device_get_light_enable device=%p idx=%u", this, (unsigned)idx);
         if (!pEn) return D3DERR_INVALIDCALL;
         // Phase 12: LightEnable shadow is the source of truth for
@@ -8066,6 +8640,7 @@ public:
 
     /* ── clip planes ── */
     HRESULT STDMETHODCALLTYPE SetClipPlane(DWORD idx, const float* pPlane) noexcept override {
+        notePeDeviceCallAfterPresent("SetClipPlane");
         dxmt9DeviceDebugLog("device_set_clip_plane device=%p idx=%u plane=%p", this, (unsigned)idx, pPlane);
         if (!pPlane) return D3DERR_INVALIDCALL;
         if (idx >= 6) return D3DERR_INVALIDCALL;
@@ -8079,6 +8654,7 @@ public:
         return S_OK;
     }
     HRESULT STDMETHODCALLTYPE GetClipPlane(DWORD idx, float* pPlane) noexcept override {
+        notePeDeviceCallAfterPresent("GetClipPlane");
         dxmt9DeviceDebugLog("device_get_clip_plane device=%p idx=%u", this, (unsigned)idx);
         if (!pPlane) return D3DERR_INVALIDCALL;
         if (idx >= 6) return D3DERR_INVALIDCALL;
@@ -8091,6 +8667,7 @@ public:
         return S_OK;
     }
     HRESULT STDMETHODCALLTYPE SetClipStatus(const D3DCLIPSTATUS9* p) noexcept override {
+        notePeDeviceCallAfterPresent("SetClipStatus");
         dxmt9DeviceDebugLog("device_set_clip_status device=%p", this);
         // gap_d3d9 B.8: dxmt9 does not track per-primitive clip status — no hardware
         // path exposes per-vertex clip-flag accumulation, exactly like wined3d's
@@ -8101,6 +8678,7 @@ public:
         return S_OK;
     }
     HRESULT STDMETHODCALLTYPE GetClipStatus(D3DCLIPSTATUS9* p) noexcept override {
+        notePeDeviceCallAfterPresent("GetClipStatus");
         dxmt9DeviceDebugLog("device_get_clip_status device=%p", this);
         if (!p) return D3DERR_INVALIDCALL;
         // Defined "everything visible / nothing clipped" default rather than echoing
@@ -8182,6 +8760,7 @@ public:
     /* ── render states ── */
     HRESULT STDMETHODCALLTYPE SetRenderState(D3DRENDERSTATETYPE state,
                                               DWORD value) noexcept override {
+        notePeDeviceCallAfterPresent("SetRenderState");
         dxmt9DeviceDebugLog("device_set_render_state device=%p state=%u value=0x%x",
                             this, (unsigned)state, (unsigned)value);
         // R-FORMAT-11 — RESZ MSAA depth-resolve trigger. The exact sentinel
@@ -8226,6 +8805,7 @@ public:
     }
     HRESULT STDMETHODCALLTYPE GetRenderState(D3DRENDERSTATETYPE state,
                                               DWORD* pValue) noexcept override {
+        notePeDeviceCallAfterPresent("GetRenderState");
         if (!pValue) return D3DERR_INVALIDCALL;
         uint32_t shadowValue = 0;
         if (peState_.renderStateShadow.get(static_cast<DWORD>(state), shadowValue)) {
@@ -8239,6 +8819,7 @@ public:
     /* ── state blocks ── */
     HRESULT STDMETHODCALLTYPE CreateStateBlock(D3DSTATEBLOCKTYPE type,
                                                 IDirect3DStateBlock9** ppSB) noexcept override {
+        notePeDeviceCallAfterPresent("CreateStateBlock");
         if (!ppSB) return D3DERR_INVALIDCALL;
         // D3D9 creation contract: a failed create must leave the out-pointer
         // NULL before the error HRESULT is returned.
@@ -8257,6 +8838,7 @@ public:
         return S_OK;
     }
     HRESULT STDMETHODCALLTYPE BeginStateBlock() noexcept override {
+        notePeDeviceCallAfterPresent("BeginStateBlock");
         if (stateBlockRecording_) {
             return D3DERR_INVALIDCALL;
         }
@@ -8275,6 +8857,7 @@ public:
         return hr;
     }
     HRESULT STDMETHODCALLTYPE EndStateBlock(IDirect3DStateBlock9** ppSB) noexcept override {
+        notePeDeviceCallAfterPresent("EndStateBlock");
         if (!ppSB) return D3DERR_INVALIDCALL;
         // EndStateBlock without a matching BeginStateBlock returns INVALIDCALL
         // and MUST leave the out-pointer UNTOUCHED — the Wine d3d9 oracle checks
@@ -8358,6 +8941,7 @@ public:
     HRESULT STDMETHODCALLTYPE SetTextureStageState(DWORD stage,
                                                     D3DTEXTURESTAGESTATETYPE type,
                                                     DWORD value) noexcept override {
+        notePeDeviceCallAfterPresent("SetTextureStageState");
         dxmt9DeviceDebugLog("device_set_texture_stage_state device=%p stage=%u type=%u value=0x%x",
                             this, (unsigned)stage, (unsigned)type, (unsigned)value);
         // Wine d3d9 test_limits + test_texture_stage_states: reject
@@ -8387,6 +8971,7 @@ public:
     HRESULT STDMETHODCALLTYPE GetTextureStageState(DWORD stage,
                                                     D3DTEXTURESTAGESTATETYPE type,
                                                     DWORD* pValue) noexcept override {
+        notePeDeviceCallAfterPresent("GetTextureStageState");
         if (!pValue) return D3DERR_INVALIDCALL;
         if (stage >= kFragmentBlendStageCount) return D3DERR_INVALIDCALL;
         if (!isValidTextureStageStateType(type)) return D3DERR_INVALIDCALL;
@@ -8403,6 +8988,7 @@ public:
     HRESULT STDMETHODCALLTYPE SetSamplerState(DWORD sampler,
                                                D3DSAMPLERSTATETYPE type,
                                                DWORD value) noexcept override {
+        notePeDeviceCallAfterPresent("SetSamplerState");
         dxmt9DeviceDebugLog("device_set_sampler_state device=%p sampler=%u type=%u value=0x%x",
                             this, (unsigned)sampler, (unsigned)type, (unsigned)value);
         uint32_t samplerIndex = 0;
@@ -8431,6 +9017,7 @@ public:
     HRESULT STDMETHODCALLTYPE GetSamplerState(DWORD sampler,
                                                D3DSAMPLERSTATETYPE type,
                                                DWORD* pValue) noexcept override {
+        notePeDeviceCallAfterPresent("GetSamplerState");
         if (!pValue) return D3DERR_INVALIDCALL;
         uint32_t samplerIndex = 0;
         if (!samplerSlot(sampler, samplerIndex)) {
@@ -8454,6 +9041,7 @@ public:
         return S_OK;
     }
     HRESULT STDMETHODCALLTYPE ValidateDevice(DWORD* pPasses) noexcept override {
+        notePeDeviceCallAfterPresent("ValidateDevice");
         dxmt9DeviceDebugLog("device_validate_device device=%p", this);
         if (pPasses) *pPasses = 1; return S_OK;
     }
@@ -8465,6 +9053,7 @@ public:
      *     the active palette into the backend A8R8G8B8 backing texture.
      * ─────────────────────────────────────────────────────────────── */
     HRESULT STDMETHODCALLTYPE SetPaletteEntries(UINT palette, const PALETTEENTRY* entries) noexcept override {
+        notePeDeviceCallAfterPresent("SetPaletteEntries");
         dxmt9DeviceDebugLog("device_set_palette_entries device=%p palette=%u entries=%p",
                             this, palette, static_cast<const void*>(entries));
         if (!entries) return D3DERR_INVALIDCALL;
@@ -8493,6 +9082,7 @@ public:
         return S_OK;
     }
     HRESULT STDMETHODCALLTYPE GetPaletteEntries(UINT palette, PALETTEENTRY* out) noexcept override {
+        notePeDeviceCallAfterPresent("GetPaletteEntries");
         dxmt9DeviceDebugLog("device_get_palette_entries device=%p palette=%u out=%p",
                             this, palette, static_cast<void*>(out));
         if (!out) return D3DERR_INVALIDCALL;
@@ -8502,6 +9092,7 @@ public:
         return S_OK;
     }
     HRESULT STDMETHODCALLTYPE SetCurrentTexturePalette(UINT palette) noexcept override {
+        notePeDeviceCallAfterPresent("SetCurrentTexturePalette");
         dxmt9DeviceDebugLog("device_set_current_texture_palette device=%p palette=%u", this, palette);
         if (palettes_.find(palette) == palettes_.end()) {
             return D3DERR_INVALIDCALL;
@@ -8512,6 +9103,7 @@ public:
         return S_OK;
     }
     HRESULT STDMETHODCALLTYPE GetCurrentTexturePalette(UINT* p) noexcept override {
+        notePeDeviceCallAfterPresent("GetCurrentTexturePalette");
         dxmt9DeviceDebugLog("device_get_current_texture_palette device=%p out=%p",
                             this, static_cast<void*>(p));
         if (!p) return D3DERR_INVALIDCALL;
@@ -8522,21 +9114,25 @@ public:
 
     /* ── soft VP / NPatches ── */
     HRESULT STDMETHODCALLTYPE SetSoftwareVertexProcessing(BOOL enable) noexcept override {
+        notePeDeviceCallAfterPresent("SetSoftwareVertexProcessing");
         dxmt9DeviceDebugLog("device_set_software_vertex_processing device=%p enable=%u", this, (unsigned)enable);
         softwareVertexProcessing_ = enable ? TRUE : FALSE;
         return S_OK;
     }
     BOOL    STDMETHODCALLTYPE GetSoftwareVertexProcessing() noexcept override {
+        notePeDeviceCallAfterPresent("GetSoftwareVertexProcessing");
         dxmt9DeviceDebugLog("device_get_software_vertex_processing device=%p", this);
         return softwareVertexProcessing_;
     }
     HRESULT STDMETHODCALLTYPE SetNPatchMode(float segments) noexcept override {
+        notePeDeviceCallAfterPresent("SetNPatchMode");
         dxmt9DeviceDebugLog("device_set_npatch_mode device=%p segments=%f", this, segments);
         // stub: Wine returns S_OK; N-Patch tessellation was removed in D3D10, legacy
         // apps tolerate a no-op.
         return S_OK;
     }
     float   STDMETHODCALLTYPE GetNPatchMode() noexcept override {
+        notePeDeviceCallAfterPresent("GetNPatchMode");
         // stub: Wine returns 0.0f; N-Patch tessellation removed in D3D10, legacy apps
         // tolerate a no-op.
         return 0.0f;
@@ -8561,6 +9157,7 @@ public:
     }
     HRESULT STDMETHODCALLTYPE SetTexture(DWORD stage,
                                           IDirect3DBaseTexture9* pTex) noexcept override {
+        notePeDeviceCallAfterPresent("SetTexture");
         dxmt9DeviceDebugLog("device_set_texture device=%p stage=%u tex=%p",
                             this, (unsigned)stage, pTex);
         // Wine d3d9 test_limits: SetTexture with a stage at or beyond
@@ -8587,6 +9184,7 @@ public:
     }
     HRESULT STDMETHODCALLTYPE GetTexture(DWORD stage,
                                           IDirect3DBaseTexture9** ppTex) noexcept override {
+        notePeDeviceCallAfterPresent("GetTexture");
         if (!ppTex) return D3DERR_INVALIDCALL;
         uint32_t textureSlot = 0;
         if (!fragmentTextureStageSlot(stage, textureSlot)) {
@@ -8636,6 +9234,7 @@ public:
     }
 
     HRESULT STDMETHODCALLTYPE SetFVF(DWORD fvf) noexcept override {
+        notePeDeviceCallAfterPresent("SetFVF");
         dxmt9DeviceDebugLog("device_set_fvf device=%p fvf=0x%x", this, (unsigned)fvf);
         if (fvf_ == fvf && vdecl_ != nullptr) {
             /* Same FVF, decl already mirrored. */
@@ -8654,6 +9253,7 @@ public:
         return S_OK;
     }
     HRESULT STDMETHODCALLTYPE GetFVF(DWORD* pFVF) noexcept override {
+        notePeDeviceCallAfterPresent("GetFVF");
         if (!pFVF) return D3DERR_INVALIDCALL;
         *pFVF = fvf_;
         return S_OK;
@@ -8661,6 +9261,7 @@ public:
     HRESULT STDMETHODCALLTYPE CreateVertexDeclaration(
             const D3DVERTEXELEMENT9* pElems,
             IDirect3DVertexDeclaration9** ppVD) noexcept override {
+        notePeDeviceCallAfterPresent("CreateVertexDeclaration");
         if (!ppVD) return D3DERR_INVALIDCALL;
         /* Wine returns INVALIDCALL with *ppVD == NULL on bad input. */
         const HRESULT validationHr = validateVertexElements(pElems);
@@ -8692,6 +9293,12 @@ public:
     }
     HRESULT STDMETHODCALLTYPE SetVertexDeclaration(
             IDirect3DVertexDeclaration9* pVD) noexcept override {
+        const auto peCall =
+            notePeDeviceCallAfterPresent("SetVertexDeclaration");
+        const auto finishPeCall = [&](HRESULT hr) noexcept {
+            logPeCallReturnAfterPresent(peCall, "SetVertexDeclaration", hr);
+            return hr;
+        };
         dxmt9DeviceDebugLog("device_set_vertex_declaration device=%p decl=%p", this, pVD);
         // PE-shadow stateblock support: remember that vdecl was touched
         // during BeginStateBlock/EndStateBlock so the resulting block's
@@ -8700,7 +9307,7 @@ public:
         if (stateBlockRecording_) {
             peState_.stateBlockVdeclRecorded = true;
         }
-        if (vdecl_ == pVD) return S_OK;
+        if (vdecl_ == pVD) return finishPeCall(S_OK);
         /* Wine semantics (test_get_set_vertex_declaration, device.c:376):
          * SetVertexDeclaration must NOT touch the user-visible refcount
          * of either the previous or the new decl. The user is required
@@ -8719,10 +9326,11 @@ public:
         fvf_ = 0;
         peState_.pendingVdecl = true;
         peState_.pendingFvf = true;
-        return S_OK;
+        return finishPeCall(S_OK);
     }
     HRESULT STDMETHODCALLTYPE GetVertexDeclaration(
             IDirect3DVertexDeclaration9** ppVD) noexcept override {
+        notePeDeviceCallAfterPresent("GetVertexDeclaration");
         if (!ppVD) return D3DERR_INVALIDCALL;
         if (vdecl_) vdecl_->AddRef();
         *ppVD = vdecl_; return S_OK;
@@ -8731,6 +9339,7 @@ public:
     /* ── vertex shaders ── */
     HRESULT STDMETHODCALLTYPE CreateVertexShader(const DWORD* pFn,
                                                   IDirect3DVertexShader9** ppVS) noexcept override {
+        notePeDeviceCallAfterPresent("CreateVertexShader");
         if (!ppVS) return D3DERR_INVALIDCALL;
         /* Wine semantics: leave *ppVS as NULL on validation failure. */
         const HRESULT validationHr = validateShaderBytecodeForStage(pFn,
@@ -8749,6 +9358,7 @@ public:
         return S_OK;
     }
     HRESULT STDMETHODCALLTYPE SetVertexShader(IDirect3DVertexShader9* pVS) noexcept override {
+        notePeDeviceCallAfterPresent("SetVertexShader");
         dxmt9DeviceDebugLog("device_set_vertex_shader device=%p shader=%p", this, pVS);
         // Phase 12: PE-shadow-only when chunk recorder is active. The
         // packet built for the next draw carries vsValid=1 + the vs_
@@ -8760,6 +9370,7 @@ public:
         return S_OK;
     }
     HRESULT STDMETHODCALLTYPE GetVertexShader(IDirect3DVertexShader9** ppVS) noexcept override {
+        notePeDeviceCallAfterPresent("GetVertexShader");
         if (!ppVS) return D3DERR_INVALIDCALL;
         if (vs_) vs_->AddRef(); *ppVS = vs_; return S_OK;
     }
@@ -8806,23 +9417,31 @@ public:
 
     HRESULT STDMETHODCALLTYPE SetVertexShaderConstantF(UINT start, const float* pData,
                                                         UINT count) noexcept override {
+        const auto peCall =
+            notePeDeviceCallAfterPresent("SetVertexShaderConstantF");
+        const auto finishPeCall = [&](HRESULT hr) noexcept {
+            logPeCallReturnAfterPresent(peCall, "SetVertexShaderConstantF", hr);
+            return hr;
+        };
         dxmt9DeviceDebugLog("device_set_vertex_shader_constant_f device=%p start=%u count=%u data=%p",
                             this, start, count, pData);
         const HRESULT hr = validateConstRange(start, count, pData, kVsConstFMax);
-        if (FAILED(hr)) return hr;
+        if (FAILED(hr)) return finishPeCall(hr);
         // Shadow-only: defer the record until the next flushPendingConsts()
         // (called before each draw record + at chunk commit).
         touchConstShadow(peConsts_.vsConstF, start, count, pData, sizeof(float) * 4);
-        return S_OK;
+        return finishPeCall(S_OK);
     }
     HRESULT STDMETHODCALLTYPE GetVertexShaderConstantF(UINT start, float* pData,
                                                         UINT count) noexcept override {
+        notePeDeviceCallAfterPresent("GetVertexShaderConstantF");
         const HRESULT hr = validateConstRange(start, count, pData, kVsConstFMax);
         if (FAILED(hr)) return hr;
         readConstShadow(peConsts_.vsConstF, start, pData, count, sizeof(float) * 4);
         return S_OK;    }
     HRESULT STDMETHODCALLTYPE SetVertexShaderConstantI(UINT start, const INT* pData,
                                                         UINT count) noexcept override {
+        notePeDeviceCallAfterPresent("SetVertexShaderConstantI");
         dxmt9DeviceDebugLog("device_set_vertex_shader_constant_i device=%p start=%u count=%u data=%p",
                             this, start, count, pData);
         const HRESULT hr = validateConstRange(start, count, pData, kVsConstIMax);
@@ -8832,12 +9451,14 @@ public:
     }
     HRESULT STDMETHODCALLTYPE GetVertexShaderConstantI(UINT start, INT* pData,
                                                         UINT count) noexcept override {
+        notePeDeviceCallAfterPresent("GetVertexShaderConstantI");
         const HRESULT hr = validateConstRange(start, count, pData, kVsConstIMax);
         if (FAILED(hr)) return hr;
         readConstShadow(peConsts_.vsConstI, start, pData, count, sizeof(int32_t) * 4);        return S_OK;
     }
     HRESULT STDMETHODCALLTYPE SetVertexShaderConstantB(UINT start, const BOOL* pData,
                                                         UINT count) noexcept override {
+        notePeDeviceCallAfterPresent("SetVertexShaderConstantB");
         dxmt9DeviceDebugLog("device_set_vertex_shader_constant_b device=%p start=%u count=%u data=%p",
                             this, start, count, pData);
         const HRESULT hr = validateConstRange(start, count, pData, kVsConstBMax);
@@ -8847,6 +9468,7 @@ public:
     }
     HRESULT STDMETHODCALLTYPE GetVertexShaderConstantB(UINT start, BOOL* pData,
                                                         UINT count) noexcept override {
+        notePeDeviceCallAfterPresent("GetVertexShaderConstantB");
         const HRESULT hr = validateConstRange(start, count, pData, kVsConstBMax);
         if (FAILED(hr)) return hr;
         readConstShadow(peConsts_.vsConstB, start, pData, count, sizeof(uint32_t));        return S_OK;
@@ -8856,9 +9478,14 @@ public:
     HRESULT STDMETHODCALLTYPE SetStreamSource(UINT stream,
                                                IDirect3DVertexBuffer9* pBuf,
                                                UINT offset, UINT stride) noexcept override {
+        const auto peCall = notePeDeviceCallAfterPresent("SetStreamSource");
+        const auto finishPeCall = [&](HRESULT hr) noexcept {
+            logPeCallReturnAfterPresent(peCall, "SetStreamSource", hr);
+            return hr;
+        };
         dxmt9DeviceDebugLog("device_set_stream_source device=%p stream=%u buf=%p offset=%u stride=%u",
                             this, stream, pBuf, offset, stride);
-        if (stream >= 16) return D3DERR_INVALIDCALL;
+        if (stream >= 16) return finishPeCall(D3DERR_INVALIDCALL);
         // Wine d3d9 deactivate-stream idiom: SetStreamSource(NULL, 0, 0)
         // detaches the buffer while preserving the previously cached
         // offset/stride for the stream slot — verified in
@@ -8869,24 +9496,25 @@ public:
         // path.
         if (pBuf == nullptr && offset == 0 && stride == 0) {
             if (streamSrc_[stream] == nullptr) {
-                return S_OK;
+                return finishPeCall(S_OK);
             }
             setRef(streamSrc_[stream], (IDirect3DVertexBuffer9*)nullptr);
             peState_.pendingStreamMask |= 1u << stream;
-            return S_OK;
+            return finishPeCall(S_OK);
         }
         if (shadowedStreamSourceEquals(stream, pBuf, offset, stride)) {
-            return S_OK;
+            return finishPeCall(S_OK);
         }
         setRef(streamSrc_[stream], pBuf);
         streamOff_[stream] = offset;
         streamStr_[stream] = stride;
         peState_.pendingStreamMask |= 1u << stream;
-        return S_OK;
+        return finishPeCall(S_OK);
     }
     HRESULT STDMETHODCALLTYPE GetStreamSource(UINT stream,
                                                IDirect3DVertexBuffer9** ppBuf,
                                                UINT* pOffset, UINT* pStride) noexcept override {
+        notePeDeviceCallAfterPresent("GetStreamSource");
         if (!ppBuf) return D3DERR_INVALIDCALL;
         if (stream >= 16) return D3DERR_INVALIDCALL;
         IDirect3DVertexBuffer9* b = streamSrc_[stream];
@@ -8897,6 +9525,7 @@ public:
         return S_OK;
     }
     HRESULT STDMETHODCALLTYPE SetStreamSourceFreq(UINT stream, UINT freq) noexcept override {
+        notePeDeviceCallAfterPresent("SetStreamSourceFreq");
         dxmt9DeviceDebugLog("device_set_stream_source_freq device=%p stream=%u freq=0x%x",
                             this, stream, (unsigned)freq);
         if (stream >= 16) return D3DERR_INVALIDCALL;
@@ -8927,6 +9556,7 @@ public:
         return hr32(dxmt9c_device_set_stream_source_freq(dev_, stream, freq));
     }
     HRESULT STDMETHODCALLTYPE GetStreamSourceFreq(UINT stream, UINT* pFreq) noexcept override {
+        notePeDeviceCallAfterPresent("GetStreamSourceFreq");
         if (!pFreq) return D3DERR_INVALIDCALL;
         if (stream >= 16) return D3DERR_INVALIDCALL;
         const UINT freq = streamFreq_[stream];
@@ -8938,13 +9568,19 @@ public:
 
     /* ── indices ── */
     HRESULT STDMETHODCALLTYPE SetIndices(IDirect3DIndexBuffer9* pIBuf) noexcept override {
+        const auto peCall = notePeDeviceCallAfterPresent("SetIndices");
+        const auto finishPeCall = [&](HRESULT hr) noexcept {
+            logPeCallReturnAfterPresent(peCall, "SetIndices", hr);
+            return hr;
+        };
         dxmt9DeviceDebugLog("device_set_indices device=%p ib=%p", this, pIBuf);
-        if (indexBuf_ == pIBuf) return S_OK;
+        if (indexBuf_ == pIBuf) return finishPeCall(S_OK);
         setRef(indexBuf_, pIBuf);
         peState_.pendingIb = true;
-        return S_OK;
+        return finishPeCall(S_OK);
     }
     HRESULT STDMETHODCALLTYPE GetIndices(IDirect3DIndexBuffer9** ppIBuf) noexcept override {
+        notePeDeviceCallAfterPresent("GetIndices");
         if (!ppIBuf) return D3DERR_INVALIDCALL;
         if (indexBuf_) indexBuf_->AddRef(); *ppIBuf = indexBuf_; return S_OK;
     }
@@ -8952,6 +9588,7 @@ public:
     /* ── pixel shaders ── */
     HRESULT STDMETHODCALLTYPE CreatePixelShader(const DWORD* pFn,
                                                  IDirect3DPixelShader9** ppPS) noexcept override {
+        notePeDeviceCallAfterPresent("CreatePixelShader");
         if (!ppPS) return D3DERR_INVALIDCALL;
         const HRESULT validationHr = validateShaderBytecodeForStage(pFn,
                                                                     /*vertexStage=*/false);
@@ -8969,6 +9606,7 @@ public:
         return S_OK;
     }
     HRESULT STDMETHODCALLTYPE SetPixelShader(IDirect3DPixelShader9* pPS) noexcept override {
+        notePeDeviceCallAfterPresent("SetPixelShader");
         dxmt9DeviceDebugLog("device_set_pixel_shader device=%p shader=%p", this, pPS);
         if (ps_ == pPS) return S_OK;
         setRef(ps_, pPS);
@@ -8976,11 +9614,13 @@ public:
         return S_OK;
     }
     HRESULT STDMETHODCALLTYPE GetPixelShader(IDirect3DPixelShader9** ppPS) noexcept override {
+        notePeDeviceCallAfterPresent("GetPixelShader");
         if (!ppPS) return D3DERR_INVALIDCALL;
         if (ps_) ps_->AddRef(); *ppPS = ps_; return S_OK;
     }
     HRESULT STDMETHODCALLTYPE SetPixelShaderConstantF(UINT start, const float* pData,
                                                        UINT count) noexcept override {
+        notePeDeviceCallAfterPresent("SetPixelShaderConstantF");
         dxmt9DeviceDebugLog("device_set_pixel_shader_constant_f device=%p start=%u count=%u data=%p",
                             this, start, count, pData);
         const HRESULT hr = validateConstRange(start, count, pData, kPsConstFMax);
@@ -8990,12 +9630,14 @@ public:
     }
     HRESULT STDMETHODCALLTYPE GetPixelShaderConstantF(UINT start, float* pData,
                                                        UINT count) noexcept override {
+        notePeDeviceCallAfterPresent("GetPixelShaderConstantF");
         const HRESULT hr = validateConstRange(start, count, pData, kPsConstFMax);
         if (FAILED(hr)) return hr;
         readConstShadow(peConsts_.psConstF, start, pData, count, sizeof(float) * 4);
         return S_OK;    }
     HRESULT STDMETHODCALLTYPE SetPixelShaderConstantI(UINT start, const INT* pData,
                                                        UINT count) noexcept override {
+        notePeDeviceCallAfterPresent("SetPixelShaderConstantI");
         dxmt9DeviceDebugLog("device_set_pixel_shader_constant_i device=%p start=%u count=%u data=%p",
                             this, start, count, pData);
         const HRESULT hr = validateConstRange(start, count, pData, kPsConstIMax);
@@ -9005,12 +9647,14 @@ public:
     }
     HRESULT STDMETHODCALLTYPE GetPixelShaderConstantI(UINT start, INT* pData,
                                                        UINT count) noexcept override {
+        notePeDeviceCallAfterPresent("GetPixelShaderConstantI");
         const HRESULT hr = validateConstRange(start, count, pData, kPsConstIMax);
         if (FAILED(hr)) return hr;
         readConstShadow(peConsts_.psConstI, start, pData, count, sizeof(int32_t) * 4);        return S_OK;
     }
     HRESULT STDMETHODCALLTYPE SetPixelShaderConstantB(UINT start, const BOOL* pData,
                                                        UINT count) noexcept override {
+        notePeDeviceCallAfterPresent("SetPixelShaderConstantB");
         dxmt9DeviceDebugLog("device_set_pixel_shader_constant_b device=%p start=%u count=%u data=%p",
                             this, start, count, pData);
         const HRESULT hr = validateConstRange(start, count, pData, kPsConstBMax);
@@ -9020,6 +9664,7 @@ public:
     }
     HRESULT STDMETHODCALLTYPE GetPixelShaderConstantB(UINT start, BOOL* pData,
                                                        UINT count) noexcept override {
+        notePeDeviceCallAfterPresent("GetPixelShaderConstantB");
         const HRESULT hr = validateConstRange(start, count, pData, kPsConstBMax);
         if (FAILED(hr)) return hr;
         readConstShadow(peConsts_.psConstB, start, pData, count, sizeof(uint32_t));        return S_OK;
@@ -9029,6 +9674,7 @@ public:
     HRESULT STDMETHODCALLTYPE DrawPrimitive(D3DPRIMITIVETYPE type,
                                              UINT startVertex,
                                              UINT count) noexcept override {
+        notePeDeviceCallAfterPresent("DrawPrimitive");
         // T2 device-lost gate.
         if (deviceNotReset_) return D3DERR_DEVICELOST;
         dxmt9DeviceDebugLog("device_draw_primitive device=%p type=%u startVertex=%u count=%u",
@@ -9080,6 +9726,7 @@ public:
                                                     UINT minVertex, UINT numVertices,
                                                     UINT startIndex,
                                                     UINT count) noexcept override {
+        notePeDeviceCallAfterPresent("DrawIndexedPrimitive");
         // T2 device-lost gate.
         if (deviceNotReset_) return D3DERR_DEVICELOST;
         dxmt9DeviceDebugLog("device_draw_indexed_primitive device=%p type=%u base=%d min=%u num=%u startIndex=%u count=%u",
@@ -9144,6 +9791,7 @@ public:
                                                UINT count,
                                                const void* pData,
                                                UINT stride) noexcept override {
+        notePeDeviceCallAfterPresent("DrawPrimitiveUP");
         // T2 device-lost gate.
         if (deviceNotReset_) return D3DERR_DEVICELOST;
         dxmt9DeviceDebugLog("device_draw_primitive_up device=%p type=%u count=%u data=%p stride=%u",
@@ -9198,6 +9846,7 @@ public:
                                                       D3DFORMAT idxFmt,
                                                       const void* pVtxData,
                                                       UINT stride) noexcept override {
+        notePeDeviceCallAfterPresent("DrawIndexedPrimitiveUP");
         // T2 device-lost gate.
         if (deviceNotReset_) return D3DERR_DEVICELOST;
         dxmt9DeviceDebugLog("device_draw_indexed_primitive_up device=%p type=%u min=%u num=%u count=%u idx=%p idxFmt=%u vtx=%p stride=%u",
@@ -9280,6 +9929,7 @@ public:
                                                IDirect3DVertexBuffer9* dstBuffer,
                                                IDirect3DVertexDeclaration9* declaration,
                                                DWORD flags) noexcept override {
+        notePeDeviceCallAfterPresent("ProcessVertices");
         // T2 device-lost gate: lost devices must report DEVICELOST before
         // any ProcessVertices validation or unsupported-path rejection.
         if (deviceNotReset_) return D3DERR_DEVICELOST;
@@ -10475,6 +11125,7 @@ public:
     /* ── query ── */
     HRESULT STDMETHODCALLTYPE CreateQuery(D3DQUERYTYPE type,
                                            IDirect3DQuery9** ppQ) noexcept override {
+        notePeDeviceCallAfterPresent("CreateQuery");
         // Query-type support gate. Unsupported / out-of-range types return
         // D3DERR_NOTAVAILABLE — including the support-probe form
         // CreateQuery(type, NULL), which must NOT mutate *ppQ (it is NULL).
@@ -10517,11 +11168,13 @@ public:
             (uint64_t)(uintptr_t)wnd, dirty, flags));
         if (SUCCEEDED(hr)) {
             logPeRecorderStats("present_ex");
+            markPePresentReturnedForCadence();
         }
         return hr;
     }
 
     HRESULT STDMETHODCALLTYPE GetGPUThreadPriority(INT* p) noexcept override {
+        notePeDeviceCallAfterPresent("GetGPUThreadPriority");
         // stub: Wine returns S_OK; GPU thread priority is not exposed by Metal.
         if (p) *p = 0; return S_OK;
     }
@@ -10531,6 +11184,7 @@ public:
     }
 
     HRESULT STDMETHODCALLTYPE WaitForVBlank(UINT sc) noexcept override {
+        notePeDeviceCallAfterPresent("WaitForVBlank");
         return hr32(dxmt9c_device_wait_for_vblank(dev_, sc));
     }
 
@@ -10550,6 +11204,7 @@ public:
         return hr32(dxmt9c_device_set_maximum_frame_latency(dev_, maxLatency));
     }
     HRESULT STDMETHODCALLTYPE GetMaximumFrameLatency(UINT* p) noexcept override {
+        notePeDeviceCallAfterPresent("GetMaximumFrameLatency");
         if (!p) return D3DERR_INVALIDCALL;
         // PE-shadow: return value previously set or the default of 3.
         *p = maxFrameLatencyShadow_;
@@ -10557,6 +11212,7 @@ public:
     }
 
     HRESULT STDMETHODCALLTYPE CheckDeviceState(HWND wnd) noexcept override {
+        notePeDeviceCallAfterPresent("CheckDeviceState");
         return hr32(dxmt9c_device_check_device_state(dev_,
                     (uint64_t)(uintptr_t)wnd));
     }
@@ -10671,6 +11327,7 @@ public:
     HRESULT STDMETHODCALLTYPE GetDisplayModeEx(UINT sc,
                                                 D3DDISPLAYMODEEX* pMode,
                                                 D3DDISPLAYROTATION* pRot) noexcept override {
+        notePeDeviceCallAfterPresent("GetDisplayModeEx");
         if (!pMode) return D3DERR_INVALIDCALL;
         if (pMode->Size != sizeof(D3DDISPLAYMODEEX)) return D3DERR_INVALIDCALL;
         D3DDISPLAYMODE mode{};

@@ -41,6 +41,11 @@ void checkNear(float actual, float expected, std::string_view message) {
   }
 }
 
+bool drawUniformPayloadDedupDisabledForTest() {
+  const char* env = std::getenv("DXMT9_DISABLE_DRAW_UNIFORM_PAYLOAD_DEDUP");
+  return env && env[0] != '\0' && env[0] != '0';
+}
+
 void checkMatrixNear(const Matrix4x4& actual, const Matrix4x4& expected,
                      std::string_view message) {
   for (size_t i = 0; i < actual.m.size(); ++i) {
@@ -595,14 +600,25 @@ void testChunkSlotDirectDrawRunUniformLookup() {
   const auto reusedView = slot.commandAt(2);
   check(reusedView.drawRunRecord != nullptr,
         "slot direct reused-uniform draw-run exposes compact run record");
-  checkEq(slot.drawUniformPayloads.size(), std::size_t{2},
-          "slot indexed uniform lookup reuses a non-recent direct payload");
-  checkEq(reusedView.drawRunRecord->uniformHandle, uniformAHandle,
-          "slot direct indexed uniform lookup returns the older payload handle");
-  checkEq(slot.lastUniformHandle, uniformAHandle,
-          "slot direct indexed uniform hit becomes the recent uniform handle");
-  checkEq(slot.drawUniformPayloadLookupNext.size(), slot.drawUniformPayloads.size(),
-          "slot direct uniform lookup tracks every interned payload");
+  if (drawUniformPayloadDedupDisabledForTest()) {
+    checkEq(slot.drawUniformPayloads.size(), std::size_t{3},
+            "slot dedup-disabled direct draw-run appends repeated uniform payload");
+    check(!(reusedView.drawRunRecord->uniformHandle == uniformAHandle),
+          "slot dedup-disabled direct draw-run uses a fresh payload handle");
+    checkEq(slot.lastUniformHandle, reusedView.drawRunRecord->uniformHandle,
+            "slot dedup-disabled direct draw-run records the fresh uniform as recent");
+    check(slot.drawUniformPayloadLookupNext.empty(),
+          "slot dedup-disabled direct draw-run leaves lookup links empty");
+  } else {
+    checkEq(slot.drawUniformPayloads.size(), std::size_t{2},
+            "slot indexed uniform lookup reuses a non-recent direct payload");
+    checkEq(reusedView.drawRunRecord->uniformHandle, uniformAHandle,
+            "slot direct indexed uniform lookup returns the older payload handle");
+    checkEq(slot.lastUniformHandle, uniformAHandle,
+            "slot direct indexed uniform hit becomes the recent uniform handle");
+    checkEq(slot.drawUniformPayloadLookupNext.size(), slot.drawUniformPayloads.size(),
+            "slot direct uniform lookup tracks every interned payload");
+  }
 
   slot.clearCommands();
   check(slot.drawUniformPayloadLookupHeads.empty(),
@@ -2454,6 +2470,7 @@ void testFlatDrawStateKey() {
   const auto sharedUniformHandle = drawView.drawRunRecord->uniformHandle;
   checkEq(slot.lastUniformHandle, sharedUniformHandle,
           "slot remembers recently appended uniform payload handle");
+  const bool uniformDedupDisabled = drawUniformPayloadDedupDisabledForTest();
 
   auto directPackedState = makeCanonicalDrawStateForTest(first);
   directPackedState.debug.renderStateHash = 99ull;
@@ -2502,12 +2519,21 @@ void testFlatDrawStateKey() {
   const auto payloadArenaSizeAfterRun = std::size_t{6} + packedPayloadSize;
   checkEq(slot.drawPayloadArena.size(), payloadArenaSizeAfterRun,
           "slot payload arena owns draw and draw-run bytes together");
-  checkEq(slot.drawUniformPayloads.size(), std::size_t{1},
-          "slot draw-run interns an unchanged uniform payload");
-  checkEq(runView.drawRunRecord->uniformHandle, sharedUniformHandle,
-          "slot draw-run reuses the existing uniform payload handle");
-  checkEq(slot.lastUniformHandle, sharedUniformHandle,
-          "slot uniform fast path keeps the recent matching handle");
+  if (uniformDedupDisabled) {
+    checkEq(slot.drawUniformPayloads.size(), std::size_t{2},
+            "slot dedup-disabled draw-run appends an unchanged uniform payload");
+    check(!(runView.drawRunRecord->uniformHandle == sharedUniformHandle),
+          "slot dedup-disabled draw-run uses a fresh unchanged-uniform handle");
+    checkEq(slot.lastUniformHandle, runView.drawRunRecord->uniformHandle,
+            "slot dedup-disabled draw-run records the fresh unchanged uniform");
+  } else {
+    checkEq(slot.drawUniformPayloads.size(), std::size_t{1},
+            "slot draw-run interns an unchanged uniform payload");
+    checkEq(runView.drawRunRecord->uniformHandle, sharedUniformHandle,
+            "slot draw-run reuses the existing uniform payload handle");
+    checkEq(slot.lastUniformHandle, sharedUniformHandle,
+            "slot uniform fast path keeps the recent matching handle");
+  }
 
   DrawDesc changedUniformDesc = withUserPayload;
   changedUniformDesc.clipPlaneMask ^= 0x1u;
@@ -2533,7 +2559,8 @@ void testFlatDrawStateKey() {
         "slot no-payload draw-run leaves index payload range empty");
   checkEq(slot.drawPayloadArena.size(), payloadArenaSizeAfterRun,
           "slot no-payload draw-run does not grow the payload arena");
-  checkEq(slot.drawUniformPayloads.size(), std::size_t{2},
+  checkEq(slot.drawUniformPayloads.size(),
+          uniformDedupDisabled ? std::size_t{3} : std::size_t{2},
           "slot stores a new uniform payload when the payload changes");
   check(!(noPayloadView.drawRunRecord->uniformHandle == sharedUniformHandle),
         "slot no-payload draw-run uses a distinct uniform payload handle");
@@ -2547,12 +2574,21 @@ void testFlatDrawStateKey() {
   const auto reusedUniformView = slot.commandAt(3);
   check(reusedUniformView.drawRunRecord != nullptr,
         "slot reused-uniform draw-run command exposes compact run record");
-  checkEq(slot.drawUniformPayloads.size(), std::size_t{2},
-          "slot indexed uniform hit reuses an older payload handle");
-  checkEq(reusedUniformView.drawRunRecord->uniformHandle, sharedUniformHandle,
-          "slot reused-uniform draw-run uses the older interned handle");
-  checkEq(slot.lastUniformHandle, sharedUniformHandle,
-          "slot records the uniform handle found by indexed lookup as most recent");
+  if (uniformDedupDisabled) {
+    checkEq(slot.drawUniformPayloads.size(), std::size_t{4},
+            "slot dedup-disabled indexed-uniform case appends another payload");
+    check(!(reusedUniformView.drawRunRecord->uniformHandle == sharedUniformHandle),
+          "slot dedup-disabled indexed-uniform case uses a fresh payload handle");
+    checkEq(slot.lastUniformHandle, reusedUniformView.drawRunRecord->uniformHandle,
+            "slot dedup-disabled indexed-uniform case records the fresh handle");
+  } else {
+    checkEq(slot.drawUniformPayloads.size(), std::size_t{2},
+            "slot indexed uniform hit reuses an older payload handle");
+    checkEq(reusedUniformView.drawRunRecord->uniformHandle, sharedUniformHandle,
+            "slot reused-uniform draw-run uses the older interned handle");
+    checkEq(slot.lastUniformHandle, sharedUniformHandle,
+            "slot records the uniform handle found by indexed lookup as most recent");
+  }
 
   slot.appendDrawRun(makeCanonicalDrawStateForTest(first), sharedUniformPayload,
                      std::span<const DrawParam>(&drawParamA, 1),
@@ -2560,17 +2596,31 @@ void testFlatDrawStateKey() {
   const auto fastUniformView = slot.commandAt(4);
   check(fastUniformView.drawRunRecord != nullptr,
         "slot fast-uniform draw-run command exposes compact run record");
-  checkEq(slot.drawUniformPayloads.size(), std::size_t{2},
-          "slot recent uniform hit does not append another payload");
-  checkEq(fastUniformView.drawRunRecord->uniformHandle, sharedUniformHandle,
-          "slot recent uniform hit reuses the most recent handle");
-  checkEq(slot.lastUniformHandle, sharedUniformHandle,
-          "slot preserves the most recent uniform handle after fast hit");
+  if (uniformDedupDisabled) {
+    checkEq(slot.drawUniformPayloads.size(), std::size_t{5},
+            "slot dedup-disabled recent-uniform case appends another payload");
+    check(!(fastUniformView.drawRunRecord->uniformHandle == sharedUniformHandle),
+          "slot dedup-disabled recent-uniform case uses a fresh payload handle");
+    checkEq(slot.lastUniformHandle, fastUniformView.drawRunRecord->uniformHandle,
+            "slot dedup-disabled recent-uniform case records the fresh handle");
+  } else {
+    checkEq(slot.drawUniformPayloads.size(), std::size_t{2},
+            "slot recent uniform hit does not append another payload");
+    checkEq(fastUniformView.drawRunRecord->uniformHandle, sharedUniformHandle,
+            "slot recent uniform hit reuses the most recent handle");
+    checkEq(slot.lastUniformHandle, sharedUniformHandle,
+            "slot preserves the most recent uniform handle after fast hit");
+  }
 
   const auto refreshedDrawView = slot.commandAt(0);
   const auto refreshedRunView = slot.commandAt(1);
-  check(refreshedDrawView.drawUniformPayload == refreshedRunView.drawUniformPayload,
-        "slot command views resolve interned uniform payloads to the same arena record");
+  if (uniformDedupDisabled) {
+    check(refreshedDrawView.drawUniformPayload != refreshedRunView.drawUniformPayload,
+          "slot dedup-disabled command views keep repeated uniform payload records distinct");
+  } else {
+    check(refreshedDrawView.drawUniformPayload == refreshedRunView.drawUniformPayload,
+          "slot command views resolve interned uniform payloads to the same arena record");
+  }
 
   DrawDesc sameMapsDifferentInsertion = first;
   sameMapsDifferentInsertion.rs.values.clear();

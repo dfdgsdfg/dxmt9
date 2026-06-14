@@ -254,6 +254,8 @@ void countD3D9SnapshotCacheDirectMissShaderLayoutCpuTime(std::uint64_t nanosecon
 void countD3D9SnapshotCacheDirectMissUniformBuildCpuTime(std::uint64_t nanoseconds);
 void countD3D9SnapshotCacheDirectMissHotBuildCpuTime(std::uint64_t nanoseconds);
 void countD3D9SnapshotCacheBatchMissShaderLayoutCpuTime(std::uint64_t nanoseconds);
+void countD3D9SnapshotCacheBatchMissShaderLayoutCompatible(bool compatible);
+void countD3D9SnapshotCacheBatchMissShaderLayoutReuse(bool reused);
 void countD3D9SnapshotCacheBatchMissUniformBuildCpuTime(std::uint64_t nanoseconds);
 void countD3D9SnapshotCacheBatchMissHotBuildCpuTime(std::uint64_t nanoseconds);
 void countD3D9SnapshotCacheBatchMissHotBuildZeroInitCpuTime(std::uint64_t nanoseconds);
@@ -319,6 +321,8 @@ void countD3D9SnapshotUniformBuildPsConstHashBytes(std::uint64_t bytes);
 void countD3D9SnapshotUniformCopyCpuTime(std::uint64_t nanoseconds);
 void countD3D9SnapshotUniformMaterialized(std::uint64_t bytes);
 void countD3D9SnapshotUniformElided(std::uint64_t bytes);
+void countD3D9SnapshotUniformAdjacentSameGeneration(bool sameStateLane,
+                                                    std::uint64_t bytes);
 void countD3D9SnapshotStateCopyCpuTime(std::uint64_t nanoseconds);
 void countD3D9SnapshotStateMaterialized(std::uint64_t bytes);
 void countD3D9SnapshotStateElided(std::uint64_t bytes);
@@ -415,6 +419,10 @@ void countEncodeDrawUniformBuildCpuTime(std::uint64_t nanoseconds);
 void countEncodeDrawFvfDecodeCpuTime(std::uint64_t nanoseconds);
 void countEncodeDrawBindingPacketCpuTime(std::uint64_t nanoseconds);
 void countEncodeDrawBindingPacketPlanCpuTime(std::uint64_t nanoseconds);
+void countEncodeDrawBindingPacketPlanFragmentCpuTime(std::uint64_t nanoseconds);
+void countEncodeDrawBindingPacketPlanVertexCpuTime(std::uint64_t nanoseconds);
+void countEncodeDrawBindingPacketPlanExtraStreamCpuTime(std::uint64_t nanoseconds);
+void countEncodeDrawBindingPacketPlanRasterCpuTime(std::uint64_t nanoseconds);
 void countEncodeDrawBindingPacketCacheCpuTime(std::uint64_t nanoseconds);
 void countEncodeDrawBindingPacketCacheKeyCpuTime(std::uint64_t nanoseconds);
 void countEncodeDrawBindingPacketCacheHashCpuTime(std::uint64_t nanoseconds);
@@ -784,6 +792,7 @@ void countCompletionWaitStatus(std::uint64_t nanoseconds,
 void countCompletionWaitOverlap(std::uint64_t nanoseconds,
                                 std::uint64_t enqueuesDuringWait,
                                 bool hasPresent);
+void countCompletionSignalDelay(std::uint64_t nanoseconds);
 void countCompletionNoEnqueueWaitToCommitChunkEntry(std::uint64_t nanoseconds);
 void countCompletionNoEnqueueWaitToCommitChunkReplayStart(std::uint64_t nanoseconds);
 void countCompletionNoEnqueueWaitToCommitChunkReplayEnd(std::uint64_t nanoseconds);
@@ -884,6 +893,10 @@ struct CounterSnapshot {
   std::uint64_t encodeDrawFvfDecodeCpuNs = 0;
   std::uint64_t encodeDrawBindingPacketCpuNs = 0;
   std::uint64_t encodeDrawBindingPacketPlanCpuNs = 0;
+  std::uint64_t encodeDrawBindingPacketPlanFragmentCpuNs = 0;
+  std::uint64_t encodeDrawBindingPacketPlanVertexCpuNs = 0;
+  std::uint64_t encodeDrawBindingPacketPlanExtraStreamCpuNs = 0;
+  std::uint64_t encodeDrawBindingPacketPlanRasterCpuNs = 0;
   std::uint64_t encodeDrawBindingPacketCacheCpuNs = 0;
   std::uint64_t encodeDrawBindingPacketTextureRecordCpuNs = 0;
   std::uint64_t encodeDrawArgbufSetupCpuNs = 0;

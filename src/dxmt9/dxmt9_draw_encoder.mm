@@ -4824,6 +4824,14 @@ bool textureSamplerDirectSplitPerfEnabled() {
   return enabled;
 }
 
+bool bindingPacketPlanSplitPerfEnabled() {
+  static const bool enabled = [] {
+    const char* env = std::getenv("DXMT9_PERF_BINDING_PACKET_PLAN_SPLIT");
+    return env && env[0] != '\0' && env[0] != '0';
+  }();
+  return enabled;
+}
+
 // R-BACK-2.29..2.32 — env-driven mid-chunk commit policy. Read once at
 // process start; subsequent runs need a re-launch to change it. This is
 // the cleanest invariant under R-BACK-2.31 (deterministic split
@@ -10623,17 +10631,57 @@ bool encodeDraw(EncodeContext& ctx,
     {
       PerfScope bindingPacketPlanScope(
           perf::countEncodeDrawBindingPacketPlanCpuTime);
-      bindingPacketPlan = makeDrawBindingPacketPlan(
-          vertexDecl,
-          hot,
-          pv,
-          bindingPacketHasRasterTarget ? bindingPacketSurface->desc.width : 1u,
-          bindingPacketHasRasterTarget ? bindingPacketSurface->desc.height : 1u,
-          ffLayout && ffLayout->preTransformed,
-          scissorDisabled,
-          debug::disableCull(),
-          &drawState.shaderContext().pixelShader,
-          &effectiveViewport);
+      if (bindingPacketPlanSplitPerfEnabled()) {
+        {
+          PerfScope fragmentScope(
+              perf::countEncodeDrawBindingPacketPlanFragmentCpuTime);
+          bindingPacketPlan.fragmentTextureSamplers =
+              makeFragmentTextureSamplerBindings(
+                  hot,
+                  &drawState.shaderContext().pixelShader);
+        }
+        {
+          PerfScope vertexScope(
+              perf::countEncodeDrawBindingPacketPlanVertexCpuTime);
+          bindingPacketPlan.vertexTextureSamplers =
+              makeVertexTextureSamplerBindings(hot);
+        }
+        {
+          PerfScope extraStreamScope(
+              perf::countEncodeDrawBindingPacketPlanExtraStreamCpuTime);
+          bindingPacketPlan.extraStreams =
+              makeProgrammableVsExtraStreamBindings(vertexDecl, hot, pv);
+        }
+        {
+          PerfScope rasterScope(
+              perf::countEncodeDrawBindingPacketPlanRasterCpuTime);
+          bindingPacketPlan.raster =
+              makeEncoderRasterStatePlan(
+                  hot,
+                  bindingPacketHasRasterTarget
+                      ? bindingPacketSurface->desc.width
+                      : 1u,
+                  bindingPacketHasRasterTarget
+                      ? bindingPacketSurface->desc.height
+                      : 1u,
+                  ffLayout && ffLayout->preTransformed,
+                  scissorDisabled,
+                  debug::disableCull(),
+                  &effectiveViewport);
+        }
+      } else {
+        bindingPacketPlan = makeDrawBindingPacketPlan(
+            vertexDecl,
+            hot,
+            pv,
+            bindingPacketHasRasterTarget ? bindingPacketSurface->desc.width : 1u,
+            bindingPacketHasRasterTarget ? bindingPacketSurface->desc.height : 1u,
+            ffLayout && ffLayout->preTransformed,
+            scissorDisabled,
+            debug::disableCull(),
+            &drawState.shaderContext().pixelShader,
+            &effectiveViewport);
+      }
     }
     {
       PerfScope bindingPacketCacheScope(

@@ -2573,6 +2573,23 @@ bool drawStateInvalidationAffectsUniformNonConstants(u32 reasonMask) noexcept {
          (reasonMask & kNonConstantMask) != 0;
 }
 
+bool drawStateInvalidationAffectsShaderLayout(u32 reasonMask) noexcept {
+  constexpr u32 kShaderLayoutMask =
+      DrawStateInvalidationMutableState |
+      DrawStateInvalidationRenderState |
+      DrawStateInvalidationTexture |
+      DrawStateInvalidationFvfVdecl |
+      DrawStateInvalidationShader |
+      DrawStateInvalidationFfpState |
+      DrawStateInvalidationClipPlane |
+      DrawStateInvalidationStateBlock |
+      DrawStateInvalidationReset |
+      DrawStateInvalidationSwapChain |
+      DrawStateInvalidationTextureStageState;
+  return reasonMask == DrawStateInvalidationUnknown ||
+         (reasonMask & kShaderLayoutMask) != 0;
+}
+
 void Device::submitDrawRunInternalFromState(
     DeviceState baseState, std::span<const DrawParam> draws,
     std::span<const DrawParamPayloadView> payloads) {
@@ -2799,10 +2816,22 @@ Device::cachedBaseDrawStateForSubmissionBatch() {
     dxmt9::perf::countD3D9DrawStateCacheLookup(/*hit=*/false,
                                                 /*includeIndexBuffer=*/false);
     dxmt9::perf::countD3D9DrawStateCacheBatchLookup(/*hit=*/false);
-    dxmt9::perf::countD3D9DrawStateCacheMissReason(
-        drawStateInvalidationReasonMask_);
+    const u32 invalidationReasonMask = drawStateInvalidationReasonMask_;
+    dxmt9::perf::countD3D9DrawStateCacheMissReason(invalidationReasonMask);
 
-    {
+    const bool reuseShaderLayout =
+        cache.valid &&
+        !drawStateInvalidationAffectsShaderLayout(invalidationReasonMask);
+    dxmt9::perf::countD3D9SnapshotCacheBatchMissShaderLayoutReuse(
+        reuseShaderLayout);
+    const bool recordShaderLayoutCompatibility =
+        dxmt9::perf::enabled() && cache.valid && !reuseShaderLayout;
+    DrawShaderLayoutContext previousShaderLayout{};
+    if (recordShaderLayoutCompatibility) {
+      previousShaderLayout = cache.shaderLayout;
+    }
+
+    if (!reuseShaderLayout) {
       PerfScope shaderLayoutScope(
           dxmt9::perf::countD3D9SnapshotCacheMissShaderLayoutCpuTime);
       PerfScope batchShaderLayoutScope(
@@ -2814,6 +2843,11 @@ Device::cachedBaseDrawStateForSubmissionBatch() {
           dxmt9::perf::countD3D9SnapshotCacheBindingLayoutCpuTime);
       refreshBindingLayout();
     }
+    dxmt9::perf::countD3D9SnapshotCacheBatchMissShaderLayoutCompatible(
+        reuseShaderLayout ||
+        (recordShaderLayoutCompatibility &&
+         shaderLayoutsCompatibleForDrawRunBatch(previousShaderLayout,
+                                                cache.shaderLayout)));
     DrawUniformPayloadHashes uniformHashes{};
     const DrawUniformPayloadHashes *reusableNonConstantHashes =
         cache.valid &&
@@ -2940,9 +2974,15 @@ HResult Device::snapshotDrawSubmissionFromCurrentState(
   const bool samePreviousGenerationLane = previousSubmission &&
       drawRunSubmissionSameStateGenerationLane(*previousSubmission, submission);
   const bool stateCopyElisionEnabled = useBindingAgnosticSnapshot;
+  const bool samePreviousUniformGeneration = previousSubmission &&
+      drawRunSubmissionSameUniformGeneration(*previousSubmission, submission);
+  if (stateCopyElisionEnabled && samePreviousUniformGeneration) {
+    dxmt9::perf::countD3D9SnapshotUniformAdjacentSameGeneration(
+        samePreviousGenerationLane, drawRunSubmissionUniformCopyBytes());
+  }
   const bool elideUniformCopy = stateCopyElisionEnabled &&
       samePreviousGenerationLane &&
-      drawRunSubmissionSameUniformGeneration(*previousSubmission, submission);
+      samePreviousUniformGeneration;
   if (elideUniformCopy) {
     submission.uniforms.reset();
     dxmt9::perf::countD3D9SnapshotUniformElided(
