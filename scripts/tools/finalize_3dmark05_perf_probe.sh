@@ -27,6 +27,9 @@ allow_partial_stable_frame_proof=0
 require_color_dontcare_increase=0
 require_depth_dontcare_increase=0
 require_tile_preservation_decrease=0
+require_tile_preservation_not_increase=0
+require_command_buffers_per_present_not_increase=0
+require_render_passes_per_present_not_increase=0
 require_draw_run_records_increase=0
 require_draw_run_records_per_submit_increase=0
 require_binding_overrides_present=0
@@ -34,6 +37,37 @@ require_const_upload_passthrough_present=0
 require_draw_submission_batch_present=0
 require_const_upload_break_bytes_decrease=0
 require_encode_draw_cpu_decrease=0
+require_completion_present_wait_decrease=0
+require_completion_wait_with_enqueue_increase=0
+require_completion_wait_without_enqueue_decrease=0
+require_completion_present_wait_with_enqueue_increase=0
+require_completion_present_wait_without_enqueue_decrease=0
+require_commit_chunk_replay_cpu_per_present_decrease=0
+require_queue_draw_submission_cpu_per_present_decrease=0
+require_snapshot_cpu_per_present_decrease=0
+require_snapshot_cache_lookup_cpu_per_present_decrease=0
+require_snapshot_cache_uniform_build_cpu_per_present_decrease=0
+require_snapshot_cache_uniform_hash_cpu_per_present_decrease=0
+require_batch_miss_uniform_build_cpu_per_present_decrease=0
+require_batch_miss_uniform_hash_cpu_per_present_decrease=0
+require_batch_miss_vs_const_hash_cpu_per_present_decrease=0
+require_batch_miss_ps_const_hash_cpu_per_present_decrease=0
+require_batch_miss_nonconst_hash_cpu_per_present_decrease=0
+require_snapshot_uniform_copy_cpu_per_present_decrease=0
+require_submit_draw_run_batch_append_uniform_cpu_per_present_decrease=0
+require_draw_uniform_payload_lookup_cpu_per_present_decrease=0
+require_draw_uniform_payload_append_copy_cpu_per_present_decrease=0
+require_argbuf_setup_cpu_per_present_decrease=0
+require_argbuf_open_cpu_per_present_decrease=0
+require_argbuf_cbuf_update_cpu_per_present_decrease=0
+require_argbuf_cbuf_update_vs_cpu_per_present_decrease=0
+require_uniform_compact_saved_bytes_present=0
+require_current_uniform_compact_saved_bytes_present=0
+require_encode_chunk_cpu_per_present_decrease=0
+require_no_enqueue_commit_entry_to_publish_decrease=0
+require_no_enqueue_publish_to_encode_dequeue_decrease=0
+require_no_enqueue_encode_dequeue_to_commit_decrease=0
+require_no_enqueue_wait_to_next_enqueue_decrease=0
 max_gpu_command_buffer_regression_ms=${DXMT_3DMARK05_MAX_GPU_COMMAND_BUFFER_REGRESSION_MS:-}
 max_const_upload_break_count_ratio=${DXMT_3DMARK05_MAX_CONST_UPLOAD_BREAK_COUNT_RATIO:-}
 
@@ -134,6 +168,9 @@ Options:
   --require-color-dontcare-increase
   --require-depth-dontcare-increase
   --require-tile-preservation-decrease
+  --require-tile-preservation-not-increase
+  --require-command-buffers-per-present-not-increase
+  --require-render-passes-per-present-not-increase
   --require-draw-run-records-increase
   --require-draw-run-records-per-submit-increase
   --require-binding-overrides-present
@@ -142,6 +179,37 @@ Options:
   --require-const-upload-break-bytes-decrease
   --max-const-upload-break-count-ratio N
   --require-encode-draw-cpu-decrease
+  --require-completion-present-wait-decrease
+  --require-completion-wait-with-enqueue-increase
+  --require-completion-wait-without-enqueue-decrease
+  --require-completion-present-wait-with-enqueue-increase
+  --require-completion-present-wait-without-enqueue-decrease
+  --require-commit-chunk-replay-cpu-per-present-decrease
+  --require-queue-draw-submission-cpu-per-present-decrease
+  --require-snapshot-cpu-per-present-decrease
+  --require-snapshot-cache-lookup-cpu-per-present-decrease
+  --require-snapshot-cache-uniform-build-cpu-per-present-decrease
+  --require-snapshot-cache-uniform-hash-cpu-per-present-decrease
+  --require-batch-miss-uniform-build-cpu-per-present-decrease
+  --require-batch-miss-uniform-hash-cpu-per-present-decrease
+  --require-batch-miss-vs-const-hash-cpu-per-present-decrease
+  --require-batch-miss-ps-const-hash-cpu-per-present-decrease
+  --require-batch-miss-nonconst-hash-cpu-per-present-decrease
+  --require-snapshot-uniform-copy-cpu-per-present-decrease
+  --require-submit-draw-run-batch-append-uniform-cpu-per-present-decrease
+  --require-draw-uniform-payload-lookup-cpu-per-present-decrease
+  --require-draw-uniform-payload-append-copy-cpu-per-present-decrease
+  --require-argbuf-setup-cpu-per-present-decrease
+  --require-argbuf-open-cpu-per-present-decrease
+  --require-argbuf-cbuf-update-cpu-per-present-decrease
+  --require-argbuf-cbuf-update-vs-cpu-per-present-decrease
+  --require-uniform-compact-saved-bytes-present
+  --require-current-uniform-compact-saved-bytes-present
+  --require-encode-chunk-cpu-per-present-decrease
+  --require-no-enqueue-commit-entry-to-publish-decrease
+  --require-no-enqueue-publish-to-encode-dequeue-decrease
+  --require-no-enqueue-encode-dequeue-to-commit-decrease
+  --require-no-enqueue-wait-to-next-enqueue-decrease
   --max-gpu-command-buffer-regression-ms N
   --require-top-gpu-decrease
   --require-top-buffer-write-decrease
@@ -334,6 +402,18 @@ while (($#)); do
       require_tile_preservation_decrease=1
       shift
       ;;
+    --require-tile-preservation-not-increase)
+      require_tile_preservation_not_increase=1
+      shift
+      ;;
+    --require-command-buffers-per-present-not-increase)
+      require_command_buffers_per_present_not_increase=1
+      shift
+      ;;
+    --require-render-passes-per-present-not-increase)
+      require_render_passes_per_present_not_increase=1
+      shift
+      ;;
     --require-draw-run-records-increase)
       require_draw_run_records_increase=1
       shift
@@ -360,6 +440,130 @@ while (($#)); do
       ;;
     --require-encode-draw-cpu-decrease)
       require_encode_draw_cpu_decrease=1
+      shift
+      ;;
+    --require-completion-present-wait-decrease)
+      require_completion_present_wait_decrease=1
+      shift
+      ;;
+    --require-completion-wait-with-enqueue-increase)
+      require_completion_wait_with_enqueue_increase=1
+      shift
+      ;;
+    --require-completion-wait-without-enqueue-decrease)
+      require_completion_wait_without_enqueue_decrease=1
+      shift
+      ;;
+    --require-completion-present-wait-with-enqueue-increase)
+      require_completion_present_wait_with_enqueue_increase=1
+      shift
+      ;;
+    --require-completion-present-wait-without-enqueue-decrease)
+      require_completion_present_wait_without_enqueue_decrease=1
+      shift
+      ;;
+    --require-commit-chunk-replay-cpu-per-present-decrease)
+      require_commit_chunk_replay_cpu_per_present_decrease=1
+      shift
+      ;;
+    --require-queue-draw-submission-cpu-per-present-decrease)
+      require_queue_draw_submission_cpu_per_present_decrease=1
+      shift
+      ;;
+    --require-snapshot-cpu-per-present-decrease)
+      require_snapshot_cpu_per_present_decrease=1
+      shift
+      ;;
+    --require-snapshot-cache-lookup-cpu-per-present-decrease)
+      require_snapshot_cache_lookup_cpu_per_present_decrease=1
+      shift
+      ;;
+    --require-snapshot-cache-uniform-build-cpu-per-present-decrease)
+      require_snapshot_cache_uniform_build_cpu_per_present_decrease=1
+      shift
+      ;;
+    --require-snapshot-cache-uniform-hash-cpu-per-present-decrease)
+      require_snapshot_cache_uniform_hash_cpu_per_present_decrease=1
+      shift
+      ;;
+    --require-batch-miss-uniform-build-cpu-per-present-decrease)
+      require_batch_miss_uniform_build_cpu_per_present_decrease=1
+      shift
+      ;;
+    --require-batch-miss-uniform-hash-cpu-per-present-decrease)
+      require_batch_miss_uniform_hash_cpu_per_present_decrease=1
+      shift
+      ;;
+    --require-batch-miss-vs-const-hash-cpu-per-present-decrease)
+      require_batch_miss_vs_const_hash_cpu_per_present_decrease=1
+      shift
+      ;;
+    --require-batch-miss-ps-const-hash-cpu-per-present-decrease)
+      require_batch_miss_ps_const_hash_cpu_per_present_decrease=1
+      shift
+      ;;
+    --require-batch-miss-nonconst-hash-cpu-per-present-decrease)
+      require_batch_miss_nonconst_hash_cpu_per_present_decrease=1
+      shift
+      ;;
+    --require-snapshot-uniform-copy-cpu-per-present-decrease)
+      require_snapshot_uniform_copy_cpu_per_present_decrease=1
+      shift
+      ;;
+    --require-submit-draw-run-batch-append-uniform-cpu-per-present-decrease)
+      require_submit_draw_run_batch_append_uniform_cpu_per_present_decrease=1
+      shift
+      ;;
+    --require-draw-uniform-payload-lookup-cpu-per-present-decrease)
+      require_draw_uniform_payload_lookup_cpu_per_present_decrease=1
+      shift
+      ;;
+    --require-draw-uniform-payload-append-copy-cpu-per-present-decrease)
+      require_draw_uniform_payload_append_copy_cpu_per_present_decrease=1
+      shift
+      ;;
+    --require-argbuf-setup-cpu-per-present-decrease)
+      require_argbuf_setup_cpu_per_present_decrease=1
+      shift
+      ;;
+    --require-argbuf-open-cpu-per-present-decrease)
+      require_argbuf_open_cpu_per_present_decrease=1
+      shift
+      ;;
+    --require-argbuf-cbuf-update-cpu-per-present-decrease)
+      require_argbuf_cbuf_update_cpu_per_present_decrease=1
+      shift
+      ;;
+    --require-argbuf-cbuf-update-vs-cpu-per-present-decrease)
+      require_argbuf_cbuf_update_vs_cpu_per_present_decrease=1
+      shift
+      ;;
+    --require-uniform-compact-saved-bytes-present)
+      require_uniform_compact_saved_bytes_present=1
+      shift
+      ;;
+    --require-current-uniform-compact-saved-bytes-present)
+      require_current_uniform_compact_saved_bytes_present=1
+      shift
+      ;;
+    --require-encode-chunk-cpu-per-present-decrease)
+      require_encode_chunk_cpu_per_present_decrease=1
+      shift
+      ;;
+    --require-no-enqueue-commit-entry-to-publish-decrease)
+      require_no_enqueue_commit_entry_to_publish_decrease=1
+      shift
+      ;;
+    --require-no-enqueue-publish-to-encode-dequeue-decrease)
+      require_no_enqueue_publish_to_encode_dequeue_decrease=1
+      shift
+      ;;
+    --require-no-enqueue-encode-dequeue-to-commit-decrease)
+      require_no_enqueue_encode_dequeue_to_commit_decrease=1
+      shift
+      ;;
+    --require-no-enqueue-wait-to-next-enqueue-decrease)
+      require_no_enqueue_wait_to_next_enqueue_decrease=1
       shift
       ;;
     --max-gpu-command-buffer-regression-ms)
@@ -696,13 +900,46 @@ run_level_compare_requested=0
 if (( require_color_dontcare_increase ||
       require_depth_dontcare_increase ||
       require_tile_preservation_decrease ||
+      require_tile_preservation_not_increase ||
+      require_command_buffers_per_present_not_increase ||
+      require_render_passes_per_present_not_increase ||
       require_draw_run_records_increase ||
       require_draw_run_records_per_submit_increase ||
       require_binding_overrides_present ||
       require_const_upload_passthrough_present ||
       require_draw_submission_batch_present ||
       require_const_upload_break_bytes_decrease ||
-      require_encode_draw_cpu_decrease )) ||
+      require_encode_draw_cpu_decrease ||
+      require_completion_present_wait_decrease ||
+      require_completion_wait_with_enqueue_increase ||
+      require_completion_wait_without_enqueue_decrease ||
+      require_completion_present_wait_with_enqueue_increase ||
+      require_completion_present_wait_without_enqueue_decrease ||
+      require_commit_chunk_replay_cpu_per_present_decrease ||
+      require_queue_draw_submission_cpu_per_present_decrease ||
+      require_snapshot_cpu_per_present_decrease ||
+      require_snapshot_cache_lookup_cpu_per_present_decrease ||
+      require_snapshot_cache_uniform_build_cpu_per_present_decrease ||
+      require_snapshot_cache_uniform_hash_cpu_per_present_decrease ||
+      require_batch_miss_uniform_build_cpu_per_present_decrease ||
+      require_batch_miss_uniform_hash_cpu_per_present_decrease ||
+      require_batch_miss_vs_const_hash_cpu_per_present_decrease ||
+      require_batch_miss_ps_const_hash_cpu_per_present_decrease ||
+      require_batch_miss_nonconst_hash_cpu_per_present_decrease ||
+      require_snapshot_uniform_copy_cpu_per_present_decrease ||
+      require_submit_draw_run_batch_append_uniform_cpu_per_present_decrease ||
+      require_draw_uniform_payload_lookup_cpu_per_present_decrease ||
+      require_draw_uniform_payload_append_copy_cpu_per_present_decrease ||
+      require_argbuf_setup_cpu_per_present_decrease ||
+      require_argbuf_open_cpu_per_present_decrease ||
+      require_argbuf_cbuf_update_cpu_per_present_decrease ||
+      require_argbuf_cbuf_update_vs_cpu_per_present_decrease ||
+      require_uniform_compact_saved_bytes_present ||
+      require_encode_chunk_cpu_per_present_decrease ||
+      require_no_enqueue_commit_entry_to_publish_decrease ||
+      require_no_enqueue_publish_to_encode_dequeue_decrease ||
+      require_no_enqueue_encode_dequeue_to_commit_decrease ||
+      require_no_enqueue_wait_to_next_enqueue_decrease )) ||
    [[ -n "$max_gpu_command_buffer_regression_ms" ||
       -n "$max_const_upload_break_count_ratio" ]]; then
   run_level_compare_requested=1
@@ -809,6 +1046,9 @@ summary_path="$output_dir/3dmark05-perf-summary.md"
 encoders_csv="$output_dir/3dmark05-perf-encoders.csv"
 stream_csv="$output_dir/3dmark05-perf-encoder-streams.csv"
 probe_draws_csv="$output_dir/3dmark05-perf-indexed-probe-draws.csv"
+trace_artifacts_json="$output_dir/3dmark05-trace-artifacts.json"
+capture_path="$trace_dir/frame${frame}.gputrace"
+xcode_performance_gputrace="$analysis_dir/frame${frame}-performance.gputrace"
 xcode_summary_csv="$analysis_dir/frame${frame}-counters-summary.csv"
 joined_csv="$analysis_dir/frame${frame}-xcode-dxmt-joined-summary.csv"
 xcode_report="$analysis_dir/frame${frame}-xcode-dxmt-bottleneck-report.md"
@@ -838,6 +1078,9 @@ summary_cmd=(
   "$output_dir"
   --output "$summary_path"
 )
+if (( require_current_uniform_compact_saved_bytes_present )); then
+  summary_cmd+=(--require-uniform-compact-saved-bytes-present)
+fi
 
 index_cache_runtime_cmd=(
   python3 scripts/tools/summarize_index_cache_runtime.py
@@ -914,6 +1157,15 @@ if [[ -n "$baseline_output" ]]; then
   if (( require_tile_preservation_decrease )); then
     perf_compare_cmd+=(--require-tile-preservation-decrease)
   fi
+  if (( require_tile_preservation_not_increase )); then
+    perf_compare_cmd+=(--require-tile-preservation-not-increase)
+  fi
+  if (( require_command_buffers_per_present_not_increase )); then
+    perf_compare_cmd+=(--require-command-buffers-per-present-not-increase)
+  fi
+  if (( require_render_passes_per_present_not_increase )); then
+    perf_compare_cmd+=(--require-render-passes-per-present-not-increase)
+  fi
   if (( require_draw_run_records_increase )); then
     perf_compare_cmd+=(--require-draw-run-records-increase)
   fi
@@ -934,6 +1186,96 @@ if [[ -n "$baseline_output" ]]; then
   fi
   if (( require_encode_draw_cpu_decrease )); then
     perf_compare_cmd+=(--require-encode-draw-cpu-decrease)
+  fi
+  if (( require_completion_present_wait_decrease )); then
+    perf_compare_cmd+=(--require-completion-present-wait-decrease)
+  fi
+  if (( require_completion_wait_with_enqueue_increase )); then
+    perf_compare_cmd+=(--require-completion-wait-with-enqueue-increase)
+  fi
+  if (( require_completion_wait_without_enqueue_decrease )); then
+    perf_compare_cmd+=(--require-completion-wait-without-enqueue-decrease)
+  fi
+  if (( require_completion_present_wait_with_enqueue_increase )); then
+    perf_compare_cmd+=(--require-completion-present-wait-with-enqueue-increase)
+  fi
+  if (( require_completion_present_wait_without_enqueue_decrease )); then
+    perf_compare_cmd+=(--require-completion-present-wait-without-enqueue-decrease)
+  fi
+  if (( require_commit_chunk_replay_cpu_per_present_decrease )); then
+    perf_compare_cmd+=(--require-commit-chunk-replay-cpu-per-present-decrease)
+  fi
+  if (( require_queue_draw_submission_cpu_per_present_decrease )); then
+    perf_compare_cmd+=(--require-queue-draw-submission-cpu-per-present-decrease)
+  fi
+  if (( require_snapshot_cpu_per_present_decrease )); then
+    perf_compare_cmd+=(--require-snapshot-cpu-per-present-decrease)
+  fi
+  if (( require_snapshot_cache_lookup_cpu_per_present_decrease )); then
+    perf_compare_cmd+=(--require-snapshot-cache-lookup-cpu-per-present-decrease)
+  fi
+  if (( require_snapshot_cache_uniform_build_cpu_per_present_decrease )); then
+    perf_compare_cmd+=(--require-snapshot-cache-uniform-build-cpu-per-present-decrease)
+  fi
+  if (( require_snapshot_cache_uniform_hash_cpu_per_present_decrease )); then
+    perf_compare_cmd+=(--require-snapshot-cache-uniform-hash-cpu-per-present-decrease)
+  fi
+  if (( require_batch_miss_uniform_build_cpu_per_present_decrease )); then
+    perf_compare_cmd+=(--require-batch-miss-uniform-build-cpu-per-present-decrease)
+  fi
+  if (( require_batch_miss_uniform_hash_cpu_per_present_decrease )); then
+    perf_compare_cmd+=(--require-batch-miss-uniform-hash-cpu-per-present-decrease)
+  fi
+  if (( require_batch_miss_vs_const_hash_cpu_per_present_decrease )); then
+    perf_compare_cmd+=(--require-batch-miss-vs-const-hash-cpu-per-present-decrease)
+  fi
+  if (( require_batch_miss_ps_const_hash_cpu_per_present_decrease )); then
+    perf_compare_cmd+=(--require-batch-miss-ps-const-hash-cpu-per-present-decrease)
+  fi
+  if (( require_batch_miss_nonconst_hash_cpu_per_present_decrease )); then
+    perf_compare_cmd+=(--require-batch-miss-nonconst-hash-cpu-per-present-decrease)
+  fi
+  if (( require_snapshot_uniform_copy_cpu_per_present_decrease )); then
+    perf_compare_cmd+=(--require-snapshot-uniform-copy-cpu-per-present-decrease)
+  fi
+  if (( require_submit_draw_run_batch_append_uniform_cpu_per_present_decrease )); then
+    perf_compare_cmd+=(--require-submit-draw-run-batch-append-uniform-cpu-per-present-decrease)
+  fi
+  if (( require_draw_uniform_payload_lookup_cpu_per_present_decrease )); then
+    perf_compare_cmd+=(--require-draw-uniform-payload-lookup-cpu-per-present-decrease)
+  fi
+  if (( require_draw_uniform_payload_append_copy_cpu_per_present_decrease )); then
+    perf_compare_cmd+=(--require-draw-uniform-payload-append-copy-cpu-per-present-decrease)
+  fi
+  if (( require_argbuf_setup_cpu_per_present_decrease )); then
+    perf_compare_cmd+=(--require-argbuf-setup-cpu-per-present-decrease)
+  fi
+  if (( require_argbuf_open_cpu_per_present_decrease )); then
+    perf_compare_cmd+=(--require-argbuf-open-cpu-per-present-decrease)
+  fi
+  if (( require_argbuf_cbuf_update_cpu_per_present_decrease )); then
+    perf_compare_cmd+=(--require-argbuf-cbuf-update-cpu-per-present-decrease)
+  fi
+  if (( require_argbuf_cbuf_update_vs_cpu_per_present_decrease )); then
+    perf_compare_cmd+=(--require-argbuf-cbuf-update-vs-cpu-per-present-decrease)
+  fi
+  if (( require_uniform_compact_saved_bytes_present )); then
+    perf_compare_cmd+=(--require-uniform-compact-saved-bytes-present)
+  fi
+  if (( require_encode_chunk_cpu_per_present_decrease )); then
+    perf_compare_cmd+=(--require-encode-chunk-cpu-per-present-decrease)
+  fi
+  if (( require_no_enqueue_commit_entry_to_publish_decrease )); then
+    perf_compare_cmd+=(--require-no-enqueue-commit-entry-to-publish-decrease)
+  fi
+  if (( require_no_enqueue_publish_to_encode_dequeue_decrease )); then
+    perf_compare_cmd+=(--require-no-enqueue-publish-to-encode-dequeue-decrease)
+  fi
+  if (( require_no_enqueue_encode_dequeue_to_commit_decrease )); then
+    perf_compare_cmd+=(--require-no-enqueue-encode-dequeue-to-commit-decrease)
+  fi
+  if (( require_no_enqueue_wait_to_next_enqueue_decrease )); then
+    perf_compare_cmd+=(--require-no-enqueue-wait-to-next-enqueue-decrease)
   fi
   if [[ -n "$max_gpu_command_buffer_regression_ms" ]]; then
     perf_compare_cmd+=(--max-gpu-command-buffer-regression-ms "$max_gpu_command_buffer_regression_ms")
@@ -1121,6 +1463,7 @@ echo "summary: $summary_path"
 echo "encoder_csv: $encoders_csv"
 echo "stream_csv: $stream_csv"
 echo "probe_draws_csv: $probe_draws_csv"
+echo "trace_artifacts_json: $trace_artifacts_json"
 echo "index_cache_runtime_report: $index_cache_runtime_report"
 echo "index_cache_runtime_csv: $index_cache_runtime_csv"
 echo "class_proxy_report: $class_proxy_report"
@@ -1204,10 +1547,85 @@ if ((${#semantic_image_compare_cmd[@]})); then
   run_cmd "${semantic_image_compare_cmd[@]}"
 fi
 
+python3 - "$trace_artifacts_json" \
+  "$run_id" \
+  "$output_dir" \
+  "$trace_dir" \
+  "$analysis_dir" \
+  "$frame" \
+  "$capture_path" \
+  "$xcode_performance_gputrace" \
+  "$xcode_csv" \
+  "$xcode_summary_csv" \
+  "$joined_csv" \
+  "$xcode_report" <<'PY'
+import json
+import pathlib
+import sys
+
+(
+    out,
+    run_id,
+    output_dir,
+    trace_dir,
+    analysis_dir,
+    frame,
+    capture_path,
+    performance_gputrace,
+    counters_csv,
+    counters_summary_csv,
+    joined_summary_csv,
+    bottleneck_report,
+) = sys.argv[1:]
+
+out_path = pathlib.Path(out)
+if out_path.exists():
+    try:
+        payload = json.loads(out_path.read_text(encoding="utf-8"))
+    except json.JSONDecodeError:
+        payload = {}
+else:
+    payload = {}
+
+destination = payload.get("metal_capture_destination") or "gpuTraceDocument"
+capture_enabled = bool(payload.get("capture_gputrace", pathlib.Path(capture_path).exists()))
+direct_file_expected = payload.get(
+    "direct_gputrace_file_expected",
+    capture_enabled and destination not in {"developerTools", "xcode"},
+)
+paths = dict(payload.get("paths") or {})
+paths.update({
+    "output_dir": output_dir,
+    "trace_dir": trace_dir,
+    "analysis_dir": analysis_dir,
+    "gputrace": capture_path if direct_file_expected else paths.get("gputrace"),
+    "xcode_performance_gputrace": performance_gputrace,
+    "xcode_encoder_counters_csv": counters_csv,
+    "xcode_counters_summary_csv": counters_summary_csv,
+    "xcode_dxmt_joined_summary_csv": joined_summary_csv,
+    "xcode_dxmt_bottleneck_report": bottleneck_report,
+})
+paths = {key: value for key, value in paths.items() if value}
+payload.update({
+    "run_id": payload.get("run_id") or run_id,
+    "frame": int(frame),
+    "capture_gputrace": capture_enabled,
+    "metal_capture_destination": destination,
+    "direct_gputrace_file_expected": bool(direct_file_expected),
+    "paths": paths,
+    "exists": {key: pathlib.Path(value).exists() for key, value in paths.items()},
+})
+
+out_path.parent.mkdir(parents=True, exist_ok=True)
+out_path.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+print(out)
+PY
+
 echo "wrote summary: $summary_path"
 echo "wrote encoder csv: $encoders_csv"
 echo "wrote stream csv: $stream_csv"
 echo "wrote probe draw csv: $probe_draws_csv"
+echo "wrote trace artifacts manifest: $trace_artifacts_json"
 echo "wrote index cache runtime report: $index_cache_runtime_report"
 echo "wrote index cache runtime csv: $index_cache_runtime_csv"
 if [[ -f "$class_proxy_csv" ]]; then

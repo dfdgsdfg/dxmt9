@@ -157,8 +157,7 @@ def describe_reference_files(reference_files: list[Path]) -> list[str]:
     return [f"- Reference: `{ref}`" for ref in reference_files]
 
 
-def write_markdown(path: Path, rows: list[RunEntry], reference_files: list[Path]) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
+def build_markdown(rows: list[RunEntry], reference_files: list[Path]) -> str:
     unreferenced_total = sum(row.total_size_bytes for row in rows if row.status == "unreferenced")
     referenced_total = sum(row.total_size_bytes for row in rows if row.status == "referenced")
     lines = [
@@ -194,7 +193,12 @@ def write_markdown(path: Path, rows: list[RunEntry], reference_files: list[Path]
             f"`{format_size(row.trace_size_bytes)}` | "
             f"`{format_size(row.output_size_bytes)}` | {row.cleanup_hint} |"
         )
-    path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+    return "\n".join(lines) + "\n"
+
+
+def write_markdown(path: Path, rows: list[RunEntry], reference_files: list[Path]) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(build_markdown(rows, reference_files), encoding="utf-8")
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -209,7 +213,11 @@ def build_parser() -> argparse.ArgumentParser:
         help="Reference text to scan for run ids. Defaults to docs/perfomance/**/*.md.",
     )
     parser.add_argument("--top", type=int, default=40, help="Rows to emit; 0 means all.")
-    parser.add_argument("--output", required=True, type=Path)
+    parser.add_argument(
+        "--output",
+        type=Path,
+        help="Markdown report path. Defaults to stdout for quick disk-space checks.",
+    )
     parser.add_argument("--csv-output", type=Path)
     return parser
 
@@ -219,11 +227,13 @@ def main() -> int:
     reference_files = args.reference_file or default_reference_files()
     references = read_references(reference_files)
     rows = limited(scan_run_dirs(args.trace_root, args.output_root, references), args.top)
-    write_markdown(args.output, rows, reference_files)
+    if args.output is not None:
+        write_markdown(args.output, rows, reference_files)
+        print(args.output)
+    else:
+        print(build_markdown(rows, reference_files), end="")
     if args.csv_output is not None:
         write_csv(args.csv_output, rows)
-    print(args.output)
-    if args.csv_output is not None:
         print(args.csv_output)
     return 0
 

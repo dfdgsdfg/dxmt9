@@ -29,6 +29,35 @@ build. `shader_corpus_tool.py` is also imported by the Meson tests under
   encoder-level totals. Use
   `run_3dmark05_perf_probe.sh --probe-draw-packet-actual-change` when snapshot
   cache misses need declared-vs-actual draw-packet delta evidence.
+- `compare_3dmark05_perf_counters.py` — compare two
+  `run_3dmark05_perf_probe.sh` output directories by dxmt9 perf counters. Use
+  it through wrapper/finalizer `--compare-baseline-output <baseline-output>`
+  when possible so no-gputrace scouts and post-Xcode finalization use the same
+  gates. The P4 gates distinguish total completion/present wait from recovered
+  enqueue overlap (`--require-completion-present-wait-decrease`,
+  `--require-completion-wait-with-enqueue-increase`,
+  `--require-completion-wait-without-enqueue-decrease`). The P2/P3 gates track
+  serialized replay/snapshot/encode owners per present
+  (`--require-commit-chunk-replay-cpu-per-present-decrease`,
+  `--require-encode-chunk-cpu-per-present-decrease`, and the
+  `--require-no-enqueue-*` stage gates). Uniform owner gates split byte-width
+  proof from CPU-owner proof, including snapshot uniform build/hash,
+  batch-miss VS/PS/nonconst hash, snapshot uniform copy, and backend uniform
+  append/lookup/copy gates such as
+  `--require-snapshot-cache-uniform-hash-cpu-per-present-decrease` and
+  `--require-submit-draw-run-batch-append-uniform-cpu-per-present-decrease`.
+  Uniform compact-opportunity counters are reported as candidate/saved
+  bytes-per-present and shares, so storage-shape candidates can be sized before
+  building a new carrier. Use
+  `--require-current-uniform-compact-saved-bytes-present` for standalone
+  scouts, and `--require-uniform-compact-saved-bytes-present` only with
+  `--compare-baseline-output` for before/after comparisons.
+  For P4 overlap candidates, combine the overlap gates with locality-preserving
+  checks: `--require-command-buffers-per-present-not-increase`,
+  `--require-render-passes-per-present-not-increase`, and
+  `--require-tile-preservation-not-increase`. These reject candidates that
+  create enqueue overlap only by fragmenting Metal command buffers, render
+  passes, or tile-preservation traffic.
 - `summarize_xctrace_metal_intervals.py` — parse xctrace
   `metal-gpu-intervals` XML and join dxmt9 encoder attribution by
   `RenderPass[seq=...,enc=...]`. Use it as a timing/label sidecar for 3DMark05
@@ -43,6 +72,18 @@ build. `shader_corpus_tool.py` is also imported by the Meson tests under
   add depth-only/textured/color route verdicts without per-draw indexed probe
   logging. Pass `--indexed-probe-draws <3dmark05-perf-indexed-probe-draws.csv>`
   only when that CSV contains draw rows and per-draw route detail is needed.
+- `summarize_xctrace_cpu_threads.py` — parse xctrace `time-profile` plus
+  optional `time-sample` / `thread-info` XML and summarize target-process
+  thread state, top sampled stacks, xctrace `tid`, main-thread status, and
+  keyword hits such as `OnMainThread`, `kevent`, macdrv cursor/window calls,
+  `CA::Transaction`, `CAMetalLayer`, `presentDrawable`, and `nextDrawable`.
+  The Markdown output and optional verdict JSON include a P4 scout verdict for
+  the highest-weight producer thread, an explicit `--producer-thread-regex`, or
+  a `thread_id=0x...` selector extracted from a PE log. Selectors match
+  the thread label and the `thread-info` `tid` when available. Use it for P4
+  present-pacing probes where a normal Metal System Trace sidecar should decide
+  whether the D3D/Wine producer thread is blocked in winemac main-thread
+  marshaling or still burning CPU in replay/encode paths.
 - `run_3dmark05_system_trace_sidecar.sh` — guarded wrapper around
   `run_3dmark05_perf_probe.sh` and `xcrun xctrace record --template
   'Metal System Trace' --all-processes`. It runs the probe wrapper dry-run
@@ -71,18 +112,48 @@ build. `shader_corpus_tool.py` is also imported by the Meson tests under
   before `MIN`, suspect a stale installed unix provider first: the standard
   staging path now builds `build-x86_64-builtin/src/winemetal/unix/winemetal.so`
   before copying it, but manual installs must do the same or new env filters
-  will not exist in the active Wine provider.
+  will not exist in the active Wine provider. The sidecar also has a
+  `--min-free-mb N` / `DXMT_3DMARK05_SYSTEM_TRACE_MIN_FREE_MB` launch guard
+  because normal Metal System Trace bundles can be large; dry-runs print the
+  free-space decision without starting xctrace. Pass `--export-cpu-summary` for
+  present-pacing / winemac `OnMainThread` scouts; it additionally exports
+  required `time-profile` plus optional `time-sample` and `thread-info` tables
+  into the trace analysis directory, writes `xctrace-cpu-thread-summary.{csv,md}` plus
+  `xctrace-cpu-thread-verdict.json`, and prints
+  `system_trace_cpu_summary_verdict:` on completion. Add
+  `--cpu-producer-thread-regex REGEX` when PE milestone logs have identified
+  the real producer thread and the default highest-weight-thread scout is too
+  broad, or `--cpu-producer-from-pe-log` to have the CPU summary parser extract
+  the selector from the wrapped probe's `3dmark05-direct.log`. Native
+  `unix_commit_chunk_entry native_tid=0x...` rows are preferred when present;
+  PE `pe_present_* thread_id=0x...` rows are the fallback. This option also forces
+  `DXMT9_PE_RECORDER_STATS=1 DXMT_LOG_LEVEL=info` into the wrapped probe when
+  no explicit producer regex is set.
+  If log extraction is requested but no native or PE thread id is present, the
+  verdict is `producer-thread-selector-missing` instead of falling back to the
+  highest-weight thread; if an extracted id does not match any xctrace thread,
+  the verdict is `producer-thread-not-found`. On Wine, PE `thread_id` values
+  are Win32 thread ids; do not assume they equal xctrace's native Mach thread
+  ids. Prefer the native `native_tid` source for decisive same-run selection.
+  Add `--require-cpu-p4-positive` only for a validation run where the expected
+  verdict is `producer-wait-stack-positive`; it fails callback-noise,
+  producer-running negative scouts, and missing explicit producer-thread
+  selectors.
 - `run_with_wine_metal_capture_layer.sh` — temporarily replace a Wine root's
   actual `bin/wine.real` and `bin/wine-preloader` names with capture-enabled
-  copies, run a command, then restore the originals. Use it for non-3DMark05
+  copies, run a command, then restore the originals. The replacement and
+  restore paths use same-directory temp files plus `mv`, not in-place `cp`
+  overwrites; this avoids stale macOS code-signing vnode/cache state that can
+  kill Rosetta Wine with `SIGKILL (Code Signature Invalid)`. Use it for
   Wine/D3D9 `.gputrace` diagnostics when `DXMT_METAL_CAPTURE_FRAME/PATH`
-  reports `Capture layer is not inserted`. Do not use it as a standard
-  3DMark05 path: it proves the temp Wine launcher can receive
-  `MetalCaptureEnabled`, but current 3DMark05 black-screens before draw/present
-  when that layer is present. The wrapper rejects 3DMark05 command lines by
-  default; pass `--allow-3dmark05` or set
-  `DXMT9_ALLOW_3DMARK05_CAPTURE_LAYER=1` only for an explicit invalid-sample
-  diagnostic.
+  reports `Capture layer is not inserted`. 3DMark05 command lines are still
+  rejected by default because an inserted capture layer is a diagnostic/Xcode
+  counter route, not a normal FPS sample; pass `--allow-3dmark05` or set
+  `DXMT9_ALLOW_3DMARK05_CAPTURE_LAYER=1` only for an explicit capture run.
+  When wrapping `run_experiment.py` directly, also pass the same Wine root to
+  the child command, for example `run_experiment.py ... --wine-root <root>`;
+  otherwise the wrapper may patch one Wine tree while the catalogue runner
+  auto-detects and launches another one.
 - `summarize_framegraph_dag.py` — parse
   `DXMT9_RENDERER_DUMP_DAG` JSON dumps and report same-attachment re-entry
   pairs, direct A->B edge resources, intervening same-attachment accesses,
@@ -219,6 +290,9 @@ build. `shader_corpus_tool.py` is also imported by the Meson tests under
   `miss32_delta`, so unapplied locality ceilings do not appear as zero-LRU rows.
 - `run_3dmark05_perf_probe.sh` — standard 3DMark05 GT1 perf launcher. Always
   use a positive `--timeout` because 3DMark05 can hang at the final frame.
+  Pass `--wait-unlocked-sec N` when the command should poll the macOS lock
+  state and launch automatically after unlock; dry-runs and expired waits do
+  not create probe artifacts.
   Add `--frame-sampling` for no-gputrace visual/perf-coupling runs; it emits
   per-Present wall-clock `wall_ms/fps` plus draw/pass/wait deltas and writes
   `3dmark05-perf-frames.csv` through the summary step.
@@ -254,15 +328,40 @@ build. `shader_corpus_tool.py` is also imported by the Meson tests under
   without `MTL_CAPTURE_ENABLED=1` by default because that Apple capture-layer
   env has reproduced 3DMark05 black-screen startup with draw/present counters
   at zero. Use `DXMT_3DMARK05_SET_MTL_CAPTURE_ENABLED=1` only for deliberate
-  capture-layer experiments. If normal rendering works but file capture reports
-  `Capture layer is not inserted`, do not automatically escalate to
-  `run_with_wine_metal_capture_layer.sh` for 3DMark05: that wrapper works for a
-  synthetic Wine/D3D9 `.gputrace` but currently black-screens 3DMark05 before
-  draw/present. Use `run_3dmark05_system_trace_sidecar.sh -- ...` for the
-  normal-rendering xctrace Metal System Trace path, or an explicitly validated
-  Xcode attach-after-normal-start route instead. The sidecar runner refuses
-  locked sessions before recording xctrace; pass `--wait-unlocked-sec N` if the
-  run should wait for unlock and then launch automatically. Manual runs can
+  capture-layer experiments. File `.gputrace` runs now preflight the Wine
+  child before launch and fail early when both `wine.real` and
+  `wine-preloader` lack `MetalCaptureEnabled`; set
+  `DXMT_3DMARK05_ALLOW_NO_FILE_CAPTURE_LAYER=1` only for an intentional late
+  `Capture layer is not inserted` diagnostic. Use
+  `--xcode-developer-tools-capture` or
+  `--metal-capture-destination developerTools` only for an explicit
+  attach-after-normal-start diagnostic where Xcode is attached to the real Wine
+  child before the target frame. Preflight Xcode first: Developer Mode must be
+  enabled, attach-by-PID must be enabled, or the attach-process submenu must
+  list the Wine child. If Developer Mode is disabled or the submenu is stuck at
+  `Getting Process List...`, stop and use another route instead of spending a
+  long run. Use `--xcode-attach-preflight-only` for a no-launch check, and
+  `--require-xcode-attach-preflight` on an actual
+  `developerTools` run so the wrapper fails before launching in the known-bad
+  Xcode state. Also choose a target frame that the current run is known to
+  reach; missing the target frame produces no capture start/stop log and is not
+  capture-layer evidence. That path does not write `frame<N>.gputrace`
+  directly; the wrapper instead requires `destination=1` start/stop log proof
+  and the useful artifact must be exported from Xcode into
+  `traces/<run>/analysis`. If normal rendering works but file capture reports
+  `Capture layer is not inserted`, use
+  `run_3dmark05_perf_probe.sh --with-wine-capture-layer ...` for a deliberate
+  supervised 3DMark05 file `.gputrace` diagnostic. Use
+  `run_with_wine_metal_capture_layer.sh --allow-3dmark05 -- ...` only when
+  manually wrapping a lower-level command. A 2026-06-16 regression showed why
+  the wrapper must replace files atomically: overwriting `wine.real` in place
+  can leave the original path killed by taskgated even though `codesign
+  --verify` says the file is valid. Use
+  `run_3dmark05_system_trace_sidecar.sh -- ...` when the goal is a
+  normal-rendering xctrace Metal System Trace path.
+  The sidecar runner refuses locked sessions before recording xctrace; pass
+  `--wait-unlocked-sec N` if the run should wait for unlock and then launch
+  automatically. Manual runs can
   still use the wrapper-printed `xctrace_system_trace_export_cmd` and
   `xctrace_system_trace_summary_cmd` for traces recorded as
   `traces/<run>/metal-system.trace`; add `--measure-index-reuse` only when
@@ -368,8 +467,9 @@ build. `shader_corpus_tool.py` is also imported by the Meson tests under
 - `summarize_3dmark05_cleanup_candidates.py` — non-destructive disk-space audit
   for 3DMark05 run ids under `traces/` and `experiments/output/`. It scans
   `docs/perfomance/**/*.md` for run-id references, reports referenced versus
-  unreferenced storage, and should be used before deleting large `.gputrace` or
-  log trees needed by current proof gates.
+  unreferenced storage, prints Markdown to stdout by default, and can write
+  `--output` / `--csv-output` files when you need an archived report. Use it
+  before deleting large `.gputrace` or log trees needed by current proof gates.
 - `summarize_visibility_scout.py` — summarize
   `frame<N>-visibility-scout.csv` into row/class buckets and an optional
   `metal_draw_index` window. The Markdown report includes a no-sample draw

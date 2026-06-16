@@ -143,6 +143,10 @@ def summarize(rows: list[dict[str, str]], top_n: int) -> dict[str, float]:
         64: float(sum(as_int(first(row, "dxmt_indexed_cache_opt_candidate_miss64",
                                   "indexed_cache_opt_candidate_miss64")) for row in top)),
     }
+
+    def top_cache_opt_candidate_counter(key: str) -> float:
+        return float(sum(as_int(first(row, f"dxmt_{key}", key)) for row in top))
+
     top_draw_calls = float(sum(as_int(first(row, "dxmt_draw_calls", "draw_calls")) for row in top))
     top_pso_state_samples = float(
         sum(as_int(first(row, "dxmt_pso_state_samples", "pso_state_samples")) for row in top)
@@ -346,6 +350,33 @@ def summarize(rows: list[dict[str, str]], top_n: int) -> dict[str, float]:
              top_cache_opt_candidate_original_misses[64]) /
             top_cache_opt_candidate_original_misses[64] * 100.0
             if top_cache_opt_candidate_original_misses[64] else 0.0
+        ),
+        "top_indexed_cache_opt_candidate_gate_pass": top_cache_opt_candidate_counter(
+            "indexed_cache_opt_candidate_gate_pass"
+        ),
+        "top_indexed_cache_opt_candidate_gate_fail": top_cache_opt_candidate_counter(
+            "indexed_cache_opt_candidate_gate_fail"
+        ),
+        "top_indexed_cache_opt_candidate_opaque_depth_draws": top_cache_opt_candidate_counter(
+            "indexed_cache_opt_candidate_opaque_depth_draws"
+        ),
+        "top_indexed_cache_opt_candidate_screen_blend_draws": top_cache_opt_candidate_counter(
+            "indexed_cache_opt_candidate_screen_blend_draws"
+        ),
+        "top_indexed_cache_opt_candidate_primitive_bucket_1_63": top_cache_opt_candidate_counter(
+            "indexed_cache_opt_candidate_primitive_bucket_1_63"
+        ),
+        "top_indexed_cache_opt_candidate_primitive_bucket_64_255": top_cache_opt_candidate_counter(
+            "indexed_cache_opt_candidate_primitive_bucket_64_255"
+        ),
+        "top_indexed_cache_opt_candidate_primitive_bucket_256_1023": top_cache_opt_candidate_counter(
+            "indexed_cache_opt_candidate_primitive_bucket_256_1023"
+        ),
+        "top_indexed_cache_opt_candidate_primitive_bucket_1024_4095": top_cache_opt_candidate_counter(
+            "indexed_cache_opt_candidate_primitive_bucket_1024_4095"
+        ),
+        "top_indexed_cache_opt_candidate_primitive_bucket_4096_plus": top_cache_opt_candidate_counter(
+            "indexed_cache_opt_candidate_primitive_bucket_4096_plus"
         ),
         "top_stream_handle_changes": float(
             sum(as_int(first(row, "dxmt_stream_handle_changes", "stream_handle_changes")) for row in top)
@@ -637,6 +668,10 @@ def row_cache_opt_candidate_miss32(row: dict[str, str]) -> float:
     )))
 
 
+def row_cache_opt_candidate_int(row: dict[str, str], key: str) -> float:
+    return float(as_int(first(row, f"dxmt_{key}", key)))
+
+
 def row_reordered_index_cache_lookups(row: dict[str, str]) -> float:
     return float(as_int(first(
         row,
@@ -731,6 +766,42 @@ def aggregate_keyed_rows(
         ),
         "cache_opt_candidate_miss32": sum(
             row_cache_opt_candidate_miss32(row) for row in present
+        ),
+        "cache_opt_candidate_gate_pass": sum(
+            row_cache_opt_candidate_int(row, "indexed_cache_opt_candidate_gate_pass")
+            for row in present
+        ),
+        "cache_opt_candidate_gate_fail": sum(
+            row_cache_opt_candidate_int(row, "indexed_cache_opt_candidate_gate_fail")
+            for row in present
+        ),
+        "cache_opt_candidate_opaque_depth_draws": sum(
+            row_cache_opt_candidate_int(row, "indexed_cache_opt_candidate_opaque_depth_draws")
+            for row in present
+        ),
+        "cache_opt_candidate_screen_blend_draws": sum(
+            row_cache_opt_candidate_int(row, "indexed_cache_opt_candidate_screen_blend_draws")
+            for row in present
+        ),
+        "cache_opt_candidate_primitive_bucket_1_63": sum(
+            row_cache_opt_candidate_int(row, "indexed_cache_opt_candidate_primitive_bucket_1_63")
+            for row in present
+        ),
+        "cache_opt_candidate_primitive_bucket_64_255": sum(
+            row_cache_opt_candidate_int(row, "indexed_cache_opt_candidate_primitive_bucket_64_255")
+            for row in present
+        ),
+        "cache_opt_candidate_primitive_bucket_256_1023": sum(
+            row_cache_opt_candidate_int(row, "indexed_cache_opt_candidate_primitive_bucket_256_1023")
+            for row in present
+        ),
+        "cache_opt_candidate_primitive_bucket_1024_4095": sum(
+            row_cache_opt_candidate_int(row, "indexed_cache_opt_candidate_primitive_bucket_1024_4095")
+            for row in present
+        ),
+        "cache_opt_candidate_primitive_bucket_4096_plus": sum(
+            row_cache_opt_candidate_int(row, "indexed_cache_opt_candidate_primitive_bucket_4096_plus")
+            for row in present
         ),
         "reordered_index_cache_lookups": sum(
             row_reordered_index_cache_lookups(row) for row in present
@@ -970,6 +1041,15 @@ def write_report(path: Path, before: dict[str, float], after: dict[str, float],
         "top_indexed_cache_opt_candidate_miss_delta_pct_16",
         "top_indexed_cache_opt_candidate_miss_delta_pct_32",
         "top_indexed_cache_opt_candidate_miss_delta_pct_64",
+        "top_indexed_cache_opt_candidate_gate_pass",
+        "top_indexed_cache_opt_candidate_gate_fail",
+        "top_indexed_cache_opt_candidate_opaque_depth_draws",
+        "top_indexed_cache_opt_candidate_screen_blend_draws",
+        "top_indexed_cache_opt_candidate_primitive_bucket_1_63",
+        "top_indexed_cache_opt_candidate_primitive_bucket_64_255",
+        "top_indexed_cache_opt_candidate_primitive_bucket_256_1023",
+        "top_indexed_cache_opt_candidate_primitive_bucket_1024_4095",
+        "top_indexed_cache_opt_candidate_primitive_bucket_4096_plus",
         "top_stream_handle_changes",
         "top_stream_offset_changes",
         "top_stream_stride_changes",
@@ -1115,6 +1195,15 @@ def write_report(path: Path, before: dict[str, float], after: dict[str, float],
             "cache_opt_candidate_draws",
             "cache_opt_candidate_original_miss32",
             "cache_opt_candidate_miss32",
+            "cache_opt_candidate_gate_pass",
+            "cache_opt_candidate_gate_fail",
+            "cache_opt_candidate_opaque_depth_draws",
+            "cache_opt_candidate_screen_blend_draws",
+            "cache_opt_candidate_primitive_bucket_1_63",
+            "cache_opt_candidate_primitive_bucket_64_255",
+            "cache_opt_candidate_primitive_bucket_256_1023",
+            "cache_opt_candidate_primitive_bucket_1024_4095",
+            "cache_opt_candidate_primitive_bucket_4096_plus",
             "reordered_index_cache_lookups",
             "reordered_index_cache_hits",
             "reordered_index_cache_rejected_hits",
@@ -1158,6 +1247,15 @@ def write_report(path: Path, before: dict[str, float], after: dict[str, float],
             "draw_calls",
             "vertex_count",
             "triangle_estimate",
+            "cache_opt_candidate_gate_pass",
+            "cache_opt_candidate_gate_fail",
+            "cache_opt_candidate_opaque_depth_draws",
+            "cache_opt_candidate_screen_blend_draws",
+            "cache_opt_candidate_primitive_bucket_1_63",
+            "cache_opt_candidate_primitive_bucket_64_255",
+            "cache_opt_candidate_primitive_bucket_256_1023",
+            "cache_opt_candidate_primitive_bucket_1024_4095",
+            "cache_opt_candidate_primitive_bucket_4096_plus",
         ):
             diff, pct = delta(after_guard[metric], before_guard[metric])
             lines.append(

@@ -14,10 +14,12 @@ class D3D9VertexShaderImpl final : public IDirect3DVertexShader9 {
   ULONG refs_ = 1;
   D9CShader *s_;
   IDirect3DDevice9 *device_;
+  std::uint64_t hash_ = 0;
 
 public:
-  D3D9VertexShaderImpl(D9CShader *s, IDirect3DDevice9 *device)
-      : s_(s), device_(device) {
+  D3D9VertexShaderImpl(D9CShader *s, IDirect3DDevice9 *device,
+                       std::uint64_t hash)
+      : s_(s), device_(device), hash_(hash) {
     if (device_)
       device_->AddRef();
   }
@@ -28,6 +30,7 @@ public:
   }
 
   D9CShader *raw() const { return s_; }
+  std::uint64_t hash() const { return hash_; }
 
   ULONG STDMETHODCALLTYPE AddRef() noexcept override { return ++refs_; }
   ULONG STDMETHODCALLTYPE Release() noexcept override {
@@ -75,10 +78,12 @@ class D3D9PixelShaderImpl final : public IDirect3DPixelShader9 {
   ULONG refs_ = 1;
   D9CShader *s_;
   IDirect3DDevice9 *device_;
+  std::uint64_t hash_ = 0;
 
 public:
-  D3D9PixelShaderImpl(D9CShader *s, IDirect3DDevice9 *device)
-      : s_(s), device_(device) {
+  D3D9PixelShaderImpl(D9CShader *s, IDirect3DDevice9 *device,
+                      std::uint64_t hash)
+      : s_(s), device_(device), hash_(hash) {
     if (device_)
       device_->AddRef();
   }
@@ -89,6 +94,7 @@ public:
   }
 
   D9CShader *raw() const { return s_; }
+  std::uint64_t hash() const { return hash_; }
 
   ULONG STDMETHODCALLTYPE AddRef() noexcept override { return ++refs_; }
   ULONG STDMETHODCALLTYPE Release() noexcept override {
@@ -134,13 +140,15 @@ public:
  * ========================================================================= */
 
 IDirect3DVertexShader9 *CreatePeVertexShader(D9CShader *shader,
-                                             IDirect3DDevice9 *device) {
-  return new D3D9VertexShaderImpl(shader, device);
+                                             IDirect3DDevice9 *device,
+                                             std::uint64_t hash) {
+  return new D3D9VertexShaderImpl(shader, device, hash);
 }
 
 IDirect3DPixelShader9 *CreatePePixelShader(D9CShader *shader,
-                                           IDirect3DDevice9 *device) {
-  return new D3D9PixelShaderImpl(shader, device);
+                                           IDirect3DDevice9 *device,
+                                           std::uint64_t hash) {
+  return new D3D9PixelShaderImpl(shader, device, hash);
 }
 
 D9CShader *D3D9PeRawVertexShader(IDirect3DVertexShader9 *shader) {
@@ -149,4 +157,12 @@ D9CShader *D3D9PeRawVertexShader(IDirect3DVertexShader9 *shader) {
 
 D9CShader *D3D9PeRawPixelShader(IDirect3DPixelShader9 *shader) {
   return shader ? static_cast<D3D9PixelShaderImpl *>(shader)->raw() : nullptr;
+}
+
+std::uint64_t D3D9PeVertexShaderHash(IDirect3DVertexShader9 *shader) {
+  return shader ? static_cast<D3D9VertexShaderImpl *>(shader)->hash() : 0;
+}
+
+std::uint64_t D3D9PePixelShaderHash(IDirect3DPixelShader9 *shader) {
+  return shader ? static_cast<D3D9PixelShaderImpl *>(shader)->hash() : 0;
 }

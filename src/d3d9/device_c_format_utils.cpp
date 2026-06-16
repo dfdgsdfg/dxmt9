@@ -11,6 +11,37 @@ constexpr uint32_t kD3DPRESENT_INTERVAL_ONE = 0x00000001u;
 constexpr uint32_t kD3DPRESENT_INTERVAL_TWO = 0x00000002u;
 constexpr uint32_t kD3DPRESENT_INTERVAL_IMMEDIATE = 0x80000000u;
 
+template <typename Constants>
+std::size_t clampedFloatConstantCount(const Constants& constants, uint32_t start,
+                                      uint32_t count) noexcept {
+  const auto capacity = constants.float4.size();
+  if (start >= capacity) {
+    return 0u;
+  }
+  return std::min<std::size_t>(count, capacity - start);
+}
+
+template <typename Constants>
+bool floatConstantsMatch(const Constants& constants, uint32_t start,
+                         const float* data, std::size_t count) noexcept {
+  for (std::size_t i = 0; i < count; ++i) {
+    if (std::memcmp(constants.float4[start + i].data(), data + i * 4u,
+                    sizeof(float) * 4u) != 0) {
+      return false;
+    }
+  }
+  return true;
+}
+
+template <typename Constants>
+void writeFloatConstants(Constants& constants, uint32_t start, const float* data,
+                         std::size_t count) noexcept {
+  for (std::size_t i = 0; i < count; ++i) {
+    std::memcpy(constants.float4[start + i].data(), data + i * 4u,
+                sizeof(float) * 4u);
+  }
+}
+
 }  // namespace
 
 uint32_t usageFromD3D(uint32_t usage) {
@@ -425,23 +456,24 @@ uint32_t transformStateFromD3D(uint32_t state) {
 
 int32_t setShaderFloatConst(D9CDevice* d, uint32_t start, const float* data, uint32_t cnt,
                             bool pixelShader) {
-  auto& state = d->dev().mutableShaderConstantsState();
   if (pixelShader) {
-    auto& consts = state.psConst;
-    for (uint32_t i = 0; i < cnt && (start + i) < consts.float4.size(); ++i) {
-      consts.float4[start + i][0] = data[i * 4 + 0];
-      consts.float4[start + i][1] = data[i * 4 + 1];
-      consts.float4[start + i][2] = data[i * 4 + 2];
-      consts.float4[start + i][3] = data[i * 4 + 3];
+    const auto& current = d->dev().state().psConst;
+    const auto effectiveCount = clampedFloatConstantCount(current, start, cnt);
+    if (effectiveCount == 0u ||
+        floatConstantsMatch(current, start, data, effectiveCount)) {
+      return dxmt9::core::D3D_OK;
     }
+    auto& consts = d->dev().mutablePixelShaderConstantsState().psConst;
+    writeFloatConstants(consts, start, data, effectiveCount);
   } else {
-    auto& consts = state.vsConst;
-    for (uint32_t i = 0; i < cnt && (start + i) < consts.float4.size(); ++i) {
-      consts.float4[start + i][0] = data[i * 4 + 0];
-      consts.float4[start + i][1] = data[i * 4 + 1];
-      consts.float4[start + i][2] = data[i * 4 + 2];
-      consts.float4[start + i][3] = data[i * 4 + 3];
+    const auto& current = d->dev().state().vsConst;
+    const auto effectiveCount = clampedFloatConstantCount(current, start, cnt);
+    if (effectiveCount == 0u ||
+        floatConstantsMatch(current, start, data, effectiveCount)) {
+      return dxmt9::core::D3D_OK;
     }
+    auto& consts = d->dev().mutableVertexShaderConstantsState().vsConst;
+    writeFloatConstants(consts, start, data, effectiveCount);
   }
   return dxmt9::core::D3D_OK;
 }

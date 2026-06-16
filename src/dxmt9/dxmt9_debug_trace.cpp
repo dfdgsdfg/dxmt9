@@ -824,6 +824,12 @@ bool probeFragmentlessDepthOnly() {
   return v;
 }
 
+bool probeFragmentlessDepthOnlyKeepVSOut() {
+  static const bool v =
+      util::getenvFlag("DXMT9_PROBE_FRAGMENTLESS_DEPTH_ONLY_KEEP_VSOUT");
+  return v;
+}
+
 IndexedTriangleClassFilter probeFragmentlessDepthOnlyClassFilter() {
   static const IndexedTriangleClassFilter filter =
       makeIndexedTriangleClassFilter(

@@ -526,7 +526,8 @@ std::optional<FixedFunctionVertexLayout> decodeFixedFunctionVertexLayout(const V
 std::string makeFfpVertexSource(const FfpVertexKey& key,
                                 const drawshader::ShaderSourceContext& context) {
   std::ostringstream out;
-  const bool argbufHybrid = context.argbufHybridMode;
+  const bool argbufHybrid =
+      context.argbufHybridMode && !context.argbufDirectCbufMode;
   const auto layout = decodeFixedFunctionVertexLayout(context.vertexDecl);
   constexpr u32 kTciIndexMask = 0x0000ffffu;
   constexpr u32 kTciGenMask = 0xffff0000u;
@@ -961,7 +962,8 @@ std::string makeFfpPixelSource(const FfpPixelKey& key,
     const char* env = std::getenv("DXMT_DEBUG_FFP_ALPHA");
     return env && env[0] != '\0' && std::strcmp(env, "0") != 0;
   }();
-  const bool argbufHybrid = context.argbufHybridMode;
+  const bool argbufHybrid =
+      context.argbufHybridMode && !context.argbufDirectCbufMode;
   // R-BACK-12.22..12.26 (resource-array sub-mode) — only meaningful when
   // Stage 2 hybrid is also on AND the fragment actually samples a texture.
   // When set, the texture/sampler resources ride the slot-30 argbuf arrays
@@ -1366,7 +1368,8 @@ std::string makeFfpTilePixelSource(const FfpPixelKey& key,
   // from the portable path so binding indices line up.
   const bool useHalf = tileFfpAttachmentAcceptsHalf(colorAttachmentPixelFormat);
   const char* tileColorType = useHalf ? "half4" : "float4";
-  const bool argbufHybrid = context.argbufHybridMode;
+  const bool argbufHybrid =
+      context.argbufHybridMode && !context.argbufDirectCbufMode;
   out << "#include <metal_stdlib>\n";
   out << "using namespace metal;\n";
   // Mirror the portable FFP PS consts struct so the same per-frequency

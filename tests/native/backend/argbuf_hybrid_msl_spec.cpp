@@ -96,6 +96,13 @@ dxmt9::drawshader::ShaderSourceContext makeContext(const DrawDesc& desc,
   return context;
 }
 
+dxmt9::drawshader::ShaderSourceContext makeDirectCbufContext(const DrawDesc& desc) {
+  auto context = dxmt9::drawshader::makeShaderSourceContext(desc);
+  context.argbufHybridMode = true;
+  context.argbufDirectCbufMode = true;
+  return context;
+}
+
 // R-BACK-12.22..12.26 (resource-array sub-mode) — build a context with the
 // resource-array sub-bit set (always alongside argbufHybridMode, matching
 // the pipeline-cache invariant key.argbufResourceArray = argbufHybridMode &&
@@ -160,6 +167,29 @@ void testFfpVertexStage2Bindings() {
   // alias makes it work without per-call rewrites.
   checkContains(src, "ffpVs.halfPixelFixup",
                 "Stage 2 FFP vertex body keeps named field reads");
+}
+
+void testFfpVertexStage2bDirectCbufBindings() {
+  DrawDesc desc{};
+  desc.vertexDecl.fvf = 0x002u;
+  desc.vertexShader.kind = ShaderRef::Kind::FixedFunctionVertex;
+  desc.vertexShader.vertexKey = FfpVertexKey{};
+  const auto src = dxmt9::ffp::makeFfpVertexSource(
+      *desc.vertexShader.vertexKey, makeDirectCbufContext(desc));
+  checkContains(src, "[[buffer(0)]]",
+                "Stage 2b FFP vertex binds VsConsts directly at slot 0");
+  checkContains(src, "[[buffer(3)]]",
+                "Stage 2b FFP vertex binds FfpVsConsts directly at slot 3");
+  checkContains(src, "[[buffer(1)]]",
+                "Stage 2b FFP vertex keeps stream0 direct at slot 1");
+  checkContains(src, "[[buffer(5)]]",
+                "Stage 2b FFP vertex keeps DrawVolatile direct at slot 5");
+  checkNotContains(src, "[[buffer(30)]]",
+                   "Stage 2b FFP vertex must not bind argbuf at slot 30");
+  checkNotContains(src, "ArgbufLayout",
+                   "Stage 2b FFP vertex must not reference ArgbufLayout");
+  checkNotContains(src, "abuf.",
+                   "Stage 2b FFP vertex must not dereference an argbuf pointer");
 }
 
 // ---------------------------------------------------------------------
@@ -240,6 +270,37 @@ void testFfpPixelStage2BindingsNoTexture() {
                    "Stage 2 FFP pixel (no-texture) must not bind slot 0");
 }
 
+void testFfpPixelStage2bDirectCbufBindingsTextured() {
+  DrawDesc desc{};
+  desc.pixelShader.kind = ShaderRef::Kind::FixedFunctionPixel;
+  FfpPixelKey psKey{};
+  psKey.stages[0].colorOp = 4;
+  psKey.stages[0].alphaOp = 4;
+  psKey.stages[0].colorArg1 = 2;
+  psKey.stages[0].colorArg2 = 0;
+  psKey.stages[0].alphaArg1 = 2;
+  psKey.stages[0].alphaArg2 = 0;
+  desc.pixelShader.pixelKey = psKey;
+  desc.textures[0].handle = Handle{1};
+
+  const auto src =
+      dxmt9::ffp::makeFfpPixelSource(psKey, makeDirectCbufContext(desc));
+  checkContains(src, "constant PsConsts& psConsts [[buffer(0)]]",
+                "Stage 2b FFP pixel binds PsConsts directly at slot 0");
+  checkContains(src, "constant FfpPsConsts& ffpPs [[buffer(3)]]",
+                "Stage 2b FFP pixel binds FfpPsConsts directly at slot 3");
+  checkContains(src, "texture2d<float> tex0 [[texture(0)]]",
+                "Stage 2b FFP pixel keeps tex0 on the direct texture lane");
+  checkContains(src, "sampler samp0 [[sampler(0)]]",
+                "Stage 2b FFP pixel keeps samp0 on the direct sampler lane");
+  checkNotContains(src, "[[buffer(30)]]",
+                   "Stage 2b FFP pixel must not bind argbuf at slot 30");
+  checkNotContains(src, "ArgbufLayout",
+                   "Stage 2b FFP pixel must not reference ArgbufLayout");
+  checkNotContains(src, "abuf.",
+                   "Stage 2b FFP pixel must not dereference an argbuf pointer");
+}
+
 // ---------------------------------------------------------------------
 // FFP tile pixel emitter
 
@@ -271,6 +332,22 @@ void testFfpTileStage2Bindings() {
                 "Stage 2 tile FFP aliases ffpPs off the argbuf");
   checkNotContains(src, "[[buffer(3)]]",
                    "Stage 2 tile FFP must not bind ffpPs directly at slot 3");
+}
+
+void testFfpTileStage2bDirectCbufBindings() {
+  DrawDesc desc{};
+  desc.pixelShader.kind = ShaderRef::Kind::FixedFunctionPixel;
+  desc.pixelShader.pixelKey = FfpPixelKey{};
+  const auto src = dxmt9::ffp::makeFfpTilePixelSource(
+      *desc.pixelShader.pixelKey,
+      makeDirectCbufContext(desc),
+      static_cast<u32>(WMTPixelFormatBGRA8Unorm));
+  checkContains(src, "constant FfpPsConsts& ffpPs [[buffer(3)]]",
+                "Stage 2b tile FFP binds ffpPs directly at slot 3");
+  checkNotContains(src, "[[buffer(30)]]",
+                   "Stage 2b tile FFP must not bind argbuf at slot 30");
+  checkNotContains(src, "ArgbufLayout",
+                   "Stage 2b tile FFP must not reference ArgbufLayout");
 }
 
 // ---------------------------------------------------------------------
@@ -349,6 +426,29 @@ void testTranslatedPixelStage2Bindings() {
                 "Stage 2 translated pixel body keeps tex2.sample(samp2, ...) form");
 }
 
+void testTranslatedPixelStage2bDirectCbufBindings() {
+  ShaderRef shader = makePixelShaderRef();
+  DrawDesc desc{};
+  desc.pixelShader = shader;
+  desc.textures[2].handle = Handle{3};
+  const auto src = dxmt9::translator::makeTranslatedFragmentSource(
+      shader, makeDirectCbufContext(desc));
+  checkContains(src, "constant PsConsts& psConsts [[buffer(0)]]",
+                "Stage 2b translated pixel binds PsConsts directly at slot 0");
+  checkContains(src, "constant FfpPsConsts& ffpPs [[buffer(3)]]",
+                "Stage 2b translated pixel binds FfpPsConsts directly at slot 3");
+  checkContains(src, "[[texture(2)]]",
+                "Stage 2b translated pixel keeps texture stage 2 direct");
+  checkContains(src, "[[sampler(2)]]",
+                "Stage 2b translated pixel keeps sampler stage 2 direct");
+  checkNotContains(src, "[[buffer(30)]]",
+                   "Stage 2b translated pixel must not bind argbuf at slot 30");
+  checkNotContains(src, "ArgbufLayout",
+                   "Stage 2b translated pixel must not reference ArgbufLayout");
+  checkNotContains(src, "abuf.",
+                   "Stage 2b translated pixel must not dereference an argbuf pointer");
+}
+
 // Vertex bytecode: vs_3_0 dcl_position o0; mov o0, c0. Pulled from the
 // existing translator spec to keep test fixtures DRY.
 std::vector<u32> makeVertexBytecode() {
@@ -423,6 +523,28 @@ void testTranslatedVertexStage2Bindings() {
                    "Stage 2 translated vertex must not bind slot 3");
 }
 
+void testTranslatedVertexStage2bDirectCbufBindings() {
+  ShaderRef shader = makeVertexShaderRef();
+  DrawDesc desc{};
+  desc.vertexShader = shader;
+  const auto src = dxmt9::translator::makeTranslatedVertexSource(
+      shader, makeDirectCbufContext(desc));
+  checkContains(src, "constant VsConsts& vsConsts [[buffer(0)]]",
+                "Stage 2b translated vertex binds VsConsts directly at slot 0");
+  checkContains(src, "constant FfpVsConsts& ffpVs [[buffer(3)]]",
+                "Stage 2b translated vertex binds FfpVsConsts directly at slot 3");
+  checkContains(src, "device const uchar* stream0 [[buffer(1)]]",
+                "Stage 2b translated vertex keeps stream0 direct at slot 1");
+  checkContains(src, "constant DrawVolatile& drawVolatile [[buffer(5)]]",
+                "Stage 2b translated vertex keeps DrawVolatile direct at slot 5");
+  checkNotContains(src, "[[buffer(30)]]",
+                   "Stage 2b translated vertex must not bind argbuf at slot 30");
+  checkNotContains(src, "ArgbufLayout",
+                   "Stage 2b translated vertex must not reference ArgbufLayout");
+  checkNotContains(src, "abuf.",
+                   "Stage 2b translated vertex must not dereference an argbuf pointer");
+}
+
 // ---------------------------------------------------------------------
 // Cross-cutting check: the prelude variant is emitted exactly when the
 // argbufHybrid bit is set, so downstream MSL has the ArgbufLayout
@@ -457,6 +579,23 @@ void testArgbufLayoutStructPresentOnlyForStage2() {
   check(dxmt9::shaders::kArgbufHybridDescriptorCount ==
             dxmt9::shaders::kArgbufHybridConstantBufferCount,
         "argbuf descriptor count equals the four constant-buffer pointers");
+}
+
+void testDirectCbufHostSlotContract() {
+  checkEq(dxmt9::shaders::kDirectVsConstsBindSlot, 0u,
+          "direct VS constants host slot is 0");
+  checkEq(dxmt9::shaders::kDirectPsConstsBindSlot, 0u,
+          "direct PS constants host slot is 0");
+  checkEq(dxmt9::shaders::kDirectFfpVsConstsBindSlot, 3u,
+          "direct FFP VS constants host slot is 3");
+  checkEq(dxmt9::shaders::kDirectFfpPsConstsBindSlot, 3u,
+          "direct FFP PS constants host slot is 3");
+  checkEq(dxmt9::shaders::kDirectVertexStreamBindSlot, 1u,
+          "direct vertex stream host slot is 1");
+  checkEq(dxmt9::shaders::kDirectDrawVolatileBindSlot, 5u,
+          "direct DrawVolatile host slot is 5");
+  checkEq(dxmt9::shaders::kArgbufHybridBindSlot, 30u,
+          "Stage 2 argbuf host slot remains 30");
 }
 
 void testArgbufDescriptorTablesMirrorPinnedMslIds() {
@@ -635,16 +774,22 @@ int main() {
     testResourceArrayDisabledStaysConstantsOnly();
     testFfpVertexStage1Bindings();
     testFfpVertexStage2Bindings();
+    testFfpVertexStage2bDirectCbufBindings();
     testFfpPixelStage1Bindings();
     testFfpPixelStage2BindingsTextured();
     testFfpPixelStage2BindingsNoTexture();
+    testFfpPixelStage2bDirectCbufBindingsTextured();
     testFfpTileStage1Bindings();
     testFfpTileStage2Bindings();
+    testFfpTileStage2bDirectCbufBindings();
     testTranslatedPixelStage1Bindings();
     testTranslatedPixelStage2Bindings();
+    testTranslatedPixelStage2bDirectCbufBindings();
     testTranslatedVertexStage1Bindings();
     testTranslatedVertexStage2Bindings();
+    testTranslatedVertexStage2bDirectCbufBindings();
     testArgbufLayoutStructPresentOnlyForStage2();
+    testDirectCbufHostSlotContract();
     testArgbufDescriptorTablesMirrorPinnedMslIds();
   } catch (const TestFailure& failure) {
     std::cerr << "argbuf_hybrid_msl_spec failed: " << failure.what() << '\n';

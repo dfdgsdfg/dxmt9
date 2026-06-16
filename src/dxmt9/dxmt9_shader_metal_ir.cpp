@@ -1244,7 +1244,8 @@ std::string translateSpirvToMsl(const SpirvModule& module,
                                 const ShaderSourceContext& context,
                                 bool vertex) {
   std::ostringstream out;
-  const bool argbufHybrid = context.argbufHybridMode;
+  const bool argbufHybrid =
+      context.argbufHybridMode && !context.argbufDirectCbufMode;
   // R-BACK-12.22..12.26 (resource-array sub-mode) — decide the fragment
   // resource-array eligibility BEFORE emitting the prelude (the extended
   // ArgbufLayout with texture/sampler arrays must replace the 4-pointer

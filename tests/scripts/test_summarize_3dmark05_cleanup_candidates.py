@@ -96,6 +96,41 @@ class Summarize3DMark05CleanupCandidatesTests(unittest.TestCase):
             self.assertIn(stale, text)
             self.assertIn("non-destructive", text)
 
+    def test_omitted_output_writes_markdown_to_stdout(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            trace_root = root / "traces"
+            output_root = root / "output"
+            stale = "app-d3d9-3dmark05-stale-r2"
+
+            write_bytes(trace_root / stale / "analysis" / "old.bin", 23)
+            references = root / "refs.md"
+            references.write_text("no run references\n", encoding="utf-8")
+
+            result = subprocess.run(
+                [
+                    sys.executable,
+                    str(SCRIPT),
+                    "--trace-root",
+                    str(trace_root),
+                    "--output-root",
+                    str(output_root),
+                    "--reference-file",
+                    str(references),
+                    "--top",
+                    "0",
+                ],
+                cwd=REPO_ROOT,
+                text=True,
+                capture_output=True,
+                check=False,
+            )
+
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertIn("# 3DMark05 Cleanup Candidates", result.stdout)
+            self.assertIn(stale, result.stdout)
+            self.assertIn("23.0B", result.stdout)
+
 
 if __name__ == "__main__":
     unittest.main()

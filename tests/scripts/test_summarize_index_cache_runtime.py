@@ -27,6 +27,15 @@ ENCODER_FIELDS = [
     "indexed_cache_opt_candidate_bytes",
     "indexed_cache_opt_candidate_original_miss32",
     "indexed_cache_opt_candidate_miss32",
+    "indexed_cache_opt_candidate_gate_pass",
+    "indexed_cache_opt_candidate_gate_fail",
+    "indexed_cache_opt_candidate_opaque_depth_draws",
+    "indexed_cache_opt_candidate_screen_blend_draws",
+    "indexed_cache_opt_candidate_primitive_bucket_1_63",
+    "indexed_cache_opt_candidate_primitive_bucket_64_255",
+    "indexed_cache_opt_candidate_primitive_bucket_256_1023",
+    "indexed_cache_opt_candidate_primitive_bucket_1024_4095",
+    "indexed_cache_opt_candidate_primitive_bucket_4096_plus",
     "reordered_index_cache_lookups",
     "reordered_index_cache_hits",
     "reordered_index_cache_rejected_hits",
@@ -160,6 +169,15 @@ class SummarizeIndexCacheRuntimeTests(unittest.TestCase):
                     "indexed_cache_opt_candidate_bytes": 443568,
                     "indexed_cache_opt_candidate_original_miss32": 133174,
                     "indexed_cache_opt_candidate_miss32": 99469,
+                    "indexed_cache_opt_candidate_gate_pass": 17,
+                    "indexed_cache_opt_candidate_gate_fail": 5,
+                    "indexed_cache_opt_candidate_opaque_depth_draws": 22,
+                    "indexed_cache_opt_candidate_screen_blend_draws": 0,
+                    "indexed_cache_opt_candidate_primitive_bucket_1_63": 0,
+                    "indexed_cache_opt_candidate_primitive_bucket_64_255": 3,
+                    "indexed_cache_opt_candidate_primitive_bucket_256_1023": 2,
+                    "indexed_cache_opt_candidate_primitive_bucket_1024_4095": 0,
+                    "indexed_cache_opt_candidate_primitive_bucket_4096_plus": 17,
                     "reordered_index_cache_lookups": 43,
                     "reordered_index_cache_hits": 17,
                     "reordered_index_cache_rejected_hits": 0,
@@ -194,6 +212,10 @@ class SummarizeIndexCacheRuntimeTests(unittest.TestCase):
             self.assertEqual(row["indexed_order_accounting_delta"], "0")
             self.assertEqual(row["probe_draw_logging"], "not-provided")
             self.assertEqual(row["candidate_miss_delta32"], "-33705")
+            self.assertEqual(row["candidate_gate_pass"], "17")
+            self.assertEqual(row["candidate_gate_fail"], "5")
+            self.assertEqual(row["candidate_opaque_depth_draws"], "22")
+            self.assertEqual(row["candidate_primitive_bucket_4096_plus"], "17")
 
 
 if __name__ == "__main__":

@@ -123,6 +123,11 @@ struct ShaderVariantKey {
   // reading the slot-30 argbuf). The selector flips this on at encoder
   // open when `argbufHybridEnabled()` holds and the pass is eligible.
   bool argbufHybridMode = false;
+  // Stage 2b direct-cbuf sub-key. This is a separate PSO identity from
+  // Stage 1 and Stage 2 even when the generated source currently keeps the
+  // same direct slot 0/3 cbuf signature as Stage 1. The split gives the
+  // future host binding path a non-aliasing cache lane.
+  bool argbufDirectCbufMode = false;
   // R-BACK-12.22..12.26 (resource-array sub-mode) — opt-in sub-bit of the
   // Stage 2 hybrid. When set (only ever alongside argbufHybridMode) the
   // emitters carry the per-stage texture/sampler resources through the
@@ -195,7 +200,8 @@ u64 makeShaderSourceDebugEnvKey(bool trimUnusedVaryings,
                                 bool debugFfpAlpha,
                                 bool probeDropVSOutPointSize,
                                 bool probePositionOnlyVSOut,
-                                bool probeHalfVSOut) noexcept;
+                                bool probeHalfVSOut,
+                                bool probeFragmentlessKeepVSOut) noexcept;
 
 // Reads the current process env knobs that can change emitted draw MSL.
 u64 currentShaderSourceDebugEnvKey() noexcept;
@@ -284,6 +290,11 @@ struct DepthStencilSlot {
 struct DrawPipelineLookup {
   std::shared_future<WMT::Reference<WMT::RenderPipelineState>> future;
   core::PsoHandle handle{};
+};
+
+struct ResolvedDrawPipelineState {
+  ShaderVariantKey key{};
+  drawshader::ShaderSourceContext shaderSource{};
 };
 
 struct DepthStencilLookup {
@@ -375,6 +386,18 @@ class Cache {
                                WMT::Reference<WMT::BinaryArchive>* archive,
                                const std::string* archivePath);
 
+  ResolvedDrawPipelineState
+  resolveDrawPipelineState(const core::BackendLimits& limits,
+                           resources::Pool& pool,
+                           core::FlatDrawStateView state,
+                           bool tileFfpMode = false,
+                           bool argbufHybridMode = false,
+                           bool argbufResourceArray = false,
+                           bool argbufDirectCbufMode = false,
+                           bool disableAlphaBlend = false,
+                           std::optional<bool> forceTextureWhiteOverride = std::nullopt,
+                           bool fragmentlessDepthOnly = false);
+
   // High-level entry point used by the encoder: resolves color/depth
   // pixel formats from the pool's surfaces, assembles blend attachment
   // keys from the flat render-state values, composes a ShaderVariantKey,
@@ -402,6 +425,7 @@ class Cache {
                                   // that routes texture/sampler reads
                                   // through the slot-30 argbuf arrays.
                                   bool argbufResourceArray = false,
+                                  bool argbufDirectCbufMode = false,
                                   bool disableAlphaBlend = false,
                                   std::optional<bool> forceTextureWhiteOverride = std::nullopt,
                                   bool fragmentlessDepthOnly = false);
@@ -416,6 +440,7 @@ class Cache {
                                        bool tileFfpMode = false,
                                        bool argbufHybridMode = false,
                                        bool argbufResourceArray = false,
+                                       bool argbufDirectCbufMode = false,
                                        bool disableAlphaBlend = false,
                                        std::optional<bool> forceTextureWhiteOverride = std::nullopt,
                                        bool fragmentlessDepthOnly = false);
@@ -556,5 +581,6 @@ enum class ArgbufHybridDecision : std::uint8_t { Stage1, Stage2 };
 
 ArgbufHybridDecision selectArgbufHybridForPass(core::FlatDrawStateView state,
                                                 bool argbufHybridEnabled);
+bool argbufDirectCbufEnabled() noexcept;
 
 }  // namespace dxmt9::pipeline

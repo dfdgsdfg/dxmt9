@@ -12,6 +12,7 @@
 // upperDevice shared_ptr that the chunk importer's Phase 4-B path
 // hands the per-chunk retention list to.
 #include "dxmt9/dxmt9_device.hpp"
+#include "util/log/log.hpp"
 
 #include <algorithm>
 #include <array>
@@ -23,6 +24,10 @@
 #include <memory>
 #include <span>
 #include <vector>
+
+#if defined(__APPLE__)
+#include <pthread.h>
+#endif
 
 using namespace dxmt9::d3d9::devicec;
 
@@ -96,6 +101,66 @@ extern "C" int32_t dxmt9c_device_get_render_target_data(D9CDevice* d, D9CSurface
                                                         D9CSurface* dst);
 
 namespace {
+
+bool peRecorderStatsEnabled() {
+  static const bool enabled = [] {
+    const char* value = std::getenv("DXMT9_PE_RECORDER_STATS");
+    return value && value[0] != '\0' && !(value[0] == '0' && value[1] == '\0');
+  }();
+  return enabled;
+}
+
+std::uint64_t currentNativeThreadId() {
+#if defined(__APPLE__)
+  std::uint64_t tid = 0;
+  if (pthread_threadid_np(nullptr, &tid) == 0) {
+    return tid;
+  }
+#endif
+  return 0;
+}
+
+std::uint64_t currentPthreadSelfBits() {
+#if defined(__APPLE__)
+  return static_cast<std::uint64_t>(reinterpret_cast<std::uintptr_t>(pthread_self()));
+#else
+  return 0;
+#endif
+}
+
+struct PendingDrawSubmissionScratch {
+  std::vector<dxmt9::core::DrawRunSubmission> submissions;
+  bool inUse = false;
+};
+
+PendingDrawSubmissionScratch& pendingDrawSubmissionScratch() {
+  static thread_local PendingDrawSubmissionScratch scratch;
+  return scratch;
+}
+
+class ScopedPendingDrawSubmissionScratchUse {
+public:
+  explicit ScopedPendingDrawSubmissionScratchUse(
+      PendingDrawSubmissionScratch& scratch) noexcept
+      : scratch_(scratch) {
+    DXMT_ASSERT(!scratch_.inUse);
+    scratch_.inUse = true;
+    scratch_.submissions.clear();
+  }
+
+  ~ScopedPendingDrawSubmissionScratchUse() {
+    scratch_.submissions.clear();
+    scratch_.inUse = false;
+  }
+
+  ScopedPendingDrawSubmissionScratchUse(
+      const ScopedPendingDrawSubmissionScratchUse&) = delete;
+  ScopedPendingDrawSubmissionScratchUse& operator=(
+      const ScopedPendingDrawSubmissionScratchUse&) = delete;
+
+private:
+  PendingDrawSubmissionScratch& scratch_;
+};
 
 // C1 helper: route per-record dirty marking through the dxmt9
 // CommandQueue's pendingDirty_ accumulator. Returns nullptr on test /
@@ -272,6 +337,59 @@ bool commitChunkRecordIsDrawReplay(std::uint32_t type) {
   default:
     return false;
   }
+}
+
+dxmt9::core::metalqueue::NoEnqueueCommitChunkRecordShape
+summarizeNoEnqueueCommitChunkRecordShape(const ImportedWireChunkView& chunk) {
+  dxmt9::core::metalqueue::NoEnqueueCommitChunkRecordShape shape{};
+  std::uint32_t recordIndex = 0;
+  while (auto recordView = nextImportedRecord(chunk, recordIndex)) {
+    if (!recordView->valid()) {
+      break;
+    }
+    ++shape.recordCount;
+    switch (recordView->header.type) {
+    case D9C_COMMAND_RECORD_DRAW_PRIMITIVE:
+    case D9C_COMMAND_RECORD_DRAW_INDEXED_PRIMITIVE:
+    case D9C_COMMAND_RECORD_DRAW_PRIMITIVE_UP:
+    case D9C_COMMAND_RECORD_DRAW_INDEXED_PRIMITIVE_UP:
+      ++shape.drawRecords;
+      break;
+    case D9C_COMMAND_RECORD_SET_VS_CONST_F:
+    case D9C_COMMAND_RECORD_SET_VS_CONST_I:
+    case D9C_COMMAND_RECORD_SET_VS_CONST_B:
+    case D9C_COMMAND_RECORD_SET_PS_CONST_F:
+    case D9C_COMMAND_RECORD_SET_PS_CONST_I:
+    case D9C_COMMAND_RECORD_SET_PS_CONST_B:
+      ++shape.constRecords;
+      break;
+    case D9C_COMMAND_RECORD_APPLY_STATE:
+      ++shape.applyStateRecords;
+      break;
+    case D9C_COMMAND_RECORD_CLEAR:
+      ++shape.clearRecords;
+      break;
+    case D9C_COMMAND_RECORD_PRESENT:
+      ++shape.presentRecords;
+      break;
+    case D9C_COMMAND_RECORD_STRETCH_RECT:
+    case D9C_COMMAND_RECORD_COLOR_FILL:
+    case D9C_COMMAND_RECORD_UPDATE_TEXTURE:
+    case D9C_COMMAND_RECORD_UPDATE_SURFACE:
+    case D9C_COMMAND_RECORD_READBACK:
+    case D9C_COMMAND_RECORD_RESZ_DEPTH_RESOLVE:
+      ++shape.surfaceRecords;
+      break;
+    case D9C_COMMAND_RECORD_QUERY_ISSUE:
+      ++shape.queryRecords;
+      break;
+    default:
+      ++shape.otherRecords;
+      break;
+    }
+    recordIndex = recordView->nextIndex();
+  }
+  return shape;
 }
 
 void (*commitChunkReplayRecordDetailCounter(std::uint32_t type))(std::uint64_t) {
@@ -1430,6 +1548,18 @@ extern "C" int32_t dxmt9c_device_commit_chunk(D9CDevice* d, const D9CCommandChun
   if (!d || !chunk || chunk->version != D9C_COMMAND_CHUNK_VERSION) {
     return commitChunkFail("bad-header");
   }
+  if (peRecorderStatsEnabled()) {
+    dxmt9::util::logf(dxmt9::util::LogLevel::Info, "dxmt9-device",
+                      "unix_commit_chunk_entry device=%p native_tid=0x%llx "
+                      "pthread_self=0x%llx recordCount=%u recordBytes=%u "
+                      "handleCount=%u records=0x%llx handles=0x%llx",
+                      static_cast<void*>(d),
+                      static_cast<unsigned long long>(currentNativeThreadId()),
+                      static_cast<unsigned long long>(currentPthreadSelfBits()),
+                      chunk->recordCount, chunk->recordBytes, chunk->handleCount,
+                      static_cast<unsigned long long>(wireHandleValue(chunk->records)),
+                      static_cast<unsigned long long>(wireHandleValue(chunk->handles)));
+  }
   if (auto* q = findDirtyQueue(d)) {
     q->noteCommitChunkEntryForCompletionGap();
   }
@@ -1457,6 +1587,10 @@ extern "C" int32_t dxmt9c_device_commit_chunk(D9CDevice* d, const D9CCommandChun
   if (!validation.valid()) {
     return commitChunkFail("validation", validation.failedRecordIndex,
                            static_cast<std::uint32_t>(validation.status));
+  }
+  if (auto* q = findDirtyQueue(d)) {
+    q->noteCommitChunkRecordShapeForCompletionGap(
+        summarizeNoEnqueueCommitChunkRecordShape(importedChunk));
   }
   auto commitChunkStageEnd = std::chrono::steady_clock::now();
   dxmt9::perf::countCommitChunkImportCpuTime(static_cast<std::uint64_t>(
@@ -1607,7 +1741,9 @@ extern "C" int32_t dxmt9c_device_commit_chunk(D9CDevice* d, const D9CCommandChun
     q->noteCommitChunkReplayStartForCompletionGap();
   }
 
-  std::vector<dxmt9::core::DrawRunSubmission> pendingDrawSubmissions;
+  auto& pendingScratch = pendingDrawSubmissionScratch();
+  ScopedPendingDrawSubmissionScratchUse pendingScratchUse(pendingScratch);
+  auto& pendingDrawSubmissions = pendingScratch.submissions;
   pendingDrawSubmissions.reserve(std::min<std::uint32_t>(importedChunk.recordCount, 256u));
   const auto flushPendingDrawSubmissions = [&]() -> int32_t {
     if (pendingDrawSubmissions.empty()) {
@@ -1923,6 +2059,13 @@ extern "C" int32_t dxmt9c_device_commit_chunk(D9CDevice* d, const D9CCommandChun
       std::memcpy(&pr, record, sizeof(pr));
       const auto* srcRect = pr.hasSrc ? &pr.src : nullptr;
       const auto* dstRect = pr.hasDst ? &pr.dst : nullptr;
+      if (auto* q = findDirtyQueue(d)) {
+        const auto activeReplayNs = static_cast<std::uint64_t>(
+            std::chrono::duration_cast<std::chrono::nanoseconds>(
+                std::chrono::steady_clock::now() - commitChunkStageStart)
+                .count());
+        q->noteCommitChunkActiveReplayCpuBeforePublish(activeReplayNs);
+      }
       // dirty-region payload was dropped at chunk-record time (PE
       // doesn't ship it); pass nullptr.
       hr = dxmt9c_device_present(d, srcRect, dstRect, pr.hwnd,
@@ -2096,12 +2239,15 @@ extern "C" int32_t dxmt9c_device_commit_chunk(D9CDevice* d, const D9CCommandChun
     return commitChunkFail("truncated-records", recordIndex, importedChunk.recordCount);
   }
   commitChunkStageEnd = std::chrono::steady_clock::now();
-  if (auto* q = findDirtyQueue(d)) {
-    q->noteCommitChunkReplayEndForCompletionGap();
-  }
-  dxmt9::perf::countCommitChunkReplayCpuTime(static_cast<std::uint64_t>(
+  const auto replayCpuNs = static_cast<std::uint64_t>(
       std::chrono::duration_cast<std::chrono::nanoseconds>(
-          commitChunkStageEnd - commitChunkStageStart).count()));
+          commitChunkStageEnd - commitChunkStageStart).count());
+  if (auto* q = findDirtyQueue(d)) {
+    q->noteCommitChunkReplayCpuBeforePublish(replayCpuNs);
+    q->noteCommitChunkReplayEndForCompletionGap();
+    q->prefetchCurrentWritingSlotPipelines();
+  }
+  dxmt9::perf::countCommitChunkReplayCpuTime(replayCpuNs);
   // R-BACK-2.10: chunk fully validated + replayed. Bumping admit at the
   // single success point keeps reject + admit symmetric.
   dxmt9::perf::countChunkAdmit();

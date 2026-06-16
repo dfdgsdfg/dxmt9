@@ -84,6 +84,23 @@ inline bool bridgeVerbose() {
   return gBridgeVerbose;
 }
 
+inline bool tracePipelineBuild() {
+  const char *queue = std::getenv("DXMT_TRACE_QUEUE");
+  const char *pipeline = std::getenv("DXMT9_TRACE_PIPELINE_BUILD");
+  return (queue && queue[0] != '\0' && std::strcmp(queue, "0") != 0) ||
+         (pipeline && pipeline[0] != '\0' && std::strcmp(pipeline, "0") != 0);
+}
+
+inline bool renderPsoOnMainThread() {
+  const char *env = std::getenv("DXMT9_CAPTURE_LAYER_PSO_ON_MAIN");
+  return env && env[0] != '\0' && std::strcmp(env, "0") != 0;
+}
+
+inline bool renderPsoSetFragmentFirst() {
+  const char *env = std::getenv("DXMT9_CAPTURE_LAYER_FRAGMENT_FIRST");
+  return env && env[0] != '\0' && std::strcmp(env, "0") != 0;
+}
+
 inline bool isPlausibleObjectHandle(obj_handle_t obj) {
   if ((obj & kObjcHandleAlignmentMask) != 0) {
     if (bridgeVerbose()) {
@@ -933,7 +950,47 @@ extern "C" obj_handle_t MTLDevice_newRenderPipelineState(obj_handle_t device,
                                                           const struct WMTRenderPipelineInfo *info,
                                                           obj_handle_t *err_out) {
   if (!device || !info) return NULL_OBJECT_HANDLE;
+  if (renderPsoOnMainThread() && ![NSThread isMainThread]) {
+    if (tracePipelineBuild()) {
+      fprintf(stderr, "[dxmt9-wmt-pso] dispatch-main begin\n");
+      fflush(stderr);
+    }
+    __block obj_handle_t result = NULL_OBJECT_HANDLE;
+    __block obj_handle_t blockErr = NULL_OBJECT_HANDLE;
+    execute_on_main(^{
+      result = MTLDevice_newRenderPipelineState(device, info, &blockErr);
+    });
+    if (err_out) *err_out = blockErr;
+    if (tracePipelineBuild()) {
+      fprintf(stderr, "[dxmt9-wmt-pso] dispatch-main end result=%p err=%p\n",
+              (void*)result,
+              (void*)blockErr);
+      fflush(stderr);
+    }
+    return result;
+  }
+  @autoreleasepool {
+  const bool tracePso = tracePipelineBuild();
+  if (tracePso) {
+    fprintf(stderr,
+            "[dxmt9-wmt-pso] stage=entry main_thread=%u device=%p vs=%p fs=%p "
+            "sample=%u color0=%u depth=%u stencil=%u topology=%u\n",
+            [NSThread isMainThread] ? 1u : 0u,
+            (void*)device,
+            (void*)info->vertex_function,
+            (void*)info->fragment_function,
+            (unsigned)info->raster_sample_count,
+            (unsigned)info->colors[0].pixel_format,
+            (unsigned)info->depth_pixel_format,
+            (unsigned)info->stencil_pixel_format,
+            (unsigned)info->input_primitive_topology);
+    fflush(stderr);
+  }
   MTLRenderPipelineDescriptor *desc = [[MTLRenderPipelineDescriptor alloc] init];
+  if (tracePso) {
+    fprintf(stderr, "[dxmt9-wmt-pso] stage=after-desc-alloc desc=%p\n", (void*)desc);
+    fflush(stderr);
+  }
   for (unsigned i = 0; i < 8; i++) {
     desc.colorAttachments[i].pixelFormat             = to_metal_pixel_format(info->colors[i].pixel_format);
     desc.colorAttachments[i].blendingEnabled         = info->colors[i].blending_enabled;
@@ -945,12 +1002,32 @@ extern "C" obj_handle_t MTLDevice_newRenderPipelineState(obj_handle_t device,
     desc.colorAttachments[i].destinationRGBBlendFactor   = (MTLBlendFactor)info->colors[i].dst_rgb_blend_factor;
     desc.colorAttachments[i].destinationAlphaBlendFactor = (MTLBlendFactor)info->colors[i].dst_alpha_blend_factor;
   }
+  if (tracePso) {
+    fprintf(stderr, "[dxmt9-wmt-pso] stage=after-colors\n");
+    fflush(stderr);
+  }
   for (unsigned i = 0; i < 31; i++) {
     if (info->immutable_vertex_buffers   & (1u << i)) desc.vertexBuffers[i].mutability   = MTLMutabilityImmutable;
     if (info->immutable_fragment_buffers & (1u << i)) desc.fragmentBuffers[i].mutability = MTLMutabilityImmutable;
   }
+  if (tracePso) {
+    fprintf(stderr, "[dxmt9-wmt-pso] stage=after-mutability\n");
+    fflush(stderr);
+  }
+  if (tracePso) {
+    fprintf(stderr, "[dxmt9-wmt-pso] stage=before-depth-format\n");
+    fflush(stderr);
+  }
   desc.depthAttachmentPixelFormat   = to_metal_pixel_format(info->depth_pixel_format);
+  if (tracePso) {
+    fprintf(stderr, "[dxmt9-wmt-pso] stage=after-depth-format\n");
+    fflush(stderr);
+  }
   desc.stencilAttachmentPixelFormat = to_metal_pixel_format(info->stencil_pixel_format);
+  if (tracePso) {
+    fprintf(stderr, "[dxmt9-wmt-pso] stage=after-stencil-format\n");
+    fflush(stderr);
+  }
   desc.alphaToCoverageEnabled       = info->alpha_to_coverage_enabled;
   desc.rasterizationEnabled         = info->rasterization_enabled;
   desc.rasterSampleCount            = info->raster_sample_count;
@@ -959,8 +1036,33 @@ extern "C" obj_handle_t MTLDevice_newRenderPipelineState(obj_handle_t device,
   desc.tessellationFactorStepFunction = (MTLTessellationFactorStepFunction)info->tessellation_factor_step;
   desc.tessellationOutputWindingOrder = (MTLWinding)info->tessellation_output_winding_order;
   desc.maxTessellationFactor        = info->max_tessellation_factor;
-  desc.vertexFunction               = (id<MTLFunction>)info->vertex_function;
-  desc.fragmentFunction             = (id<MTLFunction>)info->fragment_function;
+  if (tracePso) {
+    fprintf(stderr, "[dxmt9-wmt-pso] stage=after-fixed-state\n");
+    fflush(stderr);
+  }
+  if (renderPsoSetFragmentFirst()) {
+    desc.fragmentFunction             = (id<MTLFunction>)info->fragment_function;
+    if (tracePso) {
+      fprintf(stderr, "[dxmt9-wmt-pso] stage=after-fragment-function-first\n");
+      fflush(stderr);
+    }
+    desc.vertexFunction               = (id<MTLFunction>)info->vertex_function;
+    if (tracePso) {
+      fprintf(stderr, "[dxmt9-wmt-pso] stage=after-vertex-function-second\n");
+      fflush(stderr);
+    }
+  } else {
+    desc.vertexFunction               = (id<MTLFunction>)info->vertex_function;
+    if (tracePso) {
+      fprintf(stderr, "[dxmt9-wmt-pso] stage=after-vertex-function\n");
+      fflush(stderr);
+    }
+    desc.fragmentFunction             = (id<MTLFunction>)info->fragment_function;
+    if (tracePso) {
+      fprintf(stderr, "[dxmt9-wmt-pso] stage=after-fragment-function\n");
+      fflush(stderr);
+    }
+  }
   if (info->num_binary_archives_for_lookup && info->binary_archives_for_lookup.ptr)
     desc.binaryArchives = [NSArray arrayWithObjects:(id<MTLBinaryArchive> *)info->binary_archives_for_lookup.ptr
                                              count:info->num_binary_archives_for_lookup];
@@ -968,8 +1070,48 @@ extern "C" obj_handle_t MTLDevice_newRenderPipelineState(obj_handle_t device,
   MTLPipelineOption opts = info->fail_on_binary_archive_miss
                              ? MTLPipelineOptionFailOnBinaryArchiveMiss
                              : MTLPipelineOptionNone;
+  if (tracePso) {
+    fprintf(stderr,
+            "[dxmt9-wmt-pso] before-render-pso main_thread=%u device=%p vs=%p fs=%p "
+            "sample=%u color0=%u depth=%u stencil=%u write0=%u blend0=%u "
+            "srcRGB0=%u dstRGB0=%u srcA0=%u dstA0=%u rgbOp0=%u alphaOp0=%u "
+            "immutableV=0x%x immutableF=0x%x topology=%u maxTess=%u "
+            "archive=%p lookupCount=%u failArchiveMiss=%u opts=0x%lx\n",
+            [NSThread isMainThread] ? 1u : 0u,
+            (void*)device,
+            (void*)info->vertex_function,
+            (void*)info->fragment_function,
+            (unsigned)info->raster_sample_count,
+            (unsigned)info->colors[0].pixel_format,
+            (unsigned)info->depth_pixel_format,
+            (unsigned)info->stencil_pixel_format,
+            (unsigned)info->colors[0].write_mask,
+            info->colors[0].blending_enabled ? 1u : 0u,
+            (unsigned)info->colors[0].src_rgb_blend_factor,
+            (unsigned)info->colors[0].dst_rgb_blend_factor,
+            (unsigned)info->colors[0].src_alpha_blend_factor,
+            (unsigned)info->colors[0].dst_alpha_blend_factor,
+            (unsigned)info->colors[0].rgb_blend_operation,
+            (unsigned)info->colors[0].alpha_blend_operation,
+            info->immutable_vertex_buffers,
+            info->immutable_fragment_buffers,
+            (unsigned)info->input_primitive_topology,
+            (unsigned)info->max_tessellation_factor,
+            (void*)info->binary_archive_for_serialization,
+            (unsigned)info->num_binary_archives_for_lookup,
+            info->fail_on_binary_archive_miss ? 1u : 0u,
+            (unsigned long)opts);
+    fflush(stderr);
+  }
   id<MTLRenderPipelineState> pso = [(id<MTLDevice>)device
       newRenderPipelineStateWithDescriptor:desc options:opts reflection:nil error:&err];
+  if (tracePso) {
+    fprintf(stderr,
+            "[dxmt9-wmt-pso] after-render-pso pso=%p err=%s\n",
+            (void*)pso,
+            err ? err.localizedDescription.UTF8String : "none");
+    fflush(stderr);
+  }
   if (!err && info->binary_archive_for_serialization) {
     NSError *archErr = nil;
     [(id<MTLBinaryArchive>)info->binary_archive_for_serialization
@@ -978,6 +1120,7 @@ extern "C" obj_handle_t MTLDevice_newRenderPipelineState(obj_handle_t device,
   [desc release];
   if (err_out) *err_out = err ? (obj_handle_t)CFBridgingRetain(err) : NULL_OBJECT_HANDLE;
   return (obj_handle_t)pso;
+  }
 }
 
 extern "C" obj_handle_t MTLDevice_newComputePipelineState(obj_handle_t device,

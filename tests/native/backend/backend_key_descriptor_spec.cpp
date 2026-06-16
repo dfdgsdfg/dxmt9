@@ -1,5 +1,6 @@
 #include <array>
 #include <bit>
+#include <cstddef>
 #include <cstring>
 #include <cmath>
 #include <exception>
@@ -14,6 +15,7 @@
 #include "../../../src/dxmt9/dxmt9_draw_encoder.hpp"
 #include "../../../src/dxmt9/dxmt9_draw_encoder_internal.hpp"
 #include "../../../src/dxmt9/dxmt9_draw_state.hpp"
+#include "../../../src/dxmt9/dxmt9_pipeline_cache.hpp"
 #include "../../../src/dxmt9/dxmt9_uniform_dirty.hpp"
 
 using namespace dxmt9::core;
@@ -220,6 +222,44 @@ void testBuildFfpAndVolatileViewportAndRenderStateValues() {
   checkEq(ffpVs.clipPlaneMask, 0x15u, "clip plane mask copied");
 }
 
+void testBuildFfpPsUploadBytesMatchesValueBuilder() {
+  DrawDesc desc{};
+  desc.rs.values[RS_TEXTURE_FACTOR] = 0xc0804020u;
+  desc.rs.values[RS_ALPHA_TEST_ENABLE] = 1u;
+  desc.rs.values[RS_ALPHA_FUNC] = static_cast<u32>(CompareFunc::LessEqual);
+  desc.rs.values[RS_ALPHA_REF] = 64u;
+  desc.rs.values[RS_FOG_ENABLE] = 1u;
+  desc.rs.values[RS_FOG_COLOR] = 0x7f204080u;
+  desc.rs.values[RS_FOG_TABLE_MODE] = static_cast<u32>(FogMode::Linear);
+  desc.rs.values[RS_FOG_START] = std::bit_cast<u32>(1.25f);
+  desc.rs.values[RS_FOG_END] = std::bit_cast<u32>(5.5f);
+  desc.rs.values[RS_FOG_DENSITY] = std::bit_cast<u32>(0.25f);
+  desc.textures[3].stageStates[TSS_CONSTANT] = 0x80402010u;
+  desc.textures[3].stageStates[TSS_BUMPENVMAT00] = std::bit_cast<u32>(0.125f);
+  desc.textures[3].stageStates[TSS_BUMPENVMAT01] = std::bit_cast<u32>(0.25f);
+  desc.textures[3].stageStates[TSS_BUMPENVMAT10] = std::bit_cast<u32>(0.5f);
+  desc.textures[3].stageStates[TSS_BUMPENVMAT11] = std::bit_cast<u32>(1.0f);
+  desc.textures[3].stageStates[TSS_BUMPENVLSCALE] = std::bit_cast<u32>(2.0f);
+  desc.textures[3].stageStates[TSS_BUMPENVLOFFSET] = std::bit_cast<u32>(-0.5f);
+
+  const auto hot = makeFlatDrawStateRecord(desc);
+  const auto shaderLayout = makeDrawShaderLayoutContext(desc);
+  const auto uniformPayload = makeDrawUniformPayload(desc);
+  const FlatDrawStateView view{
+      .hot = &hot, .shaderLayout = &shaderLayout, .uniforms = &uniformPayload};
+  const auto expected = dxmt9::state::buildFfpPsConsts(view);
+  alignas(dxmt9::state::FfpPsConsts)
+      std::array<std::byte, sizeof(dxmt9::state::FfpPsConsts)> upload{};
+
+  dxmt9::state::buildFfpPsConstsUploadBytes(
+      view, std::span<std::byte>(upload.data(), upload.size()));
+
+  dxmt9::state::FfpPsConsts actual{};
+  std::memcpy(&actual, upload.data(), upload.size());
+  check(std::memcmp(&expected, &actual, sizeof(expected)) == 0,
+        "FfpPs upload bytes match value builder byte-for-byte");
+}
+
 void testProgrammableVsExtraStreamBindingPlan() {
   constexpr u32 kD3DDeclTypeFloat2 = 1u;
   constexpr u32 kD3DDeclTypeFloat3 = 2u;
@@ -366,6 +406,70 @@ void testDepthStencilKeyDefaultsAndCcwFallback() {
   checkEq(defaultKey.back, defaultKey.front, "default back stencil face matches front");
 }
 
+void testPsoPrefetchKeysDoNotRequireUniformPayload() {
+  DrawDesc desc{};
+  desc.rts.color[0] = RenderTargetAttachment{
+      .handle = Handle{0x3000u},
+      .sampleCount = 1u,
+  };
+  desc.rts.depthStencil = RenderTargetAttachment{
+      .handle = Handle{0x4000u},
+      .sampleCount = 1u,
+  };
+  desc.rs.values[RS_Z_ENABLE] = 1u;
+  desc.rs.values[RS_Z_WRITE_ENABLE] = 1u;
+  desc.rs.values[RS_Z_FUNC] = static_cast<u32>(CompareFunc::LessEqual);
+  desc.rs.values[RS_ALPHA_TEST_ENABLE] = 1u;
+  desc.rs.values[RS_ALPHA_REF] = 128u;
+  desc.samplers[0].states[SAMP_MIPMAP_LOD_BIAS] = std::bit_cast<u32>(0.5f);
+  desc.textures[0].stageStates[TSS_TEXTURE_TYPE] =
+      static_cast<u32>(TextureType::TwoD);
+  desc.vsConst.float4[7] = {1.0f, 2.0f, 3.0f, 4.0f};
+  desc.psConst.float4[5] = {5.0f, 6.0f, 7.0f, 8.0f};
+
+  const auto hot = makeFlatDrawStateRecord(desc);
+  const auto shaderLayout = makeDrawShaderLayoutContext(desc);
+  const auto uniformPayload = makeDrawUniformPayload(desc);
+  const FlatDrawStateView fullView{
+      .hot = &hot,
+      .shaderLayout = &shaderLayout,
+      .uniforms = &uniformPayload,
+  };
+  const FlatDrawStateView compactView{
+      .hot = &hot,
+      .shaderLayout = &shaderLayout,
+      .uniforms = nullptr,
+  };
+
+  std::array<u32, kMaxRenderTargets> colorFormats{};
+  colorFormats[0] = 80u;
+  auto blend = dxmt9::pipeline::detail::makeBlendAttachmentKeys(fullView);
+  blend[0].pixelFormat = colorFormats[0];
+
+  const auto fullDepth = dxmt9::state::makeDepthStencilKey(fullView);
+  const auto compactDepth = dxmt9::state::makeDepthStencilKey(compactView);
+  checkEq(fullDepth, compactDepth,
+          "depth-stencil prefetch key does not require uniform payload");
+
+  const auto fullTile =
+      dxmt9::pipeline::classifyTileFfpForPass(fullView, /*supportsApple3=*/true);
+  const auto compactTile =
+      dxmt9::pipeline::classifyTileFfpForPass(compactView, /*supportsApple3=*/true);
+  checkEq(fullTile.decision, compactTile.decision,
+          "tile-FFP prefetch decision does not require uniform payload");
+  checkEq(fullTile.reason, compactTile.reason,
+          "tile-FFP prefetch reason does not require uniform payload");
+
+  const auto fullVariant = dxmt9::pipeline::makeShaderVariantKey(
+      fullView, colorFormats, blend, /*depthFormat=*/252u,
+      /*stencilFormat=*/253u, /*forceTextureWhiteOverride=*/false);
+  const auto compactVariant = dxmt9::pipeline::makeShaderVariantKey(
+      compactView, colorFormats, blend, /*depthFormat=*/252u,
+      /*stencilFormat=*/253u, /*forceTextureWhiteOverride=*/false);
+  checkEq(fullVariant, compactVariant,
+          "draw PSO variant prefetch key does not require uniform payload");
+}
+
 void testSamplerInfoDefaultsAreDeterministic() {
   SamplerSnapshot snapshot{};
 
@@ -462,9 +566,11 @@ int main() {
     testBuildPerStageConstsCopiesShaderConstants();
     testBuildPerStageUploadBytesCopiesOnlyPlannedPrefix();
     testBuildFfpAndVolatileViewportAndRenderStateValues();
+    testBuildFfpPsUploadBytesMatchesValueBuilder();
     testProgrammableVsExtraStreamBindingPlan();
     testDepthStencilKeyReflectsDepthAndStencilState();
     testDepthStencilKeyDefaultsAndCcwFallback();
+    testPsoPrefetchKeysDoNotRequireUniformPayload();
     testSamplerInfoDefaultsAreDeterministic();
     testSamplerInfoReflectsSamplerSnapshot();
     testSamplerInfoBorderColorFallbacks();

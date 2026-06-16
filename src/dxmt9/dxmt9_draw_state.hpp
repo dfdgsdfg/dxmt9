@@ -143,6 +143,8 @@ void buildPsConstsUploadBytes(core::FlatDrawStateView state,
                               std::span<std::byte> dst);
 FfpVsConsts buildFfpVsConsts(core::FlatDrawStateView state);
 FfpPsConsts buildFfpPsConsts(core::FlatDrawStateView state);
+void buildFfpPsConstsUploadBytes(core::FlatDrawStateView state,
+                                 std::span<std::byte> dst);
 SamplerLodBias buildSamplerLodBias(core::FlatDrawStateView state);
 // PSO-variant gate predicate for D3DSAMP_MIPMAPLODBIAS (gap_d3d9 B.3). True iff
 // any active sampler stage carries a non-zero mip LOD bias. Single source of

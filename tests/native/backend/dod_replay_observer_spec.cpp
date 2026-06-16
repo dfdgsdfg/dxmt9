@@ -287,10 +287,21 @@ struct ChunkSlotCapacitySnapshot {
   std::size_t drawHotStates = 0;
   std::size_t drawShaderLayouts = 0;
   std::size_t drawDebugSnapshots = 0;
+  std::size_t drawUniformFixedPayloads = 0;
+  std::size_t drawUniformVertexConstants = 0;
+  std::size_t drawUniformVertexConstantBytes = 0;
+  std::size_t drawUniformPixelConstants = 0;
+  std::size_t drawUniformPixelConstantBytes = 0;
   std::size_t drawUniformPayloads = 0;
   std::size_t drawUniformPayloadLookupHeads = 0;
   std::size_t drawUniformPayloadLookupTails = 0;
   std::size_t drawUniformPayloadLookupNext = 0;
+  std::size_t drawUniformVertexConstantsLookupHeads = 0;
+  std::size_t drawUniformVertexConstantsLookupTails = 0;
+  std::size_t drawUniformVertexConstantsLookupNext = 0;
+  std::size_t drawUniformPixelConstantsLookupHeads = 0;
+  std::size_t drawUniformPixelConstantsLookupTails = 0;
+  std::size_t drawUniformPixelConstantsLookupNext = 0;
   std::size_t drawParams = 0;
   std::size_t drawPayloadArena = 0;
   std::size_t drawRunRecords = 0;
@@ -305,6 +316,13 @@ ChunkSlotCapacitySnapshot capacitySnapshot(const ChunkSlot &slot) {
       .drawHotStates = slot.drawHotStates.capacity(),
       .drawShaderLayouts = slot.drawShaderLayouts.capacity(),
       .drawDebugSnapshots = slot.drawDebugSnapshots.capacity(),
+      .drawUniformFixedPayloads = slot.drawUniformFixedPayloads.capacity(),
+      .drawUniformVertexConstants = slot.drawUniformVertexConstants.capacity(),
+      .drawUniformVertexConstantBytes =
+          slot.drawUniformVertexConstantBytes.capacity(),
+      .drawUniformPixelConstants = slot.drawUniformPixelConstants.capacity(),
+      .drawUniformPixelConstantBytes =
+          slot.drawUniformPixelConstantBytes.capacity(),
       .drawUniformPayloads = slot.drawUniformPayloads.capacity(),
       .drawUniformPayloadLookupHeads =
           slot.drawUniformPayloadLookupHeads.capacity(),
@@ -312,6 +330,18 @@ ChunkSlotCapacitySnapshot capacitySnapshot(const ChunkSlot &slot) {
           slot.drawUniformPayloadLookupTails.capacity(),
       .drawUniformPayloadLookupNext =
           slot.drawUniformPayloadLookupNext.capacity(),
+      .drawUniformVertexConstantsLookupHeads =
+          slot.drawUniformVertexConstantsLookupHeads.capacity(),
+      .drawUniformVertexConstantsLookupTails =
+          slot.drawUniformVertexConstantsLookupTails.capacity(),
+      .drawUniformVertexConstantsLookupNext =
+          slot.drawUniformVertexConstantsLookupNext.capacity(),
+      .drawUniformPixelConstantsLookupHeads =
+          slot.drawUniformPixelConstantsLookupHeads.capacity(),
+      .drawUniformPixelConstantsLookupTails =
+          slot.drawUniformPixelConstantsLookupTails.capacity(),
+      .drawUniformPixelConstantsLookupNext =
+          slot.drawUniformPixelConstantsLookupNext.capacity(),
       .drawParams = slot.drawParams.capacity(),
       .drawPayloadArena = slot.drawPayloadArena.capacity(),
       .drawRunRecords = slot.drawRunRecords.capacity(),
@@ -435,6 +465,14 @@ void testChunkSlotReplayObserverAndQueueSummarySeeSameCategories() {
       makeCanonicalDrawStateForTest(desc), uniforms,
       std::span<const DrawParam>(draws.data(), draws.size()),
       std::span<const DrawParamPayloadView>(payloads.data(), payloads.size()));
+  // Queue diagnostics must read projected-texture compatibility from the
+  // compact hot state, not by re-materializing draw-run uniform payloads.
+  slot.drawUniformPayloads.clear();
+  slot.drawUniformFixedPayloads.clear();
+  slot.drawUniformVertexConstants.clear();
+  slot.drawUniformVertexConstantBytes.clear();
+  slot.drawUniformPixelConstants.clear();
+  slot.drawUniformPixelConstantBytes.clear();
 
   ClearDesc clear{};
   clear.colorAttachments[0] = RenderTargetAttachment{
@@ -550,6 +588,11 @@ void testChunkSlotDrawRunSoAReuseKeepsReservedCapacitiesStable() {
   slot.reserveDrawStateStorage(4u);
   slot.drawParams.reserve(4u);
   slot.drawPayloadArena.reserve(16u);
+  slot.drawUniformFixedPayloads.reserve(1u);
+  slot.drawUniformVertexConstants.reserve(1u);
+  slot.drawUniformVertexConstantBytes.reserve(sizeof(VertexShaderConstants));
+  slot.drawUniformPixelConstants.reserve(1u);
+  slot.drawUniformPixelConstantBytes.reserve(sizeof(PixelShaderConstants));
   slot.drawUniformPayloads.reserve(1u);
 
   slot.appendDrawRun(makeCanonicalDrawStateForTest(desc), uniforms,
@@ -580,6 +623,8 @@ void testChunkSlotDrawRunSoAReuseKeepsReservedCapacitiesStable() {
           "draw-run hot path stores payload bytes in one arena");
   checkEq(slot.drawUniformPayloads.size(), std::size_t{1},
           "draw-run hot path reuses the interned uniform payload");
+  checkEq(slot.drawUniformFixedPayloads.size(), std::size_t{1},
+          "draw-run hot path reuses the interned fixed uniform payload");
   for (const auto &record : slot.drawRunRecords) {
     checkEq(record.uniformHandle, firstUniformHandle,
             "reused draw runs point at the same uniform handle");
@@ -626,14 +671,33 @@ void testChunkSlotDrawRunBatchKeepsPerDrawUniformPayloads() {
           "uniform-varying batch stores both draw params in the run");
   checkEq(slot.drawUniformPayloads.size(), std::size_t{2},
           "uniform-varying batch interns both uniform snapshots");
+  checkEq(slot.drawUniformFixedPayloads.size(), std::size_t{1},
+          "uniform-varying batch shares fixed uniform payload fields");
+  checkEq(slot.drawUniformVertexConstants.size(), std::size_t{2},
+          "uniform-varying batch keeps distinct VS constant records");
+  checkEq(slot.drawUniformPixelConstants.size(), std::size_t{1},
+          "uniform-varying batch shares unchanged PS constant records");
+  checkEq(slot.drawUniformPayloads[0].fixedHandle,
+          slot.drawUniformPayloads[1].fixedHandle,
+          "uniform-varying batch records point at the shared fixed payload");
+  check(!(slot.drawUniformPayloads[0].vertexConstantsHandle ==
+          slot.drawUniformPayloads[1].vertexConstantsHandle),
+        "uniform-varying batch records point at distinct VS constants");
+  checkEq(slot.drawUniformPayloads[0].pixelConstantsHandle,
+          slot.drawUniformPayloads[1].pixelConstantsHandle,
+          "uniform-varying batch records point at the shared PS constants");
 
   const auto command = slot.drawRunCommandAt(0u);
   checkEq(drawRunDrawCount(command), std::size_t{2},
           "command view exposes both batched draws");
+  DrawUniformPayload firstUniformScratch{};
+  DrawUniformPayload secondUniformScratch{};
   const auto* firstUniform =
-      drawRunUniformPayloadForParam(command, command.drawParams[0]);
+      drawRunUniformPayloadForParam(command, command.drawParams[0],
+                                    firstUniformScratch);
   const auto* secondUniform =
-      drawRunUniformPayloadForParam(command, command.drawParams[1]);
+      drawRunUniformPayloadForParam(command, command.drawParams[1],
+                                    secondUniformScratch);
   check(firstUniform && secondUniform,
         "per-draw uniform lookup returns payloads for both draws");
   check(firstUniform != secondUniform,
@@ -686,6 +750,44 @@ void testChunkSlotUniformPayloadLookupHashCollisionKeepsDistinctPayloads() {
           "bucket lookup reuses the matching colliding payload");
   checkEq(reusedHandle, firstHandle,
           "hash collision lookup returns the payload whose full contents match");
+}
+
+void testChunkSlotUniformStageConstantsUseCompactByteArena() {
+  DrawDesc desc{};
+  desc.primitiveCount = 1u;
+  desc.rts.color[0] = RenderTargetAttachment{.handle = Handle{0x3000u}};
+  desc.vsConst.float4[0][0] = 42.0f;
+  desc.vsConst.float4[10][0] = 99.0f;
+
+  auto uniforms = makeDrawUniformPayload(desc);
+  uniforms.vertexFloatConstantCount = 1u;
+  uniforms.vertexIntConstantCount = 0u;
+  uniforms.vertexBoolConstantCount = 0u;
+
+  const DrawParam draw = makeDrawParam(1u, 0u);
+  ChunkSlot slot{};
+  slot.appendDrawRun(makeCanonicalDrawStateForTest(desc), uniforms,
+                     std::span<const DrawParam>(&draw, 1u),
+                     std::span<const DrawParamPayloadView>{});
+
+  checkEq(slot.drawUniformVertexConstants.size(), std::size_t{1},
+          "compact stage storage appends one VS record");
+  checkEq(slot.drawUniformVertexConstantBytes.size(),
+          sizeof(std::array<f32, 4>),
+          "compact stage storage stores only the live VS float prefix");
+  check(slot.drawUniformVertexConstantBytes.size() < sizeof(VertexShaderConstants),
+        "compact stage storage is narrower than the full VS constant block");
+
+  const auto command = slot.drawRunCommandAt(0u);
+  DrawUniformPayload scratch{};
+  const auto* materialized =
+      drawRunUniformPayloadForParam(command, command.drawParams[0], scratch);
+  check(materialized != nullptr,
+        "compact stage storage materializes a legacy uniform payload view");
+  check(materialized->vsConst.float4[0][0] == 42.0f,
+        "compact stage storage preserves the stored live VS constant");
+  check(materialized->vsConst.float4[10][0] == 0.0f,
+        "compact stage storage zero-fills constants outside the stored prefix");
 }
 
 void testDrawRunBatchBindingOverrideNormalizesStreamAndIndexState() {
@@ -841,10 +943,14 @@ void testChunkSlotDrawRunBatchKeepsElidedNonFrontDrawData() {
           "elided non-front batch keeps both draw params");
 
   const auto command = slot.drawRunCommandAt(0u);
+  DrawUniformPayload firstUniformScratch{};
+  DrawUniformPayload secondUniformScratch{};
   const auto* firstUniform =
-      drawRunUniformPayloadForParam(command, command.drawParams[0]);
+      drawRunUniformPayloadForParam(command, command.drawParams[0],
+                                    firstUniformScratch);
   const auto* secondUniform =
-      drawRunUniformPayloadForParam(command, command.drawParams[1]);
+      drawRunUniformPayloadForParam(command, command.drawParams[1],
+                                    secondUniformScratch);
   check(firstUniform && secondUniform,
         "elided non-front batch keeps per-draw uniform handles");
   check(firstUniform->vsConst.float4[0][0] == 17.0f,
@@ -886,14 +992,20 @@ void testChunkSlotDrawRunBatchReusesElidedUniformPayload() {
           "uniform-elided batch interns only the materialized uniform payload");
 
   const auto command = slot.drawRunCommandAt(0u);
+  DrawUniformPayload firstUniformScratch{};
+  DrawUniformPayload secondUniformScratch{};
   const auto* firstUniform =
-      drawRunUniformPayloadForParam(command, command.drawParams[0]);
+      drawRunUniformPayloadForParam(command, command.drawParams[0],
+                                    firstUniformScratch);
   const auto* secondUniform =
-      drawRunUniformPayloadForParam(command, command.drawParams[1]);
+      drawRunUniformPayloadForParam(command, command.drawParams[1],
+                                    secondUniformScratch);
   check(firstUniform && secondUniform,
         "uniform-elided batch resolves both draw uniform payloads");
-  check(firstUniform == secondUniform,
-        "uniform-elided non-front draw reuses the previous uniform handle");
+  checkEq(command.drawParams[0].uniformHandle, command.drawParams[1].uniformHandle,
+          "uniform-elided non-front draw reuses the previous uniform handle");
+  checkEq(*firstUniform, *secondUniform,
+          "uniform-elided non-front draw materializes the same uniform payload");
   check(secondUniform->vsConst.float4[0][0] == 31.0f,
         "uniform-elided draw reads the reused uniform payload");
 }
@@ -934,6 +1046,7 @@ int main() {
     testChunkSlotDrawRunSoAReuseKeepsReservedCapacitiesStable();
     testChunkSlotDrawRunBatchKeepsPerDrawUniformPayloads();
     testChunkSlotUniformPayloadLookupHashCollisionKeepsDistinctPayloads();
+    testChunkSlotUniformStageConstantsUseCompactByteArena();
     testDrawRunBatchBindingOverrideNormalizesStreamAndIndexState();
     testChunkSlotDrawRunBatchKeepsElidedNonFrontDrawData();
     testChunkSlotDrawRunBatchReusesElidedUniformPayload();

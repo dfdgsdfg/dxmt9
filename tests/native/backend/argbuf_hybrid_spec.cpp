@@ -136,6 +136,28 @@ void testVariantKeyArgbufHybridBitDistinguishesStages() {
         "argbufHybridMode bit changes ShaderVariantKey hash");
 }
 
+void testVariantKeyDirectCbufBitDistinguishesStage2b() {
+  dxmt9::pipeline::ShaderVariantKey stage1{};
+  stage1.hash = 0xdeadbeefull;
+
+  dxmt9::pipeline::ShaderVariantKey stage2 = stage1;
+  stage2.argbufHybridMode = true;
+
+  dxmt9::pipeline::ShaderVariantKey stage2b = stage2;
+  stage2b.argbufDirectCbufMode = true;
+
+  dxmt9::pipeline::ShaderVariantKeyHash hasher{};
+  check(!(stage1 == stage2), "Stage 1 and Stage 2 keys must differ");
+  check(!(stage1 == stage2b), "Stage 1 and Stage 2b keys must differ");
+  check(!(stage2 == stage2b), "Stage 2 and Stage 2b keys must differ");
+  check(hasher(stage1) != hasher(stage2),
+        "Stage 1 and Stage 2 hashes must differ");
+  check(hasher(stage1) != hasher(stage2b),
+        "Stage 1 and Stage 2b hashes must differ");
+  check(hasher(stage2) != hasher(stage2b),
+        "Stage 2 and Stage 2b hashes must differ");
+}
+
 void testTileFfpAndArgbufHybridBitsAreIndependent() {
   // The four state combinations (tile off/on × argbuf off/on) must all
   // be distinguishable so the cache never aliases an argbuf-mode tile
@@ -440,6 +462,7 @@ int main() {
     testSelectorPicksStage2WhenEnabled();
     testSelectorPromotesTextureBoundDrawsWhenEnabled();
     testVariantKeyArgbufHybridBitDistinguishesStages();
+    testVariantKeyDirectCbufBitDistinguishesStage2b();
     testTileFfpAndArgbufHybridBitsAreIndependent();
     testArgumentDescriptorCount();
     testArgumentDescriptorRoles();

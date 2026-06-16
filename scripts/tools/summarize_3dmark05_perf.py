@@ -19,12 +19,15 @@ from pathlib import Path
 from typing import Any
 
 KEY_VALUE_RE = re.compile(r"\b([A-Za-z0-9_]+)=([^\s]+)")
+HEX_TOKEN_RE = re.compile(r"^0x[0-9a-fA-F]+$")
 SUMMARY_COUNTER_ROW_RE = re.compile(r"^\| `([^`]+)` \| `([^`]+)` \|")
 ENCODER_PREFIX = "[dxmt9-perf-encoder "
 STREAM_PREFIX = "[dxmt9-perf-encoder-stream "
 PROBE_DRAW_PREFIX = "[dxmt9-perf-indexed-probe-draw "
 RENDER_PASS_REENTRY_PREFIX = "[dxmt9-perf-render-pass-reentry "
 FRAME_PREFIX = "[dxmt9-perf-frame "
+ARGBUF_DELTA_SOURCE_PREFIX = "[dxmt9-perf-argbuf-payload-delta-source "
+VS_CONST_SETTER_RANGE_PREFIX = "[dxmt9-perf-vs-const-setter-range "
 PERF_PREFIX = "[dxmt9-perf] "
 BRIDGE_PREFIX = "[dxmt9-bridge-perf] "
 
@@ -57,6 +60,24 @@ RUN_COUNTERS = (
     "prepare_slot_pso_prefetch_cpu_ms",
     "prepare_slot_pso_prefetch_cpu_p50_ms",
     "prepare_slot_pso_prefetch_cpu_p95_ms",
+    "chunk_publish_reason_unknown",
+    "chunk_publish_reason_draw_limit",
+    "chunk_publish_reason_payload_limit",
+    "chunk_publish_reason_present",
+    "chunk_publish_reason_present_acquire",
+    "chunk_publish_reason_present_split_before",
+    "chunk_publish_reason_flush",
+    "chunk_publish_reason_stretch_split",
+    "chunk_publish_reason_map_wait",
+    "chunk_publish_commands_unknown",
+    "chunk_publish_commands_draw_limit",
+    "chunk_publish_commands_payload_limit",
+    "chunk_publish_commands_present",
+    "chunk_publish_commands_present_acquire",
+    "chunk_publish_commands_present_split_before",
+    "chunk_publish_commands_flush",
+    "chunk_publish_commands_stretch_split",
+    "chunk_publish_commands_map_wait",
     "encode_slot_pso_prefetch_cpu_ms",
     "encode_slot_pso_prefetch_cpu_p50_ms",
     "encode_slot_pso_prefetch_cpu_p95_ms",
@@ -83,9 +104,58 @@ RUN_COUNTERS = (
     "encode_slot_pso_prefetch_argbuf_select_cpu_ms",
     "encode_slot_pso_prefetch_argbuf_select_cpu_p50_ms",
     "encode_slot_pso_prefetch_argbuf_select_cpu_p95_ms",
+    "encode_slot_pso_prefetch_draw_key_resolve_cpu_ms",
+    "encode_slot_pso_prefetch_draw_resolve_format_cpu_ms",
+    "encode_slot_pso_prefetch_draw_resolve_variant_key_cpu_ms",
+    "encode_slot_pso_prefetch_draw_resolve_shader_context_cpu_ms",
+    "encode_slot_pso_prefetch_draw_resolve_x8_alpha_cpu_ms",
+    "encode_slot_pso_prefetch_draw_resolve_vsout_layout_cpu_ms",
+    "encode_slot_pso_prefetch_draw_resolve_fragmentless_cpu_ms",
     "encode_slot_pso_prefetch_draw_lookup_cpu_ms",
     "encode_slot_pso_prefetch_draw_lookup_cpu_p50_ms",
     "encode_slot_pso_prefetch_draw_lookup_cpu_p95_ms",
+    "encode_slot_pso_prefetch_draw_semantic_key_cpu_ms",
+    "encode_slot_pso_prefetch_draw_semantic_probe_cpu_ms",
+    "encode_slot_pso_prefetch_draw_semantic_store_cpu_ms",
+    "encode_slot_pso_prefetch_draw_semantic_memo_hits",
+    "encode_slot_pso_prefetch_draw_semantic_memo_misses",
+    "encode_slot_pso_prefetch_draw_semantic_memo_overflow",
+    "encode_slot_pso_prefetch_draw_semantic_miss_probe_key_hits",
+    "encode_slot_pso_prefetch_draw_semantic_miss_probe_key_same_semantic",
+    "encode_slot_pso_prefetch_draw_semantic_miss_probe_key_diff_argbuf_selector",
+    "encode_slot_pso_prefetch_draw_semantic_miss_probe_key_diff_vertex_decl",
+    "encode_slot_pso_prefetch_draw_semantic_miss_probe_key_diff_shader",
+    "encode_slot_pso_prefetch_draw_semantic_miss_probe_key_diff_render_state",
+    "encode_slot_pso_prefetch_draw_semantic_miss_probe_key_diff_texture_handles",
+    "encode_slot_pso_prefetch_draw_semantic_miss_probe_key_diff_texture_lod",
+    "encode_slot_pso_prefetch_draw_semantic_miss_probe_key_diff_texture_stage",
+    "encode_slot_pso_prefetch_draw_semantic_miss_probe_key_diff_sampler",
+    "encode_slot_pso_prefetch_draw_semantic_miss_probe_key_diff_attachment",
+    "encode_slot_pso_prefetch_draw_semantic_miss_probe_key_diff_clip_plane",
+    "encode_slot_pso_prefetch_draw_semantic_miss_probe_key_diff_constant_usage",
+    "encode_slot_pso_prefetch_draw_semantic_miss_probe_key_diff_single_field",
+    "encode_slot_pso_prefetch_draw_semantic_miss_probe_key_diff_multi_field",
+    "encode_slot_pso_prefetch_draw_semantic_miss_probe_key_diff_texture_handles_only",
+    "encode_slot_pso_prefetch_draw_semantic_miss_probe_key_diff_texture_handles_with_others",
+    "encode_slot_pso_prefetch_draw_semantic_miss_probe_key_diff_hash_only",
+    "encode_slot_pso_prefetch_draw_semantic_miss_probe_key_diff_unknown",
+    "encode_slot_pso_prefetch_draw_resource_shape_memo_candidates",
+    "encode_slot_pso_prefetch_draw_resource_shape_memo_hits",
+    "encode_slot_pso_prefetch_draw_resource_shape_memo_misses",
+    "encode_slot_pso_prefetch_draw_resource_shape_memo_overflow",
+    "encode_slot_pso_prefetch_draw_resource_shape_memo_stores",
+    "encode_slot_pso_prefetch_draw_resource_shape_memo_validated_hits",
+    "encode_slot_pso_prefetch_draw_resource_shape_memo_validated_misses",
+    "encode_slot_pso_prefetch_draw_resource_shape_memo_mismatch_texture_mask",
+    "encode_slot_pso_prefetch_draw_resource_shape_memo_mismatch_texture_types",
+    "encode_slot_pso_prefetch_draw_resource_shape_memo_mismatch_x8_alpha",
+    "encode_slot_pso_prefetch_draw_resource_shape_memo_mismatch_attachment",
+    "encode_slot_pso_prefetch_draw_resource_shape_memo_mismatch_sampler_lod_bias",
+    "encode_slot_pso_prefetch_draw_resource_shape_memo_mismatch_vsout",
+    "encode_slot_pso_prefetch_draw_resource_shape_memo_mismatch_other",
+    "encode_slot_pso_prefetch_draw_probe_key_memo_hits",
+    "encode_slot_pso_prefetch_draw_probe_key_memo_misses",
+    "encode_slot_pso_prefetch_draw_probe_key_memo_overflow",
     "encode_slot_pso_prefetch_draw_handle_adjacent_candidates",
     "encode_slot_pso_prefetch_draw_handle_adjacent_hits",
     "encode_slot_pso_prefetch_draw_handle_slot_repeat_hits",
@@ -205,6 +275,38 @@ RUN_COUNTERS = (
     "d3d9_draw_state_cache_batch_hits",
     "d3d9_draw_state_cache_batch_misses",
     "d3d9_draw_state_cache_uniform_refreshes",
+    "d3d9_draw_state_cache_batch_miss_reason_unknown",
+    "d3d9_draw_state_cache_batch_miss_reason_binding_only",
+    "d3d9_draw_state_cache_batch_miss_reason_single_render_state",
+    "d3d9_draw_state_cache_batch_miss_reason_single_texture",
+    "d3d9_draw_state_cache_batch_miss_reason_single_fvf_vdecl",
+    "d3d9_draw_state_cache_batch_miss_reason_single_shader",
+    "d3d9_draw_state_cache_batch_miss_reason_single_rt_depth",
+    "d3d9_draw_state_cache_batch_miss_reason_single_viewport_scissor",
+    "d3d9_draw_state_cache_batch_miss_reason_single_tss_sampler",
+    "d3d9_draw_state_cache_batch_miss_reason_single_ffp_clip",
+    "d3d9_draw_state_cache_batch_miss_reason_single_broad",
+    "d3d9_draw_state_cache_batch_miss_reason_mixed_2",
+    "d3d9_draw_state_cache_batch_miss_reason_mixed_3",
+    "d3d9_draw_state_cache_batch_miss_reason_mixed_4plus",
+    "d3d9_draw_state_cache_batch_miss_reason_has_render_state",
+    "d3d9_draw_state_cache_batch_miss_reason_has_texture",
+    "d3d9_draw_state_cache_batch_miss_reason_has_fvf_vdecl",
+    "d3d9_draw_state_cache_batch_miss_reason_has_shader",
+    "d3d9_draw_state_cache_batch_miss_reason_has_rt_depth",
+    "d3d9_draw_state_cache_batch_miss_reason_has_viewport_scissor",
+    "d3d9_draw_state_cache_batch_miss_reason_has_tss_sampler",
+    "d3d9_draw_state_cache_batch_miss_reason_has_ffp_clip",
+    "d3d9_draw_state_cache_batch_miss_reason_has_broad",
+    "d3d9_draw_state_cache_batch_miss_reason_has_texture_shader",
+    "d3d9_draw_state_cache_batch_miss_reason_has_texture_fvf_vdecl",
+    "d3d9_draw_state_cache_batch_miss_reason_has_shader_fvf_vdecl",
+    "d3d9_draw_state_cache_batch_miss_reason_has_texture_tss_sampler",
+    "d3d9_draw_state_cache_batch_miss_reason_has_texture_shader_fvf_vdecl",
+    "d3d9_draw_state_cache_batch_miss_reason_has_texture_shader_tss_sampler",
+    "d3d9_draw_state_cache_batch_miss_reason_has_texture_fvf_vdecl_tss_sampler",
+    "d3d9_draw_state_cache_batch_miss_reason_has_shader_fvf_vdecl_tss_sampler",
+    "d3d9_draw_state_cache_batch_miss_reason_has_texture_shader_fvf_vdecl_tss_sampler",
     "d3d9_draw_state_cache_miss_after_unknown",
     "d3d9_draw_state_cache_miss_after_mutable_state",
     "d3d9_draw_state_cache_miss_after_draw_packet",
@@ -355,6 +457,11 @@ RUN_COUNTERS = (
     "d3d9_snapshot_uniform_copy_cpu_ms",
     "d3d9_snapshot_uniform_materialized",
     "d3d9_snapshot_uniform_materialized_bytes",
+    "d3d9_snapshot_uniform_materialized_compact_candidate_bytes",
+    "d3d9_snapshot_uniform_materialized_compact_saved_bytes",
+    "d3d9_snapshot_uniform_materialized_compact_fixed_bytes",
+    "d3d9_snapshot_uniform_materialized_compact_vertex_bytes",
+    "d3d9_snapshot_uniform_materialized_compact_pixel_bytes",
     "d3d9_snapshot_uniform_elided",
     "d3d9_snapshot_uniform_elided_bytes",
     "d3d9_snapshot_uniform_adjacent_same_generation",
@@ -363,6 +470,30 @@ RUN_COUNTERS = (
     "d3d9_snapshot_uniform_adjacent_same_generation_same_state_lane_bytes",
     "d3d9_snapshot_uniform_adjacent_same_generation_diff_state_lane",
     "d3d9_snapshot_uniform_adjacent_same_generation_diff_state_lane_bytes",
+    "d3d9_snapshot_uniform_adjacent_same_payload_hash",
+    "d3d9_snapshot_uniform_adjacent_same_payload_hash_bytes",
+    "d3d9_snapshot_uniform_adjacent_same_payload_hash_same_state_lane",
+    "d3d9_snapshot_uniform_adjacent_same_payload_hash_same_state_lane_bytes",
+    "d3d9_snapshot_uniform_adjacent_same_payload_hash_diff_state_lane",
+    "d3d9_snapshot_uniform_adjacent_same_payload_hash_diff_state_lane_bytes",
+    "d3d9_snapshot_uniform_adjacent_same_payload_hash_diff_generation",
+    "d3d9_snapshot_uniform_adjacent_same_payload_hash_diff_generation_bytes",
+    "d3d9_snapshot_uniform_adjacent_previous_payload",
+    "d3d9_snapshot_uniform_adjacent_same_vs_const_hash",
+    "d3d9_snapshot_uniform_adjacent_same_vs_const_hash_same_state_lane",
+    "d3d9_snapshot_uniform_adjacent_same_vs_const_hash_diff_generation",
+    "d3d9_snapshot_uniform_adjacent_same_ps_const_hash",
+    "d3d9_snapshot_uniform_adjacent_same_ps_const_hash_same_state_lane",
+    "d3d9_snapshot_uniform_adjacent_same_ps_const_hash_diff_generation",
+    "d3d9_snapshot_uniform_adjacent_same_shader_const_hashes",
+    "d3d9_snapshot_uniform_adjacent_same_shader_const_hashes_same_state_lane",
+    "d3d9_snapshot_uniform_adjacent_same_shader_const_hashes_diff_generation",
+    "d3d9_snapshot_uniform_adjacent_same_fixed_payload_hash",
+    "d3d9_snapshot_uniform_adjacent_same_fixed_payload_hash_same_state_lane",
+    "d3d9_snapshot_uniform_adjacent_same_fixed_payload_hash_diff_generation",
+    "d3d9_snapshot_uniform_adjacent_same_fixed_and_shader_const_hashes",
+    "d3d9_snapshot_uniform_adjacent_same_fixed_and_shader_const_hashes_same_state_lane",
+    "d3d9_snapshot_uniform_adjacent_same_fixed_and_shader_const_hashes_diff_generation",
     "d3d9_snapshot_state_copy_cpu_ms",
     "d3d9_snapshot_state_materialized",
     "d3d9_snapshot_state_materialized_bytes",
@@ -381,11 +512,43 @@ RUN_COUNTERS = (
     "draw_uniform_payload_lookup_bucket_probes",
     "draw_uniform_payload_lookup_bucket_collisions",
     "draw_uniform_payload_lookup_hash_collisions",
+    "draw_uniform_payload_lookup_semantic_hash_misses",
+    "draw_uniform_payload_lookup_semantic_hash_miss_bytes",
     "draw_uniform_payload_lookup_cpu_ms",
     "draw_uniform_payload_lookup_cpu_max_ms",
     "draw_uniform_payload_lookup_bucket_cpu_ms",
     "draw_uniform_payload_lookup_bucket_cpu_max_ms",
     "draw_uniform_payload_appends",
+    "draw_uniform_payload_append_bytes",
+    "draw_uniform_fixed_payload_appends",
+    "draw_uniform_fixed_payload_append_bytes",
+    "draw_uniform_vertex_constants_appends",
+    "draw_uniform_vertex_constants_append_bytes",
+    "draw_uniform_pixel_constants_appends",
+    "draw_uniform_pixel_constants_append_bytes",
+    "draw_uniform_payload_materialized",
+    "draw_uniform_payload_materialized_bytes",
+    "draw_uniform_payload_materialize_fallbacks",
+    "draw_uniform_payload_materialize_cpu_ms",
+    "draw_uniform_payload_materialize_cpu_max_ms",
+    "draw_uniform_payload_materialized_other",
+    "draw_uniform_payload_materialized_other_bytes",
+    "draw_uniform_payload_materialize_other_cpu_ms",
+    "draw_uniform_payload_materialized_draw_encoder_command",
+    "draw_uniform_payload_materialized_draw_encoder_command_bytes",
+    "draw_uniform_payload_materialize_draw_encoder_command_cpu_ms",
+    "draw_uniform_payload_materialized_draw_encoder_param",
+    "draw_uniform_payload_materialized_draw_encoder_param_bytes",
+    "draw_uniform_payload_materialize_draw_encoder_param_cpu_ms",
+    "draw_uniform_payload_materialized_framegraph_command",
+    "draw_uniform_payload_materialized_framegraph_command_bytes",
+    "draw_uniform_payload_materialize_framegraph_command_cpu_ms",
+    "draw_uniform_payload_materialized_framegraph_param",
+    "draw_uniform_payload_materialized_framegraph_param_bytes",
+    "draw_uniform_payload_materialize_framegraph_param_cpu_ms",
+    "draw_uniform_payload_materialized_queue_observation",
+    "draw_uniform_payload_materialized_queue_observation_bytes",
+    "draw_uniform_payload_materialize_queue_observation_cpu_ms",
     "draw_uniform_payload_append_reserve_cpu_ms",
     "draw_uniform_payload_append_reserve_cpu_max_ms",
     "draw_uniform_payload_append_copy_cpu_ms",
@@ -732,10 +895,49 @@ RUN_COUNTERS = (
     "encode_draw_argbuf_payload_delta_changed_ps",
     "encode_draw_argbuf_payload_delta_changed_vs_ps",
     "encode_draw_argbuf_payload_delta_changed_nonconst_only",
+    "encode_draw_argbuf_payload_delta_changed_vs_float",
+    "encode_draw_argbuf_payload_delta_changed_vs_int",
+    "encode_draw_argbuf_payload_delta_changed_vs_bool",
+    "encode_draw_argbuf_payload_delta_changed_ps_float",
+    "encode_draw_argbuf_payload_delta_changed_ps_int",
+    "encode_draw_argbuf_payload_delta_changed_ps_bool",
+    "encode_draw_argbuf_payload_delta_changed_vs_float_regs",
+    "encode_draw_argbuf_payload_delta_changed_vs_float_regs_max",
+    "encode_draw_argbuf_payload_delta_changed_vs_float_regs_le1",
+    "encode_draw_argbuf_payload_delta_changed_vs_float_regs_le4",
+    "encode_draw_argbuf_payload_delta_changed_vs_float_regs_le16",
+    "encode_draw_argbuf_payload_delta_changed_vs_float_regs_le64",
+    "encode_draw_argbuf_payload_delta_changed_vs_float_regs_gt64",
+    "encode_draw_argbuf_payload_delta_changed_vs_float_regs_le1_sum",
+    "encode_draw_argbuf_payload_delta_changed_vs_float_regs_le4_sum",
+    "encode_draw_argbuf_payload_delta_changed_vs_float_regs_le16_sum",
+    "encode_draw_argbuf_payload_delta_changed_vs_float_regs_le64_sum",
+    "encode_draw_argbuf_payload_delta_changed_vs_float_regs_gt64_sum",
+    "encode_draw_argbuf_payload_delta_changed_vs_float_prefix_regs",
+    "encode_draw_argbuf_payload_delta_changed_vs_float_prefix_regs_max",
+    "encode_draw_argbuf_payload_delta_changed_vs_float_span_regs",
+    "encode_draw_argbuf_payload_delta_changed_vs_float_span_regs_max",
+    "encode_draw_argbuf_payload_delta_changed_vs_float_full_prefix",
+    "encode_draw_argbuf_payload_delta_changed_vs_float_full_prefix_regs",
+    "encode_draw_argbuf_payload_delta_changed_ps_float_regs",
+    "encode_draw_argbuf_payload_delta_changed_ps_float_regs_max",
+    "encode_draw_argbuf_payload_delta_changed_ps_float_regs_le1",
+    "encode_draw_argbuf_payload_delta_changed_ps_float_regs_le4",
+    "encode_draw_argbuf_payload_delta_changed_ps_float_regs_le16",
+    "encode_draw_argbuf_payload_delta_changed_ps_float_regs_le64",
+    "encode_draw_argbuf_payload_delta_changed_ps_float_regs_gt64",
+    "encode_draw_argbuf_payload_delta_changed_ps_float_regs_le1_sum",
+    "encode_draw_argbuf_payload_delta_changed_ps_float_regs_le4_sum",
+    "encode_draw_argbuf_payload_delta_changed_ps_float_regs_le16_sum",
+    "encode_draw_argbuf_payload_delta_changed_ps_float_regs_le64_sum",
+    "encode_draw_argbuf_payload_delta_changed_ps_float_regs_gt64_sum",
     "encode_draw_argbuf_payload_delta_reopen_first",
     "encode_draw_argbuf_payload_delta_reopen_payload_changed",
     "encode_draw_argbuf_payload_delta_reopen_payload_same",
     "encode_draw_argbuf_payload_delta_reopen_resource_array",
+    "encode_draw_argbuf_payload_delta_reopen_cbuf_only",
+    "encode_draw_argbuf_payload_delta_reopen_cbuf_only_first",
+    "encode_draw_argbuf_payload_delta_reopen_cbuf_only_payload_changed",
     "encode_draw_index_setup_cpu_ms",
     "encode_draw_index_source_resolve_cpu_ms",
     "encode_draw_index_cache_lookup_cpu_ms",
@@ -779,6 +981,15 @@ RUN_COUNTERS = (
     "indexed_cache_opt_candidate_bytes",
     "indexed_cache_opt_candidate_original_miss32",
     "indexed_cache_opt_candidate_miss32",
+    "indexed_cache_opt_candidate_gate_pass",
+    "indexed_cache_opt_candidate_gate_fail",
+    "indexed_cache_opt_candidate_opaque_depth_draws",
+    "indexed_cache_opt_candidate_screen_blend_draws",
+    "indexed_cache_opt_candidate_primitive_bucket_1_63",
+    "indexed_cache_opt_candidate_primitive_bucket_64_255",
+    "indexed_cache_opt_candidate_primitive_bucket_256_1023",
+    "indexed_cache_opt_candidate_primitive_bucket_1024_4095",
+    "indexed_cache_opt_candidate_primitive_bucket_4096_plus",
     "reordered_index_cache_lookups",
     "reordered_index_cache_hits",
     "reordered_index_cache_rejected_hits",
@@ -893,6 +1104,60 @@ RUN_COUNTERS = (
     "completion_no_enqueue_wait_to_commit_publish_ms",
     "completion_no_enqueue_wait_to_commit_publish_p50_ms",
     "completion_no_enqueue_wait_to_commit_publish_p95_ms",
+    "completion_no_enqueue_commit_chunk_entries_before_publish",
+    "completion_no_enqueue_commit_chunk_entries_before_publish_max",
+    "completion_no_enqueue_commit_chunk_entries_before_publish_p50",
+    "completion_no_enqueue_commit_chunk_entries_before_publish_p95",
+    "completion_no_enqueue_commit_chunk_replay_starts_before_publish",
+    "completion_no_enqueue_commit_chunk_replay_starts_before_publish_max",
+    "completion_no_enqueue_commit_chunk_replay_starts_before_publish_p50",
+    "completion_no_enqueue_commit_chunk_replay_starts_before_publish_p95",
+    "completion_no_enqueue_commit_chunk_replay_ends_before_publish",
+    "completion_no_enqueue_commit_chunk_replay_ends_before_publish_max",
+    "completion_no_enqueue_commit_chunk_replay_ends_before_publish_p50",
+    "completion_no_enqueue_commit_chunk_replay_ends_before_publish_p95",
+    "completion_no_enqueue_commit_chunk_completed_replay_cpu_before_publish",
+    "completion_no_enqueue_commit_chunk_completed_replay_cpu_before_publish_ms",
+    "completion_no_enqueue_commit_chunk_completed_replay_cpu_before_publish_max_ms",
+    "completion_no_enqueue_commit_chunk_completed_replay_cpu_before_publish_p50_ms",
+    "completion_no_enqueue_commit_chunk_completed_replay_cpu_before_publish_p95_ms",
+    "completion_no_enqueue_commit_chunk_active_replay_cpu_before_publish",
+    "completion_no_enqueue_commit_chunk_active_replay_cpu_before_publish_ms",
+    "completion_no_enqueue_commit_chunk_active_replay_cpu_before_publish_max_ms",
+    "completion_no_enqueue_commit_chunk_active_replay_cpu_before_publish_p50_ms",
+    "completion_no_enqueue_commit_chunk_active_replay_cpu_before_publish_p95_ms",
+    "completion_no_enqueue_commit_chunk_inter_replay_gap_before_publish",
+    "completion_no_enqueue_commit_chunk_inter_replay_gap_before_publish_ms",
+    "completion_no_enqueue_commit_chunk_inter_replay_gap_before_publish_max_ms",
+    "completion_no_enqueue_commit_chunk_inter_replay_gap_before_publish_p50_ms",
+    "completion_no_enqueue_commit_chunk_inter_replay_gap_before_publish_p95_ms",
+    "completion_no_enqueue_commit_publish_wait_before_publish",
+    "completion_no_enqueue_commit_publish_wait_before_publish_ms",
+    "completion_no_enqueue_commit_publish_wait_before_publish_max_ms",
+    "completion_no_enqueue_commit_publish_wait_before_publish_p50_ms",
+    "completion_no_enqueue_commit_publish_wait_before_publish_p95_ms",
+    "completion_no_enqueue_commit_publish_on_before_publish_cpu",
+    "completion_no_enqueue_commit_publish_on_before_publish_cpu_ms",
+    "completion_no_enqueue_commit_publish_on_before_publish_cpu_max_ms",
+    "completion_no_enqueue_commit_publish_on_before_publish_cpu_p50_ms",
+    "completion_no_enqueue_commit_publish_on_before_publish_cpu_p95_ms",
+    "completion_no_enqueue_commit_chunk_shape_samples_before_publish",
+    "completion_no_enqueue_commit_chunk_records_before_publish",
+    "completion_no_enqueue_commit_chunk_records_before_publish_max",
+    "completion_no_enqueue_commit_chunk_records_before_publish_p50",
+    "completion_no_enqueue_commit_chunk_records_before_publish_p95",
+    "completion_no_enqueue_commit_chunk_chunks_with_draw_before_publish",
+    "completion_no_enqueue_commit_chunk_chunks_with_present_before_publish",
+    "completion_no_enqueue_commit_chunk_chunks_state_const_only_before_publish",
+    "completion_no_enqueue_commit_chunk_chunks_no_draw_no_present_before_publish",
+    "completion_no_enqueue_commit_chunk_draw_records_before_publish",
+    "completion_no_enqueue_commit_chunk_const_records_before_publish",
+    "completion_no_enqueue_commit_chunk_apply_state_records_before_publish",
+    "completion_no_enqueue_commit_chunk_clear_records_before_publish",
+    "completion_no_enqueue_commit_chunk_present_records_before_publish",
+    "completion_no_enqueue_commit_chunk_surface_records_before_publish",
+    "completion_no_enqueue_commit_chunk_query_records_before_publish",
+    "completion_no_enqueue_commit_chunk_other_records_before_publish",
     "completion_no_enqueue_wait_to_encode_dequeue",
     "completion_no_enqueue_wait_to_encode_dequeue_ms",
     "completion_no_enqueue_wait_to_encode_dequeue_p50_ms",
@@ -901,6 +1166,12 @@ RUN_COUNTERS = (
     "completion_no_enqueue_wait_to_command_buffer_commit_ms",
     "completion_no_enqueue_wait_to_command_buffer_commit_p50_ms",
     "completion_no_enqueue_wait_to_command_buffer_commit_p95_ms",
+    "encode_dequeue_ready_depth_samples",
+    "encode_dequeue_ready_depth_total",
+    "encode_dequeue_ready_depth_max",
+    "encode_dequeue_ready_depth_gt1",
+    "encode_dequeue_ready_depth_gt2",
+    "encode_dequeue_ready_depth_gt4",
     "completion_no_enqueue_stage_commit_entry_to_publish",
     "completion_no_enqueue_stage_commit_entry_to_publish_ms",
     "completion_no_enqueue_stage_commit_entry_to_publish_p50_ms",
@@ -1139,6 +1410,15 @@ ENCODER_SUM_KEYS = (
     "indexed_cache_opt_candidate_miss16",
     "indexed_cache_opt_candidate_miss32",
     "indexed_cache_opt_candidate_miss64",
+    "indexed_cache_opt_candidate_gate_pass",
+    "indexed_cache_opt_candidate_gate_fail",
+    "indexed_cache_opt_candidate_opaque_depth_draws",
+    "indexed_cache_opt_candidate_screen_blend_draws",
+    "indexed_cache_opt_candidate_primitive_bucket_1_63",
+    "indexed_cache_opt_candidate_primitive_bucket_64_255",
+    "indexed_cache_opt_candidate_primitive_bucket_256_1023",
+    "indexed_cache_opt_candidate_primitive_bucket_1024_4095",
+    "indexed_cache_opt_candidate_primitive_bucket_4096_plus",
     "reordered_index_cache_lookups",
     "reordered_index_cache_hits",
     "reordered_index_cache_rejected_hits",
@@ -1299,6 +1579,15 @@ TOP_ENCODER_KEYS = (
     "indexed_cache_opt_candidate_miss_delta_pct_16",
     "indexed_cache_opt_candidate_miss_delta_pct_32",
     "indexed_cache_opt_candidate_miss_delta_pct_64",
+    "indexed_cache_opt_candidate_gate_pass",
+    "indexed_cache_opt_candidate_gate_fail",
+    "indexed_cache_opt_candidate_opaque_depth_draws",
+    "indexed_cache_opt_candidate_screen_blend_draws",
+    "indexed_cache_opt_candidate_primitive_bucket_1_63",
+    "indexed_cache_opt_candidate_primitive_bucket_64_255",
+    "indexed_cache_opt_candidate_primitive_bucket_256_1023",
+    "indexed_cache_opt_candidate_primitive_bucket_1024_4095",
+    "indexed_cache_opt_candidate_primitive_bucket_4096_plus",
     "pso_handle_changes",
     "pso_state_samples_per_draw",
     "shader_variant_changes",
@@ -1552,6 +1841,15 @@ ENCODER_CSV_KEYS = (
     "indexed_cache_opt_candidate_miss_delta_pct_16",
     "indexed_cache_opt_candidate_miss_delta_pct_32",
     "indexed_cache_opt_candidate_miss_delta_pct_64",
+    "indexed_cache_opt_candidate_gate_pass",
+    "indexed_cache_opt_candidate_gate_fail",
+    "indexed_cache_opt_candidate_opaque_depth_draws",
+    "indexed_cache_opt_candidate_screen_blend_draws",
+    "indexed_cache_opt_candidate_primitive_bucket_1_63",
+    "indexed_cache_opt_candidate_primitive_bucket_64_255",
+    "indexed_cache_opt_candidate_primitive_bucket_256_1023",
+    "indexed_cache_opt_candidate_primitive_bucket_1024_4095",
+    "indexed_cache_opt_candidate_primitive_bucket_4096_plus",
     "reordered_index_cache_lookups",
     "reordered_index_cache_hits",
     "reordered_index_cache_rejected_hits",
@@ -1910,6 +2208,37 @@ FRAME_CSV_KEYS = (
     "sub_command_buffers",
 )
 
+ARGBUF_DELTA_SOURCE_CSV_KEYS = (
+    "vs_hash",
+    "ps_hash",
+    "prefix_regs",
+    "rows",
+    "changed_regs",
+    "span_regs",
+    "full_prefix_rows",
+    "full_prefix_regs",
+    "overflow_rows",
+    "overflow_changed_regs",
+)
+
+VS_CONST_SETTER_RANGE_CSV_KEYS = (
+    "phase",
+    "vs_hash",
+    "ps_hash",
+    "start",
+    "count",
+    "events",
+    "range_regs",
+    "changed_regs",
+    "changed_span_regs",
+    "full_range_events",
+    "full_changed_events",
+    "overflow_events",
+    "overflow_range_regs",
+    "overflow_changed_regs",
+    "overflow_changed_span_regs",
+)
+
 RENDER_PASS_ACTION_GROUPS = (
     ("Color Load", (
         "render_pass_load_action_load",
@@ -2201,6 +2530,56 @@ def parse_kv_line(line: str) -> dict[str, int | float | str]:
     return parsed
 
 
+def parsed_int_value(row: dict[str, Any], key: str) -> int | None:
+    value = row.get(key)
+    if isinstance(value, bool):
+        return None
+    if isinstance(value, int):
+        return value
+    return None
+
+
+def parsed_hex_token(row: dict[str, Any], key: str) -> bool:
+    value = row.get(key)
+    return isinstance(value, str) and bool(HEX_TOKEN_RE.match(value))
+
+
+def valid_vs_const_setter_range_row(row: dict[str, Any]) -> bool:
+    phase = row.get("phase")
+    if phase not in {"call", "flush"}:
+        return False
+    overflow = parsed_int_value(row, "overflow")
+    if overflow == 1:
+        return all(
+            parsed_int_value(row, key) is not None
+            for key in (
+                "events",
+                "range_regs",
+                "changed_regs",
+                "changed_span_regs",
+                "full_range_events",
+                "full_changed_events",
+            )
+        )
+    if overflow != 0:
+        return False
+    if not parsed_hex_token(row, "vs_hash") or not parsed_hex_token(row, "ps_hash"):
+        return False
+    required_ints = (
+        "start",
+        "count",
+        "events",
+        "range_regs",
+        "changed_regs",
+        "changed_span_regs",
+        "full_range_events",
+        "full_changed_events",
+    )
+    if any(parsed_int_value(row, key) is None for key in required_ints):
+        return False
+    return parsed_int_value(row, "count") > 0
+
+
 def parse_encoder_lines(log_path: Path) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
     encoders: list[dict[str, Any]] = []
     streams: list[dict[str, Any]] = []
@@ -2244,6 +2623,30 @@ def parse_frame_lines(log_path: Path) -> list[dict[str, Any]]:
     return rows
 
 
+def parse_argbuf_delta_source_lines(log_path: Path) -> list[dict[str, Any]]:
+    rows: list[dict[str, Any]] = []
+    if not log_path.exists():
+        return rows
+    for line in log_path.read_text(encoding="utf-8", errors="replace").splitlines():
+        if line.startswith(ARGBUF_DELTA_SOURCE_PREFIX):
+            rows.append(parse_kv_line(line))
+    return rows
+
+
+def parse_vs_const_setter_range_lines(log_path: Path) -> list[dict[str, Any]]:
+    rows: list[dict[str, Any]] = []
+    if not log_path.exists():
+        return rows
+    for line in log_path.read_text(encoding="utf-8", errors="replace").splitlines():
+        if line.startswith(VS_CONST_SETTER_RANGE_PREFIX):
+            if not line.rstrip().endswith("]"):
+                continue
+            row = parse_kv_line(line)
+            if valid_vs_const_setter_range_row(row):
+                rows.append(row)
+    return rows
+
+
 def sum_key(rows: list[dict[str, Any]], key: str) -> int | float:
     total: int | float = 0
     for row in rows:
@@ -2279,11 +2682,1375 @@ def ratio_text(numerator: Any, denominator: Any) -> str:
     return f"{numerator / denominator:.3f}"
 
 
+def require_uniform_compact_saved_bytes_present(result: dict[str, Any]) -> None:
+    counters = result.get("dxmt9_perf_counters", {})
+    if not isinstance(counters, dict):
+        raise SystemExit("missing dxmt9_perf_counters")
+    present = counters.get("present_encoded")
+    saved = counters.get("d3d9_snapshot_uniform_materialized_compact_saved_bytes")
+    saved_per_present = None
+    if isinstance(present, (int, float)) and present > 0 and isinstance(saved, (int, float)):
+        saved_per_present = saved / present
+    if saved_per_present is None or saved_per_present <= 0.0:
+        raise SystemExit(
+            "uniform_compact_saved_bytes_per_present stayed zero "
+            f"(present_encoded={fmt(present)}, "
+            "d3d9_snapshot_uniform_materialized_compact_saved_bytes="
+            f"{fmt(saved)})"
+        )
+
+
 def numeric_value(row: dict[str, Any], key: str) -> int | float:
     value = row.get(key, 0)
     if isinstance(value, (int, float)):
         return value
     return 0
+
+
+def aggregate_argbuf_delta_sources(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    groups: dict[tuple[Any, Any, Any], dict[str, Any]] = {}
+    for row in rows:
+        if numeric_value(row, "overflow"):
+            key = ("overflow", "overflow", "overflow")
+            group = groups.setdefault(
+                key,
+                {
+                    "vs_hash": "overflow",
+                    "ps_hash": "overflow",
+                    "prefix_regs": "overflow",
+                    "rows": 0,
+                    "changed_regs": 0,
+                    "span_regs": 0,
+                    "full_prefix_rows": 0,
+                    "full_prefix_regs": 0,
+                    "overflow_rows": 0,
+                    "overflow_changed_regs": 0,
+                },
+            )
+            group["overflow_rows"] += numeric_value(row, "rows")
+            group["overflow_changed_regs"] += numeric_value(row, "changed_regs")
+            continue
+        key = (row.get("vs_hash", ""), row.get("ps_hash", ""), row.get("prefix_regs", ""))
+        group = groups.setdefault(
+            key,
+            {
+                "vs_hash": row.get("vs_hash", ""),
+                "ps_hash": row.get("ps_hash", ""),
+                "prefix_regs": row.get("prefix_regs", ""),
+                "rows": 0,
+                "changed_regs": 0,
+                "span_regs": 0,
+                "full_prefix_rows": 0,
+                "full_prefix_regs": 0,
+                "overflow_rows": 0,
+                "overflow_changed_regs": 0,
+            },
+        )
+        for field in (
+            "rows",
+            "changed_regs",
+            "span_regs",
+            "full_prefix_rows",
+            "full_prefix_regs",
+        ):
+            group[field] += numeric_value(row, field)
+    return sorted(
+        groups.values(),
+        key=lambda item: (
+            numeric_value(item, "full_prefix_regs"),
+            numeric_value(item, "changed_regs"),
+            numeric_value(item, "rows"),
+        ),
+        reverse=True,
+    )
+
+
+def aggregate_vs_const_setter_ranges(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    groups: dict[tuple[Any, Any, Any, Any, Any], dict[str, Any]] = {}
+    for row in rows:
+        phase = row.get("phase", "")
+        if numeric_value(row, "overflow"):
+            key = (phase, "overflow", "overflow", "overflow", "overflow")
+            group = groups.setdefault(
+                key,
+                {
+                    "phase": phase,
+                    "vs_hash": "overflow",
+                    "ps_hash": "overflow",
+                    "start": "overflow",
+                    "count": "overflow",
+                    "events": 0,
+                    "range_regs": 0,
+                    "changed_regs": 0,
+                    "changed_span_regs": 0,
+                    "full_range_events": 0,
+                    "full_changed_events": 0,
+                    "overflow_events": 0,
+                    "overflow_range_regs": 0,
+                    "overflow_changed_regs": 0,
+                    "overflow_changed_span_regs": 0,
+                },
+            )
+            group["overflow_events"] += numeric_value(row, "events")
+            group["overflow_range_regs"] += numeric_value(row, "range_regs")
+            group["overflow_changed_regs"] += numeric_value(row, "changed_regs")
+            group["overflow_changed_span_regs"] += numeric_value(
+                row, "changed_span_regs"
+            )
+            group["full_range_events"] += numeric_value(row, "full_range_events")
+            group["full_changed_events"] += numeric_value(row, "full_changed_events")
+            continue
+        key = (
+            phase,
+            row.get("vs_hash", ""),
+            row.get("ps_hash", ""),
+            row.get("start", ""),
+            row.get("count", ""),
+        )
+        group = groups.setdefault(
+            key,
+            {
+                "phase": phase,
+                "vs_hash": row.get("vs_hash", ""),
+                "ps_hash": row.get("ps_hash", ""),
+                "start": row.get("start", ""),
+                "count": row.get("count", ""),
+                "events": 0,
+                "range_regs": 0,
+                "changed_regs": 0,
+                "changed_span_regs": 0,
+                "full_range_events": 0,
+                "full_changed_events": 0,
+                "overflow_events": 0,
+                "overflow_range_regs": 0,
+                "overflow_changed_regs": 0,
+                "overflow_changed_span_regs": 0,
+            },
+        )
+        for field in (
+            "events",
+            "range_regs",
+            "changed_regs",
+            "changed_span_regs",
+            "full_range_events",
+            "full_changed_events",
+        ):
+            group[field] += numeric_value(row, field)
+    return sorted(
+        groups.values(),
+        key=lambda item: (
+            numeric_value(item, "changed_regs"),
+            numeric_value(item, "range_regs"),
+            numeric_value(item, "events"),
+        ),
+        reverse=True,
+    )
+
+
+def append_pacing_cpu_stage_derived(
+    lines: list[str],
+    counters: dict[str, Any],
+    present_encoded: Any,
+) -> None:
+    completion_wait = counters.get("completion_wait_ms")
+    completion_with_enqueue = counters.get("completion_wait_with_enqueue_ms")
+    completion_without_enqueue = counters.get("completion_wait_without_enqueue_ms")
+    overlap_share = None
+    no_enqueue_share = None
+    if isinstance(completion_wait, (int, float)) and completion_wait > 0:
+        if isinstance(completion_with_enqueue, (int, float)):
+            overlap_share = completion_with_enqueue / completion_wait * 100.0
+        if isinstance(completion_without_enqueue, (int, float)):
+            no_enqueue_share = completion_without_enqueue / completion_wait * 100.0
+
+    stage_rows = (
+        (
+            "wait -> commit chunk entry",
+            "completion_no_enqueue_wait_to_commit_chunk_entry_ms",
+            "completion_no_enqueue_wait_to_commit_chunk_entry_p50_ms",
+            "completion_no_enqueue_wait_to_commit_chunk_entry_p95_ms",
+        ),
+        (
+            "commit entry -> publish",
+            "completion_no_enqueue_stage_commit_entry_to_publish_ms",
+            "completion_no_enqueue_stage_commit_entry_to_publish_p50_ms",
+            "completion_no_enqueue_stage_commit_entry_to_publish_p95_ms",
+        ),
+        (
+            "publish -> encode dequeue",
+            "completion_no_enqueue_stage_publish_to_encode_dequeue_ms",
+            "completion_no_enqueue_stage_publish_to_encode_dequeue_p50_ms",
+            "completion_no_enqueue_stage_publish_to_encode_dequeue_p95_ms",
+        ),
+        (
+            "encode dequeue -> command buffer commit",
+            "completion_no_enqueue_stage_encode_dequeue_to_command_buffer_commit_ms",
+            "completion_no_enqueue_stage_encode_dequeue_to_command_buffer_commit_p50_ms",
+            "completion_no_enqueue_stage_encode_dequeue_to_command_buffer_commit_p95_ms",
+        ),
+        (
+            "wait -> next enqueue",
+            "completion_no_enqueue_wait_to_next_enqueue_ms",
+            "completion_no_enqueue_wait_to_next_enqueue_p50_ms",
+            "completion_no_enqueue_wait_to_next_enqueue_p95_ms",
+        ),
+    )
+    timeline_rows = (
+        (
+            "wait -> commit chunk entry",
+            "completion_no_enqueue_wait_to_commit_chunk_entry_ms",
+            "completion_no_enqueue_wait_to_commit_chunk_entry_p50_ms",
+            "completion_no_enqueue_wait_to_commit_chunk_entry_p95_ms",
+        ),
+        (
+            "wait -> commit chunk replay start",
+            "completion_no_enqueue_wait_to_commit_chunk_replay_start_ms",
+            "completion_no_enqueue_wait_to_commit_chunk_replay_start_p50_ms",
+            "completion_no_enqueue_wait_to_commit_chunk_replay_start_p95_ms",
+        ),
+        (
+            "wait -> commit chunk replay end",
+            "completion_no_enqueue_wait_to_commit_chunk_replay_end_ms",
+            "completion_no_enqueue_wait_to_commit_chunk_replay_end_p50_ms",
+            "completion_no_enqueue_wait_to_commit_chunk_replay_end_p95_ms",
+        ),
+        (
+            "wait -> commit publish",
+            "completion_no_enqueue_wait_to_commit_publish_ms",
+            "completion_no_enqueue_wait_to_commit_publish_p50_ms",
+            "completion_no_enqueue_wait_to_commit_publish_p95_ms",
+        ),
+        (
+            "wait -> encode dequeue",
+            "completion_no_enqueue_wait_to_encode_dequeue_ms",
+            "completion_no_enqueue_wait_to_encode_dequeue_p50_ms",
+            "completion_no_enqueue_wait_to_encode_dequeue_p95_ms",
+        ),
+        (
+            "wait -> command buffer commit",
+            "completion_no_enqueue_wait_to_command_buffer_commit_ms",
+            "completion_no_enqueue_wait_to_command_buffer_commit_p50_ms",
+            "completion_no_enqueue_wait_to_command_buffer_commit_p95_ms",
+        ),
+        (
+            "wait -> next enqueue",
+            "completion_no_enqueue_wait_to_next_enqueue_ms",
+            "completion_no_enqueue_wait_to_next_enqueue_p50_ms",
+            "completion_no_enqueue_wait_to_next_enqueue_p95_ms",
+        ),
+    )
+    largest_row = "n/a"
+    largest_row_value: float | None = None
+    for label, _total_key, p50_key, _p95_key in stage_rows:
+        value = counters.get(p50_key)
+        if isinstance(value, (int, float)):
+            if largest_row_value is None or value > largest_row_value:
+                largest_row = label
+                largest_row_value = value
+
+    if no_enqueue_share is not None and no_enqueue_share >= 80.0:
+        verdict = "under-pipelined-no-enqueue"
+    elif overlap_share is not None and overlap_share >= 20.0:
+        verdict = "overlap-active"
+    else:
+        verdict = "insufficient-p4-overlap-evidence"
+    overlap_share_text = f"{fmt(overlap_share)}%" if overlap_share is not None else "n/a"
+    no_enqueue_share_text = (
+        f"{fmt(no_enqueue_share)}%" if no_enqueue_share is not None else "n/a"
+    )
+
+    lines.append("## Pacing / CPU Stage Derived")
+    lines.append("")
+    lines.append(
+        "Use this block to decide whether an average-FPS change moved the "
+        "P4 overlap problem, the replay/publish stage, or the backend encode "
+        "stage. Current-run improvements should move these rows, not only a "
+        "single leaf counter."
+    )
+    lines.append("")
+    lines.append("| Metric | Value |")
+    lines.append("|---|---:|")
+    lines.append(
+        "| `completion_wait_ms_per_present` | "
+        f"`{ratio_text(completion_wait, present_encoded)}` |"
+    )
+    lines.append(
+        "| `completion_wait_with_enqueue_ms_per_present` | "
+        f"`{ratio_text(completion_with_enqueue, present_encoded)}` |"
+    )
+    lines.append(
+        "| `completion_wait_without_enqueue_ms_per_present` | "
+        f"`{ratio_text(completion_without_enqueue, present_encoded)}` |"
+    )
+    lines.append(
+        "| `completion_wait_overlap_share` | "
+        f"`{overlap_share_text}` |"
+    )
+    lines.append(
+        "| `completion_wait_no_enqueue_share` | "
+        f"`{no_enqueue_share_text}` |"
+    )
+    lines.append(
+        "| `completion_enqueue_while_waiting_per_present` | "
+        f"`{ratio_text(counters.get('completion_enqueue_while_waiting_present'), present_encoded)}` |"
+    )
+    lines.append(
+        "| `commit_chunk_replay_cpu_ms_per_present` | "
+        f"`{ratio_text(counters.get('commit_chunk_replay_cpu_ms'), present_encoded)}` |"
+    )
+    lines.append(
+        "| `commit_chunk_queue_draw_submission_cpu_ms_per_present` | "
+        f"`{ratio_text(counters.get('commit_chunk_queue_draw_submission_cpu_ms'), present_encoded)}` |"
+    )
+    lines.append(
+        "| `d3d9_snapshot_draw_submission_cpu_ms_per_present` | "
+        f"`{ratio_text(counters.get('d3d9_snapshot_draw_submission_cpu_ms'), present_encoded)}` |"
+    )
+    lines.append(
+        "| `d3d9_snapshot_cache_lookup_cpu_ms_per_present` | "
+        f"`{ratio_text(counters.get('d3d9_snapshot_cache_lookup_cpu_ms'), present_encoded)}` |"
+    )
+    lines.append(
+        "| `encode_chunk_cpu_ms_per_present` | "
+        f"`{ratio_text(counters.get('encode_chunk_cpu_ms'), present_encoded)}` |"
+    )
+    lines.append(
+        "| `encode_draw_cpu_ms_per_present` | "
+        f"`{ratio_text(counters.get('encode_draw_cpu_ms'), present_encoded)}` |"
+    )
+    lines.append("")
+
+    lines.append("### No-Enqueue Cumulative Timeline")
+    lines.append("")
+    lines.append(
+        "Cumulative wait-end rows are useful for ordering only. Do not subtract "
+        "their p50/p95 values across rows; each row can have a different sample "
+        "set, and `CommitPublish` may occur before full `commit_chunk` replay "
+        "end for the sampled chunk."
+    )
+    lines.append("")
+    lines.append("| Timeline point | total ms/present | p50 ms | p95 ms |")
+    lines.append("|---|---:|---:|---:|")
+    for label, total_key, p50_key, p95_key in timeline_rows:
+        lines.append(
+            f"| {label} | `{ratio_text(counters.get(total_key), present_encoded)}` | "
+            f"`{fmt(counters.get(p50_key))}` | `{fmt(counters.get(p95_key))}` |"
+        )
+    lines.append("")
+
+    lines.append("### No-Enqueue Commit Chunks Before Publish")
+    lines.append("")
+    lines.append(
+        "Counts are sampled when the first `CommitPublish` after a no-enqueue "
+        "completion wait is observed. Values above `1` mean one or more early "
+        "`commit_chunk` entries or replays did not publish the next command "
+        "buffer for that wait gap."
+    )
+    lines.append("")
+    lines.append("| Event | total | per publish sample | max | p50 | p95 |")
+    lines.append("|---|---:|---:|---:|---:|---:|")
+    publish_samples = counters.get("completion_no_enqueue_wait_to_commit_publish")
+    chunk_count_rows = (
+        (
+            "entries",
+            "completion_no_enqueue_commit_chunk_entries_before_publish",
+            "completion_no_enqueue_commit_chunk_entries_before_publish_max",
+            "completion_no_enqueue_commit_chunk_entries_before_publish_p50",
+            "completion_no_enqueue_commit_chunk_entries_before_publish_p95",
+        ),
+        (
+            "replay starts",
+            "completion_no_enqueue_commit_chunk_replay_starts_before_publish",
+            "completion_no_enqueue_commit_chunk_replay_starts_before_publish_max",
+            "completion_no_enqueue_commit_chunk_replay_starts_before_publish_p50",
+            "completion_no_enqueue_commit_chunk_replay_starts_before_publish_p95",
+        ),
+        (
+            "replay ends",
+            "completion_no_enqueue_commit_chunk_replay_ends_before_publish",
+            "completion_no_enqueue_commit_chunk_replay_ends_before_publish_max",
+            "completion_no_enqueue_commit_chunk_replay_ends_before_publish_p50",
+            "completion_no_enqueue_commit_chunk_replay_ends_before_publish_p95",
+        ),
+    )
+    for label, total_key, max_key, p50_key, p95_key in chunk_count_rows:
+        lines.append(
+            f"| {label} | `{fmt(counters.get(total_key))}` | "
+            f"`{ratio_text(counters.get(total_key), publish_samples)}` | "
+            f"`{fmt(counters.get(max_key))}` | `{fmt(counters.get(p50_key))}` | "
+            f"`{fmt(counters.get(p95_key))}` |"
+        )
+    lines.append("")
+
+    completed_replay_cpu_ms = counters.get(
+        "completion_no_enqueue_commit_chunk_completed_replay_cpu_before_publish_ms"
+    )
+    active_replay_cpu_ms = counters.get(
+        "completion_no_enqueue_commit_chunk_active_replay_cpu_before_publish_ms"
+    )
+    inter_replay_gap_ms = counters.get(
+        "completion_no_enqueue_commit_chunk_inter_replay_gap_before_publish_ms"
+    )
+    publish_wait_ms = counters.get(
+        "completion_no_enqueue_commit_publish_wait_before_publish_ms"
+    )
+    on_before_publish_cpu_ms = counters.get(
+        "completion_no_enqueue_commit_publish_on_before_publish_cpu_ms"
+    )
+    commit_entry_to_publish_ms = counters.get(
+        "completion_no_enqueue_stage_commit_entry_to_publish_ms"
+    )
+    completed_replay_residual_ms = None
+    replay_residual_ms = None
+    completed_replay_share = None
+    active_replay_share = None
+    inter_replay_gap_share = None
+    publish_wait_share = None
+    replay_attributed_share = None
+    replay_gap_attributed_share = None
+    replay_wait_attributed_share = None
+    replay_attributed_ms = None
+    replay_gap_attributed_ms = None
+    replay_wait_attributed_ms = None
+    if (
+        isinstance(completed_replay_cpu_ms, (int, float))
+        and isinstance(commit_entry_to_publish_ms, (int, float))
+    ):
+        completed_replay_residual_ms = (
+            commit_entry_to_publish_ms - completed_replay_cpu_ms
+        )
+        if commit_entry_to_publish_ms > 0:
+            completed_replay_share = (
+                completed_replay_cpu_ms / commit_entry_to_publish_ms * 100.0
+            )
+    if (
+        isinstance(completed_replay_cpu_ms, (int, float))
+        and isinstance(active_replay_cpu_ms, (int, float))
+    ):
+        replay_attributed_ms = completed_replay_cpu_ms + active_replay_cpu_ms
+    if (
+        isinstance(replay_attributed_ms, (int, float))
+        and isinstance(inter_replay_gap_ms, (int, float))
+    ):
+        replay_gap_attributed_ms = replay_attributed_ms + inter_replay_gap_ms
+    if (
+        isinstance(replay_gap_attributed_ms, (int, float))
+        and isinstance(publish_wait_ms, (int, float))
+    ):
+        replay_wait_attributed_ms = replay_gap_attributed_ms + publish_wait_ms
+    if (
+        isinstance(replay_attributed_ms, (int, float))
+        and isinstance(commit_entry_to_publish_ms, (int, float))
+    ):
+        replay_residual_ms = commit_entry_to_publish_ms - replay_attributed_ms
+        if commit_entry_to_publish_ms > 0:
+            replay_attributed_share = (
+                replay_attributed_ms / commit_entry_to_publish_ms * 100.0
+            )
+    replay_wait_residual_ms = None
+    replay_gap_residual_ms = None
+    if (
+        isinstance(replay_gap_attributed_ms, (int, float))
+        and isinstance(commit_entry_to_publish_ms, (int, float))
+    ):
+        replay_gap_residual_ms = commit_entry_to_publish_ms - replay_gap_attributed_ms
+        if commit_entry_to_publish_ms > 0:
+            replay_gap_attributed_share = (
+                replay_gap_attributed_ms / commit_entry_to_publish_ms * 100.0
+            )
+    if (
+        isinstance(replay_wait_attributed_ms, (int, float))
+        and isinstance(commit_entry_to_publish_ms, (int, float))
+    ):
+        replay_wait_residual_ms = commit_entry_to_publish_ms - replay_wait_attributed_ms
+        if commit_entry_to_publish_ms > 0:
+            replay_wait_attributed_share = (
+                replay_wait_attributed_ms / commit_entry_to_publish_ms * 100.0
+            )
+    if (
+        isinstance(active_replay_cpu_ms, (int, float))
+        and isinstance(commit_entry_to_publish_ms, (int, float))
+        and commit_entry_to_publish_ms > 0
+    ):
+        active_replay_share = active_replay_cpu_ms / commit_entry_to_publish_ms * 100.0
+    if (
+        isinstance(inter_replay_gap_ms, (int, float))
+        and isinstance(commit_entry_to_publish_ms, (int, float))
+        and commit_entry_to_publish_ms > 0
+    ):
+        inter_replay_gap_share = inter_replay_gap_ms / commit_entry_to_publish_ms * 100.0
+    if (
+        isinstance(publish_wait_ms, (int, float))
+        and isinstance(commit_entry_to_publish_ms, (int, float))
+        and commit_entry_to_publish_ms > 0
+    ):
+        publish_wait_share = publish_wait_ms / commit_entry_to_publish_ms * 100.0
+    completed_replay_share_text = (
+        f"{fmt(completed_replay_share)}%"
+        if completed_replay_share is not None
+        else "n/a"
+    )
+    active_replay_share_text = (
+        f"{fmt(active_replay_share)}%"
+        if active_replay_share is not None
+        else "n/a"
+    )
+    replay_attributed_share_text = (
+        f"{fmt(replay_attributed_share)}%"
+        if replay_attributed_share is not None
+        else "n/a"
+    )
+    inter_replay_gap_share_text = (
+        f"{fmt(inter_replay_gap_share)}%"
+        if inter_replay_gap_share is not None
+        else "n/a"
+    )
+    replay_gap_attributed_share_text = (
+        f"{fmt(replay_gap_attributed_share)}%"
+        if replay_gap_attributed_share is not None
+        else "n/a"
+    )
+    publish_wait_share_text = (
+        f"{fmt(publish_wait_share)}%"
+        if publish_wait_share is not None
+        else "n/a"
+    )
+    replay_wait_attributed_share_text = (
+        f"{fmt(replay_wait_attributed_share)}%"
+        if replay_wait_attributed_share is not None
+        else "n/a"
+    )
+    lines.append("### No-Enqueue Commit Entry Publish Attribution")
+    lines.append("")
+    lines.append(
+        "Completed replay CPU is the accumulated CPU time of chunks whose replay "
+        "fully ended before the first `CommitPublish` after a no-enqueue wait. "
+        "Active replay CPU is the current present-bearing chunk's replay work "
+        "observed immediately before the first publish. Inter-replay gap is the "
+        "wall time between a completed chunk replay and the next `commit_chunk` "
+        "entry before that first publish. Publish wait is the queue `writeCv` wait "
+        "immediately before that first publish. The residual keeps non-wait "
+        "publish formation and unattributed handoff time as the next target. "
+        "The `onBeforePublish` callback is sampled separately because it runs "
+        "after this publish timestamp and belongs to the publish -> encode-dequeue "
+        "window."
+    )
+    lines.append("")
+    lines.append("| Metric | total ms/present | p50 ms | p95 ms |")
+    lines.append("|---|---:|---:|---:|")
+    lines.append(
+        "| commit entry -> publish | "
+        f"`{ratio_text(commit_entry_to_publish_ms, present_encoded)}` | "
+        f"`{fmt(counters.get('completion_no_enqueue_stage_commit_entry_to_publish_p50_ms'))}` | "
+        f"`{fmt(counters.get('completion_no_enqueue_stage_commit_entry_to_publish_p95_ms'))}` |"
+    )
+    lines.append(
+        "| completed replay CPU before publish | "
+        f"`{ratio_text(completed_replay_cpu_ms, present_encoded)}` | "
+        f"`{fmt(counters.get('completion_no_enqueue_commit_chunk_completed_replay_cpu_before_publish_p50_ms'))}` | "
+        f"`{fmt(counters.get('completion_no_enqueue_commit_chunk_completed_replay_cpu_before_publish_p95_ms'))}` |"
+    )
+    lines.append(
+        "| active replay CPU before publish | "
+        f"`{ratio_text(active_replay_cpu_ms, present_encoded)}` | "
+        f"`{fmt(counters.get('completion_no_enqueue_commit_chunk_active_replay_cpu_before_publish_p50_ms'))}` | "
+        f"`{fmt(counters.get('completion_no_enqueue_commit_chunk_active_replay_cpu_before_publish_p95_ms'))}` |"
+    )
+    lines.append(
+        "| inter-replay producer gap before publish | "
+        f"`{ratio_text(inter_replay_gap_ms, present_encoded)}` | "
+        f"`{fmt(counters.get('completion_no_enqueue_commit_chunk_inter_replay_gap_before_publish_p50_ms'))}` | "
+        f"`{fmt(counters.get('completion_no_enqueue_commit_chunk_inter_replay_gap_before_publish_p95_ms'))}` |"
+    )
+    lines.append(
+        "| commit publish wait before publish | "
+        f"`{ratio_text(publish_wait_ms, present_encoded)}` | "
+        f"`{fmt(counters.get('completion_no_enqueue_commit_publish_wait_before_publish_p50_ms'))}` | "
+        f"`{fmt(counters.get('completion_no_enqueue_commit_publish_wait_before_publish_p95_ms'))}` |"
+    )
+    lines.append(
+        "| post-publish onBeforePublish CPU | "
+        f"`{ratio_text(on_before_publish_cpu_ms, present_encoded)}` | "
+        f"`{fmt(counters.get('completion_no_enqueue_commit_publish_on_before_publish_cpu_p50_ms'))}` | "
+        f"`{fmt(counters.get('completion_no_enqueue_commit_publish_on_before_publish_cpu_p95_ms'))}` |"
+    )
+    lines.append(
+        "| residual after completed replay only | "
+        f"`{ratio_text(completed_replay_residual_ms, present_encoded)}` | "
+        "`n/a` | `n/a` |"
+    )
+    lines.append(
+        "| residual after completed + active replay | "
+        f"`{ratio_text(replay_residual_ms, present_encoded)}` | "
+        "`n/a` | `n/a` |"
+    )
+    lines.append(
+        "| residual after completed + active replay + inter-replay gap | "
+        f"`{ratio_text(replay_gap_residual_ms, present_encoded)}` | "
+        "`n/a` | `n/a` |"
+    )
+    lines.append(
+        "| residual after completed + active replay + inter-replay gap + publish wait | "
+        f"`{ratio_text(replay_wait_residual_ms, present_encoded)}` | "
+        "`n/a` | `n/a` |"
+    )
+    lines.append(
+        "| completed replay share of commit entry -> publish | "
+        f"`{completed_replay_share_text}` | `n/a` | `n/a` |"
+    )
+    lines.append(
+        "| active replay share of commit entry -> publish | "
+        f"`{active_replay_share_text}` | `n/a` | `n/a` |"
+    )
+    lines.append(
+        "| inter-replay producer gap share of commit entry -> publish | "
+        f"`{inter_replay_gap_share_text}` | `n/a` | `n/a` |"
+    )
+    lines.append(
+        "| commit publish wait share of commit entry -> publish | "
+        f"`{publish_wait_share_text}` | `n/a` | `n/a` |"
+    )
+    lines.append(
+        "| completed + active replay share of commit entry -> publish | "
+        f"`{replay_attributed_share_text}` | `n/a` | `n/a` |"
+    )
+    lines.append(
+        "| completed + active replay + inter-replay gap share of commit entry -> publish | "
+        f"`{replay_gap_attributed_share_text}` | `n/a` | `n/a` |"
+    )
+    lines.append(
+        "| completed + active replay + inter-replay gap + publish wait share of commit entry -> publish | "
+        f"`{replay_wait_attributed_share_text}` | `n/a` | `n/a` |"
+    )
+    lines.append("")
+
+    lines.append("### No-Enqueue Before-Publish Chunk Shape")
+    lines.append("")
+    lines.append(
+        "These rows classify the validated `commit_chunk` records replayed before "
+        "the first publish after a no-enqueue completion wait. This separates "
+        "producer activity that is building draw work from state/constant-only "
+        "or present-bearing chunks."
+    )
+    lines.append("")
+    shape_samples = counters.get(
+        "completion_no_enqueue_commit_chunk_shape_samples_before_publish"
+    )
+    lines.append("| Chunk metric | total | per publish sample | per scanned chunk |")
+    lines.append("|---|---:|---:|---:|")
+    chunk_shape_rows = (
+        (
+            "scanned chunks",
+            "completion_no_enqueue_commit_chunk_shape_samples_before_publish",
+        ),
+        (
+            "chunks with draw",
+            "completion_no_enqueue_commit_chunk_chunks_with_draw_before_publish",
+        ),
+        (
+            "chunks with present",
+            "completion_no_enqueue_commit_chunk_chunks_with_present_before_publish",
+        ),
+        (
+            "state/const-only chunks",
+            "completion_no_enqueue_commit_chunk_chunks_state_const_only_before_publish",
+        ),
+        (
+            "no-draw/no-present chunks",
+            "completion_no_enqueue_commit_chunk_chunks_no_draw_no_present_before_publish",
+        ),
+    )
+    for label, total_key in chunk_shape_rows:
+        value = counters.get(total_key)
+        lines.append(
+            f"| {label} | `{fmt(value)}` | `{ratio_text(value, publish_samples)}` | "
+            f"`{ratio_text(value, shape_samples)}` |"
+        )
+    lines.append("")
+    lines.append("| Record metric | total | per publish sample | per scanned chunk |")
+    lines.append("|---|---:|---:|---:|")
+    record_shape_rows = (
+        (
+            "all records",
+            "completion_no_enqueue_commit_chunk_records_before_publish",
+        ),
+        (
+            "draw records",
+            "completion_no_enqueue_commit_chunk_draw_records_before_publish",
+        ),
+        (
+            "const records",
+            "completion_no_enqueue_commit_chunk_const_records_before_publish",
+        ),
+        (
+            "apply-state records",
+            "completion_no_enqueue_commit_chunk_apply_state_records_before_publish",
+        ),
+        (
+            "clear records",
+            "completion_no_enqueue_commit_chunk_clear_records_before_publish",
+        ),
+        (
+            "present records",
+            "completion_no_enqueue_commit_chunk_present_records_before_publish",
+        ),
+        (
+            "surface/copy records",
+            "completion_no_enqueue_commit_chunk_surface_records_before_publish",
+        ),
+        (
+            "query records",
+            "completion_no_enqueue_commit_chunk_query_records_before_publish",
+        ),
+        (
+            "other records",
+            "completion_no_enqueue_commit_chunk_other_records_before_publish",
+        ),
+    )
+    for label, total_key in record_shape_rows:
+        value = counters.get(total_key)
+        lines.append(
+            f"| {label} | `{fmt(value)}` | `{ratio_text(value, publish_samples)}` | "
+            f"`{ratio_text(value, shape_samples)}` |"
+        )
+    lines.append("")
+    lines.append(
+        "| Records per scanned chunk | max | p50 | p95 |"
+    )
+    lines.append("|---|---:|---:|---:|")
+    lines.append(
+        "| record count | "
+        f"`{fmt(counters.get('completion_no_enqueue_commit_chunk_records_before_publish_max'))}` | "
+        f"`{fmt(counters.get('completion_no_enqueue_commit_chunk_records_before_publish_p50'))}` | "
+        f"`{fmt(counters.get('completion_no_enqueue_commit_chunk_records_before_publish_p95'))}` |"
+    )
+    lines.append("")
+
+    lines.append("### Exposed No-Enqueue Stage Shape")
+    lines.append("")
+    lines.append("| Stage | total ms/present | p50 ms | p95 ms |")
+    lines.append("|---|---:|---:|---:|")
+    for label, total_key, p50_key, p95_key in stage_rows:
+        lines.append(
+            f"| {label} | `{ratio_text(counters.get(total_key), present_encoded)}` | "
+            f"`{fmt(counters.get(p50_key))}` | `{fmt(counters.get(p95_key))}` |"
+        )
+    lines.append("")
+
+    lines.append("### Pacing Verdict")
+    lines.append("")
+    lines.append(f"- Verdict: `{verdict}`.")
+    lines.append(f"- Largest p50 no-enqueue row: `{largest_row}`.")
+    lines.append("")
+
+
+def append_pe_recorder_gap_call_derived(
+    lines: list[str],
+    pe_counters: dict[str, Any],
+    present_encoded: Any,
+) -> None:
+    if not isinstance(pe_counters, dict) or not pe_counters:
+        return
+
+    focus_rows = (
+        (
+            "draw_indexed -> set_vs_const_f",
+            "gapDrawIndexedVsConstF",
+            pe_counters.get("interAppendTop1Ms"),
+        ),
+        (
+            "draw_indexed -> apply_state",
+            "gapDrawIndexedApplyState",
+            pe_counters.get("interAppendTop2Ms"),
+        ),
+        (
+            "draw_indexed -> draw_indexed",
+            "gapDrawIndexedDrawIndexed",
+            pe_counters.get("interAppendTop3Ms"),
+        ),
+        (
+            "draw_indexed -> set_ps_const_f",
+            "gapDrawIndexedPsConstF",
+            pe_counters.get("interAppendTop4Ms"),
+        ),
+    )
+    if not any(
+        pe_counters.get(f"{prefix}Top1Samples")
+        or pe_counters.get(f"{prefix}Top1Ms")
+        for _, prefix, _ in focus_rows
+    ):
+        return
+
+    lines.append("## PE Recorder Inter-Append Call-Family Attribution")
+    lines.append("")
+    lines.append(
+        "These rows attribute each focused inter-append pair gap to the PE "
+        "D3D9 call family active when the next appendable record was emitted. "
+        "Use this after setter-body timers reject a direct CPU owner."
+    )
+    lines.append("")
+    lines.append(
+        "| Pair | pair ms/present | rank | call family | samples | ms | "
+        "ms/present | max ms |"
+    )
+    lines.append("|---|---:|---:|---|---:|---:|---:|---:|")
+    for pair_label, prefix, pair_ms in focus_rows:
+        for rank in (1, 2):
+            samples = pe_counters.get(f"{prefix}Top{rank}Samples")
+            total_ms = pe_counters.get(f"{prefix}Top{rank}Ms")
+            family = pe_counters.get(f"{prefix}Top{rank}CallFamily")
+            max_ms = pe_counters.get(f"{prefix}Top{rank}MaxMs")
+            if not samples and not total_ms:
+                continue
+            lines.append(
+                f"| `{pair_label}` | `{ratio_text(pair_ms, present_encoded)}` | "
+                f"`{rank}` | `{family if family is not None else 'unknown'}` | "
+                f"`{fmt(samples)}` | `{fmt(total_ms)}` | "
+                f"`{ratio_text(total_ms, present_encoded)}` | `{fmt(max_ms)}` |"
+            )
+    lines.append("")
+
+    if any(
+        pe_counters.get(f"{prefix}PhaseSamples")
+        or pe_counters.get(f"{prefix}PreCallMs")
+        or pe_counters.get(f"{prefix}InsideCallMs")
+        for _, prefix, _ in focus_rows
+    ):
+        lines.append("### Focused Inter-Append Phase Split")
+        lines.append("")
+        lines.append(
+            "This split divides each focused gap at the next PE D3D9 call "
+            "entry. `pre-call` is time after the prior append returned and "
+            "before the next D3D9 call entered; `inside-call` is time from "
+            "that D3D9 call entry to the next append."
+        )
+        lines.append("")
+        lines.append(
+            "| Pair | split samples | pre-call ms | pre-call ms/present | "
+            "inside-call ms | inside-call ms/present | pre-call share | "
+            "inside-call share | pre max ms | inside max ms |"
+        )
+        lines.append("|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|")
+        for pair_label, prefix, _ in focus_rows:
+            samples = pe_counters.get(f"{prefix}PhaseSamples")
+            pre_ms = pe_counters.get(f"{prefix}PreCallMs")
+            inside_ms = pe_counters.get(f"{prefix}InsideCallMs")
+            if not samples and not pre_ms and not inside_ms:
+                continue
+            phase_total = None
+            if isinstance(pre_ms, (int, float)) and isinstance(inside_ms, (int, float)):
+                phase_total = pre_ms + inside_ms
+            lines.append(
+                f"| `{pair_label}` | `{fmt(samples)}` | "
+                f"`{fmt(pre_ms)}` | `{ratio_text(pre_ms, present_encoded)}` | "
+                f"`{fmt(inside_ms)}` | `{ratio_text(inside_ms, present_encoded)}` | "
+                f"`{pct(pre_ms, phase_total)}` | `{pct(inside_ms, phase_total)}` | "
+                f"`{fmt(pe_counters.get(f'{prefix}PreCallMaxMs'))}` | "
+                f"`{fmt(pe_counters.get(f'{prefix}InsideCallMaxMs'))}` |"
+            )
+        lines.append("")
+
+    if any(
+        pe_counters.get(f"{prefix}TailSplitSamples")
+        or pe_counters.get(f"{prefix}PrevCallTailMs")
+        or pe_counters.get(f"{prefix}BetweenCallsMs")
+        for _, prefix, _ in focus_rows
+    ):
+        lines.append("### Focused Pre-Call Tail Split")
+        lines.append("")
+        lines.append(
+            "This split divides the `pre-call` phase again when the previous "
+            "append happened inside a tracked `DrawIndexedPrimitive` call. "
+            "`prev-call-tail` is time after the previous append returned but "
+            "before that draw call returned; `between-calls` is time from the "
+            "draw return to the next PE D3D9 call entry."
+        )
+        lines.append("")
+        lines.append(
+            "| Pair | split samples | prev-call-tail ms | "
+            "prev-call-tail ms/present | between-calls ms | "
+            "between-calls ms/present | prev-call-tail share | "
+            "between-calls share | tail max ms | between max ms |"
+        )
+        lines.append("|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|")
+        for pair_label, prefix, _ in focus_rows:
+            samples = pe_counters.get(f"{prefix}TailSplitSamples")
+            tail_ms = pe_counters.get(f"{prefix}PrevCallTailMs")
+            between_ms = pe_counters.get(f"{prefix}BetweenCallsMs")
+            if not samples and not tail_ms and not between_ms:
+                continue
+            split_total = None
+            if isinstance(tail_ms, (int, float)) and isinstance(between_ms, (int, float)):
+                split_total = tail_ms + between_ms
+            lines.append(
+                f"| `{pair_label}` | `{fmt(samples)}` | "
+                f"`{fmt(tail_ms)}` | `{ratio_text(tail_ms, present_encoded)}` | "
+                f"`{fmt(between_ms)}` | `{ratio_text(between_ms, present_encoded)}` | "
+                f"`{pct(tail_ms, split_total)}` | `{pct(between_ms, split_total)}` | "
+                f"`{fmt(pe_counters.get(f'{prefix}PrevCallTailMaxMs'))}` | "
+                f"`{fmt(pe_counters.get(f'{prefix}BetweenCallsMaxMs'))}` |"
+            )
+        lines.append("")
+
+    if any(
+        pe_counters.get(f"{prefix}BetweenTop1Samples")
+        or pe_counters.get(f"{prefix}BetweenTop2Samples")
+        for _, prefix, _ in focus_rows
+    ):
+        lines.append("### Focused Between-Calls Entry Families")
+        lines.append("")
+        lines.append(
+            "This table counts PE D3D9 call entries observed after the "
+            "previous `DrawIndexedPrimitive` returned and before the terminal "
+            "append-producing D3D9 call. The terminal call itself is removed "
+            "from the counts."
+        )
+        lines.append("")
+        lines.append(
+            "| Pair | rank | call family | entries | entries/window | "
+            "entries/present |"
+        )
+        lines.append("|---|---:|---|---:|---:|---:|")
+        for pair_label, prefix, _ in focus_rows:
+            windows = pe_counters.get(f"{prefix}TailSplitSamples")
+            for rank in (1, 2):
+                entries = pe_counters.get(f"{prefix}BetweenTop{rank}Samples")
+                family = pe_counters.get(
+                    f"{prefix}BetweenTop{rank}CallFamily")
+                if not entries:
+                    continue
+                lines.append(
+                    f"| `{pair_label}` | `{rank}` | "
+                    f"`{family if family is not None else 'unknown'}` | "
+                    f"`{fmt(entries)}` | `{ratio_text(entries, windows)}` | "
+                    f"`{ratio_text(entries, present_encoded)}` |"
+                )
+        lines.append("")
+
+    if any(
+        pe_counters.get(f"{prefix}BetweenTop1CallNameSamples")
+        or pe_counters.get(f"{prefix}BetweenTop2CallNameSamples")
+        for _, prefix, _ in focus_rows
+    ):
+        lines.append("### Focused Between-Calls Entry Names")
+        lines.append("")
+        lines.append(
+            "This table uses the same window as the family table, but keeps "
+            "a fixed exact-call-name bucket when the call is known. It helps "
+            "split `unknown` families and confirms whether constant traffic is "
+            "float/int/bool setter traffic."
+        )
+        lines.append("")
+        lines.append(
+            "| Pair | rank | call name | entries | entries/window | "
+            "entries/present |"
+        )
+        lines.append("|---|---:|---|---:|---:|---:|")
+        for pair_label, prefix, _ in focus_rows:
+            windows = pe_counters.get(f"{prefix}TailSplitSamples")
+            for rank in (1, 2):
+                entries = pe_counters.get(
+                    f"{prefix}BetweenTop{rank}CallNameSamples")
+                call_name = pe_counters.get(
+                    f"{prefix}BetweenTop{rank}CallName")
+                if not entries:
+                    continue
+                lines.append(
+                    f"| `{pair_label}` | `{rank}` | "
+                    f"`{call_name if call_name is not None else 'unknown'}` | "
+                    f"`{fmt(entries)}` | `{ratio_text(entries, windows)}` | "
+                    f"`{ratio_text(entries, present_encoded)}` |"
+                )
+        lines.append("")
+
+
+REPLAY_SNAPSHOT_CPU_STAGE_ROWS: tuple[tuple[str, str], ...] = (
+    ("replay", "commit_chunk_replay_cpu_ms"),
+    ("replay", "commit_chunk_replay_draw_record_cpu_ms"),
+    ("replay", "commit_chunk_replay_non_draw_record_cpu_ms"),
+    ("replay", "commit_chunk_replay_pending_flush_cpu_ms"),
+    ("replay", "commit_chunk_draw_batch_submit_cpu_ms"),
+    ("submission", "commit_chunk_queue_draw_submission_cpu_ms"),
+    ("submission", "commit_chunk_queue_draw_submission_snapshot_cpu_ms"),
+    ("submission", "commit_chunk_queue_draw_submission_emplace_cpu_ms"),
+    ("submission", "commit_chunk_draw_run_submit_cpu_ms"),
+    ("submission", "commit_chunk_draw_run_build_cpu_ms"),
+    ("submission", "commit_chunk_draw_run_scan_cpu_ms"),
+    ("batch-submit", "submit_draw_run_batch_append_cpu_ms"),
+    ("batch-submit", "submit_draw_run_batch_append_uniform_cpu_ms"),
+    ("batch-submit", "submit_draw_run_batch_append_state_cpu_ms"),
+    ("batch-submit", "submit_draw_run_batch_compat_scan_cpu_ms"),
+    ("batch-submit", "submit_draw_run_batch_binding_snapshot_cpu_ms"),
+    ("snapshot", "d3d9_snapshot_draw_submission_cpu_ms"),
+    ("snapshot", "d3d9_snapshot_cache_lookup_cpu_ms"),
+    ("snapshot", "d3d9_snapshot_cache_batch_hit_cpu_ms"),
+    ("snapshot", "d3d9_snapshot_cache_batch_miss_cpu_ms"),
+    ("snapshot-miss", "d3d9_snapshot_cache_batch_miss_uniform_build_cpu_ms"),
+    ("snapshot-miss", "d3d9_snapshot_cache_batch_miss_uniform_build_hash_cpu_ms"),
+    ("snapshot-miss", "d3d9_snapshot_cache_batch_miss_uniform_build_vs_const_hash_cpu_ms"),
+    ("snapshot-miss", "d3d9_snapshot_cache_batch_miss_uniform_build_ps_const_hash_cpu_ms"),
+    ("snapshot-miss", "d3d9_snapshot_cache_batch_miss_uniform_build_nonconst_hash_cpu_ms"),
+    ("snapshot-miss", "d3d9_snapshot_cache_batch_miss_hot_build_cpu_ms"),
+    ("snapshot-miss", "d3d9_snapshot_cache_batch_miss_hot_build_key_cpu_ms"),
+    ("snapshot-miss", "d3d9_snapshot_cache_batch_miss_hot_build_render_state_cpu_ms"),
+    ("snapshot-miss", "d3d9_snapshot_cache_batch_miss_hot_build_texture_stage_state_cpu_ms"),
+    ("snapshot-miss", "d3d9_snapshot_cache_batch_miss_hot_build_sampler_state_cpu_ms"),
+    ("snapshot-miss", "d3d9_snapshot_cache_batch_miss_hot_build_tail_copy_cpu_ms"),
+    ("snapshot-miss", "d3d9_snapshot_cache_batch_miss_shader_layout_cpu_ms"),
+)
+
+
+def append_replay_snapshot_cpu_derived(
+    lines: list[str],
+    counters: dict[str, Any],
+    present_encoded: Any,
+) -> None:
+    replay_cpu = counters.get("commit_chunk_replay_cpu_ms")
+    queue_submission = counters.get("commit_chunk_queue_draw_submission_cpu_ms")
+    queue_snapshot = counters.get("commit_chunk_queue_draw_submission_snapshot_cpu_ms")
+    snapshot = counters.get("d3d9_snapshot_draw_submission_cpu_ms")
+    cache_lookup = counters.get("d3d9_snapshot_cache_lookup_cpu_ms")
+    batch_miss = counters.get("d3d9_snapshot_cache_batch_miss_cpu_ms")
+    batch_hit = counters.get("d3d9_snapshot_cache_batch_hit_cpu_ms")
+    pending_flush = counters.get("commit_chunk_replay_pending_flush_cpu_ms")
+    draw_batch_submit = counters.get("commit_chunk_draw_batch_submit_cpu_ms")
+
+    stage_rows: list[tuple[str, str, int | float]] = []
+    for scope, key in REPLAY_SNAPSHOT_CPU_STAGE_ROWS:
+        value = counters.get(key)
+        if isinstance(value, (int, float)) and value > 0:
+            stage_rows.append((scope, key, value))
+    stage_rows.sort(key=lambda row: row[2], reverse=True)
+
+    largest_key = stage_rows[0][1] if stage_rows else "n/a"
+    largest_value = stage_rows[0][2] if stage_rows else None
+
+    lines.append("## Replay / Snapshot CPU Derived")
+    lines.append("")
+    lines.append(
+        "Use this block when P4 exposes `commit entry -> publish` or when "
+        "`commit_chunk_replay_cpu_ms` is the next CPU owner. Rows mix parent "
+        "and child counters for ranking; do not sum them."
+    )
+    lines.append("")
+    lines.append("| Metric | Value |")
+    lines.append("|---|---:|")
+    lines.append(
+        "| `commit_chunk_replay_cpu_ms_per_present` | "
+        f"`{ratio_text(replay_cpu, present_encoded)}` |"
+    )
+    lines.append(
+        "| `commit_chunk_queue_draw_submission_cpu_ms_per_present` | "
+        f"`{ratio_text(queue_submission, present_encoded)}` |"
+    )
+    lines.append(
+        "| `commit_chunk_queue_draw_submission_snapshot_cpu_ms_per_present` | "
+        f"`{ratio_text(queue_snapshot, present_encoded)}` |"
+    )
+    lines.append(
+        "| `d3d9_snapshot_draw_submission_cpu_ms_per_present` | "
+        f"`{ratio_text(snapshot, present_encoded)}` |"
+    )
+    lines.append(
+        "| `d3d9_snapshot_cache_lookup_cpu_ms_per_present` | "
+        f"`{ratio_text(cache_lookup, present_encoded)}` |"
+    )
+    lines.append(
+        "| `d3d9_snapshot_cache_batch_miss_cpu_ms_per_present` | "
+        f"`{ratio_text(batch_miss, present_encoded)}` |"
+    )
+    lines.append(
+        "| `queue_submission_snapshot_share` | "
+        f"`{pct(queue_snapshot, queue_submission)}` |"
+    )
+    lines.append(
+        "| `snapshot_cache_lookup_share` | "
+        f"`{pct(cache_lookup, snapshot)}` |"
+    )
+    lines.append(
+        "| `snapshot_batch_miss_share_of_lookup` | "
+        f"`{pct(batch_miss, cache_lookup)}` |"
+    )
+    lines.append(
+        "| `snapshot_batch_hit_share_of_lookup` | "
+        f"`{pct(batch_hit, cache_lookup)}` |"
+    )
+    lines.append(
+        "| `pending_flush_share_of_replay` | "
+        f"`{pct(pending_flush, replay_cpu)}` |"
+    )
+    lines.append(
+        "| `draw_batch_submit_share_of_replay` | "
+        f"`{pct(draw_batch_submit, replay_cpu)}` |"
+    )
+    lines.append("")
+
+    lines.append("### Replay / Snapshot Candidate Ranking")
+    lines.append("")
+    lines.append(
+        "| Rank | Scope | Counter | total ms | ms/present | "
+        "share of replay | share of queue submission | share of snapshot |"
+    )
+    lines.append("|---:|---|---|---:|---:|---:|---:|---:|")
+    for index, (scope, key, value) in enumerate(stage_rows[:16], start=1):
+        lines.append(
+            f"| {index} | {scope} | `{key}` | `{fmt(value)}` | "
+            f"`{ratio_text(value, present_encoded)}` | "
+            f"`{pct(value, replay_cpu)}` | `{pct(value, queue_submission)}` | "
+            f"`{pct(value, snapshot)}` |"
+        )
+    lines.append("")
+
+    lines.append("### Replay / Snapshot Verdict")
+    lines.append("")
+    lines.append(f"- Largest replay/snapshot row: `{largest_key}`.")
+    if largest_value is not None:
+        lines.append(
+            "- Largest replay/snapshot row per present: "
+            f"`{ratio_text(largest_value, present_encoded)}ms`."
+        )
+    lines.append("")
+
+
+ENCODE_CPU_STAGE_ROWS: tuple[tuple[str, str], ...] = (
+    ("slot", "encode_slot_pso_prefetch_cpu_ms"),
+    ("pso", "encode_slot_pso_prefetch_draw_key_resolve_cpu_ms"),
+    ("pso", "encode_slot_pso_prefetch_draw_resolve_variant_key_cpu_ms"),
+    ("pso", "encode_slot_pso_prefetch_draw_lookup_cpu_ms"),
+    ("pso", "encode_slot_pso_prefetch_depth_lookup_cpu_ms"),
+    ("draw", "encode_draw_argbuf_setup_cpu_ms"),
+    ("argbuf", "encode_draw_argbuf_open_cpu_ms"),
+    ("argbuf", "encode_draw_argbuf_cbuf_update_cpu_ms"),
+    ("argbuf", "encode_draw_argbuf_cbuf_update_vs_cpu_ms"),
+    ("argbuf", "encode_draw_argbuf_cbuf_update_ps_cpu_ms"),
+    ("binding", "encode_draw_binding_packet_cpu_ms"),
+    ("binding", "encode_draw_binding_packet_plan_cpu_ms"),
+    ("binding", "encode_draw_binding_packet_cache_cpu_ms"),
+    ("stream", "encode_draw_stream_bind_cpu_ms"),
+    ("stream", "encode_draw_texture_sampler_bind_cpu_ms"),
+    ("stream", "encode_draw_vertex_stream_bind_cpu_ms"),
+    ("stream", "encode_draw_index_setup_cpu_ms"),
+    ("pipeline", "encode_draw_pipeline_lookup_cpu_ms"),
+    ("draw", "encode_draw_issue_cpu_ms"),
+    ("draw", "encode_draw_fvf_decode_cpu_ms"),
+    ("draw", "encode_draw_raster_state_cpu_ms"),
+)
+
+
+def append_encode_cpu_derived(
+    lines: list[str],
+    counters: dict[str, Any],
+    present_encoded: Any,
+) -> None:
+    encode_chunk = counters.get("encode_chunk_cpu_ms")
+    encode_draw = counters.get("encode_draw_cpu_ms")
+    pso_prefetch = counters.get("encode_slot_pso_prefetch_cpu_ms")
+    stage_rows: list[tuple[str, str, int | float]] = []
+    for scope, key in ENCODE_CPU_STAGE_ROWS:
+        value = counters.get(key)
+        if isinstance(value, (int, float)) and value > 0:
+            stage_rows.append((scope, key, value))
+    stage_rows.sort(key=lambda row: row[2], reverse=True)
+
+    largest_key = stage_rows[0][1] if stage_rows else "n/a"
+    largest_value = stage_rows[0][2] if stage_rows else None
+
+    lines.append("## Encode CPU Derived")
+    lines.append("")
+    lines.append(
+        "Use this block after the P4 summary names "
+        "`encode dequeue -> command buffer commit` as the largest exposed row. "
+        "Rows intentionally mix coarse owners and child counters for ranking; "
+        "do not sum them."
+    )
+    lines.append("")
+    lines.append("| Metric | Value |")
+    lines.append("|---|---:|")
+    lines.append(
+        "| `encode_chunk_cpu_ms_per_present` | "
+        f"`{ratio_text(encode_chunk, present_encoded)}` |"
+    )
+    lines.append(
+        "| `encode_draw_cpu_ms_per_present` | "
+        f"`{ratio_text(encode_draw, present_encoded)}` |"
+    )
+    lines.append(
+        "| `encode_slot_pso_prefetch_cpu_ms_per_present` | "
+        f"`{ratio_text(pso_prefetch, present_encoded)}` |"
+    )
+    lines.append(
+        "| `encode_draw_share_of_encode_chunk` | "
+        f"`{pct(encode_draw, encode_chunk)}` |"
+    )
+    lines.append("")
+
+    lines.append("### Encode Candidate Ranking")
+    lines.append("")
+    lines.append(
+        "| Rank | Scope | Counter | total ms | ms/present | "
+        "share of encode_chunk | share of encode_draw |"
+    )
+    lines.append("|---:|---|---|---:|---:|---:|---:|")
+    for index, (scope, key, value) in enumerate(stage_rows[:12], start=1):
+        draw_share = pct(value, encode_draw) if scope != "slot" and scope != "pso" else "n/a"
+        lines.append(
+            f"| {index} | {scope} | `{key}` | `{fmt(value)}` | "
+            f"`{ratio_text(value, present_encoded)}` | "
+            f"`{pct(value, encode_chunk)}` | `{draw_share}` |"
+        )
+    lines.append("")
+
+    lines.append("### Encode Verdict")
+    lines.append("")
+    lines.append(f"- Largest encode-stage row: `{largest_key}`.")
+    if largest_value is not None:
+        lines.append(
+            "- Largest encode-stage row per present: "
+            f"`{ratio_text(largest_value, present_encoded)}ms`."
+        )
+    lines.append("")
+
+
+ARGBUF_CPU_STAGE_ROWS: tuple[tuple[str, str], ...] = (
+    ("setup", "encode_draw_argbuf_setup_cpu_ms"),
+    ("open", "encode_draw_argbuf_open_cpu_ms"),
+    ("open", "encode_draw_argbuf_open_call_cpu_ms"),
+    ("open", "encode_draw_argbuf_open_reserve_cpu_ms"),
+    ("open", "encode_draw_argbuf_open_set_argument_buffer_cpu_ms"),
+    ("open", "encode_draw_argbuf_reopen_post_cpu_ms"),
+    ("open", "encode_draw_argbuf_reopen_table_probe_cpu_ms"),
+    ("open", "encode_draw_argbuf_reopen_table_shadow_store_cpu_ms"),
+    ("open", "encode_draw_argbuf_reopen_byte_account_cpu_ms"),
+    ("open", "encode_draw_argbuf_reopen_cbuf_cache_probe_cpu_ms"),
+    ("open", "encode_draw_argbuf_reopen_cbuf_dirty_scan_cpu_ms"),
+    ("open", "encode_draw_argbuf_reopen_cbuf_force_dirty_cpu_ms"),
+    ("open", "encode_draw_argbuf_table_bind_cpu_ms"),
+    ("cbuf", "encode_draw_argbuf_cbuf_update_cpu_ms"),
+    ("cbuf", "encode_draw_argbuf_cbuf_update_vs_cpu_ms"),
+    ("cbuf", "encode_draw_argbuf_cbuf_update_ps_cpu_ms"),
+    ("cbuf", "encode_draw_argbuf_cbuf_update_ffp_vs_cpu_ms"),
+    ("cbuf", "encode_draw_argbuf_cbuf_update_ffp_ps_cpu_ms"),
+    ("cbuf", "encode_draw_argbuf_cbuf_build_cpu_ms"),
+    ("cbuf", "encode_draw_argbuf_cbuf_upload_cpu_ms"),
+    ("cbuf", "encode_draw_argbuf_cbuf_setbuffer_cpu_ms"),
+    ("cbuf", "encode_draw_argbuf_cbuf_cache_merge_cpu_ms"),
+    ("cbuf", "encode_draw_argbuf_cbuf_cached_repoint_cpu_ms"),
+    ("cbuf", "encode_draw_argbuf_cbuf_content_probe_cpu_ms"),
+    ("cbuf", "encode_draw_argbuf_cbuf_binding_write_cpu_ms"),
+)
+
+
+def append_argbuf_cpu_derived(
+    lines: list[str],
+    counters: dict[str, Any],
+    present_encoded: Any,
+) -> None:
+    argbuf_setup = counters.get("encode_draw_argbuf_setup_cpu_ms")
+    argbuf_open = counters.get("encode_draw_argbuf_open_cpu_ms")
+    cbuf_update = counters.get("encode_draw_argbuf_cbuf_update_cpu_ms")
+    stage_rows: list[tuple[str, str, int | float]] = []
+    for scope, key in ARGBUF_CPU_STAGE_ROWS:
+        value = counters.get(key)
+        if isinstance(value, (int, float)) and value > 0:
+            stage_rows.append((scope, key, value))
+    stage_rows.sort(key=lambda row: row[2], reverse=True)
+    largest_key = stage_rows[0][1] if stage_rows else "n/a"
+    largest_value = stage_rows[0][2] if stage_rows else None
+
+    lines.append("## Argbuf CPU Derived")
+    lines.append("")
+    lines.append(
+        "Use this block when `Encode CPU Derived` names "
+        "`encode_draw_argbuf_setup_cpu_ms` as the top local owner. Rows mix "
+        "argbuf parents and children for triage; do not sum them."
+    )
+    lines.append("")
+    lines.append("| Metric | Value |")
+    lines.append("|---|---:|")
+    lines.append(
+        "| `argbuf_setup_cpu_ms_per_present` | "
+        f"`{ratio_text(argbuf_setup, present_encoded)}` |"
+    )
+    lines.append(
+        "| `argbuf_open_cpu_ms_per_present` | "
+        f"`{ratio_text(argbuf_open, present_encoded)}` |"
+    )
+    lines.append(
+        "| `argbuf_cbuf_update_cpu_ms_per_present` | "
+        f"`{ratio_text(cbuf_update, present_encoded)}` |"
+    )
+    lines.append(
+        "| `argbuf_open_share_of_setup` | "
+        f"`{pct(argbuf_open, argbuf_setup)}` |"
+    )
+    lines.append(
+        "| `argbuf_cbuf_update_share_of_setup` | "
+        f"`{pct(cbuf_update, argbuf_setup)}` |"
+    )
+    lines.append("")
+
+    lines.append("### Argbuf Candidate Ranking")
+    lines.append("")
+    lines.append("| Rank | Scope | Counter | total ms | ms/present | share of argbuf_setup |")
+    lines.append("|---:|---|---|---:|---:|---:|")
+    for index, (scope, key, value) in enumerate(stage_rows[:12], start=1):
+        lines.append(
+            f"| {index} | {scope} | `{key}` | `{fmt(value)}` | "
+            f"`{ratio_text(value, present_encoded)}` | `{pct(value, argbuf_setup)}` |"
+        )
+    lines.append("")
+
+    lines.append("### Argbuf Mechanism Counters")
+    lines.append("")
+    lines.append("| Metric | Value |")
+    lines.append("|---|---:|")
+    lines.append(
+        "| `argbuf_table_bind_skip_share` | "
+        f"`{pct(counters.get('encode_draw_argbuf_table_bind_skipped'), counters.get('encode_draw_argbuf_table_bind_calls'))}` |"
+    )
+    lines.append(
+        "| `argbuf_cbuf_update_dirty_share` | "
+        f"`{pct(counters.get('encode_draw_argbuf_cbuf_update_dirty_calls'), counters.get('encode_draw_argbuf_cbuf_update_calls'))}` |"
+    )
+    lines.append(
+        "| `argbuf_cbuf_update_write_share` | "
+        f"`{pct(counters.get('encode_draw_argbuf_cbuf_update_write_calls'), counters.get('encode_draw_argbuf_cbuf_update_calls'))}` |"
+    )
+    lines.append(
+        "| `argbuf_cbuf_no_dirty_hash_mismatch_per_present` | "
+        f"`{ratio_text(counters.get('encode_draw_argbuf_cbuf_reopen_no_dirty_hash_mismatch'), present_encoded)}` |"
+    )
+    lines.append(
+        "| `argbuf_cbuf_reopen_partial_candidates_per_present` | "
+        f"`{ratio_text(counters.get('encode_draw_argbuf_cbuf_reopen_partial_candidates'), present_encoded)}` |"
+    )
+    lines.append(
+        "| `argbuf_cbuf_cached_repoint_calls_per_present` | "
+        f"`{ratio_text(counters.get('encode_draw_argbuf_cbuf_cached_repoint_calls'), present_encoded)}` |"
+    )
+    lines.append(
+        "| `argbuf_cbuf_content_probe_vs_hit_share` | "
+        f"`{pct(counters.get('encode_draw_argbuf_cbuf_content_probe_vs_hits'), counters.get('encode_draw_argbuf_cbuf_content_probe_calls'))}` |"
+    )
+    lines.append(
+        "| `argbuf_cbuf_content_probe_ps_hit_share` | "
+        f"`{pct(counters.get('encode_draw_argbuf_cbuf_content_probe_ps_hits'), counters.get('encode_draw_argbuf_cbuf_content_probe_calls'))}` |"
+    )
+    lines.append(
+        "| `argbuf_cbuf_content_probe_ffp_ps_hit_share` | "
+        f"`{pct(counters.get('encode_draw_argbuf_cbuf_content_probe_ffp_ps_hits'), counters.get('encode_draw_argbuf_cbuf_content_probe_calls'))}` |"
+    )
+    lines.append("")
+
+    lines.append("### Argbuf Verdict")
+    lines.append("")
+    lines.append(f"- Largest argbuf-stage row: `{largest_key}`.")
+    if largest_value is not None:
+        lines.append(
+            "- Largest argbuf-stage row per present: "
+            f"`{ratio_text(largest_value, present_encoded)}ms`."
+        )
+    lines.append("")
 
 
 def per_event_preservation_bytes(row: dict[str, Any]) -> int | float:
@@ -3245,12 +5012,19 @@ def write_markdown(
     render_pass_reentry_csv: Path | None = None,
     frame_rows: list[dict[str, Any]] | None = None,
     frame_csv: Path | None = None,
+    argbuf_delta_sources: list[dict[str, Any]] | None = None,
+    argbuf_delta_source_csv: Path | None = None,
+    vs_const_setter_ranges: list[dict[str, Any]] | None = None,
+    vs_const_setter_range_csv: Path | None = None,
 ) -> None:
     counters = result.get("dxmt9_perf_counters", {})
     bridge = result.get("dxmt9_bridge_counters", {})
+    pe_counters = result.get("dxmt9_pe_recorder_counters", {})
     probe_draws = probe_draws or []
     render_pass_reentry_rows = render_pass_reentry_rows or []
     frame_rows = frame_rows or []
+    argbuf_delta_sources = argbuf_delta_sources or []
+    vs_const_setter_ranges = vs_const_setter_ranges or []
     present_encoded = counters.get("present_encoded")
     render_pass_reentry_summary_rows = render_pass_reentry_rows
     if isinstance(present_encoded, (int, float)) and present_encoded > 0:
@@ -3283,6 +5057,12 @@ def write_markdown(
     lines.append(f"- Frame sampling lines: `{len(frame_rows)}`")
     if frame_csv is not None:
         lines.append(f"- Frame sampling CSV: `{frame_csv}`")
+    lines.append(f"- Argbuf payload delta source rows: `{len(argbuf_delta_sources)}`")
+    if argbuf_delta_source_csv is not None:
+        lines.append(f"- Argbuf payload delta source CSV: `{argbuf_delta_source_csv}`")
+    lines.append(f"- VS const setter range rows: `{len(vs_const_setter_ranges)}`")
+    if vs_const_setter_range_csv is not None:
+        lines.append(f"- VS const setter range CSV: `{vs_const_setter_range_csv}`")
     lines.append("")
 
     lines.append("## Run Counters")
@@ -3292,6 +5072,57 @@ def write_markdown(
     for key in RUN_COUNTERS:
         lines.append(f"| `{key}` | `{fmt(counters.get(key))}` |")
     lines.append("")
+
+    publish_reason_rows = (
+        ("draw-limit", "chunk_publish_reason_draw_limit",
+         "chunk_publish_commands_draw_limit"),
+        ("payload-limit", "chunk_publish_reason_payload_limit",
+         "chunk_publish_commands_payload_limit"),
+        ("present", "chunk_publish_reason_present",
+         "chunk_publish_commands_present"),
+        ("present-acquire", "chunk_publish_reason_present_acquire",
+         "chunk_publish_commands_present_acquire"),
+        ("present-split-before", "chunk_publish_reason_present_split_before",
+         "chunk_publish_commands_present_split_before"),
+        ("flush", "chunk_publish_reason_flush",
+         "chunk_publish_commands_flush"),
+        ("stretch-split", "chunk_publish_reason_stretch_split",
+         "chunk_publish_commands_stretch_split"),
+        ("map-wait", "chunk_publish_reason_map_wait",
+         "chunk_publish_commands_map_wait"),
+        ("unknown", "chunk_publish_reason_unknown",
+         "chunk_publish_commands_unknown"),
+    )
+    total_publish_reasons = sum(
+        numeric_value(counters, count_key)
+        for _, count_key, _ in publish_reason_rows
+    )
+    if total_publish_reasons:
+        lines.append("## Chunk Publish Reason Derived")
+        lines.append("")
+        lines.append(
+            "These rows classify why a queue `ChunkSlot` was published to the "
+            "encode thread. Use them to separate useful overlap from "
+            "render-pass-fragmenting early publish."
+        )
+        lines.append("")
+        lines.append("| Reason | publishes | share | commands | commands/publish |")
+        lines.append("|---|---:|---:|---:|---:|")
+        for label, count_key, command_key in publish_reason_rows:
+            publishes = counters.get(count_key)
+            commands = counters.get(command_key)
+            if not isinstance(publishes, (int, float)):
+                publishes = 0
+            if not isinstance(commands, (int, float)):
+                commands = 0
+            if publishes == 0 and commands == 0:
+                continue
+            lines.append(
+                f"| {label} | `{fmt(publishes)}` | "
+                f"`{pct(publishes, total_publish_reasons)}` | "
+                f"`{fmt(commands)}` | `{ratio_text(commands, publishes)}` |"
+            )
+        lines.append("")
 
     lines.append("## Correctness / Visual-Coupling Counters")
     lines.append("")
@@ -3374,6 +5205,12 @@ def write_markdown(
             )
         lines.append("")
 
+    append_pacing_cpu_stage_derived(lines, counters, present_encoded)
+    append_pe_recorder_gap_call_derived(lines, pe_counters, present_encoded)
+    append_replay_snapshot_cpu_derived(lines, counters, present_encoded)
+    append_encode_cpu_derived(lines, counters, present_encoded)
+    append_argbuf_cpu_derived(lines, counters, present_encoded)
+
     draw_run_submits = counters.get("commit_chunk_draw_run_submits")
     draw_run_records = counters.get("commit_chunk_draw_run_records")
     submission_submits = counters.get("commit_chunk_draw_submission_batch_submits")
@@ -3407,6 +5244,291 @@ def write_markdown(
     lines.append(
         "| `const_upload_passthrough_per_submission_batch` | "
         f"`{ratio_text(counters.get('commit_chunk_draw_batch_const_upload_passthrough'), submission_submits)}` |"
+    )
+    lines.append("")
+
+    uniform_materialized = counters.get("d3d9_snapshot_uniform_materialized")
+    uniform_elided = counters.get("d3d9_snapshot_uniform_elided")
+    uniform_append_bytes = counters.get("draw_uniform_payload_append_bytes")
+    uniform_appends = counters.get("draw_uniform_payload_appends")
+    uniform_fixed_append_bytes = counters.get(
+        "draw_uniform_fixed_payload_append_bytes"
+    )
+    uniform_fixed_appends = counters.get("draw_uniform_fixed_payload_appends")
+    uniform_vertex_append_bytes = counters.get(
+        "draw_uniform_vertex_constants_append_bytes"
+    )
+    uniform_vertex_appends = counters.get("draw_uniform_vertex_constants_appends")
+    uniform_pixel_append_bytes = counters.get(
+        "draw_uniform_pixel_constants_append_bytes"
+    )
+    uniform_pixel_appends = counters.get("draw_uniform_pixel_constants_appends")
+    uniform_backend_materialized = counters.get("draw_uniform_payload_materialized")
+    uniform_backend_materialized_bytes = counters.get(
+        "draw_uniform_payload_materialized_bytes"
+    )
+    uniform_backend_materialize_fallbacks = counters.get(
+        "draw_uniform_payload_materialize_fallbacks"
+    )
+    uniform_backend_materialize_cpu = counters.get(
+        "draw_uniform_payload_materialize_cpu_ms"
+    )
+    uniform_backend_materialize_sites = [
+        ("other", "Other"),
+        ("draw_encoder_command", "Draw encoder command"),
+        ("draw_encoder_param", "Draw encoder param"),
+        ("framegraph_command", "Framegraph command"),
+        ("framegraph_param", "Framegraph param"),
+        ("queue_observation", "Queue observation"),
+    ]
+    uniform_semantic_hash_misses = counters.get(
+        "draw_uniform_payload_lookup_semantic_hash_misses"
+    )
+    uniform_semantic_hash_miss_bytes = counters.get(
+        "draw_uniform_payload_lookup_semantic_hash_miss_bytes"
+    )
+    uniform_materialized_bytes = counters.get("d3d9_snapshot_uniform_materialized_bytes")
+    uniform_compact_candidate_bytes = counters.get(
+        "d3d9_snapshot_uniform_materialized_compact_candidate_bytes"
+    )
+    uniform_compact_saved_bytes = counters.get(
+        "d3d9_snapshot_uniform_materialized_compact_saved_bytes"
+    )
+    uniform_compact_fixed_bytes = counters.get(
+        "d3d9_snapshot_uniform_materialized_compact_fixed_bytes"
+    )
+    uniform_compact_vertex_bytes = counters.get(
+        "d3d9_snapshot_uniform_materialized_compact_vertex_bytes"
+    )
+    uniform_compact_pixel_bytes = counters.get(
+        "d3d9_snapshot_uniform_materialized_compact_pixel_bytes"
+    )
+    uniform_adjacent_previous_payload = counters.get(
+        "d3d9_snapshot_uniform_adjacent_previous_payload"
+    )
+    uniform_adjacent_same_fixed_payload_hash = counters.get(
+        "d3d9_snapshot_uniform_adjacent_same_fixed_payload_hash"
+    )
+    uniform_adjacent_same_fixed_and_shader_const_hashes = counters.get(
+        "d3d9_snapshot_uniform_adjacent_same_fixed_and_shader_const_hashes"
+    )
+    uniform_snapshot_total = None
+    if isinstance(uniform_materialized, (int, float)) and isinstance(uniform_elided, (int, float)):
+        uniform_snapshot_total = uniform_materialized + uniform_elided
+    uniform_payload_record_append_bytes = None
+    if isinstance(uniform_append_bytes, (int, float)):
+        uniform_payload_record_append_bytes = uniform_append_bytes
+        for component_bytes in (
+            uniform_fixed_append_bytes,
+            uniform_vertex_append_bytes,
+            uniform_pixel_append_bytes,
+        ):
+            if isinstance(component_bytes, (int, float)):
+                uniform_payload_record_append_bytes -= component_bytes
+    uniform_stage_append_bytes = None
+    if isinstance(uniform_vertex_append_bytes, (int, float)) or isinstance(
+        uniform_pixel_append_bytes, (int, float)
+    ):
+        uniform_stage_append_bytes = 0
+        for component_bytes in (
+            uniform_vertex_append_bytes,
+            uniform_pixel_append_bytes,
+        ):
+            if isinstance(component_bytes, (int, float)):
+                uniform_stage_append_bytes += component_bytes
+    uniform_compact_stage_bytes = None
+    if isinstance(uniform_compact_vertex_bytes, (int, float)) or isinstance(
+        uniform_compact_pixel_bytes, (int, float)
+    ):
+        uniform_compact_stage_bytes = 0
+        for component_bytes in (
+            uniform_compact_vertex_bytes,
+            uniform_compact_pixel_bytes,
+        ):
+            if isinstance(component_bytes, (int, float)):
+                uniform_compact_stage_bytes += component_bytes
+    lines.append("## Uniform Payload Derived")
+    lines.append("")
+    lines.append(
+        "Use this block to separate frontend snapshot copy width from backend "
+        "unique uniform payload storage. A high materialized byte rate with a "
+        "low append share points at snapshot/hash construction; a high append "
+        "byte rate points at backend SoA storage/copy width."
+    )
+    lines.append("")
+    lines.append("| Metric | Value |")
+    lines.append("|---|---:|")
+    lines.append(
+        "| `uniform_materialized_bytes_per_present` | "
+        f"`{ratio_text(uniform_materialized_bytes, present_encoded)}` |"
+    )
+    lines.append(
+        "| `uniform_compact_candidate_bytes_per_present` | "
+        f"`{ratio_text(uniform_compact_candidate_bytes, present_encoded)}` |"
+    )
+    lines.append(
+        "| `uniform_compact_saved_bytes_per_present` | "
+        f"`{ratio_text(uniform_compact_saved_bytes, present_encoded)}` |"
+    )
+    lines.append(
+        "| `uniform_compact_fixed_bytes_per_present` | "
+        f"`{ratio_text(uniform_compact_fixed_bytes, present_encoded)}` |"
+    )
+    lines.append(
+        "| `uniform_compact_vertex_bytes_per_present` | "
+        f"`{ratio_text(uniform_compact_vertex_bytes, present_encoded)}` |"
+    )
+    lines.append(
+        "| `uniform_compact_pixel_bytes_per_present` | "
+        f"`{ratio_text(uniform_compact_pixel_bytes, present_encoded)}` |"
+    )
+    lines.append(
+        "| `uniform_compact_candidate_share_of_materialized_bytes` | "
+        f"`{pct(uniform_compact_candidate_bytes, uniform_materialized_bytes)}` |"
+    )
+    lines.append(
+        "| `uniform_compact_fixed_share_of_candidate_bytes` | "
+        f"`{pct(uniform_compact_fixed_bytes, uniform_compact_candidate_bytes)}` |"
+    )
+    lines.append(
+        "| `uniform_compact_vertex_share_of_candidate_bytes` | "
+        f"`{pct(uniform_compact_vertex_bytes, uniform_compact_candidate_bytes)}` |"
+    )
+    lines.append(
+        "| `uniform_compact_pixel_share_of_candidate_bytes` | "
+        f"`{pct(uniform_compact_pixel_bytes, uniform_compact_candidate_bytes)}` |"
+    )
+    lines.append(
+        "| `uniform_compact_saved_share_of_materialized_bytes` | "
+        f"`{pct(uniform_compact_saved_bytes, uniform_materialized_bytes)}` |"
+    )
+    lines.append(
+        "| `uniform_adjacent_same_fixed_payload_hash_share` | "
+        f"`{pct(uniform_adjacent_same_fixed_payload_hash, uniform_adjacent_previous_payload)}` |"
+    )
+    lines.append(
+        "| `uniform_adjacent_same_fixed_and_shader_const_hashes_share` | "
+        f"`{pct(uniform_adjacent_same_fixed_and_shader_const_hashes, uniform_adjacent_previous_payload)}` |"
+    )
+    lines.append(
+        "| `uniform_append_bytes_per_present` | "
+        f"`{ratio_text(uniform_append_bytes, present_encoded)}` |"
+    )
+    lines.append(
+        "| `uniform_fixed_append_bytes_per_present` | "
+        f"`{ratio_text(uniform_fixed_append_bytes, present_encoded)}` |"
+    )
+    lines.append(
+        "| `uniform_vertex_constants_append_bytes_per_present` | "
+        f"`{ratio_text(uniform_vertex_append_bytes, present_encoded)}` |"
+    )
+    lines.append(
+        "| `uniform_pixel_constants_append_bytes_per_present` | "
+        f"`{ratio_text(uniform_pixel_append_bytes, present_encoded)}` |"
+    )
+    lines.append(
+        "| `uniform_stage_constants_append_bytes_per_present` | "
+        f"`{ratio_text(uniform_stage_append_bytes, present_encoded)}` |"
+    )
+    lines.append(
+        "| `uniform_vertex_append_amplification_vs_compact_vertex` | "
+        f"`{ratio_text(uniform_vertex_append_bytes, uniform_compact_vertex_bytes)}` |"
+    )
+    lines.append(
+        "| `uniform_pixel_append_amplification_vs_compact_pixel` | "
+        f"`{ratio_text(uniform_pixel_append_bytes, uniform_compact_pixel_bytes)}` |"
+    )
+    lines.append(
+        "| `uniform_stage_append_amplification_vs_compact_stage` | "
+        f"`{ratio_text(uniform_stage_append_bytes, uniform_compact_stage_bytes)}` |"
+    )
+    lines.append(
+        "| `uniform_append_bytes_per_append` | "
+        f"`{ratio_text(uniform_append_bytes, uniform_appends)}` |"
+    )
+    lines.append(
+        "| `uniform_payload_record_append_bytes_per_append` | "
+        f"`{ratio_text(uniform_payload_record_append_bytes, uniform_appends)}` |"
+    )
+    lines.append(
+        "| `uniform_fixed_append_records_per_payload_append` | "
+        f"`{ratio_text(uniform_fixed_appends, uniform_appends)}` |"
+    )
+    lines.append(
+        "| `uniform_vertex_constants_append_records_per_payload_append` | "
+        f"`{ratio_text(uniform_vertex_appends, uniform_appends)}` |"
+    )
+    lines.append(
+        "| `uniform_pixel_constants_append_records_per_payload_append` | "
+        f"`{ratio_text(uniform_pixel_appends, uniform_appends)}` |"
+    )
+    lines.append(
+        "| `uniform_backend_materialized_bytes_per_present` | "
+        f"`{ratio_text(uniform_backend_materialized_bytes, present_encoded)}` |"
+    )
+    lines.append(
+        "| `uniform_backend_materialize_cpu_ms_per_present` | "
+        f"`{ratio_text(uniform_backend_materialize_cpu, present_encoded)}` |"
+    )
+    lines.append(
+        "| `uniform_backend_materialized_bytes_per_call` | "
+        f"`{ratio_text(uniform_backend_materialized_bytes, uniform_backend_materialized)}` |"
+    )
+    lines.append(
+        "| `uniform_backend_materialize_fallbacks` | "
+        f"`{fmt(uniform_backend_materialize_fallbacks)}` |"
+    )
+    for site_key, label in uniform_backend_materialize_sites:
+        site_count = counters.get(f"draw_uniform_payload_materialized_{site_key}")
+        site_bytes = counters.get(
+            f"draw_uniform_payload_materialized_{site_key}_bytes"
+        )
+        site_cpu = counters.get(
+            f"draw_uniform_payload_materialize_{site_key}_cpu_ms"
+        )
+        lines.append(
+            f"| `uniform_backend_materialize_{site_key}_share_pct` | "
+            f"`{pct(site_count, uniform_backend_materialized)}` |"
+        )
+        lines.append(
+            f"| `uniform_backend_materialize_{site_key}_bytes_per_present` | "
+            f"`{ratio_text(site_bytes, present_encoded)}` |"
+        )
+        lines.append(
+            f"| `uniform_backend_materialize_{site_key}_cpu_ms_per_present` | "
+            f"`{ratio_text(site_cpu, present_encoded)}` |"
+        )
+    lines.append(
+        "| `uniform_append_records_per_materialized_snapshot` | "
+        f"`{ratio_text(uniform_appends, uniform_materialized)}` |"
+    )
+    lines.append(
+        "| `uniform_semantic_hash_misses` | "
+        f"`{fmt(uniform_semantic_hash_misses)}` |"
+    )
+    lines.append(
+        "| `uniform_semantic_hash_miss_bytes_per_present` | "
+        f"`{ratio_text(uniform_semantic_hash_miss_bytes, present_encoded)}` |"
+    )
+    lines.append(
+        "| `uniform_append_bytes_share_of_materialized_bytes` | "
+        f"`{pct(uniform_append_bytes, uniform_materialized_bytes)}` |"
+    )
+    lines.append(
+        "| `uniform_fixed_append_bytes_share_of_append_bytes` | "
+        f"`{pct(uniform_fixed_append_bytes, uniform_append_bytes)}` |"
+    )
+    lines.append(
+        "| `uniform_vertex_constants_append_bytes_share_of_append_bytes` | "
+        f"`{pct(uniform_vertex_append_bytes, uniform_append_bytes)}` |"
+    )
+    lines.append(
+        "| `uniform_pixel_constants_append_bytes_share_of_append_bytes` | "
+        f"`{pct(uniform_pixel_append_bytes, uniform_append_bytes)}` |"
+    )
+    lines.append(
+        "| `uniform_snapshot_elision_share` | "
+        f"`{pct(uniform_elided, uniform_snapshot_total)}` |"
     )
     lines.append("")
 
@@ -3650,6 +5772,92 @@ def write_markdown(
         value = counters.get(key)
         lines.append(f"| `{key}` | `{fmt(value)}` | `{pct(value, const_total)}` |")
     lines.append("")
+
+    if argbuf_delta_sources:
+        total_changed_regs = sum_key(argbuf_delta_sources, "changed_regs")
+        total_full_prefix_regs = sum_key(argbuf_delta_sources, "full_prefix_regs")
+        lines.append("## Argbuf Payload Delta Sources")
+        lines.append("")
+        lines.append("| vs_hash | ps_hash | prefix_regs | rows | changed_regs | changed_share | full_prefix_rows | full_prefix_regs | full_prefix_reg_share | span/changed |")
+        lines.append("|---|---|---:|---:|---:|---:|---:|---:|---:|---:|")
+        for row in argbuf_delta_sources[:16]:
+            changed_regs = row.get("changed_regs")
+            span_regs = row.get("span_regs")
+            lines.append(
+                f"| `{row.get('vs_hash', '')}` | "
+                f"`{row.get('ps_hash', '')}` | "
+                f"`{fmt(row.get('prefix_regs'))}` | "
+                f"`{fmt(row.get('rows'))}` | "
+                f"`{fmt(changed_regs)}` | "
+                f"`{pct(changed_regs, total_changed_regs)}` | "
+                f"`{fmt(row.get('full_prefix_rows'))}` | "
+                f"`{fmt(row.get('full_prefix_regs'))}` | "
+                f"`{pct(row.get('full_prefix_regs'), total_full_prefix_regs)}` | "
+                f"`{ratio_text(span_regs, changed_regs)}` |"
+            )
+        overflow_rows = sum_key(argbuf_delta_sources, "overflow_rows")
+        if overflow_rows:
+            lines.append(
+                f"| `overflow` | `overflow` | `overflow` | "
+                f"`{fmt(overflow_rows)}` | "
+                f"`{fmt(sum_key(argbuf_delta_sources, 'overflow_changed_regs'))}` | "
+                "`n/a` | `0` | `0` | `n/a` | `n/a` |"
+            )
+        lines.append("")
+
+    if vs_const_setter_ranges:
+        total_changed_regs = (
+            sum_key(vs_const_setter_ranges, "changed_regs")
+            + sum_key(vs_const_setter_ranges, "overflow_changed_regs")
+        )
+        lines.append("## VS Const Setter Ranges")
+        lines.append("")
+        lines.append("| phase | vs_hash | ps_hash | start | count | events | range_regs | changed_regs | changed_share | range/changed | full_range_events | full_changed_events |")
+        lines.append("|---|---|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|")
+        for row in vs_const_setter_ranges[:20]:
+            changed_regs = row.get("changed_regs")
+            range_regs = row.get("range_regs")
+            lines.append(
+                f"| `{row.get('phase', '')}` | "
+                f"`{row.get('vs_hash', '')}` | "
+                f"`{row.get('ps_hash', '')}` | "
+                f"`{fmt(row.get('start'))}` | "
+                f"`{fmt(row.get('count'))}` | "
+                f"`{fmt(row.get('events'))}` | "
+                f"`{fmt(range_regs)}` | "
+                f"`{fmt(changed_regs)}` | "
+                f"`{pct(changed_regs, total_changed_regs)}` | "
+                f"`{ratio_text(range_regs, changed_regs)}` | "
+                f"`{fmt(row.get('full_range_events'))}` | "
+                f"`{fmt(row.get('full_changed_events'))}` |"
+            )
+        overflow_rows = [
+            row for row in vs_const_setter_ranges
+            if numeric_value(row, "overflow_events")
+        ]
+        for row in sorted(
+            overflow_rows,
+            key=lambda item: (
+                numeric_value(item, "overflow_changed_regs"),
+                numeric_value(item, "overflow_range_regs"),
+                numeric_value(item, "overflow_events"),
+            ),
+            reverse=True,
+        ):
+            changed_regs = row.get("overflow_changed_regs")
+            range_regs = row.get("overflow_range_regs")
+            lines.append(
+                f"| `{row.get('phase', '')}` | `overflow` | `overflow` | "
+                f"`overflow` | `overflow` | "
+                f"`{fmt(row.get('overflow_events'))}` | "
+                f"`{fmt(range_regs)}` | "
+                f"`{fmt(changed_regs)}` | "
+                f"`{pct(changed_regs, total_changed_regs)}` | "
+                f"`{ratio_text(range_regs, changed_regs)}` | "
+                f"`{fmt(row.get('full_range_events'))}` | "
+                f"`{fmt(row.get('full_changed_events'))}` |"
+            )
+        lines.append("")
 
     if encoders:
         lines.append("## Encoder Aggregates")
@@ -4104,27 +6312,47 @@ def main() -> int:
         type=Path,
         help="markdown output path (default: <output_dir>/3dmark05-perf-summary.md)",
     )
+    parser.add_argument(
+        "--require-uniform-compact-saved-bytes-present",
+        action="store_true",
+        help=(
+            "fail if the current run has no conservative compact uniform "
+            "saved bytes per present"
+        ),
+    )
     args = parser.parse_args()
 
     run_dir = args.output_dir
     result = load_result(run_dir)
+    if args.require_uniform_compact_saved_bytes_present:
+        require_uniform_compact_saved_bytes_present(result)
     output = args.output or (run_dir / "3dmark05-perf-summary.md")
     encoder_csv = output.parent / "3dmark05-perf-encoders.csv"
     stream_csv = output.parent / "3dmark05-perf-encoder-streams.csv"
     probe_draw_csv = output.parent / "3dmark05-perf-indexed-probe-draws.csv"
     render_pass_reentry_csv = output.parent / "3dmark05-perf-render-pass-reentry.csv"
     frame_csv = output.parent / "3dmark05-perf-frames.csv"
+    argbuf_delta_source_csv = output.parent / "3dmark05-perf-argbuf-payload-delta-sources.csv"
+    vs_const_setter_range_csv = output.parent / "3dmark05-perf-vs-const-setter-ranges.csv"
     log_path = run_dir / "dxmt9.log"
     encoders, streams = parse_encoder_lines(log_path)
     probe_draws = parse_probe_draw_lines(log_path)
     render_pass_reentry_rows = parse_render_pass_reentry_lines(log_path)
     frame_rows = parse_frame_lines(log_path)
+    argbuf_delta_sources = aggregate_argbuf_delta_sources(
+        parse_argbuf_delta_source_lines(log_path)
+    )
+    vs_const_setter_ranges = aggregate_vs_const_setter_ranges(
+        parse_vs_const_setter_range_lines(log_path)
+    )
     if not log_path.exists():
         encoders = load_existing_csv(encoder_csv)
         streams = load_existing_csv(stream_csv)
         probe_draws = load_existing_csv(probe_draw_csv)
         render_pass_reentry_rows = load_existing_csv(render_pass_reentry_csv)
         frame_rows = load_existing_csv(frame_csv)
+        argbuf_delta_sources = load_existing_csv(argbuf_delta_source_csv)
+        vs_const_setter_ranges = load_existing_csv(vs_const_setter_range_csv)
     enrich_encoder_rows(encoders)
     if log_path.exists() or not encoder_csv.exists():
         write_csv(encoder_csv, encoders, ENCODER_CSV_KEYS)
@@ -4136,6 +6364,18 @@ def main() -> int:
         write_csv(render_pass_reentry_csv, render_pass_reentry_rows, RENDER_PASS_REENTRY_CSV_KEYS)
     if log_path.exists() or not frame_csv.exists():
         write_csv(frame_csv, frame_rows, FRAME_CSV_KEYS)
+    if log_path.exists() or not argbuf_delta_source_csv.exists():
+        write_csv(
+            argbuf_delta_source_csv,
+            argbuf_delta_sources,
+            ARGBUF_DELTA_SOURCE_CSV_KEYS,
+        )
+    if log_path.exists() or not vs_const_setter_range_csv.exists():
+        write_csv(
+            vs_const_setter_range_csv,
+            vs_const_setter_ranges,
+            VS_CONST_SETTER_RANGE_CSV_KEYS,
+        )
     write_markdown(
         output,
         run_dir,
@@ -4150,6 +6390,10 @@ def main() -> int:
         render_pass_reentry_csv,
         frame_rows,
         frame_csv,
+        argbuf_delta_sources,
+        argbuf_delta_source_csv,
+        vs_const_setter_ranges,
+        vs_const_setter_range_csv,
     )
     print(output)
     return 0

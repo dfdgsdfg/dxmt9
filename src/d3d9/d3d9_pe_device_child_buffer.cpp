@@ -81,22 +81,47 @@ flushChildRecorderForBufferLock(D3D9PeRecorderFlush *recorder, D9CBuffer *buffer
   return recorder->FlushPeRecorderForBufferHazardForChild(buffer);
 }
 
-static bool bufferIsDefaultPool(D9CBuffer *buffer) {
-  if (!buffer)
-    return false;
-  D9CBufferDesc desc{};
-  return SUCCEEDED(hr32(dxmt9c_buffer_get_desc(buffer, &desc))) &&
-         desc.pool == D3DPOOL_DEFAULT;
+static bool loadBufferDesc(D9CBuffer *buffer, D9CBufferDesc &desc) {
+  return buffer && SUCCEEDED(hr32(dxmt9c_buffer_get_desc(buffer, &desc)));
+}
+
+static bool bufferIsDefaultPool(const D9CBufferDesc &desc, bool valid) {
+  return valid && desc.pool == D3DPOOL_DEFAULT;
 }
 
 // Wine d3d9 resource_priority_pool_policy: SetPriority only persists for
 // D3DPOOL_MANAGED resources.
-static bool bufferPriorityWriteable(D9CBuffer *buffer) {
-  if (!buffer)
-    return false;
-  D9CBufferDesc desc{};
-  return SUCCEEDED(hr32(dxmt9c_buffer_get_desc(buffer, &desc))) &&
-         desc.pool == D3DPOOL_MANAGED;
+static bool bufferPriorityWriteable(const D9CBufferDesc &desc, bool valid) {
+  return valid && desc.pool == D3DPOOL_MANAGED;
+}
+
+static HRESULT cachedBufferDescOrFetch(D9CBuffer *buffer,
+                                        const D9CBufferDesc &cached,
+                                        bool cachedValid, D9CBufferDesc &desc) {
+  if (cachedValid) {
+    desc = cached;
+    return S_OK;
+  }
+  return hr32(dxmt9c_buffer_get_desc(buffer, &desc));
+}
+
+static void fillVertexBufferDesc(const D9CBufferDesc &desc,
+                                 D3DVERTEXBUFFER_DESC &out) {
+  out.Format = D3DFMT_VERTEXDATA;
+  out.Type = D3DRTYPE_VERTEXBUFFER;
+  out.Usage = desc.usage;
+  out.Pool = static_cast<D3DPOOL>(desc.pool);
+  out.Size = desc.size;
+  out.FVF = desc.fvf;
+}
+
+static void fillIndexBufferDesc(const D9CBufferDesc &desc,
+                                D3DINDEXBUFFER_DESC &out) {
+  out.Format = static_cast<D3DFORMAT>(desc.format);
+  out.Type = D3DRTYPE_INDEXBUFFER;
+  out.Usage = desc.usage;
+  out.Pool = static_cast<D3DPOOL>(desc.pool);
+  out.Size = desc.size;
 }
 
 static void trackDefaultPoolResource(D3D9PeRecorderFlush *recorder,
@@ -123,6 +148,8 @@ class D3D9VertexBufferImpl final : public IDirect3DVertexBuffer9 {
   D9CBuffer *b_;
   IDirect3DDevice9 *device_;
   D3D9PeRecorderFlush *recorder_;
+  D9CBufferDesc desc_{};
+  bool descValid_ = false;
   bool defaultPoolTracked_ = false;
   bool locked_ = false;
   DWORD lockFlags_ = 0;
@@ -135,8 +162,9 @@ public:
       : b_(b), device_(device), recorder_(recorder) {
     if (device_)
       device_->AddRef();
+    descValid_ = loadBufferDesc(b_, desc_);
     trackDefaultPoolResource(recorder_, defaultPoolTracked_,
-                             bufferIsDefaultPool(b_));
+                             bufferIsDefaultPool(desc_, descValid_));
   }
   ~D3D9VertexBufferImpl() {
     untrackDefaultPoolResource(recorder_, defaultPoolTracked_);
@@ -193,7 +221,7 @@ public:
   }
   DWORD STDMETHODCALLTYPE SetPriority(DWORD newPriority) noexcept override {
     const DWORD previous = priorityShadow_;
-    if (bufferPriorityWriteable(b_))
+    if (bufferPriorityWriteable(desc_, descValid_))
       priorityShadow_ = newPriority;
     return previous;
   }
@@ -221,7 +249,7 @@ public:
       return D3DERR_INVALIDCALL;
     {
       D9CBufferDesc desc{};
-      if (SUCCEEDED(hr32(dxmt9c_buffer_get_desc(b_, &desc)))) {
+      if (SUCCEEDED(cachedBufferDescOrFetch(b_, desc_, descValid_, desc))) {
         const UINT bufSize = desc.size;
         // Wine treats size==0 as "lock from off to end of buffer";
         // any non-zero size must fit within [off, bufSize].
@@ -271,17 +299,13 @@ public:
     if (!pDesc)
       return finishPeCall(D3DERR_INVALIDCALL);
     D9CBufferDesc desc{};
-    const HRESULT hr = hr32(dxmt9c_buffer_get_desc(b_, &desc));
+    const HRESULT hr = cachedBufferDescOrFetch(b_, desc_, descValid_, desc);
     if (FAILED(hr)) {
-      dxmt9DeviceDebugLog("vb_get_desc vb=%p -> hr=0x%08x", this, (unsigned)hr);
+      dxmt9DeviceDebugLog("vb_get_desc vb=%p -> hr=0x%08x", this,
+                          (unsigned)hr);
       return finishPeCall(hr);
     }
-    pDesc->Format = D3DFMT_VERTEXDATA;
-    pDesc->Type = D3DRTYPE_VERTEXBUFFER;
-    pDesc->Usage = desc.usage;
-    pDesc->Pool = static_cast<D3DPOOL>(desc.pool);
-    pDesc->Size = desc.size;
-    pDesc->FVF = desc.fvf;
+    fillVertexBufferDesc(desc, *pDesc);
     dxmt9DeviceDebugLog(
         "vb_get_desc vb=%p -> size=%u usage=0x%x pool=%u fvf=0x%x", this,
         desc.size, desc.usage, desc.pool, desc.fvf);
@@ -297,6 +321,8 @@ class D3D9IndexBufferImpl final : public IDirect3DIndexBuffer9 {
   D9CBuffer *b_;
   IDirect3DDevice9 *device_;
   D3D9PeRecorderFlush *recorder_;
+  D9CBufferDesc desc_{};
+  bool descValid_ = false;
   bool defaultPoolTracked_ = false;
   bool locked_ = false;
   DWORD lockFlags_ = 0;
@@ -309,8 +335,9 @@ public:
       : b_(b), device_(device), recorder_(recorder) {
     if (device_)
       device_->AddRef();
+    descValid_ = loadBufferDesc(b_, desc_);
     trackDefaultPoolResource(recorder_, defaultPoolTracked_,
-                             bufferIsDefaultPool(b_));
+                             bufferIsDefaultPool(desc_, descValid_));
   }
   ~D3D9IndexBufferImpl() {
     untrackDefaultPoolResource(recorder_, defaultPoolTracked_);
@@ -367,7 +394,7 @@ public:
   }
   DWORD STDMETHODCALLTYPE SetPriority(DWORD newPriority) noexcept override {
     const DWORD previous = priorityShadow_;
-    if (bufferPriorityWriteable(b_))
+    if (bufferPriorityWriteable(desc_, descValid_))
       priorityShadow_ = newPriority;
     return previous;
   }
@@ -424,16 +451,13 @@ public:
     if (!pDesc)
       return finishPeCall(D3DERR_INVALIDCALL);
     D9CBufferDesc desc{};
-    const HRESULT hr = hr32(dxmt9c_buffer_get_desc(b_, &desc));
+    const HRESULT hr = cachedBufferDescOrFetch(b_, desc_, descValid_, desc);
     if (FAILED(hr)) {
-      dxmt9DeviceDebugLog("ib_get_desc ib=%p -> hr=0x%08x", this, (unsigned)hr);
+      dxmt9DeviceDebugLog("ib_get_desc ib=%p -> hr=0x%08x", this,
+                          (unsigned)hr);
       return finishPeCall(hr);
     }
-    pDesc->Format = static_cast<D3DFORMAT>(desc.format);
-    pDesc->Type = D3DRTYPE_INDEXBUFFER;
-    pDesc->Usage = desc.usage;
-    pDesc->Pool = static_cast<D3DPOOL>(desc.pool);
-    pDesc->Size = desc.size;
+    fillIndexBufferDesc(desc, *pDesc);
     dxmt9DeviceDebugLog(
         "ib_get_desc ib=%p -> size=%u usage=0x%x pool=%u fmt=%u", this,
         desc.size, desc.usage, desc.pool, desc.format);

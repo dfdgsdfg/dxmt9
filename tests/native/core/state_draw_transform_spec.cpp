@@ -66,6 +66,15 @@ Matrix4x4 taggedMatrix(float base) {
   return matrix;
 }
 
+Matrix4x4 identityMatrixForTest() {
+  Matrix4x4 matrix{};
+  matrix.m = {1.0f, 0.0f, 0.0f, 0.0f,
+              0.0f, 1.0f, 0.0f, 0.0f,
+              0.0f, 0.0f, 1.0f, 0.0f,
+              0.0f, 0.0f, 0.0f, 1.0f};
+  return matrix;
+}
+
 std::shared_ptr<Buffer> makeBuffer(u64 handle, u64 size, u32 usage) {
   BufferDesc desc{};
   desc.size = size;
@@ -627,6 +636,18 @@ void testChunkSlotDirectDrawRunUniformLookup() {
         "slot clearCommands resets uniform lookup tails");
   check(slot.drawUniformPayloadLookupNext.empty(),
         "slot clearCommands resets uniform lookup links");
+  check(slot.drawUniformVertexConstantsLookupHeads.empty(),
+        "slot clearCommands resets VS constant lookup heads");
+  check(slot.drawUniformVertexConstantsLookupTails.empty(),
+        "slot clearCommands resets VS constant lookup tails");
+  check(slot.drawUniformVertexConstantsLookupNext.empty(),
+        "slot clearCommands resets VS constant lookup links");
+  check(slot.drawUniformPixelConstantsLookupHeads.empty(),
+        "slot clearCommands resets PS constant lookup heads");
+  check(slot.drawUniformPixelConstantsLookupTails.empty(),
+        "slot clearCommands resets PS constant lookup tails");
+  check(slot.drawUniformPixelConstantsLookupNext.empty(),
+        "slot clearCommands resets PS constant lookup links");
 }
 
 void testStateValueTableDirtyHashContract() {
@@ -714,6 +735,27 @@ void testStateDrawTransform() {
     checkNear(desc.clipPlanes[2][i], 0.0f, "disabled clip plane cleared");
   }
   checkEq(desc.textureTransforms[0], state.transforms.at(XFORM_TEXTURE_BASE), "texture transform propagated");
+}
+
+void testFlatDrawStateTracksNonIdentityTextureTransformMask() {
+  DrawDesc desc{};
+  desc.textureTransforms.fill(identityMatrixForTest());
+  desc.textureTransforms[1] = taggedMatrix(1000.0f);
+
+  auto unbound = makeFlatDrawStateRecord(desc);
+  checkEq(unbound.nonIdentityTextureTransformStageMask, 1u << 1u,
+          "flat draw state records non-identity texture-transform stages");
+  checkEq(unbound.key.nonIdentityTextureTransformStageMask,
+          unbound.nonIdentityTextureTransformStageMask,
+          "flat draw key mirrors non-identity texture-transform stage mask");
+  checkEq(unbound.nonIdentityTextureTransformStageMask & unbound.textureMask, 0u,
+          "unbound transformed texture stage does not imply projected compat");
+
+  desc.textures[1].handle = Handle{0x1000u};
+  const auto bound = makeFlatDrawStateRecord(desc);
+  checkEq(bound.nonIdentityTextureTransformStageMask & bound.textureMask,
+          1u << 1u,
+          "bound transformed texture stage is available to projected compat");
 }
 
 void testTransformMultiplicationOrderAndBlendSlots() {
@@ -1193,6 +1235,63 @@ void testShaderConstantUsageAwareHashesIgnoreUnusedConstants() {
         "used PS constants affect usage-aware hot hash");
 }
 
+void testIndexedFloatConstantHashKeepsFullFloatButTrimsIntBoolTail() {
+  DeviceState state;
+  state.reset();
+
+  state.vertexShader = makeBytecodeShader(
+      0x7005004003002001ull,
+      wordsToBytes({
+          0xfffe0300u,
+          makeInstructionToken(1u, 2u),
+          makeRegisterToken(0u, 0u),
+          makeRegisterToken(2u, 4u, true),
+          makeRegisterToken(3u, 0u),
+          makeInstructionToken(1u, 2u),
+          makeRegisterToken(0u, 1u),
+          makeRegisterToken(7u, 0u),
+          makeInstructionToken(1u, 2u),
+          makeRegisterToken(0u, 2u),
+          makeRegisterToken(14u, 0u),
+          0xffffu,
+      }));
+
+  state.vsConst.float4[0] = {1.0f, 2.0f, 3.0f, 4.0f};
+  state.vsConst.float4[kMaxVertexConstants - 1] = {5.0f, 6.0f, 7.0f, 8.0f};
+  state.vsConst.int4[0] = {1, 2, 3, 4};
+  state.vsConst.int4[4] = {5, 6, 7, 8};
+  state.vsConst.bools[0] = true;
+  state.vsConst.bools[4] = true;
+
+  const auto canonical = makeCanonicalDrawStateFromState(state, {});
+
+  DeviceState tailChanged = state;
+  tailChanged.vsConst.int4[4][0] = 99;
+  tailChanged.vsConst.bools[4] = false;
+  const auto tailChangedCanonical =
+      makeCanonicalDrawStateFromState(tailChanged, {});
+  checkEq(tailChangedCanonical.hot.vertexConstantsHash,
+          canonical.hot.vertexConstantsHash,
+          "indexed-float VS hash ignores unused int/bool tail");
+
+  DeviceState floatChanged = state;
+  floatChanged.vsConst.float4[kMaxVertexConstants - 1][0] = 99.0f;
+  const auto floatChangedCanonical =
+      makeCanonicalDrawStateFromState(floatChanged, {});
+  check(floatChangedCanonical.hot.vertexConstantsHash !=
+            canonical.hot.vertexConstantsHash,
+        "indexed-float VS hash keeps the full float constant array");
+
+  DeviceState usedIntBoolChanged = state;
+  usedIntBoolChanged.vsConst.int4[0][0] = 77;
+  usedIntBoolChanged.vsConst.bools[0] = false;
+  const auto usedIntBoolChangedCanonical =
+      makeCanonicalDrawStateFromState(usedIntBoolChanged, {});
+  check(usedIntBoolChangedCanonical.hot.vertexConstantsHash !=
+            canonical.hot.vertexConstantsHash,
+        "indexed-float VS hash keeps used int/bool prefixes");
+}
+
 void testShaderConstantPayloadSurvivesDrawRunCommandView() {
   DeviceState state;
   state.reset();
@@ -1234,10 +1333,13 @@ void testShaderConstantPayloadSurvivesDrawRunCommandView() {
         "shader constant command view resolves draw-run record");
   check(command.drawState.hasShaderContext(),
         "shader constant command view carries shader layout context");
-  check(command.drawState.hasUniformPayload(),
-        "shader constant command view carries copied uniform payload");
-  check(command.drawUniformPayload != nullptr,
-        "shader constant command view resolves interned uniform payload");
+  check(!command.drawState.hasUniformPayload(),
+        "shader constant command view does not carry a command-level uniform copy");
+  DrawUniformPayload commandUniformScratch{};
+  const auto* commandUniformPayload = drawRunUniformPayloadForHandle(
+      command, command.drawRunRecord->uniformHandle, commandUniformScratch);
+  check(commandUniformPayload != nullptr,
+        "shader constant command view resolves uniform payload by handle");
   checkEq(command.drawParams.size(), std::size_t{1},
           "shader constant command view keeps draw param count");
 
@@ -1256,17 +1358,19 @@ void testShaderConstantPayloadSurvivesDrawRunCommandView() {
           command.drawState.hot->key.pixelConstantsHash,
           "draw-run command hot state keeps pixel constant hash");
   checkEq(command.drawRunRecord->uniformHandle.hash,
-          command.drawUniformPayload->hash,
-          "draw-run command uniform handle hashes the copied payload");
-  checkEq(command.drawUniformPayload->vertexConstantsHash,
+          commandUniformPayload->hash,
+          "draw-run command uniform handle hashes the resolved payload");
+  checkEq(commandUniformPayload->vertexConstantsHash,
           command.drawState.hot->vertexConstantsHash,
           "draw-run command uniform payload keeps vertex component hash");
-  checkEq(command.drawUniformPayload->pixelConstantsHash,
+  checkEq(commandUniformPayload->pixelConstantsHash,
           command.drawState.hot->pixelConstantsHash,
           "draw-run command uniform payload keeps pixel component hash");
 
-  const auto vsConsts = dxmt9::state::buildVsConsts(command.drawState);
-  const auto psConsts = dxmt9::state::buildPsConsts(command.drawState);
+  auto commandState = command.drawState;
+  commandState.uniforms = commandUniformPayload;
+  const auto vsConsts = dxmt9::state::buildVsConsts(commandState);
+  const auto psConsts = dxmt9::state::buildPsConsts(commandState);
   checkNear(vsConsts.vsFloatConst[0][0], 1.0f,
             "encoder VS constants read copied c0.x");
   checkNear(vsConsts.vsFloatConst[0][1], -2.0f,
@@ -1849,8 +1953,10 @@ void testRenderStateIntentPayloadAcrossDrawRunBoundary() {
           "slot debug view keeps render-state key hash");
   checkFlatStateValue(view.drawState.hot->renderStates, RS_BLEND_FACTOR, 0x80402010u,
                       "slot hot state keeps blend factor payload");
-  check(view.drawUniformPayload != nullptr,
-        "slot resolves the draw uniform payload alongside render state");
+  DrawUniformPayload viewUniformScratch{};
+  check(drawRunUniformPayloadForHandle(view, view.drawRunRecord->uniformHandle,
+                                       viewUniformScratch) != nullptr,
+        "slot resolves the draw uniform payload by handle alongside render state");
 
   DeviceState changed = state;
   changed.renderStates.set(RS_COLOR_WRITE_ENABLE,
@@ -2463,8 +2569,10 @@ void testFlatDrawStateKey() {
         "slot single-draw payload span starts at the record offset");
   checkEq(slot.drawPayloadArena.size(), std::size_t{6},
           "slot draw payload arena owns single-draw UP bytes");
-  check(drawView.drawUniformPayload != nullptr,
-        "slot single-draw command resolves its uniform payload");
+  DrawUniformPayload drawViewUniformScratch{};
+  check(drawRunUniformPayloadForHandle(drawView, drawView.drawRunRecord->uniformHandle,
+                                       drawViewUniformScratch) != nullptr,
+        "slot single-draw command resolves its uniform payload by handle");
   checkEq(slot.drawUniformPayloads.size(), std::size_t{1},
           "slot single-draw command stores one uniform payload");
   const auto sharedUniformHandle = drawView.drawRunRecord->uniformHandle;
@@ -2615,11 +2723,24 @@ void testFlatDrawStateKey() {
   const auto refreshedDrawView = slot.commandAt(0);
   const auto refreshedRunView = slot.commandAt(1);
   if (uniformDedupDisabled) {
-    check(refreshedDrawView.drawUniformPayload != refreshedRunView.drawUniformPayload,
-          "slot dedup-disabled command views keep repeated uniform payload records distinct");
+    check(!(refreshedDrawView.drawRunRecord->uniformHandle ==
+            refreshedRunView.drawRunRecord->uniformHandle),
+          "slot dedup-disabled command views keep repeated uniform handles distinct");
   } else {
-    check(refreshedDrawView.drawUniformPayload == refreshedRunView.drawUniformPayload,
-          "slot command views resolve interned uniform payloads to the same arena record");
+    checkEq(refreshedDrawView.drawRunRecord->uniformHandle,
+            refreshedRunView.drawRunRecord->uniformHandle,
+            "slot command views resolve interned uniform payloads to the same handle");
+    DrawUniformPayload refreshedDrawScratch{};
+    DrawUniformPayload refreshedRunScratch{};
+    const auto* refreshedDrawPayload = drawRunUniformPayloadForHandle(
+        refreshedDrawView, refreshedDrawView.drawRunRecord->uniformHandle,
+        refreshedDrawScratch);
+    const auto* refreshedRunPayload = drawRunUniformPayloadForHandle(
+        refreshedRunView, refreshedRunView.drawRunRecord->uniformHandle,
+        refreshedRunScratch);
+    check(refreshedDrawPayload && refreshedRunPayload &&
+              *refreshedDrawPayload == *refreshedRunPayload,
+          "slot command views expose equivalent default uniform payload values");
   }
 
   DrawDesc sameMapsDifferentInsertion = first;
@@ -2727,6 +2848,7 @@ int main() {
   testChunkSlotDirectDrawRunUniformLookup();
   testStateValueTableDirtyHashContract();
   testStateDrawTransform();
+  testFlatDrawStateTracksNonIdentityTextureTransformMask();
   testTransformMultiplicationOrderAndBlendSlots();
   testExtendedWorldMatrixTransformRoundTrip();
   testClipPlaneLimitsAtCoreBoundary();
@@ -2735,6 +2857,7 @@ int main() {
   testClipPlaneTransformPayloadAndMaskBounds();
   testConstantsAndShaderRefs();
   testShaderConstantUsageAwareHashesIgnoreUnusedConstants();
+  testIndexedFloatConstantHashKeepsFullFloatButTrimsIntBoolTail();
   testShaderConstantPayloadSurvivesDrawRunCommandView();
   testShaderLayoutCarriesConstantUsageMetadata();
   testResourceBindingsAndAttachments();

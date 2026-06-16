@@ -316,6 +316,12 @@ std::optional<u64> probeDepthFuncAlwaysTexture0Format();
 // Env: DXMT9_PROBE_FRAGMENTLESS_DEPTH_ONLY.
 bool probeFragmentlessDepthOnly();
 
+// Diagnostic sub-mode for DXMT9_PROBE_FRAGMENTLESS_DEPTH_ONLY. When enabled,
+// keep the ordinary pair-local VSOut layout instead of forcing position-only,
+// isolating fragment-function removal from VSOut-shape changes.
+// Env: DXMT9_PROBE_FRAGMENTLESS_DEPTH_ONLY_KEEP_VSOUT.
+bool probeFragmentlessDepthOnlyKeepVSOut();
+
 // Optional class filter for DXMT9_PROBE_FRAGMENTLESS_DEPTH_ONLY. Accepted
 // values match DXMT9_SPLIT_LARGE_INDEXED_DRAWS_CLASS.
 // Env: DXMT9_PROBE_FRAGMENTLESS_DEPTH_ONLY_CLASS.

@@ -159,6 +159,11 @@ class CommandQueue {
   void noteCommitChunkEntryForCompletionGap();
   void noteCommitChunkReplayStartForCompletionGap();
   void noteCommitChunkReplayEndForCompletionGap();
+  void noteCommitChunkReplayCpuBeforePublish(std::uint64_t nanoseconds);
+  void noteCommitChunkActiveReplayCpuBeforePublish(std::uint64_t nanoseconds);
+  void noteCommitChunkRecordShapeForCompletionGap(
+      const core::metalqueue::NoEnqueueCommitChunkRecordShape& shape);
+  void prefetchCurrentWritingSlotPipelines();
   void submitClear(const core::ClearDesc& desc);
   void submitSurfaceCopy(const core::SurfaceCopyDesc& desc);
   void submitStretchRect(const core::StretchRectDesc& desc);
@@ -223,6 +228,11 @@ class CommandQueue {
   TransientBufferSlice uploadTransientBuffer(std::span<const std::byte> bytes,
                                              std::size_t alignment,
                                              std::uint64_t seqId);
+  TransientBufferSlice uploadTransientBufferWithCompletedSeqId(
+      std::span<const std::byte> bytes,
+      std::size_t alignment,
+      std::uint64_t seqId,
+      std::uint64_t completedSeqId);
   // Batched transient upload — single TransientResourceArena acquire +
   // single completedSeqId_ snapshot for N payloads. Returns one slice
   // per input payload in order. Each payload still gets its own
@@ -235,6 +245,11 @@ class CommandQueue {
       std::span<const std::span<const std::byte>> payloads,
       std::size_t alignment,
       std::uint64_t seqId);
+  std::vector<TransientBufferSlice> uploadTransientBufferBatchWithCompletedSeqId(
+      std::span<const std::span<const std::byte>> payloads,
+      std::size_t alignment,
+      std::uint64_t seqId,
+      std::uint64_t completedSeqId);
 
   // Retain an immutable sampler state until the chunk carrying an argument
   // buffer reference to it has completed. Direct encoder binds are retained by
@@ -255,6 +270,11 @@ class CommandQueue {
   TransientBufferReservation reserveTransientBuffer(std::size_t size,
                                                     std::size_t alignment,
                                                     std::uint64_t seqId);
+  TransientBufferReservation reserveTransientBufferWithCompletedSeqId(
+      std::size_t size,
+      std::size_t alignment,
+      std::uint64_t seqId,
+      std::uint64_t completedSeqId);
 
   resources::ReorderedIndexBufferLookup findReorderedIndexBuffer(
       core::Handle sourceHandle,
@@ -348,7 +368,7 @@ class CommandQueue {
       std::uint64_t seqId);
   using ResolveSurfaceFlagsFn = std::function<std::uint32_t(core::Handle)>;
   void bindSelfLifecycle(ResolveSurfaceFlagsFn resolveSurfaceFlags);
-  void prefetchSlotPipelines(core::ChunkSlot& slot);
+  void prefetchSlotPipelines(core::ChunkSlot& slot, bool seal = true);
   void startThreads(std::function<void()> encodeLoop,
                     std::function<void()> finishLoop,
                     std::function<void()> completionLoop);

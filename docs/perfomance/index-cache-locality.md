@@ -42,6 +42,7 @@ bottleneck triage. The mechanism behind why this works is proven separately by
 | H21 | Positive Metal visibility can promote scoped depth-read locality | rejected; rank2 has positive samples with no final color, while rank1/rank3 are both positive but fail/pass diverge | [[mini-replay-bisection-texture.11]] |
 | H22 | The current perf gate can keep the locality semantic ceiling attached to the next Xcode queue | accepted (gate) | [[index-cache-locality-screenblend.10]] (`locality-semantic-ceiling=oracle-required`; color-exact/zero-sample buckets are too small, sample-visible bucket needs final-color/final-writer proof) |
 | H23 | Current real-texture semantic replay summaries provide the missing final-writer oracle | rejected by gate | [[hidden-backend-storage-shape.20]] (`final-writer-replay-oracle=blocked-final-writer-hazard`; fail LRU32 `-14,593`, masked LRU32 `-9,113`, owner-safe LRU32 `0`) |
+| H24 | Gate/class/primitive-shape telemetry can classify the remaining opaque-depth CPU side-effect before another Xcode spend | accepted; frame60 hot rows have `102/102` candidate gate-pass and `0` gate-fail, so the blocker is valid candidate construction/cache lookup, not hot-row failed-gate waste | [[index-cache-locality-cpucost.18]] |
 
 ## Verification methods
 
@@ -70,7 +71,11 @@ bottleneck triage. The mechanism behind why this works is proven separately by
   [[index-cache-locality-proofinput.01]] for the current recipes and proof
   status.
 - **LRU32 telemetry** — `indexed_cache_opt_candidate_*_miss32`,
-  `candidate_miss_delta32` (production uses miss32; miss16/64 are `0` in fast-measure).
+  `candidate_miss_delta32` (production uses miss32; miss16/64 are `0` in
+  fast-measure), plus `indexed_cache_opt_candidate_gate_{pass,fail}`,
+  `indexed_cache_opt_candidate_{opaque_depth,screen_blend}_draws`, and
+  `indexed_cache_opt_candidate_primitive_bucket_*` for the CPU side-effect
+  shape.
 - **Reordered-cache hit counters** — `reordered_index_cache_{lookups,hits,rejected_hits,created}`,
   `runtime_applied_draws` prove the path is active and conservatively scoped.
 - **No-mutate identity scout** — `DXMT9_MEASURE_INDEX_REUSE=1` +
@@ -113,6 +118,7 @@ flowchart TD
   Cpu15["index-cache-locality-cpucost.15\npersistent rejected verdict refresh\n401k rejected hits / 143 misses"]
   Cpu16["index-cache-locality-cpucost.16\ndraw-shape prefilter audit\nnon-scope already skipped"]
   Cpu17["index-cache-locality-cpucost.17\nstrict LRU diagnostic REJECTED\nmiss32 +46, total CPU +36.9ms"]
+  Cpu18["index-cache-locality-cpucost.18\ngate/class/bucket scout\nframe60 pass 102/fail 0\ncandidate+lookup 0.33ms/present"]
   ScopedDepth["mini-replay-bisection-semantic.02/.texture.02/.texture.04/.texture.05/.texture.06/.texture.07\n60/2 depth-read/no-blend\nrank1 visible fail\nrank2/3/4 color-exact owner-masked\nnon-color selector rejected"]
   OcclusionGate["mini-replay-bisection-texture.08/.09\nD3D9 query primitive-count only\nMetal visibility scout sample-count only"]
   VisibilityPositive["mini-replay-bisection-texture.11\npositive visibility is not final color"]
@@ -155,6 +161,7 @@ flowchart TD
   Cpu14 --> Cpu15
   Cpu15 --> Cpu16
   Cpu16 --> Cpu17
+  Cpu17 --> Cpu18
   Cpu3 --> FastGate
   FastGate --> Proof
   Proof --> ProofCurrent
@@ -178,9 +185,9 @@ flowchart TD
   class Preflight,OptNo,OptXcode,Smoke,Cpu1,Cpu3,Cpu4,Cpu5,Cpu6,Cpu8,Cpu9,Cpu10,FastGate,Proof,Identity1,Identity2 accepted
   class Cpu2,Cpu7,Cpu11,Cpu12,Cpu13,Cpu14,Cpu15,Cpu16,Cpu17,MinGain,OcclusionGate rejected
   class ScopedDepth accepted
+  class Cpu18,SbCeilingGate accepted
   class SbScout,SbXcode,SbGate,SbOrder,Triage,OpenOwner,ProofInput open
   class SbFull,SbVariance,SbCeiling rejected
-  class SbCeilingGate accepted
 ```
 
 ## Results synthesis
@@ -259,12 +266,21 @@ diagnostic ([[index-cache-locality-cpucost.17]]) normalized the simulated LRU
 miss path to the same no-duplicate update used by the LRU32 measurement helper,
 but that also failed as a default-change reason: candidate miss32 worsened
 `418,033→418,079`, the candidate CPU delta was only `-5.082ms`, and total
-`encode_draw_cpu_ms` regressed `+36.930ms` in the no-gputrace run. Future CPU
-work therefore needs either a cheaper cold-miss candidate construction path, a
-narrower eligible-subclass exclusion proven by telemetry, or more semantic-safe
-GPU payoff, not another per-candidate measurement pass, not basic rejected-key
-caching, not a broad "avoid non-eligible draws" gate, and not local LRU
-miss-path normalization.
+`encode_draw_cpu_ms` regressed `+36.930ms` in the no-gputrace run. The
+gate/class/bucket follow-up ([[index-cache-locality-cpucost.18]]) then
+classifies that remaining CPU tax: the frame60 hot encoder scope has `198`
+lookups, `102` applied hits, `96` rejected hits, `0` misses/creates, and
+`102/102` measured candidates pass the gain gate with all candidates in the
+opaque-depth scope. The LRU32 delta is still useful (`460,019 -> 333,936`,
+`-27.41%`), but the hot rows are not wasting CPU on failed candidates. Whole-run
+counters still show `169/58` pass/fail and `227` opaque-depth candidates, with
+candidate+lookup CPU about `0.331ms/present` and index setup rising to
+`0.724ms/present` in the contextual r18 comparison. Future CPU work therefore
+needs either a cheaper valid-candidate construction path, cheaper per-draw
+lookup/setup amortization, or more semantic-safe GPU payoff, not another
+per-candidate measurement pass, not basic rejected-key caching, not a broad
+"avoid non-eligible draws" gate, not hot-row failed-gate prefiltering, and not
+local LRU miss-path normalization.
 (2) The dominant remaining frame owner is row
 `50/2` — depth-read, screen-blend/standard-alpha/blend-off, textured, large indexed
 geometry — whose `~1.49–1.58 GiB` cost is hidden vertex/tiler/parameter storage, not

@@ -1,5 +1,6 @@
 #include "dxmt9_pipeline_cache.hpp"
 #include "dxmt9/assert.hpp"
+#include "dxmt9_debug_trace.hpp"
 #include "dxmt9_draw_shader.hpp"
 #include "dxmt9_draw_state.hpp"
 #include "dxmt9_ffp_shaders.hpp"
@@ -58,6 +59,79 @@ bool envFlag(const char* name) noexcept {
   const char* env = std::getenv(name);
   return env && env[0] != '\0' && std::strcmp(env, "0") != 0;
 }
+
+bool synchronousPsoCompileEnabled() noexcept {
+  static const bool enabled =
+      envFlag("DXMT9_SYNC_PSO_COMPILE") ||
+      envFlag("MTL_CAPTURE_ENABLED") ||
+      envFlag("METAL_CAPTURE_ENABLED");
+  return enabled;
+}
+
+bool pipelineBuildTraceEnabled() noexcept {
+  static const bool enabled =
+      envFlag("DXMT9_TRACE_PIPELINE_BUILD") ||
+      envFlag("DXMT_TRACE_QUEUE");
+  return enabled;
+}
+
+bool argbufDirectCbufEnvEnabled() noexcept {
+  static const bool enabled = envFlag("DXMT9_ARGBUF_DIRECT_CBUF");
+  return enabled;
+}
+
+void traceDrawPipelineBuild(const char* stage,
+                            const ShaderVariantKey& key,
+                            u64 sourceHash) {
+  if (!pipelineBuildTraceEnabled()) {
+    return;
+  }
+  util::logf(util::LogLevel::Info, "dxmt9-pipeline-cache",
+             "draw-pso %s variant=0x%llx source=0x%llx tile=%u tile_base=%u "
+             "argbuf=%u argbuf_direct_cbuf=%u resource_array=%u fragmentless=%u sample=%u "
+             "color0=%u depth=%u stencil=%u vsout=0x%x alpha_to_coverage=%u",
+             stage ? stage : "unknown",
+             static_cast<unsigned long long>(key.hash),
+             static_cast<unsigned long long>(sourceHash),
+             key.tileFfpMode ? 1u : 0u,
+             key.tileFfpBaseColor ? 1u : 0u,
+             key.argbufHybridMode ? 1u : 0u,
+             key.argbufDirectCbufMode ? 1u : 0u,
+             key.argbufResourceArray ? 1u : 0u,
+             key.fragmentlessDepthOnly ? 1u : 0u,
+             static_cast<unsigned>(std::max(1u, key.sampleCount)),
+             static_cast<unsigned>(key.colorFormats[0]),
+             static_cast<unsigned>(key.depthFormat),
+             static_cast<unsigned>(key.stencilFormat),
+             static_cast<unsigned>(key.vsOutLayoutKey),
+             key.alphaToCoverage ? 1u : 0u);
+}
+
+class ScopedPerfCounter {
+ public:
+  explicit ScopedPerfCounter(void (*record)(std::uint64_t))
+      : record_(perf::enabled() ? record : nullptr) {
+    if (record_) {
+      started_ = std::chrono::steady_clock::now();
+    }
+  }
+
+  ~ScopedPerfCounter() {
+    if (!record_) {
+      return;
+    }
+    const auto elapsed = std::chrono::steady_clock::now() - started_;
+    record_(static_cast<std::uint64_t>(
+        std::chrono::duration_cast<std::chrono::nanoseconds>(elapsed).count()));
+  }
+
+  ScopedPerfCounter(const ScopedPerfCounter&) = delete;
+  ScopedPerfCounter& operator=(const ScopedPerfCounter&) = delete;
+
+ private:
+  void (*record_)(std::uint64_t) = nullptr;
+  std::chrono::steady_clock::time_point started_{};
+};
 
 bool x8ShaderAlphaFillEnabled() {
   static const bool enabled = envFlag("DXMT9_X8_SHADER_ALPHA_FILL");
@@ -362,12 +436,30 @@ PipelineCompileQueue& pipelineCompileQueue() {
 template <typename Fn>
 std::shared_future<WMT::Reference<WMT::RenderPipelineState>>
 submitPipelineBuild(Fn&& fn) {
+  if (synchronousPsoCompileEnabled()) {
+    std::promise<WMT::Reference<WMT::RenderPipelineState>> promise;
+    try {
+      promise.set_value(std::forward<Fn>(fn)());
+    } catch (...) {
+      promise.set_exception(std::current_exception());
+    }
+    return promise.get_future().share();
+  }
   return pipelineCompileQueue().submit(std::forward<Fn>(fn));
 }
 
 template <typename Fn>
 std::shared_future<WMT::Reference<WMT::Library>>
 submitLibraryBuild(Fn&& fn) {
+  if (synchronousPsoCompileEnabled()) {
+    std::promise<WMT::Reference<WMT::Library>> promise;
+    try {
+      promise.set_value(std::forward<Fn>(fn)());
+    } catch (...) {
+      promise.set_exception(std::current_exception());
+    }
+    return promise.get_future().share();
+  }
   return libraryCompileQueue().submit(std::forward<Fn>(fn));
 }
 
@@ -427,13 +519,14 @@ void logPipelineBuildFailureOnce(const char* stage,
     return;
   }
   util::logf(util::LogLevel::Error, "dxmt9-pipeline-cache",
-             "draw pipeline build failed: stage=%s variant=0x%llx source=0x%llx tile=%u tile_base=%u argbuf=%u resource_array=%u color0fmt=%u depthfmt=%u stencilfmt=%u",
+             "draw pipeline build failed: stage=%s variant=0x%llx source=0x%llx tile=%u tile_base=%u argbuf=%u argbuf_direct_cbuf=%u resource_array=%u color0fmt=%u depthfmt=%u stencilfmt=%u",
              stage ? stage : "unknown",
              static_cast<unsigned long long>(key.hash),
              static_cast<unsigned long long>(sourceHash),
              key.tileFfpMode ? 1u : 0u,
              key.tileFfpBaseColor ? 1u : 0u,
              key.argbufHybridMode ? 1u : 0u,
+             key.argbufDirectCbufMode ? 1u : 0u,
              key.argbufResourceArray ? 1u : 0u,
              static_cast<unsigned>(key.colorFormats[0]),
              static_cast<unsigned>(key.depthFormat),
@@ -459,7 +552,8 @@ u64 makeShaderSourceDebugEnvKey(bool trimUnusedVaryings,
                                 bool debugFfpAlpha,
                                 bool probeDropVSOutPointSize,
                                 bool probePositionOnlyVSOut,
-                                bool probeHalfVSOut) noexcept {
+                                bool probeHalfVSOut,
+                                bool probeFragmentlessKeepVSOut) noexcept {
   u64 hash = kFnvOffset;
   hash = mix(hash, kShaderDebugEnvSchemaVersion);
   hash = mix(hash, static_cast<u64>(trimUnusedVaryings));
@@ -486,6 +580,9 @@ u64 makeShaderSourceDebugEnvKey(bool trimUnusedVaryings,
   if (probeHalfVSOut) {
     hash = mix(hash, 0xe14f9d92a8c61d37ull);
   }
+  if (probeFragmentlessKeepVSOut) {
+    hash = mix(hash, 0x2849ee34d4c1c0e7ull);
+  }
   return hash;
 }
 
@@ -510,7 +607,8 @@ u64 currentShaderSourceDebugEnvKey(
       envFlag("DXMT_DEBUG_FFP_ALPHA"),
       envFlag("DXMT9_PROBE_DROP_VSOUT_POINT_SIZE"),
       envFlag("DXMT9_PROBE_POSITION_ONLY_VSOUT"),
-      envFlag("DXMT9_PROBE_HALF_VSOUT"));
+      envFlag("DXMT9_PROBE_HALF_VSOUT"),
+      debug::probeFragmentlessDepthOnlyKeepVSOut());
 }
 
 u64 currentShaderSourceDebugEnvKey() noexcept {
@@ -722,6 +820,7 @@ std::size_t ShaderVariantKeyHash::operator()(const ShaderVariantKey& key) const 
   // hash so Stage 1 and Stage 2 PSOs of the same shader live in
   // distinct cache slots.
   hash = mix(hash, static_cast<u64>(key.argbufHybridMode));
+  hash = mix(hash, static_cast<u64>(key.argbufDirectCbufMode));
   // R-BACK-12.22..12.26 (resource-array sub-mode): the texture/sampler
   // resource-array sub-bit participates in the key hash so a Stage 2
   // constants-only PSO and a Stage 2 resource-array PSO of the same
@@ -1118,7 +1217,13 @@ Cache::getOrBuildDrawPipelineHandle(WMT::Reference<WMT::Device> device,
           WMT::Error err{};
           perf::countPipelineBuild(perf::PipelineKind::Draw);
           perf::countColdCompileAfterWarm();
+          traceDrawPipelineBuild("before-tile-pso",
+                                 sourceKey,
+                                 sourceKey.tileSourceHash);
           auto pso = device.newRenderPipelineState(desc, err);
+          traceDrawPipelineBuild(pso ? "after-tile-pso-ok" : "after-tile-pso-fail",
+                                 sourceKey,
+                                 sourceKey.tileSourceHash);
           if (!pso) {
             countPipelineBuildFailure(PipelineBuildFailureStage::Pso);
             logPipelineBuildFailureOnce("tile-pso", sourceKey, sourceKey.tileSourceHash);
@@ -1181,7 +1286,7 @@ Cache::getOrBuildDrawPipelineHandle(WMT::Reference<WMT::Device> device,
             return WMT::Reference<WMT::RenderPipelineState>{};
           }
           auto vs = vsLib.newFunction("dxmt9_vs");
-          WMT::Function fs{};
+          WMT::Reference<WMT::Function> fs{};
           if (!sourceKey.fragmentlessDepthOnly) {
             fs = fsLib.newFunction("dxmt9_fs");
           }
@@ -1232,7 +1337,15 @@ Cache::getOrBuildDrawPipelineHandle(WMT::Reference<WMT::Device> device,
           // missing, schema drift, lock_busy, or content mismatch with the
           // current emitter / variant key).
           perf::countColdCompileAfterWarm();
+          traceDrawPipelineBuild("before-render-pso",
+                                 sourceKey,
+                                 sourceKey.vertexSourceHash ^
+                                     (sourceKey.fragmentSourceHash << 1u));
           auto pso = device.newRenderPipelineState(info, err);
+          traceDrawPipelineBuild(pso ? "after-render-pso-ok" : "after-render-pso-fail",
+                                 sourceKey,
+                                 sourceKey.vertexSourceHash ^
+                                     (sourceKey.fragmentSourceHash << 1u));
           if (!pso) {
             countPipelineBuildFailure(PipelineBuildFailureStage::Pso);
             logPipelineBuildFailureOnce("render-pso", sourceKey,
@@ -1362,13 +1475,161 @@ Cache::getOrBuildDrawPipelineForState(WMT::Reference<WMT::Device> device,
                                       bool tileFfpMode,
                                       bool argbufHybridMode,
                                       bool argbufResourceArray,
+                                      bool argbufDirectCbufMode,
                                       bool disableAlphaBlend,
                                       std::optional<bool> forceTextureWhiteOverride,
                                       bool fragmentlessDepthOnly) {
   return getOrBuildDrawPipelineHandleForState(
       device, limits, pool, state, archive, archivePath, tileFfpMode,
-      argbufHybridMode, argbufResourceArray, disableAlphaBlend,
+      argbufHybridMode, argbufResourceArray, argbufDirectCbufMode,
+      disableAlphaBlend,
       forceTextureWhiteOverride, fragmentlessDepthOnly).future;
+}
+
+ResolvedDrawPipelineState
+Cache::resolveDrawPipelineState(const core::BackendLimits& limits,
+                                resources::Pool& pool,
+                                core::FlatDrawStateView state,
+                                bool tileFfpMode,
+                                bool argbufHybridMode,
+                                bool argbufResourceArray,
+                                bool argbufDirectCbufMode,
+                                bool disableAlphaBlend,
+                                std::optional<bool> forceTextureWhiteOverride,
+                                bool fragmentlessDepthOnly) {
+  std::array<u32, core::kMaxRenderTargets> colorFormats{};
+  std::array<BlendAttachmentKey, core::kMaxRenderTargets> blendAttachments{};
+  u32 depthFormat = 0;
+  u32 stencilFormat = 0;
+  {
+    ScopedPerfCounter scope(
+        perf::countEncodeSlotPsoPrefetchDrawResolveFormatCpuTime);
+    const bool srgbWrite =
+        core::flatStateOr(state.hot->renderStates, core::RS_SRGB_WRITE_ENABLE, 0u) != 0;
+    auto resolvePixelFormat = [&](core::Handle handle) -> u32 {
+      if (!handle) {
+        return 0;
+      }
+      if (auto* surface = pool.findSurface(handle.value); surface) {
+        return static_cast<u32>(
+            dxmt9::convert::toPixelFormat(surface->desc.format, limits, srgbWrite));
+      }
+      return 0;
+    };
+
+    blendAttachments =
+        detail::makeBlendAttachmentKeys(state, debugForceVisibleDraw(), disableAlphaBlend);
+    for (std::size_t i = 0; i < core::kMaxRenderTargets; ++i) {
+      colorFormats[i] = resolvePixelFormat(state.hot->colorAttachments[i].handle);
+      blendAttachments[i].pixelFormat = colorFormats[i];
+    }
+    if (state.hot->depthStencil.handle) {
+      if (auto* surface = pool.findSurface(state.hot->depthStencil.handle.value);
+          surface && surface->desc.depthStencil) {
+        const auto pixelFormat =
+            static_cast<u32>(dxmt9::convert::toPixelFormat(surface->desc.format, limits));
+        depthFormat =
+            dxmt9::convert::formatHasDepthAspect(surface->desc.format) ? pixelFormat : 0u;
+        stencilFormat =
+            dxmt9::convert::formatHasStencilAspect(surface->desc.format) ? pixelFormat : 0u;
+      }
+    }
+  }
+  bool forceTextureWhiteForDebug = false;
+  ShaderVariantKey key{};
+  {
+    ScopedPerfCounter scope(
+        perf::countEncodeSlotPsoPrefetchDrawResolveVariantKeyCpuTime);
+    forceTextureWhiteForDebug =
+        forceTextureWhiteOverride.value_or(envFlag("DXMT_FORCE_TEXTURE_WHITE"));
+    key = makeShaderVariantKey(
+        state, colorFormats, blendAttachments, depthFormat, stencilFormat,
+        forceTextureWhiteOverride);
+    // R-BACK-13.3: stamp the tile-FFP-mode bit onto the variant key so the
+    // tile-stage and fragment-stage variants share an FFPKeyPS but land in
+    // distinct cache entries.
+    key.tileFfpMode = tileFfpMode;
+    // R-BACK-12.22 / 12.23: stamp the argbuf-hybrid-mode bit so Stage 1
+    // and Stage 2 variants of the same shader compile separate PSOs.
+    key.argbufHybridMode = argbufHybridMode;
+    // R-BACK-12.22..12.26 (resource-array sub-mode): stamp the sub-bit only
+    // alongside argbufHybridMode so a stray true can never select the
+    // resource-array prelude on a Stage 1 PSO.
+    key.argbufResourceArray = argbufHybridMode && argbufResourceArray;
+    key.argbufDirectCbufMode =
+        argbufHybridMode && !key.argbufResourceArray && argbufDirectCbufMode;
+  }
+  drawshader::ShaderSourceContext shaderSource{};
+  {
+    ScopedPerfCounter scope(
+        perf::countEncodeSlotPsoPrefetchDrawResolveShaderContextCpuTime);
+    shaderSource =
+        drawshader::makeShaderSourceContext(state.shaderContext(), *state.hot);
+    // R-BACK-12.22..12.26 MSL routing — propagate the variant key bit into
+    // the source-emitter context so FFP and DXBC->MSL bodies read uniforms
+    // through `ArgbufLayout` at slot 30 instead of slots 0/3.
+    shaderSource.argbufHybridMode = argbufHybridMode;
+    shaderSource.argbufDirectCbufMode = key.argbufDirectCbufMode;
+    // R-BACK-12.22..12.26 (resource-array sub-mode): propagate the sub-bit so
+    // the emitters route texture/sampler reads through the slot-30 argbuf
+    // arrays + alias block. Mirrors the key bit exactly.
+    shaderSource.argbufResourceArray = key.argbufResourceArray;
+    // gap_d3d9 B.3: propagate the LOD-bias gate bit so the FFP and DXBC->MSL
+    // emitters declare the slot-4 SamplerLodBias param + thread bias() only when
+    // a sampler carries a non-zero LOD bias. makeShaderVariantKey already
+    // computed key.samplerLodBias from the same predicate the encoder bind reads.
+    shaderSource.samplerLodBias = key.samplerLodBias;
+    shaderSource.stripAlphaTestForDebug = envFlag("DXMT_DISABLE_ALPHA_TEST");
+    shaderSource.stripFogForDebug = envFlag("DXMT_DISABLE_FOG");
+    shaderSource.forceTextureWhiteForDebug = forceTextureWhiteForDebug;
+  }
+  {
+    ScopedPerfCounter scope(
+        perf::countEncodeSlotPsoPrefetchDrawResolveX8AlphaCpuTime);
+    stampX8AlphaOneTextureMask(
+        key, shaderSource,
+        x8AlphaOneTextureMask(pool, *state.hot, key.textureMask));
+  }
+  {
+    ScopedPerfCounter scope(
+        perf::countEncodeSlotPsoPrefetchDrawResolveVsoutLayoutCpuTime);
+    shaderSource.vsOutLayout = drawshader::resolveVSOutLayoutForShaderPair(shaderSource);
+    key.vsOutLayoutKey = shaders::vsoutLayoutKey(shaderSource.vsOutLayout);
+  }
+  if (fragmentlessDepthOnly) {
+    ScopedPerfCounter scope(
+        perf::countEncodeSlotPsoPrefetchDrawResolveFragmentlessCpuTime);
+    const char* rejectReason = nullptr;
+    if (tileFfpMode) {
+      rejectReason = "tile-ffp-mode";
+    } else if (key.alphaTest) {
+      rejectReason = "alpha-test";
+    } else if (key.alphaToCoverage) {
+      rejectReason = "alpha-to-coverage";
+    } else if (!fragmentlessDepthOnlyShaderSafe(shaderSource)) {
+      rejectReason = "fragment-side-effect";
+    }
+    fragmentlessDepthOnly = rejectReason == nullptr;
+    if (fragmentlessDepthOnly &&
+        !debug::probeFragmentlessDepthOnlyKeepVSOut()) {
+      shaderSource.vsOutLayout = shaders::positionOnlyVSOutLayout();
+      key.vsOutLayoutKey = shaders::vsoutLayoutKey(shaderSource.vsOutLayout);
+    }
+    key.fragmentlessDepthOnly = fragmentlessDepthOnly;
+    logFragmentlessDepthOnlyProbeDecision(
+        key, fragmentlessDepthOnly,
+        fragmentlessDepthOnly
+            ? (debug::probeFragmentlessDepthOnlyKeepVSOut()
+                   ? "accepted-keep-vsout"
+                   : "accepted")
+            : rejectReason);
+  }
+  key.fragmentlessDepthOnly = fragmentlessDepthOnly;
+  shaderSource.fragmentlessDepthOnly = fragmentlessDepthOnly;
+  return ResolvedDrawPipelineState{
+      .key = key,
+      .shaderSource = std::move(shaderSource),
+  };
 }
 
 DrawPipelineLookup
@@ -1381,105 +1642,17 @@ Cache::getOrBuildDrawPipelineHandleForState(WMT::Reference<WMT::Device> device,
                                             bool tileFfpMode,
                                             bool argbufHybridMode,
                                             bool argbufResourceArray,
+                                            bool argbufDirectCbufMode,
                                             bool disableAlphaBlend,
                                             std::optional<bool> forceTextureWhiteOverride,
                                             bool fragmentlessDepthOnly) {
-  const bool srgbWrite =
-      core::flatStateOr(state.hot->renderStates, core::RS_SRGB_WRITE_ENABLE, 0u) != 0;
-  auto resolvePixelFormat = [&](core::Handle handle) -> u32 {
-    if (!handle) {
-      return 0;
-    }
-    if (auto* surface = pool.findSurface(handle.value); surface) {
-      return static_cast<u32>(
-          dxmt9::convert::toPixelFormat(surface->desc.format, limits, srgbWrite));
-    }
-    return 0;
-  };
-
-  std::array<u32, core::kMaxRenderTargets> colorFormats{};
-  auto blendAttachments =
-      detail::makeBlendAttachmentKeys(state, debugForceVisibleDraw(), disableAlphaBlend);
-  for (std::size_t i = 0; i < core::kMaxRenderTargets; ++i) {
-    colorFormats[i] = resolvePixelFormat(state.hot->colorAttachments[i].handle);
-    blendAttachments[i].pixelFormat = colorFormats[i];
-  }
-  u32 depthFormat = 0;
-  u32 stencilFormat = 0;
-  if (state.hot->depthStencil.handle) {
-    if (auto* surface = pool.findSurface(state.hot->depthStencil.handle.value);
-        surface && surface->desc.depthStencil) {
-      const auto pixelFormat =
-          static_cast<u32>(dxmt9::convert::toPixelFormat(surface->desc.format, limits));
-      depthFormat = dxmt9::convert::formatHasDepthAspect(surface->desc.format) ? pixelFormat : 0u;
-      stencilFormat =
-          dxmt9::convert::formatHasStencilAspect(surface->desc.format) ? pixelFormat : 0u;
-    }
-  }
-  const bool forceTextureWhiteForDebug =
-      forceTextureWhiteOverride.value_or(envFlag("DXMT_FORCE_TEXTURE_WHITE"));
-  auto key = makeShaderVariantKey(
-      state, colorFormats, blendAttachments, depthFormat, stencilFormat,
-      forceTextureWhiteOverride);
-  // R-BACK-13.3: stamp the tile-FFP-mode bit onto the variant key so the
-  // tile-stage and fragment-stage variants share an FFPKeyPS but land in
-  // distinct cache entries.
-  key.tileFfpMode = tileFfpMode;
-  // R-BACK-12.22 / 12.23: stamp the argbuf-hybrid-mode bit so Stage 1
-  // and Stage 2 variants of the same shader compile separate PSOs.
-  key.argbufHybridMode = argbufHybridMode;
-  // R-BACK-12.22..12.26 (resource-array sub-mode): stamp the sub-bit only
-  // alongside argbufHybridMode so a stray true can never select the
-  // resource-array prelude on a Stage 1 PSO.
-  key.argbufResourceArray = argbufHybridMode && argbufResourceArray;
-  drawshader::ShaderSourceContext shaderSource =
-      drawshader::makeShaderSourceContext(state.shaderContext(), *state.hot);
-  // R-BACK-12.22..12.26 MSL routing — propagate the variant key bit into
-  // the source-emitter context so FFP and DXBC->MSL bodies read uniforms
-  // through `ArgbufLayout` at slot 30 instead of slots 0/3.
-  shaderSource.argbufHybridMode = argbufHybridMode;
-  // R-BACK-12.22..12.26 (resource-array sub-mode): propagate the sub-bit so
-  // the emitters route texture/sampler reads through the slot-30 argbuf
-  // arrays + alias block. Mirrors the key bit exactly.
-  shaderSource.argbufResourceArray = key.argbufResourceArray;
-  // gap_d3d9 B.3: propagate the LOD-bias gate bit so the FFP and DXBC->MSL
-  // emitters declare the slot-4 SamplerLodBias param + thread bias() only when
-  // a sampler carries a non-zero LOD bias. makeShaderVariantKey already
-  // computed key.samplerLodBias from the same predicate the encoder bind reads.
-  shaderSource.samplerLodBias = key.samplerLodBias;
-  shaderSource.stripAlphaTestForDebug = envFlag("DXMT_DISABLE_ALPHA_TEST");
-  shaderSource.stripFogForDebug = envFlag("DXMT_DISABLE_FOG");
-  shaderSource.forceTextureWhiteForDebug = forceTextureWhiteForDebug;
-  stampX8AlphaOneTextureMask(
-      key, shaderSource,
-      x8AlphaOneTextureMask(pool, *state.hot, key.textureMask));
-  shaderSource.vsOutLayout = drawshader::resolveVSOutLayoutForShaderPair(shaderSource);
-  key.vsOutLayoutKey = shaders::vsoutLayoutKey(shaderSource.vsOutLayout);
-  if (fragmentlessDepthOnly) {
-    const char* rejectReason = nullptr;
-    if (tileFfpMode) {
-      rejectReason = "tile-ffp-mode";
-    } else if (key.alphaTest) {
-      rejectReason = "alpha-test";
-    } else if (key.alphaToCoverage) {
-      rejectReason = "alpha-to-coverage";
-    } else if (!fragmentlessDepthOnlyShaderSafe(shaderSource)) {
-      rejectReason = "fragment-side-effect";
-    }
-    fragmentlessDepthOnly = rejectReason == nullptr;
-    if (fragmentlessDepthOnly) {
-      shaderSource.vsOutLayout = shaders::positionOnlyVSOutLayout();
-      key.vsOutLayoutKey = shaders::vsoutLayoutKey(shaderSource.vsOutLayout);
-    }
-    key.fragmentlessDepthOnly = fragmentlessDepthOnly;
-    logFragmentlessDepthOnlyProbeDecision(
-        key, fragmentlessDepthOnly,
-        fragmentlessDepthOnly ? "accepted" : rejectReason);
-  }
-  key.fragmentlessDepthOnly = fragmentlessDepthOnly;
-  shaderSource.fragmentlessDepthOnly = fragmentlessDepthOnly;
-  return getOrBuildDrawPipelineHandle(device, key, std::move(shaderSource),
-                                      archive, archivePath);
+  auto resolved = resolveDrawPipelineState(
+      limits, pool, state, tileFfpMode, argbufHybridMode, argbufResourceArray,
+      argbufDirectCbufMode, disableAlphaBlend, forceTextureWhiteOverride,
+      fragmentlessDepthOnly);
+  return getOrBuildDrawPipelineHandle(device, resolved.key,
+                                      std::move(resolved.shaderSource), archive,
+                                      archivePath);
 }
 
 std::shared_future<WMT::Reference<WMT::RenderPipelineState>>
@@ -1678,6 +1851,10 @@ ArgbufHybridDecision selectArgbufHybridForPass(core::FlatDrawStateView,
     return ArgbufHybridDecision::Stage1;
   }
   return ArgbufHybridDecision::Stage2;
+}
+
+bool argbufDirectCbufEnabled() noexcept {
+  return argbufDirectCbufEnvEnabled();
 }
 
 ShaderVariantKey makeShaderVariantKey(core::FlatDrawStateView state,

@@ -285,6 +285,11 @@ PopulatedArgbuf openArgbuf(CommandQueue& queue,
                             ArgbufEncoderResource& encoderResource,
                             std::uint64_t seqId,
                             const ArgbufRecorder* recorder = nullptr);
+PopulatedArgbuf openArgbufWithCompletedSeqId(CommandQueue& queue,
+                                             ArgbufEncoderResource& encoderResource,
+                                             std::uint64_t seqId,
+                                             std::uint64_t completedSeqId,
+                                             const ArgbufRecorder* recorder = nullptr);
 
 // R-BACK-12.24 — populate the four constant-buffer entries in the
 // argbuf from per-frequency uniform host-structs. The call writes

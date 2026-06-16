@@ -170,6 +170,18 @@ struct QueueTransitionRecord {
   Handle sourceHandle{};
 };
 
+struct NoEnqueueCommitChunkRecordShape {
+  u64 recordCount = 0;
+  u64 drawRecords = 0;
+  u64 constRecords = 0;
+  u64 applyStateRecords = 0;
+  u64 clearRecords = 0;
+  u64 presentRecords = 0;
+  u64 surfaceRecords = 0;
+  u64 queryRecords = 0;
+  u64 otherRecords = 0;
+};
+
 struct QueueSubmissionRecord {
   struct RenderEncoderGpuSample {
     u32 startIndex = 0;
@@ -479,6 +491,12 @@ class QueueLifecycleController {
   void recordNoEnqueueWaitGapToCommitChunkEntry();
   void recordNoEnqueueWaitGapToCommitChunkReplayStart();
   void recordNoEnqueueWaitGapToCommitChunkReplayEnd();
+  void recordNoEnqueueCommitChunkReplayCpuBeforePublish(
+      std::uint64_t nanoseconds);
+  void recordNoEnqueueCommitChunkActiveReplayCpuBeforePublish(
+      std::uint64_t nanoseconds);
+  void recordNoEnqueueCommitChunkRecordShapeBeforePublish(
+      const NoEnqueueCommitChunkRecordShape& shape);
 
  private:
   QueueControllerState currentState() const;
@@ -491,6 +509,10 @@ class QueueLifecycleController {
       u64 seqId,
       size_t slotIndex) const;
   void recordNoEnqueueWaitGapToCommitPublish();
+  void recordNoEnqueueCommitPublishWaitBeforePublish(
+      std::uint64_t nanoseconds);
+  void recordNoEnqueueCommitPublishOnBeforePublishCpu(
+      std::uint64_t nanoseconds);
   void recordNoEnqueueWaitGapToEncodeDequeue();
   void recordNoEnqueueWaitGapToCommandBufferCommit();
   void observeTransition(const QueueTransitionRecord& record) const;
@@ -600,6 +622,8 @@ class QueueLifecycleController {
   }
 
  private:
+  void resetNoEnqueueGapProgressLocked();
+
   std::mutex pendingCompletionMutex_{};
   std::condition_variable pendingCompletionCv_{};
   std::deque<PendingCompletion> pendingCompletion_{};
@@ -612,9 +636,17 @@ class QueueLifecycleController {
   bool noEnqueueGapCommitChunkEntryRecorded_ = false;
   bool noEnqueueGapCommitChunkReplayStartRecorded_ = false;
   bool noEnqueueGapCommitChunkReplayEndRecorded_ = false;
+  bool noEnqueueGapCommitPublishOnBeforePublishRecorded_ = false;
   std::chrono::steady_clock::time_point noEnqueueGapCommitChunkEntryTime_{};
   std::chrono::steady_clock::time_point noEnqueueGapCommitPublishTime_{};
   std::chrono::steady_clock::time_point noEnqueueGapEncodeDequeueTime_{};
+  std::chrono::steady_clock::time_point noEnqueueGapLastCommitChunkReplayEndTime_{};
+  std::uint64_t noEnqueueGapCommitChunkEntriesBeforePublish_ = 0;
+  std::uint64_t noEnqueueGapCommitChunkReplayStartsBeforePublish_ = 0;
+  std::uint64_t noEnqueueGapCommitChunkReplayEndsBeforePublish_ = 0;
+  std::uint64_t noEnqueueGapCommitChunkCompletedReplayCpuBeforePublishNs_ = 0;
+  std::uint64_t noEnqueueGapCommitChunkActiveReplayCpuBeforePublishNs_ = 0;
+  std::uint64_t noEnqueueGapCommitChunkInterReplayGapBeforePublishNs_ = 0;
 };
 
 class CompletionTracker {

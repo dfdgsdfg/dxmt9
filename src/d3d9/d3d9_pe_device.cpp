@@ -16,6 +16,11 @@
 #include <unordered_map>
 #include <utility>
 #include <vector>
+#if defined(_WIN32)
+#include <io.h>
+#else
+#include <unistd.h>
+#endif
 #include "d3d9_pe.hpp"
 #include "d3d9_pe_device_child.hpp"
 #include "d3d9_pe_draw_packet.hpp"
@@ -46,6 +51,30 @@ static void dxmt9DeviceInfoLog(const char* fmt, ...) {
     va_end(args);
 }
 
+static void dxmt9WriteStderrLineAtomic(const char* line, std::size_t len) noexcept {
+    if (!line || len == 0u) return;
+#if defined(_WIN32)
+    (void)_write(_fileno(stderr), line, static_cast<unsigned int>(len));
+#else
+    (void)::write(STDERR_FILENO, line, len);
+#endif
+}
+
+static void dxmt9PerfLogStderrAtomic(const char* fmt, ...) noexcept {
+    char line[512]{};
+    va_list args;
+    va_start(args, fmt);
+    const int written = std::vsnprintf(line, sizeof(line), fmt, args);
+    va_end(args);
+    if (written <= 0) return;
+    std::size_t len = static_cast<std::size_t>(written);
+    if (len >= sizeof(line)) {
+        len = sizeof(line) - 1u;
+        line[len - 1u] = '\n';
+    }
+    dxmt9WriteStderrLineAtomic(line, len);
+}
+
 static bool dxmt9PeRecorderStatsEnabled() {
     static const bool enabled = dxmt9::util::getenvFlag("DXMT9_PE_RECORDER_STATS");
     return enabled;
@@ -54,6 +83,12 @@ static bool dxmt9PeRecorderStatsEnabled() {
 static bool dxmt9SplitSparseConstRecordsEnabled() {
     static const bool enabled =
         dxmt9::util::getenvFlag("DXMT9_SPLIT_SPARSE_CONST_RECORDS");
+    return enabled;
+}
+
+static bool dxmt9PerfVsConstSetterRangeEnabled() {
+    static const bool enabled =
+        dxmt9::util::getenvFlag("DXMT9_PERF_VS_CONST_SETTER_RANGE");
     return enabled;
 }
 
@@ -77,7 +112,41 @@ static std::int64_t dxmt9SteadyClockNs(std::chrono::steady_clock::time_point t) 
         t.time_since_epoch()).count();
 }
 
+static std::uint32_t dxmt9PeCurrentThreadId() noexcept {
+#if defined(_WIN32)
+    return static_cast<std::uint32_t>(GetCurrentThreadId());
+#else
+    return 0;
+#endif
+}
+
 static thread_local const char* dxmt9PeCurrentCallName = nullptr;
+static thread_local PeInterAppendCallFamily dxmt9PeCurrentAppendFamily =
+    PeInterAppendCallFamily::Unknown;
+static thread_local std::int64_t dxmt9PeCurrentCallEntryNs = 0;
+
+static void dxmt9PeSetCurrentCallName(const char* callName) noexcept {
+    dxmt9PeCurrentCallName = callName;
+}
+
+class Dxmt9PeAppendFamilyScope {
+public:
+    explicit Dxmt9PeAppendFamilyScope(PeInterAppendCallFamily family) noexcept
+        : previous_(dxmt9PeCurrentAppendFamily) {
+        dxmt9PeCurrentAppendFamily = family;
+    }
+
+    ~Dxmt9PeAppendFamilyScope() noexcept {
+        dxmt9PeCurrentAppendFamily = previous_;
+    }
+
+    Dxmt9PeAppendFamilyScope(const Dxmt9PeAppendFamilyScope&) = delete;
+    Dxmt9PeAppendFamilyScope& operator=(
+        const Dxmt9PeAppendFamilyScope&) = delete;
+
+private:
+    PeInterAppendCallFamily previous_;
+};
 
 struct Dxmt9PeCallerModuleInfo {
     const void* base = nullptr;
@@ -485,6 +554,7 @@ constexpr uint32_t kShaderHeaderVS = 0xFFFEu;
 constexpr uint32_t kShaderHeaderPS = 0xFFFFu;
 constexpr uint32_t kShaderMaxMajor = 3u; /* vs_3_0 / ps_3_0 are the cap */
 constexpr uint32_t kShaderEndToken = 0x0000FFFFu;
+constexpr size_t kShaderBoundedScan = 1u << 16;
 
 [[nodiscard]] HRESULT validateShaderBytecodeForStage(const DWORD* code,
                                                      bool vertexStage) {
@@ -501,9 +571,8 @@ constexpr uint32_t kShaderEndToken = 0x0000FFFFu;
      * side; we only need to reject truncated bytecode where the END
      * marker is absent in the first few words the test harness can
      * supply. */
-    constexpr size_t kBoundedScan = 1u << 16;
     bool seenEnd = false;
-    for (size_t i = 1; i < kBoundedScan; ++i) {
+    for (size_t i = 1; i < kShaderBoundedScan; ++i) {
         const uint32_t t = static_cast<uint32_t>(code[i]);
         if (t == kShaderEndToken) {
             seenEnd = true;
@@ -517,6 +586,29 @@ constexpr uint32_t kShaderEndToken = 0x0000FFFFu;
     }
     if (!seenEnd) return D3DERR_INVALIDCALL;
     return S_OK;
+}
+
+[[nodiscard]] std::uint64_t hashValidatedShaderBytecode(const DWORD* code) {
+    size_t wordCount = 0;
+    for (size_t i = 0; i < kShaderBoundedScan; ++i) {
+        if (static_cast<uint32_t>(code[i]) == kShaderEndToken) {
+            wordCount = i + 1u;
+            break;
+        }
+    }
+    // Match dxmt9::core::hashBytes. This is intentionally not
+    // dxmt9::util::fnv1a64; the core shader hash uses the historical
+    // truncated FNV offset basis.
+    constexpr std::uint64_t kFnvOffsetCore = 1469598103934665603ull;
+    constexpr std::uint64_t kFnvPrimeCore = 1099511628211ull;
+    std::uint64_t hash = kFnvOffsetCore;
+    const auto* bytes = reinterpret_cast<const std::uint8_t*>(code);
+    const size_t byteCount = wordCount * sizeof(uint32_t);
+    for (size_t i = 0; i < byteCount; ++i) {
+        hash ^= static_cast<std::uint64_t>(bytes[i]);
+        hash *= kFnvPrimeCore;
+    }
+    return hash;
 }
 
 /// Returns >0 when the type encodes a known D3DDECLTYPE_* with that byte
@@ -3048,6 +3140,46 @@ class D3D9DeviceImpl final : public IDirect3DDevice9Ex, public D3D9PeRecorderFlu
 
     using WireHandleEntryList = D3D9PeWireHandleEntryList;
 
+    enum class VsConstSetterRangePhase : std::uint32_t {
+        Call = 1,
+        Flush = 2,
+    };
+
+    struct VsConstRangeChange {
+        std::uint32_t changedRegs = 0;
+        std::uint32_t changedSpanRegs = 0;
+    };
+
+    struct VsConstSetterRangeBucket {
+        bool used = false;
+        VsConstSetterRangePhase phase = VsConstSetterRangePhase::Call;
+        std::uint64_t vsHash = 0;
+        std::uint64_t psHash = 0;
+        std::uint32_t start = 0;
+        std::uint32_t count = 0;
+        std::uint64_t events = 0;
+        std::uint64_t rangeRegs = 0;
+        std::uint64_t changedRegs = 0;
+        std::uint64_t changedSpanRegs = 0;
+        std::uint64_t fullRangeEvents = 0;
+        std::uint64_t fullChangedEvents = 0;
+    };
+
+    struct VsConstSetterRangeOverflow {
+        std::uint64_t events = 0;
+        std::uint64_t rangeRegs = 0;
+        std::uint64_t changedRegs = 0;
+        std::uint64_t changedSpanRegs = 0;
+        std::uint64_t fullRangeEvents = 0;
+        std::uint64_t fullChangedEvents = 0;
+    };
+
+    struct VsConstSetterRangePerf {
+        static constexpr std::size_t kBucketCount = 256;
+        std::array<VsConstSetterRangeBucket, kBucketCount> buckets{};
+        std::array<VsConstSetterRangeOverflow, 3> overflow{};
+    };
+
     ULONG        refs_    = 1;
     D9CDevice*   dev_;
     IDirect3D9Ex* factory_;
@@ -3118,6 +3250,7 @@ class D3D9DeviceImpl final : public IDirect3DDevice9Ex, public D3D9PeRecorderFlu
 
     PeHotStateShadow peState_{};
     PeConstShadowBlock peConsts_{};
+    VsConstSetterRangePerf vsConstSetterRangePerf_{};
     IDirect3DSurface9* rtSlots_[4]{};
     bool rtSlotExplicit_[4]{};
     IDirect3DSurface9* dsSurface_ = nullptr;
@@ -3125,6 +3258,18 @@ class D3D9DeviceImpl final : public IDirect3DDevice9Ex, public D3D9PeRecorderFlu
     PeCommandChunkBuilder commandChunk_{};
     PeRecorderStats peRecorderStats_{};
     std::uint64_t peRecorderStatsLastLoggedCommitCount_ = 0;
+    std::int64_t peRecorderLastChunkReturnNs_ = 0;
+    std::int64_t peRecorderCurrentChunkFirstAppendNs_ = 0;
+    std::int64_t peRecorderLastAppendReturnNs_ = 0;
+    std::int64_t peRecorderLastAppendCallEntryNs_ = 0;
+    std::int64_t peRecorderLastAppendCallExitNs_ = 0;
+    std::uint32_t peRecorderLastAppendRecordType_ = 0;
+    bool peRecorderBetweenCallsActive_ = false;
+    std::int64_t peRecorderBetweenCallsStartNs_ = 0;
+    std::array<std::uint64_t, kPeInterAppendCallFamilyCount>
+        peRecorderBetweenCallFamilySamples_{};
+    std::array<std::uint64_t, kPeInterAppendCallNameCount>
+        peRecorderBetweenCallNameSamples_{};
     std::atomic<std::uint64_t> pePresentCadenceOrdinal_{0};
     std::atomic<std::uint64_t> pePresentCadencePendingOrdinal_{0};
     std::atomic<std::uint64_t> pePresentCallMilestonePendingOrdinal_{0};
@@ -3358,6 +3503,139 @@ class D3D9DeviceImpl final : public IDirect3DDevice9Ex, public D3D9PeRecorderFlu
             explicitMask[slot] = rtSlotExplicit_[slot];
         }
         return explicitMask;
+    }
+
+    std::uint64_t currentVertexShaderHash() const noexcept {
+        return D3D9PeVertexShaderHash(vs_);
+    }
+
+    std::uint64_t currentPixelShaderHash() const noexcept {
+        return D3D9PePixelShaderHash(ps_);
+    }
+
+    static const char* vsConstSetterRangePhaseName(
+        VsConstSetterRangePhase phase) noexcept {
+        switch (phase) {
+        case VsConstSetterRangePhase::Call:
+            return "call";
+        case VsConstSetterRangePhase::Flush:
+            return "flush";
+        }
+        return "unknown";
+    }
+
+    static std::size_t vsConstSetterRangePhaseIndex(
+        VsConstSetterRangePhase phase) noexcept {
+        return phase == VsConstSetterRangePhase::Flush ? 2u : 1u;
+    }
+
+    void recordVsConstSetterRange(VsConstSetterRangePhase phase,
+                                  std::uint64_t vsHash,
+                                  std::uint64_t psHash,
+                                  std::uint32_t start,
+                                  std::uint32_t count,
+                                  std::uint32_t changedRegs,
+                                  std::uint32_t changedSpanRegs) noexcept {
+        if (!dxmt9PerfVsConstSetterRangeEnabled() || count == 0u) {
+            return;
+        }
+        VsConstSetterRangeBucket* bucket = nullptr;
+        for (auto& candidate : vsConstSetterRangePerf_.buckets) {
+            if (candidate.used) {
+                if (candidate.phase == phase &&
+                    candidate.vsHash == vsHash &&
+                    candidate.psHash == psHash &&
+                    candidate.start == start &&
+                    candidate.count == count) {
+                    bucket = &candidate;
+                    break;
+                }
+                continue;
+            }
+            candidate.used = true;
+            candidate.phase = phase;
+            candidate.vsHash = vsHash;
+            candidate.psHash = psHash;
+            candidate.start = start;
+            candidate.count = count;
+            bucket = &candidate;
+            break;
+        }
+
+        const bool fullRange = start == 0u && count >= kVsConstFMax;
+        const bool fullChanged = start == 0u && changedSpanRegs >= kVsConstFMax;
+        if (!bucket) {
+            auto& overflow = vsConstSetterRangePerf_.overflow[
+                vsConstSetterRangePhaseIndex(phase)];
+            ++overflow.events;
+            overflow.rangeRegs += count;
+            overflow.changedRegs += changedRegs;
+            overflow.changedSpanRegs += changedSpanRegs;
+            overflow.fullRangeEvents += fullRange ? 1u : 0u;
+            overflow.fullChangedEvents += fullChanged ? 1u : 0u;
+            return;
+        }
+
+        ++bucket->events;
+        bucket->rangeRegs += count;
+        bucket->changedRegs += changedRegs;
+        bucket->changedSpanRegs += changedSpanRegs;
+        bucket->fullRangeEvents += fullRange ? 1u : 0u;
+        bucket->fullChangedEvents += fullChanged ? 1u : 0u;
+    }
+
+    void logVsConstSetterRangePerf(const char* event) {
+        if (!dxmt9PerfVsConstSetterRangeEnabled()) {
+            return;
+        }
+        for (const auto& bucket : vsConstSetterRangePerf_.buckets) {
+            if (!bucket.used || bucket.events == 0u) {
+                continue;
+            }
+            dxmt9PerfLogStderrAtomic(
+                "[dxmt9-perf-vs-const-setter-range event=%s overflow=0 "
+                "phase=%s vs_hash=0x%llx ps_hash=0x%llx "
+                "start=%u count=%u events=%llu range_regs=%llu "
+                "changed_regs=%llu changed_span_regs=%llu "
+                "full_range_events=%llu full_changed_events=%llu]\n",
+                event ? event : "unknown",
+                vsConstSetterRangePhaseName(bucket.phase),
+                static_cast<unsigned long long>(bucket.vsHash),
+                static_cast<unsigned long long>(bucket.psHash),
+                bucket.start, bucket.count,
+                static_cast<unsigned long long>(bucket.events),
+                static_cast<unsigned long long>(bucket.rangeRegs),
+                static_cast<unsigned long long>(bucket.changedRegs),
+                static_cast<unsigned long long>(bucket.changedSpanRegs),
+                static_cast<unsigned long long>(bucket.fullRangeEvents),
+                static_cast<unsigned long long>(bucket.fullChangedEvents));
+        }
+        for (std::size_t phaseIndex = 1u;
+             phaseIndex < vsConstSetterRangePerf_.overflow.size();
+             ++phaseIndex) {
+            const auto& overflow = vsConstSetterRangePerf_.overflow[phaseIndex];
+            if (overflow.events == 0u) {
+                continue;
+            }
+            const auto phase = phaseIndex == 2u
+                ? VsConstSetterRangePhase::Flush
+                : VsConstSetterRangePhase::Call;
+            dxmt9PerfLogStderrAtomic(
+                "[dxmt9-perf-vs-const-setter-range event=%s overflow=1 "
+                "phase=%s events=%llu range_regs=%llu changed_regs=%llu "
+                "changed_span_regs=%llu full_range_events=%llu "
+                "full_changed_events=%llu]\n",
+                event ? event : "unknown",
+                vsConstSetterRangePhaseName(phase),
+                static_cast<unsigned long long>(overflow.events),
+                static_cast<unsigned long long>(overflow.rangeRegs),
+                static_cast<unsigned long long>(overflow.changedRegs),
+                static_cast<unsigned long long>(overflow.changedSpanRegs),
+                static_cast<unsigned long long>(overflow.fullRangeEvents),
+                static_cast<unsigned long long>(overflow.fullChangedEvents));
+        }
+        std::fflush(stderr);
+        vsConstSetterRangePerf_ = VsConstSetterRangePerf{};
     }
 
     bool buildDrawPrimitivePacket(D3DPRIMITIVETYPE type,
@@ -5734,11 +6012,13 @@ class D3D9DeviceImpl final : public IDirect3DDevice9Ex, public D3D9PeRecorderFlu
         const auto callerStack = dxmt9PeFormatCallerStack(sample);
         dxmt9DeviceInfoLog(
             "pe_present_next_call device=%p ordinal=%llu call=%s "
+            "thread_id=0x%lx "
             "entry_delta_ms=%.3f observed_delta_ms=%.3f "
             "observed_wait_ms=%.3f caller_pc=%p caller_module=%s "
             "caller_base=%p caller_rva=0x%llx caller_stack=%s",
             this, static_cast<unsigned long long>(claim.ordinal),
             callName ? callName : "unknown",
+            static_cast<unsigned long>(sample.threadId),
             static_cast<double>(claim.entryNs - claim.returnNs) / 1000000.0,
             static_cast<double>(observedNs - claim.returnNs) / 1000000.0,
             static_cast<double>(observedNs - claim.entryNs) / 1000000.0,
@@ -5749,7 +6029,11 @@ class D3D9DeviceImpl final : public IDirect3DDevice9Ex, public D3D9PeRecorderFlu
 
     PePresentCallSample notePeDeviceCallAfterPresent(const char* callName,
                                                      const void* callerPc = nullptr) {
-        dxmt9PeCurrentCallName = callName;
+        dxmt9PeSetCurrentCallName(callName);
+        dxmt9PeCurrentCallEntryNs = dxmt9PeRecorderStatsEnabled()
+            ? dxmt9SteadyClockNs(std::chrono::steady_clock::now())
+            : 0;
+        recordPeBetweenCallsEntry(callName, dxmt9PeCurrentCallEntryNs);
         const PePresentCallSample sample =
             logPeCallMilestoneAfterPresent(callName, callerPc);
         logPeFirstCallAfterPresent(callName, claimPeFirstCallAfterPresent(),
@@ -5816,6 +6100,7 @@ class D3D9DeviceImpl final : public IDirect3DDevice9Ex, public D3D9PeRecorderFlu
         const bool milestone = peCallMilestoneBit(callCount, milestoneBit);
         PePresentCallSample sample{
             true, ordinal, callCount, returnNs, entryNs, callerPc};
+        sample.threadId = dxmt9PeCurrentThreadId();
         if (callCount <= 8 || milestone) {
             dxmt9PeCaptureCallStack(sample);
         }
@@ -5832,11 +6117,13 @@ class D3D9DeviceImpl final : public IDirect3DDevice9Ex, public D3D9PeRecorderFlu
                 const auto callerStack = dxmt9PeFormatCallerStack(sample);
                 dxmt9DeviceInfoLog(
                     "pe_present_call_milestone device=%p ordinal=%llu "
-                    "milestone=%u call=%s entry_delta_ms=%.3f caller_pc=%p "
+                    "milestone=%u call=%s thread_id=0x%lx "
+                    "entry_delta_ms=%.3f caller_pc=%p "
                     "caller_module=%s caller_base=%p caller_rva=0x%llx "
                     "caller_stack=%s",
                     this, static_cast<unsigned long long>(ordinal), callCount,
                     callName ? callName : "unknown",
+                    static_cast<unsigned long>(sample.threadId),
                     static_cast<double>(entryNs - returnNs) / 1000000.0,
                     callerPc, dxmt9PeCallerModuleLeaf(callerInfo),
                     callerInfo.base,
@@ -5861,11 +6148,13 @@ class D3D9DeviceImpl final : public IDirect3DDevice9Ex, public D3D9PeRecorderFlu
         const auto callerStack = dxmt9PeFormatCallerStack(sample);
         dxmt9DeviceInfoLog(
             "pe_present_call_return device=%p ordinal=%llu milestone=%u "
-            "call=%s hr=0x%08x return_delta_ms=%.3f duration_ms=%.3f "
+            "call=%s thread_id=0x%lx hr=0x%08x "
+            "return_delta_ms=%.3f duration_ms=%.3f "
             "caller_pc=%p caller_module=%s caller_base=%p caller_rva=0x%llx "
             "caller_stack=%s",
             this, static_cast<unsigned long long>(sample.ordinal),
             sample.callCount, callName ? callName : "unknown",
+            static_cast<unsigned long>(sample.threadId),
             static_cast<unsigned>(hr),
             static_cast<double>(exitNs - sample.returnNs) / 1000000.0,
             static_cast<double>(exitNs - sample.entryNs) / 1000000.0,
@@ -5922,6 +6211,609 @@ class D3D9DeviceImpl final : public IDirect3DDevice9Ex, public D3D9PeRecorderFlu
         }
     }
 
+    static std::uint32_t peCommandRecordTypeBucket(std::uint32_t type) noexcept {
+        return type < kPeCommandRecordTypeBucketCount ? type : 0u;
+    }
+
+    static const char*
+    peInterAppendCallFamilyName(std::uint32_t family) noexcept {
+        switch (static_cast<PeInterAppendCallFamily>(family)) {
+        case PeInterAppendCallFamily::Unknown: return "unknown";
+        case PeInterAppendCallFamily::RenderTarget: return "render_target";
+        case PeInterAppendCallFamily::DepthStencil: return "depth_stencil";
+        case PeInterAppendCallFamily::ViewportScissor:
+            return "viewport_scissor";
+        case PeInterAppendCallFamily::Transform: return "transform";
+        case PeInterAppendCallFamily::MaterialLightClip:
+            return "material_light_clip";
+        case PeInterAppendCallFamily::RenderState: return "render_state";
+        case PeInterAppendCallFamily::TextureStageSampler:
+            return "tss_sampler";
+        case PeInterAppendCallFamily::Texture: return "texture";
+        case PeInterAppendCallFamily::VertexInput: return "vertex_input";
+        case PeInterAppendCallFamily::Shader: return "shader";
+        case PeInterAppendCallFamily::VsConst: return "vs_const";
+        case PeInterAppendCallFamily::PsConst: return "ps_const";
+        case PeInterAppendCallFamily::OtherConst: return "other_const";
+        case PeInterAppendCallFamily::Draw: return "draw";
+        case PeInterAppendCallFamily::Barrier: return "barrier";
+        case PeInterAppendCallFamily::ScenePresent: return "scene_present";
+        case PeInterAppendCallFamily::Resource: return "resource";
+        case PeInterAppendCallFamily::Count: break;
+        }
+        return "unknown";
+    }
+
+    static PeInterAppendCallFamily
+    peInterAppendCallFamilyFromName(const char* callName) noexcept {
+        if (!callName) {
+            return PeInterAppendCallFamily::Unknown;
+        }
+        if (std::strcmp(callName, "SetRenderTarget") == 0 ||
+            std::strcmp(callName, "GetRenderTarget") == 0) {
+            return PeInterAppendCallFamily::RenderTarget;
+        }
+        if (std::strcmp(callName, "SetDepthStencilSurface") == 0 ||
+            std::strcmp(callName, "GetDepthStencilSurface") == 0) {
+            return PeInterAppendCallFamily::DepthStencil;
+        }
+        if (std::strcmp(callName, "SetViewport") == 0 ||
+            std::strcmp(callName, "GetViewport") == 0 ||
+            std::strcmp(callName, "SetScissorRect") == 0 ||
+            std::strcmp(callName, "GetScissorRect") == 0) {
+            return PeInterAppendCallFamily::ViewportScissor;
+        }
+        if (std::strcmp(callName, "SetTransform") == 0 ||
+            std::strcmp(callName, "GetTransform") == 0 ||
+            std::strcmp(callName, "MultiplyTransform") == 0) {
+            return PeInterAppendCallFamily::Transform;
+        }
+        if (std::strcmp(callName, "SetMaterial") == 0 ||
+            std::strcmp(callName, "GetMaterial") == 0 ||
+            std::strcmp(callName, "SetLight") == 0 ||
+            std::strcmp(callName, "GetLight") == 0 ||
+            std::strcmp(callName, "LightEnable") == 0 ||
+            std::strcmp(callName, "GetLightEnable") == 0 ||
+            std::strcmp(callName, "SetClipPlane") == 0 ||
+            std::strcmp(callName, "GetClipPlane") == 0 ||
+            std::strcmp(callName, "SetClipStatus") == 0 ||
+            std::strcmp(callName, "GetClipStatus") == 0) {
+            return PeInterAppendCallFamily::MaterialLightClip;
+        }
+        if (std::strcmp(callName, "SetRenderState") == 0 ||
+            std::strcmp(callName, "GetRenderState") == 0) {
+            return PeInterAppendCallFamily::RenderState;
+        }
+        if (std::strcmp(callName, "SetTextureStageState") == 0 ||
+            std::strcmp(callName, "GetTextureStageState") == 0 ||
+            std::strcmp(callName, "SetSamplerState") == 0 ||
+            std::strcmp(callName, "GetSamplerState") == 0) {
+            return PeInterAppendCallFamily::TextureStageSampler;
+        }
+        if (std::strcmp(callName, "SetTexture") == 0 ||
+            std::strcmp(callName, "GetTexture") == 0) {
+            return PeInterAppendCallFamily::Texture;
+        }
+        if (std::strcmp(callName, "SetFVF") == 0 ||
+            std::strcmp(callName, "GetFVF") == 0 ||
+            std::strcmp(callName, "SetVertexDeclaration") == 0 ||
+            std::strcmp(callName, "GetVertexDeclaration") == 0 ||
+            std::strcmp(callName, "SetStreamSource") == 0 ||
+            std::strcmp(callName, "GetStreamSource") == 0 ||
+            std::strcmp(callName, "SetStreamSourceFreq") == 0 ||
+            std::strcmp(callName, "GetStreamSourceFreq") == 0 ||
+            std::strcmp(callName, "SetIndices") == 0 ||
+            std::strcmp(callName, "GetIndices") == 0) {
+            return PeInterAppendCallFamily::VertexInput;
+        }
+        if (std::strcmp(callName, "SetVertexShader") == 0 ||
+            std::strcmp(callName, "GetVertexShader") == 0 ||
+            std::strcmp(callName, "SetPixelShader") == 0 ||
+            std::strcmp(callName, "GetPixelShader") == 0) {
+            return PeInterAppendCallFamily::Shader;
+        }
+        if (std::strcmp(callName, "SetVertexShaderConstantF") == 0 ||
+            std::strcmp(callName, "GetVertexShaderConstantF") == 0 ||
+            std::strcmp(callName, "SetVertexShaderConstantI") == 0 ||
+            std::strcmp(callName, "GetVertexShaderConstantI") == 0 ||
+            std::strcmp(callName, "SetVertexShaderConstantB") == 0 ||
+            std::strcmp(callName, "GetVertexShaderConstantB") == 0) {
+            return PeInterAppendCallFamily::VsConst;
+        }
+        if (std::strcmp(callName, "SetPixelShaderConstantF") == 0 ||
+            std::strcmp(callName, "GetPixelShaderConstantF") == 0 ||
+            std::strcmp(callName, "SetPixelShaderConstantI") == 0 ||
+            std::strcmp(callName, "GetPixelShaderConstantI") == 0 ||
+            std::strcmp(callName, "SetPixelShaderConstantB") == 0 ||
+            std::strcmp(callName, "GetPixelShaderConstantB") == 0) {
+            return PeInterAppendCallFamily::PsConst;
+        }
+        if (std::strcmp(callName, "DrawPrimitive") == 0 ||
+            std::strcmp(callName, "DrawIndexedPrimitive") == 0 ||
+            std::strcmp(callName, "DrawPrimitiveUP") == 0 ||
+            std::strcmp(callName, "DrawIndexedPrimitiveUP") == 0) {
+            return PeInterAppendCallFamily::Draw;
+        }
+        if (std::strcmp(callName, "Clear") == 0 ||
+            std::strcmp(callName, "StretchRect") == 0 ||
+            std::strcmp(callName, "ColorFill") == 0 ||
+            std::strcmp(callName, "UpdateTexture") == 0 ||
+            std::strcmp(callName, "UpdateSurface") == 0 ||
+            std::strcmp(callName, "ProcessVertices") == 0) {
+            return PeInterAppendCallFamily::Barrier;
+        }
+        if (std::strcmp(callName, "BeginScene") == 0 ||
+            std::strcmp(callName, "EndScene") == 0 ||
+            std::strcmp(callName, "Present") == 0 ||
+            std::strcmp(callName, "PresentEx") == 0 ||
+            std::strcmp(callName, "Reset") == 0 ||
+            std::strcmp(callName, "ResetEx") == 0) {
+            return PeInterAppendCallFamily::ScenePresent;
+        }
+        if (std::strncmp(callName, "Create", 6) == 0 ||
+            std::strncmp(callName, "Get", 3) == 0 ||
+            std::strcmp(callName, "ValidateDevice") == 0 ||
+            std::strcmp(callName, "SetPaletteEntries") == 0 ||
+            std::strcmp(callName, "GetPaletteEntries") == 0 ||
+            std::strcmp(callName, "SetCurrentTexturePalette") == 0 ||
+            std::strcmp(callName, "GetCurrentTexturePalette") == 0) {
+            return PeInterAppendCallFamily::Resource;
+        }
+        return PeInterAppendCallFamily::Unknown;
+    }
+
+    static const char*
+    peInterAppendCallNameName(std::uint32_t callName) noexcept {
+        switch (static_cast<PeInterAppendCallName>(callName)) {
+        case PeInterAppendCallName::Unknown: return "unknown";
+        case PeInterAppendCallName::BeginScene: return "BeginScene";
+        case PeInterAppendCallName::EndScene: return "EndScene";
+        case PeInterAppendCallName::Clear: return "Clear";
+        case PeInterAppendCallName::SetRenderTarget: return "SetRenderTarget";
+        case PeInterAppendCallName::GetRenderTarget: return "GetRenderTarget";
+        case PeInterAppendCallName::SetDepthStencilSurface:
+            return "SetDepthStencilSurface";
+        case PeInterAppendCallName::GetDepthStencilSurface:
+            return "GetDepthStencilSurface";
+        case PeInterAppendCallName::SetViewport: return "SetViewport";
+        case PeInterAppendCallName::SetScissorRect: return "SetScissorRect";
+        case PeInterAppendCallName::SetRenderState: return "SetRenderState";
+        case PeInterAppendCallName::SetTextureStageState:
+            return "SetTextureStageState";
+        case PeInterAppendCallName::SetSamplerState: return "SetSamplerState";
+        case PeInterAppendCallName::SetTexture: return "SetTexture";
+        case PeInterAppendCallName::SetFVF: return "SetFVF";
+        case PeInterAppendCallName::SetVertexDeclaration:
+            return "SetVertexDeclaration";
+        case PeInterAppendCallName::SetStreamSource:
+            return "SetStreamSource";
+        case PeInterAppendCallName::SetStreamSourceFreq:
+            return "SetStreamSourceFreq";
+        case PeInterAppendCallName::SetIndices: return "SetIndices";
+        case PeInterAppendCallName::SetVertexShader:
+            return "SetVertexShader";
+        case PeInterAppendCallName::SetPixelShader: return "SetPixelShader";
+        case PeInterAppendCallName::SetVertexShaderConstantF:
+            return "SetVertexShaderConstantF";
+        case PeInterAppendCallName::SetVertexShaderConstantI:
+            return "SetVertexShaderConstantI";
+        case PeInterAppendCallName::SetVertexShaderConstantB:
+            return "SetVertexShaderConstantB";
+        case PeInterAppendCallName::SetPixelShaderConstantF:
+            return "SetPixelShaderConstantF";
+        case PeInterAppendCallName::SetPixelShaderConstantI:
+            return "SetPixelShaderConstantI";
+        case PeInterAppendCallName::SetPixelShaderConstantB:
+            return "SetPixelShaderConstantB";
+        case PeInterAppendCallName::DrawPrimitive: return "DrawPrimitive";
+        case PeInterAppendCallName::DrawIndexedPrimitive:
+            return "DrawIndexedPrimitive";
+        case PeInterAppendCallName::DrawPrimitiveUP:
+            return "DrawPrimitiveUP";
+        case PeInterAppendCallName::DrawIndexedPrimitiveUP:
+            return "DrawIndexedPrimitiveUP";
+        case PeInterAppendCallName::ProcessVertices: return "ProcessVertices";
+        case PeInterAppendCallName::GetBackBuffer: return "GetBackBuffer";
+        case PeInterAppendCallName::GetSwapChain: return "GetSwapChain";
+        case PeInterAppendCallName::GetRasterStatus: return "GetRasterStatus";
+        case PeInterAppendCallName::ValidateDevice: return "ValidateDevice";
+        case PeInterAppendCallName::SetSoftwareVertexProcessing:
+            return "SetSoftwareVertexProcessing";
+        case PeInterAppendCallName::SetNPatchMode: return "SetNPatchMode";
+        case PeInterAppendCallName::SurfaceGetDesc:
+            return "Surface::GetDesc";
+        case PeInterAppendCallName::SurfaceLockRect:
+            return "Surface::LockRect";
+        case PeInterAppendCallName::TextureGetSurfaceLevel:
+            return "Texture::GetSurfaceLevel";
+        case PeInterAppendCallName::CubeTextureGetCubeMapSurface:
+            return "CubeTexture::GetCubeMapSurface";
+        case PeInterAppendCallName::VertexBufferLock:
+            return "VertexBuffer::Lock";
+        case PeInterAppendCallName::VertexBufferGetDesc:
+            return "VertexBuffer::GetDesc";
+        case PeInterAppendCallName::IndexBufferLock:
+            return "IndexBuffer::Lock";
+        case PeInterAppendCallName::IndexBufferGetDesc:
+            return "IndexBuffer::GetDesc";
+        case PeInterAppendCallName::QueryIssue: return "Query::Issue";
+        case PeInterAppendCallName::QueryGetData: return "Query::GetData";
+        case PeInterAppendCallName::StateBlockCapture:
+            return "StateBlock::Capture";
+        case PeInterAppendCallName::StateBlockApply:
+            return "StateBlock::Apply";
+        case PeInterAppendCallName::OtherChild: return "other_child";
+        case PeInterAppendCallName::OtherGet: return "other_get";
+        case PeInterAppendCallName::OtherSet: return "other_set";
+        case PeInterAppendCallName::OtherCreate: return "other_create";
+        case PeInterAppendCallName::Other: return "other";
+        case PeInterAppendCallName::Count: break;
+        }
+        return "unknown";
+    }
+
+    static PeInterAppendCallName
+    peInterAppendCallNameFromName(const char* callName) noexcept {
+        if (!callName) {
+            return PeInterAppendCallName::Unknown;
+        }
+        if (std::strcmp(callName, "BeginScene") == 0) {
+            return PeInterAppendCallName::BeginScene;
+        }
+        if (std::strcmp(callName, "EndScene") == 0) {
+            return PeInterAppendCallName::EndScene;
+        }
+        if (std::strcmp(callName, "Clear") == 0) {
+            return PeInterAppendCallName::Clear;
+        }
+        if (std::strcmp(callName, "SetRenderTarget") == 0) {
+            return PeInterAppendCallName::SetRenderTarget;
+        }
+        if (std::strcmp(callName, "GetRenderTarget") == 0) {
+            return PeInterAppendCallName::GetRenderTarget;
+        }
+        if (std::strcmp(callName, "SetDepthStencilSurface") == 0) {
+            return PeInterAppendCallName::SetDepthStencilSurface;
+        }
+        if (std::strcmp(callName, "GetDepthStencilSurface") == 0) {
+            return PeInterAppendCallName::GetDepthStencilSurface;
+        }
+        if (std::strcmp(callName, "SetViewport") == 0) {
+            return PeInterAppendCallName::SetViewport;
+        }
+        if (std::strcmp(callName, "SetScissorRect") == 0) {
+            return PeInterAppendCallName::SetScissorRect;
+        }
+        if (std::strcmp(callName, "SetRenderState") == 0) {
+            return PeInterAppendCallName::SetRenderState;
+        }
+        if (std::strcmp(callName, "SetTextureStageState") == 0) {
+            return PeInterAppendCallName::SetTextureStageState;
+        }
+        if (std::strcmp(callName, "SetSamplerState") == 0) {
+            return PeInterAppendCallName::SetSamplerState;
+        }
+        if (std::strcmp(callName, "SetTexture") == 0) {
+            return PeInterAppendCallName::SetTexture;
+        }
+        if (std::strcmp(callName, "SetFVF") == 0) {
+            return PeInterAppendCallName::SetFVF;
+        }
+        if (std::strcmp(callName, "SetVertexDeclaration") == 0) {
+            return PeInterAppendCallName::SetVertexDeclaration;
+        }
+        if (std::strcmp(callName, "SetStreamSource") == 0) {
+            return PeInterAppendCallName::SetStreamSource;
+        }
+        if (std::strcmp(callName, "SetStreamSourceFreq") == 0) {
+            return PeInterAppendCallName::SetStreamSourceFreq;
+        }
+        if (std::strcmp(callName, "SetIndices") == 0) {
+            return PeInterAppendCallName::SetIndices;
+        }
+        if (std::strcmp(callName, "SetVertexShader") == 0) {
+            return PeInterAppendCallName::SetVertexShader;
+        }
+        if (std::strcmp(callName, "SetPixelShader") == 0) {
+            return PeInterAppendCallName::SetPixelShader;
+        }
+        if (std::strcmp(callName, "SetVertexShaderConstantF") == 0) {
+            return PeInterAppendCallName::SetVertexShaderConstantF;
+        }
+        if (std::strcmp(callName, "SetVertexShaderConstantI") == 0) {
+            return PeInterAppendCallName::SetVertexShaderConstantI;
+        }
+        if (std::strcmp(callName, "SetVertexShaderConstantB") == 0) {
+            return PeInterAppendCallName::SetVertexShaderConstantB;
+        }
+        if (std::strcmp(callName, "SetPixelShaderConstantF") == 0) {
+            return PeInterAppendCallName::SetPixelShaderConstantF;
+        }
+        if (std::strcmp(callName, "SetPixelShaderConstantI") == 0) {
+            return PeInterAppendCallName::SetPixelShaderConstantI;
+        }
+        if (std::strcmp(callName, "SetPixelShaderConstantB") == 0) {
+            return PeInterAppendCallName::SetPixelShaderConstantB;
+        }
+        if (std::strcmp(callName, "DrawPrimitive") == 0) {
+            return PeInterAppendCallName::DrawPrimitive;
+        }
+        if (std::strcmp(callName, "DrawIndexedPrimitive") == 0) {
+            return PeInterAppendCallName::DrawIndexedPrimitive;
+        }
+        if (std::strcmp(callName, "DrawPrimitiveUP") == 0) {
+            return PeInterAppendCallName::DrawPrimitiveUP;
+        }
+        if (std::strcmp(callName, "DrawIndexedPrimitiveUP") == 0) {
+            return PeInterAppendCallName::DrawIndexedPrimitiveUP;
+        }
+        if (std::strcmp(callName, "ProcessVertices") == 0) {
+            return PeInterAppendCallName::ProcessVertices;
+        }
+        if (std::strcmp(callName, "GetBackBuffer") == 0) {
+            return PeInterAppendCallName::GetBackBuffer;
+        }
+        if (std::strcmp(callName, "GetSwapChain") == 0) {
+            return PeInterAppendCallName::GetSwapChain;
+        }
+        if (std::strcmp(callName, "GetRasterStatus") == 0) {
+            return PeInterAppendCallName::GetRasterStatus;
+        }
+        if (std::strcmp(callName, "ValidateDevice") == 0) {
+            return PeInterAppendCallName::ValidateDevice;
+        }
+        if (std::strcmp(callName, "SetSoftwareVertexProcessing") == 0) {
+            return PeInterAppendCallName::SetSoftwareVertexProcessing;
+        }
+        if (std::strcmp(callName, "SetNPatchMode") == 0) {
+            return PeInterAppendCallName::SetNPatchMode;
+        }
+        if (std::strcmp(callName, "Surface::GetDesc") == 0) {
+            return PeInterAppendCallName::SurfaceGetDesc;
+        }
+        if (std::strcmp(callName, "Surface::LockRect") == 0) {
+            return PeInterAppendCallName::SurfaceLockRect;
+        }
+        if (std::strcmp(callName, "Texture::GetSurfaceLevel") == 0) {
+            return PeInterAppendCallName::TextureGetSurfaceLevel;
+        }
+        if (std::strcmp(callName, "CubeTexture::GetCubeMapSurface") == 0) {
+            return PeInterAppendCallName::CubeTextureGetCubeMapSurface;
+        }
+        if (std::strcmp(callName, "VertexBuffer::Lock") == 0) {
+            return PeInterAppendCallName::VertexBufferLock;
+        }
+        if (std::strcmp(callName, "VertexBuffer::GetDesc") == 0) {
+            return PeInterAppendCallName::VertexBufferGetDesc;
+        }
+        if (std::strcmp(callName, "IndexBuffer::Lock") == 0) {
+            return PeInterAppendCallName::IndexBufferLock;
+        }
+        if (std::strcmp(callName, "IndexBuffer::GetDesc") == 0) {
+            return PeInterAppendCallName::IndexBufferGetDesc;
+        }
+        if (std::strcmp(callName, "Query::Issue") == 0) {
+            return PeInterAppendCallName::QueryIssue;
+        }
+        if (std::strcmp(callName, "Query::GetData") == 0) {
+            return PeInterAppendCallName::QueryGetData;
+        }
+        if (std::strcmp(callName, "StateBlock::Capture") == 0) {
+            return PeInterAppendCallName::StateBlockCapture;
+        }
+        if (std::strcmp(callName, "StateBlock::Apply") == 0) {
+            return PeInterAppendCallName::StateBlockApply;
+        }
+        if (std::strstr(callName, "::") != nullptr) {
+            return PeInterAppendCallName::OtherChild;
+        }
+        if (std::strncmp(callName, "Get", 3) == 0) {
+            return PeInterAppendCallName::OtherGet;
+        }
+        if (std::strncmp(callName, "Set", 3) == 0) {
+            return PeInterAppendCallName::OtherSet;
+        }
+        if (std::strncmp(callName, "Create", 6) == 0) {
+            return PeInterAppendCallName::OtherCreate;
+        }
+        return PeInterAppendCallName::Other;
+    }
+
+    static std::size_t peInterAppendFocusPairIndex(std::uint32_t prevType,
+                                                   std::uint32_t nextType) noexcept {
+        if (prevType != D9C_COMMAND_RECORD_DRAW_INDEXED_PRIMITIVE) {
+            return kPeInterAppendFocusPairCount;
+        }
+        switch (nextType) {
+        case D9C_COMMAND_RECORD_SET_VS_CONST_F:
+            return static_cast<std::size_t>(
+                PeInterAppendFocusPair::DrawIndexedToVsConstF);
+        case D9C_COMMAND_RECORD_APPLY_STATE:
+            return static_cast<std::size_t>(
+                PeInterAppendFocusPair::DrawIndexedToApplyState);
+        case D9C_COMMAND_RECORD_DRAW_INDEXED_PRIMITIVE:
+            return static_cast<std::size_t>(
+                PeInterAppendFocusPair::DrawIndexedToDrawIndexed);
+        case D9C_COMMAND_RECORD_SET_PS_CONST_F:
+            return static_cast<std::size_t>(
+                PeInterAppendFocusPair::DrawIndexedToPsConstF);
+        default:
+            return kPeInterAppendFocusPairCount;
+        }
+    }
+
+    static std::size_t peInterAppendFocusCallFamilyIndex(
+        std::size_t focusPair,
+        PeInterAppendCallFamily family) noexcept {
+        return focusPair * kPeInterAppendCallFamilyCount +
+               static_cast<std::size_t>(family);
+    }
+
+    static std::size_t peInterAppendFocusCallNameIndex(
+        std::size_t focusPair,
+        PeInterAppendCallName callName) noexcept {
+        return focusPair * kPeInterAppendCallNameCount +
+               static_cast<std::size_t>(callName);
+    }
+
+    static std::size_t peInterAppendPairIndex(std::uint32_t prevType,
+                                              std::uint32_t nextType) noexcept {
+        return static_cast<std::size_t>(
+                   peCommandRecordTypeBucket(prevType)) *
+                   kPeCommandRecordTypeBucketCount +
+               peCommandRecordTypeBucket(nextType);
+    }
+
+    struct PeInterAppendPairSummary {
+        std::uint32_t prevType = 0;
+        std::uint32_t nextType = 0;
+        std::uint64_t samples = 0;
+        std::uint64_t totalNs = 0;
+        std::uint64_t maxNs = 0;
+    };
+
+    struct PeInterAppendCallFamilySummary {
+        std::uint32_t family = 0;
+        std::uint64_t samples = 0;
+        std::uint64_t totalNs = 0;
+        std::uint64_t maxNs = 0;
+    };
+
+    struct PeInterAppendCallNameSummary {
+        std::uint32_t callName = 0;
+        std::uint64_t samples = 0;
+    };
+
+    std::array<PeInterAppendPairSummary, kPeRecorderInterAppendTopPairCount>
+    topPeInterAppendPairs() const noexcept {
+        std::array<PeInterAppendPairSummary, kPeRecorderInterAppendTopPairCount>
+            top{};
+        for (std::size_t prev = 0; prev < kPeCommandRecordTypeBucketCount;
+             ++prev) {
+            for (std::size_t next = 0; next < kPeCommandRecordTypeBucketCount;
+                 ++next) {
+                const std::size_t index =
+                    prev * kPeCommandRecordTypeBucketCount + next;
+                const std::uint64_t totalNs =
+                    peRecorderStats_.chunkInterAppendPairNsTotal[index];
+                if (totalNs == 0) {
+                    continue;
+                }
+                PeInterAppendPairSummary candidate{
+                    static_cast<std::uint32_t>(prev),
+                    static_cast<std::uint32_t>(next),
+                    peRecorderStats_.chunkInterAppendPairSamples[index],
+                    totalNs,
+                    peRecorderStats_.chunkInterAppendPairNsMax[index]};
+                for (auto& slot : top) {
+                    if (candidate.totalNs <= slot.totalNs) {
+                        continue;
+                    }
+                    std::swap(candidate, slot);
+                }
+            }
+        }
+        return top;
+    }
+
+    std::array<PeInterAppendCallFamilySummary,
+               kPeRecorderInterAppendTopCallFamilyCount>
+    topPeInterAppendFocusCallFamilies(std::size_t focusPair) const noexcept {
+        std::array<PeInterAppendCallFamilySummary,
+                   kPeRecorderInterAppendTopCallFamilyCount>
+            top{};
+        if (focusPair >= kPeInterAppendFocusPairCount) {
+            return top;
+        }
+        for (std::size_t family = 0; family < kPeInterAppendCallFamilyCount;
+             ++family) {
+            const std::size_t index =
+                focusPair * kPeInterAppendCallFamilyCount + family;
+            const std::uint64_t totalNs =
+                peRecorderStats_
+                    .chunkInterAppendFocusCallFamilyNsTotal[index];
+            if (totalNs == 0) {
+                continue;
+            }
+            PeInterAppendCallFamilySummary candidate{
+                static_cast<std::uint32_t>(family),
+                peRecorderStats_
+                    .chunkInterAppendFocusCallFamilySamples[index],
+                totalNs,
+                peRecorderStats_
+                    .chunkInterAppendFocusCallFamilyNsMax[index]};
+            for (auto& slot : top) {
+                if (candidate.totalNs <= slot.totalNs) {
+                    continue;
+                }
+                std::swap(candidate, slot);
+            }
+        }
+        return top;
+    }
+
+    std::array<PeInterAppendCallFamilySummary,
+               kPeRecorderInterAppendTopCallFamilyCount>
+    topPeInterAppendFocusBetweenCallFamilies(std::size_t focusPair) const noexcept {
+        std::array<PeInterAppendCallFamilySummary,
+                   kPeRecorderInterAppendTopCallFamilyCount>
+            top{};
+        if (focusPair >= kPeInterAppendFocusPairCount) {
+            return top;
+        }
+        for (std::size_t family = 0; family < kPeInterAppendCallFamilyCount;
+             ++family) {
+            const std::size_t index =
+                focusPair * kPeInterAppendCallFamilyCount + family;
+            const std::uint64_t samples =
+                peRecorderStats_
+                    .chunkInterAppendFocusBetweenCallFamilySamples[index];
+            if (samples == 0) {
+                continue;
+            }
+            PeInterAppendCallFamilySummary candidate{
+                static_cast<std::uint32_t>(family), samples, samples, 0};
+            for (auto& slot : top) {
+                if (candidate.samples <= slot.samples) {
+                    continue;
+                }
+                std::swap(candidate, slot);
+            }
+        }
+        return top;
+    }
+
+    std::array<PeInterAppendCallNameSummary,
+               kPeRecorderInterAppendTopCallNameCount>
+    topPeInterAppendFocusBetweenCallNames(std::size_t focusPair) const noexcept {
+        std::array<PeInterAppendCallNameSummary,
+                   kPeRecorderInterAppendTopCallNameCount>
+            top{};
+        if (focusPair >= kPeInterAppendFocusPairCount) {
+            return top;
+        }
+        for (std::size_t callName = 0; callName < kPeInterAppendCallNameCount;
+             ++callName) {
+            const std::size_t index =
+                focusPair * kPeInterAppendCallNameCount + callName;
+            const std::uint64_t samples =
+                peRecorderStats_
+                    .chunkInterAppendFocusBetweenCallNameSamples[index];
+            if (samples == 0) {
+                continue;
+            }
+            PeInterAppendCallNameSummary candidate{
+                static_cast<std::uint32_t>(callName), samples};
+            for (auto& slot : top) {
+                if (candidate.samples <= slot.samples) {
+                    continue;
+                }
+                std::swap(candidate, slot);
+            }
+        }
+        return top;
+    }
+
     static bool peRecordMilestoneBit(std::uint32_t recordCount,
                                      std::uint32_t& bit) noexcept {
         switch (recordCount) {
@@ -5964,10 +6856,12 @@ class D3D9DeviceImpl final : public IDirect3DDevice9Ex, public D3D9PeRecorderFlu
                 dxmt9DeviceInfoLog(
                     "pe_present_record_milestone device=%p ordinal=%llu "
                     "milestone=%u type=%s typeId=%u call=%s "
+                    "thread_id=0x%lx "
                     "entry_delta_ms=%.3f recordCount=%u payloadBytes=%u",
                     this, static_cast<unsigned long long>(ordinal), recordCount,
                     peCommandRecordTypeName(type), type,
                     dxmt9PeCurrentCallName ? dxmt9PeCurrentCallName : "unknown",
+                    static_cast<unsigned long>(dxmt9PeCurrentThreadId()),
                     static_cast<double>(entryNs - returnNs) / 1000000.0,
                     recordCount, payloadBytes);
                 return;
@@ -6007,11 +6901,14 @@ class D3D9DeviceImpl final : public IDirect3DDevice9Ex, public D3D9PeRecorderFlu
             dxmt9SteadyClockNs(std::chrono::steady_clock::now());
         dxmt9DeviceInfoLog(
             "pe_present_next_chunk device=%p ordinal=%llu reason=%s "
-            "hr=0x%08x entry_delta_ms=%.3f return_delta_ms=%.3f "
+            "thread_id=0x%lx hr=0x%08x "
+            "entry_delta_ms=%.3f return_delta_ms=%.3f "
             "bridge_ms=%.3f recordCount=%u payloadBytes=%u "
             "handleCount=%u wireBytes=%u",
             this, static_cast<unsigned long long>(claim.ordinal),
-            peRecorderFlushReasonName(reason), static_cast<unsigned>(hr),
+            peRecorderFlushReasonName(reason),
+            static_cast<unsigned long>(dxmt9PeCurrentThreadId()),
+            static_cast<unsigned>(hr),
             static_cast<double>(claim.entryNs - claim.returnNs) / 1000000.0,
             static_cast<double>(observedNs - claim.returnNs) / 1000000.0,
             static_cast<double>(observedNs - claim.entryNs) / 1000000.0,
@@ -6023,7 +6920,10 @@ class D3D9DeviceImpl final : public IDirect3DDevice9Ex, public D3D9PeRecorderFlu
                              std::uint32_t recordCount,
                              std::uint32_t payloadBytes,
                              std::uint32_t handleCount,
-                             std::uint32_t wireBytes) {
+                             std::uint32_t wireBytes,
+                             std::uint64_t fillGapNs,
+                             std::uint64_t activeFillNs,
+                             std::uint64_t bridgeNs) {
         ++peRecorderStats_.commitCount;
         peRecorderStats_.recordCountTotal += recordCount;
         peRecorderStats_.recordCountMax =
@@ -6034,6 +6934,22 @@ class D3D9DeviceImpl final : public IDirect3DDevice9Ex, public D3D9PeRecorderFlu
         peRecorderStats_.handleCountTotal += handleCount;
         peRecorderStats_.handleCountMax =
             std::max<std::uint64_t>(peRecorderStats_.handleCountMax, handleCount);
+        if (fillGapNs > 0) {
+            ++peRecorderStats_.chunkFillGapSamples;
+            peRecorderStats_.chunkFillGapNsTotal += fillGapNs;
+            peRecorderStats_.chunkFillGapNsMax =
+                std::max(peRecorderStats_.chunkFillGapNsMax, fillGapNs);
+        }
+        if (activeFillNs > 0) {
+            ++peRecorderStats_.chunkActiveFillSamples;
+            peRecorderStats_.chunkActiveFillNsTotal += activeFillNs;
+            peRecorderStats_.chunkActiveFillNsMax =
+                std::max(peRecorderStats_.chunkActiveFillNsMax, activeFillNs);
+        }
+        ++peRecorderStats_.chunkBridgeSamples;
+        peRecorderStats_.chunkBridgeNsTotal += bridgeNs;
+        peRecorderStats_.chunkBridgeNsMax =
+            std::max(peRecorderStats_.chunkBridgeNsMax, bridgeNs);
         const auto reasonIndex = static_cast<std::size_t>(reason);
         if (reasonIndex < peRecorderStats_.flushReasons.size()) {
             ++peRecorderStats_.flushReasons[reasonIndex];
@@ -6041,11 +6957,398 @@ class D3D9DeviceImpl final : public IDirect3DDevice9Ex, public D3D9PeRecorderFlu
         if (dxmt9PeRecorderChunkLogEnabled()) {
             dxmt9DeviceInfoLog(
                 "pe_recorder_chunk device=%p reason=%s commitCount=%llu "
-                "recordCount=%u payloadBytes=%u handleCount=%u wireBytes=%u",
+                "recordCount=%u payloadBytes=%u handleCount=%u wireBytes=%u "
+                "fillGapMs=%.3f activeFillMs=%.3f bridgeMs=%.3f",
                 this, peRecorderFlushReasonName(reason),
                 static_cast<unsigned long long>(peRecorderStats_.commitCount),
-                recordCount, payloadBytes, handleCount, wireBytes);
+                recordCount, payloadBytes, handleCount, wireBytes,
+                static_cast<double>(fillGapNs) / 1000000.0,
+                static_cast<double>(activeFillNs) / 1000000.0,
+                static_cast<double>(bridgeNs) / 1000000.0);
         }
+    }
+
+    void recordPeChunkInterAppendGap(std::int64_t appendEntryNs,
+                                     std::uint32_t recordCountBefore,
+                                     std::uint32_t nextType) {
+        if (!dxmt9PeRecorderStatsEnabled() ||
+            recordCountBefore == 0 ||
+            peRecorderLastAppendReturnNs_ <= 0 ||
+            appendEntryNs <= peRecorderLastAppendReturnNs_) {
+            return;
+        }
+        const auto interAppendGapNs =
+            static_cast<std::uint64_t>(
+                appendEntryNs - peRecorderLastAppendReturnNs_);
+        ++peRecorderStats_.chunkInterAppendGapSamples;
+        peRecorderStats_.chunkInterAppendGapNsTotal += interAppendGapNs;
+        peRecorderStats_.chunkInterAppendGapNsMax =
+            std::max(peRecorderStats_.chunkInterAppendGapNsMax,
+                     interAppendGapNs);
+        const std::size_t pairIndex =
+            peInterAppendPairIndex(peRecorderLastAppendRecordType_, nextType);
+        ++peRecorderStats_.chunkInterAppendPairSamples[pairIndex];
+        peRecorderStats_.chunkInterAppendPairNsTotal[pairIndex] +=
+            interAppendGapNs;
+        peRecorderStats_.chunkInterAppendPairNsMax[pairIndex] =
+            std::max(peRecorderStats_.chunkInterAppendPairNsMax[pairIndex],
+                     interAppendGapNs);
+        const std::uint32_t prevType = peRecorderLastAppendRecordType_;
+        const std::uint32_t nextBucket = peCommandRecordTypeBucket(nextType);
+        const std::size_t focusPair =
+            peInterAppendFocusPairIndex(prevType, nextBucket);
+        if (focusPair < kPeInterAppendFocusPairCount) {
+            PeInterAppendCallFamily callFamily = dxmt9PeCurrentAppendFamily;
+            if (callFamily == PeInterAppendCallFamily::Unknown) {
+                callFamily =
+                    peInterAppendCallFamilyFromName(dxmt9PeCurrentCallName);
+            }
+            const std::size_t focusIndex =
+                peInterAppendFocusCallFamilyIndex(focusPair, callFamily);
+            ++peRecorderStats_
+                .chunkInterAppendFocusCallFamilySamples[focusIndex];
+            peRecorderStats_
+                .chunkInterAppendFocusCallFamilyNsTotal[focusIndex] +=
+                interAppendGapNs;
+            peRecorderStats_
+                .chunkInterAppendFocusCallFamilyNsMax[focusIndex] =
+                std::max(
+                    peRecorderStats_
+                        .chunkInterAppendFocusCallFamilyNsMax[focusIndex],
+                    interAppendGapNs);
+            recordPeChunkInterAppendFocusPhaseSplit(focusPair, appendEntryNs);
+        }
+        if (peRecorderBetweenCallsActive_) {
+            resetPeBetweenCallsWindow();
+        }
+    }
+
+    void recordPeChunkInterAppendFocusPhaseSplit(std::size_t focusPair,
+                                                 std::int64_t appendEntryNs) {
+        if (focusPair >= kPeInterAppendFocusPairCount ||
+            peRecorderLastAppendReturnNs_ <= 0 ||
+            dxmt9PeCurrentCallEntryNs <= peRecorderLastAppendReturnNs_ ||
+            dxmt9PeCurrentCallEntryNs > appendEntryNs) {
+            return;
+        }
+        const auto preCallNs = static_cast<std::uint64_t>(
+            dxmt9PeCurrentCallEntryNs - peRecorderLastAppendReturnNs_);
+        const auto insideCallNs = static_cast<std::uint64_t>(
+            appendEntryNs - dxmt9PeCurrentCallEntryNs);
+        ++peRecorderStats_.chunkInterAppendFocusPhaseSamples[focusPair];
+        peRecorderStats_.chunkInterAppendFocusPreCallNsTotal[focusPair] +=
+            preCallNs;
+        peRecorderStats_.chunkInterAppendFocusPreCallNsMax[focusPair] =
+            std::max(
+                peRecorderStats_.chunkInterAppendFocusPreCallNsMax[focusPair],
+                preCallNs);
+        peRecorderStats_.chunkInterAppendFocusInsideCallNsTotal[focusPair] +=
+            insideCallNs;
+        peRecorderStats_.chunkInterAppendFocusInsideCallNsMax[focusPair] =
+            std::max(
+                peRecorderStats_.chunkInterAppendFocusInsideCallNsMax[focusPair],
+                insideCallNs);
+        recordPeChunkInterAppendFocusTailSplit(focusPair);
+    }
+
+    void recordPeChunkInterAppendFocusTailSplit(std::size_t focusPair) {
+        if (focusPair >= kPeInterAppendFocusPairCount ||
+            peRecorderLastAppendReturnNs_ <= 0 ||
+            peRecorderLastAppendCallExitNs_ <= peRecorderLastAppendReturnNs_ ||
+            dxmt9PeCurrentCallEntryNs < peRecorderLastAppendCallExitNs_) {
+            return;
+        }
+        const auto prevCallTailNs = static_cast<std::uint64_t>(
+            peRecorderLastAppendCallExitNs_ - peRecorderLastAppendReturnNs_);
+        const auto betweenCallsNs = static_cast<std::uint64_t>(
+            dxmt9PeCurrentCallEntryNs - peRecorderLastAppendCallExitNs_);
+        ++peRecorderStats_.chunkInterAppendFocusTailSplitSamples[focusPair];
+        peRecorderStats_
+            .chunkInterAppendFocusPrevCallTailNsTotal[focusPair] +=
+            prevCallTailNs;
+        peRecorderStats_.chunkInterAppendFocusPrevCallTailNsMax[focusPair] =
+            std::max(
+                peRecorderStats_
+                    .chunkInterAppendFocusPrevCallTailNsMax[focusPair],
+                prevCallTailNs);
+        peRecorderStats_.chunkInterAppendFocusBetweenCallsNsTotal[focusPair] +=
+            betweenCallsNs;
+        peRecorderStats_.chunkInterAppendFocusBetweenCallsNsMax[focusPair] =
+            std::max(
+                peRecorderStats_
+                    .chunkInterAppendFocusBetweenCallsNsMax[focusPair],
+                betweenCallsNs);
+        recordPeChunkInterAppendFocusBetweenCallFamilies(focusPair);
+    }
+
+    void recordPeBetweenCallsEntry(const char* callName, std::int64_t entryNs) {
+        if (!dxmt9PeRecorderStatsEnabled() ||
+            !peRecorderBetweenCallsActive_ ||
+            entryNs <= peRecorderBetweenCallsStartNs_) {
+            return;
+        }
+        const auto family = peInterAppendCallFamilyFromName(callName);
+        ++peRecorderBetweenCallFamilySamples_[
+            static_cast<std::size_t>(family)];
+        const auto callNameBucket = peInterAppendCallNameFromName(callName);
+        ++peRecorderBetweenCallNameSamples_[
+            static_cast<std::size_t>(callNameBucket)];
+    }
+
+    void resetPeBetweenCallsWindow() {
+        peRecorderBetweenCallsActive_ = false;
+        peRecorderBetweenCallsStartNs_ = 0;
+        peRecorderBetweenCallFamilySamples_.fill(0);
+        peRecorderBetweenCallNameSamples_.fill(0);
+    }
+
+    void recordPeChunkInterAppendFocusBetweenCallFamilies(std::size_t focusPair) {
+        if (focusPair >= kPeInterAppendFocusPairCount) {
+            resetPeBetweenCallsWindow();
+            return;
+        }
+        auto samples = peRecorderBetweenCallFamilySamples_;
+        const auto terminalFamily =
+            peRecorderBetweenCallsActive_
+            ? peInterAppendCallFamilyFromName(dxmt9PeCurrentCallName)
+            : PeInterAppendCallFamily::Unknown;
+        auto& terminalSamples =
+            samples[static_cast<std::size_t>(terminalFamily)];
+        if (terminalSamples != 0) {
+            --terminalSamples;
+        }
+        auto callNameSamples = peRecorderBetweenCallNameSamples_;
+        const auto terminalCallName =
+            peRecorderBetweenCallsActive_
+            ? peInterAppendCallNameFromName(dxmt9PeCurrentCallName)
+            : PeInterAppendCallName::Unknown;
+        auto& terminalCallNameSamples =
+            callNameSamples[static_cast<std::size_t>(terminalCallName)];
+        if (terminalCallNameSamples != 0) {
+            --terminalCallNameSamples;
+        }
+        for (std::size_t family = 0; family < kPeInterAppendCallFamilyCount;
+             ++family) {
+            const std::uint64_t count = samples[family];
+            if (count == 0) {
+                continue;
+            }
+            const std::size_t index =
+                focusPair * kPeInterAppendCallFamilyCount + family;
+            peRecorderStats_
+                .chunkInterAppendFocusBetweenCallFamilySamples[index] += count;
+        }
+        for (std::size_t callName = 0; callName < kPeInterAppendCallNameCount;
+             ++callName) {
+            const std::uint64_t count = callNameSamples[callName];
+            if (count == 0) {
+                continue;
+            }
+            const std::size_t index =
+                focusPair * kPeInterAppendCallNameCount + callName;
+            peRecorderStats_
+                .chunkInterAppendFocusBetweenCallNameSamples[index] += count;
+        }
+        resetPeBetweenCallsWindow();
+    }
+
+    void notePeCurrentCallReturnForInterAppendSplit() {
+        if (!dxmt9PeRecorderStatsEnabled() ||
+            peRecorderLastAppendCallEntryNs_ <= 0 ||
+            peRecorderLastAppendCallEntryNs_ != dxmt9PeCurrentCallEntryNs ||
+            peRecorderLastAppendRecordType_ !=
+                D9C_COMMAND_RECORD_DRAW_INDEXED_PRIMITIVE) {
+            return;
+        }
+        peRecorderLastAppendCallExitNs_ =
+            dxmt9SteadyClockNs(std::chrono::steady_clock::now());
+        peRecorderBetweenCallsActive_ = true;
+        peRecorderBetweenCallsStartNs_ = peRecorderLastAppendCallExitNs_;
+        peRecorderBetweenCallFamilySamples_.fill(0);
+        peRecorderBetweenCallNameSamples_.fill(0);
+    }
+
+    void recordPeAppendCpu(std::uint64_t appendCpuNs, bool noFlushAppend) {
+        if (!dxmt9PeRecorderStatsEnabled() || appendCpuNs == 0) {
+            return;
+        }
+        ++peRecorderStats_.recordAppendCalls;
+        peRecorderStats_.recordAppendCpuNsTotal += appendCpuNs;
+        peRecorderStats_.recordAppendCpuNsMax =
+            std::max(peRecorderStats_.recordAppendCpuNsMax, appendCpuNs);
+        if (!noFlushAppend) {
+            return;
+        }
+        ++peRecorderStats_.recordAppendNoFlushCalls;
+        peRecorderStats_.recordAppendNoFlushCpuNsTotal += appendCpuNs;
+        peRecorderStats_.recordAppendNoFlushCpuNsMax =
+            std::max(peRecorderStats_.recordAppendNoFlushCpuNsMax,
+                     appendCpuNs);
+    }
+
+    void recordPeConstSetterCpu(std::uint32_t recordType,
+                                std::int64_t entryNs,
+                                std::uint32_t regs) {
+        if (!dxmt9PeRecorderStatsEnabled() || entryNs <= 0) {
+            return;
+        }
+        const std::int64_t returnNs =
+            dxmt9SteadyClockNs(std::chrono::steady_clock::now());
+        if (returnNs <= entryNs) {
+            return;
+        }
+        const auto cpuNs = static_cast<std::uint64_t>(returnNs - entryNs);
+        if (recordType == D9C_COMMAND_RECORD_SET_VS_CONST_F) {
+            ++peRecorderStats_.vsConstFSetterCalls;
+            peRecorderStats_.vsConstFSetterRegs += regs;
+            peRecorderStats_.vsConstFSetterCpuNsTotal += cpuNs;
+            peRecorderStats_.vsConstFSetterCpuNsMax =
+                std::max(peRecorderStats_.vsConstFSetterCpuNsMax, cpuNs);
+        } else if (recordType == D9C_COMMAND_RECORD_SET_PS_CONST_F) {
+            ++peRecorderStats_.psConstFSetterCalls;
+            peRecorderStats_.psConstFSetterRegs += regs;
+            peRecorderStats_.psConstFSetterCpuNsTotal += cpuNs;
+            peRecorderStats_.psConstFSetterCpuNsMax =
+                std::max(peRecorderStats_.psConstFSetterCpuNsMax, cpuNs);
+        }
+    }
+
+    void recordPeConstFlushCpu(std::uint32_t recordType,
+                               std::int64_t entryNs,
+                               std::uint32_t records,
+                               std::uint32_t regs) {
+        if (!dxmt9PeRecorderStatsEnabled() || entryNs <= 0 || records == 0u) {
+            return;
+        }
+        const std::int64_t returnNs =
+            dxmt9SteadyClockNs(std::chrono::steady_clock::now());
+        if (returnNs <= entryNs) {
+            return;
+        }
+        const auto cpuNs = static_cast<std::uint64_t>(returnNs - entryNs);
+        ++peRecorderStats_.constFlushCalls;
+        peRecorderStats_.constFlushRecords += records;
+        peRecorderStats_.constFlushRegs += regs;
+        peRecorderStats_.constFlushCpuNsTotal += cpuNs;
+        peRecorderStats_.constFlushCpuNsMax =
+            std::max(peRecorderStats_.constFlushCpuNsMax, cpuNs);
+        if (recordType == D9C_COMMAND_RECORD_SET_VS_CONST_F) {
+            peRecorderStats_.vsConstFFlushRecords += records;
+            peRecorderStats_.vsConstFFlushRegs += regs;
+            peRecorderStats_.vsConstFFlushCpuNsTotal += cpuNs;
+        } else if (recordType == D9C_COMMAND_RECORD_SET_PS_CONST_F) {
+            peRecorderStats_.psConstFFlushRecords += records;
+            peRecorderStats_.psConstFFlushRegs += regs;
+            peRecorderStats_.psConstFFlushCpuNsTotal += cpuNs;
+        }
+    }
+
+    void recordPeChunkBarrierConstCpu(std::int64_t entryNs) {
+        if (!dxmt9PeRecorderStatsEnabled() || entryNs <= 0) {
+            return;
+        }
+        const std::int64_t returnNs =
+            dxmt9SteadyClockNs(std::chrono::steady_clock::now());
+        if (returnNs <= entryNs) {
+            return;
+        }
+        const auto cpuNs = static_cast<std::uint64_t>(returnNs - entryNs);
+        ++peRecorderStats_.chunkBarrierFlushCalls;
+        peRecorderStats_.chunkBarrierConstCpuNsTotal += cpuNs;
+        peRecorderStats_.chunkBarrierConstCpuNsMax =
+            std::max(peRecorderStats_.chunkBarrierConstCpuNsMax, cpuNs);
+    }
+
+    void recordPeApplyStateBuildCpu(std::int64_t entryNs) {
+        if (!dxmt9PeRecorderStatsEnabled() || entryNs <= 0) {
+            return;
+        }
+        const std::int64_t returnNs =
+            dxmt9SteadyClockNs(std::chrono::steady_clock::now());
+        if (returnNs <= entryNs) {
+            return;
+        }
+        const auto cpuNs = static_cast<std::uint64_t>(returnNs - entryNs);
+        ++peRecorderStats_.applyStateBuildCalls;
+        peRecorderStats_.applyStateBuildCpuNsTotal += cpuNs;
+        peRecorderStats_.applyStateBuildCpuNsMax =
+            std::max(peRecorderStats_.applyStateBuildCpuNsMax, cpuNs);
+    }
+
+    void recordPeHotStateSetterCpu(PeHotStateSetterFamily family,
+                                   std::int64_t entryNs,
+                                   bool dirty) {
+        if (!dxmt9PeRecorderStatsEnabled() || entryNs <= 0) {
+            return;
+        }
+        const auto index = static_cast<std::size_t>(family);
+        if (index >= kPeHotStateSetterFamilyCount) {
+            return;
+        }
+        ++peRecorderStats_.hotStateSetterCalls[index];
+        if (dirty) {
+            ++peRecorderStats_.hotStateSetterDirty[index];
+        }
+        const std::int64_t returnNs =
+            dxmt9SteadyClockNs(std::chrono::steady_clock::now());
+        if (returnNs <= entryNs) {
+            return;
+        }
+        const auto cpuNs = static_cast<std::uint64_t>(returnNs - entryNs);
+        peRecorderStats_.hotStateSetterCpuNsTotal[index] += cpuNs;
+        peRecorderStats_.hotStateSetterCpuNsMax[index] =
+            std::max(peRecorderStats_.hotStateSetterCpuNsMax[index], cpuNs);
+    }
+
+    class PeHotStateSetterTimer {
+    public:
+        PeHotStateSetterTimer(D3D9DeviceImpl& device,
+                              PeHotStateSetterFamily family) noexcept
+        : device_(device), family_(family),
+          entryNs_(dxmt9PeRecorderStatsEnabled()
+              ? dxmt9SteadyClockNs(std::chrono::steady_clock::now())
+              : 0) {
+        }
+
+        ~PeHotStateSetterTimer() noexcept {
+            device_.recordPeHotStateSetterCpu(family_, entryNs_, dirty_);
+        }
+
+        void markDirty() noexcept {
+            dirty_ = true;
+        }
+
+    private:
+        D3D9DeviceImpl& device_;
+        PeHotStateSetterFamily family_;
+        std::int64_t entryNs_ = 0;
+        bool dirty_ = false;
+    };
+
+    void notePeChunkAppendBoundary(std::int64_t appendReturnNs,
+                                   std::uint32_t type) {
+        if (!dxmt9PeRecorderStatsEnabled() ||
+            commandChunk_.recordCount() == 0) {
+            return;
+        }
+        if (peRecorderCurrentChunkFirstAppendNs_ == 0) {
+            peRecorderCurrentChunkFirstAppendNs_ = appendReturnNs;
+            const std::int64_t priorReturnNs = peRecorderLastChunkReturnNs_;
+            if (priorReturnNs > 0 && appendReturnNs > priorReturnNs) {
+                const auto firstRecordGapNs =
+                    static_cast<std::uint64_t>(
+                        appendReturnNs - priorReturnNs);
+                ++peRecorderStats_.chunkFirstRecordGapSamples;
+                peRecorderStats_.chunkFirstRecordGapNsTotal += firstRecordGapNs;
+                peRecorderStats_.chunkFirstRecordGapNsMax =
+                    std::max(peRecorderStats_.chunkFirstRecordGapNsMax,
+                             firstRecordGapNs);
+            }
+        }
+        peRecorderLastAppendReturnNs_ = appendReturnNs;
+        peRecorderLastAppendCallEntryNs_ = dxmt9PeCurrentCallEntryNs;
+        peRecorderLastAppendCallExitNs_ = 0;
+        peRecorderLastAppendRecordType_ = peCommandRecordTypeBucket(type);
     }
 
     void logPeRecorderStats(const char* event, bool force = false) {
@@ -6057,11 +7360,230 @@ class D3D9DeviceImpl final : public IDirect3DDevice9Ex, public D3D9PeRecorderFlu
             return;
         }
         peRecorderStatsLastLoggedCommitCount_ = peRecorderStats_.commitCount;
+        const auto topInterAppendPairs = topPeInterAppendPairs();
+        const auto hotRt =
+            static_cast<std::size_t>(PeHotStateSetterFamily::RenderTarget);
+        const auto hotDs =
+            static_cast<std::size_t>(PeHotStateSetterFamily::DepthStencil);
+        const auto hotViewportScissor =
+            static_cast<std::size_t>(PeHotStateSetterFamily::ViewportScissor);
+        const auto hotTransform =
+            static_cast<std::size_t>(PeHotStateSetterFamily::Transform);
+        const auto hotMaterialLightClip =
+            static_cast<std::size_t>(PeHotStateSetterFamily::MaterialLightClip);
+        const auto hotRenderState =
+            static_cast<std::size_t>(PeHotStateSetterFamily::RenderState);
+        const auto hotTssSampler =
+            static_cast<std::size_t>(
+                PeHotStateSetterFamily::TextureStageSampler);
+        const auto hotTexture =
+            static_cast<std::size_t>(PeHotStateSetterFamily::Texture);
+        const auto hotVertexInput =
+            static_cast<std::size_t>(PeHotStateSetterFamily::VertexInput);
+        const auto hotShader =
+            static_cast<std::size_t>(PeHotStateSetterFamily::Shader);
+        const auto gapVsConstFocus = static_cast<std::size_t>(
+            PeInterAppendFocusPair::DrawIndexedToVsConstF);
+        const auto gapApplyFocus = static_cast<std::size_t>(
+            PeInterAppendFocusPair::DrawIndexedToApplyState);
+        const auto gapDrawFocus = static_cast<std::size_t>(
+            PeInterAppendFocusPair::DrawIndexedToDrawIndexed);
+        const auto gapPsConstFocus = static_cast<std::size_t>(
+            PeInterAppendFocusPair::DrawIndexedToPsConstF);
+        const auto gapVsConstFamilies =
+            topPeInterAppendFocusCallFamilies(gapVsConstFocus);
+        const auto gapApplyFamilies =
+            topPeInterAppendFocusCallFamilies(gapApplyFocus);
+        const auto gapDrawFamilies =
+            topPeInterAppendFocusCallFamilies(gapDrawFocus);
+        const auto gapPsConstFamilies =
+            topPeInterAppendFocusCallFamilies(gapPsConstFocus);
+        const auto gapVsConstBetweenFamilies =
+            topPeInterAppendFocusBetweenCallFamilies(gapVsConstFocus);
+        const auto gapApplyBetweenFamilies =
+            topPeInterAppendFocusBetweenCallFamilies(gapApplyFocus);
+        const auto gapDrawBetweenFamilies =
+            topPeInterAppendFocusBetweenCallFamilies(gapDrawFocus);
+        const auto gapPsConstBetweenFamilies =
+            topPeInterAppendFocusBetweenCallFamilies(gapPsConstFocus);
+        const auto gapVsConstBetweenCallNames =
+            topPeInterAppendFocusBetweenCallNames(gapVsConstFocus);
+        const auto gapApplyBetweenCallNames =
+            topPeInterAppendFocusBetweenCallNames(gapApplyFocus);
+        const auto gapDrawBetweenCallNames =
+            topPeInterAppendFocusBetweenCallNames(gapDrawFocus);
+        const auto gapPsConstBetweenCallNames =
+            topPeInterAppendFocusBetweenCallNames(gapPsConstFocus);
+        const auto phaseSamples = [this](std::size_t focus) noexcept {
+            return peRecorderStats_.chunkInterAppendFocusPhaseSamples[focus];
+        };
+        const auto preCallMs = [this](std::size_t focus) noexcept {
+            return static_cast<double>(
+                peRecorderStats_
+                    .chunkInterAppendFocusPreCallNsTotal[focus]) /
+                1000000.0;
+        };
+        const auto preCallMaxMs = [this](std::size_t focus) noexcept {
+            return static_cast<double>(
+                peRecorderStats_
+                    .chunkInterAppendFocusPreCallNsMax[focus]) /
+                1000000.0;
+        };
+        const auto insideCallMs = [this](std::size_t focus) noexcept {
+            return static_cast<double>(
+                peRecorderStats_
+                    .chunkInterAppendFocusInsideCallNsTotal[focus]) /
+                1000000.0;
+        };
+        const auto insideCallMaxMs = [this](std::size_t focus) noexcept {
+            return static_cast<double>(
+                peRecorderStats_
+                    .chunkInterAppendFocusInsideCallNsMax[focus]) /
+                1000000.0;
+        };
+        const auto tailSplitSamples = [this](std::size_t focus) noexcept {
+            return peRecorderStats_
+                .chunkInterAppendFocusTailSplitSamples[focus];
+        };
+        const auto prevCallTailMs = [this](std::size_t focus) noexcept {
+            return static_cast<double>(
+                peRecorderStats_
+                    .chunkInterAppendFocusPrevCallTailNsTotal[focus]) /
+                1000000.0;
+        };
+        const auto prevCallTailMaxMs = [this](std::size_t focus) noexcept {
+            return static_cast<double>(
+                peRecorderStats_
+                    .chunkInterAppendFocusPrevCallTailNsMax[focus]) /
+                1000000.0;
+        };
+        const auto betweenCallsMs = [this](std::size_t focus) noexcept {
+            return static_cast<double>(
+                peRecorderStats_
+                    .chunkInterAppendFocusBetweenCallsNsTotal[focus]) /
+                1000000.0;
+        };
+        const auto betweenCallsMaxMs = [this](std::size_t focus) noexcept {
+            return static_cast<double>(
+                peRecorderStats_
+                    .chunkInterAppendFocusBetweenCallsNsMax[focus]) /
+                1000000.0;
+        };
         dxmt9DeviceInfoLog(
             "pe_recorder_stats event=%s device=%p commitCount=%llu "
             "recordCountTotal=%llu recordCountMax=%llu "
             "payloadBytesTotal=%llu payloadBytesMax=%llu "
             "handleCountTotal=%llu handleCountMax=%llu "
+            "chunkFillGapSamples=%llu chunkFillGapMs=%.3f "
+            "chunkFillGapMaxMs=%.3f "
+            "chunkFirstRecordGapSamples=%llu chunkFirstRecordGapMs=%.3f "
+            "chunkFirstRecordGapMaxMs=%.3f "
+            "chunkActiveFillSamples=%llu chunkActiveFillMs=%.3f "
+            "chunkActiveFillMaxMs=%.3f "
+            "chunkInterAppendGapSamples=%llu chunkInterAppendGapMs=%.3f "
+            "chunkInterAppendGapMaxMs=%.3f "
+            "chunkBridgeSamples=%llu chunkBridgeMs=%.3f "
+            "chunkBridgeMaxMs=%.3f "
+            "recordAppendCalls=%llu recordAppendCpuMs=%.3f "
+            "recordAppendCpuMaxMs=%.3f "
+            "recordAppendNoFlushCalls=%llu recordAppendNoFlushCpuMs=%.3f "
+            "recordAppendNoFlushCpuMaxMs=%.3f "
+            "interAppendTop1PrevType=%u interAppendTop1Prev=%s "
+            "interAppendTop1NextType=%u interAppendTop1Next=%s "
+            "interAppendTop1Samples=%llu interAppendTop1Ms=%.3f "
+            "interAppendTop1MaxMs=%.3f "
+            "interAppendTop2PrevType=%u interAppendTop2Prev=%s "
+            "interAppendTop2NextType=%u interAppendTop2Next=%s "
+            "interAppendTop2Samples=%llu interAppendTop2Ms=%.3f "
+            "interAppendTop2MaxMs=%.3f "
+            "interAppendTop3PrevType=%u interAppendTop3Prev=%s "
+            "interAppendTop3NextType=%u interAppendTop3Next=%s "
+            "interAppendTop3Samples=%llu interAppendTop3Ms=%.3f "
+            "interAppendTop3MaxMs=%.3f "
+            "interAppendTop4PrevType=%u interAppendTop4Prev=%s "
+            "interAppendTop4NextType=%u interAppendTop4Next=%s "
+            "interAppendTop4Samples=%llu interAppendTop4Ms=%.3f "
+            "interAppendTop4MaxMs=%.3f "
+            "vsConstFSetterCalls=%llu vsConstFSetterRegs=%llu "
+            "vsConstFSetterCpuMs=%.3f vsConstFSetterCpuMaxMs=%.3f "
+            "psConstFSetterCalls=%llu psConstFSetterRegs=%llu "
+            "psConstFSetterCpuMs=%.3f psConstFSetterCpuMaxMs=%.3f "
+            "constFlushCalls=%llu constFlushRecords=%llu "
+            "constFlushRegs=%llu constFlushCpuMs=%.3f "
+            "constFlushCpuMaxMs=%.3f "
+            "vsConstFFlushRecords=%llu vsConstFFlushRegs=%llu "
+            "vsConstFFlushCpuMs=%.3f "
+            "psConstFFlushRecords=%llu psConstFFlushRegs=%llu "
+            "psConstFFlushCpuMs=%.3f "
+            "chunkBarrierFlushCalls=%llu chunkBarrierConstCpuMs=%.3f "
+            "chunkBarrierConstCpuMaxMs=%.3f "
+            "applyStateBuildCalls=%llu applyStateBuildCpuMs=%.3f "
+            "applyStateBuildCpuMaxMs=%.3f "
+            "hotSetterRtCalls=%llu hotSetterRtDirty=%llu "
+            "hotSetterRtCpuMs=%.3f hotSetterRtCpuMaxMs=%.3f "
+            "hotSetterDsCalls=%llu hotSetterDsDirty=%llu "
+            "hotSetterDsCpuMs=%.3f hotSetterDsCpuMaxMs=%.3f "
+            "hotSetterViewportScissorCalls=%llu "
+            "hotSetterViewportScissorDirty=%llu "
+            "hotSetterViewportScissorCpuMs=%.3f "
+            "hotSetterViewportScissorCpuMaxMs=%.3f "
+            "hotSetterTransformCalls=%llu hotSetterTransformDirty=%llu "
+            "hotSetterTransformCpuMs=%.3f "
+            "hotSetterTransformCpuMaxMs=%.3f "
+            "hotSetterMaterialLightClipCalls=%llu "
+            "hotSetterMaterialLightClipDirty=%llu "
+            "hotSetterMaterialLightClipCpuMs=%.3f "
+            "hotSetterMaterialLightClipCpuMaxMs=%.3f "
+            "hotSetterRenderStateCalls=%llu "
+            "hotSetterRenderStateDirty=%llu "
+            "hotSetterRenderStateCpuMs=%.3f "
+            "hotSetterRenderStateCpuMaxMs=%.3f "
+            "hotSetterTssSamplerCalls=%llu "
+            "hotSetterTssSamplerDirty=%llu "
+            "hotSetterTssSamplerCpuMs=%.3f "
+            "hotSetterTssSamplerCpuMaxMs=%.3f "
+            "hotSetterTextureCalls=%llu hotSetterTextureDirty=%llu "
+            "hotSetterTextureCpuMs=%.3f "
+            "hotSetterTextureCpuMaxMs=%.3f "
+            "hotSetterVertexInputCalls=%llu "
+            "hotSetterVertexInputDirty=%llu "
+            "hotSetterVertexInputCpuMs=%.3f "
+            "hotSetterVertexInputCpuMaxMs=%.3f "
+            "hotSetterShaderCalls=%llu hotSetterShaderDirty=%llu "
+            "hotSetterShaderCpuMs=%.3f "
+            "hotSetterShaderCpuMaxMs=%.3f "
+            "gapDrawIndexedVsConstFTop1CallFamily=%s "
+            "gapDrawIndexedVsConstFTop1Samples=%llu "
+            "gapDrawIndexedVsConstFTop1Ms=%.3f "
+            "gapDrawIndexedVsConstFTop1MaxMs=%.3f "
+            "gapDrawIndexedVsConstFTop2CallFamily=%s "
+            "gapDrawIndexedVsConstFTop2Samples=%llu "
+            "gapDrawIndexedVsConstFTop2Ms=%.3f "
+            "gapDrawIndexedVsConstFTop2MaxMs=%.3f "
+            "gapDrawIndexedApplyStateTop1CallFamily=%s "
+            "gapDrawIndexedApplyStateTop1Samples=%llu "
+            "gapDrawIndexedApplyStateTop1Ms=%.3f "
+            "gapDrawIndexedApplyStateTop1MaxMs=%.3f "
+            "gapDrawIndexedApplyStateTop2CallFamily=%s "
+            "gapDrawIndexedApplyStateTop2Samples=%llu "
+            "gapDrawIndexedApplyStateTop2Ms=%.3f "
+            "gapDrawIndexedApplyStateTop2MaxMs=%.3f "
+            "gapDrawIndexedDrawIndexedTop1CallFamily=%s "
+            "gapDrawIndexedDrawIndexedTop1Samples=%llu "
+            "gapDrawIndexedDrawIndexedTop1Ms=%.3f "
+            "gapDrawIndexedDrawIndexedTop1MaxMs=%.3f "
+            "gapDrawIndexedDrawIndexedTop2CallFamily=%s "
+            "gapDrawIndexedDrawIndexedTop2Samples=%llu "
+            "gapDrawIndexedDrawIndexedTop2Ms=%.3f "
+            "gapDrawIndexedDrawIndexedTop2MaxMs=%.3f "
+            "gapDrawIndexedPsConstFTop1CallFamily=%s "
+            "gapDrawIndexedPsConstFTop1Samples=%llu "
+            "gapDrawIndexedPsConstFTop1Ms=%.3f "
+            "gapDrawIndexedPsConstFTop1MaxMs=%.3f "
+            "gapDrawIndexedPsConstFTop2CallFamily=%s "
+            "gapDrawIndexedPsConstFTop2Samples=%llu "
+            "gapDrawIndexedPsConstFTop2Ms=%.3f "
+            "gapDrawIndexedPsConstFTop2MaxMs=%.3f "
             "flushReasons{explicit=%llu capacityPre=%llu capacityPost=%llu "
             "barrier=%llu present=%llu readback=%llu reset=%llu "
             "stateblock=%llu child=%llu destructor=%llu stateMutation=%llu "
@@ -6076,6 +7598,252 @@ class D3D9DeviceImpl final : public IDirect3DDevice9Ex, public D3D9PeRecorderFlu
             static_cast<unsigned long long>(peRecorderStats_.payloadBytesMax),
             static_cast<unsigned long long>(peRecorderStats_.handleCountTotal),
             static_cast<unsigned long long>(peRecorderStats_.handleCountMax),
+            static_cast<unsigned long long>(
+                peRecorderStats_.chunkFillGapSamples),
+            static_cast<double>(peRecorderStats_.chunkFillGapNsTotal) /
+                1000000.0,
+            static_cast<double>(peRecorderStats_.chunkFillGapNsMax) /
+                1000000.0,
+            static_cast<unsigned long long>(
+                peRecorderStats_.chunkFirstRecordGapSamples),
+            static_cast<double>(
+                peRecorderStats_.chunkFirstRecordGapNsTotal) / 1000000.0,
+            static_cast<double>(
+                peRecorderStats_.chunkFirstRecordGapNsMax) / 1000000.0,
+            static_cast<unsigned long long>(
+                peRecorderStats_.chunkActiveFillSamples),
+            static_cast<double>(peRecorderStats_.chunkActiveFillNsTotal) /
+                1000000.0,
+            static_cast<double>(peRecorderStats_.chunkActiveFillNsMax) /
+                1000000.0,
+            static_cast<unsigned long long>(
+                peRecorderStats_.chunkInterAppendGapSamples),
+            static_cast<double>(
+                peRecorderStats_.chunkInterAppendGapNsTotal) / 1000000.0,
+            static_cast<double>(
+                peRecorderStats_.chunkInterAppendGapNsMax) / 1000000.0,
+            static_cast<unsigned long long>(peRecorderStats_.chunkBridgeSamples),
+            static_cast<double>(peRecorderStats_.chunkBridgeNsTotal) /
+                1000000.0,
+            static_cast<double>(peRecorderStats_.chunkBridgeNsMax) /
+                1000000.0,
+            static_cast<unsigned long long>(peRecorderStats_.recordAppendCalls),
+            static_cast<double>(peRecorderStats_.recordAppendCpuNsTotal) /
+                1000000.0,
+            static_cast<double>(peRecorderStats_.recordAppendCpuNsMax) /
+                1000000.0,
+            static_cast<unsigned long long>(
+                peRecorderStats_.recordAppendNoFlushCalls),
+            static_cast<double>(
+                peRecorderStats_.recordAppendNoFlushCpuNsTotal) / 1000000.0,
+            static_cast<double>(
+                peRecorderStats_.recordAppendNoFlushCpuNsMax) / 1000000.0,
+            topInterAppendPairs[0].prevType,
+            peCommandRecordTypeName(topInterAppendPairs[0].prevType),
+            topInterAppendPairs[0].nextType,
+            peCommandRecordTypeName(topInterAppendPairs[0].nextType),
+            static_cast<unsigned long long>(topInterAppendPairs[0].samples),
+            static_cast<double>(topInterAppendPairs[0].totalNs) / 1000000.0,
+            static_cast<double>(topInterAppendPairs[0].maxNs) / 1000000.0,
+            topInterAppendPairs[1].prevType,
+            peCommandRecordTypeName(topInterAppendPairs[1].prevType),
+            topInterAppendPairs[1].nextType,
+            peCommandRecordTypeName(topInterAppendPairs[1].nextType),
+            static_cast<unsigned long long>(topInterAppendPairs[1].samples),
+            static_cast<double>(topInterAppendPairs[1].totalNs) / 1000000.0,
+            static_cast<double>(topInterAppendPairs[1].maxNs) / 1000000.0,
+            topInterAppendPairs[2].prevType,
+            peCommandRecordTypeName(topInterAppendPairs[2].prevType),
+            topInterAppendPairs[2].nextType,
+            peCommandRecordTypeName(topInterAppendPairs[2].nextType),
+            static_cast<unsigned long long>(topInterAppendPairs[2].samples),
+            static_cast<double>(topInterAppendPairs[2].totalNs) / 1000000.0,
+            static_cast<double>(topInterAppendPairs[2].maxNs) / 1000000.0,
+            topInterAppendPairs[3].prevType,
+            peCommandRecordTypeName(topInterAppendPairs[3].prevType),
+            topInterAppendPairs[3].nextType,
+            peCommandRecordTypeName(topInterAppendPairs[3].nextType),
+            static_cast<unsigned long long>(topInterAppendPairs[3].samples),
+            static_cast<double>(topInterAppendPairs[3].totalNs) / 1000000.0,
+            static_cast<double>(topInterAppendPairs[3].maxNs) / 1000000.0,
+            static_cast<unsigned long long>(
+                peRecorderStats_.vsConstFSetterCalls),
+            static_cast<unsigned long long>(
+                peRecorderStats_.vsConstFSetterRegs),
+            static_cast<double>(
+                peRecorderStats_.vsConstFSetterCpuNsTotal) / 1000000.0,
+            static_cast<double>(
+                peRecorderStats_.vsConstFSetterCpuNsMax) / 1000000.0,
+            static_cast<unsigned long long>(
+                peRecorderStats_.psConstFSetterCalls),
+            static_cast<unsigned long long>(
+                peRecorderStats_.psConstFSetterRegs),
+            static_cast<double>(
+                peRecorderStats_.psConstFSetterCpuNsTotal) / 1000000.0,
+            static_cast<double>(
+                peRecorderStats_.psConstFSetterCpuNsMax) / 1000000.0,
+            static_cast<unsigned long long>(peRecorderStats_.constFlushCalls),
+            static_cast<unsigned long long>(peRecorderStats_.constFlushRecords),
+            static_cast<unsigned long long>(peRecorderStats_.constFlushRegs),
+            static_cast<double>(peRecorderStats_.constFlushCpuNsTotal) /
+                1000000.0,
+            static_cast<double>(peRecorderStats_.constFlushCpuNsMax) /
+                1000000.0,
+            static_cast<unsigned long long>(
+                peRecorderStats_.vsConstFFlushRecords),
+            static_cast<unsigned long long>(peRecorderStats_.vsConstFFlushRegs),
+            static_cast<double>(
+                peRecorderStats_.vsConstFFlushCpuNsTotal) / 1000000.0,
+            static_cast<unsigned long long>(
+                peRecorderStats_.psConstFFlushRecords),
+            static_cast<unsigned long long>(peRecorderStats_.psConstFFlushRegs),
+            static_cast<double>(
+                peRecorderStats_.psConstFFlushCpuNsTotal) / 1000000.0,
+            static_cast<unsigned long long>(
+                peRecorderStats_.chunkBarrierFlushCalls),
+            static_cast<double>(
+                peRecorderStats_.chunkBarrierConstCpuNsTotal) / 1000000.0,
+            static_cast<double>(
+                peRecorderStats_.chunkBarrierConstCpuNsMax) / 1000000.0,
+            static_cast<unsigned long long>(
+                peRecorderStats_.applyStateBuildCalls),
+            static_cast<double>(
+                peRecorderStats_.applyStateBuildCpuNsTotal) / 1000000.0,
+            static_cast<double>(
+                peRecorderStats_.applyStateBuildCpuNsMax) / 1000000.0,
+            static_cast<unsigned long long>(
+                peRecorderStats_.hotStateSetterCalls[hotRt]),
+            static_cast<unsigned long long>(
+                peRecorderStats_.hotStateSetterDirty[hotRt]),
+            static_cast<double>(
+                peRecorderStats_.hotStateSetterCpuNsTotal[hotRt]) /
+                1000000.0,
+            static_cast<double>(
+                peRecorderStats_.hotStateSetterCpuNsMax[hotRt]) / 1000000.0,
+            static_cast<unsigned long long>(
+                peRecorderStats_.hotStateSetterCalls[hotDs]),
+            static_cast<unsigned long long>(
+                peRecorderStats_.hotStateSetterDirty[hotDs]),
+            static_cast<double>(
+                peRecorderStats_.hotStateSetterCpuNsTotal[hotDs]) /
+                1000000.0,
+            static_cast<double>(
+                peRecorderStats_.hotStateSetterCpuNsMax[hotDs]) / 1000000.0,
+            static_cast<unsigned long long>(
+                peRecorderStats_.hotStateSetterCalls[hotViewportScissor]),
+            static_cast<unsigned long long>(
+                peRecorderStats_.hotStateSetterDirty[hotViewportScissor]),
+            static_cast<double>(
+                peRecorderStats_
+                    .hotStateSetterCpuNsTotal[hotViewportScissor]) /
+                1000000.0,
+            static_cast<double>(
+                peRecorderStats_.hotStateSetterCpuNsMax[hotViewportScissor]) /
+                1000000.0,
+            static_cast<unsigned long long>(
+                peRecorderStats_.hotStateSetterCalls[hotTransform]),
+            static_cast<unsigned long long>(
+                peRecorderStats_.hotStateSetterDirty[hotTransform]),
+            static_cast<double>(
+                peRecorderStats_.hotStateSetterCpuNsTotal[hotTransform]) /
+                1000000.0,
+            static_cast<double>(
+                peRecorderStats_.hotStateSetterCpuNsMax[hotTransform]) /
+                1000000.0,
+            static_cast<unsigned long long>(
+                peRecorderStats_.hotStateSetterCalls[hotMaterialLightClip]),
+            static_cast<unsigned long long>(
+                peRecorderStats_.hotStateSetterDirty[hotMaterialLightClip]),
+            static_cast<double>(
+                peRecorderStats_
+                    .hotStateSetterCpuNsTotal[hotMaterialLightClip]) /
+                1000000.0,
+            static_cast<double>(
+                peRecorderStats_
+                    .hotStateSetterCpuNsMax[hotMaterialLightClip]) /
+                1000000.0,
+            static_cast<unsigned long long>(
+                peRecorderStats_.hotStateSetterCalls[hotRenderState]),
+            static_cast<unsigned long long>(
+                peRecorderStats_.hotStateSetterDirty[hotRenderState]),
+            static_cast<double>(
+                peRecorderStats_.hotStateSetterCpuNsTotal[hotRenderState]) /
+                1000000.0,
+            static_cast<double>(
+                peRecorderStats_.hotStateSetterCpuNsMax[hotRenderState]) /
+                1000000.0,
+            static_cast<unsigned long long>(
+                peRecorderStats_.hotStateSetterCalls[hotTssSampler]),
+            static_cast<unsigned long long>(
+                peRecorderStats_.hotStateSetterDirty[hotTssSampler]),
+            static_cast<double>(
+                peRecorderStats_.hotStateSetterCpuNsTotal[hotTssSampler]) /
+                1000000.0,
+            static_cast<double>(
+                peRecorderStats_.hotStateSetterCpuNsMax[hotTssSampler]) /
+                1000000.0,
+            static_cast<unsigned long long>(
+                peRecorderStats_.hotStateSetterCalls[hotTexture]),
+            static_cast<unsigned long long>(
+                peRecorderStats_.hotStateSetterDirty[hotTexture]),
+            static_cast<double>(
+                peRecorderStats_.hotStateSetterCpuNsTotal[hotTexture]) /
+                1000000.0,
+            static_cast<double>(
+                peRecorderStats_.hotStateSetterCpuNsMax[hotTexture]) /
+                1000000.0,
+            static_cast<unsigned long long>(
+                peRecorderStats_.hotStateSetterCalls[hotVertexInput]),
+            static_cast<unsigned long long>(
+                peRecorderStats_.hotStateSetterDirty[hotVertexInput]),
+            static_cast<double>(
+                peRecorderStats_.hotStateSetterCpuNsTotal[hotVertexInput]) /
+                1000000.0,
+            static_cast<double>(
+                peRecorderStats_.hotStateSetterCpuNsMax[hotVertexInput]) /
+                1000000.0,
+            static_cast<unsigned long long>(
+                peRecorderStats_.hotStateSetterCalls[hotShader]),
+            static_cast<unsigned long long>(
+                peRecorderStats_.hotStateSetterDirty[hotShader]),
+            static_cast<double>(
+                peRecorderStats_.hotStateSetterCpuNsTotal[hotShader]) /
+                1000000.0,
+            static_cast<double>(
+                peRecorderStats_.hotStateSetterCpuNsMax[hotShader]) /
+                1000000.0,
+            peInterAppendCallFamilyName(gapVsConstFamilies[0].family),
+            static_cast<unsigned long long>(gapVsConstFamilies[0].samples),
+            static_cast<double>(gapVsConstFamilies[0].totalNs) / 1000000.0,
+            static_cast<double>(gapVsConstFamilies[0].maxNs) / 1000000.0,
+            peInterAppendCallFamilyName(gapVsConstFamilies[1].family),
+            static_cast<unsigned long long>(gapVsConstFamilies[1].samples),
+            static_cast<double>(gapVsConstFamilies[1].totalNs) / 1000000.0,
+            static_cast<double>(gapVsConstFamilies[1].maxNs) / 1000000.0,
+            peInterAppendCallFamilyName(gapApplyFamilies[0].family),
+            static_cast<unsigned long long>(gapApplyFamilies[0].samples),
+            static_cast<double>(gapApplyFamilies[0].totalNs) / 1000000.0,
+            static_cast<double>(gapApplyFamilies[0].maxNs) / 1000000.0,
+            peInterAppendCallFamilyName(gapApplyFamilies[1].family),
+            static_cast<unsigned long long>(gapApplyFamilies[1].samples),
+            static_cast<double>(gapApplyFamilies[1].totalNs) / 1000000.0,
+            static_cast<double>(gapApplyFamilies[1].maxNs) / 1000000.0,
+            peInterAppendCallFamilyName(gapDrawFamilies[0].family),
+            static_cast<unsigned long long>(gapDrawFamilies[0].samples),
+            static_cast<double>(gapDrawFamilies[0].totalNs) / 1000000.0,
+            static_cast<double>(gapDrawFamilies[0].maxNs) / 1000000.0,
+            peInterAppendCallFamilyName(gapDrawFamilies[1].family),
+            static_cast<unsigned long long>(gapDrawFamilies[1].samples),
+            static_cast<double>(gapDrawFamilies[1].totalNs) / 1000000.0,
+            static_cast<double>(gapDrawFamilies[1].maxNs) / 1000000.0,
+            peInterAppendCallFamilyName(gapPsConstFamilies[0].family),
+            static_cast<unsigned long long>(gapPsConstFamilies[0].samples),
+            static_cast<double>(gapPsConstFamilies[0].totalNs) / 1000000.0,
+            static_cast<double>(gapPsConstFamilies[0].maxNs) / 1000000.0,
+            peInterAppendCallFamilyName(gapPsConstFamilies[1].family),
+            static_cast<unsigned long long>(gapPsConstFamilies[1].samples),
+            static_cast<double>(gapPsConstFamilies[1].totalNs) / 1000000.0,
+            static_cast<double>(gapPsConstFamilies[1].maxNs) / 1000000.0,
             static_cast<unsigned long long>(
                 peRecorderStats_.flushReasons[
                     static_cast<std::size_t>(PeRecorderFlushReason::Explicit)]),
@@ -6116,6 +7884,244 @@ class D3D9DeviceImpl final : public IDirect3DDevice9Ex, public D3D9PeRecorderFlu
             static_cast<unsigned long long>(peRecorderStats_.drawIndexedPrimitiveUPCalls),
             static_cast<unsigned long long>(peRecorderStats_.upVertexBytes),
             static_cast<unsigned long long>(peRecorderStats_.upIndexBytes));
+        dxmt9DeviceInfoLog(
+            "pe_recorder_gap_call_stats event=%s device=%p "
+            "gapDrawIndexedVsConstFTop1CallFamily=%s "
+            "gapDrawIndexedVsConstFTop1Samples=%llu "
+            "gapDrawIndexedVsConstFTop1Ms=%.3f "
+            "gapDrawIndexedVsConstFTop1MaxMs=%.3f "
+            "gapDrawIndexedVsConstFTop2CallFamily=%s "
+            "gapDrawIndexedVsConstFTop2Samples=%llu "
+            "gapDrawIndexedVsConstFTop2Ms=%.3f "
+            "gapDrawIndexedVsConstFTop2MaxMs=%.3f "
+            "gapDrawIndexedApplyStateTop1CallFamily=%s "
+            "gapDrawIndexedApplyStateTop1Samples=%llu "
+            "gapDrawIndexedApplyStateTop1Ms=%.3f "
+            "gapDrawIndexedApplyStateTop1MaxMs=%.3f "
+            "gapDrawIndexedApplyStateTop2CallFamily=%s "
+            "gapDrawIndexedApplyStateTop2Samples=%llu "
+            "gapDrawIndexedApplyStateTop2Ms=%.3f "
+            "gapDrawIndexedApplyStateTop2MaxMs=%.3f "
+            "gapDrawIndexedDrawIndexedTop1CallFamily=%s "
+            "gapDrawIndexedDrawIndexedTop1Samples=%llu "
+            "gapDrawIndexedDrawIndexedTop1Ms=%.3f "
+            "gapDrawIndexedDrawIndexedTop1MaxMs=%.3f "
+            "gapDrawIndexedDrawIndexedTop2CallFamily=%s "
+            "gapDrawIndexedDrawIndexedTop2Samples=%llu "
+            "gapDrawIndexedDrawIndexedTop2Ms=%.3f "
+            "gapDrawIndexedDrawIndexedTop2MaxMs=%.3f "
+            "gapDrawIndexedPsConstFTop1CallFamily=%s "
+            "gapDrawIndexedPsConstFTop1Samples=%llu "
+            "gapDrawIndexedPsConstFTop1Ms=%.3f "
+            "gapDrawIndexedPsConstFTop1MaxMs=%.3f "
+            "gapDrawIndexedPsConstFTop2CallFamily=%s "
+            "gapDrawIndexedPsConstFTop2Samples=%llu "
+            "gapDrawIndexedPsConstFTop2Ms=%.3f "
+            "gapDrawIndexedPsConstFTop2MaxMs=%.3f "
+            "gapDrawIndexedVsConstFPhaseSamples=%llu "
+            "gapDrawIndexedVsConstFPreCallMs=%.3f "
+            "gapDrawIndexedVsConstFPreCallMaxMs=%.3f "
+            "gapDrawIndexedVsConstFInsideCallMs=%.3f "
+            "gapDrawIndexedVsConstFInsideCallMaxMs=%.3f "
+            "gapDrawIndexedApplyStatePhaseSamples=%llu "
+            "gapDrawIndexedApplyStatePreCallMs=%.3f "
+            "gapDrawIndexedApplyStatePreCallMaxMs=%.3f "
+            "gapDrawIndexedApplyStateInsideCallMs=%.3f "
+            "gapDrawIndexedApplyStateInsideCallMaxMs=%.3f "
+            "gapDrawIndexedDrawIndexedPhaseSamples=%llu "
+            "gapDrawIndexedDrawIndexedPreCallMs=%.3f "
+            "gapDrawIndexedDrawIndexedPreCallMaxMs=%.3f "
+            "gapDrawIndexedDrawIndexedInsideCallMs=%.3f "
+            "gapDrawIndexedDrawIndexedInsideCallMaxMs=%.3f "
+            "gapDrawIndexedPsConstFPhaseSamples=%llu "
+            "gapDrawIndexedPsConstFPreCallMs=%.3f "
+            "gapDrawIndexedPsConstFPreCallMaxMs=%.3f "
+            "gapDrawIndexedPsConstFInsideCallMs=%.3f "
+            "gapDrawIndexedPsConstFInsideCallMaxMs=%.3f",
+            event ? event : "unknown", this,
+            peInterAppendCallFamilyName(gapVsConstFamilies[0].family),
+            static_cast<unsigned long long>(gapVsConstFamilies[0].samples),
+            static_cast<double>(gapVsConstFamilies[0].totalNs) / 1000000.0,
+            static_cast<double>(gapVsConstFamilies[0].maxNs) / 1000000.0,
+            peInterAppendCallFamilyName(gapVsConstFamilies[1].family),
+            static_cast<unsigned long long>(gapVsConstFamilies[1].samples),
+            static_cast<double>(gapVsConstFamilies[1].totalNs) / 1000000.0,
+            static_cast<double>(gapVsConstFamilies[1].maxNs) / 1000000.0,
+            peInterAppendCallFamilyName(gapApplyFamilies[0].family),
+            static_cast<unsigned long long>(gapApplyFamilies[0].samples),
+            static_cast<double>(gapApplyFamilies[0].totalNs) / 1000000.0,
+            static_cast<double>(gapApplyFamilies[0].maxNs) / 1000000.0,
+            peInterAppendCallFamilyName(gapApplyFamilies[1].family),
+            static_cast<unsigned long long>(gapApplyFamilies[1].samples),
+            static_cast<double>(gapApplyFamilies[1].totalNs) / 1000000.0,
+            static_cast<double>(gapApplyFamilies[1].maxNs) / 1000000.0,
+            peInterAppendCallFamilyName(gapDrawFamilies[0].family),
+            static_cast<unsigned long long>(gapDrawFamilies[0].samples),
+            static_cast<double>(gapDrawFamilies[0].totalNs) / 1000000.0,
+            static_cast<double>(gapDrawFamilies[0].maxNs) / 1000000.0,
+            peInterAppendCallFamilyName(gapDrawFamilies[1].family),
+            static_cast<unsigned long long>(gapDrawFamilies[1].samples),
+            static_cast<double>(gapDrawFamilies[1].totalNs) / 1000000.0,
+            static_cast<double>(gapDrawFamilies[1].maxNs) / 1000000.0,
+            peInterAppendCallFamilyName(gapPsConstFamilies[0].family),
+            static_cast<unsigned long long>(gapPsConstFamilies[0].samples),
+            static_cast<double>(gapPsConstFamilies[0].totalNs) / 1000000.0,
+            static_cast<double>(gapPsConstFamilies[0].maxNs) / 1000000.0,
+            peInterAppendCallFamilyName(gapPsConstFamilies[1].family),
+            static_cast<unsigned long long>(gapPsConstFamilies[1].samples),
+            static_cast<double>(gapPsConstFamilies[1].totalNs) / 1000000.0,
+            static_cast<double>(gapPsConstFamilies[1].maxNs) / 1000000.0,
+            static_cast<unsigned long long>(phaseSamples(gapVsConstFocus)),
+            preCallMs(gapVsConstFocus),
+            preCallMaxMs(gapVsConstFocus),
+            insideCallMs(gapVsConstFocus),
+            insideCallMaxMs(gapVsConstFocus),
+            static_cast<unsigned long long>(phaseSamples(gapApplyFocus)),
+            preCallMs(gapApplyFocus),
+            preCallMaxMs(gapApplyFocus),
+            insideCallMs(gapApplyFocus),
+            insideCallMaxMs(gapApplyFocus),
+            static_cast<unsigned long long>(phaseSamples(gapDrawFocus)),
+            preCallMs(gapDrawFocus),
+            preCallMaxMs(gapDrawFocus),
+            insideCallMs(gapDrawFocus),
+            insideCallMaxMs(gapDrawFocus),
+            static_cast<unsigned long long>(phaseSamples(gapPsConstFocus)),
+            preCallMs(gapPsConstFocus),
+            preCallMaxMs(gapPsConstFocus),
+            insideCallMs(gapPsConstFocus),
+            insideCallMaxMs(gapPsConstFocus));
+        dxmt9DeviceInfoLog(
+            "pe_recorder_gap_tail_stats event=%s device=%p "
+            "gapDrawIndexedVsConstFTailSplitSamples=%llu "
+            "gapDrawIndexedVsConstFPrevCallTailMs=%.3f "
+            "gapDrawIndexedVsConstFPrevCallTailMaxMs=%.3f "
+            "gapDrawIndexedVsConstFBetweenCallsMs=%.3f "
+            "gapDrawIndexedVsConstFBetweenCallsMaxMs=%.3f "
+            "gapDrawIndexedApplyStateTailSplitSamples=%llu "
+            "gapDrawIndexedApplyStatePrevCallTailMs=%.3f "
+            "gapDrawIndexedApplyStatePrevCallTailMaxMs=%.3f "
+            "gapDrawIndexedApplyStateBetweenCallsMs=%.3f "
+            "gapDrawIndexedApplyStateBetweenCallsMaxMs=%.3f "
+            "gapDrawIndexedDrawIndexedTailSplitSamples=%llu "
+            "gapDrawIndexedDrawIndexedPrevCallTailMs=%.3f "
+            "gapDrawIndexedDrawIndexedPrevCallTailMaxMs=%.3f "
+            "gapDrawIndexedDrawIndexedBetweenCallsMs=%.3f "
+            "gapDrawIndexedDrawIndexedBetweenCallsMaxMs=%.3f "
+            "gapDrawIndexedPsConstFTailSplitSamples=%llu "
+            "gapDrawIndexedPsConstFPrevCallTailMs=%.3f "
+            "gapDrawIndexedPsConstFPrevCallTailMaxMs=%.3f "
+            "gapDrawIndexedPsConstFBetweenCallsMs=%.3f "
+            "gapDrawIndexedPsConstFBetweenCallsMaxMs=%.3f",
+            event ? event : "unknown", this,
+            static_cast<unsigned long long>(
+                tailSplitSamples(gapVsConstFocus)),
+            prevCallTailMs(gapVsConstFocus),
+            prevCallTailMaxMs(gapVsConstFocus),
+            betweenCallsMs(gapVsConstFocus),
+            betweenCallsMaxMs(gapVsConstFocus),
+            static_cast<unsigned long long>(tailSplitSamples(gapApplyFocus)),
+            prevCallTailMs(gapApplyFocus),
+            prevCallTailMaxMs(gapApplyFocus),
+            betweenCallsMs(gapApplyFocus),
+            betweenCallsMaxMs(gapApplyFocus),
+            static_cast<unsigned long long>(tailSplitSamples(gapDrawFocus)),
+            prevCallTailMs(gapDrawFocus),
+            prevCallTailMaxMs(gapDrawFocus),
+            betweenCallsMs(gapDrawFocus),
+            betweenCallsMaxMs(gapDrawFocus),
+            static_cast<unsigned long long>(tailSplitSamples(gapPsConstFocus)),
+            prevCallTailMs(gapPsConstFocus),
+            prevCallTailMaxMs(gapPsConstFocus),
+            betweenCallsMs(gapPsConstFocus),
+            betweenCallsMaxMs(gapPsConstFocus));
+        dxmt9DeviceInfoLog(
+            "pe_recorder_gap_between_call_stats event=%s device=%p "
+            "gapDrawIndexedVsConstFBetweenTop1CallFamily=%s "
+            "gapDrawIndexedVsConstFBetweenTop1Samples=%llu "
+            "gapDrawIndexedVsConstFBetweenTop2CallFamily=%s "
+            "gapDrawIndexedVsConstFBetweenTop2Samples=%llu "
+            "gapDrawIndexedApplyStateBetweenTop1CallFamily=%s "
+            "gapDrawIndexedApplyStateBetweenTop1Samples=%llu "
+            "gapDrawIndexedApplyStateBetweenTop2CallFamily=%s "
+            "gapDrawIndexedApplyStateBetweenTop2Samples=%llu "
+            "gapDrawIndexedDrawIndexedBetweenTop1CallFamily=%s "
+            "gapDrawIndexedDrawIndexedBetweenTop1Samples=%llu "
+            "gapDrawIndexedDrawIndexedBetweenTop2CallFamily=%s "
+            "gapDrawIndexedDrawIndexedBetweenTop2Samples=%llu "
+            "gapDrawIndexedPsConstFBetweenTop1CallFamily=%s "
+            "gapDrawIndexedPsConstFBetweenTop1Samples=%llu "
+            "gapDrawIndexedPsConstFBetweenTop2CallFamily=%s "
+            "gapDrawIndexedPsConstFBetweenTop2Samples=%llu "
+            "gapDrawIndexedVsConstFBetweenTop1CallName=%s "
+            "gapDrawIndexedVsConstFBetweenTop1CallNameSamples=%llu "
+            "gapDrawIndexedVsConstFBetweenTop2CallName=%s "
+            "gapDrawIndexedVsConstFBetweenTop2CallNameSamples=%llu "
+            "gapDrawIndexedApplyStateBetweenTop1CallName=%s "
+            "gapDrawIndexedApplyStateBetweenTop1CallNameSamples=%llu "
+            "gapDrawIndexedApplyStateBetweenTop2CallName=%s "
+            "gapDrawIndexedApplyStateBetweenTop2CallNameSamples=%llu "
+            "gapDrawIndexedDrawIndexedBetweenTop1CallName=%s "
+            "gapDrawIndexedDrawIndexedBetweenTop1CallNameSamples=%llu "
+            "gapDrawIndexedDrawIndexedBetweenTop2CallName=%s "
+            "gapDrawIndexedDrawIndexedBetweenTop2CallNameSamples=%llu "
+            "gapDrawIndexedPsConstFBetweenTop1CallName=%s "
+            "gapDrawIndexedPsConstFBetweenTop1CallNameSamples=%llu "
+            "gapDrawIndexedPsConstFBetweenTop2CallName=%s "
+            "gapDrawIndexedPsConstFBetweenTop2CallNameSamples=%llu",
+            event ? event : "unknown", this,
+            peInterAppendCallFamilyName(
+                gapVsConstBetweenFamilies[0].family),
+            static_cast<unsigned long long>(
+                gapVsConstBetweenFamilies[0].samples),
+            peInterAppendCallFamilyName(
+                gapVsConstBetweenFamilies[1].family),
+            static_cast<unsigned long long>(
+                gapVsConstBetweenFamilies[1].samples),
+            peInterAppendCallFamilyName(gapApplyBetweenFamilies[0].family),
+            static_cast<unsigned long long>(
+                gapApplyBetweenFamilies[0].samples),
+            peInterAppendCallFamilyName(gapApplyBetweenFamilies[1].family),
+            static_cast<unsigned long long>(
+                gapApplyBetweenFamilies[1].samples),
+            peInterAppendCallFamilyName(gapDrawBetweenFamilies[0].family),
+            static_cast<unsigned long long>(
+                gapDrawBetweenFamilies[0].samples),
+            peInterAppendCallFamilyName(gapDrawBetweenFamilies[1].family),
+            static_cast<unsigned long long>(
+                gapDrawBetweenFamilies[1].samples),
+            peInterAppendCallFamilyName(gapPsConstBetweenFamilies[0].family),
+            static_cast<unsigned long long>(
+                gapPsConstBetweenFamilies[0].samples),
+            peInterAppendCallFamilyName(gapPsConstBetweenFamilies[1].family),
+            static_cast<unsigned long long>(
+                gapPsConstBetweenFamilies[1].samples),
+            peInterAppendCallNameName(
+                gapVsConstBetweenCallNames[0].callName),
+            static_cast<unsigned long long>(
+                gapVsConstBetweenCallNames[0].samples),
+            peInterAppendCallNameName(
+                gapVsConstBetweenCallNames[1].callName),
+            static_cast<unsigned long long>(
+                gapVsConstBetweenCallNames[1].samples),
+            peInterAppendCallNameName(gapApplyBetweenCallNames[0].callName),
+            static_cast<unsigned long long>(
+                gapApplyBetweenCallNames[0].samples),
+            peInterAppendCallNameName(gapApplyBetweenCallNames[1].callName),
+            static_cast<unsigned long long>(
+                gapApplyBetweenCallNames[1].samples),
+            peInterAppendCallNameName(gapDrawBetweenCallNames[0].callName),
+            static_cast<unsigned long long>(
+                gapDrawBetweenCallNames[0].samples),
+            peInterAppendCallNameName(gapDrawBetweenCallNames[1].callName),
+            static_cast<unsigned long long>(
+                gapDrawBetweenCallNames[1].samples),
+            peInterAppendCallNameName(gapPsConstBetweenCallNames[0].callName),
+            static_cast<unsigned long long>(
+                gapPsConstBetweenCallNames[0].samples),
+            peInterAppendCallNameName(gapPsConstBetweenCallNames[1].callName),
+            static_cast<unsigned long long>(
+                gapPsConstBetweenCallNames[1].samples));
     }
 
     void recordDrawPrimitiveUPCopy(std::uint32_t vertexBytes) {
@@ -6139,12 +8145,41 @@ class D3D9DeviceImpl final : public IDirect3DDevice9Ex, public D3D9PeRecorderFlu
                    const D9CCommandChunk& chunk,
                    const PeCommandChunkCommitInfo& info) {
                 auto chunkCadence = claimPeFirstChunkAfterPresent();
+                const std::int64_t entryNs =
+                    dxmt9SteadyClockNs(std::chrono::steady_clock::now());
+                const std::int64_t priorReturnNs = peRecorderLastChunkReturnNs_;
                 const HRESULT hr = hr32(dxmt9c_device_commit_chunk(dev_, &chunk));
+                const std::int64_t returnNs =
+                    dxmt9SteadyClockNs(std::chrono::steady_clock::now());
+                peRecorderLastChunkReturnNs_ = returnNs;
+                const std::uint64_t fillGapNs =
+                    priorReturnNs > 0 && entryNs > priorReturnNs
+                    ? static_cast<std::uint64_t>(entryNs - priorReturnNs)
+                    : 0;
+                const std::uint64_t activeFillNs =
+                    peRecorderCurrentChunkFirstAppendNs_ > 0 &&
+                    entryNs > peRecorderCurrentChunkFirstAppendNs_
+                    ? static_cast<std::uint64_t>(
+                        entryNs - peRecorderCurrentChunkFirstAppendNs_)
+                    : 0;
+                const std::uint64_t bridgeNs =
+                    returnNs > entryNs
+                    ? static_cast<std::uint64_t>(returnNs - entryNs)
+                    : 0;
+                if (SUCCEEDED(hr)) {
+                    peRecorderCurrentChunkFirstAppendNs_ = 0;
+                    peRecorderLastAppendReturnNs_ = 0;
+                    peRecorderLastAppendCallEntryNs_ = 0;
+                    peRecorderLastAppendCallExitNs_ = 0;
+                    peRecorderLastAppendRecordType_ = 0;
+                    resetPeBetweenCallsWindow();
+                }
                 logPeFirstChunkAfterPresent(commitReason, chunkCadence, hr, info);
                 if (SUCCEEDED(hr)) {
                     recordPeChunkCommit(commitReason, info.recordCount,
                                         info.payloadBytes, info.handleCount,
-                                        info.wireBytes);
+                                        info.wireBytes, fillGapNs,
+                                        activeFillNs, bridgeNs);
                 }
                 return hr;
             });
@@ -6163,8 +8198,13 @@ class D3D9DeviceImpl final : public IDirect3DDevice9Ex, public D3D9PeRecorderFlu
             willFlushBeforeAppend ? 1u : recordCountBefore + 1u;
         const auto appendedPayloadBytes =
             willFlushBeforeAppend ? bytes : payloadBytesBefore + bytes;
+        const bool willFlushAfterAppend =
+            appendedRecordCount >= maxRecords || appendedPayloadBytes >= maxBytes;
+        const bool noFlushAppend =
+            !willFlushBeforeAppend && !willFlushAfterAppend;
         const auto appendEntryNs =
             dxmt9SteadyClockNs(std::chrono::steady_clock::now());
+        recordPeChunkInterAppendGap(appendEntryNs, recordCountBefore, type);
         const HRESULT hr = commandChunk_.appendRecordDirect(
             type, bytes, maxRecords, maxBytes,
             std::forward<WriteFn>(write),
@@ -6178,7 +8218,15 @@ class D3D9DeviceImpl final : public IDirect3DDevice9Ex, public D3D9PeRecorderFlu
             [this](PeRecorderFlushReason flushReason) {
                 return flushPendingCommandChunk(flushReason);
             });
+        const auto appendReturnNs =
+            dxmt9SteadyClockNs(std::chrono::steady_clock::now());
+        if (appendReturnNs > appendEntryNs) {
+            recordPeAppendCpu(
+                static_cast<std::uint64_t>(appendReturnNs - appendEntryNs),
+                noFlushAppend);
+        }
         if (SUCCEEDED(hr)) {
+            notePeChunkAppendBoundary(appendReturnNs, type);
             logPeRecordMilestoneAfterPresent(
                 type, appendedRecordCount,
                 static_cast<std::uint32_t>(std::min<std::size_t>(
@@ -6237,6 +8285,7 @@ class D3D9DeviceImpl final : public IDirect3DDevice9Ex, public D3D9PeRecorderFlu
     }
 
     HRESULT appendDrawPrimitiveRecord(D3DPRIMITIVETYPE type, UINT startVertex, UINT count) {
+        Dxmt9PeAppendFamilyScope appendFamily(PeInterAppendCallFamily::Draw);
         // Drain any accumulated const dirty ranges into chunk records FIRST,
         // so the chunk replays "consts → draw" in API order.
         const HRESULT constHr = flushPendingConsts();
@@ -6256,6 +8305,7 @@ class D3D9DeviceImpl final : public IDirect3DDevice9Ex, public D3D9PeRecorderFlu
                                              UINT numVertices,
                                              UINT startIndex,
                                              UINT count) {
+        Dxmt9PeAppendFamilyScope appendFamily(PeInterAppendCallFamily::Draw);
         const HRESULT constHr = flushPendingConsts();
         if (FAILED(constHr)) return constHr;
         D9CCommandRecordDrawIndexedPrimitive record{};
@@ -6306,6 +8356,7 @@ class D3D9DeviceImpl final : public IDirect3DDevice9Ex, public D3D9PeRecorderFlu
                                                DWORD packetFvf,
                                                bool overrideVertexShaderNull = false,
                                                bool forceFullSnapshot = false) {
+        Dxmt9PeAppendFamilyScope appendFamily(PeInterAppendCallFamily::Draw);
         const HRESULT constHr = flushPendingConsts();
         if (FAILED(constHr)) return constHr;
         D9CCommandRecordDrawPrimitiveUP header{};
@@ -6401,6 +8452,7 @@ class D3D9DeviceImpl final : public IDirect3DDevice9Ex, public D3D9PeRecorderFlu
                                                       DWORD packetFvf,
                                                       bool overrideVertexShaderNull = false,
                                                       bool forceFullSnapshot = false) {
+        Dxmt9PeAppendFamilyScope appendFamily(PeInterAppendCallFamily::Draw);
         const HRESULT constHr = flushPendingConsts();
         if (FAILED(constHr)) return constHr;
         D9CCommandRecordDrawIndexedPrimitiveUP header{};
@@ -6526,6 +8578,62 @@ class D3D9DeviceImpl final : public IDirect3DDevice9Ex, public D3D9PeRecorderFlu
             });
     }
 
+    static bool constShadowElemEquals(const ConstShadow& shadow,
+                                      std::uint32_t reg,
+                                      const std::uint8_t* src,
+                                      std::size_t elemSize) {
+        const std::size_t offset = static_cast<std::size_t>(reg) * elemSize;
+        if (shadow.values.size() >= offset + elemSize) {
+            return std::memcmp(shadow.values.data() + offset, src, elemSize) == 0;
+        }
+        for (std::size_t i = 0; i < elemSize; ++i) {
+            if (src[i] != 0u) {
+                return false;
+            }
+        }
+        return true;
+    }
+
+    static VsConstRangeChange analyzeConstShadowChange(
+        const ConstShadow& shadow,
+        std::uint32_t start,
+        std::uint32_t count,
+        const void* data,
+        std::size_t elemSize) {
+        VsConstRangeChange change{};
+        if (count == 0u || !data) {
+            return change;
+        }
+        const auto* src = static_cast<const std::uint8_t*>(data);
+        std::uint32_t firstChanged = count;
+        std::uint32_t lastChanged = 0u;
+        for (std::uint32_t i = 0; i < count; ++i) {
+            const auto* elem = src + static_cast<std::size_t>(i) * elemSize;
+            if (constShadowElemEquals(shadow, start + i, elem, elemSize)) {
+                continue;
+            }
+            ++change.changedRegs;
+            firstChanged = std::min<std::uint32_t>(firstChanged, i);
+            lastChanged = i + 1u;
+        }
+        if (change.changedRegs != 0u) {
+            change.changedSpanRegs = lastChanged - firstChanged;
+        }
+        return change;
+    }
+
+    static std::uint32_t countDirtyConstRegs(const ConstShadow& shadow,
+                                             std::uint32_t start,
+                                             std::uint32_t end) {
+        std::uint32_t count = 0u;
+        const std::uint32_t dirtyEnd = std::min<std::uint32_t>(
+            end, static_cast<std::uint32_t>(shadow.dirtyElems.size()));
+        for (std::uint32_t reg = start; reg < dirtyEnd; ++reg) {
+            count += shadow.dirtyElems[reg] != 0u ? 1u : 0u;
+        }
+        return count;
+    }
+
     static std::vector<std::pair<uint32_t, uint32_t>>
     collectConstDirtyRuns(const ConstShadow& shadow) {
         std::vector<std::pair<uint32_t, uint32_t>> runs;
@@ -6555,6 +8663,9 @@ class D3D9DeviceImpl final : public IDirect3DDevice9Ex, public D3D9PeRecorderFlu
     // is an opt-in perf experiment for sparse constant updates.
     HRESULT flushConstShadow(ConstShadow& shadow, uint32_t recordType, std::size_t elemSize) {
         if (!shadow.dirty()) return S_OK;
+        const std::int64_t flushEntryNs = dxmt9PeRecorderStatsEnabled()
+            ? dxmt9SteadyClockNs(std::chrono::steady_clock::now())
+            : 0;
         std::vector<std::pair<uint32_t, uint32_t>> runs;
         if (dxmt9SplitSparseConstRecordsEnabled()) {
             runs = collectConstDirtyRuns(shadow);
@@ -6563,14 +8674,30 @@ class D3D9DeviceImpl final : public IDirect3DDevice9Ex, public D3D9PeRecorderFlu
             runs.emplace_back(shadow.dirtyStart, shadow.dirtyEnd);
         }
         HRESULT hr = S_OK;
+        std::uint32_t flushedRecords = 0u;
+        std::uint32_t flushedRegs = 0u;
         for (const auto& [start, end] : runs) {
             if (end <= start) continue;
             const uint32_t count = end - start;
             const auto* data =
                 shadow.values.data() + static_cast<std::size_t>(start) * elemSize;
             hr = appendSetConstRecord(recordType, start, count, data, elemSize);
+            if (SUCCEEDED(hr)) {
+                ++flushedRecords;
+                flushedRegs += count;
+            }
+            if (SUCCEEDED(hr) && recordType == D9C_COMMAND_RECORD_SET_VS_CONST_F) {
+                const std::uint32_t dirtyRegs =
+                    countDirtyConstRegs(shadow, start, end);
+                recordVsConstSetterRange(VsConstSetterRangePhase::Flush,
+                                         currentVertexShaderHash(),
+                                         currentPixelShaderHash(),
+                                         start, count, dirtyRegs, count);
+            }
             if (FAILED(hr)) break;
         }
+        recordPeConstFlushCpu(recordType, flushEntryNs, flushedRecords,
+                              flushedRegs);
         if (SUCCEEDED(hr)) {
             shadow.clear();
         }
@@ -6610,8 +8737,13 @@ class D3D9DeviceImpl final : public IDirect3DDevice9Ex, public D3D9PeRecorderFlu
     // Caller still appends the actual barrier record afterwards;
     // chunk-commit flushes everything in the recorded order.
     HRESULT chunkBarrierFlush() {
+        Dxmt9PeAppendFamilyScope appendFamily(PeInterAppendCallFamily::Barrier);
         std::lock_guard<std::recursive_mutex> recorderLock(recorderMutex_);
+        const std::int64_t constEntryNs = dxmt9PeRecorderStatsEnabled()
+            ? dxmt9SteadyClockNs(std::chrono::steady_clock::now())
+            : 0;
         const HRESULT constHr = flushPendingConsts();
+        recordPeChunkBarrierConstCpu(constEntryNs);
         if (FAILED(constHr)) return constHr;
         if (!hasPendingHotState()) {
             return S_OK;
@@ -6622,12 +8754,17 @@ class D3D9DeviceImpl final : public IDirect3DDevice9Ex, public D3D9PeRecorderFlu
         // Fast path: single APPLY_STATE record covers all pending
         // state. After Phase 31 cap-checks at every Set* fast path,
         // this is the only path that runs in practice.
+        const std::int64_t buildEntryNs = dxmt9PeRecorderStatsEnabled()
+            ? dxmt9SteadyClockNs(std::chrono::steady_clock::now())
+            : 0;
         if (buildDrawPrimitivePacket(D3DPT_POINTLIST, 0, 0, record.packet)) {
+            recordPeApplyStateBuildCpu(buildEntryNs);
             const HRESULT appendHr = appendCommandRecord(&record, sizeof(record));
             if (FAILED(appendHr)) return appendHr;
             clearPendingHotState();
             return S_OK;
         }
+        recordPeApplyStateBuildCpu(buildEntryNs);
         // Over-cap slow path: a Set* somewhere bypassed the cap check
         // (regression). Drain pending oversized collections in batches
         // of cap-size records. Critical safety property: every pending
@@ -6948,6 +9085,7 @@ public:
 
     ~D3D9DeviceImpl() {
         (void)flushPeRecorder(PeRecorderFlushReason::Destructor);
+        logVsConstSetterRangePerf("destructor");
         logPeRecorderStats("destructor", true);
         clearPendingCommandChunk();
         releaseAllBound();
@@ -7204,6 +9342,7 @@ public:
     }
 
     HRESULT STDMETHODCALLTYPE Reset(D3DPRESENT_PARAMETERS* pPP) noexcept override {
+        dxmt9PeSetCurrentCallName("Reset");
         std::lock_guard<std::recursive_mutex> recorderLock(recorderMutex_);
         if (!pPP) return D3DERR_INVALIDCALL;
         // Present-parameter validation (same rule as CreateDevice): invalid
@@ -7275,7 +9414,9 @@ public:
 
     HRESULT STDMETHODCALLTYPE Present(const RECT* src, const RECT* dst,
                                        HWND wnd, const RGNDATA* dirty) noexcept override {
+        dxmt9PeSetCurrentCallName("Present");
         const bool recordPresentTiming = dxmt9PeRecorderStatsEnabled();
+        const std::uint32_t presentThreadId = dxmt9PeCurrentThreadId();
         const auto presentTimingEnter = std::chrono::steady_clock::now();
         std::lock_guard<std::recursive_mutex> recorderLock(recorderMutex_);
         const auto presentTimingStart = std::chrono::steady_clock::now();
@@ -7309,10 +9450,12 @@ public:
         if (FAILED(barrierHr)) {
             if (recordPresentTiming) {
                 dxmt9DeviceInfoLog(
-                    "pe_present_timing device=%p hr=0x%08x total_ms=%.3f "
+                    "pe_present_timing device=%p thread_id=0x%lx "
+                    "hr=0x%08x total_ms=%.3f "
                     "lock_wait_ms=%.3f barrier_ms=%.3f append_ms=0.000 "
                     "flush_ms=0.000",
-                    this, static_cast<unsigned>(barrierHr),
+                    this, static_cast<unsigned long>(presentThreadId),
+                    static_cast<unsigned>(barrierHr),
                     dxmt9ElapsedMs(presentTimingEnter, presentTimingBarrierEnd),
                     dxmt9ElapsedMs(presentTimingEnter, presentTimingStart),
                     dxmt9ElapsedMs(presentTimingStart, presentTimingBarrierEnd));
@@ -7337,10 +9480,12 @@ public:
         if (FAILED(appendHr)) {
             if (recordPresentTiming) {
                 dxmt9DeviceInfoLog(
-                    "pe_present_timing device=%p hr=0x%08x total_ms=%.3f "
+                    "pe_present_timing device=%p thread_id=0x%lx "
+                    "hr=0x%08x total_ms=%.3f "
                     "lock_wait_ms=%.3f barrier_ms=%.3f append_ms=%.3f "
                     "flush_ms=0.000",
-                    this, static_cast<unsigned>(appendHr),
+                    this, static_cast<unsigned long>(presentThreadId),
+                    static_cast<unsigned>(appendHr),
                     dxmt9ElapsedMs(presentTimingEnter, presentTimingAppendEnd),
                     dxmt9ElapsedMs(presentTimingEnter, presentTimingStart),
                     dxmt9ElapsedMs(presentTimingStart, presentTimingBarrierEnd),
@@ -7354,10 +9499,12 @@ public:
         if (recordPresentTiming) {
             presentTimingFlushEnd = std::chrono::steady_clock::now();
             dxmt9DeviceInfoLog(
-                "pe_present_timing device=%p hr=0x%08x total_ms=%.3f "
+                "pe_present_timing device=%p thread_id=0x%lx "
+                "hr=0x%08x total_ms=%.3f "
                 "lock_wait_ms=%.3f barrier_ms=%.3f append_ms=%.3f "
                 "flush_ms=%.3f",
-                this, static_cast<unsigned>(flushHr),
+                this, static_cast<unsigned long>(presentThreadId),
+                static_cast<unsigned>(flushHr),
                 dxmt9ElapsedMs(presentTimingEnter, presentTimingFlushEnd),
                 dxmt9ElapsedMs(presentTimingEnter, presentTimingStart),
                 dxmt9ElapsedMs(presentTimingStart, presentTimingBarrierEnd),
@@ -7365,6 +9512,7 @@ public:
                 dxmt9ElapsedMs(presentTimingAppendEnd, presentTimingFlushEnd));
         }
         if (SUCCEEDED(flushHr)) {
+            logVsConstSetterRangePerf("present");
             logPeRecorderStats("present");
             markPePresentReturnedForCadence();
         }
@@ -7727,6 +9875,7 @@ public:
                                              const RECT* srcRect,
                                              IDirect3DSurface9* dst,
                                              const POINT* dstPt) noexcept override {
+        dxmt9PeSetCurrentCallName("UpdateSurface");
         std::lock_guard<std::recursive_mutex> recorderLock(recorderMutex_);
         dxmt9DeviceDebugLog("device_update_surface device=%p src=%p dst=%p srcRect=%s dstPt=%s",
                             this, src, dst,
@@ -7807,6 +9956,7 @@ public:
 
     HRESULT STDMETHODCALLTYPE UpdateTexture(IDirect3DBaseTexture9* src,
                                              IDirect3DBaseTexture9* dst) noexcept override {
+        dxmt9PeSetCurrentCallName("UpdateTexture");
         std::lock_guard<std::recursive_mutex> recorderLock(recorderMutex_);
         // Wine d3d9 IDirect3DDevice9::UpdateTexture: both args non-NULL;
         // src must be SYSTEMMEM; dst must NOT be SYSTEMMEM/SCRATCH. See
@@ -7857,6 +10007,7 @@ public:
 
     HRESULT STDMETHODCALLTYPE GetRenderTargetData(IDirect3DSurface9* rt,
                                                    IDirect3DSurface9* dst) noexcept override {
+        dxmt9PeSetCurrentCallName("GetRenderTargetData");
         auto peCadence = claimPeFirstCallAfterPresent();
         const void* callerPc = DXMT9_PE_CALLSITE_PC();
         std::lock_guard<std::recursive_mutex> recorderLock(recorderMutex_);
@@ -7919,6 +10070,7 @@ public:
                                            IDirect3DSurface9* dst,
                                            const RECT* dstRect,
                                            D3DTEXTUREFILTERTYPE filter) noexcept override {
+        dxmt9PeSetCurrentCallName("StretchRect");
         std::lock_guard<std::recursive_mutex> recorderLock(recorderMutex_);
         dxmt9DeviceDebugLog("device_stretch_rect device=%p src=%p dst=%p filter=%u srcRect=%s dstRect=%s",
                             this, src, dst, (unsigned)filter,
@@ -8016,6 +10168,7 @@ public:
     HRESULT STDMETHODCALLTYPE ColorFill(IDirect3DSurface9* pSurf,
                                          const RECT* pRect,
                                          D3DCOLOR color) noexcept override {
+        dxmt9PeSetCurrentCallName("ColorFill");
         std::lock_guard<std::recursive_mutex> recorderLock(recorderMutex_);
         // Wine d3d9 ColorFill: DXT-compressed and SYSTEMMEM surfaces are
         // rejected. visual_colorfill_format_policy.
@@ -8095,6 +10248,8 @@ public:
                                                IDirect3DSurface9* pSurf) noexcept override {
         const auto peCall = notePeDeviceCallAfterPresent(
             "SetRenderTarget", DXMT9_PE_CALLSITE_PC());
+        PeHotStateSetterTimer hotSetter(
+            *this, PeHotStateSetterFamily::RenderTarget);
         const auto finishPeCall = [&](HRESULT hr) noexcept {
             logPeCallReturnAfterPresent(peCall, "SetRenderTarget", hr);
             return hr;
@@ -8124,6 +10279,7 @@ public:
         }
         if (valueChanged || !wasExplicit) {
             peState_.pendingRtMask |= 1u << idx;
+            hotSetter.markDirty();
         }
         if (idx == 0 && pSurf) {
             D3DSURFACE_DESC desc{};
@@ -8136,6 +10292,7 @@ public:
                                              static_cast<int32_t>(h)};
             peState_.pendingViewport = true;
             peState_.pendingScissor = true;
+            hotSetter.markDirty();
         }
         return finishPeCall(S_OK);
     }
@@ -8180,6 +10337,8 @@ public:
 
     HRESULT STDMETHODCALLTYPE SetDepthStencilSurface(IDirect3DSurface9* pSurf) noexcept override {
         notePeDeviceCallAfterPresent("SetDepthStencilSurface");
+        PeHotStateSetterTimer hotSetter(
+            *this, PeHotStateSetterFamily::DepthStencil);
         dxmt9DeviceDebugLog("device_set_depth_stencil device=%p surf=%p", this, pSurf);
         // render_target_device_mismatch: reject foreign-device surfaces.
         if (pSurf) {
@@ -8214,6 +10373,7 @@ public:
         }
         if (valueChanged || !wasExplicit) {
             peState_.pendingDs = true;
+            hotSetter.markDirty();
         }
         return S_OK;
     }
@@ -8345,6 +10505,7 @@ public:
     HRESULT STDMETHODCALLTYPE SetTransform(D3DTRANSFORMSTATETYPE state,
                                             const D3DMATRIX* pM) noexcept override {
         notePeDeviceCallAfterPresent("SetTransform");
+        PeHotStateSetterTimer hotSetter(*this, PeHotStateSetterFamily::Transform);
         if (!pM) return D3DERR_INVALIDCALL;
         dxmt9DeviceDebugLog(
             "device_set_transform device=%p state=%u "
@@ -8382,12 +10543,14 @@ public:
             // is responsible for reverting shadow entries that should not
             // survive the block (see the *Restore loop).
             peState_.transformShadow.set(stateKey, wireM);
+            hotSetter.markDirty();
             return hr32(dxmt9c_device_set_transform(dev_, stateKey, &wireM));
         }
         uint32_t transformSlotIndex = 0;
         if (!FixedTransformTable::slotForState(stateKey, transformSlotIndex)) {
             const HRESULT flushHr = flushPeRecorder();
             if (FAILED(flushHr)) return flushHr;
+            hotSetter.markDirty();
             return hr32(dxmt9c_device_set_transform(dev_, stateKey, &wireM));
         }
         D9CMatrix shadowMatrix{};
@@ -8413,6 +10576,7 @@ public:
         }
         peState_.pendingTransforms.set(stateKey, wireM);
         peState_.transformShadow.set(stateKey, wireM);
+        hotSetter.markDirty();
         return S_OK;
     }
     HRESULT STDMETHODCALLTYPE GetTransform(D3DTRANSFORMSTATETYPE state,
@@ -8465,6 +10629,8 @@ public:
     /* ── viewport / scissor ── */
     HRESULT STDMETHODCALLTYPE SetViewport(const D3DVIEWPORT9* pVP) noexcept override {
         notePeDeviceCallAfterPresent("SetViewport");
+        PeHotStateSetterTimer hotSetter(
+            *this, PeHotStateSetterFamily::ViewportScissor);
         if (!pVP) return D3DERR_INVALIDCALL;
         dxmt9DeviceDebugLog("device_set_viewport device=%p x=%u y=%u w=%u h=%u minZ=%f maxZ=%f",
                             this, pVP->X, pVP->Y, pVP->Width, pVP->Height, pVP->MinZ, pVP->MaxZ);
@@ -8479,6 +10645,7 @@ public:
         }
         peState_.viewportShadow = vp;
         peState_.pendingViewport = true;
+        hotSetter.markDirty();
         return S_OK;
     }
     HRESULT STDMETHODCALLTYPE GetViewport(D3DVIEWPORT9* pVP) noexcept override {
@@ -8497,6 +10664,8 @@ public:
     }
     HRESULT STDMETHODCALLTYPE SetScissorRect(const RECT* pR) noexcept override {
         notePeDeviceCallAfterPresent("SetScissorRect");
+        PeHotStateSetterTimer hotSetter(
+            *this, PeHotStateSetterFamily::ViewportScissor);
         if (!pR) return D3DERR_INVALIDCALL;
         dxmt9DeviceDebugLog("device_set_scissor_rect device=%p rect=%ld,%ld-%ld,%ld",
                             this, (long)pR->left, (long)pR->top, (long)pR->right, (long)pR->bottom);
@@ -8507,6 +10676,7 @@ public:
         }
         peState_.scissorShadow = cr;
         peState_.pendingScissor = true;
+        hotSetter.markDirty();
         return S_OK;
     }
     HRESULT STDMETHODCALLTYPE GetScissorRect(RECT* pR) noexcept override {
@@ -8522,6 +10692,8 @@ public:
     /* ── material / lights ── */
     HRESULT STDMETHODCALLTYPE SetMaterial(const D3DMATERIAL9* pM) noexcept override {
         notePeDeviceCallAfterPresent("SetMaterial");
+        PeHotStateSetterTimer hotSetter(
+            *this, PeHotStateSetterFamily::MaterialLightClip);
         if (!pM) return D3DERR_INVALIDCALL;
         dxmt9DeviceDebugLog("device_set_material device=%p", this);
         if (std::memcmp(&peState_.materialShadow, pM, sizeof(D9CMaterial)) == 0) {
@@ -8529,6 +10701,7 @@ public:
         }
         std::memcpy(&peState_.materialShadow, pM, sizeof(D9CMaterial));
         peState_.pendingMaterial = true;
+        hotSetter.markDirty();
         return S_OK;
     }
     HRESULT STDMETHODCALLTYPE GetMaterial(D3DMATERIAL9* pM) noexcept override {
@@ -8543,6 +10716,8 @@ public:
     }
     HRESULT STDMETHODCALLTYPE SetLight(DWORD idx, const D3DLIGHT9* pL) noexcept override {
         notePeDeviceCallAfterPresent("SetLight");
+        PeHotStateSetterTimer hotSetter(
+            *this, PeHotStateSetterFamily::MaterialLightClip);
         if (!pL) return D3DERR_INVALIDCALL;
         dxmt9DeviceDebugLog("device_set_light device=%p idx=%u type=%u", this, (unsigned)idx, (unsigned)pL->Type);
         D9CLight cl{};
@@ -8573,10 +10748,12 @@ public:
             }
             peState_.lightShadow[idx] = cl;
             peState_.pendingLightSlotMask |= 1u << idx;
+            hotSetter.markDirty();
             return S_OK;
         }
         const HRESULT flushHr = flushPeRecorder();
         if (FAILED(flushHr)) return flushHr;
+        hotSetter.markDirty();
         return hr32(dxmt9c_device_set_light(dev_, idx, &cl));
     }
     HRESULT STDMETHODCALLTYPE GetLight(DWORD idx, D3DLIGHT9* pL) noexcept override {
@@ -8609,6 +10786,8 @@ public:
     }
     HRESULT STDMETHODCALLTYPE LightEnable(DWORD idx, BOOL en) noexcept override {
         notePeDeviceCallAfterPresent("LightEnable");
+        PeHotStateSetterTimer hotSetter(
+            *this, PeHotStateSetterFamily::MaterialLightClip);
         dxmt9DeviceDebugLog("device_light_enable device=%p idx=%u enable=%u", this, (unsigned)idx, (unsigned)en);
         // Phase 12: PE-shadow-only when chunk recorder is active.
         if (idx < D9C_DRAW_PACKET_MAX_LIGHTS) {
@@ -8627,10 +10806,12 @@ public:
                 peState_.pendingLightEnableMask &= ~bit;
                 peState_.lightEnableShadow &= ~bit;
             }
+            hotSetter.markDirty();
             return S_OK;
         }
         const HRESULT flushHr = flushPeRecorder();
         if (FAILED(flushHr)) return flushHr;
+        hotSetter.markDirty();
         return hr32(dxmt9c_device_light_enable(dev_, idx, en ? 1u : 0u));
     }
     HRESULT STDMETHODCALLTYPE GetLightEnable(DWORD idx, BOOL* pEn) noexcept override {
@@ -8655,6 +10836,8 @@ public:
     /* ── clip planes ── */
     HRESULT STDMETHODCALLTYPE SetClipPlane(DWORD idx, const float* pPlane) noexcept override {
         notePeDeviceCallAfterPresent("SetClipPlane");
+        PeHotStateSetterTimer hotSetter(
+            *this, PeHotStateSetterFamily::MaterialLightClip);
         dxmt9DeviceDebugLog("device_set_clip_plane device=%p idx=%u plane=%p", this, (unsigned)idx, pPlane);
         if (!pPlane) return D3DERR_INVALIDCALL;
         if (idx >= 6) return D3DERR_INVALIDCALL;
@@ -8665,6 +10848,7 @@ public:
         }
         std::memcpy(&peState_.clipPlaneShadow[off], pPlane, sizeof(float) * 4);
         peState_.pendingClipPlaneMask |= 1u << idx;
+        hotSetter.markDirty();
         return S_OK;
     }
     HRESULT STDMETHODCALLTYPE GetClipPlane(DWORD idx, float* pPlane) noexcept override {
@@ -8775,6 +10959,8 @@ public:
     HRESULT STDMETHODCALLTYPE SetRenderState(D3DRENDERSTATETYPE state,
                                               DWORD value) noexcept override {
         notePeDeviceCallAfterPresent("SetRenderState");
+        PeHotStateSetterTimer hotSetter(
+            *this, PeHotStateSetterFamily::RenderState);
         dxmt9DeviceDebugLog("device_set_render_state device=%p state=%u value=0x%x",
                             this, (unsigned)state, (unsigned)value);
         // R-FORMAT-11 — RESZ MSAA depth-resolve trigger. The exact sentinel
@@ -8787,6 +10973,7 @@ public:
         // point-size meaning. (A sentinel arriving during state-block
         // recording is likewise a command, not recordable state.)
         if (state == D3DRS_POINTSIZE && value == kReszDepthResolveSentinel) {
+            hotSetter.markDirty();
             return requestReszDepthResolve();
         }
         if (stateBlockRecording_) {
@@ -8799,6 +10986,7 @@ public:
                 }
                 peState_.stateBlockRenderStateRestore.set(stateKey, previous);
             }
+            hotSetter.markDirty();
             return hr32(dxmt9c_device_set_render_state(dev_, (uint32_t)state, value));
         }
         const DWORD stateKey = static_cast<DWORD>(state);
@@ -8815,6 +11003,7 @@ public:
         }
         peState_.renderStateShadow.set(stateKey, value);
         peState_.pendingRenderStates.set(stateKey, value);
+        hotSetter.markDirty();
         return S_OK;
     }
     HRESULT STDMETHODCALLTYPE GetRenderState(D3DRENDERSTATETYPE state,
@@ -8956,6 +11145,8 @@ public:
                                                     D3DTEXTURESTAGESTATETYPE type,
                                                     DWORD value) noexcept override {
         notePeDeviceCallAfterPresent("SetTextureStageState");
+        PeHotStateSetterTimer hotSetter(
+            *this, PeHotStateSetterFamily::TextureStageSampler);
         dxmt9DeviceDebugLog("device_set_texture_stage_state device=%p stage=%u type=%u value=0x%x",
                             this, (unsigned)stage, (unsigned)type, (unsigned)value);
         // Wine d3d9 test_limits + test_texture_stage_states: reject
@@ -8980,6 +11171,7 @@ public:
         }
         peState_.tssShadow.set(stageSlot, stateSlot, value);
         peState_.pendingTss.set(stageSlot, stateSlot, value);
+        hotSetter.markDirty();
         return S_OK;
     }
     HRESULT STDMETHODCALLTYPE GetTextureStageState(DWORD stage,
@@ -9003,6 +11195,8 @@ public:
                                                D3DSAMPLERSTATETYPE type,
                                                DWORD value) noexcept override {
         notePeDeviceCallAfterPresent("SetSamplerState");
+        PeHotStateSetterTimer hotSetter(
+            *this, PeHotStateSetterFamily::TextureStageSampler);
         dxmt9DeviceDebugLog("device_set_sampler_state device=%p sampler=%u type=%u value=0x%x",
                             this, (unsigned)sampler, (unsigned)type, (unsigned)value);
         uint32_t samplerIndex = 0;
@@ -9026,6 +11220,7 @@ public:
         }
         peState_.samplerStateShadow.set(samplerIndex, stateSlot, value);
         peState_.pendingSamplerStates.set(samplerIndex, stateSlot, value);
+        hotSetter.markDirty();
         return S_OK;
     }
     HRESULT STDMETHODCALLTYPE GetSamplerState(DWORD sampler,
@@ -9172,6 +11367,7 @@ public:
     HRESULT STDMETHODCALLTYPE SetTexture(DWORD stage,
                                           IDirect3DBaseTexture9* pTex) noexcept override {
         notePeDeviceCallAfterPresent("SetTexture");
+        PeHotStateSetterTimer hotSetter(*this, PeHotStateSetterFamily::Texture);
         dxmt9DeviceDebugLog("device_set_texture device=%p stage=%u tex=%p",
                             this, (unsigned)stage, pTex);
         // Wine d3d9 test_limits: SetTexture with a stage at or beyond
@@ -9194,6 +11390,7 @@ public:
         setRef(textures_[textureSlot], pTex);
         applyCurrentPaletteToTexture(textures_[textureSlot]);
         peState_.pendingTextureMask |= 1u << textureSlot;
+        hotSetter.markDirty();
         return S_OK;
     }
     HRESULT STDMETHODCALLTYPE GetTexture(DWORD stage,
@@ -9249,6 +11446,8 @@ public:
 
     HRESULT STDMETHODCALLTYPE SetFVF(DWORD fvf) noexcept override {
         notePeDeviceCallAfterPresent("SetFVF");
+        PeHotStateSetterTimer hotSetter(
+            *this, PeHotStateSetterFamily::VertexInput);
         dxmt9DeviceDebugLog("device_set_fvf device=%p fvf=0x%x", this, (unsigned)fvf);
         if (fvf_ == fvf && vdecl_ != nullptr) {
             /* Same FVF, decl already mirrored. */
@@ -9257,6 +11456,7 @@ public:
         fvf_ = fvf;
         peState_.pendingFvf = true;
         peState_.pendingVdecl = true;
+        hotSetter.markDirty();
         /* SetFVF shadows the vertex-declaration slot: GetVertexDeclaration
          * must return the implicit decl for this FVF (Wine
          * test_vertex_declaration_fvf_policy line ~702 and
@@ -9309,6 +11509,8 @@ public:
             IDirect3DVertexDeclaration9* pVD) noexcept override {
         const auto peCall =
             notePeDeviceCallAfterPresent("SetVertexDeclaration");
+        PeHotStateSetterTimer hotSetter(
+            *this, PeHotStateSetterFamily::VertexInput);
         const auto finishPeCall = [&](HRESULT hr) noexcept {
             logPeCallReturnAfterPresent(peCall, "SetVertexDeclaration", hr);
             return hr;
@@ -9320,6 +11522,7 @@ public:
         // CaptureStateBlockShadowForChild and cleared in EndStateBlock.
         if (stateBlockRecording_) {
             peState_.stateBlockVdeclRecorded = true;
+            hotSetter.markDirty();
         }
         if (vdecl_ == pVD) return finishPeCall(S_OK);
         /* Wine semantics (test_get_set_vertex_declaration, device.c:376):
@@ -9340,6 +11543,7 @@ public:
         fvf_ = 0;
         peState_.pendingVdecl = true;
         peState_.pendingFvf = true;
+        hotSetter.markDirty();
         return finishPeCall(S_OK);
     }
     HRESULT STDMETHODCALLTYPE GetVertexDeclaration(
@@ -9368,11 +11572,12 @@ public:
             *ppVS = nullptr;
             return D3DERR_INVALIDCALL;
         }
-        *ppVS = CreatePeVertexShader(s, this);
+        *ppVS = CreatePeVertexShader(s, this, hashValidatedShaderBytecode(pFn));
         return S_OK;
     }
     HRESULT STDMETHODCALLTYPE SetVertexShader(IDirect3DVertexShader9* pVS) noexcept override {
         notePeDeviceCallAfterPresent("SetVertexShader");
+        PeHotStateSetterTimer hotSetter(*this, PeHotStateSetterFamily::Shader);
         dxmt9DeviceDebugLog("device_set_vertex_shader device=%p shader=%p", this, pVS);
         // Phase 12: PE-shadow-only when chunk recorder is active. The
         // packet built for the next draw carries vsValid=1 + the vs_
@@ -9381,6 +11586,7 @@ public:
         if (vs_ == pVS) return S_OK;
         setRef(vs_, pVS);
         peState_.pendingVs = true;
+        hotSetter.markDirty();
         return S_OK;
     }
     HRESULT STDMETHODCALLTYPE GetVertexShader(IDirect3DVertexShader9** ppVS) noexcept override {
@@ -9433,7 +11639,14 @@ public:
                                                         UINT count) noexcept override {
         const auto peCall =
             notePeDeviceCallAfterPresent("SetVertexShaderConstantF");
+        const std::int64_t callEntryNs = dxmt9PeRecorderStatsEnabled()
+            ? dxmt9SteadyClockNs(std::chrono::steady_clock::now())
+            : 0;
         const auto finishPeCall = [&](HRESULT hr) noexcept {
+            if (SUCCEEDED(hr)) {
+                recordPeConstSetterCpu(D9C_COMMAND_RECORD_SET_VS_CONST_F,
+                                       callEntryNs, count);
+            }
             logPeCallReturnAfterPresent(peCall, "SetVertexShaderConstantF", hr);
             return hr;
         };
@@ -9441,6 +11654,16 @@ public:
                             this, start, count, pData);
         const HRESULT hr = validateConstRange(start, count, pData, kVsConstFMax);
         if (FAILED(hr)) return finishPeCall(hr);
+        if (dxmt9PerfVsConstSetterRangeEnabled()) {
+            const VsConstRangeChange change = analyzeConstShadowChange(
+                peConsts_.vsConstF, start, count, pData, sizeof(float) * 4);
+            recordVsConstSetterRange(VsConstSetterRangePhase::Call,
+                                     currentVertexShaderHash(),
+                                     currentPixelShaderHash(),
+                                     start, count,
+                                     change.changedRegs,
+                                     change.changedSpanRegs);
+        }
         // Shadow-only: defer the record until the next flushPendingConsts()
         // (called before each draw record + at chunk commit).
         touchConstShadow(peConsts_.vsConstF, start, count, pData, sizeof(float) * 4);
@@ -9493,6 +11716,8 @@ public:
                                                IDirect3DVertexBuffer9* pBuf,
                                                UINT offset, UINT stride) noexcept override {
         const auto peCall = notePeDeviceCallAfterPresent("SetStreamSource");
+        PeHotStateSetterTimer hotSetter(
+            *this, PeHotStateSetterFamily::VertexInput);
         const auto finishPeCall = [&](HRESULT hr) noexcept {
             logPeCallReturnAfterPresent(peCall, "SetStreamSource", hr);
             return hr;
@@ -9514,6 +11739,7 @@ public:
             }
             setRef(streamSrc_[stream], (IDirect3DVertexBuffer9*)nullptr);
             peState_.pendingStreamMask |= 1u << stream;
+            hotSetter.markDirty();
             return finishPeCall(S_OK);
         }
         if (shadowedStreamSourceEquals(stream, pBuf, offset, stride)) {
@@ -9523,6 +11749,7 @@ public:
         streamOff_[stream] = offset;
         streamStr_[stream] = stride;
         peState_.pendingStreamMask |= 1u << stream;
+        hotSetter.markDirty();
         return finishPeCall(S_OK);
     }
     HRESULT STDMETHODCALLTYPE GetStreamSource(UINT stream,
@@ -9540,6 +11767,8 @@ public:
     }
     HRESULT STDMETHODCALLTYPE SetStreamSourceFreq(UINT stream, UINT freq) noexcept override {
         notePeDeviceCallAfterPresent("SetStreamSourceFreq");
+        PeHotStateSetterTimer hotSetter(
+            *this, PeHotStateSetterFamily::VertexInput);
         dxmt9DeviceDebugLog("device_set_stream_source_freq device=%p stream=%u freq=0x%x",
                             this, stream, (unsigned)freq);
         if (stream >= 16) return D3DERR_INVALIDCALL;
@@ -9567,6 +11796,7 @@ public:
         const HRESULT flushHr = flushPeRecorder();
         if (FAILED(flushHr)) return flushHr;
         streamFreq_[stream] = freq;
+        hotSetter.markDirty();
         return hr32(dxmt9c_device_set_stream_source_freq(dev_, stream, freq));
     }
     HRESULT STDMETHODCALLTYPE GetStreamSourceFreq(UINT stream, UINT* pFreq) noexcept override {
@@ -9583,6 +11813,8 @@ public:
     /* ── indices ── */
     HRESULT STDMETHODCALLTYPE SetIndices(IDirect3DIndexBuffer9* pIBuf) noexcept override {
         const auto peCall = notePeDeviceCallAfterPresent("SetIndices");
+        PeHotStateSetterTimer hotSetter(
+            *this, PeHotStateSetterFamily::VertexInput);
         const auto finishPeCall = [&](HRESULT hr) noexcept {
             logPeCallReturnAfterPresent(peCall, "SetIndices", hr);
             return hr;
@@ -9591,6 +11823,7 @@ public:
         if (indexBuf_ == pIBuf) return finishPeCall(S_OK);
         setRef(indexBuf_, pIBuf);
         peState_.pendingIb = true;
+        hotSetter.markDirty();
         return finishPeCall(S_OK);
     }
     HRESULT STDMETHODCALLTYPE GetIndices(IDirect3DIndexBuffer9** ppIBuf) noexcept override {
@@ -9616,15 +11849,17 @@ public:
             *ppPS = nullptr;
             return D3DERR_INVALIDCALL;
         }
-        *ppPS = CreatePePixelShader(s, this);
+        *ppPS = CreatePePixelShader(s, this, hashValidatedShaderBytecode(pFn));
         return S_OK;
     }
     HRESULT STDMETHODCALLTYPE SetPixelShader(IDirect3DPixelShader9* pPS) noexcept override {
         notePeDeviceCallAfterPresent("SetPixelShader");
+        PeHotStateSetterTimer hotSetter(*this, PeHotStateSetterFamily::Shader);
         dxmt9DeviceDebugLog("device_set_pixel_shader device=%p shader=%p", this, pPS);
         if (ps_ == pPS) return S_OK;
         setRef(ps_, pPS);
         peState_.pendingPs = true;
+        hotSetter.markDirty();
         return S_OK;
     }
     HRESULT STDMETHODCALLTYPE GetPixelShader(IDirect3DPixelShader9** ppPS) noexcept override {
@@ -9634,13 +11869,25 @@ public:
     }
     HRESULT STDMETHODCALLTYPE SetPixelShaderConstantF(UINT start, const float* pData,
                                                        UINT count) noexcept override {
-        notePeDeviceCallAfterPresent("SetPixelShaderConstantF");
+        const auto peCall =
+            notePeDeviceCallAfterPresent("SetPixelShaderConstantF");
+        const std::int64_t callEntryNs = dxmt9PeRecorderStatsEnabled()
+            ? dxmt9SteadyClockNs(std::chrono::steady_clock::now())
+            : 0;
+        const auto finishPeCall = [&](HRESULT hr) noexcept {
+            if (SUCCEEDED(hr)) {
+                recordPeConstSetterCpu(D9C_COMMAND_RECORD_SET_PS_CONST_F,
+                                       callEntryNs, count);
+            }
+            logPeCallReturnAfterPresent(peCall, "SetPixelShaderConstantF", hr);
+            return hr;
+        };
         dxmt9DeviceDebugLog("device_set_pixel_shader_constant_f device=%p start=%u count=%u data=%p",
                             this, start, count, pData);
         const HRESULT hr = validateConstRange(start, count, pData, kPsConstFMax);
-        if (FAILED(hr)) return hr;
+        if (FAILED(hr)) return finishPeCall(hr);
         touchConstShadow(peConsts_.psConstF, start, count, pData, sizeof(float) * 4);
-        return S_OK;
+        return finishPeCall(S_OK);
     }
     HRESULT STDMETHODCALLTYPE GetPixelShaderConstantF(UINT start, float* pData,
                                                        UINT count) noexcept override {
@@ -9733,6 +11980,7 @@ public:
                 if (swvpDraw.bypassVertexShader) peState_.pendingVs = true;
             }
         }
+        notePeCurrentCallReturnForInterAppendSplit();
         return hr;
     }
     HRESULT STDMETHODCALLTYPE DrawIndexedPrimitive(D3DPRIMITIVETYPE type,
@@ -9799,6 +12047,7 @@ public:
                 if (swvpDraw.bypassVertexShader) peState_.pendingVs = true;
             }
         }
+        notePeCurrentCallReturnForInterAppendSplit();
         return hr;
     }
     HRESULT STDMETHODCALLTYPE DrawPrimitiveUP(D3DPRIMITIVETYPE type,
@@ -11171,6 +13420,7 @@ public:
     HRESULT STDMETHODCALLTYPE PresentEx(const RECT* src, const RECT* dst,
                                          HWND wnd, const RGNDATA* dirty,
                                          DWORD flags) noexcept override {
+        dxmt9PeSetCurrentCallName("PresentEx");
         // T2 device-lost gate.
         if (deviceNotReset_) return D3DERR_DEVICELOST;
         D9CRect cs{}, cd{};
@@ -11270,6 +13520,7 @@ public:
 
     HRESULT STDMETHODCALLTYPE ResetEx(D3DPRESENT_PARAMETERS* pPP,
                                        D3DDISPLAYMODEEX* pFsMode) noexcept override {
+        dxmt9PeSetCurrentCallName("ResetEx");
         if (!pPP) return D3DERR_INVALIDCALL;
         // ResetEx windowed/fullscreen mode rules: wrong mode Size, a mode
         // supplied for a windowed reset (or missing for a fullscreen reset),

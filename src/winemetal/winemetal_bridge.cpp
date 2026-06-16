@@ -564,6 +564,52 @@ void recordBridgePerf(unsigned int code, std::uint64_t nanoseconds) {
     addBridgePerf(counters.details[static_cast<std::size_t>(detail)], nanoseconds);
   }
 }
+
+std::uint64_t bridgeTraceCallLimit() {
+  static const std::uint64_t value = [] {
+    const char* env = std::getenv("DXMT9_BRIDGE_TRACE_CALLS");
+    if (!env || env[0] == '\0' || env[0] == '0') {
+      return 0ull;
+    }
+    char* end = nullptr;
+    const auto parsed = std::strtoull(env, &end, 0);
+    return end != env ? static_cast<std::uint64_t>(parsed) : 0ull;
+  }();
+  return value;
+}
+
+bool bridgeTraceCallsEnabled() {
+  return bridgeTraceCallLimit() != 0;
+}
+
+void traceBridgeCall(unsigned int code, void* args, NTSTATUS status,
+                     std::uint64_t nanoseconds) {
+  const std::uint64_t limit = bridgeTraceCallLimit();
+  if (!limit) {
+    return;
+  }
+
+  static std::atomic<std::uint64_t> sequence{0};
+  const std::uint64_t index = sequence.fetch_add(1, std::memory_order_relaxed);
+  if (index >= limit) {
+    return;
+  }
+
+  BridgeDetail detail = BridgeDetail::Count;
+  const bool hasDetail = classifyBridgeDetail(code, detail);
+  const BridgeClass klass = classifyBridgeClass(code);
+  std::fprintf(stderr,
+               "[dxmt9-bridge-call] index=%llu code=%u op=%s class=%s detail=%s "
+               "status=0x%08lx duration_ms=%.3f args=%p\n",
+               static_cast<unsigned long long>(index + 1),
+               code,
+               dxmt9::bridge::bridgeOpcodeName(code),
+               bridgeClassName(klass),
+               hasDetail ? bridgeDetailName(detail) : "",
+               static_cast<unsigned long>(status),
+               static_cast<double>(nanoseconds) / 1000000.0,
+               args);
+}
 #endif  // DXMT9_BRIDGE_PERF_COUNTERS
 
 void bridgeDebugLog(const char* fmt, ...) {
@@ -839,13 +885,21 @@ extern "C" NTSTATUS dxmt9_winemetal_unix_call(unsigned int code, void *args) {
                  reinterpret_cast<void*>(state.dispatcher));
 #if DXMT9_BRIDGE_PERF_COUNTERS
   const bool record_perf = bridgePerfEnabledFlag();
-  const auto start = record_perf ? std::chrono::steady_clock::now()
-                                 : std::chrono::steady_clock::time_point{};
+  const bool trace_calls = bridgeTraceCallsEnabled();
+  const bool time_call = record_perf || trace_calls;
+  const auto start = time_call ? std::chrono::steady_clock::now()
+                               : std::chrono::steady_clock::time_point{};
   const NTSTATUS call_status = state.dispatcher(state.handle, code, args);
-  if (record_perf) {
+  if (time_call) {
     const auto end = std::chrono::steady_clock::now();
-    recordBridgePerf(code, static_cast<std::uint64_t>(
-                               std::chrono::duration_cast<std::chrono::nanoseconds>(end - start).count()));
+    const auto nanoseconds = static_cast<std::uint64_t>(
+        std::chrono::duration_cast<std::chrono::nanoseconds>(end - start).count());
+    if (record_perf) {
+      recordBridgePerf(code, nanoseconds);
+    }
+    if (trace_calls) {
+      traceBridgeCall(code, args, call_status, nanoseconds);
+    }
   }
 #else
   const NTSTATUS call_status = state.dispatcher(state.handle, code, args);

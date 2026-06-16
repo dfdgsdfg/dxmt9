@@ -202,6 +202,15 @@ bool argbufResourceArrayEnabled();
 std::string makeShaderPreludeArgbufResourceArray(bool withClipDistances);
 std::string makeShaderPreludeArgbufResourceArray(const ShaderPreludeOptions& options);
 
+// Stage 1 / Stage 2b direct constant-buffer slots. Pinned next to the
+// Stage 2 argbuf slot so host binding and emitted MSL stay in lockstep.
+inline constexpr std::uint32_t kDirectVsConstsBindSlot = 0u;
+inline constexpr std::uint32_t kDirectPsConstsBindSlot = 0u;
+inline constexpr std::uint32_t kDirectFfpVsConstsBindSlot = 3u;
+inline constexpr std::uint32_t kDirectFfpPsConstsBindSlot = 3u;
+inline constexpr std::uint32_t kDirectVertexStreamBindSlot = 1u;
+inline constexpr std::uint32_t kDirectDrawVolatileBindSlot = 5u;
+
 // R-BACK-12.22 — argbuf bind slot. Mirrors DXMT's slot-30 convention so
 // frame captures and existing tooling stay consistent.
 inline constexpr std::uint32_t kArgbufHybridBindSlot = 30u;

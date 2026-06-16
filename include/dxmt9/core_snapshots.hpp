@@ -666,6 +666,7 @@ struct FlatDrawStateKey {
   u64 worldViewProjHash = 0;
   u64 ffpBlendWorldViewProjHash = 0;
   u64 textureTransformsHash = 0;
+  u32 nonIdentityTextureTransformStageMask = 0;
   u32 clipPlaneMask = 0;
   u64 clipPlanesHash = 0;
 
@@ -696,6 +697,7 @@ struct FlatDrawStateRecord {
   u64 worldViewProjHash = 0;
   u64 ffpBlendWorldViewProjHash = 0;
   u64 textureTransformsHash = 0;
+  u32 nonIdentityTextureTransformStageMask = 0;
   u32 clipPlaneMask = 0;
   u64 clipPlanesHash = 0;
 
@@ -727,7 +729,14 @@ struct DrawUniformPayload {
   std::array<ClipPlane, kMaxClipPlanes> clipPlanes{};
   u64 vertexConstantsHash = 0;
   u64 pixelConstantsHash = 0;
+  u64 fixedPayloadHash = 0;
   u64 hash = 0;
+  u16 vertexFloatConstantCount = 0;
+  u16 vertexIntConstantCount = 0;
+  u16 vertexBoolConstantCount = 0;
+  u16 pixelFloatConstantCount = 0;
+  u16 pixelIntConstantCount = 0;
+  u16 pixelBoolConstantCount = 0;
 
   friend bool operator==(const DrawUniformPayload&, const DrawUniformPayload&) = default;
 };
@@ -735,6 +744,14 @@ struct DrawUniformPayload {
 struct DrawUniformPayloadHashes {
   u64 vertexConstantsHash = 0;
   u64 pixelConstantsHash = 0;
+  std::uint64_t vertexConstantsBytes = 0;
+  std::uint64_t pixelConstantsBytes = 0;
+  u16 vertexFloatConstantCount = 0;
+  u16 vertexIntConstantCount = 0;
+  u16 vertexBoolConstantCount = 0;
+  u16 pixelFloatConstantCount = 0;
+  u16 pixelIntConstantCount = 0;
+  u16 pixelBoolConstantCount = 0;
   u64 worldViewProjHash = 0;
   u64 ffpWorldViewHash = 0;
   u64 ffpNormalMatrixHash = 0;
@@ -742,6 +759,7 @@ struct DrawUniformPayloadHashes {
   std::array<u64, kMaxLights> lightHashes{};
   u64 ffpBlendWorldViewProjHash = 0;
   u64 textureTransformsHash = 0;
+  u32 nonIdentityTextureTransformStageMask = 0;
   u64 clipPlanesHash = 0;
 };
 
@@ -905,6 +923,7 @@ struct DrawRunSubmission {
   DrawBindingOverride bindingOverride{};
   u64 stateGeneration = 0;
   u64 uniformGeneration = 0;
+  u64 uniformPayloadHash = 0;
   DrawRunSubmissionStateLane stateLane = DrawRunSubmissionStateLane::Unknown;
   bool stateMaterialized = true;
 
@@ -1075,6 +1094,13 @@ inline bool drawRunSubmissionSameUniformGeneration(
     const DrawRunSubmission& b) noexcept {
   return a.uniformGeneration != 0 &&
          a.uniformGeneration == b.uniformGeneration;
+}
+
+inline bool drawRunSubmissionSameUniformPayloadHash(
+    const DrawRunSubmission& a,
+    const DrawRunSubmission& b) noexcept {
+  return a.uniformPayloadHash != 0 &&
+         a.uniformPayloadHash == b.uniformPayloadHash;
 }
 
 inline void prepareDrawRunSubmissionBindingOverride(
@@ -1660,7 +1686,15 @@ class Device : public std::enable_shared_from_this<Device> {
     return state_;
   }
   DeviceState& mutableShaderConstantsState() noexcept {
-    invalidateDrawUniformCache();
+    invalidateDrawShaderConstantsCache();
+    return state_;
+  }
+  DeviceState& mutableVertexShaderConstantsState() noexcept {
+    invalidateDrawVertexShaderConstantsCache();
+    return state_;
+  }
+  DeviceState& mutablePixelShaderConstantsState() noexcept {
+    invalidateDrawPixelShaderConstantsCache();
     return state_;
   }
   const PresentParameters& presentParameters() const noexcept { return presentParameters_; }
@@ -1833,6 +1867,8 @@ class Device : public std::enable_shared_from_this<Device> {
   struct CachedBaseDrawState {
     u64 generation = 0;
     u64 uniformGeneration = 0;
+    u64 vertexShaderConstantGeneration = 0;
+    u64 pixelShaderConstantGeneration = 0;
     u64 uniformNonConstantGeneration = 0;
     u64 renderStateFlatGeneration = 0;
     u64 textureStageStateFlatGeneration = 0;
@@ -1846,6 +1882,9 @@ class Device : public std::enable_shared_from_this<Device> {
 
   void invalidateDrawStateCache(u32 reasonMask = DrawStateInvalidationUnknown) noexcept;
   void invalidateDrawUniformCache() noexcept;
+  void invalidateDrawShaderConstantsCache() noexcept;
+  void invalidateDrawVertexShaderConstantsCache() noexcept;
+  void invalidateDrawPixelShaderConstantsCache() noexcept;
   void invalidateDrawUniformNonConstantCache() noexcept;
   void invalidateDrawFlatStateSetCache(u32 reasonMask) noexcept;
   const CachedBaseDrawState& cachedBaseDrawState(bool includeIndexBuffer);
@@ -1868,6 +1907,8 @@ class Device : public std::enable_shared_from_this<Device> {
   u64 drawStateGeneration_ = 1;
   u64 drawStableStateGeneration_ = 1;
   u64 drawUniformGeneration_ = 1;
+  u64 drawVertexShaderConstantGeneration_ = 1;
+  u64 drawPixelShaderConstantGeneration_ = 1;
   u64 drawUniformNonConstantGeneration_ = 1;
   u64 drawRenderStateFlatGeneration_ = 1;
   u64 drawTextureStageStateFlatGeneration_ = 1;

@@ -17,7 +17,7 @@ Options:
                                 Default: PATH/bin/wine.capture.real-preloader
   --backup-dir PATH             Backup directory. Default: mktemp under /tmp.
   --allow-3dmark05              Allow a deliberate 3DMark05 capture-layer
-                                diagnostic despite the known black-screen path.
+                                diagnostic. Not a normal FPS/perf sample path.
   -h, --help                    Show this help.
 
 The capture copies must already contain MetalCaptureEnabled in their embedded
@@ -29,6 +29,25 @@ EOF
 fail() {
   printf 'run_with_wine_metal_capture_layer: %s\n' "$*" >&2
   exit 2
+}
+
+replace_with_file() {
+  local src=$1
+  local dst=$2
+  local dir
+  local base
+  local tmp
+  dir=$(dirname -- "$dst")
+  base=$(basename -- "$dst")
+  tmp=$(mktemp "$dir/.${base}.replace.XXXXXX")
+  if ! cp -p "$src" "$tmp"; then
+    rm -f "$tmp"
+    return 1
+  fi
+  if ! mv -f "$tmp" "$dst"; then
+    rm -f "$tmp"
+    return 1
+  fi
 }
 
 wine_root=
@@ -90,7 +109,7 @@ capture_preloader=${capture_preloader:-"$wine_bin_dir/wine.capture.real-preloade
 if (( ! allow_3dmark05 )); then
   command_text=$(printf '%s\n' "$@")
   if printf '%s\n' "$command_text" | grep -Eiq '(^|[^[:alnum:]])(3dmark05|app-d3d9-3dmark05)([^[:alnum:]]|$)'; then
-    fail "refusing 3DMark05 capture-layer run: this path black-screens before draw/present and writes no .gputrace; use no-gputrace/xctrace sidecars or pass --allow-3dmark05 for a deliberate diagnostic"
+    fail "refusing 3DMark05 capture-layer run by default: this route is a diagnostic/Xcode-counter path, not a normal FPS/perf sample; pass --allow-3dmark05 for a deliberate capture run"
   fi
 fi
 
@@ -123,15 +142,15 @@ restore() {
   if ((restored)); then
     return
   fi
-  cp -p "$backup_real" "$target_real"
-  cp -p "$backup_preloader" "$target_preloader"
+  replace_with_file "$backup_real" "$target_real"
+  replace_with_file "$backup_preloader" "$target_preloader"
   restored=1
 }
 
 trap 'status=$?; restore; exit "$status"' EXIT INT TERM
 
-cp -p "$capture_real" "$target_real"
-cp -p "$capture_preloader" "$target_preloader"
+replace_with_file "$capture_real" "$target_real"
+replace_with_file "$capture_preloader" "$target_preloader"
 
 printf 'run_with_wine_metal_capture_layer: patched %s\n' "$wine_bin_dir" >&2
 printf 'run_with_wine_metal_capture_layer: backup %s\n' "$backup_dir" >&2

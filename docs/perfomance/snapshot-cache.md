@@ -45,6 +45,13 @@ write" owner ([[hidden-backend-storage]]).
 | H22 | Batch-miss shader layout can be reused for reason-mask-safe misses | accepted micro-win; compatible rebuilds are `154,985 / 380,288` (`40.75%`), but the safe default subset is only `7,565 / 390,712` (`1.94%`), cutting shader-layout rebuild `0.3715→0.3386ms/present` | [[snapshot-cache-snapshot.19]] |
 | H23 | Adjacent uniform snapshot elision is blocked only by the same-state/lane safety gate | rejected; same-`uniformGeneration` adjacent submissions are `0`, including the different-state/lane opportunity bucket | [[snapshot-cache-snapshot.20]] |
 | H24 | Current stream/IB miss-reason counts mean binding churn still owns binding-agnostic snapshot misses | rejected-current-owner; pure binding invalidation already avoids stable-generation bumps | [[snapshot-cache-snapshot.21]] |
+| H25 | Redundant shader constant records should not invalidate the uniform cache | accepted cleanup but rejected as current owner; native gate passes, GT1 still has `0` adjacent uniform-generation reuse | [[snapshot-cache-snapshot.22]] |
+| H26 | After Stage 2b direct-cbuf, the remaining P2/P3 snapshot owner is batch-miss uniform/hot construction | accepted current attribution; direct-cbuf run leaves `d3d9_snapshot_cache_lookup_cpu_ms=2.859ms/present`, with batch miss `2.162ms/present`, uniform build `0.883ms/present`, and hot build `0.707ms/present` | [[snapshot-cache-snapshot.23]] |
+| H27 | Batch-miss reason buckets are needed before choosing the next snapshot rewrite | accepted classification; texture is present in `75%` of batch misses and is the largest single bucket, but mixed rows are mostly `shader+FVF/VDecl` (`80.117%`) with `texture+shader+FVF/VDecl` at `42.761%`, so the target is co-churn/interner, not texture-only | [[snapshot-cache-snapshot.24]] |
+| H28 | Batch misses can often reuse the whole cached uniform payload after layout-safe misses | accepted cleanup, rejected next owner; the gate removes only `4,752` batch-miss uniform builds (`-1.13%`) and lookup falls `2.850 -> 2.843ms/present`, so batch-miss count/churn and hot-state storage remain larger targets | [[snapshot-cache-snapshot.25]] |
+| H29 | Current summaries should rank replay, queue-submission, snapshot, and batch-miss owners together | accepted tooling/current attribution; low-overhead and direct-cbuf continuation runs both show replay `~8.3ms/present`, queue submission `~4.1-4.2ms/present`, snapshot `~3.4-3.5ms/present`, lookup `~2.8-2.9ms/present`, and batch miss `~2.1ms/present`, so direct-cbuf does not move the remaining P2/P3 owner | [[snapshot-cache-snapshot.26]] |
+| H30 | Batch misses should reuse non-constant uniform payload fields when only shader constants changed | accepted CPU win, FPS flat; keeping cached FFP/non-constant fields and refreshing only VS/PS constants cuts batch-miss uniform build `0.871 -> 0.596ms/present`, lookup `2.925 -> 2.655ms/present`, and queue submission `4.209 -> 3.975ms/present`, while sampled FPS stays `16.666 -> 16.662` | [[snapshot-cache-snapshot.27]] |
+| H31 | Batch misses should refresh `cache.hot` in place instead of constructing a fresh `FlatDrawStateRecord` | accepted CPU win, FPS noisy; in-place refresh drops hot-build zero-init to `0`, hot build `0.729 -> 0.571ms/present`, lookup `2.655 -> 2.468ms/present`, and queue submission `3.975 -> 3.796ms/present`, while sampled FPS is only noisy/slightly up `16.662 -> 16.807` | [[snapshot-cache-snapshot.28]] |
 
 ## Verification methods
 
@@ -58,6 +65,17 @@ write" owner ([[hidden-backend-storage]]).
   `cachedBaseDrawStateForSubmissionBatch()` lane. This removes the older
   ambiguity where binding-agnostic batch lookups and no-index direct lookups both
   landed in `_hit_no_index` / `_miss_no_index`.
+- `d3d9_draw_state_cache_batch_miss_reason_{unknown,binding_only,single_render_state,single_texture,single_fvf_vdecl,single_shader,single_rt_depth,single_viewport_scissor,single_tss_sampler,single_ffp_clip,single_broad,mixed_2,mixed_3,mixed_4plus}`
+  — classifies only `cachedBaseDrawStateForSubmissionBatch()` misses into
+  exclusive grouped buckets. Binding-only ignores draw-packet, stream, and index
+  deltas because those do not bump the stable generation; the single/mixed
+  buckets tell whether the current batch-miss residual is one clear D3D9 state
+  family or broad state churn.
+- `d3d9_draw_state_cache_batch_miss_reason_has_{render_state,texture,fvf_vdecl,shader,rt_depth,viewport_scissor,tss_sampler,ffp_clip,broad}`
+  — membership counters for the same batch-miss reason mask. Subtracting the
+  matching `single_*` bucket gives the mixed-row membership for a category,
+  which is the proof gate before turning a large single-family bucket into a
+  narrow implementation target.
 - `d3d9_snapshot_draw_submission_cpu_ms` (+ `_max/_p50/_p95/_p99`) — the direct CPU
   proof that snapshot rebuild churn moved.
 - `d3d9_snapshot_cache_lookup_cpu_ms`, `_uniform_copy_cpu_ms`,
@@ -98,14 +116,27 @@ write" owner ([[hidden-backend-storage]]).
   component timers and fallback counters only while the batch-miss
   `makeDrawUniformPayloadFromState()` call is active. This prevents the
   direct-miss and uniform-refresh paths from hiding the local owner.
+- The `Replay / Snapshot CPU Derived` block in
+  `summarize_3dmark05_perf.py` ranks replay, queue draw-submission, snapshot,
+  cache lookup, batch hit/miss, pending flush, draw-batch submit, and
+  batch-miss child timers together. Use it after direct-cbuf or backend-encode
+  candidates to verify whether the exposed owner moved or simply returned to
+  queued snapshot/cache work.
 - `d3d9_snapshot_cache_batch_miss_uniform_nonconst_hash_reuse_{hits,misses}` —
   proves whether the generation-gated batch miss path reused cached
-  non-constant component hashes or had to rehash them.
+  non-constant component hashes or had to rehash them. After
+  [[snapshot-cache-snapshot.27]], this also gates the non-constant payload-field
+  reuse path: a hit means the cache can keep FFP matrix/material/light,
+  texture-transform, and clip-plane payload fields and refresh only shader
+  constants.
 - `d3d9_snapshot_cache_batch_miss_hot_build_*` — splits the batch-miss
   `makeFlatDrawStateRecordFromState()` child into zero-init, key build,
   binding/tail copies, and render/TSS/sampler `FlatStateSet` materialization.
   This is an attribution-only nested-timer split; use sibling ranking rather
-  than exact closed-sum percentages.
+  than exact closed-sum percentages. After [[snapshot-cache-snapshot.28]], the
+  batch cache path refreshes `cache.hot` in place and preserves reusable
+  render/TSS/sampler flat-state fields, so zero-init and reusable flat-state
+  copy should remain low.
 - `d3d9_snapshot_uniform_{materialized,elided}{,_bytes}` — proves whether the
   opt-in same-generation/lane path could skip `DrawUniformPayload`
   materialization. In GT1 this closes as a no-opportunity target: state copy
@@ -115,6 +146,10 @@ write" owner ([[hidden-backend-storage]]).
   elision gate rejects them. A non-zero `_diff_state_lane` bucket would need a
   batch-boundary-safe handle-carry design before behavior changes; the current
   GT1 sample is all `0`.
+- Same-value shader constant replay is now guarded by native behavior in
+  `dxmt9-core-device-com-spec`: redundant VS float / PS int / VS bool writes
+  must not bump the uniform generation or force the next adjacent
+  `DrawRunSubmission` to materialize a new `DrawUniformPayload`.
 - `d3d9_draw_state_cache_miss_after_{draw_packet,stream,index_buffer,texture,shader,fvf_vdecl}`
   — classifies which state delta caused each remaining miss (stream/IB dominate).
 - `commit_chunk_draw_delta_stream_handle` / `_ib_handle` — confirms real handle
@@ -160,6 +195,13 @@ flowchart TD
   S19["snapshot.19\nshader-layout safe reuse\nreuse only 1.94%\nsmall CPU cleanup"]:::accepted
   S20["snapshot.20\nsame uniform-generation adjacent\n0 opportunity"]:::rejected
   S21["snapshot.21\nbinding-only miss reason recheck\nstream/IB co-occurs, not owner"]:::rejected
+  S22["snapshot.22\nredundant const no-op\nnative gate accepted\nruntime rejects owner"]:::rejected
+  S23["snapshot.23\ndirect-cbuf residual\nlookup 2.859ms/present\nbatch miss 2.162ms/present"]:::accepted
+  S24["snapshot.24\nbatch-miss reason buckets\ntexture has 75.0%\nshader+FVF mixed 80.1%"]:::accepted
+  S25["snapshot.25\nwhole uniform reuse gate\n-4.7k builds only\nreject next owner"]:::accepted
+  S26["snapshot.26\nreplay/snapshot ranking\nqueue snapshot still owner\nafter direct-cbuf"]:::accepted
+  S27["snapshot.27\nnonconst payload reuse\nuniform build 0.871→0.596ms/present\nFPS flat"]:::accepted
+  S28["snapshot.28\nhot state in-place refresh\nhot build 0.729→0.571ms/present\nFPS noisy"]:::accepted
 
   S1 -->|"hits=0 → split"| S2
   S2 -->|"−3% only → classify"| S3
@@ -183,7 +225,15 @@ flowchart TD
   S18 -->|"measure shader-layout ceiling"| S19
   S19 -->|"uniform carry ambiguity"| S20
   S20 -->|"current counters suggest stream/IB again?"| S21
-  S21 -.->|"fps proof still open"| OPEN["open CPU tracks\nuniform/constant churn,\nhot-build storage,\ndirect-construct / interned state,\ncompletion_wait"]:::open
+  S20 -->|"why does uniformGeneration always differ?"| S22
+  S21 -->|"current residual recheck after direct-cbuf"| S23
+  S22 -->|"current residual recheck after direct-cbuf"| S23
+  S23 -->|"which batch miss reason family?"| S24
+  S24 -->|"can whole payload be reused?"| S25
+  S25 -->|"rank owner after direct-cbuf"| S26
+  S26 -->|"reuse nonconst payload fields"| S27
+  S27 -->|"avoid fresh hot record churn"| S28
+  S28 -.->|"fps proof still open"| OPEN["open CPU tracks\nbatch-miss count/churn,\nhot-build key construction,\nshader-constant hashing,\ncompact uniform submission/storage,\ncompletion_wait"]:::open
 ```
 
 ## Results synthesis
@@ -386,17 +436,75 @@ that generation and clears binding-only reason masks. Therefore the high
 stream/IB counts in current miss rows are co-occurrence with texture/shader/FVF
 and other non-binding deltas, not standalone stream/IB cache invalidation.
 
-Current priority after [[snapshot-cache-snapshot.21]]: snapshot rebuild remains
-worth tracking, but it is still behind backend encode and completion wait as an
-average-FPS owner. Further snapshot work should target proved larger copy-policy
-children and current measured owners only: uniform/constant churn, batch-miss
-uniform hash/build, hot-build storage, direct construction into queue-owned
-storage, or interned compact draw-state storage. Do not pursue adjacent uniform
-snapshot reuse for GT1 without a new non-zero
+The redundant shader-constant setter guard is a narrower follow-up to the
+uniform-generation result. It does not change PE record shape or draw-run break
+classification: constant records still exist and still split runs, but a
+bit-identical replayed constant no longer calls
+`mutableShaderConstantsState()` or bumps `drawUniformGeneration_`. This is
+correctness-preserving and covered by a native snapshot reuse test. The GT1
+no-gputrace scout still reports `d3d9_snapshot_uniform_elided=0` and
+`d3d9_snapshot_uniform_adjacent_same_generation=0`, so redundant-set
+invalidation was not the current adjacent-uniform blocker. The remaining owner
+is true constant volatility or a broader constant-record/run-break design.
+
+Current priority after [[snapshot-cache-snapshot.23]]: direct-cbuf removes the
+local argbuf table/open path, which makes the remaining serialized P2/P3 shape
+clearer. Snapshot rebuild is again a measured pre-publish owner:
+`d3d9_snapshot_cache_lookup_cpu_ms=2.859ms/present` in
+`argbuf-direct-cbuf-r1`, with batch miss `2.162ms/present`, batch-miss uniform
+build `0.883ms/present`, and batch-miss hot build `0.707ms/present`.
+[[snapshot-cache-snapshot.24]] then closes the first batch-miss reason split:
+texture is present in `316,829 / 75.006%` of batch misses and
+`single_texture` is the largest individual bucket (`160,046 / 37.889%`), but
+mixed buckets are larger together and mostly include shader and FVF/VDecl
+membership. The tuple split makes that concrete: `shader+FVF/VDecl` covers
+`80.117%` of mixed rows, while `texture+shader+FVF/VDecl` covers `42.761%`.
+Further snapshot work should target proved larger copy-policy children and
+current measured owners only: texture binding/key churn as a real axis, but only
+with a design that also handles shader-layout/vdecl co-churn, otherwise true
+uniform/constant churn, batch-miss uniform hash/build, hot-build key/state
+storage, direct construction into queue-owned storage, or interned compact
+draw-state storage.
+Do not pursue adjacent uniform snapshot reuse for GT1 without a new non-zero
 `d3d9_snapshot_uniform_adjacent_same_generation` counter sample, and do not
 promote stream/IB generation tweaks, VS indexed-float partial hashing, or broad
 shader-layout reuse as standalone optimizations. Average-FPS proof still needs
 movement in the pacing/overlap lane or a larger end-to-end CPU reduction.
+
+[[snapshot-cache-snapshot.25]] then tests the narrowest remaining batch-miss
+uniform shortcut: reusing the whole cached `DrawUniformPayload` when non-constant
+generation, shader-constant generations, constant usages, and clip-plane mask all
+match after the shader-layout decision. The gate is valid and trims
+`d3d9_snapshot_cache_batch_miss_uniform_build_calls` `421,656 -> 416,904`, but
+the normalized lookup win is only `2.850 -> 2.843ms/present`. Keep the cleanup,
+but do not rank whole-payload reuse as the next owner. Current work should move
+batch-miss count/churn, hot-state/key storage, compact/interned state, or the P4
+overlap lane.
+
+[[snapshot-cache-snapshot.27]] closes the larger half of the same uniform-build
+idea: when `drawUniformNonConstantGeneration_` is unchanged but shader constants
+changed, keep the cached FFP/non-constant payload fields and refresh only VS/PS
+constants. The branch is well-covered (`386,261` non-constant reuse hits) and
+cuts batch-miss uniform build `0.871 -> 0.596ms/present`, cache lookup
+`2.925 -> 2.655ms/present`, and queue submission `4.209 -> 3.975ms/present`.
+Sampled FPS remains flat (`16.666 -> 16.662`), so this is accepted as a CPU
+cleanup and owner refinement, not an end-to-end FPS fix. The remaining uniform
+work is now shader-constant hashing and the broader compact uniform
+submission/storage design; the non-constant FFP payload rebuild child should not
+be chased again without new counters.
+
+[[snapshot-cache-snapshot.28]] then removes a hot-state storage artifact exposed
+by the previous cleanup. Batch misses no longer construct a fresh
+`FlatDrawStateRecord` and copy reusable flat-state sets back into `cache.hot`;
+they refresh `cache.hot` in place and preserve unchanged render/TSS/sampler
+sets. This drops hot-build zero-init to `0`, hot build
+`0.729 -> 0.571ms/present`, cache lookup `2.655 -> 2.468ms/present`, and queue
+submission `3.975 -> 3.796ms/present`. The screenshot is normal and shows
+machine-gun muzzle bloom, but sampled FPS is only noisy/slightly up
+(`16.662 -> 16.807`), so this remains a CPU owner refinement rather than proof
+that the end-to-end FPS bottleneck is gone. The remaining local snapshot-cache
+work is now shader-constant hashing, hot-key construction, batch-miss count/
+co-churn, and compact uniform submission/storage.
 
 ## How to run
 Every experiment here is a 3DMark05 GT1 run via the standard wrapper. This is a
@@ -419,6 +527,11 @@ The relevant counters (`d3d9_draw_state_cache_*`,
 `result.json`. The exact per-experiment flags live in each leaf's `**Method.**`
 field. See `agents/rules/environment_variables.rules.md` for env-var meanings and
 `agents/rules/metal_debugging.rules.md` for the full workflow.
+For post-[[snapshot-cache-snapshot.24]] runs, also read the
+`d3d9_draw_state_cache_batch_miss_reason_*` counters from the generated
+`3dmark05-perf-summary.md`; they are the proof gate for deciding whether the
+next snapshot patch should be a narrow state-family fast path or a broader
+storage/interner redesign.
 
 ## Cross-references
 

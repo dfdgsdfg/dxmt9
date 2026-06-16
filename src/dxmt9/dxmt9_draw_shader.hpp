@@ -35,6 +35,13 @@ struct ShaderSourceContext {
   // stream (slot 1) and `DrawVolatile` (slot 5) stay direct (design.md
   // §11.4). This is set from `ShaderVariantKey::argbufHybridMode`.
   bool argbufHybridMode = false;
+  // Stage 2b direct-cbuf ABI candidate. When set alongside
+  // argbufHybridMode, shaders keep the direct constant-buffer bindings at
+  // slots 0/3 instead of reading constants through slot-30 ArgbufLayout.
+  // This lets the PSO key carry an argbuf-family variant while the host can
+  // later avoid cbuf-only table reopens. Runtime selection is still gated off;
+  // source-contract tests pin this ABI before encoder work is added.
+  bool argbufDirectCbufMode = false;
   // R-BACK-12.22..12.26 (resource-array sub-mode) — when true AND
   // argbufHybridMode is also true, the FFP and DXBC->MSL fragment/vertex
   // emitters additionally route the per-stage texture/sampler resources

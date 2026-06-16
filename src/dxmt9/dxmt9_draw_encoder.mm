@@ -226,6 +226,65 @@ std::vector<u64> parseEnvU64ListAuto(const char* name) {
   return values;
 }
 
+bool traceEncodeProgressEnabled() {
+  static const bool enabled = getenvFlagLocal("DXMT9_TRACE_ENCODE_PROGRESS");
+  return enabled;
+}
+
+std::optional<u64> traceEncodeProgressSeqFilter() {
+  static const std::optional<u64> filter =
+      parseEnvU64Auto("DXMT9_TRACE_ENCODE_PROGRESS_SEQ");
+  return filter;
+}
+
+bool traceEncodeProgressForSeq(u64 seqId) {
+  if (!traceEncodeProgressEnabled()) {
+    return false;
+  }
+  const auto filter = traceEncodeProgressSeqFilter();
+  return !filter.has_value() || *filter == seqId;
+}
+
+const char* metalCommandKindName(core::MetalCommandKind kind) {
+  switch (kind) {
+  case core::MetalCommandKind::DrawRun:
+    return "DrawRun";
+  case core::MetalCommandKind::Clear:
+    return "Clear";
+  case core::MetalCommandKind::SurfaceCopy:
+    return "SurfaceCopy";
+  case core::MetalCommandKind::StretchRect:
+    return "StretchRect";
+  case core::MetalCommandKind::Readback:
+    return "Readback";
+  case core::MetalCommandKind::ColorFill:
+    return "ColorFill";
+  case core::MetalCommandKind::DepthResolve:
+    return "DepthResolve";
+  case core::MetalCommandKind::Present:
+    return "Present";
+  }
+  return "Unknown";
+}
+
+void emitEncodeProgressDrawStage(u64 seqId,
+                                 std::uint32_t commandIndex,
+                                 u64 commandDrawIndex,
+                                 u64 commandDrawCount,
+                                 const char* stage) {
+  if (!traceEncodeProgressForSeq(seqId)) {
+    return;
+  }
+  std::ostringstream out;
+  out << "[dxmt9-encode-progress]"
+      << " stage=draw." << stage
+      << " seq=" << static_cast<unsigned long long>(seqId)
+      << " command=" << commandIndex
+      << " draw=" << static_cast<unsigned long long>(commandDrawIndex)
+      << "/" << static_cast<unsigned long long>(commandDrawCount);
+  emitQueueTraceLine(out.str());
+}
+
 struct VisibilityScoutConfig {
   bool enabled = false;
   std::string path;
@@ -2385,6 +2444,7 @@ struct ActiveEncoderBreakdown {
     bool tileFfpBaseColor = false;
     bool argbufHybridMode = false;
     bool argbufResourceArray = false;
+    bool argbufDirectCbufMode = false;
     bool samplerLodBias = false;
     u32 x8AlphaOneTextureMask = 0;
     u64 vertexSourceHash = 0;
@@ -3247,6 +3307,37 @@ struct ActiveEncoderBreakdown {
     stats.indexedCacheOptCandidateMiss64 += candidate.cacheMiss64;
   }
 
+  void recordIndexedCacheOptCandidateGate(bool passed,
+                                          u64 primitiveCount,
+                                          bool opaqueDepth,
+                                          bool screenBlend) {
+    if (!enabled) {
+      return;
+    }
+    if (passed) {
+      ++stats.indexedCacheOptCandidateGatePass;
+    } else {
+      ++stats.indexedCacheOptCandidateGateFail;
+    }
+    if (opaqueDepth) {
+      ++stats.indexedCacheOptCandidateOpaqueDepthDraws;
+    }
+    if (screenBlend) {
+      ++stats.indexedCacheOptCandidateScreenBlendDraws;
+    }
+    if (primitiveCount < 64) {
+      ++stats.indexedCacheOptCandidatePrimitiveBucket1_63;
+    } else if (primitiveCount < 256) {
+      ++stats.indexedCacheOptCandidatePrimitiveBucket64_255;
+    } else if (primitiveCount < 1024) {
+      ++stats.indexedCacheOptCandidatePrimitiveBucket256_1023;
+    } else if (primitiveCount < 4096) {
+      ++stats.indexedCacheOptCandidatePrimitiveBucket1024_4095;
+    } else {
+      ++stats.indexedCacheOptCandidatePrimitiveBucket4096Plus;
+    }
+  }
+
   void recordReorderedIndexCacheLookup(bool hit,
                                        bool rejected,
                                        bool created,
@@ -3971,6 +4062,7 @@ struct ActiveEncoderBreakdown {
                                     bool tileFfpBaseColor,
                                     bool argbufHybridMode,
                                     bool argbufResourceArray,
+                                    bool argbufDirectCbufMode,
                                     bool samplerLodBias,
                                     u32 x8AlphaOneTextureMask,
                                     u64& vertexSourceHash,
@@ -3984,6 +4076,7 @@ struct ActiveEncoderBreakdown {
           entry.tileFfpBaseColor == tileFfpBaseColor &&
           entry.argbufHybridMode == argbufHybridMode &&
           entry.argbufResourceArray == argbufResourceArray &&
+          entry.argbufDirectCbufMode == argbufDirectCbufMode &&
           entry.samplerLodBias == samplerLodBias &&
           entry.x8AlphaOneTextureMask == x8AlphaOneTextureMask) {
         vertexSourceHash = entry.vertexSourceHash;
@@ -3998,6 +4091,7 @@ struct ActiveEncoderBreakdown {
                                      bool tileFfpBaseColor,
                                      bool argbufHybridMode,
                                      bool argbufResourceArray,
+                                     bool argbufDirectCbufMode,
                                      bool samplerLodBias,
                                      u32 x8AlphaOneTextureMask,
                                      u64 vertexSourceHash,
@@ -4014,6 +4108,7 @@ struct ActiveEncoderBreakdown {
         .tileFfpBaseColor = tileFfpBaseColor,
         .argbufHybridMode = argbufHybridMode,
         .argbufResourceArray = argbufResourceArray,
+        .argbufDirectCbufMode = argbufDirectCbufMode,
         .samplerLodBias = samplerLodBias,
         .x8AlphaOneTextureMask = x8AlphaOneTextureMask,
         .vertexSourceHash = vertexSourceHash,
@@ -4783,10 +4878,6 @@ std::array<float, 4> decodeD3DBlendFactor(u32 argb) {
   };
 }
 
-u64 argbufTableShadowHash(obj_handle_t storage, u64 offset) noexcept {
-  return drawBindingPacketHashMix(static_cast<u64>(storage), offset);
-}
-
 constexpr u64 kFragmentTextureShadowTag = 0x667261675f746578ull;
 constexpr u64 kFragmentSamplerShadowTag = 0x667261675f73616dull;
 constexpr u64 kVertexTextureShadowTag = 0x766572745f746578ull;
@@ -4816,9 +4907,25 @@ bool renderEncoderGpuTimeEnabled() {
   return enabled;
 }
 
+bool encoderBreakdownCbufContentEnabled() {
+  static const bool enabled = [] {
+    const char* env = std::getenv("DXMT9_PERF_ENCODER_BREAKDOWN_CBUF_CONTENT");
+    return env && env[0] != '\0' && env[0] != '0';
+  }();
+  return enabled;
+}
+
 bool textureSamplerDirectSplitPerfEnabled() {
   static const bool enabled = [] {
     const char* env = std::getenv("DXMT9_PERF_TEXTURE_SAMPLER_DIRECT_SPLIT");
+    return env && env[0] != '\0' && env[0] != '0';
+  }();
+  return enabled;
+}
+
+bool streamBindPhaseSplitPerfEnabled() {
+  static const bool enabled = [] {
+    const char* env = std::getenv("DXMT9_PERF_STREAM_BIND_PHASE_SPLIT");
     return env && env[0] != '\0' && env[0] != '0';
   }();
   return enabled;
@@ -4848,6 +4955,14 @@ bool argbufCbufProbeSplitPerfEnabled() {
   return enabled;
 }
 
+bool argbufReopenSplitPerfEnabled() {
+  static const bool enabled = [] {
+    const char* env = std::getenv("DXMT9_PERF_ARGBUF_REOPEN_SPLIT");
+    return env && env[0] != '\0' && env[0] != '0';
+  }();
+  return enabled;
+}
+
 bool argbufCbufDirtyIdentityPerfEnabled() {
   static const bool enabled = [] {
     const char* env = std::getenv("DXMT9_PERF_ARGBUF_CBUF_DIRTY_IDENTITY");
@@ -4859,6 +4974,14 @@ bool argbufCbufDirtyIdentityPerfEnabled() {
 bool argbufPayloadDeltaPerfEnabled() {
   static const bool enabled = [] {
     const char* env = std::getenv("DXMT9_PERF_ARGBUF_PAYLOAD_DELTA");
+    return env && env[0] != '\0' && env[0] != '0';
+  }();
+  return enabled;
+}
+
+bool argbufPayloadDeltaSourcePerfEnabled() {
+  static const bool enabled = [] {
+    const char* env = std::getenv("DXMT9_PERF_ARGBUF_PAYLOAD_DELTA_SOURCE");
     return env && env[0] != '\0' && env[0] != '0';
   }();
   return enabled;
@@ -5678,7 +5801,9 @@ u64 shaderVariantHashForDraw(core::FlatDrawStateView drawState,
     hash ^= static_cast<u64>(x8AlphaOneTextureMaskForDraw(drawState, *pool)) << 5;
   }
   if (fragmentlessDepthOnly) {
-    hash ^= 0xf1a974f2b7a25c31ull;
+    hash ^= debug::probeFragmentlessDepthOnlyKeepVSOut()
+                ? 0x9e3b7a6c8fb4c521ull
+                : 0xf1a974f2b7a25c31ull;
   }
   return hash;
 }
@@ -5716,7 +5841,10 @@ u64 shaderSourceAttributionKeyForDraw(
     hash = mix(hash, static_cast<u64>(*forceTextureWhiteOverride));
   }
   if (fragmentlessDepthOnly) {
-    hash = mix(hash, 0xf1a974f2b7a25c31ull);
+    hash = mix(hash,
+               debug::probeFragmentlessDepthOnlyKeepVSOut()
+                   ? 0x9e3b7a6c8fb4c521ull
+                   : 0xf1a974f2b7a25c31ull);
   }
   return hash;
 }
@@ -5728,7 +5856,8 @@ u32 vsOutLayoutKeyForDraw(core::FlatDrawStateView drawState,
   if (!drawState.hot || !drawState.hasShaderContext()) {
     return 0;
   }
-  if (fragmentlessDepthOnly) {
+  if (fragmentlessDepthOnly &&
+      !debug::probeFragmentlessDepthOnlyKeepVSOut()) {
     return shaders::vsoutLayoutKey(shaders::positionOnlyVSOutLayout());
   }
   auto context =
@@ -5763,6 +5892,7 @@ ShaderSourceHashes shaderSourceHashesForDraw(core::FlatDrawStateView drawState,
                                              bool tileFfpBaseColor,
                                              bool argbufHybridMode,
                                              bool argbufResourceArray,
+                                             bool argbufDirectCbufMode,
                                              bool samplerLodBias,
                                              u32 x8AlphaOneTextureMask,
                                              std::optional<bool> forceTextureWhiteOverride = std::nullopt,
@@ -5781,11 +5911,15 @@ ShaderSourceHashes shaderSourceHashesForDraw(core::FlatDrawStateView drawState,
       forceTextureWhiteOverride.value_or(debug::forceTextureWhite());
   context.argbufHybridMode = argbufHybridMode;
   context.argbufResourceArray = argbufHybridMode && argbufResourceArray;
+  context.argbufDirectCbufMode =
+      argbufHybridMode && !context.argbufResourceArray && argbufDirectCbufMode;
   context.samplerLodBias = samplerLodBias;
   context.x8AlphaOneTextureMask = x8AlphaOneTextureMask;
   try {
     if (fragmentlessDepthOnly) {
-      context.vsOutLayout = shaders::positionOnlyVSOutLayout();
+      context.vsOutLayout = debug::probeFragmentlessDepthOnlyKeepVSOut()
+                                 ? drawshader::resolveVSOutLayoutForShaderPair(context)
+                                 : shaders::positionOnlyVSOutLayout();
       context.fragmentlessDepthOnly = true;
     } else {
       context.vsOutLayout = drawshader::resolveVSOutLayoutForShaderPair(context);
@@ -5816,6 +5950,7 @@ void recordPsoAttributionForDraw(ActiveEncoderBreakdown* encoderBreakdown,
                                  bool tileFfpMode,
                                  bool argbufHybridMode,
                                  bool argbufResourceArray,
+                                 bool argbufDirectCbufMode,
                                  std::optional<bool> forceTextureWhiteOverride = std::nullopt,
                                  bool fragmentlessDepthOnly = false) {
   if (!encoderBreakdown || !encoderBreakdown->enabled) {
@@ -5848,18 +5983,22 @@ void recordPsoAttributionForDraw(ActiveEncoderBreakdown* encoderBreakdown,
   u64 pixelShaderSourceHash = 0;
   if (!encoderBreakdown->findCachedShaderSourceHashes(
           sourceKey, tileFfpMode, argbufHybridMode,
-          argbufHybridMode && argbufResourceArray, samplerLodBias,
+          argbufHybridMode && argbufResourceArray,
+          argbufHybridMode && !argbufResourceArray && argbufDirectCbufMode,
+          samplerLodBias,
           x8AlphaOneTextureMask,
           vertexShaderSourceHash, pixelShaderSourceHash)) {
     const auto sourceHashes = shaderSourceHashesForDraw(
         drawState, tileFfpMode, argbufHybridMode, argbufResourceArray,
-        samplerLodBias, x8AlphaOneTextureMask, forceTextureWhiteOverride,
-        fragmentlessDepthOnly);
+        argbufDirectCbufMode, samplerLodBias, x8AlphaOneTextureMask,
+        forceTextureWhiteOverride, fragmentlessDepthOnly);
     vertexShaderSourceHash = sourceHashes.vertex;
     pixelShaderSourceHash = sourceHashes.pixel;
     encoderBreakdown->storeCachedShaderSourceHashes(
         sourceKey, tileFfpMode, argbufHybridMode,
-        argbufHybridMode && argbufResourceArray, samplerLodBias,
+        argbufHybridMode && argbufResourceArray,
+        argbufHybridMode && !argbufResourceArray && argbufDirectCbufMode,
+        samplerLodBias,
         x8AlphaOneTextureMask,
         vertexShaderSourceHash, pixelShaderSourceHash);
   }
@@ -9662,7 +9801,10 @@ bool encodeDraw(EncodeContext& ctx,
                  bool tileFfpMode,
                  bool argbufHybridMode,
                  bool argbufResourceArray,
+                 bool argbufDirectCbufMode,
                  bool reopenArgbufHybrid,
+                 bool argbufVsPayloadSourceChanged,
+                 bool argbufPsPayloadSourceChanged,
                  bool bindingOverridePrefetchedPsoCompatible,
                  core::PsoHandle renderPsoHandle,
                  core::PsoHandle tilePsoHandle,
@@ -9680,6 +9822,8 @@ bool encodeDraw(EncodeContext& ctx,
   // DXMT_DEBUG_NO_PER_DRAW_ALLOC=1 is set in env. See dxmt9_debug_alloc_guard.
   DXMT_DEBUG_NO_HEAP_ALLOC_SCOPE("encodeDraw");
   PerfScope scope(perf::countEncodeDrawCpuTime);
+  emitEncodeProgressDrawStage(seqId, commandIndex, commandDrawIndex,
+                              commandDrawCount, "enter");
   // M3 — per-draw Instruments interval. os_signpost_id_generate gives each
   // call a unique paired id so overlapping work surfaces correctly in
   // Instruments. No-op when no consumer is recording (~5 ns).
@@ -9733,6 +9877,11 @@ bool encodeDraw(EncodeContext& ctx,
                   {}};
   const bool traceEncode = debug::shouldTraceEncode(hot, seqId) ||
                            colorAttachmentAliasesTracedTexture(ctx.pool, hot);
+  const bool effectiveArgbufDirectCbufMode =
+      argbufHybridMode && !argbufResourceArray && argbufDirectCbufMode;
+  const bool argbufTableMode =
+      argbufHybridMode && !effectiveArgbufDirectCbufMode;
+  const bool directCbufBindings = !argbufTableMode;
   if (debug::skipAllDraws()) {
     if (queueTraceEnabled() || traceEncode) {
       std::ostringstream out;
@@ -9782,6 +9931,8 @@ bool encodeDraw(EncodeContext& ctx,
     ffLayout = decodeFixedFunctionVertexLayout(vertexDecl);
     fixedFunctionPath = drawUsesFixedFunctionPath(drawState, static_cast<bool>(ffLayout));
   }
+  emitEncodeProgressDrawStage(seqId, commandIndex, commandDrawIndex,
+                              commandDrawCount, "after-fvf-decode");
   const u32 primitiveCount = std::max<u32>(1, pv.primitiveCount);
   const uint64_t vertexCount =
       static_cast<uint64_t>(std::max(1u, primitiveVertexCount(pv.primitiveType, primitiveCount)));
@@ -9870,7 +10021,8 @@ bool encodeDraw(EncodeContext& ctx,
   if (effectiveSkipBaseStateBind) {
     recordPsoAttributionForDraw(encoderBreakdown, drawState, ctx.pool, renderPsoHandle,
                                 tileFfpMode, argbufHybridMode,
-                                argbufResourceArray, std::nullopt,
+                                argbufResourceArray, argbufDirectCbufMode,
+                                std::nullopt,
                                 fragmentlessDepthOnlyProbeApplied);
   }
   if (encoderBreakdown) {
@@ -9905,6 +10057,8 @@ bool encodeDraw(EncodeContext& ctx,
   // are BaseDrawState-only and survive across iterations of a
   // Kind::DrawRun on the Metal render encoder. Skip on iter 2..N.
   if (!effectiveSkipBaseStateBind) {
+    emitEncodeProgressDrawStage(seqId, commandIndex, commandDrawIndex,
+                                commandDrawCount, "before-pipeline-lookup");
     PerfScope pipelineLookupScope(perf::countEncodeDrawPipelineLookupCpuTime);
     auto depthKey = makeDepthStencilKey(drawState);
     if (disableDepthWriteProbeApplied) {
@@ -9914,6 +10068,8 @@ bool encodeDraw(EncodeContext& ctx,
       depthKey.depthFunc = static_cast<u32>(core::CompareFunc::Always);
     }
     const std::uint8_t stencilRef = state::computeStencilRef(drawState);
+    emitEncodeProgressDrawStage(seqId, commandIndex, commandDrawIndex,
+                                commandDrawCount, "after-pipeline-key");
     // R-BACK-13.3: pass `tileFfpMode` through so the cache returns the
     // tile-stage MTLRenderPipelineState (built via
     // newRenderPipelineStateWithTileDescriptor) when the selector chose
@@ -9932,7 +10088,11 @@ bool encodeDraw(EncodeContext& ctx,
         .role = tileFfpMode ? "tile-base-render-pso" : "render-pso",
     };
     if (suppressBaseStateLookup(ctx)) {
+      emitEncodeProgressDrawStage(seqId, commandIndex, commandDrawIndex,
+                                  commandDrawCount, "before-pipeline-recorder");
       pipeline = ctx.drawRecorder->renderPipelineState;
+      emitEncodeProgressDrawStage(seqId, commandIndex, commandDrawIndex,
+                                  commandDrawCount, "after-pipeline-recorder");
     } else if (tileFfpMode) {
       // R-BACK-13.1 two-stage tile-FFP encode: the render command encoder
       // first rasterizes the geometry with the BASE-COLOUR fragment PSO
@@ -9940,29 +10100,62 @@ bool encodeDraw(EncodeContext& ctx,
       // kernel over the imageblock. So in tile mode the PSO bound here via
       // setRenderPipelineState is the base-colour render PSO, NOT the tile
       // PSO. The tile PSO is fetched + dispatched after drawPrimitives below.
-      pipelineRef =
-          renderPsoHandle.valid() && !bypassPrefetchedPsoHandle
-              ? ctx.cache.drawPipelineForHandle(renderPsoHandle,
-                                                renderPsoLookup).get()
-              : ctx.cache.getOrBuildTileFfpBaseColorPipelineForState(
-                    ctx.device, ctx.limits, ctx.pool, pipelineDrawState,
-                    ctx.shaderArchive, ctx.shaderArchivePath,
-                    forceTextureWhiteOverride).get();
+      if (renderPsoHandle.valid() && !bypassPrefetchedPsoHandle) {
+        emitEncodeProgressDrawStage(seqId, commandIndex, commandDrawIndex,
+                                    commandDrawCount,
+                                    "before-pipeline-handle-tile-base");
+        pipelineRef =
+            ctx.cache.drawPipelineForHandle(renderPsoHandle,
+                                            renderPsoLookup).get();
+        emitEncodeProgressDrawStage(seqId, commandIndex, commandDrawIndex,
+                                    commandDrawCount,
+                                    "after-pipeline-handle-tile-base");
+      } else {
+        emitEncodeProgressDrawStage(seqId, commandIndex, commandDrawIndex,
+                                    commandDrawCount,
+                                    "before-pipeline-build-tile-base");
+        pipelineRef =
+            ctx.cache.getOrBuildTileFfpBaseColorPipelineForState(
+                ctx.device, ctx.limits, ctx.pool, pipelineDrawState,
+                ctx.shaderArchive, ctx.shaderArchivePath,
+                forceTextureWhiteOverride).get();
+        emitEncodeProgressDrawStage(seqId, commandIndex, commandDrawIndex,
+                                    commandDrawCount,
+                                    "after-pipeline-build-tile-base");
+      }
       pipeline = WMT::RenderPipelineState{pipelineRef.handle};
     } else {
-      pipelineRef =
-          renderPsoHandle.valid() && !bypassPrefetchedPsoHandle
-              ? ctx.cache.drawPipelineForHandle(renderPsoHandle,
-                                                renderPsoLookup).get()
-              : ctx.cache.getOrBuildDrawPipelineForState(
-                    ctx.device, ctx.limits, ctx.pool, pipelineDrawState,
-                    ctx.shaderArchive, ctx.shaderArchivePath, tileFfpMode,
-                    argbufHybridMode, argbufResourceArray,
-                    disableAlphaBlendProbeApplied,
-                    forceTextureWhiteOverride,
-                    fragmentlessDepthOnlyProbeApplied).get();
+      if (renderPsoHandle.valid() && !bypassPrefetchedPsoHandle) {
+        emitEncodeProgressDrawStage(seqId, commandIndex, commandDrawIndex,
+                                    commandDrawCount,
+                                    "before-pipeline-handle-render");
+        pipelineRef =
+            ctx.cache.drawPipelineForHandle(renderPsoHandle,
+                                            renderPsoLookup).get();
+        emitEncodeProgressDrawStage(seqId, commandIndex, commandDrawIndex,
+                                    commandDrawCount,
+                                    "after-pipeline-handle-render");
+      } else {
+        emitEncodeProgressDrawStage(seqId, commandIndex, commandDrawIndex,
+                                    commandDrawCount,
+                                    "before-pipeline-build-render");
+        pipelineRef =
+            ctx.cache.getOrBuildDrawPipelineForState(
+                ctx.device, ctx.limits, ctx.pool, pipelineDrawState,
+                ctx.shaderArchive, ctx.shaderArchivePath, tileFfpMode,
+                argbufHybridMode, argbufResourceArray,
+                effectiveArgbufDirectCbufMode,
+                disableAlphaBlendProbeApplied,
+                forceTextureWhiteOverride,
+                fragmentlessDepthOnlyProbeApplied).get();
+        emitEncodeProgressDrawStage(seqId, commandIndex, commandDrawIndex,
+                                    commandDrawCount,
+                                    "after-pipeline-build-render");
+      }
       pipeline = WMT::RenderPipelineState{pipelineRef.handle};
     }
+    emitEncodeProgressDrawStage(seqId, commandIndex, commandDrawIndex,
+                                commandDrawCount, "after-pipeline-lookup");
     if (!pipeline) {
       perf::countDrawSkippedNoPipeline();
       static std::mutex logMutex;
@@ -9971,7 +10164,8 @@ bool encodeDraw(EncodeContext& ctx,
           hot.key.vertexShaderHash ^ (hot.key.pixelShaderHash << 1u) ^
           (static_cast<std::uint64_t>(tileFfpMode) << 2u) ^
           (static_cast<std::uint64_t>(argbufHybridMode) << 3u) ^
-          (static_cast<std::uint64_t>(argbufResourceArray) << 4u);
+          (static_cast<std::uint64_t>(argbufResourceArray) << 4u) ^
+          (static_cast<std::uint64_t>(effectiveArgbufDirectCbufMode) << 5u);
       bool shouldLog = false;
       {
         std::lock_guard lock(logMutex);
@@ -9980,7 +10174,7 @@ bool encodeDraw(EncodeContext& ctx,
       }
       if (shouldLog) {
         util::logf(util::LogLevel::Error, "dxmt9-encode",
-                   "draw skipped: no render pipeline seq=%llu command=%u vs=0x%llx ps=0x%llx tile=%u argbuf=%u resource_array=%u rt0=0x%llx ds=0x%llx",
+                   "draw skipped: no render pipeline seq=%llu command=%u vs=0x%llx ps=0x%llx tile=%u argbuf=%u resource_array=%u argbuf_direct_cbuf=%u rt0=0x%llx ds=0x%llx",
                    static_cast<unsigned long long>(seqId),
                    commandIndex,
                    static_cast<unsigned long long>(hot.key.vertexShaderHash),
@@ -9988,6 +10182,7 @@ bool encodeDraw(EncodeContext& ctx,
                    tileFfpMode ? 1u : 0u,
                    argbufHybridMode ? 1u : 0u,
                    argbufResourceArray ? 1u : 0u,
+                   effectiveArgbufDirectCbufMode ? 1u : 0u,
                    static_cast<unsigned long long>(hot.colorAttachments[0].handle.value),
                    static_cast<unsigned long long>(hot.depthStencil.handle.value));
       }
@@ -10039,7 +10234,11 @@ bool encodeDraw(EncodeContext& ctx,
           textureSamplerShadowMatches(textureSamplerShadow->depthStencil,
                                       stencilRef, depthState.handle);
       if (!depthUnchanged) {
+        emitEncodeProgressDrawStage(seqId, commandIndex, commandDrawIndex,
+                                    commandDrawCount, "before-set-depth-state");
         recordedSetDepthStencilState(ctx, encoder, depthState, stencilRef);
+        emitEncodeProgressDrawStage(seqId, commandIndex, commandDrawIndex,
+                                    commandDrawCount, "after-set-depth-state");
         if (textureSamplerShadow) {
           textureSamplerShadowStore(textureSamplerShadow->depthStencil,
                                     stencilRef, depthState.handle);
@@ -10071,6 +10270,7 @@ bool encodeDraw(EncodeContext& ctx,
         recordPsoAttributionForDraw(encoderBreakdown, drawState, ctx.pool, renderPsoHandle,
                                     tileFfpMode, argbufHybridMode,
                                     argbufResourceArray,
+                                    argbufDirectCbufMode,
                                     forceTextureWhiteOverride,
                                     fragmentlessDepthOnlyProbeApplied);
         vsOutLayoutKey = encoderBreakdown->stats.vsOutLayoutLast;
@@ -10096,7 +10296,11 @@ bool encodeDraw(EncodeContext& ctx,
         textureSamplerShadow &&
         bindShadowMatches(textureSamplerShadow->renderPipeline, pipeline.handle);
     if (!pipelineUnchanged) {
+      emitEncodeProgressDrawStage(seqId, commandIndex, commandDrawIndex,
+                                  commandDrawCount, "before-set-pipeline");
       recordedSetRenderPipelineState(ctx, encoder, pipeline);
+      emitEncodeProgressDrawStage(seqId, commandIndex, commandDrawIndex,
+                                  commandDrawCount, "after-set-pipeline");
       if (textureSamplerShadow) {
         bindShadowStore(textureSamplerShadow->renderPipeline, pipeline.handle);
       }
@@ -10106,9 +10310,9 @@ bool encodeDraw(EncodeContext& ctx,
     }
   }
   auto uploadTransientBuffer = [&](const void* data, std::size_t len, std::size_t alignment) {
-    return ctx.queue.uploadTransientBuffer(
+    return ctx.queue.uploadTransientBufferWithCompletedSeqId(
         std::span<const std::byte>(reinterpret_cast<const std::byte*>(data), len),
-        alignment, seqId);
+        alignment, seqId, ctx.transientCompletedSeqId);
   };
   auto setVertexBufferCached = [&](WMT::Buffer buffer, u64 offset, std::uint8_t index) {
     if (textureSamplerShadow && index < textureSamplerShadow->vertexBuffers.size() &&
@@ -10173,6 +10377,7 @@ bool encodeDraw(EncodeContext& ctx,
                   ctx.shaderArchive, ctx.shaderArchivePath,
                   /*tileFfpMode=*/true, /*argbufHybridMode=*/false,
                   /*argbufResourceArray=*/false,
+                  /*argbufDirectCbufMode=*/false,
                   disableAlphaBlendProbeApplied,
                   forceTextureWhiteOverride).get();
     tileFfpPso = WMT::RenderPipelineState{tileFfpPsoRef.handle};
@@ -10236,7 +10441,7 @@ bool encodeDraw(EncodeContext& ctx,
   // the constants-only encoder is used, byte-identical to before. Resolved
   // once here so the constant + resource write paths can't diverge.
   const bool useResourceArrayArgbuf =
-      argbufResourceArray && argbufHybridMode &&
+      argbufResourceArray && argbufTableMode &&
       ctx.queue.resourceArrayEncoderResource().initialized();
   auto& argbufEncoderForDraw = useResourceArrayArgbuf
                                    ? ctx.queue.resourceArrayEncoderResource()
@@ -10275,31 +10480,41 @@ bool encodeDraw(EncodeContext& ctx,
   // pointers still describe the unchanged constants — and the dirty mirror
   // below is a no-op (the prior draw already consumed the const dirty bits).
   const bool argbufCbufProbeSplit =
-      argbufHybridMode && argbufCbufProbeSplitPerfEnabled();
+      argbufTableMode && argbufCbufProbeSplitPerfEnabled();
+  const bool argbufReopenSplit =
+      argbufTableMode && argbufReopenSplitPerfEnabled();
   const bool argbufCbufDirtyIdentityProbe =
-      argbufHybridMode && argbufCbufDirtyIdentityPerfEnabled();
-  if (argbufHybridMode && reopenArgbufHybrid) {
+      argbufTableMode && argbufCbufDirtyIdentityPerfEnabled();
+  const bool encoderBreakdownCbufContent =
+      encoderBreakdown && encoderBreakdown->enabled &&
+      encoderBreakdownCbufContentEnabled();
+  if (argbufTableMode && reopenArgbufHybrid) {
     PerfScope argbufSetupScope(perf::countEncodeDrawArgbufSetupCpuTime);
     PerfScope argbufOpenScope(perf::countEncodeDrawArgbufOpenCpuTime);
     const auto populated = [&]() {
       PerfScope argbufOpenCallScope(
           perf::countEncodeDrawArgbufOpenCallCpuTime);
-      return dxmt9::argbuf_hybrid::openArgbuf(
-          ctx.queue, argbufEncoderForDraw, seqId);
+      return dxmt9::argbuf_hybrid::openArgbufWithCompletedSeqId(
+          ctx.queue, argbufEncoderForDraw, seqId,
+          ctx.transientCompletedSeqId);
     }();
     if (populated && !suppressRecordedMetalCalls(ctx)) {
       PerfScope argbufReopenPostScope(
           perf::countEncodeDrawArgbufReopenPostCpuTime);
-      u64 tableHash = 0;
       bool tableUnchanged = false;
       {
         PerfScope tableProbeScope(
-            perf::countEncodeDrawArgbufReopenTableProbeCpuTime);
-        tableHash =
-            argbufTableShadowHash(populated.storage.handle, populated.offset);
+            argbufReopenSplit
+                ? perf::countEncodeDrawArgbufReopenTableProbeCpuTime
+                : nullptr);
         tableUnchanged =
-            textureSamplerShadow && textureSamplerShadow->argbufTableValid &&
-            textureSamplerShadow->argbufTableHash == tableHash;
+            textureSamplerShadow &&
+            dxmt9::shaders::kArgbufHybridBindSlot <
+                textureSamplerShadow->vertexBuffers.size() &&
+            bufferBindShadowMatches(
+                textureSamplerShadow
+                    ->vertexBuffers[dxmt9::shaders::kArgbufHybridBindSlot],
+                populated.storage.handle, populated.offset);
       }
       if (!tableUnchanged) {
         PerfScope tableBindScope(perf::countEncodeDrawArgbufTableBindCpuTime);
@@ -10310,9 +10525,9 @@ bool encodeDraw(EncodeContext& ctx,
         perf::countEncodeDrawArgbufTableBindCalls(1u);
         if (textureSamplerShadow) {
           PerfScope tableShadowStoreScope(
-              perf::countEncodeDrawArgbufReopenTableShadowStoreCpuTime);
-          textureSamplerShadow->argbufTableValid = true;
-          textureSamplerShadow->argbufTableHash = tableHash;
+              argbufReopenSplit
+                  ? perf::countEncodeDrawArgbufReopenTableShadowStoreCpuTime
+                  : nullptr);
           if (dxmt9::shaders::kArgbufHybridBindSlot <
               textureSamplerShadow->vertexBuffers.size()) {
             bufferBindShadowStore(
@@ -10325,7 +10540,9 @@ bool encodeDraw(EncodeContext& ctx,
       }
       {
         PerfScope byteAccountScope(
-            perf::countEncodeDrawArgbufReopenByteAccountCpuTime);
+            argbufReopenSplit
+                ? perf::countEncodeDrawArgbufReopenByteAccountCpuTime
+                : nullptr);
         perf::countArgbufHybridBytes(populated.length);
         if (encoderBreakdown) {
           encoderBreakdown->addArgbufTableBytes(populated.length);
@@ -10334,7 +10551,9 @@ bool encodeDraw(EncodeContext& ctx,
       bool canRepointCachedCbufs = false;
       {
         PerfScope cbufCacheProbeScope(
-            perf::countEncodeDrawArgbufReopenCbufCacheProbeCpuTime);
+            argbufReopenSplit
+                ? perf::countEncodeDrawArgbufReopenCbufCacheProbeCpuTime
+                : nullptr);
         canRepointCachedCbufs =
             argbufCbufCache &&
             argbufCbufCache->matches(argbufPayloadHash) &&
@@ -10354,7 +10573,9 @@ bool encodeDraw(EncodeContext& ctx,
       } else {
         auto forceDirty = [&](std::uint16_t mask) {
           PerfScope forceDirtyScope(
-              perf::countEncodeDrawArgbufReopenCbufForceDirtyCpuTime);
+              argbufReopenSplit
+                  ? perf::countEncodeDrawArgbufReopenCbufForceDirtyCpuTime
+                  : nullptr);
           dirtyPtr->mask = static_cast<std::uint16_t>(dirtyPtr->mask | mask);
         };
         auto pointCachedBinding = [&](u32 argbufIndex) -> bool {
@@ -10364,7 +10585,9 @@ bool encodeDraw(EncodeContext& ctx,
           const auto binding = argbufCbufCache->binding(argbufIndex);
           {
             PerfScope cachedRepointScope(
-                perf::countEncodeDrawArgbufCbufCachedRepointCpuTime);
+                argbufCbufProbeSplit
+                    ? perf::countEncodeDrawArgbufCbufCachedRepointCpuTime
+                    : nullptr);
             PerfScope cachedRepointStageScope(
                 argbufCbufProbeSplit
                     ? argbufCbufCachedRepointCpuRecorder(argbufIndex)
@@ -10382,7 +10605,9 @@ bool encodeDraw(EncodeContext& ctx,
         bool hasAnyCbufDirty = false;
         {
           PerfScope dirtyScanScope(
-              perf::countEncodeDrawArgbufReopenCbufDirtyScanCpuTime);
+              argbufReopenSplit
+                  ? perf::countEncodeDrawArgbufReopenCbufDirtyScanCpuTime
+                  : nullptr);
           hasAnyCbufDirty =
               uniform::anyDirty(*dirtyPtr, argbufConsumedBits);
         }
@@ -10397,8 +10622,10 @@ bool encodeDraw(EncodeContext& ctx,
           ArgbufCbufIdentityProbe ffpPsProbe{};
           {
             PerfScope probeScope(
-                perf::countEncodeDrawArgbufCbufContentProbeCpuTime);
-            {
+                argbufCbufProbeSplit
+                    ? perf::countEncodeDrawArgbufCbufContentProbeCpuTime
+                    : nullptr);
+            if (!argbufVsPayloadSourceChanged) {
               PerfScope vsProbeScope(
                   argbufCbufProbeSplit
                       ? argbufCbufContentProbeCpuRecorder(
@@ -10417,7 +10644,7 @@ bool encodeDraw(EncodeContext& ctx,
               };
             }
 
-            {
+            if (!argbufPsPayloadSourceChanged) {
               PerfScope psProbeScope(
                   argbufCbufProbeSplit
                       ? argbufCbufContentProbeCpuRecorder(
@@ -10467,18 +10694,28 @@ bool encodeDraw(EncodeContext& ctx,
                 forceDirty(mask);
               };
 
-          pointCachedByIdentity(
-              uniform::kVsAny,
-              dxmt9::argbuf_hybrid::kConstantBufferVsIndex,
-              vsProbe,
-              perf::countEncodeDrawArgbufCbufContentProbeVsHits,
-              perf::countEncodeDrawArgbufCbufContentProbeVsMisses);
-          pointCachedByIdentity(
-              uniform::kPsAny,
-              dxmt9::argbuf_hybrid::kConstantBufferPsIndex,
-              psProbe,
-              perf::countEncodeDrawArgbufCbufContentProbePsHits,
-              perf::countEncodeDrawArgbufCbufContentProbePsMisses);
+          if (argbufVsPayloadSourceChanged) {
+            perf::countEncodeDrawArgbufCbufContentProbeVsMisses(1u);
+            forceDirty(uniform::kVsAny);
+          } else {
+            pointCachedByIdentity(
+                uniform::kVsAny,
+                dxmt9::argbuf_hybrid::kConstantBufferVsIndex,
+                vsProbe,
+                perf::countEncodeDrawArgbufCbufContentProbeVsHits,
+                perf::countEncodeDrawArgbufCbufContentProbeVsMisses);
+          }
+          if (argbufPsPayloadSourceChanged) {
+            perf::countEncodeDrawArgbufCbufContentProbePsMisses(1u);
+            forceDirty(uniform::kPsAny);
+          } else {
+            pointCachedByIdentity(
+                uniform::kPsAny,
+                dxmt9::argbuf_hybrid::kConstantBufferPsIndex,
+                psProbe,
+                perf::countEncodeDrawArgbufCbufContentProbePsHits,
+                perf::countEncodeDrawArgbufCbufContentProbePsMisses);
+          }
           // FFPVS stays on the deferred path because pre-transformed viewport
           // handling may patch the host bytes later in this draw.
           forceDirty(uniform::kFfpVsAny);
@@ -10492,7 +10729,9 @@ bool encodeDraw(EncodeContext& ctx,
           perf::countEncodeDrawArgbufCbufReopenPartialCandidates(1u);
           {
             PerfScope dirtyScanScope(
-                perf::countEncodeDrawArgbufReopenCbufDirtyScanCpuTime);
+                argbufReopenSplit
+                    ? perf::countEncodeDrawArgbufReopenCbufDirtyScanCpuTime
+                    : nullptr);
             if (uniform::anyDirty(*dirtyPtr, uniform::kVsAny)) {
               perf::countEncodeDrawArgbufCbufReopenDirtyVs(1u);
             }
@@ -10510,7 +10749,9 @@ bool encodeDraw(EncodeContext& ctx,
             bool dirty = false;
             {
               PerfScope dirtyScanScope(
-                  perf::countEncodeDrawArgbufReopenCbufDirtyScanCpuTime);
+                  argbufReopenSplit
+                      ? perf::countEncodeDrawArgbufReopenCbufDirtyScanCpuTime
+                      : nullptr);
               dirty = uniform::anyDirty(*dirtyPtr, mask);
             }
             if (dirty) {
@@ -10545,7 +10786,7 @@ bool encodeDraw(EncodeContext& ctx,
   // after the pre-transformed viewport override below; that lets the final
   // host bytes reuse a cached stable slice instead of re-uploading an
   // unchanged block on every draw.
-  if (argbufHybridMode) {
+  if (argbufTableMode) {
     PerfScope argbufSetupScope(perf::countEncodeDrawArgbufSetupCpuTime);
     auto dirtyForArgbuf = *dirtyPtr;
     uniform::clearBits(dirtyForArgbuf, uniform::kFfpVsAny);
@@ -10587,7 +10828,7 @@ bool encodeDraw(EncodeContext& ctx,
       }
       dxmt9::argbuf_hybrid::ConstantBufferBindings writtenCbufBindings{};
       dxmt9::argbuf_hybrid::ConstantBufferUploadObserver cbufUploadObserver{};
-      if (encoderBreakdown && encoderBreakdown->enabled) {
+      if (encoderBreakdownCbufContent) {
         cbufUploadObserver.userdata = encoderBreakdown;
         cbufUploadObserver.upload = recordArgbufCbufUploadForBreakdown;
       }
@@ -10621,7 +10862,7 @@ bool encodeDraw(EncodeContext& ctx,
   }
   {
     PerfScope uniformBuildScope(perf::countEncodeDrawUniformBuildCpuTime);
-    if (!argbufHybridMode && uniform::anyDirty(*dirtyPtr, uniform::kVsAny)) {
+    if (directCbufBindings && uniform::anyDirty(*dirtyPtr, uniform::kVsAny)) {
       VsConsts vs = buildVsConsts(drawState);
       const auto plan =
           uniform::makeVsConstantUploadPlan(*dirtyPtr, shaderUsage.vertexConstantUsage);
@@ -10635,7 +10876,7 @@ bool encodeDraw(EncodeContext& ctx,
         uniform::clearBits(*dirtyPtr, uniform::kVsAny);
       }
     }
-    if (!argbufHybridMode && uniform::anyDirty(*dirtyPtr, uniform::kPsAny)) {
+    if (directCbufBindings && uniform::anyDirty(*dirtyPtr, uniform::kPsAny)) {
       PsConsts ps = buildPsConsts(drawState);
       const auto plan =
           uniform::makePsConstantUploadPlan(*dirtyPtr, shaderUsage.pixelConstantUsage);
@@ -10650,7 +10891,7 @@ bool encodeDraw(EncodeContext& ctx,
         uniform::clearBits(*dirtyPtr, uniform::kPsAny);
       }
     }
-    if (!argbufHybridMode && uniform::anyDirty(*dirtyPtr, uniform::kFfpPsAny)) {
+    if (directCbufBindings && uniform::anyDirty(*dirtyPtr, uniform::kFfpPsAny)) {
       FfpPsConsts ffpPs = buildFfpPsConsts(drawState);
       auto slice = uploadTransientBuffer(&ffpPs, sizeof(FfpPsConsts), alignof(FfpPsConsts));
       if (slice) {
@@ -10679,7 +10920,7 @@ bool encodeDraw(EncodeContext& ctx,
       return;
     }
     auto* host = ensureFfpVs();
-    if (argbufHybridMode && argbufCbufCache &&
+    if (argbufTableMode && argbufCbufCache &&
         argbufCbufCache->hasMatchingFfpVs(*host)) {
       dxmt9::argbuf_hybrid::pointConstantBufferBinding(
           argbufEncoderForDraw,
@@ -10692,7 +10933,7 @@ bool encodeDraw(EncodeContext& ctx,
     }
     auto slice = uploadTransientBuffer(host, sizeof(FfpVsConsts), alignof(FfpVsConsts));
     if (slice) {
-      if (argbufHybridMode) {
+      if (argbufTableMode) {
         dxmt9::argbuf_hybrid::pointFfpVsAtSlice(
             argbufEncoderForDraw, slice.buffer, slice.offset,
             nullptr, encoder);
@@ -10701,6 +10942,8 @@ bool encodeDraw(EncodeContext& ctx,
           encoderBreakdown->addArgbufCbufBytes(
               dxmt9::argbuf_hybrid::kConstantBufferFfpVsIndex,
               sizeof(FfpVsConsts));
+        }
+        if (encoderBreakdownCbufContent) {
           encoderBreakdown->recordArgbufCbufUploadContent(
               dxmt9::argbuf_hybrid::kConstantBufferFfpVsIndex,
               host, sizeof(FfpVsConsts), sizeof(FfpVsConsts));
@@ -10885,10 +11128,13 @@ bool encodeDraw(EncodeContext& ctx,
   }
   bindFfpVsIfDirty();
   // Phase 3-E: viewport / scissor / cull are BaseDrawState-only.
+  const bool streamBindPhaseSplitPerf = streamBindPhaseSplitPerfEnabled();
   if (!effectiveSkipBaseStateBind) {
     PerfScope streamBindViewportScope(perf::countEncodeDrawStreamBindCpuTime);
     PerfScope streamBindRasterPhaseScope(
-        perf::countEncodeDrawStreamBindRasterPhaseCpuTime);
+        streamBindPhaseSplitPerf
+            ? perf::countEncodeDrawStreamBindRasterPhaseCpuTime
+            : nullptr);
     PerfScope rasterStateScope(perf::countEncodeDrawRasterStateCpuTime);
     perf::countEncodeDrawStreamBindRasterPhaseCalls(1u);
     if (bindingPacketHasRasterTarget) {
@@ -11115,7 +11361,9 @@ bool encodeDraw(EncodeContext& ctx,
     {
       PerfScope streamBindFfScope(perf::countEncodeDrawStreamBindCpuTime);
       PerfScope streamBindFfpStreamScope(
-          perf::countEncodeDrawStreamBindFfpStreamCpuTime);
+          streamBindPhaseSplitPerf
+              ? perf::countEncodeDrawStreamBindFfpStreamCpuTime
+              : nullptr);
       PerfScope vertexStreamBindFfScope(perf::countEncodeDrawVertexStreamBindCpuTime);
       perf::countEncodeDrawStreamBindFfpStreamCalls(1u);
       if (encoderBreakdown) {
@@ -11520,7 +11768,9 @@ bool encodeDraw(EncodeContext& ctx,
     {
       PerfScope streamBindVsScope(perf::countEncodeDrawStreamBindCpuTime);
       PerfScope streamBindShaderStreamScope(
-          perf::countEncodeDrawStreamBindShaderStreamCpuTime);
+          streamBindPhaseSplitPerf
+              ? perf::countEncodeDrawStreamBindShaderStreamCpuTime
+              : nullptr);
       PerfScope vertexStreamBindVsScope(perf::countEncodeDrawVertexStreamBindCpuTime);
       perf::countEncodeDrawStreamBindShaderStreamCalls(1u);
       if (encoderBreakdown) {
@@ -11644,7 +11894,9 @@ bool encodeDraw(EncodeContext& ctx,
   if (!effectiveSkipBaseStateBind) {
     PerfScope streamBindTexScope(perf::countEncodeDrawStreamBindCpuTime);
     PerfScope streamBindTexturePhaseScope(
-        perf::countEncodeDrawStreamBindTexturePhaseCpuTime);
+        streamBindPhaseSplitPerf
+            ? perf::countEncodeDrawStreamBindTexturePhaseCpuTime
+            : nullptr);
     PerfScope textureSamplerBindScope(perf::countEncodeDrawTextureSamplerBindCpuTime);
     perf::countEncodeDrawStreamBindTexturePhaseCalls(1u);
     const bool samplerSupportsArgumentBuffers = dxmt9::shaders::argbufResourceArrayEnabled();
@@ -12477,7 +12729,9 @@ bool encodeDraw(EncodeContext& ctx,
     {
       PerfScope streamBindIndexScope(perf::countEncodeDrawStreamBindCpuTime);
       PerfScope streamBindIndexPhaseScope(
-          perf::countEncodeDrawStreamBindIndexPhaseCpuTime);
+          streamBindPhaseSplitPerf
+              ? perf::countEncodeDrawStreamBindIndexPhaseCpuTime
+              : nullptr);
       PerfScope indexSetupScope(perf::countEncodeDrawIndexSetupCpuTime);
       perf::countEncodeDrawStreamBindIndexPhaseCalls(1u);
       {
@@ -12857,8 +13111,10 @@ bool encodeDraw(EncodeContext& ctx,
                   cacheOptCandidateReuse,
                   cacheOptMinGainPct);
         }
+        const bool cacheOptCandidateAvailable =
+            originalIndexReuseForProbe.available && cacheOptCandidateReuse.available;
         perf::countIndexedCacheOptCandidate(
-            originalIndexReuseForProbe.available && cacheOptCandidateReuse.available,
+            cacheOptCandidateAvailable,
             static_cast<u64>(cacheOptCandidateIndexBytes.size()),
             originalIndexReuseForProbe.cacheMiss16,
             originalIndexReuseForProbe.cacheMiss32,
@@ -12866,11 +13122,25 @@ bool encodeDraw(EncodeContext& ctx,
             cacheOptCandidateReuse.cacheMiss16,
             cacheOptCandidateReuse.cacheMiss32,
             cacheOptCandidateReuse.cacheMiss64);
+        if (cacheOptCandidateAvailable) {
+          perf::countIndexedCacheOptCandidateGate(
+              cacheOptCandidateGatePassed,
+              primitiveCount,
+              optimizeOpaqueDepthIndexCacheScopeMatches,
+              optimizeScreenBlendIndexCacheScopeMatches);
+        }
         if (encoderBreakdownActive) {
           encoderBreakdown->recordIndexedCacheOptCandidate(
               originalIndexReuseForProbe,
               cacheOptCandidateReuse,
               static_cast<u64>(cacheOptCandidateIndexBytes.size()));
+          if (cacheOptCandidateAvailable) {
+            encoderBreakdown->recordIndexedCacheOptCandidateGate(
+                cacheOptCandidateGatePassed,
+                primitiveCount,
+                optimizeOpaqueDepthIndexCacheScopeMatches,
+                optimizeScreenBlendIndexCacheScopeMatches);
+          }
         }
         if ((optimizeOpaqueDepthIndexCacheScopeMatches ||
              optimizeScreenBlendIndexCacheScopeMatches) &&
@@ -13606,6 +13876,7 @@ bool encodeDraw(EncodeContext& ctx,
                 bool tileFfpMode,
                 bool argbufHybridMode,
                 bool argbufResourceArray,
+                bool argbufDirectCbufMode,
                 bool reopenArgbufHybrid,
                 TextureSamplerBindShadow* textureSamplerShadow,
                 std::uint32_t commandIndex,
@@ -13613,7 +13884,10 @@ bool encodeDraw(EncodeContext& ctx,
   return encodeDraw(ctx, commandBuffer, encoder, drawState, seqId,
                     skipBaseStateBind, preUploaded, paramOverride,
                     paramPayloadArena, bindingSnapshot, dirty, tileFfpMode,
-                    argbufHybridMode, argbufResourceArray, reopenArgbufHybrid,
+                    argbufHybridMode, argbufResourceArray,
+                    argbufDirectCbufMode, reopenArgbufHybrid,
+                    /*argbufVsPayloadSourceChanged=*/false,
+                    /*argbufPsPayloadSourceChanged=*/false,
                     /*bindingOverridePrefetchedPsoCompatible=*/false,
                     core::PsoHandle{}, core::PsoHandle{}, core::DepthStencilHandle{},
                     textureSamplerShadow, commandIndex, 0u, 0u, nullptr, nullptr,
@@ -13630,6 +13904,47 @@ std::optional<core::metalqueue::QueueSubmissionRecord> encodeChunk(
     return std::nullopt;
   }
 
+  const bool traceEncodeProgress = traceEncodeProgressForSeq(slot.seqId);
+  auto traceEncodeStage = [&](const char* stage) {
+    if (!traceEncodeProgress) {
+      return;
+    }
+    std::ostringstream out;
+    out << "[dxmt9-encode-progress]"
+        << " stage=" << stage
+        << " seq=" << static_cast<unsigned long long>(slot.seqId)
+        << " slot=" << slotIndex
+        << " commands=" << slot.commandCount()
+        << " draw_only=" << (slot.drawOnlyCommandStream() ? 1 : 0);
+    emitQueueTraceLine(out.str());
+  };
+  auto traceEncodeCommand = [&](const char* phase,
+                                std::size_t commandIndex,
+                                core::MetalCommandKind kind,
+                                const core::MetalCommandView& command) {
+    if (!traceEncodeProgress) {
+      return;
+    }
+    std::ostringstream out;
+    out << "[dxmt9-encode-progress]"
+        << " stage=command." << phase
+        << " seq=" << static_cast<unsigned long long>(slot.seqId)
+        << " slot=" << slotIndex
+        << " command=" << commandIndex
+        << " kind=" << metalCommandKindName(kind);
+    if (kind == core::MetalCommandKind::DrawRun) {
+      out << " draws=" << command.drawParams.size();
+      if (command.drawRunRecord) {
+        out << " first_param=" << command.drawRunRecord->firstParam
+            << " param_count=" << command.drawRunRecord->paramCount
+            << " state_index=" << command.drawRunRecord->stateIndex;
+      }
+    }
+    emitQueueTraceLine(out.str());
+  };
+
+  traceEncodeStage("begin");
+
   // M3 — Metal frame capture: ask the controller whether this chunk is
   // the first chunk of the target frame. If so, start capture BEFORE
   // `newCommandBuffer()` so Apple's MTLCaptureManager records every CB
@@ -13641,20 +13956,28 @@ std::optional<core::metalqueue::QueueSubmissionRecord> encodeChunk(
       ctx.queue.metalCaptureForChunkBegin(slot.seqId);
   bool captureAlreadyStartedAtChunkBegin = false;
   if (earlyCaptureRequest.has_value()) {
+    traceEncodeStage("before-start-capture");
     captureAlreadyStartedAtChunkBegin =
         core::metalcapture::startMetalCapture(WMT::Device{ctx.device.handle},
                                                *earlyCaptureRequest);
+    traceEncodeStage(captureAlreadyStartedAtChunkBegin
+                         ? "after-start-capture-ok"
+                         : "after-start-capture-failed");
   }
 
+  traceEncodeStage("before-new-command-buffer");
   auto commandBuffer = ctx.queue.newCommandBuffer();
   if (!commandBuffer) {
+    traceEncodeStage("new-command-buffer-null");
     if (captureAlreadyStartedAtChunkBegin && earlyCaptureRequest.has_value()) {
       core::metalcapture::stopMetalCapture(*earlyCaptureRequest);
     }
     return std::nullopt;
   }
+  traceEncodeStage("after-new-command-buffer");
   bool commandBufferHasWork = false;
   constexpr std::uint32_t kMaxRenderEncoderGpuSamples = 8192;
+  traceEncodeStage("before-gpu-sampling-setup");
   const bool renderEncoderGpuSampling =
       renderEncoderGpuTimeEnabled() &&
       WMT::Device{ctx.device.handle}.supportsCounterSampling(
@@ -13668,6 +13991,7 @@ std::optional<core::metalqueue::QueueSubmissionRecord> encodeChunk(
           ? WMT::Device{ctx.device.handle}.newCounterSampleBuffer(
                 requestedRenderEncoderGpuSamples, /*shared=*/true)
           : WMT::Reference<WMT::CounterSampleBuffer>{};
+  traceEncodeStage("after-gpu-sampling-setup");
   std::vector<core::metalqueue::QueueSubmissionRecord::RenderEncoderGpuSample>
       renderEncoderGpuSamples;
   std::uint32_t renderEncoderGpuSampleCursor = 0;
@@ -13735,9 +14059,13 @@ std::optional<core::metalqueue::QueueSubmissionRecord> encodeChunk(
   // the queue-owned ResourceInitializer, then wait for its SharedEvent
   // signal at the head of this chunk's command buffer so textures are
   // fully populated before any draw samples them.
+  traceEncodeStage("before-initializer-flush");
   const auto initializerFlush = ctx.queue.flushInitializerUploads();
+  traceEncodeStage("after-initializer-flush");
   if (initializerFlush.event && initializerFlush.value > 0) {
+    traceEncodeStage("before-initializer-wait");
     commandBuffer.encodeWaitForEvent(initializerFlush.event, initializerFlush.value);
+    traceEncodeStage("after-initializer-wait");
     commandBufferHasWork = true;
   }
 
@@ -13776,6 +14104,7 @@ std::optional<core::metalqueue::QueueSubmissionRecord> encodeChunk(
   // textures/samplers through populateResourceBindings + useResource. Like
   // activePassUsesArgbufHybrid the pass is sticky — never mid-pass switch.
   bool activePassUsesArgbufResourceArray = false;
+  bool activePassUsesArgbufDirectCbuf = false;
   [[maybe_unused]] WMT::Buffer activeArgbufStorage{};
   [[maybe_unused]] std::uint64_t activeArgbufOffset = 0;
   std::optional<core::FlatDrawStateKey> activeDrawStateKey;
@@ -13812,16 +14141,244 @@ std::optional<core::metalqueue::QueueSubmissionRecord> encodeChunk(
     u64 vertexConstantsHash = 0;
     u64 pixelConstantsHash = 0;
   };
+  struct ArgbufPayloadDeltaComponentKey {
+    u64 vsFloatHash = 0;
+    u64 vsIntHash = 0;
+    u64 vsBoolHash = 0;
+    u64 psFloatHash = 0;
+    u64 psIntHash = 0;
+    u64 psBoolHash = 0;
+  };
+  auto hashArgbufPayloadComponentPrefix =
+      [](const auto& values, u16 count) {
+        const auto clamped =
+            std::min<std::size_t>(count, values.size());
+        const auto bytes = std::as_bytes(std::span(
+            values.data(), clamped));
+        u64 hash = drawBindingPacketHashMix(
+            0x8fc6d3f8f0b19c45ull, static_cast<u64>(clamped));
+        hash = drawBindingPacketHashMix(hash, core::hashBytes(bytes));
+        return hash;
+      };
   auto makeArgbufPayloadDeltaKey =
-      [](const core::DrawUniformPayload& payload) {
+      [](core::FlatDrawStateView drawState) {
+        const auto& payload = drawState.uniformPayload();
         return ArgbufPayloadDeltaKey{
             .hash = payload.hash,
-            .vertexConstantsHash = payload.vertexConstantsHash,
-            .pixelConstantsHash = payload.pixelConstantsHash,
+            .vertexConstantsHash = drawStateVertexCbufSourceHash(drawState),
+            .pixelConstantsHash = drawStatePixelCbufSourceHash(drawState),
         };
       };
+  auto makeArgbufPayloadDeltaComponentKey =
+      [&](const core::DrawUniformPayload& payload) {
+        return ArgbufPayloadDeltaComponentKey{
+            .vsFloatHash = hashArgbufPayloadComponentPrefix(
+                payload.vsConst.float4, payload.vertexFloatConstantCount),
+            .vsIntHash = hashArgbufPayloadComponentPrefix(
+                payload.vsConst.int4, payload.vertexIntConstantCount),
+            .vsBoolHash = hashArgbufPayloadComponentPrefix(
+                payload.vsConst.bools, payload.vertexBoolConstantCount),
+            .psFloatHash = hashArgbufPayloadComponentPrefix(
+                payload.psConst.float4, payload.pixelFloatConstantCount),
+            .psIntHash = hashArgbufPayloadComponentPrefix(
+                payload.psConst.int4, payload.pixelIntConstantCount),
+            .psBoolHash = hashArgbufPayloadComponentPrefix(
+                payload.psConst.bools, payload.pixelBoolConstantCount),
+        };
+      };
+  struct ArgbufPayloadChangedPrefixStats {
+    u64 changed = 0;
+    u64 prefix = 0;
+    u64 span = 0;
+    bool fullPrefix = false;
+  };
+  auto measureArgbufPayloadChangedPrefix =
+      [](const auto& previousValues, u16 previousCount,
+         const auto& currentValues, u16 currentCount) {
+        const auto previousClamped =
+            std::min<std::size_t>(previousCount, previousValues.size());
+        const auto currentClamped =
+            std::min<std::size_t>(currentCount, currentValues.size());
+        const auto count = std::max(previousClamped, currentClamped);
+        std::size_t firstChanged = count;
+        std::size_t lastChanged = 0;
+        for (std::size_t i = 0; i < count; ++i) {
+          if (i >= previousClamped || i >= currentClamped ||
+              std::memcmp(&previousValues[i], &currentValues[i],
+                          sizeof(previousValues[i])) != 0) {
+            firstChanged = std::min(firstChanged, i);
+            lastChanged = i;
+          }
+        }
+        if (firstChanged == count) {
+          return ArgbufPayloadChangedPrefixStats{
+              .changed = 0,
+              .prefix = static_cast<u64>(count),
+              .span = 0,
+              .fullPrefix = false,
+          };
+        }
+        const auto changed = lastChanged - firstChanged + 1u;
+        u64 changedCount = 0;
+        for (std::size_t i = firstChanged; i <= lastChanged; ++i) {
+          if (i >= previousClamped || i >= currentClamped ||
+              std::memcmp(&previousValues[i], &currentValues[i],
+                          sizeof(previousValues[i])) != 0) {
+            ++changedCount;
+          }
+        }
+        return ArgbufPayloadChangedPrefixStats{
+            .changed = changedCount,
+            .prefix = static_cast<u64>(count),
+            .span = static_cast<u64>(changed),
+            .fullPrefix = changedCount == static_cast<u64>(count),
+        };
+      };
+  auto recordArgbufPayloadChangedVsFloatRegBucket = [](u64 changedRegs) {
+    if (changedRegs <= 1u) {
+      perf::countEncodeDrawArgbufPayloadDeltaChangedVsFloatRegsLe1(1u);
+      perf::countEncodeDrawArgbufPayloadDeltaChangedVsFloatRegsLe1Sum(
+          changedRegs);
+    } else if (changedRegs <= 4u) {
+      perf::countEncodeDrawArgbufPayloadDeltaChangedVsFloatRegsLe4(1u);
+      perf::countEncodeDrawArgbufPayloadDeltaChangedVsFloatRegsLe4Sum(
+          changedRegs);
+    } else if (changedRegs <= 16u) {
+      perf::countEncodeDrawArgbufPayloadDeltaChangedVsFloatRegsLe16(1u);
+      perf::countEncodeDrawArgbufPayloadDeltaChangedVsFloatRegsLe16Sum(
+          changedRegs);
+    } else if (changedRegs <= 64u) {
+      perf::countEncodeDrawArgbufPayloadDeltaChangedVsFloatRegsLe64(1u);
+      perf::countEncodeDrawArgbufPayloadDeltaChangedVsFloatRegsLe64Sum(
+          changedRegs);
+    } else {
+      perf::countEncodeDrawArgbufPayloadDeltaChangedVsFloatRegsGt64(1u);
+      perf::countEncodeDrawArgbufPayloadDeltaChangedVsFloatRegsGt64Sum(
+          changedRegs);
+    }
+  };
+  auto recordArgbufPayloadChangedPsFloatRegBucket = [](u64 changedRegs) {
+    if (changedRegs <= 1u) {
+      perf::countEncodeDrawArgbufPayloadDeltaChangedPsFloatRegsLe1(1u);
+      perf::countEncodeDrawArgbufPayloadDeltaChangedPsFloatRegsLe1Sum(
+          changedRegs);
+    } else if (changedRegs <= 4u) {
+      perf::countEncodeDrawArgbufPayloadDeltaChangedPsFloatRegsLe4(1u);
+      perf::countEncodeDrawArgbufPayloadDeltaChangedPsFloatRegsLe4Sum(
+          changedRegs);
+    } else if (changedRegs <= 16u) {
+      perf::countEncodeDrawArgbufPayloadDeltaChangedPsFloatRegsLe16(1u);
+      perf::countEncodeDrawArgbufPayloadDeltaChangedPsFloatRegsLe16Sum(
+          changedRegs);
+    } else if (changedRegs <= 64u) {
+      perf::countEncodeDrawArgbufPayloadDeltaChangedPsFloatRegsLe64(1u);
+      perf::countEncodeDrawArgbufPayloadDeltaChangedPsFloatRegsLe64Sum(
+          changedRegs);
+    } else {
+      perf::countEncodeDrawArgbufPayloadDeltaChangedPsFloatRegsGt64(1u);
+      perf::countEncodeDrawArgbufPayloadDeltaChangedPsFloatRegsGt64Sum(
+          changedRegs);
+    }
+  };
+  struct ArgbufPayloadDeltaSourceBucket {
+    bool valid = false;
+    u64 vsHash = 0;
+    u64 psHash = 0;
+    u64 prefixRegs = 0;
+    u64 rows = 0;
+    u64 changedRegs = 0;
+    u64 spanRegs = 0;
+    u64 fullPrefixRows = 0;
+    u64 fullPrefixRegs = 0;
+  };
+  struct ArgbufPayloadDeltaSourceAttribution {
+    std::array<ArgbufPayloadDeltaSourceBucket, 128> buckets{};
+    u64 overflowRows = 0;
+    u64 overflowChangedRegs = 0;
+
+    void record(core::FlatDrawStateView drawState,
+                const ArgbufPayloadChangedPrefixStats& stats) noexcept {
+      if (stats.changed == 0) {
+        return;
+      }
+      u64 vsHash = 0;
+      u64 psHash = 0;
+      if (drawState.hasShaderContext()) {
+        const auto& shader = drawState.shaderContext();
+        vsHash = shader.vertexShader.hash;
+        psHash = shader.pixelShader.hash;
+      }
+      ArgbufPayloadDeltaSourceBucket* target = nullptr;
+      for (auto& bucket : buckets) {
+        if (bucket.valid && bucket.vsHash == vsHash &&
+            bucket.psHash == psHash && bucket.prefixRegs == stats.prefix) {
+          target = &bucket;
+          break;
+        }
+        if (!bucket.valid && !target) {
+          target = &bucket;
+        }
+      }
+      if (!target) {
+        ++overflowRows;
+        overflowChangedRegs += stats.changed;
+        return;
+      }
+      if (!target->valid) {
+        target->valid = true;
+        target->vsHash = vsHash;
+        target->psHash = psHash;
+        target->prefixRegs = stats.prefix;
+      }
+      ++target->rows;
+      target->changedRegs += stats.changed;
+      target->spanRegs += stats.span;
+      if (stats.fullPrefix) {
+        ++target->fullPrefixRows;
+        target->fullPrefixRegs += stats.changed;
+      }
+    }
+
+    void emit(u64 seqId) const {
+      if (overflowRows != 0 || overflowChangedRegs != 0) {
+        std::fprintf(
+            stderr,
+            "[dxmt9-perf-argbuf-payload-delta-source seq=%llu "
+            "overflow=1 rows=%llu changed_regs=%llu]\n",
+            static_cast<unsigned long long>(seqId),
+            static_cast<unsigned long long>(overflowRows),
+            static_cast<unsigned long long>(overflowChangedRegs));
+      }
+      for (const auto& bucket : buckets) {
+        if (!bucket.valid || bucket.rows == 0) {
+          continue;
+        }
+        std::fprintf(
+            stderr,
+            "[dxmt9-perf-argbuf-payload-delta-source seq=%llu "
+            "overflow=0 vs_hash=0x%llx ps_hash=0x%llx prefix_regs=%llu "
+            "rows=%llu changed_regs=%llu span_regs=%llu "
+            "full_prefix_rows=%llu full_prefix_regs=%llu]\n",
+            static_cast<unsigned long long>(seqId),
+            static_cast<unsigned long long>(bucket.vsHash),
+            static_cast<unsigned long long>(bucket.psHash),
+            static_cast<unsigned long long>(bucket.prefixRegs),
+            static_cast<unsigned long long>(bucket.rows),
+            static_cast<unsigned long long>(bucket.changedRegs),
+            static_cast<unsigned long long>(bucket.spanRegs),
+            static_cast<unsigned long long>(bucket.fullPrefixRows),
+            static_cast<unsigned long long>(bucket.fullPrefixRegs));
+      }
+    }
+  };
   std::optional<u64> lastArgbufPayloadHash;
   std::optional<ArgbufPayloadDeltaKey> lastArgbufPayloadDeltaKey;
+  std::optional<ArgbufPayloadDeltaComponentKey>
+      lastArgbufPayloadDeltaComponentKey;
+  std::optional<core::DrawUniformPayload> lastArgbufPayloadDeltaPayload;
+  const bool argbufPayloadDeltaSourcePerf =
+      argbufPayloadDeltaSourcePerfEnabled();
+  ArgbufPayloadDeltaSourceAttribution argbufPayloadDeltaSourceAttribution;
   ArgbufCbufCache argbufCbufCache;
   StreamIbStagingCache activeStreamIbStaging;
   TextureSamplerBindShadow textureSamplerShadow{};
@@ -13829,6 +14386,22 @@ std::optional<core::metalqueue::QueueSubmissionRecord> encodeChunk(
   std::optional<VisibilityScoutPass> activeVisibilityScout;
   static thread_local RenderPassFrameTracker renderPassFrameTracker;
   u64 renderEncoderIndex = 0;
+  auto traceRenderPassProgress = [&](const char* stage,
+                                     std::size_t commandIndex,
+                                     bool hasClear) {
+    if (!traceEncodeProgress) {
+      return;
+    }
+    std::ostringstream out;
+    out << "[dxmt9-encode-progress]"
+        << " stage=renderpass." << stage
+        << " seq=" << static_cast<unsigned long long>(slot.seqId)
+        << " slot=" << slotIndex
+        << " command=" << commandIndex
+        << " encoder=" << static_cast<unsigned long long>(renderEncoderIndex)
+        << " clear=" << (hasClear ? 1 : 0);
+    emitQueueTraceLine(out.str());
+  };
 
   // TLA+: EncoderLifecycle variable binding:
   // activeKind  := activeRenderEncoder ? "Render" : activeBlitEncoder ? "Blit" : "None"
@@ -13918,6 +14491,7 @@ std::optional<core::metalqueue::QueueSubmissionRecord> encodeChunk(
                              const std::optional<core::ClearDesc>& clear,
                              std::size_t lookaheadStartIndex,
                              core::PsoHandle renderPsoHandle) {
+    traceRenderPassProgress("begin", lookaheadStartIndex, clear.has_value());
     // TLA+: EncoderLifecycle / BeginRender(rt)
     // Callers split through None before opening a new render encoder.
     // R-BACK-15.7: pass the slot + current command index so beginRenderPass
@@ -13937,12 +14511,18 @@ std::optional<core::metalqueue::QueueSubmissionRecord> encodeChunk(
     const WMT::Buffer visibilityBuffer{
         activeVisibilityScout ? activeVisibilityScout->buffer.handle
                               : NULL_OBJECT_HANDLE};
+    traceRenderPassProgress("before-begin-render-pass", lookaheadStartIndex,
+                            clear.has_value());
     RenderPassActionSummary renderPassActions{};
     activeRenderEncoder = beginRenderPass(ctx, commandBuffer, drawState, clear,
                                           &slot, lookaheadStartIndex,
                                           sampleAttachment.span(),
                                           visibilityBuffer,
                                           &renderPassActions);
+    traceRenderPassProgress(activeRenderEncoder
+                                ? "after-begin-render-pass-ok"
+                                : "after-begin-render-pass-null",
+                            lookaheadStartIndex, clear.has_value());
     hasActiveRender = static_cast<bool>(activeRenderEncoder);
     if (!hasActiveRender) {
       activeVisibilityScout.reset();
@@ -14084,6 +14664,8 @@ std::optional<core::metalqueue::QueueSubmissionRecord> encodeChunk(
     // "Render Command N" and per-pass GPU time cannot be attributed to
     // an RT in text-based analysis.
     if (activeRenderEncoder) {
+      traceRenderPassProgress("before-label", lookaheadStartIndex,
+                              clear.has_value());
       const auto rt0 = static_cast<unsigned long long>(
           drawState.hot->colorAttachments[0].handle.value);
       const auto depth = static_cast<unsigned long long>(
@@ -14095,6 +14677,8 @@ std::optional<core::metalqueue::QueueSubmissionRecord> encodeChunk(
           depth);
       activeRenderEncoder.setLabel(passLabel);
       activeRenderEncoder.pushDebugGroup(passLabel);
+      traceRenderPassProgress("after-label", lookaheadStartIndex,
+                              clear.has_value());
     }
     // R-BACK-12.22 / 12.24 / 12.25 — Stage 2 argbuf-hybrid per-encoder
     // populator. The selector reads the cached capability bool on the
@@ -14112,11 +14696,16 @@ std::optional<core::metalqueue::QueueSubmissionRecord> encodeChunk(
     // counter; no slot-30 bind is issued.
     activePassUsesArgbufHybrid = false;
     activePassUsesArgbufResourceArray = false;
+    activePassUsesArgbufDirectCbuf = false;
     activeArgbufStorage = {};
     activeArgbufOffset = 0;
     {
+      traceRenderPassProgress("before-argbuf-select", lookaheadStartIndex,
+                              clear.has_value());
       const auto argbufDecision = dxmt9::pipeline::selectArgbufHybridForPass(
           drawState, ctx.pool.argbufHybridEnabled());
+      traceRenderPassProgress("after-argbuf-select", lookaheadStartIndex,
+                              clear.has_value());
       if (argbufDecision == dxmt9::pipeline::ArgbufHybridDecision::Stage2) {
         perf::countArgbufHybridEncoder();
         // R-BACK-12.22..12.26 (resource-array sub-mode) — pick the
@@ -14126,46 +14715,66 @@ std::optional<core::metalqueue::QueueSubmissionRecord> encodeChunk(
         // the reservation size and whether texture/sampler slots are written.
         const bool resourceArrayLane = ctx.queue.resourceArrayLaneActive() &&
             ctx.queue.resourceArrayEncoderResource().initialized();
-        auto& encoderResource = resourceArrayLane
-                                    ? ctx.queue.resourceArrayEncoderResource()
-                                    : ctx.queue.argbufEncoderResource();
-        const auto populated = dxmt9::argbuf_hybrid::openArgbuf(
-            ctx.queue, encoderResource, encodeChunkSeqId);
-        if (populated) {
-          // Constant-buffer entries (VsConsts/PsConsts/FfpVsConsts/
-          // FfpPsConsts) are populated lazily from encodeDraw's dirty
-          // path on the first draw. Texture/sampler resources remain on
-          // the direct fragment binding lane for texture-bound Stage 2
-          // draws, so encoder open only binds the argbuf storage.
-          // Bind slot 30 — vertex + fragment. The render encoder reads
-          // from this single argbuf for the duration of the pass; the
-          // slot-30 bind is the only argbuf-related bind on the encoder
-          // (per design.md §11.2; setVertexBytes(slot=5) / vertex stream
-          // slot 1 stay direct).
-          activeRenderEncoder.setVertexBuffer(populated.storage,
-                                              populated.offset,
-                                              dxmt9::shaders::kArgbufHybridBindSlot);
-          activeRenderEncoder.setFragmentBuffer(populated.storage,
+        const bool directCbufLane =
+            !resourceArrayLane && dxmt9::pipeline::argbufDirectCbufEnabled();
+        if (directCbufLane) {
+          activePassUsesArgbufHybrid = true;
+          activePassUsesArgbufDirectCbuf = true;
+          traceRenderPassProgress("argbuf-direct-cbuf", lookaheadStartIndex,
+                                  clear.has_value());
+        } else {
+          auto& encoderResource = resourceArrayLane
+                                      ? ctx.queue.resourceArrayEncoderResource()
+                                      : ctx.queue.argbufEncoderResource();
+          traceRenderPassProgress("before-argbuf-open", lookaheadStartIndex,
+                                  clear.has_value());
+          const auto populated = dxmt9::argbuf_hybrid::openArgbufWithCompletedSeqId(
+              ctx.queue, encoderResource, encodeChunkSeqId,
+              ctx.transientCompletedSeqId);
+          traceRenderPassProgress(populated ? "after-argbuf-open-ok"
+                                            : "after-argbuf-open-empty",
+                                  lookaheadStartIndex, clear.has_value());
+          if (populated) {
+            // Constant-buffer entries (VsConsts/PsConsts/FfpVsConsts/
+            // FfpPsConsts) are populated lazily from encodeDraw's dirty
+            // path on the first draw. Texture/sampler resources remain on
+            // the direct fragment binding lane for texture-bound Stage 2
+            // draws, so encoder open only binds the argbuf storage.
+            // Bind slot 30 — vertex + fragment. The render encoder reads
+            // from this single argbuf for the duration of the pass; the
+            // slot-30 bind is the only argbuf-related bind on the encoder
+            // (per design.md §11.2; setVertexBytes(slot=5) / vertex stream
+            // slot 1 stay direct).
+            traceRenderPassProgress("before-argbuf-bind", lookaheadStartIndex,
+                                    clear.has_value());
+            activeRenderEncoder.setVertexBuffer(populated.storage,
                                                 populated.offset,
                                                 dxmt9::shaders::kArgbufHybridBindSlot);
-          // R-BACK-12.25 — upload accounting. `populated.length` is the
-          // argbuf descriptor-table size (matches the encoder's reported
-          // encodedLength); per-frequency cbuf bytes are bumped by
-          // updateDirtyArgbufRegions on the first draw.
-          perf::countArgbufHybridBytes(populated.length);
-          activeEncoderBreakdown.addArgbufTableBytes(populated.length);
-          activePassUsesArgbufHybrid = true;
-          activePassUsesArgbufResourceArray = resourceArrayLane;
-          activeArgbufStorage = populated.storage;
-          activeArgbufOffset = populated.offset;
-        } else {
-          // Selector chose Stage 2 but the encoder resource didn't init
-          // (sentinel-null device, test fixture, or transient ring
-          // exhaustion). R-BACK-12.22 sentence 2: never mid-pass switch
-          // — the pass commits to Stage 1 for its lifetime. Fallback
-          // counter bumps so a regression that turns this from "rare"
-          // into "common" surfaces.
-          perf::countArgbufHybridFallback();
+            activeRenderEncoder.setFragmentBuffer(populated.storage,
+                                                  populated.offset,
+                                                  dxmt9::shaders::kArgbufHybridBindSlot);
+            traceRenderPassProgress("after-argbuf-bind", lookaheadStartIndex,
+                                    clear.has_value());
+            // R-BACK-12.25 — upload accounting. `populated.length` is the
+            // argbuf descriptor-table size (matches the encoder's reported
+            // encodedLength); per-frequency cbuf bytes are bumped by
+            // updateDirtyArgbufRegions on the first draw.
+            perf::countArgbufHybridBytes(populated.length);
+            activeEncoderBreakdown.addArgbufTableBytes(populated.length);
+            activePassUsesArgbufHybrid = true;
+            activePassUsesArgbufResourceArray = resourceArrayLane;
+            activePassUsesArgbufDirectCbuf = false;
+            activeArgbufStorage = populated.storage;
+            activeArgbufOffset = populated.offset;
+          } else {
+            // Selector chose Stage 2 but the encoder resource didn't init
+            // (sentinel-null device, test fixture, or transient ring
+            // exhaustion). R-BACK-12.22 sentence 2: never mid-pass switch
+            // — the pass commits to Stage 1 for its lifetime. Fallback
+            // counter bumps so a regression that turns this from "rare"
+            // into "common" surfaces.
+            perf::countArgbufHybridFallback();
+          }
         }
       } else {
         perf::countStage1Encoder();
@@ -14188,8 +14797,11 @@ std::optional<core::metalqueue::QueueSubmissionRecord> encodeChunk(
     // payload hash.
     lastArgbufPayloadHash.reset();
     lastArgbufPayloadDeltaKey.reset();
+    lastArgbufPayloadDeltaComponentKey.reset();
+    lastArgbufPayloadDeltaPayload.reset();
     argbufCbufCache.reset();
     assertEncoderLifecycleInvariant();
+    traceRenderPassProgress("end", lookaheadStartIndex, clear.has_value());
   };
 
   auto assertHelperEncoderPrecondition = [&] {
@@ -14284,13 +14896,34 @@ std::optional<core::metalqueue::QueueSubmissionRecord> encodeChunk(
     splitMidChunk();
   };
 
+  using Kind = core::MetalCommandKind;
   auto encodeDrawRunCommand = [&](std::size_t commandIndex,
                                   const core::MetalCommandView& command) {
     if (!command.drawState.hot || !command.drawState.shaderLayout ||
-        !command.drawUniformPayload ||
-        core::drawRunDrawCount(command) == 0) return;
+        !command.drawRunRecord ||
+        core::drawRunDrawCount(command) == 0) {
+      traceEncodeCommand("drawrun.skip-invalid", commandIndex, Kind::DrawRun,
+                         command);
+      return;
+    }
+    traceEncodeCommand("drawrun.enter", commandIndex, Kind::DrawRun, command);
+    // The compact uniform materializer overwrites every field before returning
+    // this scratch pointer; avoid a full DrawUniformPayload zero-fill here.
+    core::DrawUniformPayload commandUniformScratch;
+    traceEncodeCommand("drawrun.before-command-uniform", commandIndex,
+                       Kind::DrawRun, command);
+    const auto* commandUniformPayload = core::drawRunUniformPayloadForHandle(
+        command, command.drawRunRecord->uniformHandle, commandUniformScratch,
+        perf::DrawUniformPayloadMaterializeSite::DrawEncoderCommand);
+    if (!commandUniformPayload) {
+      traceEncodeCommand("drawrun.skip-no-command-uniform", commandIndex,
+                         Kind::DrawRun, command);
+      return;
+    }
+    traceEncodeCommand("drawrun.after-command-uniform", commandIndex,
+                       Kind::DrawRun, command);
     auto stateView = command.drawState;
-    stateView.uniforms = command.drawUniformPayload;
+    stateView.uniforms = commandUniformPayload;
     const auto& hot = *stateView.hot;
     const auto drawItems =
         command.drawItems.empty() ? command.drawParams : command.drawItems;
@@ -14308,7 +14941,11 @@ std::optional<core::metalqueue::QueueSubmissionRecord> encodeChunk(
     // per-DrawParam emits. FlatDrawStateKey is the hot-path decision
     // object for skipping base-state rebinding across compatible
     // Draw/DrawRun records on the same Metal render encoder.
+    traceEncodeCommand("drawrun.before-flush-blit", commandIndex,
+                       Kind::DrawRun, command);
     flushBlit();
+    traceEncodeCommand("drawrun.after-flush-blit", commandIndex,
+                       Kind::DrawRun, command);
     assertEncoderLifecycleInvariant();
     const auto drawKey = makeAttachmentKey(hot);
     const auto drawReadHazard = makeDrawReadHazard(stateView);
@@ -14453,14 +15090,20 @@ std::optional<core::metalqueue::QueueSubmissionRecord> encodeChunk(
     const auto recordPayloadArena = core::drawRunPayloadBytes(command);
     bool anyUpData = false;
     bool hasUpPayloadRanges = false;
+    traceEncodeCommand("drawrun.before-up-prescan", commandIndex,
+                       Kind::DrawRun, command);
     for (const auto& param : drawItems) {
       if (!param.userVertexRange.empty() || !param.userIndexRange.empty()) {
         hasUpPayloadRanges = true;
         break;
       }
     }
+    traceEncodeCommand("drawrun.after-up-prescan", commandIndex,
+                       Kind::DrawRun, command);
     std::vector<CommandQueue::TransientBufferSlice> upSlices;
     if (hasUpPayloadRanges) {
+      traceEncodeCommand("drawrun.before-up-upload", commandIndex,
+                         Kind::DrawRun, command);
       std::vector<std::span<const std::byte>> upPayloads;
       upPayloads.reserve(drawCount * 2);
       for (const auto& param : drawItems) {
@@ -14474,7 +15117,9 @@ std::optional<core::metalqueue::QueueSubmissionRecord> encodeChunk(
                                 indexBytes.size());
       }
       if (anyUpData) {
-        upSlices = ctx.queue.uploadTransientBufferBatch(upPayloads, /*alignment=*/16, slot.seqId);
+        upSlices = ctx.queue.uploadTransientBufferBatchWithCompletedSeqId(
+            upPayloads, /*alignment=*/16, slot.seqId,
+            ctx.transientCompletedSeqId);
         if (!upSlices.empty()) {
           for (const auto& param : drawItems) {
             const auto vertexBytes = drawParamVertexBytes(param, recordPayloadArena);
@@ -14488,6 +15133,8 @@ std::optional<core::metalqueue::QueueSubmissionRecord> encodeChunk(
           }
         }
       }
+      traceEncodeCommand("drawrun.after-up-upload", commandIndex,
+                         Kind::DrawRun, command);
     }
 
     // encodeDraw receives the per-draw fields through DrawParam while
@@ -14496,10 +15143,21 @@ std::optional<core::metalqueue::QueueSubmissionRecord> encodeChunk(
     // bind only on dirty (R-BACK-12.5/12.8); DrawVolatile is pushed
     // via setVertexBytes per draw with no slab traffic.
     for (std::size_t i = 0; i < drawCount; ++i) {
+      traceEncodeCommand("drawrun.draw-begin", commandIndex,
+                         Kind::DrawRun, command);
       const auto& param = drawItems[i];
-      const auto* drawUniformPayload =
-          core::drawRunUniformPayloadForParam(command, param);
+      core::DrawUniformPayload drawUniformScratch;
+      const bool usesCommandUniform =
+          !param.uniformHandle.valid() ||
+          param.uniformHandle == command.drawRunRecord->uniformHandle;
+      const auto* drawUniformPayload = usesCommandUniform
+          ? commandUniformPayload
+          : core::drawRunUniformPayloadForParam(
+                command, param, drawUniformScratch,
+                perf::DrawUniformPayloadMaterializeSite::DrawEncoderParam);
       if (!drawUniformPayload) {
+        traceEncodeCommand("drawrun.draw-skip-no-uniform", commandIndex,
+                           Kind::DrawRun, command);
         continue;
       }
       PreUploadedDrawData preData{};
@@ -14529,23 +15187,47 @@ std::optional<core::metalqueue::QueueSubmissionRecord> encodeChunk(
       }
       drawStateView.uniforms = drawUniformPayload;
       const auto drawArgbufPayloadDeltaKey =
-          makeArgbufPayloadDeltaKey(*drawUniformPayload);
+          makeArgbufPayloadDeltaKey(drawStateView);
       const u64 drawArgbufPayloadHash = drawUniformPayload->hash;
       const bool argbufPayloadChanged =
           !lastArgbufPayloadHash.has_value() ||
           *lastArgbufPayloadHash != drawArgbufPayloadHash;
+      const bool activePassUsesArgbufTable =
+          activePassUsesArgbufHybrid && !activePassUsesArgbufDirectCbuf;
       const bool reopenArgbuf =
-          activePassUsesArgbufResourceArray ||
-          argbufPayloadChanged;
-      if (activePassUsesArgbufHybrid && argbufPayloadDeltaPerfEnabled()) {
+          activePassUsesArgbufTable &&
+          (activePassUsesArgbufResourceArray || argbufPayloadChanged);
+      const bool argbufVsPayloadSourceChanged =
+          lastArgbufPayloadDeltaKey.has_value() &&
+          lastArgbufPayloadDeltaKey->vertexConstantsHash !=
+              drawArgbufPayloadDeltaKey.vertexConstantsHash;
+      const bool argbufPsPayloadSourceChanged =
+          lastArgbufPayloadDeltaKey.has_value() &&
+          lastArgbufPayloadDeltaKey->pixelConstantsHash !=
+              drawArgbufPayloadDeltaKey.pixelConstantsHash;
+      const bool argbufPayloadDeltaPerf =
+          activePassUsesArgbufHybrid && argbufPayloadDeltaPerfEnabled();
+      std::optional<ArgbufPayloadDeltaComponentKey>
+          drawArgbufPayloadDeltaComponentKey;
+      if (argbufPayloadDeltaPerf) {
+        drawArgbufPayloadDeltaComponentKey =
+            makeArgbufPayloadDeltaComponentKey(*drawUniformPayload);
         perf::countEncodeDrawArgbufPayloadDeltaProbeCalls(1u);
+        const bool cbufOnlyReopen =
+            reopenArgbuf && !activePassUsesArgbufResourceArray;
         if (activePassUsesArgbufResourceArray && reopenArgbuf) {
           perf::countEncodeDrawArgbufPayloadDeltaReopenResourceArray(1u);
+        }
+        if (cbufOnlyReopen) {
+          perf::countEncodeDrawArgbufPayloadDeltaReopenCbufOnly(1u);
         }
         if (!lastArgbufPayloadDeltaKey.has_value()) {
           perf::countEncodeDrawArgbufPayloadDeltaFirst(1u);
           if (reopenArgbuf) {
             perf::countEncodeDrawArgbufPayloadDeltaReopenFirst(1u);
+          }
+          if (cbufOnlyReopen) {
+            perf::countEncodeDrawArgbufPayloadDeltaReopenCbufOnlyFirst(1u);
           }
         } else if (lastArgbufPayloadDeltaKey->hash ==
                    drawArgbufPayloadDeltaKey.hash) {
@@ -14557,6 +15239,10 @@ std::optional<core::metalqueue::QueueSubmissionRecord> encodeChunk(
           perf::countEncodeDrawArgbufPayloadDeltaChanged(1u);
           if (reopenArgbuf) {
             perf::countEncodeDrawArgbufPayloadDeltaReopenPayloadChanged(1u);
+          }
+          if (cbufOnlyReopen) {
+            perf::countEncodeDrawArgbufPayloadDeltaReopenCbufOnlyPayloadChanged(
+                1u);
           }
           const bool vsChanged =
               lastArgbufPayloadDeltaKey->vertexConstantsHash !=
@@ -14575,6 +15261,79 @@ std::optional<core::metalqueue::QueueSubmissionRecord> encodeChunk(
           }
           if (!vsChanged && !psChanged) {
             perf::countEncodeDrawArgbufPayloadDeltaChangedNonConstOnly(1u);
+          }
+          if (lastArgbufPayloadDeltaComponentKey.has_value() &&
+              drawArgbufPayloadDeltaComponentKey.has_value()) {
+            const auto& lastComponents =
+                *lastArgbufPayloadDeltaComponentKey;
+            const auto& drawComponents =
+                *drawArgbufPayloadDeltaComponentKey;
+            if (vsChanged) {
+              if (lastComponents.vsFloatHash != drawComponents.vsFloatHash) {
+                perf::countEncodeDrawArgbufPayloadDeltaChangedVsFloat(1u);
+                if (lastArgbufPayloadDeltaPayload.has_value()) {
+                  const auto stats =
+                      measureArgbufPayloadChangedPrefix(
+                          lastArgbufPayloadDeltaPayload->vsConst.float4,
+                          lastArgbufPayloadDeltaPayload->vertexFloatConstantCount,
+                          drawUniformPayload->vsConst.float4,
+                          drawUniformPayload->vertexFloatConstantCount);
+                  perf::countEncodeDrawArgbufPayloadDeltaChangedVsFloatRegs(
+                      stats.changed);
+                  perf::countEncodeDrawArgbufPayloadDeltaChangedVsFloatRegsMax(
+                      stats.changed);
+                  perf::countEncodeDrawArgbufPayloadDeltaChangedVsFloatPrefixRegs(
+                      stats.prefix);
+                  perf::countEncodeDrawArgbufPayloadDeltaChangedVsFloatPrefixRegsMax(
+                      stats.prefix);
+                  perf::countEncodeDrawArgbufPayloadDeltaChangedVsFloatSpanRegs(
+                      stats.span);
+                  perf::countEncodeDrawArgbufPayloadDeltaChangedVsFloatSpanRegsMax(
+                      stats.span);
+                  if (stats.fullPrefix) {
+                    perf::countEncodeDrawArgbufPayloadDeltaChangedVsFloatFullPrefix(
+                        1u);
+                    perf::countEncodeDrawArgbufPayloadDeltaChangedVsFloatFullPrefixRegs(
+                        stats.changed);
+                  }
+                  if (argbufPayloadDeltaSourcePerf) {
+                    argbufPayloadDeltaSourceAttribution.record(
+                        drawStateView, stats);
+                  }
+                  recordArgbufPayloadChangedVsFloatRegBucket(stats.changed);
+                }
+              }
+              if (lastComponents.vsIntHash != drawComponents.vsIntHash) {
+                perf::countEncodeDrawArgbufPayloadDeltaChangedVsInt(1u);
+              }
+              if (lastComponents.vsBoolHash != drawComponents.vsBoolHash) {
+                perf::countEncodeDrawArgbufPayloadDeltaChangedVsBool(1u);
+              }
+            }
+            if (psChanged) {
+              if (lastComponents.psFloatHash != drawComponents.psFloatHash) {
+                perf::countEncodeDrawArgbufPayloadDeltaChangedPsFloat(1u);
+                if (lastArgbufPayloadDeltaPayload.has_value()) {
+                  const auto stats =
+                      measureArgbufPayloadChangedPrefix(
+                          lastArgbufPayloadDeltaPayload->psConst.float4,
+                          lastArgbufPayloadDeltaPayload->pixelFloatConstantCount,
+                          drawUniformPayload->psConst.float4,
+                          drawUniformPayload->pixelFloatConstantCount);
+                  perf::countEncodeDrawArgbufPayloadDeltaChangedPsFloatRegs(
+                      stats.changed);
+                  perf::countEncodeDrawArgbufPayloadDeltaChangedPsFloatRegsMax(
+                      stats.changed);
+                  recordArgbufPayloadChangedPsFloatRegBucket(stats.changed);
+                }
+              }
+              if (lastComponents.psIntHash != drawComponents.psIntHash) {
+                perf::countEncodeDrawArgbufPayloadDeltaChangedPsInt(1u);
+              }
+              if (lastComponents.psBoolHash != drawComponents.psBoolHash) {
+                perf::countEncodeDrawArgbufPayloadDeltaChangedPsBool(1u);
+              }
+            }
           }
         }
       }
@@ -14601,6 +15360,8 @@ std::optional<core::metalqueue::QueueSubmissionRecord> encodeChunk(
       const u64 drawTexture0 = drawStateView.hot->textures[0]
           ? drawStateView.hot->textures[0].value
           : 0ull;
+      traceEncodeCommand("drawrun.before-encode-draw", commandIndex,
+                         Kind::DrawRun, command);
       if (encodeDraw(ctx, commandBuffer, activeRenderEncoder, drawStateView, slot.seqId,
                      /*skipBaseStateBind=*/skipBaseStateBind,
                      anyUpData ? &preData : nullptr,
@@ -14611,7 +15372,10 @@ std::optional<core::metalqueue::QueueSubmissionRecord> encodeChunk(
                      /*tileFfpMode=*/activePassUsesTileFfp,
                      /*argbufHybridMode=*/activePassUsesArgbufHybrid,
                      /*argbufResourceArray=*/activePassUsesArgbufResourceArray,
+                     /*argbufDirectCbufMode=*/activePassUsesArgbufDirectCbuf,
                      /*reopenArgbufHybrid=*/reopenArgbuf,
+                     /*argbufVsPayloadSourceChanged=*/argbufVsPayloadSourceChanged,
+                     /*argbufPsPayloadSourceChanged=*/argbufPsPayloadSourceChanged,
                      /*bindingOverridePrefetchedPsoCompatible=*/bindingOverridePrefetchedPsoCompatible,
                      renderPsoHandle,
                      tilePsoHandle,
@@ -14626,10 +15390,18 @@ std::optional<core::metalqueue::QueueSubmissionRecord> encodeChunk(
                      &argbufCbufCache,
                      &activeStreamIbStaging,
                      activeVisibilityScout ? &*activeVisibilityScout : nullptr)) {
+        traceEncodeCommand("drawrun.after-encode-draw-ok", commandIndex,
+                           Kind::DrawRun, command);
         activeDrawStateKey = drawStateView.hot->key;
         activeDrawStateUsesPrefetchedPsoLayout = !overrideNeedsBaseStateBind;
         lastArgbufPayloadHash = drawArgbufPayloadHash;
         lastArgbufPayloadDeltaKey = drawArgbufPayloadDeltaKey;
+        if (argbufPayloadDeltaPerf &&
+            drawArgbufPayloadDeltaComponentKey.has_value()) {
+          lastArgbufPayloadDeltaComponentKey =
+              *drawArgbufPayloadDeltaComponentKey;
+          lastArgbufPayloadDeltaPayload = *drawUniformPayload;
+        }
         if (colorAttachmentDumpAfterDrawWantsSplit(
                 activeColorAttachmentDump,
                 drawStateView,
@@ -14647,8 +15419,12 @@ std::optional<core::metalqueue::QueueSubmissionRecord> encodeChunk(
                             renderPsoHandle);
           }
         }
+      } else {
+        traceEncodeCommand("drawrun.after-encode-draw-false", commandIndex,
+                           Kind::DrawRun, command);
       }
     }
+    traceEncodeCommand("drawrun.end", commandIndex, Kind::DrawRun, command);
     commandBufferHasWork = true;
   };
 
@@ -14679,17 +15455,21 @@ std::optional<core::metalqueue::QueueSubmissionRecord> encodeChunk(
     }
   };
 
-  using Kind = core::MetalCommandKind;
   if (slot.drawOnlyCommandStream()) {
     for (std::size_t commandIndex = 0; commandIndex < slot.commandCount(); ++commandIndex) {
       const auto command = slot.drawRunCommandAt(commandIndex);
+      traceEncodeCommand("begin", commandIndex, Kind::DrawRun, command);
       // TLA+: EncoderLifecycle / opCount observes command replay progress.
       encodeDrawRunCommand(commandIndex, command);
+      traceEncodeCommand("after-encode", commandIndex, Kind::DrawRun, command);
+      traceEncodeCommand("before-split-policy", commandIndex, Kind::DrawRun, command);
       applyPerRecordSplitPolicy(/*presentRecord=*/false);
+      traceEncodeCommand("end", commandIndex, Kind::DrawRun, command);
     }
   } else {
     for (std::size_t commandIndex = 0; commandIndex < slot.commandCount(); ++commandIndex) {
       const auto command = slot.commandAt(commandIndex);
+      traceEncodeCommand("begin", commandIndex, command.kind, command);
       // TLA+: EncoderLifecycle / opCount observes command replay progress.
       switch (command.kind) {
       case Kind::Clear: {
@@ -14917,13 +15697,22 @@ std::optional<core::metalqueue::QueueSubmissionRecord> encodeChunk(
         break;
       }
       }
+      traceEncodeCommand("after-encode", commandIndex, command.kind, command);
+      traceEncodeCommand("before-split-policy", commandIndex, command.kind, command);
       applyPerRecordSplitPolicy(command.kind == Kind::Present);
+      traceEncodeCommand("end", commandIndex, command.kind, command);
     }
   }
 
+  traceEncodeStage("before-final-flush-pending-clear");
   flushPendingClear();
+  traceEncodeStage("after-final-flush-pending-clear");
+  traceEncodeStage("before-final-flush-render");
   flushRender(perf::EncoderSplitReason::Final);
+  traceEncodeStage("after-final-flush-render");
+  traceEncodeStage("before-final-flush-blit");
   flushBlit();
+  traceEncodeStage("after-final-flush-blit");
 
   // R-BACK-2.29..2.32 — fold the chunk's local sub-CB chain length into
   // chunkSubCBCountMax. The chain length includes every mid-chunk commit
@@ -14935,6 +15724,9 @@ std::optional<core::metalqueue::QueueSubmissionRecord> encodeChunk(
   }
 
   const u64 seqId = slot.seqId;
+  if (argbufPayloadDeltaSourcePerf) {
+    argbufPayloadDeltaSourceAttribution.emit(seqId);
+  }
   core::metalqueue::QueueSubmissionRecord record;
   record.commandBuffer = std::move(commandBuffer);
   record.commandBufferChainLength = perChunkSubCBCount + 1;
@@ -14950,6 +15742,7 @@ std::optional<core::metalqueue::QueueSubmissionRecord> encodeChunk(
   record.renderEncoderGpuSamples = std::move(renderEncoderGpuSamples);
   record.postCommitCallbacks = std::move(postCommitCallbacks);
   record.completionCallbacks = std::move(completionCallbacks);
+  traceEncodeStage("return-record");
   return record;
   }  // @autoreleasepool
 }

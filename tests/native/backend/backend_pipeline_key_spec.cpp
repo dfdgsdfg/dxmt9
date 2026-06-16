@@ -14,6 +14,7 @@
 #include "../../../src/dxmt9/dxmt9_ffp_shaders.hpp"
 #include "../../../src/dxmt9/dxmt9_format_convert.hpp"
 #include "../../../src/dxmt9/dxmt9_pipeline_cache.hpp"
+#include "../../../src/dxmt9/dxmt9_resource_pool.hpp"
 #include "../../../src/dxmt9/dxmt9_shader_sources.hpp"
 
 using namespace dxmt9::core;
@@ -496,7 +497,8 @@ void testShaderVariantKeyCarriesSourceIdentity() {
       /*debugFfpAlpha=*/false,
       /*probeDropVSOutPointSize=*/false,
       /*probePositionOnlyVSOut=*/false,
-      /*probeHalfVSOut=*/false);
+      /*probeHalfVSOut=*/false,
+      /*probeFragmentlessKeepVSOut=*/false);
   const auto debugUv = dxmt9::pipeline::makeShaderSourceDebugEnvKey(
       /*trimUnusedVaryings=*/true,
       /*trimVertexTemps=*/true,
@@ -515,7 +517,8 @@ void testShaderVariantKeyCarriesSourceIdentity() {
       /*debugFfpAlpha=*/false,
       /*probeDropVSOutPointSize=*/true,
       /*probePositionOnlyVSOut=*/true,
-      /*probeHalfVSOut=*/true);
+      /*probeHalfVSOut=*/true,
+      /*probeFragmentlessKeepVSOut=*/true);
   check(debugOff != debugUv, "pure debug env key responds to source-affecting values");
 
   auto debugEnvChanged = base;
@@ -847,6 +850,52 @@ void testFragmentlessDepthOnlyVariantBit() {
   checkEq(contained->fragmentHash, 0u, "fragmentless depth-only uses zero fragment hash");
 }
 
+void testResolveDrawPipelineStateCarriesDirectCbufStage2bBit() {
+  DrawDesc desc{};
+  auto fixture = makeFlatDrawFixture(desc);
+  BackendLimits limits{};
+  dxmt9::resources::Pool pool{};
+  dxmt9::pipeline::Cache cache;
+
+  const auto stage2b = cache.resolveDrawPipelineState(
+      limits,
+      pool,
+      fixture.view(),
+      /*tileFfpMode=*/false,
+      /*argbufHybridMode=*/true,
+      /*argbufResourceArray=*/false,
+      /*argbufDirectCbufMode=*/true);
+  check(stage2b.key.argbufHybridMode,
+        "Stage 2b resolve keeps argbuf family bit");
+  check(stage2b.key.argbufDirectCbufMode,
+        "Stage 2b resolve stamps direct-cbuf key bit");
+  check(!stage2b.key.argbufResourceArray,
+        "Stage 2b resolve is not a resource-array variant");
+  check(stage2b.shaderSource.argbufHybridMode,
+        "Stage 2b source keeps argbuf family bit");
+  check(stage2b.shaderSource.argbufDirectCbufMode,
+        "Stage 2b source emits direct cbuf bindings");
+  check(!stage2b.shaderSource.argbufResourceArray,
+        "Stage 2b source does not emit resource arrays");
+
+  const auto resourceArrayDominates = cache.resolveDrawPipelineState(
+      limits,
+      pool,
+      fixture.view(),
+      /*tileFfpMode=*/false,
+      /*argbufHybridMode=*/true,
+      /*argbufResourceArray=*/true,
+      /*argbufDirectCbufMode=*/true);
+  check(resourceArrayDominates.key.argbufResourceArray,
+        "resource-array resolve keeps resource-array key bit");
+  check(!resourceArrayDominates.key.argbufDirectCbufMode,
+        "resource-array resolve suppresses direct-cbuf key bit");
+  check(resourceArrayDominates.shaderSource.argbufResourceArray,
+        "resource-array source keeps resource-array bit");
+  check(!resourceArrayDominates.shaderSource.argbufDirectCbufMode,
+        "resource-array source suppresses direct-cbuf bit");
+}
+
 void testSrgbCompatiblePixelFormatConversion() {
   BackendLimits limits{};
 
@@ -924,6 +973,7 @@ int main() {
     testAlphaToCoverageRenderStateHack();
     testSamplerLodBiasVariantBit();
     testFragmentlessDepthOnlyVariantBit();
+    testResolveDrawPipelineStateCarriesDirectCbufStage2bBit();
     testSrgbCompatiblePixelFormatConversion();
     testUnsupportedDrawTranslatorFailureReturnsEmptyPipelineFuture();
   } catch (const TestFailure& failure) {

@@ -117,18 +117,15 @@ install_file() {
   printf 'installed %s -> %s\n' "$source" "$target"
 }
 
-ensure_meson_postprocess() {
-  local artifact build_root rel_target parent
+find_meson_build_root() {
+  local artifact build_root parent
   artifact=$1
-
-  if [[ ! -f "$artifact" ]]; then
-    return 0
-  fi
 
   build_root=$(dirname -- "$artifact")
   while [[ "$build_root" != "/" ]]; do
     if [[ -f "$build_root/build.ninja" ]]; then
-      break
+      printf '%s\n' "$build_root"
+      return 0
     fi
     parent=$(dirname -- "$build_root")
     if [[ "$parent" == "$build_root" ]]; then
@@ -137,7 +134,18 @@ ensure_meson_postprocess() {
     build_root=$parent
   done
 
-  if [[ ! -f "$build_root/build.ninja" ]]; then
+  return 1
+}
+
+ensure_meson_postprocess() {
+  local artifact build_root rel_target
+  artifact=$1
+
+  if [[ ! -f "$artifact" ]]; then
+    return 0
+  fi
+
+  if ! build_root=$(find_meson_build_root "$artifact"); then
     return 0
   fi
 
@@ -159,22 +167,10 @@ ensure_meson_postprocess() {
 }
 
 ensure_meson_artifact() {
-  local artifact build_root rel_target parent
+  local artifact build_root rel_target
   artifact=$1
 
-  build_root=$(dirname -- "$artifact")
-  while [[ "$build_root" != "/" ]]; do
-    if [[ -f "$build_root/build.ninja" ]]; then
-      break
-    fi
-    parent=$(dirname -- "$build_root")
-    if [[ "$parent" == "$build_root" ]]; then
-      break
-    fi
-    build_root=$parent
-  done
-
-  if [[ ! -f "$build_root/build.ninja" ]]; then
+  if ! build_root=$(find_meson_build_root "$artifact"); then
     return 0
   fi
 
@@ -193,6 +189,57 @@ ensure_meson_artifact() {
   fi
 
   ninja -C "$build_root" "$rel_target"
+}
+
+ensure_winemetal_unix_fixup() {
+  local artifact build_root rel_artifact rel_dir rel_target
+  artifact=$1
+
+  if ! build_root=$(find_meson_build_root "$artifact"); then
+    return 0
+  fi
+
+  rel_artifact=${artifact#"$build_root"/}
+  if [[ "$rel_artifact" == "$artifact" ]]; then
+    return 0
+  fi
+
+  rel_dir=$(dirname -- "$rel_artifact")
+  rel_target="$rel_dir/winemetal_unix_install_name_fixup.stamp"
+  if ! rg -q --fixed-strings "build $rel_target:" "$build_root/build.ninja"; then
+    return 0
+  fi
+
+  if ! command -v ninja >/dev/null 2>&1; then
+    printf 'error: ninja is required to run Meson fixup target: %s\n' "$rel_target" >&2
+    exit 1
+  fi
+
+  ninja -C "$build_root" "$rel_target"
+}
+
+audit_winemetal_unix_install_names() {
+  local artifact bad_deps
+  artifact=$1
+
+  if [[ "$(uname -s)" != "Darwin" ]]; then
+    return 0
+  fi
+  if ! command -v otool >/dev/null 2>&1; then
+    return 0
+  fi
+
+  bad_deps=$(
+    otool -L "$artifact" |
+      awk 'NR > 1 { print $1 }' |
+      grep -E '^(winemac|ntdll)\.so$' || true
+  )
+  if [[ -n "$bad_deps" ]]; then
+    printf 'error: %s still has bare Wine unix deps after fixup:\n%s\n' \
+      "$artifact" "$bad_deps" >&2
+    printf 'run the Meson target winemetal_unix_install_name_fixup before staging.\n' >&2
+    exit 1
+  fi
 }
 
 
@@ -325,13 +372,16 @@ fi
 if [[ -n "$wow64_runtime_pe_build_dir" ]]; then
   ensure_meson_postprocess "$wow64_runtime_pe_build_dir/winemetal.dll"
 fi
-ensure_meson_artifact "$unix_build_dir/winemetal/unix/winemetal.so"
+winemetal_unix_so="$unix_build_dir/winemetal/unix/winemetal.so"
+ensure_meson_artifact "$winemetal_unix_so"
+ensure_winemetal_unix_fixup "$winemetal_unix_so"
+audit_winemetal_unix_install_names "$winemetal_unix_so"
 
 install_file "$pe_build_dir/d3d9.dll" "$system32_dir/d3d9.dll"
 install_file "$pe_build_dir/d3d9.dll" "$windows_runtime_dir/d3d9.dll"
 install_file "$runtime_pe_build_dir/winemetal.dll" "$system32_dir/winemetal.dll"
 install_file "$runtime_pe_build_dir/winemetal.dll" "$windows_runtime_dir/winemetal.dll"
-install_file "$unix_build_dir/winemetal/unix/winemetal.so" "$unix_runtime_dir/winemetal.so"
+install_file "$winemetal_unix_so" "$unix_runtime_dir/winemetal.so"
 install_file "$mingw_bin_dir/libc++.dll" "$system32_dir/libc++.dll"
 install_file "$mingw_bin_dir/libunwind.dll" "$system32_dir/libunwind.dll"
 

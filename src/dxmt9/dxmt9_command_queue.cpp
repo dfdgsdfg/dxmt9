@@ -9,6 +9,7 @@
 #include "dxmt9_compat.hpp"
 #include "dxmt9_draw_encoder.hpp"
 #include "dxmt9_draw_state.hpp"
+#include "dxmt9_ffp_shaders.hpp"
 #include "dxmt9_perf_counters.hpp"
 #include "dxmt9_pipeline_cache.hpp"
 #include "dxmt9_presenter.hpp"
@@ -18,6 +19,7 @@
 #include "dxmt9_ring_arena.hpp"
 
 #include <algorithm>
+#include <array>
 #include <atomic>
 #include <chrono>
 #include <cstdarg>
@@ -25,6 +27,8 @@
 #include <cstdlib>
 #include <cstring>
 #include <limits>
+#include <memory>
+#include <sstream>
 #include <utility>
 #include <vector>
 
@@ -90,6 +94,100 @@ bool encodeSlotPsoPrefetchDisabled() {
 
 bool encodeSlotPsoPrefetchEnabled() {
   return !publishPsoPrefetchEnabled() && !encodeSlotPsoPrefetchDisabled();
+}
+
+bool unpublishedSlotPsoPrefetchEnabled() {
+  static const bool enabled = [] {
+    const char* env = std::getenv("DXMT9_PREFETCH_UNPUBLISHED_SLOT_PSO");
+    return env && env[0] != '\0' && std::strcmp(env, "0") != 0;
+  }();
+  return enabled;
+}
+
+void traceEncodeFnStage(const char* stage,
+                        std::size_t slotIndex,
+                        const core::ChunkSlot& slot) {
+  if (!core::metalqueue::queueTraceEnabled()) {
+    return;
+  }
+  std::ostringstream out;
+  out << "[dxmt9-encodefn]"
+      << " stage=" << stage
+      << " seq=" << static_cast<unsigned long long>(slot.seqId)
+      << " slot=" << slotIndex
+      << " commands=" << slot.commandCount()
+      << " prefetch_sealed=" << (slot.prefetchedPipelinesSealed() ? 1 : 0);
+  core::metalqueue::emitQueueTraceLine(out.str());
+}
+
+void tracePsoPrefetchStage(const char* stage,
+                           const core::ChunkSlot& slot,
+                           std::size_t commandIndex = std::numeric_limits<std::size_t>::max()) {
+  if (!core::metalqueue::queueTraceEnabled()) {
+    return;
+  }
+  std::ostringstream out;
+  out << "[dxmt9-pso-prefetch]"
+      << " stage=" << stage
+      << " seq=" << static_cast<unsigned long long>(slot.seqId)
+      << " commands=" << slot.commandCount();
+  if (commandIndex != std::numeric_limits<std::size_t>::max()) {
+    out << " command=" << commandIndex;
+  }
+  core::metalqueue::emitQueueTraceLine(out.str());
+}
+
+bool encodeSlotPsoProbeKeyMemoDisabled() {
+  static const bool disabled = [] {
+    const char* env = std::getenv("DXMT9_DISABLE_ENCODE_SLOT_PSO_PROBE_KEY_MEMO");
+    return env && env[0] != '\0' && std::strcmp(env, "0") != 0;
+  }();
+  return disabled;
+}
+
+bool encodeSlotPsoSemanticMemoDisabled() {
+  static const bool disabled = [] {
+    const char* env = std::getenv("DXMT9_DISABLE_ENCODE_SLOT_PSO_SEMANTIC_MEMO");
+    return env && env[0] != '\0' && std::strcmp(env, "0") != 0;
+  }();
+  return disabled;
+}
+
+bool encodeSlotPsoSemanticSplitEnabled() {
+  static const bool enabled = [] {
+    const char* env =
+        std::getenv("DXMT9_PERF_ENCODE_SLOT_PSO_SEMANTIC_SPLIT");
+    return env && env[0] != '\0' && std::strcmp(env, "0") != 0;
+  }();
+  return enabled;
+}
+
+bool encodeSlotPsoSemanticMissSplitEnabled() {
+  static const bool enabled = [] {
+    const char* env =
+        std::getenv("DXMT9_PERF_ENCODE_SLOT_PSO_SEMANTIC_MISS_SPLIT");
+    return env && env[0] != '\0' && std::strcmp(env, "0") != 0;
+  }();
+  return enabled;
+}
+
+bool encodeSlotPsoResourceShapeOpportunityEnabled() {
+  static const bool enabled = [] {
+    const char* env =
+        std::getenv("DXMT9_PERF_ENCODE_SLOT_PSO_RESOURCE_SHAPE_OPPORTUNITY");
+    return env && env[0] != '\0' && std::strcmp(env, "0") != 0;
+  }();
+  return enabled;
+}
+
+bool encodeSlotPsoResourceShapeMemoEnabled() {
+  static const bool enabled = [] {
+    const char* disableEnv =
+        std::getenv("DXMT9_DISABLE_ENCODE_SLOT_PSO_RESOURCE_SHAPE_MEMO");
+    return !(disableEnv && disableEnv[0] != '\0' &&
+             std::strcmp(disableEnv, "0") != 0);
+  }();
+  return enabled;
 }
 
 enum class QueueWorkerRole {
@@ -328,13 +426,25 @@ CommandQueue::CommandQueue(WMT::Device device, core::BackendLimits limits)
       [this] {
         runEncodeLoop(
             [this](std::size_t slotIndex, core::ChunkSlot& slot) {
+              traceEncodeFnStage("entry", slotIndex, slot);
               if (encodeSlotPsoPrefetchEnabled() &&
                   !slot.prefetchedPipelinesSealed()) {
+                traceEncodeFnStage("before-pso-prefetch", slotIndex, slot);
                 PerfScope scope(perf::countEncodeSlotPsoPrefetchCpuTime);
                 prefetchSlotPipelines(slot);
+                traceEncodeFnStage("after-pso-prefetch", slotIndex, slot);
               }
+              traceEncodeFnStage("before-make-context", slotIndex, slot);
               auto ctx = makeEncodeContext();
-              return backend_->onChunkReady(ctx, slotIndex, slot);
+              traceEncodeFnStage("after-make-context", slotIndex, slot);
+              traceEncodeFnStage("before-backend-onChunkReady", slotIndex, slot);
+              auto submission = backend_->onChunkReady(ctx, slotIndex, slot);
+              traceEncodeFnStage(submission.has_value()
+                                     ? "after-backend-onChunkReady-submission"
+                                     : "after-backend-onChunkReady-inline",
+                                 slotIndex,
+                                 slot);
+              return submission;
             },
             [this](std::uint64_t) { allocators_.reclaim(completedSeqId_); });
       },
@@ -354,33 +464,739 @@ encoders::EncodeContext CommandQueue::makeEncodeContext() {
   // real Metal-side dereference happens deep inside encoders::encodeChunk
   // / encoders::encodeDraw; assertion belongs there, not at context
   // creation.
-  return encoders::EncodeContext{
+  std::uint64_t transientCompletedSeqId = 0;
+  {
+    std::lock_guard lock(mutex_);
+    transientCompletedSeqId = completedSeqId_;
+  }
+  auto ctx = encoders::EncodeContext{
       device_, limits_, pool_, pipelineCache_, allocators_,
       &shaderArchive_.reference(), &shaderArchive_.path(),
       *this,
       consumePendingDirty(),
   };
+  ctx.transientCompletedSeqId = transientCompletedSeqId;
+  return ctx;
 }
 
-void CommandQueue::prefetchSlotPipelines(core::ChunkSlot& slot) {
+void CommandQueue::prefetchSlotPipelines(core::ChunkSlot& slot, bool seal) {
   DXMT_ASSERT(!slot.prefetchedPipelinesSealed() &&
               "prefetchSlotPipelines called after slot prefetch seal");
+  tracePsoPrefetchStage("begin", slot);
   if (!device_) {
-    slot.sealPrefetchedPipelines();
+    if (seal) {
+      slot.sealPrefetchedPipelines();
+    }
+    tracePsoPrefetchStage("no-device-sealed", slot);
     return;
   }
+  const auto beginCommand = slot.prefetchedPipelineCommandCursor();
   const auto commandCount = slot.commandCount();
+  if (beginCommand >= commandCount) {
+    if (seal) {
+      slot.sealPrefetchedPipelines();
+    }
+    tracePsoPrefetchStage(seal ? "end-sealed" : "end-partial", slot);
+    return;
+  }
   perf::countEncodeSlotPsoPrefetchCommands(
-      static_cast<std::uint64_t>(commandCount));
+      static_cast<std::uint64_t>(commandCount - beginCommand));
   static constexpr std::size_t kDrawHandleReuseTableCapacity = 2048;
   static_assert((kDrawHandleReuseTableCapacity &
                  (kDrawHandleReuseTableCapacity - 1)) == 0,
                 "draw handle reuse table capacity must be a power of two");
-  std::array<core::PsoHandle, kDrawHandleReuseTableCapacity>
+  static constexpr std::size_t kDrawProbeKeyMemoTableCapacity = 512;
+  static_assert((kDrawProbeKeyMemoTableCapacity &
+                 (kDrawProbeKeyMemoTableCapacity - 1)) == 0,
+                "draw probe-key memo table capacity must be a power of two");
+  static constexpr std::size_t kDrawSemanticMemoTableCapacity = 2048;
+  static_assert((kDrawSemanticMemoTableCapacity &
+                 (kDrawSemanticMemoTableCapacity - 1)) == 0,
+                "draw semantic memo table capacity must be a power of two");
+  static constexpr std::size_t kDrawResourceShapeMemoTableCapacity = 2048;
+  static_assert((kDrawResourceShapeMemoTableCapacity &
+                 (kDrawResourceShapeMemoTableCapacity - 1)) == 0,
+                "draw resource-shape memo table capacity must be a power of two");
+  struct DrawSemanticMemoKey {
+    std::uint64_t fingerprint = 0;
+    bool argbufHybridMode = false;
+    bool argbufResourceArray = false;
+    bool argbufDirectCbufMode = false;
+
+    constexpr bool operator==(const DrawSemanticMemoKey&) const = default;
+  };
+  struct DrawSemanticMemoEntry {
+    DrawSemanticMemoKey key{};
+    const core::FlatDrawStateRecord* hot = nullptr;
+    const core::DrawShaderLayoutContext* shaderLayout = nullptr;
+    core::PsoHandle handle{};
+    std::uint64_t epoch = 0;
+  };
+  struct DrawSemanticMemoLookup {
+    core::PsoHandle handle{};
+    std::size_t index = 0;
+    bool hit = false;
+    bool overflow = false;
+  };
+  struct DrawResourceShapeMemoEntry {
+    DrawSemanticMemoKey key{};
+    const core::FlatDrawStateRecord* hot = nullptr;
+    const core::DrawShaderLayoutContext* shaderLayout = nullptr;
+    pipeline::ShaderVariantKey probeKey{};
+    core::PsoHandle handle{};
+    std::uint64_t epoch = 0;
+  };
+  struct DrawResourceShapeMemoLookup {
+    const DrawResourceShapeMemoEntry* entry = nullptr;
+    std::size_t index = 0;
+    bool hit = false;
+    bool overflow = false;
+  };
+  struct DrawProbeKeyMemoEntry {
+    pipeline::ShaderVariantKey probeKey{};
+    DrawSemanticMemoKey semanticKey{};
+    const core::FlatDrawStateRecord* hot = nullptr;
+    const core::DrawShaderLayoutContext* shaderLayout = nullptr;
+    core::PsoHandle handle{};
+    std::uint64_t epoch = 0;
+  };
+  struct DrawProbeKeyMemoLookup {
+    core::PsoHandle handle{};
+    const DrawProbeKeyMemoEntry* entry = nullptr;
+    std::size_t index = 0;
+    bool hit = false;
+    bool overflow = false;
+  };
+  struct DrawHandleReuseEntry {
+    core::PsoHandle handle{};
+    std::uint64_t epoch = 0;
+  };
+  static thread_local std::array<DrawHandleReuseEntry,
+                                 kDrawHandleReuseTableCapacity>
       seenDrawPsoHandles{};
+  static thread_local std::array<DrawSemanticMemoEntry,
+                                 kDrawSemanticMemoTableCapacity>
+      drawSemanticMemo{};
+  static thread_local std::array<DrawProbeKeyMemoEntry,
+                                 kDrawProbeKeyMemoTableCapacity>
+      drawProbeKeyMemo{};
+  static thread_local std::uint64_t drawPsoMemoNextEpoch = 0;
+  std::uint64_t drawPsoMemoEpoch = ++drawPsoMemoNextEpoch;
+  if (drawPsoMemoEpoch == 0) {
+    for (auto& entry : seenDrawPsoHandles) {
+      entry.epoch = 0;
+    }
+    for (auto& entry : drawSemanticMemo) {
+      entry.epoch = 0;
+    }
+    for (auto& entry : drawProbeKeyMemo) {
+      entry.epoch = 0;
+    }
+    drawPsoMemoEpoch = ++drawPsoMemoNextEpoch;
+  }
   core::PsoHandle previousDrawPsoHandle{};
   bool hasPreviousDrawPsoHandle = false;
-  auto recordDrawPsoHandleReuseOpportunity = [&seenDrawPsoHandles,
+  const bool drawSemanticMemoEnabled = !encodeSlotPsoSemanticMemoDisabled();
+  const bool drawProbeKeyMemoEnabled = !encodeSlotPsoProbeKeyMemoDisabled();
+  const bool drawSemanticSplitEnabled =
+      drawSemanticMemoEnabled && encodeSlotPsoSemanticSplitEnabled();
+  const bool drawSemanticMissSplitEnabled =
+      encodeSlotPsoSemanticMissSplitEnabled();
+  const bool drawResourceShapeOpportunityEnabled =
+      drawSemanticMemoEnabled && encodeSlotPsoResourceShapeOpportunityEnabled();
+  const bool drawResourceShapeBehaviorEnabled =
+      drawSemanticMemoEnabled && encodeSlotPsoResourceShapeMemoEnabled();
+  const bool drawResourceShapeMemoEnabled =
+      drawResourceShapeOpportunityEnabled || drawResourceShapeBehaviorEnabled;
+  std::uint64_t drawResourceShapeMemoEpoch = 0;
+  std::array<DrawResourceShapeMemoEntry,
+             kDrawResourceShapeMemoTableCapacity>* drawResourceShapeMemo =
+      nullptr;
+  if (drawResourceShapeMemoEnabled) {
+    static thread_local std::array<DrawResourceShapeMemoEntry,
+                                   kDrawResourceShapeMemoTableCapacity>
+        drawResourceShapeMemoScratch{};
+    static thread_local std::uint64_t drawResourceShapeMemoNextEpoch = 0;
+    drawResourceShapeMemo = &drawResourceShapeMemoScratch;
+    drawResourceShapeMemoEpoch = ++drawResourceShapeMemoNextEpoch;
+    if (drawResourceShapeMemoEpoch == 0) {
+      for (auto& entry : drawResourceShapeMemoScratch) {
+        entry.epoch = 0;
+      }
+      drawResourceShapeMemoEpoch = ++drawResourceShapeMemoNextEpoch;
+    }
+  }
+  auto mixDrawSemanticHash = [](std::uint64_t seed, std::uint64_t value) {
+    return seed ^ (value + 0x9e3779b97f4a7c15ull + (seed << 6u) +
+                   (seed >> 2u));
+  };
+  auto mixDrawSemanticHandle =
+      [mixDrawSemanticHash](std::uint64_t seed, core::Handle handle) {
+    return mixDrawSemanticHash(seed, handle.value);
+  };
+  auto mixDrawSemanticAttachment =
+      [mixDrawSemanticHash, mixDrawSemanticHandle](
+          std::uint64_t seed, const core::RenderTargetAttachment& attachment) {
+    seed = mixDrawSemanticHandle(seed, attachment.handle);
+    seed = mixDrawSemanticHash(seed, attachment.level);
+    seed = mixDrawSemanticHash(seed, attachment.sampleCount);
+    return seed;
+  };
+  auto vertexDeclPsoShapeEqual =
+      [](const core::VertexDeclSnapshot& lhs,
+         const core::VertexDeclSnapshot& rhs) {
+    if (lhs.fvf != rhs.fvf || !(lhs.elements == rhs.elements)) {
+      return false;
+    }
+    for (std::size_t i = 0; i < core::kMaxStreams; ++i) {
+      if (lhs.streams[i].offset != rhs.streams[i].offset ||
+          lhs.streams[i].stride != rhs.streams[i].stride) {
+        return false;
+      }
+    }
+    return true;
+  };
+  auto drawSemanticMemoEquivalent =
+      [vertexDeclPsoShapeEqual](
+          const DrawSemanticMemoEntry& entry,
+          const DrawSemanticMemoKey& key,
+          const core::FlatDrawStateRecord& hot,
+          const core::DrawShaderLayoutContext& shaderLayout) {
+    if (entry.key != key || !entry.hot || !entry.shaderLayout) {
+      return false;
+    }
+    const auto& prevHot = *entry.hot;
+    const auto& prevLayout = *entry.shaderLayout;
+    const auto& prevKey = prevHot.key;
+    const auto& currentKey = hot.key;
+    return prevKey.fvf == currentKey.fvf &&
+           prevKey.vertexElementCount == currentKey.vertexElementCount &&
+           prevKey.vertexShaderKind == currentKey.vertexShaderKind &&
+           prevKey.pixelShaderKind == currentKey.pixelShaderKind &&
+           prevKey.vertexShaderHash == currentKey.vertexShaderHash &&
+           prevKey.pixelShaderHash == currentKey.pixelShaderHash &&
+           prevKey.renderStateHash == currentKey.renderStateHash &&
+           prevKey.textureMask == currentKey.textureMask &&
+           prevKey.samplerStateMask == currentKey.samplerStateMask &&
+           prevKey.renderTargetMask == currentKey.renderTargetMask &&
+           prevKey.clipPlaneMask == currentKey.clipPlaneMask &&
+           prevKey.clipPlanesHash == currentKey.clipPlanesHash &&
+           prevKey.textures == currentKey.textures &&
+           prevKey.textureLods == currentKey.textureLods &&
+           prevKey.textureStageStateHashes ==
+               currentKey.textureStageStateHashes &&
+           prevKey.samplerStateHashes == currentKey.samplerStateHashes &&
+           prevKey.colorAttachments == currentKey.colorAttachments &&
+           prevKey.depthStencil == currentKey.depthStencil &&
+           prevLayout.vertexShader.kind == shaderLayout.vertexShader.kind &&
+           prevLayout.vertexShader.hash == shaderLayout.vertexShader.hash &&
+           prevLayout.vertexShader.bytecode.hash ==
+               shaderLayout.vertexShader.bytecode.hash &&
+           prevLayout.pixelShader.kind == shaderLayout.pixelShader.kind &&
+           prevLayout.pixelShader.hash == shaderLayout.pixelShader.hash &&
+           prevLayout.pixelShader.bytecode.hash ==
+               shaderLayout.pixelShader.bytecode.hash &&
+           prevLayout.vertexConstantUsage ==
+               shaderLayout.vertexConstantUsage &&
+           prevLayout.pixelConstantUsage == shaderLayout.pixelConstantUsage &&
+           prevLayout.clipPlaneMask == shaderLayout.clipPlaneMask &&
+           vertexDeclPsoShapeEqual(prevLayout.vertexDecl,
+                                   shaderLayout.vertexDecl);
+  };
+  auto drawResourceShapeMemoEquivalent =
+      [vertexDeclPsoShapeEqual](
+          const DrawResourceShapeMemoEntry& entry,
+          const DrawSemanticMemoKey& key,
+          const core::FlatDrawStateRecord& hot,
+          const core::DrawShaderLayoutContext& shaderLayout) {
+    if (entry.key != key || !entry.hot || !entry.shaderLayout) {
+      return false;
+    }
+    const auto& prevHot = *entry.hot;
+    const auto& prevLayout = *entry.shaderLayout;
+    const auto& prevKey = prevHot.key;
+    const auto& currentKey = hot.key;
+    return prevKey.fvf == currentKey.fvf &&
+           prevKey.vertexElementCount == currentKey.vertexElementCount &&
+           prevKey.vertexShaderKind == currentKey.vertexShaderKind &&
+           prevKey.pixelShaderKind == currentKey.pixelShaderKind &&
+           prevKey.vertexShaderHash == currentKey.vertexShaderHash &&
+           prevKey.pixelShaderHash == currentKey.pixelShaderHash &&
+           prevKey.renderStateHash == currentKey.renderStateHash &&
+           prevKey.textureMask == currentKey.textureMask &&
+           prevKey.samplerStateMask == currentKey.samplerStateMask &&
+           prevKey.renderTargetMask == currentKey.renderTargetMask &&
+           prevKey.clipPlaneMask == currentKey.clipPlaneMask &&
+           prevKey.clipPlanesHash == currentKey.clipPlanesHash &&
+           prevKey.textureLods == currentKey.textureLods &&
+           prevKey.textureStageStateHashes ==
+               currentKey.textureStageStateHashes &&
+           prevKey.samplerStateHashes == currentKey.samplerStateHashes &&
+           prevKey.colorAttachments == currentKey.colorAttachments &&
+           prevKey.depthStencil == currentKey.depthStencil &&
+           prevLayout.vertexShader.kind == shaderLayout.vertexShader.kind &&
+           prevLayout.vertexShader.hash == shaderLayout.vertexShader.hash &&
+           prevLayout.vertexShader.bytecode.hash ==
+               shaderLayout.vertexShader.bytecode.hash &&
+           prevLayout.pixelShader.kind == shaderLayout.pixelShader.kind &&
+           prevLayout.pixelShader.hash == shaderLayout.pixelShader.hash &&
+           prevLayout.pixelShader.bytecode.hash ==
+               shaderLayout.pixelShader.bytecode.hash &&
+           prevLayout.vertexConstantUsage ==
+               shaderLayout.vertexConstantUsage &&
+           prevLayout.pixelConstantUsage == shaderLayout.pixelConstantUsage &&
+           prevLayout.clipPlaneMask == shaderLayout.clipPlaneMask &&
+           vertexDeclPsoShapeEqual(prevLayout.vertexDecl,
+                                   shaderLayout.vertexDecl);
+  };
+  auto makeDrawSemanticMemoKey =
+      [mixDrawSemanticHash, mixDrawSemanticHandle,
+       mixDrawSemanticAttachment](const core::FlatDrawStateView& drawState,
+                                  bool argbufHybridMode,
+                                  bool argbufResourceArray,
+                                  bool argbufDirectCbufMode) {
+    const auto& hot = *drawState.hot;
+    const auto& key = hot.key;
+    const auto& shaderLayout = drawState.shaderContext();
+    std::uint64_t hash = 1469598103934665603ull;
+    hash = mixDrawSemanticHash(hash, key.fvf);
+    hash = mixDrawSemanticHash(hash, key.vertexElementCount);
+    hash = mixDrawSemanticHash(hash, key.vertexDeclHash);
+    hash = mixDrawSemanticHash(
+        hash, ffp::hashVertexDeclaration(shaderLayout.vertexDecl));
+    hash = mixDrawSemanticHash(
+        hash, static_cast<std::uint64_t>(key.vertexShaderKind));
+    hash = mixDrawSemanticHash(
+        hash, static_cast<std::uint64_t>(key.pixelShaderKind));
+    hash = mixDrawSemanticHash(hash, key.vertexShaderHash);
+    hash = mixDrawSemanticHash(hash, key.pixelShaderHash);
+    hash = mixDrawSemanticHash(hash, shaderLayout.vertexShader.bytecode.hash);
+    hash = mixDrawSemanticHash(hash, shaderLayout.pixelShader.bytecode.hash);
+    hash = mixDrawSemanticHash(hash, key.renderStateHash);
+    hash = mixDrawSemanticHash(hash, key.textureMask);
+    hash = mixDrawSemanticHash(hash, key.samplerStateMask);
+    hash = mixDrawSemanticHash(hash, key.renderTargetMask);
+    hash = mixDrawSemanticHash(hash, key.clipPlaneMask);
+    hash = mixDrawSemanticHash(hash, key.clipPlanesHash);
+    for (const auto texture : key.textures) {
+      hash = mixDrawSemanticHandle(hash, texture);
+    }
+    for (const auto lod : key.textureLods) {
+      hash = mixDrawSemanticHash(hash, lod);
+    }
+    for (const auto stageHash : key.textureStageStateHashes) {
+      hash = mixDrawSemanticHash(hash, stageHash);
+    }
+    for (const auto samplerHash : key.samplerStateHashes) {
+      hash = mixDrawSemanticHash(hash, samplerHash);
+    }
+    for (const auto attachment : key.colorAttachments) {
+      hash = mixDrawSemanticAttachment(hash, attachment);
+    }
+    hash = mixDrawSemanticAttachment(hash, key.depthStencil);
+    hash = mixDrawSemanticHash(hash,
+                               shaderLayout.vertexConstantUsage.floatCount);
+    hash = mixDrawSemanticHash(hash,
+                               shaderLayout.vertexConstantUsage.intCount);
+    hash = mixDrawSemanticHash(hash,
+                               shaderLayout.vertexConstantUsage.boolCount);
+    hash = mixDrawSemanticHash(hash,
+                               shaderLayout.vertexConstantUsage.indexedFloat);
+    hash = mixDrawSemanticHash(hash,
+                               shaderLayout.vertexConstantUsage.indexedInt);
+    hash = mixDrawSemanticHash(hash,
+                               shaderLayout.vertexConstantUsage.indexedBool);
+    hash = mixDrawSemanticHash(hash, shaderLayout.vertexConstantUsage.unknown);
+    hash = mixDrawSemanticHash(hash,
+                               shaderLayout.pixelConstantUsage.floatCount);
+    hash = mixDrawSemanticHash(hash,
+                               shaderLayout.pixelConstantUsage.intCount);
+    hash = mixDrawSemanticHash(hash,
+                               shaderLayout.pixelConstantUsage.boolCount);
+    hash = mixDrawSemanticHash(hash,
+                               shaderLayout.pixelConstantUsage.indexedFloat);
+    hash = mixDrawSemanticHash(hash,
+                               shaderLayout.pixelConstantUsage.indexedInt);
+    hash = mixDrawSemanticHash(hash,
+                               shaderLayout.pixelConstantUsage.indexedBool);
+    hash = mixDrawSemanticHash(hash, shaderLayout.pixelConstantUsage.unknown);
+    hash = mixDrawSemanticHash(hash, shaderLayout.clipPlaneMask);
+    return DrawSemanticMemoKey{
+        .fingerprint = hash,
+        .argbufHybridMode = argbufHybridMode,
+        .argbufResourceArray = argbufResourceArray,
+        .argbufDirectCbufMode = argbufDirectCbufMode,
+    };
+  };
+  auto makeDrawResourceShapeMemoKey =
+      [mixDrawSemanticHash,
+       mixDrawSemanticAttachment](const core::FlatDrawStateView& drawState,
+                                  bool argbufHybridMode,
+                                  bool argbufResourceArray,
+                                  bool argbufDirectCbufMode) {
+    const auto& hot = *drawState.hot;
+    const auto& key = hot.key;
+    const auto& shaderLayout = drawState.shaderContext();
+    std::uint64_t hash = 1469598103934665603ull;
+    hash = mixDrawSemanticHash(hash, key.fvf);
+    hash = mixDrawSemanticHash(hash, key.vertexElementCount);
+    hash = mixDrawSemanticHash(hash, key.vertexDeclHash);
+    hash = mixDrawSemanticHash(
+        hash, ffp::hashVertexDeclaration(shaderLayout.vertexDecl));
+    hash = mixDrawSemanticHash(
+        hash, static_cast<std::uint64_t>(key.vertexShaderKind));
+    hash = mixDrawSemanticHash(
+        hash, static_cast<std::uint64_t>(key.pixelShaderKind));
+    hash = mixDrawSemanticHash(hash, key.vertexShaderHash);
+    hash = mixDrawSemanticHash(hash, key.pixelShaderHash);
+    hash = mixDrawSemanticHash(hash, shaderLayout.vertexShader.bytecode.hash);
+    hash = mixDrawSemanticHash(hash, shaderLayout.pixelShader.bytecode.hash);
+    hash = mixDrawSemanticHash(hash, key.renderStateHash);
+    hash = mixDrawSemanticHash(hash, key.textureMask);
+    hash = mixDrawSemanticHash(hash, key.samplerStateMask);
+    hash = mixDrawSemanticHash(hash, key.renderTargetMask);
+    hash = mixDrawSemanticHash(hash, key.clipPlaneMask);
+    hash = mixDrawSemanticHash(hash, key.clipPlanesHash);
+    for (const auto lod : key.textureLods) {
+      hash = mixDrawSemanticHash(hash, lod);
+    }
+    for (const auto stageHash : key.textureStageStateHashes) {
+      hash = mixDrawSemanticHash(hash, stageHash);
+    }
+    for (const auto samplerHash : key.samplerStateHashes) {
+      hash = mixDrawSemanticHash(hash, samplerHash);
+    }
+    for (const auto attachment : key.colorAttachments) {
+      hash = mixDrawSemanticAttachment(hash, attachment);
+    }
+    hash = mixDrawSemanticAttachment(hash, key.depthStencil);
+    hash = mixDrawSemanticHash(hash,
+                               shaderLayout.vertexConstantUsage.floatCount);
+    hash = mixDrawSemanticHash(hash,
+                               shaderLayout.vertexConstantUsage.intCount);
+    hash = mixDrawSemanticHash(hash,
+                               shaderLayout.vertexConstantUsage.boolCount);
+    hash = mixDrawSemanticHash(hash,
+                               shaderLayout.vertexConstantUsage.indexedFloat);
+    hash = mixDrawSemanticHash(hash,
+                               shaderLayout.vertexConstantUsage.indexedInt);
+    hash = mixDrawSemanticHash(hash,
+                               shaderLayout.vertexConstantUsage.indexedBool);
+    hash = mixDrawSemanticHash(hash, shaderLayout.vertexConstantUsage.unknown);
+    hash = mixDrawSemanticHash(hash,
+                               shaderLayout.pixelConstantUsage.floatCount);
+    hash = mixDrawSemanticHash(hash,
+                               shaderLayout.pixelConstantUsage.intCount);
+    hash = mixDrawSemanticHash(hash,
+                               shaderLayout.pixelConstantUsage.boolCount);
+    hash = mixDrawSemanticHash(hash,
+                               shaderLayout.pixelConstantUsage.indexedFloat);
+    hash = mixDrawSemanticHash(hash,
+                               shaderLayout.pixelConstantUsage.indexedInt);
+    hash = mixDrawSemanticHash(hash,
+                               shaderLayout.pixelConstantUsage.indexedBool);
+    hash = mixDrawSemanticHash(hash, shaderLayout.pixelConstantUsage.unknown);
+    hash = mixDrawSemanticHash(hash, shaderLayout.clipPlaneMask);
+    return DrawSemanticMemoKey{
+        .fingerprint = hash,
+        .argbufHybridMode = argbufHybridMode,
+        .argbufResourceArray = argbufResourceArray,
+        .argbufDirectCbufMode = argbufDirectCbufMode,
+    };
+  };
+  auto hashDrawSemanticMemoKey = [](const DrawSemanticMemoKey& key) {
+    auto hash = key.fingerprint;
+    hash ^= key.argbufHybridMode ? 0x6a09e667f3bcc909ull : 0u;
+    hash ^= key.argbufResourceArray ? 0xbb67ae8584caa73bull : 0u;
+    hash ^= key.argbufDirectCbufMode ? 0x3c6ef372fe94f82bull : 0u;
+    return static_cast<std::size_t>(hash);
+  };
+  auto probeDrawSemanticMemo =
+      [drawPsoMemoEpoch, hashDrawSemanticMemoKey, drawSemanticMemoEquivalent](
+          const DrawSemanticMemoKey& key,
+          const core::FlatDrawStateRecord& hot,
+          const core::DrawShaderLayoutContext& shaderLayout)
+      -> DrawSemanticMemoLookup {
+    std::size_t index =
+        hashDrawSemanticMemoKey(key) & (kDrawSemanticMemoTableCapacity - 1);
+    for (std::size_t probe = 0; probe < kDrawSemanticMemoTableCapacity;
+         ++probe) {
+      const auto& entry = drawSemanticMemo[index];
+      if (entry.epoch != drawPsoMemoEpoch) {
+        return DrawSemanticMemoLookup{.index = index};
+      }
+      if (drawSemanticMemoEquivalent(entry, key, hot, shaderLayout)) {
+        return DrawSemanticMemoLookup{
+            .handle = entry.handle,
+            .index = index,
+            .hit = true,
+        };
+      }
+      index = (index + 1) & (kDrawSemanticMemoTableCapacity - 1);
+    }
+    return DrawSemanticMemoLookup{.overflow = true};
+  };
+  auto storeDrawSemanticMemo =
+      [drawPsoMemoEpoch](
+          const DrawSemanticMemoLookup& memo,
+          const DrawSemanticMemoKey& key,
+          const core::FlatDrawStateRecord& hot,
+          const core::DrawShaderLayoutContext& shaderLayout,
+          core::PsoHandle handle) {
+    if (memo.hit || memo.overflow || !handle.valid()) {
+      return;
+    }
+    auto& entry = drawSemanticMemo[memo.index];
+    entry.key = key;
+    entry.hot = &hot;
+    entry.shaderLayout = &shaderLayout;
+    entry.handle = handle;
+    entry.epoch = drawPsoMemoEpoch;
+  };
+  auto probeDrawResourceShapeMemo =
+      [drawResourceShapeMemo, drawResourceShapeMemoEpoch,
+       hashDrawSemanticMemoKey,
+       drawResourceShapeMemoEquivalent](
+          const DrawSemanticMemoKey& key,
+          const core::FlatDrawStateRecord& hot,
+          const core::DrawShaderLayoutContext& shaderLayout)
+      -> DrawResourceShapeMemoLookup {
+    if (!drawResourceShapeMemo) {
+      return DrawResourceShapeMemoLookup{};
+    }
+    std::size_t index =
+        hashDrawSemanticMemoKey(key) &
+        (kDrawResourceShapeMemoTableCapacity - 1);
+    for (std::size_t probe = 0; probe < kDrawResourceShapeMemoTableCapacity;
+         ++probe) {
+      const auto& entry = (*drawResourceShapeMemo)[index];
+      if (entry.epoch != drawResourceShapeMemoEpoch) {
+        return DrawResourceShapeMemoLookup{.index = index};
+      }
+      if (drawResourceShapeMemoEquivalent(entry, key, hot, shaderLayout)) {
+        return DrawResourceShapeMemoLookup{
+            .entry = &entry,
+            .index = index,
+            .hit = true,
+        };
+      }
+      index = (index + 1) & (kDrawResourceShapeMemoTableCapacity - 1);
+    }
+    return DrawResourceShapeMemoLookup{.overflow = true};
+  };
+  auto storeDrawResourceShapeMemo =
+      [drawResourceShapeMemo, drawResourceShapeMemoEpoch](
+          const DrawResourceShapeMemoLookup& memo,
+          const DrawSemanticMemoKey& key,
+          const core::FlatDrawStateRecord& hot,
+          const core::DrawShaderLayoutContext& shaderLayout,
+          const pipeline::ShaderVariantKey& probeKey,
+          core::PsoHandle handle) {
+    if (!drawResourceShapeMemo || memo.hit || memo.overflow || !handle.valid()) {
+      return;
+    }
+    auto& entry = (*drawResourceShapeMemo)[memo.index];
+    entry.key = key;
+    entry.hot = &hot;
+    entry.shaderLayout = &shaderLayout;
+    entry.probeKey = probeKey;
+    entry.handle = handle;
+    entry.epoch = drawResourceShapeMemoEpoch;
+    perf::countEncodeSlotPsoPrefetchDrawResourceShapeMemoStores();
+  };
+  auto probeDrawPsoKeyMemo =
+      [drawPsoMemoEpoch](const pipeline::ShaderVariantKey& probeKey)
+      -> DrawProbeKeyMemoLookup {
+    std::size_t index =
+        pipeline::ShaderVariantKeyHash{}(probeKey) &
+        (kDrawProbeKeyMemoTableCapacity - 1);
+    for (std::size_t probe = 0; probe < kDrawProbeKeyMemoTableCapacity;
+         ++probe) {
+      const auto& entry = drawProbeKeyMemo[index];
+      if (entry.epoch != drawPsoMemoEpoch) {
+        return DrawProbeKeyMemoLookup{.index = index};
+      }
+      if (entry.probeKey == probeKey) {
+        return DrawProbeKeyMemoLookup{
+            .handle = entry.handle,
+            .entry = &entry,
+            .index = index,
+            .hit = true,
+        };
+      }
+      index = (index + 1) & (kDrawProbeKeyMemoTableCapacity - 1);
+    }
+    return DrawProbeKeyMemoLookup{.overflow = true};
+  };
+  auto storeDrawPsoKeyMemo = [drawPsoMemoEpoch](
+                                 const DrawProbeKeyMemoLookup& memo,
+                                 const pipeline::ShaderVariantKey& probeKey,
+                                 const DrawSemanticMemoKey& semanticKey,
+                                 const core::FlatDrawStateRecord& hot,
+                                 const core::DrawShaderLayoutContext& shaderLayout,
+                                 core::PsoHandle handle) {
+    if (memo.hit || memo.overflow || !handle.valid()) {
+      return;
+    }
+    auto& entry = drawProbeKeyMemo[memo.index];
+    entry.probeKey = probeKey;
+    entry.semanticKey = semanticKey;
+    entry.hot = &hot;
+    entry.shaderLayout = &shaderLayout;
+    entry.handle = handle;
+    entry.epoch = drawPsoMemoEpoch;
+  };
+  auto recordDrawSemanticMissProbeKeyCollapse =
+      [drawSemanticMissSplitEnabled, vertexDeclPsoShapeEqual](
+          const DrawProbeKeyMemoEntry& entry,
+          const DrawSemanticMemoKey& semanticKey,
+          const core::FlatDrawStateRecord& hot,
+          const core::DrawShaderLayoutContext& shaderLayout) {
+    if (!drawSemanticMissSplitEnabled) {
+      return;
+    }
+    perf::countEncodeSlotPsoPrefetchDrawSemanticMissProbeKeyHits();
+    if (!entry.hot || !entry.shaderLayout) {
+      perf::countEncodeSlotPsoPrefetchDrawSemanticMissProbeKeyDiffUnknown();
+      return;
+    }
+
+    std::uint32_t diffFieldCount = 0;
+    bool textureHandleDiff = false;
+    const auto& prevHot = *entry.hot;
+    const auto& prevLayout = *entry.shaderLayout;
+    const auto& prevKey = prevHot.key;
+    const auto& currentKey = hot.key;
+
+    if (entry.semanticKey.argbufHybridMode != semanticKey.argbufHybridMode ||
+        entry.semanticKey.argbufResourceArray !=
+            semanticKey.argbufResourceArray ||
+        entry.semanticKey.argbufDirectCbufMode !=
+            semanticKey.argbufDirectCbufMode) {
+      perf::countEncodeSlotPsoPrefetchDrawSemanticMissProbeKeyDiffArgbufSelector();
+      ++diffFieldCount;
+    }
+    if (prevKey.fvf != currentKey.fvf ||
+        prevKey.vertexElementCount != currentKey.vertexElementCount ||
+        prevKey.vertexDeclHash != currentKey.vertexDeclHash ||
+        !vertexDeclPsoShapeEqual(prevLayout.vertexDecl,
+                                 shaderLayout.vertexDecl)) {
+      perf::countEncodeSlotPsoPrefetchDrawSemanticMissProbeKeyDiffVertexDecl();
+      ++diffFieldCount;
+    }
+    if (prevKey.vertexShaderKind != currentKey.vertexShaderKind ||
+        prevKey.pixelShaderKind != currentKey.pixelShaderKind ||
+        prevKey.vertexShaderHash != currentKey.vertexShaderHash ||
+        prevKey.pixelShaderHash != currentKey.pixelShaderHash ||
+        prevLayout.vertexShader.kind != shaderLayout.vertexShader.kind ||
+        prevLayout.vertexShader.hash != shaderLayout.vertexShader.hash ||
+        prevLayout.vertexShader.bytecode.hash !=
+            shaderLayout.vertexShader.bytecode.hash ||
+        prevLayout.pixelShader.kind != shaderLayout.pixelShader.kind ||
+        prevLayout.pixelShader.hash != shaderLayout.pixelShader.hash ||
+        prevLayout.pixelShader.bytecode.hash !=
+            shaderLayout.pixelShader.bytecode.hash) {
+      perf::countEncodeSlotPsoPrefetchDrawSemanticMissProbeKeyDiffShader();
+      ++diffFieldCount;
+    }
+    if (prevKey.renderStateHash != currentKey.renderStateHash) {
+      perf::countEncodeSlotPsoPrefetchDrawSemanticMissProbeKeyDiffRenderState();
+      ++diffFieldCount;
+    }
+    if (prevKey.textureMask != currentKey.textureMask ||
+        prevKey.textures != currentKey.textures) {
+      perf::countEncodeSlotPsoPrefetchDrawSemanticMissProbeKeyDiffTextureHandles();
+      textureHandleDiff = true;
+      ++diffFieldCount;
+    }
+    if (prevKey.textureLods != currentKey.textureLods) {
+      perf::countEncodeSlotPsoPrefetchDrawSemanticMissProbeKeyDiffTextureLod();
+      ++diffFieldCount;
+    }
+    if (prevKey.textureStageStateHashes !=
+        currentKey.textureStageStateHashes) {
+      perf::countEncodeSlotPsoPrefetchDrawSemanticMissProbeKeyDiffTextureStage();
+      ++diffFieldCount;
+    }
+    if (prevKey.samplerStateMask != currentKey.samplerStateMask ||
+        prevKey.samplerStateHashes != currentKey.samplerStateHashes) {
+      perf::countEncodeSlotPsoPrefetchDrawSemanticMissProbeKeyDiffSampler();
+      ++diffFieldCount;
+    }
+    if (prevKey.renderTargetMask != currentKey.renderTargetMask ||
+        prevKey.colorAttachments != currentKey.colorAttachments ||
+        prevKey.depthStencil != currentKey.depthStencil) {
+      perf::countEncodeSlotPsoPrefetchDrawSemanticMissProbeKeyDiffAttachment();
+      ++diffFieldCount;
+    }
+    if (prevKey.clipPlaneMask != currentKey.clipPlaneMask ||
+        prevKey.clipPlanesHash != currentKey.clipPlanesHash ||
+        prevLayout.clipPlaneMask != shaderLayout.clipPlaneMask) {
+      perf::countEncodeSlotPsoPrefetchDrawSemanticMissProbeKeyDiffClipPlane();
+      ++diffFieldCount;
+    }
+    if (prevLayout.vertexConstantUsage != shaderLayout.vertexConstantUsage ||
+        prevLayout.pixelConstantUsage != shaderLayout.pixelConstantUsage) {
+      perf::countEncodeSlotPsoPrefetchDrawSemanticMissProbeKeyDiffConstantUsage();
+      ++diffFieldCount;
+    }
+    if (diffFieldCount == 0) {
+      if (entry.semanticKey == semanticKey) {
+        perf::countEncodeSlotPsoPrefetchDrawSemanticMissProbeKeySameSemantic();
+      } else {
+        perf::countEncodeSlotPsoPrefetchDrawSemanticMissProbeKeyDiffHashOnly();
+      }
+      return;
+    }
+    if (diffFieldCount == 1) {
+      perf::countEncodeSlotPsoPrefetchDrawSemanticMissProbeKeyDiffSingleField();
+      if (textureHandleDiff) {
+        perf::countEncodeSlotPsoPrefetchDrawSemanticMissProbeKeyDiffTextureHandlesOnly();
+      }
+      return;
+    }
+    perf::countEncodeSlotPsoPrefetchDrawSemanticMissProbeKeyDiffMultiField();
+    if (textureHandleDiff) {
+      perf::countEncodeSlotPsoPrefetchDrawSemanticMissProbeKeyDiffTextureHandlesWithOthers();
+    }
+  };
+  auto recordDrawResourceShapeProbeMismatch =
+      [](const pipeline::ShaderVariantKey& previous,
+         const pipeline::ShaderVariantKey& current) {
+    bool classified = false;
+    if (previous.textureMask != current.textureMask) {
+      perf::countEncodeSlotPsoPrefetchDrawResourceShapeMemoMismatchTextureMask();
+      classified = true;
+    }
+    if (previous.textureTypes != current.textureTypes) {
+      perf::countEncodeSlotPsoPrefetchDrawResourceShapeMemoMismatchTextureTypes();
+      classified = true;
+    }
+    if (previous.x8AlphaOneTextureMask != current.x8AlphaOneTextureMask) {
+      perf::countEncodeSlotPsoPrefetchDrawResourceShapeMemoMismatchX8Alpha();
+      classified = true;
+    }
+    if (previous.sampleCount != current.sampleCount ||
+        previous.colorFormats != current.colorFormats ||
+        previous.blend != current.blend ||
+        previous.depthFormat != current.depthFormat ||
+        previous.stencilFormat != current.stencilFormat) {
+      perf::countEncodeSlotPsoPrefetchDrawResourceShapeMemoMismatchAttachment();
+      classified = true;
+    }
+    if (previous.samplerLodBias != current.samplerLodBias) {
+      perf::countEncodeSlotPsoPrefetchDrawResourceShapeMemoMismatchSamplerLodBias();
+      classified = true;
+    }
+    if (previous.vsOutLayoutKey != current.vsOutLayoutKey) {
+      perf::countEncodeSlotPsoPrefetchDrawResourceShapeMemoMismatchVsOut();
+      classified = true;
+    }
+    if (!classified) {
+      perf::countEncodeSlotPsoPrefetchDrawResourceShapeMemoMismatchOther();
+    }
+  };
+  auto recordDrawPsoHandleReuseOpportunity = [drawPsoMemoEpoch,
                                                &previousDrawPsoHandle,
                                                &hasPreviousDrawPsoHandle](
                                                   core::PsoHandle handle) {
@@ -402,14 +1218,15 @@ void CommandQueue::prefetchSlotPipelines(core::ChunkSlot& slot) {
     for (std::size_t probe = 0; probe < kDrawHandleReuseTableCapacity;
          ++probe) {
       auto& seen = seenDrawPsoHandles[index];
-      if (!seen.valid()) {
-        seen = handle;
+      if (seen.epoch != drawPsoMemoEpoch) {
+        seen.handle = handle;
+        seen.epoch = drawPsoMemoEpoch;
         perf::countEncodeSlotPsoPrefetchDrawHandleSlotUnique();
         previousDrawPsoHandle = handle;
         hasPreviousDrawPsoHandle = true;
         return;
       }
-      if (seen == handle) {
+      if (seen.handle == handle) {
         perf::countEncodeSlotPsoPrefetchDrawHandleSlotRepeatHits();
         previousDrawPsoHandle = handle;
         hasPreviousDrawPsoHandle = true;
@@ -422,16 +1239,19 @@ void CommandQueue::prefetchSlotPipelines(core::ChunkSlot& slot) {
     previousDrawPsoHandle = handle;
     hasPreviousDrawPsoHandle = true;
   };
-  for (std::size_t i = 0; i < commandCount; ++i) {
+  for (std::size_t i = beginCommand; i < commandCount; ++i) {
+    tracePsoPrefetchStage("command.begin", slot, i);
     const auto command = slot.commandAt(i);
     if (command.kind != core::MetalCommandKind::DrawRun ||
         !command.drawPsoSubview ||
         !command.drawPsoSubview->hasShaderContext ||
         !command.drawState.hot ||
         !command.drawState.hasShaderContext()) {
+      tracePsoPrefetchStage("command.skip", slot, i);
       continue;
     }
     perf::countEncodeSlotPsoPrefetchCandidates();
+    tracePsoPrefetchStage("draw.candidate", slot, i);
 
     // DrawPsoSubview is the PE/draw-run-side summary that proves this run has
     // PSO-bearing state. Final key completion still happens below because RT/DS
@@ -440,7 +1260,9 @@ void CommandQueue::prefetchSlotPipelines(core::ChunkSlot& slot) {
     {
       PerfScope stageScope(perf::countEncodeSlotPsoPrefetchStateCopyCpuTime);
       drawState = command.drawState;
-      drawState.uniforms = command.drawUniformPayload;
+      if (!command.drawRunRecord) {
+        continue;
+      }
     }
     pipeline::DepthStencilLookup depthLookup{};
     {
@@ -463,19 +1285,23 @@ void CommandQueue::prefetchSlotPipelines(core::ChunkSlot& slot) {
       {
         PerfScope stageScope(
             perf::countEncodeSlotPsoPrefetchTileBaseLookupCpuTime);
+        tracePsoPrefetchStage("tile.before-base-lookup", slot, i);
         baseLookup =
             pipelineCache_.getOrBuildTileFfpBaseColorPipelineHandleForState(
                 device_, limits_, pool_, drawState, &shaderArchive_.reference(),
                 &shaderArchive_.path());
+        tracePsoPrefetchStage("tile.after-base-lookup", slot, i);
       }
       pipeline::DrawPipelineLookup tileLookup{};
       {
         PerfScope stageScope(
             perf::countEncodeSlotPsoPrefetchTileDrawLookupCpuTime);
+        tracePsoPrefetchStage("tile.before-draw-lookup", slot, i);
         tileLookup = pipelineCache_.getOrBuildDrawPipelineHandleForState(
             device_, limits_, pool_, drawState, &shaderArchive_.reference(),
             &shaderArchive_.path(), /*tileFfpMode=*/true,
             /*argbufHybridMode=*/false, /*argbufResourceArray=*/false);
+        tracePsoPrefetchStage("tile.after-draw-lookup", slot, i);
       }
       slot.setDrawRunPsoHandles(i, baseLookup.handle, tileLookup.handle);
       continue;
@@ -497,18 +1323,159 @@ void CommandQueue::prefetchSlotPipelines(core::ChunkSlot& slot) {
     if (argbufResourceArray) {
       perf::countEncodeSlotPsoPrefetchArgbufResourceArrayCandidates();
     }
-    pipeline::DrawPipelineLookup lookup{};
+    const bool argbufDirectCbufMode =
+        argbufHybridMode && !argbufResourceArray &&
+        pipeline::argbufDirectCbufEnabled();
+    DrawSemanticMemoKey semanticMemoKey{};
     {
-      PerfScope stageScope(perf::countEncodeSlotPsoPrefetchDrawLookupCpuTime);
-      lookup = pipelineCache_.getOrBuildDrawPipelineHandleForState(
-          device_, limits_, pool_, drawState, &shaderArchive_.reference(),
-          &shaderArchive_.path(), /*tileFfpMode=*/false, argbufHybridMode,
-          argbufResourceArray);
+      PerfScope stageScope(
+          drawSemanticSplitEnabled
+              ? perf::countEncodeSlotPsoPrefetchDrawSemanticKeyCpuTime
+              : nullptr);
+      semanticMemoKey =
+          makeDrawSemanticMemoKey(drawState, argbufHybridMode,
+                                  argbufResourceArray,
+                                  argbufDirectCbufMode);
+    }
+    DrawSemanticMemoLookup semanticMemo{};
+    if (drawSemanticMemoEnabled) {
+      {
+        PerfScope stageScope(
+            drawSemanticSplitEnabled
+                ? perf::countEncodeSlotPsoPrefetchDrawSemanticProbeCpuTime
+                : nullptr);
+        semanticMemo = probeDrawSemanticMemo(
+            semanticMemoKey, *drawState.hot, drawState.shaderContext());
+      }
+      if (semanticMemo.hit) {
+        perf::countEncodeSlotPsoPrefetchDrawSemanticMemoHits();
+        recordDrawPsoHandleReuseOpportunity(semanticMemo.handle);
+        slot.setDrawRunPsoHandles(i, semanticMemo.handle);
+        continue;
+      }
+      if (semanticMemo.overflow) {
+        perf::countEncodeSlotPsoPrefetchDrawSemanticMemoOverflow();
+      } else {
+        perf::countEncodeSlotPsoPrefetchDrawSemanticMemoMisses();
+      }
+    }
+    DrawSemanticMemoKey resourceShapeMemoKey{};
+    DrawResourceShapeMemoLookup resourceShapeMemo{};
+    const bool resourceShapeOpportunityForDraw =
+        drawResourceShapeMemoEnabled && drawSemanticMemoEnabled &&
+        !semanticMemo.hit && !semanticMemo.overflow;
+    if (resourceShapeOpportunityForDraw) {
+      perf::countEncodeSlotPsoPrefetchDrawResourceShapeMemoCandidates();
+      resourceShapeMemoKey =
+          makeDrawResourceShapeMemoKey(drawState, argbufHybridMode,
+                                       argbufResourceArray,
+                                       argbufDirectCbufMode);
+      resourceShapeMemo = probeDrawResourceShapeMemo(
+          resourceShapeMemoKey, *drawState.hot, drawState.shaderContext());
+      if (resourceShapeMemo.hit) {
+        perf::countEncodeSlotPsoPrefetchDrawResourceShapeMemoHits();
+      } else if (resourceShapeMemo.overflow) {
+        perf::countEncodeSlotPsoPrefetchDrawResourceShapeMemoOverflow();
+      } else {
+        perf::countEncodeSlotPsoPrefetchDrawResourceShapeMemoMisses();
+      }
+      if (drawResourceShapeBehaviorEnabled &&
+          !drawResourceShapeOpportunityEnabled && resourceShapeMemo.hit &&
+          resourceShapeMemo.entry && resourceShapeMemo.entry->handle.valid()) {
+        recordDrawPsoHandleReuseOpportunity(resourceShapeMemo.entry->handle);
+        if (drawSemanticMemoEnabled) {
+          PerfScope stageScope(
+              drawSemanticSplitEnabled
+                  ? perf::countEncodeSlotPsoPrefetchDrawSemanticStoreCpuTime
+                  : nullptr);
+          storeDrawSemanticMemo(semanticMemo, semanticMemoKey, *drawState.hot,
+                                drawState.shaderContext(),
+                                resourceShapeMemo.entry->handle);
+        }
+        slot.setDrawRunPsoHandles(i, resourceShapeMemo.entry->handle);
+        continue;
+      }
+    }
+    auto resolved = [&] {
+      PerfScope stageScope(
+          perf::countEncodeSlotPsoPrefetchDrawKeyResolveCpuTime);
+      return pipelineCache_.resolveDrawPipelineState(
+          limits_, pool_, drawState, /*tileFfpMode=*/false, argbufHybridMode,
+          argbufResourceArray, argbufDirectCbufMode);
+    }();
+    const auto probeKey = pipeline::makeShaderVariantProbeKey(resolved.key);
+    if (resourceShapeOpportunityForDraw && resourceShapeMemo.hit &&
+        resourceShapeMemo.entry) {
+      if (resourceShapeMemo.entry->probeKey == probeKey) {
+        perf::countEncodeSlotPsoPrefetchDrawResourceShapeMemoValidatedHits();
+      } else {
+        perf::countEncodeSlotPsoPrefetchDrawResourceShapeMemoValidatedMisses();
+        recordDrawResourceShapeProbeMismatch(resourceShapeMemo.entry->probeKey,
+                                             probeKey);
+      }
+    }
+    pipeline::DrawPipelineLookup lookup{};
+    if (drawProbeKeyMemoEnabled) {
+      const auto memo = probeDrawPsoKeyMemo(probeKey);
+      if (memo.hit) {
+        perf::countEncodeSlotPsoPrefetchDrawProbeKeyMemoHits();
+        if (drawSemanticMemoEnabled && !semanticMemo.hit &&
+            !semanticMemo.overflow && memo.entry) {
+          recordDrawSemanticMissProbeKeyCollapse(
+              *memo.entry, semanticMemoKey, *drawState.hot,
+              drawState.shaderContext());
+        }
+        lookup.handle = memo.handle;
+      } else {
+        if (memo.overflow) {
+          perf::countEncodeSlotPsoPrefetchDrawProbeKeyMemoOverflow();
+        } else {
+          perf::countEncodeSlotPsoPrefetchDrawProbeKeyMemoMisses();
+        }
+        {
+          PerfScope stageScope(
+              perf::countEncodeSlotPsoPrefetchDrawLookupCpuTime);
+          tracePsoPrefetchStage("draw.before-lookup", slot, i);
+          lookup = pipelineCache_.getOrBuildDrawPipelineHandle(
+              device_, resolved.key, std::move(resolved.shaderSource),
+              &shaderArchive_.reference(), &shaderArchive_.path());
+          tracePsoPrefetchStage("draw.after-lookup", slot, i);
+        }
+        storeDrawPsoKeyMemo(memo, probeKey, semanticMemoKey, *drawState.hot,
+                            drawState.shaderContext(), lookup.handle);
+      }
+    } else {
+      {
+        PerfScope stageScope(perf::countEncodeSlotPsoPrefetchDrawLookupCpuTime);
+        tracePsoPrefetchStage("draw.before-lookup", slot, i);
+        lookup = pipelineCache_.getOrBuildDrawPipelineHandle(
+            device_, resolved.key, std::move(resolved.shaderSource),
+            &shaderArchive_.reference(), &shaderArchive_.path());
+        tracePsoPrefetchStage("draw.after-lookup", slot, i);
+      }
+    }
+    if (drawSemanticMemoEnabled) {
+      PerfScope stageScope(
+          drawSemanticSplitEnabled
+              ? perf::countEncodeSlotPsoPrefetchDrawSemanticStoreCpuTime
+              : nullptr);
+      storeDrawSemanticMemo(semanticMemo, semanticMemoKey, *drawState.hot,
+                            drawState.shaderContext(), lookup.handle);
+    }
+    if (resourceShapeOpportunityForDraw) {
+      storeDrawResourceShapeMemo(resourceShapeMemo, resourceShapeMemoKey,
+                                 *drawState.hot, drawState.shaderContext(),
+                                 probeKey, lookup.handle);
     }
     recordDrawPsoHandleReuseOpportunity(lookup.handle);
     slot.setDrawRunPsoHandles(i, lookup.handle);
+    tracePsoPrefetchStage("draw.done", slot, i);
   }
-  slot.sealPrefetchedPipelines();
+  slot.setPrefetchedPipelineCommandCursor(commandCount);
+  if (seal) {
+    slot.sealPrefetchedPipelines();
+  }
+  tracePsoPrefetchStage(seal ? "end-sealed" : "end-partial", slot);
 }
 
 uniform::DirtyState CommandQueue::consumePendingDirty() {
@@ -721,6 +1688,16 @@ CommandQueue::TransientBufferSlice CommandQueue::uploadTransientBuffer(
     std::lock_guard lock(mutex_);
     completedSeqId = completedSeqId_;
   }
+  return uploadTransientBufferWithCompletedSeqId(
+      bytes, alignment, seqId, completedSeqId);
+}
+
+CommandQueue::TransientBufferSlice
+CommandQueue::uploadTransientBufferWithCompletedSeqId(
+    std::span<const std::byte> bytes,
+    std::size_t alignment,
+    std::uint64_t seqId,
+    std::uint64_t completedSeqId) {
   return transientArena_.uploadBuffer(bytes, alignment, seqId, completedSeqId);
 }
 
@@ -733,6 +1710,16 @@ std::vector<CommandQueue::TransientBufferSlice> CommandQueue::uploadTransientBuf
     std::lock_guard lock(mutex_);
     completedSeqId = completedSeqId_;
   }
+  return uploadTransientBufferBatchWithCompletedSeqId(
+      payloads, alignment, seqId, completedSeqId);
+}
+
+std::vector<CommandQueue::TransientBufferSlice>
+CommandQueue::uploadTransientBufferBatchWithCompletedSeqId(
+    std::span<const std::span<const std::byte>> payloads,
+    std::size_t alignment,
+    std::uint64_t seqId,
+    std::uint64_t completedSeqId) {
   return transientArena_.uploadBufferBatch(payloads, alignment, seqId, completedSeqId);
 }
 
@@ -750,6 +1737,16 @@ CommandQueue::TransientBufferReservation CommandQueue::reserveTransientBuffer(
     std::lock_guard lock(mutex_);
     completedSeqId = completedSeqId_;
   }
+  return reserveTransientBufferWithCompletedSeqId(
+      size, alignment, seqId, completedSeqId);
+}
+
+CommandQueue::TransientBufferReservation
+CommandQueue::reserveTransientBufferWithCompletedSeqId(
+    std::size_t size,
+    std::size_t alignment,
+    std::uint64_t seqId,
+    std::uint64_t completedSeqId) {
   return transientArena_.reserveBuffer(size, alignment, seqId, completedSeqId);
 }
 
@@ -1416,7 +2413,9 @@ void markSlotResourcesUnlocked(resources::Pool& pool, const core::ChunkSlot& slo
 
 void prepareSlotForPublish(CommandQueue& q,
                            resources::Pool& pool,
-                           core::ChunkSlot& slot) {
+                           core::ChunkSlot& slot,
+                           perf::ChunkPublishReason reason) {
+  perf::countChunkPublishReason(reason, slot.commandCount());
   PerfScope scope(perf::countPrepareSlotForPublishCpuTime);
   {
     PerfScope stageScope(perf::countPrepareSlotResourceMarkCpuTime);
@@ -1443,7 +2442,8 @@ bool maybeCommitDrawChunkUnlocked(
   }
   const bool committed = q.queueLifecycle_.commitCurrentChunk(
       lock, kMaxQueuedChunks, [&q, &pool](core::ChunkSlot& slot) {
-        prepareSlotForPublish(q, pool, slot);
+        prepareSlotForPublish(q, pool, slot,
+                              perf::ChunkPublishReason::DrawLimit);
       });
   if (committed && q.skipDrawResourceMarking_) {
     q.forceDrawResourceMarkingAfterSplit_ = true;
@@ -1472,7 +2472,8 @@ bool maybeCommitDrawPayloadArenaUnlocked(
 
   const bool committed = q.queueLifecycle_.commitCurrentChunk(
       lock, kMaxQueuedChunks, [&q, &pool](core::ChunkSlot& publishSlot) {
-        prepareSlotForPublish(q, pool, publishSlot);
+        prepareSlotForPublish(q, pool, publishSlot,
+                              perf::ChunkPublishReason::PayloadLimit);
       });
   if (committed) {
     if (q.skipDrawResourceMarking_) {
@@ -1501,6 +2502,39 @@ void CommandQueue::noteCommitChunkReplayStartForCompletionGap() {
 
 void CommandQueue::noteCommitChunkReplayEndForCompletionGap() {
   queueLifecycle_.recordNoEnqueueWaitGapToCommitChunkReplayEnd();
+}
+
+void CommandQueue::noteCommitChunkReplayCpuBeforePublish(
+    std::uint64_t nanoseconds) {
+  queueLifecycle_.recordNoEnqueueCommitChunkReplayCpuBeforePublish(nanoseconds);
+}
+
+void CommandQueue::noteCommitChunkActiveReplayCpuBeforePublish(
+    std::uint64_t nanoseconds) {
+  queueLifecycle_.recordNoEnqueueCommitChunkActiveReplayCpuBeforePublish(nanoseconds);
+}
+
+void CommandQueue::noteCommitChunkRecordShapeForCompletionGap(
+    const core::metalqueue::NoEnqueueCommitChunkRecordShape& shape) {
+  queueLifecycle_.recordNoEnqueueCommitChunkRecordShapeBeforePublish(shape);
+}
+
+void CommandQueue::prefetchCurrentWritingSlotPipelines() {
+  if (!unpublishedSlotPsoPrefetchEnabled()) {
+    return;
+  }
+
+  std::unique_lock lock(mutex_);
+  if (!writingSlot_) {
+    return;
+  }
+  auto& slot = currentSlotUnlocked(*this);
+  if (slot.commandsEmpty() || slot.prefetchedPipelinesSealed()) {
+    return;
+  }
+
+  PerfScope stageScope(perf::countUnpublishedSlotPsoPrefetchCpuTime);
+  prefetchSlotPipelines(slot, /*seal=*/false);
 }
 
 void CommandQueue::markChunkResources(std::span<const core::ChunkHandleEntry> entries) {
@@ -1703,7 +2737,8 @@ void CommandQueue::submitStretchRect(const core::StretchRectDesc& desc) {
   if (splitStretchChunk()) {
     queueLifecycle_.commitCurrentChunk(
         lock, kMaxQueuedChunks, [this](core::ChunkSlot& slot) {
-          prepareSlotForPublish(*this, pool_, slot);
+          prepareSlotForPublish(*this, pool_, slot,
+                                perf::ChunkPublishReason::StretchSplit);
         });
   }
   ensureWritingSlotUnlocked(*this, lock);
@@ -1714,7 +2749,8 @@ void CommandQueue::submitStretchRect(const core::StretchRectDesc& desc) {
   if (splitStretchChunk()) {
     queueLifecycle_.commitCurrentChunk(
         lock, kMaxQueuedChunks, [this](core::ChunkSlot& slot) {
-          prepareSlotForPublish(*this, pool_, slot);
+          prepareSlotForPublish(*this, pool_, slot,
+                                perf::ChunkPublishReason::StretchSplit);
         });
   }
 }
@@ -1779,7 +2815,8 @@ std::uint64_t CommandQueue::submitPresent(const core::SwapDesc& desc) {
           std::unique_lock lock(mutex_);
           queueLifecycle_.commitCurrentChunk(
               lock, kMaxQueuedChunks, [this](core::ChunkSlot& slot) {
-                prepareSlotForPublish(*this, pool_, slot);
+                prepareSlotForPublish(*this, pool_, slot,
+                                      perf::ChunkPublishReason::PresentAcquire);
               });
         }
         auto token = presenter->acquireDrawable(makePresentAcquireParams(queuedDesc));
@@ -1807,20 +2844,24 @@ std::uint64_t CommandQueue::submitPresent(const core::SwapDesc& desc) {
     if (splitPresentChunk()) {
       queueLifecycle_.commitCurrentChunk(
           lock, kMaxQueuedChunks, [this](core::ChunkSlot& slot) {
-            prepareSlotForPublish(*this, pool_, slot);
+            prepareSlotForPublish(
+                *this, pool_, slot,
+                perf::ChunkPublishReason::PresentSplitBefore);
           });
       ensureWritingSlotUnlocked(*this, lock);
       queueLifecycle_.appendPresentCommand(queuedDesc, sourceHandle);
       queueLifecycle_.commitCurrentChunk(
           lock, kMaxQueuedChunks, [this](core::ChunkSlot& slot) {
-            prepareSlotForPublish(*this, pool_, slot);
+            prepareSlotForPublish(*this, pool_, slot,
+                                  perf::ChunkPublishReason::Present);
           });
       presentSeqId = lastCommittedSeqId_;
     } else {
       queueLifecycle_.presentAndCommit(
           lock, kMaxQueuedChunks, queuedDesc, sourceHandle,
           [this](core::ChunkSlot& slot) {
-            prepareSlotForPublish(*this, pool_, slot);
+            prepareSlotForPublish(*this, pool_, slot,
+                                  perf::ChunkPublishReason::Present);
           });
       presentSeqId = lastCommittedSeqId_;
     }
@@ -1920,7 +2961,8 @@ void CommandQueue::submitFlush() {
   std::unique_lock lock(mutex_);
   queueLifecycle_.flushAndWait(
       lock, kMaxQueuedChunks, [this](core::ChunkSlot& slot) {
-        prepareSlotForPublish(*this, pool_, slot);
+        prepareSlotForPublish(*this, pool_, slot,
+                              perf::ChunkPublishReason::Flush);
       });
 }
 
@@ -1947,7 +2989,8 @@ void* CommandQueue::mapBuffer(core::BufferHandle handle, std::uint32_t flags) {
   if (waitSeq > lastCommittedSeqId_) {
     queueLifecycle_.commitCurrentChunk(
         lock, kMaxQueuedChunks, [this](core::ChunkSlot& slot) {
-          prepareSlotForPublish(*this, pool_, slot);
+          prepareSlotForPublish(*this, pool_, slot,
+                                perf::ChunkPublishReason::MapWait);
         });
   }
   if (waitSeq > completedSeqId_) {

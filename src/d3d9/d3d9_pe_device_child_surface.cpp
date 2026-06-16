@@ -289,10 +289,8 @@ static uint32_t formatBytesPerPixel(uint32_t fmt) {
   // fails.
   D9CSurfaceDesc desc{};
   UINT height = 1;
-  uint32_t format = preDesc.format;
   if (SUCCEEDED(textureLevelDesc(texture, level, &desc))) {
     height = std::max<UINT>(1, desc.height);
-    format = desc.format;
   } else if (box && box->Bottom > box->Top) {
     height = box->Bottom - box->Top;
   }
@@ -319,12 +317,12 @@ static uint32_t formatBytesPerPixel(uint32_t fmt) {
   return hr32(dxmt9c_texture_unlock_rect(texture, level));
 }
 
-static bool surfaceIsDefaultPool(D9CSurface *surface) {
-  if (!surface)
-    return false;
-  D9CSurfaceDesc desc{};
-  return SUCCEEDED(hr32(dxmt9c_surface_get_desc(surface, &desc))) &&
-         desc.pool == D3DPOOL_DEFAULT;
+static bool loadSurfaceDesc(D9CSurface *surface, D9CSurfaceDesc &desc) {
+  return surface && SUCCEEDED(hr32(dxmt9c_surface_get_desc(surface, &desc)));
+}
+
+static bool surfaceIsDefaultPool(const D9CSurfaceDesc &desc, bool valid) {
+  return valid && desc.pool == D3DPOOL_DEFAULT;
 }
 
 static bool textureIsDefaultPool(D9CTexture *texture) {
@@ -338,12 +336,8 @@ static bool textureIsDefaultPool(D9CTexture *texture) {
 // Wine d3d9 resource_priority_pool_policy: SetPriority only stores the
 // value on D3DPOOL_MANAGED resources; DEFAULT / SYSTEMMEM / SCRATCH ignore
 // the new value but still return the previous shadow.
-static bool surfacePriorityWriteable(D9CSurface *surface) {
-  if (!surface)
-    return false;
-  D9CSurfaceDesc desc{};
-  return SUCCEEDED(hr32(dxmt9c_surface_get_desc(surface, &desc))) &&
-         desc.pool == D3DPOOL_MANAGED;
+static bool surfacePriorityWriteable(const D9CSurfaceDesc &desc, bool valid) {
+  return valid && desc.pool == D3DPOOL_MANAGED;
 }
 
 static bool texturePriorityWriteable(D9CTexture *texture) {
@@ -370,6 +364,30 @@ static void untrackDefaultPoolResource(D3D9PeRecorderFlush *recorder,
   recorder->ReleaseDefaultPoolResourceRefForChild();
 }
 
+static HRESULT cachedSurfaceDescOrFetch(D9CSurface *surface,
+                                         const D9CSurfaceDesc &cached,
+                                         bool cachedValid,
+                                         D9CSurfaceDesc &desc) {
+  if (cachedValid) {
+    desc = cached;
+    return S_OK;
+  }
+  return hr32(dxmt9c_surface_get_desc(surface, &desc));
+}
+
+static void fillSurfaceDesc(const D9CSurfaceDesc &src, D3DSURFACE_DESC &dst) {
+  dst.Format = static_cast<D3DFORMAT>(src.format);
+  // Wine d3d9: any D3D9Surface always reports D3DRTYPE_SURFACE regardless
+  // of the parent texture's resource type.
+  dst.Type = D3DRTYPE_SURFACE;
+  dst.Usage = src.usage;
+  dst.Pool = static_cast<D3DPOOL>(src.pool);
+  dst.MultiSampleType = static_cast<D3DMULTISAMPLE_TYPE>(src.multiSampleType);
+  dst.MultiSampleQuality = src.multiSampleQuality;
+  dst.Width = src.width;
+  dst.Height = src.height;
+}
+
 /* =========================================================================
  * Resource COM wrappers
  * Each wrapper holds a D9C* handle (owns one refcount) and exposes raw()
@@ -385,6 +403,8 @@ class D3D9SurfaceImpl final : public IDirect3DSurface9 {
   IDirect3DDevice9 *device_;
   IUnknown *container_;
   D3D9PeRecorderFlush *recorder_;
+  D9CSurfaceDesc desc_{};
+  bool descValid_ = false;
   HDC dc_ = nullptr;
   // ex_user_memory_getdc_dib_identity: for user-memory-aliased surfaces,
   // GetDC must return a DC whose selected bitmap is a DIB section whose
@@ -424,6 +444,7 @@ public:
         userMemory_(userMemory), userMemoryPitch_(userMemoryPitch) {
     if (device_)
       device_->AddRef();
+    descValid_ = loadSurfaceDesc(s_, desc_);
     if (container_)
       container_->AddRef();
     if (container_) {
@@ -436,7 +457,8 @@ public:
       }
     }
     trackDefaultPoolResource(recorder_, defaultPoolTracked_,
-                             trackDefaultPool && surfaceIsDefaultPool(s_));
+                             trackDefaultPool &&
+                                 surfaceIsDefaultPool(desc_, descValid_));
   }
 
   bool peLocked() const { return locked_; }
@@ -509,7 +531,7 @@ public:
     // never priority-writeable — the parent owns the priority. Standalone
     // surfaces (CreateOffscreenPlainSurface, CreateRenderTarget) honor the
     // pool rule (only MANAGED stores).
-    if (!container_ && surfacePriorityWriteable(s_))
+    if (!container_ && surfacePriorityWriteable(desc_, descValid_))
       priorityShadow_ = newPriority;
     return previous;
   }
@@ -546,30 +568,20 @@ public:
     if (!pD)
       return finishPeCall(D3DERR_INVALIDCALL);
     D9CSurfaceDesc sd{};
-    HRESULT hr = hr32(dxmt9c_surface_get_desc(s_, &sd));
-    if (SUCCEEDED(hr)) {
-      pD->Format = (D3DFORMAT)sd.format;
-      // Wine d3d9: any D3D9Surface always reports D3DRTYPE_SURFACE
-      // regardless of the parent texture's resource type.
-      // cube_texture_level_surface_policy.
-      pD->Type = D3DRTYPE_SURFACE;
-      pD->Usage = sd.usage;
-      pD->Pool = (D3DPOOL)sd.pool;
-      pD->MultiSampleType = (D3DMULTISAMPLE_TYPE)sd.multiSampleType;
-      pD->MultiSampleQuality = sd.multiSampleQuality;
-      pD->Width = sd.width;
-      pD->Height = sd.height;
-      dxmt9DeviceDebugLog("surface_get_desc this=%p fmt=%u usage=0x%x pool=%u "
-                          "msaa=%u/%u size=%ux%u",
-                          this, (unsigned)pD->Format, (unsigned)pD->Usage,
-                          (unsigned)pD->Pool, (unsigned)pD->MultiSampleType,
-                          (unsigned)pD->MultiSampleQuality, (unsigned)pD->Width,
-                          (unsigned)pD->Height);
-    } else {
+    const HRESULT hr = cachedSurfaceDescOrFetch(s_, desc_, descValid_, sd);
+    if (FAILED(hr)) {
       dxmt9DeviceDebugLog("surface_get_desc this=%p -> hr=0x%08x", this,
                           (unsigned)hr);
+      return finishPeCall(hr);
     }
-    return finishPeCall(hr);
+    fillSurfaceDesc(sd, *pD);
+    dxmt9DeviceDebugLog("surface_get_desc this=%p fmt=%u usage=0x%x pool=%u "
+                        "msaa=%u/%u size=%ux%u",
+                        this, (unsigned)pD->Format, (unsigned)pD->Usage,
+                        (unsigned)pD->Pool, (unsigned)pD->MultiSampleType,
+                        (unsigned)pD->MultiSampleQuality, (unsigned)pD->Width,
+                        (unsigned)pD->Height);
+    return finishPeCall(S_OK);
   }
   HRESULT STDMETHODCALLTYPE LockRect(D3DLOCKED_RECT *pLR, const RECT *pRect,
                                      DWORD flags) noexcept override {
@@ -606,7 +618,7 @@ public:
       return D3DERR_INVALIDCALL;
     {
       D9CSurfaceDesc desc{};
-      if (SUCCEEDED(hr32(dxmt9c_surface_get_desc(s_, &desc)))) {
+      if (SUCCEEDED(cachedSurfaceDescOrFetch(s_, desc_, descValid_, desc))) {
         if (pRect && !rectWithinExtents(pRect, desc.width, desc.height))
           return D3DERR_INVALIDCALL;
         // Wine d3d9 test_resource_access (base-pool variant,
@@ -729,7 +741,7 @@ public:
     // mechanism Wine's wined3d uses for the same case.
     if (userMemory_) {
       D9CSurfaceDesc desc{};
-      if (SUCCEEDED(hr32(dxmt9c_surface_get_desc(s_, &desc)))
+      if (SUCCEEDED(cachedSurfaceDescOrFetch(s_, desc_, descValid_, desc))
           && desc.width != 0 && desc.height != 0) {
         const uint32_t bpp = formatBytesPerPixel(desc.format);
         if (bpp != 0) {

@@ -240,11 +240,31 @@ void executeLinearization(const FrameGraph& graph,
       // Pull the original draw state out of the chunk slot via the DrawRef.
       const auto command = slot.drawRunCommandAt(op.draw.command_index);
       core::FlatDrawStateView drawState = command.drawState;
-      drawState.uniforms = command.drawUniformPayload;
       const auto params = command.drawParams;
       const u32 begin = op.draw.param_first;
       const u32 end = begin + op.draw.param_count;
+      core::DrawUniformPayload commandUniformScratch{};
+      const core::DrawUniformPayload* commandUniformPayload =
+          command.drawRunRecord
+              ? core::drawRunUniformPayloadForHandle(
+                    command, command.drawRunRecord->uniformHandle,
+                    commandUniformScratch,
+                    perf::DrawUniformPayloadMaterializeSite::FramegraphCommand)
+              : command.drawUniformPayload;
+      core::DrawUniformPayload uniformScratch{};
       for (u32 pi = begin; pi < end && pi < params.size(); ++pi) {
+        const bool usesCommandUniform =
+            command.drawRunRecord &&
+            (!params[pi].uniformHandle.valid() ||
+             params[pi].uniformHandle == command.drawRunRecord->uniformHandle);
+        drawState.uniforms = usesCommandUniform
+            ? commandUniformPayload
+            : core::drawRunUniformPayloadForParam(
+                  command, params[pi], uniformScratch,
+                  perf::DrawUniformPayloadMaterializeSite::FramegraphParam);
+        if (!drawState.uniforms) {
+          continue;
+        }
         emitter.emitDraw(ctx, commandBuffer, activeEncoder, drawState, seqId,
                          params[pi]);
       }

@@ -234,6 +234,10 @@ For non-probe smoke/image checks, use the catalogue runner default
 or pass an explicit positive
 `python3 scripts/run_apps/run_experiment.py run app-d3d9-3dmark05 --timeout N`;
 `--timeout 0` is rejected for this app.
+If the macOS session may be locked while scheduling a probe, pass wrapper
+`--wait-unlocked-sec N` and optionally `--wait-unlocked-interval-sec N`; dry-run
+prints the plan without waiting, while a real run polls the lock state before
+launching Wine and still creates no probe artifacts if the wait expires.
 Do not start the 3DMark05 launcher script directly without an external timeout
 or process supervisor. If the launcher is started directly without
 `run_experiment.py`, it now falls back to
@@ -249,7 +253,23 @@ timeout-finalized 3DMark05 run should not leave a detached final-frame process.
 Do not treat an open Xcode welcome window as proof that the Metal capture layer
 is inserted. If a 3DMark05 probe log reports `startCapture failed` with
 `Capture layer is not inserted`, file and `developerTools` capture destinations
-are both invalid for that run. Also avoid making `MTL_CAPTURE_ENABLED=1` the
+are both invalid for that run. A real attach-after-normal-start diagnostic uses
+wrapper `--xcode-developer-tools-capture` or
+`--metal-capture-destination developerTools`, expects no direct
+`frame<N>.gputrace` file, and must prove `destination=1` start/stop log lines
+before relying on Xcode exports under `traces/<run>/analysis`. Preflight Xcode
+attach before spending a long run: `Debug > Attach to Process by PID or
+Name...` must be enabled or the `Debug > Attach to Process` submenu must list
+the real Wine/3DMark05 child. A folder workspace where attach-by-PID is disabled
+and the process submenu is stuck at `Getting Process List...` is not a valid
+attach route. Developer Mode disabled from `/usr/sbin/DevToolsSecurity -status`
+is also a hard preflight failure. Use
+`run_3dmark05_perf_probe.sh --xcode-attach-preflight-only` for a no-launch
+check, and add `--require-xcode-attach-preflight` to fail before launch on a
+`developerTools` capture run. Choose a target frame known to be
+reached by the current run; missing the target frame means dxmt9 never requested
+capture and cannot prove capture-layer behavior. Also avoid making
+`MTL_CAPTURE_ENABLED=1` the
 default workaround for 3DMark05: it can force a black-screen startup with no
 valid draw/present counters and no `.gputrace`, so it is not a valid
 performance sample. Use it only as a one-off capture-layer diagnostic and
@@ -1261,11 +1281,11 @@ For dxmt9's 3DMark05 GT1 GPU-bottleneck investigation, do not hand-build
 the Wine launch, the final-frame hang timeout, capture/finalize, and the
 Xcode-counter ↔ dxmt-attribution join:
 
-For this specific 3DMark05 workflow, do not add `MTL_CAPTURE_ENABLED=1` unless
-`DXMT_3DMARK05_SET_MTL_CAPTURE_ENABLED=1` is deliberately requested. That env
-has reproduced black-screen startup with draw/present counters at zero; the
-standard wrapper uses dxmt9's `DXMT_METAL_CAPTURE_FRAME/PATH` trigger without
-it by default.
+For this specific 3DMark05 workflow, do not add `MTL_CAPTURE_ENABLED=1` or
+`METAL_CAPTURE_ENABLED=1` unless `DXMT_3DMARK05_SET_MTL_CAPTURE_ENABLED=1` is
+deliberately requested. The capture-layer env path has reproduced black-screen
+startup with draw/present counters at zero; the standard wrapper uses dxmt9's
+`DXMT_METAL_CAPTURE_FRAME/PATH` trigger without it by default.
 For draw-local force-white queues generated from effect-geometry CSVs, treat
 `command_index`/`command_draw_index` as a narrow replay target, not proof. The
 follow-up run is valid only when the perf summary reports nonzero
@@ -1281,31 +1301,62 @@ Prefer `seq + texture/command` gates first, then read the resulting sidecar
 metadata for the actual `enc`, `draw`, `commandIndex`, and
 `commandDrawIndex`.
 Apple's file `.gputrace` destination still needs the process capture layer
-(`MetalCaptureEnabled` Info.plist key or macOS 14+ `MTL_CAPTURE_ENABLED=1`), so
-the expected no-layer failure is `Capture layer is not inserted`.
+(`MetalCaptureEnabled` Info.plist key or macOS capture-layer env), so the
+expected no-layer failure is `Capture layer is not inserted`.
+The standard 3DMark05 wrapper preflights file capture before launching Wine and
+fails early when both `wine.real` and `wine-preloader` lack
+`MetalCaptureEnabled` and no capture-layer env was requested. Use
+`DXMT_3DMARK05_ALLOW_NO_FILE_CAPTURE_LAYER=1` only for an intentional late
+`Capture layer is not inserted` diagnostic.
 If normal rendering works but file capture fails with `Capture layer is not
 inserted`, only try an Xcode attach-after-normal-start route when the capture
 layer can be proven on the real Wine temp child; rerun with
-`DXMT_3DMARK05_METAL_CAPTURE_DESTINATION=developerTools` only for that explicit
-diagnostic. Merely opening Xcode at the welcome window is not enough; if
-`developerTools` still logs `Capture layer is not inserted`, classify the run
-as capture-layer failure and do not use its output as an Xcode/perf sample.
+`--xcode-developer-tools-capture` or
+`--metal-capture-destination developerTools` only for that explicit diagnostic.
+This route does not write `frame<N>.gputrace` directly; the wrapper proves
+`destination=1` start/stop log lines and the useful Xcode artifacts must be
+exported into `traces/<run>/analysis`. Merely opening Xcode at the welcome
+window is not enough. Preflight that Xcode can actually attach to the real Wine
+child before launching a long run (`--xcode-attach-preflight-only`); Developer
+Mode disabled, attach-by-PID disabled, and process-list loading are all
+preflight failures. Choose a target frame that the run is known to reach;
+otherwise classify the run as attach-preflight or frame-target failure, not
+capture-layer evidence. If
+`developerTools` still logs
+`Capture layer is not inserted`, classify the run as capture-layer failure and
+do not use its output as an Xcode/perf sample.
 The in-place copied `wine.capture.real` / `wine.capture.real-preloader`
 experiment with embedded `MetalCaptureEnabled=true` also rendered GT1 normally
 but still failed file capture with `Capture layer is not inserted`. Treat that
 as a negative capture-layer result unless a future run proves that Xcode itself
 launched or attached the real Wine temp child.
-For non-3DMark05 Wine/D3D9 capture-layer diagnostics, the repository wrapper
+For deliberate 3DMark05 file `.gputrace` diagnostics, prefer
+`scripts/tools/run_3dmark05_perf_probe.sh --with-wine-capture-layer ...`; it
+uses the standard supervised probe path and wraps the launch in the Wine
+capture-layer patcher. For non-3DMark05 Wine/D3D9 capture-layer diagnostics,
+or when manually wrapping a lower-level command, the repository wrapper
 `scripts/tools/run_with_wine_metal_capture_layer.sh --wine-root <root> -- ...`
 can temporarily patch `<root>/bin/wine.real` and `wine-preloader`, let Wine copy
 the patched binaries into `/var/folders/.../winetemp...`, and restore the
-originals. It produced a valid `.gputrace` for `perf-d3d9-present-loop`.
-Do not promote that wrapper to the standard 3DMark05 path: the same in-place
-patch made the real 3DMark05 temp `wine.real` contain `MetalCaptureEnabled`, but
-3DMark05 still black-screened before draw/present and no `.gputrace` was
-written. The wrapper refuses 3DMark05 command lines by default; use
+originals. It produced valid `.gputrace` captures for
+`perf-d3d9-present-loop` and for a deliberate 3DMark05 frame60 diagnostic
+(`capture-layer-atomic-r9`). The wrapper's file swap must stay atomic:
+same-directory temp file plus `mv` for both patch and restore. Do not replace
+that with in-place `cp` overwrites; the `cp` path reproduced
+`SIGKILL (Code Signature Invalid)` / `Taskgated Invalid Signature` on the
+original `wine.real` path even though `codesign --verify` passed. When wrapping
+`run_experiment.py` directly, pass the same `--wine-root <root>` to the child
+command; otherwise the wrapper can patch one Wine tree while the catalogue
+runner auto-detects and launches another one. Also pass
+`DXMT_METAL_CAPTURE_PATH` as an absolute path when using the manual wrapper:
+catalogue launchers `cd` into the app workdir before Wine starts, so a relative
+`traces/...` path is resolved under `experiments/apps/<app>/traces/...` instead
+of the repository trace root. The 3DMark05 probe wrapper already uses an
+absolute `$repo_root/traces/<run-id>/frame<N>.gputrace` path. The wrapper
+refuses 3DMark05 command lines by default because capture-layer runs are
+diagnostic/Xcode-counter routes, not normal wall-clock FPS samples; use
 `--allow-3dmark05` or `DXMT9_ALLOW_3DMARK05_CAPTURE_LAYER=1` only for a
-deliberate diagnostic that is expected to be invalid as a perf sample.
+deliberate capture run and pair it with a no-gputrace scout for FPS claims.
 
 For render-pass dependency debugging, use the Frame Graph DAG dump as a
 no-Xcode sidecar before escalating to another `.gputrace`. It is an
@@ -1347,7 +1398,7 @@ When `.gputrace` replay is blocked, prefer
 `scripts/tools/run_3dmark05_system_trace_sidecar.sh -- ...` for
 normal-rendering Metal System Trace sidecars. It runs the probe wrapper dry-run
 first, refuses locked sessions before starting xctrace, can wait for unlock
-with `--wait-unlocked-sec N`, records `traces/<run>/metal-system.trace`, then exports/summarizes
+with sidecar `--wait-unlocked-sec N`, records `traces/<run>/metal-system.trace`, then exports/summarizes
 `metal-gpu-intervals` against dxmt encoder attribution. Manual fallback runs
 can still use `xcrun xctrace record --template 'Metal System Trace'
 --all-processes`, keep the trace at `traces/<run>/metal-system.trace`, and run

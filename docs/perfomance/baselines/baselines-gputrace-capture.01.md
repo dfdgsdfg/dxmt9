@@ -7,7 +7,7 @@ title: 3DMark05 gputrace Capture Must Avoid MTL_CAPTURE_ENABLED Startup Black Sc
 date: 2026-06-06
 type: workflow-validation
 status: accepted-capture-workflow-fix
-source: experiments/output/app-d3d9-3dmark05-fragmentless-depth-only-60-0-xcode-r2/3dmark05-direct.log; experiments/output/app-d3d9-3dmark05-fragmentless-depth-only-60-0-xcode-r2/dxmt9.log; experiments/output/app-d3d9-3dmark05-capture-env-only-sanity-r1/3dmark05-direct.log; experiments/output/app-d3d9-3dmark05-capture-env-only-sanity-r1/dxmt9.log; experiments/output/app-d3d9-3dmark05-fragmentless-depth-only-60-0-xcode-r3/3dmark05-direct.log; experiments/output/app-d3d9-3dmark05-fragmentless-depth-only-60-0-xcode-r3/3dmark05-perf-summary.md; experiments/output/app-d3d9-3dmark05-current-frame60-gputrace-capturelayer-r1/dxmt9.log; experiments/output/app-d3d9-3dmark05-current-frame60-gputrace-capturelayer-r1/actual.png; experiments/output/app-d3d9-3dmark05-current-frame60-gputrace-devtools-r1/dxmt9.log; experiments/output/app-d3d9-3dmark05-current-frame60-gputrace-devtools-r1/3dmark05-perf-summary.md; traces/app-d3d9-3dmark05-current-frame60-gputrace-devtools-r1/analysis/frame60-summary-counter-comparison-vs-post-visualfix.md; traces/capture-layer-present-loop-script-r1/frame2.gputrace; experiments/output/app-d3d9-3dmark05-capture-layer-inplace-frame60-r1/result.json; experiments/output/app-d3d9-3dmark05-capture-layer-inplace-frame60-r1/3dmark05-direct.log; scripts/tools/run_3dmark05_perf_probe.sh; scripts/tools/run_with_wine_metal_capture_layer.sh
+source: experiments/output/app-d3d9-3dmark05-fragmentless-depth-only-60-0-xcode-r2/3dmark05-direct.log; experiments/output/app-d3d9-3dmark05-fragmentless-depth-only-60-0-xcode-r2/dxmt9.log; experiments/output/app-d3d9-3dmark05-capture-env-only-sanity-r1/3dmark05-direct.log; experiments/output/app-d3d9-3dmark05-capture-env-only-sanity-r1/dxmt9.log; experiments/output/app-d3d9-3dmark05-fragmentless-depth-only-60-0-xcode-r3/3dmark05-direct.log; experiments/output/app-d3d9-3dmark05-fragmentless-depth-only-60-0-xcode-r3/3dmark05-perf-summary.md; experiments/output/app-d3d9-3dmark05-current-frame60-gputrace-capturelayer-r1/dxmt9.log; experiments/output/app-d3d9-3dmark05-current-frame60-gputrace-capturelayer-r1/actual.png; experiments/output/app-d3d9-3dmark05-current-frame60-gputrace-devtools-r1/dxmt9.log; experiments/output/app-d3d9-3dmark05-current-frame60-gputrace-devtools-r1/3dmark05-perf-summary.md; traces/app-d3d9-3dmark05-current-frame60-gputrace-devtools-r1/analysis/frame60-summary-counter-comparison-vs-post-visualfix.md; traces/capture-layer-present-loop-script-r1/frame2.gputrace; experiments/output/app-d3d9-3dmark05-capture-layer-inplace-frame60-r1/result.json; experiments/output/app-d3d9-3dmark05-capture-layer-inplace-frame60-r1/3dmark05-direct.log; local Xcode 26.5 attach-preflight observation for app-d3d9-3dmark05-xcode-devtools-attach-r1-20260615; scripts/tools/run_3dmark05_perf_probe.sh; scripts/tools/run_with_wine_metal_capture_layer.sh
 ---
 
 # 3DMark05 gputrace Capture Must Avoid `MTL_CAPTURE_ENABLED`
@@ -101,6 +101,14 @@ startCapture failed destination=1 destination_supported=0 ... error=Capture laye
 Xcode did not receive a new capture document; the previously opened
 `frame60.gputrace` remained the active Xcode window.
 
+   Later harness cleanup turned this into an explicit wrapper route:
+   `--xcode-developer-tools-capture` /
+   `--metal-capture-destination developerTools`. Unlike
+   `gpuTraceDocument`, this path should not create `frame<N>.gputrace`
+   directly; the wrapper now requires `destination=1` start/stop log lines and
+   expects the useful capture/performance artifacts to be exported from Xcode
+   into `traces/<run>/analysis`.
+
 6. Test whether a `MetalCaptureEnabled=true` app-bundle wrapper can avoid the
    env black screen. A native Metal probe proved that both direct and symlinked
    `.app/Contents/MacOS/*` executables get file capture support without
@@ -149,6 +157,39 @@ Xcode did not receive a new capture document; the previously opened
    `frame60.gputrace` was written. The wrapper restored `wine.real` and
    `wine-preloader` to the backup hashes.
 
+10. Test the explicit wrapper `developerTools` route as an
+    attach-after-normal-start diagnostic:
+
+```sh
+bash scripts/tools/run_3dmark05_perf_probe.sh \
+  --suffix xcode-devtools-attach-r1-20260615 \
+  --frame 1500 \
+  --xcode-developer-tools-capture \
+  --timeout 420
+```
+
+This run found the real 3DMark05 child from the shell (`3DMark05.exe`, with a
+`wine.real` parent), but Xcode 26.5 in a folder-workspace state could not attach:
+`Debug > Attach to Process by PID or Name...` was disabled, and
+`Debug > Attach to Process` stayed at `Getting Process List...` instead of
+listing the Wine child. The run later failed with `missing_capture`, but it only
+encoded `657` presents while the requested target was frame `1500`, so dxmt9
+never emitted a capture start/stop log. Classify this as an attach-preflight
+block plus target-frame miss, not as a capture-layer verdict.
+
+The follow-up wrapper preflight reproduces the same blocked state without
+launching 3DMark05:
+
+```sh
+bash scripts/tools/run_3dmark05_perf_probe.sh --xcode-attach-preflight-only
+# xcode_attach_preflight: status=fail reason=developer-mode-disabled ...
+```
+
+The lower-level Xcode menu probe still reports attach-by-PID disabled and the
+process list stuck at `Getting Process List...`, but
+`/usr/sbin/DevToolsSecurity -status` is the earlier root precondition on this
+machine: `Developer mode is currently disabled.`
+
 **Result.**
 
 The capture attempts split as:
@@ -166,6 +207,7 @@ The capture attempts split as:
 | `captureplist-frame60-gputrace-r1` | normal Wine root, copied `wine.capture.real` + `wine.capture.real-preloader` with embedded `MetalCaptureEnabled`, no `MTL_CAPTURE_ENABLED=1` | normal GT1 rendering and counters (`present_encoded=1680`, `draw_skipped_no_pipeline=0`, `gpu_command_buffer_errors=0`), but file capture still failed with `Capture layer is not inserted`; no `.gputrace` |
 | `capture-layer-present-loop-script-r1` | temporary replacement of actual `wine.real`/`wine-preloader` names using `run_with_wine_metal_capture_layer.sh` | valid synthetic proof; `frame2.gputrace` was written for `perf-d3d9-present-loop`; originals restored by hash |
 | `capture-layer-inplace-frame60-r1` | same temporary replacement applied to 3DMark05 | invalid 3DMark05 sample; temp `wine.real` had `MetalCaptureEnabled`, but startup black-screened before draw/present (`bridge_draw=0`, `bridge_present=0`); no `.gputrace` |
+| `xcode-devtools-attach-r1-20260615` | wrapper `--xcode-developer-tools-capture`, Xcode 26.5 folder workspace | invalid attach diagnostic; Xcode attach-by-PID was disabled and the process submenu did not populate; frame `1500` was not reached (`present_encoded=657`), so no `destination=1` start/stop log could exist |
 
 The `capture-env-only-sanity-r1` log is the isolating evidence: it did not set
 `DXMT_METAL_CAPTURE_FRAME/PATH`, yet it still reached only factory bridge calls
@@ -203,7 +245,11 @@ flowchart TD
   GpuTrace --> Layer{"capture layer inserted?"}
   Layer -- "Yes" --> Xcode["open .gputrace in Xcode<br/>export counters"]
   Layer -- "No" --> DevTools["developerTools destination"]
-  DevTools --> DevLayer{"Xcode-attached launch<br/>or capture layer inserted?"}
+  DevTools --> AttachPreflight{"Xcode attach UI ready<br/>for the Wine child?"}
+  AttachPreflight -- "No" --> AttachBlocked["attach preflight blocked<br/>PID visible from shell only"]
+  AttachPreflight -- "Yes" --> TargetFrame{"target frame reached?"}
+  TargetFrame -- "No" --> FrameMiss["capture trigger not reached<br/>no start/stop log expected"]
+  TargetFrame -- "Yes" --> DevLayer{"Xcode-attached launch<br/>or capture layer inserted?"}
   DevLayer -- "No" --> DevFail["same capture-layer failure<br/>destination=1 unsupported"]
   DevLayer -- "Yes" --> XcodeCapture["Xcode receives capture document"]
   Layer -- "try app bundle" --> AppBundle["external .app plist around wine.real"]
@@ -219,8 +265,8 @@ flowchart TD
   classDef pending fill:#fff3cd,stroke:#b8860b,color:#5a3b00
   classDef rejected fill:#f8d7da,stroke:#a33,color:#600
   class DxmtCapture,Normal,GpuTrace,Xcode,SyntheticOk accepted
-  class Layer,DevTools,DevLayer,XcodeCapture,TmpRoot,WineNamePatch pending
-  class Black,DevFail,AppBundle,WineTemp,TmpInvalid,ThreeDMarkBlack rejected
+  class Layer,DevTools,AttachPreflight,TargetFrame,DevLayer,XcodeCapture,TmpRoot,WineNamePatch pending
+  class Black,AttachBlocked,FrameMiss,DevFail,AppBundle,WineTemp,TmpInvalid,ThreeDMarkBlack rejected
 ```
 
 **Verdict.** Accepted as a capture workflow fix. For 3DMark05 perf probes, do
@@ -234,13 +280,26 @@ performance or correctness samples. The 2026-06-07 current-head retries confirm
 this is still true after the later instrumentation and visual-fix work, and
 show that the remaining capture route must be stronger than merely opening
 Xcode: launch/attach under Xcode with the capture layer inserted, or a Wine
-loader/Info.plist route that remains runtime-equivalent. A simple external
+loader/Info.plist route that remains runtime-equivalent. The wrapper's
+`developerTools` path now treats this as an Xcode-export workflow rather than a
+file-output workflow, so a future successful attach-after-normal-start run is
+not rejected just because `frame<N>.gputrace` was not written by dxmt9. A simple
+external
 `.app` wrapper is insufficient because Wine re-execs a temp child, and the tmp
 embedded-plist Wine root is not valid until the `c0000018` main-module failure
 is solved even without capture enabled. Temporary replacement of the actual
 `wine.real`/`wine-preloader` names is now proven for synthetic Wine/D3D9
 captures, but it is rejected for 3DMark05 because inserting the capture layer
 itself reproduces the black-screen/no-draw startup failure.
+
+The latest explicit Xcode route also adds a separate preflight requirement:
+before spending another long `developerTools` run, verify that Xcode can attach
+to the real Wine child and pick a target frame that the run is known to reach.
+Developer Mode disabled, attach-by-PID disabled, or a process submenu stuck at
+`Getting Process List...` are not valid attach routes. Use wrapper
+`--xcode-attach-preflight-only` to check this without launching 3DMark05, and
+`--require-xcode-attach-preflight` to fail before launch on a `developerTools`
+run when Xcode is still in that state.
 
 Reference: Apple's
 [Capturing a Metal workload programmatically](https://developer.apple.com/documentation/xcode/capturing-a-metal-workload-programmatically)

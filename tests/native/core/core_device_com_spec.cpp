@@ -1226,6 +1226,96 @@ void testReadOnlyBufferUnlockSkipsUpload() {
   checkEq(d3d->Release(), 0u, "readonly unlock factory release");
 }
 
+void testRedundantShaderConstSetKeepsUniformSnapshotReusable() {
+  using namespace dxmt9::com;
+
+  auto backend = std::make_shared<RecordingBackend>();
+  auto* d3d = Direct3DCreate9Ex(D3D_SDK_VERSION, backend);
+  check(d3d != nullptr, "factory for redundant shader const set");
+
+  PresentParameters params{};
+  params.backBufferWidth = 320;
+  params.backBufferHeight = 240;
+  params.windowed = true;
+
+  auto* device = d3d->CreateDeviceEx(0, params, nullptr);
+  check(device != nullptr, "device for redundant shader const set");
+
+  {
+    device->AddRef();
+    D9CDevice cDevice(device);
+
+    const std::array<float, 4> vsFloat{1.0f, 2.0f, 3.0f, 4.0f};
+    checkEq(dxmt9c_device_set_vs_const_f(&cDevice, 3u, vsFloat.data(), 1u),
+            D3D_OK, "initial VS float const set");
+
+    DrawParam draw{};
+    draw.primitiveCount = 1u;
+    DrawRunSubmission first{};
+    checkEq(device->coreDevice().snapshotDrawSubmissionFromCurrentState(
+                draw, first, nullptr),
+            D3D_OK, "first draw submission snapshot");
+    check(first.uniforms.has_value(), "first snapshot owns uniforms");
+
+    checkEq(dxmt9c_device_set_vs_const_f(&cDevice, 3u, vsFloat.data(), 1u),
+            D3D_OK, "redundant VS float const set");
+    DrawRunSubmission second{};
+    checkEq(device->coreDevice().snapshotDrawSubmissionFromCurrentState(
+                draw, second, &first),
+            D3D_OK, "second draw submission snapshot");
+    check(!second.uniforms.has_value(),
+          "redundant VS float const set does not invalidate uniform snapshot");
+
+    const std::array<int32_t, 4> psInt{5, 6, 7, 8};
+    checkEq(dxmt9c_device_set_ps_const_i(&cDevice, 2u, psInt.data(), 1u),
+            D3D_OK, "initial PS int const set");
+    DrawRunSubmission third{};
+    checkEq(device->coreDevice().snapshotDrawSubmissionFromCurrentState(
+                draw, third, &second),
+            D3D_OK, "third draw submission snapshot");
+    check(third.uniforms.has_value(), "changed PS int const refreshes uniforms");
+    check(third.uniformPayload().vsConst == first.uniformPayload().vsConst,
+          "changed PS const keeps cached VS constants");
+    checkEq(third.uniformPayload().vertexConstantsHash,
+            first.uniformPayload().vertexConstantsHash,
+            "changed PS const keeps cached VS constant hash");
+
+    checkEq(dxmt9c_device_set_ps_const_i(&cDevice, 2u, psInt.data(), 1u),
+            D3D_OK, "redundant PS int const set");
+    DrawRunSubmission fourth{};
+    checkEq(device->coreDevice().snapshotDrawSubmissionFromCurrentState(
+                draw, fourth, &third),
+            D3D_OK, "fourth draw submission snapshot");
+    check(!fourth.uniforms.has_value(),
+          "redundant PS int const set does not invalidate uniform snapshot");
+
+    const std::array<uint32_t, 2> vsBool{0u, 42u};
+    checkEq(dxmt9c_device_set_vs_const_b(&cDevice, 4u, vsBool.data(), 2u),
+            D3D_OK, "initial VS bool const set");
+    DrawRunSubmission fifth{};
+    checkEq(device->coreDevice().snapshotDrawSubmissionFromCurrentState(
+                draw, fifth, &fourth),
+            D3D_OK, "fifth draw submission snapshot");
+    check(fifth.uniforms.has_value(), "changed VS bool const refreshes uniforms");
+    check(fifth.uniformPayload().psConst == third.uniformPayload().psConst,
+          "changed VS const keeps cached PS constants");
+    checkEq(fifth.uniformPayload().pixelConstantsHash,
+            third.uniformPayload().pixelConstantsHash,
+            "changed VS const keeps cached PS constant hash");
+
+    checkEq(dxmt9c_device_set_vs_const_b(&cDevice, 4u, vsBool.data(), 2u),
+            D3D_OK, "redundant VS bool const set");
+    DrawRunSubmission sixth{};
+    checkEq(device->coreDevice().snapshotDrawSubmissionFromCurrentState(
+                draw, sixth, &fifth),
+            D3D_OK, "sixth draw submission snapshot");
+    check(!sixth.uniforms.has_value(),
+          "redundant VS bool const set does not invalidate uniform snapshot");
+  }
+  checkEq(device->Release(), 0u, "redundant shader const device release");
+  checkEq(d3d->Release(), 0u, "redundant shader const factory release");
+}
+
 void testZeroSizeBufferLockUsesTailRange() {
   using namespace dxmt9::com;
 
@@ -1286,6 +1376,7 @@ int main() {
     testComWrappersEx();
     testPalettizedTextureExpansion();
     testReadOnlyBufferUnlockSkipsUpload();
+    testRedundantShaderConstSetKeepsUniformSnapshotReusable();
     testZeroSizeBufferLockUsesTailRange();
   } catch (const TestFailure& error) {
     std::cerr << error.what() << '\n';

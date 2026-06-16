@@ -336,10 +336,12 @@ u64 dirtyBytesEstimate(const uniform::DirtyState& dirty,
   return bytes;
 }
 
-PopulatedArgbuf openArgbuf(CommandQueue& queue,
-                            ArgbufEncoderResource& encoderResource,
-                            std::uint64_t seqId,
-                            const ArgbufRecorder* recorder) {
+static PopulatedArgbuf openArgbufImpl(CommandQueue& queue,
+                                      ArgbufEncoderResource& encoderResource,
+                                      std::uint64_t seqId,
+                                      std::uint64_t completedSeqId,
+                                      bool useCompletedSeqIdSnapshot,
+                                      const ArgbufRecorder* recorder) {
   if (!encoderResource.initialized() || encoderResource.encodedLength() == 0) {
     return {};
   }
@@ -347,10 +349,16 @@ PopulatedArgbuf openArgbuf(CommandQueue& queue,
   const auto alignment = encoderResource.alignment();
   auto reservation = [&]() {
     PerfScope scope(perf::countEncodeDrawArgbufOpenReserveCpuTime);
-    return queue.reserveTransientBuffer(
-        static_cast<std::size_t>(length),
-        static_cast<std::size_t>(alignment),
-        seqId);
+    if (useCompletedSeqIdSnapshot) {
+      return queue.reserveTransientBufferWithCompletedSeqId(
+          static_cast<std::size_t>(length),
+          static_cast<std::size_t>(alignment),
+          seqId,
+          completedSeqId);
+    }
+    return queue.reserveTransientBuffer(static_cast<std::size_t>(length),
+                                        static_cast<std::size_t>(alignment),
+                                        seqId);
   }();
   if (!reservation) {
     return {};
@@ -368,6 +376,23 @@ PopulatedArgbuf openArgbuf(CommandQueue& queue,
   populated.offset = reservation.slice.offset;
   populated.length = length;
   return populated;
+}
+
+PopulatedArgbuf openArgbuf(CommandQueue& queue,
+                            ArgbufEncoderResource& encoderResource,
+                            std::uint64_t seqId,
+                            const ArgbufRecorder* recorder) {
+  return openArgbufImpl(queue, encoderResource, seqId, 0u,
+                        /*useCompletedSeqIdSnapshot=*/false, recorder);
+}
+
+PopulatedArgbuf openArgbufWithCompletedSeqId(CommandQueue& queue,
+                                             ArgbufEncoderResource& encoderResource,
+                                             std::uint64_t seqId,
+                                             std::uint64_t completedSeqId,
+                                             const ArgbufRecorder* recorder) {
+  return openArgbufImpl(queue, encoderResource, seqId, completedSeqId,
+                        /*useCompletedSeqIdSnapshot=*/true, recorder);
 }
 
 namespace {
@@ -734,16 +759,16 @@ u64 updateDirtyArgbufRegions(CommandQueue& queue,
   if (uniform::anyDirty(dirty, uniform::kFfpPsAny)) {
     perf::countEncodeDrawArgbufCbufUpdateFfpPsCalls(1u);
     PerfScope blockScope(perf::countEncodeDrawArgbufCbufUpdateFfpPsCpuTime);
-    state::FfpPsConsts ffpPs{};
-    {
-      PerfScope buildScope(perf::countEncodeDrawArgbufCbufBuildCpuTime,
-                           cbufBuildRecorderForArgbufIndex(kFfpPsArgbufIdx));
-      ffpPs = state::buildFfpPsConsts(state);
-    }
-    const auto written = uploadAndPointEntry(
-        queue, encoderResource, ffpPs, kFfpPsArgbufIdx, seqId, recorder,
-        residencyEncoder, writtenBindings, uploadObserver,
-        /*countDirtyPhase=*/true);
+    const auto written = buildAndPointEntryBytes(
+        queue, encoderResource, sizeof(state::FfpPsConsts),
+        alignof(state::FfpPsConsts), sizeof(state::FfpPsConsts),
+        kFfpPsArgbufIdx, seqId, recorder, residencyEncoder, writtenBindings,
+        uploadObserver, /*countDirtyPhase=*/true,
+        [&](std::span<std::byte> dst) {
+          PerfScope buildScope(perf::countEncodeDrawArgbufCbufBuildCpuTime,
+                               cbufBuildRecorderForArgbufIndex(kFfpPsArgbufIdx));
+          state::buildFfpPsConstsUploadBytes(state, dst);
+        });
     bytes += written;
     if (written != 0) {
       perf::countEncodeDrawArgbufCbufUpdateFfpPsBytes(written);

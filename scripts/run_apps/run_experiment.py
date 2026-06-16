@@ -65,7 +65,10 @@ FRAME_PATTERNS = (
 )
 PERF_COUNTER_PATTERN = re.compile(r"^\[dxmt9-perf\]\s+(.*)$")
 BRIDGE_COUNTER_PATTERN = re.compile(r"^\[dxmt9-bridge-perf\]\s+(.*)$")
-PE_RECORDER_COUNTER_PATTERN = re.compile(r"^\[dxmt9-device\]\s+(?:[A-Za-z]+:\s+)?pe_recorder_stats\s+(.*)$")
+PE_RECORDER_COUNTER_PATTERN = re.compile(
+    r"^\[dxmt9-device\]\s+(?:[A-Za-z]+:\s+)?"
+    r"pe_recorder_(?:stats|gap_call_stats|gap_tail_stats|gap_between_call_stats)\s+(.*)$"
+)
 PERF_PROBE_PATTERN = re.compile(r"^\[perf-probe\]\s+(.*)$")
 PERF_COUNTER_VALUE_PATTERN = re.compile(r"([A-Za-z0-9_]+)=([^\s}]+)")
 # R-WMB-6.2 / test_wild.rules.md: surface which WSI layer acquisition path the

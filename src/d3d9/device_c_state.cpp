@@ -12,6 +12,66 @@ void clearBoundRenderTargetCache(D9CDevice* d) {
   d->renderTargetExplicit.fill(false);
 }
 
+template <typename Constants>
+std::size_t clampedIntConstantCount(const Constants& constants, uint32_t start,
+                                    uint32_t count) noexcept {
+  const auto capacity = constants.int4.size();
+  if (start >= capacity) {
+    return 0u;
+  }
+  return std::min<std::size_t>(count, capacity - start);
+}
+
+template <typename Constants>
+std::size_t clampedBoolConstantCount(const Constants& constants, uint32_t start,
+                                     uint32_t count) noexcept {
+  const auto capacity = constants.bools.size();
+  if (start >= capacity) {
+    return 0u;
+  }
+  return std::min<std::size_t>(count, capacity - start);
+}
+
+template <typename Constants>
+bool intConstantsMatch(const Constants& constants, uint32_t start,
+                       const int32_t* data, std::size_t count) noexcept {
+  for (std::size_t i = 0; i < count; ++i) {
+    if (std::memcmp(constants.int4[start + i].data(), data + i * 4u,
+                    sizeof(int32_t) * 4u) != 0) {
+      return false;
+    }
+  }
+  return true;
+}
+
+template <typename Constants>
+bool boolConstantsMatch(const Constants& constants, uint32_t start,
+                        const uint32_t* data, std::size_t count) noexcept {
+  for (std::size_t i = 0; i < count; ++i) {
+    if (constants.bools[start + i] != (data[i] != 0)) {
+      return false;
+    }
+  }
+  return true;
+}
+
+template <typename Constants>
+void writeIntConstants(Constants& constants, uint32_t start, const int32_t* data,
+                       std::size_t count) noexcept {
+  for (std::size_t i = 0; i < count; ++i) {
+    std::memcpy(constants.int4[start + i].data(), data + i * 4u,
+                sizeof(int32_t) * 4u);
+  }
+}
+
+template <typename Constants>
+void writeBoolConstants(Constants& constants, uint32_t start, const uint32_t* data,
+                        std::size_t count) noexcept {
+  for (std::size_t i = 0; i < count; ++i) {
+    constants.bools[start + i] = data[i] != 0;
+  }
+}
+
 }  // namespace
 
 extern "C" void dxmt9c_device_addref(D9CDevice* d) {
@@ -293,43 +353,49 @@ extern "C" int32_t dxmt9c_device_get_ps_const_f(D9CDevice* d, uint32_t s, float*
 
 extern "C" int32_t dxmt9c_device_set_vs_const_i(D9CDevice* d, uint32_t s, const int32_t* data,
                                                 uint32_t cnt) {
-  auto& consts = d->dev().mutableShaderConstantsState().vsConst;
-  for (uint32_t i = 0; i < cnt && (s + i) < consts.int4.size(); ++i) {
-    consts.int4[s + i][0] = data[i * 4 + 0];
-    consts.int4[s + i][1] = data[i * 4 + 1];
-    consts.int4[s + i][2] = data[i * 4 + 2];
-    consts.int4[s + i][3] = data[i * 4 + 3];
+  const auto& current = d->dev().state().vsConst;
+  const auto effectiveCount = clampedIntConstantCount(current, s, cnt);
+  if (effectiveCount == 0u || intConstantsMatch(current, s, data, effectiveCount)) {
+    return dxmt9::core::D3D_OK;
   }
+  auto& consts = d->dev().mutableVertexShaderConstantsState().vsConst;
+  writeIntConstants(consts, s, data, effectiveCount);
   return dxmt9::core::D3D_OK;
 }
 
 extern "C" int32_t dxmt9c_device_set_ps_const_i(D9CDevice* d, uint32_t s, const int32_t* data,
                                                 uint32_t cnt) {
-  auto& consts = d->dev().mutableShaderConstantsState().psConst;
-  for (uint32_t i = 0; i < cnt && (s + i) < consts.int4.size(); ++i) {
-    consts.int4[s + i][0] = data[i * 4 + 0];
-    consts.int4[s + i][1] = data[i * 4 + 1];
-    consts.int4[s + i][2] = data[i * 4 + 2];
-    consts.int4[s + i][3] = data[i * 4 + 3];
+  const auto& current = d->dev().state().psConst;
+  const auto effectiveCount = clampedIntConstantCount(current, s, cnt);
+  if (effectiveCount == 0u || intConstantsMatch(current, s, data, effectiveCount)) {
+    return dxmt9::core::D3D_OK;
   }
+  auto& consts = d->dev().mutablePixelShaderConstantsState().psConst;
+  writeIntConstants(consts, s, data, effectiveCount);
   return dxmt9::core::D3D_OK;
 }
 
 extern "C" int32_t dxmt9c_device_set_vs_const_b(D9CDevice* d, uint32_t s,
                                                 const uint32_t* data, uint32_t cnt) {
-  auto& consts = d->dev().mutableShaderConstantsState().vsConst;
-  for (uint32_t i = 0; i < cnt && (s + i) < consts.bools.size(); ++i) {
-    consts.bools[s + i] = data[i] != 0;
+  const auto& current = d->dev().state().vsConst;
+  const auto effectiveCount = clampedBoolConstantCount(current, s, cnt);
+  if (effectiveCount == 0u || boolConstantsMatch(current, s, data, effectiveCount)) {
+    return dxmt9::core::D3D_OK;
   }
+  auto& consts = d->dev().mutableVertexShaderConstantsState().vsConst;
+  writeBoolConstants(consts, s, data, effectiveCount);
   return dxmt9::core::D3D_OK;
 }
 
 extern "C" int32_t dxmt9c_device_set_ps_const_b(D9CDevice* d, uint32_t s,
                                                 const uint32_t* data, uint32_t cnt) {
-  auto& consts = d->dev().mutableShaderConstantsState().psConst;
-  for (uint32_t i = 0; i < cnt && (s + i) < consts.bools.size(); ++i) {
-    consts.bools[s + i] = data[i] != 0;
+  const auto& current = d->dev().state().psConst;
+  const auto effectiveCount = clampedBoolConstantCount(current, s, cnt);
+  if (effectiveCount == 0u || boolConstantsMatch(current, s, data, effectiveCount)) {
+    return dxmt9::core::D3D_OK;
   }
+  auto& consts = d->dev().mutablePixelShaderConstantsState().psConst;
+  writeBoolConstants(consts, s, data, effectiveCount);
   return dxmt9::core::D3D_OK;
 }
 

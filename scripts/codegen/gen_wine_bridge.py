@@ -322,6 +322,24 @@ def write_ops_header(path: pathlib.Path, protos: list[Proto]) -> None:
     lines.append("  dxmt9c_bridge_op_count,")
     lines.append("};")
     lines.append("")
+    lines.append("inline const char* bridgeOpcodeName(unsigned int code) {")
+    lines.append("  switch (code) {")
+    lines.append("  case DXMT9_WINEMETAL_CALL_COMPILE_SHADER: return \"compile_shader\";")
+    lines.append("  case DXMT9_WINEMETAL_CALL_SHADER_SOURCE_SIZE: return \"shader_source_size\";")
+    lines.append("  case DXMT9_WINEMETAL_CALL_SHADER_SOURCE_COPY: return \"shader_source_copy\";")
+    lines.append("  case DXMT9_WINEMETAL_CALL_DESTROY_SHADER: return \"destroy_shader\";")
+    lines.append("  case DXMT9_WINEMETAL_CALL_ABI_HASH: return \"abi_hash\";")
+    for proto in protos:
+        lines.append(
+            f"  case static_cast<unsigned int>(BridgeOpcode::{proto.name}): return \"{proto.name}\";"
+        )
+    lines.append("  case static_cast<unsigned int>(BridgeOpcode::dxmt9c_bridge_op_count):")
+    lines.append("    return \"dxmt9c_bridge_op_count\";")
+    lines.append("  default:")
+    lines.append("    return \"unknown\";")
+    lines.append("  }")
+    lines.append("}")
+    lines.append("")
     for proto in protos:
         lines.append(f"struct Args_{proto.name} {{")
         for param in proto.params:

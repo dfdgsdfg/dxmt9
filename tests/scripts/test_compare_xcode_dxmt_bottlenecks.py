@@ -75,6 +75,15 @@ def write_joined(path: Path, gpu_ms: float, buffer_write_mib: float,
         "dxmt_indexed_cache_opt_candidate_miss16",
         "dxmt_indexed_cache_opt_candidate_miss32",
         "dxmt_indexed_cache_opt_candidate_miss64",
+        "dxmt_indexed_cache_opt_candidate_gate_pass",
+        "dxmt_indexed_cache_opt_candidate_gate_fail",
+        "dxmt_indexed_cache_opt_candidate_opaque_depth_draws",
+        "dxmt_indexed_cache_opt_candidate_screen_blend_draws",
+        "dxmt_indexed_cache_opt_candidate_primitive_bucket_1_63",
+        "dxmt_indexed_cache_opt_candidate_primitive_bucket_64_255",
+        "dxmt_indexed_cache_opt_candidate_primitive_bucket_256_1023",
+        "dxmt_indexed_cache_opt_candidate_primitive_bucket_1024_4095",
+        "dxmt_indexed_cache_opt_candidate_primitive_bucket_4096_plus",
         "dxmt_reordered_index_cache_lookups",
         "dxmt_reordered_index_cache_hits",
         "dxmt_reordered_index_cache_rejected_hits",
@@ -121,6 +130,15 @@ def write_joined(path: Path, gpu_ms: float, buffer_write_mib: float,
             "dxmt_indexed_cache_opt_candidate_miss16": int(cache_miss_16 * 0.8),
             "dxmt_indexed_cache_opt_candidate_miss32": candidate_miss_32,
             "dxmt_indexed_cache_opt_candidate_miss64": int(cache_miss_64 * 0.8),
+            "dxmt_indexed_cache_opt_candidate_gate_pass": 1,
+            "dxmt_indexed_cache_opt_candidate_gate_fail": 0,
+            "dxmt_indexed_cache_opt_candidate_opaque_depth_draws": 1,
+            "dxmt_indexed_cache_opt_candidate_screen_blend_draws": 0,
+            "dxmt_indexed_cache_opt_candidate_primitive_bucket_1_63": 0,
+            "dxmt_indexed_cache_opt_candidate_primitive_bucket_64_255": 0,
+            "dxmt_indexed_cache_opt_candidate_primitive_bucket_256_1023": 0,
+            "dxmt_indexed_cache_opt_candidate_primitive_bucket_1024_4095": 1,
+            "dxmt_indexed_cache_opt_candidate_primitive_bucket_4096_plus": 0,
             "dxmt_reordered_index_cache_lookups": reordered_index_cache_lookups,
             "dxmt_reordered_index_cache_hits": reordered_index_cache_hits,
             "dxmt_reordered_index_cache_rejected_hits": reordered_index_cache_rejected_hits,
@@ -168,6 +186,15 @@ def write_joined_rows(path: Path, rows: list[dict[str, object]]) -> None:
         "dxmt_indexed_cache_opt_candidate_miss16",
         "dxmt_indexed_cache_opt_candidate_miss32",
         "dxmt_indexed_cache_opt_candidate_miss64",
+        "dxmt_indexed_cache_opt_candidate_gate_pass",
+        "dxmt_indexed_cache_opt_candidate_gate_fail",
+        "dxmt_indexed_cache_opt_candidate_opaque_depth_draws",
+        "dxmt_indexed_cache_opt_candidate_screen_blend_draws",
+        "dxmt_indexed_cache_opt_candidate_primitive_bucket_1_63",
+        "dxmt_indexed_cache_opt_candidate_primitive_bucket_64_255",
+        "dxmt_indexed_cache_opt_candidate_primitive_bucket_256_1023",
+        "dxmt_indexed_cache_opt_candidate_primitive_bucket_1024_4095",
+        "dxmt_indexed_cache_opt_candidate_primitive_bucket_4096_plus",
         "dxmt_reordered_index_cache_lookups",
         "dxmt_reordered_index_cache_hits",
         "dxmt_reordered_index_cache_rejected_hits",
@@ -211,6 +238,15 @@ def write_joined_rows(path: Path, rows: list[dict[str, object]]) -> None:
                 "dxmt_indexed_cache_opt_candidate_miss16": 1200,
                 "dxmt_indexed_cache_opt_candidate_miss32": 960,
                 "dxmt_indexed_cache_opt_candidate_miss64": 880,
+                "dxmt_indexed_cache_opt_candidate_gate_pass": 1,
+                "dxmt_indexed_cache_opt_candidate_gate_fail": 0,
+                "dxmt_indexed_cache_opt_candidate_opaque_depth_draws": 1,
+                "dxmt_indexed_cache_opt_candidate_screen_blend_draws": 0,
+                "dxmt_indexed_cache_opt_candidate_primitive_bucket_1_63": 0,
+                "dxmt_indexed_cache_opt_candidate_primitive_bucket_64_255": 0,
+                "dxmt_indexed_cache_opt_candidate_primitive_bucket_256_1023": 0,
+                "dxmt_indexed_cache_opt_candidate_primitive_bucket_1024_4095": 1,
+                "dxmt_indexed_cache_opt_candidate_primitive_bucket_4096_plus": 0,
                 "dxmt_reordered_index_cache_lookups": 0,
                 "dxmt_reordered_index_cache_hits": 0,
                 "dxmt_reordered_index_cache_rejected_hits": 0,
@@ -257,8 +293,9 @@ class CompareXcodeDxmtBottlenecksTests(unittest.TestCase):
 
             self.assertEqual(result.returncode, 0, result.stderr)
             self.assertTrue(output.exists())
-            self.assertIn("Xcode/dxmt Bottleneck Comparison",
-                          output.read_text(encoding="utf-8"))
+            report = output.read_text(encoding="utf-8")
+            self.assertIn("Xcode/dxmt Bottleneck Comparison", report)
+            self.assertIn("top_indexed_cache_opt_candidate_gate_pass", report)
 
     def test_requirement_failure_is_nonzero(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -1010,6 +1047,7 @@ class CompareXcodeDxmtBottlenecksTests(unittest.TestCase):
                 "`500,805.000` | `241,780.000`",
                 report,
             )
+            self.assertIn("| `target_cache_opt_candidate_gate_pass` |", report)
             self.assertNotIn("## Requirement Failures", report)
 
     def test_target_cache_opt_guard_rejects_candidate_noop(self) -> None:

@@ -59,6 +59,11 @@ every other domain at the lever that actually moves the bucket.
 | H37 | System Trace can provide route-attributed timing while `.gputrace` is blocked | accepted (sidecar evidence) | [[hidden-backend-storage-shape.28]] (`215/215` xctrace rows joined, `1005..1024` captured seq, indexed probe rows `1000..1035` with `0` out-of-range rows; vertex share `88.86%`; route split: programmable color `45.65%`, programmable textured `40.49%`, mixed `12.02%`, depth-only `1.85%`) |
 | H38 | Route-attributed System Trace sidecars must require indexed per-draw logging | rejected-current | [[hidden-backend-storage-shape.29]] (encoder breakdown emits `route_*` primitive counters; no-indexed sidecar now verifies `route_source=encoder-summary` on `1633/1633` joined rows, while indexed rows remain optional override detail) |
 | H39 | "GPU floor" and "average FPS owner" are the same question | rejected | [[hidden-backend-storage-shape.30]] (`replay.03` proves `3.86x` hidden-write density headroom at the same VS invocation count; no-gputrace counters show average wall-clock is completion/present paced) |
+| H40 | Current head changes the capture/timing route status | accepted refresh | [[hidden-backend-storage-shape.31]] (`frame120.gputrace` file capture still fails with `Capture layer is not inserted` after normal rendering, while the System Trace sidecar joins `5263/5263` rows over `seq=1213..1591`; vertex share `90.39%`; route split remains programmable color `46.22%`, programmable textured `39.15%`, mixed `14.63%`) |
+| H41 | Recovered capture-layer file route changes measurement availability, not the GPU owner | accepted refresh | [[hidden-backend-storage-shape.32]] (`frame60.gputrace` and Xcode counters exported; first recovered proof GPU `37.475ms`, top-three `98.32%`, top-three VS buffer device write `1779.231 MiB`, partial render count `0`) |
+| H42 | Current joined Xcode/dxmt attribution narrows the next GPU gate | accepted next gate | [[hidden-backend-storage-shape.33]] (top-three Xcode rows join to dxmt encoder sidecars; latest integrated capture-layer wrapper refresh reports GPU `37.492ms`, top-three `98.40%`, top-three VS write `1779.246 MiB`; `60/2`, `60/1`, and `60/0` cover different state classes but share the same hidden-density band, dxmt CPU writer bytes negligible) |
+| H43 | The `60/0` fragmentless depth-only equality failure was caused by fragmentless routing itself | rejected; keep-VSOut route is equality-safe | [[hidden-backend-storage-shape.34]] (new diagnostic sub-mode keeps the pair-local `VSOut` layout at `0xfff` while omitting the fragment function; route coverage remains `42/42` draws and `97,294/97,294` primitives; pass-end `D24X8` depth and `X8R8G8B8` color both compare with `0` changed bytes) |
+| H44 | Removing the `60/0` fragment function while keeping `VSOut=0xfff` reduces hidden VS writes | rejected | [[hidden-backend-storage-shape.34]] (capture-layer route is usable again and exports Xcode counters, but target `60/0` VS buffer write stays flat: `224.918 -> 224.944 MiB`, VS invocations `152,895 -> 152,895`, top-three hidden estimate `1749.858 -> 1749.694 MiB`) |
 
 ## Verification methods
 
@@ -128,9 +133,14 @@ flowchart TD
   TileFfpExpansion["shape.24\nTile-FFP expansion analysis\nprogrammable route required"]:::rejected
   ProgrammableRoute["shape.25\nprogrammable route feasibility\n60/0 depth-only candidate"]:::accepted
   FragmentlessRoute["shape.26\nfragmentless depth-only route\nreachability pass, equality fail"]:::rejected
+  FragmentlessKeepVsout["shape.34\nfragmentless keep-VSOut route\nequality pass"]:::accepted
+  FragmentlessKeepVsoutXcode["shape.34\nfragmentless keep-VSOut Xcode gate\nVS write unchanged"]:::rejected
   SystemTraceRoute["shape.28\nseq-range System Trace sidecar\nroute timing joined"]:::accepted
   EncoderRouteSummary["shape.29\nencoder-summary route counters\nno indexed rows required"]:::accepted
   FloorVsWall["shape.30\nGPU floor != wall-clock owner\n3.86x order density headroom"]:::accepted
+  SystemTraceRefresh["shape.31\ncurrent System Trace refresh\n5263/5263 joined\n90.39% vertex"]:::accepted
+  CaptureRecovered["shape.32\nrecovered gputrace\nframe60 Xcode counters\n1779MiB top3 VS write"]:::accepted
+  JoinedGate["shape.33\ncurrent Xcode+dxmt join\nsame density across hot classes\nnext gate narrowed"]:::accepted
   OcclusionGate["texture.08\nocclusion oracle feasibility\nexisting query not enough"]:::rejected
   ScopedSemantic["semantic.02\nselected 60/2 depth-read/no-blend\nexact mini replay\nscoped only"]:::accepted
 
@@ -176,10 +186,19 @@ flowchart TD
   TileFfpExpansion -->|"route class split"| ProgrammableRoute
   ProgrammableRoute -->|"reduced runtime smoke"| FragmentlessRoute
   FragmentlessRoute -->|"blocked by depth equality fail"| NextTriage
+  FragmentlessRoute -->|"isolate position-only variable"| FragmentlessKeepVsout
+  FragmentlessKeepVsout -->|"baseline/treatment Xcode counters"| FragmentlessKeepVsoutXcode
+  FragmentlessKeepVsoutXcode -->|"fragmentless bit not owner"| NextTriage
   ProgrammableRoute -->|"route verdict follow-up"| SystemTraceRoute
   SystemTraceRoute -->|"programmable color/textured dominate current sidecar"| NextTriage
   SystemTraceRoute -->|"measurement overhead reduced by"| EncoderRouteSummary
   EncoderRouteSummary -->|"next sidecar without per-draw index logs"| NextTriage
+  EncoderRouteSummary -->|"current-head sidecar refresh"| SystemTraceRefresh
+  SystemTraceRefresh -->|"old state: timing-only while gputrace blocked"| NextTriage
+  SystemTraceRefresh -->|"capture-layer lifetime fix unlocks"| CaptureRecovered
+  CaptureRecovered -->|"same hidden-write owner"| NextTriage
+  CaptureRecovered -->|"joined attribution sharpens"| JoinedGate
+  JoinedGate -->|"rejects one-off state-toggle spend"| NextTriage
   Scale2 -->|"separate hot-frame GPU from average FPS"| FloorVsWall
   FloorVsWall -->|"GPU locality gate and pacing gate stay separate"| NextTriage
   ProgrammableRoute -->|"next reduced route candidate"| NextTriage
@@ -227,6 +246,19 @@ sidecar joined `1633/1633` rows from `route_source=encoder-summary`, with
 `91.90%` vertex-stage share and route split dominated by programmable color
 (`57.04%`) plus programmable textured (`29.22%`). This is route-attributed
 timing evidence, not a substitute for Xcode replay counters.
+The current-head sidecar refresh ([[hidden-backend-storage-shape.31]]) preserved
+that split after the latest CPU/profile cleanup work while file `.gputrace`
+capture was still layer-blocked. That measurement-route status is now updated by
+[[hidden-backend-storage-shape.32]]: after the fragment `WMT::Function` lifetime
+fix, the explicit capture-layer file route writes `frame60.gputrace`, Xcode
+performance data, and encoder counters. The current joined refresh
+([[hidden-backend-storage-shape.33]]) does not change the owner: the integrated
+`--with-wine-capture-layer` wrapper run reports GPU time `37.492ms`, top-three
+encoder share `98.40%`, top-three `VS Buffer Device Memory Bytes Written`
+`1779.246 MiB`, and hidden backend estimate `1750.007 MiB`. System Trace remains
+useful for route-attributed timing and low-overhead runs, but Xcode replay
+counters are available again for TVB/PB byte proof when the diagnostic capture
+route is deliberately selected.
 
 What is still open: *which* sub-component of the model dominates — VS stage-out,
 primitive/binning/tiler parameter storage, or compiler/backend spill. Visible
@@ -464,6 +496,20 @@ route reachability. The same-input gate then rejects the route for promotion:
 `1,252,096 / 3,145,728` bytes (`39.803060%`, max delta `255`) and the final
 frame changes `21.658325%`. The route is now a depth-semantic debug target, not
 an Xcode counter target.
+[[hidden-backend-storage-shape.34]] isolates that failure by keeping the
+pair-local `VSOut` layout (`0xfff`) while still omitting the fragment function.
+The route remains fully covered (`42` draws / `97,294` primitives /
+`291,882` vertices) and the same-input pass-end equality now passes for both
+attachments: `D24X8` depth and `X8R8G8B8` color each have `0` changed bytes.
+That rejects "fragmentless itself broke depth" as the current explanation and
+makes the keep-VSOut variant a valid reduced `60/0` Xcode counter candidate.
+The counter gate is now complete and negative: the capture-layer route again
+produces `frame60.gputrace`, embedded performance data, and encoder counters,
+but target `60/0` VS buffer write stays flat (`224.918 -> 224.944 MiB`) with
+unchanged VS invocations (`152,895 -> 152,895`). The useful conclusion is
+therefore narrower: the fragment-function-presence bit is not the hidden-write
+owner for `60/0`; further backend-route work needs a different below-visible
+mechanism or an invocation/locality reducer.
 
 ## How to run
 Every experiment here is a 3DMark05 GT1 run via the standard wrapper. This domain
@@ -552,10 +598,21 @@ per-experiment flags live in each leaf's `**Method.**` field; see
   proves the `60/0` route is reachable and fully covers the row, but same-input
   depth equality fails, so Xcode counter promotion is blocked until depth
   semantics are fixed.
+- [[hidden-backend-storage-shape.34]] — fragmentless depth-only keep-VSOut
+  equality plus Xcode gate; isolates the position-only variable, passes
+  pass-end depth and color equality, and then rejects the fragmentless
+  keep-VSOut route as a hidden-write performance lever.
 - [[hidden-backend-storage-shape.27]] — Metal System Trace sidecar after
   compact draw-state work; confirms the residual top rows remain vertex-stage
   dominated large indexed encoders while `.gputrace` replay remains blocked by
   capture-layer startup mutation.
+- [[hidden-backend-storage-shape.32]] — recovered capture-layer file route;
+  frame60 Xcode replay counters are available again and reconfirm top-three VS
+  buffer device write dominance with zero partial renders.
+- [[hidden-backend-storage-shape.33]] — current Xcode/dxmt joined attribution;
+  same hidden-density band across `60/2`, `60/1`, and `60/0` narrows the next
+  GPU capture gate to invocation/locality, final-color/final-writer proof, or a
+  real backend-route denominator A/B.
 - [[state-churn-encode-stream.04]] — stream/IB backend preflight; confirms
   handle-dominant hot rows but requires a handle-stable A/B before Xcode.
 - [[state-churn-encode-stream.09]] — Xcode handle-stable gate; shows `60/2`

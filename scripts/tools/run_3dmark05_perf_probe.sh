@@ -6,6 +6,8 @@ repo_root=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/../.." && pwd)
 frame=${DXMT_3DMARK05_PROBE_FRAME:-60}
 timeout=${DXMT_3DMARK05_PROBE_TIMEOUT:-}
 timeout_slack=${DXMT_3DMARK05_PROBE_TIMEOUT_SLACK:-45}
+wait_unlocked_sec=${DXMT_3DMARK05_WAIT_UNLOCKED_SEC:-0}
+wait_unlocked_interval_sec=${DXMT_3DMARK05_WAIT_UNLOCKED_INTERVAL_SEC:-5}
 capture_delay_sec=${DXMT_3DMARK05_CAPTURE_DELAY_SEC:-}
 catalogue_capture_delay_sec=$(python3 - "$repo_root/experiments/CATALOGUE.toml" <<'PY'
 import sys
@@ -32,6 +34,7 @@ dry_run=0
 dump_shaders=0
 frame_sampling=${DXMT9_PERF_FRAME_SAMPLING:-0}
 draw_packet_actual_change=${DXMT9_PERF_DRAW_PACKET_ACTUAL_CHANGE:-0}
+vs_const_setter_range=${DXMT9_PERF_VS_CONST_SETTER_RANGE:-0}
 recommended_gputrace_min_free_mb=2048
 trim_unused_varyings=0
 trim_unused_varyings_vs_hashes=
@@ -202,6 +205,7 @@ probe_fragmentless_depth_only_row=
 probe_fragmentless_depth_only_rows=
 probe_fragmentless_depth_only_class=
 probe_fragmentless_depth_only_classes=
+probe_fragmentless_depth_only_keep_vsout=0
 force_visible=0
 effect_draw_trace=0
 effect_draw_trace_seq=
@@ -250,6 +254,9 @@ framegraph_dag_draws=${DXMT_3DMARK05_DUMP_FRAMEGRAPH_DAG_DRAWS:-0}
 require_color_dontcare_increase=0
 require_depth_dontcare_increase=0
 require_tile_preservation_decrease=0
+require_tile_preservation_not_increase=0
+require_command_buffers_per_present_not_increase=0
+require_render_passes_per_present_not_increase=0
 require_draw_run_records_increase=0
 require_draw_run_records_per_submit_increase=0
 require_binding_overrides_present=0
@@ -257,6 +264,37 @@ require_const_upload_passthrough_present=0
 require_draw_submission_batch_present=0
 require_const_upload_break_bytes_decrease=0
 require_encode_draw_cpu_decrease=0
+require_completion_present_wait_decrease=0
+require_completion_wait_with_enqueue_increase=0
+require_completion_wait_without_enqueue_decrease=0
+require_completion_present_wait_with_enqueue_increase=0
+require_completion_present_wait_without_enqueue_decrease=0
+require_commit_chunk_replay_cpu_per_present_decrease=0
+require_queue_draw_submission_cpu_per_present_decrease=0
+require_snapshot_cpu_per_present_decrease=0
+require_snapshot_cache_lookup_cpu_per_present_decrease=0
+require_snapshot_cache_uniform_build_cpu_per_present_decrease=0
+require_snapshot_cache_uniform_hash_cpu_per_present_decrease=0
+require_batch_miss_uniform_build_cpu_per_present_decrease=0
+require_batch_miss_uniform_hash_cpu_per_present_decrease=0
+require_batch_miss_vs_const_hash_cpu_per_present_decrease=0
+require_batch_miss_ps_const_hash_cpu_per_present_decrease=0
+require_batch_miss_nonconst_hash_cpu_per_present_decrease=0
+require_snapshot_uniform_copy_cpu_per_present_decrease=0
+require_submit_draw_run_batch_append_uniform_cpu_per_present_decrease=0
+require_draw_uniform_payload_lookup_cpu_per_present_decrease=0
+require_draw_uniform_payload_append_copy_cpu_per_present_decrease=0
+require_argbuf_setup_cpu_per_present_decrease=0
+require_argbuf_open_cpu_per_present_decrease=0
+require_argbuf_cbuf_update_cpu_per_present_decrease=0
+require_argbuf_cbuf_update_vs_cpu_per_present_decrease=0
+require_uniform_compact_saved_bytes_present=0
+require_current_uniform_compact_saved_bytes_present=0
+require_encode_chunk_cpu_per_present_decrease=0
+require_no_enqueue_commit_entry_to_publish_decrease=0
+require_no_enqueue_publish_to_encode_dequeue_decrease=0
+require_no_enqueue_encode_dequeue_to_commit_decrease=0
+require_no_enqueue_wait_to_next_enqueue_decrease=0
 max_gpu_command_buffer_regression_ms=${DXMT_3DMARK05_MAX_GPU_COMMAND_BUFFER_REGRESSION_MS:-}
 max_const_upload_break_count_ratio=${DXMT_3DMARK05_MAX_CONST_UPLOAD_BREAK_COUNT_RATIO:-}
 require_result_json=0
@@ -303,7 +341,183 @@ max_top_triangle_delta_ratio=${DXMT_3DMARK05_MAX_TOP_TRIANGLE_DELTA_RATIO:-}
 top_n=${DXMT_3DMARK05_TOP_N:-3}
 hot_gpu_share=${DXMT_3DMARK05_HOT_GPU_SHARE:-95.0}
 min_free_mb=${DXMT_3DMARK05_MIN_TRACE_FREE_MB:-}
+metal_capture_destination=${DXMT_3DMARK05_METAL_CAPTURE_DESTINATION:-${DXMT_METAL_CAPTURE_DESTINATION:-}}
+metal_capture_destination_explicit=0
+require_xcode_attach_preflight=${DXMT_3DMARK05_REQUIRE_XCODE_ATTACH_PREFLIGHT:-0}
+xcode_attach_preflight_only=0
+with_wine_capture_layer=${DXMT_3DMARK05_WITH_WINE_CAPTURE_LAYER:-0}
+osascript_bin=${DXMT_3DMARK05_OSASCRIPT_BIN:-osascript}
+devtools_security_bin=${DXMT_3DMARK05_DEVTOOLS_SECURITY_BIN:-/usr/sbin/DevToolsSecurity}
 target_row_keys=()
+
+capture_destination_is_developer_tools() {
+  [[ "$1" == "developerTools" || "$1" == "xcode" ]]
+}
+
+capture_destination_is_file() {
+  [[ -z "$1" || "$1" == "gpuTraceDocument" ||
+     "$1" == "gputrace" || "$1" == "file" ]]
+}
+
+capture_destination_is_valid() {
+  case "$1" in
+    ""|gpuTraceDocument|gputrace|file|developerTools|xcode)
+      return 0
+      ;;
+    *)
+      return 1
+      ;;
+  esac
+}
+
+binary_has_metal_capture_enabled() {
+  local path=$1
+  [[ -f "$path" ]] && strings "$path" 2>/dev/null | grep -q 'MetalCaptureEnabled'
+}
+
+run_file_capture_layer_preflight() {
+  local wine_root=$1
+  local wine_real="$wine_root/bin/wine.real"
+  local wine_preloader="$wine_root/bin/wine-preloader"
+  local wine_real_has=0
+  local wine_preloader_has=0
+  if binary_has_metal_capture_enabled "$wine_real"; then
+    wine_real_has=1
+  fi
+  if binary_has_metal_capture_enabled "$wine_preloader"; then
+    wine_preloader_has=1
+  fi
+
+  if [[ "${DXMT_3DMARK05_SET_MTL_CAPTURE_ENABLED:-0}" != "0" ||
+        "${MTL_CAPTURE_ENABLED:-0}" != "0" ||
+        "${METAL_CAPTURE_ENABLED:-0}" != "0" ]]; then
+    echo "file_capture_layer_preflight: status=pass reason=metal-capture-enabled-env"
+    return 0
+  fi
+  if (( wine_real_has && wine_preloader_has )); then
+    echo "file_capture_layer_preflight: status=pass reason=wine-binaries-metal-capture-enabled"
+    return 0
+  fi
+
+  echo "file_capture_layer_preflight: status=fail reason=wine-binaries-lack-metal-capture-enabled wine_real_has=${wine_real_has} wine_preloader_has=${wine_preloader_has}"
+  return 2
+}
+
+run_wine_capture_layer_wrapper_preflight() {
+  local wine_root=$1
+  local wine_real="$wine_root/bin/wine.real"
+  local wine_preloader="$wine_root/bin/wine-preloader"
+  local capture_real="$wine_root/bin/wine.capture.real"
+  local capture_preloader="$wine_root/bin/wine.capture.real-preloader"
+
+  if [[ ! -f "$wine_real" || ! -f "$wine_preloader" ]]; then
+    echo "file_capture_layer_preflight: status=fail reason=wine-target-missing wine_real=$wine_real wine_preloader=$wine_preloader"
+    return 2
+  fi
+  if ! binary_has_metal_capture_enabled "$capture_real"; then
+    echo "file_capture_layer_preflight: status=fail reason=capture-real-lacks-metal-capture-enabled capture_real=$capture_real"
+    return 2
+  fi
+  if ! binary_has_metal_capture_enabled "$capture_preloader"; then
+    echo "file_capture_layer_preflight: status=fail reason=capture-preloader-lacks-metal-capture-enabled capture_preloader=$capture_preloader"
+    return 2
+  fi
+
+  echo "file_capture_layer_preflight: status=pass reason=wine-capture-layer-wrapper capture_real=$capture_real capture_preloader=$capture_preloader"
+  return 0
+}
+
+detect_session_locked() {
+  local locked=unknown
+  if command -v ioreg >/dev/null 2>&1; then
+    local session_state
+    session_state=$(ioreg -n Root -d1 2>/dev/null || true)
+    if [[ "$session_state" == *'"CGSSessionScreenIsLocked"=Yes'* ]]; then
+      locked=yes
+    else
+      locked=no
+    fi
+  fi
+  printf '%s\n' "$locked"
+}
+
+run_xcode_attach_preflight() {
+  local output
+  local devtools_output
+  if [[ -x "$devtools_security_bin" ]]; then
+    devtools_output=$("$devtools_security_bin" -status 2>&1 || true)
+    if [[ "$devtools_output" == *"disabled"* ]]; then
+      echo "xcode_attach_preflight: status=fail reason=developer-mode-disabled devtools_security=${devtools_output}"
+      return 2
+    fi
+  fi
+  if ! output=$("$osascript_bin" <<'APPLESCRIPT' 2>&1
+on boolText(value)
+  if value then
+    return "true"
+  end if
+  return "false"
+end boolText
+
+tell application "System Events"
+  if not (exists process "Xcode") then
+    return "status=fail reason=xcode-not-running"
+  end if
+  tell process "Xcode"
+    if not (exists menu bar 1) then
+      return "status=fail reason=no-menu-bar"
+    end if
+    if not (exists menu bar item "Debug" of menu bar 1) then
+      return "status=fail reason=no-debug-menu"
+    end if
+    tell menu "Debug" of menu bar item "Debug" of menu bar 1
+      set attachByPidFound to false
+      set attachByPidEnabled to false
+      set attachProcessFound to false
+      set attachProcessEnabled to false
+      set attachProcessFirstItem to ""
+      repeat with itemIndex from 1 to count menu items
+        set itemName to name of menu item itemIndex
+        if itemName starts with "Attach to Process by PID or Name" then
+          set attachByPidFound to true
+          set attachByPidEnabled to enabled of menu item itemIndex
+        end if
+        if itemName is "Attach to Process" then
+          set attachProcessFound to true
+          set attachProcessEnabled to enabled of menu item itemIndex
+          try
+            set attachProcessFirstItem to name of menu item 1 of menu 1 of menu item itemIndex
+          end try
+        end if
+      end repeat
+      set statusText to "fail"
+      set reasonText to "attach-unavailable"
+      if attachByPidFound and attachByPidEnabled then
+        set statusText to "pass"
+        set reasonText to "attach-by-pid-enabled"
+      else if attachProcessFound and attachProcessEnabled and attachProcessFirstItem is not "" and attachProcessFirstItem does not start with "Getting Process List" then
+        set statusText to "pass"
+        set reasonText to "process-list-populated"
+      else if attachProcessFound and attachProcessEnabled and attachProcessFirstItem starts with "Getting Process List" then
+        set reasonText to "process-list-loading"
+      else if attachByPidFound and not attachByPidEnabled then
+        set reasonText to "attach-by-pid-disabled"
+      end if
+      return "status=" & statusText & " reason=" & reasonText & " attach_by_pid_found=" & my boolText(attachByPidFound) & " attach_by_pid_enabled=" & my boolText(attachByPidEnabled) & " attach_process_found=" & my boolText(attachProcessFound) & " attach_process_enabled=" & my boolText(attachProcessEnabled) & " attach_process_first_item=" & attachProcessFirstItem
+    end tell
+  end tell
+end tell
+APPLESCRIPT
+); then
+    echo "xcode_attach_preflight: status=fail reason=osascript-failed output=$output" >&2
+    return 2
+  fi
+  echo "xcode_attach_preflight: $output"
+  if [[ "$output" == status=pass* ]]; then
+    return 0
+  fi
+  return 2
+}
 
 usage() {
   cat <<'USAGE'
@@ -320,6 +534,12 @@ Options:
                       120 with --no-gputrace; DXMT_3DMARK05_PROBE_TIMEOUT overrides)
                       The wrapper watchdog uses SEC + DXMT_3DMARK05_PROBE_TIMEOUT_SLACK
                       (default: 45) to clean up detached final-frame hangs.
+  --wait-unlocked-sec SEC
+                      Poll the macOS lock state before launch until unlocked.
+                      Default: DXMT_3DMARK05_WAIT_UNLOCKED_SEC or 0.
+  --wait-unlocked-interval-sec SEC
+                      Poll interval for --wait-unlocked-sec. Default:
+                      DXMT_3DMARK05_WAIT_UNLOCKED_INTERVAL_SEC or 5.
   --capture-delay-sec SEC
                       Override run_experiment capture delay seconds. Use this
                       for frame-window visual probes; the catalogue default is
@@ -339,10 +559,33 @@ Options:
                       current 3DMark05/Wine startup can black-screen with that
                       Apple capture-layer env present. Set
                       DXMT_3DMARK05_SET_MTL_CAPTURE_ENABLED=1 only for
-                      deliberate capture-layer experiments.
-                      Set DXMT_3DMARK05_METAL_CAPTURE_DESTINATION=developerTools
-                      to route MTLCaptureManager output to attached Xcode
-                      instead of a .gputrace file.
+                      deliberate capture-layer experiments. File capture
+                      preflights the Wine child for MetalCaptureEnabled and
+                      fails before launch when no capture layer is available;
+                      set DXMT_3DMARK05_ALLOW_NO_FILE_CAPTURE_LAYER=1 only for
+                      a deliberate late-failure diagnostic.
+  --metal-capture-destination DEST
+                      Set DXMT_METAL_CAPTURE_DESTINATION for gputrace runs.
+                      Accepted values: gpuTraceDocument, gputrace, file,
+                      developerTools, xcode. developerTools/xcode expects
+                      Xcode to be attached to the real Wine child and does not
+                      write frame<N>.gputrace directly.
+  --xcode-developer-tools-capture
+                      Shorthand for --metal-capture-destination developerTools.
+  --with-wine-capture-layer
+                      For a deliberate file .gputrace diagnostic, wrap the
+                      launch in run_with_wine_metal_capture_layer.sh so
+                      wine.real and wine-preloader are temporarily replaced by
+                      MetalCaptureEnabled copies. This is not a normal FPS
+                      sample path.
+  --require-xcode-attach-preflight
+                      Before launching a developerTools capture run, query
+                      Xcode's Debug attach menu and fail if attach-by-PID is
+                      disabled and the process list is not populated.
+  --xcode-attach-preflight-only
+                      Run the Xcode attach preflight and exit without launching
+                      3DMark05. Useful before a manual attach-after-normal-start
+                      capture attempt.
   --encoder-breakdown-seq N
                       Set DXMT9_PERF_ENCODER_BREAKDOWN_SEQ=N to emit only one
                       RenderPass[seq=N,...] frame's encoder breakdown
@@ -391,6 +634,10 @@ Options:
                       declared draw-packet state deltas whose values do or do
                       not actually change the unix-side DeviceState before
                       snapshot invalidation.
+  --probe-vs-const-setter-range
+                      Set DXMT9_PERF_VS_CONST_SETTER_RANGE=1. Aggregates
+                      SetVertexShaderConstantF app-call ranges and flushed VS
+                      float constant record ranges by current VS/PS shader hash.
   --dump-shaders      Dump translated MSL and D3D shader bytecode under
                       traces/<run-id>/analysis/shaders
   --trim-unused-varyings
@@ -927,6 +1174,11 @@ Options:
   --probe-fragmentless-depth-only-classes CLASSES
                       Set DXMT9_PROBE_FRAGMENTLESS_DEPTH_ONLY_CLASSES=CLASSES.
                       Values are ANDed, e.g. large4096,no-alpha-blend
+  --probe-fragmentless-depth-only-keep-vsout
+                      Set DXMT9_PROBE_FRAGMENTLESS_DEPTH_ONLY_KEEP_VSOUT=1.
+                      Keeps the ordinary VSOut layout while omitting the
+                      fragment function, isolating VSOut-shape effects from
+                      fragmentless depth-only routing.
   --force-visible     Set DXMT_DEBUG_FORCE_VISIBLE=1 for visibility/state A/B
   --effect-draw-trace
                       Set DXMT9_EFFECT_DRAW_TRACE=1 and log alpha-blended
@@ -1018,6 +1270,12 @@ Options:
                       Compare gate: candidate depth StoreActionDontCare count must increase
   --require-tile-preservation-decrease
                       Compare gate: candidate tile-preservation MiB must decrease
+  --require-tile-preservation-not-increase
+                      Compare gate: candidate tile-preservation MiB must not increase
+  --require-command-buffers-per-present-not-increase
+                      Compare gate: command buffers per present must not increase
+  --require-render-passes-per-present-not-increase
+                      Compare gate: render passes per present must not increase
   --require-draw-run-records-increase
                       Compare gate: commit_chunk_draw_run_records must increase
   --require-draw-run-records-per-submit-increase
@@ -1034,6 +1292,69 @@ Options:
                       Compare gate: max allowed after/before const-upload break count ratio
   --require-encode-draw-cpu-decrease
                       Compare gate: encode_draw_cpu_ms must decrease
+  --require-completion-present-wait-decrease
+                      Compare gate: completion_present_wait_ms must decrease
+  --require-completion-wait-with-enqueue-increase
+                      Compare gate: completion_wait_with_enqueue_ms must increase
+  --require-completion-wait-without-enqueue-decrease
+                      Compare gate: completion_wait_without_enqueue_ms must decrease
+  --require-completion-present-wait-with-enqueue-increase
+                      Compare gate: Present wait-with-enqueue ms must increase
+  --require-completion-present-wait-without-enqueue-decrease
+                      Compare gate: Present wait-without-enqueue ms must decrease
+  --require-commit-chunk-replay-cpu-per-present-decrease
+                      Compare gate: commit replay CPU per present must decrease
+  --require-queue-draw-submission-cpu-per-present-decrease
+                      Compare gate: queue draw-submission CPU per present must decrease
+  --require-snapshot-cpu-per-present-decrease
+                      Compare gate: snapshot CPU per present must decrease
+  --require-snapshot-cache-lookup-cpu-per-present-decrease
+                      Compare gate: snapshot cache lookup CPU per present must decrease
+  --require-snapshot-cache-uniform-build-cpu-per-present-decrease
+                      Compare gate: snapshot uniform-build CPU per present must decrease
+  --require-snapshot-cache-uniform-hash-cpu-per-present-decrease
+                      Compare gate: snapshot uniform-hash CPU per present must decrease
+  --require-batch-miss-uniform-build-cpu-per-present-decrease
+                      Compare gate: batch-miss uniform-build CPU per present must decrease
+  --require-batch-miss-uniform-hash-cpu-per-present-decrease
+                      Compare gate: batch-miss uniform-hash CPU per present must decrease
+  --require-batch-miss-vs-const-hash-cpu-per-present-decrease
+                      Compare gate: batch-miss VS const hash CPU per present must decrease
+  --require-batch-miss-ps-const-hash-cpu-per-present-decrease
+                      Compare gate: batch-miss PS const hash CPU per present must decrease
+  --require-batch-miss-nonconst-hash-cpu-per-present-decrease
+                      Compare gate: batch-miss nonconst hash CPU per present must decrease
+  --require-snapshot-uniform-copy-cpu-per-present-decrease
+                      Compare gate: snapshot uniform copy CPU per present must decrease
+  --require-submit-draw-run-batch-append-uniform-cpu-per-present-decrease
+                      Compare gate: backend uniform append CPU per present must decrease
+  --require-draw-uniform-payload-lookup-cpu-per-present-decrease
+                      Compare gate: uniform payload lookup CPU per present must decrease
+  --require-draw-uniform-payload-append-copy-cpu-per-present-decrease
+                      Compare gate: uniform payload append-copy CPU per present must decrease
+  --require-argbuf-setup-cpu-per-present-decrease
+                      Compare gate: argbuf setup CPU per present must decrease
+  --require-argbuf-open-cpu-per-present-decrease
+                      Compare gate: argbuf open CPU per present must decrease
+  --require-argbuf-cbuf-update-cpu-per-present-decrease
+                      Compare gate: argbuf cbuf update CPU per present must decrease
+  --require-argbuf-cbuf-update-vs-cpu-per-present-decrease
+                      Compare gate: argbuf VS cbuf update CPU per present must decrease
+  --require-uniform-compact-saved-bytes-present
+                      Compare gate: compact uniform payload saved bytes per present must be nonzero
+  --require-current-uniform-compact-saved-bytes-present
+                      Current-run gate: compact uniform payload saved bytes
+                      per present must be nonzero; does not require a baseline.
+  --require-encode-chunk-cpu-per-present-decrease
+                      Compare gate: encode_chunk_cpu_ms per present must decrease
+  --require-no-enqueue-commit-entry-to-publish-decrease
+                      Compare gate: no-enqueue commit-entry to publish ms must decrease
+  --require-no-enqueue-publish-to-encode-dequeue-decrease
+                      Compare gate: no-enqueue publish to encode-dequeue ms must decrease
+  --require-no-enqueue-encode-dequeue-to-commit-decrease
+                      Compare gate: no-enqueue encode-dequeue to Metal commit ms must decrease
+  --require-no-enqueue-wait-to-next-enqueue-decrease
+                      Compare gate: no-enqueue wait-to-next-enqueue ms must decrease
   --max-gpu-command-buffer-regression-ms N
                       Compare gate: max allowed gpu_command_buffer_time_ms regression
   --require-result-json
@@ -1188,6 +1509,14 @@ while (($#)); do
       timeout=${2:?missing value for --timeout}
       shift 2
       ;;
+    --wait-unlocked-sec)
+      wait_unlocked_sec=${2:?missing value for --wait-unlocked-sec}
+      shift 2
+      ;;
+    --wait-unlocked-interval-sec)
+      wait_unlocked_interval_sec=${2:?missing value for --wait-unlocked-interval-sec}
+      shift 2
+      ;;
     --capture-delay-sec)
       capture_delay_sec=${2:?missing value for --capture-delay-sec}
       shift 2
@@ -1271,8 +1600,34 @@ while (($#)); do
       draw_packet_actual_change=1
       shift
       ;;
+    --probe-vs-const-setter-range)
+      vs_const_setter_range=1
+      shift
+      ;;
     --no-gputrace)
       capture_gputrace=0
+      shift
+      ;;
+    --metal-capture-destination)
+      metal_capture_destination=${2:?missing value for --metal-capture-destination}
+      metal_capture_destination_explicit=1
+      shift 2
+      ;;
+    --xcode-developer-tools-capture)
+      metal_capture_destination=developerTools
+      metal_capture_destination_explicit=1
+      shift
+      ;;
+    --with-wine-capture-layer)
+      with_wine_capture_layer=1
+      shift
+      ;;
+    --require-xcode-attach-preflight)
+      require_xcode_attach_preflight=1
+      shift
+      ;;
+    --xcode-attach-preflight-only)
+      xcode_attach_preflight_only=1
       shift
       ;;
     --dump-shaders)
@@ -2000,6 +2355,11 @@ while (($#)); do
       probe_fragmentless_depth_only_classes=${2:?missing value for --probe-fragmentless-depth-only-classes}
       shift 2
       ;;
+    --probe-fragmentless-depth-only-keep-vsout)
+      probe_fragmentless_depth_only=1
+      probe_fragmentless_depth_only_keep_vsout=1
+      shift
+      ;;
     --force-visible)
       force_visible=1
       shift
@@ -2166,6 +2526,18 @@ while (($#)); do
       require_tile_preservation_decrease=1
       shift
       ;;
+    --require-tile-preservation-not-increase)
+      require_tile_preservation_not_increase=1
+      shift
+      ;;
+    --require-command-buffers-per-present-not-increase)
+      require_command_buffers_per_present_not_increase=1
+      shift
+      ;;
+    --require-render-passes-per-present-not-increase)
+      require_render_passes_per_present_not_increase=1
+      shift
+      ;;
     --require-draw-run-records-increase)
       require_draw_run_records_increase=1
       shift
@@ -2192,6 +2564,130 @@ while (($#)); do
       ;;
     --require-encode-draw-cpu-decrease)
       require_encode_draw_cpu_decrease=1
+      shift
+      ;;
+    --require-completion-present-wait-decrease)
+      require_completion_present_wait_decrease=1
+      shift
+      ;;
+    --require-completion-wait-with-enqueue-increase)
+      require_completion_wait_with_enqueue_increase=1
+      shift
+      ;;
+    --require-completion-wait-without-enqueue-decrease)
+      require_completion_wait_without_enqueue_decrease=1
+      shift
+      ;;
+    --require-completion-present-wait-with-enqueue-increase)
+      require_completion_present_wait_with_enqueue_increase=1
+      shift
+      ;;
+    --require-completion-present-wait-without-enqueue-decrease)
+      require_completion_present_wait_without_enqueue_decrease=1
+      shift
+      ;;
+    --require-commit-chunk-replay-cpu-per-present-decrease)
+      require_commit_chunk_replay_cpu_per_present_decrease=1
+      shift
+      ;;
+    --require-queue-draw-submission-cpu-per-present-decrease)
+      require_queue_draw_submission_cpu_per_present_decrease=1
+      shift
+      ;;
+    --require-snapshot-cpu-per-present-decrease)
+      require_snapshot_cpu_per_present_decrease=1
+      shift
+      ;;
+    --require-snapshot-cache-lookup-cpu-per-present-decrease)
+      require_snapshot_cache_lookup_cpu_per_present_decrease=1
+      shift
+      ;;
+    --require-snapshot-cache-uniform-build-cpu-per-present-decrease)
+      require_snapshot_cache_uniform_build_cpu_per_present_decrease=1
+      shift
+      ;;
+    --require-snapshot-cache-uniform-hash-cpu-per-present-decrease)
+      require_snapshot_cache_uniform_hash_cpu_per_present_decrease=1
+      shift
+      ;;
+    --require-batch-miss-uniform-build-cpu-per-present-decrease)
+      require_batch_miss_uniform_build_cpu_per_present_decrease=1
+      shift
+      ;;
+    --require-batch-miss-uniform-hash-cpu-per-present-decrease)
+      require_batch_miss_uniform_hash_cpu_per_present_decrease=1
+      shift
+      ;;
+    --require-batch-miss-vs-const-hash-cpu-per-present-decrease)
+      require_batch_miss_vs_const_hash_cpu_per_present_decrease=1
+      shift
+      ;;
+    --require-batch-miss-ps-const-hash-cpu-per-present-decrease)
+      require_batch_miss_ps_const_hash_cpu_per_present_decrease=1
+      shift
+      ;;
+    --require-batch-miss-nonconst-hash-cpu-per-present-decrease)
+      require_batch_miss_nonconst_hash_cpu_per_present_decrease=1
+      shift
+      ;;
+    --require-snapshot-uniform-copy-cpu-per-present-decrease)
+      require_snapshot_uniform_copy_cpu_per_present_decrease=1
+      shift
+      ;;
+    --require-submit-draw-run-batch-append-uniform-cpu-per-present-decrease)
+      require_submit_draw_run_batch_append_uniform_cpu_per_present_decrease=1
+      shift
+      ;;
+    --require-draw-uniform-payload-lookup-cpu-per-present-decrease)
+      require_draw_uniform_payload_lookup_cpu_per_present_decrease=1
+      shift
+      ;;
+    --require-draw-uniform-payload-append-copy-cpu-per-present-decrease)
+      require_draw_uniform_payload_append_copy_cpu_per_present_decrease=1
+      shift
+      ;;
+    --require-argbuf-setup-cpu-per-present-decrease)
+      require_argbuf_setup_cpu_per_present_decrease=1
+      shift
+      ;;
+    --require-argbuf-open-cpu-per-present-decrease)
+      require_argbuf_open_cpu_per_present_decrease=1
+      shift
+      ;;
+    --require-argbuf-cbuf-update-cpu-per-present-decrease)
+      require_argbuf_cbuf_update_cpu_per_present_decrease=1
+      shift
+      ;;
+    --require-argbuf-cbuf-update-vs-cpu-per-present-decrease)
+      require_argbuf_cbuf_update_vs_cpu_per_present_decrease=1
+      shift
+      ;;
+    --require-uniform-compact-saved-bytes-present)
+      require_uniform_compact_saved_bytes_present=1
+      shift
+      ;;
+    --require-current-uniform-compact-saved-bytes-present)
+      require_current_uniform_compact_saved_bytes_present=1
+      shift
+      ;;
+    --require-encode-chunk-cpu-per-present-decrease)
+      require_encode_chunk_cpu_per_present_decrease=1
+      shift
+      ;;
+    --require-no-enqueue-commit-entry-to-publish-decrease)
+      require_no_enqueue_commit_entry_to_publish_decrease=1
+      shift
+      ;;
+    --require-no-enqueue-publish-to-encode-dequeue-decrease)
+      require_no_enqueue_publish_to_encode_dequeue_decrease=1
+      shift
+      ;;
+    --require-no-enqueue-encode-dequeue-to-commit-decrease)
+      require_no_enqueue_encode_dequeue_to_commit_decrease=1
+      shift
+      ;;
+    --require-no-enqueue-wait-to-next-enqueue-decrease)
+      require_no_enqueue_wait_to_next_enqueue_decrease=1
       shift
       ;;
     --max-gpu-command-buffer-regression-ms)
@@ -2403,6 +2899,34 @@ if [[ ! "$frame" =~ ^[0-9]+$ ]] || (( frame == 0 )); then
   exit 2
 fi
 
+if (( capture_gputrace || metal_capture_destination_explicit )) &&
+   ! capture_destination_is_valid "$metal_capture_destination"; then
+  echo "--metal-capture-destination must be one of gpuTraceDocument, gputrace, file, developerTools, xcode" >&2
+  exit 2
+fi
+
+if (( require_xcode_attach_preflight )) &&
+   ! capture_destination_is_developer_tools "$metal_capture_destination"; then
+  echo "--require-xcode-attach-preflight requires --xcode-developer-tools-capture or --metal-capture-destination developerTools" >&2
+  exit 2
+fi
+
+if (( with_wine_capture_layer )) && (( ! capture_gputrace )); then
+  echo "--with-wine-capture-layer requires a file .gputrace capture; remove --no-gputrace" >&2
+  exit 2
+fi
+
+if (( with_wine_capture_layer )) &&
+   ! capture_destination_is_file "$metal_capture_destination"; then
+  echo "--with-wine-capture-layer is only for file .gputrace capture; do not combine it with developerTools/xcode capture" >&2
+  exit 2
+fi
+
+if (( xcode_attach_preflight_only )); then
+  run_xcode_attach_preflight
+  exit $?
+fi
+
 if [[ -z "$timeout" ]]; then
   if (( capture_gputrace )); then
     timeout=420
@@ -2419,6 +2943,16 @@ fi
 
 if [[ ! "$timeout_slack" =~ ^[0-9]+([.][0-9]+)?$ ]]; then
   echo "DXMT_3DMARK05_PROBE_TIMEOUT_SLACK must be non-negative numeric seconds" >&2
+  exit 2
+fi
+
+if [[ ! "$wait_unlocked_sec" =~ ^[0-9]+$ ]]; then
+  echo "--wait-unlocked-sec must be non-negative integer seconds" >&2
+  exit 2
+fi
+
+if [[ ! "$wait_unlocked_interval_sec" =~ ^[1-9][0-9]*$ ]]; then
+  echo "--wait-unlocked-interval-sec must be a positive integer" >&2
   exit 2
 fi
 
@@ -3142,13 +3676,46 @@ run_level_compare_requested=0
 if (( require_color_dontcare_increase ||
       require_depth_dontcare_increase ||
       require_tile_preservation_decrease ||
+      require_tile_preservation_not_increase ||
+      require_command_buffers_per_present_not_increase ||
+      require_render_passes_per_present_not_increase ||
       require_draw_run_records_increase ||
       require_draw_run_records_per_submit_increase ||
       require_binding_overrides_present ||
       require_const_upload_passthrough_present ||
       require_draw_submission_batch_present ||
       require_const_upload_break_bytes_decrease ||
-      require_encode_draw_cpu_decrease )) ||
+      require_encode_draw_cpu_decrease ||
+      require_completion_present_wait_decrease ||
+      require_completion_wait_with_enqueue_increase ||
+      require_completion_wait_without_enqueue_decrease ||
+      require_completion_present_wait_with_enqueue_increase ||
+      require_completion_present_wait_without_enqueue_decrease ||
+      require_commit_chunk_replay_cpu_per_present_decrease ||
+      require_queue_draw_submission_cpu_per_present_decrease ||
+      require_snapshot_cpu_per_present_decrease ||
+      require_snapshot_cache_lookup_cpu_per_present_decrease ||
+      require_snapshot_cache_uniform_build_cpu_per_present_decrease ||
+      require_snapshot_cache_uniform_hash_cpu_per_present_decrease ||
+      require_batch_miss_uniform_build_cpu_per_present_decrease ||
+      require_batch_miss_uniform_hash_cpu_per_present_decrease ||
+      require_batch_miss_vs_const_hash_cpu_per_present_decrease ||
+      require_batch_miss_ps_const_hash_cpu_per_present_decrease ||
+      require_batch_miss_nonconst_hash_cpu_per_present_decrease ||
+      require_snapshot_uniform_copy_cpu_per_present_decrease ||
+      require_submit_draw_run_batch_append_uniform_cpu_per_present_decrease ||
+      require_draw_uniform_payload_lookup_cpu_per_present_decrease ||
+      require_draw_uniform_payload_append_copy_cpu_per_present_decrease ||
+      require_argbuf_setup_cpu_per_present_decrease ||
+      require_argbuf_open_cpu_per_present_decrease ||
+      require_argbuf_cbuf_update_cpu_per_present_decrease ||
+      require_argbuf_cbuf_update_vs_cpu_per_present_decrease ||
+      require_uniform_compact_saved_bytes_present ||
+      require_encode_chunk_cpu_per_present_decrease ||
+      require_no_enqueue_commit_entry_to_publish_decrease ||
+      require_no_enqueue_publish_to_encode_dequeue_decrease ||
+      require_no_enqueue_encode_dequeue_to_commit_decrease ||
+      require_no_enqueue_wait_to_next_enqueue_decrease )) ||
    [[ -n "$max_gpu_command_buffer_regression_ms" ||
       -n "$max_const_upload_break_count_ratio" ]]; then
   run_level_compare_requested=1
@@ -3359,6 +3926,12 @@ probe_draws_csv="$output_dir/3dmark05-perf-indexed-probe-draws.csv"
 index_cache_runtime_report="$output_dir/3dmark05-index-cache-runtime-summary.md"
 index_cache_runtime_csv="$output_dir/3dmark05-index-cache-runtime-summary.csv"
 capture_path="$trace_dir/frame${frame}.gputrace"
+trace_artifacts_json="$output_dir/3dmark05-trace-artifacts.json"
+xcode_performance_gputrace="$analysis_dir/frame${frame}-performance.gputrace"
+xcode_encoder_counters_csv="$analysis_dir/frame${frame}-counters-xcode.csv"
+xcode_counters_summary_csv="$analysis_dir/frame${frame}-counters-summary.csv"
+xcode_joined_summary_csv="$analysis_dir/frame${frame}-xcode-dxmt-joined-summary.csv"
+xcode_bottleneck_report="$analysis_dir/frame${frame}-xcode-dxmt-bottleneck-report.md"
 metal_system_trace="$trace_dir/metal-system.trace"
 metal_gpu_intervals_xml="$analysis_dir/metal-gpu-intervals.xml"
 xctrace_gpu_intervals_summary_csv="$analysis_dir/xctrace-metal-gpu-intervals-summary.csv"
@@ -3372,15 +3945,7 @@ if command -v df >/dev/null 2>&1; then
   fi
 fi
 
-session_locked=unknown
-if command -v ioreg >/dev/null 2>&1; then
-  session_state=$(ioreg -n Root -d1 2>/dev/null || true)
-  if [[ "$session_state" == *'"CGSSessionScreenIsLocked"=Yes'* ]]; then
-    session_locked=yes
-  else
-    session_locked=no
-  fi
-fi
+session_locked=$(detect_session_locked)
 
 env_args=(
   "DXMT_EXPERIMENT_PROFILE=perf"
@@ -3419,6 +3984,10 @@ if [[ "$draw_packet_actual_change" != "0" && -n "$draw_packet_actual_change" ]];
   env_args+=("DXMT9_PERF_DRAW_PACKET_ACTUAL_CHANGE=$draw_packet_actual_change")
 fi
 
+if [[ "$vs_const_setter_range" != "0" && -n "$vs_const_setter_range" ]]; then
+  env_args+=("DXMT9_PERF_VS_CONST_SETTER_RANGE=$vs_const_setter_range")
+fi
+
 if (( dump_framegraph_dag )); then
   env_args+=(
     "DXMT9_RENDERER_DUMP_DAG=$framegraph_dag_dir"
@@ -3438,7 +4007,6 @@ if (( capture_gputrace )); then
   if [[ "${DXMT_3DMARK05_SET_MTL_CAPTURE_ENABLED:-0}" != "0" ]]; then
     env_args+=("MTL_CAPTURE_ENABLED=1")
   fi
-  metal_capture_destination="${DXMT_3DMARK05_METAL_CAPTURE_DESTINATION:-${DXMT_METAL_CAPTURE_DESTINATION:-}}"
   env_args+=(
     "DXMT_METAL_CAPTURE_FRAME=$frame"
     "DXMT_METAL_CAPTURE_PATH=$capture_path"
@@ -4095,6 +4663,9 @@ fi
 if [[ -n "$probe_fragmentless_depth_only_classes" ]]; then
   env_args+=("DXMT9_PROBE_FRAGMENTLESS_DEPTH_ONLY_CLASSES=$probe_fragmentless_depth_only_classes")
 fi
+if (( probe_fragmentless_depth_only_keep_vsout )); then
+  env_args+=("DXMT9_PROBE_FRAGMENTLESS_DEPTH_ONLY_KEEP_VSOUT=1")
+fi
 
 if (( force_visible )); then
   env_args+=("DXMT_DEBUG_FORCE_VISIBLE=1")
@@ -4219,6 +4790,15 @@ cmd=(
 if [[ -n "$capture_delay_sec" ]]; then
   cmd+=(--capture-delay-sec "$capture_delay_sec")
 fi
+if (( with_wine_capture_layer )); then
+  cmd=(
+    bash scripts/tools/run_with_wine_metal_capture_layer.sh
+    --wine-root "$probe_wine_root"
+    --allow-3dmark05
+    --
+    "${cmd[@]}"
+  )
+fi
 
 counter_compare_cmd=()
 if [[ -n "$compare_baseline_output" ]]; then
@@ -4238,6 +4818,15 @@ if [[ -n "$compare_baseline_output" ]]; then
   fi
   if (( require_tile_preservation_decrease )); then
     counter_compare_cmd+=(--require-tile-preservation-decrease)
+  fi
+  if (( require_tile_preservation_not_increase )); then
+    counter_compare_cmd+=(--require-tile-preservation-not-increase)
+  fi
+  if (( require_command_buffers_per_present_not_increase )); then
+    counter_compare_cmd+=(--require-command-buffers-per-present-not-increase)
+  fi
+  if (( require_render_passes_per_present_not_increase )); then
+    counter_compare_cmd+=(--require-render-passes-per-present-not-increase)
   fi
   if (( require_draw_run_records_increase )); then
     counter_compare_cmd+=(--require-draw-run-records-increase)
@@ -4259,6 +4848,96 @@ if [[ -n "$compare_baseline_output" ]]; then
   fi
   if (( require_encode_draw_cpu_decrease )); then
     counter_compare_cmd+=(--require-encode-draw-cpu-decrease)
+  fi
+  if (( require_completion_present_wait_decrease )); then
+    counter_compare_cmd+=(--require-completion-present-wait-decrease)
+  fi
+  if (( require_completion_wait_with_enqueue_increase )); then
+    counter_compare_cmd+=(--require-completion-wait-with-enqueue-increase)
+  fi
+  if (( require_completion_wait_without_enqueue_decrease )); then
+    counter_compare_cmd+=(--require-completion-wait-without-enqueue-decrease)
+  fi
+  if (( require_completion_present_wait_with_enqueue_increase )); then
+    counter_compare_cmd+=(--require-completion-present-wait-with-enqueue-increase)
+  fi
+  if (( require_completion_present_wait_without_enqueue_decrease )); then
+    counter_compare_cmd+=(--require-completion-present-wait-without-enqueue-decrease)
+  fi
+  if (( require_commit_chunk_replay_cpu_per_present_decrease )); then
+    counter_compare_cmd+=(--require-commit-chunk-replay-cpu-per-present-decrease)
+  fi
+  if (( require_queue_draw_submission_cpu_per_present_decrease )); then
+    counter_compare_cmd+=(--require-queue-draw-submission-cpu-per-present-decrease)
+  fi
+  if (( require_snapshot_cpu_per_present_decrease )); then
+    counter_compare_cmd+=(--require-snapshot-cpu-per-present-decrease)
+  fi
+  if (( require_snapshot_cache_lookup_cpu_per_present_decrease )); then
+    counter_compare_cmd+=(--require-snapshot-cache-lookup-cpu-per-present-decrease)
+  fi
+  if (( require_snapshot_cache_uniform_build_cpu_per_present_decrease )); then
+    counter_compare_cmd+=(--require-snapshot-cache-uniform-build-cpu-per-present-decrease)
+  fi
+  if (( require_snapshot_cache_uniform_hash_cpu_per_present_decrease )); then
+    counter_compare_cmd+=(--require-snapshot-cache-uniform-hash-cpu-per-present-decrease)
+  fi
+  if (( require_batch_miss_uniform_build_cpu_per_present_decrease )); then
+    counter_compare_cmd+=(--require-batch-miss-uniform-build-cpu-per-present-decrease)
+  fi
+  if (( require_batch_miss_uniform_hash_cpu_per_present_decrease )); then
+    counter_compare_cmd+=(--require-batch-miss-uniform-hash-cpu-per-present-decrease)
+  fi
+  if (( require_batch_miss_vs_const_hash_cpu_per_present_decrease )); then
+    counter_compare_cmd+=(--require-batch-miss-vs-const-hash-cpu-per-present-decrease)
+  fi
+  if (( require_batch_miss_ps_const_hash_cpu_per_present_decrease )); then
+    counter_compare_cmd+=(--require-batch-miss-ps-const-hash-cpu-per-present-decrease)
+  fi
+  if (( require_batch_miss_nonconst_hash_cpu_per_present_decrease )); then
+    counter_compare_cmd+=(--require-batch-miss-nonconst-hash-cpu-per-present-decrease)
+  fi
+  if (( require_snapshot_uniform_copy_cpu_per_present_decrease )); then
+    counter_compare_cmd+=(--require-snapshot-uniform-copy-cpu-per-present-decrease)
+  fi
+  if (( require_submit_draw_run_batch_append_uniform_cpu_per_present_decrease )); then
+    counter_compare_cmd+=(--require-submit-draw-run-batch-append-uniform-cpu-per-present-decrease)
+  fi
+  if (( require_draw_uniform_payload_lookup_cpu_per_present_decrease )); then
+    counter_compare_cmd+=(--require-draw-uniform-payload-lookup-cpu-per-present-decrease)
+  fi
+  if (( require_draw_uniform_payload_append_copy_cpu_per_present_decrease )); then
+    counter_compare_cmd+=(--require-draw-uniform-payload-append-copy-cpu-per-present-decrease)
+  fi
+  if (( require_argbuf_setup_cpu_per_present_decrease )); then
+    counter_compare_cmd+=(--require-argbuf-setup-cpu-per-present-decrease)
+  fi
+  if (( require_argbuf_open_cpu_per_present_decrease )); then
+    counter_compare_cmd+=(--require-argbuf-open-cpu-per-present-decrease)
+  fi
+  if (( require_argbuf_cbuf_update_cpu_per_present_decrease )); then
+    counter_compare_cmd+=(--require-argbuf-cbuf-update-cpu-per-present-decrease)
+  fi
+  if (( require_argbuf_cbuf_update_vs_cpu_per_present_decrease )); then
+    counter_compare_cmd+=(--require-argbuf-cbuf-update-vs-cpu-per-present-decrease)
+  fi
+  if (( require_uniform_compact_saved_bytes_present )); then
+    counter_compare_cmd+=(--require-uniform-compact-saved-bytes-present)
+  fi
+  if (( require_encode_chunk_cpu_per_present_decrease )); then
+    counter_compare_cmd+=(--require-encode-chunk-cpu-per-present-decrease)
+  fi
+  if (( require_no_enqueue_commit_entry_to_publish_decrease )); then
+    counter_compare_cmd+=(--require-no-enqueue-commit-entry-to-publish-decrease)
+  fi
+  if (( require_no_enqueue_publish_to_encode_dequeue_decrease )); then
+    counter_compare_cmd+=(--require-no-enqueue-publish-to-encode-dequeue-decrease)
+  fi
+  if (( require_no_enqueue_encode_dequeue_to_commit_decrease )); then
+    counter_compare_cmd+=(--require-no-enqueue-encode-dequeue-to-commit-decrease)
+  fi
+  if (( require_no_enqueue_wait_to_next_enqueue_decrease )); then
+    counter_compare_cmd+=(--require-no-enqueue-wait-to-next-enqueue-decrease)
   fi
   if [[ -n "$max_gpu_command_buffer_regression_ms" ]]; then
     counter_compare_cmd+=(
@@ -4366,6 +5045,15 @@ if (( capture_gputrace )); then
   if (( require_tile_preservation_decrease )); then
     finalize_cmd+=(--require-tile-preservation-decrease)
   fi
+  if (( require_tile_preservation_not_increase )); then
+    finalize_cmd+=(--require-tile-preservation-not-increase)
+  fi
+  if (( require_command_buffers_per_present_not_increase )); then
+    finalize_cmd+=(--require-command-buffers-per-present-not-increase)
+  fi
+  if (( require_render_passes_per_present_not_increase )); then
+    finalize_cmd+=(--require-render-passes-per-present-not-increase)
+  fi
   if (( require_draw_run_records_increase )); then
     finalize_cmd+=(--require-draw-run-records-increase)
   fi
@@ -4386,6 +5074,99 @@ if (( capture_gputrace )); then
   fi
   if (( require_encode_draw_cpu_decrease )); then
     finalize_cmd+=(--require-encode-draw-cpu-decrease)
+  fi
+  if (( require_completion_present_wait_decrease )); then
+    finalize_cmd+=(--require-completion-present-wait-decrease)
+  fi
+  if (( require_completion_wait_with_enqueue_increase )); then
+    finalize_cmd+=(--require-completion-wait-with-enqueue-increase)
+  fi
+  if (( require_completion_wait_without_enqueue_decrease )); then
+    finalize_cmd+=(--require-completion-wait-without-enqueue-decrease)
+  fi
+  if (( require_completion_present_wait_with_enqueue_increase )); then
+    finalize_cmd+=(--require-completion-present-wait-with-enqueue-increase)
+  fi
+  if (( require_completion_present_wait_without_enqueue_decrease )); then
+    finalize_cmd+=(--require-completion-present-wait-without-enqueue-decrease)
+  fi
+  if (( require_commit_chunk_replay_cpu_per_present_decrease )); then
+    finalize_cmd+=(--require-commit-chunk-replay-cpu-per-present-decrease)
+  fi
+  if (( require_queue_draw_submission_cpu_per_present_decrease )); then
+    finalize_cmd+=(--require-queue-draw-submission-cpu-per-present-decrease)
+  fi
+  if (( require_snapshot_cpu_per_present_decrease )); then
+    finalize_cmd+=(--require-snapshot-cpu-per-present-decrease)
+  fi
+  if (( require_snapshot_cache_lookup_cpu_per_present_decrease )); then
+    finalize_cmd+=(--require-snapshot-cache-lookup-cpu-per-present-decrease)
+  fi
+  if (( require_snapshot_cache_uniform_build_cpu_per_present_decrease )); then
+    finalize_cmd+=(--require-snapshot-cache-uniform-build-cpu-per-present-decrease)
+  fi
+  if (( require_snapshot_cache_uniform_hash_cpu_per_present_decrease )); then
+    finalize_cmd+=(--require-snapshot-cache-uniform-hash-cpu-per-present-decrease)
+  fi
+  if (( require_batch_miss_uniform_build_cpu_per_present_decrease )); then
+    finalize_cmd+=(--require-batch-miss-uniform-build-cpu-per-present-decrease)
+  fi
+  if (( require_batch_miss_uniform_hash_cpu_per_present_decrease )); then
+    finalize_cmd+=(--require-batch-miss-uniform-hash-cpu-per-present-decrease)
+  fi
+  if (( require_batch_miss_vs_const_hash_cpu_per_present_decrease )); then
+    finalize_cmd+=(--require-batch-miss-vs-const-hash-cpu-per-present-decrease)
+  fi
+  if (( require_batch_miss_ps_const_hash_cpu_per_present_decrease )); then
+    finalize_cmd+=(--require-batch-miss-ps-const-hash-cpu-per-present-decrease)
+  fi
+  if (( require_batch_miss_nonconst_hash_cpu_per_present_decrease )); then
+    finalize_cmd+=(--require-batch-miss-nonconst-hash-cpu-per-present-decrease)
+  fi
+  if (( require_snapshot_uniform_copy_cpu_per_present_decrease )); then
+    finalize_cmd+=(--require-snapshot-uniform-copy-cpu-per-present-decrease)
+  fi
+  if (( require_submit_draw_run_batch_append_uniform_cpu_per_present_decrease )); then
+    finalize_cmd+=(--require-submit-draw-run-batch-append-uniform-cpu-per-present-decrease)
+  fi
+  if (( require_draw_uniform_payload_lookup_cpu_per_present_decrease )); then
+    finalize_cmd+=(--require-draw-uniform-payload-lookup-cpu-per-present-decrease)
+  fi
+  if (( require_draw_uniform_payload_append_copy_cpu_per_present_decrease )); then
+    finalize_cmd+=(--require-draw-uniform-payload-append-copy-cpu-per-present-decrease)
+  fi
+  if (( require_argbuf_setup_cpu_per_present_decrease )); then
+    finalize_cmd+=(--require-argbuf-setup-cpu-per-present-decrease)
+  fi
+  if (( require_argbuf_open_cpu_per_present_decrease )); then
+    finalize_cmd+=(--require-argbuf-open-cpu-per-present-decrease)
+  fi
+  if (( require_argbuf_cbuf_update_cpu_per_present_decrease )); then
+    finalize_cmd+=(--require-argbuf-cbuf-update-cpu-per-present-decrease)
+  fi
+  if (( require_argbuf_cbuf_update_vs_cpu_per_present_decrease )); then
+    finalize_cmd+=(--require-argbuf-cbuf-update-vs-cpu-per-present-decrease)
+  fi
+  if (( require_uniform_compact_saved_bytes_present )); then
+    finalize_cmd+=(--require-uniform-compact-saved-bytes-present)
+  fi
+  if (( require_current_uniform_compact_saved_bytes_present )); then
+    finalize_cmd+=(--require-current-uniform-compact-saved-bytes-present)
+  fi
+  if (( require_encode_chunk_cpu_per_present_decrease )); then
+    finalize_cmd+=(--require-encode-chunk-cpu-per-present-decrease)
+  fi
+  if (( require_no_enqueue_commit_entry_to_publish_decrease )); then
+    finalize_cmd+=(--require-no-enqueue-commit-entry-to-publish-decrease)
+  fi
+  if (( require_no_enqueue_publish_to_encode_dequeue_decrease )); then
+    finalize_cmd+=(--require-no-enqueue-publish-to-encode-dequeue-decrease)
+  fi
+  if (( require_no_enqueue_encode_dequeue_to_commit_decrease )); then
+    finalize_cmd+=(--require-no-enqueue-encode-dequeue-to-commit-decrease)
+  fi
+  if (( require_no_enqueue_wait_to_next_enqueue_decrease )); then
+    finalize_cmd+=(--require-no-enqueue-wait-to-next-enqueue-decrease)
   fi
   if [[ -n "$max_gpu_command_buffer_regression_ms" ]]; then
     finalize_cmd+=(
@@ -4536,15 +5317,24 @@ echo "trace_dir: $trace_dir"
 echo "summary: $summary_path"
 echo "index_cache_runtime_report: $index_cache_runtime_report"
 echo "indexed_probe_draws: $probe_draws_csv"
+echo "trace_artifacts_json: $trace_artifacts_json"
 echo "metal_system_trace: $metal_system_trace"
 echo "metal_gpu_intervals_xml: $metal_gpu_intervals_xml"
 echo "xctrace_gpu_intervals_summary: $xctrace_gpu_intervals_summary_md"
 echo "measure_index_reuse: $measure_index_reuse"
 echo "session_locked: $session_locked"
+echo "wait_unlocked_sec: $wait_unlocked_sec"
+echo "wait_unlocked_interval_sec: $wait_unlocked_interval_sec"
+echo "require_current_uniform_compact_saved_bytes_present: $require_current_uniform_compact_saved_bytes_present"
 echo "free_space_mb: $free_mb"
 echo "min_free_space_mb: $min_free_mb"
 echo "runner_timeout_sec: $timeout"
 echo "watchdog_timeout_sec: ${timeout}+${effective_capture_delay_sec}+${timeout_slack}"
+if (( with_wine_capture_layer )); then
+  echo "wine_capture_layer_wrapper: enabled wine_root=$probe_wine_root"
+else
+  echo "wine_capture_layer_wrapper: disabled"
+fi
 if [[ -n "$capture_delay_sec" ]]; then
   echo "capture_delay_sec: $capture_delay_sec"
 else
@@ -4563,7 +5353,15 @@ if (( capture_gputrace )) && (( min_free_mb < recommended_gputrace_min_free_mb )
   echo "warning: gputrace min_free_space_mb is below the recommended ${recommended_gputrace_min_free_mb}MiB launch guard; set DXMT_3DMARK05_ALLOW_LOW_TRACE_FREE_MB=1 only for deliberate partial-run risk."
 fi
 if (( capture_gputrace )); then
-  echo "gputrace: $capture_path"
+  echo "metal_capture_destination: ${metal_capture_destination:-gpuTraceDocument}"
+  if capture_destination_is_developer_tools "$metal_capture_destination"; then
+    echo "gputrace: developerTools (Xcode export required; no direct file expected at $capture_path)"
+    echo "xcode_developer_tools_capture_preflight: attach Xcode to the real Wine child before frame $frame; do not run if attach-by-PID is disabled or Attach to Process is stuck at Getting Process List"
+    echo "xcode_developer_tools_capture_target: choose a frame known to be reached; missing frame $frame means no capture start/stop log is expected"
+    echo "xcode_developer_tools_capture_preflight_required: $require_xcode_attach_preflight"
+  else
+    echo "gputrace: $capture_path"
+  fi
 else
   echo "gputrace: disabled"
 fi
@@ -4666,6 +5464,9 @@ fi
 if (( probe_fragmentless_depth_only )); then
   echo "warning: --probe-fragmentless-depth-only is diagnostic only; it is scoped to depth-only draws and still needs image/counter equality before any production route."
 fi
+if (( probe_fragmentless_depth_only_keep_vsout )); then
+  echo "warning: --probe-fragmentless-depth-only-keep-vsout isolates fragmentless routing from position-only VSOut; it is still diagnostic and needs equality before Xcode counters."
+fi
 if (( force_expand_indexed )); then
   echo "warning: --force-expand-indexed is diagnostic only; it preserves indexed geometry intent but changes vertex submission/cache behavior and can heavily regress GPU/CPU cost."
 fi
@@ -4700,6 +5501,17 @@ if [[ -n "$force_cull_mode" ]]; then
 fi
 
 if (( dry_run )); then
+  if (( capture_gputrace )) &&
+     capture_destination_is_file "$metal_capture_destination" &&
+     [[ "${DXMT_3DMARK05_ALLOW_NO_FILE_CAPTURE_LAYER:-0}" != "1" ]]; then
+    if (( with_wine_capture_layer )); then
+      if ! run_wine_capture_layer_wrapper_preflight "$probe_wine_root"; then
+        echo "dry-run: file capture layer preflight would fail for --with-wine-capture-layer"
+      fi
+    elif ! run_file_capture_layer_preflight "$probe_wine_root"; then
+      echo "dry-run: file capture layer preflight would fail without --with-wine-capture-layer"
+    fi
+  fi
   if [[ "$free_mb" != unknown && "$min_free_mb" != 0 && "$free_mb" -lt "$min_free_mb" ]]; then
     echo "dry-run: free space is below the launch guard; cleanup candidates follow"
     print_space_hints 1
@@ -4707,8 +5519,31 @@ if (( dry_run )); then
   exit 0
 fi
 
+if [[ "${DXMT_3DMARK05_REQUIRE_UNLOCKED:-1}" != "0" &&
+      "$session_locked" == yes &&
+      "$wait_unlocked_sec" -gt 0 ]]; then
+  waited_sec=0
+  while [[ "$session_locked" == yes && "$waited_sec" -lt "$wait_unlocked_sec" ]]; do
+    remaining_sec=$((wait_unlocked_sec - waited_sec))
+    sleep_sec=$wait_unlocked_interval_sec
+    if (( sleep_sec > remaining_sec )); then
+      sleep_sec=$remaining_sec
+    fi
+    printf 'waiting for macOS session unlock: %ss/%ss\n' \
+      "$waited_sec" "$wait_unlocked_sec" >&2
+    sleep "$sleep_sec"
+    waited_sec=$((waited_sec + sleep_sec))
+    session_locked=$(detect_session_locked)
+  done
+  echo "session_locked_after_wait: $session_locked"
+fi
+
 if [[ "${DXMT_3DMARK05_REQUIRE_UNLOCKED:-1}" != "0" && "$session_locked" == yes ]]; then
-  echo "macOS session is locked; unlock the desktop before running 3DMark05 perf/gputrace" >&2
+  if [[ "$wait_unlocked_sec" -gt 0 ]]; then
+    echo "macOS session is locked after waiting ${wait_unlocked_sec}s; unlock the desktop before running 3DMark05 perf/gputrace" >&2
+  else
+    echo "macOS session is locked; unlock the desktop before running 3DMark05 perf/gputrace" >&2
+  fi
   exit 2
 fi
 
@@ -4718,6 +5553,34 @@ if (( capture_gputrace )) &&
   echo "refusing low free-space gputrace launch guard: --min-free-mb ${min_free_mb} is below the recommended ${recommended_gputrace_min_free_mb}MiB" >&2
   echo "raise --min-free-mb, free disk space, or set DXMT_3DMARK05_ALLOW_LOW_TRACE_FREE_MB=1 after deliberately accepting partial-run/no-result.json risk" >&2
   exit 2
+fi
+
+if (( capture_gputrace )) &&
+   capture_destination_is_file "$metal_capture_destination" &&
+   [[ "${DXMT_3DMARK05_ALLOW_NO_FILE_CAPTURE_LAYER:-0}" != "1" ]]; then
+  if (( with_wine_capture_layer )); then
+    if ! run_wine_capture_layer_wrapper_preflight "$probe_wine_root"; then
+      echo "Metal file capture was requested through the Wine capture-layer wrapper, but the capture-enabled Wine copies are unavailable." >&2
+      echo "Expected MetalCaptureEnabled in:" >&2
+      echo "  $probe_wine_root/bin/wine.capture.real" >&2
+      echo "  $probe_wine_root/bin/wine.capture.real-preloader" >&2
+      exit 2
+    fi
+  elif ! run_file_capture_layer_preflight "$probe_wine_root"; then
+    echo "Metal file capture requires Apple's capture layer in the Wine child." >&2
+    echo "The current Wine launcher lacks MetalCaptureEnabled and no Metal capture-layer env was requested." >&2
+    echo "Use --with-wine-capture-layer for a deliberate file .gputrace diagnostic, --xcode-developer-tools-capture with a passing Xcode attach preflight, or set DXMT_3DMARK05_ALLOW_NO_FILE_CAPTURE_LAYER=1 for a deliberate late-failure diagnostic." >&2
+    echo "Do not use DXMT_3DMARK05_SET_MTL_CAPTURE_ENABLED=1 as a normal 3DMark05 perf path; it can SIGKILL/black-screen before draw/present." >&2
+    exit 2
+  fi
+fi
+
+if (( require_xcode_attach_preflight )) &&
+   capture_destination_is_developer_tools "$metal_capture_destination"; then
+  if ! run_xcode_attach_preflight; then
+    echo "Xcode attach preflight failed; fix Xcode attach state before starting a developerTools capture run" >&2
+    exit 2
+  fi
 fi
 
 if [[ "$free_mb" != unknown && "$min_free_mb" != 0 && "$free_mb" -lt "$min_free_mb" ]]; then
@@ -4770,7 +5633,15 @@ run_status=0
 ) || run_status=$?
 cleanup_3dmark05_probe_wineserver
 
-python3 "$repo_root/scripts/tools/summarize_3dmark05_perf.py" "$output_dir" --output "$summary_path"
+summary_cmd=(
+  python3 "$repo_root/scripts/tools/summarize_3dmark05_perf.py"
+  "$output_dir"
+  --output "$summary_path"
+)
+if (( require_current_uniform_compact_saved_bytes_present )); then
+  summary_cmd+=(--require-uniform-compact-saved-bytes-present)
+fi
+"${summary_cmd[@]}"
 python3 "$repo_root/scripts/tools/summarize_index_cache_runtime.py" \
   --run "$suffix=$encoders_csv,$probe_draws_csv" \
   --output "$index_cache_runtime_report" \
@@ -4820,13 +5691,99 @@ if (( dump_framegraph_dag )); then
   fi
 fi
 
-if (( capture_gputrace )) && [[ ! -e "$capture_path" ]]; then
-  echo "Metal gputrace capture was requested but no capture was written: $capture_path" >&2
-  echo "check the run log for MTLCaptureManager errors:" >&2
-  echo "  $output_dir/dxmt9.log" >&2
-  echo "  $output_dir/3dmark05-direct.log" >&2
-  exit 2
+if (( capture_gputrace )); then
+  if capture_destination_is_developer_tools "$metal_capture_destination"; then
+    capture_started=0
+    capture_stopped=0
+    for log_path in "$output_dir/dxmt9.log" "$output_dir/3dmark05-direct.log"; do
+      if [[ -f "$log_path" ]]; then
+        if grep -F "Metal capture frame=${frame} " "$log_path" | grep -F "destination=1 started" >/dev/null; then
+          capture_started=1
+        fi
+        if grep -F "Metal capture frame=${frame} " "$log_path" | grep -F "destination=1 stopped" >/dev/null; then
+          capture_stopped=1
+        fi
+      fi
+    done
+    if (( ! capture_started || ! capture_stopped )); then
+      echo "Metal developerTools capture was requested but start/stop was not proven in logs" >&2
+      echo "expected Xcode-attached capture log lines for frame $frame with destination=1" >&2
+      echo "classify as attach-preflight failure if Xcode could not attach to the Wine child" >&2
+      echo "classify as frame-target miss if the run did not reach frame $frame" >&2
+      echo "check the run log for MTLCaptureManager errors:" >&2
+      echo "  $output_dir/dxmt9.log" >&2
+      echo "  $output_dir/3dmark05-direct.log" >&2
+      exit 2
+    fi
+  elif [[ ! -e "$capture_path" ]]; then
+    echo "Metal gputrace capture was requested but no capture was written: $capture_path" >&2
+    echo "check the run log for MTLCaptureManager errors:" >&2
+    echo "  $output_dir/dxmt9.log" >&2
+    echo "  $output_dir/3dmark05-direct.log" >&2
+    exit 2
+  fi
 fi
+
+python3 - "$trace_artifacts_json" \
+  "$run_id" \
+  "$output_dir" \
+  "$trace_dir" \
+  "$analysis_dir" \
+  "$frame" \
+  "$capture_gputrace" \
+  "${metal_capture_destination:-gpuTraceDocument}" \
+  "$capture_path" \
+  "$xcode_performance_gputrace" \
+  "$xcode_encoder_counters_csv" \
+  "$xcode_counters_summary_csv" \
+  "$xcode_joined_summary_csv" \
+  "$xcode_bottleneck_report" <<'PY'
+import json
+import pathlib
+import sys
+
+(
+    out,
+    run_id,
+    output_dir,
+    trace_dir,
+    analysis_dir,
+    frame,
+    capture_gputrace,
+    destination,
+    capture_path,
+    performance_gputrace,
+    counters_csv,
+    counters_summary_csv,
+    joined_summary_csv,
+    bottleneck_report,
+) = sys.argv[1:]
+
+capture_enabled = capture_gputrace != "0"
+direct_file_expected = capture_enabled and destination not in {"developerTools", "xcode"}
+paths = {
+    "output_dir": output_dir,
+    "trace_dir": trace_dir,
+    "analysis_dir": analysis_dir,
+    "gputrace": capture_path if direct_file_expected else None,
+    "xcode_performance_gputrace": performance_gputrace,
+    "xcode_encoder_counters_csv": counters_csv,
+    "xcode_counters_summary_csv": counters_summary_csv,
+    "xcode_dxmt_joined_summary_csv": joined_summary_csv,
+    "xcode_dxmt_bottleneck_report": bottleneck_report,
+}
+exists = {name: pathlib.Path(value).exists() for name, value in paths.items() if value}
+payload = {
+    "run_id": run_id,
+    "frame": int(frame),
+    "capture_gputrace": capture_enabled,
+    "metal_capture_destination": destination,
+    "direct_gputrace_file_expected": direct_file_expected,
+    "paths": paths,
+    "exists": exists,
+}
+pathlib.Path(out).write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+PY
 
 if ((${#counter_compare_cmd[@]})); then
   mkdir -p "$trace_dir/analysis"
@@ -4842,6 +5799,7 @@ echo "wrote stream csv: $stream_csv"
 echo "wrote probe draw csv: $probe_draws_csv"
 echo "wrote index cache runtime report: $index_cache_runtime_report"
 echo "wrote index cache runtime csv: $index_cache_runtime_csv"
+echo "wrote trace artifacts manifest: $trace_artifacts_json"
 if (( visibility_scout )); then
   echo "wrote visibility scout csv: $visibility_scout_path"
   echo "wrote visibility scout summary: $visibility_scout_summary_output"

@@ -55,17 +55,8 @@ u32 compatFlagsForDraw(FlatDrawStateView draw, const std::function<u32(Handle)>&
       flags |= CompatFlagSrgb;
     }
   }
-  if (draw.hasUniformPayload()) {
-    const auto& uniformPayload = draw.uniformPayload();
-    for (size_t stage = 0; stage < uniformPayload.textureTransforms.size(); ++stage) {
-      if (!hot.textures[stage]) {
-        continue;
-      }
-      if (!metalcompat::matrixIsIdentity(uniformPayload.textureTransforms[stage])) {
-        flags |= CompatFlagProjected;
-        break;
-      }
-    }
+  if ((hot.nonIdentityTextureTransformStageMask & hot.textureMask) != 0) {
+    flags |= CompatFlagProjected;
   }
   return flags;
 }
@@ -146,7 +137,7 @@ u32 compatFlagsForPresent(const SwapDesc& present,
 ChunkObservation makeChunkObservation(const MetalCommandView& command,
                                       const std::function<u32(Handle)>& resolveSurfaceFlags) {
   switch (command.kind) {
-    case MetalCommandKind::DrawRun:
+    case MetalCommandKind::DrawRun: {
       return ChunkObservation{
           .kind = ChunkObservationKind::Draw,
           .compatFlags = command.drawState.hot
@@ -160,6 +151,7 @@ ChunkObservation makeChunkObservation(const MetalCommandView& command,
               : 0,
           .shaderVariantHash = shaderVariantHashForDraw(command.drawState),
       };
+    }
     case MetalCommandKind::Clear:
       return ChunkObservation{
           .kind = ChunkObservationKind::Draw,
@@ -248,6 +240,19 @@ bool writerCanProceed(const QueueControllerState& state,
          state.inflightCount < inflightLimit;
 }
 
+void traceEncodeIterationStage(const char* stage, size_t slotIndex, const ChunkSlot& slot) {
+  if (!queueTraceEnabled()) {
+    return;
+  }
+  std::ostringstream out;
+  out << "[dxmt9-encode-iteration]"
+      << " stage=" << stage
+      << " seq=" << static_cast<unsigned long long>(slot.seqId)
+      << " slot=" << slotIndex
+      << " commands=" << slot.commandCount();
+  emitQueueTraceLine(out.str());
+}
+
 }  // namespace
 
 CommandBufferDiagnostics summarizeChunk(const ChunkSummaryInput& input) {
@@ -323,6 +328,26 @@ CommandBufferDiagnostics QueueLifecycleController::summarizeSubmission(
   return summarizeCommands(seqId, slotIndex, submissionBinding_.slots[slotIndex], resolveSurfaceFlags);
 }
 
+void QueueLifecycleController::resetNoEnqueueGapProgressLocked() {
+  noEnqueueGapCommitPublishRecorded_ = false;
+  noEnqueueGapEncodeDequeueRecorded_ = false;
+  noEnqueueGapCommandBufferCommitRecorded_ = false;
+  noEnqueueGapCommitChunkEntryRecorded_ = false;
+  noEnqueueGapCommitChunkReplayStartRecorded_ = false;
+  noEnqueueGapCommitChunkReplayEndRecorded_ = false;
+  noEnqueueGapCommitPublishOnBeforePublishRecorded_ = false;
+  noEnqueueGapCommitChunkEntryTime_ = {};
+  noEnqueueGapCommitPublishTime_ = {};
+  noEnqueueGapEncodeDequeueTime_ = {};
+  noEnqueueGapLastCommitChunkReplayEndTime_ = {};
+  noEnqueueGapCommitChunkEntriesBeforePublish_ = 0;
+  noEnqueueGapCommitChunkReplayStartsBeforePublish_ = 0;
+  noEnqueueGapCommitChunkReplayEndsBeforePublish_ = 0;
+  noEnqueueGapCommitChunkCompletedReplayCpuBeforePublishNs_ = 0;
+  noEnqueueGapCommitChunkActiveReplayCpuBeforePublishNs_ = 0;
+  noEnqueueGapCommitChunkInterReplayGapBeforePublishNs_ = 0;
+}
+
 void QueueLifecycleController::recordNoEnqueueWaitGapToCommitPublish() {
   std::lock_guard lock(pendingCompletionMutex_);
   if (lastNoEnqueueCompletionWaitEnd_ == std::chrono::steady_clock::time_point{} ||
@@ -338,8 +363,41 @@ void QueueLifecycleController::recordNoEnqueueWaitGapToCommitPublish() {
         static_cast<std::uint64_t>(std::chrono::duration_cast<std::chrono::nanoseconds>(
             now - noEnqueueGapCommitChunkEntryTime_).count()));
   }
+  perf::countCompletionNoEnqueueCommitChunksBeforePublish(
+      noEnqueueGapCommitChunkEntriesBeforePublish_,
+      noEnqueueGapCommitChunkReplayStartsBeforePublish_,
+      noEnqueueGapCommitChunkReplayEndsBeforePublish_);
+  perf::countCompletionNoEnqueueCommitChunkCompletedReplayCpuBeforePublish(
+      noEnqueueGapCommitChunkCompletedReplayCpuBeforePublishNs_);
+  perf::countCompletionNoEnqueueCommitChunkActiveReplayCpuBeforePublish(
+      noEnqueueGapCommitChunkActiveReplayCpuBeforePublishNs_);
+  perf::countCompletionNoEnqueueCommitChunkInterReplayGapBeforePublish(
+      noEnqueueGapCommitChunkInterReplayGapBeforePublishNs_);
   noEnqueueGapCommitPublishTime_ = now;
   noEnqueueGapCommitPublishRecorded_ = true;
+}
+
+void QueueLifecycleController::recordNoEnqueueCommitPublishWaitBeforePublish(
+    std::uint64_t nanoseconds) {
+  std::lock_guard lock(pendingCompletionMutex_);
+  if (lastNoEnqueueCompletionWaitEnd_ == std::chrono::steady_clock::time_point{} ||
+      noEnqueueGapCommitPublishRecorded_) {
+    return;
+  }
+  perf::countCompletionNoEnqueueCommitPublishWaitBeforePublish(nanoseconds);
+}
+
+void QueueLifecycleController::recordNoEnqueueCommitPublishOnBeforePublishCpu(
+    std::uint64_t nanoseconds) {
+  std::lock_guard lock(pendingCompletionMutex_);
+  if (lastNoEnqueueCompletionWaitEnd_ == std::chrono::steady_clock::time_point{} ||
+      noEnqueueGapCommitPublishTime_ == std::chrono::steady_clock::time_point{} ||
+      noEnqueueGapEncodeDequeueRecorded_ ||
+      noEnqueueGapCommitPublishOnBeforePublishRecorded_) {
+    return;
+  }
+  perf::countCompletionNoEnqueueCommitPublishOnBeforePublishCpu(nanoseconds);
+  noEnqueueGapCommitPublishOnBeforePublishRecorded_ = true;
 }
 
 void QueueLifecycleController::recordNoEnqueueWaitGapToEncodeDequeue() {
@@ -381,21 +439,39 @@ void QueueLifecycleController::recordNoEnqueueWaitGapToCommandBufferCommit() {
 
 void QueueLifecycleController::recordNoEnqueueWaitGapToCommitChunkEntry() {
   std::lock_guard lock(pendingCompletionMutex_);
-  if (lastNoEnqueueCompletionWaitEnd_ == std::chrono::steady_clock::time_point{} ||
-      noEnqueueGapCommitChunkEntryRecorded_) {
+  if (lastNoEnqueueCompletionWaitEnd_ == std::chrono::steady_clock::time_point{}) {
     return;
   }
-  const auto elapsed = std::chrono::steady_clock::now() - lastNoEnqueueCompletionWaitEnd_;
+  const auto now = std::chrono::steady_clock::now();
+  if (!noEnqueueGapCommitPublishRecorded_) {
+    if (noEnqueueGapLastCommitChunkReplayEndTime_ !=
+        std::chrono::steady_clock::time_point{}) {
+      noEnqueueGapCommitChunkInterReplayGapBeforePublishNs_ +=
+          static_cast<std::uint64_t>(std::chrono::duration_cast<std::chrono::nanoseconds>(
+              now - noEnqueueGapLastCommitChunkReplayEndTime_).count());
+      noEnqueueGapLastCommitChunkReplayEndTime_ = {};
+    }
+    ++noEnqueueGapCommitChunkEntriesBeforePublish_;
+  }
+  if (noEnqueueGapCommitChunkEntryRecorded_) {
+    return;
+  }
+  const auto elapsed = now - lastNoEnqueueCompletionWaitEnd_;
   perf::countCompletionNoEnqueueWaitToCommitChunkEntry(
       static_cast<std::uint64_t>(std::chrono::duration_cast<std::chrono::nanoseconds>(elapsed).count()));
-  noEnqueueGapCommitChunkEntryTime_ = std::chrono::steady_clock::now();
+  noEnqueueGapCommitChunkEntryTime_ = now;
   noEnqueueGapCommitChunkEntryRecorded_ = true;
 }
 
 void QueueLifecycleController::recordNoEnqueueWaitGapToCommitChunkReplayStart() {
   std::lock_guard lock(pendingCompletionMutex_);
-  if (lastNoEnqueueCompletionWaitEnd_ == std::chrono::steady_clock::time_point{} ||
-      noEnqueueGapCommitChunkReplayStartRecorded_) {
+  if (lastNoEnqueueCompletionWaitEnd_ == std::chrono::steady_clock::time_point{}) {
+    return;
+  }
+  if (!noEnqueueGapCommitPublishRecorded_) {
+    ++noEnqueueGapCommitChunkReplayStartsBeforePublish_;
+  }
+  if (noEnqueueGapCommitChunkReplayStartRecorded_) {
     return;
   }
   const auto elapsed = std::chrono::steady_clock::now() - lastNoEnqueueCompletionWaitEnd_;
@@ -406,14 +482,61 @@ void QueueLifecycleController::recordNoEnqueueWaitGapToCommitChunkReplayStart() 
 
 void QueueLifecycleController::recordNoEnqueueWaitGapToCommitChunkReplayEnd() {
   std::lock_guard lock(pendingCompletionMutex_);
-  if (lastNoEnqueueCompletionWaitEnd_ == std::chrono::steady_clock::time_point{} ||
-      noEnqueueGapCommitChunkReplayEndRecorded_) {
+  if (lastNoEnqueueCompletionWaitEnd_ == std::chrono::steady_clock::time_point{}) {
     return;
   }
-  const auto elapsed = std::chrono::steady_clock::now() - lastNoEnqueueCompletionWaitEnd_;
+  const auto now = std::chrono::steady_clock::now();
+  if (!noEnqueueGapCommitPublishRecorded_) {
+    ++noEnqueueGapCommitChunkReplayEndsBeforePublish_;
+    noEnqueueGapLastCommitChunkReplayEndTime_ = now;
+  }
+  if (noEnqueueGapCommitChunkReplayEndRecorded_) {
+    return;
+  }
+  const auto elapsed = now - lastNoEnqueueCompletionWaitEnd_;
   perf::countCompletionNoEnqueueWaitToCommitChunkReplayEnd(
       static_cast<std::uint64_t>(std::chrono::duration_cast<std::chrono::nanoseconds>(elapsed).count()));
   noEnqueueGapCommitChunkReplayEndRecorded_ = true;
+}
+
+void QueueLifecycleController::recordNoEnqueueCommitChunkReplayCpuBeforePublish(
+    std::uint64_t nanoseconds) {
+  std::lock_guard lock(pendingCompletionMutex_);
+  if (lastNoEnqueueCompletionWaitEnd_ == std::chrono::steady_clock::time_point{} ||
+      noEnqueueGapCommitPublishRecorded_) {
+    return;
+  }
+  noEnqueueGapCommitChunkCompletedReplayCpuBeforePublishNs_ += nanoseconds;
+}
+
+void QueueLifecycleController::recordNoEnqueueCommitChunkActiveReplayCpuBeforePublish(
+    std::uint64_t nanoseconds) {
+  std::lock_guard lock(pendingCompletionMutex_);
+  if (lastNoEnqueueCompletionWaitEnd_ == std::chrono::steady_clock::time_point{} ||
+      noEnqueueGapCommitPublishRecorded_) {
+    return;
+  }
+  noEnqueueGapCommitChunkActiveReplayCpuBeforePublishNs_ =
+      std::max(noEnqueueGapCommitChunkActiveReplayCpuBeforePublishNs_, nanoseconds);
+}
+
+void QueueLifecycleController::recordNoEnqueueCommitChunkRecordShapeBeforePublish(
+    const NoEnqueueCommitChunkRecordShape& shape) {
+  std::lock_guard lock(pendingCompletionMutex_);
+  if (lastNoEnqueueCompletionWaitEnd_ == std::chrono::steady_clock::time_point{} ||
+      noEnqueueGapCommitPublishRecorded_) {
+    return;
+  }
+  perf::countCompletionNoEnqueueCommitChunkRecordShapeBeforePublish(
+      shape.recordCount,
+      shape.drawRecords,
+      shape.constRecords,
+      shape.applyStateRecords,
+      shape.clearRecords,
+      shape.presentRecords,
+      shape.surfaceRecords,
+      shape.queryRecords,
+      shape.otherRecords);
 }
 
 void QueueLifecycleController::observeTransition(const QueueTransitionRecord& record) const {
@@ -612,8 +735,8 @@ bool QueueLifecycleController::commitCurrentChunk(
   }
   const auto waitStarted = std::chrono::steady_clock::now();
   writeCv->wait(lock, [&] { return *stop || *inflightCount < inflightLimit; });
+  const auto waitElapsed = std::chrono::steady_clock::now() - waitStarted;
   if (waitNeeded) {
-    const auto waitElapsed = std::chrono::steady_clock::now() - waitStarted;
     perf::countQueueCommitWait(static_cast<std::uint64_t>(
         std::chrono::duration_cast<std::chrono::nanoseconds>(waitElapsed).count()));
   }
@@ -624,15 +747,21 @@ bool QueueLifecycleController::commitCurrentChunk(
   const size_t publishedSlotIndex = **writingSlot;
   const u64 publishedSeqId = *nextSeqId;
   observeCommitWait(publishedSlotIndex, slot.seqId, inflightLimit);
+  recordNoEnqueueCommitPublishWaitBeforePublish(static_cast<std::uint64_t>(
+      std::chrono::duration_cast<std::chrono::nanoseconds>(waitElapsed).count()));
   recordNoEnqueueWaitGapToCommitPublish();
   commitPublish(publishedSlotIndex, publishedSeqId, inflightLimit, [&] {
     slot.seqId = (*nextSeqId)++;
     slot.state = ChunkSlot::State::Pending;
     *lastCommittedSeqId = slot.seqId;
     ++(*inflightCount);
+    const auto onBeforePublishStart = std::chrono::steady_clock::now();
     if (onBeforePublish) {
       onBeforePublish(slot);
     }
+    recordNoEnqueueCommitPublishOnBeforePublishCpu(static_cast<std::uint64_t>(
+        std::chrono::duration_cast<std::chrono::nanoseconds>(
+            std::chrono::steady_clock::now() - onBeforePublishStart).count()));
     readySlots->push_back(publishedSlotIndex);
     writingSlot->reset();
     *writeIndex = (*writeIndex + 1) % slots.size();
@@ -659,14 +788,20 @@ bool QueueLifecycleController::dequeueReadySlot(std::unique_lock<std::mutex>& lo
     return false;
   }
 
+  perf::countEncodeDequeueReadyDepth(
+      static_cast<std::uint64_t>(readySlots->size()));
   slotIndex = readySlots->front();
   auto& slot = submissionBinding_.slots[slotIndex];
+  traceEncodeIterationStage("dequeue.selected", slotIndex, slot);
   recordNoEnqueueWaitGapToEncodeDequeue();
   encodeDequeue(slotIndex, slot.seqId, [&] {
     readySlots->pop_front();
     slot.state = ChunkSlot::State::Encoding;
   });
+  traceEncodeIterationStage("dequeue.after-transition", slotIndex, slot);
+  traceEncodeIterationStage("dequeue.before-slot-copy", slotIndex, slot);
   slotCopy = slot;
+  traceEncodeIterationStage("dequeue.after-slot-copy", slotIndex, slotCopy);
   return true;
 }
 
@@ -681,24 +816,43 @@ bool QueueLifecycleController::runEncodeIteration(
     return false;
   }
 
+  traceEncodeIterationStage("iteration.after-dequeue", slotIndex, slotCopy);
+  traceEncodeIterationStage("iteration.before-unlock", slotIndex, slotCopy);
   lock.unlock();
+  traceEncodeIterationStage("iteration.after-unlock", slotIndex, slotCopy);
   std::optional<QueueSubmissionRecord> submission;
   if (encodeFn) {
+    traceEncodeIterationStage("iteration.before-encodefn", slotIndex, slotCopy);
     submission = encodeFn(slotIndex, slotCopy);
+    traceEncodeIterationStage(submission.has_value()
+                                  ? "iteration.after-encodefn-submission"
+                                  : "iteration.after-encodefn-inline",
+                              slotIndex,
+                              slotCopy);
+  } else {
+    traceEncodeIterationStage("iteration.no-encodefn", slotIndex, slotCopy);
   }
+  traceEncodeIterationStage("iteration.before-relock", slotIndex, slotCopy);
   lock.lock();
+  traceEncodeIterationStage("iteration.after-relock", slotIndex, slotCopy);
 
   if (submission.has_value()) {
     auto postCommitCallbacks = std::move(submission->postCommitCallbacks);
+    traceEncodeIterationStage("iteration.before-submit-record", slotIndex, slotCopy);
     enqueueSubmission(*submission);
+    traceEncodeIterationStage("iteration.after-submit-record", slotIndex, slotCopy);
     lock.unlock();
+    traceEncodeIterationStage("iteration.after-submit-unlock", slotIndex, slotCopy);
     for (auto& callback : postCommitCallbacks) {
       if (callback) {
         callback();
       }
     }
+    traceEncodeIterationStage("iteration.after-post-commit-callbacks", slotIndex, slotCopy);
   } else {
+    traceEncodeIterationStage("iteration.before-inline-complete", slotIndex, slotCopy);
     completeInlineChunk(slotIndex, slotCopy.seqId);
+    traceEncodeIterationStage("iteration.after-inline-complete", slotIndex, slotCopy);
     if (onInlineComplete) {
       onInlineComplete(slotCopy.seqId);
     }
@@ -1286,15 +1440,7 @@ void QueueLifecycleController::submit(QueueSubmissionRecord& record) {
               enqueueTime - lastNoEnqueueCompletionWaitEnd_).count()),
           preparedDiagnostics.hasPresent);
       lastNoEnqueueCompletionWaitEnd_ = {};
-      noEnqueueGapCommitPublishRecorded_ = false;
-      noEnqueueGapEncodeDequeueRecorded_ = false;
-      noEnqueueGapCommandBufferCommitRecorded_ = false;
-      noEnqueueGapCommitChunkEntryRecorded_ = false;
-      noEnqueueGapCommitChunkReplayStartRecorded_ = false;
-      noEnqueueGapCommitChunkReplayEndRecorded_ = false;
-      noEnqueueGapCommitChunkEntryTime_ = {};
-      noEnqueueGapCommitPublishTime_ = {};
-      noEnqueueGapEncodeDequeueTime_ = {};
+      resetNoEnqueueGapProgressLocked();
     }
     PendingCompletion pending;
     pending.commandBuffer = std::move(record.commandBuffer);
@@ -1371,15 +1517,7 @@ bool QueueLifecycleController::processOnePendingCompletion(bool& stop) {
       completionWaitEnqueues_ = 0;
       if (enqueuesDuringWait == 0) {
         lastNoEnqueueCompletionWaitEnd_ = completed;
-        noEnqueueGapCommitPublishRecorded_ = false;
-        noEnqueueGapEncodeDequeueRecorded_ = false;
-        noEnqueueGapCommandBufferCommitRecorded_ = false;
-        noEnqueueGapCommitChunkEntryRecorded_ = false;
-        noEnqueueGapCommitChunkReplayStartRecorded_ = false;
-        noEnqueueGapCommitChunkReplayEndRecorded_ = false;
-        noEnqueueGapCommitChunkEntryTime_ = {};
-        noEnqueueGapCommitPublishTime_ = {};
-        noEnqueueGapEncodeDequeueTime_ = {};
+        resetNoEnqueueGapProgressLocked();
       }
     }
     perf::countCompletionWaitStatus(elapsedNs,

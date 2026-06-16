@@ -76,6 +76,27 @@ enum class D3D9SnapshotUniformBuildContext : std::uint8_t {
   BatchMiss,
 };
 
+enum class DrawUniformPayloadMaterializeSite : std::uint8_t {
+  Other = 0,
+  DrawEncoderCommand,
+  DrawEncoderParam,
+  FramegraphCommand,
+  FramegraphParam,
+  QueueObservation,
+};
+
+enum class ChunkPublishReason : std::uint8_t {
+  Unknown = 0,
+  DrawLimit,
+  PayloadLimit,
+  Present,
+  PresentAcquire,
+  PresentSplitBefore,
+  Flush,
+  StretchSplit,
+  MapWait,
+};
+
 class ScopedD3D9SnapshotUniformBuildContext {
  public:
   explicit ScopedD3D9SnapshotUniformBuildContext(
@@ -113,6 +134,9 @@ void countSubmitPresentBoundaryCpuTime(std::uint64_t nanoseconds);
 void countPrepareSlotForPublishCpuTime(std::uint64_t nanoseconds);
 void countPrepareSlotResourceMarkCpuTime(std::uint64_t nanoseconds);
 void countPrepareSlotPsoPrefetchCpuTime(std::uint64_t nanoseconds);
+void countUnpublishedSlotPsoPrefetchCpuTime(std::uint64_t nanoseconds);
+void countChunkPublishReason(ChunkPublishReason reason,
+                             std::uint64_t commandCount);
 void countEncodeSlotPsoPrefetchCpuTime(std::uint64_t nanoseconds);
 void countEncodeSlotPsoPrefetchCommands(std::uint64_t count);
 void countEncodeSlotPsoPrefetchCandidates(std::uint64_t count = 1);
@@ -125,7 +149,56 @@ void countEncodeSlotPsoPrefetchTileSelectCpuTime(std::uint64_t nanoseconds);
 void countEncodeSlotPsoPrefetchTileBaseLookupCpuTime(std::uint64_t nanoseconds);
 void countEncodeSlotPsoPrefetchTileDrawLookupCpuTime(std::uint64_t nanoseconds);
 void countEncodeSlotPsoPrefetchArgbufSelectCpuTime(std::uint64_t nanoseconds);
+void countEncodeSlotPsoPrefetchDrawKeyResolveCpuTime(std::uint64_t nanoseconds);
+void countEncodeSlotPsoPrefetchDrawResolveFormatCpuTime(std::uint64_t nanoseconds);
+void countEncodeSlotPsoPrefetchDrawResolveVariantKeyCpuTime(std::uint64_t nanoseconds);
+void countEncodeSlotPsoPrefetchDrawResolveShaderContextCpuTime(std::uint64_t nanoseconds);
+void countEncodeSlotPsoPrefetchDrawResolveX8AlphaCpuTime(std::uint64_t nanoseconds);
+void countEncodeSlotPsoPrefetchDrawResolveVsoutLayoutCpuTime(std::uint64_t nanoseconds);
+void countEncodeSlotPsoPrefetchDrawResolveFragmentlessCpuTime(std::uint64_t nanoseconds);
 void countEncodeSlotPsoPrefetchDrawLookupCpuTime(std::uint64_t nanoseconds);
+void countEncodeSlotPsoPrefetchDrawSemanticKeyCpuTime(std::uint64_t nanoseconds);
+void countEncodeSlotPsoPrefetchDrawSemanticProbeCpuTime(std::uint64_t nanoseconds);
+void countEncodeSlotPsoPrefetchDrawSemanticStoreCpuTime(std::uint64_t nanoseconds);
+void countEncodeSlotPsoPrefetchDrawSemanticMemoHits(std::uint64_t count = 1);
+void countEncodeSlotPsoPrefetchDrawSemanticMemoMisses(std::uint64_t count = 1);
+void countEncodeSlotPsoPrefetchDrawSemanticMemoOverflow(std::uint64_t count = 1);
+void countEncodeSlotPsoPrefetchDrawSemanticMissProbeKeyHits(std::uint64_t count = 1);
+void countEncodeSlotPsoPrefetchDrawSemanticMissProbeKeySameSemantic(std::uint64_t count = 1);
+void countEncodeSlotPsoPrefetchDrawSemanticMissProbeKeyDiffArgbufSelector(std::uint64_t count = 1);
+void countEncodeSlotPsoPrefetchDrawSemanticMissProbeKeyDiffVertexDecl(std::uint64_t count = 1);
+void countEncodeSlotPsoPrefetchDrawSemanticMissProbeKeyDiffShader(std::uint64_t count = 1);
+void countEncodeSlotPsoPrefetchDrawSemanticMissProbeKeyDiffRenderState(std::uint64_t count = 1);
+void countEncodeSlotPsoPrefetchDrawSemanticMissProbeKeyDiffTextureHandles(std::uint64_t count = 1);
+void countEncodeSlotPsoPrefetchDrawSemanticMissProbeKeyDiffTextureLod(std::uint64_t count = 1);
+void countEncodeSlotPsoPrefetchDrawSemanticMissProbeKeyDiffTextureStage(std::uint64_t count = 1);
+void countEncodeSlotPsoPrefetchDrawSemanticMissProbeKeyDiffSampler(std::uint64_t count = 1);
+void countEncodeSlotPsoPrefetchDrawSemanticMissProbeKeyDiffAttachment(std::uint64_t count = 1);
+void countEncodeSlotPsoPrefetchDrawSemanticMissProbeKeyDiffClipPlane(std::uint64_t count = 1);
+void countEncodeSlotPsoPrefetchDrawSemanticMissProbeKeyDiffConstantUsage(std::uint64_t count = 1);
+void countEncodeSlotPsoPrefetchDrawSemanticMissProbeKeyDiffSingleField(std::uint64_t count = 1);
+void countEncodeSlotPsoPrefetchDrawSemanticMissProbeKeyDiffMultiField(std::uint64_t count = 1);
+void countEncodeSlotPsoPrefetchDrawSemanticMissProbeKeyDiffTextureHandlesOnly(std::uint64_t count = 1);
+void countEncodeSlotPsoPrefetchDrawSemanticMissProbeKeyDiffTextureHandlesWithOthers(std::uint64_t count = 1);
+void countEncodeSlotPsoPrefetchDrawSemanticMissProbeKeyDiffHashOnly(std::uint64_t count = 1);
+void countEncodeSlotPsoPrefetchDrawSemanticMissProbeKeyDiffUnknown(std::uint64_t count = 1);
+void countEncodeSlotPsoPrefetchDrawResourceShapeMemoCandidates(std::uint64_t count = 1);
+void countEncodeSlotPsoPrefetchDrawResourceShapeMemoHits(std::uint64_t count = 1);
+void countEncodeSlotPsoPrefetchDrawResourceShapeMemoMisses(std::uint64_t count = 1);
+void countEncodeSlotPsoPrefetchDrawResourceShapeMemoOverflow(std::uint64_t count = 1);
+void countEncodeSlotPsoPrefetchDrawResourceShapeMemoStores(std::uint64_t count = 1);
+void countEncodeSlotPsoPrefetchDrawResourceShapeMemoValidatedHits(std::uint64_t count = 1);
+void countEncodeSlotPsoPrefetchDrawResourceShapeMemoValidatedMisses(std::uint64_t count = 1);
+void countEncodeSlotPsoPrefetchDrawResourceShapeMemoMismatchTextureMask(std::uint64_t count = 1);
+void countEncodeSlotPsoPrefetchDrawResourceShapeMemoMismatchTextureTypes(std::uint64_t count = 1);
+void countEncodeSlotPsoPrefetchDrawResourceShapeMemoMismatchX8Alpha(std::uint64_t count = 1);
+void countEncodeSlotPsoPrefetchDrawResourceShapeMemoMismatchAttachment(std::uint64_t count = 1);
+void countEncodeSlotPsoPrefetchDrawResourceShapeMemoMismatchSamplerLodBias(std::uint64_t count = 1);
+void countEncodeSlotPsoPrefetchDrawResourceShapeMemoMismatchVsOut(std::uint64_t count = 1);
+void countEncodeSlotPsoPrefetchDrawResourceShapeMemoMismatchOther(std::uint64_t count = 1);
+void countEncodeSlotPsoPrefetchDrawProbeKeyMemoHits(std::uint64_t count = 1);
+void countEncodeSlotPsoPrefetchDrawProbeKeyMemoMisses(std::uint64_t count = 1);
+void countEncodeSlotPsoPrefetchDrawProbeKeyMemoOverflow(std::uint64_t count = 1);
 void countEncodeSlotPsoPrefetchDrawHandleAdjacentCandidates(std::uint64_t count = 1);
 void countEncodeSlotPsoPrefetchDrawHandleAdjacentHits(std::uint64_t count = 1);
 void countEncodeSlotPsoPrefetchDrawHandleSlotRepeatHits(std::uint64_t count = 1);
@@ -272,6 +345,7 @@ void countD3D9DrawStateCacheDirectLookup(bool hit, bool includeIndexBuffer);
 void countD3D9DrawStateCacheBatchLookup(bool hit);
 void countD3D9DrawStateCacheUniformRefresh();
 void countD3D9DrawStateCacheMissReason(std::uint32_t reasonMask);
+void countD3D9DrawStateCacheBatchMissReason(std::uint32_t reasonMask);
 void countD3D9SnapshotDrawSubmissionCpuTime(std::uint64_t nanoseconds);
 void countD3D9SnapshotCacheLookupCpuTime(std::uint64_t nanoseconds);
 void countD3D9SnapshotCacheHitCpuTime(std::uint64_t nanoseconds);
@@ -357,9 +431,23 @@ void countD3D9SnapshotUniformBuildVsConstHashBytes(std::uint64_t bytes);
 void countD3D9SnapshotUniformBuildPsConstHashBytes(std::uint64_t bytes);
 void countD3D9SnapshotUniformCopyCpuTime(std::uint64_t nanoseconds);
 void countD3D9SnapshotUniformMaterialized(std::uint64_t bytes);
+void countD3D9SnapshotUniformMaterializedCompactOpportunity(
+    std::uint64_t candidateBytes,
+    std::uint64_t savedBytes,
+    std::uint64_t fixedBytes,
+    std::uint64_t vertexBytes,
+    std::uint64_t pixelBytes);
 void countD3D9SnapshotUniformElided(std::uint64_t bytes);
 void countD3D9SnapshotUniformAdjacentSameGeneration(bool sameStateLane,
                                                     std::uint64_t bytes);
+void countD3D9SnapshotUniformAdjacentSamePayloadHash(bool sameStateLane,
+                                                     bool sameGeneration,
+                                                     std::uint64_t bytes);
+void countD3D9SnapshotUniformAdjacentComponentHashes(bool sameStateLane,
+                                                     bool sameGeneration,
+                                                     bool sameVertexConstants,
+                                                     bool samePixelConstants,
+                                                     bool sameFixedPayload);
 void countD3D9SnapshotStateCopyCpuTime(std::uint64_t nanoseconds);
 void countD3D9SnapshotStateMaterialized(std::uint64_t bytes);
 void countD3D9SnapshotStateElided(std::uint64_t bytes);
@@ -384,9 +472,24 @@ void countDrawUniformPayloadLookupLinearHit();
 void countDrawUniformPayloadLookupBucketProbe(std::uint64_t probes);
 void countDrawUniformPayloadLookupBucketCollision(std::uint64_t collisions);
 void countDrawUniformPayloadLookupHashCollision(std::uint64_t collisions);
+void countDrawUniformPayloadLookupSemanticHashMiss(std::uint64_t bytes);
 void countDrawUniformPayloadLookupCpuTime(std::uint64_t nanoseconds);
 void countDrawUniformPayloadLookupBucketCpuTime(std::uint64_t nanoseconds);
 void countDrawUniformPayloadAppend();
+void countDrawUniformPayloadAppendBytes(std::uint64_t bytes);
+void countDrawUniformFixedPayloadAppend();
+void countDrawUniformFixedPayloadAppendBytes(std::uint64_t bytes);
+void countDrawUniformVertexConstantsAppend();
+void countDrawUniformVertexConstantsAppendBytes(std::uint64_t bytes);
+void countDrawUniformPixelConstantsAppend();
+void countDrawUniformPixelConstantsAppendBytes(std::uint64_t bytes);
+void countDrawUniformPayloadMaterialized(DrawUniformPayloadMaterializeSite site,
+                                         std::uint64_t bytes);
+void countDrawUniformPayloadMaterializeFallback(
+    DrawUniformPayloadMaterializeSite site);
+void countDrawUniformPayloadMaterializeCpuTime(
+    DrawUniformPayloadMaterializeSite site,
+    std::uint64_t nanoseconds);
 void countDrawUniformPayloadAppendReserveCpuTime(std::uint64_t nanoseconds);
 void countDrawUniformPayloadAppendCopyCpuTime(std::uint64_t nanoseconds);
 void countDrawUniformPayloadAppendLinkCpuTime(std::uint64_t nanoseconds);
@@ -588,10 +691,50 @@ void countEncodeDrawArgbufPayloadDeltaChangedVs(std::uint64_t calls);
 void countEncodeDrawArgbufPayloadDeltaChangedPs(std::uint64_t calls);
 void countEncodeDrawArgbufPayloadDeltaChangedVsPs(std::uint64_t calls);
 void countEncodeDrawArgbufPayloadDeltaChangedNonConstOnly(std::uint64_t calls);
+void countEncodeDrawArgbufPayloadDeltaChangedVsFloat(std::uint64_t calls);
+void countEncodeDrawArgbufPayloadDeltaChangedVsInt(std::uint64_t calls);
+void countEncodeDrawArgbufPayloadDeltaChangedVsBool(std::uint64_t calls);
+void countEncodeDrawArgbufPayloadDeltaChangedPsFloat(std::uint64_t calls);
+void countEncodeDrawArgbufPayloadDeltaChangedPsInt(std::uint64_t calls);
+void countEncodeDrawArgbufPayloadDeltaChangedPsBool(std::uint64_t calls);
+void countEncodeDrawArgbufPayloadDeltaChangedVsFloatRegs(std::uint64_t regs);
+void countEncodeDrawArgbufPayloadDeltaChangedVsFloatRegsMax(std::uint64_t regs);
+void countEncodeDrawArgbufPayloadDeltaChangedVsFloatRegsLe1(std::uint64_t calls);
+void countEncodeDrawArgbufPayloadDeltaChangedVsFloatRegsLe4(std::uint64_t calls);
+void countEncodeDrawArgbufPayloadDeltaChangedVsFloatRegsLe16(std::uint64_t calls);
+void countEncodeDrawArgbufPayloadDeltaChangedVsFloatRegsLe64(std::uint64_t calls);
+void countEncodeDrawArgbufPayloadDeltaChangedVsFloatRegsGt64(std::uint64_t calls);
+void countEncodeDrawArgbufPayloadDeltaChangedVsFloatRegsLe1Sum(std::uint64_t regs);
+void countEncodeDrawArgbufPayloadDeltaChangedVsFloatRegsLe4Sum(std::uint64_t regs);
+void countEncodeDrawArgbufPayloadDeltaChangedVsFloatRegsLe16Sum(std::uint64_t regs);
+void countEncodeDrawArgbufPayloadDeltaChangedVsFloatRegsLe64Sum(std::uint64_t regs);
+void countEncodeDrawArgbufPayloadDeltaChangedVsFloatRegsGt64Sum(std::uint64_t regs);
+void countEncodeDrawArgbufPayloadDeltaChangedVsFloatPrefixRegs(std::uint64_t regs);
+void countEncodeDrawArgbufPayloadDeltaChangedVsFloatPrefixRegsMax(std::uint64_t regs);
+void countEncodeDrawArgbufPayloadDeltaChangedVsFloatSpanRegs(std::uint64_t regs);
+void countEncodeDrawArgbufPayloadDeltaChangedVsFloatSpanRegsMax(std::uint64_t regs);
+void countEncodeDrawArgbufPayloadDeltaChangedVsFloatFullPrefix(std::uint64_t calls);
+void countEncodeDrawArgbufPayloadDeltaChangedVsFloatFullPrefixRegs(std::uint64_t regs);
+void countEncodeDrawArgbufPayloadDeltaChangedPsFloatRegs(std::uint64_t regs);
+void countEncodeDrawArgbufPayloadDeltaChangedPsFloatRegsMax(std::uint64_t regs);
+void countEncodeDrawArgbufPayloadDeltaChangedPsFloatRegsLe1(std::uint64_t calls);
+void countEncodeDrawArgbufPayloadDeltaChangedPsFloatRegsLe4(std::uint64_t calls);
+void countEncodeDrawArgbufPayloadDeltaChangedPsFloatRegsLe16(std::uint64_t calls);
+void countEncodeDrawArgbufPayloadDeltaChangedPsFloatRegsLe64(std::uint64_t calls);
+void countEncodeDrawArgbufPayloadDeltaChangedPsFloatRegsGt64(std::uint64_t calls);
+void countEncodeDrawArgbufPayloadDeltaChangedPsFloatRegsLe1Sum(std::uint64_t regs);
+void countEncodeDrawArgbufPayloadDeltaChangedPsFloatRegsLe4Sum(std::uint64_t regs);
+void countEncodeDrawArgbufPayloadDeltaChangedPsFloatRegsLe16Sum(std::uint64_t regs);
+void countEncodeDrawArgbufPayloadDeltaChangedPsFloatRegsLe64Sum(std::uint64_t regs);
+void countEncodeDrawArgbufPayloadDeltaChangedPsFloatRegsGt64Sum(std::uint64_t regs);
 void countEncodeDrawArgbufPayloadDeltaReopenFirst(std::uint64_t calls);
 void countEncodeDrawArgbufPayloadDeltaReopenPayloadChanged(std::uint64_t calls);
 void countEncodeDrawArgbufPayloadDeltaReopenPayloadSame(std::uint64_t calls);
 void countEncodeDrawArgbufPayloadDeltaReopenResourceArray(std::uint64_t calls);
+void countEncodeDrawArgbufPayloadDeltaReopenCbufOnly(std::uint64_t calls);
+void countEncodeDrawArgbufPayloadDeltaReopenCbufOnlyFirst(std::uint64_t calls);
+void countEncodeDrawArgbufPayloadDeltaReopenCbufOnlyPayloadChanged(
+    std::uint64_t calls);
 void countEncodeDrawStreamBindCpuTime(std::uint64_t nanoseconds);
 void countEncodeDrawStreamBindRasterPhaseCpuTime(std::uint64_t nanoseconds);
 void countEncodeDrawStreamBindRasterPhaseCalls(std::uint64_t calls);
@@ -667,6 +810,10 @@ void countIndexedCacheOptCandidate(bool available,
                                    std::uint64_t candidateMiss16,
                                    std::uint64_t candidateMiss32,
                                    std::uint64_t candidateMiss64);
+void countIndexedCacheOptCandidateGate(bool passed,
+                                       std::uint64_t primitiveCount,
+                                       bool opaqueDepth,
+                                       bool screenBlend);
 void countReorderedIndexCacheLookup(bool hit,
                                     bool rejected,
                                     bool created,
@@ -875,6 +1022,30 @@ void countCompletionNoEnqueueWaitToCommitChunkReplayEnd(std::uint64_t nanosecond
 void countCompletionNoEnqueueWaitToCommitPublish(std::uint64_t nanoseconds);
 void countCompletionNoEnqueueWaitToEncodeDequeue(std::uint64_t nanoseconds);
 void countCompletionNoEnqueueWaitToCommandBufferCommit(std::uint64_t nanoseconds);
+void countEncodeDequeueReadyDepth(std::uint64_t readyDepthBeforePop);
+void countCompletionNoEnqueueCommitChunksBeforePublish(std::uint64_t entries,
+                                                       std::uint64_t replayStarts,
+                                                       std::uint64_t replayEnds);
+void countCompletionNoEnqueueCommitChunkCompletedReplayCpuBeforePublish(
+    std::uint64_t nanoseconds);
+void countCompletionNoEnqueueCommitChunkActiveReplayCpuBeforePublish(
+    std::uint64_t nanoseconds);
+void countCompletionNoEnqueueCommitChunkInterReplayGapBeforePublish(
+    std::uint64_t nanoseconds);
+void countCompletionNoEnqueueCommitPublishWaitBeforePublish(
+    std::uint64_t nanoseconds);
+void countCompletionNoEnqueueCommitPublishOnBeforePublishCpu(
+    std::uint64_t nanoseconds);
+void countCompletionNoEnqueueCommitChunkRecordShapeBeforePublish(
+    std::uint64_t recordCount,
+    std::uint64_t drawRecords,
+    std::uint64_t constRecords,
+    std::uint64_t applyStateRecords,
+    std::uint64_t clearRecords,
+    std::uint64_t presentRecords,
+    std::uint64_t surfaceRecords,
+    std::uint64_t queryRecords,
+    std::uint64_t otherRecords);
 void countCompletionNoEnqueueStageCommitEntryToPublish(std::uint64_t nanoseconds);
 void countCompletionNoEnqueueStagePublishToEncodeDequeue(std::uint64_t nanoseconds);
 void countCompletionNoEnqueueStageEncodeDequeueToCommandBufferCommit(std::uint64_t nanoseconds);
@@ -1271,6 +1442,15 @@ struct EncoderBreakdown {
   std::uint64_t indexedCacheOptCandidateMiss16 = 0;
   std::uint64_t indexedCacheOptCandidateMiss32 = 0;
   std::uint64_t indexedCacheOptCandidateMiss64 = 0;
+  std::uint64_t indexedCacheOptCandidateGatePass = 0;
+  std::uint64_t indexedCacheOptCandidateGateFail = 0;
+  std::uint64_t indexedCacheOptCandidateOpaqueDepthDraws = 0;
+  std::uint64_t indexedCacheOptCandidateScreenBlendDraws = 0;
+  std::uint64_t indexedCacheOptCandidatePrimitiveBucket1_63 = 0;
+  std::uint64_t indexedCacheOptCandidatePrimitiveBucket64_255 = 0;
+  std::uint64_t indexedCacheOptCandidatePrimitiveBucket256_1023 = 0;
+  std::uint64_t indexedCacheOptCandidatePrimitiveBucket1024_4095 = 0;
+  std::uint64_t indexedCacheOptCandidatePrimitiveBucket4096Plus = 0;
   std::uint64_t reorderedIndexCacheLookups = 0;
   std::uint64_t reorderedIndexCacheHits = 0;
   std::uint64_t reorderedIndexCacheRejectedHits = 0;

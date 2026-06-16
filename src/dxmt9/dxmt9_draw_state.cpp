@@ -7,6 +7,7 @@
 #include <bit>
 #include <cstring>
 #include <cmath>
+#include <memory>
 #include <type_traits>
 
 namespace dxmt9::state {
@@ -311,9 +312,8 @@ FfpVsConsts buildFfpVsConsts(core::FlatDrawStateView state) {
   return out;
 }
 
-FfpPsConsts buildFfpPsConsts(core::FlatDrawStateView state) {
+static void fillFfpPsConsts(core::FlatDrawStateView state, FfpPsConsts& out) {
   const auto& rs = state.hot->renderStates;
-  FfpPsConsts out;
   if (const auto* textureFactor = core::findFlatState(rs, RS_TEXTURE_FACTOR)) {
     out.textureFactor = normalizedD3DColor(textureFactor->value);
   }
@@ -355,7 +355,20 @@ FfpPsConsts buildFfpPsConsts(core::FlatDrawStateView state) {
         std::bit_cast<f32>(core::flatStateOr(tss, core::TSS_BUMPENVLOFFSET, 0u)),
     };
   }
+}
+
+FfpPsConsts buildFfpPsConsts(core::FlatDrawStateView state) {
+  FfpPsConsts out;
+  fillFfpPsConsts(state, out);
   return out;
+}
+
+void buildFfpPsConstsUploadBytes(core::FlatDrawStateView state,
+                                 std::span<std::byte> dst) {
+  DXMT_ASSERT(dst.size() >= sizeof(FfpPsConsts));
+  auto* out = reinterpret_cast<FfpPsConsts*>(dst.data());
+  std::construct_at(out);
+  fillFfpPsConsts(state, *out);
 }
 
 SamplerLodBias buildSamplerLodBias(core::FlatDrawStateView state) {

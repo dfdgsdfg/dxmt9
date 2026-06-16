@@ -129,6 +129,10 @@ struct EncodeContext {
   // sub-allocations / binds. C1 sets the bits as records arrive.
   uniform::DirtyState dirty{};
   EncodeDrawRecorder* drawRecorder = nullptr;
+  // Encode-chunk-local completion watermark for transient arena reservation.
+  // A stale lower watermark is safe: it can delay reclaim, never release
+  // storage before the GPU completion waterline.
+  std::uint64_t transientCompletedSeqId = 0;
 };
 
 // Sampler factory helpers used by the draw encoder. Previously
@@ -305,8 +309,6 @@ struct BufferBindShadowSlot {
 struct TextureSamplerBindShadow {
   TextureSamplerBindShadowSlot renderPipeline{};
   TextureSamplerBindShadowSlot depthStencil{};
-  bool argbufTableValid = false;
-  std::uint64_t argbufTableHash = 0;
   std::array<BufferBindShadowSlot, 32> vertexBuffers{};
   std::array<TextureSamplerBindShadowSlot, core::kMaxSamplers> fragmentTextures{};
   std::array<SamplerBindShadowSlot, core::kMaxSamplers> fragmentSamplers{};
@@ -389,6 +391,12 @@ bool encodeDraw(EncodeContext& ctx,
                  // ShaderVariantKey::argbufResourceArray bit. Default off
                  // keeps the constants-only Stage 2 path byte-identical.
                  bool argbufResourceArray = false,
+                 // Stage 2b/direct-cbuf ABI lane. Only meaningful alongside
+                 // argbufHybridMode and never with argbufResourceArray. When
+                 // true, shaders keep direct cbuf slots 0/3 and encodeDraw
+                 // skips slot-30 argbuf table open/reopen for cbuf pointer
+                 // turnover.
+                 bool argbufDirectCbufMode = false,
                  // R-BACK-12.22..12.26 — when true, reserve a FRESH argbuf
                  // descriptor table for this draw and rebind slot 30 (each
                  // draw self-contained). When false, reuse the encoder's

@@ -48,6 +48,7 @@ struct D3D9PePresentCallToken {
   std::int64_t returnNs = 0;
   std::int64_t entryNs = 0;
   const void *callerPc = nullptr;
+  std::uint32_t threadId = 0;
   std::uint8_t callerStackCount = 0;
   std::array<const void *, D3D9PePresentCallStackDepth> callerStack{};
 };
@@ -116,9 +117,11 @@ IDirect3DIndexBuffer9 *
 CreatePeIndexBuffer(D9CBuffer *buffer, IDirect3DDevice9 *device,
                     D3D9PeRecorderFlush *recorder = nullptr);
 IDirect3DVertexShader9 *CreatePeVertexShader(D9CShader *shader,
-                                             IDirect3DDevice9 *device);
+                                             IDirect3DDevice9 *device,
+                                             std::uint64_t hash);
 IDirect3DPixelShader9 *CreatePePixelShader(D9CShader *shader,
-                                           IDirect3DDevice9 *device);
+                                           IDirect3DDevice9 *device,
+                                           std::uint64_t hash);
 IDirect3DVertexDeclaration9 *CreatePeVertexDecl(D9CVertexDecl *decl,
                                                 IDirect3DDevice9 *device);
 IDirect3DQuery9 *CreatePeQuery(D9CQuery *query, IDirect3DDevice9 *device,
@@ -142,4 +145,6 @@ D9CBuffer *D3D9PeRawVertexBuffer(IDirect3DVertexBuffer9 *buffer);
 D9CBuffer *D3D9PeRawIndexBuffer(IDirect3DIndexBuffer9 *buffer);
 D9CShader *D3D9PeRawVertexShader(IDirect3DVertexShader9 *shader);
 D9CShader *D3D9PeRawPixelShader(IDirect3DPixelShader9 *shader);
+std::uint64_t D3D9PeVertexShaderHash(IDirect3DVertexShader9 *shader);
+std::uint64_t D3D9PePixelShaderHash(IDirect3DPixelShader9 *shader);
 D9CVertexDecl *D3D9PeRawVertexDecl(IDirect3DVertexDeclaration9 *decl);

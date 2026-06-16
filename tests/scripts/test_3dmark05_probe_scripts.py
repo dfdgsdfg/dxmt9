@@ -8,6 +8,7 @@ import importlib.util
 import csv
 import os
 import subprocess
+import sys
 import tempfile
 import unittest
 from pathlib import Path
@@ -41,6 +42,52 @@ def write_result(path: Path) -> None:
         json.dumps({"dxmt9_perf_counters": {}}),
         encoding="utf-8",
     )
+
+
+PACING_COMPARE_FLAGS = (
+    "--require-completion-present-wait-decrease",
+    "--require-completion-wait-with-enqueue-increase",
+    "--require-completion-wait-without-enqueue-decrease",
+    "--require-completion-present-wait-with-enqueue-increase",
+    "--require-completion-present-wait-without-enqueue-decrease",
+    "--require-commit-chunk-replay-cpu-per-present-decrease",
+    "--require-queue-draw-submission-cpu-per-present-decrease",
+    "--require-snapshot-cpu-per-present-decrease",
+    "--require-snapshot-cache-lookup-cpu-per-present-decrease",
+    "--require-encode-chunk-cpu-per-present-decrease",
+    "--require-no-enqueue-commit-entry-to-publish-decrease",
+    "--require-no-enqueue-publish-to-encode-dequeue-decrease",
+    "--require-no-enqueue-encode-dequeue-to-commit-decrease",
+    "--require-no-enqueue-wait-to-next-enqueue-decrease",
+    "--require-command-buffers-per-present-not-increase",
+    "--require-render-passes-per-present-not-increase",
+    "--require-tile-preservation-not-increase",
+)
+
+UNIFORM_OWNER_COMPARE_FLAGS = (
+    "--require-snapshot-cache-uniform-build-cpu-per-present-decrease",
+    "--require-snapshot-cache-uniform-hash-cpu-per-present-decrease",
+    "--require-batch-miss-uniform-build-cpu-per-present-decrease",
+    "--require-batch-miss-uniform-hash-cpu-per-present-decrease",
+    "--require-batch-miss-vs-const-hash-cpu-per-present-decrease",
+    "--require-batch-miss-ps-const-hash-cpu-per-present-decrease",
+    "--require-batch-miss-nonconst-hash-cpu-per-present-decrease",
+    "--require-snapshot-uniform-copy-cpu-per-present-decrease",
+    "--require-submit-draw-run-batch-append-uniform-cpu-per-present-decrease",
+    "--require-draw-uniform-payload-lookup-cpu-per-present-decrease",
+    "--require-draw-uniform-payload-append-copy-cpu-per-present-decrease",
+)
+
+UNIFORM_COMPACT_COMPARE_FLAGS = (
+    "--require-uniform-compact-saved-bytes-present",
+)
+
+ARGBUF_OWNER_COMPARE_FLAGS = (
+    "--require-argbuf-setup-cpu-per-present-decrease",
+    "--require-argbuf-open-cpu-per-present-decrease",
+    "--require-argbuf-cbuf-update-cpu-per-present-decrease",
+    "--require-argbuf-cbuf-update-vs-cpu-per-present-decrease",
+)
 
 
 class ThreeDMark05ProbeScriptTests(unittest.TestCase):
@@ -162,6 +209,29 @@ exit 0
         )
         path.chmod(0o755)
 
+    def write_fake_osascript(self, path: Path) -> None:
+        path.write_text(
+            """#!/usr/bin/env bash
+set -euo pipefail
+cat >/dev/null
+printf '%s\n' "${FAKE_OSASCRIPT_OUTPUT:-status=fail reason=missing-output}"
+exit "${FAKE_OSASCRIPT_STATUS:-0}"
+""",
+            encoding="utf-8",
+        )
+        path.chmod(0o755)
+
+    def write_fake_devtools_security(self, path: Path) -> None:
+        path.write_text(
+            """#!/usr/bin/env bash
+set -euo pipefail
+printf '%s\n' "${FAKE_DEVTOOLS_SECURITY_OUTPUT:-Developer mode is currently enabled.}"
+exit "${FAKE_DEVTOOLS_SECURITY_STATUS:-0}"
+""",
+            encoding="utf-8",
+        )
+        path.chmod(0o755)
+
     def write_system_trace_fake_xctrace(self, path: Path, marker: Path) -> None:
         path.write_text(
             f"""#!/usr/bin/env bash
@@ -190,6 +260,158 @@ mkdir -p "$output"
             encoding="utf-8",
         )
         path.chmod(0o755)
+
+    def write_system_trace_fake_xctrace_with_optional_cpu_failures(
+        self,
+        path: Path,
+        marker: Path,
+    ) -> None:
+        path.write_text(
+            f"""#!/usr/bin/env bash
+set -euo pipefail
+cmd=${{1:-}}
+shift || true
+case "$cmd" in
+  record)
+    output=
+    while (($#)); do
+      case "$1" in
+        --output)
+          output=$2
+          shift 2
+          ;;
+        *)
+          shift
+          ;;
+      esac
+    done
+    [[ -n "$output" ]] || exit 2
+    mkdir -p "$(dirname -- {marker})"
+    echo "$output" > {marker}
+    mkdir -p "$output"
+    ;;
+  export)
+    output=
+    xpath=
+    while (($#)); do
+      case "$1" in
+        --output)
+          output=$2
+          shift 2
+          ;;
+        --xpath)
+          xpath=$2
+          shift 2
+          ;;
+        *)
+          shift
+          ;;
+      esac
+    done
+    [[ -n "$output" ]] || exit 2
+    mkdir -p "$(dirname -- "$output")"
+    case "$xpath" in
+      *metal-gpu-intervals*)
+        cat > "$output" <<'XML'
+<trace-toc>
+  <run>
+    <data>
+      <table schema="metal-gpu-intervals">
+        <row>
+          <formatted-label>RenderPass[seq=60,enc=2,rt=0x1,depth=0x2]</formatted-label>
+          <duration>10 ms</duration>
+          <gpu-channel-name>Vertex</gpu-channel-name>
+        </row>
+      </table>
+    </data>
+  </run>
+</trace-toc>
+XML
+        ;;
+      *time-profile*)
+        cat > "$output" <<'XML'
+<trace-query-result>
+  <node>
+    <row>
+      <thread id="th1" fmt="3DMark05.exe (0xabc) (3DMark05.exe, pid: 42)"/>
+      <process id="p1" fmt="3DMark05.exe (42)"/>
+      <thread-state id="running" fmt="Running">Running</thread-state>
+      <weight id="w1" fmt="1.00 ms">1000000</weight>
+      <tagged-backtrace id="bt1">
+        <backtrace>
+          <frame id="f1" name="d3d9_frame_dispatch">
+            <binary id="b1" name="3DMark05.exe"/>
+          </frame>
+        </backtrace>
+      </tagged-backtrace>
+    </row>
+  </node>
+</trace-query-result>
+XML
+        ;;
+      *time-sample*|*thread-info*)
+        echo "schema not available: $xpath" >&2
+        exit 3
+        ;;
+      *)
+        echo "unexpected export xpath: $xpath" >&2
+        exit 2
+        ;;
+    esac
+    ;;
+  *)
+    echo "unexpected xctrace command: $cmd $*" >&2
+    exit 2
+    ;;
+esac
+""",
+            encoding="utf-8",
+        )
+        path.chmod(0o755)
+
+    def write_minimal_system_trace_encoder_csv(self, path: Path) -> None:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        with path.open("w", newline="", encoding="utf-8") as handle:
+            writer = csv.DictWriter(
+                handle,
+                fieldnames=[
+                    "seq",
+                    "encoder",
+                    "draw_calls",
+                    "primitive_count",
+                    "vertex_count",
+                    "route_depth_only_draws",
+                    "route_depth_only_primitives",
+                    "route_depth_only_vertices",
+                    "route_programmable_textured_draws",
+                    "route_programmable_textured_primitives",
+                    "route_programmable_textured_vertices",
+                    "route_programmable_color_draws",
+                    "route_programmable_color_primitives",
+                    "route_programmable_color_vertices",
+                    "route_alpha_blend_primitives",
+                    "route_alpha_test_primitives",
+                ],
+            )
+            writer.writeheader()
+            writer.writerow({
+                "seq": "60",
+                "encoder": "2",
+                "draw_calls": "100",
+                "primitive_count": "333333",
+                "vertex_count": "1000000",
+                "route_depth_only_draws": "100",
+                "route_depth_only_primitives": "333333",
+                "route_depth_only_vertices": "1000000",
+                "route_programmable_textured_draws": "0",
+                "route_programmable_textured_primitives": "0",
+                "route_programmable_textured_vertices": "0",
+                "route_programmable_color_draws": "0",
+                "route_programmable_color_primitives": "0",
+                "route_programmable_color_vertices": "0",
+                "route_alpha_blend_primitives": "0",
+                "route_alpha_test_primitives": "0",
+            })
 
     def run_script(
         self,
@@ -402,6 +624,22 @@ mkdir -p "$output"
             result.stdout,
         )
 
+    def test_wrapper_dry_run_prints_trace_artifacts_manifest_path(self) -> None:
+        result = self.run_script(
+            RUN_WRAPPER,
+            "--suffix",
+            "trace-artifacts-path",
+            "--dry-run",
+        )
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn(
+            "trace_artifacts_json: "
+            f"{REPO_ROOT}/experiments/output/"
+            "app-d3d9-3dmark05-trace-artifacts-path/3dmark05-trace-artifacts.json",
+            result.stdout,
+        )
+
     def test_wrapper_direct_run_uses_catalogue_prefix(self) -> None:
         result = self.run_script(
             RUN_WRAPPER,
@@ -430,7 +668,11 @@ mkdir -p "$output"
 
         self.assertIn("cleanup_3dmark05_probe_wineserver", text)
         self.assertIn('WINEPREFIX="$probe_prefix" "$probe_wineserver" -k', text)
-        self.assertIn("cleanup_3dmark05_probe_wineserver\n\npython3", text)
+        self.assertIn(
+            "cleanup_3dmark05_probe_wineserver\n\nsummary_cmd=(",
+            text,
+        )
+        self.assertIn('"${summary_cmd[@]}"', text)
 
     def test_wrapper_rejects_disabled_timeout(self) -> None:
         result = self.run_script(
@@ -477,6 +719,102 @@ OUT
             self.assertIn("macOS session is locked", result.stderr)
             self.assertFalse(output_dir.exists())
             self.assertFalse(trace_dir.exists())
+
+    def test_wrapper_wait_unlocked_times_out_before_actual_probe(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            fake_bin = root / "bin"
+            fake_bin.mkdir()
+            fake_ioreg = fake_bin / "ioreg"
+            fake_ioreg.write_text(
+                """#!/usr/bin/env bash
+cat <<'OUT'
+"CGSSessionScreenIsLocked"=Yes
+OUT
+""",
+                encoding="utf-8",
+            )
+            fake_ioreg.chmod(0o755)
+            suffix = f"wait-locked-session-{root.name}"
+            output_dir = REPO_ROOT / "experiments" / "output" / f"app-d3d9-3dmark05-{suffix}"
+            trace_dir = REPO_ROOT / "traces" / f"app-d3d9-3dmark05-{suffix}"
+
+            result = self.run_script(
+                RUN_WRAPPER,
+                "--suffix",
+                suffix,
+                "--no-gputrace",
+                "--timeout",
+                "120",
+                "--wait-unlocked-sec",
+                "1",
+                "--wait-unlocked-interval-sec",
+                "1",
+                env={"PATH": f"{fake_bin}{os.pathsep}{os.environ.get('PATH', '')}"},
+            )
+
+            self.assertEqual(result.returncode, 2)
+            self.assertIn("session_locked: yes", result.stdout)
+            self.assertIn("wait_unlocked_sec: 1", result.stdout)
+            self.assertIn("session_locked_after_wait: yes", result.stdout)
+            self.assertIn("waiting for macOS session unlock: 0s/1s", result.stderr)
+            self.assertIn("after waiting 1s", result.stderr)
+            self.assertFalse(output_dir.exists())
+            self.assertFalse(trace_dir.exists())
+
+    def test_wrapper_dry_run_prints_wait_unlocked_plan_without_waiting(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            fake_bin = root / "bin"
+            fake_bin.mkdir()
+            fake_ioreg = fake_bin / "ioreg"
+            fake_ioreg.write_text(
+                """#!/usr/bin/env bash
+cat <<'OUT'
+"CGSSessionScreenIsLocked"=Yes
+OUT
+""",
+                encoding="utf-8",
+            )
+            fake_ioreg.chmod(0o755)
+
+            result = self.run_script(
+                RUN_WRAPPER,
+                "--suffix",
+                f"wait-dry-run-{root.name}",
+                "--no-gputrace",
+                "--wait-unlocked-sec",
+                "9",
+                "--wait-unlocked-interval-sec",
+                "3",
+                "--dry-run",
+                env={"PATH": f"{fake_bin}{os.pathsep}{os.environ.get('PATH', '')}"},
+            )
+
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertIn("session_locked: yes", result.stdout)
+            self.assertIn("wait_unlocked_sec: 9", result.stdout)
+            self.assertIn("wait_unlocked_interval_sec: 3", result.stdout)
+            self.assertNotIn("waiting for macOS session unlock", result.stderr)
+
+    def test_wrapper_rejects_invalid_wait_unlocked_values(self) -> None:
+        result = self.run_script(
+            RUN_WRAPPER,
+            "--wait-unlocked-sec",
+            "1.5",
+            "--dry-run",
+        )
+        self.assertEqual(result.returncode, 2)
+        self.assertIn("--wait-unlocked-sec must be non-negative integer seconds", result.stderr)
+
+        result = self.run_script(
+            RUN_WRAPPER,
+            "--wait-unlocked-interval-sec",
+            "0",
+            "--dry-run",
+        )
+        self.assertEqual(result.returncode, 2)
+        self.assertIn("--wait-unlocked-interval-sec must be a positive integer", result.stderr)
 
     def test_catalogue_runner_rejects_disabled_timeout_for_3dmark05(self) -> None:
         result = self.run_script(
@@ -682,6 +1020,61 @@ OUT
         self.assertEqual(result.returncode, 2)
         self.assertIn("missing baseline joined CSV", result.stderr)
 
+    def test_wrapper_current_uniform_compact_gate_does_not_require_baseline(self) -> None:
+        result = self.run_script(
+            RUN_WRAPPER,
+            "--suffix",
+            "current-uniform-compact-gate",
+            "--no-gputrace",
+            "--require-current-uniform-compact-saved-bytes-present",
+            "--dry-run",
+        )
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn(
+            "require_current_uniform_compact_saved_bytes_present: 1",
+            result.stdout,
+        )
+        self.assertNotIn("run-level comparison gates require", result.stderr)
+
+    def test_wrapper_forwards_current_uniform_compact_gate_to_finalizer(self) -> None:
+        result = self.run_script(
+            RUN_WRAPPER,
+            "--suffix",
+            "forward-current-uniform-compact-gate",
+            "--require-current-uniform-compact-saved-bytes-present",
+            "--dry-run",
+        )
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+        finalize_line = next(
+            line for line in result.stdout.splitlines()
+            if line.startswith("finalize_cmd_after_xcode_export:")
+        )
+        self.assertIn(
+            "--require-current-uniform-compact-saved-bytes-present",
+            finalize_line,
+        )
+
+    def test_finalizer_current_uniform_compact_gate_forwards_to_summary(self) -> None:
+        result = self.run_script(
+            FINALIZER,
+            "--suffix",
+            "current-uniform-compact-gate",
+            "--require-current-uniform-compact-saved-bytes-present",
+            "--dry-run",
+        )
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+        summary_line = next(
+            line for line in result.stdout.splitlines()
+            if line.startswith("summary_cmd:")
+        )
+        self.assertIn(
+            "--require-uniform-compact-saved-bytes-present",
+            summary_line,
+        )
+
     def test_wrapper_dry_run_low_space_warning_does_not_interleave_commands(self) -> None:
         result = self.run_script(
             RUN_WRAPPER,
@@ -717,6 +1110,7 @@ OUT
             "unsafe-low-gputrace-space",
             "--min-free-mb",
             "256",
+            env={"DXMT_3DMARK05_REQUIRE_UNLOCKED": "0"},
         )
 
         self.assertEqual(result.returncode, 2)
@@ -1441,6 +1835,20 @@ OUT
 
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertIn("DXMT9_PROBE_HALF_VSOUT=1", result.stdout)
+
+    def test_wrapper_dry_run_includes_fragmentless_keep_vsout_env(self) -> None:
+        result = self.run_script(
+            RUN_WRAPPER,
+            "--no-gputrace",
+            "--probe-fragmentless-depth-only-row",
+            "60/0",
+            "--probe-fragmentless-depth-only-keep-vsout",
+            "--dry-run",
+        )
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("DXMT9_PROBE_FRAGMENTLESS_DEPTH_ONLY_ROW=60/0", result.stdout)
+        self.assertIn("DXMT9_PROBE_FRAGMENTLESS_DEPTH_ONLY_KEEP_VSOUT=1", result.stdout)
 
     def test_wrapper_dry_run_includes_force_fragment_color_env(self) -> None:
         result = self.run_script(
@@ -3028,6 +3436,17 @@ OUT
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertIn("DXMT9_PERF_DRAW_PACKET_ACTUAL_CHANGE=1", result.stdout)
 
+    def test_wrapper_dry_run_includes_vs_const_setter_range_probe_env(self) -> None:
+        result = self.run_script(
+            RUN_WRAPPER,
+            "--no-gputrace",
+            "--probe-vs-const-setter-range",
+            "--dry-run",
+        )
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("DXMT9_PERF_VS_CONST_SETTER_RANGE=1", result.stdout)
+
     def test_wrapper_dry_run_includes_force_expand_indexed_env(self) -> None:
         result = self.run_script(
             RUN_WRAPPER,
@@ -3197,6 +3616,124 @@ OUT
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertIn("MTL_CAPTURE_ENABLED=1", result.stdout)
 
+    def test_wrapper_rejects_file_gputrace_without_capture_layer_preflight(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            wine_root = Path(tmp) / "wine"
+            bin_dir = wine_root / "bin"
+            bin_dir.mkdir(parents=True)
+            for name in ("wine.real", "wine-preloader"):
+                path = bin_dir / name
+                path.write_text("plain wine binary\n", encoding="utf-8")
+                path.chmod(0o755)
+
+            result = self.run_script(
+                RUN_WRAPPER,
+                "--suffix",
+                f"file-capture-layer-preflight-{wine_root.name}",
+                "--timeout",
+                "120",
+                "--min-free-mb",
+                "0",
+                env={
+                    "DXMT_3DMARK05_WINE_ROOT": str(wine_root),
+                    "DXMT_3DMARK05_REQUIRE_UNLOCKED": "0",
+                    "DXMT_3DMARK05_ALLOW_LOW_TRACE_FREE_MB": "1",
+                },
+            )
+
+        self.assertEqual(result.returncode, 2)
+        self.assertIn("file_capture_layer_preflight: status=fail", result.stdout)
+        self.assertIn("wine-binaries-lack-metal-capture-enabled", result.stdout)
+        self.assertIn("Metal file capture requires Apple's capture layer", result.stderr)
+        self.assertIn("--with-wine-capture-layer", result.stderr)
+        self.assertIn("DXMT_3DMARK05_ALLOW_NO_FILE_CAPTURE_LAYER=1", result.stderr)
+
+    def test_wrapper_dry_run_can_wrap_with_wine_capture_layer(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            wine_root = Path(tmp) / "wine"
+            self.write_capture_layer_wine_root(wine_root)
+
+            result = self.run_script(
+                RUN_WRAPPER,
+                "--suffix",
+                "capture-layer-wrapper-dry",
+                "--with-wine-capture-layer",
+                "--min-free-mb",
+                "0",
+                "--dry-run",
+                env={"DXMT_3DMARK05_WINE_ROOT": str(wine_root)},
+            )
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("wine_capture_layer_wrapper: enabled", result.stdout)
+        self.assertIn("file_capture_layer_preflight: status=pass", result.stdout)
+        self.assertIn("reason=wine-capture-layer-wrapper", result.stdout)
+        cmd_line = next(line for line in result.stdout.splitlines() if line.startswith("cmd:"))
+        self.assertIn("run_with_wine_metal_capture_layer.sh", cmd_line)
+        self.assertIn("--allow-3dmark05", cmd_line)
+        self.assertIn("run_experiment.py", cmd_line)
+        self.assertNotIn("MTL_CAPTURE_ENABLED=1", result.stdout)
+
+    def test_wrapper_capture_layer_preflight_checks_capture_copies(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            wine_root = Path(tmp) / "wine"
+            bin_dir = wine_root / "bin"
+            bin_dir.mkdir(parents=True)
+            for name in ("wine.real", "wine-preloader"):
+                path = bin_dir / name
+                path.write_text("plain wine binary\n", encoding="utf-8")
+                path.chmod(0o755)
+
+            result = self.run_script(
+                RUN_WRAPPER,
+                "--suffix",
+                f"capture-layer-wrapper-preflight-{wine_root.name}",
+                "--with-wine-capture-layer",
+                "--timeout",
+                "120",
+                "--min-free-mb",
+                "0",
+                env={
+                    "DXMT_3DMARK05_WINE_ROOT": str(wine_root),
+                    "DXMT_3DMARK05_REQUIRE_UNLOCKED": "0",
+                    "DXMT_3DMARK05_ALLOW_LOW_TRACE_FREE_MB": "1",
+                },
+            )
+
+        self.assertEqual(result.returncode, 2)
+        self.assertIn("file_capture_layer_preflight: status=fail", result.stdout)
+        self.assertIn("capture-real-lacks-metal-capture-enabled", result.stdout)
+        self.assertIn("capture-enabled Wine copies are unavailable", result.stderr)
+
+    def test_wrapper_dry_run_reports_capture_layer_wrapper_preflight_failure(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            wine_root = Path(tmp) / "wine"
+            bin_dir = wine_root / "bin"
+            bin_dir.mkdir(parents=True)
+            for name in ("wine.real", "wine-preloader"):
+                path = bin_dir / name
+                path.write_text("plain wine binary\n", encoding="utf-8")
+                path.chmod(0o755)
+
+            result = self.run_script(
+                RUN_WRAPPER,
+                "--suffix",
+                "capture-layer-wrapper-dry-fail",
+                "--with-wine-capture-layer",
+                "--min-free-mb",
+                "0",
+                "--dry-run",
+                env={"DXMT_3DMARK05_WINE_ROOT": str(wine_root)},
+            )
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("file_capture_layer_preflight: status=fail", result.stdout)
+        self.assertIn("capture-real-lacks-metal-capture-enabled", result.stdout)
+        self.assertIn(
+            "dry-run: file capture layer preflight would fail for --with-wine-capture-layer",
+            result.stdout,
+        )
+
     def test_wrapper_dry_run_forwards_metal_capture_destination(self) -> None:
         result = self.run_script(
             RUN_WRAPPER,
@@ -3206,6 +3743,177 @@ OUT
 
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertIn("DXMT_METAL_CAPTURE_DESTINATION=developerTools", result.stdout)
+        self.assertIn("metal_capture_destination: developerTools", result.stdout)
+        self.assertIn("gputrace: developerTools", result.stdout)
+        self.assertIn("xcode_developer_tools_capture_preflight:", result.stdout)
+        self.assertIn("choose a frame known to be reached", result.stdout)
+
+    def test_wrapper_dry_run_accepts_xcode_developer_tools_capture_flag(self) -> None:
+        result = self.run_script(
+            RUN_WRAPPER,
+            "--xcode-developer-tools-capture",
+            "--dry-run",
+        )
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("DXMT_METAL_CAPTURE_DESTINATION=developerTools", result.stdout)
+        self.assertIn("metal_capture_destination: developerTools", result.stdout)
+        self.assertIn("no direct file expected", result.stdout)
+        self.assertIn("attach Xcode to the real Wine child", result.stdout)
+        self.assertNotIn("MTL_CAPTURE_ENABLED=1", result.stdout)
+
+    def test_wrapper_dry_run_marks_required_xcode_attach_preflight(self) -> None:
+        result = self.run_script(
+            RUN_WRAPPER,
+            "--xcode-developer-tools-capture",
+            "--require-xcode-attach-preflight",
+            "--dry-run",
+        )
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("xcode_developer_tools_capture_preflight_required: 1", result.stdout)
+
+    def test_wrapper_rejects_xcode_attach_preflight_without_developer_tools_capture(self) -> None:
+        result = self.run_script(
+            RUN_WRAPPER,
+            "--require-xcode-attach-preflight",
+            "--dry-run",
+        )
+
+        self.assertEqual(result.returncode, 2)
+        self.assertIn(
+            "--require-xcode-attach-preflight requires --xcode-developer-tools-capture",
+            result.stderr,
+        )
+
+    def test_wrapper_xcode_attach_preflight_only_passes_with_fake_osascript(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            fake_osascript = Path(tmp) / "fake-osascript.sh"
+            fake_devtools = Path(tmp) / "fake-devtools-security.sh"
+            self.write_fake_osascript(fake_osascript)
+            self.write_fake_devtools_security(fake_devtools)
+
+            result = self.run_script(
+                RUN_WRAPPER,
+                "--xcode-attach-preflight-only",
+                env={
+                    "DXMT_3DMARK05_OSASCRIPT_BIN": str(fake_osascript),
+                    "DXMT_3DMARK05_DEVTOOLS_SECURITY_BIN": str(fake_devtools),
+                    "FAKE_OSASCRIPT_OUTPUT": (
+                        "status=pass reason=attach-by-pid-enabled "
+                        "attach_by_pid_found=true attach_by_pid_enabled=true"
+                    ),
+                },
+            )
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("xcode_attach_preflight: status=pass", result.stdout)
+
+    def test_wrapper_xcode_attach_preflight_only_fails_with_fake_osascript(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            fake_osascript = Path(tmp) / "fake-osascript.sh"
+            fake_devtools = Path(tmp) / "fake-devtools-security.sh"
+            self.write_fake_osascript(fake_osascript)
+            self.write_fake_devtools_security(fake_devtools)
+
+            result = self.run_script(
+                RUN_WRAPPER,
+                "--xcode-attach-preflight-only",
+                env={
+                    "DXMT_3DMARK05_OSASCRIPT_BIN": str(fake_osascript),
+                    "DXMT_3DMARK05_DEVTOOLS_SECURITY_BIN": str(fake_devtools),
+                    "FAKE_OSASCRIPT_OUTPUT": (
+                        "status=fail reason=process-list-loading "
+                        "attach_by_pid_found=true attach_by_pid_enabled=false "
+                        "attach_process_first_item=Getting Process List..."
+                    ),
+                },
+            )
+
+        self.assertEqual(result.returncode, 2)
+        self.assertIn("xcode_attach_preflight: status=fail", result.stdout)
+
+    def test_wrapper_xcode_attach_preflight_reports_disabled_developer_mode(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            fake_osascript = Path(tmp) / "fake-osascript.sh"
+            fake_devtools = Path(tmp) / "fake-devtools-security.sh"
+            self.write_fake_osascript(fake_osascript)
+            self.write_fake_devtools_security(fake_devtools)
+
+            result = self.run_script(
+                RUN_WRAPPER,
+                "--xcode-attach-preflight-only",
+                env={
+                    "DXMT_3DMARK05_OSASCRIPT_BIN": str(fake_osascript),
+                    "DXMT_3DMARK05_DEVTOOLS_SECURITY_BIN": str(fake_devtools),
+                    "FAKE_DEVTOOLS_SECURITY_OUTPUT": "Developer mode is currently disabled.",
+                    "FAKE_OSASCRIPT_OUTPUT": (
+                        "status=pass reason=attach-by-pid-enabled "
+                        "attach_by_pid_found=true attach_by_pid_enabled=true"
+                    ),
+                },
+            )
+
+        self.assertEqual(result.returncode, 2)
+        self.assertIn("reason=developer-mode-disabled", result.stdout)
+        self.assertNotIn("attach-by-pid-enabled", result.stdout)
+
+    def test_wrapper_required_xcode_attach_preflight_fails_before_launch(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            fake_osascript = Path(tmp) / "fake-osascript.sh"
+            fake_devtools = Path(tmp) / "fake-devtools-security.sh"
+            self.write_fake_osascript(fake_osascript)
+            self.write_fake_devtools_security(fake_devtools)
+
+            result = self.run_script(
+                RUN_WRAPPER,
+                "--xcode-developer-tools-capture",
+                "--require-xcode-attach-preflight",
+                env={
+                    "DXMT_3DMARK05_REQUIRE_UNLOCKED": "0",
+                    "DXMT_3DMARK05_OSASCRIPT_BIN": str(fake_osascript),
+                    "DXMT_3DMARK05_DEVTOOLS_SECURITY_BIN": str(fake_devtools),
+                    "FAKE_OSASCRIPT_OUTPUT": (
+                        "status=fail reason=process-list-loading "
+                        "attach_by_pid_found=true attach_by_pid_enabled=false "
+                        "attach_process_first_item=Getting Process List..."
+                    ),
+                },
+            )
+
+        self.assertEqual(result.returncode, 2)
+        self.assertIn("Xcode attach preflight failed", result.stderr)
+        self.assertIn("xcode_attach_preflight: status=fail", result.stdout)
+
+    def test_wrapper_rejects_invalid_metal_capture_destination(self) -> None:
+        result = self.run_script(
+            RUN_WRAPPER,
+            "--metal-capture-destination",
+            "bad-destination",
+            "--dry-run",
+        )
+
+        self.assertEqual(result.returncode, 2)
+        self.assertIn("--metal-capture-destination must be one of", result.stderr)
+
+    def test_wrapper_no_gputrace_ignores_invalid_capture_destination_env(self) -> None:
+        result = self.run_script(
+            RUN_WRAPPER,
+            "--no-gputrace",
+            "--dry-run",
+            env={"DXMT_3DMARK05_METAL_CAPTURE_DESTINATION": "bad-destination"},
+        )
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("gputrace: disabled", result.stdout)
+
+    def test_wrapper_developer_tools_capture_checks_logs_instead_of_file(self) -> None:
+        text = RUN_WRAPPER.read_text(encoding="utf-8")
+
+        self.assertIn("capture_destination_is_developer_tools", text)
+        self.assertIn("destination=1 started", text)
+        self.assertIn("destination=1 stopped", text)
+        self.assertIn("Metal developerTools capture was requested", text)
 
     def test_wrapper_dry_run_omits_metal_capture_layer_env_without_gputrace(self) -> None:
         result = self.run_script(
@@ -3246,6 +3954,11 @@ OUT
         with tempfile.TemporaryDirectory() as tmp:
             wine_root = Path(tmp) / "wine"
             self.write_capture_layer_wine_root(wine_root)
+            wine_real = wine_root / "bin" / "wine.real"
+            wine_preloader = wine_root / "bin" / "wine-preloader"
+            original_real_inode = wine_real.stat().st_ino
+            original_preloader_inode = wine_preloader.stat().st_ino
+            marker = Path(tmp) / "patched-state.json"
 
             result = self.run_script(
                 CAPTURE_LAYER_WRAPPER,
@@ -3253,20 +3966,43 @@ OUT
                 str(wine_root),
                 "--allow-3dmark05",
                 "--",
-                "/bin/echo",
+                sys.executable,
+                "-c",
+                (
+                    "import json, pathlib, sys; "
+                    "wine_root = pathlib.Path(sys.argv[1]); "
+                    "marker = pathlib.Path(sys.argv[2]); "
+                    "real = wine_root / 'bin' / 'wine.real'; "
+                    "preloader = wine_root / 'bin' / 'wine-preloader'; "
+                    "marker.write_text(json.dumps({"
+                    "'real_text': real.read_text(), "
+                    "'preloader_text': preloader.read_text(), "
+                    "'real_inode': real.stat().st_ino, "
+                    "'preloader_inode': preloader.stat().st_ino"
+                    "}))"
+                ),
+                str(wine_root),
+                str(marker),
                 "app-d3d9-3dmark05",
             )
 
             self.assertEqual(result.returncode, 0, result.stderr)
-            self.assertIn("app-d3d9-3dmark05", result.stdout)
             self.assertIn("run_with_wine_metal_capture_layer: patched", result.stderr)
             self.assertIn("run_with_wine_metal_capture_layer: restored", result.stderr)
+            patched_state = json.loads(marker.read_text(encoding="utf-8"))
+            self.assertEqual(patched_state["real_text"], "capture wine.real\nMetalCaptureEnabled\n")
             self.assertEqual(
-                (wine_root / "bin" / "wine.real").read_text(encoding="utf-8"),
+                patched_state["preloader_text"],
+                "capture wine-preloader\nMetalCaptureEnabled\n",
+            )
+            self.assertNotEqual(patched_state["real_inode"], original_real_inode)
+            self.assertNotEqual(patched_state["preloader_inode"], original_preloader_inode)
+            self.assertEqual(
+                wine_real.read_text(encoding="utf-8"),
                 "original wine.real\n",
             )
             self.assertEqual(
-                (wine_root / "bin" / "wine-preloader").read_text(encoding="utf-8"),
+                wine_preloader.read_text(encoding="utf-8"),
                 "original wine-preloader\n",
             )
 
@@ -3370,6 +4106,223 @@ OUT
             self.assertIn("--time-limit 2s", result.stdout)
             self.assertIn("system_trace_encoder_breakdown: all_frames", result.stdout)
             self.assertIn("system_trace_summary_top: 7", result.stdout)
+            self.assertIn("system_trace_free_space_mb:", result.stdout)
+            self.assertIn("system_trace_min_free_space_mb:", result.stdout)
+            self.assertFalse(actual_marker.exists())
+            self.assertFalse(trace_dir.exists())
+
+    def test_system_trace_sidecar_rejects_low_free_space_before_launch(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            fake_wrapper = root / "fake-probe.sh"
+            actual_marker = root / "actual-called"
+            trace_dir = root / "trace"
+            self.write_system_trace_fake_wrapper(
+                fake_wrapper,
+                output_dir=root / "out",
+                trace_dir=trace_dir,
+                actual_marker=actual_marker,
+            )
+
+            result = self.run_script(
+                SYSTEM_TRACE_SIDECAR,
+                "--wrapper",
+                str(fake_wrapper),
+                "--xctrace-bin",
+                "/bin/false",
+                "--min-free-mb",
+                "999999999",
+                "--",
+                "--suffix",
+                "fake-sidecar",
+            )
+
+            self.assertEqual(result.returncode, 2)
+            self.assertIn(
+                "insufficient free space for 3DMark05 system trace sidecar",
+                result.stderr,
+            )
+            self.assertFalse(actual_marker.exists())
+            self.assertFalse(trace_dir.exists())
+
+    def test_system_trace_sidecar_dry_run_prints_cpu_summary_plan(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            fake_wrapper = root / "fake-probe.sh"
+            actual_marker = root / "actual-called"
+            trace_dir = root / "trace"
+            self.write_system_trace_fake_wrapper(
+                fake_wrapper,
+                output_dir=root / "out",
+                trace_dir=trace_dir,
+                actual_marker=actual_marker,
+            )
+
+            result = self.run_script(
+                SYSTEM_TRACE_SIDECAR,
+                "--wrapper",
+                str(fake_wrapper),
+                "--xctrace-bin",
+                "/bin/false",
+                "--export-cpu-summary",
+                "--dry-run",
+                "--",
+                "--suffix",
+                "fake-sidecar",
+            )
+
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertIn("system_trace_cpu_summary: enabled", result.stdout)
+            self.assertIn("system_trace_cpu_p4_positive_required: no", result.stdout)
+            self.assertIn("system_trace_cpu_summary_cmd:", result.stdout)
+            self.assertIn("summarize_xctrace_cpu_threads.py", result.stdout)
+            self.assertIn("time-profile.xml", result.stdout)
+            self.assertIn("xctrace-cpu-thread-summary.md", result.stdout)
+            self.assertIn("--output-verdict-json", result.stdout)
+            self.assertIn("xctrace-cpu-thread-verdict.json", result.stdout)
+            self.assertFalse(actual_marker.exists())
+            self.assertFalse(trace_dir.exists())
+
+    def test_system_trace_sidecar_rejects_cpu_p4_gate_without_cpu_summary(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            fake_wrapper = root / "fake-probe.sh"
+            actual_marker = root / "actual-called"
+            trace_dir = root / "trace"
+            self.write_system_trace_fake_wrapper(
+                fake_wrapper,
+                output_dir=root / "out",
+                trace_dir=trace_dir,
+                actual_marker=actual_marker,
+            )
+
+            result = self.run_script(
+                SYSTEM_TRACE_SIDECAR,
+                "--wrapper",
+                str(fake_wrapper),
+                "--require-cpu-p4-positive",
+                "--dry-run",
+                "--",
+                "--suffix",
+                "fake-sidecar",
+            )
+
+            self.assertEqual(result.returncode, 2)
+            self.assertIn(
+                "--require-cpu-p4-positive requires --export-cpu-summary",
+                result.stderr,
+            )
+            self.assertFalse(actual_marker.exists())
+            self.assertFalse(trace_dir.exists())
+
+    def test_system_trace_sidecar_rejects_cpu_producer_regex_without_cpu_summary(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            fake_wrapper = root / "fake-probe.sh"
+            actual_marker = root / "actual-called"
+            trace_dir = root / "trace"
+            self.write_system_trace_fake_wrapper(
+                fake_wrapper,
+                output_dir=root / "out",
+                trace_dir=trace_dir,
+                actual_marker=actual_marker,
+            )
+
+            result = self.run_script(
+                SYSTEM_TRACE_SIDECAR,
+                "--wrapper",
+                str(fake_wrapper),
+                "--cpu-producer-thread-regex",
+                "0x1234",
+                "--dry-run",
+                "--",
+                "--suffix",
+                "fake-sidecar",
+            )
+
+            self.assertEqual(result.returncode, 2)
+            self.assertIn(
+                "--cpu-producer-thread-regex requires --export-cpu-summary",
+                result.stderr,
+            )
+            self.assertFalse(actual_marker.exists())
+            self.assertFalse(trace_dir.exists())
+
+    def test_system_trace_sidecar_rejects_cpu_producer_from_pe_log_without_cpu_summary(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            fake_wrapper = root / "fake-probe.sh"
+            actual_marker = root / "actual-called"
+            trace_dir = root / "trace"
+            self.write_system_trace_fake_wrapper(
+                fake_wrapper,
+                output_dir=root / "out",
+                trace_dir=trace_dir,
+                actual_marker=actual_marker,
+            )
+
+            result = self.run_script(
+                SYSTEM_TRACE_SIDECAR,
+                "--wrapper",
+                str(fake_wrapper),
+                "--cpu-producer-from-pe-log",
+                "--dry-run",
+                "--",
+                "--suffix",
+                "fake-sidecar",
+            )
+
+            self.assertEqual(result.returncode, 2)
+            self.assertIn(
+                "--cpu-producer-from-pe-log requires --export-cpu-summary",
+                result.stderr,
+            )
+            self.assertFalse(actual_marker.exists())
+            self.assertFalse(trace_dir.exists())
+
+    def test_system_trace_sidecar_dry_run_prints_cpu_p4_gate_plan(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            fake_wrapper = root / "fake-probe.sh"
+            actual_marker = root / "actual-called"
+            trace_dir = root / "trace"
+            self.write_system_trace_fake_wrapper(
+                fake_wrapper,
+                output_dir=root / "out",
+                trace_dir=trace_dir,
+                actual_marker=actual_marker,
+            )
+
+            result = self.run_script(
+                SYSTEM_TRACE_SIDECAR,
+                "--wrapper",
+                str(fake_wrapper),
+                "--xctrace-bin",
+                "/bin/false",
+                "--export-cpu-summary",
+                "--cpu-producer-from-pe-log",
+                "--require-cpu-p4-positive",
+                "--dry-run",
+                "--",
+                "--suffix",
+                "fake-sidecar",
+            )
+
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertIn("system_trace_cpu_summary: enabled", result.stdout)
+            self.assertIn("system_trace_cpu_producer_from_pe_log: yes", result.stdout)
+            self.assertIn("system_trace_cpu_p4_positive_required: yes", result.stdout)
+            self.assertIn("system_trace_probe_env:", result.stdout)
+            self.assertIn("DXMT9_PE_RECORDER_STATS=1", result.stdout)
+            self.assertIn("DXMT_LOG_LEVEL=info", result.stdout)
+            self.assertIn("system_trace_cpu_producer_pe_log:", result.stdout)
+            self.assertIn(str(root / "out" / "3dmark05-direct.log"), result.stdout)
+            self.assertIn("system_trace_cpu_summary_cmd:", result.stdout)
+            self.assertIn("--producer-thread-regex-from-pe-log", result.stdout)
+            self.assertIn(
+                "--producer-thread-regex-from-pe-log " + str(root / "out" / "3dmark05-direct.log"),
+                result.stdout,
+            )
             self.assertFalse(actual_marker.exists())
             self.assertFalse(trace_dir.exists())
 
@@ -3430,6 +4383,8 @@ OUT
                 "0",
                 "--time-limit-sec",
                 "1",
+                "--min-free-mb",
+                "0",
                 "--encoder-breakdown-seq-range",
                 "1000:1700",
                 "--skip-export-summary",
@@ -3482,6 +4437,8 @@ OUT
                 "2",
                 "--wait-unlocked-interval-sec",
                 "1",
+                "--min-free-mb",
+                "0",
                 "--skip-export-summary",
                 "--",
                 "--suffix",
@@ -3529,6 +4486,8 @@ OUT
                 "0",
                 "--time-limit-sec",
                 "1",
+                "--min-free-mb",
+                "0",
                 "--skip-export-summary",
                 "--",
                 "--suffix",
@@ -3550,6 +4509,81 @@ OUT
                 (trace_dir / "analysis" / "system-trace-preflight.log").exists()
             )
             self.assertIn("wrote metal system trace:", result.stdout)
+
+    def test_system_trace_sidecar_cpu_summary_allows_missing_optional_tables(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            fake_wrapper = root / "fake-probe.sh"
+            fake_xctrace = root / "fake-xctrace.sh"
+            actual_marker = root / "actual-called"
+            xctrace_marker = root / "xctrace-called"
+            output_dir = root / "out"
+            trace_dir = root / "trace"
+            analysis_dir = trace_dir / "analysis"
+            self.write_system_trace_fake_wrapper(
+                fake_wrapper,
+                output_dir=output_dir,
+                trace_dir=trace_dir,
+                actual_marker=actual_marker,
+                actual_sleep_sec="1",
+            )
+            self.write_minimal_system_trace_encoder_csv(
+                output_dir / "3dmark05-perf-encoders.csv"
+            )
+            self.write_system_trace_fake_xctrace_with_optional_cpu_failures(
+                fake_xctrace,
+                xctrace_marker,
+            )
+
+            result = self.run_script(
+                SYSTEM_TRACE_SIDECAR,
+                "--wrapper",
+                str(fake_wrapper),
+                "--xctrace-bin",
+                str(fake_xctrace),
+                "--record-delay-sec",
+                "0",
+                "--time-limit-sec",
+                "1",
+                "--min-free-mb",
+                "0",
+                "--export-cpu-summary",
+                "--",
+                "--suffix",
+                "fake-sidecar",
+            )
+
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertTrue((analysis_dir / "xctrace-cpu-thread-summary.md").exists())
+            self.assertTrue((analysis_dir / "xctrace-cpu-thread-verdict.json").exists())
+            self.assertFalse((analysis_dir / "time-sample.xml").exists())
+            self.assertFalse((analysis_dir / "thread-info.xml").exists())
+            cpu_export_log = (analysis_dir / "system-trace-cpu-export.log").read_text(
+                encoding="utf-8"
+            )
+            self.assertIn(
+                "optional CPU table missing or failed to export: time-sample",
+                cpu_export_log,
+            )
+            self.assertIn(
+                "optional CPU table missing or failed to export: thread-info",
+                cpu_export_log,
+            )
+            verdict = json.loads(
+                (analysis_dir / "xctrace-cpu-thread-verdict.json").read_text(
+                    encoding="utf-8"
+                )
+            )
+            self.assertEqual(verdict["status"], "producer-stack-negative-inconclusive")
+            self.assertIn("system_trace_cpu_summary_verdict:", result.stdout)
+            verdict_line = next(
+                line
+                for line in result.stdout.splitlines()
+                if line.startswith("system_trace_cpu_summary_verdict:")
+            )
+            self.assertIn("holder_status=holder-not-sampled", verdict_line)
+            self.assertIn("main_thread_holder_hits=0", verdict_line)
+            self.assertIn("nonproducer_holder_hits=0", verdict_line)
 
     def test_wrapper_forwards_const_upload_gates_to_finalizer(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -3578,6 +4612,153 @@ OUT
         self.assertIn("--require-draw-submission-batch-present", finalize_line)
         self.assertIn("--max-const-upload-break-count-ratio", finalize_line)
         self.assertIn("1.10", finalize_line)
+
+    def test_wrapper_forwards_pacing_compare_gates_to_counter_compare(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            baseline_output = Path(tmp) / "baseline-output"
+            write_result(baseline_output)
+
+            result = self.run_script(
+                RUN_WRAPPER,
+                "--suffix",
+                "forward-pacing-counter-gates",
+                "--no-gputrace",
+                "--compare-baseline-output",
+                str(baseline_output),
+                *PACING_COMPARE_FLAGS,
+                "--dry-run",
+            )
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+        compare_line = next(
+            line for line in result.stdout.splitlines()
+            if line.startswith("counter_compare_cmd:")
+        )
+        for flag in PACING_COMPARE_FLAGS:
+            self.assertIn(flag, compare_line)
+
+    def test_wrapper_forwards_pacing_compare_gates_to_finalizer(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            baseline_output = Path(tmp) / "baseline-output"
+            write_result(baseline_output)
+
+            result = self.run_script(
+                RUN_WRAPPER,
+                "--suffix",
+                "forward-pacing-finalizer-gates",
+                "--compare-baseline-output",
+                str(baseline_output),
+                *PACING_COMPARE_FLAGS,
+                "--dry-run",
+            )
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+        finalize_line = next(
+            line for line in result.stdout.splitlines()
+            if line.startswith("finalize_cmd_after_xcode_export:")
+        )
+        for flag in PACING_COMPARE_FLAGS:
+            self.assertIn(flag, finalize_line)
+
+    def test_wrapper_forwards_uniform_owner_compare_gates_to_counter_compare(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            baseline_output = Path(tmp) / "baseline-output"
+            write_result(baseline_output)
+
+            result = self.run_script(
+                RUN_WRAPPER,
+                "--suffix",
+                "forward-uniform-owner-counter-gates",
+                "--no-gputrace",
+                "--compare-baseline-output",
+                str(baseline_output),
+                *UNIFORM_OWNER_COMPARE_FLAGS,
+                *UNIFORM_COMPACT_COMPARE_FLAGS,
+                "--dry-run",
+            )
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+        compare_line = next(
+            line for line in result.stdout.splitlines()
+            if line.startswith("counter_compare_cmd:")
+        )
+        for flag in UNIFORM_OWNER_COMPARE_FLAGS:
+            self.assertIn(flag, compare_line)
+        for flag in UNIFORM_COMPACT_COMPARE_FLAGS:
+            self.assertIn(flag, compare_line)
+
+    def test_wrapper_forwards_uniform_owner_compare_gates_to_finalizer(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            baseline_output = Path(tmp) / "baseline-output"
+            write_result(baseline_output)
+
+            result = self.run_script(
+                RUN_WRAPPER,
+                "--suffix",
+                "forward-uniform-owner-finalizer-gates",
+                "--compare-baseline-output",
+                str(baseline_output),
+                *UNIFORM_OWNER_COMPARE_FLAGS,
+                *UNIFORM_COMPACT_COMPARE_FLAGS,
+                "--dry-run",
+            )
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+        finalize_line = next(
+            line for line in result.stdout.splitlines()
+            if line.startswith("finalize_cmd_after_xcode_export:")
+        )
+        for flag in UNIFORM_OWNER_COMPARE_FLAGS:
+            self.assertIn(flag, finalize_line)
+        for flag in UNIFORM_COMPACT_COMPARE_FLAGS:
+            self.assertIn(flag, finalize_line)
+
+    def test_wrapper_forwards_argbuf_owner_compare_gates_to_counter_compare(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            baseline_output = Path(tmp) / "baseline-output"
+            write_result(baseline_output)
+
+            result = self.run_script(
+                RUN_WRAPPER,
+                "--suffix",
+                "forward-argbuf-owner-counter-gates",
+                "--no-gputrace",
+                "--compare-baseline-output",
+                str(baseline_output),
+                *ARGBUF_OWNER_COMPARE_FLAGS,
+                "--dry-run",
+            )
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+        compare_line = next(
+            line for line in result.stdout.splitlines()
+            if line.startswith("counter_compare_cmd:")
+        )
+        for flag in ARGBUF_OWNER_COMPARE_FLAGS:
+            self.assertIn(flag, compare_line)
+
+    def test_wrapper_forwards_argbuf_owner_compare_gates_to_finalizer(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            baseline_output = Path(tmp) / "baseline-output"
+            write_result(baseline_output)
+
+            result = self.run_script(
+                RUN_WRAPPER,
+                "--suffix",
+                "forward-argbuf-owner-finalizer-gates",
+                "--compare-baseline-output",
+                str(baseline_output),
+                *ARGBUF_OWNER_COMPARE_FLAGS,
+                "--dry-run",
+            )
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+        finalize_line = next(
+            line for line in result.stdout.splitlines()
+            if line.startswith("finalize_cmd_after_xcode_export:")
+        )
+        for flag in ARGBUF_OWNER_COMPARE_FLAGS:
+            self.assertIn(flag, finalize_line)
 
     def test_finalizer_forwards_unexplained_write_gates_to_compare_script(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -4131,6 +5312,78 @@ OUT
         self.assertIn("--require-draw-submission-batch-present", compare_line)
         self.assertIn("--max-const-upload-break-count-ratio", compare_line)
         self.assertIn("1.10", compare_line)
+
+    def test_finalizer_forwards_pacing_compare_gates_to_compare_script(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            baseline_output = Path(tmp) / "baseline-output"
+            write_result(baseline_output)
+
+            result = self.run_script(
+                FINALIZER,
+                "--suffix",
+                "forward-pacing-finalizer-gates",
+                "--baseline-output",
+                str(baseline_output),
+                *PACING_COMPARE_FLAGS,
+                "--dry-run",
+            )
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+        compare_line = next(
+            line for line in result.stdout.splitlines()
+            if line.startswith("perf_compare_cmd:")
+        )
+        for flag in PACING_COMPARE_FLAGS:
+            self.assertIn(flag, compare_line)
+
+    def test_finalizer_forwards_uniform_owner_compare_gates_to_compare_script(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            baseline_output = Path(tmp) / "baseline-output"
+            write_result(baseline_output)
+
+            result = self.run_script(
+                FINALIZER,
+                "--suffix",
+                "forward-uniform-owner-finalizer-gates",
+                "--baseline-output",
+                str(baseline_output),
+                *UNIFORM_OWNER_COMPARE_FLAGS,
+                *UNIFORM_COMPACT_COMPARE_FLAGS,
+                "--dry-run",
+            )
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+        compare_line = next(
+            line for line in result.stdout.splitlines()
+            if line.startswith("perf_compare_cmd:")
+        )
+        for flag in UNIFORM_OWNER_COMPARE_FLAGS:
+            self.assertIn(flag, compare_line)
+        for flag in UNIFORM_COMPACT_COMPARE_FLAGS:
+            self.assertIn(flag, compare_line)
+
+    def test_finalizer_forwards_argbuf_owner_compare_gates_to_compare_script(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            baseline_output = Path(tmp) / "baseline-output"
+            write_result(baseline_output)
+
+            result = self.run_script(
+                FINALIZER,
+                "--suffix",
+                "forward-argbuf-owner-finalizer-gates",
+                "--baseline-output",
+                str(baseline_output),
+                *ARGBUF_OWNER_COMPARE_FLAGS,
+                "--dry-run",
+            )
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+        compare_line = next(
+            line for line in result.stdout.splitlines()
+            if line.startswith("perf_compare_cmd:")
+        )
+        for flag in ARGBUF_OWNER_COMPARE_FLAGS:
+            self.assertIn(flag, compare_line)
 
     def test_finalizer_rejects_missing_baseline_joined_path(self) -> None:
         result = self.run_script(
