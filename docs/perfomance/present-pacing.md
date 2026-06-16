@@ -93,6 +93,7 @@ GPU frame-time story is owned by [[hidden-backend-storage]] /
 | H71 | Exact between-calls names identify VS const setters and IB desc getters | accepted attribution refinement | [[present-pacing-pe-between-call-name.66]] adds exact call-name buckets for the same H69 windows. The largest row, `draw_indexed -> set_vs_const_f`, is `15.912ms/present` between-calls with `SetVertexShaderConstantF=3,489.217` entries/present and `IndexBuffer::GetDesc=902.976` entries/present. `draw_indexed -> draw_indexed` is led by `IndexBuffer::GetDesc=374.757` entries/present, while `draw_indexed -> apply_state` splits into `SetRenderTarget` and nested `Surface::GetDesc`. This promotes PE child desc caching / getter fast paths as the next local P2/P3 candidate, alongside const traffic compression. |
 | H72 | PE child desc caching is a local cleanup, not the current average-FPS lever | rejected average-FPS lever; cleanup accepted | [[present-pacing-pe-desc-cache.67]] caches immutable buffer/surface descs in PE child wrappers and reruns the H71 no-gputrace scout. The local focused rows move slightly (`draw_indexed -> set_vs_const_f` `15.912 -> 15.345ms/present`, `draw_indexed -> draw_indexed` `3.873 -> 3.669`, `draw_indexed -> apply_state` `6.839 -> 6.772`), but aggregate P2/P3/P4 rows stay flat (`completion_wait_without_enqueue` `27.326 -> 27.472ms/present`, replay `7.887 -> 7.871`, encode `10.959 -> 11.020`, overlap `0`). Keep desc caching as a hot-path cleanup, but return average-FPS focus to constant traffic compression or locality-preserving run-ahead. |
 | H73 | Run-ahead must decouple logical readiness from Metal command-buffer publication | accepted design gate | [[present-pacing-run-ahead-design.68]] combines the current low-overhead baseline, direct-cbuf repeat, draw-count publish A/B, locality gates, and queue code inspection. In the current queue shape, `CommitPublish` makes one ready `ChunkSlot`, and `encodeChunk()` turns that slot into one Metal command buffer. Simple early publish therefore recovers overlap by creating more command buffers/render-pass splits/tile preservation, which is the known-bad carrier. The next FPS-facing design must use CPU run-ahead staging, encode-side multi-slot coalescing, or a tightly gated render-pass-boundary publish experiment that preserves command-buffer and tile locality. |
+| H74 | Current run-ahead/coalescing implementation proves overlap but fails locality | accepted mechanism; rejected current carrier | [[present-pacing-run-ahead-coalesce.69]] runs `DXMT9_OFFSCREEN_RUN_AHEAD=1 DXMT9_ENCODE_COALESCE_READY_SLOTS=1 DXMT9_ENCODE_COALESCE_READY_SLOT_LIMIT=4` against a fresh baseline. Present wait collapses (`completion_present_wait_ms_per_present` `29.839 -> 0.202`), overlap rises (`completion_wait_with_enqueue_ms_per_present` `1.915 -> 20.855`), and no-enqueue wait falls (`27.924 -> 16.135`). But total completion wait worsens (`29.839 -> 36.990`), command buffers per present explode (`3.999 -> 19.156`), GPU command-buffer time rises (`3.718 -> 35.197ms/present`), and `chunk_publish_reason_draw_limit` becomes `15852`. The path validates H73's design constraint; it is not an FPS promotion. |
 
 ## Verification methods
 
@@ -361,6 +362,8 @@ flowchart TD
   PeBetweenCalls65["pe-between-call-family.65\nbetween-calls filled by\nD3D9 producer entries"]
   PeBetweenCallNames66["pe-between-call-name.66\nVS const setters +\nIB desc getters named"]
   PeDescCache67["pe-desc-cache.67\nchild desc cache cleanup\nP2/P3/P4 flat"]
+  RunAheadDesign68["run-ahead-design.68\nlogical readiness must decouple\nfrom Metal CB publication"]
+  RunAheadCoalesce69["run-ahead-coalesce.69\npresent wait removed\noverlap created\nCB locality failed"]
   CompletionSignalDelay["completion-signal-delay.21\n8ms x1696 completion-signal delay\nSetRT→Clear and first chunk flat"]
   PeClearFlush["pe-clear-flush.22\nClear publishes 2-record chunk\nfirst chunk 20.6→18.9ms\nno enqueue overlap"]
   PeClearFlushRefresh["pe-clear-flush.23\ncurrent low-overhead refresh\nfirst chunk 20.7→19.1ms\nFPS flat/worse"]
@@ -449,6 +452,8 @@ flowchart TD
   PeGapTail64 --> PeBetweenCalls65
   PeBetweenCalls65 --> PeBetweenCallNames66
   PeBetweenCallNames66 --> PeDescCache67
+  PeDescCache67 --> RunAheadDesign68
+  RunAheadDesign68 --> RunAheadCoalesce69
   OverlapLocalityGate51 --> LowOverheadSerial
   PeCallerStack --> CompletionSignalDelay
   CompletionSignalDelay --> PeClearFlush
@@ -498,13 +503,13 @@ flowchart TD
   Remaining --> SCE
 
   class DSync,EncodeBudget,CurrentImmediate,CompletionStatus,CurrentOwner,PipelineOverlap,PrePublish,StageDelta,PeChunkCadence,PeRecordMilestones,PeClearGate accepted
-  class FrameLatency,AsyncAcq,WorkA,StateNoop,DirtyIdentity,TexturePreResolve,BoundaryLatency,PePresent,PeCallCadence,PeChunkSize,PeCallSequence,PeClearFlush,PeClearFlushRefresh,SubCBCap,DrawChunkLimit50,PeDescCache67 rejected
+  class FrameLatency,AsyncAcq,WorkA,StateNoop,DirtyIdentity,TexturePreResolve,BoundaryLatency,PePresent,PeCallCadence,PeChunkSize,PeCallSequence,PeClearFlush,PeClearFlushRefresh,SubCBCap,DrawChunkLimit50,PeDescCache67,RunAheadCoalesce69 rejected
   class LowOverheadSerial accepted
   class PeClearNoSampling,PeWideCall,PeThreadState rejected
   class PeCallerPc,PeCallerStack,CompletionSignalDelay accepted
   class FixProposal,Remaining,SCE,WinemacAudit,CpuSummaryCurrent proposed
   class Attribution,NextSplit,CleanGate,ReopenMask,Identity,IdentitySmoke,PacketSplit,PlanDirect,SnapshotSplit,SnapshotHash,PayloadSplit,UsageHash,FfpZero,ArgbufOpen,FastAppend,StreamBindSplit,TextureSplit,SamplerSkip,SamplerHash accepted
-  class CpuSummaryTool,CompareGate,SerialCompareGate,CurrentLowOverhead43,DirectCbuf45,CurrentP2P3Scout46,NoEnqueueBeforePublish47,DrawChunkLimit48,OverlapLocalityGate51,PeChunkCadence56,PeChunkFill57,PeActiveFill58,PePairs59,PeConstApply60,PeHotSetter61 accepted
+  class CpuSummaryTool,CompareGate,SerialCompareGate,CurrentLowOverhead43,DirectCbuf45,CurrentP2P3Scout46,NoEnqueueBeforePublish47,DrawChunkLimit48,OverlapLocalityGate51,PeChunkCadence56,PeChunkFill57,PeActiveFill58,PePairs59,PeConstApply60,PeHotSetter61,RunAheadDesign68 accepted
 ```
 
 ## Detail map
@@ -1072,6 +1077,15 @@ flowchart TD
   command buffers per present, render passes per present, or tile-preservation
   MiB. This encodes the limit64/limit256 lesson into the toolchain instead of
   relying on review prose. [[present-pacing-overlap-locality-gates.51]]
+- The first implemented run-ahead/coalescing path validates the mechanism but
+  fails the promotion gate. `DXMT9_OFFSCREEN_RUN_AHEAD=1` plus ready-slot
+  coalescing drops present wait `29.839 -> 0.202ms/present`, raises overlap
+  `1.915 -> 20.855ms/present`, and lowers no-enqueue wait
+  `27.924 -> 16.135ms/present`. The same run worsens total completion wait
+  `29.839 -> 36.990ms/present`, raises command buffers per present
+  `3.999 -> 19.156`, and raises GPU command-buffer time
+  `3.718 -> 35.197ms/present`. Treat this as proof that P4 can be moved, not
+  as an FPS fix. [[present-pacing-run-ahead-coalesce.69]]
 - The Wine `OnMainThread()` source audit is useful but not a current-owner
   proof. It proves a possible synchronous macdrv transmission path, not that
   the selected GT1 producer is blocked there. Later native-selector sidecars

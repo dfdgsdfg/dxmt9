@@ -9,8 +9,10 @@
 #include "util/log/log.hpp"
 
 #include <algorithm>
+#include <array>
 #include <chrono>
 #include <cstdlib>
+#include <limits>
 #include <sstream>
 #include <thread>
 
@@ -251,6 +253,278 @@ void traceEncodeIterationStage(const char* stage, size_t slotIndex, const ChunkS
       << " slot=" << slotIndex
       << " commands=" << slot.commandCount();
   emitQueueTraceLine(out.str());
+}
+
+bool envFlagEnabled(const char* name) noexcept {
+  const char* env = std::getenv(name);
+  if (!env || env[0] == '\0') {
+    return false;
+  }
+  return !(env[0] == '0' && env[1] == '\0');
+}
+
+bool encodeReadySlotCoalescingEnabled() noexcept {
+  static const bool enabled = [] {
+    const char* explicitEnv = std::getenv("DXMT9_ENCODE_COALESCE_READY_SLOTS");
+    if (explicitEnv && explicitEnv[0] != '\0') {
+      return !(explicitEnv[0] == '0' && explicitEnv[1] == '\0');
+    }
+    return envFlagEnabled("DXMT9_OFFSCREEN_RUN_AHEAD");
+  }();
+  return enabled;
+}
+
+size_t encodeReadySlotCoalesceLimit() noexcept {
+  static const size_t limit = [] {
+    const char* env = std::getenv("DXMT9_ENCODE_COALESCE_READY_SLOT_LIMIT");
+    if (!env || env[0] == '\0') {
+      return static_cast<size_t>(4);
+    }
+    char* end = nullptr;
+    const unsigned long parsed = std::strtoul(env, &end, 10);
+    if (end == env || parsed < 2) {
+      return static_cast<size_t>(1);
+    }
+    return static_cast<size_t>(std::min<unsigned long>(parsed, 16));
+  }();
+  return limit;
+}
+
+bool chunkBlocksEncodeCoalescing(const ChunkSlot& slot) noexcept {
+  for (const auto& header : slot.commandHeaders) {
+    if (header.kind == MetalCommandKind::Present ||
+        header.kind == MetalCommandKind::Readback) {
+      return true;
+    }
+  }
+  return false;
+}
+
+void traceEncodeCoalesce(size_t primarySlotIndex,
+                         size_t appendedSlotIndex,
+                         u64 primarySeqId,
+                         u64 appendedSeqId,
+                         size_t commandCount) {
+  if (!queueTraceEnabled()) {
+    return;
+  }
+  std::ostringstream out;
+  out << "[dxmt9-encode-coalesce]"
+      << " primary_slot=" << primarySlotIndex
+      << " appended_slot=" << appendedSlotIndex
+      << " primary_seq=" << static_cast<unsigned long long>(primarySeqId)
+      << " appended_seq=" << static_cast<unsigned long long>(appendedSeqId)
+      << " commands=" << commandCount;
+  emitQueueTraceLine(out.str());
+}
+
+std::uint32_t checkedU32(std::size_t value) noexcept {
+  DXMT_ASSERT(value <= std::numeric_limits<std::uint32_t>::max());
+  return static_cast<std::uint32_t>(
+      std::min<std::size_t>(value, std::numeric_limits<std::uint32_t>::max()));
+}
+
+DrawUniformHandle remapUniformHandle(DrawUniformHandle handle,
+                                     std::size_t base) noexcept {
+  if (!handle.valid()) {
+    return {};
+  }
+  const auto index = checkedU32(base + handle.index);
+  return detail::chunkSlotUniformHandle(index, handle.hash);
+}
+
+DrawUniformFixedHandle remapUniformFixedHandle(DrawUniformFixedHandle handle,
+                                               std::size_t base) noexcept {
+  if (!handle.valid()) {
+    return {};
+  }
+  const auto index = checkedU32(base + handle.index);
+  return detail::chunkSlotUniformFixedHandle(index, handle.hash);
+}
+
+DrawUniformStageHandle remapUniformStageHandle(DrawUniformStageHandle handle,
+                                               std::size_t base) noexcept {
+  if (!handle.valid()) {
+    return {};
+  }
+  const auto index = checkedU32(base + handle.index);
+  return detail::chunkSlotUniformStageHandle(index, handle.hash);
+}
+
+void clearMergedSlotLookupState(ChunkSlot& slot) {
+  slot.drawUniformPayloadLookupHeads.clear();
+  slot.drawUniformPayloadLookupTails.clear();
+  slot.drawUniformPayloadLookupNext.clear();
+  slot.drawUniformVertexConstantsLookupHeads.clear();
+  slot.drawUniformVertexConstantsLookupTails.clear();
+  slot.drawUniformVertexConstantsLookupNext.clear();
+  slot.drawUniformPixelConstantsLookupHeads.clear();
+  slot.drawUniformPixelConstantsLookupTails.clear();
+  slot.drawUniformPixelConstantsLookupNext.clear();
+  slot.lastUniformFixedHandle = {};
+  slot.lastUniformVertexConstantsHandle = {};
+  slot.lastUniformPixelConstantsHandle = {};
+  slot.lastUniformHandle = {};
+  slot.pipelinePrefetchSealed = false;
+  slot.pipelinePrefetchCommandCursor = 0;
+}
+
+struct ChunkSlotAppendBases {
+  std::uint32_t drawRunRecords = 0;
+  std::uint32_t clearRecords = 0;
+  std::uint32_t surfaceCopyRecords = 0;
+  std::uint32_t stretchRectRecords = 0;
+  std::uint32_t readbackRecords = 0;
+  std::uint32_t colorFillRecords = 0;
+  std::uint32_t depthResolveRecords = 0;
+  std::uint32_t presentRecords = 0;
+};
+
+std::uint32_t payloadBaseForKind(const ChunkSlotAppendBases& bases,
+                                 MetalCommandKind kind) noexcept {
+  switch (kind) {
+    case MetalCommandKind::DrawRun:
+      return bases.drawRunRecords;
+    case MetalCommandKind::Clear:
+      return bases.clearRecords;
+    case MetalCommandKind::SurfaceCopy:
+      return bases.surfaceCopyRecords;
+    case MetalCommandKind::StretchRect:
+      return bases.stretchRectRecords;
+    case MetalCommandKind::Readback:
+      return bases.readbackRecords;
+    case MetalCommandKind::ColorFill:
+      return bases.colorFillRecords;
+    case MetalCommandKind::DepthResolve:
+      return bases.depthResolveRecords;
+    case MetalCommandKind::Present:
+      return bases.presentRecords;
+  }
+  return 0;
+}
+
+template <typename T>
+void appendRange(std::vector<T>& dst, const std::vector<T>& src) {
+  dst.insert(dst.end(), src.begin(), src.end());
+}
+
+void appendChunkSlotForEncodeCoalescing(ChunkSlot& dst, const ChunkSlot& src) {
+  if (src.commandHeaders.empty()) {
+    return;
+  }
+
+  const ChunkSlotAppendBases bases{
+      .drawRunRecords = checkedU32(dst.drawRunRecords.size()),
+      .clearRecords = checkedU32(dst.clearRecords.size()),
+      .surfaceCopyRecords = checkedU32(dst.surfaceCopyRecords.size()),
+      .stretchRectRecords = checkedU32(dst.stretchRectRecords.size()),
+      .readbackRecords = checkedU32(dst.readbackRecords.size()),
+      .colorFillRecords = checkedU32(dst.colorFillRecords.size()),
+      .depthResolveRecords = checkedU32(dst.depthResolveRecords.size()),
+      .presentRecords = checkedU32(dst.presentRecords.size()),
+  };
+
+  const std::size_t drawStateBase = dst.drawHotStates.size();
+  const std::size_t drawParamBase = dst.drawParams.size();
+  const std::size_t drawPayloadBase = dst.drawPayloadArena.size();
+  const std::size_t uniformFixedBase = dst.drawUniformFixedPayloads.size();
+  const std::size_t uniformVertexBase = dst.drawUniformVertexConstants.size();
+  const std::size_t uniformVertexByteBase = dst.drawUniformVertexConstantBytes.size();
+  const std::size_t uniformPixelBase = dst.drawUniformPixelConstants.size();
+  const std::size_t uniformPixelByteBase = dst.drawUniformPixelConstantBytes.size();
+  const std::size_t uniformPayloadBase = dst.drawUniformPayloads.size();
+
+  dst.commandHeaders.reserve(dst.commandHeaders.size() + src.commandHeaders.size());
+  dst.drawHotStates.reserve(dst.drawHotStates.size() + src.drawHotStates.size());
+  dst.drawShaderLayouts.reserve(dst.drawShaderLayouts.size() + src.drawShaderLayouts.size());
+  dst.drawDebugSnapshots.reserve(dst.drawDebugSnapshots.size() + src.drawDebugSnapshots.size());
+  dst.drawPsoSubviews.reserve(dst.drawPsoSubviews.size() + src.drawPsoSubviews.size());
+  dst.drawUniformFixedPayloads.reserve(
+      dst.drawUniformFixedPayloads.size() + src.drawUniformFixedPayloads.size());
+  dst.drawUniformVertexConstants.reserve(
+      dst.drawUniformVertexConstants.size() + src.drawUniformVertexConstants.size());
+  dst.drawUniformVertexConstantBytes.reserve(
+      dst.drawUniformVertexConstantBytes.size() + src.drawUniformVertexConstantBytes.size());
+  dst.drawUniformPixelConstants.reserve(
+      dst.drawUniformPixelConstants.size() + src.drawUniformPixelConstants.size());
+  dst.drawUniformPixelConstantBytes.reserve(
+      dst.drawUniformPixelConstantBytes.size() + src.drawUniformPixelConstantBytes.size());
+  dst.drawUniformPayloads.reserve(dst.drawUniformPayloads.size() + src.drawUniformPayloads.size());
+  dst.drawParams.reserve(dst.drawParams.size() + src.drawParams.size());
+  dst.drawPayloadArena.reserve(dst.drawPayloadArena.size() + src.drawPayloadArena.size());
+  dst.drawRunRecords.reserve(dst.drawRunRecords.size() + src.drawRunRecords.size());
+
+  appendRange(dst.drawHotStates, src.drawHotStates);
+  appendRange(dst.drawShaderLayouts, src.drawShaderLayouts);
+  appendRange(dst.drawDebugSnapshots, src.drawDebugSnapshots);
+  appendRange(dst.drawPsoSubviews, src.drawPsoSubviews);
+
+  for (const auto& sourceRecord : src.drawUniformFixedPayloads) {
+    auto record = sourceRecord;
+    record.handle = remapUniformFixedHandle(record.handle, uniformFixedBase);
+    dst.drawUniformFixedPayloads.push_back(record);
+  }
+  appendRange(dst.drawUniformVertexConstantBytes, src.drawUniformVertexConstantBytes);
+  for (const auto& sourceRecord : src.drawUniformVertexConstants) {
+    auto record = sourceRecord;
+    record.handle = remapUniformStageHandle(record.handle, uniformVertexBase);
+    record.constants.byteOffset = checkedU32(
+        uniformVertexByteBase + record.constants.byteOffset);
+    dst.drawUniformVertexConstants.push_back(record);
+  }
+  appendRange(dst.drawUniformPixelConstantBytes, src.drawUniformPixelConstantBytes);
+  for (const auto& sourceRecord : src.drawUniformPixelConstants) {
+    auto record = sourceRecord;
+    record.handle = remapUniformStageHandle(record.handle, uniformPixelBase);
+    record.constants.byteOffset = checkedU32(
+        uniformPixelByteBase + record.constants.byteOffset);
+    dst.drawUniformPixelConstants.push_back(record);
+  }
+  for (const auto& sourceRecord : src.drawUniformPayloads) {
+    auto record = sourceRecord;
+    record.handle = remapUniformHandle(record.handle, uniformPayloadBase);
+    record.fixedHandle = remapUniformFixedHandle(record.fixedHandle, uniformFixedBase);
+    record.vertexConstantsHandle =
+        remapUniformStageHandle(record.vertexConstantsHandle, uniformVertexBase);
+    record.pixelConstantsHandle =
+        remapUniformStageHandle(record.pixelConstantsHandle, uniformPixelBase);
+    dst.drawUniformPayloads.push_back(record);
+  }
+
+  for (const auto& sourceParam : src.drawParams) {
+    auto param = sourceParam;
+    param.uniformHandle = remapUniformHandle(param.uniformHandle, uniformPayloadBase);
+    dst.drawParams.push_back(param);
+  }
+  appendRange(dst.drawPayloadArena, src.drawPayloadArena);
+
+  for (const auto& sourceRecord : src.drawRunRecords) {
+    auto record = sourceRecord;
+    record.stateIndex = checkedU32(drawStateBase + record.stateIndex);
+    record.firstParam = checkedU32(drawParamBase + record.firstParam);
+    record.payloadOffset = checkedU32(drawPayloadBase + record.payloadOffset);
+    record.uniformHandle = remapUniformHandle(record.uniformHandle, uniformPayloadBase);
+    dst.drawRunRecords.push_back(record);
+  }
+  appendRange(dst.clearRecords, src.clearRecords);
+  appendRange(dst.surfaceCopyRecords, src.surfaceCopyRecords);
+  appendRange(dst.stretchRectRecords, src.stretchRectRecords);
+  appendRange(dst.readbackRecords, src.readbackRecords);
+  appendRange(dst.colorFillRecords, src.colorFillRecords);
+  appendRange(dst.depthResolveRecords, src.depthResolveRecords);
+  appendRange(dst.presentRecords, src.presentRecords);
+
+  for (const auto& sourceHeader : src.commandHeaders) {
+    const std::size_t payloadIndex =
+        static_cast<std::size_t>(payloadBaseForKind(bases, sourceHeader.kind)) +
+        sourceHeader.payloadIndex.value;
+    dst.commandHeaders.push_back(MetalCommandHeader{
+        .kind = sourceHeader.kind,
+        .payloadIndex = CommandPayloadIndex::fromU32(checkedU32(payloadIndex)),
+    });
+  }
+
+  clearMergedSlotLookupState(dst);
 }
 
 }  // namespace
@@ -815,6 +1089,43 @@ bool QueueLifecycleController::runEncodeIteration(
   if (!dequeueReadySlot(lock, slotIndex, slotCopy)) {
     return false;
   }
+  std::array<size_t, 16> coalescedSlotIndices{};
+  std::array<u64, 16> coalescedSeqIds{};
+  size_t coalescedCount = 1;
+  coalescedSlotIndices[0] = slotIndex;
+  coalescedSeqIds[0] = slotCopy.seqId;
+
+  auto* readySlots = submissionBinding_.readySlots;
+  const size_t coalesceLimit = encodeReadySlotCoalescingEnabled()
+      ? encodeReadySlotCoalesceLimit()
+      : 1u;
+  if (readySlots && coalesceLimit > 1 && !chunkBlocksEncodeCoalescing(slotCopy)) {
+    auto& slots = submissionBinding_.slots;
+    while (!readySlots->empty() && coalescedCount < coalesceLimit) {
+      const size_t nextSlotIndex = readySlots->front();
+      if (nextSlotIndex >= slots.size()) {
+        break;
+      }
+      auto& nextSlot = slots[nextSlotIndex];
+      if (chunkBlocksEncodeCoalescing(nextSlot)) {
+        break;
+      }
+
+      const u64 nextSeqId = nextSlot.seqId;
+      traceEncodeIterationStage("dequeue.coalesce-selected", nextSlotIndex, nextSlot);
+      encodeDequeue(nextSlotIndex, nextSeqId, [&] {
+        readySlots->pop_front();
+        nextSlot.state = ChunkSlot::State::Encoding;
+      });
+      appendChunkSlotForEncodeCoalescing(slotCopy, nextSlot);
+      coalescedSlotIndices[coalescedCount] = nextSlotIndex;
+      coalescedSeqIds[coalescedCount] = nextSeqId;
+      ++coalescedCount;
+      slotCopy.seqId = nextSeqId;
+      traceEncodeCoalesce(slotIndex, nextSlotIndex, coalescedSeqIds[0],
+                          nextSeqId, slotCopy.commandCount());
+    }
+  }
 
   traceEncodeIterationStage("iteration.after-dequeue", slotIndex, slotCopy);
   traceEncodeIterationStage("iteration.before-unlock", slotIndex, slotCopy);
@@ -837,6 +1148,18 @@ bool QueueLifecycleController::runEncodeIteration(
   traceEncodeIterationStage("iteration.after-relock", slotIndex, slotCopy);
 
   if (submission.has_value()) {
+    if (coalescedCount > 1) {
+      submission->slotIndex = coalescedSlotIndices[0];
+      submission->seqId = coalescedSeqIds[coalescedCount - 1u];
+      submission->coalescedSlotIndices.assign(coalescedSlotIndices.begin(),
+                                              coalescedSlotIndices.begin() + coalescedCount);
+      submission->coalescedSeqIds.assign(coalescedSeqIds.begin(),
+                                         coalescedSeqIds.begin() + coalescedCount);
+      submission->diagnostics =
+          summarizeCommands(submission->seqId, submission->slotIndex,
+                            slotCopy, submissionBinding_.resolveSurfaceFlags);
+      submission->context = "queue-coalesced";
+    }
     auto postCommitCallbacks = std::move(submission->postCommitCallbacks);
     traceEncodeIterationStage("iteration.before-submit-record", slotIndex, slotCopy);
     enqueueSubmission(*submission);
@@ -851,11 +1174,13 @@ bool QueueLifecycleController::runEncodeIteration(
     traceEncodeIterationStage("iteration.after-post-commit-callbacks", slotIndex, slotCopy);
   } else {
     traceEncodeIterationStage("iteration.before-inline-complete", slotIndex, slotCopy);
-    completeInlineChunk(slotIndex, slotCopy.seqId);
-    traceEncodeIterationStage("iteration.after-inline-complete", slotIndex, slotCopy);
-    if (onInlineComplete) {
-      onInlineComplete(slotCopy.seqId);
+    for (std::size_t i = 0; i < coalescedCount; ++i) {
+      completeInlineChunk(coalescedSlotIndices[i], coalescedSeqIds[i]);
+      if (onInlineComplete) {
+        onInlineComplete(coalescedSeqIds[i]);
+      }
     }
+    traceEncodeIterationStage("iteration.after-inline-complete", slotIndex, slotCopy);
   }
   return true;
 }
@@ -1313,13 +1638,32 @@ void QueueLifecycleController::assertPendingCompletionInvariantsLocked() const {
   const u64 lastCommittedSeqId = binding.lastCommittedSeqId ? *binding.lastCommittedSeqId : 0;
   u64 previousSeqId = 0;
   for (const auto& pending : pendingCompletion_) {
-    DXMT_ASSERT(pending.slotIndex < slots.size());
-    DXMT_ASSERT(slots[pending.slotIndex].state == ChunkSlot::State::GPU);
-    DXMT_ASSERT(slots[pending.slotIndex].seqId == pending.seqId);
-    DXMT_ASSERT(pending.seqId > 0);
-    DXMT_ASSERT(pending.seqId <= lastCommittedSeqId);
-    DXMT_ASSERT(previousSeqId == 0 || pending.seqId > previousSeqId);
-    previousSeqId = pending.seqId;
+    DXMT_ASSERT(pending.coalescedSlotIndices.size() == pending.coalescedSeqIds.size());
+    std::array<size_t, 1> singleSlotIndex{pending.slotIndex};
+    std::array<u64, 1> singleSeqId{pending.seqId};
+    const bool hasCoalescedSlots =
+        !pending.coalescedSlotIndices.empty() &&
+        pending.coalescedSlotIndices.size() == pending.coalescedSeqIds.size();
+    std::span<const size_t> slotIndices =
+        hasCoalescedSlots
+            ? std::span<const size_t>(pending.coalescedSlotIndices.data(),
+                                      pending.coalescedSlotIndices.size())
+            : std::span<const size_t>(singleSlotIndex.data(), singleSlotIndex.size());
+    std::span<const u64> seqIds =
+        hasCoalescedSlots
+            ? std::span<const u64>(pending.coalescedSeqIds.data(),
+                                   pending.coalescedSeqIds.size())
+            : std::span<const u64>(singleSeqId.data(), singleSeqId.size());
+    DXMT_ASSERT(slotIndices.size() == seqIds.size());
+    for (std::size_t i = 0; i < seqIds.size(); ++i) {
+      DXMT_ASSERT(slotIndices[i] < slots.size());
+      DXMT_ASSERT(slots[slotIndices[i]].state == ChunkSlot::State::GPU);
+      DXMT_ASSERT(slots[slotIndices[i]].seqId == seqIds[i]);
+      DXMT_ASSERT(seqIds[i] > 0);
+      DXMT_ASSERT(seqIds[i] <= lastCommittedSeqId);
+      DXMT_ASSERT(previousSeqId == 0 || seqIds[i] > previousSeqId);
+      previousSeqId = seqIds[i];
+    }
   }
 }
 #endif
@@ -1340,26 +1684,48 @@ void QueueLifecycleController::transition(QueueTransitionRecord record,
 }
 
 void QueueLifecycleController::submit(QueueSubmissionRecord& record) {
+  std::array<size_t, 1> singleSlotIndex{record.slotIndex};
+  std::array<u64, 1> singleSeqId{record.seqId};
+  const bool hasCoalescedSlots = !record.coalescedSlotIndices.empty();
+  DXMT_ASSERT(record.coalescedSlotIndices.size() == record.coalescedSeqIds.size());
+  std::span<const size_t> slotIndices =
+      hasCoalescedSlots
+          ? std::span<const size_t>(record.coalescedSlotIndices.data(),
+                                    record.coalescedSlotIndices.size())
+          : std::span<const size_t>(singleSlotIndex.data(), singleSlotIndex.size());
+  std::span<const u64> seqIds =
+      hasCoalescedSlots
+          ? std::span<const u64>(record.coalescedSeqIds.data(),
+                                 record.coalescedSeqIds.size())
+          : std::span<const u64>(singleSeqId.data(), singleSeqId.size());
+  if (slotIndices.size() != seqIds.size() || slotIndices.empty()) {
+    return;
+  }
+
   CommandBufferDiagnostics diagnostics = record.diagnostics;
   if (diagnostics.seqId == 0) {
     diagnostics = summarizeSubmission(record.seqId, record.slotIndex);
   }
 
   const auto beforeCommitState = currentState();
-  if (record.slotIndex < submissionBinding_.slots.size()) {
-    submissionBinding_.slots[record.slotIndex].state = ChunkSlot::State::GPU;
+  for (const size_t submittedSlotIndex : slotIndices) {
+    if (submittedSlotIndex < submissionBinding_.slots.size()) {
+      submissionBinding_.slots[submittedSlotIndex].state = ChunkSlot::State::GPU;
+    }
   }
   const auto afterCommitState = currentState();
 #ifndef NDEBUG
   assertQueueLifecycleInvariants();
 #endif
 
-  observeTransition(QueueTransitionRecord{
-      .before = beforeCommitState,
-      .after = afterCommitState,
-      .slotIndex = record.slotIndex,
-      .eventSeqId = record.seqId,
-  });
+  for (std::size_t i = 0; i < slotIndices.size(); ++i) {
+    observeTransition(QueueTransitionRecord{
+        .before = beforeCommitState,
+        .after = afterCommitState,
+        .slotIndex = slotIndices[i],
+        .eventSeqId = seqIds[i],
+    });
+  }
 
   if (!record.commandBuffer) {
     return;
@@ -1446,8 +1812,10 @@ void QueueLifecycleController::submit(QueueSubmissionRecord& record) {
     pending.commandBuffer = std::move(record.commandBuffer);
     pending.diagnostics = preparedDiagnostics;
     pending.contextValue = record.context ? record.context : "queue";
-    pending.slotIndex = record.slotIndex;
-    pending.seqId = record.seqId;
+    pending.slotIndex = slotIndices.front();
+    pending.seqId = seqIds.back();
+    pending.coalescedSlotIndices.assign(slotIndices.begin(), slotIndices.end());
+    pending.coalescedSeqIds.assign(seqIds.begin(), seqIds.end());
     pending.commandBufferChainLength = record.commandBufferChainLength;
     pending.enqueueTime = enqueueTime;
     pending.renderEncoderGpuSampleBuffer =
@@ -1583,24 +1951,43 @@ bool QueueLifecycleController::processOnePendingCompletion(bool& stop) {
   }
   if (binding.mutex && binding.completedSeqQueue) {
     std::lock_guard completionLock(*binding.mutex);
-    const QueueControllerState before = makeBoundQueueState(binding);
-    // TLA+: QueueLifecycleRefinement / GpuComplete.
-    DXMT_ASSERT(pending.seqId == (binding.completedSeqId ? *binding.completedSeqId : 0) +
-                                   binding.completedSeqQueue->size() + 1);
-    binding.completedSeqQueue->push_back(pending.seqId);
-    if (pending.diagnostics.hasPresent && binding.completedPresentSeqQueue) {
-      binding.completedPresentSeqQueue->push_back(pending.seqId);
-    }
-    const QueueControllerState after = makeBoundQueueState(binding);
+    std::array<size_t, 1> singleSlotIndex{pending.slotIndex};
+    std::array<u64, 1> singleSeqId{pending.seqId};
+    const bool hasCoalescedSlots =
+        !pending.coalescedSlotIndices.empty() &&
+        pending.coalescedSlotIndices.size() == pending.coalescedSeqIds.size();
+    std::span<const size_t> slotIndices =
+        hasCoalescedSlots
+            ? std::span<const size_t>(pending.coalescedSlotIndices.data(),
+                                      pending.coalescedSlotIndices.size())
+            : std::span<const size_t>(singleSlotIndex.data(), singleSlotIndex.size());
+    std::span<const u64> seqIds =
+        hasCoalescedSlots
+            ? std::span<const u64>(pending.coalescedSeqIds.data(),
+                                   pending.coalescedSeqIds.size())
+            : std::span<const u64>(singleSeqId.data(), singleSeqId.size());
+
+    for (std::size_t i = 0; i < seqIds.size(); ++i) {
+      const QueueControllerState before = makeBoundQueueState(binding);
+      // TLA+: QueueLifecycleRefinement / GpuComplete.
+      DXMT_ASSERT(seqIds[i] == (binding.completedSeqId ? *binding.completedSeqId : 0) +
+                                  binding.completedSeqQueue->size() + 1);
+      binding.completedSeqQueue->push_back(seqIds[i]);
+      if (pending.diagnostics.hasPresent && i + 1 == seqIds.size() &&
+          binding.completedPresentSeqQueue) {
+        binding.completedPresentSeqQueue->push_back(seqIds[i]);
+      }
+      const QueueControllerState after = makeBoundQueueState(binding);
 #ifndef NDEBUG
-    assertQueueLifecycleInvariants();
+      assertQueueLifecycleInvariants();
 #endif
-    observeTransition(QueueTransitionRecord{
-        .before = before,
-        .after = after,
-        .slotIndex = pending.slotIndex,
-        .eventSeqId = pending.seqId,
-    });
+      observeTransition(QueueTransitionRecord{
+          .before = before,
+          .after = after,
+          .slotIndex = slotIndices[i],
+          .eventSeqId = seqIds[i],
+      });
+    }
     if (binding.finishCv) {
       binding.finishCv->notify_all();
     }

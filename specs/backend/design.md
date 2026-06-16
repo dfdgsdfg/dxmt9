@@ -283,6 +283,120 @@ Failure mode:
   `gpu_command_buffer_errors` counter (M5) at the failure site, not
   per-sub-CB.
 
+### 2.2.2 Producer / Encode Overlap (run-ahead publishing)
+
+Target (R-BACK-2.35–R-BACK-2.41). The producer (CS/submit thread) and the
+encode thread overlap the completion thread's present-completion wait, so
+per-present wall time approaches `max(producer, encode, present-wait)` instead
+of their sum. `Present` stays the only synchronization point (R-BACK-2.37);
+offscreen work runs ahead under it.
+
+Reference models:
+
+- **DXVK D3D9.** The D3D9 device records command chunks and dispatches them to
+  `DxvkCsThread` (`dxvk/src/dxvk/dxvk_cs.*`). `EmitCsChunk()` enqueues a chunk;
+  `Flush()` appends fence/flush work and dispatches the current CS chunk
+  (`dxvk/src/d3d9/d3d9_device.cpp`). The useful model is asynchronous CS-thread
+  run-ahead with explicit synchronization only for flush, query, resource, or
+  present-facing fences. dxmt9 should borrow the timing shape, not Vulkan's
+  barrier or submission objects.
+- **DXMT.** `CommandQueue::CommitCurrentChunk()` publishes a chunk to an encode
+  thread, `CommitChunkInternal()` creates one Metal command buffer for that
+  chunk, encodes it, and commits it; the finish thread waits completion and
+  signals frame-latency fences (`dxmt/src/dxmt/dxmt_command_queue.*`). The
+  presenter acquires the drawable inside present encoding
+  (`dxmt/src/dxmt/dxmt_presenter.cpp`). dxmt9 keeps this ownership split but
+  must add a finer CPU-ready/coalescing stage because simple early chunk publish
+  maps too directly to extra Metal command buffers on Apple GPUs.
+
+```mermaid
+sequenceDiagram
+  participant P as Producer (submit)
+  participant E as Encode
+  participant C as Completion (present wait)
+  Note over P,C: target — frame N+1 producer/encode overlap frame N present wait
+  C->>C: wait N present-complete
+  P->>E: stage N+1 CPU-ready offscreen work
+  E->>E: coalesce compatible slots
+  E->>E: encode + commit N+1 offscreen CB chain
+  C-->>P: N present complete
+  P->>E: stage N+1 present tail (sole frame-latency token)
+  E->>E: acquire drawable + copy/blit + presentDrawable
+```
+
+Terminology:
+
+- **CPU-ready** means imported/replayed records, draw snapshots, retained handles,
+  allocator ranges, and sequence metadata are owned by the queue, but no Metal
+  command-buffer boundary, drawable, or present token has been chosen.
+- **Encode-ready** means the encode thread may consume one or more CPU-ready
+  units and choose the Metal command-buffer chain and encoder boundaries.
+- **Present tail** means the final present-bearing unit only: drawable acquire,
+  back-buffer-to-drawable copy/blit, `presentDrawable`, and frame-token signal.
+
+Three composable mechanisms:
+
+| Mechanism | What runs ahead | CB boundary chosen by | Locality risk |
+|---|---|---|---|
+| **A. Diagnostic render-pass-boundary publish** (R-BACK-2.36) | writing chunk directly published at deterministic offscreen pass / barrier boundaries | submit thread for promotion; encoder may later coalesce ready slots | high without C; acceptable only if H57 counters prove the coalesced shape |
+| **B. CpuReady staging** (R-BACK-2.40) | PE→unix replay, snapshots, retention, allocator ownership, and queue submission to CPU-ready units | encoder, later | none alone — no Metal CB exists until the encoder picks the boundary |
+| **C. Multi-slot coalescing** (R-BACK-2.41) | several CPU-ready / early non-present units | encoder, grouping slots into the baseline CB chain while preserving normal pass boundaries | production locality closure — removes one-CB-per-slot carrier |
+
+Ownership:
+
+- **Submit/CS thread** — may choose diagnostic direct-publish points (A) and
+  stages CPU-ready units (B); in the production path it does not choose Metal
+  command-buffer boundaries and never touches the drawable or present token.
+- **Encode thread** — chooses `MTLCommandBuffer` chain boundaries (B/C),
+  coalesces consecutive compatible slots, and opens/closes render, blit, or
+  compute encoders at the normal pass / barrier boundaries. It owns R-BACK-2.30
+  present-tail attachment and the R-BACK-2.33 chain cap.
+- **Presenter** — sole owner of the drawable and present token; the
+  present-bearing tail is the only frame-latency carrier and the only code path
+  that performs drawable acquire + `presentDrawable` (R-BACK-2.37).
+- **Finish thread** — reclaims on `completedSeqId` only (R-BACK-2.32); early
+  CPU-ready or committed higher-seqId work cannot retire a resource a
+  lower-seqId present CB still uses, because `completedSeqId` is monotone in
+  submission order (R-BACK-2.38).
+
+Invariants the overlap must preserve:
+
+- **Present-only sync** — no non-present commit allocates/advances a present
+  token (`PresentFrameLatency` `CommitNonPresent`).
+- **Locality** — per-present CB / render-pass / tile-preservation shape
+  unchanged vs. single-publish (R-BACK-2.36); the arbitrary-draw-count carrier
+  and any one-CB-per-slot carrier are rejected for this reason.
+- **Lifetime** — early CPU-ready or committed work marks retained resources
+  against its `seqId` before visibility to the encode thread (`ResourceLifetime`
+  `NoUseAfterFree`, R-BACK-2.38).
+
+Verification:
+
+- TLA — `PresentFrameLatency` (`CommitNonPresent` / `CommitPresent`,
+  `OutstandingPresentBound`), `ResourceLifetime` (`NoUseAfterFree`),
+  `QueueLifecycleRefinement` (`SeqIdAssignmentSafety`, `BoundedInflight`),
+  `ConcurrentProgressSignals`.
+- Coalescing refinement — the TLA queue model remains per-`seqId`:
+  `EncodeSubmitToGpu` moves each source slot to GPU state, and `GpuComplete`
+  completes exactly one `seqId`. A coalesced Metal tail CB is an implementation
+  carrier for several consecutive source `seqId`s; when the tail completes,
+  `PendingCompletion` expands that event into strictly ordered per-`seqId`
+  `GpuComplete` transitions. Native queue tests cover this CB-to-N-seq
+  expansion.
+- Counters / A-B — `completion_wait_with_enqueue_ms` ↑ and
+  `completion_wait_without_enqueue_ms` ↓ at non-increasing
+  `command_buffers_per_present` / `passes_per_present` / `tile_preservation_mib`
+  (H43 overlap + H57 locality gates in
+  `scripts/tools/compare_3dmark05_perf_counters.py`). Current code wires A to
+  C opportunistically: `DXMT9_OFFSCREEN_RUN_AHEAD` enables deterministic
+  pass-boundary publish and, unless overridden, encode-side coalescing of
+  consecutive non-present/non-readback ready slots into one Metal command
+  buffer. Full B (`CpuReady` staging before slot publish / CB selection) remains
+  future work.
+- Performance model — `docs/perfomance/present-pacing.md` (H10
+  under-pipelining, H54/H56 draw-count-carrier rejection, H57 locality gates,
+  H73 run-ahead design gate).
+
 ### 2.3 Data-Oriented Transform Boundaries
 
 The backend command path is a sequence of data transforms. Each stage owns explicit

@@ -238,6 +238,77 @@ per `docs/research/g-axis-tuning.md`) for a measurable encode-thread +
 drawable-acquire win on chain-rich frames, while the worst case stays bounded
 by R-BACK-2.33's cap.
 
+**R-BACK-2.35** The command queue must support **producer/encode overlap**:
+work for frame N+1 may advance to CPU-ready or encode-ready state before that
+frame's `Present`, so the encode thread can build and commit non-present
+offscreen Metal work while the completion thread still waits on frame N's
+present completion. The contract is observable through the completion-overlap
+counters — `completion_wait_with_enqueue_ms` must be able to rise while
+`completion_wait_without_enqueue_ms` falls at a fixed Metal command-buffer /
+render-pass / tile-preservation shape. A queue that can advance only a
+present-bearing chunk after the present boundary wait does not satisfy this
+contract. This is a dxmt9-original divergence beyond DXMT's
+publish-at-frame-end grain.
+
+**R-BACK-2.36** Production pre-`Present` (run-ahead) promotion points must
+coincide with deterministic **encoder pass / barrier boundaries**, not
+arbitrary draw counts or payload-byte thresholds. The boundary identity must be
+derived from imported records and queue-local state that the encoder already
+uses to end or begin work: attachment set, encoder kind, load/store action,
+clear folding, resolve/copy/readback/query ordering, resource hazards, and
+`Present`. Relative to the single-publish-at-`Present` baseline, a production
+run-ahead policy must not increase per-present command-buffer count,
+render-pass count, or tile-preservation bytes (the locality-preservation gate).
+A direct early-publish policy that maps each promoted slot to its own Metal
+command buffer is diagnostic-only unless this gate is proven by counters for the
+target workload.
+
+**R-BACK-2.37** A run-ahead stage or commit must be **non-present**
+(R-BACK-2.30 extension): it must not acquire a drawable, encode
+`presentDrawable`, or allocate/advance a frame-latency present token. Only the
+final present-bearing unit carries the present token, and its Metal tail is the
+only stage allowed to acquire the drawable, copy/blit the back buffer to it, and
+encode `presentDrawable`. Frame pacing therefore synchronizes **solely on
+present completion**; outstanding-present accounting and the app-side
+frame-latency wait are unaffected by how many offscreen units run ahead.
+
+**R-BACK-2.38** Resources referenced by early CPU-ready or non-present committed
+work must be retained and marked against that work unit's `seqId` before it
+becomes visible to the encode thread, so seqId-based reclaim (R-BACK-2.32)
+holds: because `completedSeqId` advances monotonically in submission order, a
+resource freed at frame N's completion can never be referenced by an N+1 unit
+that ran ahead. When chunk-bulk resource marking is active, any run-ahead split
+or staging boundary must force per-record/per-draw marking for the post-boundary
+records — no record may land under a `seqId` the importer's bulk snapshot did
+not cover.
+
+**R-BACK-2.39** Run-ahead stage, publish, and coalesce decisions must be
+**deterministic** with respect to imported record content and explicit
+queue-local state (R-BACK-2.31 extension). Policies driven by wallclock time,
+GPU progress, or other non-deterministic signals are forbidden; identical chunk
+inputs must produce identical staging, publish, and coalescing shape.
+
+**R-BACK-2.40** *(CpuReady staging.)* The producer-side CPU work of the next
+frame — PE→unix chunk import/replay, draw-submission snapshot, retained-resource
+capture, and queue draw-submission — must be able to advance to a **CPU-ready**
+state during the previous frame's present-completion wait, decoupled from the
+choice of `MTLCommandBuffer` boundary. CPU-ready units own deterministic replay
+records, retained handles, sequence metadata, and allocator ranges, but no
+drawable or present token. Promotion from CPU-ready work into Metal command
+buffers is owned by the encode thread, subject to R-BACK-2.36.
+
+**R-BACK-2.41** *(Encode-side multi-slot coalescing.)* When more than one
+CPU-ready or non-present slot is available before `Present`, the encode thread
+must be able to **coalesce consecutive compatible slots into the same Metal
+command-buffer chain that a single-publish chunk would have produced**. Slot
+boundaries must not force one Metal command buffer per slot. The encoder still
+opens and closes render, blit, or compute encoders at the normal pass / barrier
+boundaries from R-BACK-2.36; same-attachment render passes may be merged only
+when the existing hazard and load/store rules allow it. Coalescing must not
+reorder records across `Present`, query/readback, or barrier boundaries, and
+must preserve R-BACK-2.30 present-tail attachment and R-BACK-2.32
+completion-gating semantics.
+
 ---
 
 ## 3. Pipeline State Objects

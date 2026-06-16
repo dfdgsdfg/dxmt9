@@ -124,6 +124,16 @@ dod_replay_observer_spec = executable(
 
 test('dxmt9-dod-replay-observer-spec', dod_replay_observer_spec)
 
+queue_coalescing_spec = executable(
+  'dxmt9-queue-coalescing-spec',
+  'queue_coalescing_spec.cpp',
+  include_directories: dxmt9_inc,
+  dependencies: [dxmt9_dep, dxmt9_frontend_dep, dxmt9_winemetal_dep],
+  link_args: dxmt9_test_link_args,
+)
+
+test('dxmt9-queue-coalescing-spec', queue_coalescing_spec)
+
 draw_seq_filter_spec = executable(
   'dxmt9-draw-seq-filter-spec',
   [

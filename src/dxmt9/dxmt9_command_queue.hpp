@@ -432,6 +432,23 @@ class CommandQueue {
   // not covered by the importer's bulk markChunkResources() snapshot.
   bool forceDrawResourceMarkingAfterSplit_ = false;
 
+  // DXMT9_OFFSCREEN_RUN_AHEAD: render-pass key (color0 + depth handle) of the
+  // draws currently accumulated in the writing slot. When the next draw begins
+  // a different render pass, the writing chunk is published early so the encode
+  // thread can commit offscreen command buffers during the previous frame's
+  // present-completion wait (producer/encode overlap; closes the
+  // completion_wait_with_enqueue==0 gap). This record-side split is a
+  // diagnostic promotion point; the locality-preserving production behavior
+  // depends on QueueLifecycleController encode-side coalescing merging
+  // adjacent non-present ready slots back into one Metal command buffer.
+  // Present-only sync is preserved because the boundary publish reuses the
+  // non-present CommitPublish path and never allocates a frame-latency present
+  // token (PresentFrameLatency CommitNonPresent). Sole writer is the CS/submit
+  // thread under mutex_, matching currentBackBuffer_.
+  core::Handle runAheadPassColor0_{};
+  core::Handle runAheadPassDepth_{};
+  bool runAheadPassKeyValid_ = false;
+
   core::metalqueue::QueueLifecycleController queueLifecycle_{};
   core::metalhud::SubmissionDiagnosticsController submissionDiagnostics_{};
 
