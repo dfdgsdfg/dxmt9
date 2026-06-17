@@ -14878,13 +14878,7 @@ std::optional<core::metalqueue::QueueSubmissionRecord> encodeChunk(
     commandBufferHasWork = false;
   };
 
-  // R-BACK-2.41 — a coalesced run-ahead chunk is published early so its command
-  // buffer commits during the previous frame's completion wait; the overlap win
-  // comes from that early commit, not from sub-CB splitting. Splitting it
-  // per render pass would re-fragment the merged passes into N sub-CBs and break
-  // the R-BACK-2.36 locality gate, so encode it as a single command buffer.
-  const auto commitPolicy = slot.coalescedRunAhead ? MidChunkCommitPolicy::Off
-                                                   : midChunkCommitPolicy();
+  const auto commitPolicy = midChunkCommitPolicy();
   const std::uint32_t splitNRecords = midChunkCommitNRecords();
   const std::uint32_t splitChainCap = midChunkCommitCapPerRenderPass();
   std::uint32_t recordsSinceLastSplit = 0;

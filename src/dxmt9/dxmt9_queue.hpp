@@ -520,7 +520,6 @@ class QueueLifecycleController {
       std::uint64_t nanoseconds);
   void recordNoEnqueueWaitGapToEncodeDequeue();
   void recordNoEnqueueWaitGapToCommandBufferCommit();
-  bool cpuReadyEncodeGroupAvailable(size_t coalesceLimit) const;
   void observeTransition(const QueueTransitionRecord& record) const;
   void enqueuePresent(size_t slotIndex,
                       u64 eventSeqId,
