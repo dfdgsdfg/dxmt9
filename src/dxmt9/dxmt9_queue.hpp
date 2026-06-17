@@ -214,11 +214,6 @@ struct QueueSubmissionRecord {
   bool metalCaptureAlreadyStarted = false;
   size_t slotIndex = 0;
   u64 seqId = 0;
-  // Empty for the normal one-slot path. When encode-side coalescing merges
-  // several ready non-present slots into one Metal command buffer, these
-  // arrays name every source slot/seq completed by the tail command buffer.
-  std::vector<size_t> coalescedSlotIndices{};
-  std::vector<u64> coalescedSeqIds{};
   CommandBufferDiagnostics diagnostics{};
   const char* context = "queue";
   WMT::Reference<WMT::CounterSampleBuffer> renderEncoderGpuSampleBuffer{};
@@ -609,8 +604,6 @@ class QueueLifecycleController {
     std::string contextValue{};
     size_t slotIndex = 0;
     u64 seqId = 0;
-    std::vector<size_t> coalescedSlotIndices{};
-    std::vector<u64> coalescedSeqIds{};
     u64 commandBufferChainLength = 1;
     std::chrono::steady_clock::time_point enqueueTime{};
     WMT::Reference<WMT::CounterSampleBuffer> renderEncoderGpuSampleBuffer{};
@@ -629,8 +622,6 @@ class QueueLifecycleController {
   }
 
  private:
-  friend struct QueueLifecycleControllerTestPeer;
-
   void resetNoEnqueueGapProgressLocked();
 
   std::mutex pendingCompletionMutex_{};

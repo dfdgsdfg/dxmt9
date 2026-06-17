@@ -1861,20 +1861,6 @@ std::size_t drawChunkCommandLimit() {
   return limit;
 }
 
-// DXMT9_OFFSCREEN_RUN_AHEAD (default off): publish the writing chunk at
-// offscreen render-pass boundaries so the encode thread can commit during the
-// previous frame's present-completion wait. The queue encoder pairs this with
-// opportunistic non-present ready-slot coalescing so early publish does not
-// have to become one Metal command buffer per promoted slot. Read once; "set"
-// means a non-empty value other than "0", matching the other queue env knobs.
-bool offscreenRunAheadEnabled() {
-  static const bool enabled = [] {
-    const char* env = std::getenv("DXMT9_OFFSCREEN_RUN_AHEAD");
-    return env && env[0] != '\0' && !(env[0] == '0' && env[1] == '\0');
-  }();
-  return enabled;
-}
-
 std::size_t drawPayloadArenaLimitBytes() {
   static const std::size_t limit = [] {
     const char* env = std::getenv("DXMT9_CHUNK_DRAW_PAYLOAD_ARENA_LIMIT_BYTES");
@@ -2498,48 +2484,6 @@ bool maybeCommitDrawPayloadArenaUnlocked(
   return committed;
 }
 
-// DXMT9_OFFSCREEN_RUN_AHEAD: publish the current writing chunk when the next
-// draw begins a different render pass (color0/depth handle change) than the
-// draws already accumulated. Reuses the standard CommitPublish path
-// (prepareSlotForPublish marks the slot's resources against its seqId, so
-// seqId-based lifetime / NoUseAfterFree is preserved) and never allocates a
-// present token, so present-only sync and the PresentFrameLatency model's
-// CommitNonPresent / CommitPresent split hold. This is only the producer-side
-// promotion point: QueueLifecycleController's encode-side non-present slot
-// coalescing is what keeps the eventual Metal command-buffer shape close to
-// the original pass locality. Caller gates on offscreenRunAheadEnabled() so
-// the default path pays nothing. Reuses ChunkPublishReason::DrawLimit for now
-// (the legacy DXMT9_DRAW_CHUNK_COMMAND_LIMIT knob is mutually exclusive with
-// this one).
-bool maybeCommitDrawRunAheadBoundaryUnlocked(
-    CommandQueue& q,
-    resources::Pool& pool,
-    std::unique_lock<std::mutex>& lock,
-    core::Handle passColor0,
-    core::Handle passDepth) {
-  bool committed = false;
-  const bool boundary =
-      q.runAheadPassKeyValid_ && (passColor0 != q.runAheadPassColor0_ ||
-                                  passDepth != q.runAheadPassDepth_);
-  if (boundary && q.writingSlot_ && !currentSlotUnlocked(q).commandsEmpty()) {
-    committed = q.queueLifecycle_.commitCurrentChunk(
-        lock, kMaxQueuedChunks, [&q, &pool](core::ChunkSlot& slot) {
-          prepareSlotForPublish(q, pool, slot,
-                                perf::ChunkPublishReason::DrawLimit);
-        });
-    if (committed) {
-      if (q.skipDrawResourceMarking_) {
-        q.forceDrawResourceMarkingAfterSplit_ = true;
-      }
-      ensureWritingSlotUnlocked(q, lock);
-    }
-  }
-  q.runAheadPassColor0_ = passColor0;
-  q.runAheadPassDepth_ = passDepth;
-  q.runAheadPassKeyValid_ = true;
-  return committed;
-}
-
 }  // namespace
 
 void CommandQueue::setSkipDrawResourceMarking(bool skip) {
@@ -2661,11 +2605,6 @@ void CommandQueue::submitDrawRun(core::CanonicalDrawState state,
     PerfScope stageScope(perf::countSubmitDrawRunSlotPrepareCpuTime);
     ensureWritingSlotUnlocked(*this, lock);
     maybeCommitDrawPayloadArenaUnlocked(*this, pool_, lock, pendingPayloadBytes);
-    if (offscreenRunAheadEnabled()) {
-      maybeCommitDrawRunAheadBoundaryUnlocked(
-          *this, pool_, lock, state.hot.colorAttachments[0].handle,
-          state.hot.depthStencil.handle);
-    }
   }
   {
     PerfScope stageScope(perf::countSubmitDrawRunResourceMarkCpuTime);
@@ -2733,12 +2672,6 @@ void CommandQueue::submitDrawRunBatch(
       PerfScope stageScope(perf::countSubmitDrawRunBatchSlotPrepareCpuTime);
       ensureWritingSlotUnlocked(*this, lock);
       maybeCommitDrawPayloadArenaUnlocked(*this, pool_, lock, pendingPayloadBytes);
-      if (offscreenRunAheadEnabled()) {
-        const auto& frontHot = batch.front().materializedState().hot;
-        maybeCommitDrawRunAheadBoundaryUnlocked(
-            *this, pool_, lock, frontHot.colorAttachments[0].handle,
-            frontHot.depthStencil.handle);
-      }
     }
     {
       PerfScope stageScope(perf::countSubmitDrawRunBatchResourceMarkCpuTime);
