@@ -318,6 +318,17 @@ void traceEncodeCoalesce(size_t primarySlotIndex,
   emitQueueTraceLine(out.str());
 }
 
+void traceCpuReadyStageHold(size_t readyDepth, size_t compatibleDepth) {
+  if (!queueTraceEnabled()) {
+    return;
+  }
+  std::ostringstream out;
+  out << "[dxmt9-cpu-ready-stage]"
+      << " ready_depth=" << readyDepth
+      << " compatible_depth=" << compatibleDepth;
+  emitQueueTraceLine(out.str());
+}
+
 std::uint32_t checkedU32(std::size_t value) noexcept {
   DXMT_ASSERT(value <= std::numeric_limits<std::uint32_t>::max());
   return static_cast<std::uint32_t>(
@@ -1057,7 +1068,12 @@ bool QueueLifecycleController::dequeueReadySlot(std::unique_lock<std::mutex>& lo
     return false;
   }
 
-  encodeCv->wait(lock, [&] { return *stop || !readySlots->empty(); });
+  const size_t coalesceLimit = encodeReadySlotCoalescingEnabled()
+      ? encodeReadySlotCoalesceLimit()
+      : 1u;
+  encodeCv->wait(lock, [&] {
+    return *stop || cpuReadyEncodeGroupAvailable(coalesceLimit);
+  });
   if (*stop && readySlots->empty()) {
     return false;
   }
@@ -1077,6 +1093,66 @@ bool QueueLifecycleController::dequeueReadySlot(std::unique_lock<std::mutex>& lo
   slotCopy = slot;
   traceEncodeIterationStage("dequeue.after-slot-copy", slotIndex, slotCopy);
   return true;
+}
+
+bool QueueLifecycleController::cpuReadyEncodeGroupAvailable(size_t coalesceLimit) const {
+  // R-BACK-2.40 — readySlots are the current CPU-ready staging lane:
+  // records, retained handles, seqIds, and allocator ownership are already
+  // queue-owned, but the encoder should not let the first small non-present
+  // slot immediately become a Metal CB boundary. Wait deterministically until
+  // the encoder can pick a baseline-like carrier: a full compatible group, a
+  // hard boundary, idle producer, or ring backpressure. No wallclock / GPU
+  // feedback participates in this decision (R-BACK-2.39).
+  const auto* readySlots = submissionBinding_.readySlots;
+  if (!readySlots || readySlots->empty()) {
+    return false;
+  }
+  if (coalesceLimit <= 1) {
+    return true;
+  }
+
+  const auto& slots = submissionBinding_.slots;
+  const size_t headSlotIndex = readySlots->front();
+  if (headSlotIndex >= slots.size()) {
+    return true;
+  }
+  if (chunkBlocksEncodeCoalescing(slots[headSlotIndex])) {
+    return true;
+  }
+
+  size_t compatibleDepth = 0;
+  while (compatibleDepth < readySlots->size() &&
+         compatibleDepth < coalesceLimit) {
+    const size_t slotIndex = (*readySlots)[compatibleDepth];
+    if (slotIndex >= slots.size()) {
+      return true;
+    }
+    if (chunkBlocksEncodeCoalescing(slots[slotIndex])) {
+      break;
+    }
+    ++compatibleDepth;
+  }
+  if (compatibleDepth >= coalesceLimit) {
+    return true;
+  }
+  if (compatibleDepth < readySlots->size()) {
+    return true;
+  }
+
+  const auto* writingSlot = submissionBinding_.writingSlot;
+  if (!writingSlot || !writingSlot->has_value()) {
+    return true;
+  }
+
+  const auto* inflightCount = submissionBinding_.inflightCount;
+  const size_t backpressureLimit = slots.empty() ? 0 : slots.size() - 1u;
+  if (inflightCount && backpressureLimit > 0 &&
+      *inflightCount >= backpressureLimit) {
+    return true;
+  }
+
+  traceCpuReadyStageHold(readySlots->size(), compatibleDepth);
+  return false;
 }
 
 bool QueueLifecycleController::runEncodeIteration(
@@ -1126,6 +1202,11 @@ bool QueueLifecycleController::runEncodeIteration(
                           nextSeqId, slotCopy.commandCount());
     }
   }
+  // R-BACK-2.41 — a coalesced merge is encoded as one command buffer; flag it
+  // so encodeChunk suppresses the per-render-pass mid-chunk split that would
+  // otherwise re-fragment the merged passes into N sub-CBs and break the
+  // R-BACK-2.36 locality gate.
+  slotCopy.coalescedRunAhead = coalescedCount > 1;
 
   traceEncodeIterationStage("iteration.after-dequeue", slotIndex, slotCopy);
   traceEncodeIterationStage("iteration.before-unlock", slotIndex, slotCopy);

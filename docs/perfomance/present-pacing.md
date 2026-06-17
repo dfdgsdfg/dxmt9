@@ -94,6 +94,7 @@ GPU frame-time story is owned by [[hidden-backend-storage]] /
 | H72 | PE child desc caching is a local cleanup, not the current average-FPS lever | rejected average-FPS lever; cleanup accepted | [[present-pacing-pe-desc-cache.67]] caches immutable buffer/surface descs in PE child wrappers and reruns the H71 no-gputrace scout. The local focused rows move slightly (`draw_indexed -> set_vs_const_f` `15.912 -> 15.345ms/present`, `draw_indexed -> draw_indexed` `3.873 -> 3.669`, `draw_indexed -> apply_state` `6.839 -> 6.772`), but aggregate P2/P3/P4 rows stay flat (`completion_wait_without_enqueue` `27.326 -> 27.472ms/present`, replay `7.887 -> 7.871`, encode `10.959 -> 11.020`, overlap `0`). Keep desc caching as a hot-path cleanup, but return average-FPS focus to constant traffic compression or locality-preserving run-ahead. |
 | H73 | Run-ahead must decouple logical readiness from Metal command-buffer publication | accepted design gate | [[present-pacing-run-ahead-design.68]] combines the current low-overhead baseline, direct-cbuf repeat, draw-count publish A/B, locality gates, and queue code inspection. In the current queue shape, `CommitPublish` makes one ready `ChunkSlot`, and `encodeChunk()` turns that slot into one Metal command buffer. Simple early publish therefore recovers overlap by creating more command buffers/render-pass splits/tile preservation, which is the known-bad carrier. The next FPS-facing design must use CPU run-ahead staging, encode-side multi-slot coalescing, or a tightly gated render-pass-boundary publish experiment that preserves command-buffer and tile locality. |
 | H74 | Current run-ahead/coalescing implementation proves overlap but fails locality | accepted mechanism; rejected current carrier | [[present-pacing-run-ahead-coalesce.69]] runs `DXMT9_OFFSCREEN_RUN_AHEAD=1 DXMT9_ENCODE_COALESCE_READY_SLOTS=1 DXMT9_ENCODE_COALESCE_READY_SLOT_LIMIT=4` against a fresh baseline. Present wait collapses (`completion_present_wait_ms_per_present` `29.839 -> 0.202`), overlap rises (`completion_wait_with_enqueue_ms_per_present` `1.915 -> 20.855`), and no-enqueue wait falls (`27.924 -> 16.135`). But total completion wait worsens (`29.839 -> 36.990`), command buffers per present explode (`3.999 -> 19.156`), GPU command-buffer time rises (`3.718 -> 35.197ms/present`), and `chunk_publish_reason_draw_limit` becomes `15852`. The path validates H73's design constraint; it is not an FPS promotion. |
+| H75 | CPU-ready staging restores much of the CB shape but misses FPS and correctness gates | accepted locality refinement; rejected current promotion | [[present-pacing-run-ahead-cpu-ready.70]] reruns the same env after R-BACK-2.40 CPU-ready staging and stronger encode grouping. It improves the carrier versus prior coalescing (`command_buffers_per_present` `19.156 -> 5.741`, `sub_command_buffers_per_present` `10.394 -> 1.287`) and keeps present wait near zero (`0.116ms/present`). However, versus baseline it still raises CBs (`3.999 -> 5.741`), worsens total completion wait (`29.839 -> 40.347ms/present`), worsens wait-to-next-enqueue (`31.632 -> 52.724ms/present`), and inflates commit replay (`8.363 -> 40.441ms/present`). Its `actual.png` also has a large black vertical scene artifact, so `status=pass` is not a visual smoke pass. CB locality recovery is necessary but not sufficient; the next split must explain replay/staging cost and total cadence, and remove the visual artifact, before FPS promotion. |
 
 ## Verification methods
 
@@ -364,6 +365,7 @@ flowchart TD
   PeDescCache67["pe-desc-cache.67\nchild desc cache cleanup\nP2/P3/P4 flat"]
   RunAheadDesign68["run-ahead-design.68\nlogical readiness must decouple\nfrom Metal CB publication"]
   RunAheadCoalesce69["run-ahead-coalesce.69\npresent wait removed\noverlap created\nCB locality failed"]
+  RunAheadCpuReady70["run-ahead-cpu-ready.70\nCB/sub-CB shape improved\npresent wait near zero\nreplay/total wait regressed\nblack vertical artifact"]
   CompletionSignalDelay["completion-signal-delay.21\n8ms x1696 completion-signal delay\nSetRT→Clear and first chunk flat"]
   PeClearFlush["pe-clear-flush.22\nClear publishes 2-record chunk\nfirst chunk 20.6→18.9ms\nno enqueue overlap"]
   PeClearFlushRefresh["pe-clear-flush.23\ncurrent low-overhead refresh\nfirst chunk 20.7→19.1ms\nFPS flat/worse"]
@@ -454,6 +456,7 @@ flowchart TD
   PeBetweenCallNames66 --> PeDescCache67
   PeDescCache67 --> RunAheadDesign68
   RunAheadDesign68 --> RunAheadCoalesce69
+  RunAheadCoalesce69 --> RunAheadCpuReady70
   OverlapLocalityGate51 --> LowOverheadSerial
   PeCallerStack --> CompletionSignalDelay
   CompletionSignalDelay --> PeClearFlush
@@ -503,7 +506,7 @@ flowchart TD
   Remaining --> SCE
 
   class DSync,EncodeBudget,CurrentImmediate,CompletionStatus,CurrentOwner,PipelineOverlap,PrePublish,StageDelta,PeChunkCadence,PeRecordMilestones,PeClearGate accepted
-  class FrameLatency,AsyncAcq,WorkA,StateNoop,DirtyIdentity,TexturePreResolve,BoundaryLatency,PePresent,PeCallCadence,PeChunkSize,PeCallSequence,PeClearFlush,PeClearFlushRefresh,SubCBCap,DrawChunkLimit50,PeDescCache67,RunAheadCoalesce69 rejected
+  class FrameLatency,AsyncAcq,WorkA,StateNoop,DirtyIdentity,TexturePreResolve,BoundaryLatency,PePresent,PeCallCadence,PeChunkSize,PeCallSequence,PeClearFlush,PeClearFlushRefresh,SubCBCap,DrawChunkLimit50,PeDescCache67,RunAheadCoalesce69,RunAheadCpuReady70 rejected
   class LowOverheadSerial accepted
   class PeClearNoSampling,PeWideCall,PeThreadState rejected
   class PeCallerPc,PeCallerStack,CompletionSignalDelay accepted
@@ -874,6 +877,24 @@ flowchart TD
   `15.135 -> 19.980ms`. Keep cap tuning diagnostic-only. The no-gputrace GPU
   time counter is not a total GPU-cost proof for mid-chunk chains because frame
   rows still have one GPU-time sample while tail command buffers rise to `8`.
+- [[present-pacing-run-ahead-design.68]] — ACCEPTED DESIGN GATE.
+  Simple early publish is coupled to Metal command-buffer publication, so it
+  creates overlap by increasing command buffers/render-pass/tile preservation.
+  Valid run-ahead must separate CPU readiness from the final Metal CB boundary,
+  or coalesce ready work strongly enough to preserve baseline locality.
+- [[present-pacing-run-ahead-coalesce.69]] — ACCEPTED MECHANISM /
+  REJECTED CARRIER. The first `DXMT9_OFFSCREEN_RUN_AHEAD=1` +
+  ready-slot coalescing run removes present wait and creates overlap, but it
+  raises command buffers per present `3.999 -> 19.156`, total completion wait
+  `29.839 -> 36.990ms/present`, and GPU CB time
+  `3.718 -> 35.197ms/present`.
+- [[present-pacing-run-ahead-cpu-ready.70]] — ACCEPTED LOCALITY REFINEMENT /
+  REJECTED CURRENT PROMOTION. CPU-ready staging cuts the prior coalesced carrier
+  to `5.741` command buffers and `1.287` sub-command buffers per present, but
+  still worsens total completion wait, wait-to-next-enqueue, and commit replay
+  versus baseline. Its `actual.png` also has a large black vertical scene
+  artifact, so visual correctness is broken. CB locality recovery is a gate,
+  not an FPS proof.
 
 ## Cross-links
 
@@ -1086,6 +1107,19 @@ flowchart TD
   `3.999 -> 19.156`, and raises GPU command-buffer time
   `3.718 -> 35.197ms/present`. Treat this as proof that P4 can be moved, not
   as an FPS fix. [[present-pacing-run-ahead-coalesce.69]]
+- The R-BACK-2.40 CPU-ready staging follow-up restores much of the Metal
+  carrier shape but still fails the FPS gate. Compared with the prior
+  run-ahead/coalescing carrier, `command_buffers_per_present` falls
+  `19.156 -> 5.741` and `sub_command_buffers_per_present` falls
+  `10.394 -> 1.287`; present wait stays near zero (`0.116ms/present`).
+  Against baseline, however, CBs are still above baseline (`3.999 -> 5.741`),
+  total completion wait worsens `29.839 -> 40.347ms/present`,
+  wait-to-next-enqueue worsens `31.632 -> 52.724ms/present`, and commit replay
+  rises `8.363 -> 40.441ms/present`. The run's `actual.png` also contains a
+  large black vertical scene artifact, so the clean error counters do not make
+  it a visual smoke pass. This confirms that restoring CB locality is a
+  necessary gate, not an FPS proof.
+  [[present-pacing-run-ahead-cpu-ready.70]]
 - The Wine `OnMainThread()` source audit is useful but not a current-owner
   proof. It proves a possible synchronous macdrv transmission path, not that
   the selected GT1 producer is blocked there. Later native-selector sidecars

@@ -19,6 +19,11 @@
 namespace dxmt9::core::metalqueue {
 
 struct QueueLifecycleControllerTestPeer {
+  static bool cpuReadyEncodeGroupAvailable(QueueLifecycleController& lifecycle,
+                                           size_t coalesceLimit) {
+    return lifecycle.cpuReadyEncodeGroupAvailable(coalesceLimit);
+  }
+
   static void enqueuePendingCompletion(QueueLifecycleController& lifecycle,
                                        QueueLifecycleController::PendingCompletion pending) {
     {
@@ -85,6 +90,121 @@ void drainOne(metalqueue::QueueLifecycleController& lifecycle,
   checkEq(seqId, expectedSeqId, "completed sequence order");
 }
 
+void bindLifecycle(metalqueue::QueueLifecycleController& lifecycle,
+                   std::optional<size_t>& writingSlot,
+                   size_t& writeIndex,
+                   u64& nextSeqId,
+                   std::deque<size_t>& readySlots,
+                   std::deque<u64>& completedSeqQueue,
+                   std::deque<u64>& completedPresentSeqQueue,
+                   size_t& inflightCount,
+                   u64& completedSeqId,
+                   u64& presentCompletedSeqId,
+                   u64& lastCommittedSeqId,
+                   std::span<ChunkSlot> slots,
+                   std::mutex& mutex,
+                   std::condition_variable& writeCv,
+                   std::condition_variable& encodeCv,
+                   std::condition_variable& finishCv,
+                   std::condition_variable& presentCompletedCv,
+                   bool& stop) {
+  lifecycle.bindTrackedSubmissionState(metalqueue::QueueLifecycleController::SubmissionBinding{
+      .writingSlot = &writingSlot,
+      .writeIndex = &writeIndex,
+      .nextSeqId = &nextSeqId,
+      .readySlots = &readySlots,
+      .completedSeqQueue = &completedSeqQueue,
+      .completedPresentSeqQueue = &completedPresentSeqQueue,
+      .inflightCount = &inflightCount,
+      .completedSeqId = &completedSeqId,
+      .presentCompletedSeqId = &presentCompletedSeqId,
+      .lastCommittedSeqId = &lastCommittedSeqId,
+      .slots = slots,
+      .mutex = &mutex,
+      .writeCv = &writeCv,
+      .encodeCv = &encodeCv,
+      .finishCv = &finishCv,
+      .presentCompletedCv = &presentCompletedCv,
+      .stop = &stop,
+  });
+}
+
+void testCpuReadyStagingWaitsForDeterministicCarrierBoundary() {
+  setenv("DXMT9_ENCODE_COALESCE_READY_SLOTS", "1", 1);
+  setenv("DXMT9_ENCODE_COALESCE_READY_SLOT_LIMIT", "4", 1);
+
+  std::array<ChunkSlot, 5> slots{};
+  for (size_t i = 0; i < 4; ++i) {
+    slots[i].state = ChunkSlot::State::Pending;
+    slots[i].seqId = static_cast<u64>(i + 1u);
+    slots[i].appendClear(makeClear(Handle{0x100 + i}));
+  }
+  slots[4].state = ChunkSlot::State::Writing;
+
+  std::optional<size_t> writingSlot{4};
+  size_t writeIndex = 4;
+  u64 nextSeqId = 5;
+  std::deque<size_t> readySlots{0};
+  std::deque<u64> completedSeqQueue{};
+  std::deque<u64> completedPresentSeqQueue{};
+  size_t inflightCount = 1;
+  u64 completedSeqId = 0;
+  u64 presentCompletedSeqId = 0;
+  u64 lastCommittedSeqId = 4;
+  bool stop = false;
+  std::mutex mutex;
+  std::condition_variable writeCv;
+  std::condition_variable encodeCv;
+  std::condition_variable finishCv;
+  std::condition_variable presentCompletedCv;
+
+  metalqueue::QueueLifecycleController lifecycle;
+  bindLifecycle(lifecycle, writingSlot, writeIndex, nextSeqId, readySlots,
+                completedSeqQueue, completedPresentSeqQueue, inflightCount,
+                completedSeqId, presentCompletedSeqId, lastCommittedSeqId,
+                std::span<ChunkSlot>(slots.data(), slots.size()), mutex,
+                writeCv, encodeCv, finishCv, presentCompletedCv, stop);
+
+  check(!metalqueue::QueueLifecycleControllerTestPeer::cpuReadyEncodeGroupAvailable(
+            lifecycle, 4),
+        "active writer keeps singleton CPU-ready slot staged");
+
+  readySlots = {0, 1, 2};
+  inflightCount = 3;
+  check(!metalqueue::QueueLifecycleControllerTestPeer::cpuReadyEncodeGroupAvailable(
+            lifecycle, 4),
+        "active writer keeps partial compatible group staged");
+
+  readySlots = {0, 1, 2, 3};
+  inflightCount = 4;
+  check(metalqueue::QueueLifecycleControllerTestPeer::cpuReadyEncodeGroupAvailable(
+            lifecycle, 4),
+        "full compatible group is encode-ready");
+
+  slots[3].clearCommands();
+  slots[3].appendPresent(makePresent(), Handle{0x2000});
+  readySlots = {0, 1, 2, 3};
+  inflightCount = 4;
+  check(metalqueue::QueueLifecycleControllerTestPeer::cpuReadyEncodeGroupAvailable(
+            lifecycle, 4),
+        "present boundary flushes staged non-present prefix");
+
+  readySlots = {0};
+  inflightCount = 1;
+  writingSlot.reset();
+  slots[4].state = ChunkSlot::State::Free;
+  check(metalqueue::QueueLifecycleControllerTestPeer::cpuReadyEncodeGroupAvailable(
+            lifecycle, 4),
+        "idle producer flushes singleton CPU-ready slot");
+
+  writingSlot = 4;
+  slots[4].state = ChunkSlot::State::Writing;
+  inflightCount = slots.size() - 1u;
+  check(metalqueue::QueueLifecycleControllerTestPeer::cpuReadyEncodeGroupAvailable(
+            lifecycle, 4),
+        "ring backpressure flushes singleton CPU-ready slot");
+}
+
 void testCoalescesNonPresentReadySlotsBeforePresent() {
   setenv("DXMT9_ENCODE_COALESCE_READY_SLOTS", "1", 1);
   setenv("DXMT9_ENCODE_COALESCE_READY_SLOT_LIMIT", "4", 1);
@@ -118,25 +238,11 @@ void testCoalescesNonPresentReadySlotsBeforePresent() {
   std::condition_variable presentCompletedCv;
 
   metalqueue::QueueLifecycleController lifecycle;
-  lifecycle.bindTrackedSubmissionState(metalqueue::QueueLifecycleController::SubmissionBinding{
-      .writingSlot = &writingSlot,
-      .writeIndex = &writeIndex,
-      .nextSeqId = &nextSeqId,
-      .readySlots = &readySlots,
-      .completedSeqQueue = &completedSeqQueue,
-      .completedPresentSeqQueue = &completedPresentSeqQueue,
-      .inflightCount = &inflightCount,
-      .completedSeqId = &completedSeqId,
-      .presentCompletedSeqId = &presentCompletedSeqId,
-      .lastCommittedSeqId = &lastCommittedSeqId,
-      .slots = std::span<ChunkSlot>(slots.data(), slots.size()),
-      .mutex = &mutex,
-      .writeCv = &writeCv,
-      .encodeCv = &encodeCv,
-      .finishCv = &finishCv,
-      .presentCompletedCv = &presentCompletedCv,
-      .stop = &stop,
-  });
+  bindLifecycle(lifecycle, writingSlot, writeIndex, nextSeqId, readySlots,
+                completedSeqQueue, completedPresentSeqQueue, inflightCount,
+                completedSeqId, presentCompletedSeqId, lastCommittedSeqId,
+                std::span<ChunkSlot>(slots.data(), slots.size()), mutex,
+                writeCv, encodeCv, finishCv, presentCompletedCv, stop);
 
   std::unique_lock lock(mutex);
   size_t encodeCalls = 0;
@@ -214,25 +320,11 @@ void testPendingCompletionPushesCoalescedSeqsBeforeFinishReclaim() {
   std::condition_variable presentCompletedCv;
 
   metalqueue::QueueLifecycleController lifecycle;
-  lifecycle.bindTrackedSubmissionState(metalqueue::QueueLifecycleController::SubmissionBinding{
-      .writingSlot = &writingSlot,
-      .writeIndex = &writeIndex,
-      .nextSeqId = &nextSeqId,
-      .readySlots = &readySlots,
-      .completedSeqQueue = &completedSeqQueue,
-      .completedPresentSeqQueue = &completedPresentSeqQueue,
-      .inflightCount = &inflightCount,
-      .completedSeqId = &completedSeqId,
-      .presentCompletedSeqId = &presentCompletedSeqId,
-      .lastCommittedSeqId = &lastCommittedSeqId,
-      .slots = std::span<ChunkSlot>(slots.data(), slots.size()),
-      .mutex = &mutex,
-      .writeCv = &writeCv,
-      .encodeCv = &encodeCv,
-      .finishCv = &finishCv,
-      .presentCompletedCv = &presentCompletedCv,
-      .stop = &stop,
-  });
+  bindLifecycle(lifecycle, writingSlot, writeIndex, nextSeqId, readySlots,
+                completedSeqQueue, completedPresentSeqQueue, inflightCount,
+                completedSeqId, presentCompletedSeqId, lastCommittedSeqId,
+                std::span<ChunkSlot>(slots.data(), slots.size()), mutex,
+                writeCv, encodeCv, finishCv, presentCompletedCv, stop);
 
   metalqueue::QueueLifecycleController::PendingCompletion pending;
   pending.slotIndex = 0;
@@ -282,6 +374,7 @@ void testPendingCompletionPushesCoalescedSeqsBeforeFinishReclaim() {
 
 int main() {
   try {
+    testCpuReadyStagingWaitsForDeterministicCarrierBoundary();
     testCoalescesNonPresentReadySlotsBeforePresent();
     testPendingCompletionPushesCoalescedSeqsBeforeFinishReclaim();
   } catch (const TestFailure& failure) {

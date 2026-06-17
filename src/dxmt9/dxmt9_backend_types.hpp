@@ -814,6 +814,13 @@ struct ChunkSlot {
 
   State state = State::Free;
   u64 seqId = 0;
+  // R-BACK-2.41 — set on the merged copy when the encode thread coalesces
+  // several non-present ready slots into one submission. Tells encodeChunk to
+  // encode the merged render passes as a single MTLCommandBuffer (the
+  // per-render-pass mid-chunk split is suppressed) so producer/encode overlap
+  // does not re-fragment command buffers and break the R-BACK-2.36 locality
+  // gate. Never set on a ring slot; only on the transient encode-time copy.
+  bool coalescedRunAhead = false;
   bool pipelinePrefetchSealed = false;
   std::size_t pipelinePrefetchCommandCursor = 0;
 
@@ -878,6 +885,7 @@ struct ChunkSlot {
   }
 
   void clearCommands() {
+    coalescedRunAhead = false;
     pipelinePrefetchSealed = false;
     pipelinePrefetchCommandCursor = 0;
     commandHeaders.clear();

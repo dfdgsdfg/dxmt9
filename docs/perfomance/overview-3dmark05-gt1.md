@@ -562,7 +562,7 @@ flowchart TD
   CPU --> SNAP["[[snapshot-cache]]<br/>D3D9 draw-state rebuild\n(historical owner, current P2/P3 residual;\ndirect-cbuf leaves lookup 2.859ms/present;\npure stream/IB and redundant const rejected)"]
   CPU --> SCE["[[state-churn-encode]]<br/>stream/IB churn and commit_chunk replay"]
   CPU --> CU["[[const-upload]]<br/>cbuf/argbuf traffic (CPU amplifier)"]
-  CPU --> PP["[[present-pacing]]<br/>completion_wait dominated by present completion<br/>current direct path already immediate<br/>no next-CB enqueue during wait<br/>BeginScene immediate<br/>SetRT/Clear share higher app frame 0x88760<br/>command dispatcher 0x4886E0 gates Clear dispatch<br/>dxmt9 completion-signal delay does not move Clear/first chunk<br/>Clear-after-flush and subCB cap raise rejected"]
+  CPU --> PP["[[present-pacing]]<br/>completion_wait dominated by present completion<br/>current direct path already immediate<br/>no next-CB enqueue during wait<br/>BeginScene immediate<br/>SetRT/Clear share higher app frame 0x88760<br/>command dispatcher 0x4886E0 gates Clear dispatch<br/>dxmt9 completion-signal delay does not move Clear/first chunk<br/>CPU-ready regresses total wait/replay and black vertical artifact"]
   SCE --> SNAP
   PP --> SCE
 
@@ -596,7 +596,7 @@ flowchart LR
   P1 --> P1r["→ [[render-pass-store]] (re-entry real; A/B/A immediate target reuse; coalescing open)"]
   P2 --> P2r["→ [[state-churn-encode]] + [[snapshot-cache]] (CPU wins, replay split, GPU flat)"]
   P3 --> P3r["→ [[const-upload]] (CPU bytes ↓ 4.6GB→1GB, GPU flat)"]
-  P4 --> P4r["completion_wait is present-completion paced\ncurrent direct path already immediate\nwatcher backlog rejected\nno next-CB enqueue during wait\nPE early calls immediate\n3DMark05 command dispatcher gates Clear dispatch\nSetRT return → Clear p50 17.4ms\ndxmt9 completed-seq/waterline dependency rejected\nClear-after-flush and subCB cap retuning rejected"]
+  P4 --> P4r["completion_wait is present-completion paced\ncurrent direct path already immediate\nwatcher backlog rejected\nno next-CB enqueue during wait\nPE early calls immediate\n3DMark05 command dispatcher gates Clear dispatch\nSetRT return → Clear p50 17.4ms\ndxmt9 completed-seq/waterline dependency rejected\nCPU-ready regresses replay/total wait and breaks visual correctness"]
 
   classDef p0 fill:#ffe8e8,stroke:#b64242,color:#2b0d0d
   classDef p1 fill:#fff0d6,stroke:#b26b00,color:#2b1900
@@ -764,6 +764,7 @@ keep-VSOut route is now an Xcode counter candidate, not a production fix
 | PE between-calls exact-name split | accepted attribution refinement | The child-name scout records `1,440` presents and names the dominant between-calls entries. `draw_indexed -> set_vs_const_f` has `15.912ms/present` between-calls, led by `SetVertexShaderConstantF=3,489.217` entries/present and `IndexBuffer::GetDesc=902.976`. `draw_indexed -> draw_indexed` is led by `IndexBuffer::GetDesc=374.757`, and `draw_indexed -> apply_state` splits into `SetRenderTarget` plus nested `Surface::GetDesc`. | Keep constant traffic compression on the table, but promote PE child desc caching / getter fast paths as the next local P2/P3 candidate. Buffer/surface descriptions are immutable enough to audit for PE-side caching before another GPU trace spend. [[present-pacing-pe-between-call-name.66]], [[present-pacing-pe-between-call-family.65]], [[present-pacing]] |
 | PE child desc cache | cleanup accepted; rejected average-FPS lever | The desc-cache scout records `1,472` presents after caching immutable buffer/surface descs in the PE child wrappers. Focused rows move only slightly (`draw_indexed -> set_vs_const_f` `15.912 -> 15.345ms/present`, `draw_indexed -> draw_indexed` `3.873 -> 3.669`, `draw_indexed -> apply_state` `6.839 -> 6.772`), while aggregate rows stay flat: `completion_wait_without_enqueue` `27.326 -> 27.472ms/present`, replay `7.887 -> 7.871`, encode `10.959 -> 11.020`, and completion overlap remains `0`. | Keep the cache because repeated backend desc queries are unnecessary, but do not treat child getter bodies as the current average-FPS owner. The next CPU/P4 target remains constant traffic compression or locality-preserving run-ahead. [[present-pacing-pe-desc-cache.67]], [[present-pacing-pe-between-call-name.66]], [[present-pacing]] |
 | Run-ahead coalescing implementation | mechanism accepted; current carrier rejected | With `DXMT9_OFFSCREEN_RUN_AHEAD=1`, ready-slot coalescing, and slot limit `4`, present wait collapses (`29.839 -> 0.202ms/present`), overlap rises (`1.915 -> 20.855ms/present`), and no-enqueue wait falls (`27.924 -> 16.135ms/present`). The same run worsens total completion wait (`29.839 -> 36.990ms/present`), raises command buffers per present (`3.999 -> 19.156`), raises GPU command-buffer time (`3.718 -> 35.197ms/present`), and creates `15852` draw-limit publications. | This validates that P4 can be moved and rejects the current early-publish/coalesce carrier as an FPS fix. Restoring CB locality is only a gate; the next candidate must also lower total wait, wait-to-next-enqueue, or fixed-workload wallclock. [[present-pacing-run-ahead-coalesce.69]], [[present-pacing-run-ahead-design.68]], [[present-pacing]] |
+| CPU-ready run-ahead staging | locality refinement accepted; current promotion rejected | R-BACK-2.40 CPU-ready staging improves the run-ahead carrier versus prior coalescing: `command_buffers_per_present` `19.156 -> 5.741`, `sub_command_buffers_per_present` `10.394 -> 1.287`, and present wait stays near zero (`0.116ms/present`). The FPS gate still fails versus baseline: CBs remain above baseline (`3.999 -> 5.741`), total completion wait worsens (`29.839 -> 40.347ms/present`), wait-to-next-enqueue worsens (`31.632 -> 52.724ms/present`), and commit replay rises (`8.363 -> 40.441ms/present`). The correctness gate also fails: `actual.png` has a large black vertical scene artifact, so `status=pass` is not a visual smoke pass. | CB locality recovery is necessary but not sufficient. The next run-ahead work must split the new replay/staging cost, remove the visual artifact, and move total wait or fixed-workload wallclock, not only reduce sub-CB/CB count. [[present-pacing-run-ahead-cpu-ready.70]], [[present-pacing-run-ahead-coalesce.69]], [[present-pacing]] |
 | Draw-chunk limit overlap A/B | accepted mechanism; rejected simple knob | The record-shape scout shows before-publish chunks are already draw/const-heavy (`93.1%` chunks with draw, `372.366` draw records and `348.008` const records per publish sample). `DXMT9_DRAW_CHUNK_COMMAND_LIMIT=64` proves earlier publish can create overlap (`completion_wait_with_enqueue_ms_per_present` `1.191 -> 21.032`, no-enqueue wait `26.568 -> 15.289`), but it worsens the actual run shape: total completion wait `27.759 -> 36.321ms/present`, GPU CB time `3.309 -> 24.519ms/present`, command buffers `7,199 -> 22,846`, render passes `21,234 -> 26,280`, and tile preservation `+75.63%`. | Earlier-publish/overlap is reachable, but a global draw-count split is the wrong architecture because it fragments Metal pass locality. The next P4 design must overlap replay/encode without forcing extra render-pass store/load churn. [[present-pacing-drawchunk-limit.48]], [[present-pacing-noenqueue-beforepublish.47]], [[present-pacing]] |
 | Current low-overhead post-capture scout | accepted current average-FPS baseline | `current-lowoverhead-post-capture-r2` reruns the supervised no-gputrace low-overhead path after file `.gputrace` capture and Xcode counter export were repaired. It renders a normal GT1 frame, records `1,812` presents, sampled avg FPS `16.557`, GPU CB time `3.231ms/present`, completion wait `27.916ms/present`, no-enqueue wait `27.717ms/present`, replay `8.519ms/present`, snapshot lookup `2.919ms/present`, and encode chunk `11.348ms/present`. | Treat capture-layer repair as measurement availability, not a performance fix. The current average-FPS owner is still `under-pipelined-no-enqueue`: P2/P3 replay/snapshot/encode plus P4 overlap. Do not spend Xcode on CPU-only cleanup until a no-gputrace candidate moves these rows. [[present-pacing-current-lowoverhead.49]], [[present-pacing-drawchunk-limit.48]], [[present-pacing]] |
 | Draw-chunk limit 256 sweep | rejected threshold sweep; mechanism accepted | `DXMT9_DRAW_CHUNK_COMMAND_LIMIT=256` reaches the runtime (`chunk_publish_reason_draw_limit=1,423`) and creates overlap (`completion_wait_with_enqueue_ms_per_present` `0.199 -> 14.569`, no-enqueue `27.717 -> 15.828`), but still worsens total completion wait (`27.916 -> 30.397ms/present`), GPU CB time (`3.231 -> 4.646ms/present`), command buffers (`7,247 -> 11,153`), render passes (`21,367 -> 22,686`), tile preservation (`+5.52%`), and encode chunk (`11.348 -> 12.488ms/present`), while sampled FPS stays flat (`16.557 -> 16.586`, tail-600 p50 slightly worse). | The problem is not only the `64` threshold. Draw-count splitting is the wrong carrier for P4 overlap because it buys overlap by adding Metal command-buffer/render-pass work. The next design must decouple replay/encode progress from present completion while preserving normal pass locality. [[present-pacing-drawchunk-limit-sweep.50]], [[present-pacing-current-lowoverhead.49]], [[present-pacing]] |
@@ -1512,18 +1513,21 @@ baseline and shows a large white band. Keep direct-cbuf default-off; the next
 FPS-facing work is replay/snapshot/publish cadence or true P4 overlap, not
 more local argbuf table cleanup.
 
-Latest present-pacing update: [[present-pacing-run-ahead-coalesce.69]] turns
-the run-ahead design gate into an implementation result. The current
-`DXMT9_OFFSCREEN_RUN_AHEAD=1` / encode-side ready-slot coalescing path does move
-P4: present wait falls `29.839 -> 0.202ms/present`, overlap rises
-`1.915 -> 20.855ms/present`, and no-enqueue wait falls
-`27.924 -> 16.135ms/present`. It still fails promotion because total completion
-wait rises `29.839 -> 36.990ms/present`, command buffers per present rise
-`3.999 -> 19.156`, and GPU command-buffer time rises
-`3.718 -> 35.197ms/present`. The next FPS-facing design therefore still needs
-CPU-ready staging or stronger encode-side coalescing that preserves baseline
-Metal command-buffer locality and also moves total wait / wait-to-next-enqueue
-or fixed-workload wallclock.
+Latest present-pacing update: [[present-pacing-run-ahead-cpu-ready.70]] turns
+the CPU-ready staging design into a no-gputrace result. Compared with the first
+run-ahead/coalescing carrier, the R-BACK-2.40 path restores much of the Metal
+CB shape: `command_buffers_per_present` falls `19.156 -> 5.741` and
+`sub_command_buffers_per_present` falls `10.394 -> 1.287`, while present wait
+stays near zero (`0.116ms/present`). It still fails FPS promotion because the
+baseline comparison regresses total completion wait
+`29.839 -> 40.347ms/present`, wait-to-next-enqueue
+`31.632 -> 52.724ms/present`, and commit replay
+`8.363 -> 40.441ms/present`; CBs also remain above baseline
+(`3.999 -> 5.741`). The run also breaks visual correctness: `actual.png`
+contains a large black vertical scene artifact, so the harness `status=pass`
+is not a promotion-grade visual smoke. The next FPS-facing design must split
+the replay/staging cost, remove the artifact, and improve total cadence, not
+only restore command-buffer locality.
 
 Related CPU-side counter design doc: [[overview]].
 
