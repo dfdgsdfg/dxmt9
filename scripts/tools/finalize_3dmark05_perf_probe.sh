@@ -31,6 +31,7 @@ require_tile_preservation_not_increase=0
 require_command_buffers_per_present_not_increase=0
 require_render_passes_per_present_not_increase=0
 require_encoder_final_end_reason_not_increase=0
+require_encoder_final_same_key_reopen_not_increase=0
 require_encoder_color_load_not_increase=0
 require_encoder_depth_load_not_increase=0
 require_draw_run_records_increase=0
@@ -78,6 +79,7 @@ require_no_enqueue_encode_dequeue_to_commit_decrease=0
 require_no_enqueue_wait_to_next_enqueue_decrease=0
 require_no_enqueue_before_publish_closure_decrease=0
 require_no_enqueue_before_publish_inter_replay_gap_decrease=0
+require_pe_focused_between_call_gap_residual_decrease=0
 max_gpu_command_buffer_regression_ms=${DXMT_3DMARK05_MAX_GPU_COMMAND_BUFFER_REGRESSION_MS:-}
 max_const_upload_break_count_ratio=${DXMT_3DMARK05_MAX_CONST_UPLOAD_BREAK_COUNT_RATIO:-}
 
@@ -182,6 +184,7 @@ Options:
   --require-command-buffers-per-present-not-increase
   --require-render-passes-per-present-not-increase
   --require-encoder-final-end-reason-not-increase
+  --require-encoder-final-same-key-reopen-not-increase
   --require-encoder-color-load-not-increase
   --require-encoder-depth-load-not-increase
   --require-draw-run-records-increase
@@ -230,6 +233,7 @@ Options:
   --require-no-enqueue-wait-to-next-enqueue-decrease
   --require-no-enqueue-before-publish-closure-decrease
   --require-no-enqueue-before-publish-inter-replay-gap-decrease
+  --require-pe-focused-between-call-gap-residual-decrease
   --max-gpu-command-buffer-regression-ms N
   --require-top-gpu-decrease
   --require-top-buffer-write-decrease
@@ -438,6 +442,10 @@ while (($#)); do
       require_encoder_final_end_reason_not_increase=1
       shift
       ;;
+    --require-encoder-final-same-key-reopen-not-increase)
+      require_encoder_final_same_key_reopen_not_increase=1
+      shift
+      ;;
     --require-encoder-color-load-not-increase)
       require_encoder_color_load_not_increase=1
       shift
@@ -624,6 +632,10 @@ while (($#)); do
       ;;
     --require-no-enqueue-before-publish-inter-replay-gap-decrease)
       require_no_enqueue_before_publish_inter_replay_gap_decrease=1
+      shift
+      ;;
+    --require-pe-focused-between-call-gap-residual-decrease)
+      require_pe_focused_between_call_gap_residual_decrease=1
       shift
       ;;
     --max-gpu-command-buffer-regression-ms)
@@ -964,6 +976,7 @@ if (( require_color_dontcare_increase ||
       require_command_buffers_per_present_not_increase ||
       require_render_passes_per_present_not_increase ||
       require_encoder_final_end_reason_not_increase ||
+      require_encoder_final_same_key_reopen_not_increase ||
       require_encoder_color_load_not_increase ||
       require_encoder_depth_load_not_increase ||
       require_draw_run_records_increase ||
@@ -1009,7 +1022,8 @@ if (( require_color_dontcare_increase ||
       require_no_enqueue_encode_dequeue_to_commit_decrease ||
       require_no_enqueue_wait_to_next_enqueue_decrease ||
       require_no_enqueue_before_publish_closure_decrease ||
-      require_no_enqueue_before_publish_inter_replay_gap_decrease )) ||
+      require_no_enqueue_before_publish_inter_replay_gap_decrease ||
+      require_pe_focused_between_call_gap_residual_decrease )) ||
    [[ -n "$max_gpu_command_buffer_regression_ms" ||
       -n "$max_const_upload_break_count_ratio" ]]; then
   run_level_compare_requested=1
@@ -1239,6 +1253,9 @@ if [[ -n "$baseline_output" ]]; then
   if (( require_encoder_final_end_reason_not_increase )); then
     perf_compare_cmd+=(--require-encoder-final-end-reason-not-increase)
   fi
+  if (( require_encoder_final_same_key_reopen_not_increase )); then
+    perf_compare_cmd+=(--require-encoder-final-same-key-reopen-not-increase)
+  fi
   if (( require_encoder_color_load_not_increase )); then
     perf_compare_cmd+=(--require-encoder-color-load-not-increase)
   fi
@@ -1376,6 +1393,9 @@ if [[ -n "$baseline_output" ]]; then
   fi
   if (( require_no_enqueue_before_publish_inter_replay_gap_decrease )); then
     perf_compare_cmd+=(--require-no-enqueue-before-publish-inter-replay-gap-decrease)
+  fi
+  if (( require_pe_focused_between_call_gap_residual_decrease )); then
+    perf_compare_cmd+=(--require-pe-focused-between-call-gap-residual-decrease)
   fi
   if [[ -n "$max_gpu_command_buffer_regression_ms" ]]; then
     perf_compare_cmd+=(--max-gpu-command-buffer-regression-ms "$max_gpu_command_buffer_regression_ms")

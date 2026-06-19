@@ -97,8 +97,10 @@ It must do one of these:
 Do not spend `.gputrace` on H108 threshold sweeps. A future open-CB variant
 must first show `encoder_sidecar_final_end_reason_per_present` stays flat and
 color/depth load MiB per present do not rise, in addition to the existing
-ready-depth, P4, locality, and `v0.0.3` visual gates. Use
+ready-depth, P4, locality, and `v0.0.3` visual gates. H115 adds the stricter
+same-key reopen lens and should be used with this gate set. Use
 `--require-encoder-final-end-reason-not-increase`,
+`--require-encoder-final-same-key-reopen-not-increase`,
 `--require-encoder-color-load-not-increase`, and
 `--require-encoder-depth-load-not-increase` on the no-gputrace comparison so
 the probe/finalizer path enforces this before another Xcode capture.

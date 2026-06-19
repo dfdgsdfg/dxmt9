@@ -163,14 +163,48 @@ class Summarize3DMark05PerfTests(unittest.TestCase):
                         "gapDrawIndexedVsConstFPrevCallTailMaxMs": 2.0,
                         "gapDrawIndexedVsConstFBetweenCallsMs": 20.0,
                         "gapDrawIndexedVsConstFBetweenCallsMaxMs": 4.0,
+                        "gapDrawIndexedVsConstFBetweenCallBodyCalls": 15,
+                        "gapDrawIndexedVsConstFBetweenCallBodyCpuMs": 8.0,
+                        "gapDrawIndexedVsConstFBetweenCallBodyCpuMaxMs": 1.5,
                         "gapDrawIndexedVsConstFBetweenTop1CallFamily": "vs_const",
                         "gapDrawIndexedVsConstFBetweenTop1Samples": 12,
                         "gapDrawIndexedVsConstFBetweenTop2CallFamily": "texture",
                         "gapDrawIndexedVsConstFBetweenTop2Samples": 4,
                         "gapDrawIndexedVsConstFBetweenTop1CallName": "SetVertexShaderConstantF",
                         "gapDrawIndexedVsConstFBetweenTop1CallNameSamples": 11,
+                        "gapDrawIndexedVsConstFBetweenTop1CallNameCpuMs": 5.5,
+                        "gapDrawIndexedVsConstFBetweenTop1CallNameCpuMaxMs": 1.25,
                         "gapDrawIndexedVsConstFBetweenTop2CallName": "SetVertexShaderConstantI",
                         "gapDrawIndexedVsConstFBetweenTop2CallNameSamples": 1,
+                        "gapDrawIndexedVsConstFBetweenTop2CallNameCpuMs": 0.25,
+                        "gapDrawIndexedVsConstFBetweenTop2CallNameCpuMaxMs": 0.25,
+                        "gapDrawIndexedVsConstFBetweenGapTop1PrevFamily": "draw",
+                        "gapDrawIndexedVsConstFBetweenGapTop1NextFamily": "vs_const",
+                        "gapDrawIndexedVsConstFBetweenGapTop1Samples": 4,
+                        "gapDrawIndexedVsConstFBetweenGapTop1Ms": 12.0,
+                        "gapDrawIndexedVsConstFBetweenGapTop1MaxMs": 3.0,
+                        "gapDrawIndexedVsConstFBetweenGapTop1PrevCallName": "DrawIndexedPrimitive",
+                        "gapDrawIndexedVsConstFBetweenGapTop1NextCallName": "SetVertexShaderConstantF",
+                        "gapDrawIndexedVsConstFBetweenGapTop1NameSamples": 4,
+                        "gapDrawIndexedVsConstFBetweenGapTop1NameMs": 12.0,
+                        "gapDrawIndexedVsConstFBetweenGapTop1NameMaxMs": 3.0,
+                        "gapDrawIndexedVsConstFBetweenGapSiteTop1PrevCallName": "DrawIndexedPrimitive",
+                        "gapDrawIndexedVsConstFBetweenGapSiteTop1NextCallName": "SetVertexShaderConstantF",
+                        "gapDrawIndexedVsConstFBetweenGapSiteTop1CallerModule": "3DMark05.exe",
+                        "gapDrawIndexedVsConstFBetweenGapSiteTop1CallerRva": "0x1234",
+                        "gapDrawIndexedVsConstFBetweenGapSiteTop1Samples": 4,
+                        "gapDrawIndexedVsConstFBetweenGapSiteTop1Ms": 12.0,
+                        "gapDrawIndexedVsConstFBetweenGapSiteTop1MaxMs": 3.0,
+                        "gapDrawIndexedVsConstFBetweenGapTop2PrevFamily": "vs_const",
+                        "gapDrawIndexedVsConstFBetweenGapTop2NextFamily": "vs_const",
+                        "gapDrawIndexedVsConstFBetweenGapTop2Samples": 2,
+                        "gapDrawIndexedVsConstFBetweenGapTop2Ms": 4.0,
+                        "gapDrawIndexedVsConstFBetweenGapTop2MaxMs": 1.0,
+                        "gapDrawIndexedVsConstFBetweenGapTop2PrevCallName": "SetVertexShaderConstantF",
+                        "gapDrawIndexedVsConstFBetweenGapTop2NextCallName": "SetVertexShaderConstantF",
+                        "gapDrawIndexedVsConstFBetweenGapTop2NameSamples": 2,
+                        "gapDrawIndexedVsConstFBetweenGapTop2NameMs": 4.0,
+                        "gapDrawIndexedVsConstFBetweenGapTop2NameMaxMs": 1.0,
                     },
                 },
                 [],
@@ -204,7 +238,43 @@ class Summarize3DMark05PerfTests(unittest.TestCase):
             self.assertIn("### Focused Between-Calls Entry Names", summary)
             self.assertIn(
                 "| `draw_indexed -> set_vs_const_f` | `1` | "
-                "`SetVertexShaderConstantF` | `11` | `2.750` | `1.100` |",
+                "`SetVertexShaderConstantF` | `11` | `2.750` | `1.100` | "
+                "`5.500` | `0.550` | `1.250` |",
+                summary,
+            )
+            self.assertIn("### Focused Between-Calls Return-To-Entry Gaps", summary)
+            self.assertIn(
+                "| `draw_indexed -> set_vs_const_f` | `1` | "
+                "`draw -> vs_const` | `4` | `12.000` | `1.200` | "
+                "`60.00%` | `3.000` |",
+                summary,
+            )
+            self.assertIn(
+                "### Focused Between-Calls Exact Return-To-Entry Gaps",
+                summary,
+            )
+            self.assertIn(
+                "| `draw_indexed -> set_vs_const_f` | `1` | "
+                "`DrawIndexedPrimitive -> SetVertexShaderConstantF` | `4` | "
+                "`12.000` | `1.200` | `60.00%` | `3.000` |",
+                summary,
+            )
+            self.assertIn(
+                "### Focused Between-Calls Exact Return-To-Entry Call Sites",
+                summary,
+            )
+            self.assertIn(
+                "| `draw_indexed -> set_vs_const_f` | `1` | "
+                "`DrawIndexedPrimitive -> SetVertexShaderConstantF` | "
+                "`3DMark05.exe` | `0x1234` | `4` | `12.000` | `1.200` | "
+                "`60.00%` | `3.000` |",
+                summary,
+            )
+            self.assertIn("### Focused Between-Calls Body Coverage", summary)
+            self.assertIn(
+                "| `draw_indexed -> set_vs_const_f` | `20.000` | `2.000` | "
+                "`5.750` | `0.575` | `15` | `8.000` | `0.800` | "
+                "`40.00%` | `12.000` | `1.200` | `60.00%` |",
                 summary,
             )
 
@@ -909,6 +979,25 @@ class Summarize3DMark05PerfTests(unittest.TestCase):
                         "commit_chunk_replay_cpu_ms": 320.0,
                         "commit_chunk_replay_draw_record_cpu_ms": 300.0,
                         "commit_chunk_replay_pending_flush_cpu_ms": 120.0,
+                        "commit_chunk_replay_pending_flush_before_record_cpu_ms": 60.0,
+                        "commit_chunk_replay_pending_flush_draw_run_cpu_ms": 40.0,
+                        "commit_chunk_replay_pending_flush_draw_fallback_cpu_ms": 15.0,
+                        "commit_chunk_replay_pending_flush_failure_cpu_ms": 0.0,
+                        "commit_chunk_replay_pending_flush_end_cpu_ms": 5.0,
+                        "commit_chunk_replay_pending_flush_before_record_flushes": 3,
+                        "commit_chunk_replay_pending_flush_draw_run_flushes": 4,
+                        "commit_chunk_replay_pending_flush_draw_fallback_flushes": 1,
+                        "commit_chunk_replay_pending_flush_failure_flushes": 0,
+                        "commit_chunk_replay_pending_flush_end_flushes": 2,
+                        "commit_chunk_replay_pending_flush_before_record_records": 6,
+                        "commit_chunk_replay_pending_flush_draw_run_records": 20,
+                        "commit_chunk_replay_pending_flush_draw_fallback_records": 2,
+                        "commit_chunk_replay_pending_flush_failure_records": 0,
+                        "commit_chunk_replay_pending_flush_end_records": 12,
+                        "commit_chunk_replay_draw_run_preflush_opportunities": 4,
+                        "commit_chunk_replay_draw_run_preflush_pending_records": 20,
+                        "commit_chunk_replay_draw_run_preflush_run_records": 12,
+                        "commit_chunk_replay_draw_run_preflush_combined_records": 32,
                         "commit_chunk_draw_batch_submit_cpu_ms": 150.0,
                         "commit_chunk_queue_draw_submission_cpu_ms": 160.0,
                         "commit_chunk_queue_draw_submission_snapshot_cpu_ms": 140.0,
@@ -1414,7 +1503,48 @@ class Summarize3DMark05PerfTests(unittest.TestCase):
             self.assertIn("| `snapshot_cache_lookup_share` | `50.00%` |", summary)
             self.assertIn("| `snapshot_batch_miss_share_of_lookup` | `60.00%` |", summary)
             self.assertIn("| `pending_flush_share_of_replay` | `37.50%` |", summary)
+            self.assertIn("| `pending_flush_before_record_share` | `50.00%` |", summary)
+            self.assertIn("| `pending_flush_draw_run_share` | `33.33%` |", summary)
+            self.assertIn("| `pending_flush_draw_fallback_share` | `12.50%` |", summary)
+            self.assertIn("| `pending_flush_failure_share` | `0.00%` |", summary)
+            self.assertIn("| `pending_flush_end_share` | `4.17%` |", summary)
+            self.assertIn("| `pending_flush_records_per_flush` | `4.000` |", summary)
+            self.assertIn(
+                "| `draw_run_preflush_combined_records_per_boundary` | `8.000` |",
+                summary,
+            )
             self.assertIn("| `draw_batch_submit_share_of_replay` | `46.88%` |", summary)
+            self.assertIn(
+                "| `queue_submission_known_child_residual_ms_per_present` | `0.150` |",
+                summary,
+            )
+            self.assertIn(
+                "| `draw_record_known_child_residual_ms_per_present` | `1.750` |",
+                summary,
+            )
+            self.assertIn("### Pending Flush Reason Volume", summary)
+            self.assertIn(
+                "| `draw_run` | `40.000` | `33.33%` | `4` | `20` | "
+                "`5.000` | `0.050` | `0.250` |",
+                summary,
+            )
+            self.assertIn("### Draw-Run Preflush Carrier Opportunity", summary)
+            self.assertIn(
+                "| `draw_run_preflush_pending_records_per_boundary` | `5.000` |",
+                summary,
+            )
+            self.assertIn(
+                "| `draw_run_preflush_run_records_per_boundary` | `3.000` |",
+                summary,
+            )
+            self.assertIn(
+                "| `draw_run_preflush_combined_records_per_present` | `0.400` |",
+                summary,
+            )
+            self.assertIn(
+                "| `draw_run_preflush_opportunity_share_of_draw_run_flushes` | `100.00%` |",
+                summary,
+            )
             self.assertIn("### Replay / Snapshot Candidate Ranking", summary)
             self.assertIn(
                 "| 1 | replay | `commit_chunk_replay_cpu_ms` | `320.000` | "

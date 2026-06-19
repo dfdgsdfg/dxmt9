@@ -153,6 +153,72 @@ private:
     PeInterAppendCallFamily previous_;
 };
 
+struct PeInterAppendCallSiteLocalKey {
+    std::uint32_t prevCallName = 0;
+    std::uint32_t nextCallName = 0;
+    const void* callerPc = nullptr;
+
+    bool operator==(const PeInterAppendCallSiteLocalKey& other)
+        const noexcept {
+        return prevCallName == other.prevCallName &&
+               nextCallName == other.nextCallName &&
+               callerPc == other.callerPc;
+    }
+};
+
+struct PeInterAppendCallSiteKey {
+    std::uint32_t focusPair = 0;
+    std::uint32_t prevCallName = 0;
+    std::uint32_t nextCallName = 0;
+    const void* callerPc = nullptr;
+
+    bool operator==(const PeInterAppendCallSiteKey& other)
+        const noexcept {
+        return focusPair == other.focusPair &&
+               prevCallName == other.prevCallName &&
+               nextCallName == other.nextCallName &&
+               callerPc == other.callerPc;
+    }
+};
+
+struct PeInterAppendCallSiteLocalKeyHash {
+    std::size_t operator()(const PeInterAppendCallSiteLocalKey& key)
+        const noexcept {
+        std::size_t h = static_cast<std::size_t>(key.prevCallName);
+        h = h * 1315423911u + static_cast<std::size_t>(key.nextCallName);
+        h ^= reinterpret_cast<std::uintptr_t>(key.callerPc) +
+             0x9e3779b97f4a7c15ull + (h << 6) + (h >> 2);
+        return h;
+    }
+};
+
+struct PeInterAppendCallSiteKeyHash {
+    std::size_t operator()(const PeInterAppendCallSiteKey& key)
+        const noexcept {
+        std::size_t h = static_cast<std::size_t>(key.focusPair);
+        h = h * 1315423911u + static_cast<std::size_t>(key.prevCallName);
+        h = h * 1315423911u + static_cast<std::size_t>(key.nextCallName);
+        h ^= reinterpret_cast<std::uintptr_t>(key.callerPc) +
+             0x9e3779b97f4a7c15ull + (h << 6) + (h >> 2);
+        return h;
+    }
+};
+
+struct PeInterAppendCallSiteStats {
+    std::uint64_t samples = 0;
+    std::uint64_t totalNs = 0;
+    std::uint64_t maxNs = 0;
+};
+
+struct PeInterAppendCallSiteSummary {
+    std::uint32_t prevCallName = 0;
+    std::uint32_t nextCallName = 0;
+    const void* callerPc = nullptr;
+    std::uint64_t samples = 0;
+    std::uint64_t totalNs = 0;
+    std::uint64_t maxNs = 0;
+};
+
 struct Dxmt9PeCallerModuleInfo {
     const void* base = nullptr;
     std::uintptr_t rva = 0;
@@ -3275,6 +3341,52 @@ class D3D9DeviceImpl final : public IDirect3DDevice9Ex, public D3D9PeRecorderFlu
         peRecorderBetweenCallFamilySamples_{};
     std::array<std::uint64_t, kPeInterAppendCallNameCount>
         peRecorderBetweenCallNameSamples_{};
+    std::array<std::uint64_t, kPeInterAppendCallNameCount>
+        peRecorderBetweenCallNameCpuNsTotal_{};
+    std::array<std::uint64_t, kPeInterAppendCallNameCount>
+        peRecorderBetweenCallNameCpuNsMax_{};
+    PeInterAppendCallFamily peRecorderBetweenLastCallFamily_ =
+        PeInterAppendCallFamily::Unknown;
+    PeInterAppendCallName peRecorderBetweenLastCallName_ =
+        PeInterAppendCallName::Unknown;
+    std::int64_t peRecorderBetweenLastCallExitNs_ = 0;
+    std::array<std::uint64_t,
+               kPeInterAppendCallFamilyCount *
+                   kPeInterAppendCallFamilyCount>
+        peRecorderBetweenCallTransitionSamples_{};
+    std::array<std::uint64_t,
+               kPeInterAppendCallFamilyCount *
+                   kPeInterAppendCallFamilyCount>
+        peRecorderBetweenCallTransitionNsTotal_{};
+    std::array<std::uint64_t,
+               kPeInterAppendCallFamilyCount *
+                   kPeInterAppendCallFamilyCount>
+        peRecorderBetweenCallTransitionNsMax_{};
+    std::array<std::uint64_t,
+               kPeInterAppendCallNameCount *
+                   kPeInterAppendCallNameCount>
+        peRecorderBetweenCallNameTransitionSamples_{};
+    std::array<std::uint64_t,
+               kPeInterAppendCallNameCount *
+                   kPeInterAppendCallNameCount>
+        peRecorderBetweenCallNameTransitionNsTotal_{};
+    std::array<std::uint64_t,
+               kPeInterAppendCallNameCount *
+                   kPeInterAppendCallNameCount>
+        peRecorderBetweenCallNameTransitionNsMax_{};
+    std::unordered_map<
+        PeInterAppendCallSiteLocalKey,
+        PeInterAppendCallSiteStats,
+        PeInterAppendCallSiteLocalKeyHash>
+        peRecorderBetweenCallNameTransitionSites_{};
+    std::unordered_map<
+        PeInterAppendCallSiteKey,
+        PeInterAppendCallSiteStats,
+        PeInterAppendCallSiteKeyHash>
+        peRecorderFocusBetweenCallNameTransitionSites_{};
+    std::uint64_t peRecorderBetweenCallBodyCalls_ = 0;
+    std::uint64_t peRecorderBetweenCallBodyCpuNsTotal_ = 0;
+    std::uint64_t peRecorderBetweenCallBodyCpuNsMax_ = 0;
     std::atomic<std::uint64_t> pePresentCadenceOrdinal_{0};
     std::atomic<std::uint64_t> pePresentCadencePendingOrdinal_{0};
     std::atomic<std::uint64_t> pePresentCallMilestonePendingOrdinal_{0};
@@ -6038,7 +6150,8 @@ class D3D9DeviceImpl final : public IDirect3DDevice9Ex, public D3D9PeRecorderFlu
         dxmt9PeCurrentCallEntryNs = dxmt9PeRecorderStatsEnabled()
             ? dxmt9SteadyClockNs(std::chrono::steady_clock::now())
             : 0;
-        recordPeBetweenCallsEntry(callName, dxmt9PeCurrentCallEntryNs);
+        recordPeBetweenCallsEntry(callName, dxmt9PeCurrentCallEntryNs,
+                                  callerPc);
         const PePresentCallSample sample =
             logPeCallMilestoneAfterPresent(callName, callerPc);
         logPeFirstCallAfterPresent(callName, claimPeFirstCallAfterPresent(),
@@ -6143,12 +6256,15 @@ class D3D9DeviceImpl final : public IDirect3DDevice9Ex, public D3D9PeRecorderFlu
     void logPeCallReturnAfterPresent(const PePresentCallSample& sample,
                                      const char* callName,
                                      HRESULT hr) {
-        if (!dxmt9PeRecorderStatsEnabled() || !sample.tracked ||
-            sample.callCount > 8) {
+        if (!dxmt9PeRecorderStatsEnabled() || !sample.tracked) {
             return;
         }
         const std::int64_t exitNs =
             dxmt9SteadyClockNs(std::chrono::steady_clock::now());
+        recordPeBetweenCallsReturn(callName, sample.entryNs, exitNs);
+        if (sample.callCount > 8) {
+            return;
+        }
         const auto callerInfo = dxmt9PeResolveCallerModule(sample.callerPc);
         const auto callerStack = dxmt9PeFormatCallerStack(sample);
         dxmt9DeviceInfoLog(
@@ -6381,7 +6497,9 @@ class D3D9DeviceImpl final : public IDirect3DDevice9Ex, public D3D9PeRecorderFlu
         case PeInterAppendCallName::GetDepthStencilSurface:
             return "GetDepthStencilSurface";
         case PeInterAppendCallName::SetViewport: return "SetViewport";
+        case PeInterAppendCallName::GetViewport: return "GetViewport";
         case PeInterAppendCallName::SetScissorRect: return "SetScissorRect";
+        case PeInterAppendCallName::GetScissorRect: return "GetScissorRect";
         case PeInterAppendCallName::SetRenderState: return "SetRenderState";
         case PeInterAppendCallName::SetTextureStageState:
             return "SetTextureStageState";
@@ -6486,8 +6604,14 @@ class D3D9DeviceImpl final : public IDirect3DDevice9Ex, public D3D9PeRecorderFlu
         if (std::strcmp(callName, "SetViewport") == 0) {
             return PeInterAppendCallName::SetViewport;
         }
+        if (std::strcmp(callName, "GetViewport") == 0) {
+            return PeInterAppendCallName::GetViewport;
+        }
         if (std::strcmp(callName, "SetScissorRect") == 0) {
             return PeInterAppendCallName::SetScissorRect;
+        }
+        if (std::strcmp(callName, "GetScissorRect") == 0) {
+            return PeInterAppendCallName::GetScissorRect;
         }
         if (std::strcmp(callName, "SetRenderState") == 0) {
             return PeInterAppendCallName::SetRenderState;
@@ -6661,6 +6785,42 @@ class D3D9DeviceImpl final : public IDirect3DDevice9Ex, public D3D9PeRecorderFlu
                static_cast<std::size_t>(callName);
     }
 
+    static std::size_t peInterAppendFocusCallTransitionIndex(
+        std::size_t focusPair,
+        PeInterAppendCallFamily prevFamily,
+        PeInterAppendCallFamily nextFamily) noexcept {
+        return (focusPair * kPeInterAppendCallFamilyCount +
+                static_cast<std::size_t>(prevFamily)) *
+                   kPeInterAppendCallFamilyCount +
+               static_cast<std::size_t>(nextFamily);
+    }
+
+    static std::size_t peInterAppendFocusCallNameTransitionIndex(
+        std::size_t focusPair,
+        PeInterAppendCallName prevCallName,
+        PeInterAppendCallName nextCallName) noexcept {
+        return (focusPair * kPeInterAppendCallNameCount +
+                static_cast<std::size_t>(prevCallName)) *
+                   kPeInterAppendCallNameCount +
+               static_cast<std::size_t>(nextCallName);
+    }
+
+    static std::size_t peInterAppendCallTransitionIndex(
+        PeInterAppendCallFamily prevFamily,
+        PeInterAppendCallFamily nextFamily) noexcept {
+        return static_cast<std::size_t>(prevFamily) *
+                   kPeInterAppendCallFamilyCount +
+               static_cast<std::size_t>(nextFamily);
+    }
+
+    static std::size_t peInterAppendCallNameTransitionIndex(
+        PeInterAppendCallName prevCallName,
+        PeInterAppendCallName nextCallName) noexcept {
+        return static_cast<std::size_t>(prevCallName) *
+                   kPeInterAppendCallNameCount +
+               static_cast<std::size_t>(nextCallName);
+    }
+
     static std::size_t peInterAppendPairIndex(std::uint32_t prevType,
                                               std::uint32_t nextType) noexcept {
         return static_cast<std::size_t>(
@@ -6687,6 +6847,24 @@ class D3D9DeviceImpl final : public IDirect3DDevice9Ex, public D3D9PeRecorderFlu
     struct PeInterAppendCallNameSummary {
         std::uint32_t callName = 0;
         std::uint64_t samples = 0;
+        std::uint64_t totalNs = 0;
+        std::uint64_t maxNs = 0;
+    };
+
+    struct PeInterAppendCallTransitionSummary {
+        std::uint32_t prevFamily = 0;
+        std::uint32_t nextFamily = 0;
+        std::uint64_t samples = 0;
+        std::uint64_t totalNs = 0;
+        std::uint64_t maxNs = 0;
+    };
+
+    struct PeInterAppendCallNameTransitionSummary {
+        std::uint32_t prevCallName = 0;
+        std::uint32_t nextCallName = 0;
+        std::uint64_t samples = 0;
+        std::uint64_t totalNs = 0;
+        std::uint64_t maxNs = 0;
     };
 
     std::array<PeInterAppendPairSummary, kPeRecorderInterAppendTopPairCount>
@@ -6807,10 +6985,140 @@ class D3D9DeviceImpl final : public IDirect3DDevice9Ex, public D3D9PeRecorderFlu
             if (samples == 0) {
                 continue;
             }
+            const auto cpuNs =
+                peRecorderStats_
+                    .chunkInterAppendFocusBetweenCallNameCpuNsTotal[index];
             PeInterAppendCallNameSummary candidate{
-                static_cast<std::uint32_t>(callName), samples};
+                static_cast<std::uint32_t>(callName), samples, cpuNs,
+                peRecorderStats_
+                    .chunkInterAppendFocusBetweenCallNameCpuNsMax[index]};
             for (auto& slot : top) {
                 if (candidate.samples <= slot.samples) {
+                    continue;
+                }
+                std::swap(candidate, slot);
+            }
+        }
+        return top;
+    }
+
+    std::array<PeInterAppendCallTransitionSummary,
+               kPeRecorderInterAppendTopCallTransitionCount>
+    topPeInterAppendFocusBetweenCallTransitions(
+        std::size_t focusPair) const noexcept {
+        std::array<PeInterAppendCallTransitionSummary,
+                   kPeRecorderInterAppendTopCallTransitionCount>
+            top{};
+        if (focusPair >= kPeInterAppendFocusPairCount) {
+            return top;
+        }
+        for (std::size_t prevFamily = 0;
+             prevFamily < kPeInterAppendCallFamilyCount; ++prevFamily) {
+            for (std::size_t nextFamily = 0;
+                 nextFamily < kPeInterAppendCallFamilyCount; ++nextFamily) {
+                const std::size_t index =
+                    peInterAppendFocusCallTransitionIndex(
+                        focusPair,
+                        static_cast<PeInterAppendCallFamily>(prevFamily),
+                        static_cast<PeInterAppendCallFamily>(nextFamily));
+                const std::uint64_t totalNs =
+                    peRecorderStats_
+                        .chunkInterAppendFocusBetweenCallTransitionNsTotal[
+                            index];
+                if (totalNs == 0) {
+                    continue;
+                }
+                PeInterAppendCallTransitionSummary candidate{
+                    static_cast<std::uint32_t>(prevFamily),
+                    static_cast<std::uint32_t>(nextFamily),
+                    peRecorderStats_
+                        .chunkInterAppendFocusBetweenCallTransitionSamples[
+                            index],
+                    totalNs,
+                    peRecorderStats_
+                        .chunkInterAppendFocusBetweenCallTransitionNsMax[
+                            index]};
+                for (auto& slot : top) {
+                    if (candidate.totalNs <= slot.totalNs) {
+                        continue;
+                    }
+                    std::swap(candidate, slot);
+                }
+            }
+        }
+        return top;
+    }
+
+    std::array<PeInterAppendCallNameTransitionSummary,
+               kPeRecorderInterAppendTopCallTransitionCount>
+    topPeInterAppendFocusBetweenCallNameTransitions(
+        std::size_t focusPair) const noexcept {
+        std::array<PeInterAppendCallNameTransitionSummary,
+                   kPeRecorderInterAppendTopCallTransitionCount>
+            top{};
+        if (focusPair >= kPeInterAppendFocusPairCount) {
+            return top;
+        }
+        for (std::size_t prevCallName = 0;
+             prevCallName < kPeInterAppendCallNameCount; ++prevCallName) {
+            for (std::size_t nextCallName = 0;
+                 nextCallName < kPeInterAppendCallNameCount; ++nextCallName) {
+                const std::size_t index =
+                    peInterAppendFocusCallNameTransitionIndex(
+                        focusPair,
+                        static_cast<PeInterAppendCallName>(prevCallName),
+                        static_cast<PeInterAppendCallName>(nextCallName));
+                const std::uint64_t totalNs =
+                    peRecorderStats_
+                        .chunkInterAppendFocusBetweenCallNameTransitionNsTotal[
+                            index];
+                if (totalNs == 0) {
+                    continue;
+                }
+                PeInterAppendCallNameTransitionSummary candidate{
+                    static_cast<std::uint32_t>(prevCallName),
+                    static_cast<std::uint32_t>(nextCallName),
+                    peRecorderStats_
+                        .chunkInterAppendFocusBetweenCallNameTransitionSamples[
+                            index],
+                    totalNs,
+                    peRecorderStats_
+                        .chunkInterAppendFocusBetweenCallNameTransitionNsMax[
+                            index]};
+                for (auto& slot : top) {
+                    if (candidate.totalNs <= slot.totalNs) {
+                        continue;
+                    }
+                    std::swap(candidate, slot);
+                }
+            }
+        }
+        return top;
+    }
+
+    std::array<PeInterAppendCallSiteSummary,
+               kPeRecorderInterAppendTopCallTransitionCount>
+    topPeInterAppendFocusBetweenCallNameTransitionSites(
+        std::size_t focusPair) const {
+        std::array<PeInterAppendCallSiteSummary,
+                   kPeRecorderInterAppendTopCallTransitionCount>
+            top{};
+        if (focusPair >= kPeInterAppendFocusPairCount) {
+            return top;
+        }
+        const auto wantedFocusPair = static_cast<std::uint32_t>(focusPair);
+        for (const auto& entry :
+             peRecorderFocusBetweenCallNameTransitionSites_) {
+            const auto& key = entry.first;
+            const auto& stats = entry.second;
+            if (key.focusPair != wantedFocusPair || stats.totalNs == 0) {
+                continue;
+            }
+            PeInterAppendCallSiteSummary candidate{
+                key.prevCallName, key.nextCallName, key.callerPc,
+                stats.samples, stats.totalNs, stats.maxNs};
+            for (auto& slot : top) {
+                if (candidate.totalNs <= slot.totalNs) {
                     continue;
                 }
                 std::swap(candidate, slot);
@@ -7086,18 +7394,83 @@ class D3D9DeviceImpl final : public IDirect3DDevice9Ex, public D3D9PeRecorderFlu
         recordPeChunkInterAppendFocusBetweenCallFamilies(focusPair);
     }
 
-    void recordPeBetweenCallsEntry(const char* callName, std::int64_t entryNs) {
+    void recordPeBetweenCallsEntry(const char* callName,
+                                   std::int64_t entryNs,
+                                   const void* callerPc) {
         if (!dxmt9PeRecorderStatsEnabled() ||
             !peRecorderBetweenCallsActive_ ||
             entryNs <= peRecorderBetweenCallsStartNs_) {
             return;
         }
         const auto family = peInterAppendCallFamilyFromName(callName);
+        const auto callNameBucket = peInterAppendCallNameFromName(callName);
+        if (peRecorderBetweenLastCallExitNs_ >=
+                peRecorderBetweenCallsStartNs_ &&
+            entryNs > peRecorderBetweenLastCallExitNs_) {
+            const std::size_t transitionIndex =
+                peInterAppendCallTransitionIndex(
+                    peRecorderBetweenLastCallFamily_, family);
+            const auto gapNs = static_cast<std::uint64_t>(
+                entryNs - peRecorderBetweenLastCallExitNs_);
+            ++peRecorderBetweenCallTransitionSamples_[transitionIndex];
+            peRecorderBetweenCallTransitionNsTotal_[transitionIndex] += gapNs;
+            peRecorderBetweenCallTransitionNsMax_[transitionIndex] =
+                std::max(
+                    peRecorderBetweenCallTransitionNsMax_[transitionIndex],
+                    gapNs);
+            const std::size_t nameTransitionIndex =
+                peInterAppendCallNameTransitionIndex(
+                    peRecorderBetweenLastCallName_, callNameBucket);
+            ++peRecorderBetweenCallNameTransitionSamples_[nameTransitionIndex];
+            peRecorderBetweenCallNameTransitionNsTotal_[nameTransitionIndex] +=
+                gapNs;
+            peRecorderBetweenCallNameTransitionNsMax_[nameTransitionIndex] =
+                std::max(
+                    peRecorderBetweenCallNameTransitionNsMax_[
+                        nameTransitionIndex],
+                    gapNs);
+            PeInterAppendCallSiteLocalKey siteKey{
+                static_cast<std::uint32_t>(peRecorderBetweenLastCallName_),
+                static_cast<std::uint32_t>(callNameBucket),
+                callerPc};
+            auto& siteStats =
+                peRecorderBetweenCallNameTransitionSites_[siteKey];
+            ++siteStats.samples;
+            siteStats.totalNs += gapNs;
+            siteStats.maxNs = std::max(siteStats.maxNs, gapNs);
+        }
+        peRecorderBetweenLastCallExitNs_ = 0;
+        peRecorderBetweenLastCallFamily_ = family;
+        peRecorderBetweenLastCallName_ = callNameBucket;
         ++peRecorderBetweenCallFamilySamples_[
             static_cast<std::size_t>(family)];
-        const auto callNameBucket = peInterAppendCallNameFromName(callName);
         ++peRecorderBetweenCallNameSamples_[
             static_cast<std::size_t>(callNameBucket)];
+    }
+
+    void recordPeBetweenCallsReturn(const char* callName,
+                                    std::int64_t entryNs,
+                                    std::int64_t exitNs) {
+        if (!dxmt9PeRecorderStatsEnabled() ||
+            !peRecorderBetweenCallsActive_ ||
+            entryNs <= peRecorderBetweenCallsStartNs_ ||
+            exitNs <= entryNs) {
+            return;
+        }
+        const auto callNameBucket = peInterAppendCallNameFromName(callName);
+        const auto index = static_cast<std::size_t>(callNameBucket);
+        const auto cpuNs = static_cast<std::uint64_t>(exitNs - entryNs);
+        peRecorderBetweenLastCallFamily_ =
+            peInterAppendCallFamilyFromName(callName);
+        peRecorderBetweenLastCallName_ = callNameBucket;
+        peRecorderBetweenLastCallExitNs_ = exitNs;
+        ++peRecorderBetweenCallBodyCalls_;
+        peRecorderBetweenCallBodyCpuNsTotal_ += cpuNs;
+        peRecorderBetweenCallBodyCpuNsMax_ =
+            std::max(peRecorderBetweenCallBodyCpuNsMax_, cpuNs);
+        peRecorderBetweenCallNameCpuNsTotal_[index] += cpuNs;
+        peRecorderBetweenCallNameCpuNsMax_[index] =
+            std::max(peRecorderBetweenCallNameCpuNsMax_[index], cpuNs);
     }
 
     void resetPeBetweenCallsWindow() {
@@ -7105,6 +7478,21 @@ class D3D9DeviceImpl final : public IDirect3DDevice9Ex, public D3D9PeRecorderFlu
         peRecorderBetweenCallsStartNs_ = 0;
         peRecorderBetweenCallFamilySamples_.fill(0);
         peRecorderBetweenCallNameSamples_.fill(0);
+        peRecorderBetweenCallNameCpuNsTotal_.fill(0);
+        peRecorderBetweenCallNameCpuNsMax_.fill(0);
+        peRecorderBetweenLastCallFamily_ = PeInterAppendCallFamily::Unknown;
+        peRecorderBetweenLastCallName_ = PeInterAppendCallName::Unknown;
+        peRecorderBetweenLastCallExitNs_ = 0;
+        peRecorderBetweenCallTransitionSamples_.fill(0);
+        peRecorderBetweenCallTransitionNsTotal_.fill(0);
+        peRecorderBetweenCallTransitionNsMax_.fill(0);
+        peRecorderBetweenCallNameTransitionSamples_.fill(0);
+        peRecorderBetweenCallNameTransitionNsTotal_.fill(0);
+        peRecorderBetweenCallNameTransitionNsMax_.fill(0);
+        peRecorderBetweenCallNameTransitionSites_.clear();
+        peRecorderBetweenCallBodyCalls_ = 0;
+        peRecorderBetweenCallBodyCpuNsTotal_ = 0;
+        peRecorderBetweenCallBodyCpuNsMax_ = 0;
     }
 
     void recordPeChunkInterAppendFocusBetweenCallFamilies(std::size_t focusPair) {
@@ -7123,6 +7511,20 @@ class D3D9DeviceImpl final : public IDirect3DDevice9Ex, public D3D9PeRecorderFlu
             --terminalSamples;
         }
         auto callNameSamples = peRecorderBetweenCallNameSamples_;
+        auto callNameCpuNsTotal = peRecorderBetweenCallNameCpuNsTotal_;
+        auto callNameCpuNsMax = peRecorderBetweenCallNameCpuNsMax_;
+        auto transitionSamples = peRecorderBetweenCallTransitionSamples_;
+        auto transitionNsTotal = peRecorderBetweenCallTransitionNsTotal_;
+        auto transitionNsMax = peRecorderBetweenCallTransitionNsMax_;
+        auto nameTransitionSamples =
+            peRecorderBetweenCallNameTransitionSamples_;
+        auto nameTransitionNsTotal =
+            peRecorderBetweenCallNameTransitionNsTotal_;
+        auto nameTransitionNsMax = peRecorderBetweenCallNameTransitionNsMax_;
+        const std::uint64_t bodyCalls = peRecorderBetweenCallBodyCalls_;
+        const std::uint64_t bodyCpuNsTotal =
+            peRecorderBetweenCallBodyCpuNsTotal_;
+        const std::uint64_t bodyCpuNsMax = peRecorderBetweenCallBodyCpuNsMax_;
         const auto terminalCallName =
             peRecorderBetweenCallsActive_
             ? peInterAppendCallNameFromName(dxmt9PeCurrentCallName)
@@ -7153,7 +7555,100 @@ class D3D9DeviceImpl final : public IDirect3DDevice9Ex, public D3D9PeRecorderFlu
                 focusPair * kPeInterAppendCallNameCount + callName;
             peRecorderStats_
                 .chunkInterAppendFocusBetweenCallNameSamples[index] += count;
+            peRecorderStats_
+                .chunkInterAppendFocusBetweenCallNameCpuNsTotal[index] +=
+                callNameCpuNsTotal[callName];
+            peRecorderStats_.chunkInterAppendFocusBetweenCallNameCpuNsMax[index] =
+                std::max(
+                    peRecorderStats_
+                        .chunkInterAppendFocusBetweenCallNameCpuNsMax[index],
+                callNameCpuNsMax[callName]);
         }
+        for (std::size_t prevFamily = 0;
+             prevFamily < kPeInterAppendCallFamilyCount; ++prevFamily) {
+            for (std::size_t nextFamily = 0;
+                 nextFamily < kPeInterAppendCallFamilyCount; ++nextFamily) {
+                const std::size_t localIndex =
+                    prevFamily * kPeInterAppendCallFamilyCount + nextFamily;
+                const std::uint64_t count = transitionSamples[localIndex];
+                if (count == 0) {
+                    continue;
+                }
+                const std::size_t index =
+                    peInterAppendFocusCallTransitionIndex(
+                        focusPair,
+                        static_cast<PeInterAppendCallFamily>(prevFamily),
+                        static_cast<PeInterAppendCallFamily>(nextFamily));
+                peRecorderStats_
+                    .chunkInterAppendFocusBetweenCallTransitionSamples[
+                        index] += count;
+                peRecorderStats_
+                    .chunkInterAppendFocusBetweenCallTransitionNsTotal[
+                        index] += transitionNsTotal[localIndex];
+                peRecorderStats_
+                    .chunkInterAppendFocusBetweenCallTransitionNsMax[index] =
+                    std::max(
+                        peRecorderStats_
+                            .chunkInterAppendFocusBetweenCallTransitionNsMax[
+                                index],
+                        transitionNsMax[localIndex]);
+            }
+        }
+        for (std::size_t prevCallName = 0;
+             prevCallName < kPeInterAppendCallNameCount; ++prevCallName) {
+            for (std::size_t nextCallName = 0;
+                 nextCallName < kPeInterAppendCallNameCount; ++nextCallName) {
+                const std::size_t localIndex =
+                    prevCallName * kPeInterAppendCallNameCount + nextCallName;
+                const std::uint64_t count =
+                    nameTransitionSamples[localIndex];
+                if (count == 0) {
+                    continue;
+                }
+                const std::size_t index =
+                    peInterAppendFocusCallNameTransitionIndex(
+                        focusPair,
+                        static_cast<PeInterAppendCallName>(prevCallName),
+                        static_cast<PeInterAppendCallName>(nextCallName));
+                peRecorderStats_
+                    .chunkInterAppendFocusBetweenCallNameTransitionSamples[
+                        index] += count;
+                peRecorderStats_
+                    .chunkInterAppendFocusBetweenCallNameTransitionNsTotal[
+                        index] += nameTransitionNsTotal[localIndex];
+                peRecorderStats_
+                    .chunkInterAppendFocusBetweenCallNameTransitionNsMax[
+                        index] =
+                    std::max(
+                        peRecorderStats_
+                            .chunkInterAppendFocusBetweenCallNameTransitionNsMax[
+                                index],
+                        nameTransitionNsMax[localIndex]);
+            }
+        }
+        const auto focusPairValue = static_cast<std::uint32_t>(focusPair);
+        for (const auto& entry : peRecorderBetweenCallNameTransitionSites_) {
+            const auto& key = entry.first;
+            const auto& stats = entry.second;
+            PeInterAppendCallSiteKey siteKey{
+                focusPairValue, key.prevCallName, key.nextCallName,
+                key.callerPc};
+            auto& siteStats =
+                peRecorderFocusBetweenCallNameTransitionSites_[siteKey];
+            siteStats.samples += stats.samples;
+            siteStats.totalNs += stats.totalNs;
+            siteStats.maxNs = std::max(siteStats.maxNs, stats.maxNs);
+        }
+        peRecorderStats_.chunkInterAppendFocusBetweenCallBodyCalls[focusPair] +=
+            bodyCalls;
+        peRecorderStats_
+            .chunkInterAppendFocusBetweenCallBodyCpuNsTotal[focusPair] +=
+            bodyCpuNsTotal;
+        peRecorderStats_.chunkInterAppendFocusBetweenCallBodyCpuNsMax[focusPair] =
+            std::max(
+                peRecorderStats_
+                    .chunkInterAppendFocusBetweenCallBodyCpuNsMax[focusPair],
+                bodyCpuNsMax);
         resetPeBetweenCallsWindow();
     }
 
@@ -7171,6 +7666,22 @@ class D3D9DeviceImpl final : public IDirect3DDevice9Ex, public D3D9PeRecorderFlu
         peRecorderBetweenCallsStartNs_ = peRecorderLastAppendCallExitNs_;
         peRecorderBetweenCallFamilySamples_.fill(0);
         peRecorderBetweenCallNameSamples_.fill(0);
+        peRecorderBetweenCallNameCpuNsTotal_.fill(0);
+        peRecorderBetweenCallNameCpuNsMax_.fill(0);
+        peRecorderBetweenLastCallFamily_ = PeInterAppendCallFamily::Draw;
+        peRecorderBetweenLastCallName_ =
+            PeInterAppendCallName::DrawIndexedPrimitive;
+        peRecorderBetweenLastCallExitNs_ = peRecorderBetweenCallsStartNs_;
+        peRecorderBetweenCallTransitionSamples_.fill(0);
+        peRecorderBetweenCallTransitionNsTotal_.fill(0);
+        peRecorderBetweenCallTransitionNsMax_.fill(0);
+        peRecorderBetweenCallNameTransitionSamples_.fill(0);
+        peRecorderBetweenCallNameTransitionNsTotal_.fill(0);
+        peRecorderBetweenCallNameTransitionNsMax_.fill(0);
+        peRecorderBetweenCallNameTransitionSites_.clear();
+        peRecorderBetweenCallBodyCalls_ = 0;
+        peRecorderBetweenCallBodyCpuNsTotal_ = 0;
+        peRecorderBetweenCallBodyCpuNsMax_ = 0;
     }
 
     void recordPeAppendCpu(std::uint64_t appendCpuNs, bool noFlushAppend) {
@@ -7419,6 +7930,30 @@ class D3D9DeviceImpl final : public IDirect3DDevice9Ex, public D3D9PeRecorderFlu
             topPeInterAppendFocusBetweenCallNames(gapDrawFocus);
         const auto gapPsConstBetweenCallNames =
             topPeInterAppendFocusBetweenCallNames(gapPsConstFocus);
+        const auto gapVsConstBetweenTransitions =
+            topPeInterAppendFocusBetweenCallTransitions(gapVsConstFocus);
+        const auto gapApplyBetweenTransitions =
+            topPeInterAppendFocusBetweenCallTransitions(gapApplyFocus);
+        const auto gapDrawBetweenTransitions =
+            topPeInterAppendFocusBetweenCallTransitions(gapDrawFocus);
+        const auto gapPsConstBetweenTransitions =
+            topPeInterAppendFocusBetweenCallTransitions(gapPsConstFocus);
+        const auto gapVsConstBetweenNameTransitions =
+            topPeInterAppendFocusBetweenCallNameTransitions(gapVsConstFocus);
+        const auto gapApplyBetweenNameTransitions =
+            topPeInterAppendFocusBetweenCallNameTransitions(gapApplyFocus);
+        const auto gapDrawBetweenNameTransitions =
+            topPeInterAppendFocusBetweenCallNameTransitions(gapDrawFocus);
+        const auto gapPsConstBetweenNameTransitions =
+            topPeInterAppendFocusBetweenCallNameTransitions(gapPsConstFocus);
+        const auto gapVsConstBetweenCallSites =
+            topPeInterAppendFocusBetweenCallNameTransitionSites(gapVsConstFocus);
+        const auto gapApplyBetweenCallSites =
+            topPeInterAppendFocusBetweenCallNameTransitionSites(gapApplyFocus);
+        const auto gapDrawBetweenCallSites =
+            topPeInterAppendFocusBetweenCallNameTransitionSites(gapDrawFocus);
+        const auto gapPsConstBetweenCallSites =
+            topPeInterAppendFocusBetweenCallNameTransitionSites(gapPsConstFocus);
         const auto phaseSamples = [this](std::size_t focus) noexcept {
             return peRecorderStats_.chunkInterAppendFocusPhaseSamples[focus];
         };
@@ -7474,6 +8009,23 @@ class D3D9DeviceImpl final : public IDirect3DDevice9Ex, public D3D9PeRecorderFlu
                     .chunkInterAppendFocusBetweenCallsNsMax[focus]) /
                 1000000.0;
         };
+        const auto betweenCallBodyCalls = [this](std::size_t focus) noexcept {
+            return peRecorderStats_
+                .chunkInterAppendFocusBetweenCallBodyCalls[focus];
+        };
+        const auto betweenCallBodyCpuMs = [this](std::size_t focus) noexcept {
+            return static_cast<double>(
+                peRecorderStats_
+                    .chunkInterAppendFocusBetweenCallBodyCpuNsTotal[focus]) /
+                1000000.0;
+        };
+        const auto betweenCallBodyCpuMaxMs =
+            [this](std::size_t focus) noexcept {
+                return static_cast<double>(
+                    peRecorderStats_
+                        .chunkInterAppendFocusBetweenCallBodyCpuNsMax[focus]) /
+                    1000000.0;
+            };
         dxmt9DeviceInfoLog(
             "pe_recorder_stats event=%s device=%p commitCount=%llu "
             "recordCountTotal=%llu recordCountMax=%llu "
@@ -7997,6 +8549,37 @@ class D3D9DeviceImpl final : public IDirect3DDevice9Ex, public D3D9PeRecorderFlu
             insideCallMs(gapPsConstFocus),
             insideCallMaxMs(gapPsConstFocus));
         dxmt9DeviceInfoLog(
+            "pe_recorder_gap_body_stats event=%s device=%p "
+            "gapDrawIndexedVsConstFBetweenCallBodyCalls=%llu "
+            "gapDrawIndexedVsConstFBetweenCallBodyCpuMs=%.3f "
+            "gapDrawIndexedVsConstFBetweenCallBodyCpuMaxMs=%.3f "
+            "gapDrawIndexedApplyStateBetweenCallBodyCalls=%llu "
+            "gapDrawIndexedApplyStateBetweenCallBodyCpuMs=%.3f "
+            "gapDrawIndexedApplyStateBetweenCallBodyCpuMaxMs=%.3f "
+            "gapDrawIndexedDrawIndexedBetweenCallBodyCalls=%llu "
+            "gapDrawIndexedDrawIndexedBetweenCallBodyCpuMs=%.3f "
+            "gapDrawIndexedDrawIndexedBetweenCallBodyCpuMaxMs=%.3f "
+            "gapDrawIndexedPsConstFBetweenCallBodyCalls=%llu "
+            "gapDrawIndexedPsConstFBetweenCallBodyCpuMs=%.3f "
+            "gapDrawIndexedPsConstFBetweenCallBodyCpuMaxMs=%.3f",
+            event ? event : "unknown", this,
+            static_cast<unsigned long long>(
+                betweenCallBodyCalls(gapVsConstFocus)),
+            betweenCallBodyCpuMs(gapVsConstFocus),
+            betweenCallBodyCpuMaxMs(gapVsConstFocus),
+            static_cast<unsigned long long>(
+                betweenCallBodyCalls(gapApplyFocus)),
+            betweenCallBodyCpuMs(gapApplyFocus),
+            betweenCallBodyCpuMaxMs(gapApplyFocus),
+            static_cast<unsigned long long>(
+                betweenCallBodyCalls(gapDrawFocus)),
+            betweenCallBodyCpuMs(gapDrawFocus),
+            betweenCallBodyCpuMaxMs(gapDrawFocus),
+            static_cast<unsigned long long>(
+                betweenCallBodyCalls(gapPsConstFocus)),
+            betweenCallBodyCpuMs(gapPsConstFocus),
+            betweenCallBodyCpuMaxMs(gapPsConstFocus));
+        dxmt9DeviceInfoLog(
             "pe_recorder_gap_tail_stats event=%s device=%p "
             "gapDrawIndexedVsConstFTailSplitSamples=%llu "
             "gapDrawIndexedVsConstFPrevCallTailMs=%.3f "
@@ -8060,20 +8643,36 @@ class D3D9DeviceImpl final : public IDirect3DDevice9Ex, public D3D9PeRecorderFlu
             "gapDrawIndexedPsConstFBetweenTop2Samples=%llu "
             "gapDrawIndexedVsConstFBetweenTop1CallName=%s "
             "gapDrawIndexedVsConstFBetweenTop1CallNameSamples=%llu "
+            "gapDrawIndexedVsConstFBetweenTop1CallNameCpuMs=%.3f "
+            "gapDrawIndexedVsConstFBetweenTop1CallNameCpuMaxMs=%.3f "
             "gapDrawIndexedVsConstFBetweenTop2CallName=%s "
             "gapDrawIndexedVsConstFBetweenTop2CallNameSamples=%llu "
+            "gapDrawIndexedVsConstFBetweenTop2CallNameCpuMs=%.3f "
+            "gapDrawIndexedVsConstFBetweenTop2CallNameCpuMaxMs=%.3f "
             "gapDrawIndexedApplyStateBetweenTop1CallName=%s "
             "gapDrawIndexedApplyStateBetweenTop1CallNameSamples=%llu "
+            "gapDrawIndexedApplyStateBetweenTop1CallNameCpuMs=%.3f "
+            "gapDrawIndexedApplyStateBetweenTop1CallNameCpuMaxMs=%.3f "
             "gapDrawIndexedApplyStateBetweenTop2CallName=%s "
             "gapDrawIndexedApplyStateBetweenTop2CallNameSamples=%llu "
+            "gapDrawIndexedApplyStateBetweenTop2CallNameCpuMs=%.3f "
+            "gapDrawIndexedApplyStateBetweenTop2CallNameCpuMaxMs=%.3f "
             "gapDrawIndexedDrawIndexedBetweenTop1CallName=%s "
             "gapDrawIndexedDrawIndexedBetweenTop1CallNameSamples=%llu "
+            "gapDrawIndexedDrawIndexedBetweenTop1CallNameCpuMs=%.3f "
+            "gapDrawIndexedDrawIndexedBetweenTop1CallNameCpuMaxMs=%.3f "
             "gapDrawIndexedDrawIndexedBetweenTop2CallName=%s "
             "gapDrawIndexedDrawIndexedBetweenTop2CallNameSamples=%llu "
+            "gapDrawIndexedDrawIndexedBetweenTop2CallNameCpuMs=%.3f "
+            "gapDrawIndexedDrawIndexedBetweenTop2CallNameCpuMaxMs=%.3f "
             "gapDrawIndexedPsConstFBetweenTop1CallName=%s "
             "gapDrawIndexedPsConstFBetweenTop1CallNameSamples=%llu "
+            "gapDrawIndexedPsConstFBetweenTop1CallNameCpuMs=%.3f "
+            "gapDrawIndexedPsConstFBetweenTop1CallNameCpuMaxMs=%.3f "
             "gapDrawIndexedPsConstFBetweenTop2CallName=%s "
-            "gapDrawIndexedPsConstFBetweenTop2CallNameSamples=%llu",
+            "gapDrawIndexedPsConstFBetweenTop2CallNameSamples=%llu "
+            "gapDrawIndexedPsConstFBetweenTop2CallNameCpuMs=%.3f "
+            "gapDrawIndexedPsConstFBetweenTop2CallNameCpuMaxMs=%.3f",
             event ? event : "unknown", this,
             peInterAppendCallFamilyName(
                 gapVsConstBetweenFamilies[0].family),
@@ -8105,28 +8704,220 @@ class D3D9DeviceImpl final : public IDirect3DDevice9Ex, public D3D9PeRecorderFlu
                 gapVsConstBetweenCallNames[0].callName),
             static_cast<unsigned long long>(
                 gapVsConstBetweenCallNames[0].samples),
+            static_cast<double>(gapVsConstBetweenCallNames[0].totalNs) /
+                1000000.0,
+            static_cast<double>(gapVsConstBetweenCallNames[0].maxNs) /
+                1000000.0,
             peInterAppendCallNameName(
                 gapVsConstBetweenCallNames[1].callName),
             static_cast<unsigned long long>(
                 gapVsConstBetweenCallNames[1].samples),
+            static_cast<double>(gapVsConstBetweenCallNames[1].totalNs) /
+                1000000.0,
+            static_cast<double>(gapVsConstBetweenCallNames[1].maxNs) /
+                1000000.0,
             peInterAppendCallNameName(gapApplyBetweenCallNames[0].callName),
             static_cast<unsigned long long>(
                 gapApplyBetweenCallNames[0].samples),
+            static_cast<double>(gapApplyBetweenCallNames[0].totalNs) /
+                1000000.0,
+            static_cast<double>(gapApplyBetweenCallNames[0].maxNs) /
+                1000000.0,
             peInterAppendCallNameName(gapApplyBetweenCallNames[1].callName),
             static_cast<unsigned long long>(
                 gapApplyBetweenCallNames[1].samples),
+            static_cast<double>(gapApplyBetweenCallNames[1].totalNs) /
+                1000000.0,
+            static_cast<double>(gapApplyBetweenCallNames[1].maxNs) /
+                1000000.0,
             peInterAppendCallNameName(gapDrawBetweenCallNames[0].callName),
             static_cast<unsigned long long>(
                 gapDrawBetweenCallNames[0].samples),
+            static_cast<double>(gapDrawBetweenCallNames[0].totalNs) /
+                1000000.0,
+            static_cast<double>(gapDrawBetweenCallNames[0].maxNs) /
+                1000000.0,
             peInterAppendCallNameName(gapDrawBetweenCallNames[1].callName),
             static_cast<unsigned long long>(
                 gapDrawBetweenCallNames[1].samples),
+            static_cast<double>(gapDrawBetweenCallNames[1].totalNs) /
+                1000000.0,
+            static_cast<double>(gapDrawBetweenCallNames[1].maxNs) /
+                1000000.0,
             peInterAppendCallNameName(gapPsConstBetweenCallNames[0].callName),
             static_cast<unsigned long long>(
                 gapPsConstBetweenCallNames[0].samples),
+            static_cast<double>(gapPsConstBetweenCallNames[0].totalNs) /
+                1000000.0,
+            static_cast<double>(gapPsConstBetweenCallNames[0].maxNs) /
+                1000000.0,
             peInterAppendCallNameName(gapPsConstBetweenCallNames[1].callName),
             static_cast<unsigned long long>(
-                gapPsConstBetweenCallNames[1].samples));
+                gapPsConstBetweenCallNames[1].samples),
+            static_cast<double>(gapPsConstBetweenCallNames[1].totalNs) /
+                1000000.0,
+            static_cast<double>(gapPsConstBetweenCallNames[1].maxNs) /
+                1000000.0);
+        const auto logTransitionStats =
+            [this, event](const char* prefix, const auto& transitions) {
+                dxmt9DeviceInfoLog(
+                    "pe_recorder_gap_transition_stats event=%s device=%p "
+                    "%sBetweenGapTop1PrevFamily=%s "
+                    "%sBetweenGapTop1NextFamily=%s "
+                    "%sBetweenGapTop1Samples=%llu "
+                    "%sBetweenGapTop1Ms=%.3f "
+                    "%sBetweenGapTop1MaxMs=%.3f "
+                    "%sBetweenGapTop2PrevFamily=%s "
+                    "%sBetweenGapTop2NextFamily=%s "
+                    "%sBetweenGapTop2Samples=%llu "
+                    "%sBetweenGapTop2Ms=%.3f "
+                    "%sBetweenGapTop2MaxMs=%.3f",
+                    event ? event : "unknown", this,
+                    prefix,
+                    peInterAppendCallFamilyName(
+                        transitions[0].prevFamily),
+                    prefix,
+                    peInterAppendCallFamilyName(
+                        transitions[0].nextFamily),
+                    prefix,
+                    static_cast<unsigned long long>(
+                        transitions[0].samples),
+                    prefix,
+                    static_cast<double>(transitions[0].totalNs) / 1000000.0,
+                    prefix,
+                    static_cast<double>(transitions[0].maxNs) / 1000000.0,
+                    prefix,
+                    peInterAppendCallFamilyName(
+                        transitions[1].prevFamily),
+                    prefix,
+                    peInterAppendCallFamilyName(
+                        transitions[1].nextFamily),
+                    prefix,
+                    static_cast<unsigned long long>(
+                        transitions[1].samples),
+                    prefix,
+                    static_cast<double>(transitions[1].totalNs) / 1000000.0,
+                    prefix,
+                    static_cast<double>(transitions[1].maxNs) / 1000000.0);
+            };
+        logTransitionStats("gapDrawIndexedVsConstF",
+                           gapVsConstBetweenTransitions);
+        logTransitionStats("gapDrawIndexedApplyState",
+                           gapApplyBetweenTransitions);
+        logTransitionStats("gapDrawIndexedDrawIndexed",
+                           gapDrawBetweenTransitions);
+        logTransitionStats("gapDrawIndexedPsConstF",
+                           gapPsConstBetweenTransitions);
+        const auto logNameTransitionStats =
+            [this, event](const char* prefix, const auto& transitions) {
+                dxmt9DeviceInfoLog(
+                    "pe_recorder_gap_name_transition_stats event=%s device=%p "
+                    "%sBetweenGapTop1PrevCallName=%s "
+                    "%sBetweenGapTop1NextCallName=%s "
+                    "%sBetweenGapTop1NameSamples=%llu "
+                    "%sBetweenGapTop1NameMs=%.3f "
+                    "%sBetweenGapTop1NameMaxMs=%.3f "
+                    "%sBetweenGapTop2PrevCallName=%s "
+                    "%sBetweenGapTop2NextCallName=%s "
+                    "%sBetweenGapTop2NameSamples=%llu "
+                    "%sBetweenGapTop2NameMs=%.3f "
+                    "%sBetweenGapTop2NameMaxMs=%.3f",
+                    event ? event : "unknown", this,
+                    prefix,
+                    peInterAppendCallNameName(
+                        transitions[0].prevCallName),
+                    prefix,
+                    peInterAppendCallNameName(
+                        transitions[0].nextCallName),
+                    prefix,
+                    static_cast<unsigned long long>(
+                        transitions[0].samples),
+                    prefix,
+                    static_cast<double>(transitions[0].totalNs) / 1000000.0,
+                    prefix,
+                    static_cast<double>(transitions[0].maxNs) / 1000000.0,
+                    prefix,
+                    peInterAppendCallNameName(
+                        transitions[1].prevCallName),
+                    prefix,
+                    peInterAppendCallNameName(
+                        transitions[1].nextCallName),
+                    prefix,
+                    static_cast<unsigned long long>(
+                        transitions[1].samples),
+                    prefix,
+                    static_cast<double>(transitions[1].totalNs) / 1000000.0,
+                    prefix,
+                    static_cast<double>(transitions[1].maxNs) / 1000000.0);
+            };
+        logNameTransitionStats("gapDrawIndexedVsConstF",
+                               gapVsConstBetweenNameTransitions);
+        logNameTransitionStats("gapDrawIndexedApplyState",
+                               gapApplyBetweenNameTransitions);
+        logNameTransitionStats("gapDrawIndexedDrawIndexed",
+                               gapDrawBetweenNameTransitions);
+        logNameTransitionStats("gapDrawIndexedPsConstF",
+                               gapPsConstBetweenNameTransitions);
+        const auto logCallSiteStats =
+            [this, event](const char* prefix, const auto& sites) {
+                const auto callerInfo0 =
+                    dxmt9PeResolveCallerModule(sites[0].callerPc);
+                const auto callerInfo1 =
+                    dxmt9PeResolveCallerModule(sites[1].callerPc);
+                dxmt9DeviceInfoLog(
+                    "pe_recorder_gap_callsite_stats event=%s device=%p "
+                    "%sBetweenGapSiteTop1PrevCallName=%s "
+                    "%sBetweenGapSiteTop1NextCallName=%s "
+                    "%sBetweenGapSiteTop1CallerModule=%s "
+                    "%sBetweenGapSiteTop1CallerRva=0x%llx "
+                    "%sBetweenGapSiteTop1Samples=%llu "
+                    "%sBetweenGapSiteTop1Ms=%.3f "
+                    "%sBetweenGapSiteTop1MaxMs=%.3f "
+                    "%sBetweenGapSiteTop2PrevCallName=%s "
+                    "%sBetweenGapSiteTop2NextCallName=%s "
+                    "%sBetweenGapSiteTop2CallerModule=%s "
+                    "%sBetweenGapSiteTop2CallerRva=0x%llx "
+                    "%sBetweenGapSiteTop2Samples=%llu "
+                    "%sBetweenGapSiteTop2Ms=%.3f "
+                    "%sBetweenGapSiteTop2MaxMs=%.3f",
+                    event ? event : "unknown", this,
+                    prefix,
+                    peInterAppendCallNameName(sites[0].prevCallName),
+                    prefix,
+                    peInterAppendCallNameName(sites[0].nextCallName),
+                    prefix,
+                    dxmt9PeCallerModuleLeaf(callerInfo0),
+                    prefix,
+                    static_cast<unsigned long long>(callerInfo0.rva),
+                    prefix,
+                    static_cast<unsigned long long>(sites[0].samples),
+                    prefix,
+                    static_cast<double>(sites[0].totalNs) / 1000000.0,
+                    prefix,
+                    static_cast<double>(sites[0].maxNs) / 1000000.0,
+                    prefix,
+                    peInterAppendCallNameName(sites[1].prevCallName),
+                    prefix,
+                    peInterAppendCallNameName(sites[1].nextCallName),
+                    prefix,
+                    dxmt9PeCallerModuleLeaf(callerInfo1),
+                    prefix,
+                    static_cast<unsigned long long>(callerInfo1.rva),
+                    prefix,
+                    static_cast<unsigned long long>(sites[1].samples),
+                    prefix,
+                    static_cast<double>(sites[1].totalNs) / 1000000.0,
+                    prefix,
+                    static_cast<double>(sites[1].maxNs) / 1000000.0);
+            };
+        logCallSiteStats("gapDrawIndexedVsConstF",
+                         gapVsConstBetweenCallSites);
+        logCallSiteStats("gapDrawIndexedApplyState",
+                         gapApplyBetweenCallSites);
+        logCallSiteStats("gapDrawIndexedDrawIndexed",
+                         gapDrawBetweenCallSites);
+        logCallSiteStats("gapDrawIndexedPsConstF",
+                         gapPsConstBetweenCallSites);
     }
 
     void recordDrawPrimitiveUPCopy(std::uint32_t vertexBytes) {
@@ -10647,7 +11438,7 @@ public:
 
     /* ── viewport / scissor ── */
     HRESULT STDMETHODCALLTYPE SetViewport(const D3DVIEWPORT9* pVP) noexcept override {
-        notePeDeviceCallAfterPresent("SetViewport");
+        notePeDeviceCallAfterPresent("SetViewport", DXMT9_PE_CALLSITE_PC());
         PeHotStateSetterTimer hotSetter(
             *this, PeHotStateSetterFamily::ViewportScissor);
         if (!pVP) return D3DERR_INVALIDCALL;
@@ -10668,8 +11459,13 @@ public:
         return S_OK;
     }
     HRESULT STDMETHODCALLTYPE GetViewport(D3DVIEWPORT9* pVP) noexcept override {
-        notePeDeviceCallAfterPresent("GetViewport");
-        if (!pVP) return D3DERR_INVALIDCALL;
+        const auto peCall = notePeDeviceCallAfterPresent(
+            "GetViewport", DXMT9_PE_CALLSITE_PC());
+        const auto finishPeCall = [&](HRESULT hr) noexcept {
+            logPeCallReturnAfterPresent(peCall, "GetViewport", hr);
+            return hr;
+        };
+        if (!pVP) return finishPeCall(D3DERR_INVALIDCALL);
         // Phase 12: PE shadow is the source of truth. SetViewport writes
         // only into peState_.viewportShadow (recorder-active path);
         // round-trip the same value.
@@ -10679,10 +11475,10 @@ public:
         pVP->MinZ = vp.minZ;   pVP->MaxZ   = vp.maxZ;
         dxmt9DeviceDebugLog("device_get_viewport device=%p -> x=%u y=%u w=%u h=%u minZ=%f maxZ=%f",
                             this, pVP->X, pVP->Y, pVP->Width, pVP->Height, pVP->MinZ, pVP->MaxZ);
-        return S_OK;
+        return finishPeCall(S_OK);
     }
     HRESULT STDMETHODCALLTYPE SetScissorRect(const RECT* pR) noexcept override {
-        notePeDeviceCallAfterPresent("SetScissorRect");
+        notePeDeviceCallAfterPresent("SetScissorRect", DXMT9_PE_CALLSITE_PC());
         PeHotStateSetterTimer hotSetter(
             *this, PeHotStateSetterFamily::ViewportScissor);
         if (!pR) return D3DERR_INVALIDCALL;
@@ -10699,13 +11495,18 @@ public:
         return S_OK;
     }
     HRESULT STDMETHODCALLTYPE GetScissorRect(RECT* pR) noexcept override {
-        notePeDeviceCallAfterPresent("GetScissorRect");
-        if (!pR) return D3DERR_INVALIDCALL;
+        const auto peCall = notePeDeviceCallAfterPresent(
+            "GetScissorRect", DXMT9_PE_CALLSITE_PC());
+        const auto finishPeCall = [&](HRESULT hr) noexcept {
+            logPeCallReturnAfterPresent(peCall, "GetScissorRect", hr);
+            return hr;
+        };
+        if (!pR) return finishPeCall(D3DERR_INVALIDCALL);
         // Phase 12: PE shadow is the source of truth (see GetViewport).
         const D9CRect& cr = peState_.scissorShadow;
         pR->left = cr.left; pR->top = cr.top;
         pR->right = cr.right; pR->bottom = cr.bottom;
-        return S_OK;
+        return finishPeCall(S_OK);
     }
 
     /* ── material / lights ── */
@@ -11657,7 +12458,8 @@ public:
     HRESULT STDMETHODCALLTYPE SetVertexShaderConstantF(UINT start, const float* pData,
                                                         UINT count) noexcept override {
         const auto peCall =
-            notePeDeviceCallAfterPresent("SetVertexShaderConstantF");
+            notePeDeviceCallAfterPresent(
+                "SetVertexShaderConstantF", DXMT9_PE_CALLSITE_PC());
         const std::int64_t callEntryNs = dxmt9PeRecorderStatsEnabled()
             ? dxmt9SteadyClockNs(std::chrono::steady_clock::now())
             : 0;
@@ -11889,7 +12691,8 @@ public:
     HRESULT STDMETHODCALLTYPE SetPixelShaderConstantF(UINT start, const float* pData,
                                                        UINT count) noexcept override {
         const auto peCall =
-            notePeDeviceCallAfterPresent("SetPixelShaderConstantF");
+            notePeDeviceCallAfterPresent(
+                "SetPixelShaderConstantF", DXMT9_PE_CALLSITE_PC());
         const std::int64_t callEntryNs = dxmt9PeRecorderStatsEnabled()
             ? dxmt9SteadyClockNs(std::chrono::steady_clock::now())
             : 0;
@@ -12007,7 +12810,8 @@ public:
                                                     UINT minVertex, UINT numVertices,
                                                     UINT startIndex,
                                                     UINT count) noexcept override {
-        notePeDeviceCallAfterPresent("DrawIndexedPrimitive");
+        notePeDeviceCallAfterPresent(
+            "DrawIndexedPrimitive", DXMT9_PE_CALLSITE_PC());
         // T2 device-lost gate.
         if (deviceNotReset_) return D3DERR_DEVICELOST;
         dxmt9DeviceDebugLog("device_draw_indexed_primitive device=%p type=%u base=%d min=%u num=%u startIndex=%u count=%u",

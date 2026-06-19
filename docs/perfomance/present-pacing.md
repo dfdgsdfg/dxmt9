@@ -134,6 +134,18 @@ GPU frame-time story is owned by [[hidden-backend-storage]] /
 | H112 | Normal Present-published prefixes also end at draw-run tails | accepted carrier blocker | [[present-pacing-present-prefix-tail-shape.112]] adds tail-kind counters for the command immediately before the first Present in every Present-published slot. The current default `h187` no-gputrace run has one prefix opportunity per present and almost all prefixes end at draw work: `tail_draw_run=1,553 / 1,560` (`99.55%`), `tail_clear=7` (`0.45%`), and `draw_only_pre_present_opportunity_share=0.00%`. The prefix is still large (`323.680` commands, `319.889` draw runs, `728.447` draw items, `291.153MiB` payload), but it is not a pass-safe boundary by itself. A useful P4 carrier must carry active render-pass state across staged sources, stream into one open encoder/CB, or reduce replay/producer cadence directly. |
 | H113 | Current PE cadence after the prefix-tail gate still names inter-replay producer gap | accepted current attribution | [[present-pacing-current-pe-cadence.113]] reruns `DXMT9_PE_RECORDER_STATS=1` after H111/H112. The current no-gputrace path remains fully no-enqueue (`completion_wait_with_enqueue=0`) and `commit entry -> publish` is dominated by inter-replay producer gap: `23.869ms/present`, `82.917%` of the publish window. Completed replay is secondary (`5.039ms/present`), active replay and publish wait are effectively zero, and top PE inter-append pairs are unchanged: `draw_indexed -> set_vs_const_f=19.098ms/present`, `draw_indexed -> apply_state=6.894`, `draw_indexed -> draw_indexed=5.396`, `draw_indexed -> set_ps_const_f=3.689`. This keeps the next FPS-facing work on draw/const record cadence that moves P4, or a true open render-pass/encoder carrier; it rejects setter-body, queue-publish-wait, and another threshold-search as primary next levers. |
 | H114 | Flushing the PE recorder after every draw does not create useful overlap | rejected diagnostic | [[present-pacing-pe-draw-flush.114]] adds default-off `DXMT9_PE_FLUSH_AFTER_DRAW=1` and runs a foreground no-gputrace A/B. The knob explodes PE/unix crossings (`completion_wait_commit_chunk_entries_per_present 4.284 -> 73.489`, no-enqueue before-publish entries `19.716 -> 643.422`) but queue publish remains Present-only (`chunk_publish_reason_flush=0`), ready depth stays `1.000`, and `completion_wait_with_enqueue` stays `0`. The candidate has lower progress (`present_encoded 1,140 -> 816`) and worsens replay/snapshot/encode plus no-enqueue closure (`commit_chunk_replay 10.231 -> 17.323ms/present`, `encode_chunk 13.517 -> 16.426`, `commit entry -> publish 46.674 -> 83.348`). Keep the knob diagnostic-only; the next P4 work still needs a render-pass-safe carrier or real producer/replay cadence reduction, gated by the `v0.0.3` visual-safe anchor. |
+| H115 | H108/H185 chunk-final closes immediately reopen the same RT/depth key | accepted carrier blocker | [[present-pacing-open-cb-final-reopen.115]] reanalyzes existing encoder sidecar CSVs. In H108, `3,285 / 3,469` final rows (`94.696%`) are followed immediately by the same `rt`/`depth` key; H185 repeats the shape with `3,252 / 3,449` (`94.288%`). The same-key rows account for about `1.95` forced reopens per present and roughly `13MiB/present` each of color load, depth load, final color store, and final depth store. The new gate `--require-encoder-final-same-key-reopen-not-increase` rejects H108 (`0.000 -> 1.955`). This confirms the current open-CB path cuts through a continuing render pass; future overlap work must carry active render-pass state, prove pass-safe split boundaries, or return to producer/replay cadence reduction before another `.gputrace` spend. |
+| H116 | Same-key open-CB reopens are not exact-hazard splits; render-pass carry is a session-level design | accepted design blocker | [[present-pacing-open-cb-render-state-carry-audit.116]] audits H108/H185 sidecars and current source. Same-key next rows have `0` active RT alias rows and `0` shader-read-view rows in both runs; runtime counters also show `render_split_hazard=0` and `hazard_exact=0`, while only the open-CB path creates `render_split_final≈3.4k`. Source audit shows H108 carries only the `WMT::CommandBuffer` through `EncodeChunkOptions`; `activeRenderEncoder`, attachment key, dirty state, argbuf/shadow state, sidecars, samples, and callbacks are `encodeChunk()` locals and the final path always calls `flushRender(Final)`. The next overlap carrier needs an `EncodeSession`/render-pass carry contract, a logical merged command tape, or a return to producer/replay cadence reduction. Another boolean or threshold sweep is not the right unit of work. |
+| H117 | Wrapper-forwarded PE recorder stats confirm the current cadence owner | accepted current attribution | [[present-pacing-current-pe-cadence-wrapper.117]] fixes the perf-probe wrapper's PE-recorder env forwarding and reruns a 120s foreground no-gputrace scout with `--pe-recorder-stats`. H204 is rejected as PE-recorder evidence because the env never reached the child. The valid h205 run records `present_encoded=1,483`, `completion_wait=27.124ms/present`, `completion_wait_with_enqueue=0`, `wait -> next enqueue=46.696ms/present`, `commit entry -> publish=28.519ms/present`, completed replay `4.949ms/present`, inter-replay producer gap `23.701ms/present`, and encode-dequeue -> Metal commit `12.868ms/present`. The first post-wait publish slot is still draw-heavy (`324.577` commands/slot, `319.696` draw-run commands/slot, `728.928` draw items/slot), and PE top pairs remain draw/const/state cadence: `draw_indexed -> set_vs_const_f=18.574ms/present`, `draw_indexed -> apply_state=6.783`, `draw_indexed -> draw_indexed=5.223`, `draw_indexed -> set_ps_const_f=3.587`. This refresh keeps the next FPS work on producer/record cadence, replay/snapshot/encode reductions that move P4 rows, or a true render-pass/encoder carry design. |
+| H118 | Exact between-call entries now carry body CPU time | accepted instrumentation | [[present-pacing-pe-between-call-body-time.118]] extends `DXMT9_PE_RECORDER_STATS=1` so focused between-calls exact call-name buckets report body CPU total/max in addition to entry counts. This closes the H117 ambiguity where `IndexBuffer::GetDesc`, `Surface::GetDesc`, or repeated constant setters could be high-frequency cadence markers rather than actual PE body CPU owners. The next PE-recorder scout should read CPU ms/present alongside entries/present before choosing a local PE fix or returning to producer/overlap design. |
+| H119 | Current exact body-time scout keeps desc getters demoted | accepted current attribution | [[present-pacing-pe-between-call-body-current.119]] runs h206 with the H118 counters. The path remains fully no-enqueue (`completion_wait=28.089ms/present`, `completion_wait_with_enqueue=0`) with replay `8.032ms/present` and encode `10.975ms/present`. Exact body-time rows show `IndexBuffer::GetDesc` is frequent but small (`911.775` entries/present, `0.213ms/present` in `draw_indexed -> set_vs_const_f`; `378.399`, `0.085` in `draw_indexed -> draw_indexed`), while `Surface::GetDesc` is negligible (`0.001ms/present`). `SetVertexShaderConstantF` is the largest exact body row (`2.057ms/present`) but remains a local subset, not the whole P4 owner. |
+| H120 | PE constant shadow already has the safe no-op dirty guard; sparse flush remains diagnostic | accepted current attribution | [[present-pacing-pe-const-flush-source-audit.120]] audits the h206 follow-up source path. `touchConstShadow()` already compares each element and marks only changed registers dirty, so unchanged setter calls do not emit const records. `flushConstShadow()` emits the historical merged dirty span by default or exact dirty runs under `DXMT9_SPLIT_SPARSE_CONST_RECORDS=1`; H151/H160 already proved that sparse splitting fixes width attribution but does not move FPS/P4. Do not add another default const-setter shortcut now. Constant traffic remains a bounded local candidate only if a future patch moves no-enqueue/P4 or serial replay/encode rows and passes the `v0.0.3` visual-safe gate. |
+| H121 | Aggregate PE call bodies explain only a small share of focused between-calls wall time | accepted current attribution | [[present-pacing-pe-between-call-body-coverage.121]] fixes aggregate body emission by splitting `pe_recorder_gap_body_stats` out of the truncated main PE-recorder line, then runs `pe-body-current-r2`. All intermediate PE call bodies cover only `17.73%` of `draw_indexed -> set_vs_const_f`, `0.96%` of `draw_indexed -> apply_state`, `10.86%` of `draw_indexed -> draw_indexed`, and `17.52%` of `draw_indexed -> set_ps_const_f`; residual shares remain `82.27%`, `99.04%`, `89.14%`, and `82.48%`. Direct PE setter/getter body microfixes are not the next average-FPS lever. The next candidate must reduce residual record cadence, create locality-preserving overlap, or move serial replay/encode enough that P4/frame rows also improve. |
+| H122 | Current PE-body residual repeats with real encoder sidecars; default has no final same-key reopen | accepted current attribution | [[present-pacing-pe-body-sidecar-current.122]] reruns current GT1 with PE recorder stats plus all-frame encoder breakdown. The run emits `16,546` encoder rows and repeats H121's body coverage (`0.97%-17.64%`) while preserving the no-enqueue P4 shape (`completion_wait_with_enqueue=0`, no-enqueue wait `26.462ms/present`). The sidecar shows default pass pressure (`11.990` encoders/present, RT-change `8.031`, clear `2.938`, present `1.020`, color/depth loads `6.316/14.872MiB/present`, same-key re-entry `3,085`), but `encoder_sidecar_final_end_reason_per_present=0` and `encoder_sidecar_final_same_key_reopen_per_present=0`. This distinguishes normal default re-entry pressure from the rejected H108/H185 chunk-final reopen bug. |
+| H123 | PE return-to-entry transition timing names one sharp local residual, not a broad PE body owner | accepted current attribution | [[present-pacing-pe-between-call-transition-current.123]] adds family-level return-to-next-entry transition timing and reruns current GT1 with PE recorder stats. The run stays fully no-enqueue (`completion_wait_without_enqueue=27.573ms/present`, `completion_wait_with_enqueue=0`) and repeats the body-residual shape: body coverage is only `0.98%-15.96%`. The new signal is narrow: `draw -> viewport_scissor` explains `3.019ms/present` and `43.34%` of `draw_indexed -> apply_state` between-calls, but VS/PS const and draw-to-draw windows have small top transition shares and large distributed/untracked residuals. Treat `draw -> viewport_scissor` as the next exact-name/return-hook probe, keep direct PE body cleanup demoted, and require P4/locality plus the `v0.0.3` visual-safe gate before mutation promotion. |
+| H124 | H123's viewport/scissor transition is `DrawIndexedPrimitive -> GetViewport`, an app/producer gap marker | accepted current attribution | [[present-pacing-pe-between-call-exact-transition-current.124]] adds exact call-name transition counters, maps `GetViewport`/`GetScissorRect`, and reruns current GT1. The P4 shape is unchanged (`completion_wait_without_enqueue=27.340ms/present`, `completion_wait_with_enqueue=0`). The dominant H123 row resolves to `DrawIndexedPrimitive -> GetViewport`: `2.931ms/present`, `43.07%` of `draw_indexed -> apply_state` between-calls. Because the interval is measured from draw return to the next `GetViewport` entry, it is outside the getter body. Do not optimize `GetViewport` as the average-FPS fix; use the row as an app/producer cadence marker, or add call-site/RVA attribution if needed. |
+| H125 | H124's `GetViewport` marker resolves to a stable 3DMark05 app callsite | accepted current attribution | [[present-pacing-pe-between-call-callsite-current.125]] adds caller-PC aggregation for exact return-to-entry transitions and reruns the 120s foreground no-gputrace scout. The P4 shape remains unchanged (`completion_wait_without_enqueue=27.725ms/present`, `completion_wait_with_enqueue=0`). The dominant `draw_indexed -> apply_state` marker is `DrawIndexedPrimitive -> GetViewport` from `3DMark05.exe+0x2afeb`, at `2.904ms/present` and `43.03%` of that between-calls window; rank2 is `DrawIndexedPrimitive -> CubeTexture::GetCubeMapSurface` from `3DMark05.exe+0xd37b3` at `0.624ms/present`. This closes the local attribution as app/producer re-entry cadence, not dxmt9 getter body CPU. Next work stays on record-cadence/P4 overlap or serial replay/encode reduction, gated by `v0.0.3` visual safety. |
+| H126 | H125's caller RVAs are app D3D wrapper return sites | accepted current attribution | [[present-pacing-pe-callsite-disassembly.126]] disassembles the catalogue `3DMark05.exe`. `3DMark05.exe+0x2afeb` maps to `0x42afeb`, immediately after `call *0xc0(%ecx)` (`IDirect3DDevice9::GetViewport`, vtable index 48); `0x2b061` is the matching `Clear` wrapper return, and `0x155f41` / `0x155c44` are VS/PS constant setter wrapper returns. The older `0x88760` frame is also app command-dispatch sequencing (`call *0x18(%eax)` then another object method), not a hidden dxmt9 wait. Do not optimize dxmt9 getter bodies or spend `.gputrace` from this evidence; the next FPS work remains record-cadence/P4 overlap or serial replay/encode reduction, gated by `v0.0.3` visual safety. |
 
 ## Verification methods
 
@@ -185,9 +197,13 @@ GPU frame-time story is owned by [[hidden-backend-storage]] /
   `completion_wait_with_enqueue_ms` only by splitting Metal command buffers,
   render passes, or tile-preservation traffic. Open-CB/pass-carrier candidates
   must additionally use `--require-encoder-final-end-reason-not-increase`,
+  `--require-encoder-final-same-key-reopen-not-increase`,
   `--require-encoder-color-load-not-increase`, and
   `--require-encoder-depth-load-not-increase` so chunk-final render-pass
-  closures and attachment reload amplification fail in no-gputrace comparison.
+  closures, immediate same-key reopens, and attachment reload amplification
+  fail in no-gputrace comparison. These gates require encoder-sidecar evidence
+  on both sides of the comparison; a baseline without sidecar rows is an
+  evidence gap, not a zero-reopen baseline.
 - **Encode ready-depth gate**:
   `encode_dequeue_ready_depth_*` counters measure how many ready slots existed
   immediately before the encode thread popped one. `compare_3dmark05_perf_counters.py`
@@ -280,8 +296,13 @@ GPU frame-time story is owned by [[hidden-backend-storage]] /
   publication after `waitUntilCompleted()` returns. Confirm application through
   `completion_signal_delay` and `completion_signal_delay_ms`, then compare PE
   cadence and `completion_no_enqueue_wait_to_next_enqueue_*` against a baseline.
-- **PE cadence telemetry**: with `DXMT9_PE_RECORDER_STATS=1` and
-  `DXMT_LOG_LEVEL=info`, `pe_present_timing` measures PE `Present()` itself,
+- **PE cadence telemetry**: when launching through
+  `scripts/tools/run_3dmark05_perf_probe.sh`, prefer `--pe-recorder-stats`
+  so the wrapper forwards `DXMT9_PE_RECORDER_STATS=1` and
+  `DXMT_LOG_LEVEL=info` to the child process. Direct env prefixes are now also
+  forwarded, but the explicit wrapper option makes dry-run review and future
+  logs unambiguous. With these envs, `pe_present_timing` measures PE
+  `Present()` itself,
   `pe_present_next_call` measures the first PE D3D9 call after `Present`
   returns, `pe_present_call_milestone` samples the first calls in that
   post-Present sequence, `pe_present_call_return` measures selected call
@@ -332,8 +353,16 @@ GPU frame-time story is owned by [[hidden-backend-storage]] /
   keep exact buckets for hot device/child calls such as
   `SetVertexShaderConstantF`, `IndexBuffer::GetDesc`, and
   `Surface::GetDesc`.
-  Use these with H60 before blaming queue publish or Metal completion for
-  inter-replay gaps.
+  `compare_3dmark05_perf_counters.py` promotes the same
+  `dxmt9_pe_recorder_counters` payload into `pe_recorder_*` derived rows and a
+  top inter-append pair section, including aggregate
+  `pe_recorder_focused_between_call_gap_residual_ms_per_present` from
+  `BetweenCallsMs - BetweenCallBodyCpuMs` across the focused draw/const/state
+  pairs. Use
+  `--require-pe-focused-between-call-gap-residual-decrease` when a candidate
+  claims to fix producer/record cadence; it fails when PE recorder evidence is
+  absent or only direct PE call-body CPU moves. Use these with H60 before
+  blaming queue publish or Metal completion for inter-replay gaps.
 - **winemac OnMainThread threshold telemetry**: not yet implemented in dxmt9.
   The next P4 probe should instrument Wine's `OnMainThread()` and candidate
   wrappers (`ClipCursor`, cursor get/set, window-frame, metal-layer getter) with
@@ -1327,6 +1356,72 @@ flowchart TD
   draw-side deferred VS/PS const flush and barrier-family pending-state
   materialization dominate, while APPLY_STATE packet build is only
   `0.010ms/present`. [[present-pacing-current-pe-cadence.90]]
+- H118 adds the missing body-time discriminator for focused exact call names.
+  Future PE-recorder reviews should not promote high `IndexBuffer::GetDesc`,
+  `Surface::GetDesc`, or constant-setter entry counts by themselves. Treat them
+  as local CPU candidates only when their exact-name CPU ms/present rows are
+  also material; otherwise they remain producer-cadence markers and the owner
+  stays on record-cadence reduction or a locality-preserving overlap carrier.
+  [[present-pacing-pe-between-call-body-time.118]]
+- H119 applies that discriminator to current HEAD. `IndexBuffer::GetDesc` and
+  `Surface::GetDesc` stay too small to be FPS levers after the PE desc cache,
+  while `SetVertexShaderConstantF` body time is measurable but still only
+  `2.057ms/present` under a `28.089ms/present` no-enqueue wait and
+  `10.975ms/present` encode row. Desc getter work should stay demoted; const
+  traffic cleanup must prove P4/serial-stage movement before promotion.
+  [[present-pacing-pe-between-call-body-current.119]]
+- H120 closes the obvious const-setter shortcut branch. PE constant shadows
+  already skip dirty marks for unchanged element bytes, and the sparse dirty-run
+  flush path is already an opt-in diagnostic that H151/H160 rejected as a
+  current FPS lever. Future const work needs a new record-cadence or backend
+  storage proof, not another no-op setter guard.
+  [[present-pacing-pe-const-flush-source-audit.120]]
+- H121 fixes aggregate body emission and adds the missing coverage ratio: all
+  intermediate PE call bodies cover only `0.96%-17.73%` of the focused
+  between-calls windows in `pe-body-current-r2`. The residual is therefore not
+  a direct setter/getter body bucket. Treat the next CPU-facing work as
+  residual record cadence, broader producer/app/Wine cadence, or a
+  locality-preserving overlap carrier.
+  [[present-pacing-pe-between-call-body-coverage.121]]
+- H122 repeats the same PE-body residual with real all-frame encoder sidecars.
+  The sidecar run is not a low-overhead FPS baseline because encode CPU rises
+  under instrumentation, but it gives the default pass locality floor:
+  `encoder_sidecar_final_same_key_reopen_per_present=0`,
+  `encoder_sidecar_color_load_mib_per_present=6.316`, and
+  `encoder_sidecar_depth_load_mib_per_present=14.872`. Future P4 carriers must
+  not increase final-reopen, CB/pass, tile-preservation, or load/store rows
+  while trying to create completion overlap.
+  [[present-pacing-pe-body-sidecar-current.122]]
+- H123 adds return-to-entry transition timing over the same PE residual. The
+  useful local row is `draw -> viewport_scissor` inside
+  `draw_indexed -> apply_state` (`3.019ms/present`, `43.34%` of that
+  between-calls window). VS/PS const and draw-to-draw windows remain mostly
+  distributed or untracked, so direct PE body cleanup stays demoted. The next
+  local probe should split exact transition names or add targeted return hooks;
+  any mutating candidate is gated by P4/locality movement and the `v0.0.3`
+  visual-safe anchor.
+  [[present-pacing-pe-between-call-transition-current.123]]
+- H124 resolves that viewport/scissor family row to exact call names:
+  `DrawIndexedPrimitive -> GetViewport` is `2.931ms/present` and `43.07%` of
+  the `draw_indexed -> apply_state` between-calls window. This is measured
+  between the previous draw return and the next `GetViewport` entry, so it is
+  an app/producer-side re-entry marker rather than `GetViewport` body CPU.
+  Keep getter-body microfixes demoted; the remaining FPS work is record
+  cadence, broader producer attribution, or a locality-preserving overlap path.
+  [[present-pacing-pe-between-call-exact-transition-current.124]]
+- H125 resolves that exact marker to a stable caller PC:
+  `DrawIndexedPrimitive -> GetViewport` comes from `3DMark05.exe+0x2afeb`,
+  still at `2.904ms/present` and `43.03%` of the apply-state between-calls
+  window. Rank2 is `DrawIndexedPrimitive -> CubeTexture::GetCubeMapSurface`
+  from `3DMark05.exe+0xd37b3`. This closes the local dxmt9 getter branch; use
+  the RVA only for app/disassembly correlation, not as a PE-body optimization
+  target. [[present-pacing-pe-between-call-callsite-current.125]]
+- H126 performs that app/disassembly correlation. The dominant caller RVA
+  `0x2afeb` is the return site immediately after a D3D device vtable call at
+  offset `0xc0` (`GetViewport`), and the companion RVAs are the same wrapper
+  family (`Clear`, VS constants, PS constants, cube surface getter). This turns
+  the sharp H123-H125 row into an app command-cadence marker rather than a
+  dxmt9 mutation target. [[present-pacing-pe-callsite-disassembly.126]]
 - A/B reviews should now use the compare report's
   `no_enqueue_before_publish_*` rows before promoting any local CPU cleanup. A
   candidate that lowers replay, snapshot, or encode but leaves

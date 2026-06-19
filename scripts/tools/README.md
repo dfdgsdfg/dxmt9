@@ -77,10 +77,18 @@ build. `shader_corpus_tool.py` is also imported by the Meson tests under
   create enqueue overlap only by fragmenting Metal command buffers, render
   passes, or tile-preservation traffic. Open-CB/pass-carrier candidates must
   also use `--require-encoder-final-end-reason-not-increase`,
+  `--require-encoder-final-same-key-reopen-not-increase`,
   `--require-encoder-color-load-not-increase`, and
   `--require-encoder-depth-load-not-increase` so chunk-final render-pass
-  closures and attachment reload amplification fail before any `.gputrace`
-  spend.
+  closures, immediate same-key reopens, and attachment reload amplification fail
+  before any `.gputrace` spend. These encoder-sidecar gates are evidence
+  strict: both the baseline and candidate must include encoder sidecar rows, or
+  the comparison fails as `n/a -> value` instead of silently treating missing
+  baseline evidence as zero. Producer/record-cadence candidates that rely on
+  `--pe-recorder-stats` should also use
+  `--require-pe-focused-between-call-gap-residual-decrease` to prove the
+  focused draw/const/state residual cadence moved, not only direct PE call-body
+  CPU.
 - `summarize_xctrace_metal_intervals.py` — parse xctrace
   `metal-gpu-intervals` XML and join dxmt9 encoder attribution by
   `RenderPass[seq=...,enc=...]`. Use it as a timing/label sidecar for 3DMark05

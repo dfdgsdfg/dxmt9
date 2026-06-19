@@ -119,6 +119,14 @@ FOCUS_COUNTERS = (
     "d3d9_snapshot_cache_batch_miss_uniform_payload_reuse_full",
     "d3d9_snapshot_cache_batch_miss_uniform_payload_reuse_nonconst",
     "d3d9_snapshot_cache_batch_miss_uniform_payload_full_build",
+    "d3d9_snapshot_cache_batch_miss_uniform_vs_const_hash_memo_probe",
+    "d3d9_snapshot_cache_batch_miss_uniform_vs_const_hash_memo_hits",
+    "d3d9_snapshot_cache_batch_miss_uniform_vs_const_hash_memo_misses",
+    "d3d9_snapshot_cache_batch_miss_uniform_vs_const_hash_memo_stores",
+    "d3d9_snapshot_cache_batch_miss_uniform_ps_const_hash_memo_probe",
+    "d3d9_snapshot_cache_batch_miss_uniform_ps_const_hash_memo_hits",
+    "d3d9_snapshot_cache_batch_miss_uniform_ps_const_hash_memo_misses",
+    "d3d9_snapshot_cache_batch_miss_uniform_ps_const_hash_memo_stores",
     "d3d9_snapshot_uniform_copy_cpu_ms",
     "submit_draw_run_batch_append_uniform_cpu_ms",
     "draw_uniform_payload_lookup_cpu_ms",
@@ -328,6 +336,131 @@ FOCUS_COUNTERS = (
     "queue_sequence_wait_ms",
 )
 
+PE_RECORDER_COUNTER_MAP = (
+    ("commitCount", "pe_recorder_commit_count"),
+    ("recordCountTotal", "pe_recorder_record_count_total"),
+    ("recordCountMax", "pe_recorder_record_count_max"),
+    ("payloadBytesTotal", "pe_recorder_payload_bytes_total"),
+    ("payloadBytesMax", "pe_recorder_payload_bytes_max"),
+    ("handleCountTotal", "pe_recorder_handle_count_total"),
+    ("handleCountMax", "pe_recorder_handle_count_max"),
+    ("chunkFillGapSamples", "pe_recorder_chunk_fill_gap_samples"),
+    ("chunkFillGapMs", "pe_recorder_chunk_fill_gap_ms"),
+    ("chunkFillGapMaxMs", "pe_recorder_chunk_fill_gap_max_ms"),
+    ("chunkFirstRecordGapSamples", "pe_recorder_chunk_first_record_gap_samples"),
+    ("chunkFirstRecordGapMs", "pe_recorder_chunk_first_record_gap_ms"),
+    ("chunkFirstRecordGapMaxMs", "pe_recorder_chunk_first_record_gap_max_ms"),
+    ("chunkActiveFillSamples", "pe_recorder_chunk_active_fill_samples"),
+    ("chunkActiveFillMs", "pe_recorder_chunk_active_fill_ms"),
+    ("chunkActiveFillMaxMs", "pe_recorder_chunk_active_fill_max_ms"),
+    ("chunkInterAppendGapSamples", "pe_recorder_chunk_inter_append_gap_samples"),
+    ("chunkInterAppendGapMs", "pe_recorder_chunk_inter_append_gap_ms"),
+    ("chunkInterAppendGapMaxMs", "pe_recorder_chunk_inter_append_gap_max_ms"),
+    ("chunkBridgeSamples", "pe_recorder_chunk_bridge_samples"),
+    ("chunkBridgeMs", "pe_recorder_chunk_bridge_ms"),
+    ("chunkBridgeMaxMs", "pe_recorder_chunk_bridge_max_ms"),
+    ("recordAppendCalls", "pe_recorder_record_append_calls"),
+    ("recordAppendCpuMs", "pe_recorder_record_append_cpu_ms"),
+    ("recordAppendCpuMaxMs", "pe_recorder_record_append_cpu_max_ms"),
+    ("recordAppendNoFlushCalls", "pe_recorder_record_append_no_flush_calls"),
+    ("recordAppendNoFlushCpuMs", "pe_recorder_record_append_no_flush_cpu_ms"),
+    ("recordAppendNoFlushCpuMaxMs", "pe_recorder_record_append_no_flush_cpu_max_ms"),
+    ("vsConstFSetterCalls", "pe_recorder_vs_const_f_setter_calls"),
+    ("vsConstFSetterRegs", "pe_recorder_vs_const_f_setter_regs"),
+    ("vsConstFSetterCpuMs", "pe_recorder_vs_const_f_setter_cpu_ms"),
+    ("vsConstFSetterCpuMaxMs", "pe_recorder_vs_const_f_setter_cpu_max_ms"),
+    ("psConstFSetterCalls", "pe_recorder_ps_const_f_setter_calls"),
+    ("psConstFSetterRegs", "pe_recorder_ps_const_f_setter_regs"),
+    ("psConstFSetterCpuMs", "pe_recorder_ps_const_f_setter_cpu_ms"),
+    ("psConstFSetterCpuMaxMs", "pe_recorder_ps_const_f_setter_cpu_max_ms"),
+    ("constFlushCalls", "pe_recorder_const_flush_calls"),
+    ("constFlushRecords", "pe_recorder_const_flush_records"),
+    ("constFlushRegs", "pe_recorder_const_flush_regs"),
+    ("constFlushCpuMs", "pe_recorder_const_flush_cpu_ms"),
+    ("constFlushCpuMaxMs", "pe_recorder_const_flush_cpu_max_ms"),
+    ("vsConstFFlushRecords", "pe_recorder_vs_const_f_flush_records"),
+    ("vsConstFFlushRegs", "pe_recorder_vs_const_f_flush_regs"),
+    ("vsConstFFlushCpuMs", "pe_recorder_vs_const_f_flush_cpu_ms"),
+    ("psConstFFlushRecords", "pe_recorder_ps_const_f_flush_records"),
+    ("psConstFFlushRegs", "pe_recorder_ps_const_f_flush_regs"),
+    ("psConstFFlushCpuMs", "pe_recorder_ps_const_f_flush_cpu_ms"),
+    ("chunkBarrierFlushCalls", "pe_recorder_chunk_barrier_flush_calls"),
+    ("chunkBarrierConstCpuMs", "pe_recorder_chunk_barrier_const_cpu_ms"),
+    ("chunkBarrierConstCpuMaxMs", "pe_recorder_chunk_barrier_const_cpu_max_ms"),
+    ("applyStateBuildCalls", "pe_recorder_apply_state_build_calls"),
+    ("applyStateBuildCpuMs", "pe_recorder_apply_state_build_cpu_ms"),
+    ("applyStateBuildCpuMaxMs", "pe_recorder_apply_state_build_cpu_max_ms"),
+)
+
+PE_RECORDER_HOT_SETTERS = (
+    ("Rt", "rt"),
+    ("Ds", "ds"),
+    ("ViewportScissor", "viewport_scissor"),
+    ("Transform", "transform"),
+    ("MaterialLightClip", "material_light_clip"),
+    ("RenderState", "render_state"),
+    ("TssSampler", "tss_sampler"),
+    ("Texture", "texture"),
+    ("VertexInput", "vertex_input"),
+    ("Shader", "shader"),
+)
+
+PE_RECORDER_FOCUSED_GAP_PREFIXES = (
+    ("gapDrawIndexedVsConstF", "draw_indexed_vs_const_f"),
+    ("gapDrawIndexedApplyState", "draw_indexed_apply_state"),
+    ("gapDrawIndexedDrawIndexed", "draw_indexed_draw_indexed"),
+    ("gapDrawIndexedPsConstF", "draw_indexed_ps_const_f"),
+)
+
+PE_RECORDER_NUMERIC_FOCUS_COUNTERS = tuple(
+    key for _, key in PE_RECORDER_COUNTER_MAP
+) + tuple(
+    f"pe_recorder_inter_append_top{rank}_{suffix}"
+    for rank in range(1, 5)
+    for suffix in ("samples", "ms", "max_ms")
+)
+
+PE_RECORDER_PER_PRESENT_COUNTERS = (
+    "pe_recorder_commit_count",
+    "pe_recorder_record_count_total",
+    "pe_recorder_payload_bytes_total",
+    "pe_recorder_handle_count_total",
+    "pe_recorder_chunk_fill_gap_samples",
+    "pe_recorder_chunk_fill_gap_ms",
+    "pe_recorder_chunk_first_record_gap_samples",
+    "pe_recorder_chunk_first_record_gap_ms",
+    "pe_recorder_chunk_active_fill_samples",
+    "pe_recorder_chunk_active_fill_ms",
+    "pe_recorder_chunk_inter_append_gap_samples",
+    "pe_recorder_chunk_inter_append_gap_ms",
+    "pe_recorder_chunk_bridge_samples",
+    "pe_recorder_chunk_bridge_ms",
+    "pe_recorder_record_append_calls",
+    "pe_recorder_record_append_cpu_ms",
+    "pe_recorder_record_append_no_flush_calls",
+    "pe_recorder_record_append_no_flush_cpu_ms",
+    "pe_recorder_vs_const_f_setter_calls",
+    "pe_recorder_vs_const_f_setter_regs",
+    "pe_recorder_vs_const_f_setter_cpu_ms",
+    "pe_recorder_ps_const_f_setter_calls",
+    "pe_recorder_ps_const_f_setter_regs",
+    "pe_recorder_ps_const_f_setter_cpu_ms",
+    "pe_recorder_const_flush_calls",
+    "pe_recorder_const_flush_records",
+    "pe_recorder_const_flush_regs",
+    "pe_recorder_const_flush_cpu_ms",
+    "pe_recorder_vs_const_f_flush_records",
+    "pe_recorder_vs_const_f_flush_regs",
+    "pe_recorder_vs_const_f_flush_cpu_ms",
+    "pe_recorder_ps_const_f_flush_records",
+    "pe_recorder_ps_const_f_flush_regs",
+    "pe_recorder_ps_const_f_flush_cpu_ms",
+    "pe_recorder_chunk_barrier_flush_calls",
+    "pe_recorder_chunk_barrier_const_cpu_ms",
+    "pe_recorder_apply_state_build_calls",
+    "pe_recorder_apply_state_build_cpu_ms",
+)
+
 
 def result_path(path: Path) -> Path:
     if path.is_dir():
@@ -353,7 +486,10 @@ def load_counters(path: Path) -> dict[str, Any]:
         counters = data.get("dxmt9_perf_counters")
         if not isinstance(counters, dict):
             raise SystemExit(f"missing dxmt9_perf_counters in {path}")
-        return augment_with_encoder_sidecar_metrics(path, counters)
+        return augment_with_encoder_sidecar_metrics(
+            path,
+            augment_with_pe_recorder_metrics(data, counters),
+        )
     resolved = result_path(path)
     if not resolved.exists():
         raise SystemExit(f"missing result.json: {resolved}")
@@ -361,7 +497,137 @@ def load_counters(path: Path) -> dict[str, Any]:
     counters = data.get("dxmt9_perf_counters")
     if not isinstance(counters, dict):
         raise SystemExit(f"missing dxmt9_perf_counters in {resolved}")
-    return augment_with_encoder_sidecar_metrics(resolved.parent, counters)
+    return augment_with_encoder_sidecar_metrics(
+        resolved.parent,
+        augment_with_pe_recorder_metrics(data, counters),
+    )
+
+
+def augment_with_pe_recorder_metrics(
+    data: dict[str, Any],
+    counters: dict[str, Any],
+) -> dict[str, Any]:
+    pe_counters = data.get("dxmt9_pe_recorder_counters")
+    if not isinstance(pe_counters, dict) or not pe_counters:
+        return counters
+
+    augmented = dict(counters)
+    for source_key, target_key in PE_RECORDER_COUNTER_MAP:
+        if source_key in pe_counters:
+            augmented[target_key] = pe_counters[source_key]
+
+    for source_prefix, target_prefix in PE_RECORDER_HOT_SETTERS:
+        for source_suffix, target_suffix in (
+            ("Calls", "calls"),
+            ("Dirty", "dirty"),
+            ("CpuMs", "cpu_ms"),
+            ("CpuMaxMs", "cpu_max_ms"),
+        ):
+            source_key = f"hotSetter{source_prefix}{source_suffix}"
+            if source_key in pe_counters:
+                augmented[f"pe_recorder_hot_setter_{target_prefix}_{target_suffix}"] = (
+                    pe_counters[source_key]
+                )
+
+    for rank in range(1, 5):
+        source_prefix = f"interAppendTop{rank}"
+        target_prefix = f"pe_recorder_inter_append_top{rank}"
+        for source_suffix, target_suffix in (
+            ("Prev", "prev"),
+            ("Next", "next"),
+            ("Samples", "samples"),
+            ("Ms", "ms"),
+            ("MaxMs", "max_ms"),
+        ):
+            source_key = f"{source_prefix}{source_suffix}"
+            if source_key in pe_counters:
+                augmented[f"{target_prefix}_{target_suffix}"] = pe_counters[source_key]
+
+    for source_prefix, target_prefix in PE_RECORDER_FOCUSED_GAP_PREFIXES:
+        target_base = f"pe_recorder_gap_{target_prefix}"
+        for rank in (1, 2):
+            for source_suffix, target_suffix in (
+                ("CallFamily", "call_family"),
+                ("Samples", "samples"),
+                ("Ms", "ms"),
+                ("MaxMs", "max_ms"),
+            ):
+                source_key = f"{source_prefix}Top{rank}{source_suffix}"
+                if source_key in pe_counters:
+                    augmented[f"{target_base}_top{rank}_{target_suffix}"] = (
+                        pe_counters[source_key]
+                    )
+            for source_suffix, target_suffix in (
+                ("CallFamily", "call_family"),
+                ("Samples", "samples"),
+                ("CallName", "call_name"),
+                ("CallNameSamples", "call_name_samples"),
+                ("CallNameCpuMs", "call_name_cpu_ms"),
+                ("CallNameCpuMaxMs", "call_name_cpu_max_ms"),
+            ):
+                source_key = f"{source_prefix}BetweenTop{rank}{source_suffix}"
+                if source_key in pe_counters:
+                    augmented[f"{target_base}_between_top{rank}_{target_suffix}"] = (
+                        pe_counters[source_key]
+                    )
+            for source_suffix, target_suffix in (
+                ("PrevFamily", "prev_family"),
+                ("NextFamily", "next_family"),
+                ("Samples", "samples"),
+                ("Ms", "ms"),
+                ("MaxMs", "max_ms"),
+            ):
+                source_key = f"{source_prefix}BetweenGapTop{rank}{source_suffix}"
+                if source_key in pe_counters:
+                    augmented[f"{target_base}_between_gap_top{rank}_{target_suffix}"] = (
+                        pe_counters[source_key]
+                    )
+            for source_suffix, target_suffix in (
+                ("PrevCallName", "prev_call_name"),
+                ("NextCallName", "next_call_name"),
+                ("NameSamples", "name_samples"),
+                ("NameMs", "name_ms"),
+                ("NameMaxMs", "name_max_ms"),
+            ):
+                source_key = f"{source_prefix}BetweenGapTop{rank}{source_suffix}"
+                if source_key in pe_counters:
+                    augmented[
+                        f"{target_base}_between_gap_top{rank}_{target_suffix}"
+                    ] = pe_counters[source_key]
+            for source_suffix, target_suffix in (
+                ("PrevCallName", "prev_call_name"),
+                ("NextCallName", "next_call_name"),
+                ("CallerModule", "caller_module"),
+                ("CallerRva", "caller_rva"),
+                ("Samples", "samples"),
+                ("Ms", "ms"),
+                ("MaxMs", "max_ms"),
+            ):
+                source_key = f"{source_prefix}BetweenGapSiteTop{rank}{source_suffix}"
+                if source_key in pe_counters:
+                    augmented[
+                        f"{target_base}_between_gap_site_top{rank}_{target_suffix}"
+                    ] = pe_counters[source_key]
+        for source_suffix, target_suffix in (
+            ("PhaseSamples", "phase_samples"),
+            ("PreCallMs", "pre_call_ms"),
+            ("PreCallMaxMs", "pre_call_max_ms"),
+            ("InsideCallMs", "inside_call_ms"),
+            ("InsideCallMaxMs", "inside_call_max_ms"),
+            ("TailSplitSamples", "tail_split_samples"),
+            ("PrevCallTailMs", "prev_call_tail_ms"),
+            ("PrevCallTailMaxMs", "prev_call_tail_max_ms"),
+            ("BetweenCallsMs", "between_calls_ms"),
+            ("BetweenCallsMaxMs", "between_calls_max_ms"),
+            ("BetweenCallBodyCalls", "between_call_body_calls"),
+            ("BetweenCallBodyCpuMs", "between_call_body_cpu_ms"),
+            ("BetweenCallBodyCpuMaxMs", "between_call_body_cpu_max_ms"),
+        ):
+            source_key = f"{source_prefix}{source_suffix}"
+            if source_key in pe_counters:
+                augmented[f"{target_base}_{target_suffix}"] = pe_counters[source_key]
+
+    return augmented
 
 
 def csv_number(value: Any) -> float:
@@ -389,6 +655,13 @@ def augment_with_encoder_sidecar_metrics(
         "encoder_sidecar_end_reason_present",
         "encoder_sidecar_end_reason_final",
         "encoder_sidecar_end_reason_other",
+        "encoder_sidecar_final_same_key_reopen",
+        "encoder_sidecar_final_same_rt_reopen",
+        "encoder_sidecar_final_same_depth_reopen",
+        "encoder_sidecar_final_same_key_reopen_color_load_bytes",
+        "encoder_sidecar_final_same_key_reopen_depth_load_bytes",
+        "encoder_sidecar_final_same_key_reopen_final_color_store_bytes",
+        "encoder_sidecar_final_same_key_reopen_final_depth_store_bytes",
         "encoder_sidecar_color_load_bytes",
         "encoder_sidecar_color_store_bytes",
         "encoder_sidecar_depth_load_bytes",
@@ -396,7 +669,8 @@ def augment_with_encoder_sidecar_metrics(
     ):
         augmented.setdefault(key, 0.0)
     with csv_path.open(newline="", encoding="utf-8") as handle:
-        for row in csv.DictReader(handle):
+        rows = list(csv.DictReader(handle))
+        for row in rows:
             add_counter(augmented, "encoder_sidecar_rows", 1.0)
             end_reason = (row.get("end_reason") or "unknown").strip().lower()
             if end_reason in {"rt_change", "clear", "present", "final"}:
@@ -423,6 +697,43 @@ def augment_with_encoder_sidecar_metrics(
                 "encoder_sidecar_depth_store_bytes",
                 csv_number(row.get("depth_store_bytes")),
             )
+        for row, next_row in zip(rows, rows[1:]):
+            end_reason = (row.get("end_reason") or "unknown").strip().lower()
+            if end_reason != "final":
+                continue
+
+            rt = (row.get("rt") or "").strip()
+            depth = (row.get("depth") or "").strip()
+            next_rt = (next_row.get("rt") or "").strip()
+            next_depth = (next_row.get("depth") or "").strip()
+            has_attachment_key = bool(rt or depth)
+
+            if has_attachment_key and rt == next_rt:
+                add_counter(augmented, "encoder_sidecar_final_same_rt_reopen", 1.0)
+            if has_attachment_key and depth == next_depth:
+                add_counter(augmented, "encoder_sidecar_final_same_depth_reopen", 1.0)
+            if has_attachment_key and rt == next_rt and depth == next_depth:
+                add_counter(augmented, "encoder_sidecar_final_same_key_reopen", 1.0)
+                add_counter(
+                    augmented,
+                    "encoder_sidecar_final_same_key_reopen_color_load_bytes",
+                    csv_number(next_row.get("color_load_bytes")),
+                )
+                add_counter(
+                    augmented,
+                    "encoder_sidecar_final_same_key_reopen_depth_load_bytes",
+                    csv_number(next_row.get("depth_load_bytes")),
+                )
+                add_counter(
+                    augmented,
+                    "encoder_sidecar_final_same_key_reopen_final_color_store_bytes",
+                    csv_number(row.get("color_store_bytes")),
+                )
+                add_counter(
+                    augmented,
+                    "encoder_sidecar_final_same_key_reopen_final_depth_store_bytes",
+                    csv_number(row.get("depth_store_bytes")),
+                )
     return augmented
 
 
@@ -680,14 +991,68 @@ def derived(counters: dict[str, Any]) -> dict[str, float | None]:
         counters,
         "d3d9_snapshot_cache_batch_miss_uniform_build_vs_const_hash_cpu_ms",
     )) or 0.0
+    batch_miss_vs_const_hash_reuse = number(counter(
+        counters,
+        "d3d9_snapshot_cache_batch_miss_uniform_vs_const_hash_reuse",
+    )) or 0.0
+    batch_miss_vs_const_hash_build = number(counter(
+        counters,
+        "d3d9_snapshot_cache_batch_miss_uniform_vs_const_hash_build",
+    )) or 0.0
     batch_miss_ps_const_hash_cpu_ms = number(counter(
         counters,
         "d3d9_snapshot_cache_batch_miss_uniform_build_ps_const_hash_cpu_ms",
+    )) or 0.0
+    batch_miss_ps_const_hash_reuse = number(counter(
+        counters,
+        "d3d9_snapshot_cache_batch_miss_uniform_ps_const_hash_reuse",
+    )) or 0.0
+    batch_miss_ps_const_hash_build = number(counter(
+        counters,
+        "d3d9_snapshot_cache_batch_miss_uniform_ps_const_hash_build",
+    )) or 0.0
+    batch_miss_vs_const_hash_memo_probe = number(counter(
+        counters,
+        "d3d9_snapshot_cache_batch_miss_uniform_vs_const_hash_memo_probe",
+    )) or 0.0
+    batch_miss_vs_const_hash_memo_hits = number(counter(
+        counters,
+        "d3d9_snapshot_cache_batch_miss_uniform_vs_const_hash_memo_hits",
+    )) or 0.0
+    batch_miss_vs_const_hash_memo_misses = number(counter(
+        counters,
+        "d3d9_snapshot_cache_batch_miss_uniform_vs_const_hash_memo_misses",
+    )) or 0.0
+    batch_miss_vs_const_hash_memo_stores = number(counter(
+        counters,
+        "d3d9_snapshot_cache_batch_miss_uniform_vs_const_hash_memo_stores",
+    )) or 0.0
+    batch_miss_ps_const_hash_memo_probe = number(counter(
+        counters,
+        "d3d9_snapshot_cache_batch_miss_uniform_ps_const_hash_memo_probe",
+    )) or 0.0
+    batch_miss_ps_const_hash_memo_hits = number(counter(
+        counters,
+        "d3d9_snapshot_cache_batch_miss_uniform_ps_const_hash_memo_hits",
+    )) or 0.0
+    batch_miss_ps_const_hash_memo_misses = number(counter(
+        counters,
+        "d3d9_snapshot_cache_batch_miss_uniform_ps_const_hash_memo_misses",
+    )) or 0.0
+    batch_miss_ps_const_hash_memo_stores = number(counter(
+        counters,
+        "d3d9_snapshot_cache_batch_miss_uniform_ps_const_hash_memo_stores",
     )) or 0.0
     batch_miss_nonconst_hash_cpu_ms = number(counter(
         counters,
         "d3d9_snapshot_cache_batch_miss_uniform_build_nonconst_hash_cpu_ms",
     )) or 0.0
+    batch_miss_vs_const_hash_total = (
+        batch_miss_vs_const_hash_reuse + batch_miss_vs_const_hash_build
+    )
+    batch_miss_ps_const_hash_total = (
+        batch_miss_ps_const_hash_reuse + batch_miss_ps_const_hash_build
+    )
     snapshot_uniform_copy_cpu_ms = number(counter(
         counters,
         "d3d9_snapshot_uniform_copy_cpu_ms",
@@ -1155,6 +1520,36 @@ def derived(counters: dict[str, Any]) -> dict[str, float | None]:
     encoder_depth_store_mib = (
         number(counter(counters, "encoder_sidecar_depth_store_bytes")) or 0.0
     ) / mib
+    encoder_final_same_key_reopen = (
+        number(counter(counters, "encoder_sidecar_final_same_key_reopen")) or 0.0
+    )
+    encoder_final_end_reason = (
+        number(counter(counters, "encoder_sidecar_end_reason_final")) or 0.0
+    )
+    encoder_final_same_key_reopen_color_load_mib = (
+        number(counter(
+            counters,
+            "encoder_sidecar_final_same_key_reopen_color_load_bytes",
+        )) or 0.0
+    ) / mib
+    encoder_final_same_key_reopen_depth_load_mib = (
+        number(counter(
+            counters,
+            "encoder_sidecar_final_same_key_reopen_depth_load_bytes",
+        )) or 0.0
+    ) / mib
+    encoder_final_same_key_reopen_final_color_store_mib = (
+        number(counter(
+            counters,
+            "encoder_sidecar_final_same_key_reopen_final_color_store_bytes",
+        )) or 0.0
+    ) / mib
+    encoder_final_same_key_reopen_final_depth_store_mib = (
+        number(counter(
+            counters,
+            "encoder_sidecar_final_same_key_reopen_final_depth_store_bytes",
+        )) or 0.0
+    ) / mib
     metrics = {
         "draws_per_present": ratio(counters, "draw_calls", "present_encoded"),
         "command_buffers_per_present": ratio(
@@ -1184,6 +1579,29 @@ def derived(counters: dict[str, Any]) -> dict[str, float | None]:
         ),
         "encoder_sidecar_final_end_reason_per_present": encoder_ratio(
             "encoder_sidecar_end_reason_final",
+        ),
+        "encoder_sidecar_final_same_key_reopen_per_present": encoder_ratio(
+            "encoder_sidecar_final_same_key_reopen",
+        ),
+        "encoder_sidecar_final_same_key_reopen_share_pct": (
+            encoder_final_same_key_reopen / encoder_final_end_reason * 100.0
+            if has_encoder_sidecar and encoder_final_end_reason else None
+        ),
+        "encoder_sidecar_final_same_key_reopen_color_load_mib_per_present": (
+            encoder_final_same_key_reopen_color_load_mib / present
+            if has_encoder_sidecar and present else None
+        ),
+        "encoder_sidecar_final_same_key_reopen_depth_load_mib_per_present": (
+            encoder_final_same_key_reopen_depth_load_mib / present
+            if has_encoder_sidecar and present else None
+        ),
+        "encoder_sidecar_final_same_key_reopen_final_color_store_mib_per_present": (
+            encoder_final_same_key_reopen_final_color_store_mib / present
+            if has_encoder_sidecar and present else None
+        ),
+        "encoder_sidecar_final_same_key_reopen_final_depth_store_mib_per_present": (
+            encoder_final_same_key_reopen_final_depth_store_mib / present
+            if has_encoder_sidecar and present else None
         ),
         "encoder_sidecar_color_load_mib_per_present": (
             encoder_color_load_mib / present if has_encoder_sidecar and present else None
@@ -1949,8 +2367,62 @@ def derived(counters: dict[str, Any]) -> dict[str, float | None]:
         "snapshot_cache_batch_miss_vs_const_hash_cpu_ms_per_present": (
             batch_miss_vs_const_hash_cpu_ms / present if present else None
         ),
+        "snapshot_cache_batch_miss_vs_const_hash_reuse_per_present": (
+            batch_miss_vs_const_hash_reuse / present if present else None
+        ),
+        "snapshot_cache_batch_miss_vs_const_hash_build_per_present": (
+            batch_miss_vs_const_hash_build / present if present else None
+        ),
+        "snapshot_cache_batch_miss_vs_const_hash_build_share_pct": (
+            batch_miss_vs_const_hash_build / batch_miss_vs_const_hash_total * 100.0
+            if batch_miss_vs_const_hash_total else None
+        ),
+        "snapshot_cache_batch_miss_vs_const_hash_memo_probe_per_present": (
+            batch_miss_vs_const_hash_memo_probe / present if present else None
+        ),
+        "snapshot_cache_batch_miss_vs_const_hash_memo_hits_per_present": (
+            batch_miss_vs_const_hash_memo_hits / present if present else None
+        ),
+        "snapshot_cache_batch_miss_vs_const_hash_memo_misses_per_present": (
+            batch_miss_vs_const_hash_memo_misses / present if present else None
+        ),
+        "snapshot_cache_batch_miss_vs_const_hash_memo_stores_per_present": (
+            batch_miss_vs_const_hash_memo_stores / present if present else None
+        ),
+        "snapshot_cache_batch_miss_vs_const_hash_memo_hit_share_pct": (
+            batch_miss_vs_const_hash_memo_hits /
+            batch_miss_vs_const_hash_memo_probe * 100.0
+            if batch_miss_vs_const_hash_memo_probe else None
+        ),
         "snapshot_cache_batch_miss_ps_const_hash_cpu_ms_per_present": (
             batch_miss_ps_const_hash_cpu_ms / present if present else None
+        ),
+        "snapshot_cache_batch_miss_ps_const_hash_reuse_per_present": (
+            batch_miss_ps_const_hash_reuse / present if present else None
+        ),
+        "snapshot_cache_batch_miss_ps_const_hash_build_per_present": (
+            batch_miss_ps_const_hash_build / present if present else None
+        ),
+        "snapshot_cache_batch_miss_ps_const_hash_build_share_pct": (
+            batch_miss_ps_const_hash_build / batch_miss_ps_const_hash_total * 100.0
+            if batch_miss_ps_const_hash_total else None
+        ),
+        "snapshot_cache_batch_miss_ps_const_hash_memo_probe_per_present": (
+            batch_miss_ps_const_hash_memo_probe / present if present else None
+        ),
+        "snapshot_cache_batch_miss_ps_const_hash_memo_hits_per_present": (
+            batch_miss_ps_const_hash_memo_hits / present if present else None
+        ),
+        "snapshot_cache_batch_miss_ps_const_hash_memo_misses_per_present": (
+            batch_miss_ps_const_hash_memo_misses / present if present else None
+        ),
+        "snapshot_cache_batch_miss_ps_const_hash_memo_stores_per_present": (
+            batch_miss_ps_const_hash_memo_stores / present if present else None
+        ),
+        "snapshot_cache_batch_miss_ps_const_hash_memo_hit_share_pct": (
+            batch_miss_ps_const_hash_memo_hits /
+            batch_miss_ps_const_hash_memo_probe * 100.0
+            if batch_miss_ps_const_hash_memo_probe else None
         ),
         "snapshot_cache_batch_miss_nonconst_hash_cpu_ms_per_present": (
             batch_miss_nonconst_hash_cpu_ms / present if present else None
@@ -2063,6 +2535,236 @@ def derived(counters: dict[str, Any]) -> dict[str, float | None]:
             if const_upload_breaks else None
         ),
     }
+
+    def metric_number(key: str) -> float | None:
+        return number(counter(counters, key))
+
+    def metric_per_present(key: str) -> float | None:
+        value = metric_number(key)
+        return value / present if value is not None and present else None
+
+    for key in PE_RECORDER_PER_PRESENT_COUNTERS:
+        metrics[f"{key}_per_present"] = metric_per_present(key)
+
+    pe_commit_count = metric_number("pe_recorder_commit_count") or 0.0
+    pe_record_count = metric_number("pe_recorder_record_count_total") or 0.0
+    pe_payload_bytes = metric_number("pe_recorder_payload_bytes_total") or 0.0
+    pe_record_append_calls = metric_number("pe_recorder_record_append_calls") or 0.0
+    pe_record_append_no_flush_calls = (
+        metric_number("pe_recorder_record_append_no_flush_calls") or 0.0
+    )
+    pe_record_append_cpu_ms = metric_number(
+        "pe_recorder_record_append_cpu_ms"
+    ) or 0.0
+    pe_record_append_no_flush_cpu_ms = metric_number(
+        "pe_recorder_record_append_no_flush_cpu_ms"
+    ) or 0.0
+    pe_const_flush_cpu_ms = metric_number(
+        "pe_recorder_const_flush_cpu_ms"
+    ) or 0.0
+    pe_vs_const_setter_cpu_ms = metric_number(
+        "pe_recorder_vs_const_f_setter_cpu_ms"
+    ) or 0.0
+    pe_ps_const_setter_cpu_ms = metric_number(
+        "pe_recorder_ps_const_f_setter_cpu_ms"
+    ) or 0.0
+    metrics["pe_recorder_records_per_commit"] = (
+        pe_record_count / pe_commit_count if pe_commit_count else None
+    )
+    metrics["pe_recorder_payload_bytes_per_commit"] = (
+        pe_payload_bytes / pe_commit_count if pe_commit_count else None
+    )
+    metrics["pe_recorder_payload_bytes_per_record"] = (
+        pe_payload_bytes / pe_record_count if pe_record_count else None
+    )
+    metrics["pe_recorder_record_append_cpu_us_per_call"] = (
+        pe_record_append_cpu_ms * 1000.0 / pe_record_append_calls
+        if pe_record_append_calls else None
+    )
+    metrics["pe_recorder_record_append_no_flush_cpu_us_per_call"] = (
+        pe_record_append_no_flush_cpu_ms * 1000.0 /
+        pe_record_append_no_flush_calls
+        if pe_record_append_no_flush_calls else None
+    )
+    metrics["pe_recorder_const_flush_share_of_record_append_cpu_pct"] = (
+        pe_const_flush_cpu_ms / pe_record_append_cpu_ms * 100.0
+        if pe_record_append_cpu_ms else None
+    )
+    metrics["pe_recorder_vs_const_setter_share_of_record_append_cpu_pct"] = (
+        pe_vs_const_setter_cpu_ms / pe_record_append_cpu_ms * 100.0
+        if pe_record_append_cpu_ms else None
+    )
+    metrics["pe_recorder_ps_const_setter_share_of_record_append_cpu_pct"] = (
+        pe_ps_const_setter_cpu_ms / pe_record_append_cpu_ms * 100.0
+        if pe_record_append_cpu_ms else None
+    )
+
+    for rank in range(1, 5):
+        base = f"pe_recorder_inter_append_top{rank}"
+        metrics[f"{base}_samples_per_present"] = metric_per_present(
+            f"{base}_samples"
+        )
+        metrics[f"{base}_ms_per_present"] = metric_per_present(f"{base}_ms")
+
+    focused_between_calls_ms = 0.0
+    focused_between_call_body_cpu_ms = 0.0
+    focused_between_call_gap_residual_ms = 0.0
+    has_focused_aggregate_body = False
+    for _, target_prefix in PE_RECORDER_FOCUSED_GAP_PREFIXES:
+        base = f"pe_recorder_gap_{target_prefix}"
+        for rank in (1, 2):
+            metrics[f"{base}_top{rank}_samples_per_present"] = (
+                metric_per_present(f"{base}_top{rank}_samples")
+            )
+            metrics[f"{base}_top{rank}_ms_per_present"] = metric_per_present(
+                f"{base}_top{rank}_ms"
+            )
+            metrics[f"{base}_between_top{rank}_entries_per_present"] = (
+                metric_per_present(f"{base}_between_top{rank}_samples")
+            )
+            metrics[f"{base}_between_top{rank}_call_name_entries_per_present"] = (
+                metric_per_present(f"{base}_between_top{rank}_call_name_samples")
+            )
+            metrics[f"{base}_between_top{rank}_call_name_cpu_ms_per_present"] = (
+                metric_per_present(f"{base}_between_top{rank}_call_name_cpu_ms")
+            )
+            metrics[f"{base}_between_gap_top{rank}_samples_per_present"] = (
+                metric_per_present(f"{base}_between_gap_top{rank}_samples")
+            )
+            metrics[f"{base}_between_gap_top{rank}_ms_per_present"] = (
+                metric_per_present(f"{base}_between_gap_top{rank}_ms")
+            )
+            metrics[f"{base}_between_gap_top{rank}_name_samples_per_present"] = (
+                metric_per_present(f"{base}_between_gap_top{rank}_name_samples")
+            )
+            metrics[f"{base}_between_gap_top{rank}_name_ms_per_present"] = (
+                metric_per_present(f"{base}_between_gap_top{rank}_name_ms")
+            )
+            metrics[f"{base}_between_gap_site_top{rank}_samples_per_present"] = (
+                metric_per_present(f"{base}_between_gap_site_top{rank}_samples")
+            )
+            metrics[f"{base}_between_gap_site_top{rank}_ms_per_present"] = (
+                metric_per_present(f"{base}_between_gap_site_top{rank}_ms")
+            )
+        pre_call_ms = metric_number(f"{base}_pre_call_ms") or 0.0
+        inside_call_ms = metric_number(f"{base}_inside_call_ms") or 0.0
+        prev_call_tail_ms = metric_number(f"{base}_prev_call_tail_ms") or 0.0
+        between_calls_raw = metric_number(f"{base}_between_calls_ms")
+        between_calls_ms = between_calls_raw or 0.0
+        phase_ms = pre_call_ms + inside_call_ms
+        tail_split_ms = prev_call_tail_ms + between_calls_ms
+        metrics[f"{base}_phase_samples_per_present"] = metric_per_present(
+            f"{base}_phase_samples"
+        )
+        metrics[f"{base}_pre_call_ms_per_present"] = metric_per_present(
+            f"{base}_pre_call_ms"
+        )
+        metrics[f"{base}_inside_call_ms_per_present"] = metric_per_present(
+            f"{base}_inside_call_ms"
+        )
+        metrics[f"{base}_pre_call_share_pct"] = (
+            pre_call_ms / phase_ms * 100.0 if phase_ms else None
+        )
+        metrics[f"{base}_inside_call_share_pct"] = (
+            inside_call_ms / phase_ms * 100.0 if phase_ms else None
+        )
+        metrics[f"{base}_tail_split_samples_per_present"] = metric_per_present(
+            f"{base}_tail_split_samples"
+        )
+        metrics[f"{base}_prev_call_tail_ms_per_present"] = metric_per_present(
+            f"{base}_prev_call_tail_ms"
+        )
+        metrics[f"{base}_between_calls_ms_per_present"] = metric_per_present(
+            f"{base}_between_calls_ms"
+        )
+        metrics[f"{base}_between_call_body_calls_per_present"] = (
+            metric_per_present(f"{base}_between_call_body_calls")
+        )
+        metrics[f"{base}_between_call_body_cpu_ms_per_present"] = (
+            metric_per_present(f"{base}_between_call_body_cpu_ms")
+        )
+        metrics[f"{base}_prev_call_tail_share_pct"] = (
+            prev_call_tail_ms / tail_split_ms * 100.0 if tail_split_ms else None
+        )
+        metrics[f"{base}_between_calls_share_pct"] = (
+            between_calls_ms / tail_split_ms * 100.0 if tail_split_ms else None
+        )
+        body_cpu_values = [
+            metric_number(f"{base}_between_top{rank}_call_name_cpu_ms")
+            for rank in (1, 2)
+        ]
+        has_body_cpu = any(value is not None for value in body_cpu_values)
+        body_cpu_ms = sum(value or 0.0 for value in body_cpu_values)
+        metrics[f"{base}_between_top_call_name_cpu_ms_per_present"] = (
+            body_cpu_ms / present if has_body_cpu and present else None
+        )
+        metrics[f"{base}_between_body_residual_ms_per_present"] = (
+            (between_calls_ms - body_cpu_ms) / present
+            if has_body_cpu and between_calls_raw is not None and present else None
+        )
+        metrics[f"{base}_between_body_coverage_pct"] = (
+            body_cpu_ms / between_calls_ms * 100.0
+            if has_body_cpu and between_calls_raw is not None and between_calls_ms else None
+        )
+        metrics[f"{base}_between_body_residual_share_pct"] = (
+            (between_calls_ms - body_cpu_ms) / between_calls_ms * 100.0
+            if has_body_cpu and between_calls_raw is not None and between_calls_ms else None
+        )
+        aggregate_body_raw = metric_number(f"{base}_between_call_body_cpu_ms")
+        if aggregate_body_raw is not None and between_calls_raw is not None:
+            gap_residual_ms = between_calls_ms - aggregate_body_raw
+            metrics[f"{base}_between_call_body_coverage_pct"] = (
+                aggregate_body_raw / between_calls_ms * 100.0
+                if between_calls_ms else None
+            )
+            metrics[f"{base}_between_call_gap_residual_ms_per_present"] = (
+                gap_residual_ms / present if present else None
+            )
+            metrics[f"{base}_between_call_gap_residual_share_pct"] = (
+                gap_residual_ms / between_calls_ms * 100.0
+                if between_calls_ms else None
+            )
+            focused_between_calls_ms += between_calls_ms
+            focused_between_call_body_cpu_ms += aggregate_body_raw
+            focused_between_call_gap_residual_ms += gap_residual_ms
+            has_focused_aggregate_body = True
+
+    metrics["pe_recorder_focused_between_calls_ms_per_present"] = (
+        focused_between_calls_ms / present
+        if has_focused_aggregate_body and present else None
+    )
+    metrics["pe_recorder_focused_between_call_body_cpu_ms_per_present"] = (
+        focused_between_call_body_cpu_ms / present
+        if has_focused_aggregate_body and present else None
+    )
+    metrics["pe_recorder_focused_between_call_body_coverage_pct"] = (
+        focused_between_call_body_cpu_ms / focused_between_calls_ms * 100.0
+        if has_focused_aggregate_body and focused_between_calls_ms else None
+    )
+    metrics["pe_recorder_focused_between_call_gap_residual_ms_per_present"] = (
+        focused_between_call_gap_residual_ms / present
+        if has_focused_aggregate_body and present else None
+    )
+    metrics["pe_recorder_focused_between_call_gap_residual_share_pct"] = (
+        focused_between_call_gap_residual_ms / focused_between_calls_ms * 100.0
+        if has_focused_aggregate_body and focused_between_calls_ms else None
+    )
+
+    for _, target_prefix in PE_RECORDER_HOT_SETTERS:
+        base = f"pe_recorder_hot_setter_{target_prefix}"
+        calls = metric_number(f"{base}_calls") or 0.0
+        dirty = metric_number(f"{base}_dirty") or 0.0
+        cpu_ms = metric_number(f"{base}_cpu_ms")
+        metrics[f"{base}_calls_per_present"] = metric_per_present(f"{base}_calls")
+        metrics[f"{base}_dirty_per_present"] = metric_per_present(f"{base}_dirty")
+        metrics[f"{base}_cpu_ms_per_present"] = metric_per_present(f"{base}_cpu_ms")
+        metrics[f"{base}_dirty_share_pct"] = (
+            dirty / calls * 100.0 if calls else None
+        )
+        metrics[f"{base}_cpu_us_per_call"] = (
+            cpu_ms * 1000.0 / calls if cpu_ms is not None and calls else None
+        )
+
     for subtype, value in state_delta_subtypes.items():
         metrics[f"{subtype}_share_pct"] = (
             value / state_delta_breaks * 100.0 if state_delta_breaks else None
@@ -2109,6 +2811,309 @@ def fmt_derived(value: float | None) -> str:
     return f"{value:.3f}"
 
 
+def pe_recorder_pair_label(counters: dict[str, Any], rank: int) -> str:
+    prev = counter(counters, f"pe_recorder_inter_append_top{rank}_prev")
+    next_ = counter(counters, f"pe_recorder_inter_append_top{rank}_next")
+    if not prev and not next_:
+        return "n/a"
+    return f"{prev or 'unknown'} -> {next_ or 'unknown'}"
+
+
+def append_pe_recorder_sections(
+    lines: list[str],
+    before: dict[str, Any],
+    after: dict[str, Any],
+    before_derived: dict[str, float | None],
+    after_derived: dict[str, float | None],
+) -> None:
+    has_before = any(
+        counter(before, f"pe_recorder_inter_append_top{rank}_samples") is not None
+        for rank in range(1, 5)
+    )
+    has_after = any(
+        counter(after, f"pe_recorder_inter_append_top{rank}_samples") is not None
+        for rank in range(1, 5)
+    )
+    if not has_before and not has_after:
+        return
+
+    lines.append("## PE Recorder Top Inter-Append Pairs")
+    lines.append("")
+    lines.append("| Rank | Before pair | Before ms/present | Before samples/present | After pair | After ms/present | After samples/present | Delta ms/present | Delta % |")
+    lines.append("|---:|---|---:|---:|---|---:|---:|---:|---:|")
+    for rank in range(1, 5):
+        ms_key = f"pe_recorder_inter_append_top{rank}_ms_per_present"
+        samples_key = f"pe_recorder_inter_append_top{rank}_samples_per_present"
+        before_ms = before_derived.get(ms_key)
+        after_ms = after_derived.get(ms_key)
+        diff, pct = delta(after_ms, before_ms)
+        lines.append(
+            f"| `{rank}` | `{pe_recorder_pair_label(before, rank)}` | "
+            f"`{fmt_derived(before_ms)}` | "
+            f"`{fmt_derived(before_derived.get(samples_key))}` | "
+            f"`{pe_recorder_pair_label(after, rank)}` | "
+            f"`{fmt_derived(after_ms)}` | "
+            f"`{fmt_derived(after_derived.get(samples_key))}` | "
+            f"`{diff}` | `{pct}` |"
+        )
+    lines.append("")
+
+    lines.append("### Focused Gap Phase Split")
+    lines.append("")
+    lines.append("| Pair | Before pre-call ms/present | Before inside-call ms/present | After pre-call ms/present | After inside-call ms/present | Delta pre-call | Delta inside-call |")
+    lines.append("|---|---:|---:|---:|---:|---:|---:|")
+    for _, target_prefix in PE_RECORDER_FOCUSED_GAP_PREFIXES:
+        base = f"pe_recorder_gap_{target_prefix}"
+        before_pre = before_derived.get(f"{base}_pre_call_ms_per_present")
+        before_inside = before_derived.get(f"{base}_inside_call_ms_per_present")
+        after_pre = after_derived.get(f"{base}_pre_call_ms_per_present")
+        after_inside = after_derived.get(f"{base}_inside_call_ms_per_present")
+        pre_diff, _ = delta(after_pre, before_pre)
+        inside_diff, _ = delta(after_inside, before_inside)
+        lines.append(
+            f"| `{target_prefix}` | `{fmt_derived(before_pre)}` | "
+            f"`{fmt_derived(before_inside)}` | `{fmt_derived(after_pre)}` | "
+            f"`{fmt_derived(after_inside)}` | `{pre_diff}` | `{inside_diff}` |"
+        )
+    lines.append("")
+
+    lines.append("### Focused Between-Calls Entry Names")
+    lines.append("")
+    lines.append("| Pair | Rank | Before call name | Before entries/present | Before CPU ms/present | After call name | After entries/present | After CPU ms/present | Delta entries/present | Delta CPU ms/present |")
+    lines.append("|---|---:|---|---:|---:|---|---:|---:|---:|---:|")
+    for _, target_prefix in PE_RECORDER_FOCUSED_GAP_PREFIXES:
+        base = f"pe_recorder_gap_{target_prefix}"
+        for rank in (1, 2):
+            before_key = f"{base}_between_top{rank}_call_name"
+            after_key = f"{base}_between_top{rank}_call_name"
+            metric_key = f"{base}_between_top{rank}_call_name_entries_per_present"
+            cpu_metric_key = f"{base}_between_top{rank}_call_name_cpu_ms_per_present"
+            before_value = before_derived.get(metric_key)
+            after_value = after_derived.get(metric_key)
+            before_cpu = before_derived.get(cpu_metric_key)
+            after_cpu = after_derived.get(cpu_metric_key)
+            if (
+                before_value is None
+                and after_value is None
+                and before_cpu is None
+                and after_cpu is None
+            ):
+                continue
+            diff, _ = delta(after_value, before_value)
+            cpu_diff, _ = delta(after_cpu, before_cpu)
+            lines.append(
+                f"| `{target_prefix}` | `{rank}` | "
+                f"`{counter(before, before_key) or 'n/a'}` | "
+                f"`{fmt_derived(before_value)}` | "
+                f"`{fmt_derived(before_cpu)}` | "
+                f"`{counter(after, after_key) or 'n/a'}` | "
+                f"`{fmt_derived(after_value)}` | "
+                f"`{fmt_derived(after_cpu)}` | `{diff}` | `{cpu_diff}` |"
+            )
+    lines.append("")
+
+    lines.append("### Focused Between-Calls Return-To-Entry Gaps")
+    lines.append("")
+    lines.append("| Pair | Rank | Before transition | Before ms/present | Before samples/present | After transition | After ms/present | After samples/present | Delta ms/present |")
+    lines.append("|---|---:|---|---:|---:|---|---:|---:|---:|")
+    for _, target_prefix in PE_RECORDER_FOCUSED_GAP_PREFIXES:
+        base = f"pe_recorder_gap_{target_prefix}"
+        for rank in (1, 2):
+            before_prev_key = f"{base}_between_gap_top{rank}_prev_family"
+            before_next_key = f"{base}_between_gap_top{rank}_next_family"
+            after_prev_key = f"{base}_between_gap_top{rank}_prev_family"
+            after_next_key = f"{base}_between_gap_top{rank}_next_family"
+            metric_key = f"{base}_between_gap_top{rank}_ms_per_present"
+            samples_key = f"{base}_between_gap_top{rank}_samples_per_present"
+            before_value = before_derived.get(metric_key)
+            after_value = after_derived.get(metric_key)
+            before_samples = before_derived.get(samples_key)
+            after_samples = after_derived.get(samples_key)
+            if (
+                before_value is None
+                and after_value is None
+                and before_samples is None
+                and after_samples is None
+            ):
+                continue
+            before_transition = (
+                f"{counter(before, before_prev_key) or 'n/a'} -> "
+                f"{counter(before, before_next_key) or 'n/a'}"
+            )
+            after_transition = (
+                f"{counter(after, after_prev_key) or 'n/a'} -> "
+                f"{counter(after, after_next_key) or 'n/a'}"
+            )
+            diff, _ = delta(after_value, before_value)
+            lines.append(
+                f"| `{target_prefix}` | `{rank}` | "
+                f"`{before_transition}` | `{fmt_derived(before_value)}` | "
+                f"`{fmt_derived(before_samples)}` | `{after_transition}` | "
+                f"`{fmt_derived(after_value)}` | "
+                f"`{fmt_derived(after_samples)}` | `{diff}` |"
+            )
+    lines.append("")
+
+    lines.append("### Focused Between-Calls Exact Return-To-Entry Gaps")
+    lines.append("")
+    lines.append("| Pair | Rank | Before transition | Before ms/present | Before samples/present | After transition | After ms/present | After samples/present | Delta ms/present |")
+    lines.append("|---|---:|---|---:|---:|---|---:|---:|---:|")
+    for _, target_prefix in PE_RECORDER_FOCUSED_GAP_PREFIXES:
+        base = f"pe_recorder_gap_{target_prefix}"
+        for rank in (1, 2):
+            before_prev_key = f"{base}_between_gap_top{rank}_prev_call_name"
+            before_next_key = f"{base}_between_gap_top{rank}_next_call_name"
+            after_prev_key = f"{base}_between_gap_top{rank}_prev_call_name"
+            after_next_key = f"{base}_between_gap_top{rank}_next_call_name"
+            metric_key = f"{base}_between_gap_top{rank}_name_ms_per_present"
+            samples_key = f"{base}_between_gap_top{rank}_name_samples_per_present"
+            before_value = before_derived.get(metric_key)
+            after_value = after_derived.get(metric_key)
+            before_samples = before_derived.get(samples_key)
+            after_samples = after_derived.get(samples_key)
+            if (
+                before_value is None
+                and after_value is None
+                and before_samples is None
+                and after_samples is None
+            ):
+                continue
+            before_transition = (
+                f"{counter(before, before_prev_key) or 'n/a'} -> "
+                f"{counter(before, before_next_key) or 'n/a'}"
+            )
+            after_transition = (
+                f"{counter(after, after_prev_key) or 'n/a'} -> "
+                f"{counter(after, after_next_key) or 'n/a'}"
+            )
+            diff, _ = delta(after_value, before_value)
+            lines.append(
+                f"| `{target_prefix}` | `{rank}` | "
+                f"`{before_transition}` | `{fmt_derived(before_value)}` | "
+                f"`{fmt_derived(before_samples)}` | `{after_transition}` | "
+                f"`{fmt_derived(after_value)}` | "
+                f"`{fmt_derived(after_samples)}` | `{diff}` |"
+            )
+    lines.append("")
+
+    lines.append("### Focused Between-Calls Exact Return-To-Entry Call Sites")
+    lines.append("")
+    lines.append("| Pair | Rank | Before transition | Before caller | Before ms/present | Before samples/present | After transition | After caller | After ms/present | After samples/present | Delta ms/present |")
+    lines.append("|---|---:|---|---|---:|---:|---|---|---:|---:|---:|")
+    for _, target_prefix in PE_RECORDER_FOCUSED_GAP_PREFIXES:
+        base = f"pe_recorder_gap_{target_prefix}"
+        for rank in (1, 2):
+            before_prev_key = (
+                f"{base}_between_gap_site_top{rank}_prev_call_name")
+            before_next_key = (
+                f"{base}_between_gap_site_top{rank}_next_call_name")
+            before_module_key = (
+                f"{base}_between_gap_site_top{rank}_caller_module")
+            before_rva_key = f"{base}_between_gap_site_top{rank}_caller_rva"
+            after_prev_key = f"{base}_between_gap_site_top{rank}_prev_call_name"
+            after_next_key = f"{base}_between_gap_site_top{rank}_next_call_name"
+            after_module_key = f"{base}_between_gap_site_top{rank}_caller_module"
+            after_rva_key = f"{base}_between_gap_site_top{rank}_caller_rva"
+            metric_key = f"{base}_between_gap_site_top{rank}_ms_per_present"
+            samples_key = (
+                f"{base}_between_gap_site_top{rank}_samples_per_present")
+            before_value = before_derived.get(metric_key)
+            after_value = after_derived.get(metric_key)
+            before_samples = before_derived.get(samples_key)
+            after_samples = after_derived.get(samples_key)
+            if (
+                before_value is None
+                and after_value is None
+                and before_samples is None
+                and after_samples is None
+            ):
+                continue
+            before_transition = (
+                f"{counter(before, before_prev_key) or 'n/a'} -> "
+                f"{counter(before, before_next_key) or 'n/a'}"
+            )
+            after_transition = (
+                f"{counter(after, after_prev_key) or 'n/a'} -> "
+                f"{counter(after, after_next_key) or 'n/a'}"
+            )
+            before_caller = (
+                f"{counter(before, before_module_key) or 'n/a'}+"
+                f"{counter(before, before_rva_key) or '0x0'}"
+            )
+            after_caller = (
+                f"{counter(after, after_module_key) or 'n/a'}+"
+                f"{counter(after, after_rva_key) or '0x0'}"
+            )
+            diff, _ = delta(after_value, before_value)
+            lines.append(
+                f"| `{target_prefix}` | `{rank}` | "
+                f"`{before_transition}` | `{before_caller}` | "
+                f"`{fmt_derived(before_value)}` | "
+                f"`{fmt_derived(before_samples)}` | `{after_transition}` | "
+                f"`{after_caller}` | `{fmt_derived(after_value)}` | "
+                f"`{fmt_derived(after_samples)}` | `{diff}` |"
+            )
+    lines.append("")
+
+    lines.append("### Focused Between-Calls Body Coverage")
+    lines.append("")
+    lines.append("| Pair | Before between ms/present | Before top body CPU ms/present | Before all body CPU ms/present | Before all body coverage | Before call-gap residual ms/present | After between ms/present | After top body CPU ms/present | After all body CPU ms/present | After all body coverage | After call-gap residual ms/present | Delta call-gap residual |")
+    lines.append("|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|")
+    for _, target_prefix in PE_RECORDER_FOCUSED_GAP_PREFIXES:
+        base = f"pe_recorder_gap_{target_prefix}"
+        before_between = before_derived.get(f"{base}_between_calls_ms_per_present")
+        before_top_body = before_derived.get(
+            f"{base}_between_top_call_name_cpu_ms_per_present")
+        before_all_body = before_derived.get(
+            f"{base}_between_call_body_cpu_ms_per_present")
+        before_all_coverage = before_derived.get(
+            f"{base}_between_call_body_coverage_pct")
+        before_call_gap_residual = before_derived.get(
+            f"{base}_between_call_gap_residual_ms_per_present")
+        before_residual = before_call_gap_residual
+        if before_residual is None:
+            before_residual = before_derived.get(
+                f"{base}_between_body_residual_ms_per_present")
+        after_between = after_derived.get(f"{base}_between_calls_ms_per_present")
+        after_top_body = after_derived.get(
+            f"{base}_between_top_call_name_cpu_ms_per_present")
+        after_all_body = after_derived.get(
+            f"{base}_between_call_body_cpu_ms_per_present")
+        after_all_coverage = after_derived.get(
+            f"{base}_between_call_body_coverage_pct")
+        after_call_gap_residual = after_derived.get(
+            f"{base}_between_call_gap_residual_ms_per_present")
+        after_residual = after_call_gap_residual
+        if after_residual is None:
+            after_residual = after_derived.get(
+                f"{base}_between_body_residual_ms_per_present")
+        if (
+            before_between is None
+            and before_top_body is None
+            and before_all_body is None
+            and before_residual is None
+            and after_between is None
+            and after_top_body is None
+            and after_all_body is None
+            and after_residual is None
+        ):
+            continue
+        residual_diff, _ = delta(after_residual, before_residual)
+        lines.append(
+            f"| `{target_prefix}` | `{fmt_derived(before_between)}` | "
+            f"`{fmt_derived(before_top_body)}` | "
+            f"`{fmt_derived(before_all_body)}` | "
+            f"`{fmt_derived(before_all_coverage)}` | "
+            f"`{fmt_derived(before_residual)}` | "
+            f"`{fmt_derived(after_between)}` | "
+            f"`{fmt_derived(after_top_body)}` | "
+            f"`{fmt_derived(after_all_body)}` | "
+            f"`{fmt_derived(after_all_coverage)}` | "
+            f"`{fmt_derived(after_residual)}` | `{residual_diff}` |"
+        )
+    lines.append("")
+
+
 def write_report(
     output: Path,
     before_path: Path,
@@ -2118,7 +3123,12 @@ def write_report(
     before: dict[str, Any],
     after: dict[str, Any],
 ) -> None:
-    keys = tuple(dict.fromkeys((*FOCUS_COUNTERS, *RUN_COUNTERS, *EXTRA_COUNTERS)))
+    keys = tuple(dict.fromkeys((
+        *FOCUS_COUNTERS,
+        *RUN_COUNTERS,
+        *EXTRA_COUNTERS,
+        *PE_RECORDER_NUMERIC_FOCUS_COUNTERS,
+    )))
     before_derived = derived(before)
     after_derived = derived(after)
 
@@ -2295,6 +3305,8 @@ def write_report(
         lines.append(f"| `{key}` | `{fmt_derived(b)}` | `{fmt_derived(a)}` | `{diff}` | `{pct}` |")
     lines.append("")
 
+    append_pe_recorder_sections(lines, before, after, before_derived, after_derived)
+
     lines.append("## Counters")
     lines.append("")
     lines.append("| Counter | Before | After | Delta | Delta % |")
@@ -2418,6 +3430,12 @@ def failed_requirements(args: argparse.Namespace,
         require_available_derived_not_increase(
             "encoder_sidecar_final_end_reason_per_present",
             "encoder_sidecar_final_end_reason_per_present",
+        )
+
+    if args.require_encoder_final_same_key_reopen_not_increase:
+        require_available_derived_not_increase(
+            "encoder_sidecar_final_same_key_reopen_per_present",
+            "encoder_sidecar_final_same_key_reopen_per_present",
         )
 
     if args.require_encoder_color_load_not_increase:
@@ -2787,6 +3805,12 @@ def failed_requirements(args: argparse.Namespace,
             "no_enqueue_before_publish_inter_replay_gap_ms_per_present",
         )
 
+    if args.require_pe_focused_between_call_gap_residual_decrease:
+        require_available_derived_decrease(
+            "pe_recorder_focused_between_call_gap_residual_ms_per_present",
+            "pe_recorder_focused_between_call_gap_residual_ms_per_present",
+        )
+
     return failures
 
 
@@ -2833,6 +3857,14 @@ def main() -> int:
         help=(
             "exit nonzero if encoder-sidecar chunk-final render encoder "
             "closures per present increase"
+        ),
+    )
+    parser.add_argument(
+        "--require-encoder-final-same-key-reopen-not-increase",
+        action="store_true",
+        help=(
+            "exit nonzero if encoder-sidecar chunk-final closures followed by "
+            "the same RT/depth key per present increase"
         ),
     )
     parser.add_argument(
@@ -3084,6 +4116,14 @@ def main() -> int:
         "--require-no-enqueue-before-publish-inter-replay-gap-decrease",
         action="store_true",
         help="exit nonzero unless no-enqueue before-publish inter-replay gap decreases",
+    )
+    parser.add_argument(
+        "--require-pe-focused-between-call-gap-residual-decrease",
+        action="store_true",
+        help=(
+            "exit nonzero unless aggregate focused PE between-call residual "
+            "wall time per present decreases"
+        ),
     )
     args = parser.parse_args()
     if (

@@ -444,6 +444,18 @@ RUN_COUNTERS = (
     "d3d9_snapshot_cache_batch_miss_uniform_payload_reuse_full",
     "d3d9_snapshot_cache_batch_miss_uniform_payload_reuse_nonconst",
     "d3d9_snapshot_cache_batch_miss_uniform_payload_full_build",
+    "d3d9_snapshot_cache_batch_miss_uniform_vs_const_hash_reuse",
+    "d3d9_snapshot_cache_batch_miss_uniform_vs_const_hash_build",
+    "d3d9_snapshot_cache_batch_miss_uniform_ps_const_hash_reuse",
+    "d3d9_snapshot_cache_batch_miss_uniform_ps_const_hash_build",
+    "d3d9_snapshot_cache_batch_miss_uniform_vs_const_hash_memo_probe",
+    "d3d9_snapshot_cache_batch_miss_uniform_vs_const_hash_memo_hits",
+    "d3d9_snapshot_cache_batch_miss_uniform_vs_const_hash_memo_misses",
+    "d3d9_snapshot_cache_batch_miss_uniform_vs_const_hash_memo_stores",
+    "d3d9_snapshot_cache_batch_miss_uniform_ps_const_hash_memo_probe",
+    "d3d9_snapshot_cache_batch_miss_uniform_ps_const_hash_memo_hits",
+    "d3d9_snapshot_cache_batch_miss_uniform_ps_const_hash_memo_misses",
+    "d3d9_snapshot_cache_batch_miss_uniform_ps_const_hash_memo_stores",
     "d3d9_snapshot_cache_batch_miss_uniform_build_calls",
     "d3d9_snapshot_cache_batch_miss_uniform_build_vs_const_copy_cpu_ms",
     "d3d9_snapshot_cache_batch_miss_uniform_build_ps_const_copy_cpu_ms",
@@ -1128,6 +1140,25 @@ RUN_COUNTERS = (
     "commit_chunk_replay_pending_flush_cpu_ms",
     "commit_chunk_replay_pending_flush_cpu_p50_ms",
     "commit_chunk_replay_pending_flush_cpu_p95_ms",
+    "commit_chunk_replay_pending_flush_before_record_cpu_ms",
+    "commit_chunk_replay_pending_flush_draw_run_cpu_ms",
+    "commit_chunk_replay_pending_flush_draw_fallback_cpu_ms",
+    "commit_chunk_replay_pending_flush_failure_cpu_ms",
+    "commit_chunk_replay_pending_flush_end_cpu_ms",
+    "commit_chunk_replay_pending_flush_before_record_flushes",
+    "commit_chunk_replay_pending_flush_draw_run_flushes",
+    "commit_chunk_replay_pending_flush_draw_fallback_flushes",
+    "commit_chunk_replay_pending_flush_failure_flushes",
+    "commit_chunk_replay_pending_flush_end_flushes",
+    "commit_chunk_replay_pending_flush_before_record_records",
+    "commit_chunk_replay_pending_flush_draw_run_records",
+    "commit_chunk_replay_pending_flush_draw_fallback_records",
+    "commit_chunk_replay_pending_flush_failure_records",
+    "commit_chunk_replay_pending_flush_end_records",
+    "commit_chunk_replay_draw_run_preflush_opportunities",
+    "commit_chunk_replay_draw_run_preflush_pending_records",
+    "commit_chunk_replay_draw_run_preflush_run_records",
+    "commit_chunk_replay_draw_run_preflush_combined_records",
     "commit_chunk_replay_draw_record_cpu_ms",
     "commit_chunk_replay_draw_record_cpu_p50_ms",
     "commit_chunk_replay_draw_record_cpu_p95_ms",
@@ -3881,14 +3912,15 @@ def append_pe_recorder_gap_call_derived(
             "This table uses the same window as the family table, but keeps "
             "a fixed exact-call-name bucket when the call is known. It helps "
             "split `unknown` families and confirms whether constant traffic is "
-            "float/int/bool setter traffic."
+            "float/int/bool setter traffic. CPU columns measure the body time "
+            "of those intermediate calls, excluding the terminal append call."
         )
         lines.append("")
         lines.append(
             "| Pair | rank | call name | entries | entries/window | "
-            "entries/present |"
+            "entries/present | CPU ms | CPU ms/present | CPU max ms |"
         )
-        lines.append("|---|---:|---|---:|---:|---:|")
+        lines.append("|---|---:|---|---:|---:|---:|---:|---:|---:|")
         for pair_label, prefix, _ in focus_rows:
             windows = pe_counters.get(f"{prefix}TailSplitSamples")
             for rank in (1, 2):
@@ -3896,14 +3928,248 @@ def append_pe_recorder_gap_call_derived(
                     f"{prefix}BetweenTop{rank}CallNameSamples")
                 call_name = pe_counters.get(
                     f"{prefix}BetweenTop{rank}CallName")
+                cpu_ms = pe_counters.get(
+                    f"{prefix}BetweenTop{rank}CallNameCpuMs")
+                cpu_max_ms = pe_counters.get(
+                    f"{prefix}BetweenTop{rank}CallNameCpuMaxMs")
                 if not entries:
                     continue
                 lines.append(
                     f"| `{pair_label}` | `{rank}` | "
                     f"`{call_name if call_name is not None else 'unknown'}` | "
                     f"`{fmt(entries)}` | `{ratio_text(entries, windows)}` | "
-                    f"`{ratio_text(entries, present_encoded)}` |"
+                    f"`{ratio_text(entries, present_encoded)}` | "
+                    f"`{fmt(cpu_ms)}` | `{ratio_text(cpu_ms, present_encoded)}` | "
+                    f"`{fmt(cpu_max_ms)}` |"
                 )
+        lines.append("")
+
+    if any(
+        pe_counters.get(f"{prefix}BetweenGapTop1Samples")
+        or pe_counters.get(f"{prefix}BetweenGapTop1Ms")
+        or pe_counters.get(f"{prefix}BetweenGapTop2Samples")
+        or pe_counters.get(f"{prefix}BetweenGapTop2Ms")
+        for _, prefix, _ in focus_rows
+    ):
+        lines.append("### Focused Between-Calls Return-To-Entry Gaps")
+        lines.append("")
+        lines.append(
+            "This table ranks observed PE call-family transitions by "
+            "return-to-next-entry wall time inside the same between-calls "
+            "window. It includes the terminal append-producing call entry "
+            "gap. Calls without a tracked return are skipped for the next "
+            "transition, so this is direct evidence for the observed residual "
+            "rather than a full coverage proof."
+        )
+        lines.append("")
+        lines.append(
+            "| Pair | rank | transition | samples | ms | ms/present | "
+            "share of between-calls | max ms |"
+        )
+        lines.append("|---|---:|---|---:|---:|---:|---:|---:|")
+        for pair_label, prefix, _ in focus_rows:
+            between_ms = pe_counters.get(f"{prefix}BetweenCallsMs")
+            for rank in (1, 2):
+                samples = pe_counters.get(
+                    f"{prefix}BetweenGapTop{rank}Samples")
+                total_ms = pe_counters.get(f"{prefix}BetweenGapTop{rank}Ms")
+                prev_family = pe_counters.get(
+                    f"{prefix}BetweenGapTop{rank}PrevFamily")
+                next_family = pe_counters.get(
+                    f"{prefix}BetweenGapTop{rank}NextFamily")
+                max_ms = pe_counters.get(
+                    f"{prefix}BetweenGapTop{rank}MaxMs")
+                if not samples and not total_ms:
+                    continue
+                transition = (
+                    f"{prev_family if prev_family is not None else 'unknown'}"
+                    " -> "
+                    f"{next_family if next_family is not None else 'unknown'}"
+                )
+                lines.append(
+                    f"| `{pair_label}` | `{rank}` | `{transition}` | "
+                    f"`{fmt(samples)}` | `{fmt(total_ms)}` | "
+                    f"`{ratio_text(total_ms, present_encoded)}` | "
+                    f"`{pct(total_ms, between_ms)}` | `{fmt(max_ms)}` |"
+                )
+        lines.append("")
+
+    if any(
+        pe_counters.get(f"{prefix}BetweenGapTop1NameSamples")
+        or pe_counters.get(f"{prefix}BetweenGapTop1NameMs")
+        or pe_counters.get(f"{prefix}BetweenGapTop2NameSamples")
+        or pe_counters.get(f"{prefix}BetweenGapTop2NameMs")
+        for _, prefix, _ in focus_rows
+    ):
+        lines.append("### Focused Between-Calls Exact Return-To-Entry Gaps")
+        lines.append("")
+        lines.append(
+            "This table uses the same observed return-to-next-entry timing "
+            "as the family table above, but splits it by exact PE call name. "
+            "Use it to decide whether a family row such as "
+            "`draw -> viewport_scissor` is actually `DrawIndexedPrimitive -> "
+            "SetViewport`, `DrawIndexedPrimitive -> SetScissorRect`, or a "
+            "different call path."
+        )
+        lines.append("")
+        lines.append(
+            "| Pair | rank | transition | samples | ms | ms/present | "
+            "share of between-calls | max ms |"
+        )
+        lines.append("|---|---:|---|---:|---:|---:|---:|---:|")
+        for pair_label, prefix, _ in focus_rows:
+            between_ms = pe_counters.get(f"{prefix}BetweenCallsMs")
+            for rank in (1, 2):
+                samples = pe_counters.get(
+                    f"{prefix}BetweenGapTop{rank}NameSamples")
+                total_ms = pe_counters.get(
+                    f"{prefix}BetweenGapTop{rank}NameMs")
+                prev_name = pe_counters.get(
+                    f"{prefix}BetweenGapTop{rank}PrevCallName")
+                next_name = pe_counters.get(
+                    f"{prefix}BetweenGapTop{rank}NextCallName")
+                max_ms = pe_counters.get(
+                    f"{prefix}BetweenGapTop{rank}NameMaxMs")
+                if not samples and not total_ms:
+                    continue
+                transition = (
+                    f"{prev_name if prev_name is not None else 'unknown'}"
+                    " -> "
+                    f"{next_name if next_name is not None else 'unknown'}"
+                )
+                lines.append(
+                    f"| `{pair_label}` | `{rank}` | `{transition}` | "
+                    f"`{fmt(samples)}` | `{fmt(total_ms)}` | "
+                    f"`{ratio_text(total_ms, present_encoded)}` | "
+                    f"`{pct(total_ms, between_ms)}` | `{fmt(max_ms)}` |"
+                )
+        lines.append("")
+
+    if any(
+        pe_counters.get(f"{prefix}BetweenGapSiteTop1Samples")
+        or pe_counters.get(f"{prefix}BetweenGapSiteTop1Ms")
+        or pe_counters.get(f"{prefix}BetweenGapSiteTop2Samples")
+        or pe_counters.get(f"{prefix}BetweenGapSiteTop2Ms")
+        for _, prefix, _ in focus_rows
+    ):
+        lines.append("### Focused Between-Calls Exact Return-To-Entry Call Sites")
+        lines.append("")
+        lines.append(
+            "This table keeps the exact return-to-next-entry transition, then "
+            "splits it by the PE caller PC captured at the next call entry. "
+            "Use the module/RVA column to decide whether the residual is tied "
+            "to one app call site, a wrapper path, or a missing caller-PC "
+            "instrumentation path."
+        )
+        lines.append("")
+        lines.append(
+            "| Pair | rank | transition | caller module | caller RVA | samples | "
+            "ms | ms/present | share of between-calls | max ms |"
+        )
+        lines.append("|---|---:|---|---|---:|---:|---:|---:|---:|---:|")
+        for pair_label, prefix, _ in focus_rows:
+            between_ms = pe_counters.get(f"{prefix}BetweenCallsMs")
+            for rank in (1, 2):
+                samples = pe_counters.get(
+                    f"{prefix}BetweenGapSiteTop{rank}Samples")
+                total_ms = pe_counters.get(
+                    f"{prefix}BetweenGapSiteTop{rank}Ms")
+                prev_name = pe_counters.get(
+                    f"{prefix}BetweenGapSiteTop{rank}PrevCallName")
+                next_name = pe_counters.get(
+                    f"{prefix}BetweenGapSiteTop{rank}NextCallName")
+                module = pe_counters.get(
+                    f"{prefix}BetweenGapSiteTop{rank}CallerModule")
+                rva = pe_counters.get(
+                    f"{prefix}BetweenGapSiteTop{rank}CallerRva")
+                max_ms = pe_counters.get(
+                    f"{prefix}BetweenGapSiteTop{rank}MaxMs")
+                if not samples and not total_ms:
+                    continue
+                transition = (
+                    f"{prev_name if prev_name is not None else 'unknown'}"
+                    " -> "
+                    f"{next_name if next_name is not None else 'unknown'}"
+                )
+                lines.append(
+                    f"| `{pair_label}` | `{rank}` | `{transition}` | "
+                    f"`{module if module is not None else 'unknown'}` | "
+                    f"`{rva if rva is not None else '0x0'}` | "
+                    f"`{fmt(samples)}` | `{fmt(total_ms)}` | "
+                    f"`{ratio_text(total_ms, present_encoded)}` | "
+                    f"`{pct(total_ms, between_ms)}` | `{fmt(max_ms)}` |"
+                )
+        lines.append("")
+
+    if any(
+        pe_counters.get(f"{prefix}BetweenCallsMs")
+        or pe_counters.get(f"{prefix}BetweenTop1CallNameCpuMs")
+        or pe_counters.get(f"{prefix}BetweenTop2CallNameCpuMs")
+        or pe_counters.get(f"{prefix}BetweenCallBodyCpuMs")
+        for _, prefix, _ in focus_rows
+    ):
+        lines.append("### Focused Between-Calls Body Coverage")
+        lines.append("")
+        lines.append(
+            "This table compares the focused between-calls wall time against "
+            "the measured aggregate intermediate PE call-body CPU when "
+            "available, with the top exact intermediate PE calls retained as "
+            "a fallback/detail column. "
+            "A large residual means the row is producer/app/Wine cadence or "
+            "non-PE-call gap time, not a direct PE call-body optimization."
+        )
+        lines.append("")
+        lines.append(
+            "| Pair | between-calls ms | between-calls ms/present | "
+            "top exact-body CPU ms | top exact-body CPU ms/present | "
+            "all body calls | all body CPU ms | all body CPU ms/present | "
+            "all body coverage | call-gap residual ms | "
+            "call-gap residual ms/present | call-gap residual share |"
+        )
+        lines.append("|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|")
+        for pair_label, prefix, _ in focus_rows:
+            between_ms = pe_counters.get(f"{prefix}BetweenCallsMs")
+            top_body_ms = 0.0
+            has_top_body = False
+            for rank in (1, 2):
+                value = pe_counters.get(
+                    f"{prefix}BetweenTop{rank}CallNameCpuMs")
+                if isinstance(value, (int, float)):
+                    top_body_ms += float(value)
+                    has_top_body = True
+            all_body_calls = pe_counters.get(f"{prefix}BetweenCallBodyCalls")
+            all_body_ms = pe_counters.get(f"{prefix}BetweenCallBodyCpuMs")
+            has_all_body = isinstance(all_body_ms, (int, float))
+            if (
+                not isinstance(between_ms, (int, float))
+                and not has_top_body
+                and not has_all_body
+            ):
+                continue
+            residual_base_ms = None
+            if has_all_body:
+                residual_base_ms = float(all_body_ms)
+            elif has_top_body:
+                residual_base_ms = top_body_ms
+            residual_ms = None
+            if isinstance(between_ms, (int, float)):
+                residual_ms = (
+                    float(between_ms) - residual_base_ms
+                    if residual_base_ms is not None else None
+                )
+            lines.append(
+                f"| `{pair_label}` | `{fmt(between_ms)}` | "
+                f"`{ratio_text(between_ms, present_encoded)}` | "
+                f"`{fmt(top_body_ms if has_top_body else None)}` | "
+                f"`{ratio_text(top_body_ms if has_top_body else None, present_encoded)}` | "
+                f"`{fmt(all_body_calls)}` | "
+                f"`{fmt(all_body_ms)}` | "
+                f"`{ratio_text(all_body_ms, present_encoded)}` | "
+                f"`{pct(all_body_ms, between_ms)}` | "
+                f"`{fmt(residual_ms)}` | "
+                f"`{ratio_text(residual_ms, present_encoded)}` | "
+                f"`{pct(residual_ms, between_ms)}` |"
+            )
         lines.append("")
 
 
@@ -3912,6 +4178,11 @@ REPLAY_SNAPSHOT_CPU_STAGE_ROWS: tuple[tuple[str, str], ...] = (
     ("replay", "commit_chunk_replay_draw_record_cpu_ms"),
     ("replay", "commit_chunk_replay_non_draw_record_cpu_ms"),
     ("replay", "commit_chunk_replay_pending_flush_cpu_ms"),
+    ("replay-flush", "commit_chunk_replay_pending_flush_before_record_cpu_ms"),
+    ("replay-flush", "commit_chunk_replay_pending_flush_draw_run_cpu_ms"),
+    ("replay-flush", "commit_chunk_replay_pending_flush_draw_fallback_cpu_ms"),
+    ("replay-flush", "commit_chunk_replay_pending_flush_failure_cpu_ms"),
+    ("replay-flush", "commit_chunk_replay_pending_flush_end_cpu_ms"),
     ("replay", "commit_chunk_draw_batch_submit_cpu_ms"),
     ("submission", "commit_chunk_queue_draw_submission_cpu_ms"),
     ("submission", "commit_chunk_queue_draw_submission_snapshot_cpu_ms"),
@@ -3957,6 +4228,82 @@ def append_replay_snapshot_cpu_derived(
     batch_hit = counters.get("d3d9_snapshot_cache_batch_hit_cpu_ms")
     pending_flush = counters.get("commit_chunk_replay_pending_flush_cpu_ms")
     draw_batch_submit = counters.get("commit_chunk_draw_batch_submit_cpu_ms")
+    pending_flush_before_record = counters.get(
+        "commit_chunk_replay_pending_flush_before_record_cpu_ms"
+    )
+    pending_flush_draw_run = counters.get(
+        "commit_chunk_replay_pending_flush_draw_run_cpu_ms"
+    )
+    pending_flush_draw_fallback = counters.get(
+        "commit_chunk_replay_pending_flush_draw_fallback_cpu_ms"
+    )
+    pending_flush_failure = counters.get(
+        "commit_chunk_replay_pending_flush_failure_cpu_ms"
+    )
+    pending_flush_end = counters.get(
+        "commit_chunk_replay_pending_flush_end_cpu_ms"
+    )
+    pending_flush_reason_rows = (
+        (
+            "before_record",
+            pending_flush_before_record,
+            counters.get("commit_chunk_replay_pending_flush_before_record_flushes"),
+            counters.get("commit_chunk_replay_pending_flush_before_record_records"),
+        ),
+        (
+            "draw_run",
+            pending_flush_draw_run,
+            counters.get("commit_chunk_replay_pending_flush_draw_run_flushes"),
+            counters.get("commit_chunk_replay_pending_flush_draw_run_records"),
+        ),
+        (
+            "draw_fallback",
+            pending_flush_draw_fallback,
+            counters.get("commit_chunk_replay_pending_flush_draw_fallback_flushes"),
+            counters.get("commit_chunk_replay_pending_flush_draw_fallback_records"),
+        ),
+        (
+            "failure",
+            pending_flush_failure,
+            counters.get("commit_chunk_replay_pending_flush_failure_flushes"),
+            counters.get("commit_chunk_replay_pending_flush_failure_records"),
+        ),
+        (
+            "end",
+            pending_flush_end,
+            counters.get("commit_chunk_replay_pending_flush_end_flushes"),
+            counters.get("commit_chunk_replay_pending_flush_end_records"),
+        ),
+    )
+
+    def numeric_counter(name: str) -> float:
+        value = counters.get(name)
+        return float(value) if isinstance(value, (int, float)) else 0.0
+
+    queue_submission_child_sum = (
+        numeric_counter("commit_chunk_queue_draw_submission_snapshot_cpu_ms")
+        + numeric_counter("commit_chunk_queue_draw_submission_emplace_cpu_ms")
+        + numeric_counter("commit_chunk_apply_draw_state_cpu_ms")
+        + numeric_counter("commit_chunk_index_bind_cpu_ms")
+    )
+    queue_submission_residual = (
+        queue_submission - queue_submission_child_sum
+        if isinstance(queue_submission, (int, float))
+        else None
+    )
+    draw_record_known_child_sum = (
+        numeric_counter("commit_chunk_queue_draw_submission_cpu_ms")
+        + numeric_counter("commit_chunk_draw_run_scan_cpu_ms")
+        + numeric_counter("commit_chunk_draw_run_build_cpu_ms")
+        + numeric_counter("commit_chunk_draw_run_submit_cpu_ms")
+        + numeric_counter("commit_chunk_draw_run_final_bind_cpu_ms")
+    )
+    draw_record_cpu = counters.get("commit_chunk_replay_draw_record_cpu_ms")
+    draw_record_residual = (
+        draw_record_cpu - draw_record_known_child_sum
+        if isinstance(draw_record_cpu, (int, float))
+        else None
+    )
 
     stage_rows: list[tuple[str, str, int | float]] = []
     for scope, key in REPLAY_SNAPSHOT_CPU_STAGE_ROWS:
@@ -4023,10 +4370,148 @@ def append_replay_snapshot_cpu_derived(
         f"`{pct(pending_flush, replay_cpu)}` |"
     )
     lines.append(
+        "| `pending_flush_before_record_share` | "
+        f"`{pct(pending_flush_before_record, pending_flush)}` |"
+    )
+    lines.append(
+        "| `pending_flush_draw_run_share` | "
+        f"`{pct(pending_flush_draw_run, pending_flush)}` |"
+    )
+    lines.append(
+        "| `pending_flush_draw_fallback_share` | "
+        f"`{pct(pending_flush_draw_fallback, pending_flush)}` |"
+    )
+    lines.append(
+        "| `pending_flush_failure_share` | "
+        f"`{pct(pending_flush_failure, pending_flush)}` |"
+    )
+    lines.append(
+        "| `pending_flush_end_share` | "
+        f"`{pct(pending_flush_end, pending_flush)}` |"
+    )
+    total_pending_flushes = sum(
+        numeric_counter(f"commit_chunk_replay_pending_flush_{name}_flushes")
+        for name in ("before_record", "draw_run", "draw_fallback", "failure", "end")
+    )
+    total_pending_flush_records = sum(
+        numeric_counter(f"commit_chunk_replay_pending_flush_{name}_records")
+        for name in ("before_record", "draw_run", "draw_fallback", "failure", "end")
+    )
+    draw_run_preflush_opportunities = counters.get(
+        "commit_chunk_replay_draw_run_preflush_opportunities"
+    )
+    draw_run_preflush_pending_records = counters.get(
+        "commit_chunk_replay_draw_run_preflush_pending_records"
+    )
+    draw_run_preflush_run_records = counters.get(
+        "commit_chunk_replay_draw_run_preflush_run_records"
+    )
+    draw_run_preflush_combined_records = counters.get(
+        "commit_chunk_replay_draw_run_preflush_combined_records"
+    )
+    lines.append(
+        "| `pending_flush_records_per_flush` | "
+        f"`{ratio_text(total_pending_flush_records, total_pending_flushes)}` |"
+    )
+    lines.append(
+        "| `draw_run_preflush_combined_records_per_boundary` | "
+        f"`{ratio_text(draw_run_preflush_combined_records, draw_run_preflush_opportunities)}` |"
+    )
+    lines.append(
         "| `draw_batch_submit_share_of_replay` | "
         f"`{pct(draw_batch_submit, replay_cpu)}` |"
     )
+    lines.append(
+        "| `queue_submission_known_child_residual_ms_per_present` | "
+        f"`{ratio_text(queue_submission_residual, present_encoded)}` |"
+    )
+    lines.append(
+        "| `draw_record_known_child_residual_ms_per_present` | "
+        f"`{ratio_text(draw_record_residual, present_encoded)}` |"
+    )
     lines.append("")
+
+    if any(
+        (isinstance(flushes, (int, float)) and flushes > 0)
+        or (isinstance(records, (int, float)) and records > 0)
+        for _, _, flushes, records in pending_flush_reason_rows
+    ):
+        lines.append("### Pending Flush Reason Volume")
+        lines.append("")
+        lines.append(
+            "This table distinguishes frequent tiny boundary drains from "
+            "larger batch drains. `records` counts queued draw submission "
+            "records flushed by that reason."
+        )
+        lines.append("")
+        lines.append(
+            "| Reason | CPU ms | share of pending CPU | flushes | records | "
+            "records/flush | flushes/present | records/present |"
+        )
+        lines.append("|---|---:|---:|---:|---:|---:|---:|---:|")
+        for reason, cpu_ms, flushes, records in pending_flush_reason_rows:
+            lines.append(
+                f"| `{reason}` | `{fmt(cpu_ms)}` | `{pct(cpu_ms, pending_flush)}` | "
+                f"`{fmt(flushes)}` | `{fmt(records)}` | "
+                f"`{ratio_text(records, flushes)}` | "
+                f"`{ratio_text(flushes, present_encoded)}` | "
+                f"`{ratio_text(records, present_encoded)}` |"
+            )
+        lines.append("")
+
+    if isinstance(draw_run_preflush_opportunities, (int, float)) and (
+        draw_run_preflush_opportunities > 0
+        or numeric_counter("commit_chunk_replay_draw_run_preflush_pending_records") > 0
+        or numeric_counter("commit_chunk_replay_draw_run_preflush_run_records") > 0
+    ):
+        lines.append("### Draw-Run Preflush Carrier Opportunity")
+        lines.append("")
+        lines.append(
+            "This counts non-empty pending submission drains immediately before "
+            "an explicit imported draw-run, then adds the following run length. "
+            "It sizes the carrier-combine opportunity without changing replay "
+            "ordering."
+        )
+        lines.append("")
+        lines.append("| Metric | Value |")
+        lines.append("|---|---:|")
+        lines.append(
+            "| `draw_run_preflush_opportunities` | "
+            f"`{fmt(draw_run_preflush_opportunities)}` |"
+        )
+        lines.append(
+            "| `draw_run_preflush_pending_records` | "
+            f"`{fmt(draw_run_preflush_pending_records)}` |"
+        )
+        lines.append(
+            "| `draw_run_preflush_run_records` | "
+            f"`{fmt(draw_run_preflush_run_records)}` |"
+        )
+        lines.append(
+            "| `draw_run_preflush_combined_records` | "
+            f"`{fmt(draw_run_preflush_combined_records)}` |"
+        )
+        lines.append(
+            "| `draw_run_preflush_pending_records_per_boundary` | "
+            f"`{ratio_text(draw_run_preflush_pending_records, draw_run_preflush_opportunities)}` |"
+        )
+        lines.append(
+            "| `draw_run_preflush_run_records_per_boundary` | "
+            f"`{ratio_text(draw_run_preflush_run_records, draw_run_preflush_opportunities)}` |"
+        )
+        lines.append(
+            "| `draw_run_preflush_combined_records_per_boundary` | "
+            f"`{ratio_text(draw_run_preflush_combined_records, draw_run_preflush_opportunities)}` |"
+        )
+        lines.append(
+            "| `draw_run_preflush_combined_records_per_present` | "
+            f"`{ratio_text(draw_run_preflush_combined_records, present_encoded)}` |"
+        )
+        lines.append(
+            "| `draw_run_preflush_opportunity_share_of_draw_run_flushes` | "
+            f"`{pct(draw_run_preflush_opportunities, counters.get('commit_chunk_replay_pending_flush_draw_run_flushes'))}` |"
+        )
+        lines.append("")
 
     lines.append("### Replay / Snapshot Candidate Ranking")
     lines.append("")

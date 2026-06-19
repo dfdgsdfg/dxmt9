@@ -38,6 +38,14 @@ dump_shaders=0
 frame_sampling=${DXMT9_PERF_FRAME_SAMPLING:-0}
 draw_packet_actual_change=${DXMT9_PERF_DRAW_PACKET_ACTUAL_CHANGE:-0}
 vs_const_setter_range=${DXMT9_PERF_VS_CONST_SETTER_RANGE:-0}
+pe_recorder_stats=${DXMT9_PE_RECORDER_STATS:-0}
+pe_recorder_chunk_log=${DXMT9_PE_RECORDER_CHUNK_LOG:-0}
+pe_flush_after_clear=${DXMT9_PE_FLUSH_AFTER_CLEAR:-0}
+pe_flush_after_draw=${DXMT9_PE_FLUSH_AFTER_DRAW:-0}
+pe_draw_full_snapshot=${DXMT9_PE_DRAW_FULL_SNAPSHOT:-0}
+pe_chunk_max_records=${DXMT9_PE_CHUNK_MAX_RECORDS:-}
+pe_chunk_max_bytes=${DXMT9_PE_CHUNK_MAX_BYTES:-}
+dxmt_log_level=${DXMT_LOG_LEVEL:-}
 recommended_gputrace_min_free_mb=2048
 trim_unused_varyings=0
 trim_unused_varyings_vs_hashes=
@@ -261,6 +269,7 @@ require_tile_preservation_not_increase=0
 require_command_buffers_per_present_not_increase=0
 require_render_passes_per_present_not_increase=0
 require_encoder_final_end_reason_not_increase=0
+require_encoder_final_same_key_reopen_not_increase=0
 require_encoder_color_load_not_increase=0
 require_encoder_depth_load_not_increase=0
 require_draw_run_records_increase=0
@@ -308,6 +317,7 @@ require_no_enqueue_encode_dequeue_to_commit_decrease=0
 require_no_enqueue_wait_to_next_enqueue_decrease=0
 require_no_enqueue_before_publish_closure_decrease=0
 require_no_enqueue_before_publish_inter_replay_gap_decrease=0
+require_pe_focused_between_call_gap_residual_decrease=0
 max_gpu_command_buffer_regression_ms=${DXMT_3DMARK05_MAX_GPU_COMMAND_BUFFER_REGRESSION_MS:-}
 max_const_upload_break_count_ratio=${DXMT_3DMARK05_MAX_CONST_UPLOAD_BREAK_COUNT_RATIO:-}
 require_result_json=0
@@ -692,6 +702,26 @@ Options:
                       Set DXMT9_PERF_VS_CONST_SETTER_RANGE=1. Aggregates
                       SetVertexShaderConstantF app-call ranges and flushed VS
                       float constant record ranges by current VS/PS shader hash.
+  --pe-recorder-stats
+                      Set DXMT9_PE_RECORDER_STATS=1 and default
+                      DXMT_LOG_LEVEL=info so recorder timing lines reach logs.
+  --pe-recorder-chunk-log
+                      Set DXMT9_PE_RECORDER_CHUNK_LOG=1.
+  --pe-flush-after-clear
+                      Set DXMT9_PE_FLUSH_AFTER_CLEAR=1 for PE chunk pacing
+                      probes.
+  --pe-flush-after-draw
+                      Set DXMT9_PE_FLUSH_AFTER_DRAW=1 for PE chunk pacing
+                      probes.
+  --pe-draw-full-snapshot
+                      Set DXMT9_PE_DRAW_FULL_SNAPSHOT=1 for bridge debug
+                      probes.
+  --pe-chunk-max-records N
+                      Set DXMT9_PE_CHUNK_MAX_RECORDS=N.
+  --pe-chunk-max-bytes N
+                      Set DXMT9_PE_CHUNK_MAX_BYTES=N.
+  --dxmt-log-level LEVEL
+                      Set DXMT_LOG_LEVEL for the wrapped run.
   --dump-shaders      Dump translated MSL and D3D shader bytecode under
                       traces/<run-id>/analysis/shaders
   --trim-unused-varyings
@@ -1332,6 +1362,8 @@ Options:
                       Compare gate: render passes per present must not increase
   --require-encoder-final-end-reason-not-increase
                       Compare gate: encoder sidecar final end-reason per present must not increase
+  --require-encoder-final-same-key-reopen-not-increase
+                      Compare gate: encoder sidecar final same-key reopen per present must not increase
   --require-encoder-color-load-not-increase
                       Compare gate: encoder sidecar color load MiB per present must not increase
   --require-encoder-depth-load-not-increase
@@ -1429,6 +1461,8 @@ Options:
                       Compare gate: no-enqueue before-publish closure ms must decrease
   --require-no-enqueue-before-publish-inter-replay-gap-decrease
                       Compare gate: no-enqueue before-publish inter-replay gap ms must decrease
+  --require-pe-focused-between-call-gap-residual-decrease
+                      Compare gate: focused PE between-call residual ms per present must decrease
   --max-gpu-command-buffer-regression-ms N
                       Compare gate: max allowed gpu_command_buffer_time_ms regression
   --require-result-json
@@ -1689,6 +1723,41 @@ while (($#)); do
     --probe-vs-const-setter-range)
       vs_const_setter_range=1
       shift
+      ;;
+    --pe-recorder-stats)
+      pe_recorder_stats=1
+      if [[ -z "$dxmt_log_level" ]]; then
+        dxmt_log_level=info
+      fi
+      shift
+      ;;
+    --pe-recorder-chunk-log)
+      pe_recorder_chunk_log=1
+      shift
+      ;;
+    --pe-flush-after-clear)
+      pe_flush_after_clear=1
+      shift
+      ;;
+    --pe-flush-after-draw)
+      pe_flush_after_draw=1
+      shift
+      ;;
+    --pe-draw-full-snapshot)
+      pe_draw_full_snapshot=1
+      shift
+      ;;
+    --pe-chunk-max-records)
+      pe_chunk_max_records=${2:?missing value for --pe-chunk-max-records}
+      shift 2
+      ;;
+    --pe-chunk-max-bytes)
+      pe_chunk_max_bytes=${2:?missing value for --pe-chunk-max-bytes}
+      shift 2
+      ;;
+    --dxmt-log-level)
+      dxmt_log_level=${2:?missing value for --dxmt-log-level}
+      shift 2
       ;;
     --no-gputrace)
       capture_gputrace=0
@@ -2628,6 +2697,10 @@ while (($#)); do
       require_encoder_final_end_reason_not_increase=1
       shift
       ;;
+    --require-encoder-final-same-key-reopen-not-increase)
+      require_encoder_final_same_key_reopen_not_increase=1
+      shift
+      ;;
     --require-encoder-color-load-not-increase)
       require_encoder_color_load_not_increase=1
       shift
@@ -2814,6 +2887,10 @@ while (($#)); do
       ;;
     --require-no-enqueue-before-publish-inter-replay-gap-decrease)
       require_no_enqueue_before_publish_inter_replay_gap_decrease=1
+      shift
+      ;;
+    --require-pe-focused-between-call-gap-residual-decrease)
+      require_pe_focused_between_call_gap_residual_decrease=1
       shift
       ;;
     --max-gpu-command-buffer-regression-ms)
@@ -3825,6 +3902,7 @@ if (( require_color_dontcare_increase ||
       require_command_buffers_per_present_not_increase ||
       require_render_passes_per_present_not_increase ||
       require_encoder_final_end_reason_not_increase ||
+      require_encoder_final_same_key_reopen_not_increase ||
       require_encoder_color_load_not_increase ||
       require_encoder_depth_load_not_increase ||
       require_draw_run_records_increase ||
@@ -3870,7 +3948,8 @@ if (( require_color_dontcare_increase ||
       require_no_enqueue_encode_dequeue_to_commit_decrease ||
       require_no_enqueue_wait_to_next_enqueue_decrease ||
       require_no_enqueue_before_publish_closure_decrease ||
-      require_no_enqueue_before_publish_inter_replay_gap_decrease )) ||
+      require_no_enqueue_before_publish_inter_replay_gap_decrease ||
+      require_pe_focused_between_call_gap_residual_decrease )) ||
    [[ -n "$max_gpu_command_buffer_regression_ms" ||
       -n "$max_const_upload_break_count_ratio" ]]; then
   run_level_compare_requested=1
@@ -4141,6 +4220,41 @@ fi
 
 if [[ "$vs_const_setter_range" != "0" && -n "$vs_const_setter_range" ]]; then
   env_args+=("DXMT9_PERF_VS_CONST_SETTER_RANGE=$vs_const_setter_range")
+fi
+
+if [[ "$pe_recorder_stats" != "0" && -n "$pe_recorder_stats" ]]; then
+  env_args+=("DXMT9_PE_RECORDER_STATS=$pe_recorder_stats")
+  if [[ -z "$dxmt_log_level" ]]; then
+    dxmt_log_level=info
+  fi
+fi
+
+if [[ "$pe_recorder_chunk_log" != "0" && -n "$pe_recorder_chunk_log" ]]; then
+  env_args+=("DXMT9_PE_RECORDER_CHUNK_LOG=$pe_recorder_chunk_log")
+fi
+
+if [[ "$pe_flush_after_clear" != "0" && -n "$pe_flush_after_clear" ]]; then
+  env_args+=("DXMT9_PE_FLUSH_AFTER_CLEAR=$pe_flush_after_clear")
+fi
+
+if [[ "$pe_flush_after_draw" != "0" && -n "$pe_flush_after_draw" ]]; then
+  env_args+=("DXMT9_PE_FLUSH_AFTER_DRAW=$pe_flush_after_draw")
+fi
+
+if [[ "$pe_draw_full_snapshot" != "0" && -n "$pe_draw_full_snapshot" ]]; then
+  env_args+=("DXMT9_PE_DRAW_FULL_SNAPSHOT=$pe_draw_full_snapshot")
+fi
+
+if [[ -n "$pe_chunk_max_records" ]]; then
+  env_args+=("DXMT9_PE_CHUNK_MAX_RECORDS=$pe_chunk_max_records")
+fi
+
+if [[ -n "$pe_chunk_max_bytes" ]]; then
+  env_args+=("DXMT9_PE_CHUNK_MAX_BYTES=$pe_chunk_max_bytes")
+fi
+
+if [[ -n "$dxmt_log_level" ]]; then
+  env_args+=("DXMT_LOG_LEVEL=$dxmt_log_level")
 fi
 
 if (( dump_framegraph_dag )); then
@@ -4986,6 +5100,9 @@ if [[ -n "$compare_baseline_output" ]]; then
   if (( require_encoder_final_end_reason_not_increase )); then
     counter_compare_cmd+=(--require-encoder-final-end-reason-not-increase)
   fi
+  if (( require_encoder_final_same_key_reopen_not_increase )); then
+    counter_compare_cmd+=(--require-encoder-final-same-key-reopen-not-increase)
+  fi
   if (( require_encoder_color_load_not_increase )); then
     counter_compare_cmd+=(--require-encoder-color-load-not-increase)
   fi
@@ -5124,6 +5241,9 @@ if [[ -n "$compare_baseline_output" ]]; then
   if (( require_no_enqueue_before_publish_inter_replay_gap_decrease )); then
     counter_compare_cmd+=(--require-no-enqueue-before-publish-inter-replay-gap-decrease)
   fi
+  if (( require_pe_focused_between_call_gap_residual_decrease )); then
+    counter_compare_cmd+=(--require-pe-focused-between-call-gap-residual-decrease)
+  fi
   if [[ -n "$max_gpu_command_buffer_regression_ms" ]]; then
     counter_compare_cmd+=(
       --max-gpu-command-buffer-regression-ms
@@ -5241,6 +5361,9 @@ if (( capture_gputrace )); then
   fi
   if (( require_encoder_final_end_reason_not_increase )); then
     finalize_cmd+=(--require-encoder-final-end-reason-not-increase)
+  fi
+  if (( require_encoder_final_same_key_reopen_not_increase )); then
+    finalize_cmd+=(--require-encoder-final-same-key-reopen-not-increase)
   fi
   if (( require_encoder_color_load_not_increase )); then
     finalize_cmd+=(--require-encoder-color-load-not-increase)
@@ -5382,6 +5505,9 @@ if (( capture_gputrace )); then
   fi
   if (( require_no_enqueue_before_publish_inter_replay_gap_decrease )); then
     finalize_cmd+=(--require-no-enqueue-before-publish-inter-replay-gap-decrease)
+  fi
+  if (( require_pe_focused_between_call_gap_residual_decrease )); then
+    finalize_cmd+=(--require-pe-focused-between-call-gap-residual-decrease)
   fi
   if [[ -n "$max_gpu_command_buffer_regression_ms" ]]; then
     finalize_cmd+=(

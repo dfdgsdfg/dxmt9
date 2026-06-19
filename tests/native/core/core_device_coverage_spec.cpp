@@ -300,6 +300,91 @@ void testIndexedDrawPolicyContracts() {
                           "indexed UP user index payload range"),
              std::span<const u8>(upIndexBytes.data(), upIndexBytes.size()),
              "indexed UP draw preserves user index payload");
+
+  std::array<DrawParam, 1> canonicalRun{};
+  canonicalRun[0].primitiveType = PrimitiveType::TriangleList;
+  canonicalRun[0].primitiveCount = 1;
+  canonicalRun[0].startVertex = 7;
+  const auto beforeCanonical = backend->draws.size();
+  checkEq(device->drawPrimitiveRunCanonical(
+              std::span<const DrawParam>(canonicalRun.data(),
+                                         canonicalRun.size())),
+          D3D_OK, "indexed policy canonical draw-run fast path");
+  checkEq(backend->draws.size(), beforeCanonical + 1u,
+          "canonical draw-run reaches backend");
+  checkEq(backend->draws.back().param.primitiveType,
+          PrimitiveType::TriangleList,
+          "canonical draw-run keeps primitive type");
+  checkEq(backend->draws.back().param.startVertex, 7u,
+          "canonical draw-run keeps start vertex");
+
+  std::array<DrawParam, 1> canonicalFan{};
+  canonicalFan[0].primitiveType = PrimitiveType::TriangleFan;
+  canonicalFan[0].primitiveCount = 1;
+  const auto beforeRejectedCanonical = backend->draws.size();
+  checkEq(device->drawPrimitiveRunCanonical(
+              std::span<const DrawParam>(canonicalFan.data(),
+                                         canonicalFan.size())),
+          D3DERR_INVALIDCALL,
+          "canonical draw-run fast path rejects TriangleFan");
+  checkEq(backend->draws.size(), beforeRejectedCanonical,
+          "rejected canonical fan does not reach backend");
+
+  std::array<DrawRunSubmission, 1> pendingSubmissions{};
+  DrawParam pendingDraw{};
+  pendingDraw.primitiveType = PrimitiveType::TriangleList;
+  pendingDraw.primitiveCount = 1;
+  pendingDraw.startVertex = 11;
+  checkEq(device->snapshotDrawSubmissionFromCurrentState(
+              pendingDraw, pendingSubmissions[0]),
+          D3D_OK, "mixed carrier snapshots pending submission");
+
+  std::array<DrawParam, 2> mixedRun{};
+  mixedRun[0].primitiveType = PrimitiveType::TriangleList;
+  mixedRun[0].primitiveCount = 1;
+  mixedRun[0].startVertex = 17;
+  mixedRun[1].primitiveType = PrimitiveType::TriangleList;
+  mixedRun[1].primitiveCount = 1;
+  mixedRun[1].startVertex = 23;
+  const auto beforeMixedRuns = backend->drawRuns.size();
+  checkEq(device->submitDrawSubmissionBatchAndDrawRunCanonical(
+              std::span<DrawRunSubmission>(pendingSubmissions.data(),
+                                           pendingSubmissions.size()),
+              std::span<const DrawParam>(mixedRun.data(), mixedRun.size())),
+          D3D_OK, "mixed carrier submits pending batch plus canonical run");
+  checkEq(backend->drawRuns.size(), beforeMixedRuns + 2u,
+          "stub mixed carrier preserves separate batch and run submissions");
+  checkEq(backend->drawRuns[beforeMixedRuns].draws.size(), size_t{1},
+          "mixed carrier pending batch remains one pending draw");
+  checkEq(backend->drawRuns[beforeMixedRuns].draws[0].startVertex, 11u,
+          "mixed carrier keeps pending draw params");
+  checkEq(backend->drawRuns[beforeMixedRuns + 1u].draws.size(), size_t{2},
+          "mixed carrier following run remains a canonical span");
+  checkEq(backend->drawRuns[beforeMixedRuns + 1u].draws[0].startVertex, 17u,
+          "mixed carrier keeps first run draw");
+  checkEq(backend->drawRuns[beforeMixedRuns + 1u].draws[1].startVertex, 23u,
+          "mixed carrier keeps second run draw");
+
+  std::array<DrawRunSubmission, 1> rejectedSubmissions{};
+  DrawParam rejectedPending{};
+  rejectedPending.primitiveType = PrimitiveType::TriangleList;
+  rejectedPending.primitiveCount = 1;
+  checkEq(device->snapshotDrawSubmissionFromCurrentState(
+              rejectedPending, rejectedSubmissions[0]),
+          D3D_OK, "mixed carrier snapshots rejected pending submission");
+  std::array<DrawParam, 1> rejectedRun{};
+  rejectedRun[0].primitiveType = PrimitiveType::TriangleFan;
+  rejectedRun[0].primitiveCount = 1;
+  const auto beforeRejectedMixedRuns = backend->drawRuns.size();
+  checkEq(device->submitDrawSubmissionBatchAndDrawRunCanonical(
+              std::span<DrawRunSubmission>(rejectedSubmissions.data(),
+                                           rejectedSubmissions.size()),
+              std::span<const DrawParam>(rejectedRun.data(),
+                                         rejectedRun.size())),
+          D3DERR_INVALIDCALL,
+          "mixed carrier canonical path rejects TriangleFan run");
+  checkEq(backend->drawRuns.size(), beforeRejectedMixedRuns,
+          "rejected mixed carrier does not submit pending batch");
 }
 
 void testCubeTextureSubresourceFlow() {

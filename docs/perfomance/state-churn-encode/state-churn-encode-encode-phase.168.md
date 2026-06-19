@@ -15,8 +15,9 @@ related: docs/perfomance/state-churn-encode/state-churn-encode-encode-phase.167.
 
 ## Question
 
-If the default resource-shape PSO memo is disabled entirely, does the current
-black-geometry / translucent-lighting visual artifact disappear?
+If the default resource-shape PSO memo is disabled entirely, does the
+then-suspected current black-foreground / translucent-lighting visual class
+disappear?
 
 ## Verdict
 
@@ -26,10 +27,12 @@ not a performance candidate.
 The h190 run sets only `DXMT9_DISABLE_ENCODE_SLOT_PSO_RESOURCE_SHAPE_MEMO=1`
 on top of the standard 3DMark05 perf probe. The counters prove the opt-out is
 active: resource-shape memo candidates, hits, misses, stores, and validation
-rows are all `0`. The run still renders a large black geometry artifact in
-`actual.png`, so the default memo is not the current visual-fix lever. This
-matches H167's forced-validation result, where all `161,025` memo hits matched
-the canonical `probeKey`.
+rows are all `0`. The run still renders the sampled dark foreground/silhouette
+class in `actual.png`, so the default memo is not the current visual-fix lever.
+This matches H167's forced-validation result, where all `161,025` memo hits
+matched the canonical `probeKey`. H172 later shows this sampled window class
+also exists in the `v0.0.3` safe tag, so do not treat h190's time-based
+foreground shape as standalone regression proof.
 
 The opt-out also does not improve the average-FPS owner. It shifts the repeated
 work to the probe-key memo path (`probe_key_memo_hits=169,745`) and keeps PSO
@@ -97,21 +100,21 @@ used as same-frame visual proof.
 Against h189 forced validation, the opt-out keeps the same broad cadence shape:
 command buffers per present stay `3.999`, ready depth stays `1.000`, completion
 wait changes by only `+0.295ms/present`, and encode chunk changes by
-`-0.117ms/present`. The large visual artifact persists in h190, so the useful
-conclusion is root-cause exclusion rather than a performance delta.
+`-0.117ms/present`. The then-suspected visual class persists in h190, so the
+useful conclusion is root-cause exclusion rather than a performance delta.
 
 ## Structure
 
 ```mermaid
 flowchart TD
-  A["Current visual artifact\nblack geometry / translucent-lighting reports"] --> B{"Disable resource-shape memo?"}
+  A["Then-suspected visual class\nblack foreground / translucent-lighting reports"] --> B{"Disable resource-shape memo?"}
 
   B -- "No: default" --> C["resource-shape memo hit path"]
   C --> D["H167 forced validation\n161,025 validated hits\n0 misses"]
 
   B -- "Yes: h190" --> E["resource-shape counters all 0"]
   E --> F["probe-key memo handles repeats\n169,745 hits"]
-  F --> G["actual.png still shows black geometry artifact"]
+  F --> G["actual.png still shows sampled dark foreground class"]
 
   D --> H["Memo stale-PSO branch lowered"]
   G --> H
@@ -132,9 +135,10 @@ The resource-shape memo branch is now checked two ways:
 - H167: keep the memo but validate the resolved `probeKey` on every hit.
 - H168: disable the memo entirely.
 
-Both routes reject the memo as the visual owner. The next visual-debug work
-should move to state/constant or binding-source correctness: dynamic backing
-snapshots, stream/IB payload state, shader constant source changes, blend/depth
-order, or final-writer/pass behavior. Do not spend another `.gputrace` on the
-resource-shape memo unless a same-frame A/B contradicts these two no-gputrace
-gates.
+Both routes reject the memo as the visual owner. H172 later lowers this sampled
+window to normal-scene/post-process because it also appears in `v0.0.3`. The
+next visual-debug work should move only after a reproduced object-specific
+artifact: dynamic backing snapshots, stream/IB payload state, shader constant
+source changes, blend/depth order, or final-writer/pass behavior. Do not spend
+another `.gputrace` on the resource-shape memo unless a same-frame A/B
+contradicts these no-gputrace gates.

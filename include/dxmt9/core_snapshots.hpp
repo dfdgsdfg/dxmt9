@@ -2016,6 +2016,19 @@ class Device : public std::enable_shared_from_this<Device> {
   HResult drawPrimitiveRun(std::span<const DrawParam> draws);
   HResult drawPrimitiveRun(std::span<const DrawParam> draws,
                            std::span<const DrawParamPayloadView> payloads);
+  // Chunk-importer fast path for scanned draw-runs that already exclude
+  // TriangleFan and therefore do not need public DrawPrimitive fan
+  // normalization. Borrowed spans are consumed before the call returns.
+  HResult drawPrimitiveRunCanonical(std::span<const DrawParam> draws,
+                                    std::span<const DrawParamPayloadView> payloads = {});
+  HResult submitDrawSubmissionBatchAndDrawRunCanonical(
+      std::span<DrawRunSubmission> submissions,
+      std::span<const DrawParam> draws,
+      std::span<const DrawParamPayloadView> payloads = {});
+  HResult submitCompactDrawSubmissionBatchAndDrawRunCanonical(
+      std::span<DrawRunCompactSubmission> submissions,
+      std::span<const DrawParam> draws,
+      std::span<const DrawParamPayloadView> payloads = {});
   HResult snapshotDrawSubmissionFromCurrentState(
       DrawParam draw, DrawRunSubmission& submission,
       const DrawRunSubmission* previousSubmission = nullptr,
@@ -2134,11 +2147,23 @@ class Device : public std::enable_shared_from_this<Device> {
     FlatDrawStateRecord hot{};
     DrawShaderLayoutContext shaderLayout{};
     DrawUniformPayload uniforms{};
+    DrawUniformFixedPayload uniformFixedPayload{};
     DrawUniformPayloadHashes uniformHashes{};
+    u64 uniformPayloadHash = 0;
+    u64 uniformFixedPayloadHash = 0;
+    bool fullUniformsValid = false;
+    bool uniformFixedPayloadValid = false;
   };
 
   struct BatchMissSemanticProbeEntry {
     FlatDrawStateKey key{};
+    u64 hash = 0;
+    bool valid = false;
+  };
+
+  struct BatchMissShaderConstantHashMemoEntry {
+    ShaderConstantUsageBounds usage{};
+    u64 generation = 0;
     u64 hash = 0;
     bool valid = false;
   };
@@ -2151,7 +2176,8 @@ class Device : public std::enable_shared_from_this<Device> {
   void invalidateDrawUniformNonConstantCache() noexcept;
   void invalidateDrawFlatStateSetCache(u32 reasonMask) noexcept;
   const CachedBaseDrawState& cachedBaseDrawState(bool includeIndexBuffer);
-  const CachedBaseDrawState& cachedBaseDrawStateForSubmissionBatch();
+  const CachedBaseDrawState& cachedBaseDrawStateForSubmissionBatch(
+      bool directCompactUniformSource = false);
 
   AdapterInfo adapter_{};
   BackendLimits limits_{};
@@ -2182,6 +2208,12 @@ class Device : public std::enable_shared_from_this<Device> {
   CachedBaseDrawState drawStateCacheBindingAgnostic_{};
   std::array<BatchMissSemanticProbeEntry, 8> drawStateCacheBatchMissSemanticProbe_{};
   u32 drawStateCacheBatchMissSemanticProbeCursor_ = 0;
+  std::array<BatchMissShaderConstantHashMemoEntry, 16>
+      drawStateCacheBatchMissVsConstHashMemo_{};
+  std::array<BatchMissShaderConstantHashMemoEntry, 16>
+      drawStateCacheBatchMissPsConstHashMemo_{};
+  u32 drawStateCacheBatchMissVsConstHashMemoCursor_ = 0;
+  u32 drawStateCacheBatchMissPsConstHashMemoCursor_ = 0;
   std::vector<std::weak_ptr<Buffer>> buffers_;
   std::vector<std::weak_ptr<Texture>> textures_;
   std::vector<std::weak_ptr<Surface>> surfaces_;

@@ -325,6 +325,19 @@ void countCommitChunkQueueDrawSubmissionEmplaceCpuTime(std::uint64_t nanoseconds
 void countCommitChunkQueueDrawSubmissionSnapshotCpuTime(std::uint64_t nanoseconds);
 void countCommitChunkIndexBindCpuTime(std::uint64_t nanoseconds);
 void countCommitChunkReplayPendingFlushCpuTime(std::uint64_t nanoseconds);
+void countCommitChunkReplayPendingFlushBeforeRecordCpuTime(std::uint64_t nanoseconds);
+void countCommitChunkReplayPendingFlushDrawRunCpuTime(std::uint64_t nanoseconds);
+void countCommitChunkReplayPendingFlushDrawFallbackCpuTime(std::uint64_t nanoseconds);
+void countCommitChunkReplayPendingFlushFailureCpuTime(std::uint64_t nanoseconds);
+void countCommitChunkReplayPendingFlushEndCpuTime(std::uint64_t nanoseconds);
+void countCommitChunkReplayPendingFlushBeforeRecord(std::uint64_t records);
+void countCommitChunkReplayPendingFlushDrawRun(std::uint64_t records);
+void countCommitChunkReplayPendingFlushDrawFallback(std::uint64_t records);
+void countCommitChunkReplayPendingFlushFailure(std::uint64_t records);
+void countCommitChunkReplayPendingFlushEnd(std::uint64_t records);
+void countCommitChunkReplayDrawRunPreflushOpportunity(
+    std::uint64_t pendingRecords,
+    std::uint64_t runRecords);
 void countCommitChunkReplayDrawRecordCpuTime(std::uint64_t nanoseconds);
 void countCommitChunkReplayNonDrawRecordCpuTime(std::uint64_t nanoseconds);
 void countCommitChunkReplayConstRecordCpuTime(std::uint64_t nanoseconds);
@@ -417,6 +430,12 @@ void countD3D9SnapshotCacheBatchMissUniformNonConstHashReuse(bool reused);
 void countD3D9SnapshotCacheBatchMissUniformPayloadPath(
     bool reusedFullPayload,
     bool reusedNonConstantPayload);
+void countD3D9SnapshotCacheBatchMissUniformVsConstHashPath(bool reused);
+void countD3D9SnapshotCacheBatchMissUniformPsConstHashPath(bool reused);
+void countD3D9SnapshotCacheBatchMissUniformVsConstHashMemoProbe(bool hit);
+void countD3D9SnapshotCacheBatchMissUniformPsConstHashMemoProbe(bool hit);
+void countD3D9SnapshotCacheBatchMissUniformVsConstHashMemoStore();
+void countD3D9SnapshotCacheBatchMissUniformPsConstHashMemoStore();
 void countD3D9SnapshotCacheBatchMissSemanticReuseProbe(bool hit,
                                                        std::uint32_t distance);
 void countD3D9SnapshotUniformBuildCall();

@@ -15,6 +15,7 @@
 #include <memory>
 #include <span>
 #include <string>
+#include <utility>
 
 namespace dxmt9 {
 
@@ -172,6 +173,24 @@ class Device {
   }
   virtual void submitCompactDrawRunBatch(
       std::span<core::DrawRunCompactSubmission> /*submissions*/) {}
+  virtual void submitDrawRunBatchAndRun(
+      std::span<core::DrawRunSubmission> submissions,
+      core::CanonicalDrawState state,
+      const core::DrawUniformPayload& uniforms,
+      std::span<const core::DrawParam> draws,
+      std::span<const core::DrawParamPayloadView> payloads) {
+    submitDrawRunBatch(submissions);
+    submitDrawRun(std::move(state), uniforms, draws, payloads);
+  }
+  virtual void submitCompactDrawRunBatchAndRun(
+      std::span<core::DrawRunCompactSubmission> submissions,
+      core::CanonicalDrawState state,
+      const core::DrawUniformPayload& uniforms,
+      std::span<const core::DrawParam> draws,
+      std::span<const core::DrawParamPayloadView> payloads) {
+    submitCompactDrawRunBatch(submissions);
+    submitDrawRun(std::move(state), uniforms, draws, payloads);
+  }
   virtual void submitClear(const core::ClearDesc&) {}
   virtual void submitSurfaceCopy(const core::SurfaceCopyDesc&) {}
   virtual void submitStretchRect(const core::StretchRectDesc&) {}

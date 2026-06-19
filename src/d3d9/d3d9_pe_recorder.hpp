@@ -39,6 +39,7 @@ static constexpr std::size_t kPeCommandRecordTypeBucketCount = 30;
 static constexpr std::size_t kPeRecorderInterAppendTopPairCount = 4;
 static constexpr std::size_t kPeRecorderInterAppendTopCallFamilyCount = 2;
 static constexpr std::size_t kPeRecorderInterAppendTopCallNameCount = 2;
+static constexpr std::size_t kPeRecorderInterAppendTopCallTransitionCount = 2;
 
 enum class PeHotStateSetterFamily : std::uint32_t {
     RenderTarget = 0,
@@ -92,7 +93,9 @@ enum class PeInterAppendCallName : std::uint32_t {
     SetDepthStencilSurface,
     GetDepthStencilSurface,
     SetViewport,
+    GetViewport,
     SetScissorRect,
+    GetScissorRect,
     SetRenderState,
     SetTextureStageState,
     SetSamplerState,
@@ -227,6 +230,50 @@ struct PeRecorderStats {
                kPeInterAppendFocusPairCount *
                    kPeInterAppendCallNameCount>
         chunkInterAppendFocusBetweenCallNameSamples{};
+    std::array<std::uint64_t,
+               kPeInterAppendFocusPairCount *
+                   kPeInterAppendCallNameCount>
+        chunkInterAppendFocusBetweenCallNameCpuNsTotal{};
+    std::array<std::uint64_t,
+               kPeInterAppendFocusPairCount *
+                   kPeInterAppendCallNameCount>
+        chunkInterAppendFocusBetweenCallNameCpuNsMax{};
+    std::array<std::uint64_t,
+               kPeInterAppendFocusPairCount *
+                   kPeInterAppendCallFamilyCount *
+                   kPeInterAppendCallFamilyCount>
+        chunkInterAppendFocusBetweenCallTransitionSamples{};
+    std::array<std::uint64_t,
+               kPeInterAppendFocusPairCount *
+                   kPeInterAppendCallFamilyCount *
+                   kPeInterAppendCallFamilyCount>
+        chunkInterAppendFocusBetweenCallTransitionNsTotal{};
+    std::array<std::uint64_t,
+               kPeInterAppendFocusPairCount *
+                   kPeInterAppendCallFamilyCount *
+                   kPeInterAppendCallFamilyCount>
+        chunkInterAppendFocusBetweenCallTransitionNsMax{};
+    std::array<std::uint64_t,
+               kPeInterAppendFocusPairCount *
+                   kPeInterAppendCallNameCount *
+                   kPeInterAppendCallNameCount>
+        chunkInterAppendFocusBetweenCallNameTransitionSamples{};
+    std::array<std::uint64_t,
+               kPeInterAppendFocusPairCount *
+                   kPeInterAppendCallNameCount *
+                   kPeInterAppendCallNameCount>
+        chunkInterAppendFocusBetweenCallNameTransitionNsTotal{};
+    std::array<std::uint64_t,
+               kPeInterAppendFocusPairCount *
+                   kPeInterAppendCallNameCount *
+                   kPeInterAppendCallNameCount>
+        chunkInterAppendFocusBetweenCallNameTransitionNsMax{};
+    std::array<std::uint64_t, kPeInterAppendFocusPairCount>
+        chunkInterAppendFocusBetweenCallBodyCalls{};
+    std::array<std::uint64_t, kPeInterAppendFocusPairCount>
+        chunkInterAppendFocusBetweenCallBodyCpuNsTotal{};
+    std::array<std::uint64_t, kPeInterAppendFocusPairCount>
+        chunkInterAppendFocusBetweenCallBodyCpuNsMax{};
     std::uint64_t chunkBridgeSamples = 0;
     std::uint64_t chunkBridgeNsTotal = 0;
     std::uint64_t chunkBridgeNsMax = 0;

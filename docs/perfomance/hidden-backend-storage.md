@@ -502,7 +502,7 @@ The route remains fully covered (`42` draws / `97,294` primitives /
 `291,882` vertices) and the same-input pass-end equality now passes for both
 attachments: `D24X8` depth and `X8R8G8B8` color each have `0` changed bytes.
 That rejects "fragmentless itself broke depth" as the current explanation and
-makes the keep-VSOut variant a valid reduced `60/0` Xcode counter candidate.
+made the keep-VSOut variant a valid reduced `60/0` Xcode counter candidate.
 The counter gate is now complete and negative: the capture-layer route again
 produces `frame60.gputrace`, embedded performance data, and encoder counters,
 but target `60/0` VS buffer write stays flat (`224.918 -> 224.944 MiB`) with

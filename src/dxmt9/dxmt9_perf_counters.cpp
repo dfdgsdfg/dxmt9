@@ -381,6 +381,10 @@ struct Counters {
   std::atomic<std::uint64_t> commitChunkDrawRunScans{0};
   std::atomic<std::uint64_t> commitChunkDrawRunSubmits{0};
   std::atomic<std::uint64_t> commitChunkDrawRunRecords{0};
+  std::atomic<std::uint64_t> commitChunkReplayDrawRunPreflushOpportunities{0};
+  std::atomic<std::uint64_t> commitChunkReplayDrawRunPreflushPendingRecords{0};
+  std::atomic<std::uint64_t> commitChunkReplayDrawRunPreflushRunRecords{0};
+  std::atomic<std::uint64_t> commitChunkReplayDrawRunPreflushCombinedRecords{0};
   std::atomic<std::uint64_t> commitChunkDrawRunBindingOverrideRecords{0};
   std::atomic<std::uint64_t> commitChunkDrawRunBindingOverrideBytes{0};
   std::atomic<std::uint64_t> commitChunkDrawRunBindingOverrideStreamRecords{0};
@@ -416,6 +420,21 @@ struct Counters {
   std::atomic<std::uint64_t> commitChunkIndexBindCpuMaxNs{0};
   std::atomic<std::uint64_t> commitChunkReplayPendingFlushCpuNs{0};
   std::atomic<std::uint64_t> commitChunkReplayPendingFlushCpuMaxNs{0};
+  std::atomic<std::uint64_t> commitChunkReplayPendingFlushBeforeRecordCpuNs{0};
+  std::atomic<std::uint64_t> commitChunkReplayPendingFlushDrawRunCpuNs{0};
+  std::atomic<std::uint64_t> commitChunkReplayPendingFlushDrawFallbackCpuNs{0};
+  std::atomic<std::uint64_t> commitChunkReplayPendingFlushFailureCpuNs{0};
+  std::atomic<std::uint64_t> commitChunkReplayPendingFlushEndCpuNs{0};
+  std::atomic<std::uint64_t> commitChunkReplayPendingFlushBeforeRecordFlushes{0};
+  std::atomic<std::uint64_t> commitChunkReplayPendingFlushDrawRunFlushes{0};
+  std::atomic<std::uint64_t> commitChunkReplayPendingFlushDrawFallbackFlushes{0};
+  std::atomic<std::uint64_t> commitChunkReplayPendingFlushFailureFlushes{0};
+  std::atomic<std::uint64_t> commitChunkReplayPendingFlushEndFlushes{0};
+  std::atomic<std::uint64_t> commitChunkReplayPendingFlushBeforeRecordRecords{0};
+  std::atomic<std::uint64_t> commitChunkReplayPendingFlushDrawRunRecords{0};
+  std::atomic<std::uint64_t> commitChunkReplayPendingFlushDrawFallbackRecords{0};
+  std::atomic<std::uint64_t> commitChunkReplayPendingFlushFailureRecords{0};
+  std::atomic<std::uint64_t> commitChunkReplayPendingFlushEndRecords{0};
   std::atomic<std::uint64_t> commitChunkReplayDrawRecordCpuNs{0};
   std::atomic<std::uint64_t> commitChunkReplayDrawRecordCpuMaxNs{0};
   std::atomic<std::uint64_t> commitChunkReplayNonDrawRecordCpuNs{0};
@@ -1043,6 +1062,18 @@ struct Counters {
   std::atomic<std::uint64_t> d3d9SnapshotCacheBatchMissUniformPayloadReuseFull{0};
   std::atomic<std::uint64_t> d3d9SnapshotCacheBatchMissUniformPayloadReuseNonConst{0};
   std::atomic<std::uint64_t> d3d9SnapshotCacheBatchMissUniformPayloadFullBuild{0};
+  std::atomic<std::uint64_t> d3d9SnapshotCacheBatchMissUniformVsConstHashReuse{0};
+  std::atomic<std::uint64_t> d3d9SnapshotCacheBatchMissUniformVsConstHashBuild{0};
+  std::atomic<std::uint64_t> d3d9SnapshotCacheBatchMissUniformPsConstHashReuse{0};
+  std::atomic<std::uint64_t> d3d9SnapshotCacheBatchMissUniformPsConstHashBuild{0};
+  std::atomic<std::uint64_t> d3d9SnapshotCacheBatchMissUniformVsConstHashMemoProbe{0};
+  std::atomic<std::uint64_t> d3d9SnapshotCacheBatchMissUniformVsConstHashMemoHits{0};
+  std::atomic<std::uint64_t> d3d9SnapshotCacheBatchMissUniformVsConstHashMemoMisses{0};
+  std::atomic<std::uint64_t> d3d9SnapshotCacheBatchMissUniformVsConstHashMemoStores{0};
+  std::atomic<std::uint64_t> d3d9SnapshotCacheBatchMissUniformPsConstHashMemoProbe{0};
+  std::atomic<std::uint64_t> d3d9SnapshotCacheBatchMissUniformPsConstHashMemoHits{0};
+  std::atomic<std::uint64_t> d3d9SnapshotCacheBatchMissUniformPsConstHashMemoMisses{0};
+  std::atomic<std::uint64_t> d3d9SnapshotCacheBatchMissUniformPsConstHashMemoStores{0};
   std::atomic<std::uint64_t> d3d9SnapshotUniformBuildCalls{0};
   std::atomic<std::uint64_t> d3d9SnapshotUniformBuildVsConstCopyCpuNs{0};
   std::atomic<std::uint64_t> d3d9SnapshotUniformBuildPsConstCopyCpuNs{0};
@@ -2392,6 +2423,25 @@ constexpr CounterEntry kCounterTable[] = {
     {"commit_chunk_replay_pending_flush_cpu_max_ms", CounterEntry::Kind::Milliseconds, &Counters::commitChunkReplayPendingFlushCpuMaxNs, nullptr, nullptr, 0.0},
     {"commit_chunk_replay_pending_flush_cpu_p50_ms", CounterEntry::Kind::PercentileMs, nullptr, nullptr, &Counters::commitChunkReplayPendingFlushCpuRing, 0.5},
     {"commit_chunk_replay_pending_flush_cpu_p95_ms", CounterEntry::Kind::PercentileMs, nullptr, nullptr, &Counters::commitChunkReplayPendingFlushCpuRing, 0.95},
+    {"commit_chunk_replay_pending_flush_before_record_cpu_ms", CounterEntry::Kind::Milliseconds, &Counters::commitChunkReplayPendingFlushBeforeRecordCpuNs, nullptr, nullptr, 0.0},
+    {"commit_chunk_replay_pending_flush_draw_run_cpu_ms", CounterEntry::Kind::Milliseconds, &Counters::commitChunkReplayPendingFlushDrawRunCpuNs, nullptr, nullptr, 0.0},
+    {"commit_chunk_replay_pending_flush_draw_fallback_cpu_ms", CounterEntry::Kind::Milliseconds, &Counters::commitChunkReplayPendingFlushDrawFallbackCpuNs, nullptr, nullptr, 0.0},
+    {"commit_chunk_replay_pending_flush_failure_cpu_ms", CounterEntry::Kind::Milliseconds, &Counters::commitChunkReplayPendingFlushFailureCpuNs, nullptr, nullptr, 0.0},
+    {"commit_chunk_replay_pending_flush_end_cpu_ms", CounterEntry::Kind::Milliseconds, &Counters::commitChunkReplayPendingFlushEndCpuNs, nullptr, nullptr, 0.0},
+    {"commit_chunk_replay_pending_flush_before_record_flushes", CounterEntry::Kind::UnsignedCount, &Counters::commitChunkReplayPendingFlushBeforeRecordFlushes, nullptr, nullptr, 0.0},
+    {"commit_chunk_replay_pending_flush_draw_run_flushes", CounterEntry::Kind::UnsignedCount, &Counters::commitChunkReplayPendingFlushDrawRunFlushes, nullptr, nullptr, 0.0},
+    {"commit_chunk_replay_pending_flush_draw_fallback_flushes", CounterEntry::Kind::UnsignedCount, &Counters::commitChunkReplayPendingFlushDrawFallbackFlushes, nullptr, nullptr, 0.0},
+    {"commit_chunk_replay_pending_flush_failure_flushes", CounterEntry::Kind::UnsignedCount, &Counters::commitChunkReplayPendingFlushFailureFlushes, nullptr, nullptr, 0.0},
+    {"commit_chunk_replay_pending_flush_end_flushes", CounterEntry::Kind::UnsignedCount, &Counters::commitChunkReplayPendingFlushEndFlushes, nullptr, nullptr, 0.0},
+    {"commit_chunk_replay_pending_flush_before_record_records", CounterEntry::Kind::UnsignedCount, &Counters::commitChunkReplayPendingFlushBeforeRecordRecords, nullptr, nullptr, 0.0},
+    {"commit_chunk_replay_pending_flush_draw_run_records", CounterEntry::Kind::UnsignedCount, &Counters::commitChunkReplayPendingFlushDrawRunRecords, nullptr, nullptr, 0.0},
+    {"commit_chunk_replay_pending_flush_draw_fallback_records", CounterEntry::Kind::UnsignedCount, &Counters::commitChunkReplayPendingFlushDrawFallbackRecords, nullptr, nullptr, 0.0},
+    {"commit_chunk_replay_pending_flush_failure_records", CounterEntry::Kind::UnsignedCount, &Counters::commitChunkReplayPendingFlushFailureRecords, nullptr, nullptr, 0.0},
+    {"commit_chunk_replay_pending_flush_end_records", CounterEntry::Kind::UnsignedCount, &Counters::commitChunkReplayPendingFlushEndRecords, nullptr, nullptr, 0.0},
+    {"commit_chunk_replay_draw_run_preflush_opportunities", CounterEntry::Kind::UnsignedCount, &Counters::commitChunkReplayDrawRunPreflushOpportunities, nullptr, nullptr, 0.0},
+    {"commit_chunk_replay_draw_run_preflush_pending_records", CounterEntry::Kind::UnsignedCount, &Counters::commitChunkReplayDrawRunPreflushPendingRecords, nullptr, nullptr, 0.0},
+    {"commit_chunk_replay_draw_run_preflush_run_records", CounterEntry::Kind::UnsignedCount, &Counters::commitChunkReplayDrawRunPreflushRunRecords, nullptr, nullptr, 0.0},
+    {"commit_chunk_replay_draw_run_preflush_combined_records", CounterEntry::Kind::UnsignedCount, &Counters::commitChunkReplayDrawRunPreflushCombinedRecords, nullptr, nullptr, 0.0},
     {"commit_chunk_replay_draw_record_cpu_ms", CounterEntry::Kind::Milliseconds, &Counters::commitChunkReplayDrawRecordCpuNs, nullptr, nullptr, 0.0},
     {"commit_chunk_replay_draw_record_cpu_max_ms", CounterEntry::Kind::Milliseconds, &Counters::commitChunkReplayDrawRecordCpuMaxNs, nullptr, nullptr, 0.0},
     {"commit_chunk_replay_draw_record_cpu_p50_ms", CounterEntry::Kind::PercentileMs, nullptr, nullptr, &Counters::commitChunkReplayDrawRecordCpuRing, 0.5},
@@ -3070,6 +3120,18 @@ constexpr CounterEntry kCounterTable[] = {
     {"d3d9_snapshot_cache_batch_miss_uniform_payload_reuse_full", CounterEntry::Kind::UnsignedCount, &Counters::d3d9SnapshotCacheBatchMissUniformPayloadReuseFull, nullptr, nullptr, 0.0},
     {"d3d9_snapshot_cache_batch_miss_uniform_payload_reuse_nonconst", CounterEntry::Kind::UnsignedCount, &Counters::d3d9SnapshotCacheBatchMissUniformPayloadReuseNonConst, nullptr, nullptr, 0.0},
     {"d3d9_snapshot_cache_batch_miss_uniform_payload_full_build", CounterEntry::Kind::UnsignedCount, &Counters::d3d9SnapshotCacheBatchMissUniformPayloadFullBuild, nullptr, nullptr, 0.0},
+    {"d3d9_snapshot_cache_batch_miss_uniform_vs_const_hash_reuse", CounterEntry::Kind::UnsignedCount, &Counters::d3d9SnapshotCacheBatchMissUniformVsConstHashReuse, nullptr, nullptr, 0.0},
+    {"d3d9_snapshot_cache_batch_miss_uniform_vs_const_hash_build", CounterEntry::Kind::UnsignedCount, &Counters::d3d9SnapshotCacheBatchMissUniformVsConstHashBuild, nullptr, nullptr, 0.0},
+    {"d3d9_snapshot_cache_batch_miss_uniform_ps_const_hash_reuse", CounterEntry::Kind::UnsignedCount, &Counters::d3d9SnapshotCacheBatchMissUniformPsConstHashReuse, nullptr, nullptr, 0.0},
+    {"d3d9_snapshot_cache_batch_miss_uniform_ps_const_hash_build", CounterEntry::Kind::UnsignedCount, &Counters::d3d9SnapshotCacheBatchMissUniformPsConstHashBuild, nullptr, nullptr, 0.0},
+    {"d3d9_snapshot_cache_batch_miss_uniform_vs_const_hash_memo_probe", CounterEntry::Kind::UnsignedCount, &Counters::d3d9SnapshotCacheBatchMissUniformVsConstHashMemoProbe, nullptr, nullptr, 0.0},
+    {"d3d9_snapshot_cache_batch_miss_uniform_vs_const_hash_memo_hits", CounterEntry::Kind::UnsignedCount, &Counters::d3d9SnapshotCacheBatchMissUniformVsConstHashMemoHits, nullptr, nullptr, 0.0},
+    {"d3d9_snapshot_cache_batch_miss_uniform_vs_const_hash_memo_misses", CounterEntry::Kind::UnsignedCount, &Counters::d3d9SnapshotCacheBatchMissUniformVsConstHashMemoMisses, nullptr, nullptr, 0.0},
+    {"d3d9_snapshot_cache_batch_miss_uniform_vs_const_hash_memo_stores", CounterEntry::Kind::UnsignedCount, &Counters::d3d9SnapshotCacheBatchMissUniformVsConstHashMemoStores, nullptr, nullptr, 0.0},
+    {"d3d9_snapshot_cache_batch_miss_uniform_ps_const_hash_memo_probe", CounterEntry::Kind::UnsignedCount, &Counters::d3d9SnapshotCacheBatchMissUniformPsConstHashMemoProbe, nullptr, nullptr, 0.0},
+    {"d3d9_snapshot_cache_batch_miss_uniform_ps_const_hash_memo_hits", CounterEntry::Kind::UnsignedCount, &Counters::d3d9SnapshotCacheBatchMissUniformPsConstHashMemoHits, nullptr, nullptr, 0.0},
+    {"d3d9_snapshot_cache_batch_miss_uniform_ps_const_hash_memo_misses", CounterEntry::Kind::UnsignedCount, &Counters::d3d9SnapshotCacheBatchMissUniformPsConstHashMemoMisses, nullptr, nullptr, 0.0},
+    {"d3d9_snapshot_cache_batch_miss_uniform_ps_const_hash_memo_stores", CounterEntry::Kind::UnsignedCount, &Counters::d3d9SnapshotCacheBatchMissUniformPsConstHashMemoStores, nullptr, nullptr, 0.0},
     {"d3d9_snapshot_uniform_build_calls", CounterEntry::Kind::UnsignedCount, &Counters::d3d9SnapshotUniformBuildCalls, nullptr, nullptr, 0.0},
     {"d3d9_snapshot_uniform_build_vs_const_copy_cpu_ms", CounterEntry::Kind::Milliseconds, &Counters::d3d9SnapshotUniformBuildVsConstCopyCpuNs, nullptr, nullptr, 0.0},
     {"d3d9_snapshot_uniform_build_ps_const_copy_cpu_ms", CounterEntry::Kind::Milliseconds, &Counters::d3d9SnapshotUniformBuildPsConstCopyCpuNs, nullptr, nullptr, 0.0},
@@ -5147,6 +5209,67 @@ void countCommitChunkReplayPendingFlushCpuTime(std::uint64_t nanoseconds) {
   recordRing(c.commitChunkReplayPendingFlushCpuRing, nanoseconds);
 }
 
+void countCommitChunkReplayPendingFlushBeforeRecordCpuTime(std::uint64_t nanoseconds) {
+  add(counters().commitChunkReplayPendingFlushBeforeRecordCpuNs, nanoseconds);
+}
+
+void countCommitChunkReplayPendingFlushDrawRunCpuTime(std::uint64_t nanoseconds) {
+  add(counters().commitChunkReplayPendingFlushDrawRunCpuNs, nanoseconds);
+}
+
+void countCommitChunkReplayPendingFlushDrawFallbackCpuTime(std::uint64_t nanoseconds) {
+  add(counters().commitChunkReplayPendingFlushDrawFallbackCpuNs, nanoseconds);
+}
+
+void countCommitChunkReplayPendingFlushFailureCpuTime(std::uint64_t nanoseconds) {
+  add(counters().commitChunkReplayPendingFlushFailureCpuNs, nanoseconds);
+}
+
+void countCommitChunkReplayPendingFlushEndCpuTime(std::uint64_t nanoseconds) {
+  add(counters().commitChunkReplayPendingFlushEndCpuNs, nanoseconds);
+}
+
+void countCommitChunkReplayPendingFlushBeforeRecord(std::uint64_t records) {
+  auto& c = counters();
+  add(c.commitChunkReplayPendingFlushBeforeRecordFlushes);
+  add(c.commitChunkReplayPendingFlushBeforeRecordRecords, records);
+}
+
+void countCommitChunkReplayPendingFlushDrawRun(std::uint64_t records) {
+  auto& c = counters();
+  add(c.commitChunkReplayPendingFlushDrawRunFlushes);
+  add(c.commitChunkReplayPendingFlushDrawRunRecords, records);
+}
+
+void countCommitChunkReplayPendingFlushDrawFallback(std::uint64_t records) {
+  auto& c = counters();
+  add(c.commitChunkReplayPendingFlushDrawFallbackFlushes);
+  add(c.commitChunkReplayPendingFlushDrawFallbackRecords, records);
+}
+
+void countCommitChunkReplayPendingFlushFailure(std::uint64_t records) {
+  auto& c = counters();
+  add(c.commitChunkReplayPendingFlushFailureFlushes);
+  add(c.commitChunkReplayPendingFlushFailureRecords, records);
+}
+
+void countCommitChunkReplayPendingFlushEnd(std::uint64_t records) {
+  auto& c = counters();
+  add(c.commitChunkReplayPendingFlushEndFlushes);
+  add(c.commitChunkReplayPendingFlushEndRecords, records);
+}
+
+void countCommitChunkReplayDrawRunPreflushOpportunity(
+    std::uint64_t pendingRecords,
+    std::uint64_t runRecords) {
+  auto& c = counters();
+  add(c.commitChunkReplayDrawRunPreflushOpportunities);
+  add(c.commitChunkReplayDrawRunPreflushPendingRecords, pendingRecords);
+  add(c.commitChunkReplayDrawRunPreflushRunRecords, runRecords);
+  add(c.commitChunkReplayDrawRunPreflushCombinedRecords,
+      pendingRecords + runRecords);
+}
+
 void countCommitChunkReplayDrawRecordCpuTime(std::uint64_t nanoseconds) {
   auto& c = counters();
   add(c.commitChunkReplayDrawRecordCpuNs, nanoseconds);
@@ -7169,6 +7292,40 @@ void countD3D9SnapshotCacheBatchMissUniformPayloadPath(
   } else {
     add(c.d3d9SnapshotCacheBatchMissUniformPayloadFullBuild);
   }
+}
+
+void countD3D9SnapshotCacheBatchMissUniformVsConstHashPath(bool reused) {
+  auto& c = counters();
+  add(reused ? c.d3d9SnapshotCacheBatchMissUniformVsConstHashReuse
+             : c.d3d9SnapshotCacheBatchMissUniformVsConstHashBuild);
+}
+
+void countD3D9SnapshotCacheBatchMissUniformPsConstHashPath(bool reused) {
+  auto& c = counters();
+  add(reused ? c.d3d9SnapshotCacheBatchMissUniformPsConstHashReuse
+             : c.d3d9SnapshotCacheBatchMissUniformPsConstHashBuild);
+}
+
+void countD3D9SnapshotCacheBatchMissUniformVsConstHashMemoProbe(bool hit) {
+  auto& c = counters();
+  add(c.d3d9SnapshotCacheBatchMissUniformVsConstHashMemoProbe);
+  add(hit ? c.d3d9SnapshotCacheBatchMissUniformVsConstHashMemoHits
+          : c.d3d9SnapshotCacheBatchMissUniformVsConstHashMemoMisses);
+}
+
+void countD3D9SnapshotCacheBatchMissUniformPsConstHashMemoProbe(bool hit) {
+  auto& c = counters();
+  add(c.d3d9SnapshotCacheBatchMissUniformPsConstHashMemoProbe);
+  add(hit ? c.d3d9SnapshotCacheBatchMissUniformPsConstHashMemoHits
+          : c.d3d9SnapshotCacheBatchMissUniformPsConstHashMemoMisses);
+}
+
+void countD3D9SnapshotCacheBatchMissUniformVsConstHashMemoStore() {
+  add(counters().d3d9SnapshotCacheBatchMissUniformVsConstHashMemoStores);
+}
+
+void countD3D9SnapshotCacheBatchMissUniformPsConstHashMemoStore() {
+  add(counters().d3d9SnapshotCacheBatchMissUniformPsConstHashMemoStores);
 }
 
 void countD3D9SnapshotUniformBuildCall() {

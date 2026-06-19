@@ -3013,6 +3013,151 @@ void submitDrawRunBatchImpl(CommandQueue& queue,
   }
 }
 
+template <typename Submission>
+void submitDrawRunBatchAndRunImpl(
+    CommandQueue& queue,
+    resources::Pool& pool,
+    std::mutex& mutex,
+    core::Handle& currentBackBuffer,
+    bool skipDrawResourceMarking,
+    bool forceDrawResourceMarkingAfterSplit,
+    std::span<Submission> submissions,
+    core::CanonicalDrawState state,
+    const core::DrawUniformPayload& uniforms,
+    std::span<const core::DrawParam> draws,
+    std::span<const core::DrawParamPayloadView> payloads) {
+  if (submissions.empty()) {
+    queue.submitDrawRun(std::move(state), uniforms, draws, payloads);
+    return;
+  }
+  if (draws.empty()) {
+    submitDrawRunBatchImpl(queue, pool, mutex, currentBackBuffer,
+                           skipDrawResourceMarking,
+                           forceDrawResourceMarkingAfterSplit,
+                           submissions);
+    return;
+  }
+
+  auto& scratch = drawSubmitScratch();
+  ScopedDrawSubmitScratchUse scratchUse(scratch);
+  scratch.bindingSnapshots.reserve(
+      std::max(submissions.size(), draws.size()));
+  scratch.snapshotPayloads.reserve(draws.size());
+  DXMT_DEBUG_NO_HEAP_ALLOC_SCOPE("submitDrawRunBatchAndRun");
+  for (std::size_t i = 0; i < submissions.size() + draws.size(); ++i) {
+    perf::countSubmitDraw();
+  }
+  countDrawSubmissionAdjacentStateGenerations(submissions);
+  PerfScope scope(perf::countSubmitDrawCpuTime);
+  std::unique_lock lock(mutex);
+
+  std::size_t batchStart = 0;
+  while (batchStart < submissions.size()) {
+    std::size_t batchEnd = batchStart + 1u;
+    {
+      PerfScope stageScope(perf::countSubmitDrawRunBatchCompatScanCpuTime);
+      while (batchEnd < submissions.size() &&
+             drawSubmissionStatesCompatibleWithAcceptedPrevious(
+                 submissions[batchStart], submissions[batchEnd - 1u],
+                 submissions[batchEnd])) {
+        ++batchEnd;
+      }
+    }
+    auto batch = submissions.subspan(batchStart, batchEnd - batchStart);
+    countDrawRunBatchDiscardedMaterializedStates(batch);
+    {
+      PerfScope stageScope(perf::countSubmitDrawRunBatchBindingOverrideCpuTime);
+      prepareDrawRunBatchBindingOverrides(batch);
+    }
+    {
+      PerfScope stageScope(perf::countSubmitDrawRunBatchBindingSnapshotCpuTime);
+      snapshotDrawSubmissionBindingPayloads(pool, batch, scratch.bindingSnapshots);
+    }
+    std::size_t pendingPayloadBytes = 0;
+    {
+      PerfScope stageScope(perf::countSubmitDrawRunBatchPayloadBytesCpuTime);
+      pendingPayloadBytes = drawRunSubmissionPayloadBytes(batch);
+    }
+    {
+      PerfScope stageScope(perf::countSubmitDrawRunBatchSlotPrepareCpuTime);
+      ensureWritingSlotUnlocked(queue, lock);
+      maybeCommitDrawPayloadArenaUnlocked(queue, pool, lock, pendingPayloadBytes);
+    }
+    {
+      PerfScope stageScope(perf::countSubmitDrawRunBatchResourceMarkCpuTime);
+      if (!skipDrawResourceMarking || forceDrawResourceMarkingAfterSplit) {
+        const std::uint64_t seqId = seqIdForMark(queue, 0);
+        pool.markDrawResources(batch.front().materializedState().hot, seqId);
+        for (auto& submission : batch) {
+          std::span<const core::DrawParamPayloadView> submissionPayloads{};
+          if (!submission.payload.userVertexData.empty() ||
+              !submission.payload.userIndexData.empty() ||
+              !submission.payload.bindingOverrideData.empty() ||
+              !submission.payload.bindingSnapshotData.empty()) {
+            submissionPayloads =
+                std::span<const core::DrawParamPayloadView>(&submission.payload, 1);
+          }
+          markDrawBindingOverrideResources(pool, submissionPayloads, seqId);
+        }
+      }
+    }
+    DXMT_ASSERT(batch.front().stateMaterialized);
+    currentBackBuffer =
+        batch.front().materializedState().hot.colorAttachments[0].handle;
+
+    perf::countSubmitDrawRunBatchGroup(static_cast<std::uint32_t>(batch.size()));
+    {
+      PerfScope stageScope(perf::countSubmitDrawRunBatchAppendCpuTime);
+      noteCurrentSlotCommandAppendStartedUnlocked(queue);
+      currentSlotUnlocked(queue).appendDrawRunBatch(batch);
+    }
+    batchStart = batchEnd;
+  }
+
+  std::span<const core::DrawParamPayloadView> effectivePayloads{};
+  {
+    PerfScope stageScope(perf::countSubmitDrawRunBindingSnapshotCpuTime);
+    effectivePayloads =
+        snapshotDrawRunBindingPayloads(pool,
+                                       state.hot,
+                                       draws,
+                                       payloads,
+                                       scratch.bindingSnapshots,
+                                       scratch.snapshotPayloads);
+  }
+  std::size_t pendingPayloadBytes = 0;
+  {
+    PerfScope stageScope(perf::countSubmitDrawRunPayloadBytesCpuTime);
+    pendingPayloadBytes = drawRunPayloadBytes(draws, effectivePayloads);
+  }
+  {
+    PerfScope stageScope(perf::countSubmitDrawRunSlotPrepareCpuTime);
+    ensureWritingSlotUnlocked(queue, lock);
+    maybeCommitDrawPayloadArenaUnlocked(queue, pool, lock, pendingPayloadBytes);
+  }
+  {
+    PerfScope stageScope(perf::countSubmitDrawRunResourceMarkCpuTime);
+    if (!skipDrawResourceMarking || forceDrawResourceMarkingAfterSplit) {
+      const std::uint64_t seqId = seqIdForMark(queue, 0);
+      pool.markDrawResources(state.hot, seqId);
+      markDrawBindingOverrideResources(pool, effectivePayloads, seqId);
+    }
+  }
+  currentBackBuffer = state.hot.colorAttachments[0].handle;
+  {
+    PerfScope stageScope(perf::countSubmitDrawRunAppendCpuTime);
+    noteCurrentSlotCommandAppendStartedUnlocked(queue);
+    currentSlotUnlocked(queue).appendDrawRun(
+        std::move(state), uniforms, draws, effectivePayloads);
+  }
+  {
+    PerfScope stageScope(perf::countSubmitDrawRunChunkCommitCpuTime);
+    if (!maybeStagePrePresentChunkUnlocked(queue, pool, lock)) {
+      (void)maybeCommitDrawChunkUnlocked(queue, pool, lock);
+    }
+  }
+}
+
 void CommandQueue::submitDrawRunBatch(
     std::span<core::DrawRunSubmission> submissions) {
   submitDrawRunBatchImpl(*this, pool_, mutex_, currentBackBuffer_,
@@ -3027,6 +3172,32 @@ void CommandQueue::submitCompactDrawRunBatch(
                          skipDrawResourceMarking_,
                          forceDrawResourceMarkingAfterSplit_,
                          submissions);
+}
+
+void CommandQueue::submitDrawRunBatchAndRun(
+    std::span<core::DrawRunSubmission> submissions,
+    core::CanonicalDrawState state,
+    const core::DrawUniformPayload& uniforms,
+    std::span<const core::DrawParam> draws,
+    std::span<const core::DrawParamPayloadView> payloads) {
+  submitDrawRunBatchAndRunImpl(*this, pool_, mutex_, currentBackBuffer_,
+                               skipDrawResourceMarking_,
+                               forceDrawResourceMarkingAfterSplit_,
+                               submissions, std::move(state), uniforms,
+                               draws, payloads);
+}
+
+void CommandQueue::submitCompactDrawRunBatchAndRun(
+    std::span<core::DrawRunCompactSubmission> submissions,
+    core::CanonicalDrawState state,
+    const core::DrawUniformPayload& uniforms,
+    std::span<const core::DrawParam> draws,
+    std::span<const core::DrawParamPayloadView> payloads) {
+  submitDrawRunBatchAndRunImpl(*this, pool_, mutex_, currentBackBuffer_,
+                               skipDrawResourceMarking_,
+                               forceDrawResourceMarkingAfterSplit_,
+                               submissions, std::move(state), uniforms,
+                               draws, payloads);
 }
 
 void CommandQueue::submitClear(const core::ClearDesc& desc) {

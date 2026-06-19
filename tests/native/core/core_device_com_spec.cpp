@@ -1431,6 +1431,11 @@ void testSnapshotDrawSubmissionCompactUniformScratch() {
           "direct compact first snapshot materializes state");
     checkEq(compactScratch.fixedPayloads.size(), std::size_t{1},
             "direct compact snapshot stores one fixed payload");
+    const auto& directCompact = compactFirst.compactUniformPayload();
+    checkEq(directCompact.vertexConstants, third.compactUniformPayload().vertexConstants,
+            "direct compact VS span matches full compact span");
+    checkEq(directCompact.pixelConstants, third.compactUniformPayload().pixelConstants,
+            "direct compact PS span matches full compact span");
 
     DrawRunCompactSubmission compactSecond{};
     checkEq(device->coreDevice().snapshotDrawSubmissionFromCurrentState(

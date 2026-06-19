@@ -43,16 +43,25 @@ CARRIER_COMPARE_FLAGS = (
 )
 
 
-def write_result(path: Path, counters: dict[str, int | float]) -> None:
+def write_result(
+    path: Path,
+    counters: dict[str, int | float],
+    pe_counters: dict[str, int | float | str] | None = None,
+) -> None:
     path.mkdir(parents=True, exist_ok=True)
+    result: dict[str, object] = {"dxmt9_perf_counters": counters}
+    if pe_counters is not None:
+        result["dxmt9_pe_recorder_counters"] = pe_counters
     path.joinpath("result.json").write_text(
-        json.dumps({"dxmt9_perf_counters": counters}, indent=2),
+        json.dumps(result, indent=2),
         encoding="utf-8",
     )
 
 
 def write_encoder_csv(path: Path, rows: list[dict[str, str | int]]) -> None:
     fields = (
+        "rt",
+        "depth",
         "end_reason",
         "color_load_bytes",
         "color_store_bytes",
@@ -84,6 +93,220 @@ class Compare3DMark05PerfCountersTests(unittest.TestCase):
             capture_output=True,
             check=False,
         )
+
+    def test_pe_recorder_counters_are_reported(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            write_result(
+                root / "before",
+                {"present_encoded": 2},
+                {
+                    "commitCount": 20,
+                    "recordCountTotal": 100,
+                    "payloadBytesTotal": 2000,
+                    "chunkInterAppendGapMs": 20.0,
+                    "recordAppendCalls": 100,
+                    "recordAppendCpuMs": 4.0,
+                    "recordAppendNoFlushCalls": 80,
+                    "recordAppendNoFlushCpuMs": 1.6,
+                    "constFlushCpuMs": 2.0,
+                    "interAppendTop1Prev": "draw_indexed",
+                    "interAppendTop1Next": "set_vs_const_f",
+                    "interAppendTop1Samples": 10,
+                    "interAppendTop1Ms": 20.0,
+                    "interAppendTop1MaxMs": 5.0,
+                    "gapDrawIndexedVsConstFTop1CallFamily": "draw",
+                    "gapDrawIndexedVsConstFTop1Samples": 10,
+                    "gapDrawIndexedVsConstFTop1Ms": 20.0,
+                    "gapDrawIndexedVsConstFPreCallMs": 12.0,
+                    "gapDrawIndexedVsConstFInsideCallMs": 8.0,
+                    "gapDrawIndexedVsConstFBetweenCallsMs": 10.0,
+                    "gapDrawIndexedVsConstFBetweenTop1CallName": "SetVertexShaderConstantF",
+                    "gapDrawIndexedVsConstFBetweenTop1CallNameSamples": 6,
+                    "gapDrawIndexedVsConstFBetweenTop1CallNameCpuMs": 1.0,
+                    "gapDrawIndexedVsConstFBetweenCallBodyCalls": 10,
+                    "gapDrawIndexedVsConstFBetweenCallBodyCpuMs": 2.0,
+                    "gapDrawIndexedVsConstFBetweenCallBodyCpuMaxMs": 0.4,
+                    "gapDrawIndexedVsConstFBetweenGapTop1PrevFamily": "draw",
+                    "gapDrawIndexedVsConstFBetweenGapTop1NextFamily": "vs_const",
+                    "gapDrawIndexedVsConstFBetweenGapTop1Samples": 4,
+                    "gapDrawIndexedVsConstFBetweenGapTop1Ms": 6.0,
+                    "gapDrawIndexedVsConstFBetweenGapTop1PrevCallName": "DrawIndexedPrimitive",
+                    "gapDrawIndexedVsConstFBetweenGapTop1NextCallName": "SetVertexShaderConstantF",
+                    "gapDrawIndexedVsConstFBetweenGapTop1NameSamples": 4,
+                    "gapDrawIndexedVsConstFBetweenGapTop1NameMs": 6.0,
+                    "gapDrawIndexedVsConstFBetweenGapSiteTop1PrevCallName": "DrawIndexedPrimitive",
+                    "gapDrawIndexedVsConstFBetweenGapSiteTop1NextCallName": "SetVertexShaderConstantF",
+                    "gapDrawIndexedVsConstFBetweenGapSiteTop1CallerModule": "3DMark05.exe",
+                    "gapDrawIndexedVsConstFBetweenGapSiteTop1CallerRva": "0x1111",
+                    "gapDrawIndexedVsConstFBetweenGapSiteTop1Samples": 4,
+                    "gapDrawIndexedVsConstFBetweenGapSiteTop1Ms": 6.0,
+                },
+            )
+            write_result(
+                root / "after",
+                {"present_encoded": 4},
+                {
+                    "commitCount": 24,
+                    "recordCountTotal": 120,
+                    "payloadBytesTotal": 2400,
+                    "chunkInterAppendGapMs": 12.0,
+                    "recordAppendCalls": 120,
+                    "recordAppendCpuMs": 3.0,
+                    "recordAppendNoFlushCalls": 100,
+                    "recordAppendNoFlushCpuMs": 1.0,
+                    "constFlushCpuMs": 1.2,
+                    "interAppendTop1Prev": "draw_indexed",
+                    "interAppendTop1Next": "set_vs_const_f",
+                    "interAppendTop1Samples": 12,
+                    "interAppendTop1Ms": 12.0,
+                    "interAppendTop1MaxMs": 3.0,
+                    "gapDrawIndexedVsConstFTop1CallFamily": "draw",
+                    "gapDrawIndexedVsConstFTop1Samples": 12,
+                    "gapDrawIndexedVsConstFTop1Ms": 12.0,
+                    "gapDrawIndexedVsConstFPreCallMs": 4.0,
+                    "gapDrawIndexedVsConstFInsideCallMs": 8.0,
+                    "gapDrawIndexedVsConstFBetweenCallsMs": 8.0,
+                    "gapDrawIndexedVsConstFBetweenTop1CallName": "SetVertexShaderConstantF",
+                    "gapDrawIndexedVsConstFBetweenTop1CallNameSamples": 8,
+                    "gapDrawIndexedVsConstFBetweenTop1CallNameCpuMs": 1.2,
+                    "gapDrawIndexedVsConstFBetweenCallBodyCalls": 16,
+                    "gapDrawIndexedVsConstFBetweenCallBodyCpuMs": 2.0,
+                    "gapDrawIndexedVsConstFBetweenCallBodyCpuMaxMs": 0.5,
+                    "gapDrawIndexedVsConstFBetweenGapTop1PrevFamily": "draw",
+                    "gapDrawIndexedVsConstFBetweenGapTop1NextFamily": "vs_const",
+                    "gapDrawIndexedVsConstFBetweenGapTop1Samples": 8,
+                    "gapDrawIndexedVsConstFBetweenGapTop1Ms": 4.0,
+                    "gapDrawIndexedVsConstFBetweenGapTop1PrevCallName": "DrawIndexedPrimitive",
+                    "gapDrawIndexedVsConstFBetweenGapTop1NextCallName": "SetVertexShaderConstantF",
+                    "gapDrawIndexedVsConstFBetweenGapTop1NameSamples": 8,
+                    "gapDrawIndexedVsConstFBetweenGapTop1NameMs": 4.0,
+                    "gapDrawIndexedVsConstFBetweenGapSiteTop1PrevCallName": "DrawIndexedPrimitive",
+                    "gapDrawIndexedVsConstFBetweenGapSiteTop1NextCallName": "SetVertexShaderConstantF",
+                    "gapDrawIndexedVsConstFBetweenGapSiteTop1CallerModule": "3DMark05.exe",
+                    "gapDrawIndexedVsConstFBetweenGapSiteTop1CallerRva": "0x2222",
+                    "gapDrawIndexedVsConstFBetweenGapSiteTop1Samples": 8,
+                    "gapDrawIndexedVsConstFBetweenGapSiteTop1Ms": 4.0,
+                },
+            )
+
+            result = self.run_compare(
+                root,
+                "--require-pe-focused-between-call-gap-residual-decrease",
+            )
+
+            self.assertEqual(result.returncode, 0, result.stderr)
+            report = root.joinpath("comparison.md").read_text(encoding="utf-8")
+            self.assertIn("pe_recorder_chunk_inter_append_gap_ms_per_present", report)
+            self.assertIn(
+                "pe_recorder_focused_between_call_gap_residual_ms_per_present",
+                report,
+            )
+            self.assertIn("pe_recorder_records_per_commit", report)
+            self.assertIn("pe_recorder_record_append_cpu_us_per_call", report)
+            self.assertIn("## PE Recorder Top Inter-Append Pairs", report)
+            self.assertIn("draw_indexed -> set_vs_const_f", report)
+            self.assertIn("### Focused Gap Phase Split", report)
+            self.assertIn(
+                "| `draw_indexed_vs_const_f` | `6.000` | `4.000` | "
+                "`1.000` | `2.000` | `-5` | `-2` |",
+                report,
+            )
+            self.assertIn("### Focused Between-Calls Entry Names", report)
+            self.assertIn(
+                "| `draw_indexed_vs_const_f` | `1` | "
+                "`SetVertexShaderConstantF` | `3.000` | `0.500` | "
+                "`SetVertexShaderConstantF` | `2.000` | `0.300` | "
+                "`-1` | `-0.2` |",
+                report,
+            )
+            self.assertIn("### Focused Between-Calls Return-To-Entry Gaps", report)
+            self.assertIn(
+                "| `draw_indexed_vs_const_f` | `1` | `draw -> vs_const` | "
+                "`3.000` | `2.000` | `draw -> vs_const` | `1.000` | "
+                "`2.000` | `-2` |",
+                report,
+            )
+            self.assertIn(
+                "### Focused Between-Calls Exact Return-To-Entry Gaps",
+                report,
+            )
+            self.assertIn(
+                "| `draw_indexed_vs_const_f` | `1` | "
+                "`DrawIndexedPrimitive -> SetVertexShaderConstantF` | "
+                "`3.000` | `2.000` | "
+                "`DrawIndexedPrimitive -> SetVertexShaderConstantF` | "
+                "`1.000` | `2.000` | `-2` |",
+                report,
+            )
+            self.assertIn(
+                "### Focused Between-Calls Exact Return-To-Entry Call Sites",
+                report,
+            )
+            self.assertIn(
+                "| `draw_indexed_vs_const_f` | `1` | "
+                "`DrawIndexedPrimitive -> SetVertexShaderConstantF` | "
+                "`3DMark05.exe+0x1111` | `3.000` | `2.000` | "
+                "`DrawIndexedPrimitive -> SetVertexShaderConstantF` | "
+                "`3DMark05.exe+0x2222` | `1.000` | `2.000` | `-2` |",
+                report,
+            )
+            self.assertIn("### Focused Between-Calls Body Coverage", report)
+            self.assertIn(
+                "| `draw_indexed_vs_const_f` | `5.000` | `0.500` | "
+                "`1.000` | `20.000` | `4.000` | `2.000` | `0.300` | "
+                "`0.500` | `25.000` | `1.500` | `-2.5` |",
+                report,
+            )
+            self.assertIn("pe_recorder_record_count_total", report)
+
+    def test_pe_focused_between_call_gap_residual_gate_fails_without_evidence(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            write_result(root / "before", {"present_encoded": 2})
+            write_result(root / "after", {"present_encoded": 2})
+
+            result = self.run_compare(
+                root,
+                "--require-pe-focused-between-call-gap-residual-decrease",
+            )
+
+            self.assertNotEqual(result.returncode, 0)
+            self.assertIn(
+                "pe_recorder_focused_between_call_gap_residual_ms_per_present is missing",
+                result.stderr,
+            )
+
+    def test_pe_focused_between_call_gap_residual_gate_fails_without_decrease(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            write_result(
+                root / "before",
+                {"present_encoded": 2},
+                {
+                    "gapDrawIndexedVsConstFBetweenCallsMs": 10.0,
+                    "gapDrawIndexedVsConstFBetweenCallBodyCpuMs": 2.0,
+                },
+            )
+            write_result(
+                root / "after",
+                {"present_encoded": 4},
+                {
+                    "gapDrawIndexedVsConstFBetweenCallsMs": 20.0,
+                    "gapDrawIndexedVsConstFBetweenCallBodyCpuMs": 2.0,
+                },
+            )
+
+            result = self.run_compare(
+                root,
+                "--require-pe-focused-between-call-gap-residual-decrease",
+            )
+
+            self.assertNotEqual(result.returncode, 0)
+            self.assertIn(
+                "pe_recorder_focused_between_call_gap_residual_ms_per_present did not decrease",
+                result.stderr,
+            )
 
     def test_mechanism_gates_pass_when_counters_move(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -227,7 +450,19 @@ class Compare3DMark05PerfCountersTests(unittest.TestCase):
                 "d3d9_snapshot_cache_batch_miss_uniform_build_cpu_ms": 6.0,
                 "d3d9_snapshot_cache_batch_miss_uniform_build_hash_cpu_ms": 3.0,
                 "d3d9_snapshot_cache_batch_miss_uniform_build_vs_const_hash_cpu_ms": 2.0,
+                "d3d9_snapshot_cache_batch_miss_uniform_vs_const_hash_reuse": 6,
+                "d3d9_snapshot_cache_batch_miss_uniform_vs_const_hash_build": 4,
                 "d3d9_snapshot_cache_batch_miss_uniform_build_ps_const_hash_cpu_ms": 0.5,
+                "d3d9_snapshot_cache_batch_miss_uniform_ps_const_hash_reuse": 8,
+                "d3d9_snapshot_cache_batch_miss_uniform_ps_const_hash_build": 2,
+                "d3d9_snapshot_cache_batch_miss_uniform_vs_const_hash_memo_probe": 4,
+                "d3d9_snapshot_cache_batch_miss_uniform_vs_const_hash_memo_hits": 1,
+                "d3d9_snapshot_cache_batch_miss_uniform_vs_const_hash_memo_misses": 3,
+                "d3d9_snapshot_cache_batch_miss_uniform_vs_const_hash_memo_stores": 10,
+                "d3d9_snapshot_cache_batch_miss_uniform_ps_const_hash_memo_probe": 2,
+                "d3d9_snapshot_cache_batch_miss_uniform_ps_const_hash_memo_hits": 1,
+                "d3d9_snapshot_cache_batch_miss_uniform_ps_const_hash_memo_misses": 1,
+                "d3d9_snapshot_cache_batch_miss_uniform_ps_const_hash_memo_stores": 10,
                 "d3d9_snapshot_cache_batch_miss_uniform_build_nonconst_hash_cpu_ms": 0.5,
                 "d3d9_snapshot_uniform_copy_cpu_ms": 2.0,
                 "submit_draw_run_batch_append_uniform_cpu_ms": 3.0,
@@ -395,7 +630,19 @@ class Compare3DMark05PerfCountersTests(unittest.TestCase):
                 "d3d9_snapshot_cache_batch_miss_uniform_build_cpu_ms": 4.0,
                 "d3d9_snapshot_cache_batch_miss_uniform_build_hash_cpu_ms": 1.5,
                 "d3d9_snapshot_cache_batch_miss_uniform_build_vs_const_hash_cpu_ms": 1.0,
+                "d3d9_snapshot_cache_batch_miss_uniform_vs_const_hash_reuse": 8,
+                "d3d9_snapshot_cache_batch_miss_uniform_vs_const_hash_build": 2,
                 "d3d9_snapshot_cache_batch_miss_uniform_build_ps_const_hash_cpu_ms": 0.25,
+                "d3d9_snapshot_cache_batch_miss_uniform_ps_const_hash_reuse": 9,
+                "d3d9_snapshot_cache_batch_miss_uniform_ps_const_hash_build": 1,
+                "d3d9_snapshot_cache_batch_miss_uniform_vs_const_hash_memo_probe": 2,
+                "d3d9_snapshot_cache_batch_miss_uniform_vs_const_hash_memo_hits": 1,
+                "d3d9_snapshot_cache_batch_miss_uniform_vs_const_hash_memo_misses": 1,
+                "d3d9_snapshot_cache_batch_miss_uniform_vs_const_hash_memo_stores": 10,
+                "d3d9_snapshot_cache_batch_miss_uniform_ps_const_hash_memo_probe": 1,
+                "d3d9_snapshot_cache_batch_miss_uniform_ps_const_hash_memo_hits": 1,
+                "d3d9_snapshot_cache_batch_miss_uniform_ps_const_hash_memo_misses": 0,
+                "d3d9_snapshot_cache_batch_miss_uniform_ps_const_hash_memo_stores": 10,
                 "d3d9_snapshot_cache_batch_miss_uniform_build_nonconst_hash_cpu_ms": 0.25,
                 "d3d9_snapshot_uniform_copy_cpu_ms": 1.0,
                 "submit_draw_run_batch_append_uniform_cpu_ms": 2.0,
@@ -611,7 +858,23 @@ class Compare3DMark05PerfCountersTests(unittest.TestCase):
             self.assertIn("snapshot_cache_batch_miss_uniform_build_cpu_ms_per_present", report)
             self.assertIn("snapshot_cache_batch_miss_uniform_hash_cpu_ms_per_present", report)
             self.assertIn("snapshot_cache_batch_miss_vs_const_hash_cpu_ms_per_present", report)
+            self.assertIn("snapshot_cache_batch_miss_vs_const_hash_reuse_per_present", report)
+            self.assertIn("snapshot_cache_batch_miss_vs_const_hash_build_per_present", report)
+            self.assertIn("snapshot_cache_batch_miss_vs_const_hash_build_share_pct", report)
+            self.assertIn("snapshot_cache_batch_miss_vs_const_hash_memo_probe_per_present", report)
+            self.assertIn("snapshot_cache_batch_miss_vs_const_hash_memo_hits_per_present", report)
+            self.assertIn("snapshot_cache_batch_miss_vs_const_hash_memo_misses_per_present", report)
+            self.assertIn("snapshot_cache_batch_miss_vs_const_hash_memo_stores_per_present", report)
+            self.assertIn("snapshot_cache_batch_miss_vs_const_hash_memo_hit_share_pct", report)
             self.assertIn("snapshot_cache_batch_miss_ps_const_hash_cpu_ms_per_present", report)
+            self.assertIn("snapshot_cache_batch_miss_ps_const_hash_reuse_per_present", report)
+            self.assertIn("snapshot_cache_batch_miss_ps_const_hash_build_per_present", report)
+            self.assertIn("snapshot_cache_batch_miss_ps_const_hash_build_share_pct", report)
+            self.assertIn("snapshot_cache_batch_miss_ps_const_hash_memo_probe_per_present", report)
+            self.assertIn("snapshot_cache_batch_miss_ps_const_hash_memo_hits_per_present", report)
+            self.assertIn("snapshot_cache_batch_miss_ps_const_hash_memo_misses_per_present", report)
+            self.assertIn("snapshot_cache_batch_miss_ps_const_hash_memo_stores_per_present", report)
+            self.assertIn("snapshot_cache_batch_miss_ps_const_hash_memo_hit_share_pct", report)
             self.assertIn("snapshot_cache_batch_miss_nonconst_hash_cpu_ms_per_present", report)
             self.assertIn("snapshot_uniform_copy_cpu_ms_per_present", report)
             self.assertIn("submit_draw_run_batch_append_uniform_cpu_ms_per_present", report)
@@ -1430,6 +1693,8 @@ class Compare3DMark05PerfCountersTests(unittest.TestCase):
             write_result(root / "before", {"present_encoded": 2})
             write_encoder_csv(root / "before", [
                 {
+                    "rt": "0x1",
+                    "depth": "0x10",
                     "end_reason": "rt_change",
                     "color_load_bytes": 1024 * 1024,
                     "color_store_bytes": 2 * 1024 * 1024,
@@ -1437,6 +1702,8 @@ class Compare3DMark05PerfCountersTests(unittest.TestCase):
                     "depth_store_bytes": 4 * 1024 * 1024,
                 },
                 {
+                    "rt": "0x2",
+                    "depth": "0x10",
                     "end_reason": "present",
                     "color_load_bytes": 0,
                     "color_store_bytes": 2 * 1024 * 1024,
@@ -1447,6 +1714,8 @@ class Compare3DMark05PerfCountersTests(unittest.TestCase):
             write_result(root / "after", {"present_encoded": 4})
             write_encoder_csv(root / "after", [
                 {
+                    "rt": "0x1",
+                    "depth": "0x10",
                     "end_reason": "rt_change",
                     "color_load_bytes": 1024 * 1024,
                     "color_store_bytes": 1024 * 1024,
@@ -1454,10 +1723,21 @@ class Compare3DMark05PerfCountersTests(unittest.TestCase):
                     "depth_store_bytes": 1024 * 1024,
                 },
                 {
+                    "rt": "0x3",
+                    "depth": "0x10",
                     "end_reason": "final",
                     "color_load_bytes": 3 * 1024 * 1024,
                     "color_store_bytes": 1024 * 1024,
                     "depth_load_bytes": 5 * 1024 * 1024,
+                    "depth_store_bytes": 1024 * 1024,
+                },
+                {
+                    "rt": "0x3",
+                    "depth": "0x10",
+                    "end_reason": "rt_change",
+                    "color_load_bytes": 4 * 1024 * 1024,
+                    "color_store_bytes": 1024 * 1024,
+                    "depth_load_bytes": 6 * 1024 * 1024,
                     "depth_store_bytes": 1024 * 1024,
                 },
             ])
@@ -1471,11 +1751,27 @@ class Compare3DMark05PerfCountersTests(unittest.TestCase):
                 report,
             )
             self.assertIn(
-                "| `encoder_sidecar_color_load_mib_per_present` | `0.500` | `1.000`",
+                "| `encoder_sidecar_final_same_key_reopen_per_present` | `0.000` | `0.250`",
                 report,
             )
             self.assertIn(
-                "| `encoder_sidecar_depth_load_mib_per_present` | `1.500` | `1.500`",
+                "| `encoder_sidecar_final_same_key_reopen_share_pct` | `n/a` | `100.000`",
+                report,
+            )
+            self.assertIn(
+                "| `encoder_sidecar_final_same_key_reopen_color_load_mib_per_present` | `0.000` | `1.000`",
+                report,
+            )
+            self.assertIn(
+                "| `encoder_sidecar_final_same_key_reopen_depth_load_mib_per_present` | `0.000` | `1.500`",
+                report,
+            )
+            self.assertIn(
+                "| `encoder_sidecar_color_load_mib_per_present` | `0.500` | `2.000`",
+                report,
+            )
+            self.assertIn(
+                "| `encoder_sidecar_depth_load_mib_per_present` | `1.500` | `3.000`",
                 report,
             )
 
@@ -1485,6 +1781,8 @@ class Compare3DMark05PerfCountersTests(unittest.TestCase):
             write_result(root / "before", {"present_encoded": 2})
             write_encoder_csv(root / "before", [
                 {
+                    "rt": "0x1",
+                    "depth": "0x10",
                     "end_reason": "rt_change",
                     "color_load_bytes": 1024 * 1024,
                     "depth_load_bytes": 2 * 1024 * 1024,
@@ -1493,7 +1791,16 @@ class Compare3DMark05PerfCountersTests(unittest.TestCase):
             write_result(root / "after", {"present_encoded": 2})
             write_encoder_csv(root / "after", [
                 {
+                    "rt": "0x2",
+                    "depth": "0x10",
                     "end_reason": "final",
+                    "color_load_bytes": 2 * 1024 * 1024,
+                    "depth_load_bytes": 3 * 1024 * 1024,
+                },
+                {
+                    "rt": "0x2",
+                    "depth": "0x10",
+                    "end_reason": "rt_change",
                     "color_load_bytes": 2 * 1024 * 1024,
                     "depth_load_bytes": 3 * 1024 * 1024,
                 },
@@ -1517,11 +1824,15 @@ class Compare3DMark05PerfCountersTests(unittest.TestCase):
                 report,
             )
             self.assertIn(
-                "| `encoder_sidecar_color_load_mib_per_present` | `0.500` | `1.000`",
+                "| `encoder_sidecar_final_same_key_reopen_per_present` | `0.000` | `0.500`",
                 report,
             )
             self.assertIn(
-                "| `encoder_sidecar_depth_load_mib_per_present` | `1.000` | `1.500`",
+                "| `encoder_sidecar_color_load_mib_per_present` | `0.500` | `2.000`",
+                report,
+            )
+            self.assertIn(
+                "| `encoder_sidecar_depth_load_mib_per_present` | `1.000` | `3.000`",
                 report,
             )
 
@@ -1534,6 +1845,7 @@ class Compare3DMark05PerfCountersTests(unittest.TestCase):
             result = self.run_compare(
                 root,
                 "--require-encoder-final-end-reason-not-increase",
+                "--require-encoder-final-same-key-reopen-not-increase",
                 "--require-encoder-color-load-not-increase",
                 "--require-encoder-depth-load-not-increase",
             )
@@ -1541,6 +1853,10 @@ class Compare3DMark05PerfCountersTests(unittest.TestCase):
             self.assertNotEqual(result.returncode, 0)
             self.assertIn(
                 "encoder_sidecar_final_end_reason_per_present is missing",
+                result.stderr,
+            )
+            self.assertIn(
+                "encoder_sidecar_final_same_key_reopen_per_present is missing",
                 result.stderr,
             )
             self.assertIn(
@@ -1563,6 +1879,7 @@ class Compare3DMark05PerfCountersTests(unittest.TestCase):
             result = self.run_compare(
                 root,
                 "--require-encoder-final-end-reason-not-increase",
+                "--require-encoder-final-same-key-reopen-not-increase",
                 "--require-encoder-color-load-not-increase",
                 "--require-encoder-depth-load-not-increase",
             )
@@ -1570,6 +1887,10 @@ class Compare3DMark05PerfCountersTests(unittest.TestCase):
             self.assertNotEqual(result.returncode, 0)
             self.assertIn(
                 "encoder_sidecar_final_end_reason_per_present is missing",
+                result.stderr,
+            )
+            self.assertIn(
+                "encoder_sidecar_final_same_key_reopen_per_present is missing",
                 result.stderr,
             )
             self.assertIn(
@@ -1587,6 +1908,8 @@ class Compare3DMark05PerfCountersTests(unittest.TestCase):
             write_result(root / "before", {"present_encoded": 2})
             write_encoder_csv(root / "before", [
                 {
+                    "rt": "0x1",
+                    "depth": "0x10",
                     "end_reason": "rt_change",
                     "color_load_bytes": 1024 * 1024,
                     "depth_load_bytes": 1024 * 1024,
@@ -1595,20 +1918,34 @@ class Compare3DMark05PerfCountersTests(unittest.TestCase):
             write_result(root / "after", {"present_encoded": 2})
             write_encoder_csv(root / "after", [
                 {
+                    "rt": "0x2",
+                    "depth": "0x10",
                     "end_reason": "rt_change",
                     "color_load_bytes": 1024 * 1024,
                     "depth_load_bytes": 1024 * 1024,
                 },
                 {
+                    "rt": "0x3",
+                    "depth": "0x10",
                     "end_reason": "final",
                     "color_load_bytes": 2 * 1024 * 1024,
+                    "color_store_bytes": 1024 * 1024,
                     "depth_load_bytes": 3 * 1024 * 1024,
+                    "depth_store_bytes": 1024 * 1024,
+                },
+                {
+                    "rt": "0x3",
+                    "depth": "0x10",
+                    "end_reason": "rt_change",
+                    "color_load_bytes": 1024 * 1024,
+                    "depth_load_bytes": 1024 * 1024,
                 },
             ])
 
             result = self.run_compare(
                 root,
                 "--require-encoder-final-end-reason-not-increase",
+                "--require-encoder-final-same-key-reopen-not-increase",
                 "--require-encoder-color-load-not-increase",
                 "--require-encoder-depth-load-not-increase",
             )
@@ -1616,6 +1953,10 @@ class Compare3DMark05PerfCountersTests(unittest.TestCase):
             self.assertNotEqual(result.returncode, 0)
             self.assertIn(
                 "encoder_sidecar_final_end_reason_per_present increased",
+                result.stderr,
+            )
+            self.assertIn(
+                "encoder_sidecar_final_same_key_reopen_per_present increased",
                 result.stderr,
             )
             self.assertIn(
