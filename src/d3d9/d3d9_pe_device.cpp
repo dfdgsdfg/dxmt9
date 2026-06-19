@@ -102,6 +102,11 @@ static bool dxmt9PeFlushAfterClearEnabled() {
     return enabled;
 }
 
+static bool dxmt9PeFlushAfterDrawEnabled() {
+    static const bool enabled = dxmt9::util::getenvFlag("DXMT9_PE_FLUSH_AFTER_DRAW");
+    return enabled;
+}
+
 static double dxmt9ElapsedMs(std::chrono::steady_clock::time_point start,
                              std::chrono::steady_clock::time_point end) {
     return std::chrono::duration<double, std::milli>(end - start).count();
@@ -8296,7 +8301,9 @@ class D3D9DeviceImpl final : public IDirect3DDevice9Ex, public D3D9PeRecorderFlu
         if (!buildDrawPrimitivePacket(type, startVertex, count, record.packet)) {
             return D3DERR_INVALIDCALL;
         }
-        return appendCommandRecord(&record, sizeof(record));
+        const HRESULT hr = appendCommandRecord(&record, sizeof(record));
+        if (FAILED(hr)) return hr;
+        return flushAfterDrawIfRequested();
     }
 
     HRESULT appendDrawIndexedPrimitiveRecord(D3DPRIMITIVETYPE type,
@@ -8337,7 +8344,8 @@ class D3D9DeviceImpl final : public IDirect3DDevice9Ex, public D3D9PeRecorderFlu
             }
             peState_.pendingIb = false;
         }
-        return hr;
+        if (FAILED(hr)) return hr;
+        return flushAfterDrawIfRequested();
     }
 
     HRESULT appendDrawPrimitiveUPRecord(D3DPRIMITIVETYPE type,
@@ -8423,6 +8431,8 @@ class D3D9DeviceImpl final : public IDirect3DDevice9Ex, public D3D9PeRecorderFlu
             });
         if (SUCCEEDED(hr)) {
             recordDrawPrimitiveUPCopy(vertexBytes);
+            const HRESULT flushHr = flushAfterDrawIfRequested();
+            if (FAILED(flushHr)) return flushHr;
         }
         return hr;
     }
@@ -8536,6 +8546,8 @@ class D3D9DeviceImpl final : public IDirect3DDevice9Ex, public D3D9PeRecorderFlu
             });
         if (SUCCEEDED(hr)) {
             recordDrawIndexedPrimitiveUPCopy(vertexBytes, indexBytes);
+            const HRESULT flushHr = flushAfterDrawIfRequested();
+            if (FAILED(flushHr)) return flushHr;
         }
         return hr;
     }
@@ -8545,6 +8557,13 @@ class D3D9DeviceImpl final : public IDirect3DDevice9Ex, public D3D9PeRecorderFlu
         const HRESULT barrierHr = chunkBarrierFlush();
         if (FAILED(barrierHr)) return barrierHr;
         return flushPendingCommandChunk(reason);
+    }
+
+    HRESULT flushAfterDrawIfRequested() {
+        if (!dxmt9PeFlushAfterDrawEnabled()) {
+            return S_OK;
+        }
+        return flushPendingCommandChunk(PeRecorderFlushReason::Draw);
     }
 
     // Variable-size const-array record append. The record is

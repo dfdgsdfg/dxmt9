@@ -141,6 +141,45 @@ struct Counters {
   std::atomic<std::uint64_t> chunkPublishCommandsFlush{0};
   std::atomic<std::uint64_t> chunkPublishCommandsStretchSplit{0};
   std::atomic<std::uint64_t> chunkPublishCommandsMapWait{0};
+  std::atomic<std::uint64_t> chunkPublishPresentSplitBeforeTailEmpty{0};
+  std::atomic<std::uint64_t> chunkPublishPresentSplitBeforeTailDrawRun{0};
+  std::atomic<std::uint64_t> chunkPublishPresentSplitBeforeTailClear{0};
+  std::atomic<std::uint64_t> chunkPublishPresentSplitBeforeTailSurfaceCopy{0};
+  std::atomic<std::uint64_t> chunkPublishPresentSplitBeforeTailStretchRect{0};
+  std::atomic<std::uint64_t> chunkPublishPresentSplitBeforeTailReadback{0};
+  std::atomic<std::uint64_t> chunkPublishPresentSplitBeforeTailColorFill{0};
+  std::atomic<std::uint64_t> chunkPublishPresentSplitBeforeTailDepthResolve{0};
+  std::atomic<std::uint64_t> chunkPublishPresentSplitBeforeTailPresent{0};
+  std::atomic<std::uint64_t> chunkPublishPresentSplitBeforeDrawOnly{0};
+  std::atomic<std::uint64_t> chunkPublishSlotResidencySamples{0};
+  std::atomic<std::uint64_t> chunkPublishSlotResidencyNs{0};
+  std::atomic<std::uint64_t> chunkPublishSlotResidencyMaxNs{0};
+  std::atomic<std::uint64_t> chunkPublishSlotResidencyPresentSamples{0};
+  std::atomic<std::uint64_t> chunkPublishSlotResidencyPresentNs{0};
+  std::atomic<std::uint64_t> chunkPublishSlotResidencyPresentMaxNs{0};
+  std::atomic<std::uint64_t> chunkPublishSlotResidencyNonPresentSamples{0};
+  std::atomic<std::uint64_t> chunkPublishSlotResidencyNonPresentNs{0};
+  std::atomic<std::uint64_t> chunkPublishSlotResidencyNonPresentMaxNs{0};
+  std::atomic<std::uint64_t> chunkPublishPresentPrePresentOpportunitySlots{0};
+  std::atomic<std::uint64_t> chunkPublishPresentPrePresentOpportunityTailSlots{0};
+  std::atomic<std::uint64_t> chunkPublishPresentPrePresentOpportunityNonTailSlots{0};
+  std::atomic<std::uint64_t> chunkPublishPresentPrePresentOpportunityCommands{0};
+  std::atomic<std::uint64_t> chunkPublishPresentPrePresentOpportunityDrawRuns{0};
+  std::atomic<std::uint64_t> chunkPublishPresentPrePresentOpportunityDrawItems{0};
+  std::atomic<std::uint64_t> chunkPublishPresentPrePresentOpportunityNonDrawCommands{0};
+  std::atomic<std::uint64_t> chunkPublishPresentPrePresentOpportunityPayloadBytes{0};
+  std::atomic<std::uint64_t> chunkPublishPresentPrePresentOpportunityResidencyNs{0};
+  std::atomic<std::uint64_t> chunkPublishPresentPrePresentOpportunityResidencyMaxNs{0};
+  std::atomic<std::uint64_t> chunkPublishPresentPrePresentOpportunityTailEmpty{0};
+  std::atomic<std::uint64_t> chunkPublishPresentPrePresentOpportunityTailDrawRun{0};
+  std::atomic<std::uint64_t> chunkPublishPresentPrePresentOpportunityTailClear{0};
+  std::atomic<std::uint64_t> chunkPublishPresentPrePresentOpportunityTailSurfaceCopy{0};
+  std::atomic<std::uint64_t> chunkPublishPresentPrePresentOpportunityTailStretchRect{0};
+  std::atomic<std::uint64_t> chunkPublishPresentPrePresentOpportunityTailReadback{0};
+  std::atomic<std::uint64_t> chunkPublishPresentPrePresentOpportunityTailColorFill{0};
+  std::atomic<std::uint64_t> chunkPublishPresentPrePresentOpportunityTailDepthResolve{0};
+  std::atomic<std::uint64_t> chunkPublishPresentPrePresentOpportunityTailPresent{0};
+  std::atomic<std::uint64_t> chunkPublishPresentPrePresentOpportunityDrawOnly{0};
   std::atomic<std::uint64_t> encodeSlotPsoPrefetchCpuNs{0};
   std::atomic<std::uint64_t> encodeSlotPsoPrefetchCpuMaxNs{0};
   std::atomic<std::uint64_t> encodeSlotPsoPrefetchCommands{0};
@@ -444,6 +483,13 @@ struct Counters {
   std::atomic<std::uint64_t> d3d9DrawStateCacheBatchMissReasonHasTextureFvfVdeclTssSampler{0};
   std::atomic<std::uint64_t> d3d9DrawStateCacheBatchMissReasonHasShaderFvfVdeclTssSampler{0};
   std::atomic<std::uint64_t> d3d9DrawStateCacheBatchMissReasonHasTextureShaderFvfVdeclTssSampler{0};
+  std::atomic<std::uint64_t> d3d9SnapshotCacheBatchMissSemanticReuseProbeSamples{0};
+  std::atomic<std::uint64_t> d3d9SnapshotCacheBatchMissSemanticReuseProbeHits{0};
+  std::atomic<std::uint64_t> d3d9SnapshotCacheBatchMissSemanticReuseProbeMisses{0};
+  std::atomic<std::uint64_t> d3d9SnapshotCacheBatchMissSemanticReuseProbeHitDistance1{0};
+  std::atomic<std::uint64_t> d3d9SnapshotCacheBatchMissSemanticReuseProbeHitDistance2{0};
+  std::atomic<std::uint64_t> d3d9SnapshotCacheBatchMissSemanticReuseProbeHitDistance3To4{0};
+  std::atomic<std::uint64_t> d3d9SnapshotCacheBatchMissSemanticReuseProbeHitDistance5To8{0};
   std::atomic<std::uint64_t> d3d9DrawStateCacheMissAfterUnknown{0};
   std::atomic<std::uint64_t> d3d9DrawStateCacheMissAfterMutableState{0};
   std::atomic<std::uint64_t> d3d9DrawStateCacheMissAfterDrawPacket{0};
@@ -994,6 +1040,9 @@ struct Counters {
   std::atomic<std::uint64_t> d3d9SnapshotCacheBatchMissHotBuildFlatSamplerReuseMisses{0};
   std::atomic<std::uint64_t> d3d9SnapshotCacheBatchMissUniformNonConstHashReuseHits{0};
   std::atomic<std::uint64_t> d3d9SnapshotCacheBatchMissUniformNonConstHashReuseMisses{0};
+  std::atomic<std::uint64_t> d3d9SnapshotCacheBatchMissUniformPayloadReuseFull{0};
+  std::atomic<std::uint64_t> d3d9SnapshotCacheBatchMissUniformPayloadReuseNonConst{0};
+  std::atomic<std::uint64_t> d3d9SnapshotCacheBatchMissUniformPayloadFullBuild{0};
   std::atomic<std::uint64_t> d3d9SnapshotUniformBuildCalls{0};
   std::atomic<std::uint64_t> d3d9SnapshotUniformBuildVsConstCopyCpuNs{0};
   std::atomic<std::uint64_t> d3d9SnapshotUniformBuildPsConstCopyCpuNs{0};
@@ -1041,6 +1090,20 @@ struct Counters {
   std::atomic<std::uint64_t> d3d9SnapshotUniformMaterializedCompactFixedBytes{0};
   std::atomic<std::uint64_t> d3d9SnapshotUniformMaterializedCompactVertexBytes{0};
   std::atomic<std::uint64_t> d3d9SnapshotUniformMaterializedCompactPixelBytes{0};
+  std::atomic<std::uint64_t> d3d9SnapshotUniformCompactCpuNs{0};
+  std::atomic<std::uint64_t> d3d9SnapshotUniformCompactFixedCpuNs{0};
+  std::atomic<std::uint64_t> d3d9SnapshotUniformCompactVertexStageCpuNs{0};
+  std::atomic<std::uint64_t> d3d9SnapshotUniformCompactPixelStageCpuNs{0};
+  std::atomic<std::uint64_t> d3d9SnapshotUniformCompactFixedPayloadAppends{0};
+  std::atomic<std::uint64_t> d3d9SnapshotUniformCompactFixedPayloadReuses{0};
+  std::atomic<std::uint64_t> d3d9SnapshotUniformCompactFixedPayloadReuseSavedBytes{0};
+  std::atomic<std::uint64_t> d3d9SnapshotSubmissionCarrierRecords{0};
+  std::atomic<std::uint64_t> d3d9SnapshotSubmissionCarrierBytes{0};
+  std::atomic<std::uint64_t> d3d9SnapshotSubmissionCarrierStateStorageBytes{0};
+  std::atomic<std::uint64_t> d3d9SnapshotSubmissionCarrierUniformStorageBytes{0};
+  std::atomic<std::uint64_t> d3d9SnapshotSubmissionCarrierCompactUniformStorageBytes{0};
+  std::atomic<std::uint64_t> d3d9SnapshotSubmissionCarrierUnusedUniformStorageRecords{0};
+  std::atomic<std::uint64_t> d3d9SnapshotSubmissionCarrierUnusedUniformStorageBytes{0};
   std::atomic<std::uint64_t> d3d9SnapshotUniformElided{0};
   std::atomic<std::uint64_t> d3d9SnapshotUniformElidedBytes{0};
   std::atomic<std::uint64_t> d3d9SnapshotUniformAdjacentSameGen{0};
@@ -1391,6 +1454,11 @@ struct Counters {
   std::atomic<std::uint64_t> completionWaitEnqueuesDuringWaitMax{0};
   std::atomic<std::uint64_t> completionSignalDelay{0};
   std::atomic<std::uint64_t> completionSignalDelayNs{0};
+  std::atomic<std::uint64_t> completionWaitCommitChunkEntries{0};
+  std::atomic<std::uint64_t> completionWaitCommitChunkReplayStarts{0};
+  std::atomic<std::uint64_t> completionWaitCommitChunkReplayEnds{0};
+  std::atomic<std::uint64_t> completionWaitCommitChunkReplayCpuNs{0};
+  std::atomic<std::uint64_t> completionWaitCommitChunkReplayCpuMaxNs{0};
   std::atomic<std::uint64_t> completionNoEnqueueWaitToCommitChunkEntry{0};
   std::atomic<std::uint64_t> completionNoEnqueueWaitToCommitChunkEntryNs{0};
   std::atomic<std::uint64_t> completionNoEnqueueWaitToCommitChunkEntryMaxNs{0};
@@ -1439,6 +1507,16 @@ struct Counters {
   std::atomic<std::uint64_t> completionNoEnqueueCommitChunkSurfaceRecordsBeforePublish{0};
   std::atomic<std::uint64_t> completionNoEnqueueCommitChunkQueryRecordsBeforePublish{0};
   std::atomic<std::uint64_t> completionNoEnqueueCommitChunkOtherRecordsBeforePublish{0};
+  std::atomic<std::uint64_t> completionNoEnqueueFirstPublishSlotSamples{0};
+  std::atomic<std::uint64_t> completionNoEnqueueFirstPublishSlotCommands{0};
+  std::atomic<std::uint64_t> completionNoEnqueueFirstPublishSlotCommandsMax{0};
+  std::atomic<std::uint64_t> completionNoEnqueueFirstPublishSlotDrawRunCommands{0};
+  std::atomic<std::uint64_t> completionNoEnqueueFirstPublishSlotDrawItems{0};
+  std::atomic<std::uint64_t> completionNoEnqueueFirstPublishSlotDrawItemsMax{0};
+  std::atomic<std::uint64_t> completionNoEnqueueFirstPublishSlotNonDrawCommands{0};
+  std::atomic<std::uint64_t> completionNoEnqueueFirstPublishSlotPayloadBytes{0};
+  std::atomic<std::uint64_t> completionNoEnqueueFirstPublishSlotPayloadBytesMax{0};
+  std::atomic<std::uint64_t> completionNoEnqueueFirstPublishSlotPresentCommands{0};
   std::atomic<std::uint64_t> completionNoEnqueueWaitToEncodeDequeue{0};
   std::atomic<std::uint64_t> completionNoEnqueueWaitToEncodeDequeueNs{0};
   std::atomic<std::uint64_t> completionNoEnqueueWaitToEncodeDequeueMaxNs{0};
@@ -1638,6 +1716,10 @@ struct Counters {
   PercentileRing prepareSlotResourceMarkCpuRing;
   PercentileRing prepareSlotPsoPrefetchCpuRing;
   PercentileRing unpublishedSlotPsoPrefetchCpuRing;
+  PercentileRing chunkPublishSlotResidencyRing;
+  PercentileRing chunkPublishSlotResidencyPresentRing;
+  PercentileRing chunkPublishSlotResidencyNonPresentRing;
+  PercentileRing chunkPublishPresentPrePresentOpportunityResidencyRing;
   PercentileRing encodeSlotPsoPrefetchCpuRing;
   PercentileRing encodeSlotPsoPrefetchStateCopyCpuRing;
   PercentileRing encodeSlotPsoPrefetchDepthLookupCpuRing;
@@ -1672,6 +1754,7 @@ struct Counters {
   PercentileRing commitChunkReplayQueryRecordCpuRing;
   PercentileRing commitChunkReplayOtherRecordCpuRing;
   PercentileRing commitChunkConstUploadCpuRing;
+  PercentileRing completionWaitCommitChunkReplayCpuRing;
   PercentileRing completionDequeueAgeRing;
   PercentileRing completionNoEnqueueWaitToCommitChunkEntryRing;
   PercentileRing completionNoEnqueueWaitToCommitChunkReplayStartRing;
@@ -1686,6 +1769,9 @@ struct Counters {
   PercentileRing completionNoEnqueueCommitPublishWaitBeforePublishRing;
   PercentileRing completionNoEnqueueCommitPublishOnBeforePublishCpuRing;
   PercentileRing completionNoEnqueueCommitChunkRecordsBeforePublishRing;
+  PercentileRing completionNoEnqueueFirstPublishSlotCommandsRing;
+  PercentileRing completionNoEnqueueFirstPublishSlotDrawItemsRing;
+  PercentileRing completionNoEnqueueFirstPublishSlotPayloadBytesRing;
   PercentileRing completionNoEnqueueWaitToEncodeDequeueRing;
   PercentileRing completionNoEnqueueWaitToCommandBufferCommitRing;
   PercentileRing completionNoEnqueueStageCommitEntryToPublishRing;
@@ -1999,6 +2085,53 @@ constexpr CounterEntry kCounterTable[] = {
     {"chunk_publish_commands_flush", CounterEntry::Kind::UnsignedCount, &Counters::chunkPublishCommandsFlush, nullptr, nullptr, 0.0},
     {"chunk_publish_commands_stretch_split", CounterEntry::Kind::UnsignedCount, &Counters::chunkPublishCommandsStretchSplit, nullptr, nullptr, 0.0},
     {"chunk_publish_commands_map_wait", CounterEntry::Kind::UnsignedCount, &Counters::chunkPublishCommandsMapWait, nullptr, nullptr, 0.0},
+    {"chunk_publish_present_split_before_tail_empty", CounterEntry::Kind::UnsignedCount, &Counters::chunkPublishPresentSplitBeforeTailEmpty, nullptr, nullptr, 0.0},
+    {"chunk_publish_present_split_before_tail_draw_run", CounterEntry::Kind::UnsignedCount, &Counters::chunkPublishPresentSplitBeforeTailDrawRun, nullptr, nullptr, 0.0},
+    {"chunk_publish_present_split_before_tail_clear", CounterEntry::Kind::UnsignedCount, &Counters::chunkPublishPresentSplitBeforeTailClear, nullptr, nullptr, 0.0},
+    {"chunk_publish_present_split_before_tail_surface_copy", CounterEntry::Kind::UnsignedCount, &Counters::chunkPublishPresentSplitBeforeTailSurfaceCopy, nullptr, nullptr, 0.0},
+    {"chunk_publish_present_split_before_tail_stretch_rect", CounterEntry::Kind::UnsignedCount, &Counters::chunkPublishPresentSplitBeforeTailStretchRect, nullptr, nullptr, 0.0},
+    {"chunk_publish_present_split_before_tail_readback", CounterEntry::Kind::UnsignedCount, &Counters::chunkPublishPresentSplitBeforeTailReadback, nullptr, nullptr, 0.0},
+    {"chunk_publish_present_split_before_tail_color_fill", CounterEntry::Kind::UnsignedCount, &Counters::chunkPublishPresentSplitBeforeTailColorFill, nullptr, nullptr, 0.0},
+    {"chunk_publish_present_split_before_tail_depth_resolve", CounterEntry::Kind::UnsignedCount, &Counters::chunkPublishPresentSplitBeforeTailDepthResolve, nullptr, nullptr, 0.0},
+    {"chunk_publish_present_split_before_tail_present", CounterEntry::Kind::UnsignedCount, &Counters::chunkPublishPresentSplitBeforeTailPresent, nullptr, nullptr, 0.0},
+    {"chunk_publish_present_split_before_draw_only", CounterEntry::Kind::UnsignedCount, &Counters::chunkPublishPresentSplitBeforeDrawOnly, nullptr, nullptr, 0.0},
+    {"chunk_publish_slot_residency_samples", CounterEntry::Kind::UnsignedCount, &Counters::chunkPublishSlotResidencySamples, nullptr, nullptr, 0.0},
+    {"chunk_publish_slot_residency_ms", CounterEntry::Kind::Milliseconds, &Counters::chunkPublishSlotResidencyNs, nullptr, nullptr, 0.0},
+    {"chunk_publish_slot_residency_max_ms", CounterEntry::Kind::Milliseconds, &Counters::chunkPublishSlotResidencyMaxNs, nullptr, nullptr, 0.0},
+    {"chunk_publish_slot_residency_p50_ms", CounterEntry::Kind::PercentileMs, nullptr, nullptr, &Counters::chunkPublishSlotResidencyRing, 0.5},
+    {"chunk_publish_slot_residency_p95_ms", CounterEntry::Kind::PercentileMs, nullptr, nullptr, &Counters::chunkPublishSlotResidencyRing, 0.95},
+    {"chunk_publish_slot_residency_present_samples", CounterEntry::Kind::UnsignedCount, &Counters::chunkPublishSlotResidencyPresentSamples, nullptr, nullptr, 0.0},
+    {"chunk_publish_slot_residency_present_ms", CounterEntry::Kind::Milliseconds, &Counters::chunkPublishSlotResidencyPresentNs, nullptr, nullptr, 0.0},
+    {"chunk_publish_slot_residency_present_max_ms", CounterEntry::Kind::Milliseconds, &Counters::chunkPublishSlotResidencyPresentMaxNs, nullptr, nullptr, 0.0},
+    {"chunk_publish_slot_residency_present_p50_ms", CounterEntry::Kind::PercentileMs, nullptr, nullptr, &Counters::chunkPublishSlotResidencyPresentRing, 0.5},
+    {"chunk_publish_slot_residency_present_p95_ms", CounterEntry::Kind::PercentileMs, nullptr, nullptr, &Counters::chunkPublishSlotResidencyPresentRing, 0.95},
+    {"chunk_publish_slot_residency_nonpresent_samples", CounterEntry::Kind::UnsignedCount, &Counters::chunkPublishSlotResidencyNonPresentSamples, nullptr, nullptr, 0.0},
+    {"chunk_publish_slot_residency_nonpresent_ms", CounterEntry::Kind::Milliseconds, &Counters::chunkPublishSlotResidencyNonPresentNs, nullptr, nullptr, 0.0},
+    {"chunk_publish_slot_residency_nonpresent_max_ms", CounterEntry::Kind::Milliseconds, &Counters::chunkPublishSlotResidencyNonPresentMaxNs, nullptr, nullptr, 0.0},
+    {"chunk_publish_slot_residency_nonpresent_p50_ms", CounterEntry::Kind::PercentileMs, nullptr, nullptr, &Counters::chunkPublishSlotResidencyNonPresentRing, 0.5},
+    {"chunk_publish_slot_residency_nonpresent_p95_ms", CounterEntry::Kind::PercentileMs, nullptr, nullptr, &Counters::chunkPublishSlotResidencyNonPresentRing, 0.95},
+    {"chunk_publish_present_pre_present_opportunity_slots", CounterEntry::Kind::UnsignedCount, &Counters::chunkPublishPresentPrePresentOpportunitySlots, nullptr, nullptr, 0.0},
+    {"chunk_publish_present_pre_present_opportunity_tail_slots", CounterEntry::Kind::UnsignedCount, &Counters::chunkPublishPresentPrePresentOpportunityTailSlots, nullptr, nullptr, 0.0},
+    {"chunk_publish_present_pre_present_opportunity_nontail_slots", CounterEntry::Kind::UnsignedCount, &Counters::chunkPublishPresentPrePresentOpportunityNonTailSlots, nullptr, nullptr, 0.0},
+    {"chunk_publish_present_pre_present_opportunity_commands", CounterEntry::Kind::UnsignedCount, &Counters::chunkPublishPresentPrePresentOpportunityCommands, nullptr, nullptr, 0.0},
+    {"chunk_publish_present_pre_present_opportunity_draw_runs", CounterEntry::Kind::UnsignedCount, &Counters::chunkPublishPresentPrePresentOpportunityDrawRuns, nullptr, nullptr, 0.0},
+    {"chunk_publish_present_pre_present_opportunity_draw_items", CounterEntry::Kind::UnsignedCount, &Counters::chunkPublishPresentPrePresentOpportunityDrawItems, nullptr, nullptr, 0.0},
+    {"chunk_publish_present_pre_present_opportunity_non_draw_commands", CounterEntry::Kind::UnsignedCount, &Counters::chunkPublishPresentPrePresentOpportunityNonDrawCommands, nullptr, nullptr, 0.0},
+    {"chunk_publish_present_pre_present_opportunity_payload_bytes", CounterEntry::Kind::UnsignedCount, &Counters::chunkPublishPresentPrePresentOpportunityPayloadBytes, nullptr, nullptr, 0.0},
+    {"chunk_publish_present_pre_present_opportunity_residency_ms", CounterEntry::Kind::Milliseconds, &Counters::chunkPublishPresentPrePresentOpportunityResidencyNs, nullptr, nullptr, 0.0},
+    {"chunk_publish_present_pre_present_opportunity_residency_max_ms", CounterEntry::Kind::Milliseconds, &Counters::chunkPublishPresentPrePresentOpportunityResidencyMaxNs, nullptr, nullptr, 0.0},
+    {"chunk_publish_present_pre_present_opportunity_residency_p50_ms", CounterEntry::Kind::PercentileMs, nullptr, nullptr, &Counters::chunkPublishPresentPrePresentOpportunityResidencyRing, 0.5},
+    {"chunk_publish_present_pre_present_opportunity_residency_p95_ms", CounterEntry::Kind::PercentileMs, nullptr, nullptr, &Counters::chunkPublishPresentPrePresentOpportunityResidencyRing, 0.95},
+    {"chunk_publish_present_pre_present_opportunity_tail_empty", CounterEntry::Kind::UnsignedCount, &Counters::chunkPublishPresentPrePresentOpportunityTailEmpty, nullptr, nullptr, 0.0},
+    {"chunk_publish_present_pre_present_opportunity_tail_draw_run", CounterEntry::Kind::UnsignedCount, &Counters::chunkPublishPresentPrePresentOpportunityTailDrawRun, nullptr, nullptr, 0.0},
+    {"chunk_publish_present_pre_present_opportunity_tail_clear", CounterEntry::Kind::UnsignedCount, &Counters::chunkPublishPresentPrePresentOpportunityTailClear, nullptr, nullptr, 0.0},
+    {"chunk_publish_present_pre_present_opportunity_tail_surface_copy", CounterEntry::Kind::UnsignedCount, &Counters::chunkPublishPresentPrePresentOpportunityTailSurfaceCopy, nullptr, nullptr, 0.0},
+    {"chunk_publish_present_pre_present_opportunity_tail_stretch_rect", CounterEntry::Kind::UnsignedCount, &Counters::chunkPublishPresentPrePresentOpportunityTailStretchRect, nullptr, nullptr, 0.0},
+    {"chunk_publish_present_pre_present_opportunity_tail_readback", CounterEntry::Kind::UnsignedCount, &Counters::chunkPublishPresentPrePresentOpportunityTailReadback, nullptr, nullptr, 0.0},
+    {"chunk_publish_present_pre_present_opportunity_tail_color_fill", CounterEntry::Kind::UnsignedCount, &Counters::chunkPublishPresentPrePresentOpportunityTailColorFill, nullptr, nullptr, 0.0},
+    {"chunk_publish_present_pre_present_opportunity_tail_depth_resolve", CounterEntry::Kind::UnsignedCount, &Counters::chunkPublishPresentPrePresentOpportunityTailDepthResolve, nullptr, nullptr, 0.0},
+    {"chunk_publish_present_pre_present_opportunity_tail_present", CounterEntry::Kind::UnsignedCount, &Counters::chunkPublishPresentPrePresentOpportunityTailPresent, nullptr, nullptr, 0.0},
+    {"chunk_publish_present_pre_present_opportunity_draw_only", CounterEntry::Kind::UnsignedCount, &Counters::chunkPublishPresentPrePresentOpportunityDrawOnly, nullptr, nullptr, 0.0},
     {"encode_slot_pso_prefetch_cpu_ms", CounterEntry::Kind::Milliseconds, &Counters::encodeSlotPsoPrefetchCpuNs, nullptr, nullptr, 0.0},
     {"encode_slot_pso_prefetch_cpu_max_ms", CounterEntry::Kind::Milliseconds, &Counters::encodeSlotPsoPrefetchCpuMaxNs, nullptr, nullptr, 0.0},
     {"encode_slot_pso_prefetch_cpu_p50_ms", CounterEntry::Kind::PercentileMs, nullptr, nullptr, &Counters::encodeSlotPsoPrefetchCpuRing, 0.5},
@@ -2346,6 +2479,13 @@ constexpr CounterEntry kCounterTable[] = {
     {"d3d9_draw_state_cache_batch_miss_reason_has_texture_fvf_vdecl_tss_sampler", CounterEntry::Kind::UnsignedCount, &Counters::d3d9DrawStateCacheBatchMissReasonHasTextureFvfVdeclTssSampler, nullptr, nullptr, 0.0},
     {"d3d9_draw_state_cache_batch_miss_reason_has_shader_fvf_vdecl_tss_sampler", CounterEntry::Kind::UnsignedCount, &Counters::d3d9DrawStateCacheBatchMissReasonHasShaderFvfVdeclTssSampler, nullptr, nullptr, 0.0},
     {"d3d9_draw_state_cache_batch_miss_reason_has_texture_shader_fvf_vdecl_tss_sampler", CounterEntry::Kind::UnsignedCount, &Counters::d3d9DrawStateCacheBatchMissReasonHasTextureShaderFvfVdeclTssSampler, nullptr, nullptr, 0.0},
+    {"d3d9_snapshot_cache_batch_miss_semantic_reuse_probe_samples", CounterEntry::Kind::UnsignedCount, &Counters::d3d9SnapshotCacheBatchMissSemanticReuseProbeSamples, nullptr, nullptr, 0.0},
+    {"d3d9_snapshot_cache_batch_miss_semantic_reuse_probe_hits", CounterEntry::Kind::UnsignedCount, &Counters::d3d9SnapshotCacheBatchMissSemanticReuseProbeHits, nullptr, nullptr, 0.0},
+    {"d3d9_snapshot_cache_batch_miss_semantic_reuse_probe_misses", CounterEntry::Kind::UnsignedCount, &Counters::d3d9SnapshotCacheBatchMissSemanticReuseProbeMisses, nullptr, nullptr, 0.0},
+    {"d3d9_snapshot_cache_batch_miss_semantic_reuse_probe_hit_distance_1", CounterEntry::Kind::UnsignedCount, &Counters::d3d9SnapshotCacheBatchMissSemanticReuseProbeHitDistance1, nullptr, nullptr, 0.0},
+    {"d3d9_snapshot_cache_batch_miss_semantic_reuse_probe_hit_distance_2", CounterEntry::Kind::UnsignedCount, &Counters::d3d9SnapshotCacheBatchMissSemanticReuseProbeHitDistance2, nullptr, nullptr, 0.0},
+    {"d3d9_snapshot_cache_batch_miss_semantic_reuse_probe_hit_distance_3_4", CounterEntry::Kind::UnsignedCount, &Counters::d3d9SnapshotCacheBatchMissSemanticReuseProbeHitDistance3To4, nullptr, nullptr, 0.0},
+    {"d3d9_snapshot_cache_batch_miss_semantic_reuse_probe_hit_distance_5_8", CounterEntry::Kind::UnsignedCount, &Counters::d3d9SnapshotCacheBatchMissSemanticReuseProbeHitDistance5To8, nullptr, nullptr, 0.0},
     {"d3d9_draw_state_cache_miss_after_unknown", CounterEntry::Kind::UnsignedCount, &Counters::d3d9DrawStateCacheMissAfterUnknown, nullptr, nullptr, 0.0},
     {"d3d9_draw_state_cache_miss_after_mutable_state", CounterEntry::Kind::UnsignedCount, &Counters::d3d9DrawStateCacheMissAfterMutableState, nullptr, nullptr, 0.0},
     {"d3d9_draw_state_cache_miss_after_draw_packet", CounterEntry::Kind::UnsignedCount, &Counters::d3d9DrawStateCacheMissAfterDrawPacket, nullptr, nullptr, 0.0},
@@ -2927,6 +3067,9 @@ constexpr CounterEntry kCounterTable[] = {
     {"d3d9_snapshot_cache_batch_miss_hot_build_flat_sampler_reuse_misses", CounterEntry::Kind::UnsignedCount, &Counters::d3d9SnapshotCacheBatchMissHotBuildFlatSamplerReuseMisses, nullptr, nullptr, 0.0},
     {"d3d9_snapshot_cache_batch_miss_uniform_nonconst_hash_reuse_hits", CounterEntry::Kind::UnsignedCount, &Counters::d3d9SnapshotCacheBatchMissUniformNonConstHashReuseHits, nullptr, nullptr, 0.0},
     {"d3d9_snapshot_cache_batch_miss_uniform_nonconst_hash_reuse_misses", CounterEntry::Kind::UnsignedCount, &Counters::d3d9SnapshotCacheBatchMissUniformNonConstHashReuseMisses, nullptr, nullptr, 0.0},
+    {"d3d9_snapshot_cache_batch_miss_uniform_payload_reuse_full", CounterEntry::Kind::UnsignedCount, &Counters::d3d9SnapshotCacheBatchMissUniformPayloadReuseFull, nullptr, nullptr, 0.0},
+    {"d3d9_snapshot_cache_batch_miss_uniform_payload_reuse_nonconst", CounterEntry::Kind::UnsignedCount, &Counters::d3d9SnapshotCacheBatchMissUniformPayloadReuseNonConst, nullptr, nullptr, 0.0},
+    {"d3d9_snapshot_cache_batch_miss_uniform_payload_full_build", CounterEntry::Kind::UnsignedCount, &Counters::d3d9SnapshotCacheBatchMissUniformPayloadFullBuild, nullptr, nullptr, 0.0},
     {"d3d9_snapshot_uniform_build_calls", CounterEntry::Kind::UnsignedCount, &Counters::d3d9SnapshotUniformBuildCalls, nullptr, nullptr, 0.0},
     {"d3d9_snapshot_uniform_build_vs_const_copy_cpu_ms", CounterEntry::Kind::Milliseconds, &Counters::d3d9SnapshotUniformBuildVsConstCopyCpuNs, nullptr, nullptr, 0.0},
     {"d3d9_snapshot_uniform_build_ps_const_copy_cpu_ms", CounterEntry::Kind::Milliseconds, &Counters::d3d9SnapshotUniformBuildPsConstCopyCpuNs, nullptr, nullptr, 0.0},
@@ -3015,6 +3158,20 @@ constexpr CounterEntry kCounterTable[] = {
     {"d3d9_snapshot_uniform_materialized_compact_fixed_bytes", CounterEntry::Kind::UnsignedCount, &Counters::d3d9SnapshotUniformMaterializedCompactFixedBytes, nullptr, nullptr, 0.0},
     {"d3d9_snapshot_uniform_materialized_compact_vertex_bytes", CounterEntry::Kind::UnsignedCount, &Counters::d3d9SnapshotUniformMaterializedCompactVertexBytes, nullptr, nullptr, 0.0},
     {"d3d9_snapshot_uniform_materialized_compact_pixel_bytes", CounterEntry::Kind::UnsignedCount, &Counters::d3d9SnapshotUniformMaterializedCompactPixelBytes, nullptr, nullptr, 0.0},
+    {"d3d9_snapshot_uniform_compact_cpu_ms", CounterEntry::Kind::Milliseconds, &Counters::d3d9SnapshotUniformCompactCpuNs, nullptr, nullptr, 0.0},
+    {"d3d9_snapshot_uniform_compact_fixed_cpu_ms", CounterEntry::Kind::Milliseconds, &Counters::d3d9SnapshotUniformCompactFixedCpuNs, nullptr, nullptr, 0.0},
+    {"d3d9_snapshot_uniform_compact_vertex_stage_cpu_ms", CounterEntry::Kind::Milliseconds, &Counters::d3d9SnapshotUniformCompactVertexStageCpuNs, nullptr, nullptr, 0.0},
+    {"d3d9_snapshot_uniform_compact_pixel_stage_cpu_ms", CounterEntry::Kind::Milliseconds, &Counters::d3d9SnapshotUniformCompactPixelStageCpuNs, nullptr, nullptr, 0.0},
+    {"d3d9_snapshot_uniform_compact_fixed_payload_appends", CounterEntry::Kind::UnsignedCount, &Counters::d3d9SnapshotUniformCompactFixedPayloadAppends, nullptr, nullptr, 0.0},
+    {"d3d9_snapshot_uniform_compact_fixed_payload_reuses", CounterEntry::Kind::UnsignedCount, &Counters::d3d9SnapshotUniformCompactFixedPayloadReuses, nullptr, nullptr, 0.0},
+    {"d3d9_snapshot_uniform_compact_fixed_payload_reuse_saved_bytes", CounterEntry::Kind::UnsignedCount, &Counters::d3d9SnapshotUniformCompactFixedPayloadReuseSavedBytes, nullptr, nullptr, 0.0},
+    {"d3d9_snapshot_submission_carrier_records", CounterEntry::Kind::UnsignedCount, &Counters::d3d9SnapshotSubmissionCarrierRecords, nullptr, nullptr, 0.0},
+    {"d3d9_snapshot_submission_carrier_bytes", CounterEntry::Kind::UnsignedCount, &Counters::d3d9SnapshotSubmissionCarrierBytes, nullptr, nullptr, 0.0},
+    {"d3d9_snapshot_submission_carrier_state_storage_bytes", CounterEntry::Kind::UnsignedCount, &Counters::d3d9SnapshotSubmissionCarrierStateStorageBytes, nullptr, nullptr, 0.0},
+    {"d3d9_snapshot_submission_carrier_uniform_storage_bytes", CounterEntry::Kind::UnsignedCount, &Counters::d3d9SnapshotSubmissionCarrierUniformStorageBytes, nullptr, nullptr, 0.0},
+    {"d3d9_snapshot_submission_carrier_compact_uniform_storage_bytes", CounterEntry::Kind::UnsignedCount, &Counters::d3d9SnapshotSubmissionCarrierCompactUniformStorageBytes, nullptr, nullptr, 0.0},
+    {"d3d9_snapshot_submission_carrier_unused_uniform_storage_records", CounterEntry::Kind::UnsignedCount, &Counters::d3d9SnapshotSubmissionCarrierUnusedUniformStorageRecords, nullptr, nullptr, 0.0},
+    {"d3d9_snapshot_submission_carrier_unused_uniform_storage_bytes", CounterEntry::Kind::UnsignedCount, &Counters::d3d9SnapshotSubmissionCarrierUnusedUniformStorageBytes, nullptr, nullptr, 0.0},
     {"d3d9_snapshot_uniform_elided", CounterEntry::Kind::UnsignedCount, &Counters::d3d9SnapshotUniformElided, nullptr, nullptr, 0.0},
     {"d3d9_snapshot_uniform_elided_bytes", CounterEntry::Kind::UnsignedCount, &Counters::d3d9SnapshotUniformElidedBytes, nullptr, nullptr, 0.0},
     {"d3d9_snapshot_uniform_adjacent_same_generation", CounterEntry::Kind::UnsignedCount, &Counters::d3d9SnapshotUniformAdjacentSameGen, nullptr, nullptr, 0.0},
@@ -3326,6 +3483,14 @@ constexpr CounterEntry kCounterTable[] = {
     {"completion_wait_enqueues_during_wait_max", CounterEntry::Kind::UnsignedCount, &Counters::completionWaitEnqueuesDuringWaitMax, nullptr, nullptr, 0.0},
     {"completion_signal_delay", CounterEntry::Kind::UnsignedCount, &Counters::completionSignalDelay, nullptr, nullptr, 0.0},
     {"completion_signal_delay_ms", CounterEntry::Kind::Milliseconds, &Counters::completionSignalDelayNs, nullptr, nullptr, 0.0},
+    {"completion_wait_commit_chunk_entries", CounterEntry::Kind::UnsignedCount, &Counters::completionWaitCommitChunkEntries, nullptr, nullptr, 0.0},
+    {"completion_wait_commit_chunk_replay_starts", CounterEntry::Kind::UnsignedCount, &Counters::completionWaitCommitChunkReplayStarts, nullptr, nullptr, 0.0},
+    {"completion_wait_commit_chunk_replay_ends", CounterEntry::Kind::UnsignedCount, &Counters::completionWaitCommitChunkReplayEnds, nullptr, nullptr, 0.0},
+    {"completion_wait_commit_chunk_replay_cpu_ms", CounterEntry::Kind::Milliseconds, &Counters::completionWaitCommitChunkReplayCpuNs, nullptr, nullptr, 0.0},
+    {"completion_wait_commit_chunk_replay_cpu_max_ms", CounterEntry::Kind::Milliseconds, &Counters::completionWaitCommitChunkReplayCpuMaxNs, nullptr, nullptr, 0.0},
+    {"completion_wait_commit_chunk_replay_cpu_p50_ms", CounterEntry::Kind::PercentileMs, nullptr, nullptr, &Counters::completionWaitCommitChunkReplayCpuRing, 0.5},
+    {"completion_wait_commit_chunk_replay_cpu_p95_ms", CounterEntry::Kind::PercentileMs, nullptr, nullptr, &Counters::completionWaitCommitChunkReplayCpuRing, 0.95},
+    {"completion_wait_commit_chunk_replay_cpu_p99_ms", CounterEntry::Kind::PercentileMs, nullptr, nullptr, &Counters::completionWaitCommitChunkReplayCpuRing, 0.99},
     {"completion_no_enqueue_wait_to_commit_chunk_entry", CounterEntry::Kind::UnsignedCount, &Counters::completionNoEnqueueWaitToCommitChunkEntry, nullptr, nullptr, 0.0},
     {"completion_no_enqueue_wait_to_commit_chunk_entry_ms", CounterEntry::Kind::Milliseconds, &Counters::completionNoEnqueueWaitToCommitChunkEntryNs, nullptr, nullptr, 0.0},
     {"completion_no_enqueue_wait_to_commit_chunk_entry_max_ms", CounterEntry::Kind::Milliseconds, &Counters::completionNoEnqueueWaitToCommitChunkEntryMaxNs, nullptr, nullptr, 0.0},
@@ -3413,6 +3578,22 @@ constexpr CounterEntry kCounterTable[] = {
     {"completion_no_enqueue_commit_chunk_surface_records_before_publish", CounterEntry::Kind::UnsignedCount, &Counters::completionNoEnqueueCommitChunkSurfaceRecordsBeforePublish, nullptr, nullptr, 0.0},
     {"completion_no_enqueue_commit_chunk_query_records_before_publish", CounterEntry::Kind::UnsignedCount, &Counters::completionNoEnqueueCommitChunkQueryRecordsBeforePublish, nullptr, nullptr, 0.0},
     {"completion_no_enqueue_commit_chunk_other_records_before_publish", CounterEntry::Kind::UnsignedCount, &Counters::completionNoEnqueueCommitChunkOtherRecordsBeforePublish, nullptr, nullptr, 0.0},
+    {"completion_no_enqueue_first_publish_slot_samples", CounterEntry::Kind::UnsignedCount, &Counters::completionNoEnqueueFirstPublishSlotSamples, nullptr, nullptr, 0.0},
+    {"completion_no_enqueue_first_publish_slot_commands", CounterEntry::Kind::UnsignedCount, &Counters::completionNoEnqueueFirstPublishSlotCommands, nullptr, nullptr, 0.0},
+    {"completion_no_enqueue_first_publish_slot_commands_max", CounterEntry::Kind::UnsignedCount, &Counters::completionNoEnqueueFirstPublishSlotCommandsMax, nullptr, nullptr, 0.0},
+    {"completion_no_enqueue_first_publish_slot_commands_p50", CounterEntry::Kind::PercentileNs, nullptr, nullptr, &Counters::completionNoEnqueueFirstPublishSlotCommandsRing, 0.5},
+    {"completion_no_enqueue_first_publish_slot_commands_p95", CounterEntry::Kind::PercentileNs, nullptr, nullptr, &Counters::completionNoEnqueueFirstPublishSlotCommandsRing, 0.95},
+    {"completion_no_enqueue_first_publish_slot_draw_run_commands", CounterEntry::Kind::UnsignedCount, &Counters::completionNoEnqueueFirstPublishSlotDrawRunCommands, nullptr, nullptr, 0.0},
+    {"completion_no_enqueue_first_publish_slot_draw_items", CounterEntry::Kind::UnsignedCount, &Counters::completionNoEnqueueFirstPublishSlotDrawItems, nullptr, nullptr, 0.0},
+    {"completion_no_enqueue_first_publish_slot_draw_items_max", CounterEntry::Kind::UnsignedCount, &Counters::completionNoEnqueueFirstPublishSlotDrawItemsMax, nullptr, nullptr, 0.0},
+    {"completion_no_enqueue_first_publish_slot_draw_items_p50", CounterEntry::Kind::PercentileNs, nullptr, nullptr, &Counters::completionNoEnqueueFirstPublishSlotDrawItemsRing, 0.5},
+    {"completion_no_enqueue_first_publish_slot_draw_items_p95", CounterEntry::Kind::PercentileNs, nullptr, nullptr, &Counters::completionNoEnqueueFirstPublishSlotDrawItemsRing, 0.95},
+    {"completion_no_enqueue_first_publish_slot_non_draw_commands", CounterEntry::Kind::UnsignedCount, &Counters::completionNoEnqueueFirstPublishSlotNonDrawCommands, nullptr, nullptr, 0.0},
+    {"completion_no_enqueue_first_publish_slot_payload_bytes", CounterEntry::Kind::UnsignedCount, &Counters::completionNoEnqueueFirstPublishSlotPayloadBytes, nullptr, nullptr, 0.0},
+    {"completion_no_enqueue_first_publish_slot_payload_bytes_max", CounterEntry::Kind::UnsignedCount, &Counters::completionNoEnqueueFirstPublishSlotPayloadBytesMax, nullptr, nullptr, 0.0},
+    {"completion_no_enqueue_first_publish_slot_payload_bytes_p50", CounterEntry::Kind::PercentileNs, nullptr, nullptr, &Counters::completionNoEnqueueFirstPublishSlotPayloadBytesRing, 0.5},
+    {"completion_no_enqueue_first_publish_slot_payload_bytes_p95", CounterEntry::Kind::PercentileNs, nullptr, nullptr, &Counters::completionNoEnqueueFirstPublishSlotPayloadBytesRing, 0.95},
+    {"completion_no_enqueue_first_publish_slot_present_commands", CounterEntry::Kind::UnsignedCount, &Counters::completionNoEnqueueFirstPublishSlotPresentCommands, nullptr, nullptr, 0.0},
     {"completion_no_enqueue_wait_to_encode_dequeue", CounterEntry::Kind::UnsignedCount, &Counters::completionNoEnqueueWaitToEncodeDequeue, nullptr, nullptr, 0.0},
     {"completion_no_enqueue_wait_to_encode_dequeue_ms", CounterEntry::Kind::Milliseconds, &Counters::completionNoEnqueueWaitToEncodeDequeueNs, nullptr, nullptr, 0.0},
     {"completion_no_enqueue_wait_to_encode_dequeue_max_ms", CounterEntry::Kind::Milliseconds, &Counters::completionNoEnqueueWaitToEncodeDequeueMaxNs, nullptr, nullptr, 0.0},
@@ -3948,6 +4129,133 @@ void countChunkPublishReason(ChunkPublishReason reason,
   }
   add(*count);
   add(*commands, commandCount);
+}
+
+void countChunkPublishPresentSplitBeforeTail(ChunkPublishTailCommandKind kind,
+                                             bool drawOnly) {
+  auto& c = counters();
+  switch (kind) {
+  case ChunkPublishTailCommandKind::Empty:
+    add(c.chunkPublishPresentSplitBeforeTailEmpty);
+    break;
+  case ChunkPublishTailCommandKind::DrawRun:
+    add(c.chunkPublishPresentSplitBeforeTailDrawRun);
+    break;
+  case ChunkPublishTailCommandKind::Clear:
+    add(c.chunkPublishPresentSplitBeforeTailClear);
+    break;
+  case ChunkPublishTailCommandKind::SurfaceCopy:
+    add(c.chunkPublishPresentSplitBeforeTailSurfaceCopy);
+    break;
+  case ChunkPublishTailCommandKind::StretchRect:
+    add(c.chunkPublishPresentSplitBeforeTailStretchRect);
+    break;
+  case ChunkPublishTailCommandKind::Readback:
+    add(c.chunkPublishPresentSplitBeforeTailReadback);
+    break;
+  case ChunkPublishTailCommandKind::ColorFill:
+    add(c.chunkPublishPresentSplitBeforeTailColorFill);
+    break;
+  case ChunkPublishTailCommandKind::DepthResolve:
+    add(c.chunkPublishPresentSplitBeforeTailDepthResolve);
+    break;
+  case ChunkPublishTailCommandKind::Present:
+    add(c.chunkPublishPresentSplitBeforeTailPresent);
+    break;
+  }
+  if (drawOnly) {
+    add(c.chunkPublishPresentSplitBeforeDrawOnly);
+  }
+}
+
+void countChunkPublishPresentPrePresentOpportunityTail(
+    ChunkPublishTailCommandKind kind, bool drawOnly) {
+  auto& c = counters();
+  switch (kind) {
+  case ChunkPublishTailCommandKind::Empty:
+    add(c.chunkPublishPresentPrePresentOpportunityTailEmpty);
+    break;
+  case ChunkPublishTailCommandKind::DrawRun:
+    add(c.chunkPublishPresentPrePresentOpportunityTailDrawRun);
+    break;
+  case ChunkPublishTailCommandKind::Clear:
+    add(c.chunkPublishPresentPrePresentOpportunityTailClear);
+    break;
+  case ChunkPublishTailCommandKind::SurfaceCopy:
+    add(c.chunkPublishPresentPrePresentOpportunityTailSurfaceCopy);
+    break;
+  case ChunkPublishTailCommandKind::StretchRect:
+    add(c.chunkPublishPresentPrePresentOpportunityTailStretchRect);
+    break;
+  case ChunkPublishTailCommandKind::Readback:
+    add(c.chunkPublishPresentPrePresentOpportunityTailReadback);
+    break;
+  case ChunkPublishTailCommandKind::ColorFill:
+    add(c.chunkPublishPresentPrePresentOpportunityTailColorFill);
+    break;
+  case ChunkPublishTailCommandKind::DepthResolve:
+    add(c.chunkPublishPresentPrePresentOpportunityTailDepthResolve);
+    break;
+  case ChunkPublishTailCommandKind::Present:
+    add(c.chunkPublishPresentPrePresentOpportunityTailPresent);
+    break;
+  }
+  if (drawOnly) {
+    add(c.chunkPublishPresentPrePresentOpportunityDrawOnly);
+  }
+}
+
+void countChunkPublishSlotResidency(ChunkPublishReason reason,
+                                    std::uint64_t nanoseconds) {
+  auto& c = counters();
+  add(c.chunkPublishSlotResidencySamples);
+  add(c.chunkPublishSlotResidencyNs, nanoseconds);
+  updateMax(c.chunkPublishSlotResidencyMaxNs, nanoseconds);
+  recordRing(c.chunkPublishSlotResidencyRing, nanoseconds);
+
+  const bool presentReason =
+      reason == ChunkPublishReason::Present ||
+      reason == ChunkPublishReason::PresentAcquire ||
+      reason == ChunkPublishReason::PresentSplitBefore;
+  if (presentReason) {
+    add(c.chunkPublishSlotResidencyPresentSamples);
+    add(c.chunkPublishSlotResidencyPresentNs, nanoseconds);
+    updateMax(c.chunkPublishSlotResidencyPresentMaxNs, nanoseconds);
+    recordRing(c.chunkPublishSlotResidencyPresentRing, nanoseconds);
+  } else {
+    add(c.chunkPublishSlotResidencyNonPresentSamples);
+    add(c.chunkPublishSlotResidencyNonPresentNs, nanoseconds);
+    updateMax(c.chunkPublishSlotResidencyNonPresentMaxNs, nanoseconds);
+    recordRing(c.chunkPublishSlotResidencyNonPresentRing, nanoseconds);
+  }
+}
+
+void countChunkPublishPresentPrePresentOpportunity(std::uint64_t commandCount,
+                                                   std::uint64_t drawRunCount,
+                                                   std::uint64_t drawItemCount,
+                                                   std::uint64_t nonDrawCommandCount,
+                                                   std::uint64_t payloadBytes,
+                                                   std::uint64_t residencyNanoseconds,
+                                                   bool presentIsTail) {
+  auto& c = counters();
+  add(c.chunkPublishPresentPrePresentOpportunitySlots);
+  if (presentIsTail) {
+    add(c.chunkPublishPresentPrePresentOpportunityTailSlots);
+  } else {
+    add(c.chunkPublishPresentPrePresentOpportunityNonTailSlots);
+  }
+  add(c.chunkPublishPresentPrePresentOpportunityCommands, commandCount);
+  add(c.chunkPublishPresentPrePresentOpportunityDrawRuns, drawRunCount);
+  add(c.chunkPublishPresentPrePresentOpportunityDrawItems, drawItemCount);
+  add(c.chunkPublishPresentPrePresentOpportunityNonDrawCommands, nonDrawCommandCount);
+  add(c.chunkPublishPresentPrePresentOpportunityPayloadBytes, payloadBytes);
+  if (residencyNanoseconds != 0) {
+    add(c.chunkPublishPresentPrePresentOpportunityResidencyNs, residencyNanoseconds);
+    updateMax(c.chunkPublishPresentPrePresentOpportunityResidencyMaxNs,
+              residencyNanoseconds);
+    recordRing(c.chunkPublishPresentPrePresentOpportunityResidencyRing,
+               residencyNanoseconds);
+  }
 }
 
 void countEncodeSlotPsoPrefetchCpuTime(std::uint64_t nanoseconds) {
@@ -5303,6 +5611,27 @@ void countD3D9DrawStateCacheBatchMissReason(std::uint32_t reasonMask) {
   default:
     add(c.d3d9DrawStateCacheBatchMissReasonUnknown);
     break;
+  }
+}
+
+void countD3D9SnapshotCacheBatchMissSemanticReuseProbe(bool hit,
+                                                       std::uint32_t distance) {
+  auto& c = counters();
+  add(c.d3d9SnapshotCacheBatchMissSemanticReuseProbeSamples);
+  if (!hit) {
+    add(c.d3d9SnapshotCacheBatchMissSemanticReuseProbeMisses);
+    return;
+  }
+
+  add(c.d3d9SnapshotCacheBatchMissSemanticReuseProbeHits);
+  if (distance <= 1u) {
+    add(c.d3d9SnapshotCacheBatchMissSemanticReuseProbeHitDistance1);
+  } else if (distance == 2u) {
+    add(c.d3d9SnapshotCacheBatchMissSemanticReuseProbeHitDistance2);
+  } else if (distance <= 4u) {
+    add(c.d3d9SnapshotCacheBatchMissSemanticReuseProbeHitDistance3To4);
+  } else {
+    add(c.d3d9SnapshotCacheBatchMissSemanticReuseProbeHitDistance5To8);
   }
 }
 
@@ -6829,6 +7158,19 @@ void countD3D9SnapshotCacheBatchMissUniformNonConstHashReuse(bool reused) {
              : c.d3d9SnapshotCacheBatchMissUniformNonConstHashReuseMisses);
 }
 
+void countD3D9SnapshotCacheBatchMissUniformPayloadPath(
+    bool reusedFullPayload,
+    bool reusedNonConstantPayload) {
+  auto& c = counters();
+  if (reusedFullPayload) {
+    add(c.d3d9SnapshotCacheBatchMissUniformPayloadReuseFull);
+  } else if (reusedNonConstantPayload) {
+    add(c.d3d9SnapshotCacheBatchMissUniformPayloadReuseNonConst);
+  } else {
+    add(c.d3d9SnapshotCacheBatchMissUniformPayloadFullBuild);
+  }
+}
+
 void countD3D9SnapshotUniformBuildCall() {
   add(counters().d3d9SnapshotUniformBuildCalls);
   addBatchMissUniformBuild(
@@ -7118,6 +7460,56 @@ void countD3D9SnapshotUniformMaterializedCompactOpportunity(
   add(c.d3d9SnapshotUniformMaterializedCompactFixedBytes, fixedBytes);
   add(c.d3d9SnapshotUniformMaterializedCompactVertexBytes, vertexBytes);
   add(c.d3d9SnapshotUniformMaterializedCompactPixelBytes, pixelBytes);
+}
+
+void countD3D9SnapshotUniformCompactCpuTime(std::uint64_t nanoseconds) {
+  add(counters().d3d9SnapshotUniformCompactCpuNs, nanoseconds);
+}
+
+void countD3D9SnapshotUniformCompactFixedCpuTime(
+    std::uint64_t nanoseconds) {
+  add(counters().d3d9SnapshotUniformCompactFixedCpuNs, nanoseconds);
+}
+
+void countD3D9SnapshotUniformCompactVertexStageCpuTime(
+    std::uint64_t nanoseconds) {
+  add(counters().d3d9SnapshotUniformCompactVertexStageCpuNs, nanoseconds);
+}
+
+void countD3D9SnapshotUniformCompactPixelStageCpuTime(
+    std::uint64_t nanoseconds) {
+  add(counters().d3d9SnapshotUniformCompactPixelStageCpuNs, nanoseconds);
+}
+
+void countD3D9SnapshotUniformCompactFixedPayload(bool reused,
+                                                 std::uint64_t bytes) {
+  auto& c = counters();
+  if (reused) {
+    add(c.d3d9SnapshotUniformCompactFixedPayloadReuses);
+    add(c.d3d9SnapshotUniformCompactFixedPayloadReuseSavedBytes, bytes);
+  } else {
+    add(c.d3d9SnapshotUniformCompactFixedPayloadAppends);
+  }
+}
+
+void countD3D9SnapshotSubmissionCarrier(
+    std::uint64_t carrierBytes,
+    std::uint64_t stateStorageBytes,
+    std::uint64_t uniformStorageBytes,
+    std::uint64_t compactUniformStorageBytes,
+    bool uniformStorageUnused) {
+  auto& c = counters();
+  add(c.d3d9SnapshotSubmissionCarrierRecords);
+  add(c.d3d9SnapshotSubmissionCarrierBytes, carrierBytes);
+  add(c.d3d9SnapshotSubmissionCarrierStateStorageBytes, stateStorageBytes);
+  add(c.d3d9SnapshotSubmissionCarrierUniformStorageBytes, uniformStorageBytes);
+  add(c.d3d9SnapshotSubmissionCarrierCompactUniformStorageBytes,
+      compactUniformStorageBytes);
+  if (uniformStorageUnused && uniformStorageBytes != 0) {
+    add(c.d3d9SnapshotSubmissionCarrierUnusedUniformStorageRecords);
+    add(c.d3d9SnapshotSubmissionCarrierUnusedUniformStorageBytes,
+        uniformStorageBytes);
+  }
 }
 
 void countD3D9SnapshotUniformElided(std::uint64_t bytes) {
@@ -8008,6 +8400,22 @@ void countCompletionSignalDelay(std::uint64_t nanoseconds) {
   add(c.completionSignalDelayNs, nanoseconds);
 }
 
+void countCompletionWaitCommitChunkEntry() {
+  add(counters().completionWaitCommitChunkEntries);
+}
+
+void countCompletionWaitCommitChunkReplayStart() {
+  add(counters().completionWaitCommitChunkReplayStarts);
+}
+
+void countCompletionWaitCommitChunkReplayEnd(std::uint64_t replayNanoseconds) {
+  auto& c = counters();
+  add(c.completionWaitCommitChunkReplayEnds);
+  add(c.completionWaitCommitChunkReplayCpuNs, replayNanoseconds);
+  updateMax(c.completionWaitCommitChunkReplayCpuMaxNs, replayNanoseconds);
+  recordRing(c.completionWaitCommitChunkReplayCpuRing, replayNanoseconds);
+}
+
 void countCompletionNoEnqueueWaitToCommitPublish(std::uint64_t nanoseconds) {
   auto& c = counters();
   add(c.completionNoEnqueueWaitToCommitPublish);
@@ -8130,6 +8538,29 @@ void countCompletionNoEnqueueCommitChunkRecordShapeBeforePublish(
   add(c.completionNoEnqueueCommitChunkSurfaceRecordsBeforePublish, surfaceRecords);
   add(c.completionNoEnqueueCommitChunkQueryRecordsBeforePublish, queryRecords);
   add(c.completionNoEnqueueCommitChunkOtherRecordsBeforePublish, otherRecords);
+}
+
+void countCompletionNoEnqueueFirstPublishSlotShape(
+    std::uint64_t commandCount,
+    std::uint64_t drawRunCommands,
+    std::uint64_t drawItems,
+    std::uint64_t nonDrawCommands,
+    std::uint64_t payloadBytes,
+    std::uint64_t presentCommands) {
+  auto& c = counters();
+  add(c.completionNoEnqueueFirstPublishSlotSamples);
+  add(c.completionNoEnqueueFirstPublishSlotCommands, commandCount);
+  updateMax(c.completionNoEnqueueFirstPublishSlotCommandsMax, commandCount);
+  recordRing(c.completionNoEnqueueFirstPublishSlotCommandsRing, commandCount);
+  add(c.completionNoEnqueueFirstPublishSlotDrawRunCommands, drawRunCommands);
+  add(c.completionNoEnqueueFirstPublishSlotDrawItems, drawItems);
+  updateMax(c.completionNoEnqueueFirstPublishSlotDrawItemsMax, drawItems);
+  recordRing(c.completionNoEnqueueFirstPublishSlotDrawItemsRing, drawItems);
+  add(c.completionNoEnqueueFirstPublishSlotNonDrawCommands, nonDrawCommands);
+  add(c.completionNoEnqueueFirstPublishSlotPayloadBytes, payloadBytes);
+  updateMax(c.completionNoEnqueueFirstPublishSlotPayloadBytesMax, payloadBytes);
+  recordRing(c.completionNoEnqueueFirstPublishSlotPayloadBytesRing, payloadBytes);
+  add(c.completionNoEnqueueFirstPublishSlotPresentCommands, presentCommands);
 }
 
 void countCompletionNoEnqueueWaitToCommitChunkEntry(std::uint64_t nanoseconds) {

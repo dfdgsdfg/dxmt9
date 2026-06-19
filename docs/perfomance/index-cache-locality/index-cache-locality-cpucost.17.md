@@ -91,9 +91,11 @@ candidate CPU reduction is only `~5ms`, and total encode-draw CPU regresses by
 (robot, flare, background, and HUD are present). PNG diff against the
 post-visualfix opaque-depth noenc run reports high changed-pixel percentages
 because the two captures are not the same animation frame (`SSIM 0.973072`
-full, `0.964753` crop-bottom-96). Diff against the `v0.0.1` visual anchor is
-larger for the same reason. Treat these diffs as broad corruption triage only;
-promotion would still require a same-input image proof or a stable visual gate.
+full, `0.964753` crop-bottom-96). Diff against the historical `v0.0.1`
+coherent screenshot reference is larger for the same reason; current promotion
+must use the `v0.0.3` visual-safe anchor. Treat these diffs as broad corruption
+triage only; promotion would still require a same-input image proof or a stable
+visual gate.
 
 **Verdict.** Rejected as a CPU optimization and kept as diagnostic-only. The
 strict LRU path is a cleaner model of the measurement helper, but this run does

@@ -50,6 +50,7 @@ PACING_COMPARE_FLAGS = (
     "--require-completion-wait-without-enqueue-decrease",
     "--require-completion-present-wait-with-enqueue-increase",
     "--require-completion-present-wait-without-enqueue-decrease",
+    "--require-encode-ready-depth-gt1-increase",
     "--require-commit-chunk-replay-cpu-per-present-decrease",
     "--require-queue-draw-submission-cpu-per-present-decrease",
     "--require-snapshot-cpu-per-present-decrease",
@@ -59,8 +60,13 @@ PACING_COMPARE_FLAGS = (
     "--require-no-enqueue-publish-to-encode-dequeue-decrease",
     "--require-no-enqueue-encode-dequeue-to-commit-decrease",
     "--require-no-enqueue-wait-to-next-enqueue-decrease",
+    "--require-no-enqueue-before-publish-closure-decrease",
+    "--require-no-enqueue-before-publish-inter-replay-gap-decrease",
     "--require-command-buffers-per-present-not-increase",
     "--require-render-passes-per-present-not-increase",
+    "--require-encoder-final-end-reason-not-increase",
+    "--require-encoder-color-load-not-increase",
+    "--require-encoder-depth-load-not-increase",
     "--require-tile-preservation-not-increase",
 )
 
@@ -80,6 +86,16 @@ UNIFORM_OWNER_COMPARE_FLAGS = (
 
 UNIFORM_COMPACT_COMPARE_FLAGS = (
     "--require-uniform-compact-saved-bytes-present",
+)
+
+STATE_ELISION_COMPARE_FLAGS = (
+    "--require-snapshot-state-elided-present",
+    "--require-discarded-state-not-increase",
+)
+
+CARRIER_COMPARE_FLAGS = (
+    "--require-submission-carrier-bytes-per-record-decrease",
+    "--require-submission-carrier-uniform-storage-per-record-decrease",
 )
 
 ARGBUF_OWNER_COMPARE_FLAGS = (
@@ -815,6 +831,53 @@ OUT
         )
         self.assertEqual(result.returncode, 2)
         self.assertIn("--wait-unlocked-interval-sec must be a positive integer", result.stderr)
+
+    def test_wrapper_dry_run_prints_keep_frontmost_plan(self) -> None:
+        result = self.run_script(
+            RUN_WRAPPER,
+            "--suffix",
+            "keep-frontmost",
+            "--no-gputrace",
+            "--keep-frontmost",
+            "--keep-frontmost-interval-sec",
+            "0.5",
+            "--dry-run",
+        )
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("keep_frontmost: 1", result.stdout)
+        self.assertIn("keep_frontmost_process: 3DMark05.exe", result.stdout)
+        self.assertIn("keep_frontmost_interval_sec: 0.5", result.stdout)
+
+    def test_wrapper_rejects_invalid_keep_frontmost_values(self) -> None:
+        result = self.run_script(
+            RUN_WRAPPER,
+            "--keep-frontmost",
+            "--keep-frontmost-interval-sec",
+            "0",
+            "--dry-run",
+        )
+        self.assertEqual(result.returncode, 2)
+        self.assertIn("--keep-frontmost-interval-sec must be positive numeric seconds", result.stderr)
+
+        result = self.run_script(
+            RUN_WRAPPER,
+            "--keep-frontmost",
+            "--keep-frontmost-process",
+            '3DMark05.exe"',
+            "--dry-run",
+        )
+        self.assertEqual(result.returncode, 2)
+        self.assertIn("--keep-frontmost-process must be", result.stderr)
+
+    def test_wrapper_stops_keep_frontmost_loop_after_watchdog(self) -> None:
+        text = RUN_WRAPPER.read_text(encoding="utf-8")
+
+        self.assertIn("start_3dmark05_frontmost_loop\n(", text)
+        self.assertIn(
+            ") || run_status=$?\nstop_3dmark05_frontmost_loop\ntrap - EXIT\ncleanup_3dmark05_probe_wineserver",
+            text,
+        )
 
     def test_catalogue_runner_rejects_disabled_timeout_for_3dmark05(self) -> None:
         result = self.run_script(
@@ -4713,6 +4776,100 @@ OUT
         for flag in UNIFORM_COMPACT_COMPARE_FLAGS:
             self.assertIn(flag, finalize_line)
 
+    def test_wrapper_forwards_state_elision_compare_gates_to_counter_compare(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            baseline_output = Path(tmp) / "baseline-output"
+            write_result(baseline_output)
+
+            result = self.run_script(
+                RUN_WRAPPER,
+                "--suffix",
+                "forward-state-elision-counter-gates",
+                "--no-gputrace",
+                "--compare-baseline-output",
+                str(baseline_output),
+                *STATE_ELISION_COMPARE_FLAGS,
+                "--dry-run",
+            )
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+        compare_line = next(
+            line for line in result.stdout.splitlines()
+            if line.startswith("counter_compare_cmd:")
+        )
+        for flag in STATE_ELISION_COMPARE_FLAGS:
+            self.assertIn(flag, compare_line)
+
+    def test_wrapper_forwards_state_elision_compare_gates_to_finalizer(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            baseline_output = Path(tmp) / "baseline-output"
+            write_result(baseline_output)
+
+            result = self.run_script(
+                RUN_WRAPPER,
+                "--suffix",
+                "forward-state-elision-finalizer-gates",
+                "--compare-baseline-output",
+                str(baseline_output),
+                *STATE_ELISION_COMPARE_FLAGS,
+                "--dry-run",
+            )
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+        finalize_line = next(
+            line for line in result.stdout.splitlines()
+            if line.startswith("finalize_cmd_after_xcode_export:")
+        )
+        for flag in STATE_ELISION_COMPARE_FLAGS:
+            self.assertIn(flag, finalize_line)
+
+    def test_wrapper_forwards_carrier_compare_gates_to_counter_compare(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            baseline_output = Path(tmp) / "baseline-output"
+            write_result(baseline_output)
+
+            result = self.run_script(
+                RUN_WRAPPER,
+                "--suffix",
+                "forward-carrier-counter-gates",
+                "--no-gputrace",
+                "--compare-baseline-output",
+                str(baseline_output),
+                *CARRIER_COMPARE_FLAGS,
+                "--dry-run",
+            )
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+        compare_line = next(
+            line for line in result.stdout.splitlines()
+            if line.startswith("counter_compare_cmd:")
+        )
+        for flag in CARRIER_COMPARE_FLAGS:
+            self.assertIn(flag, compare_line)
+
+    def test_wrapper_forwards_carrier_compare_gates_to_finalizer(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            baseline_output = Path(tmp) / "baseline-output"
+            write_result(baseline_output)
+
+            result = self.run_script(
+                RUN_WRAPPER,
+                "--suffix",
+                "forward-carrier-finalizer-gates",
+                "--compare-baseline-output",
+                str(baseline_output),
+                *CARRIER_COMPARE_FLAGS,
+                "--dry-run",
+            )
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+        finalize_line = next(
+            line for line in result.stdout.splitlines()
+            if line.startswith("finalize_cmd_after_xcode_export:")
+        )
+        for flag in CARRIER_COMPARE_FLAGS:
+            self.assertIn(flag, finalize_line)
+
     def test_wrapper_forwards_argbuf_owner_compare_gates_to_counter_compare(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             baseline_output = Path(tmp) / "baseline-output"
@@ -5360,6 +5517,52 @@ OUT
         for flag in UNIFORM_OWNER_COMPARE_FLAGS:
             self.assertIn(flag, compare_line)
         for flag in UNIFORM_COMPACT_COMPARE_FLAGS:
+            self.assertIn(flag, compare_line)
+
+    def test_finalizer_forwards_state_elision_compare_gates_to_compare_script(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            baseline_output = Path(tmp) / "baseline-output"
+            write_result(baseline_output)
+
+            result = self.run_script(
+                FINALIZER,
+                "--suffix",
+                "forward-state-elision-finalizer-gates",
+                "--baseline-output",
+                str(baseline_output),
+                *STATE_ELISION_COMPARE_FLAGS,
+                "--dry-run",
+            )
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+        compare_line = next(
+            line for line in result.stdout.splitlines()
+            if line.startswith("perf_compare_cmd:")
+        )
+        for flag in STATE_ELISION_COMPARE_FLAGS:
+            self.assertIn(flag, compare_line)
+
+    def test_finalizer_forwards_carrier_compare_gates_to_compare_script(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            baseline_output = Path(tmp) / "baseline-output"
+            write_result(baseline_output)
+
+            result = self.run_script(
+                FINALIZER,
+                "--suffix",
+                "forward-carrier-finalizer-gates",
+                "--baseline-output",
+                str(baseline_output),
+                *CARRIER_COMPARE_FLAGS,
+                "--dry-run",
+            )
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+        compare_line = next(
+            line for line in result.stdout.splitlines()
+            if line.startswith("perf_compare_cmd:")
+        )
+        for flag in CARRIER_COMPARE_FLAGS:
             self.assertIn(flag, compare_line)
 
     def test_finalizer_forwards_argbuf_owner_compare_gates_to_compare_script(self) -> None:

@@ -170,6 +170,8 @@ class Device {
                     *previousUniform, draws, payloads);
     }
   }
+  virtual void submitCompactDrawRunBatch(
+      std::span<core::DrawRunCompactSubmission> /*submissions*/) {}
   virtual void submitClear(const core::ClearDesc&) {}
   virtual void submitSurfaceCopy(const core::SurfaceCopyDesc&) {}
   virtual void submitStretchRect(const core::StretchRectDesc&) {}

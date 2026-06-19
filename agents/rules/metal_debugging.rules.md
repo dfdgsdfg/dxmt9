@@ -40,14 +40,18 @@ them as part of its own contract.
 
 ## 3DMark05 GT1 visual anchor
 
-For GT1 visual regressions, treat the `v0.0.1` tag as the known-good visual
-correctness / alignment anchor. A screenshot diff against that tag is useful for
-finding broad texture, color, geometry, transparency, black-vertex, UV, or
-cbuf-identity drift. The tag itself defines the expected visual alignment; the
-diff image is the triage aid. Do not confuse that with a raw pixel-percentage
-gate from time-based `actual.png` captures: the same capture delay can land on a
-different animation frame. Use same-frame capture, same-input mini replay, or a
-draw/window proof before claiming exact pixel failure.
+For GT1 visual regressions, treat the `v0.0.3` tag as the last known
+visual-safe code point and current visual correctness / alignment anchor. Older
+`v0.0.1` screenshots remain useful historical triage artifacts, but they are
+superseded by `v0.0.3` for deciding whether a new optimization is visually safe.
+A screenshot diff against the anchor is useful for finding broad texture, color,
+geometry, transparency, black-vertex, UV, or cbuf-identity drift. The tag itself
+defines the expected visual alignment; the diff image is the triage aid. Do not
+confuse that with a
+raw pixel-percentage gate from time-based `actual.png` captures: the same
+capture delay can land on a different animation frame. Use same-frame capture,
+same-input mini replay, or a draw/window proof before claiming exact pixel
+failure.
 
 ## Xcode `.gputrace` performance export discipline
 
@@ -96,6 +100,13 @@ Required Xcode GUI sequence:
    This writes `analysis/frame<N>-counters-summary.csv` and
    `analysis/frame<N>-xcode-dxmt-joined-summary.csv`, plus a Markdown
    bottleneck report ranking the top encoders.
+
+Xcode's save panel can retain a previous `analysis` folder even after a new
+`frame<N>.gputrace` is opened. After every performance or counter export,
+verify the actual landing path with `find traces -name ...` or `ls
+$ANALYSIS_DIR`; if the file landed in an older run directory, move it into the
+current `traces/<app-runid>/analysis/` before finalizing. Treat the current
+run id, not Xcode's abbreviated `Where: analysis` label, as authoritative.
 
 The CSV is the authoritative source for encoder cost, limiter, bandwidth,
 vertex, primitive, and fragment counters. Prefer citing values from that file
@@ -216,6 +227,10 @@ timeout-policy failure and verify the wrapper watchdog rather than repeating an
 unsupervised launch. If the desktop may be locked when a probe is scheduled,
 pass `run_3dmark05_perf_probe.sh --wait-unlocked-sec N`; the wrapper polls
 before Wine launch and does not create probe artifacts when the wait expires.
+For no-gputrace A/B runs whose FPS or present count is used as evidence, add
+`--keep-frontmost` when there is any risk that 3DMark05 will lose focus; this
+keeps the visible `3DMark05.exe` process frontmost during the supervised run and
+prevents app focus/scene-progress drift from masquerading as a renderer change.
 For routine
 3DMark05 smoke/image runs, use the catalogue runner's default
 `run_timeout_sec=120` / `allow_timeout=true` / `require_positive_timeout=true`
@@ -680,6 +695,8 @@ bash scripts/tools/finalize_3dmark05_perf_probe.sh \
 # For xctrace Metal System Trace sidecars, prefer the guarded runner. It
 # refuses locked sessions before recording xctrace; add sidecar
 # --wait-unlocked-sec N if the command should poll until the desktop unlocks.
+# Keep at least 4GiB free; a 10s all-processes 3DMark05 System Trace has
+# failed during Instruments trim with about 2.4GiB free.
 # Add
 # --measure-index-reuse only when per-draw route/index detail is needed.
 bash scripts/tools/run_3dmark05_system_trace_sidecar.sh -- \

@@ -13897,7 +13897,8 @@ bool encodeDraw(EncodeContext& ctx,
 std::optional<core::metalqueue::QueueSubmissionRecord> encodeChunk(
     EncodeContext& ctx,
     std::size_t slotIndex,
-    const core::ChunkSlot& slot) {
+    const core::ChunkSlot& slot,
+    EncodeChunkOptions options) {
   @autoreleasepool {
   PerfScope scope(perf::countEncodeChunkCpuTime);
   if (!ctx.device || !ctx.queue.valid()) {
@@ -13965,16 +13966,22 @@ std::optional<core::metalqueue::QueueSubmissionRecord> encodeChunk(
                          : "after-start-capture-failed");
   }
 
-  traceEncodeStage("before-new-command-buffer");
-  auto commandBuffer = ctx.queue.newCommandBuffer();
+  const bool injectedCommandBuffer = options.hasInjectedCommandBuffer();
+  traceEncodeStage(injectedCommandBuffer ? "before-use-injected-command-buffer"
+                                         : "before-new-command-buffer");
+  auto commandBuffer = injectedCommandBuffer
+      ? std::move(options.commandBuffer)
+      : ctx.queue.newCommandBuffer();
   if (!commandBuffer) {
-    traceEncodeStage("new-command-buffer-null");
+    traceEncodeStage(injectedCommandBuffer ? "injected-command-buffer-null"
+                                           : "new-command-buffer-null");
     if (captureAlreadyStartedAtChunkBegin && earlyCaptureRequest.has_value()) {
       core::metalcapture::stopMetalCapture(*earlyCaptureRequest);
     }
     return std::nullopt;
   }
-  traceEncodeStage("after-new-command-buffer");
+  traceEncodeStage(injectedCommandBuffer ? "after-use-injected-command-buffer"
+                                         : "after-new-command-buffer");
   bool commandBufferHasWork = false;
   constexpr std::uint32_t kMaxRenderEncoderGpuSamples = 8192;
   traceEncodeStage("before-gpu-sampling-setup");
@@ -14185,6 +14192,52 @@ std::optional<core::metalqueue::QueueSubmissionRecord> encodeChunk(
             .psBoolHash = hashArgbufPayloadComponentPrefix(
                 payload.psConst.bools, payload.pixelBoolConstantCount),
         };
+      };
+  auto markDirectCbufVsPayloadDirty =
+      [](uniform::DirtyState& dirty,
+         const core::DrawUniformPayload& payload) {
+        bool marked = false;
+        if (payload.vertexFloatConstantCount != 0) {
+          uniform::applyConstantSetVsF(
+              dirty, 0u, payload.vertexFloatConstantCount);
+          marked = true;
+        }
+        if (payload.vertexIntConstantCount != 0) {
+          uniform::applyConstantSetVsI(
+              dirty, 0u, payload.vertexIntConstantCount);
+          marked = true;
+        }
+        if (payload.vertexBoolConstantCount != 0) {
+          uniform::applyConstantSetVsB(
+              dirty, 0u, payload.vertexBoolConstantCount);
+          marked = true;
+        }
+        if (!marked) {
+          uniform::setBit(dirty, uniform::DirtyBit::VsF);
+        }
+      };
+  auto markDirectCbufPsPayloadDirty =
+      [](uniform::DirtyState& dirty,
+         const core::DrawUniformPayload& payload) {
+        bool marked = false;
+        if (payload.pixelFloatConstantCount != 0) {
+          uniform::applyConstantSetPsF(
+              dirty, 0u, payload.pixelFloatConstantCount);
+          marked = true;
+        }
+        if (payload.pixelIntConstantCount != 0) {
+          uniform::applyConstantSetPsI(
+              dirty, 0u, payload.pixelIntConstantCount);
+          marked = true;
+        }
+        if (payload.pixelBoolConstantCount != 0) {
+          uniform::applyConstantSetPsB(
+              dirty, 0u, payload.pixelBoolConstantCount);
+          marked = true;
+        }
+        if (!marked) {
+          uniform::setBit(dirty, uniform::DirtyBit::PsF);
+        }
       };
   struct ArgbufPayloadChangedPrefixStats {
     u64 changed = 0;
@@ -14828,7 +14881,10 @@ std::optional<core::metalqueue::QueueSubmissionRecord> encodeChunk(
   };
 
   auto splitBeforeBlockingPresent = [&] {
-    if (!splitPresentBeforeAcquireEnabled() || !commandBufferHasWork) {
+    if (injectedCommandBuffer ||
+        options.disablePresentAcquireSplit ||
+        !splitPresentBeforeAcquireEnabled() ||
+        !commandBufferHasWork) {
       return;
     }
     auto presentCommandBuffer = ctx.queue.newCommandBuffer();
@@ -14864,7 +14920,7 @@ std::optional<core::metalqueue::QueueSubmissionRecord> encodeChunk(
   // surfaces both total mid-chunk commits and the worst-case chain length.
   std::uint64_t perChunkSubCBCount = 0;
   auto splitMidChunk = [&] {
-    if (!commandBufferHasWork) return;
+    if (injectedCommandBuffer || !commandBufferHasWork) return;
     auto next = ctx.queue.newCommandBuffer();
     if (!next) return;
     const auto commitStarted = std::chrono::steady_clock::now();
@@ -14878,7 +14934,9 @@ std::optional<core::metalqueue::QueueSubmissionRecord> encodeChunk(
     commandBufferHasWork = false;
   };
 
-  const auto commitPolicy = midChunkCommitPolicy();
+  const auto commitPolicy = injectedCommandBuffer || options.disableMidChunkCommits
+      ? MidChunkCommitPolicy::Off
+      : midChunkCommitPolicy();
   const std::uint32_t splitNRecords = midChunkCommitNRecords();
   const std::uint32_t splitChainCap = midChunkCommitCapPerRenderPass();
   std::uint32_t recordsSinceLastSplit = 0;
@@ -14896,9 +14954,12 @@ std::optional<core::metalqueue::QueueSubmissionRecord> encodeChunk(
     splitMidChunk();
   };
 
+  core::DrawUniformPayloadMaterializeCache paramUniformPayloadCache;
+
   using Kind = core::MetalCommandKind;
   auto encodeDrawRunCommand = [&](std::size_t commandIndex,
                                   const core::MetalCommandView& command) {
+    paramUniformPayloadCache.reset();
     if (!command.drawState.hot || !command.drawState.shaderLayout ||
         !command.drawRunRecord ||
         core::drawRunDrawCount(command) == 0) {
@@ -14909,9 +14970,9 @@ std::optional<core::metalqueue::QueueSubmissionRecord> encodeChunk(
     traceEncodeCommand("drawrun.enter", commandIndex, Kind::DrawRun, command);
     // The compact uniform materializer overwrites every field before returning
     // this scratch pointer; avoid a full DrawUniformPayload zero-fill here.
-    core::DrawUniformPayload commandUniformScratch;
     traceEncodeCommand("drawrun.before-command-uniform", commandIndex,
                        Kind::DrawRun, command);
+    core::DrawUniformPayload commandUniformScratch;
     const auto* commandUniformPayload = core::drawRunUniformPayloadForHandle(
         command, command.drawRunRecord->uniformHandle, commandUniformScratch,
         perf::DrawUniformPayloadMaterializeSite::DrawEncoderCommand);
@@ -15146,14 +15207,13 @@ std::optional<core::metalqueue::QueueSubmissionRecord> encodeChunk(
       traceEncodeCommand("drawrun.draw-begin", commandIndex,
                          Kind::DrawRun, command);
       const auto& param = drawItems[i];
-      core::DrawUniformPayload drawUniformScratch;
       const bool usesCommandUniform =
           !param.uniformHandle.valid() ||
           param.uniformHandle == command.drawRunRecord->uniformHandle;
       const auto* drawUniformPayload = usesCommandUniform
           ? commandUniformPayload
-          : core::drawRunUniformPayloadForParam(
-                command, param, drawUniformScratch,
+          : paramUniformPayloadCache.payloadForParam(
+                command, param,
                 perf::DrawUniformPayloadMaterializeSite::DrawEncoderParam);
       if (!drawUniformPayload) {
         traceEncodeCommand("drawrun.draw-skip-no-uniform", commandIndex,
@@ -15205,6 +15265,14 @@ std::optional<core::metalqueue::QueueSubmissionRecord> encodeChunk(
           lastArgbufPayloadDeltaKey.has_value() &&
           lastArgbufPayloadDeltaKey->pixelConstantsHash !=
               drawArgbufPayloadDeltaKey.pixelConstantsHash;
+      if (activePassUsesArgbufDirectCbuf) {
+        if (argbufVsPayloadSourceChanged) {
+          markDirectCbufVsPayloadDirty(uniformDirty, *drawUniformPayload);
+        }
+        if (argbufPsPayloadSourceChanged) {
+          markDirectCbufPsPayloadDirty(uniformDirty, *drawUniformPayload);
+        }
+      }
       const bool argbufPayloadDeltaPerf =
           activePassUsesArgbufHybrid && argbufPayloadDeltaPerfEnabled();
       std::optional<ArgbufPayloadDeltaComponentKey>

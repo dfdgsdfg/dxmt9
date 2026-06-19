@@ -65,7 +65,7 @@ no-gputrace run must prove all of the following:
   proxy, render state, shader variant, and VSOut layout stay stable;
 - stream0/IB and extra-stream Metal handle changes drop materially;
 - explicit dxmt writer bytes remain bounded and are reported separately;
-- the visual gate against the `v0.0.1` anchor does not show black/translucent
+- the visual gate against the `v0.0.3` anchor does not show black/translucent
   vertices, UV drift, or cbuf/texture artifacts.
 
 ```mermaid

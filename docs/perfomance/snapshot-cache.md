@@ -52,6 +52,8 @@ write" owner ([[hidden-backend-storage]]).
 | H29 | Current summaries should rank replay, queue-submission, snapshot, and batch-miss owners together | accepted tooling/current attribution; low-overhead and direct-cbuf continuation runs both show replay `~8.3ms/present`, queue submission `~4.1-4.2ms/present`, snapshot `~3.4-3.5ms/present`, lookup `~2.8-2.9ms/present`, and batch miss `~2.1ms/present`, so direct-cbuf does not move the remaining P2/P3 owner | [[snapshot-cache-snapshot.26]] |
 | H30 | Batch misses should reuse non-constant uniform payload fields when only shader constants changed | accepted CPU win, FPS flat; keeping cached FFP/non-constant fields and refreshing only VS/PS constants cuts batch-miss uniform build `0.871 -> 0.596ms/present`, lookup `2.925 -> 2.655ms/present`, and queue submission `4.209 -> 3.975ms/present`, while sampled FPS stays `16.666 -> 16.662` | [[snapshot-cache-snapshot.27]] |
 | H31 | Batch misses should refresh `cache.hot` in place instead of constructing a fresh `FlatDrawStateRecord` | accepted CPU win, FPS noisy; in-place refresh drops hot-build zero-init to `0`, hot build `0.729 -> 0.571ms/present`, lookup `2.655 -> 2.468ms/present`, and queue submission `3.975 -> 3.796ms/present`, while sampled FPS is only noisy/slightly up `16.662 -> 16.807` | [[snapshot-cache-snapshot.28]] |
+| H32 | Compact uniform stage storage may preserve only semantic used counts while the Metal-visible constant ABI needs struct-prefix bytes | accepted correctness bug; `v0.0.3` is the last visual-safe tag, and post-tag compact uniform storage could zero float/int prefix values before int/bool uploads, matching red-light/weapon transparency artifacts. Fix: keep float-only compact, but preserve the required ABI prefix when int or bool constants are stored | [[snapshot-cache-visual.01]] |
+| H33 | Recent semantic-key recurrence on batch misses is high enough to justify a small multi-entry/interner cache | rejected; opt-in probe finds only `8,172 / 419,703` hits (`1.95%`) in the previous-eight miss keys, so a small recent-key cache cannot move the `~2ms/present` batch-miss owner | [[snapshot-cache-snapshot.29]] |
 
 ## Verification methods
 
@@ -76,6 +78,14 @@ write" owner ([[hidden-backend-storage]]).
   matching `single_*` bucket gives the mixed-row membership for a category,
   which is the proof gate before turning a large single-family bucket into a
   narrow implementation target.
+- `d3d9_snapshot_cache_batch_miss_semantic_reuse_probe_{samples,hits,misses,hit_distance_*}`
+  — opt-in exact semantic-key recurrence probe for the binding-agnostic batch
+  cache miss path. With `DXMT9_PERF_BATCH_MISS_SEMANTIC_REUSE_PROBE=1`, each
+  miss compares the cleared `FlatDrawStateKey` against the previous eight miss
+  keys and records whether a multi-entry/interner cache could have found a
+  recent equivalent state. Treat this as opportunity sizing only; it adds
+  key hash/equality work and should be used in no-gputrace CPU scouts, not
+  normal FPS baselines.
 - `d3d9_snapshot_draw_submission_cpu_ms` (+ `_max/_p50/_p95/_p99`) — the direct CPU
   proof that snapshot rebuild churn moved.
 - `d3d9_snapshot_cache_lookup_cpu_ms`, `_uniform_copy_cpu_ms`,
@@ -141,6 +151,24 @@ write" owner ([[hidden-backend-storage]]).
   opt-in same-generation/lane path could skip `DrawUniformPayload`
   materialization. In GT1 this closes as a no-opportunity target: state copy
   elision fires, uniform copy elision does not.
+- `d3d9_snapshot_submission_carrier_{records,bytes,state_storage_bytes,uniform_storage_bytes,compact_uniform_storage_bytes}`
+  — sizes the fixed `DrawRunSubmission` carrier that still exists even when
+  logical state or uniform materialization is elided or compacted. Use this to
+  separate "payload bytes went down" from "the queued submission vector and
+  optional inline storage got smaller"; compact uniform candidates are not
+  expected to move queue-submission CPU if this carrier footprint stays flat.
+  Compare carrier-shrink candidates with
+  `--require-submission-carrier-bytes-per-record-decrease` and, for full-uniform
+  storage removal,
+  `--require-submission-carrier-uniform-storage-per-record-decrease`.
+- `draw_uniform_{vertex,pixel}_constants_append_bytes` plus
+  `draw_uniform_payload_materialize_{draw_encoder_command,param}_bytes` — check
+  the correctness/perf tradeoff after compact uniform storage changes. The
+  current MSL-visible `VsConsts` / `PsConsts` ABI is a single struct prefix:
+  storing any bool constants requires the preceding full float and int regions,
+  and storing any int constants requires the preceding full float region. A run
+  that reduces these bytes must be treated as correctness-risky until red-light,
+  muzzle-flash, bloom, fog, and transparent-material frames match `v0.0.3`.
 - `d3d9_snapshot_uniform_adjacent_same_generation*` — proves whether adjacent
   submissions have a reusable uniform payload even when the current same-state
   elision gate rejects them. A non-zero `_diff_state_lane` bucket would need a
@@ -202,6 +230,8 @@ flowchart TD
   S26["snapshot.26\nreplay/snapshot ranking\nqueue snapshot still owner\nafter direct-cbuf"]:::accepted
   S27["snapshot.27\nnonconst payload reuse\nuniform build 0.871→0.596ms/present\nFPS flat"]:::accepted
   S28["snapshot.28\nhot state in-place refresh\nhot build 0.729→0.571ms/present\nFPS noisy"]:::accepted
+  V1["visual.01\nuniform ABI prefix\nv0.0.3 visual-safe baseline\nfix compact stage storage"]:::accepted
+  S29["snapshot.29\nsemantic reuse probe\nrecent-key hit 1.95%\nreject small interner"]:::rejected
 
   S1 -->|"hits=0 → split"| S2
   S2 -->|"−3% only → classify"| S3
@@ -233,7 +263,9 @@ flowchart TD
   S25 -->|"rank owner after direct-cbuf"| S26
   S26 -->|"reuse nonconst payload fields"| S27
   S27 -->|"avoid fresh hot record churn"| S28
-  S28 -.->|"fps proof still open"| OPEN["open CPU tracks\nbatch-miss count/churn,\nhot-build key construction,\nshader-constant hashing,\ncompact uniform submission/storage,\ncompletion_wait"]:::open
+  S28 -->|"visual regression after v0.0.3"| V1
+  V1 -->|"resume cache opportunity sizing"| S29
+  S29 -.->|"fps proof still open"| OPEN["open CPU tracks\nbatch-miss count/churn,\nhot-build key construction,\nshader-constant hashing,\ncompact uniform submission/storage,\ncompletion_wait"]:::open
 ```
 
 ## Results synthesis
@@ -505,6 +537,50 @@ machine-gun muzzle bloom, but sampled FPS is only noisy/slightly up
 that the end-to-end FPS bottleneck is gone. The remaining local snapshot-cache
 work is now shader-constant hashing, hot-key construction, batch-miss count/
 co-churn, and compact uniform submission/storage.
+
+[[snapshot-cache-visual.01]] then fixes a correctness regression exposed by the
+`v0.0.3` visual-safe baseline. The post-`v0.0.3` compact uniform storage path
+stored VS/PS constants by semantic used counts, but the live Metal ABI uploads
+`VsConsts` / `PsConsts` as struct prefixes. That means an int upload still needs
+the preceding float region in the materialized payload, and a bool upload needs
+both preceding float and int regions. Compacting those prefix regions to zero can
+corrupt lighting/alpha/material decisions; the observed symptom was red-light
+weapon frames with black geometry, transparent guns, and motion-coupled vertex
+artifacts. The accepted fix keeps float-only constants compact, but widens stored
+stage constants to the required ABI prefix whenever int or bool constants are
+present. Native coverage now asserts int-prefix and bool-prefix materialization
+preserve the otherwise-unused float/int values. The validation run
+`visual-uniform-prefix-fix-r1-20260617` passes with
+`draw_skipped_no_pipeline=0`, `gpu_command_buffer_errors=0`, and sampled
+`16.510fps`; its visual frame contact sheet shows no obvious large black
+triangle/weapon-tear artifact in the sampled red-light frames. A full constant
+buffer oracle run (`DXMT9_FORCE_FULL_CBUF_UPLOADS=1`,
+`visual-full-cbuf-oracle-r1-20260617`) also passes with the same no-skip/no-error
+gates and no obvious large artifact in the same capture range; its sampled FPS is
+`16.269` with `28.015ms/present` completion wait, versus prefix-fix `16.510` and
+`27.447ms/present`. This is a correctness gate, not an FPS fix: completion wait
+remains the frame-rate owner, and uniform constant append bytes move within the
+expected ABI-prefix/storage-noise range rather than exposing a new performance
+lever.
+
+[[snapshot-cache-snapshot.29]] then rejects the small recent-key interner as the
+next batch-miss lever. The opt-in
+`DXMT9_PERF_BATCH_MISS_SEMANTIC_REUSE_PROBE=1` run
+`batch-miss-semantic-reuse-probe-r1-20260617` samples every binding-agnostic
+batch miss and exact-compares its cleared semantic `FlatDrawStateKey` against
+the previous eight miss keys. It sees `419,703` samples, `8,172` hits, and
+`411,531` misses, so the recent-key hit rate is only `1.95%`. The hit distances
+are `1` at distance 1, `3,697` at distance 2, `3,671` at distances 3-4, and
+`803` at distances 5-8. That is not enough opportunity to justify a hot-path
+multi-entry cache or interner as the next implementation target. The same run
+keeps correctness gates clean (`draw_skipped_no_pipeline=0`,
+`gpu_command_buffer_errors=0`) and reports `16.591fps`, but it still shows the
+same frame-rate owner shape: `completion_wait_ms_per_present=27.336`,
+`commit_chunk_replay_cpu_ms_per_present=8.389`,
+`commit_chunk_queue_draw_submission_cpu_ms_per_present=4.085`, and
+`encode_chunk_cpu_ms_per_present=11.221`. The next work should therefore stay on
+the P4 overlap / producer-to-encode pipeline and larger replay/encode owners,
+not a narrow batch-miss semantic cache.
 
 ## How to run
 Every experiment here is a 3DMark05 GT1 run via the standard wrapper. This is a

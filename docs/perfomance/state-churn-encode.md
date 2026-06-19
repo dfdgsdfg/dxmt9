@@ -174,6 +174,30 @@ bottleneck — that is owned by [[hidden-backend-storage]].
 | H154 | Stage 2b direct-cbuf runtime selection removes constants-only argbuf table churn | accepted local CPU win; rejected as average-FPS owner | [[state-churn-encode-encode-phase.144]] adds the default-off `DXMT9_ARGBUF_DIRECT_CBUF=1` runtime scout. The normal-visual no-gputrace run keeps `588,953` Stage 2 candidates and `0` resource-array candidates, while `encode_draw_argbuf_table_bind_calls`, `argbuf_open`, `argbuf_setup`, and argbuf cbuf update counters all drop to `0`. The run is clean (`draw_skipped_no_pipeline=0`, `gpu_command_buffer_errors=0`), but still reports `under-pipelined-no-enqueue`, `sampled_avg_fps=16.864`, and `completion_wait_without_enqueue=28.565ms/present`. This closes the table/open mechanism and moves the next FPS proof back to P4/P2/P3 cadence, stream-bind/PSO-prefetch/binding-packet only if they move frame sampling and completion wait |
 | H155 | Legacy uniform scratch does not need a pre-materialization zero-fill | accepted local CPU cleanup; rejected as average-FPS owner | [[state-churn-encode-encode-phase.145]] removes full `DrawUniformPayload{}` value-initialization before compact uniform materialization in the draw encoder. The candidate is visually normal and clean (`draw_skipped_no_pipeline=0`, `gpu_command_buffer_errors=0`), and `encode_draw_cpu_ms_per_present` moves `8.580 -> 8.426` while `sampled_avg_fps` stays noise-flat (`16.865 -> 16.931`). Keep the cleanup, but do not rank legacy scratch zero-fill as the FPS owner; the next proof still needs P4/P2/P3 cadence or a larger encode child |
 | H156 | Current direct-cbuf repeat shifts exposed time from encode to replay/publish, not into overlap | accepted local CPU win; rejected FPS owner; visual open | [[state-churn-encode-encode-phase.146]] reruns `DXMT9_ARGBUF_DIRECT_CBUF=1` against the current state-elision baseline. It cuts `encode_chunk_cpu_ms_per_present` `11.110 -> 8.500` (`-23.49%`) and removes argbuf setup/open/cbuf update/table binds, but `wait -> next enqueue` stays flat (`30.482 -> 30.703ms/present`) because `commit entry -> publish` grows `13.672 -> 16.260ms/present`. The screenshot is not black but is much darker than baseline and shows a large white band, so direct-cbuf remains default-off and correctness-open. Next work should target replay/snapshot/publish cadence or true P4 overlap before more argbuf local cleanup |
+| H157 | Current direct-cbuf fails the `v0.0.3` visual-safety gate even though it removes argbuf encode cost | accepted local CPU win; rejected correctness and FPS owner | [[state-churn-encode-encode-phase.147]] repeats the Stage 2b direct-cbuf scout against a same-day `v0.0.3`-anchored baseline. It again removes argbuf setup/open/cbuf-update/table-bind counters and cuts `encode_chunk_cpu_ms_per_present` `11.311 -> 8.471` (`-25.10%`) and `encode_draw_cpu_ms_per_present` `8.750 -> 6.023` (`-31.17%`). The visual output is severely corrupted, with black scene regions and overexposed white geometry/bands versus the normal baseline frame, while `completion_wait_without_enqueue` worsens `26.839 -> 28.250ms/present`. Keep direct-cbuf default-off; next direct-cbuf work must debug runtime PSO/source/bind correctness before another FPS claim |
+| H158 | Direct-cbuf corruption was stale direct cbuf binding on per-draw payload source changes | accepted correctness fix and local CPU win; rejected FPS owner | [[state-churn-encode-encode-phase.148]] marks direct VS/PS cbuf slots dirty whenever the argbuf cbuf-source hashes change, even if no D3D constant-set dirty bit is live in the current encoder state. The `v0.0.3`-anchored rerun returns to a normal GT1 frame (`draw_skipped_no_pipeline=0`, `gpu_command_buffer_errors=0`) while still removing argbuf setup/open/cbuf-update/table-bind counters. CPU remains a local win (`encode_chunk_cpu_ms_per_present` `11.311 -> 8.871`, `-21.57%`; `encode_draw_cpu_ms_per_present` `8.750 -> 6.359`, `-27.33%`), but `sampled_avg_fps` is noise-flat (`16.832 -> 16.894`) and `completion_wait_without_enqueue` worsens `26.839 -> 28.354ms/present`. This promotes the fix as correctness-required for the opt-in path, not as an average-FPS owner; keep ranking P4/replay-publish and residual uniform/hash/append work ahead of more argbuf cleanup |
+| H159 | `v0.0.3`-anchored current run keeps N-1 state elision closed; residual submit-side owner is uniform/hash/append | accepted current attribution | [[state-churn-encode-encode-phase.149]] re-reads a same-day current run gated by the `v0.0.3` visual anchor after the direct-cbuf correctness pass. The raw DrawRun state critique is no longer the next implementation target: `d3d9_snapshot_state_elided=412,984` (`4.226GiB`), same-generation/lane compatibility has `410,551` compatible and `0` incompatible pairs, and residual `submit_draw_run_batch_discarded_state_records=3,925` is only about `40.16MiB` for the whole run. The remaining submit-side CPU is elsewhere: `d3d9_snapshot_uniform_elided=0`, `d3d9_snapshot_uniform_materialized=885,840` (`9.092GiB`), `d3d9_snapshot_uniform_build_hash_cpu_ms=1702.902`, `submit_draw_run_batch_append_uniform_cpu_ms=1176.066`, and queue submission snapshot still costs `3.102ms/present`. Next work should not reopen N-1 state materialization unless a regression counter appears; target VS/full-indexed uniform hash, compact consumers, append count/storage shape, or a larger P4 overlap design |
+| H160 | `v0.0.3`-anchored setter-range refresh keeps sparse const width closed as an FPS lever | accepted current attribution | [[state-churn-encode-encode-phase.150]] reruns `DXMT9_PERF_VS_CONST_SETTER_RANGE=1` against a current run gated by the `v0.0.3` visual anchor. The old shape repeats: app calls are mostly small, while concrete flush `count >= 128` rows own `10,192,088` range regs (`81.09%` of concrete flush range regs), and hot rows include `start=0,count=196/201`. But H151 already proved sparse dirty-run splitting only makes records exact; it leaves backend VS cbuf/table pressure and P4/FPS flat or worse. Treat setter-width/full-indexed hash as attribution, not the next primary implementation axis. The next average-FPS proof needs P4 overlap or a larger serial replay/snapshot/encode cadence win with locality gates |
+| H161 | Current uniform append storage is secondary; frontend materialization/hash and legacy compact consumers remain larger | accepted current attribution | [[state-churn-encode-encode-phase.151]] audits the same `v0.0.3` baseline and code paths behind H149. Backend append storage is already componentized: append bytes are `884.199MiB` (`491,221.742B/present`, `9.72%` of frontend materialized bytes), payload records are `96B/append`, and stage append amplification is at the compact floor. The visible append children are smaller than the parent headline (`lookup=270.282ms`, reserve/copy/link `177.252ms` total), while frontend uniform hash remains `1702.902ms` and backend legacy scratch materialization remains `423.341ms`. Do not chase previous-handle candidate plumbing or append reserve/copy/link microfixes first; target frontend compact-owned snapshots, direct compact draw-encoder consumers, VS constant churn with a `v0.0.3` visual gate, or P4/serial-cadence overlap |
+| H162 | Command-local uniform materialize caching is correctness-safe but not yet a runtime owner | accepted scoped cleanup; runtime owner open in H163 | [[state-churn-encode-encode-phase.152]] adds a draw-encoder `DrawUniformPayloadMaterializeCache` for compact draw-run commands. The cache reuses a materialized scratch only when a non-front per-draw override uniform handle repeats inside the same command, keys reuse by compact payload-record source, and resets at command boundaries because `DrawUniformHandle` values are slot-local. The command-front payload stays in a separate scratch so override cache misses cannot overwrite a retained command pointer. Native coverage proves compact command views can resolve through the helper and that repeated override handles reuse the override scratch without changing the command-front payload. Follow-up runtime evidence is H163 |
+| H163 | H162 command-local uniform cache does not move GT1 materialize or FPS counters | rejected GT1 owner; cleanup remains correctness-safe | [[state-churn-encode-encode-phase.153]] runs the H162 current worktree as `app-d3d9-3dmark05-h162-uniform-cache-r1` against the `v0.0.3` baseline with supervised `--no-gputrace --timeout 120 --frame-sampling`. The screenshot gross-check is normal with muzzle flash/bloom and `gpu_command_buffer_errors=0`, but the target counters do not improve: `uniform_backend_materialize_cpu_ms_per_present` is `0.235 -> 0.243`, draw-encoder param materialize CPU is `0.096 -> 0.101`, backend materialized bytes are `5.709M -> 5.749M/present`, `encode_chunk_cpu_ms_per_present` worsens `11.311 -> 12.997`, and sampled FPS is `16.832 -> 16.417`. Treat repeated override-handle materialize as too rare/noisy for current GT1; keep H161's next targets at frontend compact-owned snapshots, direct compact consumers with proven counter movement, or P4/serial-cadence overlap |
+| H164 | Frontend compact uniform snapshots are real but require a submission/storage boundary change | accepted design gate | [[state-churn-encode-encode-phase.154]] audits the `v0.0.3` baseline after H163. Full uniform submission snapshots still copy `9.092GiB/run`, while the conservative compact candidate is `2.616GiB` (`28.77%`) and would save `71.23%` of snapshot bytes. Adjacent fixed payload hashes are identical for `787,998 / 787,998` previous-payload pairs, but both shader-constant hashes match only `4,928` times (`0.63%`), so same-generation/full-payload elision correctly stays at zero. The next implementation is not a partial `std::optional<DrawUniformPayload>` copy or hash-only fixed reuse; it needs a compact owned `DrawRunSubmission` payload plus a `ChunkSlot` append API that consumes fixed/stage components directly, with native equality/materialization tests and a `v0.0.3` visual gate before Xcode spend |
+| H165 | `ChunkSlot` can append compact uniform payloads without a full `DrawUniformPayload` input | accepted native gate; runtime producer side open | [[state-churn-encode-encode-phase.155]] adds `DrawUniformCompactPayloadView` plus compact fixed/stage/payload find/append overloads in `ChunkSlot`. The compact path uses the same hash chains and last-handle fast paths as the full path, but still compares fixed payload contents and stage bytes before reusing handles. `testChunkSlotCompactUniformPayloadAppendMatchesFullPath()` proves a compact view produced from the full path appends equivalent fixed/VS/PS/payload records, reuses a semantic lookup handle, and materializes a legacy `DrawUniformPayload` with the expected fixed fields, stored VS/PS prefixes, zero-filled outside-prefix values, and payload hash. This is an API/storage gate only; `snapshotDrawSubmissionFromCurrentState()` still needs a compact owned producer carrier before any GT1 counter can move |
+| H166 | Producer compact uniform submissions cut bytes but regress normalized CPU | accepted mechanism; rejected runtime promotion; default-off | [[state-churn-encode-encode-phase.156]] wires the H165 compact append API into chunk replay behind `DXMT9_ENABLE_COMPACT_UNIFORM_SUBMISSIONS=1` with `DrawSubmissionUniformScratch` and `DrawUniformCompactSubmissionPayload`. Native tests pass and the no-gputrace `v0.0.3`-anchored smoke is visually coherent, but the runtime gate is negative: materialized uniform bytes per present fall `5.051MB -> 1.423MB`, yet `commit_chunk_queue_draw_submission_cpu_ms_per_present` worsens `3.776 -> 4.461ms`, `d3d9_snapshot_draw_submission_cpu_ms_per_present` worsens `3.042 -> 3.611ms`, and `sampled_avg_fps` falls `16.832 -> 14.441`. Keep the compact append/storage API, but do not promote the producer compact path until fixed-payload dedup, arena pre-sizing, or direct compact build removes the new scratch-copy overhead |
+| H167 | Compact fixed-payload reuse proves the H156 scratch-copy opportunity but does not beat `v0.0.3` | accepted bounded CPU improvement; default-off | [[state-churn-encode-encode-phase.157]] adds last-fixed-payload reuse inside `DrawSubmissionUniformScratch` and counters for appends/reuses/saved bytes. The runtime gate reports `763,709` reuses versus `94,889` appends and improves normalized CPU versus H156 (`commit_chunk_replay` `9.323 -> 8.307ms/present`, queue submission `4.461 -> 3.982ms/present`, append-uniform `0.715 -> 0.628ms/present`). It still trails the `v0.0.3` visual-safe baseline on replay and queue submission, while `sampled_avg_fps` is `16.377` versus baseline `16.832`; keep `DXMT9_ENABLE_COMPACT_UNIFORM_SUBMISSIONS=1` opt-in and move the next compact work toward direct compact build or a smaller submission carrier |
+| H168 | Compact producer breakdown ranks fixed-payload work above stage-byte copy | accepted attribution; diagnostic-only | [[state-churn-encode-encode-phase.158]] adds nested compact snapshot timers and reruns the opt-in path. The timers themselves slow the path (`uniform_copy` `0.257 -> 0.501ms/present` versus H167), so this is not a performance candidate. The attribution is still useful: compact total is `0.442ms/present`, fixed-payload construction/equality is `0.207ms/present`, VS stage copy `0.071ms/present`, and PS stage copy `0.042ms/present`. This ranks fixed-lane elimination and direct compact construction ahead of arena pre-sizing or stage-copy-only cleanup |
+| H169 | Compact fixed-payload direct compare trims the H168 fixed lane but does not promote compact submissions | accepted bounded CPU cleanup; default-off | [[state-churn-encode-encode-phase.159]] skips constructing a temporary `DrawUniformFixedPayload` on the adjacent fixed-hash reuse path and directly compares the stored fixed scratch entry against the current payload fields. Native coverage proves shader-constant-only snapshots reuse fixed storage and transform changes append new fixed storage. The opt-in runtime gate improves the H168 target child (`d3d9_snapshot_uniform_compact_fixed_cpu_ms_per_present` `0.207 -> 0.189`, compact parent `0.442 -> 0.422`, queue submission `4.305 -> 4.255`) and the broad screenshot is normal, but H169 still trails the `v0.0.3` visual-safe baseline and FPS is not promoted (`16.123`). Keep `DXMT9_ENABLE_COMPACT_UNIFORM_SUBMISSIONS=1` default-off; next compact work is direct compact build, smaller submission carrier, or removing diagnostic timers before a repeat gate |
+| H170 | Compact breakdown timers should be opt-in attribution only | accepted instrumentation hygiene; compact path still default-off | [[state-churn-encode-encode-phase.160]] gates the H158/H159 compact parent/fixed/VS/PS timers behind `DXMT9_PERF_UNIFORM_COMPACT_BREAKDOWN=1`. The H170 opt-in compact run confirms the child timer rows are `0` by default and `d3d9_snapshot_uniform_copy_cpu_ms_per_present` returns to the H167 band (`0.254ms`). Queue submission and replay recover versus H169 (`4.255 -> 4.119ms/present`, `8.667 -> 8.537`) but remain above H167 and do not move FPS (`16.142`) or completion wait (`28.292ms/present`). `actual.png` is very dark/occluded, so treat visual smoke as inconclusive rather than a `v0.0.3` visual-safe proof; keep compact submissions default-off and rank P4/replay-publish or larger serial cadence work ahead unless a direct-compact/smaller-carrier probe proves a larger CPU win |
+| H171 | Current compact uniform submission repeat still reduces bytes but not FPS/P4 | rejected current FPS lever | [[state-churn-encode-encode-phase.161]] reruns same-HEAD baseline and `DXMT9_ENABLE_COMPACT_UNIFORM_SUBMISSIONS=1` after H98/H99. The candidate passes broad effects-heavy visual smoke and proves the compact mechanism (`uniform_materialized_bytes_per_present` `5.046MB -> 1.430MB`, `-71.65%`), but normalized producer CPU regresses (`snapshot_draw_submission` `3.053 -> 3.171ms/present`, queue submission `3.801 -> 3.917`, replay `8.147 -> 8.223`) and P4 overlap worsens (`completion_wait_with_enqueue` `1.562 -> 0.139`, no-enqueue `26.860 -> 27.554`). Keep compact submissions default-off; the next compact candidate must avoid full `cached.uniforms` materialization or shrink the `DrawRunSubmission` carrier, otherwise prioritize P4/replay-publish work |
+| H172 | Submission carrier counters prove compact uniform bytes do not shrink queued draw storage | accepted attribution; rejected current compact FPS lever | [[state-churn-encode-encode-phase.162]] adds `d3d9_snapshot_submission_carrier_*` counters and reruns baseline versus `DXMT9_ENABLE_COMPACT_UNIFORM_SUBMISSIONS=1`. Both paths carry the same fixed queued-draw footprint: `DrawRunSubmission=21,176B/record`, including `10,320B` state storage, `10,272B` full-uniform storage, and only `128B` compact-uniform storage. The compact path still cuts logical producer uniform bytes `5.076MB -> 1.427MB/present` (`-71.88%`), but queue submission CPU regresses `3.876 -> 4.120ms/present`, snapshot CPU regresses `3.195 -> 3.410`, encode chunk regresses `11.090 -> 11.606`, and useful completion overlap stays absent. This turns H171's "shrink the carrier" into a measured requirement: a future compact candidate must remove the full optional uniform/state carrier or build compact payloads before full `cached.uniforms` exists |
+| H173 | Full-uniform sidecar carrier shrinks bytes but fails the runtime and visual-safe promotion gate | rejected and reverted | [[state-churn-encode-encode-phase.163]] tests a smaller `DrawRunSubmission` carrier by moving full uniforms out of the inline optional storage. The shared-pointer prototype cuts carrier width `21,176B -> 10,928B` but drops sampled FPS `18.381 -> 14.499`; the raw-pointer prototype cuts it further to `10,912B` but drops sampled FPS to `7.334` and only reaches `660` presents in the same supervised window. Restoring the inline optional returns carrier width to `21,176B`. The standardized `--keep-frontmost` repeat h179 reaches the h174 progress band (`1,800` presents, `18.527` FPS mean) and keeps local CPU rows close to baseline, but no P4 overlap appears (`completion_wait_without_enqueue` `27.922 -> 28.032ms/present`, `encode_ready_depth_avg=1.000`). Keep `v0.0.3` as the visual-safe anchor, treat h175/h176 as failed experiments, and require wrapper `--keep-frontmost` repeats before reading no-gputrace frame progression as a code regression |
+| H174 | Unused full-uniform carrier lane counter proves compact path still pays the full lane | accepted attribution; rejected current compact promotion | [[state-churn-encode-encode-phase.164]] adds `d3d9_snapshot_submission_carrier_unused_uniform_storage_*` counters and reruns default h180 against `DXMT9_ENABLE_COMPACT_UNIFORM_SUBMISSIONS=1` h181 under the standardized `--keep-frontmost --timeout 120` no-gputrace path. Default has `0` unused full-uniform carrier bytes because every submission carries `uniforms`. Compact reduces logical uniform materialization `5.070MB -> 1.435MB/present` (`-71.69%`), but the carrier remains `21,176B/record`, full-uniform storage remains `10,272B/record`, and the unused full-uniform lane becomes `492.633 records/present`, `4.826MiB/present`, `10,272B/record`, `100%` of that lane. Queue/snapshot CPU still regress slightly (`3.875 -> 3.964ms/present`, `3.112 -> 3.203`), so the next compact attempt must remove the inline lane with a direct compact carrier or split carrier before another FPS claim |
+| H175 | Compact-only draw submission carrier removes the full-uniform lane but does not move FPS/P4 | accepted carrier-shape implementation; rejected current promotion | [[state-churn-encode-encode-phase.165]] adds `DrawRunCompactSubmission` and routes `DXMT9_ENABLE_COMPACT_UNIFORM_SUBMISSIONS=1` through a compact queue/append path when render trace is off. The h182 -> h183 r2 gate proves the carrier-shape target: `submission_carrier_bytes_per_record` `21,176 -> 10,904` (`-48.51%`), full-uniform storage `10,272 -> 0B/record`, and unused full-uniform storage stays `0` because the lane no longer exists. Logical uniform materialization still falls `5.052MB -> 1.427MB/present` (`-71.75%`). But replay/snapshot remain worse (`queue_draw_submission` `3.857 -> 4.025ms/present`, snapshot `3.096 -> 3.186`), `completion_wait_without_enqueue` is flat/slightly worse (`26.840 -> 26.994ms/present`), and `encode_ready_depth_avg` stays `1.000`. Keep the compact carrier default-off; the remaining compact work is direct compact construction that removes the temporary full snapshot, not another carrier-width experiment |
+| H176 | Direct compact submission snapshot cleans the carrier path but still does not promote compact submissions | accepted cleanup; rejected current promotion | [[state-churn-encode-encode-phase.166]] removes the phase 165 temporary full-submission bridge by adding a direct `DrawRunCompactSubmission` snapshot overload and filling the compact vector in place. Native coverage proves compact materialization plus adjacent same-generation compact state/uniform elision. The h183 -> h184 compact comparison shows a small queue-submission cleanup (`4.025 -> 3.927ms/present`), but snapshot draw submission worsens (`3.186 -> 3.301`), encode chunk worsens (`12.829 -> 13.222`), sampled FPS falls (`16.332 -> 15.971`), and ready depth stays `1.000`. The h182 -> h184 storage gate remains valid (`21,176 -> 10,904B/record`, full-uniform lane `10,272 -> 0B/record`), but normalized CPU still does not beat default. Keep compact submissions default-off and stop adding carrier variants until the cached uniform source itself becomes compact or P4/replay-publish work resumes |
+| H177 | Resource-shape memo ProbeKey validation does not explain the current visual regression | rejected as visual owner; rejected default validation | [[state-churn-encode-encode-phase.167]] temporarily validates every resource-shape memo hit by resolving the canonical draw `probeKey` before reuse. The h189 no-gputrace run records `161,025 / 161,025` validated hits, `validated_misses=0`, every resource-shape mismatch bucket `0`, skipped-pipeline and Metal-error counters `0`, and a gross-normal `actual.png`. The validation itself is too expensive for default use (`draw_key_resolve` rises to `1.104ms/present` versus the recent `0.437-0.497` band, prefetch parent `1.872ms/present` versus `1.212-1.347`), so the code experiment was reverted. Keep the default memo path; use `DXMT9_DISABLE_ENCODE_SLOT_PSO_RESOURCE_SHAPE_MEMO=1` or `DXMT9_PERF_ENCODE_SLOT_PSO_RESOURCE_SHAPE_OPPORTUNITY=1` only as targeted A/B if a `v0.0.3` visual-gated artifact reproduces |
+| H178 | Disabling the resource-shape memo does not fix the black-geometry visual artifact | rejected visual fix; rejected FPS lever | [[state-churn-encode-encode-phase.168]] runs the targeted opt-out `DXMT9_DISABLE_ENCODE_SLOT_PSO_RESOURCE_SHAPE_MEMO=1`. The h190 counters prove the memo is fully disabled (`resource_shape_memo_* = 0`) and repeated work moves to probe-key memo hits (`169,745`), but `actual.png` still contains a large black geometry artifact. The run remains in the same cadence class as h189: command buffers per present `3.999`, ready depth `1.000`, completion wait `26.723ms/present`, and `draw_key_resolve=1.108ms/present`. This closes the stale resource-shape memo branch unless a future same-frame A/B contradicts it; move visual debugging to dynamic backing/state/constant/blend-depth/final-writer paths |
+| H179 | Full-cbuf oracle does not remove the sampled 1060..1100 black foreground silhouettes | rejected cbuf visual owner; rejected default workaround | [[state-churn-encode-encode-phase.169]] captures the current h191 frame window `1060..1100:5` and repeats it with `DXMT9_FORCE_FULL_CBUF_UPLOADS=1` as h192. The oracle is active (`argbuf_hybrid_bytes_per_encoder` `937,374,776 -> 4,958,743,232`, cbuf update `1.010 -> 1.332ms/present`), but the offset-paired h191 `N` vs h192 `N+5` contact sheet still shows the same dark foreground silhouette class. FPS stays noise-flat (`16.391 -> 16.379`), skipped-pipeline/Metal-error counters stay `0`, and ready depth/P4 class does not change. Do not reopen compact uniform ABI-prefix/cbuf width based on this time-based window; next visual proof needs same-frame final-writer/pass or binding-source isolation |
+| H180 | Batch-miss uniform payload attribution points at shader-constant refresh, not another carrier-width experiment | accepted attribution; no FPS claim | [[state-churn-encode-encode-phase.170]] adds runtime counters for the three binding-agnostic batch-miss uniform paths and runs h200 under the standard `--keep-frontmost --timeout 120` no-gputrace gate. The selected paths are `reuse_full=3,449`, `reuse_nonconst=306,976`, and `full_build=34,903`; `reuse_nonconst + full_build` matches `uniform_build_calls=341,879`. The residual build timer is `1071.926ms/run` (`0.715ms/present`), with hash work `764.934ms` and VS constant hashing `488.736ms`. This narrows the local target to VS constant hash/copy width or a direct compact constant representation. It does not change the global owner: h200 remains in the no-enqueue class (`completion_wait_without_enqueue=24.474ms/present`, `with_enqueue=0.000`, `encode_chunk=14.819ms/present`, sampled FPS `13.934`) |
 
 ## Verification methods
 
@@ -215,7 +239,23 @@ bottleneck — that is owned by [[hidden-backend-storage]].
   stage counter has already named `commit_chunk` replay. Use
   `commit_chunk_queue_draw_submission_emplace_cpu_ms` only to size the
   default-construction/reallocation part of queued submission creation before an
-  optional-state/direct-construct carrier refactor.
+  optional-state/direct-construct carrier refactor. Pair that with
+  `d3d9_snapshot_submission_carrier_*` when compact/uniform work reduces logical
+  payload bytes but queue-submission CPU stays flat; those counters expose the
+  fixed inline `DrawRunSubmission` storage that still has to be allocated,
+  default-constructed, moved, and scanned. The
+  `d3d9_snapshot_submission_carrier_unused_uniform_storage_*` rows specifically
+  count records where the full-uniform optional lane is empty but still
+  contributes inline carrier width; use them to size the direct-compact or
+  carrier-split target before another implementation attempt. For
+  compact-carrier A/Bs, require
+  `--require-submission-carrier-bytes-per-record-decrease`; when the candidate
+  specifically removes full inline uniform storage, also require
+  `--require-submission-carrier-uniform-storage-per-record-decrease`.
+  Native `dxmt9-core-device-com-spec` coverage locks the carrier-footprint
+  helper contract against `sizeof(DrawRunSubmission)` and the current inline
+  state/full-uniform/compact-uniform storage lanes, so future carrier refactors
+  have a deterministic pre-runtime gate before another GT1 scout.
 - **`CommandQueue` submit child counters** —
   `submit_draw_run_*_cpu_ms` and `submit_draw_run_batch_*_cpu_ms` split the
   queued draw submission residual into binding snapshot, payload byte scan,
@@ -288,9 +328,12 @@ bottleneck — that is owned by [[hidden-backend-storage]].
   `submit_draw_run_batch_discarded_state_{records,bytes}` count non-front
   `DrawRunSubmission` states that were materialized in the default path but are
   not stored by `appendDrawRunBatch()`. After
-  [[state-churn-encode-encode-phase.48]], these should stay zero on the default
-  binding-agnostic path. If they rise again, the same-stamp state-elision
-  contract regressed or a new materialized non-front class appeared.
+  [[state-churn-encode-encode-phase.48]], the large N-1 state materialization
+  waste should stay collapsed; the `v0.0.3`-anchored current run still has a small
+  residual class (`3,925` records / about `40MiB` in H159), so regression runs
+  should gate `d3d9_snapshot_state_elided` as present and
+  `submit_draw_run_batch_discarded_state_{records,bytes}` as non-increasing
+  rather than requiring exact zero.
 - **Uniform payload append split counters** —
   `draw_uniform_payload_lookup_cpu_ms`,
   `draw_uniform_payload_lookup_bucket_cpu_ms`, and
@@ -869,7 +912,8 @@ debugging should use mini-replay or same-input semantic image gates rather than
 time-based `actual.png`.
 [[state-churn-encode-encode-phase.23]] closes that visual bisection with the
 actual root cause. Disabling draw submission batching normalizes the GT1 smoke,
-and the code diff from the `v0.0.1` visual-good tag points at the batched
+and the code diff from the visual-good tag lineage, now anchored at `v0.0.3`,
+points at the batched
 per-draw uniform path. The bug is not full cbuf size; it is stale cbuf cache
 identity. Batched draws can carry a current `DrawUniformPayload` while the base
 `FlatDrawStateRecord` still has the first draw's VS/PS constant hashes, so the
@@ -1479,6 +1523,106 @@ redundant full `DrawUniformPayload` zero-fill before compact materialization
 cuts the local encode parent slightly (`8.580 -> 8.426ms/present`) in a normal
 visual run, but sampled FPS remains noise-flat and no-enqueue completion wait
 still dominates.
+[[state-churn-encode-encode-phase.156]] then wires compact uniform submissions
+into the producer path behind `DXMT9_ENABLE_COMPACT_UNIFORM_SUBMISSIONS=1`. It
+proves the storage mechanism and cuts measured materialized uniform bytes to the
+compact candidate (`10264B -> ~2922B` per materialized submission), but the
+current scratch carrier is not a CPU win: queue draw submission, snapshot, and
+append-uniform CPU all regress per present, and the no-gputrace FPS sample is
+worse. Treat compact producer submission as a default-off design checkpoint; the
+follow-up should first prove whether fixed-payload deduplication removes enough
+scratch-copy overhead before another promotion gate.
+[[state-churn-encode-encode-phase.157]] runs that first follow-up. Last
+fixed-payload reuse is real (`763,709` reuses versus `94,889` appends) and
+recovers much of H156's normalized CPU regression (`commit_chunk_replay`
+`9.323 -> 8.307ms/present`, queue submission `4.461 -> 3.982ms/present`), but
+the opt-in path still trails the `v0.0.3` visual-safe baseline on replay,
+queue submission, and `sampled_avg_fps` (`16.377` versus baseline `16.832`).
+Keep
+`DXMT9_ENABLE_COMPACT_UNIFORM_SUBMISSIONS=1` default-off; the next compact
+uniform attempt needs direct compact construction from the uniform builder,
+arena sizing, or a smaller submission carrier rather than more fixed-payload
+dedup inside the same scratch shape.
+[[state-churn-encode-encode-phase.158]] adds diagnostic timers for that compact
+path and shows why arena sizing alone is unlikely to be the next main lever:
+fixed-payload construction/equality is the largest measured compact child
+(`0.207ms/present`) and is larger than VS+PS stage byte copying combined
+(`0.113ms/present`). The timers add overhead and make the run slower, so treat
+H158 as attribution only. The next compact-uniform implementation should either
+skip the fixed projection/equality on proven adjacent fixed-hash reuse or build
+the compact snapshot directly from the uniform builder with a smaller
+submission carrier.
+[[state-churn-encode-encode-phase.162]] adds explicit carrier-footprint counters
+for that last clause. The counters show that compact uniform submissions change
+the logical uniform bytes, but not the queued draw carrier width: baseline and
+compact runs both report `21,176B/record`, with `10,272B/record` still reserved
+for full-uniform storage. This makes further compact append/storage polishing a
+secondary target unless it is paired with direct compact construction or a
+smaller `DrawRunSubmission` carrier.
+[[state-churn-encode-encode-phase.164]] adds the missing distinction between
+"reserved" and "used" full-uniform carrier storage. The compact opt-in run
+sets `submission.uniforms` empty for every queued submission, but the fixed
+record still reserves `10,272B/record`; the new counter reports that as
+`4.826MiB/present` of unused full-uniform lane. This turns the next compact
+attempt into a carrier-shape problem, not a copy-loop polishing problem.
+[[state-churn-encode-encode-phase.165]] then implements that carrier-shape
+split with a compact-only queued submission. The compact path removes the full
+uniform lane from the queued record (`21,176 -> 10,904B/record`,
+`10,272 -> 0B/record` full-uniform storage) while preserving broad no-gputrace
+smoke (`draw_skipped_no_pipeline=0`, `gpu_command_buffer_errors=0`). It is
+still not a promotion candidate: the path builds through a temporary full
+snapshot and then converts to the compact carrier, so queue/snapshot CPU remain
+slightly worse and P4 no-enqueue wait does not move. The next compact-uniform
+work should construct compact payloads directly from the uniform builder, or
+defer compact work behind the larger P4/replay-publish owner.
+[[state-churn-encode-encode-phase.166]] removes the temporary full-submission
+bridge and fills `DrawRunCompactSubmission` directly. That is a cleaner carrier
+implementation and trims the compact-vs-compact queue-submission row slightly
+(`4.025 -> 3.927ms/present`), but it does not change the larger conclusion:
+the compact path still relies on `cached.uniforms` as the source of truth,
+snapshot CPU remains worse than default, sampled FPS does not improve, and
+`encode_ready_depth_avg` remains `1.000`. This closes the carrier-shell cleanup
+thread. The next compact proof must change the uniform cache representation
+itself; otherwise prioritize P4/replay-publish cadence.
+[[state-churn-encode-encode-phase.167]] checks whether the default-on
+resource-shape PSO memo could explain the post-`v0.0.3` black/translucent
+visual reports. A temporary validation path resolved the canonical draw
+`probeKey` for every shape hit before reuse and found `161,025` validated hits,
+`0` validated misses, and all mismatch buckets at `0`. The gross visual smoke
+was normal, but this is not a same-frame visual proof. Because the validation
+raises `draw_key_resolve` to `1.104ms/present` and the prefetch parent to
+`1.872ms/present`, it was reverted and should not become default. Reproduce the
+artifact with `DXMT9_DISABLE_ENCODE_SLOT_PSO_RESOURCE_SHAPE_MEMO=1` before
+blaming this memo again.
+[[state-churn-encode-encode-phase.168]] runs that opt-out A/B and closes the
+loop. With `DXMT9_DISABLE_ENCODE_SLOT_PSO_RESOURCE_SHAPE_MEMO=1`, all
+resource-shape memo counters drop to `0`, probe-key memo hits rise to `169,745`,
+and the same broad no-enqueue cadence remains. The h190 screenshot still shows
+the black geometry artifact, so the resource-shape memo is no longer a good
+visual owner. Move the next visual-correctness investigation to binding/source
+or final-writer state instead of spending more Xcode budget on this memo.
+[[state-churn-encode-encode-phase.169]] then checks whether the sampled black
+foreground window is a recurrence of the compact uniform / cbuf-prefix visual
+bug. The h191 current capture window `1060..1100:5` and h192 full-cbuf oracle
+drift by about one capture step, so the sheet pairs h191 `N` against h192
+`N+5`. Full-cbuf is active and expensive (`argbuf_hybrid_bytes_per_encoder`
+about `0.94GB -> 4.96GB`, cbuf update `1.010 -> 1.332ms/present`), but it does
+not visually remove the dark foreground silhouette class. Treat this as a
+negative cbuf-prefix oracle for the current window, not as a pixel-exact visual
+pass. The next proof needs same-frame final-writer/pass or binding-source
+isolation.
+[[state-churn-encode-encode-phase.170]] closes that proof gate with h200. The
+new rows split the binding-agnostic snapshot-cache miss path into full-payload
+reuse, non-constant-payload reuse, and full-payload rebuild; h200 is dominated
+by non-constant payload reuse (`306,976 / 345,328` selected paths), so the
+residual `d3d9_snapshot_cache_batch_miss_uniform_build_*` timers mostly come
+from shader-constant refresh and hash width rather than complete fixed-payload
+construction. This is useful attribution, but not a promotion signal: h200 still
+has no completion overlap (`with_enqueue=0`) and remains governed by P4/no-enqueue
+serial cadence plus replay/encode CPU. Next uniform work should be VS constant
+hash/copy width or a direct compact constant representation, not another queued
+carrier-shape variant, and it still needs a P4/no-enqueue movement proof before
+any Xcode capture.
 
 ## How to run
 Every experiment here is a 3DMark05 GT1 run via the standard wrapper. This is a

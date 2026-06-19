@@ -645,16 +645,18 @@ void testChunkSlotDrawRunBatchKeepsPerDrawUniformPayloads() {
   DrawDesc secondDesc = desc;
   firstDesc.vsConst.float4[0][0] = 11.0f;
   secondDesc.vsConst.float4[0][0] = 22.0f;
+  auto firstUniformPayload = makeDrawUniformPayload(firstDesc);
+  auto secondUniformPayload = makeDrawUniformPayload(secondDesc);
 
   std::array<DrawRunSubmission, 2> submissions{
       DrawRunSubmission{
           .state = makeCanonicalDrawStateForTest(desc),
-          .uniforms = makeDrawUniformPayload(firstDesc),
+          .uniforms = firstUniformPayload,
           .draw = makeDrawParam(1u, 0u),
       },
       DrawRunSubmission{
           .state = makeCanonicalDrawStateForTest(desc),
-          .uniforms = makeDrawUniformPayload(secondDesc),
+          .uniforms = secondUniformPayload,
           .draw = makeDrawParam(1u, 3u),
       },
   };
@@ -718,19 +720,19 @@ void testChunkSlotUniformPayloadLookupHashCollisionKeepsDistinctPayloads() {
   firstDesc.vsConst.float4[0][0] = 11.0f;
   secondDesc.vsConst.float4[0][0] = 22.0f;
 
-  auto firstUniform = makeDrawUniformPayload(firstDesc);
-  auto secondUniform = makeDrawUniformPayload(secondDesc);
-  firstUniform.hash = 0x12345678ull;
-  secondUniform.hash = firstUniform.hash;
+  auto firstUniformPayload = makeDrawUniformPayload(firstDesc);
+  auto secondUniformPayload = makeDrawUniformPayload(secondDesc);
+  firstUniformPayload.hash = 0x12345678ull;
+  secondUniformPayload.hash = firstUniformPayload.hash;
 
   const DrawParam draw = makeDrawParam(1u, 0u);
   ChunkSlot slot{};
-  slot.appendDrawRun(makeCanonicalDrawStateForTest(desc), firstUniform,
+  slot.appendDrawRun(makeCanonicalDrawStateForTest(desc), firstUniformPayload,
                      std::span<const DrawParam>(&draw, 1u),
                      std::span<const DrawParamPayloadView>{});
   const auto firstHandle = slot.drawRunRecords.back().uniformHandle;
 
-  slot.appendDrawRun(makeCanonicalDrawStateForTest(desc), secondUniform,
+  slot.appendDrawRun(makeCanonicalDrawStateForTest(desc), secondUniformPayload,
                      std::span<const DrawParam>(&draw, 1u),
                      std::span<const DrawParamPayloadView>{});
   const auto secondHandle = slot.drawRunRecords.back().uniformHandle;
@@ -742,7 +744,7 @@ void testChunkSlotUniformPayloadLookupHashCollisionKeepsDistinctPayloads() {
   check(!(firstHandle == secondHandle),
         "distinct payloads keep distinct uniform handles under hash collision");
 
-  slot.appendDrawRun(makeCanonicalDrawStateForTest(desc), firstUniform,
+  slot.appendDrawRun(makeCanonicalDrawStateForTest(desc), firstUniformPayload,
                      std::span<const DrawParam>(&draw, 1u),
                      std::span<const DrawParamPayloadView>{});
   const auto reusedHandle = slot.drawRunRecords.back().uniformHandle;
@@ -790,6 +792,381 @@ void testChunkSlotUniformStageConstantsUseCompactByteArena() {
         "compact stage storage zero-fills constants outside the stored prefix");
 }
 
+void testChunkSlotUniformStageConstantsPreserveAbiPrefixForBoolUpload() {
+  DrawDesc desc{};
+  desc.primitiveCount = 1u;
+  desc.rts.color[0] = RenderTargetAttachment{.handle = Handle{0x3000u}};
+  desc.vsConst.float4[0][0] = 42.0f;
+  desc.vsConst.float4[10][0] = 99.0f;
+  desc.vsConst.int4[2][0] = 77;
+  desc.vsConst.bools[0] = true;
+  desc.psConst.float4[0][0] = 24.0f;
+  desc.psConst.float4[7][0] = 66.0f;
+  desc.psConst.int4[1][0] = 55;
+  desc.psConst.bools[0] = true;
+
+  auto uniforms = makeDrawUniformPayload(desc);
+  uniforms.vertexFloatConstantCount = 1u;
+  uniforms.vertexIntConstantCount = 1u;
+  uniforms.vertexBoolConstantCount = 1u;
+  uniforms.pixelFloatConstantCount = 1u;
+  uniforms.pixelIntConstantCount = 1u;
+  uniforms.pixelBoolConstantCount = 1u;
+
+  const DrawParam draw = makeDrawParam(1u, 0u);
+  ChunkSlot slot{};
+  slot.appendDrawRun(makeCanonicalDrawStateForTest(desc), uniforms,
+                     std::span<const DrawParam>(&draw, 1u),
+                     std::span<const DrawParamPayloadView>{});
+
+  const auto expectedVsBytes =
+      uniforms.vsConst.float4.size() * sizeof(uniforms.vsConst.float4[0]) +
+      uniforms.vsConst.int4.size() * sizeof(uniforms.vsConst.int4[0]) +
+      sizeof(uniforms.vsConst.bools[0]);
+  const auto expectedPsBytes =
+      uniforms.psConst.float4.size() * sizeof(uniforms.psConst.float4[0]) +
+      uniforms.psConst.int4.size() * sizeof(uniforms.psConst.int4[0]) +
+      sizeof(uniforms.psConst.bools[0]);
+  checkEq(slot.drawUniformVertexConstantBytes.size(), expectedVsBytes,
+          "bool VS constants preserve the ABI prefix before bool storage");
+  checkEq(slot.drawUniformPixelConstantBytes.size(), expectedPsBytes,
+          "bool PS constants preserve the ABI prefix before bool storage");
+
+  const auto command = slot.drawRunCommandAt(0u);
+  DrawUniformPayload scratch{};
+  const auto* materialized =
+      drawRunUniformPayloadForParam(command, command.drawParams[0], scratch);
+  check(materialized != nullptr,
+        "ABI-prefix stage storage materializes a uniform payload view");
+  check(materialized->vsConst.float4[10][0] == 99.0f,
+        "ABI-prefix stage storage preserves VS float prefix values");
+  check(materialized->vsConst.int4[2][0] == 77,
+        "ABI-prefix stage storage preserves VS int prefix values");
+  check(materialized->vsConst.bools[0],
+        "ABI-prefix stage storage preserves VS bool values");
+  check(materialized->psConst.float4[7][0] == 66.0f,
+        "ABI-prefix stage storage preserves PS float prefix values");
+  check(materialized->psConst.int4[1][0] == 55,
+        "ABI-prefix stage storage preserves PS int prefix values");
+  check(materialized->psConst.bools[0],
+        "ABI-prefix stage storage preserves PS bool values");
+}
+
+void testChunkSlotUniformStageConstantsPreserveAbiPrefixForIntUpload() {
+  DrawDesc desc{};
+  desc.primitiveCount = 1u;
+  desc.rts.color[0] = RenderTargetAttachment{.handle = Handle{0x3001u}};
+  desc.vsConst.float4[0][0] = 12.0f;
+  desc.vsConst.float4[10][0] = 34.0f;
+  desc.vsConst.int4[0][0] = 56;
+  desc.psConst.float4[0][0] = 78.0f;
+  desc.psConst.float4[7][0] = 90.0f;
+  desc.psConst.int4[0][0] = 123;
+
+  auto uniforms = makeDrawUniformPayload(desc);
+  uniforms.vertexFloatConstantCount = 1u;
+  uniforms.vertexIntConstantCount = 1u;
+  uniforms.vertexBoolConstantCount = 0u;
+  uniforms.pixelFloatConstantCount = 1u;
+  uniforms.pixelIntConstantCount = 1u;
+  uniforms.pixelBoolConstantCount = 0u;
+
+  const DrawParam draw = makeDrawParam(1u, 0u);
+  ChunkSlot slot{};
+  slot.appendDrawRun(makeCanonicalDrawStateForTest(desc), uniforms,
+                     std::span<const DrawParam>(&draw, 1u),
+                     std::span<const DrawParamPayloadView>{});
+
+  const auto expectedVsBytes =
+      uniforms.vsConst.float4.size() * sizeof(uniforms.vsConst.float4[0]) +
+      sizeof(uniforms.vsConst.int4[0]);
+  const auto expectedPsBytes =
+      uniforms.psConst.float4.size() * sizeof(uniforms.psConst.float4[0]) +
+      sizeof(uniforms.psConst.int4[0]);
+  checkEq(slot.drawUniformVertexConstantBytes.size(), expectedVsBytes,
+          "int VS constants preserve the ABI prefix before int storage");
+  checkEq(slot.drawUniformPixelConstantBytes.size(), expectedPsBytes,
+          "int PS constants preserve the ABI prefix before int storage");
+
+  const auto command = slot.drawRunCommandAt(0u);
+  DrawUniformPayload scratch{};
+  const auto* materialized =
+      drawRunUniformPayloadForParam(command, command.drawParams[0], scratch);
+  check(materialized != nullptr,
+        "int ABI-prefix stage storage materializes a uniform payload view");
+  check(materialized->vsConst.float4[10][0] == 34.0f,
+        "int ABI-prefix stage storage preserves VS float prefix values");
+  check(materialized->vsConst.int4[0][0] == 56,
+        "int ABI-prefix stage storage preserves VS int values");
+  check(materialized->psConst.float4[7][0] == 90.0f,
+        "int ABI-prefix stage storage preserves PS float prefix values");
+  check(materialized->psConst.int4[0][0] == 123,
+        "int ABI-prefix stage storage preserves PS int values");
+}
+
+void testChunkSlotCompactUniformPayloadAppendMatchesFullPath() {
+  DrawDesc desc{};
+  desc.primitiveCount = 1u;
+  desc.rts.color[0] = RenderTargetAttachment{.handle = Handle{0x3002u}};
+  desc.worldViewProj.m[0] = 3.0f;
+  desc.ffpWorldView.m[5] = 4.0f;
+  desc.material.diffuse.r = 0.25f;
+  desc.vsConst.float4[0][0] = 11.0f;
+  desc.vsConst.float4[1][0] = 22.0f;
+  desc.vsConst.float4[9][0] = 99.0f;
+  desc.psConst.float4[0][0] = 33.0f;
+  desc.psConst.float4[7][0] = 77.0f;
+
+  auto uniforms = makeDrawUniformPayload(desc);
+  uniforms.vertexFloatConstantCount = 2u;
+  uniforms.vertexIntConstantCount = 0u;
+  uniforms.vertexBoolConstantCount = 0u;
+  uniforms.pixelFloatConstantCount = 1u;
+  uniforms.pixelIntConstantCount = 0u;
+  uniforms.pixelBoolConstantCount = 0u;
+
+  const DrawParam draw = makeDrawParam(1u, 0u);
+  ChunkSlot sourceSlot{};
+  sourceSlot.appendDrawRun(makeCanonicalDrawStateForTest(desc), uniforms,
+                           std::span<const DrawParam>(&draw, 1u),
+                           std::span<const DrawParamPayloadView>{});
+
+  checkEq(sourceSlot.drawUniformPayloads.size(), std::size_t{1},
+          "full path appends one source payload record");
+  const auto& sourcePayload = sourceSlot.drawUniformPayloads.front();
+  const auto* sourceFixed =
+      sourceSlot.drawUniformFixedPayloadRecord(sourcePayload.fixedHandle);
+  const auto* sourceVertex =
+      sourceSlot.drawUniformVertexConstantsRecord(
+          sourcePayload.vertexConstantsHandle);
+  const auto* sourcePixel =
+      sourceSlot.drawUniformPixelConstantsRecord(
+          sourcePayload.pixelConstantsHandle);
+  check(sourceFixed && sourceVertex && sourcePixel,
+        "full path exposes compact component records");
+
+  const auto sourceVertexBytes =
+      sourceSlot.drawUniformVertexConstantsBytes(*sourceVertex);
+  const auto sourcePixelBytes =
+      sourceSlot.drawUniformPixelConstantsBytes(*sourcePixel);
+  DrawUniformCompactPayloadView compactView{
+      .fixedPayload = &sourceFixed->payload,
+      .vertexConstants = sourceVertex->constants,
+      .vertexConstantsBytes = sourceVertexBytes,
+      .pixelConstants = sourcePixel->constants,
+      .pixelConstantsBytes = sourcePixelBytes,
+      .vertexConstantsHash = sourcePayload.vertexConstantsHash,
+      .pixelConstantsHash = sourcePayload.pixelConstantsHash,
+      .fixedPayloadHash = sourcePayload.fixedPayloadHash,
+      .hash = sourcePayload.hash,
+  };
+  check(compactView.valid(),
+        "compact view carries byte spans matching source record widths");
+
+  ChunkSlot compactSlot{};
+  const auto compactHandle = compactSlot.appendDrawUniformPayload(compactView);
+  check(compactHandle.valid(), "compact path appends a payload handle");
+  checkEq(compactSlot.drawUniformPayloads.size(), std::size_t{1},
+          "compact path appends one payload record");
+  checkEq(compactSlot.drawUniformFixedPayloads.size(), std::size_t{1},
+          "compact path appends one fixed payload record");
+  checkEq(compactSlot.drawUniformVertexConstants.size(), std::size_t{1},
+          "compact path appends one VS constants record");
+  checkEq(compactSlot.drawUniformPixelConstants.size(), std::size_t{1},
+          "compact path appends one PS constants record");
+  checkEq(compactSlot.drawUniformVertexConstantBytes.size(),
+          sourceVertexBytes.size(),
+          "compact path stores the same VS stage byte width");
+  checkEq(compactSlot.drawUniformPixelConstantBytes.size(),
+          sourcePixelBytes.size(),
+          "compact path stores the same PS stage byte width");
+
+  const auto reusedHandle = compactSlot.findDrawUniformPayload(compactView);
+  checkEq(reusedHandle, compactHandle,
+          "compact lookup reuses the semantically matching payload");
+
+  MetalCommandView command{};
+  command.drawUniformFixedPayloadRecords =
+      std::span<const DrawUniformFixedPayloadRecord>(
+          compactSlot.drawUniformFixedPayloads.data(),
+          compactSlot.drawUniformFixedPayloads.size());
+  command.drawUniformVertexConstantsRecords =
+      std::span<const DrawUniformVertexConstantsRecord>(
+          compactSlot.drawUniformVertexConstants.data(),
+          compactSlot.drawUniformVertexConstants.size());
+  command.drawUniformVertexConstantBytes =
+      std::span<const u8>(compactSlot.drawUniformVertexConstantBytes.data(),
+                          compactSlot.drawUniformVertexConstantBytes.size());
+  command.drawUniformPixelConstantsRecords =
+      std::span<const DrawUniformPixelConstantsRecord>(
+          compactSlot.drawUniformPixelConstants.data(),
+          compactSlot.drawUniformPixelConstants.size());
+  command.drawUniformPixelConstantBytes =
+      std::span<const u8>(compactSlot.drawUniformPixelConstantBytes.data(),
+                          compactSlot.drawUniformPixelConstantBytes.size());
+  command.drawUniformPayloadRecords =
+      std::span<const DrawUniformPayloadRecord>(
+          compactSlot.drawUniformPayloads.data(),
+          compactSlot.drawUniformPayloads.size());
+
+  DrawUniformPayload scratch{};
+  const auto* materialized =
+      drawRunUniformPayloadForHandle(command, compactHandle, scratch);
+  check(materialized != nullptr,
+        "compact payload records materialize a legacy uniform payload");
+  check(materialized->worldViewProj.m[0] == 3.0f,
+        "compact fixed payload preserves world-view-projection fields");
+  check(materialized->material.diffuse.r == 0.25f,
+        "compact fixed payload preserves material fields");
+  check(materialized->vsConst.float4[0][0] == 11.0f,
+        "compact VS payload preserves the first stored float constant");
+  check(materialized->vsConst.float4[1][0] == 22.0f,
+        "compact VS payload preserves the last stored float constant");
+  check(materialized->vsConst.float4[9][0] == 0.0f,
+        "compact VS payload zero-fills outside the stored prefix");
+  check(materialized->psConst.float4[0][0] == 33.0f,
+        "compact PS payload preserves the stored float constant");
+  check(materialized->psConst.float4[7][0] == 0.0f,
+        "compact PS payload zero-fills outside the stored prefix");
+  checkEq(materialized->hash, uniforms.hash,
+          "compact materialization preserves the payload hash");
+}
+
+void testChunkSlotDrawRunBatchConsumesCompactUniformSubmission() {
+  DrawDesc desc{};
+  desc.primitiveCount = 1u;
+  desc.vsConst.float4[0] = {3.0f, 4.0f, 5.0f, 6.0f};
+  desc.vsConst.bools[0] = true;
+  desc.psConst.float4[0] = {7.0f, 8.0f, 9.0f, 10.0f};
+  desc.psConst.int4[0] = {11, 12, 13, 14};
+  desc.material.diffuse = ColorRGBA{0.2f, 0.4f, 0.6f, 1.0f};
+
+  auto uniforms = makeDrawUniformPayload(desc);
+  uniforms.vertexFloatConstantCount = 1u;
+  uniforms.vertexIntConstantCount = 0u;
+  uniforms.vertexBoolConstantCount = 1u;
+  uniforms.pixelFloatConstantCount = 1u;
+  uniforms.pixelIntConstantCount = 1u;
+  uniforms.pixelBoolConstantCount = 0u;
+
+  const DrawParam draw = makeDrawParam(1u, 0u);
+  ChunkSlot sourceSlot{};
+  sourceSlot.appendDrawRun(makeCanonicalDrawStateForTest(desc), uniforms,
+                           std::span<const DrawParam>(&draw, 1u),
+                           std::span<const DrawParamPayloadView>{});
+
+  const auto& sourcePayload = sourceSlot.drawUniformPayloads.front();
+  const auto* sourceFixed =
+      sourceSlot.drawUniformFixedPayloadRecord(sourcePayload.fixedHandle);
+  const auto* sourceVertex =
+      sourceSlot.drawUniformVertexConstantsRecord(
+          sourcePayload.vertexConstantsHandle);
+  const auto* sourcePixel =
+      sourceSlot.drawUniformPixelConstantsRecord(
+          sourcePayload.pixelConstantsHandle);
+  check(sourceFixed && sourceVertex && sourcePixel,
+        "compact batch source exposes component records");
+
+  DrawSubmissionUniformScratch scratch{};
+  scratch.fixedPayloads.push_back(sourceFixed->payload);
+  const auto sourceVertexBytes =
+      sourceSlot.drawUniformVertexConstantsBytes(*sourceVertex);
+  const auto sourcePixelBytes =
+      sourceSlot.drawUniformPixelConstantsBytes(*sourcePixel);
+  scratch.stageBytes.insert(scratch.stageBytes.end(),
+                            sourceVertexBytes.begin(),
+                            sourceVertexBytes.end());
+  scratch.stageBytes.insert(scratch.stageBytes.end(),
+                            sourcePixelBytes.begin(),
+                            sourcePixelBytes.end());
+
+  DrawUniformCompactSubmissionPayload compact{};
+  compact.fixedPayloadIndex = 0u;
+  compact.vertexConstants = sourceVertex->constants;
+  compact.vertexConstants.byteOffset = 0u;
+  compact.vertexConstantsRange = DrawPayloadRange{
+      .offset = 0u,
+      .size = static_cast<u32>(sourceVertexBytes.size()),
+  };
+  compact.pixelConstants = sourcePixel->constants;
+  compact.pixelConstants.byteOffset = compact.vertexConstantsRange.size;
+  compact.pixelConstantsRange = DrawPayloadRange{
+      .offset = compact.vertexConstantsRange.size,
+      .size = static_cast<u32>(sourcePixelBytes.size()),
+  };
+  compact.vertexConstantsHash = sourcePayload.vertexConstantsHash;
+  compact.pixelConstantsHash = sourcePayload.pixelConstantsHash;
+  compact.fixedPayloadHash = sourcePayload.fixedPayloadHash;
+  compact.hash = sourcePayload.hash;
+
+  DrawRunSubmission submission{};
+  submission.state = makeCanonicalDrawStateForTest(desc);
+  submission.compactUniforms = compact;
+  submission.compactUniformArena = DrawUniformCompactPayloadArenaView{
+      .fixedPayloads =
+          std::span<const DrawUniformFixedPayload>(scratch.fixedPayloads.data(),
+                                                   scratch.fixedPayloads.size()),
+      .stageBytes =
+          std::span<const u8>(scratch.stageBytes.data(), scratch.stageBytes.size()),
+  };
+  submission.draw = draw;
+  submission.uniformGeneration = 1u;
+  submission.stateGeneration = 1u;
+  submission.stateLane = DrawRunSubmissionStateLane::BindingAgnostic;
+  submission.stateMaterialized = true;
+
+  ChunkSlot compactBatchSlot{};
+  compactBatchSlot.appendDrawRunBatch(
+      std::span<DrawRunSubmission>(&submission, 1u));
+  checkEq(compactBatchSlot.commandCount(), std::size_t{1},
+          "compact batch submission appends one draw-run command");
+  checkEq(compactBatchSlot.drawUniformPayloads.size(), std::size_t{1},
+          "compact batch submission appends one uniform payload record");
+
+  const auto command = compactBatchSlot.drawRunCommandAt(0u);
+  DrawUniformPayload materialized{};
+  const auto* resolved = drawRunUniformPayloadForHandle(
+      command, command.drawRunRecord->uniformHandle, materialized);
+  check(resolved != nullptr,
+        "compact batch submission resolves the command uniform payload");
+  checkEq(resolved->hash, uniforms.hash,
+          "compact batch submission preserves the uniform payload hash");
+  checkEq(resolved->vertexConstantsHash, uniforms.vertexConstantsHash,
+          "compact batch submission preserves the VS constants hash");
+  checkEq(resolved->pixelConstantsHash, uniforms.pixelConstantsHash,
+          "compact batch submission preserves the PS constants hash");
+  checkEq(resolved->fixedPayloadHash, uniforms.fixedPayloadHash,
+          "compact batch submission preserves the fixed payload hash");
+  checkEq(resolved->material.diffuse, uniforms.material.diffuse,
+          "compact batch submission preserves fixed material data");
+  checkEq(resolved->vertexFloatConstantCount,
+          sourceVertex->constants.floatCount,
+          "compact batch submission materializes the VS float count");
+  checkEq(resolved->vertexIntConstantCount,
+          sourceVertex->constants.intCount,
+          "compact batch submission materializes the VS int count");
+  checkEq(resolved->vertexBoolConstantCount,
+          sourceVertex->constants.boolCount,
+          "compact batch submission materializes the VS bool count");
+  checkEq(resolved->pixelFloatConstantCount,
+          sourcePixel->constants.floatCount,
+          "compact batch submission materializes the PS float count");
+  checkEq(resolved->pixelIntConstantCount,
+          sourcePixel->constants.intCount,
+          "compact batch submission materializes the PS int count");
+  checkEq(resolved->pixelBoolConstantCount,
+          sourcePixel->constants.boolCount,
+          "compact batch submission materializes the PS bool count");
+  checkEq(resolved->vsConst.float4[0], uniforms.vsConst.float4[0],
+          "compact batch submission preserves the first VS float constant");
+  checkEq(resolved->vsConst.bools[0], uniforms.vsConst.bools[0],
+          "compact batch submission preserves the first VS bool constant");
+  checkEq(resolved->psConst.float4[0], uniforms.psConst.float4[0],
+          "compact batch submission preserves the first PS float constant");
+  checkEq(resolved->psConst.int4[0], uniforms.psConst.int4[0],
+          "compact batch submission preserves the first PS int constant");
+}
+
 void testDrawRunBatchBindingOverrideNormalizesStreamAndIndexState() {
   DrawDesc desc{};
   desc.primitiveCount = 1u;
@@ -829,16 +1206,17 @@ void testDrawRunBatchBindingOverrideNormalizesStreamAndIndexState() {
   secondState.hot.key.vertexConstantsHash = secondState.hot.vertexConstantsHash;
   secondState.hot.key.pixelConstantsHash = secondState.hot.pixelConstantsHash;
   secondState.hot.key.worldViewProjHash = secondState.hot.worldViewProjHash;
+  auto uniform = makeDrawUniformPayload(desc);
 
   std::array<DrawRunSubmission, 2> submissions{
       DrawRunSubmission{
           .state = firstState,
-          .uniforms = makeDrawUniformPayload(desc),
+          .uniforms = uniform,
           .draw = makeDrawParam(1u, 0u),
       },
       DrawRunSubmission{
           .state = secondState,
-          .uniforms = makeDrawUniformPayload(desc),
+          .uniforms = uniform,
           .draw = makeDrawParam(1u, 3u),
       },
   };
@@ -916,16 +1294,18 @@ void testChunkSlotDrawRunBatchKeepsElidedNonFrontDrawData() {
   DrawDesc secondDesc = desc;
   firstDesc.vsConst.float4[0][0] = 17.0f;
   secondDesc.vsConst.float4[0][0] = 23.0f;
+  auto firstUniformPayload = makeDrawUniformPayload(firstDesc);
+  auto secondUniformPayload = makeDrawUniformPayload(secondDesc);
 
   std::array<DrawRunSubmission, 2> submissions{};
   submissions[0].state = makeCanonicalDrawStateForTest(desc);
-  submissions[0].uniforms = makeDrawUniformPayload(firstDesc);
+  submissions[0].uniforms = firstUniformPayload;
   submissions[0].draw = makeDrawParam(1u, 0u);
   submissions[0].stateGeneration = 11u;
   submissions[0].stateLane = DrawRunSubmissionStateLane::BindingAgnostic;
   submissions[0].stateMaterialized = true;
 
-  submissions[1].uniforms = makeDrawUniformPayload(secondDesc);
+  submissions[1].uniforms = secondUniformPayload;
   submissions[1].draw = makeDrawParam(1u, 3u);
   submissions[1].stateGeneration = submissions[0].stateGeneration;
   submissions[1].stateLane = submissions[0].stateLane;
@@ -945,17 +1325,17 @@ void testChunkSlotDrawRunBatchKeepsElidedNonFrontDrawData() {
   const auto command = slot.drawRunCommandAt(0u);
   DrawUniformPayload firstUniformScratch{};
   DrawUniformPayload secondUniformScratch{};
-  const auto* firstUniform =
+  const auto* firstResolvedUniform =
       drawRunUniformPayloadForParam(command, command.drawParams[0],
                                     firstUniformScratch);
-  const auto* secondUniform =
+  const auto* secondResolvedUniform =
       drawRunUniformPayloadForParam(command, command.drawParams[1],
                                     secondUniformScratch);
-  check(firstUniform && secondUniform,
+  check(firstResolvedUniform && secondResolvedUniform,
         "elided non-front batch keeps per-draw uniform handles");
-  check(firstUniform->vsConst.float4[0][0] == 17.0f,
+  check(firstResolvedUniform->vsConst.float4[0][0] == 17.0f,
         "front draw keeps its uniform payload");
-  check(secondUniform->vsConst.float4[0][0] == 23.0f,
+  check(secondResolvedUniform->vsConst.float4[0][0] == 23.0f,
         "elided non-front draw keeps its uniform payload");
 }
 
@@ -964,10 +1344,11 @@ void testChunkSlotDrawRunBatchReusesElidedUniformPayload() {
   desc.primitiveCount = 1u;
   desc.rts.color[0] = RenderTargetAttachment{.handle = Handle{0x3000u}};
   desc.vsConst.float4[0][0] = 31.0f;
+  auto uniform = makeDrawUniformPayload(desc);
 
   std::array<DrawRunSubmission, 2> submissions{};
   submissions[0].state = makeCanonicalDrawStateForTest(desc);
-  submissions[0].uniforms = makeDrawUniformPayload(desc);
+  submissions[0].uniforms = uniform;
   submissions[0].draw = makeDrawParam(1u, 0u);
   submissions[0].stateGeneration = 41u;
   submissions[0].uniformGeneration = 59u;
@@ -1047,6 +1428,10 @@ int main() {
     testChunkSlotDrawRunBatchKeepsPerDrawUniformPayloads();
     testChunkSlotUniformPayloadLookupHashCollisionKeepsDistinctPayloads();
     testChunkSlotUniformStageConstantsUseCompactByteArena();
+    testChunkSlotUniformStageConstantsPreserveAbiPrefixForBoolUpload();
+    testChunkSlotUniformStageConstantsPreserveAbiPrefixForIntUpload();
+    testChunkSlotCompactUniformPayloadAppendMatchesFullPath();
+    testChunkSlotDrawRunBatchConsumesCompactUniformSubmission();
     testDrawRunBatchBindingOverrideNormalizesStreamAndIndexState();
     testChunkSlotDrawRunBatchKeepsElidedNonFrontDrawData();
     testChunkSlotDrawRunBatchReusesElidedUniformPayload();

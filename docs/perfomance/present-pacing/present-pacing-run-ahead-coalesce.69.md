@@ -6,22 +6,30 @@ order: 69
 title: Run-Ahead Coalescing Creates Overlap but Fails Locality
 date: 2026-06-16
 type: experiment-run
-status: accepted-mechanism-rejected-current-carrier
+status: accepted-mechanism-rejected-prototype-carrier
 source: experiments/output/app-d3d9-3dmark05-runahead-coalesce-baseline-r1/result.json; experiments/output/app-d3d9-3dmark05-runahead-coalesce-baseline-r1/3dmark05-perf-summary.md; experiments/output/app-d3d9-3dmark05-runahead-coalesce-on-r2/result.json; experiments/output/app-d3d9-3dmark05-runahead-coalesce-on-r2/3dmark05-perf-summary.md; traces/app-d3d9-3dmark05-runahead-coalesce-on-r2/analysis/frame60-perf-counter-comparison.md
 related: docs/perfomance/present-pacing/present-pacing-run-ahead-design.68.md, docs/perfomance/present-pacing/present-pacing-overlap-locality-gates.51.md, specs/backend/design.md, specs/backend/requirements.md
 ---
 
 # Present Pacing 69 - Run-Ahead Coalescing Creates Overlap but Fails Locality
 
+Current-code note (2026-06-18): this document is historical experiment
+evidence. The prototype implementation and env knobs were later reverted, and
+current HEAD no longer honors `DXMT9_OFFSCREEN_RUN_AHEAD`,
+`DXMT9_ENCODE_COALESCE_READY_SLOTS`, or
+`DXMT9_ENCODE_COALESCE_READY_SLOT_LIMIT`. See
+[[present-pacing-run-ahead-current-code.73]] before scheduling any follow-up
+run.
+
 ## Question
 
-After implementing `DXMT9_OFFSCREEN_RUN_AHEAD` plus encode-side ready-slot
-coalescing, does the new path recover P4 overlap without breaking the H57
-Metal locality gates?
+In the historical `DXMT9_OFFSCREEN_RUN_AHEAD` plus encode-side ready-slot
+coalescing prototype, did the new path recover P4 overlap without breaking the
+H57 Metal locality gates?
 
 ## Verdict
 
-The mechanism works, but the current carrier is rejected.
+The mechanism worked, but the prototype carrier was rejected.
 
 Present completion wait almost disappears, and the completion watcher now sees
 substantial enqueue overlap during waits. However, the implementation creates
@@ -29,10 +37,10 @@ many more Metal command buffers per present, raises total completion wait, and
 greatly increases GPU command-buffer time. This is the same class of failure as
 the draw-count publish experiments, only through a different early-publish
 path: P4 overlap is reachable, but the current ready-slot publication/coalescing
-shape does not preserve Metal command-buffer locality.
+shape did not preserve Metal command-buffer locality.
 
-Restoring `command_buffers_per_present` near baseline is a promotion gate, not
-an FPS proof by itself. A successful follow-up must also reduce
+Restoring `command_buffers_per_present` near baseline remains a promotion gate,
+not an FPS proof by itself. A successful follow-up must also reduce
 `wait -> next enqueue`, total completion wait, or actual wallclock/frame cadence.
 
 ## Runs

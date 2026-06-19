@@ -93,8 +93,47 @@ GPU frame-time story is owned by [[hidden-backend-storage]] /
 | H71 | Exact between-calls names identify VS const setters and IB desc getters | accepted attribution refinement | [[present-pacing-pe-between-call-name.66]] adds exact call-name buckets for the same H69 windows. The largest row, `draw_indexed -> set_vs_const_f`, is `15.912ms/present` between-calls with `SetVertexShaderConstantF=3,489.217` entries/present and `IndexBuffer::GetDesc=902.976` entries/present. `draw_indexed -> draw_indexed` is led by `IndexBuffer::GetDesc=374.757` entries/present, while `draw_indexed -> apply_state` splits into `SetRenderTarget` and nested `Surface::GetDesc`. This promotes PE child desc caching / getter fast paths as the next local P2/P3 candidate, alongside const traffic compression. |
 | H72 | PE child desc caching is a local cleanup, not the current average-FPS lever | rejected average-FPS lever; cleanup accepted | [[present-pacing-pe-desc-cache.67]] caches immutable buffer/surface descs in PE child wrappers and reruns the H71 no-gputrace scout. The local focused rows move slightly (`draw_indexed -> set_vs_const_f` `15.912 -> 15.345ms/present`, `draw_indexed -> draw_indexed` `3.873 -> 3.669`, `draw_indexed -> apply_state` `6.839 -> 6.772`), but aggregate P2/P3/P4 rows stay flat (`completion_wait_without_enqueue` `27.326 -> 27.472ms/present`, replay `7.887 -> 7.871`, encode `10.959 -> 11.020`, overlap `0`). Keep desc caching as a hot-path cleanup, but return average-FPS focus to constant traffic compression or locality-preserving run-ahead. |
 | H73 | Run-ahead must decouple logical readiness from Metal command-buffer publication | accepted design gate | [[present-pacing-run-ahead-design.68]] combines the current low-overhead baseline, direct-cbuf repeat, draw-count publish A/B, locality gates, and queue code inspection. In the current queue shape, `CommitPublish` makes one ready `ChunkSlot`, and `encodeChunk()` turns that slot into one Metal command buffer. Simple early publish therefore recovers overlap by creating more command buffers/render-pass splits/tile preservation, which is the known-bad carrier. The next FPS-facing design must use CPU run-ahead staging, encode-side multi-slot coalescing, or a tightly gated render-pass-boundary publish experiment that preserves command-buffer and tile locality. |
-| H74 | Current run-ahead/coalescing implementation proves overlap but fails locality | accepted mechanism; rejected current carrier | [[present-pacing-run-ahead-coalesce.69]] runs `DXMT9_OFFSCREEN_RUN_AHEAD=1 DXMT9_ENCODE_COALESCE_READY_SLOTS=1 DXMT9_ENCODE_COALESCE_READY_SLOT_LIMIT=4` against a fresh baseline. Present wait collapses (`completion_present_wait_ms_per_present` `29.839 -> 0.202`), overlap rises (`completion_wait_with_enqueue_ms_per_present` `1.915 -> 20.855`), and no-enqueue wait falls (`27.924 -> 16.135`). But total completion wait worsens (`29.839 -> 36.990`), command buffers per present explode (`3.999 -> 19.156`), GPU command-buffer time rises (`3.718 -> 35.197ms/present`), and `chunk_publish_reason_draw_limit` becomes `15852`. The path validates H73's design constraint; it is not an FPS promotion. |
-| H75 | CPU-ready staging restores much of the CB shape but misses FPS and correctness gates | accepted locality refinement; rejected current promotion | [[present-pacing-run-ahead-cpu-ready.70]] reruns the same env after R-BACK-2.40 CPU-ready staging and stronger encode grouping. It improves the carrier versus prior coalescing (`command_buffers_per_present` `19.156 -> 5.741`, `sub_command_buffers_per_present` `10.394 -> 1.287`) and keeps present wait near zero (`0.116ms/present`). However, versus baseline it still raises CBs (`3.999 -> 5.741`), worsens total completion wait (`29.839 -> 40.347ms/present`), worsens wait-to-next-enqueue (`31.632 -> 52.724ms/present`), and inflates commit replay (`8.363 -> 40.441ms/present`). Its `actual.png` also has a large black vertical scene artifact, so `status=pass` is not a visual smoke pass. CB locality recovery is necessary but not sufficient; the next split must explain replay/staging cost and total cadence, and remove the visual artifact, before FPS promotion. |
+| H74 | Historical run-ahead/coalescing prototype proves overlap but fails locality | accepted mechanism; rejected prototype carrier | [[present-pacing-run-ahead-coalesce.69]] ran `DXMT9_OFFSCREEN_RUN_AHEAD=1 DXMT9_ENCODE_COALESCE_READY_SLOTS=1 DXMT9_ENCODE_COALESCE_READY_SLOT_LIMIT=4` against a fresh baseline. Present wait collapsed (`completion_present_wait_ms_per_present` `29.839 -> 0.202`), overlap rose (`completion_wait_with_enqueue_ms_per_present` `1.915 -> 20.855`), and no-enqueue wait fell (`27.924 -> 16.135`). But total completion wait worsened (`29.839 -> 36.990`), command buffers per present exploded (`3.999 -> 19.156`), GPU command-buffer time rose (`3.718 -> 35.197ms/present`), and `chunk_publish_reason_draw_limit` became `15852`. The path validated H73's design constraint; it was not an FPS promotion and has since been reverted. See H78 before scheduling any follow-up run. |
+| H75 | Historical CPU-ready staging restores much of the CB shape but misses FPS and correctness gates | accepted locality refinement; rejected prototype promotion | [[present-pacing-run-ahead-cpu-ready.70]] reran the same prototype env after R-BACK-2.40 CPU-ready staging and stronger encode grouping. It improved the carrier versus prior coalescing (`command_buffers_per_present` `19.156 -> 5.741`, `sub_command_buffers_per_present` `10.394 -> 1.287`) and kept present wait near zero (`0.116ms/present`). However, versus baseline it still raised CBs (`3.999 -> 5.741`), worsened total completion wait (`29.839 -> 40.347ms/present`), worsened wait-to-next-enqueue (`31.632 -> 52.724ms/present`), and inflated commit replay (`8.363 -> 40.441ms/present`). Its `actual.png` also had a large black vertical scene artifact, so `status=pass` was not a visual smoke pass. CB locality recovery is necessary but not sufficient; the next split must explain replay/staging cost and total cadence, and remove the visual artifact, before FPS promotion. The implementation has since been reverted; see H78. |
+| H76 | Current low-overhead baseline after uniform ABI-prefix fix keeps the same P2/P3/P4 owner split | accepted current baseline | [[present-pacing-current-lowoverhead.71]] runs the current default no-gputrace scout after restoring compact-uniform ABI-prefix correctness. It is clean (`draw_skipped_no_pipeline=0`, `gpu_command_buffer_errors=0`) and records sampled avg FPS `16.395`, `completion_wait_ms_per_present=28.287`, no-enqueue share `98.721%`, replay `8.195ms/present`, snapshot lookup `2.470ms/present`, encode chunk `11.403ms/present`, and encode draw `8.710ms/present`. Verdict remains `under-pipelined-no-enqueue`; the largest p50 no-enqueue stage is `encode dequeue -> command buffer commit`, while replay/snapshot remains a parallel CPU owner. |
+| H77 | Current PE between-call attribution still points at producer cadence, not GPU or publish wait | accepted current attribution | [[present-pacing-pe-between-call-current.72]] reruns `DXMT9_PE_RECORDER_STATS=1` after the uniform ABI-prefix fix. The run is fully no-enqueue (`completion_wait_with_enqueue=0`) and exposes `commit entry -> publish=29.079ms/present`; completed replay explains `5.054ms/present`, active replay and publish wait are effectively zero, and inter-replay producer gap explains `24.077ms/present` (`82.798%`). Exact between-call names still match H71: `draw_indexed -> set_vs_const_f` is led by `SetVertexShaderConstantF=3444.356` entries/present and `IndexBuffer::GetDesc=890.576`, while desc caching is already classified as cleanup-only by H72. |
+| H78 | Current HEAD has no runnable run-ahead/coalescing knob | accepted current-code audit | [[present-pacing-run-ahead-current-code.73]] verifies that the historical H74/H75 prototype code was reverted. Current source no longer reads `DXMT9_OFFSCREEN_RUN_AHEAD`, `DXMT9_ENCODE_COALESCE_READY_SLOTS`, or `DXMT9_ENCODE_COALESCE_READY_SLOT_LIMIT`; `runEncodeIteration()` still calls the backend once. The queue now has `dequeueReadySlotBatch()` plus a `completionSources` carrier so a future coalesced Metal tail can move several ready slots into `Encoding` and later expand completion into strict-order source seqIds; debug invariants require those source slots to be `Encoding` with matching seqIds before submit. No current backend path fills it from multiple ready slots. Keep H74/H75 as mechanism lessons, but treat any new P4 overlap work as a fresh R-BACK-2.35-R-BACK-2.41 implementation, not as tuning an available env knob. |
+| H79 | Current native-producer System Trace still does not support broad winemac `OnMainThread` as the average-FPS owner | negative scout; P2/P3/P4 split retained | [[present-pacing-native-selector-current.79]] repeats the same-run native selector after the compact-uniform ABI-prefix correctness fix and `v0.0.3` visual-anchor correction. The selected native producer `0xafdc90` is sampled Running in `10414 / 10414` rows with `0` producer wait or holder keyword hits; `CAMetalLayer` / `presentDrawable` hits occur only on non-producer threads. The run remains fully no-enqueue (`completion_wait_with_enqueue_ms=0`), with `completion_wait_ms/present=26.668`, GPU CB time `3.037ms/present`, replay `8.244ms/present`, and encode chunk `13.101ms/present`. The first r1 sidecar also proved the old `2048MiB` System Trace guard too low: `xctrace` failed during trim at about `2.4GiB` free, so the guard is now `4096MiB`. |
+| H80 | A/B reports and gates should expose the no-enqueue before-publish closure directly | accepted tooling | [[present-pacing-noenqueue-compare-closure.80]] extends `compare_3dmark05_perf_counters.py` with completed replay, active replay, inter-replay gap, publish wait, closure, residual, share, and before-publish chunk/record shape metrics, then wires `--require-no-enqueue-before-publish-closure-decrease` and `--require-no-enqueue-before-publish-inter-replay-gap-decrease` through the probe wrapper/finalizer. The `v0.0.3`-anchored current setter-range scout sanity check shows why this matters: replay and encode CPU stay flat, while `no_enqueue_before_publish_closure_ms_per_present` worsens `15.831 -> 17.419`, dominated by inter-replay gap `11.879 -> 13.285`. Future P4 reviews can now reject local CPU wins that leave the before-publish closure flat or worse without manually comparing two summaries. |
+| H81 | P4 overlap candidates should prove ready-slot backlog, not only local CPU movement | accepted tooling | [[present-pacing-ready-depth-compare.81]] promotes existing `encode_dequeue_ready_depth_*` counters into A/B derived rows (`encode_ready_depth_avg`, `encode_ready_depth_gt1_per_present`, and backlog-share percentages) and adds `--require-encode-ready-depth-gt1-increase` through the compare script, probe wrapper, and finalizer. This is a necessary signal for CPU-ready/run-ahead/multi-slot candidates: overlap should create more than one ready slot before encode pop, while H57 locality gates still keep command-buffer/render-pass/tile shape flat. |
+| H82 | The current batch completion carrier is not a standalone FPS lever | rejected standalone lever; design prerequisite retained | [[present-pacing-batch-carrier-current.82]] combines a current run gated by the `v0.0.3` visual anchor, the PE between-call scout comparison, and queue code audit. `encode_ready_depth_avg` remains `1.000`, `encode_ready_depth_gt1_per_present=0`, and the production loop still calls `runEncodeIteration()` / one `backend_->onChunkReady()` per ready slot. The `completionSources` carrier is useful for a future coalesced-tail path, but calling the batch helper without CPU-ready/run-ahead staging would almost always hand the backend a single source and would not move `completion_wait_with_enqueue`, `completion_wait_without_enqueue`, or the no-enqueue before-publish closure. |
+| H83 | Completion-wait overlap now distinguishes absent producer from replay-without-enqueue | accepted tooling | [[present-pacing-completion-wait-overlap-counters.83]] adds `completion_wait_commit_chunk_entries`, `completion_wait_commit_chunk_replay_starts`, `completion_wait_commit_chunk_replay_ends`, and `completion_wait_commit_chunk_replay_cpu_ms`, plus per-present rows in the summary/compare scripts. This closes the P4 attribution gap left by `completion_wait_with_enqueue=0`: if the new rows are zero, the producer/app cadence did not reach unix `commit_chunk` during the watcher wait; if they are nonzero but enqueue remains zero, the owner moves to publish/ready-slot/encode handoff or CPU-ready staging. |
+| H84 | Current GT1 producer overlaps completion wait but publish is effectively present-gated | accepted attribution | [[present-pacing-completion-wait-overlap-current.84]] runs the H83 no-gputrace scout. During completion waits, producer activity is not absent: `completion_wait_commit_chunk_entries_per_present=10.574`, `completion_wait_commit_chunk_replay_ends_per_present=10.372`, and `completion_wait_commit_chunk_replay_cpu_ms_per_present=3.695`. Yet `completion_wait_with_enqueue_ms_per_present` is only `0.031`, ready depth remains `1.000` with `encode_ready_depth_gt1_per_present=0`, and publish reasons are all `Present` (`chunk_publish_reason_present=1800`, draw/payload/flush publish reasons `0`). The current P4 owner is therefore present-gated publication of already replayed draw work, not producer absence. |
+| H85 | Publish residency counters expose how long work sits in the writing slot before publication | accepted tooling; measured current shape | [[present-pacing-publish-residency-counters.85]] adds first-command-to-publish residency counters split into total, present, and non-present reason buckets. The `h85-publish-residency-r1` no-gputrace run confirms the counter is live and reinforces H84: all `1800` samples are present-bucket residency, `chunk_publish_slot_residency_present_ms_per_present=35.647`, non-present residency is `0`, publish reasons are all `Present`, ready depth remains `1.000`, and completion wait remains no-enqueue dominated. The new summary/compare rows turn present-gated publication into a direct gate for future P4 candidates. |
+| H86 | Present-published slots are tail-Present opportunities, not bare Present waits | accepted attribution | [[present-pacing-pre-present-opportunity.86]] adds observation-only counters for work before the first `Present` command in Present-published slots. The `h86-pre-present-opportunity-r1` no-gputrace run shows every frame has exactly one opportunity slot and every one is tail-Present: `slots_per_present=1.000`, `tail_slot_share=100%`, `commands_per_slot=328.962`, `draw_runs_per_slot=325.024`, `draw_items_per_slot=738.675`, `payload_mib=340.667`, and `residency_ms_per_present=35.649`. This makes the next P4 target a logical CPU-ready split at the tail Present boundary with encode-side coalescing, while preserving the H74/H75 locality gates. |
+| H87 | Existing present split is not the tail-Present CPU-ready carrier | accepted design gate; contract step built | [[present-pacing-tail-present-staging-current.87]] audits `submitPresent()`, the queue batch carrier, and backend ABI after H86. `DXMT9_SPLIT_PRESENT_CHUNK` publishes the pre-Present writing slot and then a separate Present slot, so it remains a diagnostic split/CB-shape probe rather than a promotion candidate. This step adds the neutral API contract (`IRenderBackend::onChunkBatchReady` and `CommandQueue::runEncodeBatchLoop`) while keeping production single-source encode byte-identical. The next runtime implementation needs CPU-ready tail-Present staging that can feed a real multi-source backend encode and still expand completion through `completionSources`, gated by H57/H80/H81/H86 and the `v0.0.3` visual-safe anchor. |
+| H88 | Tail-Present batch carrier keeps ready-depth, but same-day r4 rejects it as the FPS/P4 fix | mechanism accepted; FPS rejected | [[present-pacing-tail-present-batch-current.88]] adds `DXMT9_ENCODE_TAIL_PRESENT_BATCH=1`, a ready-slot batch selector that only accepts `non-present head + Present-only tail`, and shared Traditional/FrameGraph backend handling that encodes those two sources as one tail Metal submission with expanded `completionSources`. r2 proved the intended surface but exposed a missing-prefetch bug: `encode_ready_depth_avg` became `2.000`, while `encode_slot_pso_prefetch_commands_per_present` fell to `0` and `encode_draw_pipeline_lookup_cpu_ms_per_present` regressed `0.568 -> 2.986`. r3 restores combined-slot PSO prefetch after appending the Present command, recovering prefetch commands to `328.198/present`, pipeline lookup to `0.540ms/present`, and encode chunk to `11.111ms/present`. The stronger same-day r4 comparison rejects promotion: ready depth still becomes `2.000` and CB/pass locality is flat (`3.999` CB/present, passes `11.781 -> 11.688`), but `completion_wait_without_enqueue` worsens `26.566 -> 26.693ms/present`, overlap disappears `0.374 -> 0.000ms/present`, encode chunk worsens `11.266 -> 11.467ms/present`, no-enqueue closure worsens `15.832 -> 16.921ms/present`, wait-to-next-enqueue worsens `33.043 -> 34.396ms/present`, and both screenshots show HUD `FPS: 11`. Keep the carrier/test contract; return average-FPS work to serial cadence reduction or a larger overlap design that actually reduces no-enqueue closure. |
+| H89 | Current frontier after H88 is serial cadence/P4 gate first, Xcode only after no-gputrace movement | accepted current frontier | [[present-pacing-current-frontier.89]] consolidates the latest `v0.0.3`-anchored evidence. The r2 Xcode frame60 capture still confirms the GPU hot-frame lane (`36.183ms`, top-three share `98.33%`, VS write `1779.229 MiB`, hidden backend write `1749.865 MiB`), but H88 rejects the nearest average-FPS carrier: ready depth improves `1.000 -> 2.000` with CB/pass locality flat, while no-enqueue closure worsens `15.832 -> 16.921ms/present` and `wait -> next enqueue` worsens `33.043 -> 34.396ms/present`. Next average-FPS work should reduce replay/snapshot uniform hash/append cadence or produce a larger overlap design that lowers no-enqueue closure while preserving H57 locality and the `v0.0.3` visual gate; do not spend another `.gputrace` on CPU attribution alone. |
+| H90 | Current PE cadence refresh still names producer gap, not compact uniform or publish wait | accepted current attribution | [[present-pacing-current-pe-cadence.90]] reruns `DXMT9_PE_RECORDER_STATS=1` after the compact breakdown timer gate. The run is fully no-enqueue (`completion_wait_with_enqueue=0`) and records `completion_wait=28.047ms/present`, `commit entry -> publish=29.240ms/present`, completed replay `5.053ms/present`, inter-replay producer gap `24.279ms/present` (`83.031%`), and publish wait effectively `0`. PE top pairs remain draw/const heavy: `draw_indexed -> set_vs_const_f=19.790ms/present`, `draw_indexed -> apply_state=7.229`, `draw_indexed -> draw_indexed=5.577`, and `draw_indexed -> set_ps_const_f=3.831`; phase/tail split says most of those gaps are between-call producer cadence, not append body CPU. `Set*Constant` stays PE-shadow-only and setter bodies are too small to explain the gap, so keep the next average-FPS target on draw/const record cadence that moves P4 or a larger locality-preserving overlap design; no CPU-only `.gputrace` spend. |
+| H91 | Larger PE chunks reduce bridge count but do not recover P4 overlap | rejected simple chunk-size lever | [[present-pacing-pe-chunk-large-current.91]] reruns H90 with `DXMT9_PE_CHUNK_MAX_RECORDS=128` and `DXMT9_PE_CHUNK_MAX_BYTES=524288`. The knob reaches the recorder (`recordCountMax=128`, `payloadBytesMax=498,272`) and cuts commits per present `25.924 -> 14.140`; local rows improve (`chunkBridgeMs/present` `10.276 -> 9.566`, `recordAppendCpuMs/present` `14.179 -> 12.840`, `commit entry -> publish` `29.240 -> 25.293`). But `completion_wait_with_enqueue` stays `0`, total completion wait worsens `28.047 -> 29.863ms/present`, sampled avg FPS is only `13.491`, and `actual.png` is HUD-only black near the end of GT1 rather than a `v0.0.3` visual-safe proof. Smaller chunks and larger chunks are now both rejected as simple P4 fixes; the remaining target is structural CPU-ready/encode overlap with locality and visual gates. |
+| H92 | Tail-Present staging needs encoder-invisible CPU-ready slots | accepted design gate | [[present-pacing-tail-present-staging-code-audit.92]] audits the current post-H91 queue path. `dxmt9c_device_commit_chunk` replays draw/const chunks into the current writing slot and only prefetches it; normal publication still waits for Present. `DXMT9_SPLIT_PRESENT_CHUNK` plus `DXMT9_ENCODE_TAIL_PRESENT_BATCH` recombines a head and Present-only tail that are already ready together, so it repairs locality but creates no producer run-ahead. `DXMT9_DRAW_CHUNK_COMMAND_LIMIT` creates overlap, but only by making draw work encode-visible immediately, which is the rejected CB/pass/tile-fragmenting carrier. The next P4 implementation needs a queue-private staged-source lane: draw work can become CPU-ready before Present, but must not enter encode-visible `readySlots` until the tail Present releases staged sources plus tail as one batch with `completionSources`, preserving locality and the `v0.0.3` visual gate. |
+| H93 | Tail-Present staged carrier is implemented default-off; runtime proof is separate | implemented; followed by H94 | [[present-pacing-tail-present-staged-carrier.93]] adds `DXMT9_STAGE_TAIL_PRESENT_CHUNK=1`, active only with `DXMT9_ENCODE_TAIL_PRESENT_BATCH=1`. The pre-Present head is published, immediately removed from encode-visible `readySlots` into `stagedTailPresentSlots`, and released back before the Present-only tail so the existing tail batch encoder can submit one combined Metal command buffer with strict `completionSources`. The primitive keeps the source slot `Pending`, adds a headroom guard to avoid hiding work when no tail slot can be allocated, and is covered by `dxmt9-queue-completion-sources-spec`. Keep the knob default-off; H94 is the runtime verdict. |
+| H94 | Tail-Present staged carrier creates ready depth but does not recover P4 overlap | rejected promotion; mechanism retained | [[present-pacing-tail-present-staged-runtime.94]] compares same-current default control against `DXMT9_ENCODE_TAIL_PRESENT_BATCH=1 DXMT9_STAGE_TAIL_PRESENT_CHUNK=1`. The carrier reaches the intended batch surface (`encode_ready_depth_avg 1.000 -> 2.000`, `encode_ready_depth_gt1_per_present 0 -> 1`) and screenshots are broad visual-smoke normal with bloom/sparks present. But useful overlap remains absent (`completion_wait_with_enqueue_ms_per_present=0.036`, no-enqueue share `99.865%`), total completion wait worsens `26.234 -> 26.921ms/present`, no-enqueue wait worsens `26.234 -> 26.885ms/present`, passes rise `11.660 -> 11.765/present`, tile preservation rises `118.965 -> 120.411MiB/present`, and GPU CB time rises `3.030 -> 3.197ms/present`. The lesson is structural: staging at `submitPresent()` time creates a two-source tail batch but not earlier CPU-ready run-ahead. The next overlap design must stage pre-Present work before Present at replay/chunk boundaries, keep it encode-invisible, and release it with the tail only after preserving P4/locality/`v0.0.3` gates. |
+| H95 | Earlier pre-Present staging is blocked on multi-head tail merge, not just another env knob | accepted design blocker; followed by H96/H97 | [[present-pacing-tail-present-multi-head-audit.95]] audits the H94 follow-up path. The queue completion carrier already supports several strict-order source seqIds, but the tail encoder and selector were still two-source only at the time of the audit: `runEncodeBatchLoop()` used scratch size 2, `canAppendTailPresentBatchSource()` accepted only one head plus a Present-only tail, and `encodeTailPresentBatch()` mutated `sources.front().slot` then appended the tail Present. Earlier replay/chunk-boundary staging can create multiple pre-Present heads, and those cannot be concatenated naively because `ChunkSlot` command payload indices, draw-run records, and draw payload offsets are local to each source slot. H96/H97 implement the merge/remap helper and complete-prefix selector; the remaining gate is an earlier pre-Present staging trigger. |
+| H96 | ChunkSlot merge/remap primitive closes the first H95 gate | accepted primitive; followed by H97 | [[present-pacing-tail-present-merge-primitive.96]] adds `ChunkSlot::appendCommandsFrom()` and extends `canCoalesceTailPresentBatch()` to accept a complete `[non-present head..., Present-only tail]` span. The helper remaps command payload indices, draw state/PSO/param bases, draw payload arena offsets, and nested uniform handles/byte offsets, then rebuilds uniform lookups. Native coverage verifies draw/clear/draw/present order, payload bytes, clear/present payload records, uniform handle rebasing, and multi-head shape acceptance. H97 follows by adding the complete-pattern selector; the remaining runtime gate is earlier pre-Present staging plus no-gputrace P4/locality/visual proof. |
+| H97 | Tail-Present complete-prefix selector closes the second H95 gate | accepted primitive; followed by H98 | [[present-pacing-tail-present-prefix-selector.97]] adds a queue prefix-selector dequeue primitive and wires `DXMT9_ENCODE_TAIL_PRESENT_BATCH=1` to `render::selectTailPresentBatchPrefix()` with ring-sized scratch. The selector inspects ready FIFO plus slot state before transitioning anything, accepts only `[non-present head..., Present-only tail]` when the tail fits in scratch, and returns zero otherwise so the queue falls back to one-source dequeue. Native coverage locks both complete-prefix dequeue and rejection-to-single fallback. H98 follows with an earlier pre-Present staging trigger; the remaining gate is no-gputrace P4/locality/`v0.0.3` proof. |
+| H98 | Pre-Present command-limit stage trigger creates the first multi-head runtime candidate | implemented candidate; rejected by H99 runtime gate | [[present-pacing-pre-present-stage-trigger.98]] adds `DXMT9_STAGE_PRE_PRESENT_COMMAND_LIMIT=N`, active only with `DXMT9_ENCODE_TAIL_PRESENT_BATCH=1`. When a pre-Present writing slot reaches the limit after draw append, the queue commits it, immediately hides it in `stagedTailPresentSlots_`, and opens a new writing slot. Present releases all staged heads before the tail so H97 can select `[head..., Present-only tail]` and H96 can merge them into one Metal tail submission. Guardrails keep ring headroom for the later current head and tail, and selector fallback preserves correctness if the tail is not Present-only. H99 proves this carrier reaches ready depth but does not recover P4 overlap/FPS. |
+| H99 | Pre-Present command-limit staging reaches ready backlog but does not recover P4 overlap | rejected runtime promotion; contract proof retained | [[present-pacing-pre-present-stage-runtime.99]] runs `DXMT9_ENCODE_TAIL_PRESENT_BATCH=1 DXMT9_STAGE_PRE_PRESENT_COMMAND_LIMIT=128` against H86 with a 120s no-gputrace gate. The carrier works mechanically (`encode_ready_depth_avg 1.000 -> 3.942`, `encode_ready_depth_gt1_per_present 0 -> 0.997`, `chunk_publish_reason_present_split_before=4,704`) and preserves locality (`command_buffers_per_present=3.999`, passes `11.779 -> 11.407`, tile preservation `216,777.633 -> 184,847.508MiB`) with a normal effects-heavy screenshot. But overlap fails (`completion_wait_with_enqueue_ms_per_present 0.108 -> 0.000`), replay/staging cost regresses (`commit_chunk_replay_cpu_ms_per_present 8.017 -> 18.522`), first-publish closure worsens (`15.586 -> 23.025ms/present`), and sampled FPS is only `14.599`. Do not spend `.gputrace` on H98 limit sweeps; the next overlap design needs pre-encoding into an open Metal command buffer/encoder, a strictly render-pass-safe early-commit path, or direct replay/producer cadence reduction. |
+| H100 | Publish residency p50/p95 rows are required for P4 candidate review | accepted tooling | [[present-pacing-publish-residency-percentiles.100]] adds compare-tool derived rows for slot/present/non-present/pre-Present-opportunity residency p50/p95. The h174 -> h179 foreground-controlled repeat shows why: residency p50 improves (`50.898 -> 31.934ms`) and FPS returns to the baseline band (`18.381 -> 18.527` mean), but `completion_wait_without_enqueue` is flat (`27.922 -> 28.032ms/present`) and `encode_ready_depth_avg` stays `1.000`. Treat residency percentile movement as a necessary diagnostic signal, not a sufficient FPS proof; promotion still requires P4 overlap/no-enqueue movement, locality gates, and the `v0.0.3` visual-safe gate. |
+| H101 | The first slot published after no-enqueue wait is draw-heavy, so P4 overlap has a real numerator | accepted current attribution | [[present-pacing-first-publish-slot-shape.101]] adds queue/perf-counter/reporting rows for the first `ChunkSlot` published after a no-enqueue completion wait: commands, draw-run commands, draw items, non-draw commands, payload bytes, present commands, max, and p50/p95 where useful. The h180 120s no-gputrace foreground run records `1,677` samples over `1,740` presents (`0.964/present`), averaging `335.305` commands, `330.346` draw-run commands, `746.432` draw items, `200,632` payload bytes, and one Present command per sampled slot. P4 itself does not improve (`completion_wait_without_enqueue_ms_per_present 28.032 -> 28.442`, ready depth `1.000`), so this is not a win; it says the next architecture can target a substantial draw-heavy publish slot, but must preserve locality and the `v0.0.3` visual gate. |
+| H102 | Present is the tail of the missed draw-heavy slot, so the concrete target is the pre-Present prefix | accepted current attribution | [[present-pacing-present-tail-prefix-current.102]] re-reads h180's existing `chunk_publish_present_pre_present_opportunity_*` counters and extends compare rows for draw-run, non-draw, and payload-per-slot. Every Present-published slot has Present as the tail (`tail_slot_share=100%`, `slots_per_present=1.000`), and the prefix alone is large: `329.652` commands, `325.709` draw runs, `739.172` draw items, `3.943` non-draw commands, and `198,596` payload bytes per slot. The next P4 candidate should therefore target this pre-Present head with open-CB/streaming encode or another render-pass-safe early CPU-ready path, not another draw-limit split that creates pass/CB churn. |
+| H103 | Open-CB pre-encode is plausible but needs a new encoded-pending-tail carrier | accepted design gate | [[present-pacing-open-cb-feasibility.103]] audits the current backend contract. `encodeChunk()` is whole-slot and owns a fresh command buffer, active render/blit encoder locals, Present handling, capture/frame sampling, post-commit callbacks, and final `QueueSubmissionRecord`; `QueueLifecycleController::submit()` then immediately transitions all sources to GPU and commits. There is no current state for a CPU-encoded but uncommitted pre-Present head. A valid P4 prototype needs an encoded-pending-tail queue state or equivalent streaming encode carrier, with completion sources retained until the tail CB completes. Closed-head CB chains remain the rejected draw-limit class unless they pass locality gates. |
+| H104 | The queue-side encoded-pending-tail completion carrier is now native-tested | accepted implementation primitive | [[present-pacing-encoded-pending-tail-carrier.104]] reuses the existing `Encoding` state as the first carrier: `retainEncodedSourcesForPendingTail()` records already-dequeued head completion sources without making them ready-visible, and `submitEncodedSubmission()` lets a later tail record transition head+tail sources through the normal `completionSources` path. Native coverage proves pending sources are rejected, retained heads stay non-free/non-GPU until tail submit, the shared completion chain frees head then tail in seq order, and present completion advances at the tail seqId. This is not a runtime P4 win yet; the next work is actual uncommitted Metal CB/encoder ownership, then no-gputrace P4/locality plus `v0.0.3` visual gates. |
+| H105 | Tail submission record merge now rejects closed-head CB chains and preserves head-before-tail metadata | accepted implementation primitive | [[present-pacing-encoded-tail-record-merge.105]] adds `mergeEncodedPendingTailSubmission()`, a strict record-level primitive for the future open-CB path. It merges retained head completion sources, diagnostics, render samples, and callbacks into a tail `QueueSubmissionRecord` while keeping the tail slot/seq as public identity. Native coverage proves sequence gaps are rejected, completion sources stay head→tail, command-buffer chain length counts one shared final commit, and diagnostics/callback/sample order is preserved. Different command-buffer handles are rejected so this primitive cannot silently reintroduce the failed closed-head CB-chain carrier. |
+| H106 | `encodeChunk()` now has explicit open-CB split guards, default-off for current callers | accepted implementation primitive | [[present-pacing-open-cb-encode-options.106]] adds `EncodeChunkOptions` with `disableMidChunkCommits` and `disablePresentAcquireSplit`. Existing callers use default options and keep current behavior, including the default `PerRenderPass` mid-chunk policy. The options exist for the upcoming open-CB path, where a pre-Present head must not internally commit sub-CBs before the Present tail is appended. This still is not a runtime P4 claim; it only prevents the next implementation from accidentally becoming the rejected closed-head CB-chain class. |
+| H107 | `encodeChunk()` can now append into an injected open command buffer | accepted implementation primitive | [[present-pacing-open-cb-injected-command-buffer.107]] extends `EncodeChunkOptions` with an optional owned `WMT::CommandBuffer`. Default callers still allocate a fresh command buffer. An injected command buffer is treated as the open-CB carrier path: internal mid-chunk commits and present-acquire splits are suppressed so the head cannot accidentally become the rejected closed-head CB-chain class. This is not a runtime P4/FPS claim; the remaining work is wiring queue/backend pre-encoding to H104/H105 and then passing locality plus `v0.0.3` visual gates. |
+| H108 | Open-CB pre-encode tail-Present carrier is wired as a default-off runtime candidate | implemented; rejected by H109 | [[present-pacing-open-cb-preencode-runtime.108]] adds `DXMT9_OPEN_CB_PREENCODE_TAIL_PRESENT=1` for the H104-H107 carrier: `PresentSplitBefore` heads can be encoded into an uncommitted command buffer, later heads and the Present tail append to that same command buffer, and only the final tail record is submitted with strict `completionSources`. H109 is the runtime verdict for this shape. |
+| H109 | Open-CB pre-encode reaches the carrier but fails P4/locality/GPU gates | rejected runtime promotion | [[present-pacing-open-cb-preencode-runtime.109]] compares a 120s no-gputrace control against `DXMT9_OPEN_CB_PREENCODE_TAIL_PRESENT=1 DXMT9_STAGE_PRE_PRESENT_COMMAND_LIMIT=128`. The mechanism reaches `PresentSplitBefore` (`3,433` heads) and collapses command buffers per present (`3.999 -> 1.010`), but ready depth stays flat (`encode_ready_depth_gt1_per_present 0 -> 0`), passes rise (`11.762 -> 13.481`), tile preservation rises (`216,896.805 -> 280,174.887 MiB`), GPU command-buffer time explodes (`5,775.166 -> 59,178.478ms` total), completion wait worsens (`26.894 -> 35.859ms/present`), and no-enqueue wait worsens (`26.766 -> 35.636ms/present`). The screenshots are visually normal against the `v0.0.3` class, but counters reject promotion before any visual-gate promotion. Do not spend `.gputrace` on H108 limit sweeps without a different pass-safe carrier. |
+| H110 | H108's immediate failure is chunk-final render-pass closure, not command-buffer count | accepted root-cause attribution | [[present-pacing-open-cb-final-pass-sidecar.110]] extends the compare tool to parse `3dmark05-perf-encoders.csv` and report encoder-sidecar end reasons plus color/depth load/store MiB per present. The regenerated H108 report shows `encoder_sidecar_final_end_reason_per_present 0.000 -> 2.065`, while RT-change, clear, and present end reasons are flat/down. The same run raises color load `6.301 -> 19.018MiB/present` and depth load `14.585 -> 27.865MiB/present`. This means H108 keeps one Metal command buffer open but still ends render encoders at every staged chunk boundary; the next variant must carry render-pass state across chunks or split only at proven pass-safe boundaries. |
+| H111 | PresentSplitBefore command-limit heads always cut draw-run tails in the measured open-CB path | accepted carrier blocker | [[present-pacing-present-split-tail-shape.111]] adds tail-kind counters for `PresentSplitBefore` sources and runs `DXMT9_OPEN_CB_PREENCODE_TAIL_PRESENT=1 DXMT9_STAGE_PRE_PRESENT_COMMAND_LIMIT=128`. The run records `chunk_publish_reason_present_split_before=3,429`, `chunk_publish_present_split_before_tail_draw_run=3,429`, all other tail kinds `0`, and `render_split_final=3,429`. The command-limit trigger is therefore not discovering pass-safe split boundaries; it publishes immediately after draw appends and maps 1:1 to chunk-final render-pass closure. Do not spend more threshold sweeps on this carrier unless the trigger changes or render-pass state is carried across staged sources. |
+| H112 | Normal Present-published prefixes also end at draw-run tails | accepted carrier blocker | [[present-pacing-present-prefix-tail-shape.112]] adds tail-kind counters for the command immediately before the first Present in every Present-published slot. The current default `h187` no-gputrace run has one prefix opportunity per present and almost all prefixes end at draw work: `tail_draw_run=1,553 / 1,560` (`99.55%`), `tail_clear=7` (`0.45%`), and `draw_only_pre_present_opportunity_share=0.00%`. The prefix is still large (`323.680` commands, `319.889` draw runs, `728.447` draw items, `291.153MiB` payload), but it is not a pass-safe boundary by itself. A useful P4 carrier must carry active render-pass state across staged sources, stream into one open encoder/CB, or reduce replay/producer cadence directly. |
+| H113 | Current PE cadence after the prefix-tail gate still names inter-replay producer gap | accepted current attribution | [[present-pacing-current-pe-cadence.113]] reruns `DXMT9_PE_RECORDER_STATS=1` after H111/H112. The current no-gputrace path remains fully no-enqueue (`completion_wait_with_enqueue=0`) and `commit entry -> publish` is dominated by inter-replay producer gap: `23.869ms/present`, `82.917%` of the publish window. Completed replay is secondary (`5.039ms/present`), active replay and publish wait are effectively zero, and top PE inter-append pairs are unchanged: `draw_indexed -> set_vs_const_f=19.098ms/present`, `draw_indexed -> apply_state=6.894`, `draw_indexed -> draw_indexed=5.396`, `draw_indexed -> set_ps_const_f=3.689`. This keeps the next FPS-facing work on draw/const record cadence that moves P4, or a true open render-pass/encoder carrier; it rejects setter-body, queue-publish-wait, and another threshold-search as primary next levers. |
+| H114 | Flushing the PE recorder after every draw does not create useful overlap | rejected diagnostic | [[present-pacing-pe-draw-flush.114]] adds default-off `DXMT9_PE_FLUSH_AFTER_DRAW=1` and runs a foreground no-gputrace A/B. The knob explodes PE/unix crossings (`completion_wait_commit_chunk_entries_per_present 4.284 -> 73.489`, no-enqueue before-publish entries `19.716 -> 643.422`) but queue publish remains Present-only (`chunk_publish_reason_flush=0`), ready depth stays `1.000`, and `completion_wait_with_enqueue` stays `0`. The candidate has lower progress (`present_encoded 1,140 -> 816`) and worsens replay/snapshot/encode plus no-enqueue closure (`commit_chunk_replay 10.231 -> 17.323ms/present`, `encode_chunk 13.517 -> 16.426`, `commit entry -> publish 46.674 -> 83.348`). Keep the knob diagnostic-only; the next P4 work still needs a render-pass-safe carrier or real producer/replay cadence reduction, gated by the `v0.0.3` visual-safe anchor. |
 
 ## Verification methods
 
@@ -144,7 +183,19 @@ GPU frame-time story is owned by [[hidden-backend-storage]] /
   `--require-tile-preservation-not-increase` must accompany overlap candidates
   that claim a pipeline-depth fix. They reject carriers that create
   `completion_wait_with_enqueue_ms` only by splitting Metal command buffers,
-  render passes, or tile-preservation traffic.
+  render passes, or tile-preservation traffic. Open-CB/pass-carrier candidates
+  must additionally use `--require-encoder-final-end-reason-not-increase`,
+  `--require-encoder-color-load-not-increase`, and
+  `--require-encoder-depth-load-not-increase` so chunk-final render-pass
+  closures and attachment reload amplification fail in no-gputrace comparison.
+- **Encode ready-depth gate**:
+  `encode_dequeue_ready_depth_*` counters measure how many ready slots existed
+  immediately before the encode thread popped one. `compare_3dmark05_perf_counters.py`
+  reports `encode_ready_depth_avg`, `encode_ready_depth_gt1_per_present`, and
+  the `gt1/gt2/gt4` backlog shares. Use
+  `--require-encode-ready-depth-gt1-increase` for run-ahead / CPU-ready /
+  multi-slot candidates so the P4 claim proves real queued work, not only a
+  local CPU child movement.
 - **No-enqueue stage-delta counters**:
   `completion_no_enqueue_stage_commit_entry_to_publish_*`,
   `completion_no_enqueue_stage_publish_to_encode_dequeue_*`, and
@@ -187,6 +238,43 @@ GPU frame-time story is owned by [[hidden-backend-storage]] /
   report `prepare_slot_pso_prefetch_cpu_ms=0` and non-zero
   `encode_slot_pso_prefetch_cpu_ms`; use `DXMT9_ENABLE_PUBLISH_PSO_PREFETCH=1`
   only to restore the legacy serialized placement for A/B or cold-PSO tests.
+- **Publish residency percentiles**:
+  `compare_3dmark05_perf_counters.py` reports
+  `chunk_publish_slot_residency_{p50,p95}_ms`,
+  `chunk_publish_slot_residency_{present,nonpresent}_{p50,p95}_ms`, and
+  `chunk_publish_present_pre_present_opportunity_residency_{p50,p95}_ms`.
+  Use these rows with the aggregate residency totals when a P4 candidate claims
+  earlier CPU-ready work. Percentile movement alone is not a promotion gate:
+  it must align with `completion_wait_with_enqueue_ms`,
+  `completion_wait_without_enqueue_ms`, encode ready-depth, locality, and the
+  `v0.0.3` visual-safe anchor.
+- **No-enqueue first-publish slot shape**:
+  `completion_no_enqueue_first_publish_slot_*` reports the first slot published
+  after a no-enqueue completion wait. Use the normalized compare rows
+  `no_enqueue_first_publish_slot_*_per_slot` to decide whether the missing
+  overlap window contains substantial draw work or only a small frame-boundary
+  tail. Treat this as attribution only until the same run also moves P4 wait,
+  preserves locality, and passes the `v0.0.3` visual-safe gate.
+- **Present pre-Present prefix shape**:
+  `chunk_publish_present_pre_present_opportunity_*` reports work before the
+  first Present command inside Present-published slots. The compare report
+  exposes command, draw-run, draw-item, non-draw, payload, tail-share, and
+  residency rows. The
+  `chunk_publish_present_pre_present_opportunity_tail_*` family reports the
+  command kind immediately before the first Present, and
+  `chunk_publish_present_pre_present_opportunity_draw_only` reports pure-draw
+  prefixes. Use these rows to distinguish a true pre-Present draw head from a
+  mixed or tiny Present tail, and to reject pass-safe staging if the prefix is
+  draw-run-tailed.
+- **PresentSplitBefore tail shape**:
+  `chunk_publish_present_split_before_tail_*` reports the last command kind in
+  every `PresentSplitBefore` source, and
+  `chunk_publish_present_split_before_draw_only` counts sources containing only
+  draw work. The summary renders `PresentSplitBefore Tail Shape`; the compare
+  tool reports tail rows per present and share percentages. Use these rows
+  before spending `.gputrace` on open-CB threshold sweeps: a draw-run-dominated
+  tail shape means the trigger is cutting through active render-pass work, not
+  finding pass-safe boundaries.
 - **Completion-signal perturbation**:
   `DXMT9_PERF_COMPLETION_SIGNAL_DELAY_MS=N` delays completed-seq/waterline
   publication after `waitUntilCompleted()` returns. Confirm application through
@@ -336,6 +424,7 @@ flowchart TD
   CpuSummaryCurrent["xctrace-cpu-summary.30\nPE thread_id=0xd0 present\nno native xctrace tid match"]
   NativeSelector["native-selector-xctrace.31\nnative_tid selects producer\nproducer running; wait hits 0"]
   NativeSelectorDefault["native-selector-xctrace.32\ndefault-on PSO memo\nproducer still running; wait hits 0"]
+  CurrentNativeSelector79["native-selector-current.79\ncurrent native producer\nRunning 10414/10414\nwait hits 0"]
   SystemTraceP4Smoke["systemtrace-p4-smoke.34\n2s sidecar joins 306/306 rows\nproducer running; wait hits 0"]
   CurrentP4Sidecar["systemtrace-p4-current.35\n2s sidecar joins 386/386 rows\nwait hits 0; 1 blocked sample"]
   RangeP4Sidecar["systemtrace-p4-range.36\nseq-range sidecar joins 395/395\nproducer running; wait hits 0"]
@@ -366,6 +455,7 @@ flowchart TD
   RunAheadDesign68["run-ahead-design.68\nlogical readiness must decouple\nfrom Metal CB publication"]
   RunAheadCoalesce69["run-ahead-coalesce.69\npresent wait removed\noverlap created\nCB locality failed"]
   RunAheadCpuReady70["run-ahead-cpu-ready.70\nCB/sub-CB shape improved\npresent wait near zero\nreplay/total wait regressed\nblack vertical artifact"]
+  RunAheadCurrent73["run-ahead-current-code.73\nhistorical prototypes reverted\nno current env knob"]
   CompletionSignalDelay["completion-signal-delay.21\n8ms x1696 completion-signal delay\nSetRT→Clear and first chunk flat"]
   PeClearFlush["pe-clear-flush.22\nClear publishes 2-record chunk\nfirst chunk 20.6→18.9ms\nno enqueue overlap"]
   PeClearFlushRefresh["pe-clear-flush.23\ncurrent low-overhead refresh\nfirst chunk 20.7→19.1ms\nFPS flat/worse"]
@@ -430,7 +520,8 @@ flowchart TD
   NativeSelectorDefault --> SystemTraceP4Smoke
   SystemTraceP4Smoke --> CurrentP4Sidecar
   CurrentP4Sidecar --> RangeP4Sidecar
-  RangeP4Sidecar --> CompareGate
+  RangeP4Sidecar --> CurrentNativeSelector79
+  CurrentNativeSelector79 --> CompareGate
   CompareGate --> SerialCompareGate
   SerialCompareGate --> CurrentLowOverhead43
   CurrentLowOverhead43 --> DirectCbuf45
@@ -457,6 +548,7 @@ flowchart TD
   PeDescCache67 --> RunAheadDesign68
   RunAheadDesign68 --> RunAheadCoalesce69
   RunAheadCoalesce69 --> RunAheadCpuReady70
+  RunAheadCpuReady70 --> RunAheadCurrent73
   OverlapLocalityGate51 --> LowOverheadSerial
   PeCallerStack --> CompletionSignalDelay
   CompletionSignalDelay --> PeClearFlush
@@ -505,14 +597,14 @@ flowchart TD
   TexturePreResolve --> Remaining
   Remaining --> SCE
 
-  class DSync,EncodeBudget,CurrentImmediate,CompletionStatus,CurrentOwner,PipelineOverlap,PrePublish,StageDelta,PeChunkCadence,PeRecordMilestones,PeClearGate accepted
+  class DSync,EncodeBudget,CurrentImmediate,CompletionStatus,CurrentOwner,PipelineOverlap,PrePublish,StageDelta,PeChunkCadence,PeRecordMilestones,PeClearGate,RunAheadCurrent73 accepted
   class FrameLatency,AsyncAcq,WorkA,StateNoop,DirtyIdentity,TexturePreResolve,BoundaryLatency,PePresent,PeCallCadence,PeChunkSize,PeCallSequence,PeClearFlush,PeClearFlushRefresh,SubCBCap,DrawChunkLimit50,PeDescCache67,RunAheadCoalesce69,RunAheadCpuReady70 rejected
   class LowOverheadSerial accepted
   class PeClearNoSampling,PeWideCall,PeThreadState rejected
   class PeCallerPc,PeCallerStack,CompletionSignalDelay accepted
   class FixProposal,Remaining,SCE,WinemacAudit,CpuSummaryCurrent proposed
   class Attribution,NextSplit,CleanGate,ReopenMask,Identity,IdentitySmoke,PacketSplit,PlanDirect,SnapshotSplit,SnapshotHash,PayloadSplit,UsageHash,FfpZero,ArgbufOpen,FastAppend,StreamBindSplit,TextureSplit,SamplerSkip,SamplerHash accepted
-  class CpuSummaryTool,CompareGate,SerialCompareGate,CurrentLowOverhead43,DirectCbuf45,CurrentP2P3Scout46,NoEnqueueBeforePublish47,DrawChunkLimit48,OverlapLocalityGate51,PeChunkCadence56,PeChunkFill57,PeActiveFill58,PePairs59,PeConstApply60,PeHotSetter61,RunAheadDesign68 accepted
+  class CpuSummaryTool,CompareGate,SerialCompareGate,CurrentLowOverhead43,DirectCbuf45,CurrentP2P3Scout46,NoEnqueueBeforePublish47,DrawChunkLimit48,OverlapLocalityGate51,PeChunkCadence56,PeChunkFill57,PeActiveFill58,PePairs59,PeConstApply60,PeHotSetter61,RunAheadDesign68,CurrentNativeSelector79 accepted
 ```
 
 ## Detail map
@@ -883,18 +975,37 @@ flowchart TD
   Valid run-ahead must separate CPU readiness from the final Metal CB boundary,
   or coalesce ready work strongly enough to preserve baseline locality.
 - [[present-pacing-run-ahead-coalesce.69]] — ACCEPTED MECHANISM /
-  REJECTED CARRIER. The first `DXMT9_OFFSCREEN_RUN_AHEAD=1` +
+  REJECTED PROTOTYPE CARRIER. The historical `DXMT9_OFFSCREEN_RUN_AHEAD=1` +
   ready-slot coalescing run removes present wait and creates overlap, but it
   raises command buffers per present `3.999 -> 19.156`, total completion wait
   `29.839 -> 36.990ms/present`, and GPU CB time
-  `3.718 -> 35.197ms/present`.
+  `3.718 -> 35.197ms/present`. This code path is no longer present in current
+  HEAD.
 - [[present-pacing-run-ahead-cpu-ready.70]] — ACCEPTED LOCALITY REFINEMENT /
-  REJECTED CURRENT PROMOTION. CPU-ready staging cuts the prior coalesced carrier
+  REJECTED PROTOTYPE PROMOTION. CPU-ready staging cuts the prior coalesced carrier
   to `5.741` command buffers and `1.287` sub-command buffers per present, but
   still worsens total completion wait, wait-to-next-enqueue, and commit replay
   versus baseline. Its `actual.png` also has a large black vertical scene
   artifact, so visual correctness is broken. CB locality recovery is a gate,
-  not an FPS proof.
+  not an FPS proof. This code path is no longer present in current HEAD.
+- [[present-pacing-run-ahead-current-code.73]] — ACCEPTED CURRENT-CODE AUDIT.
+  The H74/H75 prototypes are reverted in current HEAD. Do not schedule new
+  `DXMT9_OFFSCREEN_RUN_AHEAD` or ready-slot coalescing env runs unless the
+  implementation is intentionally reintroduced; treat the next overlap attempt
+  as a fresh R-BACK-2.35-R-BACK-2.41 design. `dequeueReadySlotBatch()` and the
+  `completionSources` carrier only preserve strict-order ownership/completion
+  semantics for a future coalesced Metal tail, with debug guards that require
+  every source slot to be `Encoding` before submit; they do not create run-ahead
+  by themselves.
+- [[present-pacing-native-selector-current.79]] — CURRENT NEGATIVE SCOUT.
+  A fresh 10s same-run native-selector System Trace picks producer thread
+  `0xafdc90`, samples it Running in `10414 / 10414` rows, and finds `0`
+  producer wait or holder keyword hits. CA/Metal holder samples exist only on
+  non-producer threads. Keep broad winemac `OnMainThread` below the measured
+  replay/snapshot/encode and fresh run-ahead work unless a future targeted
+  threshold log contradicts it. The same attempt sequence also raises the
+  System Trace free-space guard to `4096MiB` after `xctrace` failed at the
+  save/trim stage with about `2.4GiB` free.
 
 ## Cross-links
 
@@ -1098,7 +1209,7 @@ flowchart TD
   command buffers per present, render passes per present, or tile-preservation
   MiB. This encodes the limit64/limit256 lesson into the toolchain instead of
   relying on review prose. [[present-pacing-overlap-locality-gates.51]]
-- The first implemented run-ahead/coalescing path validates the mechanism but
+- The historical run-ahead/coalescing prototype validates the mechanism but
   fails the promotion gate. `DXMT9_OFFSCREEN_RUN_AHEAD=1` plus ready-slot
   coalescing drops present wait `29.839 -> 0.202ms/present`, raises overlap
   `1.915 -> 20.855ms/present`, and lowers no-enqueue wait
@@ -1106,8 +1217,9 @@ flowchart TD
   `29.839 -> 36.990ms/present`, raises command buffers per present
   `3.999 -> 19.156`, and raises GPU command-buffer time
   `3.718 -> 35.197ms/present`. Treat this as proof that P4 can be moved, not
-  as an FPS fix. [[present-pacing-run-ahead-coalesce.69]]
-- The R-BACK-2.40 CPU-ready staging follow-up restores much of the Metal
+  as an FPS fix. This prototype has since been reverted.
+  [[present-pacing-run-ahead-coalesce.69]]
+- The historical R-BACK-2.40 CPU-ready staging follow-up restores much of the Metal
   carrier shape but still fails the FPS gate. Compared with the prior
   run-ahead/coalescing carrier, `command_buffers_per_present` falls
   `19.156 -> 5.741` and `sub_command_buffers_per_present` falls
@@ -1118,8 +1230,21 @@ flowchart TD
   rises `8.363 -> 40.441ms/present`. The run's `actual.png` also contains a
   large black vertical scene artifact, so the clean error counters do not make
   it a visual smoke pass. This confirms that restoring CB locality is a
-  necessary gate, not an FPS proof.
+  necessary gate, not an FPS proof. This prototype has since been reverted.
   [[present-pacing-run-ahead-cpu-ready.70]]
+- Current HEAD has since reverted those run-ahead prototypes, so the historical
+  env knobs are not runnable. H74/H75 remain useful because they prove the P4
+  wait can move and name the failed carriers; they are not available production
+  switches. [[present-pacing-run-ahead-current-code.73]]
+- The current native-producer System Trace repeat keeps broad winemac
+  `OnMainThread` below the measured average-FPS owners. The sidecar selects
+  native producer `0xafdc90` from `unix_commit_chunk_entry`, samples it Running
+  in `10414 / 10414` rows, and finds `0` producer wait or holder keyword hits.
+  CA/Metal holder hits are real but non-producer-only, while the perf counters
+  remain fully no-enqueue with `completion_wait_ms=26.668ms/present`,
+  `gpu_command_buffer_time_ms=3.037ms/present`, replay
+  `8.244ms/present`, and encode chunk `13.101ms/present`.
+  [[present-pacing-native-selector-current.79]]
 - The Wine `OnMainThread()` source audit is useful but not a current-owner
   proof. It proves a possible synchronous macdrv transmission path, not that
   the selected GT1 producer is blocked there. Later native-selector sidecars
@@ -1175,65 +1300,86 @@ flowchart TD
 
 **Open target**
 
-- Recovering current GT1 direct fps requires reducing P2/P3 work that feeds
-  present-bearing chunks, then proving that P4 completion/present wait and
-  frame sampling move. The latest stage split makes that P2/P3 work concrete:
-  same-sample p50/p95 is `6.172/28.101ms` for unix
-  commit/replay/snapshot/submit before `CommitPublish`, `2.535/5.086ms` for
-  queue publish-to-dequeue, and `11.384/22.232ms` for backend encode after
-  `EncodeDequeue`;
-  toggling
-  `DXMT9_DISABLE_VSYNC` is no longer a valid lever unless
-  `present_schedule_after_minimum_duration` is nonzero. The old
-  "bind calls dominate the 73% unattributed encode remainder" attribution is
-  rejected by [[present-pacing-bind-cache-work-a.01]]. Category identity cbuf
-  reuse, plan-direct binding-packet cache lookup, snapshot component-hash reuse,
-  usage-aware payload hashing, and FFP known-zero programmable constant usage
-  are now accepted CPU wins with current visual smoke, but still need a
-  vsync-on wallclock gate before they close this pacing hypothesis. The
-  remaining narrowed CPU target is now named backend encode work first. In the
-  latest low-overhead P2/P3 scout, the active children are
-  `argbuf_setup=1.875ms/present`, `argbuf_cbuf_update=0.981ms/present`,
-  `binding_packet=1.044ms/present`, `stream_bind=1.250ms/present`, and
-  `encode_slot_pso_prefetch=1.180ms/present`, plus residual snapshot/cache
-  lookup at `2.919ms/present`. Historical split runs further narrow those
-  buckets to table reserve/repoint, dirty cbuf update, fragment texture/sampler
-  planning/bind, index bind, shader stream, raster state, and miss-side PSO key
-  resolve. [[present-pacing-direct-cbuf.45]] proves that removing the argbuf
-  path is not enough by itself: the current-default comparison cuts encode
-  by `-24.44%` while FPS stays flat and no-enqueue wait worsens. These are
-  owned by
-  [[state-churn-encode]] and [[snapshot-cache]].
-- A larger producer-overlap architecture is still open, but the target is now
-  concrete: the app-side interval between `SetRenderTarget` caller PC
-  `0x0042AF4F` and `Clear` caller PC `0x0042B061` is command-dispatch cadence
-  around `3DMark05.exe+0x88760`, and it is not waiting on dxmt9's completed
-  seq/waterline publication. Frame sampling, child descriptor/subresource
-  getters, lock/query/swapchain milestone coverage, broad runloop/macdrv sleep,
-  hidden dxmt9 API-call duration, and dxmt9 completion-signal delay have been
-  rejected or weakened as that owner. A lower actual Metal/CA completion
-  dependency is still a separate open experiment because the current
-  perturbation happens after `waitUntilCompleted()` has already returned. The
-  simple post-`Clear` early-publish probe is now rejected: it publishes a
-  2-record chunk earlier, but it still does not enqueue while completion waits
-  and it increases chunk count. The current low-overhead refresh confirms this
-  remains true after recent encode/copy cleanup. A larger producer-overlap
-  design would have to
-  publish useful work before the app's `Clear` dispatch gate, or reduce the
-  pre-publish replay/snapshot and backend encode stages enough that the
-  completion wait no longer exposes a full extra frame slot. Any earlier-flush
-  design must still preserve D3D9 ordering, resource lifetime, render-pass
-  coalescing, and dynamic-buffer snapshot correctness.
+- Recovering current GT1 direct fps requires moving the no-enqueue P4 shape, not
+  only reducing a local CPU child. The post-`v0.0.3` visual-safe baseline keeps
+  `completion_wait_ms_per_present=28.287`, with `98.721%` of that wait in the
+  no-enqueue bucket. Same-cycle stages are still exposed: wait -> commit chunk
+  entry `4.183ms/present`, commit entry -> publish `15.065ms/present`, publish
+  -> encode dequeue `0.249ms/present`, and encode dequeue -> Metal commit
+  `12.513ms/present`. Replay/snapshot and encode are both real P2/P3 owners:
+  replay `8.195ms/present`, queue draw submission `3.812`, snapshot draw
+  submission `3.062`, snapshot lookup `2.470`, encode chunk `11.403`, and
+  encode draw `8.710`. [[present-pacing-current-lowoverhead.71]]
+- The current PE recorder refresh makes the larger no-enqueue row more concrete.
+  In `noenqueue-pe-between-call-current-r1`, `commit entry -> publish` is
+  `29.079ms/present`; completed replay explains `5.054ms/present`, publish wait
+  is `0`, and inter-replay producer gap explains `24.077ms/present` (`82.798%`).
+  The producer gap is draw/const-heavy, led again by
+  `draw_indexed -> set_vs_const_f` with `SetVertexShaderConstantF=3444.356`
+  entries/present. This keeps the next owner on producer/record cadence or a
+  locality-preserving overlap carrier, not on GPU execution or queue-publish
+  lock contention. [[present-pacing-pe-between-call-current.72]]
+- The latest H171 refresh after the compact timer gate keeps the same owner in
+  current HEAD. `completion_wait_with_enqueue=0`, `commit entry -> publish` is
+  `29.240ms/present`, completed replay is `5.053ms/present`, inter-replay
+  producer gap is `24.279ms/present` (`83.031%`), and queue publish wait is
+  still effectively zero. Top PE inter-append pairs are unchanged in kind:
+  draw-side deferred VS/PS const flush and barrier-family pending-state
+  materialization dominate, while APPLY_STATE packet build is only
+  `0.010ms/present`. [[present-pacing-current-pe-cadence.90]]
+- A/B reviews should now use the compare report's
+  `no_enqueue_before_publish_*` rows before promoting any local CPU cleanup. A
+  candidate that lowers replay, snapshot, or encode but leaves
+  `no_enqueue_before_publish_closure_ms_per_present` flat or worse has not moved
+  the current P4 owner. [[present-pacing-noenqueue-compare-closure.80]]
+- Local CPU cleanups remain useful only when they pass the P4/frame gates.
+  Direct-cbuf is the strongest cautionary example: it removed the argbuf table
+  path and cut encode chunk `11.110 -> 8.500ms/present`, but
+  `wait -> next enqueue` stayed flat (`30.482 -> 30.703ms/present`) because
+  `commit entry -> publish` expanded (`13.672 -> 16.260ms/present`). The same
+  run is also visual-open, so default promotion is blocked even before the P4
+  gate. [[state-churn-encode-encode-phase.146]]
+- A larger producer-overlap architecture remains open, but the current HEAD has
+  no run-ahead env knob. Historical run-ahead/coalescing and CPU-ready staging
+  prototypes proved that P4 wait can move, then failed locality, total-wait, and
+  visual-correctness gates and were reverted. The queue-level batch dequeue and
+  completion carrier are only prerequisites for strict-order multi-slot
+  ownership/completion. Any new overlap attempt must still build the CPU-ready /
+  encode-side coalescing path with present-token isolation, resource lifetime
+  proof, non-increasing command-buffer/render-pass/tile-preservation shape, and
+  counters that prove `completion_wait_with_enqueue` rises or
+  `completion_wait_without_enqueue` falls. [[present-pacing-run-ahead-current-code.73]]
+- The current batch carrier must not be promoted as the implementation target by
+  itself. Current GT1 has no ready-slot backlog (`encode_ready_depth_avg=1.000`,
+  `encode_ready_depth_gt1_per_present=0`), so an encode-loop-only batch helper
+  swap would almost always consume one source. The next implementation must
+  first create CPU-ready/run-ahead backlog, then use the carrier to submit a
+  locality-preserving coalesced tail. [[present-pacing-batch-carrier-current.82]]
+- H86/H87 narrow that overlap carrier to tail-Present staging. The current
+  Present-published slot already has large pre-Present work and Present as the
+  final command, but the existing `DXMT9_SPLIT_PRESENT_CHUNK` switch publishes
+  pre-Present work and Present as separate chunks. Keep that switch diagnostic;
+  production work needs CPU-ready visibility plus a multi-source backend encode
+  contract that can preserve one coalesced Metal tail.
+  [[present-pacing-pre-present-opportunity.86]],
+  [[present-pacing-tail-present-staging-current.87]]
 
 **Proposed (not yet built)**
 
-- Run no-gputrace A/Bs that reduce a named encode bucket or residual snapshot
-  rebuild before spending Xcode budget; dirty cbuf, binding-packet cache,
-  snapshot hash reuse, usage-aware payload hashing, and FFP known-zero usage
-  already have accepted CPU wins plus current visual smoke.
-- Reduce draw-run breaks only where the taxonomy names a semantic-safe boundary;
-  current average backend batch size remains ~1.9 records, but prior bind-cache
-  work proved bind suppression alone is not enough.
+- A fresh producer/encode overlap carrier that decouples CPU-ready work from
+  Metal command-buffer publication while preserving the H57 locality gates.
+  Reusing the reverted env names is not enough; the implementation has to carry
+  multiple CPU-ready chunks or an equivalent staging form without fragmenting
+  render passes.
+- A record-cadence reduction that targets the current `SetVertexShaderConstantF`
+  / draw-heavy producer gap and proves it moves `commit entry -> publish` or
+  `wait -> next enqueue`. Narrow byte-only reductions such as sparse const
+  record splitting are already rejected unless a new run also moves backend
+  cbuf bytes, replay/encode, and P4.
+- Continue no-gputrace A/Bs for CPU candidates first. Spend `.gputrace`/Xcode
+  only after a candidate preserves visual correctness and moves a P4/locality
+  gate, or when the candidate is explicitly a GPU-hot-frame/backend-storage
+  question.
 
 **Rejected**
 

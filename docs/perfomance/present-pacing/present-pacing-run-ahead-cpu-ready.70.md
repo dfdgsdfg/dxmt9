@@ -13,17 +13,25 @@ related: docs/perfomance/present-pacing/present-pacing-run-ahead-coalesce.69.md,
 
 # Present Pacing 70 - CPU-Ready Run-Ahead Restores Some CB Locality but Misses FPS and Correctness Gates
 
+Current-code note (2026-06-18): this document is historical experiment
+evidence. The CPU-ready run-ahead implementation and env knobs were later
+reverted, and current HEAD no longer honors `DXMT9_OFFSCREEN_RUN_AHEAD`,
+`DXMT9_ENCODE_COALESCE_READY_SLOTS`, or
+`DXMT9_ENCODE_COALESCE_READY_SLOT_LIMIT`. See
+[[present-pacing-run-ahead-current-code.73]] before scheduling any follow-up
+run.
+
 ## Question
 
-After R-BACK-2.40, CPU-ready staging holds replayed work independently of the
-final Metal command-buffer boundary. Does that preserve enough baseline command
-buffer locality to turn the earlier run-ahead/coalescing overlap proof into an
-FPS-facing win?
+In the historical R-BACK-2.40 prototype, CPU-ready staging held replayed work
+independently of the final Metal command-buffer boundary. Did that preserve
+enough baseline command-buffer locality to turn the earlier
+run-ahead/coalescing overlap proof into an FPS-facing win?
 
 ## Verdict
 
-CPU-ready staging is the right structural direction compared with the first
-run-ahead/coalescing carrier, but this implementation still fails promotion.
+CPU-ready staging was the right structural direction compared with the first
+run-ahead/coalescing carrier, but this prototype still failed promotion.
 
 The run restores much of the command-buffer shape versus the prior coalesced
 experiments: `command_buffers_per_present` falls from `19.156` in

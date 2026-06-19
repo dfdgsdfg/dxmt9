@@ -216,6 +216,11 @@ Required Xcode sequence:
    `$ANALYSIS_DIR/frame<N>-counters-xcode.csv`.
 7. Parse the CSV from the terminal and create a reduced summary CSV when useful.
 
+Xcode may keep the previous save-panel destination even when a different
+`frame<N>.gputrace` is opened, while showing only `Where: analysis`. After each
+export, verify the real path on disk and normalize misplaced files back into
+the current `$ANALYSIS_DIR` before running the finalizer.
+
 For dxmt9 3DMark05 perf probes, always launch through
 `scripts/tools/run_3dmark05_perf_probe.sh`. 3DMark05 can hang on the final frame
 after the useful capture/perf artifacts have already been written, so the
@@ -238,6 +243,10 @@ If the macOS session may be locked while scheduling a probe, pass wrapper
 `--wait-unlocked-sec N` and optionally `--wait-unlocked-interval-sec N`; dry-run
 prints the plan without waiting, while a real run polls the lock state before
 launching Wine and still creates no probe artifacts if the wait expires.
+For no-gputrace A/B runs whose FPS or present count is evidence, add
+`--keep-frontmost` when 3DMark05 may lose focus. The wrapper will periodically
+make the visible `3DMark05.exe` process frontmost during the supervised run, so
+scene-progress drift is not confused with a renderer/perf change.
 Do not start the 3DMark05 launcher script directly without an external timeout
 or process supervisor. If the launcher is started directly without
 `run_experiment.py`, it now falls back to
@@ -275,6 +284,13 @@ valid draw/present counters and no `.gputrace`, so it is not a valid
 performance sample. Use it only as a one-off capture-layer diagnostic and
 classify black/zero-counter output as capture-mode failure, not a renderer
 regression.
+
+For GT1 visual regressions, use `v0.0.3` as the last known visual-safe code
+point and current correctness/alignment anchor. Older `v0.0.1` screenshots are
+historical broad-corruption triage only. A candidate is not visually safe until
+it passes qualitative inspection against the `v0.0.3` anchor, and exact
+pixel-difference claims still require same-frame capture, same-input mini
+replay, or a draw/window-level proof.
 
 For the current GT1 hidden vertex/backend-storage hypothesis,
 `--probe-half-vsout` has already been tested on frame50 and rejected as the
@@ -1403,7 +1419,9 @@ with sidecar `--wait-unlocked-sec N`, records `traces/<run>/metal-system.trace`,
 can still use `xcrun xctrace record --template 'Metal System Trace'
 --all-processes`, keep the trace at `traces/<run>/metal-system.trace`, and run
 the wrapper-printed `xctrace_system_trace_export_cmd` and
-`xctrace_system_trace_summary_cmd`. For backend-route selection, current
+`xctrace_system_trace_summary_cmd`. Keep at least `4GiB` free before starting
+the sidecar; a 10s all-processes 3DMark05 trace has failed at the Instruments
+save/trim step with about `2.4GiB` free. For backend-route selection, current
 encoder-breakdown rows carry coarse `route_*` primitive counters, so the
 System Trace summary can emit depth-only/textured/color route verdicts without
 indexed per-draw logging. Add `--measure-index-reuse` only when per-draw route

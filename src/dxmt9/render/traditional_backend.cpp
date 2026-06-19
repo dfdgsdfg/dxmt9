@@ -1,18 +1,34 @@
 #include "traditional_backend.hpp"
 
+#include "tail_present_batch.hpp"
+
+#include <utility>
+
 namespace dxmt9::render {
 
 std::optional<core::metalqueue::QueueSubmissionRecord>
 TraditionalBackend::onChunkReady(encoders::EncodeContext& ctx,
                                  std::size_t slotIndex,
-                                 const core::ChunkSlot& slot) {
+                                 const core::ChunkSlot& slot,
+                                 encoders::EncodeChunkOptions options) {
   // Backend-agnostic DAG observe + export side-channel (R-BACK-39.7). Reads only
   // `slot`, writes only debug dump files when DXMT9_RENDERER_DUMP_DAG is set, and
   // early-outs otherwise — so the traditional encode below stays byte-identical.
   observer_.observeAndExport(slot);
 
   // Byte-identical traditional path: forward straight to the free function.
-  return encoders::encodeChunk(ctx, slotIndex, slot);
+  return encoders::encodeChunk(ctx, slotIndex, slot, std::move(options));
+}
+
+std::optional<core::metalqueue::QueueSubmissionRecord>
+TraditionalBackend::onChunkBatchReady(
+    encoders::EncodeContext& ctx,
+    std::span<core::metalqueue::ReadySlotSnapshot> sources) {
+  if (sources.size() == 1u) {
+    const auto& source = sources.front();
+    return onChunkReady(ctx, source.slotIndex, source.slot, {});
+  }
+  return encodeTailPresentBatch(ctx, sources, observer_);
 }
 
 bool TraditionalBackend::emitDraw(encoders::EncodeContext& ctx,

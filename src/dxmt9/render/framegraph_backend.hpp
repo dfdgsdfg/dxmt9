@@ -17,6 +17,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <optional>
+#include <span>
 
 namespace dxmt9::render {
 
@@ -52,7 +53,12 @@ class FrameGraphBackend final : public IRenderBackend {
   std::optional<core::metalqueue::QueueSubmissionRecord> onChunkReady(
       encoders::EncodeContext& ctx,
       std::size_t slotIndex,
-      const core::ChunkSlot& slot) override;
+      const core::ChunkSlot& slot,
+      encoders::EncodeChunkOptions options = {}) override;
+
+  std::optional<core::metalqueue::QueueSubmissionRecord> onChunkBatchReady(
+      encoders::EncodeContext& ctx,
+      std::span<core::metalqueue::ReadySlotSnapshot> sources) override;
 
   BackendMode mode() const override { return BackendMode::FrameGraph; }
 

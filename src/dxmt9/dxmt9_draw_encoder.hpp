@@ -418,13 +418,32 @@ bool encodeDraw(EncodeContext& ctx,
                  std::uint32_t commandIndex = std::numeric_limits<std::uint32_t>::max(),
                  const core::DrawBindingSnapshot* bindingSnapshot = nullptr);
 
-// Encode a single chunk's commands into a fresh WMT::CommandBuffer.
+struct EncodeChunkOptions {
+  // Optional open command buffer supplied by an encoded-pending-tail carrier.
+  // When present, encodeChunk appends work into this command buffer and must
+  // not internally commit/split it before the Present tail is appended.
+  WMT::Reference<WMT::CommandBuffer> commandBuffer{};
+  // Open-CB pre-encode carriers must not commit sub-CBs before the Present tail
+  // has been appended; keep the default false for the current byte-identical
+  // path.
+  bool disableMidChunkCommits = false;
+  // Same carrier class must also avoid the optional pre-acquire split that can
+  // commit the pre-Present head immediately before encoding Present.
+  bool disablePresentAcquireSplit = false;
+
+  bool hasInjectedCommandBuffer() const noexcept {
+    return static_cast<bool>(commandBuffer);
+  }
+};
+
+// Encode a single chunk's commands into a fresh or supplied WMT::CommandBuffer.
 // Returns a QueueSubmissionRecord that the finish loop commits; nullopt
 // on allocation failure. Previously MetalBackendDevice::encodeChunk.
 std::optional<core::metalqueue::QueueSubmissionRecord> encodeChunk(
     EncodeContext& ctx,
     std::size_t slotIndex,
-    const core::ChunkSlot& slot);
+    const core::ChunkSlot& slot,
+    EncodeChunkOptions options = {});
 
 }  // namespace encoders
 }  // namespace dxmt9

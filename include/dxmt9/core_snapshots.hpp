@@ -10,6 +10,7 @@
 #include <cstdint>
 #include <functional>
 #include <initializer_list>
+#include <limits>
 #include <memory>
 #include <optional>
 #include <span>
@@ -741,6 +742,115 @@ struct DrawUniformPayload {
   friend bool operator==(const DrawUniformPayload&, const DrawUniformPayload&) = default;
 };
 
+struct DrawUniformFixedPayload {
+  Matrix4x4 worldViewProj{};
+  Matrix4x4 ffpWorldView{};
+  Matrix4x4 ffpNormalMatrix{};
+  Material material{};
+  std::array<Light, kMaxLights> lights{};
+  std::array<Matrix4x4, 4> ffpBlendWorldViewProj{};
+  std::array<Matrix4x4, kMaxTextureStages> textureTransforms{};
+  u32 clipPlaneMask = 0;
+  std::array<ClipPlane, kMaxClipPlanes> clipPlanes{};
+
+  friend bool operator==(const DrawUniformFixedPayload&,
+                         const DrawUniformFixedPayload&) = default;
+};
+
+inline DrawUniformFixedPayload
+makeDrawUniformFixedPayload(const DrawUniformPayload& payload) noexcept {
+  return DrawUniformFixedPayload{
+      .worldViewProj = payload.worldViewProj,
+      .ffpWorldView = payload.ffpWorldView,
+      .ffpNormalMatrix = payload.ffpNormalMatrix,
+      .material = payload.material,
+      .lights = payload.lights,
+      .ffpBlendWorldViewProj = payload.ffpBlendWorldViewProj,
+      .textureTransforms = payload.textureTransforms,
+      .clipPlaneMask = payload.clipPlaneMask,
+      .clipPlanes = payload.clipPlanes,
+  };
+}
+
+struct DrawUniformStageConstantsSpan {
+  std::uint32_t byteOffset = 0;
+  std::uint32_t byteSize = 0;
+  u16 floatCount = 0;
+  u16 intCount = 0;
+  u16 boolCount = 0;
+
+  friend constexpr bool operator==(const DrawUniformStageConstantsSpan&,
+                                   const DrawUniformStageConstantsSpan&) = default;
+};
+
+template <std::size_t FloatCount>
+inline DrawUniformStageConstantsSpan makeDrawUniformStageConstantsSpan(
+    const ShaderConstantSnapshot<FloatCount>& constants,
+    u16 floatCount,
+    u16 intCount,
+    u16 boolCount,
+    std::uint32_t byteOffset) noexcept {
+  const auto clampedFloatCount =
+      static_cast<u16>(std::min<std::size_t>(floatCount, constants.float4.size()));
+  const auto clampedIntCount =
+      static_cast<u16>(std::min<std::size_t>(intCount, constants.int4.size()));
+  const auto clampedBoolCount =
+      static_cast<u16>(std::min<std::size_t>(boolCount, constants.bools.size()));
+  const auto byteSize =
+      static_cast<std::uint64_t>(clampedFloatCount) * sizeof(constants.float4[0]) +
+      static_cast<std::uint64_t>(clampedIntCount) * sizeof(constants.int4[0]) +
+      static_cast<std::uint64_t>(clampedBoolCount) * sizeof(constants.bools[0]);
+  constexpr auto kMaxU32 =
+      static_cast<std::uint64_t>(std::numeric_limits<std::uint32_t>::max());
+  return DrawUniformStageConstantsSpan{
+      .byteOffset = byteOffset,
+      .byteSize = byteSize <= kMaxU32
+          ? static_cast<std::uint32_t>(byteSize)
+          : std::numeric_limits<std::uint32_t>::max(),
+      .floatCount = clampedFloatCount,
+      .intCount = clampedIntCount,
+      .boolCount = clampedBoolCount,
+  };
+}
+
+inline DrawUniformStageConstantsSpan makeDrawUniformVertexConstantsSpan(
+    const DrawUniformPayload& payload, std::uint32_t byteOffset) noexcept {
+  u16 floatCount = payload.vertexFloatConstantCount;
+  u16 intCount = payload.vertexIntConstantCount;
+  const u16 boolCount = payload.vertexBoolConstantCount;
+  if (boolCount != 0) {
+    floatCount = static_cast<u16>(payload.vsConst.float4.size());
+    intCount = static_cast<u16>(payload.vsConst.int4.size());
+  } else if (intCount != 0) {
+    floatCount = static_cast<u16>(payload.vsConst.float4.size());
+  }
+  return makeDrawUniformStageConstantsSpan(
+      payload.vsConst,
+      floatCount,
+      intCount,
+      boolCount,
+      byteOffset);
+}
+
+inline DrawUniformStageConstantsSpan makeDrawUniformPixelConstantsSpan(
+    const DrawUniformPayload& payload, std::uint32_t byteOffset) noexcept {
+  u16 floatCount = payload.pixelFloatConstantCount;
+  u16 intCount = payload.pixelIntConstantCount;
+  const u16 boolCount = payload.pixelBoolConstantCount;
+  if (boolCount != 0) {
+    floatCount = static_cast<u16>(payload.psConst.float4.size());
+    intCount = static_cast<u16>(payload.psConst.int4.size());
+  } else if (intCount != 0) {
+    floatCount = static_cast<u16>(payload.psConst.float4.size());
+  }
+  return makeDrawUniformStageConstantsSpan(
+      payload.psConst,
+      floatCount,
+      intCount,
+      boolCount,
+      byteOffset);
+}
+
 struct DrawUniformPayloadHashes {
   u64 vertexConstantsHash = 0;
   u64 pixelConstantsHash = 0;
@@ -813,6 +923,58 @@ struct DrawPayloadRange {
   u32 size = 0;
 
   constexpr bool empty() const noexcept { return size == 0; }
+};
+
+inline std::span<const u8> drawPayloadRangeBytes(
+    DrawPayloadRange range,
+    std::span<const u8> arena) noexcept {
+  const std::size_t offset = range.offset;
+  const std::size_t size = range.size;
+  if (size == 0) {
+    return {};
+  }
+  if (offset > arena.size() || size > arena.size() - offset) {
+    return {};
+  }
+  return arena.subspan(offset, size);
+}
+
+inline constexpr u32 kInvalidDrawUniformFixedPayloadIndex =
+    std::numeric_limits<u32>::max();
+
+struct DrawUniformCompactSubmissionPayload {
+  u32 fixedPayloadIndex = kInvalidDrawUniformFixedPayloadIndex;
+  DrawUniformStageConstantsSpan vertexConstants{};
+  DrawPayloadRange vertexConstantsRange{};
+  DrawUniformStageConstantsSpan pixelConstants{};
+  DrawPayloadRange pixelConstantsRange{};
+  u64 vertexConstantsHash = 0;
+  u64 pixelConstantsHash = 0;
+  u64 fixedPayloadHash = 0;
+  u64 hash = 0;
+
+  constexpr bool valid() const noexcept {
+    return fixedPayloadIndex != kInvalidDrawUniformFixedPayloadIndex;
+  }
+};
+
+struct DrawUniformCompactPayloadArenaView {
+  std::span<const DrawUniformFixedPayload> fixedPayloads{};
+  std::span<const u8> stageBytes{};
+};
+
+struct DrawSubmissionUniformScratch {
+  std::vector<DrawUniformFixedPayload> fixedPayloads;
+  std::vector<u8> stageBytes;
+  u64 lastFixedPayloadHash = 0;
+  u32 lastFixedPayloadIndex = kInvalidDrawUniformFixedPayloadIndex;
+
+  void clear() noexcept {
+    fixedPayloads.clear();
+    stageBytes.clear();
+    lastFixedPayloadHash = 0;
+    lastFixedPayloadIndex = kInvalidDrawUniformFixedPayloadIndex;
+  }
 };
 
 struct DrawBufferBindingSnapshot {
@@ -918,6 +1080,8 @@ enum class DrawRunSubmissionStateLane : u8 {
 struct DrawRunSubmission {
   std::optional<CanonicalDrawState> state{};
   std::optional<DrawUniformPayload> uniforms{};
+  std::optional<DrawUniformCompactSubmissionPayload> compactUniforms{};
+  DrawUniformCompactPayloadArenaView compactUniformArena{};
   DrawParam draw{};
   DrawParamPayloadView payload{};
   DrawBindingOverride bindingOverride{};
@@ -942,6 +1106,37 @@ struct DrawRunSubmission {
   const DrawUniformPayload& uniformPayload() const noexcept {
     DXMT_ASSERT(uniforms.has_value());
     return *uniforms;
+  }
+  const DrawUniformCompactSubmissionPayload& compactUniformPayload() const noexcept {
+    DXMT_ASSERT(compactUniforms.has_value());
+    return *compactUniforms;
+  }
+};
+
+struct DrawRunCompactSubmission {
+  std::optional<CanonicalDrawState> state{};
+  std::optional<DrawUniformCompactSubmissionPayload> compactUniforms{};
+  DrawUniformCompactPayloadArenaView compactUniformArena{};
+  DrawParam draw{};
+  DrawParamPayloadView payload{};
+  DrawBindingOverride bindingOverride{};
+  u64 stateGeneration = 0;
+  u64 uniformGeneration = 0;
+  u64 uniformPayloadHash = 0;
+  DrawRunSubmissionStateLane stateLane = DrawRunSubmissionStateLane::Unknown;
+  bool stateMaterialized = true;
+
+  CanonicalDrawState& materializedState() noexcept {
+    DXMT_ASSERT(stateMaterialized && state.has_value());
+    return *state;
+  }
+  const CanonicalDrawState& materializedState() const noexcept {
+    DXMT_ASSERT(stateMaterialized && state.has_value());
+    return *state;
+  }
+  const DrawUniformCompactSubmissionPayload& compactUniformPayload() const noexcept {
+    DXMT_ASSERT(compactUniforms.has_value());
+    return *compactUniforms;
   }
 };
 
@@ -985,14 +1180,16 @@ inline void clearDrawShaderLayoutBindingFields(
   shaderLayout.vertexDecl.streams = {};
 }
 
+template <typename Submission>
 inline bool drawRunSubmissionHasExternalBindingOverride(
-    const DrawRunSubmission& submission) noexcept {
+    const Submission& submission) noexcept {
   return !submission.payload.bindingOverrideData.empty() ||
          !drawBindingOverrideEmpty(submission.bindingOverride);
 }
 
+template <typename Submission>
 inline void ensureDrawRunSubmissionBindingOverridePayload(
-    DrawRunSubmission& submission) noexcept {
+    Submission& submission) noexcept {
   if (submission.payload.bindingOverrideData.empty() &&
       !drawBindingOverrideEmpty(submission.bindingOverride)) {
     submission.payload.bindingOverrideData =
@@ -1053,9 +1250,10 @@ inline bool shaderLayoutsCompatibleForDrawRunBatch(
          a.clipPlaneMask == b.clipPlaneMask;
 }
 
+template <typename Submission>
 inline bool drawRunSubmissionStatesCompatibleForBatch(
-    const DrawRunSubmission& a,
-    const DrawRunSubmission& b) noexcept {
+    const Submission& a,
+    const Submission& b) noexcept {
   const auto& aState = a.materializedState();
   const auto& bState = b.materializedState();
   return drawStatesCompatibleForDrawRunBatch(aState.hot, bState.hot) &&
@@ -1063,19 +1261,21 @@ inline bool drawRunSubmissionStatesCompatibleForBatch(
                                                 bState.shaderLayout);
 }
 
+template <typename SubmissionA, typename SubmissionB>
 inline bool drawRunSubmissionSameStateGenerationLane(
-    const DrawRunSubmission& a,
-    const DrawRunSubmission& b) noexcept {
+    const SubmissionA& a,
+    const SubmissionB& b) noexcept {
   return a.stateGeneration != 0 &&
          a.stateGeneration == b.stateGeneration &&
          a.stateLane != DrawRunSubmissionStateLane::Unknown &&
          a.stateLane == b.stateLane;
 }
 
+template <typename Submission>
 inline bool drawRunSubmissionUsesAcceptedPreviousStateGenerationLane(
-    const DrawRunSubmission& base,
-    const DrawRunSubmission& previous,
-    const DrawRunSubmission& candidate) noexcept {
+    const Submission& base,
+    const Submission& previous,
+    const Submission& candidate) noexcept {
   return !drawRunSubmissionSameStateGenerationLane(base, candidate) &&
          !candidate.stateMaterialized &&
          drawRunSubmissionSameStateGenerationLane(previous, candidate);
@@ -1089,23 +1289,64 @@ inline std::uint64_t drawRunSubmissionUniformCopyBytes() noexcept {
   return sizeof(DrawUniformPayload);
 }
 
+inline std::uint64_t drawRunSubmissionCarrierBytes() noexcept {
+  return sizeof(DrawRunSubmission);
+}
+
+inline std::uint64_t drawRunSubmissionCarrierStateStorageBytes() noexcept {
+  return sizeof(std::optional<CanonicalDrawState>);
+}
+
+inline std::uint64_t drawRunSubmissionCarrierUniformStorageBytes() noexcept {
+  return sizeof(std::optional<DrawUniformPayload>);
+}
+
+inline std::uint64_t
+drawRunSubmissionCarrierCompactUniformStorageBytes() noexcept {
+  return sizeof(std::optional<DrawUniformCompactSubmissionPayload>) +
+         sizeof(DrawUniformCompactPayloadArenaView);
+}
+
+inline std::uint64_t drawRunCompactSubmissionCarrierBytes() noexcept {
+  return sizeof(DrawRunCompactSubmission);
+}
+
+inline std::uint64_t
+drawRunCompactSubmissionCarrierStateStorageBytes() noexcept {
+  return sizeof(std::optional<CanonicalDrawState>);
+}
+
+inline std::uint64_t
+drawRunCompactSubmissionCarrierUniformStorageBytes() noexcept {
+  return 0;
+}
+
+inline std::uint64_t
+drawRunCompactSubmissionCarrierCompactUniformStorageBytes() noexcept {
+  return sizeof(std::optional<DrawUniformCompactSubmissionPayload>) +
+         sizeof(DrawUniformCompactPayloadArenaView);
+}
+
+template <typename SubmissionA, typename SubmissionB>
 inline bool drawRunSubmissionSameUniformGeneration(
-    const DrawRunSubmission& a,
-    const DrawRunSubmission& b) noexcept {
+    const SubmissionA& a,
+    const SubmissionB& b) noexcept {
   return a.uniformGeneration != 0 &&
          a.uniformGeneration == b.uniformGeneration;
 }
 
+template <typename SubmissionA, typename SubmissionB>
 inline bool drawRunSubmissionSameUniformPayloadHash(
-    const DrawRunSubmission& a,
-    const DrawRunSubmission& b) noexcept {
+    const SubmissionA& a,
+    const SubmissionB& b) noexcept {
   return a.uniformPayloadHash != 0 &&
          a.uniformPayloadHash == b.uniformPayloadHash;
 }
 
+template <typename Submission>
 inline void prepareDrawRunSubmissionBindingOverride(
-    const DrawRunSubmission& base,
-    DrawRunSubmission& submission) noexcept {
+    const Submission& base,
+    Submission& submission) noexcept {
   if (drawRunSubmissionHasExternalBindingOverride(submission)) {
     ensureDrawRunSubmissionBindingOverridePayload(submission);
     return;
@@ -1777,8 +2018,17 @@ class Device : public std::enable_shared_from_this<Device> {
                            std::span<const DrawParamPayloadView> payloads);
   HResult snapshotDrawSubmissionFromCurrentState(
       DrawParam draw, DrawRunSubmission& submission,
-      const DrawRunSubmission* previousSubmission = nullptr);
+      const DrawRunSubmission* previousSubmission = nullptr,
+      DrawSubmissionUniformScratch* uniformScratch = nullptr,
+      bool compactUniformSubmission = false,
+      bool compactSubmissionCarrier = false);
+  HResult snapshotDrawSubmissionFromCurrentState(
+      DrawParam draw, DrawRunCompactSubmission& submission,
+      const DrawRunCompactSubmission* previousSubmission = nullptr,
+      DrawSubmissionUniformScratch* uniformScratch = nullptr);
   void submitDrawSubmissionBatch(std::span<DrawRunSubmission> submissions);
+  void submitCompactDrawSubmissionBatch(
+      std::span<DrawRunCompactSubmission> submissions);
   HResult present();
   HResult reset(const PresentParameters& params);
   HResult checkDeviceMultiSampleType(Format format, MultiSampleType type) const;
@@ -1855,6 +2105,13 @@ class Device : public std::enable_shared_from_this<Device> {
       DeviceState baseState,
       std::span<const DrawParam> draws,
       std::span<const DrawParamPayloadView> payloads = {});
+  template <typename Submission, typename PreviousSubmission>
+  HResult snapshotDrawSubmissionFromCurrentStateImpl(
+      DrawParam draw, Submission& submission,
+      const PreviousSubmission* previousSubmission,
+      DrawSubmissionUniformScratch* uniformScratch,
+      bool compactUniformSubmission,
+      bool compactSubmissionCarrier);
   void submitPresentInternal(const SwapDesc& desc);
   void maybeCaptureExperimentFrame();
   u32 experimentCaptureRequestedCount() const;
@@ -1878,6 +2135,12 @@ class Device : public std::enable_shared_from_this<Device> {
     DrawShaderLayoutContext shaderLayout{};
     DrawUniformPayload uniforms{};
     DrawUniformPayloadHashes uniformHashes{};
+  };
+
+  struct BatchMissSemanticProbeEntry {
+    FlatDrawStateKey key{};
+    u64 hash = 0;
+    bool valid = false;
   };
 
   void invalidateDrawStateCache(u32 reasonMask = DrawStateInvalidationUnknown) noexcept;
@@ -1917,6 +2180,8 @@ class Device : public std::enable_shared_from_this<Device> {
   CachedBaseDrawState drawStateCacheWithIndex_{};
   CachedBaseDrawState drawStateCacheNoIndex_{};
   CachedBaseDrawState drawStateCacheBindingAgnostic_{};
+  std::array<BatchMissSemanticProbeEntry, 8> drawStateCacheBatchMissSemanticProbe_{};
+  u32 drawStateCacheBatchMissSemanticProbeCursor_ = 0;
   std::vector<std::weak_ptr<Buffer>> buffers_;
   std::vector<std::weak_ptr<Texture>> textures_;
   std::vector<std::weak_ptr<Surface>> surfaces_;

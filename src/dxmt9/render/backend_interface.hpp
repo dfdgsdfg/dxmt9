@@ -14,6 +14,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <optional>
+#include <span>
 
 namespace dxmt9::render {
 
@@ -38,7 +39,26 @@ class IRenderBackend {
   virtual std::optional<core::metalqueue::QueueSubmissionRecord> onChunkReady(
       encoders::EncodeContext& ctx,
       std::size_t slotIndex,
-      const core::ChunkSlot& slot) = 0;
+      const core::ChunkSlot& slot,
+      encoders::EncodeChunkOptions options = {}) = 0;
+  // Future run-ahead / tail-Present staging path: a backend may encode several
+  // consecutive ready sources into one Metal tail submission and fill
+  // QueueSubmissionRecord::completionSources. The default contract is
+  // intentionally conservative: an empty batch completes inline, and a
+  // single-source batch delegates to the byte-identical onChunkReady path.
+  // Multi-source encode is backend-specific and must be implemented explicitly.
+  virtual std::optional<core::metalqueue::QueueSubmissionRecord> onChunkBatchReady(
+      encoders::EncodeContext& ctx,
+      std::span<core::metalqueue::ReadySlotSnapshot> sources) {
+    if (sources.empty()) {
+      return std::nullopt;
+    }
+    if (sources.size() == 1u) {
+      const auto& source = sources.front();
+      return onChunkReady(ctx, source.slotIndex, source.slot, {});
+    }
+    return std::nullopt;
+  }
   virtual BackendMode mode() const = 0;
   virtual BackendCaps caps() const { return {}; }
 };

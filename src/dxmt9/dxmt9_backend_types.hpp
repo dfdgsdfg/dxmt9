@@ -13,6 +13,7 @@
 #include <cstring>
 #include <limits>
 #include <span>
+#include <type_traits>
 #include <utility>
 #include <vector>
 
@@ -132,21 +133,6 @@ struct DrawUniformFixedHandle {
                                    const DrawUniformFixedHandle&) = default;
 };
 
-struct DrawUniformFixedPayload {
-  Matrix4x4 worldViewProj{};
-  Matrix4x4 ffpWorldView{};
-  Matrix4x4 ffpNormalMatrix{};
-  Material material{};
-  std::array<Light, kMaxLights> lights{};
-  std::array<Matrix4x4, 4> ffpBlendWorldViewProj{};
-  std::array<Matrix4x4, kMaxTextureStages> textureTransforms{};
-  u32 clipPlaneMask = 0;
-  std::array<ClipPlane, kMaxClipPlanes> clipPlanes{};
-
-  friend bool operator==(const DrawUniformFixedPayload&,
-                         const DrawUniformFixedPayload&) = default;
-};
-
 struct DrawUniformFixedPayloadRecord {
   DrawUniformFixedHandle handle{};
   DrawUniformFixedPayload payload{};
@@ -160,17 +146,6 @@ struct DrawUniformStageHandle {
   constexpr bool valid() const noexcept { return generation != 0; }
   friend constexpr bool operator==(const DrawUniformStageHandle&,
                                    const DrawUniformStageHandle&) = default;
-};
-
-struct DrawUniformStageConstantsSpan {
-  std::uint32_t byteOffset = 0;
-  std::uint32_t byteSize = 0;
-  u16 floatCount = 0;
-  u16 intCount = 0;
-  u16 boolCount = 0;
-
-  friend constexpr bool operator==(const DrawUniformStageConstantsSpan&,
-                                   const DrawUniformStageConstantsSpan&) = default;
 };
 
 struct DrawUniformVertexConstantsRecord {
@@ -207,7 +182,85 @@ struct DrawUniformPayloadRecord {
         pixelConstantsHash(uniformPayload.pixelConstantsHash),
         fixedPayloadHash(uniformPayload.fixedPayloadHash),
         hash(uniformPayload.hash) {}
+  DrawUniformPayloadRecord(DrawUniformHandle uniformHandle,
+                           DrawUniformFixedHandle uniformFixedHandle,
+                           DrawUniformStageHandle uniformVertexConstantsHandle,
+                           DrawUniformStageHandle uniformPixelConstantsHandle,
+                           u64 uniformVertexConstantsHash,
+                           u64 uniformPixelConstantsHash,
+                           u64 uniformFixedPayloadHash,
+                           u64 uniformPayloadHash)
+      : handle(uniformHandle),
+        fixedHandle(uniformFixedHandle),
+        vertexConstantsHandle(uniformVertexConstantsHandle),
+        pixelConstantsHandle(uniformPixelConstantsHandle),
+        vertexConstantsHash(uniformVertexConstantsHash),
+        pixelConstantsHash(uniformPixelConstantsHash),
+        fixedPayloadHash(uniformFixedPayloadHash),
+        hash(uniformPayloadHash) {}
 };
+
+struct DrawUniformCompactPayloadView {
+  const DrawUniformFixedPayload* fixedPayload = nullptr;
+  DrawUniformStageConstantsSpan vertexConstants{};
+  std::span<const u8> vertexConstantsBytes{};
+  DrawUniformStageConstantsSpan pixelConstants{};
+  std::span<const u8> pixelConstantsBytes{};
+  u64 vertexConstantsHash = 0;
+  u64 pixelConstantsHash = 0;
+  u64 fixedPayloadHash = 0;
+  u64 hash = 0;
+
+  bool valid() const noexcept {
+    return fixedPayload &&
+           vertexConstants.byteSize == vertexConstantsBytes.size() &&
+           pixelConstants.byteSize == pixelConstantsBytes.size();
+  }
+};
+
+template <typename Submission>
+inline DrawUniformCompactPayloadView drawUniformCompactPayloadView(
+    const Submission& submission) noexcept {
+  if (!submission.compactUniforms.has_value()) {
+    return {};
+  }
+  const auto& compact = submission.compactUniformPayload();
+  if (!compact.valid() ||
+      compact.fixedPayloadIndex >= submission.compactUniformArena.fixedPayloads.size()) {
+    return {};
+  }
+  const auto vertexBytes = drawPayloadRangeBytes(
+      compact.vertexConstantsRange, submission.compactUniformArena.stageBytes);
+  const auto pixelBytes = drawPayloadRangeBytes(
+      compact.pixelConstantsRange, submission.compactUniformArena.stageBytes);
+  return DrawUniformCompactPayloadView{
+      .fixedPayload =
+          &submission.compactUniformArena.fixedPayloads[compact.fixedPayloadIndex],
+      .vertexConstants = compact.vertexConstants,
+      .vertexConstantsBytes = vertexBytes,
+      .pixelConstants = compact.pixelConstants,
+      .pixelConstantsBytes = pixelBytes,
+      .vertexConstantsHash = compact.vertexConstantsHash,
+      .pixelConstantsHash = compact.pixelConstantsHash,
+      .fixedPayloadHash = compact.fixedPayloadHash,
+      .hash = compact.hash,
+  };
+}
+
+inline bool drawRunSubmissionHasFullUniformPayload(
+    const DrawRunSubmission& submission) noexcept {
+  return submission.uniforms.has_value();
+}
+
+inline bool drawRunSubmissionHasFullUniformPayload(
+    const DrawRunCompactSubmission& /*submission*/) noexcept {
+  return false;
+}
+
+inline const DrawUniformPayload& drawRunSubmissionFullUniformPayload(
+    const DrawRunSubmission& submission) noexcept {
+  return submission.uniformPayload();
+}
 
 struct MetalCommandHeader {
   MetalCommandKind kind = MetalCommandKind::DrawRun;
@@ -249,71 +302,6 @@ inline std::size_t drawRunPayloadSize(const MetalCommandView& command) noexcept 
 
 inline std::size_t drawRunDrawCount(const MetalCommandView& command) noexcept {
   return command.drawParams.size();
-}
-
-inline DrawUniformFixedPayload
-makeDrawUniformFixedPayload(const DrawUniformPayload& payload) noexcept {
-  return DrawUniformFixedPayload{
-      .worldViewProj = payload.worldViewProj,
-      .ffpWorldView = payload.ffpWorldView,
-      .ffpNormalMatrix = payload.ffpNormalMatrix,
-      .material = payload.material,
-      .lights = payload.lights,
-      .ffpBlendWorldViewProj = payload.ffpBlendWorldViewProj,
-      .textureTransforms = payload.textureTransforms,
-      .clipPlaneMask = payload.clipPlaneMask,
-      .clipPlanes = payload.clipPlanes,
-  };
-}
-
-template <std::size_t FloatCount>
-inline DrawUniformStageConstantsSpan makeDrawUniformStageConstantsSpan(
-    const ShaderConstantSnapshot<FloatCount>& constants,
-    u16 floatCount,
-    u16 intCount,
-    u16 boolCount,
-    std::uint32_t byteOffset) noexcept {
-  const auto clampedFloatCount =
-      static_cast<u16>(std::min<std::size_t>(floatCount, constants.float4.size()));
-  const auto clampedIntCount =
-      static_cast<u16>(std::min<std::size_t>(intCount, constants.int4.size()));
-  const auto clampedBoolCount =
-      static_cast<u16>(std::min<std::size_t>(boolCount, constants.bools.size()));
-  const auto byteSize =
-      static_cast<std::uint64_t>(clampedFloatCount) * sizeof(constants.float4[0]) +
-      static_cast<std::uint64_t>(clampedIntCount) * sizeof(constants.int4[0]) +
-      static_cast<std::uint64_t>(clampedBoolCount) * sizeof(constants.bools[0]);
-  constexpr auto kMaxU32 =
-      static_cast<std::uint64_t>(std::numeric_limits<std::uint32_t>::max());
-  return DrawUniformStageConstantsSpan{
-      .byteOffset = byteOffset,
-      .byteSize = byteSize <= kMaxU32
-          ? static_cast<std::uint32_t>(byteSize)
-          : std::numeric_limits<std::uint32_t>::max(),
-      .floatCount = clampedFloatCount,
-      .intCount = clampedIntCount,
-      .boolCount = clampedBoolCount,
-  };
-}
-
-inline DrawUniformStageConstantsSpan makeDrawUniformVertexConstantsSpan(
-    const DrawUniformPayload& payload, std::uint32_t byteOffset) noexcept {
-  return makeDrawUniformStageConstantsSpan(
-      payload.vsConst,
-      payload.vertexFloatConstantCount,
-      payload.vertexIntConstantCount,
-      payload.vertexBoolConstantCount,
-      byteOffset);
-}
-
-inline DrawUniformStageConstantsSpan makeDrawUniformPixelConstantsSpan(
-    const DrawUniformPayload& payload, std::uint32_t byteOffset) noexcept {
-  return makeDrawUniformStageConstantsSpan(
-      payload.psConst,
-      payload.pixelFloatConstantCount,
-      payload.pixelIntConstantCount,
-      payload.pixelBoolConstantCount,
-      byteOffset);
 }
 
 inline std::span<const u8> drawUniformStageConstantsBytes(
@@ -413,19 +401,28 @@ inline void materializeDrawUniformStageConstants(
 
 inline bool drawUniformFixedPayloadMatches(
     const DrawUniformFixedPayloadRecord& record,
+    const DrawUniformFixedPayload& payload,
+    u64 fixedPayloadHash) noexcept {
+  return record.handle.hash == fixedPayloadHash && record.payload == payload;
+}
+
+inline bool drawUniformFixedPayloadMatches(
+    const DrawUniformFixedPayloadRecord& record,
     const DrawUniformPayload& payload) noexcept {
-  return record.handle.hash == payload.fixedPayloadHash &&
-         record.payload == makeDrawUniformFixedPayload(payload);
+  return drawUniformFixedPayloadMatches(
+      record, makeDrawUniformFixedPayload(payload), payload.fixedPayloadHash);
 }
 
 inline bool drawUniformVertexConstantsMatches(
     const DrawUniformVertexConstantsRecord& record,
     std::span<const u8> constantsBytes,
     const DrawUniformPayload& payload) noexcept {
+  const auto expected = makeDrawUniformVertexConstantsSpan(
+      payload, record.constants.byteOffset);
   return record.handle.hash == payload.vertexConstantsHash &&
-         record.constants.floatCount == payload.vertexFloatConstantCount &&
-         record.constants.intCount == payload.vertexIntConstantCount &&
-         record.constants.boolCount == payload.vertexBoolConstantCount &&
+         record.constants.floatCount == expected.floatCount &&
+         record.constants.intCount == expected.intCount &&
+         record.constants.boolCount == expected.boolCount &&
          drawUniformStageConstantsBytesMatch(
              payload.vsConst, record.constants, constantsBytes);
 }
@@ -434,12 +431,52 @@ inline bool drawUniformPixelConstantsMatches(
     const DrawUniformPixelConstantsRecord& record,
     std::span<const u8> constantsBytes,
     const DrawUniformPayload& payload) noexcept {
+  const auto expected = makeDrawUniformPixelConstantsSpan(
+      payload, record.constants.byteOffset);
   return record.handle.hash == payload.pixelConstantsHash &&
-         record.constants.floatCount == payload.pixelFloatConstantCount &&
-         record.constants.intCount == payload.pixelIntConstantCount &&
-         record.constants.boolCount == payload.pixelBoolConstantCount &&
+         record.constants.floatCount == expected.floatCount &&
+         record.constants.intCount == expected.intCount &&
+         record.constants.boolCount == expected.boolCount &&
          drawUniformStageConstantsBytesMatch(
              payload.psConst, record.constants, constantsBytes);
+}
+
+inline bool drawUniformStageConstantsSpanBytesMatch(
+    DrawUniformStageConstantsSpan recordSpan,
+    std::span<const u8> recordBytes,
+    DrawUniformStageConstantsSpan expectedSpan,
+    std::span<const u8> expectedBytes) noexcept {
+  return recordSpan.byteSize == expectedSpan.byteSize &&
+         recordSpan.floatCount == expectedSpan.floatCount &&
+         recordSpan.intCount == expectedSpan.intCount &&
+         recordSpan.boolCount == expectedSpan.boolCount &&
+         recordBytes.size() == recordSpan.byteSize &&
+         expectedBytes.size() == expectedSpan.byteSize &&
+         (recordBytes.empty() ||
+          std::memcmp(recordBytes.data(), expectedBytes.data(),
+                      recordBytes.size()) == 0);
+}
+
+inline bool drawUniformVertexConstantsMatches(
+    const DrawUniformVertexConstantsRecord& record,
+    std::span<const u8> constantsBytes,
+    const DrawUniformCompactPayloadView& payload) noexcept {
+  return payload.valid() &&
+         record.handle.hash == payload.vertexConstantsHash &&
+         drawUniformStageConstantsSpanBytesMatch(
+             record.constants, constantsBytes,
+             payload.vertexConstants, payload.vertexConstantsBytes);
+}
+
+inline bool drawUniformPixelConstantsMatches(
+    const DrawUniformPixelConstantsRecord& record,
+    std::span<const u8> constantsBytes,
+    const DrawUniformCompactPayloadView& payload) noexcept {
+  return payload.valid() &&
+         record.handle.hash == payload.pixelConstantsHash &&
+         drawUniformStageConstantsSpanBytesMatch(
+             record.constants, constantsBytes,
+             payload.pixelConstants, payload.pixelConstantsBytes);
 }
 
 inline void materializeDrawUniformPayload(
@@ -497,6 +534,32 @@ inline bool drawUniformPayloadRecordMatches(
          drawUniformPixelConstantsMatches(
              pixelRecord, pixelConstantsBytes, payload) &&
          drawUniformFixedPayloadMatches(fixedRecord, payload);
+}
+
+inline bool drawUniformPayloadRecordMatches(
+    const DrawUniformPayloadRecord& record,
+    const DrawUniformFixedPayloadRecord& fixedRecord,
+    const DrawUniformVertexConstantsRecord& vertexRecord,
+    std::span<const u8> vertexConstantsBytes,
+    const DrawUniformPixelConstantsRecord& pixelRecord,
+    std::span<const u8> pixelConstantsBytes,
+    const DrawUniformCompactPayloadView& payload) noexcept {
+  return payload.valid() &&
+         record.handle.hash == payload.hash &&
+         record.hash == payload.hash &&
+         record.vertexConstantsHash == payload.vertexConstantsHash &&
+         record.pixelConstantsHash == payload.pixelConstantsHash &&
+         record.fixedPayloadHash == payload.fixedPayloadHash &&
+         record.vertexConstantsHandle == vertexRecord.handle &&
+         record.pixelConstantsHandle == pixelRecord.handle &&
+         vertexRecord.handle.hash == payload.vertexConstantsHash &&
+         pixelRecord.handle.hash == payload.pixelConstantsHash &&
+         drawUniformVertexConstantsMatches(
+             vertexRecord, vertexConstantsBytes, payload) &&
+         drawUniformPixelConstantsMatches(
+             pixelRecord, pixelConstantsBytes, payload) &&
+         drawUniformFixedPayloadMatches(
+             fixedRecord, *payload.fixedPayload, payload.fixedPayloadHash);
 }
 
 inline const DrawUniformFixedPayloadRecord* drawRunFixedPayloadRecord(
@@ -654,6 +717,72 @@ inline const DrawUniformPayload* drawRunUniformPayloadForParam(
   static thread_local DrawUniformPayload scratch;
   return drawRunUniformPayloadForParam(command, param, scratch);
 }
+
+struct DrawUniformPayloadMaterializeCache {
+  DrawUniformHandle handle{};
+  const DrawUniformPayloadRecord* payloadRecords = nullptr;
+  std::size_t payloadRecordCount = 0;
+  // Returned pointers refer to this single scratch and are invalidated by the
+  // next cache miss. Keep long-lived command payloads in a separate scratch.
+  DrawUniformPayload payload;
+  bool valid = false;
+
+  void reset() noexcept {
+    handle = {};
+    payloadRecords = nullptr;
+    payloadRecordCount = 0;
+    valid = false;
+  }
+
+  bool matchesSource(const MetalCommandView& command) const noexcept {
+    return payloadRecords == command.drawUniformPayloadRecords.data() &&
+           payloadRecordCount == command.drawUniformPayloadRecords.size();
+  }
+
+  const DrawUniformPayload* payloadForHandle(
+      const MetalCommandView& command,
+      DrawUniformHandle requestedHandle,
+      dxmt9::perf::DrawUniformPayloadMaterializeSite site =
+          dxmt9::perf::DrawUniformPayloadMaterializeSite::Other) noexcept {
+    if (valid && requestedHandle.valid() && requestedHandle == handle &&
+        matchesSource(command)) {
+      return &payload;
+    }
+
+    const auto* resolved = drawRunUniformPayloadForHandle(
+        command, requestedHandle, payload, site);
+    if (resolved == &payload) {
+      handle = requestedHandle;
+      payloadRecords = command.drawUniformPayloadRecords.data();
+      payloadRecordCount = command.drawUniformPayloadRecords.size();
+      valid = true;
+    } else {
+      reset();
+    }
+    return resolved;
+  }
+
+  const DrawUniformPayload* payloadForParam(
+      const MetalCommandView& command,
+      const DrawParam& param,
+      dxmt9::perf::DrawUniformPayloadMaterializeSite site =
+          dxmt9::perf::DrawUniformPayloadMaterializeSite::Other) noexcept {
+    if ((!param.uniformHandle.valid() ||
+         (command.drawRunRecord &&
+          param.uniformHandle == command.drawRunRecord->uniformHandle)) &&
+        command.drawUniformPayload) {
+      return command.drawUniformPayload;
+    }
+    if (param.uniformHandle.valid()) {
+      return payloadForHandle(command, param.uniformHandle, site);
+    }
+    if (command.drawRunRecord) {
+      return payloadForHandle(command, command.drawRunRecord->uniformHandle,
+                              site);
+    }
+    return command.drawUniformPayload;
+  }
+};
 
 namespace detail {
 
@@ -814,6 +943,8 @@ struct ChunkSlot {
 
   State state = State::Free;
   u64 seqId = 0;
+  dxmt9::perf::ChunkPublishReason publishReason =
+      dxmt9::perf::ChunkPublishReason::Unknown;
   bool pipelinePrefetchSealed = false;
   std::size_t pipelinePrefetchCommandCursor = 0;
 
@@ -878,6 +1009,7 @@ struct ChunkSlot {
   }
 
   void clearCommands() {
+    publishReason = dxmt9::perf::ChunkPublishReason::Unknown;
     pipelinePrefetchSealed = false;
     pipelinePrefetchCommandCursor = 0;
     commandHeaders.clear();
@@ -1025,9 +1157,23 @@ struct ChunkSlot {
         record, drawUniformVertexConstantsBytes(record), payload);
   }
 
+  bool drawUniformVertexConstantsRecordMatches(
+      const DrawUniformVertexConstantsRecord& record,
+      const DrawUniformCompactPayloadView& payload) const noexcept {
+    return drawUniformVertexConstantsMatches(
+        record, drawUniformVertexConstantsBytes(record), payload);
+  }
+
   bool drawUniformPixelConstantsRecordMatches(
       const DrawUniformPixelConstantsRecord& record,
       const DrawUniformPayload& payload) const noexcept {
+    return drawUniformPixelConstantsMatches(
+        record, drawUniformPixelConstantsBytes(record), payload);
+  }
+
+  bool drawUniformPixelConstantsRecordMatches(
+      const DrawUniformPixelConstantsRecord& record,
+      const DrawUniformCompactPayloadView& payload) const noexcept {
     return drawUniformPixelConstantsMatches(
         record, drawUniformPixelConstantsBytes(record), payload);
   }
@@ -1131,13 +1277,20 @@ struct ChunkSlot {
 
   DrawUniformFixedHandle
   findDrawUniformFixedPayload(const DrawUniformPayload& payload) noexcept {
+    const auto fixedPayload = makeDrawUniformFixedPayload(payload);
+    return findDrawUniformFixedPayload(fixedPayload, payload.fixedPayloadHash);
+  }
+
+  DrawUniformFixedHandle
+  findDrawUniformFixedPayload(const DrawUniformFixedPayload& payload,
+                              u64 fixedPayloadHash) noexcept {
     if (const auto* record = drawUniformFixedPayloadRecord(lastUniformFixedHandle)) {
-      if (drawUniformFixedPayloadMatches(*record, payload)) {
+      if (drawUniformFixedPayloadMatches(*record, payload, fixedPayloadHash)) {
         return record->handle;
       }
     }
     for (const auto& record : drawUniformFixedPayloads) {
-      if (drawUniformFixedPayloadMatches(record, payload)) {
+      if (drawUniformFixedPayloadMatches(record, payload, fixedPayloadHash)) {
         lastUniformFixedHandle = record.handle;
         return record.handle;
       }
@@ -1147,6 +1300,13 @@ struct ChunkSlot {
 
   DrawUniformFixedHandle
   appendDrawUniformFixedPayload(const DrawUniformPayload& payload) {
+    const auto fixedPayload = makeDrawUniformFixedPayload(payload);
+    return appendDrawUniformFixedPayload(fixedPayload, payload.fixedPayloadHash);
+  }
+
+  DrawUniformFixedHandle
+  appendDrawUniformFixedPayload(const DrawUniformFixedPayload& payload,
+                                u64 fixedPayloadHash) {
     const bool canUseUniformSoA =
         detail::chunkSlotCanAppendU32IndexedElement(drawUniformFixedPayloads.size());
     DXMT_ASSERT(canUseUniformSoA &&
@@ -1158,7 +1318,7 @@ struct ChunkSlot {
     const auto fixedIndex =
         static_cast<std::uint32_t>(drawUniformFixedPayloads.size());
     const auto fixedHandle =
-        detail::chunkSlotUniformFixedHandle(fixedIndex, payload.fixedPayloadHash);
+        detail::chunkSlotUniformFixedHandle(fixedIndex, fixedPayloadHash);
     if (dxmt9::perf::enabled()) {
       dxmt9::perf::countDrawUniformFixedPayloadAppend();
       dxmt9::perf::countDrawUniformFixedPayloadAppendBytes(
@@ -1168,7 +1328,7 @@ struct ChunkSlot {
     }
     drawUniformFixedPayloads.push_back(DrawUniformFixedPayloadRecord{
         .handle = fixedHandle,
-        .payload = makeDrawUniformFixedPayload(payload),
+        .payload = payload,
     });
     lastUniformFixedHandle = fixedHandle;
     return fixedHandle;
@@ -1176,6 +1336,49 @@ struct ChunkSlot {
 
   DrawUniformStageHandle
   findDrawUniformVertexConstants(const DrawUniformPayload& payload) noexcept {
+    if (const auto* record =
+            drawUniformVertexConstantsRecord(lastUniformVertexConstantsHandle)) {
+      if (drawUniformVertexConstantsRecordMatches(*record, payload)) {
+        return record->handle;
+      }
+    }
+
+    if (drawUniformStageLookupReady(drawUniformVertexConstants,
+                                    drawUniformVertexConstantsLookupHeads,
+                                    drawUniformVertexConstantsLookupTails,
+                                    drawUniformVertexConstantsLookupNext)) {
+      const auto bucketIndex = detail::chunkSlotUniformLookupBucket(
+          payload.vertexConstantsHash, drawUniformVertexConstantsLookupHeads.size());
+      auto recordIndex = drawUniformVertexConstantsLookupHeads[bucketIndex];
+      for (std::size_t visited = 0;
+           recordIndex != detail::kChunkSlotInvalidUniformIndex &&
+           visited < drawUniformVertexConstants.size();
+           ++visited) {
+        if (recordIndex >= drawUniformVertexConstants.size()) {
+          break;
+        }
+        const auto& record = drawUniformVertexConstants[recordIndex];
+        if (drawUniformVertexConstantsRecordMatches(record, payload)) {
+          lastUniformVertexConstantsHandle = record.handle;
+          return record.handle;
+        }
+        recordIndex = drawUniformVertexConstantsLookupNext[recordIndex];
+      }
+      return {};
+    }
+
+    for (const auto& record : drawUniformVertexConstants) {
+      if (drawUniformVertexConstantsRecordMatches(record, payload)) {
+        lastUniformVertexConstantsHandle = record.handle;
+        return record.handle;
+      }
+    }
+    return {};
+  }
+
+  DrawUniformStageHandle
+  findDrawUniformVertexConstants(
+      const DrawUniformCompactPayloadView& payload) noexcept {
     if (const auto* record =
             drawUniformVertexConstantsRecord(lastUniformVertexConstantsHandle)) {
       if (drawUniformVertexConstantsRecordMatches(*record, payload)) {
@@ -1258,6 +1461,49 @@ struct ChunkSlot {
     return {};
   }
 
+  DrawUniformStageHandle
+  findDrawUniformPixelConstants(
+      const DrawUniformCompactPayloadView& payload) noexcept {
+    if (const auto* record =
+            drawUniformPixelConstantsRecord(lastUniformPixelConstantsHandle)) {
+      if (drawUniformPixelConstantsRecordMatches(*record, payload)) {
+        return record->handle;
+      }
+    }
+
+    if (drawUniformStageLookupReady(drawUniformPixelConstants,
+                                    drawUniformPixelConstantsLookupHeads,
+                                    drawUniformPixelConstantsLookupTails,
+                                    drawUniformPixelConstantsLookupNext)) {
+      const auto bucketIndex = detail::chunkSlotUniformLookupBucket(
+          payload.pixelConstantsHash, drawUniformPixelConstantsLookupHeads.size());
+      auto recordIndex = drawUniformPixelConstantsLookupHeads[bucketIndex];
+      for (std::size_t visited = 0;
+           recordIndex != detail::kChunkSlotInvalidUniformIndex &&
+           visited < drawUniformPixelConstants.size();
+           ++visited) {
+        if (recordIndex >= drawUniformPixelConstants.size()) {
+          break;
+        }
+        const auto& record = drawUniformPixelConstants[recordIndex];
+        if (drawUniformPixelConstantsRecordMatches(record, payload)) {
+          lastUniformPixelConstantsHandle = record.handle;
+          return record.handle;
+        }
+        recordIndex = drawUniformPixelConstantsLookupNext[recordIndex];
+      }
+      return {};
+    }
+
+    for (const auto& record : drawUniformPixelConstants) {
+      if (drawUniformPixelConstantsRecordMatches(record, payload)) {
+        lastUniformPixelConstantsHandle = record.handle;
+        return record.handle;
+      }
+    }
+    return {};
+  }
+
   template <std::size_t FloatCount>
   bool appendDrawUniformStageConstantsBytes(
       std::vector<u8>& arena,
@@ -1294,6 +1540,26 @@ struct ChunkSlot {
     if (boolBytes != 0) {
       std::memcpy(cursor, constants.bools.data(), boolBytes);
     }
+    return true;
+  }
+
+  bool appendDrawUniformStageConstantsBytes(
+      std::vector<u8>& arena,
+      std::span<const u8> constantsBytes,
+      DrawUniformStageConstantsSpan& span) {
+    if (constantsBytes.size() != span.byteSize) {
+      return false;
+    }
+    if (!detail::chunkSlotCanAppendU32Range(arena.size(), span.byteSize)) {
+      return false;
+    }
+    span.byteOffset = static_cast<std::uint32_t>(arena.size());
+    if (span.byteSize == 0) {
+      return true;
+    }
+    const auto oldSize = arena.size();
+    detail::chunkSlotReserveAtLeast(arena, oldSize + span.byteSize);
+    arena.insert(arena.end(), constantsBytes.begin(), constantsBytes.end());
     return true;
   }
 
@@ -1342,6 +1608,55 @@ struct ChunkSlot {
   }
 
   DrawUniformStageHandle
+  appendDrawUniformVertexConstants(
+      const DrawUniformCompactPayloadView& payload) {
+    if (!payload.valid()) {
+      return {};
+    }
+    const bool canUseUniformSoA =
+        detail::chunkSlotCanAppendU32IndexedElement(drawUniformVertexConstants.size());
+    DXMT_ASSERT(canUseUniformSoA &&
+                "draw uniform vertex-constant storage exceeded 32-bit range storage");
+    if (!canUseUniformSoA) {
+      return {};
+    }
+
+    const auto recordIndex =
+        static_cast<std::uint32_t>(drawUniformVertexConstants.size());
+    const auto handle = detail::chunkSlotUniformStageHandle(
+        recordIndex, payload.vertexConstantsHash);
+    auto constantsSpan = payload.vertexConstants;
+    if (!appendDrawUniformStageConstantsBytes(
+            drawUniformVertexConstantBytes, payload.vertexConstantsBytes,
+            constantsSpan)) {
+      return {};
+    }
+    const auto appendBytes =
+        sizeof(DrawUniformVertexConstantsRecord) + constantsSpan.byteSize;
+    if (dxmt9::perf::enabled()) {
+      dxmt9::perf::countDrawUniformVertexConstantsAppend();
+      dxmt9::perf::countDrawUniformVertexConstantsAppendBytes(appendBytes);
+      dxmt9::perf::countDrawUniformPayloadAppendBytes(appendBytes);
+    }
+    reserveDrawUniformStageLookup(drawUniformVertexConstants,
+                                  drawUniformVertexConstantsLookupHeads,
+                                  drawUniformVertexConstantsLookupTails,
+                                  drawUniformVertexConstantsLookupNext,
+                                  drawUniformVertexConstants.size() + 1u);
+    drawUniformVertexConstants.push_back(DrawUniformVertexConstantsRecord{
+        .handle = handle,
+        .constants = constantsSpan,
+    });
+    appendDrawUniformStageLookup(drawUniformVertexConstants,
+                                 drawUniformVertexConstantsLookupHeads,
+                                 drawUniformVertexConstantsLookupTails,
+                                 drawUniformVertexConstantsLookupNext,
+                                 recordIndex);
+    lastUniformVertexConstantsHandle = handle;
+    return handle;
+  }
+
+  DrawUniformStageHandle
   appendDrawUniformPixelConstants(const DrawUniformPayload& payload) {
     const bool canUseUniformSoA =
         detail::chunkSlotCanAppendU32IndexedElement(drawUniformPixelConstants.size());
@@ -1358,6 +1673,55 @@ struct ChunkSlot {
     auto constantsSpan = makeDrawUniformPixelConstantsSpan(payload, 0u);
     if (!appendDrawUniformStageConstantsBytes(
             drawUniformPixelConstantBytes, payload.psConst, constantsSpan)) {
+      return {};
+    }
+    const auto appendBytes =
+        sizeof(DrawUniformPixelConstantsRecord) + constantsSpan.byteSize;
+    if (dxmt9::perf::enabled()) {
+      dxmt9::perf::countDrawUniformPixelConstantsAppend();
+      dxmt9::perf::countDrawUniformPixelConstantsAppendBytes(appendBytes);
+      dxmt9::perf::countDrawUniformPayloadAppendBytes(appendBytes);
+    }
+    reserveDrawUniformStageLookup(drawUniformPixelConstants,
+                                  drawUniformPixelConstantsLookupHeads,
+                                  drawUniformPixelConstantsLookupTails,
+                                  drawUniformPixelConstantsLookupNext,
+                                  drawUniformPixelConstants.size() + 1u);
+    drawUniformPixelConstants.push_back(DrawUniformPixelConstantsRecord{
+        .handle = handle,
+        .constants = constantsSpan,
+    });
+    appendDrawUniformStageLookup(drawUniformPixelConstants,
+                                 drawUniformPixelConstantsLookupHeads,
+                                 drawUniformPixelConstantsLookupTails,
+                                 drawUniformPixelConstantsLookupNext,
+                                 recordIndex);
+    lastUniformPixelConstantsHandle = handle;
+    return handle;
+  }
+
+  DrawUniformStageHandle
+  appendDrawUniformPixelConstants(
+      const DrawUniformCompactPayloadView& payload) {
+    if (!payload.valid()) {
+      return {};
+    }
+    const bool canUseUniformSoA =
+        detail::chunkSlotCanAppendU32IndexedElement(drawUniformPixelConstants.size());
+    DXMT_ASSERT(canUseUniformSoA &&
+                "draw uniform pixel-constant storage exceeded 32-bit range storage");
+    if (!canUseUniformSoA) {
+      return {};
+    }
+
+    const auto recordIndex =
+        static_cast<std::uint32_t>(drawUniformPixelConstants.size());
+    const auto handle = detail::chunkSlotUniformStageHandle(
+        recordIndex, payload.pixelConstantsHash);
+    auto constantsSpan = payload.pixelConstants;
+    if (!appendDrawUniformStageConstantsBytes(
+            drawUniformPixelConstantBytes, payload.pixelConstantsBytes,
+            constantsSpan)) {
       return {};
     }
     const auto appendBytes =
@@ -1600,6 +1964,132 @@ struct ChunkSlot {
     return {};
   }
 
+  DrawUniformHandle findDrawUniformPayload(
+      const DrawUniformCompactPayloadView& payload,
+      DrawUniformHandle candidate = {}) noexcept {
+    detail::ChunkSlotPerfScope lookupScope(
+        dxmt9::perf::countDrawUniformPayloadLookupCpuTime);
+    if (!payload.valid()) {
+      return {};
+    }
+    const bool recordPerf = dxmt9::perf::enabled();
+    bool sawSemanticHashFullMismatch = false;
+    auto payloadMatches = [&](const DrawUniformPayloadRecord& record) noexcept {
+      if (record.handle.hash != payload.hash) {
+        return false;
+      }
+      const auto* fixedRecord = drawUniformFixedPayloadRecord(record.fixedHandle);
+      const auto* vertexRecord =
+          drawUniformVertexConstantsRecord(record.vertexConstantsHandle);
+      const auto* pixelRecord =
+          drawUniformPixelConstantsRecord(record.pixelConstantsHandle);
+      if (fixedRecord && vertexRecord && pixelRecord &&
+          drawUniformPayloadRecordMatches(
+              record, *fixedRecord,
+              *vertexRecord, drawUniformVertexConstantsBytes(*vertexRecord),
+              *pixelRecord, drawUniformPixelConstantsBytes(*pixelRecord),
+              payload)) {
+        return true;
+      }
+      sawSemanticHashFullMismatch = true;
+      return false;
+    };
+    auto countSemanticHashMiss = [&]() noexcept {
+      if (recordPerf && sawSemanticHashFullMismatch) {
+        dxmt9::perf::countDrawUniformPayloadLookupSemanticHashMiss(
+            sizeof(DrawUniformPayloadRecord));
+      }
+    };
+    if (const auto* record = drawUniformPayloadRecord(candidate)) {
+      if (payloadMatches(*record)) {
+        if (recordPerf) {
+          dxmt9::perf::countDrawUniformPayloadLookupCandidateHit();
+        }
+        lastUniformHandle = record->handle;
+        return record->handle;
+      }
+    }
+
+    if (const auto* record = drawUniformPayloadRecord(lastUniformHandle)) {
+      if (payloadMatches(*record)) {
+        if (recordPerf) {
+          dxmt9::perf::countDrawUniformPayloadLookupLastHit();
+        }
+        return record->handle;
+      }
+    }
+
+    if (drawUniformPayloadLookupReady()) {
+      detail::ChunkSlotPerfScope bucketScope(
+          dxmt9::perf::countDrawUniformPayloadLookupBucketCpuTime);
+      const auto bucketIndex = detail::chunkSlotUniformLookupBucket(
+          payload.hash, drawUniformPayloadLookupHeads.size());
+      auto uniformIndex = drawUniformPayloadLookupHeads[bucketIndex];
+      bool lookupIntact = true;
+      std::uint64_t bucketProbes = 0;
+      std::uint64_t bucketCollisions = 0;
+      std::uint64_t hashCollisions = 0;
+      for (std::size_t visited = 0;
+           uniformIndex != detail::kChunkSlotInvalidUniformIndex &&
+           visited < drawUniformPayloads.size();
+           ++visited) {
+        if (uniformIndex >= drawUniformPayloads.size()) {
+          lookupIntact = false;
+          break;
+        }
+
+        const auto& record = drawUniformPayloads[uniformIndex];
+        ++bucketProbes;
+        const bool hashMatches = record.handle.hash == payload.hash;
+        if (payloadMatches(record)) {
+          if (recordPerf) {
+            dxmt9::perf::countDrawUniformPayloadLookupBucketProbe(bucketProbes);
+            dxmt9::perf::countDrawUniformPayloadLookupBucketCollision(
+                bucketCollisions);
+            dxmt9::perf::countDrawUniformPayloadLookupHashCollision(
+                hashCollisions);
+            dxmt9::perf::countDrawUniformPayloadLookupBucketHit();
+          }
+          lastUniformHandle = record.handle;
+          return record.handle;
+        }
+        if (hashMatches) {
+          ++hashCollisions;
+        } else {
+          ++bucketCollisions;
+        }
+        uniformIndex = drawUniformPayloadLookupNext[uniformIndex];
+      }
+      if (recordPerf) {
+        dxmt9::perf::countDrawUniformPayloadLookupBucketProbe(bucketProbes);
+        dxmt9::perf::countDrawUniformPayloadLookupBucketCollision(
+            bucketCollisions);
+        dxmt9::perf::countDrawUniformPayloadLookupHashCollision(
+            hashCollisions);
+      }
+      if (lookupIntact && uniformIndex == detail::kChunkSlotInvalidUniformIndex) {
+        if (recordPerf) {
+          dxmt9::perf::countDrawUniformPayloadLookupBucketMiss();
+        }
+        countSemanticHashMiss();
+        return {};
+      }
+    }
+
+    for (std::size_t i = 0; i < drawUniformPayloads.size(); ++i) {
+      const auto& record = drawUniformPayloads[i];
+      if (payloadMatches(record)) {
+        if (recordPerf) {
+          dxmt9::perf::countDrawUniformPayloadLookupLinearHit();
+        }
+        lastUniformHandle = record.handle;
+        return record.handle;
+      }
+    }
+    countSemanticHashMiss();
+    return {};
+  }
+
   DrawUniformHandle appendDrawUniformPayload(const DrawUniformPayload& payload) {
     const bool canUseUniformSoA =
         detail::chunkSlotCanAppendU32IndexedElement(drawUniformPayloads.size()) &&
@@ -1663,6 +2153,91 @@ struct ChunkSlot {
       drawUniformPayloads.emplace_back(uniformHandle, fixedHandle,
                                        vertexConstantsHandle,
                                        pixelConstantsHandle, payload);
+    }
+    {
+      detail::ChunkSlotPerfScope scope(
+          dxmt9::perf::countDrawUniformPayloadAppendLinkCpuTime);
+      if (!detail::chunkSlotDisableDrawUniformPayloadDedup()) {
+        appendDrawUniformPayloadLookup(uniformIndex);
+      }
+    }
+    lastUniformHandle = uniformHandle;
+    return uniformHandle;
+  }
+
+  DrawUniformHandle appendDrawUniformPayload(
+      const DrawUniformCompactPayloadView& payload) {
+    if (!payload.valid()) {
+      return {};
+    }
+    const bool canUseUniformSoA =
+        detail::chunkSlotCanAppendU32IndexedElement(drawUniformPayloads.size()) &&
+        detail::chunkSlotCanAppendU32IndexedElement(drawUniformFixedPayloads.size()) &&
+        detail::chunkSlotCanAppendU32IndexedElement(drawUniformVertexConstants.size()) &&
+        detail::chunkSlotCanAppendU32IndexedElement(drawUniformPixelConstants.size());
+    DXMT_ASSERT(canUseUniformSoA && "draw uniform payload storage exceeded 32-bit range storage");
+    if (!canUseUniformSoA) {
+      return {};
+    }
+
+    DrawUniformFixedHandle fixedHandle =
+        detail::chunkSlotDisableDrawUniformPayloadDedup()
+            ? DrawUniformFixedHandle{}
+            : findDrawUniformFixedPayload(*payload.fixedPayload,
+                                          payload.fixedPayloadHash);
+    if (!fixedHandle.valid()) {
+      fixedHandle = appendDrawUniformFixedPayload(*payload.fixedPayload,
+                                                  payload.fixedPayloadHash);
+      if (!fixedHandle.valid()) {
+        return {};
+      }
+    }
+
+    DrawUniformStageHandle vertexConstantsHandle =
+        detail::chunkSlotDisableDrawUniformPayloadDedup()
+            ? DrawUniformStageHandle{}
+            : findDrawUniformVertexConstants(payload);
+    if (!vertexConstantsHandle.valid()) {
+      vertexConstantsHandle = appendDrawUniformVertexConstants(payload);
+      if (!vertexConstantsHandle.valid()) {
+        return {};
+      }
+    }
+
+    DrawUniformStageHandle pixelConstantsHandle =
+        detail::chunkSlotDisableDrawUniformPayloadDedup()
+            ? DrawUniformStageHandle{}
+            : findDrawUniformPixelConstants(payload);
+    if (!pixelConstantsHandle.valid()) {
+      pixelConstantsHandle = appendDrawUniformPixelConstants(payload);
+      if (!pixelConstantsHandle.valid()) {
+        return {};
+      }
+    }
+
+    const auto uniformIndex = static_cast<std::uint32_t>(drawUniformPayloads.size());
+    const auto uniformHandle = detail::chunkSlotUniformHandle(uniformIndex, payload.hash);
+    if (dxmt9::perf::enabled()) {
+      dxmt9::perf::countDrawUniformPayloadAppend();
+      dxmt9::perf::countDrawUniformPayloadAppendBytes(sizeof(DrawUniformPayloadRecord));
+    }
+    {
+      detail::ChunkSlotPerfScope scope(
+          dxmt9::perf::countDrawUniformPayloadAppendReserveCpuTime);
+      if (!detail::chunkSlotDisableDrawUniformPayloadDedup()) {
+        reserveDrawUniformPayloadLookup(drawUniformPayloads.size() + 1u);
+      }
+    }
+    {
+      detail::ChunkSlotPerfScope scope(
+          dxmt9::perf::countDrawUniformPayloadAppendCopyCpuTime);
+      drawUniformPayloads.emplace_back(uniformHandle, fixedHandle,
+                                       vertexConstantsHandle,
+                                       pixelConstantsHandle,
+                                       payload.vertexConstantsHash,
+                                       payload.pixelConstantsHash,
+                                       payload.fixedPayloadHash,
+                                       payload.hash);
     }
     {
       detail::ChunkSlotPerfScope scope(
@@ -1872,7 +2447,8 @@ struct ChunkSlot {
     drawPsoSubviews.push_back(psoSubview);
   }
 
-  void appendDrawRunBatch(std::span<DrawRunSubmission> submissions) {
+  template <typename Submission>
+  void appendDrawRunBatch(std::span<Submission> submissions) {
     if (submissions.empty()) {
       return;
     }
@@ -2002,13 +2578,62 @@ struct ChunkSlot {
       std::uint64_t previousUniformGeneration = 0;
       for (std::size_t i = 0; i < submissions.size(); ++i) {
         DrawUniformHandle uniformHandle{};
-        if (submissions[i].uniforms.has_value()) {
+        if constexpr (std::is_same_v<Submission, DrawRunSubmission>) {
+          if (drawRunSubmissionHasFullUniformPayload(submissions[i])) {
+            const auto& uniformPayload =
+                drawRunSubmissionFullUniformPayload(submissions[i]);
+            if (!detail::chunkSlotDisableDrawUniformPayloadDedup()) {
+              uniformHandle = findDrawUniformPayload(uniformPayload);
+            }
+            if (!uniformHandle.valid()) {
+              uniformHandle = appendDrawUniformPayload(uniformPayload);
+              if (!uniformHandle.valid()) {
+                return;
+              }
+            }
+            previousUniformHandle = uniformHandle;
+            previousUniformGeneration = submissions[i].uniformGeneration;
+          } else if (submissions[i].compactUniforms.has_value()) {
+            const auto compactUniform = drawUniformCompactPayloadView(submissions[i]);
+            DXMT_ASSERT(compactUniform.valid() &&
+                        "compact draw submission uniforms require valid scratch arena");
+            if (!compactUniform.valid()) {
+              return;
+            }
+            if (!detail::chunkSlotDisableDrawUniformPayloadDedup()) {
+              uniformHandle = findDrawUniformPayload(compactUniform);
+            }
+            if (!uniformHandle.valid()) {
+              uniformHandle = appendDrawUniformPayload(compactUniform);
+              if (!uniformHandle.valid()) {
+                return;
+              }
+            }
+            previousUniformHandle = uniformHandle;
+            previousUniformGeneration = submissions[i].uniformGeneration;
+          } else {
+            const bool sameUniformGeneration =
+                submissions[i].uniformGeneration != 0 &&
+                submissions[i].uniformGeneration == previousUniformGeneration;
+            DXMT_ASSERT(i != 0u &&
+                        "batch-front draw submission must materialize uniforms");
+            DXMT_ASSERT(sameUniformGeneration && previousUniformHandle.valid() &&
+                        "elided draw submission uniforms require previous handle");
+            (void)sameUniformGeneration;
+            uniformHandle = previousUniformHandle;
+          }
+        } else if (submissions[i].compactUniforms.has_value()) {
+          const auto compactUniform = drawUniformCompactPayloadView(submissions[i]);
+          DXMT_ASSERT(compactUniform.valid() &&
+                      "compact draw submission uniforms require valid scratch arena");
+          if (!compactUniform.valid()) {
+            return;
+          }
           if (!detail::chunkSlotDisableDrawUniformPayloadDedup()) {
-            uniformHandle = findDrawUniformPayload(submissions[i].uniformPayload());
+            uniformHandle = findDrawUniformPayload(compactUniform);
           }
           if (!uniformHandle.valid()) {
-            uniformHandle =
-                appendDrawUniformPayload(submissions[i].uniformPayload());
+            uniformHandle = appendDrawUniformPayload(compactUniform);
             if (!uniformHandle.valid()) {
               return;
             }
@@ -2146,6 +2771,327 @@ struct ChunkSlot {
     });
   }
 
+  bool canAppendCommandsFrom(const ChunkSlot& source) const noexcept {
+    if (&source == this || pipelinePrefetchSealed || !drawStateStorageConsistent() ||
+        !source.drawStateStorageConsistent() ||
+        !source.commandPayloadsInRange()) {
+      return false;
+    }
+
+    return detail::chunkSlotCanAppendU32Range(commandHeaders.size(),
+                                             source.commandHeaders.size()) &&
+           detail::chunkSlotCanAppendU32Range(drawHotStates.size(),
+                                              source.drawHotStates.size()) &&
+           detail::chunkSlotCanAppendU32Range(drawPsoSubviews.size(),
+                                              source.drawPsoSubviews.size()) &&
+           detail::chunkSlotCanAppendU32Range(drawUniformFixedPayloads.size(),
+                                              source.drawUniformFixedPayloads.size()) &&
+           detail::chunkSlotCanAppendU32Range(drawUniformVertexConstants.size(),
+                                              source.drawUniformVertexConstants.size()) &&
+           detail::chunkSlotCanAppendU32Range(drawUniformVertexConstantBytes.size(),
+                                              source.drawUniformVertexConstantBytes.size()) &&
+           detail::chunkSlotCanAppendU32Range(drawUniformPixelConstants.size(),
+                                              source.drawUniformPixelConstants.size()) &&
+           detail::chunkSlotCanAppendU32Range(drawUniformPixelConstantBytes.size(),
+                                              source.drawUniformPixelConstantBytes.size()) &&
+           detail::chunkSlotCanAppendU32Range(drawUniformPayloads.size(),
+                                              source.drawUniformPayloads.size()) &&
+           detail::chunkSlotCanAppendU32Range(drawParams.size(),
+                                              source.drawParams.size()) &&
+           detail::chunkSlotCanAppendU32Range(drawPayloadArena.size(),
+                                              source.drawPayloadArena.size()) &&
+           detail::chunkSlotCanAppendU32Range(drawRunRecords.size(),
+                                              source.drawRunRecords.size()) &&
+           detail::chunkSlotCanAppendU32Range(clearRecords.size(),
+                                              source.clearRecords.size()) &&
+           detail::chunkSlotCanAppendU32Range(surfaceCopyRecords.size(),
+                                              source.surfaceCopyRecords.size()) &&
+           detail::chunkSlotCanAppendU32Range(stretchRectRecords.size(),
+                                              source.stretchRectRecords.size()) &&
+           detail::chunkSlotCanAppendU32Range(readbackRecords.size(),
+                                              source.readbackRecords.size()) &&
+           detail::chunkSlotCanAppendU32Range(colorFillRecords.size(),
+                                              source.colorFillRecords.size()) &&
+           detail::chunkSlotCanAppendU32Range(depthResolveRecords.size(),
+                                              source.depthResolveRecords.size()) &&
+           detail::chunkSlotCanAppendU32Range(presentRecords.size(),
+                                              source.presentRecords.size());
+  }
+
+  bool appendCommandsFrom(const ChunkSlot& source) {
+    DXMT_ASSERT(!pipelinePrefetchSealed &&
+                "cannot merge commands after slot prefetch seal");
+    if (!canAppendCommandsFrom(source)) {
+      return false;
+    }
+    if (source.commandHeaders.empty()) {
+      return true;
+    }
+
+    struct Bases {
+      std::uint32_t state = 0;
+      std::uint32_t pso = 0;
+      std::uint32_t fixed = 0;
+      std::uint32_t vertexConstants = 0;
+      std::uint32_t vertexConstantBytes = 0;
+      std::uint32_t pixelConstants = 0;
+      std::uint32_t pixelConstantBytes = 0;
+      std::uint32_t uniform = 0;
+      std::uint32_t param = 0;
+      std::uint32_t payload = 0;
+      std::uint32_t drawRun = 0;
+      std::uint32_t clear = 0;
+      std::uint32_t surfaceCopy = 0;
+      std::uint32_t stretchRect = 0;
+      std::uint32_t readback = 0;
+      std::uint32_t colorFill = 0;
+      std::uint32_t depthResolve = 0;
+      std::uint32_t present = 0;
+    };
+    const Bases base{
+        .state = static_cast<std::uint32_t>(drawHotStates.size()),
+        .pso = static_cast<std::uint32_t>(drawPsoSubviews.size()),
+        .fixed = static_cast<std::uint32_t>(drawUniformFixedPayloads.size()),
+        .vertexConstants =
+            static_cast<std::uint32_t>(drawUniformVertexConstants.size()),
+        .vertexConstantBytes =
+            static_cast<std::uint32_t>(drawUniformVertexConstantBytes.size()),
+        .pixelConstants =
+            static_cast<std::uint32_t>(drawUniformPixelConstants.size()),
+        .pixelConstantBytes =
+            static_cast<std::uint32_t>(drawUniformPixelConstantBytes.size()),
+        .uniform = static_cast<std::uint32_t>(drawUniformPayloads.size()),
+        .param = static_cast<std::uint32_t>(drawParams.size()),
+        .payload = static_cast<std::uint32_t>(drawPayloadArena.size()),
+        .drawRun = static_cast<std::uint32_t>(drawRunRecords.size()),
+        .clear = static_cast<std::uint32_t>(clearRecords.size()),
+        .surfaceCopy = static_cast<std::uint32_t>(surfaceCopyRecords.size()),
+        .stretchRect = static_cast<std::uint32_t>(stretchRectRecords.size()),
+        .readback = static_cast<std::uint32_t>(readbackRecords.size()),
+        .colorFill = static_cast<std::uint32_t>(colorFillRecords.size()),
+        .depthResolve = static_cast<std::uint32_t>(depthResolveRecords.size()),
+        .present = static_cast<std::uint32_t>(presentRecords.size()),
+    };
+
+    detail::chunkSlotReserveAtLeast(commandHeaders,
+                                    commandHeaders.size() + source.commandHeaders.size());
+    reserveDrawStateStorage(drawHotStates.size() + source.drawHotStates.size());
+    detail::chunkSlotReserveAtLeast(drawPsoSubviews,
+                                    drawPsoSubviews.size() + source.drawPsoSubviews.size());
+    detail::chunkSlotReserveAtLeast(
+        drawUniformFixedPayloads,
+        drawUniformFixedPayloads.size() + source.drawUniformFixedPayloads.size());
+    detail::chunkSlotReserveAtLeast(
+        drawUniformVertexConstants,
+        drawUniformVertexConstants.size() + source.drawUniformVertexConstants.size());
+    detail::chunkSlotReserveAtLeast(
+        drawUniformVertexConstantBytes,
+        drawUniformVertexConstantBytes.size() +
+            source.drawUniformVertexConstantBytes.size());
+    detail::chunkSlotReserveAtLeast(
+        drawUniformPixelConstants,
+        drawUniformPixelConstants.size() + source.drawUniformPixelConstants.size());
+    detail::chunkSlotReserveAtLeast(
+        drawUniformPixelConstantBytes,
+        drawUniformPixelConstantBytes.size() +
+            source.drawUniformPixelConstantBytes.size());
+    detail::chunkSlotReserveAtLeast(
+        drawUniformPayloads,
+        drawUniformPayloads.size() + source.drawUniformPayloads.size());
+    detail::chunkSlotReserveAtLeast(drawParams,
+                                    drawParams.size() + source.drawParams.size());
+    detail::chunkSlotReserveAtLeast(
+        drawPayloadArena,
+        drawPayloadArena.size() + source.drawPayloadArena.size());
+    detail::chunkSlotReserveAtLeast(
+        drawRunRecords,
+        drawRunRecords.size() + source.drawRunRecords.size());
+    detail::chunkSlotReserveAtLeast(
+        clearRecords, clearRecords.size() + source.clearRecords.size());
+    detail::chunkSlotReserveAtLeast(
+        surfaceCopyRecords,
+        surfaceCopyRecords.size() + source.surfaceCopyRecords.size());
+    detail::chunkSlotReserveAtLeast(
+        stretchRectRecords,
+        stretchRectRecords.size() + source.stretchRectRecords.size());
+    detail::chunkSlotReserveAtLeast(
+        readbackRecords, readbackRecords.size() + source.readbackRecords.size());
+    detail::chunkSlotReserveAtLeast(
+        colorFillRecords, colorFillRecords.size() + source.colorFillRecords.size());
+    detail::chunkSlotReserveAtLeast(
+        depthResolveRecords,
+        depthResolveRecords.size() + source.depthResolveRecords.size());
+    detail::chunkSlotReserveAtLeast(
+        presentRecords, presentRecords.size() + source.presentRecords.size());
+
+    auto remapUniformHandle = [](DrawUniformHandle handle,
+                                 std::uint32_t uniformBase) noexcept {
+      if (!handle.valid()) {
+        return handle;
+      }
+      handle.index += uniformBase;
+      handle.generation = handle.index + 1u;
+      return handle;
+    };
+    auto remapFixedHandle = [](DrawUniformFixedHandle handle,
+                               std::uint32_t fixedBase) noexcept {
+      if (!handle.valid()) {
+        return handle;
+      }
+      handle.index += fixedBase;
+      handle.generation = handle.index + 1u;
+      return handle;
+    };
+    auto remapStageHandle = [](DrawUniformStageHandle handle,
+                               std::uint32_t stageBase) noexcept {
+      if (!handle.valid()) {
+        return handle;
+      }
+      handle.index += stageBase;
+      handle.generation = handle.index + 1u;
+      return handle;
+    };
+
+    drawHotStates.insert(drawHotStates.end(),
+                         source.drawHotStates.begin(), source.drawHotStates.end());
+    drawShaderLayouts.insert(drawShaderLayouts.end(),
+                             source.drawShaderLayouts.begin(),
+                             source.drawShaderLayouts.end());
+    drawDebugSnapshots.insert(drawDebugSnapshots.end(),
+                              source.drawDebugSnapshots.begin(),
+                              source.drawDebugSnapshots.end());
+    drawPsoSubviews.insert(drawPsoSubviews.end(),
+                           source.drawPsoSubviews.begin(),
+                           source.drawPsoSubviews.end());
+
+    for (const auto& sourceRecord : source.drawUniformFixedPayloads) {
+      auto record = sourceRecord;
+      record.handle = remapFixedHandle(record.handle, base.fixed);
+      drawUniformFixedPayloads.push_back(record);
+    }
+    for (const auto& sourceRecord : source.drawUniformVertexConstants) {
+      auto record = sourceRecord;
+      record.handle = remapStageHandle(record.handle, base.vertexConstants);
+      record.constants.byteOffset += base.vertexConstantBytes;
+      drawUniformVertexConstants.push_back(record);
+    }
+    drawUniformVertexConstantBytes.insert(
+        drawUniformVertexConstantBytes.end(),
+        source.drawUniformVertexConstantBytes.begin(),
+        source.drawUniformVertexConstantBytes.end());
+    for (const auto& sourceRecord : source.drawUniformPixelConstants) {
+      auto record = sourceRecord;
+      record.handle = remapStageHandle(record.handle, base.pixelConstants);
+      record.constants.byteOffset += base.pixelConstantBytes;
+      drawUniformPixelConstants.push_back(record);
+    }
+    drawUniformPixelConstantBytes.insert(
+        drawUniformPixelConstantBytes.end(),
+        source.drawUniformPixelConstantBytes.begin(),
+        source.drawUniformPixelConstantBytes.end());
+    for (const auto& sourceRecord : source.drawUniformPayloads) {
+      auto record = sourceRecord;
+      record.handle = remapUniformHandle(record.handle, base.uniform);
+      record.fixedHandle = remapFixedHandle(record.fixedHandle, base.fixed);
+      record.vertexConstantsHandle =
+          remapStageHandle(record.vertexConstantsHandle, base.vertexConstants);
+      record.pixelConstantsHandle =
+          remapStageHandle(record.pixelConstantsHandle, base.pixelConstants);
+      drawUniformPayloads.push_back(record);
+    }
+
+    for (const auto& sourceParam : source.drawParams) {
+      auto param = sourceParam;
+      param.uniformHandle = remapUniformHandle(param.uniformHandle, base.uniform);
+      drawParams.push_back(param);
+    }
+    drawPayloadArena.insert(drawPayloadArena.end(),
+                            source.drawPayloadArena.begin(),
+                            source.drawPayloadArena.end());
+    for (const auto& sourceRecord : source.drawRunRecords) {
+      auto record = sourceRecord;
+      record.stateIndex += base.state;
+      record.firstParam += base.param;
+      record.payloadOffset += base.payload;
+      record.uniformHandle = remapUniformHandle(record.uniformHandle, base.uniform);
+      drawRunRecords.push_back(record);
+    }
+
+    clearRecords.insert(clearRecords.end(),
+                        source.clearRecords.begin(), source.clearRecords.end());
+    surfaceCopyRecords.insert(surfaceCopyRecords.end(),
+                              source.surfaceCopyRecords.begin(),
+                              source.surfaceCopyRecords.end());
+    stretchRectRecords.insert(stretchRectRecords.end(),
+                              source.stretchRectRecords.begin(),
+                              source.stretchRectRecords.end());
+    readbackRecords.insert(readbackRecords.end(),
+                           source.readbackRecords.begin(),
+                           source.readbackRecords.end());
+    colorFillRecords.insert(colorFillRecords.end(),
+                            source.colorFillRecords.begin(),
+                            source.colorFillRecords.end());
+    depthResolveRecords.insert(depthResolveRecords.end(),
+                               source.depthResolveRecords.begin(),
+                               source.depthResolveRecords.end());
+    presentRecords.insert(presentRecords.end(),
+                          source.presentRecords.begin(), source.presentRecords.end());
+
+    for (const auto& header : source.commandHeaders) {
+      CommandPayloadIndex remappedIndex = header.payloadIndex;
+      switch (header.kind) {
+      case MetalCommandKind::DrawRun:
+        remappedIndex.value += base.drawRun;
+        break;
+      case MetalCommandKind::Clear:
+        remappedIndex.value += base.clear;
+        break;
+      case MetalCommandKind::SurfaceCopy:
+        remappedIndex.value += base.surfaceCopy;
+        break;
+      case MetalCommandKind::StretchRect:
+        remappedIndex.value += base.stretchRect;
+        break;
+      case MetalCommandKind::Readback:
+        remappedIndex.value += base.readback;
+        break;
+      case MetalCommandKind::ColorFill:
+        remappedIndex.value += base.colorFill;
+        break;
+      case MetalCommandKind::DepthResolve:
+        remappedIndex.value += base.depthResolve;
+        break;
+      case MetalCommandKind::Present:
+        remappedIndex.value += base.present;
+        break;
+      }
+      commandHeaders.push_back(MetalCommandHeader{
+          .kind = header.kind,
+          .payloadIndex = remappedIndex,
+      });
+    }
+
+    rebuildDrawUniformPayloadLookup(
+        detail::chunkSlotUniformLookupBucketCount(drawUniformPayloads.size()));
+    rebuildDrawUniformStageLookup(
+        drawUniformVertexConstants,
+        drawUniformVertexConstantsLookupHeads,
+        drawUniformVertexConstantsLookupTails,
+        drawUniformVertexConstantsLookupNext,
+        detail::chunkSlotUniformLookupBucketCount(drawUniformVertexConstants.size()));
+    rebuildDrawUniformStageLookup(
+        drawUniformPixelConstants,
+        drawUniformPixelConstantsLookupHeads,
+        drawUniformPixelConstantsLookupTails,
+        drawUniformPixelConstantsLookupNext,
+        detail::chunkSlotUniformLookupBucketCount(drawUniformPixelConstants.size()));
+    lastUniformFixedHandle = {};
+    lastUniformVertexConstantsHandle = {};
+    lastUniformPixelConstantsHandle = {};
+    lastUniformHandle = {};
+    return true;
+  }
+
   MetalCommandView commandAt(std::size_t index) const {
     if (index >= commandHeaders.size()) {
       return {};
@@ -2273,6 +3219,110 @@ struct ChunkSlot {
           drawParams.data() + record.firstParam, record.paramCount);
     }
     return view;
+  }
+
+  bool commandPayloadsInRange() const noexcept {
+    if (!drawStateStorageConsistent()) {
+      return false;
+    }
+    for (const auto& header : commandHeaders) {
+      switch (header.kind) {
+      case MetalCommandKind::DrawRun: {
+        const auto payloadIndex =
+            detail::chunkSlotPayloadIndex<DrawRunRecordIndex>(header.payloadIndex);
+        if (!detail::chunkSlotIndexInRange(payloadIndex, drawRunRecords) ||
+            payloadIndex.value >= drawPsoSubviews.size()) {
+          return false;
+        }
+        const auto& record = drawRunRecords[payloadIndex.value];
+        if (record.stateIndex >= drawHotStates.size() ||
+            record.stateIndex >= drawShaderLayouts.size() ||
+            record.stateIndex >= drawDebugSnapshots.size() ||
+            record.firstParam > drawParams.size() ||
+            record.paramCount > drawParams.size() - record.firstParam ||
+            record.payloadOffset > drawPayloadArena.size() ||
+            record.payloadSize > drawPayloadArena.size() - record.payloadOffset ||
+            (record.uniformHandle.valid() &&
+             !drawUniformPayloadRecord(record.uniformHandle))) {
+          return false;
+        }
+        for (std::size_t i = 0; i < record.paramCount; ++i) {
+          const auto& param = drawParams[record.firstParam + i];
+          if ((param.uniformHandle.valid() &&
+               !drawUniformPayloadRecord(param.uniformHandle)) ||
+              !drawPayloadRangeFits(record.payloadSize, param.userVertexRange) ||
+              !drawPayloadRangeFits(record.payloadSize, param.userIndexRange) ||
+              !drawPayloadRangeFits(record.payloadSize, param.bindingOverrideRange) ||
+              !drawPayloadRangeFits(record.payloadSize, param.bindingSnapshotRange)) {
+            return false;
+          }
+        }
+        break;
+      }
+      case MetalCommandKind::Clear: {
+        const auto payloadIndex =
+            detail::chunkSlotPayloadIndex<ClearRecordIndex>(header.payloadIndex);
+        if (!detail::chunkSlotIndexInRange(payloadIndex, clearRecords)) {
+          return false;
+        }
+        break;
+      }
+      case MetalCommandKind::SurfaceCopy: {
+        const auto payloadIndex =
+            detail::chunkSlotPayloadIndex<SurfaceCopyRecordIndex>(header.payloadIndex);
+        if (!detail::chunkSlotIndexInRange(payloadIndex, surfaceCopyRecords)) {
+          return false;
+        }
+        break;
+      }
+      case MetalCommandKind::StretchRect: {
+        const auto payloadIndex =
+            detail::chunkSlotPayloadIndex<StretchRectRecordIndex>(header.payloadIndex);
+        if (!detail::chunkSlotIndexInRange(payloadIndex, stretchRectRecords)) {
+          return false;
+        }
+        break;
+      }
+      case MetalCommandKind::Readback: {
+        const auto payloadIndex =
+            detail::chunkSlotPayloadIndex<ReadbackRecordIndex>(header.payloadIndex);
+        if (!detail::chunkSlotIndexInRange(payloadIndex, readbackRecords)) {
+          return false;
+        }
+        break;
+      }
+      case MetalCommandKind::ColorFill: {
+        const auto payloadIndex =
+            detail::chunkSlotPayloadIndex<ColorFillRecordIndex>(header.payloadIndex);
+        if (!detail::chunkSlotIndexInRange(payloadIndex, colorFillRecords)) {
+          return false;
+        }
+        break;
+      }
+      case MetalCommandKind::DepthResolve: {
+        const auto payloadIndex =
+            detail::chunkSlotPayloadIndex<DepthResolveRecordIndex>(header.payloadIndex);
+        if (!detail::chunkSlotIndexInRange(payloadIndex, depthResolveRecords)) {
+          return false;
+        }
+        break;
+      }
+      case MetalCommandKind::Present: {
+        const auto payloadIndex =
+            detail::chunkSlotPayloadIndex<PresentRecordIndex>(header.payloadIndex);
+        if (!detail::chunkSlotIndexInRange(payloadIndex, presentRecords)) {
+          return false;
+        }
+        break;
+      }
+      }
+    }
+    return true;
+  }
+
+  static bool drawPayloadRangeFits(std::uint32_t payloadSize,
+                                   DrawPayloadRange range) noexcept {
+    return range.offset <= payloadSize && range.size <= payloadSize - range.offset;
   }
 };
 

@@ -30,6 +30,9 @@ require_tile_preservation_decrease=0
 require_tile_preservation_not_increase=0
 require_command_buffers_per_present_not_increase=0
 require_render_passes_per_present_not_increase=0
+require_encoder_final_end_reason_not_increase=0
+require_encoder_color_load_not_increase=0
+require_encoder_depth_load_not_increase=0
 require_draw_run_records_increase=0
 require_draw_run_records_per_submit_increase=0
 require_binding_overrides_present=0
@@ -42,6 +45,7 @@ require_completion_wait_with_enqueue_increase=0
 require_completion_wait_without_enqueue_decrease=0
 require_completion_present_wait_with_enqueue_increase=0
 require_completion_present_wait_without_enqueue_decrease=0
+require_encode_ready_depth_gt1_increase=0
 require_commit_chunk_replay_cpu_per_present_decrease=0
 require_queue_draw_submission_cpu_per_present_decrease=0
 require_snapshot_cpu_per_present_decrease=0
@@ -63,11 +67,17 @@ require_argbuf_cbuf_update_cpu_per_present_decrease=0
 require_argbuf_cbuf_update_vs_cpu_per_present_decrease=0
 require_uniform_compact_saved_bytes_present=0
 require_current_uniform_compact_saved_bytes_present=0
+require_snapshot_state_elided_present=0
+require_discarded_state_not_increase=0
+require_submission_carrier_bytes_per_record_decrease=0
+require_submission_carrier_uniform_storage_per_record_decrease=0
 require_encode_chunk_cpu_per_present_decrease=0
 require_no_enqueue_commit_entry_to_publish_decrease=0
 require_no_enqueue_publish_to_encode_dequeue_decrease=0
 require_no_enqueue_encode_dequeue_to_commit_decrease=0
 require_no_enqueue_wait_to_next_enqueue_decrease=0
+require_no_enqueue_before_publish_closure_decrease=0
+require_no_enqueue_before_publish_inter_replay_gap_decrease=0
 max_gpu_command_buffer_regression_ms=${DXMT_3DMARK05_MAX_GPU_COMMAND_BUFFER_REGRESSION_MS:-}
 max_const_upload_break_count_ratio=${DXMT_3DMARK05_MAX_CONST_UPLOAD_BREAK_COUNT_RATIO:-}
 
@@ -171,6 +181,9 @@ Options:
   --require-tile-preservation-not-increase
   --require-command-buffers-per-present-not-increase
   --require-render-passes-per-present-not-increase
+  --require-encoder-final-end-reason-not-increase
+  --require-encoder-color-load-not-increase
+  --require-encoder-depth-load-not-increase
   --require-draw-run-records-increase
   --require-draw-run-records-per-submit-increase
   --require-binding-overrides-present
@@ -184,6 +197,7 @@ Options:
   --require-completion-wait-without-enqueue-decrease
   --require-completion-present-wait-with-enqueue-increase
   --require-completion-present-wait-without-enqueue-decrease
+  --require-encode-ready-depth-gt1-increase
   --require-commit-chunk-replay-cpu-per-present-decrease
   --require-queue-draw-submission-cpu-per-present-decrease
   --require-snapshot-cpu-per-present-decrease
@@ -205,11 +219,17 @@ Options:
   --require-argbuf-cbuf-update-vs-cpu-per-present-decrease
   --require-uniform-compact-saved-bytes-present
   --require-current-uniform-compact-saved-bytes-present
+  --require-snapshot-state-elided-present
+  --require-discarded-state-not-increase
+  --require-submission-carrier-bytes-per-record-decrease
+  --require-submission-carrier-uniform-storage-per-record-decrease
   --require-encode-chunk-cpu-per-present-decrease
   --require-no-enqueue-commit-entry-to-publish-decrease
   --require-no-enqueue-publish-to-encode-dequeue-decrease
   --require-no-enqueue-encode-dequeue-to-commit-decrease
   --require-no-enqueue-wait-to-next-enqueue-decrease
+  --require-no-enqueue-before-publish-closure-decrease
+  --require-no-enqueue-before-publish-inter-replay-gap-decrease
   --max-gpu-command-buffer-regression-ms N
   --require-top-gpu-decrease
   --require-top-buffer-write-decrease
@@ -414,6 +434,18 @@ while (($#)); do
       require_render_passes_per_present_not_increase=1
       shift
       ;;
+    --require-encoder-final-end-reason-not-increase)
+      require_encoder_final_end_reason_not_increase=1
+      shift
+      ;;
+    --require-encoder-color-load-not-increase)
+      require_encoder_color_load_not_increase=1
+      shift
+      ;;
+    --require-encoder-depth-load-not-increase)
+      require_encoder_depth_load_not_increase=1
+      shift
+      ;;
     --require-draw-run-records-increase)
       require_draw_run_records_increase=1
       shift
@@ -460,6 +492,10 @@ while (($#)); do
       ;;
     --require-completion-present-wait-without-enqueue-decrease)
       require_completion_present_wait_without_enqueue_decrease=1
+      shift
+      ;;
+    --require-encode-ready-depth-gt1-increase)
+      require_encode_ready_depth_gt1_increase=1
       shift
       ;;
     --require-commit-chunk-replay-cpu-per-present-decrease)
@@ -546,6 +582,22 @@ while (($#)); do
       require_current_uniform_compact_saved_bytes_present=1
       shift
       ;;
+    --require-snapshot-state-elided-present)
+      require_snapshot_state_elided_present=1
+      shift
+      ;;
+    --require-discarded-state-not-increase)
+      require_discarded_state_not_increase=1
+      shift
+      ;;
+    --require-submission-carrier-bytes-per-record-decrease)
+      require_submission_carrier_bytes_per_record_decrease=1
+      shift
+      ;;
+    --require-submission-carrier-uniform-storage-per-record-decrease)
+      require_submission_carrier_uniform_storage_per_record_decrease=1
+      shift
+      ;;
     --require-encode-chunk-cpu-per-present-decrease)
       require_encode_chunk_cpu_per_present_decrease=1
       shift
@@ -564,6 +616,14 @@ while (($#)); do
       ;;
     --require-no-enqueue-wait-to-next-enqueue-decrease)
       require_no_enqueue_wait_to_next_enqueue_decrease=1
+      shift
+      ;;
+    --require-no-enqueue-before-publish-closure-decrease)
+      require_no_enqueue_before_publish_closure_decrease=1
+      shift
+      ;;
+    --require-no-enqueue-before-publish-inter-replay-gap-decrease)
+      require_no_enqueue_before_publish_inter_replay_gap_decrease=1
       shift
       ;;
     --max-gpu-command-buffer-regression-ms)
@@ -903,6 +963,9 @@ if (( require_color_dontcare_increase ||
       require_tile_preservation_not_increase ||
       require_command_buffers_per_present_not_increase ||
       require_render_passes_per_present_not_increase ||
+      require_encoder_final_end_reason_not_increase ||
+      require_encoder_color_load_not_increase ||
+      require_encoder_depth_load_not_increase ||
       require_draw_run_records_increase ||
       require_draw_run_records_per_submit_increase ||
       require_binding_overrides_present ||
@@ -915,6 +978,7 @@ if (( require_color_dontcare_increase ||
       require_completion_wait_without_enqueue_decrease ||
       require_completion_present_wait_with_enqueue_increase ||
       require_completion_present_wait_without_enqueue_decrease ||
+      require_encode_ready_depth_gt1_increase ||
       require_commit_chunk_replay_cpu_per_present_decrease ||
       require_queue_draw_submission_cpu_per_present_decrease ||
       require_snapshot_cpu_per_present_decrease ||
@@ -935,11 +999,17 @@ if (( require_color_dontcare_increase ||
       require_argbuf_cbuf_update_cpu_per_present_decrease ||
       require_argbuf_cbuf_update_vs_cpu_per_present_decrease ||
       require_uniform_compact_saved_bytes_present ||
+      require_snapshot_state_elided_present ||
+      require_discarded_state_not_increase ||
+      require_submission_carrier_bytes_per_record_decrease ||
+      require_submission_carrier_uniform_storage_per_record_decrease ||
       require_encode_chunk_cpu_per_present_decrease ||
       require_no_enqueue_commit_entry_to_publish_decrease ||
       require_no_enqueue_publish_to_encode_dequeue_decrease ||
       require_no_enqueue_encode_dequeue_to_commit_decrease ||
-      require_no_enqueue_wait_to_next_enqueue_decrease )) ||
+      require_no_enqueue_wait_to_next_enqueue_decrease ||
+      require_no_enqueue_before_publish_closure_decrease ||
+      require_no_enqueue_before_publish_inter_replay_gap_decrease )) ||
    [[ -n "$max_gpu_command_buffer_regression_ms" ||
       -n "$max_const_upload_break_count_ratio" ]]; then
   run_level_compare_requested=1
@@ -1166,6 +1236,15 @@ if [[ -n "$baseline_output" ]]; then
   if (( require_render_passes_per_present_not_increase )); then
     perf_compare_cmd+=(--require-render-passes-per-present-not-increase)
   fi
+  if (( require_encoder_final_end_reason_not_increase )); then
+    perf_compare_cmd+=(--require-encoder-final-end-reason-not-increase)
+  fi
+  if (( require_encoder_color_load_not_increase )); then
+    perf_compare_cmd+=(--require-encoder-color-load-not-increase)
+  fi
+  if (( require_encoder_depth_load_not_increase )); then
+    perf_compare_cmd+=(--require-encoder-depth-load-not-increase)
+  fi
   if (( require_draw_run_records_increase )); then
     perf_compare_cmd+=(--require-draw-run-records-increase)
   fi
@@ -1201,6 +1280,9 @@ if [[ -n "$baseline_output" ]]; then
   fi
   if (( require_completion_present_wait_without_enqueue_decrease )); then
     perf_compare_cmd+=(--require-completion-present-wait-without-enqueue-decrease)
+  fi
+  if (( require_encode_ready_depth_gt1_increase )); then
+    perf_compare_cmd+=(--require-encode-ready-depth-gt1-increase)
   fi
   if (( require_commit_chunk_replay_cpu_per_present_decrease )); then
     perf_compare_cmd+=(--require-commit-chunk-replay-cpu-per-present-decrease)
@@ -1262,6 +1344,18 @@ if [[ -n "$baseline_output" ]]; then
   if (( require_uniform_compact_saved_bytes_present )); then
     perf_compare_cmd+=(--require-uniform-compact-saved-bytes-present)
   fi
+  if (( require_snapshot_state_elided_present )); then
+    perf_compare_cmd+=(--require-snapshot-state-elided-present)
+  fi
+  if (( require_discarded_state_not_increase )); then
+    perf_compare_cmd+=(--require-discarded-state-not-increase)
+  fi
+  if (( require_submission_carrier_bytes_per_record_decrease )); then
+    perf_compare_cmd+=(--require-submission-carrier-bytes-per-record-decrease)
+  fi
+  if (( require_submission_carrier_uniform_storage_per_record_decrease )); then
+    perf_compare_cmd+=(--require-submission-carrier-uniform-storage-per-record-decrease)
+  fi
   if (( require_encode_chunk_cpu_per_present_decrease )); then
     perf_compare_cmd+=(--require-encode-chunk-cpu-per-present-decrease)
   fi
@@ -1276,6 +1370,12 @@ if [[ -n "$baseline_output" ]]; then
   fi
   if (( require_no_enqueue_wait_to_next_enqueue_decrease )); then
     perf_compare_cmd+=(--require-no-enqueue-wait-to-next-enqueue-decrease)
+  fi
+  if (( require_no_enqueue_before_publish_closure_decrease )); then
+    perf_compare_cmd+=(--require-no-enqueue-before-publish-closure-decrease)
+  fi
+  if (( require_no_enqueue_before_publish_inter_replay_gap_decrease )); then
+    perf_compare_cmd+=(--require-no-enqueue-before-publish-inter-replay-gap-decrease)
   fi
   if [[ -n "$max_gpu_command_buffer_regression_ms" ]]; then
     perf_compare_cmd+=(--max-gpu-command-buffer-regression-ms "$max_gpu_command_buffer_regression_ms")

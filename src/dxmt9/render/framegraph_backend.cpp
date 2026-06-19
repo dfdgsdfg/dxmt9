@@ -1,10 +1,13 @@
 #include "framegraph_backend.hpp"
 
+#include "tail_present_batch.hpp"
+
 #include "../dxmt9_draw_encoder.hpp"
 #include "util/log/log.hpp"
 
 #include <cctype>
 #include <cstdlib>
+#include <utility>
 
 namespace dxmt9::render {
 
@@ -57,7 +60,8 @@ FrameGraphBackend::FrameGraphBackend()
 std::optional<core::metalqueue::QueueSubmissionRecord>
 FrameGraphBackend::onChunkReady(encoders::EncodeContext& ctx,
                                 std::size_t slotIndex,
-                                const core::ChunkSlot& slot) {
+                                const core::ChunkSlot& slot,
+                                encoders::EncodeChunkOptions options) {
   // Side-effect-neutral observe + DAG export side-channel (R-BACK-39.7). This
   // runs BEFORE the encode but cannot influence it: it only reads `slot` and
   // writes debug dump files. The shared render::DagObserver tracks the
@@ -73,7 +77,18 @@ FrameGraphBackend::onChunkReady(encoders::EncodeContext& ctx,
   // TODO(L1-device): drive encode via fg_linearizer::executeLinearization once
   // on-device parity is validated; until then encode stays on encodeChunk and
   // the DAG is observation-only.
-  return encoders::encodeChunk(ctx, slotIndex, slot);
+  return encoders::encodeChunk(ctx, slotIndex, slot, std::move(options));
+}
+
+std::optional<core::metalqueue::QueueSubmissionRecord>
+FrameGraphBackend::onChunkBatchReady(
+    encoders::EncodeContext& ctx,
+    std::span<core::metalqueue::ReadySlotSnapshot> sources) {
+  if (sources.size() == 1u) {
+    const auto& source = sources.front();
+    return onChunkReady(ctx, source.slotIndex, source.slot, {});
+  }
+  return encodeTailPresentBatch(ctx, sources, observer_);
 }
 
 }  // namespace dxmt9::render

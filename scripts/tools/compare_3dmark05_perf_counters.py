@@ -13,6 +13,7 @@ queue waits.
 from __future__ import annotations
 
 import argparse
+import csv
 import json
 import sys
 from pathlib import Path
@@ -84,6 +85,18 @@ FOCUS_COUNTERS = (
     "commit_chunk_draw_submission_batch_size_9_16",
     "commit_chunk_draw_submission_batch_size_17_32",
     "commit_chunk_draw_submission_batch_size_33_plus",
+    "d3d9_snapshot_state_copy_cpu_ms",
+    "d3d9_snapshot_state_materialized",
+    "d3d9_snapshot_state_materialized_bytes",
+    "d3d9_snapshot_state_elided",
+    "d3d9_snapshot_state_elided_bytes",
+    "d3d9_snapshot_submission_carrier_records",
+    "d3d9_snapshot_submission_carrier_bytes",
+    "d3d9_snapshot_submission_carrier_state_storage_bytes",
+    "d3d9_snapshot_submission_carrier_uniform_storage_bytes",
+    "d3d9_snapshot_submission_carrier_compact_uniform_storage_bytes",
+    "d3d9_snapshot_submission_carrier_unused_uniform_storage_records",
+    "d3d9_snapshot_submission_carrier_unused_uniform_storage_bytes",
     "d3d9_snapshot_uniform_materialized",
     "d3d9_snapshot_uniform_materialized_bytes",
     "d3d9_snapshot_uniform_materialized_compact_candidate_bytes",
@@ -103,6 +116,9 @@ FOCUS_COUNTERS = (
     "d3d9_snapshot_cache_batch_miss_uniform_build_vs_const_hash_cpu_ms",
     "d3d9_snapshot_cache_batch_miss_uniform_build_ps_const_hash_cpu_ms",
     "d3d9_snapshot_cache_batch_miss_uniform_build_nonconst_hash_cpu_ms",
+    "d3d9_snapshot_cache_batch_miss_uniform_payload_reuse_full",
+    "d3d9_snapshot_cache_batch_miss_uniform_payload_reuse_nonconst",
+    "d3d9_snapshot_cache_batch_miss_uniform_payload_full_build",
     "d3d9_snapshot_uniform_copy_cpu_ms",
     "submit_draw_run_batch_append_uniform_cpu_ms",
     "draw_uniform_payload_lookup_cpu_ms",
@@ -142,6 +158,12 @@ FOCUS_COUNTERS = (
     "submit_draw_run_batch_groups",
     "submit_draw_run_batch_records",
     "submit_draw_run_batch_max_records",
+    "submit_draw_run_batch_discarded_state_records",
+    "submit_draw_run_batch_discarded_state_bytes",
+    "submit_draw_run_batch_submission_adjacent_same_generation_lane",
+    "submit_draw_run_batch_compat_same_generation_lane",
+    "submit_draw_run_batch_compat_same_generation_lane_compatible",
+    "submit_draw_run_batch_compat_same_generation_lane_incompatible",
     "commit_chunk_draw_run_break_type_const_upload",
     "commit_chunk_draw_run_break_type_const_upload_bytes",
     "commit_chunk_draw_run_break_type_const_upload_registers",
@@ -221,6 +243,69 @@ FOCUS_COUNTERS = (
     "completion_enqueue_while_waiting_present",
     "completion_wait_enqueues_during_wait",
     "completion_wait_enqueues_during_wait_max",
+    "completion_wait_commit_chunk_entries",
+    "completion_wait_commit_chunk_replay_starts",
+    "completion_wait_commit_chunk_replay_ends",
+    "completion_wait_commit_chunk_replay_cpu_ms",
+    "completion_wait_commit_chunk_replay_cpu_max_ms",
+    "completion_wait_commit_chunk_replay_cpu_p50_ms",
+    "completion_wait_commit_chunk_replay_cpu_p95_ms",
+    "chunk_publish_slot_residency_samples",
+    "chunk_publish_slot_residency_ms",
+    "chunk_publish_slot_residency_p50_ms",
+    "chunk_publish_slot_residency_p95_ms",
+    "chunk_publish_slot_residency_present_samples",
+    "chunk_publish_slot_residency_present_ms",
+    "chunk_publish_slot_residency_present_p50_ms",
+    "chunk_publish_slot_residency_present_p95_ms",
+    "chunk_publish_slot_residency_nonpresent_samples",
+    "chunk_publish_slot_residency_nonpresent_ms",
+    "chunk_publish_slot_residency_nonpresent_p50_ms",
+    "chunk_publish_slot_residency_nonpresent_p95_ms",
+    "chunk_publish_present_pre_present_opportunity_slots",
+    "chunk_publish_present_pre_present_opportunity_tail_slots",
+    "chunk_publish_present_pre_present_opportunity_nontail_slots",
+    "chunk_publish_present_pre_present_opportunity_commands",
+    "chunk_publish_present_pre_present_opportunity_draw_runs",
+    "chunk_publish_present_pre_present_opportunity_draw_items",
+    "chunk_publish_present_pre_present_opportunity_non_draw_commands",
+    "chunk_publish_present_pre_present_opportunity_payload_bytes",
+    "chunk_publish_present_pre_present_opportunity_residency_ms",
+    "chunk_publish_present_pre_present_opportunity_residency_p50_ms",
+    "chunk_publish_present_pre_present_opportunity_residency_p95_ms",
+    "chunk_publish_present_pre_present_opportunity_tail_empty",
+    "chunk_publish_present_pre_present_opportunity_tail_draw_run",
+    "chunk_publish_present_pre_present_opportunity_tail_clear",
+    "chunk_publish_present_pre_present_opportunity_tail_surface_copy",
+    "chunk_publish_present_pre_present_opportunity_tail_stretch_rect",
+    "chunk_publish_present_pre_present_opportunity_tail_readback",
+    "chunk_publish_present_pre_present_opportunity_tail_color_fill",
+    "chunk_publish_present_pre_present_opportunity_tail_depth_resolve",
+    "chunk_publish_present_pre_present_opportunity_tail_present",
+    "chunk_publish_present_pre_present_opportunity_draw_only",
+    "chunk_publish_present_split_before_tail_empty",
+    "chunk_publish_present_split_before_tail_draw_run",
+    "chunk_publish_present_split_before_tail_clear",
+    "chunk_publish_present_split_before_tail_surface_copy",
+    "chunk_publish_present_split_before_tail_stretch_rect",
+    "chunk_publish_present_split_before_tail_readback",
+    "chunk_publish_present_split_before_tail_color_fill",
+    "chunk_publish_present_split_before_tail_depth_resolve",
+    "chunk_publish_present_split_before_tail_present",
+    "chunk_publish_present_split_before_draw_only",
+    "completion_no_enqueue_first_publish_slot_samples",
+    "completion_no_enqueue_first_publish_slot_commands",
+    "completion_no_enqueue_first_publish_slot_commands_p50",
+    "completion_no_enqueue_first_publish_slot_commands_p95",
+    "completion_no_enqueue_first_publish_slot_draw_run_commands",
+    "completion_no_enqueue_first_publish_slot_draw_items",
+    "completion_no_enqueue_first_publish_slot_draw_items_p50",
+    "completion_no_enqueue_first_publish_slot_draw_items_p95",
+    "completion_no_enqueue_first_publish_slot_non_draw_commands",
+    "completion_no_enqueue_first_publish_slot_payload_bytes",
+    "completion_no_enqueue_first_publish_slot_payload_bytes_p50",
+    "completion_no_enqueue_first_publish_slot_payload_bytes_p95",
+    "completion_no_enqueue_first_publish_slot_present_commands",
     "completion_no_enqueue_stage_commit_entry_to_publish_ms",
     "completion_no_enqueue_stage_commit_entry_to_publish_p50_ms",
     "completion_no_enqueue_stage_commit_entry_to_publish_p95_ms",
@@ -233,6 +318,12 @@ FOCUS_COUNTERS = (
     "completion_no_enqueue_wait_to_next_enqueue_ms",
     "completion_no_enqueue_wait_to_next_enqueue_p50_ms",
     "completion_no_enqueue_wait_to_next_enqueue_p95_ms",
+    "encode_dequeue_ready_depth_samples",
+    "encode_dequeue_ready_depth_total",
+    "encode_dequeue_ready_depth_max",
+    "encode_dequeue_ready_depth_gt1",
+    "encode_dequeue_ready_depth_gt2",
+    "encode_dequeue_ready_depth_gt4",
     "map_buffer_wait_ms",
     "queue_sequence_wait_ms",
 )
@@ -262,7 +353,7 @@ def load_counters(path: Path) -> dict[str, Any]:
         counters = data.get("dxmt9_perf_counters")
         if not isinstance(counters, dict):
             raise SystemExit(f"missing dxmt9_perf_counters in {path}")
-        return counters
+        return augment_with_encoder_sidecar_metrics(path, counters)
     resolved = result_path(path)
     if not resolved.exists():
         raise SystemExit(f"missing result.json: {resolved}")
@@ -270,7 +361,69 @@ def load_counters(path: Path) -> dict[str, Any]:
     counters = data.get("dxmt9_perf_counters")
     if not isinstance(counters, dict):
         raise SystemExit(f"missing dxmt9_perf_counters in {resolved}")
-    return counters
+    return augment_with_encoder_sidecar_metrics(resolved.parent, counters)
+
+
+def csv_number(value: Any) -> float:
+    parsed = number(value)
+    return parsed if parsed is not None else 0.0
+
+
+def add_counter(counters: dict[str, Any], key: str, value: float) -> None:
+    counters[key] = (number(counters.get(key)) or 0.0) + value
+
+
+def augment_with_encoder_sidecar_metrics(
+    path: Path,
+    counters: dict[str, Any],
+) -> dict[str, Any]:
+    csv_path = path / "3dmark05-perf-encoders.csv"
+    if not csv_path.exists():
+        return counters
+
+    augmented = dict(counters)
+    for key in (
+        "encoder_sidecar_rows",
+        "encoder_sidecar_end_reason_rt_change",
+        "encoder_sidecar_end_reason_clear",
+        "encoder_sidecar_end_reason_present",
+        "encoder_sidecar_end_reason_final",
+        "encoder_sidecar_end_reason_other",
+        "encoder_sidecar_color_load_bytes",
+        "encoder_sidecar_color_store_bytes",
+        "encoder_sidecar_depth_load_bytes",
+        "encoder_sidecar_depth_store_bytes",
+    ):
+        augmented.setdefault(key, 0.0)
+    with csv_path.open(newline="", encoding="utf-8") as handle:
+        for row in csv.DictReader(handle):
+            add_counter(augmented, "encoder_sidecar_rows", 1.0)
+            end_reason = (row.get("end_reason") or "unknown").strip().lower()
+            if end_reason in {"rt_change", "clear", "present", "final"}:
+                add_counter(augmented, f"encoder_sidecar_end_reason_{end_reason}", 1.0)
+            else:
+                add_counter(augmented, "encoder_sidecar_end_reason_other", 1.0)
+            add_counter(
+                augmented,
+                "encoder_sidecar_color_load_bytes",
+                csv_number(row.get("color_load_bytes")),
+            )
+            add_counter(
+                augmented,
+                "encoder_sidecar_color_store_bytes",
+                csv_number(row.get("color_store_bytes")),
+            )
+            add_counter(
+                augmented,
+                "encoder_sidecar_depth_load_bytes",
+                csv_number(row.get("depth_load_bytes")),
+            )
+            add_counter(
+                augmented,
+                "encoder_sidecar_depth_store_bytes",
+                csv_number(row.get("depth_store_bytes")),
+            )
+    return augmented
 
 
 def number(value: Any) -> float | None:
@@ -340,6 +493,54 @@ def derived(counters: dict[str, Any]) -> dict[str, float | None]:
     const_upload_registers = number(counter(
         counters,
         "commit_chunk_draw_run_break_type_const_upload_registers",
+    )) or 0.0
+    snapshot_state_copy_cpu_ms = number(counter(
+        counters,
+        "d3d9_snapshot_state_copy_cpu_ms",
+    )) or 0.0
+    snapshot_state_materialized = number(counter(
+        counters,
+        "d3d9_snapshot_state_materialized",
+    )) or 0.0
+    snapshot_state_materialized_bytes = number(counter(
+        counters,
+        "d3d9_snapshot_state_materialized_bytes",
+    )) or 0.0
+    snapshot_state_elided = number(counter(
+        counters,
+        "d3d9_snapshot_state_elided",
+    )) or 0.0
+    snapshot_state_elided_bytes = number(counter(
+        counters,
+        "d3d9_snapshot_state_elided_bytes",
+    )) or 0.0
+    submission_carrier_records = number(counter(
+        counters,
+        "d3d9_snapshot_submission_carrier_records",
+    )) or 0.0
+    submission_carrier_bytes = number(counter(
+        counters,
+        "d3d9_snapshot_submission_carrier_bytes",
+    )) or 0.0
+    submission_carrier_state_storage_bytes = number(counter(
+        counters,
+        "d3d9_snapshot_submission_carrier_state_storage_bytes",
+    )) or 0.0
+    submission_carrier_uniform_storage_bytes = number(counter(
+        counters,
+        "d3d9_snapshot_submission_carrier_uniform_storage_bytes",
+    )) or 0.0
+    submission_carrier_compact_uniform_storage_bytes = number(counter(
+        counters,
+        "d3d9_snapshot_submission_carrier_compact_uniform_storage_bytes",
+    )) or 0.0
+    submission_carrier_unused_uniform_storage_records = number(counter(
+        counters,
+        "d3d9_snapshot_submission_carrier_unused_uniform_storage_records",
+    )) or 0.0
+    submission_carrier_unused_uniform_storage_bytes = number(counter(
+        counters,
+        "d3d9_snapshot_submission_carrier_unused_uniform_storage_bytes",
     )) or 0.0
     uniform_materialized = number(counter(
         counters,
@@ -449,6 +650,7 @@ def derived(counters: dict[str, Any]) -> dict[str, float | None]:
         counters,
         "draw_uniform_payload_lookup_semantic_hash_miss_bytes",
     )) or 0.0
+    snapshot_state_total = snapshot_state_materialized + snapshot_state_elided
     uniform_snapshot_total = uniform_materialized + uniform_elided
     uniform_payload_record_append_bytes = (
         uniform_append_bytes -
@@ -502,6 +704,30 @@ def derived(counters: dict[str, Any]) -> dict[str, float | None]:
         counters,
         "draw_uniform_payload_append_copy_cpu_ms",
     )) or 0.0
+    discarded_state_records = number(counter(
+        counters,
+        "submit_draw_run_batch_discarded_state_records",
+    )) or 0.0
+    discarded_state_bytes = number(counter(
+        counters,
+        "submit_draw_run_batch_discarded_state_bytes",
+    )) or 0.0
+    adjacent_same_generation_lane = number(counter(
+        counters,
+        "submit_draw_run_batch_submission_adjacent_same_generation_lane",
+    )) or 0.0
+    compat_same_generation_lane = number(counter(
+        counters,
+        "submit_draw_run_batch_compat_same_generation_lane",
+    )) or 0.0
+    compat_same_generation_lane_compatible = number(counter(
+        counters,
+        "submit_draw_run_batch_compat_same_generation_lane_compatible",
+    )) or 0.0
+    compat_same_generation_lane_incompatible = number(counter(
+        counters,
+        "submit_draw_run_batch_compat_same_generation_lane_incompatible",
+    )) or 0.0
     completion_wait_ms = number(counter(counters, "completion_wait_ms")) or 0.0
     completion_present_wait_ms = number(
         counter(counters, "completion_present_wait_ms")
@@ -524,6 +750,184 @@ def derived(counters: dict[str, Any]) -> dict[str, float | None]:
     completion_enqueue_while_waiting_present = number(
         counter(counters, "completion_enqueue_while_waiting_present")
     ) or 0.0
+    completion_wait_commit_chunk_entries = number(
+        counter(counters, "completion_wait_commit_chunk_entries")
+    ) or 0.0
+    completion_wait_commit_chunk_replay_starts = number(
+        counter(counters, "completion_wait_commit_chunk_replay_starts")
+    ) or 0.0
+    completion_wait_commit_chunk_replay_ends = number(
+        counter(counters, "completion_wait_commit_chunk_replay_ends")
+    ) or 0.0
+    completion_wait_commit_chunk_replay_cpu_ms = number(
+        counter(counters, "completion_wait_commit_chunk_replay_cpu_ms")
+    ) or 0.0
+    chunk_publish_slot_residency_ms = number(
+        counter(counters, "chunk_publish_slot_residency_ms")
+    ) or 0.0
+    chunk_publish_slot_residency_p50_ms = number(
+        counter(counters, "chunk_publish_slot_residency_p50_ms")
+    )
+    chunk_publish_slot_residency_p95_ms = number(
+        counter(counters, "chunk_publish_slot_residency_p95_ms")
+    )
+    chunk_publish_slot_residency_present_ms = number(
+        counter(counters, "chunk_publish_slot_residency_present_ms")
+    ) or 0.0
+    chunk_publish_slot_residency_present_p50_ms = number(
+        counter(counters, "chunk_publish_slot_residency_present_p50_ms")
+    )
+    chunk_publish_slot_residency_present_p95_ms = number(
+        counter(counters, "chunk_publish_slot_residency_present_p95_ms")
+    )
+    chunk_publish_slot_residency_nonpresent_ms = number(
+        counter(counters, "chunk_publish_slot_residency_nonpresent_ms")
+    ) or 0.0
+    chunk_publish_slot_residency_nonpresent_p50_ms = number(
+        counter(counters, "chunk_publish_slot_residency_nonpresent_p50_ms")
+    )
+    chunk_publish_slot_residency_nonpresent_p95_ms = number(
+        counter(counters, "chunk_publish_slot_residency_nonpresent_p95_ms")
+    )
+    chunk_publish_reason_present_split_before = number(counter(
+        counters,
+        "chunk_publish_reason_present_split_before",
+    )) or 0.0
+    chunk_publish_present_split_before_tail_draw_run = number(counter(
+        counters,
+        "chunk_publish_present_split_before_tail_draw_run",
+    )) or 0.0
+    chunk_publish_present_split_before_tail_clear = number(counter(
+        counters,
+        "chunk_publish_present_split_before_tail_clear",
+    )) or 0.0
+    chunk_publish_present_split_before_tail_surface_copy = number(counter(
+        counters,
+        "chunk_publish_present_split_before_tail_surface_copy",
+    )) or 0.0
+    chunk_publish_present_split_before_tail_stretch_rect = number(counter(
+        counters,
+        "chunk_publish_present_split_before_tail_stretch_rect",
+    )) or 0.0
+    chunk_publish_present_split_before_tail_readback = number(counter(
+        counters,
+        "chunk_publish_present_split_before_tail_readback",
+    )) or 0.0
+    chunk_publish_present_split_before_tail_color_fill = number(counter(
+        counters,
+        "chunk_publish_present_split_before_tail_color_fill",
+    )) or 0.0
+    chunk_publish_present_split_before_tail_depth_resolve = number(counter(
+        counters,
+        "chunk_publish_present_split_before_tail_depth_resolve",
+    )) or 0.0
+    chunk_publish_present_split_before_tail_present = number(counter(
+        counters,
+        "chunk_publish_present_split_before_tail_present",
+    )) or 0.0
+    chunk_publish_present_split_before_tail_empty = number(counter(
+        counters,
+        "chunk_publish_present_split_before_tail_empty",
+    )) or 0.0
+    chunk_publish_present_split_before_draw_only = number(counter(
+        counters,
+        "chunk_publish_present_split_before_draw_only",
+    )) or 0.0
+    chunk_publish_present_pre_present_opportunity_slots = number(counter(
+        counters,
+        "chunk_publish_present_pre_present_opportunity_slots",
+    )) or 0.0
+    chunk_publish_present_pre_present_opportunity_tail_slots = number(counter(
+        counters,
+        "chunk_publish_present_pre_present_opportunity_tail_slots",
+    )) or 0.0
+    chunk_publish_present_pre_present_opportunity_commands = number(counter(
+        counters,
+        "chunk_publish_present_pre_present_opportunity_commands",
+    )) or 0.0
+    chunk_publish_present_pre_present_opportunity_draw_runs = number(counter(
+        counters,
+        "chunk_publish_present_pre_present_opportunity_draw_runs",
+    )) or 0.0
+    chunk_publish_present_pre_present_opportunity_draw_items = number(counter(
+        counters,
+        "chunk_publish_present_pre_present_opportunity_draw_items",
+    )) or 0.0
+    chunk_publish_present_pre_present_opportunity_non_draw_commands = number(counter(
+        counters,
+        "chunk_publish_present_pre_present_opportunity_non_draw_commands",
+    )) or 0.0
+    chunk_publish_present_pre_present_opportunity_payload_bytes = number(counter(
+        counters,
+        "chunk_publish_present_pre_present_opportunity_payload_bytes",
+    )) or 0.0
+    chunk_publish_present_pre_present_opportunity_residency_ms = number(counter(
+        counters,
+        "chunk_publish_present_pre_present_opportunity_residency_ms",
+    )) or 0.0
+    chunk_publish_present_pre_present_opportunity_residency_p50_ms = number(counter(
+        counters,
+        "chunk_publish_present_pre_present_opportunity_residency_p50_ms",
+    ))
+    chunk_publish_present_pre_present_opportunity_residency_p95_ms = number(counter(
+        counters,
+        "chunk_publish_present_pre_present_opportunity_residency_p95_ms",
+    ))
+    chunk_publish_present_pre_present_opportunity_tail_draw_run = number(counter(
+        counters,
+        "chunk_publish_present_pre_present_opportunity_tail_draw_run",
+    )) or 0.0
+    chunk_publish_present_pre_present_opportunity_tail_clear = number(counter(
+        counters,
+        "chunk_publish_present_pre_present_opportunity_tail_clear",
+    )) or 0.0
+    chunk_publish_present_pre_present_opportunity_tail_surface_copy = number(counter(
+        counters,
+        "chunk_publish_present_pre_present_opportunity_tail_surface_copy",
+    )) or 0.0
+    chunk_publish_present_pre_present_opportunity_tail_stretch_rect = number(counter(
+        counters,
+        "chunk_publish_present_pre_present_opportunity_tail_stretch_rect",
+    )) or 0.0
+    chunk_publish_present_pre_present_opportunity_tail_readback = number(counter(
+        counters,
+        "chunk_publish_present_pre_present_opportunity_tail_readback",
+    )) or 0.0
+    chunk_publish_present_pre_present_opportunity_tail_color_fill = number(counter(
+        counters,
+        "chunk_publish_present_pre_present_opportunity_tail_color_fill",
+    )) or 0.0
+    chunk_publish_present_pre_present_opportunity_tail_depth_resolve = number(counter(
+        counters,
+        "chunk_publish_present_pre_present_opportunity_tail_depth_resolve",
+    )) or 0.0
+    chunk_publish_present_pre_present_opportunity_tail_present = number(counter(
+        counters,
+        "chunk_publish_present_pre_present_opportunity_tail_present",
+    )) or 0.0
+    chunk_publish_present_pre_present_opportunity_tail_empty = number(counter(
+        counters,
+        "chunk_publish_present_pre_present_opportunity_tail_empty",
+    )) or 0.0
+    chunk_publish_present_pre_present_opportunity_draw_only = number(counter(
+        counters,
+        "chunk_publish_present_pre_present_opportunity_draw_only",
+    )) or 0.0
+    encode_ready_depth_samples = number(counter(
+        counters, "encode_dequeue_ready_depth_samples",
+    )) or 0.0
+    encode_ready_depth_total = number(counter(
+        counters, "encode_dequeue_ready_depth_total",
+    )) or 0.0
+    encode_ready_depth_gt1 = number(counter(
+        counters, "encode_dequeue_ready_depth_gt1",
+    )) or 0.0
+    encode_ready_depth_gt2 = number(counter(
+        counters, "encode_dequeue_ready_depth_gt2",
+    )) or 0.0
+    encode_ready_depth_gt4 = number(counter(
+        counters, "encode_dequeue_ready_depth_gt4",
+    )) or 0.0
     commit_chunk_replay_cpu_ms = number(
         counter(counters, "commit_chunk_replay_cpu_ms")
     ) or 0.0
@@ -566,6 +970,70 @@ def derived(counters: dict[str, Any]) -> dict[str, float | None]:
         counters,
         "completion_no_enqueue_wait_to_next_enqueue_ms",
     )) or 0.0
+    no_enqueue_completed_replay_cpu_before_publish_ms = number(counter(
+        counters,
+        "completion_no_enqueue_commit_chunk_completed_replay_cpu_before_publish_ms",
+    )) or 0.0
+    no_enqueue_active_replay_cpu_before_publish_ms = number(counter(
+        counters,
+        "completion_no_enqueue_commit_chunk_active_replay_cpu_before_publish_ms",
+    )) or 0.0
+    no_enqueue_inter_replay_gap_before_publish_ms = number(counter(
+        counters,
+        "completion_no_enqueue_commit_chunk_inter_replay_gap_before_publish_ms",
+    )) or 0.0
+    no_enqueue_commit_publish_wait_before_publish_ms = number(counter(
+        counters,
+        "completion_no_enqueue_commit_publish_wait_before_publish_ms",
+    )) or 0.0
+    no_enqueue_commit_publish_on_before_publish_cpu_ms = number(counter(
+        counters,
+        "completion_no_enqueue_commit_publish_on_before_publish_cpu_ms",
+    )) or 0.0
+    no_enqueue_first_publish_slot_samples = number(counter(
+        counters,
+        "completion_no_enqueue_first_publish_slot_samples",
+    )) or 0.0
+    no_enqueue_first_publish_slot_commands = number(counter(
+        counters,
+        "completion_no_enqueue_first_publish_slot_commands",
+    )) or 0.0
+    no_enqueue_first_publish_slot_draw_run_commands = number(counter(
+        counters,
+        "completion_no_enqueue_first_publish_slot_draw_run_commands",
+    )) or 0.0
+    no_enqueue_first_publish_slot_draw_items = number(counter(
+        counters,
+        "completion_no_enqueue_first_publish_slot_draw_items",
+    )) or 0.0
+    no_enqueue_first_publish_slot_non_draw_commands = number(counter(
+        counters,
+        "completion_no_enqueue_first_publish_slot_non_draw_commands",
+    )) or 0.0
+    no_enqueue_first_publish_slot_payload_bytes = number(counter(
+        counters,
+        "completion_no_enqueue_first_publish_slot_payload_bytes",
+    )) or 0.0
+    no_enqueue_first_publish_slot_present_commands = number(counter(
+        counters,
+        "completion_no_enqueue_first_publish_slot_present_commands",
+    )) or 0.0
+    no_enqueue_before_publish_replay_cpu_ms = (
+        no_enqueue_completed_replay_cpu_before_publish_ms +
+        no_enqueue_active_replay_cpu_before_publish_ms
+    )
+    no_enqueue_before_publish_replay_gap_ms = (
+        no_enqueue_before_publish_replay_cpu_ms +
+        no_enqueue_inter_replay_gap_before_publish_ms
+    )
+    no_enqueue_before_publish_closure_ms = (
+        no_enqueue_before_publish_replay_gap_ms +
+        no_enqueue_commit_publish_wait_before_publish_ms
+    )
+    no_enqueue_before_publish_residual_ms = (
+        no_enqueue_commit_entry_to_publish_ms -
+        no_enqueue_before_publish_closure_ms
+    )
     const_subtypes = {
         "const_vs_f": number(counter(
             counters, "commit_chunk_draw_run_break_type_const_vs_f",
@@ -666,6 +1134,27 @@ def derived(counters: dict[str, Any]) -> dict[str, float | None]:
     depth_store = (number(counter(counters, "render_pass_store_action_depth_store")) or 0.0) + (
         number(counter(counters, "render_pass_store_action_depth_dontcare")) or 0.0
     )
+    mib = 1024.0 * 1024.0
+    encoder_sidecar_rows = number(counter(counters, "encoder_sidecar_rows"))
+    has_encoder_sidecar = encoder_sidecar_rows is not None and encoder_sidecar_rows > 0
+
+    def encoder_ratio(key: str) -> float | None:
+        if not has_encoder_sidecar:
+            return None
+        return ratio(counters, key, "present_encoded")
+
+    encoder_color_load_mib = (
+        number(counter(counters, "encoder_sidecar_color_load_bytes")) or 0.0
+    ) / mib
+    encoder_color_store_mib = (
+        number(counter(counters, "encoder_sidecar_color_store_bytes")) or 0.0
+    ) / mib
+    encoder_depth_load_mib = (
+        number(counter(counters, "encoder_sidecar_depth_load_bytes")) or 0.0
+    ) / mib
+    encoder_depth_store_mib = (
+        number(counter(counters, "encoder_sidecar_depth_store_bytes")) or 0.0
+    ) / mib
     metrics = {
         "draws_per_present": ratio(counters, "draw_calls", "present_encoded"),
         "command_buffers_per_present": ratio(
@@ -677,11 +1166,36 @@ def derived(counters: dict[str, Any]) -> dict[str, float | None]:
         "passes_per_present": ratio(counters, "render_pass_begin", "present_encoded"),
         "tile_preservation_mib": (
             (number(counter(counters, "render_pass_tile_preservation_bytes")) or 0.0) /
-            (1024.0 * 1024.0)
+            mib
         ),
         "same_key_preservation_mib": (
             (number(counter(counters, "render_pass_same_key_reentry_preservation_bytes")) or 0.0) /
-            (1024.0 * 1024.0)
+            mib
+        ),
+        "encoder_sidecar_rows_per_present": encoder_ratio("encoder_sidecar_rows"),
+        "encoder_sidecar_rt_change_end_reason_per_present": encoder_ratio(
+            "encoder_sidecar_end_reason_rt_change",
+        ),
+        "encoder_sidecar_clear_end_reason_per_present": encoder_ratio(
+            "encoder_sidecar_end_reason_clear",
+        ),
+        "encoder_sidecar_present_end_reason_per_present": encoder_ratio(
+            "encoder_sidecar_end_reason_present",
+        ),
+        "encoder_sidecar_final_end_reason_per_present": encoder_ratio(
+            "encoder_sidecar_end_reason_final",
+        ),
+        "encoder_sidecar_color_load_mib_per_present": (
+            encoder_color_load_mib / present if has_encoder_sidecar and present else None
+        ),
+        "encoder_sidecar_color_store_mib_per_present": (
+            encoder_color_store_mib / present if has_encoder_sidecar and present else None
+        ),
+        "encoder_sidecar_depth_load_mib_per_present": (
+            encoder_depth_load_mib / present if has_encoder_sidecar and present else None
+        ),
+        "encoder_sidecar_depth_store_mib_per_present": (
+            encoder_depth_store_mib / present if has_encoder_sidecar and present else None
         ),
         "color_dontcare_store_share_pct": (
             (number(counter(counters, "render_pass_store_action_dontcare")) or 0.0) /
@@ -736,6 +1250,234 @@ def derived(counters: dict[str, Any]) -> dict[str, float | None]:
         "completion_present_enqueue_while_waiting_per_present": (
             completion_enqueue_while_waiting_present / present if present else None
         ),
+        "completion_wait_commit_chunk_entries_per_present": (
+            completion_wait_commit_chunk_entries / present if present else None
+        ),
+        "completion_wait_commit_chunk_replay_starts_per_present": (
+            completion_wait_commit_chunk_replay_starts / present if present else None
+        ),
+        "completion_wait_commit_chunk_replay_ends_per_present": (
+            completion_wait_commit_chunk_replay_ends / present if present else None
+        ),
+        "completion_wait_commit_chunk_replay_cpu_ms_per_present": (
+            completion_wait_commit_chunk_replay_cpu_ms / present if present else None
+        ),
+        "chunk_publish_slot_residency_ms_per_present": (
+            chunk_publish_slot_residency_ms / present if present else None
+        ),
+        "chunk_publish_slot_residency_p50_ms": (
+            chunk_publish_slot_residency_p50_ms
+        ),
+        "chunk_publish_slot_residency_p95_ms": (
+            chunk_publish_slot_residency_p95_ms
+        ),
+        "chunk_publish_slot_residency_present_ms_per_present": (
+            chunk_publish_slot_residency_present_ms / present if present else None
+        ),
+        "chunk_publish_slot_residency_present_p50_ms": (
+            chunk_publish_slot_residency_present_p50_ms
+        ),
+        "chunk_publish_slot_residency_present_p95_ms": (
+            chunk_publish_slot_residency_present_p95_ms
+        ),
+        "chunk_publish_slot_residency_nonpresent_ms_per_present": (
+            chunk_publish_slot_residency_nonpresent_ms / present if present else None
+        ),
+        "chunk_publish_slot_residency_nonpresent_p50_ms": (
+            chunk_publish_slot_residency_nonpresent_p50_ms
+        ),
+        "chunk_publish_slot_residency_nonpresent_p95_ms": (
+            chunk_publish_slot_residency_nonpresent_p95_ms
+        ),
+        "chunk_publish_present_split_before_tail_draw_run_per_present": (
+            chunk_publish_present_split_before_tail_draw_run / present
+            if present else None
+        ),
+        "chunk_publish_present_split_before_tail_draw_run_share_pct": (
+            chunk_publish_present_split_before_tail_draw_run /
+            chunk_publish_reason_present_split_before * 100.0
+            if chunk_publish_reason_present_split_before else None
+        ),
+        "chunk_publish_present_split_before_tail_clear_share_pct": (
+            chunk_publish_present_split_before_tail_clear /
+            chunk_publish_reason_present_split_before * 100.0
+            if chunk_publish_reason_present_split_before else None
+        ),
+        "chunk_publish_present_split_before_tail_surface_copy_share_pct": (
+            chunk_publish_present_split_before_tail_surface_copy /
+            chunk_publish_reason_present_split_before * 100.0
+            if chunk_publish_reason_present_split_before else None
+        ),
+        "chunk_publish_present_split_before_tail_stretch_rect_share_pct": (
+            chunk_publish_present_split_before_tail_stretch_rect /
+            chunk_publish_reason_present_split_before * 100.0
+            if chunk_publish_reason_present_split_before else None
+        ),
+        "chunk_publish_present_split_before_tail_readback_share_pct": (
+            chunk_publish_present_split_before_tail_readback /
+            chunk_publish_reason_present_split_before * 100.0
+            if chunk_publish_reason_present_split_before else None
+        ),
+        "chunk_publish_present_split_before_tail_color_fill_share_pct": (
+            chunk_publish_present_split_before_tail_color_fill /
+            chunk_publish_reason_present_split_before * 100.0
+            if chunk_publish_reason_present_split_before else None
+        ),
+        "chunk_publish_present_split_before_tail_depth_resolve_share_pct": (
+            chunk_publish_present_split_before_tail_depth_resolve /
+            chunk_publish_reason_present_split_before * 100.0
+            if chunk_publish_reason_present_split_before else None
+        ),
+        "chunk_publish_present_split_before_tail_present_share_pct": (
+            chunk_publish_present_split_before_tail_present /
+            chunk_publish_reason_present_split_before * 100.0
+            if chunk_publish_reason_present_split_before else None
+        ),
+        "chunk_publish_present_split_before_tail_empty_share_pct": (
+            chunk_publish_present_split_before_tail_empty /
+            chunk_publish_reason_present_split_before * 100.0
+            if chunk_publish_reason_present_split_before else None
+        ),
+        "chunk_publish_present_split_before_draw_only_share_pct": (
+            chunk_publish_present_split_before_draw_only /
+            chunk_publish_reason_present_split_before * 100.0
+            if chunk_publish_reason_present_split_before else None
+        ),
+        "chunk_publish_present_pre_present_opportunity_slots_per_present": (
+            chunk_publish_present_pre_present_opportunity_slots / present
+            if present else None
+        ),
+        "chunk_publish_present_pre_present_opportunity_tail_slot_share_pct": (
+            chunk_publish_present_pre_present_opportunity_tail_slots /
+            chunk_publish_present_pre_present_opportunity_slots * 100.0
+            if chunk_publish_present_pre_present_opportunity_slots else None
+        ),
+        "chunk_publish_present_pre_present_opportunity_commands_per_present": (
+            chunk_publish_present_pre_present_opportunity_commands / present
+            if present else None
+        ),
+        "chunk_publish_present_pre_present_opportunity_commands_per_slot": (
+            chunk_publish_present_pre_present_opportunity_commands /
+            chunk_publish_present_pre_present_opportunity_slots
+            if chunk_publish_present_pre_present_opportunity_slots else None
+        ),
+        "chunk_publish_present_pre_present_opportunity_draw_runs_per_slot": (
+            chunk_publish_present_pre_present_opportunity_draw_runs /
+            chunk_publish_present_pre_present_opportunity_slots
+            if chunk_publish_present_pre_present_opportunity_slots else None
+        ),
+        "chunk_publish_present_pre_present_opportunity_draw_items_per_present": (
+            chunk_publish_present_pre_present_opportunity_draw_items / present
+            if present else None
+        ),
+        "chunk_publish_present_pre_present_opportunity_draw_items_per_slot": (
+            chunk_publish_present_pre_present_opportunity_draw_items /
+            chunk_publish_present_pre_present_opportunity_slots
+            if chunk_publish_present_pre_present_opportunity_slots else None
+        ),
+        "chunk_publish_present_pre_present_opportunity_non_draw_commands_per_slot": (
+            chunk_publish_present_pre_present_opportunity_non_draw_commands /
+            chunk_publish_present_pre_present_opportunity_slots
+            if chunk_publish_present_pre_present_opportunity_slots else None
+        ),
+        "chunk_publish_present_pre_present_opportunity_payload_mib": (
+            chunk_publish_present_pre_present_opportunity_payload_bytes /
+            (1024.0 * 1024.0)
+        ),
+        "chunk_publish_present_pre_present_opportunity_payload_bytes_per_slot": (
+            chunk_publish_present_pre_present_opportunity_payload_bytes /
+            chunk_publish_present_pre_present_opportunity_slots
+            if chunk_publish_present_pre_present_opportunity_slots else None
+        ),
+        "chunk_publish_present_pre_present_opportunity_residency_ms_per_present": (
+            chunk_publish_present_pre_present_opportunity_residency_ms / present
+            if present else None
+        ),
+        "chunk_publish_present_pre_present_opportunity_residency_p50_ms": (
+            chunk_publish_present_pre_present_opportunity_residency_p50_ms
+        ),
+        "chunk_publish_present_pre_present_opportunity_residency_p95_ms": (
+            chunk_publish_present_pre_present_opportunity_residency_p95_ms
+        ),
+        "chunk_publish_present_pre_present_opportunity_tail_draw_run_per_present": (
+            chunk_publish_present_pre_present_opportunity_tail_draw_run / present
+            if present else None
+        ),
+        "chunk_publish_present_pre_present_opportunity_tail_draw_run_share_pct": (
+            chunk_publish_present_pre_present_opportunity_tail_draw_run /
+            chunk_publish_present_pre_present_opportunity_slots * 100.0
+            if chunk_publish_present_pre_present_opportunity_slots else None
+        ),
+        "chunk_publish_present_pre_present_opportunity_tail_clear_share_pct": (
+            chunk_publish_present_pre_present_opportunity_tail_clear /
+            chunk_publish_present_pre_present_opportunity_slots * 100.0
+            if chunk_publish_present_pre_present_opportunity_slots else None
+        ),
+        "chunk_publish_present_pre_present_opportunity_tail_surface_copy_share_pct": (
+            chunk_publish_present_pre_present_opportunity_tail_surface_copy /
+            chunk_publish_present_pre_present_opportunity_slots * 100.0
+            if chunk_publish_present_pre_present_opportunity_slots else None
+        ),
+        "chunk_publish_present_pre_present_opportunity_tail_stretch_rect_share_pct": (
+            chunk_publish_present_pre_present_opportunity_tail_stretch_rect /
+            chunk_publish_present_pre_present_opportunity_slots * 100.0
+            if chunk_publish_present_pre_present_opportunity_slots else None
+        ),
+        "chunk_publish_present_pre_present_opportunity_tail_readback_share_pct": (
+            chunk_publish_present_pre_present_opportunity_tail_readback /
+            chunk_publish_present_pre_present_opportunity_slots * 100.0
+            if chunk_publish_present_pre_present_opportunity_slots else None
+        ),
+        "chunk_publish_present_pre_present_opportunity_tail_color_fill_share_pct": (
+            chunk_publish_present_pre_present_opportunity_tail_color_fill /
+            chunk_publish_present_pre_present_opportunity_slots * 100.0
+            if chunk_publish_present_pre_present_opportunity_slots else None
+        ),
+        "chunk_publish_present_pre_present_opportunity_tail_depth_resolve_share_pct": (
+            chunk_publish_present_pre_present_opportunity_tail_depth_resolve /
+            chunk_publish_present_pre_present_opportunity_slots * 100.0
+            if chunk_publish_present_pre_present_opportunity_slots else None
+        ),
+        "chunk_publish_present_pre_present_opportunity_tail_present_share_pct": (
+            chunk_publish_present_pre_present_opportunity_tail_present /
+            chunk_publish_present_pre_present_opportunity_slots * 100.0
+            if chunk_publish_present_pre_present_opportunity_slots else None
+        ),
+        "chunk_publish_present_pre_present_opportunity_tail_empty_share_pct": (
+            chunk_publish_present_pre_present_opportunity_tail_empty /
+            chunk_publish_present_pre_present_opportunity_slots * 100.0
+            if chunk_publish_present_pre_present_opportunity_slots else None
+        ),
+        "chunk_publish_present_pre_present_opportunity_draw_only_share_pct": (
+            chunk_publish_present_pre_present_opportunity_draw_only /
+            chunk_publish_present_pre_present_opportunity_slots * 100.0
+            if chunk_publish_present_pre_present_opportunity_slots else None
+        ),
+        "encode_ready_depth_avg": (
+            encode_ready_depth_total / encode_ready_depth_samples
+            if encode_ready_depth_samples else None
+        ),
+        "encode_ready_depth_gt1_per_present": (
+            encode_ready_depth_gt1 / present if present else None
+        ),
+        "encode_ready_depth_gt2_per_present": (
+            encode_ready_depth_gt2 / present if present else None
+        ),
+        "encode_ready_depth_gt4_per_present": (
+            encode_ready_depth_gt4 / present if present else None
+        ),
+        "encode_ready_depth_gt1_share_pct": (
+            encode_ready_depth_gt1 / encode_ready_depth_samples * 100.0
+            if encode_ready_depth_samples else None
+        ),
+        "encode_ready_depth_gt2_share_pct": (
+            encode_ready_depth_gt2 / encode_ready_depth_samples * 100.0
+            if encode_ready_depth_samples else None
+        ),
+        "encode_ready_depth_gt4_share_pct": (
+            encode_ready_depth_gt4 / encode_ready_depth_samples * 100.0
+            if encode_ready_depth_samples else None
+        ),
         "commit_chunk_replay_cpu_ms_per_present": (
             commit_chunk_replay_cpu_ms / present if present else None
         ),
@@ -785,6 +1527,279 @@ def derived(counters: dict[str, Any]) -> dict[str, float | None]:
         ),
         "no_enqueue_wait_to_next_enqueue_ms_per_present": (
             no_enqueue_wait_to_next_enqueue_ms / present if present else None
+        ),
+        "no_enqueue_before_publish_completed_replay_cpu_ms_per_present": (
+            no_enqueue_completed_replay_cpu_before_publish_ms / present
+            if present else None
+        ),
+        "no_enqueue_before_publish_active_replay_cpu_ms_per_present": (
+            no_enqueue_active_replay_cpu_before_publish_ms / present
+            if present else None
+        ),
+        "no_enqueue_before_publish_inter_replay_gap_ms_per_present": (
+            no_enqueue_inter_replay_gap_before_publish_ms / present
+            if present else None
+        ),
+        "no_enqueue_before_publish_commit_publish_wait_ms_per_present": (
+            no_enqueue_commit_publish_wait_before_publish_ms / present
+            if present else None
+        ),
+        "no_enqueue_before_publish_on_before_publish_cpu_ms_per_present": (
+            no_enqueue_commit_publish_on_before_publish_cpu_ms / present
+            if present else None
+        ),
+        "no_enqueue_first_publish_slot_samples_per_present": (
+            no_enqueue_first_publish_slot_samples / present if present else None
+        ),
+        "no_enqueue_first_publish_slot_commands_per_present": (
+            no_enqueue_first_publish_slot_commands / present if present else None
+        ),
+        "no_enqueue_first_publish_slot_commands_per_slot": (
+            no_enqueue_first_publish_slot_commands /
+            no_enqueue_first_publish_slot_samples
+            if no_enqueue_first_publish_slot_samples else None
+        ),
+        "no_enqueue_first_publish_slot_draw_run_commands_per_slot": (
+            no_enqueue_first_publish_slot_draw_run_commands /
+            no_enqueue_first_publish_slot_samples
+            if no_enqueue_first_publish_slot_samples else None
+        ),
+        "no_enqueue_first_publish_slot_draw_items_per_slot": (
+            no_enqueue_first_publish_slot_draw_items /
+            no_enqueue_first_publish_slot_samples
+            if no_enqueue_first_publish_slot_samples else None
+        ),
+        "no_enqueue_first_publish_slot_non_draw_commands_per_slot": (
+            no_enqueue_first_publish_slot_non_draw_commands /
+            no_enqueue_first_publish_slot_samples
+            if no_enqueue_first_publish_slot_samples else None
+        ),
+        "no_enqueue_first_publish_slot_payload_bytes_per_slot": (
+            no_enqueue_first_publish_slot_payload_bytes /
+            no_enqueue_first_publish_slot_samples
+            if no_enqueue_first_publish_slot_samples else None
+        ),
+        "no_enqueue_first_publish_slot_present_commands_per_slot": (
+            no_enqueue_first_publish_slot_present_commands /
+            no_enqueue_first_publish_slot_samples
+            if no_enqueue_first_publish_slot_samples else None
+        ),
+        "no_enqueue_before_publish_replay_cpu_ms_per_present": (
+            no_enqueue_before_publish_replay_cpu_ms / present if present else None
+        ),
+        "no_enqueue_before_publish_replay_gap_ms_per_present": (
+            no_enqueue_before_publish_replay_gap_ms / present if present else None
+        ),
+        "no_enqueue_before_publish_closure_ms_per_present": (
+            no_enqueue_before_publish_closure_ms / present if present else None
+        ),
+        "no_enqueue_before_publish_residual_ms_per_present": (
+            no_enqueue_before_publish_residual_ms / present if present else None
+        ),
+        "no_enqueue_before_publish_completed_replay_share_pct": (
+            no_enqueue_completed_replay_cpu_before_publish_ms /
+            no_enqueue_commit_entry_to_publish_ms * 100.0
+            if no_enqueue_commit_entry_to_publish_ms else None
+        ),
+        "no_enqueue_before_publish_active_replay_share_pct": (
+            no_enqueue_active_replay_cpu_before_publish_ms /
+            no_enqueue_commit_entry_to_publish_ms * 100.0
+            if no_enqueue_commit_entry_to_publish_ms else None
+        ),
+        "no_enqueue_before_publish_inter_replay_gap_share_pct": (
+            no_enqueue_inter_replay_gap_before_publish_ms /
+            no_enqueue_commit_entry_to_publish_ms * 100.0
+            if no_enqueue_commit_entry_to_publish_ms else None
+        ),
+        "no_enqueue_before_publish_commit_publish_wait_share_pct": (
+            no_enqueue_commit_publish_wait_before_publish_ms /
+            no_enqueue_commit_entry_to_publish_ms * 100.0
+            if no_enqueue_commit_entry_to_publish_ms else None
+        ),
+        "no_enqueue_before_publish_replay_cpu_share_pct": (
+            no_enqueue_before_publish_replay_cpu_ms /
+            no_enqueue_commit_entry_to_publish_ms * 100.0
+            if no_enqueue_commit_entry_to_publish_ms else None
+        ),
+        "no_enqueue_before_publish_replay_gap_share_pct": (
+            no_enqueue_before_publish_replay_gap_ms /
+            no_enqueue_commit_entry_to_publish_ms * 100.0
+            if no_enqueue_commit_entry_to_publish_ms else None
+        ),
+        "no_enqueue_before_publish_closure_share_pct": (
+            no_enqueue_before_publish_closure_ms /
+            no_enqueue_commit_entry_to_publish_ms * 100.0
+            if no_enqueue_commit_entry_to_publish_ms else None
+        ),
+        "no_enqueue_before_publish_residual_share_pct": (
+            no_enqueue_before_publish_residual_ms /
+            no_enqueue_commit_entry_to_publish_ms * 100.0
+            if no_enqueue_commit_entry_to_publish_ms else None
+        ),
+        "no_enqueue_before_publish_entries_per_present": ratio(
+            counters,
+            "completion_no_enqueue_commit_chunk_entries_before_publish",
+            "present_encoded",
+        ),
+        "no_enqueue_before_publish_replay_starts_per_present": ratio(
+            counters,
+            "completion_no_enqueue_commit_chunk_replay_starts_before_publish",
+            "present_encoded",
+        ),
+        "no_enqueue_before_publish_replay_ends_per_present": ratio(
+            counters,
+            "completion_no_enqueue_commit_chunk_replay_ends_before_publish",
+            "present_encoded",
+        ),
+        "no_enqueue_before_publish_scanned_chunks_per_present": ratio(
+            counters,
+            "completion_no_enqueue_commit_chunk_shape_samples_before_publish",
+            "present_encoded",
+        ),
+        "no_enqueue_before_publish_records_per_present": ratio(
+            counters,
+            "completion_no_enqueue_commit_chunk_records_before_publish",
+            "present_encoded",
+        ),
+        "no_enqueue_before_publish_records_per_scanned_chunk": ratio(
+            counters,
+            "completion_no_enqueue_commit_chunk_records_before_publish",
+            "completion_no_enqueue_commit_chunk_shape_samples_before_publish",
+        ),
+        "no_enqueue_before_publish_chunks_with_draw_per_present": ratio(
+            counters,
+            "completion_no_enqueue_commit_chunk_chunks_with_draw_before_publish",
+            "present_encoded",
+        ),
+        "no_enqueue_before_publish_chunks_with_present_per_present": ratio(
+            counters,
+            "completion_no_enqueue_commit_chunk_chunks_with_present_before_publish",
+            "present_encoded",
+        ),
+        "no_enqueue_before_publish_chunks_state_const_only_per_present": ratio(
+            counters,
+            "completion_no_enqueue_commit_chunk_chunks_state_const_only_before_publish",
+            "present_encoded",
+        ),
+        "no_enqueue_before_publish_chunks_no_draw_no_present_per_present": ratio(
+            counters,
+            "completion_no_enqueue_commit_chunk_chunks_no_draw_no_present_before_publish",
+            "present_encoded",
+        ),
+        "no_enqueue_before_publish_draw_records_per_present": ratio(
+            counters,
+            "completion_no_enqueue_commit_chunk_draw_records_before_publish",
+            "present_encoded",
+        ),
+        "no_enqueue_before_publish_const_records_per_present": ratio(
+            counters,
+            "completion_no_enqueue_commit_chunk_const_records_before_publish",
+            "present_encoded",
+        ),
+        "no_enqueue_before_publish_apply_state_records_per_present": ratio(
+            counters,
+            "completion_no_enqueue_commit_chunk_apply_state_records_before_publish",
+            "present_encoded",
+        ),
+        "no_enqueue_before_publish_clear_records_per_present": ratio(
+            counters,
+            "completion_no_enqueue_commit_chunk_clear_records_before_publish",
+            "present_encoded",
+        ),
+        "no_enqueue_before_publish_present_records_per_present": ratio(
+            counters,
+            "completion_no_enqueue_commit_chunk_present_records_before_publish",
+            "present_encoded",
+        ),
+        "no_enqueue_before_publish_surface_records_per_present": ratio(
+            counters,
+            "completion_no_enqueue_commit_chunk_surface_records_before_publish",
+            "present_encoded",
+        ),
+        "no_enqueue_before_publish_query_records_per_present": ratio(
+            counters,
+            "completion_no_enqueue_commit_chunk_query_records_before_publish",
+            "present_encoded",
+        ),
+        "no_enqueue_before_publish_other_records_per_present": ratio(
+            counters,
+            "completion_no_enqueue_commit_chunk_other_records_before_publish",
+            "present_encoded",
+        ),
+        "snapshot_state_copy_cpu_ms_per_present": (
+            snapshot_state_copy_cpu_ms / present if present else None
+        ),
+        "snapshot_state_materialized_per_present": (
+            snapshot_state_materialized / present if present else None
+        ),
+        "snapshot_state_materialized_mib_per_present": (
+            snapshot_state_materialized_bytes / mib / present if present else None
+        ),
+        "snapshot_state_elided_per_present": (
+            snapshot_state_elided / present if present else None
+        ),
+        "snapshot_state_elided_mib_per_present": (
+            snapshot_state_elided_bytes / mib / present if present else None
+        ),
+        "snapshot_state_elision_share_pct": (
+            snapshot_state_elided / snapshot_state_total * 100.0
+            if snapshot_state_total else None
+        ),
+        "submission_carrier_records_per_present": (
+            submission_carrier_records / present if present else None
+        ),
+        "submission_carrier_bytes_per_present": (
+            submission_carrier_bytes / present if present else None
+        ),
+        "submission_carrier_state_storage_bytes_per_present": (
+            submission_carrier_state_storage_bytes / present if present else None
+        ),
+        "submission_carrier_uniform_storage_bytes_per_present": (
+            submission_carrier_uniform_storage_bytes / present if present else None
+        ),
+        "submission_carrier_compact_uniform_storage_bytes_per_present": (
+            submission_carrier_compact_uniform_storage_bytes / present
+            if present else None
+        ),
+        "submission_carrier_unused_uniform_storage_records_per_present": (
+            submission_carrier_unused_uniform_storage_records / present
+            if present else None
+        ),
+        "submission_carrier_unused_uniform_storage_mib_per_present": (
+            submission_carrier_unused_uniform_storage_bytes / mib / present
+            if present else None
+        ),
+        "submission_carrier_bytes_per_record": (
+            submission_carrier_bytes / submission_carrier_records
+            if submission_carrier_records else None
+        ),
+        "submission_carrier_state_storage_bytes_per_record": (
+            submission_carrier_state_storage_bytes / submission_carrier_records
+            if submission_carrier_records else None
+        ),
+        "submission_carrier_uniform_storage_bytes_per_record": (
+            submission_carrier_uniform_storage_bytes / submission_carrier_records
+            if submission_carrier_records else None
+        ),
+        "submission_carrier_compact_uniform_storage_bytes_per_record": (
+            submission_carrier_compact_uniform_storage_bytes /
+            submission_carrier_records
+            if submission_carrier_records else None
+        ),
+        "submission_carrier_unused_uniform_storage_bytes_per_record": (
+            submission_carrier_unused_uniform_storage_bytes /
+            submission_carrier_records
+            if submission_carrier_records else None
+        ),
+        "submission_carrier_unused_uniform_storage_bytes_per_unused_record": (
+            submission_carrier_unused_uniform_storage_bytes /
+            submission_carrier_unused_uniform_storage_records
+            if submission_carrier_unused_uniform_storage_records else None
+        ),
+        "submission_carrier_unused_uniform_storage_share_pct": (
+            submission_carrier_unused_uniform_storage_bytes /
+            submission_carrier_uniform_storage_bytes * 100.0
+            if submission_carrier_uniform_storage_bytes else None
         ),
         "uniform_materialized_bytes_per_present": (
             uniform_materialized_bytes / present if present else None
@@ -951,6 +1966,25 @@ def derived(counters: dict[str, Any]) -> dict[str, float | None]:
         ),
         "draw_uniform_payload_append_copy_cpu_ms_per_present": (
             uniform_append_copy_cpu_ms / present if present else None
+        ),
+        "submit_draw_run_batch_discarded_state_records_per_present": (
+            discarded_state_records / present if present else None
+        ),
+        "submit_draw_run_batch_discarded_state_mib_per_present": (
+            discarded_state_bytes / mib / present if present else None
+        ),
+        "submit_draw_run_batch_submission_adjacent_same_generation_lane_per_present": (
+            adjacent_same_generation_lane / present if present else None
+        ),
+        "submit_draw_run_batch_compat_same_generation_lane_per_present": (
+            compat_same_generation_lane / present if present else None
+        ),
+        "submit_draw_run_batch_compat_same_generation_lane_compatible_share_pct": (
+            compat_same_generation_lane_compatible / compat_same_generation_lane * 100.0
+            if compat_same_generation_lane else None
+        ),
+        "submit_draw_run_batch_compat_same_generation_lane_incompatible_per_present": (
+            compat_same_generation_lane_incompatible / present if present else None
         ),
         "snapshot_cache_batch_miss_uniform_hash_share_pct": (
             batch_miss_uniform_hash_cpu_ms / batch_miss_uniform_build_cpu_ms * 100.0
@@ -1187,6 +2221,59 @@ def write_report(
         f"- Backend uniform append CPU changed by `{uniform_append_delta} ms/present` "
         f"(`{uniform_append_pct}`)."
     )
+    state_copy_delta, state_copy_pct = delta(
+        after_derived["snapshot_state_copy_cpu_ms_per_present"],
+        before_derived["snapshot_state_copy_cpu_ms_per_present"],
+    )
+    state_elided_delta, state_elided_pct = delta(
+        after_derived["snapshot_state_elided_mib_per_present"],
+        before_derived["snapshot_state_elided_mib_per_present"],
+    )
+    discarded_state_delta, discarded_state_pct = delta(
+        after_derived["submit_draw_run_batch_discarded_state_mib_per_present"],
+        before_derived["submit_draw_run_batch_discarded_state_mib_per_present"],
+    )
+    carrier_width_delta, carrier_width_pct = delta(
+        after_derived["submission_carrier_bytes_per_record"],
+        before_derived["submission_carrier_bytes_per_record"],
+    )
+    carrier_uniform_delta, carrier_uniform_pct = delta(
+        after_derived["submission_carrier_uniform_storage_bytes_per_record"],
+        before_derived["submission_carrier_uniform_storage_bytes_per_record"],
+    )
+    carrier_unused_uniform_delta, carrier_unused_uniform_pct = delta(
+        after_derived[
+            "submission_carrier_unused_uniform_storage_mib_per_present"
+        ],
+        before_derived[
+            "submission_carrier_unused_uniform_storage_mib_per_present"
+        ],
+    )
+    lines.append(
+        f"- Snapshot state-copy CPU changed by `{state_copy_delta} ms/present` "
+        f"(`{state_copy_pct}`)."
+    )
+    lines.append(
+        f"- Snapshot state elided bytes changed by `{state_elided_delta} MiB/present` "
+        f"(`{state_elided_pct}`)."
+    )
+    lines.append(
+        f"- Discarded backend state changed by `{discarded_state_delta} MiB/present` "
+        f"(`{discarded_state_pct}`)."
+    )
+    lines.append(
+        f"- Submission carrier width changed by `{carrier_width_delta} bytes/record` "
+        f"(`{carrier_width_pct}`)."
+    )
+    lines.append(
+        f"- Submission carrier full-uniform storage changed by "
+        f"`{carrier_uniform_delta} bytes/record` (`{carrier_uniform_pct}`)."
+    )
+    lines.append(
+        f"- Submission carrier unused full-uniform storage changed by "
+        f"`{carrier_unused_uniform_delta} MiB/present` "
+        f"(`{carrier_unused_uniform_pct}`)."
+    )
     compact_saved_delta, compact_saved_pct = delta(
         after_derived["uniform_compact_saved_bytes_per_present"],
         before_derived["uniform_compact_saved_bytes_per_present"],
@@ -1252,6 +2339,36 @@ def failed_requirements(args: argparse.Namespace,
                 f"({fmt_derived(before_value)} -> {fmt_derived(after_value)})"
             )
 
+    def require_available_derived_not_increase(key: str, label: str) -> None:
+        before_value = before_derived[key]
+        after_value = after_derived[key]
+        if before_value is None or after_value is None:
+            failures.append(
+                f"{label} is missing "
+                f"({fmt_derived(before_value)} -> {fmt_derived(after_value)})"
+            )
+            return
+        if after_value > before_value:
+            failures.append(
+                f"{label} increased "
+                f"({fmt_derived(before_value)} -> {fmt_derived(after_value)})"
+            )
+
+    def require_available_derived_decrease(key: str, label: str) -> None:
+        before_value = before_derived[key]
+        after_value = after_derived[key]
+        if before_value is None or after_value is None:
+            failures.append(
+                f"{label} is missing "
+                f"({fmt_derived(before_value)} -> {fmt_derived(after_value)})"
+            )
+            return
+        if after_value >= before_value:
+            failures.append(
+                f"{label} did not decrease "
+                f"({fmt_derived(before_value)} -> {fmt_derived(after_value)})"
+            )
+
     if args.require_color_dontcare_increase:
         before_value = metric_value(before, "render_pass_store_action_dontcare")
         after_value = metric_value(after, "render_pass_store_action_dontcare")
@@ -1295,6 +2412,24 @@ def failed_requirements(args: argparse.Namespace,
         require_derived_not_increase(
             "passes_per_present",
             "passes_per_present",
+        )
+
+    if args.require_encoder_final_end_reason_not_increase:
+        require_available_derived_not_increase(
+            "encoder_sidecar_final_end_reason_per_present",
+            "encoder_sidecar_final_end_reason_per_present",
+        )
+
+    if args.require_encoder_color_load_not_increase:
+        require_available_derived_not_increase(
+            "encoder_sidecar_color_load_mib_per_present",
+            "encoder_sidecar_color_load_mib_per_present",
+        )
+
+    if args.require_encoder_depth_load_not_increase:
+        require_available_derived_not_increase(
+            "encoder_sidecar_depth_load_mib_per_present",
+            "encoder_sidecar_depth_load_mib_per_present",
         )
 
     if args.max_gpu_command_buffer_regression_ms is not None:
@@ -1412,6 +2547,36 @@ def failed_requirements(args: argparse.Namespace,
                 f"({fmt_value(after_value)})"
             )
 
+    if args.require_snapshot_state_elided_present:
+        after_value = after_derived.get("snapshot_state_elided_per_present")
+        if after_value is None or after_value <= 0.0:
+            failures.append(
+                "snapshot_state_elided_per_present stayed zero "
+                f"({fmt_value(after_value)})"
+            )
+
+    if args.require_discarded_state_not_increase:
+        require_derived_not_increase(
+            "submit_draw_run_batch_discarded_state_records_per_present",
+            "submit_draw_run_batch_discarded_state_records_per_present",
+        )
+        require_derived_not_increase(
+            "submit_draw_run_batch_discarded_state_mib_per_present",
+            "submit_draw_run_batch_discarded_state_mib_per_present",
+        )
+
+    if args.require_submission_carrier_bytes_per_record_decrease:
+        require_available_derived_decrease(
+            "submission_carrier_bytes_per_record",
+            "submission_carrier_bytes_per_record",
+        )
+
+    if args.require_submission_carrier_uniform_storage_per_record_decrease:
+        require_available_derived_decrease(
+            "submission_carrier_uniform_storage_bytes_per_record",
+            "submission_carrier_uniform_storage_bytes_per_record",
+        )
+
     if args.require_completion_present_wait_decrease:
         before_value = metric_value(before, "completion_present_wait_ms")
         after_value = metric_value(after, "completion_present_wait_ms")
@@ -1454,6 +2619,15 @@ def failed_requirements(args: argparse.Namespace,
         if after_value >= before_value:
             failures.append(
                 "completion_present_wait_without_enqueue_ms did not decrease "
+                f"({fmt_value(before_value)} -> {fmt_value(after_value)})"
+            )
+
+    if args.require_encode_ready_depth_gt1_increase:
+        before_value = metric_value(before, "encode_dequeue_ready_depth_gt1")
+        after_value = metric_value(after, "encode_dequeue_ready_depth_gt1")
+        if after_value <= before_value:
+            failures.append(
+                "encode_dequeue_ready_depth_gt1 did not increase "
                 f"({fmt_value(before_value)} -> {fmt_value(after_value)})"
             )
 
@@ -1601,6 +2775,18 @@ def failed_requirements(args: argparse.Namespace,
             "no_enqueue_wait_to_next_enqueue_ms_per_present",
         )
 
+    if args.require_no_enqueue_before_publish_closure_decrease:
+        require_derived_decrease(
+            "no_enqueue_before_publish_closure_ms_per_present",
+            "no_enqueue_before_publish_closure_ms_per_present",
+        )
+
+    if args.require_no_enqueue_before_publish_inter_replay_gap_decrease:
+        require_derived_decrease(
+            "no_enqueue_before_publish_inter_replay_gap_ms_per_present",
+            "no_enqueue_before_publish_inter_replay_gap_ms_per_present",
+        )
+
     return failures
 
 
@@ -1640,6 +2826,24 @@ def main() -> int:
         "--require-render-passes-per-present-not-increase",
         action="store_true",
         help="exit nonzero if render_pass_begin per present increases",
+    )
+    parser.add_argument(
+        "--require-encoder-final-end-reason-not-increase",
+        action="store_true",
+        help=(
+            "exit nonzero if encoder-sidecar chunk-final render encoder "
+            "closures per present increase"
+        ),
+    )
+    parser.add_argument(
+        "--require-encoder-color-load-not-increase",
+        action="store_true",
+        help="exit nonzero if encoder-sidecar color load MiB per present increases",
+    )
+    parser.add_argument(
+        "--require-encoder-depth-load-not-increase",
+        action="store_true",
+        help="exit nonzero if encoder-sidecar depth load MiB per present increases",
     )
     parser.add_argument(
         "--max-gpu-command-buffer-regression-ms",
@@ -1702,6 +2906,26 @@ def main() -> int:
         help="exit nonzero unless compact uniform payload saved bytes per present is nonzero",
     )
     parser.add_argument(
+        "--require-snapshot-state-elided-present",
+        action="store_true",
+        help="exit nonzero unless frontend state snapshot elisions per present are nonzero",
+    )
+    parser.add_argument(
+        "--require-discarded-state-not-increase",
+        action="store_true",
+        help="exit nonzero if backend discarded state records or bytes per present increase",
+    )
+    parser.add_argument(
+        "--require-submission-carrier-bytes-per-record-decrease",
+        action="store_true",
+        help="exit nonzero unless submission carrier bytes per record decrease",
+    )
+    parser.add_argument(
+        "--require-submission-carrier-uniform-storage-per-record-decrease",
+        action="store_true",
+        help="exit nonzero unless submission carrier full-uniform storage bytes per record decrease",
+    )
+    parser.add_argument(
         "--require-completion-present-wait-decrease",
         action="store_true",
         help="exit nonzero unless completion_present_wait_ms decreases",
@@ -1725,6 +2949,11 @@ def main() -> int:
         "--require-completion-present-wait-without-enqueue-decrease",
         action="store_true",
         help="exit nonzero unless completion_present_wait_without_enqueue_ms decreases",
+    )
+    parser.add_argument(
+        "--require-encode-ready-depth-gt1-increase",
+        action="store_true",
+        help="exit nonzero unless encode dequeue samples with ready depth > 1 increase",
     )
     parser.add_argument(
         "--require-commit-chunk-replay-cpu-per-present-decrease",
@@ -1845,6 +3074,16 @@ def main() -> int:
         "--require-no-enqueue-wait-to-next-enqueue-decrease",
         action="store_true",
         help="exit nonzero unless no-enqueue wait-to-next-enqueue time decreases",
+    )
+    parser.add_argument(
+        "--require-no-enqueue-before-publish-closure-decrease",
+        action="store_true",
+        help="exit nonzero unless no-enqueue before-publish closure time decreases",
+    )
+    parser.add_argument(
+        "--require-no-enqueue-before-publish-inter-replay-gap-decrease",
+        action="store_true",
+        help="exit nonzero unless no-enqueue before-publish inter-replay gap decreases",
     )
     args = parser.parse_args()
     if (

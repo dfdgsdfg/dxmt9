@@ -97,6 +97,18 @@ enum class ChunkPublishReason : std::uint8_t {
   MapWait,
 };
 
+enum class ChunkPublishTailCommandKind : std::uint8_t {
+  Empty = 0,
+  DrawRun,
+  Clear,
+  SurfaceCopy,
+  StretchRect,
+  Readback,
+  ColorFill,
+  DepthResolve,
+  Present,
+};
+
 class ScopedD3D9SnapshotUniformBuildContext {
  public:
   explicit ScopedD3D9SnapshotUniformBuildContext(
@@ -137,6 +149,19 @@ void countPrepareSlotPsoPrefetchCpuTime(std::uint64_t nanoseconds);
 void countUnpublishedSlotPsoPrefetchCpuTime(std::uint64_t nanoseconds);
 void countChunkPublishReason(ChunkPublishReason reason,
                              std::uint64_t commandCount);
+void countChunkPublishPresentSplitBeforeTail(ChunkPublishTailCommandKind kind,
+                                             bool drawOnly);
+void countChunkPublishPresentPrePresentOpportunityTail(
+    ChunkPublishTailCommandKind kind, bool drawOnly);
+void countChunkPublishSlotResidency(ChunkPublishReason reason,
+                                    std::uint64_t nanoseconds);
+void countChunkPublishPresentPrePresentOpportunity(std::uint64_t commandCount,
+                                                   std::uint64_t drawRunCount,
+                                                   std::uint64_t drawItemCount,
+                                                   std::uint64_t nonDrawCommandCount,
+                                                   std::uint64_t payloadBytes,
+                                                   std::uint64_t residencyNanoseconds,
+                                                   bool presentIsTail);
 void countEncodeSlotPsoPrefetchCpuTime(std::uint64_t nanoseconds);
 void countEncodeSlotPsoPrefetchCommands(std::uint64_t count);
 void countEncodeSlotPsoPrefetchCandidates(std::uint64_t count = 1);
@@ -389,6 +414,11 @@ void countD3D9SnapshotCacheBatchMissHotBuildFlatRenderReuse(bool reused);
 void countD3D9SnapshotCacheBatchMissHotBuildFlatTssReuse(bool reused);
 void countD3D9SnapshotCacheBatchMissHotBuildFlatSamplerReuse(bool reused);
 void countD3D9SnapshotCacheBatchMissUniformNonConstHashReuse(bool reused);
+void countD3D9SnapshotCacheBatchMissUniformPayloadPath(
+    bool reusedFullPayload,
+    bool reusedNonConstantPayload);
+void countD3D9SnapshotCacheBatchMissSemanticReuseProbe(bool hit,
+                                                       std::uint32_t distance);
 void countD3D9SnapshotUniformBuildCall();
 void countD3D9SnapshotUniformBuildVsConstCopyCpuTime(std::uint64_t nanoseconds);
 void countD3D9SnapshotUniformBuildPsConstCopyCpuTime(std::uint64_t nanoseconds);
@@ -437,6 +467,17 @@ void countD3D9SnapshotUniformMaterializedCompactOpportunity(
     std::uint64_t fixedBytes,
     std::uint64_t vertexBytes,
     std::uint64_t pixelBytes);
+void countD3D9SnapshotUniformCompactCpuTime(std::uint64_t nanoseconds);
+void countD3D9SnapshotUniformCompactFixedCpuTime(std::uint64_t nanoseconds);
+void countD3D9SnapshotUniformCompactVertexStageCpuTime(std::uint64_t nanoseconds);
+void countD3D9SnapshotUniformCompactPixelStageCpuTime(std::uint64_t nanoseconds);
+void countD3D9SnapshotUniformCompactFixedPayload(bool reused,
+                                                 std::uint64_t bytes);
+void countD3D9SnapshotSubmissionCarrier(std::uint64_t carrierBytes,
+                                        std::uint64_t stateStorageBytes,
+                                        std::uint64_t uniformStorageBytes,
+                                        std::uint64_t compactUniformStorageBytes,
+                                        bool uniformStorageUnused);
 void countD3D9SnapshotUniformElided(std::uint64_t bytes);
 void countD3D9SnapshotUniformAdjacentSameGeneration(bool sameStateLane,
                                                     std::uint64_t bytes);
@@ -1016,6 +1057,9 @@ void countCompletionWaitOverlap(std::uint64_t nanoseconds,
                                 std::uint64_t enqueuesDuringWait,
                                 bool hasPresent);
 void countCompletionSignalDelay(std::uint64_t nanoseconds);
+void countCompletionWaitCommitChunkEntry();
+void countCompletionWaitCommitChunkReplayStart();
+void countCompletionWaitCommitChunkReplayEnd(std::uint64_t replayNanoseconds);
 void countCompletionNoEnqueueWaitToCommitChunkEntry(std::uint64_t nanoseconds);
 void countCompletionNoEnqueueWaitToCommitChunkReplayStart(std::uint64_t nanoseconds);
 void countCompletionNoEnqueueWaitToCommitChunkReplayEnd(std::uint64_t nanoseconds);
@@ -1046,6 +1090,13 @@ void countCompletionNoEnqueueCommitChunkRecordShapeBeforePublish(
     std::uint64_t surfaceRecords,
     std::uint64_t queryRecords,
     std::uint64_t otherRecords);
+void countCompletionNoEnqueueFirstPublishSlotShape(
+    std::uint64_t commandCount,
+    std::uint64_t drawRunCommands,
+    std::uint64_t drawItems,
+    std::uint64_t nonDrawCommands,
+    std::uint64_t payloadBytes,
+    std::uint64_t presentCommands);
 void countCompletionNoEnqueueStageCommitEntryToPublish(std::uint64_t nanoseconds);
 void countCompletionNoEnqueueStagePublishToEncodeDequeue(std::uint64_t nanoseconds);
 void countCompletionNoEnqueueStageEncodeDequeueToCommandBufferCommit(std::uint64_t nanoseconds);

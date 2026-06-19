@@ -228,6 +228,29 @@ dxmt encoder attribution and writes
 | Top-three VS buffer write | `1779.246 MiB` |
 | Hidden backend write estimate | `1750.007 MiB` |
 
+`capture-layer-current-r2-20260619` repeats the same integrated file route on
+the current worktree after the `v0.0.3` visual-anchor correction. The probe
+writes `traces/app-d3d9-3dmark05-capture-layer-current-r2-20260619/frame60.gputrace`
+(`191 MiB`) with `status=pass`, `capture_error=None`, and
+`gpu_command_buffer_errors=0`. Xcode replay/export produced
+`analysis/frame60-performance.gputrace`, `analysis/frame60-counters-xcode.csv`,
+and the finalizer wrote the joined bottleneck report. During export, Xcode's
+save panel kept an older `analysis` destination; the exported files were
+verified on disk and moved into the current run's `analysis/` directory before
+finalization.
+
+| Metric | Value |
+|---|---:|
+| GPU time | `36.183 ms` |
+| Draw calls | `396` |
+| Render encoders | `10` |
+| Command buffers | `4` |
+| Total Xcode buffer write | `1779.916 MiB` |
+| Total Xcode device write | `1838.890 MiB` |
+| Top-three GPU share | `98.33%` |
+| Top-three VS buffer write | `1779.229 MiB` |
+| Hidden backend write estimate | `1749.865 MiB` |
+
 This makes the preferred file-capture command explicit:
 `run_3dmark05_perf_probe.sh --with-wine-capture-layer ...`. Lower-level manual
 use of `run_with_wine_metal_capture_layer.sh` remains a diagnostic escape hatch.
@@ -236,13 +259,60 @@ use of `run_with_wine_metal_capture_layer.sh` remains a diagnostic escape hatch.
 
 | Rank | Encoder | GPU ms | Share | VS invocations | VS buffer written | Device written | Partial renders |
 |---:|---|---:|---:|---:|---:|---:|---:|
-| 1 | `seq=60,enc=2` | `19.977` | `53.28%` | `642,211` | `981.174 MiB` | `1001.053 MiB` | `0` |
-| 2 | `seq=60,enc=1` | `11.279` | `30.08%` | `383,688` | `573.091 MiB` | `595.406 MiB` | `0` |
-| 3 | `seq=60,enc=0` | `5.636` | `15.03%` | `152,895` | `224.981 MiB` | `231.151 MiB` | `0` |
+| 1 | `seq=60,enc=2` | `18.832` | `52.05%` | `642,211` | `981.158 MiB` | `1001.079 MiB` | `0` |
+| 2 | `seq=60,enc=1` | `11.241` | `31.07%` | `383,688` | `573.090 MiB` | `595.637 MiB` | `0` |
+| 3 | `seq=60,enc=0` | `5.505` | `15.21%` | `152,895` | `224.981 MiB` | `231.151 MiB` | `0` |
 
-Top-three GPU share is `98.40%`. The top-three VS buffer device write total is
-`1779.246 MiB`; total device writes for those three encoders are
-`1827.610 MiB`.
+Top-three GPU share is `98.33%`. The top-three VS buffer device write total is
+`1779.229 MiB`; total device writes for those three encoders are
+`1827.867 MiB`.
+
+## 2026-06-19 Current Post-Compact Wrapper Refresh
+
+`capture-layer-current-post-compact-r1` reran the integrated
+`--with-wine-capture-layer` file route from the current worktree after the
+direct compact-submission cleanup. It confirms that the capture layer still
+works without Xcode attach: the wrapper wrote
+`traces/app-d3d9-3dmark05-capture-layer-current-post-compact-r1/frame60.gputrace`,
+Xcode replay/profile completed, `frame60-performance.gputrace` was exported
+under the same run's `analysis/` directory, and `Editor > Export GPU Counters`
+produced `frame60-counters-xcode.csv`.
+
+The save-panel path cache still matters operationally: Xcode may show only
+`Where: analysis` while remembering another run's `analysis` directory. Verify
+the real path after every export and normalize misplaced files before running
+the finalizer.
+
+| Metric | Value |
+|---|---:|
+| GPU time | `35.919 ms` |
+| Draw calls | `396` |
+| Render encoders | `10` |
+| Command buffers | `4` |
+| Total Xcode buffer write | `1779.922 MiB` |
+| Total Xcode device write | `1838.868 MiB` |
+| Top-three GPU share | `98.26%` |
+| Top-three VS buffer write | `1779.230 MiB` |
+| Hidden backend write estimate | `1749.866 MiB` |
+| `draw_skipped_no_pipeline` | `0` |
+| `gpu_command_buffer_errors` | `0` |
+
+Top encoders from the joined Xcode/dxmt report:
+
+| Rank | Encoder | GPU ms | Share | VS invocations | VS buffer written | Device written | Partial renders |
+|---:|---|---:|---:|---:|---:|---:|---:|
+| 1 | `seq=60,enc=2` | `18.988` | `52.86%` | `642,211` | `981.191 MiB` | `1001.103 MiB` | `0` |
+| 2 | `seq=60,enc=1` | `11.002` | `30.63%` | `383,688` | `573.084 MiB` | `595.593 MiB` | `0` |
+| 3 | `seq=60,enc=0` | `5.306` | `14.77%` | `152,895` | `224.955 MiB` | `231.149 MiB` | `0` |
+
+The runtime side of the same run preserves the average-FPS owner split rather
+than changing it: `completion_wait_ms_per_present=25.530`,
+`completion_wait_without_enqueue_ms_per_present=25.317`,
+`completion_wait_no_enqueue_share=99.166%`, `commit_chunk_replay=8.333ms/present`,
+`commit_chunk_queue_draw_submission=3.912ms/present`, and
+`encode_chunk=15.700ms/present`. Its `actual.png` is an effects-heavy normal
+GT1 frame with muzzle/bloom/sparks visible, so it is suitable as capture health
+evidence. It is still not a normal wall-clock FPS sample.
 
 ```mermaid
 sequenceDiagram

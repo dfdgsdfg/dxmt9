@@ -8,6 +8,9 @@ timeout=${DXMT_3DMARK05_PROBE_TIMEOUT:-}
 timeout_slack=${DXMT_3DMARK05_PROBE_TIMEOUT_SLACK:-45}
 wait_unlocked_sec=${DXMT_3DMARK05_WAIT_UNLOCKED_SEC:-0}
 wait_unlocked_interval_sec=${DXMT_3DMARK05_WAIT_UNLOCKED_INTERVAL_SEC:-5}
+keep_frontmost=${DXMT_3DMARK05_KEEP_FRONTMOST:-0}
+keep_frontmost_interval_sec=${DXMT_3DMARK05_KEEP_FRONTMOST_INTERVAL_SEC:-1}
+keep_frontmost_process=${DXMT_3DMARK05_KEEP_FRONTMOST_PROCESS:-3DMark05.exe}
 capture_delay_sec=${DXMT_3DMARK05_CAPTURE_DELAY_SEC:-}
 catalogue_capture_delay_sec=$(python3 - "$repo_root/experiments/CATALOGUE.toml" <<'PY'
 import sys
@@ -257,6 +260,9 @@ require_tile_preservation_decrease=0
 require_tile_preservation_not_increase=0
 require_command_buffers_per_present_not_increase=0
 require_render_passes_per_present_not_increase=0
+require_encoder_final_end_reason_not_increase=0
+require_encoder_color_load_not_increase=0
+require_encoder_depth_load_not_increase=0
 require_draw_run_records_increase=0
 require_draw_run_records_per_submit_increase=0
 require_binding_overrides_present=0
@@ -269,6 +275,7 @@ require_completion_wait_with_enqueue_increase=0
 require_completion_wait_without_enqueue_decrease=0
 require_completion_present_wait_with_enqueue_increase=0
 require_completion_present_wait_without_enqueue_decrease=0
+require_encode_ready_depth_gt1_increase=0
 require_commit_chunk_replay_cpu_per_present_decrease=0
 require_queue_draw_submission_cpu_per_present_decrease=0
 require_snapshot_cpu_per_present_decrease=0
@@ -290,11 +297,17 @@ require_argbuf_cbuf_update_cpu_per_present_decrease=0
 require_argbuf_cbuf_update_vs_cpu_per_present_decrease=0
 require_uniform_compact_saved_bytes_present=0
 require_current_uniform_compact_saved_bytes_present=0
+require_snapshot_state_elided_present=0
+require_discarded_state_not_increase=0
+require_submission_carrier_bytes_per_record_decrease=0
+require_submission_carrier_uniform_storage_per_record_decrease=0
 require_encode_chunk_cpu_per_present_decrease=0
 require_no_enqueue_commit_entry_to_publish_decrease=0
 require_no_enqueue_publish_to_encode_dequeue_decrease=0
 require_no_enqueue_encode_dequeue_to_commit_decrease=0
 require_no_enqueue_wait_to_next_enqueue_decrease=0
+require_no_enqueue_before_publish_closure_decrease=0
+require_no_enqueue_before_publish_inter_replay_gap_decrease=0
 max_gpu_command_buffer_regression_ms=${DXMT_3DMARK05_MAX_GPU_COMMAND_BUFFER_REGRESSION_MS:-}
 max_const_upload_break_count_ratio=${DXMT_3DMARK05_MAX_CONST_UPLOAD_BREAK_COUNT_RATIO:-}
 require_result_json=0
@@ -349,6 +362,7 @@ with_wine_capture_layer=${DXMT_3DMARK05_WITH_WINE_CAPTURE_LAYER:-0}
 osascript_bin=${DXMT_3DMARK05_OSASCRIPT_BIN:-osascript}
 devtools_security_bin=${DXMT_3DMARK05_DEVTOOLS_SECURITY_BIN:-/usr/sbin/DevToolsSecurity}
 target_row_keys=()
+frontmost_loop_pid=
 
 capture_destination_is_developer_tools() {
   [[ "$1" == "developerTools" || "$1" == "xcode" ]]
@@ -519,6 +533,35 @@ APPLESCRIPT
   return 2
 }
 
+run_3dmark05_frontmost_once() {
+  local process_name=$1
+  "$osascript_bin" -e "tell application \"System Events\" to if exists process \"$process_name\" then set frontmost of first process whose name is \"$process_name\" to true" >/dev/null 2>&1 || true
+}
+
+start_3dmark05_frontmost_loop() {
+  if [[ "$keep_frontmost" == "0" || -z "$keep_frontmost" ]]; then
+    return 0
+  fi
+  (
+    while :; do
+      run_3dmark05_frontmost_once "$keep_frontmost_process"
+      sleep "$keep_frontmost_interval_sec" || exit 0
+    done
+  ) &
+  frontmost_loop_pid=$!
+  echo "frontmost_loop_started: pid=$frontmost_loop_pid process=$keep_frontmost_process interval_sec=$keep_frontmost_interval_sec"
+}
+
+stop_3dmark05_frontmost_loop() {
+  if [[ -z "$frontmost_loop_pid" ]]; then
+    return 0
+  fi
+  kill "$frontmost_loop_pid" >/dev/null 2>&1 || true
+  wait "$frontmost_loop_pid" >/dev/null 2>&1 || true
+  echo "frontmost_loop_stopped: pid=$frontmost_loop_pid"
+  frontmost_loop_pid=
+}
+
 usage() {
   cat <<'USAGE'
 Usage: scripts/tools/run_3dmark05_perf_probe.sh [options]
@@ -540,6 +583,17 @@ Options:
   --wait-unlocked-interval-sec SEC
                       Poll interval for --wait-unlocked-sec. Default:
                       DXMT_3DMARK05_WAIT_UNLOCKED_INTERVAL_SEC or 5.
+  --keep-frontmost    While the probe is running, periodically make the
+                      3DMark05 process frontmost using System Events. Use this
+                      for no-gputrace frame-sampling A/B runs where losing
+                      focus changes frame progress or FPS.
+  --keep-frontmost-interval-sec SEC
+                      Poll interval for --keep-frontmost. Default:
+                      DXMT_3DMARK05_KEEP_FRONTMOST_INTERVAL_SEC or 1.
+  --keep-frontmost-process NAME
+                      Process name made frontmost by --keep-frontmost.
+                      Default: DXMT_3DMARK05_KEEP_FRONTMOST_PROCESS or
+                      3DMark05.exe.
   --capture-delay-sec SEC
                       Override run_experiment capture delay seconds. Use this
                       for frame-window visual probes; the catalogue default is
@@ -1276,6 +1330,12 @@ Options:
                       Compare gate: command buffers per present must not increase
   --require-render-passes-per-present-not-increase
                       Compare gate: render passes per present must not increase
+  --require-encoder-final-end-reason-not-increase
+                      Compare gate: encoder sidecar final end-reason per present must not increase
+  --require-encoder-color-load-not-increase
+                      Compare gate: encoder sidecar color load MiB per present must not increase
+  --require-encoder-depth-load-not-increase
+                      Compare gate: encoder sidecar depth load MiB per present must not increase
   --require-draw-run-records-increase
                       Compare gate: commit_chunk_draw_run_records must increase
   --require-draw-run-records-per-submit-increase
@@ -1302,6 +1362,8 @@ Options:
                       Compare gate: Present wait-with-enqueue ms must increase
   --require-completion-present-wait-without-enqueue-decrease
                       Compare gate: Present wait-without-enqueue ms must decrease
+  --require-encode-ready-depth-gt1-increase
+                      Compare gate: encode ready-depth >1 samples must increase
   --require-commit-chunk-replay-cpu-per-present-decrease
                       Compare gate: commit replay CPU per present must decrease
   --require-queue-draw-submission-cpu-per-present-decrease
@@ -1345,6 +1407,14 @@ Options:
   --require-current-uniform-compact-saved-bytes-present
                       Current-run gate: compact uniform payload saved bytes
                       per present must be nonzero; does not require a baseline.
+  --require-snapshot-state-elided-present
+                      Compare gate: state snapshot elisions per present must be nonzero
+  --require-discarded-state-not-increase
+                      Compare gate: discarded backend state per present must not increase
+  --require-submission-carrier-bytes-per-record-decrease
+                      Compare gate: submission carrier bytes per record must decrease
+  --require-submission-carrier-uniform-storage-per-record-decrease
+                      Compare gate: submission carrier full-uniform storage bytes per record must decrease
   --require-encode-chunk-cpu-per-present-decrease
                       Compare gate: encode_chunk_cpu_ms per present must decrease
   --require-no-enqueue-commit-entry-to-publish-decrease
@@ -1355,6 +1425,10 @@ Options:
                       Compare gate: no-enqueue encode-dequeue to Metal commit ms must decrease
   --require-no-enqueue-wait-to-next-enqueue-decrease
                       Compare gate: no-enqueue wait-to-next-enqueue ms must decrease
+  --require-no-enqueue-before-publish-closure-decrease
+                      Compare gate: no-enqueue before-publish closure ms must decrease
+  --require-no-enqueue-before-publish-inter-replay-gap-decrease
+                      Compare gate: no-enqueue before-publish inter-replay gap ms must decrease
   --max-gpu-command-buffer-regression-ms N
                       Compare gate: max allowed gpu_command_buffer_time_ms regression
   --require-result-json
@@ -1515,6 +1589,18 @@ while (($#)); do
       ;;
     --wait-unlocked-interval-sec)
       wait_unlocked_interval_sec=${2:?missing value for --wait-unlocked-interval-sec}
+      shift 2
+      ;;
+    --keep-frontmost)
+      keep_frontmost=1
+      shift
+      ;;
+    --keep-frontmost-interval-sec)
+      keep_frontmost_interval_sec=${2:?missing value for --keep-frontmost-interval-sec}
+      shift 2
+      ;;
+    --keep-frontmost-process)
+      keep_frontmost_process=${2:?missing value for --keep-frontmost-process}
       shift 2
       ;;
     --capture-delay-sec)
@@ -2538,6 +2624,18 @@ while (($#)); do
       require_render_passes_per_present_not_increase=1
       shift
       ;;
+    --require-encoder-final-end-reason-not-increase)
+      require_encoder_final_end_reason_not_increase=1
+      shift
+      ;;
+    --require-encoder-color-load-not-increase)
+      require_encoder_color_load_not_increase=1
+      shift
+      ;;
+    --require-encoder-depth-load-not-increase)
+      require_encoder_depth_load_not_increase=1
+      shift
+      ;;
     --require-draw-run-records-increase)
       require_draw_run_records_increase=1
       shift
@@ -2584,6 +2682,10 @@ while (($#)); do
       ;;
     --require-completion-present-wait-without-enqueue-decrease)
       require_completion_present_wait_without_enqueue_decrease=1
+      shift
+      ;;
+    --require-encode-ready-depth-gt1-increase)
+      require_encode_ready_depth_gt1_increase=1
       shift
       ;;
     --require-commit-chunk-replay-cpu-per-present-decrease)
@@ -2670,6 +2772,22 @@ while (($#)); do
       require_current_uniform_compact_saved_bytes_present=1
       shift
       ;;
+    --require-snapshot-state-elided-present)
+      require_snapshot_state_elided_present=1
+      shift
+      ;;
+    --require-discarded-state-not-increase)
+      require_discarded_state_not_increase=1
+      shift
+      ;;
+    --require-submission-carrier-bytes-per-record-decrease)
+      require_submission_carrier_bytes_per_record_decrease=1
+      shift
+      ;;
+    --require-submission-carrier-uniform-storage-per-record-decrease)
+      require_submission_carrier_uniform_storage_per_record_decrease=1
+      shift
+      ;;
     --require-encode-chunk-cpu-per-present-decrease)
       require_encode_chunk_cpu_per_present_decrease=1
       shift
@@ -2688,6 +2806,14 @@ while (($#)); do
       ;;
     --require-no-enqueue-wait-to-next-enqueue-decrease)
       require_no_enqueue_wait_to_next_enqueue_decrease=1
+      shift
+      ;;
+    --require-no-enqueue-before-publish-closure-decrease)
+      require_no_enqueue_before_publish_closure_decrease=1
+      shift
+      ;;
+    --require-no-enqueue-before-publish-inter-replay-gap-decrease)
+      require_no_enqueue_before_publish_inter_replay_gap_decrease=1
       shift
       ;;
     --max-gpu-command-buffer-regression-ms)
@@ -2953,6 +3079,25 @@ fi
 
 if [[ ! "$wait_unlocked_interval_sec" =~ ^[1-9][0-9]*$ ]]; then
   echo "--wait-unlocked-interval-sec must be a positive integer" >&2
+  exit 2
+fi
+
+if [[ "$keep_frontmost" != "0" && -n "$keep_frontmost" ]]; then
+  keep_frontmost=1
+else
+  keep_frontmost=0
+fi
+
+if [[ ! "$keep_frontmost_interval_sec" =~ ^[0-9]+([.][0-9]+)?$ ||
+      "$keep_frontmost_interval_sec" =~ ^0+([.]0+)?$ ]]; then
+  echo "--keep-frontmost-interval-sec must be positive numeric seconds" >&2
+  exit 2
+fi
+
+keep_frontmost_process_regex='^[A-Za-z0-9_. -]+$'
+if [[ -z "$keep_frontmost_process" ||
+      ! "$keep_frontmost_process" =~ $keep_frontmost_process_regex ]]; then
+  echo "--keep-frontmost-process must be a non-empty process name without shell or AppleScript metacharacters" >&2
   exit 2
 fi
 
@@ -3679,6 +3824,9 @@ if (( require_color_dontcare_increase ||
       require_tile_preservation_not_increase ||
       require_command_buffers_per_present_not_increase ||
       require_render_passes_per_present_not_increase ||
+      require_encoder_final_end_reason_not_increase ||
+      require_encoder_color_load_not_increase ||
+      require_encoder_depth_load_not_increase ||
       require_draw_run_records_increase ||
       require_draw_run_records_per_submit_increase ||
       require_binding_overrides_present ||
@@ -3691,6 +3839,7 @@ if (( require_color_dontcare_increase ||
       require_completion_wait_without_enqueue_decrease ||
       require_completion_present_wait_with_enqueue_increase ||
       require_completion_present_wait_without_enqueue_decrease ||
+      require_encode_ready_depth_gt1_increase ||
       require_commit_chunk_replay_cpu_per_present_decrease ||
       require_queue_draw_submission_cpu_per_present_decrease ||
       require_snapshot_cpu_per_present_decrease ||
@@ -3711,11 +3860,17 @@ if (( require_color_dontcare_increase ||
       require_argbuf_cbuf_update_cpu_per_present_decrease ||
       require_argbuf_cbuf_update_vs_cpu_per_present_decrease ||
       require_uniform_compact_saved_bytes_present ||
+      require_snapshot_state_elided_present ||
+      require_discarded_state_not_increase ||
+      require_submission_carrier_bytes_per_record_decrease ||
+      require_submission_carrier_uniform_storage_per_record_decrease ||
       require_encode_chunk_cpu_per_present_decrease ||
       require_no_enqueue_commit_entry_to_publish_decrease ||
       require_no_enqueue_publish_to_encode_dequeue_decrease ||
       require_no_enqueue_encode_dequeue_to_commit_decrease ||
-      require_no_enqueue_wait_to_next_enqueue_decrease )) ||
+      require_no_enqueue_wait_to_next_enqueue_decrease ||
+      require_no_enqueue_before_publish_closure_decrease ||
+      require_no_enqueue_before_publish_inter_replay_gap_decrease )) ||
    [[ -n "$max_gpu_command_buffer_regression_ms" ||
       -n "$max_const_upload_break_count_ratio" ]]; then
   run_level_compare_requested=1
@@ -4828,6 +4983,15 @@ if [[ -n "$compare_baseline_output" ]]; then
   if (( require_render_passes_per_present_not_increase )); then
     counter_compare_cmd+=(--require-render-passes-per-present-not-increase)
   fi
+  if (( require_encoder_final_end_reason_not_increase )); then
+    counter_compare_cmd+=(--require-encoder-final-end-reason-not-increase)
+  fi
+  if (( require_encoder_color_load_not_increase )); then
+    counter_compare_cmd+=(--require-encoder-color-load-not-increase)
+  fi
+  if (( require_encoder_depth_load_not_increase )); then
+    counter_compare_cmd+=(--require-encoder-depth-load-not-increase)
+  fi
   if (( require_draw_run_records_increase )); then
     counter_compare_cmd+=(--require-draw-run-records-increase)
   fi
@@ -4863,6 +5027,9 @@ if [[ -n "$compare_baseline_output" ]]; then
   fi
   if (( require_completion_present_wait_without_enqueue_decrease )); then
     counter_compare_cmd+=(--require-completion-present-wait-without-enqueue-decrease)
+  fi
+  if (( require_encode_ready_depth_gt1_increase )); then
+    counter_compare_cmd+=(--require-encode-ready-depth-gt1-increase)
   fi
   if (( require_commit_chunk_replay_cpu_per_present_decrease )); then
     counter_compare_cmd+=(--require-commit-chunk-replay-cpu-per-present-decrease)
@@ -4924,6 +5091,18 @@ if [[ -n "$compare_baseline_output" ]]; then
   if (( require_uniform_compact_saved_bytes_present )); then
     counter_compare_cmd+=(--require-uniform-compact-saved-bytes-present)
   fi
+  if (( require_snapshot_state_elided_present )); then
+    counter_compare_cmd+=(--require-snapshot-state-elided-present)
+  fi
+  if (( require_discarded_state_not_increase )); then
+    counter_compare_cmd+=(--require-discarded-state-not-increase)
+  fi
+  if (( require_submission_carrier_bytes_per_record_decrease )); then
+    counter_compare_cmd+=(--require-submission-carrier-bytes-per-record-decrease)
+  fi
+  if (( require_submission_carrier_uniform_storage_per_record_decrease )); then
+    counter_compare_cmd+=(--require-submission-carrier-uniform-storage-per-record-decrease)
+  fi
   if (( require_encode_chunk_cpu_per_present_decrease )); then
     counter_compare_cmd+=(--require-encode-chunk-cpu-per-present-decrease)
   fi
@@ -4938,6 +5117,12 @@ if [[ -n "$compare_baseline_output" ]]; then
   fi
   if (( require_no_enqueue_wait_to_next_enqueue_decrease )); then
     counter_compare_cmd+=(--require-no-enqueue-wait-to-next-enqueue-decrease)
+  fi
+  if (( require_no_enqueue_before_publish_closure_decrease )); then
+    counter_compare_cmd+=(--require-no-enqueue-before-publish-closure-decrease)
+  fi
+  if (( require_no_enqueue_before_publish_inter_replay_gap_decrease )); then
+    counter_compare_cmd+=(--require-no-enqueue-before-publish-inter-replay-gap-decrease)
   fi
   if [[ -n "$max_gpu_command_buffer_regression_ms" ]]; then
     counter_compare_cmd+=(
@@ -5054,6 +5239,15 @@ if (( capture_gputrace )); then
   if (( require_render_passes_per_present_not_increase )); then
     finalize_cmd+=(--require-render-passes-per-present-not-increase)
   fi
+  if (( require_encoder_final_end_reason_not_increase )); then
+    finalize_cmd+=(--require-encoder-final-end-reason-not-increase)
+  fi
+  if (( require_encoder_color_load_not_increase )); then
+    finalize_cmd+=(--require-encoder-color-load-not-increase)
+  fi
+  if (( require_encoder_depth_load_not_increase )); then
+    finalize_cmd+=(--require-encoder-depth-load-not-increase)
+  fi
   if (( require_draw_run_records_increase )); then
     finalize_cmd+=(--require-draw-run-records-increase)
   fi
@@ -5089,6 +5283,9 @@ if (( capture_gputrace )); then
   fi
   if (( require_completion_present_wait_without_enqueue_decrease )); then
     finalize_cmd+=(--require-completion-present-wait-without-enqueue-decrease)
+  fi
+  if (( require_encode_ready_depth_gt1_increase )); then
+    finalize_cmd+=(--require-encode-ready-depth-gt1-increase)
   fi
   if (( require_commit_chunk_replay_cpu_per_present_decrease )); then
     finalize_cmd+=(--require-commit-chunk-replay-cpu-per-present-decrease)
@@ -5153,6 +5350,18 @@ if (( capture_gputrace )); then
   if (( require_current_uniform_compact_saved_bytes_present )); then
     finalize_cmd+=(--require-current-uniform-compact-saved-bytes-present)
   fi
+  if (( require_snapshot_state_elided_present )); then
+    finalize_cmd+=(--require-snapshot-state-elided-present)
+  fi
+  if (( require_discarded_state_not_increase )); then
+    finalize_cmd+=(--require-discarded-state-not-increase)
+  fi
+  if (( require_submission_carrier_bytes_per_record_decrease )); then
+    finalize_cmd+=(--require-submission-carrier-bytes-per-record-decrease)
+  fi
+  if (( require_submission_carrier_uniform_storage_per_record_decrease )); then
+    finalize_cmd+=(--require-submission-carrier-uniform-storage-per-record-decrease)
+  fi
   if (( require_encode_chunk_cpu_per_present_decrease )); then
     finalize_cmd+=(--require-encode-chunk-cpu-per-present-decrease)
   fi
@@ -5167,6 +5376,12 @@ if (( capture_gputrace )); then
   fi
   if (( require_no_enqueue_wait_to_next_enqueue_decrease )); then
     finalize_cmd+=(--require-no-enqueue-wait-to-next-enqueue-decrease)
+  fi
+  if (( require_no_enqueue_before_publish_closure_decrease )); then
+    finalize_cmd+=(--require-no-enqueue-before-publish-closure-decrease)
+  fi
+  if (( require_no_enqueue_before_publish_inter_replay_gap_decrease )); then
+    finalize_cmd+=(--require-no-enqueue-before-publish-inter-replay-gap-decrease)
   fi
   if [[ -n "$max_gpu_command_buffer_regression_ms" ]]; then
     finalize_cmd+=(
@@ -5325,6 +5540,9 @@ echo "measure_index_reuse: $measure_index_reuse"
 echo "session_locked: $session_locked"
 echo "wait_unlocked_sec: $wait_unlocked_sec"
 echo "wait_unlocked_interval_sec: $wait_unlocked_interval_sec"
+echo "keep_frontmost: $keep_frontmost"
+echo "keep_frontmost_process: $keep_frontmost_process"
+echo "keep_frontmost_interval_sec: $keep_frontmost_interval_sec"
 echo "require_current_uniform_compact_saved_bytes_present: $require_current_uniform_compact_saved_bytes_present"
 echo "free_space_mb: $free_mb"
 echo "min_free_space_mb: $min_free_mb"
@@ -5622,6 +5840,8 @@ if [[ -n "$capture_dir" ]]; then
 fi
 
 run_status=0
+trap 'stop_3dmark05_frontmost_loop' EXIT
+start_3dmark05_frontmost_loop
 (
   cd "$repo_root"
   python3 scripts/tools/run_with_timeout.py \
@@ -5631,6 +5851,8 @@ run_status=0
     -- \
     env "${env_args[@]}" "${cmd[@]}"
 ) || run_status=$?
+stop_3dmark05_frontmost_loop
+trap - EXIT
 cleanup_3dmark05_probe_wineserver
 
 summary_cmd=(

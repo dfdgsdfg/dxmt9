@@ -9,7 +9,7 @@ record_time_limit_sec=${DXMT_3DMARK05_SYSTEM_TRACE_TIME_LIMIT_SEC:-25}
 summary_top=${DXMT_3DMARK05_SYSTEM_TRACE_TOP:-30}
 wait_unlocked_sec=${DXMT_3DMARK05_SYSTEM_TRACE_WAIT_UNLOCKED_SEC:-0}
 wait_unlocked_interval_sec=${DXMT_3DMARK05_SYSTEM_TRACE_WAIT_UNLOCKED_INTERVAL_SEC:-5}
-min_free_mb=${DXMT_3DMARK05_SYSTEM_TRACE_MIN_FREE_MB:-2048}
+min_free_mb=${DXMT_3DMARK05_SYSTEM_TRACE_MIN_FREE_MB:-4096}
 dry_run=0
 allow_gputrace=0
 skip_export_summary=0
@@ -45,7 +45,7 @@ Sidecar options:
                                Poll interval for --wait-unlocked-sec. Default: 5.
   --min-free-mb N              Required free space before launching xctrace.
                                Default: DXMT_3DMARK05_SYSTEM_TRACE_MIN_FREE_MB
-                               or 2048.
+                               or 4096.
   --wrapper PATH               Probe wrapper path. Default:
                                scripts/tools/run_3dmark05_perf_probe.sh.
   --xctrace-bin PATH           xctrace-compatible command for tests.

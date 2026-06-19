@@ -1,8 +1,12 @@
 #include "core_spec_fixtures.hpp"
 #include "device_c_common.hpp"
 
+#include <array>
 #include <cmath>
+#include <cstdint>
+#include <cstring>
 #include <memory>
+#include <optional>
 
 using namespace dxmt9::core;
 using namespace dxmt9::core::fixture;
@@ -1251,9 +1255,10 @@ void testRedundantShaderConstSetKeepsUniformSnapshotReusable() {
 
     DrawParam draw{};
     draw.primitiveCount = 1u;
+    DrawSubmissionUniformScratch scratch{};
     DrawRunSubmission first{};
     checkEq(device->coreDevice().snapshotDrawSubmissionFromCurrentState(
-                draw, first, nullptr),
+                draw, first, nullptr, &scratch),
             D3D_OK, "first draw submission snapshot");
     check(first.uniforms.has_value(), "first snapshot owns uniforms");
 
@@ -1261,7 +1266,7 @@ void testRedundantShaderConstSetKeepsUniformSnapshotReusable() {
             D3D_OK, "redundant VS float const set");
     DrawRunSubmission second{};
     checkEq(device->coreDevice().snapshotDrawSubmissionFromCurrentState(
-                draw, second, &first),
+                draw, second, &first, &scratch),
             D3D_OK, "second draw submission snapshot");
     check(!second.uniforms.has_value(),
           "redundant VS float const set does not invalidate uniform snapshot");
@@ -1271,7 +1276,7 @@ void testRedundantShaderConstSetKeepsUniformSnapshotReusable() {
             D3D_OK, "initial PS int const set");
     DrawRunSubmission third{};
     checkEq(device->coreDevice().snapshotDrawSubmissionFromCurrentState(
-                draw, third, &second),
+                draw, third, &second, &scratch),
             D3D_OK, "third draw submission snapshot");
     check(third.uniforms.has_value(), "changed PS int const refreshes uniforms");
     check(third.uniformPayload().vsConst == first.uniformPayload().vsConst,
@@ -1284,7 +1289,7 @@ void testRedundantShaderConstSetKeepsUniformSnapshotReusable() {
             D3D_OK, "redundant PS int const set");
     DrawRunSubmission fourth{};
     checkEq(device->coreDevice().snapshotDrawSubmissionFromCurrentState(
-                draw, fourth, &third),
+                draw, fourth, &third, &scratch),
             D3D_OK, "fourth draw submission snapshot");
     check(!fourth.uniforms.has_value(),
           "redundant PS int const set does not invalidate uniform snapshot");
@@ -1294,7 +1299,7 @@ void testRedundantShaderConstSetKeepsUniformSnapshotReusable() {
             D3D_OK, "initial VS bool const set");
     DrawRunSubmission fifth{};
     checkEq(device->coreDevice().snapshotDrawSubmissionFromCurrentState(
-                draw, fifth, &fourth),
+                draw, fifth, &fourth, &scratch),
             D3D_OK, "fifth draw submission snapshot");
     check(fifth.uniforms.has_value(), "changed VS bool const refreshes uniforms");
     check(fifth.uniformPayload().psConst == third.uniformPayload().psConst,
@@ -1307,13 +1312,187 @@ void testRedundantShaderConstSetKeepsUniformSnapshotReusable() {
             D3D_OK, "redundant VS bool const set");
     DrawRunSubmission sixth{};
     checkEq(device->coreDevice().snapshotDrawSubmissionFromCurrentState(
-                draw, sixth, &fifth),
+                draw, sixth, &fifth, &scratch),
             D3D_OK, "sixth draw submission snapshot");
     check(!sixth.uniforms.has_value(),
           "redundant VS bool const set does not invalidate uniform snapshot");
   }
   checkEq(device->Release(), 0u, "redundant shader const device release");
   checkEq(d3d->Release(), 0u, "redundant shader const factory release");
+}
+
+void testSnapshotDrawSubmissionCompactUniformScratch() {
+  using namespace dxmt9::com;
+
+  auto backend = std::make_shared<RecordingBackend>();
+  auto* d3d = Direct3DCreate9Ex(D3D_SDK_VERSION, backend);
+  check(d3d != nullptr, "factory for compact uniform snapshot");
+
+  PresentParameters params{};
+  params.backBufferWidth = 320;
+  params.backBufferHeight = 240;
+  params.windowed = true;
+
+  auto* device = d3d->CreateDeviceEx(0, params, nullptr);
+  check(device != nullptr, "device for compact uniform snapshot");
+
+  {
+    device->AddRef();
+    D9CDevice cDevice(device);
+
+    const std::array<float, 8> vsFloats{
+        1.0f, 2.0f, 3.0f, 4.0f,
+        5.0f, 6.0f, 7.0f, 8.0f};
+    checkEq(dxmt9c_device_set_vs_const_f(&cDevice, 0u, vsFloats.data(), 2u),
+            D3D_OK, "set VS float prefix before compact snapshot");
+    const std::array<uint32_t, 1> vsBool{1u};
+    checkEq(dxmt9c_device_set_vs_const_b(&cDevice, 0u, vsBool.data(), 1u),
+            D3D_OK, "set VS bool requiring ABI float/int prefix");
+
+    const std::array<float, 4> psFloat{9.0f, 10.0f, 11.0f, 12.0f};
+    checkEq(dxmt9c_device_set_ps_const_f(&cDevice, 0u, psFloat.data(), 1u),
+            D3D_OK, "set PS float prefix before compact snapshot");
+    const std::array<int32_t, 4> psInt{13, 14, 15, 16};
+    checkEq(dxmt9c_device_set_ps_const_i(&cDevice, 0u, psInt.data(), 1u),
+            D3D_OK, "set PS int requiring ABI float prefix");
+
+    DrawParam draw{};
+    draw.primitiveCount = 1u;
+    DrawSubmissionUniformScratch scratch{};
+    DrawRunSubmission submission{};
+    checkEq(device->coreDevice().snapshotDrawSubmissionFromCurrentState(
+                draw, submission, nullptr, &scratch, true),
+            D3D_OK, "compact draw submission snapshot");
+
+    check(!submission.uniforms.has_value(),
+          "compact snapshot does not copy full DrawUniformPayload");
+    check(submission.compactUniforms.has_value(),
+          "compact snapshot owns a compact uniform record");
+    checkEq(scratch.fixedPayloads.size(), std::size_t{1},
+            "compact snapshot stores one fixed payload in scratch");
+
+    const auto& compact = submission.compactUniformPayload();
+    checkEq(compact.fixedPayloadIndex, 0u,
+            "compact snapshot points at the scratch fixed payload");
+    check(compact.valid(), "compact snapshot carries valid byte ranges");
+    checkEq(compact.vertexConstantsRange.size,
+            static_cast<u32>(compact.vertexConstants.byteSize),
+            "compact VS range tracks the compact VS byte width");
+    checkEq(compact.pixelConstantsRange.size,
+            static_cast<u32>(compact.pixelConstants.byteSize),
+            "compact PS range tracks the compact PS byte width");
+
+    const std::array<float, 8> nextVsFloats{
+        21.0f, 22.0f, 23.0f, 24.0f,
+        25.0f, 26.0f, 27.0f, 28.0f};
+    checkEq(dxmt9c_device_set_vs_const_f(&cDevice, 0u,
+                                         nextVsFloats.data(), 2u),
+            D3D_OK, "change shader constants before second compact snapshot");
+    DrawRunSubmission second{};
+    checkEq(device->coreDevice().snapshotDrawSubmissionFromCurrentState(
+                draw, second, &submission, &scratch, true),
+            D3D_OK, "second compact draw submission snapshot");
+    check(!second.uniforms.has_value(),
+          "second compact snapshot does not copy full DrawUniformPayload");
+    check(second.compactUniforms.has_value(),
+          "second compact snapshot owns a compact uniform record");
+    checkEq(scratch.fixedPayloads.size(), std::size_t{1},
+            "second compact snapshot reuses the scratch fixed payload");
+    checkEq(second.compactUniformPayload().fixedPayloadIndex, 0u,
+            "second compact snapshot points at the reused fixed payload");
+
+    D9CMatrix world{};
+    world.m[0] = 2.0f;
+    world.m[5] = 1.0f;
+    world.m[10] = 1.0f;
+    world.m[15] = 1.0f;
+    constexpr uint32_t kD3dtsWorld = 256u;
+    checkEq(dxmt9c_device_set_transform(&cDevice, kD3dtsWorld, &world),
+            D3D_OK, "change fixed transform before third compact snapshot");
+    DrawRunSubmission third{};
+    checkEq(device->coreDevice().snapshotDrawSubmissionFromCurrentState(
+                draw, third, &second, &scratch, true),
+            D3D_OK, "third compact draw submission snapshot");
+    check(third.compactUniforms.has_value(),
+          "third compact snapshot owns a compact uniform record");
+    checkEq(scratch.fixedPayloads.size(), std::size_t{2},
+            "third compact snapshot appends changed fixed payload");
+    checkEq(third.compactUniformPayload().fixedPayloadIndex, 1u,
+            "third compact snapshot points at the changed fixed payload");
+
+    DrawSubmissionUniformScratch compactScratch{};
+    DrawRunCompactSubmission compactFirst{};
+    checkEq(device->coreDevice().snapshotDrawSubmissionFromCurrentState(
+                draw, compactFirst, nullptr, &compactScratch),
+            D3D_OK, "direct compact draw submission snapshot");
+    check(compactFirst.compactUniforms.has_value(),
+          "direct compact snapshot owns a compact uniform record");
+    check(compactFirst.stateMaterialized,
+          "direct compact first snapshot materializes state");
+    checkEq(compactScratch.fixedPayloads.size(), std::size_t{1},
+            "direct compact snapshot stores one fixed payload");
+
+    DrawRunCompactSubmission compactSecond{};
+    checkEq(device->coreDevice().snapshotDrawSubmissionFromCurrentState(
+                draw, compactSecond, &compactFirst, &compactScratch),
+            D3D_OK, "direct compact second draw submission snapshot");
+    check(!compactSecond.compactUniforms.has_value(),
+          "direct compact second snapshot elides unchanged uniforms");
+    check(!compactSecond.stateMaterialized,
+          "direct compact second snapshot elides unchanged state");
+    checkEq(compactSecond.uniformGeneration, compactFirst.uniformGeneration,
+            "direct compact second snapshot keeps uniform generation");
+    checkEq(compactScratch.fixedPayloads.size(), std::size_t{1},
+            "direct compact elision does not append fixed payloads");
+  }
+  checkEq(device->Release(), 0u, "compact uniform snapshot device release");
+  checkEq(d3d->Release(), 0u, "compact uniform snapshot factory release");
+}
+
+void testDrawRunSubmissionCarrierFootprintCounters() {
+  const auto carrierBytes = drawRunSubmissionCarrierBytes();
+  const auto stateStorageBytes = drawRunSubmissionCarrierStateStorageBytes();
+  const auto uniformStorageBytes = drawRunSubmissionCarrierUniformStorageBytes();
+  const auto compactUniformStorageBytes =
+      drawRunSubmissionCarrierCompactUniformStorageBytes();
+  const auto compactCarrierBytes = drawRunCompactSubmissionCarrierBytes();
+  const auto compactCarrierStateStorageBytes =
+      drawRunCompactSubmissionCarrierStateStorageBytes();
+  const auto compactCarrierUniformStorageBytes =
+      drawRunCompactSubmissionCarrierUniformStorageBytes();
+  const auto compactCarrierCompactUniformStorageBytes =
+      drawRunCompactSubmissionCarrierCompactUniformStorageBytes();
+
+  checkEq(carrierBytes, static_cast<std::uint64_t>(sizeof(DrawRunSubmission)),
+          "carrier counter matches DrawRunSubmission storage");
+  checkEq(stateStorageBytes,
+          static_cast<std::uint64_t>(sizeof(std::optional<CanonicalDrawState>)),
+          "state storage counter matches inline optional storage");
+  checkEq(uniformStorageBytes,
+          static_cast<std::uint64_t>(sizeof(std::optional<DrawUniformPayload>)),
+          "uniform storage counter matches inline optional storage");
+  checkEq(compactUniformStorageBytes,
+          static_cast<std::uint64_t>(
+              sizeof(std::optional<DrawUniformCompactSubmissionPayload>) +
+              sizeof(DrawUniformCompactPayloadArenaView)),
+          "compact uniform storage counter matches inline compact storage");
+  check(carrierBytes >= stateStorageBytes + uniformStorageBytes +
+                            compactUniformStorageBytes,
+        "carrier includes the measured inline storage lanes");
+  check(uniformStorageBytes > compactUniformStorageBytes,
+        "compact uniforms do not shrink the current inline full-uniform carrier");
+  checkEq(compactCarrierBytes,
+          static_cast<std::uint64_t>(sizeof(DrawRunCompactSubmission)),
+          "compact carrier counter matches DrawRunCompactSubmission storage");
+  checkEq(compactCarrierStateStorageBytes, stateStorageBytes,
+          "compact carrier keeps the same inline state storage lane");
+  checkEq(compactCarrierUniformStorageBytes, 0ull,
+          "compact carrier has no inline full-uniform storage lane");
+  checkEq(compactCarrierCompactUniformStorageBytes,
+          compactUniformStorageBytes,
+          "compact carrier keeps the compact uniform storage lane");
+  check(compactCarrierBytes < carrierBytes,
+        "compact carrier removes the inline full-uniform lane");
 }
 
 void testZeroSizeBufferLockUsesTailRange() {
@@ -1377,6 +1556,8 @@ int main() {
     testPalettizedTextureExpansion();
     testReadOnlyBufferUnlockSkipsUpload();
     testRedundantShaderConstSetKeepsUniformSnapshotReusable();
+    testSnapshotDrawSubmissionCompactUniformScratch();
+    testDrawRunSubmissionCarrierFootprintCounters();
     testZeroSizeBufferLockUsesTailRange();
   } catch (const TestFailure& error) {
     std::cerr << error.what() << '\n';

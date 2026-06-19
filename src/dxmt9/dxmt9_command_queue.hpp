@@ -138,6 +138,8 @@ class CommandQueue {
                      std::span<const core::DrawParam> draws,
                      std::span<const core::DrawParamPayloadView> payloads = {});
   void submitDrawRunBatch(std::span<core::DrawRunSubmission> submissions);
+  void submitCompactDrawRunBatch(
+      std::span<core::DrawRunCompactSubmission> submissions);
   // Bulk resource retention — chunk importer hands the deduped handle
   // set from D9CCommandChunk.handles[] in one call. Single mutex
   // acquire, dispatches per-kind to pool_.markBufferUse / markTextureUse
@@ -158,7 +160,7 @@ class CommandQueue {
   void setSkipDrawResourceMarking(bool skip);
   void noteCommitChunkEntryForCompletionGap();
   void noteCommitChunkReplayStartForCompletionGap();
-  void noteCommitChunkReplayEndForCompletionGap();
+  void noteCommitChunkReplayEndForCompletionGap(std::uint64_t replayNanoseconds);
   void noteCommitChunkReplayCpuBeforePublish(std::uint64_t nanoseconds);
   void noteCommitChunkActiveReplayCpuBeforePublish(std::uint64_t nanoseconds);
   void noteCommitChunkRecordShapeForCompletionGap(
@@ -352,8 +354,17 @@ class CommandQueue {
   using EncodeChunkFn =
       std::function<std::optional<core::metalqueue::QueueSubmissionRecord>(
           std::size_t slotIndex, core::ChunkSlot& slot)>;
+  using EncodeBatchFn =
+      std::function<std::optional<core::metalqueue::QueueSubmissionRecord>(
+          std::span<core::metalqueue::ReadySlotSnapshot> sources)>;
   using OnSubmittedFn = std::function<void(std::uint64_t completedSeqId)>;
   void runEncodeLoop(EncodeChunkFn encodeChunk, OnSubmittedFn onSubmitted);
+  void runEncodeBatchLoop(std::span<core::metalqueue::ReadySlotSnapshot> scratch,
+                          EncodeBatchFn encodeBatch,
+                          OnSubmittedFn onSubmitted,
+                          core::metalqueue::ReadySlotBatchAppendPredicate canAppend = {},
+                          core::metalqueue::ReadySlotBatchPrefixSelector selectPrefix = {});
+  void runOpenCbTailPresentEncodeLoop(OnSubmittedFn onSubmitted);
   void runFinishLoop();
   void runCompletionWatcherLoop();
   void notePresentDequeued(std::uint64_t seqId);
@@ -402,10 +413,15 @@ class CommandQueue {
   std::uint64_t presentCompletedSeqId_ = 0; // present-bearing command buffer completed
 
   std::array<core::ChunkSlot, kCommandChunkCount> slots_{};
+  // Diagnostic-only residency timestamps for the current writing slot.
+  // Set on the first command append and consumed when the slot is published;
+  // not part of ChunkSlot so ReadySlotSnapshot copies stay unchanged.
+  std::array<std::uint64_t, kCommandChunkCount> slotFirstCommandSteadyNs_{};
   std::optional<size_t> writingSlot_{};
   size_t writeIndex_ = 0;
   size_t inflightCount_ = 0;
   std::deque<size_t> readySlots_{};
+  std::deque<size_t> stagedTailPresentSlots_{};
   std::deque<std::uint64_t> completedSeqQueue_{};
   std::deque<std::uint64_t> completedPresentSeqQueue_{};
   std::condition_variable presentDequeuedCv_{};

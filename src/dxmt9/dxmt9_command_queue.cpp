@@ -17,6 +17,7 @@
 #include "dxmt9_resource_initializer.hpp"
 #include "dxmt9_resource_pool.hpp"
 #include "dxmt9_ring_arena.hpp"
+#include "render/tail_present_batch.hpp"
 
 #include <algorithm>
 #include <array>
@@ -94,6 +95,51 @@ bool encodeSlotPsoPrefetchDisabled() {
 
 bool encodeSlotPsoPrefetchEnabled() {
   return !publishPsoPrefetchEnabled() && !encodeSlotPsoPrefetchDisabled();
+}
+
+bool encodeTailPresentBatchEnabled() {
+  static const bool enabled = [] {
+    const char* env = std::getenv("DXMT9_ENCODE_TAIL_PRESENT_BATCH");
+    return env && env[0] != '\0' && std::strcmp(env, "0") != 0;
+  }();
+  return enabled;
+}
+
+bool openCbPreencodeTailPresentEnabled() {
+  static const bool enabled = [] {
+    const char* env = std::getenv("DXMT9_OPEN_CB_PREENCODE_TAIL_PRESENT");
+    return env && env[0] != '\0' && std::strcmp(env, "0") != 0;
+  }();
+  return enabled;
+}
+
+bool stageTailPresentChunkEnabled() {
+  static const bool enabled = [] {
+    const char* env = std::getenv("DXMT9_STAGE_TAIL_PRESENT_CHUNK");
+    return env && env[0] != '\0' && std::strcmp(env, "0") != 0;
+  }();
+  return enabled && encodeTailPresentBatchEnabled();
+}
+
+std::size_t stagePrePresentCommandLimit() {
+  static const std::size_t limit = [] {
+    const char* env = std::getenv("DXMT9_STAGE_PRE_PRESENT_COMMAND_LIMIT");
+    if (!env || env[0] == '\0') {
+      return std::size_t{0};
+    }
+    char* end = nullptr;
+    const auto parsed = std::strtoull(env, &end, 10);
+    if (end == env || parsed == 0) {
+      return std::size_t{0};
+    }
+    if (parsed > std::numeric_limits<std::size_t>::max()) {
+      return std::numeric_limits<std::size_t>::max();
+    }
+    return static_cast<std::size_t>(parsed);
+  }();
+  return (encodeTailPresentBatchEnabled() || openCbPreencodeTailPresentEnabled())
+      ? limit
+      : std::size_t{0};
 }
 
 bool unpublishedSlotPsoPrefetchEnabled() {
@@ -424,8 +470,8 @@ CommandQueue::CommandQueue(WMT::Device device, core::BackendLimits limits)
   // submits can only happen after CreateDXMT9Device returns.
   startThreads(
       [this] {
-        runEncodeLoop(
-            [this](std::size_t slotIndex, core::ChunkSlot& slot) {
+        auto encodeSingleSource = [this](std::size_t slotIndex,
+                                          core::ChunkSlot& slot) {
               traceEncodeFnStage("entry", slotIndex, slot);
               if (encodeSlotPsoPrefetchEnabled() &&
                   !slot.prefetchedPipelinesSealed()) {
@@ -445,7 +491,38 @@ CommandQueue::CommandQueue(WMT::Device device, core::BackendLimits limits)
                                  slotIndex,
                                  slot);
               return submission;
-            },
+            };
+        if (openCbPreencodeTailPresentEnabled()) {
+          runOpenCbTailPresentEncodeLoop(
+              [this](std::uint64_t) { allocators_.reclaim(completedSeqId_); });
+          return;
+        }
+        if (encodeTailPresentBatchEnabled()) {
+          std::array<core::metalqueue::ReadySlotSnapshot, kCommandChunkCount> scratch{};
+          runEncodeBatchLoop(
+              std::span<core::metalqueue::ReadySlotSnapshot>(scratch),
+              [this, encodeSingleSource](
+                  std::span<core::metalqueue::ReadySlotSnapshot> sources) mutable {
+                if (sources.size() == 1u) {
+                  auto slot = sources.front().slot;
+                  return encodeSingleSource(sources.front().slotIndex, slot);
+                }
+                for (const auto& source : sources) {
+                  traceEncodeFnStage("batch-entry", source.slotIndex, source.slot);
+                }
+                auto ctx = makeEncodeContext();
+                auto submission = backend_->onChunkBatchReady(ctx, sources);
+                DXMT_ASSERT(submission.has_value() &&
+                            "tail-Present batch selector produced an unencodable batch");
+                return submission;
+              },
+              [this](std::uint64_t) { allocators_.reclaim(completedSeqId_); },
+              {},
+              render::selectTailPresentBatchPrefix);
+          return;
+        }
+        runEncodeLoop(
+            encodeSingleSource,
             [this](std::uint64_t) { allocators_.reclaim(completedSeqId_); });
       },
       [this] { runFinishLoop(); },
@@ -1842,6 +1919,52 @@ std::uint64_t seqIdForMark(CommandQueue& q, std::uint64_t seqId) {
   return seqId == 0 ? q.nextSeqId_ : seqId;
 }
 
+std::uint64_t steadyClockNanoseconds() {
+  return static_cast<std::uint64_t>(
+      std::chrono::duration_cast<std::chrono::nanoseconds>(
+          std::chrono::steady_clock::now().time_since_epoch()).count());
+}
+
+void noteCurrentSlotCommandAppendStartedUnlocked(CommandQueue& q) {
+  if (!q.writingSlot_) {
+    return;
+  }
+  const std::size_t slotIndex = *q.writingSlot_;
+  if (slotIndex >= q.slotFirstCommandSteadyNs_.size()) {
+    return;
+  }
+  if (!q.slots_[slotIndex].commandsEmpty()) {
+    return;
+  }
+  if (q.slotFirstCommandSteadyNs_[slotIndex] == 0) {
+    q.slotFirstCommandSteadyNs_[slotIndex] = steadyClockNanoseconds();
+  }
+}
+
+std::uint64_t recordCurrentSlotPublishResidencyUnlocked(
+    CommandQueue& q,
+    perf::ChunkPublishReason reason) {
+  if (!q.writingSlot_) {
+    return 0;
+  }
+  const std::size_t slotIndex = *q.writingSlot_;
+  if (slotIndex >= q.slotFirstCommandSteadyNs_.size()) {
+    return 0;
+  }
+  const std::uint64_t started = q.slotFirstCommandSteadyNs_[slotIndex];
+  q.slotFirstCommandSteadyNs_[slotIndex] = 0;
+  if (started == 0) {
+    return 0;
+  }
+  const std::uint64_t now = steadyClockNanoseconds();
+  if (now >= started) {
+    const std::uint64_t elapsed = now - started;
+    perf::countChunkPublishSlotResidency(reason, elapsed);
+    return elapsed;
+  }
+  return 0;
+}
+
 std::size_t drawChunkCommandLimit() {
   static const std::size_t limit = [] {
     const char* env = std::getenv("DXMT9_DRAW_CHUNK_COMMAND_LIMIT");
@@ -1910,8 +2033,9 @@ std::size_t drawRunPayloadBytes(
   return bytes;
 }
 
+template <typename Submission>
 std::size_t drawRunSubmissionPayloadBytes(
-    std::span<const core::DrawRunSubmission> submissions) {
+    std::span<Submission> submissions) {
   std::size_t bytes = 0;
   for (const auto& submission : submissions) {
     const auto& payload = submission.payload;
@@ -1941,9 +2065,10 @@ std::size_t drawRunSubmissionPayloadBytes(
   return bytes;
 }
 
+template <typename Submission>
 bool drawSubmissionStatesCompatible(
-    const core::DrawRunSubmission& a,
-    const core::DrawRunSubmission& b) noexcept {
+    const Submission& a,
+    const Submission& b) noexcept {
   const bool sameGenerationLane =
       core::drawRunSubmissionSameStateGenerationLane(a, b);
   if (drawRunGroupByGenerationLaneEnabled()) {
@@ -1966,10 +2091,11 @@ bool drawSubmissionStatesCompatible(
   return compatible;
 }
 
+template <typename Submission>
 bool drawSubmissionStatesCompatibleWithAcceptedPrevious(
-    const core::DrawRunSubmission& base,
-    const core::DrawRunSubmission& previous,
-    const core::DrawRunSubmission& candidate) noexcept {
+    const Submission& base,
+    const Submission& previous,
+    const Submission& candidate) noexcept {
   if (drawRunGroupByGenerationLaneEnabled()) {
     return drawSubmissionStatesCompatible(base, candidate);
   }
@@ -2002,8 +2128,9 @@ bool drawSubmissionStatesCompatibleWithAcceptedPrevious(
   return compatible;
 }
 
+template <typename Submission>
 void countDrawSubmissionAdjacentStateGenerations(
-    std::span<const core::DrawRunSubmission> submissions) noexcept {
+    std::span<Submission> submissions) noexcept {
   for (std::size_t i = 1; i < submissions.size(); ++i) {
     perf::countSubmitDrawRunBatchSubmissionAdjacent(
         core::drawRunSubmissionSameStateGenerationLane(submissions[i - 1],
@@ -2011,8 +2138,9 @@ void countDrawSubmissionAdjacentStateGenerations(
   }
 }
 
+template <typename Submission>
 void countDrawRunBatchDiscardedMaterializedStates(
-    std::span<const core::DrawRunSubmission> submissions) noexcept {
+    std::span<Submission> submissions) noexcept {
   if (submissions.size() <= 1u) {
     return;
   }
@@ -2061,8 +2189,9 @@ private:
   DrawSubmitScratch& scratch_;
 };
 
+template <typename Submission>
 void prepareDrawRunBatchBindingOverrides(
-    std::span<core::DrawRunSubmission> submissions) noexcept {
+    std::span<Submission> submissions) noexcept {
   if (submissions.empty()) {
     return;
   }
@@ -2205,9 +2334,10 @@ std::span<const core::DrawParamPayloadView> snapshotDrawRunBindingPayloads(
   return snapshotPayloads;
 }
 
+template <typename Submission>
 void snapshotDrawSubmissionBindingPayloads(
     resources::Pool& pool,
-    std::span<core::DrawRunSubmission> submissions,
+    std::span<Submission> submissions,
     std::vector<core::DrawBindingSnapshot>& bindingSnapshots) {
   bindingSnapshots.clear();
   bindingSnapshots.reserve(submissions.size());
@@ -2411,11 +2541,110 @@ void markSlotResourcesUnlocked(resources::Pool& pool, const core::ChunkSlot& slo
   }
 }
 
+struct PresentPrePresentOpportunity {
+  std::uint64_t commandCount = 0;
+  std::uint64_t drawRunCount = 0;
+  std::uint64_t drawItemCount = 0;
+  std::uint64_t nonDrawCommandCount = 0;
+  perf::ChunkPublishTailCommandKind tailKind =
+      perf::ChunkPublishTailCommandKind::Empty;
+  bool drawOnly = false;
+  bool presentIsTail = false;
+
+  bool valid() const noexcept {
+    return commandCount != 0;
+  }
+};
+
+perf::ChunkPublishTailCommandKind chunkPublishTailCommandKind(
+    core::MetalCommandKind kind) {
+  switch (kind) {
+  case core::MetalCommandKind::DrawRun:
+    return perf::ChunkPublishTailCommandKind::DrawRun;
+  case core::MetalCommandKind::Clear:
+    return perf::ChunkPublishTailCommandKind::Clear;
+  case core::MetalCommandKind::SurfaceCopy:
+    return perf::ChunkPublishTailCommandKind::SurfaceCopy;
+  case core::MetalCommandKind::StretchRect:
+    return perf::ChunkPublishTailCommandKind::StretchRect;
+  case core::MetalCommandKind::Readback:
+    return perf::ChunkPublishTailCommandKind::Readback;
+  case core::MetalCommandKind::ColorFill:
+    return perf::ChunkPublishTailCommandKind::ColorFill;
+  case core::MetalCommandKind::DepthResolve:
+    return perf::ChunkPublishTailCommandKind::DepthResolve;
+  case core::MetalCommandKind::Present:
+    return perf::ChunkPublishTailCommandKind::Present;
+  }
+  return perf::ChunkPublishTailCommandKind::Empty;
+}
+
+PresentPrePresentOpportunity analyzePresentPrePresentOpportunity(
+    const core::ChunkSlot& slot) {
+  PresentPrePresentOpportunity stats{};
+  const auto commandCount = slot.commandHeaders.size();
+  std::size_t firstPresent = commandCount;
+  for (std::size_t i = 0; i < commandCount; ++i) {
+    if (slot.commandHeaders[i].kind == core::MetalCommandKind::Present) {
+      firstPresent = i;
+      break;
+    }
+  }
+  if (firstPresent == 0 || firstPresent == commandCount) {
+    return stats;
+  }
+
+  stats.commandCount = firstPresent;
+  stats.tailKind =
+      chunkPublishTailCommandKind(slot.commandHeaders[firstPresent - 1].kind);
+  stats.presentIsTail = (firstPresent + 1 == commandCount);
+  for (std::size_t i = 0; i < firstPresent; ++i) {
+    const auto& header = slot.commandHeaders[i];
+    if (header.kind == core::MetalCommandKind::DrawRun) {
+      ++stats.drawRunCount;
+      const std::uint32_t drawRunIndex = header.payloadIndex.value;
+      if (drawRunIndex < slot.drawRunRecords.size()) {
+        stats.drawItemCount += slot.drawRunRecords[drawRunIndex].paramCount;
+      }
+    } else {
+      ++stats.nonDrawCommandCount;
+    }
+  }
+  stats.drawOnly = stats.nonDrawCommandCount == 0;
+  return stats;
+}
+
+perf::ChunkPublishTailCommandKind chunkPublishTailCommandKind(
+    const core::ChunkSlot& slot) {
+  if (slot.commandHeaders.empty()) {
+    return perf::ChunkPublishTailCommandKind::Empty;
+  }
+  return chunkPublishTailCommandKind(slot.commandHeaders.back().kind);
+}
+
 void prepareSlotForPublish(CommandQueue& q,
                            resources::Pool& pool,
                            core::ChunkSlot& slot,
                            perf::ChunkPublishReason reason) {
+  slot.publishReason = reason;
+  const std::uint64_t residencyNs =
+      recordCurrentSlotPublishResidencyUnlocked(q, reason);
   perf::countChunkPublishReason(reason, slot.commandCount());
+  if (reason == perf::ChunkPublishReason::PresentSplitBefore) {
+    perf::countChunkPublishPresentSplitBeforeTail(
+        chunkPublishTailCommandKind(slot), slot.drawOnlyCommandStream());
+  }
+  if (reason == perf::ChunkPublishReason::Present) {
+    const auto stats = analyzePresentPrePresentOpportunity(slot);
+    if (stats.valid()) {
+      perf::countChunkPublishPresentPrePresentOpportunity(
+          stats.commandCount, stats.drawRunCount, stats.drawItemCount,
+          stats.nonDrawCommandCount, slot.drawPayloadArena.size(), residencyNs,
+          stats.presentIsTail);
+      perf::countChunkPublishPresentPrePresentOpportunityTail(stats.tailKind,
+                                                              stats.drawOnly);
+    }
+  }
   PerfScope scope(perf::countPrepareSlotForPublishCpuTime);
   {
     PerfScope stageScope(perf::countPrepareSlotResourceMarkCpuTime);
@@ -2484,6 +2713,67 @@ bool maybeCommitDrawPayloadArenaUnlocked(
   return committed;
 }
 
+bool commitAndStageCurrentPrePresentSlotUnlocked(
+    CommandQueue& q,
+    resources::Pool& pool,
+    std::unique_lock<std::mutex>& lock,
+    std::size_t postCommitHeadroom) {
+  if (!(encodeTailPresentBatchEnabled() ||
+        openCbPreencodeTailPresentEnabled()) ||
+      !q.writingSlot_ ||
+      currentSlotUnlocked(q).commandsEmpty()) {
+    return false;
+  }
+  if (q.inflightCount_ + 1u + postCommitHeadroom > kMaxQueuedChunks) {
+    return false;
+  }
+
+  const bool committed = q.queueLifecycle_.commitCurrentChunk(
+      lock, kMaxQueuedChunks, [&q, &pool](core::ChunkSlot& slot) {
+        prepareSlotForPublish(q, pool, slot,
+                              perf::ChunkPublishReason::PresentSplitBefore);
+      });
+  if (!committed || q.readySlots_.empty()) {
+    return false;
+  }
+
+  if (openCbPreencodeTailPresentEnabled()) {
+    if (q.skipDrawResourceMarking_) {
+      q.forceDrawResourceMarkingAfterSplit_ = true;
+    }
+    return true;
+  }
+
+  const std::size_t stagedSlotIndex = q.readySlots_.back();
+  if (!q.queueLifecycle_.stageLastReadySlot(
+          lock, q.stagedTailPresentSlots_, stagedSlotIndex)) {
+    return false;
+  }
+  if (q.skipDrawResourceMarking_) {
+    q.forceDrawResourceMarkingAfterSplit_ = true;
+  }
+  return true;
+}
+
+bool maybeStagePrePresentChunkUnlocked(
+    CommandQueue& q,
+    resources::Pool& pool,
+    std::unique_lock<std::mutex>& lock) {
+  const std::size_t limit = stagePrePresentCommandLimit();
+  if (limit == 0 || !q.writingSlot_) {
+    return false;
+  }
+  if (currentSlotUnlocked(q).commandCount() < limit) {
+    return false;
+  }
+  const bool staged = commitAndStageCurrentPrePresentSlotUnlocked(
+      q, pool, lock, /*postCommitHeadroom=*/2u);
+  if (staged) {
+    ensureWritingSlotUnlocked(q, lock);
+  }
+  return staged;
+}
+
 }  // namespace
 
 void CommandQueue::setSkipDrawResourceMarking(bool skip) {
@@ -2493,14 +2783,18 @@ void CommandQueue::setSkipDrawResourceMarking(bool skip) {
 }
 
 void CommandQueue::noteCommitChunkEntryForCompletionGap() {
+  queueLifecycle_.recordCompletionWaitCommitChunkEntry();
   queueLifecycle_.recordNoEnqueueWaitGapToCommitChunkEntry();
 }
 
 void CommandQueue::noteCommitChunkReplayStartForCompletionGap() {
+  queueLifecycle_.recordCompletionWaitCommitChunkReplayStart();
   queueLifecycle_.recordNoEnqueueWaitGapToCommitChunkReplayStart();
 }
 
-void CommandQueue::noteCommitChunkReplayEndForCompletionGap() {
+void CommandQueue::noteCommitChunkReplayEndForCompletionGap(
+    std::uint64_t replayNanoseconds) {
+  queueLifecycle_.recordCompletionWaitCommitChunkReplayEnd(replayNanoseconds);
   queueLifecycle_.recordNoEnqueueWaitGapToCommitChunkReplayEnd();
 }
 
@@ -2617,17 +2911,26 @@ void CommandQueue::submitDrawRun(core::CanonicalDrawState state,
   currentBackBuffer_ = state.hot.colorAttachments[0].handle;
   {
     PerfScope stageScope(perf::countSubmitDrawRunAppendCpuTime);
+    noteCurrentSlotCommandAppendStartedUnlocked(*this);
     currentSlotUnlocked(*this).appendDrawRun(
         std::move(state), uniforms, draws, effectivePayloads);
   }
   {
     PerfScope stageScope(perf::countSubmitDrawRunChunkCommitCpuTime);
-    (void)maybeCommitDrawChunkUnlocked(*this, pool_, lock);
+    if (!maybeStagePrePresentChunkUnlocked(*this, pool_, lock)) {
+      (void)maybeCommitDrawChunkUnlocked(*this, pool_, lock);
+    }
   }
 }
 
-void CommandQueue::submitDrawRunBatch(
-    std::span<core::DrawRunSubmission> submissions) {
+template <typename Submission>
+void submitDrawRunBatchImpl(CommandQueue& queue,
+                            resources::Pool& pool,
+                            std::mutex& mutex,
+                            core::Handle& currentBackBuffer,
+                            bool skipDrawResourceMarking,
+                            bool forceDrawResourceMarkingAfterSplit,
+                            std::span<Submission> submissions) {
   if (submissions.empty()) {
     return;
   }
@@ -2640,7 +2943,7 @@ void CommandQueue::submitDrawRunBatch(
   }
   countDrawSubmissionAdjacentStateGenerations(submissions);
   PerfScope scope(perf::countSubmitDrawCpuTime);
-  std::unique_lock lock(mutex_);
+  std::unique_lock lock(mutex);
   std::size_t batchStart = 0;
   while (batchStart < submissions.size()) {
     std::size_t batchEnd = batchStart + 1u;
@@ -2661,7 +2964,7 @@ void CommandQueue::submitDrawRunBatch(
     }
     {
       PerfScope stageScope(perf::countSubmitDrawRunBatchBindingSnapshotCpuTime);
-      snapshotDrawSubmissionBindingPayloads(pool_, batch, scratch.bindingSnapshots);
+      snapshotDrawSubmissionBindingPayloads(pool, batch, scratch.bindingSnapshots);
     }
     std::size_t pendingPayloadBytes = 0;
     {
@@ -2670,14 +2973,14 @@ void CommandQueue::submitDrawRunBatch(
     }
     {
       PerfScope stageScope(perf::countSubmitDrawRunBatchSlotPrepareCpuTime);
-      ensureWritingSlotUnlocked(*this, lock);
-      maybeCommitDrawPayloadArenaUnlocked(*this, pool_, lock, pendingPayloadBytes);
+      ensureWritingSlotUnlocked(queue, lock);
+      maybeCommitDrawPayloadArenaUnlocked(queue, pool, lock, pendingPayloadBytes);
     }
     {
       PerfScope stageScope(perf::countSubmitDrawRunBatchResourceMarkCpuTime);
-      if (!skipDrawResourceMarking_ || forceDrawResourceMarkingAfterSplit_) {
-        const std::uint64_t seqId = seqIdForMark(*this, 0);
-        pool_.markDrawResources(batch.front().materializedState().hot, seqId);
+      if (!skipDrawResourceMarking || forceDrawResourceMarkingAfterSplit) {
+        const std::uint64_t seqId = seqIdForMark(queue, 0);
+        pool.markDrawResources(batch.front().materializedState().hot, seqId);
         for (auto& submission : batch) {
           std::span<const core::DrawParamPayloadView> payloads{};
           if (!submission.payload.userVertexData.empty() ||
@@ -2686,25 +2989,44 @@ void CommandQueue::submitDrawRunBatch(
               !submission.payload.bindingSnapshotData.empty()) {
             payloads = std::span<const core::DrawParamPayloadView>(&submission.payload, 1);
           }
-          markDrawBindingOverrideResources(pool_, payloads, seqId);
+          markDrawBindingOverrideResources(pool, payloads, seqId);
         }
       }
     }
     DXMT_ASSERT(batch.front().stateMaterialized);
-    currentBackBuffer_ =
+    currentBackBuffer =
         batch.front().materializedState().hot.colorAttachments[0].handle;
 
     perf::countSubmitDrawRunBatchGroup(static_cast<std::uint32_t>(batch.size()));
     {
       PerfScope stageScope(perf::countSubmitDrawRunBatchAppendCpuTime);
-      currentSlotUnlocked(*this).appendDrawRunBatch(batch);
+      noteCurrentSlotCommandAppendStartedUnlocked(queue);
+      currentSlotUnlocked(queue).appendDrawRunBatch(batch);
     }
     {
       PerfScope stageScope(perf::countSubmitDrawRunBatchChunkCommitCpuTime);
-      (void)maybeCommitDrawChunkUnlocked(*this, pool_, lock);
+      if (!maybeStagePrePresentChunkUnlocked(queue, pool, lock)) {
+        (void)maybeCommitDrawChunkUnlocked(queue, pool, lock);
+      }
     }
     batchStart = batchEnd;
   }
+}
+
+void CommandQueue::submitDrawRunBatch(
+    std::span<core::DrawRunSubmission> submissions) {
+  submitDrawRunBatchImpl(*this, pool_, mutex_, currentBackBuffer_,
+                         skipDrawResourceMarking_,
+                         forceDrawResourceMarkingAfterSplit_,
+                         submissions);
+}
+
+void CommandQueue::submitCompactDrawRunBatch(
+    std::span<core::DrawRunCompactSubmission> submissions) {
+  submitDrawRunBatchImpl(*this, pool_, mutex_, currentBackBuffer_,
+                         skipDrawResourceMarking_,
+                         forceDrawResourceMarkingAfterSplit_,
+                         submissions);
 }
 
 void CommandQueue::submitClear(const core::ClearDesc& desc) {
@@ -2715,6 +3037,7 @@ void CommandQueue::submitClear(const core::ClearDesc& desc) {
   for (const auto& attachment : desc.colorAttachments) {
     traceTextureSurfaceOp(pool_, "Clear", attachment.handle, desc.depthStencil.handle);
   }
+  noteCurrentSlotCommandAppendStartedUnlocked(*this);
   currentSlotUnlocked(*this).appendClear(desc);
   if (desc.colorAttachments[0].handle) {
     currentBackBuffer_ = desc.colorAttachments[0].handle;
@@ -2726,6 +3049,7 @@ void CommandQueue::submitSurfaceCopy(const core::SurfaceCopyDesc& desc) {
   std::unique_lock lock(mutex_);
   ensureWritingSlotUnlocked(*this, lock);
   traceTextureSurfaceOp(pool_, "SurfaceCopy", desc.source, desc.destination);
+  noteCurrentSlotCommandAppendStartedUnlocked(*this);
   currentSlotUnlocked(*this).appendSurfaceCopy(desc);
   currentBackBuffer_ = desc.destination;
   pool_.markSurfaceCopyResources(desc, seqIdForMark(*this, 0));
@@ -2743,6 +3067,7 @@ void CommandQueue::submitStretchRect(const core::StretchRectDesc& desc) {
   }
   ensureWritingSlotUnlocked(*this, lock);
   traceTextureSurfaceOp(pool_, "StretchRect", desc.source, desc.destination);
+  noteCurrentSlotCommandAppendStartedUnlocked(*this);
   currentSlotUnlocked(*this).appendStretchRect(desc);
   currentBackBuffer_ = desc.destination;
   pool_.markStretchResources(desc, seqIdForMark(*this, 0));
@@ -2767,6 +3092,7 @@ void CommandQueue::submitColorFill(const core::ColorFillDesc& desc) {
   std::unique_lock lock(mutex_);
   ensureWritingSlotUnlocked(*this, lock);
   traceTextureSurfaceOp(pool_, "ColorFill", desc.destination);
+  noteCurrentSlotCommandAppendStartedUnlocked(*this);
   currentSlotUnlocked(*this).appendColorFill(desc);
   currentBackBuffer_ = desc.destination;
   pool_.markColorFillResources(desc, seqIdForMark(*this, 0));
@@ -2780,6 +3106,7 @@ void CommandQueue::submitDepthResolve(const core::DepthResolveDesc& desc) {
   std::unique_lock lock(mutex_);
   ensureWritingSlotUnlocked(*this, lock);
   traceTextureSurfaceOp(pool_, "DepthResolve", desc.msaaDepth, desc.intzDest);
+  noteCurrentSlotCommandAppendStartedUnlocked(*this);
   currentSlotUnlocked(*this).appendDepthResolve(desc);
   pool_.markDepthResolveResources(desc, seqIdForMark(*this, 0));
 }
@@ -2841,7 +3168,33 @@ std::uint64_t CommandQueue::submitPresent(const core::SwapDesc& desc) {
     perf::countPresentSourceSelection(static_cast<bool>(queuedDesc.sourceSurface),
                                       sourceHandle.value != 0 &&
                                           sourceHandle.value == currentBackBuffer_.value);
-    if (splitPresentChunk()) {
+    const bool hasStagedPrePresent = !stagedTailPresentSlots_.empty();
+    const bool shouldUseTailPresentStaging =
+        hasStagedPrePresent ||
+        (stageTailPresentChunkEnabled() &&
+         writingSlot_.has_value() &&
+         !currentSlotUnlocked(*this).commandsEmpty());
+    if (shouldUseTailPresentStaging) {
+      if (writingSlot_.has_value() &&
+          !currentSlotUnlocked(*this).commandsEmpty()) {
+        (void)commitAndStageCurrentPrePresentSlotUnlocked(
+            *this, pool_, lock, /*postCommitHeadroom=*/1u);
+      }
+      ensureWritingSlotUnlocked(*this, lock);
+      queueLifecycle_.appendPresentCommand(queuedDesc, sourceHandle);
+      const bool tailCommitted = queueLifecycle_.commitCurrentChunk(
+          lock, kMaxQueuedChunks, [this](core::ChunkSlot& slot) {
+            prepareSlotForPublish(*this, pool_, slot,
+                                  perf::ChunkPublishReason::Present);
+          });
+      if (tailCommitted) {
+        presentSeqId = lastCommittedSeqId_;
+      }
+      if (tailCommitted && !readySlots_.empty()) {
+        (void)queueLifecycle_.releaseStagedSlotsBeforeReadyTail(
+            lock, stagedTailPresentSlots_, readySlots_.back());
+      }
+    } else if (splitPresentChunk()) {
       queueLifecycle_.commitCurrentChunk(
           lock, kMaxQueuedChunks, [this](core::ChunkSlot& slot) {
             prepareSlotForPublish(
@@ -3021,6 +3374,219 @@ void CommandQueue::runEncodeLoop(EncodeChunkFn encodeChunk, OnSubmittedFn onSubm
   while (true) {
     std::unique_lock lock(mutex_);
     if (!queueLifecycle_.runEncodeIteration(lock, encodeChunk, onSubmitted)) {
+      return;
+    }
+  }
+}
+
+void CommandQueue::runOpenCbTailPresentEncodeLoop(OnSubmittedFn onSubmitted) {
+  using core::metalqueue::QueueCompletionSource;
+  using core::metalqueue::QueueSubmissionRecord;
+  using core::metalqueue::ReadySlotSnapshot;
+
+  std::array<ReadySlotSnapshot, 1> scratch{};
+  std::optional<QueueSubmissionRecord> pendingRecord;
+  std::vector<QueueCompletionSource> pendingSources;
+
+  auto encodeSource = [this](const ReadySlotSnapshot& source,
+                             encoders::EncodeChunkOptions options) {
+    auto slot = source.slot;
+    traceEncodeFnStage("entry", source.slotIndex, slot);
+    if (encodeSlotPsoPrefetchEnabled() &&
+        !slot.prefetchedPipelinesSealed()) {
+      traceEncodeFnStage("before-pso-prefetch", source.slotIndex, slot);
+      PerfScope scope(perf::countEncodeSlotPsoPrefetchCpuTime);
+      prefetchSlotPipelines(slot);
+      traceEncodeFnStage("after-pso-prefetch", source.slotIndex, slot);
+    }
+    traceEncodeFnStage("before-make-context", source.slotIndex, slot);
+    auto ctx = makeEncodeContext();
+    traceEncodeFnStage("after-make-context", source.slotIndex, slot);
+    traceEncodeFnStage("before-backend-onChunkReady", source.slotIndex, slot);
+    auto submission = backend_->onChunkReady(ctx, source.slotIndex, slot,
+                                             std::move(options));
+    traceEncodeFnStage(submission.has_value()
+                           ? "after-backend-onChunkReady-submission"
+                           : "after-backend-onChunkReady-inline",
+                       source.slotIndex,
+                       slot);
+    if (submission.has_value() && !submission->commandBuffer) {
+      submission.reset();
+    }
+    return submission;
+  };
+
+  auto completeInlineSource = [this, &onSubmitted](
+                                  const QueueCompletionSource& source) {
+    queueLifecycle_.completeInlineChunk(source.slotIndex, source.seqId);
+    if (onSubmitted) {
+      onSubmitted(source.seqId);
+    }
+  };
+
+  auto completeInlineSnapshot = [this, &onSubmitted](
+                                    const ReadySlotSnapshot& source) {
+    queueLifecycle_.completeInlineChunk(source.slotIndex, source.slot.seqId);
+    if (onSubmitted) {
+      onSubmitted(source.slot.seqId);
+    }
+  };
+
+  auto retainSource = [this](std::unique_lock<std::mutex>& lock,
+                             const ReadySlotSnapshot& source,
+                             QueueCompletionSource& retained) {
+    std::array<QueueCompletionSource, 1> out{};
+    const std::span<const ReadySlotSnapshot> sources(&source, 1u);
+    const std::size_t count =
+        queueLifecycle_.retainEncodedSourcesForPendingTail(
+            lock, sources, std::span<QueueCompletionSource>(out));
+    if (count != 1u) {
+      return false;
+    }
+    retained = out.front();
+    return true;
+  };
+
+  auto submitRecordLocked = [this](std::unique_lock<std::mutex>& lock,
+                                   QueueSubmissionRecord& record) {
+    auto callbacks = std::move(record.postCommitCallbacks);
+    queueLifecycle_.submitEncodedSubmission(lock, record);
+    lock.unlock();
+    for (auto& callback : callbacks) {
+      if (callback) {
+        callback();
+      }
+    }
+  };
+
+  while (true) {
+    std::unique_lock lock(mutex_);
+    const std::size_t count =
+        queueLifecycle_.dequeueReadySlotBatchPrefix(
+            lock,
+            std::span<ReadySlotSnapshot>(scratch),
+            [](const std::deque<std::size_t>&,
+               std::span<const core::ChunkSlot>,
+               std::size_t maxCount) noexcept {
+              return maxCount == 0u ? 0u : 1u;
+            });
+    if (count == 0) {
+      if (pendingRecord.has_value()) {
+        submitRecordLocked(lock, *pendingRecord);
+        pendingRecord.reset();
+        pendingSources.clear();
+      }
+      return;
+    }
+
+    const ReadySlotSnapshot source = scratch.front();
+    const bool sourceHasPresent = !source.slot.presentRecords.empty();
+    const bool sourceIsOpenHead =
+        render::slotIsOpenCbPreencodeHead(source.slot);
+
+    if (pendingRecord.has_value() &&
+        !sourceHasPresent &&
+        !sourceIsOpenHead) {
+      submitRecordLocked(lock, *pendingRecord);
+      pendingRecord.reset();
+      pendingSources.clear();
+      lock.lock();
+    }
+
+    bool appendToPending = pendingRecord.has_value() &&
+                           (sourceHasPresent || sourceIsOpenHead);
+    bool startPending = !pendingRecord.has_value() && sourceIsOpenHead;
+    QueueCompletionSource appendRetained{};
+    bool appendRetainedValid = false;
+    if (appendToPending) {
+      if (!retainSource(lock, source, appendRetained)) {
+        submitRecordLocked(lock, *pendingRecord);
+        pendingRecord.reset();
+        pendingSources.clear();
+        lock.lock();
+        appendToPending = false;
+        startPending = sourceIsOpenHead;
+      } else {
+        appendRetainedValid = true;
+      }
+    }
+
+    encoders::EncodeChunkOptions options{};
+    if (appendToPending || startPending) {
+      options.disableMidChunkCommits = true;
+      options.disablePresentAcquireSplit = true;
+    }
+    if (appendToPending) {
+      options.commandBuffer = pendingRecord->commandBuffer;
+    }
+
+    lock.unlock();
+    auto submission = encodeSource(source, std::move(options));
+    lock.lock();
+
+    if (!submission.has_value()) {
+      if (appendToPending) {
+        for (const auto& retained : pendingSources) {
+          completeInlineSource(retained);
+        }
+        pendingRecord.reset();
+        pendingSources.clear();
+      }
+      completeInlineSnapshot(source);
+      continue;
+    }
+
+    if (startPending) {
+      QueueCompletionSource retained{};
+      if (!retainSource(lock, source, retained)) {
+        submitRecordLocked(lock, *submission);
+        continue;
+      }
+      pendingSources.assign(1u, retained);
+      pendingRecord = std::move(*submission);
+      continue;
+    }
+
+    if (appendToPending) {
+      if (!appendRetainedValid ||
+          !core::metalqueue::mergeEncodedPendingTailSubmission(
+              *submission, std::move(*pendingRecord), pendingSources,
+              appendRetained)) {
+        for (const auto& pendingSource : pendingSources) {
+          completeInlineSource(pendingSource);
+        }
+        completeInlineSource(appendRetained);
+        pendingRecord.reset();
+        pendingSources.clear();
+        continue;
+      }
+
+      pendingRecord.reset();
+      pendingSources.clear();
+      if (!sourceHasPresent) {
+        pendingSources = submission->completionSources;
+        pendingRecord = std::move(*submission);
+        continue;
+      }
+
+      submitRecordLocked(lock, *submission);
+      continue;
+    }
+
+    submitRecordLocked(lock, *submission);
+  }
+}
+
+void CommandQueue::runEncodeBatchLoop(
+    std::span<core::metalqueue::ReadySlotSnapshot> scratch,
+    EncodeBatchFn encodeBatch,
+    OnSubmittedFn onSubmitted,
+    core::metalqueue::ReadySlotBatchAppendPredicate canAppend,
+    core::metalqueue::ReadySlotBatchPrefixSelector selectPrefix) {
+  while (true) {
+    std::unique_lock lock(mutex_);
+    if (!queueLifecycle_.runEncodeBatchIteration(
+            lock, scratch, encodeBatch, onSubmitted, canAppend, selectPrefix)) {
       return;
     }
   }

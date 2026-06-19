@@ -14,11 +14,14 @@ source: experiments/output/app-d3d9-3dmark05-current-visual-smoke-r1/3dmark05-pe
 
 **Question / hypothesis.** A later GT1 smoke showed black or translucent-looking
 geometry even though [[state-churn-encode-encode-phase.22]] rejected full VS/PS
-cbuf upload as the likely fix. The `v0.0.1` visual-good tag is useful here:
-diffing from that baseline points to default-on draw submission batching and
-binding override work, while `DXMT9_DISABLE_DRAW_SUBMIT_BATCH=1` restores a
-normal-looking smoke frame. Is the artifact caused by stale cbuf cache identity
-inside the batched per-draw uniform path?
+cbuf upload as the likely fix. The visual lineage is useful here: this run used
+the `v0.0.1` historical screenshot diff that was available at the time as a
+broad-corruption triage artifact, not as the last safe code point. Current
+visual safety is anchored at `v0.0.3`. At the time, diffing from that coherent
+screenshot pointed to default-on draw submission batching and binding override
+work, while `DXMT9_DISABLE_DRAW_SUBMIT_BATCH=1` restored a normal-looking smoke
+frame. Is the artifact caused by stale cbuf cache identity inside the batched
+per-draw uniform path?
 
 **Root cause.** Draw submission batches replay many draw records through one
 base `FlatDrawStateRecord`. Each record can carry its own `DrawUniformPayload`,
@@ -137,10 +140,11 @@ misses, and FFPPS probe `867,724` hits / `31,210` misses. That is the intended
 middle ground between stale identity reuse and always dirtying every cbuf.
 
 **Verdict.** Accepted correctness fix with visual smoke. This does not prove
-pixel-perfect equality to `v0.0.1`, because time-based `actual.png` captures
-still drift between frames. The structural root cause is nevertheless clear:
-cbuf cache identity must be based on the actual per-draw uniform payload, not
-the first draw's base hot-state constant hashes.
+pixel-perfect equality to the `v0.0.3` visual-safe anchor, because
+time-based `actual.png` captures still drift between frames. The structural
+root cause is nevertheless clear: cbuf cache identity must be based on the
+actual per-draw uniform payload, not the first draw's base hot-state constant
+hashes.
 
 **Next.** Keep the component-hash identity path. Future cbuf/cache changes
 should use a same-input mini-replay or stricter image gate before claiming exact

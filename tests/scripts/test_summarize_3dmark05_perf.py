@@ -1039,6 +1039,20 @@ class Summarize3DMark05PerfTests(unittest.TestCase):
                         "chunk_publish_commands_stretch_split": 50,
                         "chunk_publish_commands_map_wait": 60,
                         "chunk_publish_commands_unknown": 2,
+                        "chunk_publish_present_split_before_tail_draw_run": 2,
+                        "chunk_publish_present_split_before_tail_clear": 1,
+                        "chunk_publish_present_split_before_draw_only": 2,
+                        "chunk_publish_present_pre_present_opportunity_slots": 2,
+                        "chunk_publish_present_pre_present_opportunity_tail_slots": 2,
+                        "chunk_publish_present_pre_present_opportunity_commands": 100,
+                        "chunk_publish_present_pre_present_opportunity_draw_runs": 80,
+                        "chunk_publish_present_pre_present_opportunity_draw_items": 160,
+                        "chunk_publish_present_pre_present_opportunity_non_draw_commands": 20,
+                        "chunk_publish_present_pre_present_opportunity_payload_bytes": 4096,
+                        "chunk_publish_present_pre_present_opportunity_residency_ms": 18.0,
+                        "chunk_publish_present_pre_present_opportunity_tail_draw_run": 1,
+                        "chunk_publish_present_pre_present_opportunity_tail_clear": 1,
+                        "chunk_publish_present_pre_present_opportunity_draw_only": 1,
                         "completion_no_enqueue_wait_to_encode_dequeue_ms": 460.0,
                         "completion_no_enqueue_wait_to_encode_dequeue_p50_ms": 9.0,
                         "completion_no_enqueue_wait_to_encode_dequeue_p95_ms": 17.0,
@@ -1092,6 +1106,11 @@ class Summarize3DMark05PerfTests(unittest.TestCase):
                         "d3d9_snapshot_uniform_materialized_compact_fixed_bytes": 8192,
                         "d3d9_snapshot_uniform_materialized_compact_vertex_bytes": 4096,
                         "d3d9_snapshot_uniform_materialized_compact_pixel_bytes": 8192,
+                        "d3d9_snapshot_submission_carrier_records": 160,
+                        "d3d9_snapshot_submission_carrier_bytes": 3388160,
+                        "d3d9_snapshot_submission_carrier_uniform_storage_bytes": 1643520,
+                        "d3d9_snapshot_submission_carrier_unused_uniform_storage_records": 80,
+                        "d3d9_snapshot_submission_carrier_unused_uniform_storage_bytes": 821760,
                         "d3d9_snapshot_uniform_elided": 1,
                         "d3d9_snapshot_uniform_adjacent_previous_payload": 10,
                         "d3d9_snapshot_uniform_adjacent_same_fixed_payload_hash": 8,
@@ -1155,6 +1174,21 @@ class Summarize3DMark05PerfTests(unittest.TestCase):
                 "| map-wait | `6` | `15.38%` | `60` | `10.000` |",
                 summary,
             )
+            self.assertIn("## PresentSplitBefore Tail Shape", summary)
+            self.assertIn("| draw-run | `2` | `66.67%` |", summary)
+            self.assertIn("| clear | `1` | `33.33%` |", summary)
+            self.assertIn(
+                "| `draw_only_split_before_share` | `66.67%` |",
+                summary,
+            )
+            self.assertIn("## Present Pre-Present Work Opportunity", summary)
+            self.assertIn("| Prefix tail command | slots | share |", summary)
+            self.assertIn("| draw-run | `1` | `50.00%` |", summary)
+            self.assertIn("| clear | `1` | `50.00%` |", summary)
+            self.assertIn(
+                "| `draw_only_pre_present_opportunity_share` | `50.00%` |",
+                summary,
+            )
             self.assertIn("| `draw_uniform_payload_append_bytes` | `20,512` |", summary)
             self.assertIn("| `draw_uniform_fixed_payload_append_bytes` | `8,192` |", summary)
             self.assertIn("| encoder_sum | `blend_screen_draws` | `1` |", summary)
@@ -1165,6 +1199,27 @@ class Summarize3DMark05PerfTests(unittest.TestCase):
             self.assertIn("| `uniform_materialized_bytes_per_present` | `512.000` |", summary)
             self.assertIn("| `uniform_compact_candidate_bytes_per_present` | `256.000` |", summary)
             self.assertIn("| `uniform_compact_saved_bytes_per_present` | `256.000` |", summary)
+            self.assertIn("| `submission_carrier_bytes_per_record` | `21176.000` |", summary)
+            self.assertIn(
+                "| `submission_carrier_uniform_storage_bytes_per_record` | `10272.000` |",
+                summary,
+            )
+            self.assertIn(
+                "| `submission_carrier_unused_uniform_storage_records_per_present` | `1.000` |",
+                summary,
+            )
+            self.assertIn(
+                "| `submission_carrier_unused_uniform_storage_mib_per_present` | `0.010` |",
+                summary,
+            )
+            self.assertIn(
+                "| `submission_carrier_unused_uniform_storage_bytes_per_record` | `5136.000` |",
+                summary,
+            )
+            self.assertIn(
+                "| `submission_carrier_unused_uniform_storage_share` | `50.00%` |",
+                summary,
+            )
             self.assertIn("| `uniform_compact_fixed_bytes_per_present` | `102.400` |", summary)
             self.assertIn("| `uniform_compact_vertex_bytes_per_present` | `51.200` |", summary)
             self.assertIn("| `uniform_compact_pixel_bytes_per_present` | `102.400` |", summary)

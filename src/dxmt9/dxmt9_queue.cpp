@@ -9,10 +9,13 @@
 #include "util/log/log.hpp"
 
 #include <algorithm>
+#include <array>
 #include <chrono>
 #include <cstdlib>
+#include <iterator>
 #include <sstream>
 #include <thread>
+#include <utility>
 
 namespace dxmt9::core::metalqueue {
 
@@ -253,7 +256,51 @@ void traceEncodeIterationStage(const char* stage, size_t slotIndex, const ChunkS
   emitQueueTraceLine(out.str());
 }
 
+std::array<QueueCompletionSource, 1> fallbackCompletionSource(
+    size_t slotIndex,
+    u64 seqId,
+    bool hasPresent) {
+  return {QueueCompletionSource{
+      .slotIndex = slotIndex,
+      .seqId = seqId,
+      .hasPresent = hasPresent,
+  }};
+}
+
+std::span<const QueueCompletionSource> completionSourcesFor(
+    const std::vector<QueueCompletionSource>& sources,
+    const std::array<QueueCompletionSource, 1>& fallback) {
+  if (!sources.empty()) {
+    return std::span<const QueueCompletionSource>(sources.data(), sources.size());
+  }
+  return std::span<const QueueCompletionSource>(fallback.data(), fallback.size());
+}
+
 }  // namespace
+
+QueueCompletionSource completionSourceForReadySlot(
+    const ReadySlotSnapshot& snapshot) noexcept {
+  return QueueCompletionSource{
+      .slotIndex = snapshot.slotIndex,
+      .seqId = snapshot.slot.seqId,
+      .hasPresent = !snapshot.slot.presentRecords.empty(),
+  };
+}
+
+void appendCompletionSourcesToQueues(
+    std::deque<u64>& completedSeqQueue,
+    std::deque<u64>* completedPresentSeqQueue,
+    u64 completedSeqId,
+    std::span<const QueueCompletionSource> sources) {
+  (void)completedSeqId;
+  for (const auto& source : sources) {
+    DXMT_ASSERT(source.seqId == completedSeqId + completedSeqQueue.size() + 1);
+    completedSeqQueue.push_back(source.seqId);
+    if (source.hasPresent && completedPresentSeqQueue) {
+      completedPresentSeqQueue->push_back(source.seqId);
+    }
+  }
+}
 
 CommandBufferDiagnostics summarizeChunk(const ChunkSummaryInput& input) {
   CommandBufferDiagnostics diagnostics;
@@ -314,6 +361,177 @@ CommandBufferDiagnostics summarizeCommands(u64 seqId,
   return summarizeChunk(seqId, slotIndex, std::span<const ChunkObservation>(observations.data(), observations.size()));
 }
 
+NoEnqueueFirstPublishSlotShape summarizeNoEnqueueFirstPublishSlotShape(
+    const ChunkSlot& slot) noexcept {
+  const auto commandCount = slot.commandCount();
+  const auto drawRunCommands = slot.drawRunRecords.size();
+  return NoEnqueueFirstPublishSlotShape{
+      .commandCount = static_cast<u64>(commandCount),
+      .drawRunCommands = static_cast<u64>(drawRunCommands),
+      .drawItems = static_cast<u64>(slot.drawParams.size()),
+      .nonDrawCommands = static_cast<u64>(
+          commandCount >= drawRunCommands ? commandCount - drawRunCommands : 0),
+      .payloadBytes = static_cast<u64>(slot.drawPayloadArena.size()),
+      .presentCommands = static_cast<u64>(slot.presentRecords.size()),
+  };
+}
+
+CommandBufferDiagnostics mergeCommandBufferDiagnostics(
+    CommandBufferDiagnostics aggregate,
+    const CommandBufferDiagnostics& source) noexcept {
+  if (aggregate.seqId == 0) {
+    aggregate.seqId = source.seqId;
+    aggregate.slotIndex = source.slotIndex;
+  }
+  aggregate.hasDraw = aggregate.hasDraw || source.hasDraw;
+  aggregate.hasPresent = aggregate.hasPresent || source.hasPresent;
+  aggregate.hasBlit = aggregate.hasBlit || source.hasBlit;
+  aggregate.hasStretchRect = aggregate.hasStretchRect || source.hasStretchRect;
+  if (aggregate.frame == 0) {
+    aggregate.frame = source.frame;
+  }
+  aggregate.compatFlags |= source.compatFlags;
+  if (source.vertexShaderHash != 0) {
+    aggregate.vertexShaderHash = source.vertexShaderHash;
+  }
+  if (source.pixelShaderHash != 0) {
+    aggregate.pixelShaderHash = source.pixelShaderHash;
+  }
+  if (source.shaderVariantHash != 0) {
+    aggregate.shaderVariantHash = source.shaderVariantHash;
+  }
+  return aggregate;
+}
+
+template <typename T>
+void prependMoved(std::vector<T>& target, std::vector<T>&& prefix) {
+  if (prefix.empty()) {
+    return;
+  }
+  std::vector<T> merged;
+  merged.reserve(prefix.size() + target.size());
+  std::move(prefix.begin(), prefix.end(), std::back_inserter(merged));
+  std::move(target.begin(), target.end(), std::back_inserter(merged));
+  target = std::move(merged);
+}
+
+bool mergeEncodedPendingTailSubmission(
+    QueueSubmissionRecord& tail,
+    QueueSubmissionRecord&& encodedHead,
+    std::span<const QueueCompletionSource> encodedHeadSources,
+    QueueCompletionSource tailSource) {
+  if (encodedHeadSources.empty() ||
+      tailSource.seqId == 0 ||
+      tail.seqId == 0 ||
+      tailSource.seqId != tail.seqId ||
+      tailSource.slotIndex != tail.slotIndex) {
+    return false;
+  }
+
+  u64 previousSeqId = 0;
+  for (const auto& source : encodedHeadSources) {
+    if (source.seqId == 0 ||
+        (previousSeqId != 0 && source.seqId != previousSeqId + 1)) {
+      return false;
+    }
+    previousSeqId = source.seqId;
+  }
+  if (tailSource.seqId != previousSeqId + 1) {
+    return false;
+  }
+
+  std::array<QueueCompletionSource, 1> fallbackTailSources{tailSource};
+  const std::span<const QueueCompletionSource> tailSources =
+      tail.completionSources.empty()
+          ? std::span<const QueueCompletionSource>(
+                fallbackTailSources.data(), fallbackTailSources.size())
+          : std::span<const QueueCompletionSource>(
+                tail.completionSources.data(), tail.completionSources.size());
+  if (tailSources.empty() || tailSources.front().seqId != tailSource.seqId) {
+    return false;
+  }
+  previousSeqId = encodedHeadSources.back().seqId;
+  for (const auto& source : tailSources) {
+    if (source.seqId != previousSeqId + 1) {
+      return false;
+    }
+    previousSeqId = source.seqId;
+  }
+
+  if (encodedHead.commandBuffer && tail.commandBuffer &&
+      encodedHead.commandBuffer.handle != tail.commandBuffer.handle) {
+    return false;
+  }
+  if (encodedHead.renderEncoderGpuSampleBuffer &&
+      tail.renderEncoderGpuSampleBuffer &&
+      encodedHead.renderEncoderGpuSampleBuffer.handle !=
+          tail.renderEncoderGpuSampleBuffer.handle) {
+    return false;
+  }
+  if (encodedHead.metalCapture.has_value() && tail.metalCapture.has_value()) {
+    return false;
+  }
+
+  if (!tail.commandBuffer && encodedHead.commandBuffer) {
+    tail.commandBuffer = std::move(encodedHead.commandBuffer);
+  }
+  if (!tail.renderEncoderGpuSampleBuffer &&
+      encodedHead.renderEncoderGpuSampleBuffer) {
+    tail.renderEncoderGpuSampleBuffer =
+        std::move(encodedHead.renderEncoderGpuSampleBuffer);
+  }
+
+  std::vector<QueueCompletionSource> mergedSources;
+  mergedSources.reserve(encodedHeadSources.size() + tailSources.size());
+  mergedSources.insert(
+      mergedSources.end(),
+      encodedHeadSources.begin(),
+      encodedHeadSources.end());
+  mergedSources.insert(mergedSources.end(), tailSources.begin(), tailSources.end());
+  tail.completionSources = std::move(mergedSources);
+
+  const u64 headChainLength = std::max<u64>(1, encodedHead.commandBufferChainLength);
+  const u64 tailChainLength = std::max<u64>(1, tail.commandBufferChainLength);
+  tail.commandBufferChainLength = headChainLength + tailChainLength - 1;
+
+  CommandBufferDiagnostics headDiagnostics = encodedHead.diagnostics;
+  if (headDiagnostics.seqId == 0) {
+    headDiagnostics.seqId = encodedHead.seqId;
+    headDiagnostics.slotIndex = encodedHead.slotIndex;
+  }
+  CommandBufferDiagnostics tailDiagnostics = tail.diagnostics;
+  if (tailDiagnostics.seqId == 0) {
+    tailDiagnostics.seqId = tail.seqId;
+    tailDiagnostics.slotIndex = tail.slotIndex;
+  }
+  CommandBufferDiagnostics mergedDiagnostics{
+      .seqId = tail.seqId,
+      .slotIndex = tail.slotIndex,
+  };
+  mergedDiagnostics = mergeCommandBufferDiagnostics(
+      mergedDiagnostics, headDiagnostics);
+  mergedDiagnostics = mergeCommandBufferDiagnostics(
+      mergedDiagnostics, tailDiagnostics);
+  tail.diagnostics = mergedDiagnostics;
+
+  prependMoved(tail.renderEncoderGpuSamples,
+               std::move(encodedHead.renderEncoderGpuSamples));
+  prependMoved(tail.postCommitCallbacks, std::move(encodedHead.postCommitCallbacks));
+  prependMoved(tail.completionCallbacks, std::move(encodedHead.completionCallbacks));
+
+  if (encodedHead.metalCapture.has_value()) {
+    tail.metalCaptureDevice = encodedHead.metalCaptureDevice;
+    tail.metalCapture = std::move(encodedHead.metalCapture);
+    tail.metalCaptureAlreadyStarted = encodedHead.metalCaptureAlreadyStarted;
+  } else {
+    tail.metalCaptureAlreadyStarted =
+        tail.metalCaptureAlreadyStarted ||
+        encodedHead.metalCaptureAlreadyStarted;
+  }
+
+  return true;
+}
+
 Handle selectPresentSourceHandle(const SwapDesc& desc, Handle currentBackBuffer) noexcept {
   return desc.sourceSurface ? desc.sourceSurface : currentBackBuffer;
 }
@@ -326,6 +544,27 @@ CommandBufferDiagnostics QueueLifecycleController::summarizeSubmission(
     return CommandBufferDiagnostics{.seqId = seqId, .slotIndex = slotIndex};
   }
   return summarizeCommands(seqId, slotIndex, submissionBinding_.slots[slotIndex], resolveSurfaceFlags);
+}
+
+CommandBufferDiagnostics QueueLifecycleController::summarizeSubmissionSources(
+    const QueueSubmissionRecord& record,
+    std::span<const QueueCompletionSource> sources) const {
+  if (sources.empty()) {
+    return record.diagnostics.seqId == 0
+        ? summarizeSubmission(record.seqId, record.slotIndex)
+        : record.diagnostics;
+  }
+
+  CommandBufferDiagnostics result{
+      .seqId = record.seqId,
+      .slotIndex = record.slotIndex,
+  };
+  for (const auto& source : sources) {
+    auto sourceDiagnostics = summarizeSubmission(source.seqId, source.slotIndex);
+    sourceDiagnostics.hasPresent = sourceDiagnostics.hasPresent || source.hasPresent;
+    result = mergeCommandBufferDiagnostics(result, sourceDiagnostics);
+  }
+  return result;
 }
 
 void QueueLifecycleController::resetNoEnqueueGapProgressLocked() {
@@ -437,6 +676,31 @@ void QueueLifecycleController::recordNoEnqueueWaitGapToCommandBufferCommit() {
   noEnqueueGapCommandBufferCommitRecorded_ = true;
 }
 
+void QueueLifecycleController::recordCompletionWaitCommitChunkEntry() {
+  std::lock_guard lock(pendingCompletionMutex_);
+  if (!completionWaitActive_) {
+    return;
+  }
+  perf::countCompletionWaitCommitChunkEntry();
+}
+
+void QueueLifecycleController::recordCompletionWaitCommitChunkReplayStart() {
+  std::lock_guard lock(pendingCompletionMutex_);
+  if (!completionWaitActive_) {
+    return;
+  }
+  perf::countCompletionWaitCommitChunkReplayStart();
+}
+
+void QueueLifecycleController::recordCompletionWaitCommitChunkReplayEnd(
+    std::uint64_t replayNanoseconds) {
+  std::lock_guard lock(pendingCompletionMutex_);
+  if (!completionWaitActive_) {
+    return;
+  }
+  perf::countCompletionWaitCommitChunkReplayEnd(replayNanoseconds);
+}
+
 void QueueLifecycleController::recordNoEnqueueWaitGapToCommitChunkEntry() {
   std::lock_guard lock(pendingCompletionMutex_);
   if (lastNoEnqueueCompletionWaitEnd_ == std::chrono::steady_clock::time_point{}) {
@@ -537,6 +801,22 @@ void QueueLifecycleController::recordNoEnqueueCommitChunkRecordShapeBeforePublis
       shape.surfaceRecords,
       shape.queryRecords,
       shape.otherRecords);
+}
+
+void QueueLifecycleController::recordNoEnqueueFirstPublishSlotShapeBeforePublish(
+    const NoEnqueueFirstPublishSlotShape& shape) {
+  std::lock_guard lock(pendingCompletionMutex_);
+  if (lastNoEnqueueCompletionWaitEnd_ == std::chrono::steady_clock::time_point{} ||
+      noEnqueueGapCommitPublishRecorded_) {
+    return;
+  }
+  perf::countCompletionNoEnqueueFirstPublishSlotShape(
+      shape.commandCount,
+      shape.drawRunCommands,
+      shape.drawItems,
+      shape.nonDrawCommands,
+      shape.payloadBytes,
+      shape.presentCommands);
 }
 
 void QueueLifecycleController::observeTransition(const QueueTransitionRecord& record) const {
@@ -749,6 +1029,8 @@ bool QueueLifecycleController::commitCurrentChunk(
   observeCommitWait(publishedSlotIndex, slot.seqId, inflightLimit);
   recordNoEnqueueCommitPublishWaitBeforePublish(static_cast<std::uint64_t>(
       std::chrono::duration_cast<std::chrono::nanoseconds>(waitElapsed).count()));
+  recordNoEnqueueFirstPublishSlotShapeBeforePublish(
+      summarizeNoEnqueueFirstPublishSlotShape(slot));
   recordNoEnqueueWaitGapToCommitPublish();
   commitPublish(publishedSlotIndex, publishedSeqId, inflightLimit, [&] {
     slot.seqId = (*nextSeqId)++;
@@ -775,34 +1057,215 @@ bool QueueLifecycleController::commitCurrentChunk(
 bool QueueLifecycleController::dequeueReadySlot(std::unique_lock<std::mutex>& lock,
                                                 size_t& slotIndex,
                                                 ChunkSlot& slotCopy) {
+  std::array<ReadySlotSnapshot, 1> snapshots{};
+  const size_t count = dequeueReadySlotBatch(lock, std::span<ReadySlotSnapshot>(snapshots));
+  if (count == 0) {
+    return false;
+  }
+  slotIndex = snapshots[0].slotIndex;
+  slotCopy = snapshots[0].slot;
+  return true;
+}
+
+size_t QueueLifecycleController::dequeueReadySlotBatch(
+    std::unique_lock<std::mutex>& lock,
+    std::span<ReadySlotSnapshot> out,
+    const ReadySlotBatchAppendPredicate& canAppend) {
   // TLA+: QueueLifecycleRefinement / EncodeDequeue.
+  if (out.empty()) {
+    return 0;
+  }
   auto* readySlots = submissionBinding_.readySlots;
   auto* encodeCv = submissionBinding_.encodeCv;
   auto* stop = submissionBinding_.stop;
   if (!readySlots || !encodeCv || !stop) {
-    return false;
+    return 0;
   }
 
   encodeCv->wait(lock, [&] { return *stop || !readySlots->empty(); });
   if (*stop && readySlots->empty()) {
-    return false;
+    return 0;
   }
 
   perf::countEncodeDequeueReadyDepth(
       static_cast<std::uint64_t>(readySlots->size()));
-  slotIndex = readySlots->front();
-  auto& slot = submissionBinding_.slots[slotIndex];
-  traceEncodeIterationStage("dequeue.selected", slotIndex, slot);
-  recordNoEnqueueWaitGapToEncodeDequeue();
-  encodeDequeue(slotIndex, slot.seqId, [&] {
-    readySlots->pop_front();
-    slot.state = ChunkSlot::State::Encoding;
-  });
-  traceEncodeIterationStage("dequeue.after-transition", slotIndex, slot);
-  traceEncodeIterationStage("dequeue.before-slot-copy", slotIndex, slot);
-  slotCopy = slot;
-  traceEncodeIterationStage("dequeue.after-slot-copy", slotIndex, slotCopy);
+  const size_t maxCount = std::min(out.size(), readySlots->size());
+  size_t count = 0;
+  for (size_t i = 0; i < maxCount; ++i) {
+    const size_t slotIndex = readySlots->front();
+    auto& slot = submissionBinding_.slots[slotIndex];
+    if (i != 0 && canAppend &&
+        !canAppend(std::span<const ReadySlotSnapshot>(out.data(), i),
+                   slotIndex, slot)) {
+      break;
+    }
+    traceEncodeIterationStage("dequeue.selected", slotIndex, slot);
+    if (i == 0) {
+      recordNoEnqueueWaitGapToEncodeDequeue();
+    }
+    encodeDequeue(slotIndex, slot.seqId, [&] {
+      readySlots->pop_front();
+      slot.state = ChunkSlot::State::Encoding;
+    });
+    traceEncodeIterationStage("dequeue.after-transition", slotIndex, slot);
+    traceEncodeIterationStage("dequeue.before-slot-copy", slotIndex, slot);
+    out[i] = ReadySlotSnapshot{
+        .slotIndex = slotIndex,
+        .slot = slot,
+    };
+    traceEncodeIterationStage("dequeue.after-slot-copy", slotIndex, out[i].slot);
+    ++count;
+  }
+  return count;
+}
+
+size_t QueueLifecycleController::dequeueReadySlotBatchPrefix(
+    std::unique_lock<std::mutex>& lock,
+    std::span<ReadySlotSnapshot> out,
+    const ReadySlotBatchPrefixSelector& selectPrefix) {
+  // TLA+: QueueLifecycleRefinement / EncodeDequeue.
+  if (out.empty()) {
+    return 0;
+  }
+  auto* readySlots = submissionBinding_.readySlots;
+  auto* encodeCv = submissionBinding_.encodeCv;
+  auto* stop = submissionBinding_.stop;
+  if (!readySlots || !encodeCv || !stop) {
+    return 0;
+  }
+
+  encodeCv->wait(lock, [&] { return *stop || !readySlots->empty(); });
+  if (*stop && readySlots->empty()) {
+    return 0;
+  }
+
+  perf::countEncodeDequeueReadyDepth(
+      static_cast<std::uint64_t>(readySlots->size()));
+  const size_t maxCount = std::min(out.size(), readySlots->size());
+  size_t count = 0;
+  if (selectPrefix) {
+    count = selectPrefix(
+        *readySlots,
+        std::span<const ChunkSlot>(
+            submissionBinding_.slots.data(),
+            submissionBinding_.slots.size()),
+        maxCount);
+    DXMT_ASSERT(count <= maxCount);
+    count = std::min(count, maxCount);
+  }
+  if (count == 0) {
+    count = 1u;
+  }
+
+  for (size_t i = 0; i < count; ++i) {
+    const size_t slotIndex = readySlots->front();
+    auto& slot = submissionBinding_.slots[slotIndex];
+    traceEncodeIterationStage("dequeue.selected", slotIndex, slot);
+    if (i == 0) {
+      recordNoEnqueueWaitGapToEncodeDequeue();
+    }
+    encodeDequeue(slotIndex, slot.seqId, [&] {
+      readySlots->pop_front();
+      slot.state = ChunkSlot::State::Encoding;
+    });
+    traceEncodeIterationStage("dequeue.after-transition", slotIndex, slot);
+    traceEncodeIterationStage("dequeue.before-slot-copy", slotIndex, slot);
+    out[i] = ReadySlotSnapshot{
+        .slotIndex = slotIndex,
+        .slot = slot,
+    };
+    traceEncodeIterationStage("dequeue.after-slot-copy", slotIndex, out[i].slot);
+  }
+  return count;
+}
+
+bool QueueLifecycleController::stageLastReadySlot(
+    std::unique_lock<std::mutex>& lock,
+    std::deque<size_t>& stagedSlots,
+    size_t expectedSlotIndex) {
+  DXMT_ASSERT(lock.owns_lock());
+  static_cast<void>(lock);
+  auto* readySlots = submissionBinding_.readySlots;
+  if (!readySlots || readySlots->empty()) {
+    return false;
+  }
+  if (readySlots->back() != expectedSlotIndex) {
+    return false;
+  }
+
+  stagedSlots.push_back(expectedSlotIndex);
+  readySlots->pop_back();
+#ifndef NDEBUG
+  assertQueueLifecycleInvariants();
+#endif
   return true;
+}
+
+size_t QueueLifecycleController::releaseStagedSlotsBeforeReadyTail(
+    std::unique_lock<std::mutex>& lock,
+    std::deque<size_t>& stagedSlots,
+    size_t tailSlotIndex) {
+  DXMT_ASSERT(lock.owns_lock());
+  static_cast<void>(lock);
+  if (stagedSlots.empty()) {
+    return 0;
+  }
+
+  auto* readySlots = submissionBinding_.readySlots;
+  if (!readySlots || readySlots->empty() || readySlots->back() != tailSlotIndex) {
+    return 0;
+  }
+
+  readySlots->pop_back();
+  const size_t releasedCount = stagedSlots.size();
+  while (!stagedSlots.empty()) {
+    readySlots->push_back(stagedSlots.front());
+    stagedSlots.pop_front();
+  }
+  readySlots->push_back(tailSlotIndex);
+#ifndef NDEBUG
+  assertQueueLifecycleInvariants();
+#endif
+  if (submissionBinding_.encodeCv) {
+    submissionBinding_.encodeCv->notify_one();
+  }
+  return releasedCount;
+}
+
+size_t QueueLifecycleController::retainEncodedSourcesForPendingTail(
+    std::unique_lock<std::mutex>& lock,
+    std::span<const ReadySlotSnapshot> sources,
+    std::span<QueueCompletionSource> out) {
+  DXMT_ASSERT(lock.owns_lock());
+  static_cast<void>(lock);
+  if (sources.empty() || out.size() < sources.size()) {
+    return 0;
+  }
+
+  u64 previousSeqId = 0;
+  for (const auto& source : sources) {
+    if (source.slotIndex >= submissionBinding_.slots.size()) {
+      return 0;
+    }
+    const auto& liveSlot = submissionBinding_.slots[source.slotIndex];
+    if (liveSlot.state != ChunkSlot::State::Encoding ||
+        liveSlot.seqId != source.slot.seqId ||
+        liveSlot.seqId == 0) {
+      return 0;
+    }
+    if (previousSeqId != 0 && liveSlot.seqId != previousSeqId + 1) {
+      return 0;
+    }
+    previousSeqId = liveSlot.seqId;
+  }
+
+  for (size_t i = 0; i < sources.size(); ++i) {
+    out[i] = completionSourceForReadySlot(sources[i]);
+  }
+#ifndef NDEBUG
+  assertQueueLifecycleInvariants();
+#endif
+  return sources.size();
 }
 
 bool QueueLifecycleController::runEncodeIteration(
@@ -824,6 +1287,9 @@ bool QueueLifecycleController::runEncodeIteration(
   if (encodeFn) {
     traceEncodeIterationStage("iteration.before-encodefn", slotIndex, slotCopy);
     submission = encodeFn(slotIndex, slotCopy);
+    if (submission.has_value() && !submission->commandBuffer) {
+      submission.reset();
+    }
     traceEncodeIterationStage(submission.has_value()
                                   ? "iteration.after-encodefn-submission"
                                   : "iteration.after-encodefn-inline",
@@ -860,6 +1326,67 @@ bool QueueLifecycleController::runEncodeIteration(
   return true;
 }
 
+bool QueueLifecycleController::runEncodeBatchIteration(
+    std::unique_lock<std::mutex>& lock,
+    std::span<ReadySlotSnapshot> scratch,
+    const std::function<std::optional<QueueSubmissionRecord>(
+        std::span<ReadySlotSnapshot>)>& encodeFn,
+    const std::function<void(u64)>& onInlineComplete,
+    const ReadySlotBatchAppendPredicate& canAppend,
+    const ReadySlotBatchPrefixSelector& selectPrefix) {
+  const size_t count = selectPrefix
+      ? dequeueReadySlotBatchPrefix(lock, scratch, selectPrefix)
+      : dequeueReadySlotBatch(lock, scratch, canAppend);
+  if (count == 0) {
+    return false;
+  }
+
+  const auto sources = scratch.first(count);
+  for (const auto& source : sources) {
+    traceEncodeIterationStage("batch.after-dequeue", source.slotIndex, source.slot);
+  }
+  lock.unlock();
+
+  std::optional<QueueSubmissionRecord> submission;
+  if (encodeFn) {
+    submission = encodeFn(sources);
+    if (submission.has_value() && !submission->commandBuffer) {
+      submission.reset();
+    }
+  }
+
+  lock.lock();
+  if (submission.has_value()) {
+    if (sources.size() > 1 && submission->completionSources.empty()) {
+      submission->completionSources.reserve(sources.size());
+      for (const auto& source : sources) {
+        submission->completionSources.push_back(completionSourceForReadySlot(source));
+      }
+    }
+#ifndef NDEBUG
+    if (sources.size() > 1) {
+      DXMT_ASSERT(!submission->completionSources.empty());
+    }
+#endif
+    auto postCommitCallbacks = std::move(submission->postCommitCallbacks);
+    enqueueSubmission(*submission);
+    lock.unlock();
+    for (auto& callback : postCommitCallbacks) {
+      if (callback) {
+        callback();
+      }
+    }
+  } else {
+    for (const auto& source : sources) {
+      completeInlineChunk(source.slotIndex, source.slot.seqId);
+      if (onInlineComplete) {
+        onInlineComplete(source.slot.seqId);
+      }
+    }
+  }
+  return true;
+}
+
 void QueueLifecycleController::appendPresentCommand(const SwapDesc& present, Handle sourceHandle) {
   // TLA+: PresentFrameLatency / CommitPresent metadata lane.
   auto* writingSlot = submissionBinding_.writingSlot;
@@ -886,6 +1413,14 @@ void QueueLifecycleController::submitEncodedChunk(WMT::Reference<WMT::CommandBuf
   record.diagnostics = summarizeSubmission(seqId, slotIndex);
   record.context = context;
   enqueueSubmission(record);
+}
+
+void QueueLifecycleController::submitEncodedSubmission(
+    std::unique_lock<std::mutex>& lock,
+    QueueSubmissionRecord& record) {
+  DXMT_ASSERT(lock.owns_lock());
+  static_cast<void>(lock);
+  submit(record);
 }
 
 void QueueLifecycleController::completeInlineChunk(size_t slotIndex, u64 seqId) {
@@ -1313,13 +1848,22 @@ void QueueLifecycleController::assertPendingCompletionInvariantsLocked() const {
   const u64 lastCommittedSeqId = binding.lastCommittedSeqId ? *binding.lastCommittedSeqId : 0;
   u64 previousSeqId = 0;
   for (const auto& pending : pendingCompletion_) {
-    DXMT_ASSERT(pending.slotIndex < slots.size());
-    DXMT_ASSERT(slots[pending.slotIndex].state == ChunkSlot::State::GPU);
-    DXMT_ASSERT(slots[pending.slotIndex].seqId == pending.seqId);
-    DXMT_ASSERT(pending.seqId > 0);
-    DXMT_ASSERT(pending.seqId <= lastCommittedSeqId);
-    DXMT_ASSERT(previousSeqId == 0 || pending.seqId > previousSeqId);
-    previousSeqId = pending.seqId;
+    const auto fallbackSources = fallbackCompletionSource(
+        pending.slotIndex,
+        pending.seqId,
+        pending.diagnostics.hasPresent);
+    const auto completionSources = completionSourcesFor(
+        pending.completionSources,
+        fallbackSources);
+    for (const auto& source : completionSources) {
+      DXMT_ASSERT(source.slotIndex < slots.size());
+      DXMT_ASSERT(slots[source.slotIndex].state == ChunkSlot::State::GPU);
+      DXMT_ASSERT(slots[source.slotIndex].seqId == source.seqId);
+      DXMT_ASSERT(source.seqId > 0);
+      DXMT_ASSERT(source.seqId <= lastCommittedSeqId);
+      DXMT_ASSERT(previousSeqId == 0 || source.seqId > previousSeqId);
+      previousSeqId = source.seqId;
+    }
   }
 }
 #endif
@@ -1340,26 +1884,35 @@ void QueueLifecycleController::transition(QueueTransitionRecord record,
 }
 
 void QueueLifecycleController::submit(QueueSubmissionRecord& record) {
-  CommandBufferDiagnostics diagnostics = record.diagnostics;
-  if (diagnostics.seqId == 0) {
-    diagnostics = summarizeSubmission(record.seqId, record.slotIndex);
-  }
-
-  const auto beforeCommitState = currentState();
-  if (record.slotIndex < submissionBinding_.slots.size()) {
-    submissionBinding_.slots[record.slotIndex].state = ChunkSlot::State::GPU;
-  }
-  const auto afterCommitState = currentState();
+  const auto fallbackSources = fallbackCompletionSource(
+      record.slotIndex, record.seqId, record.diagnostics.hasPresent);
+  const auto completionSources = completionSourcesFor(
+      record.completionSources, fallbackSources);
+  const CommandBufferDiagnostics diagnostics =
+      summarizeSubmissionSources(record, completionSources);
+  for (const auto& source : completionSources) {
+    const auto beforeCommitState = currentState();
 #ifndef NDEBUG
-  assertQueueLifecycleInvariants();
+    DXMT_ASSERT(source.slotIndex < submissionBinding_.slots.size());
+    DXMT_ASSERT(submissionBinding_.slots[source.slotIndex].state ==
+                ChunkSlot::State::Encoding);
+    DXMT_ASSERT(submissionBinding_.slots[source.slotIndex].seqId == source.seqId);
+#endif
+    if (source.slotIndex < submissionBinding_.slots.size()) {
+      submissionBinding_.slots[source.slotIndex].state = ChunkSlot::State::GPU;
+    }
+    const auto afterCommitState = currentState();
+#ifndef NDEBUG
+    assertQueueLifecycleInvariants();
 #endif
 
-  observeTransition(QueueTransitionRecord{
-      .before = beforeCommitState,
-      .after = afterCommitState,
-      .slotIndex = record.slotIndex,
-      .eventSeqId = record.seqId,
-  });
+    observeTransition(QueueTransitionRecord{
+        .before = beforeCommitState,
+        .after = afterCommitState,
+        .slotIndex = source.slotIndex,
+        .eventSeqId = source.seqId,
+    });
+  }
 
   if (!record.commandBuffer) {
     return;
@@ -1448,6 +2001,7 @@ void QueueLifecycleController::submit(QueueSubmissionRecord& record) {
     pending.contextValue = record.context ? record.context : "queue";
     pending.slotIndex = record.slotIndex;
     pending.seqId = record.seqId;
+    pending.completionSources = std::move(record.completionSources);
     pending.commandBufferChainLength = record.commandBufferChainLength;
     pending.enqueueTime = enqueueTime;
     pending.renderEncoderGpuSampleBuffer =
@@ -1583,24 +2137,32 @@ bool QueueLifecycleController::processOnePendingCompletion(bool& stop) {
   }
   if (binding.mutex && binding.completedSeqQueue) {
     std::lock_guard completionLock(*binding.mutex);
-    const QueueControllerState before = makeBoundQueueState(binding);
-    // TLA+: QueueLifecycleRefinement / GpuComplete.
-    DXMT_ASSERT(pending.seqId == (binding.completedSeqId ? *binding.completedSeqId : 0) +
-                                   binding.completedSeqQueue->size() + 1);
-    binding.completedSeqQueue->push_back(pending.seqId);
-    if (pending.diagnostics.hasPresent && binding.completedPresentSeqQueue) {
-      binding.completedPresentSeqQueue->push_back(pending.seqId);
-    }
-    const QueueControllerState after = makeBoundQueueState(binding);
+    const u64 completedSeqId = binding.completedSeqId ? *binding.completedSeqId : 0;
+    const auto fallbackSources = fallbackCompletionSource(
+        pending.slotIndex,
+        pending.seqId,
+        pending.diagnostics.hasPresent);
+    const auto completionSources = completionSourcesFor(
+        pending.completionSources,
+        fallbackSources);
+    for (const auto& source : completionSources) {
+      const QueueControllerState before = makeBoundQueueState(binding);
+      appendCompletionSourcesToQueues(
+          *binding.completedSeqQueue,
+          binding.completedPresentSeqQueue,
+          completedSeqId,
+          std::span<const QueueCompletionSource>(&source, 1));
+      const QueueControllerState after = makeBoundQueueState(binding);
 #ifndef NDEBUG
-    assertQueueLifecycleInvariants();
+      assertQueueLifecycleInvariants();
 #endif
-    observeTransition(QueueTransitionRecord{
-        .before = before,
-        .after = after,
-        .slotIndex = pending.slotIndex,
-        .eventSeqId = pending.seqId,
-    });
+      observeTransition(QueueTransitionRecord{
+          .before = before,
+          .after = after,
+          .slotIndex = source.slotIndex,
+          .eventSeqId = source.seqId,
+      });
+    }
     if (binding.finishCv) {
       binding.finishCv->notify_all();
     }

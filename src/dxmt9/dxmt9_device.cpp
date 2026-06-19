@@ -223,6 +223,10 @@ class DeviceImpl final : public Device {
   void submitDrawRunBatch(std::span<core::DrawRunSubmission> submissions) override {
     queue_.submitDrawRunBatch(submissions);
   }
+  void submitCompactDrawRunBatch(
+      std::span<core::DrawRunCompactSubmission> submissions) override {
+    queue_.submitCompactDrawRunBatch(submissions);
+  }
   void markChunkResources(std::span<const core::ChunkHandleEntry> entries) override {
     queue_.markChunkResources(entries);
   }

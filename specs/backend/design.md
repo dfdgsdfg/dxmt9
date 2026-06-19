@@ -369,6 +369,13 @@ Invariants the overlap must preserve:
 - **Lifetime** — early CPU-ready or committed work marks retained resources
   against its `seqId` before visibility to the encode thread (`ResourceLifetime`
   `NoUseAfterFree`, R-BACK-2.38).
+- **Tail-Present staging** — GT1 H86 shows the current Present-published slot is
+  already a large tail-Present stream (`~329` commands and `~739` draw items per
+  present before the final Present command, `100%` tail-Present slots). The
+  production candidate is therefore not the existing diagnostic
+  `DXMT9_SPLIT_PRESENT_CHUNK` path, which publishes pre-Present work and Present
+  as separate chunks, but a CPU-ready staging form where the encoder can still
+  choose a coalesced tail command-buffer / render-pass shape.
 
 Verification:
 
@@ -381,18 +388,34 @@ Verification:
   completes exactly one `seqId`. A coalesced Metal tail CB is an implementation
   carrier for several consecutive source `seqId`s; when the tail completes,
   `PendingCompletion` expands that event into strictly ordered per-`seqId`
-  `GpuComplete` transitions. Native queue tests cover this CB-to-N-seq
-  expansion.
+  `GpuComplete` transitions. The implementation carrier is allowed to name only
+  source slots that have already gone through `EncodeDequeue` and are in
+  `Encoding` state. `dequeueReadySlotBatch()` is the queue-owned primitive for
+  moving several consecutive ready slots into `Encoding` without allocating, and
+  `runEncodeBatchIteration()` hands a caller-owned batch scratch span to a
+  backend selector. `CommandQueue::runEncodeBatchLoop()` and
+  `IRenderBackend::onChunkBatchReady()` expose that contract without changing
+  current production behavior: the default backend batch method delegates only
+  single-source batches to `onChunkReady`, and returns `nullopt` for empty or
+  multi-source batches until a backend implements a real coalesced encode. The
+  production encode loop still calls `runEncodeIteration()` / `onChunkReady()`.
+  Debug invariants assert slot index, state, and seqId before `submit()` moves
+  those sources to GPU. Submission diagnostics are aggregated from the source
+  slots, not inferred from only the tail slot, so present/draw/blit wait counters
+  stay meaningful once a coalesced tail carries several source `seqId`s. Native
+  queue tests cover ready-slot batch dequeue, source metadata derivation,
+  empty-submission inline fallback, default backend batch fallback, and the
+  completion queue's CB-to-N-seq expansion.
 - Counters / A-B — `completion_wait_with_enqueue_ms` ↑ and
   `completion_wait_without_enqueue_ms` ↓ at non-increasing
   `command_buffers_per_present` / `passes_per_present` / `tile_preservation_mib`
   (H43 overlap + H57 locality gates in
-  `scripts/tools/compare_3dmark05_perf_counters.py`). Current code wires A to
-  C opportunistically: `DXMT9_OFFSCREEN_RUN_AHEAD` enables deterministic
-  pass-boundary publish and, unless overridden, encode-side coalescing of
-  consecutive non-present/non-readback ready slots into one Metal command
-  buffer. Full B (`CpuReady` staging before slot publish / CB selection) remains
-  future work.
+  `scripts/tools/compare_3dmark05_perf_counters.py`). Historical A/C and B
+  prototypes (`DXMT9_OFFSCREEN_RUN_AHEAD` plus ready-slot coalescing, then
+  CPU-ready staging) proved that the P4 wait can move, but they were reverted
+  after failing locality, total-wait, and visual-correctness gates. Current HEAD
+  has no production run-ahead implementation; a future attempt must reintroduce
+  the staging/coalescing carrier with the gates above and dedicated verification.
 - Performance model — `docs/perfomance/present-pacing.md` (H10
   under-pipelining, H54/H56 draw-count-carrier rejection, H57 locality gates,
   H73 run-ahead design gate).

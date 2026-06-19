@@ -33,15 +33,21 @@ build. `shader_corpus_tool.py` is also imported by the Meson tests under
   `run_3dmark05_perf_probe.sh` output directories by dxmt9 perf counters. Use
   it through wrapper/finalizer `--compare-baseline-output <baseline-output>`
   when possible so no-gputrace scouts and post-Xcode finalization use the same
-  gates. The P4 gates distinguish total completion/present wait from recovered
+  gates. Directory inputs and direct `result.json` inputs both attach
+  `3dmark05-perf-encoders.csv` from the same output directory when it exists, so
+  encoder-sidecar gates are path-shape independent. The P4 gates distinguish
+  total completion/present wait from recovered
   enqueue overlap (`--require-completion-present-wait-decrease`,
   `--require-completion-wait-with-enqueue-increase`,
   `--require-completion-wait-without-enqueue-decrease`). The P2/P3 gates track
   serialized replay/snapshot/encode owners per present
   (`--require-commit-chunk-replay-cpu-per-present-decrease`,
   `--require-encode-chunk-cpu-per-present-decrease`, and the
-  `--require-no-enqueue-*` stage gates). Uniform owner gates split byte-width
-  proof from CPU-owner proof, including snapshot uniform build/hash,
+  `--require-no-enqueue-*` stage gates). For current P4 reviews, also gate the
+  first-publish closure directly with
+  `--require-no-enqueue-before-publish-closure-decrease` or the dominant
+  `--require-no-enqueue-before-publish-inter-replay-gap-decrease` row. Uniform
+  owner gates split byte-width proof from CPU-owner proof, including snapshot uniform build/hash,
   batch-miss VS/PS/nonconst hash, snapshot uniform copy, and backend uniform
   append/lookup/copy gates such as
   `--require-snapshot-cache-uniform-hash-cpu-per-present-decrease` and
@@ -51,13 +57,30 @@ build. `shader_corpus_tool.py` is also imported by the Meson tests under
   building a new carrier. Use
   `--require-current-uniform-compact-saved-bytes-present` for standalone
   scouts, and `--require-uniform-compact-saved-bytes-present` only with
-  `--compare-baseline-output` for before/after comparisons.
+  `--compare-baseline-output` for before/after comparisons. State-copy cleanup
+  gates are separate: `--require-snapshot-state-elided-present` keeps the
+  accepted N-1 state elision path active, and
+  `--require-discarded-state-not-increase` rejects regressions in residual
+  non-front backend state materialization. Compact-carrier experiments should
+  read the reported unused full-uniform storage rows first; they count
+  compact/elided submission records that still reserve the inline full-uniform
+  lane inside `DrawRunSubmission`. Then gate
+  `--require-submission-carrier-bytes-per-record-decrease` and, when the
+  intended mechanism is removing inline full uniform storage,
+  `--require-submission-carrier-uniform-storage-per-record-decrease`.
   For P4 overlap candidates, combine the overlap gates with locality-preserving
-  checks: `--require-command-buffers-per-present-not-increase`,
+  checks. `--require-encode-ready-depth-gt1-increase` proves the encoder saw
+  more than one ready slot before popping, while
+  `--require-command-buffers-per-present-not-increase`,
   `--require-render-passes-per-present-not-increase`, and
-  `--require-tile-preservation-not-increase`. These reject candidates that
+  `--require-tile-preservation-not-increase` reject candidates that
   create enqueue overlap only by fragmenting Metal command buffers, render
-  passes, or tile-preservation traffic.
+  passes, or tile-preservation traffic. Open-CB/pass-carrier candidates must
+  also use `--require-encoder-final-end-reason-not-increase`,
+  `--require-encoder-color-load-not-increase`, and
+  `--require-encoder-depth-load-not-increase` so chunk-final render-pass
+  closures and attachment reload amplification fail before any `.gputrace`
+  spend.
 - `summarize_xctrace_metal_intervals.py` — parse xctrace
   `metal-gpu-intervals` XML and join dxmt9 encoder attribution by
   `RenderPass[seq=...,enc=...]`. Use it as a timing/label sidecar for 3DMark05
@@ -114,8 +137,10 @@ build. `shader_corpus_tool.py` is also imported by the Meson tests under
   before copying it, but manual installs must do the same or new env filters
   will not exist in the active Wine provider. The sidecar also has a
   `--min-free-mb N` / `DXMT_3DMARK05_SYSTEM_TRACE_MIN_FREE_MB` launch guard
-  because normal Metal System Trace bundles can be large; dry-runs print the
-  free-space decision without starting xctrace. Pass `--export-cpu-summary` for
+  because normal Metal System Trace bundles can be large; the default is
+  `4096` after a 10s all-processes 3DMark05 trace failed during Instruments
+  trim with about `2.4GiB` free. Dry-runs print the free-space decision without
+  starting xctrace. Pass `--export-cpu-summary` for
   present-pacing / winemac `OnMainThread` scouts; it additionally exports
   required `time-profile` plus optional `time-sample` and `thread-info` tables
   into the trace analysis directory, writes `xctrace-cpu-thread-summary.{csv,md}` plus
@@ -293,6 +318,8 @@ build. `shader_corpus_tool.py` is also imported by the Meson tests under
   Pass `--wait-unlocked-sec N` when the command should poll the macOS lock
   state and launch automatically after unlock; dry-runs and expired waits do
   not create probe artifacts.
+  Add `--keep-frontmost` for no-gputrace A/B runs where 3DMark05 losing focus
+  changes scene progress, present count, or frame-sampling FPS.
   Add `--frame-sampling` for no-gputrace visual/perf-coupling runs; it emits
   per-Present wall-clock `wall_ms/fps` plus draw/pass/wait deltas and writes
   `3dmark05-perf-frames.csv` through the summary step.
@@ -306,10 +333,11 @@ build. `shader_corpus_tool.py` is also imported by the Meson tests under
   `--index-cache-candidate-bucketed-select`,
   `--index-cache-candidate-strict-lru`, and
   `--index-cache-candidate-upper-bound-gate`; treat all candidate-order
-  changes as hypotheses until no-gputrace counters and a `v0.0.1` visual anchor
-  check agree. Use the diff image against `v0.0.1` to catch black/translucent
-  vertices, broken UVs, texture/color drift, and cbuf-identity artifacts, while
-  reserving raw pixel percentages from time-based screenshots for triage only.
+  changes as hypotheses until no-gputrace counters and a `v0.0.3` visual-safe
+  anchor check agree. Use the diff image against `v0.0.3` to catch
+  black/translucent vertices, broken UVs, texture/color drift, and
+  cbuf-identity artifacts, while reserving raw pixel percentages from
+  time-based screenshots for triage only.
   `--probe-fragmentless-depth-only-row SEQ/ENC` is a diagnostic-only
   backend-shape route smoke for depth-only rows; it still requires equality and
   Xcode counter proof before any promotion. Run

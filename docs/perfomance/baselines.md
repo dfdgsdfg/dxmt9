@@ -31,13 +31,13 @@ every A/B delta elsewhere is measured against [[baselines-frame50.01]],
 | H5 | A no-gputrace timeout-finalized run is a valid counter sample (not a wall-clock FPS sample) | accepted | [[baselines-frame50.03]] |
 | H6 | The new top-level watchdog + Wine cleanup path preserves baseline counter shape | accepted | [[baselines-frame50.04]] |
 | H7 | A time-based GT1 `actual.png` alone can prove visual correctness after optimization changes | rejected | [[baselines-visual-capture.01]] |
-| H8 | The `v0.0.1` tag is the known-good visual correctness / alignment anchor for GT1 regression triage, and screenshot diffs against it are useful corruption finders | accepted | [[baselines-visual-capture.02]] |
+| H8 | The `v0.0.1` tag was a useful early coherent screenshot-diff artifact, but the last known GT1 visual-safe code point is `v0.0.3`; screenshot diffs remain broad corruption finders, not raw pixel gates | superseded by `v0.0.3` | [[baselines-visual-capture.02]], [[snapshot-cache-visual.01]] |
 | H9 | `MTL_CAPTURE_ENABLED=1` is required for standard 3DMark05 gputrace probes | rejected / diagnostic-only | [[baselines-gputrace-capture.01]], [[baselines-gputrace-capture.02]] (`MTL_CAPTURE_ENABLED=1` previously reproduced black-screen startup with draw/present counters at zero, so it is not a default perf-run env; after the fragment-function lifetime fix, the explicit capture-layer diagnostic route can produce a valid `frame60.gputrace` and Xcode counters) |
 | H10 | Current visual-coupling frame60 smoke shows skipped/error/overflow/hazard-split work as the obvious muzzle/glow perf owner | rejected-current-smoke; post-`01:05` oracle refresh stays flat (`draw_skipped_no_pipeline=0`, `gpu_command_buffer_errors=0`, `map_buffer_wait_ms=0`, `queue_sequence_wait_ms=0`), while RT/depth/clear/present pass churn remains open | [[baselines-frame60.03]] |
 | H11 | The 120s no-gputrace timeout policy still produces standard `result.json` evidence when the wrapper watchdog includes capture delay | accepted | [[baselines-frame50.05]] |
 | H12 | The current renderer is stuck in an FPS-zero state after the latest sidecar/visual work | rejected-current | [[baselines-frame60.04]] (`--no-encoder-breakdown` scout p50/p95 FPS `18.081`/`26.648`, last sample `24.798fps`, visual state observed normal; heavy sidecar FPS tails remain instrumentation caveat) |
-| H13 | The current `.gputrace` / System Trace preflight blocks full GT1 capture on disk space | accepted disk preflight block | [[baselines-gputrace-preflight.02]] (repository free space is about `605MiB` versus the `2048MiB` guard; Developer Mode is now enabled, and file capture-layer preflight passes through the Wine capture-layer wrapper) |
-| H14 | Current capture-layer file route can produce Xcode encoder counters again | accepted | [[baselines-gputrace-capture.02]] (`frame60.gputrace` written, performance export and encoder counters exported; latest integrated `--with-wine-capture-layer` wrapper run has `10` encoder rows, Xcode reports `37.492ms`, `10` render encoders, `396` draw calls, top-three `98.40%`) |
+| H13 | Current `.gputrace` / System Trace preflight is operational for file/sidecar routes, while Xcode `developerTools` attach remains blocked | accepted current preflight plus file export | [[baselines-gputrace-preflight.02]] now records `~168GiB` free, full Xcode, Developer Mode enabled, file `.gputrace` dry-run passing through `--with-wine-capture-layer`, System Trace sidecar dry-run passing the `4096MiB` guard, and a real `capture-layer-current-r2-20260619` file-route export finalized into Xcode/dxmt reports. The old `~605MiB < 2048MiB` disk block is historical only. The Xcode `developerTools` route is still unavailable because attach preflight stays at `process-list-loading` / `Getting Process List...`; use file `.gputrace` or System Trace until that preflight passes. |
+| H14 | Current capture-layer file route can produce Xcode encoder counters again | accepted | [[baselines-gputrace-capture.02]] (`frame60.gputrace` written, performance export and encoder counters exported; latest current-worktree `--with-wine-capture-layer` wrapper run has `10` encoder rows, Xcode reports `35.919ms`, `10` render encoders, `396` draw calls, top-three `98.26%`) |
 
 ## Verification methods
 
@@ -77,9 +77,10 @@ flowchart TD
   F50wd["baselines-frame50.04\nwatchdog-cleanup scout\n2026-06-06, gpu cb 4208ms\nsame shape, no manual kill"]
   F50wd120["baselines-frame50.05\n120s capture-delay-aware watchdog\n2026-06-12, result.json preserved\nsame post-uniform shape"]
   Visual["baselines-visual-capture.01\ntime-based screenshot caveat\nnot a visual oracle"]
-  VisualAnchor["baselines-visual-capture.02\nv0.0.1 visual correctness anchor\ndiff-assisted triage"]
+  VisualAnchorOld["baselines-visual-capture.02\nv0.0.1 historical screenshot diff\ntriage only"]
+  VisualAnchor["snapshot-cache-visual.01\nv0.0.3 last visual-safe code point\nuniform ABI-prefix correctness"]
   CaptureEnv["baselines-gputrace-capture.01\nMTL_CAPTURE_ENABLED black-screen\nwrapper omits it by default"]
-  CapturePreflight["baselines-gputrace-preflight.02\ncurrent dry-run block\n~605MiB < 2048MiB\nDeveloper Mode enabled"]
+  CapturePreflight["baselines-gputrace-preflight.02\nfile route dry-run OK\nSystem Trace dry-run OK\ndeveloperTools attach blocked"]
   CaptureRecovered["baselines-gputrace-capture.02\ncapture layer recovered\nframe60 Xcode counters"]
   F60["baselines-frame60.01\nframe60 validation\n34.02ms / top3 98.41%\nVS write 1627.4MiB"]
   F60post["baselines-frame60.02\npost-visualfix frame60\n33.614ms / top3 98.12%\nhidden 1597.8MiB"]
@@ -97,7 +98,8 @@ flowchart TD
   F50to -->|supervised-timeout-refresh| F50wd
   F50wd -->|120s policy refresh| F50wd120
   F50wd -->|visual-smoke-caveat| Visual
-  Visual -->|anchor-refined-by| VisualAnchor
+  Visual -->|historical-diff-triage| VisualAnchorOld
+  VisualAnchorOld -->|superseded-by| VisualAnchor
   VisualAnchor -->|visual-alignment anchor for| F60post
   CaptureEnv -->|standard gputrace launch hygiene for| F60post
   CaptureEnv -->|preflight-refreshed-by| CapturePreflight
@@ -112,7 +114,7 @@ flowchart TD
   F60post -->|baseline-for| Backend["[[backend-shape-classifiers]]"]
   F60post -->|baseline-for| Churn["[[state-churn-encode]]"]
 
-  class F120,F50,F50san,F50to,F50wd,F50wd120,F60,F60post,F60vc,F60low,RunLevel,VisualAnchor,CapturePreflight,CaptureRecovered accepted
+  class F120,F50,F50san,F50to,F50wd,F50wd120,F60,F60post,F60vc,F60low,RunLevel,VisualAnchorOld,VisualAnchor,CapturePreflight,CaptureRecovered accepted
   class Visual,CaptureEnv rejected
   class Store,IdxCache,VSOut,Backend,Churn open
 ```
@@ -132,10 +134,10 @@ flowchart TD
 | [[baselines-frame60.02]] | 2026-06-06 | `33.614ms` | `32.984ms` / `98.12%` | post-visualfix refresh; VS write `1627.332MiB`; hidden backend `1597.755MiB`; dxmt CPU `0.202MiB`; `7.9x` |
 | [[baselines-frame60.03]] | 2026-06-07/08 | — | — | visual-coupling no-gputrace scouts; initial run and post-`01:05` oracle refresh both keep `present_encoded=1680`, `draw_skipped_no_pipeline=0`, `gpu_command_buffer_errors=0`, `map_buffer_wait_ms=0`, `queue_sequence_wait_ms=0`; refresh split reasons are RT/depth `13,163`, clear `4,895`, present `1,673`; render-pass preservation remains `~120.1MiB/present`; sampled average `15.753fps`, steady late frames `~23fps` |
 | [[baselines-frame60.04]] | 2026-06-13 | — | — | low-overhead no-gputrace recovery scout after FPS-zero observation; `--no-encoder-breakdown`, `1,807` frame samples, p50/p95/max FPS `18.081`/`26.648`/`30.351`, last sample `24.798fps`, `present_boundary_wait_ms` max `0.000`; visual state observed normal |
-| [[baselines-visual-capture.02]] | 2026-06-06 | — | — | `v0.0.1` is the known-good visual correctness / alignment anchor; same 40s screenshot can still drift (`Frame 351` vs `483`), but PNG diff is useful for broad texture/color/geometry, black/translucent vertex, UV, and cbuf-identity triage |
+| [[baselines-visual-capture.02]] | 2026-06-06 | — | — | `v0.0.1` was an early coherent screenshot-diff artifact; the last known visual-safe code point is `v0.0.3`, while the same 40s screenshot caveat still applies (`Frame 351` vs `483`) and PNG diff remains useful for broad texture/color/geometry, black/translucent vertex, UV, and cbuf-identity triage |
 | [[baselines-gputrace-capture.01]] | 2026-06-06 | — | — | capture workflow fix: `MTL_CAPTURE_ENABLED=1` alone can black-screen 3DMark05 startup with draw/present `0`; no-layer runs restore normal GT1 (`present_encoded=1680`) but file `.gputrace`, simple Xcode-open `developerTools`, external `.app` plist, and tmp embedded-plist roots were not valid 3DMark05 capture routes; original-name Wine patching worked for synthetic Wine/D3D9 `.gputrace` but also black-screened 3DMark05 before draw/present; superseded for the explicit file route by [[baselines-gputrace-capture.02]] |
-| [[baselines-gputrace-preflight.02]] | 2026-06-15 | — | — | capture preflight only: default `.gputrace` dry-run and System Trace sidecar dry-run stop on `~605MiB < 2048MiB` free-space guard; Developer Mode is enabled and the file capture-layer preflight passes, so disk is the remaining blocker for full GT1 capture |
-| [[baselines-gputrace-capture.02]] | 2026-06-16 | `37.206ms`, `38.092ms`, `37.709ms`, then `37.492ms` integrated-wrapper refresh | `36.596ms` / `98.36%`, `37.457ms` / `98.33%`, `37.115ms` / `98.42%`, then `36.892ms` / `98.40%` | capture-layer file route recovered after retaining the fragment `WMT::Function` and replacing Wine binaries via same-directory temp-file `mv`; `capture-layer-wrapper-live-r1` proves the top-level `--with-wine-capture-layer` path writes `frame60.gputrace`, Xcode performance export, and `frame60-counters-xcode.csv`; latest top-three VS buffer write `1779.246MiB`, partial render count `0` |
+| [[baselines-gputrace-preflight.02]] | 2026-06-19 | — | — | file `.gputrace` dry-run passes with `--with-wine-capture-layer` and `~168GiB` free; real `capture-layer-current-r2-20260619` export produced performance and encoder-counter files; System Trace sidecar dry-run passes the `4096MiB` guard; Xcode `developerTools` attach remains blocked by `process-list-loading` / `Getting Process List...`. The old `~605MiB < 2048MiB` disk block is retained only as historical context |
+| [[baselines-gputrace-capture.02]] | 2026-06-16/19 | `37.206ms`, `38.092ms`, `37.709ms`, `37.492ms`, `36.183ms`, then `35.919ms` current-post-compact refresh | `36.596ms` / `98.36%`, `37.457ms` / `98.33%`, `37.115ms` / `98.42%`, `36.892ms` / `98.40%`, `35.577ms` / `98.33%`, then `35.296ms` / `98.26%` | capture-layer file route recovered after retaining the fragment `WMT::Function` and replacing Wine binaries via same-directory temp-file `mv`; the top-level `--with-wine-capture-layer` path writes `frame60.gputrace`, Xcode performance export, and `frame60-counters-xcode.csv`; latest current-post-compact top-three VS buffer write `1779.230MiB`, hidden backend estimate `1749.866MiB`, partial render count `0`, visual smoke normal |
 
 ## Results synthesis
 
@@ -174,7 +176,7 @@ any draw/present calls. The current status is narrower and better:
 route can now write `frame60.gputrace` and Xcode encoder counters after the
 fragment `WMT::Function` lifetime fix. The latest current-worktree refresh
 repeats the route through the integrated `--with-wine-capture-layer` wrapper
-with `37.492ms` total GPU, top-three `98.40%`, and `1779.246MiB` top-three VS
+with `35.919ms` total GPU, top-three `98.26%`, and `1779.230MiB` top-three VS
 write, so the route is valid for Xcode-counter evidence. Still pair it with
 no-gputrace visual/FPS scouts before making wall-clock claims. Simple Xcode-open
 `developerTools` capture and external `.app` plist routes remain separate
@@ -183,11 +185,12 @@ What stays open lives in the consuming domains, not here - almost every A/B
 delta elsewhere is measured against [[baselines-frame50.01]] (frame50 locality
 proofs), [[baselines-frame60.01]] (historical VSOut / backend-shape /
 state-churn probes), or [[baselines-frame60.02]] (post-visualfix refresh).
-The latest [[baselines-gputrace-preflight.02]] check is not a new baseline
-sample; it records the current operational blocker for another full
-`.gputrace` / System Trace capture: free space, not Developer Mode or capture
-layer insertion. The current authoritative Xcode counter path remains
-[[baselines-gputrace-capture.02]].
+[[baselines-gputrace-preflight.02]] is not a new baseline sample; it records
+whether the capture routes can be launched. The current file `.gputrace` and
+System Trace sidecar dry-runs pass, but Xcode `developerTools` attach remains
+blocked by `process-list-loading`. The current authoritative Xcode counter path
+therefore remains the file capture-layer route in
+[[baselines-gputrace-capture.02]], not an attached-Xcode `developerTools` run.
 
 ## How to run
 Every experiment here is a 3DMark05 GT1 run via the standard wrapper. A baseline

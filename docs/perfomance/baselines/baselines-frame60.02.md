@@ -13,9 +13,10 @@ source: experiments/output/app-d3d9-3dmark05-post-visualfix-frame60-baseline-r1/
 # Post-Visualfix Frame60 Baseline Refresh
 
 **Question / hypothesis.** After the cbuf/binding identity visual fixes and the
-`v0.0.1` visual-anchor check, does current HEAD still show the same authoritative
-frame60 GPU bottleneck shape, or did the recent correctness/perf work move the
-owner?
+then-current visual-anchor check, does current HEAD still show the same
+authoritative frame60 GPU bottleneck shape, or did the recent correctness/perf
+work move the owner? The operational visual-safe anchor has since moved to
+`v0.0.3`.
 
 **Method.** Captured `app-d3d9-3dmark05-post-visualfix-frame60-baseline-r1` with
 the standard perf probe at frame60. The app reached the final-frame hang path,
@@ -83,7 +84,7 @@ vertex/backend traffic.
 
 ```mermaid
 flowchart TD
-  Visual["v0.0.1 visual anchor\ncurrent screenshot gross-check passed"] --> Run["post-visualfix frame60 capture\npartial-log but complete gputrace"]
+  Visual["visual anchor check\ncurrent screenshot gross-check passed\nv0.0.3 is current anchor"] --> Run["post-visualfix frame60 capture\npartial-log but complete gputrace"]
   Run --> Xcode["Xcode performance export\nencoder counters CSV"]
   Xcode --> Finalizer["finalizer gates passed\ncounter coverage + dxmt join + PSO + shaders"]
   Finalizer --> Hot["top 3 = 32.984ms / 98.12%\nVS write 1627.332MiB"]

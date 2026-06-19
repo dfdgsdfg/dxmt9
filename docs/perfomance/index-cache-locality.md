@@ -88,7 +88,7 @@ bottleneck triage. The mechanism behind why this works is proven separately by
   `--index-cache-candidate-strict-lru`, and
   `--index-cache-candidate-upper-bound-gate` are hypotheses, not default
   changes. Judge them first with no-gputrace CPU/miss32 counters, then require
-  same-input image proof or a stable visual gate; `v0.0.1` PNG diffs are useful
+  same-input image proof or a stable visual gate; `v0.0.3` PNG diffs are useful
   for broad corruption triage but not raw pixel-percent correctness gates.
 
 ## Experiment dependency graph
